@@ -142,6 +142,26 @@ describe('runInvoke 双层校验', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it('create-session 的网络目录探测超时 → 明确 IPC 错误,不落到 handler', async () => {
+    const handler = vi.fn(() => ({ session: { id: 's-timeout' } }));
+    registry.register('maker:create-session', handler as never);
+    setRemoteWorkingDirGuard(async () => ({ allowed: false, reason: 'timeout' }));
+
+    const result = await runInvoke('ctrl', {
+      channel: 'maker:create-session',
+      args: [{ workingDir: 'Z:\\offline-project' }],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'IPC_ERROR',
+        message: expect.stringContaining('[REMOTE_WORKDIR_UNAVAILABLE]'),
+      },
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it('未注入 workingDir guard 时不阻断 create-session(生产未就绪态放行)', async () => {
     registry.register('maker:create-session', () => ({ session: { id: 's2' } }));
     const r = await runInvoke('ctrl', {
@@ -365,6 +385,7 @@ import {
 } from '../device-link/dispatch';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
 import { SESSION_ACTIVITY_CHANNEL, type Envelope } from '@cindy/device-link';
+import { MAKER_PUSH } from '../maker-ipc/channels';
 
 /** 最小 fake client:捕获 onFrame handler,记录出站调用 */
 function makeFakeClient() {
@@ -574,6 +595,84 @@ describe('被控端订阅 registry + topic 转发', () => {
     expect(calls.push).toEqual([
       { dst: 'ctrl-a', channel: 'maker:event', payload: { sessionId: 's1', event: {} } },
     ]);
+  });
+
+  it('device-link strips Desktop-only plugin setup helpers without mutating local push', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-a', SUB, ['session:s1']));
+    const payload = {
+      sessionId: 's1',
+      request: {
+        kind: 'plugin_setup',
+        requestId: 'setup-1',
+        revision: 1,
+        ghost: { id: 'generic-plugin', name: 'Generic plugin' },
+        steps: [
+          {
+            id: 'api-key',
+            groupId: 'credentials',
+            groupMode: 'any_of',
+            title: 'API key',
+            description: 'Configure a key',
+            phase: 'pending',
+            action: {
+              id: 'inline_form:opaque',
+              kind: 'inline_form',
+              form: {
+                fields: [
+                  {
+                    id: 'value',
+                    type: 'secret',
+                    label: 'API key',
+                    externalLink: { url: 'https://desktop-only.example/keys' },
+                    required: true,
+                    maxLength: 4096,
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    tapWindowBroadcast(MAKER_PUSH.INTERACTION_REQUEST, payload);
+
+    expect(calls.push).toHaveLength(1);
+    expect(calls.push[0]).toMatchObject({
+      dst: 'ctrl-a',
+      channel: MAKER_PUSH.INTERACTION_REQUEST,
+      payload: {
+        sessionId: 's1',
+        request: {
+          kind: 'plugin_setup',
+          ghost: { id: 'generic-plugin' },
+          steps: [
+            {
+              action: {
+                kind: 'inline_form',
+                form: {
+                  fields: [
+                    {
+                      id: 'value',
+                      label: 'API key',
+                      required: true,
+                      maxLength: 4096,
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(JSON.stringify(calls.push[0].payload)).not.toContain('desktop-only.example');
+    expect(payload.request.steps[0].action.form.fields[0].externalLink).toEqual({
+      url: 'https://desktop-only.example/keys',
+    });
   });
 
   it('unsubscribe 移除 topic;registry 空后停 tap', () => {

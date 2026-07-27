@@ -8,6 +8,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
+import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import type { WindowsCloseBehavior } from '../../../shared/windowBehavior';
 
 interface WindowControlsProps {
@@ -41,7 +42,13 @@ export function WindowControls({
   const { t } = useTranslation();
 
   useEffect(() => {
-    if (window.electronAPI.platform !== 'win32' || isSecondaryWindow() || isSidebarWindow()) return;
+    if (
+      window.electronAPI.platform !== 'win32' ||
+      isSecondaryWindow() ||
+      isSidebarWindow() ||
+      isGhostPanelWindow()
+    )
+      return;
     return window.electronAPI.windowBehavior.onWindowsCloseBehaviorRequested(() => {
       if (windowsCloseBehaviorDialogVisibleRef.current) {
         window.electronAPI.windowBehavior.notifyWindowsCloseBehaviorPromptShown();
@@ -120,10 +127,11 @@ export function WindowControls({
   // splash / login 阶段 maker-ipc handler 还没注册, invoke 会 reject ——
   // catch 后当作 false 处理 (那个阶段本来就不可能有 in-flight)。
   const handleCloseClick = async (): Promise<void> => {
-    // 「在新窗口打开」的副窗口 / 右侧栏子窗口:关闭只关本窗(会话活在主进程,
-    // 不受影响),不退出 app,也没有 disposer chain,所以跳过 in-flight 确认框 +
-    // 全屏 closing overlay,直接调 windowClose(main 端按 sender 解析为 win.close())。
-    if (isSecondaryWindow() || isSidebarWindow()) {
+    // 「在新窗口打开」的副窗口 / 右侧栏子窗口 / 插件面板子窗口:关闭只关本窗
+    // (会话活在主进程,不受影响),不退出 app,也没有 disposer chain,所以跳过
+    // in-flight 确认框 + 全屏 closing overlay,直接调 windowClose(main 端按
+    // sender 解析为 win.close())。
+    if (isSecondaryWindow() || isSidebarWindow() || isGhostPanelWindow()) {
       window.electronAPI.windowClose();
       return;
     }

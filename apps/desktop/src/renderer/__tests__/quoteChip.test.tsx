@@ -14,6 +14,9 @@ describe('QuoteChip', () => {
     const chip = container.querySelector<HTMLElement>('[aria-label]');
     expect(chip?.getAttribute('aria-label')).toBe('first line\n\nsecond line');
     expect(chip?.textContent).toBe('first line second line');
+    // 引用 chip 是消息内 chip 里唯一保留 select-none 的:它展示的是折叠成单行的
+    // 摘要而非原文,不该跟着复制出去(其余 chip 默认可选中,见 inlineReferenceChip
+    // 的剪贴板契约测试)。
     expect(chip?.className).toContain('select-none');
   });
 

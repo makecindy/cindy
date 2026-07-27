@@ -116,3 +116,87 @@ describe('PermissionSelector (MorphPopover pilot)', () => {
     expect(screen.queryByRole('listbox')).toBeNull();
   });
 });
+
+/**
+ * field 形态(设置页表单字段)—— 由「IM 机器人 → 工作目录映射」引入。trigger 换成
+ * 与 ModelSelector 的 field trigger 逐字对齐的输入面,选项列表与权限语义不分叉;
+ * chip 形态(composer)必须逐字不变。
+ */
+describe('PermissionSelector triggerVariant', () => {
+  it('默认 chip 形态:composer 胶囊,无输入面边框', () => {
+    renderSelector();
+    const cls = getTrigger().className;
+    expect(cls).toContain('rounded-full');
+    expect(cls).toContain('border-transparent');
+    expect(cls).not.toContain('settings-input-bg');
+  });
+
+  it('field 形态:输入面样式,与 ModelSelector 的 field trigger 同规格(pill,§4 Select 触发器)', () => {
+    renderSelector({ triggerVariant: 'field' });
+    const cls = getTrigger().className;
+    // DESIGN.md §4 Select & Dropdown:单行 select trigger 同单行输入,胶囊形(9999px),
+    // 不是 8px 内圆角(那一档只留给穿不了 pill 的控件)。
+    expect(cls).toContain('rounded-full');
+    expect(cls).toContain('border-[var(--border-default)]');
+    expect(cls).toContain('bg-[var(--settings-input-bg)]');
+    expect(cls).toContain('hover:bg-[var(--surface-hover-soft)]');
+    expect(cls).toContain('w-full');
+    expect(cls).not.toContain('rounded-lg');
+  });
+
+  it('field 形态 dense 压一档高度(与同排模型字段等高)', () => {
+    renderSelector({ triggerVariant: 'field', dense: true });
+    expect(getTrigger().className).toContain('h-9');
+  });
+
+  // 弹层原语按形态分叉(权限语义共用一份):chip = MorphPopover(容器形变是 composer
+  // 专属类目,§14.4,恒向上);field = **Radix Popover**(锚点随设置页滚动跟随、collision
+  // 自动翻转)。此前两版尝试(恒 bottom / morph 动态选侧)都被实测打回:morph 只在打开时
+  // 测一次 fixed 几何,恒定侧在页面首/末行截断,且滚动时面板脱锚 —— 设置页一律走 Radix。
+  it('chip 走 morph(向上);field 走 Radix Popover,不再是 morph', async () => {
+    const { unmount } = renderSelector();
+    fireEvent.click(getTrigger());
+    const chipPanel = await screen.findByRole('listbox');
+    expect(chipPanel.closest('[data-morph-side]')?.getAttribute('data-morph-side') ?? 'top').toBe(
+      'top',
+    );
+    unmount();
+    cleanup();
+
+    renderSelector({ triggerVariant: 'field' });
+    fireEvent.click(getTrigger());
+    const fieldPanel = await screen.findByRole('listbox');
+    // Radix PopoverContent 而非 morph 面板:无 data-morph-side 祖先,有 Radix 定位包装
+    expect(fieldPanel.closest('[data-morph-side]')).toBeNull();
+    const popperWrapper = fieldPanel.closest('[data-radix-popper-content-wrapper]');
+    expect(popperWrapper).not.toBeNull();
+    // DESIGN.md §4:下拉面板无阴影(分离感来自层色/描边)。共享 PopoverContent 默认
+    // shadow-md,field 面板必须显式压掉(codex review 2026-07-25)。
+    const content = popperWrapper?.firstElementChild as HTMLElement;
+    expect(content.className).toContain('shadow-none');
+    expect(screen.getAllByRole('option')).toHaveLength(4);
+  });
+
+  it('field 形态仍走同一份选项列表与危险档配色', async () => {
+    const { onChange } = renderSelector({ triggerVariant: 'field' });
+    fireEvent.click(getTrigger());
+    await screen.findByRole('listbox');
+    expect(screen.getAllByRole('option')).toHaveLength(4);
+
+    fireEvent.click(screen.getByText('完全访问'));
+    expect(onChange).toHaveBeenCalledWith('bypassPermissions');
+  });
+
+  it('ariaContext 前置到 trigger 可及名(多实例同屏读屏区分,不传则原样)', () => {
+    renderSelector({ triggerVariant: 'field', ariaContext: '权限模式 · chat' });
+    expect(screen.getByRole('button', { name: '权限模式 · chat:默认权限' })).toBeTruthy();
+  });
+
+  it('field 形态选中危险档时只染文字,不改底色', () => {
+    renderSelector({ triggerVariant: 'field', permissionMode: 'bypassPermissions' });
+    const cls = getTrigger().className;
+    expect(cls).toContain('text-[var(--perm-bypass-selected-text)]');
+    // 底仍是输入面,不因危险档换底色
+    expect(cls).toContain('bg-[var(--settings-input-bg)]');
+  });
+});

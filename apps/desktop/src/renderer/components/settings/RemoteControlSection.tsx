@@ -17,8 +17,9 @@
  * SSH 主机摘要由本组件自取轻量快照(list + onStatusChanged),不侵入 RemoteSection。
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import { useDeviceLinkSettings, type DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
@@ -136,15 +137,56 @@ function sshSummary(
 export function RemoteControlSection() {
   const { t } = useTranslation();
   const { mode } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const deviceLinkAvailable = mode === 'cloud';
   const s = useDeviceLinkSettings(deviceLinkAvailable);
 
-  const [devicesOpen, setDevicesOpen] = useState(false);
+  // 深链 ?section=devices 必须在首帧就是展开态:放到 effect 里会先画一帧收起,
+  // 再把下方内容顶开一格。
+  const [devicesOpen, setDevicesOpen] = useState(
+    () => new URLSearchParams(location.search).get('section') === 'devices',
+  );
   const [sshOpen, setSshOpen] = useState(false);
 
   // SSH 主机轻量快照 —— 只为收起态摘要服务。RemoteSection 内部自管自己的一份;
   // 这里不外提它的状态是有意的(979 行组件不为一行摘要重构)。
   const [hosts, setHosts] = useState<RemoteHostSnapshot[] | null>(null);
+
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('section') === 'devices') {
+      setDevicesOpen(true);
+    }
+  }, [location.search]);
+
+  const collapseRequestedRef = useRef(false);
+  const toggleDevices = useCallback(() => {
+    setDevicesOpen((previous) => {
+      // 只有用户主动收起才需要清 URL;更新函数里只记录这次意图,幂等、可重入。
+      collapseRequestedRef.current = previous;
+      return !previous;
+    });
+  }, []);
+
+  // 收起后把 ?section=devices 摘掉,否则刷新/返回还会再展开一次。挂 effect 是为了
+  // 让 toggle 保持函数式更新;必须再看 collapseRequestedRef,否则「页面已挂载时才
+  // 导航进深链」那一帧会读到还没提交的 devicesOpen=false,把刚进来的深链清掉。
+  useEffect(() => {
+    if (devicesOpen || !collapseRequestedRef.current) return;
+    collapseRequestedRef.current = false;
+
+    const next = new URLSearchParams(location.search);
+    if (next.get('section') !== 'devices') return;
+    next.delete('section');
+    const search = next.toString();
+    navigate(
+      {
+        pathname: location.pathname,
+        search: search ? `?${search}` : '',
+      },
+      { replace: true },
+    );
+  }, [devicesOpen, location.pathname, location.search, navigate]);
 
   const refreshHosts = useCallback(async () => {
     try {
@@ -201,7 +243,7 @@ export function RemoteControlSection() {
               summary={devSumText}
               dotColor={null}
               open={devicesOpen}
-              onToggle={() => setDevicesOpen((v) => !v)}
+              onToggle={toggleDevices}
               pinned={<MyDevicesPanel s={s} variant="self" />}
             >
               <MyDevicesPanel s={s} variant="others" />

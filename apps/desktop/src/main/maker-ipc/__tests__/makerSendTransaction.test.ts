@@ -15,8 +15,12 @@ function createSession(overrides: Partial<MakerSendTransactionSession> = {}): Ma
     workDir: 'C:\\repo',
     remoteHostId: null,
     isTurnRunning: vi.fn(() => false),
-    send: vi.fn(async (_message: UserMessage | string, opts?: { onAccepted?: () => Promise<void> }) => {
+    send: vi.fn(async (
+      _message: UserMessage | string,
+      opts?: { onAccepted?: () => Promise<void>; onDispatching?: () => void },
+    ) => {
       await opts?.onAccepted?.();
+      opts?.onDispatching?.();
       return { accepted: true } satisfies SessionSendResult;
     }),
     ...overrides,
@@ -52,6 +56,7 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
     prepareSendUserMessage: vi.fn(async (_sessionId, message) => message as UserMessage | string),
     createDbMessage: vi.fn(async () => {}),
     previewUserPrompt: vi.fn(),
+    dispatchUserPromptPreview: vi.fn(),
     commitUserPromptPreview: vi.fn(),
     rollbackUserPromptPreview: vi.fn(),
     isSessionRunningError: vi.fn(() => false),
@@ -143,6 +148,7 @@ describe('maker SEND transaction', () => {
       { shouldBroadcast },
     );
     expect(onPersisted).toHaveBeenCalled();
+    expect(deps.dispatchUserPromptPreview).toHaveBeenCalledWith('session-1');
     expect(deps.commitUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.rollbackUserPromptPreview).not.toHaveBeenCalled();
   });

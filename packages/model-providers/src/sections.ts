@@ -11,7 +11,8 @@
  */
 
 import type { AgentKind, CatalogModel, Effort } from './types.js';
-import { connectedProvidersForAgent, type ProviderView } from './registry.js';
+import type { ProviderView } from './registry.js';
+import { deriveModelList, deriveModelSections } from './modelList.js';
 
 /**
  * 单个模型的可见性决策 —— **纯函数,唯一真相**。
@@ -94,24 +95,31 @@ export function resolveModelIconKind(icon: string | undefined): ModelIconKind | 
  *   - 按供应商序 + 目录序,同 id **首见胜出**去重(与 renderer providerModels /
  *     main deriveAvailableModels 的顺序契约一致):某供应商下被隐藏、另一供应商下
  *     可见的模型仍会出现(取可见那家的元数据)。
- * 返回 CatalogModel 引用(含 group / efforts / defaultEffort 等全部元数据),纯函数可单测。
+ * 返回 CatalogModel 形状的**拷贝**(含 group / efforts / defaultEffort 等全部元数据;
+ * 不是 catalog 对象引用 —— 按引用 memo/相等比较会失配,详见函数体内的物理差异警告),
+ * 纯函数可单测。
  */
 export function visibleModelUnion(
   providers: readonly ProviderView[],
   agent: AgentKind,
   isVisible: (providerId: string, model: CatalogModel) => boolean,
 ): CatalogModel[] {
-  const seen = new Set<string>();
-  const out: CatalogModel[] = [];
-  for (const provider of connectedProvidersForAgent([...providers], agent)) {
-    for (const m of provider.models[agent] ?? []) {
-      if (seen.has(m.id)) continue;
-      if (!isVisible(provider.id, m)) continue;
-      seen.add(m.id);
-      out.push(m);
-    }
-  }
-  return out;
+  // 薄壳: 标准派生的「已连接 + 可见性 + first-wins 去重」口径(modelList.ts)。
+  // 返回类型保持 CatalogModel[](ModelListEntry 是其超集,协变加宽,消费方无感);
+  // 输出顺序与历史实现逐字节一致,由 sections.test.ts(零修改)与 parity 测试锁定。
+  //
+  // ⚠ 两个与历史实现的物理差异(语义等价,但消费方不得依赖):
+  //   1. 条目是**拷贝**而非 catalog 对象引用 —— 按引用做 memo/相等比较会失配;
+  //   2. 条目带 3 个额外可枚举字段(sourceProviderId / sourceConnected / 可选 sourceAccess),
+  //      类型层不可见 —— **禁止把条目整对象 JSON.stringify / spread 进 IPC・协议・持久化**,
+  //      过 wire 前必须显式投影字段(现存 5 个消费方已核查合规;键集有测试锁)。
+  return deriveModelList({
+    providers,
+    agent,
+    providerScope: 'connected-for-agent',
+    isVisible,
+    dedupe: 'first-wins',
+  });
 }
 
 export function buildProviderSections(args: {
@@ -122,15 +130,27 @@ export function buildProviderSections(args: {
   isVisible: (providerId: string, modelId: string) => boolean;
   query?: string;
 }): ProviderSection[] {
-  const q = (args.query ?? '').trim().toLowerCase();
-  const sections: ProviderSection[] = [];
-  for (const provider of args.providers) {
-    const catalog = provider.models[args.agent] ?? [];
-    const models: SectionModel[] = [];
-    for (const m of catalog) {
-      const isSelected = m.id === args.selectedModelId && provider.id === args.selectedProviderId;
-      if (!isSelected && !args.isVisible(provider.id, m.id)) continue;
-      if (q && !m.name.toLowerCase().includes(q) && !m.id.toLowerCase().includes(q)) continue;
+  // 薄壳: 标准分段派生(modelList.ts)+ SectionModel 字段投影。历史语义逐项保持:
+  //   - providerScope 'as-given': 本函数从不收窄供应商(调用方已自行收窄),薄壳不得
+  //     擅自加 connectedProvidersForAgent —— 否则调用方传未收窄列表时行为漂移;
+  //   - 选中豁免仅在 selectedProviderId **非空**时生效(旧实现 provider.id === null
+  //     恒 false,即 flat 语义的「null = 匹配任意行」在这里不适用);
+  //   - 字段拷贝保持条件性(undefined 字段不写 key),对象形状逐字节一致。
+  const sections = deriveModelSections({
+    providers: args.providers,
+    agent: args.agent,
+    providerScope: 'as-given',
+    isVisible: (providerId, model) => args.isVisible(providerId, model.id),
+    ...(args.selectedModelId !== undefined &&
+    args.selectedProviderId !== undefined &&
+    args.selectedProviderId !== null
+      ? { keepSelected: { providerId: args.selectedProviderId, modelId: args.selectedModelId } }
+      : {}),
+    ...(args.query !== undefined ? { query: args.query } : {}),
+  });
+  return sections.map(({ provider, models }) => ({
+    provider,
+    models: models.map((m) => {
       const sm: SectionModel = {
         id: m.id,
         displayName: m.name,
@@ -142,9 +162,7 @@ export function buildProviderSections(args: {
       if (m.effortDisplayNames !== undefined) sm.effortDisplayNames = m.effortDisplayNames;
       if (m.supportsFastMode !== undefined) sm.supportsFastMode = m.supportsFastMode;
       if (m.icon !== undefined) sm.icon = m.icon;
-      models.push(sm);
-    }
-    if (models.length > 0) sections.push({ provider, models });
-  }
-  return sections;
+      return sm;
+    }),
+  }));
 }

@@ -56,7 +56,7 @@ export function CindyCapabilityPrefs({
   return (
     <div
       className={cn(
-        'flex flex-col gap-3 rounded-xl border px-5 py-4',
+        'cindy-capability-prefs min-w-0 max-w-full flex flex-col gap-3 rounded-xl border px-5 py-4',
         appearance === 'plugin'
           ? 'border-[color-mix(in_srgb,var(--border-default)_72%,transparent)] bg-[color-mix(in_srgb,var(--surface-elevated)_82%,var(--surface))]'
           : 'border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
@@ -83,42 +83,60 @@ export function CindyCapabilityPrefs({
       </p>
       {capabilities.map((capability) => {
         const kind = capability.startsWith('video.') ? prefs.video : prefs.image;
+        // 目录没给这个类目任何模型 = 能力暂不可用:行照旧显示(插件确实申请了
+        // 这项能力),但右侧不给下拉,改一句不可点的灰字,不拿旧型号冒充可选。
+        const defaultModel = kind.defaultModel;
+        const unavailable = kind.options.length === 0 || defaultModel === null;
         return (
-          <div key={capability} className="flex items-center justify-between gap-4">
+          <div
+            key={capability}
+            className="cindy-capability-row flex min-w-0 items-center justify-between gap-4"
+          >
             <span
               className={cn(
-                'text-[var(--text-secondary)]',
+                'min-w-0 text-[var(--text-secondary)]',
                 appearance === 'plugin' ? 'text-13 leading-5' : 'text-12',
               )}
             >
               {t(`settings.ghosts.detail.cindyPrefs.cap.${capability}`)}
             </span>
-            <select
-              value={
-                overrides[capability] && overrides[capability] !== kind.defaultModel.id
-                  ? overrides[capability]
-                  : FOLLOW_DEFAULT_VALUE
-              }
-              onChange={(event) => void handleChange(capability, event.target.value)}
-              aria-label={t(`settings.ghosts.detail.cindyPrefs.cap.${capability}`)}
-              className={cn(
-                'h-8 w-[300px] shrink-0 appearance-none rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] py-0 pl-3 pr-8 text-[var(--settings-input-text)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
-                appearance === 'plugin' ? 'text-13 leading-5' : 'text-12',
-              )}
-            >
-              {kind.options.map((option) => {
-                const isDefault = option.id === kind.defaultModel.id;
-                return (
-                  <option key={option.id} value={isDefault ? FOLLOW_DEFAULT_VALUE : option.id}>
-                    {isDefault
-                      ? t('settings.ghosts.detail.cindyPrefs.defaultOption', {
-                          model: option.label,
-                        })
-                      : option.label}
-                  </option>
-                );
-              })}
-            </select>
+            {unavailable ? (
+              <span
+                className={cn(
+                  'cindy-capability-empty min-w-0 truncate text-[var(--text-tertiary)]',
+                  appearance === 'plugin' ? 'text-13 leading-5' : 'text-12',
+                )}
+              >
+                {t('settings.ghosts.detail.cindyPrefs.noModels')}
+              </span>
+            ) : (
+              <select
+                value={
+                  overrides[capability] && overrides[capability] !== defaultModel.id
+                    ? overrides[capability]
+                    : FOLLOW_DEFAULT_VALUE
+                }
+                onChange={(event) => void handleChange(capability, event.target.value)}
+                aria-label={t(`settings.ghosts.detail.cindyPrefs.cap.${capability}`)}
+                className={cn(
+                  'cindy-capability-select h-8 w-[300px] max-w-[60%] min-w-0 shrink appearance-none rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] py-0 pl-3 pr-8 text-[var(--settings-input-text)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
+                  appearance === 'plugin' ? 'text-13 leading-5' : 'text-12',
+                )}
+              >
+                {kind.options.map((option) => {
+                  const isDefault = option.id === defaultModel.id;
+                  return (
+                    <option key={option.id} value={isDefault ? FOLLOW_DEFAULT_VALUE : option.id}>
+                      {isDefault
+                        ? t('settings.ghosts.detail.cindyPrefs.defaultOption', {
+                            model: option.label,
+                          })
+                        : option.label}
+                    </option>
+                  );
+                })}
+              </select>
+            )}
           </div>
         );
       })}

@@ -43,7 +43,7 @@ const server = createServer((req, res) => {
       () => {
         res.writeHead(204).end();
       },
-      (err) => writeJson(res, 500, { error: err instanceof Error ? err.message : String(err) }),
+      (err) => writeInternalError(res, err),
     );
     return;
   }
@@ -88,7 +88,7 @@ async function handleManagedSessionCreate(req, res, url) {
     });
     if (debug) console.error(`[mock-voice-proxy] managed session issued for ${asrProvider} (url=${url.pathname})`);
   } catch (err) {
-    writeJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    writeInternalError(res, err);
   }
 }
 
@@ -202,7 +202,7 @@ async function handleChatCompletion(req, res) {
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (err) {
-    writeJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    writeInternalError(res, err);
   }
 }
 
@@ -230,6 +230,12 @@ function readRequestBody(req) {
 function writeJson(res, status, payload) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(payload));
+}
+
+// 内部错误细节只进本地终端;HTTP 响应回笼统信息(CodeQL js/stack-trace-exposure)。
+function writeInternalError(res, err) {
+  console.error('[mock-voice-proxy] internal error:', err);
+  writeJson(res, 500, { error: 'internal error' });
 }
 
 function parseJson(raw) {

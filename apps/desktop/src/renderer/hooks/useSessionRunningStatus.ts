@@ -18,6 +18,8 @@
  *      being the active session.
  *    - It has a pending plan review (`hasPendingPlanReview`) while NOT being
  *      the active session (FP-3).
+ *    - It has pending local plugin setup (`hasPendingPluginSetup`) while NOT
+ *      being the active session.
  *
  * Notifications are cleared when:
  *    - The user navigates to that session (clicks it) — done / awaiting only。
@@ -35,7 +37,7 @@
  * 静默完成不走去抖(见下方分支)。
  */
 
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { SessionStatusInfo } from '@/lib/makerChatStore';
 import {
@@ -79,7 +81,8 @@ interface UseSessionRunningStatusOptions {
   onSessionError?: (sessionId: string) => void;
   /**
    * Fired when a session enters a pending state needing user input
-   * (`pendingAskUser` / `pendingPermission` / `pendingPlanReview`). Rising
+   * (`pendingAskUser` / `pendingPermission` / `pendingPlanReview` /
+   * `pendingPluginSetup`). Rising
    * edge only — re-fires only after the pending state clears and re-enters.
    * Like onSessionDone, no active-session filter; the consumer decides.
    */
@@ -226,7 +229,11 @@ export function useSessionRunningStatus(
           // section 3 之后,必须显式让 awaiting 优先。done 系统通知仍照常发(与原行为一致)。
           const cur = makerChatStore.getRunningSnapshot().get(sessionId);
           const stillPending =
-            !!cur && (cur.hasPendingAskUser || cur.hasPendingPermission || cur.hasPendingPlanReview);
+            !!cur &&
+            (cur.hasPendingAskUser ||
+              cur.hasPendingPermission ||
+              cur.hasPendingPlanReview ||
+              cur.hasPendingPluginSetup);
           if (!isActive && !stillPending) {
             addSessionAttention(sessionId, 'done');
           }
@@ -236,10 +243,15 @@ export function useSessionRunningStatus(
       }
     }
 
-    // --- 3. Detect pending ask-user / permission / plan-review ---
+    // --- 3. Detect pending ask-user / permission / plan-review / plugin-setup ---
     const currentPendingSet = new Set<string>();
     for (const [id, info] of statusMap) {
-      if (info.hasPendingAskUser || info.hasPendingPermission || info.hasPendingPlanReview) {
+      if (
+        info.hasPendingAskUser ||
+        info.hasPendingPermission ||
+        info.hasPendingPlanReview ||
+        info.hasPendingPluginSetup
+      ) {
         currentPendingSet.add(id);
         const isActive = id === activeSessionId;
         const wasAlreadyPending = prevPendingRef.current.has(id);
@@ -317,7 +329,11 @@ export function useSessionRunningStatus(
   );
 
   // Derive running set for the return value (outside effect, for rendering).
-  const runningSessionIds = deriveRunningSet(statusMap);
+  // 必须 memo:裸调用每渲染都 new Set,会顺着 effectiveRunningSessionIds →
+  // handleActionClick / handleMoveSession 一路换引用,把 SessionItem 的 memo
+  // 全表打穿(见 sidebar/SessionItem.tsx 的性能不变量第 3 条)。statusMap 来自
+  // useSyncExternalStore,只在真实状态变化时换引用,故这里的缓存是安全的。
+  const runningSessionIds = useMemo(() => deriveRunningSet(statusMap), [statusMap]);
 
   return {
     /** Set of session IDs currently running. */

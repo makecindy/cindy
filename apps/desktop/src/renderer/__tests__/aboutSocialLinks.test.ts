@@ -19,7 +19,7 @@ const expectedXiaohongshuDescriptions: Record<string, string> = {
 
 describe('Settings About social links', () => {
   it('uses the official destinations and prioritizes the Discord community', () => {
-    const discordIndex = aboutSource.indexOf('https://discord.gg/UxHPUGXdd');
+    const discordIndex = aboutSource.indexOf('https://discord.gg/V4yKguac7K');
     const xIndex = aboutSource.indexOf('https://x.com/making_cindy');
     const xiaohongshuIndex = aboutSource.indexOf('https://xhslink.com/m/XmfveHjLlL');
 

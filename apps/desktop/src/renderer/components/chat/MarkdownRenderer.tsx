@@ -825,6 +825,12 @@ function localKindFromAbsPath(absPath: string, fallback: MarkdownLocalKind): Mar
  * unresolved / ambiguous / unsupported scheme — renders as plain text by the
  * call sites, not as a chip. So this component is always interactive: click
  * to open, hover to highlight, right-click for the file menu.
+ *
+ * 标签是 `<code role="button">` 而不是 `<button>`,这条不能回退:这个 chip 是
+ * 行内代码升级来的,复制消息时 Chromium 会把选区原样序列化进 `text/html`,而
+ * `<button>` 不在外部富文本编辑器(Slack / 飞书 / Notion / Word)的粘贴白名单
+ * 里——整个节点连同路径文字会被丢弃,只在原位留下一个断行。`<code>` 既是语义
+ * 正解,粘出去还会落成对方的行内代码。详见 InlineReferenceChip 的同款说明。
  */
 function FileTargetChip({
   resolvedAbsPath,
@@ -882,11 +888,18 @@ function FileTargetChip({
 
   return (
     <>
-      <button
-        type="button"
+      <code
+        role="button"
+        tabIndex={0}
         title={title}
         onClick={activate}
         onContextMenu={ctxMenu.onContextMenu}
+        onKeyDown={(e) => {
+          // 换掉原生按钮元素后,键盘激活要自己补回来。
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          e.preventDefault();
+          activate();
+        }}
         className={cn(
           'inline rounded-[6px] border-0 px-1 py-0.5',
           'font-mono text-14 align-baseline',
@@ -898,7 +911,7 @@ function FileTargetChip({
         )}
       >
         {children}
-      </button>
+      </code>
       {ctxMenu.menu}
     </>
   );

@@ -75,7 +75,13 @@ export interface CodexMcpThreadContextArgs {
   vendorOptions: Record<string, unknown>;
 }
 
-/** Metadata Codex attaches to an MCP tool approval elicitation. */
+/**
+ * Metadata for an MCP tool approval decision.
+ *
+ * Codex fills it from the elicitation `_meta`; Claude fills it by splitting the
+ * SDK tool name (`mcp__<server>__<tool>`) and passing the tool input verbatim.
+ * Both therefore hand the host the same shape, so one policy answers for both.
+ */
 export interface McpToolApprovalContext {
   serverName: string;
   /** Top-level MCP tool name, for example `list_tools` or `call_tool`. */
@@ -93,6 +99,14 @@ export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
   codexProxyActive?: boolean;
+  /**
+   * spawn args 中定义的「OpenAI 身份」provider id(name 逐字为 "OpenAI",
+   * codex 据 name 判定 supports_remote_compaction)。仅 oauth-bearer spawn 下发。
+   * CodexAgent 只对 ChatGPT 订阅直连路由的 thread 在 thread/start|resume 传
+   * modelProvider=该 id,启用 OpenAI 远端压缩;其余 thread 保持默认 provider
+   * (本地压缩)—— 网关 / xAI / 自定义供应商上游不实现远端压缩,错配是硬失败。
+   */
+  codexRemoteCompactionProviderId?: string;
 }
 
 export interface CodexLocalCredentialModeSwitchContext {
@@ -203,6 +217,19 @@ export interface AgentDeps {
   ) => void | Promise<void>;
 
   /**
+   * Host-owned Auto permission fallback. A vendor reviewer timeout/unavailable
+   * result has already blocked the current action; the host persists this session
+   * from Auto to Ask and broadcasts the selector/toast update. Fire-and-forget:
+   * classifier failure handling must never hold the vendor notification loop.
+   */
+  onAutoPermissionClassifierUnavailable?: (args: {
+    sessionId: string;
+    agentKind: 'claude-code' | 'codex';
+    /** HTTP status when available; Codex reviewer timeout/failure use synthetic 408/500. */
+    status: number;
+  }) => void;
+
+  /**
    * Codex-only: bind app-server thread ids back to xdt-maker session context
    * for host-owned HTTP MCP bridges. Missing hooks keep the old no-session
    * behavior; implementations should be in-memory and best-effort.
@@ -237,10 +264,10 @@ export interface AgentDeps {
   makerMemory?: MakerMemoryManager;
 
   /**
-   * Host-side Codex MCP approval policy. `auto-approve` skips PermissionPrompt;
-   * `prompt` preserves Codex's normal approval UI and optional session grant;
-   * `prompt-each-time` always asks and never persists a server/tool grant.
-   * Claude SDK does not consume this hook.
+   * Host-side MCP approval policy, shared by **both** agents. `auto-approve`
+   * skips the permission prompt; `prompt` preserves the normal approval UI and
+   * its optional session grant; `prompt-each-time` always asks and never
+   * persists a server/tool grant.
    *
    * 背景:
    *  - Codex CLI 对 raw `mcp_servers.*` 的 write 类 tool call 弹 user approval 是 known
@@ -249,9 +276,14 @@ export interface AgentDeps {
    *  - host 自家可信的 MCP server (e.g. lizi_*) 每次写都弹严重影响 UX, 这里给一个
    *    宿主策略短路。渐进式 server 还可利用 toolName/toolParams 区分 inner action,
    *    让查询保持无打扰而删除/外部写入逐次确认。
+   *  - 同一个第一方 MCP 在两个 agent 下必须给出同一个答案。历史上 Claude 只有一份
+   *    静态 allowedTools 白名单、不查这个 hook, 结果 `cindy_browser` 之类高频 server
+   *    的 `call_tool` 在 Codex 侧静默执行、在 Claude 侧每调用一次弹一次窗。
    *
-   * 实现位置: codex/index.ts mcpServerElicitation handler 在 dispatchInteraction 之前
-   * 查这里；auto-approve 直接 accept，prompt-each-time 禁掉 session persistence。
+   * 实现位置:
+   *  - codex/index.ts mcpServerElicitation handler 在 dispatchInteraction 之前查这里;
+   *  - claude-code/index.ts canUseTool 对 `mcp__<server>__<tool>` 形态的工具查这里。
+   * 两侧同义: auto-approve 直接放行, prompt-each-time 禁掉 session persistence。
    *
    * 缺省 / undefined → 走原 dispatchInteraction (弹 UI), 行为与改动前一致。
    */
@@ -513,9 +545,8 @@ export interface StartSessionOptions {
    */
   codexHistoryHasProductPrompt?: boolean;
   /**
-   * 附加只读引用目录列表(绝对路径)。Claude 透传到 SDK options.additionalDirectories,
-   * 让 agent 能读 workingDir 之外的目录(只读语义,permission 仍受 sandbox 控制)。
-   * Codex 不支持 (capability=false), 收到此字段会忽略。
+   * 附加只读引用目录列表(绝对路径)。Claude 透传到 SDK options.additionalDirectories；
+   * Codex 透传到 app-server runtimeWorkspaceRoots，并用 permission profile 保持只读。
    * 跟 model/effort 同语义: 启动时快照 + 由 setExtraDirs 热更新 closure。
    */
   extraDirs?: string[];
@@ -641,6 +672,9 @@ export interface AgentSessionHandle {
   /** 中断当前 turn */
   abort(): Promise<void>;
 
+  /** Provider turn identity when the adapter exposes one (currently Codex). */
+  getCurrentTurnId?(): string | null;
+
   /**
    * 停止会话内单个后台任务(SDK Query.stopTask 透传)。
    * 与 abort() 的区别:abort 是"用户 Stop"的全停语义(只连带 wake 型任务、并
@@ -706,8 +740,7 @@ export interface AgentSessionHandle {
   setFastMode?(enabled: boolean): Promise<void>;
 
   /**
-   * 运行时增删 extraDirs(覆盖式)。Claude 推 closure → 下一 turn buildQuery 自动用新值。
-   * Codex 不实现(capability=false 时 Session 层会先抛 NotSupportedError)。
+   * 运行时增删 extraDirs(覆盖式)。Claude 与 Codex 都更新 closure，在下一 turn 生效。
    */
   setExtraDirs?(dirs: string[]): Promise<void>;
 

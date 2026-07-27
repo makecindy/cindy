@@ -147,6 +147,83 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     expect(presets.map((p) => p.id)).toContain('openrouter');
   });
 
+  it('ships Codex support metadata for the current XD gateway model set', () => {
+    const metadata = BUNDLED_CATALOG.cindyModelMeta as {
+      version?: unknown;
+      models?: Record<string, unknown>;
+    };
+    expect(metadata.version).toBe(1);
+    const expected = {
+      'qwen/qwen3.7-max': 'Qwen 3.7 Max',
+      'moonshotai/kimi-k3': 'Kimi K3',
+      'z-ai/glm-5.2': 'GLM-5.2',
+      'deepseek/deepseek-v4-pro': 'DeepSeek V4 Pro',
+      'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash',
+      'bytedance-seed/seed-2.1-pro': 'Seed 2.1 Pro',
+      'qwen/qwen3.8-max-preview': 'Qwen 3.8 Max Preview',
+    };
+    for (const [id, name] of Object.entries(expected)) {
+      expect(metadata.models?.[id], id).toMatchObject({
+        agents: ['claude-code', 'codex'],
+        name,
+      });
+    }
+
+    expect(metadata.models?.['bytedance-seed/seed-2.1-pro']).toMatchObject({
+      efforts: ['minimal', 'low', 'medium', 'high'],
+      defaultEffort: 'minimal',
+      supportsFastMode: false,
+      perAgent: {
+        'claude-code': {
+          efforts: ['low', 'medium', 'high'],
+          defaultEffort: 'low',
+        },
+      },
+    });
+    expect(metadata.models?.['moonshotai/kimi-k3']).toMatchObject({
+      efforts: ['low', 'high', 'max'],
+      defaultEffort: 'max',
+      supportsFastMode: false,
+    });
+    expect(metadata.models?.['qwen/qwen3.8-max-preview']).toMatchObject({
+      efforts: ['low', 'high', 'xhigh'],
+      defaultEffort: 'xhigh',
+      supportsFastMode: false,
+    });
+    expect(metadata.models?.['z-ai/glm-5.2']).toMatchObject({
+      efforts: ['minimal', 'high', 'max'],
+      defaultEffort: 'max',
+      supportsFastMode: false,
+      perAgent: {
+        'claude-code': {
+          efforts: ['high', 'max'],
+          defaultEffort: 'max',
+        },
+      },
+    });
+    for (const id of ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash']) {
+      expect(metadata.models?.[id], id).toMatchObject({
+        efforts: ['high', 'max'],
+        defaultEffort: 'high',
+        supportsFastMode: false,
+      });
+    }
+    for (const id of [
+      'bytedance-seed/seed-2.1-pro',
+      'moonshotai/kimi-k3',
+      'qwen/qwen3.8-max-preview',
+    ]) {
+      expect(metadata.models?.[id], id).not.toHaveProperty('description');
+    }
+  });
+
+  it('enables DeepSeek V4 Flash by default', () => {
+    const metadata = BUNDLED_CATALOG.cindyModelMeta as {
+      models?: Record<string, { defaultEnabled?: boolean }>;
+    };
+    expect(metadata.models?.['deepseek/deepseek-v4-flash']?.defaultEnabled).toBeUndefined();
+  });
+
   it('models are grouped per-agent (no flat array, no rogue agent keys)', () => {
     for (const p of BUNDLED_CATALOG.providers) {
       expect(Array.isArray(p.models), `${p.id} models must be a per-agent map`).toBe(false);
@@ -329,5 +406,76 @@ describe('vendor grouping metadata (xai 静态清单)', () => {
         expect(typeof m.sortOrder, `${m.id} sortOrder`).toBe('number');
       }
     }
+  });
+});
+
+describe('provider OAuth and upstream URL validation', () => {
+  const oauthCatalog = (): Catalog => ({
+    version: '1',
+    providers: [{
+      id: 'oauth-provider',
+      name: 'OAuth Provider',
+      source: 'builtin',
+      agents: ['codex'],
+      auth: {
+        method: 'oauth',
+        oauth: {
+          flow: 'authorization-code',
+          authorizeUrl: 'https://auth.example/authorize',
+          tokenUrl: 'https://auth.example/token',
+          clientId: 'client',
+          scopes: 'openid',
+        },
+      },
+      routing: {
+        codex: {
+          upstream: 'https://api.example/v1',
+          authStrategy: 'oauth-token',
+        },
+      },
+      models: { codex: [model('m1')] },
+    }],
+  });
+
+  it('rejects fields from the other OAuth flow', () => {
+    const authorizationCode = oauthCatalog();
+    Object.assign(authorizationCode.providers[0]!.auth.oauth!, {
+      deviceAuthorizationUrl: 'https://auth.example/device',
+    });
+    expect(() => parseCatalog(authorizationCode)).toThrow(/device-code fields/);
+
+    const deviceCode = oauthCatalog();
+    deviceCode.providers[0]!.auth.oauth = {
+      flow: 'device-code',
+      deviceAuthorizationUrl: 'https://auth.example/device',
+      tokenUrl: 'https://auth.example/token',
+      clientId: 'client',
+      scopes: 'openid',
+      authorizeUrl: 'https://auth.example/authorize',
+    } as never;
+    expect(() => parseCatalog(deviceCode)).toThrow(/authorization-code fields/);
+  });
+
+  it('rejects reserved OAuth extra params case-insensitively', () => {
+    const catalog = oauthCatalog();
+    catalog.providers[0]!.auth.oauth!.extraAuthParams = {
+      Client_Id: 'shadow-client',
+    };
+    expect(() => parseCatalog(catalog)).toThrow(/cannot override 'Client_Id'/);
+  });
+
+  it('rejects an OAuth descriptor on a non-OAuth auth method', () => {
+    const catalog = oauthCatalog();
+    catalog.providers[0]!.auth = {
+      method: 'none',
+      oauth: catalog.providers[0]!.auth.oauth,
+    } as never;
+    expect(() => parseCatalog(catalog)).toThrow(/auth\.oauth not allowed for none method/);
+  });
+
+  it('rejects an upstream URL with embedded credentials', () => {
+    const catalog = oauthCatalog();
+    catalog.providers[0]!.routing.codex!.upstream = 'https://user:pass@api.example/v1';
+    expect(() => parseCatalog(catalog)).toThrow(/upstream invalid/);
   });
 });

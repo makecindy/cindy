@@ -113,6 +113,35 @@ describe('sidebar-embedded session navigation boundary', () => {
     ).toBeTruthy();
   });
 
+  it('keeps the anchored pill and its range summary on a single line', () => {
+    const { container } = render(
+      <SessionLinkChip
+        href="cindy://session/session-a?message=message-1"
+        label="Session A"
+        referenceMetadata={{
+          sessionId: 'session-a',
+          messageClientId: 'message-1',
+          range: 'around-anchor',
+          messageCount: 11,
+          truncated: true,
+        }}
+      />,
+    );
+
+    // 宽度上限必须留在 pill 一侧:加回外层会让 pill 与 summary 抢同一份 240px,
+    // summary 被压成逐字竖排、pill 被 stretch 拉成大椭圆。
+    const link = container.querySelector('button[data-session-message-link]');
+    expect(link?.className).toContain('items-center');
+    expect(link?.className).not.toContain('max-w-[min(240px,55vw)]');
+    expect(
+      container.querySelector('[data-inline-reference-chip]')?.parentElement?.className,
+    ).toContain('max-w-[min(240px,55vw)]');
+    // summary 单行截断,不参与换行。
+    expect(container.querySelector('[data-session-reference-summary]')?.className).toContain(
+      'truncate',
+    );
+  });
+
   it('renders handoff cards as static content without resolving or navigating', () => {
     render(
       embedded(

@@ -1,8 +1,9 @@
 ---
 id: sidebar
 title: Finding and organizing sessions
-summary: Browse, group, filter, search, and pin sessions in the left sidebar.
+summary: Browse, group, filter, search, and pin sessions or projects in the left sidebar.
 ---
+
 The left sidebar lists your sessions. It's the main way to navigate and organize.
 
 **Grouping:**
@@ -20,6 +21,9 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 
 - Right-click a session and pick **Pin** to keep it at the top. There's no cap on the number of pinned sessions; a newly pinned session goes to the **front** of the pin order (most recent pin first).
 - Right-click a pinned session and pick **Unpin** to remove the pin.
+- Open a project's overflow menu and pick **Pin project** to move the whole project into **Pinned**. Project pins are independent from session pins, remain available after a restart or project rename, and can be expanded or collapsed inside **Pinned**.
+- Pinned projects and sessions share one draggable order. Newly pinned items move to the front, while the other pinned items keep their relative order. Use **Unpin project** to return a project to its position under the current project sorting mode.
+- The **Pinned** section supports the same **Text**, **List**, and **Card** display modes for both sessions and projects.
 
 **Searching:**
 
@@ -37,4 +41,4 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 **Notes:**
 
 - Click the sidebar collapse arrow to shrink it to an icon-only strip — that's purely visual, you don't lose any features.
-- **Pin order** is persisted in `<userData>/sidebar-settings.json` and is shared across windows. **Filter settings** are stored per-window (in that window's local storage), so they don't sync between, say, a dev window and the installed app.
+- **Pin state and order** are persisted in `<userData>/sidebar-settings.json` and are shared across windows. **Filter settings** are stored per-window (in that window's local storage), so they don't sync between, say, a dev window and the installed app.

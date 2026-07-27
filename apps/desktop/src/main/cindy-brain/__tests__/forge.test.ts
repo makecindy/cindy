@@ -107,6 +107,97 @@ describe('packGhostDir', () => {
     });
   });
 
+  it('打包期校验 locale 文件存在、合法且完整，产物可按宿主语言 inspect', async () => {
+    const manifest = {
+      ...GOOD_MANIFEST,
+      description: 'Base description',
+      locales: {
+        en: 'locales/en.json',
+        ja: 'locales/ja.json',
+      },
+    };
+    const locale = (name: string, description: string, tool: string) => JSON.stringify({
+      name,
+      description,
+      tools: { do_thing: { description: tool } },
+    });
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// brain',
+      'locales/en.json': locale('Demo', 'English description', 'English tool'),
+      'locales/ja.json': locale('デモ', '日本語の説明', '日本語のツール'),
+    });
+    const packed = await packGhostDir(dir);
+    expect(packed.ok, JSON.stringify(packed)).toBe(true);
+    if (!packed.ok) return;
+    const manager = new GhostManager({
+      getRootDir: () => path.join(workDir, 'ghosts'),
+      getLocale: () => 'ja',
+    });
+    expect(await manager.inspect(packed.cindyPath)).toMatchObject({
+      manifest: {
+        name: 'デモ',
+        description: '日本語の説明',
+        resolvedLocale: 'ja',
+        tools: [{ name: 'do_thing', description: '日本語のツール' }],
+      },
+    });
+  });
+
+  it('Forge 在 locale 缺文件、坏 JSON 或翻译错位时直接拒绝;部分翻译可打包', async () => {
+    const manifest = {
+      ...GOOD_MANIFEST,
+      locales: { en: 'locales/en.json' },
+    };
+    const missing = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// brain',
+    });
+    expect(await packGhostDir(missing)).toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+    });
+
+    await fs.promises.mkdir(path.join(missing, 'locales'), { recursive: true });
+    await fs.promises.writeFile(path.join(missing, 'locales', 'en.json'), '{ nope');
+    expect(await packGhostDir(missing)).toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+    });
+
+    await fs.promises.writeFile(
+      path.join(missing, 'locales', 'en.json'),
+      JSON.stringify({ name: 'Demo', tools: { nope: { description: 'x' } } }),
+    );
+    expect(await packGhostDir(missing)).toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+    });
+
+    // 部分翻译(只给 name)不再挡打包:缺译回退原文。
+    await fs.promises.writeFile(
+      path.join(missing, 'locales', 'en.json'),
+      JSON.stringify({ name: 'Demo' }),
+    );
+    const partialPacked = await packGhostDir(missing);
+    expect(partialPacked.ok, JSON.stringify(partialPacked)).toBe(true);
+
+    await fs.promises.rm(path.join(missing, 'locales'), { recursive: true, force: true });
+    await fs.promises.mkdir(path.join(missing, 'Locales'), { recursive: true });
+    await fs.promises.writeFile(
+      path.join(missing, 'Locales', 'EN.json'),
+      JSON.stringify({
+        name: 'Demo',
+        tools: { do_thing: { description: 'English tool' } },
+      }),
+    );
+    expect(await packGhostDir(missing)).toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('大小写不一致'),
+    });
+  });
+
   it('目录不存在 / 清单坏 / 声明的入口文件缺失 → 结构化拒绝', async () => {
     expect((await packGhostDir(path.join(workDir, 'nope'))).ok).toBe(false);
 
@@ -303,6 +394,13 @@ describe('FORGE_GUIDE', () => {
       'data-ghost-link',
       'cindy.request',
       'app-context',
+      'navigator.language',
+      'host-context-changed',
+      'locales/en.json',
+      '固定使用英文',
+      // 2026-07-25 locale 可选化:缺译回退原文,翻译错位仍拒;§2.1 同步。
+      '翻译是可选项',
+      '翻译错位仍是硬错误',
       'clientIdAlternatives',
       'cindy.fetch',
       'network 槽',
@@ -339,15 +437,22 @@ describe('FORGE_GUIDE', () => {
       '/preview/',
       'settingsHtml',
       'settingsHeight',
+      'box-sizing:border-box',
+      'min-width:0',
+      'max-width:100%',
       "fetch('/kv')",
       // setup 就绪声明(2026-07-21):使用前置检查——作者声明需求,主机统一检查。
       'setup 就绪声明',
       'anyOf',
       'secret:brave_api_key',
+      'Node 凭证同样可参与 setup.requires',
       // 2026-07-23 通用能力四件套:会话上下文 / node 多入口 / 目录选择 / 面板预览。
       '会话上下文(session-context 槽)',
       'workdir_is_local',
+      'workdir_is_read_only',
       'node.entries',
+      'node.secretBindings',
+      'request.cindy.secrets',
       '目录选择(pick 槽)',
       'cindy.pick',
       '面板预览(preview 槽)',
@@ -360,8 +465,82 @@ describe('FORGE_GUIDE', () => {
       '宿主代启子进程(childSpawn)',
       '__CINDY_NODE__',
       'spawnEntry',
+      // 2026-07-24 面板页签形态:position 'tab' 进右侧栏,每会话单例,
+      // 停靠专属字段(minWidth/defaultFraction)拒装;§5 面板章节同步。
+      '面板(panel.html/css/js)',
+      'panel.position',
+      '右侧栏页签',
+      // 2026-07-25 标准头系统按钮:主机画标题条,systemButtons 逐个关
+      // (maximize 撑满 / detach 独立窗口 / minimize 气泡);§2 样例与 §5
+      // 面板章节同步。
+      'systemButtons',
+      '撑满内容区',
+      '在独立窗口中打开',
+      'minimize',
+      '最小化为浮动气泡',
+      // 2026-07-25 skill 槽:随包捆绑 Agent Skills,声明一致性 + 全局作用域披露。
+      // 卡槽总数标记随 workspace 槽合入更新为十五个。
+      '十五个卡槽',
+      '捆绑 Agent Skills(skill 槽)',
+      'skill.items',
+      'SKILL.md',
+      '~/.agents/skills',
+      '逐字一致',
+      '不受插件沙箱约束',
+      // 2026-07-25 工作区会话(workspace 槽):目录亲选/确认卡授权,判重复用,
+      // 空会话入口落侧边栏;§2 卡槽清单与 §4.17 章节同步。
+      '创建工作区会话(workspace 槽)',
+      'cindy.workspace',
+      "kind: 'ensure-session'",
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }
+  });
+});
+
+describe('packGhostDir · skill 槽', () => {
+  const SKILL_MANIFEST = {
+    ...GOOD_MANIFEST,
+    id: 'skilled',
+    slots: ['tool', 'skill'],
+    skill: { items: [{ dir: 'skills/foo', name: 'foo', description: '教 Agent 用 foo' }] },
+  };
+  const skillMd = (name: string, description: string) =>
+    `---\nname: ${name}\ndescription: ${description}\n---\n\n正文\n`;
+
+  it('happy path:SKILL.md 一致 → 打包,产物能被装入侧 inspect 认可', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(SKILL_MANIFEST),
+      'main.js': '// brain',
+      'skills/foo/SKILL.md': skillMd('foo', '教 Agent 用 foo'),
+    });
+    const r = await packGhostDir(dir);
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    if (!r.ok) return;
+    const manager = new GhostManager({ getRootDir: () => path.join(workDir, 'ghosts') });
+    const inspected = await manager.inspect(r.cindyPath);
+    expect(inspected).toMatchObject({
+      manifest: { skill: { items: [{ dir: 'skills/foo', name: 'foo' }] } },
+    });
+  });
+
+  it('声明的技能目录缺 SKILL.md → ENTRY_MISSING', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(SKILL_MANIFEST),
+      'main.js': '// brain',
+      'skills/foo/notes.md': '不是 SKILL.md',
+    });
+    const r = await packGhostDir(dir);
+    expect(r).toMatchObject({ ok: false, errorCode: 'ENTRY_MISSING' });
+  });
+
+  it('frontmatter 与清单声明漂移 → MANIFEST_INVALID(与装入侧同一契约)', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(SKILL_MANIFEST),
+      'main.js': '// brain',
+      'skills/foo/SKILL.md': skillMd('foo', '偷偷换一份说明'),
+    });
+    const r = await packGhostDir(dir);
+    expect(r).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
   });
 });

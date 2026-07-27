@@ -32,7 +32,6 @@ function makeDeps(overrides: Partial<ProfileEditDeps> = {}): {
     showAvatarOpenDialog: vi.fn(async () => null),
     readFile: vi.fn(async () => Buffer.from([1, 2, 3])),
     uploadAvatar: vi.fn(async () => ({ ok: true as const, publicUrl: PUBLIC_URL })),
-    moderateProfile: vi.fn(async () => 'allow' as const),
     patchProfile: vi.fn(async (patch: ProfilePatch) => {
       patches.push(patch);
       return { ok: true as const };
@@ -104,16 +103,9 @@ describe('名字收敛(留空 / 与当前一致 = 不改名)', () => {
 });
 
 describe('头像三态', () => {
-  it('set:读文件 → 私有审核 → OSS 直传 → PATCH avatarUrl=publicUrl', async () => {
+  it('set:读文件 → OSS 直传 → PATCH avatarUrl=publicUrl', async () => {
     const { deps, patches } = makeDeps();
     await updateProfile(deps, { name: null, avatar: { type: 'set', filePath: 'C:\\pics\\me.PNG' } });
-    expect(deps.moderateProfile).toHaveBeenCalledWith({
-      avatar: {
-        bytes: expect.any(Buffer),
-        fileName: 'me.PNG',
-        mimeType: 'image/png',
-      },
-    });
     expect(deps.uploadAvatar).toHaveBeenCalledWith({
       buffer: expect.any(Buffer),
       mimeType: 'image/png',
@@ -124,40 +116,7 @@ describe('头像三态', () => {
   it('set + 改名:一次 PATCH 同时带两个字段', async () => {
     const { deps, patches } = makeDeps();
     await updateProfile(deps, { name: 'Lizi', avatar: { type: 'set', filePath: '/a/b.webp' } });
-    expect(deps.moderateProfile).toHaveBeenCalledWith({
-      displayName: 'Lizi',
-      avatar: {
-        bytes: expect.any(Buffer),
-        fileName: 'b.webp',
-        mimeType: 'image/webp',
-      },
-    });
     expect(patches).toEqual([{ displayName: 'Lizi', avatarUrl: PUBLIC_URL }]);
-  });
-
-  it('昵称或头像被审核拒绝:不公开上传且不 PATCH', async () => {
-    const { deps } = makeDeps({
-      moderateProfile: vi.fn(async () => 'reject' as const),
-    });
-    await expect(
-      updateProfile(deps, {
-        name: 'Rejected',
-        avatar: { type: 'set', filePath: '/a/b.png' },
-      }),
-    ).rejects.toSatisfy((e) => ipcCode(e) === 'CONTENT_MODERATION_REJECTED');
-    expect(deps.uploadAvatar).not.toHaveBeenCalled();
-    expect(deps.patchProfile).not.toHaveBeenCalled();
-  });
-
-  it('审核期间身份切换:保存取消且不产生正式副作用', async () => {
-    const { deps } = makeDeps({
-      moderateProfile: vi.fn(async () => 'cancelled' as const),
-    });
-    await expect(
-      updateProfile(deps, { name: 'Lizi', avatar: { type: 'keep' } }),
-    ).rejects.toSatisfy((e) => ipcCode(e) === 'CONTENT_MODERATION_CANCELLED');
-    expect(deps.uploadAvatar).not.toHaveBeenCalled();
-    expect(deps.patchProfile).not.toHaveBeenCalled();
   });
 
   it('reset:PATCH avatarUrl=null(清除自定义头像)', async () => {

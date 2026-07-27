@@ -119,11 +119,11 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
       ),
     ).toBeUndefined();
     expect(signals).toEqual([
-      { sessionId: 'session-1', status: 429 },
-      { sessionId: 'session-1', status: 400 },
-      { sessionId: 'session-1', status: 401 },
-      { sessionId: 'session-1', status: 404 },
-      { sessionId: 'session-1', status: 503 },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 429 },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 400 },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 401 },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 404 },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 503 },
     ]);
   });
 
@@ -274,6 +274,22 @@ describe('createClaudeAutoPermissionFallbackCoordinator', () => {
     ).resolves.toBe(false);
     expect(notAuto.setPermissionMode).not.toHaveBeenCalled();
     expect(codex.deps.persistPermissionModeIfAuto).not.toHaveBeenCalled();
+  });
+
+  it('downgrades a Codex Auto session when the signal identifies Codex', async () => {
+    const setPermissionMode = vi.fn(async () => {});
+    const { deps } = createDeps({
+      getSession: vi.fn(() => ({ agentKind: 'codex', setPermissionMode })),
+    });
+    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+    await expect(fallback({
+      sessionId: 'session-codex',
+      agentKind: 'codex',
+      status: 408,
+    })).resolves.toBe(true);
+    expect(setPermissionMode).toHaveBeenCalledWith('ask');
+    expect(deps.persistPermissionModeIfAuto).toHaveBeenCalledWith('session-codex');
   });
 
   it('rolls runtime back to persisted mode when persistence fails', async () => {

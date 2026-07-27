@@ -5,7 +5,7 @@
  * ---------------------------------------------------------------------------
  * issue #475 — 计划模式一级入口的 DOM 级渲染断言:
  *   - ExtraDirsButton:「计划模式」菜单项与「新建目标」同级;点击回调 toggle;
- *     勾选态 aria-checked;codex(无引用目录能力)也能只凭 planMode 渲染「+」按钮
+ *     勾选态 aria-checked;codex 也能只凭 planMode 渲染「+」按钮
  *   - PlanModeIndicator:激活 chip 文案 + 退出按钮;disabled 时隐藏退出按钮
  *   - PlanActionCard:取消收敛为次级动作(仅 Esc,无独立行)与 ⏎ 去重
  *     (编辑反馈时批准行 ⏎ 隐藏,反馈 ⏎ 仅在有文字时出现且可点击发送)
@@ -79,8 +79,6 @@ describe('ExtraDirsButton 计划模式菜单项', () => {
     render(
       createElement(ExtraDirsButton, {
         extraDirs: [],
-        agentKind: 'codex',
-        onChange: () => {},
         planMode: { enabled: false, onToggle },
       }),
     );
@@ -99,7 +97,6 @@ describe('ExtraDirsButton 计划模式菜单项', () => {
     render(
       createElement(ExtraDirsButton, {
         extraDirs: [],
-        agentKind: 'cc',
         onChange: () => {},
         onNewGoal,
         planMode: { enabled: true, onToggle },
@@ -115,15 +112,31 @@ describe('ExtraDirsButton 计划模式菜单项', () => {
     expect(onToggle).toHaveBeenCalledWith(false);
   });
 
-  it('没有任何入口(codex 无 planMode 无 onNewGoal)时保持不渲染', () => {
+  it('没有任何入口时保持不渲染', () => {
     const { container } = render(
       createElement(ExtraDirsButton, {
         extraDirs: [],
-        agentKind: 'codex',
-        onChange: () => {},
       }),
     );
     expect(container.firstChild).toBeNull();
+  });
+
+  it('Codex 接入 onChange 后显示引用目录、数量与增删入口', () => {
+    const onChange = vi.fn();
+    render(
+      createElement(ExtraDirsButton, {
+        extraDirs: ['/repo-shared'],
+        workingDir: '/repo',
+        onChange,
+      }),
+    );
+
+    expect(screen.getByText('×1')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('extraDirs.menuAria'));
+    expect(screen.getByText('extraDirs.sectionTitle')).toBeTruthy();
+    expect(screen.getByText('repo-shared')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('extraDirs.remove'));
+    expect(onChange).toHaveBeenCalledWith([]);
   });
 
   it('展示所有已安装 Plugin，并把可用项交给 composer 放置', () => {
@@ -131,8 +144,6 @@ describe('ExtraDirsButton 计划模式菜单项', () => {
     render(
       createElement(ExtraDirsButton, {
         extraDirs: [],
-        agentKind: 'codex',
-        onChange: () => {},
         plugins: [installedPlugin],
         onPluginSelect,
       }),
@@ -150,8 +161,6 @@ describe('ExtraDirsButton 计划模式菜单项', () => {
     render(
       createElement(ExtraDirsButton, {
         extraDirs: [],
-        agentKind: 'codex',
-        onChange: () => {},
         plugins: [installedMermaidPlugin],
         onPluginSelect: vi.fn(),
       }),

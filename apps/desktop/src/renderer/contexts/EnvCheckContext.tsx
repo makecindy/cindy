@@ -11,13 +11,15 @@ import {
 
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
+import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 
 /**
- * 由主窗派生的附属窗口(会话多开副窗 / 右侧栏子窗口):主窗启动时已完成
- * env check + 热更检查,附属窗口一律跳过(初始 'passed' + 不跑 auto-check)。
+ * 由主窗派生的附属窗口(会话多开副窗 / 右侧栏子窗口 / 插件面板子窗口):
+ * 主窗启动时已完成 env check + 热更检查,附属窗口一律跳过
+ * (初始 'passed' + 不跑 auto-check)。
  */
 function isDerivedWindow(): boolean {
-  return isSecondaryWindow() || isSidebarWindow();
+  return isSecondaryWindow() || isSidebarWindow() || isGhostPanelWindow();
 }
 
 /* ── Types ── */

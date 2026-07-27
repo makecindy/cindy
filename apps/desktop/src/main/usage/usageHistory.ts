@@ -23,16 +23,27 @@ import { getAllSpendDays, localDayKey } from '../localDb/dailySpend';
 import { getModelUsageSince, type DailyModelUsageRow } from '../localDb/dailyModelUsage';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { createLogger } from '../logger';
-import { getClaudeSubscriptionValueFallbackPrice } from '../../shared/claudeSubscriptionValue';
 import {
   getCodexSubscriptionValuePrice,
   getModelPricing,
   getSubscriptionDirectValuePrice,
   isModelPricingRefreshInFlight,
-  type ModelPrice,
   type ModelPricingMap,
 } from './modelPricing';
-import { computeGatewayTurnCost } from './turnCostCalculator';
+import { computePriceQuoteTurnMoney } from './turnCostCalculator';
+import {
+  getModelPriceQuote,
+} from '../../shared/modelPriceQuote.js';
+import {
+  addCompatibleRegionalMoney,
+  DEFAULT_USAGE_CURRENCY,
+  normalizeRegionalMoney,
+  USD_TO_CNY_FIXED_RATE,
+  type ModelPriceQuote,
+  type MoneyCurrency,
+  type RegionalMoney,
+  zeroUsageMoney,
+} from '../../shared/regionalMoney.js';
 
 const log = createLogger('usageHistory');
 
@@ -47,7 +58,8 @@ const ANOMALY_MIN_ACTIVE_DAYS = 3;
 const MODEL_WINDOW_DAYS = 30;
 /** 等价格表的最长预算 (ms) — 缓存命中时是同步快返, 只有冷启动网络 fetch 会触及。 */
 const PRICING_WAIT_BUDGET_MS = 200;
-const DISK_CACHE_VERSION = 1;
+// v3: 币种语义改为跟随来源(默认 USD),旧缓存里 CN 构建的金额带错标 CNY,整体作废。
+const DISK_CACHE_VERSION = 3;
 const DISK_CACHE_FILE = 'usage-history.json';
 /** 后台刷新完成后, renderer 的短轮询能拿到 fresh payload, 避免 stale 状态自循环。 */
 const MEMORY_FRESH_MS = 10_000;
@@ -55,7 +67,7 @@ const CODEX_BILLING_MODEL_SUFFIX_RE = /#billing=(api|subscription)$/;
 
 export interface UsageHistoryDay {
   day: string;
-  costUsd: number;
+  money: RegionalMoney;
   /** 当日 token 合计 (daily_model_usage 口径, 表上线前的历史日为 0)。 */
   tokens: number;
 }
@@ -64,9 +76,9 @@ export interface UsageHistoryModel {
   agentKind: 'claude-code' | 'codex';
   model: string;
   /** SDK 实报美元 (Claude); Codex 恒 0。 */
-  costUsd: number;
+  money: RegionalMoney;
   /** Codex: token × 价格表估算; 模型无价格条目或价格表不可用时 null。Claude 恒 null。 */
-  estimatedCostUsd: number | null;
+  estimatedMoney: RegionalMoney | null;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -79,11 +91,11 @@ export interface UsageHistoryModelDay {
   agentKind: 'claude-code' | 'codex';
   model: string;
   /** 可比金额: Claude 实报 $; Codex 为价格表估算 (无价格 → 0, 只出现在图例 token 行)。 */
-  amountUsd: number;
+  money: RegionalMoney;
   /** 实际 API / gateway 计费金额。 */
-  apiCostUsd: number;
+  apiMoney: RegionalMoney;
   /** 订阅 token 价值估算金额。 */
-  subscriptionEstimateUsd: number;
+  subscriptionEstimateMoney: RegionalMoney;
   tokens: number;
 }
 
@@ -109,21 +121,21 @@ export interface UsageHistoryPayload {
   models: UsageHistoryModel[];
   streak: { current: number; longest: number };
   totals: {
-    today: number;
-    last30Days: number;
+    today: RegionalMoney;
+    last30Days: RegionalMoney;
     /**
      * 近 30 天展示口径: 实际 API / gateway spend + Codex OAuth 订阅 token 价值估算。
      * 订阅估算按模型明细单独叠加, 不会把已计入 API spend 的模型行重复算入。
      */
-    last30DaysWithEstimatedValue: number;
+    last30DaysWithEstimatedValue: RegionalMoney;
     /** last30DaysWithEstimatedValue - last30Days, 用于 UI 标注"含估算"。 */
-    last30DaysEstimatedValue: number;
+    last30DaysEstimatedValue: RegionalMoney;
     /** 今日 token 合计 (input+output+cacheRead+cacheCreate, daily_model_usage 口径; 表上线后才有)。 */
     todayTokens: number;
     /** 近 30 天 token 合计 (同上口径; 0 = 还没积累出数据, renderer 据此隐藏 token 段)。 */
     last30DaysTokens: number;
   };
-  anomaly: { isAnomalous: boolean; trailing7DayAvg: number | null };
+  anomaly: { isAnomalous: boolean; trailing7DayAvg: RegionalMoney | null };
 }
 
 /** YYYY-MM-DD → 前一天 (本地时区语义, 纯字符串进出)。 */
@@ -183,13 +195,20 @@ export function computeStreaks(
 export function computeAnomaly(
   spendByDay: ReadonlyMap<string, number>,
   todayKey: string,
+  thresholds: {
+    activeDayMin?: number;
+    anomalyMinToday?: number;
+  } = {},
 ): { isAnomalous: boolean; trailing7DayAvg: number | null } {
+  const activeDayMin = thresholds.activeDayMin ?? ACTIVE_DAY_MIN_USD;
+  const anomalyMinToday =
+    thresholds.anomalyMinToday ?? ANOMALY_MIN_TODAY_USD;
   let sum = 0;
   let activeCount = 0;
   for (let i = 1; i <= 7; i++) {
     const v = spendByDay.get(shiftDayKey(todayKey, -i)) ?? 0;
     sum += v;
-    if (v >= ACTIVE_DAY_MIN_USD) activeCount += 1;
+    if (v >= activeDayMin) activeCount += 1;
   }
   if (activeCount < ANOMALY_MIN_ACTIVE_DAYS) {
     return { isAnomalous: false, trailing7DayAvg: null };
@@ -197,14 +216,14 @@ export function computeAnomaly(
   const avg = sum / 7;
   const today = spendByDay.get(todayKey) ?? 0;
   return {
-    isAnomalous: today >= ANOMALY_MIN_TODAY_USD && today > ANOMALY_FACTOR * avg,
+    isAnomalous: today >= anomalyMinToday && today > ANOMALY_FACTOR * avg,
     trailing7DayAvg: avg,
   };
 }
 
 /** 测试注入用的数据读取依赖。 */
 export interface UsageHistoryDeps {
-  getAllSpendDays(): Promise<Array<{ day: string; costUsd: number }>>;
+  getAllSpendDays(): Promise<Array<{ day: string; money: RegionalMoney }>>;
   getModelUsageSince(sinceDayKey: string): Promise<DailyModelUsageRow[]>;
   getModelPricing(): Promise<ModelPricingMap | null>;
   isModelPricingRefreshInFlight(): boolean;
@@ -258,10 +277,10 @@ function validateUsageHistoryPayload(value: unknown): UsageHistoryPayload | null
   if (!payload.streak || !payload.totals || !payload.anomaly) return null;
   if (!isFiniteNumber(payload.streak.current) || !isFiniteNumber(payload.streak.longest)) return null;
   if (
-    !isFiniteNumber(payload.totals.today) ||
-    !isFiniteNumber(payload.totals.last30Days) ||
-    !isFiniteNumber(payload.totals.last30DaysWithEstimatedValue) ||
-    !isFiniteNumber(payload.totals.last30DaysEstimatedValue) ||
+    !normalizeRegionalMoney(payload.totals.today) ||
+    !normalizeRegionalMoney(payload.totals.last30Days) ||
+    !normalizeRegionalMoney(payload.totals.last30DaysWithEstimatedValue) ||
+    !normalizeRegionalMoney(payload.totals.last30DaysEstimatedValue) ||
     !isFiniteNumber(payload.totals.todayTokens) ||
     !isFiniteNumber(payload.totals.last30DaysTokens)
   ) {
@@ -269,7 +288,10 @@ function validateUsageHistoryPayload(value: unknown): UsageHistoryPayload | null
   }
   if (
     typeof payload.anomaly.isAnomalous !== 'boolean' ||
-    !(isFiniteNumber(payload.anomaly.trailing7DayAvg) || payload.anomaly.trailing7DayAvg === null)
+    !(
+      normalizeRegionalMoney(payload.anomaly.trailing7DayAvg) ||
+      payload.anomaly.trailing7DayAvg === null
+    )
   ) {
     return null;
   }
@@ -332,11 +354,14 @@ function getSubscriptionValuePriceFor(
   agentKind: 'claude-code' | 'codex',
   model: string,
   pricing: ModelPricingMap | null,
-): ModelPrice | undefined {
+): ModelPriceQuote | undefined {
   if (agentKind === 'codex') {
-    return getSubscriptionDirectValuePrice(model) ?? getCodexSubscriptionValuePrice(model, pricing);
+    return (
+      getSubscriptionDirectValuePrice(model) ??
+      getCodexSubscriptionValuePrice(model, pricing)
+    );
   }
-  return pricing?.[model] ?? getClaudeSubscriptionValueFallbackPrice(model);
+  return getModelPriceQuote(pricing, 'anthropic', model);
 }
 
 async function hydrateFromDisk(expectedOptsKey: string): Promise<UsageHistoryPayload | null> {
@@ -462,7 +487,39 @@ export async function readUsageHistoryWith(
   const todayKey = deps.todayKey();
 
   const allDays = await deps.getAllSpendDays();
-  const spendByDay = new Map(allDays.map((r) => [r.day, r.costUsd]));
+  // 阈值启发式(异常检测)使用的日金额表必须与账本币种同单位:币种切换过渡
+  // 期的异币种历史日不进表(按 0 计),避免拿一种币种的阈值去比另一种的数值。
+  const ledgerCurrency =
+    allDays.find((row) => row.day === todayKey)?.money.currency ??
+    allDays[allDays.length - 1]?.money.currency ??
+    DEFAULT_USAGE_CURRENCY;
+  const spendByDay = new Map(
+    allDays
+      .filter((row) => row.money.currency === ledgerCurrency)
+      .map((row) => [row.day, row.money.amount]),
+  );
+  // 零值也用账本币种:无消费日的 today/空聚合不能把展示单位翻回默认币种。
+  const zeroActual = (): RegionalMoney => ({
+    amount: 0,
+    currency: ledgerCurrency,
+    approximate: false,
+    kind: 'actual-cost',
+  });
+  const zeroEstimate = (): RegionalMoney => ({
+    amount: 0,
+    currency: ledgerCurrency,
+    approximate: true,
+    kind: 'value-estimate',
+    estimateReasons: ['subscription-value'],
+  });
+  // 聚合偏好账本币种(今天/最新行的币种):默认 USD 偏好会在币种切换过渡期
+  // 把当前币种的日金额整段挤掉(窗口里残留任意旧 USD 行即触发)。
+  const addOrZero = (
+    values: RegionalMoney[],
+    kind: 'actual-cost' | 'value-estimate' = 'actual-cost',
+  ): RegionalMoney =>
+    addCompatibleRegionalMoney(values, ledgerCurrency) ??
+    (kind === 'actual-cost' ? zeroActual() : zeroEstimate());
 
   const heatmapCutoff = shiftDayKey(todayKey, -(windowDays - 1));
   const modelCutoff = shiftDayKey(todayKey, -(MODEL_WINDOW_DAYS - 1));
@@ -482,13 +539,15 @@ export async function readUsageHistoryWith(
   }
   const daysMap = new Map<string, UsageHistoryDay>();
   for (const r of allDays) {
-    if (r.day >= heatmapCutoff && r.costUsd > 0) daysMap.set(r.day, { day: r.day, costUsd: r.costUsd, tokens: 0 });
+    if (r.day >= heatmapCutoff && r.money.amount > 0) {
+      daysMap.set(r.day, { day: r.day, money: r.money, tokens: 0 });
+    }
   }
   for (const [day, tokens] of tokensByDay) {
     if (tokens <= 0) continue;
     const existing = daysMap.get(day);
     if (existing) existing.tokens = tokens;
-    else daysMap.set(day, { day, costUsd: 0, tokens });
+    else daysMap.set(day, { day, money: zeroActual(), tokens });
   }
   const days = [...daysMap.values()].sort((a, b) => (a.day < b.day ? -1 : 1));
   // pricing 不许阻塞首页首帧: 冷启动时 getModelPricing 是一次最长 5s 的网络请求,
@@ -529,8 +588,8 @@ export async function readUsageHistoryWith(
       agg = {
         agentKind,
         model,
-        costUsd: 0,
-        estimatedCostUsd: null,
+        money: zeroActual(),
+        estimatedMoney: null,
         inputTokens: 0,
         outputTokens: 0,
         cacheReadTokens: 0,
@@ -538,7 +597,12 @@ export async function readUsageHistoryWith(
       };
       byKey.set(key, agg);
     }
-    agg.costUsd += row.costUsd;
+    if (row.money.amount > 0) {
+      agg.money =
+        agg.money.amount > 0
+          ? (addCompatibleRegionalMoney([agg.money, row.money], ledgerCurrency) ?? row.money)
+          : row.money;
+    }
     agg.inputTokens += row.inputTokens;
     agg.outputTokens += row.outputTokens;
     agg.cacheReadTokens += row.cacheReadTokens;
@@ -546,8 +610,8 @@ export async function readUsageHistoryWith(
   }
   for (const [key, m] of byKey) {
     const modelKey = key.slice(key.indexOf('\u0000') + 1);
-    if (m.costUsd === 0 && isSubscriptionUsageModel(modelKey)) {
-      m.estimatedCostUsd = computeGatewayTurnCost(
+    if (m.money.amount === 0 && isSubscriptionUsageModel(modelKey)) {
+      m.estimatedMoney = computePriceQuoteTurnMoney(
         m,
         getSubscriptionValuePriceFor(m.agentKind, m.model, pricing),
       );
@@ -560,23 +624,29 @@ export async function readUsageHistoryWith(
   const modelDaily: UsageHistoryModelDay[] = modelRows.map((row) => {
     const agentKind = row.agentKind === 'codex' ? ('codex' as const) : ('claude-code' as const);
     const model = displayModelName(row.model);
-    const apiCostUsd = row.costUsd > 0 ? row.costUsd : 0;
-    const subscriptionEstimateUsd = apiCostUsd === 0 && isSubscriptionUsageModel(row.model)
-      ? (computeGatewayTurnCost(row, getSubscriptionValuePriceFor(agentKind, model, pricing)) ?? 0)
-      : 0;
-    const amountUsd = apiCostUsd > 0 ? apiCostUsd : subscriptionEstimateUsd;
+    const apiMoney = row.money;
+    const subscriptionEstimateMoney =
+      apiMoney.amount === 0 && isSubscriptionUsageModel(row.model)
+        ? (computePriceQuoteTurnMoney(
+            row,
+            getSubscriptionValuePriceFor(agentKind, model, pricing),
+          ) ?? zeroEstimate())
+        : zeroEstimate();
+    const money =
+      apiMoney.amount > 0 ? apiMoney : subscriptionEstimateMoney;
     return {
       day: row.day,
       agentKind,
       model,
-      amountUsd,
-      apiCostUsd,
-      subscriptionEstimateUsd,
+      money,
+      apiMoney,
+      subscriptionEstimateMoney,
       tokens: row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreateTokens,
     };
   });
   // 可比金额 (实报或估算) 降序; 无金额的 token-only 行排最后 (按 token 量降序)
-  const comparable = (m: UsageHistoryModel) => (m.costUsd > 0 ? m.costUsd : (m.estimatedCostUsd ?? -1));
+  const comparable = (m: UsageHistoryModel) =>
+    m.money.amount > 0 ? m.money.amount : (m.estimatedMoney?.amount ?? -1);
   models.sort((a, b) => {
     const diff = comparable(b) - comparable(a);
     if (diff !== 0) return diff;
@@ -585,30 +655,63 @@ export async function readUsageHistoryWith(
     return tokens(b) - tokens(a);
   });
 
-  const activeDays = allDays.filter((r) => r.costUsd >= ACTIVE_DAY_MIN_USD).map((r) => r.day);
+  // 活跃日/异常阈值常量是 USD 口径;历史 CNY 行(或来源真声明 CNY 的账本)按
+  // 固定汇率把阈值折到该行币种再比较。仅阈值启发式用,不产生任何展示金额。
+  const heuristicThreshold = (base: number, currency: MoneyCurrency): number =>
+    currency === 'CNY' ? base * USD_TO_CNY_FIXED_RATE : base;
+  const activeDayMin = heuristicThreshold(ACTIVE_DAY_MIN_USD, ledgerCurrency);
+  const anomalyMinToday = heuristicThreshold(
+    ANOMALY_MIN_TODAY_USD,
+    ledgerCurrency,
+  );
+  const activeDays = allDays
+    .filter(
+      (row) =>
+        row.money.amount >=
+        heuristicThreshold(ACTIVE_DAY_MIN_USD, row.money.currency),
+    )
+    .map((row) => row.day);
   const last30Cutoff = shiftDayKey(todayKey, -(MODEL_WINDOW_DAYS - 1));
-  let last30 = 0;
-  for (const r of allDays) {
-    if (r.day >= last30Cutoff) last30 += r.costUsd;
+  const last30ActualByDay = new Map<string, RegionalMoney>();
+  for (const row of allDays) {
+    if (row.day >= last30Cutoff) {
+      last30ActualByDay.set(row.day, row.money);
+    }
   }
-  const last30ActualByDay = new Map<string, number>();
-  for (const r of allDays) {
-    if (r.day >= last30Cutoff) last30ActualByDay.set(r.day, r.costUsd);
-  }
-  const last30SubscriptionEstimateByDay = new Map<string, number>();
+  const last30SubscriptionEstimateByDay = new Map<string, RegionalMoney[]>();
   for (const row of modelDaily) {
-    last30SubscriptionEstimateByDay.set(
-      row.day,
-      (last30SubscriptionEstimateByDay.get(row.day) ?? 0) + row.subscriptionEstimateUsd,
-    );
+    if (row.subscriptionEstimateMoney.amount <= 0) continue;
+    const values = last30SubscriptionEstimateByDay.get(row.day) ?? [];
+    values.push(row.subscriptionEstimateMoney);
+    last30SubscriptionEstimateByDay.set(row.day, values);
   }
-  const last30DisplayDays = new Set([...last30ActualByDay.keys(), ...last30SubscriptionEstimateByDay.keys()]);
-  let last30WithEstimatedValue = 0;
-  for (const day of last30DisplayDays) {
-    last30WithEstimatedValue +=
-      (last30ActualByDay.get(day) ?? 0) + (last30SubscriptionEstimateByDay.get(day) ?? 0);
-  }
-  const last30EstimatedValue = Math.max(0, last30WithEstimatedValue - last30);
+  const last30 = addOrZero([...last30ActualByDay.values()]);
+  const last30EstimatedValue = addOrZero(
+    [...last30SubscriptionEstimateByDay.values()].flat(),
+    'value-estimate',
+  );
+  const last30WithEstimatedValue =
+    last30EstimatedValue.amount > 0
+      ? (addCompatibleRegionalMoney([last30, last30EstimatedValue], ledgerCurrency) ?? last30)
+      : last30;
+  // 与合计口径一致:估算若因币种不兼容被聚合弃掉,就不能再单独外露非零值,
+  // 否则 UI 会声称「总额已含订阅估算」而实际未含。
+  const exposedLast30EstimatedValue =
+    last30EstimatedValue.currency === last30WithEstimatedValue.currency
+      ? last30EstimatedValue
+      : zeroEstimate();
+  const anomalyRaw = computeAnomaly(spendByDay, todayKey, {
+    activeDayMin,
+    anomalyMinToday,
+  });
+  const trailing7Approximate = allDays.some(
+    (row) =>
+      row.day >= shiftDayKey(todayKey, -7) &&
+      row.day < todayKey &&
+      row.money.approximate,
+  );
+  const today =
+    allDays.find((row) => row.day === todayKey)?.money ?? zeroActual();
 
   return {
     generatedAt: Date.now(),
@@ -619,14 +722,28 @@ export async function readUsageHistoryWith(
     models,
     streak: computeStreaks(activeDays, todayKey),
     totals: {
-      today: spendByDay.get(todayKey) ?? 0,
+      today,
       last30Days: last30,
       last30DaysWithEstimatedValue: last30WithEstimatedValue,
-      last30DaysEstimatedValue: last30EstimatedValue,
+      last30DaysEstimatedValue: exposedLast30EstimatedValue,
       todayTokens,
       last30DaysTokens,
     },
-    anomaly: computeAnomaly(spendByDay, todayKey),
+    anomaly: {
+      isAnomalous: anomalyRaw.isAnomalous,
+      trailing7DayAvg:
+        anomalyRaw.trailing7DayAvg === null
+          ? null
+          : {
+              amount: anomalyRaw.trailing7DayAvg,
+              currency: ledgerCurrency,
+              approximate: trailing7Approximate,
+              kind: 'actual-cost',
+              ...(trailing7Approximate
+                ? { estimateReasons: ['legacy-usd'] }
+                : {}),
+            },
+    },
   };
 }
 
@@ -669,10 +786,10 @@ export function emptyUsageHistoryPayload(): UsageHistoryPayload {
     models: [],
     streak: { current: 0, longest: 0 },
     totals: {
-      today: 0,
-      last30Days: 0,
-      last30DaysWithEstimatedValue: 0,
-      last30DaysEstimatedValue: 0,
+      today: zeroUsageMoney(),
+      last30Days: zeroUsageMoney(),
+      last30DaysWithEstimatedValue: zeroUsageMoney(),
+      last30DaysEstimatedValue: zeroUsageMoney('value-estimate'),
       todayTokens: 0,
       last30DaysTokens: 0,
     },

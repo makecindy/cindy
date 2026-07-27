@@ -166,6 +166,13 @@ export interface ResponsesHandlerOptions {
   logger?: BridgeLogger;
 }
 
+// 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
+function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return s.slice(0, end);
+}
+
 /**
  * 创建订阅直连 handler。host 把它包进 compat-proxy 的 `RoutingDecision.localHandler`:
  * `{ localHandler: (a) => handler.handle({ ...a, prefs }) }`。
@@ -177,7 +184,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       throw new Error(`bridge provider '${p.prefix}' 声明了未实现的 wireProtocol: ${String(p.wireProtocol)}`);
     }
   }
-  const providers = opts.providers.map((p) => ({ ...p, upstreamBase: p.upstreamBase.replace(/\/+$/, '') }));
+  const providers = opts.providers.map((p) => ({ ...p, upstreamBase: trimTrailingSlashes(p.upstreamBase) }));
   const log = opts.logger ?? {};
   let reqSeq = 0;
 

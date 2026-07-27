@@ -12,11 +12,7 @@ import {
   type ResolvedImSessionDefaults,
 } from '../defaultSessionSettings';
 import { readXdGatewayApiKey } from '../shared/apiKey';
-import {
-  checkImRouteAuth,
-  type ImAuthCheckDeps,
-  type ImAuthMissing,
-} from '../shared/authCheck';
+import { checkImRouteAuth, type ImAuthCheckDeps, type ImAuthMissing } from '../shared/authCheck';
 import type { ImOrchestratorConfig } from '../shared/types';
 
 export const DISCORD_SESSION_AUTH_CHECK_CHANNEL = 'discordBot:check-session-auth';
@@ -54,7 +50,7 @@ export async function checkDiscordSessionAuth(
   const resolveDefaults = deps.resolveDefaults ?? resolveImSessionDefaults;
   const checkAuth = deps.checkAuth ?? checkImRouteAuth;
   const cached = withProviderSnapshotCache(deps.authDeps ?? createDefaultAuthDeps());
-  const defaults = await resolveDefaults(config);
+  const defaults = await resolveDefaults(config, undefined, 'discord');
   const row: AuthRow = {
     agentKind: defaults.agentKind,
     model: defaults.model,
@@ -63,7 +59,7 @@ export async function checkDiscordSessionAuth(
   const auth = await checkAuth(row, undefined, cached.authDeps);
   const providers = await cached.loadProviderSnapshot();
   const providerLabel = row.providerId
-    ? providers?.find((provider) => provider.id === row.providerId)?.name ?? null
+    ? (providers?.find((provider) => provider.id === row.providerId)?.name ?? null)
     : null;
 
   return {

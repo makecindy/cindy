@@ -61,6 +61,7 @@ import { composeResponseObservers } from './claude-rate-limit-headers-observer.j
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 import { encryptedStripController, imageGenerationStripController } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
+import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
@@ -116,7 +117,7 @@ export function getCodexProxyAuthInjection(): CodexProxyAuthInjection {
 }
 
 // gateway api key reader —— 由 host 注入(readClaudeApiKey), 避免 codex-proxy-host 直接 import
-// auth-adapters(重模块, 会拖累单测加载 / 埋循环依赖)。proxy 给骨折 / api 流量换 gateway key 时调它。
+// auth-adapters(重模块, 会拖累单测加载 / 埋循环依赖)。proxy 给折扣 / api 流量换 gateway key 时调它。
 let _readGatewayKey: () => string | null = () => null;
 export function setCodexProxyGatewayKeyReader(fn: () => string | null): void {
   _readGatewayKey = fn;
@@ -200,6 +201,47 @@ const CHAT_BRIDGE_DEFAULT_CAPABILITIES: ChatBridgeCapabilities = {
   forceAutoToolChoice: true,
 };
 
+function isGoogleGeminiChatUpstream(upstream: string): boolean {
+  try {
+    return new URL(upstream).hostname === 'generativelanguage.googleapis.com';
+  } catch {
+    return false;
+  }
+}
+
+const MOONSHOT_CHAT_HOSTS = new Set(['api.moonshot.cn', 'api.moonshot.ai']);
+
+function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined): string {
+  return stripPrefix && model.startsWith(stripPrefix)
+    ? model.slice(stripPrefix.length)
+    : model;
+}
+
+/**
+ * 图片桥接必须按已验证的上游能力显式开启。这里认官方 Moonshot DNS 边界 + Kimi K3
+ * 上游 model，不认 provider id（预设创建后会生成用户自定义 id），也不对所有
+ * openai-chat 供应商放开。未命中继续沿用 fail-closed 默认。
+ */
+export function chatBridgeCapabilitiesForRoute(
+  upstream: string,
+  realModel: string,
+  fallback: ChatBridgeCapabilities = CHAT_BRIDGE_DEFAULT_CAPABILITIES,
+): ChatBridgeCapabilities {
+  if (realModel !== 'kimi-k3') return fallback;
+  try {
+    const url = new URL(upstream);
+    if (url.protocol !== 'https:' || !MOONSHOT_CHAT_HOSTS.has(url.hostname.toLowerCase())) {
+      return fallback;
+    }
+  } catch {
+    return fallback;
+  }
+  return {
+    ...fallback,
+    imageInput: 'image_url',
+  };
+}
+
 /**
  * Chat bridge 上游只收 host 明确构造的 header。绝不把 Codex/ChatGPT 请求 header
  * 原样透传，防止账号 id、OpenAI OAuth bearer 或内部 session 元数据泄漏给第三方。
@@ -207,16 +249,36 @@ const CHAT_BRIDGE_DEFAULT_CAPABILITIES: ChatBridgeCapabilities = {
 function createChatBridgeDecision(
   route: Awaited<ReturnType<typeof resolveSessionRoute>>,
   instructions: string | undefined,
+  wireModel: string,
 ): RoutingDecision | null {
   if (!route || route.routing.wireProtocol !== 'openai-chat') return null;
   const { headers } = buildLocalHandlerHeaders(route, 'codex');
   const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
+  const realModel = rewriteChatBridgeModel(wireModel, stripPrefix);
   // localHandler 绕过 proxy 的 responseObserver,自定义(user)供应商的上游错误不会被
   // createProviderUpstreamErrorObserver 看到。这里显式把非 2xx 上游错误喂回同一广播通道,
   // 让 Chat 桥接会话与透明自定义供应商一样弹结构化 providerError.* 提示。内置来源不广播
   // (与 observer 的 user-only 语义一致)。
   const providerId = route.providerId;
   const providerName = getActiveCatalog().providers.find((p) => p.id === providerId)?.name ?? providerId;
+  const baseCapabilities: ChatBridgeCapabilities = isGoogleGeminiChatUpstream(
+    route.routing.upstream,
+  )
+    ? {
+        ...CHAT_BRIDGE_DEFAULT_CAPABILITIES,
+        // Gemini 的 OpenAI 兼容层原生理解 reasoning_effort 和具名 tool choice；同时不需要
+        // DeepSeek/Kimi 的 reasoning_content 占位。工具回放则必须带 Google thought signature。
+        reasoningField: 'reasoning_effort',
+        toolCallReasoningPlaceholder: false,
+        forceAutoToolChoice: false,
+        googleThoughtSignaturePlaceholder: true,
+      }
+    : CHAT_BRIDGE_DEFAULT_CAPABILITIES;
+  const capabilities = chatBridgeCapabilitiesForRoute(
+    route.routing.upstream,
+    realModel,
+    baseCapabilities,
+  );
   const onUpstreamError = route.providerSource === 'user'
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
@@ -224,11 +286,10 @@ function createChatBridgeDecision(
     : undefined;
   const handler = createResponsesChatHandler({
     upstreamBase: route.routing.upstream,
+    ...(route.routing.requestPath ? { chatCompletionsPath: route.routing.requestPath } : {}),
     buildHeaders: async () => headers,
-    rewriteModel: (model: string) => stripPrefix && model.startsWith(stripPrefix)
-      ? model.slice(stripPrefix.length)
-      : model,
-    capabilities: CHAT_BRIDGE_DEFAULT_CAPABILITIES,
+    rewriteModel: (model: string) => rewriteChatBridgeModel(model, stripPrefix),
+    capabilities,
     ...(onUpstreamError ? { onUpstreamError } : {}),
   }, { logger: log });
   return {
@@ -250,6 +311,18 @@ function createChatBridgeDecision(
             ? existing
             : [existing, instructions].filter(Boolean).join('\n\n'),
         };
+      }
+      // localHandler 在 transform 链**之前**执行(引擎按路由决策短路),跨来源恢复的
+      // 加密压缩块不会被 createCrossProviderCompactionCompatTransform 处理;而 bridge
+      // 的翻译层遇到 compaction 项会按不支持的输入 400(Greptile P1 第二轮)。Chat
+      // bridge 目标上游定义上永远不是 ChatGPT,这里无条件做同一份替换。
+      const compactionSafe = replaceEncryptedCompactionItems(body);
+      if (compactionSafe) {
+        log.info('replaced encrypted compaction history for chat-bridge upstream', {
+          providerId,
+          upstreamBase: route.routing.upstream,
+        });
+        body = compactionSafe;
       }
       return handler.handle({ parsedBody: body, res });
     },
@@ -563,6 +636,270 @@ function sanitizeXaiTools(body: Record<string, unknown>): Record<string, unknown
   return next;
 }
 
+/**
+ * ByteDance Seed accepts standard function tools and web search. Codex also
+ * emits namespaced and other built-in descriptors that Volcengine rejects
+ * before the request reaches the model. Its web-search descriptor must also
+ * be reduced to the standard shape: Codex's `external_web_access` extension
+ * is rejected as an unknown field.
+ */
+function isByteDanceSeedModel(model: unknown): boolean {
+  return typeof model === 'string' && model.startsWith('bytedance-seed/');
+}
+
+function seedToolChoiceReferencesRemovedTool(
+  toolChoice: unknown,
+  tools: Record<string, unknown>[],
+): boolean {
+  if (!isPlainObject(toolChoice) || typeof toolChoice.type !== 'string') return false;
+
+  return !tools.some((tool) => {
+    if (tool.type !== toolChoice.type) return false;
+    if (toolChoice.type !== 'function') return true;
+    return typeof toolChoice.name === 'string' && tool.name === toolChoice.name;
+  });
+}
+
+function sanitizeByteDanceSeedTools(body: Record<string, unknown>): Record<string, unknown> | null {
+  if (!isByteDanceSeedModel(body.model) || !Array.isArray(body.tools)) return null;
+
+  let changed = false;
+  const tools: Record<string, unknown>[] = [];
+  for (const tool of body.tools) {
+    if (!isPlainObject(tool)) {
+      changed = true;
+      continue;
+    }
+    if (tool.type === 'function') {
+      tools.push(tool);
+      continue;
+    }
+    if (tool.type === 'web_search') {
+      // Seed cannot represent Codex's cache-only search policy. Dropping the
+      // tool preserves the caller's explicit prohibition on live web access.
+      if (tool.external_web_access === false) {
+        changed = true;
+        continue;
+      }
+      tools.push({ type: 'web_search' });
+      if (Object.keys(tool).length !== 1) changed = true;
+      continue;
+    }
+    changed = true;
+  }
+  if (!changed) return null;
+
+  const next: Record<string, unknown> = { ...body };
+  if (tools.length > 0) {
+    next.tools = tools;
+    if (seedToolChoiceReferencesRemovedTool(next.tool_choice, tools)) next.tool_choice = 'auto';
+  } else {
+    delete next.tools;
+    delete next.tool_choice;
+    delete next.parallel_tool_calls;
+  }
+  return next;
+}
+
+const STRICT_GATEWAY_TOOL_HISTORY_MODELS = new Set([
+  'moonshotai/kimi-k3',
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash',
+]);
+const RESPONSE_TOOL_CALL_TYPES = new Set(['function_call', 'custom_tool_call']);
+const RESPONSE_TOOL_OUTPUT_TYPES = new Set(['function_call_output', 'custom_tool_call_output']);
+
+function responseToolCallId(item: unknown, output: boolean): string | null {
+  if (!isPlainObject(item)) return null;
+  const supportedTypes = output ? RESPONSE_TOOL_OUTPUT_TYPES : RESPONSE_TOOL_CALL_TYPES;
+  if (!supportedTypes.has(typeof item.type === 'string' ? item.type : '')) return null;
+  return typeof item.call_id === 'string' && item.call_id.length > 0 ? item.call_id : null;
+}
+
+function stripEmptyResponseMessage(item: unknown): { item: unknown; changed: boolean } | null {
+  if (!isPlainObject(item) || item.type !== 'message') return { item, changed: false };
+  if (item.content === '') return null;
+  if (!Array.isArray(item.content)) return { item, changed: false };
+
+  const content = item.content.filter((part) => !(
+    isPlainObject(part) &&
+    (part.type === 'input_text' || part.type === 'output_text') &&
+    part.text === ''
+  ));
+  if (content.length === 0) return null;
+  return content.length === item.content.length
+    ? { item, changed: false }
+    : { item: { ...item, content }, changed: true };
+}
+
+/** Volcengine requires replayed assistant messages to carry their output status and non-empty text. */
+function normalizeByteDanceSeedInput(body: Record<string, unknown>): Record<string, unknown> | null {
+  if (!isByteDanceSeedModel(body.model) || !Array.isArray(body.input)) return null;
+
+  let changed = false;
+  const input: unknown[] = [];
+  for (const item of body.input) {
+    const normalized = stripEmptyResponseMessage(item);
+    if (!normalized) {
+      changed = true;
+      continue;
+    }
+    if (normalized.changed) changed = true;
+
+    const nextItem = normalized.item;
+    if (
+      isPlainObject(nextItem) &&
+      nextItem.type === 'message' &&
+      nextItem.role === 'assistant' &&
+      typeof nextItem.status !== 'string'
+    ) {
+      changed = true;
+      input.push({ ...nextItem, status: 'completed' });
+      continue;
+    }
+    input.push(nextItem);
+  }
+  return changed ? { ...body, input } : null;
+}
+
+/**
+ * LiteLLM converts gateway Responses history to Chat Completions for these models.
+ * Their native APIs require every assistant tool call to be followed immediately
+ * by its tool result, while Codex may persist an assistant progress message between
+ * the Responses function_call and function_call_output items. Codex may also persist
+ * empty assistant output_text items, which Moonshot rejects after history conversion.
+ * Consecutive calls form one parallel assistant group, so their matched outputs must
+ * be moved after the whole group rather than inserted between calls.
+ */
+function normalizeStrictGatewayHistory(body: Record<string, unknown>): Record<string, unknown> | null {
+  if (
+    typeof body.model !== 'string' ||
+    !STRICT_GATEWAY_TOOL_HISTORY_MODELS.has(body.model) ||
+    !Array.isArray(body.input)
+  ) {
+    return null;
+  }
+
+  const originalInput = body.input;
+  const normalizedInput: unknown[] = [];
+  for (const item of originalInput) {
+    const normalized = stripEmptyResponseMessage(item);
+    if (normalized) normalizedInput.push(normalized.item);
+  }
+
+  const matchedOutputs = new Map<number, number>();
+  const usedOutputIndexes = new Set<number>();
+  const outputIndexesByCallId = new Map<string, number[]>();
+  const outputCursorByCallId = new Map<string, number>();
+  for (let index = 0; index < normalizedInput.length; index += 1) {
+    const outputCallId = responseToolCallId(normalizedInput[index], true);
+    if (!outputCallId) continue;
+    const indexes = outputIndexesByCallId.get(outputCallId) ?? [];
+    indexes.push(index);
+    outputIndexesByCallId.set(outputCallId, indexes);
+  }
+
+  for (let callIndex = 0; callIndex < normalizedInput.length; callIndex += 1) {
+    const callId = responseToolCallId(normalizedInput[callIndex], false);
+    if (!callId) continue;
+
+    const outputIndexes = outputIndexesByCallId.get(callId);
+    if (!outputIndexes) continue;
+    let cursor = outputCursorByCallId.get(callId) ?? 0;
+    while (cursor < outputIndexes.length && outputIndexes[cursor] <= callIndex) cursor += 1;
+    if (cursor >= outputIndexes.length) continue;
+
+    const outputIndex = outputIndexes[cursor];
+    outputCursorByCallId.set(callId, cursor + 1);
+    matchedOutputs.set(callIndex, outputIndex);
+    usedOutputIndexes.add(outputIndex);
+  }
+
+  const outputIndexesByGroupEnd = new Map<number, number[]>();
+  for (let groupStart = 0; groupStart < normalizedInput.length;) {
+    if (!responseToolCallId(normalizedInput[groupStart], false)) {
+      groupStart += 1;
+      continue;
+    }
+    let groupEnd = groupStart;
+    while (
+      groupEnd + 1 < normalizedInput.length &&
+      responseToolCallId(normalizedInput[groupEnd + 1], false)
+    ) {
+      groupEnd += 1;
+    }
+    const outputIndexes: number[] = [];
+    for (let callIndex = groupStart; callIndex <= groupEnd; callIndex += 1) {
+      const outputIndex = matchedOutputs.get(callIndex);
+      if (outputIndex !== undefined) outputIndexes.push(outputIndex);
+    }
+    if (outputIndexes.length > 0) {
+      outputIndexesByGroupEnd.set(groupEnd, outputIndexes.sort((a, b) => a - b));
+    }
+    groupStart = groupEnd + 1;
+  }
+
+  const input: unknown[] = [];
+  for (let index = 0; index < normalizedInput.length; index += 1) {
+    if (usedOutputIndexes.has(index)) continue;
+    input.push(normalizedInput[index]);
+    const outputIndexes = outputIndexesByGroupEnd.get(index);
+    if (outputIndexes) {
+      for (const outputIndex of outputIndexes) input.push(normalizedInput[outputIndex]);
+    }
+  }
+  const changed =
+    input.length !== originalInput.length ||
+    input.some((item, index) => item !== originalInput[index]);
+  return changed ? { ...body, input } : null;
+}
+
+function createStrictGatewayHistoryCompatTransform(): RequestTransform {
+  return (body) => {
+    if (!isPlainObject(body)) return null;
+    return normalizeStrictGatewayHistory(body);
+  };
+}
+
+/** Seed accepts the reasoning effort, but rejects Responses' summary selector. */
+function sanitizeByteDanceSeedReasoning(body: Record<string, unknown>): Record<string, unknown> | null {
+  if (!isByteDanceSeedModel(body.model) || !isPlainObject(body.reasoning) || !('summary' in body.reasoning)) {
+    return null;
+  }
+
+  const reasoning = { ...body.reasoning };
+  delete reasoning.summary;
+
+  const next: Record<string, unknown> = { ...body };
+  if (Object.keys(reasoning).length > 0) next.reasoning = reasoning;
+  else delete next.reasoning;
+  return next;
+}
+
+function createByteDanceSeedResponsesCompatTransform(): RequestTransform {
+  return (body) => {
+    if (!isPlainObject(body)) return null;
+    let changed = false;
+    let current = body;
+    const withSanitizedTools = sanitizeByteDanceSeedTools(current);
+    if (withSanitizedTools) {
+      current = withSanitizedTools;
+      changed = true;
+    }
+    const withNormalizedInput = normalizeByteDanceSeedInput(current);
+    if (withNormalizedInput) {
+      current = withNormalizedInput;
+      changed = true;
+    }
+    const withSanitizedReasoning = sanitizeByteDanceSeedReasoning(current);
+    if (withSanitizedReasoning) {
+      current = withSanitizedReasoning;
+      changed = true;
+    }
+    return changed ? current : null;
+  };
+}
+
 function createXaiResponsesCompatTransform(): RequestTransform {
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
@@ -599,6 +936,78 @@ function createXaiResponsesCompatTransform(): RequestTransform {
       changed = true;
     }
     return changed ? current : null;
+  };
+}
+
+/**
+ * 跨来源恢复的加密压缩历史兼容(Greptile P1, PR #265):
+ *
+ * OpenAI 远端压缩会把早期历史替换成加密 compaction 块(只有 ChatGPT 后端能解)。
+ * 该会话切到 XD / xAI / 自定义供应商后按原 thread id resume,持久化历史里的加密块
+ * 会被逐请求重放给读不懂它的上游 → 请求被拒、会话卡死。客户端无法解密转换,
+ * 唯一可行的降级是:发往**非 ChatGPT 上游**时把加密块替换成明文占位 user message,
+ * 明确告知模型「压缩点之前的上下文不可用」,保留压缩点之后仍在历史里的对话继续跑。
+ * 判断去向用 ctx.upstreamBase(引擎按最终路由注入),不复刻路由逻辑。
+ * ChatGPT 路由(chatgpt.com)原样透传,远端压缩语义不受影响。
+ */
+const COMPACTION_UNAVAILABLE_NOTE =
+  '[context note] Earlier conversation history was compacted into an encrypted snapshot by the ' +
+  'OpenAI subscription backend and is not readable on the current model provider. Treat the ' +
+  'conversation from this point on as the available context; ask the user if earlier details are needed.';
+
+function isChatGptUpstreamBase(upstreamBase: string | undefined): boolean {
+  if (!upstreamBase) return false;
+  try {
+    return new URL(upstreamBase).hostname === new URL(CODEX_OAUTH_UPSTREAM).hostname;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 把 body.input 里**确实携带加密内容**的压缩项替换为明文占位 user message。
+ * 返回 null = 无压缩项,零改写。透明转发路径(transform 链)与 Chat bridge
+ * localHandler 路径共用——两条路都可能重放跨来源恢复的加密压缩历史。
+ *
+ * 只替换 encrypted_content 非空的项(codex wire 上 Compaction.encrypted_content
+ * 必填、ContextCompaction 可选):未来若出现可读/非加密的 compaction 变体,
+ * 不在「上游解不开」的问题域内,原样透传交给目标上游/翻译层自行处理。
+ */
+function replaceEncryptedCompactionItems(body: unknown): Record<string, unknown> | null {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return null;
+  let changed = false;
+  const input = body.input.map((item) => {
+    if (
+      isPlainObject(item) &&
+      (item.type === 'compaction' || item.type === 'context_compaction') &&
+      typeof item.encrypted_content === 'string' &&
+      item.encrypted_content.length > 0
+    ) {
+      changed = true;
+      return {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: COMPACTION_UNAVAILABLE_NOTE }],
+      };
+    }
+    return item;
+  });
+  return changed ? { ...body, input } : null;
+}
+
+export function createCrossProviderCompactionCompatTransform(): RequestTransform {
+  return (body, ctx) => {
+    // upstreamBase 未注入(理论不发生)按非 ChatGPT 保守处理?否——保守方向是不改写:
+    // 改写会丢加密块,误伤真 ChatGPT 请求的代价(远端压缩语义被破坏)高于维持现状。
+    if (!ctx.upstreamBase || isChatGptUpstreamBase(ctx.upstreamBase)) return null;
+    const replaced = replaceEncryptedCompactionItems(body);
+    if (!replaced) return null;
+    log.info('replaced encrypted compaction history for non-ChatGPT upstream', {
+      reqId: ctx.reqId,
+      upstreamBase: ctx.upstreamBase,
+      threadId: selectedThreadIdFromHeaders(ctx.headers),
+    });
+    return replaced;
   };
 }
 
@@ -727,9 +1136,20 @@ function numericHeader(headers: Readonly<Record<string, string>>, name: string):
   return Number.isFinite(value) ? value : undefined;
 }
 
+// 精确解析 host 判定,不用 startsWith 子串判断——'https://api.x.aievil.com' 也能
+// 通过前缀检查(CodeQL js/incomplete-url-substring-sanitization)。
+function isXaiUpstream(upstreamBase: string): boolean {
+  try {
+    const url = new URL(upstreamBase);
+    return url.protocol === 'https:' && url.hostname === 'api.x.ai';
+  } catch {
+    return false;
+  }
+}
+
 function maybeRecordXaiRateLimit(ctx: ResponseObserverCtx): void {
   if (ctx.status < 200 || ctx.status >= 300) return;
-  if (!ctx.upstreamBase.startsWith('https://api.x.ai')) return;
+  if (!isXaiUpstream(ctx.upstreamBase)) return;
   const info = {
     limitRequests: numericHeader(ctx.responseHeaders, 'x-ratelimit-limit-requests'),
     remainingRequests: numericHeader(ctx.responseHeaders, 'x-ratelimit-remaining-requests'),
@@ -844,7 +1264,7 @@ function createCodexResponseObserver(): ResponseObserver {
  * (会话显式选了供应商时由 resolveSessionRouteDecision 优先接管,不会走到这里。)
  *   - env-key spawn(codex 已带 gateway key): 全程 null(走默认上游 gateway, 不动 header)。
  *   - oauth-bearer spawn(codex 带 OAuth token):
- *       codex/ 骨折模型 → 换 gateway key, 默认上游(gateway); 无 key 则 null(passthrough, 上游会 401)。
+ *       codex/ 折扣模型 → 换 gateway key, 默认上游(gateway); 无 key 则 null(passthrough, 上游会 401)。
  *       普通模型        → override 上游到 ChatGPT, 透传 OAuth token(不动 header)= 订阅默认。
  * 退役了全局 api 开关:「普通模型也走网关」改由 per-session 显式选 XD 来源触发,不再是全局默认。
  */
@@ -887,7 +1307,11 @@ export function createModelRoutingTransform(): RoutingTransform {
       const selectedRouting = getSessionRoutingDescriptor(sessionId, 'codex', model || undefined);
       if (selectedRouting?.wireProtocol === 'openai-chat' && ctx.method === 'POST' && model) {
         return resolveSessionRoute(sessionId, 'codex', model).then((localRoute) =>
-          createChatBridgeDecision(localRoute, threadId ? registry.get(threadId) : undefined));
+          createChatBridgeDecision(
+            localRoute,
+            threadId ? registry.get(threadId) : undefined,
+            model,
+          ));
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。
@@ -930,7 +1354,7 @@ export function createModelRoutingTransform(): RoutingTransform {
 
     // ② 未显式选供应商 → 回落默认路由(decideCodexRoute,与未升级行为字节级一致)。
     const decision = decideCodexRoute({ model, authInjection, gatewayKey });
-    // codex/ 骨折模型该走 gateway 换 key 但没配 key → null(passthrough), 上游大概率 401, 记一条诊断。
+    // codex/ 折扣模型该走 gateway 换 key 但没配 key → null(passthrough), 上游大概率 401, 记一条诊断。
     if (decision === null && authInjection === 'oauth-bearer' && model
       && model.startsWith('codex/') && !gatewayKey) {
       log.warn('codex routing → gateway but no api key configured; passthrough (可能 401)', { model });
@@ -952,7 +1376,12 @@ function createTransformRequestChain(): RequestTransform[] {
       strip: stripImageGenerationItemsWithoutIdFromBody,
     }),
     createCodexTransform(),
+    // 必须先于 xAI/MiniMax 兼容改写:加密压缩块换成明文占位 message 后,后续
+    // 针对具体供应商的 input 归一化才能按标准 message 处理它。
+    createCrossProviderCompactionCompatTransform(),
+    createStrictGatewayHistoryCompatTransform(),
     createXaiResponsesCompatTransform(),
+    createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
     createProviderModelRewriteTransform(),
     stripNonAnthropicFields,
@@ -1013,6 +1442,9 @@ export async function ensureCodexProxyReady(): Promise<void> {
           }),
         ],
         logger: log,
+        // 上游连接跟随代理环境变量 / 系统代理(非 TUN 的代理软件场景);无代理配置时直连,
+        // 行为与之前字节级一致。见 outbound-proxy-resolver.ts。
+        resolveOutboundProxy: resolveDesktopOutboundProxy,
       });
       if (generation !== _disposeGeneration) {
         await handle.dispose().catch((err) => {

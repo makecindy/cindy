@@ -78,6 +78,11 @@ async function checkImRouteAuthWithResolution(
         ? { ok: true, missing: null }
         : { ok: false, missing: 'provider-disconnected' };
     }
+    if (routing?.authStrategy === 'none') {
+      return resolution.provider.connected
+        ? { ok: true, missing: null }
+        : { ok: false, missing: 'provider-disconnected' };
+    }
     if (routing?.authStrategy === 'api-key-header') {
       if (!resolution.provider.connected) return { ok: false, missing: 'provider-disconnected' };
       return hasCustomProviderAuth(resolution.provider, row.agentKind, deps)

@@ -28,6 +28,10 @@ import { getModelVisibilityOverride } from '../maker-host/model-visibility-mirro
 import { WorktreeManager } from '../worktree/index.js';
 import { prepareHandoffWorktree } from '../maker-ipc/handoffWorktree.js';
 import { throwIpcError, requireObject, requireString } from '../utils/ipcValidate.js';
+import {
+  listWorkspaceProviderSources,
+  setWorkspaceProviderSource,
+} from './workspaceProviderSourceStore.js';
 import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import {
   dialogueWorkspaceRootDir,
@@ -41,6 +45,8 @@ import { ownerScopedUserDataPath } from '../appSessionState.js';
 import {
   HOOK_CONTROL_EVENT,
   HOOK_CONTROL_INVOKE,
+  HOOK_WORKSPACE_ALIAS_RE,
+  HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES,
   type HookPrefsPatch,
   type HookPrefsView,
   type ProviderPrefsView,
@@ -53,6 +59,7 @@ import {
 } from './store.js';
 import {
   createHookControlManager,
+  hookNotConnectedIpcMessage,
   HookNotConnectedError,
   HookPrefsTimeoutError,
   type HookControlManager,
@@ -62,12 +69,12 @@ import { registerSlackToolBridge, unregisterSlackToolBridge } from './slackToolB
 import { createHookBindingStore } from './bindings.js';
 import { createHookDispatcher } from './dispatcher.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
-import { cancelReleasedOutput } from '../content-moderation/outputHub.js';
 import { resolveHookInteraction } from './interactions.js';
 import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
 import { isAppContentWindow } from '../windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { getAgentIslandService } from '../agent-island/service.js';
 
 const log = createLogger('hook-control');
 
@@ -200,10 +207,11 @@ function currentAccountFingerprint(): string | null {
   return createHash('sha256').update(fingerprintSource).digest('base64url').slice(0, 22);
 }
 
-/** prefs 往返错误 -> IPC 错误码(规则 13)。 */
+/** prefs 往返错误 -> IPC 错误码(规则 13)。not-connected 文案随 provider 区分,
+ *  Telegram 偏好查询失败不再误报 Slack Hook 断线(issue #279)。 */
 function throwHookPrefsError(err: unknown): never {
   if (err instanceof HookNotConnectedError) {
-    throwIpcError('HOOK_NOT_CONNECTED', 'slack hook is not connected');
+    throwIpcError('HOOK_NOT_CONNECTED', hookNotConnectedIpcMessage(err.provider));
   }
   if (err instanceof HookPrefsTimeoutError) {
     throwIpcError(
@@ -295,8 +303,20 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       // task.cancel 的中断出口: 与用户手动 Stop 同一条 session.abort() 路径
       abortSession: async (sessionId) => {
-        cancelReleasedOutput(sessionId);
-        await getMaker().getSession(sessionId)?.abort();
+        const session = getMaker().getSession(sessionId);
+        if (!session) return;
+        try {
+          getAgentIslandService()?.handleSessionStopped(
+            sessionId,
+            session.getCurrentTurnId?.() ?? null,
+          );
+        } catch (error) {
+          log.warn('Agent Island session stop update failed before hook provider abort', {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        await session.abort();
       },
       // session.archive 的归档出口: 与 device-link 远程归档同一条
       // patchSessionMetaInDb 路径(落库 + sessions:patched 广播, sidebar 即时移出)
@@ -360,7 +380,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
               displayName: m.name,
               efforts: m.efforts,
               defaultEffort: m.defaultEffort,
-              // 分组随行: 骨折版(gpt-budget)与官方版 displayName 故意同名,
+              // 分组随行: 折扣版(gpt-budget)与官方版 displayName 故意同名,
               // Slack 卡与 Tina 下拉都靠 group 加区分后缀
               ...(m.group !== undefined ? { group: m.group } : {}),
             })),
@@ -680,9 +700,78 @@ export function registerHookControlIpc(): void {
     }
   });
 
+  // 工作目录模型来源偏好: 纯本地文件, 不经 WS(来源是纯客户端维度, server 零感知)。
+  registerTrustedHookControlHandler(
+    HOOK_CONTROL_INVOKE.WORKSPACE_PROVIDER_SOURCE_GET,
+    async () => ({ entries: listWorkspaceProviderSources() }),
+  );
+
+  registerTrustedHookControlHandler(
+    HOOK_CONTROL_INVOKE.WORKSPACE_PROVIDER_SOURCE_SET,
+    async (_e, payload) => {
+      const p = requireObject(payload);
+      const channel = requireString(p.channel, 'channel');
+      if (channel !== 'slack' && channel !== 'telegram') {
+        throwIpcError('INVALID_PARAMS', 'channel must be slack or telegram');
+      }
+      // 输入设界(codex review): 即使 renderer 被攻破, 也不允许任意长度/格式的键
+      // 无限追加条目撑爆本地文件 —— workspace 按别名正则(与 prefs 同规), 其余限长。
+      const workspace = requireString(p.workspace, 'workspace');
+      if (!HOOK_WORKSPACE_ALIAS_RE.test(workspace)) {
+        throwIpcError('INVALID_PARAMS', 'workspace must match the alias format');
+      }
+      const teamId =
+        p.teamId === undefined || p.teamId === null ? null : requireString(p.teamId, 'teamId');
+      if (teamId !== null && teamId.length > 64) {
+        throwIpcError('INVALID_PARAMS', 'teamId too long');
+      }
+      const providerId =
+        p.providerId === undefined || p.providerId === null
+          ? null
+          : requireString(p.providerId, 'providerId');
+      if (providerId !== null && providerId.length > 128) {
+        throwIpcError('INVALID_PARAMS', 'providerId too long');
+      }
+      // 条目总量上限(codex review): 键合法性校验挡不住海量唯一 teamId 的无限
+      // 追加 —— 新增(非替换/删除)且已达上限时拒绝。按精确键判新增(不能用
+      // getWorkspaceProviderSource, 它的 teamId null 兜底会把新 team 误判为已存在)。
+      const existing = listWorkspaceProviderSources();
+      const isReplace = existing.some(
+        (e) => e.channel === channel && e.teamId === teamId && e.workspace === workspace,
+      );
+      if (
+        providerId !== null &&
+        !isReplace &&
+        existing.length >= HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES
+      ) {
+        throwIpcError('INVALID_PARAMS', 'too many workspace provider source entries');
+      }
+      // fs 异常在 IPC 边界翻译(codex review): 只读盘/满盘/rename 失败的原始
+      // 异常含 owner-scoped 绝对路径, 不得未脱敏穿透给 renderer;统一走
+      // throwIpcError 协议给稳定错误码, 细节留 main 日志。
+      let entries: ReturnType<typeof setWorkspaceProviderSource>;
+      try {
+        entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId);
+      } catch (err) {
+        log.warn(
+          `workspace provider source write failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        throwIpcError('INTERNAL', 'failed to persist workspace provider source');
+      }
+      // 多窗口同步(codex review): 会话副窗也能开设置页, 写后全窗口广播全量条目。
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed() && isAppContentWindow(w)) {
+          w.webContents.send(HOOK_CONTROL_EVENT.WORKSPACE_PROVIDER_SOURCE_CHANGED, entries);
+        }
+      }
+      return { entries };
+    },
+  );
+
   // Account teardown is orchestrated before its DB closes. This listener is a
-  // fail-closed backstop for signed-out/local sessions; activation still waits
-  // for app:ready-for-bot after the next owner DB is ready.
+  // fail-closed backstop for signed-out/local sessions; activation waits for
+  // the next owner DB readiness callback (with app:ready-for-bot as a
+  // compatibility retry).
   disposeAuthListener = authManager.onAuthStateChange(() => {
     if (!hookControlAvailable()) {
       void stopHookControlAccount().catch((err: unknown) => {
@@ -696,7 +785,7 @@ export function registerHookControlIpc(): void {
   log.info('hook-control ipc registered');
 }
 
-/** Called by app:ready-for-bot after the current account DB is ready. */
+/** Called after the current account DB is ready; app:ready-for-bot may retry it. */
 export function startHookControlAccount(): void {
   if (!hookControlAvailable()) return;
   ensureInstances().manager.activateAccount();

@@ -31,10 +31,6 @@ const KNOWN_MISSING: ReadonlySet<string> = new Set([
   'ccAgent.workdirBrowse.fileBody.drawioLoading',
   'ccAgent.workdirBrowse.fileBody.pdfLoading',
   'chat.media.clickToZoom',
-  'settings.lspMode.cell.description',
-  'settings.lspMode.cell.title',
-  'settings.lspMode.toast.toggleFailed',
-  'settings.lspMode.toggleAria',
 ]);
 
 function loadLocales(): Record<string, unknown>[] {

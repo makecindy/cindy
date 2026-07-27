@@ -21,6 +21,14 @@ import { useTranslation } from 'react-i18next';
 import type { DeviceView } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { loginText } from '@/auth/loginMessages';
+import {
+  clearAnalyticsEnabledOverride,
+  getAnalyticsConsentState,
+  hydrateAnalyticsConsent,
+  setAnalyticsEnabled,
+  subscribeAnalyticsConsent,
+} from '@/analytics/analyticsConsentStore';
+import { initMobileTapdb, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
 import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import { useLocale } from '@/i18n/useLocale';
 import { goBackGuarded } from '@/utils/backGuard';
@@ -31,7 +39,16 @@ import {
   ScreenHeader,
   StatusDot,
 } from '@/components/MobilePrimitives';
-import { AUTH_API_BASE_URL, AUTH_REGION, DESKTOP_PACKAGE_VERSION, DEVICE_LINK_API_BASE_URL, IS_OTA_SELFHOST, REVIEW_MODE } from '@/config/env';
+import {
+  AUTH_API_BASE_URL,
+  AUTH_REGION,
+  DESKTOP_PACKAGE_VERSION,
+  DEVICE_LINK_API_BASE_URL,
+  IS_OTA_SELFHOST,
+  IS_TESTFLIGHT_BUILD,
+  REVIEW_MODE,
+} from '@/config/env';
+import { LEGAL_LINKS } from '@/config/legalLinks';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { formatRemoteError } from '@/device-link/remoteStatus';
@@ -47,6 +64,7 @@ import {
   writePushEnabled,
 } from '@/notifications/pushNotifications';
 import { buildMobileUpdateInfoRows, currentMobileOtaVersion } from '@/settings/updateInfo';
+import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
 import { runManualUpdateCheck } from '@/update/manualUpdateCheck';
 import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
 import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
@@ -61,9 +79,6 @@ type SelfDeviceNameQueuedWrite =
 const SETTINGS_DEVICE_TIMEOUT_MS = 12_000;
 // 显示语言选项:「跟随系统」在前,4 种具体语言在后(与 desktop LanguageSection 同序)。
 const LANGUAGE_OPTIONS: readonly LocalePreference[] = ['system', ...SUPPORTED_LOCALES];
-const PRIVACY_POLICY_URL = AUTH_REGION === 'cn'
-  ? 'https://cindy.cn/privacy/'
-  : 'https://cindy.app/privacy/';
 
 export default function SettingsScreen() {
   const styles = useThemedStyles(makeStyles);
@@ -83,6 +98,14 @@ export default function SettingsScreen() {
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
+  // 使用统计(TapDB)开关。真相在 analyticsConsentStore,这里只是视图态。
+  const [analyticsEnabled, setAnalyticsEnabledState] = useState(true);
+  const [analyticsCustomized, setAnalyticsCustomized] = useState(false);
+  const [analyticsBusy, setAnalyticsBusy] = useState(false);
+  // hydration 完成前开关必须禁用:此时显示的是 fail-closed 默认值,可能与盘上
+  // 相反;放行点击会让 toggleAnalytics 对着真值取反,做出与所见相反的动作。
+  const [analyticsReady, setAnalyticsReady] = useState(false);
+  const [analyticsMessage, setAnalyticsMessage] = useState<string | null>(null);
   const updateCheckInFlightRef = useRef(false);
   const [selfDeviceName, setSelfDeviceName] = useState<string | null>(null);
   const [selfDeviceNameDraft, setSelfDeviceNameDraft] = useState('');
@@ -125,12 +148,17 @@ export default function SettingsScreen() {
   const updateInfoRows = useMemo(() => buildMobileUpdateInfoRows(currentlyRunning), [currentlyRunning, t]);
   const otaVersion = useMemo(() => currentMobileOtaVersion(currentlyRunning), [currentlyRunning, t]);
   const canaryChannel = useCanaryChannelGate(IS_OTA_SELFHOST);
-  // 自建变体的统一入口先查整包;无整包时再由 checkForUpdate 继续查 JS OTA。
+  // 允许整包分发时统一入口先查整包;TestFlight 等禁用整包的环境直接进入 JS OTA。
   const { checkNow: checkBundleUpdate } = useBundleUpdatePrompt({
     auto: false,
     isCanary: canaryChannel.isCanary,
   });
-  const updateCheckEnabled = IS_OTA_SELFHOST || updatesEnabled;
+  const bundleCheckEnabled = shouldCheckBundleUpdate({
+    isSelfHosted: IS_OTA_SELFHOST,
+    isReviewMode: REVIEW_MODE,
+    isTestFlightBuild: IS_TESTFLIGHT_BUILD,
+  });
+  const updateCheckEnabled = bundleCheckEnabled || updatesEnabled;
 
   const aboutSection = overview.sections.find((section) => section.id === 'about');
   const debugSection = overview.sections.find((section) => section.id === 'debug');
@@ -189,7 +217,11 @@ export default function SettingsScreen() {
   }, []);
 
   const openPrivacyPolicy = useCallback(() => {
-    void Linking.openURL(PRIVACY_POLICY_URL).catch(() => undefined);
+    void Linking.openURL(LEGAL_LINKS.privacyPolicy).catch(() => undefined);
+  }, []);
+
+  const openUserAgreement = useCallback(() => {
+    void Linking.openURL(LEGAL_LINKS.termsOfService).catch(() => undefined);
   }, []);
 
   const checkForUpdate = useCallback(async () => {
@@ -199,7 +231,7 @@ export default function SettingsScreen() {
     setUpdateMessage(null);
     try {
       const outcome = await runManualUpdateCheck({
-        checkBundleUpdate: IS_OTA_SELFHOST ? checkBundleUpdate : undefined,
+        checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,
         otaEnabled: updatesEnabled,
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
@@ -211,10 +243,18 @@ export default function SettingsScreen() {
         setUpdateMessage(t('settings.version.bundleUpdateFound'));
       } else if (outcome.kind === 'up-to-date') {
         setUpdatePhase('uptodate');
-        setUpdateMessage(t('settings.version.upToDate'));
+        setUpdateMessage(t(
+          IS_TESTFLIGHT_BUILD
+            ? 'settings.version.testFlightNoContentUpdate'
+            : 'settings.version.upToDate',
+        ));
       } else if (outcome.kind === 'ota-unavailable') {
         setUpdatePhase('uptodate');
-        setUpdateMessage(t('settings.version.bundleUpToDateNoOta'));
+        setUpdateMessage(t(
+          IS_TESTFLIGHT_BUILD
+            ? 'settings.version.testFlightContentUpdateUnavailable'
+            : 'settings.version.bundleUpToDateNoOta',
+        ));
       } else if (outcome.kind === 'reloading') {
         setUpdatePhase('downloading');
         setUpdateMessage(t('settings.version.downloadedRestarting'));
@@ -227,7 +267,7 @@ export default function SettingsScreen() {
     } finally {
       updateCheckInFlightRef.current = false;
     }
-  }, [checkBundleUpdate, t, updateCheckEnabled, updatesEnabled]);
+  }, [bundleCheckEnabled, checkBundleUpdate, t, updateCheckEnabled, updatesEnabled]);
 
   const updateSelfDeviceNameDraft = useCallback((value: string) => {
     selfDeviceNameDraftRef.current = value;
@@ -420,6 +460,30 @@ export default function SettingsScreen() {
     };
   }, []);
 
+  // 使用统计开关的当前值。store 是本机唯一真相,订阅它以免多个入口写入后本页陈旧。
+  useEffect(() => {
+    let cancelled = false;
+    const sync = () => {
+      if (cancelled) return;
+      const snapshot = getAnalyticsConsentState();
+      setAnalyticsEnabledState(snapshot.enabled);
+      setAnalyticsCustomized(snapshot.enabledCustomized);
+    };
+    void hydrateAnalyticsConsent()
+      .then(sync)
+      .catch(() => undefined)
+      // 读失败也放开:store 已 fail closed 到已 hydrate 的默认态,此后的交互
+      // 操作的是真值,不再有「对陈旧显示取反」的问题。
+      .finally(() => {
+        if (!cancelled) setAnalyticsReady(true);
+      });
+    const unsubscribe = subscribeAnalyticsConsent(sync);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
   const togglePushNotifications = useCallback(async () => {
     if (pushBusy) return;
     setPushBusy(true);
@@ -458,11 +522,71 @@ export default function SettingsScreen() {
     setDebugExpanded((value) => !value);
   }, []);
 
+  /* ── 使用统计(TapDB)开关 ──
+     语义是 opt-out:用户在登录页同意《隐私政策》后默认开启,这里随时可关。
+     关闭后立即解绑账号标识、不再主动上报;原生 SDK 不支持反初始化,本次进程内
+     已初始化的实例要到下次冷启动才彻底不再初始化(见 analytics/mobileTapdb)。
+
+     关闭路径**先停上报再落盘**:写盘失败时本次运行已经不再上报(偏安全的一侧),
+     而开关值不变,如实反映「重启后仍是开启」。 */
+  /* 重新开启统计时必须**重新绑定当前账号**。关闭路径已经调过 clearNativeTapdbUser(),
+     而 AuthContext 里负责绑定的 effect 依赖 [initialized, user?.id] —— 拨开关不会
+     让这两个值变化,所以它不会再跑。不补这一下的话,账号维度的用量会一直空到下次
+     重启或下一次登录态变化。 */
+  const resumeAnalyticsReporting = useCallback(async () => {
+    const status = await initMobileTapdb();
+    if (!status.ok) return;
+    const userId = auth.user?.id;
+    if (userId) await setTapdbUser(userId);
+  }, [auth.user?.id]);
+
+  const toggleAnalytics = useCallback(async () => {
+    if (analyticsBusy) return;
+    setAnalyticsBusy(true);
+    setAnalyticsMessage(null);
+    try {
+      // 必须先 hydrate 再取反:AsyncStorage 读慢时 getAnalyticsConsentState() 返回的
+      // 是 fail-closed 默认值,直接取反会算错方向,对着一个陈旧值执行 stop/start。
+      await hydrateAnalyticsConsent();
+      const next = !getAnalyticsConsentState().enabled;
+      if (!next) await stopMobileTapdbReporting();
+      await setAnalyticsEnabled(next);
+      if (next) await resumeAnalyticsReporting();
+    } catch {
+      // 只可能是本机存储异常(无服务端往返)。开关值由 store 回推,保持落盘前的
+      // 真值;这里显式告诉用户没存住,而不是让它看起来「点了没反应」。
+      setAnalyticsMessage(t('settings.legal.analyticsSaveFailed'));
+    } finally {
+      setAnalyticsBusy(false);
+    }
+  }, [analyticsBusy, resumeAnalyticsReporting, t]);
+
+  /* 恢复默认:只删掉开关 override 让它重新跟随版本默认值,同意事实不动
+     (configuration-and-overrides §4)。仅在用户显式拨过开关时出现。 */
+  const resetAnalytics = useCallback(async () => {
+    if (analyticsBusy) return;
+    setAnalyticsBusy(true);
+    setAnalyticsMessage(null);
+    try {
+      await clearAnalyticsEnabledOverride();
+      if (getAnalyticsConsentState().enabled) await resumeAnalyticsReporting();
+      else await stopMobileTapdbReporting();
+    } catch {
+      setAnalyticsMessage(t('settings.legal.analyticsSaveFailed'));
+    } finally {
+      setAnalyticsBusy(false);
+    }
+  }, [analyticsBusy, resumeAnalyticsReporting, t]);
+
   const avatarLabel = (overview.header.name.trim()[0] ?? '?').toUpperCase();
   const updateBusy = updatePhase === 'checking' || updatePhase === 'downloading';
   const updateButtonLabel = updatePhase === 'checking' ? t('settings.version.checking')
     : updatePhase === 'downloading' ? t('settings.version.updating')
-    : t('settings.version.checkAction');
+    : t(
+      IS_TESTFLIGHT_BUILD
+        ? 'settings.version.testFlightCheckAction'
+        : 'settings.version.checkAction',
+    );
 
   if (selfDeviceNameEditing) {
     return (
@@ -509,7 +633,7 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* 版本:只保留统一检查入口,自建线严格先查整包、无整包再查热更。 */}
+        {/* 版本:只保留统一检查入口;允许整包分发时先查整包,否则直接查热更。 */}
         <SettingsGroup title={t('settings.version.sectionTitle')}>
           {[
             <View key="version" style={styles.versionRow} testID="settings.version">
@@ -521,17 +645,38 @@ export default function SettingsScreen() {
                 {IS_OTA_SELFHOST && DESKTOP_PACKAGE_VERSION ? (
                   <Text style={styles.rowDetail} numberOfLines={1} testID="settings.desktopVersion">{t('settings.version.desktopVersion', { version: DESKTOP_PACKAGE_VERSION })}</Text>
                 ) : null}
+                {IS_TESTFLIGHT_BUILD ? (
+                  <Text style={styles.rowDetail} numberOfLines={2} testID="settings.testFlightUpdateHint">
+                    {t('settings.version.testFlightUpdateManaged')}
+                  </Text>
+                ) : null}
                 {updateMessage ? (
                   <Text style={styles.rowDetail} numberOfLines={2} testID="settings.updateMessage">{updateMessage}</Text>
                 ) : !REVIEW_MODE && !updatesEnabled ? (
-                  <Text style={styles.rowDetail} numberOfLines={1}>{t('settings.version.devNoOta')}</Text>
+                  <Text style={styles.rowDetail} numberOfLines={2}>
+                    {t(
+                      IS_TESTFLIGHT_BUILD
+                        ? 'settings.version.testFlightContentUpdateUnavailable'
+                        : 'settings.version.devNoOta',
+                    )}
+                  </Text>
                 ) : null}
               </View>
               {/* 审核模式(清单 review 命中当前二进制版本):隐藏检查更新入口,版本号照常展示 */}
               {!REVIEW_MODE ? (
                 <MainWindowActionButton
                   action={{
-                    accessibilityLabel: updateBusy ? t('settings.version.checkingAccessibility') : t('settings.version.checkAction'),
+                    accessibilityLabel: updateBusy
+                      ? t(
+                        IS_TESTFLIGHT_BUILD
+                          ? 'settings.version.testFlightCheckingAccessibility'
+                          : 'settings.version.checkingAccessibility',
+                      )
+                      : t(
+                        IS_TESTFLIGHT_BUILD
+                          ? 'settings.version.testFlightCheckAction'
+                          : 'settings.version.checkAction',
+                      ),
                     busy: updateBusy,
                     disabled: !updateCheckEnabled,
                     label: updateButtonLabel,
@@ -635,8 +780,37 @@ export default function SettingsScreen() {
           </SettingsGroup>
         ) : null}
 
-        {/* 法律信息:隐私政策始终显示;App 备案号仅国内版显示。 */}
+        {/* 法律信息:隐私政策/用户协议始终显示(链接区域分流走 legalLinks 单点);
+            使用统计开关与它们同组(合规要求关闭途径可被找到);
+            App 备案号仅国内版显示。 */}
         <SettingsGroup title={t('settings.legal.sectionTitle')}>
+          <View key="analytics-toggle" style={styles.switchRow} testID="settings.analyticsToggleRow">
+            <View style={styles.switchTexts}>
+              <Text style={styles.rowLabel}>{t('settings.legal.analytics')}</Text>
+              <Text style={styles.hint}>{t('settings.legal.analyticsHint')}</Text>
+              {analyticsMessage ? (
+                <Text style={styles.hint} testID="settings.analyticsMessage">{analyticsMessage}</Text>
+              ) : null}
+            </View>
+            <Switch
+              accessibilityLabel={t('settings.legal.analytics')}
+              disabled={analyticsBusy || !analyticsReady}
+              onValueChange={() => void toggleAnalytics()}
+              testID="settings.analyticsToggle"
+              trackColor={{ true: colors.inputCaret }}
+              value={analyticsEnabled}
+            />
+          </View>
+          {analyticsCustomized ? (
+            <ActionInfoRow
+              accessibilityLabel={t('settings.legal.analyticsReset')}
+              key="analytics-reset"
+              label={t('settings.legal.analyticsReset')}
+              onPress={() => void resetAnalytics()}
+              testID="settings.analyticsReset"
+              value={t('settings.legal.analyticsResetAction')}
+            />
+          ) : null}
           <ActionInfoRow
             accessibilityLabel={t('settings.legal.openPrivacyPolicy')}
             accessibilityRole="link"
@@ -644,6 +818,15 @@ export default function SettingsScreen() {
             label={t('settings.legal.privacyPolicy')}
             onPress={openPrivacyPolicy}
             testID="settings.privacyPolicy"
+            value={t('settings.legal.view')}
+          />
+          <ActionInfoRow
+            accessibilityLabel={t('settings.legal.openUserAgreement')}
+            accessibilityRole="link"
+            key="user-agreement"
+            label={t('settings.legal.userAgreement')}
+            onPress={openUserAgreement}
+            testID="settings.userAgreement"
             value={t('settings.legal.view')}
           />
           {AUTH_REGION === 'cn' ? (

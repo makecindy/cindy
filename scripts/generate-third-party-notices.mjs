@@ -242,16 +242,39 @@ function matchesPackageConstraint(values, actual) {
 }
 
 function matchesTarget(pkgJson, target) {
-  if (!target) return true;
   return (
     matchesPackageConstraint(pkgJson.os, target.os) &&
     matchesPackageConstraint(pkgJson.cpu, target.cpu) &&
+    // libc 只对 linux 有意义，非 linux 目标可以省略这一轴（desktop-win / desktop-macos
+    // 与移动端的 target 就没带），省略时由 matchesPackageConstraint() 按「未声明约束一律
+    // 放行」处理；SUPPORTED_TARGETS 叉乘出来的 target 则各轴齐全，os 不是 linux 时也带
+    // libc，那种情况下这一轴只会挡掉声明了 libc 约束的包，而声明该约束的包都把 os 限定
+    // 在 linux，早已被上面的 os 轴挡掉。
     matchesPackageConstraint(pkgJson.libc, target.libc)
   );
 }
 
-/** BFS 遍历给定入口的生产依赖闭包。workspace 内部包穿透但不收录。 */
-function collectClosure(entryDirs, target = null) {
+/**
+ * BFS 遍历给定入口的生产依赖闭包。workspace 内部包穿透但不收录。
+ *
+ * `target` 必填且强制校验：本函数判断一个平台可选依赖是否存在，只看 `node_modules` 里
+ * 有没有对应目录，所以缺了 target 就等于把「本机恰好装了哪些架构」写进产物。这里刻意
+ * 不提供「不过滤」的默认值——宁可让调用点直接报错，也不给出一条能静默恢复机器相关
+ * 行为的路径。
+ */
+function collectClosure(entryDirs, target) {
+  // 只有 linux 分 glibc / musl，所以 libc 只在 linux 目标上必填：缺了它
+  // matchesPackageConstraint() 会因为「未声明约束一律放行」把 glibc 与 musl 变体同时收进
+  // 闭包，产物重新随本机装了哪个变体漂移——正是本函数要挡掉的那种机器相关行为。
+  const requiredAxes =
+    target?.os === "linux" ? ["os", "cpu", "libc"] : ["os", "cpu"];
+  for (const axis of requiredAxes) {
+    if (typeof target?.[axis] !== "string" || target[axis].length === 0) {
+      throw new Error(
+        `collectClosure() requires an explicit target.${axis}: license notices would otherwise depend on the generating machine`,
+      );
+    }
+  }
   const collected = new Map(); // key: name@version
   const visitedDirs = new Set();
   const missing = new Set();
@@ -384,6 +407,50 @@ function mergeClosures(...closures) {
     excluded: [...excluded.values()].sort(sort),
     missing: [...missing].sort(),
   };
+}
+
+/**
+ * 由根 package.json 的 `pnpm.supportedArchitectures` 叉乘出的目标平台集合。
+ *
+ * 覆盖「本仓声明支持的全部架构」而非单一发行产物的闭包必须逐个 target 收集再合并：
+ * collectClosure() 判断一个平台可选依赖是否存在只看 `node_modules` 里有没有对应目录，
+ * 而实际装出来的集合可能超出 supportedArchitectures 的声明（例如 libc 只声明 glibc 时
+ * 仍装进 musl 变体），产物内容就会随生成机器漂移。这里不假设包管理器只安装声明过的
+ * 架构。
+ */
+function readSupportedTargets() {
+  const declared = readJson(path.join(REPO_ROOT, "package.json")).pnpm
+    ?.supportedArchitectures;
+  for (const axis of ["os", "cpu", "libc"]) {
+    const values = declared?.[axis];
+    if (!Array.isArray(values) || values.length === 0) {
+      throw new Error(
+        `pnpm.supportedArchitectures.${axis} must list explicit values in the root package.json`,
+      );
+    }
+    // pnpm 支持 "current" 表示生成机器自身的架构，那会把机器差异重新带回产物。
+    if (values.includes("current")) {
+      throw new Error(
+        `pnpm.supportedArchitectures.${axis} must not use "current": license notices would depend on the generating machine`,
+      );
+    }
+  }
+  const targets = [];
+  for (const os of declared.os) {
+    for (const cpu of declared.cpu) {
+      for (const libc of declared.libc) targets.push({ os, cpu, libc });
+    }
+  }
+  return targets;
+}
+
+const SUPPORTED_TARGETS = readSupportedTargets();
+
+/** 在全部支持架构上收集闭包并合并，结果与生成机器的安装集合无关。 */
+function collectClosureForSupportedTargets(entryDirs) {
+  return mergeClosures(
+    ...SUPPORTED_TARGETS.map((target) => collectClosure(entryDirs, target)),
+  );
 }
 
 function cargoExecutable() {
@@ -520,7 +587,15 @@ function readBundledLicense(relativePath) {
   );
 }
 
-function buildDesktopCommonEntries(apacheText, sharpPackageName) {
+/**
+ * 桌面三平台共有的随包分发组件声明。
+ *
+ * @param sharpPackageNames sharp 预编译包名,可传单个或数组。该包的 README 与
+ *   versions.json 是 per-arch 的(见下方 sharp 段),所以一个平台声明覆盖多个架构时
+ *   应把每个架构的包都传进来。desktop-linux 已按此传 x64 + arm64;desktop-macos
+ *   的 productName 同样是 x64/arm64 但目前只传 arm64,属既存缺口,记在 issue #452。
+ */
+function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
   const entries = [];
 
   // ripgrep — 随包分发的搜索二进制
@@ -639,28 +714,33 @@ function buildDesktopCommonEntries(apacheText, sharpPackageName) {
   );
 
   // sharp 预编译包内含多种第三方动态库;保留包自带清单和精确版本表。
-  const sharpDir = resolvePkgDir(sharpPackageName, DESKTOP_DIR);
-  if (!sharpDir)
-    throw new Error(
-      `sharp platform package is not installed: ${sharpPackageName}`,
+  // 逐架构出条目:README 与 versions.json 都是 per-arch 的,一个平台声明覆盖两个
+  // 架构时只读其中一份,另一个架构的分发物就会带着错误的架构描述发出去
+  // (arm64 用户拿到的声明写着 "Linux (glibc) x64")。
+  for (const sharpPackageName of [sharpPackageNames].flat()) {
+    const sharpDir = resolvePkgDir(sharpPackageName, DESKTOP_DIR);
+    if (!sharpDir)
+      throw new Error(
+        `sharp platform package is not installed: ${sharpPackageName}`,
+      );
+    const sharpJson = readJson(path.join(sharpDir, "package.json"));
+    const versions = readJson(path.join(sharpDir, "versions.json"));
+    const licensingReadme = normalizeNoticeText(
+      fs.readFileSync(path.join(sharpDir, "README.md"), "utf8"),
     );
-  const sharpJson = readJson(path.join(sharpDir, "package.json"));
-  const versions = readJson(path.join(sharpDir, "versions.json"));
-  const licensingReadme = normalizeNoticeText(
-    fs.readFileSync(path.join(sharpDir, "README.md"), "utf8"),
-  );
-  entries.push(
-    bundledComponent({
-      name: `${sharpPackageName} embedded native libraries`,
-      version: sharpJson.version,
-      license: "LicenseRef-Sharp-Third-Party-Licenses",
-      url: `https://github.com/lovell/sharp-libvips/tree/v${sharpPackageName.includes("libvips") ? sharpJson.version : "1.2.4"}`,
-      licenseText:
-        `${licensingReadme}\n\nExact bundled library versions:\n${JSON.stringify(versions, null, 2)}\n\n` +
-        "Corresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. " +
-        `The bundled libvips version is ${versions.vips}.`,
-    }),
-  );
+    entries.push(
+      bundledComponent({
+        name: `${sharpPackageName} embedded native libraries`,
+        version: sharpJson.version,
+        license: "LicenseRef-Sharp-Third-Party-Licenses",
+        url: `https://github.com/lovell/sharp-libvips/tree/v${sharpPackageName.includes("libvips") ? sharpJson.version : "1.2.4"}`,
+        licenseText:
+          `${licensingReadme}\n\nExact bundled library versions:\n${JSON.stringify(versions, null, 2)}\n\n` +
+          "Corresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. " +
+          `The bundled libvips version is ${versions.vips}.`,
+      }),
+    );
+  }
 
   // SQLite — better-sqlite3 静态编译进 native addon
   entries.push(
@@ -1013,17 +1093,22 @@ function buildSpdxDocument(artifact, components) {
         : {}),
     };
   });
+  // licenseId -> (componentKey -> licenseText)。必须按组件分别留存,不能先到先得:
+  // SPDX 的 hasExtractedLicensingInfos 对一个 licenseId 只存一份 extractedText,
+  // 而同一个 LicenseRef 会被多个组件共用(desktop-linux 的 x64/arm64 两份 libvips
+  // 预编译包就是如此)。只留其中一份,另一个组件就会引用到不属于它的说明和版本表。
   const licenseRefs = new Map();
   for (const component of sorted) {
     for (const match of component.license.matchAll(
       /LicenseRef-[A-Za-z0-9.-]+/g,
     )) {
-      if (!licenseRefs.has(match[0])) {
-        licenseRefs.set(
-          match[0],
+      if (!licenseRefs.has(match[0])) licenseRefs.set(match[0], new Map());
+      licenseRefs
+        .get(match[0])
+        .set(
+          componentKey(component),
           component.licenseText || "No standalone license text available.",
         );
-      }
     }
   }
   return {
@@ -1045,9 +1130,17 @@ function buildSpdxDocument(artifact, components) {
     ...(licenseRefs.size
       ? {
           hasExtractedLicensingInfos: [...licenseRefs].map(
-            ([licenseId, extractedText]) => ({
+            ([licenseId, textsByComponent]) => ({
               licenseId,
-              extractedText,
+              // 独占该 licenseId 的组件保持原样输出(不给 win/macos 等单组件产物
+              // 引入无谓的格式变化);多组件共用时按组件加标题分段,让每个 package
+              // 条目都能在文本里找到属于自己的那段。
+              extractedText:
+                textsByComponent.size === 1
+                  ? [...textsByComponent.values()][0]
+                  : [...textsByComponent]
+                      .map(([key, text]) => `### ${key}\n\n${text}`)
+                      .join(`\n\n${"-".repeat(72)}\n\n`),
             }),
           ),
         }
@@ -1174,10 +1267,11 @@ function assertTrackedBinariesRegistered() {
     ".woff",
     ".woff2",
   ]);
+  // cindy-updater.exe 不在列:它已不入仓(Windows 打包时现场 cargo build 生成,
+  // 见 .gitignore)。若有人绕过 ignore 把它提交回来,这里会主动拦下要求登记。
   const registeredPrefixes = [
     "apps/android-platform-tools-bin/",
     "apps/desktop/native/sqlite-vec/",
-    "apps/desktop/resources/cindy-updater.exe",
     "apps/mobile/assets/fonts/JetBrainsMono-",
   ];
   const files = execFileSync("git", ["ls-files", "-z"], {
@@ -1212,7 +1306,12 @@ if (!fs.existsSync(path.join(path.dirname(CARGO_MANIFEST), "Cargo.lock"))) {
   );
 }
 
-const projectNpm = collectClosure([REPO_ROOT, ...discoverWorkspaceDirs()]);
+const projectNpm = collectClosureForSupportedTargets([
+  REPO_ROOT,
+  ...discoverWorkspaceDirs(),
+]);
+// 桌面三份产物的 target 是各自的实际发行矩阵（如 Windows 只发 x64），刻意不等于
+// SUPPORTED_TARGETS——后者是仓库声明支持的全部架构，用于覆盖面更宽的聚合声明。
 const desktopWinNpm = collectClosure([DESKTOP_DIR], {
   os: "win32",
   cpu: "x64",
@@ -1221,12 +1320,20 @@ const desktopMacNpm = mergeClosures(
   collectClosure([DESKTOP_DIR], { os: "darwin", cpu: "x64" }),
   collectClosure([DESKTOP_DIR], { os: "darwin", cpu: "arm64" }),
 );
-const desktopLinuxNpm = collectClosure([DESKTOP_DIR], {
-  os: "linux",
-  cpu: "x64",
-  libc: "glibc",
+const desktopLinuxNpm = mergeClosures(
+  collectClosure([DESKTOP_DIR], { os: "linux", cpu: "x64", libc: "glibc" }),
+  collectClosure([DESKTOP_DIR], { os: "linux", cpu: "arm64", libc: "glibc" }),
+);
+// 移动端产物的 target 是「app 实际分发到的设备」，不是仓库支持的构建架构：
+// 移动端 JS 依赖里的平台可选包（lightningcss / @parcel/watcher / @rollup 等预编译
+// 二进制）属于开发机上的构建期工具链，不进 iOS bundle 或 APK/AAB。npm 生态里纯 JS
+// 包不声明 os/cpu，matchesPackageConstraint() 对未声明的约束一律放行，所以按设备
+// target 过滤只会摘掉这些原生变体，包自身（含其许可义务）仍然照常声明。
+const mobileIosNpm = collectClosure([MOBILE_DIR], { os: "ios", cpu: "arm64" });
+const mobileAndroidNpm = collectClosure([MOBILE_DIR], {
+  os: "android",
+  cpu: "arm64",
 });
-const mobileNpm = collectClosure([MOBILE_DIR]);
 const cargoClosure = collectCargoClosure();
 
 const apacheText =
@@ -1253,7 +1360,10 @@ const artifactDefinitions = {
   "desktop-macos": {
     closure: desktopMacNpm,
     manual: [
-      ...buildDesktopCommonEntries(apacheText, "@img/sharp-libvips-darwin-arm64"),
+      ...buildDesktopCommonEntries(apacheText, [
+        "@img/sharp-libvips-darwin-x64",
+        "@img/sharp-libvips-darwin-arm64",
+      ]),
       ...buildMacEntries(),
     ],
     productName: "Cindy desktop application — macOS x64/arm64",
@@ -1266,30 +1376,34 @@ const artifactDefinitions = {
   },
   "desktop-linux": {
     closure: desktopLinuxNpm,
-    manual: buildDesktopCommonEntries(
-      apacheText,
+    manual: buildDesktopCommonEntries(apacheText, [
       "@img/sharp-libvips-linux-x64",
-    ),
-    productName: "Cindy desktop application — Linux x64 glibc",
-    description: ["Linux x64 glibc 桌面安装包的第三方开源组件声明。"],
-    notes: ["不包含运行时按需下载的 Android Platform-Tools。"],
+      "@img/sharp-libvips-linux-arm64",
+    ]),
+    productName: "Cindy desktop application — Linux x64/arm64 glibc",
+    description: ["Linux x64 与 arm64 glibc 桌面安装包的第三方开源组件声明。"],
+    notes: [
+      "合并 x64 与 arm64 原生可选包;不包含运行时按需下载的 Android Platform-Tools。",
+    ],
   },
   "mobile-ios": {
-    closure: mobileNpm,
+    closure: mobileIosNpm,
     manual: buildMobileEntries(apacheText, "ios"),
     productName: "Cindy mobile application — iOS",
     description: ["iOS JS 生产依赖及仓库显式声明的原生 SDK/字体组件。"],
     notes: [
       "Expo managed 工程的完整 Pod 闭包在构建时生成;本文件不声称替代具体构建产物的 Podfile.lock 审计。",
+      "不含只在开发机构建期使用、不随 app 分发的平台可选原生包(其 JS 包自身仍已声明)。",
     ],
   },
   "mobile-android": {
-    closure: mobileNpm,
+    closure: mobileAndroidNpm,
     manual: buildMobileEntries(apacheText, "android"),
     productName: "Cindy mobile application — Android",
     description: ["Android JS 生产依赖及仓库显式声明的原生 SDK/字体组件。"],
     notes: [
       "Expo managed 工程的完整 Gradle 闭包在构建时生成;本文件不声称替代具体 APK/AAB 的依赖报告。",
+      "不含只在开发机构建期使用、不随 app 分发的平台可选原生包(其 JS 包自身仍已声明)。",
     ],
   },
 };

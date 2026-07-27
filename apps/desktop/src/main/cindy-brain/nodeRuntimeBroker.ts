@@ -34,12 +34,35 @@ import {
   GHOST_NODE_CHILD_MODE_FLAG,
   GHOST_NODE_MAX_CHILDREN_PER_GHOST,
   GHOST_NODE_REQUEST_MAX_TOTAL_MS,
+  isGhostNodeMcpReservedMethod,
   parseGhostNodeChildToHostMessage,
 } from '../../shared/ghost.js';
 
 const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_START_TIMEOUT_MS = 10_000;
+/**
+ * 启动失败重试(2026-07-24):Windows 上杀软实时扫描刚写入的 .vite 产物 /
+ * 刚更新的 app.asar 时,子进程读引导入口会瞬时 ACCESS_DENIED(表现为
+ * "EPERM: operation not permitted, open …nodeRuntimeWorkerProcess.js" 后
+ * 立即退出)。这类失败几百毫秒内自愈,给"fork 抛错 / 就绪前退出"留有界
+ * 重试;启动超时不重试——进程活着只是没就绪,重跑只会成倍拉长等待。
+ */
+const WORKER_START_ATTEMPTS = 3;
+const WORKER_START_RETRY_DELAYS_MS = [250, 750] as const;
+/** 启动期 stderr 只留头部这么多字符,够提取一行诊断,不给日志灌洪。 */
+const STARTUP_STDERR_CAP = 4_096;
+/**
+ * 意外死亡诊断(2026-07-26):引导层先发 ready、后 require 插件入口,所以"插件
+ * 模块加载期抛错"这类崩溃落在启动期之后——startupStderr 那条路截不到,在途
+ * 请求只会收到干巴巴的"已退出(code=1)"。真实案例:某插件在 Windows 上
+ * defineProperty(process, 'stdin') 抛 TypeError,主进程日志里有完整栈,插件与
+ * Agent 侧却一无所知,只能翻日志才知道为什么。这里另留 stderr **尾部**——崩溃
+ * 摘要出现在最后,与启动期的头部截存互补。
+ */
+const EXIT_STDERR_CAP = 4_096;
+/** 尾部 stderr 只在紧邻退出时可信;更早的日志与本次死亡无关,拼进错误只会误导。 */
+const EXIT_STDERR_LOOKBACK_MS = 5_000;
 const MAX_REQUEST_TIMEOUT_MS = 120_000;
 const MAX_PENDING_REQUESTS = 32;
 const MAX_REQUEST_BYTES = 256 * 1024;
@@ -48,6 +71,7 @@ const MCP_PROTOCOL_VERSION = '2025-06-18';
 
 interface NodeWorkerReadable {
   on(event: 'data', listener: (chunk: Buffer | string) => void): this;
+  once?(event: 'end', listener: () => void): this;
 }
 
 interface NodeWorkerWritable {
@@ -76,6 +100,11 @@ export interface NodeWorkerProcess {
 
 export interface GhostNodeRuntimeBrokerDeps {
   getGhost(id: string): InstalledGhost | null;
+  /**
+   * 读取当前插件自己声明的 Node 凭证。生产接 safeStorage；返回 null =
+   * 未保存或保险库不可用。调用方不得记录返回值。
+   */
+  readSecret?: (ghostId: string, secretKey: string) => string | null;
   spawnProcess?: (entryPath: string, cwd: string, ghostId: string) => NodeWorkerProcess;
   /** 代启原样 stdio 子进程(childSpawn;缺省用 utilityProcess 适配器)。 */
   spawnChildProcess?: (
@@ -120,6 +149,16 @@ interface WorkerEntry {
   /** 本进程对应的入口(相对路径;主入口 = manifest.node.entry)。 */
   entryRel: string;
   child: NodeWorkerProcess;
+  /** 就绪握手完成前为 true:此阶段的退出由 ensureWorker 统一报告(可能重试),handleExit 不发 crashed。 */
+  startupPhase: boolean;
+  /** 启动期 stderr 头部截存,失败时提取一行诊断拼进错误消息(如杀软拦截的 EPERM)。 */
+  startupStderr: string;
+  /** stderr 尾部按段带时间戳截存,退出时只取回看窗口内的段拼接诊断。 */
+  stderrSegments: Array<{ text: string; at: number }>;
+  /** segments 总字符数(增量维护,避免每次 reduce)。 */
+  stderrTotalChars: number;
+  /** stderr 也可能把多字节字符切在两个 Buffer 之间,与 stdout 同理需流式解码。 */
+  stderrDecoder: StringDecoder;
   /** stdout 的 UTF-8 字节可能把一个汉字切在两个 chunk 之间，必须流式解码。 */
   stdoutDecoder: StringDecoder;
   stdoutBuffer: string;
@@ -131,6 +170,10 @@ interface WorkerEntry {
   hardKillTimer: NodeJS.Timeout | null;
   mcpInitPromise: Promise<void> | null;
   stopping: boolean;
+  /** 曾发给本 worker 的凭证明文(退出诊断脱敏用;settleExit 后立即清空)。 */
+  exposedSecretValues: Set<string>;
+  /** exit 后 stderr drain 用:非 null 表示进程已退出、正在等待管道排空。 */
+  exitDrain: { code: number | null; signal: string | null; error: Error | null; timer: NodeJS.Timeout; exitedAt: number; gen: number } | null;
 }
 
 class NodeRpcError extends Error {
@@ -141,6 +184,55 @@ class NodeRpcError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * 工作进程启动失败:retryable 决定 ensureWorker 是否值得再试一次;
+ * silent = 状态已由别处如实播报(如 stop 时的 'stopped'),不再补发 'crashed'。
+ */
+class WorkerStartError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+    readonly silent = false,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * 从 stderr 里挑最有诊断价值的一行(优先含 error 的行),截短拼进失败消息。
+ * preferLast: true 时从末尾向前搜索(退出诊断,最后的 error 行更可能是死因);
+ *             false 时从头向后搜索(启动诊断,首条 error 最相关)。
+ */
+function stderrHint(text: string, preferLast = false): string | null {
+  const lines = text
+    .split(/\r?\n|\r/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return null;
+  const fallback = preferLast ? lines[lines.length - 1] : lines[0];
+  const isDiagnostic = (s: string) => /error|fatal|exception|panic|abort/i.test(s);
+  const errorLine = preferLast
+    ? lines.findLast(isDiagnostic)
+    : lines.find(isDiagnostic);
+  const line = errorLine ?? fallback;
+  return sanitizePathsInHint(line).slice(0, 240);
+}
+
+function sanitizePathsInHint(hint: string): string {
+  const basename = (p: string) => p.split(/[/\\]/).pop() ?? p;
+  return hint
+    // 双引号包裹(内部允许 ')
+    .replace(/"((?:[A-Za-z]:[/\\]|\\\\[^"]+|\/)[^"]+)"/g, (_, p) => `"${basename(p)}"`)
+    // 单引号包裹(内部允许 ")
+    .replace(/'((?:[A-Za-z]:[/\\]|\\\\[^']+|\/)[^']+)'/g, (_, p) => `'${basename(p)}'`)
+    .replace(/[A-Za-z]:[/\\][^")\]\n]*/g, basename)
+    .replace(/\\\\[^")\]\n]*/g, basename)
+    // 多段 POSIX 路径;(?<![:/]) 排除 URL scheme 和连续斜杠
+    .replace(/(?<![:/])\/(?:[^/")\]\n]+\/)+[^")\]\n]*/g, basename)
+    // 单段 POSIX 绝对路径(/.ssh、/_private、/123mount 等)
+    .replace(/(?<![:/])\/[^\s/")\]\n:,][^\s")\]\n:,]*(?=[\s")\]\n:,]|$)/g, basename);
 }
 
 type UtilityFork = typeof utilityProcess.fork;
@@ -307,6 +399,11 @@ function errorResult(
   return { ok: false, errorCode, message, ...(data !== undefined ? { data } : {}) };
 }
 
+function clearHostSecrets(secrets: Record<string, string> | undefined): void {
+  if (!secrets) return;
+  for (const key of Object.keys(secrets)) secrets[key] = '';
+}
+
 /**
  * 每意识的本地 Node 工作进程生命周期与 JSON-RPC stdio 中继。
  * 多进程窄版(2026-07-23):主入口之外,manifest.node.entries 申报的每个额外
@@ -333,9 +430,19 @@ export class GhostNodeRuntimeBroker {
     return 'off';
   }
 
-  /** resident 档在插件启用/启动时调用；按需档保持零进程。常驻只覆盖主入口。 */
+  /** resident 档在插件启用/启动时调用；按需档保持零进程。常驻只覆盖主入口。
+   *  同时也是 stop() 的对称点:上层完成更新/重启后调用此方法,清除停止标记。 */
   async startResident(ghost: InstalledGhost): Promise<void> {
+    this.stoppedGhosts.delete(ghost.manifest.id);
     if (!ghost.enabled || ghost.manifest.node?.lifecycle !== 'resident') return;
+    const entry = await this.ensureWorker(ghost, ghost.manifest.node.entry);
+    if (ghost.manifest.node.protocol === 'mcp-stdio') await this.ensureMcpInitialized(entry);
+  }
+
+  /** Recovery-only restart for a runtime that was already running on demand. */
+  async startForRecovery(ghost: InstalledGhost): Promise<void> {
+    this.stoppedGhosts.delete(ghost.manifest.id);
+    if (!ghost.enabled || !ghost.manifest.node) return;
     const entry = await this.ensureWorker(ghost, ghost.manifest.node.entry);
     if (ghost.manifest.node.protocol === 'mcp-stdio') await this.ensureMcpInitialized(entry);
   }
@@ -346,6 +453,9 @@ export class GhostNodeRuntimeBroker {
     if (!ghost?.enabled || !ghost.manifest.slots.includes('node') || !ghost.manifest.node) {
       return errorResult('PERMISSION_DENIED', '插件未申请本地 Node 权限，或当前未启用');
     }
+    // getGhost 确认插件当前已启用——这是按需插件的"后更新/重启边界",
+    // 清除 stop() 留下的停止标记,使按需进程可以恢复启动。
+    this.stoppedGhosts.delete(ghostId);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return errorResult('INVALID_REQUEST', 'node-request 载荷必须是对象');
     }
@@ -407,37 +517,82 @@ export class GhostNodeRuntimeBroker {
       }
       entryRel = request.entry;
     }
+    const secretBindings = (ghost.manifest.node.secretBindings ?? []).filter(
+      (binding) =>
+        binding.methods.includes(request.method as string) &&
+        (binding.entry ?? ghost.manifest.node!.entry) === entryRel,
+    );
+
+    if (
+      ghost.manifest.node.protocol === 'mcp-stdio' &&
+      isGhostNodeMcpReservedMethod(request.method as string)
+    ) {
+      return errorResult('INVALID_REQUEST', 'MCP 初始化由 Cindy 主机统一管理');
+    }
+
+    let hostSecrets: Record<string, string> | undefined;
+    if (secretBindings.length > 0) {
+      hostSecrets = Object.create(null) as Record<string, string>;
+      try {
+        for (const binding of secretBindings) {
+          const value = this.deps.readSecret?.(ghostId, binding.key) ?? null;
+          if (value === null) {
+            clearHostSecrets(hostSecrets);
+            return errorResult(
+              'PERMISSION_DENIED',
+              `Node 请求需要先配置凭证「${binding.label}」`,
+            );
+          }
+          hostSecrets[binding.key] = value;
+        }
+      } catch {
+        clearHostSecrets(hostSecrets);
+        return errorResult('INTERNAL', '读取 Node 请求所需凭证失败');
+      }
+    }
 
     let entry: WorkerEntry;
     try {
       entry = await this.ensureWorker(ghost, entryRel);
     } catch (error) {
+      clearHostSecrets(hostSecrets);
       return errorResult(
         'PROCESS_START_FAILED',
         error instanceof Error ? error.message : 'Node 工作进程启动失败',
       );
     }
     if (entry.pending.size >= MAX_PENDING_REQUESTS) {
+      clearHostSecrets(hostSecrets);
       return errorResult('RATE_LIMITED', '这个插件同时等待的 Node 请求太多');
     }
 
     try {
       if (ghost.manifest.node.protocol === 'mcp-stdio') {
-        if (request.method === 'initialize' || request.method === 'notifications/initialized') {
-          return errorResult('INVALID_REQUEST', 'MCP 初始化由 Cindy 主机统一管理');
-        }
         await this.ensureMcpInitialized(entry);
         if (entry.pending.size >= MAX_PENDING_REQUESTS) {
           return errorResult('RATE_LIMITED', '这个插件同时等待的 Node 请求太多');
         }
       }
-      const result = await this.sendRpc(
+      if (hostSecrets) {
+        for (const v of Object.values(hostSecrets)) {
+          if (v) entry.exposedSecretValues.add(v);
+        }
+      }
+      const pendingResult = this.sendRpc(
         entry,
         request.method,
         request.params ?? null,
         effectiveTimeoutMs,
         request.maxTotalMs as number | undefined,
+        hostSecrets,
       );
+      // writeLine/JSON.stringify 在 sendRpc 内同步完成；随即抹掉本次临时对象，
+      // 不让凭证明文跟随 Promise 生命周期常驻在 broker 闭包里。
+      if (hostSecrets) {
+        clearHostSecrets(hostSecrets);
+        hostSecrets = undefined;
+      }
+      const result = await pendingResult;
       return { ok: true, result };
     } catch (error) {
       if (error instanceof NodeRpcError) {
@@ -447,6 +602,7 @@ export class GhostNodeRuntimeBroker {
       }
       return errorResult('INTERNAL', error instanceof Error ? error.message : String(error));
     } finally {
+      clearHostSecrets(hostSecrets);
       this.scheduleIdleStop(entry);
     }
   }
@@ -689,6 +845,7 @@ export class GhostNodeRuntimeBroker {
 
   /** 停用、更新或卸载一个插件时立即停止其名下**全部** Node 进程。 */
   stop(ghostId: string): void {
+    this.stoppedGhosts.add(ghostId);
     for (const [key, entry] of [...this.workers]) {
       if (entry.ghost.manifest.id === ghostId) this.stopWorker(key, entry);
     }
@@ -697,6 +854,7 @@ export class GhostNodeRuntimeBroker {
   private stopWorker(key: string, entry: WorkerEntry): void {
     entry.stopping = true;
     this.workers.delete(key);
+    this.exitGen.set(key, (this.exitGen.get(key) ?? 0) + 1);
     this.clearIdleTimer(entry);
     // 级联:先收孩子再收本体,不留孤儿进程。
     for (const child of [...entry.children.values()]) this.stopChild(entry, child, true);
@@ -705,6 +863,7 @@ export class GhostNodeRuntimeBroker {
       pending.reject(new NodeRpcError('exit', 'Node 工作进程已停止'));
     }
     entry.pending.clear();
+    entry.exposedSecretValues.clear();
     try {
       entry.child.kill('SIGTERM');
       entry.hardKillTimer = this.setTimer(() => {
@@ -724,33 +883,109 @@ export class GhostNodeRuntimeBroker {
 
   /** Cindy 退出时收掉全部随包 Node 进程。 */
   destroyAll(): void {
+    this.destroyed = true;
     for (const [key, entry] of [...this.workers]) this.stopWorker(key, entry);
   }
 
+  /** 同 key 在途启动去重:重试退避窗口内的并发请求共享同一次启动,不双开进程。 */
+  private readonly startingWorkers = new Map<string, Promise<WorkerEntry>>();
+
+  /** stop(ghostId) 置入:在途重试检测到后立即中止,不继续拉新进程。 */
+  private readonly stoppedGhosts = new Set<string>();
+
+  /** 每次 handleExit 递增,settleExit 仅在世代未推进时发布 crashed。 */
+  private readonly exitGen = new Map<string, number>();
+
+  /** destroyAll(主机退出)后置真:退避中的重试不得再拉新进程。 */
+  private destroyed = false;
+
   private async ensureWorker(ghost: InstalledGhost, entryRel: string): Promise<WorkerEntry> {
     const key = GhostNodeRuntimeBroker.keyOf(ghost.manifest.id, entryRel);
+    const inflight = this.startingWorkers.get(key);
+    if (inflight) return inflight;
     const existing = this.workers.get(key);
     if (existing) return existing;
-    const node = ghost.manifest.node;
-    if (!node) throw new Error('ghost.json 缺少 node 工作进程详单');
+    const starting = this.startWorkerWithRetry(ghost, entryRel, key);
+    this.startingWorkers.set(key, starting);
+    try {
+      return await starting;
+    } finally {
+      this.startingWorkers.delete(key);
+    }
+  }
 
+  private async startWorkerWithRetry(
+    ghost: InstalledGhost,
+    entryRel: string,
+    key: string,
+  ): Promise<WorkerEntry> {
+    if (this.destroyed || this.stoppedGhosts.has(ghost.manifest.id)) {
+      throw new WorkerStartError('Node 工作进程启动已取消', false, true);
+    }
+    this.sendStatus(ghost, 'starting', undefined, entryRel);
+    let current = ghost;
+    let lastError = new Error('Node 工作进程启动失败');
+    for (let attempt = 1; attempt <= WORKER_START_ATTEMPTS; attempt++) {
+      if (attempt > 1) {
+        await this.delay(WORKER_START_RETRY_DELAYS_MS[attempt - 2] ?? 750);
+        // 退避期间插件可能被停用/卸载/更新/停止,主机也可能正在退出:
+        // 现查现用;已停用/已收摊/已停止就不再拉进程,也不补发状态事件。
+        if (this.destroyed || this.stoppedGhosts.has(ghost.manifest.id)) throw lastError;
+        const fresh = this.deps.getGhost(ghost.manifest.id);
+        if (!fresh?.enabled) throw lastError;
+        // 跨更新边界时重验入口:新 manifest 可能已不再申报该 entry。
+        if (!fresh.manifest.node) throw lastError;
+        const declaredEntries = [fresh.manifest.node.entry, ...(fresh.manifest.node.entries ?? [])];
+        if (!declaredEntries.includes(entryRel)) throw lastError;
+        current = fresh;
+      }
+      try {
+        return await this.startWorkerOnce(current, entryRel, key);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        const retryable = error instanceof WorkerStartError ? error.retryable : true;
+        this.deps.log?.warn('ghost node start attempt failed', {
+          ghostId: ghost.manifest.id,
+          entry: entryRel,
+          attempt,
+          message: lastError.message,
+        });
+        if (!retryable) break;
+      }
+    }
+    if (!(lastError instanceof WorkerStartError) || !lastError.silent) {
+      this.sendStatus(current, 'crashed', lastError.message, entryRel);
+    }
+    throw lastError;
+  }
+
+  private async startWorkerOnce(
+    ghost: InstalledGhost,
+    entryRel: string,
+    key: string,
+  ): Promise<WorkerEntry> {
+    const node = ghost.manifest.node;
+    if (!node) throw new WorkerStartError('ghost.json 缺少 node 工作进程详单', false);
     const entryPath = path.resolve(ghost.dir, ...entryRel.split('/'));
     const root = path.resolve(ghost.dir);
     if (entryPath === root || !entryPath.startsWith(`${root}${path.sep}`)) {
-      throw new Error('node 入口越出插件安装目录');
+      throw new WorkerStartError('node 入口越出插件安装目录', false);
     }
-    this.sendStatus(ghost, 'starting', undefined, entryRel);
     let child: NodeWorkerProcess;
     try {
       child = (this.deps.spawnProcess ?? defaultSpawnProcess)(entryPath, root, ghost.manifest.id);
     } catch (error) {
-      this.sendStatus(ghost, 'crashed', error instanceof Error ? error.message : String(error), entryRel);
-      throw error;
+      throw new WorkerStartError(error instanceof Error ? error.message : String(error), true);
     }
     const entry: WorkerEntry = {
       ghost,
       entryRel,
       child,
+      startupPhase: true,
+      startupStderr: '',
+      stderrSegments: [],
+      stderrTotalChars: 0,
+      stderrDecoder: new StringDecoder('utf8'),
       stdoutDecoder: new StringDecoder('utf8'),
       stdoutBuffer: '',
       nextId: 1,
@@ -760,16 +995,48 @@ export class GhostNodeRuntimeBroker {
       hardKillTimer: null,
       mcpInitPromise: null,
       stopping: false,
+      exposedSecretValues: new Set(),
+      exitDrain: null,
     };
     this.workers.set(key, entry);
+    if (this.destroyed || this.stoppedGhosts.has(ghost.manifest.id)) {
+      this.workers.delete(key);
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      throw new WorkerStartError('Node 工作进程启动已取消', false, true);
+    }
     // 代启子进程的控制帧入口(childSpawn):帧形状严格把关,资格在 handle 里查。
     child.onControl?.((message) => this.handleWorkerControl(entry, message));
     child.stdout.on('data', (chunk) => this.handleStdout(entry, chunk));
     child.stderr.on('data', (chunk) => {
-      const text = String(chunk).trim().slice(0, 4_096);
+      const decoded = entry.stderrDecoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+      if (entry.startupPhase && entry.startupStderr.length < STARTUP_STDERR_CAP) {
+        entry.startupStderr = (entry.startupStderr + decoded).slice(0, STARTUP_STDERR_CAP);
+      }
+      // 按段带时间戳截存,退出时只取回看窗口内的段,不让老日志被新 chunk 携带。
+      entry.stderrSegments.push({ text: decoded, at: this.now() });
+      entry.stderrTotalChars += decoded.length;
+      // 总量控制:保留尾部 EXIT_STDERR_CAP 字符——部分裁剪最老段的头部。
+      if (entry.stderrTotalChars > EXIT_STDERR_CAP) {
+        let excess = entry.stderrTotalChars - EXIT_STDERR_CAP;
+        while (excess > 0 && entry.stderrSegments.length > 0) {
+          const oldest = entry.stderrSegments[0];
+          if (excess >= oldest.text.length) {
+            entry.stderrSegments.shift();
+            excess -= oldest.text.length;
+          } else {
+            oldest.text = oldest.text.slice(excess);
+            excess = 0;
+          }
+        }
+        entry.stderrTotalChars = EXIT_STDERR_CAP;
+      }
+      const text = decoded.trim().slice(0, 4_096);
       if (text) this.deps.log?.warn('ghost node stderr', { ghostId: ghost.manifest.id, text });
-      // stderr 是手册钦定的日志口——构建刷日志就是活着的证据,给续命请求重置沉默窗口。
-      this.renewPendingOnActivity(entry);
+      // 进程已退出后不再续命——定时器已冻结,由 settleExit 统一结算。
+      if (!entry.exitDrain) {
+        // stderr 是手册钦定的日志口——构建刷日志就是活着的证据,给续命请求重置沉默窗口。
+        this.renewPendingOnActivity(entry);
+      }
     });
     child.on('exit', (code, signal) => this.handleExit(entry, code, signal, null));
     child.on('error', (error) => this.handleExit(entry, null, null, error));
@@ -785,16 +1052,34 @@ export class GhostNodeRuntimeBroker {
           outcome();
         };
         startTimer = this.setTimer(
-          () => settle(() => reject(new Error('Node 工作进程启动超时'))),
+          () => settle(() => reject(new WorkerStartError('Node 工作进程启动超时', false))),
           DEFAULT_START_TIMEOUT_MS,
         );
         startTimer.unref?.();
         child.once('spawn', () => settle(resolve));
-        child.once('error', (error) => settle(() => reject(error)));
+        child.once('error', (error) =>
+          settle(() => reject(new WorkerStartError(error.message, true))),
+        );
         child.once('exit', (code, signal) => {
-          settle(() =>
-            reject(new Error(`Node 工作进程启动前退出(code=${code}, signal=${signal ?? 'none'})`)),
-          );
+          // stderr 管道字节可能晚于 exit 事件到达:给在途 chunk 一个极短的
+          // 落地窗口,诊断行(如杀软拦截的 EPERM)才截得到。
+          const drainTimer = this.setTimer(() => {
+            settle(() => {
+              if (entry.stopping) {
+                reject(new WorkerStartError('Node 工作进程启动已取消', false, true));
+              } else {
+                const hint = stderrHint(entry.startupStderr);
+                reject(
+                  new WorkerStartError(
+                    `Node 工作进程启动前退出(code=${code}, signal=${signal ?? 'none'})${hint ? `:${hint}` : ''}`,
+                    true,
+                    false,
+                  ),
+                );
+              }
+            });
+          }, 10);
+          drainTimer.unref?.();
         });
       });
     } catch (error) {
@@ -806,6 +1091,7 @@ export class GhostNodeRuntimeBroker {
       }
       throw error;
     }
+    entry.startupPhase = false;
     this.deps.log?.info('ghost node process started', {
       ghostId: ghost.manifest.id,
       entry: entryRel,
@@ -815,6 +1101,13 @@ export class GhostNodeRuntimeBroker {
     this.sendStatus(ghost, 'running', undefined, entryRel);
     this.scheduleIdleStop(entry);
     return entry;
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = this.setTimer(resolve, ms);
+      timer.unref?.();
+    });
   }
 
   private async ensureMcpInitialized(entry: WorkerEntry): Promise<void> {
@@ -848,6 +1141,7 @@ export class GhostNodeRuntimeBroker {
     params: unknown,
     timeoutMs: number,
     maxTotalMs?: number,
+    hostSecrets?: Readonly<Record<string, string>>,
   ): Promise<unknown> {
     this.clearIdleTimer(entry);
     const id = String(entry.nextId++);
@@ -868,7 +1162,15 @@ export class GhostNodeRuntimeBroker {
       entry.pending.set(id, pending);
       this.armPendingTimer(pending);
       try {
-        this.writeLine(entry, { jsonrpc: '2.0', id, method, params });
+        this.writeLine(entry, {
+          jsonrpc: '2.0',
+          id,
+          method,
+          params,
+          ...(hostSecrets && Object.keys(hostSecrets).length > 0
+            ? { cindy: { secrets: hostSecrets } }
+            : {}),
+        });
       } catch (error) {
         entry.pending.delete(id);
         this.clearTimer(pending.timer);
@@ -1031,16 +1333,85 @@ export class GhostNodeRuntimeBroker {
     this.clearIdleTimer(entry);
     // worker 意外死亡:孩子级联收掉,不留孤儿(silent——收件人已经不在了)。
     for (const child of [...entry.children.values()]) this.stopChild(entry, child, true);
-    const detail = error?.message ?? `code=${code}, signal=${signal ?? 'none'}`;
+    // 立即冻结所有 pending 请求的超时定时器,防止在 drain 窗口内误报 TIMEOUT。
+    for (const pending of entry.pending.values()) this.clearTimer(pending.timer);
+    // stderr stream 'end' 是权威排空信号——所有管道字节已到达。
+    // 定时器仅作为"end 永远不来"的兜底安全网(500ms),不做 debounce。
+    const gen = (this.exitGen.get(key) ?? 0) + 1;
+    this.exitGen.set(key, gen);
+    const settle = () => this.settleExit(entry, code, signal, error);
+    const timer = this.setTimer(settle, 500);
+    timer.unref?.();
+    entry.exitDrain = { code, signal, error, timer, exitedAt: this.now(), gen };
+    entry.child.stderr.once?.('end', settle);
+  }
+
+  private settleExit(
+    entry: WorkerEntry,
+    code: number | null,
+    signal: string | null,
+    error: Error | null,
+  ): void {
+    if (!entry.exitDrain) return;
+    const { exitedAt, gen } = entry.exitDrain;
+    this.clearTimer(entry.exitDrain.timer);
+    entry.exitDrain = null;
+    // flush stderrDecoder 残留字节(多字节字符被切在最后一个 chunk 边界时)
+    const tail = entry.stderrDecoder.end();
+    if (tail) {
+      entry.stderrSegments.push({ text: tail, at: this.now() });
+      entry.stderrTotalChars += tail.length;
+    }
+    const ghostId = entry.ghost.manifest.id;
+    const exitHint = this.exitStderrHint(entry, exitedAt);
+    const detail = `${error?.message ?? `code=${code}, signal=${signal ?? 'none'}`}${
+      exitHint ? `:${exitHint}` : ''
+    }`;
     for (const pending of entry.pending.values()) {
       this.clearTimer(pending.timer);
       pending.reject(new NodeRpcError('exit', `Node 工作进程已退出(${detail})`));
     }
     entry.pending.clear();
-    if (!entry.stopping) {
+    entry.exposedSecretValues.clear();
+    // 启动期退出不在这里报 crashed:ensureWorker 统一收口(可能还要重试,
+    // 重试成功时插件不该看到一次假 crash)。
+    if (!entry.stopping && !entry.startupPhase) {
       this.deps.log?.warn('ghost node process exited', { ghostId, entry: entry.entryRel, detail });
-      this.sendStatus(entry.ghost, 'crashed', detail, entry.entryRel);
+      // 抑制 crashed 广播:替代 worker 已启动(key 被占);drain 期间插件被
+      // 主动停止/禁用;或同 key 有更新世代退出(本次已过时)。
+      const key = GhostNodeRuntimeBroker.keyOf(ghostId, entry.entryRel);
+      const isLatest = this.exitGen.get(key) === gen;
+      if (!this.workers.has(key) && !this.stoppedGhosts.has(ghostId) && isLatest) {
+        this.sendStatus(entry.ghost, 'crashed', detail, entry.entryRel);
+      }
     }
+  }
+
+  /**
+   * 意外死亡时的 stderr 诊断行:补上 startupStderr 那条路截不到的"就绪之后才崩"
+   * (插件模块加载期抛错最典型)。绝对路径已由 stderrHint 收敛为文件名。
+   * 主动 stop 不参与——那是预期内的收摊,拼诊断只会把无关日志说成死因;陈旧
+   * 段同理,只认回看窗口内的段。
+   */
+  private exitStderrHint(entry: WorkerEntry, exitedAt: number): string | null {
+    if (entry.stopping) return null;
+    // 以退出时刻为锚点(而非结算时刻),避免兜底定时器延迟导致回看窗口偏移。
+    // drain 期间到达的 chunk 时间戳 >= exitedAt,自然在窗口内。
+    const recent = entry.stderrSegments
+      .filter((seg) => exitedAt - seg.at <= EXIT_STDERR_LOOKBACK_MS)
+      .map((seg) => seg.text)
+      .join('');
+    if (!recent) return null;
+    return stderrHint(this.redactSecrets(entry, recent), true);
+  }
+
+  private redactSecrets(entry: WorkerEntry, text: string): string {
+    if (!entry.exposedSecretValues.size) return text;
+    const sorted = [...entry.exposedSecretValues].sort((a, b) => b.length - a.length);
+    for (const secret of sorted) {
+      if (text.includes(secret)) text = text.replaceAll(secret, '[REDACTED]');
+    }
+    return text;
   }
 
   private scheduleIdleStop(entry: WorkerEntry): void {

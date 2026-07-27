@@ -3,7 +3,7 @@
  *
  * 缓存 / 去重 / 代际驱逐核心在 `./deviceModelMetaCache`(纯逻辑、node 可测)。两个 hook 都
  * 优雅降级:旧被控端不识别通道 / 拉取失败 → 单价 null(隐藏价格)、key 状态 'unknown'
- * (骨折版不置灰),与桌面「无价不显示」「宁可放行不误伤」的口径一致,不出 loading 态
+ * (折扣版不置灰),与桌面「无价不显示」「宁可放行不误伤」的口径一致,不出 loading 态
  * (数据未到时界面不变化,符合设计规范 7)。
  */
 import { useEffect, useState } from 'react';
@@ -50,7 +50,7 @@ export function useDeviceModelPricing(deviceId?: string): MobileModelPricingMap 
   return pricing;
 }
 
-/** 被控端网关 API key presence;'unknown' = 还没拿到 / 拉不到(消费方不置灰骨折版)。 */
+/** 被控端网关 API key presence;'unknown' = 还没拿到 / 拉不到(消费方不置灰折扣版)。 */
 export function useDeviceApiKeyStatus(deviceId?: string): DeviceApiKeyStatus {
   const maker = useMobileMakerTransport(deviceId ?? '');
   const [status, setStatus] = useState<DeviceApiKeyStatus>(

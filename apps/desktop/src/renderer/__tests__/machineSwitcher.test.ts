@@ -13,7 +13,10 @@ import {
   toggleMachineSelection,
 } from '@/features/device-link/selectedMachineStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
-import { shouldShowSelectedMachineConnectingPlaceholder } from '@/features/device-link/useMachineSwitcher';
+import {
+  shouldShowSelectedMachineConnectingPlaceholder,
+  shouldWaitForRemoteSessionBootstrap,
+} from '@/features/device-link/useMachineSwitcher';
 import { buildSwitcherDevices, selectableDeviceIds } from '@/features/device-link/switcherDevices';
 import { compareDevicesByName } from '@/features/device-link/deviceSort';
 import { applyDeviceRename } from '@/features/device-link/useDeviceLinkDeviceList';
@@ -380,13 +383,160 @@ describe('normalizeSelectedMachineId 配合可选中集(连接中可保留,被�
   });
 });
 
+describe('shouldWaitForRemoteSessionBootstrap', () => {
+  const connecting = [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const }];
+  const noBootstrapFailures = new Set<string>();
+
+  it('所有机器:设备清单或在线远端首快照未落地 → 保持加载态', () => {
+    expect(
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId: MACHINE_ALL,
+        deviceListSettled: false,
+        devices: [],
+        syncedDevices: [],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
+      }),
+    ).toBe(true);
+    expect(
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId: MACHINE_ALL,
+        deviceListSettled: true,
+        devices: connecting,
+        syncedDevices: [],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
+      }),
+    ).toBe(true);
+  });
+
+  it('权威空快照已落地也算 bootstrap 完成，不把 0 会话误判成仍加载', () => {
+    expect(
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId: MACHINE_ALL,
+        deviceListSettled: true,
+        devices: connecting,
+        syncedDevices: [
+          { deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 0, connected: false },
+        ],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
+      }),
+    ).toBe(false);
+  });
+
+  it('明确选择已有权威 shard 的设备时，不等待独立的设备清单重试', () => {
+    expect(
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId: ['dev-a'],
+        deviceListSettled: false,
+        devices: connecting,
+        syncedDevices: [
+          { deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 0, connected: false },
+        ],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
+      }),
+    ).toBe(false);
+  });
+
+  it('设备清单请求失败但已结算 → 不把未知设备列表当成永久加载', () => {
+    expect(
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId: MACHINE_ALL,
+        deviceListSettled: true,
+        devices: [],
+        syncedDevices: [],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
+      }),
+    ).toBe(false);
+  });
+
+  it('仅本机不等待远端；混合选择只等待作用域内尚未同步的远端设备', () => {
+    expect(
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId: [MACHINE_LOCAL],
+        deviceListSettled: false,
+        devices: [],
+        syncedDevices: [],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
+      }),
+    ).toBe(false);
+    expect(
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId: [MACHINE_LOCAL, 'dev-b'],
+        deviceListSettled: true,
+        devices: connecting,
+        syncedDevices: [],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
+      }),
+    ).toBe(false);
+    expect(
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId: [MACHINE_LOCAL, 'dev-a'],
+        deviceListSettled: true,
+        devices: connecting,
+        syncedDevices: [],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
+      }),
+    ).toBe(true);
+  });
+
+  it('被拒或已有断线缓存的设备不算等待中的首次 bootstrap', () => {
+    expect(
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId: MACHINE_ALL,
+        deviceListSettled: true,
+        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'rejected' }],
+        syncedDevices: [],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
+      }),
+    ).toBe(false);
+    expect(
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId: MACHINE_ALL,
+        deviceListSettled: true,
+        devices: connecting,
+        syncedDevices: [
+          { deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 2, connected: false },
+        ],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
+      }),
+    ).toBe(false);
+  });
+
+  it('bootstrap 终态失败的连接中设备不再无限 loading；其它未结算设备仍继续等待', () => {
+    const devices = [
+      { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const },
+      { deviceId: 'dev-b', name: 'Mac B', status: 'connecting' as const },
+    ];
+    expect(
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId: ['dev-a'],
+        deviceListSettled: true,
+        devices,
+        syncedDevices: [],
+        bootstrapFailedDeviceIds: new Set(['dev-a']),
+      }),
+    ).toBe(false);
+    expect(
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId: MACHINE_ALL,
+        deviceListSettled: true,
+        devices,
+        syncedDevices: [],
+        bootstrapFailedDeviceIds: new Set(['dev-a']),
+      }),
+    ).toBe(true);
+  });
+});
+
 describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
+  const noBootstrapFailures = new Set<string>();
+
   it('在线可控但尚未同步会话 → 显示连接中占位', () => {
     expect(
       shouldShowSelectedMachineConnectingPlaceholder({
         rawSelection: ['dev-a'],
         devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting' }],
         syncedDevices: [],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
     ).toBe(true);
   });
@@ -399,6 +549,7 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
         syncedDevices: [
           { deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 2, connected: false },
         ],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
     ).toBe(false);
   });
@@ -411,8 +562,20 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
         syncedDevices: [
           { deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 0, connected: false },
         ],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
     ).toBe(true);
+  });
+
+  it('选中设备的 bootstrap 已终态失败 → 停止连接中占位并进入真实空态', () => {
+    expect(
+      shouldShowSelectedMachineConnectingPlaceholder({
+        rawSelection: ['dev-a'],
+        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting' }],
+        syncedDevices: [],
+        bootstrapFailedDeviceIds: new Set(['dev-a']),
+      }),
+    ).toBe(false);
   });
 
   it('多选:全是连接中且无缓存 → 占位;混入本机或已连接设备 → 不占位', () => {
@@ -425,6 +588,7 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
         rawSelection: ['dev-a'],
         devices,
         syncedDevices: [],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
     ).toBe(true);
     expect(
@@ -432,6 +596,7 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
         rawSelection: ['dev-a', 'dev-b'],
         devices,
         syncedDevices: [],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
     ).toBe(false);
     expect(
@@ -439,6 +604,7 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
         rawSelection: ['local', 'dev-a'],
         devices,
         syncedDevices: [],
+        bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
     ).toBe(false);
   });

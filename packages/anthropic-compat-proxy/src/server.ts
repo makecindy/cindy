@@ -20,6 +20,16 @@ import { URL } from 'node:url';
 import { brotliDecompressSync, gunzipSync, inflateRawSync, inflateSync } from 'node:zlib';
 
 import { DEFAULT_THREAD_ID_HEADERS, selectedHeaderValue } from './headers.js';
+import {
+  formatAuthority,
+  formatHostHeader,
+  isLoopbackHostname,
+  OutboundProxyAgentPool,
+  parseOutboundProxyUrl,
+  redactProxyUrlForLog,
+  type OutboundProxyTarget,
+  type TunnelingHttpsAgent,
+} from './outbound-proxy.js';
 import { stripNonAnthropicFields, stripToolUseProviderSpecificFields } from './transform.js';
 import type {
   LocalRequestHandler,
@@ -93,6 +103,17 @@ interface UpstreamTarget {
   port: number;
   protocol: 'http:' | 'https:';
   basePath: string;  // 上游路径前缀(例 "" 或 "/v1")
+  baseQuery: string; // 不含前导 '?'
+}
+
+/**
+ * 一次请求已解析好的出站代理。在请求处理层(路由决策后)解析一次,透明重试沿用同一份,
+ * 保证重试与首发走同一条网络路径。
+ */
+interface ResolvedOutboundProxy {
+  target: OutboundProxyTarget;
+  /** https 上游用的 CONNECT 隧道 agent;http 上游走绝对形式请求,不需要 agent。 */
+  agent?: TunnelingHttpsAgent;
 }
 
 function parseUpstream(upstream: string): UpstreamTarget {
@@ -105,6 +126,7 @@ function parseUpstream(upstream: string): UpstreamTarget {
     port: u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80),
     protocol: u.protocol,
     basePath: u.pathname.replace(/\/+$/, ''),  // 去末尾斜杠,防止后面拼出双斜杠
+    baseQuery: u.search.slice(1),
   };
 }
 
@@ -118,7 +140,8 @@ function formatUpstreamBase(t: UpstreamTarget): string {
   return (
     `${t.protocol}//${t.hostname}` +
     (t.port === defaultPort ? '' : `:${t.port}`) +
-    t.basePath
+    t.basePath +
+    (t.baseQuery ? `?${t.baseQuery}` : '')
   );
 }
 
@@ -229,6 +252,21 @@ function respondRoutingFailure(
     return;
   }
   res.destroy(err instanceof Error ? err : new Error(String(err)));
+}
+
+/** 路由层是最后的信任边界；任何调用方给出的路径覆盖都必须保持同源且不可注入 header。 */
+function isSafePathOverride(value: unknown): value is string {
+  return (
+    typeof value === 'string'
+    && value.length >= 1
+    && value.length <= 2_048
+    && value.startsWith('/')
+    && !value.startsWith('//')
+    && !value.includes('#')
+    && !value.includes('\\')
+    && !/[^\u0021-\u007e]/.test(value)
+    && !/%(?![0-9A-Fa-f]{2})/.test(value)
+  );
 }
 
 function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
@@ -582,6 +620,10 @@ function forward(
   // 原始客户端 model id。provider transform 可能在出站前去掉命名空间；recovery
   // controller 必须记原值，才能和下一轮主动 strip 看到的入站 model 对上。
   clientModel = '',
+  // 请求处理层解析好的出站代理;undefined = 直连(与扩展前字节级一致)。
+  outboundProxy?: ResolvedOutboundProxy,
+  // 精确推理路径覆盖；省略时沿用客户端原始 path。
+  pathOverride?: string,
 ): void {
   // 客户端已断开(典型:400 缓冲期间断开后走到透明重试)——'close' 已经发过,
   // 下面挂的中断传播 listener 永远不会触发,直接不发起上游请求。
@@ -600,7 +642,14 @@ function forward(
     }
   }
   const reqFn = actualTarget.protocol === 'https:' ? httpsRequest : httpRequest;
-  const upstreamPath = `${actualTarget.basePath}${path.startsWith('/') ? path : '/' + path}`;
+  const routedPath = pathOverride ?? path;
+  const queryIndex = routedPath.indexOf('?');
+  const routedPathname = queryIndex === -1 ? routedPath : routedPath.slice(0, queryIndex);
+  const routedQuery = queryIndex === -1 ? '' : routedPath.slice(queryIndex + 1);
+  const upstreamPathname =
+    `${actualTarget.basePath}${routedPathname.startsWith('/') ? routedPathname : '/' + routedPathname}`;
+  const upstreamQuery = [actualTarget.baseQuery, routedQuery].filter(Boolean).join('&');
+  const upstreamPath = upstreamQuery ? `${upstreamPathname}?${upstreamQuery}` : upstreamPathname;
 
   // http.request 会把 options 原样透传给 agent.createConnection → net.connect,
   // 所以 socket 级 connect 选项运行时有效;但 @types/node 的 RequestOptions 没收录
@@ -618,6 +667,23 @@ function forward(
     timeout: UPSTREAM_SOCKET_TIMEOUT_MS,
     autoSelectFamilyAttemptTimeout: UPSTREAM_CONNECT_ATTEMPT_TIMEOUT_MS,
   };
+  if (outboundProxy) {
+    if (actualTarget.protocol === 'https:') {
+      // https 上游:经 CONNECT 隧道 agent 转发(TLS 端到端,代理只见密文)。
+      upstreamOptions.agent = outboundProxy.agent;
+    } else {
+      // http 上游:按 HTTP 代理惯例改发绝对形式请求给代理;Host 头指向真实上游。
+      // socket 连的是代理,Host 头只能显式设置 —— 按 RFC 9110 带非默认端口 / IPv6 方括号。
+      upstreamOptions.hostname = outboundProxy.target.hostname;
+      upstreamOptions.port = outboundProxy.target.port;
+      upstreamOptions.path = `http://${formatAuthority(actualTarget.hostname, actualTarget.port)}${upstreamPath}`;
+      (upstreamOptions.headers as Record<string, string>).host =
+        formatHostHeader(actualTarget.hostname, actualTarget.port, actualTarget.protocol);
+      if (outboundProxy.target.authHeader) {
+        (upstreamOptions.headers as Record<string, string>)['proxy-authorization'] = outboundProxy.target.authHeader;
+      }
+    }
+  }
   const upstreamReq = reqFn(upstreamOptions);
 
   // ── 客户端中断传播 ────────────────────────────────────────────────────────
@@ -667,14 +733,14 @@ function forward(
       upstreamRes.on('data', (chunk: Buffer) => chunks.push(chunk));
       upstreamRes.on('end', () => {
         const errBody = Buffer.concat(chunks);
-        // 先按 content-encoding 解压一次 —— 规则 match / errorType / body dump 都吃解压后的字节。
+        // 先按 content-encoding 解压一次 —— 规则 matches / errorType / body dump 都吃解压后的字节。
         // node:http 不自动解压; 上游若 gzip/br 压缩, 直接对压缩字节跑 regex 会漏判, 透明重试就不触发。
         // (回客户端仍是原始 errBody + content-encoding 头透传, 客户端自己解压, 见下方 clientRes.end)
         const decodedErrBody = decodeBodyForLog(errBody, String(upstreamRes.headers['content-encoding'] ?? ''));
         const decodedText = decodedErrBody.toString('utf8');
         // 取第一条 match 命中且 strip 出东西的规则;命中错误文案但没东西可删 → 试下一条。
         for (const [matchedIndex, rule] of activeRules.entries()) {
-          if (!rule.match(decodedText)) continue;
+          if (!rule.matches(decodedText)) continue;
           const stripped = rule.strip(body);
           if (!stripped) continue;
           let retryBody = stripped;
@@ -718,6 +784,8 @@ function forward(
             headerDelete,
             responseObserver,
             clientModel,
+            outboundProxy,
+            pathOverride,
           );
           return;
         }
@@ -886,7 +954,13 @@ function forward(
     // 客户端主动断开触发的 destroy 是预期路径:客户端已不在,不写 502、不按
     // 上游故障记 error(上面 'close' 处已记过 info)。
     if (clientAborted) return;
-    logger.error?.('upstream request failed', { reqId, err: String(err), method, path: upstreamPath });
+    logger.error?.('upstream request failed', {
+      reqId,
+      err: String(err),
+      method,
+      path: upstreamPath,
+      ...(outboundProxy ? { viaProxy: outboundProxy.target.url } : {}),
+    });
     if (!clientRes.headersSent) {
       clientRes.writeHead(502, { 'content-type': 'application/json' });
       clientRes.end(JSON.stringify({ error: { type: 'proxy_error', message: `upstream unreachable: ${String(err)}` } }));
@@ -946,7 +1020,20 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     overrideTarget?: UpstreamTarget;
     headerOverride?: Record<string, string>;
     headerDelete?: readonly string[];
+    pathOverride?: string;
   } | null => {
+    const pathOverride = decision?.pathOverride;
+    if (pathOverride !== undefined && !isSafePathOverride(pathOverride)) {
+      respondRoutingFailure(
+        res,
+        logger,
+        reqId,
+        502,
+        'selected request path invalid',
+        new Error('routingTransform returned an unsafe pathOverride'),
+      );
+      return null;
+    }
     let overrideTarget: UpstreamTarget | undefined;
     try {
       overrideTarget = decision?.upstreamOverride
@@ -968,6 +1055,52 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       overrideTarget,
       headerOverride: decision?.headerOverride,
       headerDelete: decision?.headerDelete,
+      pathOverride,
+    };
+  };
+
+  // 出站代理:CONNECT 隧道 agent 按代理地址缓存(keep-alive 连接池),随 dispose 销毁。
+  const outboundAgentPool = new OutboundProxyAgentPool();
+
+  /**
+   * per-request 解析本次转发的出站代理。任何一步失败(resolver 抛错 / 返回不支持的
+   * 代理形态)都回落直连 —— 代理解析问题绝不能比今天的裸直连更糟。loopback 上游
+   * (本机 bridge / gateway / 测试桩)恒直连,不打扰 resolver。
+   */
+  const resolveOutboundForTarget = async (
+    target: UpstreamTarget,
+    reqId: number,
+  ): Promise<ResolvedOutboundProxy | undefined> => {
+    const resolver = opts.resolveOutboundProxy;
+    if (!resolver) return undefined;
+    if (isLoopbackHostname(target.hostname)) return undefined;
+    // IPv6 字面量上游要按 [addr]:port 拼 origin,否则 resolver 拿到非法 URL。
+    const upstreamOrigin = `${target.protocol}//${formatAuthority(target.hostname, target.port)}`;
+    let raw: string | null | undefined;
+    try {
+      raw = await resolver(upstreamOrigin);
+    } catch (err) {
+      logger.warn?.('outbound proxy resolver threw — using direct connection', { reqId, err: String(err) });
+      return undefined;
+    }
+    if (!raw) return undefined;
+    const parsed = parseOutboundProxyUrl(raw);
+    if (!parsed) {
+      // raw 可能带凭证,只记脱敏形态。
+      logger.warn?.('unsupported outbound proxy url — using direct connection', {
+        reqId,
+        proxy: redactProxyUrlForLog(String(raw)),
+      });
+      return undefined;
+    }
+    logger.debug?.('using outbound proxy for upstream', {
+      reqId,
+      proxy: parsed.url,
+      upstream: upstreamOrigin,
+    });
+    return {
+      target: parsed,
+      agent: target.protocol === 'https:' ? outboundAgentPool.get(parsed) : undefined,
     };
   };
 
@@ -1044,6 +1177,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         route.headerOverride,
         route.headerDelete,
         opts.responseObserver,
+        '',
+        await resolveOutboundForTarget(route.target, reqId),
+        route.pathOverride,
       );
       return;
     }
@@ -1140,7 +1276,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       });
     }
 
-    const transformed = runTransforms(rawBody, contentType, transforms, requestCtx, logger);
+    // transform 链的 ctx 附带最终上游(override 已生效):按目标上游做兼容改写的
+    // transform 据此判断去向,不必在 host 侧复刻路由逻辑。
+    const transformCtx: RequestTransformCtx = {
+      ...requestCtx,
+      upstreamBase: formatUpstreamBase(route.target),
+    };
+    const transformed = runTransforms(rawBody, contentType, transforms, transformCtx, logger);
     const outBody = transformed ?? rawBody;
 
     if (transformed) {
@@ -1169,6 +1311,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       route.headerDelete,
       opts.responseObserver,
       extractBodyModel(rawBody),
+      await resolveOutboundForTarget(route.target, reqId),
+      route.pathOverride,
     );
   });
 
@@ -1198,6 +1342,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       for (const s of inflightSockets) {
         try { s.destroy(); } catch { /* no-op */ }
       }
+      // 出站代理的 keep-alive 隧道池一并断开,不留空闲 CONNECT 连接。
+      outboundAgentPool.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };

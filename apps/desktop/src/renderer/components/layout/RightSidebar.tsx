@@ -66,6 +66,8 @@ interface RightSidebarProps {
   /** Maximize 态(Phase 6):RSB 撑满整个非左栏区,主区 hidden。本组件用来隐藏
    *  resize handle(maximize 不允许拖宽)+ 把 TabBar maximize 按钮图标切到"还原"。 */
   isMaximized?: boolean;
+  /** 左侧栏完全收起且 RSB maximize 时，为顶栏左上角浮动 ChromeActions 让位。 */
+  reserveLeftChromeActions?: boolean;
   /** 「在新窗口中打开侧边栏」:开偏好 + 弹出子窗口。Win 端 TabBar 内渲染按钮
    *  (Mac 走 MainLayout 浮层,不经此 prop)。 */
   onDetach?: () => void;
@@ -84,6 +86,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
     onCloseSidebar,
     onMaximize,
     isMaximized,
+    reserveLeftChromeActions = false,
     sessionId,
     workdir,
     remoteHostId,
@@ -254,6 +257,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
           onCloseSidebar={onCloseSidebar}
           onMaximize={onMaximize}
           isMaximized={isMaximized}
+          reserveLeftChromeActions={reserveLeftChromeActions}
           onDetach={onDetach}
           // B3:主窗口内嵌形态 Tab 条空白处 = 拖面板手势面(窗口拖动走左栏顶行)。
           chromeWindowDrag={false}

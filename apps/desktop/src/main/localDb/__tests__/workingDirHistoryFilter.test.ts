@@ -9,8 +9,7 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../../appSessionState.js', () => ({
-  ownerScopedUserDataPath: (...parts: string[]) =>
-    ['/tmp/xdt-test-user-data', ...parts].join('/'),
+  ownerScopedUserDataPath: (...parts: string[]) => ['/tmp/xdt-test-user-data', ...parts].join('/'),
 }));
 
 import {
@@ -42,6 +41,9 @@ function createLocalDb(): Database.Database {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_amount REAL NOT NULL DEFAULT 0,
+      total_cost_currency TEXT,
+      total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
       fast_mode INTEGER NOT NULL DEFAULT 0,
@@ -126,7 +128,9 @@ afterEach(() => {
 describe('normalizeHistoryWorkingDir', () => {
   it('normalizes legacy Windows drive and UNC spellings', () => {
     expect(normalizeHistoryWorkingDir('D:\\repo\\project')).toBe('D:/repo/project');
-    expect(normalizeHistoryWorkingDir('\\\\?\\UNC\\server\\share\\repo')).toBe('//server/share/repo');
+    expect(normalizeHistoryWorkingDir('\\\\?\\UNC\\server\\share\\repo')).toBe(
+      '//server/share/repo',
+    );
   });
 });
 
@@ -162,7 +166,11 @@ describe('resolveStoredWorkingDirCandidates', () => {
     insertSession(db, 'p1', '/repo/project', 2_000);
 
     expect(await resolveStoredWorkingDirCandidates(dialogueDir)).toEqual([dialogueDir]);
-    expect(await resolveStoredWorkingDirCandidates('/tmp/xdt-test-user-data/dialogues/2026-07-04/absent')).toEqual([]);
+    expect(
+      await resolveStoredWorkingDirCandidates(
+        '/tmp/xdt-test-user-data/dialogues/2026-07-04/absent',
+      ),
+    ).toEqual([]);
   });
 
   it('still resolves project dirs when the DB is dominated by managed dialogue rows', async () => {
@@ -215,7 +223,11 @@ describe('listWorkdirsForHistory managed dialogue exclusion', () => {
     const page = await listWorkdirsForHistory({ limit: 10, cursor: null, order: 'desc' });
 
     expect(page.items.map((w) => w.workingDir).sort()).toEqual(
-      ['/repo/dialogue-target', '/repo/project', '/tmp/xdt-test-user-data/dialogues-project'].sort(),
+      [
+        '/repo/dialogue-target',
+        '/repo/project',
+        '/tmp/xdt-test-user-data/dialogues-project',
+      ].sort(),
     );
   });
 });

@@ -72,6 +72,14 @@ export const CLIENT_ENDPOINT_KEYS = [
   // auth 不分 cn/global:国内/海外是两条 CDN 各发各的清单,清单本身已 region 化,
   // 客户端无脑取本字段即可。
   'authApiBaseUrl',
+  // desktop 系统浏览器登录的**服务端托管回调**地址(auth-server 路由,精确值需与
+  // 服务端 redirect_uri allowlist 逐字符一致)。非空 = 走托管回调链路:回调页停在
+  // 自有域名、授权码由客户端轮询取回,浏览器地址栏不再出现 127.0.0.1 与 code;
+  // 空 = 回落到 RFC 8252 loopback(现状行为)。这也是本能力的灰度/回滚开关——
+  // 服务端出问题时清空本字段即可回退,客户端不必发版。
+  // 不 bump schemaVersion:纯增可选字段,老清单缺失即 '',老客户端按未知字段忽略
+  // (同 review / cdnBaseUrl 先例,理由见上方版本注释)。
+  'authDesktopCallbackUrl',
   'deviceLinkApiBaseUrl',
   'oauthBrokerApiBaseUrl',
   // oss-server(公开资产直传预签名,当前场景:头像上传)。
@@ -86,14 +94,12 @@ export const CLIENT_ENDPOINT_KEYS = [
   'modelAccessApiBaseUrl',
   // voice-server（一期开通免费语音输入的数据面）API 基址。
   'voiceApiBaseUrl',
-  // content-moderation short-lived signing services. Production and test are
-  // separate keys so a dev build can never fall through to production HMAC.
-  'moderationSignApiBaseUrl',
-  'moderationSignTestApiBaseUrl',
   // github-server(用户反馈 → 官方仓 GitHub issue 的薄代理)的 API 基址。
   'githubApiBaseUrl',
   // skillhub-server(SkillHub 技能市场/发布 → XD hub 的 S2S 代理)的 API 基址。
   'skillhubApiBaseUrl',
+  // plugin-server(Plugin/Skill 市场、组织管理与发布)的 API 基址。
+  'pluginApiBaseUrl',
   // 更新/hotfix 链的 CDN base(manifest-*.json / hotfix 包 / agent 二进制)。
   'cdnBaseUrl',
   // 自建线手机整包发现的 mobile-update-server 基址(`${base}/latest`)。仅
@@ -135,6 +141,7 @@ export const CLIENT_ENDPOINT_REVIEW_KEY = 'review';
 /** 各字段允许的 URL 协议白名单。 */
 const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   authApiBaseUrl: ['https:'],
+  authDesktopCallbackUrl: ['https:'],
   deviceLinkApiBaseUrl: ['https:'],
   oauthBrokerApiBaseUrl: ['https:'],
   ossApiBaseUrl: ['https:'],
@@ -144,10 +151,9 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   websiteUrl: ['https:'],
   modelAccessApiBaseUrl: ['https:'],
   voiceApiBaseUrl: ['https:'],
-  moderationSignApiBaseUrl: ['https:'],
-  moderationSignTestApiBaseUrl: ['https:'],
   githubApiBaseUrl: ['https:'],
   skillhubApiBaseUrl: ['https:'],
+  pluginApiBaseUrl: ['https:'],
   cdnBaseUrl: ['https:'],
   mobileUpdateBaseUrl: ['https:'],
 };
@@ -156,6 +162,13 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
 export interface ParseClientEndpointManifestOptions {
   /** true 时 https-only 字段追加接受 http:、wss 字段追加 ws:(localhost 场景)。 */
   allowHttp?: boolean;
+}
+
+// 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
+function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return s.slice(0, end);
 }
 
 function allowedProtocols(key: ClientEndpointKey, allowHttp: boolean): readonly string[] {
@@ -214,7 +227,7 @@ export function parseClientEndpointManifest(
     if (typeof raw !== 'string') {
       return { ok: false, reason: `invalid-field:${key}` };
     }
-    const normalized = raw.trim().replace(/\/+$/, '');
+    const normalized = trimTrailingSlashes(raw.trim());
     let url: URL;
     try {
       url = new URL(normalized);

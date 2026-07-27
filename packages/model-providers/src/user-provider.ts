@@ -4,8 +4,8 @@
  * 设计要点：
  *   - 产出的 `Provider` 与内置厂商（providers.json）**同形状**，进同一 active-catalog，
  *     下游（路由 / 选择器 / listProviders）不区分内置 / 自定义，统一消费。
- *   - `source: 'user'`、`auth.method: 'apiKey'`。
- *   - 每个用户选中的 agent 生成一份 `api-key-header` 路由（upstream = baseUrl，带用户自定义
+ *   - `source: 'user'`，鉴权可为 API key / OAuth / none。
+ *   - 每个用户选中的 agent 生成一份与鉴权形态匹配的路由（upstream = baseUrl，带用户自定义
  *     headers）；**API key 不在此注入**——它存 safeStorage，由 host 在路由 resolve 时按
  *     `provider_key_<id>` 读出并写进鉴权头，绝不进 catalog（防经 listProviders 泄漏给 renderer）。
  *   - 用户模型可携带预设确认的 contextWindow；缺省时补保守默认，effort 使用 runtime 默认。
@@ -66,18 +66,20 @@ function defaultWireProtocol(agent: AgentKind): 'anthropic-messages' | 'openai-r
   return agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
 }
 
-/** baseUrl + 自定义 headers → 路由描述符（**不含密钥**；OAuth 形态用 oauth-token 策略）。 */
+/** baseUrl + 自定义 headers → 路由描述符（**不含密钥**）。 */
 function toRouting(
   agent: AgentKind,
   baseUrl: string,
+  requestPath: string | undefined,
   headers: Record<string, string> | undefined,
-  strategy: 'api-key-header' | 'oauth-token',
+  strategy: 'api-key-header' | 'oauth-token' | 'none',
   modelsUrl?: string,
   wireProtocol?: 'anthropic-messages' | 'openai-responses' | 'openai-chat',
 ): RoutingDescriptor {
   const r: RoutingDescriptor = {
     upstream: baseUrl,
     authStrategy: strategy,
+    ...(requestPath ? { requestPath } : {}),
     ...(wireProtocol && wireProtocol !== defaultWireProtocol(agent) ? { wireProtocol } : {}),
   };
   if (headers && Object.keys(headers).length > 0) r.headerOverride = { ...headers };
@@ -92,8 +94,11 @@ function toRouting(
  * 模型 / headers）；空 runtimes 产出空 Provider（不出现在任何 agent 列表，无害）。
  */
 export function buildUserProvider(config: CustomProviderConfig): Provider {
-  // OAuth 形态：带完整描述符时路由走 oauth-token（Runner 持有的 Bearer），否则 API key（历史默认）。
-  const isOAuth = config.auth?.method === 'oauth' && config.auth.oauth !== undefined;
+  // OAuth 形态路由走 Runner Bearer；none 明确走无鉴权且由 host 剥凭证；缺省保持历史 API key。
+  const oauth = config.auth?.method === 'oauth' ? config.auth.oauth : undefined;
+  const isOAuth = oauth !== undefined;
+  const noAuth = config.auth?.method === 'none';
+  const strategy = isOAuth ? 'oauth-token' : noAuth ? 'none' : 'api-key-header';
   const routing: Partial<Record<AgentKind, RoutingDescriptor>> = {};
   const models: Partial<Record<AgentKind, CatalogModel[]>> = {};
   const agents: AgentKind[] = [];
@@ -104,8 +109,9 @@ export function buildUserProvider(config: CustomProviderConfig): Provider {
     routing[agent] = toRouting(
       agent,
       rt.baseUrl,
+      rt.requestPath,
       rt.headers,
-      isOAuth ? 'oauth-token' : 'api-key-header',
+      strategy,
       rt.modelsUrl,
       rt.wireProtocol,
     );
@@ -116,8 +122,12 @@ export function buildUserProvider(config: CustomProviderConfig): Provider {
     name: config.name,
     source: 'user',
     agents,
-    auth: isOAuth ? { method: 'oauth', oauth: config.auth!.oauth } : { method: 'apiKey' },
-    // API key 的额度语义明确；通用 OAuth 可能是订阅也可能按量计费，配置尚未显式声明前不猜。
+    auth: isOAuth
+      ? { method: 'oauth', oauth }
+      : noAuth
+        ? { method: 'none' }
+        : { method: 'apiKey' },
+    // API key / 无鉴权代理都属于用户自备接口；通用 OAuth 可能订阅也可能按量，未声明前不猜。
     ...(isOAuth ? {} : { access: { kind: 'api' as const } }),
     routing,
     models,

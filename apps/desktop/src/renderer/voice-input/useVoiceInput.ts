@@ -59,6 +59,7 @@ import { resolveVoiceInputStartGuards } from './startGuards';
 import { getVoiceInputWorkletUrl } from './workletUrl';
 import { buildRefinementPreviewText } from './refinementPreviewText';
 import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
+import { isVoiceInputServiceConnectionError } from './overlayErrors';
 import {
   VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS,
 } from '../../shared/voiceInputDictionaryLearning';
@@ -370,6 +371,12 @@ export function useVoiceInput(
   const formatVoiceInputError = useCallback((message: string, code?: VoiceInputErrorCode): string => {
     if (code === 'empty_transcript') return t('voiceInputOverlay.emptyTranscript');
     return message;
+  }, [t]);
+
+  const formatVoiceInputStartError = useCallback((message: string): string => {
+    return isVoiceInputServiceConnectionError(message)
+      ? t('voiceInputOverlay.asrServiceUnavailable')
+      : message;
   }, [t]);
 
   const appendAudioChunk = useCallback((chunk: PcmChunk) => {
@@ -1070,35 +1077,41 @@ export function useVoiceInput(
       refinementEnabled: voiceInputSettings.refinementEnabled,
     }).catch(() => undefined);
     void prewarmVoiceInputAudio(workletUrl).catch(() => undefined);
-    if (voiceInputSettings.fastActivationEnabled) {
-      const permission = window.electronAPI.voiceInput.getMicrophonePermissionCached();
-      if (permission.ok) {
-        void prewarmVoiceInputMicrophoneWithAutomaticFallback(
-          {
-            workletUrl,
-            deviceId: voiceInputSettings.microphoneDeviceId ?? undefined,
-            ...createVoiceInputAudioProfile(true),
-          },
-          () => {
-            log.warn('fast activation selected microphone unavailable, prewarming automatic microphone');
-          },
-        ).catch((error) => {
-          log.warn('fast activation microphone prewarm failed', {
-            error: error instanceof Error ? error.message : String(error),
-            workletUrl,
-            hasDeviceId: Boolean(voiceInputSettings.microphoneDeviceId),
-          });
-        });
-      }
-    } else {
-      void disposeKeepAliveVoiceInputMicrophone('setting_disabled').catch(() => undefined);
-    }
     if (import.meta.env.DEV) void prewarmVoiceInputBenchmarkFixture().catch(() => undefined);
+  }, [voiceInputSettings.language, voiceInputSettings.refinementEnabled]);
+
+  // Microphone keep-alive is deliberately a separate effect: unlike the prewarm
+  // above it opens a real capture device and turns on the OS privacy indicator,
+  // so it must not re-run for settings unrelated to the microphone. Language and
+  // refinement changes used to re-assert keep-alive intent here, which kept the
+  // device warm for reasons the user never asked for.
+  useEffect(() => {
+    if (disabledRef.current) return;
+    if (!voiceInputSettings.fastActivationEnabled) {
+      void disposeKeepAliveVoiceInputMicrophone('setting_disabled').catch(() => undefined);
+      return;
+    }
+    const permission = window.electronAPI.voiceInput.getMicrophonePermissionCached();
+    if (!permission.ok) return;
+    void prewarmVoiceInputMicrophoneWithAutomaticFallback(
+      {
+        workletUrl,
+        deviceId: voiceInputSettings.microphoneDeviceId ?? undefined,
+        ...createVoiceInputAudioProfile(true),
+      },
+      () => {
+        log.warn('fast activation selected microphone unavailable, prewarming automatic microphone');
+      },
+    ).catch((error) => {
+      log.warn('fast activation microphone prewarm failed', {
+        error: error instanceof Error ? error.message : String(error),
+        workletUrl,
+        hasDeviceId: Boolean(voiceInputSettings.microphoneDeviceId),
+      });
+    });
   }, [
     voiceInputSettings.fastActivationEnabled,
-    voiceInputSettings.language,
     voiceInputSettings.microphoneDeviceId,
-    voiceInputSettings.refinementEnabled,
   ]);
 
   const start = useCallback(async () => {
@@ -1183,7 +1196,18 @@ export function useVoiceInput(
       return;
     }
     if (!guards.readiness.ok) {
-      const readinessError = guards.readiness.error ?? 'Voice input is not configured.';
+      let readinessError = guards.readiness.error ?? 'Voice input is not configured.';
+      switch (guards.readiness.failureReason) {
+        case 'custom-asr-config-missing':
+          readinessError = t('settings.voiceInput.serviceSource.credentialError.customAsrConfigMissing');
+          break;
+        case 'custom-asr-key-missing':
+          readinessError = t('settings.voiceInput.serviceSource.credentialError.customAsrKeyMissing');
+          break;
+        case 'codex-realtime-unsupported':
+          readinessError = t('settings.voiceInput.serviceSource.credentialError.codexRealtimeUnsupported');
+          break;
+      }
       const authErrorReason = guards.readiness.authErrorReason;
       if (guards.readiness.auth === 'codex' && authErrorReason && isCodexSessionExpiredError(authErrorReason)) {
         promptCodexSessionExpired(authErrorReason);
@@ -1236,6 +1260,22 @@ export function useVoiceInput(
       elapsedMs,
     });
     if (!captureStart.ok) {
+      // 电源释放(锁屏/挂起)取消了启动:静默回收,不显示错误态 —— 用户是主动
+      // 离开,内部的 disposed 消息不该出现在界面上。
+      if (captureStart.cancelled) {
+        log.debug('microphone start cancelled by power release');
+        resolveStartReadyState(attemptId, { ok: false, error: captureStart.error });
+        invalidateStartAttempt();
+        void startResultPromise.then((result) => {
+          if (result.ok) {
+            void window.electronAPI.voiceInput.cancel({ runId: result.runId });
+          }
+        });
+        await restoreSystemAudioForRecording();
+        setVoiceState('idle');
+        restoreEditorFocusAfterVoiceInput();
+        return;
+      }
       log.warn('microphone start failed:', captureStart.error);
       resolveStartReadyState(attemptId, { ok: false, error: captureStart.error });
       invalidateStartAttempt();
@@ -1292,7 +1332,7 @@ export function useVoiceInput(
       insertionRangeRef.current = null;
       setVoiceState('error');
       promptCodexSessionExpired(result.authErrorReason ?? result.error);
-      reportVoiceInputError(result.error);
+      reportVoiceInputError(formatVoiceInputStartError(result.error));
       restoreEditorFocusAfterVoiceInput();
       return;
     }
@@ -1323,6 +1363,7 @@ export function useVoiceInput(
     createStartReadyState,
     disabled,
     failActiveRecording,
+    formatVoiceInputStartError,
     formatMicrophoneFallbackMessage,
     formatMicrophoneStartError,
     invalidateStartAttempt,
@@ -1335,6 +1376,7 @@ export function useVoiceInput(
     restoreSystemAudioForRecording,
     setVoiceState,
     stopEngine,
+    t,
     voiceInputSettings.language,
     voiceInputSettings.microphoneDeviceId,
     voiceInputSettings.fastActivationEnabled,
@@ -1418,7 +1460,7 @@ export function useVoiceInput(
           resolveStopCompletion();
           setVoiceState('error');
           promptCodexSessionExpired(startResult.authErrorReason ?? startResult.error);
-          reportVoiceInputError(startResult.error);
+          reportVoiceInputError(formatVoiceInputStartError(startResult.error));
           restoreEditorFocusAfterVoiceInput();
           throw new Error(startResult.error);
         }
@@ -1482,7 +1524,7 @@ export function useVoiceInput(
       setVoiceState('done');
       restoreEditorFocusAfterVoiceInput();
     }
-  }, [commitUsageStats, dismissInlineError, drainAndStopEngine, drainQueuedAudioToMain, invalidateStartAttempt, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioAndNotifyEndCue, setVoiceState, waitForBusyCompletion, waitForStartReadyWhileStopping]);
+  }, [commitUsageStats, dismissInlineError, drainAndStopEngine, drainQueuedAudioToMain, formatVoiceInputStartError, invalidateStartAttempt, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioAndNotifyEndCue, setVoiceState, waitForBusyCompletion, waitForStartReadyWhileStopping]);
 
   const stopWithGate = useCallback(async (options?: VoiceInputStopOptions) => {
     if (stopInFlightPromiseRef.current) return stopInFlightPromiseRef.current;

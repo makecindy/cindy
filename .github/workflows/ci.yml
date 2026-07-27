@@ -33,6 +33,23 @@ jobs:
           fetch-depth: 0
           lfs: true
 
+      # .gitmodules 来自 PR 分支,fork PR 可以把 cindy-protocol 的 url / path 改成
+      # 任意仓库。先钉死来源再 sync/update,避免 CI 拉取并 pnpm install 第三方仓库
+      # 内容。gitlink 的 commit 同样来自 PR,但只能从 makecindy/cindy-protocol 拉取,
+      # 外部无法向该仓库推送,所以来源钉死后取到的一定是本组织的历史。
+      - name: Verify cindy-protocol submodule source
+        run: |
+          set -euo pipefail
+          expected_url='https://github.com/makecindy/cindy-protocol.git'
+          expected_path='cindy-protocol'
+          actual_url="$(git config -f .gitmodules --get submodule.cindy-protocol.url || true)"
+          actual_path="$(git config -f .gitmodules --get submodule.cindy-protocol.path || true)"
+          if [ "$actual_url" != "$expected_url" ] || [ "$actual_path" != "$expected_path" ]; then
+            echo "::error file=.gitmodules::cindy-protocol submodule 来源不符: url='$actual_url' path='$actual_path'(期望 url='$expected_url' path='$expected_path')"
+            exit 1
+          fi
+          echo "cindy-protocol submodule 来源校验通过: $actual_url"
+
       # 本 job 只做本仓 typecheck / 单测 / 各类 guard。cindy-protocol 是公开的
       # workspace 依赖,需要 checkout 以供 pnpm install 解析,但不在本 job 运行
       # 协议仓自己的 CI。
@@ -69,6 +86,17 @@ jobs:
 
       - name: Check endpoint literals
         run: pnpm check:endpoints
+
+      # i18n 三道静态门禁：key 结构一致性、品牌名收口、术语表一致性。
+      # 都是纯文件扫描、秒级返回，放在耗时的 typecheck / 单测之前快速失败。
+      - name: Check i18n key consistency
+        run: pnpm check:i18n
+
+      - name: Check brand terminology
+        run: pnpm check:brand-terminology
+
+      - name: Check i18n glossary
+        run: pnpm check:i18n-glossary
 
       - name: Typecheck desktop
         run: pnpm --filter desktop typecheck

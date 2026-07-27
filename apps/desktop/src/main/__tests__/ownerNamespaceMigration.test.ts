@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dataOwnerStorageKey } from '../appSessionState.js';
 import {
   claimLegacyOwnerNamespace,
+  getLegacyGhostRecoveryStatus,
   hasLegacyOwnerNamespaceClaim,
+  listLegacyGhostTombstoneRoots,
+  recoverLegacyGhostPlugins,
   __testing,
 } from '../ownerNamespaceMigration.js';
 
@@ -18,8 +21,28 @@ async function tempRoot(): Promise<string> {
   return root;
 }
 
+/**
+ * Chromium uses a relative file symlink for SingletonLock on macOS/Linux.
+ * Windows local test hosts may not have file-symlink privileges, so use a
+ * directory junction whose readlink target preserves the same trailing PID.
+ */
+async function writeSingletonLock(root: string, pid: number): Promise<void> {
+  const lockTarget = `myhost-${pid}`;
+  if (process.platform === 'win32') {
+    const junctionTarget = path.join(root, 'singleton-lock-targets', lockTarget);
+    await fs.mkdir(junctionTarget, { recursive: true });
+    await fs.symlink(junctionTarget, path.join(root, 'SingletonLock'), 'junction');
+    return;
+  }
+  await fs.symlink(lockTarget, path.join(root, 'SingletonLock'));
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+});
+
+beforeEach(() => {
+  __testing.resetLegacyGhostRecoveryState();
 });
 
 describe('claimLegacyOwnerNamespace', () => {
@@ -197,11 +220,15 @@ describe('claimLegacyOwnerNamespace', () => {
     const root = await tempRoot();
     await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
     // 历史 packaged build 不写 .dev-instances,但持有 Chromium 单例锁 symlink。
-    await fs.symlink('myhost-4242', path.join(root, 'SingletonLock'));
+    await writeSingletonLock(root, 4242);
 
     const result = await claimLegacyOwnerNamespace(
       { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
-      realFsDeps(root, { isPidAlive: (pid) => pid === 4242 }),
+      realFsDeps(
+        root,
+        { isPidAlive: (pid) => pid === 4242 },
+        { readlink: () => Promise.resolve('myhost-4242') },
+      ),
     );
 
     expect(result).toEqual({
@@ -216,11 +243,12 @@ describe('claimLegacyOwnerNamespace', () => {
   it('ignores a stale SingletonLock whose pid is dead and migrates normally', async () => {
     const root = await tempRoot();
     await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
-    await fs.symlink('myhost-4242', path.join(root, 'SingletonLock'));
+    await writeSingletonLock(root, 4242);
 
     const result = await claimLegacyOwnerNamespace(
       { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
-      realFsDeps(root), // isPidAlive 恒 false = 崩溃残留
+      realFsDeps(root, {}, { readlink: () => Promise.resolve('myhost-4242') }),
+      // isPidAlive 恒 false = 崩溃残留
     );
 
     expect(result).toMatchObject({ status: 'migrated' });
@@ -420,6 +448,934 @@ describe('claimLegacyOwnerNamespace', () => {
   });
 });
 
+describe('legacy Ghost plugin recovery', () => {
+  it('does not follow a linked legacy repository root', async () => {
+    const root = await tempRoot();
+    const externalRoot = await tempRoot();
+    await writeGhostDirAtPath(
+      path.join(externalRoot, 'external-plugin'),
+      'external-plugin',
+    );
+    await fs.symlink(
+      externalRoot,
+      path.join(root, 'brain'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+        realFsDeps(root),
+      ),
+    ).resolves.toEqual({ status: 'skipped', moved: 0, conflicts: 0 });
+    await expect(
+      fs.readFile(path.join(externalRoot, 'external-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"external-plugin"');
+    await expect(
+      fs.access(
+        path.join(
+          root,
+          'owners',
+          dataOwnerStorageKey('cloud-a'),
+          'cindy-brain',
+          'external-plugin',
+        ),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('does not move linked legacy plugin directories', async () => {
+    const root = await tempRoot();
+    const externalRoot = await tempRoot();
+    const linkedPlugin = path.join(externalRoot, 'linked-plugin');
+    await writeGhostDirAtPath(linkedPlugin, 'linked-plugin');
+    await fs.mkdir(path.join(root, 'brain'), { recursive: true });
+    await fs.symlink(
+      linkedPlugin,
+      path.join(root, 'brain', 'linked-plugin'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+        realFsDeps(root),
+      ),
+    ).resolves.toEqual({ status: 'skipped', moved: 0, conflicts: 0 });
+    await expect(
+      fs.readFile(path.join(linkedPlugin, 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"linked-plugin"');
+    await expect(
+      fs.access(
+        path.join(
+          root,
+          'owners',
+          dataOwnerStorageKey('cloud-a'),
+          'cindy-brain',
+          'linked-plugin',
+        ),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('does not follow a linked owner-scoped recovery destination', async () => {
+    const root = await tempRoot();
+    const externalRoot = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    await writeGhostDir(root, 'brain', 'legacy-plugin');
+    const ownerRoot = path.join(root, 'owners', ownerKey);
+    await fs.mkdir(ownerRoot, { recursive: true });
+    await fs.symlink(
+      externalRoot,
+      path.join(ownerRoot, 'cindy-brain'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        root,
+      ),
+    ).toEqual({
+      state: 'partial',
+      legacyPluginCount: 1,
+      canRetry: false,
+    });
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toMatchObject({ status: 'partial', moved: 0, conflicts: 1 });
+    await expect(
+      fs.readFile(path.join(root, 'brain', 'legacy-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"legacy-plugin"');
+    await expect(fs.access(path.join(externalRoot, 'legacy-plugin'))).rejects.toThrow();
+  });
+
+  it('does not restore plugins whose command conflicts with an installed plugin', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    await writeGhostDirAtPath(
+      path.join(root, 'brain', 'legacy-plugin'),
+      'legacy-plugin',
+      'Draw',
+    );
+    const targetRoot = path.join(root, 'owners', ownerKey, 'cindy-brain');
+    await writeGhostDirAtPath(
+      path.join(targetRoot, 'current-plugin'),
+      'current-plugin',
+      'draw',
+    );
+
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        root,
+      ),
+    ).toEqual({
+      state: 'partial',
+      legacyPluginCount: 1,
+      canRetry: false,
+    });
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toMatchObject({ status: 'partial', moved: 0, conflicts: 1 });
+    await expect(
+      fs.readFile(path.join(root, 'brain', 'legacy-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"command":"Draw"');
+    await expect(fs.access(path.join(targetRoot, 'legacy-plugin'))).rejects.toThrow();
+    await expect(fs.access(path.join(root, __testing.CLAIM_MARKER))).rejects.toThrow();
+  });
+
+  it('does not restore plugins whose command is reserved for a builtin seed', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    await writeGhostDirAtPath(
+      path.join(root, 'brain', 'custom-plugin'),
+      'custom-plugin',
+      'Draw',
+    );
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+        { reservedCommands: new Set(['draw']) },
+      ),
+    ).resolves.toMatchObject({ status: 'partial', moved: 0, conflicts: 1 });
+    await expect(
+      fs.readFile(path.join(root, 'brain', 'custom-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"command":"Draw"');
+  });
+
+  it('derives retryability from bundled command reservations', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    await writeGhostDirAtPath(
+      path.join(root, 'brain', 'custom-plugin'),
+      'custom-plugin',
+      'Draw',
+    );
+
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        root,
+        false,
+        { reservedCommands: new Set(['draw']) },
+      ),
+    ).toEqual({
+      state: 'partial',
+      legacyPluginCount: 1,
+      canRetry: false,
+    });
+  });
+
+  it('ignores tombstones from a foreign shared root during recovery planning', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const foreignOwnerKey = dataOwnerStorageKey('cloud-b');
+    const scopedRoot = path.join(root, 'owners', dataOwnerStorageKey(ownerId), 'brain');
+    await writeGhostDir(root, 'brain', 'shared-plugin');
+    await writeGhostDirAtPath(path.join(scopedRoot, 'scoped-plugin'), 'scoped-plugin', 'Draw');
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey: foreignOwnerKey, complete: true }),
+    );
+    await fs.writeFile(
+      path.join(root, 'brain', '.builtin-provisioning.json'),
+      JSON.stringify({ removed: ['draw'] }),
+    );
+
+    expect(listLegacyGhostTombstoneRoots(ownerId, root)).toEqual([scopedRoot]);
+  });
+
+  it('does not restore reserved plugin IDs when packaged recovery protection is enabled', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    await writeGhostDir(root, 'brain', 'cindy-untrusted');
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+        { rejectReservedIds: true },
+      ),
+    ).resolves.toMatchObject({ status: 'partial', moved: 0, conflicts: 1 });
+    await expect(
+      fs.readFile(path.join(root, 'brain', 'cindy-untrusted', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"cindy-untrusted"');
+  });
+
+  it('moves builtin provisioning state with plugins before reconciliation', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    await writeGhostDir(root, 'brain', 'seeded-plugin');
+    const state = {
+      removed: ['removed-builtin'],
+      seeded: ['seeded-plugin'],
+    };
+    await fs.writeFile(
+      path.join(root, 'brain', '.builtin-provisioning.json'),
+      JSON.stringify(state),
+    );
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toMatchObject({
+      status: 'migrated',
+      moved: 1,
+      conflicts: 0,
+      provisioningStateMoved: true,
+    });
+    await expect(
+      fs.readFile(
+        path.join(
+          root,
+          'owners',
+          ownerKey,
+          'cindy-brain',
+          '.builtin-provisioning.json',
+        ),
+        'utf-8',
+      ),
+    ).resolves.toBe(JSON.stringify(state));
+    await expect(
+      fs.access(path.join(root, 'brain', '.builtin-provisioning.json')),
+    ).rejects.toThrow();
+  });
+
+  it('does not move plugins when builtin provisioning state would conflict', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    await writeGhostDir(root, 'brain', 'seeded-plugin');
+    await fs.writeFile(
+      path.join(root, 'brain', '.builtin-provisioning.json'),
+      JSON.stringify({ removed: ['legacy'], seeded: [] }),
+    );
+    const targetRoot = path.join(root, 'owners', ownerKey, 'cindy-brain');
+    await fs.mkdir(targetRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(targetRoot, '.builtin-provisioning.json'),
+      JSON.stringify({ removed: ['current'], seeded: [] }),
+    );
+
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        root,
+      ),
+    ).toEqual({
+      state: 'partial',
+      legacyPluginCount: 1,
+      canRetry: false,
+    });
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toMatchObject({ status: 'partial', moved: 0, conflicts: 1 });
+    await expect(
+      fs.readFile(path.join(root, 'brain', 'seeded-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"seeded-plugin"');
+    await expect(
+      fs.readFile(path.join(targetRoot, '.builtin-provisioning.json'), 'utf-8'),
+    ).resolves.toContain('current');
+  });
+
+  it('does not reserve commands from roots blocked by provisioning preflight', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const blockedRoot = path.join(root, 'cindy-brain');
+    const safeRoot = path.join(root, 'brain');
+    const targetRoot = path.join(root, 'owners', ownerKey, 'cindy-brain');
+    await writeGhostDirAtPath(
+      path.join(blockedRoot, 'blocked-plugin'),
+      'blocked-plugin',
+      'Draw',
+    );
+    await writeGhostDirAtPath(path.join(safeRoot, 'safe-plugin'), 'safe-plugin', 'draw');
+    await fs.mkdir(targetRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(blockedRoot, '.builtin-provisioning.json'),
+      JSON.stringify({ removed: [], seeded: ['blocked-plugin'] }),
+    );
+    await fs.writeFile(
+      path.join(targetRoot, '.builtin-provisioning.json'),
+      JSON.stringify({ removed: [], seeded: [] }),
+    );
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toMatchObject({ status: 'partial', moved: 1, conflicts: 1 });
+    await expect(
+      fs.readFile(path.join(targetRoot, 'safe-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"safe-plugin"');
+    await expect(
+      fs.readFile(path.join(blockedRoot, 'blocked-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"blocked-plugin"');
+  });
+
+  it('aborts before moving builtin provisioning state when the owner changes', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    await writeGhostDir(root, 'brain', 'seeded-plugin');
+    await fs.writeFile(
+      path.join(root, 'brain', '.builtin-provisioning.json'),
+      JSON.stringify({ removed: [], seeded: ['seeded-plugin'] }),
+    );
+    let checks = 0;
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      realFsDeps(root),
+      { shouldAbort: () => ++checks >= 4 },
+    );
+
+    expect(result).toMatchObject({ status: 'partial', moved: 0 });
+    await expect(
+      fs.readFile(path.join(root, 'brain', '.builtin-provisioning.json'), 'utf-8'),
+    ).resolves.toContain('seeded-plugin');
+    await expect(
+      fs.access(
+        path.join(root, 'owners', ownerKey, 'cindy-brain', '.builtin-provisioning.json'),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('rolls back builtin provisioning state when the owner changes during rename', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    await writeGhostDir(root, 'brain', 'seeded-plugin');
+    const sourceState = path.join(root, 'brain', '.builtin-provisioning.json');
+    const targetState = path.join(
+      root,
+      'owners',
+      ownerKey,
+      'cindy-brain',
+      '.builtin-provisioning.json',
+    );
+    await fs.writeFile(
+      sourceState,
+      JSON.stringify({ removed: [], seeded: ['seeded-plugin'] }),
+    );
+    let boundaryPending = false;
+    const deps = realFsDeps(
+      root,
+      {},
+      {
+        rename: async (source: string, target: string) => {
+          await fs.rename(source, target);
+          if (source === sourceState && target === targetState) boundaryPending = true;
+        },
+      },
+    );
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      deps,
+      { shouldAbort: () => boundaryPending },
+    );
+
+    expect(result).toMatchObject({ status: 'partial', moved: 0 });
+    await expect(fs.readFile(sourceState, 'utf-8')).resolves.toContain('seeded-plugin');
+    await expect(fs.access(targetState)).rejects.toThrow();
+    await expect(
+      fs.readFile(path.join(root, 'brain', 'seeded-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('seeded-plugin');
+  });
+
+  it('keeps moved provisioning state when a peer appears before rollback', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    await writeGhostDir(root, 'brain', 'seeded-plugin');
+    await writeDevInstanceRecord(root, 4242);
+    const sourceState = path.join(root, 'brain', '.builtin-provisioning.json');
+    const targetState = path.join(
+      root,
+      'owners',
+      ownerKey,
+      'cindy-brain',
+      '.builtin-provisioning.json',
+    );
+    await fs.writeFile(
+      sourceState,
+      JSON.stringify({ removed: [], seeded: ['seeded-plugin'] }),
+    );
+    let boundaryPending = false;
+    let peerStarted = false;
+    const deps = realFsDeps(
+      root,
+      { isPidAlive: (pid) => peerStarted && pid === 4242 },
+      {
+        rename: async (source: string, target: string) => {
+          await fs.rename(source, target);
+          if (source === sourceState && target === targetState) {
+            boundaryPending = true;
+            peerStarted = true;
+          }
+        },
+      },
+    );
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      deps,
+      { shouldAbort: () => boundaryPending },
+    );
+
+    expect(result).toMatchObject({
+      status: 'partial',
+      moved: 0,
+      provisioningStateMoved: true,
+    });
+    await expect(fs.access(sourceState)).rejects.toThrow();
+    await expect(fs.readFile(targetState, 'utf-8')).resolves.toContain('seeded-plugin');
+  });
+
+  it('reports a provisioning-state move even when the plugin rename fails', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    await writeGhostDir(root, 'brain', 'seeded-plugin');
+    await fs.writeFile(
+      path.join(root, 'brain', '.builtin-provisioning.json'),
+      JSON.stringify({ removed: [], seeded: ['seeded-plugin'] }),
+    );
+    const deps = realFsDeps(
+      root,
+      {},
+      {
+        rename: (source: string, target: string) =>
+          path.basename(source) === '.builtin-provisioning.json'
+            ? fs.rename(source, target)
+            : Promise.reject(Object.assign(new Error('rename denied'), { code: 'EACCES' })),
+      },
+    );
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        deps,
+      ),
+    ).resolves.toMatchObject({
+      status: 'partial',
+      moved: 0,
+      conflicts: 0,
+      provisioningStateMoved: true,
+    });
+    await expect(
+      fs.readFile(
+        path.join(root, 'owners', ownerKey, 'cindy-brain', '.builtin-provisioning.json'),
+        'utf-8',
+      ),
+    ).resolves.toContain('seeded-plugin');
+    await expect(
+      fs.readFile(path.join(root, 'brain', 'seeded-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('seeded-plugin');
+  });
+
+  it('moves only valid legacy plugins and leaves other owner data in place', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    await writeGhostDir(root, 'cindy-brain', 'valid-plugin');
+    await fs.mkdir(path.join(root, 'cindy-brain', 'invalid-plugin'), { recursive: true });
+    await fs.writeFile(path.join(root, 'cindy-brain', 'invalid-plugin', 'ghost.json'), '{ nope');
+    await fs.mkdir(path.join(root, 'dialogues'), { recursive: true });
+    await fs.writeFile(path.join(root, 'dialogues', 'session.json'), 'legacy-dialogue');
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      realFsDeps(root),
+    );
+
+    const targetRoot = path.join(root, 'owners', dataOwnerStorageKey(ownerId));
+    expect(result).toMatchObject({ status: 'migrated', moved: 1, conflicts: 0 });
+    await expect(
+      fs.readFile(path.join(targetRoot, 'cindy-brain', 'valid-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"valid-plugin"');
+    await expect(
+      fs.readFile(path.join(root, 'cindy-brain', 'invalid-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toBe('{ nope');
+    await expect(fs.readFile(path.join(root, 'dialogues', 'session.json'), 'utf-8')).resolves.toBe(
+      'legacy-dialogue',
+    );
+  });
+
+  it('removes a newly created empty target when every plugin rename fails', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    await writeGhostDirAtPath(
+      path.join(root, 'owners', ownerKey, 'brain', 'legacy-plugin'),
+      'legacy-plugin',
+    );
+    const deps = realFsDeps(
+      root,
+      {},
+      {
+        rename: () =>
+          Promise.reject(Object.assign(new Error('rename denied'), { code: 'EACCES' })),
+      },
+    );
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        deps,
+      ),
+    ).resolves.toMatchObject({ status: 'partial', moved: 0 });
+    await expect(
+      fs.access(path.join(root, 'owners', ownerKey, 'cindy-brain')),
+    ).rejects.toThrow();
+    await expect(
+      fs.readFile(
+        path.join(root, 'owners', ownerKey, 'brain', 'legacy-plugin', 'ghost.json'),
+        'utf-8',
+      ),
+    ).resolves.toContain('"id":"legacy-plugin"');
+  });
+
+  it('does not overwrite an existing scoped plugin', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    await writeGhostDir(root, 'cindy-brain', 'valid-plugin');
+    const target = path.join(root, 'owners', dataOwnerStorageKey(ownerId), 'cindy-brain', 'valid-plugin');
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, 'ghost.json'), 'scoped');
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      realFsDeps(root),
+    );
+    const status = getLegacyGhostRecoveryStatus(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      root,
+    );
+
+    expect(result).toMatchObject({ status: 'partial', moved: 0, conflicts: 1 });
+    expect(status).toEqual({
+      state: 'partial',
+      legacyPluginCount: 1,
+      canRetry: false,
+    });
+    await expect(fs.readFile(path.join(target, 'ghost.json'), 'utf-8')).resolves.toBe('scoped');
+    await expect(
+      fs.readFile(path.join(root, 'cindy-brain', 'valid-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"valid-plugin"');
+    await expect(fs.access(path.join(root, __testing.CLAIM_MARKER))).rejects.toThrow();
+  });
+
+  it('does not claim legacy owner data when no valid plugin can be recovered', async () => {
+    const root = await tempRoot();
+    await fs.mkdir(path.join(root, 'cindy-brain', 'invalid-plugin'), { recursive: true });
+    await fs.writeFile(path.join(root, 'cindy-brain', 'invalid-plugin', 'ghost.json'), '{ nope');
+    await fs.mkdir(path.join(root, 'dialogues'), { recursive: true });
+    await fs.writeFile(path.join(root, 'dialogues', 'session.json'), 'legacy-dialogue');
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root),
+    );
+
+    expect(result).toEqual({ status: 'skipped', moved: 0, conflicts: 0 });
+    await expect(fs.access(path.join(root, __testing.CLAIM_MARKER))).rejects.toThrow();
+    await expect(fs.readFile(path.join(root, 'dialogues', 'session.json'), 'utf-8')).resolves.toBe(
+      'legacy-dialogue',
+    );
+  });
+
+  it('consolidates plugins left in the current owner scoped brain directory', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const legacyPluginDir = path.join(
+      root,
+      'owners',
+      ownerKey,
+      'brain',
+      'scoped-legacy-plugin',
+    );
+    await writeGhostDirAtPath(legacyPluginDir, 'scoped-legacy-plugin');
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey, complete: true }),
+    );
+
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        root,
+      ),
+    ).toEqual({
+      state: 'partial',
+      legacyPluginCount: 1,
+      canRetry: true,
+    });
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      realFsDeps(root),
+    );
+
+    expect(result).toMatchObject({ status: 'migrated', moved: 1, conflicts: 0 });
+    await expect(
+      fs.readFile(
+        path.join(root, 'owners', ownerKey, 'cindy-brain', 'scoped-legacy-plugin', 'ghost.json'),
+        'utf-8',
+      ),
+    ).resolves.toContain('"id":"scoped-legacy-plugin"');
+    await expect(
+      fs.access(path.join(root, 'owners', ownerKey, 'brain', 'scoped-legacy-plugin')),
+    ).rejects.toThrow();
+  });
+
+  it('recovers current-owner scoped plugins without changing another owner global claim', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-b';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const otherOwnerKey = dataOwnerStorageKey('cloud-a');
+    await writeGhostDirAtPath(
+      path.join(root, 'owners', ownerKey, 'brain', 'scoped-legacy-plugin'),
+      'scoped-legacy-plugin',
+    );
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey: otherOwnerKey, complete: true }),
+    );
+
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        root,
+      ),
+    ).toEqual({
+      state: 'partial',
+      legacyPluginCount: 1,
+      canRetry: true,
+    });
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toMatchObject({ status: 'migrated', moved: 1, conflicts: 0 });
+    await expect(
+      fs.readFile(
+        path.join(root, 'owners', ownerKey, 'cindy-brain', 'scoped-legacy-plugin', 'ghost.json'),
+        'utf-8',
+      ),
+    ).resolves.toContain('"id":"scoped-legacy-plugin"');
+    await expect(
+      fs.readFile(path.join(root, __testing.CLAIM_MARKER), 'utf-8'),
+    ).resolves.toContain(otherOwnerKey);
+  });
+
+  it('fails closed when the global claim marker is unreadable', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    await writeGhostDir(root, 'cindy-brain', 'valid-plugin');
+    await fs.writeFile(path.join(root, __testing.CLAIM_MARKER), '{ invalid');
+
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        root,
+      ),
+    ).toEqual({
+      state: 'partial',
+      legacyPluginCount: 1,
+      canRetry: false,
+    });
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toEqual({ status: 'partial', moved: 0, conflicts: 1 });
+    await expect(
+      fs.readFile(path.join(root, 'cindy-brain', 'valid-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"valid-plugin"');
+  });
+
+  it('preserves successful moves when empty legacy root cleanup fails', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    await writeGhostDir(root, 'cindy-brain', 'valid-plugin');
+    const deps = realFsDeps(
+      root,
+      {},
+      {
+        rmdir: (dir: string) =>
+          path.basename(dir) === 'cindy-brain'
+            ? Promise.reject(Object.assign(new Error('cleanup denied'), { code: 'EACCES' }))
+            : fs.rmdir(dir),
+      },
+    );
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        deps,
+      ),
+    ).resolves.toMatchObject({ status: 'migrated', moved: 1, conflicts: 0 });
+    await expect(
+      fs.readFile(
+        path.join(root, 'owners', ownerKey, 'cindy-brain', 'valid-plugin', 'ghost.json'),
+        'utf-8',
+      ),
+    ).resolves.toContain('"id":"valid-plugin"');
+  });
+
+  it('defers without writing a marker while another live instance shares userData', async () => {
+    const root = await tempRoot();
+    await writeGhostDir(root, 'cindy-brain', 'valid-plugin');
+    await writeDevInstanceRecord(root, 4242);
+
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+        root,
+        false,
+        {},
+        (pid) => pid === 4242,
+      ),
+    ).toEqual({
+      state: 'deferred',
+      legacyPluginCount: 1,
+      canRetry: false,
+    });
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, { isPidAlive: (pid) => pid === 4242 }),
+    );
+
+    expect(result).toEqual({
+      status: 'deferred',
+      moved: 0,
+      conflicts: 0,
+      deferredReason: 'concurrent-live-instances',
+    });
+    await expect(fs.access(path.join(root, __testing.CLAIM_MARKER))).rejects.toThrow();
+    await expect(
+      fs.readFile(path.join(root, 'cindy-brain', 'valid-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"valid-plugin"');
+  });
+
+  it('interrupts plugin recovery when an instance registers before the next plugin move', async () => {
+    const root = await tempRoot();
+    await writeGhostDir(root, 'cindy-brain', 'first-plugin');
+    await writeGhostDir(root, 'brain', 'second-plugin');
+    let scans = 0;
+    const racedDeps = realFsDeps(
+      root,
+      { isPidAlive: (pid) => pid === 9999 },
+      {
+        readdir: (dir: string) => {
+          if (path.basename(dir) === '.dev-instances') {
+            scans += 1;
+            return Promise.resolve(scans <= 2 ? [] : ['9999.json']);
+          }
+          return fs.readdir(dir);
+        },
+        readFile: (file: string) =>
+          path.basename(file) === '9999.json'
+            ? Promise.resolve(JSON.stringify({ pid: 9999, userDataDir: root }))
+            : fs.readFile(file, 'utf-8'),
+      },
+    );
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      racedDeps,
+    );
+
+    const targetRoot = path.join(root, 'owners', dataOwnerStorageKey('cloud-a'), 'cindy-brain');
+    expect(result).toMatchObject({
+      status: 'partial',
+      moved: 1,
+      conflicts: 0,
+      deferredReason: 'concurrent-live-instances',
+    });
+    await expect(
+      fs.readFile(path.join(targetRoot, 'first-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"first-plugin"');
+    await expect(
+      fs.readFile(path.join(root, 'brain', 'second-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"second-plugin"');
+    await expect(fs.access(path.join(root, 'cindy-brain'))).resolves.toBeUndefined();
+    expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(false);
+  });
+
+  it('reports claimed-by-other-owner and never moves plugins across accounts', async () => {
+    const root = await tempRoot();
+    await writeGhostDir(root, 'cindy-brain', 'valid-plugin');
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: true }),
+    );
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: 'cloud-b', user: { id: 'cloud-b' } },
+      realFsDeps(root),
+    );
+    const status = getLegacyGhostRecoveryStatus(
+      { mode: 'cloud', dataOwnerId: 'cloud-b', user: { id: 'cloud-b' } },
+      root,
+    );
+
+    expect(result).toEqual({ status: 'claimed-by-other-owner', moved: 0, conflicts: 0 });
+    expect(status).toEqual({
+      state: 'claimed-by-other-owner',
+      legacyPluginCount: 1,
+      canRetry: false,
+    });
+    await expect(
+      fs.access(path.join(root, 'owners', dataOwnerStorageKey('cloud-b'), 'cindy-brain')),
+    ).rejects.toThrow();
+  });
+
+  it('reports retryable partial status when legacy plugins appear after a completed owner claim', async () => {
+    const root = await tempRoot();
+    await writeGhostDir(root, 'cindy-brain', 'valid-plugin');
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: true }),
+    );
+
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+        root,
+      ),
+    ).toEqual({
+      state: 'partial',
+      legacyPluginCount: 1,
+      canRetry: true,
+    });
+  });
+
+  it('disables manual recovery retry in passive shared-userData mode', async () => {
+    const root = await tempRoot();
+    await writeGhostDir(root, 'cindy-brain', 'valid-plugin');
+    process.env.XDT_PASSIVE_SHARED_USER_DATA = '1';
+    try {
+      expect(
+        getLegacyGhostRecoveryStatus(
+          { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+          root,
+        ),
+      ).toEqual({
+        state: 'deferred',
+        legacyPluginCount: 1,
+        canRetry: false,
+      });
+    } finally {
+      delete process.env.XDT_PASSIVE_SHARED_USER_DATA;
+    }
+  });
+
+  it('aborts before the first write when the owner generation guard changes', async () => {
+    const root = await tempRoot();
+    await writeGhostDir(root, 'cindy-brain', 'valid-plugin');
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root),
+      { shouldAbort: () => true },
+    );
+
+    expect(result).toEqual({ status: 'deferred', moved: 0, conflicts: 0 });
+    await expect(fs.access(path.join(root, __testing.CLAIM_MARKER))).rejects.toThrow();
+    await expect(
+      fs.readFile(path.join(root, 'cindy-brain', 'valid-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"valid-plugin"');
+  });
+});
+
 describe('hasLegacyOwnerNamespaceClaim', () => {
   beforeEach(() => {
     // 防外部 shell 的 ambient env 污染断言(该函数直接读 env)。
@@ -461,7 +1417,7 @@ describe('hasLegacyOwnerNamespaceClaim', () => {
       path.join(root, __testing.CLAIM_MARKER),
       JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: true }),
     );
-    await fs.symlink('myhost-4242', path.join(root, 'SingletonLock'));
+    await writeSingletonLock(root, 4242);
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root, (pid) => pid === 4242)).toBe(false);
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root, () => false)).toBe(true);
   });
@@ -490,6 +1446,27 @@ describe('isSameUserDataDir', () => {
     expect(isSameUserDataDir('/Users/a/Data', '/users/a/data', 'linux')).toBe(false);
     expect(isSameUserDataDir('/Users/a/Data', '/Users/a/Data', 'linux')).toBe(true);
     expect(isSameUserDataDir('/Users/a/Data', '/Users/b/Data', 'win32')).toBe(false);
+  });
+});
+
+describe('pathExistsNoFollowSync', () => {
+  it('treats any lstat-visible entry as occupied, including links', () => {
+    const lstat = vi.fn(() => ({}) as never);
+    expect(__testing.pathExistsNoFollowSync('destination', lstat)).toBe(true);
+    expect(lstat).toHaveBeenCalledWith('destination');
+  });
+
+  it('returns missing only for ENOENT and fails closed for other lstat errors', () => {
+    expect(
+      __testing.pathExistsNoFollowSync('missing', () => {
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      }),
+    ).toBe(false);
+    expect(
+      __testing.pathExistsNoFollowSync('unreadable', () => {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      }),
+    ).toBe(true);
   });
 });
 
@@ -538,4 +1515,33 @@ async function writeDevInstanceRecord(
     JSON.stringify({ schemaVersion: 1, pid, userDataDir, passive: false }),
     'utf-8',
   );
+}
+
+async function writeGhostDir(root: string, rootName: 'cindy-brain' | 'brain', id: string): Promise<void> {
+  const dir = path.join(root, rootName, id);
+  await writeGhostDirAtPath(dir, id);
+}
+
+async function writeGhostDirAtPath(
+  dir: string,
+  id: string,
+  command?: string,
+): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, 'ghost.json'),
+    JSON.stringify({
+      schemaVersion: 2,
+      id,
+      name: `Plugin ${id}`,
+      version: '1.0.0',
+      kind: 'chip',
+      entry: 'main.js',
+      slots: ['tool'],
+      tools: [{ name: 'do_thing', description: 'Do something' }],
+      ...(command === undefined ? {} : { command }),
+    }),
+    'utf-8',
+  );
+  await fs.writeFile(path.join(dir, 'main.js'), 'export default {};', 'utf-8');
 }

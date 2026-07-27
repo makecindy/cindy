@@ -18,11 +18,12 @@ import { resolveRemoteProjectMachineIdentity } from '../lib/remoteProjectIdentit
 export function useProjectGroups(
   sessions: readonly Session[],
   projectAliases?: ReadonlyMap<string, string>,
+  includePinnedInProjects: boolean = false,
 ): ProjectGroupsResult {
   const sshHosts = useRemoteSshHosts();
 
   return useMemo(() => {
-    const groups = groupSessions(sessions, { projectAliases });
+    const groups = groupSessions(sessions, { projectAliases, includePinnedInProjects });
     return {
       ...groups,
       projects: groups.projects.map((project) => ({
@@ -30,5 +31,5 @@ export function useProjectGroups(
         remoteMachineIdentity: resolveRemoteProjectMachineIdentity(project, sshHosts),
       })),
     };
-  }, [sessions, projectAliases, sshHosts]);
+  }, [sessions, projectAliases, includePinnedInProjects, sshHosts]);
 }

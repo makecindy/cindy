@@ -76,6 +76,7 @@ import {
 } from './runtime-configs.js';
 import { getClaudeEndpoint, setClaudeProxyGatewayKeyReader, setClaudeProxyOAuthSpawnChecker } from './anthropic-compat-proxy-host.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
+import { notifyAutoPermissionClassifierUnavailable } from './claude-auto-permission-fallback.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
   clearCodexProxyAuthInjection,
@@ -102,7 +103,7 @@ import {
   unregisterCodexMcpThreadContext,
 } from '../mcp-integrations/codexEnvironment.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../mcp-integrations/codexBuiltinToolPolicy.js';
-import { buildCodexProxySpawnArgs } from './codex-gateway-config.js';
+import { buildCodexProxySpawnArgs, CODEX_OPENAI_COMPACT_PROVIDER_ID } from './codex-gateway-config.js';
 import {
   createDesktopMakerMemoryManager,
   attachAgentsToMakerMemory,
@@ -338,6 +339,10 @@ export function getMaker(): Maker {
       // 第一方只读工具走 SDK allowedTools, 避免 auto 模式为 discovery/read-only
       // 操作额外调用远程安全分类器; 列表按精确工具名维护, 不放行动态 call_tool。
       claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),
+      // MCP 工具审批与 Codex 共用同一份策略(mcp-tool-approval-policy.ts)。没有这一
+      // 行时, Claude 只剩上面那份静态只读白名单, 可信第一方 server 的 call_tool
+      // (浏览器自动化等高频入口)会逐次弹窗, 与 Codex 侧的静默执行行为分叉。
+      getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CLAUDE_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 cc 列表注入
       // （含 claude 订阅模型 + XD 网关路由的 gpt / 国产 / gemini 等）。active catalog 已在 splash 期
@@ -422,7 +427,7 @@ export function getMaker(): Maker {
       makerMemory: makerMemoryManager,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CODEX_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 codex 列表注入
-      // （gpt 原生 + codex/ 骨折网关路由）。「骨折GPT」codex/ 仍是「XD 网关来源」,渲染层按
+      // （gpt 原生 + codex/ 折扣网关路由）。「折扣GPT」codex/ 仍是「XD 网关来源」,渲染层按
       // 「XD 网关已连接」gate 可见性（ModelSelector onlyConnected / CreateWorkerPopover / ScheduleChips）。
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'codex'),
@@ -430,6 +435,7 @@ export function getMaker(): Maker {
       onCodexLocalModelsListed: (models) => {
         setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
       },
+      onAutoPermissionClassifierUnavailable: notifyAutoPermissionClassifierUnavailable,
       prepareCodexLocalCredentialModeSwitch: async (ctx) => {
         const maker = _maker;
         if (!maker) throw new Error('Maker is not initialized for Codex credential mode switch');
@@ -502,6 +508,11 @@ export function getMaker(): Maker {
           extraArgs: [...mcpExtraArgs, ...buildCodexProxySpawnArgs(endpoint, authInjection)],
           extraEnv: mcpExtraEnv,
           codexProxyActive: ready,
+          // oauth spawn 才定义 OpenAI 身份 provider(spawn args 同源);maker-core 只对
+          // 「订阅直连路由」的 thread 用它开 OpenAI 远端压缩,其余 thread 保持本地压缩。
+          ...(useOAuthBearer && ready
+            ? { codexRemoteCompactionProviderId: CODEX_OPENAI_COMPACT_PROVIDER_ID }
+            : {}),
         };
       },
       registerCodexMcpThreadContext: ({ threadId, sessionId, workingDir, vendorOptions }) => {
@@ -526,7 +537,8 @@ export function getMaker(): Maker {
       // host 自家、用户已通过 OAuth/账号授权过且完成权限 review 的 MCP server,
       // 按精确 server name 自动通过 Codex MCP elicitation，避免每次可信写操作都弹
       // PermissionPrompt。`cindy_` 只是 namespace，不构成信任边界；新 provider
-      // 默认仍弹审批，必须显式加入 allowlist。
+      // 默认仍弹审批，必须显式加入 allowlist。同一份策略也注入 Claude Code
+      // (见上方 claudeAgent 构造)，两端对同一个 MCP 工具必须给出同一个答案。
       // 例外:`cindy_ssh` 显式排除——它的 ssh_exec 在远端机器上执行任意命令,
       // 属于跨机器写操作,必须保留 Codex MCP elicitation 审批(PR #874 review)。
       // cindy_contacts 是渐进式 list_tools/call_tool server：不能按 serverName

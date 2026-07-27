@@ -15,8 +15,8 @@
 //     确实要换端口请 `--port <p>` 显式指定(你需自行把模拟器里的 app 指过去,如 dev menu)。
 //
 // 用法(仓库根):
-//   pnpm mobile:sim:start                 # cn，起在 8081(app 默认连这个)
-//   pnpm mobile:sim:start -- --region=global
+//   pnpm mobile:sim:start                 # Global，起在 8081(app 默认连这个)
+//   pnpm mobile:sim:start -- --region=cn  # 中国大陆版
 //   pnpm mobile:sim:start -- --port 8082   # 显式换端口(透传给 expo;需自行把 app 指过去)
 
 import { execFileSync, spawn } from 'node:child_process';

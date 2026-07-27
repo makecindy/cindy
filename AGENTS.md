@@ -13,8 +13,9 @@
 
 - 开发与工程规则统一放在 `docs/dev-rules/`。
 - 产品行为与体验规则统一放在 `docs/product-rules/`。
-- UI 视觉、交互与内容设计规则的入口与配套说明统一放在 `docs/design-rules/`，
-  权威视觉规范正文为根目录 `DESIGN.md`。
+- UI 视觉、交互与内容设计规则统一放在 `docs/design-rules/`，权威视觉规范正文为
+  `docs/design-rules/DESIGN.md`（根目录 `DESIGN.md` 仅为跳转入口），目录索引为
+  `docs/design-rules/cindy-design-system.md`。
 - 根 `AGENTS.md` 只保留所有任务都适用的规则、风险入口和文档索引。
 - 目录或模块专属规则优先放到对应目录的嵌套 `AGENTS.md`；需要跨目录复用的
   专题说明放在 `docs/`，并由本文件写明触发条件。
@@ -35,12 +36,26 @@
 - 修改 Desktop 数据库 schema、migration、companion script 或运行期数据库访问前，必须
   先读 `docs/dev-rules/database-and-migrations.md`。
 - 开发、调试或验证 Mobile 时，必须先读 `docs/dev-rules/mobile-development.md`。
+- 修改 `apps/mobile` 的原生配置、原生依赖、config plugin 或原生模块（`app.json`、
+  `app.config.js`、`eas.json`、`apps/mobile/package.json`、`plugins/`、`modules/` 等会
+  进入 runtime fingerprint 的输入）前，必须先读 `docs/dev-rules/mobile-development.md`
+  的「冷更边界」：**除非必要，不得提交会改变指纹的改动**；会触发冷更的 PR 与技术框架
+  变动同级，必须由仓库指定的把关人针对冷更明确确认后才能合并——不看改动大小，也不看谁
+  提的，提交者身份不构成例外。
 - 新增或调整产品功能、判断能力应进入 Core / Skill / 插件、设计人机交互或多端体验
   前，必须先读 `docs/product-rules/core-product-principles.md`。
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
-  `DESIGN.md`；`docs/design-rules/cindy-design-system.md` 仅为历史引用兼容入口。
-- 所有新增或修改的 UI 必须同时完成 Light 与 Dark 两种模式；只实现或只验证一种模式，
-  视为未完成。具体实现与验收要求以 `DESIGN.md` 的双模式交付门槛为准。
+  `docs/design-rules/DESIGN.md`；设计文档索引见
+  `docs/design-rules/cindy-design-system.md`。
+- 新增或修改任何 UI 文案里的**产品术语**前，必须先查术语表 `i18n/GLOSSARY.md`：已裁决
+  的术语照用，不自造译法；表里没有或拿不准的，在 `i18n/glossary.json` 加
+  `status: "proposed"` 条目再讨论。门禁为 `pnpm check:i18n-glossary`，规则见
+  `docs/dev-rules/engineering-conventions.md` §5.1。
+- 所有新增或修改的 UI 必须同时**实现** Light 与 Dark 两种模式（颜色一律走语义 token，
+  禁止只适配一种模式的硬编码或条件补丁）；只实现一种模式视为未完成。**两种模式的实机
+  目检不是硬性门槛**——能目检更好，做不到时如实写明哪种模式未验证，不得把「复用了 themed
+  样式」当成「双模式已验证」。具体要求以 `docs/design-rules/DESIGN.md` 的双模式交付门槛
+  为准。
 - 修改 Orca 多 Agent 协同时，必须先读
   `docs/dev-rules/orca-team-architecture.md`。
 - 修改 `packages/maker-core` 的 Agent 编排、prompt 组装、tool／MCP 暴露、translator、
@@ -86,6 +101,16 @@
 - commit、push 和创建 PR 的执行时机由开发者或 Codex、Claude Code、Cindy 等宿主
   工作流决定；仓库规则本身不额外授权外部写操作。
 - 提交 PR 时遵循 `.github/PULL_REQUEST_TEMPLATE.md`，如实说明改动、验证和风险。
+- **DCO 签名（硬性要求）**：本仓每个 commit 都必须带 `Signed-off-by` trailer，且其中的
+  名字与邮箱都要与 commit 的 author（或 committer）一致，用 `git commit -s` 生成；
+  agent 的自动提交同样适用。PR 上的 DCO check（DCO GitHub App，配置见
+  `.github/dco.yml`）会拦下漏签的 commit。`git commit` 没有自动签名的配置项，一次配好
+  可跑 `pnpm dco:install-hook` 装 `.githooks/prepare-commit-msg`；提交前自查用
+  `pnpm check:dco`。DCO 全文见根目录 `DCO`，贡献者说明见 `CONTRIBUTING.md`。
+  对自动 code review 环境的说明：review 沙箱 checkout 出的 HEAD 可能是平台合成的
+  瞬时 commit（不存在于本仓库、GitHub 上查不到该 SHA）；对这类合成 SHA 跑
+  `check:dco` 的失败结果不构成缺签证据，不要据此报告 DCO 问题。判定 DCO 是否通过，
+  一律以 PR 上的 DCO App check 与真实提交范围（`origin/main..PR head`）的结果为准。
 - **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地
   跑完仓库根 `pnpm test:unit`（全部单元测试），并对本次改动涉及的每个 package 跑
   `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在

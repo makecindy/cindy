@@ -185,6 +185,29 @@ export type AccountDeletionStatus = z.infer<
   typeof accountDeletionStatusSchema
 >;
 
+/**
+ * 托管回调链路(desktop 系统浏览器登录)的授权码取回结果。
+ *
+ * 背景:RFC 8252 loopback 会把 `127.0.0.1:<port>` 与授权码一起暴露在浏览器地址栏,
+ * 唤起 app 的系统弹框也显示该 IP。托管回调改为让 auth-server 接住 provider 回调、
+ * 按 clientState 短期暂存授权码,客户端轮询取回——浏览器全程停在自有域名上。
+ *
+ * 语义:
+ *  - `pending`:用户尚未完成授权,继续轮询;
+ *  - `ok`:取到一次性授权码(服务端应即时失效),客户端接着走 PKCE 换 token;
+ *  - `error`:provider 或 auth-server 侧失败,`error` 为可展示的错误码;
+ *  - `expired`:暂存已过 TTL 或已被取走,本次尝试作废。
+ */
+export const desktopAuthorizationPollSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("pending") }),
+  z.object({ status: z.literal("ok"), code: z.string().min(1) }),
+  z.object({ status: z.literal("error"), error: z.string().min(1) }),
+  z.object({ status: z.literal("expired") }),
+]);
+export type DesktopAuthorizationPoll = z.infer<
+  typeof desktopAuthorizationPollSchema
+>;
+
 export type AuthClientType = "desktop" | "mobile" | "web";
 export type VerificationKind = "email" | "phone";
 export type SsoVerificationChannel = "email" | "sms";

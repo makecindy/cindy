@@ -77,7 +77,7 @@ export function canReuseHostForCredentialMode(
 /**
  * Codex 专用的共享 host 复用判定:在通用规则之上增加「订阅超集 host」放宽 ——
  * oauth-bearer spawn 的本地 app-server 经 loopback proxy 具备按请求换网关 key 的
- * 能力(骨折模型分支与 per-session 显式 XD 路由均为已上线行为),因此 gateway-key
+ * 能力(折扣模型分支与 per-session 显式 XD 路由均为已上线行为),因此 gateway-key
  * 诉求的会话可以直接复用 oauth-bearer host,不再触发全 host 重建 —— 这是消除
  * 「订阅/API 会话切换排队」的关键(方案 A,2026-07)。
  *

@@ -1,6 +1,8 @@
 // 动态 Expo config —— region 是 app 身份、auth-server 与 OAuth 回调 scheme 的统一构建开关。
 //
-// - 默认 cn:com.xd.cindycn + cindycn://auth;显式 global:com.xd.cindy + cindy://auth。
+// - 标准开发脚本默认显式注入 global；这里无 env 时仍保留 cn 原生基线，避免仅为
+//   默认值翻转触发一次全量冷更。下次计划内冷更再单独迁移该兼容基线。
+// - cn:com.xd.cindycn + cindycn://auth;global:com.xd.cindy + cindy://auth。
 // - beta 只改显示名,不改变所选 region 的身份。
 // - production / TestFlight 必须由发布环境注入对应 App Store 数字 ID,缺失即中止。
 // - 本地 Xcode / Simulator 与自建分发变体共用 scripts/self-host-regions.json 的 app 身份、

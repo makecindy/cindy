@@ -1,0 +1,12 @@
+# DCO App 配置（github.com/apps/dco）。只有默认分支上的这份文件生效。
+#
+# 允许 remediation commit：贡献者可以推一个后续 commit，用固定格式的正文为先前的
+# commit 补上签名，不必改写历史 force-push（否则已有的 review 评论会全部 outdated）。
+# 格式与用法写在 CONTRIBUTING.en.md / CONTRIBUTING.md 的 DCO 一节。
+# thirdParty 依赖 individual，必须一起开。
+allowRemediationCommits:
+  individual: true
+  thirdParty: true
+# 刻意不设 require.members: false。那个开关会跳过「org 成员且 GPG 签名」的提交，
+# 但本仓没有强制 GPG 签名，配上去要么不起作用，要么正好在内部提交上留下签名缺口——
+# 而开源客户端做 DCO 的目的就是留完整的贡献来源记录。

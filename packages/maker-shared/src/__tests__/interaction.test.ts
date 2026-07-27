@@ -14,14 +14,19 @@ import {
   buildPlanReviewDecision,
   buildPlanReviewDecisionSummary,
   buildPlanReviewEvidencePresentation,
+  buildPluginSetupCancelDecision,
+  buildRemotePluginSetupPresentation,
   canStartInteractionResolve,
   encodeMultiSelectAnswer,
   extractPlanOutline,
   formatPermissionInput,
+  interactionBlocksRemoteComposer,
   normalizeAskQuestions,
   normalizeIssueConfirm,
+  pendingInteractionsBlockRemoteComposer,
   permissionRiskSummary,
   permissionTitle,
+  remoteInteractionHandling,
   selectActivePendingInteraction,
   selectionFromAnswer,
   sessionScopedPermissionSuggestions,
@@ -376,6 +381,7 @@ describe('interaction shared model', () => {
       { request: { kind: 'ask_user_question', requestId: 'ask-1' } },
       { request: { kind: 'permission', requestId: 'permission-1' } },
       { request: { kind: 'plan_review', requestId: 'plan-1' } },
+      { request: { kind: 'plugin_setup', requestId: 'setup-1' } },
       { request: { kind: 'custom', requestId: 'custom-1' } },
     ];
 
@@ -384,6 +390,7 @@ describe('interaction shared model', () => {
       'permission-1',
       'ask-1',
       'issue-1',
+      'setup-1',
       'custom-1',
     ]);
     expect(selectActivePendingInteraction(interactions)?.request.requestId).toBe('plan-1');
@@ -515,5 +522,214 @@ describe('interaction shared model', () => {
       uiLanguage: 'zh-CN',
     });
     expect(buildIssueConfirmDecision(false)).toEqual({ confirmed: false });
+  });
+
+  it('only lets remotely resolvable interactions take over the controller composer', () => {
+    expect(remoteInteractionHandling({ request: { kind: 'permission', requestId: 'p1' } })).toBe('resolvable');
+    expect(remoteInteractionHandling({ request: { kind: 'ask_user_question', requestId: 'a1' } })).toBe('resolvable');
+    expect(remoteInteractionHandling({ request: { kind: 'plan_review', requestId: 'pl1' } })).toBe('resolvable');
+    expect(remoteInteractionHandling({ request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } })).toBe('cancel-only');
+    // 收尾帧不再 actionable,取消也没有意义。
+    expect(remoteInteractionHandling({
+      request: { kind: 'plugin_setup', requestId: 's1', revision: 2, terminal: true },
+    })).toBe('desktop-only');
+    // cancel-only 与 buildPluginSetupCancelDecision 对齐:拿不到合法 revision 就不是
+    // 「能取消」,否则调用方只看 handling 会误判。
+    expect(remoteInteractionHandling({ request: { kind: 'plugin_setup', requestId: 's1' } })).toBe('desktop-only');
+    expect(remoteInteractionHandling({ request: { kind: 'plugin_setup', requestId: 's1', revision: 1.5 } })).toBe('desktop-only');
+    expect(remoteInteractionHandling({ request: { kind: 'plugin_setup', requestId: 's1', revision: -1 } })).toBe('desktop-only');
+    expect(remoteInteractionHandling({ request: { kind: 'plugin_setup', requestId: 's1', revision: 0 } })).toBe('cancel-only');
+    expect(remoteInteractionHandling({ request: { kind: 'issue_confirm', requestId: 'i1' } })).toBe('desktop-only');
+    // 被控端将来新增的类型默认落进「不阻塞」,不会再把手机会话锁死。
+    expect(remoteInteractionHandling({ request: { kind: 'future_kind', requestId: 'f1' } })).toBe('desktop-only');
+
+    expect(interactionBlocksRemoteComposer({ request: { kind: 'permission', requestId: 'p1' } })).toBe(true);
+    expect(interactionBlocksRemoteComposer({ request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } })).toBe(false);
+    expect(interactionBlocksRemoteComposer({ request: { kind: 'future_kind', requestId: 'f1' } })).toBe(false);
+    expect(interactionBlocksRemoteComposer(null)).toBe(false);
+  });
+
+  it('keys composer blocking off the whole pending set, not the card being viewed', () => {
+    // 混合队列:切到 plugin_setup 只是换了查看对象,那张权限卡仍在等回答 —— 输入框
+    // 不能因此放开,否则用户绕过了仍待处理的阻塞交互。
+    expect(pendingInteractionsBlockRemoteComposer([
+      { request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } },
+      { request: { kind: 'permission', requestId: 'p1' } },
+    ])).toBe(true);
+
+    // 整批都是本端终结不了的卡:输入框回来。
+    expect(pendingInteractionsBlockRemoteComposer([
+      { request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } },
+      { request: { kind: 'issue_confirm', requestId: 'i1' } },
+      { request: { kind: 'future_kind', requestId: 'f1' } },
+    ])).toBe(false);
+
+    expect(pendingInteractionsBlockRemoteComposer([])).toBe(false);
+  });
+
+  it('builds a revision-pinned plugin setup cancel decision and a readable remote summary', () => {
+    expect(buildPluginSetupCancelDecision({
+      kind: 'plugin_setup',
+      requestId: 's1',
+      revision: 3,
+    })).toEqual({ kind: 'plugin_setup', action: 'cancel', expectedRevision: 3 });
+
+    // revision 缺失 / 非法时不构造决定:被控端只接受与当前快照一致的 revision,
+    // 发出去也只会被丢弃,调用方据此不给取消入口。
+    expect(buildPluginSetupCancelDecision({ kind: 'plugin_setup', requestId: 's1' })).toBeNull();
+    expect(buildPluginSetupCancelDecision({ kind: 'plugin_setup', requestId: 's1', revision: 1.5 })).toBeNull();
+    expect(buildPluginSetupCancelDecision({ kind: 'plugin_setup', requestId: 's1', revision: -1 })).toBeNull();
+    expect(buildPluginSetupCancelDecision({ kind: 'permission', requestId: 'p1', revision: 1 })).toBeNull();
+
+  });
+
+  it('projects a full read-only plugin setup status card for controllers', () => {
+    const presentation = buildRemotePluginSetupPresentation({
+      kind: 'plugin_setup',
+      requestId: 's1',
+      revision: 2,
+      ghost: {
+        id: 'cindy-web-search',
+        name: ' Cindy Web Search ',
+        iconDataUrl: 'data:image/png;base64,AAAA',
+      },
+      intro: ' 需要一个搜索 API key ',
+      steps: [
+        {
+          id: 'brave',
+          groupId: 'search-key',
+          groupMode: 'any_of',
+          title: ' Brave key ',
+          description: ' 用 Brave 的搜索 API ',
+          phase: 'failed',
+          errorCode: 'SAVE_FAILED',
+          action: {
+            id: 'inline:opaque',
+            kind: 'inline_form',
+            form: { fields: [{ id: 'value', type: 'secret', label: ' Brave API key ' }] },
+          },
+        },
+        {
+          id: 'tavily',
+          groupId: 'search-key',
+          groupMode: 'any_of',
+          title: 'Tavily key',
+          phase: 'pending',
+          action: { id: 'oauth:opaque', kind: 'oauth_connect' },
+        },
+        {
+          id: 'model',
+          groupId: 'model',
+          groupMode: 'any_of',
+          title: '连接模型服务',
+          phase: 'satisfied',
+        },
+      ],
+    });
+
+    expect(presentation).toEqual({
+      ghostName: 'Cindy Web Search',
+      iconDataUrl: 'data:image/png;base64,AAAA',
+      intro: '需要一个搜索 API key',
+      satisfiedCount: 1,
+      stepCount: 3,
+      terminal: false,
+      groups: [
+        {
+          id: 'search-key',
+          // 组内两项 → 「任选其一」
+          anyOf: true,
+          steps: [
+            {
+              id: 'brave',
+              title: 'Brave key',
+              description: '用 Brave 的搜索 API',
+              phase: 'failed',
+              errorCode: 'SAVE_FAILED',
+              actionKind: 'inline_form',
+              inlineFieldLabel: 'Brave API key',
+            },
+            {
+              id: 'tavily',
+              title: 'Tavily key',
+              description: null,
+              phase: 'pending',
+              errorCode: null,
+              actionKind: 'oauth_connect',
+              inlineFieldLabel: null,
+            },
+          ],
+        },
+        {
+          id: 'model',
+          // 单项组没有「任选其一」语义,提示只会让用户困惑
+          anyOf: false,
+          steps: [{
+            id: 'model',
+            title: '连接模型服务',
+            description: null,
+            phase: 'satisfied',
+            errorCode: null,
+            actionKind: null,
+            inlineFieldLabel: null,
+          }],
+        },
+      ],
+    });
+  });
+
+  it('collapses unknown plugin setup enums instead of passing them through to copy lookups', () => {
+    const presentation = buildRemotePluginSetupPresentation({
+      kind: 'plugin_setup',
+      requestId: 's1',
+      revision: 1,
+      terminal: true,
+      steps: [
+        // 被控端新版本引入的值:降级为 null,少一个徽标而不是查表查出 key 字面量
+        { id: 'a', title: 'A', phase: 'teleporting', errorCode: 'NOT_A_CODE', action: { id: 'x', kind: 'mind_control' } },
+        { id: 'b', title: '   ' },
+        'not-a-step',
+      ],
+    });
+
+    expect(presentation.terminal).toBe(true);
+    expect(presentation.stepCount).toBe(1);
+    expect(presentation.groups).toEqual([{
+      id: 'a-group',
+      anyOf: false,
+      steps: [{
+        id: 'a',
+        title: 'A',
+        description: null,
+        phase: null,
+        errorCode: null,
+        actionKind: null,
+        inlineFieldLabel: null,
+      }],
+    }]);
+
+    // 远程 URL 图标一律丢弃:只接受内联 data:image/。
+    expect(buildRemotePluginSetupPresentation({
+      kind: 'plugin_setup',
+      requestId: 's1',
+      ghost: { id: 'g', name: 'G', iconDataUrl: 'https://example.com/icon.png' },
+    }).iconDataUrl).toBeNull();
+
+    // 换个 kind 传进来必须返回空投影,而不是从任意 request 上刮字段让误用「看起来正常」。
+    expect(buildRemotePluginSetupPresentation({
+      kind: 'permission',
+      requestId: 'p1',
+      ghost: { id: 'x', name: 'Not a plugin setup' },
+      intro: 'nope',
+      steps: [{ id: 's', title: 'nope' }],
+    })).toEqual({
+      ghostName: null,
+      iconDataUrl: null,
+      intro: null,
+      groups: [],
+      satisfiedCount: 0,
+      stepCount: 0,
+      terminal: false,
+    });
   });
 });

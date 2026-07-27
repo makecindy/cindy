@@ -11,9 +11,40 @@
  * 唯一例外是 dev HMR 下同一插件模块的重新执行,见 registerTabKind 注释。
  */
 
+import { useSyncExternalStore } from 'react';
+
 import type { TabKindId, TabKindMenuMeta, TabKindPlugin } from './types';
 
 const REGISTRY = new Map<TabKindId, TabKindPlugin>();
+
+/**
+ * 注册表变更订阅:插件页签(`ghost:<id>`)随已装清单在运行期注册/注销,
+ * 「+」菜单与空态要能感知。内置 plugin 的 import-side-effect 注册发生在
+ * 首帧渲染前,订阅者挂载时拿到的已是终态,不受影响。
+ */
+let registryVersion = 0;
+const registryListeners = new Set<() => void>();
+
+function notifyRegistryChanged(): void {
+  registryVersion += 1;
+  for (const listener of [...registryListeners]) listener();
+}
+
+function subscribeTabKindRegistry(listener: () => void): () => void {
+  registryListeners.add(listener);
+  return () => {
+    registryListeners.delete(listener);
+  };
+}
+
+function getTabKindRegistryVersion(): number {
+  return registryVersion;
+}
+
+/** 注册表版本号 hook:动态 kind 注册/注销时触发重渲(消费方把返回值放进 deps/渲染路径)。 */
+export function useTabKindRegistryVersion(): number {
+  return useSyncExternalStore(subscribeTabKindRegistry, getTabKindRegistryVersion);
+}
 
 /** 存进 hot.data 的标记 key,值为该模块上次注册过的 kind。 */
 const HMR_REGISTERED_KEY = '__tabKindRegistered';
@@ -45,6 +76,16 @@ export function registerTabKind(plugin: TabKindPlugin, hot?: HotContextLike | nu
   if (hot?.data) {
     hot.data[HMR_REGISTERED_KEY] = plugin.kind;
   }
+  notifyRegistryChanged();
+}
+
+/**
+ * 注销 plugin —— 插件页签的意识停用/卸下时由 ghostTabPlugins 调用,幂等;
+ * 内置 plugin 不注销。已打开的同 kind tab 落回 Shell 的 PlaceholderBody,
+ * tab 数据保留,重新注册即原位复活(对齐顶层面板「未安装隐藏、重装复活」语义)。
+ */
+export function unregisterTabKind(kind: TabKindId): void {
+  if (REGISTRY.delete(kind)) notifyRegistryChanged();
 }
 
 export function getTabKind(kind: TabKindId): TabKindPlugin | null {
@@ -74,7 +115,19 @@ export function listTabKindMenuMetas(): TabKindMenuMeta[] {
     .sort((a, b) => a.order - b.order);
 }
 
+/**
+ * 启用中的插件页签 menu 项(kind 前缀 `ghost:`),「+」菜单动态分组与空态
+ * 「1 个直显 / 多个折叠」共用。按 labelText(插件名)稳定排序。
+ */
+export function listGhostTabMenuMetas(): TabKindMenuMeta[] {
+  return Array.from(REGISTRY.values())
+    .map((p) => p.menu)
+    .filter((menu) => menu.kind.startsWith('ghost:') && !menu.hiddenFromMenu)
+    .sort((a, b) => (a.labelText ?? a.kind).localeCompare(b.labelText ?? b.kind));
+}
+
 /** 仅测试 / dev hot-reload 用:清空 registry。production 不应调用。 */
 export function _resetTabKindRegistry(): void {
   REGISTRY.clear();
+  notifyRegistryChanged();
 }

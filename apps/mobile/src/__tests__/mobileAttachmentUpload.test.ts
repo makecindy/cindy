@@ -163,7 +163,7 @@ describe('mobileAttachmentUpload', () => {
 
     await expect(putMobileAttachmentUpload('https://oss.example/upload', new Blob(['x']), 'text/plain', {
       fetch: fetchPut,
-    })).rejects.toThrow('附件上传失败: HTTP 403 (SignatureDoesNotMatch)');
+    })).rejects.toThrow('附件上传失败：HTTP 403 (SignatureDoesNotMatch)');
   });
 
   it('still reports the bare status when the OSS error body is unavailable', async () => {
@@ -176,7 +176,7 @@ describe('mobileAttachmentUpload', () => {
 
     await expect(putMobileAttachmentUpload('https://oss.example/upload', new Blob(['x']), 'text/plain', {
       fetch: fetchPut,
-    })).rejects.toThrow('附件上传失败: HTTP 403');
+    })).rejects.toThrow('附件上传失败：HTTP 403');
   });
 
   it('uploads a local file natively with the signed PUT url and OSS headers', async () => {
@@ -336,7 +336,7 @@ describe('mobileAttachmentUpload', () => {
 
     await expect(putMobileAttachmentUploadFromFile('https://oss.example/upload', 'file:///tmp/x.png', 'image/png', {
       uploadFile,
-    })).rejects.toThrow('附件上传失败: HTTP 403 (SignatureDoesNotMatch)');
+    })).rejects.toThrow('附件上传失败：HTTP 403 (SignatureDoesNotMatch)');
   });
 
   it('rejects an unsupported file type before presign in the native file path (no orphaned OSS object)', async () => {
@@ -370,7 +370,7 @@ describe('mobileAttachmentUpload', () => {
 
     await expect(putMobileAttachmentUploadFromFile('https://oss.example/upload', 'file:///tmp/x.png', 'image/png', {
       uploadFile,
-    })).rejects.toThrow('附件上传失败: HTTP 403');
+    })).rejects.toThrow('附件上传失败：HTTP 403');
     // HTTP 状态码失败是签名/权限类问题,重试无意义,只允许调用一次。
     expect(uploadFile).toHaveBeenCalledTimes(1);
   });
@@ -395,7 +395,7 @@ describe('mobileAttachmentUpload', () => {
 
     await expect(putMobileAttachmentUploadFromFile('https://oss.example/upload', 'file:///tmp/x.png', 'image/png', {
       uploadFile,
-    })).rejects.toThrow('附件上传失败:网络传输异常,请检查网络后重试。');
+    })).rejects.toThrow('附件上传失败：网络传输异常，请检查网络后重试。');
     expect(uploadFile).toHaveBeenCalledTimes(2);
   });
 
@@ -412,7 +412,7 @@ describe('mobileAttachmentUpload', () => {
       const pending = putMobileAttachmentUploadFromFile('https://oss.example/upload', 'file:///tmp/x.png', 'image/png', {
         uploadFile,
       });
-      const expectation = expect(pending).rejects.toThrow('附件上传超时,请检查网络后重试。');
+      const expectation = expect(pending).rejects.toThrow('附件上传超时，请检查网络后重试。');
       await vi.advanceTimersByTimeAsync(120_000);
       await expectation;
       expect(uploadFile).toHaveBeenCalledTimes(1);

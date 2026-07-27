@@ -5,6 +5,7 @@ import {
   useRef,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from 'react';
 import { Check, ChevronDown, PlugZap, Plus, Search, Unplug, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -26,6 +27,12 @@ import { useModelPricing } from '@/hooks/useModelPricing';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
+  formatModelPricePair,
+  modelPriceDiscountLabelValues,
+  modelPriceDetailRows,
+  modelPricePresentation,
+} from '@/lib/modelPriceFormat';
+import {
   filterChatBridgedCodexProviders,
   providerMonogram,
   resolveVisibleModelAgentKind,
@@ -46,6 +53,8 @@ import {
   visibleModelUnion,
   type ProviderView,
 } from '@cindy/model-providers';
+import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
+import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
 
 // 厂商分类 / 分组标题 key 表的纯逻辑在 ./sourceSwitch。这里 re-export 给 ChatInput
@@ -226,6 +235,17 @@ export function modelEffortLabel(
   });
 }
 
+function ModelPromotionBadge({ children }: { children: ReactNode }) {
+  return (
+    <span
+      data-model-promotion-badge
+      className="inline-flex shrink-0 items-center rounded-full bg-[var(--accent-cta-bg)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--accent-pure-cta-fg)]"
+    >
+      {children}
+    </span>
+  );
+}
+
 interface ModelSelectorProps {
   modelId: string;
   effort: Effort;
@@ -299,6 +319,23 @@ interface ModelSelectorProps {
   /** 可选的列表首行兜底值，例如“不指定（使用原逻辑）”。 */
   fallbackOption?: { active: boolean; label: string; onSelect: () => void };
   /**
+   * 点击**当前已选中**的行时照常回调 onModelChange / onProviderChange（默认 false = 收起了事）。
+   * 供「当前值是解析出的继承值、点一下才落成显式值」的调用方（IM 工作目录偏好）使用；
+   * 会话场景不要开——那里 modelId 本就是已持久化的值，重选自己是纯无操作。
+   */
+  reselectEmitsChange?: boolean;
+  /**
+   * modelId 非空但不在可见清单时的 trigger 文案（默认落「选择模型」占位符）。
+   * 供展示已持久化偏好的调用方给出诊断性文案，避免把「存过但当前不可用」显示成「没选过」。
+   */
+  unknownModelLabel?: (modelId: string) => string;
+  /**
+   * 可及名上下文前缀(如「模型 · chat」)。多实例同屏(IM 目录偏好逐行一个)时前置到
+   * trigger 的 aria-label,行与行才能被读屏区分 —— 与 VendorSegmentedSwitcher.ariaLabel
+   * 同一动机;单实例的 composer 不传,行为不变。
+   */
+  ariaContext?: string;
+  /**
    * session-agent-switch:会话内显式两步切换引擎(先选 Agent,再选模型)。
    * 传入后列表顶部渲染 Claude / Codex 分段;切到非当前引擎的 tab 进入「浏览目标
    * 引擎模型」态(带提示行),此时点模型行调 onSwitch(而非 onModelChange),由调用方
@@ -350,8 +387,15 @@ interface ModelSelectorContentProps {
   followSession?: { active: boolean; label: string; onFollow: () => void };
   /** 是否显示模型的 effort / Fast 编辑入口。 */
   configurationEnabled?: boolean;
+  /** 语义同 ModelSelectorProps.reselectEmitsChange(点当前行照常回调)。 */
+  reselectEmitsChange?: boolean;
   /** Morph 原位展开时，要求真实 pointer move 后才展示行级配置，避免静止光标误触。 */
   pointerRevealRequiresIntent?: boolean;
+  /**
+   * field 形态:面板宽度绑定 trigger(DESIGN.md §4「Panel width must bind to the
+   * trigger width」),主菜单列由固定 320 改为撑满外层 PopoverContent。
+   */
+  fluidWidth?: boolean;
   /** 语义同 ModelSelectorProps.agentSwitch(显式两步引擎切换)。 */
   agentSwitch?: {
     currentVendor: 'cc' | 'codex';
@@ -370,7 +414,12 @@ function vendorKeyToAgentKind(v?: 'cc' | 'codex'): AgentKind | null {
   return null;
 }
 
-export function ModelSelectorContent({
+export function ModelSelectorContent(props: ModelSelectorContentProps) {
+  const pricing = useModelPricing();
+  return <ModelSelectorContentView {...props} pricing={pricing} />;
+}
+
+function ModelSelectorContentView({
   modelId,
   effort,
   onModelChange,
@@ -389,9 +438,12 @@ export function ModelSelectorContent({
   onNavigateToProviders,
   followSession,
   configurationEnabled = true,
+  reselectEmitsChange = false,
   pointerRevealRequiresIntent = false,
+  fluidWidth = false,
   agentSwitch,
-}: ModelSelectorContentProps) {
+  pricing,
+}: ModelSelectorContentProps & { pricing: ModelPricingCatalog | null }) {
   const { t } = useTranslation();
   // session-agent-switch:两步式引擎切换的浏览态。browseVendor 初始 = 会话当前引擎;
   // 切到另一家 tab 只是「浏览目标引擎的模型」,选中模型行才真正触发切换事务。
@@ -425,8 +477,7 @@ export function ModelSelectorContent({
   // 同时拉两个 agent —— vendorKey 不传时把两边模型一起展示。hooks 必须按固定顺序调用。
   const cc = useAgentCapabilities('claude-code', deviceId);
   const codex = useAgentCapabilities('codex', deviceId);
-  const pricing = useModelPricing();
-  // 本机骨折 GPT 仍按本机 API key gate；device-link 必须只看被控端 provider 状态。
+  // 本机折扣 GPT 仍按本机 API key gate；device-link 必须只看被控端 provider 状态。
   // 旧被控端不支持 provider:list 时按远端 capabilities 退化，不得误用控制端 key。
   const { hasSavedKey } = useApiKey();
   // 供应商来源:本机会话用本机 useProviders;device-link 远程会话用**被控端**供应商目录
@@ -622,14 +673,31 @@ export function ModelSelectorContent({
   };
 
   // ── 模型单价 ─────────────────────────────────────────────────────────────
-  const priceTipOf = (id: string): string | null => {
-    const p = pricing?.[id];
-    if (!p) return null;
-    const fmt = (v: number) => `$${Number(v.toFixed(2))}`;
-    return t('newChat.modelSelector.priceTip', {
-      input: fmt(p.inputUsdPerMtok),
-      output: fmt(p.outputUsdPerMtok),
-    });
+  // providerId 是价格索引的一部分。同模型经 XD / OpenAI / Anthropic 等来源出现时，
+  // 必须按实际行来源查价，不能退化为 pricing[modelId]。只有 XD Gateway 目录价会
+  // 叠加 CatalogModel.cost 作为折后展示价；其它来源保持价格源自带的币种。
+  const pricePresentationOf = (providerId: string | null, id: string) => {
+    // device-link 只同步被控端 provider 目录，不同步价格快照；不能把控制端价格与
+    // 被控端 CatalogModel.cost 拼成一个展示结果。在协议补齐前远程选择器不展示价格。
+    if (deviceId) return null;
+    const effectiveProviderId =
+      providerId ??
+      (currentAgentKind
+        ? effectiveSourceIdForModel(providers, currentProviderId, id, currentAgentKind)
+        : null);
+    const quote = getModelPriceQuote(pricing, effectiveProviderId, id);
+    if (effectiveProviderId === 'xd' && (!quote || quote.source === 'gateway')) {
+      if (!quote && pricing == null) return null;
+      const effectiveProvider = providers.find((provider) => provider.id === effectiveProviderId);
+      const effectiveCost =
+        effectiveProvider && currentAgentKind
+          ? getModel(effectiveProvider, id, currentAgentKind)?.cost
+          : undefined;
+      return modelPricePresentation(quote ?? null, effectiveCost);
+    }
+    if (!quote) return null;
+    const displayQuote = quote.approximate ? { ...quote, approximate: false } : quote;
+    return modelPricePresentation(displayQuote, undefined);
   };
   const modelDisabledOf = (id: string): boolean => {
     if (!deviceId) return id.startsWith('codex/') && !hasSavedKey;
@@ -784,6 +852,14 @@ export function ModelSelectorContent({
       return;
     }
     if (isSelectedRow(providerId, id)) {
+      // 默认:重选当前行 = 无操作,直接收起(会话场景点自己没有意义)。
+      // reselectEmitsChange:调用方的「当前值」可能是**解析出来的继承值**而非已持久化的
+      // 显式值(IM 工作目录偏好),这时点当前行的语义是「把继承值钉成显式值」,必须照常回调,
+      // 否则用户点了没反应、之后上游默认一变这条偏好就被静默改掉。
+      if (reselectEmitsChange) {
+        if (sections && providerId) onProviderChange?.(providerId, id);
+        else onModelChange(id);
+      }
       onDismiss?.();
       return;
     }
@@ -870,7 +946,20 @@ export function ModelSelectorContent({
       effectiveSourceIdForModel(providers, currentProviderId, editingModel.id, currentAgentKind);
     return providerId ? providers.find((provider) => provider.id === providerId) : undefined;
   }, [editingModel, currentAgentKind, editingProviderId, providers, currentProviderId]);
-  const editingPrice = editingModel ? priceTipOf(editingModel.id) : null;
+  const editingPricePresentation = editingModel
+    ? pricePresentationOf(editingProvider?.id ?? editingProviderId, editingModel.id)
+    : null;
+  const editingDiscount =
+    editingPricePresentation?.kind === 'priced' ? editingPricePresentation.discount : undefined;
+  const editingPromotionLabel =
+    editingPricePresentation?.kind === 'free'
+      ? t('newChat.modelSelector.pricing.free')
+      : editingDiscount !== undefined
+        ? t(
+            'newChat.modelSelector.pricing.discount',
+            modelPriceDiscountLabelValues(editingDiscount),
+          )
+        : null;
 
   // 每个模型行的信息 / 配置内容由一个独立的 portaled Popover 承载,而不是拼进主菜单宽度。
   // 这样浮层会像 Hermes 的 Radix submenu 一样贴着当前行移动,切行不触发主菜单重排。
@@ -953,6 +1042,59 @@ export function ModelSelectorContent({
       {(editShowFast || editHasEfforts) && (
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
+      {editingPricePresentation && (
+        <>
+          <div className="px-2 pb-1 pt-1">
+            <div
+              className={cn(
+                'flex items-center gap-1.5 text-11 font-medium text-[var(--text-tertiary)]',
+                editingPricePresentation.kind === 'priced' && 'mb-1.5',
+              )}
+            >
+              <span>{t('newChat.modelSelector.pricing.title')}</span>
+              {editingPromotionLabel && (
+                <span data-model-tags className="ml-auto flex shrink-0 items-center">
+                  <ModelPromotionBadge>{editingPromotionLabel}</ModelPromotionBadge>
+                </span>
+              )}
+            </div>
+            {editingPricePresentation.kind === 'priced' && (
+              <>
+                <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-12 leading-[1.4]">
+                  {modelPriceDetailRows(
+                    editingPricePresentation.current,
+                    editingPricePresentation.original,
+                  ).map((row) => (
+                    <div key={row.kind} className="contents">
+                      <span className="text-[var(--text-secondary)]">
+                        {t(`newChat.modelSelector.pricing.${row.kind}`)}
+                      </span>
+                      <span className="flex items-center justify-end gap-1.5 tabular-nums">
+                        <span className="text-[var(--model-item-text)]">
+                          {row.value}
+                        </span>
+                        {row.originalValue && (
+                          <span className="text-[var(--text-tertiary)] line-through">
+                            {row.originalValue}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-1.5 text-11 leading-[1.4] text-[var(--text-tertiary)]">
+                  {editingPricePresentation.current.source === 'subscription-reference'
+                    ? t('newChat.modelSelector.pricing.subscriptionEstimate')
+                    : editingPricePresentation.current.approximate
+                      ? t('newChat.modelSelector.pricing.fixedFx')
+                      : t('newChat.modelSelector.pricing.perMillion')}
+                </div>
+              </>
+            )}
+          </div>
+          <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
+        </>
+      )}
       <div className="px-2 py-1.5">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-11 font-normal leading-[1.4] text-[var(--text-tertiary)]">
           {editingProvider && (
@@ -972,7 +1114,6 @@ export function ModelSelectorContent({
           {editingModel.supportsFastMode && (
             <span>{t('newChat.modelSelector.meta.fastBadge')}</span>
           )}
-          {editingPrice && <span>{editingPrice}</span>}
         </div>
       </div>
     </div>
@@ -988,6 +1129,16 @@ export function ModelSelectorContent({
     const disabled = modelDisabledOf(model.id);
     const rowEffort = rowEffortOf(providerId, model);
     const rowFastOn = fastOnOf(providerId, model);
+    const rowPrice = pricePresentationOf(providerId, model.id);
+    const rowPromotionLabel =
+      rowPrice?.kind === 'free'
+        ? t('newChat.modelSelector.pricing.free')
+        : rowPrice?.kind === 'priced' && rowPrice.discount !== undefined
+          ? t(
+              'newChat.modelSelector.pricing.discount',
+              modelPriceDiscountLabelValues(rowPrice.discount),
+            )
+          : null;
     // 信息面板对所有可用模型开放;能否编辑 effort / Fast 在面板内部另行判定。
     // session-agent-switch 浏览目标引擎态同样开放:选模型前正需要看描述/上下文/价格/来源;
     // 面板内配置写的是**目标引擎**的 per-(来源,模型) 全局预设(currentAgentKind 已随浏览态
@@ -1011,7 +1162,8 @@ export function ModelSelectorContent({
         pointerRevealRequiresIntent &&
         !hoverIntentArmedRef.current &&
         event.nativeEvent.isTrusted
-      ) return;
+      )
+        return;
       if (!isEditingThis) revealOptions();
       else cancelOptionsClose();
     };
@@ -1068,8 +1220,7 @@ export function ModelSelectorContent({
               disabled && 'cursor-not-allowed opacity-50 hover:bg-transparent',
             )}
           >
-            {/* 外层 gap-2.5 = icon→名字间距(略宽,与行左内边距更协调);内层 gap-1.5 = 名字→徽标/effort。 */}
-            <span className="flex min-w-0 items-center gap-2.5">
+            <span className="flex min-w-0 flex-1 items-center gap-2.5">
               {provider && (
                 <ModelIconMark
                   icon={model.icon}
@@ -1081,36 +1232,67 @@ export function ModelSelectorContent({
                   dense
                 />
               )}
-              <span className="flex min-w-0 items-center gap-1.5">
-                <span className="truncate text-14 font-medium text-[var(--model-item-text)]">
-                  {model.displayName}
+              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <span className="truncate text-14 font-medium text-[var(--model-item-text)]">
+                    {model.displayName}
+                  </span>
+                  {rowEffort && (
+                    <span className="shrink-0 text-13 font-normal text-[var(--text-tertiary)]">
+                      {effortLabelFor(model, rowEffort)}
+                    </span>
+                  )}
+                  {rowFastOn && (
+                    <Zap
+                      size={13}
+                      className="shrink-0 text-[var(--text-tertiary)]"
+                      aria-label={t('newChat.modelSelector.meta.fastBadge')}
+                    />
+                  )}
                 </span>
-                {isSubscriptionModel && (
-                  <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-[11px] font-medium text-[var(--text-secondary)]">
-                    {t('settings.providers.models.subscription')}
+                {(isSubscriptionModel || isBudgetModel || rowPromotionLabel) && (
+                  <span data-model-tags className="ml-auto flex shrink-0 items-center gap-1.5">
+                    {isSubscriptionModel && (
+                      <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-[11px] font-medium text-[var(--text-secondary)]">
+                        {t('settings.providers.models.subscription')}
+                      </span>
+                    )}
+                    {isBudgetModel && (
+                      <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--model-budget-badge-bg)] px-2 py-[1px] text-[11px] font-medium text-[var(--model-budget-badge-text)]">
+                        {t('newChat.modelSelector.meta.budgetDiscount')}
+                      </span>
+                    )}
+                    {rowPromotionLabel && (
+                      <ModelPromotionBadge>{rowPromotionLabel}</ModelPromotionBadge>
+                    )}
                   </span>
-                )}
-                {isBudgetModel && (
-                  <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--model-budget-badge-bg)] px-2 py-[1px] text-[11px] font-medium text-[var(--model-budget-badge-text)]">
-                    {t('newChat.modelSelector.meta.budgetDiscount')}
-                  </span>
-                )}
-                {rowEffort && (
-                  <span className="shrink-0 text-13 font-normal text-[var(--text-tertiary)]">
-                    {effortLabelFor(model, rowEffort)}
-                  </span>
-                )}
-                {rowFastOn && (
-                  <Zap
-                    size={13}
-                    className="shrink-0 text-[var(--text-tertiary)]"
-                    aria-label={t('newChat.modelSelector.meta.fastBadge')}
-                  />
                 )}
               </span>
             </span>
-            {isSelected && (
-              <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
+            {(rowPrice?.kind === 'priced' || isSelected) && (
+              <span className="ml-2 flex shrink-0 items-center gap-1.5">
+                {rowPrice?.kind === 'priced' && (
+                  <span
+                    data-model-price-stack={rowPrice.original ? 'true' : undefined}
+                    className={cn(
+                      'flex tabular-nums text-11 font-normal leading-[1.25]',
+                      rowPrice.original ? 'flex-col items-end' : 'items-center',
+                    )}
+                  >
+                    <span className="text-[var(--text-secondary)]">
+                      {formatModelPricePair(rowPrice.current)}
+                    </span>
+                    {rowPrice.original && (
+                      <span className="text-[var(--text-tertiary)] line-through">
+                        {formatModelPricePair(rowPrice.original)}
+                      </span>
+                    )}
+                  </span>
+                )}
+                {isSelected && (
+                  <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
+                )}
+              </span>
             )}
           </div>
         </PopoverAnchor>
@@ -1185,9 +1367,15 @@ export function ModelSelectorContent({
 
   const hasAnyModel = sections ? sections.length > 0 : (flatModels?.length ?? 0) > 0;
 
-  // ── 主菜单:固定 320 宽,选项浮层 portal 到 body,hover 时主菜单完全不重排 ─────
+  // ── 主菜单:固定 320 宽(field 形态改绑 trigger 宽度,见 fluidWidth),选项浮层
+  //    portal 到 body,hover 时主菜单完全不重排 ─────
   const pane = (
-    <div className="flex w-[320px] shrink-0 flex-col gap-1.5 p-2">
+    <div
+      className={cn(
+        'flex shrink-0 flex-col gap-1.5 p-2',
+        fluidWidth ? 'w-full min-w-0' : 'w-[320px]',
+      )}
+    >
       {/* session-agent-switch:显式两步引擎切换——先在分段里选 Agent,再选模型。
           复用新建会话的 VendorSegmentedSwitcher 视觉(dense),宽度撑满列表列。 */}
       {agentSwitch && (
@@ -1255,7 +1443,7 @@ export function ModelSelectorContent({
         ref={listRef}
         // -mr-2 把滚动条挪进面板右侧 8px 留白;scrollbar-gutter:stable 让无滚动时
         // 行宽与有滚动时一致(否则行会比搜索框宽 8px);细滚动条见 globals.css
-        className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto [scrollbar-gutter:stable]"
+        className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
         role="listbox"
         aria-label="Model list"
         onScroll={() => {
@@ -1327,6 +1515,9 @@ export function ModelSelector({
   popoverSide = 'top',
   configurationEnabled = true,
   fallbackOption,
+  reselectEmitsChange = false,
+  unknownModelLabel,
+  ariaContext,
   currentProviderId,
   sourceDisconnected = false,
   onProviderChange,
@@ -1360,6 +1551,7 @@ export function ModelSelector({
   const agentKind = vendorKeyToAgentKind(vendorKey);
   const cc = useAgentCapabilities('claude-code', deviceId);
   const codex = useAgentCapabilities('codex', deviceId);
+  const pricing = useModelPricing();
   // trigger 的来源 icon / 当前模型也按来源取:device-link 用被控端供应商目录(否则控制端本地
   // 查不到被控端独有模型 → currentModel undefined → label 退成 "Select model")。
   const localProviders = useProviders();
@@ -1388,9 +1580,18 @@ export function ModelSelector({
   );
 
   const currentModel = visibleModels.find((m) => m.id === modelId);
+  // 已保存的模型不在可见清单里(被隐藏 / 供应商断开 / 目录下架)时,默认落到「选择模型」
+  // 占位符 —— 对会话是对的(没选过),但对「展示一条已持久化偏好」的调用方是信息丢失:
+  // 用户既看不到自己存的是什么,也看不到实际会跑什么。unknownModelLabel 让这类调用方
+  // 给出诊断性文案(通常是裸 id),行为与本组件接管前一致。
+  // unknown label 空串/全空白按缺省处理(否则 ?? 不回落,trigger 渲染成空白)。
+  const unknownLabel =
+    modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
   const displayLabel = fallbackOption?.active
     ? fallbackOption.label
-    : (currentModel?.displayName ?? t('newChat.modelSelector.trigger.placeholder'));
+    : (currentModel?.displayName ??
+      (unknownLabel !== '' ? unknownLabel : null) ??
+      t('newChat.modelSelector.trigger.placeholder'));
   const efforts = currentModel?.efforts ?? [];
 
   const currentAgentKind: AgentKind | null = useMemo(() => {
@@ -1455,6 +1656,27 @@ export function ModelSelector({
     triggerActiveProvider && currentAgentKind
       ? getModel(triggerActiveProvider, modelId, currentAgentKind)?.icon
       : undefined;
+  const triggerPricePresentation = (() => {
+    if (deviceId || activeSourceId !== 'xd' || !triggerActiveProvider || !currentAgentKind)
+      return null;
+    const quote = getModelPriceQuote(pricing, activeSourceId, modelId);
+    if (quote && quote.source !== 'gateway') return null;
+    if (!quote && pricing == null) return null;
+    return modelPricePresentation(
+      quote ?? null,
+      getModel(triggerActiveProvider, modelId, currentAgentKind)?.cost,
+    );
+  })();
+  const triggerPromotionLabel =
+    triggerPricePresentation?.kind === 'free'
+      ? t('newChat.modelSelector.pricing.free')
+      : triggerPricePresentation?.kind === 'priced' &&
+          triggerPricePresentation.discount !== undefined
+        ? t(
+            'newChat.modelSelector.pricing.discount',
+            modelPriceDiscountLabelValues(triggerPricePresentation.discount),
+          )
+        : null;
   // 断开态同一规则,只是来源取「真实断开来源」(currentProviderId)。
   const disconnectedProvider = currentProviderId
     ? providers.find((p) => p.id === currentProviderId)
@@ -1471,7 +1693,7 @@ export function ModelSelector({
   // 断开态仅在「非 noSource」时生效:全部来源都断开时 noSource CTA 优先(下拉已无可选行,
   // 跳设置才是正确恢复路径);还有别的已连接来源时,下拉换源就是恢复路径,trigger 保持可点。
   const showSourceDisconnected = !noSource && sourceDisconnected && !!currentProviderId;
-  const ariaLabel = noSource
+  const baseAriaLabel = noSource
     ? t('newChat.modelSelector.source.connect')
     : showSourceDisconnected
       ? `${t('newChat.modelSelector.source.disconnected')}: ${displayLabel}`
@@ -1481,6 +1703,8 @@ export function ModelSelector({
             effort: effortLabel,
           })
         : t('newChat.modelSelector.trigger.aria', { model: displayLabel });
+  // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
+  const ariaLabel = ariaContext ? `${ariaContext}:${baseAriaLabel}` : baseAriaLabel;
   const isBudget = modelId.startsWith('codex/');
   const isFieldTrigger = triggerVariant === 'field';
   const isCreateAgentVariant = visualVariant === 'create-agent';
@@ -1500,216 +1724,216 @@ export function ModelSelector({
 
   const trigger = (
     <button
-          type="button"
-          disabled={switching || disabled}
-          onClick={morphEnabled ? () => setOpen((prev) => (disabled ? false : !prev)) : undefined}
-          aria-expanded={open && !disabled}
-          aria-haspopup="listbox"
-          title={displayLabel}
-          className={cn(
-            'flex min-w-0 max-w-full items-center gap-1 transition-colors',
-            isFieldTrigger
-              ? cn(
-                  'w-full rounded-lg border border-[var(--border-default)] bg-[var(--settings-input-bg)] px-3',
-                  dense ? 'h-9' : 'h-10',
-                  'hover:bg-[var(--surface-hover-soft)]',
-                )
-              : cn(
-                  'rounded-full',
-                  // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
-                  // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
-                  'h-[30px] min-w-[72px] max-w-full shrink overflow-hidden px-2.5',
-                  // 窄态工具条(#562):新建对话框空间不足时钳制触发器宽度,防与语音/发送重叠。
-                  isUltraCompactToolbar ? 'w-[64px]' : isCompactToolbar ? 'w-[148px]' : undefined,
-                  'border border-transparent bg-transparent',
-                  'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
-                ),
-            // device-link 远程切换 in-flight:置灰 + 禁用点击(复用本文件 disabled 行的 opacity-50 习惯)。
-            (switching || disabled) && 'pointer-events-none opacity-50',
+      type="button"
+      disabled={switching || disabled}
+      onClick={morphEnabled ? () => setOpen((prev) => (disabled ? false : !prev)) : undefined}
+      aria-expanded={open && !disabled}
+      aria-haspopup="listbox"
+      title={displayLabel}
+      className={cn(
+        'flex min-w-0 max-w-full items-center gap-1 transition-colors',
+        isFieldTrigger
+          ? cn(
+              // pill 而非 8px:DESIGN.md §4 Select & Dropdown 规定单行 select trigger 同单行输入,胶囊形。
+              'w-full rounded-full border border-[var(--border-default)] bg-[var(--settings-input-bg)] px-3',
+              dense ? 'h-9' : 'h-10',
+              'hover:bg-[var(--surface-hover-soft)]',
+            )
+          : cn(
+              'rounded-full',
+              // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
+              // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
+              'h-[30px] min-w-[72px] max-w-full shrink overflow-hidden px-2.5',
+              // 窄态工具条(#562):新建对话框空间不足时钳制触发器宽度,防与语音/发送重叠。
+              isUltraCompactToolbar ? 'w-[64px]' : isCompactToolbar ? 'w-[148px]' : undefined,
+              'border border-transparent bg-transparent',
+              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+            ),
+        // device-link 远程切换 in-flight:置灰 + 禁用点击(复用本文件 disabled 行的 opacity-50 习惯)。
+        (switching || disabled) && 'pointer-events-none opacity-50',
+      )}
+      aria-label={ariaLabel}
+    >
+      {noSource ? (
+        <>
+          <PlugZap
+            size={isCreateAgentVariant ? 11 : 13}
+            className={cn(
+              'mr-0.5 shrink-0',
+              isCreateAgentVariant
+                ? 'text-[var(--create-agent-control-icon)]'
+                : 'text-[var(--text-primary)]',
+            )}
+          />
+          <span
+            className={cn(
+              'min-w-0 font-medium',
+              isCreateAgentVariant
+                ? 'text-[var(--create-agent-control-text)]'
+                : 'text-[var(--text-primary)]',
+              isCreateAgentVariant
+                ? isUltraCompactToolbar
+                  ? 'hidden'
+                  : isCompactToolbar
+                    ? 'max-w-[108px] truncate'
+                    : 'truncate'
+                : cn('truncate', isFieldTrigger ? 'max-w-[260px]' : ''),
+              isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+            )}
+          >
+            {t('newChat.modelSelector.source.connect')}
+          </span>
+        </>
+      ) : showSourceDisconnected && currentProviderId ? (
+        // 选中来源已断开:显示**真实来源**(currentProviderId)而非 activeSourceId 的默认回落
+        // ——回落图标会让用户以为在用默认来源,而发送实际按 DB 里的断开来源走(no_oauth 事故)。
+        // 错误态用语义豁免 error token(规则 16);trigger 保持可点击,下拉换源即恢复。
+        <>
+          <ModelIconMark
+            icon={disconnectedModelIcon}
+            providerId={currentProviderId}
+            name={disconnectedProvider?.name}
+            routing={disconnectedProvider?.routing}
+            colorClass="text-[var(--error-fg)]"
+          />
+          <span
+            className={cn(
+              'min-w-0 font-normal text-[var(--text-primary)]',
+              isCreateAgentVariant
+                ? isUltraCompactToolbar
+                  ? 'hidden'
+                  : isCompactToolbar
+                    ? 'max-w-[108px] truncate'
+                    : 'truncate'
+                : isFieldTrigger
+                  ? 'max-w-[260px] truncate'
+                  : 'truncate',
+              isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+            )}
+          >
+            {/* 断开来源可能是该模型的唯一提供方 → visibleModels 查不到,回落显示原始 id,
+                    比 "Select model" 占位更能说明「哪个模型的来源断了」。 */}
+            {currentModel?.displayName ?? modelId}
+          </span>
+          <Unplug
+            size={dense ? 11 : 12}
+            className="ml-0.5 shrink-0 text-[var(--error-fg)]"
+            aria-hidden
+          />
+          <span
+            className={cn(
+              'shrink-0 font-medium text-[var(--error-fg)]',
+              dense ? 'text-[11.5px]' : 'text-[12px]',
+            )}
+          >
+            {t('newChat.modelSelector.source.disconnected')}
+          </span>
+        </>
+      ) : (
+        <>
+          {/* 图标统一规则:模型条目 icon(AI Gateway / 目录设定)优先,缺省回落
+                  当前真正路由的来源标(activeSourceId)——客户端不按 model id 猜厂牌。 */}
+          {activeSourceId && (
+            <ModelIconMark
+              icon={triggerModelIcon}
+              providerId={activeSourceId}
+              name={triggerActiveProvider?.name}
+              routing={triggerActiveProvider?.routing}
+              colorClass={
+                isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : undefined
+              }
+            />
           )}
-          aria-label={ariaLabel}
-        >
-          {noSource ? (
+          <span
+            className={cn(
+              'min-w-0 font-normal',
+              isCreateAgentVariant
+                ? isUltraCompactToolbar
+                  ? 'hidden'
+                  : isCompactToolbar
+                    ? 'max-w-[108px] truncate'
+                    : 'truncate'
+                : isFieldTrigger
+                  ? 'max-w-[260px] truncate'
+                  : 'truncate',
+              !isBudget &&
+                (isCreateAgentVariant
+                  ? 'text-[var(--create-agent-control-text)]'
+                  : 'text-[var(--text-primary)]'),
+              isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+            )}
+            style={budgetGradientStyle}
+          >
+            {displayLabel}
+          </span>
+          {!fallbackOption?.active && triggerPromotionLabel && !isCompactToolbar && (
+            <ModelPromotionBadge>{triggerPromotionLabel}</ModelPromotionBadge>
+          )}
+          {effortLabel && !isCompactToolbar && (
             <>
-              <PlugZap
-                size={isCreateAgentVariant ? 11 : 13}
-                className={cn(
-                  'mr-0.5 shrink-0',
-                  isCreateAgentVariant
-                    ? 'text-[var(--create-agent-control-icon)]'
-                    : 'text-[var(--text-primary)]',
-                )}
-              />
               <span
                 className={cn(
-                  'min-w-0 font-medium',
+                  'shrink-0 font-normal',
                   isCreateAgentVariant
                     ? 'text-[var(--create-agent-control-text)]'
-                    : 'text-[var(--text-primary)]',
+                    : 'text-[var(--model-trigger-meta)]',
                   isCreateAgentVariant
-                    ? isUltraCompactToolbar
-                      ? 'hidden'
-                      : isCompactToolbar
-                        ? 'max-w-[108px] truncate'
-                        : 'truncate'
-                    : cn('truncate', isFieldTrigger ? 'max-w-[260px]' : ''),
-                  isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+                    ? 'shrink-0 text-[12px]'
+                    : dense
+                      ? 'shrink-0 text-[12.5px]'
+                      : 'shrink-0 text-[13px]',
                 )}
+                aria-hidden="true"
               >
-                {t('newChat.modelSelector.source.connect')}
+                ·
               </span>
-            </>
-          ) : showSourceDisconnected && currentProviderId ? (
-            // 选中来源已断开:显示**真实来源**(currentProviderId)而非 activeSourceId 的默认回落
-            // ——回落图标会让用户以为在用默认来源,而发送实际按 DB 里的断开来源走(no_oauth 事故)。
-            // 错误态用语义豁免 error token(规则 16);trigger 保持可点击,下拉换源即恢复。
-            <>
-              <ModelIconMark
-                icon={disconnectedModelIcon}
-                providerId={currentProviderId}
-                name={disconnectedProvider?.name}
-                routing={disconnectedProvider?.routing}
-                colorClass="text-[var(--error-fg)]"
-              />
-              <span
-                className={cn(
-                  'min-w-0 font-normal text-[var(--text-primary)]',
-                  isCreateAgentVariant
-                    ? isUltraCompactToolbar
-                      ? 'hidden'
-                      : isCompactToolbar
-                        ? 'max-w-[108px] truncate'
-                        : 'truncate'
-                    : isFieldTrigger
-                      ? 'max-w-[260px] truncate'
-                      : 'truncate',
-                  isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
-                )}
-              >
-                {/* 断开来源可能是该模型的唯一提供方 → visibleModels 查不到,回落显示原始 id,
-                    比 "Select model" 占位更能说明「哪个模型的来源断了」。 */}
-                {currentModel?.displayName ?? modelId}
-              </span>
-              <Unplug
-                size={dense ? 11 : 12}
-                className="ml-0.5 shrink-0 text-[var(--error-fg)]"
-                aria-hidden
-              />
-              <span
-                className={cn(
-                  'shrink-0 font-medium text-[var(--error-fg)]',
-                  dense ? 'text-[11.5px]' : 'text-[12px]',
-                )}
-              >
-                {t('newChat.modelSelector.source.disconnected')}
-              </span>
-            </>
-          ) : (
-            <>
-              {/* 图标统一规则:模型条目 icon(AI Gateway / 目录设定)优先,缺省回落
-                  当前真正路由的来源标(activeSourceId)——客户端不按 model id 猜厂牌。 */}
-              {activeSourceId && (
-                <ModelIconMark
-                  icon={triggerModelIcon}
-                  providerId={activeSourceId}
-                  name={triggerActiveProvider?.name}
-                  routing={triggerActiveProvider?.routing}
-                  colorClass={
-                    isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : undefined
-                  }
-                />
-              )}
               <span
                 className={cn(
                   'min-w-0 font-normal',
                   isCreateAgentVariant
-                    ? isUltraCompactToolbar
-                      ? 'hidden'
-                      : isCompactToolbar
-                        ? 'max-w-[108px] truncate'
-                        : 'truncate'
+                    ? 'text-[var(--create-agent-control-text)]'
+                    : 'text-[var(--text-primary)]',
+                  isCreateAgentVariant
+                    ? 'truncate'
                     : isFieldTrigger
-                      ? 'max-w-[260px] truncate'
-                      : 'truncate',
-                  !isBudget &&
-                    (isCreateAgentVariant
-                      ? 'text-[var(--create-agent-control-text)]'
-                      : 'text-[var(--text-primary)]'),
+                      ? 'max-w-[120px] truncate'
+                      : 'shrink-0 whitespace-nowrap',
                   isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
                 )}
-                style={budgetGradientStyle}
               >
-                {displayLabel}
+                {effortLabel}
               </span>
-              {effortLabel && !isCompactToolbar && (
-                <>
-                  <span
-                    className={cn(
-                      'shrink-0 font-normal',
-                      isCreateAgentVariant
-                        ? 'text-[var(--create-agent-control-text)]'
-                        : 'text-[var(--model-trigger-meta)]',
-                      isCreateAgentVariant
-                        ? 'shrink-0 text-[12px]'
-                        : dense
-                          ? 'shrink-0 text-[12.5px]'
-                          : 'shrink-0 text-[13px]',
-                    )}
-                    aria-hidden="true"
-                  >
-                    ·
-                  </span>
-                  <span
-                    className={cn(
-                      'min-w-0 font-normal',
-                      isCreateAgentVariant
-                        ? 'text-[var(--create-agent-control-text)]'
-                        : 'text-[var(--text-primary)]',
-                      isCreateAgentVariant
-                        ? 'truncate'
-                        : isFieldTrigger
-                          ? 'max-w-[120px] truncate'
-                          : 'shrink-0 whitespace-nowrap',
-                      isCreateAgentVariant
-                        ? 'text-[12px]'
-                        : dense
-                          ? 'text-[12.5px]'
-                          : 'text-[13px]',
-                    )}
-                  >
-                    {effortLabel}
-                  </span>
-                </>
-              )}
-              {triggerFastOn && !isCompactToolbar && (
-                <Zap
-                  size={isCreateAgentVariant ? 11 : dense ? 12 : 13}
-                  className={cn(
-                    'ml-0.5 shrink-0',
-                    isCreateAgentVariant
-                      ? 'text-[var(--create-agent-control-icon)]'
-                      : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
-                  )}
-                  aria-label={t('newChat.modelSelector.meta.fastBadge')}
-                />
-              )}
             </>
           )}
-          <ChevronDown
-            size={isCreateAgentVariant ? 8 : dense ? 13 : 14}
-            className={cn(
-              'shrink-0',
-              isCreateAgentVariant
-                ? 'text-[var(--create-agent-control-icon)]'
-                : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]' /* spec 2026-07-17, token by 一哥 */,
-              isFieldTrigger && 'ml-auto',
-            )}
-          />
+          {triggerFastOn && !isCompactToolbar && (
+            <Zap
+              size={isCreateAgentVariant ? 11 : dense ? 12 : 13}
+              className={cn(
+                'ml-0.5 shrink-0',
+                isCreateAgentVariant
+                  ? 'text-[var(--create-agent-control-icon)]'
+                  : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
+              )}
+              aria-label={t('newChat.modelSelector.meta.fastBadge')}
+            />
+          )}
+        </>
+      )}
+      <ChevronDown
+        size={isCreateAgentVariant ? 8 : dense ? 13 : 14}
+        className={cn(
+          'shrink-0',
+          isCreateAgentVariant
+            ? 'text-[var(--create-agent-control-icon)]'
+            : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]' /* spec 2026-07-17, token by 一哥 */,
+          isFieldTrigger && 'ml-auto',
+        )}
+      />
     </button>
   );
 
   const content = (
-    <ModelSelectorContent
+    <ModelSelectorContentView
       modelId={modelId}
       effort={effort}
       onModelChange={onModelChange}
@@ -1726,8 +1950,11 @@ export function ModelSelector({
       onProviderChange={onProviderChange}
       onNavigateToProviders={onNavigateToProviders}
       configurationEnabled={configurationEnabled}
+      reselectEmitsChange={reselectEmitsChange}
       pointerRevealRequiresIntent={morphEnabled}
+      fluidWidth={isFieldTrigger}
       agentSwitch={contentAgentSwitch}
+      pricing={pricing}
       followSession={
         fallbackOption
           ? {
@@ -1769,7 +1996,11 @@ export function ModelSelector({
         sideOffset={4}
         collisionPadding={8}
         className={cn(
-          'w-auto overflow-hidden rounded-[12px] p-0',
+          // field 形态面板宽度绑定 trigger(DESIGN.md §4 Select & Dropdown 宽度铁则,
+          // 与隔壁权限字段同规则),且压掉共享 PopoverContent 的 shadow-md(§4 面板无
+          // 阴影);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
+          isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)] shadow-none' : 'w-auto',
+          'overflow-hidden rounded-[12px] p-0',
           'bg-[var(--model-dropdown-bg)]',
           'border border-[var(--model-dropdown-border)]',
         )}

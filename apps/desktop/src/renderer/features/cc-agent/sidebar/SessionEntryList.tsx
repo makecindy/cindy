@@ -17,6 +17,7 @@ import type { SessionClickHandler } from './SessionItem';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import { useCollapsibleShowAll } from './hooks/useCollapsibleShowAll';
+import { SessionCard } from './SessionCard';
 
 /** 条目是否为当前激活会话(group 命中其下任一会话)。 */
 function entryIsActive(entry: SidebarSessionEntry, activeSessionId?: string): boolean {
@@ -60,6 +61,8 @@ export interface SessionEntryListProps {
   disableCollapse?: boolean;
   /** 父级 SectionCollapse 的折叠态;用于收起动画结束后复位「显示全部」。 */
   sectionCollapsed?: boolean;
+  /** 项目置顶到列表模式时，项目内会话复用满宽列表卡片；其它场景保持紧凑文字行。 */
+  sessionVariant?: 'text' | 'list';
 }
 
 export interface SessionEntryRowsProps extends Omit<
@@ -86,30 +89,52 @@ export function SessionEntryRows({
   indented = false,
   matchMap,
   sourceLabelMap,
+  sessionVariant = 'text',
 }: SessionEntryRowsProps) {
   return (
     <>
-      {entries.map((entry) =>
-        entry.kind === 'session' ? (
-          <SessionItem
-            key={entry.session.id}
-            session={entry.session}
-            isActive={entry.session.id === activeSessionId}
-            isRunning={runningSessionIds.has(entry.session.id)}
-            isAttached={attachedSessionIds.has(entry.session.id)}
-            hasAttentionNotification={notifications.has(entry.session.id)}
-            isSelected={selectedSessionIds?.has(entry.session.id) ?? false}
-            onClick={onSessionClick}
-            onAction={onAction}
-            onRename={onRename}
-            onTogglePin={onTogglePin}
-            onMoveSession={onMoveSession}
-            projectOptions={projectOptions}
-            indented={indented}
-            matchIndices={matchMap?.get(entry.session.id)}
-            sourceLabel={sourceLabelMap?.get(entry.session.id)}
-          />
-        ) : (
+      {entries.map((entry, index) => {
+        if (entry.kind === 'session') {
+          const nextEntry = entries[index + 1];
+          const nextHighlighted =
+            nextEntry?.kind === 'session' &&
+            (nextEntry.session.id === activeSessionId ||
+              (selectedSessionIds?.has(nextEntry.session.id) ?? false));
+          const commonProps = {
+            session: entry.session,
+            isActive: entry.session.id === activeSessionId,
+            isRunning: runningSessionIds.has(entry.session.id),
+            isAttached: attachedSessionIds.has(entry.session.id),
+            hasAttentionNotification: notifications.has(entry.session.id),
+            isSelected: selectedSessionIds?.has(entry.session.id) ?? false,
+            onClick: onSessionClick,
+            onAction,
+            onRename,
+            onTogglePin,
+            onMoveSession,
+            projectOptions,
+            indented,
+            matchIndices: matchMap?.get(entry.session.id),
+          };
+
+          return sessionVariant === 'list' ? (
+            <SessionCard
+              key={entry.session.id}
+              {...commonProps}
+              variant="list"
+              isFirst={index === 0}
+              hideBottomDivider={nextHighlighted}
+            />
+          ) : (
+            <SessionItem
+              key={entry.session.id}
+              {...commonProps}
+              sourceLabel={sourceLabelMap?.get(entry.session.id)}
+            />
+          );
+        }
+
+        return (
           <AutomationSessionGroupItem
             key={entry.group.id}
             group={entry.group}
@@ -125,9 +150,10 @@ export function SessionEntryRows({
             onScheduleAction={onScheduleAction}
             indented={indented}
             sourceLabelMap={sourceLabelMap}
+            sessionVariant={sessionVariant}
           />
-        ),
-      )}
+        );
+      })}
     </>
   );
 }

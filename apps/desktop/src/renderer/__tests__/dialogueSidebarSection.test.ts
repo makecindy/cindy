@@ -22,6 +22,19 @@ const dialogueSectionSource = readFileSync(
   'utf8',
 );
 
+const dateGroupedSectionSource = readFileSync(
+  resolve(
+    __dirname,
+    '..',
+    'features',
+    'cc-agent',
+    'sidebar',
+    'sections',
+    'DateGroupedSessionsSection.tsx',
+  ),
+  'utf8',
+);
+
 const newMakerDraftRouteSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'NewMakerDraftRoute.tsx'),
   'utf8',
@@ -43,7 +56,27 @@ describe('Dialogue sidebar section', () => {
 
   it('keeps the Dialogue section visible when it has no sessions', () => {
     expect(dialogueSectionSource).not.toMatch(/sessions\.length\s*===\s*0\)\s*return\s+null/);
-    expect(dialogueSectionSource).toContain("t('ccAgent.sidebar.noDialogues')");
+    expect(dialogueSectionSource).toContain("'ccAgent.sidebar.noDialogues'");
+  });
+
+  it('shows loading instead of the empty state until the initial session fetch settles', () => {
+    expect(sidebarSource.match(/isLoading=\{isLoadingSidebarSessions\}/g)).toHaveLength(2);
+    expect(sidebarSource).toContain(
+      'useRemoteSessionBootstrapLoading(selectedMachineId)',
+    );
+    expect(sidebarSource).toContain(
+      'sessionsHook.isLoading || remoteSessionBootstrapLoading',
+    );
+    expect(dialogueSectionSource).toContain('isLoading: boolean');
+    expect(dialogueSectionSource).toContain("'ccAgent.sidebar.loadingDialogues'");
+    expect(dialogueSectionSource).toMatch(
+      /isLoading\s*\?\s*'ccAgent\.sidebar\.loadingDialogues'\s*:\s*'ccAgent\.sidebar\.noDialogues'/,
+    );
+    expect(dateGroupedSectionSource).toContain('isLoading: boolean');
+    expect(dateGroupedSectionSource).toContain('!isLoading');
+    expect(dateGroupedSectionSource).toMatch(
+      /isLoading\s*\?\s*'ccAgent\.sidebar\.loadingDialogues'\s*:\s*'ccAgent\.sidebar\.dateGroup\.empty'/,
+    );
   });
 
   it('has a Dialogue-owned runtime sort setting instead of using project manual order or renderer storage', () => {

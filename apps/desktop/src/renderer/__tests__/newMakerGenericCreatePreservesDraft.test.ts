@@ -27,6 +27,11 @@ const sidebarUpperSource = readFileSync(
   'utf8',
 );
 
+const draftRouteSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'NewMakerDraftRoute.tsx'),
+  'utf8',
+);
+
 /** 抽出某个 handler 的实现体(从 `const <name> =` 到该 handler 结束的 `}, [` / `};`)。 */
 function extractHandlerBlock(source: string, name: string): string {
   const re = new RegExp(`const ${name}\\s*=\\s*[\\s\\S]*?(?:\\}, \\[|\\};)`);
@@ -55,5 +60,15 @@ describe('通用「新建」保留 newMakerDraft 选择', () => {
   it('显式「新建对话」入口 handleCreateDialogue 仍清空 workingDir(不受本次修复影响)', () => {
     const block = extractHandlerBlock(sidebarUpperSource, 'handleCreateDialogue');
     expect(block).toContain('patchNewMakerDraft({ workingDir: null, remoteHostId: null, extraDirs: [] })');
+  });
+
+  // 保留与清空的分界(2026-07-25 用户定稿):workingDir / 文本 / 模型是便利性
+  // 记忆,通用「新建」保留;extraDirs 是单次授权范围,每次进入草稿页必须从空开始
+  //(否则旧目录会无感知地带进新会话)。清空由 NewMakerDraftRoute mount 效果承担,
+  // 通用入口依旧不 patch store(前两条断言不受影响)。
+  it('NewMakerDraftRoute mount 时清空 extraDirs(引用目录不跨草稿保留)', () => {
+    expect(draftRouteSource).toContain(
+      "if (getDraft().extraDirs.length > 0) patchDraft({ extraDirs: [] });",
+    );
   });
 });

@@ -1,0 +1,59 @@
+#!/bin/sh
+# cindy-dco-signoff-hook: appends the DCO Signed-off-by trailer to local commits.
+# See the DCO file at the repository root for what the trailer certifies.
+#
+# Install with `pnpm dco:install-hook` (copies this file into your hooks directory,
+# see scripts/install-dco-hook.mjs), or point Git at this directory yourself with
+# `git config core.hooksPath .githooks`. Delete the installed copy to uninstall.
+#
+# Why a hook is needed: Git has no option that signs commits off automatically.
+# format.signOff only affects git format-patch / git am, and commit.signoff does
+# not exist. Unsigned commits are rejected by the DCO check on every pull request
+# (the DCO GitHub App, configured in .github/dco.yml), and fixing them afterwards
+# means rewriting commits. scripts/check-dco.mjs is the local pre-commit
+# self-check for the same rules; the App's check is the authority.
+
+MSG_FILE="$1"
+MSG_SOURCE="$2"
+
+# Merge commits are exempt from the DCO check, so never sign them off here.
+case "$MSG_SOURCE" in
+  merge) exit 0 ;;
+esac
+
+# Use the COMMITTER ident, exactly like `git commit -s` does. A sign-off is a
+# statement by whoever runs the commit, so it must never be generated from the
+# author ident: with `git commit --author=...`, or while cherry-picking or
+# rebasing somebody else's patch, the author is a different person and signing
+# on their behalf would forge their DCO certification. The check accepts a
+# sign-off matching either the author or the committer, so using the committer
+# ident still passes.
+IDENT=$(git var GIT_COMMITTER_IDENT) || exit 0
+SIGNOFF=$(printf '%s\n' "$IDENT" | sed -n 's/^\(.*>\).*$/\1/p')
+[ -n "$SIGNOFF" ] || exit 0
+
+# Already signed off (git commit -s, a cherry-pick carrying our own sign-off, or
+# a second pass during --amend): leave the message alone.
+if grep -qxF "Signed-off-by: $SIGNOFF" "$MSG_FILE"; then
+  exit 0
+fi
+
+# During an interactive commit the message body is still empty (comments only).
+# interpret-trailers would put the sign-off on line 2, so once the author types a
+# subject on line 1 the result is "subject immediately followed by trailer" with
+# no blank line between them. Build the layout `git commit -s` uses instead:
+# an empty subject line, a blank line, then the sign-off.
+if [ -z "$(sed -e 's/^[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$MSG_FILE")" ]; then
+  DCO_TMP="$MSG_FILE.dco-signoff"
+  { printf '\n\nSigned-off-by: %s\n\n' "$SIGNOFF"; sed '/./,$!d' "$MSG_FILE"; } > "$DCO_TMP" || exit 0
+  mv "$DCO_TMP" "$MSG_FILE" || exit 0
+  exit 0
+fi
+
+# The message already has a body: let interpret-trailers place the sign-off in
+# the trailer block. Pass --if-exists / --if-missing explicitly — their defaults
+# come from trailer.ifExists / trailer.ifMissing, and a developer who set those
+# to doNothing would silently get unsigned commits whenever a message already
+# carries somebody else's sign-off.
+git interpret-trailers --if-exists addIfDifferent --if-missing add \
+  --trailer "Signed-off-by: $SIGNOFF" --in-place "$MSG_FILE"

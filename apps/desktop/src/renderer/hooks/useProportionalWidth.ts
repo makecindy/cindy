@@ -4,8 +4,12 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
  * 主区域内容宽度 hook
  *
  * 同时返回两个宽度：
- *   messageWidth = min(1200, containerWidth - sidePadding*2)   // 普通模式 50px/侧
+ *   messageWidth = min(maxWidth, containerWidth - sidePadding*2)   // 普通模式 50px/侧
  *   inputWidth   = messageWidth + INPUT_OUTSET (输入框每侧少 10px)
+ *
+ * maxWidth 为内容封顶宽（首参）：容器再宽,内容列也不超过它,超出部分靠 mx-auto
+ * 居中留白。不传时回落到 MAX_MESSAGE_WIDTH(1200) 的历史默认。新建对话页与进行中
+ * 对话页传同一个值(914),保证发送首条消息时输入框宽度不跳变,同时左右留出呼吸空间。
  *
  * - 消息流侧 (50px)：MessageStream 是 overflow-y-auto 的原生滚动容器,占满
  *   全宽 containerWidth，内部 contentRef `mx-auto` + `maxWidth=messageWidth`
@@ -30,6 +34,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
  *     messageWidth 先扩出去顶过 parent"的中间帧。doc rail 走显式 `compact: true`
  *     仍恒 compact,行为不变。
  */
+// 内容封顶宽的历史默认值:调用方不传首参时回落到它(旧行为)。
 const MAX_MESSAGE_WIDTH = 1200;
 const INPUT_OUTSET = 20; // 输入框比消息流每侧宽 10px（共 20px）
 const DEFAULT_MESSAGE_PAD = 50;
@@ -57,7 +62,7 @@ export interface UseProportionalWidthOptions {
 }
 
 export function useProportionalWidth(
-  _maxWidth?: number,
+  maxWidth?: number,
   opts: UseProportionalWidthOptions = {},
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -83,7 +88,9 @@ export function useProportionalWidth(
       const messagePad = useCompact ? COMPACT_MESSAGE_PAD : DEFAULT_MESSAGE_PAD;
       const nextInputPad = Math.max(0, messagePad - INPUT_OUTSET / 2);
       const messageAvailable = Math.max(0, containerWidth - messagePad * 2);
-      const nextMessage = Math.min(MAX_MESSAGE_WIDTH, messageAvailable);
+      // 首参 maxWidth 为内容封顶宽;非法/未传时回落到历史默认 1200。
+      const cap = maxWidth && maxWidth > 0 ? maxWidth : MAX_MESSAGE_WIDTH;
+      const nextMessage = Math.min(cap, messageAvailable);
       let nextInput = nextMessage + INPUT_OUTSET;
       if (opts.minWidth && opts.minWidth > nextInput) {
         // 地板夹到实测容器宽以内:窄窗仍是"填满容器",不会溢出/裁切。
@@ -94,7 +101,7 @@ export function useProportionalWidth(
       setInputPad(nextInputPad);
       setIsCompact(useCompact);
     },
-    [opts.compact, opts.minWidth],
+    [maxWidth, opts.compact, opts.minWidth],
   );
 
   // useLayoutEffect + 同步量一次:消除 mount 第一帧 width=0 的视觉跳变。

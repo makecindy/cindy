@@ -1,13 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { TEST_CDN_BASE_URL as CDN_EXTERNAL_BASE_URL } from '../../test/vitest/clientEndpointsFixture';
 
 const originalPlatform = process.platform;
-const TEST_ROOT = path.join(os.tmpdir(), 'xdt-maker-update-service-test');
-const TEST_USER_DATA = path.join(TEST_ROOT, 'user-data');
-const TEST_EXE = path.join(TEST_ROOT, 'app', 'xdt-maker.exe');
+let TEST_ROOT: string;
+let TEST_USER_DATA: string;
+let TEST_EXE: string;
 
 const browserWindowGetAllWindows = vi.fn(() => []);
 const ipcMainHandle = vi.fn();
@@ -114,6 +114,15 @@ async function freshUpdateService(platform: NodeJS.Platform) {
   return import('../updateService');
 }
 
+beforeAll(() => {
+  TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-maker-update-service-test-'));
+  TEST_USER_DATA = path.join(TEST_ROOT, 'user-data');
+  TEST_EXE = path.join(TEST_ROOT, 'app', 'xdt-maker.exe');
+});
+afterAll(() => {
+  if (!TEST_ROOT) return;
+  fs.rmSync(TEST_ROOT, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+});
 beforeEach(() => {
   browserWindowGetAllWindows.mockReset();
   browserWindowGetAllWindows.mockReturnValue([]);

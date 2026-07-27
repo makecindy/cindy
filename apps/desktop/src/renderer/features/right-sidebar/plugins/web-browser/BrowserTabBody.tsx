@@ -28,7 +28,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
-import { AlertTriangle, RotateCw } from 'lucide-react';
+import { AlertTriangle, Gauge, RotateCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -38,6 +38,10 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
+import {
+  forceKillBrowserTab,
+  setForegroundBrowserTab,
+} from '../../lib/rsbBrowserBridge';
 import { closeTab } from '../../store';
 import { useBrowserWebview } from '../../hooks/useBrowserWebview';
 import type { TabKindHostContext } from '../../types';
@@ -55,6 +59,10 @@ interface BrowserTabBodyProps {
   /** 顶层 active tab 才响应来自 main 的 webview-内 Cmd+L 信号 + 后续 mute /
    *  暂停媒体等行为。Shell 注入。 */
   active?: boolean;
+  /** 整个右侧栏是否展开可见。Shell 注入;真实可见性 = active && shellVisible ——
+   *  侧栏收起时 active tab 依旧 mount 且 active=true,资源看门狗的前台判定
+   *  必须用组合值,否则收起的 tab 永远享受前台豁免(review P1)。 */
+  shellVisible?: boolean;
 }
 
 function normalizeNavigationUrl(url: string): string {
@@ -69,19 +77,22 @@ function isSameNavigationUrl(a: string, b: string): boolean {
   return normalizeNavigationUrl(a) === normalizeNavigationUrl(b);
 }
 
-export function BrowserTabBody({ state, ctx, active }: BrowserTabBodyProps) {
+export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabBodyProps) {
   const { t } = useTranslation();
   // tabId 从 ctx 拿(Shell 注入,每个 tab 实例稳定),用作 BrowserWebviewPool 的
   // entry key — pool 据此把同一个 webview DOM 节点跟 tab 绑定一辈子。
   // sessionId 跟 tabId 一起喂给 hook,用于 dom-ready 后给 main 端 TabRegistry
   // 上报 (sessionId, tabId, webContentsId) 三元组(Phase 2 browser bridge)。
   const { tabId, sessionId } = ctx;
+  // 真实可见性:顶层 active tab 且整个侧栏展开。shellVisible 缺省(旧宿主 /
+  // 测试)按可见处理,与 active 的既有缺省语义一致。
+  const tabVisible = active === true && shellVisible !== false;
   // BrowserChrome 的 imperative ref —— Cmd/Ctrl+L 快捷键调它的 focusUrlBar()。
   const chromeRef = useRef<BrowserChromeHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const slotRef = useRef<HTMLDivElement>(null);
-  const browser = useBrowserWebview(tabId, sessionId);
-  const initialNavigationTabRef = useRef<string | null>(null);
+  const browser = useBrowserWebview(tabId, sessionId, tabVisible);
+  const lastNavigatedWrapperRef = useRef<HTMLDivElement | null>(null);
   const stateUrlRef = useRef(state.url);
   const browserUrlRef = useRef(browser.url);
   const suppressStaleUrlRef = useRef<{ targetUrl: string; staleUrl: string } | null>(null);
@@ -157,16 +168,21 @@ export function BrowserTabBody({ state, ctx, active }: BrowserTabBodyProps) {
   // 的观测结果,绝不能再反向驱动 loadURL:跨 origin 重定向时 React state 可能
   // 落后一帧,双向 reconcile 会把 authorize / callback 互相覆盖成死循环。
   // 用户地址栏与 agent 导航都有各自明确的命令入口,不依赖 state 反向触发。
+  //
+  // 按 wrapper **代际**(而不是 tabId)判定"首次":资源看门狗 / LRU 淘汰销毁
+  // entry 后,重新可见时 hook 会 acquire 出一个全新 wrapper —— 新代际的 webview
+  // 是空的,必须重新用持久化 URL 驱动一次加载(review P1:淘汰后空壳)。
   useEffect(() => {
-    if (initialNavigationTabRef.current === tabId) return;
-    initialNavigationTabRef.current = tabId;
+    const wrapper = browser.wrapper;
+    if (!wrapper || lastNavigatedWrapperRef.current === wrapper) return;
+    lastNavigatedWrapperRef.current = wrapper;
     const nextUrl = stateUrlRef.current || 'about:blank';
     const currentUrl = browserUrlRef.current;
     if (currentUrl && isSameNavigationUrl(currentUrl, nextUrl)) return;
     // about:blank 默认状态下也要 navigate,确保 webview 真的处于 about:blank,
     // 不会停留在 pool 创建时未 setAttribute('src') 的"未初始化"状态。
     navigateRef.current(nextUrl);
-  }, [tabId]);
+  }, [tabId, browser.wrapper]);
 
   const reloadRef = useRef(browser.reload);
   const goBackRef = useRef(browser.goBack);
@@ -260,6 +276,17 @@ export function BrowserTabBody({ state, ctx, active }: BrowserTabBodyProps) {
     },
     { enabled: active },
   );
+
+  // 前台上报:资源看门狗据此区分前台 / 后台 guest(前台只在内存超硬阈值时才
+  // 强杀,后台可激进淘汰)。用 tabVisible(active && shellVisible)而不是裸
+  // active:侧栏收起时 active tab 依旧 mount,不算前台。可见性翻转 / tab 切换 /
+  // 组件卸载都要同步。
+  useEffect(() => {
+    setForegroundBrowserTab(tabId, tabVisible);
+    return () => {
+      setForegroundBrowserTab(tabId, false);
+    };
+  }, [tabVisible, tabId]);
 
   // webview guest 内 Cmd/Ctrl+L:main 推送过来,只有 active tab 响应。
   useEffect(() => {
@@ -411,7 +438,48 @@ export function BrowserTabBody({ state, ctx, active }: BrowserTabBodyProps) {
         data-browser-tab-slot={tabId}
       >
         {browser.crash && (
-          <BrowserCrashBanner reason={browser.crash.reason} onRecover={handleRecover} />
+          <BrowserCrashBanner
+            reason={browser.crash.reason}
+            cause={browser.crash.cause}
+            onRecover={handleRecover}
+            onForceKill={
+              browser.crash.reason === 'unresponsive'
+                ? () => void forceKillBrowserTab(tabId)
+                : undefined
+            }
+          />
+        )}
+        {/* 资源看门狗 cpu-alert 提示条:非阻断,固定在 slot 顶部居中。用户可
+            「强制终止」失控页面,或「忽略」继续(可能是正经的重页面)。 */}
+        {!browser.crash && browser.resourceAlert && (
+          <div
+            className={cn(
+              'absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-2',
+              'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+              'py-1 pl-3 pr-1 text-[11px] text-[var(--text-secondary)] shadow-sm',
+            )}
+          >
+            <Gauge size={12} strokeWidth={2} className="shrink-0 text-[var(--warning-fg)]" />
+            <span>{t('rightSidebar.browser.resourceAlert.cpuHint')}</span>
+            <button
+              type="button"
+              onClick={() => {
+                browser.dismissResourceAlert();
+                void forceKillBrowserTab(tabId);
+              }}
+              className="rounded-full px-2 py-0.5 text-[11px] font-medium text-[var(--error-fg)] hover:bg-[var(--surface-hover)]"
+            >
+              {t('rightSidebar.browser.resourceAlert.terminate')}
+            </button>
+            <button
+              type="button"
+              aria-label={t('rightSidebar.browser.resourceAlert.dismiss')}
+              onClick={browser.dismissResourceAlert}
+              className="flex size-5 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+            >
+              <X size={12} strokeWidth={2} />
+            </button>
+          </div>
         )}
         {/* 评论模式提示条:点选中显示操作说明,固定在 slot 顶部居中,不挡 chrome。 */}
         {comment.mode === 'selecting' && (
@@ -447,25 +515,38 @@ export function BrowserTabBody({ state, ctx, active }: BrowserTabBodyProps) {
  * 崩溃 banner —— absolute 覆盖整个 webview slot,半透明黑底 + 中心一个卡片。
  * Codex 也对崩溃做 UI 反馈(`render-process-gone` 事件链),Chrome 在 tab 内显示
  * "Aw, Snap!" 页。我们做精简版:图标 + 原因 + 重载按钮。
+ *
+ * `cause === 'resource-memory'`:资源看门狗因内存超限主动终止(不是页面自己崩),
+ * 换专属文案让用户明白"是保护机制在工作"。`onForceKill` 只在 unresponsive 时传:
+ * 卡死的 guest 进程还在烧 CPU,「强制终止」给用户一个立即止损的出口(终止后
+ * 走 render-process-gone → 本 banner 切到 crashed 文案 → 重新加载恢复)。
  */
 function BrowserCrashBanner({
   reason,
+  cause,
   onRecover,
+  onForceKill,
 }: {
   reason: string;
+  cause?: 'resource-memory';
   onRecover: () => void;
+  onForceKill?: () => void;
 }) {
   const { t } = useTranslation();
-  // 区分导航熔断、unresponsive 与进程崩溃。沿用同一个克制的恢复 banner,
-  // 不新增布局或视觉分支。
+  // 区分资源终止、导航熔断、unresponsive 与进程崩溃。沿用同一个克制的恢复
+  // banner,不新增布局或视觉分支。
   const titleKey =
-    reason === 'navigation-loop'
+    cause === 'resource-memory'
+      ? 'rightSidebar.browser.crash.resourceKilledTitle'
+      : reason === 'navigation-loop'
       ? 'rightSidebar.browser.crash.navigationLoopTitle'
       : reason === 'unresponsive'
       ? 'rightSidebar.browser.crash.unresponsiveTitle'
       : 'rightSidebar.browser.crash.crashedTitle';
   const descKey =
-    reason === 'navigation-loop'
+    cause === 'resource-memory'
+      ? 'rightSidebar.browser.crash.resourceKilledDesc'
+      : reason === 'navigation-loop'
       ? 'rightSidebar.browser.crash.navigationLoopDesc'
       : reason === 'unresponsive'
       ? 'rightSidebar.browser.crash.unresponsiveDesc'
@@ -476,14 +557,25 @@ function BrowserCrashBanner({
         <AlertTriangle size={28} strokeWidth={1.5} className="text-[var(--error-fg)]" />
         <div className="text-[13px] font-medium text-[var(--text-primary)]">{t(titleKey)}</div>
         <div className="text-[12px] text-[var(--text-secondary)]">{t(descKey)}</div>
-        <button
-          type="button"
-          onClick={onRecover}
-          className="mt-1 flex h-7 items-center gap-1.5 rounded-md bg-[var(--accent-cta-bg)] px-3 text-[12px] font-medium text-[var(--accent-pure-cta-fg)] hover:bg-[var(--accent-hover)]"
-        >
-          <RotateCw size={12} strokeWidth={2.5} />
-          {t('rightSidebar.browser.crash.reload')}
-        </button>
+        <div className="mt-1 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onRecover}
+            className="flex h-7 items-center gap-1.5 rounded-md bg-[var(--accent-cta-bg)] px-3 text-[12px] font-medium text-[var(--accent-pure-cta-fg)] hover:bg-[var(--accent-hover)]"
+          >
+            <RotateCw size={12} strokeWidth={2.5} />
+            {t('rightSidebar.browser.crash.reload')}
+          </button>
+          {onForceKill && (
+            <button
+              type="button"
+              onClick={onForceKill}
+              className="flex h-7 items-center rounded-md border border-[var(--border-default)] px-3 text-[12px] font-medium text-[var(--error-fg)] hover:bg-[var(--surface-hover)]"
+            >
+              {t('rightSidebar.browser.crash.forceKill')}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

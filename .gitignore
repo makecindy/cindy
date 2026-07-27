@@ -37,12 +37,24 @@ apps/desktop/resources/tools/
 apps/desktop/resources/cc-manager/
 apps/desktop/resources/anthropic-compat-proxy/
 apps/desktop/resources/remote-file-service/
+# Windows 打包时由 prePackage 现场 cargo build 生成并覆盖(forge.config.ts
+# buildCindyUpdater);源码在 apps/desktop/cindy-updater/,不入仓避免 4.5MB
+# 二进制持续消耗 Git LFS 流量。
+apps/desktop/resources/cindy-updater.exe
 
 # ── Agent CLI 本地二进制 ─────────────────────────────────────
 # 实体文件按 tools/<kind>/latest.json 的 pin 下载，不进 Git/LFS。
 apps/claude-code-bin/
 apps/codex-bin/
 apps/ripgrep-bin/
+# Android platform-tools 的二进制同理：Windows 打包前按 source.properties 的 pin
+# 版本下载并校验 sha256（apps/desktop/scripts/ensure-android-platform-tools.mjs）。
+# 只忽略已知的三个二进制文件——同目录的 NOTICE.txt（许可清单要读）与
+# source.properties（版本事实源）是文本，必须继续入仓。不使用通配符，防止
+# 意外文件被隐藏后经 stageAndroidPlatformTools 混入安装包。
+apps/android-platform-tools-bin/win32-x64/adb.exe
+apps/android-platform-tools-bin/win32-x64/AdbWinApi.dll
+apps/android-platform-tools-bin/win32-x64/AdbWinUsbApi.dll
 tools/claude/updates/
 tools/codex/updates/
 tools/ripgrep/updates/

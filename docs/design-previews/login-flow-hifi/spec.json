@@ -1,0 +1,178 @@
+{
+  "meta": {
+    "name": "cindy-login-flow-hifi",
+    "summary": {
+      "what": "最新 main(8a6bc911)桌面登录链路全状态高保真 QA demo:identifier/SSO/验证码/协议门/绑定/错误态",
+      "how": "truth 由 extract.mjs 从 loginDesignTokens/loginScale/colors.ts/四语 common.json/legalLinks 机械提取;布局公式 oracle=产品 loginScale.ts 编译预计算",
+      "accept": "A-F 门自动验收:extractor drift/状态覆盖/交互鲁棒(截断·输入·持久化)/渲染绑定/适配采样;门 E 无沙盒基准如实标注"
+    }
+  },
+  "matrix": {
+    "platforms": ["desk"],
+    "regions": ["cn", "global"],
+    "systems": ["mac"],
+    "themes": ["light", "dark"],
+    "langs": ["zh-CN", "en", "ja", "ko"]
+  },
+  "states": [
+    { "id": "identifier", "via": [{ "expect": "identifier" }] },
+    { "id": "identifier.formatError", "via": [
+      { "click": "[data-qa-pref=\"region:global\"]" },
+      { "type": { "sel": ".lp-input", "text": "abc" } },
+      { "click": ".lp-primary-btn" },
+      { "expect": "identifier.formatError" }
+    ] },
+    { "id": "consent.dialog", "via": [
+      { "click": ".lp-social-guest" },
+      { "expect": "consent.dialog" }
+    ] },
+    { "id": "sso-org", "via": [
+      { "click": ".lp-social-sso" },
+      { "expect": "sso-org" }
+    ] },
+    { "id": "verify.counting", "via": [
+      { "click": "[data-qa-pref=\"region:cn\"]" },
+      { "click": ".lp-consent-radio" },
+      { "type": { "sel": ".lp-input", "text": "13800138000" } },
+      { "click": ".lp-primary-btn" },
+      { "expect": "verify.counting" }
+    ] },
+    { "id": "verify.error", "via": [
+      { "click": "[data-qa-pref=\"region:cn\"]" },
+      { "click": ".lp-consent-radio" },
+      { "type": { "sel": ".lp-input", "text": "13800138000" } },
+      { "click": ".lp-primary-btn" },
+      { "type": { "sel": ".lp-code-input", "text": "000000" } },
+      { "click": ".lp-primary-btn" },
+      { "expect": "verify.error" }
+    ] },
+    { "id": "method-choice", "via": [
+      { "click": "[data-qa-pref=\"region:global\"]" },
+      { "click": ".lp-consent-radio" },
+      { "type": { "sel": ".lp-input", "text": "lead@acme.com" } },
+      { "click": ".lp-primary-btn" },
+      { "expect": "method-choice" }
+    ] },
+    { "id": "method-choice.ssoRequired", "via": [
+      { "click": "[data-qa-pref=\"region:global\"]" },
+      { "click": ".lp-consent-radio" },
+      { "type": { "sel": ".lp-input", "text": "ceo@ssoonly.com" } },
+      { "click": ".lp-primary-btn" },
+      { "expect": "method-choice.ssoRequired" }
+    ] },
+    { "id": "browser-redirect", "via": [
+      { "click": "[data-qa-pref=\"region:global\"]" },
+      { "click": ".lp-consent-radio" },
+      { "type": { "sel": ".lp-input", "text": "lead@acme.com" } },
+      { "click": ".lp-primary-btn" },
+      { "click": ".lp-method-sso" },
+      { "expect": "browser-redirect" }
+    ] },
+    { "id": "main", "via": [
+      { "click": "[data-qa-pref=\"region:cn\"]" },
+      { "click": ".lp-consent-radio" },
+      { "type": { "sel": ".lp-input", "text": "13800138000" } },
+      { "click": ".lp-primary-btn" },
+      { "type": { "sel": ".lp-code-input", "text": "123456" } },
+      { "click": ".lp-primary-btn" },
+      { "expect": "main" }
+    ] },
+    { "id": "preparing", "via": null, "tab": "状态补齐",
+      "note": "loginState 就绪前的准备伪态(figma §5.2),真实链路是应用启动瞬间的中间帧,静态 demo 无法经交互到达" },
+    { "id": "verify.resend", "via": null, "tab": "状态补齐",
+      "note": "重发链接态需等 42s 倒计时(RESEND_COUNTDOWN_MS)自然归零,链路等待过长" },
+    { "id": "account-selection", "via": null, "tab": "状态补齐",
+      "note": "多身份选择步由外部浏览器 SSO 回调携带多账号返回触发,demo 无真实浏览器回调" },
+    { "id": "sso-verification", "via": null, "tab": "状态补齐",
+      "note": "验证企业联系方式步由 SSO 首登回调触发(codeRequested 子态),demo 无真实 IdP 回调" },
+    { "id": "binding.request", "via": null, "tab": "状态补齐",
+      "note": "绑定手机号/邮箱步由社交登录回调发现缺联系方式触发,demo 无真实浏览器回调" },
+    { "id": "binding.code", "via": null, "tab": "状态补齐",
+      "note": "绑定验证码子态(codeRequested=true)同上依赖浏览器回调;含「验证码已发送至 X」countdown 样式提示行" },
+    { "id": "error", "via": null, "tab": "状态补齐",
+      "note": "登录服务不可用整页错误态(含「跳过登录」逃生 footer),需服务端故障才能真实触达" }
+  ],
+  "verify": {
+    "cases": [
+      { "id": "cn-light-zh", "prefs": { "plat": "desk", "region": "cn", "os": "mac", "mode": "light", "lang": "zh-CN" } },
+      { "id": "cn-dark-ja", "prefs": { "plat": "desk", "region": "cn", "os": "mac", "mode": "dark", "lang": "ja" } },
+      { "id": "global-light-en", "prefs": { "plat": "desk", "region": "global", "os": "mac", "mode": "light", "lang": "en" } },
+      { "id": "global-dark-ko", "prefs": { "plat": "desk", "region": "global", "os": "mac", "mode": "dark", "lang": "ko" } }
+    ],
+    "noClip": [".lp-title", ".lp-subtitle"],
+    "inputs": [
+      {
+        "via": [
+          { "click": "[data-qa-pref=\"region:cn\"]" },
+          { "click": ".lp-consent-radio" },
+          { "type": { "sel": ".lp-input", "text": "13800138000" } },
+          { "click": ".lp-primary-btn" },
+          { "expect": "verify.counting" }
+        ],
+        "sel": ".lp-code-input",
+        "text": "123456",
+        "tickMs": 1000,
+        "tickWitness": "#resend-countdown"
+      }
+    ],
+    "persistence": {
+      "via": [
+        { "click": "[data-qa-pref=\"region:global\"]" },
+        { "click": "[data-qa-pref=\"mode:dark\"]" },
+        { "click": "[data-qa-pref=\"lang:ko\"]" }
+      ],
+      "expected": { "plat": "desk", "region": "global", "os": "mac", "mode": "dark", "lang": "ko" },
+      "storageKey": "qa-hifi:cindy-login-flow-hifi:prefs",
+      "reloads": 2,
+      "initialState": "identifier"
+    }
+  },
+  "bindings": [
+    { "sel": ".lp-panel", "prop": "background-color", "truth": "colors.panelBg.light", "kind": "color",
+      "via": [{ "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".lp-panel", "prop": "background-color", "truth": "colors.panelBg.dark", "kind": "color",
+      "via": [{ "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".frame", "prop": "background-color", "truth": "colors.bgBase.light", "kind": "color",
+      "via": [{ "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame", "prop": "background-color", "truth": "colors.bgBase.dark", "kind": "color",
+      "via": [{ "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".lp-title", "prop": "color", "truth": "colors.titleText.light", "kind": "color",
+      "via": [{ "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".lp-title", "prop": "font-size", "truth": "geometry.title.fontSize", "kind": "length", "scaled": true },
+    { "sel": ".lp-subtitle", "prop": "color", "truth": "colors.secondaryText.light", "kind": "color",
+      "via": [{ "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".lp-subtitle", "prop": "font-size", "truth": "geometry.subtitle.fontSize", "kind": "length", "scaled": true },
+    { "sel": ".lp-input", "prop": "border-radius", "truth": "geometry.control.radius", "kind": "length", "scaled": true },
+    { "sel": ".lp-input", "prop": "font-size", "truth": "geometry.control.fontSize", "kind": "length", "scaled": true },
+    { "sel": ".lp-input", "prop": "color", "pseudo": "::placeholder", "truth": "colors.controlPlaceholder.light", "kind": "color",
+      "via": [{ "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".lp-input", "prop": "color", "pseudo": "::placeholder", "truth": "colors.controlPlaceholder.dark", "kind": "color",
+      "via": [{ "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".lp-primary-btn", "prop": "background-color", "truth": "colors.primaryButtonBg.light", "kind": "color",
+      "via": [{ "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".lp-primary-btn", "prop": "background-color", "truth": "colors.primaryButtonBg.dark", "kind": "color",
+      "via": [{ "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".lp-primary-btn", "prop": "border-radius", "truth": "geometry.control.radius", "kind": "length", "scaled": true },
+    { "sel": ".lp-error-text", "prop": "color", "truth": "colors.errorFg.light", "kind": "color",
+      "via": [
+        { "click": "[data-qa-pref=\"mode:light\"]" },
+        { "click": "[data-qa-pref=\"region:global\"]" },
+        { "type": { "sel": ".lp-input", "text": "abc" } },
+        { "click": ".lp-primary-btn" },
+        { "expect": "identifier.formatError" }
+      ] }
+  ],
+  "adaptive": {
+    "min": { "w": 800, "h": 600 },
+    "sampleSizes": [
+      [800, 600], [800, 601], [900, 620], [1024, 640], [1280, 720],
+      [1280, 800], [1280, 801], [1440, 900], [1680, 1050], [800, 1200]
+    ],
+    "probes": [
+      { "id": "panel", "sel": ".lp-stage" },
+      { "id": "hero", "sel": ".hero" },
+      { "id": "slogan", "sel": ".slogan" }
+    ],
+    "tolerancePx": 1
+  }
+}

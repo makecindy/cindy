@@ -29,6 +29,9 @@ CREATE TABLE sessions (
   sdk_session_id TEXT,
   total_token_usage INTEGER NOT NULL DEFAULT 0,
   total_cost_usd REAL NOT NULL DEFAULT 0,
+  total_cost_amount REAL NOT NULL DEFAULT 0,
+  total_cost_currency TEXT,
+  total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
   context_tokens INTEGER NOT NULL DEFAULT 0,
   context_window INTEGER NOT NULL DEFAULT 0,
   fast_mode INTEGER NOT NULL DEFAULT 0,
@@ -179,7 +182,11 @@ describe('db worker tx handlers', () => {
       });
 
       expect(result).toEqual({ changed: 1 });
-      await expect(client.query('SELECT client_id, agent_meta FROM messages WHERE client_id LIKE ?', ['codex-import:%'])).resolves.toEqual([
+      await expect(
+        client.query('SELECT client_id, agent_meta FROM messages WHERE client_id LIKE ?', [
+          'codex-import:%',
+        ]),
+      ).resolves.toEqual([
         {
           client_id: 'codex-import:2',
           agent_meta: JSON.stringify({ sdkSessionId: 'thread-1', model: 'gpt-5' }),
@@ -202,7 +209,13 @@ describe('db worker tx handlers', () => {
         sdkSessionId: 'thread-1',
         model: 'gpt-5',
         rows: [
-          { lineNo: 2, role: 'assistant', text: 'secret body', content: 'secret body', createdAt: 2000 },
+          {
+            lineNo: 2,
+            role: 'assistant',
+            text: 'secret body',
+            content: 'secret body',
+            createdAt: 2000,
+          },
         ],
       });
 
@@ -241,7 +254,9 @@ describe('db worker tx handlers', () => {
       });
 
       expect(result).toEqual({ changed: 1 });
-      await expect(client.queryOne('SELECT id, client_id, tool_use_id, agent_meta FROM messages')).resolves.toEqual({
+      await expect(
+        client.queryOne('SELECT id, client_id, tool_use_id, agent_meta FROM messages'),
+      ).resolves.toEqual({
         id: 'claude-import-sdk-1-7-0',
         client_id: 'claude-import:7-0',
         tool_use_id: 'tool-1',
@@ -306,11 +321,18 @@ describe('db worker tx handlers', () => {
         now: 999,
       });
 
-      await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual([
-        { id: 'm1', rewind_at: null },
-        { id: 'm2', rewind_at: 999 },
-      ]);
-      await expect(client.queryOne('SELECT user_send_at, context_tokens, context_window, sdk_session_id FROM sessions WHERE id = ?', ['s1'])).resolves.toEqual({
+      await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
+        [
+          { id: 'm1', rewind_at: null },
+          { id: 'm2', rewind_at: 999 },
+        ],
+      );
+      await expect(
+        client.queryOne(
+          'SELECT user_send_at, context_tokens, context_window, sdk_session_id FROM sessions WHERE id = ?',
+          ['s1'],
+        ),
+      ).resolves.toEqual({
         user_send_at: 999,
         context_tokens: 0,
         context_window: 0,
@@ -355,11 +377,13 @@ describe('db worker tx handlers', () => {
         now: 999,
       });
 
-      await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual([
-        { id: 'aaa-before-target', rewind_at: null },
-        { id: 'target', rewind_at: 999 },
-        { id: 'zzz-after-target', rewind_at: 999 },
-      ]);
+      await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
+        [
+          { id: 'aaa-before-target', rewind_at: null },
+          { id: 'target', rewind_at: 999 },
+          { id: 'zzz-after-target', rewind_at: 999 },
+        ],
+      );
     });
   });
 
@@ -391,7 +415,9 @@ describe('db worker tx handlers', () => {
           updatedAt: expect.stringMatching(/^20\d{2}-\d{2}-\d{2}T/),
         },
       ]);
-      await expect(client.queryOne('SELECT title FROM sessions WHERE id = ?', ['s1'])).resolves.toEqual({
+      await expect(
+        client.queryOne('SELECT title FROM sessions WHERE id = ?', ['s1']),
+      ).resolves.toEqual({
         title: 'New title',
       });
 
@@ -406,7 +432,9 @@ describe('db worker tx handlers', () => {
           ],
         }),
       ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
-      await expect(client.queryOne('SELECT title FROM sessions WHERE id = ?', ['s1'])).resolves.toEqual({
+      await expect(
+        client.queryOne('SELECT title FROM sessions WHERE id = ?', ['s1']),
+      ).resolves.toEqual({
         title: 'New title',
       });
     });
@@ -459,12 +487,14 @@ describe('db worker tx handlers', () => {
         now: 999,
       });
 
-      await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual([
-        { id: 'child', rewind_at: 999 },
-        { id: 'prior', rewind_at: null },
-        { id: 'target', rewind_at: 999 },
-        { id: 'unrelated', rewind_at: null },
-      ]);
+      await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
+        [
+          { id: 'child', rewind_at: 999 },
+          { id: 'prior', rewind_at: null },
+          { id: 'target', rewind_at: 999 },
+          { id: 'unrelated', rewind_at: null },
+        ],
+      );
     });
   });
 
@@ -507,11 +537,13 @@ describe('db worker tx handlers', () => {
         now: 999,
       });
 
-      await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual([
-        { id: 'child', rewind_at: 999 },
-        { id: 'prior', rewind_at: null },
-        { id: 'target', rewind_at: 999 },
-      ]);
+      await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
+        [
+          { id: 'child', rewind_at: 999 },
+          { id: 'prior', rewind_at: null },
+          { id: 'target', rewind_at: 999 },
+        ],
+      );
     });
   });
 
@@ -550,21 +582,34 @@ describe('db worker tx handlers', () => {
           forkedAtMessageId: 'c2',
           providerId: 'xd',
         }),
-        uuidMap: [['old', 'new'], ['parent', 'new-parent-tool'], ['old-parent', 'new-parent']],
+        uuidMap: [
+          ['old', 'new'],
+          ['parent', 'new-parent-tool'],
+          ['old-parent', 'new-parent'],
+        ],
         newMessageIds: [{ id: 'copy-id-1', clientId: 'copy-client-1' }],
       });
 
       expect(result).toEqual({ messageCount: 1 });
-      await expect(client.queryOne('SELECT working_dir, parent_session_id, forked_at_message_id, provider_id FROM sessions WHERE id = ?', ['forked'])).resolves.toEqual({
+      await expect(
+        client.queryOne(
+          'SELECT working_dir, parent_session_id, forked_at_message_id, provider_id FROM sessions WHERE id = ?',
+          ['forked'],
+        ),
+      ).resolves.toEqual({
         working_dir: 'D:/repo/project',
         parent_session_id: 'src',
         forked_at_message_id: 'c2',
         provider_id: 'xd',
       });
-      const copied = await client.queryOne<{ id: string; client_id: string; agent_meta: string; agent_kind: string }>(
-        'SELECT id, client_id, agent_meta, agent_kind FROM messages WHERE session_id = ?',
-        ['forked'],
-      );
+      const copied = await client.queryOne<{
+        id: string;
+        client_id: string;
+        agent_meta: string;
+        agent_kind: string;
+      }>('SELECT id, client_id, agent_meta, agent_kind FROM messages WHERE session_id = ?', [
+        'forked',
+      ]);
       expect(copied?.id).toBe('copy-id-1');
       expect(copied?.client_id).toBe('copy-client-1');
       expect(copied?.agent_kind).toBe('cc');
@@ -593,11 +638,36 @@ describe('db worker tx handlers', () => {
          VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?),
                 (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
         [
-          'pre-clear', 'pre-clear-client', 'src', 'user', 'old', 50,
-          'switch', 'switch-client', 'src', 'agent_switch', switchContent, 100,
-          'same-before', 'same-before-client', 'src', 'assistant', 'keep', 200,
-          'target', 'target-client', 'src', 'user', 'exclude target', 200,
-          'same-after', 'same-after-client', 'src', 'assistant', 'exclude tail', 200,
+          'pre-clear',
+          'pre-clear-client',
+          'src',
+          'user',
+          'old',
+          50,
+          'switch',
+          'switch-client',
+          'src',
+          'agent_switch',
+          switchContent,
+          100,
+          'same-before',
+          'same-before-client',
+          'src',
+          'assistant',
+          'keep',
+          200,
+          'target',
+          'target-client',
+          'src',
+          'user',
+          'exclude target',
+          200,
+          'same-after',
+          'same-after-client',
+          'src',
+          'assistant',
+          'exclude tail',
+          200,
         ],
       );
       const target = await client.queryOne<{ rowid: number }>(
@@ -625,10 +695,9 @@ describe('db worker tx handlers', () => {
         id: string;
         role: string;
         content: string;
-      }>(
-        'SELECT id, role, content FROM messages WHERE session_id = ? ORDER BY created_at, rowid',
-        ['forked'],
-      );
+      }>('SELECT id, role, content FROM messages WHERE session_id = ? ORDER BY created_at, rowid', [
+        'forked',
+      ]);
       expect(copied.map((row) => row.id)).toEqual(['copy-switch', 'copy-same-before']);
       expect(JSON.parse(copied[0].content)).toMatchObject({
         fromSdkSessionId: null,
@@ -659,7 +728,10 @@ describe('db worker tx handlers', () => {
         sourceSessionId: 'src',
         targetCreatedAt: 200,
         newSession: sessionRow('forked', { parentSessionId: 'src' }),
-        uuidMap: [['legacy-asst', 'new-asst'], ['legacy-user', 'new-user']],
+        uuidMap: [
+          ['legacy-asst', 'new-asst'],
+          ['legacy-user', 'new-user'],
+        ],
         legacyTranscriptParentUuids: ['legacy-asst'],
         newMessageIds: [{ id: 'copy-id', clientId: 'copy-client' }],
       });
@@ -720,13 +792,15 @@ describe('db worker tx handlers', () => {
         ['m1', 'c1', 'src', 'assistant', 'copy', 100],
       );
 
-      await expect(client.tx('fork.session', {
-        sourceSessionId: 'src',
-        targetCreatedAt: 200,
-        newSession: sessionRow('forked', { parentSessionId: 'src', forkedAtMessageId: 'c1' }),
-        uuidMap: [],
-        newMessageIds: [],
-      })).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+      await expect(
+        client.tx('fork.session', {
+          sourceSessionId: 'src',
+          targetCreatedAt: 200,
+          newSession: sessionRow('forked', { parentSessionId: 'src', forkedAtMessageId: 'c1' }),
+          uuidMap: [],
+          newMessageIds: [],
+        }),
+      ).rejects.toMatchObject({ code: 'INVALID_ARGS' });
     });
   });
 
@@ -744,14 +818,15 @@ describe('db worker tx handlers', () => {
         boundaryContent: '{"handoff":"full","resumed":false}',
         updatedAt: 500,
       });
-      await expect(client.queryOne(
-        'SELECT sdk_session_id, updated_at FROM sessions WHERE id = ?',
-        ['s1'],
-      )).resolves.toEqual({ sdk_session_id: null, updated_at: 500 });
-      await expect(client.queryOne(
-        'SELECT content FROM messages WHERE session_id = ? AND client_id = ?',
-        ['s1', 'sw-client'],
-      )).resolves.toEqual({ content: '{"handoff":"full","resumed":false}' });
+      await expect(
+        client.queryOne('SELECT sdk_session_id, updated_at FROM sessions WHERE id = ?', ['s1']),
+      ).resolves.toEqual({ sdk_session_id: null, updated_at: 500 });
+      await expect(
+        client.queryOne('SELECT content FROM messages WHERE session_id = ? AND client_id = ?', [
+          's1',
+          'sw-client',
+        ]),
+      ).resolves.toEqual({ content: '{"handoff":"full","resumed":false}' });
     });
   });
 
@@ -759,23 +834,27 @@ describe('db worker tx handlers', () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
       await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', ['stale-sdk', 's1']);
-      await expect(client.tx('session.agentSwitchFallback', {
-        sessionId: 's1',
-        boundaryClientId: 'missing',
-        boundaryContent: '{}',
-        updatedAt: 500,
-      })).rejects.toMatchObject({ code: 'NOT_FOUND' });
-      await expect(client.queryOne(
-        'SELECT sdk_session_id FROM sessions WHERE id = ?',
-        ['s1'],
-      )).resolves.toEqual({ sdk_session_id: 'stale-sdk' });
+      await expect(
+        client.tx('session.agentSwitchFallback', {
+          sessionId: 's1',
+          boundaryClientId: 'missing',
+          boundaryContent: '{}',
+          updatedAt: 500,
+        }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      await expect(
+        client.queryOne('SELECT sdk_session_id FROM sessions WHERE id = ?', ['s1']),
+      ).resolves.toEqual({ sdk_session_id: 'stale-sdk' });
     });
   });
 
   it('message.delete scrubs the selected AI round and invalidates native context atomically', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
-      await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', ['old-native', 's1']);
+      await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', [
+        'old-native',
+        's1',
+      ]);
       for (const [id, role, createdAt] of [
         ['before', 'user', 100],
         ['target', 'assistant', 200],
@@ -793,19 +872,24 @@ describe('db worker tx handlers', () => {
         "INSERT INTO embedding_jobs (source, source_id, model_id, vec_table, scheduled_at) VALUES ('chat', ?, 'test', 'chat_vec', 0)",
         ['target'],
       );
-      await client.exec('INSERT INTO chat_vec (rowid, embedding) VALUES (?, ?)', [job.lastInsertRowid, Buffer.from([1, 2, 3])]);
+      await client.exec('INSERT INTO chat_vec (rowid, embedding) VALUES (?, ?)', [
+        job.lastInsertRowid,
+        Buffer.from([1, 2, 3]),
+      ]);
 
-      await expect(client.tx('message.delete', {
-        sessionId: 's1',
-        clientIds: ['target', 'thinking', 'auto-resume', 'tool'],
-        contextMarker: {
-          id: 'ctx-id',
-          clientId: 'ctx-client',
-          content: '{"handoff":"before + after","consumed":false}',
-          createdAt: 400,
-        },
-        updatedAt: 500,
-      })).resolves.toEqual({
+      await expect(
+        client.tx('message.delete', {
+          sessionId: 's1',
+          clientIds: ['target', 'thinking', 'auto-resume', 'tool'],
+          contextMarker: {
+            id: 'ctx-id',
+            clientId: 'ctx-client',
+            content: '{"handoff":"before + after","consumed":false}',
+            createdAt: 400,
+          },
+          updatedAt: 500,
+        }),
+      ).resolves.toEqual({
         messages: [
           { messageId: 'target', clientId: 'target' },
           { messageId: 'thinking', clientId: 'thinking' },
@@ -814,21 +898,47 @@ describe('db worker tx handlers', () => {
         ],
       });
 
-      await expect(client.query<{
-        id: string;
-        role: string;
-        content: string;
-        agent_meta: string | null;
-        rewind_at: number | null;
-      }>(
-        'SELECT id, role, content, agent_meta, rewind_at FROM messages WHERE session_id = ? ORDER BY created_at',
-        ['s1'],
-      )).resolves.toEqual([
+      await expect(
+        client.query<{
+          id: string;
+          role: string;
+          content: string;
+          agent_meta: string | null;
+          rewind_at: number | null;
+        }>(
+          'SELECT id, role, content, agent_meta, rewind_at FROM messages WHERE session_id = ? ORDER BY created_at',
+          ['s1'],
+        ),
+      ).resolves.toEqual([
         { id: 'before', role: 'user', content: '"before"', agent_meta: null, rewind_at: null },
-        { id: 'target', role: 'message_tombstone', content: 'null', agent_meta: null, rewind_at: 500 },
-        { id: 'thinking', role: 'message_tombstone', content: 'null', agent_meta: null, rewind_at: 500 },
-        { id: 'auto-resume', role: 'message_tombstone', content: 'null', agent_meta: null, rewind_at: 500 },
-        { id: 'tool', role: 'message_tombstone', content: 'null', agent_meta: null, rewind_at: 500 },
+        {
+          id: 'target',
+          role: 'message_tombstone',
+          content: 'null',
+          agent_meta: null,
+          rewind_at: 500,
+        },
+        {
+          id: 'thinking',
+          role: 'message_tombstone',
+          content: 'null',
+          agent_meta: null,
+          rewind_at: 500,
+        },
+        {
+          id: 'auto-resume',
+          role: 'message_tombstone',
+          content: 'null',
+          agent_meta: null,
+          rewind_at: 500,
+        },
+        {
+          id: 'tool',
+          role: 'message_tombstone',
+          content: 'null',
+          agent_meta: null,
+          rewind_at: 500,
+        },
         { id: 'after', role: 'user', content: '"after"', agent_meta: null, rewind_at: null },
         {
           id: 'ctx-id',
@@ -838,11 +948,12 @@ describe('db worker tx handlers', () => {
           rewind_at: 400,
         },
       ]);
-      await expect(client.queryOne(
-        'SELECT sdk_session_id, updated_at FROM sessions WHERE id = ?',
-        ['s1'],
-      )).resolves.toEqual({ sdk_session_id: null, updated_at: 500 });
-      await expect(client.query('SELECT rowid FROM embedding_jobs WHERE source_id = ?', ['target'])).resolves.toEqual([]);
+      await expect(
+        client.queryOne('SELECT sdk_session_id, updated_at FROM sessions WHERE id = ?', ['s1']),
+      ).resolves.toEqual({ sdk_session_id: null, updated_at: 500 });
+      await expect(
+        client.query('SELECT rowid FROM embedding_jobs WHERE source_id = ?', ['target']),
+      ).resolves.toEqual([]);
       await expect(client.query('SELECT rowid FROM chat_vec')).resolves.toEqual([]);
     });
   });
@@ -850,24 +961,30 @@ describe('db worker tx handlers', () => {
   it('message.delete rejects non-deletable rows without clearing the sdk binding', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
-      await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', ['old-native', 's1']);
+      await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', [
+        'old-native',
+        's1',
+      ]);
       await client.exec(
         'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
         ['switch', 'switch', 's1', 'agent_switch', '{}', 100],
       );
-      await expect(client.tx('message.delete', {
-        sessionId: 's1',
-        clientIds: ['switch'],
-        contextMarker: {
-          id: 'ctx-id',
-          clientId: 'ctx-client',
-          content: '{"handoff":"empty","consumed":false}',
-          createdAt: 400,
-        },
-        updatedAt: 500,
-      })).rejects.toMatchObject({ code: 'NOT_FOUND' });
-      await expect(client.queryOne('SELECT sdk_session_id FROM sessions WHERE id = ?', ['s1']))
-        .resolves.toEqual({ sdk_session_id: 'old-native' });
+      await expect(
+        client.tx('message.delete', {
+          sessionId: 's1',
+          clientIds: ['switch'],
+          contextMarker: {
+            id: 'ctx-id',
+            clientId: 'ctx-client',
+            content: '{"handoff":"empty","consumed":false}',
+            createdAt: 400,
+          },
+          updatedAt: 500,
+        }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      await expect(
+        client.queryOne('SELECT sdk_session_id FROM sessions WHERE id = ?', ['s1']),
+      ).resolves.toEqual({ sdk_session_id: 'old-native' });
     });
   });
 
@@ -1066,7 +1183,9 @@ describe('db worker tx handlers', () => {
     await withClient(async (client) => {
       const rowid = await insertJob(client, { sourceId: 'm1' });
       await client.tx('embedding.markDone', { rowids: [rowid] });
-      await expect(client.queryOne('SELECT status, last_error FROM embedding_jobs WHERE rowid = ?', [rowid])).resolves.toEqual({
+      await expect(
+        client.queryOne('SELECT status, last_error FROM embedding_jobs WHERE rowid = ?', [rowid]),
+      ).resolves.toEqual({
         status: 'done',
         last_error: null,
       });
@@ -1077,16 +1196,18 @@ describe('db worker tx handlers', () => {
     await withClient(async (client) => {
       const rowid = await insertJob(client, { sourceId: 'm1' });
       const embedding = new Float32Array([1, 2, 3, 4]);
-      await client.tx(
-        'embedding.commit',
-        { items: [{ rowid, vecTable: 'chat_vec', embedding }] },
-        [embedding.buffer],
-      );
+      await client.tx('embedding.commit', { items: [{ rowid, vecTable: 'chat_vec', embedding }] }, [
+        embedding.buffer,
+      ]);
 
-      await expect(client.queryOne('SELECT status FROM embedding_jobs WHERE rowid = ?', [rowid])).resolves.toEqual({
+      await expect(
+        client.queryOne('SELECT status FROM embedding_jobs WHERE rowid = ?', [rowid]),
+      ).resolves.toEqual({
         status: 'done',
       });
-      await expect(client.queryOne('SELECT rowid, length(embedding) AS len FROM chat_vec')).resolves.toEqual({
+      await expect(
+        client.queryOne('SELECT rowid, length(embedding) AS len FROM chat_vec'),
+      ).resolves.toEqual({
         rowid,
         len: 16,
       });
@@ -1136,13 +1257,19 @@ describe('db worker tx handlers', () => {
         [second.buffer],
       );
 
-      await expect(client.queryOne('SELECT status FROM embedding_jobs WHERE rowid = ?', [rowid])).resolves.toEqual({
+      await expect(
+        client.queryOne('SELECT status FROM embedding_jobs WHERE rowid = ?', [rowid]),
+      ).resolves.toEqual({
         status: 'done',
       });
-      await expect(client.queryOne('SELECT COUNT(*) AS n FROM chat_vec WHERE rowid = ?', [rowid])).resolves.toEqual({
+      await expect(
+        client.queryOne('SELECT COUNT(*) AS n FROM chat_vec WHERE rowid = ?', [rowid]),
+      ).resolves.toEqual({
         n: 1,
       });
-      await expect(client.queryOne('SELECT rowid, length(embedding) AS len FROM chat_vec')).resolves.toEqual({
+      await expect(
+        client.queryOne('SELECT rowid, length(embedding) AS len FROM chat_vec'),
+      ).resolves.toEqual({
         rowid,
         len: 32,
       });
@@ -1163,7 +1290,11 @@ describe('db worker tx handlers', () => {
       });
 
       expect(result).toEqual({ failCount: 1 });
-      await expect(client.query('SELECT rowid, status, attempts, scheduled_at FROM embedding_jobs ORDER BY rowid')).resolves.toEqual([
+      await expect(
+        client.query(
+          'SELECT rowid, status, attempts, scheduled_at FROM embedding_jobs ORDER BY rowid',
+        ),
+      ).resolves.toEqual([
         { rowid: retryRowid, status: 'pending', attempts: 1, scheduled_at: 11_000 },
         { rowid: failRowid, status: 'failed', attempts: 5, scheduled_at: 0 },
       ]);
@@ -1183,7 +1314,11 @@ describe('db worker tx handlers', () => {
       });
 
       expect(result).toEqual({ inserted: 2, skipped: 1 });
-      await expect(client.query('SELECT source_id, chunk_index, scheduled_at FROM embedding_jobs ORDER BY rowid')).resolves.toEqual([
+      await expect(
+        client.query(
+          'SELECT source_id, chunk_index, scheduled_at FROM embedding_jobs ORDER BY rowid',
+        ),
+      ).resolves.toEqual([
         { source_id: 'm1', chunk_index: 0, scheduled_at: 123 },
         { source_id: 'm2', chunk_index: 1, scheduled_at: 123 },
       ]);
@@ -1214,8 +1349,14 @@ describe('db worker tx handlers', () => {
 
       expect(archivedSessionId).toBe('worker');
       expect(missingSessionId).toBeNull();
-      await expect(client.queryOne('SELECT id FROM orca_workers WHERE id = ?', ['worker-1'])).resolves.toBeUndefined();
-      await expect(client.queryOne('SELECT status, orca_role, updated_at FROM sessions WHERE id = ?', ['worker'])).resolves.toEqual({
+      await expect(
+        client.queryOne('SELECT id FROM orca_workers WHERE id = ?', ['worker-1']),
+      ).resolves.toBeUndefined();
+      await expect(
+        client.queryOne('SELECT status, orca_role, updated_at FROM sessions WHERE id = ?', [
+          'worker',
+        ]),
+      ).resolves.toEqual({
         status: 'archived',
         orca_role: null,
         updated_at: 999,
@@ -1232,10 +1373,20 @@ describe('db worker tx handlers', () => {
       );
       const results = await Promise.all([
         first.tx('orca.reserveWorkerCreation', {
-          reservationId: 'first', teamId: 'team-1', label: 'tester', hardLimit: 5, now: 100, expiresAt: 200,
+          reservationId: 'first',
+          teamId: 'team-1',
+          label: 'tester',
+          hardLimit: 5,
+          now: 100,
+          expiresAt: 200,
         }),
         second.tx('orca.reserveWorkerCreation', {
-          reservationId: 'second', teamId: 'team-1', label: 'TESTER', hardLimit: 5, now: 100, expiresAt: 200,
+          reservationId: 'second',
+          teamId: 'team-1',
+          label: 'TESTER',
+          hardLimit: 5,
+          now: 100,
+          expiresAt: 200,
         }),
       ]);
       expect(results).toContainEqual({ ok: true, occupiedSlotsBefore: 0 });
@@ -1265,15 +1416,29 @@ describe('db worker tx handlers', () => {
         ['worker-2', 'team-1', 'errored-worker', 'error', 'errored', 'reviewer', 1, 1],
       );
 
-      await expect(client.tx('orca.reserveWorkerCreation', {
-        reservationId: 'blocked', teamId: 'team-1', label: 'blocked', hardLimit: 2, now: 100, expiresAt: 200,
-      })).resolves.toEqual({ ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED' });
+      await expect(
+        client.tx('orca.reserveWorkerCreation', {
+          reservationId: 'blocked',
+          teamId: 'team-1',
+          label: 'blocked',
+          hardLimit: 2,
+          now: 100,
+          expiresAt: 200,
+        }),
+      ).resolves.toEqual({ ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED' });
 
       await client.exec("UPDATE sessions SET status = 'archived' WHERE id = ?", ['done-worker']);
 
-      await expect(client.tx('orca.reserveWorkerCreation', {
-        reservationId: 'replacement', teamId: 'team-1', label: 'replacement', hardLimit: 2, now: 100, expiresAt: 200,
-      })).resolves.toEqual({ ok: true, occupiedSlotsBefore: 1 });
+      await expect(
+        client.tx('orca.reserveWorkerCreation', {
+          reservationId: 'replacement',
+          teamId: 'team-1',
+          label: 'replacement',
+          hardLimit: 2,
+          now: 100,
+          expiresAt: 200,
+        }),
+      ).resolves.toEqual({ ok: true, occupiedSlotsBefore: 1 });
     });
   });
 });
@@ -1313,13 +1478,15 @@ async function withTwoClients(fn: (clients: [DbClient, DbClient]) => Promise<voi
   const clients: DbClient[] = [];
   try {
     for (let index = 0; index < 2; index += 1) {
-      clients.push(await createDbClient({
-        userId: `test-user-${index}`,
-        dbPath,
-        drizzleDir,
-        betterSqliteModulePath: require.resolve('better-sqlite3'),
-        workerScriptPath,
-      }));
+      clients.push(
+        await createDbClient({
+          userId: `test-user-${index}`,
+          dbPath,
+          drizzleDir,
+          betterSqliteModulePath: require.resolve('better-sqlite3'),
+          workerScriptPath,
+        }),
+      );
     }
     await fn(clients as [DbClient, DbClient]);
   } finally {
@@ -1380,10 +1547,7 @@ async function seedSession(
   );
 }
 
-function sessionRow(
-  id: string,
-  overrides: Partial<TestSessionRow> = {},
-): TestSessionRow {
+function sessionRow(id: string, overrides: Partial<TestSessionRow> = {}): TestSessionRow {
   return {
     id,
     title: `Session ${id}`,

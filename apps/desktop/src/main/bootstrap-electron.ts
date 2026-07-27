@@ -36,6 +36,7 @@ import {
   markDesktopDevStartupFailed,
   markDesktopDevWindowReady,
 } from './devStartupStatus';
+import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 
 const PROCESS_STARTED_AT_MS = Date.now();
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
@@ -51,6 +52,18 @@ if (
   app.commandLine.appendSwitch('password-store', 'basic');
   safeStorage.setUsePlainTextEncryption(true);
 }
+
+// TapTap Maker 等站点的 WASM 多线程引擎依赖 SharedArrayBuffer。Chromium 把 SAB 锁在
+// crossOriginIsolated(COOP/COEP 响应头)之后,而 Electron 不实现 COOP 进程隔离——
+// 即便站点响应头正确,BrowserWindow / `<webview>` 里 crossOriginIsolated 恒为 false,
+// SAB 拿不到,RSB 内置浏览器里这类站点直接报"缺少运行时支持"(Electron 41.2.0 实测,
+// 真 Chrome 同页面为 true)。这里用 Chromium 官方 feature 开关无条件恢复 SAB 构造器,
+// TapTap Maker 桌面端(xdt-maker.exe)、VS Code 同款做法。风险面是向所有网页内容放开
+// 高精度共享内存计时器(Spectre 类),缓解依赖远程内容只跑在 webview-security.ts 强制
+// 加固的 webview 里(sandbox + webSecurity + 隔离分区,无 Node)。注意 appendSwitch
+// 同 key 后写覆盖前写:如需再加其他
+// enable-features,必须合并进同一次调用的逗号分隔值,不能另起一行。
+app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
 
 // agentManager 已在 vendor 大扫除时退役。app 退出 / 崩溃路径走 maker.shutdown()
 // 一刀切 — 它内部按 (Layer 1) 关所有 session → (Layer 2) dispose 所有 agent (Codex
@@ -150,12 +163,6 @@ import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
-import { moderateProfileUpdate } from './content-moderation/profile.js';
-import {
-  moderateUserPrompt,
-  validateUserPromptReviewValue,
-} from './content-moderation/userPrompt.js';
-import { cancelAllReleasedOutputs } from './content-moderation/outputHub.js';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
 import { installWebviewHardener } from './webview-security';
@@ -245,6 +252,10 @@ import {
   installPowerEventDiagnostics,
   installWindowResponsivenessDiagnostics,
 } from './powerWakeDiagnostics';
+import {
+  broadcastVoiceInputPowerState,
+  installVoiceInputPowerRelease,
+} from './voice-input/powerReleaseNotifier';
 import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
@@ -256,6 +267,7 @@ import {
 } from './windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { initHeartbeatService } from './heartbeatService';
+import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { WindowManualDragController } from './windowManualDrag';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import { initDeviceLinkService, releaseDeviceLinkOwnershipBeforeLogout } from './device-link';
@@ -295,6 +307,7 @@ import {
   resetHookControlOwnerBoundary,
   disposeHookControl,
 } from './hook-control';
+import { startAccountIntegrationsAfterOwnerDbReady } from './accountIntegrationStartup';
 import { registerSkillhubIpc } from './skillhub/registerIpc';
 import { SkillhubMarketService } from './skillhub/marketService';
 import { skillhubAutoSyncService } from './skillhub/autoSyncService';
@@ -352,6 +365,14 @@ import {
 import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
 import { registerRsbWindowIpc } from './right-sidebar-window/ipc.js';
+import { GhostPanelWindowsController } from './ghost-panel-window/controller.js';
+import { createGhostPanelWindow } from './ghost-panel-window/window.js';
+import { registerGhostPanelWindowIpc } from './ghost-panel-window/ipc.js';
+import {
+  patchGhostPanelWindowEntry,
+  readGhostPanelWindowsSettings,
+  removeGhostPanelWindowEntry,
+} from './ghost-panel-window/settings-store.js';
 import {
   readRsbWindowSettings,
   writeRsbWindowSettingsPatch,
@@ -377,6 +398,7 @@ import {
 import {
   readImDefaultSettingsState,
   resetImDefaultSettings,
+  resetImDefaultSettingsChannel,
   writeImDefaultSettingsPatch,
 } from './im/defaultSettingsStore.js';
 import { hasClaudeAiOAuth } from './maker-host/claude-credentials-store.js';
@@ -394,6 +416,7 @@ import {
   writeSilentEncryptedRetryEnabled,
 } from './maker-host/silent-encrypted-retry-store.js';
 import { resolveOwnerScopedSecretStorageKey } from './secrets/providerSecretStore.js';
+import { isRendererAccessibleSafeStorageKey } from '../shared/providerSecrets.js';
 import {
   readCompactionPct,
   readCompactionState,
@@ -401,6 +424,7 @@ import {
   writeCompactionPct,
 } from './maker-host/compaction-settings-store.js';
 import {
+  readSubagentModelSettings,
   readSubagentModelSettingsState,
   resetSubagentModelSettings,
   writeSubagentModelSettingsPatch,
@@ -495,13 +519,16 @@ import {
   IM_DEFAULT_SETTINGS,
   isImDefaultAgentKind,
   isImDefaultEffort,
+  isImDefaultSettingsChannel,
   type ImDefaultAgentKind,
   type ImDefaultAgentSettings,
+  type ImDefaultSettingsChannel,
   type ImDefaultSettingsPatch,
 } from '../shared/imDefaultSettings.js';
 import {
   isValidSubagentModelIdInput,
   normalizeSubagentModelId,
+  reconcileSubagentModelSettingsPatch,
   type SubagentModelSettingsPatch,
 } from '../shared/subagentModelSettings.js';
 import { isBrowserOpenablePath } from '../shared/browserOpenableExts.js';
@@ -510,6 +537,7 @@ import {
   initClientEndpoints,
   registerClientEndpointsIpc,
 } from './clientEndpointsService.js';
+import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
   noteManualXdKeySaved,
@@ -543,7 +571,18 @@ import {
 } from './app-shortcuts/index.js';
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
 import { registerLayoutIpc } from './layout/index.js';
-import { registerGhostIpc, suspendAllGhosts } from './cindy-brain/index.js';
+import {
+  getGhostManager,
+  isGhostAvailableForActiveSession,
+  refreshGhostLocalization,
+  registerGhostIpc,
+  setGhostsChangedObserver,
+  suspendAllGhosts,
+  waitForGhostMutations,
+} from './cindy-brain/index.js';
+import { getGhostSetupChangeBus } from './cindy-brain/ghostSetupChangeBus.js';
+import { getGhostSetupInteractionBridge } from './cindy-brain/ghostSetupInteractionBridge.js';
+import { registerPluginMarketIpc } from './plugin-market/registerIpc.js';
 import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
@@ -769,6 +808,7 @@ const authBoundaryLog = createLogger('auth-boundary');
 // 主窗 renderer 加载失败可观测性 + dev 启动看门狗(见 renderer-boot-guard.ts 顶部注释)。
 const rendererGuardLog = createLogger('renderer-guard');
 const updatePresentationLog = createLogger('update-presentation');
+const voicePowerBroadcastLog = createLogger('voice-input-power');
 let rendererBootGuard: RendererBootGuard | null = null;
 
 const lifecycleDbClientManager = createLifecycleDbClientManager({
@@ -806,9 +846,11 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // Every Ghost sandbox can retain live OAuth, subscription, or in-memory
   // state. Stop them before changing owners; resident Ghosts are recreated by
   // the auth-change activation pass after the new boundary is committed.
+  await waitForGhostMutations();
   suspendAllGhosts();
-  // Personal IM channels have the same DB boundary. Relogin restarts them via
-  // app:ready-for-bot after the new DbClient is ready.
+  // Personal IM channels have the same DB boundary. Relogin restarts them from
+  // the next owner DB-ready callback; app:ready-for-bot remains a compatibility
+  // retry after the new DbClient is ready.
   try {
     await stopImConnection(reason);
   } catch (err) {
@@ -985,6 +1027,52 @@ registerRsbWindowIpc({
   getMainWindow: () => mainWindowRef,
 });
 
+// ── 插件停靠面板独立窗口(ghost panel window)────────────────────────────
+// 每 ghostId 一扇窗:PanelChrome「独立窗口」按钮 → setDetached(id, true) 开窗,
+// 主窗布局树里该 pane 停止渲染(树不动);关窗/合并即回停靠。装/卸/启停广播
+// 经 setGhostsChangedObserver 喂 reconcile,失去资格的窗口即时收掉。
+// deps 同样全 lazy(isQuitting 声明在后),状态机见 ghost-panel-window/controller.ts。
+const ghostPanelWindowsController = new GhostPanelWindowsController({
+  settings: {
+    read: readGhostPanelWindowsSettings,
+    patchEntry: patchGhostPanelWindowEntry,
+    removeEntry: removeGhostPanelWindowEntry,
+  },
+  createWindow: (ghostId) => {
+    const ghost = getGhostManager()
+      .list()
+      .find((g) => g.manifest.id === ghostId);
+    const title = ghost?.manifest.panel?.title ?? ghost?.manifest.name ?? ghostId;
+    return createGhostPanelWindow(ghostId, title);
+  },
+  isGhostDetachable: (ghostId) => {
+    const ghost = getGhostManager()
+      .list()
+      .find((g) => g.manifest.id === ghostId);
+    return (
+      ghost !== undefined &&
+      ghost.enabled !== false &&
+      ghost.manifest.panel !== undefined &&
+      ghost.manifest.panel.position !== 'tab' &&
+      isGhostAvailableForActiveSession(ghostId)
+    );
+  },
+  broadcastState: (state) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(MAKER_PUSH.GHOST_PANEL_WINDOW_STATE_CHANGED, state);
+      } catch {
+        // window torn down mid-broadcast — ignore
+      }
+    }
+  },
+  isQuitting: () => isQuitting,
+  log: createLogger('ghost-panel-window-controller'),
+});
+registerGhostPanelWindowIpc(ghostPanelWindowsController);
+setGhostsChangedObserver((ghosts) => ghostPanelWindowsController.reconcile(ghosts));
+
 registerRsbBrowserBridgeIpc({
   registry: getRsbBrowserBridge(),
   getHostWebContents: () => rsbWindowController.getHostWebContents(),
@@ -1025,6 +1113,7 @@ registerLayoutIpc();
 // renderer 首帧 sendSync 拉已装意识清单(意识面板与内置面板同帧注册,规则 7
 // 无跳变)、install/uninstall 写路径、changed 广播。见 main/cindy-brain/。
 registerGhostIpc();
+registerPluginMarketIpc();
 
 // ── Custom protocol registration (image-local-cache M2) ──────────────────
 // MUST run before app.whenReady(), and MUST be a SINGLE call:
@@ -1058,6 +1147,11 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 import started from 'electron-squirrel-startup';
+
+import {
+  APPLICATION_MENU_LABELS,
+  type ApplicationMenuLocale,
+} from './applicationMenuLabels.js';
 
 if (started) {
   app.quit();
@@ -1109,91 +1203,7 @@ if (started) {
 const SYSTEM_PATH_BLOCKLIST: string[] = buildSystemPathBlocklist();
 
 // ApplicationMenuCommand 从 ../shared/applicationMenuCommands 单点导入。
-type ApplicationMenuLocale = SupportedLocale;
-
-interface ApplicationMenuLabels {
-  about: string;
-  hide: string;
-  quit: string;
-  settings: string;
-  checkForUpdates: string;
-  fileMenu: string;
-  newMaker: string;
-  viewMenu: string;
-  toggleSidebar: string;
-  windowMenu: string;
-  helpMenu: string;
-  help: string;
-  releaseNotes: string;
-  issues: string;
-}
-
-const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationMenuLabels> = {
-  'zh-CN': {
-    about: '关于 {{appName}}',
-    hide: '隐藏 {{appName}}',
-    quit: '退出 {{appName}}',
-    settings: '设置...',
-    checkForUpdates: '检查更新...',
-    fileMenu: '文件',
-    newMaker: '新建 Maker',
-    viewMenu: '显示',
-    toggleSidebar: '切换侧边栏',
-    windowMenu: '窗口',
-    helpMenu: '帮助',
-    help: '帮助',
-    releaseNotes: '最新更新介绍',
-    issues: '议题',
-  },
-  en: {
-    about: 'About {{appName}}',
-    hide: 'Hide {{appName}}',
-    quit: 'Quit {{appName}}',
-    settings: 'Settings...',
-    checkForUpdates: 'Check for Updates...',
-    fileMenu: 'File',
-    newMaker: 'New Maker',
-    viewMenu: 'View',
-    toggleSidebar: 'Toggle Sidebar',
-    windowMenu: 'Window',
-    helpMenu: 'Help',
-    help: 'Help',
-    releaseNotes: "What's New",
-    issues: 'Issues',
-  },
-  ja: {
-    about: '{{appName}} について',
-    hide: '{{appName}}を隠す',
-    quit: '{{appName}}を終了',
-    settings: '設定...',
-    checkForUpdates: 'アップデートを確認...',
-    fileMenu: 'ファイル',
-    newMaker: '新規 Maker',
-    viewMenu: '表示',
-    toggleSidebar: 'サイドバーを切り替え',
-    windowMenu: 'ウインドウ',
-    helpMenu: 'ヘルプ',
-    help: 'ヘルプ',
-    releaseNotes: '最新情報',
-    issues: '問題',
-  },
-  ko: {
-    about: '{{appName}} 정보',
-    hide: '{{appName}} 가리기',
-    quit: '{{appName}} 종료',
-    settings: '설정...',
-    checkForUpdates: '업데이트 확인...',
-    fileMenu: '파일',
-    newMaker: '새 Maker',
-    viewMenu: '보기',
-    toggleSidebar: '사이드바 토글',
-    windowMenu: '윈도우',
-    helpMenu: '도움말',
-    help: '도움말',
-    releaseNotes: '최신 업데이트',
-    issues: '이슈',
-  },
-};
+// 应用菜单四语标签抽到 ./applicationMenuLabels,使术语门禁能直接 import 扫描(见该文件注释)。
 
 function resolveApplicationMenuLocale(raw: string | null | undefined): ApplicationMenuLocale {
   return resolveSystemLocale(raw);
@@ -1437,6 +1447,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  refreshGhostLocalization();
   const mainWindow = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
   if (mainWindow) {
     installApplicationMenu(mainWindow, currentApplicationMenuLocale);
@@ -1737,7 +1748,21 @@ app.on('browser-window-focus', (_event, win) => {
     clearTimeout(appFocusSyncTimer);
     appFocusSyncTimer = null;
   }
-  syncAppFocusState(isAppContentWindow(win));
+  const focusedAppContent = isAppContentWindow(win);
+  syncAppFocusState(focusedAppContent);
+  if (focusedAppContent) {
+    // OAuth and system settings may complete outside Cindy. Focus is a
+    // metadata-only fallback wake-up: each pending plugin is re-assessed, but
+    // no stored value crosses the change bus.
+    const pendingGhostIds = new Set(
+      (getGhostSetupInteractionBridge()?.pendingSnapshots() ?? []).map(
+        ({ request }) => request.ghost.id,
+      ),
+    );
+    for (const ghostId of pendingGhostIds) {
+      getGhostSetupChangeBus().wake(ghostId, { source: 'focus' });
+    }
+  }
 });
 
 app.on('browser-window-blur', () => {
@@ -2304,7 +2329,6 @@ const createWindow = () => {
 
 let disposeSkillhubAutoSyncAuthListener: (() => void) | null = null;
 let disposeProviderAccessAuthListener: (() => void) | null = null;
-let disposeContentModerationAuthListener: (() => void) | null = null;
 
 const registerIpcHandlers = () => {
   // Find the primary app window, skipping transient utility BrowserWindows like
@@ -2322,6 +2346,19 @@ const registerIpcHandlers = () => {
     const windows = BrowserWindow.getAllWindows();
     return windows.find((w) => !w.isDestroyed() && w.isMinimizable()) ?? windows[0];
   };
+
+  registerBillingIpc({
+    getMainWindow: () => mainWindowRef,
+    requirePersonalAccount: () => {
+      requireAppCapability(
+        'canUseCindyAccountServices',
+        'Billing requires a personal Cindy account.',
+      );
+      if (authManager.getAuthState().user?.membershipKind !== 'personal') {
+        throwIpcError('PERMISSION_DENIED', 'Billing is only available to personal accounts.');
+      }
+    },
+  });
 
   initAppBadgeService({
     getWindow: () => getWindow() ?? null,
@@ -2450,22 +2487,38 @@ const registerIpcHandlers = () => {
       }
     },
   );
-  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_GET, async () => {
-    return imDefaultSettingsWire();
+  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_GET, async (_e, rawChannel: unknown) => {
+    return imDefaultSettingsWire(parseImDefaultSettingsChannel(rawChannel));
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_SET, async (_e, patch: unknown) => {
-    writeImDefaultSettingsPatch(parseImDefaultSettingsPatch(patch));
-    return imDefaultSettingsWire();
-  });
-  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_RESET, async () => {
-    resetImDefaultSettings();
-    return imDefaultSettingsWire();
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_SET,
+    async (_e, patch: unknown, rawChannel: unknown) => {
+      const channel = parseImDefaultSettingsChannel(rawChannel);
+      writeImDefaultSettingsPatch(parseImDefaultSettingsPatch(patch), channel);
+      return imDefaultSettingsWire(channel);
+    },
+  );
+  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_RESET, async (_e, rawChannel: unknown) => {
+    const channel = parseImDefaultSettingsChannel(rawChannel);
+    if (channel) {
+      resetImDefaultSettingsChannel(channel);
+    } else {
+      resetImDefaultSettings();
+    }
+    return imDefaultSettingsWire(channel);
   });
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
     return subagentModelSettingsWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_SET, async (_e, patch: unknown) => {
-    writeSubagentModelSettingsPatch(parseSubagentModelSettingsPatch(patch));
+    // 配对一致性按「patch 合并当前存储」判定:有效模型为 null 时来源强制清空,
+    // 同时兜住「清模型漏清来源」与「模型未指定时的 provider-only patch」两类孤儿写入。
+    writeSubagentModelSettingsPatch(
+      reconcileSubagentModelSettingsPatch(
+        parseSubagentModelSettingsPatch(patch),
+        readSubagentModelSettings(),
+      ),
+    );
     return subagentModelSettingsWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async () => {
@@ -3069,6 +3122,8 @@ const registerIpcHandlers = () => {
 
   // safeStorage IPC handlers
   const isValidKey = (key: string): boolean => /^[a-zA-Z0-9_-]+$/.test(key);
+  const isValidRendererKey = (key: string): boolean =>
+    isValidKey(key) && isRendererAccessibleSafeStorageKey(key);
   const resolveSafeStorageFilepath = (key: string): string | null => {
     const scopedKey = resolveOwnerScopedSecretStorageKey(key);
     return scopedKey
@@ -3121,11 +3176,19 @@ const registerIpcHandlers = () => {
     cancelCodexAuthModeChange();
   };
 
+  const notifyProviderKeyChanged = (providerId: string): void => {
+    getGhostSetupChangeBus().emitAll({
+      source: 'host_config',
+      ref: `provider:${providerId}`,
+    });
+  };
+
   ipcMain.handle(
     'safe-storage-store',
-    async (_event: Electron.IpcMainInvokeEvent, key: string, value: string): Promise<boolean> => {
+    async (event: Electron.IpcMainInvokeEvent, key: string, value: string): Promise<boolean> => {
       try {
-        if (!isValidKey(key)) return false;
+        assertTrustedAppRendererEvent(event);
+        if (!isValidRendererKey(key)) return false;
         const filepath = resolveSafeStorageFilepath(key);
         if (!filepath) return false;
         if (!safeStorage.isEncryptionAvailable()) return false;
@@ -3146,7 +3209,10 @@ const registerIpcHandlers = () => {
           if (restartResult.ok) {
             // 手填 XD key 保存成功:来源标记翻 manual(endpoint 回落编译期常量,
             // 与 model-access 自动下发的 endpoint 解耦,见 credentialsStore 注释)。
-            if (key === 'api_key') noteManualXdKeySaved();
+            if (key === 'api_key') {
+              noteManualXdKeySaved();
+              notifyProviderKeyChanged('xd');
+            }
             return true;
           }
           if (hadPrevious && previousContent !== null)
@@ -3168,9 +3234,10 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle(
     'safe-storage-read',
-    async (_event: Electron.IpcMainInvokeEvent, key: string): Promise<string | null> => {
+    async (event: Electron.IpcMainInvokeEvent, key: string): Promise<string | null> => {
       try {
-        if (!isValidKey(key)) return null;
+        assertTrustedAppRendererEvent(event);
+        if (!isValidRendererKey(key)) return null;
         const filepath = resolveSafeStorageFilepath(key);
         if (!filepath) return null;
         if (!safeStorage.isEncryptionAvailable()) return null;
@@ -3188,11 +3255,12 @@ const registerIpcHandlers = () => {
   ipcMain.handle(
     'safe-storage-remove',
     async (
-      _event: Electron.IpcMainInvokeEvent,
+      event: Electron.IpcMainInvokeEvent,
       key: string,
     ): Promise<{ success: boolean; error?: string }> => {
       try {
-        if (!isValidKey(key)) {
+        assertTrustedAppRendererEvent(event);
+        if (!isValidRendererKey(key)) {
           return { success: false, error: 'invalid key' };
         }
         const filepath = resolveSafeStorageFilepath(key);
@@ -3231,7 +3299,10 @@ const registerIpcHandlers = () => {
           return { success: false, error: 'codex_restart_failed' };
         }
         // 手填 XD key 被删除(断开):清来源标记,endpoint 回落编译期常量。
-        if (key === 'api_key') noteManualXdKeyRemoved();
+        if (key === 'api_key') {
+          noteManualXdKeyRemoved();
+          notifyProviderKeyChanged('xd');
+        }
         return { success: true };
       } catch (err: unknown) {
         console.error('[safe-storage-remove]', err);
@@ -3259,13 +3330,24 @@ const registerIpcHandlers = () => {
           authManager.getAuthState(),
         );
       }
+      // 使用统计同意闸的一次性存量迁移:只认冷启动恢复出来的登录态。内部有 guard,
+      // 多个窗口各自 initialize 只会评估一次(见 analyticsSettingsService)。
+      // 埋点是 best-effort:再包一层 catch,任何异常都不得让这次认证被判失败
+      // (那会让用户被归一成未登录)。
+      try {
+        noteAuthColdStartState(state, pendingCompletion);
+      } catch (analyticsErr) {
+        console.warn('[analytics] cold-start consent migration failed', analyticsErr);
+      }
       return state;
     } catch (err) {
       if (!app.isPackaged) {
         markDesktopDevStartupFailed(
           'AUTH_INIT_FAILED',
           err instanceof Error ? err.message : String(err),
-          { phase: 'auth:initialize' },
+          {
+            phase: 'auth:initialize',
+          },
         );
       }
       throw err;
@@ -3354,12 +3436,6 @@ const registerIpcHandlers = () => {
     accountDeletionHandlers.consumeRestoredNotice(),
   );
 
-  ipcMain.handle('content-moderation:review-user-prompt', async (event, value: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    validateUserPromptReviewValue(value);
-    return moderateUserPrompt(value);
-  });
-
   // ── Profile 编辑 IPC(设置 → 用户卡片编辑;业务体在 profileEdit.ts,
   //    资料直写 auth-server,头像经 oss-server 预签名直传) ──
 
@@ -3389,7 +3465,6 @@ const registerIpcHandlers = () => {
       }
       return result;
     },
-    moderateProfile: (input) => moderateProfileUpdate(input),
     patchProfile: (patch) => authManager.updateServerProfile(patch),
     logWarn: (message, err) => profileEditLog.warn(message, err),
   };
@@ -4054,13 +4129,6 @@ const registerIpcHandlers = () => {
   disposeProviderAccessAuthListener = authManager.onAuthStateChange(() => {
     refreshProviderAccessAfterAuthChange();
   });
-  let moderationAuthEpoch = authManager.getAuthIdentityEpoch();
-  disposeContentModerationAuthListener = authManager.onAuthStateChange(() => {
-    const nextEpoch = authManager.getAuthIdentityEpoch();
-    if (nextEpoch === moderationAuthEpoch) return;
-    moderationAuthEpoch = nextEpoch;
-    cancelAllReleasedOutputs();
-  });
 
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
   ipcMain.handle(
@@ -4430,7 +4498,10 @@ const registerIpcHandlers = () => {
           // 错误,无法区分"file:// 编码问题"还是"文件 / 权限问题",难排障。
           createLogger('shell:open-file-in-browser').warn(
             'openExternal failed, fallback to openPath',
-            { fileUrl, error: String(e) },
+            {
+              fileUrl,
+              error: String(e),
+            },
           );
           const errMsg = await shell.openPath(filePath);
           if (errMsg) return { success: false, error: errMsg };
@@ -5031,7 +5102,7 @@ async function runSmokeTest(userId: string): Promise<void> {
 
 // AUMID 三位一体:必须与 NSIS appId(forge.config 按构建区域从 brandAppId() 取)
 // 与快捷方式 AUMID 逐字符一致。值经 shared/brandRegion 按构建期区域烘焙
-// (cn=com.xd.cindycn / global=com.xd.cindy,dev 默认 cn)。
+// (cn=com.xd.cindycn / global=com.xd.cindy；未注入 region 时默认 global)。
 const WINDOWS_APP_USER_MODEL_ID = CURRENT_APP_ID;
 
 /**
@@ -5321,6 +5392,23 @@ app.on('ready', async () => {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+      // Hook and personal IM both require the current owner's DbClient. Start
+      // them from this authoritative Main-side readiness point instead of
+      // relying only on the renderer's later fire-and-forget
+      // app:ready-for-bot signal. That signal can be lost during cold-start
+      // auto-login or an owner remount, leaving a saved Feishu bot disconnected
+      // and unable to claim the owner from its first p2p message.
+      startAccountIntegrationsAfterOwnerDbReady(userId, {
+        isOwnerCurrent: (ownerId) =>
+          isLocalDbOwnerCurrent(
+            authManager.getAuthState(),
+            ownerId,
+            isAppSessionBoundaryPending(),
+          ),
+        startHookControlAccount,
+        startImConnection,
+        log: dbClientLog,
+      });
       attemptStartScheduler();
       attemptStartEmbeddingHost();
       // 旧「资料本地覆写」方案退役(2026-07)的一次性清理:清当前账号名下的
@@ -5460,14 +5548,11 @@ app.on('ready', async () => {
   im.registerIpc();
   // 挂业务 orchestrator: 订阅 feishuIm.onMessage / .onCardAction。orchestrator
   // 必须在 createWindow 前挂好,避免 renderer 起来后第一波 IPC / event 找不到
-  // handler。bot 的 WS 长连接此处不启动 —— 由 renderer 在用户登录 + localDb 就绪
-  // 后通过 'app:ready-for-bot' IPC 触发(见下方 handler)。
+  // handler。FeishuBot 的 WS 长连接必须等当前用户 localDb ready 后再启动。
   startImOrchestrators();
-  // Renderer → main 的 "应用真正就绪" 信号。LocalDbGate 在 localDb.ensureReady
-  // 成功之后调一次。在此之前 bot 不上线 —— 否则会出现"bot 已上线但 localDb 未
-  // ready, 用户回消息直接 500"的 race(2026-05-07 王韬反馈)。
-  // 多次调用是幂等的(startImConnection 内部 connectionStarted 守卫),
-  // renderer remount / 切账号都不会重复连。
+  // Renderer → main 的 "应用真正就绪" 兼容信号。LocalDbGate 在
+  // localDb.ensureReady 成功之后调一次。Hook 与 FeishuBot 已在 localDb onReady
+  // 的 Main 权威时点激活，这里为旧时序与瞬时失败保留幂等重试。
   ipcMain.handle('app:ready-for-bot', (event) => {
     assertTrustedAppRendererEvent(event);
     startHookControlAccount();
@@ -5477,8 +5562,17 @@ app.on('ready', async () => {
   // 强制引用避免 tree-shaking 干掉 feishuIm（imHost 已通过 im 间接持有，但 main/im 也直接用它）
   void feishuIm;
   // 端点清单已就绪、IPC 已注册,此后 second-instance / activate 允许按需建窗。
+  // 使用统计(TapDB)的同意闸:必须在 createWindow **之前**注册。renderer 的
+  // tapdbClient 一挂载就 invoke analytics:settings-get 来决定是否初始化 SDK,
+  // handler 还没注册的话那次 invoke 会 reject,而它是 fail closed 的 —— 已同意
+  // 的用户会一直不上报,直到手动去设置里拨一下开关。
+  initAnalyticsSettingsService();
   startupWindowCreationAllowed = true;
   createWindow();
+  // 预热仅服务 dev macOS，延迟执行避免和启动关键路径争用 CPU；失败由入口内部吞掉。
+  setTimeout(() => {
+    prewarmMacComputerPermissionGuideHelper();
+  }, 3_000);
   initUpdateService();
   // 在线人数心跳:App 启动即上报,内部走 deviceId / userId 兜底,登录前后都活
   initHeartbeatService();
@@ -5492,6 +5586,20 @@ app.on('ready', async () => {
   // 睡醒白屏取证:suspend/resume/lock/unlock 全部落日志,给 renderer 侧
   // render-watchdog 的漂移/无帧日志提供时间锚点。
   installPowerEventDiagnostics({ powerMonitor });
+
+  // 挂起/锁屏时通知 renderer 释放语音输入的保活麦克风(用户已离开,再占着采集
+  // 设备只剩隐私指示灯常亮和 idle-sleep assertion 的代价)。
+  installVoiceInputPowerRelease({
+    powerMonitor,
+    broadcast: (channel, payload) => {
+      broadcastVoiceInputPowerState(
+        BrowserWindow.getAllWindows(),
+        channel,
+        payload,
+        voicePowerBroadcastLog,
+      );
+    },
+  });
 
   // ── System resume: refresh tokens after sleep/hibernate ──
   powerMonitor.on('resume', () => {
@@ -5568,8 +5676,6 @@ onQuit(
   () => {
     disposeProviderAccessAuthListener?.();
     disposeProviderAccessAuthListener = null;
-    disposeContentModerationAuthListener?.();
-    disposeContentModerationAuthListener = null;
   },
   'sync',
 );
@@ -5653,14 +5759,22 @@ function memorySettingsWire() {
   };
 }
 
-function imDefaultSettingsWire() {
-  const state = readImDefaultSettingsState();
+function imDefaultSettingsWire(channel?: ImDefaultSettingsChannel) {
+  const state = readImDefaultSettingsState(channel);
   return {
     ...state.value,
     isCustomized: state.isCustomized,
     customizedKeys: state.customizedKeys,
     defaults: state.defaults,
   };
+}
+
+function parseImDefaultSettingsChannel(raw: unknown): ImDefaultSettingsChannel | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!isImDefaultSettingsChannel(raw)) {
+    throwIpcError('INVALID_PARAMS', 'im default settings channel invalid');
+  }
+  return raw;
 }
 
 function subagentModelSettingsWire() {
@@ -5679,7 +5793,8 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
   }
   const input = raw as Record<string, unknown>;
   const patch: SubagentModelSettingsPatch = {};
-  for (const key of ['claudeCode', 'codex'] as const) {
+  // providerId 与 model id 同约束(短标识串),共用同一套校验/归一化。
+  for (const key of ['claudeCode', 'claudeCodeProviderId', 'codex', 'codexProviderId'] as const) {
     if (!(key in input)) continue;
     const value = input[key];
     if (!isValidSubagentModelIdInput(value)) {

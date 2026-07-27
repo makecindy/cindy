@@ -22,9 +22,16 @@
  */
 
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
-import { useRemoteDevices, type RemoteDeviceSummary } from './remoteProjectsStore';
+import {
+  useRemoteBootstrapFailedDeviceIds,
+  useRemoteDevices,
+  type RemoteDeviceSummary,
+} from './remoteProjectsStore';
 import { revokedDevicesStore } from './revokedDevicesStore';
-import { useDeviceLinkDeviceList } from './useDeviceLinkDeviceList';
+import {
+  useDeviceLinkDeviceList,
+  useDeviceLinkDeviceListSettled,
+} from './useDeviceLinkDeviceList';
 import { buildSwitcherDevices, selectableDeviceIds, type SwitcherDevice } from './switcherDevices';
 import {
   MACHINE_ALL,
@@ -40,6 +47,53 @@ export interface SelectedMachineConnectingInput {
   rawSelection: MachineSelection;
   devices: readonly SwitcherDevice[];
   syncedDevices: readonly RemoteDeviceSummary[];
+  bootstrapFailedDeviceIds: ReadonlySet<string>;
+}
+
+export interface RemoteSessionBootstrapLoadingInput {
+  selectedMachineId: MachineSelection;
+  deviceListSettled: boolean;
+  devices: readonly SwitcherDevice[];
+  syncedDevices: readonly RemoteDeviceSummary[];
+  bootstrapFailedDeviceIds: ReadonlySet<string>;
+}
+
+/**
+ * 当前机器作用域是否仍包含尚未完成首次 sessions snapshot 的远程设备。
+ * syncedDevices 即使 sessionCount=0 也代表 bootstrap 已落过权威空快照；
+ * connecting 且没有对应分片才是冷启动中的未知状态。
+ */
+export function shouldWaitForRemoteSessionBootstrap({
+  selectedMachineId,
+  deviceListSettled,
+  devices,
+  syncedDevices,
+  bootstrapFailedDeviceIds,
+}: RemoteSessionBootstrapLoadingInput): boolean {
+  const selectedRemoteIds =
+    selectedMachineId === MACHINE_ALL
+      ? null
+      : new Set(selectedMachineId.filter((id) => id !== MACHINE_LOCAL));
+  if (selectedRemoteIds?.size === 0) return false;
+
+  const syncedIds = new Set(syncedDevices.map((device) => device.deviceId));
+  // 明确选择的远端设备若都已有权威 shard（包括 0 会话），设备目录的独立重试不应
+  // 把已知作用域重新挡回 loading；「所有」仍必须等目录结算，才能知道完整远端集合。
+  if (
+    selectedRemoteIds !== null &&
+    [...selectedRemoteIds].every((deviceId) => syncedIds.has(deviceId))
+  ) {
+    return false;
+  }
+  if (!deviceListSettled) return true;
+
+  return devices.some(
+    (device) =>
+      device.status === 'connecting' &&
+      !syncedIds.has(device.deviceId) &&
+      !bootstrapFailedDeviceIds.has(device.deviceId) &&
+      (selectedRemoteIds === null || selectedRemoteIds.has(device.deviceId)),
+  );
 }
 
 /**
@@ -52,12 +106,14 @@ export function shouldShowSelectedMachineConnectingPlaceholder({
   rawSelection,
   devices,
   syncedDevices,
+  bootstrapFailedDeviceIds,
 }: SelectedMachineConnectingInput): boolean {
   const effective = normalizeSelectedMachineId(rawSelection, selectableDeviceIds(devices));
   if (effective === MACHINE_ALL || effective.includes(MACHINE_LOCAL)) return false;
   for (const deviceId of effective) {
     const selectedDevice = devices.find((d) => d.deviceId === deviceId);
     if (selectedDevice?.status !== 'connecting') return false;
+    if (bootstrapFailedDeviceIds.has(deviceId)) return false;
     const cachedSessionCount =
       syncedDevices.find((d) => d.deviceId === deviceId)?.sessionCount ?? 0;
     if (cachedSessionCount > 0) return false;
@@ -104,11 +160,38 @@ export function useSelectedMachineConnecting(): boolean {
   const raw = useSelectedMachineId();
   const devices = useSwitcherDevices();
   const synced = useRemoteDevices();
+  const bootstrapFailedDeviceIds = useRemoteBootstrapFailedDeviceIds();
   return shouldShowSelectedMachineConnectingPlaceholder({
     rawSelection: raw,
     devices,
     syncedDevices: synced,
+    bootstrapFailedDeviceIds,
   });
+}
+
+/**
+ * 当前可见列表是否还在等待 device-link 远程会话的首次 bootstrap。
+ * 「所有」作用域包含本机与全部远程源，因此远端设备清单或任一相关首快照未落地时，
+ * 侧栏继续显示加载态，避免本地 sessions 先完成后短暂误报真实空态。
+ */
+export function useRemoteSessionBootstrapLoading(
+  selectedMachineId: MachineSelection,
+): boolean {
+  const deviceListSettled = useDeviceLinkDeviceListSettled();
+  const devices = useSwitcherDevices();
+  const synced = useRemoteDevices();
+  const bootstrapFailedDeviceIds = useRemoteBootstrapFailedDeviceIds();
+  return useMemo(
+    () =>
+      shouldWaitForRemoteSessionBootstrap({
+        selectedMachineId,
+        deviceListSettled,
+        devices,
+        syncedDevices: synced,
+        bootstrapFailedDeviceIds,
+      }),
+    [selectedMachineId, deviceListSettled, devices, synced, bootstrapFailedDeviceIds],
+  );
 }
 
 export interface MachineSwitcherState {

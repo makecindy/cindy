@@ -8,6 +8,7 @@ import {
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
+import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 
 /**
  * builtinGhostProvisioner — 内置意识的启动播种(第一方可信通道)。
@@ -130,6 +131,32 @@ export function listBuiltinSeedIds(seedRootDirs: string[]): string[] {
     for (const id of listSeedIdsInRoot(root)) ids.add(id);
   }
   return [...ids].sort();
+}
+
+/** 列出当前身份本轮会播种的 command(已墓碑的 id 由调用方排除)。 */
+export function listEligibleBuiltinCommands(
+  seedRootDirs: string[],
+  identity: ProvisionIdentity | null,
+  excludedIds: ReadonlySet<string> = new Set(),
+  log?: BuiltinProvisionerLogger,
+): string[] {
+  const commands = new Set<string>();
+  const seen = new Set<string>();
+  for (const root of seedRootDirs) {
+    const ids = listSeedIdsInRoot(root);
+    if (ids.length === 0) continue;
+    const config = readProvisioningConfig(root, log);
+    if (config === null) continue;
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (excludedIds.has(id) || !matchesAudience(config.get(id)?.audience, identity)) continue;
+      const manifest = readSeedManifest(path.join(root, id), id, log);
+      const command = manifest?.command?.toLowerCase();
+      if (command) commands.add(command);
+    }
+  }
+  return [...commands].sort();
 }
 
 /** 列出单个种子根下的意识 id(= 子目录名;点开头跳过)。种子根缺失返回空。 */
@@ -545,6 +572,14 @@ function readSeedManifest(seedDir: string, id: string, log?: BuiltinProvisionerL
   }
   if (v.manifest.id !== id) {
     log?.warn('builtin seed skipped: dir name != manifest id', { seedDir, manifestId: v.manifest.id });
+    return null;
+  }
+  const localeValidation = validateGhostLocaleResourcesInDirectory(seedDir, v.manifest);
+  if (!localeValidation.ok) {
+    log?.warn('builtin seed skipped: invalid locale resources', {
+      seedDir,
+      reason: localeValidation.reason,
+    });
     return null;
   }
   return v.manifest;

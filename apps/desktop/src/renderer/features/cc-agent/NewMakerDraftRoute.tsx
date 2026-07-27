@@ -54,6 +54,8 @@ import {
   type RemoteProjectTarget,
 } from '@/components/new-chat/AddRemoteProjectDialog';
 import { useHasAnyRemoteTarget } from '@/hooks/useHasAnyReadyRemoteHost';
+import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
+import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { buildDeviceLinkCreateArgs } from './deviceLinkCreateArgs';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
@@ -64,6 +66,7 @@ import { useAttachments } from '@/hooks/useAttachments';
 import {
   useNewMakerDraft,
   switchVendor,
+  getDraft,
   patchDraft,
   patchCollab,
   patchCurrentVendorPrefs,
@@ -100,6 +103,7 @@ import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
 import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
+import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor, Session } from '@/lib/ccAgent.types';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -125,6 +129,7 @@ import {
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { createLogger } from '@/lib/logger';
+import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import {
   useAgentCapabilities,
@@ -133,6 +138,7 @@ import {
   type AgentCapabilities,
 } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
+import { isModelEnabled } from '@/state/modelVisibilityPrefs';
 import {
   useDeviceProviders,
   evictDeviceProviders,
@@ -144,7 +150,7 @@ import {
   useProjectPickerOptions,
 } from '@/hooks/useProjectPickerOptions';
 import { resolveFastSupported, deriveModelsFromProviders } from '@/lib/providerModels';
-import { effectiveSourceIdForModel, getModel, sessionModelSupportsFastMode, connectedProvidersForAgent } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, getModel, providerOffersModel, sessionModelSupportsFastMode, connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
 import {
   resolveDeviceLinkDraftDefaults,
@@ -201,10 +207,32 @@ const DRAFT_IMAGE_URL_PREFIX = `xdt-image://${NEW_MAKER_DRAFT_KEY}/`;
  * 由 draft.collab 拼出 createSession 后 enableOrca 的入参:与会话内 requestEnableCollab 同口径。
  * 有 workerConfig(用户在「开启协同」弹窗配过 role/model/…)则透传全量;否则只带 workerAgent 回退默认。
  */
-function draftEnableOrcaOptions(collab: CollabDraft) {
+function draftEnableOrcaOptions(
+  collab: CollabDraft,
+  providers: ProviderView[],
+  providersReady: boolean,
+) {
   const workerAgent: 'claude-code' | 'codex' = collab.worker === 'codex' ? 'codex' : 'claude-code';
   const cfg = collab.workerConfig;
   if (!cfg) return { workerAgent };
+  // 草稿里持久化的来源在发送时按 live 目录重新收窄(已连接 + 提供该模型 + 未被可见性
+  // 隐藏,与 CreateWorkerPopover.narrowProviderSource 同规则):草稿可跨重启存活,来源
+  // 可能已断开/掉模型 —— 直接透传会撞 main 的 PROVIDER_ROUTE_UNAVAILABLE 精确 preflight,
+  // 让协同退化成单会话(codex review)。收窄为 undefined = 交回默认路由解析。
+  // 仅在目录快照就绪时收窄:loading 中把空/滞后快照当权威会误清有效来源(静默降级,
+  // 用户无感);未就绪透传原值,真失效由 main 精确 preflight 报可操作错误(codex review)。
+  const providerId = (() => {
+    if (!cfg.providerId) return undefined;
+    if (!providersReady) return cfg.providerId;
+    const provider = connectedProvidersForAgent(providers, workerAgent).find(
+      (p) => p.id === cfg.providerId,
+    );
+    if (!provider || !providerOffersModel(provider, cfg.model, workerAgent)) return undefined;
+    const catalogModel = getModel(provider, cfg.model, workerAgent);
+    return catalogModel && isModelEnabled(workerAgent, cfg.providerId, catalogModel)
+      ? cfg.providerId
+      : undefined;
+  })();
   return {
     workerAgent,
     role: cfg.role,
@@ -212,6 +240,7 @@ function draftEnableOrcaOptions(collab: CollabDraft) {
     model: cfg.model,
     effort: cfg.effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined,
     fast: cfg.fast,
+    providerId,
     delegateTask: cfg.initialTask || undefined,
   };
 }
@@ -324,8 +353,10 @@ export function NewMakerDraftRoute() {
   const { t } = useTranslation();
   const draft = useNewMakerDraft();
   const navigate = useNavigate();
-  // minWidth=640:自适应内容列在大屏封顶 1220(hook 内 MAX),小屏兜一个体面下限
-  // (与对话页的 max 对称);窄于下限时 hook 自动回落成"填满容器",不溢出。
+  // 首参 914=内容封顶宽(→ inputWidth 封顶 934):大屏留出左右呼吸空间,不再顶满全宽;
+  // 与进行中对话页(CCAgentSessionView 同传 914)一致,发送首条消息时输入框宽度不跳变。
+  // minWidth=640:小屏兜一个体面下限(与对话页对称);窄于下限时 hook 自动回落成
+  // "填满容器",不溢出。
   const { containerRef, inputWidth } = useProportionalWidth(914, { minWidth: 640 });
   // The available rail can shrink when either sidebar opens while the
   // viewport itself remains wide. Keep the draft layout responsive to that
@@ -416,10 +447,16 @@ export function NewMakerDraftRoute() {
   const effectiveDeviceLinkDeviceId = draft.deviceLinkDeviceId ?? undefined;
   const effectiveDeviceLinkDeviceName = draft.deviceLinkDeviceName;
   const isDeviceLinkDraft = effectiveWorkingDir != null && effectiveDeviceLinkDeviceId != null;
+  // 零可用模型引导卡:device-link 草稿不出(连接态在被控端,本机替它连不上)。
+  const providerOnboarding = useProviderOnboarding();
+  const showProviderOnboardingCard = providerOnboarding.visible && !isDeviceLinkDraft;
   const effectiveExtraDirs = draft.extraDirs;
   const effectiveCollab = collab;
-  const effectiveCollabEnabled =
-    effectiveCollab.enabled && effectiveWorkingDir != null && effectiveRemoteHostId == null;
+  const collabPolicyEligible =
+    effectiveWorkingDir != null &&
+    effectiveRemoteHostId == null &&
+    effectiveDeviceLinkDeviceId == null;
+  const collabPolicy = useCollabProjectPolicy(effectiveWorkingDir, collabPolicyEligible);
   const projectPickerOptions = useProjectPickerOptions();
   const createAgentModeLabel =
     getProjectPickerDisplayName(effectiveWorkingDir, projectPickerOptions) ??
@@ -443,6 +480,22 @@ export function NewMakerDraftRoute() {
     setRightSidebarSessionId?.(draftRightSidebar.sessionId);
     return () => setRightSidebarSessionId?.(null);
   }, [draftRightSidebar.sessionId, setRightSidebarSessionId]);
+
+  useEffect(() => {
+    if (
+      effectiveCollab.enabled &&
+      !collabPolicy.loading &&
+      !collabPolicy.unavailable &&
+      !collabPolicy.enabled
+    ) {
+      patchCollab({ enabled: false });
+    }
+  }, [
+    collabPolicy.enabled,
+    collabPolicy.loading,
+    collabPolicy.unavailable,
+    effectiveCollab.enabled,
+  ]);
 
   useEffect(() => {
     const draftSessionId = draftRightSidebar.sessionId;
@@ -471,7 +524,7 @@ export function NewMakerDraftRoute() {
   const { capabilities, loading: capabilitiesLoading } = useAgentCapabilities(capabilityAgentKind, effectiveDeviceLinkDeviceId);
   // device-link「以被控端为准」:远程草稿用被控端经隧道带来的 providers(per-provider,含 fast 能力);
   // 本地草稿用本机 providers。fast 判定统一交给 resolveFastSupported(不在控制端另写远程逻辑)。
-  const { providers: localProviders } = useProviders();
+  const { providers: localProviders, loading: localProvidersLoading } = useProviders();
   const { providers: deviceProviders, loading: deviceProvidersLoading } = useDeviceProviders(effectiveDeviceLinkDeviceId);
   const providers = effectiveDeviceLinkDeviceId ? deviceProviders : localProviders;
 
@@ -1099,9 +1152,19 @@ export function NewMakerDraftRoute() {
     patchDraft({ workingDir: dir, remoteHostId: null });
   }, []);
 
+  // ─── 新草稿入场:引用目录清零 ──────────────────────────────────────────
+  // 引用目录是"这次给 agent 额外看哪"的单次授权,不是"我常用哪个"的偏好记忆:
+  // 上一个未发送草稿留下的目录若静默带进新草稿,用户会无感知地扩大 agent 可见
+  // 范围(2026-07-25 用户定稿)。每次进入草稿页一律从空开始;store 侧 sanitize
+  // 也不跨重启还原,双保险。workingDir / 文本 / 模型等便利性记忆不受影响。
+  // StrictMode 双 mount 安全:清空幂等;guard 避免空转 emit。
+  useEffect(() => {
+    if (getDraft().extraDirs.length > 0) patchDraft({ extraDirs: [] });
+  }, []);
+
   // ─── 用户增删 extraDirs → 写回 draft ────────────────────────────────────
-  // 草稿期 (还没建 session) 没有 IPC 可调; localStorage 持久化 + 走 createSession
-  // 时一次性透传到 DB / agent 即可。
+  // 草稿期 (还没建 session) 没有 IPC 可调; 内存态 + 走 createSession
+  // 时一次性透传到 DB / agent 即可(sanitize 不跨重启还原,见 store 注释)。
   const handleExtraDirsChange = useCallback((next: string[]) => {
     patchDraft({ extraDirs: next });
   }, []);
@@ -1145,9 +1208,9 @@ export function NewMakerDraftRoute() {
   };
 
   // ─── Send 拦截:vendorAuthGate → createSession → send / background worktree ──
-  // 同步 return false 阻止 ChatInput 立即清空输入(异步流程未必成功)。
+  // 异步流程未接受发送时 resolve false，让 ChatInput 保留当前草稿。
   const handleSend = useCallback(
-    (
+    async (
       message: string,
       model: string,
       effort: Effort,
@@ -1162,8 +1225,31 @@ export function NewMakerDraftRoute() {
         slashCommandRanges?: SlashCommandRange[];
         onAccepted?: () => void;
       },
-    ): boolean | undefined => {
+    ): Promise<boolean | undefined> => {
       if (sendInFlightRef.current) return false;
+      if (effectiveCollab.enabled && collabPolicy.loading) {
+        toast.warning(t('newChat.collaboration.loadingHint'));
+        return false;
+      }
+      let policyEnabled = collabPolicy.enabled;
+      let policyUnavailable = collabPolicy.unavailable;
+      if (effectiveCollab.enabled && policyUnavailable) {
+        const refreshed = await collabPolicy.refresh();
+        policyEnabled = refreshed.enabled;
+        policyUnavailable = refreshed.unavailable;
+      }
+      if (effectiveCollab.enabled && (policyUnavailable || !policyEnabled)) {
+        toast.warning(
+          t(
+            policyUnavailable
+              ? 'newChat.collaboration.unavailableHint'
+              : 'newChat.collaboration.disabledHint',
+          ),
+        );
+        return false;
+      }
+      const shouldEnableCollab =
+        effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
       // device-link 切设备后,capabilities/providers hook 可能还没 re-render 到新设备快照;
       // 此时 effectiveFastMode / supportsFastMode / sendProviderId 仍基于旧设备。
       if (isDeviceLinkDraft && (capabilitiesLoading || deviceProvidersLoading)) return false;
@@ -1253,11 +1339,16 @@ export function NewMakerDraftRoute() {
                 }
                 remoteWorkingDir = resp.meta.path;
               } catch (err) {
-                // 隧道失败(含老被控端 CHANNEL_NOT_ALLOWED)→ unknown 类 toast,回显原始信息。
-                showWorktreeError({
-                  kind: 'unknown',
-                  message: err instanceof Error ? err.message : String(err),
-                });
+                const remoteWorkdirMessage = getRemoteWorkingDirErrorMessage(err, t);
+                if (remoteWorkdirMessage) {
+                  toast.error(remoteWorkdirMessage);
+                } else {
+                  // 隧道失败(含老被控端 CHANNEL_NOT_ALLOWED)仍沿用 worktree 通用错误提示。
+                  showWorktreeError({
+                    kind: 'unknown',
+                    message: err instanceof Error ? err.message : String(err),
+                  });
+                }
                 return;
               } finally {
                 setWtCreating(false);
@@ -1488,11 +1579,11 @@ export function NewMakerDraftRoute() {
                 // 才进入 1.6s 平滑期, overlay 从 "空 ChatView" 自然过渡到 "已在
                 // streaming 的 ChatView", 不暴露中间空窗。clear 时机见本 async 块末尾。
 
-                if (effectiveCollabEnabled) {
+                if (shouldEnableCollab) {
                   try {
                     const result = await window.electronAPI.maker.enableOrca(
                       newSession.id,
-                      draftEnableOrcaOptions(effectiveCollab),
+                      draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
                     );
                     // worktree 创建在后台完成,组件可能已经切走;这里读取当前 URL,
                     // 避免用 render 时捕获的旧路由误判。
@@ -1568,8 +1659,7 @@ export function NewMakerDraftRoute() {
             // 自动分配 <userData>/dialogues/<date>/<sid>/ 作为运行目录,不进入项目段。
             workspaceKind: workingDir ? 'project' : 'dialogue',
             remoteHostId: workingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
-            // Codex 不支持 extraDirs (capability=false), agent 收到也忽略;
-            // 但 draft.extraDirs 是 vendor 无关字段, 这里照传, DB 存了也无害。
+            // extraDirs 是 vendor 无关字段；Claude 与 Codex 都按只读引用目录透传。
             extraDirs: effectiveExtraDirs,
             providerId,
           });
@@ -1603,11 +1693,11 @@ export function NewMakerDraftRoute() {
           // 不阻断 send 流程。worker 类型由 popover 选择,失败回退到单 session 路由。
           let orcaNavTarget: string | null = null;
           let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
-          if (effectiveCollabEnabled) {
+          if (shouldEnableCollab) {
             try {
               const result = await window.electronAPI.maker.enableOrca(
                 newSession.id,
-                draftEnableOrcaOptions(effectiveCollab),
+                draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
               );
               orcaNavTarget = `/cc-agent/${newSession.id}`;
               orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
@@ -1653,7 +1743,9 @@ export function NewMakerDraftRoute() {
           });
         } catch (err) {
           log.error('[draft send]', err);
-          toast.error(t('ccAgent.draft.createSessionFailed'));
+          toast.error(
+            getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed'),
+          );
         } finally {
           setWtCreating(false);
           sendInFlightRef.current = false;
@@ -1681,11 +1773,20 @@ export function NewMakerDraftRoute() {
       // 漏在依赖里会让"切换后立即发送"用到旧值(bot review P2)。
       effectivePlanMode,
       patchActivePrefs,
-      effectiveCollabEnabled,
+      effectiveCollab.enabled,
+      collabPolicyEligible,
+      collabPolicy.enabled,
+      collabPolicy.loading,
+      collabPolicy.refresh,
+      collabPolicy.unavailable,
       effectiveCollab.worker,
       // workerConfig 也要进依赖:只改角色/模型/effort/初始任务(worker 类型不变)时,
       // 少了它 handleSend 会闭包吃旧的 effectiveCollab,起 Worker 用错配置(codex P2)。
       effectiveCollab.workerConfig,
+      // draftEnableOrcaOptions 现按 live 目录收窄草稿来源:快照与 loading 都要进
+      // 依赖,否则闭包吃旧快照,来源连/断后仍按陈旧目录收窄(codex review)。
+      localProviders,
+      localProvidersLoading,
       vendorAuthGate,
       createSession,
       navigate,
@@ -1703,6 +1804,25 @@ export function NewMakerDraftRoute() {
   // 失败抛错 → NewGoalDialog 内联报错并保持打开。
   const handleCreateGoal = useCallback(
     async (objective: string, limits: GoalLimitValues): Promise<void> => {
+      let policyEnabled = collabPolicy.enabled;
+      if (effectiveCollab.enabled && collabPolicyEligible) {
+        if (collabPolicy.loading) {
+          throw new Error(t('newChat.collaboration.loadingHint'));
+        }
+        if (collabPolicy.unavailable) {
+          const refreshed = await collabPolicy.refresh();
+          if (refreshed.unavailable) {
+            throw new Error(t('newChat.collaboration.unavailableHint'));
+          }
+          policyEnabled = refreshed.enabled;
+        }
+        if (!policyEnabled) {
+          patchCollab({ enabled: false });
+          throw new Error(t('newChat.collaboration.disabledHint'));
+        }
+      }
+      const shouldEnableCollab =
+        effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
       if (isDeviceLinkDraft && (capabilitiesLoading || deviceProvidersLoading)) {
         throw new Error(t('ccAgent.draft.deviceStillLoading'));
       }
@@ -1733,7 +1853,11 @@ export function NewMakerDraftRoute() {
               providerId: chatInitialProviderId ?? null,
             }),
           ],
-        );
+        ).catch((err) => {
+          const remoteWorkdirMessage = getRemoteWorkingDirErrorMessage(err, t);
+          if (remoteWorkdirMessage) throw new Error(remoteWorkdirMessage);
+          throw err;
+        });
         const remoteSessionId = (createResult as { sessionId?: string } | null)?.sessionId;
         if (!remoteSessionId) {
           throw new Error(t('ccAgent.draft.createSessionFailed'));
@@ -1754,17 +1878,51 @@ export function NewMakerDraftRoute() {
         setPendingGoal(remoteSessionId, { objective, limits });
         // 自动起名:goal 首轮走 GoalController 的 session.send、不经 maker:input:enqueue,
         // 被控端 deviceLinkAutoTitle 不会触发(Codex review #548)—— 与本地分支的
-        // autoNameSession 对位,经隧道生成标题并窄口径写回。fire-and-forget;
-        // 写回前 re-read,仅在会话仍无标题时落盘(用户手动改名 wins)。
+        // autoNameSession 对位:先立即用目标文案截断占位(Codex 式,侧边栏不停留在
+        // 'New Maker'),再经隧道生成智能标题窄口径覆盖。fire-and-forget;
+        // 覆盖前 re-read,仅在标题仍是占位/默认时落盘(用户手动改名 wins)。
         const titleAgentKind = persistedAgentKind === 'codex' ? 'codex' : 'claude-code';
+        // 先折叠空白并 trim 再截断,避免前导空白吃满 40 字符得到空占位(PR #296 review)。
+        const placeholderTitle = objective.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
         void (async () => {
           try {
+            // 无文本目标(理论不可达,goal 对话框必填)不起名:被控端旧版本的
+            // maker:generate-title 没有空消息防线,LLM 会把"请提供内容"当标题。
+            if (!placeholderTitle) return;
+            // 覆写守卫:仅当远端标题仍是默认占位时才自动起名(user rename wins,
+            // PR #296 review)。刚 create-session 建出的会话标题必为 'New Maker',
+            // 此检查防御极端 race;读取失败时按默认占位继续,不中断起名。
+            try {
+              const preCheck = (await window.electronAPI.deviceLink.invoke(
+                deviceId,
+                'local-db:sessions:get',
+                [remoteSessionId],
+              )) as { title?: string | null } | null;
+              const preTitle = preCheck?.title?.trim();
+              if (preTitle && preTitle !== 'New Maker') return;
+            } catch {
+              // 读不到当前标题时按"仍是默认占位"继续。
+            }
+            // 占位写入失败(旧被控端无此窄口径 / 瞬时通道错误)单独吞掉,不中断
+            // 后续智能起名——生成与写回不依赖占位成功(PR #296 review P1)。
+            try {
+              await window.electronAPI.deviceLink.invoke(
+                deviceId,
+                'local-db:sessions:patch-meta',
+                [remoteSessionId, { title: placeholderTitle }],
+              );
+            } catch {
+              // 占位失败仅暂留默认名,智能标题仍会尝试生成并写回。
+            }
             const gen = (await window.electronAPI.deviceLink.invoke(
               deviceId,
               'maker:generate-title',
               [{ message: objective, agentKind: titleAgentKind, sessionId: remoteSessionId }],
             )) as { title: string | null } | null;
-            const title = gen?.title?.trim() || objective.replace(/\n/g, ' ').slice(0, 40).trim();
+            const title = gen?.title?.trim();
+            // 智能标题与占位相同也照走写回:占位写入允许失败(上方 catch),
+            // 此时远端仍是 'New Maker',跳过会让标题永久停在默认名(PR #296
+            // review P1);占位已成功时重写同值幂等无害。
             if (!title) return;
             const current = (await window.electronAPI.deviceLink.invoke(
               deviceId,
@@ -1772,15 +1930,21 @@ export function NewMakerDraftRoute() {
               [remoteSessionId],
             )) as { title?: string | null } | null;
             const existingTitle = current?.title?.trim();
-            // 'New Maker' 是 maker:create-session 的默认占位符标题,允许覆写;
+            // 占位标题与 'New Maker'(maker:create-session 的默认占位符)都允许覆写;
             // 用户已手动改过的真实标题则保留(user rename wins)。
-            if (existingTitle && existingTitle !== 'New Maker') return;
+            if (
+              existingTitle &&
+              existingTitle !== 'New Maker' &&
+              existingTitle !== placeholderTitle
+            ) {
+              return;
+            }
             await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:patch-meta', [
               remoteSessionId,
               { title },
             ]);
           } catch {
-            // 起名失败不影响目标流程,侧边栏保留默认名。
+            // 起名失败不影响目标流程,侧边栏保留占位/默认名。
           }
         })();
         clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
@@ -1816,11 +1980,11 @@ export function NewMakerDraftRoute() {
       // session 不匹配返回 stale-context(codex P2)——与 Send 路径同口径,把 reveal
       // 塞进 navigate state,由 CCAgentSessionView mount 后消费。
       let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
-      if (effectiveCollabEnabled) {
+      if (shouldEnableCollab) {
         try {
           const result = await window.electronAPI.maker.enableOrca(
             newSession.id,
-            draftEnableOrcaOptions(effectiveCollab),
+            draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
           );
           orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
         } catch (err) {
@@ -1831,7 +1995,7 @@ export function NewMakerDraftRoute() {
       // setGoal 内部 ensureSession(拉起 agent)+ 发首轮(带目标指令)。
       await window.electronAPI.maker.setGoal({ sessionId: newSession.id, objective, limits });
       // 自动起名:/goal 新建的会话不经普通发送路径,scheduleAutoName 漏触发 → 标题会停在默认。
-      // 这里用目标文案补一次,与普通会话同款(宽限期 + 占位 + 不覆盖手动改名)。
+      // 这里用目标文案补一次,与普通会话同款(立即占位 + 智能标题后台覆盖 + 不覆盖手动改名)。
       makerChatStore.autoNameSession(newSession.id, objective, capabilityAgentKind);
       clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
       resetDraftWorkspaceAfterSend();
@@ -1860,8 +2024,16 @@ export function NewMakerDraftRoute() {
       effectiveRemoteHostId,
       effectiveExtraDirs,
       chatInitialProviderId,
-      effectiveCollabEnabled,
       effectiveCollab,
+      collabPolicyEligible,
+      collabPolicy.loading,
+      collabPolicy.refresh,
+      collabPolicy.unavailable,
+      collabPolicy.enabled,
+      // 同 handleSend:草稿来源收窄依赖 live 目录快照。
+      localProviders,
+      localProvidersLoading,
+      patchCollab,
       navigate,
       t,
     ],
@@ -2004,16 +2176,22 @@ export function NewMakerDraftRoute() {
             data-testid="create-agent-main"
             className={cn(
               'relative flex h-full min-w-0 w-full flex-col items-center justify-start',
+              // 引导卡比快速开始高一截:收紧顶部留白并允许纵向滚动,否则外壳
+              // overflow-hidden 会把卡片下半截裁在视口外(2026-07-24 用户实测)。
+              showProviderOnboardingCard && 'overflow-y-auto pb-8',
               isDraftNarrow
                 ? 'px-4 pt-[calc(max(64px,18vh)_+_32px_-_var(--content-header-h,46px))]'
-                : 'px-8 pt-[calc(max(96px,28vh)_+_46px_-_var(--content-header-h,46px))]',
+                : showProviderOnboardingCard
+                  ? 'px-8 pt-[calc(max(56px,10vh)_+_46px_-_var(--content-header-h,46px))]'
+                  : 'px-8 pt-[calc(max(96px,28vh)_+_46px_-_var(--content-header-h,46px))]',
             )}
           >
             <div
               className="relative flex w-full flex-col items-start"
               // 与进行中对话页同源:内容列宽度跟随 useProportionalWidth 算出的
-              // inputWidth(封顶 1220px),不再死锁 800——大屏自适应变宽,且发送后
-              // 同一个 ChatInput 无宽度跳变。inputWidth 由 useLayoutEffect 同步量出
+              // inputWidth(封顶 914+20=934px,见 hook 首参),不再死锁 800——大屏留出
+              // 左右呼吸空间、窄屏自适应收窄,且发送后同一个 ChatInput 无宽度跳变。
+              // inputWidth 由 useLayoutEffect 同步量出
               // (paint 前已就绪);极端未量到(0)时回落旧默认 800,不放大到全宽。
               style={{ maxWidth: inputWidth || 800 }}
             >
@@ -2052,9 +2230,7 @@ export function NewMakerDraftRoute() {
                       className="shrink-0 text-[var(--create-agent-control-icon)]"
                     />
                     <span className="min-w-0 truncate">
-                      {effectiveCollab.enabled
-                        ? t('newChat.collaboration.pillLabel')
-                        : createAgentModeLabel}
+                      {createAgentModeLabel}
                     </span>
                     <ChevronDown
                       size={12}
@@ -2089,26 +2265,6 @@ export function NewMakerDraftRoute() {
               />
 
               <div className={cn('flex w-full flex-col items-start gap-0', isDraftNarrow && 'order-3')}>
-                {/* device-link:为远程设备项目新建对话时的明显标识。让用户清楚这条对话会建在
-                    被控设备上、属于那台机器的项目,而不是本机。 */}
-                {isDeviceLinkDraft && (
-                  <div className="mb-3 flex max-w-full items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
-                    <MonitorSmartphone
-                      size={14}
-                      strokeWidth={2}
-                      className="shrink-0 text-[var(--folder-item-icon)]"
-                    />
-                    <span className="min-w-0 truncate">
-                      {t('ccAgent.draft.remoteProjectBanner', {
-                        device: effectiveDeviceLinkDeviceName ?? effectiveDeviceLinkDeviceId ?? '',
-                        project:
-                          effectiveWorkingDir?.split(/[\\/]/).filter(Boolean).pop() ??
-                          effectiveWorkingDir ??
-                          '',
-                      })}
-                    </span>
-                  </div>
-                )}
                 <div className="w-full">
                   <ChatInput
                     onSend={handleSend}
@@ -2158,16 +2314,36 @@ export function NewMakerDraftRoute() {
                     // vendor(上方 VendorSegmentedSwitcher)。onOpenDetails 打开「开启协同」富弹窗
                     // (CreateWorkerPopover:role/agent/model/初始任务),与会话内完全一致;OFF 态点击
                     // 走它而非简单 worker popover。ON 态点击 onChange(enabled:false) 关闭协同。
-                    // createSession 已在 effectiveCollabEnabled 时用 workerConfig 拉起 Worker。
+                    // createSession 后按本次策略校验结果用 workerConfig 拉起 Worker。
                     collaboration={
-                      effectiveWorkingDir != null &&
-                      effectiveRemoteHostId == null &&
-                      effectiveDeviceLinkDeviceId == null
+                      collabPolicyEligible
                         ? {
                             enabled: effectiveCollab.enabled,
                             worker: effectiveCollab.worker,
                             onChange: (next) => patchCollab(next),
                             onOpenDetails: () => setCreateWorkerOpen(true),
+                            onDisabledActivate: collabPolicy.unavailable
+                              ? () => {
+                                  void collabPolicy.refresh().then((policy) => {
+                                    if (policy.enabled && !policy.unavailable) {
+                                      setCreateWorkerOpen(true);
+                                    }
+                                  });
+                                }
+                              : undefined,
+                            disabled:
+                              !effectiveCollab.enabled &&
+                              (collabPolicy.loading ||
+                                collabPolicy.unavailable ||
+                                !collabPolicy.enabled),
+                            disabledReason:
+                              collabPolicy.loading
+                                ? t('newChat.collaboration.loadingHint')
+                                : collabPolicy.unavailable
+                                  ? t('newChat.collaboration.unavailableHint')
+                                  : !collabPolicy.enabled
+                                    ? t('newChat.collaboration.disabledHint')
+                                    : undefined,
                           }
                         : undefined
                     }
@@ -2204,56 +2380,86 @@ export function NewMakerDraftRoute() {
                     }
                   />
                 </div>
-                {/* 输入框跟随 inputWidth 变宽后,快捷入口只有 4 项,若也铺满全宽
-                    会被撑成又宽又空的短卡。这里把卡片区封顶在 800px、左对齐(与输入框
-                    左缘齐),保持每张卡当前的紧凑比例;输入框仍独立用满可用宽度。 */}
-                <div
-                  data-testid="create-agent-quick-starts"
-                  className="mt-[42px] w-full"
-                  style={{ maxWidth: 800 }}
-                >
-                  {/* 标题字号 12→14px(DESIGN §3 Caption),与卡片间距 16→10px 收近
-                      (DESIGN §5 间距档)——用户改稿 2026-07-22。 */}
-                  <div className="mb-2.5 px-0.5">
-                    <div className="text-[14px] font-medium leading-[18px] text-[var(--text-secondary)]">
-                      {t('newChat.createAgent.quickStart')}
+                {/* device-link:为远程设备项目新建对话时的明显标识。让用户清楚这条对话会建在
+                    被控设备上、属于那台机器的项目,而不是本机。放输入框正下方并与其水平居中
+                    (父列 items-start,靠 self-center 相对 w-full 的输入框居中)。 */}
+                {isDeviceLinkDraft && (
+                  <div className="mt-3 flex max-w-full items-center gap-2 self-center rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
+                    <MonitorSmartphone
+                      size={14}
+                      strokeWidth={2}
+                      className="shrink-0 text-[var(--folder-item-icon)]"
+                    />
+                    <span className="min-w-0 truncate">
+                      {t('ccAgent.draft.remoteProjectBanner', {
+                        device: effectiveDeviceLinkDeviceName ?? effectiveDeviceLinkDeviceId ?? '',
+                        project:
+                          effectiveWorkingDir?.split(/[\\/]/).filter(Boolean).pop() ??
+                          effectiveWorkingDir ??
+                          '',
+                      })}
+                    </span>
+                  </div>
+                )}
+                {/* 零可用模型 → 快速开始换成「连接供应商」引导卡(互斥:此时快捷入口
+                    只会把 prompt 填进发不出去的输入框;device-link 草稿由上方 chip 负责,
+                    引导卡自身有 !isDeviceLinkDraft gate)。dismiss / 连上后恢复快捷入口。 */}
+                {showProviderOnboardingCard && (
+                  <div className="mt-8 w-full" style={{ maxWidth: 800 }}>
+                    <ConnectProviderCard />
+                  </div>
+                )}
+                {/* 快捷入口与输入框同宽:左右两缘都与上方 ChatInput 对齐(父列已封顶
+                    inputWidth)。此前封顶 800px 会在宽窗口下右缘短一截,视觉上没对齐
+                    (2026-07-24 用户反馈)。 */}
+                {!showProviderOnboardingCard && (
+                  <div data-testid="create-agent-quick-starts" className="mt-[42px] w-full">
+                    {/* 标题字号 12→14px(DESIGN §3 Caption),与卡片间距 16→10px 收近
+                        (DESIGN §5 间距档)——用户改稿 2026-07-22。 */}
+                    <div className="mb-2.5 px-0.5">
+                      <div className="text-[14px] font-medium leading-[18px] text-[var(--text-secondary)]">
+                        {t('newChat.createAgent.quickStart')}
+                      </div>
+                    </div>
+                    <div
+                      className={cn(
+                        'grid w-full gap-3',
+                        isDraftNarrow ? 'grid-cols-1' : isDraftMedium ? 'grid-cols-2' : 'grid-cols-4',
+                      )}
+                    >
+                      {createAgentQuickStarts.map(({ key, labelKey, icon: Icon }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => handleQuickStart(labelKey)}
+                          // 圆角与输入框统一为 12px(DESIGN §5 容器档,rounded-xl)。
+                          // 用户改稿 2026-07-25:两档统一竖排——icon 固定卡片左上(距顶/
+                          // 距左均等于 p-3/p-4 内边距),文字挪到卡片中下方、与 icon 左对齐
+                          // (flex-col + justify-between,icon 顶、文字底;gap-1 兜底竖向
+                          // 最小间距),取代原窄态横排 / 常态竖排自适应(#562)。
+                          // 卡片高度不变(narrow 84 / 常态 112)。
+                          className={cn(
+                            'group flex flex-col items-start justify-between gap-1 rounded-xl border border-[var(--create-agent-quick-card-border)] bg-[var(--create-agent-quick-card-bg)] text-left text-[var(--create-agent-quick-card-text)] transition-colors hover:bg-[var(--create-agent-quick-card-bg-hover)]',
+                            isDraftNarrow ? 'min-h-[84px] p-3' : 'min-h-[112px] p-4',
+                          )}
+                        >
+                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--create-agent-quick-card-icon-bg)]">
+                            <Icon
+                              size={16}
+                              strokeWidth={2}
+                              className="text-[var(--create-agent-quick-card-icon)]"
+                            />
+                          </span>
+                          {/* 字号 13px 与左侧会话列表(text-13)一致——用户改稿 2026-07-22。
+                              竖排下占满卡片宽度、左对齐 icon,靠父列 justify-between 贴底。 */}
+                          <span className="w-full min-w-0 text-13 font-semibold leading-[16px]">
+                            {t(labelKey)}
+                          </span>
+                        </button>
+                      ))}
                     </div>
                   </div>
-                  <div
-                    className={cn(
-                      'grid w-full gap-3',
-                      isDraftNarrow ? 'grid-cols-1' : isDraftMedium ? 'grid-cols-2' : 'grid-cols-4',
-                    )}
-                  >
-                    {createAgentQuickStarts.map(({ key, labelKey, icon: Icon }) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => handleQuickStart(labelKey)}
-                        // 圆角与输入框统一为 12px(DESIGN §5 容器档,rounded-xl);
-                        // 窄态横排 / 常态竖排自适应(#562)。
-                        className={cn(
-                          'group rounded-xl border border-[var(--create-agent-quick-card-border)] bg-[var(--create-agent-quick-card-bg)] text-left text-[var(--create-agent-quick-card-text)] transition-colors hover:bg-[var(--create-agent-quick-card-bg-hover)]',
-                          isDraftNarrow
-                            ? 'flex min-h-[84px] items-center gap-3 p-3'
-                            : 'flex min-h-[112px] flex-col items-start gap-3 p-4',
-                        )}
-                      >
-                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--create-agent-quick-card-icon-bg)]">
-                          <Icon
-                            size={16}
-                            strokeWidth={2}
-                            className="text-[var(--create-agent-quick-card-icon)]"
-                          />
-                        </span>
-                        {/* 字号 13px 与左侧会话列表(text-13)一致——用户改稿 2026-07-22。 */}
-                        <span className="flex min-w-0 min-h-10 items-center text-13 font-semibold leading-[16px]">
-                          {t(labelKey)}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                )}
                 {/* 首页「新建目标」弹窗:无 sessionId → onCreate 建会话并 setGoal(见 handleCreateGoal)。
                 initialObjective = 点「新建目标」时输入框里已有的文字。 */}
                 <NewGoalDialog
@@ -2293,6 +2499,7 @@ export function NewMakerDraftRoute() {
                 model: form.model,
                 effort: form.effort,
                 fast: form.fast,
+                providerId: form.providerId,
                 initialTask: form.initialTask || undefined,
               },
             });

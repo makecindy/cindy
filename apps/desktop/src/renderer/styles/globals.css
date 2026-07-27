@@ -187,6 +187,21 @@
   [data-theme='cindy-dark'][data-splash-active] .bg-content-area {
     background: transparent;
   }
+
+  html[data-computer-permission-overlay='true'],
+  html[data-computer-permission-overlay='true'] body,
+  html[data-computer-permission-overlay='true'] #root {
+    background: transparent;
+  }
+}
+
+/* 移动端下载卡：只有二维码本身，不加品牌描边、阴影与 3D 倾斜（曾经登记在
+   DESIGN.md §14.4 / §15.7 的旋转折射边已按用户要求撤除）。唯一动效是设备
+   列表刷新驱动的尺寸补间（132 ↔ 228）。 */
+.mobile-download-qr-card {
+  transition:
+    width var(--motion-base) var(--motion-ease-move),
+    height var(--motion-base) var(--motion-ease-move);
 }
 
 /* 按 <html lang> 切换 CJK 字体栈 —— 同一汉字在中/日/韩字体中字形不同
@@ -331,13 +346,98 @@ html:lang(ko) {
 .cm-editor .cm-dropCursor {
   border-left-color: var(--caret-accent) !important;
 }
-/* composer 列表行缩进(ComposerListIndentDecoration):行首列表前缀被识别后,
-   整行内容右移一格,作为"已进入列表状态"的视觉反馈(对齐 Claude 原生 App)。
-   纯文本编辑器行是 inline 内容,折行后的后续视觉行不缩进(已知 trade-off)。 */
-.ProseMirror .composer-list-line-indent {
+/* composer 列表行缩进(ComposerListIndentDecoration):单行列表使用段落级
+   decoration,多行列表的无特殊标点行使用 inline-block 换行容器。padding-left
+   留出"基础缩进 + 前缀宽度",首行再用负 text-indent 把列表标记悬挂回基础
+   缩进位置;自动换行后的续行不吃负缩进,因此会与首行正文对齐。 */
+.ProseMirror .composer-list-block-indent {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding-left: calc(1em + var(--composer-list-hang, 1.25em));
+  text-indent: var(--composer-list-hang-negative, -1.25em);
+  overflow-wrap: anywhere;
+}
+.ProseMirror .composer-list-prefix-indent {
   padding-left: 1em;
 }
+.ProseMirror .composer-list-fallback-container {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding-left: calc(1em + var(--composer-list-fallback-indent, 1.25em));
+  overflow-wrap: anywhere;
+}
+.ProseMirror .composer-list-fallback-prefix {
+  display: inline-block;
+  box-sizing: border-box;
+  width: calc(1em + var(--composer-list-fallback-indent, 1.25em));
+  margin-left: calc(-1em - var(--composer-list-fallback-indent, 1.25em));
+  white-space: nowrap;
+  vertical-align: top;
+}
+.ProseMirror .composer-list-fallback-unindented {
+  display: inline-block;
+  box-sizing: border-box;
+  width: calc(100% + 1em + var(--composer-list-fallback-indent, 1.25em));
+  margin-left: calc(-1em - var(--composer-list-fallback-indent, 1.25em));
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.ProseMirror .composer-list-fallback-break {
+  /* Keep native <br> line boxes so consecutive hard breaks retain intentional
+     blank lines inside a paragraph-level list fallback. */
+  display: inline;
+}
+.ProseMirror .composer-list-line-indent {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 100%;
+  padding-left: calc(1em + var(--composer-list-hang, 1.25em));
+  text-indent: var(--composer-list-hang-negative, -1.25em);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.ProseMirror .composer-list-tab-indent {
+  /* Keep the fallback and the browser's tab advance deterministic until the
+     plugin view replaces the CSS variables with a measured Range width. */
+  tab-size: 8;
+}
+.ProseMirror .composer-list-cjk-font {
+  font-family:
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC',
+    'Source Han Sans SC', 'HarmonyOS Sans SC', sans-serif;
+}
+/* 没有自然断点的长数字/字母串拆成 marker/body 两个相邻盒子。marker
+   始终留在正文首行,body 独占剩余宽度;overflow-wrap:anywhere 仅在正文
+   需要溢出时启用紧急断字,普通英文仍优先按空格换行。 */
+.ProseMirror .composer-list-long-run-marker {
+  display: inline-block;
+  box-sizing: border-box;
+  width: calc(1em + var(--composer-list-hang, 1.25em));
+  padding-left: 1em;
+  overflow: visible;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.ProseMirror .composer-list-long-run-body {
+  display: inline-block;
+  box-sizing: border-box;
+  width: calc(100% - 1em - var(--composer-list-hang, 1.25em));
+  max-width: calc(100% - 1em - var(--composer-list-hang, 1.25em));
+  overflow-wrap: anywhere;
+  /* 该盒子只由 LONG_ALPHANUMERIC_BODY_RE 生成，正文没有自然断点；
+     因此可以安全地在串内断字，而不会影响普通英文句子的词边界。 */
+  word-break: break-all;
+  vertical-align: top;
+}
 .ProseMirror .voice-input-draft-replaced {
+  display: none;
+}
+/* Long-run body boxes can overlap a voice replacement in single-line rows.
+   The general multiline list path switches to the paragraph fallback while a
+   replacement is active, so its full-width row wrapper is never fragmented. */
+.ProseMirror .composer-list-long-run-body.voice-input-draft-replaced {
   display: none;
 }
 .ProseMirror [data-voice-draft-inline] {
@@ -1479,4 +1579,67 @@ body.resizing-pane [data-ghost-webview] {
   background: var(--surface-translucent-overlay);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
+}
+
+/* ── 插件面板悬浮球(GhostPanelBubbleLayer)────────────────────────────
+   动效按 engineering-conventions §7 红线:只动 transform/opacity、动画挂
+   HTML wrapper(不挂 SVG)、常驻循环仅 hover 期间播放、减弱动效时停用。
+   任何动画都不压在气泡按钮本体上 —— 按钮的 transform 是位置(translate3d),
+   压同一元素会把气泡顶到 (0,0);圆圈与幽灵各自分层(.ghost-bubble-circle /
+   .ghost-bubble-face-jump)编排。
+   时序(2026-07-25 Lizi 定案"两段都要有戏"):
+   出现 = 面板收走 → 等 300ms → 圆圈渐显(160ms)→ 幽灵跳进来(240ms,回弹);
+   消失 = 幽灵跳走(160ms)→ 圆圈渐隐(120ms 延迟 + 140ms)→ 面板滑入。 */
+@keyframes ghost-bubble-circle-in {
+  from { transform: scale(0.85); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+@keyframes ghost-bubble-circle-out {
+  to { transform: scale(0.9); opacity: 0; }
+}
+@keyframes ghost-bubble-ghost-in {
+  0% { transform: translateY(12px) scale(0.4); opacity: 0; }
+  65% { transform: translateY(-4px) scale(1.08); opacity: 1; }
+  100% { transform: none; opacity: 1; }
+}
+@keyframes ghost-bubble-ghost-out {
+  to { transform: translateY(-14px) scale(0.4); opacity: 0; }
+}
+@keyframes ghost-bubble-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+.ghost-bubble-enter .ghost-bubble-circle {
+  animation: ghost-bubble-circle-in 160ms ease-out 300ms backwards;
+}
+.ghost-bubble-enter .ghost-bubble-face-jump {
+  animation: ghost-bubble-ghost-in 240ms cubic-bezier(0.34, 1.4, 0.64, 1) 420ms backwards;
+}
+.ghost-bubble-exit .ghost-bubble-face-jump {
+  animation: ghost-bubble-ghost-out 160ms ease-in forwards;
+}
+.ghost-bubble-exit .ghost-bubble-circle {
+  animation: ghost-bubble-circle-out 140ms ease-in 120ms forwards;
+}
+.ghost-bubble:hover .ghost-bubble-face {
+  animation: ghost-bubble-bob 1.1s ease-in-out infinite;
+}
+/* 停靠面板出现/收起(气泡展开/合并/装入/启用出现,点最小化收起;启动首屏
+   豁免与提交时序都在 ghostPanels.tsx):外层壳宽度 0↔实宽 折叠展开。
+   这是 §7 compositor-only 的窄例外(同登录 handoff 的容器形变口径):
+   一次性、有状态含义;内容层定实宽被外壳裁切,webview 不逐帧重排。
+   keyframes 缺省端取元素实宽(inline style),不用变量传宽。 */
+@keyframes ghost-panel-expand { from { width: 0; } }
+@keyframes ghost-panel-collapse { to { width: 0; } }
+.ghost-panel-enter { animation: ghost-panel-expand 200ms ease-out; }
+/* exit 在 enter 之后声明:出现瞬间就点收起时,后者整段覆盖前者。 */
+.ghost-panel-exit { animation: ghost-panel-collapse 180ms ease-in forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .ghost-bubble-enter .ghost-bubble-circle,
+  .ghost-bubble-enter .ghost-bubble-face-jump,
+  .ghost-bubble-exit .ghost-bubble-circle,
+  .ghost-bubble-exit .ghost-bubble-face-jump,
+  .ghost-panel-enter,
+  .ghost-panel-exit,
+  .ghost-bubble:hover .ghost-bubble-face { animation: none; }
 }

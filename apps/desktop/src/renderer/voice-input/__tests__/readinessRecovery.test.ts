@@ -62,4 +62,50 @@ describe('resolveVoiceInputReadinessRecovery', () => {
       settingsTab: 'providers',
     });
   });
+
+  it('routes incomplete custom ASR setup back to voice input settings', () => {
+    expect(
+      resolveVoiceInputReadinessRecovery(
+        {
+          auth: 'api-key',
+          provider: 'custom-realtime-asr',
+          failureReason: 'custom-asr-config-missing',
+        },
+        'byok',
+      ),
+    ).toEqual({
+      messageKey: 'settings.voiceInput.serviceSource.credentialError.customAsrConfigMissing',
+      settingsTab: 'voice-input',
+    });
+
+    expect(
+      resolveVoiceInputReadinessRecovery(
+        {
+          auth: 'api-key',
+          provider: 'custom-realtime-asr',
+          failureReason: 'custom-asr-key-missing',
+        },
+        'byok',
+      ),
+    ).toEqual({
+      messageKey: 'settings.voiceInput.serviceSource.credentialError.customAsrKeyMissing',
+      settingsTab: 'voice-input',
+    });
+  });
+
+  it('explains why Codex sign-in cannot power realtime ASR', () => {
+    expect(
+      resolveVoiceInputReadinessRecovery(
+        {
+          auth: 'codex',
+          provider: 'openai-realtime-whisper',
+          failureReason: 'codex-realtime-unsupported',
+        },
+        'byok',
+      ),
+    ).toEqual({
+      messageKey: 'settings.voiceInput.serviceSource.credentialError.codexRealtimeUnsupported',
+      settingsTab: 'voice-input',
+    });
+  });
 });

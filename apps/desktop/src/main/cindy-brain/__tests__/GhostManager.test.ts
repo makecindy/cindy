@@ -13,12 +13,18 @@ let workDir: string;
 let rootDir: string;
 let onChanged: ReturnType<typeof vi.fn>;
 let manager: GhostManager;
+let hostLocale: string;
 
 beforeEach(async () => {
   workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-ghost-test-'));
   rootDir = path.join(workDir, 'ghosts');
   onChanged = vi.fn();
-  manager = new GhostManager({ getRootDir: () => rootDir, onChanged });
+  hostLocale = 'zh-CN';
+  manager = new GhostManager({
+    getRootDir: () => rootDir,
+    getLocale: () => hostLocale,
+    onChanged,
+  });
 });
 
 afterEach(async () => {
@@ -78,6 +84,137 @@ async function expectRejection(
 }
 
 describe('GhostManager · install', () => {
+  it('按宿主语言返回本地化清单，切换语言后 list 立即更新，不支持语言固定回退英文', async () => {
+    const manifest = {
+      ...goodManifest(),
+      name: 'Base name',
+      description: 'Base description',
+      locales: {
+        en: 'locales/en.json',
+        'zh-CN': 'locales/zh-CN.json',
+      },
+    };
+    const locale = (name: string, description: string, toolDescription: string) => JSON.stringify({
+      name,
+      description,
+      tools: { do_thing: { description: toolDescription } },
+    });
+    const cindy = await makeCindy('localized.cindy', manifest, {
+      'locales/en.json': locale('English name', 'English description', 'English tool'),
+      'locales/zh-CN.json': locale('中文名称', '中文说明', '中文工具'),
+    });
+    const result = await manager.install(cindy);
+    expect(result).toMatchObject({
+      ghost: {
+        manifest: {
+          name: '中文名称',
+          description: '中文说明',
+          resolvedLocale: 'zh-CN',
+          tools: [{ name: 'do_thing', description: '中文工具' }],
+        },
+      },
+    });
+
+    hostLocale = 'ja';
+    expect(manager.list()[0].manifest).toMatchObject({
+      name: 'English name',
+      description: 'English description',
+      resolvedLocale: 'ja',
+      tools: [{ name: 'do_thing', description: 'English tool' }],
+    });
+    hostLocale = 'fr-FR';
+    expect(manager.list()[0].manifest).toMatchObject({
+      name: 'English name',
+      resolvedLocale: 'en',
+    });
+  });
+
+  it('已安装 locale 或其父目录被替换为目录外软链时拒绝读取并回退基础清单', async () => {
+    hostLocale = 'en';
+    const manifest = {
+      ...goodManifest(),
+      name: 'Base name',
+      locales: { en: 'locales/en.json' },
+    };
+    const locale = (name: string) => JSON.stringify({
+      name,
+      tools: { do_thing: { description: 'Localized tool' } },
+    });
+    const cindy = await makeCindy('localized-symlink.cindy', manifest, {
+      'locales/en.json': locale('Packaged name'),
+    });
+    await manager.install(cindy);
+    const localePath = path.join(rootDir, 'hello', 'locales', 'en.json');
+    const outsidePath = path.join(workDir, 'outside-locale.json');
+    await fs.promises.writeFile(outsidePath, locale('Outside name'));
+    await fs.promises.rm(localePath);
+    try {
+      await fs.promises.symlink(outsidePath, localePath, 'file');
+    } catch {
+      return; // Windows 无 symlink 权限时跳过；生产守卫仍由 lstatSync 钉死。
+    }
+
+    expect(manager.list()[0].manifest).toMatchObject({
+      name: 'Base name',
+      resolvedLocale: 'en',
+      tools: [{ name: 'do_thing', description: '做点事' }],
+    });
+
+    const localesDir = path.dirname(localePath);
+    const outsideLocalesDir = path.join(workDir, 'outside-locales');
+    await fs.promises.rm(localesDir, { recursive: true, force: true });
+    await fs.promises.mkdir(outsideLocalesDir);
+    await fs.promises.writeFile(path.join(outsideLocalesDir, 'en.json'), locale('Outside parent name'));
+    await fs.promises.symlink(
+      outsideLocalesDir,
+      localesDir,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    expect(manager.list()[0].manifest).toMatchObject({
+      name: 'Base name',
+      resolvedLocale: 'en',
+    });
+  });
+
+  it('locale 文件缺失、非法 JSON 或翻译错位时 inspect/install 都拒绝;部分翻译回退后可装', async () => {
+    const manifest = {
+      ...goodManifest(),
+      locales: { en: 'locales/en.json' },
+    };
+    const missing = await makeCindy('locale-missing.cindy', manifest);
+    await expectRejection(await manager.install(missing), 'file-invalid');
+
+    const invalid = await makeCindy('locale-invalid.cindy', manifest, {
+      'locales/en.json': '{ nope',
+    });
+    await expectRejection(await manager.install(invalid), 'file-invalid');
+
+    const unknownTool = await makeCindy('locale-unknown-tool.cindy', manifest, {
+      'locales/en.json': JSON.stringify({ name: 'English', tools: { nope: { description: 'x' } } }),
+    });
+    await expectRejection(await manager.install(unknownTool), 'file-invalid');
+
+    // 部分翻译(只给 name,工具不翻)不再拒装:缺失条目回退原 manifest 文案。
+    hostLocale = 'en';
+    const partial = await makeCindy('locale-partial.cindy', manifest, {
+      'locales/en.json': JSON.stringify({ name: 'English partial' }),
+    });
+    expect(await manager.install(partial)).toMatchObject({
+      ghost: {
+        manifest: {
+          name: 'English partial',
+          resolvedLocale: 'en',
+          tools: [{ name: 'do_thing', description: '做点事' }],
+        },
+      },
+    });
+
+    const aliasedManifest = await makeCindy('locale-manifest-alias.cindy', goodManifest(), {
+      'GHOST.JSON': JSON.stringify({ name: 'Alias locale' }),
+    });
+    await expectRejection(await manager.install(aliasedManifest), 'file-invalid');
+  });
+
   it('装入合法 .cindy:目录落地、ghost.json 在位、list 可见、onChanged 收到全量清单', async () => {
     const cindy = await makeCindy('hello.cindy', goodManifest(), { 'assets/readme.txt': 'hi' });
     const result = await manager.install(cindy);
@@ -505,5 +642,67 @@ describe('GhostManager · update(原位换版)', () => {
     await fs.promises.writeFile(bad, 'nope');
     await expectRejection(await manager.update(bad), 'file-invalid');
     expect(manager.list().find((g) => g.manifest.id === 'hello')?.manifest.version).toBe('1.0.0');
+  });
+});
+
+describe('GhostManager · skill 槽装入校验(确认框看到的 = Agent 读到的)', () => {
+  const skillManifest = (
+    items: Array<Record<string, string>> = [
+      { dir: 'skills/foo', name: 'foo', description: '教 Agent 用 foo' },
+    ],
+  ): Record<string, unknown> => ({
+    ...goodManifest('skilled'),
+    slots: ['tool', 'skill'],
+    skill: { items },
+  });
+  const skillMd = (name: string, description: string, body = '正文'): string =>
+    `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`;
+
+  it('SKILL.md 在场且 frontmatter 与声明一致 → 装入,落盘为普通文件', async () => {
+    const cindy = await makeCindy('skill-good.cindy', skillManifest(), {
+      'skills/foo/SKILL.md': skillMd('foo', '教 Agent 用 foo'),
+      'skills/foo/reference.md': '附带资料',
+    });
+    const result = await manager.install(cindy);
+    expect('ghost' in result, JSON.stringify(result)).toBe(true);
+    const landed = path.join(rootDir, 'skilled', 'skills', 'foo', 'SKILL.md');
+    const st = await fs.promises.lstat(landed);
+    expect(st.isFile()).toBe(true);
+    expect(st.isSymbolicLink()).toBe(false);
+  });
+
+  it('声明的技能目录缺 SKILL.md → 拒装', async () => {
+    const cindy = await makeCindy('skill-missing.cindy', skillManifest(), {
+      'skills/foo/notes.md': '没有 SKILL.md',
+    });
+    await expectRejection(await manager.install(cindy), 'file-invalid');
+  });
+
+  it('frontmatter name 与声明不一致 → 拒装', async () => {
+    const cindy = await makeCindy('skill-name-drift.cindy', skillManifest(), {
+      'skills/foo/SKILL.md': skillMd('bar', '教 Agent 用 foo'),
+    });
+    await expectRejection(await manager.install(cindy), 'file-invalid');
+  });
+
+  it('frontmatter description 与声明不一致 → 拒装', async () => {
+    const cindy = await makeCindy('skill-desc-drift.cindy', skillManifest(), {
+      'skills/foo/SKILL.md': skillMd('foo', '偷偷换一份说明'),
+    });
+    await expectRejection(await manager.install(cindy), 'file-invalid');
+  });
+
+  it('frontmatter 缺 description → 拒装', async () => {
+    const cindy = await makeCindy('skill-no-desc.cindy', skillManifest(), {
+      'skills/foo/SKILL.md': '---\nname: foo\n---\n\n正文\n',
+    });
+    await expectRejection(await manager.install(cindy), 'file-invalid');
+  });
+
+  it('SKILL.md 超过字节上限 → 拒装', async () => {
+    const cindy = await makeCindy('skill-huge.cindy', skillManifest(), {
+      'skills/foo/SKILL.md': skillMd('foo', '教 Agent 用 foo', 'x'.repeat(64 * 1024 + 1)),
+    });
+    await expectRejection(await manager.install(cindy), 'file-invalid');
   });
 });

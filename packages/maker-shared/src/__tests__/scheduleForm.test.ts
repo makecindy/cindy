@@ -271,6 +271,39 @@ describe('mobile schedule form model', () => {
     expect(validateTemplateParamValues(template, { scope: 'today' })).toBeNull();
   });
 
+  it('switches a worktree template draft into project workspace so useWorktree survives serialization', () => {
+    const template: RemoteScheduleTemplate = {
+      id: 'nightly-test-heal',
+      name: '夜间自愈测试',
+      description: 'Nightly test healing',
+      category: 'dev-automation',
+      source: 'builtin',
+      prompt: 'Run tests and fix failures',
+      cronExpr: '0 2 * * *',
+      timezone: 'Asia/Shanghai',
+      recurring: true,
+      agentKind: 'claude-code',
+      useWorktree: true,
+      notify: { desktop: true, feishu: false },
+    };
+    // 默认空 draft 是 dialogue workspace；不切 project 的话 useWorktree 会在
+    // buildMobileScheduleInput 里被静默打回 false（review #316 P1）。
+    const draft = applyTemplateToMobileScheduleDraft(createMobileScheduleDraft(null), template);
+
+    expect(draft.workspaceKind).toBe('project');
+    expect(draft.useWorktree).toBe(true);
+    expect(validateMobileScheduleDraft(draft)).toMatchObject({ field: 'workingDir' });
+    expect(buildMobileScheduleInput({ ...draft, workingDir: '/repo' }).useWorktree).toBe(true);
+
+    // 绑定会话的 draft 上应用 worktree 模板：绑定与 worktree 互斥，必须清掉
+    // targetSessionId，否则序列化的 heartbeat 分支同样会打回 false。
+    const boundDraft = updateDraftBoundSessionId(createMobileScheduleDraft(null), 'session-1');
+    const fromBound = applyTemplateToMobileScheduleDraft(boundDraft, template);
+    expect(fromBound.targetSessionId).toBe('');
+    expect(fromBound.useWorktree).toBe(true);
+    expect(buildMobileScheduleInput({ ...fromBound, workingDir: '/repo' }).useWorktree).toBe(true);
+  });
+
   it('flags missing required template parameters without defaults', () => {
     const template: RemoteScheduleTemplate = {
       id: 'custom',

@@ -11,7 +11,7 @@ const scriptDir = resolve(fileURLToPath(import.meta.url), '..');
 const mobileRoot = resolve(scriptDir, '..');
 const flowRoot = resolve(mobileRoot, 'e2e', 'maestro');
 const doctorScript = resolve(scriptDir, 'native-e2e-doctor.mjs');
-const defaultAppId = 'com.xd.lizcn';
+const defaultAppId = 'com.xd.cindy';
 
 const options = parseArgs(process.argv.slice(2));
 const profile = resolveMobileE2eProfile(options.profile ?? process.env.XDT_MOBILE_E2E_PROFILE);

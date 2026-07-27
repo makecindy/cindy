@@ -289,17 +289,12 @@ export function createLiziMcpProviders(
       name: 'cindy_ssh',
       // 无 isEnabled 门控:plugin 系统已在 host 层(mcp-providers.ts wrap)按
       // plugin id 'ssh' 包了 isEnabled 检查,这里再加就是双重门(同 cindy_orca)。
-      // ctx 当前仅日志归因用;工具本身不依赖 workingDir,Codex bridge 空 ctx
-      // 也能正常工作。
-      toClaudeSdkConfig: (ctx) => ({
+      // 启用策略由 host 在 Agent runtime / Codex thread 创建时冻结；SSH server
+      // 本身不读取 workingDir 或实时设置。
+      toClaudeSdkConfig: () => ({
         type: 'sdk',
         name: 'cindy_ssh',
-        instance: createSshMcpServer(opts.ssh!, {
-          agentKind: ctx.agentKind === 'codex' ? 'codex' : 'claude-code',
-          workingDir: ctx.workingDir,
-          sessionId: ctx.sessionId,
-          vendorOptions: ctx.vendorOptions,
-        }),
+        instance: createSshMcpServer(opts.ssh!),
       }),
     });
   }

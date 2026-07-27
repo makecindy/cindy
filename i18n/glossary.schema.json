@@ -1,0 +1,125 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/makecindy/cindy/i18n/glossary.schema.json",
+  "title": "Cindy i18n Glossary",
+  "description": "产品术语表正本。desktop / mobile / 脚本 / AI agent 共用的唯一事实源。定位是**参考**：它回答「这个词该不该用」，不回答「该换成哪个」——后者取决于该 key 的英文源与用途，必须逐条读语境判断，不得用于脚本批量替换。",
+  "type": "object",
+  "required": ["version", "locales", "sourceLocale", "terms"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "指向本 schema 的相对路径，供编辑器提供补全与校验。additionalProperties 为 false，必须显式允许。"
+    },
+    "version": {
+      "type": "integer",
+      "description": "schema 版本；破坏性结构调整时 +1，guard 会拒绝不认识的版本。"
+    },
+    "locales": {
+      "type": "array",
+      "description": "术语表覆盖的语言，必须与 SUPPORTED_LOCALES 一致。",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "sourceLocale": {
+      "type": "string",
+      "description": "源语言（术语的 en 字段所属语言），当前为 en。"
+    },
+    "punctuationExempt": {
+      "type": "array",
+      "description": "标点规则的豁免 key（格式同 term.exempt）。术语规则的 exempt 挂在术语条目上，标点规则不属于任何术语，需要独立清单。唯一正当用途：整条文案不是给人读的中文正文，而是机器可读的结构化文本——例如 GitHub issue 正文模板里的 `locale: {{locale}}` 元数据行，冒号是 key-value 分隔符、必须半角。这类形态与正文里的「无效 JSON: {{snippet}}」外形完全相同，静态扫描区分不了，只能按 key 声明。每条都应说明理由。",
+      "items": { "type": "string", "pattern": "^(desktop|mobile/[a-zA-Z]+):.+$" }
+    },
+    "terms": {
+      "type": "array",
+      "description": "术语条目。minItems 为 1 是防塌陷保险：terms 被误清空时，所有「遍历 terms」的完整性单测都会变成空循环而全绿，baseline 也是空的，于是整套禁用词与大小写检查静默消失、CI 一路通过。这类失效必须在加载阶段就炸掉。",
+      "items": { "$ref": "#/definitions/term" },
+      "minItems": 1
+    }
+  },
+  "definitions": {
+    "term": {
+      "type": "object",
+      "required": ["id", "status", "en", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$",
+          "description": "稳定标识，kebab-case。baseline 用它做锚点，改名会让 baseline 失效。"
+        },
+        "status": {
+          "enum": ["decided", "proposed"],
+          "description": "decided = 已裁决，forbidden 命中即阻断 CI。proposed = 待讨论，只输出警告，用于承载尚未拍板的术语。"
+        },
+        "en": {
+          "type": "string",
+          "description": "英文标准形态（源语言）。"
+        },
+        "translations": {
+          "type": "object",
+          "description": "各语言的首选译法。注意这是**参考值不是替换目标**——同一个中文词常对应多个英文概念，具体某条文案该怎么译取决于它的英文源与该 key 的用途，禁止拿本字段做脚本批量替换。默认场景用它。保留英文原词的术语直接把 en 原样写进来（如 Agent 的 zh-CN 就是 \"Agent\"），不要用空字符串——那个约定从未被任何条目使用，却让 guard、文档生成、单测三处各自对 \"\" 有不同解读。刻意不放进 required：status=proposed 的术语正是「已知不一致但还没拍板译法」，要求它先填译法等于否定 proposed 这个状态本身。「decided 必须给全所有非源语言译法」这条真正的不变量由单测按 status 精确约束。",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "alsoAllowed": {
+          "type": "object",
+          "description": "场景化译法：同一个词在特定语境下允许的其他说法。翻译要贴合语境，一刀切的强制映射会写出别扭的中文——例如 Automation 作模块名是「自动化」，指单条实例时是「自动任务」。这些词不会被 guard 拦截；每条必须写明 when（什么场合用），否则等于没有约束力。",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["text", "when"],
+              "additionalProperties": false,
+              "properties": {
+                "text": { "type": "string", "description": "该场景下的译法" },
+                "when": { "type": "string", "description": "适用场合，写具体——「指单条自动化实例时」而非「视情况」" }
+              }
+            }
+          }
+        },
+        "forbidden": {
+          "type": "object",
+          "description": "各语言的禁用译法。命中即违规（decided 阻断 / proposed 警告）。数组元素有两种形态：字符串＝无条件禁用；对象 { text, whenEn } ＝仅当该 key 的英文源匹配 whenEn 时才禁用。条件形态用于「同一个中文词是另一个英文词的正确译法」的场景——例如 Directory 该译「目录」，但不能无条件禁「文件夹」，否则会误伤 Folder 的正确翻译。",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                { "type": "string", "minLength": 1 },
+                {
+                  "type": "object",
+                  "required": ["text", "whenEn"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "text": { "type": "string", "minLength": 1, "description": "禁用的译法。minLength 为 1 是必须的：空串会被计数函数当成 CJK 词，而空串的 indexOf 永远返回同一个偏移、长度为 0，循环不推进——门禁会挂死而不是报错，且 CI 里 check:i18n-glossary 排在单测之前，一个手滑的 \"\" 就能卡住整条流水线。" },
+                    "whenEn": { "type": "string", "minLength": 1, "description": "英文源需匹配的词（按词边界、大小写不敏感匹配）。同样不能为空：空串会让条件禁用退化成无条件命中。" }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "note": {
+          "type": "string",
+          "description": "裁决理由。必填——没有理由的术语裁决会被后人反复推翻。"
+        },
+        "minorityByDesign": {
+          "type": "object",
+          "description": "显式声明「该语言的译法有意偏离现状主流」及理由。单测会校验：凡是声明的译法在现状中占比不足 35%，就必须在这里给出理由，否则判定为凭抽样拍脑袋（引入术语表时 ja/ko 有 5 条栽在这上面，其中 ko 的 쿼터 全仓零出现）。合法的偏离理由通常是「主流译法与另一个术语撞车」。",
+          "additionalProperties": { "type": "string" }
+        },
+        "checkCase": {
+          "type": "boolean",
+          "description": "是否检查大小写形态，默认 true。对同时是常用英语单词的术语（Issue、Session、Chat）必须设 false：英文句子里的 \"fix the issue\" 是正常用法，强行要求大写会在 prompt 模板和英文文案里制造大批假阳性。只有 Worker、Agent 这类「在文案里出现即指产品概念」的词才适合做大小写约束。"
+        },
+        "exempt": {
+          "type": "array",
+          "description": "豁免的 key 路径。两种形式：完整路径精确匹配（desktop:settings.x.y），或以 . 结尾的子树前缀（desktop:settings.remote.）用于整段同形异义场景。绝不支持按末段 key 名匹配——那会让任意同名嵌套 key 被静默放过。每条豁免都应在 note 里说明理由。",
+          "items": {
+            "type": "string",
+            "pattern": "^(desktop|mobile/[a-zA-Z]+):.+$"
+          }
+        }
+      }
+    }
+  }
+}

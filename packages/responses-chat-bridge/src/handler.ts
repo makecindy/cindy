@@ -37,7 +37,31 @@ function writeSse(res: ServerResponse, event: unknown, sequenceNumber: number): 
 
 function joinUrl(base: string, path: string): string {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  return `${base.replace(/\/*$/, '')}${normalizedPath}`;
+  if (
+    normalizedPath.startsWith('//')
+    || normalizedPath.includes('#')
+    || normalizedPath.includes('\\')
+    || /[^\u0021-\u007e]/.test(normalizedPath)
+    || /%(?![0-9A-Fa-f]{2})/.test(normalizedPath)
+  ) {
+    throw new TypeError('invalid chat completions path');
+  }
+  const url = new URL(base);
+  if (
+    (url.protocol !== 'http:' && url.protocol !== 'https:')
+    || url.username
+    || url.password
+  ) {
+    throw new TypeError('invalid upstream base URL');
+  }
+  const queryIndex = normalizedPath.indexOf('?');
+  const pathname = queryIndex === -1 ? normalizedPath : normalizedPath.slice(0, queryIndex);
+  const pathQuery = queryIndex === -1 ? '' : normalizedPath.slice(queryIndex + 1);
+  const baseQuery = url.search.slice(1);
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}${pathname}`;
+  url.search = [baseQuery, pathQuery].filter(Boolean).join('&');
+  url.hash = '';
+  return url.toString();
 }
 
 function responsesError(status: number, code: string, message: string): Record<string, unknown> {
@@ -102,6 +126,25 @@ export function createResponsesChatHandler(
         throw error;
       }
 
+      let upstreamUrl: string;
+      try {
+        upstreamUrl = joinUrl(
+          provider.upstreamBase,
+          provider.chatCompletionsPath ?? '/chat/completions',
+        );
+      } catch (error) {
+        log.error?.('responses-chat bridge invalid upstream configuration', {
+          model: request.model,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        writeJson(
+          res,
+          502,
+          responsesError(502, 'invalid_upstream_config', 'provider upstream configuration is invalid'),
+        );
+        return;
+      }
+
       let providerHeaders: Record<string, string>;
       try {
         providerHeaders = await provider.buildHeaders();
@@ -119,7 +162,7 @@ export function createResponsesChatHandler(
       res.once('close', abortUpstream);
       let upstream: Response;
       try {
-        upstream = await fetchImpl(joinUrl(provider.upstreamBase, provider.chatCompletionsPath ?? '/chat/completions'), {
+        upstream = await fetchImpl(upstreamUrl, {
           method: 'POST',
           headers: {
             ...providerHeaders,

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
@@ -29,6 +30,7 @@ export type RecorderInitMeta = {
   sourceLanguage?: string;
   inputSampleRate?: number;
   startedAtIso: string;
+  redactSensitiveWs?: boolean;
 };
 
 export type RecorderWsDirection = 'outbound' | 'inbound';
@@ -109,7 +111,7 @@ export class VoiceInputSessionRecorder {
     const entry = {
       t: Date.now(),
       dir: direction,
-      ...summarizeWsMessage(message),
+      ...summarizeWsMessage(message, this.meta?.redactSensitiveWs === true),
     };
     try {
       this.wsStream.write(`${JSON.stringify(entry)}\n`);
@@ -186,7 +188,8 @@ export function isVoiceInputRecordingEnabled(): boolean {
 
 export function makeRecorderSessionId(): string {
   const stamp = new Date().toISOString().replace(/:/g, '-').replace(/\.\d+Z$/, 'Z');
-  const suffix = Math.random().toString(36).slice(2, 8);
+  // CSPRNG 4 bytes = 8 hex chars ≈ 32 bits entropy (CodeQL js/insecure-randomness)
+  const suffix = randomBytes(4).toString('hex');
   return `${stamp}-${suffix}`;
 }
 
@@ -199,23 +202,29 @@ function closeStream(stream: fs.WriteStream): Promise<void> {
 // Strip noisy/large fields from WS messages before logging. Audio appends
 // can be hundreds of KB of base64 — useless to keep verbatim, but the type
 // and cadence are exactly what we need for stall diagnosis.
-function summarizeWsMessage(message: unknown): Record<string, unknown> {
+export function summarizeWsMessage(message: unknown, redactSensitive = false): Record<string, unknown> {
   if (typeof message === 'string') {
     let parsed: unknown;
     try {
       parsed = JSON.parse(message);
     } catch {
-      return { raw: truncateString(message, WS_FIELD_INLINE_MAX_BYTES) };
+      return redactSensitive
+        ? { redacted: true }
+        : { raw: truncateString(message, WS_FIELD_INLINE_MAX_BYTES) };
     }
-    return summarizeWsMessage(parsed);
+    return summarizeWsMessage(parsed, redactSensitive);
   }
   if (Buffer.isBuffer(message)) {
     return { binary: true, bytes: message.length };
   }
   if (!message || typeof message !== 'object') {
-    return { value: message };
+    return redactSensitive ? { redacted: true } : { value: message };
   }
   const obj = message as Record<string, unknown>;
+  if (redactSensitive) {
+    const type = typeof obj.type === 'string' ? obj.type : undefined;
+    return type ? { redacted: true, type } : { redacted: true };
+  }
   const summary: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj)) {
     if (key === 'audio' && typeof value === 'string') {

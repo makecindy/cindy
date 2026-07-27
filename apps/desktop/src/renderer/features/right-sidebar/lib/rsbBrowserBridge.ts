@@ -20,6 +20,7 @@
 
 import type {
   RsbBrowserBridgePinPayload,
+  RsbBrowserBridgeResourceEvent,
   RsbBrowserBridgeTabOpRequest,
   RsbBrowserBridgeTabOpResult,
 } from '../../../../shared/rsbBrowserBridge';
@@ -50,6 +51,12 @@ interface RsbBrowserBridgeIpcSubset {
   onTabOpRequest(cb: (req: RsbBrowserBridgeTabOpRequest) => void): () => void;
   /** renderer → main result of a tab-op-request, keyed by reqId. */
   tabOpResult(result: RsbBrowserBridgeTabOpResult): Promise<unknown>;
+  /** 资源看门狗:上报本 renderer 当前展示的浏览器 tab(null = 无)。 */
+  setForeground(input: { tabId: string | null }): Promise<unknown>;
+  /** 用户主动强杀 guest 进程(webContentsId = registry 未命中时的兜底解析)。 */
+  forceKill(input: { tabId: string; webContentsId?: number }): Promise<unknown>;
+  /** main → renderer 资源看门狗事件。 */
+  onResourceEvent(cb: (event: RsbBrowserBridgeResourceEvent) => void): () => void;
 }
 
 function ipc(): RsbBrowserBridgeIpcSubset | undefined {
@@ -68,6 +75,95 @@ let teardown: (() => void) | null = null;
  * 新窗口刚注册的记录误删(直到 remount 前 tab 都失联)。
  */
 const lastReportedWebContentsId = new Map<string, number>();
+
+/**
+ * 资源看门狗 kill-notice 的 pending 原因(tabId → cause + 记录时间)。main 先发
+ * notice 再 forcefullyCrashRenderer,但两条消息走不同 channel,到达顺序无硬保证:
+ *  - notice 先到:useBrowserWebview 的 render-process-gone handler 用
+ *    `consumePendingKillCause` 取走,banner 直接显示资源原因;
+ *  - crash 事件先到:per-tab 订阅回调随后升级已有 crash state。
+ * 带新鲜度窗口:kill 在 main 侧失败 / guest 已死时 crash 事件永远不来,残留的
+ * cause 不能在很久之后错标一次无关崩溃 —— 超窗直接作废。
+ */
+const pendingKillCauses = new Map<string, { cause: 'memory'; at: number }>();
+
+/** pending kill cause 的有效窗口(ms)。notice → crash 事件正常在毫秒级到达,
+ *  10s 足够覆盖慢 IPC,又不至于跨到下一次无关崩溃。 */
+export const PENDING_KILL_CAUSE_TTL_MS = 10_000;
+
+/** per-tab 资源事件订阅(useBrowserWebview 挂/卸)。 */
+const resourceEventListeners = new Map<
+  string,
+  Set<(event: RsbBrowserBridgeResourceEvent) => void>
+>();
+
+/**
+ * 订阅某个 tab 的资源看门狗事件(kill-notice / cpu-alert;evict-request 在
+ * bridge 内部直接消化,不会到订阅者)。返回退订函数。
+ */
+export function subscribeTabResourceEvent(
+  tabId: string,
+  cb: (event: RsbBrowserBridgeResourceEvent) => void,
+): () => void {
+  let set = resourceEventListeners.get(tabId);
+  if (!set) {
+    set = new Set();
+    resourceEventListeners.set(tabId, set);
+  }
+  set.add(cb);
+  return () => {
+    const listeners = resourceEventListeners.get(tabId);
+    if (!listeners) return;
+    listeners.delete(cb);
+    if (listeners.size === 0) resourceEventListeners.delete(tabId);
+  };
+}
+
+/** 取走(并清除)该 tab 的 pending kill 原因;无或已超新鲜度窗口则 null。 */
+export function consumePendingKillCause(tabId: string): 'memory' | null {
+  const entry = pendingKillCauses.get(tabId) ?? null;
+  pendingKillCauses.delete(tabId);
+  if (!entry) return null;
+  return Date.now() - entry.at <= PENDING_KILL_CAUSE_TTL_MS ? entry.cause : null;
+}
+
+/**
+ * 上报"本 renderer 当前展示的浏览器 tab"给 main 的资源看门狗。
+ * BrowserTabBody 在 active 变化时调;模块内维护单一 claimant,避免两个 TabBody
+ * 的 mount / unmount 交错时后发的 null 把先发的前台声明冲掉。
+ */
+let currentForegroundTabId: string | null = null;
+
+export function setForegroundBrowserTab(tabId: string, active: boolean): void {
+  const api = ipc();
+  if (active) {
+    currentForegroundTabId = tabId;
+    if (api) void api.setForeground({ tabId }).catch(() => undefined);
+  } else if (currentForegroundTabId === tabId) {
+    currentForegroundTabId = null;
+    if (api) void api.setForeground({ tabId: null }).catch(() => undefined);
+  }
+}
+
+/** 用户主动强杀 guest 进程(unresponsive banner / cpu 提示条的「强制终止」)。
+ *  随包携带 webview 的现值 webContentsId:页面在首个 dom-ready 前锁死 renderer
+ *  时 tab 还没 report 进 main 的 registry,main 用它做兜底解析(归属校验不变)。 */
+export function forceKillBrowserTab(tabId: string): Promise<void> {
+  const api = ipc();
+  if (!api) return Promise.resolve();
+  let webContentsId: number | undefined;
+  try {
+    webContentsId = browserWebviewPool.peek(tabId)?.webview.getWebContentsId();
+  } catch {
+    // attach 尚未完成时 getWebContentsId 抛 —— 不带兜底 id,交给 main 判 NOT_FOUND。
+  }
+  return api
+    .forceKill(webContentsId === undefined ? { tabId } : { tabId, webContentsId })
+    .then(
+      () => undefined,
+      () => undefined,
+    );
+}
 
 /**
  * Bind the renderer ↔ main bridge. Returns a teardown function that's safe to
@@ -120,11 +216,39 @@ export function initRsbBrowserBridge(): () => void {
     void handleTabOpRequest(req, api);
   });
 
+  // 资源看门狗事件(main → renderer):
+  //  - evict-request:后台 guest 资源超限,直接走 pool.release 淘汰(对用户
+  //    等价于 LRU 淘汰;release → onRelease → main registry 同步清理)。
+  //  - kill-notice:main 即将强杀该 guest。记 pending cause + 转发给 per-tab
+  //    订阅者(useBrowserWebview),两条路径覆盖 notice / render-process-gone
+  //    两种到达顺序,banner 都能显示"内存过高被终止"。
+  //  - cpu-alert:转发给 per-tab 订阅者显示非阻断提示条。
+  const unsubResource = api.onResourceEvent((event) => {
+    if (event.kind === 'evict-request') {
+      browserWebviewPool.release(event.tabId);
+      return;
+    }
+    if (event.kind === 'kill-notice') {
+      pendingKillCauses.set(event.tabId, { cause: event.cause, at: Date.now() });
+    }
+    const listeners = resourceEventListeners.get(event.tabId);
+    if (listeners) {
+      for (const cb of [...listeners]) {
+        try {
+          cb(event);
+        } catch {
+          // listener throw must not break event fan-out
+        }
+      }
+    }
+  });
+
   teardown = () => {
     unsubRelease();
     unsubPin();
     unsubUnpin();
     unsubTabOp();
+    unsubResource();
   };
 
   // Initial snapshot — drop main-side rows that the renderer no longer
@@ -424,4 +548,7 @@ export function _resetRsbBrowserBridgeForTests(): void {
   initialized = false;
   teardown = null;
   lastReportedWebContentsId.clear();
+  pendingKillCauses.clear();
+  resourceEventListeners.clear();
+  currentForegroundTabId = null;
 }

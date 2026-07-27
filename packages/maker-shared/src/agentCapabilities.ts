@@ -49,7 +49,7 @@ export type MobileModelCategory = 'anthropic' | 'gpt' | 'gpt-budget' | 'google' 
 export const MOBILE_MODEL_CATEGORY_LABEL: Record<MobileModelCategory, string> = {
   anthropic: 'Anthropic',
   gpt: 'GPT',
-  'gpt-budget': 'GPT（立省 85%）',
+  'gpt-budget': 'GPT 折扣',
   google: 'Google',
   china: 'China',
 };

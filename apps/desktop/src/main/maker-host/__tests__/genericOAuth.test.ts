@@ -50,6 +50,14 @@ const OAUTH: OAuthProviderDescriptor = {
   scopes: 'openid offline_access',
   modelsDiscoveryUrl: 'https://api.acme.example/v1/models',
 };
+const DEVICE_OAUTH: OAuthProviderDescriptor = {
+  flow: 'device-code',
+  deviceAuthorizationUrl: 'https://auth.acme.example/oauth2/device',
+  tokenUrl: 'https://auth.acme.example/oauth2/token',
+  clientId: 'device-client-1',
+  scopes: 'openid offline_access',
+  modelsDiscoveryUrl: 'https://api.acme.example/v1/models',
+};
 
 function memStorage(): GenericOAuthStorage & { map: Map<string, string> } {
   const map = new Map<string, string>();
@@ -70,11 +78,13 @@ let storage = memStorage();
 let nowMs = 1_000_000;
 let fetchCalls: { url: string; body?: string; headers?: Record<string, string> }[] = [];
 let fetchResponder: (url: string) => Response = () => new Response('{}', { status: 500 });
+let openedUrls: string[] = [];
 
 beforeEach(() => {
   storage = memStorage();
   nowMs = 1_000_000;
   fetchCalls = [];
+  openedUrls = [];
   resetGenericOAuthMemoryCache();
   configureGenericOAuth({
     storage,
@@ -87,6 +97,12 @@ beforeEach(() => {
       });
       return fetchResponder(String(url));
     }) as typeof fetch,
+    openExternal: async (url) => {
+      openedUrls.push(url);
+    },
+    sleep: async (ms) => {
+      nowMs += ms;
+    },
   });
 });
 
@@ -202,6 +218,196 @@ describe('登录流与凭证落盘失败', () => {
     expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('new'); // 内存态已是新 token
     expect(JSON.parse(storage.map.get('acme')!).access_token).toBe('old'); // 盘上还是旧值
   });
+
+  it('Device Grant：展示一次性代码，按 pending / slow_down 轮询并安全落盘', async () => {
+    const waits: number[] = [];
+    configureGenericOAuth({ sleep: async (ms) => void waits.push(ms) });
+    let tokenPolls = 0;
+    fetchResponder = (url) => {
+      if (url === DEVICE_OAUTH.deviceAuthorizationUrl) {
+        return new Response(
+          JSON.stringify({
+            device_code: 'secret-device-code',
+            user_code: 'ABCD-EFGH',
+            verification_uri: 'https://auth.acme.example/device',
+            verification_uri_complete: 'https://auth.acme.example/device?user_code=ABCD-EFGH',
+            expires_in: 600,
+            interval: 1,
+          }),
+          { status: 200 },
+        );
+      }
+      tokenPolls += 1;
+      if (tokenPolls === 1) {
+        return new Response(JSON.stringify({ error: 'authorization_pending' }), { status: 400 });
+      }
+      if (tokenPolls === 2) {
+        return new Response(JSON.stringify({ error: 'slow_down' }), { status: 400 });
+      }
+      return new Response(
+        JSON.stringify({
+          access_token: 'device-access',
+          refresh_token: 'device-refresh',
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      );
+    };
+    const progress: unknown[] = [];
+
+    const result = await runGenericOAuthLogin(
+      { id: 'device', name: 'Device Provider' },
+      DEVICE_OAUTH,
+      { onProgress: (event) => progress.push(event) },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(progress).toEqual([
+      {
+        phase: 'device-code',
+        verificationUrl: 'https://auth.acme.example/device?user_code=ABCD-EFGH',
+        userCode: 'ABCD-EFGH',
+        expiresAt: nowMs + 10 * 60_000,
+      },
+    ]);
+    expect(waits).toEqual([1_000, 1_000, 6_000]);
+    expect(openedUrls).toEqual([]);
+    expect(new URLSearchParams(fetchCalls[0]?.body).get('client_id')).toBe('device-client-1');
+    expect(new URLSearchParams(fetchCalls[1]?.body).get('grant_type')).toBe(
+      'urn:ietf:params:oauth:grant-type:device_code',
+    );
+    const persisted = storage.map.get('device')!;
+    expect(JSON.parse(persisted).access_token).toBe('device-access');
+    expect(persisted).not.toContain('secret-device-code');
+    expect(persisted).not.toContain('ABCD-EFGH');
+  });
+
+  it('Device Grant：持续 pending 时按注入时钟到期，不会无限轮询', async () => {
+    let tokenPolls = 0;
+    fetchResponder = (url) => {
+      if (url === DEVICE_OAUTH.deviceAuthorizationUrl) {
+        return new Response(
+          JSON.stringify({
+            device_code: 'secret-device-code',
+            user_code: 'ABCD-EFGH',
+            verification_uri: 'https://auth.acme.example/device',
+            expires_in: 2,
+            interval: 1,
+          }),
+          { status: 200 },
+        );
+      }
+      tokenPolls += 1;
+      return new Response(JSON.stringify({ error: 'authorization_pending' }), { status: 400 });
+    };
+
+    const result = await runGenericOAuthLogin(
+      { id: 'device', name: 'Device Provider' },
+      DEVICE_OAUTH,
+      { onProgress: () => undefined },
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'device_code_expired' });
+    expect(tokenPolls).toBe(2);
+    expect(nowMs).toBe(1_002_000);
+    expect(storage.map.has('device')).toBe(false);
+  });
+
+  it('Device Grant：标准 client_id/scope 不会被扩展参数覆盖', async () => {
+    fetchResponder = () => new Response('{}', { status: 200 });
+    const result = await runGenericOAuthLogin(
+      { id: 'device', name: 'Device Provider' },
+      {
+        ...DEVICE_OAUTH,
+        extraDeviceParams: {
+          client_id: 'wrong-client',
+          scope: 'wrong-scope',
+          audience: 'models',
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'invalid_device_authorization_response',
+    });
+    const body = new URLSearchParams(fetchCalls[0]?.body);
+    expect(body.getAll('client_id')).toEqual(['device-client-1']);
+    expect(body.getAll('scope')).toEqual(['openid offline_access']);
+    expect(body.get('audience')).toBe('models');
+  });
+
+  it('Authorization Code：标准 PKCE 参数不会被扩展参数或端点 query 覆盖', async () => {
+    configureGenericOAuth({
+      openExternal: async (authUrl) => {
+        openedUrls.push(authUrl);
+        cancelGenericOAuthLogin('acme');
+      },
+    });
+    const result = await runGenericOAuthLogin(
+      { id: 'acme', name: 'Acme' },
+      {
+        ...OAUTH,
+        authorizeUrl: `${OAUTH.authorizeUrl}?client_id=endpoint-client`,
+        extraAuthParams: {
+          client_id: 'wrong-client',
+          scope: 'wrong-scope',
+          audience: 'models',
+        },
+      },
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'login_cancelled' });
+    const authUrl = new URL(openedUrls[0]!);
+    expect(authUrl.searchParams.getAll('client_id')).toEqual(['client-1']);
+    expect(authUrl.searchParams.getAll('scope')).toEqual(['openid offline_access']);
+    expect(authUrl.searchParams.get('audience')).toBe('models');
+  });
+
+  it('Device Grant：进度回调后取消，不再轮询或写入凭证', async () => {
+    fetchResponder = () =>
+      new Response(
+        JSON.stringify({
+          device_code: 'secret-device-code',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'https://auth.acme.example/device',
+          expires_in: 600,
+        }),
+        { status: 200 },
+      );
+
+    const result = await runGenericOAuthLogin(
+      { id: 'device', name: 'Device Provider' },
+      DEVICE_OAUTH,
+      { onProgress: () => cancelGenericOAuthLogin('device') },
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'login_cancelled' });
+    expect(fetchCalls).toHaveLength(1);
+    expect(storage.map.has('device')).toBe(false);
+  });
+
+  it('Device Grant：拒绝非 https 验证页响应', async () => {
+    fetchResponder = () =>
+      new Response(
+        JSON.stringify({
+          device_code: 'secret-device-code',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'http://auth.acme.example/device',
+          expires_in: 600,
+        }),
+        { status: 200 },
+      );
+
+    const result = await runGenericOAuthLogin(
+      { id: 'device', name: 'Device Provider' },
+      DEVICE_OAUTH,
+    );
+    expect(result).toEqual({
+      ok: false,
+      reason: 'invalid_device_authorization_response',
+    });
+  });
 });
 
 describe('discoverGenericOAuthModels', () => {
@@ -244,7 +450,7 @@ describe('discoverGenericOAuthModels', () => {
     fetchResponder = () => new Response(JSON.stringify({ data: [{ id: 'm' }] }), { status: 200 });
     await discoverGenericOAuthModels('acme', OAUTH, 'https://derived.example/v1/models');
     expect(fetchCalls[0]?.url).toBe('https://derived.example/v1/models');
-    const { modelsDiscoveryUrl: _omit, ...noDiscovery } = OAUTH;
+    const noDiscovery = { ...OAUTH, modelsDiscoveryUrl: undefined };
     expect(await discoverGenericOAuthModels('acme', noDiscovery)).toBeNull();
     expect(fetchCalls).toHaveLength(1); // 第二次没发请求
   });

@@ -26,6 +26,7 @@
   },
   "screen": {
     "composerSyncing": "Syncing session data; you can send once it finishes.",
+    "composerSessionNotSynced": "This conversation has not finished syncing yet.",
     "composerCreating": "Creating the session; you can keep sending after the first message goes out.",
     "nextAgentSwitch": "Next switches to {{agent}} · {{model}}",
     "createFailedTitle": "Session Creation Failed",
@@ -123,7 +124,7 @@
     "selectProjectNamed": "Select project {{title}}",
     "noProjects": "No projects yet",
     "chooseOtherFolder": "Choose another project folder",
-    "readingRemoteDir": "Reading remote directory...",
+    "readingRemoteDir": "Reading remote directory…",
     "goParentDir": "Go to parent directory",
     "parentDir": "Parent",
     "useCurrentRemoteDir": "Use current remote directory",

@@ -257,7 +257,7 @@
       "cancelA11y": "Cancel editing automation"
     },
     "delete": {
-      "counting": "Counting the conversations this automation generated...",
+      "counting": "Counting the conversations this automation generated…",
       "confirmDeleteBoth": "Delete Task and Conversations",
       "confirmArchive": "Delete Task and Archive Conversations",
       "confirmTaskOnly": "Delete Task Only",

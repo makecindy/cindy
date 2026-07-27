@@ -29,7 +29,7 @@ export const BRAND_USER_DATA_DIR_NAME = 'Cindy';
 // local 模式读生成的 config/endpoint.local.json,--endpoints-cdn 走线上 CDN),这里只
 // 保留 region 身份。飞书登录构建变量已退役,不再创建或补写。
 function desktopEnvSpec() {
-  return [{ key: 'VITE_CINDY_AUTH_REGION', value: 'cn', force: false }];
+  return [{ key: 'VITE_CINDY_AUTH_REGION', value: 'global', force: false }];
 }
 const closeDarwinTerminalTtyScript = Object.freeze([
   'on closeMatchingTerminalTab(targetTty)',
@@ -149,27 +149,11 @@ function ensureDesktopEnv() {
   } else {
     console.log(`==> Checked desktop env: ${path.relative(rootDir, envPath)}`);
   }
-  return content;
 }
 
 function readEnvValue(content, key) {
   const pattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*(.*?)\\s*$`, 'm');
   return content.match(pattern)?.[1]?.trim() ?? '';
-}
-
-/**
- * Remote dev intentionally does not load the whole desktop .env. These two
- * dev-only overrides are allowlisted so local moderation can be tested while
- * auth and the rest of the client continue to use the selected endpoint
- * manifest. Explicit process/CLI values keep precedence.
- */
-export function applyDesktopDevEnvOverrides(content, env = process.env) {
-  for (const key of ['XDT_CONTENT_MODERATION', 'XDT_ENDPOINT_MANIFEST_FILE']) {
-    if (key in env) continue;
-    const value = readEnvValue(content, key);
-    if (value) env[key] = value;
-  }
-  return env;
 }
 
 function upsertEnvValue(content, key, value, options = {}) {
@@ -473,7 +457,7 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['XDT_SCHEDULER_PASSIVE', env.XDT_SCHEDULER_PASSIVE],
     ['XDT_ISOLATED', env.XDT_ISOLATED],
     ['XDT_ISOLATED_NAME', env.XDT_ISOLATED_NAME],
-    ['XDT_CONTENT_MODERATION', env.XDT_CONTENT_MODERATION],
+    ['XDT_TAPDB_DEV', env.XDT_TAPDB_DEV],
     // 端点清单来源覆写:--endpoints-cdn(dev 走线上 CDN)/ local 模式的
     // endpoint.local.json 文件路径,均由主进程 clientEndpointsService 消费。
     ['XDT_ENDPOINTS_CDN', env.XDT_ENDPOINTS_CDN],
@@ -622,6 +606,16 @@ export async function waitForDesktopStartup(statusPath, timeoutMs = startupReady
   );
 }
 
+/**
+ * The kill-only phase controls existing processes but does not launch Desktop.
+ * Skipping startup initialization keeps that phase from printing default
+ * region/endpoint values that can contradict the following real startup.
+ */
+export function applyDesktopStartupConfigForPhase(options) {
+  if (options.argv.includes('--kill-only')) return null;
+  return applyDesktopDevStartupConfig(options);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const killOnly = argv.includes('--kill-only');
@@ -633,7 +627,7 @@ async function main() {
     : null;
   // --local 切换到本地模式(连 localhost:3333);缺省走 remote(连 xdt-api)。
   const mode = argv.includes('--local') ? 'local' : 'remote';
-  const startupConfig = applyDesktopDevStartupConfig({ argv, mode });
+  const startupConfig = applyDesktopStartupConfigForPhase({ argv, mode });
   const isolatedArg = argv.find((a) => a === '--isolated' || a.startsWith('--isolated='));
   if (preserveRunning && killOnly) {
     throw new Error('--preserve-running cannot be combined with the internal --kill-only stage');
@@ -663,16 +657,14 @@ async function main() {
       '--preserve-running reuses the current Cindy login via shared userData and cannot be combined with --isolated',
     );
   }
-  console.log(`==> Desktop region: ${startupConfig.region}`);
-  if (argv.includes('--content-moderation')) {
-    process.env.XDT_CONTENT_MODERATION = '1';
-    console.log('==> Content moderation test mode: enabled.');
+  if (startupConfig) {
+    console.log(`==> Desktop region: ${startupConfig.region}`);
   }
   // --passive: 定时任务被动模式 —— 本实例不参与自动触发(交给同机 primary,
   // 典型场景多个 dev preview 与 release/primary 共享数据时 preview 让位)。
   // 实现方式是置 XDT_SCHEDULER_PASSIVE=1,经 devEnvPrefix 白名单透传进新开的
   // 系统终端 / 直接 spawn 的 dev 进程。
-  if (argv.includes('--passive') || preserveRunning) {
+  if (startupConfig && (argv.includes('--passive') || preserveRunning)) {
     process.env.XDT_SCHEDULER_PASSIVE = '1';
     console.log(
       preserveRunning
@@ -685,9 +677,9 @@ async function main() {
   // 经 devEnvPrefix 白名单透传,主进程 devCliFlags/clientEndpointsService 消费。
   // 注意 local 模式的 endpoint.local.json 生成不在本脚本——dev(local)脚本链里的
   // apps/desktop/scripts/dev-local-env.mjs 统一负责(human 直跑与 restart 同路径)。
-  if (startupConfig.endpointsCdn) {
+  if (startupConfig?.endpointsCdn) {
     console.log(`==> Endpoints via CDN: dev will fetch the ${startupConfig.region} online endpoint manifest.`);
-  } else if (mode === 'remote' && startupConfig.endpointManifestFile) {
+  } else if (startupConfig && mode === 'remote' && startupConfig.endpointManifestFile) {
     console.log(`==> Endpoint manifest: ${startupConfig.endpointManifestFile}`);
   }
   // --isolated[=<名字>]: dev 使用独立的 userData 目录(数据库/登录态/会话全部与
@@ -701,7 +693,7 @@ async function main() {
   // 主进程据此派生独立 deviceId(dev-[<名字>-]<机器指纹>,机器指纹只有主进程能取)
   // ——服务端登录凭证按 (user, device) 一对一存,不派生的话沙箱登录会覆盖正式版
   // 的续期凭证,同机互踢。
-  if (isolatedArg) {
+  if (startupConfig && isolatedArg) {
     let isolationName = '';
     if (isolatedArg.includes('=')) {
       isolationName = isolatedArg.slice('--isolated='.length);
@@ -720,10 +712,7 @@ async function main() {
     fs.mkdirSync(process.env.XDT_USER_DATA_DIR, { recursive: true });
     console.log(`==> Isolated dev user data${isolationName ? ` (sandbox "${isolationName}")` : ''}: ${process.env.XDT_USER_DATA_DIR}`);
   }
-  if (!killOnly) {
-    const desktopEnv = ensureDesktopEnv();
-    applyDesktopDevEnvOverrides(desktopEnv);
-  }
+  if (startupConfig) ensureDesktopEnv();
 
   const devAncestor = findDevAncestor();
   if (devAncestor && !preserveRunning) {

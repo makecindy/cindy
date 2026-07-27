@@ -3,11 +3,6 @@ description: "Ask a non-security usage question / 提一个与安全无关的使
 title: "question: "
 labels: [question]
 body:
-  - type: markdown
-    attributes:
-      value: |
-        一般性讨论建议优先使用 [Discussions](../discussions)。
-        For open-ended discussion, prefer GitHub Discussions.
   - type: textarea
     id: goal
     attributes:

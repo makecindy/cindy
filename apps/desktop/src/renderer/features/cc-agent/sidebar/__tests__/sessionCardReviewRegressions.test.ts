@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const sidebarDir = resolve(__dirname, '..');
 const sessionCardSource = readFileSync(resolve(sidebarDir, 'SessionCard.tsx'), 'utf8');
+const sessionEntryListSource = readFileSync(resolve(sidebarDir, 'SessionEntryList.tsx'), 'utf8');
 const sessionItemSource = readFileSync(resolve(sidebarDir, 'SessionItem.tsx'), 'utf8');
 const sessionRenameInputSource = readFileSync(resolve(sidebarDir, '..', 'SessionRenameInput.tsx'), 'utf8');
 const sessionStatusIconSource = readFileSync(resolve(sidebarDir, 'SessionStatusIcon.tsx'), 'utf8');
@@ -14,6 +15,13 @@ const scheduleBindingBadgeSource = readFileSync(resolve(sidebarDir, 'ScheduleBin
 const globalsSource = readFileSync(resolve(__dirname, '..', '..', '..', '..', 'styles', 'globals.css'), 'utf8');
 
 describe('SessionCard review regressions', () => {
+  it('only draws the list top divider on the first overall entry', () => {
+    expect(sessionEntryListSource).toContain('isFirst={index === 0}');
+    expect(sessionEntryListSource).not.toContain(
+      "isFirst={index === 0 || entries[index - 1]?.kind !== 'session'}",
+    );
+  });
+
   it('keeps awaiting text in list mode previews', () => {
     expect(sessionCardSource).toContain('const listPreview = awaitingText ?? runningDetail ?? summaryPreview');
     expect(sessionCardSource).toContain('{listPreview}');

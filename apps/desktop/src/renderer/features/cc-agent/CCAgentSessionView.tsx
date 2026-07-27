@@ -60,6 +60,7 @@ import { IssueConfirmCard } from './IssueConfirmCard';
 import { RenameSessionsConfirmCard } from './RenameSessionsConfirmCard';
 import { GhostGrantConfirmCard } from './GhostGrantConfirmCard';
 import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionPrompt';
+import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { InteractionPromptHost } from '@/components/interaction-portal';
@@ -81,6 +82,7 @@ import { clearInterruptedAttentionIfOwned } from '@/hooks/useInterruptedSessions
 import { CredentialSwitchWaitBanner } from '@/components/chat/CredentialSwitchWaitBanner';
 import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
 import { WorktreeRestoreBanner } from '@/components/chat/WorktreeRestoreBanner';
+import { ConnectProviderBanner } from '@/components/onboarding/ConnectProviderBanner';
 import { Tip } from '@/components/ui/tooltip';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
@@ -148,6 +150,7 @@ import {
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
+import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
 import { createSessionSnapshotPatchBuffer } from './lib/sessionSnapshotPatchBuffer';
@@ -428,6 +431,18 @@ export function CCAgentSessionView({
   const navigate = useNavigate();
   const ownsWindowRoute = navigationMode === 'route-owner';
   const location = useLocation();
+  useEffect(() => {
+    return window.electronAPI.ghosts.onSetupNavigate((payload) => {
+      // The session view owns the card even when it is embedded in a workdir
+      // rail or Orca worker pane. Route parsing cannot identify those surfaces.
+      if (!viewVisible || !sessionId || payload.sessionId !== sessionId) return;
+      if (payload.target === 'plugin_settings') {
+        navigate(`/plugins?ghost=${encodeURIComponent(payload.ghostId)}`);
+        return;
+      }
+      navigate('/settings?tab=providers');
+    });
+  }, [navigate, sessionId, viewVisible]);
   // MainLayout 经 Outlet context 下发右栏相关能力(二级路由由 CCAgentFeatureLayout
   // 透传,否则这里会断链拿不到):
   //   - rightSidebarCollapsed:折叠态,用于 useProportionalWidth 的 compact 判定;
@@ -1093,6 +1108,11 @@ export function CCAgentSessionView({
     respondToPermission,
     pendingAskUser,
     answerUserQuestion,
+    pendingPluginSetup,
+    pluginSetupViewerState,
+    pluginSetupCommandInFlight,
+    setPluginSetupViewerState,
+    respondToPluginSetup,
     askUserViewerState,
     setAskUserViewerState,
     askUserDraft,
@@ -1397,7 +1417,8 @@ export function CCAgentSessionView({
   useEffect(() => {
     if (!sessionId) return;
     setAskUserViewerState('expanded');
-  }, [sessionId, setAskUserViewerState]);
+    setPluginSetupViewerState('expanded');
+  }, [sessionId, setAskUserViewerState, setPluginSetupViewerState]);
 
   // ── F-DIFF-1: Session-wide change panel ──
   // Aggregate diffs once at this level and pass to both the toggle (for the
@@ -1668,12 +1689,14 @@ export function CCAgentSessionView({
   // 针对 Lead session 接入了 OrcaSplitView toggle 布局,普通 session 必须能从
   // ChatInput 工具行启用协同变成 Lead,否则 doc 模式下首次开启入口完全没有。
   // 工具行同时传 denseToolbar=true,协同 pill 自动收成 icon-only,窄 rail 视觉 OK。
-  const allowCollabToggle =
+  const collabPolicyEligible =
     !orcaMode &&
     session?.orcaRole !== 'worker' &&
     session?.remoteHostId == null &&
     session?.workspaceKind === 'project' &&
     !!session?.workingDir;
+  const collabPolicy = useCollabProjectPolicy(session?.workingDir, collabPolicyEligible);
+  const allowCollabToggle = !orcaMode && collabPolicyEligible;
   // 把 sessionId 抽出来给 useEffect 用 (linter 偏好稳定的标量依赖)
   const collabSessionId = sessionId;
   useEffect(() => {
@@ -1786,6 +1809,8 @@ export function CCAgentSessionView({
           effort: form.effort as
             'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | undefined,
           fast: form.fast,
+          // null(未显式选来源)不传字段:IPC 侧只认非空 string 为显式来源。
+          providerId: form.providerId ?? undefined,
           delegateTask: form.initialTask || undefined,
         });
         void sessionsStore.forceRefresh('active');
@@ -1978,7 +2003,7 @@ export function CCAgentSessionView({
   // 双 IPC 协调,跟 setModel 同模式:
   //   1. sessionService.update({ extraDirs }) → 落 DB(持久化)
   //   2. window.electronAPI.maker.setExtraDirs(sessionId, ...) → 推 closure
-  //      (Claude 下一 turn buildQuery 自动用新值; agent capability=false / session 已 close 时 no-op)
+  //      (Claude / Codex 都在下一 turn 使用新值；session 已 close 时 no-op)
   //   3. refreshServerSession → 让本视图的 session.extraDirs 同步到最新值
   // 失败任一只 toast warn,不阻塞;乐观 UI 由 chip 数字角标已经反映。
   const handleExtraDirsChange = useCallback(
@@ -2985,6 +3010,12 @@ export function CCAgentSessionView({
               />
             )}
 
+            {/* 零可用模型引导条:与首屏引导卡共享判定与 dismiss(useProviderOnboarding),
+              组件自判 visible、不可见渲染 null。device-link 远程会话不出——连接态在被控端。 */}
+            {!remoteDeviceId && (
+              <ConnectProviderBanner style={{ width: inputWidth }} className="py-1" />
+            )}
+
             <div
               className="mx-auto flex flex-col items-center gap-[10px]"
               style={{ width: inputWidth }}
@@ -3010,6 +3041,7 @@ export function CCAgentSessionView({
                     pendingPlanReview ||
                     pendingPermission ||
                     pendingAskUser ||
+                    pendingPluginSetup ||
                     pendingIssueConfirm ||
                     pendingRenameSessionsConfirm ||
                     pendingGhostGrantConfirm
@@ -3052,6 +3084,15 @@ export function CCAgentSessionView({
                     draft={askUserDraft}
                     onDraftChange={setAskUserDraft}
                   />
+                ) : pendingPluginSetup ? (
+                  <PluginSetupPrompt
+                    pending={pendingPluginSetup}
+                    viewerState={pluginSetupViewerState}
+                    commandInFlight={pluginSetupCommandInFlight}
+                    remote={!!remoteDeviceId}
+                    onViewerStateChange={setPluginSetupViewerState}
+                    onCommand={respondToPluginSetup}
+                  />
                 ) : pendingIssueConfirm ? (
                   <IssueConfirmCard
                     pending={pendingIssueConfirm}
@@ -3085,6 +3126,7 @@ export function CCAgentSessionView({
               {pendingPlanReview ||
               pendingPermission ||
               pendingAskUser ||
+              pendingPluginSetup ||
               pendingIssueConfirm ||
               pendingRenameSessionsConfirm ||
               pendingGhostGrantConfirm ? null : sessionBinding.attached && sessionId ? (
@@ -3183,6 +3225,31 @@ export function CCAgentSessionView({
                             if (enableBusy) return;
                             setCreateWorkerOpen(true);
                           },
+                          onDisabledActivate: collabPolicy.unavailable
+                            ? () => {
+                                if (enableBusy) return;
+                                void collabPolicy.refresh().then((policy) => {
+                                  if (policy.enabled && !policy.unavailable) {
+                                    setCreateWorkerOpen(true);
+                                  }
+                                });
+                              }
+                            : undefined,
+                          disabled:
+                            !collabEnabled &&
+                            (collabPolicy.loading || !collabPolicy.enabled),
+                          disabledReason:
+                            !collabEnabled
+                              ? collabPolicy.loading
+                                ? t('newChat.collaboration.loadingHint')
+                                : collabPolicy.unavailable || !collabPolicy.enabled
+                                  ? t(
+                                      collabPolicy.unavailable
+                                        ? 'newChat.collaboration.unavailableHint'
+                                        : 'newChat.collaboration.disabledHint',
+                                    )
+                                  : undefined
+                              : undefined,
                         }
                       : undefined
                   }
@@ -3293,6 +3360,7 @@ export function CCAgentSessionView({
                         : (session?.providerId ?? null)
                     }
                     sessionId={sessionId}
+                    sessionInitialMoney={session?.totalMoney ?? null}
                     sessionInitialCostUsd={session?.totalCostUsd ?? null}
                     sessionInitialTokens={session?.totalTokenUsage ?? null}
                     remoteHostId={session?.remoteHostId ?? null}

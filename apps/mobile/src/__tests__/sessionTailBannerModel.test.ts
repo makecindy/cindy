@@ -88,7 +88,7 @@ describe('resolveSessionTailBanner — error-tail', () => {
       })],
     }));
     expect(stale).toMatchObject({ kind: 'error-tail', retryable: false });
-    expect((stale as { text: string }).text).toContain('新建会话');
+    expect((stale as { text: string }).text).toContain('新建对话');
 
     const encrypted = resolveSessionTailBanner(baseInput({
       messages: [errorRow('e2', '2026-01-01T00:00:02.000Z', {

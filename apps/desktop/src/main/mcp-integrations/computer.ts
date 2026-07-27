@@ -72,6 +72,9 @@ const UPDATE_CHECK_TIMEOUT_MS = 10_000;
 const LOG_OUTPUT_PREVIEW_CHARS = 2_000;
 const TYPE_TEXT_CHUNK_CHARS = 400;
 const CUA_DRIVER_SESSION_PROCESS_NONCE = randomUUID().replace(/-/g, '').slice(0, 12);
+// 0.12.2 changed `permissions status` into a strictly read-only daemon query.
+// Older builds may touch ScreenCaptureKit while checking capturability.
+const PASSIVE_PERMISSION_STATUS_MIN_VERSION = '0.12.2';
 const SCREENSHOT_OUTPUT_TOOL_NAMES = new Set<ComputerMcpToolName>(['get_window_state']);
 const DRIVER_SESSION_ARG_TOOL_NAMES = new Set<ComputerMcpToolName>([
   'list_windows',
@@ -132,8 +135,21 @@ const PROCESS_SNAPSHOT_CACHE_MS = 2_000;
 const LIST_WINDOWS_LOCAL_ARG_NAMES = new Set(['query', 'workspace_root', 'process_name']);
 const WIN32_FALLBACK_SOURCE = 'xdmaker_win32_fallback';
 const WINDOWS_WIN32_FALLBACK_TOOL_NAMES = new Set<ComputerMcpToolName>(['list_windows', 'list_apps']);
-// CuaDriver 的 macOS app bundle 安装位置(LaunchServices 拉起 daemon / 取图标共用)。
+// Phase one uses the upstream CuaDriver app as the real runtime and TCC
+// identity.
 const CUA_DRIVER_APP_BUNDLE_PATH = '/Applications/CuaDriver.app';
+
+let computerDriverPermissionProbePaused = false;
+
+/**
+ * macOS permission panes accept application bundles as native file drags.
+ * Keep the technical bundle path in main; renderer only sees "Computer Use".
+ */
+export function getComputerDriverAppBundlePath(): string | null {
+  if (process.platform !== 'darwin') return null;
+  if (!existsSync(CUA_DRIVER_APP_BUNDLE_PATH)) return null;
+  return CUA_DRIVER_APP_BUNDLE_PATH;
+}
 
 const WINDOWS_WIN32_WINDOW_SNAPSHOT_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -326,11 +342,15 @@ export interface ComputerDriverPermissionGrantResult {
 
 export interface ComputerMcpDepsOptions {
   isComputerUseEnabled?: (context?: ComputerMcpCallContext) => boolean;
+  /** Optional provider gate before the first status/tool request. */
+  prepareRuntimeBeforeUse?: () => Promise<void>;
 }
 
 interface ComputerDriverStatusOptions {
   includeDoctor?: boolean;
   forcePermissionProbe?: boolean;
+  /** Passive surfaces must not trigger ScreenCaptureKit authorization prompts. */
+  skipPermissionProbe?: boolean;
   /**
    * 显式用户动作(重新检查 / 开启开关)专用:先重启 daemon 再实测。
    * 背景:辅助功能(AX)被用户在系统设置里撤销后,**正在运行的 daemon 感知不到**
@@ -348,6 +368,8 @@ interface ComputerDriverStatusOptions {
    * 弹授权对话框,实测可能再触发的弹窗与引导语义一致。
    */
   bypassPermissionProbeCache?: boolean;
+  /** Never fall back to a status implementation that may open a macOS TCC prompt. */
+  passivePermissionProbeOnly?: boolean;
 }
 
 class ComputerDriverError extends Error {
@@ -392,6 +414,7 @@ export function resetComputerDriverPermissionProbeCacheForTests(): void {
   cachedPermissionProbe = null;
   lastDaemonAutostartAt = 0;
   daemonAutostartInFlight = null;
+  computerDriverPermissionProbePaused = false;
 }
 
 // ── macOS daemon 自愈启动 ────────────────────────────────────────────────
@@ -531,12 +554,59 @@ function resolveDriverCommand(): string {
   return DRIVER_COMMAND;
 }
 
+function resolveDriverInvocation(args: readonly string[]): {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+} {
+  return { command: resolveDriverCommand(), args: [...args] };
+}
+
+/** Whether permission onboarding is deliberately waiting for a real app drag. */
+export function isComputerDriverPermissionProbePaused(): boolean {
+  return computerDriverPermissionProbePaused;
+}
+
+function assertComputerDriverToolDispatchAvailable(): void {
+  if (computerDriverPermissionProbePaused) {
+    throw new ComputerDriverError(
+      'Computer Use tool calls are paused while permission onboarding is active.',
+    );
+  }
+}
+
+/**
+ * Pause permission probes while the app is absent from the current macOS
+ * permission pane. Close active agent MCP sessions and reject new tool calls
+ * so they cannot re-register a deleted app row while the guide waits for a
+ * fresh drag.
+ */
+export async function pauseComputerDriverPermissionProbe(): Promise<void> {
+  computerDriverPermissionProbePaused = true;
+  cachedPermissionProbe = null;
+  lastDaemonAutostartAt = 0;
+  await cleanupActiveComputerDriverSessions();
+}
+
+/** Resume live permission checks after System Settings contains Computer Use. */
+export function resumeComputerDriverPermissionProbe(): void {
+  computerDriverPermissionProbePaused = false;
+  cachedPermissionProbe = null;
+  lastDaemonAutostartAt = 0;
+}
+
 function runDriver(args: string[], timeoutMs: number, options: RunDriverOptions = {}): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
-    const command = resolveDriverCommand();
-    const child = spawn(command, args, {
+    const invocation = resolveDriverInvocation(args);
+    const child = spawn(invocation.command, invocation.args, {
       stdio: [options.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      env: invocation.env
+        ? {
+            ...process.env,
+            ...invocation.env,
+          }
+        : undefined,
     });
     options.onChild?.(child);
     let stdout = '';
@@ -1913,10 +1983,14 @@ function logCuaMcpStderr(sessionId: string, stream: Stream): void {
 }
 
 function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
+  const invocation = resolveDriverInvocation(['mcp']);
   const transport = new StdioClientTransport({
-    command: resolveDriverCommand(),
-    args: ['mcp'],
-    env: inheritedProcessEnv(),
+    command: invocation.command,
+    args: invocation.args,
+    env: {
+      ...inheritedProcessEnv(),
+      ...(invocation.env ?? {}),
+    },
     stderr: 'pipe',
   });
   const stderr = transport.stderr;
@@ -1953,6 +2027,7 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
 }
 
 async function getCuaMcpSession(sessionId: string): Promise<CuaMcpSessionEntry> {
+  assertComputerDriverToolDispatchAvailable();
   const existing = cuaMcpSessions.get(sessionId);
   if (existing) {
     await existing.ready;
@@ -2175,7 +2250,8 @@ function normalizePermissionState(raw: unknown): ComputerDriverPermissionState {
     };
   }
 
-  const source = objectValue(obj.source)?.attribution;
+  const sourceObject = objectValue(obj.source);
+  const source = sourceObject?.attribution;
   const sourceAttribution = typeof source === 'string' ? source : undefined;
   const accessibility = readBooleanGrant(obj.accessibility);
   const screenRecording = readBooleanGrant(obj.screen_recording);
@@ -2219,6 +2295,13 @@ export async function getComputerDriverStatus(
 ): Promise<ComputerDriverStatus> {
   try {
     const version = await readDriverVersion();
+    const installedVersion = extractDriverSemver(version);
+    const passivePermissionProbeSupported =
+      options.passivePermissionProbeOnly !== true
+      || (
+        installedVersion !== null
+        && compareSemver(installedVersion, PASSIVE_PERMISSION_STATUS_MIN_VERSION) >= 0
+      );
     let daemon: DaemonStatus = await readDaemonStatus().catch((err) => ({
       running: false,
       message: err instanceof Error ? err.message : String(err),
@@ -2234,13 +2317,15 @@ export async function getComputerDriverStatus(
     //   - stop 失败(daemon 仍在)→ 同上,静默回落不重启的现场实测。
     if (
       process.platform === 'darwin' &&
+      !computerDriverPermissionProbePaused &&
       options.freshPermissionProbe === true &&
+      passivePermissionProbeSupported &&
       daemon.running &&
       cuaMcpSessions.size === 0 &&
       // CLI-only 安装(无 app bundle)时自愈的 `open` 必然失败:停了就拉不回来,
       // 宁可保留运行中的 daemon(此时读不到 AX 撤销)也不能让「重新检查」这种
       // 看似只读的动作变成破坏性操作(review P2)。
-      existsSync(CUA_DRIVER_APP_BUNDLE_PATH)
+      Boolean(getComputerDriverAppBundlePath())
     ) {
       await runDriver(['stop'], STATUS_TIMEOUT_MS).catch((err: unknown) => {
         logger.warn('failed to stop cua-driver daemon for fresh permission probe', {
@@ -2258,7 +2343,9 @@ export async function getComputerDriverStatus(
     // fresh 探测刚主动停掉 daemon,豁免节流立即拉起)。
     if (
       process.platform === 'darwin' &&
+      !computerDriverPermissionProbePaused &&
       !daemon.running &&
+      passivePermissionProbeSupported &&
       (options.forcePermissionProbe === true || options.freshPermissionProbe === true)
     ) {
       const revived = await tryAutostartCuaDaemon({
@@ -2278,6 +2365,9 @@ export async function getComputerDriverStatus(
     const grantFlowAtProbeStart = permissionGrantInFlight;
     const shouldProbePermissions =
       process.platform === 'darwin' &&
+      !computerDriverPermissionProbePaused &&
+      options.skipPermissionProbe !== true &&
+      passivePermissionProbeSupported &&
       (daemon.running || options.forcePermissionProbe === true || options.freshPermissionProbe === true);
     let permissions: unknown = null;
     let permissionProbe: 'run' | 'cached' | 'skipped' = 'skipped';
@@ -2317,7 +2407,18 @@ export async function getComputerDriverStatus(
         }
       }
     } else {
-      permissionState = normalizePermissionState(null);
+      permissionState = computerDriverPermissionProbePaused && process.platform === 'darwin'
+        ? {
+            platform: 'macos',
+            required: true,
+            status: 'missing',
+            accessibility: 'missing',
+            screenRecording: 'unknown',
+            screenRecordingCapturable: 'unknown',
+            reason: 'Waiting for CuaDriver to be added in System Settings.',
+            canGrant: true,
+          }
+        : normalizePermissionState(null);
     }
     // 权限已确认到位时,收割仍在傻等系统弹窗的 grant 子进程(用户可能是在系统
     // 设置里手动授的权,上游 `permissions grant` 不会自己退出)。
@@ -3011,7 +3112,9 @@ export function cancelComputerDriverPermissionGrant(): void {
   stopPermissionGrantFlow('user cancelled permission guide');
 }
 
-export async function grantComputerDriverPermissions(): Promise<ComputerDriverPermissionGrantResult> {
+export async function grantComputerDriverPermissions(
+  knownStatus?: ComputerDriverStatus,
+): Promise<ComputerDriverPermissionGrantResult> {
   if (process.platform !== 'darwin') {
     const status = await getComputerDriverStatus();
     return {
@@ -3022,6 +3125,22 @@ export async function grantComputerDriverPermissions(): Promise<ComputerDriverPe
     };
   }
 
+  // The phase-one macOS guide owns the drag/enable interaction. While it is
+  // waiting for the real CuaDriver.app row, do not run upstream
+  // `permissions grant`: that command would recreate the row and replace the
+  // designed drag step with its own legacy onboarding.
+  if (computerDriverPermissionProbePaused) {
+    const status = knownStatus
+      ?? await getComputerDriverStatus({ skipPermissionProbe: true });
+    return {
+      ok: false,
+      stdout: '',
+      stderr: '',
+      status,
+    };
+  }
+
+  // Legacy callers without the new guide retain upstream CuaDriver's grant.
   const grantFlow = startPermissionGrantFlow();
   await Promise.race([
     grantFlow.catch(() => null),
@@ -3051,6 +3170,7 @@ export async function callComputerDriverTool(
   args: Record<string, unknown>,
   context?: ComputerMcpCallContext,
 ): Promise<unknown> {
+  assertComputerDriverToolDispatchAvailable();
   const sessionId = readSessionIdFromContext(context);
   if (!sessionId) {
     throw new ComputerDriverError(`Computer Use tool calls require an active ${BRAND_NAME} session.`);
@@ -3060,6 +3180,7 @@ export async function callComputerDriverTool(
   const driverInputArgs = stripLocalListWindowsArgs(name, rawArgs);
   const normalizedArgs = normalizeToolArgsForDriver(name, driverInputArgs);
   const entry = await getCuaMcpSession(sessionId);
+  assertComputerDriverToolDispatchAvailable();
   const driverArgs = applyDriverSessionArgs(name, normalizedArgs, entry.driverSessionId);
   await initializeDefaultCursorStyle(name, driverArgs, entry, entry.driverSessionId);
   const timeoutMs = getCuaMcpToolTimeoutMs(name);
@@ -3093,6 +3214,7 @@ export async function callComputerDriverTool(
           throw err;
         }
         const freshEntry = await getCuaMcpSession(sessionId);
+        assertComputerDriverToolDispatchAvailable();
         if (getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion) {
           await cleanupComputerDriverSessionInternal(sessionId, {
             resetGeneration: false,
@@ -3214,23 +3336,37 @@ function cleanupComputerDriverSessionInternal(
   return cleanup;
 }
 
-export async function cleanupAllComputerDriverSessions(): Promise<void> {
-  stopPermissionGrantFlow('cleanup');
-  clearProcessSnapshotCache();
+async function cleanupActiveComputerDriverSessions(): Promise<void> {
   const sessionIds = Array.from(cuaMcpSessions.keys());
   await Promise.allSettled(sessionIds.map((sessionId) => cleanupComputerDriverSession(sessionId)));
   await Promise.allSettled(Array.from(cuaMcpSessionCleanups.values()));
+}
+
+export async function cleanupAllComputerDriverSessions(): Promise<void> {
+  stopPermissionGrantFlow('cleanup');
+  clearProcessSnapshotCache();
+  await cleanupActiveComputerDriverSessions();
   cuaDriverSessionGenerations.clear();
   cuaMcpSessionCloseVersions.clear();
 }
 
 export function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): ComputerMcpDeps {
+  let runtimePreparation: Promise<void> | null = null;
+  const ensureRuntime = async (): Promise<void> => {
+    if (!options.prepareRuntimeBeforeUse) return;
+    runtimePreparation ??= Promise.resolve().then(options.prepareRuntimeBeforeUse);
+    await runtimePreparation;
+  };
   return {
-    getStatus: getComputerDriverStatus,
+    getStatus: async () => {
+      await ensureRuntime();
+      return getComputerDriverStatus();
+    },
     callTool: async (name, args, context) => {
       if (options.isComputerUseEnabled && !options.isComputerUseEnabled(context)) {
         throw new ComputerDriverError('Computer Use is disabled in Settings.');
       }
+      await ensureRuntime();
       return callComputerDriverTool(name, args, context);
     },
     logger,

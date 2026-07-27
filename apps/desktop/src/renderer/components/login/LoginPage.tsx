@@ -2,6 +2,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type FormEvent,
@@ -14,10 +15,7 @@ import { isValidEmail } from '@cindy/auth-client';
 import { cn } from '@/lib/utils';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { useLogin } from '@/hooks/useLogin';
-import {
-  endLoginFirstLaunchLightGate,
-  loginFirstLaunchLightActive,
-} from '@/hooks/useTheme';
+import { endLoginFirstLaunchLightGate, loginFirstLaunchLightActive } from '@/hooks/useTheme';
 import { LOGIN_HANDOFF_TIMINGS, useLoginHandoff } from '@/contexts/LoginHandoffContext';
 
 import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
@@ -28,10 +26,14 @@ import googleIcon from '@/assets/login/icons/google.svg';
 import wechatIcon from '@/assets/login/icons/wechat.svg';
 import ssoIcon from '@/assets/login/icons/sso.svg';
 import ssoIconDark from '@/assets/login/icons/sso-dark.svg';
+import guestIcon from '@/assets/login/icons/guest.svg';
+import guestIconDark from '@/assets/login/icons/guest-dark.svg';
 
 import { LoginStage } from './LoginStage';
 import {
   LoginBackButton,
+  LoginConsentDialog,
+  LoginConsentRow,
   LoginErrorText,
   LoginInput,
   LoginLoadingRing,
@@ -45,23 +47,28 @@ import {
 } from './LoginControls';
 import { useResendCountdown } from './useResendCountdown';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import { LEGAL_LINKS } from '../../../shared/legalLinks';
 import { resolveIdentifierMethod } from '../../../shared/loginIdentifierMethod';
 import {
   DRAG_BAR_HEIGHT,
   LOADING_RING,
   LOGIN_COLORS,
+  LOGIN_DELETION_BUBBLE,
   LOGIN_LOCAL_MODE,
-  TEXT_LINK,
+  SSO_ORG_HINT,
 } from './loginDesignTokens';
+import { PANEL_FIXED_SCALE } from './loginScale';
+import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './consentGate';
 
 /**
- * LoginPage — 桌面登录(wave4 白底体系 + figma §4 组件库,PR1 stage 框架)。
+ * LoginPage — 桌面登录(wave4 白底体系 + figma §4 组件库)。
  *
- * 呈现层职责不变:凭证/票据全在 main(useLogin dispatch IPC)。
- * PR1 精修态 = identifier 主视图 / ssoOrgMode 子视图(含 sso-org-list = method-choice
- * 的 SSO 入口来源变体)/ preparing 伪态;其余状态以同一组件库承载功能等价渲染,
- * 组件级变体精修(倒计时契约、Text_link 全态、560↔440 锚定切换、错误码全覆盖、
- * chrome 双描边 overlay)归 PR2a/2b(implementation-plan Step 3/3b)。
+ * 呈现层职责:凭证/票据全在 main(useLogin dispatch IPC),本组件只做视图状态机
+ * 渲染与本地格式校验。覆盖全部登录步骤:identifier 主视图 / ssoOrgMode 子视图
+ * (含 sso-org-list = method-choice 的 SSO 入口来源变体)/ method-choice /
+ * verification-code / account-selection / binding / preparing / error,以及
+ * 协议同意链路(radio + 拦截弹窗)与游客入口。倒计时契约、Text_link 全态、
+ * 错误码映射均已落地(历史施工批次见 git log,不再在注释中引用)。
  */
 export function LoginPage() {
   const {
@@ -103,6 +110,88 @@ export function LoginPage() {
     }
   };
 
+  // 企业 SSO 入口子视图:在 identifier 步骤内输入组织标识(本地展示态,不进 main)。
+  // 需先于 bottomReserve 计算声明——协议行只在 identifier 主视图渲染,sso-org 子视图隐藏。
+  const [ssoOrgMode, setSsoOrgMode] = useState(false);
+
+  /* ── 协议同意链路(consent PR):radio 状态 + 未勾选拦截弹窗 + 同意后续接。
+     过门点(产品拍板 2026-07-24 二次):手机号提交、邮箱提交(discover 前)、
+     method-choice 个人行发码、社交圆钮(Apple/Google/未来微信)、游客——个人
+     登录一律先同意协议再发起,包括仅触发方式查询的 email discover(拍板压过
+     审查侧「discover 无副作用可放行」的建议)。豁免仅限显式企业 SSO 入口:
+     SSO 圆钮、组织标识提交、method-choice sso 行。pending 动作只存 renderer
+     本地(不进 main loginFlowState;规则 9:分支全部代码状态机化)。 ── */
+  const [consentAccepted, setConsentAccepted] = useState(false);
+  const [consentDialogOpen, setConsentDialogOpen] = useState(false);
+  // pending 带开门时刻快照,同意时复验防陈旧续接(codex 审查 P1;consentGate 单测)
+  const pendingConsentAction = useRef<{
+    action: () => void;
+    stamp: ConsentStamp;
+  } | null>(null);
+
+  /* 把「用户明示同意《隐私政策》」这个事实落到 main。
+     它是 TapDB 采集的前置条件(见 main/analytics-settings-store.ts):没有这条
+     记录,统计 SDK 一个字节都不会发。写在**放行时刻**而不是勾 radio 时刻——
+     勾了又取消不算同意,同意并继续使用才算。幂等,失败不阻断登录(闸保持关闭)。 */
+  const persistPrivacyConsent = () => {
+    // 记录同意**绝不能挡住登录链路**:preload 面缺失、IPC 未就绪都可能让这里抛。
+    // 失败时闸保持关闭(= 不采集),这是安全的一侧。
+    try {
+      void window.electronAPI.acceptPrivacyConsent().catch(() => undefined);
+    } catch {
+      // no-op
+    }
+  };
+
+  const requireConsent = (action: () => void) => {
+    if (consentAccepted) {
+      persistPrivacyConsent();
+      action();
+      return;
+    }
+    pendingConsentAction.current = {
+      action,
+      stamp: makeConsentStamp(loginState?.step, isLoading, loginState?.step === 'completed'),
+    };
+    setConsentDialogOpen(true);
+  };
+  const agreeConsent = () => {
+    // 同意 = 自动勾选 radio + 续接用户刚才点的那条登录链路(产品拍板)
+    setConsentAccepted(true);
+    setConsentDialogOpen(false);
+    // 点了弹窗上的「同意」即为明示同意,与下面 pending 是否还能续接无关。
+    persistPrivacyConsent();
+    const pending = pendingConsentAction.current;
+    pendingConsentAction.current = null;
+    if (!pending) return;
+    // 复验:弹窗期间 auth 状态被异步推进(登录完成/步骤切换/in-flight)则丢弃动作
+    const current = makeConsentStamp(loginState?.step, isLoading, loginState?.step === 'completed');
+    if (canResumePendingConsent(pending.stamp, current)) pending.action();
+  };
+  const dismissConsent = () => {
+    // 不同意 = 退回登录页,radio 保持未勾选
+    pendingConsentAction.current = null;
+    setConsentDialogOpen(false);
+  };
+  // 弹窗打开期间登录上下文漂移(完成/步骤切换)→ 自动收窗弃 pending
+  useEffect(() => {
+    if (!consentDialogOpen) return;
+    const pending = pendingConsentAction.current;
+    const step = loginState?.step ?? 'unknown';
+    if (step === 'completed' || (pending && step !== pending.stamp.step)) {
+      pendingConsentAction.current = null;
+      setConsentDialogOpen(false);
+    }
+  }, [consentDialogOpen, loginState?.step]);
+  const openLegalLink = (kind: 'terms' | 'privacy') => {
+    // 链接经系统默认浏览器打开(shell:open-external 只放行 http(s),未登录可用);
+    // URL 按构建区域分流(国内 protocol.xd.cn / 国际 protocol.xd.com)。
+    // 吞掉 IPC 失败(与移动端 Linking.openURL(...).catch 同口径),避免未处理 rejection
+    void window.electronAPI
+      ?.openExternal?.(kind === 'terms' ? LEGAL_LINKS.termsOfService : LEGAL_LINKS.privacyPolicy)
+      .catch(() => undefined);
+  };
+
   // handoff「面板已挂载」信号(未登录分支进 panel 步的前置锚,Step 3b WHAT2);
   // 卸载(路由离开 /login)时回报,品牌 overlay 据此卸载。
   const { reportLoginPanelMounted, reportLoginPanelUnmounted } = handoff;
@@ -110,9 +199,16 @@ export function LoginPage() {
     reportLoginPanelMounted();
     return () => reportLoginPanelUnmounted();
   }, [reportLoginPanelMounted, reportLoginPanelUnmounted]);
-  const showLocalModeFooter =
-    loginState?.step !== 'browser-redirect' && loginState?.step !== 'completed';
-  const panelBottomReserve = showLocalModeFooter ? LOGIN_LOCAL_MODE.reservedHeight : 0;
+  // 游客入口已移入第三方圆钮行(identifier 视图人形圆钮);footer 仅保留 error 步
+  // 的「跳过登录」逃生入口——登录服务不可用时用户仍能进入本地模式(既有产品保证)。
+  const showLocalModeFooter = loginState?.step === 'error';
+  // 面板底部预留恒取全流程最大值(footer 124;协议行 48 被其覆盖):step 切换时
+  // 面板/品牌层零跳位(规则 7,codex 审查 P1)。browser-redirect/completed 维持 0,
+  // 与迁移前 main 口径一致(该两步由品牌 overlay/跳转态接管)。
+  const panelBottomReserve =
+    loginState?.step === 'browser-redirect' || loginState?.step === 'completed'
+      ? 0
+      : LOGIN_LOCAL_MODE.reservedHeight;
   const { reportPanelBottomReserve } = handoff;
   useLayoutEffect(() => {
     reportPanelBottomReserve(panelBottomReserve);
@@ -138,8 +234,6 @@ export function LoginPage() {
   // (规则 9:能代码化的格式校验不甩给 server 往返);与 server errorCode 互斥展示
   // (本地错误优先),输入变更即清除。null = 无本地格式错误。
   const [identifierFormatError, setIdentifierFormatError] = useState<VerificationKind | null>(null);
-  // 企业 SSO 入口子视图:在 identifier 步骤内输入组织标识(本地展示态,不进 main)
-  const [ssoOrgMode, setSsoOrgMode] = useState(false);
   const [ssoOrg, setSsoOrg] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
   const [ssoVerificationCode, setSsoVerificationCode] = useState('');
@@ -251,12 +345,14 @@ export function LoginPage() {
         return;
       }
       setIdentifierFormatError(null);
-      void dispatch({ type: 'discover', email: value });
+      // 邮箱提交先过协议门(产品拍板 2026-07-24 二次:手机号/邮箱提交一律先弹协议
+      // 弹窗,压过审查侧「discover 纯查询可放行」的建议;显式企业 SSO 入口仍豁免)
+      requireConsent(() => void dispatch({ type: 'discover', email: value }));
     } else {
       // 手机号:桌面不做客户端 +86/号段校验(#223 仅移动端做 cnPhone 本地拦截),
       // 输入原样透传服务端 request-code,由服务端校验号段合法性。
       setIdentifierFormatError(null);
-      void dispatchRequestCode('phone', value);
+      requireConsent(() => void dispatchRequestCode('phone', value));
     }
   };
 
@@ -323,23 +419,29 @@ export function LoginPage() {
             )}
           </form>
         </LoginPanel>
-        <LoginSocialRow count={providers.social.length + 1}>
+        <LoginSocialRow count={providers.social.length + 2}>
           {providers.social.map((provider) => (
             <LoginSocialButton
               key={provider}
               testId={`login-social-${provider}`}
               label={t('login.socialButton', { provider: t(`login.social.${provider}`) })}
               isLoading={isLoading}
+              // Apple 圆钮走 ADR 官方配色(亮黑圆白标/暗白圆黑标,无描边;Guideline 4)
+              variant={provider === 'apple' ? 'apple' : 'default'}
               onClick={() => {
                 // SC-SOC-7: in-flight(isLoading)期间 no-op 防重复发起;行为层 guard,
                 // 零视觉变化(圆钮已无 disabled 态 per §10 拍板,不回填 disabled 视觉)。
                 if (isLoading) return;
-                void dispatch({
-                  type: 'start-browser',
-                  kind: 'social',
-                  providerOrConnectionId: provider,
-                  label: t(`login.social.${provider}`),
-                });
+                // 社交属个人登录链路,过协议门;同意后续接本次 start-browser
+                requireConsent(
+                  () =>
+                    void dispatch({
+                      type: 'start-browser',
+                      kind: 'social',
+                      providerOrConnectionId: provider,
+                      label: t(`login.social.${provider}`),
+                    }),
+                );
               }}
             >
               <SocialProviderIcon provider={provider} />
@@ -352,6 +454,7 @@ export function LoginPage() {
             isLoading={isLoading}
             onClick={() => {
               // SC-SOC-7: in-flight 期间 no-op(行为层 guard,无 disabled 视觉回填)。
+              // 企业 SSO 豁免协议门(产品拍板),不过 requireConsent。
               if (isLoading) return;
               clearError();
               setSsoOrgMode(true);
@@ -359,7 +462,29 @@ export function LoginPage() {
           >
             <SsoGlyph />
           </LoginSocialButton>
+          {/* 游客登录 = 行内最后一颗人形圆钮(figma 379:680 mdi:user),接既有
+              local mode;属个人链路,过协议门(同意后直接进主界面,产品拍板)。 */}
+          <LoginSocialButton
+            testId="login-social-guest"
+            label={t('login.localModeEntry')}
+            isLoading={isLoading || localModePending}
+            onClick={() => {
+              if (isLoading || localModePending) return;
+              requireConsent(() => void openLocalMode());
+            }}
+          >
+            <GuestGlyph />
+          </LoginSocialButton>
         </LoginSocialRow>
+        {/* 协议同意行(figma 600:660:圆钮行下方 22 设计px,组坐标 y=582;
+            渲染门 = 所在 identifier 主视图分支,面板底部预留恒定已含其区间) */}
+        <LoginConsentRow
+          checked={consentAccepted}
+          onToggle={() => setConsentAccepted((prev) => !prev)}
+          statement={t('login.consentStatement')}
+          onOpenTerms={() => openLegalLink('terms')}
+          onOpenPrivacy={() => openLegalLink('privacy')}
+        />
       </>
     );
   };
@@ -388,15 +513,16 @@ export function LoginPage() {
           error={!!errorCode}
           testId="login-sso-org-input"
         />
-        {/* 帮助行(demo ssoOrgPanel:text-link 位、无下划线、次级色) */}
+        {/* 帮助行(无下划线、次级色;顶对齐 ≤2 行,DESIGN.md §16.2 折行分级 2) */}
         <span
-          className="absolute flex items-center justify-center"
+          className="absolute line-clamp-2 text-center"
           style={{
-            left: TEXT_LINK.x,
-            top: TEXT_LINK.y,
-            width: TEXT_LINK.width,
-            height: 36,
-            fontSize: TEXT_LINK.fontSize,
+            left: SSO_ORG_HINT.x,
+            top: SSO_ORG_HINT.y,
+            width: SSO_ORG_HINT.width,
+            height: SSO_ORG_HINT.lineHeight * SSO_ORG_HINT.maxLines,
+            lineHeight: `${SSO_ORG_HINT.lineHeight}px`,
+            fontSize: SSO_ORG_HINT.fontSize,
             color: LOGIN_COLORS.secondaryText,
           }}
         >
@@ -415,7 +541,7 @@ export function LoginPage() {
     </LoginPanel>
   );
 
-  /* ── method-choice(含 sso-org-list 来源变体;方式行精修归 PR2a) ── */
+  /* ── method-choice(含 sso-org-list 来源变体) ── */
   const renderMethodChoice = () => {
     if (loginState?.step !== 'method-choice') return null;
     const ssoMethods = loginState.methods.filter((method) => method.type === 'sso');
@@ -466,7 +592,11 @@ export function LoginPage() {
             disabled={isLoading}
             title={t('login.personalLogin')}
             subtitle={t('login.personalDesc')}
-            onClick={() => void dispatchRequestCode('email', loginState.email)}
+            // 个人邮箱发码 = 个人链路实际发起点,在此过协议门(discover 已放行,
+            // 保证企业用户经 discover→SSO 全程无门)
+            onClick={() =>
+              requireConsent(() => void dispatchRequestCode('email', loginState.email))
+            }
           />
         )}
         {ssoMethods.some((method) => method.ssoRequired) && (
@@ -478,7 +608,7 @@ export function LoginPage() {
     );
   };
 
-  /* ── verification-code(倒计时契约/Text_link 全态归 PR2a Step 3a) ── */
+  /* ── verification-code(42s 重发倒计时 = 绝对 deadline 模型,双端同契约) ── */
   const renderVerification = () => {
     if (loginState?.step !== 'verification-code') return null;
     const submit = (event: FormEvent) => {
@@ -540,7 +670,7 @@ export function LoginPage() {
     );
   };
 
-  /* ── account-selection(行样式复用方式行;精修归 PR2a) ── */
+  /* ── account-selection(行样式复用方式行) ── */
   const renderAccountSelection = () => {
     if (loginState?.step !== 'account-selection') return null;
     return (
@@ -639,7 +769,7 @@ export function LoginPage() {
     );
   };
 
-  /* ── binding 两阶段(精修归 PR2a) ── */
+  /* ── binding 两阶段 ── */
   const renderBinding = () => {
     if (loginState?.step !== 'binding') return null;
     const contact = loginState.contact ?? bindingContact;
@@ -799,34 +929,33 @@ export function LoginPage() {
       ? `opacity ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}, transform ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}`
       : undefined,
   };
-  const localModeFooter =
-    showLocalModeFooter ? (
-      <>
-        <button
-          data-testid="login-local-mode"
-          type="button"
-          disabled={localModePending || isLoading}
-          onClick={() => void openLocalMode()}
-          aria-describedby="login-local-mode-description"
-          className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60"
-          style={{ minHeight: 40 }}
-        >
-          {localModePending ? t('login.localModeOpening') : t('login.localModeEntry')}
-        </button>
-        <span
-          id="login-local-mode-description"
-          className="mt-2 line-clamp-2 max-w-full text-12 text-[var(--text-secondary)]"
-          style={{ lineHeight: `${LOGIN_LOCAL_MODE.descriptionLineHeight}px` }}
-        >
-          {t('login.localModeDescription')}
-        </span>
-      </>
-    ) : null;
+  const localModeFooter = showLocalModeFooter ? (
+    <>
+      <button
+        data-testid="login-local-mode"
+        type="button"
+        disabled={localModePending || isLoading}
+        onClick={() => requireConsent(() => void openLocalMode())}
+        aria-describedby="login-local-mode-description"
+        className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+        style={{ minHeight: 40 }}
+      >
+        {localModePending ? t('login.localModeOpening') : t('login.localModeEntry')}
+      </button>
+      <span
+        id="login-local-mode-description"
+        className="mt-2 line-clamp-2 max-w-full text-12 text-[var(--text-secondary)]"
+        style={{ lineHeight: `${LOGIN_LOCAL_MODE.descriptionLineHeight}px` }}
+      >
+        {t('login.localModeDescription')}
+      </span>
+    </>
+  ) : null;
 
   return (
     // 根级 z-[9990] 建立 LoginPage 自己的 stacking context:整体压过品牌 overlay
     // (LoginBrandStage z-[9980])、低于 SplashScreen(z-[9999]);内部 stage(z-auto)
-    // / 窗框描边(z-30)/ 拖拽条(z-40)沿 PR2a 相对层序不变(PR2b handoff 合流)。
+    // / 窗框描边(z-30)/ 拖拽条(z-40)相对层序固定(handoff 合流时序依赖此序)。
     <div className="relative z-[9990] min-h-screen">
       <LoginStage
         ssoOrgGroupY={ssoOrgGroupY}
@@ -834,21 +963,32 @@ export function LoginPage() {
         footer={localModeFooter}
         bottomReserve={panelBottomReserve}
       >
-        {accountDeletionStatus && (
-          <AccountDeletionStatusPanel
-            status={accountDeletionStatus}
-            onDismiss={
-              accountDeletionStatus.status === 'completed'
-                ? () => {
-                    void clearAccountDeletionReceipt?.().catch(() => undefined);
-                    setAccountDeletionStatus(null);
-                  }
-                : undefined
-            }
-          />
-        )}
         {node}
       </LoginStage>
+      {/* 注销状态提示气泡(figma 678:1075「注销状态」组件集):浮层——不占文档流、
+          不推挤下方内容,z-30 盖过 stage 全部内容(低于拖拽条 z-40 与协议弹窗 z-50);
+          窗口顶 72px 恒定、水平窗口居中、宽 670 恒定,均不随 loginScale 缩放。
+          显隐与面板入场同节奏(只淡入,不参与位移)。 */}
+      {accountDeletionStatus && (
+        <AccountDeletionStatusPanel
+          status={accountDeletionStatus}
+          onDismiss={
+            accountDeletionStatus.status === 'completed'
+              ? () => {
+                  void clearAccountDeletionReceipt?.().catch(() => undefined);
+                  setAccountDeletionStatus(null);
+                }
+              : undefined
+          }
+          style={{
+            opacity: panelHidden ? 0 : 1,
+            pointerEvents: panelHidden ? 'none' : undefined,
+            transition: handoff.isPlaying
+              ? `opacity ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}`
+              : undefined,
+          }}
+        />
+      )}
       {/* 顶部 46px 拖拽条 overlay(附录 C §1.4 条4:独立层不占文档流;返回钮在
           面板区 y≫46px 不被遮挡;Win 控件 no-drag)。窗框双描边 chrome overlay 已于
           2026-07-22 随 PR #104 对齐(纯平白底 + 无窗框描边)移除 */}
@@ -863,6 +1003,21 @@ export function LoginPage() {
           </div>
         )}
       </div>
+      {/* 服务条款和隐私协议确认弹窗(figma 602:822/602:1249):个人登录链路在
+          radio 未勾选时统一拦截;同意=勾选并续接,不同意=留在登录页。
+          z-50 盖过 stage 与拖拽条(根 z-[9990] stacking context 内)。 */}
+      {consentDialogOpen && (
+        <LoginConsentDialog
+          title={t('login.consentDialog.title')}
+          body={t('login.consentDialog.body')}
+          agreeLabel={t('login.consentDialog.agree')}
+          disagreeLabel={t('login.consentDialog.disagree')}
+          onAgree={agreeConsent}
+          onDisagree={dismissConsent}
+          onOpenTerms={() => openLegalLink('terms')}
+          onOpenPrivacy={() => openLegalLink('privacy')}
+        />
+      )}
     </div>
   );
 }
@@ -893,12 +1048,32 @@ function SocialProviderIcon({ provider }: { provider: SocialProvider }) {
   );
 }
 
+/**
+ * 注销状态提示气泡(figma 678:1075「注销状态」组件集)。
+ *
+ * 浮层组件——absolute 定位、不占布局流、盖在登录页一切元素(立绘/字标/面板/社交行)之上。
+ * 几何**全部用设计单位书写**(`LOGIN_DELETION_BUBBLE`,1819×2098 的 2x 稿),由外层
+ * wrapper 施加与登录组同一个 `PANEL_FIXED_SCALE`(=0.5)缩放 —— 与 LoginStage 对面板的
+ * 做法一致,故 Figma 数值可逐字落码:屏幕上宽 335 / 顶距 36 CSS px,与面板 340 基本同宽。
+ * (2026-07-26 修正:初版把设计单位当 CSS px 用,气泡在屏幕上宽了整一倍。)
+ *
+ * 排版全居中,标题与正文同字号(20/23 设计单位)仅以颜色区分(标题 login-control-text /
+ * 正文 login-secondary-text);间距 标题↔正文 5、正文↔「我知道了」22、「我知道了」↔气泡底
+ * 20(= 下 padding,文案拉长不变)。「我知道了」为下划线文字链,上下各 11 设计单位 padding
+ * 撑热区、等量负 margin 抵消视觉间距(缩放后约 22 CSS px 高,桌面鼠标指针足够;
+ * 触摸端的 ≥44 物理热区由 mobile 侧 hitSlop 负责)。
+ * 状态:pending/processing 无按钮、completed 带「我知道了」;颜色全走 token
+ * (气泡底 login-deletion-bubble-bg、描边 login-deletion-bubble-border,固定亮/暗值)。
+ */
 function AccountDeletionStatusPanel({
   status,
   onDismiss,
+  style,
 }: {
   status: AccountDeletionStatus;
   onDismiss?: () => void;
+  /** 浮层显隐(handoff 合流:与面板入场同节奏,只淡入不透明、不参与位移)。 */
+  style?: CSSProperties;
 }) {
   const { t } = useTranslation();
   const titleKey =
@@ -914,31 +1089,82 @@ function AccountDeletionStatusPanel({
         ? 'accountDeletion.status.processingCopy'
         : 'accountDeletion.status.completedCopy';
 
+  const B = LOGIN_DELETION_BUBBLE;
   return (
-    <section
-      aria-label={t(titleKey)}
-      className="mb-5 w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3"
+    // 定位 + 缩放层(同 LoginStage 对面板的做法):transformOrigin 取 top center,
+    // 使 `translateX(-50%) scale(k)` 的可视框以 left:50% 为中心、顶边落在 top 值上。
+    // 宽度写设计单位,窄窗时按「可视宽 ≤ 100vw-24」反算(可视宽 = 设计宽 × k)。
+    <div
+      data-testid="login-deletion-bubble-scale"
+      className="absolute left-1/2 z-30"
+      style={{
+        top: B.top * PANEL_FIXED_SCALE,
+        width: B.width,
+        // 窄窗钳制:可视宽 = 设计宽 × k,要求可视宽 ≤ 100vw-24 → 设计宽上限按 1/k 反算
+        maxWidth: `calc(${100 / PANEL_FIXED_SCALE}vw - ${24 / PANEL_FIXED_SCALE}px)`,
+        transform: `translateX(-50%) scale(${PANEL_FIXED_SCALE})`,
+        transformOrigin: 'top center',
+        opacity: style?.opacity,
+        pointerEvents: style?.pointerEvents,
+        transition: style?.transition,
+      }}
     >
-      <h2 className="text-14 font-medium text-[var(--text-primary)]">{t(titleKey)}</h2>
-      <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-        {t(copyKey, {
-          date: formatAccountDeletionDate(status.deleteAfter),
-        })}
-      </p>
-      {onDismiss && (
-        <button
-          type="button"
-          onClick={onDismiss}
-          className={cn(
-            'mt-2 rounded-full px-2 py-1 text-12 text-[var(--text-secondary)]',
-            'transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-          )}
+      <section
+        aria-label={t(titleKey)}
+        className="w-full break-words border border-[var(--login-deletion-bubble-border)] bg-[var(--login-deletion-bubble-bg)] text-center"
+        style={{
+          borderRadius: B.radius,
+          padding: B.padding,
+          // 描边保持 1 物理 px(DESIGN.md §16.4):wrapper 的 scale 会把 1px 缩成
+          // 0.5px(DPR=1 下变虚/消失),按 1/k 设计单位补偿,缩放后恰为 1 CSS px
+          borderWidth: 1 / PANEL_FIXED_SCALE,
+        }}
+      >
+        <h2
+          className="font-normal text-[var(--login-control-text)]"
+          style={{ fontSize: B.font, lineHeight: `${B.lineHeight}px` }}
         >
-          {t('accountDeletion.status.dismissButton')}
-        </button>
-      )}
-    </section>
+          {t(titleKey)}
+        </h2>
+        <p
+          className="font-normal text-[var(--login-secondary-text)]"
+          style={{
+            fontSize: B.font,
+            lineHeight: `${B.lineHeight}px`,
+            marginTop: B.titleBodyGap,
+          }}
+        >
+          {t(copyKey, {
+            date: formatAccountDeletionDate(status.deleteAfter),
+          })}
+        </p>
+        {onDismiss && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className={cn(
+              'border-0 bg-transparent font-normal text-[var(--login-control-text)] underline',
+              'hover:enabled:[color:var(--login-link-hover)] active:enabled:[color:var(--login-link-pressed)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+            )}
+            style={{
+              fontSize: B.font,
+              lineHeight: `${B.lineHeight}px`,
+              // 热区:上下各 linkHitPadding 撑开,等量负 margin 抵消,
+              // 视觉间距仍是 上 bodyLinkGap / 下 padding
+              marginTop: B.bodyLinkGap - B.linkHitPadding,
+              marginBottom: -B.linkHitPadding,
+              paddingTop: B.linkHitPadding,
+              paddingBottom: B.linkHitPadding,
+              paddingLeft: B.padding,
+              paddingRight: B.padding,
+            }}
+          >
+            {t('accountDeletion.status.dismissButton')}
+          </button>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -953,6 +1179,21 @@ function SsoGlyph() {
   return (
     <img
       src={isDark ? ssoIconDark : ssoIcon}
+      alt=""
+      aria-hidden
+      draggable={false}
+      className="h-full w-full object-contain"
+    />
+  );
+}
+
+// 游客人形图标(figma 379:753 mdi:user):单色随圆钮底反相(亮色深圆浅标 #EEEEEE /
+// 暗色白圆墨标 #2A2828),与 Apple 单色图标同规则。
+function GuestGlyph() {
+  const isDark = useIsDarkMode();
+  return (
+    <img
+      src={isDark ? guestIconDark : guestIcon}
       alt=""
       aria-hidden
       draggable={false}

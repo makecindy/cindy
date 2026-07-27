@@ -1,0 +1,428 @@
+{
+  "ok": true,
+  "toolVersion": "qa-hifi-demo@2026-07-25-p0-hardening",
+  "demo": "deletion-banner-repro",
+  "inputHashes": {
+    "spec.json": "249c2a33e35c138c96dfdd58fbc22eb7fe5d815087dcccd76e4a570552a74fa7",
+    "truth.json": "46af01379aa39634aac52121e5ba02b5b12675bad6e5cf111b26f5125a7c811a",
+    "index.html": "8a2be15f5488ebf828fd25aacdea61a614a0e3f5bcfff8c0db494972945ab0f0",
+    "baselines": {
+      "declared": [],
+      "files": []
+    }
+  },
+  "statesResult": {
+    "total": 3,
+    "viaReachable": 3,
+    "tabOnly": 0
+  },
+  "coverage": {
+    "cases": [
+      {
+        "id": "desk-cn-light-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "desk-cn-dark-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "zh-CN"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "desk-global-light-en",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "light",
+          "lang": "en"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "desk-global-dark-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "zh-CN"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "phone-cn-light-zh",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "ios",
+          "mode": "light",
+          "lang": "zh-CN"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "phone-cn-dark-zh",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "zh-CN"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "phone-global-light-en",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "light",
+          "lang": "en"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "phone-global-dark-en",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "en"
+        },
+        "source": "verify.cases"
+      }
+    ]
+  },
+  "gateA": {
+    "name": "真值一致",
+    "pass": true,
+    "detail": "",
+    "provenance": "required",
+    "extractorDrift": "none"
+  },
+  "gateB": {
+    "name": "状态覆盖",
+    "pass": true,
+    "total": 24,
+    "passed": 24,
+    "failures": [],
+    "cases": [
+      {
+        "id": "desk-cn-light-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        },
+        "passed": 3,
+        "total": 3,
+        "failures": []
+      },
+      {
+        "id": "desk-cn-dark-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "zh-CN"
+        },
+        "passed": 3,
+        "total": 3,
+        "failures": []
+      },
+      {
+        "id": "desk-global-light-en",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "light",
+          "lang": "en"
+        },
+        "passed": 3,
+        "total": 3,
+        "failures": []
+      },
+      {
+        "id": "desk-global-dark-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "zh-CN"
+        },
+        "passed": 3,
+        "total": 3,
+        "failures": []
+      },
+      {
+        "id": "phone-cn-light-zh",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "ios",
+          "mode": "light",
+          "lang": "zh-CN"
+        },
+        "passed": 3,
+        "total": 3,
+        "failures": []
+      },
+      {
+        "id": "phone-cn-dark-zh",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "zh-CN"
+        },
+        "passed": 3,
+        "total": 3,
+        "failures": []
+      },
+      {
+        "id": "phone-global-light-en",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "light",
+          "lang": "en"
+        },
+        "passed": 3,
+        "total": 3,
+        "failures": []
+      },
+      {
+        "id": "phone-global-dark-en",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "en"
+        },
+        "passed": 3,
+        "total": 3,
+        "failures": []
+      }
+    ]
+  },
+  "gateC": {
+    "name": "交互鲁棒",
+    "pass": true,
+    "checks": [
+      {
+        "id": "no-clip",
+        "pass": true,
+        "failures": []
+      },
+      {
+        "id": "persistence",
+        "pass": true,
+        "failures": []
+      }
+    ],
+    "cases": [
+      {
+        "id": "desk-cn-light-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "desk-cn-dark-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "desk-global-light-en",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "light",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "desk-global-dark-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "phone-cn-light-zh",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "ios",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "phone-cn-dark-zh",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "phone-global-light-en",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "light",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "phone-global-dark-en",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "en"
+        }
+      }
+    ]
+  },
+  "gateD": {
+    "name": "渲染绑定",
+    "pass": true,
+    "total": 496,
+    "passed": 496,
+    "failures": [],
+    "cases": [
+      {
+        "id": "desk-cn-light-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "desk-cn-dark-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "desk-global-light-en",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "light",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "desk-global-dark-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "phone-cn-light-zh",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "ios",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "phone-cn-dark-zh",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "phone-global-light-en",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "light",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "phone-global-dark-en",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "en"
+        }
+      }
+    ]
+  },
+  "gateF": {
+    "name": "适配还原",
+    "pass": true,
+    "total": 0,
+    "passed": 0,
+    "failures": [],
+    "cases": [],
+    "detail": "spec.adaptive 未配置——窗口拉伸行为未验证"
+  },
+  "generatedAt": "2026-07-25T20:35:53.844Z"
+}

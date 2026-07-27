@@ -4,7 +4,7 @@ import { extractMobileDevRegionArgs, MOBILE_DEV_REGIONS } from './mobile-dev-reg
 export const MOBILE_XCODE_REGIONS = MOBILE_DEV_REGIONS;
 
 /**
- * 解析 mobile:xcode 参数。未显式指定 region 时与其它本地 mobile 入口一样默认 cn。
+ * 解析 mobile:xcode 参数。未显式指定 region 时与其它本地 mobile 入口一样默认 global。
  */
 export function parseMobileXcodeArgs(argv) {
   const { region, passthrough } = extractMobileDevRegionArgs(argv);

@@ -34,6 +34,8 @@ const HEADER_HOVER_ACTION_CLASS =
 
 export interface DateGroupedSessionsSectionProps {
   sessions: Session[];
+  /** 首次载入会话列表时避免把暂时的空数组误报成真正空态。 */
+  isLoading: boolean;
   allKnownProjects: ProjectNodeData[];
   filter: UseSidebarFilterReturn;
   activeSessionId?: string;
@@ -64,6 +66,7 @@ function formatDateGroupLabel(
 
 export function DateGroupedSessionsSection({
   sessions,
+  isLoading,
   allKnownProjects,
   filter,
   activeSessionId,
@@ -102,14 +105,18 @@ export function DateGroupedSessionsSection({
     [i18n.language],
   );
 
-  if (groups.length === 0 && !filter.isFilterActive && !machineFilterActive) return null;
+  if (groups.length === 0 && !isLoading && !filter.isFilterActive && !machineFilterActive) return null;
 
   return (
     <div className="flex w-full flex-col gap-2">
       {groups.length === 0 ? (
         <div className="group/sidebar-header flex h-6 select-none items-center justify-between pr-0 pl-6">
           <span className="text-sm font-semibold text-[var(--cmd-palette-item-meta)]">
-            {t('ccAgent.sidebar.dateGroup.empty')}
+            {t(
+              isLoading
+                ? 'ccAgent.sidebar.loadingDialogues'
+                : 'ccAgent.sidebar.dateGroup.empty',
+            )}
           </span>
           <div className="-mt-px flex items-center gap-0.5">
             <div className={HEADER_HOVER_ACTION_CLASS}>

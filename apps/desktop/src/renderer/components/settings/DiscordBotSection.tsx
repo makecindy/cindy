@@ -1,18 +1,12 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Eye,
-  EyeOff,
-  Loader2,
-  Trash2,
-} from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useDiscordBot } from '@/hooks/useDiscordBot';
+import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
+import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 
 const DISCORD_DEVELOPER_PORTAL_URL = 'https://discord.com/developers/applications';
 
@@ -39,12 +33,16 @@ function statusColor(s: DiscordBotTransportStatus): string {
 }
 
 function statusTextColor(s: DiscordBotTransportStatus): string {
-  return s.kind === 'connected'
-    ? 'var(--settings-badge-connected-text)'
-    : statusColor(s);
+  return s.kind === 'connected' ? 'var(--settings-badge-connected-text)' : statusColor(s);
 }
 
-export function DiscordBotSection() {
+export function DiscordBotSection({
+  expanded,
+  onToggle,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const {
     token,
     setToken,
@@ -61,6 +59,7 @@ export function DiscordBotSection() {
 
   const [showToken, setShowToken] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
+  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('discord');
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
 
@@ -105,18 +104,25 @@ export function DiscordBotSection() {
   const hasSavedCreds = status.kind !== 'idle';
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.discordBot.title')}
-        </h2>
+    <ImChannelSettingsCard
+      id="personal-im-discord"
+      title={t('settings.discordBot.title')}
+      description={t('settings.discordBot.description')}
+      routeSummary={
+        routeSummary
+          ? `${t(`settings.imBot.defaults.agents.${routeSummary.agentKind}`)} · ${routeSummary.model}`
+          : null
+      }
+      expanded={expanded}
+      onToggle={onToggle}
+      status={
         <span
           className={cn(
             'inline-flex items-center gap-1.5 rounded-full',
-            'px-3 py-[5px]',
+            'px-2.5 py-1',
             'bg-[var(--settings-badge-bg)]',
             'border border-[var(--settings-badge-border)]',
-            'text-12 font-medium tracking-[0.12px]',
+            'text-11 font-medium tracking-[0.12px]',
           )}
           style={{ letterSpacing: '0.12px', color: statusTextColor(status) }}
           role="status"
@@ -130,12 +136,10 @@ export function DiscordBotSection() {
           />
           {t(statusKey[status.kind])}
         </span>
-      </div>
-
-      <p className="text-13 leading-[1.6] text-[var(--settings-section-desc)]">
-        {t('settings.discordBot.description')}
-      </p>
-
+      }
+    >
+      <ImDefaultSettingsSection channel="discord" embedded onSummaryChange={setRouteSummary} />
+      <div className="h-px w-full bg-[var(--border-default)]" />
       {/* 与 FeishuBotSection 同构:已连接 → 状态卡(单个解绑);否则表单(单个连接)。 */}
       {status.kind === 'connected' ? (
         <ConnectedCard
@@ -145,167 +149,165 @@ export function DiscordBotSection() {
           onDisconnect={() => void handleDisconnectClick()}
         />
       ) : (
-      <div className="flex flex-col gap-3">
-        <label
-          className="text-12 font-medium text-[var(--settings-section-desc)]"
-          style={{ letterSpacing: '0.12px' }}
-        >
-          {t('settings.discordBot.tokenLabel')}
-        </label>
-        <div className="relative">
+        <div className="flex flex-col gap-3">
+          <label
+            className="text-12 font-medium text-[var(--settings-section-desc)]"
+            style={{ letterSpacing: '0.12px' }}
+          >
+            {t('settings.discordBot.tokenLabel')}
+          </label>
+          <div className="relative">
+            <input
+              type={showToken ? 'text' : 'password'}
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder={t('settings.discordBot.tokenPlaceholder')}
+              spellCheck={false}
+              autoComplete="off"
+              className={cn(
+                'h-[42px] w-full rounded-full pl-[14px] pr-10',
+                'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
+                'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
+                'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
+              )}
+              style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+            />
+            <button
+              type="button"
+              onClick={() => setShowToken(!showToken)}
+              className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
+              aria-label={
+                showToken ? t('settings.discordBot.hideToken') : t('settings.discordBot.showToken')
+              }
+            >
+              {showToken ? <Eye size={18} /> : <EyeOff size={18} />}
+            </button>
+          </div>
+
+          <label
+            className="text-12 font-medium text-[var(--settings-section-desc)]"
+            style={{ letterSpacing: '0.12px' }}
+          >
+            {t('settings.discordBot.ownerUserIdLabel')}
+          </label>
           <input
-            type={showToken ? 'text' : 'password'}
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder={t('settings.discordBot.tokenPlaceholder')}
+            type="text"
+            value={ownerUserId}
+            onChange={(e) => setOwnerUserId(e.target.value)}
+            placeholder={t('settings.discordBot.ownerUserIdPlaceholder')}
             spellCheck={false}
             autoComplete="off"
+            inputMode="numeric"
             className={cn(
-              'h-[42px] w-full rounded-full pl-[14px] pr-10',
+              'h-[42px] w-full rounded-full pl-[14px] pr-[14px]',
               'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
               'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
               'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
             )}
             style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
           />
-          <button
-            type="button"
-            onClick={() => setShowToken(!showToken)}
-            className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
-            aria-label={
-              showToken
-                ? t('settings.discordBot.hideToken')
-                : t('settings.discordBot.showToken')
-            }
-          >
-            {showToken ? <Eye size={18} /> : <EyeOff size={18} />}
-          </button>
-        </div>
 
-        <label
-          className="text-12 font-medium text-[var(--settings-section-desc)]"
-          style={{ letterSpacing: '0.12px' }}
-        >
-          {t('settings.discordBot.ownerUserIdLabel')}
-        </label>
-        <input
-          type="text"
-          value={ownerUserId}
-          onChange={(e) => setOwnerUserId(e.target.value)}
-          placeholder={t('settings.discordBot.ownerUserIdPlaceholder')}
-          spellCheck={false}
-          autoComplete="off"
-          inputMode="numeric"
-          className={cn(
-            'h-[42px] w-full rounded-full pl-[14px] pr-[14px]',
-            'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
-            'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
-            'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
-          )}
-          style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
-        />
-
-        {/* 提示/错误行:右侧小垃圾桶仅在已有保存凭证时出现(对齐 FeishuBotSection) */}
-        <div className="flex min-h-[18px] items-center justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            {validationError ? (
-              <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-                {validationError}
-              </p>
-            ) : status.kind === 'error' ? (
-              <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-                {status.reason}
-              </p>
-            ) : (
-              <p className="text-12 text-[var(--settings-source-meta)]">
-                {t('settings.discordBot.formHint')}
-              </p>
+          {/* 提示/错误行:右侧小垃圾桶仅在已有保存凭证时出现(对齐 FeishuBotSection) */}
+          <div className="flex min-h-[18px] items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              {validationError ? (
+                <p className="text-12 text-[var(--settings-error-text)]" role="alert">
+                  {validationError}
+                </p>
+              ) : status.kind === 'error' ? (
+                <p className="text-12 text-[var(--settings-error-text)]" role="alert">
+                  {status.reason}
+                </p>
+              ) : (
+                <p className="text-12 text-[var(--settings-source-meta)]">
+                  {t('settings.discordBot.formHint')}
+                </p>
+              )}
+            </div>
+            {hasSavedCreds && (
+              <button
+                type="button"
+                onClick={() => void handleDisconnectClick()}
+                disabled={isDisconnecting}
+                aria-label={t('settings.discordBot.disconnectAria')}
+                className={cn(
+                  'mr-[4px] flex shrink-0 items-center justify-center bg-transparent p-0',
+                  'text-[var(--settings-trash-icon)] transition-colors hover:text-[var(--settings-trash-icon-hover)]',
+                  isDisconnecting && 'cursor-not-allowed opacity-40',
+                )}
+              >
+                <Trash2 size={18} />
+              </button>
             )}
           </div>
-          {hasSavedCreds && (
-            <button
-              type="button"
-              onClick={() => void handleDisconnectClick()}
-              disabled={isDisconnecting}
-              aria-label={t('settings.discordBot.disconnectAria')}
-              className={cn(
-                'mr-[4px] flex shrink-0 items-center justify-center bg-transparent p-0',
-                'text-[var(--settings-trash-icon)] transition-colors hover:text-[var(--settings-trash-icon-hover)]',
-                isDisconnecting && 'cursor-not-allowed opacity-40',
-              )}
-            >
-              <Trash2 size={18} />
-            </button>
-          )}
-        </div>
 
-        <button
-          type="button"
-          onClick={() => void connect()}
-          disabled={!canConnect}
-          className={cn(
-            'flex h-[42px] w-full items-center justify-center gap-1.5 rounded-full',
-            'bg-[var(--settings-btn-primary-bg)] border border-[var(--settings-btn-primary-border)]',
-            'text-13 font-medium text-[var(--settings-btn-primary-text)]',
-            'transition-colors hover:bg-[var(--settings-btn-primary-hover-bg)]',
-            !canConnect && 'cursor-not-allowed opacity-40',
-          )}
-        >
-          {isSaving ? (
-            <span className="inline-flex animate-spin motion-reduce:animate-none" aria-hidden>
-              <Loader2 size={14} />
-            </span>
-          ) : null}
-          {isSaving
-            ? t('settings.discordBot.connectingAction')
-            : t('settings.discordBot.connect')}
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={() => void connect()}
+            disabled={!canConnect}
+            className={cn(
+              'flex h-[42px] w-full items-center justify-center gap-1.5 rounded-full',
+              'bg-[var(--settings-btn-primary-bg)] border border-[var(--settings-btn-primary-border)]',
+              'text-13 font-medium text-[var(--settings-btn-primary-text)]',
+              'transition-colors hover:bg-[var(--settings-btn-primary-hover-bg)]',
+              !canConnect && 'cursor-not-allowed opacity-40',
+            )}
+          >
+            {isSaving ? (
+              <span className="inline-flex animate-spin motion-reduce:animate-none" aria-hidden>
+                <Loader2 size={14} />
+              </span>
+            ) : null}
+            {isSaving
+              ? t('settings.discordBot.connectingAction')
+              : t('settings.discordBot.connect')}
+          </button>
+        </div>
       )}
 
       <div className="border-t border-[var(--settings-theme-card-border)] pt-3">
-          <button
-            type="button"
-            onClick={() => setGuideOpen(!guideOpen)}
-            className="flex w-full items-center justify-between gap-3 bg-transparent p-0 text-left"
-            aria-expanded={guideOpen}
-          >
-            <span className="text-13 font-medium text-[var(--settings-section-title)]">
-              {t('settings.discordBot.guide.title')}
-            </span>
-            <span className="text-[var(--settings-section-desc)]">
-              {guideOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-            </span>
-          </button>
+        <button
+          type="button"
+          onClick={() => setGuideOpen(!guideOpen)}
+          className="flex w-full items-center justify-between gap-3 bg-transparent p-0 text-left"
+          aria-expanded={guideOpen}
+        >
+          <span className="text-13 font-medium text-[var(--settings-section-title)]">
+            {t('settings.discordBot.guide.title')}
+          </span>
+          <span className="text-[var(--settings-section-desc)]">
+            {guideOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          </span>
+        </button>
 
-          {guideOpen && (
-            <div className="mt-3 flex flex-col gap-3">
-              {guideSteps.map((step, index) => (
-                <div key={step.title} className="flex gap-3">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] text-11 font-medium text-[var(--settings-section-title)]">
-                    {index + 1}
-                  </span>
-                  <div className="min-w-0">
-                    <div className="text-12 font-medium text-[var(--settings-section-title)]">
-                      {step.title}
-                    </div>
-                    <div className="mt-0.5 text-12 leading-[1.6] text-[var(--settings-section-desc)]">
-                      {step.body}
-                    </div>
+        {guideOpen && (
+          <div className="mt-3 flex flex-col gap-3">
+            {guideSteps.map((step, index) => (
+              <div key={step.title} className="flex gap-3">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] text-11 font-medium text-[var(--settings-section-title)]">
+                  {index + 1}
+                </span>
+                <div className="min-w-0">
+                  <div className="text-12 font-medium text-[var(--settings-section-title)]">
+                    {step.title}
+                  </div>
+                  <div className="mt-0.5 text-12 leading-[1.6] text-[var(--settings-section-desc)]">
+                    {step.body}
                   </div>
                 </div>
-              ))}
-              <button
-                type="button"
-                onClick={openDeveloperPortal}
-                className="w-fit cursor-pointer bg-transparent p-0 text-12 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2"
-              >
-                {t('settings.discordBot.guide.openPortal')}
-              </button>
-            </div>
-          )}
-        </div>
-    </div>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={openDeveloperPortal}
+              className="w-fit cursor-pointer bg-transparent p-0 text-12 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2"
+            >
+              {t('settings.discordBot.guide.openPortal')}
+            </button>
+          </div>
+        )}
+      </div>
+    </ImChannelSettingsCard>
   );
 }
 

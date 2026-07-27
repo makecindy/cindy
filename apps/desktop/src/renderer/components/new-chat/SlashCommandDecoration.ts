@@ -19,7 +19,7 @@ import type { UnifiedCommand } from '@/lib/slashCommands';
 const PLUGIN_KEY = new PluginKey<SlashCommandPluginState>('slashCommandDecoration');
 const META_KEY = 'slashCommandDecoration';
 
-type SlashCommandRoster = ReadonlyArray<Pick<UnifiedCommand, 'name' | 'description'>>;
+export type SlashCommandRoster = ReadonlyArray<Pick<UnifiedCommand, 'name' | 'description'>>;
 
 interface SlashCommandPluginState {
   commands: SlashCommandRoster;
@@ -138,11 +138,21 @@ export function setSlashCommandRoster(editor: Editor | null, commands: SlashComm
   editor.view.dispatch(editor.state.tr.setMeta(META_KEY, commands));
 }
 
+/** Return the command roster currently used by the decoration plugin. */
+export function getSlashCommandRoster(state: EditorState): SlashCommandRoster {
+  return PLUGIN_KEY.getState(state)?.commands ?? [];
+}
+
+/** Return a roster update carried by this transaction, if present. */
+export function getSlashCommandRosterUpdate(
+  tr: Transaction,
+): SlashCommandRoster | undefined {
+  return tr.getMeta(META_KEY) as SlashCommandRoster | undefined;
+}
+
 /** Return the exact slash runs currently decorated by this editor's roster. */
 export function getDecoratedSlashCommandMatches(editor: Editor): SlashCommandMatch[] {
-  const current = PLUGIN_KEY.getState(editor.state);
-  if (!current) return [];
-  return findSlashCommandMatches(editor.state.doc, current.commands);
+  return findSlashCommandMatches(editor.state.doc, getSlashCommandRoster(editor.state));
 }
 
 /** 导出供 ProseMirror state 层测试 roster、退格与 legacy 草稿迁移。 */

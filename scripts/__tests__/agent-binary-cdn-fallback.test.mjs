@@ -31,7 +31,8 @@ before(async () => {
   server = http.createServer((req, res) => {
     const urlPath = req.url.split('?')[0];
     const handler = routes.get(urlPath);
-    if (!handler) {
+    // 显式校验取出的是函数再调用(CodeQL js/unvalidated-dynamic-method-call)
+    if (typeof handler !== 'function') {
       res.writeHead(404);
       res.end('not found');
       return;

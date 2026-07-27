@@ -1,0 +1,2689 @@
+{
+  "desk": {
+    "colors": {
+      "appleCircleBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-apple-circle-bg').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#FFFFFF"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-apple-circle-bg').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#000000"
+        }
+      },
+      "bannerBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('surface-chip').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#3c3c3a"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('surface-chip').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#e5e5e5"
+        }
+      },
+      "bannerBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('border-default').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#3c3c3a"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('border-default').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#d7d7d4"
+        }
+      },
+      "bannerCopyText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('text-secondary').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#a3a3a3"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('text-secondary').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#737373"
+        }
+      },
+      "bannerTitleText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('text-primary').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#d4d4d4"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('text-primary').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#262626"
+        }
+      },
+      "bgBase": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-bg-base').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#1F1F1E"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-bg-base').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#EDEDED"
+        }
+      },
+      "brandAccent": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-brand-accent').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#DF0C27"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-brand-accent').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#DF0C27"
+        }
+      },
+      "consentRadioBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-consent-radio-bg').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#2A2828"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-consent-radio-bg').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#F1F0F1"
+        }
+      },
+      "consentRadioBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-consent-radio-border').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#F1F0F1"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-consent-radio-border').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#434343"
+        }
+      },
+      "consentRadioCheck": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-consent-radio-check').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#2A2828"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-consent-radio-check').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#FFFFFF"
+        }
+      },
+      "consentRadioCheckedBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-consent-radio-checked-bg').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#F1F0F1"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-consent-radio-checked-bg').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#2A2828"
+        }
+      },
+      "controlBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-control-bg').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#2C2A2A"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-control-bg').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#EEEEEE"
+        }
+      },
+      "controlBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-control-border').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#434343"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-control-border').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#D4D4D4"
+        }
+      },
+      "controlPlaceholder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-control-placeholder').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#6F6F6F"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-control-placeholder').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#D4D4D4"
+        }
+      },
+      "controlText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-control-text').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#EEEEEE"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-control-text').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#252222"
+        }
+      },
+      "invertedButtonBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-inverted-button-border').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#FFFFFF"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-inverted-button-border').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#FFFFFF"
+        }
+      },
+      "linkText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-link-text').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#EEEEEE"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-link-text').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#2A2828"
+        }
+      },
+      "panelBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-panel-bg').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#312F2F"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-panel-bg').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#FBFBFB"
+        }
+      },
+      "panelBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-panel-border').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#434343"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-panel-border').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#D4D4D4"
+        }
+      },
+      "primaryButtonBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-primary-button-bg').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#EEEEEE"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-primary-button-bg').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#2A2828"
+        }
+      },
+      "primaryButtonBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-primary-button-border').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#FFFFFF"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-primary-button-border').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#434343"
+        }
+      },
+      "primaryButtonText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-primary-button-text').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#2A2828"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-primary-button-text').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#D4D4D4"
+        }
+      },
+      "secondaryText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-secondary-text').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#6F6F6F"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-secondary-text').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#6F6F6F"
+        }
+      },
+      "titleText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-title-text').dark",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#D4D4D4"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+            "locator": "[pinned 75baac1ee] registerColor('login-title-text').light",
+            "source": "_pinned/apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#252222"
+        }
+      }
+    },
+    "constants": {
+      "identifierMethod": {
+        "cn": {
+          "provenance": {
+            "hash": "sha256:80aec94dfbe774e45e84525df7f62dac25bc9f23aef4d1d760f26f9dd2467635",
+            "locator": "[pinned 75baac1ee] resolveIdentifierMethod:region!=='global'→phone(providers 双 true 仿真)",
+            "source": "_pinned/apps/desktop/src/shared/loginIdentifierMethod.ts"
+          },
+          "value": "phone"
+        },
+        "global": {
+          "provenance": {
+            "hash": "sha256:80aec94dfbe774e45e84525df7f62dac25bc9f23aef4d1d760f26f9dd2467635",
+            "locator": "[pinned 75baac1ee] resolveIdentifierMethod:region==='global'→email(providers 双 true 仿真)",
+            "source": "_pinned/apps/desktop/src/shared/loginIdentifierMethod.ts"
+          },
+          "value": "email"
+        }
+      },
+      "legalLinks": {
+        "cn": {
+          "provenance": {
+            "hash": "sha256:49f74abacc987e6a5481bda879f5cfd72c57fede32e2c727a913a8c21a736b74",
+            "locator": "[pinned 75baac1ee] CN_LEGAL_LINKS",
+            "source": "_pinned/apps/desktop/src/shared/legalLinks.ts"
+          },
+          "value": {
+            "privacy": "https://protocol.xd.cn/cindy/privacy-1.0.html",
+            "terms": "https://protocol.xd.cn/cindy/agreement.html"
+          }
+        },
+        "global": {
+          "provenance": {
+            "hash": "sha256:49f74abacc987e6a5481bda879f5cfd72c57fede32e2c727a913a8c21a736b74",
+            "locator": "[pinned 75baac1ee] GLOBAL_LEGAL_LINKS",
+            "source": "_pinned/apps/desktop/src/shared/legalLinks.ts"
+          },
+          "value": {
+            "privacy": "https://protocol.xd.com/cindy/privacy.html",
+            "terms": "https://protocol.xd.com/cindy/agreement-1.0.html"
+          }
+        }
+      }
+    },
+    "copy": {
+      "en": {
+        "provenance": {
+          "hash": "sha256:7a770acd5f62796d64410e236513aac0f101b86ab848daf2410772011c793233",
+          "locator": "[pinned 75baac1ee] accountDeletion.status.* + login.{title,subtitle,phonePlaceholder,emailPlaceholder,continue,consentStatement,globalRegion,ssoEntry,socialButton,social.*,localMode*}",
+          "source": "_pinned/apps/desktop/src/renderer/i18n/locales/en/common.json"
+        },
+        "value": {
+          "completedCopy": "Your Cindy sign-in account has been removed.",
+          "completedTitle": "Account deleted",
+          "consentStatement": "I have read and agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
+          "dismissButton": "Got it",
+          "emailPlaceholder": "Enter your email",
+          "globalRegion": "Global",
+          "identifierContinue": "Continue",
+          "identifierPlaceholder": "Enter your phone number",
+          "identifierSubtitle": "Choose a secure way to sign in",
+          "identifierTitle": "Welcome to Cindy",
+          "localModeDescription": "No Cindy account required. Data stays on this device; cloud models, cross-device access, and marketplace services are unavailable.",
+          "localModeEntry": "Skip Sign-In",
+          "pendingCopy": "Scheduled for permanent deletion on {{date}}. Sign in before then to cancel deletion.",
+          "pendingTitle": "Account scheduled for deletion",
+          "processingCopy": "The waiting period ended. Your Cindy sign-in account is being removed.",
+          "processingTitle": "Account deletion in progress",
+          "socialApple": "Apple",
+          "socialButton": "Continue with {{provider}}",
+          "socialGoogle": "Google",
+          "socialWechat": "WeChat",
+          "ssoEntry": "Sign in with enterprise SSO"
+        }
+      },
+      "ja": {
+        "provenance": {
+          "hash": "sha256:09eb0a32f8f6b7a83bbc2a03db44550888d0f542091cd9a862a3b74a78568561",
+          "locator": "[pinned 75baac1ee] accountDeletion.status.* + login.{title,subtitle,phonePlaceholder,emailPlaceholder,continue,consentStatement,globalRegion,ssoEntry,socialButton,social.*,localMode*}",
+          "source": "_pinned/apps/desktop/src/renderer/i18n/locales/ja/common.json"
+        },
+        "value": {
+          "completedCopy": "Cindy のログインアカウントを削除しました。",
+          "completedTitle": "アカウントを削除しました",
+          "consentStatement": "<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を読み、同意します",
+          "dismissButton": "確認",
+          "emailPlaceholder": "メールアドレスを入力",
+          "globalRegion": "Global",
+          "identifierContinue": "続行",
+          "identifierPlaceholder": "電話番号を入力",
+          "identifierSubtitle": "安全なログイン方法を選択してください",
+          "identifierTitle": "Cindy へようこそ",
+          "localModeDescription": "Cindy アカウントは不要です。データはこのデバイスに保存され、クラウドモデル、デバイス間アクセス、マーケットサービスは利用できません。",
+          "localModeEntry": "ログインをスキップ",
+          "pendingCopy": "{{date}} に完全削除される予定です。それまでにログインすると削除を取り消せます。",
+          "pendingTitle": "アカウントは削除待ちです",
+          "processingCopy": "待機期間が終了し、Cindy のログインアカウントを削除しています。",
+          "processingTitle": "アカウントを削除しています",
+          "socialApple": "Apple",
+          "socialButton": "{{provider}} で続行",
+          "socialGoogle": "Google",
+          "socialWechat": "WeChat",
+          "ssoEntry": "企業 SSO でサインイン"
+        }
+      },
+      "ko": {
+        "provenance": {
+          "hash": "sha256:adaedcd4ec436e7ec739157df5cc6834b5a8571b28d5b351739c62393233d994",
+          "locator": "[pinned 75baac1ee] accountDeletion.status.* + login.{title,subtitle,phonePlaceholder,emailPlaceholder,continue,consentStatement,globalRegion,ssoEntry,socialButton,social.*,localMode*}",
+          "source": "_pinned/apps/desktop/src/renderer/i18n/locales/ko/common.json"
+        },
+        "value": {
+          "completedCopy": "Cindy 로그인 계정이 삭제되었습니다.",
+          "completedTitle": "계정 삭제 완료",
+          "consentStatement": "<terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>을 읽고 동의합니다",
+          "dismissButton": "확인",
+          "emailPlaceholder": "이메일 입력",
+          "globalRegion": "Global",
+          "identifierContinue": "계속",
+          "identifierPlaceholder": "휴대폰 번호 입력",
+          "identifierSubtitle": "안전한 로그인 방법을 선택하세요",
+          "identifierTitle": "Cindy에 오신 것을 환영합니다",
+          "localModeDescription": "Cindy 계정이 필요하지 않습니다. 데이터는 이 기기에 저장되며 클라우드 모델, 기기 간 연결 및 마켓 서비스는 사용할 수 없습니다.",
+          "localModeEntry": "로그인 건너뛰기",
+          "pendingCopy": "{{date}}에 영구 삭제될 예정입니다. 그 전에 로그인하면 삭제를 취소할 수 있습니다.",
+          "pendingTitle": "계정 삭제 대기 중",
+          "processingCopy": "대기 기간이 끝나 Cindy 로그인 계정을 삭제하고 있습니다.",
+          "processingTitle": "계정 삭제 진행 중",
+          "socialApple": "Apple",
+          "socialButton": "{{provider}}(으)로 계속",
+          "socialGoogle": "Google",
+          "socialWechat": "WeChat",
+          "ssoEntry": "기업 SSO로 로그인"
+        }
+      },
+      "zh-CN": {
+        "provenance": {
+          "hash": "sha256:546572b84575c601ec1a68d7f3b8393b05e7eaef7367734da53cf0f3a5aea76c",
+          "locator": "[pinned 75baac1ee] accountDeletion.status.* + login.{title,subtitle,phonePlaceholder,emailPlaceholder,continue,consentStatement,globalRegion,ssoEntry,socialButton,social.*,localMode*}",
+          "source": "_pinned/apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+        },
+        "value": {
+          "completedCopy": "Cindy 登录账号已删除。",
+          "completedTitle": "账号已注销",
+          "consentStatement": "我已阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私协议</privacy>",
+          "dismissButton": "我知道了",
+          "emailPlaceholder": "请输入邮箱",
+          "globalRegion": "Global",
+          "identifierContinue": "继续",
+          "identifierPlaceholder": "请输入手机号",
+          "identifierSubtitle": "选择一种方式安全登录",
+          "identifierTitle": "欢迎使用 Cindy",
+          "localModeDescription": "无需 Cindy 账号，数据保存在本机。云模型、跨设备与市场服务不可用。",
+          "localModeEntry": "跳过登录",
+          "pendingCopy": "账号计划于 {{date}} 永久删除。在此之前重新登录可取消注销。",
+          "pendingTitle": "账号正在等待注销",
+          "processingCopy": "等待期已结束，Cindy 登录账号正在删除。",
+          "processingTitle": "账号正在注销",
+          "socialApple": "Apple",
+          "socialButton": "使用 {{provider}} 登录",
+          "socialGoogle": "Google",
+          "socialWechat": "微信",
+          "ssoEntry": "使用企业 SSO 登录"
+        }
+      }
+    },
+    "geometry": {
+      "banner": {
+        "borderWidth": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] border=1",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 1
+        },
+        "copyFontSize": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] text-12(globals.css --text-12)",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 12
+        },
+        "copyLineHeight": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] leading-5=20",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 20
+        },
+        "copyMarginTop": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] mt-1=4",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 4
+        },
+        "dismissFontSize": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] text-12",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 12
+        },
+        "dismissMarginTop": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] mt-2=8",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 8
+        },
+        "dismissPadX": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] px-2=8",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 8
+        },
+        "dismissPadY": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] py-1=4",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 4
+        },
+        "marginBottom": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] mb-5=20(tailwind spacing×4)",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 20
+        },
+        "padX": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] px-4=16",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 16
+        },
+        "padY": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] py-3=12",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 12
+        },
+        "radius": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] rounded-xl=12",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 12
+        },
+        "titleFontSize": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] text-14(globals.css --text-14)",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 14
+        },
+        "titleWeight": {
+          "provenance": {
+            "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+            "locator": "[pinned 75baac1ee] font-medium=500",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+          },
+          "value": 500
+        }
+      },
+      "consentRow": {
+        "fontSize": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONSENT_ROW.fontSize",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 20
+        },
+        "gap": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONSENT_ROW.gap",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 6.5
+        },
+        "height": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONSENT_ROW.height",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 40
+        },
+        "lineHeight": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONSENT_ROW 文字行高 23(LoginControls.tsx:745 lineHeight:\"23px\")",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 23
+        },
+        "radioHitSize": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONSENT_ROW.radio.hitSize",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 24
+        },
+        "radioRingRadius": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONSENT_ROW.radio.ringRadius",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 9
+        },
+        "radioRingSize": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONSENT_ROW.radio.ringSize",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 20
+        },
+        "radioRingStroke": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONSENT_ROW.radio.ringStroke",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 2
+        },
+        "width": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONSENT_ROW.width",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 680
+        },
+        "y": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONSENT_ROW.y",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 582
+        }
+      },
+      "control": {
+        "buttonY": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONTROL.buttonY",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 300
+        },
+        "fontSize": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONTROL.fontSize",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 24
+        },
+        "height": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONTROL.height",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 80
+        },
+        "inputY": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONTROL.inputY",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 158
+        },
+        "radius": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONTROL.radius",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 40
+        },
+        "textPadLeft": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONTROL.textPadLeft",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 31
+        },
+        "width": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONTROL.width",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 540
+        },
+        "x": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] CONTROL.x",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 70
+        }
+      },
+      "globalPill": {
+        "fontSize": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] Global 徽标 fontSize:16(LoginControls.tsx:118 inline style 字面量)",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 16
+        },
+        "gap": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] GLOBAL_PILL.gap",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 2
+        },
+        "height": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] GLOBAL_PILL.height",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 30
+        },
+        "radius": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] GLOBAL_PILL.radius",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 40
+        },
+        "width": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] GLOBAL_PILL.width",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 70
+        }
+      },
+      "group": {
+        "height": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] LOGIN_GROUP.height",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 560
+        },
+        "width": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] LOGIN_GROUP.width",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 680
+        },
+        "x": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] LOGIN_GROUP.x",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 570
+        },
+        "yDefault": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] LOGIN_GROUP.yDefault",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 1229
+        }
+      },
+      "localMode": {
+        "descriptionLineHeight": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] LOGIN_LOCAL_MODE.descriptionLineHeight",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 18
+        },
+        "gap": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] LOGIN_LOCAL_MODE.gap",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 16
+        },
+        "reservedHeight": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] LOGIN_LOCAL_MODE.reservedHeight",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 124
+        }
+      },
+      "panel": {
+        "height": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] PANEL.height",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 440
+        },
+        "left": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] PANEL.left=0(同左)",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 0
+        },
+        "radius": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] PANEL.radius",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 36
+        },
+        "top": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] PANEL.top=0(由 LoginControls.tsx:48 absolute left-0 top-0)",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 0
+        },
+        "width": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] PANEL.width",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 680
+        }
+      },
+      "panelFixedScale": {
+        "provenance": {
+          "hash": "sha256:9ce9fa4385a8faf05aa2aac4187d3610d2694e55a8a667b07d1712812d37b980",
+          "locator": "[pinned 75baac1ee] PANEL_FIXED_SCALE",
+          "source": "_pinned/apps/desktop/src/renderer/components/login/loginScale.ts"
+        },
+        "value": 0.5
+      },
+      "social": {
+        "gap": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] SOCIAL.gap",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 70
+        },
+        "iconSize": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] SOCIAL.iconSize",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 48
+        },
+        "radius": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] SOCIAL.radius",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 50
+        },
+        "size": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] SOCIAL.size",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 80
+        },
+        "y": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] SOCIAL.y",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 480
+        }
+      },
+      "stage": {
+        "height": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] STAGE.height",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 2098
+        },
+        "width": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] STAGE.width",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 1819
+        }
+      },
+      "subtitle": {
+        "fontSize": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] SUBTITLE.fontSize",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 20
+        },
+        "lineHeight": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] SUBTITLE.lineHeight",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 23
+        },
+        "maxLines": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] SUBTITLE.maxLines",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 2
+        },
+        "width": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] SUBTITLE.width",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 540
+        },
+        "x": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] SUBTITLE.x",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 70
+        },
+        "y": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] SUBTITLE.y",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 75
+        }
+      },
+      "title": {
+        "fontSize": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] TITLE.fontSize",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 32
+        },
+        "height": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] TITLE.height",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 38
+        },
+        "y": {
+          "provenance": {
+            "hash": "sha256:4b8033a4fd89a9e9982f8ead249d3596bfdf0fbe446028225fa258f277f7db0b",
+            "locator": "[pinned 75baac1ee] TITLE.y",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+          },
+          "value": 31
+        }
+      }
+    },
+    "icons": {
+      "apple": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:a1186519bc5a19eef17b11f8b8d80497305866d3bf89b1c7a6ca65e7efd580af",
+            "locator": "[pinned 75baac1ee] svg 文件全文",
+            "source": "_pinned/apps/desktop/src/renderer/assets/login/icons/apple-dark.svg"
+          },
+          "value": "<!-- artwork 来自 Apple Design Resources「Sign in with Apple - Logo Only」Black 变体\n     (Logo - SIWA - Logo-only - Black.svg):path d 原样未改动,仅去除方形底 rect 并按\n     logo 光学中心裁切 viewBox(占位缩放,非改绘,logo 高约为圆钮 46%,对齐设计标准图)。\n     暗色模式:白圆底 + 黑标(ADR White button 配色)。 -->\n<svg width=\"48\" height=\"48\" viewBox=\"15.7 13.2 24.6 24.6\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<path d=\"M28.2226562,20.3846154 C29.0546875,20.3846154 30.0976562,19.8048315 30.71875,19.0317864 C31.28125,18.3312142 31.6914062,17.352829 31.6914062,16.3744437 C31.6914062,16.2415766 31.6796875,16.1087095 31.65625,16 C30.7304687,16.0362365 29.6171875,16.640178 28.9492187,17.4494596 C28.421875,18.06548 27.9414062,19.0317864 27.9414062,20.0222505 C27.9414062,20.1671964 27.9648438,20.3121424 27.9765625,20.3604577 C28.0351562,20.3725366 28.1289062,20.3846154 28.2226562,20.3846154 Z M25.2929688,35 C26.4296875,35 26.9335938,34.214876 28.3515625,34.214876 C29.7929688,34.214876 30.109375,34.9758423 31.375,34.9758423 C32.6171875,34.9758423 33.4492188,33.792117 34.234375,32.6325493 C35.1132812,31.3038779 35.4765625,29.9993643 35.5,29.9389701 C35.4179688,29.9148125 33.0390625,28.9122695 33.0390625,26.0979021 C33.0390625,23.6579784 34.9140625,22.5588048 35.0195312,22.474253 C33.7773438,20.6382708 31.890625,20.5899555 31.375,20.5899555 C29.9804688,20.5899555 28.84375,21.4596313 28.1289062,21.4596313 C27.3554688,21.4596313 26.3359375,20.6382708 25.1289062,20.6382708 C22.8320312,20.6382708 20.5,22.5950413 20.5,26.2911634 C20.5,28.5861411 21.3671875,31.013986 22.4335938,32.5842339 C23.3476562,33.9129053 24.1445312,35 25.2929688,35 Z\" fill=\"#000000\" fill-rule=\"nonzero\"/>\n</svg>\n"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:220a7ef3d6063cc2e0840c94d28c9df7d62da390c75f716be6f4115eed540752",
+            "locator": "[pinned 75baac1ee] svg 文件全文",
+            "source": "_pinned/apps/desktop/src/renderer/assets/login/icons/apple.svg"
+          },
+          "value": "<!-- artwork 来自 Apple Design Resources「Sign in with Apple - Logo Only」White 变体\n     (Logo - SIWA - Logo-only - White.svg):path d 原样未改动,仅去除方形底 rect 并按\n     logo 光学中心裁切 viewBox(占位缩放,非改绘,logo 高约为圆钮 46%,对齐设计标准图)。\n     亮色模式:黑圆底 + 白标(ADR Black button 配色)。 -->\n<svg width=\"48\" height=\"48\" viewBox=\"15.7 13.2 24.6 24.6\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<path d=\"M28.2226562,20.3846154 C29.0546875,20.3846154 30.0976562,19.8048315 30.71875,19.0317864 C31.28125,18.3312142 31.6914062,17.352829 31.6914062,16.3744437 C31.6914062,16.2415766 31.6796875,16.1087095 31.65625,16 C30.7304687,16.0362365 29.6171875,16.640178 28.9492187,17.4494596 C28.421875,18.06548 27.9414062,19.0317864 27.9414062,20.0222505 C27.9414062,20.1671964 27.9648438,20.3121424 27.9765625,20.3604577 C28.0351562,20.3725366 28.1289062,20.3846154 28.2226562,20.3846154 Z M25.2929688,35 C26.4296875,35 26.9335938,34.214876 28.3515625,34.214876 C29.7929688,34.214876 30.109375,34.9758423 31.375,34.9758423 C32.6171875,34.9758423 33.4492188,33.792117 34.234375,32.6325493 C35.1132812,31.3038779 35.4765625,29.9993643 35.5,29.9389701 C35.4179688,29.9148125 33.0390625,28.9122695 33.0390625,26.0979021 C33.0390625,23.6579784 34.9140625,22.5588048 35.0195312,22.474253 C33.7773438,20.6382708 31.890625,20.5899555 31.375,20.5899555 C29.9804688,20.5899555 28.84375,21.4596313 28.1289062,21.4596313 C27.3554688,21.4596313 26.3359375,20.6382708 25.1289062,20.6382708 C22.8320312,20.6382708 20.5,22.5950413 20.5,26.2911634 C20.5,28.5861411 21.3671875,31.013986 22.4335938,32.5842339 C23.3476562,33.9129053 24.1445312,35 25.2929688,35 Z\" fill=\"#FFFFFF\" fill-rule=\"nonzero\"/>\n</svg>\n"
+        }
+      },
+      "consentCheck": {
+        "d": {
+          "provenance": {
+            "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
+            "locator": "[pinned 75baac1ee] ConsentCheckGlyph path d",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginControls.tsx"
+          },
+          "value": "M6.6 10.4 L9.3 12.9 L15 8.2"
+        },
+        "stroke": {
+          "provenance": {
+            "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
+            "locator": "[pinned 75baac1ee] ConsentCheckGlyph strokeWidth=3",
+            "source": "_pinned/apps/desktop/src/renderer/components/login/LoginControls.tsx"
+          },
+          "value": 3
+        }
+      },
+      "google": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:f7ef6da85beb8982464cadf7d898d09233a0b474dd5d28330249c8ef4d3f2e63",
+            "locator": "[pinned 75baac1ee] svg 文件全文",
+            "source": "_pinned/apps/desktop/src/renderer/assets/login/icons/google.svg"
+          },
+          "value": "<svg width=\"48\" height=\"48\" viewBox=\"0 0 48 48\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<g id=\"&#229;&#133;&#182;&#228;&#187;&#150;&#231;&#153;&#187;&#229;&#189;&#149;&#230;&#150;&#185;&#229;&#188;&#143;&#229;&#133;&#165;&#229;&#143;&#163;\">\n<g id=\"Property 1=Google\">\n<g id=\"material-icon-theme:google\">\n<g id=\"Group\">\n<path id=\"Vector\" opacity=\"0.987\" fill-rule=\"evenodd\" clip-rule=\"evenodd\" d=\"M22.1323 7.58511C23.8472 7.39351 24.862 7.39351 26.7047 7.58511C29.9666 8.06789 32.9903 9.57562 35.3387 11.8903C33.7518 13.3903 32.1857 14.9122 30.6409 16.4556C27.6825 13.9482 24.3803 13.3695 20.7343 14.7194C18.0597 15.9494 16.1973 17.9427 15.147 20.6993C13.4307 19.4215 11.7368 18.114 10.066 16.7773C9.94986 16.7162 9.81724 16.6938 9.6875 16.7135C12.3416 11.5962 16.489 8.55259 22.1299 7.58274\" fill=\"#F44336\"/>\n<path id=\"Vector_2\" opacity=\"0.997\" fill-rule=\"evenodd\" clip-rule=\"evenodd\" d=\"M9.68212 16.7126C9.81617 16.6921 9.94311 16.7134 10.063 16.7765C11.7338 18.1132 13.4277 19.4207 15.144 20.6984C14.8739 21.7725 14.7037 22.8692 14.6354 23.9746C14.6938 25.0438 14.8633 26.0933 15.144 27.1231L9.80986 31.3691C7.48696 26.5151 7.44438 21.6297 9.68212 16.7126Z\" fill=\"#FFC107\"/>\n<path id=\"Vector_3\" opacity=\"0.999\" fill-rule=\"evenodd\" clip-rule=\"evenodd\" d=\"M35.0866 36.513C33.4257 35.0483 31.6869 33.6743 29.8779 32.3971C31.6914 31.1166 32.7921 29.3598 33.1801 27.1268H24.293V20.9553C29.4182 20.9127 34.541 20.9561 39.6615 21.0854C40.6329 26.3604 39.5109 31.1166 36.2954 35.3539C35.913 35.7604 35.508 36.1472 35.0866 36.513Z\" fill=\"#448AFF\"/>\n<path id=\"Vector_4\" opacity=\"0.993\" fill-rule=\"evenodd\" clip-rule=\"evenodd\" d=\"M15.1466 27.127C17.0863 31.9478 20.6424 34.1981 25.8149 33.878C27.2669 33.7099 28.6591 33.2027 29.8788 32.3972C31.6892 33.6777 33.4255 35.0497 35.0876 36.5132C32.454 38.8797 29.0961 40.2839 25.5618 40.4966C24.7589 40.5608 23.952 40.5608 23.149 40.4966C17.1281 39.787 12.6826 36.745 9.8125 31.3706L15.1466 27.127Z\" fill=\"#43A047\"/>\n</g>\n</g>\n</g>\n</g>\n</svg>\n"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:f7ef6da85beb8982464cadf7d898d09233a0b474dd5d28330249c8ef4d3f2e63",
+            "locator": "[pinned 75baac1ee] svg 文件全文",
+            "source": "_pinned/apps/desktop/src/renderer/assets/login/icons/google.svg"
+          },
+          "value": "<svg width=\"48\" height=\"48\" viewBox=\"0 0 48 48\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<g id=\"&#229;&#133;&#182;&#228;&#187;&#150;&#231;&#153;&#187;&#229;&#189;&#149;&#230;&#150;&#185;&#229;&#188;&#143;&#229;&#133;&#165;&#229;&#143;&#163;\">\n<g id=\"Property 1=Google\">\n<g id=\"material-icon-theme:google\">\n<g id=\"Group\">\n<path id=\"Vector\" opacity=\"0.987\" fill-rule=\"evenodd\" clip-rule=\"evenodd\" d=\"M22.1323 7.58511C23.8472 7.39351 24.862 7.39351 26.7047 7.58511C29.9666 8.06789 32.9903 9.57562 35.3387 11.8903C33.7518 13.3903 32.1857 14.9122 30.6409 16.4556C27.6825 13.9482 24.3803 13.3695 20.7343 14.7194C18.0597 15.9494 16.1973 17.9427 15.147 20.6993C13.4307 19.4215 11.7368 18.114 10.066 16.7773C9.94986 16.7162 9.81724 16.6938 9.6875 16.7135C12.3416 11.5962 16.489 8.55259 22.1299 7.58274\" fill=\"#F44336\"/>\n<path id=\"Vector_2\" opacity=\"0.997\" fill-rule=\"evenodd\" clip-rule=\"evenodd\" d=\"M9.68212 16.7126C9.81617 16.6921 9.94311 16.7134 10.063 16.7765C11.7338 18.1132 13.4277 19.4207 15.144 20.6984C14.8739 21.7725 14.7037 22.8692 14.6354 23.9746C14.6938 25.0438 14.8633 26.0933 15.144 27.1231L9.80986 31.3691C7.48696 26.5151 7.44438 21.6297 9.68212 16.7126Z\" fill=\"#FFC107\"/>\n<path id=\"Vector_3\" opacity=\"0.999\" fill-rule=\"evenodd\" clip-rule=\"evenodd\" d=\"M35.0866 36.513C33.4257 35.0483 31.6869 33.6743 29.8779 32.3971C31.6914 31.1166 32.7921 29.3598 33.1801 27.1268H24.293V20.9553C29.4182 20.9127 34.541 20.9561 39.6615 21.0854C40.6329 26.3604 39.5109 31.1166 36.2954 35.3539C35.913 35.7604 35.508 36.1472 35.0866 36.513Z\" fill=\"#448AFF\"/>\n<path id=\"Vector_4\" opacity=\"0.993\" fill-rule=\"evenodd\" clip-rule=\"evenodd\" d=\"M15.1466 27.127C17.0863 31.9478 20.6424 34.1981 25.8149 33.878C27.2669 33.7099 28.6591 33.2027 29.8788 32.3972C31.6892 33.6777 33.4255 35.0497 35.0876 36.5132C32.454 38.8797 29.0961 40.2839 25.5618 40.4966C24.7589 40.5608 23.952 40.5608 23.149 40.4966C17.1281 39.787 12.6826 36.745 9.8125 31.3706L15.1466 27.127Z\" fill=\"#43A047\"/>\n</g>\n</g>\n</g>\n</g>\n</svg>\n"
+        }
+      },
+      "guest": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:72506589adc69fefbc6b57f642da32497c494133421e4e7c42efabfa634182e8",
+            "locator": "[pinned 75baac1ee] svg 文件全文",
+            "source": "_pinned/apps/desktop/src/renderer/assets/login/icons/guest-dark.svg"
+          },
+          "value": "<svg width=\"48\" height=\"48\" viewBox=\"0 0 48 48\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<g id=\"Property 1=游客\">\n<g id=\"mdi:user\">\n<path id=\"Vector\" d=\"M24 8C26.1217 8 28.1566 8.84285 29.6569 10.3431C31.1571 11.8434 32 13.8783 32 16C32 18.1217 31.1571 20.1566 29.6569 21.6569C28.1566 23.1571 26.1217 24 24 24C21.8783 24 19.8434 23.1571 18.3431 21.6569C16.8429 20.1566 16 18.1217 16 16C16 13.8783 16.8429 11.8434 18.3431 10.3431C19.8434 8.84285 21.8783 8 24 8ZM24 28C32.84 28 40 31.58 40 36V40H8V36C8 31.58 15.16 28 24 28Z\" fill=\"#2A2828\"/>\n</g>\n</g>\n</svg>\n"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:20bb8379ce376ab1eae0cd33a2aabbb895504d69c7a388703a4fead265390866",
+            "locator": "[pinned 75baac1ee] svg 文件全文",
+            "source": "_pinned/apps/desktop/src/renderer/assets/login/icons/guest.svg"
+          },
+          "value": "<svg width=\"48\" height=\"48\" viewBox=\"0 0 48 48\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<g id=\"Property 1=游客\">\n<g id=\"mdi:user\">\n<path id=\"Vector\" d=\"M24 8C26.1217 8 28.1566 8.84285 29.6569 10.3431C31.1571 11.8434 32 13.8783 32 16C32 18.1217 31.1571 20.1566 29.6569 21.6569C28.1566 23.1571 26.1217 24 24 24C21.8783 24 19.8434 23.1571 18.3431 21.6569C16.8429 20.1566 16 18.1217 16 16C16 13.8783 16.8429 11.8434 18.3431 10.3431C19.8434 8.84285 21.8783 8 24 8ZM24 28C32.84 28 40 31.58 40 36V40H8V36C8 31.58 15.16 28 24 28Z\" fill=\"#EEEEEE\"/>\n</g>\n</g>\n</svg>\n"
+        }
+      },
+      "sso": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:bfb6e770eb51961c9f6403a20ff77ce5d1d2297bd1bc14876c43f72e76c268fc",
+            "locator": "[pinned 75baac1ee] svg 文件全文",
+            "source": "_pinned/apps/desktop/src/renderer/assets/login/icons/sso-dark.svg"
+          },
+          "value": "<svg width=\"48\" height=\"48\" viewBox=\"0 0 48 48\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<g id=\"&#229;&#133;&#182;&#228;&#187;&#150;&#231;&#153;&#187;&#229;&#189;&#149;&#230;&#150;&#185;&#229;&#188;&#143;&#229;&#133;&#165;&#229;&#143;&#163;\">\n<g id=\"Property 1=SSO\">\n<g id=\"SSO&#231;&#153;&#187;&#229;&#189;&#149; 1\">\n<g id=\"SSO\">\n<path id=\"Vector\" d=\"M37.8674 37.1222C35.8843 37.1222 34.3663 36.5591 33.3135 35.4329C32.2608 34.3066 31.7344 32.7152 31.7344 30.6585V17.1434C31.7344 15.0868 32.2608 13.4953 33.3135 12.3691C34.3663 11.2428 35.8843 10.6797 37.8674 10.6797C39.8506 10.6797 41.3685 11.2428 42.4213 12.3691C43.4741 13.4953 44.0005 15.0868 44.0005 17.1434V30.6585C44.0005 32.7152 43.4741 34.3066 42.4213 35.4329C41.3685 36.5591 39.8506 37.1222 37.8674 37.1222ZM37.8674 33.4497C39.263 33.4497 39.9607 32.605 39.9607 30.9156V16.8863C39.9607 15.197 39.263 14.3523 37.8674 14.3523C36.4719 14.3523 35.7741 15.197 35.7741 16.8863V30.9156C35.7741 32.605 36.4719 33.4497 37.8674 33.4497Z\" fill=\"#2A2828\"/>\n<path id=\"Vector_2\" d=\"M23.6135 37.1222C21.6548 37.1222 20.1736 36.5714 19.1698 35.4696C18.166 34.3433 17.6641 32.7396 17.6641 30.6585V29.1895H21.4834V30.9523C21.4834 32.6172 22.1812 33.4497 23.5768 33.4497C24.2623 33.4497 24.7764 33.2538 25.1192 32.8621C25.4864 32.4458 25.6701 31.7848 25.6701 30.8789C25.6701 29.8016 25.4252 28.8589 24.9356 28.051C24.4459 27.2185 23.54 26.2269 22.2179 25.0762C20.5531 23.6072 19.3901 22.285 18.7291 21.1098C18.068 19.9101 17.7375 18.5635 17.7375 17.07C17.7375 15.0378 18.2517 13.4708 19.28 12.3691C20.3082 11.2428 21.8017 10.6797 23.7604 10.6797C25.6945 10.6797 27.1513 11.2428 28.1306 12.3691C29.1344 13.4708 29.6363 15.0623 29.6363 17.1434V18.2085H25.817V16.8863C25.817 16.0049 25.6456 15.3683 25.3028 14.9766C24.9601 14.5604 24.4581 14.3523 23.7971 14.3523C22.4505 14.3523 21.7772 15.1725 21.7772 16.8129C21.7772 17.7433 22.0221 18.6125 22.5117 19.4204C23.0259 20.2284 23.944 21.2077 25.2661 22.3585C26.9554 23.8275 28.1184 25.1619 28.7549 26.3616C29.3915 27.5613 29.7098 28.9691 29.7098 30.5851C29.7098 32.6907 29.1834 34.3066 28.1306 35.4329C27.1023 36.5591 25.5966 37.1222 23.6135 37.1222Z\" fill=\"#2A2828\"/>\n<path id=\"Vector_3\" d=\"M9.94942 37.1222C7.99076 37.1222 6.50953 36.5714 5.50572 35.4696C4.50191 34.3433 4 32.7396 4 30.6585V29.1895H7.81938V30.9523C7.81938 32.6172 8.51715 33.4497 9.91269 33.4497C10.5982 33.4497 11.1124 33.2538 11.4551 32.8621C11.8224 32.4458 12.006 31.7848 12.006 30.8789C12.006 29.8016 11.7612 28.8589 11.2715 28.051C10.7818 27.2185 9.87597 26.2269 8.55387 25.0762C6.88902 23.6072 5.72606 22.285 5.06502 21.1098C4.40397 19.9101 4.07345 18.5635 4.07345 17.07C4.07345 15.0378 4.5876 13.4708 5.61589 12.3691C6.64418 11.2428 8.13766 10.6797 10.0963 10.6797C12.0305 10.6797 13.4872 11.2428 14.4666 12.3691C15.4704 13.4708 15.9723 15.0623 15.9723 17.1434V18.2085H12.1529V16.8863C12.1529 16.0049 11.9815 15.3683 11.6388 14.9766C11.296 14.5604 10.7941 14.3523 10.133 14.3523C8.78646 14.3523 8.11318 15.1725 8.11318 16.8129C8.11318 17.7433 8.35801 18.6125 8.84767 19.4204C9.36182 20.2284 10.2799 21.2077 11.602 22.3585C13.2914 23.8275 14.4543 25.1619 15.0909 26.3616C15.7274 27.5613 16.0457 28.9691 16.0457 30.5851C16.0457 32.6907 15.5193 34.3066 14.4666 35.4329C13.4383 36.5591 11.9326 37.1222 9.94942 37.1222Z\" fill=\"#2A2828\"/>\n</g>\n</g>\n</g>\n</g>\n</svg>\n"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:93881dff538931ac16e51b2ee1c0c4d91299f73ddd39a9655267d7dc79a90cc6",
+            "locator": "[pinned 75baac1ee] svg 文件全文",
+            "source": "_pinned/apps/desktop/src/renderer/assets/login/icons/sso.svg"
+          },
+          "value": "<svg width=\"48\" height=\"48\" viewBox=\"0 0 48 48\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<g id=\"&#229;&#133;&#182;&#228;&#187;&#150;&#231;&#153;&#187;&#229;&#189;&#149;&#230;&#150;&#185;&#229;&#188;&#143;&#229;&#133;&#165;&#229;&#143;&#163;\">\n<g id=\"Property 1=SSO\">\n<g id=\"SSO&#231;&#153;&#187;&#229;&#189;&#149; 1\">\n<g id=\"SSO\">\n<path id=\"Vector\" d=\"M37.8674 37.1222C35.8843 37.1222 34.3663 36.5591 33.3135 35.4329C32.2608 34.3066 31.7344 32.7152 31.7344 30.6585V17.1434C31.7344 15.0868 32.2608 13.4953 33.3135 12.3691C34.3663 11.2428 35.8843 10.6797 37.8674 10.6797C39.8506 10.6797 41.3685 11.2428 42.4213 12.3691C43.4741 13.4953 44.0005 15.0868 44.0005 17.1434V30.6585C44.0005 32.7152 43.4741 34.3066 42.4213 35.4329C41.3685 36.5591 39.8506 37.1222 37.8674 37.1222ZM37.8674 33.4497C39.263 33.4497 39.9607 32.605 39.9607 30.9156V16.8863C39.9607 15.197 39.263 14.3523 37.8674 14.3523C36.4719 14.3523 35.7741 15.197 35.7741 16.8863V30.9156C35.7741 32.605 36.4719 33.4497 37.8674 33.4497Z\" fill=\"#EEEEEE\"/>\n<path id=\"Vector_2\" d=\"M23.6135 37.1222C21.6548 37.1222 20.1736 36.5714 19.1698 35.4696C18.166 34.3433 17.6641 32.7396 17.6641 30.6585V29.1895H21.4834V30.9523C21.4834 32.6172 22.1812 33.4497 23.5768 33.4497C24.2623 33.4497 24.7764 33.2538 25.1192 32.8621C25.4864 32.4458 25.6701 31.7848 25.6701 30.8789C25.6701 29.8016 25.4252 28.8589 24.9356 28.051C24.4459 27.2185 23.54 26.2269 22.2179 25.0762C20.5531 23.6072 19.3901 22.285 18.7291 21.1098C18.068 19.9101 17.7375 18.5635 17.7375 17.07C17.7375 15.0378 18.2517 13.4708 19.28 12.3691C20.3082 11.2428 21.8017 10.6797 23.7604 10.6797C25.6945 10.6797 27.1513 11.2428 28.1306 12.3691C29.1344 13.4708 29.6363 15.0623 29.6363 17.1434V18.2085H25.817V16.8863C25.817 16.0049 25.6456 15.3683 25.3028 14.9766C24.9601 14.5604 24.4581 14.3523 23.7971 14.3523C22.4505 14.3523 21.7772 15.1725 21.7772 16.8129C21.7772 17.7433 22.0221 18.6125 22.5117 19.4204C23.0259 20.2284 23.944 21.2077 25.2661 22.3585C26.9554 23.8275 28.1184 25.1619 28.7549 26.3616C29.3915 27.5613 29.7098 28.9691 29.7098 30.5851C29.7098 32.6907 29.1834 34.3066 28.1306 35.4329C27.1023 36.5591 25.5966 37.1222 23.6135 37.1222Z\" fill=\"#EEEEEE\"/>\n<path id=\"Vector_3\" d=\"M9.94942 37.1222C7.99076 37.1222 6.50953 36.5714 5.50572 35.4696C4.50191 34.3433 4 32.7396 4 30.6585V29.1895H7.81938V30.9523C7.81938 32.6172 8.51715 33.4497 9.91269 33.4497C10.5982 33.4497 11.1124 33.2538 11.4551 32.8621C11.8224 32.4458 12.006 31.7848 12.006 30.8789C12.006 29.8016 11.7612 28.8589 11.2715 28.051C10.7818 27.2185 9.87597 26.2269 8.55387 25.0762C6.88902 23.6072 5.72606 22.285 5.06502 21.1098C4.40397 19.9101 4.07345 18.5635 4.07345 17.07C4.07345 15.0378 4.5876 13.4708 5.61589 12.3691C6.64418 11.2428 8.13766 10.6797 10.0963 10.6797C12.0305 10.6797 13.4872 11.2428 14.4666 12.3691C15.4704 13.4708 15.9723 15.0623 15.9723 17.1434V18.2085H12.1529V16.8863C12.1529 16.0049 11.9815 15.3683 11.6388 14.9766C11.296 14.5604 10.7941 14.3523 10.133 14.3523C8.78646 14.3523 8.11318 15.1725 8.11318 16.8129C8.11318 17.7433 8.35801 18.6125 8.84767 19.4204C9.36182 20.2284 10.2799 21.2077 11.602 22.3585C13.2914 23.8275 14.4543 25.1619 15.0909 26.3616C15.7274 27.5613 16.0457 28.9691 16.0457 30.5851C16.0457 32.6907 15.5193 34.3066 14.4666 35.4329C13.4383 36.5591 11.9326 37.1222 9.94942 37.1222Z\" fill=\"#EEEEEE\"/>\n</g>\n</g>\n</g>\n</g>\n</svg>\n"
+        }
+      },
+      "wechat": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:c52f9d7a3de4f7643666c758b19d69808b8146a611bcaef55cc0e00dda584626",
+            "locator": "[pinned 75baac1ee] svg 文件全文",
+            "source": "_pinned/apps/desktop/src/renderer/assets/login/icons/wechat.svg"
+          },
+          "value": "<svg width=\"48\" height=\"48\" viewBox=\"0 0 48 48\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<g id=\"&#229;&#133;&#182;&#228;&#187;&#150;&#231;&#153;&#187;&#229;&#189;&#149;&#230;&#150;&#185;&#229;&#188;&#143;&#229;&#133;&#165;&#229;&#143;&#163;\">\n<g id=\"Property 1=Wechat\">\n<g id=\"selfhst:wechat\">\n<path id=\"Vector\" d=\"M39.0664 35.6885C41.4488 33.9711 43 31.4421 43 28.6088C43 23.4566 37.8195 19.3116 31.5035 19.3116C25.1875 19.3116 20.1109 23.4566 20.1109 28.6088C20.1109 33.761 25.1875 37.9132 31.5035 37.9132C32.8469 37.9132 34.0938 37.7103 35.2293 37.4059C35.6449 37.3045 36.0605 37.4059 36.1645 37.5074L38.7547 38.9204C39.0664 39.1233 39.3781 38.9204 39.2742 38.5146L38.6508 36.29C38.6508 35.9929 38.8586 35.79 39.0664 35.6885ZM27.6738 27.0943C26.8426 27.3117 25.9965 26.8262 25.7738 26.0146C25.5512 25.203 26.0484 24.3769 26.8797 24.1595C27.1395 24.0943 27.4141 24.0943 27.6738 24.1595C28.5051 24.3769 28.9949 25.203 28.7797 26.0146C28.6387 26.5435 28.2156 26.9566 27.6738 27.0943ZM35.3406 27.0943C34.5094 27.3117 33.6633 26.8262 33.4406 26.0146C33.218 25.203 33.7152 24.3769 34.5465 24.1595C34.8062 24.0943 35.0809 24.0943 35.3406 24.1595C36.1719 24.3769 36.6617 25.203 36.4465 26.0146C36.298 26.5435 35.875 26.9566 35.3406 27.0943ZM18.6711 9C11.1082 9 5 14.0507 5 20.2174C5 23.5508 6.75898 26.587 9.66094 28.6088C9.97266 28.8117 10.1805 29.116 10.0766 29.6233L9.34922 32.0508C9.24531 32.5581 9.66094 32.761 9.97266 32.6595L13.0824 30.9421C13.3941 30.7392 13.8098 30.6378 14.218 30.7392C16.9121 31.5508 19.1906 31.3479 19.4949 31.3479C17.0086 22.8551 25.6031 18 32.2309 18.4058C31.1992 13.1449 25.4992 9 18.6711 9ZM14.1141 18.3986C13.1121 18.6305 12.1102 18.029 11.8652 17.058C11.6203 16.087 12.2438 15.1015 13.2383 14.8623C13.5277 14.7971 13.8246 14.7971 14.1141 14.8623C15.116 15.0942 15.732 16.0797 15.4871 17.058C15.3238 17.7247 14.7895 18.2392 14.1141 18.3986ZM23.3246 18.3986C22.3227 18.6305 21.3207 18.029 21.0758 17.058C20.8309 16.087 21.4543 15.1015 22.4488 14.8623C22.7383 14.7971 23.0352 14.7971 23.3246 14.8623C24.3266 15.0942 24.9426 16.0797 24.6977 17.058C24.5418 17.7247 24.0074 18.2392 23.3246 18.3986Z\" fill=\"#00C70A\"/>\n</g>\n</g>\n</g>\n</svg>\n"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:c52f9d7a3de4f7643666c758b19d69808b8146a611bcaef55cc0e00dda584626",
+            "locator": "[pinned 75baac1ee] svg 文件全文",
+            "source": "_pinned/apps/desktop/src/renderer/assets/login/icons/wechat.svg"
+          },
+          "value": "<svg width=\"48\" height=\"48\" viewBox=\"0 0 48 48\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<g id=\"&#229;&#133;&#182;&#228;&#187;&#150;&#231;&#153;&#187;&#229;&#189;&#149;&#230;&#150;&#185;&#229;&#188;&#143;&#229;&#133;&#165;&#229;&#143;&#163;\">\n<g id=\"Property 1=Wechat\">\n<g id=\"selfhst:wechat\">\n<path id=\"Vector\" d=\"M39.0664 35.6885C41.4488 33.9711 43 31.4421 43 28.6088C43 23.4566 37.8195 19.3116 31.5035 19.3116C25.1875 19.3116 20.1109 23.4566 20.1109 28.6088C20.1109 33.761 25.1875 37.9132 31.5035 37.9132C32.8469 37.9132 34.0938 37.7103 35.2293 37.4059C35.6449 37.3045 36.0605 37.4059 36.1645 37.5074L38.7547 38.9204C39.0664 39.1233 39.3781 38.9204 39.2742 38.5146L38.6508 36.29C38.6508 35.9929 38.8586 35.79 39.0664 35.6885ZM27.6738 27.0943C26.8426 27.3117 25.9965 26.8262 25.7738 26.0146C25.5512 25.203 26.0484 24.3769 26.8797 24.1595C27.1395 24.0943 27.4141 24.0943 27.6738 24.1595C28.5051 24.3769 28.9949 25.203 28.7797 26.0146C28.6387 26.5435 28.2156 26.9566 27.6738 27.0943ZM35.3406 27.0943C34.5094 27.3117 33.6633 26.8262 33.4406 26.0146C33.218 25.203 33.7152 24.3769 34.5465 24.1595C34.8062 24.0943 35.0809 24.0943 35.3406 24.1595C36.1719 24.3769 36.6617 25.203 36.4465 26.0146C36.298 26.5435 35.875 26.9566 35.3406 27.0943ZM18.6711 9C11.1082 9 5 14.0507 5 20.2174C5 23.5508 6.75898 26.587 9.66094 28.6088C9.97266 28.8117 10.1805 29.116 10.0766 29.6233L9.34922 32.0508C9.24531 32.5581 9.66094 32.761 9.97266 32.6595L13.0824 30.9421C13.3941 30.7392 13.8098 30.6378 14.218 30.7392C16.9121 31.5508 19.1906 31.3479 19.4949 31.3479C17.0086 22.8551 25.6031 18 32.2309 18.4058C31.1992 13.1449 25.4992 9 18.6711 9ZM14.1141 18.3986C13.1121 18.6305 12.1102 18.029 11.8652 17.058C11.6203 16.087 12.2438 15.1015 13.2383 14.8623C13.5277 14.7971 13.8246 14.7971 14.1141 14.8623C15.116 15.0942 15.732 16.0797 15.4871 17.058C15.3238 17.7247 14.7895 18.2392 14.1141 18.3986ZM23.3246 18.3986C22.3227 18.6305 21.3207 18.029 21.0758 17.058C20.8309 16.087 21.4543 15.1015 22.4488 14.8623C22.7383 14.7971 23.0352 14.7971 23.3246 14.8623C24.3266 15.0942 24.9426 16.0797 24.6977 17.058C24.5418 17.7247 24.0074 18.2392 23.3246 18.3986Z\" fill=\"#00C70A\"/>\n</g>\n</g>\n</g>\n</svg>\n"
+        }
+      }
+    }
+  },
+  "mobile": {
+    "colors": {
+      "appleCircleBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.appleCircleBg",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#FFFFFF"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.appleCircleBg",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#000000"
+        }
+      },
+      "appleLogoInk": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.appleLogoInk",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#000000"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.appleLogoInk",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#FFFFFF"
+        }
+      },
+      "bannerBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] makeStyles.deletionStatus 无 backgroundColor(横幅无底色)",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": "transparent"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] makeStyles.deletionStatus 无 backgroundColor(横幅无底色)",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": "transparent"
+        }
+      },
+      "bannerBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] ThemeColors.dark.borderStrong",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#BFC1C4"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] ThemeColors.light.borderStrong",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#686B72"
+        }
+      },
+      "bannerCopyText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] ThemeColors.dark.textSecondary",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#6F6F6F"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] ThemeColors.light.textSecondary",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#8C8E94"
+        }
+      },
+      "bannerTitleText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] ThemeColors.dark.textPrimary",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#D4D4D4"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] ThemeColors.light.textPrimary",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#3C3F43"
+        }
+      },
+      "bgBase": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.bgBase",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#1F1F1E"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.bgBase",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#EDEDED"
+        }
+      },
+      "brandAccent": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.brandAccent",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#DF0C27"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.brandAccent",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#DF0C27"
+        }
+      },
+      "consentRadioBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.consentRadioBg",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#2A2828"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.consentRadioBg",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#F1F0F1"
+        }
+      },
+      "consentRadioBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.consentRadioBorder",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#F1F0F1"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.consentRadioBorder",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#434343"
+        }
+      },
+      "consentRadioCheck": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.consentRadioCheck",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#2A2828"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.consentRadioCheck",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#FFFFFF"
+        }
+      },
+      "consentRadioCheckedBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.consentRadioCheckedBg",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#F1F0F1"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.consentRadioCheckedBg",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#2A2828"
+        }
+      },
+      "controlBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.controlBg",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#2C2A2A"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.controlBg",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#EEEEEE"
+        }
+      },
+      "controlBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.controlBorder",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#434343"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.controlBorder",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#D4D4D4"
+        }
+      },
+      "controlPlaceholder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.controlPlaceholder",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#6F6F6F"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.controlPlaceholder",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#D4D4D4"
+        }
+      },
+      "controlText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.controlText",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#EEEEEE"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.controlText",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#252222"
+        }
+      },
+      "dismissBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:b634aec9e145b4e8e69e6eea4d51f885f07aa1200c6f91817b49bd0e204979f4",
+            "locator": "[pinned 75baac1ee] mainActionButton 无 backgroundColor(secondary 默认 tone 透明底)",
+            "source": "_pinned/apps/mobile/src/components/MobilePrimitives.tsx"
+          },
+          "value": "transparent"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:b634aec9e145b4e8e69e6eea4d51f885f07aa1200c6f91817b49bd0e204979f4",
+            "locator": "[pinned 75baac1ee] mainActionButton 无 backgroundColor(secondary 默认 tone 透明底)",
+            "source": "_pinned/apps/mobile/src/components/MobilePrimitives.tsx"
+          },
+          "value": "transparent"
+        }
+      },
+      "dismissBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] ThemeColors.dark.border",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#434343"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] ThemeColors.light.border",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#C6C9CE"
+        }
+      },
+      "invertedButtonBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.invertedButtonBorder",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#FFFFFF"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.invertedButtonBorder",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#FFFFFF"
+        }
+      },
+      "linkText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.linkText",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#EEEEEE"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.linkText",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#2A2828"
+        }
+      },
+      "panelBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.panelBg",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#312F2F"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.panelBg",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#FBFBFB"
+        }
+      },
+      "panelBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.panelBorder",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#434343"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.panelBorder",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#D4D4D4"
+        }
+      },
+      "primaryButtonBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.primaryButtonBg",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#EEEEEE"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.primaryButtonBg",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#2A2828"
+        }
+      },
+      "primaryButtonBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.primaryButtonBorder",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#FFFFFF"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.primaryButtonBorder",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#434343"
+        }
+      },
+      "primaryButtonText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.primaryButtonText",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#2A2828"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.primaryButtonText",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#D4D4D4"
+        }
+      },
+      "secondaryText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.secondaryText",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#6F6F6F"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.secondaryText",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#6F6F6F"
+        }
+      },
+      "titleText": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.dark.titleText",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#D4D4D4"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginPalettes.light.titleText",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#252222"
+        }
+      }
+    },
+    "constants": {
+      "appleIosOnly": {
+        "provenance": {
+          "hash": "sha256:e9a3b2e755051a0159c07e5cfe91e8f27f4236600be1e1cc8f7254fa3a02b347",
+          "locator": "[pinned 75baac1ee] isNativeSocialProviderSupported:provider==='apple'→Platform.OS==='ios'",
+          "source": "_pinned/apps/mobile/src/auth/nativeSocial.ts"
+        },
+        "value": true
+      },
+      "cnPhonePrefix": {
+        "provenance": {
+          "hash": "sha256:b2aef758fe0a74a8020d9f85048a594044aba2b59d2002b4d807e73d26c97643",
+          "locator": "[pinned 75baac1ee] CN_PHONE_PREFIX",
+          "source": "_pinned/apps/mobile/src/auth/cnPhone.ts"
+        },
+        "value": "+86"
+      },
+      "identifierMethod": {
+        "cn": {
+          "provenance": {
+            "hash": "sha256:168a008f3dec446f718045d35966efde06776cbe9577d8ee93df45cad48399b8",
+            "locator": "[pinned 75baac1ee] resolveIdentifierMethod:region!=='global'→phone(providers 双 true 仿真)",
+            "source": "_pinned/apps/mobile/src/auth/loginIdentifierMethod.ts"
+          },
+          "value": "phone"
+        },
+        "global": {
+          "provenance": {
+            "hash": "sha256:168a008f3dec446f718045d35966efde06776cbe9577d8ee93df45cad48399b8",
+            "locator": "[pinned 75baac1ee] resolveIdentifierMethod:region==='global'→email(providers 双 true 仿真)",
+            "source": "_pinned/apps/mobile/src/auth/loginIdentifierMethod.ts"
+          },
+          "value": "email"
+        }
+      },
+      "legalLinks": {
+        "cn": {
+          "provenance": {
+            "hash": "sha256:044dcdae955b47959f066dbba9b6ad8a511b7148bdedfc92345d046977fc0ad3",
+            "locator": "[pinned 75baac1ee] cn 区协议链接",
+            "source": "_pinned/apps/mobile/src/config/legalLinks.ts"
+          },
+          "value": {
+            "privacy": "https://protocol.xd.cn/cindy/privacy-1.0.html",
+            "terms": "https://protocol.xd.cn/cindy/agreement.html"
+          }
+        },
+        "global": {
+          "provenance": {
+            "hash": "sha256:044dcdae955b47959f066dbba9b6ad8a511b7148bdedfc92345d046977fc0ad3",
+            "locator": "[pinned 75baac1ee] global 区协议链接",
+            "source": "_pinned/apps/mobile/src/config/legalLinks.ts"
+          },
+          "value": {
+            "privacy": "https://protocol.xd.com/cindy/privacy.html",
+            "terms": "https://protocol.xd.com/cindy/agreement-1.0.html"
+          }
+        }
+      },
+      "socialProviders": {
+        "cn": {
+          "provenance": {
+            "hash": "sha256:bbd8cbde195ff385506b8c7e64a716f53bbc3b6b61af9ba6e2d94a8d354027a0",
+            "locator": "[pinned 75baac1ee] providersFor defaults social(cn)",
+            "source": "_pinned/packages/auth-client/fixtures/loginScenarios.ts"
+          },
+          "value": [
+            "apple"
+          ]
+        },
+        "global": {
+          "provenance": {
+            "hash": "sha256:bbd8cbde195ff385506b8c7e64a716f53bbc3b6b61af9ba6e2d94a8d354027a0",
+            "locator": "[pinned 75baac1ee] providersFor defaults social(global)",
+            "source": "_pinned/packages/auth-client/fixtures/loginScenarios.ts"
+          },
+          "value": [
+            "apple",
+            "google"
+          ]
+        }
+      }
+    },
+    "copy": {
+      "en": {
+        "provenance": {
+          "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+          "locator": "[pinned 75baac1ee] accountDeletion* + title/phonePlaceholder/emailPlaceholder/continue/consentStatement/ssoEntry/social(apple|google|wechat)",
+          "source": "_pinned/apps/mobile/src/auth/loginMessages.ts"
+        },
+        "value": {
+          "completedCopy": "Your Cindy sign-in account has been deleted.",
+          "completedTitle": "Account deleted",
+          "consentStatement": "I have read and agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
+          "dismissButton": "Got it",
+          "emailPlaceholder": "Email address",
+          "identifierContinue": "Continue",
+          "identifierPlaceholder": "Phone number",
+          "identifierTitle": "Sign in to Cindy",
+          "pendingCopy": "Scheduled for permanent deletion on {date}. Sign in now to cancel deletion.",
+          "pendingTitle": "Account scheduled for deletion",
+          "processingCopy": "Your Cindy sign-in account is being deleted and will be permanently deleted when processing is complete.",
+          "processingTitle": "Account deletion in progress",
+          "socialApple": "Continue with Apple",
+          "socialGoogle": "Continue with Google",
+          "socialWechat": "Continue with WeChat",
+          "ssoEntry": "Sign in with enterprise SSO"
+        }
+      },
+      "ja": {
+        "provenance": {
+          "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+          "locator": "[pinned 75baac1ee] accountDeletion* + title/phonePlaceholder/emailPlaceholder/continue/consentStatement/ssoEntry/social(apple|google|wechat)",
+          "source": "_pinned/apps/mobile/src/auth/loginMessages.ts"
+        },
+        "value": {
+          "completedCopy": "Cindy ログインアカウントは削除されました。",
+          "completedTitle": "アカウントを削除しました",
+          "consentStatement": "<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を読み、同意します",
+          "dismissButton": "了解しました",
+          "emailPlaceholder": "メールアドレスを入力",
+          "identifierContinue": "続行",
+          "identifierPlaceholder": "携帯電話番号",
+          "identifierTitle": "Cindy にログイン",
+          "pendingCopy": "{date} に完全に削除される予定です。今すぐ再ログインすると削除を取り消せます。",
+          "pendingTitle": "アカウントは削除待機中です",
+          "processingCopy": "Cindy ログインアカウントを削除しています。処理が完了すると完全に削除されます。",
+          "processingTitle": "アカウントを削除処理中です",
+          "socialApple": "Apple で続行",
+          "socialGoogle": "Google で続行",
+          "socialWechat": "WeChat で続行",
+          "ssoEntry": "エンタープライズ SSO でログイン"
+        }
+      },
+      "ko": {
+        "provenance": {
+          "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+          "locator": "[pinned 75baac1ee] accountDeletion* + title/phonePlaceholder/emailPlaceholder/continue/consentStatement/ssoEntry/social(apple|google|wechat)",
+          "source": "_pinned/apps/mobile/src/auth/loginMessages.ts"
+        },
+        "value": {
+          "completedCopy": "Cindy 로그인 계정이 삭제되었습니다.",
+          "completedTitle": "계정이 삭제되었습니다",
+          "consentStatement": "<terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>을 읽고 동의합니다",
+          "dismissButton": "확인",
+          "emailPlaceholder": "이메일 주소 입력",
+          "identifierContinue": "계속",
+          "identifierPlaceholder": "휴대전화 번호",
+          "identifierTitle": "Cindy 로그인",
+          "pendingCopy": "{date}에 영구 삭제될 예정입니다. 지금 다시 로그인하면 삭제를 취소할 수 있습니다.",
+          "pendingTitle": "계정이 삭제 대기 중입니다",
+          "processingCopy": "Cindy 로그인 계정을 삭제하고 있습니다. 처리가 완료되면 영구적으로 삭제됩니다.",
+          "processingTitle": "계정을 삭제하는 중입니다",
+          "socialApple": "Apple로 계속",
+          "socialGoogle": "Google로 계속",
+          "socialWechat": "WeChat으로 계속",
+          "ssoEntry": "기업 SSO로 로그인"
+        }
+      },
+      "zh-CN": {
+        "provenance": {
+          "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+          "locator": "[pinned 75baac1ee] accountDeletion* + title/phonePlaceholder/emailPlaceholder/continue/consentStatement/ssoEntry/social(apple|google|wechat)",
+          "source": "_pinned/apps/mobile/src/auth/loginMessages.ts"
+        },
+        "value": {
+          "completedCopy": "Cindy 登录账号已删除。",
+          "completedTitle": "账号已注销",
+          "consentStatement": "我已阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私协议</privacy>",
+          "dismissButton": "我知道了",
+          "emailPlaceholder": "输入邮箱地址",
+          "identifierContinue": "继续",
+          "identifierPlaceholder": "输入手机号",
+          "identifierTitle": "登录 Cindy",
+          "pendingCopy": "预计于 {date} 永久删除。现在重新登录即可取消注销。",
+          "pendingTitle": "账号正在等待注销",
+          "processingCopy": "Cindy 登录账号正在删除，处理完成后将永久注销。",
+          "processingTitle": "账号正在注销",
+          "socialApple": "通过 Apple 继续",
+          "socialGoogle": "通过 Google 继续",
+          "socialWechat": "通过微信继续",
+          "ssoEntry": "使用企业 SSO 登录"
+        }
+      }
+    },
+    "geometry": {
+      "banner": {
+        "borderWidth": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] StyleSheet.hairlineWidth≈1(deletionStatus.borderWidth)",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": 1
+        },
+        "copyFontSize": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] deletionStatusCopy.fontSize=typeScale.footnote",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": 13
+        },
+        "copyLineHeight": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] deletionStatusCopy.lineHeight=lineHeight.caption",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": 18
+        },
+        "dismissFontSize": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] mainActionButtonTextCompact.fontSize=typeScale.caption",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": 12
+        },
+        "dismissMinHeight": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] fullButton.minHeight(login.tsx:1505,覆盖 compact 38)",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": 48
+        },
+        "dismissPadX": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] mainActionButtonCompact.paddingHorizontal=spacing.md",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": 12
+        },
+        "dismissRadius": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] mainActionButton.borderRadius=radius.pill",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": 9999
+        },
+        "gap": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] deletionStatus.gap=spacing.sm",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": 8
+        },
+        "pad": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] deletionStatus.padding=spacing.md",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": 12
+        },
+        "radius": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] deletionStatus.borderRadius=radius.control",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": 8
+        },
+        "titleFontSize": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] deletionStatusTitle.fontSize=typeScale.body",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": 16
+        },
+        "titleWeight": {
+          "provenance": {
+            "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+            "locator": "[pinned 75baac1ee] deletionStatusTitle.fontWeight=semibold=600",
+            "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+          },
+          "value": 600
+        }
+      },
+      "consentRow": {
+        "bottomOverflow": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.bottomOverflow",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 62
+        },
+        "fontSize": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.fontSize",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 20
+        },
+        "gap": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.gap",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 6.5
+        },
+        "height": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.height",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 40
+        },
+        "lineHeight": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.lineHeight",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 23
+        },
+        "radioCheckStroke": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.radio.checkStroke",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 3
+        },
+        "radioHitSize": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.radio.hitSize",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 24
+        },
+        "radioPressSize": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.radio.pressSize",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 88
+        },
+        "radioRingRadius": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.radio.ringRadius",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 9
+        },
+        "radioRingSize": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.radio.ringSize",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 20
+        },
+        "radioRingStroke": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.radio.ringStroke",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 2
+        },
+        "rowTop": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] 行容器顶 = y-(pressSize-height)(LoginSkinControls.tsx:199 top:LOGIN_CONSENT_ROW.y-pressExpand;常量均在 loginSkinLayout.ts)",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 534
+        },
+        "width": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.width",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 680
+        },
+        "y": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.y",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 582
+        }
+      },
+      "control": {
+        "buttonY": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONTROL.buttonY",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 300
+        },
+        "fontSize": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONTROL.fontSize",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 24
+        },
+        "height": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONTROL.height",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 80
+        },
+        "inputY": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONTROL.inputY",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 158
+        },
+        "radius": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONTROL.radius",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 40
+        },
+        "textPadLeft": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONTROL.textPadLeft",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 31
+        },
+        "width": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONTROL.width",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 540
+        },
+        "x": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONTROL.x",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 70
+        }
+      },
+      "flowHeight": {
+        "provenance": {
+          "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+          "locator": "[pinned 75baac1ee] loginSizes.flowHeight",
+          "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+        },
+        "value": 560
+      },
+      "group": {
+        "height": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_GROUP.height",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 560
+        },
+        "width": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_GROUP.width",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 680
+        },
+        "x": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_GROUP.x",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 35
+        }
+      },
+      "panel": {
+        "height": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginSizes.panel.height",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": 440
+        },
+        "left": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] panel.left=0(由 LoginSkinControls.tsx:1320)",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": 0
+        },
+        "radius": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginSizes.panel.radius",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": 36
+        },
+        "top": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] panel.top=0(由 LoginSkinControls.tsx:1323)",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": 0
+        },
+        "width": {
+          "provenance": {
+            "hash": "sha256:d48ed6cfcc805ac8961cea28d699d4bbd75d6c5a173901ceaec24a85501b5ade",
+            "locator": "[pinned 75baac1ee] loginSizes.panel.width",
+            "source": "_pinned/apps/mobile/src/theme/tokens.ts"
+          },
+          "value": 680
+        }
+      },
+      "social": {
+        "gap": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_SOCIAL.gap",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 70
+        },
+        "iconSize": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_SOCIAL.iconSize",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 48
+        },
+        "size": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_SOCIAL.size",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 80
+        },
+        "y": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_SOCIAL.y",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 480
+        }
+      },
+      "stageLong": {
+        "designHeight": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_STAGE_LONG.designHeight",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 1624
+        },
+        "loginY": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_STAGE_LONG.loginY",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 933
+        }
+      },
+      "stageShort": {
+        "designHeight": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_STAGE_SHORT.designHeight",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 1334
+        },
+        "loginY": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_STAGE_SHORT.loginY",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 694
+        }
+      },
+      "stageWidth": {
+        "provenance": {
+          "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+          "locator": "[pinned 75baac1ee] LOGIN_STAGE_WIDTH",
+          "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 750
+      },
+      "title": {
+        "fontSize": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_TITLE.fontSize",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 32
+        },
+        "height": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_TITLE.height",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 38
+        },
+        "y": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_TITLE.y",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 31
+        }
+      }
+    },
+    "icons": {
+      "apple": {
+        "d": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] AppleLogoGlyph Path d",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": "M28.2226562,20.3846154 C29.0546875,20.3846154 30.0976562,19.8048315 30.71875,19.0317864 C31.28125,18.3312142 31.6914062,17.352829 31.6914062,16.3744437 C31.6914062,16.2415766 31.6796875,16.1087095 31.65625,16 C30.7304687,16.0362365 29.6171875,16.640178 28.9492187,17.4494596 C28.421875,18.06548 27.9414062,19.0317864 27.9414062,20.0222505 C27.9414062,20.1671964 27.9648438,20.3121424 27.9765625,20.3604577 C28.0351562,20.3725366 28.1289062,20.3846154 28.2226562,20.3846154 Z M25.2929688,35 C26.4296875,35 26.9335938,34.214876 28.3515625,34.214876 C29.7929688,34.214876 30.109375,34.9758423 31.375,34.9758423 C32.6171875,34.9758423 33.4492188,33.792117 34.234375,32.6325493 C35.1132812,31.3038779 35.4765625,29.9993643 35.5,29.9389701 C35.4179688,29.9148125 33.0390625,28.9122695 33.0390625,26.0979021 C33.0390625,23.6579784 34.9140625,22.5588048 35.0195312,22.474253 C33.7773438,20.6382708 31.890625,20.5899555 31.375,20.5899555 C29.9804688,20.5899555 28.84375,21.4596313 28.1289062,21.4596313 C27.3554688,21.4596313 26.3359375,20.6382708 25.1289062,20.6382708 C22.8320312,20.6382708 20.5,22.5950413 20.5,26.2911634 C20.5,28.5861411 21.3671875,31.013986 22.4335938,32.5842339 C23.3476562,33.9129053 24.1445312,35 25.2929688,35 Z"
+        },
+        "viewBox": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] AppleLogoGlyph Svg viewBox",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": "15.7 13.2 24.6 24.6"
+        }
+      },
+      "consentCheck": {
+        "d": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] ConsentCheckGlyph path d",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": "M6.6 10.4 L9.3 12.9 L15 8.2"
+        },
+        "stroke": {
+          "provenance": {
+            "hash": "sha256:e0c43818f17f9370eda3955ad38b759058dfbd8235752190f26d5de9e7229644",
+            "locator": "[pinned 75baac1ee] LOGIN_CONSENT_ROW.radio.checkStroke",
+            "source": "_pinned/apps/mobile/src/auth/loginSkinLayout.ts"
+          },
+          "value": 3
+        }
+      },
+      "google": {
+        "fills": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] GoogleIcon 品牌色字面值 ×4",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": [
+            "#F44336",
+            "#FFC107",
+            "#448AFF",
+            "#43A047"
+          ]
+        },
+        "paths": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] GoogleIcon Path d ×4",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": [
+            "M22.1323 7.58511C23.8472 7.39351 24.862 7.39351 26.7047 7.58511C29.9666 8.06789 32.9903 9.57562 35.3387 11.8903C33.7518 13.3903 32.1857 14.9122 30.6409 16.4556C27.6825 13.9482 24.3803 13.3695 20.7343 14.7194C18.0597 15.9494 16.1973 17.9427 15.147 20.6993C13.4307 19.4215 11.7368 18.114 10.066 16.7773C9.94986 16.7162 9.81724 16.6938 9.6875 16.7135C12.3416 11.5962 16.489 8.55259 22.1299 7.58274",
+            "M9.68212 16.7126C9.81617 16.6921 9.94311 16.7134 10.063 16.7765C11.7338 18.1132 13.4277 19.4207 15.144 20.6984C14.8739 21.7725 14.7037 22.8692 14.6354 23.9746C14.6938 25.0438 14.8633 26.0933 15.144 27.1231L9.80986 31.3691C7.48696 26.5151 7.44438 21.6297 9.68212 16.7126Z",
+            "M35.0866 36.513C33.4257 35.0483 31.6869 33.6743 29.8779 32.3971C31.6914 31.1166 32.7921 29.3598 33.1801 27.1268H24.293V20.9553C29.4182 20.9127 34.541 20.9561 39.6615 21.0854C40.6329 26.3604 39.5109 31.1166 36.2954 35.3539C35.913 35.7604 35.508 36.1472 35.0866 36.513Z",
+            "M15.1466 27.127C17.0863 31.9478 20.6424 34.1981 25.8149 33.878C27.2669 33.7099 28.6591 33.2027 29.8788 32.3972C31.6892 33.6777 33.4255 35.0497 35.0876 36.5132C32.454 38.8797 29.0961 40.2839 25.5618 40.4966C24.7589 40.5608 23.952 40.5608 23.149 40.4966C17.1281 39.787 12.6826 36.745 9.8125 31.3706L15.1466 27.127Z"
+          ]
+        },
+        "viewBox": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] GoogleIcon Svg viewBox",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": "0 0 48 48"
+        }
+      },
+      "sso": {
+        "fillDark": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] SsoIcon fill dark(mode==='dark'?'#2A2828':…)",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": "#2A2828"
+        },
+        "fillLight": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] SsoIcon fill light(mode==='dark'?…:'#EEEEEE')",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": "#EEEEEE"
+        },
+        "paths": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] SsoIcon Path d ×3",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": [
+            "M37.8674 37.1222C35.8843 37.1222 34.3663 36.5591 33.3135 35.4329C32.2608 34.3066 31.7344 32.7152 31.7344 30.6585V17.1434C31.7344 15.0868 32.2608 13.4953 33.3135 12.3691C34.3663 11.2428 35.8843 10.6797 37.8674 10.6797C39.8506 10.6797 41.3685 11.2428 42.4213 12.3691C43.4741 13.4953 44.0005 15.0868 44.0005 17.1434V30.6585C44.0005 32.7152 43.4741 34.3066 42.4213 35.4329C41.3685 36.5591 39.8506 37.1222 37.8674 37.1222ZM37.8674 33.4497C39.263 33.4497 39.9607 32.605 39.9607 30.9156V16.8863C39.9607 15.197 39.263 14.3523 37.8674 14.3523C36.4719 14.3523 35.7741 15.197 35.7741 16.8863V30.9156C35.7741 32.605 36.4719 33.4497 37.8674 33.4497Z",
+            "M23.6135 37.1222C21.6548 37.1222 20.1736 36.5714 19.1698 35.4696C18.166 34.3433 17.6641 32.7396 17.6641 30.6585V29.1895H21.4834V30.9523C21.4834 32.6172 22.1812 33.4497 23.5768 33.4497C24.2623 33.4497 24.7764 33.2538 25.1192 32.8621C25.4864 32.4458 25.6701 31.7848 25.6701 30.8789C25.6701 29.8016 25.4252 28.8589 24.9356 28.051C24.4459 27.2185 23.54 26.2269 22.2179 25.0762C20.5531 23.6072 19.3901 22.285 18.7291 21.1098C18.068 19.9101 17.7375 18.5635 17.7375 17.07C17.7375 15.0378 18.2517 13.4708 19.28 12.3691C20.3082 11.2428 21.8017 10.6797 23.7604 10.6797C25.6945 10.6797 27.1513 11.2428 28.1306 12.3691C29.1344 13.4708 29.6363 15.0623 29.6363 17.1434V18.2085H25.817V16.8863C25.817 16.0049 25.6456 15.3683 25.3028 14.9766C24.9601 14.5604 24.4581 14.3523 23.7971 14.3523C22.4505 14.3523 21.7772 15.1725 21.7772 16.8129C21.7772 17.7433 22.0221 18.6125 22.5117 19.4204C23.0259 20.2284 23.944 21.2077 25.2661 22.3585C26.9554 23.8275 28.1184 25.1619 28.7549 26.3616C29.3915 27.5613 29.7098 28.9691 29.7098 30.5851C29.7098 32.6907 29.1834 34.3066 28.1306 35.4329C27.1023 36.5591 25.5966 37.1222 23.6135 37.1222Z",
+            "M9.94942 37.1222C7.99076 37.1222 6.50953 36.5714 5.50572 35.4696C4.50191 34.3433 4 32.7396 4 30.6585V29.1895H7.81938V30.9523C7.81938 32.6172 8.51715 33.4497 9.91269 33.4497C10.5982 33.4497 11.1124 33.2538 11.4551 32.8621C11.8224 32.4458 12.006 31.7848 12.006 30.8789C12.006 29.8016 11.7612 28.8589 11.2715 28.051C10.7818 27.2185 9.87597 26.2269 8.55387 25.0762C6.88902 23.6072 5.72606 22.285 5.06502 21.1098C4.40397 19.9101 4.07345 18.5635 4.07345 17.07C4.07345 15.0378 4.5876 13.4708 5.61589 12.3691C6.64418 11.2428 8.13766 10.6797 10.0963 10.6797C12.0305 10.6797 13.4872 11.2428 14.4666 12.3691C15.4704 13.4708 15.9723 15.0623 15.9723 17.1434V18.2085H12.1529V16.8863C12.1529 16.0049 11.9815 15.3683 11.6388 14.9766C11.296 14.5604 10.7941 14.3523 10.133 14.3523C8.78646 14.3523 8.11318 15.1725 8.11318 16.8129C8.11318 17.7433 8.35801 18.6125 8.84767 19.4204C9.36182 20.2284 10.2799 21.2077 11.602 22.3585C13.2914 23.8275 14.4543 25.1619 15.0909 26.3616C15.7274 27.5613 16.0457 28.9691 16.0457 30.5851C16.0457 32.6907 15.5193 34.3066 14.4666 35.4329C13.4383 36.5591 11.9326 37.1222 9.94942 37.1222Z"
+          ]
+        },
+        "viewBox": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] SsoIcon Svg viewBox",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": "0 0 48 48"
+        }
+      },
+      "wechat": {
+        "d": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] WeChatIcon Path d",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": "M39.0664 35.6885C41.4488 33.9711 43 31.4421 43 28.6088C43 23.4566 37.8195 19.3116 31.5035 19.3116C25.1875 19.3116 20.1109 23.4566 20.1109 28.6088C20.1109 33.761 25.1875 37.9132 31.5035 37.9132C32.8469 37.9132 34.0938 37.7103 35.2293 37.4059C35.6449 37.3045 36.0605 37.4059 36.1645 37.5074L38.7547 38.9204C39.0664 39.1233 39.3781 38.9204 39.2742 38.5146L38.6508 36.29C38.6508 35.9929 38.8586 35.79 39.0664 35.6885ZM27.6738 27.0943C26.8426 27.3117 25.9965 26.8262 25.7738 26.0146C25.5512 25.203 26.0484 24.3769 26.8797 24.1595C27.1395 24.0943 27.4141 24.0943 27.6738 24.1595C28.5051 24.3769 28.9949 25.203 28.7797 26.0146C28.6387 26.5435 28.2156 26.9566 27.6738 27.0943ZM35.3406 27.0943C34.5094 27.3117 33.6633 26.8262 33.4406 26.0146C33.218 25.203 33.7152 24.3769 34.5465 24.1595C34.8062 24.0943 35.0809 24.0943 35.3406 24.1595C36.1719 24.3769 36.6617 25.203 36.4465 26.0146C36.298 26.5435 35.875 26.9566 35.3406 27.0943ZM18.6711 9C11.1082 9 5 14.0507 5 20.2174C5 23.5508 6.75898 26.587 9.66094 28.6088C9.97266 28.8117 10.1805 29.116 10.0766 29.6233L9.34922 32.0508C9.24531 32.5581 9.66094 32.761 9.97266 32.6595L13.0824 30.9421C13.3941 30.7392 13.8098 30.6378 14.218 30.7392C16.9121 31.5508 19.1906 31.3479 19.4949 31.3479C17.0086 22.8551 25.6031 18 32.2309 18.4058C31.1992 13.1449 25.4992 9 18.6711 9ZM14.1141 18.3986C13.1121 18.6305 12.1102 18.029 11.8652 17.058C11.6203 16.087 12.2438 15.1015 13.2383 14.8623C13.5277 14.7971 13.8246 14.7971 14.1141 14.8623C15.116 15.0942 15.732 16.0797 15.4871 17.058C15.3238 17.7247 14.7895 18.2392 14.1141 18.3986ZM23.3246 18.3986C22.3227 18.6305 21.3207 18.029 21.0758 17.058C20.8309 16.087 21.4543 15.1015 22.4488 14.8623C22.7383 14.7971 23.0352 14.7971 23.3246 14.8623C24.3266 15.0942 24.9426 16.0797 24.6977 17.058C24.5418 17.7247 24.0074 18.2392 23.3246 18.3986Z"
+        },
+        "fill": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] WeChatIcon 品牌绿字面值",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": "#00C70A"
+        },
+        "viewBox": {
+          "provenance": {
+            "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+            "locator": "[pinned 75baac1ee] WeChatIcon Svg viewBox",
+            "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+          },
+          "value": "0 0 48 48"
+        }
+      }
+    }
+  },
+  "structure": {
+    "desk": {
+      "bannerParent": {
+        "provenance": {
+          "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+          "locator": "[pinned 75baac1ee] LoginPage.tsx:964-977 {accountDeletionStatus && <AccountDeletionStatusPanel/>}{node}",
+          "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "login-group(LoginStage children 首子,{node} 紧随其后)"
+      },
+      "bannerPosition": {
+        "provenance": {
+          "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+          "locator": "[pinned 75baac1ee] AccountDeletionStatusPanel section className=\"mb-5 w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3\"",
+          "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "static(文档流内,无 absolute/z-index)"
+      },
+      "footerGate": {
+        "provenance": {
+          "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+          "locator": "[pinned 75baac1ee] LoginPage.tsx:202 showLocalModeFooter = loginState?.step === 'error'",
+          "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "localMode 页脚仅 loginState.step==='error' 渲染;identifier 态无页脚"
+      },
+      "globalPillGate": {
+        "provenance": {
+          "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+          "locator": "[pinned 75baac1ee] LoginPage.tsx:378 globalPill={isGlobalBuild ? t('login.globalRegion') : undefined}",
+          "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "仅 global 构建显示(isGlobalBuild=VITE_CINDY_AUTH_REGION==='global');cn 构建无徽标"
+      },
+      "panelDomOrder": {
+        "provenance": {
+          "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+          "locator": "[pinned 75baac1ee] LoginPage.tsx:964-977 兄弟顺序",
+          "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "横幅在 DOM 上先于面板;面板 positioned 后绘制,叠于流内静态元素之上"
+      },
+      "panelPosition": {
+        "provenance": {
+          "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
+          "locator": "[pinned 75baac1ee] LoginPanel className=\"absolute left-0 top-0 overflow-hidden\"",
+          "source": "_pinned/apps/desktop/src/renderer/components/login/LoginControls.tsx"
+        },
+        "value": "absolute left-0 top-0"
+      },
+      "socialCountFormula": {
+        "provenance": {
+          "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+          "locator": "[pinned 75baac1ee] LoginPage.tsx:420 <LoginSocialRow count={providers.social.length + 2}>",
+          "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "count = providers.social.length + 2(企业 SSO 钮 + 游客钮)"
+      },
+      "socialProvidersNote": {
+        "provenance": {
+          "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+          "locator": "[pinned 75baac1ee] LoginPage.tsx:1012-1015 注释(服务端 providers.social 驱动显隐)",
+          "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "providers.social 为服务端下发数据(非仓内常量);demo 按桌面基线服务端仿真口径:cn=[apple,wechat],global=[apple,google]"
+      },
+      "socialRowPosition": {
+        "provenance": {
+          "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
+          "locator": "[pinned 75baac1ee] LoginControls.tsx:393-407 LoginSocialRow style top:SOCIAL.y",
+          "source": "_pinned/apps/desktop/src/renderer/components/login/LoginControls.tsx"
+        },
+        "value": "absolute top=SOCIAL.y=480(与面板顶 0 同一组坐标系)"
+      },
+      "threeSiblings": {
+        "provenance": {
+          "hash": "sha256:111cc21b633f06bed8ddb8d994022690b6a918e9e3ad71af90c9fcf565e3cf31",
+          "locator": "[pinned 75baac1ee] LoginPage.tsx:953-978 LoginStage children + renderIdentifier:369-486",
+          "source": "_pinned/apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "横幅 / 面板 / 社交行同为 login-group(680×560,scale 0.5)直接子节点:横幅流内 static,面板与社交行各自 absolute"
+      }
+    },
+    "mobile": {
+      "bannerParent": {
+        "provenance": {
+          "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+          "locator": "[pinned 75baac1ee] login.tsx:1179-1189 {accountDeletionStatus ? <AccountDeletionStatusPanel/> : null}{stateContent}",
+          "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+        },
+        "value": "680 宽设计 px 容器(position:absolute,top:0)首子,{stateContent} 紧随其后"
+      },
+      "bannerPosition": {
+        "provenance": {
+          "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+          "locator": "[pinned 75baac1ee] login.tsx:1419-1425 makeStyles.deletionStatus",
+          "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+        },
+        "value": "relative(RN 默认,在流内);无 zIndex;无 backgroundColor"
+      },
+      "dismissButton": {
+        "provenance": {
+          "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+          "locator": "[pinned 75baac1ee] login.tsx:1297-1307 + :1505 styles.fullButton + MobilePrimitives.tsx:975-989",
+          "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+        },
+        "value": "MainWindowActionButton density=compact + fullButton(minHeight 48,minWidth 0);RN 列容器默认 stretch → 全宽;透明底(无 backgroundColor)+ border 描边 + radius.pill"
+      },
+      "panelDomOrder": {
+        "provenance": {
+          "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+          "locator": "[pinned 75baac1ee] login.tsx:1179-1189 兄弟顺序",
+          "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+        },
+        "value": "横幅先于面板;RN 后序兄弟绘制在上"
+      },
+      "panelPosition": {
+        "provenance": {
+          "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+          "locator": "[pinned 75baac1ee] LoginSkinControls.tsx:1314-1325 makeStyles.panel",
+          "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+        },
+        "value": "absolute, top: 0, left: 0"
+      },
+      "socialCountFormula": {
+        "provenance": {
+          "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+          "locator": "[pinned 75baac1ee] login.tsx:504-571 LoginSocialRow count",
+          "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+        },
+        "value": "count = (apple?1:0) + nonAppleProviders.length + 1(SSO);无游客钮(产品拍板 2026-07-24)"
+      },
+      "socialRowPosition": {
+        "provenance": {
+          "hash": "sha256:1dc437104c8277bf0c003f0854cb3147c3eafb7aefb894cba8098f33a1f73e78",
+          "locator": "[pinned 75baac1ee] LoginSkinControls.tsx:1423-1429 makeStyles.socialRow",
+          "source": "_pinned/apps/mobile/src/components/LoginSkinControls.tsx"
+        },
+        "value": "absolute top=LOGIN_SOCIAL.y=480(与桌面同 y、同 80×80、同 gap 70,两端同构)"
+      },
+      "threeSiblings": {
+        "provenance": {
+          "hash": "sha256:0564f3a7928465a0e00f49c1bf7f0e98ddba05f9ccd19d06194a865053d24982",
+          "locator": "[pinned 75baac1ee] login.tsx:1168-1190 缩放容器 children + renderIdentifier:442-581",
+          "source": "_pinned/apps/mobile/app/(auth)/login.tsx"
+        },
+        "value": "横幅 / 面板 / 社交行同在 680 宽设计 px 缩放容器内:横幅流内,面板 absolute top:0,社交行 absolute top:480"
+      }
+    }
+  }
+}

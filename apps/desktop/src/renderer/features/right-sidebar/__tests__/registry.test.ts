@@ -20,8 +20,10 @@ import {
   _resetTabKindRegistry,
   getTabKind,
   hydrateTabState,
+  listGhostTabMenuMetas,
   listTabKindMenuMetas,
   registerTabKind,
+  unregisterTabKind,
 } from '../registry';
 import type { TabKindId, TabKindPlugin } from '../types';
 
@@ -98,6 +100,59 @@ describe('TabKindRegistry', () => {
       registerTabKind(b);
       expect(getTabKind('file-browser')).toBe(a);
       expect(getTabKind('web-browser')).toBe(b);
+    });
+  });
+
+  describe('unregisterTabKind', () => {
+    it('removes a registered plugin; idempotent on missing kind', () => {
+      registerTabKind(makePlugin('file-browser', 10));
+      unregisterTabKind('file-browser');
+      expect(getTabKind('file-browser')).toBeNull();
+      // 幂等:再注销同 kind / 从未注册的 kind 都不抛
+      expect(() => unregisterTabKind('file-browser')).not.toThrow();
+      expect(() => unregisterTabKind('ghost:never')).not.toThrow();
+    });
+
+    it('allows re-registering same kind after unregister(停用→重新启用复活)', () => {
+      registerTabKind(makePlugin('file-browser', 10));
+      unregisterTabKind('file-browser');
+      expect(() => registerTabKind(makePlugin('file-browser', 99))).not.toThrow();
+      expect(getTabKind('file-browser')?.menu.order).toBe(99);
+    });
+  });
+
+  describe('listGhostTabMenuMetas', () => {
+    it('only returns ghost:* kinds, sorted by labelText', () => {
+      registerTabKind(makePlugin('file-browser', 10));
+      registerTabKind(
+        makePlugin('ghost:zeta' as TabKindId, 100, {
+          menu: {
+            kind: 'ghost:zeta' as TabKindId,
+            labelKey: 'stub.ghost',
+            labelText: '备忘',
+            icon: Globe,
+            order: 100,
+            enabled: true,
+            singleton: true,
+          },
+        }),
+      );
+      registerTabKind(
+        makePlugin('ghost:alpha' as TabKindId, 100, {
+          menu: {
+            kind: 'ghost:alpha' as TabKindId,
+            labelKey: 'stub.ghost',
+            labelText: '画廊',
+            icon: Globe,
+            order: 100,
+            enabled: true,
+            singleton: true,
+          },
+        }),
+      );
+      expect(listGhostTabMenuMetas().map((m) => m.labelText)).toEqual(['备忘', '画廊']);
+      // 内置项不混入
+      expect(listGhostTabMenuMetas().some((m) => m.kind === 'file-browser')).toBe(false);
     });
   });
 

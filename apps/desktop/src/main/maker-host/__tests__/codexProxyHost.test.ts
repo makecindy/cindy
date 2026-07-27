@@ -24,6 +24,7 @@ const mockState = vi.hoisted(() => {
       error: vi.fn(),
     },
     createAnthropicCompatProxy: vi.fn(),
+    createResponsesChatHandler: vi.fn(() => ({ handle: vi.fn(async () => undefined) })),
     injectionTransform: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
     stripNonAnthropicFields: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
     recordXaiRateLimitSnapshot: vi.fn(),
@@ -83,8 +84,8 @@ vi.mock('@cindy/anthropic-compat-proxy', () => ({
   createInstructionsInjectionTransform: mockState.createInstructionsInjectionTransform,
   createActiveStripTransform: () => (() => null),
   createThreadStripController: () => ({ markActive: () => {}, reconcile: () => {}, shouldStrip: () => false, clear: () => {} }),
-  createEncryptedContentRecoveryRule: () => ({ id: 'encrypted_content', enabled: () => false, match: () => false, strip: () => null }),
-  createImageGenerationIdRecoveryRule: () => ({ id: 'image_generation_id', enabled: () => true, match: () => false, strip: () => null }),
+  createEncryptedContentRecoveryRule: () => ({ id: 'encrypted_content', enabled: () => false, matches: () => false, strip: () => null }),
+  createImageGenerationIdRecoveryRule: () => ({ id: 'image_generation_id', enabled: () => true, matches: () => false, strip: () => null }),
   stripEncryptedContentFromBody: () => null,
   stripImageGenerationItemsWithoutIdFromBody: () => null,
   stripNonAnthropicFields: mockState.stripNonAnthropicFields,
@@ -99,9 +100,14 @@ vi.mock('@cindy/anthropic-compat-proxy', () => ({
   },
 }));
 
+vi.mock('@cindy/responses-chat-bridge', () => ({
+  createResponsesChatHandler: mockState.createResponsesChatHandler,
+}));
+
 async function freshCodexProxyHost() {
   vi.resetModules();
   mockState.createAnthropicCompatProxy.mockReset();
+  mockState.createResponsesChatHandler.mockClear();
   mockState.createInstructionsInjectionTransform.mockClear();
   mockState.injectionTransform.mockReset();
   mockState.injectionTransform.mockReturnValue(null);
@@ -121,6 +127,34 @@ describe('codex gateway config', () => {
     expect(args).toContain('model_providers.cindy_gateway.requires_openai_auth=true');
     expect(args).not.toContain('model_providers.cindy_gateway.env_key="XDT_CODEX_API_KEY"');
     expect(args).toContain('model_providers.cindy_gateway.supports_websockets=false');
+  });
+
+  it('oauth-bearer 模式: 追加 OpenAI 身份 provider(远端压缩)并关掉请求 zstd 压缩', async () => {
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+
+    const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'oauth-bearer');
+
+    // 默认 model_provider 仍是 cindy_gateway(本地压缩安全缺省);OpenAI 身份靠
+    // thread/start|resume 的 modelProvider 显式选入。
+    expect(args).toContain('model_provider="cindy_gateway"');
+    // name 必须逐字 "OpenAI" —— codex supports_remote_compaction() 按 name 判定。
+    expect(args).toContain('model_providers.cindy_openai.name="OpenAI"');
+    expect(args).toContain('model_providers.cindy_openai.base_url="http://127.0.0.1:12345"');
+    expect(args).toContain('model_providers.cindy_openai.wire_api="responses"');
+    expect(args).toContain('model_providers.cindy_openai.requires_openai_auth=true');
+    expect(args).toContain('model_providers.cindy_openai.supports_websockets=false');
+    // is_openai + OAuth 命中时 codex 默认 zstd 压缩请求体,loopback proxy 无法解析,必须关。
+    expect(args).toContain('features.enable_request_compression=false');
+  });
+
+  it('env-key / provider-oauth 模式: 不定义 OpenAI 身份 provider', async () => {
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+
+    for (const mode of ['env-key', 'provider-oauth'] as const) {
+      const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
+      expect(args.some((arg) => arg.includes('cindy_openai'))).toBe(false);
+      expect(args).not.toContain('features.enable_request_compression=false');
+    }
   });
 
   it('env-key 模式: env_key=XDT_CODEX_API_KEY, 不带 requires_openai_auth', async () => {
@@ -144,6 +178,69 @@ describe('codex gateway config', () => {
   });
 });
 
+describe('createCrossProviderCompactionCompatTransform', () => {
+  const CTX_BASE = { reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 't-1' } };
+  const compactionItem = { type: 'compaction', encrypted_content: 'ENC' };
+  const contextCompactionItem = { type: 'context_compaction', id: 'cc_1', encrypted_content: 'ENC2' };
+  const userMessage = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] };
+
+  it('把加密压缩块替换为明文占位 message(非 ChatGPT 上游)', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    const out = transform(
+      { model: 'gpt-5.5', input: [compactionItem, contextCompactionItem, userMessage] },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    ) as { input: Array<Record<string, unknown>> };
+
+    expect(out).not.toBeNull();
+    expect(out.input).toHaveLength(3);
+    expect(out.input[0].type).toBe('message');
+    expect(out.input[1].type).toBe('message');
+    expect(JSON.stringify(out.input)).not.toContain('ENC');
+    expect(JSON.stringify(out.input[0])).toContain('compacted into an encrypted snapshot');
+    // 压缩点之后的原有消息原样保留
+    expect(out.input[2]).toEqual(userMessage);
+  });
+
+  it('ChatGPT 上游原样透传(远端压缩语义不受影响)', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    expect(transform(
+      { model: 'gpt-5.5', input: [compactionItem, userMessage] },
+      { ...CTX_BASE, upstreamBase: 'https://chatgpt.com/backend-api/codex' },
+    )).toBeNull();
+  });
+
+  it('upstreamBase 缺失时不改写(保守方向:宁可维持现状,不误伤 ChatGPT 请求)', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    expect(transform({ model: 'gpt-5.5', input: [compactionItem] }, CTX_BASE)).toBeNull();
+  });
+
+  it('无压缩块时零改写', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    expect(transform(
+      { model: 'codex/gpt-5.5', input: [userMessage] },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    )).toBeNull();
+  });
+
+  it('不携带加密内容的 compaction 变体原样透传(只处理"上游解不开"的加密块)', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    expect(transform(
+      { model: 'gpt-5.5', input: [{ type: 'context_compaction', id: 'cc_2' }, { type: 'compaction', encrypted_content: '' }] },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    )).toBeNull();
+  });
+});
+
 describe('decideCodexRoute', () => {
   const CHATGPT = 'https://chatgpt.com/backend-api/codex';
 
@@ -153,7 +250,7 @@ describe('decideCodexRoute', () => {
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'env-key', gatewayKey: 'k' })).toBeNull();
   });
 
-  it('oauth-bearer + codex/ 骨折模型 → 换 gateway key', async () => {
+  it('oauth-bearer + codex/ 折扣模型 → 换 gateway key', async () => {
     const { decideCodexRoute } = await import('../codex-proxy-host.js');
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'oauth-bearer', gatewayKey: 'gw' }))
       .toEqual({ headerOverride: { authorization: 'Bearer gw' } });
@@ -165,7 +262,7 @@ describe('decideCodexRoute', () => {
       .toEqual({ upstreamOverride: CHATGPT });
   });
 
-  it('oauth-bearer + codex/ 骨折但无 gateway key → null(passthrough)', async () => {
+  it('oauth-bearer + codex/ 折扣但无 gateway key → null(passthrough)', async () => {
     const { decideCodexRoute } = await import('../codex-proxy-host.js');
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'oauth-bearer', gatewayKey: null })).toBeNull();
   });
@@ -173,6 +270,82 @@ describe('decideCodexRoute', () => {
   it('空 model → null', async () => {
     const { decideCodexRoute } = await import('../codex-proxy-host.js');
     expect(decideCodexRoute({ model: '', authInjection: 'oauth-bearer', gatewayKey: 'gw' })).toBeNull();
+  });
+});
+
+describe('chatBridgeCapabilitiesForRoute', () => {
+  it.each([
+    'https://api.moonshot.cn/v1',
+    'https://api.moonshot.ai/v1/',
+  ])('enables image_url only for Kimi K3 on official Moonshot host: %s', async (upstream) => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeCapabilitiesForRoute(upstream, 'kimi-k3').imageInput).toBe('image_url');
+  });
+
+  it.each([
+    ['https://api.moonshot.cn/v1', 'kimi-k2.6'],
+    ['https://api.deepseek.com/v1', 'kimi-k3'],
+    ['https://api.moonshot.cn.evil.example/v1', 'kimi-k3'],
+    ['http://api.moonshot.cn/v1', 'kimi-k3'],
+    ['not-a-url', 'kimi-k3'],
+  ])('keeps image input disabled for non-matching route %s / %s', async (upstream, model) => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBeUndefined();
+  });
+
+  it('passes image support into the handler for a preset-derived custom Kimi route', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'kimi-moonshot',
+        name: 'Kimi (Moonshot 中国大陆)',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://api.moonshot.cn/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'kimi-k3', name: 'Kimi K3' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'moonshot-key');
+    host.registerComposed('session-kimi-image', 'thread-kimi-image', 'PRODUCT_PROMPT');
+    setSessionProvider('session-kimi-image', 'kimi-moonshot');
+    host.setCodexProxyAuthInjection('env-key');
+
+    const decision = await Promise.resolve(host.createModelRoutingTransform()(
+      {
+        model: 'kimi-k3',
+        input: [{
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', image_url: 'data:image/png;base64,eA==' }],
+        }],
+      },
+      {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-kimi-image' },
+      },
+    ));
+
+    expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    expect(mockState.createResponsesChatHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        upstreamBase: 'https://api.moonshot.cn/v1',
+        capabilities: expect.objectContaining({ imageInput: 'image_url' }),
+      }),
+      expect.anything(),
+    );
+
+    clearSessionProvider('session-kimi-image');
+    setCustomProviderKeyReader(() => null);
+    setCustomProviders([]);
   });
 });
 
@@ -226,7 +399,7 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
     host.setCodexProxyAuthInjection('oauth-bearer');
     host.setCodexProxyGatewayKeyReader(() => 'gw');
     const transform = host.createModelRoutingTransform();
-    // codex/ 骨折模型 + 无 session: 若被桶③劫持会返回 { upstreamOverride: CHATGPT };
+    // codex/ 折扣模型 + 无 session: 若被桶③劫持会返回 { upstreamOverride: CHATGPT };
     // 正确行为是落 ② decideCodexRoute → 换 gateway key。
     expect(transform({ model: 'codex/gpt-5.5', input: [] }, { reqId: 1, method: 'POST', url: '/responses', headers: {} }))
       .toEqual({ headerOverride: { authorization: 'Bearer gw' } });
@@ -361,8 +534,8 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, instructions 注入, xAI Responses 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
+        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
@@ -569,6 +742,366 @@ describe('codex proxy host', () => {
       input: originalInput,
     });
     clearSessionProvider('session-openai-custom-tool');
+  });
+
+  it.each([
+    'moonshotai/kimi-k3',
+    'deepseek/deepseek-v4-pro',
+    'deepseek/deepseek-v4-flash',
+  ])('normalizes strict gateway history for model %s', async (model) => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model,
+      input: [
+        { type: 'function_call', name: 'exec_command', call_id: 'call_1', arguments: '{"cmd":"pwd"}' },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '我先检查项目目录。' }],
+        },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '' }],
+        },
+        { type: 'function_call', name: 'exec_command', call_id: 'call_2', arguments: '{"cmd":"git status"}' },
+        { type: 'function_call_output', call_id: 'call_1', output: '/repo' },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '接着检查工作区。' }],
+        },
+        { type: 'function_call_output', call_id: 'call_2', output: 'clean' },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] },
+      ],
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model,
+      input: [
+        { type: 'function_call', name: 'exec_command', call_id: 'call_1', arguments: '{"cmd":"pwd"}' },
+        { type: 'function_call_output', call_id: 'call_1', output: '/repo' },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '我先检查项目目录。' }],
+        },
+        { type: 'function_call', name: 'exec_command', call_id: 'call_2', arguments: '{"cmd":"git status"}' },
+        { type: 'function_call_output', call_id: 'call_2', output: 'clean' },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '接着检查工作区。' }],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] },
+      ],
+    });
+  });
+
+  it('keeps parallel strict-gateway tool calls grouped before their matched outputs', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'moonshotai/kimi-k3',
+      parallel_tool_calls: true,
+      input: [
+        { type: 'function_call', name: 'exec_command', call_id: 'call_1', arguments: '{"cmd":"pwd"}' },
+        { type: 'function_call', name: 'exec_command', call_id: 'call_2', arguments: '{"cmd":"git status"}' },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '两个命令都在执行。' }],
+        },
+        { type: 'function_call_output', call_id: 'call_1', output: '/repo' },
+        { type: 'function_call_output', call_id: 'call_2', output: 'clean' },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] },
+      ],
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'moonshotai/kimi-k3',
+      parallel_tool_calls: true,
+      input: [
+        { type: 'function_call', name: 'exec_command', call_id: 'call_1', arguments: '{"cmd":"pwd"}' },
+        { type: 'function_call', name: 'exec_command', call_id: 'call_2', arguments: '{"cmd":"git status"}' },
+        { type: 'function_call_output', call_id: 'call_1', output: '/repo' },
+        { type: 'function_call_output', call_id: 'call_2', output: 'clean' },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '两个命令都在执行。' }],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] },
+      ],
+    });
+  });
+
+  it('keeps interleaved tool history unchanged for non-strict gateway models', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    const input = [
+      { type: 'function_call', name: 'exec_command', call_id: 'call_1', arguments: '{"cmd":"pwd"}' },
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'checking' }] },
+      { type: 'function_call_output', call_id: 'call_1', output: '/repo' },
+    ];
+    const original = { model: 'qwen/qwen3.7-max', input };
+    let current: unknown = original;
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual(original);
+  });
+
+  it('normalizes requests to ByteDance Seed Responses capabilities', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-seed', 'thread-seed', 'PRODUCT_PROMPT');
+    setSessionProvider('session-seed', 'xd');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'bytedance-seed/seed-2.1-pro',
+      reasoning: { effort: 'high', summary: 'auto' },
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'function', name: 'write_stdin' },
+        { type: 'namespace', name: 'multi_agent_v1', tools: [{ type: 'function', name: 'close_agent' }] },
+        { type: 'web_search', external_web_access: true },
+        { type: 'image_generation' },
+      ],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: [
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'earlier answer' }] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '' }] },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [
+            { type: 'output_text', text: '' },
+            { type: 'output_text', text: 'non-empty remainder' },
+          ],
+        },
+        { type: 'reasoning', summary: [], content: null },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+      ],
+    };
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-seed' },
+    };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'bytedance-seed/seed-2.1-pro',
+      reasoning: { effort: 'high' },
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'function', name: 'write_stdin' },
+        { type: 'web_search' },
+      ],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: [
+        {
+          type: 'message',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text: 'earlier answer' }],
+        },
+        {
+          type: 'message',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text: 'non-empty remainder' }],
+        },
+        { type: 'reasoning', summary: [], content: null },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+      ],
+    });
+
+    let summaryOnlyReasoning: unknown = {
+      model: 'bytedance-seed/seed-2.1-pro',
+      reasoning: { summary: 'auto' },
+    };
+    for (const transform of transforms) {
+      const next = transform(summaryOnlyReasoning, ctx);
+      if (next !== null && next !== undefined) summaryOnlyReasoning = next;
+    }
+    expect(summaryOnlyReasoning).toEqual({ model: 'bytedance-seed/seed-2.1-pro' });
+
+    clearSessionProvider('session-seed');
+  });
+
+  it('removes Seed tool controls when every declared tool is unsupported', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [{ type: 'namespace', name: 'multi_agent_v1', tools: [] }],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: 'hello',
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'bytedance-seed/seed-2.1-pro',
+      input: 'hello',
+    });
+  });
+
+  it('drops Seed web search when Codex explicitly disables live web access', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'web_search', external_web_access: false },
+      ],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: 'hello',
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [{ type: 'function', name: 'exec_command' }],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: 'hello',
+    });
+  });
+
+  it('resets a Seed tool choice that references a filtered tool', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'image_generation' },
+      ],
+      tool_choice: { type: 'image_generation' },
+      parallel_tool_calls: false,
+      input: 'hello',
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [{ type: 'function', name: 'exec_command' }],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: 'hello',
+    });
+  });
+
+  it('keeps a Seed tool choice that references a retained function', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'namespace', name: 'multi_agent_v1', tools: [] },
+      ],
+      tool_choice: { type: 'function', name: 'exec_command' },
+      parallel_tool_calls: false,
+      input: 'hello',
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [{ type: 'function', name: 'exec_command' }],
+      tool_choice: { type: 'function', name: 'exec_command' },
+      parallel_tool_calls: false,
+      input: 'hello',
+    });
   });
 
   it('keeps Codex namespace tools for non-xAI requests', async () => {
@@ -917,7 +1450,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(8); // encrypted activeStrip, image generation activeStrip, instructions 注入, xAI Responses 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(11); // encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

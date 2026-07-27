@@ -14,7 +14,11 @@
  *     provider-route.setCustomProviderKeyReader，host 在 register 时接通）。
  */
 
-import type { AgentKind, ProviderWireProtocol } from '@cindy/model-providers';
+import {
+  appendProviderRequestPath,
+  type AgentKind,
+  type ProviderWireProtocol,
+} from '@cindy/model-providers';
 
 import {
   classifyProviderError,
@@ -35,6 +39,8 @@ export interface ProviderProbeSpec {
   modelId: string;
   /** 缺省按 agent 保持历史行为。 */
   wireProtocol?: ProviderWireProtocol;
+  /** 非标准推理端点的精确相对路径。 */
+  requestPath?: string;
   /** 用户 API key；缺省 = 不注入鉴权头（端点可能靠自定义 headers 鉴权）。 */
   apiKey?: string | null;
   /** 附加请求头（自定义供应商的 headers 配置）。 */
@@ -67,16 +73,22 @@ export function setDiagnosticsKeyReader(reader: KeyReader): void {
   keyReader = reader;
 }
 
-/** 拼 URL：baseUrl 去尾斜杠 + path。 */
-function joinUrl(baseUrl: string, path: string): string {
-  return baseUrl.replace(/\/+$/, '') + path;
+function withoutCredentialHeaders(
+  headers: Record<string, string> | undefined,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers ?? {}).filter(([name]) => {
+      const normalized = name.toLowerCase();
+      return normalized !== 'authorization' && normalized !== 'x-api-key';
+    }),
+  );
 }
 
 /** 构造探测请求（纯函数，单测直断言）。header 组合与 provider-route 的 api-key-header 分支对齐。 */
 export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init: RequestInit } {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
-    ...(spec.headers ?? {}),
+    ...(spec.apiKey ? withoutCredentialHeaders(spec.headers) : (spec.headers ?? {})),
   };
   if (spec.agent === 'claude-code') {
     // Anthropic Messages wire。anthropic-version 为兼容端点普遍要求的必带头。
@@ -86,7 +98,7 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
       headers['authorization'] = `Bearer ${spec.apiKey}`;
     }
     return {
-      url: joinUrl(spec.baseUrl, '/v1/messages'),
+      url: appendProviderRequestPath(spec.baseUrl, spec.requestPath ?? '/v1/messages'),
       init: {
         method: 'POST',
         headers,
@@ -106,7 +118,7 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
     // (“Thinking mode does not support this tool_choice”),会把可达的端点误报成失败。
     // 工具调用能力交给真实会话验证(Codex 用 tool_choice:'auto',不强制)。
     return {
-      url: joinUrl(spec.baseUrl, '/chat/completions'),
+      url: appendProviderRequestPath(spec.baseUrl, spec.requestPath ?? '/chat/completions'),
       init: {
         method: 'POST',
         headers,
@@ -121,7 +133,7 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
     };
   }
   return {
-    url: joinUrl(spec.baseUrl, '/responses'),
+    url: appendProviderRequestPath(spec.baseUrl, spec.requestPath ?? '/responses'),
     init: {
       method: 'POST',
       headers,
@@ -305,13 +317,26 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
       baseUrl: routing.upstream,
       modelId: model.id,
       wireProtocol: routing.wireProtocol,
+      requestPath: routing.requestPath,
       apiKey: null,
       headers: {
-        ...(routing.headerOverride ?? {}),
+        ...withoutCredentialHeaders(routing.headerOverride),
         ...(oauthToken ? { authorization: `Bearer ${oauthToken}` } : {}),
       },
     };
   }
+  if (routing.authStrategy === 'none') {
+    return {
+      agent,
+      baseUrl: routing.upstream,
+      modelId: model.id,
+      wireProtocol: routing.wireProtocol,
+      requestPath: routing.requestPath,
+      apiKey: null,
+      headers: withoutCredentialHeaders(routing.headerOverride),
+    };
+  }
+  const apiKey = keyReader(providerId, agent);
   return {
     agent,
     baseUrl: routing.upstream,
@@ -320,8 +345,13 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
     // 必须带上 wireProtocol，否则 buildProbeRequest 回落到原生 /responses，对 Chat-only 上游
     // 误报连接失败（真实会话走 resolveSessionRoute 不受影响，探测结论会与真实会话相反）。
     wireProtocol: routing.wireProtocol,
-    apiKey: keyReader(providerId, agent),
-    headers: routing.headerOverride,
+    requestPath: routing.requestPath,
+    apiKey,
+    // 与真实会话路由保持 legacy 兼容：safeStorage 已有 key 时清掉旧凭证头，由 apiKey
+    // 重新注入；尚未迁移的 header-only 配置则原样保留，否则“测试连接”会无凭证误报失败。
+    headers: apiKey
+      ? withoutCredentialHeaders(routing.headerOverride)
+      : { ...(routing.headerOverride ?? {}) },
   };
 }
 

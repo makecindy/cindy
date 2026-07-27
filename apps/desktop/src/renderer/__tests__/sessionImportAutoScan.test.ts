@@ -59,6 +59,25 @@ describe('SessionImportSection initial scan', () => {
     expect(source).toContain('return basename(item.projectDir) || item.projectDir;');
   });
 
+  it('offers a select-all control scoped to the visible (filtered) candidates', () => {
+    expect(source).toMatch(
+      /const toggleAllVisible = useCallback\(\(\) => \{[\s\S]*for \(const item of visibleCandidates\)/,
+    );
+    expect(source).toContain(
+      "{t('settings.sessionImport.selectAll', { count: visibleCandidates.length })}",
+    );
+    expect(source).toMatch(
+      /checked=\{visibleCandidates\.length > 0 && visibleSelectedCount === visibleCandidates\.length\}/,
+    );
+  });
+
+  it('surfaces selections hidden by the current filters next to the import button', () => {
+    expect(source).toContain('const hiddenSelectedCount = selectedItems.length - visibleSelectedCount;');
+    expect(source).toMatch(
+      /\{hiddenSelectedCount > 0 && \([\s\S]*selectedOutsideFilter[\s\S]*count: hiddenSelectedCount/,
+    );
+  });
+
   it('uses the sidebar time formatter for project and session-row timestamps', () => {
     expect(source).toContain(
       "import { formatSidebarTime, formatSidebarTimeAbsolute } from '@/features/cc-agent/lib/formatSidebarTime';",

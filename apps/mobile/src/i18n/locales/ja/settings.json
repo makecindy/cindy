@@ -19,9 +19,14 @@
     "desktopVersion": "デスクトップ版 {{version}}",
     "devNoOta": "開発ビルドのため OTA 更新は利用できません",
     "checkAction": "更新を確認",
+    "testFlightCheckAction": "コンテンツ更新を確認",
     "checking": "確認中",
     "updating": "更新中",
     "checkingAccessibility": "更新を確認しています",
+    "testFlightCheckingAccessibility": "コンテンツ更新を確認しています",
+    "testFlightUpdateManaged": "テスト版アプリの更新は TestFlight で管理されます",
+    "testFlightNoContentUpdate": "利用可能なコンテンツ更新はありません。新しいテスト版は TestFlight で確認してください。",
+    "testFlightContentUpdateUnavailable": "このビルドではコンテンツ更新を確認できません。新しいテスト版は TestFlight で確認してください。",
     "bundleUpdateFound": "アプリ本体の更新があります",
     "upToDate": "すでに最新の状態です",
     "bundleUpToDateNoOta": "アプリ本体は最新です。このバージョンは OTA 更新に対応していません",
@@ -84,9 +89,16 @@
   "legal": {
     "sectionTitle": "法的情報",
     "privacyPolicy": "プライバシーポリシー",
+    "userAgreement": "利用規約",
     "view": "表示",
     "openPrivacyPolicy": "プライバシーポリシーを開く",
-    "appFilingNumber": "アプリ届出番号"
+    "openUserAgreement": "利用規約を開く",
+    "appFilingNumber": "アプリ届出番号",
+    "analytics": "利用統計",
+    "analyticsHint": "Cindy の起動状況や継続利用状況の把握に使います。送信するのはデバイスの機種名、OS バージョン、アプリバージョン、デバイス識別子などのデバイス・利用環境情報と、ログイン後はアカウント ID で、会話内容・ファイル・プロンプトは一切含みません。",
+    "analyticsSaveFailed": "設定を保存できませんでした。再起動すると元に戻る場合があります。",
+    "analyticsReset": "デフォルトに戻す",
+    "analyticsResetAction": "戻す"
   },
   "account": {
     "logoutHint": "ログアウトすると、このスマートフォン上のログイン状態とローカルのリモートミラーだけが削除されます。パソコン側のセッションには影響しません。",

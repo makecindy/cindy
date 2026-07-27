@@ -720,6 +720,33 @@ describe('Session turn send guard', () => {
     expect(handle.send).toHaveBeenCalledTimes(1);
   });
 
+  it('runs onDispatching after acceptance and immediately before vendor send', async () => {
+    const calls: string[] = [];
+    const handle = createHandle({ id: 'thread-1' });
+    handle.send = vi.fn(async () => {
+      calls.push('vendor');
+    });
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+
+    await expect(session.send('first', {
+      onAccepted: () => {
+        calls.push('accepted');
+      },
+      onDispatching: () => {
+        calls.push('dispatching');
+      },
+    })).resolves.toEqual({ accepted: true });
+
+    expect(calls).toEqual(['accepted', 'dispatching', 'vendor']);
+  });
+
   it('keeps the reservation while onAccepted is awaiting', async () => {
     let releaseAccepted!: () => void;
     const acceptedReady = new Promise<void>((resolve) => {

@@ -39,10 +39,11 @@ const MAX_EXTRA_DIRS = 10;
 export interface ExtraDirsButtonProps {
   extraDirs: string[];
   workingDir?: string | null;
-  /** 'cc' 才渲染按钮; 其它(包括 codex)直接返回 null。 */
-  agentKind: 'cc' | 'codex';
-  /** 父组件实现增删持久化(创建时写 draft store / 中途双 IPC 协调)。 */
-  onChange: (next: string[]) => void | Promise<void>;
+  /**
+   * 父组件实现增删持久化(创建时写 draft store / 中途双 IPC 协调)。
+   * 未提供时只显示目标、计划模式或 Plugin 入口，不显示引用目录段。
+   */
+  onChange?: (next: string[]) => void | Promise<void>;
   /** 提供时在菜单顶部显示「新建目标」项(仅会话中;点击 → 父组件打开 NewGoalDialog)。 */
   onNewGoal?: () => void;
   /**
@@ -114,7 +115,6 @@ function basename(p: string): string {
 export function ExtraDirsButton({
   extraDirs,
   workingDir,
-  agentKind,
   onChange,
   onNewGoal,
   planMode,
@@ -129,21 +129,20 @@ export function ExtraDirsButton({
   const [open, setOpen] = useState(false);
   const { confirm } = useConfirmDialog();
 
-  const isCc = agentKind === 'cc';
+  const hasReferenceDirs = onChange !== undefined;
   const count = extraDirs.length;
   const isCreateAgentVariant = visualVariant === 'create-agent';
 
   // hover 展开「添加」文案已移除(2026-07-22 用户定稿:展开必须承载信息,
   // 图标自明的 + 不需要;裸态→hover 外框→点击直接长出菜单)。
 
-  // 能力感知:新建目标(onNewGoal)/ 计划模式(planMode)两端通用;引用目录仅 cc
-  // (Codex 忽略 extraDirs)。三样都没有才不渲染。
-  if (!onNewGoal && !planMode && !isCc && plugins.length === 0) return null;
+  // 能力感知:新建目标、计划模式、Plugin 与引用目录都由父组件是否接线决定。
+  if (!onNewGoal && !planMode && !hasReferenceDirs && plugins.length === 0) return null;
 
   const atLimit = count >= MAX_EXTRA_DIRS;
 
   const handleAdd = async () => {
-    if (atLimit) return;
+    if (atLimit || !onChange) return;
     let picked: string | null = null;
     try {
       const r = await window.electronAPI.dialog.showOpenDirectory({});
@@ -180,6 +179,7 @@ export function ExtraDirsButton({
   };
 
   const handleRemove = async (path: string) => {
+    if (!onChange) return;
     await onChange(extraDirs.filter((p) => p !== path));
   };
 
@@ -210,8 +210,10 @@ export function ExtraDirsButton({
               // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
               // 透明 border 常驻占位,避免 hover 时 1px 布局跳动。
               'h-[30px]',
-              // 会话内 count>0 加宽显示 ×N;create-agent(新建对话框)保持 icon-only 紧凑态(不展 count)
-              count > 0 && isCc && !isCreateAgentVariant
+              // count>0 加宽显示 ×N —— 会话内与新建草稿(create-agent)一致:引用目录
+              // 扩大 agent 可见范围,必须在收起态外显,不允许静默(2026-07-25 用户定稿,
+              // 取代此前 create-agent icon-only 紧凑态的决定)。
+              count > 0 && hasReferenceDirs
                 ? 'min-w-max justify-center gap-1 px-2.5'
                 : 'w-[30px] justify-center p-0',
               'border border-transparent bg-transparent text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
@@ -224,7 +226,7 @@ export function ExtraDirsButton({
               size={isCreateAgentVariant ? 11 : dense ? 14 : 14}
               className="shrink-0"
             />
-            {count > 0 && isCc && !isCreateAgentVariant && (
+            {count > 0 && hasReferenceDirs && (
               <span
                 className={cn(
                   'font-normal tabular-nums',
@@ -343,8 +345,8 @@ export function ExtraDirsButton({
           </>
         )}
 
-        {/* 引用目录段:仅 Claude(cc)显示;Codex 忽略 extraDirs,只保留上面的入口项。 */}
-        {isCc && (
+        {/* 引用目录段:Claude 与 Codex 共用；未接 onChange 时不暴露空操作入口。 */}
+        {hasReferenceDirs && (
           <>
             {(onNewGoal || planMode || plugins.length > 0) && (
               <div className="my-1 h-px bg-[var(--model-dropdown-border)]" />

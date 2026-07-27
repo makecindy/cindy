@@ -88,6 +88,7 @@ import {
   getComputerDriverStatus,
   grantComputerDriverPermissions,
   installComputerDriver,
+  pauseComputerDriverPermissionProbe,
   pickLatestCuaDriverVersion,
   resetComputerDriverPermissionProbeCacheForTests,
   resetComputerDriverUpdateStateForTests,
@@ -349,6 +350,31 @@ describe('computer mcp integration', () => {
       windowsHide: true,
     });
     expect(spawnMock.mock.calls.some((call) => call[1]?.[0] === 'doctor')).toBe(false);
+  });
+
+  it('does not probe or autostart the permission daemon while waiting for the real app drag', async () => {
+    setPlatform('darwin');
+    await pauseComputerDriverPermissionProbe();
+    mockDriverSpawn({ stdout: 'cua-driver 0.7.1\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n  pid: 4242\n' });
+
+    await expect(getComputerDriverStatus({
+      forcePermissionProbe: true,
+      freshPermissionProbe: true,
+      bypassPermissionProbeCache: true,
+    })).resolves.toMatchObject({
+      installed: true,
+      daemonRunning: true,
+      permissionState: {
+        platform: 'macos',
+        status: 'missing',
+        accessibility: 'missing',
+        reason: 'Waiting for CuaDriver to be added in System Settings.',
+      },
+    });
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(driverStdinWrites).toEqual([]);
   });
 
   it('runs cua-driver doctor only for explicit deep status checks', async () => {
@@ -2329,12 +2355,81 @@ describe('computer mcp integration', () => {
 
   it('checks current Computer Use opt-in before dispatching MCP tool calls', async () => {
     const isComputerUseEnabled = vi.fn(() => false);
-    const deps = getComputerMcpDeps({ isComputerUseEnabled });
+    const prepareRuntimeBeforeUse = vi.fn(async () => undefined);
+    const deps = getComputerMcpDeps({ isComputerUseEnabled, prepareRuntimeBeforeUse });
 
     await expect(deps.callTool('list_windows', {}, { agentKind: 'codex' }))
       .rejects.toThrow('Computer Use is disabled');
     expect(isComputerUseEnabled).toHaveBeenCalledWith({ agentKind: 'codex' });
+    expect(prepareRuntimeBeforeUse).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('closes active MCP sessions and blocks tool dispatch while permission onboarding is paused', async () => {
+    setPlatform('darwin');
+    mcpCallToolMock
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"ok":true,"windows":[]}' }],
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"ok":true}' }],
+      });
+
+    await callComputerDriverTool(
+      'list_windows',
+      {},
+      { sessionId: 'session-permission-guide-pause' },
+    );
+    await pauseComputerDriverPermissionProbe();
+
+    expect(mcpCloseMock).toHaveBeenCalledOnce();
+    await expect(callComputerDriverTool(
+      'list_windows',
+      {},
+      { sessionId: 'session-permission-guide-pause' },
+    )).rejects.toThrow('permission onboarding is active');
+    expect(mcpConnectMock).toHaveBeenCalledOnce();
+  });
+
+  it('prepares the runtime before dispatching the first enabled tool call', async () => {
+    const prepareRuntimeBeforeUse = vi.fn(async () => undefined);
+    mcpCallToolMock.mockResolvedValueOnce({
+      content: [{ type: 'text', text: '{"ok":true,"windows":[]}' }],
+    });
+    const deps = getComputerMcpDeps({
+      isComputerUseEnabled: () => true,
+      prepareRuntimeBeforeUse,
+    });
+
+    await expect(deps.callTool(
+      'list_windows',
+      {},
+      { sessionId: 'session-runtime-gate' },
+    )).resolves.toEqual({ ok: true, windows: [] });
+    expect(prepareRuntimeBeforeUse).toHaveBeenCalledTimes(1);
+    expect(prepareRuntimeBeforeUse.mock.invocationCallOrder[0]).toBeLessThan(
+      mcpCallToolMock.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('prepares the runtime only once for subsequent tool calls', async () => {
+    const prepareRuntimeBeforeUse = vi.fn(async () => undefined);
+    mcpCallToolMock
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"ok":true,"windows":[]}' }],
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"ok":true,"windows":[]}' }],
+      });
+    const deps = getComputerMcpDeps({
+      isComputerUseEnabled: () => true,
+      prepareRuntimeBeforeUse,
+    });
+
+    await deps.callTool('list_windows', {}, { sessionId: 'session-runtime-gate-once' });
+    await deps.callTool('list_windows', {}, { sessionId: 'session-runtime-gate-once' });
+
+    expect(prepareRuntimeBeforeUse).toHaveBeenCalledTimes(1);
   });
 
   it('runs the official installer and returns refreshed status', async () => {
@@ -2376,6 +2471,73 @@ describe('computer mcp integration', () => {
     });
     expect(spawnMock.mock.calls.some((call) => call[1]?.[0] === 'serve')).toBe(false);
     expect(spawnMock.mock.calls.some((call) => call[1]?.[0] === 'permissions')).toBe(false);
+  });
+
+  it('can inspect a running macOS daemon without triggering the permission probe', async () => {
+    if (process.platform !== 'darwin') return;
+
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n' });
+
+    await expect(getComputerDriverStatus({ skipPermissionProbe: true })).resolves.toMatchObject({
+      installed: true,
+      daemonRunning: true,
+      permissionState: {
+        platform: 'macos',
+        status: 'unknown',
+      },
+    });
+    expect(spawnMock.mock.calls.some((call) => call[1]?.[0] === 'permissions')).toBe(false);
+  });
+
+  it('keeps page-entry status checks passive on CuaDriver versions before 0.12.2', async () => {
+    if (process.platform !== 'darwin') return;
+
+    mockDriverSpawn({ stdout: 'cua-driver 0.12.1\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n  pid: 4242\n' });
+
+    await expect(getComputerDriverStatus({
+      forcePermissionProbe: true,
+      bypassPermissionProbeCache: true,
+      passivePermissionProbeOnly: true,
+    })).resolves.toMatchObject({
+      installed: true,
+      daemonRunning: true,
+      permissionState: {
+        platform: 'macos',
+        status: 'unknown',
+      },
+    });
+    expect(spawnMock.mock.calls.some((call) => call[1]?.[0] === 'permissions')).toBe(false);
+  });
+
+  it('refreshes page-entry permissions through the read-only 0.12.2 status command', async () => {
+    if (process.platform !== 'darwin') return;
+
+    mockDriverSpawn({ stdout: 'cua-driver 0.12.2\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n  pid: 4242\n' });
+    mockDriverSpawn({
+      stdout:
+        '{"accessibility":true,"screen_recording":true,"screen_recording_capturable":true,"source":{"attribution":"driver-daemon"}}\n',
+    });
+
+    await expect(getComputerDriverStatus({
+      forcePermissionProbe: true,
+      bypassPermissionProbeCache: true,
+      passivePermissionProbeOnly: true,
+    })).resolves.toMatchObject({
+      installed: true,
+      permissionState: {
+        accessibility: 'granted',
+        screenRecording: 'granted',
+        status: 'granted',
+      },
+    });
+    expect(spawnMock).toHaveBeenCalledWith(
+      'cua-driver',
+      ['permissions', 'status', '--json'],
+      expect.objectContaining({ windowsHide: true }),
+    );
   });
 
   it('can force a macOS permission probe even when the daemon status is stopped', async () => {
@@ -2816,6 +2978,62 @@ describe('computer mcp integration', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
+  });
+
+  it('leaves row creation to the phase-one guide while its drag step is active', async () => {
+    setPlatform('darwin');
+    await pauseComputerDriverPermissionProbe();
+    mockDriverSpawn({ stdout: 'cua-driver 0.12.2\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is not running\n' });
+
+    await expect(grantComputerDriverPermissions()).resolves.toMatchObject({
+      ok: false,
+      status: {
+        permissionState: {
+          status: 'missing',
+          accessibility: 'missing',
+          reason: 'Waiting for CuaDriver to be added in System Settings.',
+        },
+      },
+    });
+    expect(
+      spawnMock.mock.calls.some(
+        (call) => call[1]?.[0] === 'permissions' && call[1]?.[1] === 'grant',
+      ),
+    ).toBe(false);
+  });
+
+  it('preserves the preflight permission snapshot while the phase-one guide is active', async () => {
+    setPlatform('darwin');
+    await pauseComputerDriverPermissionProbe();
+    const preflightStatus: ComputerDriverStatus = {
+      installed: true,
+      executablePath: '/Applications/CuaDriver.app/Contents/MacOS/cua-driver',
+      version: '0.12.2',
+      daemonRunning: true,
+      installCommand: 'test',
+      docsUrl: 'https://cua.ai/docs/cua-driver',
+      permissionState: {
+        platform: 'macos',
+        required: true,
+        status: 'missing',
+        accessibility: 'granted',
+        screenRecording: 'missing',
+        screenRecordingCapturable: 'missing',
+        canGrant: true,
+      },
+    };
+
+    await expect(grantComputerDriverPermissions(preflightStatus)).resolves.toMatchObject({
+      ok: false,
+      status: {
+        permissionState: {
+          accessibility: 'granted',
+          screenRecording: 'missing',
+        },
+      },
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it('kills the in-flight grant child when the user cancels the permission guide', async () => {

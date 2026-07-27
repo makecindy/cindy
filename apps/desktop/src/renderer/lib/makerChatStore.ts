@@ -33,11 +33,25 @@ import type {
   AgentInputReference,
 } from '../../shared/agentInputQueue';
 import {
+  deriveAutoTitleSeed,
   getAgentFacingText,
   reconcileSessionRefsForText,
+  type AutoTitleFallbackLabels,
+  type AutoTitleSeed,
 } from '../../shared/agentInputQueue';
 import { providerSecretStorageKey } from '../../shared/providerSecrets';
-import { GHOST_HOST_NOTICE_KEYS } from '../../shared/ghost';
+import {
+  GHOST_HOST_NOTICE_KEYS,
+  GHOST_SECRET_VALUE_MAX_CHARS,
+  GHOST_SETUP_MAX_INTERACTION_STEPS,
+  isGhostSetupErrorCode,
+} from '../../shared/ghost';
+import type {
+  GhostSetupActionKind,
+  GhostSetupAllowedAction,
+  GhostSetupErrorCode,
+  GhostSetupStepPhase,
+} from '../../shared/ghost';
 import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 // device-link 透明传输:远程(被控设备)会话的操作/读取走隧道,本地会话零变化。
@@ -79,6 +93,11 @@ import {
 } from '@/lib/issueConfirmPayload';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../shared/codexSubscriptionValue';
 import { normalizeTurnUsageDetails, type TurnUsageDetails } from '../../shared/turnUsageDetails';
+import {
+  legacyUsdMoney,
+  normalizeRegionalMoney,
+  type RegionalMoney,
+} from '../../shared/regionalMoney';
 import type { PersistedSessionReferenceMetadata } from '../../shared/sessionReferenceMetadata';
 import { isSessionUpgrading } from '@/state/ccMgrUpgradeStore';
 import { i18n } from '@/i18n';
@@ -121,7 +140,6 @@ const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   'maker:input:projection',
   'maker:interaction-request',
   'maker:interaction-dismissed',
-  'content-moderation:output-blocked',
   'local-db:messages:created',
   'usage:message-turn-cost',
   'maker:session-model-pref:changed',
@@ -168,11 +186,7 @@ import {
   parseUserContent,
   stringifyUserContent,
 } from '@/lib/imageRef';
-import {
-  getDraft as getComposerDraft,
-  saveDraft as saveComposerDraft,
-  plainTextToTiptapDoc,
-} from '@/lib/composerDraftStore';
+import { saveDraft as saveComposerDraft, plainTextToTiptapDoc } from '@/lib/composerDraftStore';
 import {
   canStartComposerSteer,
   canStartQueuedSteer,
@@ -380,10 +394,12 @@ export interface ChatMessage {
    * 仅 assistant 消息可能有值;MessageActionBar 据此显示"本轮消耗"。
    */
   turnCostUsd?: number;
+  turnMoney?: RegionalMoney;
   /** true = 订阅模式下的 token 价值;false = API 账单 cost / API 单价折算 cost。 */
   turnCostIsEstimate?: boolean;
   /** 用户从最近一条真实输入至本消息的累计成本；只用于消息旁展示。 */
   userTurnCostUsd?: number;
+  userTurnMoney?: RegionalMoney;
   userTurnCostIsEstimate?: boolean;
   /** 本轮 token/cache 明细;旧消息或未拿到 usage 时缺省。 */
   turnUsageDetails?: TurnUsageDetails;
@@ -461,6 +477,61 @@ export interface PendingAskUser {
   questions: AskUserQuestionItem[];
 }
 
+export type PluginSetupAction = GhostSetupAllowedAction;
+type PluginSetupInlineFormAction = Extract<GhostSetupAllowedAction, { kind: 'inline_form' }>;
+
+export interface PendingPluginSetup {
+  requestId: string;
+  revision: number;
+  /** Settled but retained briefly so the card can show terminal feedback. */
+  terminal?: true;
+  ghost: {
+    id: string;
+    name: string;
+    iconDataUrl?: string;
+  };
+  intro?: string;
+  steps: Array<{
+    id: string;
+    groupId: string;
+    groupMode: 'any_of';
+    title: string;
+    description: string;
+    phase: GhostSetupStepPhase;
+    action?: PluginSetupAction;
+    /** Preferred stable failure identity; localized by this Renderer. */
+    errorCode?: GhostSetupErrorCode;
+    /** Legacy controlled-Desktop fallback only. */
+    errorMessage?: string;
+  }>;
+}
+
+function isPluginSetupInteractionPending(setup: PendingPluginSetup | null): boolean {
+  return setup !== null && setup.terminal !== true;
+}
+
+function hasPendingPluginSetupInteraction(
+  current: PendingPluginSetup | null,
+  queue: readonly PendingPluginSetup[],
+): boolean {
+  return (
+    isPluginSetupInteractionPending(current) ||
+    queue.some((setup) => isPluginSetupInteractionPending(setup))
+  );
+}
+
+export type PluginSetupViewerState = 'expanded' | 'minimized';
+
+export interface PluginSetupCommandInFlight {
+  requestId: string;
+  action: 'run_action' | 'submit_form' | 'cancel';
+  actionId?: string;
+}
+
+export interface PluginSetupInlineFormValues {
+  value: string;
+}
+
 /**
  * F-AUQ-DRAFT: Per-session draft of in-progress AskUserQuestion answers.
  *
@@ -520,9 +591,10 @@ export interface PendingGhostGrantConfirm {
   /**
    * attachments = 媒体文件交给意识;dir = 上传目录/文件;save_dir = 允许意识
    * 往目录里存文件;fs_write = 意识申请写工作目录文件(会话 permission 为
-   * 逐条确认档时逐次弹,同目录本会话批一次)。
+   * 逐条确认档时逐次弹,同目录本会话批一次);workspace = 意识申请以该目录
+   * 为工作区在侧边栏创建/复用会话入口(不过户字节)。
    */
-  lane: 'attachments' | 'dir' | 'save_dir' | 'fs_write';
+  lane: 'attachments' | 'dir' | 'save_dir' | 'fs_write' | 'workspace';
   items: Array<{
     name: string;
     absPath: string;
@@ -700,6 +772,19 @@ export interface SessionChatState {
   pendingPermission: PendingPermission | null;
   /** F7.2: Currently pending ask-user-question; null when none. */
   pendingAskUser: PendingAskUser | null;
+  /** Host-owned plugin setup snapshot; updates replace by monotonic revision. */
+  pendingPluginSetup: PendingPluginSetup | null;
+  /**
+   * Additional setup requests for this session, in first-seen order.
+   *
+   * Only the head prompt is interactive. Snapshot updates replace the matching
+   * request in place, and dismissal promotes the next request without losing it.
+   */
+  pendingPluginSetupQueue: PendingPluginSetup[];
+  /** UI-only fold state for the current plugin setup prompt. */
+  pluginSetupViewerState: PluginSetupViewerState;
+  /** Prevents duplicate commands until Main publishes a newer snapshot/dismissal. */
+  pluginSetupCommandInFlight: PluginSetupCommandInFlight | null;
   /**
    * F-AUQ-MIN-1: AskUserQuestion viewer display state. Only meaningful while
    * pendingAskUser != null. Reset to 'expanded' every time a new
@@ -853,6 +938,9 @@ export type SessionChatLightState = Pick<
   | 'historyLoaded'
   | 'pendingPermission'
   | 'pendingAskUser'
+  | 'pendingPluginSetup'
+  | 'pluginSetupViewerState'
+  | 'pluginSetupCommandInFlight'
   | 'askUserViewerState'
   | 'askUserDraft'
   | 'pendingPlanReview'
@@ -901,6 +989,10 @@ function createInitialState(): SessionChatState {
     streamingText: '',
     pendingPermission: null,
     pendingAskUser: null,
+    pendingPluginSetup: null,
+    pendingPluginSetupQueue: [],
+    pluginSetupViewerState: 'expanded',
+    pluginSetupCommandInFlight: null,
     askUserViewerState: 'expanded',
     askUserDraft: null,
     pendingPlanReview: null,
@@ -962,6 +1054,10 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   sdkSessionId: null,
   pendingPermission: null,
   pendingAskUser: null,
+  pendingPluginSetup: null,
+  pendingPluginSetupQueue: [],
+  pluginSetupViewerState: 'expanded',
+  pluginSetupCommandInFlight: null,
   askUserViewerState: 'expanded',
   askUserDraft: null,
   pendingPlanReview: null,
@@ -1149,6 +1245,7 @@ function _isSessionBusy(sessionId: string, s: SessionChatState): boolean {
     hasBackgroundAgentWork(sessionId, s) ||
     s.pendingPermission ||
     s.pendingAskUser ||
+    hasPendingPluginSetupInteraction(s.pendingPluginSetup, s.pendingPluginSetupQueue) ||
     s.pendingPlanReview ||
     s.pendingIssueConfirm ||
     s.pendingRenameSessionsConfirm ||
@@ -1431,8 +1528,10 @@ function hydratePersistedMessage(
     existing.toolName === 'update_plan' &&
     persisted.toolName === 'update_plan' &&
     existing.toolUseId === persisted.toolUseId &&
-    typeof existing.toolInput === 'object' && existing.toolInput !== null &&
-    typeof persisted.toolInput === 'object' && persisted.toolInput !== null &&
+    typeof existing.toolInput === 'object' &&
+    existing.toolInput !== null &&
+    typeof persisted.toolInput === 'object' &&
+    persisted.toolInput !== null &&
     Array.isArray((existing.toolInput as { plan?: unknown }).plan) &&
     Array.isArray((persisted.toolInput as { plan?: unknown }).plan)
   ) {
@@ -2260,11 +2359,19 @@ export function handleStreamEvent(
         return next;
       });
 
-      const terminalData = event.data as { plan?: unknown; raw?: { id?: unknown } } | null | undefined;
+      const terminalData =
+        event.data as { plan?: unknown; raw?: { id?: unknown; status?: unknown } } | null | undefined;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
+      const terminalTurnStatus =
+        typeof terminalData?.raw?.status === 'string' ? terminalData.raw.status : null;
       const doneMessages = event.source === 'codex'
-        ? applyCodexPlanSnapshotOnDone(cleanedMessages, terminalData?.plan, terminalTurnId).messages
-        : cleanedMessages;
+        ? applyCodexPlanSnapshotOnDone(
+            cleanedMessages,
+            terminalData?.plan,
+            terminalTurnId,
+            terminalTurnStatus,
+           ).messages
+         : cleanedMessages;
 
       // F1-a Option C: tool-result-image 孤儿 flush(turn 末残留 pendingFullText)已收口
       // main(messagePersistBroadcaster.flushOrphanToolResults),落库后经 onCreated append
@@ -2303,7 +2410,11 @@ export function handleStreamEvent(
     }
 
     case 'error': {
-      const { message: errMsgRaw, reason, errorStatus } = event.data as {
+      const {
+        message: errMsgRaw,
+        reason,
+        errorStatus,
+      } = event.data as {
         message: string;
         reason?: string;
         errorStatus?: number | null;
@@ -2327,7 +2438,9 @@ export function handleStreamEvent(
             ? i18n.t('logic.errors.turnFailed')
             : reason === 'silent-stop-exhausted'
               ? i18n.t('logic.errors.silentStopExhausted')
-              : decodeRemoteErrorMessage(safeErrMsg);
+              : reason === 'codex-auto-review-unavailable'
+                ? i18n.t('logic.errors.codexAutoReviewUnavailable')
+                : decodeRemoteErrorMessage(safeErrMsg);
       const isTerminalError = isTerminalErrorData(event.data);
       if (!isTerminalError) {
         return {
@@ -2435,6 +2548,27 @@ export function handleStreamEvent(
           : null;
       if (state.pendingPermission?.requestId === data.requestId) {
         return { ...state, pendingPermission: null };
+      }
+      if (state.pendingPluginSetup?.requestId === data.requestId) {
+        const [nextSetup = null, ...remainingSetups] = state.pendingPluginSetupQueue;
+        return {
+          ...state,
+          pendingPluginSetup: nextSetup,
+          pendingPluginSetupQueue: remainingSetups,
+          pluginSetupViewerState: 'expanded',
+          pluginSetupCommandInFlight: null,
+        };
+      }
+      const queuedSetupIndex = state.pendingPluginSetupQueue.findIndex(
+        (setup) => setup.requestId === data.requestId,
+      );
+      if (queuedSetupIndex >= 0) {
+        return {
+          ...state,
+          pendingPluginSetupQueue: state.pendingPluginSetupQueue.filter(
+            (_, index) => index !== queuedSetupIndex,
+          ),
+        };
       }
       if (state.pendingIssueConfirm?.requestId === data.requestId) {
         // issue 确认卡被 main 兜底关闭(超时/会话清理),ephemeral 无落库,直接清。
@@ -2729,6 +2863,8 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     !state.isStreaming &&
     !state.pendingPermission &&
     !state.pendingAskUser &&
+    !state.pendingPluginSetup &&
+    state.pendingPluginSetupQueue.length === 0 &&
     !state.pendingPlanReview &&
     !state.pendingIssueConfirm &&
     !state.pendingRenameSessionsConfirm &&
@@ -2770,6 +2906,10 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     errorRetryText: null,
     pendingPermission: null,
     pendingAskUser: null,
+    pendingPluginSetup: null,
+    pendingPluginSetupQueue: [],
+    pluginSetupViewerState: 'expanded',
+    pluginSetupCommandInFlight: null,
     askUserViewerState: 'expanded',
     askUserDraft: null,
     pendingPlanReview: null,
@@ -3047,6 +3187,227 @@ function enqueueTextDeltaPayload(
   scheduleTextDeltaFlush();
 }
 
+const PLUGIN_SETUP_STEP_PHASES = new Set<GhostSetupStepPhase>([
+  'pending',
+  'action_running',
+  'waiting_external',
+  'verifying',
+  'satisfied',
+  'failed',
+  'cancelled',
+]);
+
+const PLUGIN_SETUP_ACTION_KINDS = new Set<GhostSetupActionKind>([
+  'oauth_connect',
+  'open_plugin_settings',
+  'manage_connection',
+  'open_client_settings',
+]);
+
+function parsePluginSetupInlineFormAction(
+  rawAction: Record<string, unknown>,
+): PluginSetupInlineFormAction | null {
+  const rawForm = rawAction.form;
+  if (!rawForm || typeof rawForm !== 'object' || Array.isArray(rawForm)) return null;
+  const rawFields = (rawForm as Record<string, unknown>).fields;
+  if (!Array.isArray(rawFields) || rawFields.length !== 1) return null;
+
+  const rawField = rawFields[0];
+  if (!rawField || typeof rawField !== 'object' || Array.isArray(rawField)) return null;
+  const field = rawField as Record<string, unknown>;
+  let externalLink: { url: string } | undefined;
+  if (field.externalLink !== undefined) {
+    if (
+      !field.externalLink ||
+      typeof field.externalLink !== 'object' ||
+      Array.isArray(field.externalLink)
+    ) {
+      return null;
+    }
+    const rawLink = field.externalLink as Record<string, unknown>;
+    if (
+      Object.keys(rawLink).length !== 1 ||
+      typeof rawLink.url !== 'string' ||
+      rawLink.url.length === 0 ||
+      rawLink.url.length > 200
+    ) {
+      return null;
+    }
+    try {
+      const parsed = new URL(rawLink.url);
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return null;
+    } catch {
+      return null;
+    }
+    externalLink = { url: rawLink.url };
+  }
+  if (
+    field.id !== 'value' ||
+    field.type !== 'secret' ||
+    typeof field.label !== 'string' ||
+    field.label.length === 0 ||
+    field.label.length > 120 ||
+    (field.description !== undefined &&
+      (typeof field.description !== 'string' || field.description.length > 500)) ||
+    (field.placeholder !== undefined &&
+      (typeof field.placeholder !== 'string' || field.placeholder.length > 120)) ||
+    field.required !== true ||
+    typeof field.maxLength !== 'number' ||
+    !Number.isSafeInteger(field.maxLength) ||
+    field.maxLength < 1 ||
+    field.maxLength > GHOST_SECRET_VALUE_MAX_CHARS
+  ) {
+    return null;
+  }
+
+  return {
+    id: rawAction.id as string,
+    kind: 'inline_form',
+    form: {
+      fields: [
+        {
+          id: field.id,
+          type: 'secret',
+          label: field.label,
+          ...(typeof field.description === 'string' ? { description: field.description } : {}),
+          ...(typeof field.placeholder === 'string' ? { placeholder: field.placeholder } : {}),
+          ...(externalLink ? { externalLink } : {}),
+          required: true,
+          maxLength: field.maxLength,
+        },
+      ],
+    },
+  };
+}
+
+/** Strict renderer boundary parser: unknown push data never reaches the card. */
+export function parsePendingPluginSetup(request: {
+  requestId?: unknown;
+  revision?: unknown;
+  terminal?: unknown;
+  ghost?: unknown;
+  intro?: unknown;
+  steps?: unknown;
+}): PendingPluginSetup | null {
+  if (
+    typeof request.requestId !== 'string' ||
+    request.requestId.length === 0 ||
+    request.requestId.length > 256 ||
+    typeof request.revision !== 'number' ||
+    !Number.isSafeInteger(request.revision) ||
+    request.revision < 0 ||
+    !request.ghost ||
+    typeof request.ghost !== 'object' ||
+    !Array.isArray(request.steps) ||
+    request.steps.length === 0 ||
+    request.steps.length > GHOST_SETUP_MAX_INTERACTION_STEPS ||
+    (request.terminal !== undefined && request.terminal !== true) ||
+    (request.intro !== undefined &&
+      (typeof request.intro !== 'string' || request.intro.length > 500))
+  ) {
+    return null;
+  }
+
+  const ghost = request.ghost as Record<string, unknown>;
+  if (
+    typeof ghost.id !== 'string' ||
+    ghost.id.length === 0 ||
+    ghost.id.length > 256 ||
+    typeof ghost.name !== 'string' ||
+    ghost.name.length === 0 ||
+    ghost.name.length > 256
+  ) {
+    return null;
+  }
+
+  const steps: PendingPluginSetup['steps'] = [];
+  for (const rawStep of request.steps) {
+    if (!rawStep || typeof rawStep !== 'object') return null;
+    const step = rawStep as Record<string, unknown>;
+    if (
+      typeof step.id !== 'string' ||
+      step.id.length === 0 ||
+      step.id.length > 256 ||
+      (step.groupId !== undefined &&
+        (typeof step.groupId !== 'string' ||
+          step.groupId.length === 0 ||
+          step.groupId.length > 256)) ||
+      (step.groupMode !== undefined && step.groupMode !== 'any_of') ||
+      typeof step.title !== 'string' ||
+      step.title.length === 0 ||
+      step.title.length > 120 ||
+      typeof step.description !== 'string' ||
+      step.description.length > 500 ||
+      typeof step.phase !== 'string' ||
+      !PLUGIN_SETUP_STEP_PHASES.has(step.phase as GhostSetupStepPhase) ||
+      (step.errorCode !== undefined && !isGhostSetupErrorCode(step.errorCode)) ||
+      (step.errorMessage !== undefined &&
+        (typeof step.errorMessage !== 'string' || step.errorMessage.length > 500))
+    ) {
+      return null;
+    }
+
+    let action: PluginSetupAction | undefined;
+    if (step.action !== undefined) {
+      if (!step.action || typeof step.action !== 'object') return null;
+      const rawAction = step.action as Record<string, unknown>;
+      if (
+        typeof rawAction.id !== 'string' ||
+        rawAction.id.length === 0 ||
+        rawAction.id.length > 256 ||
+        typeof rawAction.kind !== 'string'
+      ) {
+        return null;
+      }
+      if (rawAction.kind === 'inline_form') {
+        const parsedInline = parsePluginSetupInlineFormAction(rawAction);
+        if (!parsedInline) return null;
+        action = parsedInline;
+      } else {
+        if (!PLUGIN_SETUP_ACTION_KINDS.has(rawAction.kind as GhostSetupActionKind)) return null;
+        action = {
+          id: rawAction.id,
+          kind: rawAction.kind as Exclude<GhostSetupActionKind, 'inline_form'>,
+        };
+      }
+    }
+
+    steps.push({
+      id: step.id,
+      // Older controlled Desktops did not project group identity. Treat each
+      // legacy step as its own group while preserving strict validation when
+      // the new fields are present.
+      groupId: typeof step.groupId === 'string' ? step.groupId : step.id,
+      groupMode: 'any_of',
+      title: step.title,
+      description: step.description,
+      phase: step.phase as GhostSetupStepPhase,
+      ...(action ? { action } : {}),
+      ...(isGhostSetupErrorCode(step.errorCode) ? { errorCode: step.errorCode } : {}),
+      ...(typeof step.errorMessage === 'string' ? { errorMessage: step.errorMessage } : {}),
+    });
+  }
+
+  const iconDataUrl =
+    typeof ghost.iconDataUrl === 'string' &&
+    ghost.iconDataUrl.length <= 512_000 &&
+    ghost.iconDataUrl.startsWith('data:image/')
+      ? ghost.iconDataUrl
+      : undefined;
+  return {
+    requestId: request.requestId,
+    revision: request.revision,
+    ...(request.terminal === true ? { terminal: true as const } : {}),
+    ghost: {
+      id: ghost.id,
+      name: ghost.name,
+      ...(iconDataUrl ? { iconDataUrl } : {}),
+    },
+    ...(typeof request.intro === 'string' ? { intro: request.intro } : {}),
+    steps,
+  };
+}
+
 function initGlobalListeners(): void {
   if (globalListenersInitialized) return; // idempotent for StrictMode / HMR
   globalListenersInitialized = true;
@@ -3104,7 +3465,8 @@ function initGlobalListeners(): void {
     // fork / rewind 反向找 prior assistant 锚点要靠这个字段。
     // Remote auth-retry: 在 reducer 写 error 之前拦截,避免 error banner 闪烁。
     if (event.type === 'error') {
-      const errData = (event.data as { sdkError?: string; message?: string; errorStatus?: number }) ?? {};
+      const errData =
+        (event.data as { sdkError?: string; message?: string; errorStatus?: number }) ?? {};
       const isAuthError =
         errData.sdkError === 'authentication_failed' ||
         errData.errorStatus === 401 ||
@@ -3322,6 +3684,7 @@ function initGlobalListeners(): void {
     if (
       (kind !== 'permission' &&
         kind !== 'ask_user_question' &&
+        kind !== 'plugin_setup' &&
         kind !== 'plan_review' &&
         kind !== 'issue_confirm' &&
         kind !== 'rename_sessions_confirm' &&
@@ -3363,6 +3726,48 @@ function initGlobalListeners(): void {
       setState(sessionId, (s) =>
         handleStreamEvent(s, { sessionId, type: 'ask_user_question', data, persistId }),
       );
+      return;
+    }
+
+    if (request.kind === 'plugin_setup') {
+      const parsed = parsePendingPluginSetup(request);
+      if (!parsed) return;
+      setState(sessionId, (s) => {
+        const current = s.pendingPluginSetup;
+        if (!current) {
+          return {
+            ...s,
+            pendingPluginSetup: parsed,
+            pluginSetupViewerState: 'expanded',
+            pluginSetupCommandInFlight: null,
+          };
+        }
+        if (current.requestId === parsed.requestId) {
+          if (parsed.revision < current.revision) return s;
+          const advanced = parsed.revision > current.revision;
+          return {
+            ...s,
+            pendingPluginSetup: parsed,
+            pluginSetupCommandInFlight: advanced ? null : s.pluginSetupCommandInFlight,
+          };
+        }
+
+        const queuedIndex = s.pendingPluginSetupQueue.findIndex(
+          (setup) => setup.requestId === parsed.requestId,
+        );
+        if (queuedIndex >= 0) {
+          const queued = s.pendingPluginSetupQueue[queuedIndex];
+          if (parsed.revision < queued.revision) return s;
+          const nextQueue = s.pendingPluginSetupQueue.slice();
+          nextQueue[queuedIndex] = parsed;
+          return { ...s, pendingPluginSetupQueue: nextQueue };
+        }
+
+        return {
+          ...s,
+          pendingPluginSetupQueue: [...s.pendingPluginSetupQueue, parsed],
+        };
+      });
       return;
     }
 
@@ -3509,8 +3914,8 @@ function initGlobalListeners(): void {
     } | null;
     if (!payload?.sessionId) return;
     const clientIds = Array.isArray(payload.clientIds)
-      ? payload.clientIds.filter((value): value is string =>
-          typeof value === 'string' && value.length > 0,
+      ? payload.clientIds.filter(
+          (value): value is string => typeof value === 'string' && value.length > 0,
         )
       : typeof payload.clientId === 'string' && payload.clientId.length > 0
         ? [payload.clientId]
@@ -3522,37 +3927,61 @@ function initGlobalListeners(): void {
     const p = raw as {
       sessionId?: string;
       clientId?: string;
+      turnMoney?: unknown;
       turnCostUsd?: number;
       turnCostIsEstimate?: boolean;
+      userTurnMoney?: unknown;
       userTurnCostUsd?: number;
       userTurnCostIsEstimate?: boolean;
       turnUsageDetails?: unknown;
     } | null;
     if (!p?.sessionId || !p.clientId) return;
-    if (typeof p.turnCostUsd !== 'number' || !(p.turnCostUsd > 0)) return;
-    const { sessionId, clientId, turnCostUsd } = p;
     const turnCostIsEstimate = p.turnCostIsEstimate === true;
+    const turnUsageDetails = normalizeTurnUsageDetails(p.turnUsageDetails);
+    const normalizedTurnMoney = normalizeRegionalMoney(p.turnMoney);
+    const legacyTurnCostUsd =
+      typeof p.turnCostUsd === 'number' && p.turnCostUsd > 0
+        ? resolveEstimatedTurnCostUsd(
+            p.turnCostUsd,
+            turnCostIsEstimate,
+            turnUsageDetails,
+          )
+        : undefined;
+    const turnMoney =
+      normalizedTurnMoney ??
+      (legacyTurnCostUsd !== undefined
+        ? legacyUsdMoney(legacyTurnCostUsd)
+        : undefined);
+    if (!turnMoney || !(turnMoney.amount > 0)) return;
+    const { sessionId, clientId } = p;
+    const userTurnMoney =
+      normalizeRegionalMoney(p.userTurnMoney) ??
+      (typeof p.userTurnCostUsd === 'number' && p.userTurnCostUsd > 0
+        ? legacyUsdMoney(p.userTurnCostUsd)
+        : undefined);
     const userTurnCostUsd =
       typeof p.userTurnCostUsd === 'number' && p.userTurnCostUsd > 0
         ? p.userTurnCostUsd
         : undefined;
-    const turnUsageDetails = normalizeTurnUsageDetails(p.turnUsageDetails);
-    const resolvedTurnCostUsd = resolveEstimatedTurnCostUsd(
-      turnCostUsd,
-      turnCostIsEstimate,
-      turnUsageDetails,
-    );
+    const resolvedTurnCostUsd =
+      turnMoney.currency === 'USD'
+        ? turnMoney.amount
+        : undefined;
     setState(sessionId, (s) => {
       const idx = s.messages.findIndex((m) => m.clientId === clientId);
       if (idx < 0) return s;
       const msgs = s.messages.slice();
       msgs[idx] = {
         ...msgs[idx],
-        turnCostUsd: resolvedTurnCostUsd,
+        turnMoney,
+        ...(resolvedTurnCostUsd !== undefined
+          ? { turnCostUsd: resolvedTurnCostUsd }
+          : {}),
         turnCostIsEstimate,
-        ...(userTurnCostUsd
+        ...(userTurnMoney
           ? {
-              userTurnCostUsd,
+              userTurnMoney,
+              ...(userTurnCostUsd ? { userTurnCostUsd } : {}),
               userTurnCostIsEstimate: p.userTurnCostIsEstimate === true,
             }
           : {}),
@@ -3623,9 +4052,6 @@ function initGlobalListeners(): void {
         case 'maker:interaction-dismissed':
           handleInteractionDismissedRaw(push.payload);
           break;
-        case 'content-moderation:output-blocked':
-          handleContentModerationOutputBlocked(push.payload);
-          break;
         case 'local-db:messages:created':
           // 远程会话的持久化消息(接管路径)→ 注入 in-memory state(同本机)。
           handleMessageCreatedRaw(push.payload);
@@ -3643,15 +4069,24 @@ function initGlobalListeners(): void {
           // 被控端 session 终身累计 cost 落库推送(sessionSpendBroadcaster 走裸 UPDATE、
           // 不发 sessions:patched)→ 镜像进远程项目分片;打开中的远程会话底部 $ chip 经
           // session.totalCostUsd → useSessionSpend 初值重置显示最新值。
-          const p = push.payload as { sessionId?: string; totalCostUsd?: number } | null;
-          // 跨设备 payload 防御:NaN / 负数不入镜像(否则 chip 显示 $NaN / 污染后续计算)。
-          if (
-            push.deviceId && p?.sessionId
-            && typeof p.totalCostUsd === 'number'
-            && Number.isFinite(p.totalCostUsd) && p.totalCostUsd >= 0
-          ) {
+          const p = push.payload as {
+            sessionId?: string;
+            totalMoney?: unknown;
+            totalCostUsd?: number;
+          } | null;
+          const totalMoney =
+            normalizeRegionalMoney(p?.totalMoney) ??
+            (typeof p?.totalCostUsd === 'number' &&
+            Number.isFinite(p.totalCostUsd) &&
+            p.totalCostUsd >= 0
+              ? legacyUsdMoney(p.totalCostUsd)
+              : undefined);
+          if (push.deviceId && p?.sessionId && totalMoney) {
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
-              totalCostUsd: p.totalCostUsd,
+              totalMoney,
+              ...(typeof p.totalCostUsd === 'number'
+                ? { totalCostUsd: p.totalCostUsd }
+                : {}),
             });
           }
           break;
@@ -3660,9 +4095,11 @@ function initGlobalListeners(): void {
           // 同上:session 终身累计 token 镜像(chip tooltip 的 token 累计行)。
           const p = push.payload as { sessionId?: string; totalTokens?: number } | null;
           if (
-            push.deviceId && p?.sessionId
-            && typeof p.totalTokens === 'number'
-            && Number.isFinite(p.totalTokens) && p.totalTokens >= 0
+            push.deviceId &&
+            p?.sessionId &&
+            typeof p.totalTokens === 'number' &&
+            Number.isFinite(p.totalTokens) &&
+            p.totalTokens >= 0
           ) {
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
               totalTokenUsage: p.totalTokens,
@@ -3872,78 +4309,6 @@ function initGlobalListeners(): void {
     'ghosts-user-message-blocked',
   );
 
-  bindIpc(
-    (cb) => window.electronAPI.contentModeration?.onInputBlocked?.(cb),
-    (raw: unknown) => {
-      const payload = raw as {
-        sessionId?: string;
-        clientId?: string;
-        text?: string;
-        files?: SerializedAttachedFile[];
-        reason?: 'rejected' | 'cancelled';
-      } | null;
-      if (!payload?.sessionId || !payload.clientId || typeof payload.text !== 'string') return;
-
-      setState(payload.sessionId, (state) => ({
-        ...state,
-        messages: state.messages.filter(
-          (message) => !(message.clientId === payload.clientId && message.isPendingPersist),
-        ),
-      }));
-
-      const existing = getComposerDraft(payload.sessionId);
-      const restoredText = plainTextToTiptapDoc(payload.text);
-      const text = existing?.text?.content?.length
-        ? {
-            type: 'doc',
-            content: [
-              ...(restoredText.content ?? []),
-              { type: 'paragraph' },
-              ...existing.text.content,
-            ],
-          }
-        : restoredText;
-
-      const restoredFiles = (payload.files ?? []) as AttachedFile[];
-      const seen = new Set<string>();
-      const attachments = [...restoredFiles, ...(existing?.attachments ?? [])].filter((file) => {
-        const key = file.id || file.url || file.path;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-
-      saveComposerDraft(payload.sessionId, { text, attachments });
-      if (payload.reason === 'rejected') {
-        toast.error(i18n.t('contentModeration.blocked'));
-      }
-    },
-    'content-moderation-input-blocked',
-  );
-
-  const handleContentModerationOutputBlocked = (raw: unknown): void => {
-    const payload = raw as {
-      sessionId?: string;
-      kind?: string;
-      i18nKey?: string;
-    } | null;
-    if (
-      !payload?.sessionId
-      || payload.kind !== 'blocked'
-      || payload.i18nKey !== 'contentModeration.blocked'
-      || !_activeViewSessions.has(payload.sessionId)
-    ) {
-      return;
-    }
-    toast.error(i18n.t('contentModeration.blocked'));
-  };
-
-  bindIpc(
-    (cb) => window.electronAPI.contentModeration?.onOutputBlocked?.(cb),
-    handleContentModerationOutputBlocked,
-    'content-moderation-output-blocked',
-  );
-
   // ── 意识改写(订阅槽①):用户消息正文被钩子优化 ──
   // main 已用改写版落库 + 送 agent;这里把乐观气泡 content 静默换成改写版
   // (无标记,所见即送给 AI 的),保持气泡与 AI 实收一致。乐观气泡(空闲发)
@@ -4133,6 +4498,9 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     historyLoaded: state.historyLoaded,
     pendingPermission: state.pendingPermission,
     pendingAskUser: state.pendingAskUser,
+    pendingPluginSetup: state.pendingPluginSetup,
+    pluginSetupViewerState: state.pluginSetupViewerState,
+    pluginSetupCommandInFlight: state.pluginSetupCommandInFlight,
     askUserViewerState: state.askUserViewerState,
     askUserDraft: state.askUserDraft,
     pendingPlanReview: state.pendingPlanReview,
@@ -4167,6 +4535,9 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.historyLoaded === b.historyLoaded &&
     a.pendingPermission === b.pendingPermission &&
     a.pendingAskUser === b.pendingAskUser &&
+    a.pendingPluginSetup === b.pendingPluginSetup &&
+    a.pluginSetupViewerState === b.pluginSetupViewerState &&
+    a.pluginSetupCommandInFlight === b.pluginSetupCommandInFlight &&
     a.askUserViewerState === b.askUserViewerState &&
     a.askUserDraft === b.askUserDraft &&
     a.pendingPlanReview === b.pendingPlanReview &&
@@ -4236,6 +4607,7 @@ function subscribeAll(cb: () => void): () => void {
  * `hasPendingAskUser`    — session is waiting for user to answer a question.
  * `hasPendingPermission` — session is waiting for user to grant permission.
  * `hasPendingPlanReview` — session is waiting for user to review a plan (FP-3).
+ * `hasPendingPluginSetup` — session is waiting for local plugin setup.
  */
 export interface SessionStatusInfo {
   isRunning: boolean;
@@ -4245,6 +4617,7 @@ export interface SessionStatusInfo {
   hasPendingAskUser: boolean;
   hasPendingPermission: boolean;
   hasPendingPlanReview: boolean;
+  hasPendingPluginSetup: boolean;
 }
 
 /**
@@ -4303,6 +4676,10 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
     const hasPendingAskUser = state.pendingAskUser !== null;
     const hasPendingPermission = state.pendingPermission !== null;
     const hasPendingPlanReview = state.pendingPlanReview !== null;
+    const hasPendingPluginSetup = hasPendingPluginSetupInteraction(
+      state.pendingPluginSetup,
+      state.pendingPluginSetupQueue,
+    );
 
     // 后台 subagent 折算:主 turn 已结束但 wake 型后台任务(local_agent /
     // local_workflow)还在跑,或正处于「任务终态 → wake turn 启动」的桥接空窗
@@ -4320,8 +4697,14 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingAskUser,
         hasPendingPermission,
         hasPendingPlanReview,
+        hasPendingPluginSetup,
       });
-    } else if (hasPendingAskUser || hasPendingPermission || hasPendingPlanReview) {
+    } else if (
+      hasPendingAskUser ||
+      hasPendingPermission ||
+      hasPendingPlanReview ||
+      hasPendingPluginSetup
+    ) {
       // Session has a pending prompt for the user — include so the Sidebar
       // can show the "needs attention" notification dot.
       next.set(id, {
@@ -4330,6 +4713,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingAskUser,
         hasPendingPermission,
         hasPendingPlanReview,
+        hasPendingPluginSetup,
       });
     }
   }
@@ -4349,6 +4733,10 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
       hasPendingAskUser: state.pendingAskUser !== null,
       hasPendingPermission: state.pendingPermission !== null,
       hasPendingPlanReview: state.pendingPlanReview !== null,
+      hasPendingPluginSetup: hasPendingPluginSetupInteraction(
+        state.pendingPluginSetup,
+        state.pendingPluginSetupQueue,
+      ),
     });
   }
 
@@ -4385,7 +4773,8 @@ function getRunningSnapshot(): ReadonlyMap<string, SessionStatusInfo> {
         prev.sideTask !== info.sideTask ||
         prev.hasPendingAskUser !== info.hasPendingAskUser ||
         prev.hasPendingPermission !== info.hasPendingPermission ||
-        prev.hasPendingPlanReview !== info.hasPendingPlanReview
+        prev.hasPendingPlanReview !== info.hasPendingPlanReview ||
+        prev.hasPendingPluginSetup !== info.hasPendingPluginSetup
       ) {
         same = false;
         break;
@@ -4516,6 +4905,60 @@ function reconcilePendingInteractions(sessionId: string): Promise<number> {
       .getPendingInteractions(sessionId)
       .then((list) => {
         if (!Array.isArray(list)) return 0;
+        // A successful list response is the Host-authoritative snapshot for Setup
+        // interactions. Reconcile it subtractively before replaying the snapshot so
+        // a Device Link reconnect cannot leave cards that the Host already closed.
+        // Other interaction kinds keep their existing replay semantics.
+        const authoritativePluginSetupIds = new Set<string>();
+        for (const item of list) {
+          const request = item?.request;
+          if (
+            request?.kind === 'plugin_setup' &&
+            typeof request.requestId === 'string' &&
+            request.requestId.length > 0
+          ) {
+            authoritativePluginSetupIds.add(request.requestId);
+          }
+        }
+        setState(sessionId, (state) => {
+          const currentSurvives =
+            state.pendingPluginSetup !== null &&
+            authoritativePluginSetupIds.has(state.pendingPluginSetup.requestId);
+          const survivingQueue = state.pendingPluginSetupQueue.filter(
+            (setup) =>
+              authoritativePluginSetupIds.has(setup.requestId) &&
+              (!currentSurvives || setup.requestId !== state.pendingPluginSetup?.requestId),
+          );
+          const nextCurrent = currentSurvives
+            ? state.pendingPluginSetup
+            : (survivingQueue.shift() ?? null);
+          const currentChanged = nextCurrent !== state.pendingPluginSetup;
+          const queueChanged =
+            survivingQueue.length !== state.pendingPluginSetupQueue.length ||
+            survivingQueue.some(
+              (setup, index) => setup !== state.pendingPluginSetupQueue[index],
+            );
+          const nextCommand =
+            state.pluginSetupCommandInFlight &&
+            authoritativePluginSetupIds.has(state.pluginSetupCommandInFlight.requestId)
+              ? state.pluginSetupCommandInFlight
+              : null;
+
+          if (
+            !currentChanged &&
+            !queueChanged &&
+            nextCommand === state.pluginSetupCommandInFlight
+          ) {
+            return state;
+          }
+          return {
+            ...state,
+            pendingPluginSetup: nextCurrent,
+            pendingPluginSetupQueue: survivingQueue,
+            pluginSetupViewerState: currentChanged ? 'expanded' : state.pluginSetupViewerState,
+            pluginSetupCommandInFlight: nextCommand,
+          };
+        });
         for (const item of list) {
           applyInteractionRequestRef?.({
             sessionId,
@@ -4790,12 +5233,8 @@ function removeMessagesByClientIds(
   // 作废删除提交前发起的历史分页，避免旧页响应把已经清除的行重新 merge 回来。
   if (options.invalidateHistory !== false) bumpMessagesEpoch(sessionId);
   setState(sessionId, (s) => {
-    const removedMessages = s.messages.filter((message) =>
-      deletedClientIds.has(message.clientId),
-    );
-    const messages = s.messages.filter((message) =>
-      !deletedClientIds.has(message.clientId),
-    );
+    const removedMessages = s.messages.filter((message) => deletedClientIds.has(message.clientId));
+    const messages = s.messages.filter((message) => !deletedClientIds.has(message.clientId));
     const deletedTaskAliases = new Set<string>(deletedClientIds);
     for (const message of removedMessages) {
       if (message.toolUseId) deletedTaskAliases.add(message.toolUseId);
@@ -4809,8 +5248,7 @@ function removeMessagesByClientIds(
         if (
           deletedTaskAliases.has(key) ||
           deletedTaskAliases.has(task.taskId) ||
-          (task.parentToolUseId !== undefined &&
-            deletedTaskAliases.has(task.parentToolUseId))
+          (task.parentToolUseId !== undefined && deletedTaskAliases.has(task.parentToolUseId))
         ) {
           changed = true;
           continue;
@@ -4819,10 +5257,7 @@ function removeMessagesByClientIds(
       }
       if (changed) taskUpdates = nextTaskUpdates;
     }
-    if (
-      messages.length === s.messages.length &&
-      taskUpdates === s.taskUpdates
-    ) {
+    if (messages.length === s.messages.length && taskUpdates === s.taskUpdates) {
       return s;
     }
     return {
@@ -5347,7 +5782,9 @@ function buildCreateOptsForCurrentSession(
     // device-link routes to the target desktop, so omit the controller setting;
     // SSH still starts the agent through this process and must not inherit the
     // controller's default-enabled Maker Memory for a remote working directory.
-    ...(deviceLinkRemote ? {} : { makerMemoryEnabled: sshRemote ? false : getMakerMemoryEnabled() }),
+    ...(deviceLinkRemote
+      ? {}
+      : { makerMemoryEnabled: sshRemote ? false : getMakerMemoryEnabled() }),
     ...(current.remoteHostId ? { remoteHostId: current.remoteHostId } : {}),
     ...(opts?.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
     ...(current.sdkSessionId ? { resumeSessionId: current.sdkSessionId } : {}),
@@ -5450,97 +5887,98 @@ function updateQueueItem(sessionId: string, clientId: string, newText: string): 
     .catch((err) => log.warn('updateQueueItem failed:', err));
 }
 
-// 自动起名的"无中间态宽限期":LLM 在此窗口内出结果就直接用智能标题、不闪原话
-// (Claude haiku 实测常 2-3s 命中);超过则先用原话前 40 字占位,再后台等 oneShot
-// 真正出结果(靠其自身 30s 超时)异步覆盖成智能标题。这样 Claude 快路径无跳变,
-// Codex 慢路径(临时 thread 冷启动 + 可能重连,常 >3s)也能最终拿到智能标题,而
-// 不是像旧的"等够 N 秒否则 fallback"那样永远停在原话。
-const TITLE_AUTONAME_GRACE_MS = 3000;
+/**
+ * 已确认「不再需要自动起名」的会话(main 返回 done=true:已起过名,或用户手动
+ * 改过名)。纯粹是省 IPC 的缓存 —— 权威判定始终在 main。
+ *
+ * 只在 main 明确给出 done=true 时登记:瞬时失败(IPC/DB 异常、模型无结果)不登记,
+ * 下一条带文字的消息会重试,不会因一次抖动把会话永久钉在占位标题上。
+ */
+const autoNameSettled = new Set<string>();
 
-const forkAutoNameChecked = new Set<string>();
-
-/** 落库 + patch sidebar 标题 — 自动起名链路的统一出口。 */
-async function applyAutoNameTitle(sessionId: string, title: string): Promise<void> {
-  await sessionService.update(sessionId, { title });
-  // title 落库后只 patch 本会话的 title，省掉一次全量 fetchSessions
-  emitPatch(sessionId, { title });
+/** 纯附件消息合成占位标题时的类别兜底词(拿不到任何文件名时才用)。 */
+function autoTitleFallbackLabels(): AutoTitleFallbackLabels {
+  return {
+    image: i18n.t('ccAgent.autoTitle.image'),
+    file: i18n.t('ccAgent.autoTitle.file'),
+  };
 }
 
 /**
- * 宽限期 + 后台覆盖式自动起名:
- *   - 宽限期(TITLE_AUTONAME_GRACE_MS)内 LLM 出非空标题 → 直接用,无原话中间态。
- *   - 超宽限期 → 先用原话前 40 字占位改名,后台继续等 oneShot 出结果再覆盖。
+ * 触发自动起名。
+ *
+ * **权威逻辑全在 main**(`maker:auto-title`):资格判定、立即占位、智能标题覆盖、
+ * 条件写与合成占位归属表都在那边。renderer 只负责给素材,原因是同一个会话既可能
+ * 被本机发送、也可能被另一台设备远控,归属表若分散在两个进程会互相误判成「用户
+ * 手动改名」而永久跳过替换(PR #510 review)。标题落库后 main 广播
+ * `sessions:patched`,sessionsStore 据此更新侧边栏。
+ *
+ * device-link 远程会话例外:权威标题由**被控端** main 写,控制端这里只在自己的
+ * 投影层登记一条即时预览,免得干等一次隧道往返。
+ *
  * 整条链路 fire-and-forget,失败只打日志,不阻塞发送主流程。
  */
 function scheduleAutoName(
   sessionId: string,
   text: string,
   agentKind: 'claude-code' | 'codex',
+  isUserText = true,
 ): void {
-  // device-link 远程会话由被控端 main 负责基于本机 DB 自动起名，控制端 renderer
-  // 不再额外生成标题，避免两端并发覆盖同一 session title。
-  if (isRemoteSession(sessionId)) return;
-  const fallbackTitle = text.replace(/\n/g, ' ').slice(0, 40);
-  const titlePromise = window.electronAPI.maker
-    .generateTitle(text, agentKind, sessionId)
-    .then((result) => result.title)
-    .catch(() => null);
-  void (async () => {
-    try {
-      const graceP = new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), TITLE_AUTONAME_GRACE_MS),
-      );
-      const within = await Promise.race([titlePromise, graceP]);
-      if (within && within.trim()) {
-        // 宽限期内命中 → 直接智能标题,无中间态。
-        await applyAutoNameTitle(sessionId, within);
-        return;
-      }
-      // 宽限期超时 → 先用原话占位,后台等智能标题再覆盖。
-      await applyAutoNameTitle(sessionId, fallbackTitle);
-      const smart = await titlePromise;
-      if (smart && smart.trim() && smart !== fallbackTitle) {
-        // 覆盖前 re-read 确认标题仍是我们写的占位 —— 等待窗口(Codex oneShot 最长
-        // ~30s)内用户若从 header/sidebar 手动改名,标题已不等于 fallbackTitle,
-        // 此时不覆盖,让用户的手动改名 wins(避免后台智能标题静默冲掉用户改名)。
-        const currentSession = await sessionService.get(sessionId);
-        if (currentSession.title === fallbackTitle) {
-          await applyAutoNameTitle(sessionId, smart);
-        }
-      }
-    } catch (err) {
-      log.error('Failed to auto-name session:', err);
-    }
-  })();
+  // 与 main 的 normalizeAutoTitle 同一套规则,两端算出的占位串一致,回流时不跳变。
+  const fallbackTitle = text.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
+  // 连描述都合成不出来(既无文字也无可命名附件):保留默认标题,留给下一条消息。
+  if (!fallbackTitle) return;
+  if (isRemoteSession(sessionId)) {
+    // 带上 isUserText:合成描述对应「被控端先写占位、之后还要换掉」,要登记成系统
+    // 占位归属;用户文字对应的标题可能就此定稿,登记了会让后续预览一直盖着它。
+    remoteProjectsStore.setPendingTitlePreview(sessionId, fallbackTitle, isUserText);
+    return;
+  }
+  if (autoNameSettled.has(sessionId)) return;
+  // 整条链路对发送主流程必须是无副作用的:起名失败(桥接缺失 / IPC 抛错)只记日志,
+  // 绝不能把异常抛回 sendMessageCore 打断消息入队。
+  try {
+    void window.electronAPI.maker
+      .autoTitle({ sessionId, text, agentKind, isUserText })
+      .then((result) => {
+        if (result?.done) autoNameSettled.add(sessionId);
+      })
+      .catch((err) => {
+        // 不登记 settled —— 下一条带文字的消息会重试。
+        log.warn('Failed to auto-name session:', err);
+      });
+  } catch (err) {
+    log.warn('Failed to invoke auto-title IPC:', err);
+  }
 }
 
 /**
- * fork 出来的会话标题是占位的 "[Fork] <源标题>"（剥离 fork 为 "[Fork·已剥离]
- * ..."），在用户于该会话里发出第一句文本消息时基于这句话自动起名（走与普通会话
- * 同款的 scheduleAutoName）。fork 会话天然带历史消息（isFirstMessage=false），
- * 走不到普通首条消息的起名分支,因此单独在这里触发。
+ * 非首条消息的补起名:标题仍是系统占位的会话,在用户发出第一句**带文字**的消息
+ * 时把标题换成他写的内容。三类会话会走到这里:
  *
- * 每个 session 每次 app 生命周期只查一次 session 行（Set 去重）——非 fork 会话 /
- * 用户手动改过名（前缀不再是 [Fork）的会话,后续 send 不再发 IPC。
+ *   - 首条消息是纯附件(只贴图没打字)的会话:标题此时是合成占位(文件名 /
+ *     「图片」等),用户一打字就换成他自己的话。
+ *   - 同上但连描述都合成不出来、标题仍是 "New Maker" 的会话。
+ *   - fork 出来的会话:标题是占位的 "[Fork] <源标题>"(剥离 fork 为
+ *     "[Fork·已剥离] ..."),天然带历史消息(isFirstMessage=false),走不到普通
+ *     首条消息的起名分支。
+ *
+ * 素材同样经 {@link deriveAutoTitleSeed} 推导,与首条消息共用一套口径:直接拿
+ * `projectLiteralUserText` 会把 mention chip 序列化出的 `@<path>` 当成用户散文,
+ * 既违反「合成描述不喂标题模型」的契约,也可能让标题里出现 wire token
+ * (PR #510 review)。
+ *
+ * 只有 `isUserText=true` 才补起名:纯附件的后续消息不该把已有的合成占位换成
+ * 另一个文件名。是否仍是系统占位由 main 判定(它持有 DB 与归属表),这里不再读
+ * 会话行 —— 远程会话的行根本不在本机 DB 里,读它只会抛错。
  */
-function maybeAutoNameForkedSession(sessionId: string, text: string): void {
-  // 纯附件 send（无文本）起不出有意义的标题，留给下一条带文本的消息。
-  if (!text.trim()) return;
-  if (forkAutoNameChecked.has(sessionId)) return;
-  // 同步占位去重 — 同一会话快速连发两条时第二条不会并发再跑一次起名。
-  forkAutoNameChecked.add(sessionId);
-  void (async () => {
-    try {
-      const session = await sessionService.get(sessionId);
-      if (!session.parentSessionId || !session.title?.startsWith('[Fork')) return;
-      scheduleAutoName(sessionId, text, dbAgentKindToMakerKind(session.agentKind));
-    } catch (err) {
-      // get 失败不应永久关掉本会话的自动起名 — 释放占位让下一条消息重试。
-      // 非 fork / 已改名会话走上面的 return（成功路径），保持已检查状态不重复查库。
-      forkAutoNameChecked.delete(sessionId);
-      log.warn('Failed to auto-name forked session:', err);
-    }
-  })();
+function maybeAutoNameUnnamedSession(
+  sessionId: string,
+  seed: AutoTitleSeed | null,
+  agentKind: 'claude-code' | 'codex',
+): void {
+  if (!seed?.isUserText) return;
+  scheduleAutoName(sessionId, seed.text, agentKind, true);
 }
 
 /**
@@ -5667,17 +6105,21 @@ async function sendMessageCore(
   // Auto-naming (F-CHAT-2) — only fires for the first message in the session,
   // and that is by definition not busy (queue would have been dispatched on a
   // previous turn). Safe to leave outside the isBusy branch.
+  // 首条与补起名共用同一套素材推导:用户没打字时 seed.isUserText=false,
+  // 只写合成占位、不调标题模型。
+  const autoTitleSeed = deriveAutoTitleSeed(queued, autoTitleFallbackLabels());
   if (wasFirst) {
     // 用会话真实 agentKind 起名 — 之前写死 'claude-code',导致 Codex 会话也
     // 用 Claude haiku 起标题:纯 Codex 用户(无 Claude 鉴权)会 oneShot 失败 →
     // fallback 原话,表现为"Codex 会话标题没有智能总结"。current.agentKind 已是
-    // maker 格式('claude-code' | 'codex'),直接透传。起名走宽限期 + 后台覆盖。
-    scheduleAutoName(sessionId, getAgentFacingText(queued), current.agentKind);
+    // maker 格式('claude-code' | 'codex'),直接透传。起名走立即占位 + 后台覆盖。
+    if (autoTitleSeed) {
+      scheduleAutoName(sessionId, autoTitleSeed.text, current.agentKind, autoTitleSeed.isUserText);
+    }
   } else {
-    // fork-auto-name: fork 出来的会话带着占位标题 "[Fork] <源标题>"，在用户
-    // 于新会话里发出第一句话时按同款流程基于这句话改名（fork 会话天然带历史
-    // 消息，isFirstMessage=false 走不到上面的分支）。
-    maybeAutoNameForkedSession(sessionId, getAgentFacingText(queued));
+    // 补起名:首条是纯附件(只贴图没打字)、标题还是合成占位或默认名的会话,以及
+    // fork 出来的占位标题会话,都在第一条带文字的消息上把标题换成用户写的内容。
+    maybeAutoNameUnnamedSession(sessionId, autoTitleSeed, current.agentKind);
   }
 
   // 视觉连续性: agent 空闲 + 队列为空时, main coordinator 会立即派发这条(见
@@ -5865,10 +6307,19 @@ function steerMessageCore(
     opts,
   );
   touchSessionUserSend(sessionId, workingDir, false);
+  // 补起名同样要覆盖 steer:首条是纯附件的会话标题此时是合成占位,而用户完全
+  // 可能趁这一轮还在跑就用「插话」写下第一句话。只走普通发送的话,这句话不会
+  // 改名,标题会一直停在附件名直到他再排队发一条(PR #510 review P1)。
+  // 素材在入队前推导(此刻 queued 还在手里),但**只有输入被受理才改名**:同会话
+  // 已有在飞 steer / Stop 边界 / 输入锁都会让它被拒,拒掉的文本不该改名。
+  const autoTitleSeed = deriveAutoTitleSeed(queued, autoTitleFallbackLabels());
+  const agentKind = getOrCreateState(sessionId).agentKind;
+  const commitAutoTitle = () => maybeAutoNameUnnamedSession(sessionId, autoTitleSeed, agentKind);
   return makerApiFor(sessionId)
     .input.steer(sessionId, queued, { touchUserSend: true })
     .then(async (ok) => {
       if (ok) {
+        commitAutoTitle();
         requestInputProjection(sessionId);
         return true;
       }
@@ -5880,6 +6331,10 @@ function steerMessageCore(
         const latest = await makerApiFor(sessionId).input.getProjection(sessionId);
         applyInputProjection(latest);
         if (latest.pendingQueue.some((q) => q.clientId === queued.clientId)) {
+          // 物化进队列 = 这条输入已被主端接管、日后会派发,与受理同等 —— 起名也要
+          // 跟上,否则纯附件/fork 之后的第一句话恰好在这条不确定路径上不改名
+          // (review P1)。是否真该改名仍由 main 权威判定。
+          commitAutoTitle();
           return true;
         }
       } catch (err) {
@@ -5949,16 +6404,18 @@ async function resendBlockedMessage(
         msg.retryFiles,
         msg.retryMentions,
         opts?.quotesEncoded ||
-        opts?.agentReferences?.length ||
-        opts?.pastedTextRanges?.length ||
-        opts?.slashCommandRanges !== undefined
+          opts?.agentReferences?.length ||
+          opts?.pastedTextRanges?.length ||
+          opts?.slashCommandRanges !== undefined
           ? {
               ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
-              ...(opts?.agentReferences?.length
-                ? { agentReferences: opts.agentReferences }
+              ...(opts?.agentReferences?.length ? { agentReferences: opts.agentReferences } : {}),
+              ...(opts?.pastedTextRanges?.length
+                ? { pastedTextRanges: opts.pastedTextRanges }
                 : {}),
-              ...(opts?.pastedTextRanges?.length ? { pastedTextRanges: opts.pastedTextRanges } : {}),
-              ...(opts?.slashCommandRanges !== undefined ? { slashCommandRanges: opts.slashCommandRanges } : {}),
+              ...(opts?.slashCommandRanges !== undefined
+                ? { slashCommandRanges: opts.slashCommandRanges }
+                : {}),
             }
           : undefined,
       );
@@ -6289,6 +6746,10 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
       errorRetryText: null,
       pendingPermission: null,
       pendingAskUser: null,
+      pendingPluginSetup: null,
+      pendingPluginSetupQueue: [],
+      pluginSetupViewerState: 'expanded',
+      pluginSetupCommandInFlight: null,
       // F-AUQ-MIN-5: Clear session — wipe viewer state too.
       askUserViewerState: 'expanded',
       // F-AUQ-DRAFT: Clear session also wipes any in-progress draft.
@@ -6498,6 +6959,81 @@ function answerUserQuestion(
     .catch((err) => log.error('Failed to answer user question:', err));
 }
 
+function respondToPluginSetup(
+  sessionId: string,
+  requestId: string,
+  action: 'run_action' | 'submit_form' | 'cancel',
+  actionId?: string,
+  values?: PluginSetupInlineFormValues,
+): void {
+  if (!sessionId) return;
+  const state = getOrCreateState(sessionId);
+  const pending = state.pendingPluginSetup;
+  if (!pending || pending.requestId !== requestId || state.pluginSetupCommandInFlight) return;
+
+  const selectedAction = actionId
+    ? pending.steps.find((step) => step.action?.id === actionId)?.action
+    : undefined;
+  if (action === 'run_action') {
+    if (!selectedAction || selectedAction.kind === 'inline_form') return;
+  } else if (action === 'submit_form') {
+    if (
+      isRemoteSession(sessionId) ||
+      !selectedAction ||
+      selectedAction.kind !== 'inline_form' ||
+      typeof values?.value !== 'string'
+    ) {
+      return;
+    }
+    const value = values.value.trim();
+    const field = selectedAction.form.fields[0];
+    if (value.length === 0 || value.length > field.maxLength) return;
+
+    const command: PluginSetupCommandInFlight = {
+      requestId,
+      action,
+      actionId: selectedAction.id,
+    };
+    setState(sessionId, (s) => ({ ...s, pluginSetupCommandInFlight: command }));
+    window.electronAPI.maker
+      .submitPluginSetupInline({
+        requestId,
+        actionId: selectedAction.id,
+        expectedRevision: pending.revision,
+        value,
+      })
+      .catch(() => {
+        // Do not attach IPC error details here: this path carries a secret.
+        log.error('Failed to submit plugin setup form');
+        setState(sessionId, (s) =>
+          s.pluginSetupCommandInFlight === command ? { ...s, pluginSetupCommandInFlight: null } : s,
+        );
+      });
+    return;
+  }
+
+  const command: PluginSetupCommandInFlight = {
+    requestId,
+    action,
+    ...(actionId ? { actionId } : {}),
+  };
+  setState(sessionId, (s) => ({ ...s, pluginSetupCommandInFlight: command }));
+
+  makerApiFor(sessionId)
+    .resolveInteraction(requestId, {
+      kind: 'plugin_setup',
+      action,
+      ...(actionId ? { actionId } : {}),
+      expectedRevision: pending.revision,
+    })
+    .catch((err) => {
+      log.error('Failed to respond to plugin setup:', err);
+      setState(sessionId, (s) =>
+        s.pluginSetupCommandInFlight === command ? { ...s, pluginSetupCommandInFlight: null } : s,
+      );
+    });
+}
+
 /**
  * F-PERM-2: Send a permission decision to the main process and clear pendingPermission.
  */
@@ -6599,7 +7135,13 @@ function parseGhostGrantConfirmRequest(request: {
   [k: string]: unknown;
 }): PendingGhostGrantConfirm | null {
   const lane = request.lane;
-  if (lane !== 'attachments' && lane !== 'dir' && lane !== 'save_dir' && lane !== 'fs_write')
+  if (
+    lane !== 'attachments' &&
+    lane !== 'dir' &&
+    lane !== 'save_dir' &&
+    lane !== 'fs_write' &&
+    lane !== 'workspace'
+  )
     return null;
   if (typeof request.ghostId !== 'string' || typeof request.ghostName !== 'string') return null;
   const rawItems = Array.isArray(request.items) ? request.items : null;
@@ -6995,6 +7537,14 @@ function setAskUserViewerState(sessionId: string, next: AskUserViewerState): voi
   });
 }
 
+function setPluginSetupViewerState(sessionId: string, next: PluginSetupViewerState): void {
+  if (!sessionId) return;
+  setState(sessionId, (s) => {
+    if (s.pluginSetupViewerState === next) return s;
+    return { ...s, pluginSetupViewerState: next };
+  });
+}
+
 /**
  * F-AUQ-DRAFT: Persist the in-progress AskUserQuestion wizard state
  * (currentIndex + answers) per session so it survives the session-switch
@@ -7128,12 +7678,11 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
         // 执行端 maker:send 在进入 vendor 前冻结自己的时钟，并仅在 accepted 后
         // durable ack；device-link 控制端不再跨设备传时间戳。老执行端忽略该选项
         // 时安全降级为“不确认旧中断”，不会因时钟偏差抹掉新的中断。
-        return sendDirect(true)
-          .then(() => {
-            if (continuedErrorTailClientId) {
-              dismissErrorTailMessage(sessionId, continuedErrorTailClientId);
-            }
-          });
+        return sendDirect(true).then(() => {
+          if (continuedErrorTailClientId) {
+            dismissErrorTailMessage(sessionId, continuedErrorTailClientId);
+          }
+        });
       }
       const queued = buildQueuedMessage(
         sessionId,
@@ -7422,6 +7971,7 @@ export const makerChatStore = {
   respondToRenameSessionsConfirm,
   respondToGhostGrantConfirm,
   answerUserQuestion,
+  respondToPluginSetup,
   respondToPlanReview,
   cancelPlanReview,
   updatePendingPlanReviewContent,
@@ -7431,6 +7981,8 @@ export const makerChatStore = {
   setPlanViewerState,
   /** F-AUQ-MIN-2/4: minimize/restore the AskUserQuestion prompt UI. */
   setAskUserViewerState,
+  /** Minimize/restore the Host-owned plugin setup prompt UI. */
+  setPluginSetupViewerState,
   /** F-AUQ-DRAFT: persist in-progress wizard state across session switch. */
   setAskUserDraft,
   setTitleUpdateCallback,
@@ -7473,6 +8025,12 @@ export const makerChatStore = {
   },
   /** Exposed for tests only. */
   __teardownGlobalListeners,
+  /** Exposed for tests only: 非首条消息的补起名(纯附件首条 / fork 占位)。 */
+  __autoNameUnnamedSessionForTest: maybeAutoNameUnnamedSession,
+  /** Exposed for tests only: 清空「已确认无需起名」缓存,隔离用例间状态。 */
+  __resetAutoNameStateForTest: (): void => {
+    autoNameSettled.clear();
+  },
   /** Exposed for tests only: 把 stream event 打进真实 store(驱动 getRunningSnapshot 等)。 */
   __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void =>
     setState(sessionId, (s) => handleStreamEvent(s, event)),
@@ -8038,6 +8596,33 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         systemCardData: { kind: m.agentMeta.goalNotice },
       };
     }
+    const agentMeta = m.agentMeta;
+    const turnUsageDetails =
+      m.role === 'assistant'
+        ? normalizeTurnUsageDetails(agentMeta?.turnUsageDetails)
+        : undefined;
+    const normalizedTurnMoney =
+      m.role === 'assistant'
+        ? normalizeRegionalMoney(agentMeta?.turnCost)
+        : undefined;
+    const legacyTurnCostUsd =
+      m.role === 'assistant' &&
+      typeof agentMeta?.turnCostUsd === 'number' &&
+      agentMeta.turnCostUsd > 0
+        ? resolveEstimatedTurnCostUsd(
+            agentMeta.turnCostUsd,
+            agentMeta.turnCostIsEstimate === true,
+            turnUsageDetails,
+            agentMeta.model,
+          )
+        : undefined;
+    const persistedTurnMoney =
+      m.role === 'assistant'
+        ? normalizedTurnMoney ??
+          (legacyTurnCostUsd !== undefined
+            ? legacyUsdMoney(legacyTurnCostUsd)
+            : undefined)
+        : undefined;
     return {
       clientId: m.clientId,
       role: m.role,
@@ -8049,30 +8634,39 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       // SDK done turn seal:新数据用 turnCompleted；存量会话已有 turnCostUsd 的收尾
       // assistant 等价可推导，直接补投影让本修复对历史复现会话立即生效。
       ...(m.role === 'assistant' && (
-        m.agentMeta?.turnCompleted === true ||
-        (typeof m.agentMeta?.turnCostUsd === 'number' && m.agentMeta.turnCostUsd > 0)
+        agentMeta?.turnCompleted === true ||
+        (persistedTurnMoney?.amount ?? 0) > 0
       )
         ? { turnCompleted: true }
         : {}),
       // assistant 上挂的 per-turn 费用(main turn 结束时 patch 进 agent_meta)
       ...(m.role === 'assistant' &&
-      typeof m.agentMeta?.turnCostUsd === 'number' &&
-      m.agentMeta.turnCostUsd > 0
+      agentMeta &&
+      persistedTurnMoney &&
+      persistedTurnMoney.amount > 0
         ? (() => {
-            const turnUsageDetails = normalizeTurnUsageDetails(m.agentMeta.turnUsageDetails);
-            const turnCostUsd = resolveEstimatedTurnCostUsd(
-              m.agentMeta.turnCostUsd,
-              m.agentMeta.turnCostIsEstimate === true,
-              turnUsageDetails,
-              m.agentMeta.model,
-            );
+            const turnCostUsd =
+              persistedTurnMoney.currency === 'USD'
+                ? persistedTurnMoney.amount
+                : undefined;
+            const persistedUserTurnMoney =
+              normalizeRegionalMoney(agentMeta.userTurnCost) ??
+              (typeof agentMeta.userTurnCostUsd === 'number' &&
+              agentMeta.userTurnCostUsd > 0
+                ? legacyUsdMoney(agentMeta.userTurnCostUsd)
+                : undefined);
             return {
-              turnCostUsd,
-              turnCostIsEstimate: m.agentMeta.turnCostIsEstimate === true,
-              ...(typeof m.agentMeta.userTurnCostUsd === 'number' && m.agentMeta.userTurnCostUsd > 0
+              turnMoney: persistedTurnMoney,
+              ...(turnCostUsd !== undefined ? { turnCostUsd } : {}),
+              turnCostIsEstimate: agentMeta.turnCostIsEstimate === true,
+              ...(persistedUserTurnMoney
                 ? {
-                    userTurnCostUsd: m.agentMeta.userTurnCostUsd,
-                    userTurnCostIsEstimate: m.agentMeta.userTurnCostIsEstimate === true,
+                    userTurnMoney: persistedUserTurnMoney,
+                    ...(typeof agentMeta.userTurnCostUsd === 'number' &&
+                    agentMeta.userTurnCostUsd > 0
+                      ? { userTurnCostUsd: agentMeta.userTurnCostUsd }
+                      : {}),
+                    userTurnCostIsEstimate: agentMeta.userTurnCostIsEstimate === true,
                   }
                 : {}),
               ...(turnUsageDetails ? { turnUsageDetails } : {}),
@@ -8130,15 +8724,24 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
 
 /**
  * Device-link can load history from a peer that predates persisted
- * userTurnCostUsd. Rebuild only those missing display totals from the ordered
+ * userTurnCost. Rebuild only those missing display totals from the ordered
  * rows returned by that peer; raw per-segment values remain untouched.
  */
 function projectLegacyUserTurnCosts(
   serverMsgs: Message[],
-): Map<string, Pick<ChatMessage, 'userTurnCostUsd' | 'userTurnCostIsEstimate'>> {
+): Map<
+  string,
+  Pick<
+    ChatMessage,
+    'userTurnMoney' | 'userTurnCostUsd' | 'userTurnCostIsEstimate'
+  >
+> {
   const projected = new Map<
     string,
-    Pick<ChatMessage, 'userTurnCostUsd' | 'userTurnCostIsEstimate'>
+    Pick<
+      ChatMessage,
+      'userTurnMoney' | 'userTurnCostUsd' | 'userTurnCostIsEstimate'
+    >
   >();
   let hasRealUserBoundary = false;
   let costUsd = 0;
@@ -8161,8 +8764,12 @@ function projectLegacyUserTurnCosts(
     }
     costUsd += meta.turnCostUsd;
     hasEstimatedValue ||= meta.turnCostIsEstimate === true;
-    if (typeof meta.userTurnCostUsd !== 'number' || !(meta.userTurnCostUsd > 0)) {
+    if (
+      !normalizeRegionalMoney(meta.userTurnCost) &&
+      (typeof meta.userTurnCostUsd !== 'number' || !(meta.userTurnCostUsd > 0))
+    ) {
       projected.set(message.clientId, {
+        userTurnMoney: legacyUsdMoney(costUsd),
         userTurnCostUsd: costUsd,
         userTurnCostIsEstimate: hasEstimatedValue,
       });

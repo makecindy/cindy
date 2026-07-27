@@ -38,6 +38,18 @@ interface VendorSegmentedSwitcherProps {
    * 该变体把 active 段换成黑白反转强 CTA(--accent-cta-bg),当前 Agent 一眼可辨。
    */
   visualVariant?: 'default' | 'create-agent' | 'dropdown';
+  /**
+   * 点击**当前选中段**时也回调 onChange(默认 false = 无操作)。
+   * 供「当前值是解析出的继承值、重选 = 钉成显式值」的调用方(IM 工作目录偏好)使用;
+   * 普通调用点不要开 —— 那里 value 本就是显式状态,重选自己是纯无操作。
+   * 调用方需自行对「显式同值」去重(如 handler 里 next === persisted 时 return)。
+   */
+  reselectEmitsChange?: boolean;
+  /**
+   * tablist 的可及名。多实例同屏(如 IM 目录偏好逐行一个)时必须传**本地化且可区分**
+   * 的名字,否则读屏用户听到的全是同一个英文兜底,行与行无法分辨。
+   */
+  ariaLabel?: string;
 }
 
 interface SegmentOption {
@@ -61,6 +73,8 @@ export function VendorSegmentedSwitcher({
   dense = false,
   iconOnly = false,
   visualVariant = 'default',
+  reselectEmitsChange = false,
+  ariaLabel,
 }: VendorSegmentedSwitcherProps) {
   const isCreateAgentVariant = visualVariant === 'create-agent';
   return (
@@ -83,7 +97,7 @@ export function VendorSegmentedSwitcher({
       )}
       style={{ width }}
       role="tablist"
-      aria-label="Vendor switcher"
+      aria-label={ariaLabel ?? 'Vendor switcher'}
     >
       {OPTIONS.map((opt) => {
         const isActive = value === opt.vendor;
@@ -93,12 +107,16 @@ export function VendorSegmentedSwitcher({
             type="button"
             role="tab"
             aria-selected={isActive}
+            // 容器上的 pointer-events-none 只挡鼠标, 键盘仍能 Tab 到这里按 Enter ——
+            // 在设置页的只读态(未连接/未绑定)或写入在途时会绕过禁用直接触发 onChange。
+            // 原生 disabled 同时移出 tab 序并阻断激活, 是唯一可靠的门。
+            disabled={disabled}
             // 阻止 mousedown 抢焦点 —— 否则点 tab 时下方 ChatInput 的 :focus-within
             // 边框会瞬间掉到非聚焦色。键盘 Tab 仍可正常 focus 本按钮（preventDefault
             // 只阻断鼠标路径），无障碍不受影响。
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
-              if (isActive) return;
+              if (isActive && !reselectEmitsChange) return;
               onChange(opt.vendor);
             }}
             aria-label={opt.label}

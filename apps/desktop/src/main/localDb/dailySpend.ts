@@ -1,100 +1,122 @@
-/**
- * dailySpend — 每日花费聚合 CRUD。
- *
- * 数据流：
- *   - agentManager.ts 在每个 turn 的 `result` 事件后调用 incrementDailySpend(costUsd, ts)
- *   - costUsd 是 SDK 给的 total_cost_usd (per-turn delta, 不是累计)
- *   - 用户右下角 chip 通过 IPC `usage:get-today-spend` 拉当日值
- *
- * 时区处理：
- *   - day key 用**用户本地时区** YYYY-MM-DD (避免 UTC 跨日错配)
- *   - localDayKey(ts) 把 unix ms 转成本地日期串
- */
-
 import { sql } from 'drizzle-orm';
 
-import { dailySpend } from './schema';
-import { getDbClient } from './client/current';
+import {
+  addRegionalMoney,
+  legacyUsdMoney,
+  normalizeRegionalMoney,
+  type RegionalMoney,
+} from '../../shared/regionalMoney.js';
+import { dailySpend } from './schema.js';
+import { getDbClient } from './client/current.js';
+import { createLogger } from '../logger.js';
 
-/**
- * 把 unix ms 时间戳转成**本地时区**的 YYYY-MM-DD 字符串。
- * 避开 ISO 字符串的 UTC 偏移问题（toISOString 会返回 UTC 日期，跨午夜会错）。
- */
+const log = createLogger('localDb/dailySpend');
+
 export function localDayKey(ts: number = Date.now()): string {
-  const d = new Date(ts);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  const date = new Date(ts);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
-/**
- * 累加一笔花费到对应日期的聚合行（upsert）。
- * 不存在 → INSERT；存在 → UPDATE cost_usd += delta + 刷 updated_at。
- *
- * 返回累加后该日期的最新累计值（供 main 直接广播给 renderer）。
- *
- * 注意：极小金额（< 1e-10）跳过 — 防止脏数据 / 浮点噪声写库。
- */
-export async function incrementDailySpend(
-  costUsdDelta: number,
-  ts: number = Date.now(),
-): Promise<{ day: string; costUsd: number }> {
-  const day = localDayKey(ts);
-  if (!Number.isFinite(costUsdDelta) || costUsdDelta < 1e-10) {
-    // 0 或负数或 NaN/Infinity — 不写，但仍返回当前值供调用方用
-    return { day, costUsd: await getSpendForDay(day) };
+function rowMoney(row: {
+  costUsd: number;
+  costAmount: number;
+  costCurrency: 'CNY' | 'USD' | null;
+  costIsApproximate: boolean;
+} | undefined): RegionalMoney {
+  const legacy = legacyUsdMoney(row?.costUsd ?? 0);
+  const current =
+    row?.costCurrency && row.costAmount > 0
+      ? normalizeRegionalMoney({
+          amount: row.costAmount,
+          currency: row.costCurrency,
+          approximate: row.costIsApproximate,
+          kind: 'actual-cost',
+        })
+      : undefined;
+  if (legacy.amount > 0 && current) {
+    return legacy.currency === current.currency
+      ? addRegionalMoney([legacy, current])
+      : current;
   }
+  return current ?? legacy;
+}
 
+async function getSpendForDay(day: string): Promise<RegionalMoney> {
+  const row = await getDbClient().drizzle
+    .select({
+      costUsd: dailySpend.costUsd,
+      costAmount: dailySpend.costAmount,
+      costCurrency: dailySpend.costCurrency,
+      costIsApproximate: dailySpend.costIsApproximate,
+    })
+    .from(dailySpend)
+    .where(sql`${dailySpend.day} = ${day}`)
+    .get();
+  return rowMoney(row);
+}
+
+export async function incrementDailySpend(
+  money: RegionalMoney,
+  ts: number = Date.now(),
+): Promise<{ day: string; money: RegionalMoney }> {
+  const day = localDayKey(ts);
+  const normalized = normalizeRegionalMoney(money);
+  if (!normalized || normalized.amount < 1e-10) {
+    return { day, money: await getSpendForDay(day) };
+  }
   const db = getDbClient().drizzle;
-
-  // SQLite UPSERT：INSERT ... ON CONFLICT(day) DO UPDATE SET cost_usd = cost_usd + excluded.cost_usd
-  await db.insert(dailySpend)
+  // 单币种日账本:币种守卫必须在同一条 upsert 里用 CASE 表达 —— 先查再写有
+  // TOCTOU 窗口,并发首写会把不同币种的裸数字加进同一行。冲突段原子地弃掉
+  // (行保持原币种),绝不 throw:抛异常会打断 turn 收尾管道,损失更大。
+  const sameCurrency = sql`(${dailySpend.costCurrency} IS NULL OR ${dailySpend.costCurrency} = ${normalized.currency})`;
+  await db
+    .insert(dailySpend)
     .values({
       day,
-      costUsd: costUsdDelta,
+      costAmount: normalized.amount,
+      costCurrency: normalized.currency,
+      costIsApproximate: normalized.approximate,
       updatedAt: ts,
     })
     .onConflictDoUpdate({
       target: dailySpend.day,
       set: {
-        costUsd: sql`${dailySpend.costUsd} + ${costUsdDelta}`,
+        costAmount: sql`CASE WHEN ${sameCurrency} THEN ${dailySpend.costAmount} + ${normalized.amount} ELSE ${dailySpend.costAmount} END`,
+        costCurrency: sql`CASE WHEN ${sameCurrency} THEN ${normalized.currency} ELSE ${dailySpend.costCurrency} END`,
+        costIsApproximate: sql`CASE WHEN ${sameCurrency} THEN (${dailySpend.costIsApproximate} OR ${normalized.approximate ? 1 : 0}) ELSE ${dailySpend.costIsApproximate} END`,
         updatedAt: ts,
       },
     })
     .run();
-
-  return { day, costUsd: await getSpendForDay(day) };
+  const persisted = await getSpendForDay(day);
+  if (persisted.currency !== normalized.currency && persisted.amount > 0) {
+    log.warn(
+      `daily spend currency conflict on ${day}: keeping ${persisted.currency}, dropped ${normalized.currency} amount`,
+    );
+  }
+  return { day, money: persisted };
 }
 
-/**
- * 拿"今天"的累计花费（USD）。
- * 没记录 → 返回 0（不是 null —— 调用方判 0 vs > 0 来决定 UI 显示）。
- */
-export function getTodaySpend(): Promise<number> {
+export function getTodaySpend(): Promise<RegionalMoney> {
   return getSpendForDay(localDayKey());
 }
 
-/**
- * 读出全部日花费行 (day 升序)。
- * 表每天最多 1 行, 体量极小 — 首页仪表盘的 streak / 热力图直接全量读。
- */
-export async function getAllSpendDays(): Promise<Array<{ day: string; costUsd: number }>> {
-  const db = getDbClient().drizzle;
-  return db
-    .select({ day: dailySpend.day, costUsd: dailySpend.costUsd })
+export async function getAllSpendDays(): Promise<
+  Array<{ day: string; money: RegionalMoney }>
+> {
+  const rows = await getDbClient().drizzle
+    .select({
+      day: dailySpend.day,
+      costUsd: dailySpend.costUsd,
+      costAmount: dailySpend.costAmount,
+      costCurrency: dailySpend.costCurrency,
+      costIsApproximate: dailySpend.costIsApproximate,
+    })
     .from(dailySpend)
     .orderBy(dailySpend.day)
     .all();
-}
-
-/** 内部：按指定 day key 查累计值。 */
-async function getSpendForDay(day: string): Promise<number> {
-  const db = getDbClient().drizzle;
-  const row = await db
-    .select({ costUsd: dailySpend.costUsd })
-    .from(dailySpend)
-    .where(sql`${dailySpend.day} = ${day}`)
-    .get();
-  return row?.costUsd ?? 0;
+  return rows.map((row) => ({ day: row.day, money: rowMoney(row) }));
 }

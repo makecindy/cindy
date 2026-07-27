@@ -95,6 +95,13 @@ import { assertSafeBaseUrl, fetchWithSafeRedirect } from './http-safety.js';
 
 const DEFAULT_BASE_URL = 'https://api.github.com';
 
+// 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
+function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return s.slice(0, end);
+}
+
 export class GithubClient {
   private readonly baseUrl: string;
   private readonly token: string;
@@ -115,7 +122,7 @@ export class GithubClient {
   private readonly graphqlUrl: string;
 
   constructor(config: GithubClientConfig) {
-    this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+    this.baseUrl = trimTrailingSlashes(config.baseUrl ?? DEFAULT_BASE_URL);
     // GitHub(含 GHE)惯例强制 https(源自已退役的 shared/connectorUrl.ts 的 forceHttps 惯例,该模块已随 lizi_gitlab 于 2026-07-14 退役删除),
     // 故默认拒绝非 loopback 的 http,并拒绝非 http(s) 协议 / userinfo / 不可解析的 baseUrl。
     assertSafeBaseUrl(this.baseUrl);

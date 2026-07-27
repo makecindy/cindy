@@ -27,7 +27,7 @@ export interface AgentModelSource {
     displayName: string;
     efforts: readonly string[];
     defaultEffort: string | null;
-    /** 目录分组 id(如 'gpt-budget'): 骨折版与官方版同名, server 靠它加区分后缀。 */
+    /** 目录分组 id(如 'gpt-budget'): 折扣版与官方版同名, server 靠它加区分后缀。 */
     group?: string;
   }>;
   /** 该 agent 支持的权限档(capabilities.permissionModes; label 用 displayName 原样透传)。 */

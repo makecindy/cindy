@@ -22,7 +22,7 @@
  * runner 校验其属于目标 agent 的能力档位, 合法即用, 非法/缺省落
  * bypassPermissions(hook 无人值守的历史默认); 复用/接管以 session meta 为
  * 权威, options 不覆盖。非 bypass 档下 agent 的权限请求经 interaction.request
- * 以 Slack 卡片呈现(允许一次/本会话总是允许/拒绝), 超时安全默认拒绝。
+ * 以 Slack 卡片呈现(允许一次/本对话总是允许/拒绝), 超时安全默认拒绝。
  */
 
 import path from 'node:path';
@@ -82,6 +82,11 @@ export interface HookRunRequest {
    * 落侧边栏「对话」分组而非按目录聚成项目。仅 isNew 时有意义。
    */
   workspaceKind?: 'dialogue';
+  /**
+   * 本次派发的目录别名(内置「对话」= chat)—— runner 据此查本地的目录模型
+   * 来源偏好(workspaceProviderSourceStore)。缺省 = 老 server 未带 workspace。
+   */
+  workspaceAlias?: string;
   title: string | null;
   prompt: string;
   /** 本次派发携带的入站附件(base64); 无则省略。runner 解码落盘后喂给 agent。 */
@@ -161,9 +166,9 @@ export interface HookDispatcherDeps {
    */
   resolveInteraction?: (interactionId: string, buttonId: string) => boolean;
   /**
-   * Production keeps ingress closed until app:ready-for-bot has opened the
-   * account DB. Tests and standalone consumers retain the historical eager
-   * behavior unless they opt out explicitly.
+   * Production keeps ingress closed until the owner DB-ready callback opens
+   * the account boundary. Tests and standalone consumers retain the historical
+   * eager behavior unless they opt out explicitly.
    */
   accountInitiallyActive?: boolean;
   log: { info(msg: string): void; warn(msg: string): void };
@@ -699,6 +704,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         effort,
         permissionMode,
         ...(isChat ? { workspaceKind: 'dialogue' as const } : {}),
+        ...(payload.workspace ? { workspaceAlias: payload.workspace } : {}),
         title: buildHookSessionTitle(
           providerName,
           payload.prompt,

@@ -1,13 +1,13 @@
 ==============================================================================
 RESTRICTED AND PROPRIETARY THIRD-PARTY COMPONENTS
-Cindy desktop application — Linux x64 glibc
+Cindy desktop application — Linux x64/arm64 glibc
 ==============================================================================
 
 本文件单列不是开放源代码许可的第三方组件;它们不计入开源包数量。
 This file separately discloses components not distributed under open-source licenses.
 
 ------------------------------------------------------------------------------
-Claude Code CLI@2.1.215
+Claude Code CLI@2.1.219
 Category: proprietary
 License: LicenseRef-Anthropic-Commercial-Terms
 Source: https://www.anthropic.com/legal/commercial-terms

@@ -45,6 +45,7 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.expandInfoValue': `Show full ${String(options?.label ?? '')}`,
         'settings.ghosts.detail.collapseInfoValue': `Collapse ${String(options?.label ?? '')}`,
         'settings.ghosts.detail.panelNotDocked': 'Not docked',
+        'settings.ghosts.detail.cindyPrefs.noModels': 'No models available',
       };
       return labels[key] ?? key;
     },
@@ -52,6 +53,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import type { GhostPermissionItem } from '../../../../shared/ghost';
+import { CindyCapabilityPrefs } from '@/cindy-brain/CindyCapabilityPrefs';
 import {
   DetailsSection,
   GhostPluginDetailView,
@@ -150,11 +152,58 @@ describe('Ghost plugin detail sections', () => {
     const scrollSurface = container.querySelector('main');
     const detailFrame = container.querySelector('article');
     const backButton = detailFrame?.querySelector(':scope > button');
+    const detailHero = detailFrame?.querySelector('.plugin-detail-hero');
+    const detailActions = detailFrame?.querySelector('.plugin-detail-actions');
     expect(scrollSurface?.className).toContain('[scrollbar-gutter:stable_both-edges]');
     expect(detailFrame?.className).toContain('plugin-detail-frame');
     expect(detailFrame?.className).toContain('mx-auto');
     expect(detailFrame?.className).toContain('max-w-[824px]');
     expect(backButton?.className).toContain('-ml-3');
+    expect(detailHero?.className).toContain('grid-cols-[64px_minmax(0,1fr)_auto]');
+    expect(detailActions?.className).toContain('flex-nowrap');
+  });
+
+  it('disables every market update entry while an update is busy', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const onUpdate = vi.fn();
+
+    render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={detail}
+        panelStatus="Docked"
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={onUpdate}
+        updateLabel="Update from market"
+        updateVersion="1.2.4"
+        updateBusy
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    expect(
+      (screen.getByRole('button', {
+        name: 'settings.ghosts.market.updateTo',
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+      { button: 0, ctrlKey: false },
+    );
+    const menuUpdate = screen.getByRole('menuitem', { name: 'Update from market' });
+    expect(menuUpdate.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(menuUpdate);
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 
   it('uses one metadata color and orders author, then version', () => {
@@ -164,6 +213,83 @@ describe('Ghost plugin detail sections', () => {
     expect(metadata.textContent).toBe('By Cindy·v1.1.4');
     expect(metadata.className).toContain('text-[var(--text-tertiary)]');
     expect(metadata.innerHTML).not.toContain('text-[var(--text-secondary)]');
+    expect(screen.getByText('By Cindy').className).toContain('min-w-0');
+    expect(screen.getByText('By Cindy').className).toContain('truncate');
+  });
+
+  it('marks Cindy model preferences as a card-width responsive control group', () => {
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: {},
+            image: {
+              options: [{ id: 'image-default', label: 'Image Default' }],
+              defaultModel: { id: 'image-default', label: 'Image Default' },
+            },
+            video: {
+              options: [{ id: 'video-default', label: 'Video Default' }],
+              defaultModel: { id: 'video-default', label: 'Video Default' },
+            },
+          }),
+          setCindyPref: vi.fn(),
+        },
+      },
+    });
+
+    const { container } = render(
+      <CindyCapabilityPrefs
+        ghostId="builtin.example"
+        capabilities={['image.generate']}
+        appearance="plugin"
+      />,
+    );
+
+    expect(container.querySelector('.cindy-capability-prefs')).toBeTruthy();
+    expect(container.querySelector('.cindy-capability-row')).toBeTruthy();
+    const select = screen.getByRole('combobox');
+    expect(select.className).toContain('cindy-capability-select');
+    expect(select.className).toContain('max-w-[60%]');
+  });
+
+  it('replaces the select with tertiary copy for ability categories the catalog has no models for', () => {
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: { 'video.generate': 'retired-video-model' },
+            image: {
+              options: [{ id: 'image-default', label: 'Image Default' }],
+              defaultModel: { id: 'image-default', label: 'Image Default' },
+            },
+            // 目录没给视频清单 = 能力暂不可用。
+            video: { options: [], defaultModel: null },
+          }),
+          setCindyPref: vi.fn(),
+        },
+      },
+    });
+
+    const { container } = render(
+      <CindyCapabilityPrefs
+        ghostId="builtin.example"
+        capabilities={['image.generate', 'video.generate', 'video.edit']}
+        appearance="plugin"
+      />,
+    );
+
+    // 三行都在(插件确实申请了这三项能力),但只有图像那行给下拉。
+    expect(container.querySelectorAll('.cindy-capability-row')).toHaveLength(3);
+    expect(screen.getAllByRole('combobox')).toHaveLength(1);
+
+    const empties = container.querySelectorAll('.cindy-capability-empty');
+    expect(empties).toHaveLength(2);
+    empties.forEach((node) => {
+      expect(node.textContent).toBe('No models available');
+      expect(node.className).toContain('text-[var(--text-tertiary)]');
+    });
   });
 
   it('shows only the Tool description after an explicit click', async () => {

@@ -27,6 +27,8 @@ import { contextBridge, ipcRenderer } from 'electron';
  *   系统选文件夹窗口由主机弹,用户亲选即授权,守门全在主机侧 pickSlot。
  * - preview(req):preview 槽的便捷口——send({type:'preview-request', …req})
  *   的语法糖;URL 白名单守门在主机侧 previewSlot。
+ * - workspace(req):workspace 槽的便捷口——send({type:'workspace-request',
+ *   …req}) 的语法糖;目录授权与会话创建守门全在主机侧 workspaceSlot。
  */
 
 type HostMessageListener = (payload: unknown) => void;
@@ -60,4 +62,6 @@ contextBridge.exposeInMainWorld('cindy', {
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'pick-request' }),
   preview: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'preview-request' }),
+  workspace: (req: Record<string, unknown>): Promise<unknown> =>
+    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'workspace-request' }),
 });

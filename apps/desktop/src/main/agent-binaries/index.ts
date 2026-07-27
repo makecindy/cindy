@@ -110,6 +110,17 @@ export function getReadyBinaryPath(kind: AgentBinaryKind): string | undefined {
   return lastReadyPath.get(kind);
 }
 
+/**
+ * spawn/execFile 前的执行侧复核:candidate 必须与本模块此刻能解析出的受管二进制
+ * 路径完全一致。二进制路径本就只该出自本模块,这里再挡一层意外来源作为防御纵深
+ * (CodeQL js/command-line-injection)。
+ */
+export function isVettedAgentBinaryPath(kind: AgentBinaryKind, candidate: string): boolean {
+  if (!candidate) return false;
+  const status = getCachedBinaryStatus(kind);
+  return status.binaryReady === true && status.binaryPath === candidate;
+}
+
 // ── splash 进度 IPC 广播 ─────────────────────────────────────────────────────
 
 export function broadcastBinaryDownloadProgress(data: BinaryDownloadProgressPayload): void {

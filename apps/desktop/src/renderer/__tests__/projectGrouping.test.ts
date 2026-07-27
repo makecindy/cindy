@@ -46,6 +46,7 @@ function s(partial: Partial<Session>): Session {
     userSendAt,
     status: partial.status ?? 'active',
     agentKind: partial.agentKind ?? 'cc',
+    source: partial.source,
     remoteHostId: partial.remoteHostId ?? null,
     deviceLinkDeviceId: partial.deviceLinkDeviceId,
     deviceLinkDeviceName: partial.deviceLinkDeviceName,
@@ -205,6 +206,24 @@ describe('groupSessions', () => {
       unclassified: [],
       projects: [],
     });
+  });
+
+  it('can keep an individually pinned conversation in the project catalogue', () => {
+    const pinned = s({
+      id: 'pinned-in-project',
+      workingDir: '/workspace/project-a',
+      pinnedAt: '2026-07-01T00:00:00.000Z',
+    });
+
+    expect(groupSessions([pinned]).projects).toEqual([]);
+
+    const catalogue = groupSessions([pinned], { includePinnedInProjects: true });
+    expect(catalogue.pinned.map((session) => session.id)).toEqual(['pinned-in-project']);
+    expect(catalogue.projects).toHaveLength(1);
+    expect(catalogue.projects[0]?.projectKey).toBe('local:/workspace/project-a');
+    expect(catalogue.projects[0]?.sessions.map((session) => session.id)).toEqual([
+      'pinned-in-project',
+    ]);
   });
 
   it('groups 1000 same-basename projects with stable display names', () => {
@@ -491,6 +510,18 @@ describe('groupSessions', () => {
     expect(r.unclassified).toHaveLength(0);
     expect(r.projects).toHaveLength(1);
     expect(r.projects[0].sessions[0]).toBe(orphan);
+  });
+
+  // scheduler / plugin 来源豁免草稿判定:零消息也落项目分组。scheduler 由
+  // 自动化任务显式绑定目录;plugin 是 workspace 槽建的空会话入口——零消息
+  // 落在项目分组正是功能本身,掉未分类则功能不成立。
+  it('keeps zero-message scheduler/plugin sessions in their project group (draft exemption)', () => {
+    const scheduler = s({ workingDir: '/p/auto', userSendAt: null, source: 'scheduler' });
+    const plugin = s({ workingDir: '/p/auto', userSendAt: null, source: 'plugin' });
+    const r = groupSessions([scheduler, plugin]);
+    expect(r.unclassified).toHaveLength(0);
+    expect(r.projects).toHaveLength(1);
+    expect(r.projects[0].sessions).toHaveLength(2);
   });
 
   it('allows manually imported external sessions to create standalone projects', () => {

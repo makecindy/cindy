@@ -53,7 +53,7 @@ describe('sessionMenu header', () => {
 
   it('falls back to workspace name when the session has no title', () => {
     expect(buildSessionMenuHeader(session({ title: '' }), {}).title).toBe('xdt-maker');
-    expect(buildSessionMenuHeader(session({ title: '', workingDir: null }), {}).title).toBe('远程会话');
+    expect(buildSessionMenuHeader(session({ title: '', workingDir: null }), {}).title).toBe('远程对话');
   });
 
   it('prefers the worktree name in the meta line', () => {

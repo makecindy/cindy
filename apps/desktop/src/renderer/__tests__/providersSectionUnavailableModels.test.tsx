@@ -9,6 +9,7 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
@@ -56,6 +57,10 @@ vi.mock('@/hooks/useProviders', () => ({
     loading: false,
     refetch: vi.fn(),
   }),
+}));
+
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ mode: 'cloud', exitLocalMode: vi.fn(async () => undefined) }),
 }));
 
 vi.mock('@/hooks/useCodexAuth', () => ({
@@ -138,10 +143,13 @@ afterEach(() => {
 
 describe('ProvidersSection — 双栏管理', () => {
   it('Cindy AI 置顶默认选中;未连接内置渠道不占行;零模型详情给空态提示', async () => {
-    render(React.createElement(ProvidersSection));
+    // ProvidersSection 内部消费 useSearchParams(深链定位),测试需要 Router 上下文。
+    render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
 
     // 详情头 + 左栏行都显示 xd 标题(默认选中第一行 = xd)。
-    expect((await screen.findAllByText('settings.providers.xd.title')).length).toBeGreaterThanOrEqual(2);
+    expect(
+      (await screen.findAllByText('settings.providers.xd.title')).length,
+    ).toBeGreaterThanOrEqual(2);
     // 未连接的 Anthropic 不出现在左栏(无检测建议时整页不出现)。
     expect(screen.queryByText('Anthropic')).toBeNull();
     // xd 实时模型为空 → 详情空态提示(不渲染模型开关面板)。
@@ -156,7 +164,7 @@ describe('ProvidersSection — 双栏管理', () => {
         { cli: 'codex-cli', providerId: 'openai', installed: false, loggedIn: false },
       ],
     };
-    render(React.createElement(ProvidersSection));
+    render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
 
     // 建议组标签 + Anthropic 建议行(codex 未安装不出现)。
     expect(await screen.findByText('settings.providers.detect.groupLabel')).not.toBeNull();

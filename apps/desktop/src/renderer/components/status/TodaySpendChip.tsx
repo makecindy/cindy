@@ -15,13 +15,13 @@
  * Codex 订阅形态主 chip 显示服务端下发的各限额窗口剩余 / 当前会话 USD 折算金额。
  * 窗口构成不做任何假设,完全以上游接口返回为准 —— OpenAI 会调整窗口策略
  * (典型:5h + 周双窗;2026-07 曾一度取消 5h 窗口,且可能随时恢复)。
- * 订阅模式下 USD 是 token 价值,API / codex/ 骨折 GPT 下是 gateway API 单价折算 cost。
+ * 订阅模式下 USD 是 token 价值,API / codex/ 折扣 GPT 下是 gateway API 单价折算 cost。
  * credits / token 明细只放 tooltip,不占主 chip。
  *
  * Codex tooltip 按当前会话实际 runtime route + 当前模型分两种:
  *   - oauth 模式 + 当前 app-server 以 OAuth bearer 启动 + 普通模型: 显示各限额窗口
  *     剩余额度、当前会话 token 累计、credits 明细。订阅没有单一 per-token 余额。
- *   - api 模式、app-server 以 gateway key 启动、或当前模型是 codex/ 骨折 GPT:
+ *   - api 模式、app-server 以 gateway key 启动、或当前模型是 codex/ 折扣 GPT:
  *     与 cc 同一把 XD key、同一套 LiteLLM 计费,直接复用 cc 的 daily/monthly/key
  *     cost 形态 (session 仍显示 USD 折算累计)。
  *
@@ -36,7 +36,13 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 
 import { cn } from '@/lib/utils';
-import { DAILY_SOFT_LIMIT_FACTOR, formatCompactTokens, formatCompactUsd, formatTurnCostUsd } from '@/lib/usageFormat';
+import {
+  DAILY_SOFT_LIMIT_FACTOR,
+  formatCompactMoney,
+  formatCompactTokens,
+  formatTurnCostMoney,
+  formatTurnCostUsd,
+} from '@/lib/usageFormat';
 import { Tip } from '@/components/ui/tooltip';
 import { useApiKey } from '@/hooks/useApiKey';
 import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
@@ -60,6 +66,8 @@ import {
   type ClaudeSubscriptionUsageSnapshot,
 } from '@/hooks/useClaudeSubscriptionUsage';
 import {
+  hasAlertingClaudeSessionWindow,
+  isClaudeSubscriptionAlerting,
   matchScopedWindowForModel,
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
@@ -68,6 +76,7 @@ import { useXaiRateLimit, type XaiRateLimitSnapshot } from '@/hooks/useXaiRateLi
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
+import { gatewayMoney, type RegionalMoney } from '../../../shared/regionalMoney';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../../shared/subscriptionModels';
 import {
   RESET_PENDING_MAX_MS,
@@ -129,7 +138,7 @@ interface MetricSlot {
  */
 function computeMetricSlots(
   claudeQuota: ClaudeAccountUsageSnapshot | null,
-  sessionCostUsd: number | null,
+  sessionMoney: RegionalMoney | null,
   t: TFunction,
 ): Record<MetricKey, MetricSlot> {
   const slots: Record<MetricKey, MetricSlot> = {
@@ -142,8 +151,8 @@ function computeMetricSlots(
     // monthly 永远跟 cycle 一起拿到; daily 走单独 endpoint 可能拉不到 (todaySpend=null) → 隐藏
     slots.monthly = {
       label: t('todaySpend.monthlyLimitLabel', {
-        spend: formatCompactUsd(claudeQuota.spend),
-        limit: formatCompactUsd(claudeQuota.maxBudget),
+        spend: formatCompactMoney(gatewayMoney(claudeQuota.spend)),
+        limit: formatCompactMoney(gatewayMoney(claudeQuota.maxBudget)),
       }),
       available: true,
     };
@@ -151,18 +160,21 @@ function computeMetricSlots(
       const softLimit = (claudeQuota.maxBudget / 30) * DAILY_SOFT_LIMIT_FACTOR;
       slots.daily = {
         label: t('todaySpend.dailyLimitLabel', {
-          spend: formatCompactUsd(claudeQuota.todaySpend),
-          limit: formatCompactUsd(softLimit),
+          spend: formatCompactMoney(
+            gatewayMoney(claudeQuota.todaySpend),
+          ),
+          limit: formatCompactMoney(gatewayMoney(softLimit)),
         }),
         available: true,
       };
     }
   }
 
-  if (typeof sessionCostUsd === 'number' && sessionCostUsd > 0) {
+  if (sessionMoney && sessionMoney.amount > 0) {
+    const cost = formatTurnCostMoney(sessionMoney);
     slots.session = {
-      label: t('todaySpend.sessionCostLabel', { cost: `$${sessionCostUsd.toFixed(2)}` }),
-      tooltipLabel: t('todaySpend.tooltip.sessionUsed', { cost: `$${sessionCostUsd.toFixed(2)}` }),
+      label: t('todaySpend.sessionCostLabel', { cost }),
+      tooltipLabel: t('todaySpend.tooltip.sessionUsed', { cost }),
       available: true,
     };
   }
@@ -223,8 +235,8 @@ function formatResetAt(epochSeconds: number | null | undefined): string | null {
 
 /**
  * chip 主体用的紧凑剩余时长(距 reset 还有多久): 单级精度 + 向上取整 ——
- * 「7天」/「3小时」/「45分钟」/「41秒」。Codex 与 Claude 订阅两种形态统一用它当窗口
- * label(所有限额窗口都算给用户);无数据 / 已过期 → null, 调用方回退窗口名。
+ * 「7天」/「3小时」/「45分钟」/「41秒」。Codex 订阅用它当窗口 label,
+ * Claude 订阅只在 tooltip 展示;主 chip 保留稳定窗口名。无数据 / 已过期 → null。
  * 天级向上取整与 Codex 既有 getDaysUntilReset 口径一致(剩 6天10小时 → 7天)。
  * 最后一分钟降到秒级, 配合秒级 tick(computeCountdownTickDelayMs)逐秒走动。
  */
@@ -259,7 +271,7 @@ function toEpochMs(epochSeconds: number | null | undefined): number | null {
 }
 
 /**
- * chip 上一个限额窗口段的素材: 倒计时 label + 数值化剩余百分比 + 窗口身份/reset
+ * chip 上一个限额窗口段的素材: 展示 label + 数值化剩余百分比 + 窗口身份/reset
  * 时点(useQuotaResetRollup 检测重置并驱动 0% → 100% 滚动动画的输入)。
  * Codex 订阅与 Claude 订阅两种形态共用, 成品字符串在组件里统一格式化。
  */
@@ -439,7 +451,7 @@ function getCodexApiEmptyState(
 function buildCodexTooltipNode(
   snapshot: RateLimitSnapshot | null,
   sessionTokens: number | null,
-  sessionValueUsd: number | null,
+  sessionValueMoney: RegionalMoney | null,
   t: TFunction,
   usageDashboardLabel: string | null,
   nowMs: number,
@@ -477,7 +489,7 @@ function buildCodexTooltipNode(
   } else if (credits?.hasCredits && !parsedCredits) {
     lines.push(t('todaySpend.codex.balanceAvailable'));
   }
-  pushSessionValueLines(lines, sessionValueUsd, sessionTokens, t);
+  pushSessionValueLines(lines, sessionValueMoney, sessionTokens, t);
 
   for (const window of getCodexWindowUsages(snapshot, t, nowMs)) {
     const base = t('todaySpend.codex.windowLine', {
@@ -513,27 +525,26 @@ function buildCodexTooltipNode(
 // 不到回退总周限并标注口径) · 本会话价值 $。tooltip 列全量窗口 (含非当前模型的
 // scoped 条目) + 套餐 + extra usage。utilization 语义 = 已用百分比 (0-100)。
 
-/** Claude 窗口 → 展示行素材;窗口缺失 / 数据不可解析 → null (调用方过滤)。 */
+/**
+ * Claude 窗口 → tooltip 行素材;窗口缺失 / 数据不可解析 → null (调用方过滤)。
+ * tooltip 的窗口行不做逐行高亮 (纯文本 tooltip), 告警只体现在 chip 配色与末尾的
+ * 「接近限额」行 —— 故这里不带 alerting 标记。
+ */
 interface ClaudeWindowUsage {
   label: string;
   used: string;
   remaining: string;
+  /** tooltip 用的相对 reset 倒计时;无数据 / 已过期 → null。 */
+  resetIn: string | null;
   /** tooltip 用的精确 reset 时间点;无数据 → null。 */
   resetAt: string | null;
-  /** 服务端 severity 非 normal, 或已打满 —— tooltip 高亮 / chip 变警示色的依据。 */
-  alerting: boolean;
-}
-
-function isClaudeWindowAlerting(window: ClaudeUsageWindow | null | undefined): boolean {
-  if (!window) return false;
-  if (clampPercent(window.utilization) >= 99.95) return true;
-  const severity = window.severity?.trim().toLowerCase();
-  return Boolean(severity && severity !== 'normal');
 }
 
 function toClaudeWindowUsage(
   label: string,
   window: ClaudeUsageWindow | null | undefined,
+  nowMs: number,
+  t: TFunction,
 ): ClaudeWindowUsage | null {
   if (!window || typeof window.utilization !== 'number' || !Number.isFinite(window.utilization)) {
     return null;
@@ -543,15 +554,15 @@ function toClaudeWindowUsage(
     label,
     used: formatPercent(usedPercent),
     remaining: formatPercent(100 - usedPercent),
+    resetIn: formatCompactTimeUntilReset(window.resetsAt, nowMs, t),
     resetAt: formatResetAt(window.resetsAt),
-    alerting: isClaudeWindowAlerting(window),
   };
 }
 
 /**
  * 当前会话生效的周限窗口: 命中当前模型的 weekly_scoped 条目优先 (label 带模型名,
  * 如 "Fable 周限"), 否则回退总周限 —— 两种 label 口径可区分, 绝不臆造数字。
- * modelDisplayName 仅 scoped 命中时有, chip 倒计时 label 用它拼「Fable 7天」。
+ * modelDisplayName 仅 scoped 命中时有, 用于区分窗口身份。
  */
 function resolveClaudeWeeklyWindow(
   snapshot: ClaudeSubscriptionUsageSnapshot,
@@ -573,9 +584,9 @@ function resolveClaudeWeeklyWindow(
 }
 
 /**
- * chip 段素材 (方案 B + 倒计时 label): 窗口 label 直接用距 reset 的剩余时长 ——
- * 「3小时 剩余 45% · Fable 7天 剩余 78%」;scoped 命中时时长前带模型名标注口径。
- * 无 reset 数据回退窗口名 (5h / Fable 周限 / 周限), 绝不显示算不出的时间。
+ * chip 段素材 (方案 B): 保留稳定窗口身份 ——
+ * 「5h 剩余 45% · Fable 周限 剩余 78%」;reset 时间只放 tooltip,避免周限恰好
+ * 剩 5 小时时与 5h 窗口显示成两个同名「5h」。
  * 剩余百分比留数值形态, 由组件经 useQuotaResetRollup(重置滚动动画)后再格式化。
  */
 function getClaudeChipWindows(
@@ -588,11 +599,10 @@ function getClaudeChipWindows(
   const windows: ChipWindowSegment[] = [];
   const fiveHour = snapshot.fiveHour;
   if (fiveHour && typeof fiveHour.utilization === 'number' && Number.isFinite(fiveHour.utilization)) {
-    const countdown = formatCompactTimeUntilReset(fiveHour.resetsAt, nowMs, t);
     const resetsAtMs = toEpochMs(fiveHour.resetsAt);
     windows.push({
       key: 'claude-5h',
-      label: countdown ?? '5h',
+      label: '5h',
       remainingPercent: 100 - clampPercent(fiveHour.utilization),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
@@ -604,15 +614,11 @@ function getClaudeChipWindows(
     && typeof weekly.window.utilization === 'number'
     && Number.isFinite(weekly.window.utilization)
   ) {
-    const countdown = formatCompactTimeUntilReset(weekly.window.resetsAt, nowMs, t);
-    const label = countdown
-      ? (weekly.modelDisplayName ? `${weekly.modelDisplayName} ${countdown}` : countdown)
-      : weekly.label;
     const resetsAtMs = toEpochMs(weekly.window.resetsAt);
     windows.push({
       // 身份 key 区分总周限与各 scoped 周限: 切模型导致窗口切换时只重置动画基线。
       key: weekly.modelDisplayName ? `claude-weekly:${weekly.modelDisplayName}` : 'claude-weekly:total',
-      label,
+      label: weekly.label,
       remainingPercent: 100 - clampPercent(weekly.window.utilization),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
@@ -621,32 +627,18 @@ function getClaudeChipWindows(
   return windows;
 }
 
-/**
- * chip 警示态: 只看影响当前会话的窗口 (5h / 总周限 / 当前模型 scoped) 与 headers
- * 的整体 status —— 其它模型的窗口打满不限流当前会话, 只在 tooltip 里可见。
- * headers 源的窗口不带 severity, turn 内实时阶段「接近限额」只由整体 status 的
- * allowed_warning 表达, 因此 warning / rejected 都纳入告警 (rejected 在 tooltip
- * 文案分流里优先)。
- */
-function isClaudeSubscriptionAlerting(
-  snapshot: ClaudeSubscriptionUsageSnapshot | null,
-  modelId: string | null | undefined,
-): boolean {
-  if (!snapshot) return false;
-  const status = snapshot.rateLimitStatus?.trim().toLowerCase();
-  if (status === 'rejected' || status === 'allowed_warning') return true;
-  return (
-    isClaudeWindowAlerting(snapshot.fiveHour)
-    || isClaudeWindowAlerting(snapshot.sevenDay)
-    || isClaudeWindowAlerting(matchScopedWindowForModel(snapshot.scoped, modelId))
-  );
-}
+// 告警判定 (chip 变红的口径 + allowed_warning 为何不染红、为何不用 representativeClaim
+// 的取舍) 已收进 shared/claudeSubscriptionUsage.ts: isClaudeUsageWindowAlerting /
+// hasAlertingClaudeSessionWindow / isClaudeSubscriptionAlerting (纯数据判定, 有直接单测)。
+// tooltip 不逐行高亮, 它比 chip 宽一档的那一档在 buildClaudeSubscriptionTooltipNode 里
+// (整体 status 的 allowed_warning 也出「接近限额」行)。
 
 function buildClaudeSubscriptionTooltipNode(
   snapshot: ClaudeSubscriptionUsageSnapshot | null,
   modelId: string | null | undefined,
-  sessionValueUsd: number | null,
+  sessionValueMoney: RegionalMoney | null,
   t: TFunction,
+  nowMs: number,
   usageDashboardLabel: string | null,
   latestTurnUsage: LatestTurnUsageSummary | null,
 ): React.ReactNode {
@@ -662,23 +654,30 @@ function buildClaudeSubscriptionTooltipNode(
   if (planLabel) {
     lines.push(t('todaySpend.claude.planLine', { plan: planLabel }));
   }
-  if (typeof sessionValueUsd === 'number' && Number.isFinite(sessionValueUsd) && sessionValueUsd > 0) {
+  if (sessionValueMoney?.amount) {
     lines.push(t('todaySpend.claude.sessionValueLabel', {
-      cost: `$${sessionValueUsd.toFixed(2)}`,
+      cost: formatTurnCostMoney(sessionValueMoney),
     }));
   }
 
   // 窗口明细: 5h → 总周限 → 全部分模型周限 (含非当前模型, 用户能看到谁先见底)。
-  // tooltip 保留精确 reset 时间点 (chip 上是倒计时, 两层信息互补)。
+  // chip 保留稳定窗口名;tooltip 同时给相对倒计时和精确 reset 时间点。
   const windows: ClaudeWindowUsage[] = [];
-  const fiveHour = toClaudeWindowUsage('5h', snapshot.fiveHour);
+  const fiveHour = toClaudeWindowUsage('5h', snapshot.fiveHour, nowMs, t);
   if (fiveHour) windows.push(fiveHour);
-  const sevenDay = toClaudeWindowUsage(t('todaySpend.claude.weeklyLabel'), snapshot.sevenDay);
+  const sevenDay = toClaudeWindowUsage(
+    t('todaySpend.claude.weeklyLabel'),
+    snapshot.sevenDay,
+    nowMs,
+    t,
+  );
   if (sevenDay) windows.push(sevenDay);
   for (const scoped of snapshot.scoped ?? []) {
     const usage = toClaudeWindowUsage(
       t('todaySpend.claude.modelWeeklyLabel', { model: scoped.modelDisplayName }),
       scoped,
+      nowMs,
+      t,
     );
     if (usage) windows.push(usage);
   }
@@ -688,16 +687,25 @@ function buildClaudeSubscriptionTooltipNode(
       remaining: window.remaining,
       used: window.used,
     });
-    lines.push(window.resetAt
-      ? `${base} · ${t('todaySpend.claude.resetAt', { at: window.resetAt })}`
-      : base,
-    );
+    let resetLabel: string | null = null;
+    if (window.resetAt && window.resetIn) {
+      resetLabel = t('todaySpend.claude.resetInAt', {
+        countdown: window.resetIn,
+        at: window.resetAt,
+      });
+    } else if (window.resetAt) {
+      resetLabel = t('todaySpend.claude.resetAt', { at: window.resetAt });
+    }
+    lines.push(resetLabel ? `${base} · ${resetLabel}` : base);
   }
 
+  // tooltip 比 chip 宽一档: allowed_warning (服务端综合全部窗口的模糊信号) 也提示 ——
+  // 上面刚列完全量窗口, 用户能自己看出是哪个窗口吃紧; chip 颜色不吃这个信号 (见
+  // isClaudeSubscriptionAlerting)。
   const status = snapshot.rateLimitStatus?.trim().toLowerCase();
   if (status === 'rejected') {
     lines.push(t('todaySpend.claude.limitRejected'));
-  } else if (isClaudeSubscriptionAlerting(snapshot, modelId)) {
+  } else if (status === 'allowed_warning' || hasAlertingClaudeSessionWindow(snapshot, modelId)) {
     lines.push(t('todaySpend.claude.limitWarning'));
   }
 
@@ -718,8 +726,10 @@ function buildClaudeSubscriptionTooltipNode(
 
 /** 最近一轮 tooltip 使用的 assistant 消息明细。 */
 interface LatestTurnUsageSummary {
+  money?: RegionalMoney;
   costUsd?: number;
   isEstimate?: boolean;
+  segmentMoney?: RegionalMoney;
   segmentCostUsd?: number;
   segmentIsEstimate?: boolean;
   isUserTurnTotal: boolean;
@@ -730,25 +740,38 @@ function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSum
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message.role !== 'assistant' || !message.turnUsageDetails) continue;
+    const userTurnMoney =
+      message.userTurnMoney?.amount
+        ? message.userTurnMoney
+        : undefined;
     const userTurnCostUsd = typeof message.userTurnCostUsd === 'number' && message.userTurnCostUsd > 0
       ? message.userTurnCostUsd
       : undefined;
     return {
-      ...(userTurnCostUsd != null
-        ? { costUsd: userTurnCostUsd }
+      ...(userTurnMoney
+        ? { money: userTurnMoney }
+        : userTurnCostUsd != null
+          ? { costUsd: userTurnCostUsd }
+          : message.turnMoney?.amount
+            ? { money: message.turnMoney }
         : typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0
           ? { costUsd: message.turnCostUsd }
         : {}),
-      ...((userTurnCostUsd != null
+      ...((userTurnMoney || userTurnCostUsd != null
         ? message.userTurnCostIsEstimate
         : message.turnCostIsEstimate) === true ? { isEstimate: true } : {}),
-      ...(userTurnCostUsd != null && typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0
+      ...((userTurnMoney || userTurnCostUsd != null) && message.turnMoney?.amount
+        ? {
+            segmentMoney: message.turnMoney,
+            segmentIsEstimate: message.turnCostIsEstimate === true,
+          }
+        : userTurnCostUsd != null && typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0
         ? {
             segmentCostUsd: message.turnCostUsd,
             segmentIsEstimate: message.turnCostIsEstimate === true,
           }
         : {}),
-      isUserTurnTotal: userTurnCostUsd != null,
+      isUserTurnTotal: Boolean(userTurnMoney || userTurnCostUsd != null),
       details: message.turnUsageDetails,
     };
   }
@@ -789,10 +812,15 @@ function appendLatestTurnUsageLines(
 ): void {
   if (!summary) return;
   if (lines.length > 0) lines.push('');
-  if (summary.isUserTurnTotal && summary.costUsd != null) {
+  if (
+    summary.isUserTurnTotal &&
+    (summary.money?.amount || summary.costUsd != null)
+  ) {
     lines.push(t('todaySpend.tooltip.latestUserTurnTitle'));
     lines.push(t(summary.isEstimate ? 'usageDetails.valueLine' : 'usageDetails.costLine', {
-      cost: formatTurnCostUsd(summary.costUsd),
+      cost: summary.money
+        ? formatTurnCostMoney(summary.money)
+        : formatTurnCostUsd(summary.costUsd ?? 0),
     }));
   }
   lines.push(...buildTurnUsageTooltipLines({
@@ -800,6 +828,7 @@ function appendLatestTurnUsageLines(
     t,
     // Token / model detail remains scoped to the final SDK segment. Keep its
     // cost line separate from the user-turn total shown above.
+    money: summary.isUserTurnTotal ? summary.segmentMoney : summary.money,
     costUsd: summary.isUserTurnTotal ? summary.segmentCostUsd : summary.costUsd,
     isEstimate: summary.isUserTurnTotal ? summary.segmentIsEstimate : summary.isEstimate,
     title: t(summary.isUserTurnTotal
@@ -825,12 +854,14 @@ function pushDashboardLinkLine(lines: string[], label: string | null): void {
 /** 「本会话价值 / token 累计」两行 —— codex 订阅与 xai bridge tooltip 共用(同 i18n key 同格式)。 */
 function pushSessionValueLines(
   lines: string[],
-  sessionValueUsd: number | null,
+  sessionValueMoney: RegionalMoney | null,
   sessionTokens: number | null,
   t: TFunction,
 ): void {
-  if (typeof sessionValueUsd === 'number' && Number.isFinite(sessionValueUsd) && sessionValueUsd > 0) {
-    lines.push(t('todaySpend.codex.sessionValueLabel', { cost: `$${sessionValueUsd.toFixed(2)}` }));
+  if (sessionValueMoney?.amount) {
+    lines.push(t('todaySpend.codex.sessionValueLabel', {
+      cost: formatTurnCostMoney(sessionValueMoney),
+    }));
   }
   if (typeof sessionTokens === 'number' && Number.isFinite(sessionTokens) && sessionTokens > 0) {
     lines.push(t('todaySpend.codex.sessionTokensLine', {
@@ -846,13 +877,13 @@ function pushSessionValueLines(
 function buildXaiTooltipNode(
   rateLimit: XaiRateLimitSnapshot | null,
   sessionTokens: number | null,
-  sessionValueUsd: number | null,
+  sessionValueMoney: RegionalMoney | null,
   t: TFunction,
   usageDashboardLabel: string | null,
   latestTurnUsage: LatestTurnUsageSummary | null,
 ): React.ReactNode {
   const lines: string[] = [];
-  pushSessionValueLines(lines, sessionValueUsd, sessionTokens, t);
+  pushSessionValueLines(lines, sessionValueMoney, sessionTokens, t);
   if (rateLimit && typeof rateLimit.remainingRequests === 'number' && typeof rateLimit.limitRequests === 'number') {
     lines.push(t('todaySpend.xai.requestsLine', {
       remaining: rateLimit.remainingRequests.toLocaleString(),
@@ -889,7 +920,7 @@ function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
 
 interface TodaySpendChipProps {
   vendorKey?: 'cc' | 'codex';
-  /** 当前会话模型;codex/ 骨折 GPT 恒走 gateway API, 即使 oauth-bearer spawn 也按 API 形态显示。 */
+  /** 当前会话模型;codex/ 折扣 GPT 恒走 gateway API, 即使 oauth-bearer spawn 也按 API 形态显示。 */
   modelId?: string | null;
   /**
    * 本会话显式选定的供应商('anthropic' / 'openai' / 'xd' / null=默认路由)。
@@ -901,6 +932,7 @@ interface TodaySpendChipProps {
   /** session 累计需要 sessionId + 初始值。Claude / Codex API 显示真实 USD cost。 */
   sessionId?: string;
   /** 来自 session.totalCostUsd（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
+  sessionInitialMoney?: RegionalMoney | null;
   sessionInitialCostUsd?: number | null;
   /** 来自 session.totalTokenUsage（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
   sessionInitialTokens?: number | null;
@@ -919,6 +951,7 @@ export function TodaySpendChip({
   modelId,
   providerId,
   sessionId,
+  sessionInitialMoney,
   sessionInitialCostUsd,
   sessionInitialTokens,
   remoteHostId,
@@ -981,7 +1014,7 @@ export function TodaySpendChip({
   const isCodexXaiProvider =
     vendorKey === 'codex' && typeof modelId === 'string' && modelId.startsWith(XAI_MODEL_PREFIX);
   // codex 走订阅价值估算:ChatGPT 订阅需要 oauth-bearer 且未显式选 XD;xAI 由 proxy 注入
-  // SuperGrok OAuth,不依赖 Codex 子进程凭证。env-key fallback、codex/ 骨折、或显式选 XD
+  // SuperGrok OAuth,不依赖 Codex 子进程凭证。env-key fallback、codex/ 折扣、或显式选 XD
   // → 复用 cc 的 cost tooltip 形态。远端 Codex 的事实在远端 daemon 上,本机只记录 token
   // 价值估算,不写本地 gateway cost。
   const isCodexOauth = vendorKey === 'codex' && !isCodexXaiProvider && (
@@ -1004,10 +1037,13 @@ export function TodaySpendChip({
   // 订阅直连 bridge 轮真实计费恒 0(不写 sessions.total_cost_usd),spend hook 无意义 → 关。
   // device-link 远程会话形态未知 → 无条件启用(与 tokens / 估算价值同口径),否则被控端
   // 若是本机判不出的形态(如 codex+xai)累计 cost 镜像永远不展示。
-  const sessionCostUsd = useSessionSpend(
+  const sessionMoney = useSessionSpend(
     (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi || isDeviceLinkRemote
       ? sessionId
       : undefined,
+    (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi || isDeviceLinkRemote
+      ? sessionInitialMoney
+      : null,
     (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi || isDeviceLinkRemote
       ? sessionInitialCostUsd
       : null,
@@ -1020,7 +1056,7 @@ export function TodaySpendChip({
   );
   // 订阅会话的"本会话价值"估算 (isEstimate 消息汇总): Codex OAuth / Claude 订阅 / bridge 订阅同管道。
   // device-link 远程会话形态未知(被控端账号事实拿不到)→ 无条件启用,有估算数据就显示。
-  const sessionEstimatedValueUsd = useSessionEstimatedValue(
+  const sessionEstimatedValueMoney = useSessionEstimatedValue(
     sessionId,
     isCodexSubscription || isClaudeSubscription || isSubscriptionBridge || isDeviceLinkRemote,
   );
@@ -1031,6 +1067,9 @@ export function TodaySpendChip({
     sessionId,
     shouldReadLocalCodexAccountUsage ? 'codex' : undefined,
     isChatgptBridge ? 'openai-web' : 'app-server',
+    // app-server 形态下据当前模型匹配限额桶(账号可能同时有主配额桶与模型专属
+    // 促销桶, 见 useAccountUsage.matchCodexBucketForModel)。
+    modelId,
   );
   // xAI 限流快照同为本机 main 抓的 —— 远程会话(SSH / device-link)同样抑制,回落价值估算。
   const xaiRateLimit = useXaiRateLimit(usesXaiQuotaForm && !isAnyRemoteSession);
@@ -1158,9 +1197,9 @@ export function TodaySpendChip({
   );
 
   React.useEffect(() => {
-    // 订阅形态 (codex-oauth / cc+chatgpt bridge / claude 订阅) 的 reset 倒计时文案
-    // 需要随时间走动: 常态分钟级 tick 足够; 任一窗口进入最后一分钟切秒级 tick,
-    // 让「59秒 → 1秒」逐秒跳动。setTimeout 链每次 tick 后按最新窗口重估下一次延迟。
+    // Codex 订阅的 reset 倒计时文案与全部订阅窗口的 resetPending 判定需要随时间走动:
+    // 常态分钟级 tick 足够;任一窗口进入最后一分钟切秒级 tick,让倒计时准确归零,
+    // Claude 稳定窗口名也能及时切到「重置中」。setTimeout 链每次 tick 后重估延迟。
     if (!usesCodexQuotaForm && !isClaudeSubscription) return undefined;
     const delay = computeCountdownTickDelayMs(chipResetsAtMsList, Date.now());
     const timer = window.setTimeout(() => {
@@ -1201,30 +1240,34 @@ export function TodaySpendChip({
     // turn-cost 推送)与真实累计 cost(usage:session-spend-changed 镜像)有哪个显哪个;
     // 被控端账号的限额窗口本机拿不到,不显示、不猜。
     const chipSegments: string[] = [];
-    if (typeof sessionEstimatedValueUsd === 'number' && sessionEstimatedValueUsd > 0) {
+    if (sessionEstimatedValueMoney) {
       chipSegments.push(t('todaySpend.codex.sessionValueLabel', {
-        cost: `$${sessionEstimatedValueUsd.toFixed(2)}`,
+        cost: formatTurnCostMoney(sessionEstimatedValueMoney),
       }));
     }
-    if (typeof sessionCostUsd === 'number' && sessionCostUsd > 0) {
-      chipSegments.push(t('todaySpend.sessionCostLabel', { cost: `$${sessionCostUsd.toFixed(2)}` }));
+    if (sessionMoney?.amount) {
+      chipSegments.push(t('todaySpend.sessionCostLabel', {
+        cost: formatTurnCostMoney(sessionMoney),
+      }));
     }
     labelNode = chipSegments.length > 0
       ? renderSegmentedLabel(chipSegments)
       : <span className="tabular-nums opacity-60">$</span>;
     const tooltipLines: string[] = [];
-    pushSessionValueLines(tooltipLines, sessionEstimatedValueUsd, sessionTokens, t);
-    if (typeof sessionCostUsd === 'number' && sessionCostUsd > 0) {
-      tooltipLines.push(t('todaySpend.tooltip.sessionUsed', { cost: `$${sessionCostUsd.toFixed(2)}` }));
+    pushSessionValueLines(tooltipLines, sessionEstimatedValueMoney, sessionTokens, t);
+    if (sessionMoney?.amount) {
+      tooltipLines.push(t('todaySpend.tooltip.sessionUsed', {
+        cost: formatTurnCostMoney(sessionMoney),
+      }));
     }
     appendLatestTurnUsageLines(tooltipLines, latestTurnUsage, t);
     tooltipNode = tooltipLines.length > 0 ? buildTooltipNode(tooltipLines) : null;
   } else if (usesCodexQuotaForm) {
     // codex-oauth 与 cc+chatgpt/ bridge 共用同一 ChatGPT 账户,复用同一套限额窗口 + 价值估算渲染。
     const chipSegments = [...windowSegments];
-    if (typeof sessionEstimatedValueUsd === 'number' && sessionEstimatedValueUsd > 0) {
+    if (sessionEstimatedValueMoney) {
       chipSegments.push(t('todaySpend.codex.sessionValueLabel', {
-        cost: `$${sessionEstimatedValueUsd.toFixed(2)}`,
+        cost: formatTurnCostMoney(sessionEstimatedValueMoney),
       }));
     }
     labelNode = chipSegments.length > 0
@@ -1233,7 +1276,7 @@ export function TodaySpendChip({
     tooltipNode = buildCodexTooltipNode(
       accountUsage,
       sessionTokens,
-      sessionEstimatedValueUsd,
+      sessionEstimatedValueMoney,
       t,
       usageDashboardLabel,
       windowLabelNowMs,
@@ -1242,9 +1285,9 @@ export function TodaySpendChip({
   } else if (usesXaiQuotaForm) {
     // xAI 无订阅窗口数据源:主 chip 只显示本会话价值估算,限流细节(若 bridge 抓到)进 tooltip。
     const chipSegments: string[] = [];
-    if (typeof sessionEstimatedValueUsd === 'number' && sessionEstimatedValueUsd > 0) {
+    if (sessionEstimatedValueMoney) {
       chipSegments.push(t('todaySpend.codex.sessionValueLabel', {
-        cost: `$${sessionEstimatedValueUsd.toFixed(2)}`,
+        cost: formatTurnCostMoney(sessionEstimatedValueMoney),
       }));
     }
     labelNode = chipSegments.length > 0
@@ -1253,18 +1296,18 @@ export function TodaySpendChip({
     tooltipNode = buildXaiTooltipNode(
       xaiRateLimit,
       sessionTokens,
-      sessionEstimatedValueUsd,
+      sessionEstimatedValueMoney,
       t,
       usageDashboardLabel,
       latestTurnUsage,
     );
   } else if (isClaudeSubscription) {
-    // Claude 订阅形态 (方案 B): chip 显示「剩余时长 剩余%」倒计时段 + 本会话价值,
-    // 倒计时由 windowLabelNowMs 驱动 (常态 60s tick, 最后一分钟逐秒); tooltip 保留精确时间。
+    // Claude 订阅形态 (方案 B): chip 显示稳定窗口名 + 剩余% + 本会话价值;
+    // tooltip 保留相对倒计时和精确 reset 时间。
     const chipSegments = [...windowSegments];
-    if (typeof sessionEstimatedValueUsd === 'number' && sessionEstimatedValueUsd > 0) {
+    if (sessionEstimatedValueMoney) {
       chipSegments.push(t('todaySpend.claude.sessionValueLabel', {
-        cost: `$${sessionEstimatedValueUsd.toFixed(2)}`,
+        cost: formatTurnCostMoney(sessionEstimatedValueMoney),
       }));
     }
     labelNode = chipSegments.length > 0
@@ -1273,13 +1316,14 @@ export function TodaySpendChip({
     tooltipNode = buildClaudeSubscriptionTooltipNode(
       claudeSubscriptionUsage,
       modelId,
-      sessionEstimatedValueUsd,
+      sessionEstimatedValueMoney,
       t,
+      windowLabelNowMs,
       usageDashboardLabel,
       latestTurnUsage,
     );
   } else {
-    const slots = computeMetricSlots(claudeQuota, sessionCostUsd, t);
+    const slots = computeMetricSlots(claudeQuota, sessionMoney, t);
     const chipSegments = getGatewayChipSegments(slots);
     const codexApiHasTokenFallback = isCodexApi
       && !slots.session.available
@@ -1351,6 +1395,8 @@ export function TodaySpendChip({
 
   // Claude 订阅告警态: 影响当前会话的窗口 (5h / 总周限 / 当前模型 scoped) 任一逼近 /
   // 打满, 或 headers 报 rejected → chip 变 error 色 (语义豁免色, 跨主题一致)。
+  // 其它模型的周限吃紧不染红 —— chip 上没有那一段, 红了也无从解释 (见
+  // isClaudeSubscriptionAlerting 对 allowed_warning 的取舍)。
   const claudeSubscriptionAlerting = isClaudeSubscription
     && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId);
 

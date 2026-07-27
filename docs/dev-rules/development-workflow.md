@@ -38,8 +38,25 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
   具备 bypass 权限的维护者明确选择，并执行本节的额外门禁。
 - PR 的 Title／Description 以 [`../../.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md)
   为准（这次改了什么／怎么验证的／风险）；涉及 SQLite migration、system prompt、协议、
-  原生层或跨平台差异时必须在「风险」里说明。Reviewer 只看 Title + Description 决定要不要
-  review，写不清直接退回。
+  原生层或跨平台差异时必须在「风险」里说明；涉及 UI 时必须在「UI 变化」注明引用的
+  设计规范章节与约束（正本为 `docs/design-rules/DESIGN.md`）。CI 的
+  `pr-design-basis` 会在 PR 变更命中 UI 路径时轻校验该字段（非空、引用了
+  design-rules 文档，或「不涉及：<理由>」豁免；判定逻辑见
+  `scripts/check-pr-design-basis.mjs`），但通过 CI 不代表内容合格，质量仍由
+  review 把关。Reviewer 只看 Title + Description 决定要不要 review，写不清直接退回。
+- **DCO 签名门禁（硬性要求）**：每个 commit 都必须带 `Signed-off-by` trailer，其中的名字
+  与邮箱都要与 commit 的 author（或 committer）一致——`git commit -s`，或先跑一次
+  `pnpm dco:install-hook` 装上 hook 让后续提交自动补签（正本 `.githooks/prepare-commit-msg`；
+  `git commit` 本身没有自动签名的配置项，`format.signOff` 只作用于 `git format-patch` /
+  `git am`）。这条对 agent 自动提交、worktree 会话内的收尾 commit 一律适用。
+  - PR 上的权威门禁是 **DCO GitHub App** 的 check：它校验该 PR 的每个 commit，豁免
+    merge 与 bot，不追溯历史；`.github/dco.yml` 开了 remediation commit，因此漏签也可以
+    不改写历史（格式见 `CONTRIBUTING.md`）。
+  - 提交前自查用 `pnpm check:dco`（`scripts/check-dco.mjs`，范围 `merge-base..head`）。
+    它的判定刻意对齐 App 但**不识别 remediation commit**：本地通过则 App 必过，反之不然。
+    改这个脚本时不要放宽 name／邮箱比对，否则会出现「本地绿、PR 红」。
+  - 漏签不要重新造一份提交：用 `git commit --amend -s --no-edit` 或
+    `git rebase --signoff <base>` 补签后 `git push --force-with-lease`。
 - **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地跑完
   仓库根 `pnpm test:unit`（全部单元测试），并对本次改动涉及的每个 package 跑
   `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在
@@ -49,6 +66,19 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
   宿主删除／归档会话时自动存的内容快照（见第 1 节），以及会话必须收尾、测试却来不及
   修好时的收尾 commit——后者 commit message 必须标注 `WIP`，且在门禁通过前不得
   push、不得提 PR。
+  - **完整单测的外层超时**：`pnpm test:unit` 是全仓完整门禁，正常执行可能超过数分钟。
+    调用它的 agent／自动化工具不得使用 120 秒或更短的绝对超时；未知当前耗时时，外层
+    兜底超时至少设为 15 分钟。工具支持后台运行或 yielded process handle 时优先使用该
+    模式并短轮询进度，不要因为调用端停止等待就误判失败、杀掉仍在正常运行的测试或重复
+    启动一轮。Vitest 的单测试例超时仍由各 package 配置控制，不受这条外层约束影响。
+  - **workspace 有界并行**：`test-workspaces.mjs` 默认最多并行
+    `min(4, os.availableParallelism())` 个普通 workspace；每个普通 Vitest workspace 只使用
+    1 个 worker。Mobile 使用完整的 4-worker 配额；Desktop 使用基准验证过的单池最多
+    8-worker 配额，低于 8 CPU 时按 `os.availableParallelism()` 自动下调。重型 workspace
+    必须独占执行，避免外层并发与内部 worker 池相乘。
+    排查并发相关问题时可用
+    `pnpm test:unit -- --workspace-concurrency=1` 临时退回 workspace 串行；该参数只改变
+    workspace 调度，不减少测试覆盖。
 - **在门禁之上按风险追加验证**：跨模块、高风险或基础设施改动追加更广泛验证（如仓库根
   `pnpm test:all`），**最终以 CI 门禁为准**。不得通过 skip、删除或弱化测试制造通过；
   PR「怎么验证的」一节必须**如实**填写，没跑不许写已跑。

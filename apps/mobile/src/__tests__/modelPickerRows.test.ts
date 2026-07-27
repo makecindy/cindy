@@ -170,7 +170,7 @@ describe('rowFastEditable / rowFastOn(严格 per-(供应商, 模型))', () => {
   });
 });
 
-describe('budgetRowDisabled(骨折版置灰三态)', () => {
+describe('budgetRowDisabled(折扣版置灰三态)', () => {
   it("只有 codex/ 前缀且被控端明确 absent 才置灰;unknown 不误伤", () => {
     expect(budgetRowDisabled('codex/gpt-5.5', 'absent')).toBe(true);
     expect(budgetRowDisabled('codex/gpt-5.5', 'present')).toBe(false);

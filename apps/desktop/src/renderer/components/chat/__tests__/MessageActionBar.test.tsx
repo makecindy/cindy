@@ -27,7 +27,7 @@ vi.mock('@/lib/toast', () => ({
 
 import { MessageActionBar } from '../MessageActionBar';
 
-describe('MessageActionBar more menu', () => {
+describe('MessageActionBar', () => {
   const writeText = vi.fn(async () => undefined);
 
   beforeEach(() => {
@@ -176,5 +176,50 @@ describe('MessageActionBar more menu', () => {
     fireEvent.keyDown(item, { key: 'Escape' });
 
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it('renders the user-turn total and SDK segment details on separate lines', () => {
+    render(
+      <MessageActionBar
+        copyText="message body"
+        align="left"
+        hovered
+        userTurnMoney={{
+          amount: 2,
+          currency: 'CNY',
+          approximate: false,
+          kind: 'actual-cost',
+        }}
+        turnMoney={{
+          amount: 1,
+          currency: 'CNY',
+          approximate: false,
+          kind: 'actual-cost',
+        }}
+        turnUsageDetails={{
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          totalTokens: 15,
+          cacheHitRate: 0,
+        }}
+      />,
+    );
+
+    const tooltip = screen.getByText(
+      (_, element) =>
+        element?.classList.contains('whitespace-pre-line') === true &&
+        element.textContent?.includes('chat.messageActionBar.userTurnCostTotalLine') === true,
+    );
+    expect(tooltip.textContent).toBe(
+      [
+        'chat.messageActionBar.userTurnCostTotalLine',
+        'chat.messageActionBar.userTurnCostDetailsTitle',
+        'usageDetails.costLine',
+        'usageDetails.tokenLine',
+        'usageDetails.cacheLine',
+      ].join('\n'),
+    );
   });
 });

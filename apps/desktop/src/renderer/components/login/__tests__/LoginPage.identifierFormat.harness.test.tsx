@@ -70,7 +70,9 @@ beforeAll(async () => {
 beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { platform: 'darwin' },
+    // acceptPrivacyConsent:协议门放行时记录「已同意」(TapDB 采集的前置条件)。
+    // fire-and-forget,不参与登录派发时序。
+    value: { platform: 'darwin', acceptPrivacyConsent: async () => ({ allowed: true }) },
   });
 });
 
@@ -108,6 +110,8 @@ describe('identifier 本地格式校验错误态(设计稿 347:1727)', () => {
 
   it('合法邮箱提交 → 发 discover,无本地错误文案', () => {
     mount(emailOnlyState);
+    // consent PR:个人链路先过协议门,勾选 radio 后提交直接派发
+    fireEvent.click(screen.getByTestId('login-consent-radio'));
     fireEvent.change(screen.getByTestId('login-input'), {
       target: { value: 'user@example.com' },
     });
@@ -121,6 +125,8 @@ describe('identifier 本地格式校验错误态(设计稿 347:1727)', () => {
 
   it('手机号提交 → 直接透传 request-code,无客户端 +86/号段校验(对齐 #223:仅移动端做 cnPhone)', () => {
     mount(phoneOnlyState);
+    // consent PR:先勾选协议 radio 再提交
+    fireEvent.click(screen.getByTestId('login-consent-radio'));
     fireEvent.change(screen.getByTestId('login-input'), {
       target: { value: '12345' },
     });

@@ -31,10 +31,17 @@
     "pendingRequests": "대기 중인 요청",
     "queueSwitchTo": "{{position}} 대기 중인 요청으로 전환: {{label}}",
     "queueSwitchGeneric": "대기 중인 요청 전환",
+    "queuePositionCurrent": "현재",
+    "queuePositionNext": "다음",
+    "queuePositionNth": "{{index}}번째",
+    "composerBlockedByPending": "컴퓨터의 대기 중인 요청을 처리한 뒤 계속 입력할 수 있습니다.",
     "missingRequestId": "이 원격 상호작용에는 requestId가 없어 결정을 돌려보낼 수 없습니다.",
     "issueConfirmUnsupported": "Issue 제출 확인은 컴퓨터에서만 처리됩니다. 데스크톱 앱으로 돌아가 확인하거나 취소하세요.",
     "unsupportedType": "이 원격 상호작용 유형은 모바일에서 아직 지원되지 않습니다.",
     "unsupportedKind": "미지원",
+    "desktopOnlyKind": "컴퓨터에서 처리",
+    "cancelRequest": "이 요청 취소",
+    "cancelRequestAccessibility": "이 원격 요청 취소",
     "awaitingAnswer": "답변 대기",
     "continueAccessibility": "원격 질문 계속",
     "continue": "계속",
@@ -49,7 +56,7 @@
     "submittingHint": "결정을 컴퓨터로 전송 중입니다. 중복 제출하지 마세요.",
     "customAnswerInputAccessibility": "사용자 지정 답변 입력",
     "customAnswerPlaceholder": "다른 답변 입력",
-    "customAnswerButtonText": "다른 답변 입력...",
+    "customAnswerButtonText": "다른 답변 입력…",
     "answerInput": "답변 입력",
     "previous": "이전",
     "skipAccessibility": "질문 건너뛰기",
@@ -80,6 +87,32 @@
     "planFeedbackSubmit": "플랜 피드백 제출",
     "planFeedbackAccessibility": "플랜을 변경할 피드백"
   },
+  "kinds": {
+    "permission": {
+      "title": "컴퓨터 작업을 허용해 주세요",
+      "label": "권한"
+    },
+    "ask_user_question": {
+      "title": "에이전트가 답변을 기다립니다",
+      "label": "질문"
+    },
+    "plan_review": {
+      "title": "실행 계획 확인이 필요합니다",
+      "label": "계획"
+    },
+    "issue_confirm": {
+      "title": "이슈 내용을 확인해 주세요",
+      "label": "이슈"
+    },
+    "plugin_setup": {
+      "title": "컴퓨터에서 플러그인 설정이 필요합니다",
+      "label": "플러그인"
+    },
+    "fallback": {
+      "title": "원격 요청을 처리해야 합니다",
+      "label": "요청"
+    }
+  },
   "rewind": {
     "readError": "되감기 미리보기를 읽을 수 없습니다. 다시 동기화한 후 시도하세요.",
     "noFilesNote": "롤백할 파일이 없습니다. 이 메시지 이후의 대화 기록만 잘립니다.",
@@ -101,15 +134,15 @@
   },
   "collab": {
     "dispatchSummaryItem": "{{label}}: {{task}}",
-    "batchTitle": "worker {{count}}명에게 일괄 배정",
-    "batchTitleGeneric": "여러 worker에게 일괄 배정",
-    "batchBodyFallback": "worker 일괄 생성",
-    "dispatchTitle": "worker {{who}}에게 배정",
+    "batchTitle": "Worker {{count}}명에게 일괄 배정",
+    "batchTitleGeneric": "여러 Worker에게 일괄 배정",
+    "batchBodyFallback": "Worker 일괄 생성",
+    "dispatchTitle": "Worker {{who}}에게 배정",
     "dispatchRole": "역할 {{meta}}",
-    "dispatchBodyFallback": "worker 생성",
-    "sendTitle": "worker에게 메시지 전송",
+    "dispatchBodyFallback": "Worker 생성",
+    "sendTitle": "Worker에게 메시지 전송",
     "sendBodyFallback": "메시지 전송",
-    "reportTitle": "worker 보고",
+    "reportTitle": "Worker 보고",
     "reportBodyFallback": "(빈 보고)"
   },
   "contextSheet": {
@@ -145,5 +178,42 @@
     "enable": "켜기",
     "icloudTimeout": "사진이 아직 iCloud에서 다운로드 중이며 시간이 초과되었습니다. 네트워크를 확인하고 다시 시도하세요.",
     "photoNotReadable": "이 사진은 지금 읽을 수 없습니다(iCloud에서 다운로드가 완료되지 않았을 수 있습니다). 나중에 다시 시도하세요."
+  },
+  "pluginSetup": {
+    "completeOnDesktop": "제어 중인 데스크톱에서 설정을 완료하세요. 이 카드는 자동으로 업데이트됩니다.",
+    "chooseOne": "설정 방법을 하나 선택하세요",
+    "stepsHeading": "설정 단계",
+    "progress": "{{satisfied}}/{{total}} 완료",
+    "desktopActionHint": "컴퓨터에서 {{action}}",
+    "phase": {
+      "pending": "설정 대기",
+      "action_running": "진행 중…",
+      "waiting_external": "인증 대기 중…",
+      "verifying": "검증 중…",
+      "satisfied": "완료",
+      "failed": "실패",
+      "cancelled": "취소됨"
+    },
+    "error": {
+      "ACTION_FAILED": "설정 작업을 완료할 수 없습니다. 다시 시도하세요.",
+      "ACTION_STALE": "설정 내용이 변경되었습니다. 설정 작업을 다시 선택하세요.",
+      "AUTH_CANCELLED": "인증이 취소되었습니다. 필요한 경우 다시 인증하세요.",
+      "AUTH_FAILED": "인증을 완료할 수 없습니다. 다시 시도하세요.",
+      "INLINE_INVALID": "설정 내용이 올바르지 않습니다. 확인한 후 다시 시도하세요.",
+      "INLINE_UNAVAILABLE": "이 Cindy 버전에서는 채팅에서 이 설정을 저장할 수 없습니다. Cindy를 업데이트한 후 다시 시도하세요.",
+      "SAVE_FAILED": "설정을 저장할 수 없습니다. 다시 시도하세요.",
+      "WINDOW_CLOSED": "설정을 시작한 창이 닫혔습니다. 세션으로 돌아가 다시 시도하세요.",
+      "TARGET_UNAVAILABLE": "플러그인이 비활성화되었거나 제거되었거나 사용할 수 없습니다. 플러그인 상태를 확인한 후 다시 시도하세요.",
+      "ASSESSMENT_FAILED": "설정 상태를 새로 고칠 수 없습니다. 다시 시도하세요.",
+      "TIMEOUT": "설정 대기 시간이 초과되었습니다. 다시 시도하세요."
+    },
+    "action": {
+      "oauth_connect": "인증",
+      "open_plugin_settings": "설정 열기",
+      "manage_connection": "연결 관리",
+      "open_client_settings": "모델 설정 열기"
+    },
+    "inlineFormAction": "컴퓨터에서 {{label}} 입력",
+    "inlineFormActionGeneric": "컴퓨터에서 설정 입력"
   }
 }

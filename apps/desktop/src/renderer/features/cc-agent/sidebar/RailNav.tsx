@@ -291,11 +291,14 @@ export function RailNav({
     [activeSessionId, navigate, sessions],
   );
 
-  const openSectionAt = useCallback((section: RailPanelSection, el: HTMLElement) => {
-    setPreview(null);
-    const rect = el.getBoundingClientRect();
-    railPanelStore.openSection(section, { right: rect.right, top: rect.top }, el);
-  }, []);
+  const openSectionAt = useCallback(
+    (section: RailPanelSection, el: HTMLElement, viaKeyboard = false) => {
+      setPreview(null);
+      const rect = el.getBoundingClientRect();
+      railPanelStore.openSection(section, { right: rect.right, top: rect.top }, el, viaKeyboard);
+    },
+    [],
+  );
 
   return (
     <>
@@ -398,9 +401,22 @@ export function RailNav({
           title={t(`ccAgent.sidebar.railNav.${key}`)}
           aria-haspopup="menu"
           aria-expanded={panelState.openSection === key}
-          onMouseEnter={(e) => openSectionAt(key, e.currentTarget)}
+          // 同 section 已打开时 hover 不重复 open:重复调用会把键盘打开态
+          // (openedViaKeyboard)覆写成 false、并清掉已展开的项目三级,破坏
+          // popover 显式关闭契约(copilot review);锚点不变,重开本无意义。
+          onMouseEnter={(e) => {
+            if (panelState.openSection !== key) {
+              openSectionAt(key, e.currentTarget);
+            } else {
+              // 不重开,但要取消可能在途的收回计时(离开瓷砖 120ms 内折返;
+              // copilot review)——全局 pointermove 保活通常已覆盖,这里兜底。
+              railPanelStore.cancelClose();
+            }
+          }}
           onMouseLeave={() => railPanelStore.scheduleClose()}
-          onClick={(e) => openSectionAt(key, e.currentTarget)}
+          // 键盘激活(Enter/Space 的合成 click,detail===0):按 popover 焦点契约
+          // 打开——焦点移入面板、hover 收回让位、显式关闭(codex review)。
+          onClick={(e) => openSectionAt(key, e.currentTarget, e.detail === 0)}
           className={cn(
             'relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors duration-150',
             panelState.openSection === key

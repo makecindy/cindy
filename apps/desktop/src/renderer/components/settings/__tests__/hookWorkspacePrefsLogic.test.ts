@@ -6,9 +6,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  HOOK_DEFAULT_PERMISSION_MODE,
   patchForAgentChange,
   patchForModelChange,
   resolveEffectiveRow,
+  resolveEffectivePermissionMode,
   type PrefsAgentCaps,
 } from '../hookWorkspacePrefsLogic';
 
@@ -26,38 +28,91 @@ const CODEX_CAPS: PrefsAgentCaps = {
 };
 
 describe('patchForAgentChange', () => {
-  it('换 agent: 清 model/effort; 权限档兼容则保留', () => {
-    expect(patchForAgentChange('codex', { permissionMode: 'ask' }, CODEX_CAPS)).toEqual({
+  it('换 agent: 清 model/effort(与 agent 强绑定)', () => {
+    expect(patchForAgentChange('codex')).toEqual({
       agentKind: 'codex',
       model: null,
       effort: null,
     });
   });
 
-  it('换 agent: 权限档不被新组支持时一并清空(claude 专属 acceptEdits -> codex)', () => {
-    expect(patchForAgentChange('codex', { permissionMode: 'acceptEdits' }, CODEX_CAPS)).toEqual({
-      agentKind: 'codex',
-      model: null,
-      effort: null,
-      permissionMode: null,
-    });
+  // 2026-07 安全修正:原实现会在「新 agent 不支持该权限档」时把 permissionMode 清成 null,
+  // 而 null = 无显式偏好 = 派发侧回落 bypassPermissions(完全访问)。于是用户选了更严的
+  // acceptEdits, 只要切一下 agent 就被静默放宽 —— 正是原注释声称要防的那件事。
+  // 现在一律原样保留, 由 resolveEffectivePermissionMode 统一校准到最严档。
+  it('换 agent: 权限档永不清空 —— 清空会静默放宽成 bypassPermissions', () => {
+    const patch = patchForAgentChange('codex');
+    expect(patch).not.toHaveProperty('permissionMode');
+    expect(patchForAgentChange('claude-code')).not.toHaveProperty('permissionMode');
   });
 
-  it('agent 置 null(跟随默认): 整组清空, 权限档保留(派发侧自校验)', () => {
-    expect(patchForAgentChange(null, { permissionMode: 'ask' }, null)).toEqual({
+  it('agent 置 null(跟随默认): 整组清空, 权限档保留', () => {
+    expect(patchForAgentChange(null)).toEqual({
       agentKind: null,
       model: null,
       effort: null,
     });
   });
+});
 
-  it('能力未就绪(caps null)时保守清权限档 —— 无从判断兼容性', () => {
-    expect(patchForAgentChange('codex', { permissionMode: 'acceptEdits' }, null)).toEqual({
-      agentKind: 'codex',
-      model: null,
-      effort: null,
-      permissionMode: null,
-    });
+describe('resolveEffectiveRow — 过期存量值归一化(与派发侧 defaults.ts 同口径)', () => {
+  const IM_DEFAULTS = {
+    agentKind: 'claude-code',
+    agents: { 'claude-code': { model: 'claude-opus-4-8', effort: 'high' } },
+  };
+  const capsFor = (k: string) => (k === 'claude-code' ? CLAUDE_CAPS : k === 'codex' ? CODEX_CAPS : null);
+
+  it('未知/未来 agentKind 按无显式偏好处理,归一到默认 agent(不显示成 Claude 也不禁死整行)', () => {
+    const row = resolveEffectiveRow(
+      { agentKind: 'future-agent', model: null, effort: null, permissionMode: null },
+      IM_DEFAULTS,
+      capsFor,
+    );
+    expect(row.agentKind.id).toBe('claude-code');
+    expect(row.agentKind.isDefault).toBe(true); // 视为跟随默认,分段控件保持可用
+  });
+
+  it('显式 effort 不被生效模型支持 → 落 defaultEffort 链,不裸透传', () => {
+    const row = resolveEffectiveRow(
+      { agentKind: 'claude-code', model: 'claude-opus-4-8', effort: 'ultra', permissionMode: null },
+      IM_DEFAULTS,
+      capsFor,
+    );
+    // CLAUDE_CAPS 的 opus 不支持 ultra → 草稿 'high' 支持 → 显示 high(= 派发实际用的)
+    expect(row.effort.id).toBe('high');
+  });
+
+  it('显式 effort 合法时原样保留', () => {
+    const row = resolveEffectiveRow(
+      { agentKind: 'claude-code', model: 'claude-opus-4-8', effort: 'low', permissionMode: null },
+      IM_DEFAULTS,
+      capsFor,
+    );
+    expect(row.effort.id).toBe('low');
+  });
+});
+
+describe('resolveEffectivePermissionMode', () => {
+  it('显式档且当前 agent 支持 → 原样', () => {
+    expect(resolveEffectivePermissionMode('acceptEdits', CLAUDE_CAPS)).toBe('acceptEdits');
+    expect(resolveEffectivePermissionMode('ask', CODEX_CAPS)).toBe('ask');
+  });
+
+  // 核心安全断言:不支持时只能更严, 绝不能更宽。
+  it('显式档不被当前 agent 支持 → 回落该 agent 最严档, 不是 bypassPermissions', () => {
+    expect(resolveEffectivePermissionMode('acceptEdits', CODEX_CAPS)).toBe('ask');
+    expect(resolveEffectivePermissionMode('acceptEdits', CODEX_CAPS)).not.toBe(
+      HOOK_DEFAULT_PERMISSION_MODE,
+    );
+  });
+
+  it('从未填显式档 → bypassPermissions(hook 无人值守历史默认, 不变)', () => {
+    expect(resolveEffectivePermissionMode(null, CLAUDE_CAPS)).toBe(HOOK_DEFAULT_PERMISSION_MODE);
+    expect(resolveEffectivePermissionMode(null, null)).toBe(HOOK_DEFAULT_PERMISSION_MODE);
+  });
+
+  it('能力未就绪 → 不猜, 原样返回显式值(由派发侧兜底)', () => {
+    expect(resolveEffectivePermissionMode('acceptEdits', null)).toBe('acceptEdits');
   });
 });
 

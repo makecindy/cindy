@@ -1,11 +1,12 @@
-; 区域身份参数化(2026-07-18 同机双装):本文件不再硬编码 Cindy 字面量,
+; 区域身份参数化:本文件不再硬编码 Cindy 字面量,
 ; 一律走 electron-builder 在 common.nsh 里注入的宏——
-;   ${APP_EXECUTABLE_FILENAME} = <productName>.exe(cn Cindy.exe / global CindyGlobal.exe)
-;   ${PRODUCT_FILENAME}        = productName(cn Cindy / global CindyGlobal)
+;   ${APP_EXECUTABLE_FILENAME} = <productName>.exe(cn/global Cindy.exe / dev CindyDev.exe)
+;   ${PRODUCT_FILENAME}        = productName(cn/global Cindy / dev CindyDev)
 ;   ${SHORTCUT_NAME}           = forge.config nsis.shortcutName(与 exe 基名同源)
-; 这样 cn 安装器只杀/只删自己区域的进程与快捷方式,绝不误伤同机并存的另一
-; 区域安装(双装红线)。注册表键名 Windows 大小写不敏感,cn 的 shell 键
-; "Cindy" 与历史写入的 "cindy" 是同一个键,行为零变化。
+; 2026-07-26 起 cn/global exe 名同值(显示名统一,双装文件层互抢已被 owner
+; 接受);dev 仍独立名,dev 安装器绝不误伤同机并存的正式安装。注册表键名
+; Windows 大小写不敏感,shell 键 "Cindy" 与历史写入的 "cindy" 是同一个键,
+; 行为零变化。
 !macro customInit
   ; Check if the app is already running
   check_running:
@@ -43,9 +44,9 @@
   ; 用 HKCU 不用 HKLM:不需要管理员权限, 多用户机器上每个用户启动 app 时自注册。
   ; %V 在 Directory\shell / Directory\Background\shell 两种上下文里都解析为
   ; "用户右键所在的目录" 路径, argv 直传不做 URL 编解码 (deep link 走 cindy:// 另一套)。
-  ; 键名用 ${PRODUCT_FILENAME}(区域身份):cn 'Cindy' 与历史 'cindy' 键大小写
-  ; 不敏感同键;global 'CindyGlobal' 独立键——双装时两条菜单项并存互不覆盖,
-  ; 也与老 XDMaker 安装的 xdt-maker 键并存。
+  ; 键名用 ${PRODUCT_FILENAME}(区域身份):cn/global 'Cindy' 与历史 'cindy'
+  ; 键大小写不敏感同键(2026-07-26 起两区同键,双装互写已被 owner 接受);
+  ; dev 'CindyDev' 独立键;都与老 XDMaker 安装的 xdt-maker 键并存。
   WriteRegStr HKCU "Software\Classes\Directory\shell\${PRODUCT_FILENAME}" "" "通过 ${PRODUCT_FILENAME} 打开"
   WriteRegStr HKCU "Software\Classes\Directory\shell\${PRODUCT_FILENAME}" "Icon" "$INSTDIR\${APP_EXECUTABLE_FILENAME},0"
   WriteRegStr HKCU "Software\Classes\Directory\shell\${PRODUCT_FILENAME}\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --open-folder "%V"'

@@ -138,12 +138,17 @@ async function doStart(
       };
     },
   };
-  const serverFactories: Record<string, () => McpServer> = {};
-  const pluginIdByServerName: Record<string, string> = {};
+  // null-prototype：server 名可能来自用户可控来源（自定义 MCP id、插件身份卡），而
+  // `__proto__` 这类名字在普通 `{}` 上命中的是原型 setter —— 该 server 不会出现在
+  // Object.keys / Object.entries 里，于是在 Codex 侧静默消失，同一份配置却在 Claude 侧
+  // 正常工作。registry 已从源头隔离这类 id，这里是对称的纵深防御（Claude 侧的
+  // buildMcpServers 同样用 null-prototype）。
+  const serverFactories: Record<string, () => McpServer> = Object.create(null);
+  const pluginIdByServerName: Record<string, string> = Object.create(null);
   const remoteHttpServers: Record<
     string,
     { url: string; bearerTokenEnvVar?: string; envHttpHeaders?: Record<string, string> }
-  > = {};
+  > = Object.create(null);
   const extraEnv: Record<string, string> = {};
   for (const provider of opts.mcpProviders) {
     if (provider.isEnabled && !provider.isEnabled(ctx)) continue;

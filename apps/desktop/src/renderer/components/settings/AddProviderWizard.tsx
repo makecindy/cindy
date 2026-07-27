@@ -28,14 +28,21 @@ import { providerMonogram } from '@/lib/providerModels';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 
-import { sortPresetsForLocale } from '@cindy/model-providers';
-import type { AgentKind, CustomProviderConfig, ProviderPreset, ProviderView } from '@cindy/model-providers';
+import { presetDisplayName, sortPresetsForLocale } from '@cindy/model-providers';
+import type {
+  AgentKind,
+  CustomProviderConfig,
+  ProviderPreset,
+  ProviderView,
+} from '@cindy/model-providers';
 
-/** 外部直达入口(左栏检测建议点击):直接进入该内置渠道的授权步。 */
-export interface WizardEntry {
-  kind: 'builtin';
-  providerId: string;
-}
+/**
+ * 外部直达入口:
+ *   - builtin(左栏检测建议 / 引导卡 OAuth 行):直接进入该内置渠道的授权步。
+ *   - preset(引导卡「其他供应商」行):presets 异步载入后直达该预设的表单步。
+ */
+export type WizardEntry =
+  { kind: 'builtin'; providerId: string } | { kind: 'preset'; presetId: string };
 
 interface AddProviderWizardProps {
   providers: ProviderView[];
@@ -48,12 +55,100 @@ interface AddProviderWizardProps {
 }
 
 type Selection =
-  | { kind: 'oauth'; provider: ProviderView }
-  | { kind: 'preset'; preset: ProviderPreset };
+  { kind: 'oauth'; provider: ProviderView } | { kind: 'preset'; preset: ProviderPreset };
+
+type PresetBaseUrls = Partial<Record<AgentKind, string>>;
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
+};
+
+function presetRuntimeBaseUrl(
+  preset: ProviderPreset,
+  agent: AgentKind,
+  edited: PresetBaseUrls,
+): string {
+  const runtime = preset.runtimes[agent];
+  if (!runtime) return '';
+  return runtime.baseUrlEditable
+    ? (edited[agent] ?? runtime.baseUrl).trim()
+    : runtime.baseUrl;
+}
+
+function isValidEditablePresetBaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:')
+      && !url.username
+      && !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * bespoke OAuth 渠道的官方 API 预设——授权步「改用 API Key 接入」的替代路径
+ * (API 用户没有订阅,OAuth 授权对其是错误路径)。
+ *
+ * 不能复用 OAuth routing 的 upstream:那是订阅专用端点(openai 是 chatgpt
+ * backend)。此处声明官方 API 端点,模型清单以 Step 3 列模型接口实拉为准
+ * (缺省由 baseUrl 推导 …/v1/models,见 provider-model-fetch);同时内置少量
+ * 推荐模型兜底——拉取因网络/限流失败时降级为「仅推荐模型」仍可完成创建,
+ * 不把用户堵死(与目录预设同语义;Greptile P1 反馈 2026-07-24)。
+ * cc runtime 需 Anthropic 兼容端点、codex 需 OpenAI 兼容端点,故 openai/xai
+ * 仅声明 codex(两家无 Anthropic 兼容端点),表单会自动展示「仅支持 X」说明行。
+ */
+const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
+  anthropic: {
+    id: 'anthropic-api',
+    name: 'Anthropic API',
+    docsUrl: 'https://console.anthropic.com/settings/keys',
+    runtimes: {
+      'claude-code': {
+        baseUrl: 'https://api.anthropic.com',
+        // contextWindow 必须与目录(providers.json)一致:保存时它是窗口的唯一来源
+        // (拉取的模型列表不带窗口),缺省会落 200k 默认 → toSdkModelString 剥掉
+        // 1M 模型的 [1m] 路由,用户拿到 1/5 窗口。
+        models: [
+          { id: 'claude-opus-5', name: 'Claude Opus 5', contextWindow: 1_000_000 },
+          { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
+          { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200_000 },
+        ],
+      },
+    },
+  },
+  openai: {
+    id: 'openai-api',
+    name: 'OpenAI API',
+    docsUrl: 'https://platform.openai.com/api-keys',
+    runtimes: {
+      codex: {
+        baseUrl: 'https://api.openai.com/v1',
+        models: [
+          { id: 'gpt-5.5', name: 'GPT-5.5' },
+          { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini' },
+        ],
+      },
+    },
+  },
+  xai: {
+    id: 'xai-api',
+    name: 'xAI API',
+    docsUrl: 'https://console.x.ai',
+    runtimes: {
+      codex: {
+        baseUrl: 'https://api.x.ai/v1',
+        wireProtocol: 'openai-chat',
+        models: [
+          { id: 'grok-4.5', name: 'Grok 4.5' },
+          { id: 'grok-4.3', name: 'Grok 4.3' },
+        ],
+      },
+    },
+  },
 };
 
 /** 供应商卡片图标。 */
@@ -95,14 +190,12 @@ function ProviderCardName({ name }: { name: string }) {
   );
 
   return truncated ? (
-    <Tip
-      text={name}
-      delay={250}
-      contentClassName="z-[10001] max-w-[320px] [word-break:normal]"
-    >
+    <Tip text={name} delay={250} contentClassName="z-[10001] max-w-[320px] [word-break:normal]">
       {text}
     </Tip>
-  ) : text;
+  ) : (
+    text
+  );
 }
 
 function ProviderCard({
@@ -178,22 +271,22 @@ export function AddProviderWizard({
 
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [query, setQuery] = useState('');
-  // entry(左栏检测建议直达):目录里找得到该渠道才直达授权步,否则回落目录页。
-  const entryProvider = entry ? providers.find((x) => x.id === entry.providerId) : undefined;
+  // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
+  const entryProvider =
+    entry?.kind === 'builtin' ? providers.find((x) => x.id === entry.providerId) : undefined;
   const [sel, setSel] = useState<Selection | null>(() =>
     entryProvider ? { kind: 'oauth', provider: entryProvider } : null,
   );
   // 预设表单态
   const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [presetBaseUrls, setPresetBaseUrls] = useState<PresetBaseUrls>({});
   const [saving, setSaving] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   // Step 3 拉取态
   const [step, setStep] = useState<1 | 2 | 3>(entryProvider ? 2 : 1);
   const [fetchState, setFetchState] = useState<
-    | { status: 'idle' }
-    | { status: 'fetching' }
-    | { status: 'done'; failed: boolean }
+    { status: 'idle' } | { status: 'fetching' } | { status: 'done'; failed: boolean }
   >({ status: 'idle' });
   /**
    * 勾选清单:id → { name, checked, recommended, agents }。Map 保序(推荐在前,拉取新增在后)。
@@ -226,7 +319,8 @@ export function AddProviderWizard({
           p.id !== 'xd' &&
           p.source === 'builtin' &&
           !p.connected &&
-          (['anthropic', 'openai', 'xai'].includes(p.id) || (p.auth.method === 'oauth' && !!p.auth.oauth)),
+          (['anthropic', 'openai', 'xai'].includes(p.id) ||
+            (p.auth.method === 'oauth' && !!p.auth.oauth)),
       ),
     [providers],
   );
@@ -239,7 +333,9 @@ export function AddProviderWizard({
     ? oauthChoices.filter((p) => p.name.toLowerCase().includes(q))
     : oauthChoices;
   const filteredPresets = q
-    ? sortedPresets.filter((p) => p.name.toLowerCase().includes(q))
+    ? sortedPresets.filter(
+        (p) => p.name.toLowerCase().includes(q) || (p.nameEn?.toLowerCase().includes(q) ?? false),
+      )
     : sortedPresets;
 
   /**
@@ -253,13 +349,34 @@ export function AddProviderWizard({
     setSel({ kind: 'oauth', provider });
     setStep(2);
   }, []);
-  const pickPreset = useCallback((preset: ProviderPreset) => {
-    fetchSeqRef.current += 1;
-    setSel({ kind: 'preset', preset });
-    setName(preset.name);
-    setApiKey('');
-    setStep(2);
-  }, []);
+  const pickPreset = useCallback(
+    (preset: ProviderPreset) => {
+      fetchSeqRef.current += 1;
+      setSel({ kind: 'preset', preset });
+      setName(presetDisplayName(preset, i18n.language));
+      setApiKey('');
+      setPresetBaseUrls(
+        Object.fromEntries(
+          (Object.keys(preset.runtimes) as AgentKind[])
+            .map((agent) => [agent, preset.runtimes[agent]?.baseUrl ?? '']),
+        ) as PresetBaseUrls,
+      );
+      setStep(2);
+    },
+    [i18n.language],
+  );
+
+  // entry(preset 直达):presets 异步载入,到位后消费;找不到该预设则留在目录页。
+  // 按 presetId 记录已消费值(而非布尔):同一挂载期内 entry 换成另一个 preset
+  // (如深链二次进入)仍能直达,同一 entry 不重复触发。
+  const presetEntryConsumedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (entry?.kind !== 'preset' || presetEntryConsumedRef.current === entry.presetId) return;
+    if (presets.length === 0) return;
+    presetEntryConsumedRef.current = entry.presetId;
+    const preset = presets.find((p) => p.id === entry.presetId);
+    if (preset) pickPreset(preset);
+  }, [entry, presets, pickPreset]);
 
   /**
    * 本向导内是否发起过 OpenAI 登录。codexAuth 反映的是整机 ChatGPT 凭证,不含
@@ -351,6 +468,12 @@ export function AddProviderWizard({
   const startFetch = useCallback(async () => {
     if (!sel || sel.kind !== 'preset') return;
     const preset = sel.preset;
+    const editableBaseUrlsValid = (Object.keys(preset.runtimes) as AgentKind[]).every((agent) => {
+      const rt = preset.runtimes[agent];
+      return !rt?.baseUrlEditable
+        || isValidEditablePresetBaseUrl(presetRuntimeBaseUrl(preset, agent, presetBaseUrls));
+    });
+    if (!editableBaseUrlsValid) return;
     // 预设推荐模型先入清单(预勾);归属 = 预设里列出该模型的全部 runtime。
     const initial = new Map<
       string,
@@ -380,7 +503,7 @@ export function AddProviderWizard({
         try {
           const r = await window.electronAPI.maker.fetchProviderModels({
             agent,
-            baseUrl: rt.baseUrl,
+            baseUrl: presetRuntimeBaseUrl(preset, agent, presetBaseUrls),
             modelsUrl: rt.modelsUrl ?? null,
             apiKey: apiKey.trim() || null,
             ...(rt.headers ? { headers: rt.headers } : {}),
@@ -411,7 +534,7 @@ export function AddProviderWizard({
     });
     // 全部端点都失败才算失败(单端失败仍可按另一端 + 预设推荐完成)。
     setFetchState({ status: 'done', failed: !results.some((r) => r.ok) });
-  }, [sel, apiKey]);
+  }, [sel, apiKey, presetBaseUrls]);
 
   // ── 完成创建(预设)────────────────────────────────────────────────────
   const handleFinish = useCallback(async () => {
@@ -427,7 +550,10 @@ export function AddProviderWizard({
     setSaving(true);
     try {
       const existing = new Set(providers.map((p) => p.id));
-      const id = uniqueCustomProviderId(name.trim() || preset.name, existing);
+      const id = uniqueCustomProviderId(
+        name.trim() || presetDisplayName(preset, i18n.language),
+        existing,
+      );
       const runtimes: CustomProviderConfig['runtimes'] = {};
       const keys: RuntimeKeys = {};
       for (const agent of Object.keys(preset.runtimes) as AgentKind[]) {
@@ -449,8 +575,9 @@ export function AddProviderWizard({
           });
         if (agentModels.length === 0) continue;
         runtimes[agent] = {
-          baseUrl: rt.baseUrl,
+          baseUrl: presetRuntimeBaseUrl(preset, agent, presetBaseUrls),
           ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
+          ...(rt.requestPath ? { requestPath: rt.requestPath } : {}),
           models: agentModels,
           ...(rt.headers ? { headers: rt.headers } : {}),
           ...(rt.modelsUrl ? { modelsUrl: rt.modelsUrl } : {}),
@@ -462,15 +589,22 @@ export function AddProviderWizard({
         toast.error(t('settings.providers.wizard.noModelSelected'));
         return;
       }
-      await createCustomProvider({ id, name: name.trim() || preset.name, runtimes }, keys);
-      toast.success(t('settings.providers.wizard.createdToast', { name: name.trim() || preset.name }));
+      await createCustomProvider(
+        { id, name: name.trim() || presetDisplayName(preset, i18n.language), runtimes },
+        keys,
+      );
+      toast.success(
+        t('settings.providers.wizard.createdToast', {
+          name: name.trim() || presetDisplayName(preset, i18n.language),
+        }),
+      );
       onDone(id);
     } catch {
       toast.error(t('settings.providers.wizard.createFailed'));
     } finally {
       setSaving(false);
     }
-  }, [sel, picks, name, apiKey, providers, onDone, t]);
+  }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language]);
 
   // ── 步骤指示(OAuth 路径只有 2 步)─────────────────────────────────────
   const totalSteps = sel?.kind === 'preset' ? 3 : 2;
@@ -483,6 +617,15 @@ export function AddProviderWizard({
   // 预设单 runtime 时的「仅支持 X」说明(数据驱动的静态灰,见文件头注释)。
   const presetAgents =
     sel?.kind === 'preset' ? (Object.keys(sel.preset.runtimes) as AgentKind[]) : [];
+  const presetBaseUrlsValid =
+    sel?.kind !== 'preset'
+    || presetAgents.every((agent) => {
+      const rt = sel.preset.runtimes[agent];
+      return !rt?.baseUrlEditable
+        || isValidEditablePresetBaseUrl(
+          presetRuntimeBaseUrl(sel.preset, agent, presetBaseUrls),
+        );
+    });
   const presetSingleAgentNote =
     sel?.kind === 'preset' && presetAgents.length === 1
       ? t('settings.providers.wizard.onlyAgentNote', { agent: AGENT_LABEL[presetAgents[0]] })
@@ -508,10 +651,16 @@ export function AddProviderWizard({
         {/* 头部:标题 + 步骤指示 */}
         <div className="flex flex-col gap-3 px-6 pb-4 pt-5">
           <div className="flex items-center justify-between">
-            <h3 className="text-16 font-semibold" style={{ color: 'var(--settings-section-title)' }}>
+            <h3
+              className="text-16 font-semibold"
+              style={{ color: 'var(--settings-section-title)' }}
+            >
               {sel
                 ? t('settings.providers.wizard.titleWith', {
-                    name: sel.kind === 'oauth' ? sel.provider.name : sel.preset.name,
+                    name:
+                      sel.kind === 'oauth'
+                        ? sel.provider.name
+                        : presetDisplayName(sel.preset, i18n.language),
                   })
                 : t('settings.providers.wizard.title')}
             </h3>
@@ -531,7 +680,13 @@ export function AddProviderWizard({
               const isCur = n === step || (n === totalSteps && step > totalSteps);
               const isDone = n < step;
               return (
-                <span key={label} className="flex items-center gap-1.5 text-12" style={{ color: isCur ? 'var(--settings-section-title)' : 'var(--text-tertiary)' }}>
+                <span
+                  key={label}
+                  className="flex items-center gap-1.5 text-12"
+                  style={{
+                    color: isCur ? 'var(--settings-section-title)' : 'var(--text-tertiary)',
+                  }}
+                >
                   <span
                     className="flex h-[18px] w-[18px] items-center justify-center rounded-full border text-10 font-medium"
                     style={
@@ -542,7 +697,11 @@ export function AddProviderWizard({
                             borderColor: 'var(--accent-cta-bg)',
                           }
                         : isDone
-                          ? { backgroundColor: 'var(--surface-chip)', borderColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }
+                          ? {
+                              backgroundColor: 'var(--surface-chip)',
+                              borderColor: 'var(--surface-chip)',
+                              color: 'var(--text-secondary)',
+                            }
                           : { borderColor: 'var(--border-default)' }
                     }
                   >
@@ -564,7 +723,10 @@ export function AddProviderWizard({
             <div className="flex flex-col">
               <div
                 className="flex h-9 items-center gap-2 rounded-full border px-3.5"
-                style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--surface-elevated)' }}
+                style={{
+                  borderColor: 'var(--border-default)',
+                  backgroundColor: 'var(--surface-elevated)',
+                }}
               >
                 <Search size={14} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
                 <input
@@ -586,7 +748,11 @@ export function AddProviderWizard({
                         key={p.id}
                         icon={cardIcon({ providerId: p.id, name: p.name })}
                         name={p.name}
-                        meta={t('settings.providers.wizard.metaOAuth')}
+                        meta={t(
+                          OFFICIAL_API_PRESETS[p.id]
+                            ? 'settings.providers.wizard.metaOAuthOrApi'
+                            : 'settings.providers.wizard.metaOAuth',
+                        )}
                         onClick={() => pickOauth(p)}
                       />
                     ))}
@@ -601,8 +767,11 @@ export function AddProviderWizard({
                     {filteredPresets.map((p) => (
                       <ProviderCard
                         key={p.id}
-                        icon={cardIcon({ providerId: p.id, name: p.name })}
-                        name={p.name}
+                        icon={cardIcon({
+                          providerId: p.id,
+                          name: presetDisplayName(p, i18n.language),
+                        })}
+                        name={presetDisplayName(p, i18n.language)}
                         meta={t('settings.providers.wizard.metaApiKey')}
                         onClick={() => pickPreset(p)}
                       />
@@ -628,7 +797,10 @@ export function AddProviderWizard({
                   <Plus size={13} />
                 </span>
                 <span className="flex min-w-0 flex-col">
-                  <span className="text-13 font-medium" style={{ color: 'var(--settings-section-title)' }}>
+                  <span
+                    className="text-13 font-medium"
+                    style={{ color: 'var(--settings-section-title)' }}
+                  >
                     {t('settings.providers.wizard.customTitle')}
                   </span>
                   <span className="truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
@@ -657,7 +829,10 @@ export function AddProviderWizard({
                   {cardIcon({ providerId: sel.provider.id, name: sel.provider.name })}
                 </span>
                 <div className="flex min-w-0 flex-col">
-                  <span className="text-14 font-medium" style={{ color: 'var(--settings-section-title)' }}>
+                  <span
+                    className="text-14 font-medium"
+                    style={{ color: 'var(--settings-section-title)' }}
+                  >
                     {sel.provider.name}
                   </span>
                   <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
@@ -665,7 +840,7 @@ export function AddProviderWizard({
                   </span>
                 </div>
               </div>
-              <div>
+              <div className="flex items-center gap-2">
                 {/* 等待授权中按钮变「取消」(与详情头对称),不禁用——浏览器流挂起时用户必须能中止重试。 */}
                 <button
                   type="button"
@@ -687,6 +862,25 @@ export function AddProviderWizard({
                       : 'settings.providers.button.authorize',
                   )}
                 </button>
+                {/* 替代路径:API 用户没有订阅,OAuth 对其是错误路径——切到该渠道的
+                    官方 API 预设表单(填 key),与从目录选预设完全同一条流水线。
+                    与「授权」并排的次级描边按钮(White Pill):小灰字形态用户根本
+                    注意不到(2026-07-24 实测)。 */}
+                {OFFICIAL_API_PRESETS[sel.provider.id] && (
+                  <button
+                    type="button"
+                    onClick={() => pickPreset(OFFICIAL_API_PRESETS[sel.provider.id])}
+                    disabled={loggingIn}
+                    className="flex h-9 items-center justify-center rounded-full border px-5 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                    style={{
+                      backgroundColor: 'transparent',
+                      borderColor: 'var(--settings-btn-secondary-border)',
+                      color: 'var(--settings-btn-secondary-text)',
+                    }}
+                  >
+                    {t('settings.providers.wizard.useApiKey')}
+                  </button>
+                )}
               </div>
               {oauthSingleAgentNote && <InfoLine text={oauthSingleAgentNote} />}
             </div>
@@ -728,14 +922,49 @@ export function AddProviderWizard({
                   }}
                 />
               </div>
-              {/* baseUrl 由预设携带,只读展示(要改走保存后的编辑表单)。
+              {/* 官方渠道 URL 只读；本机/自托管预设可在创建时改 host/port。
                   codex + openai-chat 上游标注「Cindy 桥接」,让用户明确该通道是协议转换而非原生。 */}
-              <div className="flex flex-col gap-1">
+              <div className="flex flex-col gap-2">
                 {presetAgents.map((agent) => {
                   const rt = sel.preset.runtimes[agent];
                   const bridged = agent === 'codex' && rt?.wireProtocol === 'openai-chat';
+                  if (rt?.baseUrlEditable) {
+                    const value = presetBaseUrls[agent] ?? rt.baseUrl;
+                    const valid = isValidEditablePresetBaseUrl(value.trim());
+                    return (
+                      <label key={agent} className="flex flex-col gap-1.5">
+                        <span className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
+                          {t('settings.providers.custom.fields.baseUrl')} · {AGENT_LABEL[agent]}
+                        </span>
+                        <input
+                          type="url"
+                          value={value}
+                          onChange={(event) => setPresetBaseUrls((prev) => ({
+                            ...prev,
+                            [agent]: event.target.value,
+                          }))}
+                          aria-invalid={!valid}
+                          className="h-9 rounded-full border px-4 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+                          style={{
+                            borderColor: valid ? 'var(--border-default)' : 'var(--status-error)',
+                            backgroundColor: 'var(--surface-elevated)',
+                            color: 'var(--settings-section-title)',
+                          }}
+                        />
+                        {bridged && (
+                          <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>
+                            {t('settings.providers.wizard.bridgedNote')}
+                          </span>
+                        )}
+                      </label>
+                    );
+                  }
                   return (
-                    <span key={agent} className="truncate text-12" style={{ color: 'var(--text-tertiary)' }}>
+                    <span
+                      key={agent}
+                      className="truncate text-12"
+                      style={{ color: 'var(--text-tertiary)' }}
+                    >
                       {AGENT_LABEL[agent]} · {rt?.baseUrl}
                       {bridged ? ` · ${t('settings.providers.wizard.bridgedNote')}` : ''}
                     </span>
@@ -816,16 +1045,25 @@ export function AddProviderWizard({
                         </span>
                         {/* 双 runtime 预设里单端归属的模型,标注能力事实(与管理页同措辞)。 */}
                         {presetAgents.length > 1 && v.agents.length === 1 && (
-                          <span className="shrink-0 text-12" style={{ color: 'var(--text-tertiary)' }}>
+                          <span
+                            className="shrink-0 text-12"
+                            style={{ color: 'var(--text-tertiary)' }}
+                          >
                             {t('settings.providers.models.capabilityNote', {
-                              agent: AGENT_LABEL[v.agents[0] === 'claude-code' ? 'codex' : 'claude-code'],
+                              agent:
+                                AGENT_LABEL[
+                                  v.agents[0] === 'claude-code' ? 'codex' : 'claude-code'
+                                ],
                             })}
                           </span>
                         )}
                         {v.recommended && (
                           <span
                             className="flex h-[18px] shrink-0 items-center rounded-full px-2 text-11 font-medium"
-                            style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
+                            style={{
+                              backgroundColor: 'var(--surface-chip)',
+                              color: 'var(--text-secondary)',
+                            }}
                           >
                             {t('settings.providers.wizard.recommended')}
                           </span>
@@ -884,10 +1122,12 @@ export function AddProviderWizard({
               <button
                 type="button"
                 onClick={() => void startFetch()}
-                disabled={apiKey.trim().length === 0}
+                disabled={apiKey.trim().length === 0 || !presetBaseUrlsValid}
                 className={cn(
                   'flex h-9 items-center justify-center rounded-full px-5 text-13 font-medium transition-opacity',
-                  apiKey.trim().length === 0 ? 'cursor-not-allowed opacity-50' : 'hover:opacity-90',
+                  apiKey.trim().length === 0 || !presetBaseUrlsValid
+                    ? 'cursor-not-allowed opacity-50'
+                    : 'hover:opacity-90',
                 )}
                 style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
               >

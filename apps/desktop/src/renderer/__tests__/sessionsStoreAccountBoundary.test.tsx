@@ -4,12 +4,18 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import type { Session } from '@/lib/ccAgent.types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+type SpendPayload = {
+  sessionId: string;
+  totalMoney?: Session['totalMoney'];
+  totalCostUsd?: number;
+};
+
 const mocks = vi.hoisted(() => {
   let spendListener:
-    | ((payload: { sessionId: string; totalCostUsd: number }) => void)
+    | ((payload: SpendPayload) => void)
     | undefined;
   const onUsageSessionSpendChanged = vi.fn(
-    (listener: (payload: { sessionId: string; totalCostUsd: number }) => void) => {
+    (listener: (payload: SpendPayload) => void) => {
       spendListener = listener;
       return vi.fn();
     },
@@ -20,7 +26,7 @@ const mocks = vi.hoisted(() => {
   });
   return {
     list: vi.fn(),
-    emitSessionSpend(payload: { sessionId: string; totalCostUsd: number }): void {
+    emitSessionSpend(payload: SpendPayload): void {
       spendListener?.(payload);
     },
   };
@@ -160,6 +166,38 @@ describe('sessionsStore account boundaries', () => {
     expect(subscriber).toHaveBeenCalledTimes(1);
     expect(mocks.list).not.toHaveBeenCalled();
     unsubscribe();
+  });
+
+  it('patches structured CNY spend without fabricating a USD projection', async () => {
+    mocks.list.mockResolvedValueOnce([
+      session('target', { totalCostUsd: 1 }),
+    ]);
+    await sessionsStore.ensureByFilter('active');
+
+    act(() => {
+      mocks.emitSessionSpend({
+        sessionId: 'target',
+        totalMoney: {
+          amount: 3,
+          currency: 'CNY',
+          approximate: false,
+          kind: 'actual-cost',
+        },
+      });
+    });
+
+    expect(sessionsStore.getByFilter('active')).toEqual([
+      expect.objectContaining({
+        id: 'target',
+        totalCostUsd: 1,
+        totalMoney: {
+          amount: 3,
+          currency: 'CNY',
+          approximate: false,
+          kind: 'actual-cost',
+        },
+      }),
+    ]);
   });
 
   it('preserves spend received while a stale session list response is in flight', async () => {

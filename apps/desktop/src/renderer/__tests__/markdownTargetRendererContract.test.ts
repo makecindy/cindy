@@ -56,6 +56,24 @@ describe('Markdown target rendering contract', () => {
     expect(markdownRenderer).not.toContain('function FilePathChip');
   });
 
+  it('renders the path chip as <code>, so copied messages survive an external paste', () => {
+    // 复制一段聊天消息时 Chromium 把选区原样序列化进 text/html。`<button>` 是交互
+    // 控件,不属于富文本内容模型:Slack / 飞书 / Notion / Word 按标签白名单解析
+    // 粘贴内容,会把整个节点连同路径文字丢掉,只在原位留下一个断行——用户看到的
+    // 就是"文件名凭空消失"。`<code>` 既是语义正解(这个 chip 本来就是行内代码
+    // 升级来的),粘出去还会落成对方的行内代码。
+    const chipBody = markdownRenderer.match(/function FileTargetChip\([\s\S]*?\n}\n/)?.[0];
+    expect(chipBody).toBeDefined();
+    expect(chipBody).toContain('<code');
+    expect(chipBody).not.toContain('<button');
+    // 原生按钮语义靠 role/tabIndex/onKeyDown 补齐,不要退回 <button>。
+    expect(chipBody).toContain('role="button"');
+    expect(chipBody).toContain('tabIndex={0}');
+    expect(chipBody).toContain('onKeyDown');
+    // 同理:chip 文字必须能进剪贴板,不得 select-none。
+    expect(chipBody).not.toContain('select-none');
+  });
+
   it('resolves targets through the renderer cache so session switches do not re-flash', () => {
     // Eager render-time resolution (chip only when unique) re-fires the IPC and
     // re-flashes plain-text → chip on every session switch unless results are

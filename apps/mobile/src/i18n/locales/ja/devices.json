@@ -226,7 +226,7 @@
         "workspace": "ワークスペース",
         "projectDir": "プロジェクトディレクトリ",
         "model": "モデル",
-        "effort": "推論の強度",
+        "effort": "推論強度",
         "timezone": "タイムゾーン"
       },
       "namePlaceholder": "例：毎日のプロジェクト点検",
@@ -257,7 +257,7 @@
       "cancelA11y": "自動化の編集をキャンセル"
     },
     "delete": {
-      "counting": "この自動化が生成した会話を集計中...",
+      "counting": "この自動化が生成した会話を集計中…",
       "confirmDeleteBoth": "タスクと会話を削除",
       "confirmArchive": "タスクを削除して会話をアーカイブ",
       "confirmTaskOnly": "タスクのみ削除",

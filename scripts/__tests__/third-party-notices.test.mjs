@@ -56,6 +56,81 @@ test("generated artifact notices are platform-scoped and disclose restricted com
   assert.doesNotMatch(windows, /@codesandbox\/nodebox@0\.1\.8 —/);
 });
 
+test("multi-arch desktop notices describe every architecture they ship with", () => {
+  const macos = read("docs/legal/notices/desktop-macos.txt");
+  const linux = read("docs/legal/notices/desktop-linux.txt");
+
+  // 一个平台声明覆盖两个架构时,内嵌原生库的 README 和 versions.json 都是 per-arch 的:
+  // 只读其中一份,另一个架构的分发物就会带着错误的架构描述发出去。
+  assert.match(
+    macos,
+    /@img\/sharp-libvips-darwin-x64 embedded native libraries/,
+  );
+  assert.match(
+    macos,
+    /@img\/sharp-libvips-darwin-arm64 embedded native libraries/,
+  );
+  assert.match(macos, /for use with sharp on macOS x64\./);
+  assert.match(macos, /for use with sharp on macOS 64-bit ARM\./);
+  assert.match(
+    linux,
+    /@img\/sharp-libvips-linux-x64 embedded native libraries/,
+  );
+  assert.match(
+    linux,
+    /@img\/sharp-libvips-linux-arm64 embedded native libraries/,
+  );
+  assert.match(linux, /for use with sharp on Linux \(glibc\) x64\./);
+  assert.match(linux, /for use with sharp on Linux \(glibc\) 64-bit ARM\./);
+});
+
+// 移动端安装包不分发构建期工具链的预编译二进制，但这些包的许可义务由其 JS 主包
+// 承载，主包必须留在声明里。
+test("mobile notices exclude build-time platform binaries but keep their JS packages", () => {
+  for (const artifact of ["mobile-ios", "mobile-android"]) {
+    const notices = read(`docs/legal/notices/${artifact}.txt`);
+    // 覆盖 name-darwin-arm64 与 @scope/darwin-arm64 两种命名形式。
+    assert.doesNotMatch(
+      notices,
+      /^- \S*(?:darwin|linux|win32|musl|freebsd)\S*@/im,
+    );
+    assert.match(notices, /^- lightningcss@/m);
+  }
+});
+
+// 闭包必须按显式目标平台收集：collectClosure() 判断可选依赖是否存在只看 node_modules
+// 里有没有目录，省掉 target 就会让产物随生成机器的安装集合漂移。
+//
+// 这里守的是那一处强制校验本身，而不是去枚举调用点。枚举的写法（无论正则还是括号扫描）
+// 都能被换一种调用形式绕过，且在本文件上会实打实误报——生成器的错误消息与注释里都出现
+// 了 `collectClosure(`，而源码含带引号的正则字面量，使得零依赖的字符串跳过无法可靠实现。
+// 强制校验则覆盖全部调用形式：`licenses:generate` 是产物的唯一生成途径，缺 target 的调用
+// 必然在生成时抛错，产物不可能带着机器相关的内容进仓库。
+test("collectClosure() refuses to run without an explicit target", () => {
+  const source = read("scripts/generate-third-party-notices.mjs");
+  const signature = source.match(/function collectClosure\(([^)]*)\)/)?.[1];
+  assert.ok(signature, "找不到 collectClosure 定义，守卫已失效");
+  assert.doesNotMatch(
+    signature,
+    /=/,
+    "target 不得有默认值：默认值会让缺 target 的调用静默恢复成机器相关行为",
+  );
+  assert.match(source, /requires an explicit target/);
+  // linux 目标必须连 libc 一起强制：只有 linux 分 glibc / musl，缺了这一轴
+  // matchesPackageConstraint() 会把两种变体同时放行，产物又随本机装了哪个变体漂移。
+  assert.match(
+    source,
+    /os === "linux"\s*\?\s*\["os", "cpu", "libc"\]/,
+    "linux 目标未强制 libc：glibc 与 musl 变体会同时进闭包",
+  );
+  // matchesTarget() 不得再有「target 为空则一律放行」的分支，那是漂移的根源。
+  const matchesTarget = source.match(
+    /function matchesTarget\([^)]*\)\s*\{[\s\S]*?\n\}/,
+  )?.[0];
+  assert.ok(matchesTarget, "找不到 matchesTarget 定义，守卫已失效");
+  assert.doesNotMatch(matchesTarget, /return true/);
+});
+
 test("commercial distributions do not resolve forbidden Sustainable Use dependencies", () => {
   const lockfile = read("pnpm-lock.yaml");
   assert.doesNotMatch(lockfile, /@codesandbox\/nodebox/);

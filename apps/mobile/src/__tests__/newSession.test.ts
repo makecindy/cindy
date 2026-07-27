@@ -26,6 +26,10 @@ import {
 import type { ProviderModelRow } from '@/session/providerModelSections';
 import type { RemoteSession } from '@/session/types';
 
+// Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
+const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
+  String(readFileSync(...args)).replace(/\r\n/g, '\n');
+
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN');
@@ -328,13 +332,13 @@ describe('pickNewSessionDefaultDevice', () => {
 // 避免锚点(如 deps 数组)变化时 indexOf 失效产生误导性报错。
 describe('new session default device follows the home device filter', () => {
   it('sends the deviceExplicit flag only when the home list is filtered to one device', () => {
-    const homeSource = readFileSync(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
+    const homeSource = readTextLf(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
     // 筛选某台电脑时带显式标记;"所有对话"(selectedDeviceId=null)不带,保留记忆回落。
     expect(homeSource).toContain("...(selectedDeviceId ? { deviceExplicit: '1' } : {})");
   });
 
   it('treats the deviceExplicit route flag as an explicit device on the new-session screen', () => {
-    const newSource = readFileSync(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
     expect(newSource).toContain('deviceExplicit?: string;');
     expect(newSource).toContain("readRouteString(params.deviceExplicit) === '1'");
   });
@@ -527,10 +531,10 @@ describe('new session model', () => {
       title: '还不能创建',
       subtitle: '请输入电脑端项目路径。',
       details: [
-        '电脑: Carol Mac',
-        '位置: 未选择项目路径',
-        '运行: Claude · claude-sonnet-4-6 · medium',
-        '首条: 未填写',
+        '电脑：Carol Mac',
+        '位置：未选择项目路径',
+        '运行：Claude · claude-sonnet-4-6 · medium',
+        '首条：未填写',
       ],
     });
 
@@ -542,12 +546,12 @@ describe('new session model', () => {
       model: 'claude-sonnet-4-6',
     }, 'Carol Mac')).toMatchObject({
       title: '准备创建并发送',
-      subtitle: '确认后会在被控电脑创建会话，并把首条消息加入队列。',
+      subtitle: '确认后会在被控电脑创建对话，并把首条消息加入队列。',
       details: [
-        '电脑: Carol Mac',
-        '位置: 对话工作区',
-        '运行: Claude · claude-sonnet-4-6 · medium',
-        '首条: 请帮我总结这个项目，并给出下一步建议。',
+        '电脑：Carol Mac',
+        '位置：对话工作区',
+        '运行：Claude · claude-sonnet-4-6 · medium',
+        '首条：请帮我总结这个项目，并给出下一步建议。',
       ],
     });
 
@@ -558,11 +562,11 @@ describe('new session model', () => {
     }, 'Carol Mac', { attachmentCount: 2 })).toMatchObject({
       title: '准备创建并发送',
       details: [
-        '电脑: Carol Mac',
-        '位置: /repo/xdt-maker',
-        '运行: Claude · claude-sonnet-4-6 · medium',
-        '首条: 仅发送附件',
-        '附件: 2 个',
+        '电脑：Carol Mac',
+        '位置：/repo/xdt-maker',
+        '运行：Claude · claude-sonnet-4-6 · medium',
+        '首条：仅发送附件',
+        '附件：2 个',
       ],
     });
   });
@@ -715,7 +719,7 @@ describe('new session model', () => {
 
 describe('new session composer surface', () => {
   it('does not double-apply the Android safe-area inset to the top navigation', () => {
-    const newSource = readFileSync(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
 
     expect(newSource).toContain(
       "const NEW_SESSION_SCREEN_TOP_PADDING = Platform.OS === 'android' ? 0 : spacing.xl;",
@@ -724,7 +728,7 @@ describe('new session composer surface', () => {
   });
 
   it('uses the shared platform keyboard avoidance rule for the new-session composer', () => {
-    const newSource = readFileSync(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
     const normalizedNewSource = newSource.replace(/\r\n/g, '\n');
 
     expect(newSource).toContain("import { keyboardAvoidingBehaviorForPlatform } from '@/session/mobileNativeShellLayout';");
@@ -735,9 +739,9 @@ describe('new session composer surface', () => {
   });
 
   it('uses the shared mobile composer row rather than a separate input implementation', () => {
-    const newSource = readFileSync(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
-    const sessionSource = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
-    const sharedSource = readFileSync(resolve(process.cwd(), 'src/session/MobileComposerInputRow.tsx'), 'utf8');
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const sessionSource = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const sharedSource = readTextLf(resolve(process.cwd(), 'src/session/MobileComposerInputRow.tsx'), 'utf8');
     const newComposerStart = newSource.indexOf('<MobileComposerInputRow');
     const newComposerEnd = newSource.indexOf('\n                />', newComposerStart) + '\n                />'.length;
     const newComposerSource = newSource.slice(newComposerStart, newComposerEnd);
@@ -754,11 +758,11 @@ describe('new session composer surface', () => {
     const modelPillEnd = newSource.indexOf('modelPillText:', modelPillStart);
     const modelPillStyle = newSource.slice(modelPillStart, modelPillEnd);
     const modelPillTextStart = newSource.indexOf('modelPillText: {');
-    const modelPillTextEnd = newSource.indexOf('sessionComposerInput:', modelPillTextStart);
+    const modelPillTextEnd = newSource.indexOf('inputVoiceHidden:', modelPillTextStart);
     const modelPillTextStyle = newSource.slice(modelPillTextStart, modelPillTextEnd);
-    const sessionComposerInputStart = newSource.indexOf('sessionComposerInput: {');
-    const sessionComposerInputEnd = newSource.indexOf('inputVoiceHidden:', sessionComposerInputStart);
-    const sessionComposerInputStyle = newSource.slice(sessionComposerInputStart, sessionComposerInputEnd);
+    const voiceDraftTextStart = newSource.indexOf('voiceDraftText: {');
+    const voiceDraftTextEnd = newSource.indexOf('voiceDraftListeningPrompt:', voiceDraftTextStart);
+    const voiceDraftTextStyle = newSource.slice(voiceDraftTextStart, voiceDraftTextEnd);
     const sendButtonStart = newSource.indexOf('sendButton: {');
     const sendButtonEnd = newSource.indexOf('sendButtonDisabled:', sendButtonStart);
     const sendButtonStyle = newSource.slice(sendButtonStart, sendButtonEnd);
@@ -807,7 +811,7 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain('selectionColor={colors.inputCaret}');
     expect(newComposerSource).toContain('inputRef={firstMessageInputRef}');
     expect(newComposerSource).toContain('inputOverlay={renderComposerInputOverlay()}');
-    expect(newComposerSource).toContain('inputStyle={[styles.sessionComposerInput, voiceIsListening && styles.inputVoiceHidden]}');
+    expect(newComposerSource).toContain('inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}');
     expect(newComposerSource).toContain('onChangeText={setFirstMessageDraft}');
     expect(newComposerSource).toContain('onContentSizeChange={handleFirstMessageInputContentSizeChange}');
     expect(newComposerSource).toContain("placeholder={voiceIsListening ? '' : composerPlaceholder}");
@@ -837,8 +841,11 @@ describe('new session composer surface', () => {
     expect(modelPillTextStyle).toContain('color: colors.textPrimary');
     expect(modelPillTextStyle).toContain('fontSize: typeScale.caption');
     expect(modelPillTextStyle).toContain('fontWeight: fontWeight.semibold');
-    expect(sessionComposerInputStyle).toContain('fontSize: typeScale.listBody');
-    expect(sessionComposerInputStyle).toContain('lineHeight: lineHeight.listBody');
+    // 输入框字号档由 MobileComposerInputRow 统一持有(MOBILE_COMPOSER_DRAFT_TEXT_STYLE),
+    // 页面不再覆盖;语音草稿覆盖层必须引用同一档,否则换行位置与输入框错开(见
+    // composerVoiceDraftMetrics.test.ts)。
+    expect(newSource).not.toContain('sessionComposerInput');
+    expect(voiceDraftTextStyle).toContain('...MOBILE_COMPOSER_DRAFT_TEXT_STYLE');
     expect(sendButtonStyle).toContain('backgroundColor: colors.cta');
     expect(sendButtonStyle).toContain('borderColor: colors.cta');
     expect(sendButtonStyle).toContain('borderWidth: StyleSheet.hairlineWidth');
@@ -860,15 +867,27 @@ describe('new session composer surface', () => {
     expect(voiceButtonSource).toContain('disabled={creating || voiceIsProcessing}');
     expect(newSource).toContain('const startVoiceRecording = useCallback(async () => {');
     expect(newSource).toContain('const voiceStartupInFlightRef = useRef(false);');
+    expect(newSource).toContain('const voicePermissionRequestInFlightRef = useRef(false);');
     expect(newSource).toContain('const voiceStopInFlightRef = useRef(false);');
     expect(newSource).toContain('const voiceStartupSeqRef = useRef(0);');
     expect(newSource).toContain('|| voiceStopInFlightRef.current');
-    expect(newSource.indexOf('voiceStartupInFlightRef.current = true;')).toBeLessThan(
-      newSource.indexOf('const permission = await requestRecordingPermissionsAsync();'),
+    expect(newSource).toContain('resolveMobileVoiceRecordingPermission({');
+    expect(newSource).toContain('voiceStartupInFlightRef.current = true;');
+    expect(newSource.indexOf('resolveMobileVoiceRecordingPermission({')).toBeLessThan(
+      newSource.indexOf('voiceStartupInFlightRef.current = true;'),
     );
-    expect(newSource).toContain('if (voiceStartupSeqRef.current !== startupSeq) return;');
+    expect(newSource).toContain('getPermission: getRecordingPermissionsAsync');
+    expect(newSource).toContain("isAppActive: () => AppState.currentState === 'active'");
+    expect(newSource).toContain(
+      "voicePermissionRequestSeqRef.current !== permissionRequestSeq\n"
+      + "        || AppState.currentState !== 'active'\n"
+      + "      ) return;\n"
+      + "      startupSeq = voiceStartupSeqRef.current + 1;",
+    );
     expect(newSource).toContain('const cancelVoiceForDeviceSwitch = useCallback(() => {');
-    expect(selectDeviceSource).toContain('if (voiceStopInFlightRef.current || voiceIsProcessing) return;');
+    expect(selectDeviceSource).toContain('voicePermissionRequestInFlightRef.current');
+    expect(selectDeviceSource).toContain('|| voiceStopInFlightRef.current');
+    expect(selectDeviceSource).toContain('|| voiceIsProcessing');
     expect(selectDeviceSource).toContain('cancelVoiceForDeviceSwitch();');
     expect(newSource).toContain('voiceStartupInFlightRef.current = false;');
     expect(newSource).toContain('createMobileVoiceControllerSession({');

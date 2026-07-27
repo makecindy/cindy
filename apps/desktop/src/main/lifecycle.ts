@@ -280,13 +280,23 @@ export function installQuitHandler(timeoutMs = 2000): void {
   // ── Layer 4: renderer crashed (main alive) ──────────────────────────────
   // Main 还活着, 但 renderer 死了。继续让用户看一个空白窗没意义, 走 disposer
   // chain 把 IM offline / 子进程都收掉再 exit(1)。
-  // 例外:意识沙箱(cindy-brain/runtime)的渲染进程"允许死"——崩溃隔离正是它的
+  // 例外 1:意识沙箱(cindy-brain/runtime)的渲染进程"允许死"——崩溃隔离正是它的
   // 设计属性(docs/dev-rules/plugin-security-and-authoring.md),由 GhostRuntime 自己收尸/熔断,
   // 绝不能触发整个应用关机(实证:强崩沙箱曾把主界面一起带走)。
+  // 例外 2:`<webview>` guest(内置浏览器等)的崩溃/OOM 只影响那一个 tab——
+  // renderer 侧 useBrowserWebview 已有 crash banner + reload 恢复链路。此前
+  // 这里不区分 guest,网页死递归吃满内存被 OOM kill 时会把整个 App 一起带走
+  // (VS Code / Cursor 的边界都是 guest 崩溃不退 Workbench)。
   app.on('render-process-gone', (_event, webContents, details) => {
     if (isGhostSandboxWebContentsId(webContents.id)) {
       log.warn(
         `ghost sandbox render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
+      );
+      return;
+    }
+    if (webContents.getType() === 'webview') {
+      log.warn(
+        `webview guest render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
     }

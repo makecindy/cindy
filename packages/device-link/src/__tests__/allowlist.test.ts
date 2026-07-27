@@ -265,8 +265,6 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'maker:status-changed',
       'maker:interaction-request',
       'maker:interaction-dismissed',
-      'content-moderation:input-blocked',
-      'content-moderation:output-blocked',
       'maker:auto-permission:fallback',
       'maker:provider:changed',
       'maker:schedule:event',

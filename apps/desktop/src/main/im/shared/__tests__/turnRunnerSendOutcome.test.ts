@@ -56,6 +56,7 @@ const mocks = vi.hoisted(() => ({
   checkDestructiveToolCall: vi.fn(),
   resolveXdtImageUrl: vi.fn(),
   generateAndPersistFbotTitle: vi.fn(),
+  desktopSessionRows: vi.fn(),
 }));
 
 vi.mock('../../../logger', () => ({
@@ -77,7 +78,13 @@ vi.mock('../../../maker-host/provider-route', () => ({
 vi.mock('../../../localDb/client/current', () => ({
   getDbClient: vi.fn(() => ({
     drizzle: {
-      select: vi.fn(),
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: mocks.desktopSessionRows,
+          })),
+        })),
+      })),
       update: vi.fn(),
     },
   })),
@@ -142,6 +149,7 @@ import type { ImSessionRepo, ImSessionRow } from '../sessionRepo';
 import type { ImChannelAdapter } from '../types';
 import { ui } from '../../feishu/uiText';
 import { CredentialModeSwitchBusyError } from '../../../maker-host/codex-credential-switch';
+import { isHeadlessGhostSetupTurn } from '../../../mcp-integrations/ghostSetupInteractionSurface';
 
 /** harness send 的完整签名 — 第二参透传 onAccepted(对齐 maker-core 语义)。 */
 type HarnessSend = (
@@ -308,6 +316,29 @@ function setupSession(
   return h;
 }
 
+function setupAttachedSession(
+  sendImpl: Parameters<typeof createSessionHarness>[0],
+): SessionHarness {
+  const sessionId = 'desktop-attached-session';
+  const h = createSessionHarness(sendImpl, sessionId);
+  mocks.bindingGet.mockReturnValue(sessionId);
+  mocks.desktopSessionRows.mockResolvedValue([
+    {
+      id: sessionId,
+      agentKind: 'claude-code',
+      workingDir: 'F:\\XDMaker',
+      model: 'claude-opus-4-7',
+      effort: 'xhigh',
+      permissionMode: 'bypassPermissions',
+      fastMode: false,
+      sdkSessionId: null,
+      providerId: null,
+    },
+  ]);
+  mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
+  return h;
+}
+
 function setupSessionWithId(
   sessionId: string,
   sendImpl: Parameters<typeof createSessionHarness>[0],
@@ -424,6 +455,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       },
     ]);
     mocks.bindingGet.mockReturnValue(undefined);
+    mocks.desktopSessionRows.mockResolvedValue([]);
     mocks.findActiveSession.mockResolvedValue({
       id: 'feishu-session',
       agentKind: 'claude-code',
@@ -489,6 +521,68 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect.stringContaining('错误'),
       expect.anything(),
     );
+  });
+
+  it('marks only an accepted attached IM turn headless and releases it on done', async () => {
+    const sendGate = deferred<SessionSendResult>();
+    const h = setupAttachedSession(async () => sendGate.promise);
+    const { turnPromise } = await startDefaultTurn();
+
+    await waitForAssertion(() => {
+      expect(h.send).toHaveBeenCalledTimes(1);
+    });
+    expect(isHeadlessGhostSetupTurn('desktop-attached-session')).toBe(false);
+
+    sendGate.resolve({ accepted: true });
+    await turnPromise;
+    expect(isHeadlessGhostSetupTurn('desktop-attached-session')).toBe(true);
+
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(isHeadlessGhostSetupTurn('desktop-attached-session')).toBe(false);
+    });
+  });
+
+  it('releases an attached IM headless marker on terminal error', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    expect(isHeadlessGhostSetupTurn('desktop-attached-session')).toBe(true);
+
+    h.emit({ type: 'error', data: { message: 'terminal failure' } });
+    await waitForAssertion(() => {
+      expect(isHeadlessGhostSetupTurn('desktop-attached-session')).toBe(false);
+    });
+  });
+
+  it('keeps channel-native IM turns on their existing non-marker path', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    expect(isHeadlessGhostSetupTurn('feishu-session')).toBe(false);
+
+    h.emit({ type: 'done', data: {} });
+    await flushMicrotasks();
+    expect(isHeadlessGhostSetupTurn('feishu-session')).toBe(false);
+  });
+
+  it('does not reacquire attached IM headless state from a late acceptance callback', async () => {
+    let lateOnAccepted: NonNullable<Parameters<Session['send']>[1]>['onAccepted'];
+    const h = setupAttachedSession(async () => ({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+    }));
+    h.send.mockImplementationOnce(async (_message, opts) => {
+      lateOnAccepted = opts?.onAccepted;
+      return { accepted: false, reason: 'cancelled-before-dispatch' };
+    });
+
+    await runDefaultTurn();
+    expect(isHeadlessGhostSetupTurn('desktop-attached-session')).toBe(false);
+
+    await lateOnAccepted?.();
+    expect(isHeadlessGhostSetupTurn('desktop-attached-session')).toBe(false);
+    expect(mocks.persistUserMessage).not.toHaveBeenCalled();
   });
 
   it('applies a deferred switch and sends the first queued IM message through the refreshed session', async () => {

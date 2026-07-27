@@ -1,11 +1,19 @@
 import type { TFunction } from 'i18next';
 
 import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
-import { formatCompactTokens, formatModelShort, formatTurnCostUsd } from '@/lib/usageFormat';
+import type { RegionalMoney } from '../../shared/regionalMoney';
+import {
+  formatCompactTokens,
+  formatModelShort,
+  formatTurnCostMoney,
+  formatTurnCostUsd,
+} from '@/lib/usageFormat';
 
 export interface TurnUsageTooltipInput {
   details: TurnUsageDetails;
   t: TFunction;
+  money?: RegionalMoney;
+  /** 旧消息兼容；新链路使用 money。 */
   costUsd?: number;
   isEstimate?: boolean;
   title?: string;
@@ -54,15 +62,21 @@ function suggestion(details: TurnUsageDetails, t: TFunction): string | null {
 export function buildTurnUsageTooltipLines({
   details,
   t,
+  money,
   costUsd,
   isEstimate = false,
   title,
 }: TurnUsageTooltipInput): string[] {
   const lines: string[] = [];
   if (title) lines.push(title);
-  if (typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd > 0) {
+  const formattedCost = money && money.amount > 0
+    ? formatTurnCostMoney(money)
+    : typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd > 0
+      ? formatTurnCostUsd(costUsd)
+      : null;
+  if (formattedCost) {
     lines.push(t(isEstimate ? 'usageDetails.valueLine' : 'usageDetails.costLine', {
-      cost: formatTurnCostUsd(costUsd),
+      cost: formattedCost,
     }));
   }
   // 按模型成本明细: 仅在 ≥2 个模型时展开 (单模型已由下方 modelLine 表达)。
@@ -74,7 +88,7 @@ export function buildTurnUsageTooltipLines({
     for (const m of perModelCost) {
       lines.push(t('usageDetails.modelCostLine', {
         model: formatModelShort(m.model),
-        cost: formatTurnCostUsd(m.costUsd),
+        cost: formatTurnCostMoney(m.money),
       }));
     }
   }

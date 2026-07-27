@@ -5,6 +5,8 @@ import {
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostContentKeys,
+  ghostExternalLinkUrls,
+  ghostLocalePathFor,
   ghostNetworkHostMatches,
   ghostPanelKind,
   ghostPreviewUrlAllowed,
@@ -18,7 +20,10 @@ import {
   isValidGhostNetworkHostPattern,
   layoutWithGhostPanel,
   parseGhostPartition,
+  resolveGhostManifestLocale,
   validateGhostManifest,
+  validateGhostManifestLocaleResource,
+  withGhostResolvedLocale,
   type GhostManifest,
 } from '../ghost';
 import { createDefaultLayout, type SplitNode } from '../layoutTree';
@@ -195,6 +200,49 @@ describe('ghost · 清单校验', () => {
     expect(withPanel({}).ok).toBe(true);
   });
 
+  it('panel.systemButtons:标准头系统按钮开关 —— 布尔白名单键,tab 形态拒装', () => {
+    const withPanel = (panel: Record<string, unknown>) =>
+      validateGhostManifest({ ...goodManifest(), panel: { html: 'panel.html', ...panel } });
+    // 合法:关掉 maximize / detach / 空对象(= 全默认) / 显式 true / 双键并存
+    const off = withPanel({ systemButtons: { maximize: false } });
+    expect(off.ok && (off as { ok: true; manifest: GhostManifest }).manifest.panel?.systemButtons).toEqual({
+      maximize: false,
+    });
+    const detachOff = withPanel({ systemButtons: { detach: false } });
+    expect(
+      detachOff.ok && (detachOff as { ok: true; manifest: GhostManifest }).manifest.panel?.systemButtons,
+    ).toEqual({ detach: false });
+    const bothOff = withPanel({ systemButtons: { maximize: false, detach: false } });
+    expect(
+      bothOff.ok && (bothOff as { ok: true; manifest: GhostManifest }).manifest.panel?.systemButtons,
+    ).toEqual({ maximize: false, detach: false });
+    const minimizeOff = withPanel({ systemButtons: { minimize: false } });
+    expect(
+      minimizeOff.ok &&
+        (minimizeOff as { ok: true; manifest: GhostManifest }).manifest.panel?.systemButtons,
+    ).toEqual({ minimize: false });
+    const allOff = withPanel({ systemButtons: { maximize: false, detach: false, minimize: false } });
+    expect(
+      allOff.ok && (allOff as { ok: true; manifest: GhostManifest }).manifest.panel?.systemButtons,
+    ).toEqual({ maximize: false, detach: false, minimize: false });
+    expect(withPanel({ systemButtons: {} }).ok).toBe(true);
+    expect(withPanel({ systemButtons: { maximize: true, detach: true } }).ok).toBe(true);
+    // 非对象 / 未知键 / 非布尔值:收词明确拒绝(规则 9)
+    expect(withPanel({ systemButtons: 'off' }).ok).toBe(false);
+    expect(withPanel({ systemButtons: { refresh: false } }).ok).toBe(false);
+    expect(withPanel({ systemButtons: { maximize: 'no' } }).ok).toBe(false);
+    expect(withPanel({ systemButtons: { detach: 0 } }).ok).toBe(false);
+    expect(withPanel({ systemButtons: { minimize: 0 } }).ok).toBe(false);
+    expect(withPanel({ position: 'tab', systemButtons: { minimize: false } }).ok).toBe(false);
+    // 页签形态没有标准头:声明即拒(与 minWidth/defaultFraction 同款语义)
+    expect(withPanel({ position: 'tab', systemButtons: { maximize: false } }).ok).toBe(false);
+    // 缺省(不声明)不产出字段
+    const plain = withPanel({});
+    expect(
+      plain.ok && (plain as { ok: true; manifest: GhostManifest }).manifest.panel?.systemButtons,
+    ).toBeUndefined();
+  });
+
   it('author:可选展示名,1–64 字符,原样输出', () => {
     const base = validateGhostManifest({ ...goodManifest(), author: 'Lizi' });
     expect(base.ok && (base as { ok: true; manifest: GhostManifest }).manifest.author).toBe('Lizi');
@@ -204,6 +252,350 @@ describe('ghost · 清单校验', () => {
     expect(validateGhostManifest({ ...goodManifest(), author: '  ' }).ok).toBe(false);
     expect(validateGhostManifest({ ...goodManifest(), author: 'x'.repeat(65) }).ok).toBe(false);
     expect(validateGhostManifest({ ...goodManifest(), author: 42 }).ok).toBe(false);
+  });
+
+  it('locales 只接受宿主四种语言、安全 JSON 路径且必须提供英文', () => {
+    const valid = validateGhostManifest({
+      ...goodManifest(),
+      locales: {
+        en: 'locales/en.json',
+        'zh-CN': 'locales/zh-CN.json',
+        ja: 'locales/ja.json',
+        ko: 'locales/ko.json',
+      },
+    });
+    expect(valid.ok).toBe(true);
+    expect(valid.ok && valid.manifest.locales?.en).toBe('locales/en.json');
+
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { 'zh-CN': 'locales/zh-CN.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: '../en.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', fr: 'locales/fr.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', ja: 'locales/en.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', ja: 'Locales/EN.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'GHOST.JSON' },
+    }).ok).toBe(false);
+  });
+
+  it('locale 选择完全跟随宿主，插件不支持或宿主值未知时固定回退英文', () => {
+    const parsed = validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', ja: 'locales/ja.json' },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(ghostLocalePathFor(parsed.manifest, 'ja')).toBe('locales/ja.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'zh-CN')).toBe('locales/en.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'fr-FR')).toBe('locales/en.json');
+    expect(withGhostResolvedLocale(parsed.manifest, 'ko').resolvedLocale).toBe('ko');
+    expect(withGhostResolvedLocale(parsed.manifest, 'fr-FR').resolvedLocale).toBe('en');
+  });
+
+  it('locale 资源按稳定 tool name 合并;翻译可部分提供、缺译回退原文,错位仍拒', () => {
+    const parsed = validateGhostManifest({
+      schemaVersion: 2,
+      id: 'localized',
+      name: 'Base',
+      description: 'Base description',
+      whenToUse: 'Base routing',
+      version: '1.0.0',
+      entry: 'main.js',
+      slots: ['tool'],
+      tools: [
+        {
+          name: 'alpha',
+          description: 'Base alpha',
+          parameters: {
+            type: 'object',
+            title: 'Base arguments',
+            properties: {
+              query: {
+                type: 'string',
+                title: 'Base query',
+                description: 'Base query description',
+              },
+              mode: {
+                oneOf: [
+                  { const: 'fast', title: 'Base fast mode' },
+                  { const: 'safe', title: 'Base safe mode' },
+                ],
+              },
+            },
+          },
+        },
+        { name: 'beta', description: 'Base beta' },
+      ],
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const resource = validateGhostManifestLocaleResource({
+      name: 'Localized',
+      description: 'Localized description',
+      whenToUse: 'Localized routing',
+      tools: {
+        beta: { description: 'Localized beta' },
+        alpha: {
+          description: 'Localized alpha',
+          parameters: {
+            '': { title: 'Localized arguments' },
+            '/properties/query': {
+              title: 'Localized query',
+              description: 'Localized query description',
+            },
+            '/properties/mode/oneOf/0': { title: 'Localized fast mode' },
+            '/properties/mode/oneOf/1': { title: 'Localized safe mode' },
+          },
+        },
+      },
+    }, parsed.manifest);
+    expect(resource.ok).toBe(true);
+    if (!resource.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, resource.resource)).toMatchObject({
+      name: 'Localized',
+      description: 'Localized description',
+      whenToUse: 'Localized routing',
+      tools: [
+        {
+          name: 'alpha',
+          description: 'Localized alpha',
+          parameters: {
+            title: 'Localized arguments',
+            properties: {
+              query: {
+                title: 'Localized query',
+                description: 'Localized query description',
+              },
+              mode: {
+                oneOf: [
+                  { title: 'Localized fast mode' },
+                  { title: 'Localized safe mode' },
+                ],
+              },
+            },
+          },
+        },
+        { name: 'beta', description: 'Localized beta' },
+      ],
+    });
+    // 部分翻译是合法状态:只翻 alpha 的 description(不翻参数、不翻 beta),
+    // 缺失条目解析时回退原文。
+    const partial = validateGhostManifestLocaleResource({
+      name: 'Partial',
+      tools: { alpha: { description: 'Only alpha' } },
+    }, parsed.manifest);
+    expect(partial.ok, JSON.stringify(partial)).toBe(true);
+    if (!partial.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, partial.resource)).toMatchObject({
+      name: 'Partial',
+      description: 'Base description',
+      whenToUse: 'Base routing',
+      tools: [
+        {
+          name: 'alpha',
+          description: 'Only alpha',
+          parameters: {
+            title: 'Base arguments',
+            properties: { query: { title: 'Base query', description: 'Base query description' } },
+          },
+        },
+        { name: 'beta', description: 'Base beta' },
+      ],
+    });
+    // 连 name 都可以省:空对象 locale 合法,解析后与原 manifest 恒等。
+    const empty = validateGhostManifestLocaleResource({}, parsed.manifest);
+    expect(empty.ok).toBe(true);
+    if (!empty.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, empty.resource)).toMatchObject({
+      name: 'Base',
+      tools: [{ name: 'alpha', description: 'Base alpha' }, { name: 'beta', description: 'Base beta' }],
+    });
+    // 参数翻译允许只覆盖部分 pointer,未覆盖的回退。
+    const partialParams = validateGhostManifestLocaleResource({
+      tools: {
+        alpha: {
+          description: 'Localized alpha',
+          parameters: { '/properties/query': { title: 'Localized query', description: 'Localized query description' } },
+        },
+      },
+    }, parsed.manifest);
+    expect(partialParams.ok, JSON.stringify(partialParams)).toBe(true);
+    if (!partialParams.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, partialParams.resource)).toMatchObject({
+      tools: [
+        {
+          name: 'alpha',
+          parameters: {
+            title: 'Base arguments',
+            properties: { query: { title: 'Localized query', description: 'Localized query description' } },
+          },
+        },
+        { name: 'beta', description: 'Base beta' },
+      ],
+    });
+    // 翻译错位仍是硬错误:未知工具 / 未知 pointer / 未知字段 / 提供了条目却缺 description。
+    expect(validateGhostManifestLocaleResource({
+      tools: { gamma: { description: 'No such tool' } },
+    }, parsed.manifest).ok).toBe(false);
+    expect(validateGhostManifestLocaleResource({
+      tools: { alpha: { description: 'x', parameters: { '/properties/nope': { title: 'x' } } } },
+    }, parsed.manifest).ok).toBe(false);
+    expect(validateGhostManifestLocaleResource({
+      tools: { beta: { description: 'x', parameters: { '': { title: 'x' } } } },
+    }, parsed.manifest).ok).toBe(false);
+    expect(validateGhostManifestLocaleResource({
+      tools: { alpha: {} },
+    }, parsed.manifest).ok).toBe(false);
+    expect(validateGhostManifestLocaleResource({
+      description: 'x',
+      whenToUse: 'x',
+      extra: 'x',
+    }, parsed.manifest).ok).toBe(false);
+  });
+
+  it('locale 资源覆盖宿主持有的面板、凭证、连接与 setup 标签;标签可部分提供', () => {
+    const parsed = validateGhostManifest({
+      schemaVersion: 2,
+      id: 'localized-labels',
+      name: 'Base',
+      version: '1.0.0',
+      entry: 'main.js',
+      settingsHtml: 'settings.html',
+      slots: ['panel', 'network', 'node'],
+      panel: { title: 'Base panel', html: 'panel.html' },
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [{
+          key: 'api_key',
+          label: 'Base API key',
+          hint: 'Base secret hint',
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+        }],
+        connections: [{
+          key: 'instance',
+          label: 'Base instance',
+          hint: 'Base connection hint',
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+        }],
+      },
+      node: {
+        entry: 'node/worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [{
+          key: 'worker_key',
+          label: 'Base worker key',
+          hint: 'Base worker hint',
+          methods: ['run'],
+        }],
+      },
+      setup: {
+        requires: [{ anyOf: [{ kv: 'default_repo', label: 'Base repository' }] }],
+      },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const resource = validateGhostManifestLocaleResource({
+      name: 'Localized',
+      panel: { title: 'Localized panel' },
+      network: {
+        secrets: {
+          api_key: { label: 'Localized API key', hint: 'Localized secret hint' },
+        },
+        connections: {
+          instance: { label: 'Localized instance', hint: 'Localized connection hint' },
+        },
+      },
+      node: {
+        secretBindings: {
+          worker_key: { label: 'Localized worker key', hint: 'Localized worker hint' },
+        },
+      },
+      setup: {
+        kv: {
+          default_repo: { label: 'Localized repository' },
+        },
+      },
+    }, parsed.manifest);
+    expect(resource.ok).toBe(true);
+    if (!resource.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, resource.resource)).toMatchObject({
+      panel: { title: 'Localized panel' },
+      network: {
+        secrets: [{
+          key: 'api_key',
+          label: 'Localized API key',
+          hint: 'Localized secret hint',
+        }],
+        connections: [{
+          key: 'instance',
+          label: 'Localized instance',
+          hint: 'Localized connection hint',
+        }],
+      },
+      node: {
+        secretBindings: [{
+          key: 'worker_key',
+          label: 'Localized worker key',
+          hint: 'Localized worker hint',
+        }],
+      },
+      setup: {
+        requires: [{
+          anyOf: [{ kind: 'kv', key: 'default_repo', label: 'Localized repository' }],
+        }],
+      },
+    });
+    // 只翻面板标题、不翻凭证/连接/kv 也合法,缺失标签回退原文。
+    const panelOnly = validateGhostManifestLocaleResource({
+      name: 'Partial labels',
+      panel: { title: 'Localized panel' },
+    }, parsed.manifest);
+    expect(panelOnly.ok, JSON.stringify(panelOnly)).toBe(true);
+    if (!panelOnly.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, panelOnly.resource)).toMatchObject({
+      panel: { title: 'Localized panel' },
+      network: {
+        secrets: [{ key: 'api_key', label: 'Base API key', hint: 'Base secret hint' }],
+        connections: [{ key: 'instance', label: 'Base instance' }],
+      },
+      node: { secretBindings: [{ key: 'worker_key', label: 'Base worker key' }] },
+      setup: { requires: [{ anyOf: [{ kind: 'kv', key: 'default_repo', label: 'Base repository' }] }] },
+    });
+    // 提供的标签条目 label 必填、hint 可省(缺 hint 回退原文);未知 key 仍拒。
+    const labelNoHint = validateGhostManifestLocaleResource({
+      network: { secrets: { api_key: { label: 'Localized API key' } } },
+    }, parsed.manifest);
+    expect(labelNoHint.ok, JSON.stringify(labelNoHint)).toBe(true);
+    if (!labelNoHint.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, labelNoHint.resource)).toMatchObject({
+      network: {
+        secrets: [{ key: 'api_key', label: 'Localized API key', hint: 'Base secret hint' }],
+      },
+    });
+    expect(validateGhostManifestLocaleResource({
+      network: { secrets: { nope: { label: 'x' } } },
+    }, parsed.manifest).ok).toBe(false);
+    expect(validateGhostManifestLocaleResource({
+      network: { secrets: { api_key: { hint: 'hint without label' } } },
+    }, parsed.manifest).ok).toBe(false);
+    expect(validateGhostManifestLocaleResource({
+      setup: { kv: { default_repo: { label: 'x', hint: 'kv 未声明 hint' } } },
+    }, parsed.manifest).ok).toBe(false);
   });
 
   it('icon:可选包内相对路径,扩展名白名单;非法路径/扩展名 → 拒', () => {
@@ -368,6 +760,154 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(validateGhostManifest({ ...goodChipManifest(), slots: ['panel', 'node'] }).ok).toBe(false);
   });
 
+  it('node.secretBindings 逐方法声明保险库凭证并生成单独权限项', () => {
+    const result = validateGhostManifest({
+      ...goodChipManifest(),
+      settingsHtml: 'settings.html',
+      slots: ['panel', 'node'],
+      node: {
+        entry: 'node/worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [
+          {
+            key: 'mail_code',
+            label: '邮箱授权码',
+            methods: ['account/connect', 'mail/action'],
+            url: 'https://mail.example.com/settings',
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.node?.secretBindings).toEqual([
+      {
+        key: 'mail_code',
+        label: '邮箱授权码',
+        methods: ['account/connect', 'mail/action'],
+        url: 'https://mail.example.com/settings',
+      },
+    ]);
+    expect(ghostPermissionItems(result.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: expect.stringContaining('node:secret:mail_code'),
+          kind: 'node',
+          labelKey: 'nodeSecret',
+          labelArgs: { name: '邮箱授权码' },
+        }),
+      ]),
+    );
+
+    const reordered = validateGhostManifest({
+      ...goodChipManifest(),
+      settingsHtml: 'settings.html',
+      slots: ['panel', 'node'],
+      node: {
+        entry: 'node/worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [
+          {
+            key: 'mail_code',
+            label: '邮箱授权码',
+            methods: ['mail/action', 'account/connect'],
+            url: 'https://mail.example.com/settings',
+          },
+        ],
+      },
+    });
+    expect(reordered.ok).toBe(true);
+    if (!reordered.ok) return;
+    const permission = ghostPermissionItems(result.manifest).find((item) =>
+      item.key.startsWith('node:secret:mail_code:'),
+    );
+    const reorderedPermission = ghostPermissionItems(reordered.manifest).find((item) =>
+      item.key.startsWith('node:secret:mail_code:'),
+    );
+    expect(reorderedPermission?.key).toBe(permission?.key);
+    expect(reorderedPermission?.detail).toBe('mail/action\naccount/connect');
+
+    expect(ghostExternalLinkUrls(result.manifest)).toContain('https://mail.example.com/settings');
+  });
+
+  it('node.secretBindings 缺设置页、坏方法/入口、重复键或与 network 凭证撞名均拒', () => {
+    const base = {
+      ...goodChipManifest(),
+      settingsHtml: 'settings.html',
+      slots: ['panel', 'node'],
+      node: {
+        entry: 'node/worker.cjs',
+        entries: ['node/secondary.cjs'],
+        protocol: 'json-rpc-stdio',
+      },
+    };
+    const binding = { key: 'mail_code', label: '邮箱授权码', methods: ['mail/action'] };
+    expect(
+      validateGhostManifest({
+        ...base,
+        settingsHtml: undefined,
+        node: { ...base.node, secretBindings: [binding] },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: { ...base.node, secretBindings: [{ ...binding, methods: ['bad method'] }] },
+      }).ok,
+    ).toBe(false);
+    for (const method of ['initialize', 'notifications/initialized']) {
+      expect(
+        validateGhostManifest({
+          ...base,
+          node: {
+            ...base.node,
+            protocol: 'mcp-stdio',
+            secretBindings: [{ ...binding, methods: [method] }],
+          },
+        }).ok,
+      ).toBe(false);
+    }
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: {
+          ...base.node,
+          protocol: 'json-rpc-stdio',
+          secretBindings: [{ ...binding, methods: ['initialize'] }],
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: { ...base.node, secretBindings: [{ ...binding, entry: 'node/other.cjs' }] },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: { ...base.node, secretBindings: [binding, binding] },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['panel', 'node', 'network'],
+        node: { ...base.node, secretBindings: [binding] },
+        network: {
+          hosts: ['api.example.com'],
+          secrets: [
+            {
+              key: 'mail_code',
+              label: '重复',
+              inject: { header: 'Authorization', format: 'Bearer {value}' },
+            },
+          ],
+        },
+      }).ok,
+    ).toBe(false);
+  });
+
   it('工具声明(卡槽②)与 tool 槽成对;名/描述/条数校验', () => {
     const withTools = (slots: string[], tools: unknown) =>
       validateGhostManifest({ ...goodChipManifest(), slots, tools });
@@ -437,16 +977,16 @@ describe('ghost · layoutWithGhostPanel(装入即停靠)', () => {
     panel: { html: 'panel.html', minWidth: 240, defaultFraction: 0.18 },
   });
 
-  it('新装缺省 position:停在主聊天窗右侧(默认 right,2026-07-12 定案)', () => {
+  it('新装缺省 position:停在主聊天窗左侧(right 退役,2026-07-25 定案)', () => {
     const next = layoutWithGhostPanel(createDefaultLayout(), manifest());
     expect(next).not.toBeNull();
     const split = next!.content as SplitNode;
     expect(split.children.map((c) => (c.node.type === 'pane' ? c.node.panelKind : '?'))).toEqual([
-      'chat-main',
       'ghost:hello',
+      'chat-main',
       'right-tabs',
     ]);
-    const pane = split.children[1];
+    const pane = split.children[0];
     expect(pane.fraction).toBeCloseTo(0.18, 5);
     expect(pane.node.type === 'pane' && pane.node.minWidth).toBe(240);
     // 全体份额仍归一
@@ -480,8 +1020,14 @@ describe('ghost · layoutWithGhostPanel(装入即停靠)', () => {
     const m = manifest();
     delete m.panel!.defaultFraction;
     const next = layoutWithGhostPanel(createDefaultLayout(), m);
-    // 缺省 position=right,面板在 chat-main 之后(下标 1)。
-    expect((next!.content as SplitNode).children[1].fraction).toBeCloseTo(0.2, 5);
+    // 缺省 position=left,面板在 chat-main 之前(下标 0)。
+    expect((next!.content as SplitNode).children[0].fraction).toBeCloseTo(0.2, 5);
+  });
+
+  it("position: 'tab' → null,不进布局树(页签形态由右侧栏承载)", () => {
+    const m = manifest();
+    m.panel = { html: 'panel.html', position: 'tab' };
+    expect(layoutWithGhostPanel(createDefaultLayout(), m)).toBeNull();
   });
 });
 
@@ -689,15 +1235,16 @@ describe('ghost · description(自我介绍)', () => {
 });
 
 describe('ghost · panel.position 校验', () => {
-  it('left/right 通过并进清单;top/bottom 收词但明确拒绝;野值拒', () => {
+  it('left 通过;right 退役兼容归一化为 left;top/bottom 收词但明确拒绝;野值拒', () => {
     const withPos = (position: unknown) => ({
       ...goodManifest(),
       panel: { title: 'Hello', html: 'panel.html', position },
     });
     const left = validateGhostManifest(withPos('left'));
     expect(left.ok && left.manifest.panel?.position).toBe('left');
+    // 旧包兼容:right 不拒装(已装插件每次启动重过校验),归一化为 left。
     const right = validateGhostManifest(withPos('right'));
-    expect(right.ok && right.manifest.panel?.position).toBe('right');
+    expect(right.ok && right.manifest.panel?.position).toBe('left');
 
     for (const pending of ['top', 'bottom']) {
       const v = validateGhostManifest(withPos(pending));
@@ -705,6 +1252,24 @@ describe('ghost · panel.position 校验', () => {
       expect(!v.ok && v.reason).toContain('暂未支持');
     }
     expect(validateGhostManifest(withPos('center')).ok).toBe(false);
+  });
+
+  it("'tab'(右侧栏页签)通过;tab 时 minWidth/defaultFraction 收词明确拒绝", () => {
+    const tab = validateGhostManifest({
+      ...goodManifest(),
+      panel: { title: 'Hello', html: 'panel.html', position: 'tab' },
+    });
+    expect(tab.ok && tab.manifest.panel?.position).toBe('tab');
+
+    // 页签没有拖缝宽度语义:带停靠专属字段必须明确拒绝,不静默忽略(规则 9)。
+    for (const extra of [{ minWidth: 240 }, { defaultFraction: 0.2 }, { minWidth: 240, defaultFraction: 0.2 }]) {
+      const v = validateGhostManifest({
+        ...goodManifest(),
+        panel: { title: 'Hello', html: 'panel.html', position: 'tab', ...extra },
+      });
+      expect(v.ok, JSON.stringify(extra)).toBe(false);
+      expect(!v.ok && v.reason).toContain('仅停靠形态');
+    }
   });
 });
 
@@ -808,8 +1373,13 @@ describe('ghost · 逐项权限清单', () => {
       panel: { html: 'panel.html' },
     };
     const items = ghostPermissionItems(plain);
-    expect(items.map((i) => i.key)).toEqual(['panel:right', 'code']);
-    expect(items[0]).toMatchObject({ labelKey: 'panelRight', labelArgs: { title: '说明书' } });
+    expect(items.map((i) => i.key)).toEqual(['panel:left', 'code']);
+    expect(items[0]).toMatchObject({ labelKey: 'panelLeft', labelArgs: { title: '说明书' } });
+
+    // 页签形态在确认框同样逐项如实展示(labelKey 独立成 panelTab)。
+    const tabbed = ghostPermissionItems({ ...plain, panel: { html: 'panel.html', position: 'tab' } });
+    expect(tabbed.map((i) => i.key)).toEqual(['panel:tab', 'code']);
+    expect(tabbed[0]).toMatchObject({ labelKey: 'panelTab', labelArgs: { title: '说明书' } });
 
     const chipNoNeeds: GhostManifest = {
       schemaVersion: 2,
@@ -831,10 +1401,10 @@ describe('ghost · 逐项权限清单', () => {
       version: '2.0.0',
       cindy: { image: ['generate'] }, // 移除 edit
       tools: [...(fullChip().tools ?? []), { name: 'style_image', description: '风格化' }], // 新增工具
-      panel: { title: '画廊', html: 'panel.html', position: 'right' }, // 换边
+      panel: { title: '画廊', html: 'panel.html', position: 'tab' }, // 换形态(right 已退役)
     };
     const diff = diffGhostPermissionItems(prev, next);
-    expect(diff.added.map((i) => i.key).sort()).toEqual(['panel:right', 'tool:style_image']);
+    expect(diff.added.map((i) => i.key).sort()).toEqual(['panel:tab', 'tool:style_image']);
     expect(diff.removed.map((i) => i.key).sort()).toEqual(['cindy:image.edit', 'panel:left']);
     expect(diff.unchanged.map((i) => i.key)).toEqual([
       'cindy:image.generate',
@@ -1620,7 +2190,7 @@ describe('ghost · settingsHtml 自绘设置区 + settingsHeight', () => {
   });
 });
 
-describe('ghost · 凭证收单一律意识自绘(2026-07-13 宿主凭证渲染退役)', () => {
+describe('ghost · user 凭证由 Host Setup 收单并保留 settingsHtml 管理入口', () => {
   function withSecret(secret: Record<string, unknown>, extra: Record<string, unknown> = {}) {
     return validateGhostManifest({
       ...goodManifest(),
@@ -1650,7 +2220,7 @@ describe('ghost · 凭证收单一律意识自绘(2026-07-13 宿主凭证渲染�
     expect(legacy.ok && 'input' in (legacy.manifest.network?.secrets?.[0] ?? {})).toBe(false);
   });
 
-  it('user 凭证没声明 settingsHtml → 拒(宿主渲染输入行已退役,没有界面就没人收单)', () => {
+  it('user 凭证没声明 settingsHtml → 拒(仍缺少长期管理/替换/清除入口)', () => {
     for (const secret of [{}, { input: 'ghost' }]) {
       const r = withSecret(secret);
       expect(r.ok, JSON.stringify(secret)).toBe(false);
@@ -1658,7 +2228,7 @@ describe('ghost · 凭证收单一律意识自绘(2026-07-13 宿主凭证渲染�
     }
   });
 
-  it("input:'host' → 拒(宿主收单已退役);其它非法值同拒", () => {
+  it("input:'host' → 拒(旧 input 字段已退役);其它非法值同拒", () => {
     const host = withSecret({ input: 'host' }, { settingsHtml: 'settings.html' });
     expect(host.ok).toBe(false);
     expect(!host.ok && host.reason).toContain('退役');
@@ -1758,14 +2328,15 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
     expect(withPreview({ hosts: ['a.example.com'], extra: 1 }).ok).toBe(false);
   });
 
-  it('session-context / pick 槽:纯槽声明即可装入,并生成对应权限项', () => {
+  it('session-context / pick / workspace 槽:纯槽声明即可装入,并生成对应权限项', () => {
     const r = validateGhostManifest({
       ...goodChipManifest(),
-      slots: ['panel', 'session-context', 'pick', 'preview'],
+      slots: ['panel', 'session-context', 'pick', 'preview', 'workspace'],
       preview: { hosts: ['example.com'] },
     });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
+    expect(ghostContentKeys(r.manifest)).toContain('slotWorkspace');
     const items = ghostPermissionItems(r.manifest);
     expect(items).toEqual(
       expect.arrayContaining([
@@ -1780,6 +2351,12 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
           kind: 'preview',
           labelKey: 'preview',
           detail: 'example.com',
+        }),
+        expect.objectContaining({
+          key: 'workspace',
+          kind: 'workspace',
+          labelKey: 'workspace',
+          detailKey: 'workspaceDetail',
         }),
       ]),
     );
@@ -1818,25 +2395,67 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
       session_id: null,
       workdir: '/als/dir',
       workdir_is_local: false,
+      workdir_is_read_only: true,
     });
     // 有 sessionId 但查无会话:同样不可当本地
     expect(deriveGhostSessionContext('s1', '/als/dir', null)).toEqual({
       session_id: 's1',
       workdir: '/als/dir',
       workdir_is_local: false,
+      workdir_is_read_only: true,
     });
     // 本地会话:workdir 取会话真身,可当本地
     expect(
-      deriveGhostSessionContext('s1', null, { workingDir: '/proj', remoteHostId: null }),
-    ).toEqual({ session_id: 's1', workdir: '/proj', workdir_is_local: true });
+      deriveGhostSessionContext('s1', null, {
+        workingDir: '/proj',
+        remoteHostId: null,
+        workdirIsReadOnly: false,
+      }),
+    ).toEqual({
+      session_id: 's1',
+      workdir: '/proj',
+      workdir_is_local: true,
+      workdir_is_read_only: false,
+    });
+    // 计划 / 只读会话:位置仍是本地,但插件不得修改 workdir
+    expect(
+      deriveGhostSessionContext('s1', null, {
+        workingDir: '/proj',
+        remoteHostId: null,
+        workdirIsReadOnly: true,
+      }),
+    ).toEqual({
+      session_id: 's1',
+      workdir: '/proj',
+      workdir_is_local: true,
+      workdir_is_read_only: true,
+    });
     // SSH 远程会话:路径给(远端事实),但绝不许当本地
     expect(
-      deriveGhostSessionContext('s1', null, { workingDir: '/remote/proj', remoteHostId: 'h1' }),
-    ).toEqual({ session_id: 's1', workdir: '/remote/proj', workdir_is_local: false });
+      deriveGhostSessionContext('s1', null, {
+        workingDir: '/remote/proj',
+        remoteHostId: 'h1',
+        workdirIsReadOnly: false,
+      }),
+    ).toEqual({
+      session_id: 's1',
+      workdir: '/remote/proj',
+      workdir_is_local: false,
+      workdir_is_read_only: false,
+    });
     // 会话存在但没 workdir:没有可当本地的对象
     expect(
-      deriveGhostSessionContext('s1', null, { workingDir: null, remoteHostId: null }),
-    ).toEqual({ session_id: 's1', workdir: null, workdir_is_local: false });
+      deriveGhostSessionContext('s1', null, {
+        workingDir: null,
+        remoteHostId: null,
+        workdirIsReadOnly: false,
+      }),
+    ).toEqual({
+      session_id: 's1',
+      workdir: null,
+      workdir_is_local: false,
+      workdir_is_read_only: false,
+    });
   });
 });
 
@@ -1925,5 +2544,149 @@ describe('ghost · 宿主代启子进程(node.childSpawn,2026-07-23)', () => {
         b64: 'a'.repeat(1024 * 1024 + 1),
       }),
     ).toBeNull();
+  });
+});
+
+describe('ghost · skill 槽(捆绑 Agent Skills,2026-07-25)', () => {
+  const withSkill = (skill: unknown, slots: string[] = ['panel', 'skill']) =>
+    validateGhostManifest({ ...goodChipManifest(), slots, skill });
+  const goodItems = [
+    { dir: 'skills/foo', name: 'foo', description: '教 Agent 用 foo' },
+  ];
+
+  it('槽与详单严格成对;合法声明原样收录', () => {
+    // 有槽必有详单
+    expect(validateGhostManifest({ ...goodChipManifest(), slots: ['panel', 'skill'] }).ok).toBe(false);
+    // 有详单必有槽
+    expect(
+      validateGhostManifest({ ...goodChipManifest(), skill: { items: goodItems } }).ok,
+    ).toBe(false);
+    const good = withSkill({ items: goodItems });
+    expect(good.ok).toBe(true);
+    if (good.ok) expect(good.manifest.skill?.items).toEqual(goodItems);
+  });
+
+  it('items 形状:空/超限/非对象/自造字段一律拒', () => {
+    expect(withSkill({ items: [] }).ok).toBe(false);
+    expect(withSkill({}).ok).toBe(false);
+    expect(withSkill({ items: goodItems, extra: 1 }).ok).toBe(false);
+    expect(withSkill({ items: ['skills/foo'] }).ok).toBe(false);
+    expect(
+      withSkill({ items: [{ ...goodItems[0], scope: 'global' }] }).ok,
+    ).toBe(false);
+    const five = Array.from({ length: 5 }, (_, i) => ({
+      dir: `skills/s${i}`,
+      name: `s${i}`,
+      description: 'x',
+    }));
+    expect(withSkill({ items: five }).ok).toBe(false);
+    // 恰好 4 条放行
+    expect(withSkill({ items: five.slice(0, 4) }).ok).toBe(true);
+  });
+
+  it('dir:必须是包内安全相对路径', () => {
+    const item = (dir: string) => withSkill({ items: [{ dir, name: 'foo', description: 'x' }] });
+    expect(item('../evil').ok).toBe(false);
+    expect(item('/abs/path').ok).toBe(false);
+    expect(item('skills\\foo').ok).toBe(false);
+    expect(item('skills/./foo').ok).toBe(false);
+    expect(item('').ok).toBe(false);
+    expect(item('skills/foo').ok).toBe(true);
+  });
+
+  it('name:小写字母数字单连字符分段;禁首尾/连续连字符(链接名 <id>--<name> 的无歧义前提)', () => {
+    const named = (name: string) => withSkill({ items: [{ dir: 'skills/foo', name, description: 'x' }] });
+    expect(named('foo-bar').ok).toBe(true);
+    expect(named('foo2').ok).toBe(true);
+    expect(named('Foo').ok).toBe(false);
+    expect(named('-foo').ok).toBe(false);
+    expect(named('foo-').ok).toBe(false);
+    expect(named('foo--bar').ok).toBe(false);
+    expect(named('').ok).toBe(false);
+    expect(named('a'.repeat(65)).ok).toBe(false);
+    expect(named('a'.repeat(64)).ok).toBe(true);
+  });
+
+  it('description:1–1024 非空;name/dir 大小写折叠去重', () => {
+    const desc = (description: unknown) =>
+      withSkill({ items: [{ dir: 'skills/foo', name: 'foo', description }] });
+    expect(desc('').ok).toBe(false);
+    expect(desc('   ').ok).toBe(false);
+    expect(desc('x'.repeat(1025)).ok).toBe(false);
+    expect(desc('x'.repeat(1024)).ok).toBe(true);
+    expect(desc(42).ok).toBe(false);
+    // 重复 name(等值)拒
+    expect(
+      withSkill({
+        items: [
+          { dir: 'skills/a', name: 'foo', description: 'x' },
+          { dir: 'skills/b', name: 'foo', description: 'y' },
+        ],
+      }).ok,
+    ).toBe(false);
+    // 重复 dir 大小写折叠拒(win32 文件系统折叠大小写)
+    expect(
+      withSkill({
+        items: [
+          { dir: 'skills/A', name: 'foo', description: 'x' },
+          { dir: 'skills/a', name: 'bar', description: 'y' },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('权限清单:逐技能置顶展示,key 稳定,detail = 声明的 description;详情页内容含 slotSkill', () => {
+    const r = withSkill({
+      items: [
+        { dir: 'skills/alpha', name: 'alpha', description: '技能 A' },
+        { dir: 'skills/beta', name: 'beta', description: '技能 B' },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const items = ghostPermissionItems(r.manifest);
+    // 置顶簇:两条 skill 项按声明顺序排在清单最前
+    expect(items[0]).toMatchObject({
+      key: 'skill:alpha',
+      kind: 'skill',
+      labelKey: 'skill',
+      labelArgs: { name: 'alpha' },
+      detailKey: 'skillDetail',
+      detail: '技能 A',
+    });
+    expect(items[1]).toMatchObject({ key: 'skill:beta', detail: '技能 B' });
+    expect(ghostContentKeys(r.manifest)).toContain('slotSkill');
+  });
+
+  it('更新 diff：技能增删可见,不变项不进 diff', () => {
+    const v1 = withSkill({
+      items: [{ dir: 'skills/alpha', name: 'alpha', description: '技能 A' }],
+    });
+    const v2 = withSkill({
+      items: [
+        { dir: 'skills/alpha', name: 'alpha', description: '技能 A' },
+        { dir: 'skills/beta', name: 'beta', description: '技能 B' },
+      ],
+    });
+    expect(v1.ok && v2.ok).toBe(true);
+    if (!v1.ok || !v2.ok) return;
+    const diff = diffGhostPermissionItems(v1.manifest, v2.manifest);
+    expect(diff.added.map((i) => i.key)).toContain('skill:beta');
+    expect(diff.removed.map((i) => i.key)).not.toContain('skill:alpha');
+  });
+
+  it('更新 diff：同名技能改 description 视为权限变更(added+removed)', () => {
+    const v1 = withSkill({
+      items: [{ dir: 'skills/alpha', name: 'alpha', description: '旧描述' }],
+    });
+    const v2 = withSkill({
+      items: [{ dir: 'skills/alpha', name: 'alpha', description: '新描述' }],
+    });
+    expect(v1.ok && v2.ok).toBe(true);
+    if (!v1.ok || !v2.ok) return;
+    const diff = diffGhostPermissionItems(v1.manifest, v2.manifest);
+    expect(diff.added.map((i) => i.key)).toContain('skill:alpha');
+    expect(diff.removed.map((i) => i.key)).toContain('skill:alpha');
+    expect(diff.unchanged.map((i) => i.key)).not.toContain('skill:alpha');
   });
 });

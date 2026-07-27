@@ -141,11 +141,6 @@ function FileBrowserBodyWithWorkdir({
   const fileDragDepthRef = useRef(0);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const confirmSwitchAway = useConfirmSwitchAwayIfDirty();
-  // 项目级文件名扁平列表(走 ripgrep --files honor .gitignore),给文件名筛选用。
-  // 缓存 30 秒,跨 tab 共享同 workdir 索引;tree.refresh 时同步 invalidate。
-  // remote:daemon 内跑远端 rg;远端没有 rg 时返回空 + error,走"未索引"占位。
-  const projectFiles = useProjectFileList(workdir, remoteHostId, deviceId);
-
   // 文件树 / 搜索 双模式 —— 跟 doc 模式 sidebar 同 ergonomics(参考 WorkdirBrowseSidebar
   // L124 的 mode state)。mode 不持久化,关 tab 重开默认 tree(合理预期:用户切到
   // 新 tab 期望"看文件",不是"接着上次的搜索状态")。
@@ -155,6 +150,15 @@ function FileBrowserBodyWithWorkdir({
   // 文件名筛选 query —— tree 模式下用,独立于内容搜索。空 query 显示文件树,有
   // 内容显示筛选结果列表。不持久化(关 tab 重开默认空)。
   const [filterQuery, setFilterQuery] = useState('');
+  // 项目级文件名扁平列表(走 ripgrep --files honor .gitignore),给文件名筛选用。
+  // 缓存 30 秒,跨 tab 共享同 workdir 索引;tree.refresh 时同步 invalidate。
+  // remote:daemon 内跑远端 rg;远端没有 rg 时返回空 + error,走"未索引"占位。
+  // enabled 惰性拉取:query 为空(FilterResultList 不显示)时不扫描 —— 切会话
+  // 不再为用不上的索引付 rg + IPC + 建索引的主线程成本。trim 与 filterFiles
+  // 的匹配语义对齐:纯空格 query 结果必为空,不值得为它扫描。
+  const projectFiles = useProjectFileList(workdir, remoteHostId, deviceId, {
+    enabled: filterQuery.trim() !== '',
+  });
   const filteredFiles = useMemo(
     () => filterFiles(filterQuery, projectFiles.files),
     [filterQuery, projectFiles.files],

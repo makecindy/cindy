@@ -54,7 +54,22 @@ const inflight = new Map<ListStatusFilter, Promise<Session[]>>();
 /** 列表请求期间收到的 session 费用权威值及其本地事件版本。 */
 interface SessionSpendOverride {
   revision: number;
-  totalCostUsd: number;
+  totalCostUsd?: number;
+  /** CN 构建推送只带结构化金额,与 totalCostUsd 一样需要防旧列表覆盖。 */
+  totalMoney?: NonNullable<Session['totalMoney']>;
+}
+
+function sameMoney(
+  a: Session['totalMoney'],
+  b: Session['totalMoney'],
+): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.amount === b.amount &&
+    a.currency === b.currency &&
+    a.approximate === b.approximate &&
+    a.kind === b.kind
+  );
 }
 
 const sessionSpendOverrides = new Map<string, SessionSpendOverride>();
@@ -85,9 +100,19 @@ function applySessionSpendOverrides(list: Session[], afterRevision: number): Ses
   const next = list.map((session) => {
     const override = sessionSpendOverrides.get(session.id);
     if (!override || override.revision <= afterRevision) return session;
-    if (override.totalCostUsd === session.totalCostUsd) return session;
+    const patch: Partial<Session> = {};
+    if (
+      override.totalCostUsd !== undefined &&
+      override.totalCostUsd !== session.totalCostUsd
+    ) {
+      patch.totalCostUsd = override.totalCostUsd;
+    }
+    if (override.totalMoney && !sameMoney(override.totalMoney, session.totalMoney)) {
+      patch.totalMoney = override.totalMoney;
+    }
+    if (Object.keys(patch).length === 0) return session;
     changed = true;
-    return mergeSession(session, { totalCostUsd: override.totalCostUsd });
+    return mergeSession(session, patch);
   });
   return changed ? next : list;
 }
@@ -203,11 +228,13 @@ export const sessionsStore = {
       }
       return;
     }
-    if (patch.totalCostUsd !== undefined) {
+    if (patch.totalCostUsd !== undefined || patch.totalMoney !== undefined) {
       sessionSpendRevision += 1;
+      const prev = sessionSpendOverrides.get(id);
       sessionSpendOverrides.set(id, {
         revision: sessionSpendRevision,
-        totalCostUsd: patch.totalCostUsd,
+        totalCostUsd: patch.totalCostUsd ?? prev?.totalCostUsd,
+        totalMoney: patch.totalMoney ?? prev?.totalMoney,
       });
     }
     let touched = false;
@@ -285,9 +312,14 @@ if (typeof window !== 'undefined') {
     void sessionsStore.forceRefreshAll();
   });
 
-  window.electronAPI?.onUsageSessionSpendChanged?.(({ sessionId, totalCostUsd }) => {
-    sessionsStore.patchLocal(sessionId, { totalCostUsd });
-  });
+  window.electronAPI?.onUsageSessionSpendChanged?.(
+    ({ sessionId, totalMoney, totalCostUsd }) => {
+      sessionsStore.patchLocal(sessionId, {
+        ...(totalMoney ? { totalMoney } : {}),
+        ...(typeof totalCostUsd === 'number' ? { totalCostUsd } : {}),
+      });
+    },
+  );
 
   const sessionsPush = window.electronAPI?.localDb?.sessionsPush;
   if (sessionsPush) {

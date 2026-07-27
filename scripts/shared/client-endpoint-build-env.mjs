@@ -14,7 +14,7 @@ export const CLIENT_BUILD_REGIONS = Object.freeze(['cn', 'global', 'dev']);
 
 /** 规范化并校验构建 region。 */
 export function resolveClientBuildRegion(authRegion) {
-  const region = authRegion?.trim() || 'cn';
+  const region = authRegion?.trim() || 'global';
   if (!CLIENT_BUILD_REGIONS.includes(region)) {
     throw new Error(`Invalid Cindy auth region: ${region}; expected cn, global or dev`);
   }

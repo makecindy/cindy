@@ -34,7 +34,9 @@ import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings.js';
 import {
   __testing,
   readImDefaultSettings,
+  readImDefaultSettingsState,
   resetImDefaultSettings,
+  resetImDefaultSettingsChannel,
   writeImDefaultSettingsPatch,
 } from '../defaultSettingsStore';
 
@@ -84,7 +86,9 @@ describe('im default settings store', () => {
       },
     });
 
-    expect(JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'))).toEqual({
+    const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
+    expect(persisted.schemaVersion).toBe(2);
+    expect(persisted.global).toEqual({
       agents: {
         codex: {
           providerId: 'openai',
@@ -93,6 +97,9 @@ describe('im default settings store', () => {
         },
       },
     });
+    // Legacy flat fields preserved for old app versions
+    expect(persisted.agentKind).toBe(IM_DEFAULT_SETTINGS.agentKind);
+    expect(persisted.agents).toBeDefined();
   });
 
   it('preserves existing agent overrides when another agent is updated', () => {
@@ -116,7 +123,9 @@ describe('im default settings store', () => {
       },
     });
 
-    expect(JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'))).toEqual({
+    const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
+    expect(persisted.schemaVersion).toBe(2);
+    expect(persisted.global).toEqual({
       agents: {
         'claude-code': {
           providerId: 'anthropic',
@@ -128,6 +137,20 @@ describe('im default settings store', () => {
           model: 'gpt-5.5',
           effort: 'high',
         },
+      },
+    });
+    // Legacy flat fields mirror global route for backward compatibility
+    expect(persisted.agentKind).toBe(IM_DEFAULT_SETTINGS.agentKind);
+    expect(persisted.agents).toEqual({
+      'claude-code': {
+        providerId: 'anthropic',
+        model: 'claude-sonnet-4-8',
+        effort: 'xhigh',
+      },
+      codex: {
+        providerId: 'openai',
+        model: 'gpt-5.5',
+        effort: 'high',
       },
     });
   });
@@ -149,6 +172,129 @@ describe('im default settings store', () => {
 
     scopeMocks.owner = 'cloud-a';
     expect(readImDefaultSettings().agentKind).toBe('codex');
-    expect(JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'))).toEqual({ agentKind: 'codex' });
+    const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
+    expect(persisted.schemaVersion).toBe(2);
+    expect(persisted.global).toEqual({ agentKind: 'codex' });
+    expect(persisted.agentKind).toBe('codex');
+  });
+
+  it('migrates a legacy global override into independent channel routes', () => {
+    const migrated = __testing.normalizeDocument({
+      ...IM_DEFAULT_SETTINGS,
+      agentKind: 'codex',
+      agents: {
+        ...IM_DEFAULT_SETTINGS.agents,
+        codex: {
+          providerId: 'openai',
+          model: 'gpt-5.5',
+          effort: 'high',
+        },
+      },
+    });
+
+    expect(migrated.global.agentKind).toBe('codex');
+    expect(migrated.channels.feishu).toEqual(migrated.global);
+    expect(migrated.channels.discord).toEqual(migrated.global);
+    expect(migrated.channels.slack).toEqual(migrated.global);
+  });
+
+  it('detects legacy files even when v2 defaults are merged in by createOverrideSettingsFile', () => {
+    // createOverrideSettingsFile calls normalize({ ...defaults(), ...overrides }).
+    // For a v1 file the overrides are flat route fields; defaults inject
+    // schemaVersion/global/channels. Legacy detection must still trigger.
+    const v2Defaults = {
+      schemaVersion: 2,
+      global: IM_DEFAULT_SETTINGS,
+      channels: {
+        feishu: IM_DEFAULT_SETTINGS,
+        discord: IM_DEFAULT_SETTINGS,
+        slack: IM_DEFAULT_SETTINGS,
+      },
+    };
+
+    // Case 1: v1 file with scalar fields (providerId/model/effort)
+    const v1WithScalars = { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5', effort: 'high' };
+    const merged1 = { ...v2Defaults, ...v1WithScalars };
+    const migrated1 = __testing.normalizeDocument(merged1);
+    expect(migrated1.global.agentKind).toBe('codex');
+    expect(migrated1.global.agents.codex.providerId).toBe('openai');
+    expect(migrated1.channels.feishu).toEqual(migrated1.global);
+
+    // Case 2: v1 file with only agentKind (no scalar fields)
+    const v1AgentOnly = { agentKind: 'codex' };
+    const merged2 = { ...v2Defaults, ...v1AgentOnly };
+    const migrated2 = __testing.normalizeDocument(merged2);
+    expect(migrated2.global.agentKind).toBe('codex');
+    expect(migrated2.channels.feishu.agentKind).toBe('codex');
+    expect(migrated2.channels.discord.agentKind).toBe('codex');
+
+    // Case 3: v1 file with only agents (user changed model/provider, kept default agent)
+    const v1AgentsOnly = {
+      agents: {
+        'claude-code': { providerId: 'anthropic', model: 'claude-sonnet-4-8', effort: 'high' },
+      },
+    };
+    const merged3 = { ...v2Defaults, ...v1AgentsOnly };
+    const migrated3 = __testing.normalizeDocument(merged3);
+    expect(migrated3.global.agents['claude-code'].model).toBe('claude-sonnet-4-8');
+    expect(migrated3.global.agents['claude-code'].providerId).toBe('anthropic');
+    expect(migrated3.channels.feishu.agents['claude-code'].model).toBe('claude-sonnet-4-8');
+    expect(migrated3.channels.slack.agents['claude-code'].model).toBe('claude-sonnet-4-8');
+  });
+
+  it('does not misidentify a v2 file with partial global as legacy after channel edit', () => {
+    // Simulate: user customizes global, then edits one channel. The on-disk v2
+    // file has a partial `global` override and full root `agents` mirror.
+    // After defaults merge this must NOT trigger legacy migration.
+    const v2Defaults = {
+      schemaVersion: 2,
+      global: IM_DEFAULT_SETTINGS,
+      channels: {
+        feishu: IM_DEFAULT_SETTINGS,
+        discord: IM_DEFAULT_SETTINGS,
+        slack: IM_DEFAULT_SETTINGS,
+      },
+    };
+    const v2FileOverrides = {
+      schemaVersion: 2,
+      global: { agentKind: 'codex' },
+      channels: { feishu: { agentKind: 'codex', agents: { codex: { providerId: 'openai', model: 'gpt-5.5', effort: 'high' } } } },
+      agentKind: 'codex',
+      agents: { 'claude-code': IM_DEFAULT_SETTINGS.agents['claude-code'], codex: { providerId: null, model: IM_DEFAULT_SETTINGS.agents.codex.model, effort: IM_DEFAULT_SETTINGS.agents.codex.effort } },
+    };
+    const merged = { ...v2Defaults, ...v2FileOverrides };
+    const result = __testing.normalizeDocument(merged);
+
+    // Must preserve per-channel data, NOT flatten everything from global
+    expect(result.channels.feishu.agentKind).toBe('codex');
+    expect(result.channels.feishu.agents.codex.providerId).toBe('openai');
+    // Discord should remain at defaults (not overwritten by global's codex)
+    expect(result.channels.discord.agentKind).toBe(IM_DEFAULT_SETTINGS.agentKind);
+  });
+
+  it('writes and resets one channel without changing another channel', () => {
+    writeImDefaultSettingsPatch({ agentKind: 'codex' }, 'feishu');
+    writeImDefaultSettingsPatch(
+      {
+        agents: {
+          'claude-code': {
+            providerId: 'anthropic',
+            model: 'claude-sonnet-4-8',
+            effort: 'high',
+          },
+        },
+      },
+      'discord',
+    );
+
+    expect(readImDefaultSettings('feishu').agentKind).toBe('codex');
+    expect(readImDefaultSettings('discord').agentKind).toBe('claude-code');
+    expect(readImDefaultSettings('discord').agents['claude-code'].model).toBe('claude-sonnet-4-8');
+
+    resetImDefaultSettingsChannel('feishu');
+
+    expect(readImDefaultSettingsState('feishu').isCustomized).toBe(false);
+    expect(readImDefaultSettings('feishu')).toEqual(IM_DEFAULT_SETTINGS);
+    expect(readImDefaultSettings('discord').agents['claude-code'].model).toBe('claude-sonnet-4-8');
   });
 });

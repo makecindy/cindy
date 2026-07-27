@@ -26,6 +26,7 @@
   },
   "screen": {
     "composerSyncing": "세션 데이터를 동기화 중입니다. 완료되면 보낼 수 있습니다.",
+    "composerSessionNotSynced": "이 대화는 아직 동기화가 끝나지 않았습니다.",
     "composerCreating": "세션을 만드는 중입니다. 첫 메시지가 전송되면 계속 보낼 수 있습니다.",
     "nextAgentSwitch": "다음부터 {{agent}} · {{model}}(으)로 전환",
     "createFailedTitle": "세션 생성 실패",
@@ -123,7 +124,7 @@
     "selectProjectNamed": "프로젝트 {{title}} 선택",
     "noProjects": "아직 프로젝트가 없습니다",
     "chooseOtherFolder": "다른 프로젝트 폴더 선택",
-    "readingRemoteDir": "원격 디렉터리를 읽는 중...",
+    "readingRemoteDir": "원격 디렉터리를 읽는 중…",
     "goParentDir": "상위 디렉터리로",
     "parentDir": "상위",
     "useCurrentRemoteDir": "현재 원격 디렉터리 사용",
@@ -218,7 +219,7 @@
     "retry": "다시 시도",
     "ignore": "무시",
     "codexThreadLost": "Codex 인증 모드가 전환되어 이 세션을 계속할 수 없습니다 —— 새 세션을 만들면 적용됩니다.",
-    "encryptedContentInvalid": "공급자 변경으로 암호화를 사용할 수 없게 되어 이 세션은 원래 공급자에서만 사용할 수 있습니다. 컴퓨터에서 처리하세요(Fork하여 프로토콜 암호화 콘텐츠를 버린 후 새 세션에서 계속할 수 있습니다)."
+    "encryptedContentInvalid": "제공자 변경으로 암호화를 사용할 수 없게 되어 이 세션은 원래 제공자에서만 사용할 수 있습니다. 컴퓨터에서 처리하세요(Fork하여 프로토콜 암호화 콘텐츠를 버린 후 새 세션에서 계속할 수 있습니다)."
   },
   "row": {
     "moreOptions": "기타 옵션",
@@ -232,6 +233,6 @@
     "extraDirsSummary": "추가 디렉터리 {{num}}개",
     "noExtraDirsSummary": "추가 디렉터리 없음",
     "attachmentUploadFailed": "첨부 업로드에 실패했습니다. 다시 시도하거나 이 메시지를 삭제하세요.",
-    "authGateHint": "이 컴퓨터에 {{agent}}에 연결된 모델 공급자가 없어 전송이 실패합니다. 컴퓨터의 {{appName}}에서 '설정 → 모델 공급자'를 설정하세요."
+    "authGateHint": "이 컴퓨터에 {{agent}}에 연결된 모델 제공자가 없어 전송이 실패합니다. 컴퓨터의 {{appName}}에서 '설정 → 모델 제공자'를 설정하세요."
   }
 }

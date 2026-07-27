@@ -10,7 +10,7 @@ const source = readFileSync(
 
 describe('NewMakerDraftRoute Orca worker create order', () => {
   it('delegates worker creation to enableOrca and defers tab reveal until the new route is current', () => {
-    const collabBranch = source.indexOf('if (effectiveCollabEnabled)');
+    const collabBranch = source.indexOf('if (shouldEnableCollab)');
     const enableOrca = source.indexOf('const result = await window.electronAPI.maker.enableOrca', collabBranch);
     const revealState = source.indexOf('orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };', enableOrca);
     const navigate = source.indexOf('navigate(orcaNavTarget ?? `/cc-agent/${newSession.id}`', revealState);
@@ -34,5 +34,31 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
 
     expect(mappedFallbacks).toHaveLength(3);
     expect(source).not.toContain("toast.error(t('newChat.collaboration.startFailed'");
+  });
+
+  it('blocks new-goal creation until a selected collaboration policy is available', () => {
+    const goalHandler = source.slice(source.indexOf('const handleCreateGoal = useCallback('));
+    expect(goalHandler).toContain("let policyEnabled = collabPolicy.enabled");
+    expect(goalHandler).toContain("if (collabPolicy.loading)");
+    expect(goalHandler).toContain("if (collabPolicy.unavailable)");
+    expect(goalHandler).toContain("collabPolicy.refresh()");
+    expect(goalHandler).toContain("policyEnabled = refreshed.enabled");
+    expect(goalHandler).toContain("if (!policyEnabled)");
+    expect(goalHandler.indexOf("if (collabPolicy.loading)")).toBeLessThan(
+      goalHandler.indexOf('const newSession = await createSession'),
+    );
+  });
+
+  it('carries a successful policy refresh into all collaboration creation branches', () => {
+    expect(source.match(/const shouldEnableCollab =/g)).toHaveLength(2);
+    expect(source.match(/if \(shouldEnableCollab\)/g)).toHaveLength(3);
+    expect(source).not.toContain('effectiveCollabEnabled');
+  });
+
+  it('surfaces initial policy loading and retries an unavailable draft toggle', () => {
+    expect(source).toContain("toast.warning(t('newChat.collaboration.loadingHint'))");
+    expect(source).toContain('onDisabledActivate: collabPolicy.unavailable');
+    expect(source).toContain('void collabPolicy.refresh().then((policy) => {');
+    expect(source).toContain('if (policy.enabled && !policy.unavailable) {');
   });
 });

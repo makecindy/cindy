@@ -30,11 +30,16 @@ vi.mock('../../../lib/browserWebviewPool', () => ({
   },
 }));
 
+// 稳定的 wrapper 元素:BrowserTabBody 的首次导航按 wrapper 代际判定(淘汰后
+// 重建需要重新导航),测试里跨 rerender 复用同一个元素,行为与"每 tab 一次"
+// 的旧语义一致。
+const sharedWrapper = document.createElement('div');
+
 function makeBrowserState(
   patch: Partial<UseBrowserWebviewResult> = {},
 ): UseBrowserWebviewResult {
   return {
-    wrapper: null,
+    wrapper: sharedWrapper,
     url: 'https://www.taptap.cn/',
     title: '',
     favicon: '',
@@ -43,11 +48,13 @@ function makeBrowserState(
     canGoForward: false,
     isAudible: false,
     crash: null,
+    resourceAlert: null,
     navigate: browserNavigate,
     reload: vi.fn(),
     goBack: vi.fn(),
     goForward: vi.fn(),
     stop: vi.fn(),
+    dismissResourceAlert: vi.fn(),
     ...patch,
   };
 }

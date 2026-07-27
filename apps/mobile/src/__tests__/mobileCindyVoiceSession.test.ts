@@ -7,6 +7,7 @@ vi.mock('expo-constants', () => ({
   },
 }));
 vi.mock('@/config/env', () => ({
+  AUTH_REGION: 'global',
   VOICE_API_BASE_URL: 'https://voice.example.com/',
 }));
 vi.mock('@/auth/secureStorage', () => ({
@@ -22,6 +23,10 @@ import {
   createMobileCindyVoiceCredential,
   MobileCindyVoiceRunContext,
 } from '@/session/mobileCindyVoiceSession';
+import {
+  resolveMobileVoiceAsrLanguage,
+  resolveMobileVoiceRefinementSourceLanguage,
+} from '@/session/mobileVoiceLanguage';
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
@@ -80,6 +85,28 @@ describe('MobileCindyVoiceRunContext', () => {
       },
       timeoutMs: 10_000,
     });
+  });
+
+  it('keeps ASR auto-detection separate from the concrete refinement language', async () => {
+    const apiFetch = vi.fn(async (
+      _path: string,
+      _options: { body?: { language?: string } },
+    ) => sessionResponse());
+    const context = new MobileCindyVoiceRunContext(
+      vi.fn(async () => 'access-token'),
+      vi.fn(async () => 'fresh-access-token'),
+      apiFetch as ConstructorParameters<typeof MobileCindyVoiceRunContext>[2],
+      'auto',
+      CINDY_MANAGED_REFINER_PROVIDER,
+    );
+
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+
+    expect(apiFetch.mock.calls[0][1].body?.language)
+      .toBeUndefined();
+    expect(resolveMobileVoiceAsrLanguage(' auto ')).toBeUndefined();
+    expect(resolveMobileVoiceRefinementSourceLanguage('auto', 'ja')).toBe('ja');
+    expect(resolveMobileVoiceRefinementSourceLanguage('ko', 'en')).toBe('ko');
   });
 
   it('retries once without the auto marker when a legacy voice-server rejects with 400, then fails refine fast', async () => {
@@ -213,10 +240,18 @@ describe('createMobileCindyVoiceCredential', () => {
     ]);
     expect(credential.asrProviderChain?.every((item) => item.pcmSampleRate === 16_000)).toBe(true);
     expect(credential.settings).toEqual({
-      language: 'zh-CN',
+      language: 'auto',
       refinementEnabled: true,
       playInteractionSound: true,
     });
+  });
+
+  it.each([
+    ['cn', 'zh-CN'],
+    ['global', 'auto'],
+    ['dev', 'auto'],
+  ] as const)('uses the %s build voice language default', (region, language) => {
+    expect(createMobileCindyVoiceCredential('device-1', region).settings?.language).toBe(language);
   });
 
   it('rejects an empty host device id', () => {

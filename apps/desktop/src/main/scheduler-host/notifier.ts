@@ -129,8 +129,10 @@ function renderFeishuMessage(schedule: Schedule, run: ScheduleRun): string {
   } else if (run.status === 'success' && run.resultText) {
     // prompt 类成功：把 agent 这一轮 turn 的最终文本贴出来 — 与飞书正常对话
     // 气泡显示同源（runner 按 text 事件 isFinal 语义聚合）。截断防卡片体积过大,
-    // 完整内容用户可点 "Open session" 看。
-    lines.push('', truncate(run.resultText, 1500));
+    // 完整内容用户可点 "Open session" 看。上限 6000:多 PR 审查汇总这类逐行带
+    // markdown 链接的正文 1500 会拦腰截断;6000 即使全 CJK(~18KB UTF-8)也在
+    // 飞书互动卡片 30KB 体积上限内。
+    lines.push('', truncate(run.resultText, 6000));
   }
 
   // ── 元信息行（时间 / 耗时 / agent / cwd）────────────────────────────────

@@ -45,6 +45,23 @@ export interface EvaluateBundleUpdateInput {
 
 const NO_UPDATE: BundleUpdateEvaluation = { needsUpdate: false, forced: false, target: null };
 
+/**
+ * 整包更新只属于自建分发渠道。
+ * Review 构建与 TestFlight 构建都不能展示外部安装入口；
+ * TestFlight 的 JS OTA 由独立通道继续处理。
+ */
+export function shouldCheckBundleUpdate({
+  isSelfHosted,
+  isReviewMode,
+  isTestFlightBuild,
+}: {
+  isSelfHosted: boolean;
+  isReviewMode: boolean;
+  isTestFlightBuild: boolean;
+}): boolean {
+  return isSelfHosted && !isReviewMode && !isTestFlightBuild;
+}
+
 /** 校验并收窄 `/latest` 响应为 LatestReleaseRecord;字段缺失即返回 null(宁可不提示,不误导)。 */
 export function parseLatestRelease(value: unknown): LatestReleaseRecord | null {
   if (!value || typeof value !== 'object') return null;

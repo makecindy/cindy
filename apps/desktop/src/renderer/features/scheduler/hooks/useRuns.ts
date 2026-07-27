@@ -36,36 +36,37 @@ export function useRuns(scheduleId: string | null, limit = 50): UseRunsResult {
   const [hasLoaded, setHasLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 防止 race：用户飞快切 A→B→A 时，A 的请求晚于 B 的请求返回会把 B 的数据冲掉。
-  // 用 ref 记录最近发起的 fetch 的 scheduleId，回调里只接受跟它匹配的结果。
-  const latestFetchIdRef = useRef<string | null>(null);
+  // 防止 race：同一 schedule 的连续刷新可能并发返回，旧快照不能覆盖新费用。
+  // 用递增序号记录最近发起的 fetch，回调里只接受最新请求的结果。
+  const latestFetchIdRef = useRef(0);
 
   const refresh = useCallback(async () => {
+    const fetchId = latestFetchIdRef.current + 1;
+    latestFetchIdRef.current = fetchId;
     if (!scheduleId) {
       // 完全没有选中：清空展示。其他场景（切任务）保留旧数据等新数据替换。
-      latestFetchIdRef.current = null;
       setRuns([]);
       setRunsScheduleId(null);
+      setLoading(false);
       setError(null);
       setHasLoaded(false);
       return;
     }
-    latestFetchIdRef.current = scheduleId;
     setLoading(true);
     try {
       const list = (await window.electronAPI.maker.schedule.listRuns(scheduleId, limit)) as ScheduleRun[];
       // 过期请求直接丢弃，不写 state
-      if (latestFetchIdRef.current !== scheduleId) return;
+      if (latestFetchIdRef.current !== fetchId) return;
       setRuns(list);
       setRunsScheduleId(scheduleId);
       setError(null);
     } catch (e) {
-      if (latestFetchIdRef.current !== scheduleId) return;
+      if (latestFetchIdRef.current !== fetchId) return;
       setError(e instanceof Error ? e.message : String(e));
       // 失败也算"这条 scheduleId 有结论"，让 caller 走 error 分支
       setRunsScheduleId(scheduleId);
     } finally {
-      if (latestFetchIdRef.current === scheduleId) {
+      if (latestFetchIdRef.current === fetchId) {
         setLoading(false);
         setHasLoaded(true);
       }
@@ -102,9 +103,15 @@ export function useRuns(scheduleId: string | null, limit = 50): UseRunsResult {
     // 广播,跨实例过期的未读快照等不到上面的事件,必须靠这条本地通道自愈
     // (见 scheduleRunReadSync 模块注释)。
     const offReadSync = subscribeScheduleRunReadSync(() => void refresh());
+    // Codex 费用在 done 后异步查价并落 message/run 账本，可能晚于 completed 事件。
+    // 监听费用广播，避免历史卡永久保留 completed 时读到的旧快照。
+    const offTurnCost = window.electronAPI.onUsageMessageTurnCost?.(() => {
+      void refresh();
+    });
     return () => {
       off();
       offReadSync();
+      offTurnCost?.();
     };
   }, [scheduleId, refresh]);
 

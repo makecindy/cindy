@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   boundSchedulesBySession: new Map<string, readonly unknown[]>(),
   worktreeSessionIds: new Set<string>(),
   runningDetailBySession: new Map<string, string>(),
+  pendingPluginSetupSessionIds: new Set<string>(),
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -44,6 +45,7 @@ vi.mock('react-i18next', () => ({
         'ccAgent.sidebar.card.awaitingPermission': '等待授权',
         'ccAgent.sidebar.card.awaitingPlan': '等待确认计划',
         'ccAgent.sidebar.card.awaitingQuestion': '等待回复',
+        'ccAgent.sidebar.card.awaitingPluginSetup': '等待插件设置',
         'ccAgent.sidebar.sessionMenu.rename': '重命名',
         'ccAgent.sidebar.sessionMenu.unarchive': '取消归档',
         'ccAgent.sidebar.sessionMenu.delete': '删除',
@@ -93,7 +95,13 @@ vi.mock('@/state/agentIslandActivity', () => ({
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: {
     subscribeAll: () => () => {},
-    getRunningSnapshot: () => new Map(),
+    getRunningSnapshot: () =>
+      new Map(
+        [...mocks.pendingPluginSetupSessionIds].map((sessionId) => [
+          sessionId,
+          { hasPendingPluginSetup: true },
+        ]),
+      ),
   },
 }));
 
@@ -172,6 +180,7 @@ describe('SessionCard visual cases', () => {
     mocks.boundSchedulesBySession.clear();
     mocks.worktreeSessionIds.clear();
     mocks.runningDetailBySession.clear();
+    mocks.pendingPluginSetupSessionIds.clear();
   });
 
   afterEach(() => {
@@ -218,6 +227,16 @@ describe('SessionCard visual cases', () => {
 
     renderCase('summary-long-body');
     expect(screen.getByText(/汇总玩家/)).toBeTruthy();
+  });
+
+  it('shows plugin setup as a needs-interaction preview', () => {
+    const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
+    if (!visualCase) throw new Error('Missing visual case');
+    mocks.pendingPluginSetupSessionIds.add(visualCase.session.id);
+
+    renderCase('short-idle-cc');
+
+    expect(screen.getByText('等待插件设置')).toBeTruthy();
   });
 
   it('uses the unified Timer for automation cases without a bound schedule', () => {

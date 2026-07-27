@@ -1,7 +1,11 @@
 import Constants from 'expo-constants';
 
 import { ApiError, type ApiFetchOptions } from '@/api/client';
-import { VOICE_API_BASE_URL } from '@/config/env';
+import {
+  AUTH_REGION,
+  VOICE_API_BASE_URL,
+  type CindyAuthRegion,
+} from '@/config/env';
 import { i18n } from '@/i18n';
 import type {
   MobileVoiceCredentialSyncAsr,
@@ -11,6 +15,7 @@ import {
   assertMobileVoiceCredentialShape,
   type StoredMobileVoiceCredential,
 } from '@/session/mobileVoiceCredentialStore';
+import { resolveMobileVoiceAsrLanguage } from '@/session/mobileVoiceLanguage';
 
 const VOICE_SESSION_REQUEST_TIMEOUT_MS = 10_000;
 const VOICE_REFINE_WARMUP_TIMEOUT_MS = 10_000;
@@ -43,6 +48,7 @@ type VoiceSessionResponse = {
 /** Per-dictation holder for one-shot ASR tickets and the owning refine session. */
 export class MobileCindyVoiceRunContext {
   private latestSessionId: string | null = null;
+  private readonly sourceLanguage: string | undefined;
   /**
    * 旧 voice-server 不认识 'auto' 标记时置位:会话分配已降级为无润色,后续
    * refine/warmup 直接快速失败(原始 ASR 文本保留),听写本身不受影响。
@@ -53,9 +59,11 @@ export class MobileCindyVoiceRunContext {
     private readonly getAccessToken: AccessTokenProvider,
     private readonly refreshAccessToken: AccessTokenProvider,
     private readonly apiFetch: AuthenticatedApiFetch,
-    private readonly sourceLanguage: string | undefined,
+    sourceLanguage: string | undefined,
     private readonly refinerProvider: string | undefined,
-  ) {}
+  ) {
+    this.sourceLanguage = resolveMobileVoiceAsrLanguage(sourceLanguage);
+  }
 
   async createAsrConnection(asrProvider: string): Promise<{
     websocketUrl: string;
@@ -227,7 +235,10 @@ const CINDY_MANAGED_REFINER_CHAIN = [
 ] as const satisfies readonly MobileVoiceCredentialSyncRefiner[];
 
 /** Builds the provider-neutral profile graph without persisting any inference key. */
-export function createMobileCindyVoiceCredential(hostDeviceId: string): StoredMobileVoiceCredential {
+export function createMobileCindyVoiceCredential(
+  hostDeviceId: string,
+  region: CindyAuthRegion = AUTH_REGION,
+): StoredMobileVoiceCredential {
   const normalizedHostDeviceId = hostDeviceId.trim();
   if (!normalizedHostDeviceId) throw new Error('host device id is required');
   const baseUrl = requireVoiceBaseUrl();
@@ -243,7 +254,9 @@ export function createMobileCindyVoiceCredential(hostDeviceId: string): StoredMo
     refiner: { ...CINDY_MANAGED_REFINER_CHAIN[0] },
     refinerProviderChain: CINDY_MANAGED_REFINER_CHAIN.map((item) => ({ ...item })),
     settings: {
-      language: 'zh-CN',
+      // Global and dev builds let ASR detect the spoken language. The Mainland
+      // China build keeps Chinese as its product default.
+      language: region === 'cn' ? 'zh-CN' : 'auto',
       refinementEnabled: true,
       playInteractionSound: true,
     },

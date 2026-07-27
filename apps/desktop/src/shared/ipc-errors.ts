@@ -87,6 +87,10 @@ export type IpcErrorCode =
   | 'DEVICE_LINK_TIMEOUT' // 等待远端响应超时
   | 'DEVICE_LINK_VERSION_MISMATCH' // 两端协议/版本不匹配
   | 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' // 远程媒体经 OSS 中转失败(出方向附件上传 / 入方向取媒体)
+  | 'REMOTE_WORKDIR_INVALID' // 被控端工作目录路径非法
+  | 'REMOTE_WORKDIR_NOT_FOUND' // 被控端工作目录不存在
+  | 'REMOTE_WORKDIR_NOT_DIRECTORY' // 被控端工作路径存在但不是目录
+  | 'REMOTE_WORKDIR_UNAVAILABLE' // 被控端网络目录不可访问 / 探测超时
   | 'SESSION_REFERENCE_UNAVAILABLE' // 会话引用不存在、离线、撤权、预算/形状非法
   | 'SESSION_REFERENCE_UNSUPPORTED' // 目标端版本不能消费可信会话引用快照
   // right-sidebar tabs(对标 Codex in-app browser sidebar 多 Tab 容器)
@@ -106,11 +110,10 @@ export type IpcErrorCode =
   | 'MODEL_ACCESS_FAILED' // 拉取/轮换失败(网络或服务端错误),可重试
   | 'MODEL_ACCESS_DISABLED' // 服务端灰度未启用(503)——走手填兜底
   | 'MODEL_ACCESS_UNSUPPORTED' // 企业未接入(403)——XD 网关不可用,不重试
+  | 'PLAN_CHANGE_NOT_AVAILABLE' // 当前订阅不能切换到目标套餐，可返回候选列表重选
   // 个人资料自助修改(settings → 用户卡片;服务端直写)
   | 'PROFILE_AVATAR_UPLOAD_FAILED' // 头像经 oss-server 预签名直传失败(presign 或 PUT 阶段)
   | 'PROFILE_UPDATE_FAILED' // PATCH /api/me/profile 失败(网络 / 服务端拒绝)
-  | 'CONTENT_MODERATION_REJECTED' // 内容审核明确拒绝
-  | 'CONTENT_MODERATION_CANCELLED' // 审核期间登录身份切换,结果作废
   // 会话分享(.cshare 导出/导入)
   | 'SHARE_FILE_INVALID' // 不是 .cshare / 头或 manifest 损坏 / payload 不是 zip
   | 'SHARE_PASSWORD_REQUIRED' // 文件已加密但未提供密码
@@ -192,6 +195,10 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'DEVICE_LINK_TIMEOUT',
   'DEVICE_LINK_VERSION_MISMATCH',
   'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+  'REMOTE_WORKDIR_INVALID',
+  'REMOTE_WORKDIR_NOT_FOUND',
+  'REMOTE_WORKDIR_NOT_DIRECTORY',
+  'REMOTE_WORKDIR_UNAVAILABLE',
   'SESSION_REFERENCE_UNAVAILABLE',
   'SESSION_REFERENCE_UNSUPPORTED',
   'RIGHT_SIDEBAR_TOO_MANY_TABS',
@@ -207,10 +214,9 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'MODEL_ACCESS_FAILED',
   'MODEL_ACCESS_DISABLED',
   'MODEL_ACCESS_UNSUPPORTED',
+  'PLAN_CHANGE_NOT_AVAILABLE',
   'PROFILE_AVATAR_UPLOAD_FAILED',
   'PROFILE_UPDATE_FAILED',
-  'CONTENT_MODERATION_REJECTED',
-  'CONTENT_MODERATION_CANCELLED',
   'SHARE_FILE_INVALID',
   'SHARE_PASSWORD_REQUIRED',
   'SHARE_PASSWORD_WRONG',

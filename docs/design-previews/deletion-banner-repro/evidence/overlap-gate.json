@@ -1,0 +1,274 @@
+{
+ "gate": "overlap",
+ "pass": true,
+ "total": 12,
+ "passed": 12,
+ "failures": 0,
+ "generatedAt": "2026-07-26T04:57:34.612Z",
+ "results": [
+  {
+   "case": "desk-cn-light-zh",
+   "state": "deletion-pending",
+   "pass": true,
+   "checks": {
+    "overlap_ge_98": true,
+    "hit_panel": true,
+    "panel_opaque": true,
+    "intent_hits_banner": true
+   },
+   "metrics": {
+    "ratio": 1,
+    "hitIsPanel": true,
+    "bg": "rgb(251, 251, 251)",
+    "alpha": 1,
+    "iHitSelf": true,
+    "bannerDesignH": 73,
+    "panelTopDesign": 239,
+    "bannerPos": "static",
+    "panelPos": "absolute"
+   }
+  },
+  {
+   "case": "desk-cn-light-zh",
+   "state": "deletion-processing",
+   "pass": true,
+   "checks": {
+    "overlap_ge_98": true,
+    "hit_panel": true,
+    "panel_opaque": true,
+    "intent_hits_banner": true
+   },
+   "metrics": {
+    "ratio": 1,
+    "hitIsPanel": true,
+    "bg": "rgb(251, 251, 251)",
+    "alpha": 1,
+    "iHitSelf": true,
+    "bannerDesignH": 73,
+    "panelTopDesign": 239,
+    "bannerPos": "static",
+    "panelPos": "absolute"
+   }
+  },
+  {
+   "case": "desk-cn-light-zh",
+   "state": "deletion-completed",
+   "pass": true,
+   "checks": {
+    "overlap_ge_98": true,
+    "hit_panel": true,
+    "panel_opaque": true,
+    "intent_hits_banner": true
+   },
+   "metrics": {
+    "ratio": 1,
+    "hitIsPanel": true,
+    "bg": "rgb(251, 251, 251)",
+    "alpha": 1,
+    "iHitSelf": true,
+    "bannerDesignH": 113,
+    "panelTopDesign": 279,
+    "bannerPos": "static",
+    "panelPos": "absolute"
+   }
+  },
+  {
+   "case": "desk-global-dark-en",
+   "state": "deletion-pending",
+   "pass": true,
+   "checks": {
+    "overlap_ge_98": true,
+    "hit_panel": true,
+    "panel_opaque": true,
+    "intent_hits_banner": true
+   },
+   "metrics": {
+    "ratio": 1,
+    "hitIsPanel": true,
+    "bg": "rgb(49, 47, 47)",
+    "alpha": 1,
+    "iHitSelf": true,
+    "bannerDesignH": 73,
+    "panelTopDesign": 239,
+    "bannerPos": "static",
+    "panelPos": "absolute"
+   }
+  },
+  {
+   "case": "desk-global-dark-en",
+   "state": "deletion-processing",
+   "pass": true,
+   "checks": {
+    "overlap_ge_98": true,
+    "hit_panel": true,
+    "panel_opaque": true,
+    "intent_hits_banner": true
+   },
+   "metrics": {
+    "ratio": 1,
+    "hitIsPanel": true,
+    "bg": "rgb(49, 47, 47)",
+    "alpha": 1,
+    "iHitSelf": true,
+    "bannerDesignH": 73,
+    "panelTopDesign": 239,
+    "bannerPos": "static",
+    "panelPos": "absolute"
+   }
+  },
+  {
+   "case": "desk-global-dark-en",
+   "state": "deletion-completed",
+   "pass": true,
+   "checks": {
+    "overlap_ge_98": true,
+    "hit_panel": true,
+    "panel_opaque": true,
+    "intent_hits_banner": true
+   },
+   "metrics": {
+    "ratio": 1,
+    "hitIsPanel": true,
+    "bg": "rgb(49, 47, 47)",
+    "alpha": 1,
+    "iHitSelf": true,
+    "bannerDesignH": 113,
+    "panelTopDesign": 279,
+    "bannerPos": "static",
+    "panelPos": "absolute"
+   }
+  },
+  {
+   "case": "phone-cn-light-zh",
+   "state": "deletion-pending",
+   "pass": true,
+   "checks": {
+    "overlap_ge_98": true,
+    "hit_panel": true,
+    "panel_opaque": true,
+    "intent_hits_banner": true
+   },
+   "metrics": {
+    "ratio": 1,
+    "hitIsPanel": true,
+    "bg": "rgb(251, 251, 251)",
+    "alpha": 1,
+    "iHitSelf": true,
+    "bannerDesignH": 73,
+    "panelTopDesign": 716.1,
+    "bannerPos": "static",
+    "panelPos": "absolute"
+   }
+  },
+  {
+   "case": "phone-cn-light-zh",
+   "state": "deletion-processing",
+   "pass": true,
+   "checks": {
+    "overlap_ge_98": true,
+    "hit_panel": true,
+    "panel_opaque": true,
+    "intent_hits_banner": true
+   },
+   "metrics": {
+    "ratio": 1,
+    "hitIsPanel": true,
+    "bg": "rgb(251, 251, 251)",
+    "alpha": 1,
+    "iHitSelf": true,
+    "bannerDesignH": 73,
+    "panelTopDesign": 716.1,
+    "bannerPos": "static",
+    "panelPos": "absolute"
+   }
+  },
+  {
+   "case": "phone-cn-light-zh",
+   "state": "deletion-completed",
+   "pass": true,
+   "checks": {
+    "overlap_ge_98": true,
+    "hit_panel": true,
+    "panel_opaque": true,
+    "intent_hits_banner": true
+   },
+   "metrics": {
+    "ratio": 1,
+    "hitIsPanel": true,
+    "bg": "rgb(251, 251, 251)",
+    "alpha": 1,
+    "iHitSelf": true,
+    "bannerDesignH": 129,
+    "panelTopDesign": 772.1,
+    "bannerPos": "static",
+    "panelPos": "absolute"
+   }
+  },
+  {
+   "case": "phone-global-dark-en",
+   "state": "deletion-pending",
+   "pass": true,
+   "checks": {
+    "overlap_ge_98": true,
+    "hit_panel": true,
+    "panel_opaque": true,
+    "intent_hits_banner": true
+   },
+   "metrics": {
+    "ratio": 1,
+    "hitIsPanel": true,
+    "bg": "rgb(49, 47, 47)",
+    "alpha": 1,
+    "iHitSelf": true,
+    "bannerDesignH": 73,
+    "panelTopDesign": 716.1,
+    "bannerPos": "static",
+    "panelPos": "absolute"
+   }
+  },
+  {
+   "case": "phone-global-dark-en",
+   "state": "deletion-processing",
+   "pass": true,
+   "checks": {
+    "overlap_ge_98": true,
+    "hit_panel": true,
+    "panel_opaque": true,
+    "intent_hits_banner": true
+   },
+   "metrics": {
+    "ratio": 1,
+    "hitIsPanel": true,
+    "bg": "rgb(49, 47, 47)",
+    "alpha": 1,
+    "iHitSelf": true,
+    "bannerDesignH": 91,
+    "panelTopDesign": 734.1,
+    "bannerPos": "static",
+    "panelPos": "absolute"
+   }
+  },
+  {
+   "case": "phone-global-dark-en",
+   "state": "deletion-completed",
+   "pass": true,
+   "checks": {
+    "overlap_ge_98": true,
+    "hit_panel": true,
+    "panel_opaque": true,
+    "intent_hits_banner": true
+   },
+   "metrics": {
+    "ratio": 1,
+    "hitIsPanel": true,
+    "bg": "rgb(49, 47, 47)",
+    "alpha": 1,
+    "iHitSelf": true,
+    "bannerDesignH": 129,
+    "panelTopDesign": 772.1,
+    "bannerPos": "static",
+    "panelPos": "absolute"
+   }
+  }
+ ]
+}

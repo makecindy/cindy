@@ -1,0 +1,5 @@
+{
+  "_comment": "存量违规冻结清单(仅 status=decided 的术语与标点规则)。只减不增:修好一条就从这里删一条,新增违规一律阻断 CI。剪枝(只删已修好的、拒绝登记新违规): node scripts/check-i18n-glossary.mjs --update-baseline —— 确需新冻结一批存量时必须手动编辑本文件,让新增条目出现在 diff 里被 review 看到。",
+  "_generatedFrom": "glossary.json version 1",
+  "entries": []
+}

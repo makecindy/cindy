@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Keyboard, Linking, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import {
-  AppleAuthenticationButton,
-  AppleAuthenticationButtonStyle,
-  AppleAuthenticationButtonType,
-} from 'expo-apple-authentication';
 import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@cindy/auth-client';
 
 import { useAuth } from '@/auth/AuthContext';
@@ -18,10 +13,11 @@ import {
 } from '@/auth/cnPhone';
 import { AuthApiError, isValidEmail } from '@cindy/auth-client';
 import { authErrorText, getAuthLocale, loginText } from '@/auth/loginMessages';
+import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from '@/auth/consentGate';
+import { acceptPrivacyConsent } from '@/analytics/analyticsConsentStore';
+import { initMobileTapdb } from '@/analytics/mobileTapdb';
 import { isNativeSocialProviderSupported } from '@/auth/nativeSocial';
 import { Text, TextInput } from '@/components/AppText';
-import { MainWindowActionButton } from '@/components/MobilePrimitives';
-import { useObserve } from '@/observability/observe';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import {
   LOGIN_HANDOFF_EASING,
@@ -33,18 +29,27 @@ import { computeLoginKeyboardShift } from '@/auth/loginKeyboardAvoidance';
 import { useLoginHandoffOptional } from '@/auth/MobileLoginHandoffContext';
 import {
   createResendDeadline,
+  LOGIN_CONSENT_ROW,
   LOGIN_CONTROL,
+  LOGIN_DELETION_BUBBLE,
   LOGIN_ERROR_TEXT,
   LOGIN_GROUP,
   LOGIN_LOADING_RING,
   LOGIN_METHOD_ROW,
+  LOGIN_SSO_ORG_HINT_TOP,
   LOGIN_SUBTITLE,
   LOGIN_TITLE,
+  resolveDeletionBubbleFrame,
+  resolveDeletionBubbleLinkHitSlop,
+  type LoginDeletionBubbleFrame,
   type LoginSurfaceMode,
 } from '@/auth/loginSkinLayout';
+import { LEGAL_LINKS } from '@/config/legalLinks';
 import { useLoginKeyboardRect } from '@/session/useMobileKeyboardState';
 import {
   LoginBackButton,
+  LoginConsentDialog,
+  LoginConsentRow,
   LoginErrorText,
   LoginLoadingRing,
   LoginMethodRow,
@@ -58,6 +63,7 @@ import {
   LoginSocialRow,
   LoginTextLinkSlot,
   LoginTitleBlock,
+  AppleLogoGlyph,
 } from '@/components/LoginSkinControls';
 import {
   MobileLoginHandoffStage,
@@ -79,7 +85,6 @@ export default function LoginScreen() {
   // 手动语言 override 恢复/切换时本屏跟着重渲(P2-a:不依赖 auth 重渲兜底)。
   useTranslation();
   const auth = useAuth();
-  const { markInteractive } = useObserve();
   const stage = useLoginSurface();
   const insets = useSafeAreaInsets();
   const handoff = useLoginHandoffOptional();
@@ -111,6 +116,83 @@ export default function LoginScreen() {
   // 企业 SSO 入口子视图:在 identifier 步骤内输入组织标识(本地展示态)
   const [ssoOrgMode, setSsoOrgMode] = useState(false);
   const [ssoOrg, setSsoOrg] = useState('');
+  /* ── 协议同意链路(consent PR,与桌面 LoginPage 同源语义):radio 状态 +
+     未勾选拦截弹窗 + 同意后续接。过门点(产品拍板 2026-07-24 二次):手机号提交、
+     邮箱提交(discover 前)、method-choice 个人行发码、社交圆钮(Apple/Google/
+     未来微信)——个人登录一律先同意再发起,含仅触发方式查询的 email discover
+     (拍板压过审查侧「无副作用可放行」建议)。豁免仅限显式企业 SSO 入口。
+     手机端无游客登录(远程连接客户端必须有账号,产品拍板 2026-07-24)。
+     pending 动作只存本组件(不进 AuthContext 状态机;仓规 9)。 ── */
+  const [consentAccepted, setConsentAccepted] = useState(false);
+  const [consentDialogOpen, setConsentDialogOpen] = useState(false);
+  // pending 带开门时刻快照(stamp),同意时复验防陈旧续接(codex 审查 P1;consentGate 单测覆盖)
+  const pendingConsentAction = useRef<{
+    action: () => void;
+    stamp: ConsentStamp;
+  } | null>(null);
+  /* 把「用户明示同意《隐私政策》」这个事实落到本机。它是 TapDB 采集的前置条件
+     (见 src/analytics/analyticsConsentStore.ts):没有这条记录,统计 SDK 根本不会
+     初始化。写在**放行时刻**而不是勾 radio 时刻——勾了又取消不算同意,同意并继续
+     使用才算。幂等,失败不阻断登录(闸保持关闭)。 */
+  const persistPrivacyConsent = () => {
+    void acceptPrivacyConsent()
+      // 同意即可开始统计,不必等到登录成功——「未登录用户的启动与留存」本来就是
+      // 这份埋点要回答的问题。冷启动那次 initMobileTapdb 当时被同意闸挡住了,
+      // 这里补一次。
+      .then(() => initMobileTapdb())
+      .catch(() => undefined);
+  };
+
+  const requireConsent = (action: () => void) => {
+    if (consentAccepted) {
+      persistPrivacyConsent();
+      action();
+      return;
+    }
+    // 弹窗非原生 Modal、不参与键盘避让:从输入框 onSubmitEditing 进来时先收键盘,
+    // 否则小屏上「同意」钮会被键盘盖住(codex 审查 P1)
+    Keyboard.dismiss();
+    pendingConsentAction.current = {
+      action,
+      stamp: makeConsentStamp(auth.loginState?.step, auth.isBusy, auth.isAuthenticated),
+    };
+    setConsentDialogOpen(true);
+  };
+  const agreeConsent = () => {
+    // 同意 = 自动勾选 radio + 续接用户刚才点的那条登录链路(产品拍板)
+    setConsentAccepted(true);
+    setConsentDialogOpen(false);
+    // 点了弹窗上的「同意」即为明示同意,与下面 pending 是否还能续接无关。
+    persistPrivacyConsent();
+    const pending = pendingConsentAction.current;
+    pendingConsentAction.current = null;
+    if (!pending) return;
+    // 复验:弹窗期间认证状态被异步推进(深链回调/另一路完成/步骤切换)则丢弃动作
+    const current = makeConsentStamp(auth.loginState?.step, auth.isBusy, auth.isAuthenticated);
+    if (canResumePendingConsent(pending.stamp, current)) pending.action();
+  };
+  const dismissConsent = () => {
+    // 不同意 = 退回登录页,radio 保持未勾选
+    pendingConsentAction.current = null;
+    setConsentDialogOpen(false);
+  };
+  // 弹窗打开期间登录上下文漂移(认证完成/步骤切换)→ 自动收窗弃 pending,
+  // 避免用户对着一个已失效来源视图的弹窗做决定
+  useEffect(() => {
+    if (!consentDialogOpen) return;
+    const pending = pendingConsentAction.current;
+    const current = makeConsentStamp(auth.loginState?.step, auth.isBusy, auth.isAuthenticated);
+    if (auth.isAuthenticated || (pending && current.step !== pending.stamp.step)) {
+      pendingConsentAction.current = null;
+      setConsentDialogOpen(false);
+    }
+  }, [consentDialogOpen, auth.isAuthenticated, auth.isBusy, auth.loginState?.step]);
+  const openLegalLink = (kind: 'terms' | 'privacy') => {
+    // 系统默认浏览器打开(settings.tsx 同款 Linking 模式);URL 按构建区域分流
+    void Linking.openURL(
+      kind === 'terms' ? LEGAL_LINKS.termsOfService : LEGAL_LINKS.privacyPolicy,
+    ).catch(() => undefined);
+  };
   const [verificationCode, setVerificationCode] = useState('');
   const [ssoVerificationCode, setSsoVerificationCode] = useState('');
   const [bindingContact, setBindingContact] = useState('');
@@ -120,8 +202,6 @@ export default function LoginScreen() {
   const [resendDeadline, setResendDeadline] = useState<number | null>(null);
   const [accountDeletionStatus, setAccountDeletionStatus] =
     useState<AccountDeletionStatus | null>(null);
-  const { mode } = useTheme();
-  // 官方 Apple 按钮走 makeStyles 的 appleButton(合规按钮不可皮肤化,复用主干样式)。
   const styles = useThemedStyles(makeStyles);
   const configIssues = getMobileConfigIssues();
   const disabled = auth.isBusy || !auth.initialized || configIssues.length > 0;
@@ -223,11 +303,6 @@ export default function LoginScreen() {
     auth.isAuthenticated,
   ]);
 
-  // EAS Observe: the stable login surface is ready before network actions complete.
-  useEffect(() => {
-    if (auth.initialized) markInteractive();
-  }, [auth.initialized, markInteractive]);
-
   const reset = () => {
     auth.clearAuthError();
     setIdentifierFormatError(null);
@@ -272,7 +347,10 @@ export default function LoginScreen() {
     // App Store 合规:Apple 必须用官方 Sign in with Apple 按钮(不可皮肤化),
     // 从统一社交圆钮行中拆出、单独全宽渲染;其余(Google/微信/SSO)保留皮肤圆钮。
     const nonAppleProviders = socialProviders.filter(
-      (provider) => provider !== 'apple',
+      // type guard 收窄为 Google/微信(SSO 由行内末位单独渲染),与 LoginSocialGlyph
+      // 收窄后的 provider 类型对齐;Apple 走圆钮行第一颗(AppleLogoGlyph,variant='apple')。
+      (provider): provider is Exclude<SocialProvider, 'apple'> =>
+        provider !== 'apple',
     );
     if (ssoOrgMode) {
       const submitSsoOrg = () => {
@@ -301,7 +379,11 @@ export default function LoginScreen() {
             testID="login.ssoOrgInput"
             value={ssoOrg}
           />
-          <LoginTextLinkSlot tone="secondary">
+          <LoginTextLinkSlot
+            align="top"
+            tone="secondary"
+            top={LOGIN_SSO_ORG_HINT_TOP}
+          >
             {loginText('ssoOrgHint')}
           </LoginTextLinkSlot>
           <LoginPrimaryButton
@@ -327,7 +409,11 @@ export default function LoginScreen() {
           return;
         }
         setIdentifierFormatError(null);
-        void auth.dispatchLoginAction({ type: 'discover', email: value });
+        // 邮箱提交先过协议门(产品拍板 2026-07-24 二次:手机号/邮箱提交一律先弹
+        // 协议弹窗,压过审查侧「discover 纯查询可放行」建议;显式 SSO 入口仍豁免)
+        requireConsent(() =>
+          void auth.dispatchLoginAction({ type: 'discover', email: value }),
+        );
       } else {
         // 手机号登录只支持中国大陆号码:UI 固定 +86,输入框只存本地号,提交时拼回完整号码。
         // 号段不合法本地拦截并提示「请输入正确手机号」(设计稿同款红边+红字)。
@@ -337,11 +423,13 @@ export default function LoginScreen() {
           return;
         }
         setIdentifierFormatError(null);
-        void auth.dispatchLoginAction({
-          type: 'request-code',
-          kind: 'phone',
-          identifier: toCnE164(identifier),
-        });
+        requireConsent(() =>
+          void auth.dispatchLoginAction({
+            type: 'request-code',
+            kind: 'phone',
+            identifier: toCnE164(identifier),
+          }),
+        );
       }
     };
     // 本地格式错误优先展示(设计稿「请输入正确邮箱/手机号」),否则回退 server 错误文案。
@@ -411,46 +499,56 @@ export default function LoginScreen() {
           />
           {identifierErrorNode}
         </LoginPanel>
-        {/* App Store 合规:Apple 官方 Sign in with Apple 按钮全宽单列,不可皮肤化
-            (mobileAuthServerLogin 守护测试 + Apple 审核硬要求;socialProviders 已按 iOS
-            过滤,仅 iOS 且可用时渲染)。视觉不完全跟随统一圆钮皮肤是 Apple 硬性规范所致。 */}
-        {socialProviders.includes('apple') ? (
-          <AppleAuthenticationButton
-            accessibilityState={{ disabled }}
-            buttonStyle={
-              mode === 'dark'
-                ? AppleAuthenticationButtonStyle.WHITE
-                : AppleAuthenticationButtonStyle.BLACK
-            }
-            buttonType={AppleAuthenticationButtonType.SIGN_IN}
-            cornerRadius={24}
-            onPress={() => {
-              if (disabled) return;
-              void auth.dispatchLoginAction({
-                type: 'native-social',
-                provider: 'apple',
-              });
-            }}
-            pointerEvents={disabled ? 'none' : 'auto'}
-            style={styles.appleButton}
-            testID="login.appleButton"
-          />
-        ) : null}
-        {/* 第三方圆钮行:Apple 之外的原生方式驱动;企业 SSO = 行内最后一颗(329:243) */}
-        <LoginSocialRow count={nonAppleProviders.length + 1}>
+        {/* App Store 合规(Guideline 4):Apple 入口为圆钮行第一颗(iOS only,沿用
+            socialProviders.includes('apple') 即 isNativeSocialProviderSupported 判定,
+            Android 自动无此钮)。圆钮底色用 ADR 官方 Black/White 配色(appleCircleBg)、
+            logo 用官方 Logo-only artwork(AppleLogoGlyph,path 逐字节原样未改)、无描边。
+            HIG 允许 logo-only 自定义按钮(圆形),artwork 来自 Apple Design Resources。 */}
+        <LoginSocialRow
+          count={
+            (socialProviders.includes('apple') ? 1 : 0) +
+            nonAppleProviders.length +
+            1
+          }
+        >
+          {socialProviders.includes('apple') ? (
+            <LoginSocialButton
+              key="apple"
+              label={loginText('apple')}
+              busy={auth.isBusy}
+              variant="apple"
+              onPress={() => {
+                // SC-SOC-7: in-flight 期间 no-op(行为层 guard,无 disabled 视觉回填)。
+                if (disabled) return;
+                // Apple 属个人登录链路,过协议门(未勾选先弹协议弹窗,同意后续接原路径)
+                requireConsent(() =>
+                  void auth.dispatchLoginAction({
+                    type: 'native-social',
+                    provider: 'apple',
+                  }),
+                );
+              }}
+              testID="login.appleButton"
+            >
+              <AppleLogoGlyph />
+            </LoginSocialButton>
+          ) : null}
           {nonAppleProviders.map((provider) => (
             <LoginSocialButton
               key={provider}
               label={socialLabel(provider)}
-              busy={disabled}
+              busy={auth.isBusy}
               onPress={() => {
                 // SC-SOC-7: in-flight(disabled)期间 no-op 防重复发起;行为层 guard,
                 // 零视觉变化(圆钮已无 disabled 态 per §10 拍板,不回填 disabled 视觉)。
                 if (disabled) return;
-                void auth.dispatchLoginAction({
-                  type: 'native-social',
-                  provider,
-                });
+                // Google/微信属个人登录链路,过协议门;同意后续接本次 native-social
+                requireConsent(() =>
+                  void auth.dispatchLoginAction({
+                    type: 'native-social',
+                    provider,
+                  }),
+                );
               }}
               // 对象展开保持 testID: 键形态(mobileAuthServerLogin 守护测试锚定该字面)
               {...{ testID: `login.${provider}Button` }}
@@ -458,10 +556,11 @@ export default function LoginScreen() {
               <LoginSocialGlyph provider={provider} />
             </LoginSocialButton>
           ))}
-          {/* 企业 SSO 入口:输入组织标识 发起单点登录(国内版隐藏邮箱后企业用户的登录路径) */}
+          {/* 企业 SSO 入口:输入组织标识 发起单点登录(国内版隐藏邮箱后企业用户的登录路径)。
+              企业 SSO 豁免协议门(产品拍板),不过 requireConsent。 */}
           <LoginSocialButton
             label={loginText('ssoEntry')}
-            busy={disabled}
+            busy={auth.isBusy}
             onPress={() => {
               // SC-SOC-7: in-flight 期间 no-op(行为层 guard,无 disabled 视觉回填)。
               if (disabled) return;
@@ -473,6 +572,15 @@ export default function LoginScreen() {
             <LoginSocialGlyph provider="sso" />
           </LoginSocialButton>
         </LoginSocialRow>
+        {/* 协议同意行(figma 600:660:圆钮行下方 22 设计px,组坐标 y=582;
+            渲染门 = 所在 identifier 主视图分支,流程底边恒 622 已含其区间) */}
+        <LoginConsentRow
+          checked={consentAccepted}
+          onToggle={() => setConsentAccepted((prev) => !prev)}
+          statement={loginText('consentStatement')}
+          onOpenTerms={() => openLegalLink('terms')}
+          onOpenPrivacy={() => openLegalLink('privacy')}
+        />
       </>
     );
   };
@@ -530,12 +638,16 @@ export default function LoginScreen() {
           <LoginMethodRow
             disabled={disabled}
             icon="person"
+            // 个人邮箱发码 = 个人链路实际发起点,在此过协议门(discover 已放行,
+            // 保证企业用户经 discover→SSO 全程无门)
             onPress={() =>
-              void auth.dispatchLoginAction({
-                type: 'request-code',
-                kind: 'email',
-                identifier: state.email,
-              })
+              requireConsent(() =>
+                void auth.dispatchLoginAction({
+                  type: 'request-code',
+                  kind: 'email',
+                  identifier: state.email,
+                }),
+              )
             }
             testID="login.emailCodeButton"
             title={loginText(
@@ -934,9 +1046,14 @@ export default function LoginScreen() {
   const groupLeftPx = stage.offsetX + stage.loginX * stage.scale;
   const groupTopPxRaw = stage.offsetY + stage.loginY * stage.scale;
   const bottomLimitPx = stage.viewportHeight - insets.bottom;
+  // consent PR:identifier 主视图下方多出协议行(行底 622 超出组高 560 共 62 设计px)。
+  // 流程底边全步骤恒取 622(含协议行的最低内容):一防步骤切换时 lift 释放产生
+  // 整组纵向跳变(规则 7,codex 审查 P1),二让下方外层/内层容器 bounds 恒包住
+  // 协议行——RN(尤其 Android)对父 bounds 外子节点不派发触摸,协议行必须在界内。
+  const flowBottomDesignPx = loginSizes.flowHeight + LOGIN_CONSENT_ROW.bottomOverflow;
   const liftPx = Math.max(
     0,
-    groupTopPxRaw + loginSizes.flowHeight * groupScale - bottomLimitPx,
+    groupTopPxRaw + flowBottomDesignPx * groupScale - bottomLimitPx,
   );
   const groupTopPx = Math.max(0, groupTopPxRaw - liftPx);
 
@@ -1018,6 +1135,18 @@ export default function LoginScreen() {
   // reduced-motion/已登录直入由 Provider 收敛为 done,此处直落终态)
   const panelEntrance = usePanelEntrance(handoffPhase, stage.mode, stage.scale);
 
+  // 注销提示气泡(figma 678:1075):登录屏根容器 absolute 浮层,viewport 物理坐标,
+  // 不随键盘位移、不参与 stage 缩放;渲染序在登录组之后 = 盖过立绘/字标/面板/社交行,
+  // 协议弹窗仍在更上层(modal 拦截优先)。
+  const deletionBubbleFrame = accountDeletionStatus
+    ? resolveDeletionBubbleFrame(stage, insets.top)
+    : null;
+  // 气泡对读屏隐藏的条件:① 协议弹窗打开(气泡是弹窗兄弟浮层,不隐藏则 TalkBack 可
+  // 穿透读到文案、completed 态还能激活「我知道了」);② 入场未完成(opacity/pointerEvents
+  // 只管渲染与命中,读屏仍会念出不可见的注销状态)。iOS 走 accessibilityElementsHidden、
+  // Android 走 importantForAccessibility,两端都要给(PR #464 codex)。
+  const deletionBubbleA11yHidden = consentDialogOpen || handoffPhase !== 'done';
+
   return (
     <MobileLoginHandoffStage
       keyboardShiftPx={keyboardShift}
@@ -1026,10 +1155,14 @@ export default function LoginScreen() {
       {/* 外层未变换测量 wrapper(v5 冻结拓扑):持布局基线,不参与任何 translate */}
       <View
         collapsable={false}
+        // Android 读屏:弹窗打开时隐藏背景登录组(accessibilityViewIsModal 仅 iOS
+        // 生效;codex 审查 P2)。iOS 忽略此属性,无副作用。
+        importantForAccessibility={consentDialogOpen ? 'no-hide-descendants' : 'auto'}
         onLayout={measureBaseline}
         ref={outerGroupRef}
         style={{
-          height: loginSizes.flowHeight * groupScale,
+          // 恒含协议行区间(622 设计px):协议行必须在父 bounds 内才可命中(见 flowBottomDesignPx 注)
+          height: flowBottomDesignPx * groupScale,
           left: groupLeftPx,
           position: 'absolute',
           top: groupTopPx,
@@ -1045,10 +1178,11 @@ export default function LoginScreen() {
               transform: [{ translateY: panelEntrance.translateY }],
             }}
           >
-            {/* 内层 680×560 设计 px 坐标系,整层 transform 缩放(demo loginGroup 同构) */}
+            {/* 内层 680 宽设计 px 坐标系,整层 transform 缩放(demo loginGroup 同构);
+                高度恒 622(组 560 + 协议行 overflow 62),保证协议行在 bounds 内可命中 */}
             <View
               style={{
-                height: LOGIN_GROUP.height,
+                height: flowBottomDesignPx,
                 left: 0,
                 position: 'absolute',
                 top: 0,
@@ -1057,21 +1191,55 @@ export default function LoginScreen() {
                 width: LOGIN_GROUP.width,
               }}
             >
-              {accountDeletionStatus ? (
-                <AccountDeletionStatusPanel
-                  onDismiss={
-                    accountDeletionStatus.status === 'completed'
-                      ? () => void auth.clearAccountDeletionReceipt()
-                      : undefined
-                  }
-                  status={accountDeletionStatus}
-                />
-              ) : null}
               {stateContent}
             </View>
           </Animated.View>
         </View>
       </View>
+      {accountDeletionStatus && deletionBubbleFrame ? (
+        // 入场门(PR #464 review,与桌面同口径):opacity 结构性跟随面板入场的
+        // Animated 值(splash=0 → handoff 渐显 → done=1,同一 usePanelEntrance 输出,
+        // 不新造状态机);pointerEvents 仅 done 放行——入场完成前气泡不可见也不可点。
+        <Animated.View
+          // 读屏隔离(见 deletionBubbleA11yHidden 注):iOS + Android 双端属性都给,
+          // 覆盖「协议弹窗打开」与「入场未完成」两种不该被念出的时刻。
+          accessibilityElementsHidden={deletionBubbleA11yHidden}
+          importantForAccessibility={
+            deletionBubbleA11yHidden ? 'no-hide-descendants' : 'auto'
+          }
+          // box-none 而非 auto:包装层铺满全屏(absoluteFill),RN 下全屏 View 即使透明
+          // 也会吃掉命中区、挡住下方登录组的输入框/按钮/社交入口(web 的穿透直觉不适用)。
+          // box-none = 自身不作触摸目标、子节点(气泡)照常可点(Greptile 审查 P1)。
+          pointerEvents={handoffPhase === 'done' ? 'box-none' : 'none'}
+          style={[StyleSheet.absoluteFill, { opacity: panelEntrance.opacity }]}
+        >
+          <AccountDeletionStatusPanel
+            frame={deletionBubbleFrame}
+            onDismiss={
+              accountDeletionStatus.status === 'completed'
+                ? () => void auth.clearAccountDeletionReceipt()
+                : undefined
+            }
+            status={accountDeletionStatus}
+          />
+        </Animated.View>
+      ) : null}
+      {/* 服务条款和隐私协议确认弹窗(figma 602:822/602:1249):个人登录链路在
+          radio 未勾选时统一拦截;同意=勾选并续接,不同意=留在登录页。stage 内
+          全屏遮罩(继承首启亮色门主题上下文),zIndex 盖过登录组。 */}
+      {consentDialogOpen ? (
+        <LoginConsentDialog
+          scale={groupScale}
+          title={loginText('consentDialogTitle')}
+          body={loginText('consentDialogBody')}
+          agreeLabel={loginText('consentAgree')}
+          disagreeLabel={loginText('consentDisagree')}
+          onAgree={agreeConsent}
+          onDisagree={dismissConsent}
+          onOpenTerms={() => openLegalLink('terms')}
+          onOpenPrivacy={() => openLegalLink('privacy')}
+        />
+      ) : null}
     </MobileLoginHandoffStage>
   );
 }
@@ -1131,25 +1299,64 @@ function usePanelEntrance(
   return { opacity, translateY };
 }
 
+/**
+ * 注销状态提示气泡(figma 678:1075「注销状态」组件集)。
+ *
+ * 浮层:落位与宽度由 `resolveDeletionBubbleFrame` 给出(物理 pt),内部几何(圆角 /
+ * padding / 字号 / 行高 / 间距)是 **stage 设计单位**,与登录组同乘 `frame.scale`
+ * 折算成物理 pt——故 figma 数值可逐字落码,气泡与登录面板保持设计稿里的比例关系。
+ * (2026-07-26 修正:初版把设计单位当物理 pt 用、宽度写死 335,比例失真。)
+ * 描边保持 1pt 物理细线;高度由内容撑开,禁止固定高;无图标 / 阴影 / 动画。
+ */
 function AccountDeletionStatusPanel({
+  frame,
   onDismiss,
   status,
 }: {
+  frame: LoginDeletionBubbleFrame;
   onDismiss?: () => void;
   status: AccountDeletionStatus;
 }) {
   const styles = useThemedStyles(makeStyles);
   const pending = status.status === 'pending';
+  const scaled = (designUnits: number) => designUnits * frame.scale;
+  const B = LOGIN_DELETION_BUBBLE;
   return (
-    <View style={styles.deletionStatus} testID="login.accountDeletionStatus">
-      <Text style={styles.deletionStatusTitle}>
+    <View
+      style={[
+        styles.deletionBubble,
+        {
+          borderRadius: scaled(B.radius),
+          left: frame.left,
+          padding: scaled(B.padding),
+          top: frame.top,
+          width: frame.width,
+        },
+      ]}
+      testID="login.accountDeletionStatus"
+    >
+      <Text
+        style={[
+          styles.deletionBubbleTitle,
+          { fontSize: scaled(B.font), lineHeight: scaled(B.lineHeight) },
+        ]}
+      >
         {pending
           ? loginText('accountDeletionPendingTitle')
           : status.status === 'processing'
             ? loginText('accountDeletionProcessingTitle')
             : loginText('accountDeletionCompletedTitle')}
       </Text>
-      <Text style={styles.deletionStatusCopy}>
+      <Text
+        style={[
+          styles.deletionBubbleCopy,
+          {
+            fontSize: scaled(B.font),
+            lineHeight: scaled(B.lineHeight),
+            marginTop: scaled(B.titleBodyGap),
+          },
+        ]}
+      >
         {pending
           ? loginText('accountDeletionPendingCopy').replace(
               '{date}',
@@ -1160,15 +1367,22 @@ function AccountDeletionStatusPanel({
             : loginText('accountDeletionCompletedCopy')}
       </Text>
       {onDismiss ? (
-        <MainWindowActionButton
-          action={{
-            label: loginText('accountDeletionDismiss'),
-            onPress: onDismiss,
-            testID: 'login.accountDeletionDismissButton',
-          }}
-          density="compact"
-          style={styles.fullButton}
-        />
+        <Pressable
+          accessibilityRole="button"
+          hitSlop={resolveDeletionBubbleLinkHitSlop(frame.scale)}
+          onPress={onDismiss}
+          style={[styles.deletionBubbleLink, { marginTop: scaled(B.bodyLinkGap) }]}
+          testID="login.accountDeletionDismissButton"
+        >
+          <Text
+            style={[
+              styles.deletionBubbleLinkText,
+              { fontSize: scaled(B.font), lineHeight: scaled(B.lineHeight) },
+            ]}
+          >
+            {loginText('accountDeletionDismiss')}
+          </Text>
+        </Pressable>
       ) : null}
     </View>
   );
@@ -1281,22 +1495,34 @@ const makeStyles = (colors: ThemeColors) =>
       gap: spacing.md,
       padding: spacing.lg,
     },
-    deletionStatus: {
-      borderColor: colors.borderStrong,
-      borderRadius: radius.control,
-      borderWidth: StyleSheet.hairlineWidth,
-      gap: spacing.sm,
-      padding: spacing.md,
+    // 注销提示气泡(figma 678:1075):不透明底 + 1px 描边(浮层盖立绘,必须不透明);
+    // 与缩放相关的几何(圆角/padding/字号/行高/间距)在组件内按 frame.scale 行内折算,
+    // left/top/width 由 resolveDeletionBubbleFrame 注入;描边保持 1pt 物理细线
+    // (设计 1 单位折算后不足半点,会在部分密度下消失);无图标/阴影/动画,高度内容撑开。
+    deletionBubble: {
+      backgroundColor: colors.login.deletionBubbleBg,
+      borderColor: colors.login.deletionBubbleBorder,
+      borderWidth: LOGIN_DELETION_BUBBLE.borderWidth,
+      position: 'absolute',
     },
-    deletionStatusTitle: {
-      color: colors.textPrimary,
-      fontSize: typeScale.body,
-      fontWeight: fontWeight.semibold,
+    deletionBubbleTitle: {
+      color: colors.login.controlText,
+      fontWeight: fontWeight.regular,
+      textAlign: 'center',
     },
-    deletionStatusCopy: {
-      color: colors.textSecondary,
-      fontSize: typeScale.footnote,
-      lineHeight: lineHeight.caption,
+    deletionBubbleCopy: {
+      color: colors.login.secondaryText,
+      fontWeight: fontWeight.regular,
+      textAlign: 'center',
+    },
+    deletionBubbleLink: {
+      alignSelf: 'center',
+    },
+    deletionBubbleLinkText: {
+      color: colors.login.controlText,
+      fontWeight: fontWeight.regular,
+      textAlign: 'center',
+      textDecorationLine: 'underline',
     },
     stepHeader: { gap: spacing.xs, marginBottom: spacing.xs },
     stepTitle: {
@@ -1367,8 +1593,6 @@ const makeStyles = (colors: ThemeColors) =>
       letterSpacing: spacing.sm,
       textAlign: 'center',
     },
-    appleButton: { height: 48, width: '100%' },
-    fullButton: { minHeight: 48, minWidth: 0 },
     helper: {
       color: colors.textSecondary,
       fontSize: typeScale.footnote,

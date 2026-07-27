@@ -101,6 +101,12 @@ function broadcastSchedulerEvent(event: SchedulerEvent): void {
   }
 }
 
+/** 非 Scheduler 引擎写入 run 衍生数据后，通知各端重新读取该任务。 */
+export function broadcastSchedulerChanged(scheduleId: string): void {
+  if (!scheduleId) return;
+  broadcastSchedulerEvent({ type: 'changed', scheduleId });
+}
+
 /**
  * 把 scheduler 抛的业务 Error 翻成带 code 的 IPC error。
  * Scheduler 当前抛的 message 形态固定为 'schedule {id} not found' 等明文(见

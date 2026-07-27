@@ -18,7 +18,7 @@
  *   切到 DraggableCardColumns。落定后都通过父层注入的 `onReorder(newOrderIds)`
  *   回调写回 manualPinnedOrder。
  *
- * 受控组件——sessions 为空时返回 null（不渲染段）。
+ * 受控组件——entries 为空时返回 null（不渲染段）。
  */
 
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
@@ -50,10 +50,7 @@ import { CardMasonry } from '../CardMasonry';
 import { SessionItem } from '../SessionItem';
 import type { SessionClickHandler } from '../SessionItem';
 import { SessionCard } from '../SessionCard';
-import {
-  projectIdentityKeyForSession,
-  type ProjectNode as ProjectNodeData,
-} from '../../lib/projectGrouping';
+import type { ProjectNode as ProjectNodeData } from '../../lib/projectGrouping';
 import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import type { Session } from '@/lib/ccAgent.types';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
@@ -105,7 +102,11 @@ function ViewStyleMenu({
             onSelect={() => setMode(opt.value)}
             className={MENU_ITEM_CLASS}
           >
-            <opt.Icon size={15} strokeWidth={1.75} className="shrink-0 text-[var(--cmd-palette-item-meta)]" />
+            <opt.Icon
+              size={15}
+              strokeWidth={1.75}
+              className="shrink-0 text-[var(--cmd-palette-item-meta)]"
+            />
             <span className="truncate">{t(opt.labelKey)}</span>
             {mode === opt.value && <Check size={15} className="ml-auto shrink-0" />}
           </DropdownMenuItem>
@@ -115,24 +116,31 @@ function ViewStyleMenu({
   );
 }
 
+export type PinnedSidebarEntry =
+  | { kind: 'session'; id: string; session: Session }
+  | {
+      kind: 'project';
+      id: string;
+      project: ProjectNodeData;
+      displaySessions: ProjectNodeData['sessions'];
+    };
+
 export interface PinnedSectionProps {
-  sessions: Session[];
+  /** 已按筛选和持久化顺序排好的置顶对话与项目。 */
+  entries: PinnedSidebarEntry[];
   /**
    * 已知项目全集,用于 hover 时把 pinned session 映射到项目 displayName(与
    * ProjectNode 表头同口径消歧)。文字模式渲染 SessionItem 时才用到,card / list
    * 模式当前不消费。
    */
   allKnownProjects: readonly ProjectNodeData[];
-  /**
-   * F-PJ-10：Project 维度过滤集合。
-   *   - 'all'         → 不过滤
-   *   - Set<string>   → 仅渲染 normalize(workingDir) 落在集合内的 pinned session
-   *
-   * Pinned session 的 workingDir 为 null 时（即未归属任何 Project）：
-   *   - 'all' → 显示
-   *   - Set   → 不显示（spec：多选具体 Project 时只看属于这些 Project 的 session）
-   */
-  projectsFilter: 'all' | ReadonlySet<string>;
+  /** 复用 ProjectNode 渲染项目，确保展开/收起和项目操作与普通项目段一致。 */
+  renderProject: (
+    project: ProjectNodeData,
+    displaySessions: ProjectNodeData['sessions'],
+    parentSectionCollapsed: boolean,
+    sessionVariant: 'text' | 'list',
+  ) => ReactNode;
   activeSessionId?: string;
   runningSessionIds: ReadonlySet<string>;
   /** /ctr 接管中的 sessionIds — SessionItem 用来切换左侧 icon */
@@ -150,9 +158,9 @@ export interface PinnedSectionProps {
 }
 
 export function PinnedSection({
-  sessions,
+  entries,
   allKnownProjects,
-  projectsFilter,
+  renderProject,
   activeSessionId,
   runningSessionIds,
   attachedSessionIds,
@@ -173,32 +181,25 @@ export function PinnedSection({
   const isCardLike = mode !== 'text';
   const [collapsed, setCollapsed] = useState(false);
 
-  // F-PJ-10：'all' 跳过过滤；Set 时按归一化后的 workingDir 过滤；
-  // 不归属任何 Project 的 pinned 在多选模式下不显示。
+  const visibleEntries = entries;
   const visibleSessions = useMemo(
-    () =>
-      projectsFilter === 'all'
-        ? sessions
-        : sessions.filter((s) => {
-            if (s.workspaceKind === 'dialogue') return false;
-            const projectKey = projectIdentityKeyForSession(s);
-            return projectKey != null && projectsFilter.has(projectKey);
-          }),
-    [sessions, projectsFilter],
+    () => visibleEntries.flatMap((entry) => (entry.kind === 'session' ? [entry.session] : [])),
+    [visibleEntries],
   );
 
   // 置顶不做"最多显示 N 条"折叠——置顶是用户主动钉住的,全部显示(三种模式一致)。
-  const slicedSessions = visibleSessions;
+  const slicedEntries = visibleEntries;
 
   // 文字模式 SessionItem hover 时右侧浮层展示的"项目来源"标签(口径见
   // buildSessionSourceLabelMap),与时间排序视图同口径。card / list 模式视觉自成一体,
-  // 当前不注入。置顶视图传 slicedSessions。
+  // 当前不注入。置顶视图传 visibleSessions。
   const sourceLabelMap = useMemo(
-    () => buildSessionSourceLabelMap(slicedSessions, allKnownProjects, t('ccAgent.sidebar.dialogues')),
-    [slicedSessions, allKnownProjects, t],
+    () =>
+      buildSessionSourceLabelMap(visibleSessions, allKnownProjects, t('ccAgent.sidebar.dialogues')),
+    [visibleSessions, allKnownProjects, t],
   );
 
-  const getSessionId = useCallback((s: Session) => s.id, []);
+  const getEntryId = useCallback((entry: PinnedSidebarEntry) => entry.id, []);
 
   // 卡片渲染——card(瀑布流,白底描边卡)与 list(单列满宽,扁平 Telegram 风行)
   // 共用同一张 SessionCard,靠 variant 切换视觉。index 用于 list 变体首行补一条
@@ -207,10 +208,31 @@ export function PinnedSection({
   // 方块的"正上方"会露出上一行的底线(本行的底线 = 高亮行的上沿)。配合行自身高亮时
   // 隐藏自己的底线,高亮方块上下两条线都不再露出。
   const renderCard = useCallback(
-    (session: Session, index: number) => {
-      const next = slicedSessions[index + 1];
+    (entry: PinnedSidebarEntry, index: number) => {
+      if (entry.kind === 'project') {
+        return (
+          <div
+            className={cn(
+              mode === 'card' &&
+                'rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--surface-elevated)] p-1',
+              mode === 'list' && 'border-b border-[var(--cmd-palette-border)] py-0.5',
+            )}
+          >
+            {renderProject(
+              entry.project,
+              entry.displaySessions,
+              collapsed,
+              mode === 'list' ? 'list' : 'text',
+            )}
+          </div>
+        );
+      }
+      const session = entry.session;
+      const next = slicedEntries[index + 1];
       const nextHighlighted =
-        next != null && (next.id === activeSessionId || (selectedSessionIds?.has(next.id) ?? false));
+        next?.kind === 'session' &&
+        (next.session.id === activeSessionId ||
+          (selectedSessionIds?.has(next.session.id) ?? false));
       return (
         <SessionCard
           session={session}
@@ -233,7 +255,9 @@ export function PinnedSection({
     },
     [
       mode,
-      slicedSessions,
+      slicedEntries,
+      renderProject,
+      collapsed,
       activeSessionId,
       runningSessionIds,
       attachedSessionIds,
@@ -253,7 +277,7 @@ export function PinnedSection({
     ? t('ccAgent.sidebar.pinnedToggleExpand')
     : t('ccAgent.sidebar.pinnedToggleCollapse');
 
-  if (visibleSessions.length === 0) return null;
+  if (visibleEntries.length === 0) return null;
 
   return (
     <div className="flex flex-col gap-0.5 w-full">
@@ -321,20 +345,15 @@ export function PinnedSection({
           导致右留白(~23px)明显宽于左(11px)——改为 pr-0 后两侧都≈12px 且更窄。 */}
       {/* 段级收起走 SectionCollapse 高度动画(内容保持挂载)。 */}
       <SectionCollapse collapsed={collapsed}>
-        <div
-          className={cn(
-            'flex flex-col gap-0.5',
-            isCardLike ? 'pr-0 pl-3' : 'pt-1 pr-0 pl-3',
-          )}
-        >
+        <div className={cn('flex flex-col gap-0.5', isCardLike ? 'pr-0 pl-3' : 'pt-1 pr-0 pl-3')}>
           {/* 三种显示模式:
               - card:CardMasonry 响应式分栏(侧栏 ~258px 起 2 列、~424px 起 3 列,错落瀑布);
               - list:卡片视觉但**单列满宽**(不分栏、铺满左侧,类灵动岛),走单列 SortableList;
               - text:紧凑行 SessionItem。card/list 都整卡可拖,回写同一份 manualPinnedOrder。 */}
           {mode === 'card' ? (
             <CardMasonry
-              items={slicedSessions}
-              getId={getSessionId}
+              items={slicedEntries}
+              getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
               renderItem={renderCard}
@@ -345,38 +364,42 @@ export function PinnedSection({
             // (内缩短线,见 SessionCard list 变体):行底一条覆盖"行间 + 列表底",首行补
             // 一条顶线覆盖"列表顶";高亮(active/选中/hover)行及其相邻行的线隐藏。
             <SortableList
-              items={slicedSessions}
-              getId={getSessionId}
+              items={slicedEntries}
+              getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
               className="flex flex-col gap-0.5"
               renderItem={renderCard}
             />
           ) : (
-          <SortableList
-            items={slicedSessions}
-            getId={getSessionId}
-            onReorder={onReorder}
-            reducedMotion={reducedMotion}
-            className="flex flex-col gap-0.5"
-            renderItem={(session) => (
-              <SessionItem
-                session={session}
-                isActive={session.id === activeSessionId}
-                isRunning={runningSessionIds.has(session.id)}
-                isAttached={attachedSessionIds.has(session.id)}
-                hasAttentionNotification={notifications.has(session.id)}
-                isSelected={selectedSessionIds?.has(session.id) ?? false}
-                onClick={onSessionClick}
-                onAction={onAction}
-                onRename={onRename}
-                onTogglePin={onTogglePin}
-                onMoveSession={onMoveSession}
-                projectOptions={projectOptions}
-                sourceLabel={sourceLabelMap.get(session.id)}
-              />
-            )}
-          />
+            <SortableList
+              items={slicedEntries}
+              getId={getEntryId}
+              onReorder={onReorder}
+              reducedMotion={reducedMotion}
+              className="flex flex-col gap-0.5"
+              renderItem={(entry) =>
+                entry.kind === 'project' ? (
+                  renderProject(entry.project, entry.displaySessions, collapsed, 'text')
+                ) : (
+                  <SessionItem
+                    session={entry.session}
+                    isActive={entry.session.id === activeSessionId}
+                    isRunning={runningSessionIds.has(entry.session.id)}
+                    isAttached={attachedSessionIds.has(entry.session.id)}
+                    hasAttentionNotification={notifications.has(entry.session.id)}
+                    isSelected={selectedSessionIds?.has(entry.session.id) ?? false}
+                    onClick={onSessionClick}
+                    onAction={onAction}
+                    onRename={onRename}
+                    onTogglePin={onTogglePin}
+                    onMoveSession={onMoveSession}
+                    projectOptions={projectOptions}
+                    sourceLabel={sourceLabelMap.get(entry.session.id)}
+                  />
+                )
+              }
+            />
           )}
         </div>
       </SectionCollapse>

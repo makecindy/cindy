@@ -41,7 +41,7 @@
  *   不依赖 React 渲染。Hook 只做 `useState` + 持久化副作用。
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   loadStatus,
@@ -113,7 +113,7 @@ export interface UseSidebarFilterReturn {
   sortBy: FilterSortBy;
   /** Project 分组手动排序顺序。元素为 normalized workingDir。 */
   manualProjectOrder: readonly string[];
-  /** Pinned 段手动排序顺序。元素为 session id；不在数组里的（新置顶）由调用方按 pinnedAt 补在后面。 */
+  /** Pinned 段手动排序顺序。元素为 session id 或带前缀的 project entry id。 */
   manualPinnedOrder: readonly string[];
 
   setStatus: (s: FilterStatus) => void;
@@ -140,17 +140,18 @@ export interface UseSidebarFilterReturn {
     order: readonly string[],
     activeWorkingDirs: readonly string[],
   ) => void;
-  /** 直接替换 Pinned 手动排序顺序，持久化到 localStorage。
-   *  activeSessionIds 是当前所有 pinned session 的 id（用于 normalize：
-   *  剔除已不再 pinned 的、补上未出现在 order 的）。 */
+  /** 直接替换 Pinned 手动排序顺序并持久化。
+   *  activeEntryIds 是当前所有仍有效的 pinned session / project entry id。 */
   setManualPinnedOrder: (
     order: readonly string[],
-    activeSessionIds: readonly string[],
+    activeEntryIds: readonly string[],
   ) => void;
-  /** 把 sessionId 提到 manualPinnedOrder 首位（已存在则去重移位）。
+  /** 把一个 pinned entry 提到 manualPinnedOrder 首位（已存在则去重移位）。
    *  pin / re-pin 都调它，确保新置顶立刻可见 rank=0；不调它则 re-pin 会带着
    *  老 rank 卡在原位。函数式更新，对快速连点 pin 安全。 */
-  promotePin: (sessionId: string) => void;
+  promotePin: (entryId: string) => void;
+  /** 从 Pinned 顺序中删除一个 entry；project 置顶状态以 entry 是否存在为准。 */
+  removePin: (entryId: string) => void;
 }
 
 export function useSidebarFilter(): UseSidebarFilterReturn {
@@ -162,6 +163,18 @@ export function useSidebarFilter(): UseSidebarFilterReturn {
   const [sortBy, setSortByState] = useState<FilterSortBy>(() => loadSortBy());
   const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() => loadManualProjectOrder());
   const [manualPinnedOrder, setManualPinnedOrderState] = useState<string[]>(() => loadManualPinnedOrder());
+
+  useEffect(
+    () =>
+      window.electronAPI.sidebarSettingsOnPinnedOrderChanged((next) => {
+        setManualPinnedOrderState((prev) =>
+          next.length === prev.length && next.every((id, index) => id === prev[index])
+            ? prev
+            : Array.from(next),
+        );
+      }),
+    [],
+  );
 
   const setStatus = useCallback((s: FilterStatus) => {
     setStatusState(s);
@@ -239,9 +252,9 @@ export function useSidebarFilter(): UseSidebarFilterReturn {
   );
 
   const setManualPinnedOrder = useCallback(
-    (order: readonly string[], activeSessionIds: readonly string[]) => {
+    (order: readonly string[], activeEntryIds: readonly string[]) => {
       setManualPinnedOrderState((prev) => {
-        const next = normalizeManualPinnedOrder(order, activeSessionIds);
+        const next = normalizeManualPinnedOrder(order, activeEntryIds);
         if (next.length === prev.length && next.every((id, index) => id === prev[index])) return prev;
         persistManualPinnedOrder(next);
         return next;
@@ -250,10 +263,19 @@ export function useSidebarFilter(): UseSidebarFilterReturn {
     [],
   );
 
-  const promotePin = useCallback((sessionId: string) => {
+  const promotePin = useCallback((entryId: string) => {
     setManualPinnedOrderState((prev) => {
-      if (prev[0] === sessionId) return prev;
-      const next = [sessionId, ...prev.filter((id) => id !== sessionId)];
+      if (prev[0] === entryId) return prev;
+      const next = [entryId, ...prev.filter((id) => id !== entryId)];
+      persistManualPinnedOrder(next);
+      return next;
+    });
+  }, []);
+
+  const removePin = useCallback((entryId: string) => {
+    setManualPinnedOrderState((prev) => {
+      if (!prev.includes(entryId)) return prev;
+      const next = prev.filter((id) => id !== entryId);
       persistManualPinnedOrder(next);
       return next;
     });
@@ -291,5 +313,6 @@ export function useSidebarFilter(): UseSidebarFilterReturn {
     setManualProjectOrder,
     setManualPinnedOrder,
     promotePin,
+    removePin,
   };
 }

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Building2, Pencil } from 'lucide-react';
+import { Building2, Copy, Pencil } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
@@ -24,6 +24,11 @@ function getOrganizationRoleI18nKey(role: string) {
   return ORGANIZATION_ROLE_I18N_KEYS[isOrganizationRole(role) ? role : 'member'];
 }
 
+// 展示用缩写:长 ID 只露头尾便于目视比对,点击复制的仍是完整值。
+function abbreviateUserId(id: string): string {
+  return id.length > 14 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;
+}
+
 export function UserProfileCard() {
   const { user, mode, exitLocalMode } = useAuth();
   const navigate = useNavigate();
@@ -31,6 +36,9 @@ export function UserProfileCard() {
   const [orgLogoError, setOrgLogoError] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const { t } = useTranslation();
+  // aria-label(动作)会覆盖子文本作为可访问名称;可见的 ID 文本经 aria-describedby
+  // 暴露给辅助技术,让读屏用户复制前也能核对 ID。
+  const userIdDescriptionId = useId();
 
   // 换头像(服务端资料更新)后给新地址重试的机会,
   // 不让一次历史加载失败永远钉死在首字母兜底上。
@@ -150,22 +158,28 @@ export function UserProfileCard() {
         )}
       </button>
 
-      {/* User name — 点击复制用户 ID;hover / cursor 明示可交互。 */}
       <div className="min-w-0 flex-1">
+        <p className="min-w-0 truncate text-18 font-medium leading-[1.2] text-[var(--settings-profile-name)]">
+          {displayName}
+        </p>
+        {/* User ID — 显式展示,整行点击复制;常驻小图标明示可复制。 */}
         <button
           type="button"
           onClick={() => void handleCopyUserId()}
           aria-label={t('settings.userProfile.copyUserId.action')}
+          aria-describedby={userIdDescriptionId}
           title={t('settings.userProfile.copyUserId.action')}
           className={cn(
-            '-ml-2 flex min-w-0 max-w-full cursor-pointer items-center rounded-lg px-2 py-1 text-left',
-            'transition-colors hover:bg-[var(--settings-profile-avatar-bg)]',
+            '-ml-1.5 mt-0.5 flex min-w-0 max-w-full cursor-pointer items-center gap-1 rounded-full px-1.5 py-0.5 text-left',
+            'text-12 text-[var(--text-tertiary)] transition-colors',
+            'hover:bg-[var(--settings-profile-avatar-bg)] hover:text-[var(--text-secondary)]',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           )}
         >
-          <span className="min-w-0 truncate text-18 font-medium leading-[1.2] text-[var(--settings-profile-name)]">
-            {displayName}
+          <span id={userIdDescriptionId} className="min-w-0 truncate">
+            {t('settings.userProfile.copyUserId.display', { id: abbreviateUserId(user.id) })}
           </span>
+          <Copy aria-hidden="true" size={11} className="shrink-0" />
         </button>
         {organizationName && organizationRole && (
           <div className="mt-1 flex min-w-0 items-center gap-1.5 text-sm leading-5 text-[var(--text-secondary)]">

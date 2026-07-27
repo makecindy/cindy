@@ -3,6 +3,3 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/makecindy/cindy/security/advisories/new
     about: Do not disclose security vulnerabilities publicly.
-  - name: Discussions
-    url: https://github.com/makecindy/cindy/discussions
-    about: Ask usage questions and discuss ideas with the community.

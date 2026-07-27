@@ -28,6 +28,7 @@ describe('collaboration error i18n', () => {
       expect(collaboration?.startFailedContinue, locale).toEqual(expect.any(String));
       for (const code of [
         'INVALID_PARAMS',
+        'PRECONDITION_FAILED',
         'NO_PROVIDER_FOR_AGENT',
         'PROVIDER_ROUTE_UNAVAILABLE',
         'BUDGET_MODEL_REQUIRES_API_MODE',

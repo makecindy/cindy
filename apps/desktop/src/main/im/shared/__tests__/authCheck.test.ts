@@ -182,6 +182,19 @@ describe('checkImRouteAuth', () => {
     });
   });
 
+  it('allows an explicitly connected no-auth proxy without API key material', async () => {
+    const providerSnapshot = [
+      provider({ id: 'local-proxy', strategy: 'none', connected: true }),
+    ];
+
+    await expect(
+      checkImRouteAuth(row({ providerId: 'local-proxy' }), providerSnapshot, deps()),
+    ).resolves.toEqual({
+      ok: true,
+      missing: null,
+    });
+  });
+
   it('reports provider-key when an api-key provider is connected without key material', async () => {
     const providerSnapshot = [
       provider({ id: 'custom-anthropic', strategy: 'api-key-header', connected: true }),

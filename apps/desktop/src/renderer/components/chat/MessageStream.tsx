@@ -553,6 +553,7 @@ export function shouldBlockAssistantFork(
  */
 function isCompletedAssistantMessage(message: ChatMessage): boolean {
   return message.turnCompleted === true ||
+    (message.turnMoney?.amount ?? 0) > 0 ||
     (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0);
 }
 
@@ -3416,8 +3417,10 @@ const MessageItem = memo(function MessageItem({
           // 任务执行过程中(尾部 turn 流式中,forkBlocked=true)不出现操作行;
           // turn 结束后只有收尾正文出现 —— 中间句彻底不挂 bar。
           showActionBar={Boolean(assistantIsTurnFinal) && !assistantForkBlocked}
+          turnMoney={message.turnMoney}
           turnCostUsd={message.turnCostUsd}
           turnCostIsEstimate={message.turnCostIsEstimate}
+          userTurnMoney={message.userTurnMoney}
           userTurnCostUsd={message.userTurnCostUsd}
           userTurnCostIsEstimate={message.userTurnCostIsEstimate}
           turnUsageDetails={message.turnUsageDetails}

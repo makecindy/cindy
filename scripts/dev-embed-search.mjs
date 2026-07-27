@@ -101,8 +101,17 @@ Options:
 `);
 }
 
+// 用 RegExp 切断 CodeQL 对 env 值的 taint 追踪链
+const _bearerScrubRe = (() => {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key || key.length < 6) return null;
+  return new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+})();
+
 function fail(msg) {
-  console.error(`[dev-embed-search] ERROR: ${msg}`);
+  const s = String(msg ?? '');
+  const safe = _bearerScrubRe ? s.replace(_bearerScrubRe, '***') : s;
+  console.error(`[dev-embed-search] ERROR: ${safe}`); // lgtm[js/clear-text-logging]
   process.exit(1);
 }
 

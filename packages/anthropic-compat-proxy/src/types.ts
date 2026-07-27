@@ -12,6 +12,8 @@
 import type { Buffer } from 'node:buffer';
 import type { ServerResponse } from 'node:http';
 
+import type { OutboundProxyResolver } from './outbound-proxy.js';
+
 /**
  * 请求 transform 上下文。
  * - method/url/headers 是只读快照,transform 不应该尝试通过这些改写 outbound 请求
@@ -23,6 +25,14 @@ export interface RequestTransformCtx {
   readonly method: string;
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
+  /**
+   * 本请求**最终**发往的上游 baseURL(routingTransform 的 per-request override 已生效,
+   * 与 ResponseObserverCtx.upstreamBase 同构)。仅在请求 transform 链的 ctx 里出现;
+   * routingTransform / localHandler 的 ctx 中为 undefined(路由尚未/无需解析)。
+   * 供「按目标上游做兼容改写」的 transform 使用(如跨供应商时转换上游读不懂的历史项),
+   * 避免 host 侧为判断路由去向而复刻整套路由逻辑。
+   */
+  readonly upstreamBase?: string;
 }
 
 /**
@@ -67,6 +77,11 @@ export type LocalRequestHandler = (args: {
 export interface RoutingDecision {
   /** 覆盖本次请求的上游 URL(完整 `http(s)://host[:port][/basePath]`);省略 = 用默认 `opts.upstream`。 */
   upstreamOverride?: string;
+  /**
+   * 覆盖本次请求追加到上游 base path 后的路径；必须是以单个 `/` 开头的同源路径。
+   * 典型用于兼容端点不是标准 `/responses` / `/v1/messages` 的供应商。
+   */
+  pathOverride?: string;
   /** 合并进 outbound headers 的字段(覆盖语义,小写 key);典型用于换 `authorization`。 */
   headerOverride?: Record<string, string>;
   /**
@@ -78,7 +93,7 @@ export interface RoutingDecision {
    */
   headerDelete?: string[];
   /**
-   * 本地 handler(见 LocalRequestHandler)。与上面三个转发字段**互斥**:设了 handler 时其余
+   * 本地 handler(见 LocalRequestHandler)。与上面四个转发字段**互斥**:设了 handler 时其余
    * 字段忽略、不发生任何上游转发。省略 = 转发语义,与本字段引入前字节级一致。
    */
   localHandler?: LocalRequestHandler;
@@ -123,7 +138,7 @@ export type ResponseObserver = (
 /**
  * 一条 400 透明重试规则。
  *
- * forward() 命中上游 400 时,按顺序找第一条 `enabled() && match(decodedErrBodyText)
+ * forward() 命中上游 400 时,按顺序找第一条 `enabled() && matches(decodedErrBodyText)
  * && strip(body) !== null` 的规则,用其 strip 结果重发一次(canRetry=false,防循环)。
  * 多条规则并列(例: encrypted_content / empty_thinking),互不耦合;regex 互斥,
  * 命中顺序仅在两条都可能匹配同一错误体时才有意义(实际不会)。
@@ -133,8 +148,10 @@ export interface RecoveryRule {
   id: string;
   /** gate: false 时该规则完全跳过(thinking 永远 true;encrypted 跟 silentEncryptedRetry 设置)。 */
   enabled: () => boolean;
-  /** 对解压后的 400 错误体文本判定是否命中本规则。 */
-  match: (decodedErrorBodyText: string) => boolean;
+  /** 对解压后的 400 错误体文本判定是否命中本规则。
+   * 命名避开 `match`:与 String.prototype.match 同名会让 CodeQL 把动态文本误判为
+   * 正则模式(js/regex-injection 误报)。 */
+  matches: (decodedErrorBodyText: string) => boolean;
   /** 改写请求 body;返回 null = 没有可改的东西(本规则不适用,继续找下一条)。 */
   strip: (body: Buffer) => Buffer | null;
   /** 命中并成功 strip 后触发(用于 Layer-2 markActive)。 */
@@ -206,6 +223,14 @@ export interface ProxyOptions {
    * 注意: body 会整段缓冲进内存并 JSON.parse,该值同时就是单请求的内存 / 解析停顿预算。
    */
   maxRequestBodyBytes?: number;
+  /**
+   * 可选: 出站(上游方向)代理解析器。per-request 以最终上游 origin 现取:返回
+   * http:// 代理地址 = 该请求经代理转发(https 上游走 CONNECT 隧道、http 上游走
+   * 绝对形式);返回 null / 抛错 = 直连(fail-open)。loopback 上游不会被调用。
+   * 宿主用它接系统代理(Electron resolveProxy)或代理环境变量
+   * (createEnvOutboundProxyResolver)。不传 = 永远直连,与扩展前字节级一致。
+   */
+  resolveOutboundProxy?: OutboundProxyResolver;
   /**
    * 可选: debug 级别下是否 dump 入站请求 body(截断到 64KiB)。默认 false ——
    * dev 的日志级别默认 trace,若默认 dump,agent 高并发场景(code-review 扇出 +

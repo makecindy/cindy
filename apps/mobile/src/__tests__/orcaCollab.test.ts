@@ -72,12 +72,12 @@ describe('buildOrcaDispatchCard', () => {
       label: 'frontend',
       initial_task: '实现登录页',
     });
-    expect(card).toEqual({ variant: 'dispatch', title: '派活给 worker frontend', body: '实现登录页' });
+    expect(card).toEqual({ variant: 'dispatch', title: '派活给 Worker frontend', body: '实现登录页' });
   });
 
   it('falls back to role/agent meta when create_worker has no initial_task', () => {
     const card = buildOrcaDispatchCard('create_worker', { role: 'reviewer', agent: 'claude-code' });
-    expect(card).toEqual({ variant: 'dispatch', title: '派活给 worker reviewer', body: '角色 reviewer · claude-code' });
+    expect(card).toEqual({ variant: 'dispatch', title: '派活给 Worker reviewer', body: '角色 reviewer · claude-code' });
   });
 
   it('summarizes create_workers with the batch size and each worker task', () => {
@@ -89,7 +89,7 @@ describe('buildOrcaDispatchCard', () => {
     });
     expect(card).toEqual({
       variant: 'dispatch',
-      title: '批量派活给 2 个 worker',
+      title: '批量派活给 2 个 Worker',
       body: 'frontend：实现登录页\nreview：检查交互',
     });
   });
@@ -99,7 +99,7 @@ describe('buildOrcaDispatchCard', () => {
       target_session_id: 'sess-123',
       message: '继续下一步',
     });
-    expect(card).toEqual({ variant: 'dispatch', title: '发消息给 worker', body: '继续下一步' });
+    expect(card).toEqual({ variant: 'dispatch', title: '发消息给 Worker', body: '继续下一步' });
   });
 
   it('returns null for non-dispatch tools', () => {
@@ -110,12 +110,12 @@ describe('buildOrcaDispatchCard', () => {
 describe('parseOrcaWorkerReport', () => {
   it('parses the DB JSON report shape (string content)', () => {
     expect(parseOrcaWorkerReport('{"orcaSource":"worker","content":"任务完成"}'))
-      .toEqual({ variant: 'report', title: 'worker 回报', body: '任务完成' });
+      .toEqual({ variant: 'report', title: 'Worker 回报', body: '任务完成' });
   });
 
   it('parses an already-object report', () => {
     expect(parseOrcaWorkerReport({ orcaSource: 'worker', content: '已修复' }))
-      .toEqual({ variant: 'report', title: 'worker 回报', body: '已修复' });
+      .toEqual({ variant: 'report', title: 'Worker 回报', body: '已修复' });
   });
 
   it('returns null for normal user content / malformed JSON (fallback to plain text)', () => {
@@ -145,12 +145,12 @@ describe('normalizeRemoteMessages with orca collaboration', () => {
 
     const dispatch = items.find((item) => item.source.id === 'dispatch');
     expect(dispatch?.kind).toBe('system');
-    expect(dispatch?.orcaCard).toEqual({ variant: 'dispatch', title: '派活给 worker api', body: '建接口' });
+    expect(dispatch?.orcaCard).toEqual({ variant: 'dispatch', title: '派活给 Worker api', body: '建接口' });
 
     const report = items.find((item) => item.source.id === 'report');
     expect(report?.kind).toBe('user');
     expect(report?.body).toBe('接口完成');
-    expect(report?.orcaCard).toEqual({ variant: 'report', title: 'worker 回报', body: '接口完成' });
+    expect(report?.orcaCard).toEqual({ variant: 'report', title: 'Worker 回报', body: '接口完成' });
   });
 
   it('renders create_workers tool_use as an Orca dispatch card', () => {
@@ -173,7 +173,7 @@ describe('normalizeRemoteMessages with orca collaboration', () => {
     expect(item?.kind).toBe('system');
     expect(item?.orcaCard).toEqual({
       variant: 'dispatch',
-      title: '批量派活给 2 个 worker',
+      title: '批量派活给 2 个 Worker',
       body: 'api：实现接口\ntest：补充测试',
     });
   });

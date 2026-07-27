@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "productName": "Cindy",
-  "version": "1.0.0",
+  "version": "0.0.0",
   "description": "Cindy desktop client (真实版本号在 release 时由脚本通过 APP_VERSION 注入,见 forge.config.ts)",
   "main": ".vite/build/index.js",
   "private": true,
@@ -18,6 +18,7 @@
     "dev:inspect": "pnpm dev:winsetup && cross-env OPEN_DEVTOOLS=1 node scripts/dev-remote-env.mjs electron-forge start --inspect-electron --",
     "package": "electron-forge package",
     "release:package": "node scripts/package-desktop.mjs",
+    "install:android-platform-tools": "node scripts/ensure-android-platform-tools.mjs",
     "build": "electron-forge make",
     "db:check": "drizzle-kit check",
     "db:generate": "drizzle-kit generate",
@@ -35,7 +36,8 @@
     "test:migration": "pnpm --dir ../.. test:runner && node ../../scripts/test-workspaces.mjs --tier migration",
     "test:migration-replay": "node ../../scripts/ensure-deps.mjs && node ../../scripts/ensure-dev-runtime-assets.mjs && vitest run src/main/localDb/__tests__/migrationReplay.test.ts",
     "test:watch": "vitest",
-    "preview:oauth-pages": "tsx scripts/preview-oauth-pages.ts"
+    "preview:oauth-pages": "tsx scripts/preview-oauth-pages.ts",
+    "export:login-callback-template": "tsx scripts/export-login-callback-template.ts"
   },
   "author": {
     "name": "X.D. Network Inc.",
@@ -44,7 +46,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@cindy/auth-client": "workspace:*",
-    "@cindy/content-moderation-protocol": "workspace:*",
+    "@cindy/plugin-protocol": "workspace:*",
     "@cindy/slack-hook-protocol": "workspace:*",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-cpp": "^6.0.3",

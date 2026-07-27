@@ -27,6 +27,7 @@
     "./fixtures": "./src/fixtures.ts",
     "./interaction": "./src/interaction.ts",
     "./math-markdown": "./src/mathMarkdown.ts",
+    "./mention-ref": "./src/mentionRef.ts",
     "./mermaid-autofix": "./src/mermaidAutofix.ts",
     "./message-render": "./src/messageRender.ts",
     "./message-normalize": "./src/messageNormalize.ts",
@@ -54,7 +55,8 @@
     "./system-card": "./src/systemCard.ts",
     "./thinking-text": "./src/thinkingText.ts",
     "./tool-use-descriptor": "./src/toolUseDescriptor.ts",
-    "./work-activity-projection": "./src/workActivityProjection.ts"
+    "./work-activity-projection": "./src/workActivityProjection.ts",
+    "./codex-usage-buckets": "./src/codexUsageBuckets.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

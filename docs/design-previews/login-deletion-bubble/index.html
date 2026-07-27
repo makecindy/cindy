@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>账号注销提示气泡 · 修复验收 Demo</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
+    background: #f4f4f2; color: #262626; padding: 20px 24px 40px;
+  }
+  header h1 { font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
+  .badge.sha { background: #ececec; color: #525252; border-color: #d7d7d4; }
+  .meta-lines { margin-top: 6px; font-size: 12.5px; line-height: 1.6; color: #404040; max-width: 1120px; }
+  .meta-lines b { color: #262626; }
+  .bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; }
+  .grp { color: #737373; font-weight: 600; }
+  .seg { display: inline-flex; border: 1px solid #d7d7d4; border-radius: 8px; overflow: hidden; background: #fff; }
+  .seg button { border: 0; background: transparent; padding: 5px 10px; font-size: 12px; cursor: pointer; color: #525252; }
+  .seg button.on { background: #262626; color: #f4f4f2; }
+  .statebtn { border: 1px solid #d7d7d4; border-radius: 8px; background: #fff; padding: 5px 10px; font-size: 12px; cursor: pointer; color: #525252; }
+  .statebtn.on { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
+  main { display: flex; gap: 28px; margin-top: 14px; flex-wrap: wrap; align-items: flex-start; }
+  .framewrap { display: flex; flex-direction: column; gap: 8px; }
+  .framelabel { font-size: 12px; font-weight: 700; padding: 5px 10px; border-radius: 8px; max-width: 720px; line-height: 1.55; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+  .framelabel .tag { display: inline-block; margin-right: 8px; padding: 1px 8px; border-radius: 6px; font-size: 11px; letter-spacing: .5px; background: #166534; color: #fff; }
+  .frame { position: relative; outline: 1px solid #c9c9c6; outline-offset: -1px; border-radius: 6px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+  .frame .stage { position: absolute; inset: 0; }
+  /* 家具示意占位(非验收对象):虚线半透明块 */
+  .prop { position: absolute; border: 1.5px dashed rgba(100,100,100,.45); border-radius: 10px; background: rgba(140,140,140,.14); color: rgba(80,80,80,.75); font-size: 10px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 4px; }
+  .db-bubble { }
+  .db-dismiss { cursor: pointer; }
+  .rsz { position: absolute; z-index: 30; touch-action: none; }
+  .rsz-e { right: 0; top: 0; width: 8px; height: 100%; cursor: ew-resize; }
+  .rsz-s { left: 0; bottom: 0; width: 100%; height: 8px; cursor: ns-resize; }
+  .rsz-se { right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; }
+  .rsz-se::after { content: ""; position: absolute; right: 2px; bottom: 2px; width: 8px; height: 8px; border-right: 2px solid #a3a3a3; border-bottom: 2px solid #a3a3a3; }
+  .sizetag { position: absolute; right: 8px; top: 6px; font-size: 10px; color: #737373; background: rgba(255,255,255,.75); padding: 1px 6px; border-radius: 6px; z-index: 31; pointer-events: none; }
+  .modetag { position: absolute; left: 8px; top: 6px; font-size: 10px; color: #1d4ed8; background: rgba(239,246,255,.85); padding: 1px 6px; border-radius: 6px; z-index: 31; pointer-events: none; font-weight: 600; }
+  .probe-readout {
+    margin-top: 14px; font-size: 12px; line-height: 1.75; background: #111827; color: #d1fae5;
+    border-radius: 10px; padding: 10px 14px; max-width: 1120px; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  footer { margin-top: 22px; font-size: 11.5px; color: #8a8a8a; line-height: 1.7; max-width: 1120px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>账号注销提示气泡 · 修复验收 Demo
+    <span class="badge">修复后验证(浮层气泡)</span><span class="badge sha">feat/login-deletion-bubble</span>
+  </h1>
+  <div class="meta-lines">
+    <div><b>验证什么</b>:账号注销状态提示已从「登录组文档流首子(被面板 100% 覆盖的 bug)」改为<b>浮层气泡</b>——盖在登录页一切元素(立绘/字标/面板/社交行)之上,不占布局流;desk / phone / pad(横/竖)四端,light/dark 双模式,四语言。</div>
+    <div><b>怎么验</b>:气泡的几何/颜色/排版全部由内嵌 truth 渲染(提取自本分支 HEAD 源码,带 provenance);布局引擎 = 产品 <code>resolveDeletionBubbleFrame</code> 移植,门 F oracle = 产品纯函数 <code>resolveLoginSurface + resolveDeletionBubbleFrame</code> 预计算;帧右/下缘可拖拽拉尺寸(窄窗 clamp、pad 横竖断点 ±1 全覆盖)。</div>
+    <div><b>验收</b>:门 A/B/C/D/F 全绿(门 E 无沙盒基准照实跳过);completed 态点「我知道了」气泡消失;长文案压力态验证撑高/居中换行/底距 20 恒定;下方探针区给出浮层覆盖与不推挤的实测数值。家具(立绘/字标/面板/社交行/协议行)为<b>示意占位</b>,非验收对象。</div>
+  </div>
+  <div class="bar" id="matrixBar"></div>
+  <div class="bar">
+    <span class="grp">注销状态</span><span id="stateBtns" style="display:inline-flex;gap:6px"></span>
+  </div>
+</header>
+<main>
+  <section class="framewrap">
+    <div class="framelabel"><span class="tag">浮层气泡</span>气泡 = 修复后真实渲染(truth 绑定);虚线块 = 示意家具,气泡应盖在其上且不推挤</div>
+    <div class="frame" id="frame"></div>
+  </section>
+</main>
+<pre class="probe-readout" id="probeOut">probe…</pre>
+<footer>
+  由 qa-hifi-demo 生成 · 渲染数据全部来自内嵌 truth(带 provenance,提取自 feat/login-deletion-bubble HEAD) · 家具为示意占位非验收对象 · 2026-07-26
+</footer>
+<script id="qa-truth" type="application/json">{"adaptive":{"oracle":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"loginSkinLayout.ts:302 resolveLoginSurface / :486 resolveDeletionBubbleFrame","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":"resolveLoginSurface + resolveDeletionBubbleFrame(esbuild 编译 loginSkinLayout.ts 后 import,产品纯函数)"},"safeTop":{"provenance":{"hash":"sha256:20ed75caa1af0812da868a6ce764a33556811c291e21ccd4a9671e1c92559429","locator":"demo chrome:safe-area 顶仿真常量(产品运行时 = insets.top)","source":"../../../apps/mobile/app/(auth)/login.tsx"},"value":59},"samples":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"产品纯函数对 spec.adaptive.sampleSizes 预计算(oracle 输出,非手算)","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":[{"h":844,"probes":{"bubble":{"w":348.40000000000003,"x":20.799999999999983,"y":59},"surfaceMode":"phone"},"w":390},{"h":812,"probes":{"bubble":{"w":335,"x":20,"y":59},"surfaceMode":"phone"},"w":375},{"h":812,"probes":{"bubble":{"w":334.1066666666666,"x":19.946666666666687,"y":59},"surfaceMode":"phone"},"w":374},{"h":700,"probes":{"bubble":{"w":299.26666666666665,"x":17.866666666666674,"y":59},"surfaceMode":"phone"},"w":335},{"h":680,"probes":{"bubble":{"w":285.8666666666667,"x":17.066666666666663,"y":59},"surfaceMode":"phone"},"w":320},{"h":1000,"probes":{"bubble":{"w":444.83671668137686,"x":127.58164165931157,"y":63.54810238305384},"surfaceMode":"pad-portrait"},"w":700},{"h":1000,"probes":{"bubble":{"w":624.44,"x":37.27999999999997,"y":59},"surfaceMode":"phone"},"w":699},{"h":1133,"probes":{"bubble":{"w":504,"x":120,"y":72},"surfaceMode":"pad-portrait"},"w":744},{"h":690,"probes":{"bubble":{"w":472.59999999999997,"x":514.4499999999999,"y":57.699999999999996},"surfaceMode":"pad-landscape"},"w":1000},{"h":690,"probes":{"bubble":{"w":892.44,"x":53.27999999999997,"y":59},"surfaceMode":"phone"},"w":999},{"h":689,"probes":{"bubble":{"w":893.3333333333333,"x":53.33333333333337,"y":59},"surfaceMode":"phone"},"w":1000},{"h":820,"probes":{"bubble":{"w":556,"x":607,"y":72},"surfaceMode":"pad-landscape"},"w":1180},{"h":900,"probes":{"bubble":{"w":610.2439024390244,"x":738.6585365853658,"y":79.02439024390239},"surfaceMode":"pad-landscape"},"w":1440}]}},"desktop":{"colors":{"bgBase":{"dark":{"provenance":{"hash":"sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098","locator":"registerColor('login-bg-base').dark","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#1F1F1E"},"light":{"provenance":{"hash":"sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098","locator":"registerColor('login-bg-base').light","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#EDEDED"}},"bubbleBg":{"dark":{"provenance":{"hash":"sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098","locator":"registerColor('login-deletion-bubble-bg').dark(固定值)","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#1F1F1E"},"light":{"provenance":{"hash":"sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098","locator":"registerColor('login-deletion-bubble-bg').light(固定值,Fix A 弃 alias)","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#FFFFFF"}},"bubbleBorder":{"dark":{"provenance":{"hash":"sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098","locator":"registerColor('login-deletion-bubble-border').dark","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#3C3C3A"},"light":{"provenance":{"hash":"sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098","locator":"registerColor('login-deletion-bubble-border').light(Fix A 新增 token)","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#D7D7D4"}},"copyText":{"dark":{"provenance":{"hash":"sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098","locator":"registerColor('login-secondary-text').dark","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#6F6F6F"},"light":{"provenance":{"hash":"sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098","locator":"registerColor('login-secondary-text').light","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#6F6F6F"}},"titleText":{"dark":{"provenance":{"hash":"sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098","locator":"registerColor('login-control-text').dark","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#EEEEEE"},"light":{"provenance":{"hash":"sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098","locator":"registerColor('login-control-text').light","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#252222"}}},"copy":{"en":{"completedCopy":{"provenance":{"hash":"sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff","locator":"accountDeletion.status(en).completedCopy","source":"../../../apps/desktop/src/renderer/i18n/locales/en/common.json"},"value":"Your Cindy sign-in account has been removed."},"completedTitle":{"provenance":{"hash":"sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff","locator":"accountDeletion.status(en).completedTitle","source":"../../../apps/desktop/src/renderer/i18n/locales/en/common.json"},"value":"Account deleted"},"dismissButton":{"provenance":{"hash":"sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff","locator":"accountDeletion.status(en).dismissButton","source":"../../../apps/desktop/src/renderer/i18n/locales/en/common.json"},"value":"Got it"},"pendingCopy":{"provenance":{"hash":"sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff","locator":"accountDeletion.status(en).pendingCopy","source":"../../../apps/desktop/src/renderer/i18n/locales/en/common.json"},"value":"Scheduled for permanent deletion on {{date}}. Sign in before then to cancel deletion."},"pendingTitle":{"provenance":{"hash":"sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff","locator":"accountDeletion.status(en).pendingTitle","source":"../../../apps/desktop/src/renderer/i18n/locales/en/common.json"},"value":"Account scheduled for deletion"},"processingCopy":{"provenance":{"hash":"sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff","locator":"accountDeletion.status(en).processingCopy","source":"../../../apps/desktop/src/renderer/i18n/locales/en/common.json"},"value":"The waiting period ended. Your Cindy sign-in account is being removed."},"processingTitle":{"provenance":{"hash":"sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff","locator":"accountDeletion.status(en).processingTitle","source":"../../../apps/desktop/src/renderer/i18n/locales/en/common.json"},"value":"Account deletion in progress"}},"ja":{"completedCopy":{"provenance":{"hash":"sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564","locator":"accountDeletion.status(ja).completedCopy","source":"../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"},"value":"Cindy のログインアカウントを削除しました。"},"completedTitle":{"provenance":{"hash":"sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564","locator":"accountDeletion.status(ja).completedTitle","source":"../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"},"value":"アカウントを削除しました"},"dismissButton":{"provenance":{"hash":"sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564","locator":"accountDeletion.status(ja).dismissButton","source":"../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"},"value":"確認"},"pendingCopy":{"provenance":{"hash":"sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564","locator":"accountDeletion.status(ja).pendingCopy","source":"../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"},"value":"{{date}} に完全削除される予定です。それまでにログインすると削除を取り消せます。"},"pendingTitle":{"provenance":{"hash":"sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564","locator":"accountDeletion.status(ja).pendingTitle","source":"../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"},"value":"アカウントは削除待ちです"},"processingCopy":{"provenance":{"hash":"sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564","locator":"accountDeletion.status(ja).processingCopy","source":"../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"},"value":"待機期間が終了し、Cindy のログインアカウントを削除しています。"},"processingTitle":{"provenance":{"hash":"sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564","locator":"accountDeletion.status(ja).processingTitle","source":"../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"},"value":"アカウントを削除しています"}},"ko":{"completedCopy":{"provenance":{"hash":"sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3","locator":"accountDeletion.status(ko).completedCopy","source":"../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"},"value":"Cindy 로그인 계정이 삭제되었습니다."},"completedTitle":{"provenance":{"hash":"sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3","locator":"accountDeletion.status(ko).completedTitle","source":"../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"},"value":"계정 삭제 완료"},"dismissButton":{"provenance":{"hash":"sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3","locator":"accountDeletion.status(ko).dismissButton","source":"../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"},"value":"확인"},"pendingCopy":{"provenance":{"hash":"sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3","locator":"accountDeletion.status(ko).pendingCopy","source":"../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"},"value":"{{date}}에 영구 삭제될 예정입니다. 그 전에 로그인하면 삭제를 취소할 수 있습니다."},"pendingTitle":{"provenance":{"hash":"sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3","locator":"accountDeletion.status(ko).pendingTitle","source":"../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"},"value":"계정 삭제 대기 중"},"processingCopy":{"provenance":{"hash":"sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3","locator":"accountDeletion.status(ko).processingCopy","source":"../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"},"value":"대기 기간이 끝나 Cindy 로그인 계정을 삭제하고 있습니다."},"processingTitle":{"provenance":{"hash":"sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3","locator":"accountDeletion.status(ko).processingTitle","source":"../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"},"value":"계정 삭제 진행 중"}},"zh-CN":{"completedCopy":{"provenance":{"hash":"sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599","locator":"accountDeletion.status(zh-CN).completedCopy","source":"../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"},"value":"Cindy 登录账号已删除。"},"completedTitle":{"provenance":{"hash":"sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599","locator":"accountDeletion.status(zh-CN).completedTitle","source":"../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"},"value":"账号已注销"},"dismissButton":{"provenance":{"hash":"sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599","locator":"accountDeletion.status(zh-CN).dismissButton","source":"../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"},"value":"我知道了"},"pendingCopy":{"provenance":{"hash":"sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599","locator":"accountDeletion.status(zh-CN).pendingCopy","source":"../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"},"value":"账号计划于 {{date}} 永久删除。在此之前重新登录可取消注销。"},"pendingTitle":{"provenance":{"hash":"sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599","locator":"accountDeletion.status(zh-CN).pendingTitle","source":"../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"},"value":"账号正在等待注销"},"processingCopy":{"provenance":{"hash":"sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599","locator":"accountDeletion.status(zh-CN).processingCopy","source":"../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"},"value":"等待期已结束，Cindy 登录账号正在删除。"},"processingTitle":{"provenance":{"hash":"sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599","locator":"accountDeletion.status(zh-CN).processingTitle","source":"../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"},"value":"账号正在注销"}}},"geometry":{"bodyLinkGap":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"LOGIN_DELETION_BUBBLE(设计单位).bodyLinkGap","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":22},"borderWidth":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"LoginPage.tsx section style borderWidth=1/PANEL_FIXED_SCALE 设计单位(缩放补偿,渲染恰 1 物理 px;DESIGN.md §16.4)","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":1},"fontSize":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"LOGIN_DELETION_BUBBLE(设计单位).fontSize","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":20},"fontWeight":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"LoginPage.tsx font-normal=400","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":400},"lineHeight":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"LOGIN_DELETION_BUBBLE(设计单位).lineHeight","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":23},"linkHitPadding":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"LOGIN_DELETION_BUBBLE(设计单位).linkHitPadding","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":11},"padding":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"LOGIN_DELETION_BUBBLE(设计单位).padding","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":20},"radius":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"LOGIN_DELETION_BUBBLE(设计单位).radius","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":22},"scale":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"loginScale.ts PANEL_FIXED_SCALE=0.5(面板恒定缩放,气泡同乘)","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":0.5},"titleBodyGap":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"LOGIN_DELETION_BUBBLE(设计单位).titleBodyGap","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":5},"top":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"LOGIN_DELETION_BUBBLE(设计单位).top","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":72},"width":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"LOGIN_DELETION_BUBBLE(设计单位).width","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":670},"zIndex":{"provenance":{"hash":"sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3","locator":"LoginPage.tsx wrapper z-30","source":"../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"},"value":30}}},"mobile":{"colors":{"bgBase":{"dark":{"provenance":{"hash":"sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c","locator":"loginPalettes.dark.bgBase","source":"../../../apps/mobile/src/theme/tokens.ts"},"value":"#1F1F1E"},"light":{"provenance":{"hash":"sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c","locator":"loginPalettes.light.bgBase","source":"../../../apps/mobile/src/theme/tokens.ts"},"value":"#EDEDED"}},"controlText":{"dark":{"provenance":{"hash":"sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c","locator":"loginPalettes.dark.controlText","source":"../../../apps/mobile/src/theme/tokens.ts"},"value":"#EEEEEE"},"light":{"provenance":{"hash":"sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c","locator":"loginPalettes.light.controlText","source":"../../../apps/mobile/src/theme/tokens.ts"},"value":"#252222"}},"deletionBubbleBg":{"dark":{"provenance":{"hash":"sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c","locator":"loginPalettes.dark.deletionBubbleBg","source":"../../../apps/mobile/src/theme/tokens.ts"},"value":"#1F1F1E"},"light":{"provenance":{"hash":"sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c","locator":"loginPalettes.light.deletionBubbleBg","source":"../../../apps/mobile/src/theme/tokens.ts"},"value":"#FFFFFF"}},"deletionBubbleBorder":{"dark":{"provenance":{"hash":"sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c","locator":"loginPalettes.dark.deletionBubbleBorder","source":"../../../apps/mobile/src/theme/tokens.ts"},"value":"#3C3C3A"},"light":{"provenance":{"hash":"sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c","locator":"loginPalettes.light.deletionBubbleBorder","source":"../../../apps/mobile/src/theme/tokens.ts"},"value":"#D7D7D4"}},"secondaryText":{"dark":{"provenance":{"hash":"sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c","locator":"loginPalettes.dark.secondaryText","source":"../../../apps/mobile/src/theme/tokens.ts"},"value":"#6F6F6F"},"light":{"provenance":{"hash":"sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c","locator":"loginPalettes.light.secondaryText","source":"../../../apps/mobile/src/theme/tokens.ts"},"value":"#6F6F6F"}}},"copy":{"en":{"completedCopy":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(en).completedCopy","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Your Cindy sign-in account has been deleted."},"completedTitle":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(en).completedTitle","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Account deleted"},"dismissButton":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(en).dismissButton","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Got it"},"pendingCopy":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(en).pendingCopy","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Scheduled for permanent deletion on {date}. Sign in now to cancel deletion."},"pendingTitle":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(en).pendingTitle","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Account scheduled for deletion"},"processingCopy":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(en).processingCopy","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Your Cindy sign-in account is being deleted and will be permanently deleted when processing is complete."},"processingTitle":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(en).processingTitle","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Account deletion in progress"}},"ja":{"completedCopy":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ja).completedCopy","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Cindy ログインアカウントは削除されました。"},"completedTitle":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ja).completedTitle","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"アカウントを削除しました"},"dismissButton":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ja).dismissButton","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"了解しました"},"pendingCopy":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ja).pendingCopy","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"{date} に完全に削除される予定です。今すぐ再ログインすると削除を取り消せます。"},"pendingTitle":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ja).pendingTitle","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"アカウントは削除待機中です"},"processingCopy":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ja).processingCopy","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Cindy ログインアカウントを削除しています。処理が完了すると完全に削除されます。"},"processingTitle":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ja).processingTitle","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"アカウントを削除処理中です"}},"ko":{"completedCopy":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ko).completedCopy","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Cindy 로그인 계정이 삭제되었습니다."},"completedTitle":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ko).completedTitle","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"계정이 삭제되었습니다"},"dismissButton":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ko).dismissButton","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"확인"},"pendingCopy":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ko).pendingCopy","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"{date}에 영구 삭제될 예정입니다. 지금 다시 로그인하면 삭제를 취소할 수 있습니다."},"pendingTitle":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ko).pendingTitle","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"계정이 삭제 대기 중입니다"},"processingCopy":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ko).processingCopy","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Cindy 로그인 계정을 삭제하고 있습니다. 처리가 완료되면 영구적으로 삭제됩니다."},"processingTitle":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(ko).processingTitle","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"계정을 삭제하는 중입니다"}},"zh-CN":{"completedCopy":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(zh-CN).completedCopy","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Cindy 登录账号已删除。"},"completedTitle":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(zh-CN).completedTitle","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"账号已注销"},"dismissButton":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(zh-CN).dismissButton","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"我知道了"},"pendingCopy":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(zh-CN).pendingCopy","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"预计于 {date} 永久删除。现在重新登录即可取消注销。"},"pendingTitle":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(zh-CN).pendingTitle","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"账号正在等待注销"},"processingCopy":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(zh-CN).processingCopy","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"Cindy 登录账号正在删除，处理完成后将永久注销。"},"processingTitle":{"provenance":{"hash":"sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2","locator":"accountDeletion*(zh-CN).processingTitle","source":"../../../apps/mobile/src/auth/loginMessages.ts"},"value":"账号正在注销"}}},"geometry":{"bodyLinkGap":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE(stage 设计单位).bodyLinkGap","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":22},"borderWidth":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE(stage 设计单位).borderWidth","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":1},"fontSize":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE(stage 设计单位).fontSize","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":20},"lineHeight":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE.lineHeight=LOGIN_COPY_LINE_HEIGHT","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":23},"linkHitSlopMax":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"resolveDeletionBubbleLinkHitSlop 的 18 上限(物理 pt)","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":18},"linkHitSlopX":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"resolveDeletionBubbleLinkHitSlop left/right=20(物理 pt)","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":20},"padLandscapeWidth":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE.padLandscape.width(= WORD_MARK 框宽)","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":556},"padLandscapeX":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE.padLandscape.x","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":607},"padPortraitWidth":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE.padPortrait.width","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":504},"padTop":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE.padLandscape.top / padPortrait.top","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":72},"padding":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE(stage 设计单位).padding","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":20},"phoneWidth":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE.phone.width","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":670},"phoneX":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE.phone.x","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":40},"radius":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE(stage 设计单位).radius","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":22},"titleBodyGap":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_DELETION_BUBBLE(stage 设计单位).titleBodyGap","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":5}},"surface":{"padLandscapeMinHeight":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"PAD_LANDSCAPE_MIN_HEIGHT","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":690},"padLandscapeMinScale":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"PAD_LANDSCAPE_MIN_SCALE","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":0.85},"padLandscapeMinWidth":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"PAD_LANDSCAPE_MIN_WIDTH","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":1000},"padLandscapeStageHeight":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_PAD_LANDSCAPE_STAGE.height","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":820},"padLandscapeStageWidth":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_PAD_LANDSCAPE_STAGE.width","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":1180},"padPortraitMinWidth":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"PAD_PORTRAIT_MIN_WIDTH","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":700},"padPortraitStageHeight":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_PAD_PORTRAIT_STAGE.height","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":1133},"padPortraitStageWidth":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_PAD_PORTRAIT_STAGE.width","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":744},"phoneStageWidth":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"surface 断点/stage 规格.phoneStageWidth","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":750},"stageWidth":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"LOGIN_STAGE_WIDTH","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":750}}},"structure":{"desktop":{"bubbleClass":{"provenance":{"hash":"sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927","locator":"AccountDeletionStatusPanel section className 全串","source":"../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"},"value":"w-full break-words border border-[var(--login-deletion-bubble-border)] bg-[var(--login-deletion-bubble-bg)] text-center"},"dismissGate":{"provenance":{"hash":"sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927","locator":"LoginPage.tsx accountDeletionStatus.status === 'completed' ? onDismiss : undefined","source":"../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"},"value":"仅 completed 态传入 onDismiss(「我知道了」);pending/processing 无按钮"},"dismissHitArea":{"provenance":{"hash":"sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927","locator":"dismiss inline style marginTop/marginBottom/paddingTop/paddingBottom","source":"../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"},"value":"上下各 11 设计单位 padding 撑热区 + 等量负 margin 抵消(视觉间距仍 上 22 / 下 20);缩放后约 22.5 CSS px 高(桌面鼠标指针)"},"renderPosition":{"provenance":{"hash":"sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927","locator":"LoginPage.tsx \u003c/LoginStage\u003e 之后的 AccountDeletionStatusPanel 渲染点","source":"../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"},"value":"LoginPage 根层(\u003c/LoginStage\u003e 之后),不在 stage 文档流;absolute z-30 浮层"},"scaleContract":{"provenance":{"hash":"sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927","locator":"wrapper style: top/width/transform/transformOrigin","source":"../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"},"value":"几何为设计单位,wrapper 施加 translateX(-50%) scale(0.5) + transformOrigin top center;渲染值 = 设计单位 × 0.5(宽 335 / 顶距 36 CSS px)"},"wrapperClass":{"provenance":{"hash":"sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927","locator":"wrapper(定位+缩放层)className,几何走 inline style","source":"../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"},"value":"absolute left-1/2 z-30"}},"mobile":{"a11yModalGate":{"provenance":{"hash":"sha256:20ed75caa1af0812da868a6ce764a33556811c291e21ccd4a9671e1c92559429","locator":"login.tsx 气泡渲染点 Animated.View importantForAccessibility","source":"../../../apps/mobile/app/(auth)/login.tsx"},"value":"气泡对读屏隐藏 = 协议弹窗打开 || 入场未完成;iOS accessibilityElementsHidden + Android importantForAccessibility 双端都给(opacity/pointerEvents 不影响读屏,不隐藏则会念出不可见的注销状态)(PR #464 codex)"},"dismissGate":{"provenance":{"hash":"sha256:20ed75caa1af0812da868a6ce764a33556811c291e21ccd4a9671e1c92559429","locator":"login.tsx:1315-1327 {onDismiss ? \u003cPressable/\u003e : null}","source":"../../../apps/mobile/app/(auth)/login.tsx"},"value":"仅 completed 态渲染 dismiss Pressable(onDismiss 仅 completed 传入)"},"dismissHitSlop":{"provenance":{"hash":"sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565","locator":"resolveDeletionBubbleLinkHitSlop(scale)","source":"../../../apps/mobile/src/auth/loginSkinLayout.ts"},"value":"hitSlop 按气泡内可用空间钳制:top=min(18, bodyLinkGap×scale)、bottom=min(18, padding×scale)、左右 20——RN hitSlop 不越父边界,虚标无效(PR #494 codex);热区随整个登录 stage 同步缩放(320pt 窗口下主按钮本身 ≈34pt),不追未缩放 44pt 绝对值"},"entranceGate":{"provenance":{"hash":"sha256:20ed75caa1af0812da868a6ce764a33556811c291e21ccd4a9671e1c92559429","locator":"login.tsx 气泡渲染点 Animated.View pointerEvents/style","source":"../../../apps/mobile/app/(auth)/login.tsx"},"value":"Animated.View 包装:opacity=panelEntrance.opacity(与登录组同一 Animated 值);pointerEvents 仅 handoffPhase==='done' 放行且取 box-none(全屏包装层不作触摸目标,避免挡住下方登录组命中;入场完成前 none = 不可见不可点)(PR #464 review)"},"renderPosition":{"provenance":{"hash":"sha256:20ed75caa1af0812da868a6ce764a33556811c291e21ccd4a9671e1c92559429","locator":"login.tsx:1140-1197 deletionBubbleFrame + AccountDeletionStatusPanel frame prop","source":"../../../apps/mobile/app/(auth)/login.tsx"},"value":"position:absolute,left/top/width 由 resolveDeletionBubbleFrame(stage, insets.top) 行内注入;不参与布局流"},"styleFacts":{"provenance":{"hash":"sha256:20ed75caa1af0812da868a6ce764a33556811c291e21ccd4a9671e1c92559429","locator":"login.tsx:1439-1449 makeStyles.deletionBubble","source":"../../../apps/mobile/app/(auth)/login.tsx"},"value":"不透明底+1px 描边;无 shadow/elevation/固定高(样式块守护断言)"}}}}</script>
+<script>
+"use strict";
+/* ═══════════════ 数据层:内嵌 truth(唯一取数来源) ═══════════════ */
+const TRUTH = JSON.parse(document.getElementById("qa-truth").textContent);
+const unwrap = (v) => {
+  if (v && typeof v === "object") {
+    if (Object.hasOwn(v, "value")) return v.value;
+    if (Array.isArray(v)) return v.map(unwrap);
+    const o = {};
+    for (const [k, x] of Object.entries(v)) o[k] = unwrap(x);
+    return o;
+  }
+  return v;
+};
+const T = unwrap(TRUTH);
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/* ═══════════════ 状态(偏好持久化;流程状态不持久化) ═══════════════ */
+const STORE_KEY = "qa-hifi:login-deletion-bubble:prefs";
+const STATES = ["deletion-pending", "deletion-processing", "deletion-completed", "deletion-stress"];
+const DEFAULT_PREFS = { plat: "phone", region: "cn", os: "ios", mode: "light", lang: "zh-CN" };
+const FRAME_DEFAULT = {
+  desk: { w: 800, h: 600 },
+  phone: { w: 390, h: 844 },
+  "pad-landscape": { w: 1100, h: 700 },
+  "pad-portrait": { w: 744, h: 1000 },
+};
+const S = { step: "deletion-pending", dismissed: false, prefs: { ...DEFAULT_PREFS }, frame: { ...FRAME_DEFAULT.phone } };
+try {
+  const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+  if (saved) for (const k of Object.keys(DEFAULT_PREFS)) if (typeof saved[k] === "string") S.prefs[k] = saved[k];
+  if (saved && FRAME_DEFAULT[S.prefs.plat]) S.frame = { ...FRAME_DEFAULT[S.prefs.plat] };
+} catch {}
+function persist() { localStorage.setItem(STORE_KEY, JSON.stringify(S.prefs)); }
+
+const isDesk = () => S.prefs.plat === "desk";
+const PLAT = () => (isDesk() ? T.desktop : T.mobile);
+
+/* ═══════════════ 布局引擎(产品公式移植,常数全部来自 truth) ═══════════════ */
+// desk:LoginPage.tsx 的定位/缩放层语义——几何是 1819×2098 设计画布单位(2x 稿),
+// 与登录面板同乘 PANEL_FIXED_SCALE(=0.5):可视宽 = 670×k、顶距 = 72×k、可视宽 ≤ 100vw−24。
+function deskBubbleFrame(w) {
+  const G = T.desktop.geometry;
+  const k = G.scale;
+  const width = Math.min(G.width * k, w - 24);
+  return { left: (w - width) / 2, top: G.top * k, width, mode: "desk", k };
+}
+// mobile:resolveLoginSurfaceMode + padSurface + resolveDeletionBubbleFrame 移植
+// (loginSkinLayout.ts:157/:280/:486;断点/stage 规格/常量全来自 truth)。
+function mobileSurfaceMode(w, h) {
+  const S = T.mobile.surface;
+  const landscape = w > h;
+  if (landscape && w >= S.padLandscapeMinWidth && h >= S.padLandscapeMinHeight) return "pad-landscape";
+  if (!landscape && w >= S.padPortraitMinWidth) return "pad-portrait";
+  return "phone";
+}
+// mobile:几何是各 stage 的设计单位,与登录组同乘 surface.scale 折算成物理 pt
+// (phone: w/750;pad-portrait: min(w/744,h/1133);pad-landscape: max(0.85,min(w/1180,h/820)))。
+function mobileBubbleFrame(w, h) {
+  const B = T.mobile.geometry, S = T.mobile.surface;
+  const mode = mobileSurfaceMode(w, h);
+  const clamp = (left, width) => Math.max(0, Math.min(left, w - width));
+  if (mode === "phone") {
+    const k = w / S.phoneStageWidth;
+    const width = B.phoneWidth * k;
+    return { left: clamp((w - width) / 2, width), top: T.adaptive.safeTop, width, mode, k };
+  }
+  if (mode === "pad-landscape") {
+    const raw = Math.min(w / S.padLandscapeStageWidth, h / S.padLandscapeStageHeight);
+    const k = Math.max(S.padLandscapeMinScale, raw);
+    const offsetX = (w - S.padLandscapeStageWidth * k) / 2;
+    const offsetY = (h - S.padLandscapeStageHeight * k) / 2;
+    const width = B.padLandscapeWidth * k;
+    return { left: clamp(offsetX + B.padLandscapeX * k, width), top: offsetY + B.padTop * k, width, mode, k };
+  }
+  const k = Math.min(w / S.padPortraitStageWidth, h / S.padPortraitStageHeight);
+  const offsetY = (h - S.padPortraitStageHeight * k) / 2;
+  const width = B.padPortraitWidth * k;
+  return { left: clamp((w - width) / 2, width), top: offsetY + B.padTop * k, width, mode, k };
+}
+const bubbleFrame = () => (isDesk() ? deskBubbleFrame(S.frame.w) : mobileBubbleFrame(S.frame.w, S.frame.h));
+
+/* ═══════════════ 文案(注销三态 + 压力态;date 用 demo 固定日期,格式同产品) ═══════════════ */
+const DEMO_DATE = new Date("2026-08-15T12:00:00Z"); // demo 固定日期(非产品真值),仅为让 {{date}} 占位符可渲染
+function copyFor(state) {
+  const lang = S.prefs.lang;
+  const C = PLAT().copy[lang];
+  const key = state === "deletion-pending" ? "pending" : state === "deletion-processing" ? "processing" : "completed";
+  let copy = C[key + "Copy"];
+  if (isDesk()) {
+    const date = new Intl.DateTimeFormat(lang === "zh-CN" ? "zh-CN" : "en", { dateStyle: "medium" }).format(DEMO_DATE);
+    copy = copy.replace("{{date}}", date);
+  } else {
+    const date = new Intl.DateTimeFormat(lang === "zh-CN" ? "zh-CN" : "en", { year: "numeric", month: "long", day: "numeric" }).format(DEMO_DATE);
+    copy = copy.replace("{date}", date);
+  }
+  if (state === "deletion-stress") {
+    // 长文案压力态(figma 679:1192 同法):completed 文案重复 4 段,验证撑高/居中换行/底距恒定
+    return { title: C.completedTitle, copy: copy.repeat(8), dismiss: C.dismissButton };
+  }
+  return { title: C[key + "Title"], copy, dismiss: C.dismissButton };
+}
+
+/* ═══════════════ 渲染:气泡(truth 绑定) + 示意家具 ═══════════════ */
+const px = (n) => `${n}px`;
+function bubbleHtml() {
+  if (S.dismissed) return "";
+  const mode = S.prefs.mode;
+  const f = bubbleFrame();
+  const { title, copy, dismiss } = copyFor(S.step);
+  const G = PLAT().geometry, C = PLAT().colors;
+  const hasDismiss = S.step === "deletion-completed" || S.step === "deletion-stress";
+  // 内部几何同样是设计单位 × f.k(与登录组同缩放);描边保持 1 物理 px 细线
+  const sc = (designUnits) => designUnits * f.k;
+  const base = [
+    `position:absolute`, `left:${px(f.left)}`, `top:${px(f.top)}`, `width:${px(f.width)}`,
+    `background:${isDesk() ? C.bubbleBg[mode] : C.deletionBubbleBg[mode]}`,
+    `border:${px(G.borderWidth)} solid ${isDesk() ? C.bubbleBorder[mode] : C.deletionBubbleBorder[mode]}`,
+    `border-radius:${px(sc(G.radius))}`, `padding:${px(sc(G.padding))}`, `text-align:center`, `overflow-wrap:break-word`, `z-index:30`,
+    `box-sizing:border-box`,
+  ].join(";");
+  const titleSt = `font-size:${px(sc(G.fontSize))};line-height:${px(sc(G.lineHeight))};font-weight:400;color:${isDesk() ? C.titleText[mode] : C.controlText[mode]}`;
+  const copySt = `font-size:${px(sc(G.fontSize))};line-height:${px(sc(G.lineHeight))};font-weight:400;color:${isDesk() ? C.copyText[mode] : C.secondaryText[mode]};margin:${px(sc(G.titleBodyGap))} 0 0`;
+  // dismiss 热区:desk 用设计单位的 linkHitPadding(上下)+ 等量负 margin 抵消视觉;
+  // mobile 的 hitSlop 是**物理 pt**(不缩放、不影响布局),demo 用 padding + 负 margin
+  // 等效模拟出可测量的热区盒,视觉间距仍为 bodyLinkGap×k / 底距 padding×k。
+  const dismissSt = isDesk()
+    ? [
+        `display:inline-block`,
+        `margin:${px(sc(G.bodyLinkGap - G.linkHitPadding))} 0 ${px(-sc(G.linkHitPadding))}`,
+        `padding:${px(sc(G.linkHitPadding))} ${px(sc(G.padding))}`,
+        `font-size:${px(sc(G.fontSize))}`, `line-height:${px(sc(G.lineHeight))}`, `font-weight:400`,
+        `color:${C.titleText[mode]}`, `text-decoration:underline`, `background:transparent`, `border:0`,
+      ].join(";")
+    : (() => {
+        // 钳制热区(同产品 resolveDeletionBubbleLinkHitSlop):RN hitSlop 不越父边界,
+        // 上=min(18, bodyLinkGap×k)、下=min(18, padding×k);demo 用 padding+负 margin 模拟
+        const slopT = Math.min(G.linkHitSlopMax, sc(G.bodyLinkGap));
+        const slopB = Math.min(G.linkHitSlopMax, sc(G.padding));
+        return [
+          `display:inline-block`,
+          `margin:${px(sc(G.bodyLinkGap) - slopT)} 0 ${px(-slopB)}`,
+          `padding:${px(slopT)} ${px(G.linkHitSlopX)} ${px(slopB)}`,
+          `font-size:${px(sc(G.fontSize))}`, `line-height:${px(sc(G.lineHeight))}`, `font-weight:400`,
+          `color:${C.controlText[mode]}`, `text-decoration:underline`, `background:transparent`, `border:0`,
+        ].join(";");
+      })();
+  const dismissHtml = hasDismiss ? `<button type="button" class="db-dismiss" style="${dismissSt}"><span class="db-dismiss-text">${esc(dismiss)}</span></button>` : "";
+  return `<div class="db-bubble" data-mode="${f.mode}" style="${base}"><h2 class="db-title" style="${titleSt}">${esc(title)}</h2><p class="db-copy" style="${copySt}">${esc(copy)}</p>${dismissHtml}</div>`;
+}
+
+// 示意家具(非验收对象):虚线占位块,让「浮层覆盖/不推挤」可视化
+function furnitureHtml() {
+  const w = S.frame.w, h = S.frame.h, plat = S.prefs.plat;
+  const block = (cls, label, x, y, bw, bh) =>
+    `<div class="prop ${cls}" style="left:${px(x)};top:${px(y)};width:${px(bw)};height:${px(bh)}">${label}</div>`;
+  if (plat === "desk") {
+    return (
+      block("prop-hero", "立绘示意", w / 2 - w * 0.16, h * 0.16, w * 0.32, h * 0.3) +
+      block("prop-word", "字标示意", w / 2 - w * 0.11, h * 0.5, w * 0.22, 34) +
+      block("prop-panel", "面板示意", w / 2 - 170, h * 0.62, 340, 220) +
+      block("prop-social", "社交行示意", w / 2 - 130, Math.min(h - 74, h * 0.62 + 248), 260, 40) +
+      block("prop-consent", "协议行示意", w / 2 - 150, h - 28, 300, 16)
+    );
+  }
+  if (plat === "phone") {
+    return (
+      block("prop-hero", "立绘示意(气泡应盖住其顶部)", w * 0.14, 40, w * 0.72, h * 0.3) +
+      block("prop-word", "字标示意", w * 0.28, h * 0.44, w * 0.44, 40) +
+      block("prop-panel", "面板示意", w * 0.07, h * 0.56, w * 0.86, h * 0.28) +
+      block("prop-social", "社交行示意", w * 0.22, h * 0.87, w * 0.56, 36) +
+      block("prop-consent", "协议行示意", w * 0.2, h - 24, w * 0.6, 14)
+    );
+  }
+  if (plat === "pad-landscape") {
+    return (
+      block("prop-hero", "立绘示意(左半栏)", w * 0.09, h * 0.14, w * 0.32, h * 0.5) +
+      block("prop-word", "字标示意(右栏)", w * 0.55, h * 0.18, w * 0.36, 48) +
+      block("prop-panel", "面板示意(右栏)", w * 0.58, h * 0.42, w * 0.3, h * 0.34) +
+      block("prop-social", "社交行示意", w * 0.6, h * 0.82, w * 0.26, 36)
+    );
+  }
+  return (
+    block("prop-hero", "立绘示意", w * 0.2, h * 0.1, w * 0.6, h * 0.28) +
+    block("prop-word", "字标示意", w * 0.3, h * 0.42, w * 0.4, 44) +
+    block("prop-panel", "面板示意", w * 0.12, h * 0.56, w * 0.76, h * 0.28) +
+    block("prop-social", "社交行示意", w * 0.24, h * 0.88, w * 0.52, 36)
+  );
+}
+
+function renderFrame() {
+  const el = document.getElementById("frame");
+  const mode = S.prefs.mode;
+  const bg = isDesk() ? T.desktop.colors.bgBase[mode] : T.mobile.colors.bgBase[mode];
+  el.style.width = px(S.frame.w);
+  el.style.height = px(S.frame.h);
+  const f = bubbleFrame();
+  el.innerHTML =
+    `<div class="stage" style="background:${bg}"></div>` +
+    furnitureHtml() +
+    bubbleHtml() +
+    `<div class="modetag">${isDesk() ? "desktop" : f.mode} · ${S.frame.w}×${S.frame.h}</div>` +
+    `<div class="sizetag">气泡 left=${f.left.toFixed(1)} top=${f.top} width=${f.width}</div>` +
+    `<div class="rsz rsz-e"></div><div class="rsz rsz-s"></div><div class="rsz rsz-se"></div>`;
+  el.querySelectorAll(".rsz").forEach(bindResize);
+  const dismissBtn = el.querySelector(".db-dismiss");
+  if (dismissBtn) dismissBtn.addEventListener("click", () => { S.dismissed = true; renderAll(); });
+}
+
+/* ═══════════════ 探针读数(实测 DOM,非自报) ═══════════════ */
+const f1 = (n) => Math.round(n * 10) / 10;
+function probe() {
+  const frame = document.getElementById("frame");
+  const bubble = frame.querySelector(".db-bubble");
+  if (!bubble) {
+    document.getElementById("probeOut").textContent =
+      `[${S.prefs.plat}/${S.prefs.mode}/${S.prefs.lang} · ${S.step}] 气泡已消失(dismiss 生效):elementFromPoint 不再命中气泡 —— 点击任意状态按钮恢复`;
+    return;
+  }
+  const fr = frame.getBoundingClientRect();
+  const br = bubble.getBoundingClientRect();
+  const cx = br.left + br.width / 2, cy = br.top + br.height / 2;
+  const hit = document.elementFromPoint(cx, cy);
+  const hitIsBubble = hit === bubble || bubble.contains(hit);
+  // 浮层不推挤:记录面板示意 rect,与 dismiss 后对照(见 custom gate;此处展示当前值)
+  const panel = frame.querySelector(".prop-panel");
+  const pr = panel ? panel.getBoundingClientRect() : null;
+  // 间距实测:正文底 → 「我知道了」顶(desk mt11+py11=22 / mobile mt22);「我知道了」底 → 气泡边框内缘(padding-bottom 20,desk 经 py11+pb20−mb11 抵消同为 20)
+  let gaps = "(pending/processing 无按钮)";
+  const dismiss = bubble.querySelector(".db-dismiss");
+  if (dismiss) {
+    const copyR = bubble.querySelector(".db-copy").getBoundingClientRect();
+    const dr = (dismiss.querySelector(".db-dismiss-text") ?? dismiss).getBoundingClientRect();
+    const gapLink = dr.top - copyR.bottom;
+    const gapBottom = br.bottom - 1 - dr.bottom;
+    gaps = `正文↔我知道了 = ${f1(gapLink)}px(拍板 22)| 我知道了↔气泡底 = ${f1(gapBottom)}px(拍板恒定 20,长文案不变)`;
+  }
+  document.getElementById("probeOut").textContent =
+    `[${S.prefs.plat}/${S.prefs.mode}/${S.prefs.lang} · ${S.step}] 气泡 rect(帧内): x=${f1(br.left - fr.left)} y=${f1(br.top - fr.top)} w=${f1(br.width)} h=${f1(br.height)}\n` +
+    `elementFromPoint(气泡中心): ${hit ? hit.tagName + (hit.className && typeof hit.className === "string" ? "." + hit.className.split(" ").filter(Boolean).join(".") : "") : "(null)"} → ${hitIsBubble ? "命中气泡:浮层盖在家具之上(立绘/字标方向)" : "未命中气泡(异常)"}\n` +
+    `${gaps}\n` +
+    `面板示意 rect: ${pr ? `x=${f1(pr.left - fr.left)} y=${f1(pr.top - fr.top)}(气泡存在与否不改变它——不推挤证明见 interaction-gate)` : "n/a"}`;
+}
+
+/* ═══════════════ chrome(matrix segs / 状态按钮 / resize) ═══════════════ */
+const SEGS = [
+  ["plat", "端", [["desk", "desktop"], ["phone", "phone"], ["pad-landscape", "pad 横屏"], ["pad-portrait", "pad 竖屏"]]],
+  ["region", "区域", [["cn", "国区"]]],
+  ["os", "系统", [["mac", "mac"], ["ios", "iOS"]]],
+  ["mode", "主题", [["light", "亮色"], ["dark", "暗色"]]],
+  ["lang", "语言", [["zh-CN", "中文"], ["en", "EN"], ["ja", "日本語"], ["ko", "한국어"]]],
+];
+function renderChrome() {
+  const bar = document.getElementById("matrixBar");
+  bar.innerHTML = "";
+  for (const [key, label, opts] of SEGS) {
+    const g = document.createElement("span");
+    g.className = "grp";
+    g.textContent = label;
+    const seg = document.createElement("span");
+    seg.className = "seg";
+    for (const [v, text] of opts) {
+      const b = document.createElement("button");
+      b.textContent = text;
+      b.dataset.qaPref = `${key}:${v}`;
+      if (S.prefs[key] === v) b.classList.add("on");
+      b.addEventListener("click", () => {
+        S.prefs[key] = v;
+        if (key === "plat") {
+          S.prefs.os = v === "desk" ? "mac" : "ios";
+          S.frame = { ...FRAME_DEFAULT[v] };
+        }
+        persist();
+        renderAll();
+      });
+      seg.appendChild(b);
+    }
+    bar.appendChild(g);
+    bar.appendChild(seg);
+  }
+  const sb = document.getElementById("stateBtns");
+  sb.innerHTML = "";
+  const label = { "deletion-pending": "等待注销", "deletion-processing": "注销中", "deletion-completed": "已注销", "deletion-stress": "长文案压力" };
+  for (const id of STATES) {
+    const b = document.createElement("button");
+    b.className = "statebtn" + (S.step === id && !S.dismissed ? " on" : "");
+    b.dataset.qaStateBtn = id;
+    b.textContent = label[id];
+    b.addEventListener("click", () => { S.step = id; S.dismissed = false; renderAll(); });
+    sb.appendChild(b);
+  }
+}
+function bindResize(h) {
+  h.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const startX = e.clientX, startY = e.clientY, startW = S.frame.w, startH = S.frame.h;
+    const isE = h.classList.contains("rsz-e"), isS = h.classList.contains("rsz-s");
+    const move = (ev) => {
+      const dw = isS ? 0 : ev.clientX - startX;
+      const dh = isE ? 0 : ev.clientY - startY;
+      window.__qa.resize(startW + dw, startH + dh);
+    };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  });
+}
+
+/* ═══════════════ __qa API(验收合约) ═══════════════ */
+window.__qa = {
+  current: () => S.step,
+  goto: (id) => {
+    if (!STATES.includes(id)) throw new Error(`unknown state: ${id}`);
+    S.step = id;
+    S.dismissed = false;
+    renderAll();
+  },
+  prefs: () => ({ ...S.prefs }),
+  scale: () => bubbleFrame().k, // 设计单位 → 物理 px 系数(desk=PANEL_FIXED_SCALE;mobile=stage scale)
+  resize: (w, h) => {
+    S.frame.w = Math.max(320, Math.round(w));
+    S.frame.h = Math.max(480, Math.round(h));
+    renderFrame();
+    probe();
+  },
+  metrics: (ids) => {
+    const frame = document.getElementById("frame");
+    const fr = frame.getBoundingClientRect();
+    const out = { frame: { ...S.frame }, probes: {} };
+    for (const id of ids || []) {
+      const el = frame.querySelector(id === "bubble" ? ".db-bubble" : id);
+      if (el) {
+        const r = el.getBoundingClientRect();
+        out.probes[id] = { x: r.left - fr.left, y: r.top - fr.top, w: r.width, h: r.height };
+      }
+    }
+    return out;
+  },
+};
+
+function renderAll() {
+  renderChrome();
+  renderFrame();
+  probe();
+}
+renderAll();
+</script>
+</body>
+</html>

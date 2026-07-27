@@ -73,6 +73,107 @@ describe('createResponsesChatHandler', () => {
     expect(res.ended).toBe(true);
   });
 
+  it('preserves the upstream base query when applying the chat path', async () => {
+    const fetchImpl = vi.fn(async () =>
+      streamResponse([
+        { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ]),
+    ) as typeof fetch;
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/gateway?tenant=acme',
+      chatCompletionsPath: '/infer?stream=1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'm', input: 'hi' }, res: res as never });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://provider.example/gateway/infer?tenant=acme&stream=1',
+      expect.anything(),
+    );
+  });
+
+  it.each([
+    ['an invalid upstream base URL', 'ftp://provider.example/v1', '/chat/completions'],
+    ['an invalid chat path', 'https://provider.example/v1', '//attacker.example/chat'],
+    ['a raw non-ASCII chat path', 'https://provider.example/v1', '/café'],
+    ['a control character in the chat path', 'https://provider.example/v1', '/chat\u007f'],
+    ['a backslash in the chat path', 'https://provider.example/v1', '/v1\\chat'],
+    ['an incomplete percent escape', 'https://provider.example/v1', '/chat%2'],
+    ['an invalid percent escape', 'https://provider.example/v1', '/%ZZ'],
+  ])('reports %s as configuration failure before fetching', async (_case, upstreamBase, chatCompletionsPath) => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const buildHeaders = vi.fn(async () => ({ authorization: 'Bearer secret' }));
+    const handler = createResponsesChatHandler({
+      upstreamBase,
+      chatCompletionsPath,
+      buildHeaders,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+
+    await handler.handle({ parsedBody: { model: 'm', input: 'hi' }, res: res as never });
+
+    expect(res.status).toBe(502);
+    expect(res.chunks.join('')).toContain('invalid_upstream_config');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(buildHeaders).not.toHaveBeenCalled();
+  });
+
+  it('posts capability-gated image_url content without logging image data', async () => {
+    const imageUrl = 'data:image/png;base64,SECRET_IMAGE_DATA';
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        model: 'kimi-k3',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'describe' },
+            { type: 'image_url', image_url: { url: imageUrl } },
+          ],
+        }],
+      });
+      return streamResponse([
+        { id: 'chat_image', model: 'kimi-k3', choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }] },
+      ]);
+    }) as typeof fetch;
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://api.moonshot.cn/v1',
+      buildHeaders: async () => ({ authorization: 'Bearer secret' }),
+      capabilities: { imageInput: 'image_url' },
+    }, { fetchImpl, logger });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: {
+        model: 'kimi-k3',
+        input: [{
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'describe' },
+            { type: 'input_image', image_url: imageUrl },
+          ],
+        }],
+      },
+      res: res as never,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+    const logCalls = [
+      ...logger.debug.mock.calls,
+      ...logger.info.mock.calls,
+      ...logger.warn.mock.calls,
+      ...logger.error.mock.calls,
+    ];
+    expect(JSON.stringify(logCalls)).not.toContain('SECRET_IMAGE_DATA');
+  });
+
   it('accepts a final SSE data event without a trailing newline', async () => {
     const fetchImpl = vi.fn(async () => new Response(
       'data: {"id":"chat_tail","choices":[{"delta":{"content":"tail"},"finish_reason":"stop"}]}',
@@ -169,6 +270,33 @@ describe('createResponsesChatHandler', () => {
     expect(res.status).toBe(400);
     expect(res.chunks.join('')).toContain('unsupported_feature');
     expect(buildHeaders).not.toHaveBeenCalled();
+  });
+
+  it('keeps image input disabled by default and rejects it before credentials or network', async () => {
+    const buildHeaders = vi.fn(async () => ({ authorization: 'Bearer secret' }));
+    const fetchImpl = vi.fn<typeof fetch>();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: {
+        model: 'm',
+        input: [{
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', image_url: 'data:image/png;base64,eA==' }],
+        }],
+      },
+      res: res as never,
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.chunks.join('')).toContain('unsupported_feature');
+    expect(buildHeaders).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('runs the provider error callback before returning the original status', async () => {

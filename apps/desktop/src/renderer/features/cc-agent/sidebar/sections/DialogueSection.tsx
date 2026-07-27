@@ -67,6 +67,8 @@ const HEADER_ACTIONS_CLASS = cn('flex items-center gap-0.5 -mt-px', HEADER_HOVER
 
 export interface DialogueSectionProps {
   sessions: Session[];
+  /** 首次载入会话列表时避免把暂时的空数组误报成真正空态。 */
+  isLoading: boolean;
   activeSessionId?: string;
   runningSessionIds: ReadonlySet<string>;
   attachedSessionIds: ReadonlySet<string>;
@@ -113,6 +115,7 @@ export function compareDialogueSessions(a: Session, b: Session, sortBy: Dialogue
 
 export function DialogueSection({
   sessions,
+  isLoading,
   activeSessionId,
   runningSessionIds,
   attachedSessionIds,
@@ -277,7 +280,7 @@ export function DialogueSection({
           />
           {sortedSessions.length === 0 && (
             <div className="flex h-7 items-center rounded-full px-3 text-xs text-sidebar-muted">
-              {t('ccAgent.sidebar.noDialogues')}
+              {t(isLoading ? 'ccAgent.sidebar.loadingDialogues' : 'ccAgent.sidebar.noDialogues')}
             </div>
           )}
         </div>

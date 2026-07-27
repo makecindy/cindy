@@ -57,13 +57,20 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('pt-[calc(max(96px,28vh)_+_46px_-_var(--content-header-h,46px))]');
     expect(source).not.toContain('pt-[clamp(96px,25.5vh,268px)]');
     // 内容列宽度从死锁 800px 改为跟随 useProportionalWidth 的 inputWidth(与进行中
-    // 对话页同源,封顶 1220px):大屏自适应变宽、发送后同一 ChatInput 无宽度跳变。
+    // 对话页同源,封顶 914+20=934px):大屏留出左右呼吸空间、发送后同一 ChatInput 无宽度跳变。
     expect(source).toContain('relative flex w-full flex-col items-start');
     expect(source).toContain('style={{ maxWidth: inputWidth || 800 }}');
     expect(source).not.toContain('max-w-[800px]');
     expect(source).toContain('absolute right-0 top-[22px]');
-    // 快捷入口只有 4 项,不随内容列铺满全宽——封顶 800px 左对齐,保持卡片紧凑比例。
-    expect(source).toMatch(/data-testid="create-agent-quick-starts"[\s\S]*?style=\{\{ maxWidth: 800 \}\}/);
+    // 快捷入口与输入框同宽(w-full 跟随父列 inputWidth),左右两缘对齐 ChatInput;
+    // 旧 800px 封顶在宽窗口下右缘短一截,2026-07-24 用户反馈后摘除。
+    const quickStartsBlock = source.slice(
+      source.indexOf('data-testid="create-agent-quick-starts"'),
+      source.indexOf('data-testid="create-agent-quick-starts"') + 200,
+    );
+    expect(quickStartsBlock).toContain('w-full');
+    expect(quickStartsBlock).toContain('mt-[42px]');
+    expect(quickStartsBlock).not.toMatch(/maxWidth:\s*800/);
   });
 
   it('preserves New Maker behavior-critical props on ChatInput', () => {
@@ -114,6 +121,20 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('Hammer');
     expect(source).not.toContain('shadow-[');
     expect(source).not.toContain('boxShadow');
+  });
+
+  it('lays out quick-start cards icon-top/label-bottom with a 4px minimum gap (2026-07-25 redesign)', () => {
+    // 用户改稿 2026-07-25:两档(narrow/常态)统一竖排——icon 固定左上,文字挪到卡片
+    // 中下方与 icon 左对齐(flex-col + justify-between,gap-1 兜底最小间距),取代原
+    // 窄态横排 / 常态竖排自适应(#562)。卡片高度不变(narrow 84 / 常态 112)。
+    expect(source).toContain(
+      "'group flex flex-col items-start justify-between gap-1 rounded-xl border",
+    );
+    expect(source).toContain("isDraftNarrow ? 'min-h-[84px] p-3' : 'min-h-[112px] p-4'");
+    expect(source).toContain('className="w-full min-w-0 text-13 font-semibold leading-[16px]"');
+    // 旧的窄态横排(items-center)/常态竖排(gap-3)特判已被统一竖排取代。
+    expect(source).not.toContain("'flex min-h-[84px] items-center gap-3 p-3'");
+    expect(source).not.toContain("'flex min-h-[112px] flex-col items-start gap-3 p-4'");
   });
 
   it('uses exact CREATE AGENT quick-start and avatar tokens from the Figma slices', () => {
@@ -247,6 +268,22 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(modelSelectorSource).toContain("'shrink-0'");
     expect(chatInputSource).toContain(
       "className={isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined}",
+    );
+    expect(chatInputSource).toContain(
+      '(extraDirs !== undefined && onExtraDirsChange)',
+    );
+    expect(chatInputSource).not.toContain(
+      "vendorKey === 'cc' && extraDirs !== undefined && onExtraDirsChange",
+    );
+    expect(extraDirsButtonSource).toContain(
+      'const hasReferenceDirs = onChange !== undefined',
+    );
+    expect(extraDirsButtonSource).not.toContain("const isCc = agentKind === 'cc'");
+    // ×N 角标在 create-agent(新建草稿)也要外显(2026-07-25 用户定稿):引用目录
+    // 扩大 agent 可见范围,收起态不允许静默。不得回退到 icon-only 紧凑态。
+    expect(extraDirsButtonSource).toContain('count > 0 && hasReferenceDirs');
+    expect(extraDirsButtonSource).not.toContain(
+      'count > 0 && hasReferenceDirs && !isCreateAgentVariant',
     );
   });
 

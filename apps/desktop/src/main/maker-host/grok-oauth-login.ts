@@ -4,6 +4,8 @@
  * 参数取自 xAI 的 grok-cli OAuth 公共配置(client_id / OIDC issuer / scope / 固定回调端口)。
  * 与 Claude 登录的关键差异:
  *   - 回调端口**固定 56121**(xAI 注册的 redirect_uri 是 http://127.0.0.1:56121/callback,不可随机);
+ *   - code 由 consent 页(accounts.x.ai)的**页面 JS 跨源 fetch** 投递到 loopback(新版流程,
+ *     不再 302 重定向)——回调服务器必须应答 CORS preflight + Chrome PNA 头,见 CallbackListener;
  *   - endpoints 走 OIDC discovery(auth.x.ai/.well-known/openid-configuration),校验必须在 *.x.ai over https;
  *   - token 交换是 **form-encoded**,且 PKCE 的 code_challenge/method 在交换时**再发一次**(该 client 会二次校验);
  *   - token 由**本模块自管**(存 safeStorage 的 provider secret 'xai',JSON blob),过期自己用 refresh_token 刷新
@@ -222,12 +224,41 @@ function blobFromTokenResponse(t: TokenResponse, prev?: GrokTokenBlob | null): G
   };
 }
 
+// ── 回调 CORS ──────────────────────────────────────────────────────────────────
+// xAI 新版 consent 页(accounts.x.ai)授权完成后不再 302 重定向到 loopback,而是由
+// 页面 JS 跨源 fetch 本回调地址投递 code(页面同时显示授权码供官方 CLI 手动粘贴兜底)。
+// 跨源 fetch 要求本服务器正确应答 CORS preflight;Chrome 对「公网 https 页面 →
+// 127.0.0.1」还要求 Private Network Access 头。来源只放行 xAI 自己的 auth 域。
+const CALLBACK_CORS_ALLOWED_ORIGINS = new Set(['https://accounts.x.ai', 'https://auth.x.ai']);
+
+/** origin 在白名单内时返回回调响应应附带的 CORS 头;否则为空(不放行)。 */
+export function xaiCallbackCorsHeaders(origin: string | undefined): Record<string, string> {
+  if (!origin || !CALLBACK_CORS_ALLOWED_ORIGINS.has(origin)) return {};
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Private-Network': 'true',
+    Vary: 'Origin',
+  };
+}
+
 // ── 回调监听(固定端口 56121)────────────────────────────────────────────────────
-class CallbackListener {
+// 导出仅供单测(runGrokOAuthLogin 是唯一运行期使用方)。
+export class CallbackListener {
   private server: Server;
   private expectedState = '';
-  private pendingRes: ServerResponse | null = null;
+  /** code 已收到、等待 token exchange 收口的全部连接(consent 页可能重试 fetch)。 */
+  private pending: Array<{ res: ServerResponse; cors: Record<string, string> }> = [];
   private callbackLang: OAuthResultPageLang = 'en';
+  /**
+   * 登录结果状态机,仅由 state 已匹配的回调驱动:收到 code → 'exchanging',
+   * succeed()/fail() 收口为 'success'/'failed'(state 匹配的 error 回调直接
+   * 'failed')。重放/迟到的回调按它回执:成功重放 200、失败重放 400、exchanging
+   * 挂起同候(挂起连接在 fail() 时收 500)。state 不匹配的请求一律 400 拒绝,
+   * 不进入状态机也不入 pending。
+   */
+  private outcome: 'exchanging' | 'success' | 'failed' | null = null;
   private resolve: ((code: string) => void) | null = null;
   private reject: ((err: Error) => void) | null = null;
 
@@ -261,6 +292,16 @@ class CallbackListener {
   }
 
   private onRequest(req: IncomingMessage, res: ServerResponse): void {
+    const cors = xaiCallbackCorsHeaders(
+      typeof req.headers.origin === 'string' ? req.headers.origin : undefined,
+    );
+    // CORS/PNA preflight 必须 204 放行且不触碰登录流状态 —— 它没有 code 参数,
+    // 落进下方缺 code 分支会直接终止整个登录(issue #491 的卡死根因之一)。
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, cors);
+      res.end();
+      return;
+    }
     const parsed = new URL(req.url || '', `http://127.0.0.1:${REDIRECT_PORT}`);
     if (parsed.pathname !== '/callback') {
       res.writeHead(404);
@@ -277,26 +318,16 @@ class CallbackListener {
     const action = buildOAuthReturnAction(lang, 'xai-oauth', BRAND_NAME);
     const code = parsed.searchParams.get('code') ?? undefined;
     const state = parsed.searchParams.get('state') ?? undefined;
-    if (!code) {
-      res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(
-        renderOAuthResultPage({
-          htmlLang: OAUTH_RESULT_HTML_LANG[lang],
-          variant: 'error',
-          title: copy.errorTitle,
-          body: copy.missingCodeBody,
-          detail:
-            parsed.searchParams.get('error_description') ??
-            parsed.searchParams.get('error') ??
-            undefined,
-          action,
-        }),
-      );
-      this.reject?.(new Error('No authorization code received'));
-      return;
-    }
+    const oauthError =
+      parsed.searchParams.get('error_description') ?? parsed.searchParams.get('error') ?? undefined;
+    // state 是回调真实性的唯一凭证,最先校验。固定端口 + fetch 重试的新流程下,
+    // 上一次登录尝试的 consent 页 tab 可能仍在带旧 state 重试 —— 凡 state 不匹配
+    // 的请求(无论携带 code 还是 error、无论登录处于何种阶段)一律 400 拒绝:
+    // 不 settle 当前登录(旧 tab 一次滞留重试不能杀死新发起的登录)、不入 pending
+    // 挂起(否则不知道 state 的本机进程可在 exchange 窗口内囤积任意多连接)、
+    // 不吃成功重放(避免旧 tab 白显成功)。
     if (state !== this.expectedState) {
-      res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' });
+      res.writeHead(400, { 'content-type': 'text/html; charset=utf-8', ...cors });
       res.end(
         renderOAuthResultPage({
           htmlLang: OAUTH_RESULT_HTML_LANG[lang],
@@ -306,52 +337,114 @@ class CallbackListener {
           action,
         }),
       );
-      this.reject?.(new Error('Invalid state parameter'));
       return;
     }
-    this.pendingRes = res;
+    // 已有终态结果后网页侧可能重试 fetch(超时重发/用户手动访问)—— 不改写登录结果,
+    // 按状态机回执:成功 200 / 失败 400;exchange 未收口时挂起同候(与首个连接一起在
+    // succeed()/fail() 回执),不能提前发 200 —— exchange 随后失败会让页面白显成功。
+    // 能走到这里的都已通过 state 校验,pending 只会积累同一 consent 页的合法重试。
+    if (this.outcome !== null) {
+      if (this.outcome === 'exchanging') {
+        this.pending.push({ res, cors });
+        return;
+      }
+      const replayStatus = this.outcome === 'success' ? 200 : 400;
+      res.writeHead(replayStatus, { 'content-type': 'text/plain; charset=utf-8', ...cors });
+      res.end(this.outcome === 'success' ? 'OK' : 'login failed');
+      return;
+    }
+    if (!code) {
+      // 无 code 也无 error:健康检查、预取等杂请求,回 400 但保持登录流继续等待,
+      // 不能让任意本机请求终止一次进行中的登录。
+      if (!oauthError) {
+        res.writeHead(400, { 'content-type': 'text/html; charset=utf-8', ...cors });
+        res.end(
+          renderOAuthResultPage({
+            htmlLang: OAUTH_RESULT_HTML_LANG[lang],
+            variant: 'error',
+            title: copy.errorTitle,
+            body: copy.missingCodeBody,
+            action,
+          }),
+        );
+        return;
+      }
+      // state 已匹配的 error 回调 = 当前这次授权被真实拒绝/失败,终止登录。
+      this.outcome = 'failed';
+      res.writeHead(400, { 'content-type': 'text/html; charset=utf-8', ...cors });
+      res.end(
+        renderOAuthResultPage({
+          htmlLang: OAUTH_RESULT_HTML_LANG[lang],
+          variant: 'error',
+          title: copy.errorTitle,
+          body: copy.missingCodeBody,
+          detail: oauthError,
+          action,
+        }),
+      );
+      this.reject?.(new Error('No authorization code received'));
+      return;
+    }
+    this.outcome = 'exchanging';
+    this.pending.push({ res, cors });
     this.resolve?.(code);
   }
 
   succeed(): void {
-    if (!this.pendingRes) return;
+    this.outcome = 'success';
+    const held = this.pending;
+    this.pending = [];
     const copy = getProviderOAuthResultCopy(this.callbackLang, 'xAI', BRAND_NAME);
-    this.pendingRes.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    this.pendingRes.end(
-      renderOAuthResultPage({
-        htmlLang: OAUTH_RESULT_HTML_LANG[this.callbackLang],
-        variant: 'success',
-        title: copy.successTitle,
-        body: copy.successBody,
-        action: buildOAuthReturnAction(this.callbackLang, 'xai-oauth', BRAND_NAME),
-      }),
-    );
-    this.pendingRes = null;
+    for (const { res, cors } of held) {
+      try {
+        // 回执必须带上对应请求的 CORS 头:没有它,consent 页的 fetch 读不到响应,
+        // 页面停在「等待检测」;302 导航场景 cors 为空对象,无影响。
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...cors });
+        res.end(
+          renderOAuthResultPage({
+            htmlLang: OAUTH_RESULT_HTML_LANG[this.callbackLang],
+            variant: 'success',
+            title: copy.successTitle,
+            body: copy.successBody,
+            action: buildOAuthReturnAction(this.callbackLang, 'xai-oauth', BRAND_NAME),
+          }),
+        );
+      } catch {
+        // 连接可能已被客户端中止(如用户在 exchange 期间关掉授权页)——凭证此刻
+        // 已成功落盘,单个回执通道抛错不得把成功登录翻转成失败(调用方在 catch
+        // 里会返回 ok:false),也不得影响其余挂起连接的回执。
+      }
+    }
   }
 
   fail(detail?: string): void {
-    if (!this.pendingRes) return;
-    try {
-      const copy = getProviderOAuthResultCopy(this.callbackLang, 'xAI', BRAND_NAME);
-      this.pendingRes.writeHead(500, { 'content-type': 'text/html; charset=utf-8' });
-      this.pendingRes.end(
-        renderOAuthResultPage({
-          htmlLang: OAUTH_RESULT_HTML_LANG[this.callbackLang],
-          variant: 'error',
-          title: copy.errorTitle,
-          body: copy.exchangeFailedBody,
-          detail,
-          action: buildOAuthReturnAction(this.callbackLang, 'xai-oauth', BRAND_NAME),
-        }),
-      );
-    } catch {
-      /* 回执通道已关闭,登录结果仍由调用链决定 */
+    // exchange 失败也是失败终态;code 尚未收到(pending 为空)时不改写 outcome,
+    // 留给 onRequest 的分支自行定性。
+    if (this.outcome === 'exchanging') this.outcome = 'failed';
+    const held = this.pending;
+    this.pending = [];
+    for (const { res, cors } of held) {
+      try {
+        const copy = getProviderOAuthResultCopy(this.callbackLang, 'xAI', BRAND_NAME);
+        res.writeHead(500, { 'content-type': 'text/html; charset=utf-8', ...cors });
+        res.end(
+          renderOAuthResultPage({
+            htmlLang: OAUTH_RESULT_HTML_LANG[this.callbackLang],
+            variant: 'error',
+            title: copy.errorTitle,
+            body: copy.exchangeFailedBody,
+            detail,
+            action: buildOAuthReturnAction(this.callbackLang, 'xai-oauth', BRAND_NAME),
+          }),
+        );
+      } catch {
+        /* 回执通道已关闭,登录结果仍由调用链决定 */
+      }
     }
-    this.pendingRes = null;
   }
 
   close(): void {
-    if (this.pendingRes) {
+    if (this.pending.length > 0) {
       this.fail();
     }
     try {

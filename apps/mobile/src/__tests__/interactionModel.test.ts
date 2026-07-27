@@ -21,8 +21,14 @@ import {
   extractPlanOutline,
   formatPermissionInput,
   isPlanReviewResolveBusy,
+  interactionBlocksRemoteComposer,
   interactionKind,
   normalizeAskQuestions,
+  pendingInteractionsBlockRemoteComposer,
+  remoteInteractionHandling,
+  REMOTE_PLUGIN_SETUP_ACTION_KINDS,
+  REMOTE_PLUGIN_SETUP_ERROR_CODES,
+  REMOTE_PLUGIN_SETUP_PHASES,
   permissionRiskSummary,
   permissionTitle,
   selectActivePendingInteraction,
@@ -202,6 +208,139 @@ describe('interactionModel', () => {
     expect(interactionPanelSource).toContain("if (kind === 'issue_confirm')");
     expect(interactionPanelSource).toContain("t('interaction.panel.issueConfirmUnsupported')");
     expect(interactionPanelSource).not.toContain('buildIssueConfirmReviewPresentation');
+  });
+
+  it('gives plugin setup requests a cancel exit instead of a dead card', () => {
+    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
+
+    // 桌面把 plugin_setup 也推给控制端,而配置动作只能在桌面完成。手机侧必须留
+    // 取消出口:没有出口 + 卡接管输入框 = 会话锁死(线上已复现)。
+    expect(interactionPanelSource).toContain("if (kind === 'plugin_setup')");
+    expect(interactionPanelSource).toContain('buildPluginSetupCancelDecision(item.request)');
+    expect(interactionPanelSource).toContain('interaction.unsupported.cancelButton');
+    // 未知 kind 仍回退到 UnsupportedCard 的合并摘要:每行各自 numberOfLines 会把
+    // 总高度放大成 6 × 行数。
+    expect(interactionPanelSource).toContain("const summaryText = (summaryLines ?? [contentToPreview(request)])");
+    expect(interactionPanelSource).not.toContain('lines.map((line, index)');
+    // 取消由被控端按 expectedRevision 裁决,不能乐观撤卡(撤了可能其实没取消);
+    // 但仍要按该 revision 封顶抑制,否则取消前发出的慢快照会把卡写回来。
+    expect(interactionPanelSource).toContain('optimisticDismiss: false');
+    expect(interactionPanelSource).toContain('resolvedRevision: cancelDecision.expectedRevision');
+    expect(interactionPanelSource).toContain('markInteractionRevisionResolved');
+    // terminal 快照(被控端已 settle)不得给取消按钮:那只会点出一个「看起来成功」
+    // 的 no-op。门控以共享分类器为单一真相源。
+    expect(interactionPanelSource).toContain("remoteInteractionHandling(item) === 'cancel-only'");
+    expect(remoteInteractionHandling({
+      request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 2, terminal: true },
+    })).toBe('desktop-only');
+
+    expect(interactionBlocksRemoteComposer({
+      request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 },
+    })).toBe(false);
+    expect(interactionBlocksRemoteComposer({
+      request: { kind: 'permission', requestId: 'perm-1' },
+    })).toBe(true);
+  });
+
+  it('renders plugin setup as a full read-only status card, not a flat summary', () => {
+    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
+
+    // 手机端做不了配置动作,这张卡的全部价值在「看懂」:哪个插件、卡在哪一步、
+    // 为什么失败、回电脑端要做什么。退回扁平摘要就等于把这些信息又丢了。
+    expect(interactionPanelSource).toContain('function PluginSetupCard(');
+    expect(interactionPanelSource).toContain('buildRemotePluginSetupPresentation(item.request)');
+    expect(interactionPanelSource).not.toContain('pluginSetupSummaryLines');
+    expect(interactionPanelSource).toContain('interaction.pluginSetup.phase.${step.phase}');
+    expect(interactionPanelSource).toContain('interaction.pluginSetup.error.${step.errorCode}');
+    expect(interactionPanelSource).toContain('interaction.pluginSetup.action.${step.actionKind}');
+    // any_of 组要提示「任选其一」,否则用户以为每一步都得做。
+    expect(interactionPanelSource).toContain("t('interaction.pluginSetup.chooseOne')");
+    // 已 settle 的收尾帧不该再引导用户「去电脑端完成」。
+    expect(interactionPanelSource).toContain('presentation.terminal ? null');
+    // 状态色只用两个语义色 + 灰阶(mobile-design-guide §1)。
+    expect(interactionPanelSource).toContain('colors.statusReady');
+    expect(interactionPanelSource).toContain('colors.statusAccent');
+  });
+
+  it('keeps every plugin setup phase, error code and action kind translated in all locales', async () => {
+    const previous = i18n.language;
+    try {
+      for (const locale of ['zh-CN', 'en', 'ja', 'ko']) {
+        await i18n.changeLanguage(locale);
+        for (const phase of REMOTE_PLUGIN_SETUP_PHASES) {
+          const key = `interaction.pluginSetup.phase.${phase}`;
+          expect(i18n.t(key), `${locale} ${key}`).not.toBe(key);
+        }
+        for (const code of REMOTE_PLUGIN_SETUP_ERROR_CODES) {
+          const key = `interaction.pluginSetup.error.${code}`;
+          expect(i18n.t(key), `${locale} ${key}`).not.toBe(key);
+        }
+        for (const kind of REMOTE_PLUGIN_SETUP_ACTION_KINDS) {
+          // inline_form 走带字段名的专属文案,不在 action 目录里。
+          if (kind === 'inline_form') continue;
+          const key = `interaction.pluginSetup.action.${kind}`;
+          expect(i18n.t(key), `${locale} ${key}`).not.toBe(key);
+        }
+        for (const key of [
+          'interaction.pluginSetup.completeOnDesktop',
+          'interaction.pluginSetup.chooseOne',
+          'interaction.pluginSetup.progress',
+          'interaction.pluginSetup.desktopActionHint',
+          'interaction.pluginSetup.inlineFormAction',
+          'interaction.pluginSetup.inlineFormActionGeneric',
+        ]) {
+          expect(i18n.t(key), `${locale} ${key}`).not.toBe(key);
+        }
+      }
+    } finally {
+      await i18n.changeLanguage(previous);
+    }
+  });
+
+  it('localizes queue titles and kind labels instead of rendering the shared Chinese defaults', () => {
+    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
+
+    // 共享层的 title / label 是中文直出;控制端必须按 locale 翻译后再渲染,否则
+    // 队列头在 en / ja / ko 下仍是中文。
+    // kind 来自远端、可为任意字符串:必须先经白名单归一再拼 i18next key,
+    // 否则带 `.` / `__proto__` 的值会参与路径解析。
+    expect(interactionPanelSource).toContain('interaction.kinds.${localizedInteractionKindKey(itemKind)}.${field}');
+    expect(interactionPanelSource).toContain('const LOCALIZED_INTERACTION_KINDS = new Set([');
+    expect(interactionPanelSource).not.toContain('interaction.kinds.${kind}.');
+    expect(interactionPanelSource).not.toContain('title: selectedQueueItem?.title');
+    // positionLabel 会被插进队列切换的 accessibility 文案,同样必须翻译,
+    // 否则读屏在非中文 locale 下念混语。
+    expect(interactionPanelSource).toContain("t('interaction.panel.queuePositionCurrent')");
+    expect(interactionPanelSource).toContain("t('interaction.panel.queuePositionNth', { index: index + 1 })");
+
+    for (const lang of ['zh-CN', 'en', 'ja', 'ko']) {
+      const bundle = JSON.parse(readFileSync(resolve(process.cwd(), `src/i18n/locales/${lang}/interaction.json`), 'utf8'));
+      for (const kind of ['permission', 'ask_user_question', 'plan_review', 'issue_confirm', 'plugin_setup', 'fallback']) {
+        expect(bundle.kinds?.[kind]?.title, `${lang}/${kind}.title`).toBeTruthy();
+        expect(bundle.kinds?.[kind]?.label, `${lang}/${kind}.label`).toBeTruthy();
+      }
+      for (const key of ['queuePositionCurrent', 'queuePositionNext', 'queuePositionNth']) {
+        expect(bundle.panel?.[key], `${lang}/panel.${key}`).toBeTruthy();
+      }
+      expect(bundle.panel?.queuePositionNth, `${lang}/panel.queuePositionNth`).toContain('{{index}}');
+    }
+  });
+
+  it('keys mobile composer blocking off the whole pending set', () => {
+    const sessionScreenSource = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+
+    // 阻塞判定必须喂整个 pending 集合;喂 activePendingInteraction 会让用户切到
+    // 一张手机处理不了的卡就绕过仍待处理的权限 / 提问 / 计划卡。
+    expect(sessionScreenSource).toContain('pendingInteractionsBlockRemoteComposer(pending)');
+    expect(sessionScreenSource).not.toContain('interactionBlocksRemoteComposer(activePendingInteraction)');
+
+    expect(pendingInteractionsBlockRemoteComposer([
+      { request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } },
+      { request: { kind: 'permission', requestId: 'perm-1' } },
+    ])).toBe(true);
+    expect(pendingInteractionsBlockRemoteComposer([
+      { request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } },
+    ])).toBe(false);
   });
 
   it('keeps read-only pending interactions as a short desktop-style blocker', () => {

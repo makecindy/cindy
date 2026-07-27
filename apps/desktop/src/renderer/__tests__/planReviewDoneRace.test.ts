@@ -151,13 +151,18 @@ function emitDone(
   source: 'codex' | 'claude-code',
   plan?: Array<{ step: string; status: string }>,
   turnId = 'turn-1',
+  turnStatus?: string,
 ): void {
   onEvent?.({
     sessionId: SESSION_ID,
     event: {
       type: 'done',
       source,
-      data: { type: 'task_complete', raw: { id: turnId }, ...(plan ? { plan } : {}) },
+      data: {
+        type: 'task_complete',
+        raw: { id: turnId, ...(turnStatus ? { status: turnStatus } : {}) },
+        ...(plan ? { plan } : {}),
+      },
     },
   });
 }
@@ -261,6 +266,15 @@ describe('plan_review 与 done 的时序', () => {
     emitDone('codex');
 
     expect(latestPlanStatuses()).toEqual(['in_progress', 'pending']);
+  });
+
+  it('codex:成功完成但缺少最终 plan 快照时收口计划卡片', () => {
+    makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
+    emitPlanUpdate('codex', ['in_progress', 'pending']);
+
+    emitDone('codex', undefined, 'turn-1', 'completed');
+
+    expect(latestPlanStatuses()).toEqual(['completed', 'completed']);
   });
 
   it('claude:done 不改 Codex update_plan 展示状态', () => {

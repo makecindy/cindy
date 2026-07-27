@@ -6,6 +6,13 @@ import {
   MAX_PASTED_IMAGE_NAME_CHARS,
   SUPPORTED_PASTED_IMAGE_MIME_TYPES,
 } from '@/session/composerRichInputProtocol';
+import {
+  COMPOSER_SINGLE_LINE_HEIGHT,
+  COMPOSER_TEXT_FONT_SIZE,
+  COMPOSER_TEXT_HORIZONTAL_PADDING,
+  COMPOSER_TEXT_LINE_HEIGHT,
+  COMPOSER_TEXT_VERTICAL_PADDING,
+} from '@/session/composerTextMetrics';
 
 export interface ComposerRichInputTheme {
   background: string;
@@ -40,10 +47,15 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  /* 字号 / 行高 / 内边距来自 composerTextMetrics(与原生输入框、语音听写覆盖层同源):
+     任一处漂移都会让同一段文字在两个渲染器里换行位置不同,听写时新起的行被裁在框外。 */
   #editor {
-    color: var(--text); caret-color: var(--focus); font-size: 15px; line-height: 22px;
-    min-height: 28px; max-height: var(--max-height); overflow-y: auto; outline: none;
-    padding: 3px 0; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-user-select: text;
+    color: var(--text); caret-color: var(--focus);
+    font-size: ${COMPOSER_TEXT_FONT_SIZE}px; line-height: ${COMPOSER_TEXT_LINE_HEIGHT}px;
+    min-height: ${COMPOSER_SINGLE_LINE_HEIGHT}px; max-height: var(--max-height);
+    overflow-y: auto; outline: none;
+    padding: ${COMPOSER_TEXT_VERTICAL_PADDING}px ${COMPOSER_TEXT_HORIZONTAL_PADDING}px;
+    white-space: pre-wrap; overflow-wrap: anywhere; -webkit-user-select: text;
   }
   #editor:empty::before { content: attr(data-placeholder); color: var(--placeholder); pointer-events: none; }
   .atom {
@@ -190,7 +202,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     walk(root, nodes);
     return { version: 1, nodes };
   };
-  const reportHeight = () => post({ type: 'height', height: Math.min(config.maxHeight, Math.max(28, root.scrollHeight)) });
+  const reportHeight = () => post({ type: 'height', height: Math.min(config.maxHeight, Math.max(${COMPOSER_SINGLE_LINE_HEIGHT}, root.scrollHeight)) });
   const notify = () => {
     if (applying || composing) return;
     const value = readDocument();

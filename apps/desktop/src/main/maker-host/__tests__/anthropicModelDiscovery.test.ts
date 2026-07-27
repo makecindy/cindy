@@ -3,7 +3,8 @@
  *
  * 覆盖:SDK ModelInfo 映射(别名过滤 / dated id 归一 / 能力字段在场 = 权威、全缺席 =
  * 未知按确定性默认合成 / haiku 默认收起)、HTTP /v1/models 映射(能力字段容错 / haiku
- * 例外 / max_input_tokens 优先 / dated 去重)、contextWindow 规则(默认 1M,haiku 200k)、
+ * 例外 / max_input_tokens 优先 / dated 去重)、contextWindow 规则(HTTP 明示 > 目录 >
+ * 默认 1M / haiku 200k)、
  * SDK 捕获入口的登录态门控与合并纪律(登出不注入 / 无能力信息保留已精化条目 /
  * HTTP 明说窗口不被 SDK 打回猜测值 / 磁盘缓存恢复 explicitWindows)。
  * HTTP 拉取的网络路径不在此测(登录态 + fetch 依赖,行为由代码注释契约覆盖)。
@@ -12,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
 
 // 规则 23:测试涉及路径一律用 os.tmpdir() 下的临时目录,收尾清理。
 const TEST_USER_DATA = path.join(os.tmpdir(), `cindy-anthropic-discovery-test-${process.pid}`);
@@ -46,7 +48,11 @@ import {
   resetAnthropicDiscoveryForTest,
   waitForAnthropicDiscoveryIdleForTest,
 } from '../model-discovery/anthropic.js';
-import { getActiveCatalog, setAnthropicDiscoveredModels } from '../active-catalog.js';
+import {
+  getActiveCatalog,
+  setActiveCatalog,
+  setAnthropicDiscoveredModels,
+} from '../active-catalog.js';
 
 function anthropicIds(): string[] {
   const p = getActiveCatalog().providers.find((x) => x.id === 'anthropic');
@@ -60,6 +66,10 @@ function anthropicModel(id: string) {
 
 afterAll(async () => {
   await fsp.rm(TEST_USER_DATA, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  setActiveCatalog(BUNDLED_CATALOG);
 });
 
 describe('mapAnthropicSdkModels', () => {
@@ -118,6 +128,48 @@ describe('mapAnthropicSdkModels', () => {
     expect(out[1].model).toMatchObject({ efforts: [], defaultEnabled: false });
   });
 
+  it('SDK 未下发窗口时使用目录中的官方窗口', () => {
+    const out = mapAnthropicSdkModels([
+      { value: 'claude-opus-5', displayName: 'Opus 5' },
+      { value: 'claude-opus-4-5', displayName: 'Opus 4.5' },
+      { value: 'claude-sonnet-4-5', displayName: 'Sonnet 4.5' },
+    ]);
+    expect(out.map(({ model }) => [model.id, model.contextWindow])).toEqual([
+      ['claude-opus-5', 1_000_000],
+      ['claude-opus-4-5', 200_000],
+      ['claude-sonnet-4-5', 200_000],
+    ]);
+  });
+
+  it('active v1 元数据缺字段时仍从 bundled v1 取得窗口和 effort', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.cindyModelMeta = {
+      version: 1,
+      models: {
+        'claude-sonnet-4-5': { name: 'Remote Sonnet 4.5' },
+      },
+    };
+    setActiveCatalog(catalog);
+
+    const out = mapAnthropicSdkModels([
+      { value: 'claude-sonnet-4-5', displayName: 'Sonnet 4.5' },
+      { value: 'claude-opus-5', displayName: 'Opus 5' },
+    ]);
+
+    expect(out.map(({ model }) => ({
+      id: model.id,
+      contextWindow: model.contextWindow,
+      efforts: model.efforts,
+    }))).toEqual([
+      { id: 'claude-sonnet-4-5', contextWindow: 200_000, efforts: [] },
+      {
+        id: 'claude-opus-5',
+        contextWindow: 1_000_000,
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      },
+    ]);
+  });
+
   it('supportsEffort=true 但缺档位清单:使用目录基线,不解读为不可调', () => {
     const out = mapAnthropicSdkModels([
       { value: 'claude-opus-4-8', displayName: 'Opus', supportsEffort: true },
@@ -134,6 +186,22 @@ describe('mapAnthropicSdkModels', () => {
     expect(out[0].model).toMatchObject({
       efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
       supportsFastMode: true,
+    });
+  });
+
+  it('目录未知且能力缺席时,非 Haiku 新模型先开放 5 档,Haiku 仍保持 0 档', () => {
+    const out = mapAnthropicSdkModels([
+      { value: 'claude-opus-6', displayName: 'Opus 6' },
+      { value: 'claude-haiku-5', displayName: 'Haiku 5' },
+    ]);
+    expect(out[0]).toMatchObject({ hasEffortInfo: false });
+    expect(out[0].model).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'high',
+    });
+    expect(out[1].model).toMatchObject({
+      efforts: [],
+      defaultEffort: null,
     });
   });
 
@@ -199,6 +267,30 @@ describe('mapAnthropicHttpModels', () => {
       contextWindow: 900_000, // max_input_tokens 优先于 1M 规则
       efforts: ['low', 'high', 'max'],
       supportsFastMode: true,
+    });
+  });
+
+  it('HTTP 未下发 max_input_tokens 时使用目录中的官方窗口', () => {
+    const out = mapAnthropicHttpModels([
+      { id: 'claude-opus-5', display_name: 'Opus 5', type: 'model' },
+      { id: 'claude-opus-4-5', display_name: 'Opus 4.5', type: 'model' },
+      { id: 'claude-sonnet-4-5', display_name: 'Sonnet 4.5', type: 'model' },
+    ]);
+    expect(out.map(({ model }) => [model.id, model.contextWindow])).toEqual([
+      ['claude-opus-5', 1_000_000],
+      ['claude-opus-4-5', 200_000],
+      ['claude-sonnet-4-5', 200_000],
+    ]);
+  });
+
+  it('HTTP 未知新模型缺 capability 时同样使用 5 档临时基线', () => {
+    const out = mapAnthropicHttpModels([
+      { id: 'claude-sonnet-6', display_name: 'Sonnet 6', type: 'model' },
+    ]);
+    expect(out[0]).toMatchObject({ hasEffortInfo: false });
+    expect(out[0].model).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'high',
     });
   });
 
@@ -489,7 +581,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     });
   });
 
-  it('HTTP 刷新用当前目录基线替换旧版缓存的三档合成值', async () => {
+  it('磁盘恢复即用当前目录基线替换旧版缓存的三档合成值', async () => {
     const cacheDir = path.join(TEST_USER_DATA, 'model-discovery');
     const cacheFile = path.join(cacheDir, 'anthropic-models.json');
     await fsp.mkdir(cacheDir, { recursive: true });
@@ -500,7 +592,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
         models: [
           {
             id: 'claude-fable-5',
-            name: 'Fable 5',
+            name: 'Fable from stale cache',
             group: 'anthropic',
             sortOrder: 0,
             contextWindow: 1_000_000,
@@ -516,7 +608,13 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       'utf-8',
     );
     await loadAnthropicModelsFromDiskCache();
-    expect(anthropicModel('claude-fable-5')?.efforts).toEqual(['low', 'medium', 'high']);
+    expect(anthropicModel('claude-fable-5')?.efforts).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]);
 
     oauthRefreshMock.getValidClaudeAiOAuth.mockResolvedValue({ accessToken: 'test-token' });
     vi.stubGlobal(
@@ -610,6 +708,83 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     };
     expect(persisted.explicitEffortModelIds).toEqual(['claude-fable-5']);
     expect(persisted.explicitFastModeModelIds).toEqual(['claude-fable-5']);
+  });
+
+  it('磁盘缓存会按当前目录修正未明确声明的旧窗口', async () => {
+    const cacheDir = path.join(TEST_USER_DATA, 'model-discovery');
+    await fsp.mkdir(cacheDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(cacheDir, 'anthropic-models.json'),
+      JSON.stringify({
+        fetchedAt: '2026-07-19T00:00:00.000Z',
+        models: [
+          {
+            id: 'claude-sonnet-4-5',
+            name: 'Sonnet 4.5',
+            group: 'anthropic',
+            sortOrder: 0,
+            contextWindow: 1_000_000,
+            efforts: [],
+            defaultEffort: null,
+            supportsFastMode: false,
+            status: 'active',
+          },
+        ],
+      }),
+      'utf-8',
+    );
+
+    await loadAnthropicModelsFromDiskCache();
+
+    expect(anthropicModel('claude-sonnet-4-5')?.contextWindow).toBe(200_000);
+  });
+
+  it('磁盘缓存按当前目录刷新非明确 effort,同时保留明确能力', async () => {
+    const cacheDir = path.join(TEST_USER_DATA, 'model-discovery');
+    await fsp.mkdir(cacheDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(cacheDir, 'anthropic-models.json'),
+      JSON.stringify({
+        fetchedAt: '2026-07-22T00:00:00.000Z',
+        models: [
+          {
+            id: 'claude-sonnet-5',
+            name: 'Sonnet 5',
+            group: 'anthropic',
+            sortOrder: 0,
+            contextWindow: 1_000_000,
+            efforts: ['low', 'medium', 'high'],
+            defaultEffort: 'high',
+            supportsFastMode: false,
+            status: 'active',
+          },
+          {
+            id: 'claude-opus-5',
+            name: 'Opus 5',
+            group: 'anthropic',
+            sortOrder: 1,
+            contextWindow: 1_000_000,
+            efforts: ['low', 'high'],
+            defaultEffort: 'high',
+            supportsFastMode: false,
+            status: 'active',
+          },
+        ],
+        explicitEffortModelIds: ['claude-opus-5'],
+      }),
+      'utf-8',
+    );
+
+    await loadAnthropicModelsFromDiskCache();
+
+    expect(anthropicModel('claude-sonnet-5')).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'high',
+    });
+    expect(anthropicModel('claude-opus-5')).toMatchObject({
+      efforts: ['low', 'high'],
+      defaultEffort: 'high',
+    });
   });
 
   it('磁盘缓存恢复 explicitWindows:重启后 SDK 捕获不把 HTTP 明说窗口打回猜测值(review P2 回归)', async () => {

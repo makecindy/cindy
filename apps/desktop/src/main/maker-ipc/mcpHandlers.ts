@@ -39,6 +39,12 @@ export interface McpHandlerDeps {
    * 只告警不阻塞 CRUD）。测试可省略。
    */
   invalidateCodex?(): Promise<void>;
+  /**
+   * 内置 MCP server 名（生产 = getBuiltinMcpServerNames）。自定义 MCP 撞上这些名字时
+   * 会在装配层顶替内置 server 并继承其审批信任，因此创建 / 更新阶段直接拒收。
+   * 省略时不做保留名校验（测试便利）。
+   */
+  getReservedMcpIds?(): string[];
 }
 
 export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandlerDeps): void {
@@ -61,7 +67,7 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
   }
 
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (_event, input: unknown) => {
-    const v = validateCustomMcpConfig(input);
+    const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
     const config = input as CustomMcpConfig;
     if (await customMcpServerExists(config.id)) {
@@ -73,7 +79,7 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
   });
 
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (_event, input: unknown) => {
-    const v = validateCustomMcpConfig(input);
+    const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
     const config = input as CustomMcpConfig;
     const updated = await updateCustomMcpServer(config.id, config);

@@ -72,12 +72,13 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
   });
 
   it('日期分组视图:选中 0 会话的远程机器时仍渲染空态段头(空列表可感知)', () => {
-    // groups 为空且 filter 未激活时,若还选中了非「所有」的远程机器,machineFilterActive
-    // 让组件继续渲染空态段头(「空」标签),让用户看得出是机器过滤导致的空列表而非白屏。
+    // groups 为空且 filter 未激活、初始加载已结束时,若还选中了非「所有」的远程机器,
+    // machineFilterActive 让组件继续渲染空态段头(「空」标签),让用户看得出是机器
+    // 过滤导致的空列表而非白屏。
     expect(dateSectionSource).toContain('machineFilterActive');
     expect(dateSectionSource).toMatch(/selectedDeviceId\s*!==\s*MACHINE_ALL/);
     expect(dateSectionSource).toContain(
-      'if (groups.length === 0 && !filter.isFilterActive && !machineFilterActive) return null;',
+      'if (groups.length === 0 && !isLoading && !filter.isFilterActive && !machineFilterActive) return null;',
     );
   });
 

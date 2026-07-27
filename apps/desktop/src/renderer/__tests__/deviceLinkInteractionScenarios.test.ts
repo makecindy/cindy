@@ -660,7 +660,8 @@ describe('远程交互接线不变式', () => {
     const src = read('lib/makerChatStore.ts');
     expect(src).toContain('const deviceLinkRemote = isRemoteSession(sessionId);');
     expect(src).toContain('const sshRemote = Boolean(current.remoteHostId);');
-    expect(src).toContain(
+    // 该三元可能被 prettier 折成多行:先把空白折叠成单空格,只锁 token 序列。
+    expect(src.replace(/\s+/g, ' ')).toContain(
       '...(deviceLinkRemote ? {} : { makerMemoryEnabled: sshRemote ? false : getMakerMemoryEnabled() })',
     );
   });
@@ -1006,13 +1007,19 @@ describe('远程交互接线不变式', () => {
   it('main RESOLVE_INTERACTION handler 解决后广播 dismissed(dismissRendererInteraction)', () => {
     const src = readFileSync(resolve(__dirname, '../../main/maker-ipc/register.ts'), 'utf8');
     // handler 可以只委托 helper,但 helper 必须负责 resolved 广播和权威落库。
+    // 截取窗口用下一个语法边界而非固定字符数:handler/helper 体量会随入参校验、
+    // 注释增长,固定窗口会在无行为回归时误报(#329 曾把调用挤出 1000 字符窗口)。
     const handlerStart = src.indexOf('ipcMain.handle(MAKER_INVOKE.RESOLVE_INTERACTION');
     expect(handlerStart).toBeGreaterThan(-1);
-    const handlerBody = src.slice(handlerStart, handlerStart + 1000);
+    const handlerEnd = src.indexOf('ipcMain.handle(', handlerStart + 1);
+    const handlerBody = src.slice(handlerStart, handlerEnd === -1 ? undefined : handlerEnd);
     expect(handlerBody).toContain('resolvePendingInteraction(');
     const helperStart = src.indexOf('function resolvePendingInteraction');
     expect(helperStart).toBeGreaterThan(-1);
-    const body = src.slice(helperStart, helperStart + 1800);
+    // 顶层函数体内嵌套块都有缩进,列首 '\n}' 即 helper 自己的闭括号。
+    const helperEnd = src.indexOf('\n}', helperStart);
+    expect(helperEnd).toBeGreaterThan(-1);
+    const body = src.slice(helperStart, helperEnd);
     expect(body).toContain('resolver.resolve(');
     expect(body).toContain('dismissRendererInteraction(');
     // F1:resolve 后被控端权威落库 ask/plan answered 状态。
@@ -1042,6 +1049,26 @@ describe('远程交互接线不变式', () => {
       expect(start, f).toBeGreaterThan(-1);
       expect(src.slice(start, start + 400), f).toContain('tapWindowBroadcast(channel, payload)');
     }
+  });
+
+  it('F6: scheduler 新会话在首条消息落库后广播 created 给 device-link 列表订阅者', () => {
+    const runnerSrc = mainSrc('scheduler-host/runner.ts');
+    const hostSrc = mainSrc('scheduler-host/index.ts');
+    expect(runnerSrc).toContain('this.deps.onSessionCreated?.(session.id)');
+    expect(hostSrc).toContain('onSessionCreated: broadcastSessionCreated');
+  });
+
+  it('F7: 周期 sessions:list 是有界窗口，只能 merge，不能截断远程分片', () => {
+    const src = read('features/device-link/useDeviceLinkRemoteProjects.ts');
+    expect(src).toContain("snapshotMode: 'merge'");
+    expect(src).toContain("coalescingMode: 'weak'");
+  });
+
+  it('F8: 周期对账从实际 link status 启动，且状态 push 不被迟到快照覆盖', () => {
+    const src = read('features/device-link/useDeviceLinkRemoteProjects.ts');
+    expect(src).toContain('let linkOnline = false');
+    expect(src).toContain("if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online'");
+    expect(src).toContain('linkStatusPushSeen = true');
   });
 
   it('F4: extraDirs 远程跳过 sessionService.update(getSessionDeviceId 守卫,避免阻断 setExtraDirs)', () => {

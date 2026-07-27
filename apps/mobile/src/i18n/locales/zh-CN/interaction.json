@@ -13,9 +13,9 @@
     "kind": "权限确认",
     "deny": "拒绝",
     "denyAccessibility": "拒绝权限请求",
-    "alwaysAllow": "本会话总是允许",
-    "alwaysAllowAccessibility": "本会话总是允许权限请求",
-    "alwaysAllowConfirm": "确认本会话允许",
+    "alwaysAllow": "本对话总是允许",
+    "alwaysAllowAccessibility": "本对话总是允许权限请求",
+    "alwaysAllowConfirm": "确认本对话允许",
     "allowOnce": "允许一次",
     "allowOnceAccessibility": "允许一次权限请求",
     "allowOnceConfirm": "确认允许一次",
@@ -29,12 +29,19 @@
     "readOnlyKind": "待确认",
     "readOnlyTitle": "电脑端正在等待确认",
     "pendingRequests": "待处理请求",
-    "queueSwitchTo": "切换到{{position}}待处理请求: {{label}}",
+    "queueSwitchTo": "切换到{{position}}待处理请求：{{label}}",
     "queueSwitchGeneric": "切换待处理请求",
+    "queuePositionCurrent": "当前",
+    "queuePositionNext": "接着",
+    "queuePositionNth": "第 {{index}}",
+    "composerBlockedByPending": "先处理电脑端的待处理请求后才能继续输入。",
     "missingRequestId": "这个远程交互缺少 requestId，无法回传决定。",
     "issueConfirmUnsupported": "Issue 提交确认只在电脑端处理。请回到桌面端确认或取消提交。",
     "unsupportedType": "手机版暂不支持这个远程交互类型。",
     "unsupportedKind": "暂不支持",
+    "desktopOnlyKind": "电脑端处理",
+    "cancelRequest": "取消这次请求",
+    "cancelRequestAccessibility": "取消这次远程请求",
     "awaitingAnswer": "等待回答",
     "continueAccessibility": "继续远程提问",
     "continue": "继续",
@@ -49,7 +56,7 @@
     "submittingHint": "正在把决定回传到电脑端，请不要重复提交。",
     "customAnswerInputAccessibility": "输入自定义回答",
     "customAnswerPlaceholder": "输入其他回答",
-    "customAnswerButtonText": "输入其他回答...",
+    "customAnswerButtonText": "输入其他回答…",
     "answerInput": "输入回答",
     "previous": "上一步",
     "skipAccessibility": "跳过问题",
@@ -80,6 +87,32 @@
     "planFeedbackSubmit": "提交计划反馈",
     "planFeedbackAccessibility": "反馈修改计划"
   },
+  "kinds": {
+    "permission": {
+      "title": "需要授权电脑端操作",
+      "label": "授权"
+    },
+    "ask_user_question": {
+      "title": "需要回答 Agent 问题",
+      "label": "问题"
+    },
+    "plan_review": {
+      "title": "需要确认执行计划",
+      "label": "计划"
+    },
+    "issue_confirm": {
+      "title": "需要确认 Issue 内容",
+      "label": "Issue"
+    },
+    "plugin_setup": {
+      "title": "需要在电脑端配置插件",
+      "label": "插件"
+    },
+    "fallback": {
+      "title": "需要处理远程请求",
+      "label": "请求"
+    }
+  },
   "rewind": {
     "readError": "无法读取回退预览结果，请重新同步后再试。",
     "noFilesNote": "没有可回滚的文件，将只截断这条消息之后的对话历史。",
@@ -91,7 +124,7 @@
     "confirm": "确认回退",
     "confirming": "回退中",
     "titleLoading": "正在检查回退影响",
-    "titleDefault": "确认回退到这条消息?",
+    "titleDefault": "确认回退到这条消息？",
     "titleEmpty": "只回退对话历史",
     "titleError": "无法回退",
     "detailLoading": "手机端正在向电脑端读取文件回退预览。",
@@ -101,15 +134,15 @@
   },
   "collab": {
     "dispatchSummaryItem": "{{label}}：{{task}}",
-    "batchTitle": "批量派活给 {{count}} 个 worker",
-    "batchTitleGeneric": "批量派活给多个 worker",
-    "batchBodyFallback": "批量创建 worker",
-    "dispatchTitle": "派活给 worker {{who}}",
+    "batchTitle": "批量派活给 {{count}} 个 Worker",
+    "batchTitleGeneric": "批量派活给多个 Worker",
+    "batchBodyFallback": "批量创建 Worker",
+    "dispatchTitle": "派活给 Worker {{who}}",
     "dispatchRole": "角色 {{meta}}",
-    "dispatchBodyFallback": "创建 worker",
-    "sendTitle": "发消息给 worker",
+    "dispatchBodyFallback": "创建 Worker",
+    "sendTitle": "发消息给 Worker",
     "sendBodyFallback": "发送消息",
-    "reportTitle": "worker 回报",
+    "reportTitle": "Worker 回报",
     "reportBodyFallback": "(空回报)"
   },
   "contextSheet": {
@@ -124,7 +157,7 @@
     },
     "goalLabel": "目标",
     "goalObjectiveAccessibility": "目标内容",
-    "goalPlaceholder": "想要达成什么？agent 会围绕这个目标自动续跑，直到完成或达到限制。",
+    "goalPlaceholder": "想要达成什么？Agent 会围绕这个目标自动续跑，直到完成或达到限制。",
     "advancedSettings": "高级设置",
     "limitsHint": "未改动时跟随被控端的默认限制；达到任一上限时目标自动停止，可随时手动终止；「不限」表示不设该上限。",
     "maxTurns": "最大轮数",
@@ -143,7 +176,44 @@
     "photoPermissionHint": "照片权限未开启，开启后可快速添加最近照片。",
     "enablePhotoPermission": "开启照片权限",
     "enable": "去开启",
-    "icloudTimeout": "照片还在从 iCloud 下载,等待超时了。请检查网络,稍后重试。",
-    "photoNotReadable": "这张照片暂时无法读取(可能还没从 iCloud 下载完成),请稍后重试。"
+    "icloudTimeout": "照片还在从 iCloud 下载，等待超时了。请检查网络，稍后重试。",
+    "photoNotReadable": "这张照片暂时无法读取(可能还没从 iCloud 下载完成)，请稍后重试。"
+  },
+  "pluginSetup": {
+    "completeOnDesktop": "请在被控桌面完成设置，本卡片会自动更新状态。",
+    "chooseOne": "选择一种配置方式",
+    "stepsHeading": "配置步骤",
+    "progress": "{{satisfied}}/{{total}} 已完成",
+    "desktopActionHint": "在电脑端{{action}}",
+    "phase": {
+      "pending": "待设置",
+      "action_running": "进行中…",
+      "waiting_external": "等待授权…",
+      "verifying": "验证中…",
+      "satisfied": "已完成",
+      "failed": "失败",
+      "cancelled": "已取消"
+    },
+    "error": {
+      "ACTION_FAILED": "设置操作未完成，请重试。",
+      "ACTION_STALE": "设置已更新，请重新选择配置操作。",
+      "AUTH_CANCELLED": "授权已取消，您可以重新授权。",
+      "AUTH_FAILED": "未能完成授权，请重试。",
+      "INLINE_INVALID": "配置内容无效，请检查后重试。",
+      "INLINE_UNAVAILABLE": "当前版本无法在对话中保存此配置，请更新 Cindy 后重试。",
+      "SAVE_FAILED": "未能保存配置，请重试。",
+      "WINDOW_CLOSED": "发起设置的窗口已关闭，请回到该对话重试。",
+      "TARGET_UNAVAILABLE": "插件已停用、卸载或不可用，请检查插件状态后重试。",
+      "ASSESSMENT_FAILED": "暂时无法刷新配置状态，请重试。",
+      "TIMEOUT": "等待设置超时，请重试。"
+    },
+    "action": {
+      "oauth_connect": "授权",
+      "open_plugin_settings": "打开设置",
+      "manage_connection": "管理连接",
+      "open_client_settings": "打开模型设置"
+    },
+    "inlineFormAction": "在电脑端填写{{label}}",
+    "inlineFormActionGeneric": "在电脑端填写一项配置"
   }
 }

@@ -21,6 +21,10 @@ import { fileURLToPath } from 'node:url';
 
 export const FINGERPRINT_PLATFORMS = ['ios', 'android'];
 export const GUARD_COMMENT_MARKER = '<!-- mobile-fingerprint-guard -->';
+// 机器可读结论(第二行隐藏注释):review 侧的冷更审查门读这一行判「本 PR 是否触发冷更」,
+// 不靠标题文案匹配。改文案可以,这一行的格式不能动 —— 门会因此漏判(见
+// docs/dev-rules/mobile-development.md「冷更边界」)。第一行仍是 sticky comment 的定位 marker。
+export const guardChangedMarker = (changed) => `<!-- fingerprint-changed: ${changed ? 'true' : 'false'} -->`;
 
 /**
  * 解析本脚本的 CLI 参数。
@@ -141,7 +145,7 @@ export function compareFingerprintReports(base, current) {
 
 /** 渲染 PR sticky comment 的 markdown 正文(含 marker,changed / unchanged 两种形态)。 */
 export function renderGuardComment(comparison) {
-  const lines = [GUARD_COMMENT_MARKER];
+  const lines = [GUARD_COMMENT_MARKER, guardChangedMarker(comparison.changed)];
   if (comparison.changed) {
     lines.push('### ⚠️ 本 PR 会改变 mobile 原生 runtime fingerprint');
     lines.push('');
@@ -205,7 +209,10 @@ function commandCompare(args) {
   appendGithubOutput('changed', String(comparison.changed));
   appendGithubOutput('comment_md', comment);
   if (process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${comment.replace(`${GUARD_COMMENT_MARKER}\n`, '')}\n`);
+    const summary = comment
+      .replace(`${GUARD_COMMENT_MARKER}\n`, '')
+      .replace(`${guardChangedMarker(comparison.changed)}\n`, '');
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
   }
 }
 

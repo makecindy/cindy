@@ -125,4 +125,34 @@ describe('markdownToDiscord', () => {
       imageUrls: ['xdt-image://diagram-1'],
     });
   });
+
+  // 2026-07 安全整改回归:图片提取与 HTML 剥除从正则改为线性扫描/循环剥除
+  // (CodeQL js/polynomial-redos / js/incomplete-multi-character-sanitization),
+  // 钉住新实现的行为与性能边界。
+  describe('sanitizer hardening regressions', () => {
+    it('non-xdt image markdown and unclosed constructs pass through untouched', () => {
+      expect(markdownToDiscord('![pic](https://a/b.png) ![x [y](xdt-image://')).toEqual({
+        text: '![pic](https://a/b.png) ![x [y](xdt-image://',
+        imageUrls: [],
+      });
+      // '://' 后紧跟 ')' 不算图片引用
+      expect(markdownToDiscord('a ![e](xdt-image://) b')).toEqual({
+        text: 'a ![e](xdt-image://) b',
+        imageUrls: [],
+      });
+    });
+
+    it('nested tag fragments cannot reassemble into <script>', () => {
+      const { text } = markdownToDiscord('<scr<x>ipt>alert(1)</scr<x>ipt>');
+      expect(text.toLowerCase()).not.toContain('<script');
+    });
+
+    it('adversarial long inputs finish fast (no catastrophic backtracking)', () => {
+      const start = Date.now();
+      markdownToDiscord('![['.repeat(20_000));
+      markdownToDiscord('![](xdt-image://'.repeat(10_000));
+      markdownToDiscord('<A\t'.repeat(20_000));
+      expect(Date.now() - start).toBeLessThan(2_000);
+    });
+  });
 });

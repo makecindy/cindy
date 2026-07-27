@@ -1,19 +1,20 @@
 import type { ComponentType } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
-  Activity,
-  Boxes,
-  Bug,
-  CalendarDays,
-  ClipboardCheck,
+  BookOpenCheck,
   FileText,
   FlaskConical,
+  GitBranch,
   GitPullRequest,
-  Package,
+  Globe,
+  Radar,
+  SlidersHorizontal,
   Sparkles,
+  Telescope,
   Timer,
   type LucideProps,
 } from 'lucide-react';
-import type { ScheduleTemplate } from '@cindy/maker-scheduler';
+import type { ScheduleTemplate, TemplateCapability } from '@cindy/maker-scheduler';
 
 import { cn } from '@/lib/utils';
 import { cronToHuman } from '../lib/cronToHuman';
@@ -25,8 +26,14 @@ interface TemplateCardProps {
 }
 
 export function TemplateCard({ template, selected = false, onSelect }: TemplateCardProps) {
+  const { t } = useTranslation();
   const Icon = iconForTemplate(template.id);
   const scheduleText = template.cronExpr ? cronToHuman(template.cronExpr) : '';
+  // user/project 模板的 capabilities 不受包词表约束：Object.hasOwn（而不是 in）挡住
+  // 'toString' 这类原型链 key，Set 去重避免重复项撞 React key。
+  const capabilities = [...new Set(template.capabilities ?? [])].filter(
+    (capability): capability is TemplateCapability => Object.hasOwn(CAPABILITY_ICONS, capability),
+  );
 
   return (
     <button
@@ -62,36 +69,55 @@ export function TemplateCard({ template, selected = false, onSelect }: TemplateC
         {template.description}
       </p>
 
-      {scheduleText && (
-        <span className="mt-auto inline-flex h-5 max-w-full items-center gap-[5px] rounded-full bg-[var(--chat-input-chip-bg)] px-2 text-11 leading-none text-[var(--settings-section-desc)]">
-          <Timer size={10} strokeWidth={1.8} className="shrink-0 text-[var(--cmd-palette-item-meta)]" />
-          <span className="truncate">{scheduleText}</span>
-        </span>
-      )}
+      <span className="mt-auto flex max-w-full flex-wrap items-center gap-1.5">
+        {scheduleText && (
+          <span className="inline-flex h-5 max-w-full items-center gap-[5px] rounded-full bg-[var(--chat-input-chip-bg)] px-2 text-11 leading-none text-[var(--settings-section-desc)]">
+            <Timer size={10} strokeWidth={1.8} className="shrink-0 text-[var(--cmd-palette-item-meta)]" />
+            <span className="truncate">{scheduleText}</span>
+          </span>
+        )}
+        {capabilities.map((capability) => {
+          const CapabilityIcon = CAPABILITY_ICONS[capability];
+          return (
+            <span
+              key={capability}
+              className="inline-flex h-5 items-center gap-[5px] rounded-full bg-[var(--chat-input-chip-bg)] px-2 text-11 leading-none text-[var(--settings-section-desc)]"
+            >
+              <CapabilityIcon
+                size={10}
+                strokeWidth={1.8}
+                className="shrink-0 text-[var(--cmd-palette-item-meta)]"
+              />
+              <span className="truncate">{t(`scheduler.template.capability.${capability}`)}</span>
+            </span>
+          );
+        })}
+      </span>
     </button>
   );
 }
 
+const CAPABILITY_ICONS: Record<TemplateCapability, ComponentType<LucideProps>> = {
+  worktree: GitBranch,
+  pr: GitPullRequest,
+  web: Globe,
+  params: SlidersHorizontal,
+};
+
 function iconForTemplate(id: string): ComponentType<LucideProps> {
   switch (id) {
-    case 'standup-summary':
-      return CalendarDays;
-    case 'weekly-mr-summary':
-      return GitPullRequest;
-    case 'weekly-release-notes':
-      return Package;
-    case 'pre-release-check':
-      return ClipboardCheck;
-    case 'update-changelog':
-      return FileText;
-    case 'daily-bug-scan':
-      return Bug;
-    case 'test-gap-detection':
+    case 'nightly-test-heal':
       return FlaskConical;
-    case 'nightly-ci-report':
-      return Activity;
-    case 'dependency-sweep':
-      return Boxes;
+    case 'pr-gatekeeper':
+      return GitPullRequest;
+    case 'domain-radar':
+      return Radar;
+    case 'competitor-watch':
+      return Telescope;
+    case 'weekly-work-draft':
+      return FileText;
+    case 'knowledge-freshness':
+      return BookOpenCheck;
     default:
       return Sparkles;
   }

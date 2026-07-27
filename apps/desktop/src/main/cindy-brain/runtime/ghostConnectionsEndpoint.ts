@@ -67,11 +67,24 @@ export async function handleGhostConnectionsRequest(args: {
    * 用户拒绝。弹窗抛错按拒绝收(fail-closed:确认不了就不扩白名单)。
    */
   confirmAddHost: (declLabel: string, host: string) => Promise<boolean>;
-  /** 新连接添加成功后的通知钩子(主机代言 tips;更新 token 不触发)。 */
+  /** Any committed connection mutation; used to re-assess setup readiness. */
   onChanged?: (declKey: string) => void;
+  /** New-connection user notice, separate from the complete mutation hook. */
+  onAdded?: (declKey: string) => void;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }): Promise<GhostConnectionsRequestOutcome> {
   const { method, pathname, readBodyText, decls, manager, ghostId, log } = args;
+  const notifyChanged = (declKey: string): void => {
+    try {
+      args.onChanged?.(declKey);
+    } catch (err) {
+      log?.warn('ghost connections onChanged 通知失败(不影响入库结果)', {
+        ghostId,
+        declKey,
+        err: String(err),
+      });
+    }
+  };
 
   const json = (status: number, payload: unknown): GhostConnectionsRequestOutcome => ({
     status,
@@ -158,13 +171,11 @@ export async function handleGhostConnectionsRequest(args: {
         max: decl.maxConnections,
       });
       if (!result.ok) return json(200, { ok: false, error: result.error });
-      // 通知钩子只报"真新增"(「连接已添加」);提示挂了不能把真成功折叠成失败。
-      if (!result.updated) {
-        try {
-          args.onChanged?.(declKey);
-        } catch (err) {
-          log?.warn('ghost connections onChanged 通知失败(不影响入库结果)', { ghostId, declKey, err: String(err) });
-        }
+      try {
+        notifyChanged(declKey);
+        if (!result.updated) args.onAdded?.(declKey);
+      } catch (err) {
+        log?.warn('ghost connections change 通知失败(不影响入库结果)', { ghostId, declKey, err: String(err) });
       }
       return json(200, { ok: true, connection: result.connection });
     } catch (err) {
@@ -196,7 +207,9 @@ export async function handleGhostConnectionsRequest(args: {
           : undefined;
       if (typeof connectionId !== 'string' || connectionId.length === 0) return { status: 400 };
       try {
-        return manager.setDefault(ghostId, declKey, connectionId) ? { status: 204 } : { status: 404 };
+        if (!manager.setDefault(ghostId, declKey, connectionId)) return { status: 404 };
+        notifyChanged(declKey);
+        return { status: 204 };
       } catch (err) {
         log?.warn('ghost connections 设默认连接意外失败', { ghostId, declKey, err: String(err) });
         return { status: 500 };
@@ -208,6 +221,7 @@ export async function handleGhostConnectionsRequest(args: {
     if (!connectionId) return { status: 404 };
     try {
       manager.remove(ghostId, declKey, connectionId);
+      notifyChanged(declKey);
       return { status: 204 };
     } catch (err) {
       log?.warn('ghost connections 删除连接意外失败', { ghostId, declKey, err: String(err) });

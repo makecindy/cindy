@@ -112,10 +112,12 @@ describe('automation-generated sessions', () => {
       'scheduler',
       'learn',
       'shared',
+      'plugin',
     ]);
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('feishu');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('telegram');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('discord');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('plugin');
 
     expect(normalizeSessionSource('desktop')).toBe('desktop');
     expect(normalizeSessionSource('scheduler')).toBe('scheduler');
@@ -123,6 +125,7 @@ describe('automation-generated sessions', () => {
     expect(normalizeSessionSource('feishu')).toBe('feishu');
     expect(normalizeSessionSource('telegram')).toBe('telegram');
     expect(normalizeSessionSource('discord')).toBe('discord');
+    expect(normalizeSessionSource('plugin')).toBe('plugin');
     expect(normalizeSessionSource(null)).toBe('desktop');
     expect(normalizeSessionSource('unknown')).toBe('desktop');
   });
@@ -930,7 +933,11 @@ describe('automation-generated sessions', () => {
     expect(storageSource).toContain('turnCostIsEstimate === true');
     expect(storageSource).toContain('SQLITE_IN_CHUNK_SIZE');
     expect(storageSource).toContain("when 'user' then 0 else 1 end");
-    expect(storageSource).toContain('entry.totalCostUsd += cost');
+    expect(storageSource).toContain('entry.costValues.push(turnCost.costMoney)');
+    expect(storageSource).toContain(
+      'addCompatibleRegionalMoney(summary.costValues, summary.latestCurrency)',
+    );
+    expect(storageSource).toContain('totalMoney');
     expect(storageSource).toContain('listLegacySessionRuns');
     expect(storageSource).toContain("LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] '");
     expect(storageSource).toContain("LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:'");
@@ -946,7 +953,7 @@ describe('automation-generated sessions', () => {
     expect(schedulePageSource).toContain('useScheduleCostSummaries(sorted)');
     expect(taskListPaneSource).toContain('costSummariesLoaded');
     expect(taskListCellSource).toContain('scheduler.cell.totalCost');
-    expect(taskListCellSource).toContain('formatUsd(totalCostUsd)');
+    expect(taskListCellSource).toContain('formatTurnCostMoney(totalMoney)');
     expect(runHistoryPaneSource).toContain('groupRunsForHistory');
     expect(runHistoryPaneSource).toContain('PERSISTENT_SESSION_PREVIEW_LIMIT = 3');
     expect(runHistoryPaneSource).toContain('expandRemainingRuns');
@@ -957,11 +964,11 @@ describe('automation-generated sessions', () => {
     expect(runHistoryCardSource).toContain("run.costAttribution === 'legacy'");
     expect(zh.scheduler.cell.totalCost).toBe('开销 {{cost}}');
     expect(zh.scheduler.cell.totalValue).toBe('价值 {{value}}');
-    expect(zh.scheduler.runs.sessionCost).toBe('会话开销 {{cost}}');
-    expect(zh.scheduler.runs.sessionValue).toBe('会话价值 {{value}}');
+    expect(zh.scheduler.runs.sessionCost).toBe('对话开销 {{cost}}');
+    expect(zh.scheduler.runs.sessionValue).toBe('对话价值 {{value}}');
     expect(zh.scheduler.runs.runCost).toBe('本次开销 {{cost}}');
     expect(zh.scheduler.runs.legacyCostUnavailable).toBe('历史费用无法拆分');
-    expect(zh.scheduler.runs.persistentSessionGroup).toBe('持续会话 {{session}} · {{count}} 次运行');
+    expect(zh.scheduler.runs.persistentSessionGroup).toBe('持续对话 {{session}} · {{count}} 次运行');
     expect(zh.scheduler.runs.expandRemainingRuns).toBe('展开另外 {{count}} 次');
   });
 

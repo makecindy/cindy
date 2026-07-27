@@ -11,6 +11,14 @@ const DEFAULT_API_BASE = 'http://localhost:3333';
 const DEFAULT_DEVICE_ID = 'mobile-e2e-host';
 const DEFAULT_DEVICE_NAME = 'XDMaker Mock Mac';
 const DEFAULT_SESSION_ID = 'mock-session-1';
+
+// 日志脱敏:session id 可能来自 env / 真实本地 db,只打印首尾预览,不落明文
+// (CodeQL js/clear-text-logging)。
+function idPreview(value) {
+  const s = String(value ?? '');
+  if (s.length <= 8) return s;
+  return `${s.slice(0, 4)}…${s.slice(-4)}`;
+}
 const DEFAULT_REAL_DB_LIMIT = 200;
 const MOCK_IMAGE_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAABaAgMAAABCqLXBAAAADFBMVEX9/f2BgoIgISTY2NXfCK5xAAAACXBIWXMAAAsTAAALEwEAmpwYAAACCklEQVR42uWXsU7DMBBAk1rqgKyy9xM6nVSJoQv9BJaKlbVh4QcQfEIXWMsQiSZFav8Ao0hMGVhY+IRMmTogVebslsah1Hd0QYKrYrXOq+98Pp99QcAW+bUDPrtF9U5gt8q7kGfmgRwlAwGmxW7zLjdvu931v5lqxYCSU2VY6KWkPNgBIxpMFI7ZSknVg3SOIzZjei7tETa9OQ22jJGdPg2GE2wKjh+n+Aw54PAPguFmUWM/6MSP8oKdCrz2gk6gjbygE3l3vwzWN8doJxjWN0y8E2zUwcmeYFIueKrR5IIzmQS/HXHcE2O+CjngSAaZUUmCNmoKBtjPJECbAdqfBzSYyACEbNLgNMiEyYAM0ORpBmjWM8gaDFBIUEGDqVpybASQ1WRe3fx9UXcPHmKgntdgLdGf1B0uXIf7wD5OZrOEHtXmIJEmtdBhBqvI5gSueuIELnsrmC0UscCbarv6wUtmkkp0wQPv9bvhbklwrJfWABLUWkfGgLOtJcS7hxtmCL6l6Uy/bAUFigPOEET3POrSC0ZIoFgDvKo7htC6mK7B3Ufc1IKLMTbKe2jOLLi8wqb0HsPHuhIvqJmgcEHlAQ9dsPSAronf616Dej9QccHyn1y5aDn/ydWVfRlmX6/ZF3ZWCYDHuWQVFXZcVpmCKV7Rhc/AFj6C48esqtrIoktIQYuE1XhAfgL4ANer/BnN/IZTAAAAAElFTkSuQmCC';
 
@@ -50,7 +58,7 @@ if (options.dryRun) {
   console.log(`- device-link api base: ${deviceLinkApiBase}`);
   console.log(`- device id: ${deviceId}`);
   console.log(`- device name: ${deviceName}`);
-  console.log(`- session id: ${state.sessionId ?? sessionId}`);
+  console.log(`- session id: ${idPreview(state.sessionId ?? sessionId)}`); // lgtm[js/clear-text-logging]
   console.log(`- source: ${realDbPath ? 'real-db' : `mock:${scenario}`}`);
   if (realDbPath) {
     console.log(`- real db: ${state.realDb?.dbPath ?? realDbPath}`);
@@ -137,7 +145,7 @@ function openWebSocket(accessToken) {
           [
             'mock-device-link-host ready',
             `deviceId=${payload?.deviceId ?? deviceId}`,
-            `sessionId=${state.sessionId ?? sessionId}`,
+            `sessionId=${idPreview(state.sessionId ?? sessionId)}`,
             realDbPath ? 'source=real-db' : `scenario=${scenario}`,
           ].join(' '),
         );
@@ -251,7 +259,7 @@ async function handleInvoke(controllerId, channel, args) {
       maybeThrowVisualSessionFailure(targetSessionId);
       const list = state.pendingInteractions.get(targetSessionId) ?? [];
       if (debug) {
-        console.error(`[mock-device-link-host] pending sessionId=${targetSessionId} count=${list.length}`);
+        console.error(`[mock-device-link-host] pending sessionId=${idPreview(targetSessionId)} count=${list.length}`); // lgtm[js/clear-text-logging]
       }
       return list;
     }
@@ -1788,7 +1796,7 @@ function maybeScheduleVisualTransition(controllerId, topic) {
 
 function maybeThrowVisualSessionFailure(targetSessionId) {
   if (debug) {
-    console.error(`[mock-device-link-host] maybe visual failure scenario=${scenario} target=${targetSessionId}`);
+    console.error(`[mock-device-link-host] maybe visual failure scenario=${scenario} target=${idPreview(targetSessionId)}`); // lgtm[js/clear-text-logging]
   }
   if (scenario !== 'visual' || targetSessionId !== 'visual-offline') return;
   const err = new Error('[NOT_CONNECTED] visual offline fixture');

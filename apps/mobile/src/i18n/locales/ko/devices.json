@@ -257,7 +257,7 @@
       "cancelA11y": "자동화 편집 취소"
     },
     "delete": {
-      "counting": "이 자동화가 생성한 대화를 집계하는 중...",
+      "counting": "이 자동화가 생성한 대화를 집계하는 중…",
       "confirmDeleteBoth": "작업과 대화 삭제",
       "confirmArchive": "작업 삭제 후 대화 보관",
       "confirmTaskOnly": "작업만 삭제",

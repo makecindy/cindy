@@ -21,7 +21,12 @@ vi.mock('../../maker-host/title-one-shot.js', () => ({
   generateTitleViaProvider: vi.fn(),
 }));
 
-import { regenerateMakerSessionTitle, type RegenerateTitleDeps } from '../title.js';
+import {
+  generateMakerSessionTitle,
+  regenerateMakerSessionTitle,
+  type RegenerateTitleDeps,
+} from '../title.js';
+import { generateTitleViaProvider } from '../../maker-host/title-one-shot.js';
 import type { RegenerateTitleMaterial } from '../../localDb/latestMessageText.js';
 
 /** 默认素材:短会话——最近窗口已覆盖会话开头(开场消息就是窗口第一条)。 */
@@ -200,5 +205,31 @@ describe('regenerateMakerSessionTitle', () => {
     });
 
     expect(await regenerateMakerSessionTitle('s1', deps)).toBeNull();
+  });
+});
+
+describe('generateMakerSessionTitle', () => {
+  it('空/全空白消息(如仅图片附件的首条输入)→ null 且不发标题请求', async () => {
+    vi.mocked(generateTitleViaProvider).mockClear();
+
+    expect(await generateMakerSessionTitle('', 'claude-code', 's1')).toBeNull();
+    expect(await generateMakerSessionTitle('   \n  ', 'codex', 's1')).toBeNull();
+    expect(generateTitleViaProvider).not.toHaveBeenCalled();
+  });
+
+  it('非空消息走 provider oneShot,prompt 使用 trim 后的消息', async () => {
+    vi.mocked(generateTitleViaProvider).mockClear();
+    vi.mocked(generateTitleViaProvider).mockResolvedValueOnce('登录失败排查');
+
+    expect(await generateMakerSessionTitle('  帮我排查登录失败  ', 'claude-code', 's1')).toBe(
+      '登录失败排查',
+    );
+    const [request] = vi.mocked(generateTitleViaProvider).mock.calls[0] as [
+      { sessionId: string; agentKind: string; prompt: string },
+    ];
+    expect(request.sessionId).toBe('s1');
+    expect(request.agentKind).toBe('claude-code');
+    expect(request.prompt).toContain('帮我排查登录失败');
+    expect(request.prompt).not.toContain('  帮我排查登录失败');
   });
 });

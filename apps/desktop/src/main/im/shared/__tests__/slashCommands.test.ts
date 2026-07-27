@@ -200,6 +200,7 @@ describe('IM slash commands', () => {
       'feishu-session',
       expect.anything(),
       prepared,
+      'feishu',
     );
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.new);
   });

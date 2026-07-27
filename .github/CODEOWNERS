@@ -1,3 +1,11 @@
-# 默认所有路径由维护者团队 review。仓库公开后请把下面的 team 换成
-# 实际存在的 GitHub team 或维护者账号列表。
+# 默认所有路径由维护者 review。
+#
+# 生效前提（缺一条 GitHub 就静默跳过该 owner，不报错）：
+#   - team 必须真实存在于 makecindy 组织下，slug 与此处一致；
+#   - 该 team 必须对本仓库有 write 及以上权限；
+#   - 个人账号同样需要对本仓库有 write 及以上权限。
+# 组织级设置见 https://github.com/orgs/makecindy/teams
+#
+# 这里同时列出 team 与个人:即使 team 尚未建好或未授权,自动指派仍然生效。
+# team 确认可用后可以删掉个人账号那一项。
 * @makecindy/maintainers

@@ -28,7 +28,7 @@
 | 身份卡字段与校验、管子协议类型 | `apps/desktop/src/shared/ghost.ts`（`validateGhostManifest`、`cindy.send` / `cindy.onHostMessage` 类型） |
 | 打包限制 | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir` |
 | 运行时、沙箱进程与生命周期 | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts` |
-| 能力 slot（网络／通知／文件系统／宿主等） | `apps/desktop/src/main/cindy-brain/networkSlot.ts`、`notifySlot.ts`、`fsSlot.ts`、`cindySlot.ts` |
+| 能力 slot（网络／通知／文件系统／技能／宿主等） | `apps/desktop/src/main/cindy-brain/networkSlot.ts`、`notifySlot.ts`、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts` |
 | 面板供片、注入主题 token 与协议 | `apps/desktop/src/renderer/cindy-brain/ghostPanelTheme.ts`、`cindy-ghost://` 分支 |
 | 权限注入／更新确认 UI | `apps/desktop/src/renderer/cindy-brain/GhostPermissionList.tsx` |
 | 远程／手机版能力准入白名单 | `packages/device-link/src/allowlist.ts` |
@@ -60,10 +60,36 @@
   也不构成授权。
 - 新增或修改 slot 时，除同步编写手册与校验（下节 5）外，还必须同步 shared 类型、
   preload／host handler、权限 UI（`GhostPermissionList.tsx`）、错误边界和测试。
+- `skill` 槽是唯一**越出沙箱**的能力：技能指令由主 Agent 以用户全部权限执行、全局
+  生效、不随 workdir 级停用隐藏。其安全边界是**声明一致性**（manifest 里的
+  name／description 必须与 SKILL.md frontmatter 逐字一致，`skillSlot.ts` 的
+  `checkSkillMdConsistency` 是唯一裁判，打包与装入两侧共用）+ **链接对账**
+  （`reconcileGhostSkillLinks` 只增删"目标落在 cindy-brain 安装根内的
+  symlink／junction"，绝不触碰真实目录与外来链接；启用挂链、停用／卸载撤链、
+  断链自愈）。改动技能落链、命名（`<id>--<name>`，name 侧禁 `--`）或对账判据前，
+  必须先读 `skillSlot.ts` 头注释并保持上述不变量。
 
 ## 4. 网络、凭证与资源交接
 
 - network 只允许 manifest 白名单域名；凭证由主机保险库注入，**无明文读回**给沙箱。
+- 插件 setup 的完成状态只由 Host 读取真实持久化状态后判定。简单的
+  `source: "user"` Secret 可由 Host 在聊天 Setup 卡中生成 `inline_form` 并直接写入
+  保险库；插件详情页的 `settings.js` 仍可通过 `/oauth`、`/kv`、`/secrets`、
+  `/connections` 完成正常保存。两条路径都不得自行向聊天卡回调“已完成”，Renderer
+  也不得以轮询或 `BroadcastChannel` 事件替代 Host 判定。
+- Agent 可编排 setup 卡片的说明与步骤，但只能引用 Host 下发的 requirement / action；
+  插件身份、字段 schema、字段与存储目标的绑定、Action 执行、完成状态和原
+  `ghost_call` 恢复均由 Host 掌控。Secret、Token、OAuth code 和连接凭证不得进入
+  Agent、Ghost、interaction / pending snapshot、会话历史、日志或分析事件。内联 Secret
+  只允许短暂存在于本地 Desktop 输入组件和一次性的 trusted Renderer → Main 专用 IPC；
+  不得走通用 interaction response、device-link 或其它远程通道，也不得写入 Renderer
+  store。提交成功、取消、request / revision 替换和组件卸载时必须清空。
+- Host 必须把每个未满足 `any_of` 组的全部可执行 item 投影到卡片，Agent plan
+  不能隐藏合法配置路径。Renderer 统一按组展示选项并复用 Ask 卡片的正文限高与纵向
+  滚动，不得为 Brave、Tavily、Gmail 等具体插件增加分支。
+- `network.secrets[].url` 可由 Host 作为 Setup 字段旁的辅助获取入口展示。该地址必须
+  继续满足 manifest 安装期的 `https`、无内嵌凭证校验；它不是 Agent 文案或 plan
+  的一部分，插件也不能通过 `settings.js` 动态替换 Setup 卡地址。
 - 模型调用一律走 Cindy 统一通道，不允许插件自建绕过通道的推理请求。
 - 附件、媒体、目录和保存路径通过归属校验后的 grant／deposit／ledger 交接，**禁止把
   宿主绝对路径或不必要的字节暴露给沙箱**。媒体字节须走
@@ -116,10 +142,14 @@ topic 路由；产品层多端语义见
 2. 新能力是否先在 manifest 声明 slot、走同一套校验、在确认框如实展示后才由 host 授权？
 3. 网络是否限白名单域名、凭证无明文读回？附件／媒体／目录是否经归属校验的
    grant／deposit／ledger 交接，未暴露宿主绝对路径？
-4. 改动是否命中作者可见契约（身份卡／管子／模型 slot／面板供片／打包）？命中就必须
+4. 内联凭证是否只走 trusted Desktop 专用 IPC，未登记 device-link？Main 是否重新校验
+   sender、request、revision、action、精确字段集合与 manifest 绑定，且没有把 Renderer
+   字段 id 直接当作 Secret key／路径？保险库写失败是否不 emit，写成功后是否仍重新
+   assessment，而不是把“提交完成”当作 ready？
+5. 改动是否命中作者可见契约（身份卡／管子／模型 slot／面板供片／打包）？命中就必须
    同步 `FORGE_GUIDE` 并在 PR 说明；漏同步 = P1。
-5. 第 6 节的已知缺口是否被触及？触及是否一并修复或留了正式跟踪？
-6. 新增 IPC／推送是否需要远程／手机版？需要就登记 device-link 白名单与 topic 路由。
+6. 第 6 节的已知缺口是否被触及？触及是否一并修复或留了正式跟踪？
+7. 新增 IPC／推送是否需要远程／手机版？需要就登记 device-link 白名单与 topic 路由。
 
 最小验证入口：
 

@@ -1,5 +1,7 @@
 export type ImDefaultAgentKind = 'claude-code' | 'codex';
 export type ImDefaultEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+/** IM channel scopes that keep independent new-conversation routing preferences. */
+export type ImDefaultSettingsChannel = 'feishu' | 'slack' | 'discord';
 
 export interface ImDefaultAgentSettings {
   providerId: string | null;
@@ -40,6 +42,12 @@ export const IM_DEFAULT_SETTINGS: ImDefaultSettings = {
   },
 };
 
+export const IM_DEFAULT_SETTINGS_CHANNELS: readonly ImDefaultSettingsChannel[] = [
+  'feishu',
+  'slack',
+  'discord',
+];
+
 export const IM_DEFAULT_EFFORT_OVERRIDES: Readonly<Partial<Record<string, ImDefaultEffort>>> = {
   'claude-opus-4-8': 'xhigh',
   'codex/gpt-5.5': 'high',
@@ -62,4 +70,11 @@ export function isImDefaultAgentKind(value: unknown): value is ImDefaultAgentKin
 
 export function isImDefaultEffort(value: unknown): value is ImDefaultEffort {
   return typeof value === 'string' && EFFORTS.has(value as ImDefaultEffort);
+}
+
+export function isImDefaultSettingsChannel(value: unknown): value is ImDefaultSettingsChannel {
+  return (
+    typeof value === 'string' &&
+    IM_DEFAULT_SETTINGS_CHANNELS.includes(value as ImDefaultSettingsChannel)
+  );
 }

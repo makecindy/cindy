@@ -53,6 +53,8 @@ vi.mock('@/components/ui/switch', () => ({
 vi.mock('../HookWorkspacePrefsEditor', () => ({
   useHookWorkspacePrefs: () => ({
     prefsFor: vi.fn(),
+    providerSourceFor: vi.fn(() => null),
+    applyProviderSource: vi.fn(),
     editable: false,
     pendingWs: null,
     hint: null,
@@ -68,6 +70,13 @@ vi.mock('../HookWorkspacePrefsEditor', () => ({
 }));
 
 import { deriveAlias, HookConnectionsSection, workspaceRowsToMap } from '../HookConnectionsSection';
+
+/** 渠道卡收起时内容卸载(Collapse), 交互前先点开对应卡的头部行。 */
+async function expandChannelCard(titleKey: RegExp) {
+  fireEvent.click(await screen.findByRole('button', { name: titleKey }));
+}
+const SLACK_CARD = /settings\.tina\.prefs\.providerSlack/;
+const TELEGRAM_CARD = /settings\.tina\.prefs\.providerTelegram/;
 
 const BASE_HOOK: SlackHookView = {
   enabled: false,
@@ -147,6 +156,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     ipc.providerBindStart.mockResolvedValue({ hook: BASE_HOOK });
 
     render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
 
     fireEvent.click(
       await screen.findByRole('button', {
@@ -182,6 +192,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     ipc.get.mockResolvedValue({ hook });
 
     render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
 
     const openButton = await screen.findByRole('button', {
       name: 'settings.remoteControl.hook.telegram.openTelegram',
@@ -370,6 +381,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     });
 
     render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
 
     expect(await screen.findByText('Unexpected server response: 503')).toBeTruthy();
   });
@@ -412,6 +424,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
         },
       });
     });
+    await expandChannelCard(TELEGRAM_CARD);
     expect(
       await screen.findByRole('button', {
         name: 'settings.remoteControl.hook.telegram.cancel',
@@ -451,6 +464,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
       );
 
     render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
     const connect = await screen.findByRole('button', {
       name: 'settings.remoteControl.hook.telegram.connect',
     });
@@ -541,6 +555,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     ipc.get.mockResolvedValue({ hook: confirmed('binding-1') });
 
     render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
     fireEvent.click(
       await screen.findByRole('button', {
         name: 'settings.remoteControl.hook.telegram.unlink',
@@ -589,6 +604,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     ipc.get.mockResolvedValue({ hook: withBinding(false) });
 
     render(<HookConnectionsSection />);
+    await expandChannelCard(SLACK_CARD);
     fireEvent.click(
       await screen.findByRole('button', {
         name: 'settings.remoteControl.hook.multi.removeAria',

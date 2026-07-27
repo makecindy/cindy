@@ -101,6 +101,9 @@ function MentionChipNodeView({ node, selected }: NodeViewProps) {
         tooltip={tooltip}
         ariaLabel={displayLabel(attrs)}
         selected={selected}
+        // ProseMirror atomic node:chip 整体被选中 / 删除,内部文字不参与
+        // selection(外层 wrapper 也已 userSelect: none,这里显式声明意图)。
+        textSelectable={false}
         className={attrs.kind === 'slash' ? 'text-[var(--chat-input-text)]' : undefined}
       />
     </NodeViewWrapper>

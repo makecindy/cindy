@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 按所选 region(默认 cn)读取 self-host-regions.json,重新生成 iOS 原生工程、安装 Pods，
+// 按所选 region(默认 global)读取 self-host-regions.json,重新生成 iOS 原生工程、安装 Pods，
 // 然后打开 app 的 .xcworkspace。
 // 这是本地开发入口：不 archive、不上传 NPKG/OSS，也不写任何发版记录。
 
@@ -27,8 +27,8 @@ const metroPort = 8081;
 
 function printUsage() {
   console.log(`用法:
-  pnpm mobile:xcode                   # 国服(默认)
-  pnpm mobile:xcode --region=global   # 海外
+  pnpm mobile:xcode                   # Cindy(Global,默认)
+  pnpm mobile:xcode --region=cn       # 中国大陆版
 
 流程:读取 self-host-regions.json → 切换 apps/mobile/.env 地区 → clean prebuild → 安装 Pods → 打开 Xcode → 启动 Metro
 说明:只准备本地 Xcode 工程，不会上传或发布。`);
@@ -70,8 +70,18 @@ async function main() {
   }
   if (nextEnv !== previousEnv) writeFileSync(envPath, nextEnv);
 
+  const builtInBundleId = {
+    cn: 'com.xd.cindycn',
+    global: 'com.xd.cindy',
+    dev: 'com.xd.cindydev',
+  }[args.region];
+  const editionLabel = {
+    cn: '中国大陆版',
+    global: 'Cindy',
+    dev: 'CindyDev',
+  }[args.region];
   console.log(`\n› 准备 Cindy iOS Xcode 工程(region=${args.region})`);
-  console.log(`  bundle: ${args.region === 'global' ? 'com.xd.cindy' : 'com.xd.cindycn'}`);
+  console.log(`  bundle: ${builtInBundleId}`);
   console.log(`  已同步 apps/mobile/.env；原生构建与 Metro 将读取 self-host-regions.json 的 ${args.region}。`);
   console.log('› clean prebuild(重新生成 ios/，避免沿用另一地区的 bundle/scheme)…');
   execFileSync('pnpm', ['exec', 'expo', 'prebuild', '-p', 'ios', '--clean', '--no-install'], {
@@ -86,7 +96,7 @@ async function main() {
   const workspace = selectMobileXcodeWorkspace(iosDir, readdirSync(iosDir));
   console.log(`› 打开 ${workspace}`);
   execFileSync('open', ['-a', 'Xcode', workspace], { cwd: mobileDir, stdio: 'inherit' });
-  console.log(`\n✓ ${args.region === 'global' ? '海外版' : '国服版'} Xcode 工程已生成并打开。`);
+  console.log(`\n✓ ${editionLabel} Xcode 工程已生成并打开。`);
   console.log(`  工程目录: ${mobileXcodeGeneratedDir(workspace)}`);
   console.log(`› 启动 Metro(${metroPort})；请保持当前终端开启，在 Xcode 选择设备后点击 Run。`);
   execFileSync(process.execPath, [simStartPath, `--region=${args.region}`], {

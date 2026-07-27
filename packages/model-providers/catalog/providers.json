@@ -251,6 +251,7 @@
     {
       "id": "zhipu-glm-cn",
       "name": "智谱 GLM（中国大陆）",
+      "nameEn": "Zhipu GLM (China)",
       "docsUrl": "https://docs.bigmodel.cn/cn/guide/develop/claude",
       "regionHint": "cn",
       "runtimes": {
@@ -321,6 +322,7 @@
     {
       "id": "moonshot-kimi-cn",
       "name": "Kimi (Moonshot 中国大陆)",
+      "nameEn": "Kimi (Moonshot China)",
       "docsUrl": "https://platform.moonshot.cn/docs/guide/agent-support",
       "regionHint": "cn",
       "runtimes": {
@@ -417,6 +419,7 @@
     {
       "id": "moonshot-kimi-code",
       "name": "Kimi Code（编程计划包月）",
+      "nameEn": "Kimi Code (coding plan)",
       "docsUrl": "https://www.kimi.com/zh-cn/help/kimi-code/third-party-agents",
       "runtimes": {
         "claude-code": {
@@ -461,6 +464,7 @@
     {
       "id": "minimax-cn",
       "name": "MiniMax（中国大陆）",
+      "nameEn": "MiniMax (China)",
       "docsUrl": "https://platform.minimaxi.com/docs/api-reference/responses-create",
       "regionHint": "cn",
       "runtimes": {
@@ -531,6 +535,7 @@
     {
       "id": "aliyun-bailian-coding",
       "name": "阿里云百炼 Coding Plan（包月）",
+      "nameEn": "Alibaba Cloud Bailian Coding Plan",
       "docsUrl": "https://help.aliyun.com/zh/model-studio/coding-plan",
       "regionHint": "cn",
       "runtimes": {
@@ -576,6 +581,25 @@
   "cindyModelMeta": {
     "version": 1,
     "models": {
+      "claude-opus-5": {
+        "agents": [
+          "claude-code"
+        ],
+        "name": "Opus 5",
+        "group": "anthropic",
+        "description": "Latest Opus for ambitious work",
+        "contextWindow": 1000000,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "sortOrder": 0,
+        "supportsFastMode": false
+      },
       "claude-fable-5": {
         "agents": [
           "claude-code"
@@ -592,7 +616,7 @@
           "max"
         ],
         "defaultEffort": "high",
-        "sortOrder": 0,
+        "sortOrder": 1,
         "supportsFastMode": false
       },
       "claude-opus-4-8": {
@@ -611,7 +635,7 @@
           "max"
         ],
         "defaultEffort": "high",
-        "sortOrder": 1,
+        "sortOrder": 2,
         "supportsFastMode": false
       },
       "claude-opus-4-7": {
@@ -630,7 +654,7 @@
           "max"
         ],
         "defaultEffort": "high",
-        "sortOrder": 2,
+        "sortOrder": 3,
         "supportsFastMode": false,
         "defaultEnabled": false
       },
@@ -649,7 +673,25 @@
           "max"
         ],
         "defaultEffort": "high",
-        "sortOrder": 3,
+        "sortOrder": 4,
+        "supportsFastMode": false,
+        "defaultEnabled": false
+      },
+      "claude-opus-4-5": {
+        "agents": [
+          "claude-code"
+        ],
+        "name": "Opus 4.5",
+        "group": "anthropic",
+        "description": "Earlier Opus generation",
+        "contextWindow": 200000,
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "high",
+        "sortOrder": 5,
         "supportsFastMode": false,
         "defaultEnabled": false
       },
@@ -664,10 +706,12 @@
         "efforts": [
           "low",
           "medium",
-          "high"
+          "high",
+          "xhigh",
+          "max"
         ],
         "defaultEffort": "high",
-        "sortOrder": 4,
+        "sortOrder": 6,
         "supportsFastMode": false
       },
       "claude-sonnet-4-6": {
@@ -681,10 +725,25 @@
         "efforts": [
           "low",
           "medium",
-          "high"
+          "high",
+          "max"
         ],
         "defaultEffort": "high",
-        "sortOrder": 5,
+        "sortOrder": 7,
+        "supportsFastMode": false,
+        "defaultEnabled": false
+      },
+      "claude-sonnet-4-5": {
+        "agents": [
+          "claude-code"
+        ],
+        "name": "Sonnet 4.5",
+        "group": "anthropic",
+        "description": "Earlier Sonnet generation",
+        "contextWindow": 200000,
+        "efforts": [],
+        "defaultEffort": null,
+        "sortOrder": 8,
         "supportsFastMode": false,
         "defaultEnabled": false
       },
@@ -697,7 +756,8 @@
         "description": "Fastest for quick answers",
         "contextWindow": 200000,
         "efforts": [],
-        "sortOrder": 6,
+        "defaultEffort": null,
+        "sortOrder": 9,
         "supportsFastMode": false,
         "defaultEnabled": false
       },
@@ -1016,9 +1076,53 @@
         "supportsFastMode": false,
         "defaultEnabled": false
       },
+      "bytedance-seed/seed-2.1-pro": {
+        "agents": [
+          "claude-code",
+          "codex"
+        ],
+        "name": "Seed 2.1 Pro",
+        "group": "china",
+        "contextWindow": 256000,
+        "efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "minimal",
+        "supportsFastMode": false,
+        "perAgent": {
+          "claude-code": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "defaultEffort": "low"
+          }
+        }
+      },
+      "qwen/qwen3.8-max-preview": {
+        "agents": [
+          "claude-code",
+          "codex"
+        ],
+        "name": "Qwen 3.8 Max Preview",
+        "group": "china",
+        "contextWindow": 983616,
+        "efforts": [
+          "low",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "xhigh",
+        "supportsFastMode": false
+      },
       "qwen/qwen3.7-max": {
         "agents": [
-          "claude-code"
+          "claude-code",
+          "codex"
         ],
         "name": "Qwen 3.7 Max",
         "group": "china",
@@ -1056,23 +1160,35 @@
       },
       "z-ai/glm-5.2": {
         "agents": [
-          "claude-code"
+          "claude-code",
+          "codex"
         ],
         "name": "GLM-5.2",
         "group": "china",
         "description": "Zhipu GLM-5.2 agentic coding model; 1M context",
         "contextWindow": 1000000,
         "efforts": [
+          "minimal",
           "high",
           "max"
         ],
-        "defaultEffort": "high",
+        "defaultEffort": "max",
         "sortOrder": 43,
-        "supportsFastMode": false
+        "supportsFastMode": false,
+        "perAgent": {
+          "claude-code": {
+            "efforts": [
+              "high",
+              "max"
+            ],
+            "defaultEffort": "max"
+          }
+        }
       },
       "deepseek/deepseek-v4-pro": {
         "agents": [
-          "claude-code"
+          "claude-code",
+          "codex"
         ],
         "name": "DeepSeek V4 Pro",
         "group": "china",
@@ -1088,7 +1204,8 @@
       },
       "deepseek/deepseek-v4-flash": {
         "agents": [
-          "claude-code"
+          "claude-code",
+          "codex"
         ],
         "name": "DeepSeek V4 Flash",
         "group": "china",
@@ -1100,8 +1217,7 @@
         ],
         "defaultEffort": "high",
         "sortOrder": 45,
-        "supportsFastMode": false,
-        "defaultEnabled": false
+        "supportsFastMode": false
       },
       "gpt-5.6-luna": {
         "agents": [
@@ -1132,15 +1248,22 @@
         "sortOrder": 103,
         "defaultEnabled": false
       },
-      "moonshot/kimi-k3": {
+      "moonshotai/kimi-k3": {
         "agents": [
-          "claude-code"
+          "claude-code",
+          "codex"
         ],
         "name": "Kimi K3",
         "group": "china",
-        "description": "Moonshot Kimi K3 agentic coding model; 1M context; thinking is provider-managed",
         "contextWindow": 1000000,
-        "sortOrder": 41
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "max",
+        "sortOrder": 41,
+        "supportsFastMode": false
       },
       "qwen/qwen3.6-plus": {
         "agents": [

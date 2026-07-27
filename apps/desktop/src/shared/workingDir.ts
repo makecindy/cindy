@@ -35,16 +35,28 @@ export function normalizeWorkingDirForStorage(raw: string | null | undefined): s
 }
 
 /**
- * Normalize a session workingDir for project grouping and equality checks.
- * Storage normalization is applied first, then managed worktree subdirectories
- * collapse to their base repo.
+ * Normalize the directory used to read or write project settings.
+ *
+ * Cindy-managed worktrees inherit settings from their base repository.
+ * Imported or user-managed worktrees keep their runtime cwd because they may
+ * intentionally carry a distinct .claude/settings.json.
  */
-export function normalizeWorkingDirForGrouping(raw: string | null | undefined): string | null {
+export function normalizeWorkingDirForProjectSettings(
+  raw: string | null | undefined,
+): string | null {
   const out = normalizeWorkingDirForStorage(raw);
   if (out == null) return null;
+  return getManagedWorktreeBasePath(out) ?? out;
+}
 
-  const managedWorktreeBase = getManagedWorktreeBasePath(out);
-  if (managedWorktreeBase != null) return managedWorktreeBase;
+/**
+ * Normalize a session workingDir for broad project grouping and equality
+ * checks. Project-settings normalization is applied first, then conventional
+ * user-managed worktree paths also collapse to their base repo.
+ */
+export function normalizeWorkingDirForGrouping(raw: string | null | undefined): string | null {
+  const out = normalizeWorkingDirForProjectSettings(raw);
+  if (out == null) return null;
 
   return out
     .replace(/\/\.worktrees\/[^/]+(?:\/.*)?$/, '')

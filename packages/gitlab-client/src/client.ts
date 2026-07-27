@@ -81,6 +81,13 @@ import type {
 import { GitlabApiError } from './types.js';
 import { assertSafeBaseUrl, fetchWithSafeRedirect } from './http-safety.js';
 
+// 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
+function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return s.slice(0, end);
+}
+
 export class GitlabClient {
   private readonly baseUrl: string;
   private readonly token: string;
@@ -90,7 +97,7 @@ export class GitlabClient {
   private readonly projectId: string | null;
 
   constructor(config: GitlabClientConfig) {
-    this.baseUrl = config.baseUrl.replace(/\/+$/, '');
+    this.baseUrl = trimTrailingSlashes(config.baseUrl);
     // GitLab 自建实例惯例允许 http(源自已退役的 shared/connectorUrl.ts「沿用输入协议」惯例,该模块已随 lizi_gitlab 于 2026-07-14 退役删除),
     // 故 allowInsecureHttp: true;仍拒绝非 http(s) 协议 / userinfo / 不可解析的 baseUrl。
     assertSafeBaseUrl(this.baseUrl, { allowInsecureHttp: true });

@@ -9,7 +9,8 @@
  *     → 频控(默认不限并发;用户可按意识配置在途上限,经 deps.getInflightLimit
  *       注入——配了才闸,防失控刷付费接口;配额治理随分发渠道重启)
  *     → 模型白名单校验(意识只能从主机菜单里挑,挑不了菜单外的任何路由;
- *       图像/视频各一份白名单与默认,同来自 providers.json 目录)
+ *       图像/视频各一份白名单与默认,同来自 providers.json 目录;该类目清单
+ *       为空 = 能力暂不可用,直接拒单)
  *     → 吃源图的代办(改图/图生视频):指纹逐张查账验归属(只能用自己名下的媒体)
  *     → 主机走统一媒体通道干活(字节从头到尾在主机手里;视频为分钟级长任务)
  *     → 落 blob(SHA-256 主机算)+ 账本记账(出生=该意识)
@@ -22,24 +23,39 @@
  * 依赖注入(规则 14):生成/落盘/记账/归属解析全部经 deps,单测直测。
  */
 
+import { randomUUID } from 'node:crypto';
+
 import {
+  GHOST_CINDY_JOB_TTL_MS,
+  GHOST_CINDY_MAX_ASYNC_JOBS,
+  GHOST_IMAGE_ASPECT_RATIOS,
   GHOST_MODEL_TIERS,
+  type GhostImageAspectRatio,
   type GhostModelTier,
   type GhostPipeModelResult,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { probeImageSize } from './imageProbe.js';
 
-/** 媒体能力配置(图像/视频同构):白名单 + 默认/档位选型,真身在 providers.json 目录。 */
+/**
+ * 媒体能力配置(图像/视频同构):白名单 + 默认/档位选型,真身在 providers.json 目录。
+ * models 空 / defaults null = 目录没有该类目的任何模型 = 该能力暂不可用(见
+ * cindyMediaCatalog.ts 的空清单语义),本模块据此早拒,不拿不在册的型号下单。
+ */
 export interface CindyMediaConfig {
   models: ReadonlyArray<{ id: string; label: string }>;
-  defaults: { standard: string; draft: string; best: string };
+  defaults: { standard: string; draft: string; best: string } | null;
 }
 
 export interface CindySlotDeps {
   getGhost(id: string): InstalledGhost | null;
-  /** 主机统一图片通道(art 底层客户端);返回图片字节与 mime。 */
-  generateImage(params: { prompt: string; model: string }): Promise<{ buffer: Uint8Array; mimeType: string }>;
+  /** 主机统一图片通道(art 底层客户端);返回图片字节与 mime。
+   *  aspectRatio 是意识的画幅意图,注入实现负责翻译成后端具体尺寸。 */
+  generateImage(params: {
+    prompt: string;
+    model: string;
+    aspectRatio?: GhostImageAspectRatio;
+  }): Promise<{ buffer: Uint8Array; mimeType: string }>;
   /** 主机统一图片通道·改图;源图以磁盘路径喂给网关(意识摸不到路径)。 */
   editImage(params: {
     prompt: string;
@@ -72,7 +88,8 @@ export interface CindySlotDeps {
   /**
    * 当前图像能力配置——真身是 providers.json 运行时目录(与会话模型列表
    * 同一获取来源),每单现读跟随热更。models = 白名单与显示名;defaults =
-   * 默认/档位选型(同样来自目录,代码零模型字面量)。
+   * 默认/档位选型(同样来自目录,代码零模型字面量);清单空 / defaults null
+   * = 目录没给,能力暂不可用。
    */
   getImageConfig(): CindyMediaConfig;
   /** 当前视频能力配置(同 getImageConfig 语义;白名单 id = 视频 provider 层 alias)。 */
@@ -92,6 +109,20 @@ export interface CindySlotDeps {
     /** tool-call callId(记入 ghostMediaLedger 供 ghost_call 收口带回)。 */
     callId?: string;
   }): Promise<{ url: string; hash: string; ext: string }>;
+  /**
+   * 管子续命挂钩(pipeDispatcher.holdCall/releaseCall 接线):tool-call
+   * 触发的同步视频代办开始时 hold(budgetMs = 这单的轮询预算),结束时
+   * release——署名单在途期间管子不再按 330s 掐掉。ghostId = 主机反查的
+   * 代办发起方,派发器按它配对验身(冒用别人的 callId 不生效)。可选
+   * 依赖:不注入(纯测试环境)等同不续命。
+   */
+  holdPipeCall?(ghostId: string, callId: string, budgetMs: number): void;
+  releasePipeCall?(ghostId: string, callId: string): void;
+  /**
+   * 视频型号预期耗时(秒;video registry 登记值)。hold 预算与异步受理
+   * 返回的 expectedSeconds 共用。未注入/查无该型号 → null(用缺省)。
+   */
+  videoExpectedSeconds?(model: string): number | null;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -109,6 +140,41 @@ const MAX_VIDEO_SOURCES = 2;
 
 /** 归因号长度上限(tool-call 配对号量级;超长视为沙箱乱填,拒单防日志注水)。 */
 const MAX_CALL_ID_LEN = 128;
+
+/** 视频预期耗时缺省(秒;与 video/run.ts 的缺省同口径)。 */
+const DEFAULT_VIDEO_EXPECTED_SECONDS = 120;
+
+/** 异步任务号长度上限(主机铸 UUID 量级;超长视为沙箱乱填)。 */
+const MAX_JOB_ID_LEN = 64;
+
+/**
+ * 每意识完成态(done/failed)任务记录保留上限:TTL 之外的第二道闸——
+ * 快速失败/快速完成的 submit 循环不受 running 在途闸限制,没有条数上限
+ * 就能在 TTL 窗口内堆记录。超出即淘汰最旧,正常插件(一次 1–2 单)碰不到。
+ */
+const MAX_SETTLED_JOBS_PER_GHOST = 16;
+
+/** 异步代办任务(mode:'submit')的在途/完成记录。内存表:主进程重启即丢,
+ *  query_job 对丢失单统一回"查无此任务",意识按可重新提交处理。 */
+interface CindyAsyncJob {
+  ghostId: string;
+  /** 人话动词(失败话术,来自 KIND_INFO.verb)。 */
+  verb: string;
+  startedAt: number;
+  status: 'running' | 'done' | 'failed';
+  /** done:与同步成功返回同形的取件字段。 */
+  result?: {
+    url: string;
+    hash: string;
+    ext: string;
+    model: string;
+    modelLabel: string;
+  };
+  /** failed:人话失败原因。 */
+  error?: string;
+  /** 完成时刻(done/failed;TTL 从这里起算)。 */
+  doneAt?: number;
+}
 
 /** 每种代办类型的静态口径(类目/动作/是否吃源图/人话动词)。 */
 interface CindyKindInfo {
@@ -139,13 +205,16 @@ const CATEGORY_LABEL: Record<CindyKindInfo['category'], string> = { image: '图�
 
 // 可选清单与默认/档位选型都不再是本模块常量:经 deps.getImageConfig 注入,
 // 真身来自 providers.json 运行时目录(与会话模型列表同一获取来源,OSS 热更
-// 同机制),见 index.ts 的 getCatalogImageConfig。本文件零模型字面量。
+// 同机制),见 index.ts 的 getCatalogImageConfig 与 cindyMediaCatalog.ts 的派生
+// 规则。本文件零模型字面量;目录没给清单时不猜、不顶,直接拒单。
 
 /** 指纹形状(与 blobStore 同一规则;这里先粗筛,细校验在归属解析)。 */
 const HASH_RE = /^[0-9a-f]{64}$/;
 
 export class GhostCindySlot {
   private readonly inflight = new Map<string, number>();
+  /** 异步代办任务表(jobId → 记录;惰性 sweep,过期即清)。 */
+  private readonly jobs = new Map<string, CindyAsyncJob>();
 
   constructor(private readonly deps: CindySlotDeps) {}
 
@@ -155,25 +224,45 @@ export class GhostCindySlot {
    * 结构化拒绝而不是异常穿透。
    */
   async handleModelRequest(ghostId: string, payload: unknown): Promise<GhostPipeModelResult> {
+    this.sweepJobs();
     const p = payload as {
       kind?: unknown;
       prompt?: unknown;
       tier?: unknown;
       model?: unknown;
+      aspectRatio?: unknown;
       hashes?: unknown;
       callId?: unknown;
+      mode?: unknown;
+      jobId?: unknown;
     };
+    if (p?.kind === 'query_job') {
+      return this.handleQueryJob(ghostId, p);
+    }
     const info = typeof p?.kind === 'string' ? KIND_INFO[p.kind] : undefined;
     if (!info) {
-      return { ok: false, message: `未知的代办类型(当前支持 ${Object.keys(KIND_INFO).join(' / ')})` };
+      return {
+        ok: false,
+        message: `未知的代办类型(当前支持 ${Object.keys(KIND_INFO).join(' / ')} / query_job)`,
+      };
     }
     const kind = p.kind as string;
+    if (p.mode !== undefined && p.mode !== 'submit') {
+      return { ok: false, message: "mode 只支持 'submit'(异步提交)或不传(同步等待)" };
+    }
+    if (p.mode === 'submit' && info.category !== 'video') {
+      return {
+        ok: false,
+        message: '异步提交(mode:submit)仅支持视频类代办;图像代办秒级完成,直接同步等待',
+      };
+    }
     if (typeof p.prompt !== 'string' || p.prompt.trim().length === 0) {
       return { ok: false, message: 'prompt 不能为空' };
     }
     if (p.prompt.length > MAX_PROMPT_LEN) {
       return { ok: false, message: `prompt 过长(上限 ${MAX_PROMPT_LEN} 字符)` };
     }
+    const prompt = p.prompt;
     // 归因号:可选——tool-call 触发的代办把 callId 原样带回,日志/
     // 配额由此对上"哪次调用花的钱";面板交互等自发代办可不带,日志记
     // unattributed。带了就必须像样(非空字符串、长度设限),乱填拒单。
@@ -182,18 +271,62 @@ export class GhostCindySlot {
     }
     const callId = (p.callId as string | undefined) ?? 'unattributed';
 
+    // 画幅意图(可选,仅生图):意识声明比例,注入实现翻译成后端具体尺寸。
+    // 改图跟随源图画幅、视频画幅由 provider 层自治——带了就是用错协议,
+    // 明拒好过静默忽略(将来放开支持是向后兼容的放宽)。
+    if (p.aspectRatio !== undefined) {
+      if (kind !== 'gen_image') {
+        return { ok: false, message: 'aspectRatio 仅支持 gen_image(改图跟随源图画幅,视频不收比例)' };
+      }
+      if (
+        typeof p.aspectRatio !== 'string' ||
+        !(GHOST_IMAGE_ASPECT_RATIOS as readonly string[]).includes(p.aspectRatio)
+      ) {
+        return { ok: false, message: `未知画幅比例(可用:${GHOST_IMAGE_ASPECT_RATIOS.join(' / ')})` };
+      }
+    }
+    const aspectRatio = p.aspectRatio as GhostImageAspectRatio | undefined;
+
+    const ghost = this.deps.getGhost(ghostId);
+    if (!ghost || !ghost.enabled) {
+      return { ok: false, message: '意识不在可用状态' };
+    }
+    if (!ghost.manifest.slots?.includes('cindy')) {
+      return { ok: false, message: '本意识未声明 cindy 卡槽,无权请 Cindy 代办' };
+    }
+    // 能力粒度资格审:详单里没申请的动作点不了(缺详单 = 零能力,提示作者补声明)。
+    const declaredActions: readonly string[] = ghost.manifest.cindy?.[info.category] ?? [];
+    if (!declaredActions.includes(info.action)) {
+      return {
+        ok: false,
+        message: `本意识未声明${CATEGORY_LABEL[info.category]}「${info.verb}」能力(身份卡 cindy.${info.category} 缺 "${info.action}"),请意识作者更新声明`,
+      };
+    }
+
     // 选型优先级(低 → 高逐层覆盖):出厂默认 → 档位(意识意图,主机翻译)
     // → 意识专属覆盖(用户在详情页钉的)→ 调用显式点名(用户当场说的)。
     // 意识报了白名单外的名字 = 拒,不静默降级。配置按类目取(图像/视频
     // 各一份白名单与默认,同来自 providers.json 目录)。
     const cfg = info.category === 'image' ? this.deps.getImageConfig() : this.deps.getVideoConfig();
+    // 目录没给该类目任何模型 = 能力暂不可用:早拒并说清原因,不落回任何写死型号
+    // (说明见 cindyMediaCatalog.ts;详情页对应的那几行同时显示为灰字不可选)。
+    if (cfg.models.length === 0 || cfg.defaults === null) {
+      const category = CATEGORY_LABEL[info.category];
+      return {
+        ok: false,
+        message:
+          `主机当前没有可用的${category}模型(模型目录暂时取不到,不是本插件缺${category}能力)。` +
+          '这是主机侧临时状态,不要频繁重试;请如实告知用户,可稍后再试或重启应用重新加载模型目录。',
+      };
+    }
+    const defaults = cfg.defaults;
     const whitelist = new Set(cfg.models.map((m) => m.id));
-    let model = cfg.defaults.standard;
+    let model = defaults.standard;
     if (p.tier !== undefined) {
       if (typeof p.tier !== 'string' || !(GHOST_MODEL_TIERS as readonly string[]).includes(p.tier)) {
         return { ok: false, message: `未知档位(可用:${GHOST_MODEL_TIERS.join(' / ')})` };
       }
-      model = cfg.defaults[p.tier as GhostModelTier];
+      model = defaults[p.tier as GhostModelTier];
     }
     const capability = `${info.category}.${info.action}`;
     const override = this.deps.getOverride(ghostId, capability);
@@ -210,23 +343,6 @@ export class GhostCindySlot {
         return { ok: false, message: '不支持的模型(不在主机白名单内)' };
       }
       model = p.model;
-    }
-
-    const ghost = this.deps.getGhost(ghostId);
-    if (!ghost || !ghost.enabled) {
-      return { ok: false, message: '意识不在可用状态' };
-    }
-    if (!ghost.manifest.slots?.includes('cindy')) {
-      // 身份卡没声明模型槽 = 结构上没有这个器官,直接拒。
-      return { ok: false, message: '本意识未声明 cindy 卡槽,无权请 Cindy 代办' };
-    }
-    // 能力粒度资格审:详单里没申请的动作点不了(缺详单 = 零能力,提示作者补声明)。
-    const declaredActions: readonly string[] = ghost.manifest.cindy?.[info.category] ?? [];
-    if (!declaredActions.includes(info.action)) {
-      return {
-        ok: false,
-        message: `本意识未声明${CATEGORY_LABEL[info.category]}「${info.verb}」能力(身份卡 cindy.${info.category} 缺 "${info.action}"),请意识作者更新声明`,
-      };
     }
 
     // 吃源图的代办(改图/图生视频):指纹形状先粗筛(不占在途名额),
@@ -256,13 +372,20 @@ export class GhostCindySlot {
     }
 
     this.inflight.set(ghostId, inflight + 1);
+    // 异步受理成功后名额转交后台任务,由它的收尾释放;其余路径 finally 释放。
+    let backgrounded = false;
     try {
       // 日志口径:发生的事件是"一单 cindy 代办"(kind = 代办类型),槽只是
       // 资格概念不进文案;归因三件套 ghostId / kind / callId 三处日志一致。
-      this.deps.log?.info(`ghost cindy-request ${kind} start`, { ghostId, model, callId });
+      this.deps.log?.info(`ghost cindy-request ${kind} start`, {
+        ghostId,
+        model,
+        callId,
+        ...(p.mode === 'submit' ? { mode: 'submit' } : {}),
+      });
 
       // 吃源图的代办:逐张查账验归属——任何一张不是它名下的,整单拒
-      // (统一话术不泄露细节)。
+      // (统一话术不泄露细节)。异步模式也在受理期同步校验,拒绝立即可见。
       const imagePaths: string[] = [];
       for (const hash of hashes) {
         const abs = await this.deps.resolveOwnedMedia(ghostId, hash);
@@ -272,49 +395,192 @@ export class GhostCindySlot {
         imagePaths.push(abs);
       }
 
-      let generated: { buffer: Uint8Array; mimeType: string };
-      if (kind === 'edit_image') {
-        generated = await this.deps.editImage({ prompt: p.prompt, model, imagePaths });
-      } else if (kind === 'gen_image') {
-        generated = await this.deps.generateImage({ prompt: p.prompt, model });
-      } else if (kind === 'edit_video') {
-        generated = await this.deps.editVideo({ prompt: p.prompt, model, imagePaths });
-      } else {
-        generated = await this.deps.generateVideo({ prompt: p.prompt, model });
+      // 单次生成 → 落库 → 组装取件字段(同步返回与异步后台共用一条链;
+      // 抛错由各自调用方折叠成结构化失败)。
+      const runExec = async (): Promise<{
+        url: string;
+        hash: string;
+        ext: string;
+        model: string;
+        modelLabel: string;
+        width?: number;
+        height?: number;
+      }> => {
+        let generated: { buffer: Uint8Array; mimeType: string };
+        if (kind === 'edit_image') {
+          generated = await this.deps.editImage({ prompt, model, imagePaths });
+        } else if (kind === 'gen_image') {
+          // 画幅意图条件展开:不传时载荷里连键都没有,与老协议逐字节同形。
+          generated = await this.deps.generateImage({
+            prompt,
+            model,
+            ...(aspectRatio !== undefined ? { aspectRatio } : {}),
+          });
+        } else if (kind === 'edit_video') {
+          generated = await this.deps.editVideo({ prompt, model, imagePaths });
+        } else {
+          generated = await this.deps.generateVideo({ prompt, model });
+        }
+
+        const saved = await this.deps.saveGhostMedia({
+          ghostId,
+          buffer: generated.buffer,
+          mimeType: generated.mimeType,
+          label: prompt.slice(0, 200),
+          // 模型代办产物记账(ghostMediaLedger),随 ghost_call 收口带回;
+          // 未署名('unattributed')不记,与 networkSlot 同契约防并发串账
+          ...(callId !== 'unattributed' ? { callId } : {}),
+        });
+        this.deps.log?.info(`ghost cindy-request ${kind} done`, {
+          ghostId,
+          model,
+          callId,
+          hash: saved.hash,
+          bytes: generated.buffer.byteLength,
+        });
+        // 实际选型随结果回传(主机权威信息):意识交卷 note、会话里的 AI 与
+        // 用户由此看得见"这单是谁画的"。
+        const modelLabel = cfg.models.find((m) => m.id === model)?.label ?? model;
+        // 图片代办附带像素宽高(字节头解析,best-effort):意识供聊天卡片时
+        // 据此精确声明卡高,首帧零跳动;解析不出就缺省,意识回退估计值。
+        const dims =
+          kind === 'gen_image' || kind === 'edit_image' ? probeImageSize(generated.buffer) : null;
+        return { url: saved.url, hash: saved.hash, ext: saved.ext, model, modelLabel, ...(dims ?? {}) };
+      };
+
+      const expectedSeconds =
+        info.category === 'video'
+          ? (this.deps.videoExpectedSeconds?.(model) ?? DEFAULT_VIDEO_EXPECTED_SECONDS)
+          : null;
+
+      if (p.mode === 'submit') {
+        // 异步受理。内置在途闸(用户 inflightLimit 之上的缺省闸):同步代办
+        // 天然被管子超时限流,异步提交是瞬时的,不设闸就能批量刷付费通道。
+        const runningJobs = [...this.jobs.values()].filter(
+          (j) => j.ghostId === ghostId && j.status === 'running',
+        ).length;
+        if (runningJobs >= GHOST_CINDY_MAX_ASYNC_JOBS) {
+          return {
+            ok: false,
+            message: `后台任务已达上限(${GHOST_CINDY_MAX_ASYNC_JOBS} 单):先用 query_job 取回已完成的,或等在途任务结束`,
+          };
+        }
+        this.evictSettledJobs(ghostId);
+        const jobId = randomUUID();
+        const job: CindyAsyncJob = { ghostId, verb: info.verb, startedAt: Date.now(), status: 'running' };
+        this.jobs.set(jobId, job);
+        backgrounded = true;
+        void runExec()
+          .then((result) => {
+            job.status = 'done';
+            job.result = {
+              url: result.url,
+              hash: result.hash,
+              ext: result.ext,
+              model: result.model,
+              modelLabel: result.modelLabel,
+            };
+            job.doneAt = Date.now();
+          })
+          .catch((err: unknown) => {
+            job.status = 'failed';
+            job.error = err instanceof Error ? err.message : String(err);
+            job.doneAt = Date.now();
+            this.deps.log?.warn(`ghost cindy-request ${kind} job failed`, {
+              ghostId,
+              callId,
+              jobId,
+              error: job.error,
+            });
+          })
+          .finally(() => this.releaseInflight(ghostId));
+        return { ok: true, jobId, status: 'running', ...(expectedSeconds !== null ? { expectedSeconds } : {}) };
       }
 
-      const saved = await this.deps.saveGhostMedia({
-        ghostId,
-        buffer: generated.buffer,
-        mimeType: generated.mimeType,
-        label: p.prompt.slice(0, 200),
-        // 模型代办产物记账(ghostMediaLedger),随 ghost_call 收口带回;
-        // 未署名('unattributed')不记,与 networkSlot 同契约防并发串账
-        ...(callId !== 'unattributed' ? { callId } : {}),
-      });
-      this.deps.log?.info(`ghost cindy-request ${kind} done`, {
-        ghostId,
-        model,
-        callId,
-        hash: saved.hash,
-        bytes: generated.buffer.byteLength,
-      });
-      // 实际选型随结果回传(主机权威信息):意识交卷 note、会话里的 AI 与
-      // 用户由此看得见"这单是谁画的"。
-      const modelLabel = cfg.models.find((m) => m.id === model)?.label ?? model;
-      // 图片代办附带像素宽高(字节头解析,best-effort):意识供聊天卡片时
-      // 据此精确声明卡高,首帧零跳动;解析不出就缺省,意识回退估计值。
-      const dims =
-        kind === 'gen_image' || kind === 'edit_image' ? probeImageSize(generated.buffer) : null;
-      return { ok: true, url: saved.url, hash: saved.hash, ext: saved.ext, model, modelLabel, ...(dims ?? {}) };
+      // 同步等待:署名单在途期间替管子那头的 tool-call 续命(hold 预算 =
+      // 这单自己的轮询上限 expected×3,与 video/run.ts 的总超时同口径;
+      // 图片秒级完成,330s 基础窗口足够,不 hold)。
+      const holdBudgetMs = expectedSeconds !== null ? expectedSeconds * 3 * 1000 : 0;
+      const shouldHold = holdBudgetMs > 0 && callId !== 'unattributed';
+      if (shouldHold) this.deps.holdPipeCall?.(ghostId, callId, holdBudgetMs);
+      try {
+        return { ok: true, ...(await runExec()) };
+      } finally {
+        if (shouldHold) this.deps.releasePipeCall?.(ghostId, callId);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.log?.warn(`ghost cindy-request ${kind} failed`, { ghostId, callId, error: message });
       return { ok: false, message: `${info.verb}失败:${message}` };
     } finally {
-      const left = (this.inflight.get(ghostId) ?? 1) - 1;
-      if (left <= 0) this.inflight.delete(ghostId);
-      else this.inflight.set(ghostId, left);
+      if (!backgrounded) this.releaseInflight(ghostId);
     }
+  }
+
+  private releaseInflight(ghostId: string): void {
+    const left = (this.inflight.get(ghostId) ?? 1) - 1;
+    if (left <= 0) this.inflight.delete(ghostId);
+    else this.inflight.set(ghostId, left);
+  }
+
+  /** 惰性清理:完成(done/failed)超过 TTL 的任务记录出表(running 永不清)。 */
+  private sweepJobs(): void {
+    if (this.jobs.size === 0) return;
+    const now = Date.now();
+    for (const [jobId, job] of [...this.jobs]) {
+      if (job.status !== 'running' && now - (job.doneAt ?? 0) > GHOST_CINDY_JOB_TTL_MS) {
+        this.jobs.delete(jobId);
+      }
+    }
+  }
+
+  /**
+   * 新 job 入表前按意识淘汰最旧的完成记录,保住每意识条数上限。
+   * 在途 running(含本单即将占用的名额)都会落成完成记录,一并计入预留,
+   * 上限在任何并发时序下都不被突破。
+   */
+  private evictSettledJobs(ghostId: string): void {
+    const entries = [...this.jobs.entries()].filter(([, j]) => j.ghostId === ghostId);
+    const running = entries.filter(([, j]) => j.status === 'running').length;
+    const settled = entries
+      .filter(([, j]) => j.status !== 'running')
+      .sort((a, b) => (a[1].doneAt ?? 0) - (b[1].doneAt ?? 0));
+    const excess = settled.length - (MAX_SETTLED_JOBS_PER_GHOST - running - 1);
+    for (let i = 0; i < excess; i++) {
+      this.jobs.delete(settled[i][0]);
+    }
+  }
+
+  /**
+   * query_job:取异步任务状态/结果。归属统一话术——查无此单与不是它的单
+   * 同一句,不泄露他人任务存在性;完成结果可反复查(TTL 内幂等)。
+   */
+  private handleQueryJob(ghostId: string, p: { jobId?: unknown }): GhostPipeModelResult {
+    const ghost = this.deps.getGhost(ghostId);
+    if (!ghost || !ghost.enabled) {
+      return { ok: false, message: '意识不在可用状态' };
+    }
+    if (!ghost.manifest.slots?.includes('cindy')) {
+      return { ok: false, message: '本意识未声明 cindy 卡槽,无权请 Cindy 代办' };
+    }
+    if (typeof p.jobId !== 'string' || p.jobId.length === 0 || p.jobId.length > MAX_JOB_ID_LEN) {
+      return { ok: false, message: 'jobId 不合法(mode:submit 受理时返回的任务号)' };
+    }
+    const job = this.jobs.get(p.jobId);
+    if (!job || job.ghostId !== ghostId) {
+      return { ok: false, message: '查无此任务(可能已过期清理或应用重启丢失;请重新提交)' };
+    }
+    if (job.status === 'running') {
+      return {
+        ok: true,
+        jobId: p.jobId,
+        status: 'running',
+        elapsedSeconds: Math.round((Date.now() - job.startedAt) / 1000),
+      };
+    }
+    if (job.status === 'failed' || !job.result) {
+      return { ok: false, message: `${job.verb}失败:${job.error ?? '未知原因'}` };
+    }
+    return { ok: true, jobId: p.jobId, status: 'done', ...job.result };
   }
 }

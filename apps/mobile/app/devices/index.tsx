@@ -55,7 +55,6 @@ import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useScreenEdgePadding } from '@/components/screenEdgeInsets';
 import { isAccessRevokedError } from '@/device-link/accessRevoked';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
-import { useObserve } from '@/observability/observe';
 import {
   createEmptyDeviceIdentityCache,
   loadDeviceIdentityCache,
@@ -146,6 +145,7 @@ const DEVICE_LIST_TIMEOUT_MS = 12_000;
 // 项目组与自动化组展开后的子列表共用同一个预览限量(设备详情页也 import 复用,避免两处漂移)。
 export const PROJECT_PREVIEW_LIMIT = 5;
 const HOME_SESSION_ROW_HEIGHT = 78;
+const HOME_SESSION_SINGLE_LINE_ROW_HEIGHT = 60;
 const CINDY_LIST_GUTTER = 20;
 const CINDY_LIST_ROW_HEIGHT = 60;
 const CINDY_LIST_ROW_GAP = 10;
@@ -796,11 +796,6 @@ export default function HomeScreen() {
   const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;
   const initialHomeLoading = !initialHomeSettled && !connectionError;
   const initialHomeError = !initialHomeSettled && !!connectionError;
-  // EAS Observe:首页设备 / 会话首次加载完成即标记可交互(markInteractive 每 route 仅记首次)。
-  const { markInteractive } = useObserve();
-  useEffect(() => {
-    if (initialHomeSettled) markInteractive();
-  }, [initialHomeSettled, markInteractive]);
   // 首次同步完成后校验恢复/当前选中的设备,不成立时回退「所有对话」并同步持久化:
   // - 设备已不存在(解绑):home.selectedDeviceId 是归一化后的口径,查不到会变 null,
   //   若不回退,表头显示旧设备名而列表实际展示全部会话,两者口径不一致。
@@ -2198,6 +2193,9 @@ function HomeSessionRowInner({
   const preview = group
     ? automationGroupPreview(item, group.sessionCount, t)
     : buildRemoteSessionCardPreview(item, { running });
+  // 零消息会话没有摘要。此时不要保留双行列表的空白第二行；但定时任务与置顶
+  // 标记仍占用右下状态槽，因此继续使用双行布局。
+  const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;
   // 组行点击语义对齐桌面版侧边栏:收起且有需关注内容(未读运行 / 待处理)时,点行直接打开
   // 该看的那条会话(共享层 primary:运行中 > 有未读 > 最新);想展开点行首箭头(独立热区)。
   // 无需关注内容或已展开时,点行仍是展开 / 收起。
@@ -2230,6 +2228,7 @@ function HomeSessionRowInner({
         style={({ pressed }) => [
           styles.sessionListRow,
           cindyList && styles.sessionListRowCindy,
+          !showPreviewLine && styles.sessionListRowSingleLine,
           cindyList && inOutlinedGroup && styles.sessionListRowOutlinedGroup,
           cindyList && inOutlinedGroup && groupEnd && styles.sessionListRowOutlinedGroupEnd,
           standaloneCindyCard && styles.sessionListRowCindyCard,
@@ -2264,7 +2263,11 @@ function HomeSessionRowInner({
             )}
           </Pressable>
         ) : null}
-        <View style={[styles.sessionIconCell, cindyList && styles.sessionIconCellCindy]}>
+        <View style={[
+          styles.sessionIconCell,
+          cindyList && styles.sessionIconCellCindy,
+          !showPreviewLine && styles.sessionIconCellSingleLine,
+        ]}>
           <SessionStatusMark
             active={running || attention}
             item={item}
@@ -2316,30 +2319,32 @@ function HomeSessionRowInner({
               </View>
             )}
           </View>
-          <View style={[styles.sessionPreviewRow, cindyList && styles.sessionPreviewRowCindy]}>
-            <Text
-              ellipsizeMode="tail"
-              numberOfLines={1}
-              style={[styles.sessionPreview, cindyList && styles.sessionPreviewCindy]}
-              testID={`home.sessionRowPreview.${item.session.id}`}
-            >
-              {preview}
-            </Text>
-            {showSchedule || showPinned ? (
-              // 组行与单次自动化会话行同款标记:Timer 放右下(时间下方的尾部图标位),
-              // 行首保留正常的会话状态图标(primary 运行的 vendor / 运行态)。
-              <View style={[styles.sessionTrailingIcons, cindyList && styles.sessionTrailingIconsCindy]}>
-                {showSchedule ? (
-                  <AutomationTimerIcon
-                    paused={scheduleStopped}
-                    size={cindyList ? iconSize.xs : iconSize.lg}
-                    testID={`home.sessionAutomationTimer.${item.session.id}`}
-                  />
-                ) : null}
-                {showPinned ? <Pin color={colors.textTertiary} size={cindyList ? iconSize.xs : iconSize.lg} strokeWidth={iconStroke.thin} /> : null}
-              </View>
-            ) : null}
-          </View>
+          {showPreviewLine ? (
+            <View style={[styles.sessionPreviewRow, cindyList && styles.sessionPreviewRowCindy]}>
+              <Text
+                ellipsizeMode="tail"
+                numberOfLines={1}
+                style={[styles.sessionPreview, cindyList && styles.sessionPreviewCindy]}
+                testID={`home.sessionRowPreview.${item.session.id}`}
+              >
+                {preview}
+              </Text>
+              {showSchedule || showPinned ? (
+                // 组行与单次自动化会话行同款标记:Timer 放右下(时间下方的尾部图标位),
+                // 行首保留正常的会话状态图标(primary 运行的 vendor / 运行态)。
+                <View style={[styles.sessionTrailingIcons, cindyList && styles.sessionTrailingIconsCindy]}>
+                  {showSchedule ? (
+                    <AutomationTimerIcon
+                      paused={scheduleStopped}
+                      size={cindyList ? iconSize.xs : iconSize.lg}
+                      testID={`home.sessionAutomationTimer.${item.session.id}`}
+                    />
+                  ) : null}
+                  {showPinned ? <Pin color={colors.textTertiary} size={cindyList ? iconSize.xs : iconSize.lg} strokeWidth={iconStroke.thin} /> : null}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       </Pressable>
       {group && groupExpanded ? (
@@ -3029,6 +3034,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: CINDY_LIST_ROW_HEIGHT,
     paddingLeft: 18,
   },
+  sessionListRowSingleLine: {
+    height: HOME_SESSION_SINGLE_LINE_ROW_HEIGHT,
+  },
   sessionListRowCindyCard: {
     borderColor: colors.border,
     borderRadius: radius.container,
@@ -3128,6 +3136,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   sessionIconCellCindy: {
     paddingTop: 14,
     width: iconSize.md,
+  },
+  sessionIconCellSingleLine: {
+    justifyContent: 'center',
+    paddingTop: 0,
   },
   sessionGroupChevronCell: {
     // 自动化组行行首的展开箭头列:与项目组行首 chevron 对齐(尺寸 22、次级色),

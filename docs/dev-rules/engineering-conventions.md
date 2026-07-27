@@ -7,7 +7,7 @@
 
 本文收拢一组适用于整个客户端的通用工程约束。IPC 的安全与授权边界另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
-UI 文案的语气与措辞另见根 [`DESIGN.md`](../../DESIGN.md) 的 Voice & Content 一节，验证命令
+UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 Voice & Content 一节，验证命令
 见 [`desktop-development.md`](desktop-development.md)。
 
 > **增量适用原则**：本规则约束新增和正在修改的代码，不要求为统一形式专项重构存量。
@@ -25,6 +25,8 @@ UI 文案的语气与措辞另见根 [`DESIGN.md`](../../DESIGN.md) 的 Voice & 
 | 支持的语言与默认语言 | `apps/desktop/src/shared/locale.ts`（`SUPPORTED_LOCALES`、`DEFAULT_LOCALE`） |
 | i18n 资源 | `apps/desktop/src/renderer/i18n/locales/<locale>/common.json` |
 | i18n key 一致性门禁 | `scripts/check-i18n.mjs`（`pnpm check:i18n`） |
+| **术语表（唯一事实源）** | `i18n/glossary.json`，人读版 `i18n/GLOSSARY.md` |
+| 术语一致性门禁 | `scripts/check-i18n-glossary.mjs`（`pnpm check:i18n-glossary`） |
 
 ## 1. 日志
 
@@ -93,9 +95,90 @@ UI 文案的语气与措辞另见根 [`DESIGN.md`](../../DESIGN.md) 的 Voice & 
 - **删除**：删 UI 时把对应 key 从全部 locale 一起删掉，不留孤儿 key。
 - **翻译准确性**：`fallbackLng = 'en'`，缺 key 会静默回退英文。4 种语言都必须补齐并给出
   **准确**翻译，不留空、占位或“待校对”；ja / ko 没把握时先查证再写。
-- **门禁**：`pnpm check:i18n` 校验 key 一致性——缺 key、孤儿 key、跨 locale 类型冲突会
-  报错阻断；空值与“与默认语言完全相同”只发警告。它保证 key 结构齐整，但**翻译是否
-  准确仍需人核**，改完至少跑一次 `pnpm check:i18n`。
+- **术语一致性**：写任何术语前先查 `i18n/GLOSSARY.md`。同一个概念在不同界面译法不一致
+  是用户直接可见的质量问题（引入术语表时实测：162 个英文短语存在多种中文译法，反向
+  227 条）。表里已裁决的术语**必须照用**，拿不准或表里没有的先在
+  `i18n/glossary.json` 加 `status: "proposed"` 条目，别自己临时造一个译法。
+
+### 5.1 术语表与门禁
+
+- **数据正本**：`i18n/glossary.json`；人读版 `i18n/GLOSSARY.md` 由
+  `pnpm i18n:glossary-doc` 生成，**不要手改**。
+- **两级状态**：`decided` 违反即阻断 CI；`proposed` 只告警，用于承载「已知不一致但
+  尚未拍板」的术语——让清单可见可讨论，而不是靠脚本替产品做裁决。
+- **三类规则**：禁用译法、保留英文术语的大小写形态、zh-CN 半角标点与三语省略号。
+  标点规则的适用范围由现状数据定，不靠直觉——例如日文 UI 惯例本就用半角冒号，
+  ja 不套用中文的全角规则。
+- **存量**：`i18n/glossary-baseline.json` 冻结引入时的既有违规，**只减不增**；修好一条
+  就从账上删一条，已修复却仍挂账会报错。新增违规一律阻断。
+- **误报处理**：guard 已剥离 `{{插值}}`、URL、文件名，并把连字符视作词边界
+  （`ssh-agent` 不会被判成产品 `Agent`）。仍需放行时用 `exempt`——完整路径精确匹配，
+  或以 `.` 结尾的子树前缀；同形异义必须在 `note` 里写明理由。
+- **门禁**：
+  - `pnpm check:i18n` 校验 key 结构——缺 key、孤儿 key、跨 locale 类型冲突报错阻断；
+    空值与“与默认语言完全相同”只发警告。
+  - `pnpm check:i18n-glossary` 校验译文术语与标点，并检查 `GLOSSARY.md` 是否与术语表同步。
+  - 两者互补：前者管「key 齐不齐」，后者管「词译得一不一致」，谁也替代不了谁。改
+    i18n 后两个都要跑（CI 已强制）。
+- **影子 catalog**：有几批不走 i18next 的手写四语 catalog，根脚本只扫 locale JSON、扫不到
+  这些 `.ts`。它们由 vitest 直接 import 运行时对象覆盖，复用
+  `scripts/shared/glossary-rules.mjs` 的同一套判定，随 `test:unit` 阻断：
+  - mobile：`src/auth/loginMessages.ts`、`src/session/newSessionMessages.ts`、
+    `src/session/fullAccessConfirmationCopy.ts`（Full access 高风险权限提示）→
+    `apps/mobile/src/__tests__/shadowCatalogGlossary.test.ts`
+  - desktop：`src/main/applicationMenuLabels.ts`（macOS 原生菜单栏）→
+    `apps/desktop/src/main/__tests__/applicationMenuLabels.test.ts`
+  - desktop：`src/main/oauthResultPage.ts`（OAuth 回调结果页，渲染在系统浏览器里）→
+    `apps/desktop/src/main/__tests__/oauthResultPageGlossary.test.ts`。它的文案分散在
+    若干函数里且要传 provider / brand 实参，测试用固定占位实参求值后再扫；占位值不含
+    CJK 与标点，免得实参本身影响判定。
+
+  新增同类手写 catalog 时记得加进对应测试的 `collectEntries()`。**catalog 要单独成模块**：
+  原先这两份分别嵌在 `bootstrap-electron.ts` 与 `fullAccessConfirmation.ts` 里，测试一 import
+  就会拉起整个 Electron 主进程 / react-native，根本跑不起来——这也是它们长期是盲区的原因。
+- **Slack / IM 侧的文案不在任何 locale 文件里**：`src/main/hook-control/interactions.ts` 的
+  权限卡片按钮是硬编码中文，与应用内 `permissions.alwaysAllowForSession` 是同一个动作。
+  改产品术语时这类「同一动作、两处独立文案」要一起找出来，否则用户在 Slack 和 App 里
+  看到两种说法。
+- **批量改术语时必须跑全量 `pnpm test:unit`**：仓库里有若干测试直接断言中文文案
+  （`automationGeneratedSessions.test.ts`、`builtinToolsCollabDescriptionI18n.test.ts`、
+  mobile 的 `sessionMenu.test.ts` 等）。它们是有意的文案锁，改词后要同步更新期望值，
+  不能靠 guard 绿灯就认为改完了。反过来这也是一层兜底——Session→对话 那轮正是
+  `mobileCindyVoiceSession.test.ts` 暴露了漏网的「语音识别会话」（ASR WebSocket
+  连接，不是产品对话）。
+- **有些 locale 文案是 package 源的镜像**：改 locale 时必须同步改源，否则镜像断言会红。
+  已知两处：`packages/maker-shared/src/sessionOperation.ts` 的 `DESKTOP_SESSION_CHAT_PLACEHOLDER_ZH_CN`
+  （mobile composer placeholder 必须等于 desktop `ccAgent.layout.chatPlaceholder`）、
+  `packages/maker-scheduler/src/builtin-templates.ts`（desktop locale 的 scheduler 模板块要求与
+  package 源逐字一致）。这类断言不是碍事，正是它们保证了跨端文案不漂移。
+- **标点可能不在 locale 里**：部分错误消息由代码拼接（如 `cloudVoiceHttpErrorMessage()`
+  给 `composer.voice.refineFailed` 补半角冒号），guard 只扫 locale JSON，改不到也管不到。
+  批量改标点后若测试断言与实际值方向相反，先查该文案的冒号究竟来自 locale 还是代码，
+  别顺手把断言改成"看起来一致"的那个。
+- **术语表是参考，不是替换表**：它回答「这个词该不该用」，不回答「该换成哪个」。
+  表里的译法是默认情况下的选择，不是「见到 A 就换成 B」的映射——目标译法取决于该
+  key 的英文源与实际用途，而脚本看不见语境。因此**禁止用 sed / 正则拿术语表做批量
+  替换**，逐条交给 AI 按语境判断。这不是效率取舍，是正确性要求。
+
+  门禁的输出也按这个定位设计：命中禁用译法时只报告事实并附上**英文源原文**，
+  刻意不给替换目标（以前输出「应为 X」，读起来就是一条替换指令，于是很自然地被拿去
+  做机械替换）。大小写与标点两类例外——`worker`→`Worker`、`,`→`，` 的答案与语境无关、
+  唯一确定，那两处仍直接给目标。
+
+  实测代价：#389 那轮批量替换引入的用户可见误译，经七轮 review 才收敛，约 35 处。
+  典型如「额度」同时是 Balance / Quota / Credits 三个英文源的正确译法，「代理」同时是
+  Agent / Subagent / Proxy 的译法——无条件替换必然改错其中两类。更隐蔽的是外部产品的
+  既定术语被产品术语盖掉：macOS 系统设置面板名日文是「オートメーション」而非产品的
+  「自動化」，照改会让用户按提示在系统设置里找不到授权项，授权恢复路径直接断掉。
+
+  正确做法：guard 报出违规清单后，**逐条读英文源与该 key 的实际用途再决定**（这正是
+  AI 擅长、脚本做不到的部分）。同形异义写进 `exempt` 并在 `note` 里说明理由；若某个
+  禁用词对应多个英文源，用条件禁用 `{ text, whenEn }` 按英文源拆开，让每条规则的目标
+  译法唯一——目标不唯一的禁用词就是误译的温床。改完仍需人工过一遍 diff。
+
+  已登记的几组同形异义：ssh-agent ≠ 产品 Agent；Computer Use 的「自动操作」≠ scheduler
+  的「自动化」；SSO 的「身份提供方」≠「模型供应商」；登录态 / WebSocket / SDK 运行时的
+  session ≠ 产品「对话」；OS 的「活动桌面」≠ 产品的「活跃」；Jira 的「課題」≠ 产品 Issue。
 
 ## 6. 注释
 
@@ -104,8 +187,8 @@ UI 文案的语气与措辞另见根 [`DESIGN.md`](../../DESIGN.md) 的 Voice & 
 
 ## 7. 渲染性能与视觉连续性
 
-界面切换与动画的性能约束。动效的视觉规范（允许哪些过渡、时长、容器形变）见根
-[`DESIGN.md`](../../DESIGN.md) §14.4；本节只管性能红线与加载时序。
+界面切换与动画的性能约束。动效的视觉规范（允许哪些过渡、时长、容器形变）见
+[`DESIGN.md`](../design-rules/DESIGN.md) §14.4；本节只管性能红线与加载时序。
 
 - **杜绝跳变与空白帧**：所有界面／子界面／边栏切换，过程中不产生让人难受的视觉跳变。
 - **取数时序**：Render 层先异步获取数据（绝不能卡主线程渲染），获取期间界面不发生
@@ -134,10 +217,12 @@ UI 文案的语气与措辞另见根 [`DESIGN.md`](../../DESIGN.md) 的 Voice & 
    依赖、便于免 Electron 测试？
 4. 路径、子进程、FS、性能、快捷键是否在 macOS / Windows 两端都成立？未实测平台是否
    标注？
-5. UI 文案是否全部走 `t()`、4 种语言齐全且翻译准确、无孤儿 key？是否跑过 `pnpm check:i18n`？
+5. UI 文案是否全部走 `t()`、4 种语言齐全且翻译准确、无孤儿 key？术语是否照 `i18n/GLOSSARY.md`
+   写、没有自造译法？是否跑过 `pnpm check:i18n` 与 `pnpm check:i18n-glossary`？
 6. 新增类／核心逻辑是否有职责注释？
 7. 新增常驻动画是否 compositor-only（HTML 元素 + `transform`/`opacity` + wrapper）、
    响应 `prefers-reduced-motion`？界面切换是否无跳变／空白帧、未引入不必要的 loading 态？
 
 验证按 [`desktop-development.md`](desktop-development.md) 的分层选择：改 TypeScript 至少跑相关
-类型检查与定向测试；改 i18n 跑 `pnpm check:i18n`；跨模块或高风险改动再扩大验证范围。
+类型检查与定向测试；改 i18n 跑 `pnpm check:i18n` 与 `pnpm check:i18n-glossary`；跨模块或
+高风险改动再扩大验证范围。

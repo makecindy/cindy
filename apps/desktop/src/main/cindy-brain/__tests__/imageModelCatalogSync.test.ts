@@ -1,8 +1,9 @@
 /**
  * imageModelCatalogSync.test.ts — 图像模型两份打包源的同源守卫。
  *
- * 运行时以 providers.json 目录(getActiveCatalog)为准;@cindy/mcps 的
- * GATEWAY_IMAGE_MODELS 是意识 cindy 槽白名单与目录缺区时的打包兜底。
+ * 运行时清单以 providers.json 目录(getActiveCatalog)为准,目录缺区即视为
+ * 能力暂不可用(不再回落常量,见 cindyMediaCatalog.ts);@cindy/mcps 的
+ * GATEWAY_IMAGE_MODELS 仍是图像通道 enum(GatewayImageModel)的类型正本。
  * 两者随 App 同版发布,必须逐项一致——漂移会造成"下拉可选但图像通道
  * enum 不认"(或反之)的割裂。改任一边,另一边必须同步。
  */

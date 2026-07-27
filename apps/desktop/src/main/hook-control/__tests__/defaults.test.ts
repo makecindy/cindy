@@ -1,8 +1,9 @@
 /**
  * defaults.ts(Hook 新会话 agent/model/effort/permissionMode/providerId 合成)单测:
  * 取值链「显式 override > 草稿默认 > capabilities 兜底」与非法值回落;
- * permissionMode 取值链是「显式且该 agent 支持 > bypassPermissions」
- * (无草稿层); providerId 无 override 通道, 恒取最终 agentKind 的草稿默认
+ * permissionMode 取值链是「显式且该 agent 支持 > 显式但不支持时回落该 agent 最严档
+ * > 无显式偏好时 bypassPermissions」(无草稿层; 不支持时只能更严不能更宽, 见下方
+ * 安全修正注释); providerId 无 override 通道, 恒取最终 agentKind 的草稿默认
  * (空白归一 null; 连接态校验在 session-runner 异步做, 不在本纯函数)。
  */
 
@@ -131,21 +132,37 @@ describe('resolveHookSessionConfig', () => {
     ).toBe('acceptEdits');
   });
 
-  it('permissionMode: 该 agent 不支持时回落 bypass 并 warn(codex 无 acceptEdits)', () => {
+  // 2026-07 安全修正:原实现在「显式档不被该 agent 支持」时回落 bypassPermissions
+  // (最宽档)。用户填过显式档 = 表达过「不要默认的完全访问」,换 agent 后被静默放宽成
+  // 完全访问,而这是无人值守的 IM 派发链路,没有人在旁边确认。现在一律回落该 agent 的
+  // **最严**档(permissionModes 从严到宽声明,取 [0])。
+  it('permissionMode: 显式档不被该 agent 支持时回落最严档而非 bypass(codex 无 acceptEdits)', () => {
     const warns: string[] = [];
     const r = resolveHookSessionConfig(
       deps({ log: { warn: (m) => warns.push(m) } }),
       over({ agentKind: 'codex', model: 'gpt-5.5', permissionMode: 'acceptEdits' }),
     );
-    expect(r.permissionMode).toBe('bypassPermissions');
+    expect(r.permissionMode).toBe('ask');
+    expect(r.permissionMode).not.toBe('bypassPermissions');
     expect(warns.some((m) => m.includes('acceptEdits'))).toBe(true);
   });
 
-  it('permissionMode: 未知档回落 bypass, null 缺省 bypass', () => {
-    expect(
-      resolveHookSessionConfig(deps(), over({ permissionMode: 'yolo' })).permissionMode,
-    ).toBe('bypassPermissions');
+  it('permissionMode: 未知档同样回落最严档, 不因无法识别而放宽', () => {
+    expect(resolveHookSessionConfig(deps(), over({ permissionMode: 'yolo' })).permissionMode).toBe(
+      'ask',
+    );
+  });
+
+  it('permissionMode: 从未填显式档 → bypass(无人值守历史默认, 本次不改)', () => {
     expect(resolveHookSessionConfig(deps(), over()).permissionMode).toBe('bypassPermissions');
+  });
+
+  it('permissionMode: 该 agent 无任何档位声明时才兜底 bypass', () => {
+    const r = resolveHookSessionConfig(
+      deps({ getPermissionModes: () => [] }),
+      over({ permissionMode: 'acceptEdits' }),
+    );
+    expect(r.permissionMode).toBe('bypassPermissions');
   });
 
   it('providerId: 跟随最终 agentKind 的草稿默认(agent override 切换后取对应组)', () => {

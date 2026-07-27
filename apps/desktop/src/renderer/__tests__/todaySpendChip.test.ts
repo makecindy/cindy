@@ -15,12 +15,14 @@ const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
 
 describe('TodaySpendChip dashboard routing', () => {
   it('separates the latest user-round total from final-segment token details', () => {
+    expect(source).toContain('message.userTurnMoney?.amount');
     expect(source).toContain('const userTurnCostUsd = typeof message.userTurnCostUsd');
-    expect(source).toContain('? { costUsd: userTurnCostUsd }');
-    expect(source).toContain('isUserTurnTotal: userTurnCostUsd != null');
+    expect(source).toContain('? { money: userTurnMoney }');
+    expect(source).toContain('isUserTurnTotal: Boolean(userTurnMoney || userTurnCostUsd != null)');
     expect(source).toContain("'todaySpend.tooltip.latestUserTurnTitle'");
+    expect(source).toContain('segmentMoney: message.turnMoney');
     expect(source).toContain('segmentCostUsd: message.turnCostUsd');
-    expect(source).toContain('costUsd: summary.isUserTurnTotal ? summary.segmentCostUsd : summary.costUsd');
+    expect(source).toContain('money: summary.isUserTurnTotal ? summary.segmentMoney : summary.money');
     expect(source).toContain("'chat.messageActionBar.userTurnCostDetailsTitle'");
   });
 
@@ -111,7 +113,7 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).not.toContain('CODEX_CREDIT_USD_RATE');
     expect(source).not.toContain('usdFormatted');
     expect(source).not.toContain('function getSessionCostSegment(');
-    expect(source).toContain("t('todaySpend.sessionCostLabel', { cost: `$${sessionCostUsd.toFixed(2)}` })");
+    expect(source).toContain('const cost = formatTurnCostMoney(sessionMoney)');
     expect(source).toContain("tooltipLabel: t('todaySpend.tooltip.sessionUsed'");
     expect(source).toContain("session: { label: t('todaySpend.sessionCostLabel', { cost: '$—' })");
     // spend hook 对 device-link 远程会话无条件启用(形态未知,累计 cost 镜像不可丢)
@@ -132,12 +134,12 @@ describe('TodaySpendChip dashboard routing', () => {
       "chipSegments.push(t('todaySpend.codex.sessionValueLabel'",
     );
     expect(source).toContain('tooltipNode = buildCodexTooltipNode(');
-    expect(source).toContain('sessionEstimatedValueUsd,');
+    expect(source).toContain('sessionEstimatedValueMoney,');
     expect(source).toContain("t('todaySpend.codex.sessionValueLabel'");
     expect(source).toContain('getCodexWindowUsages(snapshot, t, nowMs)');
     expect(source).toContain('todaySpend.codex.planCreditsLine');
     expect(source).toContain('todaySpend.codex.windowLine');
-    // chip 主体 label 统一为距 reset 的剩余时长倒计时 (Claude / Codex 同一函数),
+    // Codex chip 主体 label 为距 reset 的剩余时长倒计时,
     // tooltip 保留窗口名 + 精确 reset 时间点
     expect(source).toContain('function formatCompactTimeUntilReset(');
     expect(source).toContain('function toCodexChipWindow(');
@@ -146,6 +148,16 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).not.toContain('todaySpend.codex.remainingSegment');
     expect(source).not.toContain('todaySpend.codex.sessionTokensSegment');
     expect(source).not.toContain('todaySpend.codex.creditsShort');
+  });
+
+  it('formats gateway quota amounts with the gateway-native currency', () => {
+    expect(source).toContain(
+      'formatCompactMoney(gatewayMoney(claudeQuota.spend))',
+    );
+    expect(source).toContain(
+      'formatCompactMoney(gatewayMoney(claudeQuota.maxBudget))',
+    );
+    expect(source).not.toContain('formatCompactUsd(claudeQuota.');
   });
 
   it('uses token and explicit empty-state fallbacks for Codex API sessions', () => {
@@ -177,14 +189,25 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('todaySpend.claude.weeklyLabel');
     expect(source).toContain('todaySpend.claude.windowLine');
     expect(source).toContain('todaySpend.claude.resetAt');
-    // chip 周限段: scoped 命中时倒计时前带模型名标注口径 (「Fable 7天 剩余 78%」)
-    expect(source).toContain('weekly.modelDisplayName ? `${weekly.modelDisplayName} ${countdown}` : countdown');
+    expect(source).toContain('todaySpend.claude.resetInAt');
+    // 稳定窗口身份与完整 reset tooltip 的最终输出由 todaySpendChip.behavior.test.tsx
+    // 直接渲染组件验证；这里仅保留形态路由契约。
     expect(source).toContain('todaySpend.claude.sessionValueLabel');
     expect(source).toContain('todaySpend.claude.planLine');
-    // 告警只看影响当前会话的窗口 (5h / 总周限 / 当前模型 scoped);headers 的
-    // allowed_warning 是 turn 内唯一的「接近限额」实时信号, 必须纳入告警态
-    expect(source).toContain('isClaudeSubscriptionAlerting(');
-    expect(source).toContain("status === 'rejected' || status === 'allowed_warning'");
+    // 告警判定是纯数据判定, 统一收在 shared/claudeSubscriptionUsage.ts (有直接单测:
+    // main/usage/__tests__/claudeSubscriptionUsage.test.ts), 组件只消费, 不再本地重写。
+    expect(source).toContain('isClaudeSubscriptionAlerting,');
+    expect(source).toContain('hasAlertingClaudeSessionWindow,');
+    expect(source).not.toContain('function isClaudeSubscriptionAlerting(');
+    expect(source).not.toContain('function hasAlertingClaudeSessionWindow(');
+    // chip 变红只看当前会话真受限 (rejected / 影响本会话的窗口告警); headers 的
+    // allowed_warning 综合了其它模型的分模型周限, 不得单独染红 —— 否则跑 Opus 的
+    // 会话会因 Fable 周限吃紧变红, 而 chip 上根本没有那一段。
+    expect(source).not.toContain("status === 'rejected' || status === 'allowed_warning'");
+    // tooltip 比 chip 宽一档: allowed_warning 仍提示 (紧邻全量窗口列表, 有上下文)
+    expect(source).toContain(
+      "status === 'allowed_warning' || hasAlertingClaudeSessionWindow(snapshot, modelId)",
+    );
     // Claude 订阅 / bridge 订阅不读 gateway quota (不反映订阅花费); 默认路由 key reconcile
     // 完成前形态未定, 同样不放行网关 quota 读 (避免形态闪切)
     expect(source).toContain("vendorKey === 'cc' && !isClaudeSubscription && !isSubscriptionBridge && !ccBillingFormPending");

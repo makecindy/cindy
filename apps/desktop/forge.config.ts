@@ -24,7 +24,7 @@ import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 const _require = createRequire(__filename);
 
 // ── 构建期身份(2026-07-17 Cindy 渠道分叉) ─────────────────────────────────────
-// 区域默认 cn;打海外包时由发布脚本注入 CINDY_AUTH_REGION=global。appId 随区域
+// 区域默认 global;中国大陆包由发布脚本显式注入 CINDY_AUTH_REGION=cn。appId 随区域
 // 派生(com.xd.cindycn / com.xd.cindy),必须与运行时 shared/brandRegion
 // (经 vite.main.config 的 VITE_CINDY_AUTH_REGION define 烘焙)同源——AUMID
 // 三位一体:NSIS appId = 运行时 setAppUserModelId = 快捷方式 AUMID。
@@ -38,10 +38,11 @@ process.env.VITE_CINDY_AUTH_REGION = CINDY_REGION;
 const CINDY_APP_ID = brandAppId(CINDY_REGION);
 const CINDY_UTI_PREFIX = brandBundleIdPrefix(CINDY_REGION);
 /**
- * 可执行文件基名,按区域派生(cn 'Cindy' / global 'CindyGlobal'):同机双装时
- * exe / mac .app 包名 / NSIS 安装目录与快捷方式若同名,第二个安装会覆盖第一个,
- * 更新器按 exe 名杀进程也会误伤另一区域。运行时 userData 目录由 main 入口按
- * 同一区域切换(src/main/regionUserData.ts),两端从 brand-identity 同源派生。
+ * 可执行文件基名,按区域派生(cn/global 同值 'Cindy',dev 'CindyDev';
+ * 2026-07-26 显示名统一决策,cn/global 文件层双装隔离随之放弃,见
+ * brandIdentity.ts executableNameByRegion doc)。运行时 userData 目录由 main
+ * 入口按同一区域切换(src/main/regionUserData.ts),两端从 brand-identity
+ * 同源派生,cn/global 数据仍分库。
  */
 const CINDY_EXE = brandExecutableName(CINDY_REGION);
 /** 更新器二进制文件名(cindy-updater.exe)。 */
@@ -636,11 +637,11 @@ function signPackagedExes(buildPath: string): void {
  * ⚠️ 绝不能改 CFBundleName:Electron 启动时用主 app 的 CFBundleName 拼
  * `Frameworks/<CFBundleName> Helper.app` 查找 Helper(electron_main_delegate_mac.mm,
  * 唯一 fallback 是 'Electron Helper.app'),而 Helper 目录名跟随 packager name
- * (区域派生:cn 'Cindy' / global 'CindyGlobal' / dev 'CindyDev')。把
- * CFBundleName 改成 Cindy 会让 global/dev 包启动即 FATAL
- * "Unable to find helper app"(SIGTRAP;2026-07-21 dev region smoke 实踩)。
- * 代价:菜单栏粗体标题取自 CFBundleName 且运行时改不了,global/dev 构建上
- * 显示区域 exe 名而非 Cindy——cn(packager 已写 Cindy)不受影响,可接受。
+ * (区域派生:cn/global 'Cindy' / dev 'CindyDev')。把 CFBundleName 改成
+ * 与 Helper 目录不一致的值会让包启动即 FATAL "Unable to find helper app"
+ * (SIGTRAP;2026-07-21 dev region smoke 实踩)。
+ * 代价:菜单栏粗体标题取自 CFBundleName 且运行时改不了,dev 构建上显示
+ * CindyDev 而非 Cindy——cn/global(packager 已写 Cindy)不受影响,可接受。
  *
  * 为什么在 postPackage 改而不是 packagerConfig:electron-packager 在
  * updatePlistFiles 里先合并 extendInfo、后用 appName/executableName 覆写
@@ -650,11 +651,11 @@ function signPackagedExes(buildPath: string): void {
  * 历史沿革:本步骤诞生于身份翻转前(当时 .app/CFBundleExecutable/bundle id/
  * userData 均为 xdt-maker 系,这里是唯一的显示名来源)。2026-07-17 身份翻转后
  * cn 构建的 packager 本身就会把 CFBundleName/CFBundleDisplayName 写成 Cindy,
- * 对 cn 是冗余兜底;2026-07-18 双装支持后 global 构建的 packager name 是
- * 'CindyGlobal'(.app 目录名 / 标识符层),本步骤把 Dock 名、Cmd+Tab、
- * 系统通知的**显示层**统一拉回 Cindy(BRAND_NAME 各区共用)——对
- * global/dev 不再冗余,是显示名的唯一来源。正式签名/公证(外部发布流程)
- * 发生在 postPackage 之后,本改动会被签名一起封印,不存在破坏签名问题。
+ * 对 cn 是冗余兜底;2026-07-26 global exe 名与 cn 统一为 'Cindy' 后 global
+ * 同样只是冗余兜底;dev 构建的 packager name 仍是 'CindyDev',本步骤把
+ * Dock 名、Cmd+Tab、系统通知的**显示层**拉回 Cindy(BRAND_NAME 各区共用),
+ * 对 dev 是显示名的唯一来源。正式签名/公证(外部发布流程)发生在
+ * postPackage 之后,本改动会被签名一起封印,不存在破坏签名问题。
  */
 function applyMacPackagedDisplayName(buildPath: string, platform: string): void {
   if (platform !== 'darwin') return;
@@ -787,10 +788,37 @@ function validateAndroidPlatformToolsSource(srcDir: string, targetPlatform: stri
   assertRealAndroidPlatformTool(path.join(srcDir, 'adb'));
 }
 
+/**
+ * Windows 打包前把 Android platform-tools 的三个二进制按 pin 版本就位。
+ *
+ * 它们(6.5MB)不入仓:公开仓每次 clone 与每次 CI checkout(ci.yml 的 lfs: true)都会
+ * 把 LFS 对象下一遍,免费带宽额度耗尽后 clone 与 CI 会一起硬失败。脚本幂等 ——
+ * 已就位且 sha256 匹配时直接跳过、不碰网络;无外网的打包机见脚本内的离线出路。
+ */
+function ensureAndroidPlatformToolsBinaries(key: string): void {
+  const script = path.join(__dirname, 'scripts', 'ensure-android-platform-tools.mjs');
+  const r = spawnSync(process.execPath, [script, `--platform-key=${key}`], { stdio: 'inherit' });
+  if (r.error) {
+    throw new Error(`[forge] failed to invoke ${script}: ${r.error.message}`);
+  }
+  if (r.status !== 0) {
+    throw new Error(
+      `[forge] Android platform-tools ${key} 未能就位(exit ${r.status})——见上方脚本输出的离线出路。`,
+    );
+  }
+}
+
 function stageAndroidPlatformTools(targetPlatform: string, targetArch: string): void {
   const key = targetPlatformKey(targetPlatform, targetArch);
   const srcDir = path.join(__dirname, '..', 'android-platform-tools-bin', key);
   const destDir = path.join(__dirname, 'resources', 'tools', 'android-platform-tools', key);
+
+  // win32 的二进制不入仓,先按 pin 版本下载/校验。注意不能靠 srcDir 是否存在来判断
+  // 二进制在不在 —— 同目录的 NOTICE.txt 与 source.properties 是有意入仓的文本
+  // (许可清单与版本 pin 都读它们),所以目录一直存在。
+  if (targetPlatform === 'win32') {
+    ensureAndroidPlatformToolsBinaries(key);
+  }
 
   if (!fs.existsSync(srcDir)) {
     fs.rmSync(destDir, { recursive: true, force: true });
@@ -819,6 +847,7 @@ function isMacForgePlatform(platform: ForgePlatform): boolean {
 
 const MACOS_VOICE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 const MACOS_AGENT_ISLAND_HELPER_DEPLOYMENT_TARGET = 'macos14.0';
+const MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET = 'macos13.0';
 
 function swiftTargetTriple(cpuArch: 'arm64' | 'x86_64', deploymentTarget: string): string {
   return `${cpuArch}-apple-${deploymentTarget}`;
@@ -964,6 +993,33 @@ function buildMacAgentIslandHelper(platform: ForgePlatform, arch: ForgeArch): vo
   console.log(`[forge:prePackage] macOS agent island helper (${swiftArchLabel(arch, MACOS_AGENT_ISLAND_HELPER_DEPLOYMENT_TARGET)}) -> ${dest} (${sizeMb} MB)`);
 }
 
+function buildMacComputerPermissionGuideHelper(platform: ForgePlatform, arch: ForgeArch): void {
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  const src = path.join(
+    __dirname,
+    'native',
+    'computer-permission-guide',
+    'macos-computer-permission-guide-helper.swift',
+  );
+  const destDir = path.join(__dirname, 'resources', 'tools', 'computer-permission-guide');
+  const dest = path.join(destDir, 'xdt-macos-computer-permission-guide-helper');
+  if (!fs.existsSync(src)) {
+    throw new Error(`[forge] macOS computer permission guide helper source missing at ${src}`);
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+  buildSwiftHelperForForgeArch(
+    src,
+    dest,
+    arch,
+    MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET,
+    ['-O'],
+    'computer permission guide helper',
+  );
+  fs.chmodSync(dest, 0o755);
+  const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
+  console.log(`[forge:prePackage] macOS computer permission guide helper (${swiftArchLabel(arch, MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET)}) -> ${dest} (${sizeMb} MB)`);
+}
+
 // MakerNSIS is Windows-only (native dependency), conditionally require to
 // avoid import errors on macOS / Linux.
 const makers: ForgeConfig['makers'] = [
@@ -975,7 +1031,7 @@ const makers: ForgeConfig['makers'] = [
       // 双 scheme:cindy 主 + xdt-maker 兼容(老分享链接不死)。
       mimeType: allDeepLinkSchemes().map((s) => `x-scheme-handler/${s}`),
       maintainer: 'Lizi <feedback@cindy.app>',
-      // deb 包名规范要求小写;跟随区域 exe 名(cn cindy / global cindyglobal)。
+      // deb 包名规范要求小写;跟随区域 exe 名(cn/global cindy / dev cindydev)。
       name: CINDY_EXE.toLowerCase(),
       bin: CINDY_EXE,
       productName: CINDY_EXE,
@@ -1015,9 +1071,10 @@ if (isWin) {
         // 才会接收 toast；否则原生 Notification 被静默丢弃。
         // 值按构建区域派生(shared/brandRegion 运行时同源),见文件头身份块。
         appId: CINDY_APP_ID,
-        // 安装目录名跟随区域(默认装到 …\Programs\<productName>):cn 'Cindy' /
-        // global 'CindyGlobal'。不设的话 app-builder 回落 package.json 的
-        // productName('Cindy'),两个区域会装进同一目录互相覆盖(双装红线)。
+        // 安装目录名跟随区域 exe 名(默认装到 …\Programs\<productName>):
+        // cn/global 'Cindy'(2026-07-26 显示名统一,双装同目录互抢已被 owner
+        // 接受)/ dev 'CindyDev'(仍与正式包隔离)。显式设值防 app-builder
+        // 回落 package.json productName 造成 dev 与正式包同目录。
         productName: CINDY_EXE,
         nsis: {
           oneClick: false,
@@ -1026,10 +1083,11 @@ if (isWin) {
           uninstallerIcon: 'resources/icon.ico',
           createDesktopShortcut: 'always',
           createStartMenuShortcut: true,
-          // 快捷方式显示名,跟随区域 exe 名(cn 'Cindy' / global 'CindyGlobal',
-          // 同名 .lnk 双装互抢)。installer.nsh 只清理/重建自家 .lnk——同机可能
-          // 并存老 XDMaker 安装,它的 xdt-maker.lnk / XDMaker.lnk 属于老 app,
-          // 绝不能删(共存红线,见 installer.nsh customInit 注释)。
+          // 快捷方式显示名,跟随区域 exe 名(cn/global 'Cindy'——同名 .lnk
+          // 双装互抢已被 owner 接受 / dev 'CindyDev')。installer.nsh 只清理/
+          // 重建自家 .lnk——同机可能并存老 XDMaker 安装,它的 xdt-maker.lnk /
+          // XDMaker.lnk 属于老 app,绝不能删(共存红线,见 installer.nsh
+          // customInit 注释)。
           shortcutName: CINDY_EXE,
           runAfterFinish: true,
           include: 'resources/installer.nsh',
@@ -1060,11 +1118,12 @@ const config: ForgeConfig = {
     // 所以这里显式覆盖 loudness / node-pty 整个目录。
     asar: { unpack: '**/{@img/{sharp-libvips-*,sharp-win32-*},loudness,native/sqlite-vec,node-pty}/**' },
     // 打包名(out 目录 / mac .app 包名 / Helper 目录名 / 主 plist CFBundleName)
-    // 按区域派生:不设的话 packager 回落 package.json productName('Cindy'),
-    // global 的 .app 会与 cn 撞名(双装时拖进 /Applications 直接覆盖)。mac 的
-    // Dock/Cmd+Tab/通知**显示名**由 postPackage 的 applyMacPackagedDisplayName
-    // 经 CFBundleDisplayName 统一拉回 Cindy(显示层共用 BRAND_NAME,标识符层
-    // 分区域;CFBundleName 不可动,Electron 靠它找 Helper,见该函数注释)。
+    // 按区域派生:cn/global 'Cindy'(2026-07-26 显示名统一,.app 撞名双装
+    // 互覆已被 owner 接受)/ dev 'CindyDev'(显式设值防 packager 回落
+    // package.json productName 让 dev 与正式包撞名)。mac 的 Dock/Cmd+Tab/
+    // 通知**显示名**由 postPackage 的 applyMacPackagedDisplayName 经
+    // CFBundleDisplayName 统一拉回 Cindy(对 dev 是唯一显示名来源;
+    // CFBundleName 不可动,Electron 靠它找 Helper,见该函数注释)。
     name: CINDY_EXE,
     executableName: CINDY_EXE,
     // mac bundle id(与 Windows AUMID 同值,按区域派生;cn/global 是两个可并存
@@ -1099,6 +1158,14 @@ const config: ForgeConfig = {
     //   Windows / Linux 完全忽略此字段。
     extendInfo: {
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
+      // agent 会话中访问受 TCC 保护的目录(桌面/文稿/下载)时，macOS 需要这些声明才能向
+      // 用户展示授权弹窗；缺失时系统直接静默拒绝，不弹窗。
+      NSDesktopFolderUsageDescription:
+        "Cindy's AI agent needs access to read and write files on your Desktop.",
+      NSDocumentsFolderUsageDescription:
+        "Cindy's AI agent needs access to read and write files in your Documents folder.",
+      NSDownloadsFolderUsageDescription:
+        "Cindy's AI agent needs access to read and write files in your Downloads folder.",
       // 智能通讯录导入: 经 osascript 向"通讯录"发 Apple Events(只读拉取)。
       // 缺这条声明 macOS 会不弹授权窗直接拒绝(-1743), 用户只看到静默失败。
       NSAppleEventsUsageDescription:
@@ -1157,6 +1224,12 @@ const config: ForgeConfig = {
     // the packaged app correctly in Privacy & Security > Microphone.
     extendHelperInfo: {
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
+      NSDesktopFolderUsageDescription:
+        "Cindy's AI agent needs access to read and write files on your Desktop.",
+      NSDocumentsFolderUsageDescription:
+        "Cindy's AI agent needs access to read and write files in your Documents folder.",
+      NSDownloadsFolderUsageDescription:
+        "Cindy's AI agent needs access to read and write files in your Downloads folder.",
     },
     // chat-data-localization F1：drizzle SQL migration 文件需要随包发出，
     // main 通过 process.resourcesPath/drizzle 读取。dev 模式 main 走源码路径，
@@ -1204,6 +1277,7 @@ const config: ForgeConfig = {
       buildMacVoiceInputTextInsertionHelper(platform, arch);
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
+      buildMacComputerPermissionGuideHelper(platform, arch);
     },
     // packaged dir 产出后、makers 跑之前签内部 .exe。这样 NSIS 包出来的
     // Setup.exe 内嵌的、和 publish 阶段从同一 packagedDir 打的热更 ZIP 内嵌的，
@@ -1241,6 +1315,13 @@ const config: ForgeConfig = {
           config: 'vite.watcher-host.config.ts',
           // 同 dbWorker:借 preload target 出 CJS 单文件；运行时是 Electron
           // utilityProcess（@parcel/watcher 的 native 崩溃隔离，见 watcher-host/）。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/workdir-probe-host/workdirProbeHostProcess.ts',
+          config: 'vite.preload.config.ts',
+          // UNC/SMB stat 不可取消；独立 utility process 超时后可直接终止，
+          // 避免把挂死 I/O 留在 Electron main 的 libuv 线程池。
           target: 'preload',
         },
         {

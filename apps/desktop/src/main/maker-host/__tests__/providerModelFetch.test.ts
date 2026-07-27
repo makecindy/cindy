@@ -42,10 +42,19 @@ describe('buildModelsFetchRequest', () => {
   });
 
   it('cc wire sends anthropic-version + x-api-key + Bearer; codex wire sends Bearer only', () => {
-    const cc = buildModelsFetchRequest(spec()).init.headers as Record<string, string>;
+    const cc = buildModelsFetchRequest(spec({
+      headers: {
+        Authorization: 'Bearer stale',
+        'X-API-Key': 'stale',
+        'x-extra': '1',
+      },
+    })).init.headers as Record<string, string>;
     expect(cc['anthropic-version']).toBe('2023-06-01');
     expect(cc['x-api-key']).toBe('sk-test');
     expect(cc['authorization']).toBe('Bearer sk-test');
+    expect(cc.Authorization).toBeUndefined();
+    expect(cc['X-API-Key']).toBeUndefined();
+    expect(cc['x-extra']).toBe('1');
 
     const codex = buildModelsFetchRequest(spec({ agent: 'codex' })).init.headers as Record<string, string>;
     expect(codex['anthropic-version']).toBeUndefined();

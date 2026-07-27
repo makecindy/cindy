@@ -206,11 +206,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       getPool: async () => (await import('../remote-ssh/index.js')).getRemoteSshPoolHydrated(),
       ensureReady: async (id: string) =>
         (await import('../remote-ssh/index.js')).ensureRemoteHostReady(id),
-      // 运行时门控(tool-call 时刻):Codex 共享 bridge 构建期 workingDir 为空,
-      // 下方 provider isEnabled wrap 的构建期检查覆盖不到项目级禁用,ssh_exec
-      // 这种远端执行工具必须在调用时刻按真实会话 workdir 再查一次 registry;
-      // workingDir undefined = 无会话上下文,回落全局开关判定。
-      isEnabledForWorkdir: (workingDir) => pluginRegistry.isEnabled('ssh', workingDir),
+      // 普通工具策略在 Claude runtime / Codex thread 创建时冻结。不要在 tool-call
+      // 时重新读取 registry，否则运行中的工具清单与执行权限会随 Settings 分叉。
       logger: createLogger('mcp/cindy_ssh'),
     },
     memory: {
@@ -328,7 +325,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // holder 同样是延迟查找，registerMakerIpc 里 init。
       githubIssue: (req) => submitGithubIssueForSession(req),
     },
-    // cindy_orca: 多 worker 协同 team 工具集。"协同模式"可关插件 gate 它。
+    // cindy_orca: 多 worker 协同 team 工具集。创建权限由 Main handler 实时校验。
     orca: {
       startTeam: wrap((s, params) => s.startTeam(params)),
       createWorker: wrap((s, params) => s.createWorker(params)),
@@ -365,8 +362,17 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         // 仍沿用现有 spawn-time gate + 环境重建语义。
         const deferOrdinaryCodexGate =
           ctx.agentKind === 'codex' && !ctx.workingDir && !GLOBAL_PLUGIN_IDS.has(pluginId);
+        // Orca 工具面必须在会话生命周期内保持稳定：Claude query 不会在项目策略
+        // 动态启用后重建 MCP。创建入口仍由 Main 按调用时的项目策略 fail closed。
+        const keepOrcaProviderStable = pluginId === 'collab';
         // Plugin gate：registry 负责 essential / machine / project / user / default 判定。
-        if (!deferOrdinaryCodexGate && !pluginRegistry.isEnabled(pluginId, ctx.workingDir)) return false;
+        if (
+          !keepOrcaProviderStable &&
+          !deferOrdinaryCodexGate &&
+          !pluginRegistry.isEnabled(pluginId, ctx.workingDir)
+        ) {
+          return false;
+        }
         // 继续走原 provider gate，例如 memory manager check、feishu bot source check。
         return originalIsEnabled?.(ctx) ?? true;
       },

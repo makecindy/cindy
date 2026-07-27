@@ -21,6 +21,8 @@ export interface OrcaEnableTeamParams {
   model?: string;
   effort?: OrcaWorkerEffort;
   fast?: boolean;
+  /** 显式选定的模型来源;语义见 OrcaWorkerCreateParams.providerId。 */
+  providerId?: string | null;
   delegateTask?: string;
 }
 
@@ -123,6 +125,7 @@ function normalizeEnableParams(params: OrcaEnableTeamParams): OrcaWorkerCreatePa
     model: params.model?.trim() || undefined,
     effort: params.effort,
     fast: params.fast,
+    providerId: params.providerId,
     initialTask: delegateTask,
   };
 }

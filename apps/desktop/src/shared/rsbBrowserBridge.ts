@@ -61,6 +61,35 @@ export const RSB_BROWSER_BRIDGE_PIN_CHANNEL = 'rsb-browser-bridge:pin';
 export const RSB_BROWSER_BRIDGE_UNPIN_CHANNEL = 'rsb-browser-bridge:unpin';
 
 /**
+ * Channel name for renderer → main "the user is currently looking at THIS
+ * browser tab (or none)". 资源看门狗据此区分前台 / 后台 guest:前台页面只在
+ * 内存超硬阈值时才强杀,后台页面可以被更激进地淘汰(对用户等价于 LRU 淘汰)。
+ * 语义是 per-renderer 的"全量状态"(最新一次上报覆盖之前的),不是增量事件。
+ */
+export const RSB_BROWSER_BRIDGE_SET_FOREGROUND_CHANNEL = 'rsb-browser-bridge:set-foreground';
+
+/**
+ * Channel name for renderer → main "force-kill the guest process of tab Y"。
+ * 用户在 crash banner(unresponsive)或资源提示条上点「强制终止」时调。kill 必须
+ * 在 main:`forcefullyCrashRenderer()` 是 webContents 的特权方法。归属校验与
+ * 截图 channel 相同(tabId → registry → hostWebContents === sender)。
+ */
+export const RSB_BROWSER_BRIDGE_FORCE_KILL_CHANNEL = 'rsb-browser-bridge:force-kill';
+
+/**
+ * Channel name for main → renderer resource watchdog events(见
+ * `main/rsb-browser-bridge/resource-watchdog.ts` 的阶梯策略):
+ *  - `evict-request`:后台 guest 资源超限,请 renderer 走 pool.release 淘汰
+ *    (tab 保留,下次激活重建 webview 重新加载)。
+ *  - `kill-notice`:main 即将 forcefullyCrashRenderer 强杀该前台 guest;renderer
+ *    记下原因,让随后的 render-process-gone crash banner 显示"内存过高被终止"
+ *    而不是笼统的"页面崩溃"。
+ *  - `cpu-alert`:前台 guest 持续高 CPU;renderer 显示非阻断提示条 + 终止按钮,
+ *    不自动杀(可能是用户在跑正经的重页面)。
+ */
+export const RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL = 'rsb-browser-bridge:resource-event';
+
+/**
  * Channel name for main → renderer "execute this tab operation against the
  * store" (RsbWebviewBackend dispatches `open` / `focus` / `close` actions).
  * The renderer answers via `tab-op-result` keyed by `reqId`.
@@ -169,3 +198,31 @@ export interface RsbBrowserBridgeSnapshotPayload {
 export interface RsbBrowserBridgePinPayload {
   tabId: string;
 }
+
+/**
+ * Payload renderer sends on `set-foreground`。`tabId = null` 表示该 renderer
+ * 当前没有可见的浏览器 tab(RSB 收起 / 切到非浏览器 tab)。
+ */
+export interface RsbBrowserBridgeSetForegroundPayload {
+  tabId: string | null;
+}
+
+/**
+ * Payload renderer sends on `force-kill`。
+ *
+ * `webContentsId`(可选)= renderer 侧 `webview.getWebContentsId()` 的现值,
+ * 供 registry 未命中时兜底:页面在首个 dom-ready 前就把 renderer 锁死(内联
+ * 死循环)时,tab 还没 report 进 TabRegistry,但 guest 已 attach、unresponsive
+ * banner 已出现 —— 没有兜底的话「强制终止」按钮会静默失效。main 端对该 id 做
+ * 与 report 相同的归属校验(必须是 webview guest 且宿主为 sender)后才执行。
+ */
+export interface RsbBrowserBridgeForceKillPayload {
+  tabId: string;
+  webContentsId?: number;
+}
+
+/** Resource watchdog event main pushes on `resource-event`(kind 语义见 channel 注释)。 */
+export type RsbBrowserBridgeResourceEvent =
+  | { tabId: string; kind: 'evict-request' }
+  | { tabId: string; kind: 'kill-notice'; cause: 'memory' }
+  | { tabId: string; kind: 'cpu-alert'; cpuPercent: number };

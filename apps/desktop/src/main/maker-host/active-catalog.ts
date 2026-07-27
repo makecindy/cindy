@@ -23,7 +23,13 @@
  * createDesktopProviderService.ts,这样依赖本 holder 的纯逻辑模块(及其单测)不被 electron 污染。
  */
 
-import { BUNDLED_CATALOG, type AgentKind, type Catalog, type CatalogModel, type Provider } from '@cindy/model-providers';
+import {
+  BUNDLED_CATALOG,
+  type AgentKind,
+  type Catalog,
+  type CatalogModel,
+  type Provider,
+} from '@cindy/model-providers';
 
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 
@@ -47,14 +53,22 @@ const discoveredByProvider = new Map<string, Partial<Record<AgentKind, CatalogMo
 export interface XdGatewayAgentOverride {
   contextWindow?: number;
   efforts?: string[];
-  defaultEffort?: string;
+  defaultEffort?: string | null;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
 }
 
-/** 服务端下发的 XD 网关聊天模型条目(shared/modelAccess ModelAccessGatewayModel 同形)。 */
+/** 服务端下发的 XD 网关聊天模型条目(shared/modelAccess ModelAccessGatewayModel 的子集)。 */
 export interface XdGatewayModelInfo {
   id: string;
+  /** AIGateway 折扣比例(0..1),折后价 = 原价 × (1 - costDiscount)。 */
+  costDiscount?: number;
+  /** AIGateway 标准 token 单价(per token)。 */
+  inputCostPerToken?: number;
+  outputCostPerToken?: number;
+  /** AIGateway 缓存 token 单价(per token);参与「免费」判定与价格展示。 */
+  cacheReadInputTokenCost?: number;
+  cacheCreationInputTokenCost?: number;
   /** 进哪些 runtime tab;缺省 = 仅 claude-code 兜底。 */
   agents?: AgentKind[];
   name?: string;
@@ -62,9 +76,9 @@ export interface XdGatewayModelInfo {
   description?: string;
   contextWindow?: number;
   efforts?: string[];
-  defaultEffort?: string;
+  defaultEffort?: string | null;
   sortOrder?: number;
-  /** Fast 支持;缺省按 true(未登记模型的确定性默认:开了没效果无害)。 */
+  /** Fast 支持;缺省按 false(上游未声明时不猜测能力)。 */
   supportsFastMode?: boolean;
   /** 默认可见性;缺省按 true。 */
   defaultEnabled?: boolean;
@@ -107,8 +121,46 @@ const VALID_EFFORTS: ReadonlySet<string> = new Set([
 ]);
 
 type Effort = CatalogModel['efforts'][number];
+
+function nonNegativeFiniteOrUndefined(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function effectiveGatewayModelCost(model: XdGatewayModelInfo): CatalogModel['cost'] | undefined {
+  const input = model.inputCostPerToken;
+  const output = model.outputCostPerToken;
+  if (
+    typeof input !== 'number' ||
+    !Number.isFinite(input) ||
+    input < 0 ||
+    typeof output !== 'number' ||
+    !Number.isFinite(output) ||
+    output < 0
+  ) {
+    return undefined;
+  }
+  const discount =
+    typeof model.costDiscount === 'number' &&
+    Number.isFinite(model.costDiscount) &&
+    model.costDiscount > 0 &&
+    model.costDiscount <= 1
+      ? model.costDiscount
+      : 0;
+  const multiplier = 1 - discount;
+  const cacheRead = nonNegativeFiniteOrUndefined(model.cacheReadInputTokenCost);
+  const cacheWrite = nonNegativeFiniteOrUndefined(model.cacheCreationInputTokenCost);
+  return {
+    input: input * 1_000_000 * multiplier,
+    output: output * 1_000_000 * multiplier,
+    ...(cacheRead !== undefined ? { cacheRead: cacheRead * 1_000_000 * multiplier } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite: cacheWrite * 1_000_000 * multiplier } : {}),
+  };
+}
+
 /** base + custom + discovered augment 的合并缓存;null = 待重算(惰性)。 */
 let merged: Catalog | null = null;
+/** bundled + active v1 `cindyModelMeta` 的合并索引；目录变化时与 merged 一起失效。 */
+let effectiveCindyModelMetaIndex: Map<string, CindyModelMetaFields> | null = null;
 
 /**
  * 目录修订号。所有会改变 getActiveCatalog() 结果的写入都必须经过 markChanged，
@@ -121,6 +173,7 @@ let changedListener: ((nextRevision: number) => void) | null = null;
 
 function markChanged(): void {
   merged = null;
+  effectiveCindyModelMetaIndex = null;
   revision += 1;
   changedListener?.(revision);
 }
@@ -143,8 +196,7 @@ function augmentModels(
         .sort(
           (a, b) =>
             (a.model.sortOrder ?? Number.MAX_SAFE_INTEGER) -
-              (b.model.sortOrder ?? Number.MAX_SAFE_INTEGER) ||
-            a.index - b.index,
+              (b.model.sortOrder ?? Number.MAX_SAFE_INTEGER) || a.index - b.index,
         )
         .map(({ model }) => model)
     : combined;
@@ -172,7 +224,7 @@ function toChatgptBridgeModel(model: CatalogModel): CatalogModel {
     model.defaultEffort && CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS.has(model.defaultEffort)
       ? bridgeEfforts.includes('xhigh')
         ? 'xhigh'
-        : bridgeEfforts[bridgeEfforts.length - 1] ?? null
+        : (bridgeEfforts[bridgeEfforts.length - 1] ?? null)
       : model.defaultEffort;
   return {
     ...model,
@@ -197,7 +249,8 @@ function projectCodexModelsToClaude(p: Provider): Provider {
   const alignedExisting = existing.map((model) => {
     if (!model.id.startsWith(CHATGPT_MODEL_PREFIX)) return model;
     const source = canonical.get(model.id.slice(CHATGPT_MODEL_PREFIX.length));
-    if (!source || (model.name === source.name && model.sortOrder === source.sortOrder)) return model;
+    if (!source || (model.name === source.name && model.sortOrder === source.sortOrder))
+      return model;
     aligned = true;
     return { ...model, name: source.name, sortOrder: source.sortOrder };
   });
@@ -211,9 +264,10 @@ function projectCodexModelsToClaude(p: Provider): Provider {
 const DYNAMIC_LIST_PROVIDER_IDS: ReadonlySet<string> = new Set(['anthropic', 'openai', 'xd']);
 
 /**
- * cindyModelMeta 里客户端认识的字段子集。展示字段直接覆盖发现条目；effort 字段只在
- * Anthropic 动态通道**没有能力信息**时作为基线，由 model-discovery/anthropic 消费。
- * 上游显式能力始终优先，meta 不在 active catalog overlay 阶段改写能力。
+ * cindyModelMeta 里客户端认识的字段子集。展示字段直接覆盖发现条目；context / effort
+ * 字段只在 Anthropic 动态通道**没有能力信息**时作为基线，由
+ * model-discovery/anthropic 消费。上游显式能力始终优先，meta 不在 active catalog
+ * overlay 阶段改写能力。
  */
 interface CindyModelMetaFields {
   name?: string;
@@ -221,6 +275,7 @@ interface CindyModelMetaFields {
   description?: string;
   sortOrder?: number;
   defaultEnabled?: boolean;
+  contextWindow?: number;
   efforts?: Effort[];
   defaultEffort?: Effort | null;
 }
@@ -244,12 +299,22 @@ function buildCindyModelMetaIndex(meta: unknown): Map<string, CindyModelMetaFiel
     const fields: CindyModelMetaFields = {};
     if (typeof e.name === 'string' && e.name.length > 0) fields.name = e.name;
     if (typeof e.group === 'string' && e.group.length > 0) fields.group = e.group;
-    if (typeof e.description === 'string' && e.description.length > 0) fields.description = e.description;
-    if (typeof e.sortOrder === 'number' && Number.isFinite(e.sortOrder)) fields.sortOrder = e.sortOrder;
+    if (typeof e.description === 'string' && e.description.length > 0)
+      fields.description = e.description;
+    if (typeof e.sortOrder === 'number' && Number.isFinite(e.sortOrder))
+      fields.sortOrder = e.sortOrder;
     if (typeof e.defaultEnabled === 'boolean') fields.defaultEnabled = e.defaultEnabled;
+    if (
+      typeof e.contextWindow === 'number' &&
+      Number.isFinite(e.contextWindow) &&
+      e.contextWindow > 0
+    ) {
+      fields.contextWindow = e.contextWindow;
+    }
     if (Array.isArray(e.efforts)) {
-      const efforts = e.efforts.filter((value): value is Effort =>
-        typeof value === 'string' && VALID_EFFORTS.has(value));
+      const efforts = e.efforts.filter(
+        (value): value is Effort => typeof value === 'string' && VALID_EFFORTS.has(value),
+      );
       if (efforts.length === e.efforts.length) fields.efforts = efforts;
     }
     if (e.defaultEffort === null) fields.defaultEffort = null;
@@ -261,9 +326,48 @@ function buildCindyModelMetaIndex(meta: unknown): Map<string, CindyModelMetaFiel
   return index;
 }
 
+/**
+ * 远端 v1 元数据允许按模型、按字段增量覆盖 bundled v1。旧远端目录经常只带
+ * 部分新字段或缺少新模型；缺口必须回落 bundled，否则已知 200k 模型会落入
+ * 1M 启发式。非 v1 active 信封仍整段忽略，不能拿 bundled v1 混入未知 schema。
+ */
+function buildEffectiveCindyModelMetaIndex(): Map<string, CindyModelMetaFields> {
+  if (effectiveCindyModelMetaIndex) return effectiveCindyModelMetaIndex;
+
+  const bundled = buildCindyModelMetaIndex(BUNDLED_CATALOG.cindyModelMeta);
+  if (!base || base.cindyModelMeta === undefined) {
+    effectiveCindyModelMetaIndex = bundled;
+    return effectiveCindyModelMetaIndex;
+  }
+
+  const activeMeta = base.cindyModelMeta;
+  if (
+    !activeMeta ||
+    typeof activeMeta !== 'object' ||
+    Array.isArray(activeMeta) ||
+    (activeMeta as { version?: unknown }).version !== 1
+  ) {
+    effectiveCindyModelMetaIndex = new Map();
+    return effectiveCindyModelMetaIndex;
+  }
+
+  const effective = new Map<string, CindyModelMetaFields>();
+  for (const [id, fields] of bundled) effective.set(id, { ...fields });
+  for (const [id, fields] of buildCindyModelMetaIndex(activeMeta)) {
+    effective.set(id, { ...effective.get(id), ...fields });
+  }
+  effectiveCindyModelMetaIndex = effective;
+  return effectiveCindyModelMetaIndex;
+}
+
 export interface CindyModelEffortBaseline {
   efforts: Effort[];
   defaultEffort: Effort | null;
+}
+
+/** 返回当前目录的已知上下文窗口；只供动态发现缺少上游明确值时兜底。 */
+export function getCindyModelContextWindow(modelId: string): number | null {
+  return buildEffectiveCindyModelMetaIndex().get(modelId)?.contextWindow ?? null;
 }
 
 /**
@@ -271,7 +375,7 @@ export interface CindyModelEffortBaseline {
  * 模型是否存在仍完全由 HTTP / SDK 动态清单决定。
  */
 export function getCindyModelEffortBaseline(modelId: string): CindyModelEffortBaseline | null {
-  const fields = buildCindyModelMetaIndex((base ?? BUNDLED_CATALOG).cindyModelMeta).get(modelId);
+  const fields = buildEffectiveCindyModelMetaIndex().get(modelId);
   if (!fields?.efforts) return null;
   const efforts = [...fields.efforts];
   const defaultEffort =
@@ -280,7 +384,7 @@ export function getCindyModelEffortBaseline(modelId: string): CindyModelEffortBa
       ? fields.defaultEffort
       : efforts.includes('high')
         ? 'high'
-        : efforts[efforts.length - 1] ?? null;
+        : (efforts[efforts.length - 1] ?? null);
   return { efforts, defaultEffort };
 }
 
@@ -289,7 +393,10 @@ export function getCindyModelEffortBaseline(modelId: string): CindyModelEffortBa
  * 典型修正:订阅 `/v1/models` / SDK 捕获给的家族级名字("Fable")→ 产品命名
  * ("Fable 5");上游无排序 → 产品排序。
  */
-function overlayCindyMeta(model: CatalogModel, fields: CindyModelMetaFields | undefined): CatalogModel {
+function overlayCindyMeta(
+  model: CatalogModel,
+  fields: CindyModelMetaFields | undefined,
+): CatalogModel {
   if (!fields) return model;
   return {
     ...model,
@@ -329,7 +436,9 @@ function computeMerged(): Catalog {
   // 动态清单供应商先清零静态模型(2026-07-19 统一重构):无论目录来自 bundled 还是
   // 远端(含仍带静态段的旧版 v1 OSS 文件),这三家的清单**只信运行时注入**——
   // 否则过渡期旧 OSS 文件会让静态清单复活,违反「无可用性证明不展示」。
-  const normalized = providers.map((p) => (DYNAMIC_LIST_PROVIDER_IDS.has(p.id) ? withEmptyModels(p) : p));
+  const normalized = providers.map((p) =>
+    DYNAMIC_LIST_PROVIDER_IDS.has(p.id) ? withEmptyModels(p) : p,
+  );
   if (normalized.some((p, index) => p !== providers[index])) providers = normalized;
 
   // 同一份规范快照先进入 Codex,再从「静态 first-wins 后的生效 Codex 列表」投影 bridge。
@@ -366,14 +475,12 @@ function computeMerged(): Catalog {
   // 三层合并:存在性=发现,展示=产品目录,用户 override 永远最高)——订阅通道返回的
   // 家族级名字("Fable")在此归位为产品命名("Fable 5");能力字段仍以发现为准。
   if (anthropicModels.length > 0) {
-    const metaIndex = buildCindyModelMetaIndex(b.cindyModelMeta);
+    const metaIndex = buildEffectiveCindyModelMetaIndex();
     const overlaid = sortModelsByOrder(
       anthropicModels.map((m) => overlayCindyMeta(m, metaIndex.get(m.id))),
     );
     providers = providers.map((p) =>
-      p.id === 'anthropic'
-        ? { ...p, models: { ...p.models, 'claude-code': overlaid } }
-        : p,
+      p.id === 'anthropic' ? { ...p, models: { ...p.models, 'claude-code': overlaid } } : p,
     );
   }
 
@@ -383,7 +490,7 @@ function computeMerged(): Catalog {
   //   - perAgent 覆盖块按 tab 应用在基线字段之上;
   //   - efforts 字段缺失 = 未登记 → 合成 3 档(low/medium/high,默认 high);
   //     显式 [] = 登记为不可调 → 尊重为空;
-  //   - supportsFastMode 缺失 → true(开了没效果无害,但不能没有);
+  //   - supportsFastMode 缺失 → false(上游未声明就不能声称支持);
   //   - defaultEnabled 缺失 → 默认可见。
   // 放在所有 augment 之后:只影响 xd 供应商自己的模型列表,同 id 模型经其它供应商
   // (如 anthropic 订阅直连)仍照常可用。
@@ -396,7 +503,8 @@ function computeMerged(): Catalog {
     for (const agent of agentKeys) models[agent] = [];
     for (const gm of gwModels) {
       // tab 归属:服务端 agents > 仅 claude-code(网关 /v1/messages 翻译覆盖面最广,不猜)
-      const targetAgents: AgentKind[] = gm.agents && gm.agents.length > 0 ? gm.agents : ['claude-code'];
+      const targetAgents: AgentKind[] =
+        gm.agents && gm.agents.length > 0 ? gm.agents : ['claude-code'];
       for (const agent of targetAgents) {
         if (!models[agent]) continue; // 未知 agent 键防御(wire 数据)
         const ov = gm.perAgent?.[agent] ?? {};
@@ -406,7 +514,7 @@ function computeMerged(): Catalog {
           rawEfforts === undefined
             ? ['low', 'medium', 'high']
             : rawEfforts.filter((e): e is Effort => VALID_EFFORTS.has(e));
-        const rawDefault = ov.defaultEffort ?? gm.defaultEffort;
+        const rawDefault = ov.defaultEffort !== undefined ? ov.defaultEffort : gm.defaultEffort;
         const defaultEffort: Effort | null =
           rawDefault && VALID_EFFORTS.has(rawDefault) && efforts.includes(rawDefault as Effort)
             ? (rawDefault as Effort)
@@ -416,6 +524,7 @@ function computeMerged(): Catalog {
                 ? efforts[efforts.length - 1]
                 : null;
         const defaultEnabled = ov.defaultEnabled ?? gm.defaultEnabled;
+        const cost = effectiveGatewayModelCost(gm);
         const merged: CatalogModel = {
           id: gm.id,
           name: gm.name ?? gm.id,
@@ -423,19 +532,19 @@ function computeMerged(): Catalog {
           contextWindow: ov.contextWindow ?? gm.contextWindow ?? 200_000,
           efforts,
           defaultEffort,
-          supportsFastMode: ov.supportsFastMode ?? gm.supportsFastMode ?? true,
+          supportsFastMode: ov.supportsFastMode ?? gm.supportsFastMode ?? false,
           ...(gm.description !== undefined ? { description: gm.description } : {}),
           ...(gm.sortOrder !== undefined ? { sortOrder: gm.sortOrder } : {}),
           ...(defaultEnabled !== undefined ? { defaultEnabled } : {}),
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
+          ...(cost ? { cost } : {}),
         };
         models[agent]!.push(merged);
       }
     }
     // 每个 tab 内按 sortOrder 稳定排序(无 sortOrder 的合成条目排最后,按进入序)。
     for (const agent of agentKeys) {
-      models[agent] = models[agent]!
-        .map((model, index) => ({ model, index }))
+      models[agent] = models[agent]!.map((model, index) => ({ model, index }))
         .sort(
           (a, b) =>
             (a.model.sortOrder ?? Number.MAX_SAFE_INTEGER) -

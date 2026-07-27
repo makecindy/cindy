@@ -114,7 +114,7 @@ export function createSlashHandlers(
         const row =
           existing ?? (await repo.createSession(ctx.botContextId, ctx.userId, undefined, prepared));
         if (existing) {
-          await resetSessionToDefaults(row.id, adapter.config, prepared);
+          await resetSessionToDefaults(row.id, adapter.config, prepared, adapter.channel);
         }
         await turnRunner.disposeOneSession(row.id);
         await safeSendText(ctx.userId, ui.slash.new);

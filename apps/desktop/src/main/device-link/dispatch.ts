@@ -56,6 +56,12 @@ import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/inde
 import { setBroadcastTapListener } from './broadcast-tap';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
+import { MAKER_PUSH } from '../maker-ipc/channels.js';
+import { sanitizeGhostSetupRequestForRemote } from '../cindy-brain/ghostSetupInteractionBridge.js';
+import {
+  remoteWorkingDirRejectionToIpcError,
+  type RemoteWorkingDirCheckResult,
+} from './remote-workdir-guard';
 
 const log = createLogger('device-link-dispatch');
 
@@ -102,12 +108,14 @@ const PATH_GUARDED_CHANNELS: ReadonlyMap<string, 'workingDir' | 'baseRepo'> = ne
   ['worktree:create', 'baseRepo'],
 ]);
 
-/** host 注入的 workingDir 校验器(null = 未注入,放行;测试默认不注入故行为不变) */
-let workingDirGuard: ((dir: string) => boolean | Promise<boolean>) | null = null;
+type RemoteWorkingDirGuardValue = boolean | RemoteWorkingDirCheckResult;
 
-/** 注入远程 create/fork 的 workingDir 校验器(register.ts 在 maker 就绪后接入)。 */
+/** host 注入的 workingDir 校验器(null = 未注入,放行;布尔返回值仅作旧测试兼容) */
+let workingDirGuard: ((dir: string) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>) | null = null;
+
+/** 注入远程 create-session/worktree:create 的本地目录校验器(register.ts 在 maker 就绪后接入)。 */
 export function setRemoteWorkingDirGuard(
-  guard: ((dir: string) => boolean | Promise<boolean>) | null,
+  guard: ((dir: string) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>) | null,
 ): void {
   workingDirGuard = guard;
 }
@@ -284,12 +292,24 @@ function forwardPush(channel: string, payload: unknown): void {
   if (!activeClient) return;
   const topic = topicForPush(channel, payload);
   if (!topic) return;
+  const remotePayload =
+    channel === MAKER_PUSH.INTERACTION_REQUEST &&
+    payload &&
+    typeof payload === 'object' &&
+    'request' in payload
+      ? {
+          ...payload,
+          request: sanitizeGhostSetupRequestForRemote(
+            (payload as { request: unknown }).request,
+          ),
+        }
+      : payload;
   const dsts = subscriptions.getControllersForTopic(topic);
   for (const dst of dsts) {
     // 转发是尽力而为的旁路:单个控制端的帧超限(PAYLOAD_TOO_LARGE,如大 tool 输出)/ 连接异常
     // 绝不能冒泡——它会经 tapWindowBroadcast 回到 broadcastToAllWindows,让被控端**本机** renderer
     // 漏收该事件(本地 UI 是第一优先);per-dst 接住也避免一个控制端坏帧拖垮其它控制端的转发。
-    sendPushBestEffort(dst, channel, payload);
+    sendPushBestEffort(dst, channel, remotePayload);
   }
 }
 
@@ -933,18 +953,30 @@ export async function runInvoke(
   }
 
   // 参数级收敛:create-session 的 workingDir / worktree:create 的 baseRepo 决定 agent
-  // 在哪个目录起进程或跑 git,allowlist 只挡 channel 不挡 args。把目录限定到被控端
-  // 已知集合,挡掉任意路径越权执行。
+  // 在哪个目录起进程或跑 git,allowlist 只挡 channel 不挡 args。路径必须在被控端
+  // 当前可访问且确为目录,历史记录不能替代实时探测。
   const guardedField = PATH_GUARDED_CHANNELS.get(payload.channel);
   if (guardedField && workingDirGuard) {
     const dir = extractGuardedPath(payload.args ?? [], guardedField);
-    if (dir && !(await workingDirGuard(dir))) {
+    const guardResult = dir ? await workingDirGuard(dir) : true;
+    if (guardResult === false) {
       log.warn(`blocked remote ${payload.channel} to unknown ${guardedField} from ${shortId(src)}: ${dir}`);
       return {
         ok: false,
         error: {
           code: 'CHANNEL_NOT_ALLOWED',
           message: `${guardedField} not allowed for remote ${payload.channel}`,
+        },
+      };
+    }
+    if (guardResult !== true && !guardResult.allowed) {
+      const rejection = remoteWorkingDirRejectionToIpcError(guardResult.reason);
+      log.warn(`blocked remote ${payload.channel} for ${guardedField} reason ${guardResult.reason} from ${shortId(src)}`);
+      return {
+        ok: false,
+        error: {
+          code: 'IPC_ERROR',
+          message: `[${rejection.code}] ${rejection.message}`,
         },
       };
     }

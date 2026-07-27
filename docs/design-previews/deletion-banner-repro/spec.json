@@ -1,0 +1,122 @@
+{
+  "meta": {
+    "name": "deletion-banner-repro",
+    "pr": "无(bug 复现 demo,不提 PR;产品源码一行未改)",
+    "summary": {
+      "what": "复现疑似 bug:账号注销状态横幅被登录面板完全覆盖不可见(desk + phone,pending/processing/completed 三态)",
+      "how": "忠实渲染当前源码层叠——横幅/面板/社交行三兄弟同容器:横幅=文档流首子(static,无 z-index),面板=absolute top-0 不透明,社交行=absolute top=480 两端同构;完整登录页家具(标题/global 徽标/副标题/输入框/主按钮/社交整行/协议行)全部按 truth 渲染;右帧为推测的意图布局对照",
+      "accept": "门 A-D + 自定义重叠门:横幅与面板重叠率 ≥98%、elementFromPoint(横幅中心) 命中面板、面板底色不透明;意图帧同探针不命中作方法论自证;数值表给出三状态横幅高/意图面板底/撞社交行 y=480/冲出组高 560 的实测量化"
+    }
+  },
+  "matrix": {
+    "platforms": ["desk", "phone"],
+    "regions": ["cn", "global"],
+    "systems": ["mac", "ios"],
+    "themes": ["light", "dark"],
+    "langs": ["zh-CN", "en"]
+  },
+  "states": [
+    {
+      "id": "deletion-pending",
+      "via": [{ "click": "[data-qa-state-btn=\"deletion-pending\"]" }, { "expect": "deletion-pending" }]
+    },
+    {
+      "id": "deletion-processing",
+      "via": [{ "click": "[data-qa-state-btn=\"deletion-processing\"]" }, { "expect": "deletion-processing" }]
+    },
+    {
+      "id": "deletion-completed",
+      "via": [{ "click": "[data-qa-state-btn=\"deletion-completed\"]" }, { "expect": "deletion-completed" }]
+    }
+  ],
+  "verify": {
+    "cases": [
+      { "id": "desk-cn-light-zh", "prefs": { "plat": "desk", "region": "cn", "os": "mac", "mode": "light", "lang": "zh-CN" } },
+      { "id": "desk-cn-dark-zh", "prefs": { "plat": "desk", "region": "cn", "os": "mac", "mode": "dark", "lang": "zh-CN" } },
+      { "id": "desk-global-light-en", "prefs": { "plat": "desk", "region": "global", "os": "mac", "mode": "light", "lang": "en" } },
+      { "id": "desk-global-dark-zh", "prefs": { "plat": "desk", "region": "global", "os": "mac", "mode": "dark", "lang": "zh-CN" } },
+      { "id": "phone-cn-light-zh", "prefs": { "plat": "phone", "region": "cn", "os": "ios", "mode": "light", "lang": "zh-CN" } },
+      { "id": "phone-cn-dark-zh", "prefs": { "plat": "phone", "region": "cn", "os": "ios", "mode": "dark", "lang": "zh-CN" } },
+      { "id": "phone-global-light-en", "prefs": { "plat": "phone", "region": "global", "os": "ios", "mode": "light", "lang": "en" } },
+      { "id": "phone-global-dark-en", "prefs": { "plat": "phone", "region": "global", "os": "ios", "mode": "dark", "lang": "en" } }
+    ],
+    "noClip": [".frame-intent .db-title", ".frame-intent .db-copy", ".lp-title", ".lp-consent-statement", ".frame-intent .lp-social-row"],
+    "persistence": {
+      "via": [
+        { "click": "[data-qa-pref=\"plat:phone\"]" },
+        { "click": "[data-qa-pref=\"region:global\"]" },
+        { "click": "[data-qa-pref=\"mode:dark\"]" },
+        { "click": "[data-qa-pref=\"lang:en\"]" }
+      ],
+      "expected": { "plat": "phone", "region": "global", "os": "ios", "mode": "dark", "lang": "en" },
+      "storageKey": "qa-hifi:deletion-banner-repro:prefs",
+      "reloads": 2,
+      "initialState": "deletion-pending"
+    }
+  },
+  "bindings": [
+    { "sel": ".frame-bug .lp-panel", "prop": "background-color", "truth": "desk.colors.panelBg.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .lp-panel", "prop": "background-color", "truth": "desk.colors.panelBg.dark", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".frame-bug .lp-panel", "prop": "width", "truth": "desk.geometry.panel.width", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-panel", "prop": "height", "truth": "desk.geometry.panel.height", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-panel", "prop": "border-top-left-radius", "truth": "desk.geometry.panel.radius", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-panel", "prop": "top", "truth": "desk.geometry.panel.top", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-panel", "prop": "left", "truth": "desk.geometry.panel.left", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .db-banner", "prop": "background-color", "truth": "desk.colors.bannerBg.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .db-banner", "prop": "background-color", "truth": "desk.colors.bannerBg.dark", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".frame-bug .db-banner", "prop": "border-top-color", "truth": "desk.colors.bannerBorder.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .db-banner", "prop": "border-top-color", "truth": "desk.colors.bannerBorder.dark", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".frame-bug .db-banner", "prop": "border-top-left-radius", "truth": "desk.geometry.banner.radius", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .db-title", "prop": "color", "truth": "desk.colors.bannerTitleText.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .db-title", "prop": "color", "truth": "desk.colors.bannerTitleText.dark", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".frame-bug .db-title", "prop": "font-size", "truth": "desk.geometry.banner.titleFontSize", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .db-copy", "prop": "color", "truth": "desk.colors.bannerCopyText.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .db-copy", "prop": "color", "truth": "desk.colors.bannerCopyText.dark", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".frame-bug .db-copy", "prop": "font-size", "truth": "desk.geometry.banner.copyFontSize", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-social-row", "prop": "top", "truth": "desk.geometry.social.y", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-social-row", "prop": "height", "truth": "desk.geometry.social.size", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-social-apple", "prop": "width", "truth": "desk.geometry.social.size", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-social-apple", "prop": "background-color", "truth": "desk.colors.appleCircleBg.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .lp-social-apple", "prop": "background-color", "truth": "desk.colors.appleCircleBg.dark", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".frame-bug .lp-social-sso", "prop": "background-color", "truth": "desk.colors.primaryButtonBg.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .lp-consent-row", "prop": "top", "truth": "desk.geometry.consentRow.y", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-title", "prop": "font-size", "truth": "desk.geometry.title.fontSize", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-title", "prop": "top", "truth": "desk.geometry.title.y", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-input", "prop": "top", "truth": "desk.geometry.control.inputY", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-input", "prop": "height", "truth": "desk.geometry.control.height", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-primary", "prop": "top", "truth": "desk.geometry.control.buttonY", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }] },
+    { "sel": ".frame-bug .lp-primary", "prop": "background-color", "truth": "desk.colors.primaryButtonBg.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug [data-testid=\"login-global-pill\"]", "prop": "width", "truth": "desk.geometry.globalPill.width", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"region:global\"]" }] },
+    { "sel": ".frame-bug [data-testid=\"login-global-pill\"]", "prop": "height", "truth": "desk.geometry.globalPill.height", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"region:global\"]" }] },
+    { "sel": ".frame-bug [data-testid=\"login-global-pill\"]", "prop": "background-color", "truth": "desk.colors.brandAccent.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"region:global\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug [data-testid=\"login-global-pill\"]", "prop": "font-size", "truth": "desk.geometry.globalPill.fontSize", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:desk\"]" }, { "click": "[data-qa-pref=\"region:global\"]" }] },
+
+    { "sel": ".frame-bug .lp-panel", "prop": "background-color", "truth": "mobile.colors.panelBg.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .lp-panel", "prop": "background-color", "truth": "mobile.colors.panelBg.dark", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }, { "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".frame-bug .lp-panel", "prop": "width", "truth": "mobile.geometry.panel.width", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-panel", "prop": "height", "truth": "mobile.geometry.panel.height", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-panel", "prop": "border-top-left-radius", "truth": "mobile.geometry.panel.radius", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-panel", "prop": "top", "truth": "mobile.geometry.panel.top", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-panel", "prop": "left", "truth": "mobile.geometry.panel.left", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .db-banner", "prop": "background-color", "truth": "mobile.colors.bannerBg.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .db-banner", "prop": "border-top-color", "truth": "mobile.colors.bannerBorder.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .db-banner", "prop": "border-top-color", "truth": "mobile.colors.bannerBorder.dark", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }, { "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".frame-bug .db-banner", "prop": "border-top-left-radius", "truth": "mobile.geometry.banner.radius", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .db-title", "prop": "color", "truth": "mobile.colors.bannerTitleText.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .db-title", "prop": "color", "truth": "mobile.colors.bannerTitleText.dark", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }, { "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".frame-bug .db-title", "prop": "font-size", "truth": "mobile.geometry.banner.titleFontSize", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .db-copy", "prop": "color", "truth": "mobile.colors.bannerCopyText.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .db-copy", "prop": "color", "truth": "mobile.colors.bannerCopyText.dark", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }, { "click": "[data-qa-pref=\"mode:dark\"]" }] },
+    { "sel": ".frame-bug .db-copy", "prop": "font-size", "truth": "mobile.geometry.banner.copyFontSize", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-social-row", "prop": "top", "truth": "mobile.geometry.social.y", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-social-row", "prop": "height", "truth": "mobile.geometry.social.size", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-social-apple", "prop": "width", "truth": "mobile.geometry.social.size", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-social-apple", "prop": "background-color", "truth": "mobile.colors.appleCircleBg.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] },
+    { "sel": ".frame-bug .lp-consent-row", "prop": "top", "truth": "mobile.geometry.consentRow.rowTop", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-title", "prop": "font-size", "truth": "mobile.geometry.title.fontSize", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-input", "prop": "top", "truth": "mobile.geometry.control.inputY", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-input", "prop": "height", "truth": "mobile.geometry.control.height", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-primary", "prop": "top", "truth": "mobile.geometry.control.buttonY", "kind": "length", "scaled": true, "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }] },
+    { "sel": ".frame-bug .lp-primary", "prop": "background-color", "truth": "mobile.colors.primaryButtonBg.light", "kind": "color", "via": [{ "click": "[data-qa-pref=\"plat:phone\"]" }, { "click": "[data-qa-pref=\"mode:light\"]" }] }
+  ]
+}

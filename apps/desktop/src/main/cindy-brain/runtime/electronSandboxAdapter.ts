@@ -205,6 +205,7 @@ export function setGhostConnectionsHandler(handler: GhostConnectionsProtocolHand
 
 /** 该分区是否已挂过协议 handler(session 分区随 app 生命周期,挂一次即可)。 */
 const partitionRegistered = new Set<string>();
+const partitionGhost = new Map<string, { dir: string; entry: string }>();
 
 /**
  * 确保某意识分区上的 cindy-ghost:// 协议 handler 就位(幂等)。
@@ -224,14 +225,16 @@ const GHOST_HTML_CSP =
   "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:";
 
 function registerGhostProtocol(partition: string, ghost: InstalledGhost): void {
+  partitionGhost.set(partition, {
+    dir: ghost.dir,
+    entry: ghost.manifest.entry,
+  });
   if (partitionRegistered.has(partition)) return;
   // 注意:登记发生在全部挂载成功之后(函数末尾)——session.fromPartition 在
   // app ready 前会 throw,若先登记后挂载,失败分区会被永久标记"已注册"而
   // 实际无 handler,面板与电子脑一起哑火(review P0 的中毒模式)。
   const ses = session.fromPartition(partition);
   const ghostId = ghost.manifest.id;
-  const installDir = ghost.dir;
-  const entry = ghost.manifest.entry;
   // 分区级断网(docs/dev-rules/plugin-security-and-authoring.md 的"网络永远不直连"):本分区发出的一切
   // 请求,只放行自己协议同 id 下的资源;http(s) / ws / 其它协议一律掐断。
   // 进程沙箱不管网络,这里才是"零网络"承诺的真正闸门;外部数据未来走
@@ -369,6 +372,7 @@ function registerGhostProtocol(partition: string, ghost: InstalledGhost): void {
         });
       }
       if (url.pathname === GHOST_BOOT_PATH || url.pathname === '/') {
+        const entry = partitionGhost.get(partition)?.entry;
         if (!entry) return new Response(null, { status: 404 });
         return new Response(ghostBootHtml(entry), {
           status: 200,
@@ -379,6 +383,8 @@ function registerGhostProtocol(partition: string, ghost: InstalledGhost): void {
           },
         });
       }
+      const installDir = partitionGhost.get(partition)?.dir;
+      if (!installDir) return new Response(null, { status: 404 });
       const filePath = resolveGhostFilePath(installDir, url.pathname);
       if (!filePath) return new Response(null, { status: 403 });
       const data = await fs.readFile(filePath);

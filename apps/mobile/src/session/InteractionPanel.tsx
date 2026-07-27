@@ -11,6 +11,7 @@ import {
   Square,
 } from 'lucide-react-native';
 import {
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -32,7 +33,9 @@ import {
   buildPermissionReviewPresentation,
   buildPlanReviewEvidencePresentation,
   buildInteractionResolveActionPresentation,
+  buildPluginSetupCancelDecision,
   buildPlanReviewDecision,
+  buildRemotePluginSetupPresentation,
   canStartInteractionResolve,
   encodeMultiSelectAnswer,
   resolveInteractionResilient,
@@ -42,12 +45,15 @@ import {
   planReviewFilePath,
   planReviewPlan,
   readRequestId,
+  remoteInteractionHandling,
   selectionFromAnswer,
   sessionScopedPermissionSuggestions,
   sortPendingInteractions,
   type AskQuestion,
   type PermissionReviewPresentation,
   type PlanReviewEvidencePresentation,
+  type RemotePluginSetupPhase,
+  type RemotePluginSetupStep,
 } from '@/session/interactionModel';
 import {
   clearAskUserDraft,
@@ -68,6 +74,25 @@ import { iconSize, radius, spacing, typeScale } from '@/theme/tokens';
 import { contentToPreview } from '@/utils/contentPreview';
 
 const PLAN_PREVIEW_LINE_HEIGHT = 20;
+
+/**
+ * 有本地化文案的 interaction kind 白名单(与 interaction.json 的 `kinds` 键一一对应)。
+ *
+ * kind 来自远端请求、可以是任意字符串,不能直接拼进 i18next 的 key 路径:带 `.` 的值
+ * 会改变路径解析,`__proto__` 这类还会牵扯原型链(#530 review)。白名单外一律归到
+ * `fallback`。
+ */
+const LOCALIZED_INTERACTION_KINDS = new Set([
+  'permission',
+  'ask_user_question',
+  'plan_review',
+  'issue_confirm',
+  'plugin_setup',
+]);
+
+function localizedInteractionKindKey(kind: string): string {
+  return LOCALIZED_INTERACTION_KINDS.has(kind) ? kind : 'fallback';
+}
 
 export type MobilePlanViewerState = 'half' | 'expanded' | 'minimized' | 'edit';
 type RestorablePlanViewerState = Exclude<MobilePlanViewerState, 'minimized'>;
@@ -132,14 +157,37 @@ export function InteractionPanel({
   const activeRequestIdForPresentation = readRequestId(activeInteraction);
   const selectedQueueItem = queuePresentation.items.find((item) => item.requestId === activeRequestIdForPresentation)
     ?? queuePresentation.active;
+  // 共享层的 title / label 是中文直出(desktop 时代留下的),控制端要按当前 locale
+  // 翻译后再渲染,否则这些队列文案在 en / ja / ko 下仍是中文(#530 review)。
+  const localizedKindText = (itemKind: string, field: 'title' | 'label') => t(
+    `interaction.kinds.${localizedInteractionKindKey(itemKind)}.${field}`,
+  );
+  // positionLabel 同样是中文直出,且会被插进队列切换的 accessibility 文案 —— 不翻的话
+  // VoiceOver / TalkBack 在 en / ja / ko 下会念出混语(#530 review)。
+  const localizedPositionLabel = (index: number) => {
+    if (index === 0) return t('interaction.panel.queuePositionCurrent');
+    if (index === 1) return t('interaction.panel.queuePositionNext');
+    return t('interaction.panel.queuePositionNth', { index: index + 1 });
+  };
+  const localizeQueueItem = <T extends { kind: string; positionLabel: string }>(item: T, index: number): T => ({
+    ...item,
+    label: localizedKindText(item.kind, 'label'),
+    positionLabel: localizedPositionLabel(index),
+    title: localizedKindText(item.kind, 'title'),
+  });
+  const selectedQueueIndex = queuePresentation.items.findIndex((item) => item.requestId === activeRequestIdForPresentation);
   const activeQueuePresentation = {
     ...queuePresentation,
-    active: selectedQueueItem,
-    items: queuePresentation.items.map((item) => ({
-      ...item,
+    active: selectedQueueItem
+      ? localizeQueueItem(selectedQueueItem, selectedQueueIndex >= 0 ? selectedQueueIndex : 0)
+      : selectedQueueItem,
+    items: queuePresentation.items.map((item, index) => ({
+      ...localizeQueueItem(item, index),
       active: item.requestId === activeRequestIdForPresentation,
     })),
-    title: selectedQueueItem?.title ?? queuePresentation.title,
+    title: selectedQueueItem
+      ? localizedKindText(selectedQueueItem.kind, 'title')
+      : queuePresentation.title,
   };
   const touchLayout = buildInteractionTouchLayout({
     actionCount: resolveActionCount(kind),
@@ -301,10 +349,18 @@ function InteractionItem({
   const requestId = readRequestId(item);
   const kind = interactionKind(item);
 
-  const submitDecision = async (decision: Record<string, unknown>) => {
+  const submitDecision = async (
+    decision: Record<string, unknown>,
+    options: { optimisticDismiss?: boolean; resolvedRevision?: number } = {},
+  ) => {
     if (!canStartInteractionResolve({ requestId, submittingRequestId: submittingRequestIdRef.current })) return;
     const currentRequestId = requestId;
     if (!currentRequestId) return;
+    // 乐观 dismiss 只适合「决定即终局」的卡。plugin_setup 的取消由被控端按
+    // expectedRevision 裁决(旧快照会被改判成重新体检而非取消),抢先撤卡会在
+    // 取消其实没生效时留下一张被抑制、再也灌不回来的幽灵卡 —— 那类卡走非乐观
+    // 路径,等被控端 dismiss 推送为准。
+    const optimisticDismiss = options.optimisticDismiss !== false;
     submittingRequestIdRef.current = currentRequestId;
     setBusy(true);
     onError(null);
@@ -313,18 +369,32 @@ function InteractionItem({
     // 登记在途抑制,防权威快照 / push 重放在被控端确认前把同卡灌回闪回;保留
     // item 快照,真失败时原卡复原供重试。
     const itemSnapshot = item;
-    remoteSessionStore.beginOptimisticInteractionDismiss(sessionId, currentRequestId);
+    if (optimisticDismiss) remoteSessionStore.beginOptimisticInteractionDismiss(sessionId, currentRequestId);
     try {
       await resolveInteractionResilient(maker, sessionId, currentRequestId, decision);
       if (kind === 'plan_review') clearPlanReviewDraft(currentRequestId);
-      remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, currentRequestId, { kind: 'confirmed' });
+      if (optimisticDismiss) {
+        remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, currentRequestId, { kind: 'confirmed' });
+      } else if (options.resolvedRevision !== undefined) {
+        // 非乐观路径也必须挡「早发晚到」:提交前发出的慢快照仍带着这张卡,dismiss
+        // push 先到时它会把已取消的卡写回来(#530 review P1)。这里只把 revision
+        // 下限抬过本次决定作用的那份 —— 决定没生效时被控端会推更高 revision,
+        // 卡照样回来。
+        remoteSessionStore.markInteractionRevisionResolved(
+          sessionId,
+          currentRequestId,
+          options.resolvedRevision,
+        );
+      }
     } catch (err) {
       // resolveInteractionResilient 已带弱网重试 + pending 列表权威分辨,走到
       // 这里就是决定确未生效:复原卡片 + 报错。
-      remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, currentRequestId, {
-        kind: 'restore',
-        item: itemSnapshot,
-      });
+      if (optimisticDismiss) {
+        remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, currentRequestId, {
+          kind: 'restore',
+          item: itemSnapshot,
+        });
+      }
       onError(formatRemoteError(err));
     } finally {
       if (submittingRequestIdRef.current === currentRequestId) {
@@ -383,6 +453,35 @@ function InteractionItem({
         kind={kind}
         message={t('interaction.panel.issueConfirmUnsupported')}
         request={item.request}
+        touchLayout={touchLayout}
+      />
+    );
+  }
+  // plugin_setup:配置动作(OAuth / 写本地设置)只能在被控端完成,被控端的 IPC
+  // 边界也只放 cancel 过来。手机侧因此给只读摘要 + 取消出口,让用户至少能把
+  // 会话从等待里放出来,而不是对着一张没有任何按钮的卡干等。
+  if (kind === 'plugin_setup') {
+    // 取消入口以共享分类器为准:terminal 快照(被控端 settle 后短暂保留的收尾帧)
+    // 归 desktop-only,此时被控端已 complete、不再受理 resolve,给按钮只会让用户点出
+    // 一个「看起来成功」的 no-op(#530 review)。
+    const cancelDecision = remoteInteractionHandling(item) === 'cancel-only'
+      ? buildPluginSetupCancelDecision(item.request)
+      : null;
+    return (
+      <PluginSetupCard
+        busy={busy}
+        cancel={cancelDecision
+          ? {
+            accessibilityLabel: t('interaction.panel.cancelRequestAccessibility'),
+            label: t('interaction.panel.cancelRequest'),
+            onPress: () => void submitDecision(cancelDecision, {
+              optimisticDismiss: false,
+              resolvedRevision: cancelDecision.expectedRevision,
+            }),
+          }
+          : null}
+        item={item}
+        requestId={requestId}
         touchLayout={touchLayout}
       />
     );
@@ -1237,24 +1336,210 @@ function PlanReviewCard({
   );
 }
 
-function UnsupportedCard({
-  kind,
-  message,
-  request,
+/**
+ * plugin_setup 的**只读**状态卡。
+ *
+ * 手机端做不了配置动作(Secret 输入与 OAuth 必须留在被控端,见
+ * docs/dev-rules/plugin-security-and-authoring.md §4 与 desktop 的
+ * interactionResolveOrigin),所以这张卡的价值全在「看懂」:哪个插件、卡在哪一步、
+ * 为什么失败、回电脑端要做什么。动作只有取消。
+ */
+function PluginSetupCard({
+  busy,
+  cancel,
+  item,
+  requestId,
   touchLayout,
 }: {
-  kind: string;
-  message: string;
-  request: PendingInteraction['request'];
+  busy: boolean;
+  cancel: { accessibilityLabel: string; label: string; onPress(): void } | null;
+  item: PendingInteraction;
+  requestId: string | null;
   touchLayout: InteractionTouchLayout;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
+  const presentation = useMemo(
+    () => buildRemotePluginSetupPresentation(item.request),
+    [item.request],
+  );
+  const title = presentation.ghostName ?? t('interaction.kinds.plugin_setup.title');
+  return (
+    <View style={cardStyle(styles, touchLayout)} testID="interaction.pluginSetup.card">
+      <View style={styles.compactCardHeader}>
+        {presentation.iconDataUrl ? (
+          <Image
+            accessibilityIgnoresInvertColors
+            // 纯装饰:插件名紧跟其后,读屏再念一次图标只是噪音。
+            accessibilityElementsHidden
+            importantForAccessibility="no"
+            source={{ uri: presentation.iconDataUrl }}
+            style={styles.pluginSetupIcon}
+            testID="interaction.pluginSetup.icon"
+          />
+        ) : null}
+        <View style={styles.compactCardTitleWrap}>
+          <Text style={styles.kind}>{t('interaction.panel.desktopOnlyKind')}</Text>
+          <Text numberOfLines={1} style={styles.compactCardTitle}>{title}</Text>
+        </View>
+        {presentation.stepCount > 0 ? (
+          <Text style={styles.pageText} testID="interaction.pluginSetup.progress">
+            {t('interaction.pluginSetup.progress', {
+              satisfied: presentation.satisfiedCount,
+              total: presentation.stepCount,
+            })}
+          </Text>
+        ) : null}
+      </View>
+      {presentation.intro ? (
+        <Text style={styles.body} numberOfLines={3}>{presentation.intro}</Text>
+      ) : null}
+      {presentation.groups.map((group) => (
+        <View key={group.id} style={styles.pluginSetupGroup}>
+          {group.anyOf ? (
+            <Text style={styles.pluginSetupGroupHint}>{t('interaction.pluginSetup.chooseOne')}</Text>
+          ) : null}
+          {group.steps.map((step) => (
+            <PluginSetupStepRow key={step.id} step={step} />
+          ))}
+        </View>
+      ))}
+      {/* 收尾帧已经 settle,再让用户「去电脑端完成」是错的引导。 */}
+      {presentation.terminal ? null : (
+        <Text style={styles.pluginSetupFootnote}>{t('interaction.pluginSetup.completeOnDesktop')}</Text>
+      )}
+      {cancel ? (
+        <View style={actionsStyle(styles, touchLayout)}>
+          <ResolveButton
+            accessibilityLabel={cancel.accessibilityLabel}
+            busy={busy}
+            label={cancel.label}
+            onPress={cancel.onPress}
+            requestId={requestId}
+            touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary')}
+            testID="interaction.unsupported.cancelButton"
+            variant="secondary"
+          />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/** 运行中的步骤:与桌面同语义,用 Heart Orange 表示「正在进行」。 */
+const PLUGIN_SETUP_RUNNING_PHASES: ReadonlySet<RemotePluginSetupPhase> = new Set([
+  'action_running',
+  'waiting_external',
+  'verifying',
+]);
+
+function PluginSetupStepRow({ step }: { step: RemotePluginSetupStep }) {
+  const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  const { t } = useTranslation();
+  const phaseColor = step.phase === 'satisfied'
+    ? colors.statusReady
+    : step.phase && PLUGIN_SETUP_RUNNING_PHASES.has(step.phase)
+      ? colors.statusAccent
+      : colors.textTertiary;
+  const phaseText = step.phase ? t(`interaction.pluginSetup.phase.${step.phase}`) : null;
+  const actionHint = step.actionKind === 'inline_form'
+    ? (step.inlineFieldLabel
+      ? t('interaction.pluginSetup.inlineFormAction', { label: step.inlineFieldLabel })
+      : t('interaction.pluginSetup.inlineFormActionGeneric'))
+    : step.actionKind
+      ? t('interaction.pluginSetup.desktopActionHint', {
+        action: t(`interaction.pluginSetup.action.${step.actionKind}`),
+      })
+      : null;
+  // 已完成的步骤不再提示「回电脑端做什么」——那是下一步该做的事。
+  const visibleActionHint = actionHint && step.phase !== 'satisfied' ? actionHint : null;
+  const errorText = step.errorCode ? t(`interaction.pluginSetup.error.${step.errorCode}`) : null;
+  return (
+    <View
+      // 聚合成一个读屏单元:标题 / 状态 / 待办 / 错误分开念会把一步拆成四条碎片。
+      accessible
+      accessibilityLabel={[step.title, phaseText, step.description, visibleActionHint, errorText]
+        .filter((part): part is string => !!part)
+        .join('，')}
+      style={styles.pluginSetupStep}
+      testID="interaction.pluginSetup.step"
+    >
+      <View style={styles.pluginSetupStepHeader}>
+        <Text numberOfLines={2} style={styles.pluginSetupStepTitle}>{step.title}</Text>
+        {phaseText ? (
+          <Text style={[styles.pluginSetupPhase, { color: phaseColor }]}>{phaseText}</Text>
+        ) : null}
+      </View>
+      {step.description ? (
+        <Text numberOfLines={2} style={styles.pluginSetupStepBody}>{step.description}</Text>
+      ) : null}
+      {visibleActionHint ? (
+        <Text style={styles.pluginSetupStepAction}>{visibleActionHint}</Text>
+      ) : null}
+      {errorText ? (
+        <Text style={styles.pluginSetupStepError} testID="interaction.pluginSetup.stepError">
+          {errorText}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function UnsupportedCard({
+  busy = false,
+  cancel = null,
+  kind,
+  kindLabel,
+  message,
+  request,
+  requestId = null,
+  summaryLines,
+  touchLayout,
+}: {
+  busy?: boolean;
+  /** 本端唯一能做的动作(目前只有 plugin_setup 的取消);null = 纯展示卡。 */
+  cancel?: { accessibilityLabel: string; label: string; onPress(): void } | null;
+  kind: string;
+  /** eyebrow 覆写;缺省是「暂不支持」。 */
+  kindLabel?: string;
+  message: string;
+  request: PendingInteraction['request'];
+  requestId?: string | null;
+  /**
+   * 可读摘要。**未提供**时才回退成 request 预览(未知类型只能这样交底);提供了
+   * 空数组表示「这类卡本来就该只显示标题」,不能再掉回 raw JSON —— 那正是本次要
+   * 消灭的展示(#530 review)。
+   */
+  summaryLines?: string[];
+  touchLayout: InteractionTouchLayout;
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
+  // 合并成一段带换行的文本再限行:每行各自 numberOfLines={6} 会把总可见行数放大成
+  // 6 × 行数,步骤多时把卡撑得很高(#530 review)。
+  const summaryText = (summaryLines ?? [contentToPreview(request)])
+    .filter((line) => line.length > 0)
+    .join('\n');
   return (
     <View style={cardStyle(styles, touchLayout)} testID="interaction.unsupported.card">
-      <Text style={styles.kind}>{t('interaction.panel.unsupportedKind')}</Text>
+      <Text style={styles.kind}>{kindLabel ?? t('interaction.panel.unsupportedKind')}</Text>
       <Text style={styles.cardTitle}>{message}</Text>
-      <Text style={styles.body} numberOfLines={6}>{contentToPreview(request)}</Text>
+      {summaryText ? <Text style={styles.body} numberOfLines={6}>{summaryText}</Text> : null}
+      {cancel ? (
+        <View style={actionsStyle(styles, touchLayout)}>
+          <ResolveButton
+            accessibilityLabel={cancel.accessibilityLabel}
+            busy={busy}
+            label={cancel.label}
+            onPress={cancel.onPress}
+            requestId={requestId}
+            touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary')}
+            testID="interaction.unsupported.cancelButton"
+            variant="secondary"
+          />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1522,6 +1807,63 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   body: {
     color: colors.textSecondary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+  },
+  pluginSetupIcon: {
+    borderRadius: radius.container,
+    flexShrink: 0,
+    height: iconSize.xxl,
+    width: iconSize.xxl,
+  },
+  pluginSetupGroup: {
+    gap: spacing.sm,
+  },
+  pluginSetupGroupHint: {
+    color: colors.textTertiary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+  },
+  pluginSetupStep: {
+    gap: spacing.xs,
+  },
+  pluginSetupStepHeader: {
+    alignItems: 'baseline',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  pluginSetupStepTitle: {
+    color: colors.textPrimary,
+    flex: 1,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    minWidth: 0,
+  },
+  pluginSetupPhase: {
+    // 颜色随 phase 内联(已完成 statusReady / 进行中 statusAccent / 其余 textTertiary)。
+    flexShrink: 0,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+  },
+  pluginSetupStepBody: {
+    color: colors.textTertiary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+  },
+  pluginSetupStepAction: {
+    color: colors.textSecondary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+  },
+  pluginSetupStepError: {
+    color: colors.errorText,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+  },
+  pluginSetupFootnote: {
+    color: colors.textTertiary,
     fontSize: typeScale.caption,
     lineHeight: lineHeight.caption,
   },

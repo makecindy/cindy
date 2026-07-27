@@ -1,10 +1,11 @@
 {
-  "contentModeration": {
-    "blocked": "Sorry, we can't answer this question right now. Please rephrase your question."
-  },
   "ipcError": {
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
-    "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish."
+    "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
+    "REMOTE_WORKDIR_INVALID": "The remote project path is invalid. Choose the project directory again.",
+    "REMOTE_WORKDIR_NOT_FOUND": "The remote project directory no longer exists. Choose it again.",
+    "REMOTE_WORKDIR_NOT_DIRECTORY": "The remote project path is not a folder. Choose a project directory.",
+    "REMOTE_WORKDIR_UNAVAILABLE": "The remote project directory is unavailable. Reconnect the network drive and try again."
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
@@ -81,6 +82,7 @@
     },
     "tabs": {
       "general": "General",
+      "billing": "Usage and billing",
       "personalization": "Personalization",
       "apiKeys": "Tool Keys",
       "voiceInput": "Voice Input",
@@ -102,6 +104,7 @@
     },
     "sections": {
       "user": "User",
+      "billing": "Usage and billing",
       "appearance": "Appearance",
       "notifications": "Notifications",
       "agentIsland": "Agent Island",
@@ -143,10 +146,10 @@
       },
       "status": {
         "disconnected": "Disconnected",
-        "connecting": "Connecting...",
-        "authenticating": "Authenticating...",
+        "connecting": "Connecting…",
+        "authenticating": "Authenticating…",
         "ready": "Ready",
-        "reconnecting": "Reconnecting...",
+        "reconnecting": "Reconnecting…",
         "failed": "Failed"
       },
       "button": {
@@ -175,7 +178,7 @@
         "close": "Close",
         "done": "Done",
         "pickOrGenerate": "Pick an existing key, or generate a new one",
-        "loading": "Scanning ~/.ssh/...",
+        "loading": "Scanning ~/.ssh/…",
         "empty": "No SSH keys found in ~/.ssh/. Click \"Generate new\" to create one.",
         "generateButton": "Generate new",
         "cancelGenerate": "Cancel",
@@ -189,7 +192,7 @@
         "unlockSubmit": "Unlock",
         "generateTitle": "Generate a new SSH key",
         "nameLabel": "Name (optional)",
-        "nameHint": "Saved as ~/.ssh/<name>. Defaults to \"cindy\", suffixes with -1, -2... on collision.",
+        "nameHint": "Saved as ~/.ssh/<name>. Defaults to \"cindy\", suffixes with -1, -2… on collision.",
         "encryptLabel": "Encrypt with a passphrase (recommended)",
         "encryptHint": "Passphrase is typed once now, then ssh-add caches the decrypted key in your system's ssh-agent. macOS also persists the passphrase in Keychain so it survives reboots.",
         "passLabel": "Passphrase",
@@ -337,9 +340,9 @@
         "codexSyncNoLocal": "No local Codex credentials found — log in to Codex in {{appName}} first"
       },
       "silentInstall": {
-        "starting": "Installing {{agent}} on remote {{hostId}}...",
-        "preparingRuntime": "Preparing runtime on {{hostId}}...",
-        "installingAgent": "Installing {{agent}} on remote {{hostId}}...",
+        "starting": "Installing {{agent}} on remote {{hostId}}…",
+        "preparingRuntime": "Preparing runtime on {{hostId}}…",
+        "installingAgent": "Installing {{agent}} on remote {{hostId}}…",
         "failed": "Failed to install {{agent}} on {{hostId}}: {{message}}. Open Settings → Remote → expand {{hostId}} for the full log."
       }
     },
@@ -524,7 +527,7 @@
         "victory-fanfare": "Victory fanfare",
         "error-buzz": "Error buzz",
         "secret-chime": "Secret chime",
-        "custom": "Local file...",
+        "custom": "Local file…",
         "customSelected": "Local file: {{name}}"
       }
     },
@@ -553,6 +556,7 @@
       },
       "copyUserId": {
         "action": "Copy user ID",
+        "display": "ID: {{id}}",
         "success": "User ID copied",
         "failed": "Failed to copy user ID"
       },
@@ -642,6 +646,11 @@
       "autoUpdateEnabledToast": "Idle update installation enabled",
       "autoUpdateDisabledToast": "Idle update installation disabled",
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
+      "analyticsLabel": "Usage statistics",
+      "analyticsDescription": "Helps us understand how often Cindy is launched and kept in use. Reports device and usage-environment information — such as your device model, OS version, app version, and a device identifier — plus, once signed in, your account ID; never conversations, files, or prompts. Turning this off stops reporting immediately.",
+      "analyticsEnabledToast": "Usage statistics enabled",
+      "analyticsDisabledToast": "Usage statistics disabled",
+      "analyticsSaveFailed": "Failed to save usage statistics settings",
       "debugLogLabel": "Debug logs",
       "debugLogDescription": "When enabled, emits verbose debug logs: main/maker logger raised to debug level; new Claude Code sessions also log API request URL/status/latency, Node-level DNS/TCP/TLS handshake timing, and SDK internals. Output is large — turn off after troubleshooting. Always on in dev mode.",
       "social": {
@@ -706,21 +715,37 @@
       },
       "serviceSource": {
         "label": "Voice service",
-        "hint": "Uses the Cindy voice service by default; switch to your own key and models if you prefer.",
-        "localHint": "Local mode does not use Cindy account services; configure your own key and models.",
+        "hint": "Uses the Cindy voice service by default. You can instead connect a realtime ASR service with separate voice credentials.",
+        "localHint": "Local mode does not use Cindy account services; connect a realtime ASR service with separate voice credentials.",
         "ariaLabel": "Voice service source",
         "options": {
           "cindy": "Cindy official service",
-          "byok": "Custom (your own key)"
+          "byok": "Custom voice service"
         },
         "optionDescriptions": {
           "cindy": "Uses your Cindy sign-in, no keys to configure",
-          "byok": "Uses your own keys and models, billed to your account"
+          "byok": "Uses an ASR-capable service and its own voice credentials"
         },
         "asr": {
           "label": "Recognition model",
           "hint": "ASR model used for speech-to-text.",
           "ariaLabel": "Speech recognition model"
+        },
+        "connectionTest": {
+          "action": "Test connection",
+          "testing": "Testing",
+          "testingStatus": "Connecting to the selected realtime ASR service…",
+          "success": "Connected. The selected realtime ASR route is available.",
+          "saveBeforeTest": "Save the custom ASR changes before testing the connection.",
+          "failure": {
+            "credentialsMissing": "Required credentials are missing. Complete the setup first.",
+            "authenticationFailed": "Authentication failed. Check the credentials for this service.",
+            "routeUnavailable": "The AI gateway does not support or has not enabled this realtime ASR route.",
+            "timeout": "Connection timed out. Check the network and service status, then try again.",
+            "network": "Could not connect. Check the network, address, and certificate settings.",
+            "serviceError": "The service handshake failed. Try again later or check the service setup.",
+            "unsupportedProvider": "Connection testing is not supported for this recognition model."
+          }
         },
         "refiner": {
           "label": "Refinement model",
@@ -734,15 +759,52 @@
           "none": "No fallback",
           "noneDescription": "Keep the raw transcript when the primary model fails"
         },
+        "customAsr": {
+          "optionLabel": "Custom realtime ASR",
+          "optionDescription": "Uses a dedicated speech-recognition WebSocket and API key",
+          "notice": "Enter the complete WebSocket address from an ASR-capable service. Cindy will not reuse or append paths to your chat model endpoint.",
+          "protocol": {
+            "label": "Realtime protocol",
+            "hint": "Choose the message format implemented by the ASR service.",
+            "ariaLabel": "Custom realtime ASR protocol",
+            "openai": "OpenAI transcription",
+            "qwen": "Qwen realtime ASR"
+          },
+          "websocketUrl": {
+            "label": "WebSocket URL",
+            "hint": "A complete wss:// URL. Local loopback services may use ws://.",
+            "placeholder": "wss://asr.example.com/v1/realtime",
+            "invalid": "Enter a valid wss:// URL without embedded credentials. Only local loopback services may use ws://."
+          },
+          "model": {
+            "label": "ASR model",
+            "hint": "The exact speech-recognition model accepted by this service.",
+            "placeholder": "Speech-recognition model ID"
+          },
+          "apiKey": {
+            "label": "ASR API key",
+            "hint": "Stored locally with system encryption and used only for this voice service.",
+            "savedHint": "A key is stored locally. Leave this field blank to keep it.",
+            "endpointChangedHint": "The service origin changed. Enter a new key, or remove the saved key before saving.",
+            "placeholder": "Enter the ASR API key",
+            "savedPlaceholder": "Key saved — enter a new value to replace it",
+            "clear": "Remove key"
+          },
+          "save": "Save voice service"
+        },
         "credential": {
-          "gatewayKey": "Uses your AI gateway key",
+          "gatewayKey": "Requires your AI gateway to support this realtime ASR route",
           "codexLogin": "Uses your Codex sign-in",
-          "elevenlabsKey": "Uses your ElevenLabs key (environment variable)"
+          "elevenlabsKey": "Uses your ElevenLabs key (environment variable)",
+          "codexRealtimeUnsupported": "Unavailable: Codex sign-in is not an OpenAI API Realtime credential"
         },
         "credentialError": {
           "gatewayMissing": "No AI gateway key found; this model is unavailable.",
           "codexMissing": "Codex is not signed in; this model is unavailable.",
-          "elevenlabsMissing": "No ElevenLabs key configured (environment variable); this model is unavailable."
+          "elevenlabsMissing": "No ElevenLabs key configured (environment variable); this model is unavailable.",
+          "customAsrConfigMissing": "Complete and save the realtime ASR service settings before starting voice input.",
+          "customAsrKeyMissing": "Add and save an API key for the custom realtime ASR service.",
+          "codexRealtimeUnsupported": "Codex sign-in cannot be used for realtime speech recognition. Choose a supported ASR service."
         },
         "manageProviders": "Open model providers",
         "reset": "Reset to default"
@@ -932,8 +994,6 @@
     "sessionImport": {
       "title": "Local Session Import",
       "description": "Read-only scan of local Claude Code and Codex history. Only checked sessions in the list will be imported; skipped internal sessions are hidden and cannot be imported.",
-      "linkedTitle": "Local Session Links",
-      "linkedDescription": "Read-only scan of local Claude Code and Codex history. Codex sessions are linked to the original thread and resumed without replaying history; Claude sessions are imported as local history.",
       "scan": "Scan",
       "scanning": "Scanning",
       "emptyTitle": "Scan local history first",
@@ -945,9 +1005,7 @@
       "sessions": "sessions",
       "selected": "{{count}} selected",
       "importSelected": "Import selected",
-      "linkSelected": "Link selected",
       "importing": "Importing",
-      "linked": "Linked",
       "archived": "Archived",
       "untitled": "Untitled Session",
       "noWorkingDir": "No working directory",
@@ -974,7 +1032,9 @@
         "scanFailed": "Scan failed",
         "importFailed": "Import failed",
         "imported": "Import complete: {{inserted}} inserted, {{updated}} updated"
-      }
+      },
+      "selectAll": "Select all in current filter ({{count}})",
+      "selectedOutsideFilter": "({{count}} of them outside the current filter)"
     },
     "connections": {
       "codex": {
@@ -1288,7 +1348,7 @@
         "stepConnect": "Connect",
         "stepModels": "Choose models",
         "searchPlaceholder": "Search providers…",
-        "groupSubscription": "Subscription sign-in · recommended, no API key",
+        "groupSubscription": "Subscription sign-in · recommended",
         "groupApiKey": "API key providers · presets update with the catalog",
         "groupCustom": "Custom",
         "metaOAuth": "Subscription (OAuth)",
@@ -1297,6 +1357,15 @@
         "customMeta": "Connect any OpenAI / Anthropic compatible source",
         "pickHint": "The sign-in method is defined by each provider; OAuth endpoints and base URLs come from presets — nothing to fill in by hand.",
         "oauthDesc": "Authorize your subscription in the browser — no API key needed",
+        "authorizeWithDeviceCode": "Use device code",
+        "preparingDeviceCode": "Preparing a device code…",
+        "deviceCodePrompt": "Enter this one-time device code on the verification page:",
+        "deviceCodeWaiting": "Keep this window open while you complete authorization.",
+        "copyDeviceCode": "Copy code",
+        "openVerificationPage": "Open verification page",
+        "deviceCodeCopied": "Device code copied",
+        "deviceCodeCopyFailed": "Couldn't copy the device code",
+        "verificationPageOpenFailed": "Couldn't open the verification page",
         "authorizedToast": "Connected {{name}}",
         "authorizeFailed": "Failed to authorize {{name}}. Please try again",
         "nameLabel": "Display name",
@@ -1313,13 +1382,32 @@
         "next": "Next",
         "back": "← Back",
         "finish": "Finish",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "useApiKey": "Use an API key instead",
+        "metaOAuthOrApi": "Subscription (OAuth) · API key"
+      },
+      "xdSignin": {
+        "badge": "Recommended",
+        "desc": "Sign in to Cindy to enable the official Cindy AI service — all models work out of the box, no keys to manage.",
+        "cta": "Sign in to Cindy"
       }
     },
     "experimental": {
       "title": "Experimental",
       "toggleAria": "Toggle experimental feature: {{title}}",
       "features": {}
+    },
+    "lspMode": {
+      "cell": {
+        "title": "Code Intelligence (LSP) · Beta",
+        "description": "Gives the agent precise symbol references, go-to-definition, and call hierarchy via typescript-language-server. Only takes effect in TypeScript projects (auto-detected from tsconfig.json / package.json dependencies). In non-TS projects this switch does nothing and lsp_* tools won't appear in the agent's tool list."
+      },
+      "toggleAria": "Toggle LSP code intelligence",
+      "toast": {
+        "enabled": "LSP enabled — takes effect in new sessions",
+        "disabled": "LSP disabled — takes effect in new sessions",
+        "toggleFailed": "Failed to toggle LSP"
+      }
     },
     "gitSafety": {
       "title": "Git Safety",
@@ -1334,9 +1422,9 @@
       "statusAria": "FeiShu Bot status: {{status}}",
       "status": {
         "needsConfig": "Needs configuration",
-        "connecting": "Connecting...",
+        "connecting": "Connecting…",
         "connected": "Connected",
-        "reconnecting": "Reconnecting...",
+        "reconnecting": "Reconnecting…",
         "conflict": "Used by another device",
         "error": "Connection failed"
       },
@@ -1385,7 +1473,7 @@
       "statusAria": "Discord bot status: {{status}}",
       "status": {
         "needsConfig": "Needs configuration",
-        "connecting": "Connecting...",
+        "connecting": "Connecting…",
         "connected": "Connected",
         "conflict": "In use on another device",
         "error": "Connection failed"
@@ -1410,9 +1498,9 @@
       "hideToken": "Hide token",
       "formHint": "User ID must be a 17-20 digit numeric snowflake.",
       "connect": "Connect",
-      "connectingAction": "Connecting...",
+      "connectingAction": "Connecting…",
       "disconnect": "Unbind",
-      "disconnectingAction": "Unbinding...",
+      "disconnectingAction": "Unbinding…",
       "disconnectAria": "Unbind Discord Bot",
       "disconnectConfirm": {
         "title": "Unbind Discord Bot?",
@@ -1535,8 +1623,7 @@
       "save": "Save",
       "overLimit": " — over limit",
       "toast": {
-        "saved": "Custom instructions saved",
-        "saveFailed": "Failed to save custom instructions"
+        "saved": "Custom instructions saved"
       }
     },
     "chipMetrics": {
@@ -1600,7 +1687,7 @@
       }
     },
     "collaboration": {
-      "loading": "Loading collaboration settings...",
+      "loading": "Loading collaboration settings…",
       "title": "Collaboration",
       "workerSoftLimit": "Worker Soft Limit",
       "workerSoftLimitHint": "Soft warning when number of workers reaches this threshold.",
@@ -1654,8 +1741,8 @@
         "refresh": "Recheck",
         "toggleHint": "This machine-wide toggle only applies to agent sessions started afterward; it does not affect a conversation that is already running.",
         "status": {
-          "checking": "Checking ADB status...",
-          "preparing": "Preparing ADB...",
+          "checking": "Checking ADB status…",
+          "preparing": "Preparing ADB…",
           "ready": "ADB ready. Ready devices: {{count}}. Default: {{device}}",
           "adbDetail": "{{version}} at {{path}}",
           "noDevice": "ADB ready. No authorized Android device is connected.",
@@ -1681,7 +1768,7 @@
         "adb": {
           "title": "ADB",
           "auto": "Automatic ADB resolution is active",
-          "preparing": "Preparing ADB...",
+          "preparing": "Preparing ADB…",
           "ready": "Current source: {{source}}",
           "prepareFailed": "ADB preparation failed: {{message}}",
           "placeholder": "Custom adb path",
@@ -1710,6 +1797,15 @@
       "directControl": {
         "title": "Computer automation",
         "description": "Let agents inspect windows, read UI, click, and type",
+        "status": {
+          "ready": "Ready to use",
+          "needsPermission": "Needs system access",
+          "notInstalled": "Driver not installed",
+          "disabled": "Turned off",
+          "checking": "Checking access…",
+          "setup": "Set up access",
+          "version": "CUA Driver {{version}}"
+        },
         "toggleAria": "Toggle direct computer control",
         "driverInfo": "Computer automation is powered by the open-source CUA Driver. It runs locally to read the screen and perform actions such as clicking and typing.",
         "openSourceProject": "View open-source project",
@@ -1717,7 +1813,7 @@
         "daemonRunning": "daemon running",
         "daemonStopped": "daemon stopped; it will start automatically on use",
         "notDetected": "cua-driver was not detected. It will be installed automatically the first time you enable this; grant permissions afterward to use direct computer control.",
-        "installing": "Installing cua-driver...",
+        "installing": "Installing cua-driver…",
         "authorizing": "Waiting for system permissions. Complete Accessibility and Screen Recording in the Cua Driver permission window.",
         "permissionIntro": {
           "title": "Enable computer automation",
@@ -1727,14 +1823,25 @@
           "cancel": "Not now"
         },
         "permissionGuide": {
-          "title": "Waiting for system permissions",
-          "description": "In System Settings, grant the permissions below to CuaDriver (look for the app matching the icon on the left). This will continue automatically once everything is granted.",
-          "waiting": "Pending"
+          "waiting": "Waiting for you",
+          "step": "Open computer automation",
+          "completeEyebrow": "Permissions complete",
+          "dragTitle": "Drag CuaDriver into {{permission}}",
+          "turnOnAppTitle": "Turn on CuaDriver in {{permission}}",
+          "dragHint": "Drag",
+          "draggingTitle": "Dragging CuaDriver",
+          "draggingHint": "Drop into {{permission}}",
+          "appName": "CuaDriver",
+          "turnOnTitle": "Turn on {{permission}}",
+          "turnOnDescription": "Turn on this permission in System Settings. Cindy will continue automatically.",
+          "readyTitle": "Computer Use is ready",
+          "readyDescription": "Cindy can now operate this computer when you ask."
         },
         "permissions": {
-          "macosHint": "macOS requires core Accessibility and Screen Recording permissions for Cua Driver. During actual use, the system may still show additional confirmations for a target app or a specific action.",
-          "accessibilityLabel": "CuaDriver Accessibility",
-          "screenRecordingLabel": "CuaDriver Screen Recording",
+          "title": "System access",
+          "macosHint": "Computer Use needs Accessibility and Screen Recording. During actual use, macOS may still show additional confirmations for a target app or action.",
+          "accessibilityLabel": "Accessibility",
+          "screenRecordingLabel": "Screen Recording",
           "grant": "Grant",
           "accessibility": "Accessibility: {{status}}",
           "screenRecording": "Screen Recording: {{status}}",
@@ -1746,6 +1853,8 @@
           "openAccessibility": "Open Accessibility settings",
           "openScreenRecording": "Open Screen Recording settings",
           "recheck": "Recheck",
+          "moreDetails": "More details",
+          "hideDetails": "Hide details",
           "windowsHint": "Windows does not require extra system permissions. Keep the target app visible on the active desktop while the agent works.",
           "linuxHint": "Linux does not use macOS TCC permissions; make sure the current desktop session allows window inspection and input automation."
         },
@@ -1768,9 +1877,10 @@
           "disabled": "Direct computer control disabled",
           "toggleFailed": "Failed to toggle direct computer control",
           "installFailed": "Failed to install cua-driver",
-          "permissionFailed": "cua-driver permissions are not complete",
-          "permissionPending": "Finish Cua Driver system permissions and this will enable automatically",
+          "permissionFailed": "Computer Use permissions are not complete",
+          "permissionPending": "Finish the two system permissions, then return here and click Recheck",
           "permissionSettingsOpened": "System permission settings opened. After granting, come back and click \"Recheck\".",
+          "permissionSettingsMonitoring": "System permission settings opened. Finish the permissions and the status will update automatically.",
           "openPermissionSettingsFailed": "Failed to open system permission settings"
         }
       }
@@ -1874,6 +1984,9 @@
       },
       "hook": {
         "description": "Connect Slack and Telegram to the same Cindy. Messages are dispatched to this device and share its project list and session runner; each provider keeps its own account and preferences.",
+        "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",
+        "slackDisabledHint": "Turn on the switch to start Slack authorization; once bound you can dispatch tasks from Slack.",
+        "slackBoundHint": "Binding complete. Turning the switch off unbinds this device; turning it back on requires authorizing again.",
         "toggleAria": "Toggle the Slack connection",
         "installApp": "Install Slack App",
         "status": {
@@ -1884,7 +1997,8 @@
           "error": "Connection failed"
         },
         "form": {
-          "workspaces": "Working directory mapping (alias → local absolute path)",
+          "workspacesCardTitle": "Workdir mappings",
+          "workspacesCardDescription": "Alias → local absolute path; the directory list is shared across channels while run preferences stay per channel.",
           "workspacesBoundCount_one": "{{count}} local working directory bound",
           "workspacesBoundCount_other": "{{count}} local working directories bound",
           "aliasPlaceholder": "Alias, e.g. my-server",
@@ -1925,7 +2039,6 @@
           "waitingHint": "Waiting for the installation to finish… Binding completes automatically once installed, no re-authorization needed."
         },
         "multi": {
-          "title": "Slack workspaces",
           "statusWorkspaces_one": "{{count}} workspace",
           "statusWorkspaces_other": "{{count}} workspaces",
           "statusPendingSuffix_one": " ({{count}} pending)",
@@ -1945,6 +2058,8 @@
           "alreadyBound": "You authorized {{team}}, which is already linked. To add another workspace, switch workspaces in the top-right corner of the Slack authorization page before allowing."
         },
         "telegram": {
+          "description": "Link your Telegram account and dispatch tasks to Cindy via the official bot.",
+          "disabledHint": "Turn on the switch, then follow the prompts in Telegram to link your account.",
           "toggleAria": "Toggle the Telegram connection",
           "connect": "Link Telegram",
           "openTelegram": "Open Telegram",
@@ -1992,11 +2107,10 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "Model",
-        "effortLabel": "Effort",
+        "effortLabel": "Reasoning effort",
         "permissionLabel": "Permission mode",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
-        "none": "None",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
         "requireBinding": "Complete {{provider}} account linking first.",
         "serverUnsupported": "Server is too old or not responding; preferences cannot be loaded.",
@@ -2004,8 +2118,7 @@
         "toast": {
           "saveFailed": "Failed to save directory preferences"
         },
-        "teamChipAria": "Choose which Slack workspace these preferences belong to",
-        "providerAria": "Choose which IM provider these preferences belong to"
+        "teamChipAria": "Choose which Slack workspace these preferences belong to"
       }
     },
     "devices": {
@@ -2070,7 +2183,7 @@
     "imBot": {
       "beta": "Beta",
       "groups": {
-        "cindy": "Cindy",
+        "cindy": "Official",
         "personal": "Personal"
       },
       "tips": {
@@ -2080,9 +2193,11 @@
       },
       "defaults": {
         "title": "New Conversation Configuration",
-        "description": "New conversations started from Feishu, Slack, or Discord use this agent and model configuration. Changes apply only to new conversations; send /new in an existing Discord DM to apply them.",
-        "localDescription": "New conversations started from Feishu or Discord use this agent and model configuration. Changes apply only to new conversations; send /new in an existing Discord DM to apply them.",
-        "feishuOnlyDescription": "New conversations started from Feishu use this agent and model configuration. Changes apply only to new conversations.",
+        "channelDescriptions": {
+          "feishu": "New Feishu conversations use this Agent and model. Send /new in an existing DM to apply it.",
+          "slack": "New Slack threads use this Agent and model.",
+          "discord": "New Discord conversations use this Agent and model. Send /new in an existing DM to apply it."
+        },
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",
         "loading": "Loading new conversation configuration…",
@@ -2202,13 +2317,75 @@
         "installedExpand": "Show {{count}} more installed plugins",
         "installedCollapse": "Hide additional installed plugins",
         "allTitle": "All plugins",
+        "filterAll": "All",
+        "filtersAria": "Filter plugins by source",
+        "origin": {
+          "public": "Public",
+          "organization": "Team shared",
+          "local": "Local"
+        },
         "emptyFiltered": "No matching plugins",
         "useAction": "Use",
         "useAria": "Use {{name}}"
       },
+      "market": {
+        "scopeAria": "Filter plugin sources",
+        "scope": {
+          "all": "All",
+          "public": "Public",
+          "organization": "Organization",
+          "personal": "Personal",
+          "local": "Local"
+        },
+        "install": "Install",
+        "details": "Details",
+        "update": "Update from market",
+        "updateAvailable": "Update available",
+        "updateAction": "Update",
+        "updateAria": "Update {{name}}",
+        "updateTo": "Update to v{{version}}",
+        "installed": "Installed",
+        "conflict": "Plugin ID conflict",
+        "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
+        "authenticationRequired": "Sign in to Cindy to view the plugin market.",
+        "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
+        "errors": {
+          "generic": "The plugin market operation failed. Please try again.",
+          "invalidRequest": "The plugin request is invalid.",
+          "notFound": "This plugin is no longer available. Refresh the market and try again.",
+          "conflict": "Another installed or market plugin uses the same plugin ID.",
+          "stateChanged": "The account, plugin, or release changed during this operation. Review the latest state and try again.",
+          "accessDenied": "This plugin operation is not permitted or was cancelled.",
+          "notConfigured": "The plugin market is not available in this environment.",
+          "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy."
+        },
+        "securityTitle": "Install and permissions",
+        "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. First-time installs are enabled automatically and can be disabled anytime on the Plugins page; updates keep the current enabled state.",
+        "noPermissions": "This plugin declares no additional capabilities.",
+        "installConfirmTitle": "Install “{{name}}”?",
+        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
+        "updateConfirmDescription": "The package will be verified for integrity and manifest compatibility, then replace the installed version. Its current enabled state stays unchanged."
+      },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
-      "emptyHint": "Click \"Install Plugin…\" above and pick a .cindy file",
+      "emptyHint": "Install from the market, or import a .cindy file from the menu above",
+      "legacyRecovery": {
+        "title": "Plugins from an older version are waiting to be restored",
+        "deferred": "Found {{count}} older plugin directory. Cindy deferred restoration to avoid moving data while another instance may still be using it.",
+        "deferred_one": "Found {{count}} older plugin directory. Cindy deferred restoration to avoid moving data while another instance may still be using it.",
+        "deferred_other": "Found {{count}} older plugin directories. Cindy deferred restoration to avoid moving data while another instance may still be using it.",
+        "partial": "Found {{count}} older plugin directory. Some data was not restored automatically, so you can retry now.",
+        "partial_one": "Found {{count}} older plugin directory. Some data was not restored automatically, so you can retry now.",
+        "partial_other": "Found {{count}} older plugin directories. Some data was not restored automatically, so you can retry now.",
+        "partialBlocked": "Found {{count}} older plugin directory, but Cindy could not safely restore it automatically. The data was kept unchanged.",
+        "partialBlocked_one": "Found {{count}} older plugin directory, but Cindy could not safely restore it automatically. The data was kept unchanged.",
+        "partialBlocked_other": "Found {{count}} older plugin directories, but Cindy could not safely restore them automatically. The data was kept unchanged.",
+        "claimedByOtherOwner": "Found {{count}} older plugin directory, but it belongs to the first account that claimed this device data. Switch back to that account to restore it.",
+        "claimedByOtherOwner_one": "Found {{count}} older plugin directory, but it belongs to the first account that claimed this device data. Switch back to that account to restore it.",
+        "claimedByOtherOwner_other": "Found {{count}} older plugin directories, but it belongs to the first account that claimed this device data. Switch back to that account to restore it.",
+        "retry": "Retry restoring",
+        "retrying": "Restoring…"
+      },
       "disabledTag": "Disabled",
       "projectDisabledTag": "Off in this project",
       "projectSwitchLockedTip": "This plugin is disabled globally; enable it in the Global view first",
@@ -2259,12 +2436,9 @@
         "meta": "Version {{version}}. Installs locally and can be uninstalled anytime.",
         "metaWithAuthor": "By {{author}} · Version {{version}}. Installs locally and can be uninstalled anytime.",
         "enableNow": "Enable right after install",
+        "enableNowOpenTab": "Enable and open its tab right after install",
         "expandDescription": "Show Full Description",
-        "collapseDescription": "Hide Full Description",
-        "nodeRiskTitle": "Allow a local Node program to run?",
-        "nodeRiskDescription": "This is high risk. The plugin's Node program has the same local permissions as your user account: it can read or change accessible files, use the network, and start other programs. The browser sandbox cannot contain it. Install only plugins from sources you trust.",
-        "nodeRiskConfirm": "I understand, continue",
-        "nodeRiskCancel": "Cancel installation"
+        "collapseDescription": "Hide Full Description"
       },
       "trust": {
         "official": "Official Cindy plugin",
@@ -2283,6 +2457,7 @@
       "perm": {
         "grantsTitle": "After installing it will have:",
         "toolsGroup": "Registered Tools",
+        "toolsDiffGroup": "Registered Tool Changes",
         "itemCount": "{{count}} total",
         "cindyImageGenerate": "Image generation (delegated to Cindy)",
         "cindyImageEdit": "Image editing (delegated to Cindy, its own images only)",
@@ -2295,12 +2470,14 @@
         "nodeRuntime": "Can run a bundled Node program on this computer",
         "nodeMcp": "Can run a bundled stdio MCP on this computer",
         "nodeRuntimeDetail": "High risk: it has the same local access as your user account, including files, network, and starting other programs. Cindy cannot contain it in the browser sandbox.",
+        "nodeSecret": "Can provide the stored credential “{{name}}” to the local Node program",
+        "nodeSecretDetail": "Cindy stores it encrypted and injects it only while the declared Worker methods below run. The Node program receives the plaintext and can return, log, save, or otherwise expose it to browser-side plugin code or Agent parameters. Only install plugins you trust.",
         "nodeResident": "The Node program can stay running in the background",
         "nodeResidentDetail": "Runs while the plugin is enabled and stops when disabled, updated, uninstalled, or when Cindy exits.",
         "tool": "Tool \"{{name}}\"",
         "command": "Chat command ${{command}}",
-        "panelRight": "Panel \"{{title}}\" · docked right of the chat",
         "panelLeft": "Panel \"{{title}}\" · docked left of the chat",
+        "panelTab": "Panel \"{{title}}\" · tab in the right sidebar",
         "code": "Executable code",
         "codeDetail": "Runs in an isolated sandbox with no access to your files or network.",
         "resident": "Always-on (starts when enabled, keeps a background process even when idle)",
@@ -2334,12 +2511,16 @@
         "noChange": "No permission changes.",
         "pick": "Can ask you to pick a folder for it",
         "pickDetail": "When it asks, Cindy shows the system folder picker; you decide what to share, and cancelling gives it nothing.",
+        "workspace": "Can ask to create a session entry for a project folder in the sidebar",
+        "workspaceDetail": "When it asks, you either pick the folder yourself or see the full path on a confirmation card before deciding; while it is handling a call you started, subfolders inside the current session's working directory are used directly without an extra prompt. Folders that already have a session are reused, and what gets created is an empty session — nothing starts running on its own.",
         "sessionContext": "Can learn which project folder the current session is working in",
         "sessionContextDetail": "Shares only location facts (session ID and project folder path) while it works for the current session — no file contents, and no file access is granted.",
         "preview": "Can open preview pages from the sites below in the sidebar browser",
         "previewDetail": "Only the sites listed below can be opened; every page it opens is attributed to this plugin.",
         "nodeChildSpawn": "Its Node program can ask the host to start declared sub-processes from its package",
-        "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits."
+        "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits.",
+        "skill": "Adds the skill \"{{name}}\" to your AI assistants",
+        "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust."
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -2391,7 +2572,8 @@
             "video.generate": "Video generation",
             "video.edit": "Image-to-video"
           },
-          "defaultOption": "{{model}} (default)"
+          "defaultOption": "{{model}} (default)",
+          "noModels": "No models available"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "Permissions",
@@ -2426,7 +2608,9 @@
         "slotCard": "Message cards",
         "slotNetwork": "Network access",
         "slotNotify": "System tips",
-        "slotFs": "File writing"
+        "slotFs": "File writing",
+        "slotSkill": "Agent skills",
+        "slotWorkspace": "Workspace sessions"
       },
       "commandPaletteTag": "Plugin command",
       "updateConfirm": {
@@ -2438,6 +2622,10 @@
       "pick": {
         "dialogTitle": "Choose a folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a folder"
+      },
+      "workspace": {
+        "dialogTitle": "Choose a project folder",
+        "dialogMessage": "Plugin “{{name}}” is asking you to choose a project folder to create a session in the sidebar"
       }
     },
     "mcp": {
@@ -2738,7 +2926,7 @@
     "emailPlaceholder": "Enter your email",
     "invalidEmail": "Please enter a valid email address",
     "invalidPhone": "Please enter a valid phone number",
-    "working": "Please wait...",
+    "working": "Please wait…",
     "continue": "Continue",
     "or": "or",
     "socialButton": "Continue with {{provider}}",
@@ -2759,12 +2947,19 @@
     "ssoRequired": "This organization requires SSO sign-in",
     "ssoEntry": "Sign in with enterprise SSO",
     "localModeEntry": "Skip Sign-In",
-    "localModeOpening": "Opening local mode...",
+    "localModeOpening": "Opening local mode…",
     "returnToLocalMode": "Return to local mode",
     "localModeDescription": "No Cindy account required. Data stays on this device; cloud models, cross-device access, and marketplace services are unavailable.",
+    "consentStatement": "I have read and agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
+    "consentDialog": {
+      "title": "Terms of Service & Privacy Policy",
+      "body": "Read and agree to Cindy's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy> to continue.",
+      "agree": "Agree",
+      "disagree": "Not Now"
+    },
     "ssoOrgTitle": "Enterprise SSO",
     "ssoOrgSubtitle": "Enter a company ID, organization slug, or verified domain to continue with single sign-on",
-    "ssoOrgPlaceholder": "Company ID, organization slug, or verified domain",
+    "ssoOrgPlaceholder": "Company ID, slug, or domain",
     "ssoOrgHint": "Don't know your enterprise sign-in identifier? Ask your admin",
     "ssoOrgDetected": "Choose a single sign-on connection for \"{{org}}\"",
     "ssoVerificationTitle": "Verify Your Work Identity",
@@ -2772,7 +2967,7 @@
     "enterCode": "Enter verification code",
     "codeSentTo": "We sent a code to {{identifier}}",
     "codePlaceholder": "6-digit code",
-    "verifying": "Verifying...",
+    "verifying": "Verifying…",
     "signIn": "Sign in",
     "resendCode": "Resend code",
     "resendCountdown": "{{n}} seconds until resend",
@@ -2843,11 +3038,11 @@
   },
   "splash": {
     "tips": {
-      "checkingUpdate": "Checking for updates...",
-      "updating": "Updating Cindy...",
-      "updateDone": "Update complete, restarting shortly...",
-      "checkingEnv": "Checking runtime environment...",
-      "waking": "Waking Cindy...",
+      "checkingUpdate": "Checking for updates…",
+      "updating": "Updating Cindy…",
+      "updateDone": "Update complete, restarting shortly…",
+      "checkingEnv": "Checking runtime environment…",
+      "waking": "Waking Cindy…",
       "envFailed": "Environment setup failed — click to retry"
     },
     "downloadStats": "{{percent}}% · {{speed}} MB/s · {{done}} MB / {{total}} MB",
@@ -2923,6 +3118,7 @@
       "modelWeeklyLabel": "{{model}} weekly",
       "windowSegment": "{{label}} {{remaining}} left",
       "resetAt": "resets {{at}}",
+      "resetInAt": "resets in {{countdown}} ({{at}})",
       "windowLine": "{{label}} {{remaining}} left ({{used}} used)",
       "sessionValueLabel": "Session value {{cost}}",
       "planLine": "Plan {{plan}}",
@@ -3021,6 +3217,19 @@
     "collapsePanel": "Collapse",
     "expandPanel": "Expand"
   },
+  "panelChrome": {
+    "maximizeAria": "Maximize panel",
+    "restoreAria": "Restore panel size",
+    "detachAria": "Open in a new window",
+    "minimizeAria": "Minimize to floating bubble"
+  },
+  "ghostPanelWindow": {
+    "mergeBack": "Merge back into main window",
+    "unavailable": "This plugin panel is currently unavailable"
+  },
+  "ghostPanelBubble": {
+    "restoreAria": "Restore {{name}} panel"
+  },
   "rightSidebar": {
     "ariaLabel": "Right sidebar",
     "window": {
@@ -3037,7 +3246,8 @@
       "menu": {
         "addLabel": "Add tab",
         "comingSoon": "Coming soon",
-        "alreadyOpen": "Open"
+        "alreadyOpen": "Open",
+        "pluginGroup": "Plugins"
       },
       "kinds": {
         "fileBrowser": "File browser",
@@ -3045,7 +3255,8 @@
         "terminal": "Terminal",
         "review": "Review",
         "collaboration": "Team",
-        "unknown": "Unknown tab"
+        "unknown": "Unknown tab",
+        "ghostPanel": "Plugin panel"
       },
       "controls": {
         "maximizeAria": "Maximize sidebar",
@@ -3070,6 +3281,9 @@
         "browserSub": "Browser",
         "openTerminal": "Open terminal",
         "terminalSub": "Terminal",
+        "pluginSub": "Plugin",
+        "pluginGroup": "Plugin panels",
+        "pluginGroupSub": "{{count}} plugins",
         "addMoreHint": "Use the + button at the top to choose more panel types"
       },
       "placeholderHint": "{{kind}} — content coming in a later phase"
@@ -3120,7 +3334,15 @@
         "unresponsiveDesc": "The page has not responded for a while. Reload or wait a moment.",
         "navigationLoopTitle": "Repeated Navigation Stopped",
         "navigationLoopDesc": "The page navigated repeatedly in a short time. Reload the page to try again.",
+        "resourceKilledTitle": "Page used too much memory",
+        "resourceKilledDesc": "This page was using too much memory and was stopped to keep the app running. You can reload it.",
+        "forceKill": "Force stop",
         "reload": "Reload"
+      },
+      "resourceAlert": {
+        "cpuHint": "This page is using significant system resources",
+        "terminate": "Stop page",
+        "dismiss": "Dismiss"
       }
     },
     "terminal": {
@@ -3481,7 +3703,31 @@
       "settingsLink": "Settings, current user: {{name}}",
       "canaryBadge": "Canary user",
       "viewReleaseNotes": "View release notes",
-      "reopenUpdateBanner": "Update ready — click to review"
+      "reopenUpdateBanner": "Update ready — click to review",
+      "downloadMobile": "Download Cindy Mobile"
+    },
+    "mobileDownload": {
+      "title": "Control Cindy Remotely",
+      "subtitle": "Connect your phone to this desktop",
+      "qrAlt": "QR code to download Cindy mobile",
+      "preparing": "Preparing QR code…",
+      "error": "Couldn’t create the QR code. Try again later.",
+      "openPage": "Open Download Page",
+      "openFailed": "Couldn’t open the download page. Check your system browser settings.",
+      "scanToOpen": "Scan to open the Cindy app and sign in with the same account",
+      "scanAnother": "Scan Another Device",
+      "scanAnotherHint": "Open Cindy on another phone",
+      "myDevices": "My Devices",
+      "deviceOffline": "Offline",
+      "allowControl": "Allow same-account devices to control this machine",
+      "deviceId": "This device · {{id}}",
+      "remoteAction": {
+        "checking": "Checking…",
+        "unavailable": "Unavailable",
+        "enable": "Enable",
+        "enabled": "Enabled"
+      },
+      "close": "Close Download Dialog"
     },
     "vendorReadiness": {
       "loading": "loading"
@@ -3496,7 +3742,7 @@
         "cancel": "No thanks"
       },
       "running": {
-        "title": "Converting config...",
+        "title": "Converting config…",
         "description": "Writing workspace config for {{targetAgent}}. Please do not close the window.",
         "primary": "Convert",
         "cancel": "No thanks"
@@ -3515,7 +3761,7 @@
   },
   "findInPage": {
     "dialogAriaLabel": "Find in page",
-    "placeholder": "Find...",
+    "placeholder": "Find…",
     "previous": "Previous",
     "next": "Next",
     "close": "Close"
@@ -3557,6 +3803,75 @@
       "queueTooltip": "Click to queue; press {{shortcut}} to steer without interrupting the task",
       "stop": "Stop generating"
     },
+    "pluginSetup": {
+      "title": "{{name}} Settings",
+      "assessmentReadFailed": "Couldn't read the plugin setup status.",
+      "setupIncomplete": "Plugin setup is not complete.",
+      "setupChangedDuringResume": "Plugin setup changed while the call was resuming. Please complete setup and try again.",
+      "chooseOne": "Choose one setup method",
+      "restoreAria": "Restore {{name}} settings",
+      "minimizeAria": "Minimize {{name}} settings",
+      "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
+      "cancel": "Cancel",
+      "cancelling": "Cancelling…",
+      "retry": "Retry",
+      "saveConfiguration": "Save Configuration",
+      "saving": "Saving…",
+      "error": {
+        "ACTION_FAILED": "Couldn't complete this setup action. Try again.",
+        "ACTION_STALE": "This setup changed. Choose the setup action again.",
+        "AUTH_CANCELLED": "Authorization was cancelled. Authorize the account again when ready.",
+        "AUTH_FAILED": "Couldn't authorize the account. Try again.",
+        "INLINE_INVALID": "This configuration is invalid. Check it and try again.",
+        "INLINE_UNAVAILABLE": "This Cindy version can't save this configuration in chat. Update Cindy and try again.",
+        "SAVE_FAILED": "Couldn't save this configuration. Try again.",
+        "WINDOW_CLOSED": "The window that started setup was closed. Return to the session and try again.",
+        "TARGET_UNAVAILABLE": "This plugin is disabled, uninstalled, or unavailable. Check the plugin and try again.",
+        "ASSESSMENT_FAILED": "Couldn't refresh the setup status. Try again.",
+        "TIMEOUT": "Setup timed out. Try again."
+      },
+      "hostRequirements": {
+        "modelProvider": {
+          "label": "AI Model Service",
+          "description": "Connect an available model service before using the image or video capabilities declared by this plugin."
+        }
+      },
+      "form": {
+        "placeholder": "Enter {{label}}",
+        "required": "Enter {{label}}",
+        "tooLong": "Must be {{maxLength}} characters or fewer",
+        "openLink": "Get {{label}}",
+        "openLinkFailed": "Couldn't open this page. Please try again."
+      },
+      "action": {
+        "oauth_connect": "Authorize",
+        "open_plugin_settings": "Open settings",
+        "manage_connection": "Manage connections",
+        "open_client_settings": "Open model settings"
+      },
+      "phase": {
+        "pending": "Pending",
+        "action_running": "In progress…",
+        "waiting_external": "Waiting for authorization…",
+        "verifying": "Verifying…",
+        "satisfied": "Completed",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      },
+      "timeout": "Setup timed out",
+      "oauthCancelled": "Authorization was cancelled",
+      "oauthFailed": "Authorization failed: {{detail}}",
+      "pluginUninstalledDuringOauth": "The target plugin was uninstalled or is unavailable",
+      "inlineSecretInvalid": "Credential value is invalid",
+      "pluginUnavailable": "The target plugin was uninstalled or is unavailable",
+      "inlineActionExpired": "This setup action has expired; please try again",
+      "inlineSecretDeclChanged": "Credential declaration has changed; please try again",
+      "inlineSecretStoreFailed": "Failed to save credential",
+      "targetNotFound": "The target plugin was uninstalled or is currently unavailable",
+      "targetDisabled": "The target plugin has been disabled",
+      "targetDisabledInWorkdir": "The user has disabled this plugin in the current working directory; do not retry.",
+      "targetToolNotFound": "The target plugin no longer provides this tool"
+    },
     "createAgent": {
       "quickStart": "Quick start",
       "quickStarts": {
@@ -3587,13 +3902,13 @@
       "add": "Add project",
       "cancel": "Cancel",
       "empty": "Connect a controllable device under Settings → Remote connection, or add an SSH host under Settings → Remote machines first.",
-      "loading": "Loading...",
+      "loading": "Loading…",
       "noSubdirs": "No subfolders here",
       "doubleClickHint": "Double-click to enter",
       "tabExisting": "Existing projects",
       "tabBrowse": "Browse folders",
       "existingEmpty": "No projects on that machine yet — browse folders to add one.",
-      "existingLoading": "Loading projects...",
+      "existingLoading": "Loading projects…",
       "confirmCreate": {
         "title": "Create remote directory?",
         "description": "{{path}} does not exist on {{hostId}}. Create it now?",
@@ -3616,6 +3931,18 @@
       "edit": "Edit",
       "options": "Options",
       "priceTip": "Input {{input}} · Output {{output}} per 1M tokens",
+      "pricing": {
+        "title": "Per 1M tokens",
+        "input": "Input",
+        "output": "Output",
+        "cacheRead": "Cache read",
+        "cacheCreate": "Cache write",
+        "free": "Limited-time free",
+        "discount": "Save {{percent}}%",
+        "perMillion": "Standard model pricing",
+        "fixedFx": "Estimated at the fixed rate of 1 USD = 6.7 CNY",
+        "subscriptionEstimate": "Value estimate, not an actual bill"
+      },
       "trigger": {
         "placeholder": "Select model",
         "aria": "Select model. Current: {{model}}",
@@ -3624,7 +3951,7 @@
       "category": {
         "anthropic": "Anthropic",
         "gpt": "OpenAI",
-        "budget": "85% off",
+        "budget": "GPT Discount",
         "grok": "xAI",
         "google": "Google",
         "china": "Domestic",
@@ -3635,15 +3962,15 @@
         "other": "Other"
       },
       "search": {
-        "placeholder": "Search {{source}} models...",
-        "placeholderAll": "Search models...",
+        "placeholder": "Search {{source}} models…",
+        "placeholderAll": "Search models…",
         "noResults": "No matching models"
       },
       "meta": {
         "context": "{{value}} context",
         "price": "{{input}}/{{output}} per 1M",
         "fastBadge": "Fast",
-        "budgetDiscount": "85% off"
+        "budgetDiscount": "Special discount"
       },
       "source": {
         "railLabel": "Source",
@@ -3755,7 +4082,7 @@
       "steerAction": "Steer",
       "steerRunningTip": "Steer this message into the running task without interrupting it; handled once the current action finishes",
       "steerPausedTip": "Continue the task and handle this message first",
-      "steeringAction": "Steering...",
+      "steeringAction": "Steering…",
       "steerAria": "Steer queued message {{index}} into the running task",
       "steeringAria": "Queued message {{index}} is being steered",
       "editAction": "Edit",
@@ -3786,6 +4113,9 @@
       "startFailedContinue": "Failed to start collaboration. Continuing as a single session.",
       "createWorkerRefreshFailed": "Unable to refresh Worker status. Please try again.",
       "openHint": "Bring in a Worker to help",
+      "disabledHint": "Collaboration is disabled for this project. Enable it in project settings.",
+      "unavailableHint": "Unable to verify this project's collaboration setting. Try again shortly.",
+      "loadingHint": "Still checking this project's collaboration setting. Try again shortly.",
       "stopHint": "Stop collaboration",
       "stopAria": "Stop collaboration",
       "toggleOnAria": "Collaboration on — click to stop",
@@ -3811,7 +4141,10 @@
         "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "The selected provider and model route is unavailable on the controlled device. Choose a route available on that device, then retry.",
         "BUDGET_MODEL_REQUIRES_API_MODE": "This Codex model requires an API key. Configure it in Settings, then try again.",
         "BUDGET_MODEL_REQUIRES_API_MODE_CONTINUE": "This Codex model requires an API key. Collaboration was not started, and this message is continuing as a single session. Configure it in Settings, then try again.",
-        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "The controlled device does not have the API key required for this Codex model. Configure it on that device, then retry."
+        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "The controlled device does not have the API key required for this Codex model. Configure it on that device, then retry.",
+        "PRECONDITION_FAILED": "Collaboration is disabled for this project or the session is not eligible.",
+        "PRECONDITION_FAILED_CONTINUE": "Collaboration is disabled for this project. Continuing as a single session.",
+        "PRECONDITION_FAILED_REMOTE": "The controlled session is not eligible for collaboration."
       }
     },
     "chatInput": {
@@ -3899,6 +4232,31 @@
       "saveEdit": "Save Text"
     }
   },
+  "onboarding": {
+    "connectProvider": {
+      "title": "Connect a model provider to get started",
+      "desc": "No models are available yet. Connect a provider to start chatting.",
+      "recommendedLabel": "Recommended",
+      "cindy": {
+        "title": "Cindy AI",
+        "desc": "Official service · all models · works with Claude Code and Codex",
+        "loginTitle": "Sign in to Cindy",
+        "loginDesc": "Sign in to enable the official Cindy AI service with access to all models"
+      },
+      "othersToggle": "Other providers ({{count}})",
+      "presetSub": "Paste an API key to connect",
+      "dismiss": "Maybe later",
+      "haveApiKey": "I have an API key",
+      "banner": {
+        "text": "No models available — connect a provider to start chatting.",
+        "connectCta": "Connect a provider",
+        "loginCta": "Sign in to Cindy",
+        "dismissAria": "Dismiss"
+      },
+      "detectedLabel": "Detected",
+      "oauthSub": "Opens a verification page in your browser — connects automatically"
+    }
+  },
   "voiceInputOverlay": {
     "status": {
       "listening": "Voice input",
@@ -3910,7 +4268,7 @@
       "error": "Voice input failed"
     },
     "hint": "Press shortcut again to input",
-    "placeholder": "Start speaking...",
+    "placeholder": "Start speaking…",
     "pasteHint": "Automatic input failed. Copy the transcript and enter it manually.",
     "pasteErrors": {
       "empty": "There is no voice input text to enter.",
@@ -3954,7 +4312,7 @@
       "approved": "Approved",
       "revisionRequested": "Revision requested",
       "expired": "Expired",
-      "pendingHint": "Agent is waiting for plan approval...",
+      "pendingHint": "Agent is waiting for plan approval…",
       "collapse": "Collapse plan",
       "showFull": "Show full plan",
       "feedbackLabel": "Feedback:",
@@ -4060,7 +4418,7 @@
       "syncAuthDaemonRestartFailed": "Credentials pushed, but the old daemon did not restart — reconnect to the remote before retrying",
       "invalidEncryptedContent": "Switching providers made the previous encryption unusable. This session can only continue under the original provider, or click Fork to drop the protocol-encrypted content and continue in a new session.",
       "forkStripEncrypted": "Fork and strip",
-      "forkStripEncryptedRunning": "Forking...",
+      "forkStripEncryptedRunning": "Forking…",
       "forkStripEncryptedTitle": "Fork and strip into a new session",
       "codexSessionExpiredLogin": "Reconnect ChatGPT",
       "codexSessionReconnected": "ChatGPT is reconnected. Click “Retry” to continue.",
@@ -4192,7 +4550,7 @@
       "openSystemFailed": "Cannot open in system",
       "copyAll": "Copy all",
       "cannotRead": "Unable to read file",
-      "loading": "Loading file...",
+      "loading": "Loading file…",
       "oversizeTitle": "File too large to preview",
       "oversizeBody": "This file is {{size}}, exceeding the {{limit}}MB preview limit. Please open it with the system default application.",
       "openInSystem": "Open in system",
@@ -4329,7 +4687,7 @@
     "systemCard": {
       "context": {
         "title": "Context Usage",
-        "loading": "Loading...",
+        "loading": "Loading…",
         "noLiveSession": "No context data is available yet. Try again after the Claude Code session starts.",
         "unsupportedAgent": "{{agent}} does not support context usage yet.",
         "percentFull": "{{pct}}% Full",
@@ -4480,7 +4838,7 @@
         "title": "Rewind to this message?",
         "titleError": "Cannot rewind to this message",
         "errorDescription": "File checkpointing is not enabled for this Session — files modified by tools cannot be rolled back.",
-        "calculating": "Calculating rewind impact...",
+        "calculating": "Calculating rewind impact…",
         "noChanges": "No file changes to roll back",
         "continueWillTruncate": "Continuing will still truncate later conversation",
         "noPerFileDiff": "This SDK version does not support per-file diff preview",
@@ -4503,7 +4861,7 @@
     },
     "upgradeBanner": {
       "description": "A new cc-manager version is available on {{hostId}} — upgrading will interrupt all active Claude Code remote sessions on this host",
-      "upgrading": "Upgrading cc-manager on {{hostId}}...",
+      "upgrading": "Upgrading cc-manager on {{hostId}}…",
       "upgrade": "Upgrade now",
       "upgradeTitle": "Download and restart cc-manager (will interrupt current sessions)",
       "dismissTitle": "Not now (will prompt again on next launch)",
@@ -4617,7 +4975,7 @@
       "unnamedSession": "Untitled session",
       "moreActions": "More actions",
       "newSession": "New session",
-      "loading": "Loading..."
+      "loading": "Loading…"
     },
     "time": {
       "yesterday": "Yesterday",
@@ -4662,7 +5020,7 @@
         "confirm": "Open Settings",
         "cancel": "Cancel"
       },
-      "chatPlaceholder": "Let's keep chatting...",
+      "chatPlaceholder": "Let's keep chatting…",
       "chatDropAreaAria": "Chat file drop area",
       "openWorkingDirAria": "Open working directory in the system file manager",
       "projectContextLoaded": "Project Knowledge Base loaded",
@@ -4739,13 +5097,15 @@
       "card": {
         "awaitingPermission": "Awaiting permission",
         "awaitingQuestion": "Awaiting your reply",
-        "awaitingPlan": "Awaiting plan review"
+        "awaitingPlan": "Awaiting plan review",
+        "awaitingPluginSetup": "Awaiting plugin setup"
       },
       "showAllSessions": "Show all {{count}}",
       "dialogues": "Dialogues",
       "newDialogue": "New dialogue",
       "dialoguesToggleExpand": "Expand dialogues",
       "dialoguesToggleCollapse": "Collapse dialogues",
+      "loadingDialogues": "Loading…",
       "noDialogues": "No dialogues",
       "dialogueSettings": "Organize dialogues",
       "dialogueSettingsAria": "Organize dialogues (Sort by: {{sortBy}})",
@@ -4950,6 +5310,8 @@
       },
       "projectAction": {
         "rename": "Rename project",
+        "pin": "Pin project",
+        "unpin": "Unpin project",
         "showFiles": "Show Files",
         "archivedAll": "Archive all",
         "unarchiveAll": "Restore all",
@@ -4981,6 +5343,10 @@
       "aiRenameRemoteOutdated": "The remote device is on an older version. Update it to use AI rename",
       "aiRenameRemoteOffline": "Remote device is not connected. Check the connection and try again",
       "aiRenameFailed": "AI rename failed, please try again"
+    },
+    "autoTitle": {
+      "image": "Image",
+      "file": "File"
     },
     "sessionHeader": {
       "untitled": "Untitled session",
@@ -5074,7 +5440,7 @@
       },
       "docSearch": {
         "ariaLabel": "Find in document",
-        "placeholder": "Find...",
+        "placeholder": "Find…",
         "prev": "Previous",
         "next": "Next",
         "close": "Close",
@@ -5173,10 +5539,10 @@
     },
     "search": {
       "open": "Search",
-      "placeholder": "Search titles or content...",
+      "placeholder": "Search titles or content…",
       "clear": "Clear search",
       "empty": "Type to search chat titles and content",
-      "searching": "Searching...",
+      "searching": "Searching…",
       "failed": "Search failed",
       "noResults": "No matching chats",
       "jumpFailed": "Opened the chat, but could not jump to the matching message",
@@ -5213,7 +5579,7 @@
     "low": "Low",
     "medium": "Medium",
     "high": "High",
-    "xhigh": "Extra",
+    "xhigh": "Extra High",
     "max": "Max",
     "ultra": "Ultra"
   },
@@ -5237,6 +5603,12 @@
       },
       "gallery": {
         "heading": "Start from a template"
+      },
+      "capability": {
+        "worktree": "Isolated worktree",
+        "pr": "PR automation",
+        "web": "Web search",
+        "params": "Customizable"
       }
     },
     "projectAutomation": {
@@ -5309,6 +5681,7 @@
       "tagManual": "Manual",
       "totalCost": "Cost {{cost}}",
       "totalValue": "Value {{value}}",
+      "costUnavailable": "Cost unavailable",
       "menu": {
         "rename": "Rename",
         "resume": "Resume",
@@ -5348,6 +5721,7 @@
       "sessionValue": "Session value {{value}}",
       "runCost": "Run cost {{cost}}",
       "runValue": "Estimated run value {{value}}",
+      "costUnavailable": "Cost unavailable",
       "legacyCostUnavailable": "Historical cost unavailable",
       "persistentSessionGroup": "Persistent session {{session}} · {{count}} runs",
       "expandRemainingRuns": "Show {{count}} more",
@@ -5583,7 +5957,7 @@
         "category": {
           "anthropic": "Anthropic",
           "gpt": "GPT",
-          "gpt-budget": "GPT (85% off)",
+          "gpt-budget": "GPT Discount",
           "google": "Google",
           "china": "China"
         },
@@ -5654,6 +6028,57 @@
         "description": "The run history entry will be removed. This cannot be undone.",
         "confirm": "Delete",
         "cancel": "Cancel"
+      }
+    },
+    "builtinTemplates": {
+      "categories": {
+        "dev-automation": "Development automation",
+        "info-radar": "Information radar",
+        "office-docs": "Docs & office work"
+      },
+      "items": {
+        "nightly-test-heal": {
+          "name": "Nightly test self-healing",
+          "description": "Run tests every night and attempt minimal fixes for failures in an isolated worktree",
+          "prompt": "Run the project's test suite. If there are failures, attempt a minimal fix in an isolated worktree.\nConstraints:\n- Determine the standard test command from the repo docs or package scripts before running the full suite\n- Only fix issues backed by clear failing evidence; prefer the smallest possible change and avoid drive-by refactoring\n- Re-run the affected tests after fixing to confirm they pass, and review the full diff\n- Deliver fixes through the repo's workflow (e.g. create a branch and open a PR); never commit directly to the main branch\n- For failures that cannot be fixed safely, report the cause, suspicious files, and suggested next steps"
+        },
+        "pr-gatekeeper": {
+          "name": "PR gatekeeper",
+          "description": "Pre-review new changes on open PRs each weekday and report risks by severity",
+          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits in the past 24 hours (on Monday, look back over the whole weekend), citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
+        },
+        "domain-radar": {
+          "name": "Domain radar",
+          "description": "Periodically collect the latest updates in a topic you follow and deliver an opinionated digest",
+          "prompt": "Collect the latest developments about \"{{topic}}\" from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+          "params": {
+            "topic": {
+              "label": "Topic to follow",
+              "placeholder": "e.g. AI agents, EV market, frontend frameworks"
+            }
+          }
+        },
+        "competitor-watch": {
+          "name": "Competitor watch",
+          "description": "Weekly roundup of competitors' product and market moves, with impact analysis",
+          "prompt": "Track the past week's activity of these competitors: {{competitors}}.\nConstraints:\n- Use web search to cover product updates, releases, pricing changes, market moves, and user sentiment, citing sources\n- Distinguish official information from third-party accounts; clearly mark unverified rumors\n- For each significant update, analyze what it means for us and suggest a response\n- If nothing substantive happened, say so honestly instead of padding the report",
+          "params": {
+            "competitors": {
+              "label": "Competitors",
+              "placeholder": "e.g. Notion, Linear, Figma"
+            }
+          }
+        },
+        "weekly-work-draft": {
+          "name": "Weekly report drafter",
+          "description": "Compile this week's work from documents in the working directory into a report draft",
+          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+        },
+        "knowledge-freshness": {
+          "name": "Knowledge base freshness check",
+          "description": "Monthly health check of working-directory docs for outdated or conflicting content",
+          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+        }
       }
     }
   },
@@ -5907,6 +6332,7 @@
       "descriptionDir": "The directory/file below is outside this session's working directory. If you allow, its files will be handed to this plugin for upload (it only receives a one-time ticket, never paths).",
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
+      "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
       "dirMeta": "{{count}} files · {{size}}",
       "directory": "Directory",
       "allowDirs": "Also allow their folders (media files in the same folders won't ask again this session)",
@@ -5946,7 +6372,7 @@
       "totalCount_other": "{{count}} items"
     },
     "sidebar": {
-      "loading": "loading ...",
+      "loading": "loading…",
       "skillHub": "Skill Hub",
       "backToLocal": "Back To Local",
       "openInExplorer": "Open in file manager",
@@ -6104,7 +6530,7 @@
       "categoryAll": "All",
       "categoryLabel": "Category: {{name}}",
       "loadFailed": "Load failed: {{error}}",
-      "loading": "Loading...",
+      "loading": "Loading…",
       "noResults": "No matching skills",
       "installFailedToast": "{{name}} install failed: {{message}}",
       "installError": "Unknown error"
@@ -6207,7 +6633,7 @@
       "categoryLabel": "Category",
       "categoryAuto": "Auto",
       "categoryPlaceholder": "Select a category",
-      "categoryLoading": "Loading categories...",
+      "categoryLoading": "Loading categories…",
       "categoryLoadFailed": "Failed to load categories. Please retry.",
       "categoryEmpty": "No categories are available",
       "categoryRequired": "Select a category before publishing",
@@ -6456,7 +6882,7 @@
     "statusField": "Status:",
     "errorField": "Error:",
     "sendNotAccepted": "Send was not accepted and no turn started. Check the working directory or session state, then try again.",
-    "messagePlaceholder": "Type message...",
+    "messagePlaceholder": "Type message…",
     "imagePathPlaceholder": "Image absolute path (D5 - test Codex image)",
     "send": "Send",
     "abort": "Abort",
@@ -6508,7 +6934,8 @@
       "qrExpired": "QR code expired, please start again",
       "registrationFailed": "Creation failed, please retry later",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
-      "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed."
+      "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
+      "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed."
     },
     "validation": {
       "feishuFieldsRequired": "App ID and App Secret are both required",
@@ -6831,6 +7258,223 @@
     "note": {
       "codexStateSkipped": "Codex has not been initialized on this machine, so session state was not fully restored. Run any Codex session once, then continuing will work.",
       "workdirKeyInexact": "The chosen directory path is too long to place transcripts; downgraded to chat history only."
+    }
+  },
+  "billing": {
+    "sidebar": "Credits & plans",
+    "settings": {
+      "title": "Usage and billing",
+      "subscriptionCard": {
+        "title": "Current plan",
+        "empty": "No active subscription",
+        "emptyTitle": "No subscription plan",
+        "unnamedPlan": "Subscription plan",
+        "unavailable": "Subscription status is temporarily unavailable. Refresh to try again.",
+        "action": "View plans",
+        "changeAction": "Change plan",
+        "priceInterval": "{{price}} / {{interval}}",
+        "includedCredits": "Includes {{amount}} credits per {{interval}}",
+        "renewsAt": "Renews {{date}}",
+        "endsAt": "Plan ends {{date}}",
+        "cancelAction": "Cancel Subscription",
+        "cancelConfirmTitle": "Cancel Your Current Subscription?",
+        "cancelConfirmDescription": "This action does not issue a refund or immediately change your credits. Your current plan stays available through {{date}}, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmDescriptionWithoutDate": "This action does not issue a refund or immediately change your credits. Your current plan stays available through the end of this billing period, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmAction": "Confirm Cancellation",
+        "cancelSuccess": "Auto-renewal is canceled. Your current plan remains available through {{date}}.",
+        "cancelSuccessWithoutDate": "Auto-renewal is canceled. Your current plan will end after this billing period.",
+        "cancelNotSupported": "This subscription cannot be canceled yet.",
+        "cancelFailed": "Could not cancel the subscription. Try again later."
+      },
+      "topupCard": {
+        "action": "Buy credits"
+      }
+    },
+    "balance": {
+      "title": "Available balance",
+      "creditParityCny": "1 credit = 1 CNY. Credits pay for Cindy AI usage; payments are processed by third-party providers.",
+      "creditParityUsd": "1 credit = 1 USD. Credits pay for Cindy AI usage; payments are processed by third-party providers.",
+      "plan": "Plan credits",
+      "purchased": "Purchased credits",
+      "promotional": "Promotional credits",
+      "notProvisioned": "Credits have not been enabled for this account.",
+      "notSupported": "Balance lookup is not supported for this account.",
+      "unavailable": "Balance is temporarily unavailable. Refresh to try again."
+    },
+    "usage": {
+      "title": "Credit usage",
+      "observedAt": "Balance updated {{date}}",
+      "poolDetail": "Used {{used}} · Total {{total}}",
+      "remaining": "Remaining",
+      "progressLabel": "{{label}} usage",
+      "historyUnavailable": "Usage history is incomplete. Only the remaining balance is available.",
+      "detailsUnavailable": "Usage details are temporarily unavailable. Current balances are shown instead.",
+      "promotionalDetails": {
+        "title": "Promotional Credit Details",
+        "count": "{{count}} grants",
+        "empty": "No promotional credit grants are available.",
+        "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
+        "unnamed": "Promotional credit",
+        "original": "Original",
+        "used": "Used",
+        "remaining": "Remaining",
+        "expiresAt": "Expires {{date}}",
+        "states": {
+          "active": "Active",
+          "depleted": "Depleted",
+          "expired": "Expired",
+          "voided": "Voided"
+        }
+      }
+    },
+    "dialogs": {
+      "subscription": {
+        "title": "Choose a subscription plan"
+      },
+      "topup": {
+        "title": "Buy credits"
+      }
+    },
+    "steps": {
+      "channel": {
+        "title": "Choose a payment method"
+      }
+    },
+    "actions": {
+      "refreshCatalog": "Refresh",
+      "retry": "Retry",
+      "pay": "Review and pay",
+      "refresh": "Refresh status",
+      "close": "Close"
+    },
+    "catalog": {
+      "errorTitle": "Plans are temporarily unavailable",
+      "errorDescription": "Check your connection and retry. Local fallback plans will not be used.",
+      "emptyTitle": "No Plans Available",
+      "emptyDescription": "The server has not published any plans yet.",
+      "currentPlan": "Current Plan",
+      "unavailableReasons": {
+        "OFFER_COMING_SOON": "Coming Soon",
+        "NO_AVAILABLE_PAYMENT_CHANNEL": "No Payment Method Available"
+      }
+    },
+    "amount": {
+      "custom": "Custom amount",
+      "label": "Top-up amount",
+      "placeholder": "Enter an amount",
+      "rangeHint": "Enter between {{min}} and {{max}}",
+      "rangeError": "Amount must be between {{min}} and {{max}}",
+      "formatError": "Enter a valid amount with no more than {{digits}} decimal places"
+    },
+    "intervals": {
+      "MONTH": "month",
+      "YEAR": "year"
+    },
+    "credits": "{{amount}} credits",
+    "confirm": {
+      "channel": "Pay with {{provider}}"
+    },
+    "paymentActions": {
+      "QR_CODE": "Scan to pay",
+      "REDIRECT": "Open payment page"
+    },
+    "providers": {
+      "alipay": "Alipay",
+      "stripe": "Card"
+    },
+    "currentSubscription": {
+      "title": "Current subscription",
+      "purchaseBlocked": "You already have an unfinished subscription. Manage it before purchasing another plan."
+    },
+    "subscriptionStatus": {
+      "INCOMPLETE": "Awaiting payment",
+      "INCOMPLETE_EXPIRED": "Payment expired",
+      "TRIALING": "Trial",
+      "ACTIVE": "Active",
+      "PAST_DUE": "Past due",
+      "UNPAID": "Unpaid",
+      "CANCELED": "Canceled",
+      "PAUSED": "Paused"
+    },
+    "checkout": {
+      "creatingTitle": "Creating payment",
+      "awaitingTitle": "Awaiting payment",
+      "completedTitle": "Payment successful",
+      "failedTitle": "Unable to complete",
+      "expiredTitle": "Payment expired",
+      "canceledTitle": "Payment canceled",
+      "topupSubtitle": "Credit top-up",
+      "subscriptionSubtitle": "Subscription",
+      "creatingBody": "Confirming the order with the payment service…",
+      "qrAlt": "Payment QR code",
+      "scanHint": "Scan with the corresponding payment app",
+      "checkingExpiry": "Checking expiration…",
+      "expiresIn": "QR code expires in {{minutes}}:{{seconds}}",
+      "redirectHint": "Complete payment on the provider page, then return to Cindy.",
+      "openPayment": "Open payment page",
+      "refreshingAction": "Loading payment instructions…",
+      "paymentCompleted": "Your payment was completed.",
+      "requestFailed": "The request failed. Retry safely; an uncertain create result keeps the original idempotency key.",
+      "expiredBody": "This payment link expired. Create a new payment to continue.",
+      "actionExpiredBody": "This code expired. Close this window and choose again to generate a new one.",
+      "canceledBody": "This payment was canceled.",
+      "failedBody": "Payment failed. Try again later or contact support."
+    },
+    "planChange": {
+      "targetTitle": "Change subscription plan",
+      "upgradeBadge": "Upgrade",
+      "sameLevelBadge": "Same tier",
+      "downgradeBadge": "Downgrade",
+      "emptyTitle": "No plans available to switch to",
+      "emptyDescription": "The server has not configured another plan for your current payment method.",
+      "quotingTitle": "Preparing plan change",
+      "quotingBody": "Fetching the price and effective time from the server…",
+      "quoteTitle": "Confirm plan change",
+      "confirmingTitle": "Submitting plan change",
+      "confirmingBody": "Submitting your plan change to the server…",
+      "pendingProviderTitle": "Processing plan change",
+      "pendingProviderBody": "The payment provider is processing this change. Cindy will keep checking the result…",
+      "awaitingTitle": "Pay the difference",
+      "scheduledTitle": "Downgrade scheduled",
+      "scheduledBody": "The new plan takes effect on {{date}}. Your current plan stays active until then.",
+      "appliedTitle": "Plan change applied",
+      "appliedBody": "Your new plan is now active.",
+      "canceledTitle": "Plan change canceled",
+      "canceledBody": "The plan change was canceled. Your current plan is unchanged.",
+      "expiredTitle": "Quote expired",
+      "expiredBody": "The quote expired. Start the plan change again to get a new quote.",
+      "failedTitle": "Plan change failed",
+      "failedBody": "The plan change did not complete. Your current plan is unchanged.",
+      "requestFailed": "The plan change request couldn’t be completed. Refresh your subscription status and try again.",
+      "quoteRejected": "This plan isn’t available for your current subscription. Choose another plan.",
+      "chooseAnotherPlan": "Choose Another Plan",
+      "resyncHint": "The confirmation result could not be verified. Syncing the latest status from the server…",
+      "upgradeDueNow": "Pay {{amount}} now for the remainder of this period",
+      "upgradeNoAmount": "The upgrade takes effect immediately after confirmation.",
+      "upgradeHint": "The upgrade takes effect immediately after payment. The renewal price becomes the new plan price.",
+      "downgradeAt": "Takes effect on {{date}}",
+      "downgradeHint": "Your current plan stays active until the end of this billing period. No refund is issued now.",
+      "quoteExpiresIn": "Quote expires in {{minutes}}:{{seconds}}",
+      "scanToPay": "Scan to pay {{amount}}",
+      "confirm": "Confirm change",
+      "abandon": "Discard",
+      "targetLabel": "Target plan: {{name}}",
+      "pendingDowngrade": "Downgrade to {{name}} is scheduled for {{date}}.",
+      "undo": "Undo downgrade"
+    }
+  },
+  "fileAccess": {
+    "epermGuidance": {
+      "title": "macOS folder access denied",
+      "message": "Cindy cannot access your {{folder}} folder",
+      "detail": "macOS denied access. Open System Settings to grant permission, then run your agent command again.",
+      "openSystemSettings": "Open System Settings",
+      "cancel": "Cancel",
+      "folderNames": {
+        "desktop": "Desktop",
+        "documents": "Documents",
+        "downloads": "Downloads"
+      }
     }
   }
 }

@@ -1,0 +1,1003 @@
+{
+ "meta": {
+  "name": "login-deletion-bubble",
+  "pr": "feat/login-deletion-bubble(验收证据;施工 commit 31e472ed9 desktop + b7392d8d4 mobile)",
+  "summary": {
+   "what": "验证修复后的账号注销提示气泡:浮层盖在登录页一切元素之上(立绘/字标/面板/社交行),不占布局流;desk/phone/pad(横/竖)四端,light/dark,四语言",
+   "how": "气泡视觉/几何/颜色全部 truth 驱动(提取自本分支 HEAD 源码,带 provenance);布局引擎=产品 resolveDeletionBubbleFrame 移植,门 F oracle=产品纯函数 resolveLoginSurface+resolveDeletionBubbleFrame 预计算;家具为示意占位(非验收对象)",
+   "accept": "门 A/B/C/D/F 阻断门全绿;门 E 无沙盒基准照实跳过;长文案压力态验证撑高/居中换行/底距 20 恒定;completed 点「我知道了」消失;浮层覆盖与不推挤由交互门实测"
+  }
+ },
+ "matrix": {
+  "platforms": [
+   "desk",
+   "phone",
+   "pad-landscape",
+   "pad-portrait"
+  ],
+  "regions": [
+   "cn"
+  ],
+  "systems": [
+   "mac",
+   "ios"
+  ],
+  "themes": [
+   "light",
+   "dark"
+  ],
+  "langs": [
+   "zh-CN",
+   "en",
+   "ja",
+   "ko"
+  ]
+ },
+ "states": [
+  {
+   "id": "deletion-pending",
+   "via": [
+    {
+     "click": "[data-qa-state-btn=\"deletion-pending\"]"
+    },
+    {
+     "expect": "deletion-pending"
+    }
+   ]
+  },
+  {
+   "id": "deletion-processing",
+   "via": [
+    {
+     "click": "[data-qa-state-btn=\"deletion-processing\"]"
+    },
+    {
+     "expect": "deletion-processing"
+    }
+   ]
+  },
+  {
+   "id": "deletion-completed",
+   "via": [
+    {
+     "click": "[data-qa-state-btn=\"deletion-completed\"]"
+    },
+    {
+     "expect": "deletion-completed"
+    }
+   ]
+  },
+  {
+   "id": "deletion-stress",
+   "via": [
+    {
+     "click": "[data-qa-state-btn=\"deletion-stress\"]"
+    },
+    {
+     "expect": "deletion-stress"
+    }
+   ]
+  }
+ ],
+ "verify": {
+  "cases": [
+   {
+    "id": "desk-light-zh",
+    "prefs": {
+     "plat": "desk",
+     "region": "cn",
+     "os": "mac",
+     "mode": "light",
+     "lang": "zh-CN"
+    }
+   },
+   {
+    "id": "desk-dark-en",
+    "prefs": {
+     "plat": "desk",
+     "region": "cn",
+     "os": "mac",
+     "mode": "dark",
+     "lang": "en"
+    }
+   },
+   {
+    "id": "desk-light-ja",
+    "prefs": {
+     "plat": "desk",
+     "region": "cn",
+     "os": "mac",
+     "mode": "light",
+     "lang": "ja"
+    }
+   },
+   {
+    "id": "phone-light-zh",
+    "prefs": {
+     "plat": "phone",
+     "region": "cn",
+     "os": "ios",
+     "mode": "light",
+     "lang": "zh-CN"
+    }
+   },
+   {
+    "id": "phone-dark-en",
+    "prefs": {
+     "plat": "phone",
+     "region": "cn",
+     "os": "ios",
+     "mode": "dark",
+     "lang": "en"
+    }
+   },
+   {
+    "id": "phone-dark-ko",
+    "prefs": {
+     "plat": "phone",
+     "region": "cn",
+     "os": "ios",
+     "mode": "dark",
+     "lang": "ko"
+    }
+   },
+   {
+    "id": "pad-land-light-zh",
+    "prefs": {
+     "plat": "pad-landscape",
+     "region": "cn",
+     "os": "ios",
+     "mode": "light",
+     "lang": "zh-CN"
+    }
+   },
+   {
+    "id": "pad-land-dark-ja",
+    "prefs": {
+     "plat": "pad-landscape",
+     "region": "cn",
+     "os": "ios",
+     "mode": "dark",
+     "lang": "ja"
+    }
+   },
+   {
+    "id": "pad-port-light-en",
+    "prefs": {
+     "plat": "pad-portrait",
+     "region": "cn",
+     "os": "ios",
+     "mode": "light",
+     "lang": "en"
+    }
+   },
+   {
+    "id": "pad-port-dark-zh",
+    "prefs": {
+     "plat": "pad-portrait",
+     "region": "cn",
+     "os": "ios",
+     "mode": "dark",
+     "lang": "zh-CN"
+    }
+   },
+   {
+    "id": "pad-port-light-ko",
+    "prefs": {
+     "plat": "pad-portrait",
+     "region": "cn",
+     "os": "ios",
+     "mode": "light",
+     "lang": "ko"
+    }
+   }
+  ],
+  "noClip": [
+   ".db-title",
+   ".db-copy"
+  ],
+  "persistence": {
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:pad-landscape\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:dark\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:ja\"]"
+    }
+   ],
+   "expected": {
+    "plat": "pad-landscape",
+    "region": "cn",
+    "os": "ios",
+    "mode": "dark",
+    "lang": "ja"
+   },
+   "storageKey": "qa-hifi:login-deletion-bubble:prefs",
+   "reloads": 2,
+   "initialState": "deletion-pending"
+  }
+ },
+ "bindings": [
+  {
+   "sel": ".db-bubble",
+   "prop": "background-color",
+   "truth": "desktop.colors.bubbleBg.light",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:light\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "background-color",
+   "truth": "desktop.colors.bubbleBg.dark",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:dark\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "border-top-color",
+   "truth": "desktop.colors.bubbleBorder.light",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:light\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "border-top-color",
+   "truth": "desktop.colors.bubbleBorder.dark",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:dark\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "border-top-left-radius",
+   "truth": "desktop.geometry.radius",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "padding-top",
+   "truth": "desktop.geometry.padding",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "width",
+   "truth": "desktop.geometry.width",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "top",
+   "truth": "desktop.geometry.top",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-title",
+   "prop": "color",
+   "truth": "desktop.colors.titleText.light",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:light\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-title",
+   "prop": "color",
+   "truth": "desktop.colors.titleText.dark",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:dark\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-title",
+   "prop": "font-size",
+   "truth": "desktop.geometry.fontSize",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-title",
+   "prop": "line-height",
+   "truth": "desktop.geometry.lineHeight",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-copy",
+   "prop": "color",
+   "truth": "desktop.colors.copyText.light",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:light\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-copy",
+   "prop": "color",
+   "truth": "desktop.colors.copyText.dark",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:dark\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-copy",
+   "prop": "margin-top",
+   "truth": "desktop.geometry.titleBodyGap",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-title",
+   "prop": "__text__",
+   "truth": "desktop.copy.zh-CN.pendingTitle",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:zh-CN\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-pending\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-title",
+   "prop": "__text__",
+   "truth": "desktop.copy.en.processingTitle",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:en\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-processing\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-title",
+   "prop": "__text__",
+   "truth": "desktop.copy.ja.completedTitle",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:ja\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-completed\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-title",
+   "prop": "__text__",
+   "truth": "desktop.copy.ko.pendingTitle",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:ko\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-pending\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-dismiss",
+   "prop": "__text__",
+   "truth": "desktop.copy.zh-CN.dismissButton",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:zh-CN\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-completed\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-dismiss",
+   "prop": "__text__",
+   "truth": "desktop.copy.en.dismissButton",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:en\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-completed\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-dismiss",
+   "prop": "__text__",
+   "truth": "desktop.copy.ja.dismissButton",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:ja\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-completed\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-dismiss",
+   "prop": "__text__",
+   "truth": "desktop.copy.ko.dismissButton",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:desk\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:ko\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-completed\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "background-color",
+   "truth": "mobile.colors.deletionBubbleBg.light",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:light\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "background-color",
+   "truth": "mobile.colors.deletionBubbleBg.dark",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:dark\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "border-top-color",
+   "truth": "mobile.colors.deletionBubbleBorder.light",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:light\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "border-top-color",
+   "truth": "mobile.colors.deletionBubbleBorder.dark",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:dark\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "border-top-left-radius",
+   "truth": "mobile.geometry.radius",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "padding-top",
+   "truth": "mobile.geometry.padding",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "width",
+   "truth": "mobile.geometry.phoneWidth",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "top",
+   "truth": "adaptive.safeTop",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-title",
+   "prop": "color",
+   "truth": "mobile.colors.controlText.light",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:light\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-title",
+   "prop": "color",
+   "truth": "mobile.colors.controlText.dark",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:dark\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-title",
+   "prop": "font-size",
+   "truth": "mobile.geometry.fontSize",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-title",
+   "prop": "line-height",
+   "truth": "mobile.geometry.lineHeight",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-copy",
+   "prop": "color",
+   "truth": "mobile.colors.secondaryText.light",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:light\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-copy",
+   "prop": "color",
+   "truth": "mobile.colors.secondaryText.dark",
+   "kind": "color",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"mode:dark\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-copy",
+   "prop": "margin-top",
+   "truth": "mobile.geometry.titleBodyGap",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-title",
+   "prop": "__text__",
+   "truth": "mobile.copy.zh-CN.pendingTitle",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:zh-CN\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-pending\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-title",
+   "prop": "__text__",
+   "truth": "mobile.copy.en.processingTitle",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:en\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-processing\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-title",
+   "prop": "__text__",
+   "truth": "mobile.copy.ja.completedTitle",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:ja\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-completed\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-title",
+   "prop": "__text__",
+   "truth": "mobile.copy.ko.pendingTitle",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:ko\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-pending\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-dismiss",
+   "prop": "__text__",
+   "truth": "mobile.copy.zh-CN.dismissButton",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:zh-CN\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-completed\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-dismiss",
+   "prop": "__text__",
+   "truth": "mobile.copy.en.dismissButton",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:en\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-completed\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-dismiss",
+   "prop": "__text__",
+   "truth": "mobile.copy.ja.dismissButton",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:ja\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-completed\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-dismiss",
+   "prop": "__text__",
+   "truth": "mobile.copy.ko.dismissButton",
+   "kind": "text",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:phone\"]"
+    },
+    {
+     "click": "[data-qa-pref=\"lang:ko\"]"
+    },
+    {
+     "click": "[data-qa-state-btn=\"deletion-completed\"]"
+    }
+   ]
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "width",
+   "truth": "mobile.geometry.padLandscapeWidth",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:pad-landscape\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "top",
+   "truth": "mobile.geometry.padTop",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:pad-landscape\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "width",
+   "truth": "mobile.geometry.padPortraitWidth",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:pad-portrait\"]"
+    }
+   ],
+   "scaled": true
+  },
+  {
+   "sel": ".db-bubble",
+   "prop": "top",
+   "truth": "mobile.geometry.padTop",
+   "kind": "length",
+   "via": [
+    {
+     "click": "[data-qa-pref=\"plat:pad-portrait\"]"
+    }
+   ],
+   "scaled": true
+  }
+ ],
+ "adaptive": {
+  "min": {
+   "w": 320,
+   "h": 480
+  },
+  "sampleSizes": [
+   [
+    390,
+    844
+   ],
+   [
+    375,
+    812
+   ],
+   [
+    374,
+    812
+   ],
+   [
+    335,
+    700
+   ],
+   [
+    320,
+    680
+   ],
+   [
+    700,
+    1000
+   ],
+   [
+    699,
+    1000
+   ],
+   [
+    744,
+    1133
+   ],
+   [
+    1000,
+    690
+   ],
+   [
+    999,
+    690
+   ],
+   [
+    1000,
+    689
+   ],
+   [
+    1180,
+    820
+   ],
+   [
+    1440,
+    900
+   ]
+  ],
+  "probes": [
+   {
+    "id": "bubble",
+    "sel": ".db-bubble"
+   }
+  ],
+  "tolerancePx": 1
+ }
+}

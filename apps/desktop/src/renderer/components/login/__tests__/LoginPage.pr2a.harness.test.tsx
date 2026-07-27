@@ -44,6 +44,10 @@ vi.mock('react-i18next', () => ({
     },
   }),
 }));
+vi.mock('../../../../shared/brandRegion', () => ({
+  CURRENT_CINDY_REGION: 'cn',
+  CURRENT_APP_ID: 'com.xd.cindycn',
+}));
 vi.mock('@/hooks/useLogin', () => ({ useLogin: () => loginHook.value }));
 vi.mock('@/components/title-bar/WindowControls', () => ({ WindowControls: () => null }));
 
@@ -97,7 +101,9 @@ function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.val
 beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { platform: 'darwin' },
+    // acceptPrivacyConsent:协议门放行时记录「已同意」(TapDB 采集的前置条件)。
+    // fire-and-forget,不参与登录派发时序。
+    value: { platform: 'darwin', acceptPrivacyConsent: async () => ({ allowed: true }) },
   });
 });
 
@@ -176,6 +182,8 @@ describe('verification-code', () => {
     const identifierState = reduceAuthFlow(null, { type: 'providers-loaded', providers });
     const view = mount(identifierState);
     // tabs 已随分区互斥拍板(2026-07-21)移除:测试构建区域=cn,providers:both 直落手机形态
+    // consent PR:先勾选协议 radio,提交才会派发 request-code(未勾选路径见 consent 专测)
+    fireEvent.click(screen.getByTestId('login-consent-radio'));
     fireEvent.change(screen.getByTestId('login-input'), { target: { value: '13800138000' } });
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-continue-button'));

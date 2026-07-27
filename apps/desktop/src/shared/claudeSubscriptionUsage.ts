@@ -353,3 +353,80 @@ export function matchScopedWindowForModel(
   if (!family) return null;
   return scoped.find((w) => w.modelDisplayName.trim().toLowerCase() === family) ?? null;
 }
+
+// ── 告警判定(chip 变红的口径;tooltip 另有 status 分流,见 TodaySpendChip) ───
+
+/**
+ * 窗口进入告警的剩余水位:剩余 ≤10%(已用 ≥90%)。
+ *
+ * 兜的是 unified-headers 源没有 per-window `severity` 这个事实 —— 该源只给 utilization,
+ * 光靠「打满」判定会让 chip 一直到 99.95% 才变红。用固定水位而不是 headers 的整体
+ * `allowed_warning`:水位对着 chip 上正在显示的那个数字,「剩余 8%」是红的能自证;
+ * 整体 status 综合了 chip 上没有的窗口,红了无从解释(见 isClaudeSubscriptionAlerting)。
+ */
+const WINDOW_ALERT_UTILIZATION_PERCENT = 90;
+
+/**
+ * 单个窗口告警:剩余水位见底,或服务端 severity 明确非 normal。
+ *
+ * utilization 走 Number.isFinite 而不只是 typeof —— 与本文件其它调用点同口径。解析层
+ * (toFiniteNumber / parseHeaderUtilization)本就只放行有限数, 但持久化快照是 JSON.parse
+ * 后直接断言成 snapshot 的(见 usageBroadcaster hydration), 不重新校验字段; 万一有脏值
+ * 滑进来, +Infinity 会被 clampPercent 夹成 100 并误判成额度耗尽而染红。
+ */
+export function isClaudeUsageWindowAlerting(
+  window: ClaudeUsageWindow | null | undefined,
+): boolean {
+  if (!window) return false;
+  if (
+    typeof window.utilization === 'number'
+    && Number.isFinite(window.utilization)
+    && clampPercent(window.utilization) >= WINDOW_ALERT_UTILIZATION_PERCENT
+  ) {
+    return true;
+  }
+  const severity = window.severity?.trim().toLowerCase();
+  return Boolean(severity && severity !== 'normal');
+}
+
+/**
+ * 影响当前会话的窗口是否告警:只看 5h / 总周限 / **当前模型**的 scoped 周限 ——
+ * 其它模型的 scoped 窗口打满不限流当前会话(跑 Opus 时 Fable 周限见底与本会话无关),
+ * 只在 tooltip 的全量窗口列表里可见,不参与判定。
+ */
+export function hasAlertingClaudeSessionWindow(
+  snapshot: ClaudeSubscriptionUsageSnapshot | null,
+  modelId: string | null | undefined,
+): boolean {
+  if (!snapshot) return false;
+  return (
+    isClaudeUsageWindowAlerting(snapshot.fiveHour)
+    || isClaudeUsageWindowAlerting(snapshot.sevenDay)
+    || isClaudeUsageWindowAlerting(matchScopedWindowForModel(snapshot.scoped, modelId))
+  );
+}
+
+/**
+ * chip 警示态(变红):只在当前会话**真的**受限时亮 —— 请求已被拒(headers 整体
+ * status = rejected),或影响当前会话的窗口告警(见上)。
+ *
+ * headers 的 `allowed_warning` **不**单独染红:它是服务端综合全部窗口(含其它模型的
+ * 分模型周限)给出的模糊信号,而 chip 只显示 5h + 周限两段 —— 拿 Fable 周限 87% 把跑
+ * Opus 的会话染红,用户看到的是「剩余 91% / 56% 却是红的」,颜色与数字自相矛盾且无处
+ * 解释(chip 上没有那个窗口)。真限流时 rejected 会立刻到,不需要它兜底;「接近限额」
+ * 提示仍留在 tooltip —— 那里紧邻全量窗口列表,有上下文。
+ *
+ * 也没有走 `representativeClaim`(「只在 claim 指向 chip 上的窗口时才认 allowed_warning」):
+ * 2026-07-25 实测快照里 claim=`five_hour`,而当时真正吃紧的是 Fable 周限(87%,
+ * severity=warning),5h 只用了 10% —— 这个字段并不指向触发 warning 的窗口,以它为条件
+ * 会原样退回误红。headers 源缺 severity 的预警缺口改由 WINDOW_ALERT_UTILIZATION_PERCENT
+ * 的剩余水位兜住,判据始终是 chip 上看得见的那个数字。
+ */
+export function isClaudeSubscriptionAlerting(
+  snapshot: ClaudeSubscriptionUsageSnapshot | null,
+  modelId: string | null | undefined,
+): boolean {
+  if (!snapshot) return false;
+  if (snapshot.rateLimitStatus?.trim().toLowerCase() === 'rejected') return true;
+  return hasAlertingClaudeSessionWindow(snapshot, modelId);
+}

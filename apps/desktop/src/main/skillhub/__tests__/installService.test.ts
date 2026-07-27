@@ -2,10 +2,22 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
 
-const TEST_ROOT = path.join(os.tmpdir(), 'xdt-install-service-test');
+// The system temp directory is shared by every worktree and test process.
+// A fixed root lets concurrent `pnpm test:unit` runs delete each other's
+// junctions and rename targets, producing ENOENT/EPERM/ENOTEMPTY on Windows.
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-install-service-test-'));
+
+function removeTestRoot(): void {
+  fs.rmSync(TEST_ROOT, {
+    recursive: true,
+    force: true,
+    maxRetries: process.platform === 'win32' ? 5 : 0,
+    retryDelay: 20,
+  });
+}
 
 vi.mock('electron', () => ({
   app: {
@@ -140,8 +152,12 @@ describe('skillhub/installService', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-    fs.rmSync(TEST_ROOT, { recursive: true, force: true });
+    removeTestRoot();
     fs.mkdirSync(TEST_ROOT, { recursive: true });
+  });
+
+  afterAll(() => {
+    removeTestRoot();
   });
 
   it('keeps the previous install intact when extraction fails during forced update', async () => {

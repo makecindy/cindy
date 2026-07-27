@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildNoProviderMessage,
   createOrcaWorkerCreationService,
+  providerRouteRequiresExplicitSelection,
   type OrcaWorkerCreationDeps,
   type OrcaWorkerProviderRoutingContext,
   type OrcaWorkerProviderSnapshot,
@@ -15,6 +16,22 @@ import { isActiveWorkerStatus } from '../../../shared/orca-worker-status';
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const WORKER_SESSION_ID = '123e4567-e89b-42d3-a456-426614174000';
+
+describe('providerRouteRequiresExplicitSelection', () => {
+  it.each(['api-key-header', 'oauth-token', 'none'] as const)(
+    'keeps %s routes pinned to the selected provider',
+    (strategy) => {
+      expect(providerRouteRequiresExplicitSelection(strategy)).toBe(true);
+    },
+  );
+
+  it.each(['oauth-passthrough', 'provider-oauth-header', 'gateway-key', undefined] as const)(
+    'does not force an explicit route for %s',
+    (strategy) => {
+      expect(providerRouteRequiresExplicitSelection(strategy)).toBe(false);
+    },
+  );
+});
 
 function providerRoutingContext(
   availability: Record<AgentKind, OrcaWorkerProviderSnapshot[]>,
@@ -1205,5 +1222,319 @@ describe('buildNoProviderMessage', () => {
     expect(msg).toContain('Claude Code 当前没有可用的模型供应商');
     expect(msg).toContain('设置 → 模型供应商');
     expect(msg).not.toContain('改用');
+  });
+
+  it('honors an explicit panel-selected provider over the forced default route', async () => {
+    const { deps, service } = createDeps({
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [
+          { id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] },
+          { id: 'openai', name: 'OpenAI', models: ['gpt-5.5'] },
+        ],
+      })),
+    });
+
+    // 显式 model 且未显式来源时既有语义是强制默认路由(providerId=null);
+    // 标准面板显式选定来源后必须原样生效,不再被强制回落。
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'openai', model: 'gpt-5.5' },
+    });
+
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'openai',
+      model: 'gpt-5.5',
+    }));
+  });
+
+  it('treats an empty-string providerId as not-explicit and keeps the forced default route', async () => {
+    const { service } = createDeps();
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: '',
+    })).resolves.toMatchObject({
+      ok: true,
+      // 与「显式 model 未显式来源」同语义:providerId 强制默认路由,不进显式 preflight。
+      resolved: { providerId: null, model: 'gpt-5.5' },
+    });
+  });
+
+  it('resolves Fast from the explicit provider catalog entry, not the flattened union', async () => {
+    // gpt-5.5 在 xd(拍平清单首来源,不支持 Fast)与 openai(支持)都有:显式选 openai
+    // 时 Fast 必须按 openai 自己的条目放行,不被拍平首来源误杀;反向显式选 xd 时压掉。
+    const routing = () => providerRoutingContext({
+      'claude-code': [],
+      codex: [
+        { id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'], fastModels: [] },
+        { id: 'openai', name: 'OpenAI', models: ['gpt-5.5'], fastModels: ['gpt-5.5'] },
+      ],
+    });
+    const supportsFastByUnion = (supported: boolean) => vi.fn((agent: AgentKind) => (
+      agent === 'codex'
+        ? [{ id: 'gpt-5.5', efforts: ['high'], defaultEffort: 'high', supportsFastMode: supported }]
+        : []
+    ));
+
+    const enabled = createDeps({
+      getProviderRoutingContext: vi.fn(async () => routing()),
+      // 拍平清单说不支持(首来源 xd wins)——显式 openai 仍应放行。
+      getAvailableModels: supportsFastByUnion(false),
+    });
+    await expect(enabled.service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      fast: true,
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'openai', fastMode: true },
+    });
+
+    const suppressed = createDeps({
+      getProviderRoutingContext: vi.fn(async () => routing()),
+      // 拍平清单说支持(假设首来源换位)——显式 xd 不支持,必须压掉。
+      getAvailableModels: supportsFastByUnion(true),
+    });
+    await expect(suppressed.service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      fast: true,
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'xd', fastMode: false },
+    });
+  });
+
+  it('normalizes effort against the explicit provider catalog entry, not the flattened union', async () => {
+    // gpt-5.5 的拍平首见条目只有 medium 档,而显式来源 openai 的同 id 条目支持
+    // low/medium/high:explicit effort=high 必须按 openai 自己的元数据放行,不被
+    // 拍平条目在 resolveWorkerConfig 内 error 早退误拒(codex review)。
+    const { service } = createDeps({
+      getAvailableModels: vi.fn((agent: AgentKind) => (
+        agent === 'codex'
+          ? [{ id: 'gpt-5.5', efforts: ['medium'], defaultEffort: 'medium', supportsFastMode: false }]
+          : []
+      )),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [
+          { id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] },
+          {
+            id: 'openai',
+            name: 'OpenAI',
+            models: ['gpt-5.5'],
+            effortMetaByModel: {
+              'gpt-5.5': { efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+            },
+          },
+        ],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      effort: 'high',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'openai', effort: 'high' },
+    });
+  });
+
+  it('rejects efforts the explicit no-effort provider copy does not support and defaults to null', async () => {
+    // 自定义来源的 gpt-5.5 副本无 effort 档(efforts:[]):explicit effort 必须按该
+    // 来源条目拒绝,不能沿用拍平首见条目的档位表放行;非显式输入则落该来源的
+    // defaultEffort(null),不带着拍平归一出的档位派发(codex review)。
+    const routing = () => providerRoutingContext({
+      'claude-code': [],
+      codex: [
+        { id: 'xd', name: 'XD Gateway', models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'codex/budget'] },
+        {
+          id: 'custom',
+          name: 'Custom Gateway',
+          models: ['gpt-5.5'],
+          effortMetaByModel: { 'gpt-5.5': { efforts: [], defaultEffort: null } },
+        },
+      ],
+    });
+
+    const rejected = createDeps({ getProviderRoutingContext: vi.fn(async () => routing()) });
+    await expect(rejected.service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'custom',
+      effort: 'high',
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_PARAMS',
+    });
+
+    const defaulted = createDeps({ getProviderRoutingContext: vi.fn(async () => routing()) });
+    await expect(defaulted.service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'custom',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'custom', effort: null },
+    });
+  });
+
+  it('allows an explicit effort the flattened descriptor lacks when the route provider supports it', async () => {
+    // 拍平首见条目(可能来自已断开来源,不含连接态)缺 xhigh,而实际路由来源
+    // (未显式时的生效默认来源)支持:explicit effort 不得在首次归一处 error 早退,
+    // 暂存后由路由来源档位表裁决放行(codex review)。
+    const { service } = createDeps({
+      getAvailableModels: vi.fn((agent: AgentKind) => (
+        agent === 'codex'
+          ? [{ id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false }]
+          : []
+      )),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [{
+          id: 'xd',
+          name: 'XD Gateway',
+          models: ['gpt-5.5'],
+          effortMetaByModel: {
+            'gpt-5.5': { efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+          },
+        }],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      effort: 'xhigh',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { model: 'gpt-5.5', effort: 'xhigh' },
+    });
+  });
+
+  it('surfaces the flattened rejection when the route provider carries no effort metadata', async () => {
+    // 路由来源无 effort 元数据(旧组装方)时没有更权威的档位表:explicit 无效输入
+    // 的暂存拒绝按拍平条目落地,不静默吞掉派发 null(行为与重构前一致)。
+    const { service } = createDeps();
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      effort: 'ultra',
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_PARAMS',
+    });
+  });
+
+  it('renormalizes effort against the default route provider when no explicit source is set', async () => {
+    // 未显式选来源时实际路由来源是 lead/defaults 解析出的 xd:其 gpt-5.5 条目只有
+    // low 档,lead effort=medium 按拍平条目(四档)归一原样通过,必须再按路由来源
+    // 条目重归一落到该来源的 defaultEffort(codex review;与 Fast 的路由来源口径一致)。
+    const { service } = createDeps({
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [{
+          id: 'xd',
+          name: 'XD Gateway',
+          models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'codex/budget'],
+          effortMetaByModel: { 'gpt-5.5': { efforts: ['low'], defaultEffort: 'low' } },
+        }],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { model: 'gpt-5.5', effort: 'low' },
+    });
+  });
+
+  it('rejects an explicit provider that does not offer the requested model', async () => {
+    const { deps, service } = createDeps({
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [
+          { id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] },
+          { id: 'openai', name: 'OpenAI', models: ['gpt-5.4'] },
+        ],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+    });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it('does not demand the gateway API key for a budget model on an explicit non-gateway route', async () => {
+    const { service } = createDeps({
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [{ id: 'custom-codex', name: 'Custom Codex', models: ['codex/budget'] }],
+      })),
+      readClaudeApiKey: vi.fn((): string | null => null),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'codex/budget',
+      providerId: 'custom-codex',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'custom-codex', model: 'codex/budget' },
+    });
   });
 });

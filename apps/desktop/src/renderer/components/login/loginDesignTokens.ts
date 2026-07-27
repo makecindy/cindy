@@ -38,6 +38,31 @@ export const LOGIN_GROUP = {
 } as const;
 
 /**
+ * 注销状态提示气泡(figma 678:1075「注销状态」组件集;桌面实例 679:1172 落位于帧 678:750)。
+ *
+ * ⚠ 全部数值是 **1819×2098 设计画布单位(2x 稿)**,不是 CSS px——渲染时与登录组同乘
+ * `PANEL_FIXED_SCALE`(=0.5),屏幕上得到宽 335 / 顶距 36 CSS px,与登录面板
+ * (680×0.5=340)基本同宽,与设计稿里 670 vs 680 的关系一致。
+ * (2026-07-26 修正:初版把这些设计单位当 CSS px 直接用,气泡在屏幕上宽了整一倍。)
+ *
+ * 内部几何由组件子元素坐标反算自洽:标题 text @(20,20) h=23、正文 text @(20,48) h=23
+ * → padding 20、标题↔正文 5、行高 23、底距 20,无钮变体总高 91 = 20+23+5+23+20。
+ */
+export const LOGIN_DELETION_BUBBLE = {
+  /** 距窗口顶固定间距(顶对齐,不随窗口高度变化;figma y=72) */
+  top: 72,
+  width: 670,
+  radius: 22,
+  padding: 20,
+  font: 20,
+  lineHeight: 23,
+  titleBodyGap: 5,
+  bodyLinkGap: 22,
+  /** 「我知道了」热区上下 padding(视觉间距由等量负 margin 抵消) */
+  linkHitPadding: 11,
+} as const;
+
+/**
  * 登录面板下方的本地模式操作区。
  *
  * 这块区域不再脱离登录 stage 固定在窗口底部：stage 会为它预留空间，避免小窗口
@@ -53,9 +78,15 @@ export const LOGIN_LOCAL_MODE = {
 /** 面板与面板内组件几何(figma §5.1/§4;wave4 面板描边 1px inside 368:1383)。 */
 export const PANEL = { width: 680, height: 440, radius: 36 } as const;
 export const TITLE = { y: 31, height: 38, fontSize: 32 } as const;
-export const SUBTITLE = { x: 41, y: 75, width: 599, fontSize: 20 } as const;
-export const GLOBAL_PILL = { left: 425, top: 4, width: 70, height: 30, radius: 40 } as const; // §4.10
-export const GLOBAL_TITLE_SPAN = { left: 185, width: 236 } as const; // demo titleBlock global 变体
+/** 副标题:540@70 ≤2 行顶对齐,槽高 = 行高 × 最大行数(DESIGN.md §16.2,2026-07-24 拍板)。 */
+export const SUBTITLE = { x: 70, y: 75, width: 540, fontSize: 20, lineHeight: 23, maxLines: 2 } as const;
+/**
+ * Global 徽标(figma §4.10 胶囊 70×30 r40)。v2 inline 组方案(用户裁定 2026-07-25):
+ * 标题文字 shrink-to-fit 单行 + 徽标紧随其后 gap 2 设计px,组整体相对面板水平居中——
+ * 修复旧固定跨度方案(标题 span 固定 236 @185 + 徽标绝对 @425)在 en/ja/ko 下
+ * 标题与徽标重叠的问题;GLOBAL_TITLE_SPAN 随之废弃删除。
+ */
+export const GLOBAL_PILL = { width: 70, height: 30, radius: 40, gap: 2 } as const;
 export const CONTROL = {
   x: 70,
   inputY: 158,
@@ -69,7 +100,8 @@ export const CONTROL = {
 export const SPINNER = { size: 24, x: 487, y: 27 } as const; // 247:1546 @load
 export const SOCIAL = { y: 480, size: 80, gap: 70, radius: 50, iconSize: 48 } as const; // §4.5
 export const BACK = { x: 20, y: 20, size: 60, radius: 40 } as const; // §4.6
-export const ERROR_TEXT = { y: 380, width: 680, height: 50, fontSize: 20 } as const; // §4.8 误差文本 (0,380)
+// 错误提示:占满主按钮底(380)→面板底(440)整段,文案垂直居中(2026-07-24 拍板;原 h50 偏上)
+export const ERROR_TEXT = { y: 380, width: 680, height: 60, fontSize: 20 } as const;
 export const METHOD_ROW = {
   x: 70,
   width: 540,
@@ -83,6 +115,44 @@ export const METHOD_ROW = {
 } as const; // §4.9 + demo method-row
 export const LOADING_RING = { x: 308, yBrowser: 158, yPreparing: 193, size: 64 } as const; // §5.2
 export const TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, fontSize: 20 } as const; // §4.7
+/** sso-org 帮助行:顶对齐 ≤2 行,y=输入框底 238+6,两行至 290 < 主按钮 300(DESIGN.md §16.2 折行分级 2)。 */
+export const SSO_ORG_HINT = { x: 70, y: 244, width: 540, fontSize: 20, lineHeight: 23, maxLines: 2 } as const;
+
+/**
+ * 协议同意行(figma 600:660「服务条款」行:680×40,radio 24 @x156 + 文字 20 @x186.5)。
+ * 行顶相对登录组顶 = 帧内 y1811 - 组 y1229 = 582(即组底 560 下方 22 设计px);
+ * 行内容(radio + 声明文字)水平居中,radio 与文字间距 = 186.5 - (156+24) = 6.5。
+ * 文字宽随语言变化,落码用 flex 居中而非固定 x(几何语义与稿等价)。
+ */
+export const CONSENT_ROW = {
+  y: 582,
+  width: 680,
+  height: 40,
+  gap: 6.5,
+  fontSize: 20,
+  radio: {
+    /** 命中区 24×24;圈体 20×20 @(2,2) r9 + 2px 描边(600:626) */
+    hitSize: 24,
+    ringSize: 20,
+    ringRadius: 9,
+    ringStroke: 2,
+  },
+} as const;
+
+/**
+ * 服务条款弹窗(figma 602:822 Log_in_bg 680×380 r36;标题 Bold 32 @y31;
+ * 正文 26/40 @(41,122) w599;两钮 260×80 r40 @y260:不同意 x70 / 同意 x350)。
+ * 面板复用 login-panel-bg/border;同意钮 = login-primary-button-*;
+ * 不同意钮 = login-secondary-button-*(wave5 双色小按钮)。
+ */
+export const CONSENT_DIALOG = {
+  width: 680,
+  height: 380,
+  radius: 36,
+  title: { y: 31, height: 38, fontSize: 32 },
+  body: { x: 41, y: 122, width: 599, fontSize: 26, lineHeight: 40 },
+  button: { y: 260, width: 260, height: 80, radius: 40, fontSize: 24, disagreeX: 70, agreeX: 350 },
+} as const;
 
 /** 顶部拖拽条 overlay 高度(附录 C §1.4 条4 工程定案:46px 独立层,不占文档流)。 */
 export const DRAG_BAR_HEIGHT = 46;
@@ -149,4 +219,18 @@ export const LOGIN_COLORS = {
   splashProgressTrack: 'var(--login-splash-progress-track)',
   splashProgressFill: 'var(--login-splash-progress-fill)',
   linkHover: 'var(--login-link-hover)',
+  /**
+   * Apple 登录圆钮底(App Store Guideline 4:亮 = ADR Black button 黑圆白标 /
+   * 暗 = ADR White button 白圆黑标,无描边;用户标准图 2026-07-24)
+   */
+  appleCircleBg: 'var(--login-apple-circle-bg)',
+  /** 协议同意族(consent PR:radio 四态 + 弹窗遮罩 + 次级小按钮;figma wave5) */
+  consentRadioBg: 'var(--login-consent-radio-bg)',
+  consentRadioBorder: 'var(--login-consent-radio-border)',
+  consentRadioCheckedBg: 'var(--login-consent-radio-checked-bg)',
+  consentRadioCheck: 'var(--login-consent-radio-check)',
+  consentOverlay: 'var(--login-consent-overlay)',
+  secondaryButtonBg: 'var(--login-secondary-button-bg)',
+  secondaryButtonBorder: 'var(--login-secondary-button-border)',
+  secondaryButtonText: 'var(--login-secondary-button-text)',
 } as const;

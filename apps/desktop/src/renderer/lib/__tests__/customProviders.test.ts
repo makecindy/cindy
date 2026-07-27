@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   appendDiscoveredCustomProviderModels,
   customProviderModelConfigFromCatalogModel,
+  providerViewToCustomProviderConfig,
   replaceCustomProviderModelId,
 } from '../customProviders';
+import type { ProviderView } from '@cindy/model-providers';
 
 describe('replaceCustomProviderModelId', () => {
   it('drops hidden metadata when the model id changes', () => {
@@ -62,6 +64,53 @@ describe('customProviderModelConfigFromCatalogModel', () => {
       id: 'discovered',
       name: 'Discovered',
       defaultEnabled: false,
+    });
+  });
+});
+
+describe('providerViewToCustomProviderConfig', () => {
+  it('preserves no-auth and exact request-path fields through the edit round trip', () => {
+    const provider = {
+      id: 'local-chat',
+      name: 'Local Chat',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'none' },
+      access: { kind: 'api' },
+      routing: {
+        codex: {
+          upstream: 'http://127.0.0.1:4000/v1',
+          authStrategy: 'none',
+          wireProtocol: 'openai-chat',
+          requestPath: '/tenant/acme/infer?stream=1',
+          modelsUrl: 'http://127.0.0.1:4000/v1/models',
+        },
+      },
+      models: {
+        codex: [{
+          id: 'local-model',
+          name: 'Local Model',
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      connected: true,
+    } satisfies ProviderView;
+
+    expect(providerViewToCustomProviderConfig(provider)).toEqual({
+      id: 'local-chat',
+      name: 'Local Chat',
+      auth: { method: 'none' },
+      runtimes: {
+        codex: {
+          baseUrl: 'http://127.0.0.1:4000/v1',
+          requestPath: '/tenant/acme/infer?stream=1',
+          wireProtocol: 'openai-chat',
+          modelsUrl: 'http://127.0.0.1:4000/v1/models',
+          models: [{ id: 'local-model', name: 'Local Model' }],
+        },
+      },
     });
   });
 });

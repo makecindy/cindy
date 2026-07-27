@@ -60,9 +60,14 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     // 自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」替代「连接 / 断开」，
     // 没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。
     for (const p of catalog.providers) {
+      // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
+      // 该规则与 source 无关，覆盖远端目录下发的 built-in/self-hosted 条目。
+      if (p.auth.method === 'none') {
+        connected[p.id] = true;
+      }
       // 通用 OAuth 供应商（带 auth.oauth 描述符，内置目录下发或用户自建皆同）：
       // 连接态 = 本机是否有凭证 blob（登录过才算连接）。
-      if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
+      else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
         connected[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
       }
       // API key 形态的自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」

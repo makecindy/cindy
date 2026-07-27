@@ -51,6 +51,17 @@ describe('ClaudeCodeAgent model capabilities', () => {
     expect(agent.capabilities.availableModels).toEqual([]);
   });
 
+  it('uses unambiguous display names for every Anthropic effort level', () => {
+    const agent = new ClaudeCodeAgent(createDeps());
+    expect(agent.capabilities.effortLevels.map(({ id, displayName }) => [id, displayName])).toEqual([
+      ['low', 'Low'],
+      ['medium', 'Medium'],
+      ['high', 'High'],
+      ['xhigh', 'Extra High'],
+      ['max', 'Max'],
+    ]);
+  });
+
   // sonnet 必须映射到显式版本号:裸 'sonnet[1m]' 别名会随 cc-code 二进制漂移
   // (Sonnet 5 上线后别名仍指 4.6,用户选 Sonnet 5 实际发出 claude-sonnet-4-6)。
   it('maps every catalog sonnet model to its explicit versioned SDK string', () => {
@@ -79,7 +90,7 @@ describe('ClaudeCodeAgent model capabilities', () => {
 
   it('does NOT add [1m] to budget codex/* models (real window 272k, not 1M)', () => {
     // [1m] 会让 cc-code 的 has1mContext 把窗口判成 1M, 撑大 auto-compact 阈值,
-    // 对话冲过骨折网关真实上限后空转。骨折版必须保持原样、不带 [1m]。
+    // 对话冲过折扣网关真实上限后空转。折扣版必须保持原样、不带 [1m]。
     expect(toSdkModelString('codex/gpt-5.5')).toBe('codex/gpt-5.5');
     expect(toSdkModelString('codex/gpt-5.4')).toBe('codex/gpt-5.4');
   });
@@ -94,7 +105,7 @@ describe('ClaudeCodeAgent model capabilities', () => {
   });
 
   it('never emits [1m] when catalog window < 1M (strips a stray suffix too)', () => {
-    // 骨折 codex/*(272k/372k)带 [1m] 会让 cc 把窗口误判 1M → 会话假死,窗口规则兜死这一类。
+    // 折扣 codex/*(272k/372k)带 [1m] 会让 cc 把窗口误判 1M → 会话假死,窗口规则兜死这一类。
     expect(toSdkModelString('codex/gpt-5.5', 272_000)).toBe('codex/gpt-5.5');
     expect(toSdkModelString('codex/gpt-5.6-sol', 372_000)).toBe('codex/gpt-5.6-sol');
     expect(toSdkModelString('qwen/qwen3.7-max', 992_000)).toBe('qwen/qwen3.7-max');
@@ -110,6 +121,7 @@ describe('ClaudeCodeAgent model capabilities', () => {
 
   it('falls back to the legacy hardcoded chain when window is unknown', () => {
     // 目录外模型 / 未传窗口的老调用方(title-one-shot)行为不变
+    expect(toSdkModelString('claude-opus-5')).toBe('claude-opus-5[1m]');
     expect(toSdkModelString('claude-sonnet-5')).toBe('claude-sonnet-5[1m]');
     expect(toSdkModelString('codex/gpt-5.5')).toBe('codex/gpt-5.5');
     expect(toSdkModelString('totally-unknown-model')).toBe('totally-unknown-model');

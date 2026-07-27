@@ -4,8 +4,10 @@ import {
   type ChatBridgeCapabilities,
   type ChatDeveloperRole,
   type ChatCompletionsRequest,
+  type ChatImageInput,
   type ChatMessage,
-  type ResponsesContentPart,
+  type ChatToolCallExtraContent,
+  type ChatUserContentPart,
   type ResponsesFunctionTool,
   type ResponsesInputItem,
   type ResponsesRequest,
@@ -13,6 +15,15 @@ import {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function cloneToolCallExtraContent(value: unknown): ChatToolCallExtraContent | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const { google, ...rest } = value;
+  return {
+    ...rest,
+    ...(isPlainObject(google) ? { google: { ...google } } : {}),
+  };
 }
 
 function stringifyToolOutput(output: unknown): string {
@@ -52,9 +63,21 @@ function customToolArguments(input: unknown): string {
   }
 }
 
-function textFromParts(parts: ResponsesContentPart[], itemIndex: number): string {
+function messageContent(
+  item: Extract<ResponsesInputItem, { role: string }>,
+  itemIndex: number,
+  developerRole: ChatDeveloperRole,
+  imageInput: ChatImageInput | undefined,
+): string | ChatUserContentPart[] {
+  if (typeof item.content === 'string') return item.content;
+  if (!Array.isArray(item.content)) {
+    throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
+  }
+
   let text = '';
-  for (const part of parts) {
+  let hasImage = false;
+  const multimodal: ChatUserContentPart[] = [];
+  for (const part of item.content) {
     if (!isPlainObject(part) || typeof part.type !== 'string') {
       throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
     }
@@ -63,29 +86,49 @@ function textFromParts(parts: ResponsesContentPart[], itemIndex: number): string
         throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${part.type}`);
       }
       text += part.text;
+      multimodal.push({ type: 'text', text: part.text });
+      continue;
+    }
+    if (part.type === 'input_image') {
+      const normalizedRole = item.role === 'assistant'
+        ? 'assistant'
+        : normalizeRole(item.role, developerRole);
+      if (
+        normalizedRole !== 'user'
+        || imageInput !== 'image_url'
+        || part.file_id !== undefined
+        || typeof part.image_url !== 'string'
+        || part.image_url.length === 0
+      ) {
+        throw new UnsupportedResponsesFeatureError(`input content part '${part.type}'`);
+      }
+      hasImage = true;
+      multimodal.push({
+        type: 'image_url',
+        image_url: { url: part.image_url },
+      });
       continue;
     }
     throw new UnsupportedResponsesFeatureError(`input content part '${part.type}'`);
   }
-  return text;
-}
-
-function messageContent(item: Extract<ResponsesInputItem, { role: string }>, itemIndex: number): string {
-  if (typeof item.content === 'string') return item.content;
-  if (!Array.isArray(item.content)) {
-    throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
-  }
-  return textFromParts(item.content, itemIndex);
+  // 无图片时维持历史 JSON 形态(string)，不让 capability 改变纯文本供应商请求。
+  return hasImage ? multimodal : text;
 }
 
 interface TranslateInputOptions {
   developerRole: ChatDeveloperRole;
+  /** 仅明确支持视觉的 Chat 上游开启；未声明时 input_image 继续 fail closed。 */
+  imageInput?: ChatImageInput;
   /** thinking 模型:为带 tool_calls 但缺 reasoning_content 的 assistant 消息注入占位。 */
   toolCallReasoningPlaceholder: boolean;
+  /** Gemini 3 OpenAI 兼容层:为每步首个回放 tool call 注入官方允许的签名跳过值。 */
+  googleThoughtSignaturePlaceholder: boolean;
 }
 
 /** cc-switch 的占位口径:kimi/DeepSeek 要求 tool_call assistant 消息带非空 reasoning_content。 */
 const TOOL_CALL_REASONING_PLACEHOLDER = 'tool call';
+/** Google 官方文档允许在无法取得原始签名的注入式 function call 上使用的校验跳过值。 */
+const GOOGLE_THOUGHT_SIGNATURE_PLACEHOLDER = 'skip_thought_signature_validator';
 
 function flushAssistant(
   messages: ChatMessage[],
@@ -98,6 +141,22 @@ function flushAssistant(
   if (pending.content == null && !hasToolCalls) return null;
   if (hasToolCalls && opts.toolCallReasoningPlaceholder && !pending.reasoning_content) {
     pending.reasoning_content = TOOL_CALL_REASONING_PLACEHOLDER;
+  }
+  if (hasToolCalls && opts.googleThoughtSignaturePlaceholder) {
+    const firstCall = pending.tool_calls?.[0];
+    const thoughtSignature = firstCall?.extra_content?.google?.thought_signature;
+    if (
+      firstCall
+      && (typeof thoughtSignature !== 'string' || thoughtSignature.trim().length === 0)
+    ) {
+      firstCall.extra_content = {
+        ...firstCall.extra_content,
+        google: {
+          ...firstCall.extra_content?.google,
+          thought_signature: GOOGLE_THOUGHT_SIGNATURE_PLACEHOLDER,
+        },
+      };
+    }
   }
   messages.push(pending);
   return null;
@@ -125,14 +184,31 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
     if (!isPlainObject(item)) throw new UnsupportedResponsesFeatureError(`input[${index}]`);
 
     if ('role' in item && typeof item.role === 'string') {
-      const content = messageContent(item as Extract<ResponsesInputItem, { role: string }>, index);
+      const content = messageContent(
+        item as Extract<ResponsesInputItem, { role: string }>,
+        index,
+        opts.developerRole,
+        opts.imageInput,
+      );
       if (item.role === 'assistant') {
+        // messageContent 只会为 user 图片返回数组；这里再守一次类型边界，避免未来扩展误放行。
+        if (typeof content !== 'string') {
+          throw new UnsupportedResponsesFeatureError(`input[${index}].content`);
+        }
         if (!assistant) assistant = { role: 'assistant', content };
         else if (assistant.content == null) assistant.content = content;
         else if (content) assistant.content += content;
       } else {
         assistant = flushAssistant(messages, assistant, opts);
-        messages.push({ role: normalizeRole(item.role, opts.developerRole), content });
+        const role = normalizeRole(item.role, opts.developerRole);
+        if (role === 'user') {
+          messages.push({ role, content });
+        } else {
+          if (typeof content !== 'string') {
+            throw new UnsupportedResponsesFeatureError(`input[${index}].content`);
+          }
+          messages.push({ role, content });
+        }
       }
       continue;
     }
@@ -170,10 +246,12 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
       }
       assistant ??= { role: 'assistant', content: null, tool_calls: [] };
       assistant.tool_calls ??= [];
+      const extraContent = cloneToolCallExtraContent(item.extra_content);
       assistant.tool_calls.push({
         id: item.call_id,
         type: 'function',
         function: { name: item.name, arguments: item.arguments },
+        ...(extraContent ? { extra_content: extraContent } : {}),
       });
       continue;
     }
@@ -272,7 +350,9 @@ export function translateResponsesRequest(
   const developerRole = capabilities.developerRole ?? 'system';
   const messages = translateInput(input.input, {
     developerRole,
+    imageInput: capabilities.imageInput,
     toolCallReasoningPlaceholder: capabilities.toolCallReasoningPlaceholder === true,
+    googleThoughtSignaturePlaceholder: capabilities.googleThoughtSignaturePlaceholder === true,
   });
   if (input.instructions) {
     messages.unshift({ role: developerRole, content: input.instructions });

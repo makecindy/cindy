@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-	applyDesktopDevEnvOverrides,
+	applyDesktopStartupConfigForPhase,
 	devEnvPrefix,
 	isRepositoryDesktopDevProcess,
 	formatDesktopStartupFailure,
@@ -94,6 +94,38 @@ test("desktop restart runner keeps the kill-before-deps order by default", () =>
 		[stepScript(root, "ensure-dev-runtime-assets.mjs")],
 		[stepScript(root, "restart-desktop-remote.mjs"), "--wait-ready"],
 	]);
+});
+
+test("desktop restart process-control phase does not initialize startup configuration", () => {
+	const processControlEnv = {};
+	assert.equal(
+		applyDesktopStartupConfigForPhase({
+			argv: ["--kill-only", "--region=global", "--endpoints-cdn"],
+			env: processControlEnv,
+			mode: "remote",
+		}),
+		null,
+	);
+	assert.deepEqual(processControlEnv, {});
+
+	const startupEnv = {};
+	assert.deepEqual(
+		applyDesktopStartupConfigForPhase({
+			argv: ["--region=global"],
+			env: startupEnv,
+			mode: "remote",
+		}),
+		{
+			region: "global",
+			endpointsCdn: false,
+			endpointManifestFile: "config/endpoint.global.json",
+		},
+	);
+	assert.deepEqual(startupEnv, {
+		CINDY_AUTH_REGION: "global",
+		VITE_CINDY_AUTH_REGION: "global",
+		XDT_ENDPOINT_MANIFEST_FILE: "config/endpoint.global.json",
+	});
 });
 
 test("desktop restart rejects an unmerged migration before the kill step", () => {
@@ -388,45 +420,4 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 
 test("devEnvPrefix omits harness envs when unset (whitelist stays opt-in)", () => {
 	assert.equal(devEnvPrefix({}, "darwin"), "");
-});
-
-test("devEnvPrefix passes the content moderation dev switch to Electron", () => {
-	assert.equal(
-		devEnvPrefix({ XDT_CONTENT_MODERATION: "1" }, "win32"),
-		'set "XDT_CONTENT_MODERATION=1" && ',
-	);
-});
-
-test("desktop .env allowlists local moderation dev overrides without replacing explicit env", () => {
-	const env = {
-		XDT_ENDPOINT_MANIFEST_FILE: "C:\\explicit\\endpoint.json",
-	};
-	applyDesktopDevEnvOverrides(
-		[
-			"XDT_CONTENT_MODERATION=1",
-			"XDT_ENDPOINT_MANIFEST_FILE=C:\\local\\moderation.json",
-			"MODERATION_APP_SECRET=must-not-be-loaded",
-		].join("\n"),
-		env,
-	);
-	assert.deepEqual(env, {
-		XDT_CONTENT_MODERATION: "1",
-		XDT_ENDPOINT_MANIFEST_FILE: "C:\\explicit\\endpoint.json",
-	});
-});
-
-test("desktop .env overrides respect explicit empty-string env values", () => {
-	const env = {
-		XDT_CONTENT_MODERATION: "",
-	};
-	applyDesktopDevEnvOverrides(
-		["XDT_CONTENT_MODERATION=1", "XDT_ENDPOINT_MANIFEST_FILE=/some/path"].join(
-			"\n",
-		),
-		env,
-	);
-	assert.deepEqual(env, {
-		XDT_CONTENT_MODERATION: "",
-		XDT_ENDPOINT_MANIFEST_FILE: "/some/path",
-	});
 });

@@ -153,7 +153,7 @@ function isHttpUrl(value: string): boolean {
 // 新值(消费点全部是调用时读取,无模块顶层捕获——新增顶层派生前先想清楚)。
 // 初始值即构建期烘焙值;__DEV__ 下闸门不拉取,行为与现状完全一致。
 
-// auth 不分 cn/global 字段:dev 读 cn 正本(dev 默认 region=cn);prod 由 region 化
+// auth 不分 cn/global 字段:dev 读所选 region 正本(默认 global);prod 由 region 化
 // 清单回填。显式 env 覆写仍最高优先。
 export let AUTH_API_BASE_URL = normalizeBaseUrlWithDefault(
   configuredValue('EXPO_PUBLIC_CINDY_AUTH_BASE_URL'),
@@ -240,8 +240,8 @@ export function isReviewModeActive(
 
 // 手机版审核模式(清单可选字段 review = 送审版本号,缺失/空串 = 关闭):App 审核
 // 期间线上清单填送审构建的二进制版本号,仅版本命中且 StoreKit 未识别为 TestFlight
-// 的构建关闭全部 JS 显式更新检查(TestFlight 始终保留更新能力)
-// (启动 JS 热更门 / 整包检查 / resume 静默检查)、设置页隐藏统一「检查更新」入口;
+// 的构建关闭全部 JS 显式更新检查。TestFlight 不进入审核模式,但由整包更新策略单独
+// 禁用会外跳安装的整包检查,只保留 JS OTA。设置页在审核模式隐藏统一「检查更新」入口;
 // 存量其它版本用户不受影响。覆盖边界与运维义务(原生层后台检查管不到、
 // 过审发布后须清空字段)见 maker-shared clientEndpoints 的 CLIENT_ENDPOINT_REVIEW_KEY
 // 注释。live binding:prod 由启动闸门回填,闸门 ready 前业务树不挂载,消费点
@@ -249,7 +249,7 @@ export function isReviewModeActive(
 // desktop 忽略该字段。
 let resolvedReviewVersion = DEV_MANIFEST_PARSED?.reviewVersion ?? null;
 
-/** StoreKit 在 endpoint 闸门期间识别出的 TestFlight 状态；供 JS 层同步诊断。 */
+/** StoreKit 在 endpoint 闸门期间识别出的 TestFlight 状态；供更新策略与诊断同步消费。 */
 export let IS_TESTFLIGHT_BUILD = false;
 
 export let REVIEW_MODE = isReviewModeActive(
@@ -286,7 +286,7 @@ export function applyResolvedClientEndpoints(resolved: {
   mobileUpdateBaseUrl?: string;
   /** 审核模式送审版本号(parser 产出,null = 清单未填;undefined = 不改动)。 */
   reviewVersion?: string | null;
-  /** iOS StoreKit 分发环境；TestFlight 必须继续检查更新。 */
+  /** iOS StoreKit 分发环境；TestFlight 保留 OTA、禁用整包外跳。 */
   isTestFlight?: boolean;
 }): void {
   if (resolved.authApiBaseUrl !== undefined) {
