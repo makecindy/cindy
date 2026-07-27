@@ -27,18 +27,22 @@ interface QuitInfoLogger extends QuitLogger {
  */
 export interface UsageTrackedBrowserRuntime extends Pick<BrowserControlRuntime, 'call'> {
   /**
-   * True iff at least one NON-stop `call` produced an HTTP response since the
-   * last successful `stop` — i.e. the control service provably booted and
-   * answered, and has not been torn down again since.
+   * True iff a NON-stop `call` produced an HTTP response and no successful
+   * `stop` has invalidated it since — i.e. the control service provably
+   * booted and answered, and (as far as dispatch ordering can tell) has not
+   * been torn down again afterwards.
    */
   everCalled(): boolean;
   /**
-   * Resolves once every in-flight NON-stop call has settled (results and
-   * rejections are swallowed). The quit path awaits this before reading
-   * `everCalled()` — quitting while the very first call is still booting the
-   * managed Chrome must not be misread as "never used" (review P1): that call
-   * can finish launching Chrome right after we skipped the stop, orphaning the
-   * process and its locked user-data-dir.
+   * Resolves once every in-flight call — `stop` included — has settled
+   * (results and rejections are swallowed). The quit path awaits this before
+   * reading `everCalled()`:
+   *  - a still-booting first call must not be misread as "never used"
+   *    (review P1): it can finish launching Chrome right after we skipped
+   *    the stop, orphaning the process and its locked user-data-dir;
+   *  - an in-flight backend-switch `stop` must settle first too (review):
+   *    reading usage before its reset lands would make quit dispatch a
+   *    second stop against a service that is already going down.
    */
   settleInFlight(): Promise<void>;
   /**
@@ -55,13 +59,19 @@ export function trackBrowserRuntimeUsage(
 ): UsageTrackedBrowserRuntime {
   let everCalled = false;
   let quiescing = false;
-  // Usage epoch: bumped on every SUCCESSFUL stop. A non-stop call only marks
-  // usage if the epoch it was dispatched under is still current — a call that
-  // was in flight across a backend-switch stop (BackendRouter.setBackend
-  // disposes the old backend without draining its calls) settles against a
-  // service that has since been torn down, and must not re-mark usage
-  // (review ×2: late settle would re-enable the quit-time stop → boot).
-  let usageEpoch = 0;
+  // Dispatch-order barrier (review ×3, two rounds): every call gets a
+  // monotonically increasing dispatch sequence; a SUCCESSFUL stop raises the
+  // barrier to its own sequence. A non-stop response only marks usage when
+  // its dispatch sequence is ABOVE the barrier:
+  //  - calls dispatched BEFORE the stop settle late against a torn-down
+  //    service → blocked (late settle must not re-enable the quit stop);
+  //  - calls admitted AFTER the stop was dispatched (e.g. a start racing
+  //    ExternalChromeBackend.dispose during a backend switch) are newer than
+  //    the barrier → their response re-marks usage, so quit still cleans up
+  //    the freshly launched Chrome (an epoch-per-stop scheme wrongly
+  //    invalidated these).
+  let dispatchSeq = 0;
+  let stopInvalidationBarrier = -1;
   const inFlight = new Set<Promise<unknown>>();
   return {
     call(request) {
@@ -94,14 +104,16 @@ export function trackBrowserRuntimeUsage(
       //    the quit path dispatch a second stop that re-boots the service.
       // A wrongly-skipped quit-stop is recovered by the vendored stale-lock
       // path on next launch (see stopRuntimeForQuit docs).
+      const mySeq = dispatchSeq;
+      dispatchSeq += 1;
+      let settled: Promise<unknown>;
       if (request.action !== 'stop') {
-        const dispatchEpoch = usageEpoch;
-        const settled = result.then(
+        settled = result.then(
           (response) => {
             const status = (response as { status?: unknown } | null | undefined)?.status;
-            // Epoch must still match: a success settling after a later
-            // successful stop belongs to the torn-down service instance.
-            if (typeof status === 'number' && dispatchEpoch === usageEpoch) {
+            // Barrier check: only calls dispatched after the latest
+            // successful stop may (re-)mark usage — see barrier comment.
+            if (typeof status === 'number' && mySeq > stopInvalidationBarrier) {
               everCalled = true;
             }
           },
@@ -109,29 +121,31 @@ export function trackBrowserRuntimeUsage(
             // Rejected dispatch proves nothing about service liveness — ignore.
           },
         );
-        inFlight.add(settled);
-        void settled.finally(() => inFlight.delete(settled));
       } else {
         // A settled SUCCESSFUL stop proves the service is down again (review
         // P1: ExternalChromeBackend.dispose stops it mid-session on backend
         // switch). Keeping usage true past that point would make the
         // quit-time stop boot the already-stopped service — the exact
-        // startup this wrapper exists to prevent. Later non-stop traffic
-        // flips usage back on. ok:false / rejected stops leave state
+        // startup this wrapper exists to prevent. The barrier only
+        // invalidates calls dispatched BEFORE this stop; anything admitted
+        // after it can re-mark usage. ok:false / rejected stops leave state
         // unchanged: the service may still be up, and a possibly-redundant
         // quit stop is the safe direction there.
-        void result.then(
+        settled = result.then(
           (response) => {
             if ((response as { ok?: unknown } | null | undefined)?.ok === true) {
               everCalled = false;
-              // Invalidate in-flight pre-stop calls' usage marking (see
-              // usageEpoch above).
-              usageEpoch += 1;
+              stopInvalidationBarrier = Math.max(stopInvalidationBarrier, mySeq);
             }
           },
           () => {},
         );
       }
+      // Stops are tracked in inFlight too (review): settleInFlight must let a
+      // racing backend-switch stop land its usage reset before the quit path
+      // reads everCalled, or quit dispatches a second stop.
+      inFlight.add(settled);
+      void settled.finally(() => inFlight.delete(settled));
       return result;
     },
     everCalled: () => everCalled,

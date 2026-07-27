@@ -243,6 +243,65 @@ describe('stopRuntimeForQuitIfUsed', () => {
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
   });
 
+  it('quit waits for an in-flight backend-switch stop, then skips its own stop (review)', async () => {
+    // stop 若不进 inFlight,settleInFlight 之后它才落定重置使用态,quit 已经
+    // 多派了一次 stop——vendored bridge 会为路由这次 stop 把刚停掉的服务再拉起。
+    let resolveStop!: (r: BrowserControlResult) => void;
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>((req) =>
+      req.action === 'stop'
+        ? new Promise((resolve) => {
+            resolveStop = resolve;
+          })
+        : Promise.resolve({ ok: true, action: req.action, status: 200 }),
+    );
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    await tracked.call({ action: 'status' }); // usage = true
+    const switchStop = tracked.call({ action: 'stop' }); // 后端切换的 stop,在途
+    const quit = stopRuntimeForQuitIfUsed(tracked, logger);
+    resolveStop({ ok: true, action: 'stop', status: 200 });
+    await switchStop;
+    await quit;
+
+    expect(call.mock.calls.map(([req]) => req.action)).toEqual(['status', 'stop']); // quit 未再派
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
+  });
+
+  it('a call admitted AFTER a pending stop re-marks usage once it answers (review P1)', async () => {
+    // 后端切换的 stop 在途期间,一条 start(比 stop 晚派发)赢得竞态并拉起了
+    // 新 Chrome:它的应答必须重新计入使用,否则 quit 会跳过清理、泄漏进程与
+    // profile 锁(epoch-per-stop 方案会误伤这类新调用,seq 屏障不会)。
+    let resolveStop!: (r: BrowserControlResult) => void;
+    let resolveStart!: (r: BrowserControlResult) => void;
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>((req) => {
+      if (req.action === 'stop' && !resolveStop) {
+        return new Promise((resolve) => {
+          resolveStop = resolve;
+        });
+      }
+      if (req.action === 'start') {
+        return new Promise((resolve) => {
+          resolveStart = resolve;
+        });
+      }
+      return Promise.resolve({ ok: true, action: req.action, status: 200 });
+    });
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    const pendingStop = tracked.call({ action: 'stop' }); // 先派发的 stop
+    const lateStart = tracked.call({ action: 'start' }); // stop 之后新进的 start
+    resolveStop({ ok: true, action: 'stop', status: 200 }); // stop 成功:只作废更早的调用
+    await pendingStop;
+    resolveStart({ ok: true, action: 'start', status: 200 }); // start 应答:重新计使用
+    await lateStart;
+    expect(tracked.everCalled()).toBe(true);
+
+    await stopRuntimeForQuitIfUsed(tracked, logger);
+    expect(call.mock.calls.map(([req]) => req.action)).toEqual(['stop', 'start', 'stop']); // quit 照常清理
+  });
+
   it('usage flips back on when non-stop traffic resumes after a successful stop', async () => {
     const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
       async (req) => ({ ok: true, action: req.action, status: 200 }),
