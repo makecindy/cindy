@@ -40,4 +40,36 @@ describe('PermissionPrompt i18n', () => {
     expect(screen.queryByText('Allow Codex to run this command?')).toBeNull();
     expect(screen.getByText('Provider-supplied reason stays verbatim.')).toBeTruthy();
   });
+
+  it('preserves an action-specific title when no display name is available', () => {
+    render(
+      <PermissionPrompt
+        permission={{
+          requestId: 'permission-2',
+          toolName: 'file_change',
+          input: { path: '/tmp/example.txt' },
+          title: 'Allow Codex to edit /tmp/example.txt?',
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Allow Codex to edit /tmp/example.txt?')).toBeTruthy();
+    expect(screen.queryByText('允许 file_change？')).toBeNull();
+  });
+
+  it('localizes the tool fallback when no richer title is available', () => {
+    render(
+      <PermissionPrompt
+        permission={{
+          requestId: 'permission-3',
+          toolName: 'Bash',
+          input: { command: 'pwd' },
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('允许 Bash？')).toBeTruthy();
+  });
 });

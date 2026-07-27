@@ -67,11 +67,11 @@ function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
 
 export function PermissionPrompt({ permission, onRespond }: PermissionPromptProps) {
   const { t } = useTranslation();
-  const { toolName, input, displayName, description, suggestions } = permission;
+  const { toolName, input, title, displayName, description, suggestions } = permission;
 
-  const displayTitle = t('agentIsland.native.permissionPromptTitleWithTool', {
-    toolName: displayName || toolName,
-  });
+  const displayTitle = displayName
+    ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
+    : title || t('agentIsland.native.permissionPromptTitleWithTool', { toolName });
   const codeContent = formatToolInput(toolName, input);
   const sessionSuggestions = useMemo(() => filterSessionScopedSuggestions(suggestions), [suggestions]);
   const canAlwaysAllowForSession = sessionSuggestions.length > 0;

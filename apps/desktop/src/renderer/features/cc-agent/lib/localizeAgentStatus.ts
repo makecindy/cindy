@@ -8,12 +8,27 @@ const STATUS_KEYS = new Map<string, string>([
   ['generating image', 'ccAgent.agentStatus.generatingImage'],
   ['compacting', 'ccAgent.agentStatus.compacting'],
   ['done', 'ccAgent.agentStatus.done'],
+  ['just wait', 'ccAgent.agentStatus.waiting'],
 ]);
+
+const TURN_START_NAME_PATTERNS = [
+  /^Nice day, (.+)!$/i,
+  /^Hey (.+), here we go$/i,
+  /^(.+), sit tight$/i,
+  /^Crafting for (.+?)(?:\.{3}|…)$/i,
+  /^(.+), on it$/i,
+  /^Brewing magic for (.+?)(?:\.{3}|…)$/i,
+  /^Take a breath, (.+)$/i,
+  /^Let's go, (.+)!$/i,
+  /^(.+), leave it to me$/i,
+  /^Working on it, (.+)$/i,
+];
 
 function normalizeStaticStatus(status: string): string {
   return status
     .trim()
     .replace(/(?:\.{3}|…)$/, '')
+    .trim()
     .toLowerCase();
 }
 
@@ -26,7 +41,20 @@ export function localizeAgentStatus(status: string, t: TFunction): string {
   const staticKey = STATUS_KEYS.get(normalizeStaticStatus(status));
   if (staticKey) return t(staticKey);
 
-  const runningTool = status.trim().match(/^(.+?) running(?:\.{3}|…)$/i);
+  const trimmedStatus = status.trim();
+  const issueTip = trimmedStatus.match(/^(.+),试试 \/issue 给我们提反馈或建议$/);
+  if (issueTip) {
+    return t('ccAgent.agentStatus.issueTip', { name: issueTip[1] });
+  }
+
+  for (const pattern of TURN_START_NAME_PATTERNS) {
+    const match = trimmedStatus.match(pattern);
+    if (match) {
+      return t('ccAgent.agentStatus.turnStart', { name: match[1], status: trimmedStatus });
+    }
+  }
+
+  const runningTool = trimmedStatus.match(/^(.+?) running(?:\.{3}|…)$/i);
   if (runningTool) {
     return t('ccAgent.agentStatus.runningTool', { tool: runningTool[1] });
   }

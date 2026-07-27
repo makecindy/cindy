@@ -56,7 +56,6 @@ import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
 import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSidebarTime';
 import { highlightSegments } from '../lib/highlightSegments';
-import { localizeAgentStatus } from '../lib/localizeAgentStatus';
 import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
 import {
   getAutomationSessionDisplayTitle,
@@ -170,7 +169,7 @@ export function SessionCard({
           : t('ccAgent.sidebar.card.awaitingQuestion');
   const runningDetail =
     islandActivity?.phase === 'running' && islandActivity.compactDetail
-      ? localizeAgentStatus(islandActivity.compactDetail, t)
+      ? islandActivity.compactDetail
       : null;
   const listPreview = awaitingText ?? runningDetail ?? summaryPreview;
   const cardPreview = awaitingText ?? summaryPreview;

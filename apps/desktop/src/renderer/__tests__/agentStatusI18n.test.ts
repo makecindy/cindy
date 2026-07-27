@@ -26,6 +26,15 @@ describe('localizeAgentStatus', () => {
     );
   });
 
+  it('localizes Cindy-owned turn-start phrases without changing the user name', () => {
+    expect(localizeAgentStatus('Just Wait ...', i18n.t)).toBe('请稍候…');
+    expect(localizeAgentStatus('Nice day, Alice!', i18n.t)).toBe('正在处理，Alice');
+    expect(localizeAgentStatus('Working on it, Alice', i18n.t)).toBe('正在处理，Alice');
+    expect(localizeAgentStatus('Alice,试试 /issue 给我们提反馈或建议', i18n.t)).toBe(
+      'Alice，试试用 /issue 给我们提反馈或建议',
+    );
+  });
+
   it('preserves arbitrary vendor status text verbatim', () => {
     expect(localizeAgentStatus('Still running', i18n.t)).toBe('Still running');
     expect(localizeAgentStatus('正在检查测试', i18n.t)).toBe('正在检查测试');

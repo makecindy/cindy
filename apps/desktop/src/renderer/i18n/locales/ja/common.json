@@ -4940,6 +4940,9 @@
       "generatingImage": "画像を生成中…",
       "compacting": "コンテキストを圧縮中…",
       "done": "完了",
+      "waiting": "少々お待ちください…",
+      "turnStart": "{{name}} さん、対応中です…",
+      "issueTip": "{{name}} さん、/issue でフィードバックや提案をお寄せください",
       "runningTool": "{{tool}} を実行中…"
     },
     "remoteSession": {
