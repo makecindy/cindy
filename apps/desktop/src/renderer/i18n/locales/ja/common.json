@@ -2590,6 +2590,7 @@
         "descriptionCollapse": "折りたたむ",
         "useAction": "Plugin を使用",
         "useDisabled": "使用する前に Plugin を有効にしてください",
+        "enableGlobalAria": "「{{name}}」をグローバルに有効/無効にします(プロジェクト単位の無効化はプロジェクト設定に従います)",
         "moreActions": "その他の Plugin 操作",
         "updateFromFile": ".cindy ファイルから更新…",
         "settingsTitle": "{{name}} の設定",

@@ -50,6 +50,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
+import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import type { GhostPermissionItem, GhostToolDecl, InstalledGhost } from '../../../shared/ghost';
@@ -253,12 +254,16 @@ export function GhostPluginDetailView({
               >
                 {t('settings.ghosts.detail.useAction')}
               </button>
-              <Switch
-                checked={enabled}
-                onCheckedChange={onToggle}
-                disabled={toggleDisabled}
-                aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
-              />
+              <Tip text={t('settings.ghosts.detail.enableGlobalAria', { name: detail.name })}>
+                <span className="inline-flex">
+                  <Switch
+                    checked={enabled}
+                    onCheckedChange={onToggle}
+                    disabled={toggleDisabled}
+                    aria-label={t('settings.ghosts.detail.enableGlobalAria', { name: detail.name })}
+                  />
+                </span>
+              </Tip>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button

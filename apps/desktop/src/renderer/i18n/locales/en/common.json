@@ -2591,6 +2591,7 @@
         "descriptionCollapse": "Show less",
         "useAction": "Use Plugin",
         "useDisabled": "Enable this Plugin before using it",
+        "enableGlobalAria": "Enable/disable \"{{name}}\" globally (project-scoped disables follow project settings)",
         "moreActions": "More Plugin Actions",
         "updateFromFile": "Update from .cindy File…",
         "settingsTitle": "{{name}} Settings",

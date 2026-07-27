@@ -2590,6 +2590,7 @@
         "descriptionCollapse": "접기",
         "useAction": "Plugin 사용",
         "useDisabled": "사용하기 전에 Plugin을 활성화하세요",
+        "enableGlobalAria": "「{{name}}」을(를) 전역으로 활성화/비활성화합니다(프로젝트 범위 비활성화는 프로젝트 설정을 따릅니다)",
         "moreActions": "Plugin 추가 작업",
         "updateFromFile": ".cindy 파일에서 업데이트…",
         "settingsTitle": "{{name}} 설정",

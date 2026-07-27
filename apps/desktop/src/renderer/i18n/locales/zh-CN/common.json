@@ -2590,6 +2590,7 @@
         "descriptionCollapse": "收起",
         "useAction": "使用",
         "useDisabled": "请先开启插件",
+        "enableGlobalAria": "全局生效/停用「{{name}}」(项目范围的停用跟随项目设置)",
         "moreActions": "更多插件操作",
         "updateFromFile": "从 .cindy 文件更新…",
         "settingsTitle": "{{name}} 设置",
