@@ -142,7 +142,9 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
     // 401 原样回给意识(代发成功,对方说不行),但台账已记
     expect(r.ok).toBe(true);
     expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'brave_api_key');
-    expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'tavily_api_key');
+    // tavily_api_key 的 scope 是 *.tavily.com,不匹配 api.search.brave.com,不记账
+    expect(noteCredentialRejected).not.toHaveBeenCalledWith('web-search', 'tavily_api_key');
+    expect(noteCredentialRejected).toHaveBeenCalledTimes(1);
 
     noteCredentialRejected.mockClear();
     const { slot: okSlot } = makeSlot({ noteCredentialRejected });
@@ -187,6 +189,23 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
     expect(noteCredentialRejected).not.toHaveBeenCalled();
   });
 
+  it('401/403 只记命中最终 host 的凭证,不殃及其它 host 的 key', async () => {
+    const noteCredentialRejected = vi.fn();
+    // 双 host 插件:brave key 打 api.search.brave.com,tavily key 打 api.tavily.com。
+    // 在 tavily 域上拿到 401,只应记 tavily_api_key,不记 brave_api_key。
+    const { slot } = makeSlot({
+      fetchImpl: vi.fn(async () => fakeResponse({ status: 401 })) as never,
+      noteCredentialRejected,
+    });
+    await slot.handleFetchRequest('web-search', {
+      type: 'fetch-request',
+      url: 'https://api.tavily.com/search',
+    });
+    expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'tavily_api_key');
+    expect(noteCredentialRejected).not.toHaveBeenCalledWith('web-search', 'brave_api_key');
+    expect(noteCredentialRejected).toHaveBeenCalledTimes(1);
+  });
+
   it('422 + 令牌失效类 body 对纯 key 型 user 凭证记账;业务 422 不记', async () => {
     // Brave 对无效订阅令牌回 422(非标),body 含 "subscription token is invalid"。
     const noteCredentialRejected = vi.fn();
@@ -198,7 +217,9 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
     });
     await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
     expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'brave_api_key');
-    expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'tavily_api_key');
+    // 同样只记命中 host 的 brave_api_key,不殃及 tavily_api_key
+    expect(noteCredentialRejected).not.toHaveBeenCalledWith('web-search', 'tavily_api_key');
+    expect(noteCredentialRejected).toHaveBeenCalledTimes(1);
 
     // 业务语义校验失败的 422(body 无凭证类关键词)不记账。
     noteCredentialRejected.mockClear();

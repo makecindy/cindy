@@ -1183,18 +1183,34 @@ export class GhostNetworkSlot {
       // user 源 key 被吊销后不会再有任何信号——在这里按 secret key 记
       // 台账,生命周期投影折算 needs_reauth,发现层与插件页即知;OAuth /
       // 连接有自己的 expired 链路,不重复记账。
+      // 只记实际对最终响应 host(重定向后)可注入的凭证:scope 判定与
+      // injectSecrets 同口径(inject.hosts ?? net.hosts + 模式匹配),否则
+      // 挂在别的 host 的无关 key 会被误翻 needs_reauth。
+      // 最终 host 以 response.url 为准(经重定向后);取不到才退回请求 host。
+      let responseHost = url.hostname;
+      try {
+        const finalUrl = (response as { url?: string }).url;
+        if (finalUrl) responseHost = new URL(finalUrl).hostname;
+      } catch {
+        /* 非绝对地址等异常:退回请求 host */
+      }
+      const injectableKeys = (net.secrets ?? [])
+        .filter((decl) => (decl.source ?? 'user') === 'user')
+        .filter((decl) =>
+          (decl.inject.hosts ?? net.hosts).some((pattern) =>
+            ghostNetworkHostMatches(pattern, responseHost),
+          ),
+        );
       if (response.status === 401 || response.status === 403) {
-        for (const decl of net.secrets ?? []) {
-          if ((decl.source ?? 'user') === 'user') {
-            this.deps.noteCredentialRejected?.(ghostId, decl.key);
-          }
+        for (const decl of injectableKeys) {
+          this.deps.noteCredentialRejected?.(ghostId, decl.key);
         }
       } else if (response.status === 422) {
         // 非标凭证失效信号(如 Brave 对无效订阅令牌回 422):只对纯 key 型
         // user 源凭证记账,且要求 body 出现令牌/失效类关键词,避免把插件
         // 业务语义校验失败的 422 误标为凭证被拒。
-        const plainKeys = (net.secrets ?? [])
-          .filter((decl) => (decl.source ?? 'user') === 'user' && decl.exchange === undefined)
+        const plainKeys = injectableKeys
+          .filter((decl) => decl.exchange === undefined)
           .map((decl) => decl.key);
         if (plainKeys.length > 0 && (await probeCredentialRejectionBody(response))) {
           for (const key of plainKeys) {

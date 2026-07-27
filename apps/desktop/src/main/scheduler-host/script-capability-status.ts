@@ -27,6 +27,7 @@ export type ScriptCapabilityRuntimeState =
   | 'ghost-asleep'
   | 'ghost-needs-setup'
   | 'ghost-needs-reauth'
+  | 'ghost-blocked'
   | 'ghost-degraded';
 
 export interface ScriptCapabilityStatus {
@@ -63,9 +64,13 @@ export function resolveScriptCapabilityStatuses(
       case 'ready':
         return { capability, state: 'ok' as const };
       case 'needs_setup':
-      case 'blocked':
       case 'unknown':
         return { capability, state: 'ghost-needs-setup' as const, ghostName: ghost.name };
+      case 'blocked':
+        // blocked = 云端会话缺失/账号服务不可用(如 xd-atlassian/xd-feishu
+        // 这类 Cindy 账号插件),修复动作是登录/恢复云端,不是「去配置」,
+        // 单独成态避免误导成 needs-setup。
+        return { capability, state: 'ghost-blocked' as const, ghostName: ghost.name };
       case 'needs_reauth':
         return { capability, state: 'ghost-needs-reauth' as const, ghostName: ghost.name };
       case 'degraded':

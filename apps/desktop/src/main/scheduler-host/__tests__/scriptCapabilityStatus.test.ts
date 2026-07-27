@@ -58,13 +58,14 @@ describe('resolveScriptCapabilityStatuses', () => {
   it('生命周期投影的非 ready 态映射为对应能力警示', () => {
     const cases: Array<{
       readiness: 'needs_setup' | 'needs_reauth' | 'degraded' | 'blocked' | 'unknown';
-      expected: 'ghost-needs-setup' | 'ghost-needs-reauth' | 'ghost-degraded';
+      expected: 'ghost-needs-setup' | 'ghost-needs-reauth' | 'ghost-blocked' | 'ghost-degraded';
     }> = [
       { readiness: 'needs_setup', expected: 'ghost-needs-setup' },
       { readiness: 'needs_reauth', expected: 'ghost-needs-reauth' },
       { readiness: 'degraded', expected: 'ghost-degraded' },
-      // blocked / unknown 按「需要用户处置」归类到 needs-setup 警示
-      { readiness: 'blocked', expected: 'ghost-needs-setup' },
+      // blocked 是云端会话/账号服务缺失,独立成态(文案≠「去配置」);
+      // unknown 按「需要用户处置」归类到 needs-setup 警示
+      { readiness: 'blocked', expected: 'ghost-blocked' },
       { readiness: 'unknown', expected: 'ghost-needs-setup' },
     ];
     for (const { readiness, expected } of cases) {

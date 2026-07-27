@@ -4386,6 +4386,7 @@ interface ElectronAPI {
             | 'ghost-asleep'
             | 'ghost-needs-setup'
             | 'ghost-needs-reauth'
+            | 'ghost-blocked'
             | 'ghost-degraded';
           ghostName?: string;
         }>;

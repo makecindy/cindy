@@ -16,6 +16,7 @@
  *   损坏时按空账处理(fail-open,不因为台账故障把可用插件判死)。
  */
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -71,7 +72,26 @@ export function createGhostCredentialRejectionsStore(args: {
 
   const persist = (): void => {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(cache), 'utf8');
+    // 原子写:先落临时文件再 rename,进程崩溃/断电不会留下半截 JSON
+    // 把台账打坏(与 plugin-market ledger 同模式,含 Windows 替换处理)。
+    const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(tempPath, JSON.stringify(cache), { mode: 0o600, flag: 'wx' });
+      try {
+        fs.renameSync(tempPath, filePath);
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'code' in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+        if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EEXIST')) {
+          throw error;
+        }
+        fs.rmSync(filePath, { force: true });
+        fs.renameSync(tempPath, filePath);
+      }
+    } finally {
+      fs.rmSync(tempPath, { force: true });
+    }
   };
 
   return {

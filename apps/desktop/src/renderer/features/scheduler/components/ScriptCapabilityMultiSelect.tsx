@@ -29,11 +29,22 @@ type CapabilityRuntimeState =
   | 'ghost-asleep'
   | 'ghost-needs-setup'
   | 'ghost-needs-reauth'
+  | 'ghost-blocked'
   | 'ghost-degraded';
 interface CapabilityRuntimeStatus {
   state: CapabilityRuntimeState;
   ghostName?: string;
 }
+
+/** 能力警告的 state → i18n 后缀;新增 state 在此登记,避免嵌套三元漂移。 */
+const CAPABILITY_WARN_I18N_SUFFIX: Record<Exclude<CapabilityRuntimeState, 'ok'>, string> = {
+  'ghost-missing': 'ghostMissing',
+  'ghost-asleep': 'ghostAsleep',
+  'ghost-needs-setup': 'ghostNeedsSetup',
+  'ghost-needs-reauth': 'ghostNeedsReauth',
+  'ghost-blocked': 'ghostBlocked',
+  'ghost-degraded': 'ghostDegraded',
+};
 
 export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
   const { t } = useTranslation();
@@ -175,15 +186,9 @@ export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
                       <AlertTriangle size={11} className="shrink-0" />
                       {t(
                         `scheduler.editor.script.capabilityWarn.${
-                          warn.state === 'ghost-missing'
-                            ? 'ghostMissing'
-                            : warn.state === 'ghost-asleep'
-                              ? 'ghostAsleep'
-                              : warn.state === 'ghost-needs-reauth'
-                                ? 'ghostNeedsReauth'
-                                : warn.state === 'ghost-degraded'
-                                  ? 'ghostDegraded'
-                                  : 'ghostNeedsSetup'
+                          CAPABILITY_WARN_I18N_SUFFIX[
+                            warn.state as Exclude<CapabilityRuntimeState, 'ok'>
+                          ] ?? 'ghostNeedsSetup'
                         }`,
                         { name: warn.ghostName ?? '' },
                       )}

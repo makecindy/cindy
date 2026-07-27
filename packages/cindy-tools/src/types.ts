@@ -101,6 +101,15 @@ export interface CindyGhostSetupPlan {
   }>;
 }
 
+/** 插件配置就绪态;缺省视同 ready(旧 Host 口径)。 */
+export type CindyGhostReadiness =
+  | 'ready'
+  | 'needs_setup'
+  | 'needs_reauth'
+  | 'degraded'
+  | 'blocked'
+  | 'unknown';
+
 /** ghost_list 返回的单段意识条目(仅"已装且唤醒"的意识在列)。 */
 export interface CindyGhostInfo {
   id: string;
@@ -111,7 +120,7 @@ export interface CindyGhostInfo {
    * 配置就绪态(ready / needs_setup / needs_reauth / degraded / blocked /
    * unknown)。缺省视同 ready(旧 Host 口径);非 ready 的条目 tools 为空。
    */
-  readiness?: string;
+  readiness?: CindyGhostReadiness | (string & {});
   tools: CindyGhostToolInfo[];
   /**
    * Host 现查的配置评估。state=required 的条目 tools 必须为空(不派发
@@ -284,7 +293,7 @@ export interface CindyGhostsMcpDeps {
      * blocked / unknown)。非 ready 的条目只做发现与配置引导,不提供
      * 可调用工具;由 Host 现查注入,缺省视同 ready(旧 Host 口径)。
      */
-    readiness?: string;
+    readiness?: CindyGhostReadiness | (string & {});
   }>;
   /** 意识编写手册(markdown,随主机版本走;agent 写意识前先读)。 */
   forgeGuide(): Promise<string>;

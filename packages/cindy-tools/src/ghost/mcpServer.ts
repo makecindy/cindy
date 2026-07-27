@@ -4,6 +4,7 @@ import { z } from "zod";
 import type {
   CindyForgeScaffoldTemplate,
   CindyGhostInfo,
+  CindyGhostReadiness,
   CindyGhostSetupAllowedAction,
   CindyGhostSetupAssessment,
   CindyGhostSetupPlan,
@@ -82,6 +83,24 @@ const ROSTER_DESC_MAX = 120;
 /** 花名册条数上限(超出的意识仍可经 ghost_list 实时查到,只是不进描述)。 */
 const ROSTER_MAX_ITEMS = 16;
 
+/** 允许进入花名册文本的就绪态白名单;集合外(含 forward-compat 任意串)一律按
+ * unknown 渲染,避免把含 `]`/换行/超长串注入工具描述(=系统提示前缀)。 */
+const ROSTER_READINESS_TOKENS: ReadonlySet<string> = new Set([
+  "needs_setup",
+  "needs_reauth",
+  "degraded",
+  "blocked",
+  "unknown",
+]);
+
+function rosterReadinessToken(
+  readiness: CindyGhostReadiness | (string & {}) | undefined,
+): string {
+  if (!readiness || readiness === "ready") return "";
+  const safe = ROSTER_READINESS_TOKENS.has(readiness) ? readiness : "unknown";
+  return ` [${safe}]`;
+}
+
 /**
  * Agent setup plan 的 MCP 边界上限。须覆盖 Desktop manifest 的
  * (max groups + host groups) × max any-of items ((8+2) × 8 = 80)；
@@ -154,14 +173,13 @@ export function formatGhostRoster(
     name: string;
     command?: string;
     description?: string;
-    readiness?: string;
+    readiness?: CindyGhostReadiness | (string & {});
   }>,
 ): string {
   if (items.length === 0) return "";
   const lines = items.slice(0, ROSTER_MAX_ITEMS).map((g) => {
     const cmd = g.command ? `,指令 $${g.command}` : "";
-    const readiness =
-      g.readiness && g.readiness !== "ready" ? ` [${g.readiness}]` : "";
+    const readiness = rosterReadinessToken(g.readiness);
     const desc = g.description
       ? `:${g.description.replace(/\s+/g, " ").slice(0, ROSTER_DESC_MAX)}`
       : "";
