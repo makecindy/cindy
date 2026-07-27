@@ -8,13 +8,14 @@
 | 文档 | 内容 | 角色 |
 |---|---|---|
 | [`DESIGN.md`](./DESIGN.md) | 权威视觉规范全文：视觉语言（§1）、颜色（§2）、排版（§3）、组件（§4）、布局（§5）、交互约定与 Motion token（§14）、主题系统与 Token 参考（§10）、CINDY 皮肤族（§15）、登录链路（§16） | **权威正本**（原仓库根文件，根目录 `DESIGN.md` 保留为跳转入口） |
-| [`figma-component-spec.md`](./figma-component-spec.md) | 登录链路 Figma 组件与色彩速查手册：全组件逐态参数、nodeId 溯源、wave1–wave5 读取记录 | 权威（登录域逐参数） |
+| [`figma-component-spec.md`](./figma-component-spec.md) | 登录链路 Figma 组件与色彩速查手册：全组件逐态参数、nodeId 溯源、wave1–wave6 读取记录 | 权威（登录域逐参数） |
 | [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `DESIGN.md §16.1` + `colors.ts` 为准） |
 | [`design-decision-log.md`](./design-decision-log.md) | 全局设计决策史台账：被推翻的方案、勘误过程、backlog（已收录原 `DESIGN.md §13` G1–G4 归档与 §15 决策史全量） | 决策台账（只增不改；与 `DESIGN.md` 冲突时以 `DESIGN.md` 为准） |
 | [`README.md`](./README.md) | 本目录使用规则 | 说明 |
 
 ## 版本记录
 
+- **2026-07-27（登录改版：面板 500 + 跳过登录）**：`DESIGN.md §16` 几何表换新值（面板 440→500、登录组 560→620、圆钮行 y 480→540、协议行 y 582→642、error 槽回 680×50@380、新增「跳过登录」槽 680×60@430）+ 新增 §16.3「登录文字按钮」组件规格 + §16.4 协议门过门点与豁免表 + §16.2 移动端 stage 几何与键盘停靠锚；`figma-component-spec.md` 新增 §12（wave6 新稿 `700:783` / `705:799` / `705:915` 读取记录、跳过登录逐值规格、新旧稿差异、UNKNOWN 清单）；`token-decision-table.md` §3/§4 改值并登记跳过登录尺寸族（色源复用 `--login-secondary-text`，零新增颜色 token）；被推翻的两条 2026-07-24 产品拍板（游客过协议门 / 手机必须有账号）与 pad 竖屏推导值归档至 [`design-decision-log.md`](./design-decision-log.md)「2026-07-27」条。
 - **2026-07-24（梳理批次 1）**：`DESIGN.md` 整体梳理第一批落地——去除 Ollama 官网叙事（标题改 `Cindy Design System`，§1/§4/§5/§8/§9 重写或删除官网内容）；focus ring 文档追平代码（`#3b82f6` → `#417CDD`）；§2/§9 二级三级文字与 chip 双 slot 表述按 `colors.ts` 修正；§10 移除写死 token 计数与过时豁免行；§12 结构化规格并入 §4（§12 编号留占位）；§13 G1–G4 归档至新建 [`design-decision-log.md`](./design-decision-log.md)；§14/§15/§16 若干失效指向修正。
 - **2026-07-24**：目录整编（设计 md 统一归位 `docs/design-rules/`，本文件升级为索引）。同步 Figma 组件库更新：hover 统一「叠白变亮」口径（旧「白底钮 hover 叠黑」作废）、新增协议勾选 `radiobutton` 四态与双色模式小按钮四母版、`SSO 登录_企业` / `back` 扩 Dark 三态、`white_button` 增 loading 五态（`figma-component-spec §11`、`DESIGN.md §16.5`）。`figma-component-spec.md` / `token-decision-table.md` 自迁移前仓库最后版本恢复并更新至 wave5。
 - **2026-07-23**：`DESIGN.md` 新增 §16 登录链路（登录全链路设计规范、`--login-*` 双态 token 表、深色模式落地机制）。
