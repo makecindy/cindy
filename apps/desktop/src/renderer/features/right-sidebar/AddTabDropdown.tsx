@@ -96,10 +96,20 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
 
   useLayoutEffect(() => {
     let raf = 0;
+    // 主窗口内嵌形态的宿主 aside:收起时不 unmount 而是 w-0 + overflow-hidden
+    // 保挂载(见 RightSidebar.tsx 规则 7 注释),此时 anchor 自身 rect 并不归零
+    // (「+」wrapper shrink-0 仍有宽度),要靠 aside 的 data-pane-collapsed 状态
+    // 判定。detached 子窗口没有这层 aside(closest 为 null),跳过该检测。
+    const hostPane = anchorRef.current?.closest('[data-panel-drag-root="right-tabs"]');
     const track = () => {
       const anchor = anchorRef.current;
       const rect = anchor?.getBoundingClientRect();
-      if (!anchor || !rect || (rect.width === 0 && rect.height === 0)) {
+      if (
+        !anchor ||
+        !rect ||
+        (rect.width === 0 && rect.height === 0) ||
+        hostPane?.hasAttribute('data-pane-collapsed')
+      ) {
         onClose();
         return;
       }
@@ -118,17 +128,21 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
   // 焦点:portal 在 body 末尾,原生 tab 序从「+」按钮出发够不到菜单,打开时把焦点
   // 落到第一个可用 menuitem 上(DESIGN.md 焦点规范:浮层打开焦点落主控件 —— 键盘
   // Enter/Space 打开后直接可再按 Enter 选中;鼠标打开时首项走 focus-visible,不会
-  // 无端高亮)。卸载时若焦点仍困在菜单里(DOM 摘除后落回 body)则还给「+」按钮:
-  // ⌘W 关 tab 的归属按 activeElement 判定,焦点丢在 body 会让下一次 ⌘W 误关整个
-  // 窗口;焦点已被用户主动移去别处时不抢。
-  useEffect(() => {
+  // 无端高亮)。
+  //
+  // 卸载时仅当焦点仍在菜单里时才还给「+」按钮(Escape / 选中菜单项的路径):⌘W
+  // 归属按 activeElement 判定,焦点随菜单 DOM 摘除丢到 body 会让下一次 ⌘W 误关
+  // 整个窗口。必须用 useLayoutEffect —— cleanup 在 DOM 摘除前运行,此时还能读到
+  // "焦点是否在菜单内";点击菜单外时浏览器已先把焦点移走(不可聚焦区 → body),
+  // 该场景下不 restore,⌘W 归属正确地跟随用户点击的区域(而不是被拽回右栏)。
+  useLayoutEffect(() => {
     const menuEl = ref.current;
     const anchor = anchorRef.current;
     const firstItem = menuEl?.querySelector<HTMLButtonElement>('[role="menuitem"]:not([disabled])');
     (firstItem ?? menuEl)?.focus();
     return () => {
       const active = document.activeElement;
-      if (active === document.body || (menuEl && menuEl.contains(active))) {
+      if (menuEl && menuEl.contains(active)) {
         anchor?.querySelector('button')?.focus();
       }
     };
@@ -173,7 +187,12 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
       data-rsb-territory=""
       onBlur={(e) => {
         const next = e.relatedTarget as Node | null;
-        if (next && ref.current && !ref.current.contains(next)) onClose();
+        if (!next || !ref.current || ref.current.contains(next)) return;
+        // 焦点移向「+」按钮不算离开:菜单打开时首项持有焦点,点「+」的 mousedown
+        // 会先把焦点转移到按钮触发本 blur —— 这里关闭会让随后的 click toggle 把
+        // 菜单重新打开("点 + 关不上"以 blur 路径回归)。关闭交给按钮 onClick。
+        if (anchorRef.current?.contains(next)) return;
+        onClose();
       }}
       className="fixed z-50 w-[220px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1 outline-none"
       style={{
