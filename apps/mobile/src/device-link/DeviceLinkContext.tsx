@@ -463,10 +463,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     }));
     client.start();
 
-    // 熔断恢复回填:探测成功可能发生在任意业务请求上(不局限某个页面),设备从
-    // unresponsive 集合移除时补一次 rehydrate——它 open 期间被跳过的订阅 / 快照
-    // 不该等到下一次重连或回前台才回来。只在「有设备恢复」时触发,open 方向不动。
-    // 双向触发(review P1):
+    // 熔断状态变化触发 rehydrate:unresponsive 集合的新增与移除都各触发一次
+    // (review P1 + 注释勘误):
     // - 设备恢复(移除):补一次 rehydrate,把 open 期间被跳过的订阅/快照拉回来;
     // - 设备进入 open(新增):也要触发一次——熔断可能由普通页面请求凑满超时打开,
     //   此刻若没有已在跑的 rehydrate 退避循环,代表性探测根本无人发起,
