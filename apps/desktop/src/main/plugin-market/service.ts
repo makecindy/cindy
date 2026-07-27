@@ -264,12 +264,15 @@ export class PluginMarketService {
           'Plugin release changed after permission review',
         );
       }
+      const existing = getGhostManager()
+        .list()
+        .some((ghost) => ghost.manifest.id === plugin.ghostId);
       return {
         ghost: await this.installDetail(
           plugin,
           {
-            allowPermissionExpansion:
-              options?.allowPermissionExpansion === true,
+            expectedInstalled: existing,
+            allowPermissionExpansion: options.allowPermissionExpansion === true,
           },
           owner,
           ledger,
@@ -341,7 +344,9 @@ export class PluginMarketService {
     plugin: VisiblePluginDetail,
     options: {
       allowPermissionExpansion?: boolean;
-    } = {},
+      /** 确认操作时的安装意图;下载窗口期目标被另一窗口卸载时拒绝滑入首装。 */
+      expectedInstalled: boolean;
+    } = { expectedInstalled: false },
     owner = captureMarketOwner(),
     ledger = this.ledgerForOwner(owner),
   ): Promise<InstalledGhost> {
@@ -388,6 +393,19 @@ export class PluginMarketService {
     try {
       await downloadVerifiedPlugin(download.url, download, tempPath);
       requireSameMarketOwner(owner);
+      if (options.expectedInstalled) {
+        const stillInstalled = getGhostManager()
+          .list()
+          .some((ghost) => ghost.manifest.id === plugin.ghostId);
+        if (!stillInstalled) {
+          // 用户确认的是更新；下载期间若另一窗口已卸载目标,不能把操作
+          // 降级成首装并自动启用。按状态变化拒绝,由 renderer 刷新重试。
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'Plugin was uninstalled while the update was downloading',
+          );
+        }
+      }
       // 市场首装一律装完即开(2026-07-26 定案,见 installOrUpdateMarketGhostPackage);
       // 已装过则走原位更新,唤醒/沉睡状态延续当前值。
       const ghost = await installOrUpdateMarketGhostPackage(tempPath, {
@@ -537,7 +555,12 @@ export class PluginMarketService {
           requireSameMarketOwner(owner);
           const detail = await this.api.detail(summary.id);
           // 装完即开语义已收敛进市场安装入口本身,这里无需再显式声明。
-          await this.installDetail(detail, {}, owner, ledger);
+          await this.installDetail(
+            detail,
+            { expectedInstalled: false },
+            owner,
+            ledger,
+          );
         });
       } catch (error) {
         // 单个默认插件失败不拖垮整个市场；下次同步可重试。

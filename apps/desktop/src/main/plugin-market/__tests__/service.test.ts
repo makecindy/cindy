@@ -654,6 +654,38 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects an update when the installed target disappears during download', async () => {
+    const item = summary({ currentRelease: { ...summary().currentRelease, version: '2.0.0' } });
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-0',
+      version: '1.0.0',
+    });
+    runtime.ghosts = [
+      {
+        manifest: manifest('cindy-test', '1.0.0'),
+        dir: '/userData/cindy-brain/cindy-test',
+        enabled: false,
+      },
+    ];
+    h.api.download.mockImplementationOnce(async () => {
+      // 模拟另一窗口在下载期间完成本地卸载。
+      runtime.ghosts = [];
+      return {
+        url: 'https://downloads.test.invalid/plugin.cindy',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        sha256: item.currentRelease.sha256,
+        sizeBytes: item.currentRelease.sizeBytes,
+      };
+    });
+
+    await expect(
+      h.service.install(item.id, { expectedReleaseId: item.currentRelease.id }),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
   it('rejects when the market release changes after renderer review', async () => {
     const reviewed = summary();
     const replacement = summary({
