@@ -1305,7 +1305,7 @@ describe('makerChatStore text delta batching', () => {
 
   it('persists the original remote auth error when retry enqueue rejects asynchronously', async () => {
     vi.mocked(sessionService.get).mockResolvedValue({
-      agentKind: 'claude-code',
+      agentKind: 'cc',
       remoteHostId: 'remote-host',
       sdkSessionId: null,
       fastMode: false,
@@ -1350,7 +1350,7 @@ describe('makerChatStore text delta batching', () => {
 
   it('persists the original remote auth error when an accepted retry returns a projection error', async () => {
     vi.mocked(sessionService.get).mockResolvedValue({
-      agentKind: 'claude-code',
+      agentKind: 'cc',
       remoteHostId: 'remote-host',
       sdkSessionId: null,
       fastMode: false,
