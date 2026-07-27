@@ -30,8 +30,9 @@ export function ensureSystemBinPathForMachineId(): void {
   const present = new Set(raw.split(path.delimiter));
   const missing = required.filter((dir) => !present.has(dir));
   if (missing.length === 0) return;
-  // Append missing dirs, preserving the original PATH string verbatim (including
-  // any empty segments, which mean CWD on Unix) so we don't change PATH order or
-  // semantics — only add fallback lookup locations at the end.
+  // Non-empty PATH: keep it verbatim (including any empty segments, which mean
+  // CWD on Unix) and append the missing dirs at the end — no reordering, no
+  // dropped segments. Empty/unset PATH: set just the system dirs; we intentionally
+  // do not materialise an implicit "" / CWD entry into PATH.
   process.env.PATH = raw === '' ? missing.join(path.delimiter) : [raw, ...missing].join(path.delimiter);
 }
