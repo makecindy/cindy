@@ -409,7 +409,7 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.getByText('Panel')).toBeTruthy();
     expect(screen.getByText('Install Location')).toBeTruthy();
     const installLocation = screen.getByText('/tmp/cindy-brain/builtin.example');
-    expect(installLocation.parentElement?.parentElement?.className).toContain('col-span-full');
+    expect(installLocation.closest('.col-span-full')).toBeTruthy();
     expect(installLocation.className).toContain('truncate');
     expect(installLocation.className).toContain('whitespace-nowrap');
     expect(screen.queryByRole('button', { name: 'See All' })).toBeNull();
