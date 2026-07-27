@@ -7289,7 +7289,7 @@
     },
     "providers": {
       "alipay": "支付宝",
-      "stripe": "银行卡"
+      "stripe": "Stripe"
     },
     "currentSubscription": {
       "title": "当前订阅",

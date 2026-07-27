@@ -7288,7 +7288,7 @@
     },
     "providers": {
       "alipay": "Alipay",
-      "stripe": "카드"
+      "stripe": "Stripe"
     },
     "currentSubscription": {
       "title": "현재 구독",

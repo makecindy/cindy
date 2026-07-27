@@ -7299,7 +7299,7 @@
     },
     "providers": {
       "alipay": "Alipay",
-      "stripe": "Card"
+      "stripe": "Stripe"
     },
     "currentSubscription": {
       "title": "Current subscription",

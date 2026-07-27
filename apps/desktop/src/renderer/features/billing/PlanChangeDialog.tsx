@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as QRCode from 'qrcode';
 import {
@@ -240,6 +240,12 @@ export function PlanChangeStatusDialog({
   const change = state.planChange;
   const action: BillingPaymentAction | null = change?.paymentAction ?? null;
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const openedRedirectKeyRef = useRef<string | null>(null);
+  const redirectUrl = action?.type === 'REDIRECT' ? action.url : null;
+  const redirectKey =
+    action?.type === 'REDIRECT'
+      ? [change?.planChangeId, action.url, action.expiresAt].join(':')
+      : null;
   const actionSeconds = useCountdownSeconds(
     state.phase === 'AWAITING_PAYMENT' ? (action?.expiresAt ?? null) : null,
   );
@@ -263,6 +269,16 @@ export function PlanChangeStatusDialog({
       active = false;
     };
   }, [action]);
+
+  useEffect(() => {
+    if (!state.open || state.phase !== 'AWAITING_PAYMENT') {
+      openedRedirectKeyRef.current = null;
+      return;
+    }
+    if (!redirectKey || !redirectUrl || openedRedirectKeyRef.current === redirectKey) return;
+    openedRedirectKeyRef.current = redirectKey;
+    void billingApi.openPaymentRedirect(redirectUrl);
+  }, [redirectKey, redirectUrl, state.open, state.phase]);
 
   const busy = state.phase === 'QUOTING' || state.phase === 'CONFIRMING';
   const title = useMemo(() => {
