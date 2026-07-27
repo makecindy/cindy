@@ -112,30 +112,21 @@ describe('file-browser scanner path boundaries', () => {
       await expect(statEntry(root, '\\Windows\\system32')).rejects.toThrow(
         /absolute path not allowed/,
       );
-      // Windows drive-letter absolutes have no leading slash after normalization
-      // ('C:\\x' -> 'C:/x'), so they must be rejected by an explicit drive check
-      // rather than slipping through as a relative 'C:' dir under the workdir.
+      // Windows drive paths are rejected via a host-independent check
+      // (path.win32.isAbsolute + a drive-letter regex), so they never reach
+      // path.resolve where a Windows host would mis-interpret them. This covers
+      // both drive-*absolute* ('C:\\x' / 'C:/x') and drive-*relative* ('C:foo' /
+      // 'C:') — the latter is Windows drive-relative syntax (resolved against
+      // drive C:'s CWD), not a literal workdir entry, so it must not slip through.
       await expect(statEntry(root, 'C:\\Windows\\system32')).rejects.toThrow(
         /absolute path not allowed/,
       );
       await expect(readFile(root, 'C:/Windows/system32')).rejects.toThrow(
         /absolute path not allowed/,
       );
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it('treats a drive-letter-looking relative name (no separator) as workdir-relative', async () => {
-    // A Windows drive *absolute* is 'C:/x' (drive + separator); a bare 'C:foo'
-    // has no separator and is a legal POSIX filename. The guard must reject only
-    // the former, so this must resolve as a normal workdir-relative entry.
-    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));
-    try {
-      await fsWriteFile(path.join(root, 'C:foo'), 'hi', 'utf8');
-      const stat = await statEntry(root, 'C:foo');
-      expect(stat.relPath).toBe('C:foo');
-      expect(stat.type).toBe('file');
+      await expect(statEntry(root, 'C:foo')).rejects.toThrow(/absolute path not allowed/);
+      await expect(statEntry(root, 'C:')).rejects.toThrow(/absolute path not allowed/);
+      await expect(readFile(root, 'c:bar')).rejects.toThrow(/absolute path not allowed/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
