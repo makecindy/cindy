@@ -17,9 +17,12 @@
  *    单事务把业务行 INSERT OR IGNORE 进账号库。只写账号库、只读 local 库 →
  *    单库事务,提交天然原子;local 库在提交点前后都没被动过一个字节,「登录把
  *    会话弄丢了」在物理上不可能发生。导入幂等(主键冲突整行跳过),失败重试安全。
- *  - 导入提交后依次做三件收尾(都不再影响会话可见性,失败只 warn + 下次登录续跑):
+ *  - 导入提交后依次做三件收尾(都不再影响会话可见性,失败只 warn + 下次登录续跑;
+ *    整段可被新出现的并发实例打断——收尾动的是共享 userData 里别人也在用的文件):
  *    ① local 库改名归档为 `<prefix>-local-v1.db.adopted-<ts>`(保留不删)——防止
- *       用户回到 local 模式后看到同一批会话的第二份副本各自分叉;
+ *       用户回到 local 模式后看到同一批会话的第二份副本各自分叉;**导入未能把数据
+ *       全带过来时(droppedRows / unimportableTables 非空)不归档**,local 库留在
+ *       原地,用户回 local 模式仍能看到全部原始数据;
  *    ② `owners/<localKey>` 下除 `dialogues` 外的项合并搬进 `owners/<accountKey>`
  *       (不覆盖,冲突跳过);`dialogues` 故意不搬——dialogue 会话的 working_dir
  *       由 db ready 后的 sweepLegacyDialogueWorkingDirs 逐行处理,它自带「新位置
@@ -86,6 +89,13 @@ const ADOPTED_DB_SUFFIX = '.adopted-';
 
 /** 归档名的进程内单调序号(同秒重入不撞名)。 */
 let archiveSeq = 0;
+
+/** 收尾期间发现并发实例时的中断信号(转成「收尾未完成」,下次登录续跑)。 */
+class AdoptionInterruptedError extends Error {
+  constructor() {
+    super('local owner adoption tail interrupted by a concurrent instance');
+  }
+}
 
 /** 推送给 renderer 的弹窗阶段(语义同 mToc:done/failed 后可解除)。 */
 export type LocalAdoptionPhase = 'confirm' | 'running' | 'done' | 'failed';
@@ -229,20 +239,53 @@ async function finishAdoption(
   deps: LocalOwnerAdoptionDeps,
   userId: string,
   localDbPath: string,
+  keepLocalDb: boolean,
 ): Promise<boolean> {
   let complete = true;
   const warn = (step: string, err: unknown): void => {
     complete = false;
+    if (err instanceof AdoptionInterruptedError) {
+      deps.log.info(
+        'local owner adoption: %s stopped, another live instance appeared (will resume next login)',
+        step,
+      );
+      return;
+    }
     deps.log.warn(
       'local owner adoption: %s failed after commit (will resume next login): %s',
       step,
       err instanceof Error ? err.message : String(err),
     );
   };
+  // 收尾要动的是「共享 userData 里别人也可能在用」的文件:local 库本体、owner
+  // 命名空间、加密凭证。确认窗停留期间可能有新的 local 实例启动——它正开着
+  // local 库、读着那些配置,把文件从它脚下搬走会让它打不开库、设置与记忆凭空
+  // 消失(Greptile review)。因此收尾整段都要能被并发实例打断:进场先复查一次,
+  // 递归搬移期间按 500ms 节流继续复查,发现即中断。中断视为收尾未完成,
+  // importedOwnerKey 留着,下次独占启动时续跑(每一步都幂等)。
+  if (deps.hasConcurrentLiveInstances()) {
+    deps.log.info('local owner adoption: tail deferred, another live instance appeared');
+    return false;
+  }
+  let lastAbortScanMs = 0;
+  const abortCheck = async (): Promise<void> => {
+    const nowMs = deps.now().getTime();
+    if (nowMs - lastAbortScanMs < 500) return;
+    lastAbortScanMs = nowMs;
+    if (deps.hasConcurrentLiveInstances()) throw new AdoptionInterruptedError();
+  };
 
   // ① local 库归档:防止用户回到 local 模式后看到同一批会话的第二份副本。
   //    秒级时间戳 + 进程内序号,同秒重入不撞已存在的归档名。
-  if (await deps.fs.pathExists(localDbPath)) {
+  //    keepLocalDb = 导入没能把数据全带过来,此时**绝不归档**:归档才是让那些
+  //    没导入的行在账号侧和 local 模式两边都消失的原因(Greptile review)。
+  //    留在原地 = 用户回到 local 模式仍能看到全部原始数据,代价是已导入的那部分
+  //    在两边并存;「不丢」优先于「不重复」。
+  if (keepLocalDb) {
+    deps.log.warn(
+      'local owner adoption: local db kept in place (not archived) because some rows could not be imported; local mode still shows the original data',
+    );
+  } else if (await deps.fs.pathExists(localDbPath)) {
     try {
       const stamp = deps.now().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
       const archivePath = `${localDbPath}${ADOPTED_DB_SUFFIX}${stamp}-${archiveSeq++}`;
@@ -269,10 +312,12 @@ async function finishAdoption(
     try {
       for (const name of await deps.fs.readdir(localOwnerDir)) {
         if (name === DIALOGUES_DIR_NAME) continue;
+        await abortCheck();
         const result = await moveWithoutOverwrite(
           deps.fs,
           path.join(localOwnerDir, name),
           path.join(accountOwnerDir, name),
+          abortCheck,
         );
         moved += result.moved;
         conflicts += result.conflicts;
@@ -303,6 +348,7 @@ async function finishAdoption(
         if (!name.endsWith('.enc')) continue;
         const pair = secretPrefixPairs.find((candidate) => name.startsWith(candidate.from));
         if (!pair) continue;
+        await abortCheck();
         const target = `${pair.to}${name.slice(pair.from.length)}`;
         const result = await moveWithoutOverwrite(
           deps.fs,
@@ -374,18 +420,21 @@ export async function runLocalOwnerDataAdoption(
     // 2. 本进程若仍持有 local 库(inproc fallback 路径)先关闭;随后 open+close
     //    统计会话数,顺带完成 wal checkpoint。0 条会话 = 无可认领,静默跳过
     //    (不写 marker:之后 local 模式产生了会话,再次登录仍可认领)。
+    //    **续跑路径也必须走这一步**:sidecar 检查的前提就是紧跟在一次干净的
+    //    open+close(checkpoint 会删掉 -wal/-shm)之后,跳过它会让残留 sidecar
+    //    把续跑永久卡在 local-db-busy(Copilot review)。续跑时只是不再拿会话数
+    //    当门槛——导入早已提交,0 条会话也要把收尾做完。
     deps.closeLocalDbIfOpen();
-    if (!resuming) {
-      let sessionCount: number;
-      try {
-        sessionCount = await deps.countLocalSessions(localDbPath);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        deps.log.warn('local owner adoption: local db unreadable, skipped: %s', message);
-        return { status: 'local-db-unreadable', error: message };
-      }
-      if (sessionCount <= 0) return { status: 'no-local-sessions' };
+    let sessionCount: number;
+    try {
+      sessionCount = await deps.countLocalSessions(localDbPath);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      deps.log.warn('local owner adoption: local db unreadable, skipped: %s', message);
+      return { status: 'local-db-unreadable', error: message };
     }
+    if (!resuming && sessionCount <= 0) return { status: 'no-local-sessions' };
+    // checkpoint 之后仍有 sidecar = 库确实被别的进程持有,推迟。
     if (await dbSidecarsPresent(deps, localDbPath)) {
       deps.log.info('local owner adoption deferred: local db sidecars still present');
       return { status: 'deferred', reason: 'local-db-busy' };
@@ -443,9 +492,13 @@ export async function runLocalOwnerDataAdoption(
           .map(([table, count]) => `${table}=${count}`)
           .join(' ') || 'no new rows',
       );
-      // 有行没能并过来(两库 schema 不兼容才会发生):这正是用户口中的「会话弄丢」,
-      // 必须留下明确日志。local 库随后归档为 `.adopted-<ts>` 保留不删,是找回的
-      // 唯一依据,所以这里不静默、也不因此把已提交的导入判成失败。
+      // 数据没能并过来的三种形态(都只在两库 schema 不兼容时出现),任一非空都是
+      // 用户口中的「会话弄丢」,必须留下明确日志:
+      //  - droppedRows:行级违规被 OR IGNORE 吞掉;
+      //  - unimportableTables:账号库缺表 / 列完全不重叠,整表没导入;
+      //  - unverifiedTables:无主键可核验,该表究竟丢没丢无法断言。
+      // local 库随后归档为 `.adopted-<ts>` 保留不删,是找回的唯一依据,所以这里
+      // 只如实 warn,不把已提交的导入判成失败(判失败只会让用户永远认领不了)。
       const dropped = Object.entries(imported.droppedRows);
       if (dropped.length > 0) {
         deps.log.warn(
@@ -454,6 +507,23 @@ export async function runLocalOwnerDataAdoption(
           dropped.map(([table, count]) => `${table}=${count}`).join(' '),
         );
       }
+      if (imported.unimportableTables.length > 0) {
+        deps.log.warn(
+          'local owner adoption: account db has no compatible table for %s; those rows stay only in the archived local db',
+          imported.unimportableTables.join(' '),
+        );
+      }
+      if (imported.unverifiedTables.length > 0) {
+        deps.log.warn(
+          'local owner adoption: could not verify row completeness for %s (no usable primary key)',
+          imported.unverifiedTables.join(' '),
+        );
+      }
+      // 有数据没能并过来时保留 local 库不归档:归档才是让那些行在账号侧与
+      // local 模式两边都消失的原因(Greptile review)。unverifiedTables 只是
+      // 「无法断言」,不作为保留依据,否则正常路径也可能永不归档。
+      const incomplete =
+        Object.keys(imported.droppedRows).length > 0 || imported.unimportableTables.length > 0;
       return await commitAdoptionTail(
         deps,
         userId,
@@ -462,6 +532,7 @@ export async function runLocalOwnerDataAdoption(
         imported.inserted,
         resuming,
         localDbPath,
+        incomplete,
       );
     } catch (err) {
       // 导入阶段失败:未写任何 marker,local 数据完好,下次登录重新询问。
@@ -493,6 +564,7 @@ async function commitAdoptionTail(
   imported: number,
   resumed: boolean,
   localDbPath?: string,
+  keepLocalDb = false,
 ): Promise<LocalOwnerAdoptionResult> {
   const ownerKey = dataOwnerStorageKey(userId);
   const declined = marker?.declinedOwnerKeys?.length
@@ -521,6 +593,7 @@ async function commitAdoptionTail(
     userId,
     localDbPath ??
       path.join(deps.userDataDir, `${deps.dbFilePrefix}-${LOCAL_DATA_OWNER_ID}.db`),
+    keepLocalDb,
   );
   if (complete) {
     try {
@@ -587,9 +660,20 @@ const realFsDeps: LocalAdoptionFsDeps = {
   },
   rename: (source, target) => fsp.rename(source, target),
   rmdir: (dir) => fsp.rmdir(dir),
-  // Node 的 fs.rename 在 POSIX 与 Windows(libuv MOVEFILE_REPLACE_EXISTING)上
-  // 都覆盖已存在的目标文件,正是 marker 原子落盘要的语义。
-  replaceFile: (source, target) => fsp.rename(source, target),
+  replaceFile: async (source, target) => {
+    try {
+      await fsp.rename(source, target);
+    } catch (err) {
+      // POSIX 的 rename 直接覆盖目标;Windows 上目标被占用/只读时会 EPERM 或
+      // EEXIST(libuv 的 MOVEFILE_REPLACE_EXISTING 并非总能成功)。按本仓既有
+      // 模式(plugin-market/ledger.ts 同款)先删目标再改名——marker 写不进去会让
+      // 认领反复弹窗、终态永远落不下来(Copilot review)。
+      const code = (err as NodeJS.ErrnoException).code;
+      if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EEXIST')) throw err;
+      await fsp.rm(target, { force: true });
+      await fsp.rename(source, target);
+    }
+  },
 };
 
 /**

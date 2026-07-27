@@ -525,9 +525,50 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
     expect(readMarker(mem).claimedOwnerKey).toBe(USER_KEY);
   });
 
-  it('导入丢了行(两库 schema 不兼容)时 warn 出来,local 库仍归档保留可找回', async () => {
+  it('收尾开始前出现并发实例时不动任何文件,停在 importedOwnerKey 等下次续跑', async () => {
+    let calls = 0;
     const { mem, deps } = createHarness({
-      importResult: { inserted: 2, droppedRows: { messages: 3 } },
+      // 前置与提交前复查放行(第 1、2 次),收尾进场那次(第 3 次)才出现实例。
+      concurrent: () => calls++ >= 2,
+    });
+    mem.addFile(LOCAL_DB);
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'), 'learn');
+
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(result.status).toBe('adopted');
+    // 另一个 local 实例可能正开着这个库、读着这些配置,一个字节都不能动。
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+    expect(archivedDbNames(mem)).toHaveLength(0);
+    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'))).toBe(true);
+    expect(mem.exists(path.join(ACCOUNT_OWNER_DIR, 'learn'))).toBe(false);
+    const marker = readMarker(mem);
+    expect(marker.importedOwnerKey).toBe(USER_KEY);
+    expect(marker.claimedOwnerKey).toBeUndefined();
+  });
+
+  it('续跑路径也走一次 open+close checkpoint(否则残留 sidecar 永久卡住续跑)', async () => {
+    const { mem, deps } = createHarness();
+    mem.addFile(LOCAL_DB);
+    mem.addFile(MARKER, JSON.stringify({ version: 1, importedOwnerKey: USER_KEY }));
+
+    await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(deps.countLocalSessions).toHaveBeenCalledWith(path.normalize(LOCAL_DB));
+  });
+
+  it('续跑时 local 库 0 条会话不再当门槛(导入早已提交,收尾照做)', async () => {
+    const { mem, deps } = createHarness({ sessionCount: 0 });
+    mem.addFile(LOCAL_DB);
+    mem.addFile(MARKER, JSON.stringify({ version: 1, importedOwnerKey: USER_KEY }));
+
+    expect((await runLocalOwnerDataAdoption(USER_ID, deps)).status).toBe('adopted');
+    expect(archivedDbNames(mem)).toHaveLength(1);
+  });
+
+  it('导入丢了行时如实 warn 出丢了哪些表、多少行', async () => {
+    const { mem, deps } = createHarness({
+      importResult: { inserted: 2, droppedRows: { messages: 3, sessions: 1 } },
     });
     mem.addFile(LOCAL_DB);
 
@@ -535,9 +576,69 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
 
     expect(deps.log.warn).toHaveBeenCalledWith(
       expect.stringContaining('could not be imported'),
-      3,
-      'messages=3',
+      4,
+      'messages=3 sessions=1',
     );
+  });
+
+  it('丢行时不归档 local 库(否则那些行在账号侧与 local 模式两边都消失)', async () => {
+    const { mem, deps } = createHarness({
+      importResult: { inserted: 2, droppedRows: { messages: 3 } },
+    });
+    mem.addFile(LOCAL_DB);
+
+    expect((await runLocalOwnerDataAdoption(USER_ID, deps)).status).toBe('adopted');
+
+    // local 库留在原地 = 回到 local 模式仍能看到全部原始数据。
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+    expect(archivedDbNames(mem)).toHaveLength(0);
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('kept in place (not archived)'),
+    );
+  });
+
+  it('整表没导入时同样保留 local 库不归档', async () => {
+    const { mem, deps } = createHarness({
+      importResult: { inserted: 1, unimportableTables: ['custom_providers'] },
+    });
+    mem.addFile(LOCAL_DB);
+
+    await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+    expect(archivedDbNames(mem)).toHaveLength(0);
+  });
+
+  it('仅 unverifiedTables 非空时照常归档(「无法断言」不等于丢了)', async () => {
+    const { mem, deps } = createHarness({
+      importResult: { inserted: 3, unverifiedTables: ['recent_workdirs'] },
+    });
+    mem.addFile(LOCAL_DB);
+
+    await runLocalOwnerDataAdoption(USER_ID, deps);
+
     expect(archivedDbNames(mem)).toHaveLength(1);
+  });
+
+  it('整表没导入 / 无法核验时同样 warn(与丢行同级的「没并过来」信号)', async () => {
+    const { mem, deps } = createHarness({
+      importResult: {
+        inserted: 1,
+        unimportableTables: ['custom_providers'],
+        unverifiedTables: ['recent_workdirs'],
+      },
+    });
+    mem.addFile(LOCAL_DB);
+
+    expect((await runLocalOwnerDataAdoption(USER_ID, deps)).status).toBe('adopted');
+
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('no compatible table'),
+      'custom_providers',
+    );
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('could not verify row completeness'),
+      'recent_workdirs',
+    );
   });
 });
