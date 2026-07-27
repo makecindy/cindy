@@ -125,10 +125,10 @@ function listLineRanges(
       match: matchListPrefix(line.text),
     }));
     // ComposerListIndentDecoration switches the entire paragraph to its
-    // prefix-only fallback when any list row contains an atom or a recognized
-    // slash pill. In that mode even otherwise-plain sibling rows do not have a
-    // complete hanging wrapper, so their punctuation must remain available to
-    // this plugin as well.
+    // prefix-only fallback when any list row contains an atom, a recognized
+    // slash pill, voice replacement, or CJK punctuation. Its unindented sibling
+    // wrapper must remain one inline-block, so those rows opt out of nested
+    // punctuation spans and use a Unicode-scoped composite font class instead.
     const hasFallbackLine = lineMatches.some(({ line, match }) => {
       if (!match) return false;
       const overlapsSlashCommandPill = slashCommandMatches.some(
@@ -220,10 +220,11 @@ function buildDecorations(
       const from = pos + m.index;
       const to = from + m[0].length;
       if (listRanges.some((range) => from >= range.from && to <= range.to)) {
-        // ComposerListIndentDecoration owns the wrapping container for list
-        // rows. An overlapping inline font decoration would split that
-        // container at every punctuation boundary; list rows opt into the
-        // same CJK font stack through `.composer-list-cjk-font` instead.
+        // ComposerListIndentDecoration owns the wrapping container for these
+        // ranges. An overlapping inline font decoration would split fixed-width
+        // boxes at punctuation boundaries; marker boxes use
+        // `.composer-list-cjk-font`, while unindented fallback rows use the
+        // Unicode-scoped `.composer-list-cjk-punctuation-font`.
         continue;
       }
       decorations.push(

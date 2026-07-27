@@ -1118,7 +1118,12 @@ export function MarketPluginCard({
         type="button"
         onClick={onSelect}
         disabled={busy || item.installState === 'conflict'}
-        className="flex min-w-0 flex-1 items-start gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-wait"
+        className={cn(
+          'flex min-w-0 flex-1 items-start gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+          item.installState === 'conflict'
+            ? 'disabled:cursor-not-allowed'
+            : 'disabled:cursor-wait',
+        )}
         aria-label={item.name}
       >
         <GhostPluginIcon

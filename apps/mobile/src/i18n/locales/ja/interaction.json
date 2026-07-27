@@ -182,9 +182,9 @@
   "pluginSetup": {
     "completeOnDesktop": "操作対象のデスクトップで設定を完了してください。このカードは自動的に更新されます。",
     "chooseOne": "設定方法を1つ選択してください",
-    "stepsHeading": "設定手順",
     "progress": "{{satisfied}}/{{total}} 完了",
     "desktopActionHint": "パソコンで{{action}}",
+    "a11ySeparator": "、",
     "phase": {
       "pending": "設定待ち",
       "action_running": "処理中…",

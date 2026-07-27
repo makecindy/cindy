@@ -224,9 +224,11 @@ export interface ProxyOptions {
    */
   maxRequestBodyBytes?: number;
   /**
-   * 可选: 出站(上游方向)代理解析器。per-request 以最终上游 origin 现取:返回
-   * http:// 代理地址 = 该请求经代理转发(https 上游走 CONNECT 隧道、http 上游走
-   * 绝对形式);返回 null / 抛错 = 直连(fail-open)。loopback 上游不会被调用。
+   * 可选: 出站(上游方向)代理解析器。per-request 以最终上游 origin 现取:
+   *   - `http://` 代理地址 = 经该代理转发(https 上游走 CONNECT 隧道、http 上游走绝对形式)
+   *   - `socks5://`(含 socks5h / socks 别名)= 经 SOCKS5 隧道转发,两种上游都走隧道,
+   *     且**上游域名交给代理端解析**(见 socks5.ts;本地 DNS 解不出上游时这是唯一出路)
+   *   - 返回 null / 其它 scheme / 抛错 = 直连(fail-open)。loopback 上游不会被调用。
    * 宿主用它接系统代理(Electron resolveProxy)或代理环境变量
    * (createEnvOutboundProxyResolver)。不传 = 永远直连,与扩展前字节级一致。
    */

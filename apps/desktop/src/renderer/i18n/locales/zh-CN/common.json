@@ -66,6 +66,7 @@
       "awaitingQuestion": "等待你的回复",
       "awaitingPlan": "等待计划审阅",
       "permissionPromptTitle": "需要确认权限",
+      "permissionPromptTitleWithTool": "允许 {{toolName}}？",
       "allowOnce": "允许一次",
       "alwaysAllowForSession": "本对话总是允许",
       "deny": "拒绝"
@@ -3657,7 +3658,7 @@
       "title": "更新公告",
       "newFeatures": "新功能",
       "bugFixes": "问题修复",
-      "craftedBy": "出品",
+      "thanksTo": "感谢",
       "gotIt": "我知道了",
       "ariaDescription": "版本 {{version}} 的更新说明",
       "ariaDescriptionSpan": "自 v{{from}} 起累计 {{count}} 个版本的更新说明",
@@ -4931,6 +4932,21 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "正在思考…",
+      "generating": "正在生成…",
+      "editingFiles": "正在编辑文件…",
+      "searchingWeb": "正在搜索网页…",
+      "generatingImage": "正在生成图片…",
+      "compacting": "正在压缩上下文…",
+      "done": "已完成",
+      "waiting": "请稍候…",
+      "working": "正在工作…",
+      "running": "运行中…",
+      "turnStart": "正在处理，{{name}}",
+      "issueTip": "{{name}}，试试用 /issue 给我们提反馈或建议",
+      "runningTool": "{{tool}} 运行中…"
+    },
     "remoteSession": {
       "reconnecting": "与被控设备的连接中断，正在重连…",
       "hostOffline": "被控设备已离线，暂时无法同步",

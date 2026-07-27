@@ -15,6 +15,7 @@ import { createElement } from 'react';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import '@/i18n';
 import type { PendingAskUser } from '@/lib/makerChatStore';
 import { AskUserQuestionPrompt } from '../components/new-chat/AskUserQuestionPrompt';
 import { PermissionPrompt } from '../components/new-chat/PermissionPrompt';

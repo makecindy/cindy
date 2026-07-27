@@ -182,9 +182,9 @@
   "pluginSetup": {
     "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
     "chooseOne": "Choose one setup method",
-    "stepsHeading": "Setup steps",
     "progress": "{{satisfied}}/{{total}} completed",
     "desktopActionHint": "On your computer: {{action}}",
+    "a11ySeparator": ", ",
     "phase": {
       "pending": "Pending",
       "action_running": "In progress…",

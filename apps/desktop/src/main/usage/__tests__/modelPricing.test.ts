@@ -250,6 +250,31 @@ describe('pricing cache lifecycle', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('persists a startup snapshot under the authenticated user before localDb is ready', async () => {
+    mocks.getCurrentDbClientUserId.mockReturnValue(null);
+    const pricing = replaceGatewayModelPricing(
+      [
+        {
+          id: 'early-model',
+          inputCostPerToken: 0.000001,
+          outputCostPerToken: 0.000002,
+        },
+      ],
+      'user-a',
+    );
+
+    await vi.waitFor(async () => {
+      const raw = JSON.parse(await readFile(userDataPath('cache', 'model-pricing.json'), 'utf8'));
+      expect(raw).toMatchObject({
+        scope: expectedScope('user-a'),
+        pricing,
+      });
+    });
+
+    mocks.getCurrentDbClientUserId.mockReturnValue('user-a');
+    await expect(getModelPricing()).resolves.toEqual(pricing);
+  });
+
   it('does not hydrate another account pricing snapshot', async () => {
     await mkdir(userDataPath('cache'), { recursive: true });
     await writeFile(

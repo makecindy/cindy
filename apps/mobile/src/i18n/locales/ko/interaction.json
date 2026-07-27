@@ -182,9 +182,9 @@
   "pluginSetup": {
     "completeOnDesktop": "제어 중인 데스크톱에서 설정을 완료하세요. 이 카드는 자동으로 업데이트됩니다.",
     "chooseOne": "설정 방법을 하나 선택하세요",
-    "stepsHeading": "설정 단계",
     "progress": "{{satisfied}}/{{total}} 완료",
     "desktopActionHint": "컴퓨터에서 {{action}}",
+    "a11ySeparator": ", ",
     "phase": {
       "pending": "설정 대기",
       "action_running": "진행 중…",

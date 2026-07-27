@@ -367,15 +367,18 @@ html:lang(ko) {
   width: 100%;
   padding-left: calc(1em + var(--composer-list-fallback-indent, 1.25em));
   overflow-wrap: anywhere;
-  word-break: break-all;
 }
 .ProseMirror .composer-list-fallback-prefix {
   display: inline-block;
   box-sizing: border-box;
   width: var(--composer-list-fallback-indent, 1.25em);
   margin-left: calc(0px - var(--composer-list-fallback-indent, 1.25em));
-  white-space: nowrap;
+  white-space: pre;
   vertical-align: top;
+}
+.ProseMirror .composer-list-fallback-long-run-body {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 .ProseMirror .composer-list-fallback-unindented {
   display: inline-block;
@@ -403,7 +406,71 @@ html:lang(ko) {
   /* Keep the browser's tab advance aligned with the deterministic prefix-width
      estimate. Do not measure and rewrite decoration DOM from a plugin view:
      ProseMirror's DOMObserver may restore that style and enter an update loop. */
-  tab-size: 8;
+  tab-size: 8ch;
+}
+/* The fallback unindented row must remain one inline-block; character-scoped
+   ProseMirror decorations would split it into several full-width fragments.
+   The local face covers the same ranges as CjkPunctDecoration, while the
+   bundled faces cover the punctuation glyphs HarmonyOS actually ships. Latin
+   text and digits continue through the configured UI font. Keep the asset
+   names aligned with the exact-pinned font package. */
+@font-face {
+  font-family: 'Cindy CJK Punctuation Local';
+  src:
+    local('PingFang SC'),
+    local('Hiragino Sans GB'),
+    local('Microsoft YaHei UI'),
+    local('Microsoft YaHei'),
+    local('Noto Sans CJK SC'),
+    local('Source Han Sans SC');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+3000-303F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: 'Cindy CJK Punctuation Bundled';
+  src: url('../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular_256855.woff2')
+    format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+3001-3002, U+3008-3011, U+3014-3017;
+}
+@font-face {
+  font-family: 'Cindy CJK Punctuation Bundled';
+  src: url('../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular_312071.woff2')
+    format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range:
+    U+3000, U+3003, U+3005-3007, U+3012-3013, U+3018-301B, U+301D-301E, U+3021-3029, U+303E;
+}
+@font-face {
+  font-family: 'Cindy CJK Punctuation Bundled';
+  src: url('../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular_ac4458.woff2')
+    format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range:
+    U+FF01-FF03, U+FF05-FF0A, U+FF0C-FF1B, U+FF1F-FF3D, U+FF3F, U+FF41-FF5B, U+FF5D, U+FF5F-FF60,
+    U+FFE6;
+}
+@font-face {
+  font-family: 'Cindy CJK Punctuation Bundled';
+  src: url('../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular_ea8896.woff2')
+    format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+FF04, U+FF0B, U+FF1C-FF1E, U+FF3E, U+FF40, U+FF5C, U+FF5E, U+FFE0-FFE5;
+}
+.ProseMirror .composer-list-cjk-punctuation-font {
+  font-family:
+    'Cindy CJK Punctuation Local', 'Cindy CJK Punctuation Bundled',
+    var(--app-font-ui, var(--app-font-ui-default));
 }
 .ProseMirror .composer-list-cjk-font {
   font-family:

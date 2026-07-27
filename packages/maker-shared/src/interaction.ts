@@ -596,20 +596,28 @@ export function buildRemotePluginSetupPresentation(
     stepCount += 1;
     if (phase === 'satisfied') satisfiedCount += 1;
 
-    // 分组按首次出现顺序保留;groupId 缺失的步骤各自成组,不并进同一个「空组」。
-    const groupId = trimmedOrNull(rawStep.groupId) ?? `${step.id}-group`;
-    const existing = groupsById.get(groupId);
+    // 分组按首次出现顺序保留。
+    const rawGroupId = trimmedOrNull(rawStep.groupId);
+    if (rawGroupId === null) {
+      // 缺 groupId 的步骤各自成组,并且**不进 groupsById**:合成的 id 与被控端真实
+      // groupId 共用一个命名空间,一旦撞名(远端某组恰好就叫合成出来的那个名字),
+      // 两批互不相关的配置要求会被并成一组、还套上 any_of 语义,让用户以为「二选
+      // 一」而漏做另一半(#657 review)。生成身份只用于本地展示,不参与查表。
+      groups.push({ id: `ungrouped-${index}`, anyOf: false, steps: [step] });
+      return;
+    }
+    const existing = groupsById.get(rawGroupId);
     if (existing) {
       existing.steps.push(step);
       if (rawStep.groupMode === 'any_of') existing.anyOf = true;
       return;
     }
     const group: RemotePluginSetupGroup = {
-      id: groupId,
+      id: rawGroupId,
       anyOf: rawStep.groupMode === 'any_of',
       steps: [step],
     };
-    groupsById.set(groupId, group);
+    groupsById.set(rawGroupId, group);
     groups.push(group);
   });
 
@@ -618,11 +626,30 @@ export function buildRemotePluginSetupPresentation(
     iconDataUrl: inlineImageDataUrl(ghost?.iconDataUrl),
     intro: trimmedOrNull(request.intro),
     // 单项组没有「任选其一」的语义,提示只会让用户困惑。
-    groups: groups.map((group) => ({ ...group, anyOf: group.anyOf && group.steps.length > 1 })),
+    groups: dedupeGroupIds(groups).map((group) => ({
+      ...group,
+      anyOf: group.anyOf && group.steps.length > 1,
+    })),
     satisfiedCount,
     stepCount,
     terminal: request.terminal === true,
   };
+}
+
+/**
+ * 保证组 id 在本次投影内唯一(渲染层拿它当 list key)。
+ *
+ * 合成的 `ungrouped-*` 已经不参与合并,但仍可能与被控端某个真实 groupId 撞名;
+ * 那只是展示身份重复,不该退化成重复 key。id 不回传被控端,改写是安全的。
+ */
+function dedupeGroupIds(groups: RemotePluginSetupGroup[]): RemotePluginSetupGroup[] {
+  const used = new Set<string>();
+  return groups.map((group) => {
+    let id = group.id;
+    for (let suffix = 2; used.has(id); suffix += 1) id = `${group.id}-${suffix}`;
+    used.add(id);
+    return id === group.id ? group : { ...group, id };
+  });
 }
 
 function trimmedOrNull(value: unknown): string | null {

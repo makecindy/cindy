@@ -73,6 +73,10 @@ function listPrefixIndentValues(prefix: string): ListIndentValues {
     if (char >= '0' && char <= '9') {
       ch += 1;
     } else if (char === '\t') {
+      // Reserve a full 8ch slot for each tab. The browser's native tab advance
+      // is at most 8ch, so this remains safe when an earlier full-width marker
+      // contributes `em` that cannot participate in deterministic ch-only
+      // tab-stop arithmetic.
       ch += TAB_SIZE;
     } else if (char === '、' || char === '\u3000') {
       em += 1;
@@ -247,7 +251,7 @@ export function buildListIndentDecorations(
             Decoration.inline(contentBase + line.start, contentBase + line.end, {
               class: [
                 'composer-list-fallback-unindented',
-                hasCjkPunctuation ? 'composer-list-cjk-font' : '',
+                hasCjkPunctuation ? 'composer-list-cjk-punctuation-font' : '',
               ]
                 .filter(Boolean)
                 .join(' '),
@@ -281,6 +285,13 @@ export function buildListIndentDecorations(
             style: listPrefixIndentStyle(prefix),
           }),
         );
+        if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {
+          decorations.push(
+            Decoration.inline(from + match.prefixLength, to, {
+              class: 'composer-list-fallback-long-run-body',
+            }),
+          );
+        }
         return;
       }
       if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {

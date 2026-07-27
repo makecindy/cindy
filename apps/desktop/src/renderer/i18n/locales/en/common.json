@@ -66,8 +66,9 @@
       "awaitingQuestion": "Awaiting your reply",
       "awaitingPlan": "Awaiting plan review",
       "permissionPromptTitle": "Confirm permission",
+      "permissionPromptTitleWithTool": "Allow {{toolName}}?",
       "allowOnce": "Allow once",
-      "alwaysAllowForSession": "Always allow",
+      "alwaysAllowForSession": "Always allow for this session",
       "deny": "Deny"
     }
   },
@@ -3658,7 +3659,7 @@
       "title": "What's New",
       "newFeatures": "New Features",
       "bugFixes": "Bug Fixes",
-      "craftedBy": "Crafted by",
+      "thanksTo": "Thanks to",
       "gotIt": "Got it",
       "ariaDescription": "Release notes for version {{version}}",
       "ariaDescriptionSpan": "Release notes for {{count}} versions since v{{from}}",
@@ -4941,6 +4942,21 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "Thinking…",
+      "generating": "Generating…",
+      "editingFiles": "Editing files…",
+      "searchingWeb": "Searching the web…",
+      "generatingImage": "Generating an image…",
+      "compacting": "Compacting context…",
+      "done": "Done",
+      "waiting": "Just wait…",
+      "working": "Working…",
+      "running": "Running…",
+      "turnStart": "{{status}}",
+      "issueTip": "{{name}}, try /issue to send us feedback or suggestions",
+      "runningTool": "{{tool}} running…"
+    },
     "remoteSession": {
       "reconnecting": "Connection to the controlled device was lost — reconnecting…",
       "hostOffline": "The controlled device is offline; can't sync right now",

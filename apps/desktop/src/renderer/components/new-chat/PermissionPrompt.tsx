@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import type { PendingPermission } from '@/lib/makerChatStore';
@@ -65,9 +66,12 @@ function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
 // ---------------------------------------------------------------------------
 
 export function PermissionPrompt({ permission, onRespond }: PermissionPromptProps) {
-  const { toolName, input, title, description, suggestions } = permission;
+  const { t } = useTranslation();
+  const { toolName, input, title, displayName, description, suggestions } = permission;
 
-  const displayTitle = title || `Allow Claude to use ${toolName}?`;
+  const displayTitle = displayName
+    ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
+    : title || t('agentIsland.native.permissionPromptTitleWithTool', { toolName });
   const codeContent = formatToolInput(toolName, input);
   const sessionSuggestions = useMemo(() => filterSessionScopedSuggestions(suggestions), [suggestions]);
   const canAlwaysAllowForSession = sessionSuggestions.length > 0;
@@ -171,7 +175,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
             'transition-colors hover:bg-[var(--perm-code-bg)]',
           )}
         >
-          <span>Deny</span>
+          <span>{t('agentIsland.native.deny')}</span>
           <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
             Esc
           </kbd>
@@ -188,7 +192,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
               'transition-colors hover:bg-[var(--perm-code-bg)]',
             )}
           >
-            <span>Always allow for session</span>
+            <span>{t('agentIsland.native.alwaysAllowForSession')}</span>
             <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
               Ctrl
             </kbd>
@@ -210,7 +214,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
             'transition-colors hover:opacity-90',
           )}
         >
-          <span>Allow once</span>
+          <span>{t('agentIsland.native.allowOnce')}</span>
           <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             Enter
           </kbd>

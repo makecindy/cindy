@@ -25,11 +25,14 @@ import {
   formatHostHeader,
   isLoopbackHostname,
   OutboundProxyAgentPool,
+  outboundProxyAgentKey,
   parseOutboundProxyUrl,
   redactProxyUrlForLog,
+  TunnelingHttpsAgent,
+  type OutboundProxyAgent,
   type OutboundProxyTarget,
-  type TunnelingHttpsAgent,
 } from './outbound-proxy.js';
+import { Socks5HttpAgent, Socks5HttpsAgent } from './socks5.js';
 import { stripNonAnthropicFields, stripToolUseProviderSpecificFields } from './transform.js';
 import type {
   LocalRequestHandler,
@@ -112,8 +115,11 @@ interface UpstreamTarget {
  */
 interface ResolvedOutboundProxy {
   target: OutboundProxyTarget;
-  /** https 上游用的 CONNECT 隧道 agent;http 上游走绝对形式请求,不需要 agent。 */
-  agent?: TunnelingHttpsAgent;
+  /**
+   * 转发要挂的 agent。HTTP 代理:https 上游用 CONNECT 隧道 agent,http 上游走绝对形式
+   * 请求不需要 agent(undefined);SOCKS5:两种上游都靠 agent 建隧道,恒有值。
+   */
+  agent?: OutboundProxyAgent;
 }
 
 function parseUpstream(upstream: string): UpstreamTarget {
@@ -668,7 +674,12 @@ function forward(
     autoSelectFamilyAttemptTimeout: UPSTREAM_CONNECT_ATTEMPT_TIMEOUT_MS,
   };
   if (outboundProxy) {
-    if (actualTarget.protocol === 'https:') {
+    if (outboundProxy.target.kind === 'socks5') {
+      // SOCKS5 是 L4 隧道:握手由 agent 完成,请求本身照常发给真实上游 ——
+      // hostname / port / path / Host 头一律不动(没有绝对形式请求这回事),
+      // 目标域名也不在本地解析,交给代理端(见 socks5.ts 文件头)。
+      upstreamOptions.agent = outboundProxy.agent;
+    } else if (actualTarget.protocol === 'https:') {
       // https 上游:经 CONNECT 隧道 agent 转发(TLS 端到端,代理只见密文)。
       upstreamOptions.agent = outboundProxy.agent;
     } else {
@@ -1098,9 +1109,21 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       proxy: parsed.url,
       upstream: upstreamOrigin,
     });
+    const agentKey = outboundProxyAgentKey(parsed, target.protocol);
+    if (parsed.kind === 'socks5') {
+      // SOCKS5 两种上游都要 agent:https 在隧道上做 TLS,http 直接用隧道当连接。
+      return {
+        target: parsed,
+        agent: outboundAgentPool.get(agentKey, () => (target.protocol === 'https:'
+          ? new Socks5HttpsAgent(parsed)
+          : new Socks5HttpAgent(parsed))),
+      };
+    }
     return {
       target: parsed,
-      agent: target.protocol === 'https:' ? outboundAgentPool.get(parsed) : undefined,
+      agent: target.protocol === 'https:'
+        ? outboundAgentPool.get(agentKey, () => new TunnelingHttpsAgent(parsed))
+        : undefined,
     };
   };
 

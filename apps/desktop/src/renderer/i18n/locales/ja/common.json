@@ -66,6 +66,7 @@
       "awaitingQuestion": "返信待ち",
       "awaitingPlan": "プランの確認待ち",
       "permissionPromptTitle": "権限の確認",
+      "permissionPromptTitleWithTool": "{{toolName}} を許可しますか?",
       "allowOnce": "一度だけ許可",
       "alwaysAllowForSession": "このセッションで常に許可",
       "deny": "拒否"
@@ -3657,7 +3658,7 @@
       "title": "更新情報",
       "newFeatures": "新機能",
       "bugFixes": "不具合修正",
-      "craftedBy": "制作",
+      "thanksTo": "感謝",
       "gotIt": "了解しました",
       "ariaDescription": "バージョン {{version}} のリリースノート",
       "ariaDescriptionSpan": "v{{from}} 以降 {{count}} バージョン分のリリースノート",
@@ -4931,6 +4932,21 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "考え中…",
+      "generating": "生成中…",
+      "editingFiles": "ファイルを編集中…",
+      "searchingWeb": "ウェブを検索中…",
+      "generatingImage": "画像を生成中…",
+      "compacting": "コンテキストを圧縮中…",
+      "done": "完了",
+      "waiting": "少々お待ちください…",
+      "working": "作業中…",
+      "running": "実行中…",
+      "turnStart": "{{name}} さん、対応中です…",
+      "issueTip": "{{name}} さん、/issue でフィードバックや提案をお寄せください",
+      "runningTool": "{{tool}} を実行中…"
+    },
     "remoteSession": {
       "reconnecting": "被制御デバイスとの接続が切れました。再接続中…",
       "hostOffline": "被制御デバイスがオフラインのため、現在は同期できません",

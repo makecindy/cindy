@@ -182,9 +182,9 @@
   "pluginSetup": {
     "completeOnDesktop": "请在被控桌面完成设置，本卡片会自动更新状态。",
     "chooseOne": "选择一种配置方式",
-    "stepsHeading": "配置步骤",
     "progress": "{{satisfied}}/{{total}} 已完成",
     "desktopActionHint": "在电脑端{{action}}",
+    "a11ySeparator": "，",
     "phase": {
       "pending": "待设置",
       "action_running": "进行中…",

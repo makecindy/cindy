@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Editor, Node as TiptapNode } from '@tiptap/core';
@@ -94,6 +94,14 @@ describe('buildListIndentDecorations', () => {
     expect(tabIndent?.getAttribute('data-composer-list-prefix-length')).toBe('4');
     expect((tabIndent as HTMLElement | null)?.style.getPropertyValue('--composer-list-hang')).toBe(
       '9.8ch',
+    );
+  });
+
+  it('reserves a deterministic 8ch slot for every indented tab', () => {
+    expect(listPrefixIndentStyle('  \t1. ')).toContain('--composer-list-hang:10.6ch;');
+    expect(listPrefixIndentStyle('\t\t1. ')).toContain('--composer-list-hang:17.8ch;');
+    expect(listPrefixIndentStyle('1、\t')).toContain(
+      '--composer-list-hang:calc(9ch + 1em);',
     );
   });
 
@@ -757,7 +765,10 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     expect(container).not.toBeNull();
     expect(unindentedRows).toHaveLength(1);
     expect(unindentedRows?.[0]?.textContent).toBe('有新增游戏数的用户数、占全部用户比例。');
-    expect(unindentedRows?.[0]?.classList.contains('composer-list-cjk-font')).toBe(true);
+    expect(unindentedRows?.[0]?.classList.contains('composer-list-cjk-font')).toBe(false);
+    expect(
+      unindentedRows?.[0]?.classList.contains('composer-list-cjk-punctuation-font'),
+    ).toBe(true);
     expect(unindentedRows?.[0]?.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
   });
 
@@ -800,7 +811,43 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     const fallbackContainerRule = css.match(
       /\.ProseMirror \.composer-list-fallback-container \{([\s\S]*?)\n\}/,
     )?.[1];
-    expect(fallbackContainerRule).toContain('word-break: break-all;');
+    const fallbackLongRunRule = css.match(
+      /\.ProseMirror \.composer-list-fallback-long-run-body \{([\s\S]*?)\n\}/,
+    )?.[1];
+    expect(fallbackContainerRule).not.toContain('word-break: break-all;');
+    expect(fallbackLongRunRule).toContain('word-break: break-all;');
+
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '1. 中文标点。' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '2. abcdefghijklmnopqrstuvwxyz' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '3. alpha ordinaryword omega' },
+            ],
+          },
+        ],
+      },
+    });
+    const longRunBodies = editor.view.dom.querySelectorAll(
+      '.composer-list-fallback-long-run-body',
+    );
+    expect(longRunBodies).toHaveLength(1);
+    expect(longRunBodies[0]?.textContent).toBe('abcdefghijklmnopqrstuvwxyz');
   });
 
   it('keeps hanging indent for slash paths and unknown commands without pills', () => {
@@ -883,8 +930,47 @@ describe('wiring contract', () => {
     expect(css).toContain('.ProseMirror .composer-list-long-run-marker');
     expect(css).toContain('.ProseMirror .composer-list-long-run-body');
     expect(css).toContain('.ProseMirror .composer-list-tab-indent');
-    expect(css).toContain('tab-size: 8;');
-    expect(css).toContain('white-space: nowrap;');
+    expect(css).toContain('.ProseMirror .composer-list-cjk-punctuation-font');
+    expect(css).toContain("font-family: 'Cindy CJK Punctuation Local'");
+    expect(css).toContain("font-family: 'Cindy CJK Punctuation Bundled'");
+    expect(css).toContain('unicode-range: U+3000-303F, U+FF00-FFEF;');
+    const punctuationFontCss = css.slice(
+      css.indexOf("font-family: 'Cindy CJK Punctuation Local'"),
+      css.indexOf('.ProseMirror .composer-list-cjk-punctuation-font'),
+    );
+    expect(punctuationFontCss.match(/font-style: normal;/g)).toHaveLength(5);
+    expect(punctuationFontCss.match(/font-weight: 400;/g)).toHaveLength(5);
+    const bundledPunctuationFonts = [
+      'Regular_256855.woff2',
+      'Regular_312071.woff2',
+      'Regular_ac4458.woff2',
+      'Regular_ea8896.woff2',
+    ];
+    bundledPunctuationFonts.forEach((filename) => {
+      expect(css).toContain(`harmonyos-sans-sc-webfont-splitted/dist/${filename}`);
+      expect(
+        existsSync(
+          resolve(
+            __dirname,
+            '..',
+            '..',
+            '..',
+            '..',
+            '..',
+            'node_modules',
+            'harmonyos-sans-sc-webfont-splitted',
+            'dist',
+            filename,
+          ),
+        ),
+      ).toBe(true);
+    });
+    const desktopPackage = JSON.parse(
+      readFileSync(resolve(__dirname, '..', '..', '..', 'package.json'), 'utf8'),
+    ) as { dependencies?: Record<string, string> };
+    expect(desktopPackage.dependencies?.['harmonyos-sans-sc-webfont-splitted']).toBe('1.1.0');
+    expect(css).toContain('tab-size: 8ch;');
+    expect(css).toContain('white-space: pre;');
     const fallbackPrefixRule = css.match(
       /\.ProseMirror \.composer-list-fallback-prefix \{([\s\S]*?)\n\}/,
     )?.[1];
