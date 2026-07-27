@@ -92,6 +92,7 @@ import {
 import type { SessionMenuView } from '@/session/sessionMenu';
 import {
   interactionKind,
+  pendingInteractionsBlockRemoteComposer,
   readRequestId,
   selectPendingInteractionByRequestId,
   shouldUseFullHeightPendingInteractionSurface,
@@ -245,10 +246,12 @@ import {
   ComposerToolbarSpacer,
   ComposerToolbarVoiceSlot,
   MOBILE_COMPOSER_CONTROL_SIZE,
+  MOBILE_COMPOSER_DRAFT_TEXT_STYLE,
   MOBILE_COMPOSER_INPUT_LINE_HEIGHT,
   MOBILE_COMPOSER_INPUT_MAX_HEIGHT,
   MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
   MOBILE_COMPOSER_INPUT_VERTICAL_PADDING,
+  MOBILE_COMPOSER_MIN_TOUCH_TARGET,
   MOBILE_COMPOSER_TOOL_GAP,
   MobileComposerInputRow,
   VoiceMicWaveCaret,
@@ -300,6 +303,7 @@ import {
   resolveComposerVoiceHoldActive,
   shouldArmComposerVoiceHold,
 } from '@/session/composerVoiceHold';
+import { COMPOSER_TEXT_HORIZONTAL_PADDING } from '@/session/composerTextMetrics';
 import {
   isMobileRealtimeAudioAvailable,
   prewarmMobileRealtimeAudio,
@@ -434,7 +438,7 @@ import {
   canUseLocalCodexRateLimitControl,
   shouldFallbackToLegacyCodexUsage,
 } from '@/session/sessionControls';
-import { buildSessionOperationLayout } from '@/session/sessionOperationLayout';
+import { buildSessionOperationLayout, composerDisabledReasonI18nKey } from '@/session/sessionOperationLayout';
 import {
   summarizeSessionOverview,
   type SessionActionStripActionId,
@@ -1269,6 +1273,13 @@ export default function SessionScreen() {
     planViewerState: pendingPlanViewerState,
   });
   const hasActivePendingInteraction = activePendingInteraction !== null;
+  // 只有手机能终结的卡才允许接管输入框。plugin_setup 这类必须回电脑端完成的
+  // 请求若也顶掉 composer,用户既处理不了卡、又发不出消息,会话在手机上被彻底
+  // 锁死(线上已复现);它们改为贴在输入框上方,聊天不受影响。
+  // 判据是整个 pending 集合而非当前查看的卡:队列里还有权限 / 提问 / 计划卡在等
+  // 回答时,切到 plugin_setup 只是换了查看对象,不能就此放开 composer 让用户绕过
+  // 那张仍待处理的阻塞交互(#530 review P1)。
+  const pendingInteractionBlocksComposer = pendingInteractionsBlockRemoteComposer(pending);
   const remoteUnavailableReason = useMemo(
     () => describeRemoteError(connectionError),
     [connectionError],
@@ -1289,12 +1300,13 @@ export default function SessionScreen() {
     () => buildSessionOperationLayout({
       hasCurrentSession,
       hasActivePendingInteraction,
+      pendingInteractionBlocksComposer,
       remoteUnavailableReason,
       // composer 用 composer-only reason:Lead → editable(可发消息),worker → read-only;
       // 缓存种入行在 fresh 同步前同走此禁发通道。
       readOnlyReason: cacheSeededReason ?? pendingCreationReason ?? composerReadOnlyReason,
     }),
-    [cacheSeededReason, composerReadOnlyReason, hasActivePendingInteraction, hasCurrentSession, pendingCreationReason, remoteUnavailableReason],
+    [cacheSeededReason, composerReadOnlyReason, hasActivePendingInteraction, hasCurrentSession, pendingCreationReason, pendingInteractionBlocksComposer, remoteUnavailableReason],
   );
   useEffect(() => {
     if (!pendingInteractionActiveRequestId) return;
@@ -1317,11 +1329,21 @@ export default function SessionScreen() {
     }
   }, [activePendingKind, activePendingRequestId, sessionOperationLayout.composerSlot]);
   const canUseComposer = sessionOperationLayout.canUseComposer;
+  // 共享模型自造的那两条禁发理由是中文直出,而它会经 composer 与队列行的
+  // accessibility hint 读给用户 —— 按 locale 翻译后再用,否则读屏在 en / ja / ko
+  // 下念混语(#530 review)。调用方自己传进去的理由(离线 / 只读 / 同步中)已本地化,
+  // 此时 key 为 null,原样使用。
+  const composerDisabledReasonKey = composerDisabledReasonI18nKey(
+    sessionOperationLayout.composerDisabledReasonSource,
+  );
+  const composerDisabledReason = composerDisabledReasonKey
+    ? t(composerDisabledReasonKey)
+    : sessionOperationLayout.composerDisabledReason;
   // inline 队列操作可用性:旧队列弹层由 showQueue 整体隐藏(离线/被撤销、pending
   // interaction 等),inline 化后气泡必须留在消息流里,故改为保留渲染、按同一规则
   // 禁用操作(取消/编辑/插话/重试/恢复),禁用理由沿用 composerDisabledReason。
   const queueInlineReadOnlyReason = collaborationReadOnlyReason
-    ?? (sessionOperationLayout.showQueue ? null : sessionOperationLayout.composerDisabledReason);
+    ?? (sessionOperationLayout.showQueue ? null : composerDisabledReason);
   const showMessageHistory = sessionOperationLayout.messageHistoryMode === 'visible'
     || (sessionOperationLayout.messageHistoryMode === 'collapsed' && pendingHistoryExpanded);
   // 冷开即出壳:session 元信息还没回来,但不是真正不可用(离线/被撤销,看 remoteUnavailableReason)——
@@ -1545,7 +1567,7 @@ export default function SessionScreen() {
       ? t('session.screen.nextAgentSwitch', { agent: mobileAgentLabel(agentSwitchIntent.targetAgentKind), model: composerRuntimeSummary.modelSummary })
       : composerRuntimeSummary.modelSummary
     : '';
-  const composerSendUnavailableReason = canUseComposer ? null : sessionOperationLayout.composerDisabledReason;
+  const composerSendUnavailableReason = canUseComposer ? null : composerDisabledReason;
   // 引用已是 ComposerDocument 内的 atom；排队编辑同样可能只有引用而没有可见
   // 文本，因此必须计入 payload，否则「保存修改」会被错误禁用。
   const composerQuoteCount = composerDocumentQuotes(composerDocument).length;
@@ -1798,52 +1820,68 @@ export default function SessionScreen() {
     </>
   );
   const renderComposerInputOverlay = () => voiceIsListening ? (
-    <ScrollView
-      ref={voiceDraftScrollRef}
-      contentContainerStyle={styles.voiceDraftOverlayContent}
-      onContentSizeChange={() => {
-        requestAnimationFrame(() => {
-          voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
-        });
-      }}
-      onLayout={() => {
-        requestAnimationFrame(() => {
-          voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
-        });
-      }}
-      pointerEvents="none"
-      scrollEnabled={composerInputScrollEnabled}
-      showsVerticalScrollIndicator={false}
+    // 「点输入区 = 想打字 → 停止听写」由这层 RN 覆盖层承接。听写期间真正盖在输入区上的
+    // 就是它;底下的富文本 WebView 此刻是 hidden(opacity 0),iOS hitTest 会跳过 alpha≈0
+    // 的 view,它根本收不到触摸——把停听写挂在 WebView 的 focus / touch 上都不成立
+    // (focus 还会被 WKWebView 自己恢复焦点误触发,掐断刚开始的听写)。
+    <Pressable
+      accessibilityLabel={t('session.common.voiceStopRecording')}
+      accessibilityRole="button"
+      // onPressIn 给手指「触摸即停」的即时手感;onPress 是无障碍激活(VoiceOver /
+      // TalkBack 的 activate 只走 onPress,不会派发 onPressIn)的唯一入口,两者都要挂。
+      // handler 幂等:finishVoiceRecording 有 voiceStopInFlight 门,重复调用是 no-op。
+      onPress={handleComposerInputPressIn}
+      onPressIn={handleComposerInputPressIn}
       style={styles.voiceDraftOverlay}
+      testID="session.voiceDraftOverlay"
     >
-      {voiceDraftShowsListeningPrompt ? (
-        <View style={styles.voiceDraftListeningPrompt}>
-          <VoiceMicWaveCaret color={colors.statusReady} testID="session.voiceMicCaret" />
-          <Text style={styles.voiceDraftListeningText}>{composerLayout.input.placeholder}</Text>
-        </View>
-      ) : (
-        <View style={styles.voiceDraftMeasuredBlock}>
-          <Text
-            onTextLayout={handleVoiceDraftTextLayout}
-            style={styles.voiceDraftText}
-          >
-            {draft}
-          </Text>
-          <View
-            pointerEvents="none"
-            style={[
-              styles.voiceDraftCaretOverlay,
-              {
-                left: voiceDraftCaretFrame.left,
-                top: voiceDraftCaretFrame.top,
-              },
-            ]}
-          >
+      <ScrollView
+        ref={voiceDraftScrollRef}
+        contentContainerStyle={styles.voiceDraftOverlayContent}
+        onContentSizeChange={() => {
+          requestAnimationFrame(() => {
+            voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+          });
+        }}
+        onLayout={() => {
+          requestAnimationFrame(() => {
+            voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
+          });
+        }}
+        pointerEvents="none"
+        scrollEnabled={composerInputScrollEnabled}
+        showsVerticalScrollIndicator={false}
+        style={styles.voiceDraftScroll}
+      >
+        {voiceDraftShowsListeningPrompt ? (
+          <View style={styles.voiceDraftListeningPrompt}>
             <VoiceMicWaveCaret color={colors.statusReady} testID="session.voiceMicCaret" />
+            <Text style={styles.voiceDraftListeningText}>{composerLayout.input.placeholder}</Text>
           </View>
-        </View>
-      )}
-    </ScrollView>
+        ) : (
+          <View style={styles.voiceDraftMeasuredBlock}>
+            <Text
+              onTextLayout={handleVoiceDraftTextLayout}
+              style={styles.voiceDraftText}
+            >
+              {draft}
+            </Text>
+            <View
+              pointerEvents="none"
+              style={[
+                styles.voiceDraftCaretOverlay,
+                {
+                  left: voiceDraftCaretFrame.left,
+                  top: voiceDraftCaretFrame.top,
+                },
+              ]}
+            >
+              <VoiceMicWaveCaret color={colors.statusReady} testID="session.voiceMicCaret" />
+            </View>
+          </View>
+        )}
+      </ScrollView>
+    </Pressable>
   ) : null;
   const measureSendButtonTarget = useCallback(() => {
     sendButtonRef.current?.measureInWindow((x, y, width, height) => {
@@ -6859,6 +6897,37 @@ export default function SessionScreen() {
             </ComposerPaletteFrame>
           ) : null}
 
+          {/*
+            手机端终结不了的请求(plugin_setup 等)只贴在输入框上方:能看清电脑端
+            在等什么、能取消,但不吃掉 composer —— 否则用户既处理不了这张卡又发不
+            出消息。高度按 palette 量级收紧,内容超出走内部滚动。
+          */}
+          {sessionOperationLayout.pendingInteractionPlacement === 'above-composer' ? (
+            <View
+              style={[
+                styles.pendingInteractionSurface,
+                { maxHeight: nativeShellLayout.paletteMaxHeight },
+              ]}
+              testID="interaction.aboveComposerSurface"
+            >
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                testID="interaction.aboveComposerScroll"
+              >
+                <InteractionPanel
+                  deviceId={deviceId}
+                  sessionId={sessionId}
+                  interactions={pending}
+                  activeRequestId={pendingInteractionActiveRequestId}
+                  onActiveRequestIdChange={setPendingInteractionActiveRequestId}
+                  onError={setError}
+                  readOnlyReason={collaborationReadOnlyReason}
+                />
+              </ScrollView>
+            </View>
+          ) : null}
+
           {sessionOperationLayout.composerSlot === 'pending-interaction' ? (
             <View
               style={[
@@ -6919,7 +6988,7 @@ export default function SessionScreen() {
             <View style={styles.readOnlyComposer} testID="session.collaborationReadOnlyComposer">
               <Text style={styles.collaborationTitle}>{t('session.screen.readOnlyMode')}</Text>
               <Text style={styles.collaborationText}>
-                {sessionOperationLayout.composerDisabledReason}
+                {composerDisabledReason}
               </Text>
             </View>
           ) : (
@@ -7046,6 +7115,9 @@ export default function SessionScreen() {
                     floatingVoiceButtonStyle={composerFloatingVoiceButtonStyle}
                     cursorColor={colors.inputCaret}
                     inputFrameHeight={composerResize.frameHeight}
+                    // 听写期间把输入区撑到 44pt 触控目标:命中层盖在 inputFrame 上,
+                    // hitSlop 越不过父边界(见常量注释)。
+                    inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
                     inputElement={(
                       <ComposerRichInput
                         ref={composerInputRef}
@@ -7061,10 +7133,7 @@ export default function SessionScreen() {
                           setComposerVoiceHoldArmed(false);
                         }}
                         onChangeDocument={applyRichComposerChange}
-                        onFocus={() => {
-                          setComposerFocused(true);
-                          handleComposerInputPressIn();
-                        }}
+                        onFocus={() => setComposerFocused(true)}
                         onHeightChange={handleComposerRichInputHeight}
                         onPasteImages={(uris) => void addPastedImageAttachments(uris)}
                         onPasteImagesLoading={beginPastePlaceholders}
@@ -7084,7 +7153,7 @@ export default function SessionScreen() {
                       />
                     )}
                     inputOverlay={renderComposerInputOverlay()}
-                    inputStyle={[styles.sessionComposerInput, voiceIsListening && styles.inputVoiceHidden]}
+                    inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
                     inputTestID="session.composerInput"
                     leading={renderComposerCollapsedAttachmentBadge()}
                     maxHeight={composerResize.inputMaxHeight}
@@ -8269,16 +8338,17 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: colors.surfaceChip,
     borderColor: colors.borderStrong,
   },
-  sessionComposerInput: {
-    fontSize: typeScale.listBody,
-    lineHeight: lineHeight.listBody,
-  },
   voiceDraftOverlay: {
     ...StyleSheet.absoluteFill,
     overflow: 'hidden',
   },
+  // 草稿滚动层填满外层触摸区(外层负责「点输入区停听写」,自身 pointerEvents 关闭)。
+  voiceDraftScroll: {
+    flex: 1,
+  },
+  // 内边距与真实输入框同源:差一点就会让听写文字与非听写文字左右错位、换行位置不同。
   voiceDraftOverlayContent: {
-    paddingHorizontal: spacing.xs,
+    paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING,
     paddingVertical: COMPOSER_INPUT_VERTICAL_PADDING,
   },
   voiceDraftMeasuredBlock: {
@@ -8288,10 +8358,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   voiceDraftCaretOverlay: {
     position: 'absolute',
   },
+  // 草稿层的文本档必须与真实 TextInput 完全一致,否则换行位置错开、超出的行被裁在
+  // 框外(见 MOBILE_COMPOSER_DRAFT_TEXT_STYLE)。
   voiceDraftText: {
     color: colors.textPrimary,
-    fontSize: typeScale.body,
-    lineHeight: COMPOSER_INPUT_LINE_HEIGHT,
+    ...MOBILE_COMPOSER_DRAFT_TEXT_STYLE,
   },
   voiceDraftListeningPrompt: {
     alignItems: 'center',
@@ -8300,8 +8371,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   voiceDraftListeningText: {
     color: colors.statusReady,
-    fontSize: typeScale.body,
-    lineHeight: COMPOSER_INPUT_LINE_HEIGHT,
+    ...MOBILE_COMPOSER_DRAFT_TEXT_STYLE,
   },
   palettePanel: {
     backgroundColor: colors.surfaceElevated,

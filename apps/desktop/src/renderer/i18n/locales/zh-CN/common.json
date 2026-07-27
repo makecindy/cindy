@@ -66,6 +66,7 @@
       "awaitingQuestion": "等待你的回复",
       "awaitingPlan": "等待计划审阅",
       "permissionPromptTitle": "需要确认权限",
+      "permissionPromptTitleWithTool": "允许 {{toolName}}？",
       "allowOnce": "允许一次",
       "alwaysAllowForSession": "本对话总是允许",
       "deny": "拒绝"
@@ -1356,6 +1357,15 @@
         "customMeta": "接入任意 OpenAI / Anthropic 兼容的模型来源",
         "pickHint": "鉴权方式由供应商定义决定；OAuth 端点与基础 URL 由预设携带，无需手填。",
         "oauthDesc": "通过浏览器完成订阅授权，无需 API Key",
+        "authorizeWithDeviceCode": "使用设备码",
+        "preparingDeviceCode": "正在生成设备码…",
+        "deviceCodePrompt": "请在验证页面输入以下一次性设备码：",
+        "deviceCodeWaiting": "完成授权前请保持此窗口开启。",
+        "copyDeviceCode": "复制设备码",
+        "openVerificationPage": "打开验证页面",
+        "deviceCodeCopied": "设备码已复制",
+        "deviceCodeCopyFailed": "设备码复制失败",
+        "verificationPageOpenFailed": "无法打开验证页面",
         "authorizedToast": "已连接「{{name}}」",
         "authorizeFailed": "「{{name}}」授权失败，请重试",
         "nameLabel": "显示名称",
@@ -2350,10 +2360,11 @@
           "invalidPackage": "该插件包无效，或当前 Cindy 版本不支持它。"
         },
         "securityTitle": "安装与权限",
-        "securityDescription": "安装包会在主进程中校验大小与 SHA-256，再经 Cindy 插件清单校验后原子安装。安装后默认不生效，由你确认权限后再开启。",
+        "securityDescription": "安装包会在主进程中校验大小与 SHA-256，再经 Cindy 插件清单校验后原子安装。首次安装完成后即自动开启，可随时在插件页停用；更新会保留当前生效状态。",
         "noPermissions": "此插件未声明额外能力。",
         "installConfirmTitle": "安装「{{name}}」？",
-        "installConfirmDescription": "安装包将经过完整性与清单校验，并以未生效状态安装。你可以在安装后查看配置并手动开启。"
+        "installConfirmDescription": "安装包将经过完整性与清单校验。安装完成后插件将自动开启，你可以随时在插件页停用或调整配置。",
+        "updateConfirmDescription": "安装包将经过完整性与清单校验，并替换现有版本。当前生效状态保持不变。"
       },
       "install": "安装插件…",
       "empty": "还没有安装任何插件",
@@ -2446,6 +2457,7 @@
       "perm": {
         "grantsTitle": "安装后它将拥有：",
         "toolsGroup": "注册工具",
+        "toolsDiffGroup": "注册工具变化",
         "itemCount": "{{count}} 项",
         "cindyImageGenerate": "图像生成(请 Cindy 代办)",
         "cindyImageEdit": "图像编辑(请 Cindy 代办，仅限它自己生成的图)",
@@ -3646,7 +3658,7 @@
       "title": "更新公告",
       "newFeatures": "新功能",
       "bugFixes": "问题修复",
-      "craftedBy": "出品",
+      "thanksTo": "感谢",
       "gotIt": "我知道了",
       "ariaDescription": "版本 {{version}} 的更新说明",
       "ariaDescriptionSpan": "自 v{{from}} 起累计 {{count}} 个版本的更新说明",
@@ -4920,6 +4932,21 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "正在思考…",
+      "generating": "正在生成…",
+      "editingFiles": "正在编辑文件…",
+      "searchingWeb": "正在搜索网页…",
+      "generatingImage": "正在生成图片…",
+      "compacting": "正在压缩上下文…",
+      "done": "已完成",
+      "waiting": "请稍候…",
+      "working": "正在工作…",
+      "running": "运行中…",
+      "turnStart": "正在处理，{{name}}",
+      "issueTip": "{{name}}，试试用 /issue 给我们提反馈或建议",
+      "runningTool": "{{tool}} 运行中…"
+    },
     "remoteSession": {
       "reconnecting": "与被控设备的连接中断，正在重连…",
       "hostOffline": "被控设备已离线，暂时无法同步",
@@ -5279,6 +5306,8 @@
       },
       "projectAction": {
         "rename": "重命名项目",
+        "pin": "置顶项目",
+        "unpin": "取消置顶项目",
         "showFiles": "查看文件",
         "archivedAll": "全部归档",
         "unarchiveAll": "全部取消归档",
@@ -5310,6 +5339,10 @@
       "aiRenameRemoteOutdated": "对方设备版本过旧，升级后才能使用 AI 命名",
       "aiRenameRemoteOffline": "远程设备未连接，请检查连接后重试",
       "aiRenameFailed": "AI 命名失败，请稍后重试"
+    },
+    "autoTitle": {
+      "image": "图片",
+      "file": "文件"
     },
     "sessionHeader": {
       "untitled": "未命名对话",

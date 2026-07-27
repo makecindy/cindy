@@ -4,6 +4,7 @@ import {
   evaluateBundleUpdate,
   parseLatestRelease,
   preferredInstallUrl,
+  shouldCheckBundleUpdate,
 } from './bundleUpdate';
 
 const VALID = {
@@ -13,6 +14,24 @@ const VALID = {
   installUrl: 'https://npkg.example.com/install/42',
   itmsUrl: 'itms-services://?action=download-manifest&url=https%3A%2F%2Fx%2Fplist%2F42',
 };
+
+describe('shouldCheckBundleUpdate', () => {
+  it.each([
+    ['非自建分发', false, false, false, false],
+    ['正式自建分发', true, false, false, true],
+    ['审核模式', true, true, false, false],
+    ['TestFlight', true, false, true, false],
+  ] as const)(
+    '%s → %s',
+    (_label, isSelfHosted, isReviewMode, isTestFlightBuild, expected) => {
+      expect(shouldCheckBundleUpdate({
+        isSelfHosted,
+        isReviewMode,
+        isTestFlightBuild,
+      })).toBe(expected);
+    },
+  );
+});
 
 describe('parseLatestRelease', () => {
   it('接受完整记录', () => {

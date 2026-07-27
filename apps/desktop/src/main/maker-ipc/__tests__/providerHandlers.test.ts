@@ -211,12 +211,26 @@ describe('provider:test-connection handler', () => {
 
     const result = await harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, {
       kind: 'adhoc',
-      spec: { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
+      spec: {
+        agent: 'claude-code',
+        baseUrl: 'https://x.example',
+        modelId: 'm',
+        requestPath: '/tenant/acme/infer?stream=1',
+        apiKey: 'k',
+      },
     });
     expect(result).toMatchObject({ ok: false, code: 'AUTH_INVALID', status: 401 });
     expect(testConnection).toHaveBeenCalledWith({
       kind: 'adhoc',
-      spec: { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k', headers: undefined },
+      spec: {
+        agent: 'claude-code',
+        baseUrl: 'https://x.example',
+        modelId: 'm',
+        wireProtocol: undefined,
+        requestPath: '/tenant/acme/infer?stream=1',
+        apiKey: 'k',
+        headers: undefined,
+      },
     });
   });
 
@@ -229,6 +243,15 @@ describe('provider:test-connection handler', () => {
       { kind: 'adhoc', spec: { agent: 'gemini', baseUrl: 'https://x.example', modelId: 'm' } },
       { kind: 'adhoc', spec: { agent: 'codex', baseUrl: 'ftp://x', modelId: 'm' } },
       { kind: 'adhoc', spec: { agent: 'codex', baseUrl: 'https://x.example', modelId: '' } },
+      {
+        kind: 'adhoc',
+        spec: {
+          agent: 'codex',
+          baseUrl: 'https://x.example',
+          modelId: 'm',
+          requestPath: '/unescaped path',
+        },
+      },
       { kind: 'saved', providerId: '', agent: 'codex' },
     ];
     for (const input of bad) {

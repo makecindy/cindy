@@ -62,6 +62,10 @@ const log = createLogger('ProjectNode');
 
 export interface ProjectNodeProps {
   project: ProjectNodeData;
+  /** Optional visible subset; project-level actions still receive the full project. */
+  displaySessions?: ProjectNodeData['sessions'];
+  /** 置顶栏列表模式可让展开后的会话使用满宽列表行；普通项目默认仍是紧凑文字行。 */
+  sessionVariant?: 'text' | 'list';
   /** 当前会话状态筛选，决定项目菜单是批量归档还是批量恢复。 */
   statusFilter: FilterStatus;
   isCollapsed: boolean;
@@ -77,6 +81,9 @@ export interface ProjectNodeProps {
   /** Sidebar 内容过滤态或时间升序排序下强制展示全部 session entry。 */
   disableSessionCollapse: boolean;
   onToggle: (projectKey: string) => void;
+  /** Project pin is independent from conversation pin state. */
+  isProjectPinned: boolean;
+  onToggleProjectPin: (project: ProjectNodeData, currentlyPinned: boolean) => void;
   onRenameProject: (project: ProjectNodeData, alias: string) => Promise<void>;
   onSessionClick: SessionClickHandler;
   onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
@@ -103,6 +110,8 @@ export interface ProjectNodeProps {
 
 export function ProjectNode({
   project,
+  displaySessions,
+  sessionVariant = 'text',
   statusFilter,
   isCollapsed,
   parentSectionCollapsed,
@@ -114,6 +123,8 @@ export function ProjectNode({
   selectedSessionIds,
   disableSessionCollapse,
   onToggle,
+  isProjectPinned,
+  onToggleProjectPin,
   onRenameProject,
   onSessionClick,
   onAction,
@@ -415,6 +426,19 @@ export function ProjectNode({
           >
             {t('ccAgent.sidebar.projectAction.rename')}
           </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => {
+              setMenuPos(null);
+              onToggleProjectPin(project, isProjectPinned);
+            }}
+            className={MENU_ITEM_CLASS}
+          >
+            {t(
+              isProjectPinned
+                ? 'ccAgent.sidebar.projectAction.unpin'
+                : 'ccAgent.sidebar.projectAction.pin',
+            )}
+          </DropdownMenuItem>
           <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
           {/* 菜单 items 顺序:浏览 → 工具 → 危险
               [搜索, 查看文件, 在文件管理器中打开] - [复制深度链接, 同步 Codex] - [全部归档]
@@ -501,9 +525,14 @@ export function ProjectNode({
       <SectionCollapse collapsed={isCollapsed} data-no-drag>
         {/* pb-1.5:展开块与下一个项目标题之间的间距(4px 树 gap + 6px = 10px),
             大于会话行间距(gap-0.5),让项目块之间有分组呼吸(参考 Codex,2026-07 定稿)。 */}
-        <div className="flex flex-col gap-0.5 pt-0.5 pb-1.5 px-0">
+        <div
+          className={cn(
+            'flex flex-col gap-0.5 pt-0.5 pb-1.5 pr-0',
+            sessionVariant === 'list' ? 'pl-3' : 'pl-0',
+          )}
+        >
           <SessionEntryList
-            sessions={project.sessions}
+            sessions={displaySessions ?? project.sessions}
             activeSessionId={activeSessionId}
             runningSessionIds={runningSessionIds}
             attachedSessionIds={attachedSessionIds}
@@ -522,6 +551,7 @@ export function ProjectNode({
             projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
             indented
+            sessionVariant={sessionVariant}
           />
         </div>
       </SectionCollapse>

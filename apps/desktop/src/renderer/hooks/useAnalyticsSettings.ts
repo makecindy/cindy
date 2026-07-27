@@ -5,7 +5,7 @@ export interface AnalyticsSettingsState {
   analyticsEnabled: boolean;
   /** 用户是否显式设置过开关;false = 跟随当前默认值。 */
   analyticsEnabledCustomized: boolean;
-  /** allowed = 已同意隐私政策 && 统计开关开启。 */
+  /** allowed = isReportingBuild && 已同意隐私政策 && 统计开关开启(dev 默认 false,XDT_TAPDB_DEV=1 可放行)。 */
   allowed: boolean;
   loading: boolean;
 }

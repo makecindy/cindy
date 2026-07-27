@@ -59,6 +59,10 @@ import {
   renderAuthLoopbackPage,
   type AuthLoopbackDevBridge,
 } from './authLoopbackCallback';
+import {
+  createDesktopPollCredentials,
+  runHostedCallbackPolling,
+} from './authHostedCallback';
 // dev-only 登录 scenario harness(implementation-plan Step 0 WHAT4):静态 import
 // (main 禁运行时动态 import),生产构建由 vite alias 把整模块替换为空 stub
 // (vite.main.config.ts),运行时另有 app.isPackaged guard 双保险。
@@ -455,7 +459,16 @@ export function setAuthSessionTeardown(teardown: AuthSessionTeardown | null): vo
 // 从不同步到服务器,因此登录 / 冷启动不再从服务器拉 key 写本地。新设备 / 新登录
 // 需用户在本机重新填入 key。renderer 侧 useApiKey / useMivoApiKey 同为本地 only。
 
-// ── System-browser OAuth / SSO (RFC 8252 loopback callback) ────────────────
+// ── System-browser OAuth / SSO ─────────────────────────────────────────────
+//
+// 两条回调链路,由端点清单的 authDesktopCallbackUrl 决定走哪条:
+//  - 非空 → 托管回调(hosted):redirect_uri 指向 auth-server 自有域名下的固定
+//    地址,服务端暂存授权码、客户端轮询取回。浏览器全程停在自有域名上,地址栏
+//    与浏览历史里不再出现 127.0.0.1 和授权码,唤起 app 的系统弹框显示的也是域名。
+//  - 空 → RFC 8252 loopback(现状):本机起随机端口 HTTP server 接回调。
+//
+// 清单字段同时充当灰度与回滚开关:服务端侧出问题时清空该字段即可回到 loopback,
+// 客户端不必发版。两条链路共用同一套取消 / 超时预算与返回契约。
 
 const BROWSER_AUTH_TIMEOUT_MS = 5 * 60_000;
 const browserAuthorizationSlot = createAuthBrowserAuthorizationSlot();
@@ -472,13 +485,111 @@ export function registerAuthLoopbackDevBridge(bridge: AuthLoopbackDevBridge): bo
   return authLoopbackDevBridgeSlot.register(bridge);
 }
 
+interface BrowserAuthorizationInput {
+  kind: 'social' | 'sso';
+  providerOrConnectionId: string;
+  codeChallenge: string;
+  state: string;
+}
+
+/** 可被 abort 提前唤醒的等待(轮询间隔用;取消后立即 resolve,不 reject)。 */
+function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    // finish 幂等:abort 与 timeout 都可能触发它,重复 resolve 无副作用但仍显式挡掉。
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener('abort', finish, { once: true });
+    // 注册后再查一次。当前 executor 全程同步、abort 插不进来,但这层防御让「将来有人
+    // 在中间加了 await」不会静默退化成「取消要等满一个轮询间隔」。
+    if (signal.aborted) finish();
+  });
+}
+
+/**
+ * 托管回调链路:打开系统浏览器后轮询 auth-server 取回授权码。
+ *
+ * 这里不起本地监听、也不渲染回调页——结果页由服务端在自有域名下托管。
+ * redirect_uri 原样使用清单值(必须与服务端 allowlist 逐字符一致,不做拼接)。
+ *
+ * 注意本链路**不复用**调用方传进来的 `state`:那个值会进浏览器地址栏与导航历史,
+ * 拿它当取回凭据就能被旁观者抢先消费(见 createDesktopPollCredentials 的说明)。
+ * 这里另生成一对凭据,只把哈希后的 clientState 交给 authorize。
+ */
+async function openHostedBrowserAuthorization(
+  input: BrowserAuthorizationInput,
+  redirectUri: string,
+  signal: AbortSignal,
+): Promise<{ code: string } | { error: string }> {
+  if (signal.aborted) return { error: 'USER_CANCELLED' };
+
+  const { clientState, pollSecret } = createDesktopPollCredentials();
+  const client = createAuthClient();
+  const authUrl = client.buildAuthorizeUrl({ ...input, state: clientState, redirectUri });
+
+  // 整次尝试共用一个截止时间:唤起浏览器与随后的轮询都从这份预算里花,和 loopback
+  // 分支「先起 timer 再 openExternal」的语义对齐。
+  const deadline = Date.now() + BROWSER_AUTH_TIMEOUT_MS;
+
+  // shell.openExternal 必须与取消/超时竞速。它在某些环境下会长时间不返回(系统
+  // 默认浏览器正在冷启动、handler 注册异常等),而这一步发生在轮询开始之前——
+  // 若只是 await 它,取消信号和五分钟预算都够不着,cancel-browser 会一直等在同一个
+  // 未 settle 的登录动作上。
+  const launchDeadline = AbortSignal.timeout(BROWSER_AUTH_TIMEOUT_MS);
+  const launched = await raceAuthBrowserCancellation(
+    shell.openExternal(authUrl).then(
+      () => ({ ok: true }) as const,
+      (error: unknown) => {
+        log.warn('open auth URL in system browser failed', error);
+        return { ok: false } as const;
+      },
+    ),
+    AbortSignal.any([signal, launchDeadline]),
+  );
+  // 取消与超时都收敛成 USER_CANCELLED(renderer 特意不展示它),与 loopback 一致。
+  if (launched.cancelled) return { error: 'USER_CANCELLED' };
+  if (!launched.value.ok) return { error: 'BROWSER_OPEN_FAILED' };
+
+  return runHostedCallbackPolling({
+    poll: async () => {
+      try {
+        return await client.pollDesktopAuthorization(pollSecret, { signal });
+      } catch (error) {
+        // 单次失败不等于登录失败(轮询本身有连续失败预算),但静默会让线上登录
+        // 问题无从排查。取消引发的中断不是故障,不记。错误对象只含固定文案与
+        // 错误码,不含 state / 授权码。
+        if (!signal.aborted) log.warn('hosted auth callback poll failed', error);
+        throw error;
+      }
+    },
+    sleep: (ms) => sleepUnlessAborted(ms, signal),
+    now: () => Date.now(),
+    signal,
+    // 扣掉唤起浏览器已经花掉的时间,整次尝试仍只有一个五分钟预算。
+    timeoutMs: Math.max(0, deadline - Date.now()),
+  });
+}
+
+/** 按端点清单分流到托管回调或 loopback(语义见本节顶部注释)。 */
 async function openSystemBrowserAuthorization(
-  input: {
-    kind: 'social' | 'sso';
-    providerOrConnectionId: string;
-    codeChallenge: string;
-    state: string;
-  },
+  input: BrowserAuthorizationInput,
+  signal: AbortSignal,
+): Promise<{ code: string } | { error: string }> {
+  const hostedCallbackUrl = getClientEndpoint('authDesktopCallbackUrl');
+  return hostedCallbackUrl
+    ? openHostedBrowserAuthorization(input, hostedCallbackUrl, signal)
+    : openLoopbackBrowserAuthorization(input, signal);
+}
+
+async function openLoopbackBrowserAuthorization(
+  input: BrowserAuthorizationInput,
   signal: AbortSignal,
 ): Promise<{ code: string } | { error: string }> {
   return new Promise((resolve) => {
@@ -1833,6 +1944,14 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
         throw new AuthApiError('CONNECTION_NOT_FOUND', 404, 'SSO connection is unavailable');
       }
       const { codeVerifier, codeChallenge } = generatePKCE();
+      // 这个 state 只服务 loopback 链路:纯 CSRF 校验值,回调回来比对一次即弃。
+      // randomUUID 的 122 bit 随机量对该用途足够,也不动存量 client_state 的格式。
+      //
+      // 托管回调链路**不用它** —— openHostedBrowserAuthorization 会另生成一对
+      // (pollSecret, clientState = base64url(sha256(pollSecret))),把哈希交给
+      // authorize、原像留作取回凭据。原因是这里的值会进浏览器地址栏与导航历史,
+      // 拿它取回就能被旁观者抢先消费(见 createDesktopPollCredentials 的说明)。
+      // 两条链路的值都只存在于本进程内存中,不落盘、不进日志。
       const state = crypto.randomUUID();
       loginFlowState = reduceAuthFlow(loginFlowState, {
         type: 'browser-started',

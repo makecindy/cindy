@@ -306,6 +306,9 @@ const fanOutCorruptionRestored = createIpcFanOut('local-db:corruption-restored')
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut('local-db:schema-drift-warning');
 const fanOutProjectAliasesChanged = createIpcFanOut('local-db:project-aliases:changed');
+const fanOutSidebarPinnedOrderChanged = createIpcFanOut(
+  'sidebar-settings:pinned-order-changed',
+);
 // Workdir File Browser — push events from chokidar (add/change/unlink/...)
 const fanOutFileBrowserEvent = createIpcFanOut('maker:file-browser:event');
 const fanOutFileBrowserTransfer = createIpcFanOut('maker:file-browser:transfer');
@@ -444,6 +447,7 @@ const fanOutMakerAuthStateChanged = createIpcFanOut('maker:auth:state-changed');
 const fanOutMakerAuthLoginProgress = createIpcFanOut('maker:auth:login-progress');
 // 自定义供应商增删改广播 → 各 useProviders 实例 refetch（设置页列表 + 对话模型选择器 live 刷新）。
 const fanOutMakerProvidersChanged = createIpcFanOut('maker:provider:changed');
+const fanOutMakerProviderOAuthProgress = createIpcFanOut('maker:provider:oauth:progress');
 // 自定义 MCP 服务器增删改广播 → 设置页 McpServersSection refetch。
 const fanOutMakerMcpChanged = createIpcFanOut('maker:mcp:changed');
 // 自定义供应商上游错误的结构化广播（payload = { agent, providerId, providerName, code, retryable, status }）。
@@ -948,7 +952,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:detail', pluginId),
     install: (
       pluginId: string,
-      options?: { allowPermissionExpansion?: boolean },
+      options: { expectedReleaseId: string; allowPermissionExpansion?: boolean },
     ): Promise<{ ghost: import('../shared/ghost').InstalledGhost }> =>
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
     uninstall: (pluginId: string): Promise<{ ok: true }> =>
@@ -3247,6 +3251,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   sidebarSettingsSavePinnedOrder: (order: readonly string[]): Promise<void> =>
     ipcRenderer.invoke('sidebar-settings:save-pinned-order', Array.from(order)),
+  sidebarSettingsOnPinnedOrderChanged: (cb: (order: string[]) => void): (() => void) =>
+    fanOutSidebarPinnedOrderChanged((payload) => {
+      if (
+        Array.isArray(payload) &&
+        payload.every((entry): entry is string => typeof entry === 'string')
+      ) {
+        cb(payload);
+      }
+    }),
 
   // ── session 级"终身累计 cost"变化 (per-session, 不是 today-aggregate) ──
   // 今日累计 (Claude USD + Codex token) 已搬到 electronAPI.maker.usage.* (取代老
@@ -3618,6 +3631,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
               agent: 'claude-code' | 'codex';
               baseUrl: string;
               modelId: string;
+              wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
+              requestPath?: string;
               apiKey?: string | null;
               headers?: Record<string, string>;
             };
@@ -3703,6 +3718,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:provider:oauth:logout', providerId),
     providerOAuthCancel: (providerId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:provider:oauth:cancel', providerId),
+    onProviderOAuthProgress: fanOutMakerProviderOAuthProgress,
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。
      * 让 IM /model 在 main 侧复用同一套可见性过滤,与应用内模型列表逐模型一致。
@@ -3904,8 +3920,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         label?: string;
         model?: string;
         effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+        fast?: boolean;
+        /** 显式选定的模型来源(标准面板 per-worker 选择);缺省 = 跟随默认路由解析。 */
+        providerId?: string | null;
       },
-    ): Promise<{ workflowId: string; workerSessionId: string; workerId: string }> =>
+      // main handler 实际返回 teamId(见 enableOrcaInternal);此前类型写成 workflowId 是漂移。
+    ): Promise<{ teamId: string; workerSessionId: string; workerId: string }> =>
       ipcRenderer.invoke('maker:session:enable-orca', leadSessionId, opts),
 
     /**
@@ -4412,6 +4432,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(素材由 main 读 DB)
     regenerateSessionTitle: (sessionId: string): Promise<{ title: string | null }> =>
       ipcRenderer.invoke('maker:regenerate-title', { sessionId }),
+    // 会话自动起名:renderer 只给素材,占位/条件写/归属表都在 main(单一真相源)。
+    autoTitle: (request: {
+      sessionId: string;
+      text: string;
+      agentKind: 'claude-code' | 'codex';
+      isUserText?: boolean;
+    }): Promise<{ applied: boolean; done: boolean }> =>
+      ipcRenderer.invoke('maker:auto-title', request),
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ): Promise<import('../shared/helpTypes').HelpAnswerResult> =>

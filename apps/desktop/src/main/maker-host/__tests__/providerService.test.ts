@@ -46,4 +46,29 @@ describe('createProviderService', () => {
     const openai = (await svc.listProviders()).find((p) => p.id === 'openai')!;
     expect(openai.connected).toBe(true);
   });
+
+  it('treats catalog no-auth providers as connected without credentials', async () => {
+    const noAuthProvider = {
+      ...BUNDLED_CATALOG.providers[0],
+      id: 'local-no-auth',
+      name: 'Local no-auth',
+      auth: { method: 'none' as const },
+    };
+    const svc = createProviderService({
+      getCatalog: () => ({
+        version: 'no-auth-test',
+        providers: [...BUNDLED_CATALOG.providers, noAuthProvider],
+      }),
+      connection: {
+        xd: () => false,
+        anthropic: () => false,
+        openai: () => false,
+        xai: () => false,
+      },
+    });
+
+    expect(
+      (await svc.listProviders()).find((provider) => provider.id === noAuthProvider.id)?.connected,
+    ).toBe(true);
+  });
 });

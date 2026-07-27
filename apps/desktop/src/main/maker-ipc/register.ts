@@ -35,6 +35,7 @@ import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { BrowserWindow, ipcMain } from 'electron';
 import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
 import {
+  deriveAutoTitleSeed,
   getAgentFacingText,
   serializeSessionReferencePayload,
   type AgentInputCreateOpts,
@@ -127,7 +128,6 @@ import {
   broadcastSessionPatched,
   clearSessionContextInDb,
   getSessionRowSnapshot,
-  isUntitledDraftSessionBeforeFirstInput,
   persistSessionFields,
   persistSessionPermissionModeIfAuto,
 } from '../localDb/ipc/sessions.js';
@@ -333,7 +333,11 @@ import { getAgentIslandService } from '../agent-island/service.js';
 import { createOrcaLifecycleService, ORCA_WORKER_READY_MESSAGE } from './orcaLifecycleService.js';
 import { throwOrcaServiceFailure } from './orcaServiceFailure.js';
 import { createOrcaTeamService, findFocusTargetWorker, type ListWorkerQueuedMessagesResult, type OrcaTeamService, type OrcaWorkerEffort, type WorkerQueuedMessageControlResult } from './orcaTeamService.js';
-import { createOrcaWorkerCreationService, normalizeOrcaWorkerLabel } from './orcaWorkerCreationService.js';
+import {
+  createOrcaWorkerCreationService,
+  normalizeOrcaWorkerLabel,
+  providerRouteRequiresExplicitSelection,
+} from './orcaWorkerCreationService.js';
 import { registerOrcaWorkerControlHandlers } from './orcaWorkerControlHandlers.js';
 import {
   clearOrcaMcpHydrated,
@@ -374,7 +378,10 @@ import { registerStopSessionBackgroundTasksHandler } from './stopSessionBackgrou
 import { registerProviderHandlers } from './providerHandlers.js';
 import { createLocalCliScanDeps, scanLocalCliAuth } from './localCliDetect.js';
 import { registerMcpHandlers } from './mcpHandlers.js';
-import { refreshCustomMcpProviders } from '../mcp-integrations/custom-mcp-registry.js';
+import {
+  getBuiltinMcpServerNames,
+  refreshCustomMcpProviders,
+} from '../mcp-integrations/custom-mcp-registry.js';
 import {
   getDesktopProviderService,
   refreshCustomProvidersIntoCatalog,
@@ -447,7 +454,11 @@ import { checkRemoteWorkingDir } from '../device-link/remote-workdir-guard.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { forkSessionAtMessage } from '../maker-orchestration/fork.js';
-import { scheduleEligibleDeviceLinkAutoTitle } from './deviceLinkAutoTitle.js';
+import {
+  isSessionAutoTitleEligible,
+  registerSessionAutoTitleHooks,
+  scheduleSessionAutoTitle,
+} from './sessionAutoTitle.js';
 import {
   SILENT_STOP_RESUME_PROMPT,
   SilentStopAutoResumeGuard,
@@ -460,6 +471,7 @@ import {
   getGhostFsSlot,
   hasEnabledGhostAssistantHook,
   runGhostAssistantReplyHook,
+  hasEnabledUserMessageHookGhost,
   screenGhostUserMessage,
   setGhostAgentTurnRunner,
   setGhostWorkspaceSessionService,
@@ -921,6 +933,8 @@ interface EnableOrcaOptions {
   model?: string;
   effort?: OrcaWorkerEffort;
   fast?: boolean;
+  /** 显式选定的模型来源;语义见 OrcaWorkerCreateParams.providerId。 */
+  providerId?: string | null;
 }
 
 let orcaCollabServiceHolder: OrcaCollabService | null = null;
@@ -3120,6 +3134,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   getAgentIslandService()?.setPermissionResolver(resolvePendingPermissionFromAgentIsland);
   sessionTurnActivityTracker.setTurnKeepaliveChangeListener(options.onAnySessionTurnKeepaliveChange ?? null);
   gitSnapshotCoordinator = createGitSnapshotCoordinator(maker);
+  // 接上 DB 改名通知(用户手动改名后自动起名收手)与拦截意识探针(装了
+  // will-user-message 钩子时不把用户原话送去标题模型)。
+  registerSessionAutoTitleHooks({
+    isUserMessageScreeningActive: hasEnabledUserMessageHookGhost,
+  });
 
   // device-link busy presence:把「本机是否有 turn 在跑」探针注入 device-link host,
   // 它每 5s 取一次、翻转才上报,让控制端设备列表显示 busy 三态(规则 2:回调注入解耦)。
@@ -3409,7 +3428,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
       const oauth = provider?.auth.oauth;
       if (!provider || !oauth) throw new Error(`provider '${providerId}' has no oauth descriptor`);
-      const result = await runGenericOAuthLogin({ id: provider.id, name: provider.name }, oauth);
+      const result = await runGenericOAuthLogin(
+        { id: provider.id, name: provider.name },
+        oauth,
+        {
+          onProgress: (progress) =>
+            broadcastToAllWindows(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
+              providerId,
+              ...progress,
+            }),
+        },
+      );
       if (result.ok) {
         // 授权成功后按 agent 自动发现模型（与内置订阅体验统一,用户不必手填模型）:
         // 发现端点 = 描述符显式声明 ?? 由该 runtime 的 baseUrl 推导（…/v1/models）。
@@ -3470,6 +3499,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   registerMcpHandlers(createElectronIpcHandlerRegistry(), {
     refreshProviders: () => refreshCustomMcpProviders(),
     broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.MCP_CHANGED, {}),
+    // 内置 server 名对自定义 MCP 是保留名：撞名会在装配层顶替内置 server 并继承
+    // 它在 MCP 审批策略里的信任，所以 CRUD 阶段就拒收。
+    getReservedMcpIds: () => getBuiltinMcpServerNames(),
     // Codex 的 MCP flags 冻在 codexEnvironment 的 cached spawn 配置里,清缓存 + dispose app-server,
     // 让下个 codex 会话按新 MCP 配置重 spawn(与 slack 变更同款 best-effort;busy 会话软重启失败只告警)。
     // 顺序：先 dispose app-server（含 busy 检查），成功后再关 bridge/cache。
@@ -4244,6 +4276,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       model: opts.model,
       effort: opts.effort,
       fast: opts.fast,
+      providerId: opts.providerId,
       delegateTask: opts.delegateTask,
     });
     if (!result.ok) throwOrcaServiceFailure(result);
@@ -5138,6 +5171,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       model?: unknown;
       effort?: unknown;
       fast?: unknown;
+      providerId?: unknown;
     };
     const workerAgent: AgentKind = body.workerAgent === 'codex' ? 'codex' : 'claude-code';
     const delegateTask = typeof body.delegateTask === 'string' ? body.delegateTask : undefined;
@@ -5149,6 +5183,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       model: typeof body.model === 'string' ? body.model : undefined,
       effort: typeof body.effort === 'string' ? body.effort as OrcaWorkerEffort : undefined,
       fast: typeof body.fast === 'boolean' ? body.fast : undefined,
+      // 只认非空(trim 后)string 为显式来源;其余(null/空白/缺省/异型)一律按「未显式」处理。
+      providerId: typeof body.providerId === 'string' && body.providerId.trim().length > 0
+        ? body.providerId.trim()
+        : undefined,
     });
   });
 
@@ -5289,6 +5327,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       model,
       effort: typeof b.effort === 'string' ? b.effort as OrcaWorkerEffort : undefined,
       fast: typeof b.fast === 'boolean' ? b.fast : undefined,
+      // 只认非空(trim 后)string 为显式来源;其余(null/空白/缺省/异型)一律按「未显式」处理。
+      providerId: typeof b.providerId === 'string' && b.providerId.trim().length > 0
+        ? b.providerId.trim()
+        : undefined,
       label: label.value,
       initialTask: typeof b.initialTask === 'string' && b.initialTask.length > 0 ? b.initialTask : undefined,
     });
@@ -5503,15 +5545,37 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
             id: provider.id,
             name: provider.name,
             models: (provider.models['claude-code'] ?? []).map((model) => model.id),
-            requiresExplicitRoute: provider.routing['claude-code']?.authStrategy === 'api-key-header'
-              || provider.routing['claude-code']?.authStrategy === 'oauth-token',
+            // Fast 能力 per-(provider, model):显式来源的 Fast 判定按该来源自己的条目。
+            fastModels: (provider.models['claude-code'] ?? [])
+              .filter((model) => model.supportsFastMode)
+              .map((model) => model.id),
+            // effort 档位同样 per-(provider, model):供 service 按实际路由来源重归一。
+            effortMetaByModel: Object.fromEntries(
+              (provider.models['claude-code'] ?? []).map((model) => [
+                model.id,
+                { efforts: model.efforts, defaultEffort: model.defaultEffort },
+              ]),
+            ),
+            requiresExplicitRoute: providerRouteRequiresExplicitSelection(
+              provider.routing['claude-code']?.authStrategy,
+            ),
           })),
           codex: connectedProvidersForAgent(views, 'codex').map((provider) => ({
             id: provider.id,
             name: provider.name,
             models: (provider.models.codex ?? []).map((model) => model.id),
-            requiresExplicitRoute: provider.routing.codex?.authStrategy === 'api-key-header'
-              || provider.routing.codex?.authStrategy === 'oauth-token',
+            fastModels: (provider.models.codex ?? [])
+              .filter((model) => model.supportsFastMode)
+              .map((model) => model.id),
+            effortMetaByModel: Object.fromEntries(
+              (provider.models.codex ?? []).map((model) => [
+                model.id,
+                { efforts: model.efforts, defaultEffort: model.defaultEffort },
+              ]),
+            ),
+            requiresExplicitRoute: providerRouteRequiresExplicitSelection(
+              provider.routing.codex?.authStrategy,
+            ),
           })),
         },
         resolveDefaultProviderIdForModel: (agent, model) => (
@@ -6549,6 +6613,50 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     version: 1,
   }));
 
+  /**
+   * device-link 远控输入的自动起名(入队 / 插话共用)。
+   *
+   * 只对远控调用生效:本机 renderer 自己走 `maker:auto-title`。返回一个 commit 闭包
+   * 而不是直接调度 —— 调度必须发生在输入真正被 coordinator 接受之后,否则输入被拒
+   * 时会留下一个凭空出现的标题。
+   */
+  const prepareDeviceLinkAutoTitle = async (
+    sid: string,
+    queued: AgentInputQueuedMessage,
+  ): Promise<() => void> => {
+    const noop = () => {};
+    if (!isDeviceLinkInvoke()) return noop;
+    // 起名素材:用户写了字就用他的字(可喂标题模型);一个字没写(只贴图 / 只拖
+    // 文件 / 只 @ 一个文件 / 只引用一个会话)就用本地合成的描述,只当占位标题。
+    const seed = deriveAutoTitleSeed(queued, {
+      image: t('ccAgent.autoTitle.image'),
+      file: t('ccAgent.autoTitle.file'),
+    });
+    if (!seed) return noop;
+    let eligible: boolean;
+    try {
+      eligible = await isSessionAutoTitleEligible(sid);
+    } catch (err) {
+      // 这一步只是省一次无谓调度的**廉价预检**,权威资格判定在
+      // runSessionAutoTitle 内部(它自己也做重试安全的处理)。读不到时按"要起名"
+      // 放行,否则一次 DB 抖动就会让单轮对话的标题永久停在 New Maker(review P1)。
+      log.warn('[device-link] auto-title precheck failed (scheduling anyway)', {
+        sessionId: sid,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      eligible = true;
+    }
+    if (!eligible) return noop;
+    return () => {
+      scheduleSessionAutoTitle({
+        sessionId: sid,
+        text: seed.text,
+        agentKind: queued.createOpts.agentKind,
+        isUserText: seed.isUserText,
+      });
+    };
+  };
+
   ipcMain.handle(MAKER_INVOKE.INPUT_GET_PROJECTION, async (_e, sessionId: unknown) => {
     const sid = requireSessionId(sessionId);
     // 崩溃恢复(issue #761):renderer 打开会话首次取 projection 前,先把持久化的
@@ -6571,17 +6679,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       requireQueuedMessage(item),
     )) as AgentInputQueuedMessage;
     const queued = await hydrateQueuedAgentReferences(queuedWithAttachments);
-    let shouldAutoTitle = false;
-    if (isDeviceLinkInvoke() && queued.text.trim()) {
-      try {
-        shouldAutoTitle = await isUntitledDraftSessionBeforeFirstInput(sid);
-      } catch (err) {
-        log.warn('[device-link] auto-title eligibility check failed', {
-          sessionId: sid,
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
+    const commitAutoTitle = await prepareDeviceLinkAutoTitle(sid, queued);
 
     // 「继续任务」durable ack 延后到 vendor dispatch 成功（onDispatchedUserTurn）：
     // 排队可取消时旧中断提示必须能恢复；accepted 但仍可能 cancelled-before-dispatch
@@ -6594,14 +6692,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       // enqueue,不带此 flag,恢复暂停语义不变。
       resumeRestorePausedQueue: true,
     });
-    if (shouldAutoTitle) {
-      scheduleEligibleDeviceLinkAutoTitle({
-        maker,
-        sessionId: sid,
-        text: getAgentFacingText(queued),
-        agentKind: queued.createOpts.agentKind,
-      });
-    }
+    commitAutoTitle();
     return projection;
   });
 
@@ -6638,11 +6729,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       }),
     )) as AgentInputQueuedMessage;
     const queued = await hydrateQueuedAgentReferences(queuedWithAttachments);
-    return inputCoordinator.steer(
+    // 插话也补起名:远控用户完全可能趁这一轮还在跑就写下第一句话,只认入队的话
+    // 标题会一直停在首条纯附件消息的合成占位上(PR #510 review P1)。是否真的该
+    // 改名由 runSessionAutoTitle 权威判定。
+    const commitAutoTitle = await prepareDeviceLinkAutoTitle(sid, queued);
+    // steer 与 enqueue 不同:它会因同会话已有在飞 steer / Stop 边界 / 输入锁而
+    // 返回 false。必须等它落定、受理了才改名 —— 被拒的文本改掉默认名 / 合成占位 /
+    // fork 占位就是凭空改名(review P1)。
+    const accepted = await inputCoordinator.steer(
       sid,
       queued,
       steerOpts,
     );
+    if (accepted) commitAutoTitle();
+    return accepted;
   });
 
   ipcMain.handle(MAKER_INVOKE.INPUT_STOP, async (_e, sessionId: unknown, opts?: unknown) => {

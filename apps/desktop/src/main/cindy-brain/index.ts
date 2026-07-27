@@ -1196,6 +1196,24 @@ export function createGhostSessionTap(sessionId: string): {
  * 快路径:没有任何启用意识声明钩子 → 零开销放行(不查 DB 不进网关),
  * 绝大多数用户走这条。任何异常收敛为放行(fail-open),绝不卡发送热路径。
  */
+/**
+ * 是否装有**启用中**的 will-user-message 拦截意识(纯本地判定,不触发钩子)。
+ *
+ * 调用方(自动起名)据此决定要不要把用户原话送去标题模型:那是一次独立的 AI 发送,
+ * 而拦截钩的全部意义就是不让某些内容到达 AI。这里只问"有没有人在管",不重复询问
+ * 钩子本身 —— 重复询问会让 Ghost 对同一条消息被问两次,产生它没预期的副作用。
+ */
+export function hasEnabledUserMessageHookGhost(): boolean {
+  try {
+    return availableGhosts().some(
+      (g) => g.enabled && g.manifest.subscribe?.hooks?.includes('will-user-message'),
+    );
+  } catch {
+    // 判定不了就按"有人在管"处理:宁可少一个智能标题,也不把内容送出去。
+    return true;
+  }
+}
+
 export async function screenGhostUserMessage(
   sessionId: string,
   text: string,
@@ -2352,7 +2370,6 @@ export async function installOrUpdateMarketGhostPackage(
   expected: {
     ghostId: string;
     version: string;
-    initiallyEnabled?: boolean;
   },
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
@@ -2381,10 +2398,12 @@ export async function installOrUpdateMarketGhostPackage(
     // mutation.
     releaseMutation = beginGhostMutation(mutationOwner);
     if (!installed) {
-      // defaultInstall 首次装入即启用；手动市场安装仍保持沉睡，等待用户主动开启。
-      return installAndDock(manager, cindyFilePath, {
-        enable: expected.initiallyEnabled === true,
-      });
+      // 2026-07-26 定案:市场首装一律装完即开(defaultInstall 与手动安装归一),
+      // 用户不必再手动点一次开关。市场包走官方分发链路(服务端校验 + sha256
+      // 校验下载),且确认框如实展示权限清单,确认安装即授权运行;本地 .cindy
+      // 文件装入的初始启用态仍由确认框勾选决定(勾选默认开启,main 侧
+      // installAndDock 缺省不启用,授权判断始终来自 UI 显式值)。
+      return installAndDock(manager, cindyFilePath, { enable: true });
     }
 
     const runtime = getGhostRuntime();

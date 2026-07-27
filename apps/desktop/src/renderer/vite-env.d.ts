@@ -1246,7 +1246,7 @@ interface ElectronAPI {
     ) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     install: (
       pluginId: string,
-      options?: { allowPermissionExpansion?: boolean },
+      options: { expectedReleaseId: string; allowPermissionExpansion?: boolean },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     uninstall: (pluginId: string) => Promise<{ ok: true }>;
   };
@@ -2993,6 +2993,7 @@ interface ElectronAPI {
   // sidebar 偏好(置顶手动顺序)跨 dev / installed 共享;读 sendSync,写 invoke。
   sidebarSettingsLoadPinnedOrderSync: () => string[];
   sidebarSettingsSavePinnedOrder: (order: readonly string[]) => Promise<void>;
+  sidebarSettingsOnPinnedOrderChanged: (cb: (order: string[]) => void) => () => void;
 
   // ── session 级"终身累计 cost"变化 (per-session, 不是 today-aggregate) ──
   // today aggregate 已搬到 electronAPI.maker.usage.* (Claude USD + Codex token 统一)。
@@ -3487,6 +3488,7 @@ interface ElectronAPI {
               baseUrl: string;
               modelId: string;
               wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
+              requestPath?: string;
               apiKey?: string | null;
               headers?: Record<string, string>;
             };
@@ -3541,6 +3543,15 @@ interface ElectronAPI {
     providerOAuthLogin: (providerId: string) => Promise<{ ok: boolean; reason?: string }>;
     providerOAuthLogout: (providerId: string) => Promise<{ ok: true }>;
     providerOAuthCancel: (providerId: string) => Promise<{ ok: true }>;
+    onProviderOAuthProgress: (
+      cb: (progress: {
+        providerId: string;
+        phase: 'device-code';
+        verificationUrl: string;
+        userCode: string;
+        expiresAt: number;
+      }) => void,
+    ) => () => void;
     /** 自定义供应商上游错误订阅（返回 off）；code 走 providerError.* i18n。 */
     onProviderUpstreamError: (
       cb: (event: {
@@ -3731,6 +3742,8 @@ interface ElectronAPI {
         model?: string;
         effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
         fast?: boolean;
+        /** 显式选定的模型来源(标准面板 per-worker 选择);缺省 = 跟随默认路由解析。 */
+        providerId?: string | null;
       },
     ) => Promise<{ teamId: string; workerSessionId: string; workerId: string }>;
 
@@ -4141,6 +4154,17 @@ interface ElectronAPI {
     ) => Promise<{ title: string | null }>;
     /** 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(失败返 title: null)。 */
     regenerateSessionTitle: (sessionId: string) => Promise<{ title: string | null }>;
+    /**
+     * 会话自动起名(权威实现在 main):立即占位 + 智能标题覆盖,条件写保证
+     * user rename wins。`done=true` 表示该会话已不需要再起名(已起过名或用户
+     * 手动改过名);瞬时失败返回 false,调用方应在下一条带文字的消息上重试。
+     */
+    autoTitle: (request: {
+      sessionId: string;
+      text: string;
+      agentKind: 'claude-code' | 'codex';
+      isUserText?: boolean;
+    }) => Promise<{ applied: boolean; done: boolean }>;
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ) => Promise<import('../shared/helpTypes').HelpAnswerResult>;
@@ -4468,12 +4492,28 @@ interface RawReleaseNotesSection {
   items: RawReleaseNotesItem[];
 }
 
+/** Topic-format (v2) block: one user-facing theme with a short narrative. */
+interface RawReleaseNotesTopic {
+  emoji?: string;
+  title: string;
+  text: string;
+  contributors?: string[];
+}
+
 interface RawReleaseNotesPayload {
   version: string;
   date: string;
-  /** Flat contributor list — collective hall-of-fame on top of per-item `by`. */
-  contributors: string[];
-  sections: RawReleaseNotesSection[];
+  /**
+   * Flat contributor list — collective hall-of-fame on top of per-item `by`.
+   * Optional: older notice files predate the field (renderer defaults to []).
+   */
+  contributors?: string[];
+  /** Legacy author-grouped sections. Absent on topic-format payloads. */
+  sections?: RawReleaseNotesSection[];
+  /** Topic-format blocks. Non-empty ⇒ renderer uses the topic layout. */
+  topics?: RawReleaseNotesTopic[];
+  /** Optional one-line lead above the topics (e.g. PR/commit counts). */
+  intro?: string;
 }
 
 /* ── SkillHub Registry types (v0.6) ──

@@ -1974,10 +1974,14 @@ export function ChatInput({
             void voiceInputStopAndSendRef.current(deliveryMode);
             return true;
           }
+          // Do not gate the delivery choice on composerCanSubmitRef here.
+          // Tiptap updates its document synchronously, while that ref mirrors
+          // sendButtonDisabled from a later React effect. A quick Cmd/Ctrl+Enter
+          // after typing could otherwise observe the previous empty state and
+          // incorrectly enqueue instead of steering the running turn.
           const wantsSteer =
             (event.metaKey || event.ctrlKey) &&
             showStopButtonRef.current &&
-            composerCanSubmitRef.current &&
             voiceInputStateRef.current !== 'listening';
           void dispatchSendRef.current(wantsSteer ? 'steer' : 'queue');
           return true;
@@ -2347,7 +2351,6 @@ export function ChatInput({
 
       if (
         showStopButtonRef.current &&
-        composerCanSubmitRef.current &&
         isComposerEnterTarget(event.target) &&
         event.key === 'Enter' &&
         (event.metaKey || event.ctrlKey) &&

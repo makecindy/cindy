@@ -286,7 +286,8 @@
     {
      "click": "[data-qa-pref=\"plat:desk\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-bubble",
@@ -297,7 +298,8 @@
     {
      "click": "[data-qa-pref=\"plat:desk\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-bubble",
@@ -308,7 +310,8 @@
     {
      "click": "[data-qa-pref=\"plat:desk\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-bubble",
@@ -319,7 +322,8 @@
     {
      "click": "[data-qa-pref=\"plat:desk\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-title",
@@ -358,7 +362,8 @@
     {
      "click": "[data-qa-pref=\"plat:desk\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-title",
@@ -369,7 +374,8 @@
     {
      "click": "[data-qa-pref=\"plat:desk\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-copy",
@@ -408,7 +414,8 @@
     {
      "click": "[data-qa-pref=\"plat:desk\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-title",
@@ -611,7 +618,8 @@
     {
      "click": "[data-qa-pref=\"plat:phone\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-bubble",
@@ -622,18 +630,20 @@
     {
      "click": "[data-qa-pref=\"plat:phone\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-bubble",
    "prop": "width",
-   "truth": "mobile.geometry.phoneMaxWidth",
+   "truth": "mobile.geometry.phoneWidth",
    "kind": "length",
    "via": [
     {
      "click": "[data-qa-pref=\"plat:phone\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-bubble",
@@ -683,7 +693,8 @@
     {
      "click": "[data-qa-pref=\"plat:phone\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-title",
@@ -694,7 +705,8 @@
     {
      "click": "[data-qa-pref=\"plat:phone\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-copy",
@@ -733,7 +745,8 @@
     {
      "click": "[data-qa-pref=\"plat:phone\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-title",
@@ -874,13 +887,14 @@
   {
    "sel": ".db-bubble",
    "prop": "width",
-   "truth": "mobile.geometry.padWidth",
+   "truth": "mobile.geometry.padLandscapeWidth",
    "kind": "length",
    "via": [
     {
      "click": "[data-qa-pref=\"plat:pad-landscape\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-bubble",
@@ -891,18 +905,20 @@
     {
      "click": "[data-qa-pref=\"plat:pad-landscape\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-bubble",
    "prop": "width",
-   "truth": "mobile.geometry.padWidth",
+   "truth": "mobile.geometry.padPortraitWidth",
    "kind": "length",
    "via": [
     {
      "click": "[data-qa-pref=\"plat:pad-portrait\"]"
     }
-   ]
+   ],
+   "scaled": true
   },
   {
    "sel": ".db-bubble",
@@ -913,7 +929,8 @@
     {
      "click": "[data-qa-pref=\"plat:pad-portrait\"]"
     }
-   ]
+   ],
+   "scaled": true
   }
  ],
  "adaptive": {

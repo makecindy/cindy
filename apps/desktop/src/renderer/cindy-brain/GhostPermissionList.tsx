@@ -31,10 +31,9 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { cn } from '@/lib/utils';
 import type {
   GhostPermissionDiff,
@@ -143,10 +142,21 @@ export function GhostPermissionRows({ items }: { items: GhostPermissionItem[] })
 }
 
 /**
- * 工具说明由意识作者自由填写,往往是整段接口文档。安装确认只先报工具数量,
+ * 工具说明由意识作者自由填写,往往是整段接口文档。确认框只先报工具数量,
  * 用户主动展开后再显示原文,避免常规工具把真正需要留意的权限挤出屏幕。
+ *
+ * 装入(全量清单)与更新(权限 diff)共用这一个折叠壳:标题 key 与计数由调用方给,
+ * 行本身作为 children 传入 —— 更新分支的行带 added/removed 徽章,装入分支不带。
  */
-function GhostToolPermissionGroup({ items }: { items: GhostPermissionItem[] }) {
+function GhostToolPermissionGroup({
+  titleKey,
+  count,
+  children,
+}: {
+  titleKey: 'toolsGroup' | 'toolsDiffGroup';
+  count: number;
+  children: ReactNode;
+}) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
 
@@ -159,9 +169,9 @@ function GhostToolPermissionGroup({ items }: { items: GhostPermissionItem[] }) {
         className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-13 text-[var(--confirm-desc)]"
       >
         <Wrench size={14} className="shrink-0 text-[var(--text-tertiary)]" />
-        <span className="flex-1">{t('settings.ghosts.perm.toolsGroup')}</span>
+        <span className="flex-1">{t(`settings.ghosts.perm.${titleKey}`)}</span>
         <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 text-[var(--text-secondary)]">
-          {t('settings.ghosts.perm.itemCount', { count: items.length })}
+          {t('settings.ghosts.perm.itemCount', { count })}
         </span>
         <ChevronDown
           size={14}
@@ -172,9 +182,7 @@ function GhostToolPermissionGroup({ items }: { items: GhostPermissionItem[] }) {
         />
       </button>
       {expanded && (
-        <div className="border-t border-[var(--border-default)] px-3 py-2">
-          <GhostPermissionRows items={items} />
-        </div>
+        <div className="border-t border-[var(--border-default)] px-3 py-2">{children}</div>
       )}
     </div>
   );
@@ -200,7 +208,11 @@ export function GhostPermissionList({ items }: { items: GhostPermissionItem[] })
         <span>{t('settings.ghosts.perm.itemCount', { count: items.length })}</span>
       </div>
       <GhostPermissionRows items={beforeTools} />
-      {toolItems.length > 0 && <GhostToolPermissionGroup items={toolItems} />}
+      {toolItems.length > 0 && (
+        <GhostToolPermissionGroup titleKey="toolsGroup" count={toolItems.length}>
+          <GhostPermissionRows items={toolItems} />
+        </GhostToolPermissionGroup>
+      )}
       <GhostPermissionRows items={afterTools} />
     </div>
   );
@@ -243,8 +255,13 @@ export function GhostTrustSummary({ trust }: { trust: GhostTrustInfo }) {
 }
 
 /**
- * 安装确认的紧凑内容区:简介可折叠,作者/版本单列,详情只在弹窗内部滚动。
+ * 安装确认的紧凑内容区:简介可折叠,作者/版本单列。
  * 安全相关权限不做总折叠,避免为了短而牺牲知情确认。
+ *
+ * 限高与滚动不在这里:共享 ConfirmDialog 已经持有 max-h-[85vh] + 内部滚动区,
+ * 并在弹窗出现/内容变高时闪一下滚动条。本组件曾自带 min(56vh, 520px) 滚动容器,
+ * 那会与共享层套成两层限高(2026-07-27 收口删除)——只留一个滚动主体,
+ * "还能往下看"这件事才有唯一口径。
  */
 export function GhostInstallReview({
   description,
@@ -259,27 +276,12 @@ export function GhostInstallReview({
 }) {
   const { t } = useTranslation();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const canCollapseDescription = Boolean(
     description && (description.length > 160 || description.includes('\n')),
   );
 
-  const revealScrollbar = () => {
-    requestAnimationFrame(() => {
-      if (scrollRef.current) flashScrollbar(scrollRef.current);
-    });
-  };
-
-  // 初次出现以及展开介绍/工具后都短暂亮出滚动条,明确告诉用户内容还能往下看。
-  useEffect(revealScrollbar, []);
-
   return (
-    <div
-      ref={scrollRef}
-      className="overflow-y-auto overscroll-contain pr-1"
-      style={{ maxHeight: 'min(56vh, 520px)', scrollbarGutter: 'stable' }}
-      onClickCapture={revealScrollbar}
-    >
+    <div>
       {description && (
         <div>
           <p
@@ -317,7 +319,15 @@ export function GhostInstallReview({
   );
 }
 
-/** 更新确认:只展示权限变化(新增/移除),不变项折叠成一行计数。 */
+/**
+ * 更新确认:只展示权限变化(新增/移除),不变项折叠成一行计数。
+ *
+ * 工具行再折一层。原因是 diffGhostPermissionItems 会比对同一 key 的 detail:
+ * 作者只重写了工具说明,也算「移除旧行 + 新增新行」,N 个工具就产出 2N 行、
+ * 每行一整段接口文档。真正该被看见的权限变化(新增网络域名、新增凭证等)会被
+ * 顶到滚动区最上面、需要滚过一屏文档。所以 kind === 'tool' 的变化收进折叠组
+ * 只报数量,非 tool 的敏感变化仍旧直接亮出来。
+ */
 export function GhostPermissionDiffView({ diff }: { diff: GhostPermissionDiff }) {
   const { t } = useTranslation();
   const changed = diff.added.length > 0 || diff.removed.length > 0;
@@ -328,19 +338,63 @@ export function GhostPermissionDiffView({ diff }: { diff: GhostPermissionDiff })
       </div>
     );
   }
+  const isTool = (item: GhostPermissionItem) => item.kind === 'tool';
+  const addedSensitive = diff.added.filter((item) => !isTool(item));
+  const removedSensitive = diff.removed.filter((item) => !isTool(item));
+  const addedTools = diff.added.filter(isTool);
+  const removedTools = diff.removed.filter(isTool);
+  const toolChangeCount = addedTools.length + removedTools.length;
   return (
     <div>
-      {diff.added.map((item) => (
+      {addedSensitive.map((item) => (
         <PermRow key={`added:${item.key}`} item={item} badge="added" />
       ))}
-      {diff.removed.map((item) => (
+      {removedSensitive.map((item) => (
         <PermRow key={`removed:${item.key}`} item={item} badge="removed" />
       ))}
+      {toolChangeCount > 0 && (
+        <GhostToolPermissionGroup titleKey="toolsDiffGroup" count={toolChangeCount}>
+          {addedTools.map((item) => (
+            <PermRow key={`added:${item.key}`} item={item} badge="added" />
+          ))}
+          {removedTools.map((item) => (
+            <PermRow key={`removed:${item.key}`} item={item} badge="removed" />
+          ))}
+        </GhostToolPermissionGroup>
+      )}
       {diff.unchanged.length > 0 && (
         <div className="mt-1 text-12 text-[var(--text-tertiary)]">
           {t('settings.ghosts.perm.unchanged', { count: diff.unchanged.length })}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 更新确认的内容区:来源/签名摘要(可选)+ 权限 diff。
+ *
+ * 更新确认有两个入口 —— 本地 .cindy 换版走 installFlow.confirmAndRunUpdate,
+ * 市场更新走 GhostPluginPage.handleMarketUpdate。此前两边各写一遍 content,
+ * 市场那条还漏了 trust 卡。收成一个组件后,内容层的调整(如上面的工具折叠)
+ * 只改一处,不会再出现"第三个入口又漏一次"。
+ *
+ * trust 可选:市场路径当前拿不到与本地包同口径的 GhostTrustInfo,不传即不渲染
+ * 来源卡 —— 不许诺自己没验过的来源,也不拿假数据占位。
+ */
+export function GhostUpdateReview({
+  trust,
+  diff,
+}: {
+  trust?: GhostTrustInfo;
+  diff: GhostPermissionDiff;
+}) {
+  return (
+    <div>
+      {trust && <GhostTrustSummary trust={trust} />}
+      <div className={cn(trust && 'mt-3')}>
+        <GhostPermissionDiffView diff={diff} />
+      </div>
     </div>
   );
 }

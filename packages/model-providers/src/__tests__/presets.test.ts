@@ -221,6 +221,28 @@ describe('parseCatalog oauth 描述符校验', () => {
     ).toThrow(/redirectPort/);
   });
 
+  it('扩展参数不能覆盖 OAuth 标准字段', () => {
+    expect(() =>
+      parseCatalog(catalogWithAuth({
+        method: 'oauth',
+        oauth: { ...oauth, extraAuthParams: { state: 'fixed-state' } },
+      })),
+    ).toThrow(/cannot override 'state'/);
+    expect(() =>
+      parseCatalog(catalogWithAuth({
+        method: 'oauth',
+        oauth: {
+          flow: 'device-code',
+          deviceAuthorizationUrl: 'https://auth.acme.example/device',
+          tokenUrl: oauth.tokenUrl,
+          clientId: oauth.clientId,
+          scopes: oauth.scopes,
+          extraDeviceParams: { client_id: 'other-client' },
+        },
+      })),
+    ).toThrow(/cannot override 'client_id'/);
+  });
+
   it('不带描述符的 oauth 供应商（bespoke 现状）不受影响', () => {
     expect(() => parseCatalog(catalogWithAuth({ method: 'oauth' }))).not.toThrow();
   });

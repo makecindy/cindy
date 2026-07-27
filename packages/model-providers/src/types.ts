@@ -37,8 +37,9 @@ export type ProviderSource = 'builtin' | 'user';
  *  - oauth   : 走 OAuth 登录（Claude.ai 订阅 / Codex 订阅）
  *  - apiKey  : 用户手填 API key
  *  - managed : 由平台托管 / 自动下发（XD 网关 key 登录后自动同步）
+ *  - none    : 上游不要求客户端鉴权（本机 LiteLLM / Ollama 等受信代理）
  */
-export type AuthMethod = 'oauth' | 'apiKey' | 'managed';
+export type AuthMethod = 'oauth' | 'apiKey' | 'managed' | 'none';
 
 /**
  * 模型额度的来源（展示 / 产品语义），与 `auth` 的连接协议刻意分开：
@@ -62,26 +63,27 @@ export type ProviderAccess =
  *                         access_token 覆盖鉴权头（`Authorization: Bearer`）。与
  *                         oauth-passthrough 的区别：token 不来自 agent 二进制自带凭证，
  *                         而来自目录 `auth.oauth` 描述符驱动的登录（见 OAuthProviderDescriptor）。
+ *   - none              : 直连无需鉴权的受信上游；代理必须剥掉 agent 自带的鉴权与账号头，
+ *                         防把 Claude.ai / ChatGPT 订阅凭证泄漏给本地或自托管服务。
  */
 export type AuthStrategy =
   | 'oauth-passthrough'
   | 'provider-oauth-header'
   | 'api-key-header'
   | 'gateway-key'
-  | 'oauth-token';
+  | 'oauth-token'
+  | 'none';
 
 /**
  * 授权（OAuth）供应商描述符 —— 让「接一家标准 OAuth 供应商」退化成目录数据。
  *
- * 只承载**标准 authorization-code + PKCE** 形态的同构参数；深度定制（spawn CLI 登录、
- * auth.json reconcile、JWT claim 提头等）保持 host 侧 bespoke 实现，不进描述符（规则 9：
- * 确定性逻辑写代码，描述符只承载真正同构的部分）。host 的通用 OAuth Runner
- * （generic-oauth）消费本描述符完成：授权页拉起 → 回环回调 → token 交换 → safeStorage
- * 存储 → 单飞刷新；路由侧配合 `authStrategy: 'oauth-token'` 注入 Bearer。
+ * 承载标准 authorization-code + PKCE 或 OAuth 2.0 Device Authorization Grant 的同构参数；
+ * 深度定制（spawn CLI 登录、auth.json reconcile、JWT claim 提头等）保持 host 侧 bespoke
+ * 实现，不进描述符（规则 9：确定性逻辑写代码，描述符只承载真正同构的部分）。host 的
+ * 通用 OAuth Runner（generic-oauth）消费本描述符完成授权、safeStorage 存储与单飞刷新；
+ * 路由侧配合 `authStrategy: 'oauth-token'` 注入 Bearer。
  */
-export interface OAuthProviderDescriptor {
-  /** 授权端点（authorization_endpoint）。 */
-  authorizeUrl: string;
+interface OAuthProviderDescriptorBase {
   /** token 交换端点（token_endpoint，form-encoded POST）。 */
   tokenUrl: string;
   /** OAuth client id（公共客户端，PKCE 保护，无 secret）。 */
@@ -89,19 +91,43 @@ export interface OAuthProviderDescriptor {
   /** 请求的 scopes（空格分隔）。 */
   scopes: string;
   /**
-   * 回环回调端口。多数供应商注册的 redirect_uri 是固定端口
-   * （`http://127.0.0.1:<port>/callback`）；缺省 = 随机高位端口（供应商允许通配端口时用）。
-   */
-  redirectPort?: number;
-  /** 追加到授权 URL 的额外 query 参数（如厂商自定义的 plan / referrer）。 */
-  extraAuthParams?: Record<string, string>;
-  /**
    * 动态模型发现端点（可选）。登录成功后 host 带 Bearer GET 此 URL，响应按 OpenAI
    * `GET /models` 形状（`{data:[{id}]}` 或 `{models:[...]}`）解析，additions-only
    * merge 进 active-catalog（静态条目 first-wins，发现条目只增不改删）。
    */
   modelsDiscoveryUrl?: string;
 }
+
+export interface OAuthAuthorizationCodeDescriptor extends OAuthProviderDescriptorBase {
+  /** 缺省保持历史目录兼容；等价于 `authorization-code`。 */
+  flow?: 'authorization-code';
+  /** 授权端点（authorization_endpoint）。 */
+  authorizeUrl: string;
+  /**
+   * 回环回调端口。多数供应商注册的 redirect_uri 是固定端口
+   * （`http://127.0.0.1:<port>/callback`）；缺省 = 随机高位端口（供应商允许通配端口时用）。
+   */
+  redirectPort?: number;
+  /** 追加到授权 URL 的额外 query 参数（如厂商自定义的 plan / referrer）。 */
+  extraAuthParams?: Record<string, string>;
+  deviceAuthorizationUrl?: never;
+  extraDeviceParams?: never;
+}
+
+export interface OAuthDeviceCodeDescriptor extends OAuthProviderDescriptorBase {
+  flow: 'device-code';
+  /** 申请 device_code / user_code 的端点（device_authorization_endpoint）。 */
+  deviceAuthorizationUrl: string;
+  /** 追加到设备授权 POST body 的厂商参数。 */
+  extraDeviceParams?: Record<string, string>;
+  authorizeUrl?: never;
+  redirectPort?: never;
+  extraAuthParams?: never;
+}
+
+export type OAuthProviderDescriptor =
+  | OAuthAuthorizationCodeDescriptor
+  | OAuthDeviceCodeDescriptor;
 
 /**
  * 路由描述符（per provider × runtime）。喂给 host 侧通用路由器，决定请求的
@@ -115,6 +141,14 @@ export interface RoutingDescriptor {
   wireProtocol?: ProviderWireProtocol;
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
   upstream: string;
+  /**
+   * 推理请求的精确相对路径（可选，必须以单个 `/` 开头）。
+   *
+   * 缺省时沿用 agent 发来的标准路径（Claude `/v1/messages`、Codex `/responses`）；
+   * 提供后只覆盖带 model 的推理请求，GET `/models` 等控制面请求不受影响。
+   * `openai-chat` 本地桥也消费同一字段，替代缺省 `/chat/completions`。
+   */
+  requestPath?: string;
   /** 鉴权策略（见 AuthStrategy）。 */
   authStrategy: AuthStrategy;
   /** 转发上游前还原 model id（如剥掉 `codex/` 前缀）。缺省 = 原样。 */
@@ -330,6 +364,8 @@ export interface ProviderPresetRuntime {
   wireProtocol?: ProviderWireProtocol;
   /** 该 runtime 的兼容端点 base URL（cc=Anthropic 兼容 / codex=OpenAI Responses 兼容）。 */
   baseUrl: string;
+  /** 非标准推理端点的相对路径；缺省由 wire protocol 推导。 */
+  requestPath?: string;
   /** 推荐模型清单（预填进表单，用户可增删改）。 */
   models: ProviderRuntimeModelConfig[];
   /** 可选预填请求头。 */
@@ -340,6 +376,11 @@ export interface ProviderPresetRuntime {
    * `…/anthropic`，但列模型接口只在 `https://api.moonshot.cn/v1/models`（同一 key 可用）。
    */
   modelsUrl?: string;
+  /**
+   * 允许添加向导编辑预填 base URL。仅用于本机 / 自托管网关类预设；普通官方渠道保持只读，
+   * 防用户无意改坏已核验端点。
+   */
+  baseUrlEditable?: boolean;
 }
 
 /**
@@ -370,6 +411,11 @@ export interface ProviderPreset {
    * （单端点全球服务的厂商，如 OpenRouter / DeepSeek），排序时居中。
    */
   regionHint?: 'cn' | 'global';
+  /**
+   * 预设的鉴权形态。缺省 = API key；`none` 用于明确不要求客户端凭证的本机 / 自托管代理。
+   * 创建后会快照进 CustomProviderConfig，不随预设后续更新。
+   */
+  authMethod?: 'apiKey' | 'none';
   /** per-runtime 预填数据（至少一个）。 */
   runtimes: Partial<Record<AgentKind, ProviderPresetRuntime>>;
 }
@@ -409,6 +455,8 @@ export interface CustomProviderRuntimeConfig {
   wireProtocol?: ProviderWireProtocol;
   /** 该 runtime 的兼容上游 base URL（cc=Anthropic 端点 / codex=OpenAI 端点）。 */
   baseUrl: string;
+  /** 非标准推理端点的相对路径；缺省由 wire protocol 推导。 */
+  requestPath?: string;
   /** 用户模型；contextWindow 可由预设带入，缺省时由 `buildUserProvider` 补保守默认。 */
   models: ProviderRuntimeModelConfig[];
   /** 可选自定义请求头（非密钥鉴权头可放这里；API key 走 safeStorage，不放这里）。 */
@@ -445,7 +493,10 @@ export interface CustomProviderConfig {
    * 登录（凭证存 safeStorage `provider_oauth_<id>`），路由用 `oauth-token` 策略注入
    * Bearer；此形态下不再使用 per-runtime API key。
    */
-  auth?: { method: 'apiKey' | 'oauth'; oauth?: OAuthProviderDescriptor };
+  auth?:
+    | { method: 'apiKey'; oauth?: never }
+    | { method: 'oauth'; oauth: OAuthProviderDescriptor }
+    | { method: 'none'; oauth?: never };
   /** per-runtime 独立配置（键为 agent，只含已配置的 runtime；至少一个）。 */
   runtimes: Partial<Record<AgentKind, CustomProviderRuntimeConfig>>;
 }

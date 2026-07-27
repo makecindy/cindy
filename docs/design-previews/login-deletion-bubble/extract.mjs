@@ -73,27 +73,50 @@ function extractRegisterColor(src, name) {
 /* ══ desktop ══ */
 const P = {
   loginPage: 'apps/desktop/src/renderer/components/login/LoginPage.tsx',
+  designTokens: 'apps/desktop/src/renderer/components/login/loginDesignTokens.ts',
+  loginScale: 'apps/desktop/src/renderer/components/login/loginScale.ts',
   colors: 'apps/desktop/src/renderer/themes/colors.ts',
   commonJson: (loc) => `apps/desktop/src/renderer/i18n/locales/${loc}/common.json`,
 };
 const loginPageSrc = readSrc(P.loginPage);
 const colorsSrc = readSrc(P.colors);
 
-// 结构事实:气泡 class 串(浮层定位/尺寸/颜色 token 消费)
-const bubbleClassM = /className="(absolute left-1\/2 top-\[72px\] z-30 w-\[min\(670px,calc\(100vw-48px\)\)\] -translate-x-1\/2 break-words rounded-\[22px\] border border-\[var\(--login-deletion-bubble-border\)\] bg-\[var\(--login-deletion-bubble-bg\)\] p-5 text-center)"/.exec(loginPageSrc);
+// 结构事实:定位/缩放 wrapper(设计单位 × PANEL_FIXED_SCALE)+ 气泡本体 class
+const bubbleWrapM = /data-testid="login-deletion-bubble-scale"\s*\n\s*className="(absolute left-1\/2 z-30)"/.exec(loginPageSrc);
+if (!bubbleWrapM) throw new Error('desktop 气泡缩放 wrapper(data-testid + className)未命中(源码已变?)');
+const bubbleClassM = /className="(w-full break-words border border-\[var\(--login-deletion-bubble-border\)\] bg-\[var\(--login-deletion-bubble-bg\)\] text-center)"/.exec(loginPageSrc);
 if (!bubbleClassM) throw new Error('desktop 气泡 section className 未命中(源码已变?)');
-const bubbleTitleClassM = /<h2 className="(text-\[20px\] font-normal leading-\[23px\] text-\[var\(--login-control-text\)\])"/.exec(loginPageSrc);
-const bubbleCopyClassM = /<p className="(mt-\[5px\] text-\[20px\] font-normal leading-\[23px\] text-\[var\(--login-secondary-text\)\])"/.exec(loginPageSrc);
-if (!bubbleTitleClassM || !bubbleCopyClassM) throw new Error('desktop 气泡标题/正文 className 未命中');
+// wrapper 的定位/缩放全部由 LOGIN_DELETION_BUBBLE × PANEL_FIXED_SCALE 计算,断言表达式在位
+for (const expr of [
+  'top: B.top * PANEL_FIXED_SCALE',
+  'transform: `translateX(-50%) scale(${PANEL_FIXED_SCALE})`',
+  "transformOrigin: 'top center'",
+]) {
+  if (!loginPageSrc.includes(expr)) throw new Error(`desktop 气泡 wrapper 缺表达式:${expr}`);
+}
+// 内部几何消费设计常量(不再是 CSS px 字面量 class)
+for (const expr of ['borderRadius: B.radius', 'padding: B.padding', 'fontSize: B.font', 'marginTop: B.titleBodyGap']) {
+  if (!loginPageSrc.includes(expr)) throw new Error(`desktop 气泡内部几何缺表达式:${expr}`);
+}
+const deskTokensSrc = readSrc(P.designTokens);
+const deskScaleSrc = readSrc(P.loginScale);
+const deskBubbleObj = extractConstObject(deskTokensSrc, 'LOGIN_DELETION_BUBBLE');
+const panelFixedScale = Number(/PANEL_FIXED_SCALE\s*=\s*([\d.]+)/.exec(deskScaleSrc)[1]);
+if (!(panelFixedScale > 0 && panelFixedScale <= 1)) throw new Error('PANEL_FIXED_SCALE 提取异常');
 // 渲染位置结构事实:气泡在 </LoginStage> 之后(根层,不在 stage 文档流)
 const renderPosM = /<\/LoginStage>\s*\{\/\* 注销状态提示气泡[\s\S]{0,400}?<AccountDeletionStatusPanel/.exec(loginPageSrc);
 if (!renderPosM) throw new Error('desktop 气泡根层渲染位置(</LoginStage> 之后)未命中');
 // completed 才传 onDismiss(结构事实,沿用旧逻辑未改动)
 const dismissGateM = /accountDeletionStatus\.status === 'completed'\s*\?\s*\(\) =>/.exec(loginPageSrc);
 if (!dismissGateM) throw new Error('desktop dismiss 仅 completed 结构未命中');
-// 「我知道了」热区扩张 class(mt-11 -mb-11 py-11 视觉间距 22/20)
-const dismissClassM = /'(mt-\[11px\] -mb-\[11px\] border-0 bg-transparent px-3 py-\[11px\])',/.exec(loginPageSrc);
-if (!dismissClassM) throw new Error('desktop dismiss 热区扩张 className 未命中');
+// 「我知道了」热区:上下 linkHitPadding 撑开 + 等量负 margin 抵消(设计单位,随 wrapper 缩放)
+for (const expr of [
+  'marginTop: B.bodyLinkGap - B.linkHitPadding',
+  'marginBottom: -B.linkHitPadding',
+  'paddingTop: B.linkHitPadding',
+]) {
+  if (!loginPageSrc.includes(expr)) throw new Error(`desktop dismiss 热区缺表达式:${expr}`);
+}
 
 // 颜色 token:固定值(login skin 不随扩展主题,Fix A——弃用 var 链 alias,
 // 与 mobile loginPalettes.deletionBubbleBg/Border 逐值一致)
@@ -152,12 +175,26 @@ if (!mBubbleStyleBlock || !/position: 'absolute'/.test(mBubbleStyleBlock[1]))
   throw new Error('mobile deletionBubble 样式块 position:absolute 未命中');
 if (/shadow|elevation|height:/.test(mBubbleStyleBlock[1]))
   throw new Error('mobile deletionBubble 出现了 shadow/elevation/固定高——规格前提变化,需复核');
-const mFrameInjectM = /\{ left: frame\.left, top: frame\.top, width: frame\.width \}/.exec(mLoginSrc);
-if (!mFrameInjectM) throw new Error('mobile 气泡 frame 行内注入(left/top/width)未命中');
+for (const expr of ['left: frame.left', 'top: frame.top', 'width: frame.width']) {
+  if (!mLoginSrc.includes(expr)) throw new Error(`mobile 气泡 frame 行内注入缺 ${expr}`);
+}
+// 内部几何按 frame.scale 折算(设计单位 → 物理 pt),不再写死物理值
+for (const expr of [
+  'const scaled = (designUnits: number) => designUnits * frame.scale',
+  'borderRadius: scaled(B.radius)',
+  'padding: scaled(B.padding)',
+  'fontSize: scaled(B.font)',
+  'lineHeight: scaled(B.lineHeight)',
+]) {
+  if (!mLoginSrc.includes(expr)) throw new Error(`mobile 气泡缺缩放表达式:${expr}`);
+}
 const mResolveCallM = /resolveDeletionBubbleFrame\(stage, insets\.top\)/.exec(mLoginSrc);
 if (!mResolveCallM) throw new Error('mobile resolveDeletionBubbleFrame(stage, insets.top) 调用未命中');
-const mHitSlopM = /hitSlop=\{LOGIN_DELETION_BUBBLE\.linkHitSlop\}/.exec(mLoginSrc);
-if (!mHitSlopM) throw new Error('mobile dismiss hitSlop 未命中');
+if (!/hitSlop=\{resolveDeletionBubbleLinkHitSlop\(frame\.scale\)\}/.test(mLoginSrc))
+  throw new Error('mobile dismiss hitSlop(resolveDeletionBubbleLinkHitSlop)未命中');
+// 热区钳制函数结构断言:上=min(18, bodyLinkGap×scale)、下=min(18, padding×scale)
+if (!/top: Math\.min\(18, bodyLinkGap \* scale\)/.test(mSkinSrc) || !/bottom: Math\.min\(18, padding \* scale\)/.test(mSkinSrc))
+  throw new Error('resolveDeletionBubbleLinkHitSlop 钳制公式未命中');
 // 入场门(PR #464 review):Animated.View opacity=panelEntrance.opacity + pointerEvents 仅 done。
 // 按 opening tag 整段取(容纳后续追加的属性/注释,如 Android 无障碍隐藏),再逐项断言,
 // 避免属性顺序或新增属性把单条长正则打断。
@@ -252,12 +289,22 @@ const truth = {
       renderPosition: leaf('LoginPage 根层(</LoginStage> 之后),不在 stage 文档流;absolute z-30 浮层', P.loginPage, 'LoginPage.tsx </LoginStage> 之后的 AccountDeletionStatusPanel 渲染点'),
       dismissGate: leaf("仅 completed 态传入 onDismiss(「我知道了」);pending/processing 无按钮", P.loginPage, "LoginPage.tsx accountDeletionStatus.status === 'completed' ? onDismiss : undefined"),
       bubbleClass: leaf(bubbleClassM[1], P.loginPage, 'AccountDeletionStatusPanel section className 全串'),
-      dismissHitArea: leaf('mt-[11px]+py-[11px](视觉 22)+-mb-[11px](视觉底 20);热区 11+23+11=45≥44', P.loginPage, `dismiss className="${dismissClassM[1]}"`),
+      wrapperClass: leaf(bubbleWrapM[1], P.loginPage, 'wrapper(定位+缩放层)className,几何走 inline style'),
+      scaleContract: leaf(
+        `几何为设计单位,wrapper 施加 translateX(-50%) scale(${panelFixedScale}) + transformOrigin top center;渲染值 = 设计单位 × ${panelFixedScale}(宽 ${numField(deskBubbleObj, 'width') * panelFixedScale} / 顶距 ${numField(deskBubbleObj, 'top') * panelFixedScale} CSS px)`,
+        P.loginPage,
+        'wrapper style: top/width/transform/transformOrigin',
+      ),
+      dismissHitArea: leaf(
+        `上下各 ${numField(deskBubbleObj, 'linkHitPadding')} 设计单位 padding 撑热区 + 等量负 margin 抵消(视觉间距仍 上 ${numField(deskBubbleObj, 'bodyLinkGap')} / 下 ${numField(deskBubbleObj, 'padding')});缩放后约 ${(numField(deskBubbleObj, 'lineHeight') + 2 * numField(deskBubbleObj, 'linkHitPadding')) * panelFixedScale} CSS px 高(桌面鼠标指针)`,
+        P.loginPage,
+        'dismiss inline style marginTop/marginBottom/paddingTop/paddingBottom',
+      ),
     },
     mobile: {
       renderPosition: leaf('position:absolute,left/top/width 由 resolveDeletionBubbleFrame(stage, insets.top) 行内注入;不参与布局流', M.loginTsx, 'login.tsx:1140-1197 deletionBubbleFrame + AccountDeletionStatusPanel frame prop'),
       styleFacts: leaf('不透明底+1px 描边;无 shadow/elevation/固定高(样式块守护断言)', M.loginTsx, 'login.tsx:1439-1449 makeStyles.deletionBubble'),
-      dismissHitSlop: leaf('hitSlop {top:12,bottom:12,left:20,right:20} → 热区 47≥44', M.loginTsx, 'login.tsx hitSlop={LOGIN_DELETION_BUBBLE.linkHitSlop}'),
+      dismissHitSlop: leaf("hitSlop 按气泡内可用空间钳制:top=min(18, bodyLinkGap×scale)、bottom=min(18, padding×scale)、左右 20——RN hitSlop 不越父边界,虚标无效(PR #494 codex);热区随整个登录 stage 同步缩放(320pt 窗口下主按钮本身 ≈34pt),不追未缩放 44pt 绝对值", M.skinLayout, 'resolveDeletionBubbleLinkHitSlop(scale)'),
       dismissGate: leaf('仅 completed 态渲染 dismiss Pressable(onDismiss 仅 completed 传入)', M.loginTsx, 'login.tsx:1315-1327 {onDismiss ? <Pressable/> : null}'),
       entranceGate: leaf("Animated.View 包装:opacity=panelEntrance.opacity(与登录组同一 Animated 值);pointerEvents 仅 handoffPhase==='done' 放行且取 box-none(全屏包装层不作触摸目标,避免挡住下方登录组命中;入场完成前 none = 不可见不可点)(PR #464 review)", M.loginTsx, 'login.tsx 气泡渲染点 Animated.View pointerEvents/style'),
       a11yModalGate: leaf("气泡对读屏隐藏 = 协议弹窗打开 || 入场未完成;iOS accessibilityElementsHidden + Android importantForAccessibility 双端都给(opacity/pointerEvents 不影响读屏,不隐藏则会念出不可见的注销状态)(PR #464 codex)", M.loginTsx, 'login.tsx 气泡渲染点 Animated.View importantForAccessibility'),
@@ -265,16 +312,29 @@ const truth = {
   },
   desktop: {
     geometry: leafFields(
-      { top: 72, width: 670, widthClamp: 'min(670px, calc(100vw - 48px))', radius: 22, padding: 20, borderWidth: 1, fontSize: 20, lineHeight: 23, fontWeight: 400, titleBodyGap: 5, bodyLinkGap: 22, linkBottomGap: 20, linkHitHeight: 45, zIndex: 30 },
-      P.loginPage,
-      'AccountDeletionStatusPanel(tailwind 类)',
       {
-        top: 'top-[72px]', width: 'w-[min(670px,…)] 的 670', widthClamp: 'w-[min(670px,calc(100vw-48px))]',
-        radius: 'rounded-[22px]', padding: 'p-5=20', borderWidth: 'border=1',
-        fontSize: 'text-[20px]', lineHeight: 'leading-[23px]', fontWeight: 'font-normal=400',
-        titleBodyGap: '正文 mt-[5px]', bodyLinkGap: 'mt-[11px]+py-[11px] 视觉 22',
-        linkBottomGap: '-mb-[11px]+p-5 视觉 20(拍板固定底距)', linkHitHeight: 'py 11×2+23=45',
-        zIndex: 'z-30',
+        // 设计单位(1819×2098 的 2x 稿);渲染值 = 设计单位 × scale
+        scale: panelFixedScale,
+        top: numField(deskBubbleObj, 'top'),
+        width: numField(deskBubbleObj, 'width'),
+        radius: numField(deskBubbleObj, 'radius'),
+        padding: numField(deskBubbleObj, 'padding'),
+        fontSize: numField(deskBubbleObj, 'font'),
+        lineHeight: numField(deskBubbleObj, 'lineHeight'),
+        titleBodyGap: numField(deskBubbleObj, 'titleBodyGap'),
+        bodyLinkGap: numField(deskBubbleObj, 'bodyLinkGap'),
+        linkHitPadding: numField(deskBubbleObj, 'linkHitPadding'),
+        borderWidth: 1,
+        fontWeight: 400,
+        zIndex: 30,
+      },
+      P.designTokens,
+      'LOGIN_DELETION_BUBBLE(设计单位)',
+      {
+        scale: `loginScale.ts PANEL_FIXED_SCALE=${panelFixedScale}(面板恒定缩放,气泡同乘)`,
+        borderWidth: 'LoginPage.tsx section style borderWidth=1/PANEL_FIXED_SCALE 设计单位(缩放补偿,渲染恰 1 物理 px;DESIGN.md §16.4)',
+        fontWeight: 'LoginPage.tsx font-normal=400',
+        zIndex: 'LoginPage.tsx wrapper z-30',
       },
     ),
     colors: {
@@ -316,26 +376,29 @@ const truth = {
         lineHeight: copyLineHeight,
         titleBodyGap: numField(mBubbleObj, 'titleBodyGap'),
         bodyLinkGap: numField(mBubbleObj, 'bodyLinkGap'),
-        hitSlopTop: 12,
-        hitSlopBottom: 12,
-        hitSlopX: 20,
-        sideMargin: numField(mBubbleObj, 'sideMargin'),
-        phoneMaxWidth: 335,
-        padWidth: 556,
+        // hitSlop 名义上限(物理 pt;实际上/下按气泡内可用空间钳制,见 hitSlopRule)
+        linkHitSlopMax: 18,
+        linkHitSlopX: 20,
+        // 各端落位(stage 设计单位)
+        phoneWidth: numField(mBubbleObj, 'width'),
+        phoneX: numField(mBubbleObj, 'x'),
+        padLandscapeWidth: 556,
+        padLandscapeX: 607,
+        padPortraitWidth: 504,
         padTop: 72,
-        padLandscapeCenterRatio: 0.75,
       },
       M.skinLayout,
-      'LOGIN_DELETION_BUBBLE',
+      'LOGIN_DELETION_BUBBLE(stage 设计单位)',
       {
         lineHeight: 'LOGIN_DELETION_BUBBLE.lineHeight=LOGIN_COPY_LINE_HEIGHT',
-        hitSlopTop: 'LOGIN_DELETION_BUBBLE.linkHitSlop.top',
-        hitSlopBottom: 'LOGIN_DELETION_BUBBLE.linkHitSlop.bottom',
-        hitSlopX: 'LOGIN_DELETION_BUBBLE.linkHitSlop.left/right',
-        phoneMaxWidth: 'LOGIN_DELETION_BUBBLE.phone.maxWidth',
-        padWidth: 'LOGIN_DELETION_BUBBLE.pad.width',
-        padTop: 'LOGIN_DELETION_BUBBLE.pad.top',
-        padLandscapeCenterRatio: 'LOGIN_DELETION_BUBBLE.pad.landscapeCenterRatio',
+        linkHitSlopMax: 'resolveDeletionBubbleLinkHitSlop 的 18 上限(物理 pt)',
+        linkHitSlopX: 'resolveDeletionBubbleLinkHitSlop left/right=20(物理 pt)',
+        phoneWidth: 'LOGIN_DELETION_BUBBLE.phone.width',
+        phoneX: 'LOGIN_DELETION_BUBBLE.phone.x',
+        padLandscapeWidth: 'LOGIN_DELETION_BUBBLE.padLandscape.width(= WORD_MARK 框宽)',
+        padLandscapeX: 'LOGIN_DELETION_BUBBLE.padLandscape.x',
+        padPortraitWidth: 'LOGIN_DELETION_BUBBLE.padPortrait.width',
+        padTop: 'LOGIN_DELETION_BUBBLE.padLandscape.top / padPortrait.top',
       },
     ),
     colors: (() => {
@@ -350,6 +413,7 @@ const truth = {
     })(),
     surface: leafFields(
       {
+        phoneStageWidth: mStageWidth,
         padLandscapeMinWidth: padLandscapeMinW,
         padLandscapeMinHeight: padLandscapeMinH,
         padPortraitMinWidth: padPortraitMinW,

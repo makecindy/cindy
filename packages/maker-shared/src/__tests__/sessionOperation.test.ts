@@ -13,8 +13,10 @@ describe('shared session operation model', () => {
     })).toEqual({
       canUseComposer: false,
       composerDisabledReason: '当前会话还没有同步完成。',
+      composerDisabledReasonSource: 'session-syncing',
       composerSlot: 'missing-session',
       messageHistoryMode: 'hidden',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: false,
     });
@@ -26,8 +28,10 @@ describe('shared session operation model', () => {
     })).toEqual({
       canUseComposer: false,
       composerDisabledReason: '网络或被控端暂时不可用，可以稍后重新同步。',
+      composerDisabledReasonSource: 'caller-provided',
       composerSlot: 'editable',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: false,
     });
@@ -38,9 +42,11 @@ describe('shared session operation model', () => {
       readOnlyReason: '协作模式手机版第一版为只读安全降级。',
     })).toEqual({
       canUseComposer: false,
-      composerDisabledReason: '先处理当前授权或提问后才能继续输入。',
+      composerDisabledReason: '先处理电脑端的待处理请求后才能继续输入。',
+      composerDisabledReasonSource: 'pending-interaction',
       composerSlot: 'pending-interaction',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'composer',
       showPendingInteraction: true,
       showQueue: false,
     });
@@ -52,8 +58,10 @@ describe('shared session operation model', () => {
     })).toMatchObject({
       canUseComposer: false,
       composerDisabledReason: '协作模式手机版第一版为只读安全降级。',
+      composerDisabledReasonSource: 'caller-provided',
       composerSlot: 'read-only',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showQueue: true,
     });
 
@@ -63,8 +71,10 @@ describe('shared session operation model', () => {
     })).toEqual({
       canUseComposer: true,
       composerDisabledReason: null,
+      composerDisabledReasonSource: null,
       composerSlot: 'editable',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: true,
     });

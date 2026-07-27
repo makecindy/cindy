@@ -63,6 +63,19 @@ describe('buildUserProvider (per-runtime)', () => {
     });
   });
 
+  it('preserves a non-standard inference request path in routing', () => {
+    const p = buildUserProvider({
+      ...codexOnly,
+      runtimes: {
+        codex: {
+          ...codexOnly.runtimes.codex!,
+          requestPath: '/tenant/acme/v2/infer?stream=1',
+        },
+      },
+    });
+    expect(p.routing.codex?.requestPath).toBe('/tenant/acme/v2/infer?stream=1');
+  });
+
   it('maps models per runtime with conservative default metadata', () => {
     const p = buildUserProvider(codexOnly);
     const models = p.models.codex ?? [];
@@ -146,6 +159,23 @@ describe('buildUserProvider (per-runtime)', () => {
     expect(p.auth).toMatchObject({ method: 'oauth' });
     expect(p.access).toBeUndefined();
     expect(p.routing.codex?.authStrategy).toBe('oauth-token');
+  });
+
+  it('maps an explicit no-auth proxy without falling back to API-key routing', () => {
+    const p = buildUserProvider({
+      ...codexOnly,
+      id: 'litellm-proxy',
+      auth: { method: 'none' },
+      runtimes: {
+        codex: {
+          baseUrl: 'http://127.0.0.1:4000/v1',
+          models: [{ id: 'local-model', name: 'Local model' }],
+        },
+      },
+    });
+    expect(p.auth).toEqual({ method: 'none' });
+    expect(p.access).toEqual({ kind: 'api' });
+    expect(p.routing.codex?.authStrategy).toBe('none');
   });
 
   it('supports two runtimes with independent baseUrl + models, stable agent order', () => {

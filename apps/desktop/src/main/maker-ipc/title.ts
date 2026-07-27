@@ -29,8 +29,15 @@ import {
   type RegenerateTitleMaterial,
 } from '../localDb/latestMessageText.js';
 import { createLogger } from '../logger.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 
 import { MAKER_INVOKE } from './channels.js';
+import {
+  runSessionAutoTitle,
+  type SessionAutoTitleRequest,
+  type SessionAutoTitleResult,
+} from './sessionAutoTitle.js';
 
 const log = createLogger('maker-ipc/title');
 
@@ -192,6 +199,41 @@ export async function regenerateMakerSessionTitle(
   }
 }
 
+/** 起名素材上限:超出部分对标题毫无价值,只会放大 prompt 与落库开销。 */
+const AUTO_TITLE_TEXT_MAX = 2000;
+/** sessionId 长度上限(UUID / cuid 都远小于此)。 */
+const SESSION_ID_MAX = 128;
+
+/**
+ * 运行期校验 `maker:auto-title` 的 payload。结构、长度、枚举值不合法一律按
+ * INVALID_PARAMS 拒绝,不让畸形值进到会改写标题 / 调用付费模型的副作用路径。
+ */
+function parseAutoTitleRequest(raw: unknown): SessionAutoTitleRequest {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throwIpcError('INVALID_PARAMS', 'auto-title request required');
+  }
+  const { sessionId, text, agentKind, isUserText } = raw as Record<string, unknown>;
+  if (typeof sessionId !== 'string' || !sessionId || sessionId.length > SESSION_ID_MAX) {
+    throwIpcError('INVALID_PARAMS', 'invalid sessionId');
+  }
+  if (typeof text !== 'string') {
+    throwIpcError('INVALID_PARAMS', 'invalid text');
+  }
+  if (agentKind !== 'claude-code' && agentKind !== 'codex') {
+    throwIpcError('INVALID_PARAMS', 'invalid agentKind');
+  }
+  if (isUserText !== undefined && typeof isUserText !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'invalid isUserText');
+  }
+  return {
+    sessionId,
+    // 截断而非拒绝:超长正文是正常输入,标题只需要开头一小段。
+    text: (text as string).slice(0, AUTO_TITLE_TEXT_MAX),
+    agentKind,
+    ...(isUserText === undefined ? {} : { isUserText }),
+  };
+}
+
 export function registerMakerTitleIpc(): void {
   ipcMain.handle(
     MAKER_INVOKE.GENERATE_TITLE,
@@ -209,6 +251,20 @@ export function registerMakerTitleIpc(): void {
       { sessionId }: { sessionId: string },
     ): Promise<{ title: string | null }> => {
       return { title: await regenerateMakerSessionTitle(sessionId) };
+    },
+  );
+  // 自动起名:renderer 只负责给素材,占位/条件写/归属表全在 main(单一真相源)。
+  // 本 handler 会改写会话标题并可能触发一次付费模型调用,属于新增特权入口 ——
+  // 按 electron-security-and-process-boundaries §5 做 sender 断言 + 运行期 payload
+  // 校验,不把 Renderer 传来的 sessionId / text 视为已授权(TS 类型不是运行期校验)。
+  ipcMain.handle(
+    MAKER_INVOKE.AUTO_TITLE,
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      request: unknown,
+    ): Promise<SessionAutoTitleResult> => {
+      assertTrustedAppRendererEvent(event);
+      return runSessionAutoTitle(parseAutoTitleRequest(request));
     },
   );
 }

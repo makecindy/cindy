@@ -12,11 +12,7 @@ import {
   type InstalledGhost,
 } from '../../shared/ghost';
 import { openGhostTabInSidebar } from '../features/right-sidebar/lib/openGhostTabInSidebar';
-import {
-  GhostInstallReview,
-  GhostPermissionDiffView,
-  GhostTrustSummary,
-} from './GhostPermissionList';
+import { GhostInstallReview, GhostUpdateReview } from './GhostPermissionList';
 import { ghostInstallErrorKey } from './installErrorKey';
 
 /**
@@ -102,14 +98,7 @@ async function confirmAndRunUpdate(
       from: installed.manifest.version,
       to: manifest.version,
     }),
-    content: (
-      <div>
-        <GhostTrustSummary trust={trust} />
-        <div className="mt-3">
-          <GhostPermissionDiffView diff={diff} />
-        </div>
-      </div>
-    ),
+    content: <GhostUpdateReview trust={trust} diff={diff} />,
     maxWidth: GHOST_CONFIRM_MAX_WIDTH,
     confirmText: t('settings.ghosts.updateConfirm.confirm'),
     cancelText: t('settings.ghosts.updateConfirm.cancel'),

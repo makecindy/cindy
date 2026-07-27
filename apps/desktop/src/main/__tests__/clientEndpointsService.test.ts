@@ -4,6 +4,8 @@
  * 校验语义(缺省字段归一/协议白名单/allowHttp)在 @cindy/maker-shared 侧已覆盖;
  * 这里只测 desktop 宿主层:清单来源解析(resolveEndpointSource 表驱动)、
  * 阻断式重试循环(失败 → prompt → 重试/退出,无静默降级、无烘焙合并)、
+ * 弹框前的网络层自动重试(mac 首装瞬时失败自愈;配置事故不消耗预算)、
+ * 失败 reason 带错误码、
  * file 模式的 allowHttp 放行、init 前 getter 抛错(启动时序守卫)、sendSync IPC 形状。
  */
 import path from 'node:path';
@@ -32,6 +34,7 @@ import {
   resolveClientEndpointsBlocking,
   resolveEndpointSource,
   CLIENT_ENDPOINTS_SYNC_CHANNEL,
+  type BlockingResolveDeps,
 } from '../clientEndpointsService';
 
 afterEach(() => {
@@ -116,11 +119,17 @@ describe('resolveEndpointSource(清单来源三选一)', () => {
   });
 });
 
+/** 自动重试预算关掉的公共 deps 片段(测"一轮一次尝试"的原语义)。 */
+const NO_AUTO_RETRY = { autoRetryDelaysMs: [] as readonly number[] };
+
+const okFetch = (text: string) => async () => ({ ok: true as const, text });
+const failFetch = (detail: string) => async () => ({ ok: false as const, detail });
+
 describe('resolveClientEndpointsBlocking(阻断循环,清单即唯一事实源)', () => {
   it('首次成功:不进 prompt,所有值来自清单', async () => {
     const promptRetry = vi.fn();
     const result = await resolveClientEndpointsBlocking({
-      fetchManifestText: async () => FULL_MANIFEST,
+      fetchManifest: okFetch(FULL_MANIFEST),
       promptRetry,
       exitApp: vi.fn(),
     });
@@ -130,20 +139,21 @@ describe('resolveClientEndpointsBlocking(阻断循环,清单即唯一事实源)'
   });
 
   it('失败 → prompt 选重试 → 第二次成功(无静默降级)', async () => {
-    const fetchManifestText = vi
-      .fn<(timeoutMs: number) => Promise<string | null>>()
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(FULL_MANIFEST);
+    const fetchManifest = vi
+      .fn<BlockingResolveDeps['fetchManifest']>()
+      .mockResolvedValueOnce({ ok: false, detail: 'ERR_CONNECTION_REFUSED' })
+      .mockResolvedValueOnce({ ok: true, text: FULL_MANIFEST });
     const promptRetry = vi.fn().mockReturnValue('retry');
     const exitApp = vi.fn();
     const result = await resolveClientEndpointsBlocking({
-      fetchManifestText,
+      fetchManifest,
       promptRetry,
       exitApp,
+      ...NO_AUTO_RETRY,
     });
     expect(promptRetry).toHaveBeenCalledTimes(1);
-    expect(promptRetry).toHaveBeenCalledWith('fetch-failed');
-    expect(fetchManifestText).toHaveBeenCalledTimes(2);
+    expect(promptRetry).toHaveBeenCalledWith('fetch-failed:ERR_CONNECTION_REFUSED');
+    expect(fetchManifest).toHaveBeenCalledTimes(2);
     expect(result?.authApiBaseUrl).toBe('https://auth.remote.example.com');
     expect(exitApp).not.toHaveBeenCalled();
   });
@@ -158,7 +168,7 @@ describe('resolveClientEndpointsBlocking(阻断循环,清单即唯一事实源)'
     const promptRetry = vi.fn();
     const exitApp = vi.fn();
     const result = await resolveClientEndpointsBlocking({
-      fetchManifestText: async () => JSON.stringify(manifest),
+      fetchManifest: okFetch(JSON.stringify(manifest)),
       promptRetry,
       exitApp,
     });
@@ -167,30 +177,43 @@ describe('resolveClientEndpointsBlocking(阻断循环,清单即唯一事实源)'
     expect(exitApp).not.toHaveBeenCalled();
   });
 
-  it('fetch 抛错视同失败进 prompt,选退出返回 null', async () => {
+  it('fetch 抛错视同失败进 prompt(reason 抽出 ERR_ 码),选退出返回 null', async () => {
     const promptRetry = vi.fn().mockReturnValue('exit');
     const exitApp = vi.fn();
     const result = await resolveClientEndpointsBlocking({
-      fetchManifestText: async () => {
-        throw new Error('boom');
+      fetchManifest: async () => {
+        throw new Error('net::ERR_NAME_NOT_RESOLVED');
       },
       promptRetry,
       exitApp,
+      ...NO_AUTO_RETRY,
     });
     expect(result).toBeNull();
+    expect(promptRetry).toHaveBeenCalledWith('fetch-failed:ERR_NAME_NOT_RESOLVED');
     expect(exitApp).toHaveBeenCalledTimes(1);
+  });
+
+  it('detail 为空时 reason 退回裸 fetch-failed', async () => {
+    const promptRetry = vi.fn().mockReturnValue('exit');
+    await resolveClientEndpointsBlocking({
+      fetchManifest: failFetch('   '),
+      promptRetry,
+      exitApp: vi.fn(),
+      ...NO_AUTO_RETRY,
+    });
+    expect(promptRetry).toHaveBeenCalledWith('fetch-failed');
   });
 
   it('localhost http 清单:默认拒绝(CDN 路径零放松),allowHttp(file 模式)放行', async () => {
     const rejected = await resolveClientEndpointsBlocking({
-      fetchManifestText: async () => LOCAL_MANIFEST,
+      fetchManifest: okFetch(LOCAL_MANIFEST),
       promptRetry: vi.fn().mockReturnValue('exit'),
       exitApp: vi.fn(),
     });
     expect(rejected).toBeNull();
 
     const accepted = await resolveClientEndpointsBlocking({
-      fetchManifestText: async () => LOCAL_MANIFEST,
+      fetchManifest: okFetch(LOCAL_MANIFEST),
       promptRetry: vi.fn(),
       exitApp: vi.fn(),
       allowHttp: true,
@@ -198,16 +221,181 @@ describe('resolveClientEndpointsBlocking(阻断循环,清单即唯一事实源)'
     expect(accepted?.authApiBaseUrl).toBe('http://localhost:3344');
   });
 
-  it('文件缺失(读取返回 null)进同一条阻断链路', async () => {
+  it('文件缺失(读取失败带 errno)进同一条阻断链路', async () => {
     const promptRetry = vi.fn().mockReturnValue('exit');
     const result = await resolveClientEndpointsBlocking({
-      fetchManifestText: async () => null, // file 模式读不到文件即返回 null
+      fetchManifest: failFetch('ENOENT'), // file 模式读不到文件
       promptRetry,
       exitApp: vi.fn(),
       allowHttp: true,
+      ...NO_AUTO_RETRY,
     });
     expect(result).toBeNull();
-    expect(promptRetry).toHaveBeenCalledWith('fetch-failed');
+    expect(promptRetry).toHaveBeenCalledWith('fetch-failed:ENOENT');
+  });
+});
+
+describe('弹框前的自动重试(mac 首装瞬时失败自愈)', () => {
+  it('网络失败后自动重试成功:用户完全看不到阻断框', async () => {
+    const fetchManifest = vi
+      .fn<BlockingResolveDeps['fetchManifest']>()
+      .mockResolvedValueOnce({ ok: false, detail: 'ERR_NAME_NOT_RESOLVED' })
+      .mockResolvedValueOnce({ ok: false, detail: 'timeout-15000ms' })
+      .mockResolvedValueOnce({ ok: true, text: FULL_MANIFEST });
+    const promptRetry = vi.fn();
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest,
+      promptRetry,
+      exitApp: vi.fn(),
+      autoRetryDelaysMs: [10, 20],
+      sleep,
+    });
+
+    expect(result?.authApiBaseUrl).toBe('https://auth.remote.example.com');
+    expect(fetchManifest).toHaveBeenCalledTimes(3);
+    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([10, 20]);
+    expect(promptRetry).not.toHaveBeenCalled();
+  });
+
+  it('预算用尽才弹框,reason 是最后一次的错误码', async () => {
+    const fetchManifest = vi
+      .fn<BlockingResolveDeps['fetchManifest']>()
+      .mockResolvedValueOnce({ ok: false, detail: 'ERR_NAME_NOT_RESOLVED' })
+      .mockResolvedValueOnce({ ok: false, detail: 'ERR_PROXY_CONNECTION_FAILED' })
+      .mockResolvedValue({ ok: false, detail: 'timeout-15000ms' });
+    const promptRetry = vi.fn().mockReturnValue('exit');
+    const exitApp = vi.fn();
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest,
+      promptRetry,
+      exitApp,
+      autoRetryDelaysMs: [10, 20],
+      sleep: async () => {},
+    });
+
+    expect(fetchManifest).toHaveBeenCalledTimes(3); // 首发 + 2 次自动重试
+    expect(promptRetry).toHaveBeenCalledTimes(1);
+    expect(promptRetry).toHaveBeenCalledWith('fetch-failed:timeout-15000ms');
+    expect(result).toBeNull();
+    expect(exitApp).toHaveBeenCalledTimes(1);
+  });
+
+  it('用户点重试开的新一轮同样带完整预算', async () => {
+    const fetchManifest = vi
+      .fn<BlockingResolveDeps['fetchManifest']>()
+      .mockResolvedValueOnce({ ok: false, detail: 'ERR_FAILED' }) // 轮 1 首发
+      .mockResolvedValueOnce({ ok: false, detail: 'ERR_FAILED' }) // 轮 1 自动重试
+      .mockResolvedValueOnce({ ok: false, detail: 'ERR_FAILED' }) // 轮 2 首发
+      .mockResolvedValueOnce({ ok: true, text: FULL_MANIFEST }); // 轮 2 自动重试
+    const promptRetry = vi.fn().mockReturnValue('retry');
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest,
+      promptRetry,
+      exitApp: vi.fn(),
+      autoRetryDelaysMs: [10],
+      sleep: async () => {},
+    });
+
+    expect(promptRetry).toHaveBeenCalledTimes(1);
+    expect(fetchManifest).toHaveBeenCalledTimes(4);
+    expect(result?.authApiBaseUrl).toBe('https://auth.remote.example.com');
+  });
+
+  it.each([
+    ['JSON 非法', 'not json at all'],
+    ['schema 版本非法', JSON.stringify({ schemaVersion: 0 })],
+    ['非空值非法', JSON.stringify({ ...(JSON.parse(FULL_MANIFEST) as object), cdnBaseUrl: 'ftp://x.example.com' })],
+  ])('%s(配置事故)不消耗重试预算,立刻弹框', async (_label, text) => {
+    const fetchManifest = vi.fn<BlockingResolveDeps['fetchManifest']>().mockResolvedValue({
+      ok: true,
+      text,
+    });
+    const promptRetry = vi.fn().mockReturnValue('exit');
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest,
+      promptRetry,
+      exitApp: vi.fn(),
+      autoRetryDelaysMs: [10, 20],
+      sleep,
+    });
+
+    expect(fetchManifest).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(promptRetry).toHaveBeenCalledTimes(1);
+    expect(promptRetry.mock.calls[0][0]).not.toMatch(/^fetch-failed/);
+    expect(result).toBeNull();
+  });
+
+  it('missing-manifest-base-url(打包配置事故)不消耗重试预算,立刻弹框', async () => {
+    const fetchManifest = vi.fn<BlockingResolveDeps['fetchManifest']>().mockResolvedValue({
+      ok: false,
+      detail: 'missing-manifest-base-url',
+    });
+    const promptRetry = vi.fn().mockReturnValue('exit');
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest,
+      promptRetry,
+      exitApp: vi.fn(),
+      autoRetryDelaysMs: [10, 20],
+      sleep,
+    });
+
+    expect(fetchManifest).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(promptRetry).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
+  });
+
+  it.each([403, 404, 301])('HTTP %d(永久性错误)不消耗重试预算,立刻弹框', async (status) => {
+    const fetchManifest = vi.fn<BlockingResolveDeps['fetchManifest']>().mockResolvedValue({
+      ok: false,
+      detail: `http-${status}`,
+    });
+    const promptRetry = vi.fn().mockReturnValue('exit');
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest,
+      promptRetry,
+      exitApp: vi.fn(),
+      autoRetryDelaysMs: [10, 20],
+      sleep,
+    });
+
+    expect(fetchManifest).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(promptRetry).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
+  });
+
+  it('HTTP 502(瞬时服务端错误)仍消耗重试预算', async () => {
+    const fetchManifest = vi.fn<BlockingResolveDeps['fetchManifest']>().mockResolvedValue({
+      ok: false,
+      detail: 'http-502',
+    });
+    const promptRetry = vi.fn().mockReturnValue('exit');
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest,
+      promptRetry,
+      exitApp: vi.fn(),
+      autoRetryDelaysMs: [10, 20],
+      sleep,
+    });
+
+    expect(fetchManifest).toHaveBeenCalledTimes(3); // 首发 + 2 次自动重试
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(promptRetry).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
   });
 });
 

@@ -208,6 +208,24 @@ describe('groupSessions', () => {
     });
   });
 
+  it('can keep an individually pinned conversation in the project catalogue', () => {
+    const pinned = s({
+      id: 'pinned-in-project',
+      workingDir: '/workspace/project-a',
+      pinnedAt: '2026-07-01T00:00:00.000Z',
+    });
+
+    expect(groupSessions([pinned]).projects).toEqual([]);
+
+    const catalogue = groupSessions([pinned], { includePinnedInProjects: true });
+    expect(catalogue.pinned.map((session) => session.id)).toEqual(['pinned-in-project']);
+    expect(catalogue.projects).toHaveLength(1);
+    expect(catalogue.projects[0]?.projectKey).toBe('local:/workspace/project-a');
+    expect(catalogue.projects[0]?.sessions.map((session) => session.id)).toEqual([
+      'pinned-in-project',
+    ]);
+  });
+
   it('groups 1000 same-basename projects with stable display names', () => {
     const many = Array.from({ length: 1000 }, (_, i) =>
       s({

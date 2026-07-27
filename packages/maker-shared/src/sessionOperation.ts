@@ -71,15 +71,47 @@ export interface SessionComposerLayout {
 export interface SessionOperationLayoutInput {
   hasCurrentSession: boolean;
   hasActivePendingInteraction: boolean;
+  /**
+   * 待处理卡是否该接管输入框。
+   *
+   * 判据是**整个 pending 集合**里还有没有本端能终结的卡,调用方请用
+   * `pendingInteractionsBlockRemoteComposer(interactions)` 计算 —— 不要按「当前正在
+   * 看的那张卡能不能终结」传值:队列里还有权限 / 提问 / 计划卡在等回答时,用户切到
+   * 一张本端终结不了的卡不该把输入框放开,否则就绕过了那张阻塞交互。
+   *
+   * 传 false 时卡只展示、输入框继续可用;否则会话会被一张本端处理不了的卡锁死。
+   * 缺省 true 保持既有调用方语义。
+   */
+  pendingInteractionBlocksComposer?: boolean;
   remoteUnavailableReason?: string | null;
   readOnlyReason?: string | null;
 }
 
+/** 待处理卡放哪:接管输入框 / 贴在输入框上方 / 不显示。 */
+export type SessionPendingInteractionPlacement = 'composer' | 'above-composer' | 'none';
+
+/**
+ * 禁发理由的来源标识,locale 无关。
+ *
+ * `session-syncing` / `pending-interaction` 两条文案由本模型自己造(中文默认值),
+ * 控制端要按 locale 翻译后再展示 —— 它会经 composer 与队列行的 accessibility
+ * hint 读给用户,直出中文会让读屏在 en / ja / ko 下念混语(#530 review)。
+ * `caller-provided` 表示理由是调用方传进来的(remoteUnavailableReason /
+ * readOnlyReason),已由调用方负责本地化,原样展示即可。
+ */
+export type SessionComposerDisabledReasonSource =
+  | 'session-syncing'
+  | 'pending-interaction'
+  | 'caller-provided';
+
 export interface SessionOperationLayout {
   canUseComposer: boolean;
   composerDisabledReason: string | null;
+  /** 上面那条理由的来源;null 表示没有禁发理由。 */
+  composerDisabledReasonSource: SessionComposerDisabledReasonSource | null;
   composerSlot: SessionComposerSlot;
   messageHistoryMode: SessionMessageHistoryMode;
+  pendingInteractionPlacement: SessionPendingInteractionPlacement;
   showPendingInteraction: boolean;
   showQueue: boolean;
 }
@@ -223,8 +255,10 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
     return {
       canUseComposer: false,
       composerDisabledReason: '当前会话还没有同步完成。',
+      composerDisabledReasonSource: 'session-syncing',
       composerSlot: 'missing-session',
       messageHistoryMode: 'hidden',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: false,
     };
@@ -234,31 +268,44 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
     return {
       canUseComposer: false,
       composerDisabledReason: input.remoteUnavailableReason,
+      composerDisabledReasonSource: 'caller-provided',
       composerSlot: 'editable',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: false,
     };
   }
 
-  if (input.hasActivePendingInteraction) {
+  const blocksComposer = input.pendingInteractionBlocksComposer !== false;
+  if (input.hasActivePendingInteraction && blocksComposer) {
     return {
       canUseComposer: false,
-      composerDisabledReason: '先处理当前授权或提问后才能继续输入。',
+      composerDisabledReason: '先处理电脑端的待处理请求后才能继续输入。',
+      composerDisabledReasonSource: 'pending-interaction',
       composerSlot: 'pending-interaction',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'composer',
       showPendingInteraction: true,
       showQueue: false,
     };
   }
 
+  // 本端处理不了的卡只贴在输入框上方:用户能看到电脑端在等什么、能取消(若该
+  // 类型支持),同时继续发消息 —— 卡不再是死路。
+  const placement: SessionPendingInteractionPlacement = input.hasActivePendingInteraction
+    ? 'above-composer'
+    : 'none';
+
   if (input.readOnlyReason) {
     return {
       canUseComposer: false,
       composerDisabledReason: input.readOnlyReason,
+      composerDisabledReasonSource: 'caller-provided',
       composerSlot: 'read-only',
       messageHistoryMode: 'visible',
-      showPendingInteraction: false,
+      pendingInteractionPlacement: placement,
+      showPendingInteraction: placement !== 'none',
       showQueue: true,
     };
   }
@@ -266,9 +313,11 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
   return {
     canUseComposer: true,
     composerDisabledReason: null,
+    composerDisabledReasonSource: null,
     composerSlot: 'editable',
     messageHistoryMode: 'visible',
-    showPendingInteraction: false,
+    pendingInteractionPlacement: placement,
+    showPendingInteraction: placement !== 'none',
     showQueue: true,
   };
 }

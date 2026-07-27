@@ -758,11 +758,11 @@ describe('new session composer surface', () => {
     const modelPillEnd = newSource.indexOf('modelPillText:', modelPillStart);
     const modelPillStyle = newSource.slice(modelPillStart, modelPillEnd);
     const modelPillTextStart = newSource.indexOf('modelPillText: {');
-    const modelPillTextEnd = newSource.indexOf('sessionComposerInput:', modelPillTextStart);
+    const modelPillTextEnd = newSource.indexOf('inputVoiceHidden:', modelPillTextStart);
     const modelPillTextStyle = newSource.slice(modelPillTextStart, modelPillTextEnd);
-    const sessionComposerInputStart = newSource.indexOf('sessionComposerInput: {');
-    const sessionComposerInputEnd = newSource.indexOf('inputVoiceHidden:', sessionComposerInputStart);
-    const sessionComposerInputStyle = newSource.slice(sessionComposerInputStart, sessionComposerInputEnd);
+    const voiceDraftTextStart = newSource.indexOf('voiceDraftText: {');
+    const voiceDraftTextEnd = newSource.indexOf('voiceDraftListeningPrompt:', voiceDraftTextStart);
+    const voiceDraftTextStyle = newSource.slice(voiceDraftTextStart, voiceDraftTextEnd);
     const sendButtonStart = newSource.indexOf('sendButton: {');
     const sendButtonEnd = newSource.indexOf('sendButtonDisabled:', sendButtonStart);
     const sendButtonStyle = newSource.slice(sendButtonStart, sendButtonEnd);
@@ -811,7 +811,7 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain('selectionColor={colors.inputCaret}');
     expect(newComposerSource).toContain('inputRef={firstMessageInputRef}');
     expect(newComposerSource).toContain('inputOverlay={renderComposerInputOverlay()}');
-    expect(newComposerSource).toContain('inputStyle={[styles.sessionComposerInput, voiceIsListening && styles.inputVoiceHidden]}');
+    expect(newComposerSource).toContain('inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}');
     expect(newComposerSource).toContain('onChangeText={setFirstMessageDraft}');
     expect(newComposerSource).toContain('onContentSizeChange={handleFirstMessageInputContentSizeChange}');
     expect(newComposerSource).toContain("placeholder={voiceIsListening ? '' : composerPlaceholder}");
@@ -841,8 +841,11 @@ describe('new session composer surface', () => {
     expect(modelPillTextStyle).toContain('color: colors.textPrimary');
     expect(modelPillTextStyle).toContain('fontSize: typeScale.caption');
     expect(modelPillTextStyle).toContain('fontWeight: fontWeight.semibold');
-    expect(sessionComposerInputStyle).toContain('fontSize: typeScale.listBody');
-    expect(sessionComposerInputStyle).toContain('lineHeight: lineHeight.listBody');
+    // 输入框字号档由 MobileComposerInputRow 统一持有(MOBILE_COMPOSER_DRAFT_TEXT_STYLE),
+    // 页面不再覆盖;语音草稿覆盖层必须引用同一档,否则换行位置与输入框错开(见
+    // composerVoiceDraftMetrics.test.ts)。
+    expect(newSource).not.toContain('sessionComposerInput');
+    expect(voiceDraftTextStyle).toContain('...MOBILE_COMPOSER_DRAFT_TEXT_STYLE');
     expect(sendButtonStyle).toContain('backgroundColor: colors.cta');
     expect(sendButtonStyle).toContain('borderColor: colors.cta');
     expect(sendButtonStyle).toContain('borderWidth: StyleSheet.hairlineWidth');

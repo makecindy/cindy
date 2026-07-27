@@ -197,6 +197,41 @@ describe('AddProviderWizard — preset 直达', () => {
     );
   });
 
+  it('editable preset saves the edited base URL and exact request path', async () => {
+    const editablePreset = {
+      id: 'local-gateway',
+      name: 'Local Gateway',
+      runtimes: {
+        codex: {
+          baseUrl: 'http://127.0.0.1:4000/v1',
+          baseUrlEditable: true,
+          requestPath: '/tenant/acme/infer',
+          models: [{ id: 'local-model', name: 'Local model' }],
+        },
+      },
+    };
+    vi.mocked(window.electronAPI.maker.listProviderPresets)
+      .mockResolvedValueOnce({ presets: [editablePreset] });
+    renderWizard('local-gateway');
+
+    const baseUrl = await screen.findByDisplayValue('http://127.0.0.1:4000/v1');
+    fireEvent.change(baseUrl, { target: { value: 'http://localhost:11434/custom' } });
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'local-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+
+    await waitFor(() => expect(screen.getByText('Local model')).not.toBeNull());
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: 'http://localhost:11434/custom' }),
+    );
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex).toMatchObject({
+      baseUrl: 'http://localhost:11434/custom',
+      requestPath: '/tenant/acme/infer',
+    });
+  });
+
   it('presetId 不存在 → 回落目录第一步', async () => {
     renderWizard('nonexistent');
 

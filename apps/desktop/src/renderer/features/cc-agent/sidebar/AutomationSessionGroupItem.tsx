@@ -30,6 +30,7 @@ import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyC
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
+import { SessionCard } from './SessionCard';
 
 export interface AutomationSessionGroupItemProps {
   group: AutomationSessionGroup;
@@ -50,6 +51,8 @@ export interface AutomationSessionGroupItemProps {
    * 传给子行,自动化 group 里的子会话也能显示来源。
    */
   sourceLabelMap?: ReadonlyMap<string, string>;
+  /** 项目置顶列表模式下，展开的自动化运行也使用同一套列表行。 */
+  sessionVariant?: 'text' | 'list';
 }
 
 interface FrozenGroupState {
@@ -73,6 +76,7 @@ export function AutomationSessionGroupItem({
   onScheduleAction,
   indented = false,
   sourceLabelMap,
+  sessionVariant = 'text',
 }: AutomationSessionGroupItemProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -566,24 +570,43 @@ export function AutomationSessionGroupItem({
       </Tip>
       {hasVisibleChildren && (
         <div className="flex flex-col gap-0.5 pl-3">
-          {visibleSessions.map((session: Session) => (
-            <SessionItem
-              key={session.id}
-              session={session}
-              isActive={session.id === activeSessionId}
-              isRunning={runningSessionIds.has(session.id)}
-              isAttached={attachedSessionIds.has(session.id)}
-              hasAttentionNotification={notifications.has(session.id)}
-              isSelected={selectedSessionIds?.has(session.id) ?? false}
-              onClick={handleChildSessionClick}
-              onAction={onAction}
-              onRename={onRename}
-              onTogglePin={onTogglePin}
-              indented={indented}
-              sourceLabel={sourceLabelMap?.get(session.id)}
-              insideAutomationGroup
-            />
-          ))}
+          {visibleSessions.map((session: Session, index) => {
+            const nextSession = visibleSessions[index + 1];
+            const nextHighlighted =
+              nextSession != null &&
+              (nextSession.id === activeSessionId ||
+                (selectedSessionIds?.has(nextSession.id) ?? false));
+            const commonProps = {
+              session,
+              isActive: session.id === activeSessionId,
+              isRunning: runningSessionIds.has(session.id),
+              isAttached: attachedSessionIds.has(session.id),
+              hasAttentionNotification: notifications.has(session.id),
+              isSelected: selectedSessionIds?.has(session.id) ?? false,
+              onClick: handleChildSessionClick,
+              onAction,
+              onRename,
+              onTogglePin,
+              indented,
+            };
+
+            return sessionVariant === 'list' ? (
+              <SessionCard
+                key={session.id}
+                {...commonProps}
+                variant="list"
+                isFirst={index === 0}
+                hideBottomDivider={nextHighlighted}
+              />
+            ) : (
+              <SessionItem
+                key={session.id}
+                {...commonProps}
+                sourceLabel={sourceLabelMap?.get(session.id)}
+                insideAutomationGroup
+              />
+            );
+          })}
           {!showAll && childView.isOverflowing && (
             <button
               type="button"

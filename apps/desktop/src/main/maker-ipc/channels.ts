@@ -195,6 +195,9 @@ export const MAKER_INVOKE = {
   RUN: 'maker:run',
   // Chat utility (Stage 2 C1) — 不是 session 级 API,但走 maker.* 命名空间统一管理
   GENERATE_TITLE: 'maker:generate-title',
+  // 会话自动起名(权威实现在 main):立即占位 + 智能标题覆盖,条件写保证 user rename wins。
+  // 本机发送由 renderer 触发;device-link 远控由被控端 enqueue 直接调同一实现。
+  AUTO_TITLE: 'maker:auto-title',
   // 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(读 DB 素材,失败返 null)
   REGENERATE_TITLE: 'maker:regenerate-title',
   HELP_ASK: 'maker:help:ask',
@@ -642,6 +645,8 @@ export const MAKER_PUSH = {
    * 模型选择器 live 刷新）。无 payload；收到即重拉 listProviders。
    */
   PROVIDER_CHANGED: 'maker:provider:changed',
+  /** 通用 OAuth Device Grant 的短期验证码进度（仅 renderer 展示，不落盘/不进日志）。 */
+  PROVIDER_OAUTH_PROGRESS: 'maker:provider:oauth:progress',
   /**
    * 自定义 MCP 服务器增删改后广播（renderer 设置页 McpServersSection refetch）。
    * 无 payload；收到即重拉 listCustomMcpServers。

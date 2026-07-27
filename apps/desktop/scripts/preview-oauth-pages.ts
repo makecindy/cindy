@@ -1,7 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
@@ -16,6 +13,7 @@ import {
   type OAuthResultPageLang,
   type OAuthResultPageTheme,
 } from '../src/main/oauthResultPage.js';
+import { loadLoginCallbackCopy } from './lib/loginCallbackCopy.js';
 
 const PAGE_KINDS = [
   'login-success',
@@ -46,64 +44,8 @@ const PAGE_LABELS: Record<PageKind, string> = {
   warning: '需要继续操作 · 警告',
 };
 
-/**
- * Login callback copy comes from the SAME source production uses: renderer
- * locale JSONs' `login.browserCallback.*` (authManager resolves them via the
- * main mini-i18n; the preview cannot boot Electron, so it reads the JSON files
- * directly). Ghost / provider / neutral copy comes from the shared builders in
- * oauthResultPage.ts. No preview-only copy table remains — callback copy
- * builder 生产/preview 合一(PR0b-callback)。
- */
-const LOCALE_DIR = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../src/renderer/i18n/locales',
-);
-
-/**
- * Preview lang → renderer locale candidates(主干 4 语,中文全并进 zh-CN)。
- */
-const OAUTH_LANG_TO_APP_LOCALES: Record<OAuthResultPageLang, string[]> = {
-  zh: ['zh-CN'],
-  en: ['en'],
-  ja: ['ja'],
-  ko: ['ko'],
-};
-
-interface LoginBrowserCallbackCopy {
-  successTitle: string;
-  successBody: string;
-  errorTitle: string;
-  errorBody: string;
-  returnButton: string;
-}
-
-/** Reads production `login.browserCallback.*` copy, interpolating {{appName}}. */
-function loadLoginCallbackCopy(lang: OAuthResultPageLang): LoginBrowserCallbackCopy {
-  for (const locale of OAUTH_LANG_TO_APP_LOCALES[lang]) {
-    const file = path.join(LOCALE_DIR, locale, 'common.json');
-    if (!existsSync(file)) continue;
-    const common = JSON.parse(readFileSync(file, 'utf8')) as {
-      login?: { browserCallback?: Record<string, unknown> };
-    };
-    const raw = common.login?.browserCallback;
-    if (!raw) continue;
-    const resolve = (key: keyof LoginBrowserCallbackCopy): string => {
-      const value = raw[key];
-      if (typeof value !== 'string' || value.length === 0) {
-        throw new Error(`login.browserCallback.${key} missing in ${locale}/common.json`);
-      }
-      return value.replaceAll('{{appName}}', BRAND_NAME);
-    };
-    return {
-      successTitle: resolve('successTitle'),
-      successBody: resolve('successBody'),
-      errorTitle: resolve('errorTitle'),
-      errorBody: resolve('errorBody'),
-      returnButton: resolve('returnButton'),
-    };
-  }
-  throw new Error(`No locale file provides login.browserCallback for lang=${lang}`);
-}
+// 登录回调文案与 locale 映射见 ./lib/loginCallbackCopy.ts —— 那里是 preview 与
+// 托管回调模板导出共用的读取单点,文案正本仍是 renderer 的 locale JSON。
 
 function isPageKind(value: string | null): value is PageKind {
   return PAGE_KINDS.includes(value as PageKind);

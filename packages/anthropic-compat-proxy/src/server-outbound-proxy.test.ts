@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnthropicCompatProxy } from './server.js';
 import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
+import { startSocks5Stub } from './test-socks5-stub.js';
 import type { ProxyHandle } from './types.js';
 
 /**
@@ -85,6 +86,61 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
     expect(connects).toEqual(['upstream.invalid:443']);
   });
 
+  it('tunnels upstreams through SOCKS5 and hands the domain to the proxy unresolved', async () => {
+    const seen: Array<{ url: string; host?: string }> = [];
+    const upstream = createHttpServer((req, res) => {
+      seen.push({ url: req.url ?? '', host: req.headers.host });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ via: 'socks5' }));
+    });
+    const upstreamPort = await listenOnAvailableLoopbackPort(upstream);
+    cleanups.push(() => new Promise<void>((r) => upstream.close(() => r())));
+    const stub = await startSocks5Stub({ tunnelToPort: upstreamPort });
+    cleanups.push(() => stub.close());
+
+    proxy = await createAnthropicCompatProxy({
+      // 上游用保证不可解析的 .invalid 假域:请求能成功本身就证明域名没有在本地解析,
+      // 而是原样交给了代理(本 feature 修的正是 getaddrinfo ENOTFOUND 那条链路)。
+      upstream: 'http://upstream.invalid:8080/v1',
+      transformRequest: [],
+      resolveOutboundProxy: () => `socks5://127.0.0.1:${stub.port}`,
+    });
+
+    const res = await fetch(`${proxy.url}/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'x', messages: [] }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ via: 'socks5' });
+
+    expect(stub.requests).toEqual([{ atyp: 0x03, host: 'upstream.invalid', port: 8080 }]);
+    // L4 隧道:请求仍是 origin-form,Host 与**直连**时逐字节一致(转发层设的
+    // `host: target.hostname`),没有 HTTP 代理那套绝对形式 + Host 重写。
+    expect(seen).toEqual([{ url: '/v1/messages', host: 'upstream.invalid' }]);
+  });
+
+  it('encodes IPv6 literal upstreams as ATYP=0x04 through the whole forward path', async () => {
+    // 回归:parseUpstream 保留 WHATWG hostname 的方括号,并一路传到 agent 的
+    // options.host。桩直接拒绝 CONNECT(0x05),用例只关心送出去的目标编码。
+    const stub = await startSocks5Stub({ replyCode: 0x05 });
+    cleanups.push(() => stub.close());
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://[2001:db8::1]:8080',
+      transformRequest: [],
+      resolveOutboundProxy: () => `socks5://127.0.0.1:${stub.port}`,
+    });
+
+    const res = await fetch(`${proxy.url}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'x', messages: [] }),
+    });
+    expect(res.status).toBe(502);
+    expect(stub.requests).toEqual([{ atyp: 0x04, host: '2001:db8:0:0:0:0:0:1', port: 8080 }]);
+  });
+
   it('never consults the resolver for loopback upstreams', async () => {
     const upstream = createHttpServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -145,7 +201,8 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
     proxy = await createAnthropicCompatProxy({
       upstream: `http://0.0.0.0:${upstreamPort}`,
       transformRequest: [],
-      resolveOutboundProxy: () => 'socks5://127.0.0.1:1080',
+      // socks4 仍不支持(无认证、无 IPv6),按不支持的形态回落直连。
+      resolveOutboundProxy: () => 'socks4://127.0.0.1:1080',
       logger: { warn: (msg) => { warns2.push(msg); } },
     });
     const res2 = await fetch(`${proxy.url}/v1/messages`, {

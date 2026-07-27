@@ -93,6 +93,7 @@ export interface ProjectsSectionProps {
   projectOptions?: readonly FolderPickerOption[];
   onScheduleAction: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
   onToggleProject: (projectKey: string) => void;
+  onToggleProjectPin: (project: ProjectNodeData, currentlyPinned: boolean) => void;
   onRenameProject: (project: ProjectNodeData, alias: string) => Promise<void>;
   onCollapseAll: () => void;
   onExpandAll: () => void;
@@ -135,6 +136,7 @@ export function ProjectsSection({
   projectOptions,
   onScheduleAction,
   onToggleProject,
+  onToggleProjectPin,
   onRenameProject,
   onCollapseAll,
   onExpandAll,
@@ -360,6 +362,8 @@ export function ProjectsSection({
                 selectedSessionIds={selectedSessionIds}
                 disableSessionCollapse={disableSessionCollapse}
                 onToggle={onToggleProject}
+                isProjectPinned={false}
+                onToggleProjectPin={onToggleProjectPin}
                 onRenameProject={onRenameProject}
                 onSessionClick={onSessionClick}
                 onAction={onAction}

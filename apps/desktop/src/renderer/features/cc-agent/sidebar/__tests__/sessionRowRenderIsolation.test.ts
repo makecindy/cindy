@@ -235,3 +235,111 @@ describe('SessionItem — 父层与 urgency 隔离', () => {
     expect(renderCounts.get('session-b')).toBe(baselineB);
   });
 });
+
+// ── 不变量 4:父层传给行的 props 必须运行期引用稳定 ──────────────────────────
+//
+// 上面三条都在「隔离环境 + 稳定 noop props」下成立,抓不到真正的历史 bug:
+// 真实父组件(CCAgentSidebarUpper)把每渲染换引用的东西放进 handler 的 useCallback
+// deps,memo 在生产里从未生效。渲染真实父组件需要 mock 掉 router + 十几个 store,
+// 成本远超收益,故这里退一步做源码级断言 —— 脆,但能钉住确切的回归点。
+//
+// 历史:2026-07 单击切换卡顿排查发现两处
+//   a) useSessionRunningStatus 的 runningSessionIds 裸调 deriveRunningSet,每渲染 new Set;
+//   b) 5 个行级 handler 的 deps 里带着 sessions / sessionsById(它们随每条消息换引用)。
+// 两者都会让 onAction / onMoveSession / onClick 等 prop 每渲染换引用,打穿整表 memo。
+
+/** 取 `const <name> = useCallback(...)` 的 deps 数组文本(括号配平扫描)。 */
+function useCallbackDeps(source: string, name: string): string {
+  const start = source.indexOf(`const ${name} = useCallback(`);
+  if (start < 0) throw new Error(`未找到 handler: ${name}`);
+  let depth = 0;
+  let i = source.indexOf('(', start);
+  const open = i;
+  for (; i < source.length; i += 1) {
+    if (source[i] === '(') depth += 1;
+    else if (source[i] === ')') {
+      depth -= 1;
+      if (depth === 0) break;
+    }
+  }
+  const body = source.slice(open, i);
+  const depsStart = body.lastIndexOf('[');
+  const depsEnd = body.lastIndexOf(']');
+  if (depsStart < 0 || depsEnd < depsStart) throw new Error(`${name} 没有 deps 数组`);
+  return body.slice(depsStart, depsEnd + 1);
+}
+
+describe('父层 — 行级 handler 的引用稳定性', () => {
+  /** 这 5 个是 SessionItem 的直接 props(onClick/onAction/onRename/onTogglePin/onMoveSession)。 */
+  const ROW_HANDLERS = [
+    'handleSessionClick',
+    'handleRename',
+    'handleTogglePin',
+    'handleMoveSession',
+    'handleActionClick',
+  ];
+
+  it('deps 里不得出现每条消息都换引用的 sessions / sessionsById', () => {
+    const source = readFileSync(
+      resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'),
+      'utf8',
+    );
+    for (const name of ROW_HANDLERS) {
+      const deps = useCallbackDeps(source, name);
+      // 词边界保证 sessionsRef / sessionsByIdRef 不误伤。
+      expect(deps, `${name} 的 deps 不得含裸 sessions`).not.toMatch(/\bsessions\b/);
+      expect(deps, `${name} 的 deps 不得含裸 sessionsById`).not.toMatch(/\bsessionsById\b/);
+    }
+  });
+
+  it('deps 里不得出现每渲染重建的 hook 返回对象(filter / collapse)', () => {
+    // useSidebarFilter / useCollapsedProjects 都返回裸对象字面量,每次调用换引用。
+    // 必须依赖到具体成员(filter.promotePin、collapse.expand …),故用 (?!\.) 放行
+    // 成员访问、只拦整个对象。
+    const source = readFileSync(
+      resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'),
+      'utf8',
+    );
+    for (const name of ROW_HANDLERS) {
+      const deps = useCallbackDeps(source, name);
+      expect(deps, `${name} 的 deps 不得含整个 filter`).not.toMatch(/\bfilter\b(?!\.)/);
+      expect(deps, `${name} 的 deps 不得含整个 collapse`).not.toMatch(/\bcollapse\b(?!\.)/);
+    }
+  });
+
+  it('deps 里不得出现随路由切换而变的 viewedSessionId', () => {
+    const source = readFileSync(
+      resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'),
+      'utf8',
+    );
+    for (const name of ROW_HANDLERS) {
+      const deps = useCallbackDeps(source, name);
+      expect(deps, `${name} 的 deps 不得含 viewedSessionId`).not.toMatch(
+        /\bviewedSessionId\b/,
+      );
+    }
+  });
+
+  it('handleSessionClick 的 deps 不得含每次点击/切换都变的选择态', () => {
+    // 这三个只在点击那一刻读,却会被 setSelectionAnchorSessionId(每次点击必调)
+    // 和路由切换带着变 —— 留在 deps 里等于每切换一次就整表重画一遍。
+    const source = readFileSync(
+      resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'),
+      'utf8',
+    );
+    const deps = useCallbackDeps(source, 'handleSessionClick');
+    expect(deps).not.toMatch(/\bactiveSessionId\b/);
+    expect(deps).not.toMatch(/\bselectedSessionIds\b/);
+    expect(deps).not.toMatch(/\bselectionAnchorSessionId\b/);
+  });
+
+  it('runningSessionIds 必须 memo 化(否则每渲染 new Set 打穿整表)', () => {
+    const source = readFileSync(
+      resolve(__dirname, '..', '..', '..', '..', 'hooks', 'useSessionRunningStatus.ts'),
+      'utf8',
+    );
+    expect(source).toMatch(
+      /const runningSessionIds = useMemo\(\s*\(\)\s*=>\s*deriveRunningSet\(statusMap\),\s*\[statusMap\]\s*\)/,
+    );
+  });
+});

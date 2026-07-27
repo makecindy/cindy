@@ -66,8 +66,9 @@
       "awaitingQuestion": "Awaiting your reply",
       "awaitingPlan": "Awaiting plan review",
       "permissionPromptTitle": "Confirm permission",
+      "permissionPromptTitleWithTool": "Allow {{toolName}}?",
       "allowOnce": "Allow once",
-      "alwaysAllowForSession": "Always allow",
+      "alwaysAllowForSession": "Always allow for this session",
       "deny": "Deny"
     }
   },
@@ -1357,6 +1358,15 @@
         "customMeta": "Connect any OpenAI / Anthropic compatible source",
         "pickHint": "The sign-in method is defined by each provider; OAuth endpoints and base URLs come from presets — nothing to fill in by hand.",
         "oauthDesc": "Authorize your subscription in the browser — no API key needed",
+        "authorizeWithDeviceCode": "Use device code",
+        "preparingDeviceCode": "Preparing a device code…",
+        "deviceCodePrompt": "Enter this one-time device code on the verification page:",
+        "deviceCodeWaiting": "Keep this window open while you complete authorization.",
+        "copyDeviceCode": "Copy code",
+        "openVerificationPage": "Open verification page",
+        "deviceCodeCopied": "Device code copied",
+        "deviceCodeCopyFailed": "Couldn't copy the device code",
+        "verificationPageOpenFailed": "Couldn't open the verification page",
         "authorizedToast": "Connected {{name}}",
         "authorizeFailed": "Failed to authorize {{name}}. Please try again",
         "nameLabel": "Display name",
@@ -2351,10 +2361,11 @@
           "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy."
         },
         "securityTitle": "Install and permissions",
-        "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. New installs stay disabled until you review permissions and enable them.",
+        "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. First-time installs are enabled automatically and can be disabled anytime on the Plugins page; updates keep the current enabled state.",
         "noPermissions": "This plugin declares no additional capabilities.",
         "installConfirmTitle": "Install “{{name}}”?",
-        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility, then installed disabled. Review its setup and enable it when ready."
+        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
+        "updateConfirmDescription": "The package will be verified for integrity and manifest compatibility, then replace the installed version. Its current enabled state stays unchanged."
       },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
@@ -2447,6 +2458,7 @@
       "perm": {
         "grantsTitle": "After installing it will have:",
         "toolsGroup": "Registered Tools",
+        "toolsDiffGroup": "Registered Tool Changes",
         "itemCount": "{{count}} total",
         "cindyImageGenerate": "Image generation (delegated to Cindy)",
         "cindyImageEdit": "Image editing (delegated to Cindy, its own images only)",
@@ -3647,7 +3659,7 @@
       "title": "What's New",
       "newFeatures": "New Features",
       "bugFixes": "Bug Fixes",
-      "craftedBy": "Crafted by",
+      "thanksTo": "Thanks to",
       "gotIt": "Got it",
       "ariaDescription": "Release notes for version {{version}}",
       "ariaDescriptionSpan": "Release notes for {{count}} versions since v{{from}}",
@@ -4930,6 +4942,21 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "Thinking…",
+      "generating": "Generating…",
+      "editingFiles": "Editing files…",
+      "searchingWeb": "Searching the web…",
+      "generatingImage": "Generating an image…",
+      "compacting": "Compacting context…",
+      "done": "Done",
+      "waiting": "Just wait…",
+      "working": "Working…",
+      "running": "Running…",
+      "turnStart": "{{status}}",
+      "issueTip": "{{name}}, try /issue to send us feedback or suggestions",
+      "runningTool": "{{tool}} running…"
+    },
     "remoteSession": {
       "reconnecting": "Connection to the controlled device was lost — reconnecting…",
       "hostOffline": "The controlled device is offline; can't sync right now",
@@ -5289,6 +5316,8 @@
       },
       "projectAction": {
         "rename": "Rename project",
+        "pin": "Pin project",
+        "unpin": "Unpin project",
         "showFiles": "Show Files",
         "archivedAll": "Archive all",
         "unarchiveAll": "Restore all",
@@ -5320,6 +5349,10 @@
       "aiRenameRemoteOutdated": "The remote device is on an older version. Update it to use AI rename",
       "aiRenameRemoteOffline": "Remote device is not connected. Check the connection and try again",
       "aiRenameFailed": "AI rename failed, please try again"
+    },
+    "autoTitle": {
+      "image": "Image",
+      "file": "File"
     },
     "sessionHeader": {
       "untitled": "Untitled session",

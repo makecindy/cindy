@@ -8,6 +8,10 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
+import type { ManifestFetchResult } from '@/config/clientEndpointStartup';
+
+type FetchManifest = (timeoutMs: number) => Promise<ManifestFetchResult>;
+
 async function freshModules() {
   vi.resetModules();
   const env = await import('@/config/env');
@@ -36,13 +40,18 @@ const FULL_MANIFEST_OBJECT = {
 };
 const FULL_MANIFEST = JSON.stringify(FULL_MANIFEST_OBJECT);
 
+const okFetch = (text: string) => async () => ({ ok: true as const, text });
+const failFetch = (detail: string) => async () => ({ ok: false as const, detail });
+/** 关掉自动重试预算,测"单次尝试"原语义(不然失败路径会白等真实 backoff)。 */
+const NO_AUTO_RETRY = { autoRetryDelaysMs: [] as readonly number[] };
+
 describe('runStartupEndpointResolve(CDN 解析)', () => {
   it('拉取成功:全量采用 CDN 清单,回写 env live binding,跨模块可见', async () => {
     const { env, startup } = await freshModules();
     expect(env.DEVICE_LINK_API_BASE_URL).toBe('https://relay.example.invalid');
 
     const outcome = await startup.runStartupEndpointResolve({
-      fetchManifestText: async () => FULL_MANIFEST,
+      fetchManifest: okFetch(FULL_MANIFEST),
     });
 
     expect(outcome).toEqual({ ok: true, source: 'cdn' });
@@ -70,15 +79,17 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
       expect(env.REVIEW_MODE).toBe(false);
 
       let outcome = await startup.runStartupEndpointResolve({
-        fetchManifestText: async () =>
+        fetchManifest: okFetch(
           JSON.stringify({ ...FULL_MANIFEST_OBJECT, review: '9.9.8' }),
+        ),
       });
       expect(outcome).toEqual({ ok: true, source: 'cdn' });
       expect(env.REVIEW_MODE).toBe(false);
 
       outcome = await startup.runStartupEndpointResolve({
-        fetchManifestText: async () =>
+        fetchManifest: okFetch(
           JSON.stringify({ ...FULL_MANIFEST_OBJECT, review: '9.9.9' }),
+        ),
         resolveIsTestFlight: async () => false,
       });
       expect(outcome).toEqual({ ok: true, source: 'cdn' });
@@ -86,8 +97,9 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
       expect(env.IS_TESTFLIGHT_BUILD).toBe(false);
 
       outcome = await startup.runStartupEndpointResolve({
-        fetchManifestText: async () =>
+        fetchManifest: okFetch(
           JSON.stringify({ ...FULL_MANIFEST_OBJECT, review: '9.9.9' }),
+        ),
         resolveIsTestFlight: async () => true,
       });
       expect(outcome).toEqual({ ok: true, source: 'cdn' });
@@ -95,8 +107,9 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
       expect(env.IS_TESTFLIGHT_BUILD).toBe(true);
 
       outcome = await startup.runStartupEndpointResolve({
-        fetchManifestText: async () =>
+        fetchManifest: okFetch(
           JSON.stringify({ ...FULL_MANIFEST_OBJECT, review: '' }),
+        ),
       });
       expect(outcome).toEqual({ ok: true, source: 'cdn' });
       expect(env.REVIEW_MODE).toBe(false);
@@ -123,7 +136,7 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
     const { startup } = await freshModules();
     const apply = vi.fn();
     const outcome = await startup.runStartupEndpointResolve({
-      fetchManifestText: async () => text,
+      fetchManifest: okFetch(text),
       apply,
     });
 
@@ -147,7 +160,7 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
 
     await expect(
       startup.runStartupEndpointResolve({
-        fetchManifestText: async () => JSON.stringify(manifest),
+        fetchManifest: okFetch(JSON.stringify(manifest)),
       }),
     ).resolves.toEqual({ ok: true, source: 'cdn' });
     expect(env.AUTH_API_BASE_URL).toBe('');
@@ -171,12 +184,11 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
       'unsupported-schema-version:999',
     ],
     ['非 JSON', 'not-json{', 'invalid-json'],
-    ['拉取失败', null, 'fetch-failed'],
   ] as const)('%s → 直接阻断,不回写任何端点', async (_label, text, reason) => {
     const { env, startup } = await freshModules();
     const apply = vi.fn();
     const outcome = await startup.runStartupEndpointResolve({
-      fetchManifestText: async () => text,
+      fetchManifest: okFetch(text),
       apply,
     });
 
@@ -185,29 +197,148 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
     expect(env.DEVICE_LINK_API_BASE_URL).toBe('https://relay.example.invalid');
   });
 
-  it('fetch 抛错视同拉取失败并阻断;下一次重试成功后才回写', async () => {
+  it('拉取失败 → 阻断且 reason 带错误码,不回写任何端点', async () => {
+    const { env, startup } = await freshModules();
+    const apply = vi.fn();
+    const outcome = await startup.runStartupEndpointResolve({
+      fetchManifest: failFetch('timeout-10000ms'),
+      apply,
+      ...NO_AUTO_RETRY,
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: 'fetch-failed:timeout-10000ms' });
+    expect(apply).not.toHaveBeenCalled();
+    expect(env.DEVICE_LINK_API_BASE_URL).toBe('https://relay.example.invalid');
+  });
+
+  it('fetch 抛错视同拉取失败并阻断(reason 带 name);下一次重试成功后才回写', async () => {
     const { env, startup } = await freshModules();
     const initialAuthApiBaseUrl = env.AUTH_API_BASE_URL;
-    const fetchManifestText = vi
-      .fn<(timeoutMs: number) => Promise<string | null>>()
-      .mockRejectedValueOnce(new Error('boom'))
-      .mockResolvedValueOnce(FULL_MANIFEST);
+    const fetchManifest = vi.fn<FetchManifest>()
+      .mockRejectedValueOnce(new TypeError('Network request failed'))
+      .mockResolvedValueOnce({ ok: true, text: FULL_MANIFEST });
 
     await expect(
-      startup.runStartupEndpointResolve({ fetchManifestText }),
+      startup.runStartupEndpointResolve({ fetchManifest, ...NO_AUTO_RETRY }),
     ).resolves.toEqual({
       ok: false,
-      reason: 'fetch-failed',
+      reason: 'fetch-failed:TypeError:Network request failed',
     });
     expect(env.AUTH_API_BASE_URL).toBe(initialAuthApiBaseUrl);
 
     await expect(
-      startup.runStartupEndpointResolve({ fetchManifestText }),
+      startup.runStartupEndpointResolve({ fetchManifest, ...NO_AUTO_RETRY }),
     ).resolves.toEqual({
       ok: true,
       source: 'cdn',
     });
     expect(env.AUTH_API_BASE_URL).toBe('https://auth-next.example.com');
+  });
+
+  describe('返回失败前的自动重试(首装瞬时失败自愈)', () => {
+    it('拉取失败后自动重试成功:闸门不进错误屏', async () => {
+      const { env, startup } = await freshModules();
+      const fetchManifest = vi.fn<FetchManifest>()
+        .mockResolvedValueOnce({ ok: false, detail: 'timeout-10000ms' })
+        .mockResolvedValueOnce({ ok: false, detail: 'TypeError:Network request failed' })
+        .mockResolvedValueOnce({ ok: true, text: FULL_MANIFEST });
+      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+      const outcome = await startup.runStartupEndpointResolve({
+        fetchManifest,
+        autoRetryDelaysMs: [10, 20],
+        sleep,
+      });
+
+      expect(outcome).toEqual({ ok: true, source: 'cdn' });
+      expect(fetchManifest).toHaveBeenCalledTimes(3);
+      expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([10, 20]);
+      expect(env.AUTH_API_BASE_URL).toBe('https://auth-next.example.com');
+    });
+
+    it('预算用尽才阻断,reason 是最后一次的错误码', async () => {
+      const { startup } = await freshModules();
+      const fetchManifest = vi.fn<FetchManifest>()
+        .mockResolvedValueOnce({ ok: false, detail: 'AbortError:Aborted' })
+        .mockResolvedValue({ ok: false, detail: 'timeout-10000ms' });
+
+      const outcome = await startup.runStartupEndpointResolve({
+        fetchManifest,
+        autoRetryDelaysMs: [10, 20],
+        sleep: async () => {},
+      });
+
+      expect(fetchManifest).toHaveBeenCalledTimes(3); // 首发 + 2 次自动重试
+      expect(outcome).toEqual({ ok: false, reason: 'fetch-failed:timeout-10000ms' });
+    });
+
+    it('清单非法(配置事故)不消耗重试预算', async () => {
+      const { startup } = await freshModules();
+      const fetchManifest = vi.fn<FetchManifest>()
+        .mockResolvedValue({ ok: true, text: 'not-json{' });
+      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+      const outcome = await startup.runStartupEndpointResolve({
+        fetchManifest,
+        autoRetryDelaysMs: [10, 20],
+        sleep,
+      });
+
+      expect(outcome).toEqual({ ok: false, reason: 'invalid-json' });
+      expect(fetchManifest).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    it('missing-manifest-base-url(打包配置事故)不消耗重试预算', async () => {
+      const { startup } = await freshModules();
+      const fetchManifest = vi.fn<FetchManifest>()
+        .mockResolvedValue({ ok: false, detail: 'missing-manifest-base-url' });
+      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+      const outcome = await startup.runStartupEndpointResolve({
+        fetchManifest,
+        autoRetryDelaysMs: [10, 20],
+        sleep,
+      });
+
+      expect(outcome).toEqual({ ok: false, reason: 'fetch-failed:missing-manifest-base-url' });
+      expect(fetchManifest).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    it.each([403, 404, 301])('HTTP %d(永久性错误)不消耗重试预算', async (status) => {
+      const { startup } = await freshModules();
+      const fetchManifest = vi.fn<FetchManifest>()
+        .mockResolvedValue({ ok: false, detail: `http-${status}` });
+      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+      const outcome = await startup.runStartupEndpointResolve({
+        fetchManifest,
+        autoRetryDelaysMs: [10, 20],
+        sleep,
+      });
+
+      expect(outcome).toEqual({ ok: false, reason: `fetch-failed:http-${status}` });
+      expect(fetchManifest).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    it('HTTP 502(瞬时服务端错误)仍消耗重试预算', async () => {
+      const { startup } = await freshModules();
+      const fetchManifest = vi.fn<FetchManifest>()
+        .mockResolvedValue({ ok: false, detail: 'http-502' });
+      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+      const outcome = await startup.runStartupEndpointResolve({
+        fetchManifest,
+        autoRetryDelaysMs: [10, 20],
+        sleep,
+      });
+
+      expect(outcome).toEqual({ ok: false, reason: 'fetch-failed:http-502' });
+      expect(fetchManifest).toHaveBeenCalledTimes(3); // 首发 + 2 次自动重试
+      expect(sleep).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('自建变体(IS_OTA_SELFHOST=1):mobileUpdateBaseUrl 只能在 CDN 清单校验通过后生效', async () => {
@@ -216,7 +347,7 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
       const { env, startup } = await freshModules();
       expect(env.OTA_SERVER_BASE_URL).toBe('');
       const outcome = await startup.runStartupEndpointResolve({
-        fetchManifestText: async () => FULL_MANIFEST,
+        fetchManifest: okFetch(FULL_MANIFEST),
       });
       expect(outcome).toEqual({ ok: true, source: 'cdn' });
       expect(env.OTA_SERVER_BASE_URL).toBe(
@@ -229,7 +360,7 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
       });
       await expect(
         startup.runStartupEndpointResolve({
-          fetchManifestText: async () => blankUpdateManifest,
+          fetchManifest: okFetch(blankUpdateManifest),
         }),
       ).resolves.toEqual({ ok: true, source: 'cdn' });
       expect(env.OTA_SERVER_BASE_URL).toBe('');

@@ -32,7 +32,13 @@ import type {
   AgentInputSessionRef,
   AgentInputReference,
 } from '../../shared/agentInputQueue';
-import { getAgentFacingText, reconcileSessionRefsForText } from '../../shared/agentInputQueue';
+import {
+  deriveAutoTitleSeed,
+  getAgentFacingText,
+  reconcileSessionRefsForText,
+  type AutoTitleFallbackLabels,
+  type AutoTitleSeed,
+} from '../../shared/agentInputQueue';
 import { providerSecretStorageKey } from '../../shared/providerSecrets';
 import {
   GHOST_HOST_NOTICE_KEYS,
@@ -5881,93 +5887,98 @@ function updateQueueItem(sessionId: string, clientId: string, newText: string): 
     .catch((err) => log.warn('updateQueueItem failed:', err));
 }
 
-const forkAutoNameChecked = new Set<string>();
+/**
+ * 已确认「不再需要自动起名」的会话(main 返回 done=true:已起过名,或用户手动
+ * 改过名)。纯粹是省 IPC 的缓存 —— 权威判定始终在 main。
+ *
+ * 只在 main 明确给出 done=true 时登记:瞬时失败(IPC/DB 异常、模型无结果)不登记,
+ * 下一条带文字的消息会重试,不会因一次抖动把会话永久钉在占位标题上。
+ */
+const autoNameSettled = new Set<string>();
 
-/** 落库 + patch sidebar 标题 — 自动起名链路的统一出口。 */
-async function applyAutoNameTitle(sessionId: string, title: string): Promise<void> {
-  await sessionService.update(sessionId, { title });
-  // title 落库后只 patch 本会话的 title，省掉一次全量 fetchSessions
-  emitPatch(sessionId, { title });
+/** 纯附件消息合成占位标题时的类别兜底词(拿不到任何文件名时才用)。 */
+function autoTitleFallbackLabels(): AutoTitleFallbackLabels {
+  return {
+    image: i18n.t('ccAgent.autoTitle.image'),
+    file: i18n.t('ccAgent.autoTitle.file'),
+  };
 }
 
 /**
- * 立即占位 + 后台覆盖式自动起名(Codex 式):
- *   - 发送瞬间就用原话前 40 字占位改名,侧边栏不停留在 "New Maker" 默认标题。
- *   - 后台等 oneShot 出非空智能标题(靠其自身 30s 超时)再覆盖占位;占位→智能
- *     标题的一次跳变是有意为之——立即反映"这个会话是关于什么的"优于先看数秒
- *     默认名。
+ * 触发自动起名。
+ *
+ * **权威逻辑全在 main**(`maker:auto-title`):资格判定、立即占位、智能标题覆盖、
+ * 条件写与合成占位归属表都在那边。renderer 只负责给素材,原因是同一个会话既可能
+ * 被本机发送、也可能被另一台设备远控,归属表若分散在两个进程会互相误判成「用户
+ * 手动改名」而永久跳过替换(PR #510 review)。标题落库后 main 广播
+ * `sessions:patched`,sessionsStore 据此更新侧边栏。
+ *
+ * device-link 远程会话例外:权威标题由**被控端** main 写,控制端这里只在自己的
+ * 投影层登记一条即时预览,免得干等一次隧道往返。
+ *
  * 整条链路 fire-and-forget,失败只打日志,不阻塞发送主流程。
  */
 function scheduleAutoName(
   sessionId: string,
   text: string,
   agentKind: 'claude-code' | 'codex',
+  isUserText = true,
 ): void {
-  // device-link 远程会话由被控端 main 负责基于本机 DB 自动起名，控制端 renderer
-  // 不再额外生成标题，避免两端并发覆盖同一 session title。
-  if (isRemoteSession(sessionId)) return;
-  // 先折叠空白并 trim,再截断——先截断会让"前 40 字符全是空白"的消息(如粘贴
-  // 大段缩进/多行文本)得到空占位,误跳过起名(PR #296 review)。
+  // 与 main 的 normalizeAutoTitle 同一套规则,两端算出的占位串一致,回流时不跳变。
   const fallbackTitle = text.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
-  // 纯附件等无文本首条消息起不出有意义的标题,保留默认标题。
+  // 连描述都合成不出来(既无文字也无可命名附件):保留默认标题,留给下一条消息。
   if (!fallbackTitle) return;
-  void (async () => {
-    try {
-      // 覆写守卫:仅当标题仍是系统占位(默认 'New Maker' / fork 占位)时才自动
-      // 起名。用户可以在发首条消息前就手动改名(空会话也能重命名),此时整条
-      // 链路放弃——占位与智能标题都不写(user rename wins,PR #296 review)。
-      const before = await sessionService.get(sessionId);
-      if (before.title && before.title !== 'New Maker' && !before.title.startsWith('[Fork')) {
-        return;
-      }
-      const titlePromise = window.electronAPI.maker
-        .generateTitle(text, agentKind, sessionId)
-        .then((result) => result.title)
-        .catch(() => null);
-      await applyAutoNameTitle(sessionId, fallbackTitle);
-      const smart = (await titlePromise)?.trim();
-      if (smart && smart !== fallbackTitle) {
-        // 覆盖前 re-read 确认标题仍是我们写的占位 —— 等待窗口(Codex oneShot 最长
-        // ~30s)内用户若从 header/sidebar 手动改名,标题已不等于 fallbackTitle,
-        // 此时不覆盖,让用户的手动改名 wins(避免后台智能标题静默冲掉用户改名)。
-        const currentSession = await sessionService.get(sessionId);
-        if (currentSession.title === fallbackTitle) {
-          await applyAutoNameTitle(sessionId, smart);
-        }
-      }
-    } catch (err) {
-      log.error('Failed to auto-name session:', err);
-    }
-  })();
+  if (isRemoteSession(sessionId)) {
+    // 带上 isUserText:合成描述对应「被控端先写占位、之后还要换掉」,要登记成系统
+    // 占位归属;用户文字对应的标题可能就此定稿,登记了会让后续预览一直盖着它。
+    remoteProjectsStore.setPendingTitlePreview(sessionId, fallbackTitle, isUserText);
+    return;
+  }
+  if (autoNameSettled.has(sessionId)) return;
+  // 整条链路对发送主流程必须是无副作用的:起名失败(桥接缺失 / IPC 抛错)只记日志,
+  // 绝不能把异常抛回 sendMessageCore 打断消息入队。
+  try {
+    void window.electronAPI.maker
+      .autoTitle({ sessionId, text, agentKind, isUserText })
+      .then((result) => {
+        if (result?.done) autoNameSettled.add(sessionId);
+      })
+      .catch((err) => {
+        // 不登记 settled —— 下一条带文字的消息会重试。
+        log.warn('Failed to auto-name session:', err);
+      });
+  } catch (err) {
+    log.warn('Failed to invoke auto-title IPC:', err);
+  }
 }
 
 /**
- * fork 出来的会话标题是占位的 "[Fork] <源标题>"（剥离 fork 为 "[Fork·已剥离]
- * ..."），在用户于该会话里发出第一句文本消息时基于这句话自动起名（走与普通会话
- * 同款的 scheduleAutoName）。fork 会话天然带历史消息（isFirstMessage=false），
- * 走不到普通首条消息的起名分支,因此单独在这里触发。
+ * 非首条消息的补起名:标题仍是系统占位的会话,在用户发出第一句**带文字**的消息
+ * 时把标题换成他写的内容。三类会话会走到这里:
  *
- * 每个 session 每次 app 生命周期只查一次 session 行（Set 去重）——非 fork 会话 /
- * 用户手动改过名（前缀不再是 [Fork）的会话,后续 send 不再发 IPC。
+ *   - 首条消息是纯附件(只贴图没打字)的会话:标题此时是合成占位(文件名 /
+ *     「图片」等),用户一打字就换成他自己的话。
+ *   - 同上但连描述都合成不出来、标题仍是 "New Maker" 的会话。
+ *   - fork 出来的会话:标题是占位的 "[Fork] <源标题>"(剥离 fork 为
+ *     "[Fork·已剥离] ..."),天然带历史消息(isFirstMessage=false),走不到普通
+ *     首条消息的起名分支。
+ *
+ * 素材同样经 {@link deriveAutoTitleSeed} 推导,与首条消息共用一套口径:直接拿
+ * `projectLiteralUserText` 会把 mention chip 序列化出的 `@<path>` 当成用户散文,
+ * 既违反「合成描述不喂标题模型」的契约,也可能让标题里出现 wire token
+ * (PR #510 review)。
+ *
+ * 只有 `isUserText=true` 才补起名:纯附件的后续消息不该把已有的合成占位换成
+ * 另一个文件名。是否仍是系统占位由 main 判定(它持有 DB 与归属表),这里不再读
+ * 会话行 —— 远程会话的行根本不在本机 DB 里,读它只会抛错。
  */
-function maybeAutoNameForkedSession(sessionId: string, text: string): void {
-  // 纯附件 send（无文本）起不出有意义的标题，留给下一条带文本的消息。
-  if (!text.trim()) return;
-  if (forkAutoNameChecked.has(sessionId)) return;
-  // 同步占位去重 — 同一会话快速连发两条时第二条不会并发再跑一次起名。
-  forkAutoNameChecked.add(sessionId);
-  void (async () => {
-    try {
-      const session = await sessionService.get(sessionId);
-      if (!session.parentSessionId || !session.title?.startsWith('[Fork')) return;
-      scheduleAutoName(sessionId, text, dbAgentKindToMakerKind(session.agentKind));
-    } catch (err) {
-      // get 失败不应永久关掉本会话的自动起名 — 释放占位让下一条消息重试。
-      // 非 fork / 已改名会话走上面的 return（成功路径），保持已检查状态不重复查库。
-      forkAutoNameChecked.delete(sessionId);
-      log.warn('Failed to auto-name forked session:', err);
-    }
-  })();
+function maybeAutoNameUnnamedSession(
+  sessionId: string,
+  seed: AutoTitleSeed | null,
+  agentKind: 'claude-code' | 'codex',
+): void {
+  if (!seed?.isUserText) return;
+  scheduleAutoName(sessionId, seed.text, agentKind, true);
 }
 
 /**
@@ -6094,17 +6105,21 @@ async function sendMessageCore(
   // Auto-naming (F-CHAT-2) — only fires for the first message in the session,
   // and that is by definition not busy (queue would have been dispatched on a
   // previous turn). Safe to leave outside the isBusy branch.
+  // 首条与补起名共用同一套素材推导:用户没打字时 seed.isUserText=false,
+  // 只写合成占位、不调标题模型。
+  const autoTitleSeed = deriveAutoTitleSeed(queued, autoTitleFallbackLabels());
   if (wasFirst) {
     // 用会话真实 agentKind 起名 — 之前写死 'claude-code',导致 Codex 会话也
     // 用 Claude haiku 起标题:纯 Codex 用户(无 Claude 鉴权)会 oneShot 失败 →
     // fallback 原话,表现为"Codex 会话标题没有智能总结"。current.agentKind 已是
-    // maker 格式('claude-code' | 'codex'),直接透传。起名走宽限期 + 后台覆盖。
-    scheduleAutoName(sessionId, getAgentFacingText(queued), current.agentKind);
+    // maker 格式('claude-code' | 'codex'),直接透传。起名走立即占位 + 后台覆盖。
+    if (autoTitleSeed) {
+      scheduleAutoName(sessionId, autoTitleSeed.text, current.agentKind, autoTitleSeed.isUserText);
+    }
   } else {
-    // fork-auto-name: fork 出来的会话带着占位标题 "[Fork] <源标题>"，在用户
-    // 于新会话里发出第一句话时按同款流程基于这句话改名（fork 会话天然带历史
-    // 消息，isFirstMessage=false 走不到上面的分支）。
-    maybeAutoNameForkedSession(sessionId, getAgentFacingText(queued));
+    // 补起名:首条是纯附件(只贴图没打字)、标题还是合成占位或默认名的会话,以及
+    // fork 出来的占位标题会话,都在第一条带文字的消息上把标题换成用户写的内容。
+    maybeAutoNameUnnamedSession(sessionId, autoTitleSeed, current.agentKind);
   }
 
   // 视觉连续性: agent 空闲 + 队列为空时, main coordinator 会立即派发这条(见
@@ -6292,10 +6307,19 @@ function steerMessageCore(
     opts,
   );
   touchSessionUserSend(sessionId, workingDir, false);
+  // 补起名同样要覆盖 steer:首条是纯附件的会话标题此时是合成占位,而用户完全
+  // 可能趁这一轮还在跑就用「插话」写下第一句话。只走普通发送的话,这句话不会
+  // 改名,标题会一直停在附件名直到他再排队发一条(PR #510 review P1)。
+  // 素材在入队前推导(此刻 queued 还在手里),但**只有输入被受理才改名**:同会话
+  // 已有在飞 steer / Stop 边界 / 输入锁都会让它被拒,拒掉的文本不该改名。
+  const autoTitleSeed = deriveAutoTitleSeed(queued, autoTitleFallbackLabels());
+  const agentKind = getOrCreateState(sessionId).agentKind;
+  const commitAutoTitle = () => maybeAutoNameUnnamedSession(sessionId, autoTitleSeed, agentKind);
   return makerApiFor(sessionId)
     .input.steer(sessionId, queued, { touchUserSend: true })
     .then(async (ok) => {
       if (ok) {
+        commitAutoTitle();
         requestInputProjection(sessionId);
         return true;
       }
@@ -6307,6 +6331,10 @@ function steerMessageCore(
         const latest = await makerApiFor(sessionId).input.getProjection(sessionId);
         applyInputProjection(latest);
         if (latest.pendingQueue.some((q) => q.clientId === queued.clientId)) {
+          // 物化进队列 = 这条输入已被主端接管、日后会派发,与受理同等 —— 起名也要
+          // 跟上,否则纯附件/fork 之后的第一句话恰好在这条不确定路径上不改名
+          // (review P1)。是否真该改名仍由 main 权威判定。
+          commitAutoTitle();
           return true;
         }
       } catch (err) {
@@ -7997,6 +8025,12 @@ export const makerChatStore = {
   },
   /** Exposed for tests only. */
   __teardownGlobalListeners,
+  /** Exposed for tests only: 非首条消息的补起名(纯附件首条 / fork 占位)。 */
+  __autoNameUnnamedSessionForTest: maybeAutoNameUnnamedSession,
+  /** Exposed for tests only: 清空「已确认无需起名」缓存,隔离用例间状态。 */
+  __resetAutoNameStateForTest: (): void => {
+    autoNameSettled.clear();
+  },
   /** Exposed for tests only: 把 stream event 打进真实 store(驱动 getRunningSnapshot 等)。 */
   __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void =>
     setState(sessionId, (s) => handleStreamEvent(s, event)),

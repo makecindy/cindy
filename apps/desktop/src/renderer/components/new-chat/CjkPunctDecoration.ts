@@ -21,9 +21,8 @@
  *
  * 边界处理
  * --------
- * - IME 组合期 (用户打 pinyin 还没选字): view.update() 跳过布局测量,
- *   避免同步 layout 读写干扰输入法候选框; decoration state 仍由 transaction
- *   驱动,在 doc/meta 变化时按正常路径重算。
+ * - IME 组合期 (用户打 pinyin 还没选字): compositionstart 前临时移除
+ *   decoration,compositionend 后再按当前 doc 补算,避免改写输入法维护的 DOM。
  * - 性能: chat input 文本量很小,doc 变化、slash roster 或 voice replacement
  *   range 变化时采用全量重扫;不使用 DecorationSet.map 增量映射,以保持边界逻辑简单。
  * - 不污染源数据: decoration 只是渲染层,doc JSON 里没有 span,copy/paste/save
@@ -52,7 +51,14 @@ import {
   type VoiceInputReplacementRange,
 } from './VoiceInputDraftDecoration';
 
-const PLUGIN_KEY = new PluginKey<DecorationSet>('cjkPunctDecoration');
+type CjkDecorationPluginState = {
+  decorations: DecorationSet;
+  suspendedForComposition: boolean;
+};
+
+type CompositionMeta = 'suspend' | 'resume';
+
+const PLUGIN_KEY = new PluginKey<CjkDecorationPluginState>('cjkPunctDecoration');
 
 /**
  * CJK 标点字符集合。覆盖最常用的几个区段,够 chat input 场景用:
@@ -119,10 +125,10 @@ function listLineRanges(
       match: matchListPrefix(line.text),
     }));
     // ComposerListIndentDecoration switches the entire paragraph to its
-    // prefix-only fallback when any list row contains an atom or a recognized
-    // slash pill. In that mode even otherwise-plain sibling rows do not have a
-    // complete hanging wrapper, so their punctuation must remain available to
-    // this plugin as well.
+    // prefix-only fallback when any list row contains an atom, a recognized
+    // slash pill, voice replacement, or CJK punctuation. Its unindented sibling
+    // wrapper must remain one inline-block, so those rows opt out of nested
+    // punctuation spans and use a Unicode-scoped composite font class instead.
     const hasFallbackLine = lineMatches.some(({ line, match }) => {
       if (!match) return false;
       const overlapsSlashCommandPill = slashCommandMatches.some(
@@ -142,7 +148,12 @@ function listLineRanges(
       );
     });
     lineMatches.forEach(({ line, match }) => {
-      if (!match) return;
+      if (!match) {
+        if (hasFallbackLine && lines.length > 1 && line.end > line.start) {
+          ranges.push({ from: contentBase + line.start, to: contentBase + line.end });
+        }
+        return;
+      }
       const prefixFrom = contentBase + line.start;
       const prefixTo = prefixFrom + match.prefixLength;
       const body = line.text.slice(match.prefixLength);
@@ -209,10 +220,11 @@ function buildDecorations(
       const from = pos + m.index;
       const to = from + m[0].length;
       if (listRanges.some((range) => from >= range.from && to <= range.to)) {
-        // ComposerListIndentDecoration owns the wrapping container for list
-        // rows. An overlapping inline font decoration would split that
-        // container at every punctuation boundary; list rows opt into the
-        // same CJK font stack through `.composer-list-cjk-font` instead.
+        // ComposerListIndentDecoration owns the wrapping container for these
+        // ranges. An overlapping inline font decoration would split fixed-width
+        // boxes at punctuation boundaries; marker boxes use
+        // `.composer-list-cjk-font`, while unindented fallback rows use the
+        // Unicode-scoped `.composer-list-cjk-punctuation-font`.
         continue;
       }
       decorations.push(
@@ -231,20 +243,41 @@ export const CjkPunctDecoration = Extension.create({
   name: 'cjkPunctDecoration',
 
   addProseMirrorPlugins() {
+    let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+
     return [
-      new Plugin<DecorationSet>({
+      new Plugin<CjkDecorationPluginState>({
         key: PLUGIN_KEY,
         state: {
           init(_config, state: EditorState) {
             const roster = getSlashCommandRoster(state);
-            return buildDecorations(state.doc, findSlashCommandMatches(state.doc, roster));
+            return {
+              decorations: buildDecorations(state.doc, findSlashCommandMatches(state.doc, roster)),
+              suspendedForComposition: false,
+            };
           },
-          apply(tr: Transaction, old: DecorationSet, oldState: EditorState) {
+          apply(tr: Transaction, old: CjkDecorationPluginState, oldState: EditorState) {
+            const compositionMeta = tr.getMeta(PLUGIN_KEY) as CompositionMeta | undefined;
+            if (compositionMeta === 'suspend') {
+              return {
+                decorations: DecorationSet.empty,
+                suspendedForComposition: true,
+              };
+            }
+
             const rosterUpdate = getSlashCommandRosterUpdate(tr);
             const voiceReplacement = resolveVoiceInputReplacementRange(tr, oldState);
+            if (old.suspendedForComposition && compositionMeta !== 'resume') {
+              return old;
+            }
             // doc、命令 roster 和 voice replacement 都没变 → decoration 位置不变,
             // 直接复用;任一输入变化都需要重新扫描。
-            if (!tr.docChanged && rosterUpdate === undefined && !voiceReplacement.changed) {
+            if (
+              compositionMeta !== 'resume' &&
+              !tr.docChanged &&
+              rosterUpdate === undefined &&
+              !voiceReplacement.changed
+            ) {
               return old;
             }
             // doc、命令 roster 或 voice replacement 变化 → 全量重算。
@@ -252,28 +285,56 @@ export const CjkPunctDecoration = Extension.create({
             // 文本量很小 (< 1KB 常见), 全量重扫成本可忽略, 而增量映射要额外
             // 处理"变化范围内新增/删除的 CJK 标点", 代码复杂度上升不划算。
             const roster = rosterUpdate ?? getSlashCommandRoster(oldState);
-            return buildDecorations(
-              tr.doc,
-              findSlashCommandMatches(tr.doc, roster),
-              voiceReplacement.range,
-            );
+            return {
+              decorations: buildDecorations(
+                tr.doc,
+                findSlashCommandMatches(tr.doc, roster),
+                voiceReplacement.range,
+              ),
+              suspendedForComposition: false,
+            };
           },
         },
         props: {
           decorations(state) {
-            return this.getState(state) ?? DecorationSet.empty;
+            return this.getState(state)?.decorations ?? DecorationSet.empty;
+          },
+          handleDOMEvents: {
+            compositionstart(view) {
+              if (resumeTimer !== null) {
+                clearTimeout(resumeTimer);
+                resumeTimer = null;
+              }
+              if (!PLUGIN_KEY.getState(view.state)?.suspendedForComposition) {
+                view.dispatch(
+                  view.state.tr
+                    .setMeta(PLUGIN_KEY, 'suspend' satisfies CompositionMeta)
+                    .setMeta('addToHistory', false),
+                );
+              }
+              return false;
+            },
+            compositionend(view) {
+              if (resumeTimer !== null) clearTimeout(resumeTimer);
+              resumeTimer = setTimeout(() => {
+                resumeTimer = null;
+                if (view.isDestroyed || view.composing) return;
+                if (!PLUGIN_KEY.getState(view.state)?.suspendedForComposition) return;
+                view.dispatch(
+                  view.state.tr
+                    .setMeta(PLUGIN_KEY, 'resume' satisfies CompositionMeta)
+                    .setMeta('addToHistory', false),
+                );
+              }, 0);
+              return false;
+            },
           },
         },
         view() {
           return {
-            update(view, prevState) {
-              // IME 组合期 (用户打 pinyin 还没回车选字) 不重新计算 decoration,
-              // 避免 DOM 抖动把输入法候选框踢掉。组合结束后 ProseMirror 会发
-              // 一个常规 transaction, apply() 会把 decoration 补上。
-              if (view.composing) return;
-              // composing 期间 doc 也会变, 但 apply() 已经在每次 docChanged
-              // 时重算了, 这里 view.update 是后置 hook, 不需要额外动作。
-              void prevState;
+            destroy() {
+              if (resumeTimer !== null) clearTimeout(resumeTimer);
+              resumeTimer = null;
             },
           };
         },

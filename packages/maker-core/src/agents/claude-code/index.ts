@@ -194,6 +194,34 @@ function isReadOnlyClaudeTool(toolName: string): boolean {
 }
 
 /**
+ * 把 Claude SDK 的 MCP 工具名拆成 host 审批策略要的 { serverName, toolName }。
+ *
+ * SDK 命名格式为 `mcp__<server>__<tool>`, 但**不能**按 `__` 盲切首段当 server ——
+ * server 名自身可以含 `__`(自定义 MCP 的 id 正则是 `/^[a-z0-9_-]+$/`, 下划线合法)。
+ * 盲切会让 id 为 `cindy_browser__evil` 的第三方 server 被识别成第一方 `cindy_browser`,
+ * 直接继承信任表里的静默放行 —— 这是一条实打实的提权路径。
+ *
+ * 因此只在**本 session 实际注册过**的 server 名里做前缀匹配, 命中多个时取最长者
+ * (`cindy_browser__evil` 胜过 `cindy_browser`), 保证归属唯一。名字对不上任何已注册
+ * server 时返回 null, 调用方按"不查策略"处理 —— 走原有权限链, 不放行。
+ */
+function resolveMcpToolTarget(
+  toolName: string,
+  registeredServerNames: ReadonlySet<string>,
+): { serverName: string; toolName: string } | null {
+  if (!toolName.startsWith('mcp__')) return null;
+  let best: { serverName: string; toolName: string } | null = null;
+  for (const serverName of registeredServerNames) {
+    const prefix = `mcp__${serverName}__`;
+    if (!toolName.startsWith(prefix) || toolName.length <= prefix.length) continue;
+    if (!best || serverName.length > best.serverName.length) {
+      best = { serverName, toolName: toolName.slice(prefix.length) };
+    }
+  }
+  return best;
+}
+
+/**
  * 把 maker-core 的 Effort clamp 到 Claude SDK 支持的档位 (ClaudeSdkEffort)。
  * Claude 没有 'minimal'(→ 'low') 与 'ultra'(→ 'max'; ultra 是 Codex GPT-5.6 专属档)。
  */
@@ -834,6 +862,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     const claudeAllowedTools = this.deps.claudeAllowedTools?.length
       ? [...this.deps.claudeAllowedTools]
       : undefined;
+    /**
+     * 本 session 实际注册进 SDK 的 MCP server 名, 由 buildMcpServers 写入。
+     * canUseTool 用它把 `mcp__<server>__<tool>` 归属到唯一 server; 空集合时
+     * 一律解析失败 → MCP 策略不参与判定, 维持原权限链。
+     */
+    let registeredMcpServerNames: ReadonlySet<string> = new Set();
     const buildMcpServers = (): Record<string, McpServerConfig> | undefined => {
       const providers = mcpProviders;
       if (providers.length === 0) return undefined;
@@ -849,15 +883,35 @@ export class ClaudeCodeAgent extends BaseAgent {
         sessionId: opts.sessionId,
         getSessionContext: () => context,
       };
-      const out: Record<string, McpServerConfig> = {};
+      // null-prototype: server 名来自用户可控的自定义 MCP id, 而 id 正则允许下划线,
+      // `__proto__` 是合法 id。用普通 `{}` 时 `out['__proto__'] = config` 命中的是原型
+      // 访问器 —— 不产生自有属性(hasOwnProperty / Object.keys 都看不见, 去重与归属判定
+      // 一起失效), 反而把这个 map 的原型换成了 config。null-prototype 让这类名字退化成
+      // 普通字符串键。
+      const out: Record<string, McpServerConfig> = Object.create(null);
       for (const provider of providers) {
         if (provider.name === 'cindy_memory' && (!makerMemoryEnabled || opts.remoteHostId)) continue;
         if (provider.isEnabled && !provider.isEnabled(context)) continue;
+        // 同名 provider 先注册者胜 —— host 把用户自定义 MCP **追加**在内置之后, 后写
+        // 覆盖会让一个 id 取名 `cindy_browser` 的自定义远程端点顶替内置 server:
+        // 既悄悄换掉了内置能力, 又让审批策略(只看 serverName)把第三方端点的所有工具
+        // 当第一方静默放行。host 侧也拦了这类保留名, 这里是纵深防御。
+        if (Object.prototype.hasOwnProperty.call(out, provider.name)) {
+          log.warn('duplicate MCP server name; keeping the first registration', {
+            serverName: provider.name,
+          });
+          continue;
+        }
         const config = provider.toClaudeSdkConfig?.(context);
         if (!config) continue;
         out[provider.name] = config as McpServerConfig;
       }
-      return Object.keys(out).length > 0 ? out : undefined;
+      // canUseTool 只认这批真实注册过的 server 名, 不靠 `mcp__` 工具名切分猜归属
+      // (见 resolveMcpToolTarget: 自定义 server id 可以含 `__`, 盲切会被冒名顶替)。
+      registeredMcpServerNames = new Set(Object.keys(out));
+      // 交回普通对象: SDK / RPC 序列化路径按普通对象处理(有的实现会调 obj.hasOwnProperty)。
+      // spread 走 CreateDataProperty, 不触发 `__proto__` setter, 所以这一步是安全的。
+      return Object.keys(out).length > 0 ? { ...out } : undefined;
     };
 
     // ── userMessageStream + permission callback 准备 ────────────────────────
@@ -892,6 +946,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       kind: InteractionRequest['kind'];
       resolve: (d: InteractionDecision) => void;
       settled: boolean;
+      /** prompt-each-time 高风险审批: 切到宽松模式时也不接受 dismissAllPending('allow')。 */
+      forcePrompt?: boolean;
     };
     const pendingInteractions = new Map<string, PendingEntry>();
 
@@ -905,13 +961,21 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 任一时刻可由 dismissAllPending 强制提前 resolve(走 settled flag 防止 host 后续回调
      * 又 resolve 一次)。
      */
-    async function dispatchInteraction(req: InteractionRequest): Promise<InteractionDecision> {
+    async function dispatchInteraction(
+      req: InteractionRequest,
+      opts?: { forcePrompt?: boolean },
+    ): Promise<InteractionDecision> {
       if (!interactionResolver) {
         return safeDefaultDecision(req.kind, 'no_resolver_attached');
       }
       const resolver = interactionResolver;
       return new Promise<InteractionDecision>((resolve) => {
-        const entry: PendingEntry = { kind: req.kind, resolve, settled: false };
+        const entry: PendingEntry = {
+          kind: req.kind,
+          resolve,
+          settled: false,
+          ...(opts?.forcePrompt ? { forcePrompt: true } : {}),
+        };
         pendingInteractions.set(req.requestId, entry);
         const finalize = (d: InteractionDecision) => {
           if (entry.settled) return;
@@ -939,13 +1003,23 @@ export class ClaudeCodeAgent extends BaseAgent {
       const entries = Array.from(pendingInteractions.entries());
       for (const [requestId, entry] of entries) {
         if (entry.settled) continue;
-        const decision = resolveAs === 'allow' && entry.kind !== 'ask_user_question'
+        // forcePrompt(prompt-each-time 高风险审批)不接受"切到宽松模式"的批量放行 ——
+        // 没拿到用户对这一次调用的明确确认就 fail-closed 拒绝, 与 Codex 侧同名逻辑
+        // 一致。否则用户在 pending 期间切到 auto / bypassPermissions, 一个破坏性的
+        // contacts 调用就被自动 allow 了。
+        const effectiveResolveAs: 'allow' | 'deny' =
+          resolveAs === 'allow' && entry.forcePrompt === true ? 'deny' : resolveAs;
+        const decision = effectiveResolveAs === 'allow' && entry.kind !== 'ask_user_question'
           ? ({ kind: entry.kind, behavior: 'allow' } as InteractionDecision)
           : safeDefaultDecision(entry.kind, reason);
         entry.settled = true;
         pendingInteractions.delete(requestId);
         entry.resolve(decision);
-        const dismissedPayload: InteractionDismissedEvent = { requestId, reason, resolvedAs: resolveAs };
+        const dismissedPayload: InteractionDismissedEvent = {
+          requestId,
+          reason,
+          resolvedAs: effectiveResolveAs,
+        };
         eventQueue.push({ type: 'interaction_dismissed', data: dismissedPayload, source: 'claude-code' });
       }
     }
@@ -959,6 +1033,73 @@ export class ClaudeCodeAgent extends BaseAgent {
       const resolvedAs = entry.kind === 'ask_user_question' ? 'allow' : 'deny';
       eventQueue.push({ type: 'interaction_dismissed', data: { requestId, reason, resolvedAs }, source: 'claude-code' });
     }
+
+    /**
+     * MCP 工具的 host 审批档位 —— 与 Codex 的 mcpServerElicitation 同一个
+     * deps.getMcpToolApprovalPolicy 真源。两端共用后, 同一个第一方 MCP 不会出现
+     * "Codex 静默执行 / Claude 每次调用都弹窗"的分叉(浏览器自动化这类高频 server
+     * 一次调研能攒出上百个权限请求)。
+     *   auto-approve      → 静默放行, 不打扰用户
+     *   prompt-each-time  → 照常弹窗, 且全程禁止持久化授权(suggestion 不下发、
+     *                       decision 带回来的 permissionUpdates 也丢弃、切到宽松
+     *                       模式时 pending 请求 fail-closed)
+     *   prompt / 未注入   → 完全维持原有权限链
+     * 策略抛错或返回非法值时按最保守的 prompt-each-time 处理(与 Codex 侧一致)。
+     *
+     * 本地 canUseTool 与远端 onApprovalRequest 都走这里 —— 否则同一套 MCP 配置在
+     * SSH 会话里又会退回"逐次弹窗 + 没有 forced prompt 保护"的老行为。
+     *
+     * **已知差异(bypassPermissions)**: 该档位下 SDK 直接跳过全部权限检查
+     * (allowDangerouslySkipPermissions, 见 SDK PermissionMode 文档), canUseTool 根本
+     * 不会被调用, 所以这里的 prompt-each-time 拦不住 Full access 会话 —— 那是该档位
+     * 本身的语义("Accepts all permissions"), 不是本函数的兜底范围。Codex 侧的
+     * forcePrompt 走自己的 approval 通道, 在 Full access 下仍会弹, 两端在这一档不等价。
+     *
+     * 抹平它的两条路都不便宜(结论来自 cc 2.1.219 的 cli.js 权限判定 `zd8`):
+     *  - PreToolUse hook: hook 无条件执行(先于权限判定), 且 hook 返回 deny 会在 `zd8`
+     *    首个分支直接阻断、不看 permissionMode —— 所以 hook 能在 Full access 下**拒绝**;
+     *    但 hook 返回 ask 会落到正常权限管线, 而该管线在 bypass 下就是放行, 所以做不到
+     *    Codex 那样的"仍然弹窗询问"。只能把高风险 action 变成硬拒绝, 用户在自己选了
+     *    Full access 之后反而做不了这些操作, 体验上不可接受。
+     *  - 让 Full access 停在可回调档(default) + canUseTool 里模拟放行普通工具: 能拿到
+     *    真 parity, 但 Full access 的判定语义会整体改变(settings 的 deny 规则、沙箱网络
+     *    等不经 canUseTool 的检查都会重新生效), 必须实机验证后才能上。
+     * 因此本轮如实保留差异, 不做半吊子拦截。
+     */
+    const classifyMcpApprovalPolicy = (
+      toolName: string,
+      input: unknown,
+    ): 'auto-approve' | 'prompt' | 'prompt-each-time' => {
+      const target = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+      const classifier = this.deps.getMcpToolApprovalPolicy;
+      if (!target || !classifier) return 'prompt';
+      try {
+        const policy = classifier({
+          serverName: target.serverName,
+          toolName: target.toolName,
+          toolParams: input,
+        });
+        if (policy === 'auto-approve' || policy === 'prompt' || policy === 'prompt-each-time') {
+          if (policy === 'auto-approve') {
+            log.debug('mcp tool auto-approved by host policy', {
+              serverName: target.serverName,
+              toolName: target.toolName,
+            });
+          }
+          return policy;
+        }
+        log.error('invalid MCP approval policy -> prompt each time', {
+          serverName: target.serverName,
+          policy,
+        });
+      } catch (error) {
+        log.error('MCP approval policy threw -> prompt each time', {
+          serverName: target.serverName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return 'prompt-each-time';
+    };
 
     // canUseTool dispatcher —— 三路分支(参考 agentManager.ts:1054-1162):
     //  1. AskUserQuestion: 模型问问题, 转 ask_user_question kind, decision.answers 拼回 updatedInput
@@ -1048,6 +1189,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 故这里 interactionResolver 为 null 只可能是 misconfiguration / 裸 handle 直用。
       // 此时对已知只读内省工具(Read/Glob/Grep/...)放行, 对会改文件 / 跑命令 / 发外部
       // 消息的工具及一切未知工具一律 deny —— 不再依赖 SDK permissionMode 兜底。
+      //
+      // 这道闸必须在 MCP 审批策略**之前**: host 策略描述的是"这个工具值不值得打扰
+      // 用户", 不代表"没有用户在场也可以跑"。裸 handle 场景下没有任何人能撤销误判,
+      // 可信 MCP 同样落到 deny。
       if (!interactionResolver) {
         if (isReadOnlyClaudeTool(toolName)) {
           return { behavior: 'allow', updatedInput: input };
@@ -1055,6 +1200,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         log.warn('canUseTool without interactionResolver → fail-closed deny', { tool: toolName });
         return { behavior: 'deny', message: 'no interaction resolver attached; denying non-read-only tool (fail-closed)' };
       }
+
+      // 3a. MCP 工具过 host 审批策略(本地与远端会话共用 classifyMcpApprovalPolicy)。
+      const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
+      if (mcpApprovalPolicy === 'auto-approve') {
+        return { behavior: 'allow', updatedInput: input };
+      }
+      const forcePrompt = mcpApprovalPolicy === 'prompt-each-time';
       const decision = await dispatchInteraction({
         kind: 'permission',
         requestId: options.toolUseID,
@@ -1063,13 +1215,17 @@ export class ClaudeCodeAgent extends BaseAgent {
         title: options.title,
         displayName: options.displayName,
         description: options.description,
-        suggestions: this.normalizeSessionPermissionSuggestions(options.suggestions),
+        // prompt-each-time 的语义是"每次都要人过目", 因此不把会话级 suggestion 交给
+        // UI —— 否则用户点一次"总是允许"就把逐次确认的高风险 action 永久放行了。
+        suggestions: forcePrompt
+          ? undefined
+          : this.normalizeSessionPermissionSuggestions(options.suggestions),
         metadata: {
           ...(options.blockedPath ? { blockedPath: options.blockedPath } : {}),
           ...(options.decisionReason ? { decisionReason: options.decisionReason } : {}),
           ...(options.agentID ? { agentID: options.agentID } : {}),
         },
-      });
+      }, { forcePrompt });
       if (decision.kind !== 'permission') {
         log.warn('permission got mismatched decision', { tool: toolName, decKind: decision.kind });
         return { behavior: 'deny', message: 'resolver kind mismatch' };
@@ -1086,7 +1242,18 @@ export class ClaudeCodeAgent extends BaseAgent {
         // Pass-through vendor-specific permission rule updates. BaseAgent owns
         // the session-scope normalization; Claude SDK validates the final shape.
         // PermissionUpdate shapes; we don't validate — SDK throws on bad shape.
-        if (decision.permissionUpdates && decision.permissionUpdates.length > 0) {
+        //
+        // forcePrompt 下必须在**消费决策**这一侧丢弃, 不能只靠不下发 suggestion:
+        // hook-control/interactions.ts 与 IM 卡片流会自己拼 permissionUpdates(不看
+        // request.suggestions), 原样转给 SDK 就等于给逐次确认的高风险 action 落了
+        // 一条会话规则, 之后的 canUseTool 全被跳过。本次调用仍按用户意愿放行。
+        if (forcePrompt) {
+          if (decision.permissionUpdates && decision.permissionUpdates.length > 0) {
+            log.warn('dropping session permission grant for prompt-each-time MCP tool', {
+              tool: toolName,
+            });
+          }
+        } else if (decision.permissionUpdates && decision.permissionUpdates.length > 0) {
           out.updatedPermissions = decision.permissionUpdates as PermissionUpdate[];
         }
         return out;
@@ -1562,6 +1729,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           const dropped = Object.keys(mcpServers).filter((k) => !(k in remoteMcpServers));
           log.warn('cc remote: dropping in-process MCP servers (MVP not supported)', { dropped });
         }
+        // 远端会话实际只装到 remoteMcpServers 这一批, 被 filter 掉的 in-process server
+        // 在远端不存在 —— 审批归属必须按远端真实清单判, 否则策略会对远端根本不可能
+        // 出现的 server 名做判定。
+        registeredMcpServerNames = new Set(Object.keys(remoteMcpServers ?? {}));
         // 计划模式开启时远端 SDK 同样跑 plan; 读 mutable 值让 rewind 重建也拿到当前档。
         const remotePermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
         sdkInPlanMode = remotePermissionMode === 'plan';
@@ -1637,7 +1808,10 @@ export class ClaudeCodeAgent extends BaseAgent {
             // On timeout, dismiss the pending interaction (clears UI) and reject to
             // let cc-manager-client return deny to daemon.
             const REMOTE_APPROVAL_TIMEOUT_MS = 110_000;
-            async function dispatchWithTimeout(req: InteractionRequest): Promise<InteractionDecision> {
+            async function dispatchWithTimeout(
+              req: InteractionRequest,
+              dispatchOpts?: { forcePrompt?: boolean },
+            ): Promise<InteractionDecision> {
               let timer: NodeJS.Timeout | undefined;
               try {
                 return await new Promise<InteractionDecision>((resolve, reject) => {
@@ -1645,7 +1819,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                     dismissSinglePending(req.requestId, 'approval_timeout');
                     reject(new Error('approval timed out'));
                   }, REMOTE_APPROVAL_TIMEOUT_MS);
-                  dispatchInteraction(req).then(resolve, reject);
+                  dispatchInteraction(req, dispatchOpts).then(resolve, reject);
                 });
               } finally {
                 if (timer) clearTimeout(timer);
@@ -1697,9 +1871,34 @@ export class ClaudeCodeAgent extends BaseAgent {
               };
             }
             // permission kind
+            // 没接 resolver → 与本地 canUseTool 同款 fail-closed: 只放行已知只读工具,
+            // 其余(含未知工具与所有 MCP 工具)一律 deny。这里过去 return allow, 一个
+            // misconfigured / 裸 handle 的远端会话可以在无人在场时跑破坏性工具 ——
+            // 本地那侧不允许的事, 远端没有理由更宽。
             if (!interactionResolver) {
+              const remoteTool = params.toolName ?? '';
+              if (isReadOnlyClaudeTool(remoteTool)) {
+                return { kind: 'permission', behavior: 'allow' };
+              }
+              log.warn('cc remote: approval without interactionResolver → fail-closed deny', {
+                tool: remoteTool || 'unknown',
+              });
+              return {
+                kind: 'permission',
+                behavior: 'deny',
+                reason: 'no interaction resolver attached; denying non-read-only tool (fail-closed)',
+              };
+            }
+            // 远端会话走同一份 host MCP 策略 —— 否则 SSH 会话里可信 server 又要逐次
+            // 弹窗, prompt-each-time 的"禁止持久化授权"保护也整套缺失。
+            const remoteMcpPolicy = classifyMcpApprovalPolicy(
+              params.toolName ?? '',
+              params.input ?? {},
+            );
+            if (remoteMcpPolicy === 'auto-approve') {
               return { kind: 'permission', behavior: 'allow' };
             }
+            const remoteForcePrompt = remoteMcpPolicy === 'prompt-each-time';
             const decision = await dispatchWithTimeout({
               kind: 'permission',
               requestId: params.requestId,
@@ -1708,17 +1907,24 @@ export class ClaudeCodeAgent extends BaseAgent {
               title: params.title,
               displayName: params.displayName,
               description: params.description,
-              suggestions: this.normalizeSessionPermissionSuggestions(params.suggestions),
+              suggestions: remoteForcePrompt
+                ? undefined
+                : this.normalizeSessionPermissionSuggestions(params.suggestions),
               metadata: params.metadata ?? {},
-            });
+            }, { forcePrompt: remoteForcePrompt });
             if (decision.kind !== 'permission') {
               return { kind: 'permission', behavior: 'deny', reason: 'resolver kind mismatch' };
+            }
+            if (remoteForcePrompt && decision.permissionUpdates && decision.permissionUpdates.length > 0) {
+              log.warn('dropping session permission grant for prompt-each-time MCP tool (remote)', {
+                tool: params.toolName,
+              });
             }
             return {
               kind: 'permission',
               behavior: decision.behavior,
               updatedInput: decision.updatedInput,
-              permissionUpdates: decision.permissionUpdates,
+              permissionUpdates: remoteForcePrompt ? undefined : decision.permissionUpdates,
               reason: decision.reason,
             };
           },

@@ -73,6 +73,8 @@ export interface CollabWorkerConfig {
   model: string;
   effort?: Effort;
   fast?: boolean;
+  /** 显式选定的模型来源;null/缺省 = 未显式(main 侧按默认路由解析)。 */
+  providerId?: string | null;
   /** 首条派工任务。一次性,故意不跨重启持久化(sanitize 加载时丢弃,见下方解析)。 */
   initialTask?: string;
 }
@@ -261,9 +263,16 @@ function sanitize(raw: unknown): NewMakerDraft {
       model,
       effort: typeof wc.effort === 'string' ? (wc.effort as Effort) : undefined,
       fast: typeof wc.fast === 'boolean' ? wc.fast : undefined,
+      // 来源与模型是同一次选择的两个维度,随 model 一起耐久保留;与 role 同样 trim,
+      // 空白串回落未显式 —— IPC 侧把非空 string 当显式来源,漏 trim 会把无效 id
+      // 一路带到 PROVIDER_ROUTE_UNAVAILABLE(copilot review)。
+      providerId:
+        typeof wc.providerId === 'string' && wc.providerId.trim()
+          ? wc.providerId.trim()
+          : undefined,
       // initialTask 是一次性任务,**故意不跨重启持久化**(同 deviceLinkDeviceId 先例):
       // 重启后 Send/New Goal 会静默把过期任务当 delegateTask 发出去,而收起态 pill
-      // 无从看见/编辑(codex P2)。耐久保留的只有 role/model/effort/fast。
+      // 无从看见/编辑(codex P2)。耐久保留的只有 role/model/effort/fast/providerId。
     };
   })();
   const collab: CollabDraft = { enabled: collabEnabled, worker: collabWorker, workerConfig };

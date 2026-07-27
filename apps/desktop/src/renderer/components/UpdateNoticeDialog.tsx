@@ -1,6 +1,6 @@
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { Flame, Zap, Wrench, Swords, ChevronDown } from 'lucide-react';
+import { Flame, Zap, Wrench, Flower, ChevronDown } from 'lucide-react';
 import {
   useCallback,
   useEffect,
@@ -10,7 +10,12 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { ReleaseNoteItem, ReleaseNoteSection, ReleaseNotes } from '@/release-notes';
+import type {
+  ReleaseNoteItem,
+  ReleaseNoteSection,
+  ReleaseNoteTopic,
+  ReleaseNotes,
+} from '@/release-notes';
 import type { UpdateNoticeMode } from '@/hooks/useUpdateNotice';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
@@ -201,12 +206,12 @@ function ContributorsLine({ contributors }: { contributors: string[] }) {
       )}
     >
       <span className="flex h-[12px] items-center">
-        <Swords
+        <Flower
           className="h-3.5 w-3.5 text-[var(--status-bar-accent)] -translate-y-[2px]"
           strokeWidth={2.25}
         />
       </span>
-      <span className="text-[var(--cmd-palette-item-meta)]">{t('update.notice.craftedBy')}</span>
+      <span className="text-[var(--cmd-palette-item-meta)]">{t('update.notice.thanksTo')}</span>
       <span className="font-semibold text-[var(--msg-assistant-text)]">
         {contributors.join(' · ')}
       </span>
@@ -214,13 +219,59 @@ function ContributorsLine({ contributors }: { contributors: string[] }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Topic-format (v2) body: single centered column of theme blocks. Replaces
+// the two-column author-grouped layout for payloads that carry `topics` —
+// notably fixes the half-empty dialog on bugfix-only releases.
+// ---------------------------------------------------------------------------
+
+function TopicList({ intro, topics }: { intro?: string; topics: ReleaseNoteTopic[] }) {
+  return (
+    <div className="flex flex-col items-center px-7">
+      {intro && (
+        <div className="w-full max-w-[760px] pb-3 text-sm leading-[1.7] break-words text-[var(--cmd-palette-item-meta)]">
+          {intro}
+        </div>
+      )}
+      {topics.map((topic, i) => (
+        <div key={`${i}-${topic.title}`} className="w-full max-w-[760px] py-3">
+          {/* flex-wrap + min-w-0: long titles shrink/wrap and an overlong
+              contributor list drops to its own right-aligned line instead of
+              overflowing the dialog at narrow widths. */}
+          <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            {topic.emoji && <span className="text-15 leading-none">{topic.emoji}</span>}
+            <span
+              className={cn(
+                'min-w-0 break-words text-15 font-medium leading-tight tracking-tight',
+                'text-[var(--msg-assistant-text)]',
+              )}
+            >
+              {topic.title}
+            </span>
+            {topic.contributors.length > 0 && (
+              <span className="ml-auto max-w-full break-words text-right text-12 text-[var(--cmd-palette-item-meta)]">
+                {topic.contributors.join(' · ')}
+              </span>
+            )}
+          </div>
+          <div className="text-sm leading-[1.7] break-words text-[var(--msg-assistant-text)]">
+            {topic.text}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /**
  * A loaded version's block — subheader (version badge + date + contributors)
- * on top, two-column features/bugfixes below. Same layout auto and manual
- * modes share; the outer container owns scrolling in both cases.
+ * on top, body below: topic list for v2 payloads, two-column
+ * features/bugfixes for legacy ones. Same layout auto and manual modes
+ * share; the outer container owns scrolling in both cases.
  */
 function VersionBlock({ notes, locale }: { notes: ReleaseNotes; locale: string }) {
   const { t } = useTranslation();
+  const isTopicFormat = notes.topics.length > 0;
   const { leftSections, rightSections } = splitSections(notes.sections);
   const formattedDate = formatDate(notes.date, locale);
   return (
@@ -236,21 +287,27 @@ function VersionBlock({ notes, locale }: { notes: ReleaseNotes; locale: string }
           </span>
         )}
       </div>
-      <div className="flex py-3">
-        <SectionColumn
-          icon="zap"
-          title={t('update.notice.newFeatures')}
-          sections={leftSections}
-          scroll={false}
-        />
-        <div className="w-px self-stretch bg-[var(--cmd-palette-border)]" />
-        <SectionColumn
-          icon="wrench"
-          title={t('update.notice.bugFixes')}
-          sections={rightSections}
-          scroll={false}
-        />
-      </div>
+      {isTopicFormat ? (
+        <div className="py-3">
+          <TopicList intro={notes.intro} topics={notes.topics} />
+        </div>
+      ) : (
+        <div className="flex py-3">
+          <SectionColumn
+            icon="zap"
+            title={t('update.notice.newFeatures')}
+            sections={leftSections}
+            scroll={false}
+          />
+          <div className="w-px self-stretch bg-[var(--cmd-palette-border)]" />
+          <SectionColumn
+            icon="wrench"
+            title={t('update.notice.bugFixes')}
+            sections={rightSections}
+            scroll={false}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -853,24 +910,30 @@ export function UpdateNoticeDialog({
               onNotesLoaded={handleNotesLoaded}
             />
           ) : mode === 'auto' && releaseNotes.length === 1 ? (
-            (() => {
-              const { leftSections, rightSections } = splitSections(newest.sections);
-              return (
-                <div className="flex flex-1 min-h-0 py-4 select-text">
-                  <SectionColumn
-                    icon="zap"
-                    title={t('update.notice.newFeatures')}
-                    sections={leftSections}
-                  />
-                  <div className="w-px self-stretch bg-[var(--cmd-palette-border)]" />
-                  <SectionColumn
-                    icon="wrench"
-                    title={t('update.notice.bugFixes')}
-                    sections={rightSections}
-                  />
-                </div>
-              );
-            })()
+            newest.topics.length > 0 ? (
+              <div className="flex flex-1 min-h-0 flex-col overflow-y-auto py-4 select-text">
+                <TopicList intro={newest.intro} topics={newest.topics} />
+              </div>
+            ) : (
+              (() => {
+                const { leftSections, rightSections } = splitSections(newest.sections);
+                return (
+                  <div className="flex flex-1 min-h-0 py-4 select-text">
+                    <SectionColumn
+                      icon="zap"
+                      title={t('update.notice.newFeatures')}
+                      sections={leftSections}
+                    />
+                    <div className="w-px self-stretch bg-[var(--cmd-palette-border)]" />
+                    <SectionColumn
+                      icon="wrench"
+                      title={t('update.notice.bugFixes')}
+                      sections={rightSections}
+                    />
+                  </div>
+                );
+              })()
+            )
           ) : (
             <AutoBody releaseNotes={releaseNotes} locale={i18n.language} />
           )}

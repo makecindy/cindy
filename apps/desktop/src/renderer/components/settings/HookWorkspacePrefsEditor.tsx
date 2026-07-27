@@ -496,9 +496,11 @@ function toAgentKind(vendor: MakerVendor): KnownAgent {
 export function WorkspacePrefsEditor({
   alias,
   state,
+  maxVisibleModelRows,
 }: {
   alias: string;
   state: HookWorkspacePrefsState;
+  maxVisibleModelRows?: number;
 }) {
   const { t } = useTranslation();
   const claudeCaps = useAgentCapabilities('claude-code');
@@ -574,6 +576,7 @@ export function WorkspacePrefsEditor({
           vendorKey={vendorKey}
           triggerVariant="field"
           popoverSide="bottom"
+          maxVisibleModelRows={maxVisibleModelRows}
           dense
           // 可及名上下文与 agent 分段同规则(字段名 · 行别名),多卡片同屏读屏可区分。
           ariaContext={`${t('settings.tina.prefs.modelLabel')} · ${alias}`}

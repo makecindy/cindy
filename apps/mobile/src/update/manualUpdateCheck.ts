@@ -1,4 +1,4 @@
-import { i18n } from '@/i18n';
+import type { TFunction } from 'i18next';
 
 /** 手动整包检查结果,供统一流程决定是否继续检查 JS 热更新。 */
 export type BundleUpdateCheckOutcome =
@@ -18,7 +18,7 @@ export type ManualUpdateCheckOutcome =
   | { kind: 'ota-unavailable' }
   | { kind: 'reloading' }
   | { kind: 'busy' }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; reason: 'bundle-check' | 'ota-check'; detail?: string };
 
 /** 统一更新检查所需的外部能力,由设置页注入真实 Expo / 整包更新实现。 */
 export interface ManualUpdateCheckDeps {
@@ -50,10 +50,10 @@ export async function runManualUpdateCheck({
     try {
       bundleOutcome = await checkBundleUpdate();
     } catch {
-      return { kind: 'error', message: i18n.t('settings.version.bundleCheckFailed') };
+      return { kind: 'error', reason: 'bundle-check' };
     }
     if (bundleOutcome === 'update-available') return { kind: 'bundle-update-available' };
-    if (bundleOutcome === 'error') return { kind: 'error', message: i18n.t('settings.version.bundleCheckFailed') };
+    if (bundleOutcome === 'error') return { kind: 'error', reason: 'bundle-check' };
     if (bundleOutcome === 'busy') return { kind: 'busy' };
   }
 
@@ -70,9 +70,39 @@ export async function runManualUpdateCheck({
     const detail = error instanceof Error ? error.message.trim() : String(error).trim();
     return {
       kind: 'error',
-      message: detail
-        ? i18n.t('settings.version.checkFailedDetail', { detail })
-        : i18n.t('settings.version.checkFailed'),
+      reason: 'ota-check',
+      ...(detail ? { detail } : {}),
     };
+  }
+}
+
+/**
+ * 在设置页渲染更新检查结果。结果本身只保存语义和动态详情，避免语言切换后保留旧语言的字符串。
+ */
+export function manualUpdateCheckMessage(
+  outcome: ManualUpdateCheckOutcome,
+  options: { isTestFlightBuild: boolean; t: TFunction },
+): string | null {
+  const { isTestFlightBuild, t } = options;
+  switch (outcome.kind) {
+    case 'bundle-update-available':
+      return t('settings.version.bundleUpdateFound');
+    case 'up-to-date':
+      return t(isTestFlightBuild
+        ? 'settings.version.testFlightNoContentUpdate'
+        : 'settings.version.upToDate');
+    case 'ota-unavailable':
+      return t(isTestFlightBuild
+        ? 'settings.version.testFlightContentUpdateUnavailable'
+        : 'settings.version.bundleUpToDateNoOta');
+    case 'reloading':
+      return t('settings.version.downloadedRestarting');
+    case 'error':
+      if (outcome.reason === 'bundle-check') return t('settings.version.bundleCheckFailed');
+      return outcome.detail
+        ? t('settings.version.checkFailedDetail', { detail: outcome.detail })
+        : t('settings.version.checkFailed');
+    case 'busy':
+      return null;
   }
 }

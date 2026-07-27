@@ -12,6 +12,8 @@
  */
 
 import type { Catalog, Provider, CatalogModel, AgentKind, Effort, ProviderPreset } from './types.js';
+import { findReservedOAuthExtraParam } from './provider-oauth.js';
+import { isProviderRequestPath } from './provider-url.js';
 
 export { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
 
@@ -74,22 +76,88 @@ function validateModel(m: CatalogModel, providerId: string): void {
 function validateOAuthDescriptor(p: Provider): void {
   const d = p.auth?.oauth;
   if (d === undefined) return;
-  assert(d && typeof d === 'object', `provider '${p.id}' auth.oauth must be an object`);
-  for (const field of ['authorizeUrl', 'tokenUrl', 'clientId', 'scopes'] as const) {
-    assert(typeof d[field] === 'string' && d[field].length > 0, `provider '${p.id}' auth.oauth.${field} missing`);
+  assert(d && typeof d === 'object' && !Array.isArray(d), `provider '${p.id}' auth.oauth must be an object`);
+  const raw = d as unknown as Record<string, unknown>;
+  const flow = raw.flow ?? 'authorization-code';
+  assert(
+    flow === 'authorization-code' || flow === 'device-code',
+    `provider '${p.id}' auth.oauth.flow invalid`,
+  );
+  for (const field of ['tokenUrl', 'clientId', 'scopes'] as const) {
+    assert(typeof raw[field] === 'string' && raw[field].length > 0, `provider '${p.id}' auth.oauth.${field} missing`);
   }
-  for (const field of ['authorizeUrl', 'tokenUrl'] as const) {
-    assert(d[field].startsWith('https://'), `provider '${p.id}' auth.oauth.${field} must be https`);
-  }
-  if (d.redirectPort !== undefined) {
+  const requireHttpsUrl = (field: string): void => {
+    const value = raw[field];
+    let valid = false;
+    if (typeof value === 'string') {
+      try {
+        const url = new URL(value);
+        valid = url.protocol === 'https:' && !url.username && !url.password;
+      } catch {
+        valid = false;
+      }
+    }
+    assert(valid, `provider '${p.id}' auth.oauth.${field} must be https`);
+  };
+  requireHttpsUrl('tokenUrl');
+  if (flow === 'authorization-code') {
+    requireHttpsUrl('authorizeUrl');
     assert(
-      typeof d.redirectPort === 'number' && Number.isInteger(d.redirectPort) && d.redirectPort > 0 && d.redirectPort < 65536,
+      raw.deviceAuthorizationUrl === undefined && raw.extraDeviceParams === undefined,
+      `provider '${p.id}' auth.oauth device-code fields not allowed for authorization-code`,
+    );
+  } else {
+    requireHttpsUrl('deviceAuthorizationUrl');
+    assert(
+      raw.authorizeUrl === undefined
+        && raw.extraAuthParams === undefined
+        && raw.redirectPort === undefined,
+      `provider '${p.id}' auth.oauth authorization-code fields not allowed for device-code`,
+    );
+  }
+  if (raw.redirectPort !== undefined) {
+    assert(
+      flow === 'authorization-code'
+        && typeof raw.redirectPort === 'number'
+        && Number.isInteger(raw.redirectPort)
+        && raw.redirectPort > 0
+        && raw.redirectPort < 65536,
       `provider '${p.id}' auth.oauth.redirectPort invalid`,
     );
   }
-  if (d.modelsDiscoveryUrl !== undefined) {
+  const validateParams = (field: 'extraAuthParams' | 'extraDeviceParams'): void => {
+    if (raw[field] === undefined) return;
     assert(
-      typeof d.modelsDiscoveryUrl === 'string' && d.modelsDiscoveryUrl.startsWith('https://'),
+      raw[field] && typeof raw[field] === 'object' && !Array.isArray(raw[field]),
+      `provider '${p.id}' auth.oauth.${field} invalid`,
+    );
+    assert(
+      Object.values(raw[field] as Record<string, unknown>).every((value) => typeof value === 'string'),
+      `provider '${p.id}' auth.oauth.${field} invalid`,
+    );
+    const collision = findReservedOAuthExtraParam(
+      raw[field] as Record<string, unknown>,
+      flow,
+    );
+    assert(
+      collision === null,
+      `provider '${p.id}' auth.oauth.${field} cannot override '${String(collision)}'`,
+    );
+  };
+  if (flow === 'authorization-code') validateParams('extraAuthParams');
+  else validateParams('extraDeviceParams');
+  if (raw.modelsDiscoveryUrl !== undefined) {
+    let valid = false;
+    if (typeof raw.modelsDiscoveryUrl === 'string') {
+      try {
+        const url = new URL(raw.modelsDiscoveryUrl);
+        valid = url.protocol === 'https:' && !url.username && !url.password;
+      } catch {
+        valid = false;
+      }
+    }
+    assert(
+      valid,
       `provider '${p.id}' auth.oauth.modelsDiscoveryUrl must be https`,
     );
   }
@@ -102,6 +170,20 @@ function validateProvider(p: Provider): void {
   // 必须限定 slug 字符集，防被投毒目录用 `../` 之类字符把凭证写出存储目录。
   assert(/^[a-zA-Z0-9_-]+$/.test(p.id), `provider.id has illegal characters: '${p.id}'`);
   assert(typeof p.name === 'string' && p.name.length > 0, `provider.name missing for '${p.id}'`);
+  assert(
+    p.auth
+      && (
+        p.auth.method === 'oauth'
+        || p.auth.method === 'apiKey'
+        || p.auth.method === 'managed'
+        || p.auth.method === 'none'
+    ),
+    `provider.auth.method invalid for '${p.id}'`,
+  );
+  assert(
+    p.auth.method === 'oauth' || p.auth.oauth === undefined,
+    `provider '${p.id}' auth.oauth not allowed for ${p.auth.method} method`,
+  );
   assert(Array.isArray(p.agents) && p.agents.length > 0, `provider.agents missing for '${p.id}'`);
   assert(p.agents.every(isAgentKind), `provider.agents has invalid kind for '${p.id}'`);
   assert(p.routing && typeof p.routing === 'object', `provider.routing missing for '${p.id}'`);
@@ -113,6 +195,20 @@ function validateProvider(p: Provider): void {
   for (const agent of p.agents) {
     const routing = p.routing[agent];
     assert(routing, `provider '${p.id}' declares agent '${agent}' but no routing[${agent}]`);
+    if (routing.upstream !== undefined) {
+      let valid = false;
+      try {
+        const url = new URL(routing.upstream);
+        valid = (
+          (url.protocol === 'http:' || url.protocol === 'https:')
+          && !url.username
+          && !url.password
+        );
+      } catch {
+        valid = false;
+      }
+      assert(valid, `provider '${p.id}' routing[${agent}].upstream invalid`);
+    }
     if (routing.wireProtocol !== undefined) {
       assert(
         isWireProtocol(routing.wireProtocol),
@@ -132,6 +228,12 @@ function validateProvider(p: Provider): void {
           `provider '${p.id}' routing[${agent}] cannot use anthropic-messages`,
         );
       }
+    }
+    if (routing.requestPath !== undefined) {
+      assert(
+        isProviderRequestPath(routing.requestPath),
+        `provider '${p.id}' routing[${agent}].requestPath invalid`,
+      );
     }
     // modelPrefixes（路由服务范围）提供了就必须是命名空间前缀形态（`xai/` 这类,以 `/` 结尾）——
     // 结构上保证 claude-* 等裸 wire model 永远不会命中,防止把 scope 声明成误伤辅助请求的形状。
@@ -249,6 +351,11 @@ function isValidPreset(v: unknown): v is ProviderPreset {
   if (typeof p.id !== 'string' || p.id.length === 0) return false;
   if (typeof p.name !== 'string' || p.name.length === 0) return false;
   if (p.docsUrl !== undefined && typeof p.docsUrl !== 'string') return false;
+  if (
+    p.authMethod !== undefined
+    && p.authMethod !== 'apiKey'
+    && p.authMethod !== 'none'
+  ) return false;
   if (!p.runtimes || typeof p.runtimes !== 'object' || Array.isArray(p.runtimes)) return false;
   const entries = Object.entries(p.runtimes as Record<string, unknown>);
   if (entries.length === 0) return false;
@@ -275,7 +382,8 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       if (!r.headers || typeof r.headers !== 'object' || Array.isArray(r.headers)) return false;
       if (Object.values(r.headers as Record<string, unknown>).some((x) => typeof x !== 'string')) return false;
     }
-    // modelsUrl 不在此淘汰整条——非法值由 sanitizePresets 剥字段（同 regionHint 容错语义）。
+    if (r.baseUrlEditable !== undefined && typeof r.baseUrlEditable !== 'boolean') return false;
+    // modelsUrl / requestPath 不在此淘汰整条——非法值由 sanitizePresets 剥字段。
   }
   return true;
 }
@@ -295,17 +403,22 @@ function isHttpUrl(v: unknown): boolean {
  * runtime.modelsUrl 非法（非 http(s) URL）时剥掉该字段、保留预设本体——OSS 推错一个
  * 不可见字段不该让整条预设消失，更不该让用户保存时撞 main 侧 URL 校验无法自助修复。
  */
-function normalizePresetModelsUrls(p: ProviderPreset): ProviderPreset {
+function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {
   let changed = false;
   const runtimes: ProviderPreset['runtimes'] = {};
   for (const [agent, rt] of Object.entries(p.runtimes) as [AgentKind, ProviderPreset['runtimes'][AgentKind] & object][]) {
-    if (rt.modelsUrl !== undefined && !isHttpUrl(rt.modelsUrl)) {
-      const { modelsUrl: _drop, ...rest } = rt;
-      runtimes[agent] = rest;
+    let next = rt;
+    if (next.modelsUrl !== undefined && !isHttpUrl(next.modelsUrl)) {
+      const { modelsUrl: _drop, ...rest } = next;
+      next = rest;
       changed = true;
-    } else {
-      runtimes[agent] = rt;
     }
+    if (next.requestPath !== undefined && !isProviderRequestPath(next.requestPath)) {
+      const { requestPath: _drop, ...rest } = next;
+      next = rest;
+      changed = true;
+    }
+    runtimes[agent] = next;
   }
   return changed ? { ...p, runtimes } : p;
 }
@@ -336,7 +449,7 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
       const { nameEn: _drop, ...rest } = preset as ProviderPreset & { nameEn: unknown };
       preset = rest as ProviderPreset;
     }
-    out.push(normalizePresetModelsUrls(preset));
+    out.push(normalizePresetRuntimeOptions(preset));
   }
   return out;
 }

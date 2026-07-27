@@ -89,6 +89,19 @@ const PROVIDER_TITLE_KEY: Record<string, string> = {
 
 // 配置面板锚在主菜单内缩 8px 的模型行上；补偿这段内缩，让两块面板贴边但不重叠。
 const MODEL_OPTIONS_SIDE_OFFSET = 8;
+const MODEL_LIST_DEFAULT_MAX_HEIGHT_PX = 300;
+// 折扣模型的价格会叠成两行：27.5px 价格栈 + 16px 纵向 padding，向上取整为 44px。
+const MODEL_LIST_CONSTRAINED_ROW_HEIGHT_PX = 44;
+const MODEL_LIST_ROW_GAP_PX = 2;
+
+export function modelListMaxHeightForRows(maxVisibleRows?: number): number | undefined {
+  if (maxVisibleRows === undefined || !Number.isFinite(maxVisibleRows)) return undefined;
+  const rows = Math.max(1, Math.floor(maxVisibleRows));
+  return Math.min(
+    MODEL_LIST_DEFAULT_MAX_HEIGHT_PX,
+    rows * MODEL_LIST_CONSTRAINED_ROW_HEIGHT_PX + Math.max(0, rows - 1) * MODEL_LIST_ROW_GAP_PX,
+  );
+}
 
 function providerDisplayName(p: ProviderView, t: (key: string) => string): string {
   const key = PROVIDER_TITLE_KEY[p.id];
@@ -314,6 +327,11 @@ interface ModelSelectorProps {
   useMorphPopover?: boolean;
   /** Popover 弹出方向,默认 "top"（底部工具栏向上弹），dialog 内嵌场景传 "bottom"。 */
   popoverSide?: 'top' | 'bottom';
+  /**
+   * 模型列表最多露出的标准行数；超出后列表自身滚动。
+   * 不传时沿用通用面板的 300px 上限，供 Settings 等紧凑场景按行数收窄。
+   */
+  maxVisibleModelRows?: number;
   /** 关闭模型的 effort / Fast 编辑入口；只选择模型 id 的设置项使用。 */
   configurationEnabled?: boolean;
   /** 可选的列表首行兜底值，例如“不指定（使用原逻辑）”。 */
@@ -371,6 +389,8 @@ interface ModelSelectorContentProps {
   excludeChatBridgedCodex?: boolean;
   /** 选中后是否自动关闭。Popover 场景传入,内嵌场景不传。 */
   onDismiss?: () => void;
+  /** 语义同 ModelSelectorProps.maxVisibleModelRows。 */
+  maxVisibleModelRows?: number;
   /** 模型信息 / 选项浮层的额外样式。供嵌套在高层级 overlay 中的调用方覆盖默认 z-index。 */
   overlayContentClassName?: string;
   currentProviderId?: string | null;
@@ -432,6 +452,7 @@ function ModelSelectorContentView({
   excludeSubscriptionDirect,
   excludeChatBridgedCodex,
   onDismiss,
+  maxVisibleModelRows,
   overlayContentClassName,
   currentProviderId,
   onProviderChange,
@@ -445,6 +466,7 @@ function ModelSelectorContentView({
   pricing,
 }: ModelSelectorContentProps & { pricing: ModelPricingCatalog | null }) {
   const { t } = useTranslation();
+  const constrainedListMaxHeight = modelListMaxHeightForRows(maxVisibleModelRows);
   // session-agent-switch:两步式引擎切换的浏览态。browseVendor 初始 = 会话当前引擎;
   // 切到另一家 tab 只是「浏览目标引擎的模型」,选中模型行才真正触发切换事务。
   const [browseVendor, setBrowseVendor] = useState<'cc' | 'codex'>(
@@ -1213,6 +1235,7 @@ function ModelSelectorContentView({
             }}
             className={cn(
               'flex w-full cursor-pointer items-center justify-between rounded-[8px] px-3 py-2',
+              constrainedListMaxHeight !== undefined && 'min-h-11',
               'transition-colors duration-100 hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
               isSelected && 'bg-[var(--model-item-hover)]',
               isEditingThis &&
@@ -1443,7 +1466,12 @@ function ModelSelectorContentView({
         ref={listRef}
         // -mr-2 把滚动条挪进面板右侧 8px 留白;scrollbar-gutter:stable 让无滚动时
         // 行宽与有滚动时一致(否则行会比搜索框宽 8px);细滚动条见 globals.css
-        className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto [scrollbar-gutter:stable]"
+        className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+        style={
+          constrainedListMaxHeight === undefined
+            ? undefined
+            : { maxHeight: `${constrainedListMaxHeight}px` }
+        }
         role="listbox"
         aria-label="Model list"
         onScroll={() => {
@@ -1513,6 +1541,7 @@ export function ModelSelector({
   visualVariant = 'default',
   useMorphPopover = false,
   popoverSide = 'top',
+  maxVisibleModelRows,
   configurationEnabled = true,
   fallbackOption,
   reselectEmitsChange = false,
@@ -1946,6 +1975,7 @@ export function ModelSelector({
       excludeSubscriptionDirect={excludeSubscriptionDirect}
       excludeChatBridgedCodex={excludeChatBridgedCodex}
       onDismiss={() => setOpen(false)}
+      maxVisibleModelRows={maxVisibleModelRows}
       currentProviderId={currentProviderId}
       onProviderChange={onProviderChange}
       onNavigateToProviders={onNavigateToProviders}

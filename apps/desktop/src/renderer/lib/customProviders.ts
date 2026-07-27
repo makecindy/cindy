@@ -17,6 +17,7 @@ import type {
   AgentKind,
   CatalogModel,
   CustomProviderConfig,
+  ProviderView,
   ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
 
@@ -51,6 +52,35 @@ export function customProviderModelConfigFromCatalogModel(
       ? { contextWindow: model.contextWindow }
       : {}),
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
+  };
+}
+
+/** ProviderView → 编辑表单配置；必须无损保留所有非密钥路由/鉴权字段。 */
+export function providerViewToCustomProviderConfig(p: ProviderView): CustomProviderConfig {
+  const runtimes: CustomProviderConfig['runtimes'] = {};
+  for (const agent of p.agents) {
+    const routing = p.routing[agent];
+    const models = p.models[agent] ?? [];
+    runtimes[agent] = {
+      baseUrl: routing?.upstream ?? '',
+      ...(routing?.requestPath ? { requestPath: routing.requestPath } : {}),
+      ...(routing?.wireProtocol ? { wireProtocol: routing.wireProtocol } : {}),
+      models: models.map(customProviderModelConfigFromCatalogModel),
+      ...(routing?.headerOverride && Object.keys(routing.headerOverride).length > 0
+        ? { headers: { ...routing.headerOverride } }
+        : {}),
+      ...(routing?.modelsUrl ? { modelsUrl: routing.modelsUrl } : {}),
+    };
+  }
+  return {
+    id: p.id,
+    name: p.name,
+    ...(p.auth.method === 'oauth' && p.auth.oauth
+      ? { auth: { method: 'oauth' as const, oauth: p.auth.oauth } }
+      : p.auth.method === 'none'
+        ? { auth: { method: 'none' as const } }
+        : {}),
+    runtimes,
   };
 }
 

@@ -87,12 +87,18 @@ describe('buildProbeRequest', () => {
       baseUrl: 'https://api.deepseek.com/anthropic/',
       modelId: 'deepseek-chat',
       apiKey: 'sk-test',
-      headers: { 'x-custom': '1' },
+      headers: {
+        'x-custom': '1',
+        Authorization: 'Bearer stale',
+        'X-API-Key': 'stale',
+      },
     });
     expect(url).toBe('https://api.deepseek.com/anthropic/v1/messages');
     const headers = init.headers as Record<string, string>;
     expect(headers['x-api-key']).toBe('sk-test');
     expect(headers['authorization']).toBe('Bearer sk-test');
+    expect(headers.Authorization).toBeUndefined();
+    expect(headers['X-API-Key']).toBeUndefined();
     expect(headers['anthropic-version']).toBe('2023-06-01');
     expect(headers['x-custom']).toBe('1');
     const body = JSON.parse(String(init.body)) as { model: string; max_tokens: number };
@@ -153,6 +159,38 @@ describe('buildProbeRequest', () => {
     // 导致可达端点被误报失败;工具能力交给真实会话验证。
     expect(body.tools).toBeUndefined();
     expect(body.tool_choice).toBeUndefined();
+  });
+
+  it('uses an exact request path instead of appending the protocol default', () => {
+    const { url } = buildProbeRequest({
+      agent: 'codex',
+      baseUrl: 'https://gateway.example/api',
+      modelId: 'custom-model',
+      wireProtocol: 'openai-chat',
+      requestPath: '/tenant/acme/infer?stream=1',
+    });
+    expect(url).toBe('https://gateway.example/api/tenant/acme/infer?stream=1');
+  });
+
+  it('preserves the base query when applying an exact request path', () => {
+    const { url } = buildProbeRequest({
+      agent: 'codex',
+      baseUrl: 'https://gateway.example/api?tenant=alpha',
+      modelId: 'custom-model',
+      requestPath: '/infer?stream=1&mode=fast',
+    });
+    expect(url).toBe(
+      'https://gateway.example/api/infer?tenant=alpha&stream=1&mode=fast',
+    );
+  });
+
+  it('rejects base URL credentials when applying an exact request path', () => {
+    expect(() => buildProbeRequest({
+      agent: 'codex',
+      baseUrl: 'https://user:pass@gateway.example/api',
+      modelId: 'custom-model',
+      requestPath: '/infer',
+    })).toThrow('invalid provider base URL');
   });
 
   it('无 key 时不注入鉴权头（端点可能靠自定义 headers 鉴权）', () => {
@@ -253,7 +291,11 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       'claude-code': {
         baseUrl: 'https://relay.example/anthropic',
         models: [{ id: 'glm-5.2', name: 'GLM' }],
-        headers: { 'x-tenant': 't1' },
+        headers: {
+          'x-tenant': 't1',
+          Authorization: 'Bearer stale',
+          'X-API-Key': 'stale',
+        },
       },
     },
   };
@@ -268,6 +310,23 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       apiKey: 'sk-saved',
       headers: { 'x-tenant': 't1' },
     });
+  });
+
+  it('safeStorage 尚无 key 时保留 legacy header-only 凭证', () => {
+    setCustomProviders([buildUserProvider(config)]);
+    setDiagnosticsKeyReader(() => null);
+
+    const spec = resolveSavedProbeSpec('my-relay', 'claude-code');
+    expect(spec.apiKey).toBeNull();
+    expect(spec.headers).toEqual({
+      'x-tenant': 't1',
+      Authorization: 'Bearer stale',
+      'X-API-Key': 'stale',
+    });
+
+    const headers = buildProbeRequest(spec).init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe('Bearer stale');
+    expect(headers['X-API-Key']).toBe('stale');
   });
 
   it('api-key-header + openai-chat 供应商:saved 探测带上 wireProtocol → 打 /chat/completions', async () => {
@@ -295,6 +354,25 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       },
     );
     expect(seenUrl).toBe('https://api.deepseek.com/chat/completions');
+  });
+
+  it('saved 探测沿用自定义供应商的精确请求路径', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'exact-path',
+        name: 'Exact Path',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://gateway.example/api',
+            requestPath: '/tenant/acme/infer',
+            models: [{ id: 'm', name: 'M' }],
+          },
+        },
+      }),
+    ]);
+    setDiagnosticsKeyReader(() => 'sk-exact');
+    expect(resolveSavedProbeSpec('exact-path', 'codex').requestPath)
+      .toBe('/tenant/acme/infer');
   });
 
   it('不存在 / 非 user 供应商 / 无该 runtime → 抛错（handler 映射 INVALID_PARAMS）', () => {
@@ -348,5 +426,30 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     const headers = init.headers as Record<string, string>;
     expect(headers['authorization']).toBe('Bearer at-77');
     expect(headers['x-api-key']).toBeUndefined();
+  });
+
+  it('none 供应商:saved 探测不读取旧 key,并剥掉配置里残留的鉴权头', () => {
+    setCustomProviders([
+      buildUserProvider({
+        ...config,
+        id: 'local-proxy',
+        auth: { method: 'none' },
+        runtimes: {
+          'claude-code': {
+            ...config.runtimes['claude-code'],
+            headers: {
+              ...config.runtimes['claude-code'].headers,
+              Authorization: 'Bearer must-not-leak',
+              'X-API-Key': 'must-not-leak',
+            },
+          },
+        },
+      }),
+    ]);
+    setDiagnosticsKeyReader(() => 'stale-safe-storage-key');
+
+    const spec = resolveSavedProbeSpec('local-proxy', 'claude-code');
+    expect(spec.apiKey).toBeNull();
+    expect(spec.headers).toEqual({ 'x-tenant': 't1' });
   });
 });

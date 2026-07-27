@@ -665,7 +665,10 @@ export function HookConnectionsSection() {
    * 渠道切换 chip。用普通函数而非内联子组件渲染: 内联组件每次渲染都会
    * 重建类型导致子树 remount, 别名输入框会在输入中途失焦。
    */
-  const renderWorkdirSection = (prefsState: ReturnType<typeof useHookWorkspacePrefs>) => (
+  const renderWorkdirSection = (
+    prefsState: ReturnType<typeof useHookWorkspacePrefs>,
+    chatMaxVisibleModelRows?: number,
+  ) => (
     <>
       <div className="h-px w-full bg-[var(--border-default)]" />
       <div className="flex flex-col gap-1.5">
@@ -733,7 +736,11 @@ export function HookConnectionsSection() {
               {t('settings.tina.chat.description')}
             </span>
           </div>
-          <WorkspacePrefsEditor alias={HOOK_CHAT_WORKSPACE_ALIAS} state={prefsState} />
+          <WorkspacePrefsEditor
+            alias={HOOK_CHAT_WORKSPACE_ALIAS}
+            state={prefsState}
+            maxVisibleModelRows={chatMaxVisibleModelRows}
+          />
         </div>
         {rows.map((row, i) => (
           <div
@@ -1075,7 +1082,7 @@ export function HookConnectionsSection() {
           ) : null}
 
           {/* 工作目录映射(清单共享, 偏好取 Slack 那份) */}
-          {hook.enabled ? renderWorkdirSection(slackPrefsState) : null}
+          {hook.enabled ? renderWorkdirSection(slackPrefsState, 6) : null}
         </div>
       </ImChannelSettingsCard>
 

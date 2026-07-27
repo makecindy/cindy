@@ -152,6 +152,7 @@ import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
+import { localizeAgentStatus } from './lib/localizeAgentStatus';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
 import { createSessionSnapshotPatchBuffer } from './lib/sessionSnapshotPatchBuffer';
 import { readPanelCollapsedRecord } from '@/layout/collapsePrefs';
@@ -1809,6 +1810,8 @@ export function CCAgentSessionView({
           effort: form.effort as
             'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | undefined,
           fast: form.fast,
+          // null(未显式选来源)不传字段:IPC 侧只认非空 string 为显式来源。
+          providerId: form.providerId ?? undefined,
           delegateTask: form.initialTask || undefined,
         });
         void sessionsStore.forceRefresh('active');
@@ -3645,7 +3648,7 @@ function RunningStatusBar({
     ? backgroundBashOnlyCount > 0
       ? t('chat.backgroundActivity.bashStatus', { count: backgroundBashOnlyCount })
       : t('chat.backgroundActivity.status')
-    : status;
+    : localizeAgentStatus(status, t);
   // F-COMPACT-1: when SDK is auto-summarizing the conversation, give the
   // status bar a distinct icon so the user can tell "Compacting..." apart
   // from "Thinking..." — both share the shimmer animation by design, but

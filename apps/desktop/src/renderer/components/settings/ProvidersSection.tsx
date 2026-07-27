@@ -29,11 +29,12 @@ import { useApiKey } from '@/hooks/useApiKey';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
+import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { toast } from '@/lib/toast';
 import {
   appendDiscoveredCustomProviderModels,
-  customProviderModelConfigFromCatalogModel,
   deleteCustomProvider,
+  providerViewToCustomProviderConfig,
   readCustomProviderKey,
   updateCustomProvider,
 } from '@/lib/customProviders';
@@ -44,6 +45,7 @@ import {
 } from '@/lib/providerSubtitle';
 import { CustomProviderDialog } from './CustomProviderDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
+import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
@@ -555,9 +557,15 @@ function GenericOAuthHeader({
   const [busy, setBusy] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const connected = provider.connected;
+  const deviceFlow = provider.auth.oauth?.flow === 'device-code';
+  const { deviceCode, clearDeviceCode, beginOwnedLogin } = useProviderOAuthDeviceCode(
+    deviceFlow ? provider.id : null,
+  );
 
   const handleLogin = useCallback(async () => {
+    clearDeviceCode();
     setLoggingIn(true);
+    const finishOwnedLogin = beginOwnedLogin();
     try {
       const r = await window.electronAPI.maker.providerOAuthLogin(provider.id);
       if (r.ok) {
@@ -573,9 +581,10 @@ function GenericOAuthHeader({
     } catch {
       toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }));
     } finally {
+      finishOwnedLogin();
       setLoggingIn(false);
     }
-  }, [onChanged, provider.id, provider.name, t]);
+  }, [beginOwnedLogin, clearDeviceCode, onChanged, provider.id, provider.name, t]);
 
   const handleLogout = useCallback(async () => {
     const confirmed = await confirm({
@@ -611,11 +620,18 @@ function GenericOAuthHeader({
   ) : (
     <PillButton
       label={
-        loggingIn ? t('settings.providers.button.cancel') : t('settings.providers.button.authorize')
+        loggingIn
+          ? t('settings.providers.button.cancel')
+          : t(
+              deviceFlow
+                ? 'settings.providers.wizard.authorizeWithDeviceCode'
+                : 'settings.providers.button.authorize',
+            )
       }
       onClick={() => {
         if (loggingIn) {
           void window.electronAPI.maker.providerOAuthCancel(provider.id);
+          clearDeviceCode();
           setLoggingIn(false);
         } else {
           void handleLogin();
@@ -623,6 +639,8 @@ function GenericOAuthHeader({
       }}
     />
   );
+  const detail =
+    loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} /> : undefined;
 
   return (
     <DetailHeader
@@ -631,6 +649,7 @@ function GenericOAuthHeader({
       subtitle={t('settings.providers.genericOAuth.subtitle')}
       trailing={trailing}
       provider={provider}
+      detail={detail}
     />
   );
 }
@@ -817,32 +836,6 @@ function XdGatewayHeader({
 // 自定义供应商详情头 —— 编辑 / 删除;OAuth 形态另有授权/登出。
 // ---------------------------------------------------------------------------
 
-/** ProviderView → 编辑表单用的 CustomProviderConfig(per-runtime,不含密钥)。 */
-function providerViewToConfig(p: ProviderView): CustomProviderConfig {
-  const runtimes: CustomProviderConfig['runtimes'] = {};
-  for (const agent of p.agents) {
-    const routing = p.routing[agent];
-    const models = p.models[agent] ?? [];
-    runtimes[agent] = {
-      baseUrl: routing?.upstream ?? '',
-      ...(routing?.wireProtocol ? { wireProtocol: routing.wireProtocol } : {}),
-      models: models.map(customProviderModelConfigFromCatalogModel),
-      ...(routing?.headerOverride && Object.keys(routing.headerOverride).length > 0
-        ? { headers: { ...routing.headerOverride } }
-        : {}),
-      ...(routing?.modelsUrl ? { modelsUrl: routing.modelsUrl } : {}),
-    };
-  }
-  return {
-    id: p.id,
-    name: p.name,
-    ...(p.auth.method === 'oauth' && p.auth.oauth
-      ? { auth: { method: 'oauth' as const, oauth: p.auth.oauth } }
-      : {}),
-    runtimes,
-  };
-}
-
 function CustomProviderHeader({
   provider,
   onEdit,
@@ -855,6 +848,10 @@ function CustomProviderHeader({
   const { t } = useTranslation();
   const [loggingIn, setLoggingIn] = useState(false);
   const isOAuth = provider.auth.method === 'oauth' && !!provider.auth.oauth;
+  const deviceFlow = provider.auth.oauth?.flow === 'device-code';
+  const { deviceCode, clearDeviceCode, beginOwnedLogin } = useProviderOAuthDeviceCode(
+    deviceFlow ? provider.id : null,
+  );
   const handleOAuthClick = useCallback(async () => {
     if (provider.connected) {
       try {
@@ -871,10 +868,13 @@ function CustomProviderHeader({
     }
     if (loggingIn) {
       void window.electronAPI.maker.providerOAuthCancel(provider.id);
+      clearDeviceCode();
       setLoggingIn(false);
       return;
     }
+    clearDeviceCode();
     setLoggingIn(true);
+    const finishOwnedLogin = beginOwnedLogin();
     try {
       const r = await window.electronAPI.maker.providerOAuthLogin(provider.id);
       if (r.ok)
@@ -887,9 +887,10 @@ function CustomProviderHeader({
     } catch {
       toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }));
     } finally {
+      finishOwnedLogin();
       setLoggingIn(false);
     }
-  }, [loggingIn, provider.connected, provider.id, provider.name, t]);
+  }, [beginOwnedLogin, clearDeviceCode, loggingIn, provider.connected, provider.id, provider.name, t]);
 
   const trailing = (
     <div className="flex shrink-0 items-center gap-1">
@@ -900,7 +901,11 @@ function CustomProviderHeader({
               ? t('settings.providers.button.disconnect')
               : loggingIn
                 ? t('settings.providers.button.cancel')
-                : t('settings.providers.button.authorize')
+                : t(
+                    deviceFlow
+                      ? 'settings.providers.wizard.authorizeWithDeviceCode'
+                      : 'settings.providers.button.authorize',
+                  )
           }
           onClick={() => void handleOAuthClick()}
         />
@@ -925,6 +930,9 @@ function CustomProviderHeader({
       trailing={trailing}
       provider={provider}
       badge={<CustomTag label={t('settings.providers.custom.tag')} />}
+      detail={
+        loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} /> : undefined
+      }
     />
   );
 }
@@ -1251,7 +1259,7 @@ export function ProvidersSection() {
     async (p: ProviderView) => {
       setRefreshingModels(true);
       try {
-        const config = providerViewToConfig(p);
+        const config = providerViewToCustomProviderConfig(p);
         let added = 0;
         let anyOk = false;
         for (const agent of p.agents) {
@@ -1301,7 +1309,7 @@ export function ProvidersSection() {
     return (
       <CustomProviderHeader
         provider={p}
-        onEdit={() => setDialog({ mode: 'edit', config: providerViewToConfig(p) })}
+        onEdit={() => setDialog({ mode: 'edit', config: providerViewToCustomProviderConfig(p) })}
         onDelete={() => void handleDelete(p)}
       />
     );

@@ -9,6 +9,11 @@ export {
   type ChatBridgeProviderConfig,
   type ChatBridgeUpstreamErrorInfo,
   type ChatCompletionsRequest,
+  type ChatImageInput,
+  type ChatImageUrlContentPart,
+  type ChatTextContentPart,
+  type ChatUserContentPart,
+  type ChatUserMessage,
   type ResponsesChatBridgeHandler,
   type ResponsesRequest,
 } from './types.js';

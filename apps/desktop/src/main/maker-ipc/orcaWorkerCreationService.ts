@@ -1,4 +1,5 @@
 import type { AgentKind } from '@cindy/maker-core';
+import type { AuthStrategy } from '@cindy/model-providers';
 
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort, OrcaWorkerStatus } from './orcaTeamService.js';
@@ -42,8 +43,32 @@ export interface OrcaWorkerProviderSnapshot {
   id: string;
   name: string;
   models: readonly string[];
+  /**
+   * 该来源下 supportsFastMode 的模型 id 集合。Fast 能力是 per-(provider, model) 的,
+   * 同 id 模型在不同来源可分叉;缺省 = 该快照来源未提供 Fast 元数据,Fast 判定
+   * 回落拍平清单解析(兼容旧组装方,不整体压灭 Fast)。
+   */
+  fastModels?: readonly string[];
+  /**
+   * 该来源下各模型的 effort 元数据。effort 档位同样是 per-(provider, model) 的:
+   * 自定义来源追加同 id 模型时不经过基础目录的跨来源一致性校验,efforts /
+   * defaultEffort 可与拍平清单的首见条目分叉;缺省 = 该快照来源未提供 effort
+   * 元数据,effort 归一保留拍平清单解析(兼容旧组装方)。
+   */
+  effortMetaByModel?: Readonly<
+    Record<string, { efforts: readonly string[]; defaultEffort: string | null }>
+  >;
   /** true 表示该来源必须写入 session provider store 才能注入自己的 API key/OAuth token。 */
   requiresExplicitRoute?: boolean;
+}
+
+/** 自带凭证或明确无鉴权的第三方路由都不能回落到 worker/lead 的默认上游。 */
+export function providerRouteRequiresExplicitSelection(
+  authStrategy: AuthStrategy | undefined,
+): boolean {
+  return authStrategy === 'api-key-header'
+    || authStrategy === 'oauth-token'
+    || authStrategy === 'none';
 }
 
 /** 同一次 provider registry 快照派生出的可用性与默认模型路由，避免两次读取产生竞态。 */
@@ -130,6 +155,13 @@ export interface OrcaWorkerCreateParams {
   model?: string;
   effort?: OrcaWorkerEffort;
   fast?: boolean;
+  /**
+   * 显式选定的模型来源(标准模型选择面板的 per-worker 选择)。string = 显式来源,
+   * 走下方精确 preflight 校验「已连接且提供该模型」,不满足即失败,不静默换路由;
+   * undefined / null = 未显式选择,沿用 defaults 缓存 / Lead 继承 / spawn-aware
+   * 默认路由的既有解析(含 requiresExplicitRoute 唯一来源救援与 stale 回落)。
+   */
+  providerId?: string | null;
   initialTask?: string;
 }
 
@@ -249,6 +281,14 @@ type ResolveWorkerConfigResult =
       effort: string | null;
       fastMode: boolean;
       providerId: string | null;
+      /**
+       * 显式 effort 被拍平首见条目拒绝的**暂存**错误:拍平清单(首来源 wins,不含
+       * 连接态)不是档位权威 —— 实际路由来源(显式/缓存/默认解析)的条目可能支持
+       * 该档(如首见来源已断开且缺 xhigh,而生效默认来源提供,codex review)。由
+       * 调用方在解析出路由来源后裁决:有该来源元数据则按它重归一定论;没有(旧
+       * 组装方)才按本错误落地。
+       */
+      pendingEffortError?: string;
     }
   | {
       ok: false;
@@ -314,11 +354,13 @@ function resolveWorkerConfig(params: {
     effort: input.effort ?? defaults.effort ?? lead.effort,
     explicit: input.effort !== undefined,
   });
-  if (!normalizedEffort.ok) return normalizedEffort;
   return {
     ok: true,
     model,
-    effort: normalizedEffort.effort,
+    // 归一 !ok 只发生在 explicit 输入:此处不 error 早退,暂存给调用方按实际路由
+    // 来源的档位表裁决(见 pendingEffortError 注);其余字段照常解析。
+    effort: normalizedEffort.ok ? normalizedEffort.effort : null,
+    ...(normalizedEffort.ok ? {} : { pendingEffortError: normalizedEffort.message }),
     providerId: defaults.providerId !== undefined
       ? defaults.providerId
       : (input.agent === lead.agentKind ? lead.providerId : null),
@@ -459,6 +501,14 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }
 
     const defaults = deps.getWorkerDefaults(params.agent);
+    // 标准面板显式选定的来源(非空 string)直接生效,由下方精确 preflight 把关「已连接且
+    // 提供该模型」;空串/null/undefined 一律按未显式处理(与 IPC 边界同口径,service 作为
+    // 共用内核自防调用方漏归一),维持既有解析,包括「显式 model 不等于显式来源」的
+    // 强制默认路由与 requiresExplicitRoute 唯一来源救援。
+    const explicitSourceId =
+      typeof params.providerId === 'string' && params.providerId.trim().length > 0
+        ? params.providerId.trim()
+        : null;
     const resolvedConfig = resolveWorkerConfig({ input: params, lead, defaults, availableModels });
     if (!resolvedConfig.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.message };
@@ -488,19 +538,67 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       ...resolvedConfig,
       // 仅显式指定 model 不等于显式选择来源：providerId=null 必须保留 spawn-aware 默认路由。
       // 例外是该模型只有一个来源且它必须依赖 session provider store 注入自己的凭证。
-      providerId: params.model !== undefined
-        && explicitModelProviders.length === 1
-        && explicitModelProvider?.requiresExplicitRoute
-        ? explicitModelProvider.id
+      providerId: explicitSourceId !== null
+        ? explicitSourceId
         : params.model !== undefined
-          ? null
-          : cachedProviderRouteIsStale
-            ? (cachedProviderFallback?.requiresExplicitRoute ? cachedProviderFallback.id : null)
-            : resolvedConfig.providerId,
+          && explicitModelProviders.length === 1
+          && explicitModelProvider?.requiresExplicitRoute
+          ? explicitModelProvider.id
+          : params.model !== undefined
+            ? null
+            : cachedProviderRouteIsStale
+              ? (cachedProviderFallback?.requiresExplicitRoute ? cachedProviderFallback.id : null)
+              : resolvedConfig.providerId,
     };
-    const budgetRouteProviderId = params.model !== undefined
-      ? explicitModelDefaultProviderId
-      : (cachedProviderRouteIsStale ? cachedProviderFallbackId : resolved.providerId);
+    // Fast 与 effort 都按**实际路由来源**自己的模型条目判定(显式来源、defaults 缓存
+    // 来源、spawn 默认来源统一)—— getAvailableModels 是跨来源拍平清单(首来源 wins,
+    // 且不含连接态),同 id 模型的 supportsFastMode / efforts 在不同来源可分叉:首来源
+    // 的元数据会误杀或误放行真实路由来源的能力(codex review 三轮)。
+    const routeProviderId = explicitSourceId
+      ?? resolved.providerId
+      ?? providerRouting.resolveDefaultProviderIdForModel(params.agent, resolved.model);
+    const routeProvider = routeProviderId === null
+      ? undefined
+      : agentProviders.find((provider) => provider.id === routeProviderId);
+    // 只有该来源确实带了 Fast 元数据才覆盖;无元数据(旧组装方)保留拍平解析。
+    if (routeProvider?.fastModels) {
+      const providerSupportsFast = routeProvider.fastModels.includes(resolved.model);
+      const requestedFast = params.agent === 'codex' && params.fast !== undefined
+        ? params.fast
+        : (defaults.fastMode ?? !!lead.fastMode);
+      resolved.fastMode = providerSupportsFast && requestedFast === true;
+    }
+    // effort 按路由来源自己的条目**重归一定论**:resolveWorkerConfig 按拍平首见
+    // 条目归一只是初值(该条目不含连接态、同 id 模型档位表跨来源可分叉),显式
+    // 来源、defaults 缓存来源与默认解析来源统一在这里按权威档位表收口 —— 误放行
+    // (无档副本携带拍平档位)与误拒(路由来源支持而拍平缺档,explicit 输入已被
+    // 暂存为 pendingEffortError,不在归一处 error 早退)两个方向都在此裁决
+    // (codex review 两轮)。重归一用与 resolveWorkerConfig 相同的**原始输入**,
+    // 不拿已归一值二次级联;路由来源无元数据(旧组装方)时没有更权威的档位表,
+    // 按拍平结果落地 —— 含暂存的拒绝。
+    const routeEffortMeta = routeProvider?.effortMetaByModel?.[resolved.model];
+    if (routeEffortMeta) {
+      const renormalized = normalizeResolvedEffort({
+        model: {
+          id: resolved.model,
+          efforts: routeEffortMeta.efforts,
+          defaultEffort: routeEffortMeta.defaultEffort,
+        },
+        effort: params.effort ?? defaults.effort ?? lead.effort,
+        explicit: params.effort !== undefined,
+      });
+      if (!renormalized.ok) {
+        return { ok: false, errorCode: 'INVALID_PARAMS', message: renormalized.message };
+      }
+      resolved.effort = renormalized.effort;
+    } else if (resolvedConfig.pendingEffortError) {
+      return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.pendingEffortError };
+    }
+    const budgetRouteProviderId = explicitSourceId !== null
+      ? explicitSourceId
+      : params.model !== undefined
+        ? explicitModelDefaultProviderId
+        : (cachedProviderRouteIsStale ? cachedProviderFallbackId : resolved.providerId);
 
     // codex/ 预算模型依赖 Cindy AI API key；XD/default 路由即使因 provider 缺失，
     // 也要先返回这条可操作的凭证错误，避免被下方通用的精确路由失败遮蔽。

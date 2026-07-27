@@ -339,6 +339,10 @@ export function getMaker(): Maker {
       // 第一方只读工具走 SDK allowedTools, 避免 auto 模式为 discovery/read-only
       // 操作额外调用远程安全分类器; 列表按精确工具名维护, 不放行动态 call_tool。
       claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),
+      // MCP 工具审批与 Codex 共用同一份策略(mcp-tool-approval-policy.ts)。没有这一
+      // 行时, Claude 只剩上面那份静态只读白名单, 可信第一方 server 的 call_tool
+      // (浏览器自动化等高频入口)会逐次弹窗, 与 Codex 侧的静默执行行为分叉。
+      getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CLAUDE_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 cc 列表注入
       // （含 claude 订阅模型 + XD 网关路由的 gpt / 国产 / gemini 等）。active catalog 已在 splash 期
@@ -533,7 +537,8 @@ export function getMaker(): Maker {
       // host 自家、用户已通过 OAuth/账号授权过且完成权限 review 的 MCP server,
       // 按精确 server name 自动通过 Codex MCP elicitation，避免每次可信写操作都弹
       // PermissionPrompt。`cindy_` 只是 namespace，不构成信任边界；新 provider
-      // 默认仍弹审批，必须显式加入 allowlist。
+      // 默认仍弹审批，必须显式加入 allowlist。同一份策略也注入 Claude Code
+      // (见上方 claudeAgent 构造)，两端对同一个 MCP 工具必须给出同一个答案。
       // 例外:`cindy_ssh` 显式排除——它的 ssh_exec 在远端机器上执行任意命令,
       // 属于跨机器写操作,必须保留 Codex MCP elicitation 审批(PR #874 review)。
       // cindy_contacts 是渐进式 list_tools/call_tool server：不能按 serverName

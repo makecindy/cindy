@@ -31,10 +31,17 @@
     "pendingRequests": "待处理请求",
     "queueSwitchTo": "切换到{{position}}待处理请求：{{label}}",
     "queueSwitchGeneric": "切换待处理请求",
+    "queuePositionCurrent": "当前",
+    "queuePositionNext": "接着",
+    "queuePositionNth": "第 {{index}}",
+    "composerBlockedByPending": "先处理电脑端的待处理请求后才能继续输入。",
     "missingRequestId": "这个远程交互缺少 requestId，无法回传决定。",
     "issueConfirmUnsupported": "Issue 提交确认只在电脑端处理。请回到桌面端确认或取消提交。",
     "unsupportedType": "手机版暂不支持这个远程交互类型。",
     "unsupportedKind": "暂不支持",
+    "desktopOnlyKind": "电脑端处理",
+    "cancelRequest": "取消这次请求",
+    "cancelRequestAccessibility": "取消这次远程请求",
     "awaitingAnswer": "等待回答",
     "continueAccessibility": "继续远程提问",
     "continue": "继续",
@@ -79,6 +86,32 @@
     "planFeedbackRequired": "输入反馈后才能提交。",
     "planFeedbackSubmit": "提交计划反馈",
     "planFeedbackAccessibility": "反馈修改计划"
+  },
+  "kinds": {
+    "permission": {
+      "title": "需要授权电脑端操作",
+      "label": "授权"
+    },
+    "ask_user_question": {
+      "title": "需要回答 Agent 问题",
+      "label": "问题"
+    },
+    "plan_review": {
+      "title": "需要确认执行计划",
+      "label": "计划"
+    },
+    "issue_confirm": {
+      "title": "需要确认 Issue 内容",
+      "label": "Issue"
+    },
+    "plugin_setup": {
+      "title": "需要在电脑端配置插件",
+      "label": "插件"
+    },
+    "fallback": {
+      "title": "需要处理远程请求",
+      "label": "请求"
+    }
   },
   "rewind": {
     "readError": "无法读取回退预览结果，请重新同步后再试。",
@@ -145,5 +178,42 @@
     "enable": "去开启",
     "icloudTimeout": "照片还在从 iCloud 下载，等待超时了。请检查网络，稍后重试。",
     "photoNotReadable": "这张照片暂时无法读取(可能还没从 iCloud 下载完成)，请稍后重试。"
+  },
+  "pluginSetup": {
+    "completeOnDesktop": "请在被控桌面完成设置，本卡片会自动更新状态。",
+    "chooseOne": "选择一种配置方式",
+    "progress": "{{satisfied}}/{{total}} 已完成",
+    "desktopActionHint": "在电脑端{{action}}",
+    "a11ySeparator": "，",
+    "phase": {
+      "pending": "待设置",
+      "action_running": "进行中…",
+      "waiting_external": "等待授权…",
+      "verifying": "验证中…",
+      "satisfied": "已完成",
+      "failed": "失败",
+      "cancelled": "已取消"
+    },
+    "error": {
+      "ACTION_FAILED": "设置操作未完成，请重试。",
+      "ACTION_STALE": "设置已更新，请重新选择配置操作。",
+      "AUTH_CANCELLED": "授权已取消，您可以重新授权。",
+      "AUTH_FAILED": "未能完成授权，请重试。",
+      "INLINE_INVALID": "配置内容无效，请检查后重试。",
+      "INLINE_UNAVAILABLE": "当前版本无法在对话中保存此配置，请更新 Cindy 后重试。",
+      "SAVE_FAILED": "未能保存配置，请重试。",
+      "WINDOW_CLOSED": "发起设置的窗口已关闭，请回到该对话重试。",
+      "TARGET_UNAVAILABLE": "插件已停用、卸载或不可用，请检查插件状态后重试。",
+      "ASSESSMENT_FAILED": "暂时无法刷新配置状态，请重试。",
+      "TIMEOUT": "等待设置超时，请重试。"
+    },
+    "action": {
+      "oauth_connect": "授权",
+      "open_plugin_settings": "打开设置",
+      "manage_connection": "管理连接",
+      "open_client_settings": "打开模型设置"
+    },
+    "inlineFormAction": "在电脑端填写{{label}}",
+    "inlineFormActionGeneric": "在电脑端填写一项配置"
   }
 }

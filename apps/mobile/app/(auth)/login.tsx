@@ -40,6 +40,7 @@ import {
   LOGIN_SUBTITLE,
   LOGIN_TITLE,
   resolveDeletionBubbleFrame,
+  resolveDeletionBubbleLinkHitSlop,
   type LoginDeletionBubbleFrame,
   type LoginSurfaceMode,
 } from '@/auth/loginSkinLayout';
@@ -1298,6 +1299,15 @@ function usePanelEntrance(
   return { opacity, translateY };
 }
 
+/**
+ * 注销状态提示气泡(figma 678:1075「注销状态」组件集)。
+ *
+ * 浮层:落位与宽度由 `resolveDeletionBubbleFrame` 给出(物理 pt),内部几何(圆角 /
+ * padding / 字号 / 行高 / 间距)是 **stage 设计单位**,与登录组同乘 `frame.scale`
+ * 折算成物理 pt——故 figma 数值可逐字落码,气泡与登录面板保持设计稿里的比例关系。
+ * (2026-07-26 修正:初版把设计单位当物理 pt 用、宽度写死 335,比例失真。)
+ * 描边保持 1pt 物理细线;高度由内容撑开,禁止固定高;无图标 / 阴影 / 动画。
+ */
 function AccountDeletionStatusPanel({
   frame,
   onDismiss,
@@ -1309,22 +1319,44 @@ function AccountDeletionStatusPanel({
 }) {
   const styles = useThemedStyles(makeStyles);
   const pending = status.status === 'pending';
+  const scaled = (designUnits: number) => designUnits * frame.scale;
+  const B = LOGIN_DELETION_BUBBLE;
   return (
     <View
       style={[
         styles.deletionBubble,
-        { left: frame.left, top: frame.top, width: frame.width },
+        {
+          borderRadius: scaled(B.radius),
+          left: frame.left,
+          padding: scaled(B.padding),
+          top: frame.top,
+          width: frame.width,
+        },
       ]}
       testID="login.accountDeletionStatus"
     >
-      <Text style={styles.deletionBubbleTitle}>
+      <Text
+        style={[
+          styles.deletionBubbleTitle,
+          { fontSize: scaled(B.font), lineHeight: scaled(B.lineHeight) },
+        ]}
+      >
         {pending
           ? loginText('accountDeletionPendingTitle')
           : status.status === 'processing'
             ? loginText('accountDeletionProcessingTitle')
             : loginText('accountDeletionCompletedTitle')}
       </Text>
-      <Text style={styles.deletionBubbleCopy}>
+      <Text
+        style={[
+          styles.deletionBubbleCopy,
+          {
+            fontSize: scaled(B.font),
+            lineHeight: scaled(B.lineHeight),
+            marginTop: scaled(B.titleBodyGap),
+          },
+        ]}
+      >
         {pending
           ? loginText('accountDeletionPendingCopy').replace(
               '{date}',
@@ -1337,12 +1369,17 @@ function AccountDeletionStatusPanel({
       {onDismiss ? (
         <Pressable
           accessibilityRole="button"
-          hitSlop={LOGIN_DELETION_BUBBLE.linkHitSlop}
+          hitSlop={resolveDeletionBubbleLinkHitSlop(frame.scale)}
           onPress={onDismiss}
-          style={styles.deletionBubbleLink}
+          style={[styles.deletionBubbleLink, { marginTop: scaled(B.bodyLinkGap) }]}
           testID="login.accountDeletionDismissButton"
         >
-          <Text style={styles.deletionBubbleLinkText}>
+          <Text
+            style={[
+              styles.deletionBubbleLinkText,
+              { fontSize: scaled(B.font), lineHeight: scaled(B.lineHeight) },
+            ]}
+          >
             {loginText('accountDeletionDismiss')}
           </Text>
         </Pressable>
@@ -1459,40 +1496,31 @@ const makeStyles = (colors: ThemeColors) =>
       padding: spacing.lg,
     },
     // 注销提示气泡(figma 678:1075):不透明底 + 1px 描边(浮层盖立绘,必须不透明);
-    // left/top/width 由 resolveDeletionBubbleFrame 行内注入(物理 pt,不走 stage 缩放);
-    // 无图标/阴影/动画,高度内容撑开不固定。
+    // 与缩放相关的几何(圆角/padding/字号/行高/间距)在组件内按 frame.scale 行内折算,
+    // left/top/width 由 resolveDeletionBubbleFrame 注入;描边保持 1pt 物理细线
+    // (设计 1 单位折算后不足半点,会在部分密度下消失);无图标/阴影/动画,高度内容撑开。
     deletionBubble: {
       backgroundColor: colors.login.deletionBubbleBg,
       borderColor: colors.login.deletionBubbleBorder,
-      borderRadius: LOGIN_DELETION_BUBBLE.radius,
       borderWidth: LOGIN_DELETION_BUBBLE.borderWidth,
-      padding: LOGIN_DELETION_BUBBLE.padding,
       position: 'absolute',
     },
     deletionBubbleTitle: {
       color: colors.login.controlText,
-      fontSize: LOGIN_DELETION_BUBBLE.font,
       fontWeight: fontWeight.regular,
-      lineHeight: LOGIN_DELETION_BUBBLE.lineHeight,
       textAlign: 'center',
     },
     deletionBubbleCopy: {
       color: colors.login.secondaryText,
-      fontSize: LOGIN_DELETION_BUBBLE.font,
       fontWeight: fontWeight.regular,
-      lineHeight: LOGIN_DELETION_BUBBLE.lineHeight,
-      marginTop: LOGIN_DELETION_BUBBLE.titleBodyGap,
       textAlign: 'center',
     },
     deletionBubbleLink: {
       alignSelf: 'center',
-      marginTop: LOGIN_DELETION_BUBBLE.bodyLinkGap,
     },
     deletionBubbleLinkText: {
       color: colors.login.controlText,
-      fontSize: LOGIN_DELETION_BUBBLE.font,
       fontWeight: fontWeight.regular,
-      lineHeight: LOGIN_DELETION_BUBBLE.lineHeight,
       textAlign: 'center',
       textDecorationLine: 'underline',
     },

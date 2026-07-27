@@ -60,18 +60,27 @@ function declaredCurrency(
 /**
  * 目录级币种:本地记账账本(daily / session / schedule)都是单币种,逐条目
  * 混用币种会造成同端多币种金额被聚合层丢弃。规则:
- *   - 未声明条目恒为 Gateway 原生 USD(契约缺省),绝不被其它条目的声明改标;
- *   - 只有当**每个**条目都显式声明同一非 USD 币种时,目录才整体切换;
+ *   - 只有**会产生报价**的条目参与裁决:免费/无价条目本就不出报价,它们缺失
+ *     currency 声明不能把整个目录钉回 USD、连带丢弃全部已声明的报价
+ *     (对外 CNY 目录曾因此全军覆没,#587);
+ *   - 未声明的计价条目恒为 Gateway 原生 USD(契约缺省),绝不被其它条目的声明改标;
+ *   - 只有当每个计价条目都显式声明同一非 USD 币种时,目录才整体切换;
  *   - 与目录币种冲突的声明条目由 gatewayPricingCatalog 丢弃报价(退回 SDK
  *     实报 USD 兜底),而不是改标币种——错标单位正是本模块要杜绝的事。
  */
+/** 该条目是否会产生报价(与币种无关;目录币种裁决与覆盖率统计共用此判定)。 */
+export function isPricedGatewayModel(model: ModelAccessGatewayModel): boolean {
+  return gatewayModelPriceQuote(model) !== undefined;
+}
+
 export function resolveGatewayCatalogCurrency(
   models: readonly ModelAccessGatewayModel[],
 ): MoneyCurrency {
-  if (models.length === 0) return GATEWAY_NATIVE_CURRENCY;
-  const first = declaredCurrency(models[0]);
+  const priced = models.filter(isPricedGatewayModel);
+  if (priced.length === 0) return GATEWAY_NATIVE_CURRENCY;
+  const first = declaredCurrency(priced[0]);
   if (!first || first === GATEWAY_NATIVE_CURRENCY) return GATEWAY_NATIVE_CURRENCY;
-  return models.every((model) => declaredCurrency(model) === first)
+  return priced.every((model) => declaredCurrency(model) === first)
     ? first
     : GATEWAY_NATIVE_CURRENCY;
 }

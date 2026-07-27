@@ -7,6 +7,7 @@ vi.mock('expo-constants', () => ({
   },
 }));
 vi.mock('@/config/env', () => ({
+  AUTH_REGION: 'global',
   VOICE_API_BASE_URL: 'https://voice.example.com/',
 }));
 vi.mock('@/auth/secureStorage', () => ({
@@ -243,6 +244,14 @@ describe('createMobileCindyVoiceCredential', () => {
       refinementEnabled: true,
       playInteractionSound: true,
     });
+  });
+
+  it.each([
+    ['cn', 'zh-CN'],
+    ['global', 'auto'],
+    ['dev', 'auto'],
+  ] as const)('uses the %s build voice language default', (region, language) => {
+    expect(createMobileCindyVoiceCredential('device-1', region).settings?.language).toBe(language);
   });
 
   it('rejects an empty host device id', () => {

@@ -66,6 +66,7 @@
       "awaitingQuestion": "返信待ち",
       "awaitingPlan": "プランの確認待ち",
       "permissionPromptTitle": "権限の確認",
+      "permissionPromptTitleWithTool": "{{toolName}} を許可しますか?",
       "allowOnce": "一度だけ許可",
       "alwaysAllowForSession": "このセッションで常に許可",
       "deny": "拒否"
@@ -1356,6 +1357,15 @@
         "customMeta": "OpenAI / Anthropic 互換の任意のモデルソースを接続",
         "pickHint": "認証方式はプロバイダーの定義で決まります。OAuth エンドポイントとベース URL はプリセットに含まれ、手入力は不要です。",
         "oauthDesc": "ブラウザでサブスクリプション認証を完了します。API キーは不要です",
+        "authorizeWithDeviceCode": "デバイスコードを使用",
+        "preparingDeviceCode": "デバイスコードを準備しています…",
+        "deviceCodePrompt": "認証ページで、次のワンタイムデバイスコードを入力してください：",
+        "deviceCodeWaiting": "認証が完了するまで、このウィンドウを開いたままにしてください。",
+        "copyDeviceCode": "コードをコピー",
+        "openVerificationPage": "認証ページを開く",
+        "deviceCodeCopied": "デバイスコードをコピーしました",
+        "deviceCodeCopyFailed": "デバイスコードをコピーできませんでした",
+        "verificationPageOpenFailed": "認証ページを開けませんでした",
         "authorizedToast": "「{{name}}」に接続しました",
         "authorizeFailed": "「{{name}}」の認証に失敗しました。もう一度お試しください",
         "nameLabel": "表示名",
@@ -2350,10 +2360,11 @@
           "invalidPackage": "このプラグインパッケージは無効か、現在の Cindy バージョンではサポートされていません。"
         },
         "securityTitle": "インストールと権限",
-        "securityDescription": "メインプロセスでサイズと SHA-256、プラグインマニフェストを検証してからアトミックにインストールします。権限を確認して有効にするまで、新規プラグインは無効のままです。",
+        "securityDescription": "メインプロセスでサイズと SHA-256、プラグインマニフェストを検証してからアトミックにインストールします。初回インストール後は自動的に有効になり、プラグインページからいつでも無効化できます。更新では現在の有効/無効の状態が維持されます。",
         "noPermissions": "このプラグインは追加機能を宣言していません。",
         "installConfirmTitle": "「{{name}}」をインストールしますか？",
-        "installConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認し、無効の状態でインストールします。設定を確認してから有効にできます。"
+        "installConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認してからインストールします。インストール完了後は自動的に有効になり、いつでも無効化や設定の変更ができます。",
+        "updateConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認してから、既存のバージョンを置き換えます。現在の有効/無効の状態は変わりません。"
       },
       "install": "プラグインをインストール…",
       "empty": "まだプラグインがインストールされていません",
@@ -2446,6 +2457,7 @@
       "perm": {
         "grantsTitle": "インストール後に持つ権限:",
         "toolsGroup": "登録ツール",
+        "toolsDiffGroup": "登録ツールの変更",
         "itemCount": "{{count}} 件",
         "cindyImageGenerate": "画像生成(Cindy に代行依頼)",
         "cindyImageEdit": "画像編集(Cindy に代行依頼、自身が生成した画像のみ)",
@@ -3646,7 +3658,7 @@
       "title": "更新情報",
       "newFeatures": "新機能",
       "bugFixes": "不具合修正",
-      "craftedBy": "制作",
+      "thanksTo": "感謝",
       "gotIt": "了解しました",
       "ariaDescription": "バージョン {{version}} のリリースノート",
       "ariaDescriptionSpan": "v{{from}} 以降 {{count}} バージョン分のリリースノート",
@@ -4920,6 +4932,21 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "考え中…",
+      "generating": "生成中…",
+      "editingFiles": "ファイルを編集中…",
+      "searchingWeb": "ウェブを検索中…",
+      "generatingImage": "画像を生成中…",
+      "compacting": "コンテキストを圧縮中…",
+      "done": "完了",
+      "waiting": "少々お待ちください…",
+      "working": "作業中…",
+      "running": "実行中…",
+      "turnStart": "{{name}} さん、対応中です…",
+      "issueTip": "{{name}} さん、/issue でフィードバックや提案をお寄せください",
+      "runningTool": "{{tool}} を実行中…"
+    },
     "remoteSession": {
       "reconnecting": "被制御デバイスとの接続が切れました。再接続中…",
       "hostOffline": "被制御デバイスがオフラインのため、現在は同期できません",
@@ -5279,6 +5306,8 @@
       },
       "projectAction": {
         "rename": "プロジェクト名を変更",
+        "pin": "プロジェクトをピン留め",
+        "unpin": "プロジェクトのピン留めを解除",
         "syncCodex": "このプロジェクトの Codex セッションを同期",
         "syncCodexDone": "Codex 同期完了:リンク {{inserted}} 件、更新 {{updated}} 件",
         "syncCodexAlreadyLinked": "このプロジェクトの Codex セッションはリンク済みです",
@@ -5310,6 +5339,10 @@
       "aiRenameRemoteOutdated": "リモートデバイスのバージョンが古いため、AIによる命名を利用するには更新が必要です",
       "aiRenameRemoteOffline": "リモートデバイスに接続されていません。接続を確認してからもう一度お試しください",
       "aiRenameFailed": "AIによる命名に失敗しました。しばらくしてからもう一度お試しください"
+    },
+    "autoTitle": {
+      "image": "画像",
+      "file": "ファイル"
     },
     "sessionHeader": {
       "untitled": "無題のセッション",

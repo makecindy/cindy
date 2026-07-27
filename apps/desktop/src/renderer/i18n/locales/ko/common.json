@@ -66,6 +66,7 @@
       "awaitingQuestion": "답장 대기 중",
       "awaitingPlan": "계획 검토 대기 중",
       "permissionPromptTitle": "권한 확인 필요",
+      "permissionPromptTitleWithTool": "{{toolName}} 사용을 허용할까요?",
       "allowOnce": "한 번 허용",
       "alwaysAllowForSession": "이 세션에서 항상 허용",
       "deny": "거부"
@@ -1356,6 +1357,15 @@
         "customMeta": "OpenAI / Anthropic 호환 모델 소스를 연결",
         "pickHint": "인증 방식은 제공자 정의에 따라 결정됩니다. OAuth 엔드포인트와 기본 URL은 프리셋에 포함되어 직접 입력할 필요가 없습니다.",
         "oauthDesc": "브라우저에서 구독 인증을 완료합니다. API 키가 필요 없습니다",
+        "authorizeWithDeviceCode": "기기 코드 사용",
+        "preparingDeviceCode": "기기 코드를 준비하는 중…",
+        "deviceCodePrompt": "인증 페이지에 다음 일회용 기기 코드를 입력하세요:",
+        "deviceCodeWaiting": "인증이 완료될 때까지 이 창을 열어 두세요.",
+        "copyDeviceCode": "코드 복사",
+        "openVerificationPage": "인증 페이지 열기",
+        "deviceCodeCopied": "기기 코드가 복사되었습니다",
+        "deviceCodeCopyFailed": "기기 코드를 복사하지 못했습니다",
+        "verificationPageOpenFailed": "인증 페이지를 열지 못했습니다",
         "authorizedToast": "{{name}}에 연결되었습니다",
         "authorizeFailed": "{{name}} 인증에 실패했습니다. 다시 시도해 주세요",
         "nameLabel": "표시 이름",
@@ -2350,10 +2360,11 @@
           "invalidPackage": "이 플러그인 패키지가 올바르지 않거나 현재 Cindy 버전에서 지원되지 않습니다."
         },
         "securityTitle": "설치 및 권한",
-        "securityDescription": "메인 프로세스에서 크기와 SHA-256 및 플러그인 매니페스트를 검증한 뒤 원자적으로 설치합니다. 권한을 확인하고 활성화할 때까지 새 플러그인은 비활성 상태로 유지됩니다.",
+        "securityDescription": "메인 프로세스에서 크기와 SHA-256 및 플러그인 매니페스트를 검증한 뒤 원자적으로 설치합니다. 최초 설치 후 자동으로 활성화되며 플러그인 페이지에서 언제든지 비활성화할 수 있습니다. 업데이트 시 현재 활성화 상태가 유지됩니다.",
         "noPermissions": "이 플러그인은 추가 기능을 선언하지 않았습니다.",
         "installConfirmTitle": "‘{{name}}’을(를) 설치할까요?",
-        "installConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 비활성 상태로 설치합니다. 설정을 검토한 후 직접 활성화할 수 있습니다."
+        "installConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 설치합니다. 설치가 완료되면 자동으로 활성화되며, 언제든지 비활성화하거나 설정을 변경할 수 있습니다.",
+        "updateConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 기존 버전을 교체합니다. 현재 활성화 상태는 그대로 유지됩니다."
       },
       "install": "플러그인 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
@@ -2446,6 +2457,7 @@
       "perm": {
         "grantsTitle": "설치 후 갖게 되는 권한:",
         "toolsGroup": "등록 도구",
+        "toolsDiffGroup": "등록 도구 변경",
         "itemCount": "{{count}}개",
         "cindyImageGenerate": "이미지 생성(Cindy에게 대행 요청)",
         "cindyImageEdit": "이미지 편집(Cindy에게 대행 요청, 자신이 생성한 이미지만)",
@@ -3646,7 +3658,7 @@
       "title": "업데이트 소식",
       "newFeatures": "새로운 기능",
       "bugFixes": "버그 수정",
-      "craftedBy": "제작",
+      "thanksTo": "감사",
       "gotIt": "확인",
       "ariaDescription": "버전 {{version}} 릴리스 노트",
       "ariaDescriptionSpan": "v{{from}} 이후 {{count}}개 버전의 릴리스 노트",
@@ -4920,6 +4932,21 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "생각 중…",
+      "generating": "생성 중…",
+      "editingFiles": "파일 수정 중…",
+      "searchingWeb": "웹 검색 중…",
+      "generatingImage": "이미지 생성 중…",
+      "compacting": "컨텍스트 압축 중…",
+      "done": "완료",
+      "waiting": "잠시만 기다려 주세요…",
+      "working": "작업 중…",
+      "running": "실행 중…",
+      "turnStart": "{{name}}님, 처리 중이에요…",
+      "issueTip": "{{name}}님, /issue로 피드백이나 제안을 보내 주세요",
+      "runningTool": "{{tool}} 실행 중…"
+    },
     "remoteSession": {
       "reconnecting": "제어 대상 기기와 연결이 끊겼습니다. 다시 연결 중…",
       "hostOffline": "제어 대상 기기가 오프라인이라 지금은 동기화할 수 없습니다",
@@ -5279,6 +5306,8 @@
       },
       "projectAction": {
         "rename": "프로젝트 이름 변경",
+        "pin": "프로젝트 고정",
+        "unpin": "프로젝트 고정 해제",
         "syncCodex": "이 프로젝트의 Codex 세션 동기화",
         "syncCodexDone": "Codex 동기화 완료: 링크 {{inserted}}개, 업데이트 {{updated}}개",
         "syncCodexAlreadyLinked": "이 프로젝트의 Codex 세션은 이미 링크되어 있습니다",
@@ -5310,6 +5339,10 @@
       "aiRenameRemoteOutdated": "원격 기기의 버전이 오래되어 AI 이름 짓기를 사용하려면 업데이트가 필요합니다",
       "aiRenameRemoteOffline": "원격 기기에 연결되어 있지 않습니다. 연결을 확인한 후 다시 시도해 주세요",
       "aiRenameFailed": "AI 이름 생성에 실패했습니다. 잠시 후 다시 시도해 주세요"
+    },
+    "autoTitle": {
+      "image": "이미지",
+      "file": "파일"
     },
     "sessionHeader": {
       "untitled": "제목 없는 세션",

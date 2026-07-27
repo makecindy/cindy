@@ -5,7 +5,9 @@ import type {
   DictationDictionaryLearningEntryState,
   DictationRefinementContext,
 } from '@cindy/voice-input-core';
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
+import { CURRENT_CINDY_REGION } from './brandRegion';
 import { SUPPORTED_LOCALES, type SupportedLocale } from './locale';
 import type { IpcErrorCode } from './ipc-errors';
 
@@ -387,9 +389,15 @@ export function isVoiceInputMacNativeKeyboardShortcutTargetDown(
   return typeof expectedKeyCode === 'number' && keys.includes(`KeyCode:${expectedKeyCode}`);
 }
 
-export function getDefaultVoiceInputSettings(platform?: string): VoiceInputSettings {
+export function getDefaultVoiceInputSettings(
+  platform?: string,
+  region: CindyRegion = CURRENT_CINDY_REGION,
+): VoiceInputSettings {
   return {
-    language: 'auto',
+    // Global cannot assume a spoken language; the Mainland China build uses
+    // Chinese as its product default. A persisted user choice still wins in
+    // normalizeVoiceInputSettings below.
+    language: region === 'cn' ? 'zh-CN' : 'auto',
     microphoneDeviceId: null,
     muteSystemAudio: true,
     playInteractionSound: true,
@@ -407,8 +415,9 @@ export function getDefaultVoiceInputSettings(platform?: string): VoiceInputSetti
 export function normalizeVoiceInputSettings(
   raw: unknown,
   platform?: string,
+  region: CindyRegion = CURRENT_CINDY_REGION,
 ): VoiceInputSettings {
-  const defaults = getDefaultVoiceInputSettings(platform);
+  const defaults = getDefaultVoiceInputSettings(platform, region);
   if (!raw || typeof raw !== 'object') return defaults;
   const candidate = raw as Partial<VoiceInputSettings>;
   const legacyPlayStartSound = (candidate as { playStartSound?: unknown }).playStartSound;

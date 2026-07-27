@@ -5,6 +5,7 @@
  *  - 默认必须是「未同意」,即 allowed=false(fail closed)
  *  - 同意后才允许上报,且开关能独立关掉
  *  - 存量迁移只在本机毫无记录时生效,绝不覆盖用户已有选择
+ *  - dev 构建一律不上报(构建闸),且不因此篡改用户的同意与开关
  *
  * 用真实 tmpdir 当 userData(mkdtemp),覆盖到落盘与回读,而不是只测 normalize。
  */
@@ -16,9 +17,17 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 let userDataDir = '';
+/** 除「构建闸」那一组之外,所有用例测的都是正式构建下的同意语义。 */
+let isPackaged = true;
 
 vi.mock('electron', () => ({
-  app: { getPath: (name: string) => (name === 'userData' ? userDataDir : userDataDir) },
+  app: {
+    getPath: (name: string) => (name === 'userData' ? userDataDir : userDataDir),
+    // getter:构建 flavor 要能在用例内切换,不能在 mock 工厂调用那一刻定死。
+    get isPackaged() {
+      return isPackaged;
+    },
+  },
 }));
 vi.mock('../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
@@ -33,12 +42,18 @@ function settingsFile(): string {
   return path.join(userDataDir, 'analytics-settings.json');
 }
 
+const originalDevReportingEnv = process.env.XDT_TAPDB_DEV;
+
 beforeEach(() => {
   userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-analytics-'));
+  isPackaged = true;
+  delete process.env.XDT_TAPDB_DEV;
 });
 
 afterEach(() => {
   fs.rmSync(userDataDir, { recursive: true, force: true });
+  if (originalDevReportingEnv === undefined) delete process.env.XDT_TAPDB_DEV;
+  else process.env.XDT_TAPDB_DEV = originalDevReportingEnv;
 });
 
 describe('analytics settings store', () => {
@@ -210,6 +225,76 @@ describe('analytics settings store', () => {
     const store = await importStore();
 
     expect(store.migrateExistingLoginAsConsented(true)).toBe(false);
+    expect(store.isAnalyticsAllowed()).toBe(false);
+  });
+});
+
+/**
+ * 构建闸 —— dev 构建绝不上报。
+ *
+ * dev 的 renderer 从 http://localhost:<vite 端口> 加载、每条 --isolated 沙箱各有独立
+ * userData,TapDB 的 device_id 存在 localStorage 里因而每次都是新的,会凭空造出大量
+ * 「新增设备」污染线上口径(2026-07-26 复盘)。这一组守的就是那道闸。
+ */
+describe('analytics build gate', () => {
+  it('refuses to report from a dev build even after consent', async () => {
+    isPackaged = false;
+    const store = await importStore();
+
+    store.acceptPrivacyConsent();
+
+    expect(store.isAnalyticsAllowed()).toBe(false);
+    // 闸只挡上报,不得篡改用户的持久真相 —— dev 与正式版常共享同一份 userData。
+    expect(store.readAnalyticsSettings()).toEqual({
+      privacyConsentAccepted: true,
+      analyticsEnabled: true,
+    });
+    expect(JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'))).toMatchObject({
+      privacyConsentAccepted: true,
+    });
+  });
+
+  it('still reports from a packaged build with the same on-disk record', async () => {
+    isPackaged = false;
+    const devStore = await importStore();
+    devStore.acceptPrivacyConsent();
+    expect(devStore.isAnalyticsAllowed()).toBe(false);
+
+    // 同一份盘上记录,换成正式构建立刻放行 —— 证明差异只来自构建 flavor。
+    isPackaged = true;
+    const packagedStore = await importStore();
+    expect(packagedStore.isAnalyticsAllowed()).toBe(true);
+  });
+
+  it('lets XDT_TAPDB_DEV=1 opt a dev build back in (link verification escape hatch)', async () => {
+    isPackaged = false;
+    process.env.XDT_TAPDB_DEV = '1';
+    const store = await importStore();
+
+    store.acceptPrivacyConsent();
+
+    expect(store.isAnalyticsAllowed()).toBe(true);
+  });
+
+  it('treats any value other than "1" as opted out — no boolean guessing', async () => {
+    isPackaged = false;
+    for (const raw of ['0', 'true', 'yes', '', ' 1']) {
+      process.env.XDT_TAPDB_DEV = raw;
+      const store = await importStore();
+      store.acceptPrivacyConsent();
+
+      expect(store.isAnalyticsAllowed()).toBe(false);
+      expect(store.__testing.isReportingBuild()).toBe(false);
+    }
+  });
+
+  it('fails closed when the host cannot tell whether the build is packaged', async () => {
+    // 非 Electron 宿主 / 不完整 mock:isPackaged 不是严格 true 就按 dev 处理。
+    isPackaged = undefined as unknown as boolean;
+    const store = await importStore();
+
+    store.acceptPrivacyConsent();
+
     expect(store.isAnalyticsAllowed()).toBe(false);
   });
 });

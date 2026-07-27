@@ -9,6 +9,9 @@
  * 时才弹系统错误框(重试 / 退出),用户不重试成功就不放行启动。
  * **没有缓存回退、没有超时后静默继续、没有逐字段烘焙回退**——生效的端点
  * (含更新链 CDN base)全部来自清单,非空值配置非法会在启动时立刻暴露。
+ * 唯一的柔性是弹框**之前**的网络层自动重试(AUTO_RETRY_DELAYS_MS,只对
+ * 拉取失败生效、不对解析/校验失败生效),用于自愈首启瞬时抖动;重试用尽
+ * 仍失败照样阻断,所以严格语义不变。
  *
  * 清单来源按运行形态三选一(resolveEndpointSource,纯函数可单测):
  *  - packaged / dev + --endpoints-cdn:从烘焙自举基址 ENDPOINT_MANIFEST_BASE_URL
@@ -45,6 +48,25 @@ const log = createLogger('clientEndpoints');
 const MANIFEST_FILE_NAME = 'endpoint.json';
 /** 单次请求的网络超时——只用于触发错误框,不是静默降级。 */
 const ATTEMPT_TIMEOUT_MS = 15_000;
+
+/**
+ * 弹阻断框**之前**的自动重试节奏(ms);长度 = 额外尝试次数,总尝试 = 1 + 长度。
+ *
+ * 背景(2026-07,mac 首次安装启动的现场反馈):本函数是 app.ready 的第一枪,而
+ * "首次安装后的第一次启动"恰好是网络栈最冷的时刻——userData / Chromium profile
+ * 与 network context 尚未建立、Gatekeeper 公证校验与 XProtect 还在扫整个 bundle、
+ * 系统代理(macOS SystemConfiguration / PAC)与 DNS 全无缓存。原实现单次失败即
+ * 弹阻断框,用户重启一次或点一下「重试」就正常 = 典型瞬时失败,却被呈现成
+ * "无法获取服务器配置"。
+ *
+ * 这里补的只是"瞬时抖动自愈",不是静默降级:预算用尽仍失败照样弹框阻断,
+ * 依然没有缓存回退、没有烘焙兜底。**只有网络层失败(fetch 未拿到正文)消耗
+ * 预算**;JSON / schema / 非法值这类配置事故重试同一份内容没有意义,立刻弹框。
+ *
+ * 时长权衡:真断网时 DNS 立即失败,约 3.2s 就会弹框;最坏情况(三次都卡到
+ * 15s 超时)约 48s 才弹框——此时网络确实不通,慢比误报好。
+ */
+const AUTO_RETRY_DELAYS_MS: readonly number[] = [800, 2400];
 
 export const CLIENT_ENDPOINTS_SYNC_CHANNEL = 'client-endpoints:get-sync';
 
@@ -83,49 +105,81 @@ export function resolveEndpointSource(input: ResolveEndpointSourceInput): Endpoi
 
 // ── IO:CDN 拉取 / 本地文件读取 ─────────────────────────────────────────────
 
-/** net.request 拉清单原文;任何失败(非 200 / 超时 / 异常)返回 null。 */
-function fetchTextViaNet(url: string, timeoutMs: number): Promise<string | null> {
+/**
+ * 一次清单取原文的结果。失败携带 `detail`(错误码级别的短标识)——原实现把
+ * error 对象整个丢掉、统一折叠成 `fetch-failed`,现场只能看到一句
+ * "fetch-failed",日志里也无从区分 DNS / 代理 / TLS / 超时,排查全靠猜。
+ */
+export type ManifestFetchResult =
+  | { ok: true; text: string }
+  | { ok: false; detail: string };
+
+/** 归一为单行并截断:避免多行栈把弹框 detail 与日志行撑爆。 */
+function normalizeDetail(detail: string): string {
+  return detail.replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+/**
+ * 错误细节 → 简短错误码。Electron net 的 error.message 形如
+ * `net::ERR_NAME_NOT_RESOLVED`,优先抽 `ERR_*` 码;抽不出时退回消息原文。
+ */
+function describeFetchError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const code = /\b(ERR_[A-Z0-9_]+)\b/.exec(message)?.[1];
+  return normalizeDetail(code ?? message);
+}
+
+/** 失败 detail → 阻断循环用的 reason(保持 maker-shared 的 `fetch-failed` 前缀语义)。 */
+function fetchFailedReason(detail: string): string {
+  const normalized = normalizeDetail(detail);
+  return normalized ? `fetch-failed:${normalized}` : 'fetch-failed';
+}
+
+/** net.request 拉清单原文;任何失败(非 200 / 超时 / 异常)带错误码返回。 */
+function fetchTextViaNet(url: string, timeoutMs: number): Promise<ManifestFetchResult> {
   return new Promise((resolve) => {
     try {
       const request = net.request(url);
       let body = '';
       let settled = false;
-      const finish = (value: string | null) => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const finish = (value: ManifestFetchResult) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
+        if (!value.ok) log.debug('fetch failed (%s) for %s', value.detail, url);
         resolve(value);
       };
-      const timeout = setTimeout(() => {
+      timeout = setTimeout(() => {
         request.abort();
-        finish(null);
+        finish({ ok: false, detail: `timeout-${timeoutMs}ms` });
       }, timeoutMs);
 
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
-          log.info('HTTP %d for %s', response.statusCode, url);
-          finish(null);
+          response.on('data', () => {});
+          finish({ ok: false, detail: `http-${response.statusCode}` });
           return;
         }
         response.on('data', (chunk) => {
           body += chunk.toString();
         });
-        response.on('end', () => finish(body));
-        response.on('error', () => finish(null));
+        response.on('end', () => finish({ ok: true, text: body }));
+        response.on('error', (err) => finish({ ok: false, detail: describeFetchError(err) }));
       });
-      request.on('error', () => finish(null));
+      request.on('error', (err) => finish({ ok: false, detail: describeFetchError(err) }));
       request.end();
-    } catch {
-      resolve(null);
+    } catch (err) {
+      resolve({ ok: false, detail: describeFetchError(err) });
     }
   });
 }
 
-function fetchManifestTextViaCdn(timeoutMs: number): Promise<string | null> {
+function fetchManifestViaCdn(timeoutMs: number): Promise<ManifestFetchResult> {
   if (!ENDPOINT_MANIFEST_BASE_URL) {
-    // 烘焙基址缺失属打包/构建配置事故,同样走阻断暴露(fetch-failed → 弹框)。
+    // 烘焙基址缺失属打包/构建配置事故,同样走阻断暴露(→ 弹框)。
     log.error('ENDPOINT_MANIFEST_BASE_URL is empty (build misconfiguration)');
-    return Promise.resolve(null);
+    return Promise.resolve({ ok: false, detail: 'missing-manifest-base-url' });
   }
   // cache-bust:防 Chromium / CDN 复用陈旧清单。
   return fetchTextViaNet(
@@ -134,49 +188,94 @@ function fetchManifestTextViaCdn(timeoutMs: number): Promise<string | null> {
   );
 }
 
-/** dev 本地清单文件读取;缺失 / 读失败返回 null(→ 同一条阻断弹框链路)。 */
-function readManifestTextFromFile(filePath: string): string | null {
+/** dev 本地清单文件读取;缺失 / 读失败带 errno 返回(→ 同一条阻断弹框链路)。 */
+function readManifestFromFile(filePath: string): ManifestFetchResult {
   try {
-    return fs.readFileSync(filePath, 'utf8');
+    return { ok: true, text: fs.readFileSync(filePath, 'utf8') };
   } catch (err) {
     log.warn('failed to read local endpoint manifest %s: %s', filePath, String(err));
-    return null;
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    return { ok: false, detail: code ?? describeFetchError(err) };
   }
 }
 
 // ── 阻断式解析循环 ──────────────────────────────────────────────────────────
 
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** 阻断循环的依赖注入面(规则 14:测试用内存 harness 驱动,不起 Electron)。 */
 export interface BlockingResolveDeps {
-  fetchManifestText(timeoutMs: number): Promise<string | null>;
+  fetchManifest(timeoutMs: number): Promise<ManifestFetchResult>;
   /** 拉取/校验失败时问用户;生产实现是系统模态错误框。 */
   promptRetry(reason: string): 'retry' | 'exit';
   exitApp(): void;
   timeoutMs?: number;
   /** 仅 dev 本地文件路径为 true(localhost http);CDN 路径一律不传。 */
   allowHttp?: boolean;
+  /**
+   * 弹框前的自动重试节奏,默认 AUTO_RETRY_DELAYS_MS。file 模式传 `[]` 关闭:
+   * 本地文件读不到 / 内容非法都是配置事故,重读同一路径没有意义,只会白等。
+   */
+  autoRetryDelaysMs?: readonly number[];
+  /** 仅测试注入(默认 setTimeout);让重试节奏在内存 harness 里零等待可测。 */
+  sleep?(ms: number): Promise<void>;
 }
 
 /**
  * 阻断式解析循环:成功返回完整端点 map;用户选择退出返回 null(调用方不再继续启动)。
- * 失败 → promptRetry → 'retry' 无限重试;没有任何静默降级路径。
+ *
+ * 每一轮 = 一次首发尝试 + 若干次自动重试(仅网络层失败消耗预算,见
+ * AUTO_RETRY_DELAYS_MS);一轮全败才 promptRetry,用户选 'retry' 则重新开一轮
+ * (同样带完整自动重试预算)。没有任何静默降级路径。
  */
 export async function resolveClientEndpointsBlocking(
   deps: BlockingResolveDeps,
 ): Promise<ClientEndpointMap | null> {
   const timeoutMs = deps.timeoutMs ?? ATTEMPT_TIMEOUT_MS;
   const options = deps.allowHttp ? { allowHttp: true } : undefined;
+  const retryDelays = deps.autoRetryDelaysMs ?? AUTO_RETRY_DELAYS_MS;
+  const sleep = deps.sleep ?? defaultSleep;
+
   for (;;) {
-    let rawText: string | null = null;
-    try {
-      rawText = await deps.fetchManifestText(timeoutMs);
-    } catch {
-      rawText = null;
+    let reason = 'fetch-failed';
+    for (let attempt = 0; ; attempt += 1) {
+      let fetched: ManifestFetchResult;
+      try {
+        fetched = await deps.fetchManifest(timeoutMs);
+      } catch (err) {
+        fetched = { ok: false, detail: describeFetchError(err) };
+      }
+
+      if (fetched.ok) {
+        const parsed = resolveClientEndpointsStrict(fetched.text, options);
+        if (parsed.ok) return parsed.endpoints;
+        // 拿到了正文但解析/校验不过 = 配置事故:重试同一份内容没有意义,直接弹框。
+        reason = parsed.reason;
+        break;
+      }
+
+      reason = fetchFailedReason(fetched.detail);
+      // 构建/打包配置事故(基址为空)重试不会改变结果,立即跳出。
+      if (fetched.detail === 'missing-manifest-base-url') break;
+      // HTTP 3xx/4xx 是永久性错误(路径/权限/配置),重试同一 URL 不会自愈;仅 5xx 可能是瞬时故障。
+      const httpStatus = /^http-(\d+)$/.exec(fetched.detail)?.[1];
+      if (httpStatus && Number(httpStatus) < 500) break;
+      const delay = retryDelays[attempt];
+      if (delay === undefined) break; // 预算用尽 → 阻断弹框
+      log.warn(
+        'manifest fetch failed (%s); auto-retry %d/%d in %dms',
+        reason,
+        attempt + 1,
+        retryDelays.length,
+        delay,
+      );
+      await sleep(delay);
     }
-    const result = resolveClientEndpointsStrict(rawText, options);
-    if (result.ok) return result.endpoints;
-    log.warn(`client endpoints manifest unavailable (${result.reason}), prompting user`);
-    if (deps.promptRetry(result.reason) === 'exit') {
+
+    log.warn(`client endpoints manifest unavailable (${reason}), prompting user`);
+    if (deps.promptRetry(reason) === 'exit') {
       deps.exitApp();
       return null;
     }
@@ -227,13 +326,15 @@ export async function initClientEndpoints(): Promise<boolean> {
       ? `${ENDPOINT_MANIFEST_BASE_URL}/${MANIFEST_FILE_NAME}`
       : source.filePath;
   const endpoints = await resolveClientEndpointsBlocking({
-    fetchManifestText:
+    fetchManifest:
       source.kind === 'cdn'
-        ? fetchManifestTextViaCdn
-        : () => Promise.resolve(readManifestTextFromFile(source.filePath)),
+        ? fetchManifestViaCdn
+        : () => Promise.resolve(readManifestFromFile(source.filePath)),
     promptRetry: (reason) => promptRetryDialog(reason, sourceLabel),
     exitApp: () => app.exit(1),
     allowHttp: source.kind === 'file',
+    // dev 本地文件:读不到就是路径/内容配置错,不自动重试(见 BlockingResolveDeps)。
+    autoRetryDelaysMs: source.kind === 'cdn' ? undefined : [],
   });
   if (endpoints === null) return false; // 用户选择退出,app.exit 已调用
   resolvedEndpoints = endpoints;

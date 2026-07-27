@@ -240,6 +240,25 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
   });
 
+  it('classifies the wrapped thread/resume refresh-token failure as reconnect, not retry', () => {
+    render(
+      <ErrorBanner
+        error="LAZY_CREATE_FAILED: Failed to resume Codex thread: Error: codex app-server thread/resume error -32600: failed to load configuration: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again."
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+        modelId="gpt-5.4"
+        providerId="openai"
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.codexSessionExpired')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'chat.errorBanner.codexSessionExpiredLogin' }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+  });
+
   it('does not classify a non-OpenAI provider error as ChatGPT reconnect', () => {
     render(
       <ErrorBanner

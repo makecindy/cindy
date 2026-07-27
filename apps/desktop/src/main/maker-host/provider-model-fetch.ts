@@ -58,9 +58,22 @@ function sameOrigin(a: string, b: string): boolean {
   }
 }
 
+function withoutCredentialHeaders(
+  headers: Record<string, string> | undefined,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers ?? {}).filter(([name]) => {
+      const normalized = name.toLowerCase();
+      return normalized !== 'authorization' && normalized !== 'x-api-key';
+    }),
+  );
+}
+
 /** 构造列模型请求（纯函数，单测直断言）。鉴权头组合与 buildProbeRequest 同口径。 */
 export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: string; init: RequestInit } {
-  const headers: Record<string, string> = { ...(spec.headers ?? {}) };
+  const headers: Record<string, string> = spec.apiKey
+    ? withoutCredentialHeaders(spec.headers)
+    : { ...(spec.headers ?? {}) };
   if (spec.agent === 'claude-code') {
     // Anthropic wire 的所有端点（含 GET /v1/models）都要求 anthropic-version，缺失直接 400。
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';

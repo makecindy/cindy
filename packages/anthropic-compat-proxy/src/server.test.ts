@@ -607,6 +607,92 @@ describe('anthropic-compat-proxy routingTransform', () => {
     expect(custom.bodies).toHaveLength(1);
   });
 
+  it('forwards to an exact same-origin path override instead of appending the client path', async () => {
+    const custom = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = custom.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: `${custom.url}/base`,
+      transformRequest: [],
+      routingTransform: () => ({ pathOverride: '/tenant/acme/infer?stream=1' }),
+    });
+
+    await post(proxy.url, { model: 'custom-model' });
+    expect(custom.paths).toEqual(['/base/tenant/acme/infer?stream=1']);
+  });
+
+  it('accepts a root override when the upstream base already names the endpoint', async () => {
+    const custom = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = custom.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: `${custom.url}/inference-endpoint`,
+      transformRequest: [],
+      routingTransform: () => ({ pathOverride: '/' }),
+    });
+
+    await post(proxy.url, { model: 'custom-model' });
+    expect(custom.paths).toEqual(['/inference-endpoint/']);
+  });
+
+  it('preserves the upstream base query when applying a path override', async () => {
+    const custom = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = custom.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: `${custom.url}/base?tenant=acme`,
+      transformRequest: [],
+      routingTransform: () => ({ pathOverride: '/infer?stream=1' }),
+    });
+
+    await post(proxy.url, { model: 'custom-model' });
+    expect(custom.paths).toEqual(['/base/infer?tenant=acme&stream=1']);
+  });
+
+  it.each([
+    '//evil.example/infer',
+    '/infer#fragment',
+    '/infer\r\nx-injected: yes',
+    '/my path',
+    '/infer\tmode',
+    '/infer\u0000mode',
+    '/infer\u007fmode',
+    '/infer\u0085mode',
+    '/café',
+    '/infer%2',
+    '/%ZZ',
+    '/模型',
+    '/v1\\messages',
+  ])('rejects an unsafe path override before contacting the upstream: %j', async (pathOverride) => {
+    const custom = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = custom.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: `${custom.url}/base`,
+      transformRequest: [],
+      routingTransform: () => ({ pathOverride }),
+    });
+
+    const result = await post(proxy.url, { model: 'custom-model' });
+    expect(result.status).toBe(502);
+    expect(JSON.parse(result.text)).toEqual({
+      error: { type: 'proxy_error', message: 'selected request path invalid' },
+    });
+    expect(custom.paths).toHaveLength(0);
+  });
+
   it('runs a local handler without resolving an unavailable default upstream', async () => {
     proxy = await createAnthropicCompatProxy({
       upstream: () => '',
@@ -932,8 +1018,9 @@ describe('anthropic-compat-proxy routingTransform', () => {
     let observedEnd = false;
     let transformedReqId: number | null = null;
     let observedCtx: { reqId: number; url: string; status: number; upstreamBase: string } | null = null;
+    const upstreamWithQuery = `${upstream.url}/tenant/acme?region=us`;
     proxy = await createAnthropicCompatProxy({
-      upstream: upstream.url,
+      upstream: upstreamWithQuery,
       transformRequest: [(_body, ctx) => {
         transformedReqId = ctx.reqId;
         return null;
@@ -961,7 +1048,7 @@ describe('anthropic-compat-proxy routingTransform', () => {
       reqId: transformedReqId,
       url: '/v1/responses',
       status: 200,
-      upstreamBase: upstream.url,
+      upstreamBase: upstreamWithQuery,
     });
     expect(chunks.join('')).toBe(r.text);
     expect(observedEnd).toBe(true);

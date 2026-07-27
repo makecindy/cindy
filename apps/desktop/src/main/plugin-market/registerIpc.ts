@@ -54,12 +54,18 @@ export function registerPluginMarketIpc(): void {
     'plugin-market:install',
     (event, pluginId: unknown, options: unknown) => {
       assertTrustedAppRendererEvent(event);
-      const allowPermissionExpansion =
-        typeof options === 'object' &&
-        options !== null &&
-        (options as { allowPermissionExpansion?: unknown }).allowPermissionExpansion === true;
+      const obj =
+        typeof options === 'object' && options !== null
+          ? (options as {
+              expectedReleaseId?: unknown;
+              allowPermissionExpansion?: unknown;
+            })
+          : null;
+      const expectedReleaseId = requireString(obj?.expectedReleaseId, 'expectedReleaseId');
+      const allowPermissionExpansion = obj?.allowPermissionExpansion === true;
       return invokePluginMarket(() =>
         service().install(requireString(pluginId, 'pluginId'), {
+          expectedReleaseId,
           allowPermissionExpansion,
         }),
       );

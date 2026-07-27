@@ -105,6 +105,13 @@ export interface ProjectGroupsResult {
 
 export interface GroupSessionsOptions {
   projectAliases?: ReadonlyMap<string, string> | Record<string, string>;
+  /**
+   * Build a project catalogue that also contains individually pinned sessions.
+   * The normal sidebar keeps this false so a pinned conversation only appears
+   * once; project pinning uses true so the project itself does not disappear
+   * when every conversation inside it is pinned.
+   */
+  includePinnedInProjects?: boolean;
 }
 
 /* ============================== normalize ============================== */
@@ -394,7 +401,9 @@ export function groupSessions(
     .sort(comparePinnedByStatusThenPinnedDesc);
 
   // 2. 剩余 = 未 pin 的
-  const remaining = sessions.filter((s) => s.pinnedAt == null);
+  const remaining = options.includePinnedInProjects
+    ? sessions
+    : sessions.filter((s) => s.pinnedAt == null);
 
   // 3. 按 normalize 后 workingDir 分组
   // 草稿判定主线：userSendAt == null（用户从未按下发送）。
