@@ -165,6 +165,7 @@ export function UnifiedModelList({
   onRefresh,
   refreshing,
   refreshDisabled,
+  refreshIdleLabel,
   emptyMessage,
 }: {
   provider: ProviderView;
@@ -173,6 +174,8 @@ export function UnifiedModelList({
   refreshing?: boolean;
   /** 其它供应商正在刷新时禁用，避免并发刷新造成反馈归属不清。 */
   refreshDisabled?: boolean;
+  /** 内置供应商可传中性文案；自定义供应商默认保留 additions-only 的承诺。 */
+  refreshIdleLabel?: string;
   /** 模型真源当前为空时的说明；搜索无结果仍使用 noResults。 */
   emptyMessage?: string;
 }) {
@@ -240,11 +243,9 @@ export function UnifiedModelList({
   const agentCounts = useMemo(() => countModelsByAgent(provider), [provider, visibilityVersion]);
   const totalModelsAcrossAgents = agentCounts.reduce((sum, count) => sum + count.total, 0);
   const allOn = totalModelsAcrossAgents > 0 && agentCounts.every((count) => count.on === count.total);
-  const refreshLabel = t(
-    refreshing
-      ? 'settings.providers.models.refreshingAria'
-      : 'settings.providers.models.refreshAria',
-  );
+  const refreshLabel = refreshing
+    ? t('settings.providers.models.refreshingAria')
+    : (refreshIdleLabel ?? t('settings.providers.models.refreshAria'));
 
   /** 单开关:一次写该行全部可用 agent(分歧行拨动即归一)。写入用各 agent 的**真实模型 id**
    *  (桥接投影行两端 id 不同:chatgpt/gpt-5.5 vs gpt-5.5),不能用规范化后的 row.id。 */

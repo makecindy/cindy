@@ -1307,6 +1307,7 @@
         "capabilityNote": "{{agent}}에서는 사용 불가",
         "divergedChip": "{{agent}}에서 숨김",
         "refreshAria": "모델 목록 새로고침",
+        "refreshBuiltinAria": "모델 목록 새로고침",
         "refreshingAria": "모델 목록 새로고침 중…",
         "refreshDone": "모델 목록을 새로고침했습니다",
         "refreshAdded": "새 모델 {{count}}개를 발견했습니다",

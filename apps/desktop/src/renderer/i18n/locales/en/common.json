@@ -1308,6 +1308,7 @@
         "capabilityNote": "Not available in {{agent}}",
         "divergedChip": "Hidden in {{agent}}",
         "refreshAria": "Refresh Model List",
+        "refreshBuiltinAria": "Refresh Model List",
         "refreshingAria": "Refreshing model list…",
         "refreshDone": "Model list refreshed",
         "refreshAdded": "Found {{count}} new models",

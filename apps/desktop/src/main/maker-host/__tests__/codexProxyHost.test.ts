@@ -367,6 +367,20 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
       .toEqual({ upstreamOverride: CHATGPT });
   });
 
+  it('冻结 control-plane auth 形态后不受 session host 的全局模式改写', async () => {
+    const host = await import('../codex-proxy-host.js');
+    host.setCodexProxyAuthInjection('provider-oauth');
+    const transform = host.createModelRoutingTransform('oauth-bearer');
+
+    host.setCodexProxyAuthInjection('provider-oauth');
+    expect(transform(undefined, {
+      reqId: 1,
+      method: 'GET',
+      url: '/models',
+      headers: {},
+    })).toEqual({ upstreamOverride: CHATGPT });
+  });
+
   it('env-key + 无 session + 无 model(GET /models)→ null(留默认网关, sk- key 本就有效)', async () => {
     const host = await import('../codex-proxy-host.js');
     host.setCodexProxyAuthInjection('env-key');

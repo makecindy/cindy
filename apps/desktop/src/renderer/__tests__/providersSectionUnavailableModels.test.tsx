@@ -161,7 +161,7 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(screen.getByText('settings.providers.models.available')).not.toBeNull();
     await act(async () => {
       fireEvent.click(
-        screen.getByRole('button', { name: 'settings.providers.models.refreshAria' }),
+        screen.getByRole('button', { name: 'settings.providers.models.refreshBuiltinAria' }),
       );
     });
     expect(refreshBuiltinModelsSpy).toHaveBeenCalledWith('xd');
@@ -176,7 +176,7 @@ describe('ProvidersSection — 双栏管理', () => {
     render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
 
     const button = await screen.findByRole('button', {
-      name: 'settings.providers.models.refreshAria',
+      name: 'settings.providers.models.refreshBuiltinAria',
     });
     await act(async () => {
       button.dispatchEvent(new MouseEvent('click', { bubbles: true }));

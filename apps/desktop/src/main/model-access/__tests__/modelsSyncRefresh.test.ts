@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildModelsSyncRequest,
   ensureCredentialsReadyForModelsRefresh,
+  withModelsSyncOverallDeadline,
   waitForModelsSyncRefresh,
   XD_MODELS_SYNC_TIMEOUT_MS,
   type ModelsSyncFlightSnapshot,
@@ -19,6 +20,30 @@ describe('waitForModelsSyncRefresh', () => {
     });
     expect(Number.isFinite(XD_MODELS_SYNC_TIMEOUT_MS)).toBe(true);
     expect(XD_MODELS_SYNC_TIMEOUT_MS).toBeGreaterThan(0);
+  });
+
+  it('bounds the complete fetch lifecycle without cancelling the underlying auth refresh', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveOperation!: (value: string) => void;
+      const operation = new Promise<string>((resolve) => {
+        resolveOperation = resolve;
+      });
+      const bounded = withModelsSyncOverallDeadline(operation, 25);
+      const rejection = expect(bounded).rejects.toThrow(
+        'Cindy AI model list refresh timed out after 25ms',
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await rejection;
+
+      // Token rotation is deliberately non-abortable; it may settle safely after the
+      // model single-flight has already been released for a later retry.
+      resolveOperation('late-safe-result');
+      await expect(operation).resolves.toBe('late-safe-result');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reuses ready credentials and preserves the prior snapshot when the model request fails', async () => {

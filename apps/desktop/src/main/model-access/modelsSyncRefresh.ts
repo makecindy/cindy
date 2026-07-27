@@ -4,6 +4,29 @@ import type { CredentialsSync } from './credentialsSync.js';
 /** Bound the shared single-flight so a black-hole connection cannot block later refreshes. */
 export const XD_MODELS_SYNC_TIMEOUT_MS = 20_000;
 
+/**
+ * Bound the whole serverApiFetch lifecycle, including its non-abortable token-rotation refresh.
+ * The input promise is intentionally not cancelled: aborting `/api/auth/refresh` after the server
+ * rotates a token can invalidate the session. Promise.race still observes its eventual settlement,
+ * while the model single-flight is released at the advertised deadline.
+ */
+export function withModelsSyncOverallDeadline<T>(
+  operation: Promise<T>,
+  timeoutMs = XD_MODELS_SYNC_TIMEOUT_MS,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = setTimeout(
+      () => reject(new Error(`Cindy AI model list refresh timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+    timeout.unref?.();
+  });
+  return Promise.race([operation, deadline]).finally(() => {
+    if (timeout !== null) clearTimeout(timeout);
+  });
+}
+
 export function buildModelsSyncRequest(baseUrl: string): {
   path: '/api/model-access/models';
   options: { baseUrl: string; timeoutMs: number };

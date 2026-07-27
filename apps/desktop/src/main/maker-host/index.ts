@@ -80,9 +80,12 @@ import { notifyAutoPermissionClassifierUnavailable } from './claude-auto-permiss
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
   clearCodexProxyAuthInjection,
+  ensureCodexControlPlaneProxyReady,
   ensureCodexProxyReady,
+  getCodexControlPlaneProxyEndpoint,
   getCodexProxyAuthInjectionState,
   getCodexProxyEndpoint,
+  isCodexControlPlaneProxyHandleReady,
   isCodexProxyHandleReady,
   setCodexProxyAuthInjection,
   setCodexProxyGatewayKeyReader,
@@ -484,14 +487,23 @@ export function getMaker(): Maker {
               ? 'provider-oauth'
               : 'env-key';
         const useOAuthBearer = authInjection === 'oauth-bearer';
-        setCodexProxyAuthInjection(authInjection);
-        await broadcastCodexRuntimeRoute();
+        const isControlPlane = ctx.hostPurpose === 'control-plane';
+        if (!isControlPlane) {
+          setCodexProxyAuthInjection(authInjection);
+          await broadcastCodexRuntimeRoute();
+        }
         setCodexProxyGatewayKeyReader(readClaudeApiKey);
 
         // 这个点在 CodexAgent.createHost() 内。返回的 codexProxyActive 会被冻到 AppServerHost 实例上,
         // 后续 startSession 只读 host 自己的事实,不再 live 读全局 flag。
-        await ensureCodexProxyReady();
-        const ready = isCodexProxyHandleReady();
+        if (isControlPlane) {
+          await ensureCodexControlPlaneProxyReady(authInjection);
+        } else {
+          await ensureCodexProxyReady();
+        }
+        const ready = isControlPlane
+          ? isCodexControlPlaneProxyHandleReady(authInjection)
+          : isCodexProxyHandleReady();
         if ((useOAuthBearer || authInjection === 'provider-oauth') && !ready) {
           const error = new Error(
             authInjection === 'provider-oauth'
@@ -503,7 +515,9 @@ export function getMaker(): Maker {
           throw error;
         }
         // gateway-key 模式下 proxy 挂了仍可 fallback 到 gateway base_url(codex 直连 gateway, 不裸奔)。
-        const endpoint = getCodexProxyEndpoint();
+        const endpoint = isControlPlane
+          ? getCodexControlPlaneProxyEndpoint(authInjection)
+          : getCodexProxyEndpoint();
         return {
           extraArgs: [...mcpExtraArgs, ...buildCodexProxySpawnArgs(endpoint, authInjection)],
           extraEnv: mcpExtraEnv,

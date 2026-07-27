@@ -90,6 +90,7 @@ import {
   type CodexRuntimeState,
 } from './translator.js';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
+import { AppServerRequestTimeoutError } from './app-server/client.js';
 import { createStdioTransport } from './app-server/stdioTransport.js';
 import { CodexInteractionBroker } from './interaction-broker.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
@@ -277,6 +278,7 @@ export function hostKey(remoteHostId?: string | null): string {
 }
 
 const LOCAL_CONTROL_PLANE_HOST_PREFIX = 'local-control:';
+const CODEX_MODEL_LIST_RPC_TIMEOUT_MS = 20_000;
 
 function localControlPlaneHostKey(credentialMode: AgentCredentialMode): string {
   return `${LOCAL_CONTROL_PLANE_HOST_PREFIX}${credentialMode}`;
@@ -1344,7 +1346,11 @@ export class CodexAgent extends BaseAgent {
   private async getHost(
     remoteHostId?: string,
     credentialMode?: AgentCredentialMode,
-    opts: { ignoreBindingLeases?: number; keyOverride?: string } = {},
+    opts: {
+      ignoreBindingLeases?: number;
+      keyOverride?: string;
+      hostPurpose?: 'control-plane';
+    } = {},
   ): Promise<AppServerHost> {
     const key = opts.keyOverride ?? hostKey(remoteHostId);
     // spawnMode = 调用方原始诉求(undefined 保持 adapter fallback,spawn 行为不变)。
@@ -1471,12 +1477,19 @@ export class CodexAgent extends BaseAgent {
         credentialModeResolved: boolean;
         generation: number;
       } | null = null;
-      const promise = this.createHost(remoteHostId, key, spawnMode, generation, (resolvedMode) => {
-        if (inflightEntry) {
-          inflightEntry.credentialMode = resolvedMode;
-          inflightEntry.credentialModeResolved = true;
-        }
-      }).finally(() => {
+      const promise = this.createHost(
+        remoteHostId,
+        key,
+        spawnMode,
+        generation,
+        (resolvedMode) => {
+          if (inflightEntry) {
+            inflightEntry.credentialMode = resolvedMode;
+            inflightEntry.credentialModeResolved = true;
+          }
+        },
+        opts.hostPurpose,
+      ).finally(() => {
         // 成功: this.hosts 已赋值, 后续走快路径; 失败: 清掉 promise 让下次调用能重试
         const current = this.hostPromises.get(key);
         if (current?.promise === promise) this.hostPromises.delete(key);
@@ -1526,7 +1539,10 @@ export class CodexAgent extends BaseAgent {
       ? localControlPlaneHostKey(credentialMode)
       : hostKey();
     const host = credentialMode
-      ? await this.getHost(undefined, credentialMode, { keyOverride: key })
+      ? await this.getHost(undefined, credentialMode, {
+        keyOverride: key,
+        hostPurpose: 'control-plane',
+      })
       : (await this.getUtilityHost()).host;
     const init = await host.ensureStarted();
     if (init.codexHome) this.codexHome = init.codexHome;
@@ -1534,22 +1550,36 @@ export class CodexAgent extends BaseAgent {
     const models: CodexModelListResponse['data'] = [];
     const seenCursors = new Set<string>();
     let cursor: string | null = null;
-    do {
-      const page: CodexModelListResponse = await host.request<CodexModelListResponse>(Method.ModelList, {
-        cursor,
-        limit: 100,
-        includeHidden: false,
-      });
-      models.push(...(Array.isArray(page.data) ? page.data : []));
-      const next: string | null = typeof page.nextCursor === 'string' && page.nextCursor.length > 0
-        ? page.nextCursor
-        : null;
-      if (next && seenCursors.has(next)) {
-        throw new Error(`Codex app-server model/list repeated cursor: ${next}`);
+    try {
+      do {
+        const page: CodexModelListResponse = await host.request<CodexModelListResponse>(
+          Method.ModelList,
+          {
+            cursor,
+            limit: 100,
+            includeHidden: false,
+          },
+          { timeoutMs: CODEX_MODEL_LIST_RPC_TIMEOUT_MS },
+        );
+        models.push(...(Array.isArray(page.data) ? page.data : []));
+        const next: string | null = typeof page.nextCursor === 'string' && page.nextCursor.length > 0
+          ? page.nextCursor
+          : null;
+        if (next && seenCursors.has(next)) {
+          throw new Error(`Codex app-server model/list repeated cursor: ${next}`);
+        }
+        if (next) seenCursors.add(next);
+        cursor = next;
+      } while (cursor !== null);
+    } catch (error) {
+      if (credentialMode && error instanceof AppServerRequestTimeoutError) {
+        await this.retireHostKey(key, 'Codex control-plane model/list timed out', {
+          failIfActive: false,
+          logPrefix: 'codex model list refresh',
+        });
       }
-      if (next) seenCursors.add(next);
-      cursor = next;
-    } while (cursor !== null);
+      throw error;
+    }
 
     // Auth 切换 / logout 可能在分页请求期间 retire 旧 host。旧账号的迟到响应绝不能
     // 覆盖新账号目录；只有仍登记为当前 local host 的结果才允许交给宿主。
@@ -1584,6 +1614,7 @@ export class CodexAgent extends BaseAgent {
     credentialMode: AgentCredentialMode | undefined,
     generation: number,
     onSpawnCredentialModeResolved?: (mode: AgentCredentialMode | undefined) => void,
+    hostPurpose?: 'control-plane',
   ): Promise<AppServerHost> {
     const seq = (this.createHostSeqByKey.get(key) ?? 0) + 1;
     this.createHostSeqByKey.set(key, seq);
@@ -1664,7 +1695,11 @@ export class CodexAgent extends BaseAgent {
         try {
           const cfg = await this.deps.prepareCodexExtraSpawnConfig(
             this.deps.mcpProviders ?? [],
-            { remoteHostId, credentialMode: spawnCredentialMode },
+            {
+              remoteHostId,
+              credentialMode: spawnCredentialMode,
+              ...(hostPurpose ? { hostPurpose } : {}),
+            },
           );
           assertCurrentGeneration('spawn config');
           Object.assign(env, cfg.extraEnv);

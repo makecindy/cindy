@@ -32,7 +32,13 @@ import {
 import { createLogger } from '../logger.js';
 import { getBaseUrl, isDev } from '../manifestService.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { getActiveCatalog, setActiveCatalog, setCustomProviders, setDiscoveredCodexModels } from './active-catalog.js';
+import {
+  getActiveCatalog,
+  setActiveCatalog,
+  setCustomProviders,
+  setDiscoveredCodexModels,
+  setProviderModelsFromCatalog,
+} from './active-catalog.js';
 import {
   readCodexDiscoveredModels,
   readCodexDiscoveredModelsForAuthRefresh,
@@ -240,8 +246,9 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
 }
 
 /**
- * 手动重载远端/本地目录。先确保启动期动态发现已完成，再复用同一 `loadCatalog`
- * 源选择与 bundled fallback；active-catalog 的动态模型、自定义供应商状态保持不变。
+ * 手动重载 xAI 模型目录。先确保启动期动态发现已完成，再复用同一 `loadCatalog`
+ * 源选择与 bundled fallback；只投影 xAI 的静态模型列表，当前 routing/auth 以及其它
+ * provider 全部保持不变，避免活跃 turn 中途被整份远端目录切换路由。
  */
 export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   await ensureActiveCatalogLoaded();
@@ -251,8 +258,8 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
       if (source === 'bundled') {
         throw new Error('catalog refresh exhausted configured sources; keeping current snapshot');
       }
-      setActiveCatalog(catalog);
-      return catalog;
+      setProviderModelsFromCatalog('xai', catalog);
+      return getActiveCatalog();
     })
     .finally(() => {
       if (catalogRefreshInflight === flight) catalogRefreshInflight = null;

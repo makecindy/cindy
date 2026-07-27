@@ -20,6 +20,7 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
     static threadSeq = 1;
     static failThreadStart = false;
     static dropThreadUnsubscribe = false;
+    static dropModelList = false;
     static beforeThreadStartResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
     static onCreate: ((transport: MockCodexTransport) => void) | null = null;
 
@@ -134,6 +135,7 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
         return;
       }
       if (req.method === 'model/list') {
+        if (MockCodexTransport.dropModelList) return;
         this.emitLine({ id: req.id, result: { data: [], nextCursor: null } });
         return;
       }
@@ -228,6 +230,7 @@ beforeEach(() => {
   MockCodexTransport.threadSeq = 1;
   MockCodexTransport.failThreadStart = false;
   MockCodexTransport.dropThreadUnsubscribe = false;
+  MockCodexTransport.dropModelList = false;
   MockCodexTransport.beforeThreadStartResponse = null;
   MockCodexTransport.onCreate = null;
 });
@@ -672,6 +675,7 @@ describe('CodexAgent.refreshLocalModels', () => {
     expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(2, [], {
       remoteHostId: undefined,
       credentialMode: 'oauth-bearer',
+      hostPurpose: 'control-plane',
     });
     expect(onCodexLocalModelsListed).toHaveBeenCalledOnce();
     expect(Array.from(
@@ -708,8 +712,16 @@ describe('CodexAgent.refreshLocalModels', () => {
 
     await expect(agent.refreshLocalModels()).resolves.toBe(true);
     expect(host.request.mock.calls.filter(([method]) => method === Method.ModelList)).toEqual([
-      [Method.ModelList, { cursor: null, limit: 100, includeHidden: false }],
-      [Method.ModelList, { cursor: 'page-2', limit: 100, includeHidden: false }],
+      [
+        Method.ModelList,
+        { cursor: null, limit: 100, includeHidden: false },
+        { timeoutMs: 20_000 },
+      ],
+      [
+        Method.ModelList,
+        { cursor: 'page-2', limit: 100, includeHidden: false },
+        { timeoutMs: 20_000 },
+      ],
     ]);
     expect(onCodexLocalModelsListed).toHaveBeenCalledOnce();
     expect(onCodexLocalModelsListed.mock.calls[0][0].map((model: { id: string }) => model.id))
@@ -744,6 +756,30 @@ describe('CodexAgent.refreshLocalModels', () => {
 
     await expect(agent.refreshLocalModels()).resolves.toBe(false);
     expect(onCodexLocalModelsListed).not.toHaveBeenCalled();
+  });
+
+  it('retires a wedged control-plane host after the model/list deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      MockCodexTransport.dropModelList = true;
+      const agent = new CodexAgent(createDeps());
+      const refresh = agent.refreshLocalModels({ credentialMode: 'oauth-bearer' });
+      const refreshExpectation = expect(refresh).rejects.toThrow(
+        'codex app-server model/list timed out after 20000ms',
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await refreshExpectation;
+      expect(createdTransports).toHaveLength(1);
+      expect(createdTransports[0].closed).toBe(true);
+      expect(Array.from(
+        (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
+      )).not.toContain('local-control:oauth-bearer');
+      await agent.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

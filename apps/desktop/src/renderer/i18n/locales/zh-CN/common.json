@@ -1307,6 +1307,7 @@
         "capabilityNote": "不支持 {{agent}}",
         "divergedChip": "已在 {{agent}} 隐藏",
         "refreshAria": "刷新模型列表(仅新增，不改动现有)",
+        "refreshBuiltinAria": "刷新模型列表",
         "refreshingAria": "正在刷新模型列表…",
         "refreshDone": "模型列表已刷新",
         "refreshAdded": "已发现 {{count}} 个新模型",

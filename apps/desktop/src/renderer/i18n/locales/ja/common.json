@@ -1307,6 +1307,7 @@
         "capabilityNote": "{{agent}} では利用不可",
         "divergedChip": "{{agent}} で非表示",
         "refreshAria": "モデル一覧を更新",
+        "refreshBuiltinAria": "モデル一覧を更新",
         "refreshingAria": "モデル一覧を更新中…",
         "refreshDone": "モデル一覧を再読み込みしました",
         "refreshAdded": "新しいモデルを {{count}} 件検出しました",

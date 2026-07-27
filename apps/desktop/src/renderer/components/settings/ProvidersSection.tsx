@@ -1493,6 +1493,7 @@ export function ProvidersSection() {
                             onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
                             refreshing: refreshingProviderId === effectiveSelected.id,
                             refreshDisabled: refreshingProviderId !== null,
+                            refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
                           }
                         : effectiveSelected.source === 'user' &&
                             effectiveSelected.auth.method !== 'oauth'

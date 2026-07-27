@@ -202,6 +202,8 @@ export interface AgentDeps {
     ctx: {
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
+      /** Marks one-off app-server work (e.g. model/list) that must not alter session routing. */
+      hostPurpose?: 'control-plane';
     },
   ) => Promise<CodexExtraSpawnConfig>;
 

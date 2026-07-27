@@ -485,10 +485,14 @@ export class AppServerHost {
    * 透传 JSON-RPC request 到底层 client (会先 ensureStarted)。
    * thread/start / turn/start / turn/interrupt / thread/resume / thread/fork 都走这里。
    */
-  async request<R = unknown>(method: string, params?: unknown): Promise<R> {
+  async request<R = unknown>(
+    method: string,
+    params?: unknown,
+    opts?: { timeoutMs?: number },
+  ): Promise<R> {
     await this.ensureStarted();
     if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
-    return this.client.request<R>(method, params);
+    return this.client.request<R>(method, params, opts);
   }
 
   /** Release one thread's live runtime without archiving or deleting its history. */

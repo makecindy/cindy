@@ -35,6 +35,7 @@ import {
 import {
   buildModelsSyncRequest,
   ensureCredentialsReadyForModelsRefresh,
+  withModelsSyncOverallDeadline,
   waitForModelsSyncRefresh,
 } from './modelsSyncRefresh.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
@@ -177,9 +178,11 @@ async function runModelsSync(myGen: number, myAttempt: number): Promise<void> {
   let payload: { models: ModelAccessGatewayModel[] };
   try {
     const request = buildModelsSyncRequest(getClientEndpoint('modelAccessApiBaseUrl'));
-    payload = await serverApiFetch<{ models: ModelAccessGatewayModel[] }>(
-      request.path,
-      request.options,
+    payload = await withModelsSyncOverallDeadline(
+      serverApiFetch<{ models: ModelAccessGatewayModel[] }>(
+        request.path,
+        request.options,
+      ),
     );
   } catch (err) {
     log.warn('xd gateway models fetch failed (keeping last valid list)', {
