@@ -36,8 +36,9 @@ describe('computeListContinuation', () => {
       expect(computeListContinuation('1. ', '   ')).toEqual({ action: 'exit' });
     });
 
-    it('序号后没有空格不算列表(避免误伤 `1.5倍` 这类输入)', () => {
+    it('序号后没有空格不算列表(避免误伤中文正文和 `1.5倍` 这类输入)', () => {
       expect(computeListContinuation('1.foo')).toBeNull();
+      expect(computeListContinuation('1.中文项')).toBeNull();
       expect(computeListContinuation('1.5倍速')).toBeNull();
     });
   });

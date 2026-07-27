@@ -367,12 +367,13 @@ html:lang(ko) {
   width: 100%;
   padding-left: calc(1em + var(--composer-list-fallback-indent, 1.25em));
   overflow-wrap: anywhere;
+  word-break: break-all;
 }
 .ProseMirror .composer-list-fallback-prefix {
   display: inline-block;
   box-sizing: border-box;
-  width: calc(1em + var(--composer-list-fallback-indent, 1.25em));
-  margin-left: calc(-1em - var(--composer-list-fallback-indent, 1.25em));
+  width: var(--composer-list-fallback-indent, 1.25em);
+  margin-left: calc(0px - var(--composer-list-fallback-indent, 1.25em));
   white-space: nowrap;
   vertical-align: top;
 }
@@ -399,8 +400,9 @@ html:lang(ko) {
   overflow-wrap: anywhere;
 }
 .ProseMirror .composer-list-tab-indent {
-  /* Keep the fallback and the browser's tab advance deterministic until the
-     plugin view replaces the CSS variables with a measured Range width. */
+  /* Keep the browser's tab advance aligned with the deterministic prefix-width
+     estimate. Do not measure and rewrite decoration DOM from a plugin view:
+     ProseMirror's DOMObserver may restore that style and enter an update loop. */
   tab-size: 8;
 }
 .ProseMirror .composer-list-cjk-font {

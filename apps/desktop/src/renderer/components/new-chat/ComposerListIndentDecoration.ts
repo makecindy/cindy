@@ -8,7 +8,8 @@
  * decoration；连续数字/字母正文使用 marker/body 两个盒子，避免长串把
  * 列表标记单独挤到上一行。包含 inline atom/pill 的段落使用段落级 fallback
  * 容器和每行前缀槽位，避免 inline decoration 在 atom 边界被拆成多个 block。
- * 所有路径都把前缀的估算宽度写入 CSS 变量。
+ * 所有路径都把前缀的确定性估算宽度写入 CSS 变量，不在 plugin view
+ * 阶段读取布局或回写 decoration DOM。
  * CSS 将列表行作为独立的换行容器:首行用负 text-indent 把标记悬挂在左侧,
  * 自动换行后的续行则从正文起点开始。用户打完 `1. `(空格落下)那一刻
  * 缩进立即出现,即"已进入列表状态"的视觉信号;空项退出(前缀被删)时缩进
@@ -112,8 +113,9 @@ function addLongRunDecoration(
  *
  * ChatInput 已启用 tabular-nums,所以数字直接用 1ch;句点、空格、方括号等
  * 窄字符按 0.4ch 估算;中文顿号按全角 1em。这里只生成数字和 CSS 单位,
- * 不会透传用户文本。Tab 先用固定 tab stop 做首帧回退，插件 view 在布局
- * 完成后用 Range 实测并覆盖变量，避免比例字体下的 ch 近似误差。
+ * 不会透传用户文本。Tab 使用固定 tab stop 估算，不再用 Range 实测后
+ * 直接改 decoration DOM：ProseMirror 的 DOMObserver 会尝试恢复这类外部
+ * style 变更，在 Chromium 中可能与 plugin view 形成更新循环并卡死 renderer。
  */
 export function listPrefixIndentStyle(prefix: string): string {
   const { ch, em } = listPrefixIndentValues(prefix);
@@ -229,9 +231,15 @@ export function buildListIndentDecorations(
       const match = matchListPrefix(line.text);
       if (!match) {
         if (hasFallbackLine && lines.length > 1 && line.end > line.start) {
+          const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(line.text);
           decorations.push(
             Decoration.inline(contentBase + line.start, contentBase + line.end, {
-              class: 'composer-list-fallback-unindented',
+              class: [
+                'composer-list-fallback-unindented',
+                hasCjkPunctuation ? 'composer-list-cjk-font' : '',
+              ]
+                .filter(Boolean)
+                .join(' '),
             }),
           );
         }
@@ -290,7 +298,6 @@ export function buildListIndentDecorations(
       const prefix = match ? line.text.slice(0, match.prefixLength) : '';
       const body = line && match ? line.text.slice(match.prefixLength) : '';
       const from = line ? contentBase + line.start : contentBase;
-      const to = line ? contentBase + line.end : contentBase;
       const hasLongAlphanumericBody = LONG_ALPHANUMERIC_BODY_RE.test(body);
       const prefixHasCjkPunctuation = CJK_PUNCTUATION_RE.test(prefix);
       const hasTabPrefix = prefix.includes('\t');
@@ -402,74 +409,6 @@ export const ComposerListIndentDecoration = Extension.create({
           decorations(state) {
             return this.getState(state) ?? DecorationSet.empty;
           },
-        },
-        view() {
-          return {
-            update(view) {
-              const measurablePrefixes = view.dom.querySelectorAll<HTMLElement>(
-                '.composer-list-tab-indent, .composer-list-fallback-prefix',
-              );
-              const fallbackWidths = new Map<HTMLElement, number>();
-              measurablePrefixes.forEach((span) => {
-                const prefixLength = Number(span.dataset.composerListPrefixLength ?? Number.NaN);
-                if (!Number.isFinite(prefixLength) || prefixLength <= 0) return;
-                // Once Chromium measurement has replaced the deterministic
-                // fallback with pixels, the same span no longer needs a
-                // synchronous Range/layout read on every editor update.
-                const existingWidth = span.style.getPropertyValue('--composer-list-hang').trim();
-                let width = existingWidth.endsWith('px')
-                  ? Number.parseFloat(existingWidth.slice(0, -2))
-                  : Number.NaN;
-                if (!Number.isFinite(width)) {
-                  const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
-                  let remaining = prefixLength;
-                  let startNode: Text | null = null;
-                  let endNode: Text | null = null;
-                  let endOffset = 0;
-                  while (remaining > 0) {
-                    const node = walker.nextNode() as Text | null;
-                    if (!node) break;
-                    const length = node.data.length;
-                    if (!startNode) startNode = node;
-                    endNode = node;
-                    if (length >= remaining) {
-                      endOffset = remaining;
-                      remaining = 0;
-                      break;
-                    }
-                    remaining -= length;
-                  }
-                  if (!startNode || !endNode || remaining > 0) return;
-                  const range = document.createRange();
-                  range.setStart(startNode, 0);
-                  range.setEnd(endNode, endOffset);
-                  if (typeof range.getBoundingClientRect !== 'function') return;
-                  width = range.getBoundingClientRect().width;
-                  if (!Number.isFinite(width) || width <= 0) return;
-                  span.style.setProperty('--composer-list-hang', `${width}px`);
-                  span.style.setProperty('--composer-list-hang-negative', `-${width}px`);
-                }
-                const fallbackContainer = span.closest<HTMLElement>(
-                  '.composer-list-fallback-container',
-                );
-                if (fallbackContainer) {
-                  fallbackWidths.set(
-                    fallbackContainer,
-                    Math.max(fallbackWidths.get(fallbackContainer) ?? 0, width),
-                  );
-                }
-              });
-              fallbackWidths.forEach((width, fallbackContainer) => {
-                const nextWidth = `${width}px`;
-                if (
-                  fallbackContainer.style.getPropertyValue('--composer-list-fallback-indent') !==
-                  nextWidth
-                ) {
-                  fallbackContainer.style.setProperty('--composer-list-fallback-indent', nextWidth);
-                }
-              });
-            },
-          };
         },
         // 注:曾有一个 view().update 里 `if (view.composing) return` 的"IME 保护",
         // 但重算发生在上面的 state.apply(只看 tr.docChanged),view.update 在视图更新

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Editor, Node as TiptapNode } from '@tiptap/core';
 import Document from '@tiptap/extension-document';
 import Paragraph from '@tiptap/extension-paragraph';
@@ -21,6 +21,7 @@ import {
   setVoiceInputDraftDecoration,
   VoiceInputDraftDecoration,
 } from '@/components/new-chat/VoiceInputDraftDecoration';
+import { applyListContinuation } from '@/lib/composerListContinuation';
 
 /**
  * composer 列表行缩进 decoration:
@@ -85,11 +86,14 @@ describe('buildListIndentDecorations', () => {
     expect(cjkStyle).not.toContain('10、');
   });
 
-  it('decorates tab-indented lines and leaves their final width to browser measurement', () => {
+  it('decorates tab-indented lines with a deterministic fallback width', () => {
     const ed = makeEditor(['\t1. item']);
     const tabIndent = ed.view.dom.querySelector('.composer-list-tab-indent');
     expect(tabIndent).not.toBeNull();
     expect(tabIndent?.getAttribute('data-composer-list-prefix-length')).toBe('4');
+    expect((tabIndent as HTMLElement | null)?.style.getPropertyValue('--composer-list-hang')).toBe(
+      '9.8ch',
+    );
   });
 
   it('decorates the full content of a single-line item', () => {
@@ -169,6 +173,11 @@ describe('buildListIndentDecorations', () => {
     expect(buildListIndentDecorations(ed.state.doc).find()).toHaveLength(1);
   });
 
+  it('does not decorate ordered-dot CJK text without a separator space', () => {
+    const ed = makeEditor(['5.我']);
+    expect(buildListIndentDecorations(ed.state.doc).find()).toHaveLength(0);
+  });
+
   it('does not decorate plain text lines', () => {
     const ed = makeEditor(['hello world', '3.14159']);
     expect(buildListIndentDecorations(ed.state.doc).find()).toHaveLength(0);
@@ -233,6 +242,116 @@ describe('buildListIndentDecorations', () => {
 });
 
 describe('ComposerListIndentDecoration in a real editor', () => {
+  it('keeps the automatically inserted ordered prefix indented before body input', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [Document, Paragraph, Text, HardBreak, ComposerListIndentDecoration],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: '1. 第一项' }],
+          },
+        ],
+      },
+    });
+    editor.commands.setTextSelection(editor.state.doc.content.size - 1);
+
+    expect(applyListContinuation(editor.view)).toBe(true);
+    expect(editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n', '\n')).toBe(
+      '1. 第一项\n2. ',
+    );
+
+    const indentedRows = editor.view.dom.querySelectorAll('.composer-list-line-indent');
+    expect(indentedRows).toHaveLength(2);
+    expect(indentedRows[1]?.textContent).toBe('2. ');
+
+    editor.commands.insertContent('中文');
+    expect(editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n', '\n')).toBe(
+      '1. 第一项\n2. 中文',
+    );
+    expect(editor.view.dom.querySelectorAll('.composer-list-line-indent')).toHaveLength(2);
+  });
+
+  it('does not rewrite decoration-owned styles while laying out multiline CJK lists', () => {
+    const getBoundingClientRect = vi.fn(() => ({
+      width: 24,
+      height: 22,
+      top: 0,
+      right: 24,
+      bottom: 22,
+      left: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+    const originalDescriptor = Object.getOwnPropertyDescriptor(
+      Range.prototype,
+      'getBoundingClientRect',
+    );
+    Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: getBoundingClientRect,
+    });
+
+    try {
+      editor = new Editor({
+        element: document.createElement('div'),
+        extensions: [
+          Document,
+          Paragraph,
+          Text,
+          HardBreak,
+          CjkPunctDecoration,
+          ComposerListIndentDecoration,
+        ],
+        content: {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: '1. 有新增游戏数的用户数、占全部用户比例。' },
+                { type: 'hardBreak' },
+                { type: 'text', text: '2. 有新增游戏数的近30天、近1年活跃用户数及占比。' },
+                { type: 'hardBreak' },
+                {
+                  type: 'text',
+                  text: '3. 每人新增游戏数的均值、P50、P75、P90、P95、P99、最大值。',
+                },
+              ],
+            },
+          ],
+        },
+      });
+
+      // Force a plugin-view update after the decoration DOM is mounted. Directly
+      // writing measured pixels back to these nodes makes ProseMirror's
+      // DOMObserver restore the declared decoration styles in Chromium, which
+      // can create an update loop and freeze the renderer.
+      editor.view.updateState(editor.state);
+
+      expect(getBoundingClientRect).not.toHaveBeenCalled();
+      expect(
+        editor.view.dom
+          .querySelector<HTMLElement>('.composer-list-fallback-prefix')
+          ?.style.getPropertyValue('--composer-list-hang'),
+      ).toBe('1.8ch');
+      expect(
+        editor.view.dom
+          .querySelector<HTMLElement>('.composer-list-fallback-container')
+          ?.style.getPropertyValue('--composer-list-fallback-indent'),
+      ).toBe('1.8ch');
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(Range.prototype, 'getBoundingClientRect', originalDescriptor);
+      } else {
+        Reflect.deleteProperty(Range.prototype, 'getBoundingClientRect');
+      }
+    }
+  });
+
   it('renders the indent span into the DOM for list lines', () => {
     const ed = makeEditor(['1. hello']);
     expect(ed.view.dom.querySelector('p.composer-list-block-indent')?.textContent).toBe('1. hello');
@@ -552,6 +671,90 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     );
   });
 
+  it('keeps a fallback non-list CJK line as one box after deleting its ordered marker', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '1. 有新增游戏数的用户数、占全部用户比例。' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '2. 有新增游戏数的近30天、近1年活跃用户数及占比。' },
+              { type: 'hardBreak' },
+              {
+                type: 'text',
+                text: '3. 每人新增游戏数的均值、P50、P75、P90、P95、P99、最大值。',
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    editor.commands.deleteRange({ from: 1, to: 4 });
+
+    const container = editor.view.dom.querySelector('p.composer-list-fallback-container');
+    const unindentedRows = container?.querySelectorAll('.composer-list-fallback-unindented');
+    expect(container).not.toBeNull();
+    expect(unindentedRows).toHaveLength(1);
+    expect(unindentedRows?.[0]?.textContent).toBe('有新增游戏数的用户数、占全部用户比例。');
+    expect(unindentedRows?.[0]?.classList.contains('composer-list-cjk-font')).toBe(true);
+    expect(unindentedRows?.[0]?.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
+  });
+
+  it('keeps no-space CJK ordered text unindented inside the multiline fallback', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '1. 有新增游戏数的用户数、占全部用户比例。' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '5.我' },
+            ],
+          },
+        ],
+      },
+    });
+
+    const prefixes = editor.view.dom.querySelectorAll('.composer-list-fallback-prefix');
+    const unindentedRows = editor.view.dom.querySelectorAll('.composer-list-fallback-unindented');
+    expect(prefixes).toHaveLength(1);
+    expect(prefixes[0]?.textContent).toBe('1. ');
+    expect(unindentedRows).toHaveLength(1);
+    expect(unindentedRows[0]?.textContent).toBe('5.我');
+  });
+
+  it('keeps fallback long alphanumeric rows in the same visual line as their marker', () => {
+    const css = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
+    const fallbackContainerRule = css.match(
+      /\.ProseMirror \.composer-list-fallback-container \{([\s\S]*?)\n\}/,
+    )?.[1];
+    expect(fallbackContainerRule).toContain('word-break: break-all;');
+  });
+
   it('keeps hanging indent for slash paths and unknown commands without pills', () => {
     editor = new Editor({
       element: document.createElement('div'),
@@ -634,6 +837,17 @@ describe('wiring contract', () => {
     expect(css).toContain('.ProseMirror .composer-list-tab-indent');
     expect(css).toContain('tab-size: 8;');
     expect(css).toContain('white-space: nowrap;');
+    const fallbackPrefixRule = css.match(
+      /\.ProseMirror \.composer-list-fallback-prefix \{([\s\S]*?)\n\}/,
+    )?.[1];
+    expect(fallbackPrefixRule).toContain(
+      'width: var(--composer-list-fallback-indent, 1.25em);',
+    );
+    expect(fallbackPrefixRule).toContain(
+      'margin-left: calc(0px - var(--composer-list-fallback-indent, 1.25em));',
+    );
+    expect(fallbackPrefixRule).not.toContain('width: calc(1em +');
+    expect(fallbackPrefixRule).not.toContain('margin-left: calc(-1em -');
     const fallbackBreakRule = css.match(
       /\.ProseMirror \.composer-list-fallback-break \{([\s\S]*?)\n\}/,
     )?.[1];

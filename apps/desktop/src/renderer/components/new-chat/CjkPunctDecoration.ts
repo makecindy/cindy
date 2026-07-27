@@ -142,7 +142,12 @@ function listLineRanges(
       );
     });
     lineMatches.forEach(({ line, match }) => {
-      if (!match) return;
+      if (!match) {
+        if (hasFallbackLine && lines.length > 1 && line.end > line.start) {
+          ranges.push({ from: contentBase + line.start, to: contentBase + line.end });
+        }
+        return;
+      }
       const prefixFrom = contentBase + line.start;
       const prefixTo = prefixFrom + match.prefixLength;
       const body = line.text.slice(match.prefixLength);
