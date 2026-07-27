@@ -482,6 +482,14 @@
       "soundPreviewAria": "{{event}} 사운드 미리 듣기",
       "skinAnimationAria": "{{skin}} 미리보기 애니메이션 전환",
       "skins": {
+        "cindy": {
+          "name": "Cindy",
+          "description": "Cindy 본인. 실행 중인 작업을 지켜봅니다."
+        },
+        "blackcat": {
+          "name": "검은 고양이",
+          "description": "차분한 검은 고양이. 어두운 노치 속에서도 노란 눈이 또렷합니다."
+        },
         "pululu": {
           "name": "Pululu",
           "description": "TapFamily의 차분한 수호 담당. 동그란 머리와 진심 어린 태도로 어수선한 작업도 지켜줍니다."
@@ -509,6 +517,10 @@
         "muffin": {
           "name": "Muffin",
           "description": "부드러운 블루 그레이 분위기의 동료. 실행 중인 작업을 더 가볍고 친근하게 보여줍니다."
+        },
+        "erika": {
+          "name": "Erika",
+          "description": "초승달 머리 장식을 한 Erika. 따뜻한 갈색 눈으로 긴 작업을 조용히 함께합니다."
         }
       },
       "soundEvents": {

@@ -482,6 +482,14 @@
       "soundPreviewAria": "{{event}} のサウンドをプレビュー",
       "skinAnimationAria": "{{skin}} のプレビューアニメーションを切り替え",
       "skins": {
+        "cindy": {
+          "name": "Cindy",
+          "description": "Cindy 本人。実行中のタスクをしっかり見守ります。"
+        },
+        "blackcat": {
+          "name": "黒猫",
+          "description": "落ち着いた黒猫。暗いノッチの中でも黄色い瞳がよく目立ちます。"
+        },
         "pululu": {
           "name": "Pululu",
           "description": "TapFamily の落ち着いた守り役。丸い頭とまっすぐな優しさで、荒れがちなタスクも支えます。"
@@ -509,6 +517,10 @@
         "muffin": {
           "name": "Muffin",
           "description": "やわらかなブルーグレーの相棒。実行中のタスクを軽やかで親しみやすく見せます。"
+        },
+        "erika": {
+          "name": "Erika",
+          "description": "三日月の髪飾りをつけた Erika。温かみのある茶色の瞳で、長いタスクに静かに寄り添います。"
         }
       },
       "soundEvents": {

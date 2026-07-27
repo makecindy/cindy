@@ -482,6 +482,14 @@
       "soundPreviewAria": "Preview {{event}} sound",
       "skinAnimationAria": "Switch {{skin}} animation preview",
       "skins": {
+        "cindy": {
+          "name": "Cindy",
+          "description": "Cindy herself, keeping an eye on every run."
+        },
+        "blackcat": {
+          "name": "Black Cat",
+          "description": "A composed black cat whose yellow eyes stay sharp against the dark notch."
+        },
         "pululu": {
           "name": "Pululu",
           "description": "TapFamily's calm little guardian: round-headed, sincere, and ready to steady messy tasks."
@@ -509,6 +517,10 @@
         "muffin": {
           "name": "Muffin",
           "description": "A soft blue-gray companion that keeps running tasks feeling light and playful."
+        },
+        "erika": {
+          "name": "Erika",
+          "description": "Erika with her crescent hairpin — warm brown eyes, quietly focused on long runs."
         }
       },
       "soundEvents": {

@@ -37,6 +37,7 @@
     "test:migration-replay": "node ../../scripts/ensure-deps.mjs && node ../../scripts/ensure-dev-runtime-assets.mjs && vitest run src/main/localDb/__tests__/migrationReplay.test.ts",
     "test:watch": "vitest",
     "preview:oauth-pages": "tsx scripts/preview-oauth-pages.ts",
+    "preview:island-mascots": "node scripts/preview-island-mascots.mjs",
     "export:login-callback-template": "tsx scripts/export-login-callback-template.ts"
   },
   "author": {
