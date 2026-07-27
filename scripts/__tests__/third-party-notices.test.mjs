@@ -189,6 +189,14 @@ test("desktop resources include both open-source and restricted disclosures", ()
   const desktopRestricted = read(
     "apps/desktop/resources/THIRD-PARTY-RESTRICTED.txt",
   );
+  const assertProviderBrandingOrder = (noticePath) => {
+    const notice = read(noticePath);
+    assert.ok(
+      notice.indexOf("LiteLLM mascot SVG path (adapted)") <
+        notice.indexOf("Lobe Icons SVG paths (vendored)"),
+      `${noticePath} keeps provider branding notices in canonical name order`,
+    );
+  };
   assert.match(desktopRestricted, /Claude Code CLI@/);
   assert.doesNotMatch(desktopRestricted, /WeChat OpenSDK/);
   assert.match(
@@ -207,6 +215,12 @@ test("desktop resources include both open-source and restricted disclosures", ()
     read("apps/desktop/resources/THIRD-PARTY-NOTICES.txt"),
     /LiteLLM mascot SVG path \(adapted\) adapted/,
   );
+  assertProviderBrandingOrder(
+    "apps/desktop/resources/THIRD-PARTY-NOTICES.txt",
+  );
+  assertProviderBrandingOrder(
+    "docs/legal/notices/THIRD-PARTY-NOTICES.txt",
+  );
   for (const platform of ["ios", "android"]) {
     const mobileNotice = read(
       `docs/legal/notices/mobile-${platform}.txt`,
@@ -219,6 +233,7 @@ test("desktop resources include both open-source and restricted disclosures", ()
       mobileNotice,
       /LiteLLM mascot SVG path \(adapted\) adapted/,
     );
+    assertProviderBrandingOrder(`docs/legal/notices/mobile-${platform}.txt`);
   }
   assert.ok(
     fs.existsSync(

@@ -582,7 +582,7 @@ function bundledComponent(component) {
 }
 
 function buildProviderBrandingEntries() {
-  return [
+  const entries = [
     bundledComponent({
       name: "Lobe Icons SVG paths (vendored)",
       version: "5.14.0",
@@ -598,6 +598,11 @@ function buildProviderBrandingEntries() {
       licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2026 Berri AI"),
     }),
   ];
+  return entries.sort(
+    (a, b) =>
+      (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) ||
+      (a.url < b.url ? -1 : a.url > b.url ? 1 : 0),
+  );
 }
 
 function readBundledLicense(relativePath) {

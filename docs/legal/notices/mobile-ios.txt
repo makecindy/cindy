@@ -24,13 +24,13 @@ SECTION 1: Bundled components (non-npm)
 ==============================================================================
 
 ------------------------------------------------------------------------------
-Lobe Icons SVG paths (vendored) 5.14.0
+LiteLLM mascot SVG path (adapted)
 License: MIT
-Source: https://github.com/lobehub/lobe-icons/tree/v5.14.0
+Source: https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg
 ------------------------------------------------------------------------------
 MIT License
 
-Copyright (c) 2023 LobeHub
+Copyright (c) 2026 Berri AI
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -51,13 +51,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-LiteLLM mascot SVG path (adapted)
+Lobe Icons SVG paths (vendored) 5.14.0
 License: MIT
-Source: https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg
+Source: https://github.com/lobehub/lobe-icons/tree/v5.14.0
 ------------------------------------------------------------------------------
 MIT License
 
-Copyright (c) 2026 Berri AI
+Copyright (c) 2023 LobeHub
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
