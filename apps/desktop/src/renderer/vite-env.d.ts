@@ -4503,8 +4503,11 @@ interface RawReleaseNotesTopic {
 interface RawReleaseNotesPayload {
   version: string;
   date: string;
-  /** Flat contributor list — collective hall-of-fame on top of per-item `by`. */
-  contributors: string[];
+  /**
+   * Flat contributor list — collective hall-of-fame on top of per-item `by`.
+   * Optional: older notice files predate the field (renderer defaults to []).
+   */
+  contributors?: string[];
   /** Legacy author-grouped sections. Absent on topic-format payloads. */
   sections?: RawReleaseNotesSection[];
   /** Topic-format blocks. Non-empty ⇒ renderer uses the topic layout. */

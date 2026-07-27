@@ -29,6 +29,8 @@ import { StringDecoder } from 'node:string_decoder';
 
 import { net } from 'electron';
 
+import { hasRenderableContent } from '../shared/releaseNotesContent';
+
 import { getBaseUrl, getPlatformKey } from './manifestService';
 
 import { createLogger } from './logger';
@@ -66,8 +68,11 @@ export interface RawReleaseNotes {
    * Optional because older notice files predate the field.
    */
   githash?: string;
-  /** Flat contributor list — collective hall-of-fame on top of per-item `by`. */
-  contributors: string[];
+  /**
+   * Flat contributor list — collective hall-of-fame on top of per-item `by`.
+   * Optional: older notice files predate the field (renderer defaults to []).
+   */
+  contributors?: string[];
   /** Legacy author-grouped sections. Absent on topic-format payloads. */
   sections?: RawSection[];
   /** Topic-format blocks. Non-empty ⇒ renderer uses the topic layout. */
@@ -181,6 +186,14 @@ export async function fetchReleaseNotes(version: string): Promise<RawReleaseNote
   const url = `${getBaseUrl()}/notice/${platform}/${version}.json?t=${Date.now()}`;
   const json = await fetchCdnJson<RawReleaseNotes>(url);
   if (!json) return null;
+  // A 200 payload with nothing renderable (e.g. a v2 document whose topics
+  // are all malformed) is treated as a failed fetch and NOT cached — the
+  // process-lifetime cache would otherwise keep serving the bad document
+  // even after the CDN is corrected, and the renderer would reject it anyway.
+  if (!hasRenderableContent(json)) {
+    log.warn('Payload has no renderable content, treating as failure: version=%s', version);
+    return null;
+  }
   cache.set(version, json);
   log.info('Fetched OK: version=%s, sections=%d', json.version, json.sections?.length ?? 0);
   return json;

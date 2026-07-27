@@ -79,6 +79,8 @@ describe('release-notes normalization', () => {
       contributors: [],
       topics: [
         { title: '只有标题没有正文' },
+        { title: '   ', text: '标题是纯空白' },
+        { title: '正文是纯空白', text: '' },
         { emoji: 42, title: '正常主题', text: '正文。', contributors: ['A', 7, 'B'] },
         'not-an-object',
       ],

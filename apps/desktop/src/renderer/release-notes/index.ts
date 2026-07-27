@@ -23,6 +23,8 @@
  * `topics` array is the discriminator; old payloads never have it.
  */
 
+import { isRenderableTopic } from '../../shared/releaseNotesContent';
+
 /** Per-item shape after flattening: one bullet with its author tag. */
 export interface ReleaseNoteItem {
   text: string;
@@ -125,7 +127,7 @@ export async function fetchReleaseNotes(
       items: (s.items as RawReleaseNoteItem[]).flatMap(expandRawItem),
     })),
     topics: rawTopics
-      .filter((t) => typeof t?.title === 'string' && typeof t?.text === 'string')
+      .filter((t) => isRenderableTopic(t))
       .map((t) => ({
         emoji: typeof t.emoji === 'string' ? t.emoji : undefined,
         title: t.title,
