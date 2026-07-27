@@ -228,17 +228,25 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             state.rerun = false;
             if (client.getStatus() !== 'online') return;
             // 熔断 open 的设备:探测窗口未到时跳过本轮(每一步都会本地快速失败,
-            // 还会白白占用探测单飞席位);**窗口已到则重新纳入**——它的首个请求
-            // (openLink)会自然成为 half-open 探测,这就是无业务流量时的主动探测
-            // 通道(review P1:恢复不能只靠业务请求被动触发,否则用户挂机时设备
+            // 还会白白占用探测单飞席位);**窗口已到则重新纳入**——openLink 先行
+            // (成功按不定论、释放席位不关熔断),紧随的 subscribe(真实 invoke
+            // 通道)接棒成为 half-open 探测,这就是无业务流量时的主动探测通道
+            // (review P1:恢复不能只靠业务请求被动触发,否则用户挂机时设备
             // 会无限期停留在未响应态)。恢复(探测成功关熔断)后由下方 effect 里
             // 的 store 订阅补触发一次全量补齐回填。
             const allPlans = registryRef.current.snapshot();
-            const plans = allPlans.filter(
+            // 撤权设备直接出局(review P1):撤权是终态,openLink 只会等来
+            // link-close(revoked) + 超时;若不过滤,撤权时清熔断状态触发的这轮
+            // rehydrate 会对它重新 openLink,且其超时已按撤权降级为不定论,
+            // 熔断兜不住,退避循环会为它无限空转。也不计入 transientFailures。
+            const grantedPlans = allPlans.filter(
+              (plan) => !revokedDevicesStore.has(plan.deviceId),
+            );
+            const plans = grantedPlans.filter(
               (plan) =>
                 !unresponsiveDevicesStore.has(plan.deviceId) || isDeviceProbeDue(plan.deviceId),
             );
-            const skippedOpenDevices = allPlans.length - plans.length;
+            const skippedOpenDevices = grantedPlans.length - plans.length;
             const result = await rehydrateDeviceLinkTopics(plans, {
               openLink: (deviceId) => sendOpenLinkOnce(client, deviceId),
               subscribe: (deviceId, topics) => sendTrackedSubscribe(client, deviceId, topics),
@@ -720,10 +728,16 @@ async function sendOpenLink(client: DeviceLinkClient, deviceId: string): Promise
       protocolVersion: PROTOCOL_VERSION,
       appVersion: Constants.expoConfig?.version ?? '0.0.0',
     });
-    // link-accept 是目标设备的真实回包 → 重置熔断计数。
-    settleDeviceSend(deviceId, probe, 'responded');
+    // link-accept 只证明链路层活着,不证明 invoke 路径健康(review P1):事故形态
+    // 正是 link-open 在被控端 IPC/DB 路径之外应答正常、invoke 全部挂死——若凭
+    // link-accept 关熔断,恢复流程会立刻放进订阅 + 快照 + 业务 invoke 突发,3 次
+    // 超时后再 open,形成周期性风暴。这里按不定论处理:不关熔断也不计失败;
+    // openLink 若是探测,单飞席位随之释放、退避窗口不动,紧随其后的 subscribe
+    // (真实 invoke 通道)会立即接棒成为新探测,由它的回包决定开合。
+    settleDeviceSend(deviceId, probe, 'inconclusive');
     return accepted;
   } catch (err) {
+    // 超时仍计失败:link-open 都等不到回包说明被控端连链路层都没在应答。
     settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));
     throw err;
   }

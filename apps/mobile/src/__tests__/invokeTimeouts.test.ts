@@ -7,9 +7,12 @@ import {
 } from '@/device-link/invokeTimeouts';
 
 describe('resolveMobileInvokeTimeoutMs', () => {
-  it('mobile 精确表优先:media / 文件搜索保住收紧前的 30s 窗口', () => {
+  it('mobile 精确表优先:media / 文件搜索 / 词典学习保住收紧前的 30s 窗口', () => {
     expect(resolveMobileInvokeTimeoutMs('device-link:media:fetch')).toBe(30_000);
     expect(resolveMobileInvokeTimeoutMs('file-browser:remote-op')).toBe(30_000);
+    // 词典学习:桌面 advisor 的 managed refiner 单次尝试空闲窗 12s 且会换备选
+    // profile 重试,合法执行可超 15s;15s 默认误超时会把后台学习计入熔断失败。
+    expect(resolveMobileInvokeTimeoutMs('device-link:voice:dictionary-learning')).toBe(30_000);
     expect(MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS['device-link:media:fetch']).toBe(30_000);
   });
 

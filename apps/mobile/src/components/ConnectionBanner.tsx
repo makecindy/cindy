@@ -11,7 +11,10 @@ import {
   relayStatusLabel,
 } from '@/device-link/remoteStatus';
 import { MainWindowActionButton, StatusDot } from '@/components/MobilePrimitives';
-import { resolveConnectionBannerVisibility } from '@/components/connectionBannerVisibility';
+import {
+  resolveConnectionBannerVisibility,
+  resolveEffectiveConnectionError,
+} from '@/components/connectionBannerVisibility';
 import { fontWeight, useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -46,7 +49,9 @@ export function useShowConnectionBanner(
   return resolveConnectionBannerVisibility({
     offline,
     offlineLongEnough,
-    hasError: Boolean(error),
+    // 熔断已关后屏幕残留的 DEVICE_UNRESPONSIVE 错误按陈旧丢弃(review P1),
+    // 否则恢复后 banner 会带着"自动重试中"文案常驻到用户手动同步。
+    hasError: Boolean(resolveEffectiveConnectionError(error, deviceUnresponsive)),
     hasIssue: issue !== null,
     deviceUnresponsive,
   });
@@ -83,7 +88,10 @@ export function ConnectionBanner({
   // 熔断 open 优先于请求级 error:open 期间的请求失败绝大多数就是熔断快速失败本身,
   // 状态级提示(未响应 + 自动重试中)比单次请求的错误原文更能解释现状。
   const showUnresponsive = !activeIssue && deviceUnresponsive;
-  const friendlyError = activeIssue || showUnresponsive ? null : describeRemoteError(error);
+  // 熔断已关后残留的 DEVICE_UNRESPONSIVE 错误是陈旧快照,按 null 处理(与
+  // useShowConnectionBanner 同一判定,否则会出现可见但无内容的空壳 banner)。
+  const effectiveError = resolveEffectiveConnectionError(error, deviceUnresponsive);
+  const friendlyError = activeIssue || showUnresponsive ? null : describeRemoteError(effectiveError);
   const tone = activeIssue
     ? 'off'
     : showUnresponsive
