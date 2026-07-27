@@ -459,6 +459,7 @@ export function GhostPluginPage() {
         });
         if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
         const result = await window.electronAPI.pluginMarket.install(marketItem.pluginId, {
+          expectedReleaseId: next.releaseId,
           allowPermissionExpansion: diff.added.length > 0,
         });
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
@@ -762,10 +763,12 @@ export function GhostPluginPage() {
         autoFocusConfirm: true,
       });
       if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
-      const result = await window.electronAPI.pluginMarket.install(
-        marketDetail.pluginId,
-        isUpdate && diff!.added.length > 0 ? { allowPermissionExpansion: true } : undefined,
-      );
+      const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId, {
+        expectedReleaseId: marketDetail.releaseId,
+        ...(isUpdate && diff!.added.length > 0
+          ? { allowPermissionExpansion: true }
+          : {}),
+      });
       if (!isMarketBusyLeaseActive(marketBusyLease)) return;
       // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
       // 用"已更新"(生效状态未被改变)。

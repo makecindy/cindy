@@ -230,7 +230,10 @@ export class PluginMarketService {
 
   async install(
     pluginId: string,
-    options?: {
+    options: {
+      /** Renderer 确认框实际展示过的 release。Main 重拉详情后必须仍一致,
+       *  否则用户审阅 A、实际安装/启用 B(review P1)。 */
+      expectedReleaseId: string;
       allowPermissionExpansion?: boolean;
     },
   ): Promise<{ ghost: InstalledGhost }> {
@@ -254,6 +257,13 @@ export class PluginMarketService {
         throwIpcError('ALREADY_EXISTS', 'Multiple market Plugins use the same Plugin ID');
       }
       const plugin = await this.api.detail(pluginId);
+      requireSameMarketOwner(owner);
+      if (plugin.currentRelease.id !== options.expectedReleaseId) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'Plugin release changed after permission review',
+        );
+      }
       return {
         ghost: await this.installDetail(
           plugin,

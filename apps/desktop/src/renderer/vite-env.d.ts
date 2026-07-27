@@ -1235,7 +1235,7 @@ interface ElectronAPI {
     ) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     install: (
       pluginId: string,
-      options?: { allowPermissionExpansion?: boolean },
+      options: { expectedReleaseId: string; allowPermissionExpansion?: boolean },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     uninstall: (pluginId: string) => Promise<{ ok: true }>;
   };
