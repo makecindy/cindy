@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Editor, Node as TiptapNode } from '@tiptap/core';
@@ -884,7 +884,31 @@ describe('wiring contract', () => {
     expect(css).toContain('.ProseMirror .composer-list-tab-indent');
     expect(css).toContain('.ProseMirror .composer-list-cjk-punctuation-font');
     expect(css).toContain("font-family: 'Cindy CJK Punctuation'");
-    expect(css).toContain('unicode-range: U+3000-303F, U+FF00-FFEF;');
+    const bundledPunctuationFonts = [
+      'Regular_256855.woff2',
+      'Regular_312071.woff2',
+      'Regular_ac4458.woff2',
+      'Regular_ea8896.woff2',
+    ];
+    bundledPunctuationFonts.forEach((filename) => {
+      expect(css).toContain(`harmonyos-sans-sc-webfont-splitted/dist/${filename}`);
+      expect(
+        existsSync(
+          resolve(
+            __dirname,
+            '..',
+            '..',
+            '..',
+            '..',
+            '..',
+            'node_modules',
+            'harmonyos-sans-sc-webfont-splitted',
+            'dist',
+            filename,
+          ),
+        ),
+      ).toBe(true);
+    });
     expect(css).toContain('tab-size: 8ch;');
     expect(css).toContain('white-space: pre;');
     const fallbackPrefixRule = css.match(
