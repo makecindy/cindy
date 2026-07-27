@@ -658,7 +658,7 @@
         "privacyPolicyLabel": "隐私政策",
         "view": "查看",
         "viewDocument": "查看{{document}}",
-        "openFailed": "无法打开协议，请检查系统浏览器设置"
+        "openFailed": "无法打开文档，请检查系统浏览器设置"
       },
       "social": {
         "title": "和 Cindy 联系",
