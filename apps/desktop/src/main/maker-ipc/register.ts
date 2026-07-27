@@ -1842,10 +1842,11 @@ function handleAgentIslandEventAfterBroadcast(
 }
 
 function isRemoteAuthRetryErrorEvent(
-  session: { remoteHostId?: unknown },
+  session: { agentKind?: unknown; remoteHostId?: unknown },
   event: AgentEvent,
 ): boolean {
   if (!session.remoteHostId || event.type !== 'error' || !isTerminalTurnErrorEvent(event)) return false;
+  if (session.agentKind === 'codex') return false;
   const data = event.data as { message?: unknown; sdkError?: unknown; errorStatus?: unknown } | undefined;
   return data?.sdkError === 'authentication_failed' ||
     data?.errorStatus === 401 ||
@@ -2469,7 +2470,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       isPlannedUpgradeClose =
         errData?.reason === 'remote_daemon_closed' &&
         isCcMgrUpgradeInFlight(session.id);
-      // 远程 auth 错误跳过持久化：renderer 会静默 auto-retry（makerChatStore 在 reducer
+      // Legacy CC/XD 远程 auth 错误跳过持久化：renderer 会静默 auto-retry（makerChatStore 在 reducer
       // 前拦截、关闭旧会话、重发消息，不显示 ErrorBanner）；若 main 已落库，retry 成功后
       // 重开会话会看到虚假错误卡。判定与 renderer 的 isAuthError 保持一致，覆盖
       // sdkError === 'authentication_failed' 以及 message 命中 authentication_error /

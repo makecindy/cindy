@@ -116,7 +116,7 @@ const log = createLogger('CcAgentChatStore');
 // + setState),用于会话切换卡顿归因;<30ms 不打,避免噪音。
 const perfLog = createLogger('perf/session-switch');
 export const EMPTY_TASK_UPDATES: ReadonlyMap<string, AgentTaskUpdate> = new Map();
-/** Max consecutive auto auth-retries per remote session before surfacing the error. */
+/** Max consecutive legacy CC/XD auto auth-retries per remote session before surfacing the error. */
 const MAX_REMOTE_AUTH_RETRIES = 2;
 /** Bound best-effort main-side /clear guard arming so local cleanup cannot hang forever. */
 const CLEAR_SESSION_GUARD_TIMEOUT_MS = 500;
@@ -359,7 +359,7 @@ export interface ChatMessage {
   /** F-MSG-DOC: document/file attachments (path) for rendering as @path in message stream */
   files?: Array<{ name: string; path: string }>;
   /**
-   * Remote auth-retry / cc-mgr upgrade retry payload: the original send's
+   * Legacy CC/XD remote auth-retry / cc-mgr upgrade retry payload: the original send's
    * attachments + mentions, kept on the user message so an auto-retry (or the
    * UpgradeBanner resend) can replay the exact same turn. Set at send time,
    * not persisted to the server.
@@ -3463,7 +3463,7 @@ function initGlobalListeners(): void {
     // parent_tool_use_id / sdkSessionId / model / ... 提取并塞在 event 顶层, 这里把它转到
     // CCAgentStreamEvent.agentMeta 让 handleStreamEvent 落库 messages.agent_meta 行,
     // fork / rewind 反向找 prior assistant 锚点要靠这个字段。
-    // Remote auth-retry: 在 reducer 写 error 之前拦截,避免 error banner 闪烁。
+    // Legacy CC/XD remote auth-retry: 在 reducer 写 error 之前拦截,避免 error banner 闪烁。
     if (event.type === 'error') {
       const errData =
         (event.data as { sdkError?: string; message?: string; errorStatus?: number }) ?? {};
@@ -3476,6 +3476,7 @@ function initGlobalListeners(): void {
       if (
         isAuthError &&
         preSnap.remoteHostId &&
+        preSnap.agentKind === 'claude-code' &&
         !preSnap._authRetryInFlight &&
         authRetryCount < MAX_REMOTE_AUTH_RETRIES
       ) {

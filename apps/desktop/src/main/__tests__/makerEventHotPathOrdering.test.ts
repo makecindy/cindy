@@ -50,6 +50,7 @@ describe('maker:event hot path ordering', () => {
     )?.[0];
 
     expect(source).toContain('function isRemoteAuthRetryErrorEvent(');
+    expect(source).toContain("if (session.agentKind === 'codex') return false;");
     expect(source).toContain('service.deferRemoteAuthRetryError(meta, event);');
     expect(wireSessionSource).toContain('isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);');
     expect(deferredHandler).toBeTruthy();
