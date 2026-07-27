@@ -147,3 +147,28 @@ describe('deviceResponsivenessBreaker', () => {
     expect(h.onOpenChanged).toHaveBeenCalledWith(DEV, false);
   });
 });
+
+describe('probeDue(只读探测窗口判定,给 rehydrate 主动探测用)', () => {
+  it('closed 设备恒 false;open 后窗口未到 false、窗口到 true', () => {
+    const h = harness();
+    expect(h.breaker.probeDue(DEV)).toBe(false);
+    openBreaker(h);
+    expect(h.breaker.probeDue(DEV)).toBe(false);
+    h.advance(BREAKER_PROBE_BACKOFF_BASE_MS);
+    expect(h.breaker.probeDue(DEV)).toBe(true);
+  });
+
+  it('是只读的:不占用探测席位,acquire 仍能拿到 probe', () => {
+    const h = harness();
+    openBreaker(h);
+    h.advance(BREAKER_PROBE_BACKOFF_BASE_MS);
+    expect(h.breaker.probeDue(DEV)).toBe(true);
+    expect(h.breaker.probeDue(DEV)).toBe(true);
+    expect(h.breaker.acquire(DEV)).toBe('probe');
+    // 探测在途时 probeDue 收回 false(rehydrate 不应重复带上该设备)
+    expect(h.breaker.probeDue(DEV)).toBe(false);
+    h.breaker.settle(DEV, true, 'responded');
+    expect(h.breaker.probeDue(DEV)).toBe(false);
+    expect(h.breaker.isOpen(DEV)).toBe(false);
+  });
+});

@@ -57,6 +57,7 @@ import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
 import {
   acquireDeviceSendSlot,
   classifyDeviceSendFailure,
+  isDeviceProbeDue,
   resetDeviceResponsivenessTracking,
   settleDeviceSend,
   unresponsiveDevicesStore,
@@ -110,6 +111,17 @@ interface RehydrateRetryState {
 /** 补齐仍有瞬时失败时的退避重跑曲线:2s → 4s → … → 30s 封顶。 */
 const REHYDRATE_RETRY_BASE_MS = 2_000;
 const REHYDRATE_RETRY_MAX_MS = 30_000;
+
+/**
+ * mobile 侧的 invoke 超时补充表(优先于协议契约表 INVOKE_TIMEOUT_OVERRIDES_MS)。
+ * media:fetch 是「桌面拉文件再传 OSS」的长操作(最大 2GB,15-30s 属正常),
+ * 收紧后的默认 15s 会掐断此前能成功的传输(review P1);30s 与收紧前的全局
+ * 默认一致,保持该通道行为零回归。新增合法慢通道时优先登记进协议契约表
+ * (桌面控制端共用),仅 mobile 特有的差异才放这里。
+ */
+const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
+  'device-link:media:fetch': 30_000,
+};
 
 /**
  * 退后台断开连接前的宽限:几秒内切回前台的快速 App 切换不触发整套
@@ -226,19 +238,27 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           do {
             state.rerun = false;
             if (client.getStatus() !== 'online') return;
-            // 熔断 open 的设备跳过补齐:它的每一步都会快速失败(DEVICE_UNRESPONSIVE,
-            // permanent 不计瞬时重试),还会白白占用探测单飞窗口。恢复(探测成功关熔断)
-            // 后由下方 effect 里的 store 订阅补触发一次全量补齐回填。
-            const plans = registryRef.current
-              .snapshot()
-              .filter((plan) => !unresponsiveDevicesStore.has(plan.deviceId));
+            // 熔断 open 的设备:探测窗口未到时跳过本轮(每一步都会本地快速失败,
+            // 还会白白占用探测单飞席位);**窗口已到则重新纳入**——它的首个请求
+            // (openLink)会自然成为 half-open 探测,这就是无业务流量时的主动探测
+            // 通道(review P1:恢复不能只靠业务请求被动触发,否则用户挂机时设备
+            // 会无限期停留在未响应态)。恢复(探测成功关熔断)后由下方 effect 里
+            // 的 store 订阅补触发一次全量补齐回填。
+            const allPlans = registryRef.current.snapshot();
+            const plans = allPlans.filter(
+              (plan) =>
+                !unresponsiveDevicesStore.has(plan.deviceId) || isDeviceProbeDue(plan.deviceId),
+            );
+            const skippedOpenDevices = allPlans.length - plans.length;
             const result = await rehydrateDeviceLinkTopics(plans, {
               openLink: (deviceId) => sendOpenLinkOnce(client, deviceId),
               subscribe: (deviceId, topics) => sendTrackedSubscribe(client, deviceId, topics),
               requestSessionsReseed: (deviceId) => remoteSessionStore.requestReseed(deviceId),
               rebuildSessionSnapshot: (deviceId, sessionId) => rebuildSessionSnapshot(client, deviceId, sessionId),
             });
-            lastTransientFailures = result.transientFailures;
+            // 被跳过的熔断设备计入"未完成"信号,让退避重试循环(2s→30s)继续走:
+            // 每轮只做本地窗口检查,零管道流量,窗口一到下一轮就把设备带上探测。
+            lastTransientFailures = result.transientFailures + skippedOpenDevices;
           } while (state.rerun && client.getStatus() === 'online');
         } finally {
           if (state.inFlight === run) {
@@ -745,7 +765,11 @@ async function sendInvoke<T>(
   try {
     // 长执行通道(desktop-cmd:run / worktree:create 等)按协议契约表放宽超时,
     // 与桌面控制端用法对齐,避免 mobile 收紧的默认 15s 误伤合法慢操作。
-    result = await client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
+    result = await client.invoke(
+      deviceId,
+      { channel, args },
+      MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS[channel] ?? INVOKE_TIMEOUT_OVERRIDES_MS[channel],
+    );
   } catch (err) {
     settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));
     throw err;

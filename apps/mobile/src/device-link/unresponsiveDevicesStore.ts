@@ -89,6 +89,14 @@ const breaker = createDeviceResponsivenessBreaker({
  * 窗口时抛 DEVICE_UNRESPONSIVE 快速失败(不等重连、不上管道);返回值 = 本次
  * 请求是否为探测(单飞),必须原样回传给 settleDeviceSend。
  */
+/**
+ * 只读:该设备当前是否「探测已到窗口」——rehydrate 等自动恢复路径据此决定
+ * 是否把熔断 open 的设备重新纳入本轮(它的首个请求会自然成为探测)。
+ */
+export function isDeviceProbeDue(deviceId: string): boolean {
+  return breaker.probeDue(deviceId);
+}
+
 export function acquireDeviceSendSlot(deviceId: string): boolean {
   const decision = breaker.acquire(deviceId);
   if (decision === 'reject') throw createDeviceUnresponsiveError(deviceId);

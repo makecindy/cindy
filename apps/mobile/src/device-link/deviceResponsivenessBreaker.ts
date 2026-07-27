@@ -57,6 +57,13 @@ export interface DeviceResponsivenessBreaker {
   /** 请求收尾上报。wasProbe 必须回传 acquire 的结果('probe' → true)。 */
   settle(deviceId: string, wasProbe: boolean, outcome: BreakerSettleOutcome): void;
   isOpen(deviceId: string): boolean;
+  /**
+   * 只读:open 且探测窗口已到、无在途探测 —— 即「现在发一个请求会成为探测」。
+   * 给 rehydrate 这类自动恢复路径做**主动探测**判定用:设备恢复但用户没有发起
+   * 任何业务请求时,half-open 不能只靠业务流量被动触发,否则设备会无限期停留
+   * 在未响应态(review P1)。不占用探测席位、不改任何状态。
+   */
+  probeDue(deviceId: string): boolean;
   /** 清空全部状态(登出 / 切号);open 中的设备会触发 onOpenChanged(false)。 */
   resetAll(): void;
 }
@@ -131,6 +138,11 @@ export function createDeviceResponsivenessBreaker(
     acquire,
     settle,
     isOpen: (deviceId) => states.get(deviceId)?.open === true,
+    probeDue: (deviceId) => {
+      const state = states.get(deviceId);
+      if (!state?.open || state.probeInFlight) return false;
+      return now() - state.openedAt >= state.probeBackoffMs;
+    },
     resetAll: () => {
       const openIds = [...states.entries()].filter(([, s]) => s.open).map(([id]) => id);
       states.clear();
