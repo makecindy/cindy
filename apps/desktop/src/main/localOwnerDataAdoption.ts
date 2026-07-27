@@ -289,10 +289,15 @@ async function finishAdoption(
     // 导入没能把数据全带过来 → local 模式必须是**完整**的兜底恢复路径:不只是
     // 不归档库,owner 命名空间与凭证也一并不动。只留个空壳库、配置和凭证却已经
     // 搬走的话,「回 local 模式还能看到原来的数据」就是句空话(Copilot review)。
+    //
+    // 返回 false(收尾未完成)让 marker 停在 importedOwnerKey:claimed 不再作为
+    // 跳过依据,写了它下次登录会拿同一个 local 库**再弹一次窗**;停在 imported
+    // 则后续登录静默重跑导入(幂等),哪天两库 schema 对上了就自然收尾归档,
+    // 期间一次都不打扰用户(Copilot review)。
     deps.log.warn(
-      'local owner adoption: cleanup skipped entirely (local db, owner files and credentials all left in place) because some rows could not be imported; local mode stays a complete fallback',
+      'local owner adoption: cleanup skipped entirely (local db, owner files and credentials all left in place) because some rows could not be imported; local mode stays a complete fallback and later logins retry silently',
     );
-    return true;
+    return false;
   }
   if (await deps.fs.pathExists(localDbPath)) {
     try {

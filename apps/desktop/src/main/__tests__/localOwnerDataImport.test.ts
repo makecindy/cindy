@@ -48,7 +48,10 @@ const ACCOUNT_SCHEMA = `
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
-    target_session_id TEXT
+    -- 无 REFERENCES 声明:靠已知列名清单命中。
+    target_session_id TEXT,
+    -- 有 REFERENCES 声明:靠动态读外键命中。
+    skip_log_session_id TEXT REFERENCES sessions(id)
   );
   CREATE TABLE session_goals (
     id TEXT PRIMARY KEY,
@@ -368,21 +371,28 @@ describe('importLocalOwnerData 同 id 会话冲突', () => {
     expect(result.droppedRows.messages).toBeUndefined();
   });
 
-  it('可空的会话引用列为 NULL 时照常导入(NOT IN 对 NULL 的坑)', () => {
+  it('多个会话引用列全覆盖(声明了外键的与只在名单里的),NULL 引用照常导入', () => {
     accountDb
       .prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)')
       .run('shared-id', '账号侧', 10);
     seedLocalDb((db) => {
       // 制造一个冲突会话,让冲突过滤生效。
       db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('shared-id', '本机', 1);
-      // 这条定时任务不关联任何会话(target_session_id 为 NULL),必须照常并入。
+      // 两个引用列都为 NULL:不关联任何会话,必须照常并入。
       db.prepare(
-        "INSERT INTO schedules (id, name, status, target_session_id) VALUES (?,?,'active',NULL)",
+        "INSERT INTO schedules (id, name, status, target_session_id, skip_log_session_id)" +
+          " VALUES (?,?,'active',NULL,NULL)",
       ).run('sch-null', '不关联会话的任务');
-      // 这条关联冲突会话,应被跳过。
+      // 冲突会话出现在**无外键声明**的列上(靠已知列名清单命中),应被跳过。
       db.prepare(
-        "INSERT INTO schedules (id, name, status, target_session_id) VALUES (?,?,'active',?)",
-      ).run('sch-conflict', '关联冲突会话的任务', 'shared-id');
+        "INSERT INTO schedules (id, name, status, target_session_id, skip_log_session_id)" +
+          " VALUES (?,?,'active',?,NULL)",
+      ).run('sch-conflict-target', '关联冲突会话(target)', 'shared-id');
+      // 冲突会话出现在**有外键声明**的列上(靠动态读外键命中),也应被跳过。
+      db.prepare(
+        "INSERT INTO schedules (id, name, status, target_session_id, skip_log_session_id)" +
+          " VALUES (?,?,'active',NULL,?)",
+      ).run('sch-conflict-skiplog', '关联冲突会话(skip_log)', 'shared-id');
     });
 
     const result = importLocalOwnerData(accountDb, localDbPath);
@@ -392,7 +402,7 @@ describe('importLocalOwnerData 同 id 会话冲突', () => {
       .all()
       .map((r) => (r as { id: string }).id);
     expect(ids).toEqual(['sch-null']);
-    expect(result.skippedByConflict.schedules).toBe(1);
+    expect(result.skippedByConflict.schedules).toBe(2);
     // NULL 那条是正常并入的,不该被算成丢行。
     expect(result.droppedRows.schedules).toBeUndefined();
   });

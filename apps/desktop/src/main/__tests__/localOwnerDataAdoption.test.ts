@@ -715,6 +715,11 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
     expect(deps.log.warn).toHaveBeenCalledWith(
       expect.stringContaining('cleanup skipped entirely'),
     );
+    // 不写 claimed:否则下次登录会拿同一个 local 库再弹一次窗。停在 imported
+    // 让后续登录静默重跑,schema 对上了就自然收尾。
+    const marker = readMarker(mem);
+    expect(marker.importedOwnerKey).toBe(USER_KEY);
+    expect(marker.claimedOwnerKey).toBeUndefined();
   });
 
   it('整表没导入时同样整体跳过收尾', async () => {

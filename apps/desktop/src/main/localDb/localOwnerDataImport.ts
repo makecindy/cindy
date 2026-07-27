@@ -33,11 +33,20 @@ import type Database from 'better-sqlite3';
 /** ATTACH 时给 local 库的 schema 名(仅存活于本次导入事务)。 */
 const SOURCE_SCHEMA = 'adopt_src';
 
+/** 会话表名(冲突集与外键探测都以它为锚)。 */
+const SESSIONS_TABLE = 'sessions';
+
 /**
- * 子表指向 sessions 的外键列名(本仓 schema 里只有这三种拼法)。用于把「账号库
- * 已有同 id 会话」的那些会话的子行整批排除,避免它们挂到别人的会话上。
+ * 已知的会话引用列名。与「从外键定义动态读」取**并集**:动态那半覆盖将来新增的
+ * 引用列(不必回来改清单),这份名单覆盖没有显式声明 REFERENCES 的列——两者都可能
+ * 单独漏,漏一列就会让子行挂到账号侧的同名会话上。
  */
-const SESSION_REF_COLUMNS = ['session_id', 'target_session_id', 'lead_session_id'] as const;
+const SESSION_REF_COLUMN_NAMES = [
+  'session_id',
+  'target_session_id',
+  'lead_session_id',
+  'skip_log_session_id',
+] as const;
 
 /** 冲突会话 id 的临时表名(事务内建、用完即弃;避免 IN 子句撞变量数上限)。 */
 const CONFLICT_TEMP_TABLE = 'adopt_conflicted_sessions';
@@ -154,6 +163,22 @@ function primaryKeyColumns(db: Database.Database, table: string): string[] {
     .map((row) => row.name);
 }
 
+/**
+ * 某张表里指向 `sessions` 的列:账号库的外键定义(schema 最新)∪ 已知列名清单。
+ * 一张表可以有多个会话引用列——schedules 就同时有 target_session_id 与
+ * skip_log_session_id,任何一半单独用都会漏。
+ */
+function sessionRefColumns(db: Database.Database, table: string): string[] {
+  const rows = db.pragma(`main.foreign_key_list(${quoteId(table)})`) as Array<{
+    table: string;
+    from: string;
+  }>;
+  const declared = rows
+    .filter((row) => row.table === SESSIONS_TABLE)
+    .map((row) => row.from);
+  return [...new Set([...declared, ...SESSION_REF_COLUMN_NAMES])];
+}
+
 function sourceTableNames(db: Database.Database): Set<string> {
   const rows = db
     .prepare(`SELECT name FROM ${SOURCE_SCHEMA}.sqlite_master WHERE type = 'table'`)
@@ -230,26 +255,36 @@ export function importLocalOwnerData(
         }
         const colList = sharedCols.map(quoteId).join(', ');
         // 冲突会话的子行整批排除(见上面临时表的理由)。sessions 自身不需要过滤:
-        // 它的冲突行本来就被 OR IGNORE 跳过。
-        const refCol =
-          conflictedSessions > 0 && table !== 'sessions'
-            ? SESSION_REF_COLUMNS.find((col) => sharedCols.includes(col))
-            : undefined;
+        // 它的冲突行本来就被 OR IGNORE 跳过。引用列**从账号库的外键定义动态读**,
+        // 不硬编码列名——schedules 就同时有 target_session_id 与 skip_log_session_id,
+        // 漏一列就会让子行挂到账号侧的同名会话上(Copilot review)。
+        const refCols =
+          conflictedSessions > 0 && table !== SESSIONS_TABLE
+            ? sessionRefColumns(db, table).filter((col) => sharedCols.includes(col))
+            : [];
         // NULL-safe:`col NOT IN (...)` 在 col 为 NULL 时结果是 NULL(被 WHERE 当假),
-        // 而 target_session_id / lead_session_id 都是可空列——不显式放行 NULL 的话,
-        // 只要出现一个冲突会话,所有「不关联任何会话」的行都会被误跳过
-        // (Copilot review)。
-        const conflictFilter = refCol
-          ? ` WHERE (${quoteId(refCol)} IS NULL OR ${quoteId(refCol)} NOT IN` +
-            ` (SELECT id FROM temp.${quoteId(CONFLICT_TEMP_TABLE)}))`
+        // 而这些引用列多数可空——不显式放行 NULL 的话,只要出现一个冲突会话,
+        // 所有「不关联任何会话」的行都会被误跳过(Copilot review)。
+        const refPredicate = (col: string, alias = ''): string =>
+          `(${alias}${quoteId(col)} IS NULL OR ${alias}${quoteId(col)} NOT IN` +
+          ` (SELECT id FROM temp.${quoteId(CONFLICT_TEMP_TABLE)}))`;
+        const conflictFilter = refCols.length
+          ? ` WHERE ${refCols.map((col) => refPredicate(col)).join(' AND ')}`
           : '';
-        if (refCol) {
+        if (refCols.length) {
+          // 任一引用列指向冲突会话即整行跳过,统计口径与上面的过滤保持一致。
+          const anyConflict = refCols
+            .map(
+              (col) =>
+                `${quoteId(col)} IN (SELECT id FROM temp.${quoteId(CONFLICT_TEMP_TABLE)})`,
+            )
+            .join(' OR ');
           const skipped = Number(
             (
               db
                 .prepare(
                   `SELECT COUNT(*) AS c FROM ${SOURCE_SCHEMA}.${quoteId(table)}
-                     WHERE ${quoteId(refCol)} IN (SELECT id FROM temp.${quoteId(CONFLICT_TEMP_TABLE)})`,
+                     WHERE ${anyConflict}`,
                 )
                 .get() as { c: number | bigint }
             ).c ?? 0,
@@ -284,9 +319,8 @@ export function importLocalOwnerData(
           .join(' AND ');
         // 核验时排除「因会话冲突而故意跳过」的行——它们没进来是设计使然,
         // 已单独记在 skippedByConflict 里,不该再算成 schema 不兼容的丢行。
-        const conflictExclusion = refCol
-          ? ` AND (s.${quoteId(refCol)} IS NULL OR s.${quoteId(refCol)} NOT IN` +
-            ` (SELECT id FROM temp.${quoteId(CONFLICT_TEMP_TABLE)}))`
+        const conflictExclusion = refCols.length
+          ? ` AND ${refCols.map((col) => refPredicate(col, 's.')).join(' AND ')}`
           : '';
         const dropped = db
           .prepare(
