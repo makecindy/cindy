@@ -1236,7 +1236,9 @@ function ModelSelectorContentView({
               handleRowSelect(providerId, model.id);
             }}
             className={cn(
-              'flex w-full cursor-pointer items-center justify-between rounded-[8px] px-3 py-2',
+              // 单行三槽:icon | 名称(可截断) | 右侧 meta(徽章/价/对勾) shrink-0 贴右,
+              // 避免徽章嵌在名称 flex-1 里导致「限时免费 + 对勾」停在行中、右侧空一截。
+              'flex w-full cursor-pointer items-center gap-2.5 rounded-[8px] px-3 py-2',
               constrainedListMaxHeight !== undefined && 'min-h-11',
               'transition-colors duration-100 hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
               isSelected && 'bg-[var(--model-item-hover)]',
@@ -1245,38 +1247,42 @@ function ModelSelectorContentView({
               disabled && 'cursor-not-allowed opacity-50 hover:bg-transparent',
             )}
           >
-            <span className="flex min-w-0 flex-1 items-center gap-2.5">
-              {provider && (
-                <ModelIconMark
-                  icon={model.icon}
-                  providerId={provider.id}
-                  name={provider.name}
-                  routing={provider.routing}
-                  colorClass="text-[var(--text-secondary)]"
-                  withMargin={false}
-                  dense
+            {provider && (
+              <ModelIconMark
+                icon={model.icon}
+                providerId={provider.id}
+                name={provider.name}
+                routing={provider.routing}
+                colorClass="text-[var(--text-secondary)]"
+                withMargin={false}
+                dense
+              />
+            )}
+            <span className="flex min-w-0 flex-1 items-center gap-1.5">
+              <span className="truncate text-14 font-medium text-[var(--model-item-text)]">
+                {model.displayName}
+              </span>
+              {rowEffort && (
+                <span className="shrink-0 text-13 font-normal text-[var(--text-tertiary)]">
+                  {effortLabelFor(model, rowEffort)}
+                </span>
+              )}
+              {rowFastOn && (
+                <Zap
+                  size={13}
+                  className="shrink-0 text-[var(--text-tertiary)]"
+                  aria-label={t('newChat.modelSelector.meta.fastBadge')}
                 />
               )}
-              <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <span className="truncate text-14 font-medium text-[var(--model-item-text)]">
-                    {model.displayName}
-                  </span>
-                  {rowEffort && (
-                    <span className="shrink-0 text-13 font-normal text-[var(--text-tertiary)]">
-                      {effortLabelFor(model, rowEffort)}
-                    </span>
-                  )}
-                  {rowFastOn && (
-                    <Zap
-                      size={13}
-                      className="shrink-0 text-[var(--text-tertiary)]"
-                      aria-label={t('newChat.modelSelector.meta.fastBadge')}
-                    />
-                  )}
-                </span>
+            </span>
+            {(isSubscriptionModel ||
+              isBudgetModel ||
+              rowPromotionLabel ||
+              (rowPrice?.kind === 'priced' && !isSubscriptionModel) ||
+              isSelected) && (
+              <span className="flex shrink-0 items-center gap-1.5">
                 {(isSubscriptionModel || isBudgetModel || rowPromotionLabel) && (
-                  <span data-model-tags className="ml-auto flex min-w-0 shrink items-center gap-1.5">
+                  <span data-model-tags className="flex shrink-0 items-center gap-1.5">
                     {isSubscriptionModel &&
                       (rowPrice?.kind === 'priced' ? (
                         <Tip text={t('settings.providers.models.subscription')}>
@@ -1336,10 +1342,6 @@ function ModelSelectorContentView({
                     )}
                   </span>
                 )}
-              </span>
-            </span>
-            {((rowPrice?.kind === 'priced' && !isSubscriptionModel) || isSelected) && (
-              <span className="ml-2 flex shrink-0 items-center gap-1.5">
                 {rowPrice?.kind === 'priced' && !isSubscriptionModel && (
                   <span
                     data-model-price-stack={rowPrice.original ? 'true' : undefined}
