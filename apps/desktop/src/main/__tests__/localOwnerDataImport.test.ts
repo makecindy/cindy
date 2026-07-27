@@ -43,6 +43,16 @@ const ACCOUNT_SCHEMA = `
   CREATE TABLE custom_providers (id TEXT PRIMARY KEY, name TEXT NOT NULL);
   CREATE TABLE daily_spend (day TEXT PRIMARY KEY, amount REAL NOT NULL DEFAULT 0);
   CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE schedules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active'
+  );
+  CREATE TABLE session_goals (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    goal TEXT NOT NULL
+  );
 `;
 
 beforeEach(async () => {
@@ -310,6 +320,96 @@ describe('importLocalOwnerData 边界与原子性', () => {
     expect(() => importLocalOwnerData(accountDb, localDbPath)).toThrow();
     const attached = (accountDb.pragma('database_list') as Array<{ name: string }>).map((r) => r.name);
     expect(attached).not.toContain('adopt_src');
+  });
+});
+
+describe('importLocalOwnerData 同 id 会话冲突', () => {
+  it('冲突会话的子行整批跳过,不挂到账号库那条同 id 会话上', () => {
+    accountDb
+      .prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)')
+      .run('shared-id', '账号侧的会话', 10);
+    accountDb
+      .prepare('INSERT INTO messages (id, session_id, role, content) VALUES (?,?,?,?)')
+      .run('acc-m1', 'shared-id', 'user', '"账号侧消息"');
+    seedLocalDb((db) => {
+      // 同 id、不同内容:local 侧这条会话及其子行都必须整批跳过。
+      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('shared-id', '本机的会话', 1);
+      db.prepare('INSERT INTO messages (id, session_id, role, content) VALUES (?,?,?,?)').run(
+        'local-m1', 'shared-id', 'user', '"本机消息"',
+      );
+      db.prepare('INSERT INTO session_goals (id, session_id, goal) VALUES (?,?,?)').run(
+        'g1', 'shared-id', '本机目标',
+      );
+      // 不冲突的会话照常并入。
+      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('fresh', '本机新会话', 2);
+      db.prepare('INSERT INTO messages (id, session_id, role, content) VALUES (?,?,?,?)').run(
+        'local-m2', 'fresh', 'user', '"ok"',
+      );
+    });
+
+    const result = importLocalOwnerData(accountDb, localDbPath);
+
+    expect(result.conflictedSessions).toBe(1);
+    expect(result.skippedByConflict).toMatchObject({ messages: 1, session_goals: 1 });
+    // 账号侧那条会话的历史一个字都没被污染。
+    const accMessages = accountDb
+      .prepare('SELECT id FROM messages WHERE session_id = ? ORDER BY id')
+      .all('shared-id')
+      .map((r) => (r as { id: string }).id);
+    expect(accMessages).toEqual(['acc-m1']);
+    expect(countRows('session_goals')).toBe(0);
+    // 不冲突的那条照常并入。
+    expect(
+      accountDb.prepare('SELECT title FROM sessions WHERE id = ?').get('fresh'),
+    ).toEqual({ title: '本机新会话' });
+    // 被故意跳过的子行不算成 schema 不兼容的丢行。
+    expect(result.droppedRows.messages).toBeUndefined();
+  });
+
+  it('无冲突时不建过滤临时表、不误伤任何子行', () => {
+    seedLocalDb((db) => {
+      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('s1', 'x', 1);
+      db.prepare('INSERT INTO messages (id, session_id, role, content) VALUES (?,?,?,?)').run(
+        'm1', 's1', 'user', '{}',
+      );
+    });
+
+    const result = importLocalOwnerData(accountDb, localDbPath);
+
+    expect(result.conflictedSessions).toBe(0);
+    expect(result.skippedByConflict).toEqual({});
+    expect(countRows('messages')).toBe(1);
+  });
+});
+
+describe('importLocalOwnerData 定时任务导入即暂停', () => {
+  it('导入的 schedules 一律置为 paused(用户只裁决了对话归属)', () => {
+    seedLocalDb((db) => {
+      db.prepare("INSERT INTO schedules (id, name, status) VALUES (?,?,'active')").run('sch1', '每日巡检');
+      db.prepare("INSERT INTO schedules (id, name, status) VALUES (?,?,'paused')").run('sch2', '已暂停的');
+    });
+
+    const result = importLocalOwnerData(accountDb, localDbPath);
+
+    expect(result.pausedSchedules).toBe(1);
+    const rows = accountDb.prepare('SELECT id, status FROM schedules ORDER BY id').all();
+    expect(rows).toEqual([
+      { id: 'sch1', status: 'paused' },
+      { id: 'sch2', status: 'paused' },
+    ]);
+  });
+
+  it('不动账号库原有的 active 定时任务', () => {
+    accountDb.prepare("INSERT INTO schedules (id, name, status) VALUES (?,?,'active')").run('acc-sch', '账号的');
+    seedLocalDb((db) => {
+      db.prepare("INSERT INTO schedules (id, name, status) VALUES (?,?,'active')").run('sch1', '本机的');
+    });
+
+    importLocalOwnerData(accountDb, localDbPath);
+
+    expect(accountDb.prepare('SELECT status FROM schedules WHERE id = ?').get('acc-sch')).toEqual({
+      status: 'active',
+    });
   });
 });
 

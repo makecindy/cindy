@@ -5367,7 +5367,20 @@ app.on('ready', async () => {
       //  - 都在 ensure-ready IPC 返回之前 —— renderer 之后才拉会话列表,用户不会
       //    看到「先空一下再冒出来」。
       // 内部自带 marker 防重入,绝不 throw,失败不阻塞登录(下次登录重试)。
-      await runLocalOwnerDataAdoptionForUser(userId);
+      const adoption = await runLocalOwnerDataAdoptionForUser(userId);
+      // 认领可能带进来 custom_mcp_servers / custom_providers 行,而上面那趟
+      // refreshCustomMcpProviders 跑在导入之前——不再刷一次的话,紧随其后的 Codex
+      // 重启、首个 Claude 会话与 scheduler 拿到的 provider 数组里没有刚并入的
+      // MCP,要等下一次 CRUD 或重启才出现(codex review)。只在真导入了行时刷。
+      if (adoption.status === 'adopted' && adoption.imported > 0) {
+        try {
+          await refreshCustomMcpProviders();
+        } catch (err) {
+          accountSwitchLog.warn('refreshCustomMcpProviders after local adoption failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       // 身份翻转遗留的 dialogue 工作目录自愈:把 legacy userData 前缀的
       // sessions.working_dir 批量改写到当前 userData(详见 dialogueWorkdirSelfHeal.ts)。
       // 必须 await:ensure-ready IPC 返回后 renderer 才拉会话列表,在此之前改写完

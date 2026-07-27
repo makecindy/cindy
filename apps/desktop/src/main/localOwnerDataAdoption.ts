@@ -169,14 +169,18 @@ export interface LocalOwnerAdoptionDeps {
 
 export type LocalOwnerAdoptionResult =
   | { status: 'skipped-local-owner' }
-  | { status: 'already-claimed' }
+  | { status: 'imported-by-other-account' }
   | { status: 'declined-before' }
   | { status: 'no-local-db' }
   | { status: 'no-local-sessions' }
   | { status: 'local-db-unreadable'; error: string }
   | {
       status: 'deferred';
-      reason: 'passive-shared-user-data' | 'concurrent-live-instances' | 'local-db-busy';
+      reason:
+        | 'passive-shared-user-data'
+        | 'concurrent-live-instances'
+        | 'local-db-busy'
+        | 'import-unsupported-runtime';
     }
   | { status: 'declined' }
   | { status: 'stale-owner' }
@@ -289,6 +293,21 @@ async function finishAdoption(
     try {
       const stamp = deps.now().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
       const archivePath = `${localDbPath}${ADOPTED_DB_SUFFIX}${stamp}-${archiveSeq++}`;
+      // sidecar 先、db 最后:前置检查已确认此刻没有 -wal/-shm(checkpoint 过),
+      // 这里是防御——万一残留却只搬走主库,原路径会留下与新建 local 库失配的
+      // WAL,回放起来可能串台(Copilot review)。db 最后搬,它成功才算归档完成。
+      for (const suffix of DB_SIDECAR_SUFFIXES) {
+        const sidecar = `${localDbPath}${suffix}`;
+        if (!(await deps.fs.pathExists(sidecar))) continue;
+        const movedSidecar = await moveWithoutOverwrite(
+          deps.fs,
+          sidecar,
+          `${archivePath}${suffix}`,
+        );
+        if (movedSidecar.moved === 0) {
+          throw new Error(`archive target already exists: ${archivePath}${suffix}`);
+        }
+      }
       const archived = await moveWithoutOverwrite(deps.fs, localDbPath, archivePath);
       if (archived.moved === 0) throw new Error(`archive target already exists: ${archivePath}`);
       deps.log.info('local owner adoption: local db archived as %s', path.basename(archivePath));
@@ -388,12 +407,22 @@ export async function runLocalOwnerDataAdoption(
     const markerPath = path.join(deps.userDataDir, LOCAL_OWNER_ADOPTION_MARKER_FILENAME);
     const ownerKey = dataOwnerStorageKey(userId);
     const marker = await readAdoptionMarker(deps, markerPath);
-    if (marker?.claimedOwnerKey) return { status: 'already-claimed' };
     // 上次导入已提交、收尾没走完:静默续跑,不再问用户(会话已经在账号下了)。
     const resuming = marker?.importedOwnerKey === ownerKey;
+    // 别的账号导入完但收尾没走完时,这批数据已经归它了:静默让路,等它回来续跑。
+    // 否则本账号会把同一批会话再导入一遍、把凭证搬到自己名下,连它的续跑凭据都
+    // 会被覆盖掉(codex / Copilot review)。
+    if (marker?.importedOwnerKey && !resuming) {
+      deps.log.info('local owner adoption: local data already imported by another account');
+      return { status: 'imported-by-other-account' };
+    }
     if (!resuming && marker?.declinedOwnerKeys?.includes(ownerKey)) {
       return { status: 'declined-before' };
     }
+    // 注意:claimedOwnerKey **不**作为跳过依据。认领只归档了当时那个 local 库,
+    // 用户随后完全可以再进一次 local 模式、在新建的 local 库里攒下新会话——把
+    // claimed 当永久终态会让那批新会话再也没机会并入账号(codex review)。
+    // 该不该问,只由「local 库现在是否存在且有未删除会话」决定。
 
     const localDbPath = path.join(
       deps.userDataDir,
@@ -448,6 +477,10 @@ export async function runLocalOwnerDataAdoption(
         try {
           await writeAdoptionMarker(deps, markerPath, {
             version: 1,
+            // 保留既有的认领记录:拒绝只表达「本账号不要」,不该抹掉别人的进度。
+            ...(marker?.claimedOwnerKey
+              ? { claimedOwnerKey: marker.claimedOwnerKey, adoptedAt: marker.adoptedAt }
+              : {}),
             declinedOwnerKeys: [...new Set([...(marker?.declinedOwnerKeys ?? []), ownerKey])],
           });
         } catch (err) {
@@ -519,11 +552,28 @@ export async function runLocalOwnerDataAdoption(
           imported.unverifiedTables.join(' '),
         );
       }
+      if (imported.conflictedSessions > 0) {
+        deps.log.warn(
+          'local owner adoption: %d local sessions collide with existing account sessions; they and their %s child rows were skipped to avoid corrupting the account side',
+          imported.conflictedSessions,
+          Object.entries(imported.skippedByConflict)
+            .map(([table, count]) => `${table}=${count}`)
+            .join(' ') || 'no',
+        );
+      }
+      if (imported.pausedSchedules > 0) {
+        deps.log.info(
+          'local owner adoption: %d imported schedules were paused (the user only consented to moving conversations)',
+          imported.pausedSchedules,
+        );
+      }
       // 有数据没能并过来时保留 local 库不归档:归档才是让那些行在账号侧与
       // local 模式两边都消失的原因(Greptile review)。unverifiedTables 只是
       // 「无法断言」,不作为保留依据,否则正常路径也可能永不归档。
       const incomplete =
-        Object.keys(imported.droppedRows).length > 0 || imported.unimportableTables.length > 0;
+        Object.keys(imported.droppedRows).length > 0 ||
+        imported.unimportableTables.length > 0 ||
+        imported.conflictedSessions > 0;
       return await commitAdoptionTail(
         deps,
         userId,
@@ -537,6 +587,14 @@ export async function runLocalOwnerDataAdoption(
     } catch (err) {
       // 导入阶段失败:未写任何 marker,local 数据完好,下次登录重新询问。
       const message = err instanceof Error ? err.message : String(err);
+      // inline worker 回滚口不实现 localOwner.importData(导入语义只留一份正本,
+      // 不做第二份易 drift 的复制)。这不是错误,是「当前 db 运行时做不了」:
+      // 推迟即可,正常 file worker 下会照常认领。
+      if ((err as { code?: string }).code === 'UNKNOWN_TX') {
+        deps.log.info('local owner adoption deferred: db runtime has no row-level import support');
+        deps.ui.publish('done');
+        return { status: 'deferred', reason: 'import-unsupported-runtime' };
+      }
       deps.log.warn('local owner adoption failed (will retry next login): %s', message);
       deps.ui.publish('failed');
       return { status: 'failed', error: message };
@@ -630,8 +688,10 @@ const log = createLogger('localOwnerDataAdoption');
 let currentPhase: LocalAdoptionPhase | null = null;
 /** 确认窗的 pending resolver(同一时刻至多一个认领在等裁决)。 */
 let pendingDecisionResolver: ((decision: LocalAdoptionDecision) => void) | null = null;
-/** 并发防重入:onReady 可能被重复触发,共享同一个 in-flight promise。 */
+/** 并发防重入:onReady 可能被重复触发,同一 owner 共享同一个 in-flight promise。 */
 let inFlight: Promise<LocalOwnerAdoptionResult> | null = null;
+/** in-flight 那次认领的目标 userId(用于判断能不能复用它的结果)。 */
+let inFlightUserId: string | null = null;
 
 function broadcastPhase(phase: LocalAdoptionPhase): void {
   currentPhase = phase;
@@ -751,11 +811,21 @@ export function registerLocalOwnerAdoptionIpc(): void {
  * 幂等 + 防重入;绝不 throw。全部操作发生在当前生效的 userData 内部,因此
  * dev --isolated 沙箱无需特判(沙箱内的 local 数据认领进沙箱内的账号库,语义自洽)。
  */
-export async function runLocalOwnerDataAdoptionForUser(userId: string): Promise<void> {
-  if (inFlight != null) {
-    await inFlight;
-    return;
+export async function runLocalOwnerDataAdoptionForUser(
+  userId: string,
+): Promise<LocalOwnerAdoptionResult> {
+  // 已有认领在跑:同一个 owner 直接复用它的结果;**不同 owner 必须等它结束后
+  // 自己再跑一遍**。A 的认领可能正停在确认窗上,另一个窗口切到 B 时 B 的
+  // ensureReady 会走到这里——只 await 就返回等于 B 永远没被认领过(codex review)。
+  while (inFlight != null) {
+    const pending = inFlight;
+    const pendingUserId = inFlightUserId;
+    const result = await pending;
+    if (pendingUserId === userId) return result;
+    // 上一轮已结束(finally 清了 inFlight)则退出循环自己跑;若又有新的在跑则继续等。
+    if (inFlight === pending) break;
   }
+  inFlightUserId = userId;
   inFlight = runLocalOwnerDataAdoption(userId, {
     userDataDir: app.getPath('userData'),
     dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
@@ -774,9 +844,10 @@ export async function runLocalOwnerDataAdoptionForUser(userId: string): Promise<
     ui: electronUiDeps,
   });
   try {
-    await inFlight;
+    return await inFlight;
   } finally {
     inFlight = null;
+    inFlightUserId = null;
   }
 }
 

@@ -143,6 +143,9 @@ const emptyImport: LocalOwnerImportResult = {
   droppedRows: {},
   unverifiedTables: [],
   unimportableTables: [],
+  conflictedSessions: 0,
+  skippedByConflict: {},
+  pausedSchedules: 0,
 };
 
 interface HarnessOverrides {
@@ -197,8 +200,14 @@ function createHarness(overrides: HarnessOverrides = {}) {
 const readMarker = (mem: ReturnType<typeof createMemFs>): Record<string, unknown> =>
   JSON.parse(mem.files.get(path.normalize(MARKER)) ?? '{}') as Record<string, unknown>;
 
+/** 归档出来的主库文件名(排除随之归档的 -wal / -shm sidecar)。 */
 const archivedDbNames = (mem: ReturnType<typeof createMemFs>): string[] =>
-  [...mem.files.keys()].filter((f) => f.startsWith(`${path.normalize(LOCAL_DB)}.adopted-`));
+  [...mem.files.keys()].filter(
+    (f) =>
+      f.startsWith(`${path.normalize(LOCAL_DB)}.adopted-`) &&
+      !f.endsWith('-wal') &&
+      !f.endsWith('-shm'),
+  );
 
 describe('runLocalOwnerDataAdoption 前置探测(静默跳过,绝不弹窗)', () => {
   it('userId 为 local-v1 自身时跳过(防御 local 模式 ensureReady 误触发)', async () => {
@@ -278,12 +287,37 @@ describe('runLocalOwnerDataAdoption 前置探测(静默跳过,绝不弹窗)', ()
 });
 
 describe('runLocalOwnerDataAdoption marker 终态', () => {
-  it('已认领过(claimedOwnerKey)时永久跳过', async () => {
+  it('上次已认领过、但用户又在 local 模式攒了新对话时重新询问(claimed 不是永久终态)', async () => {
     const { mem, deps, phases } = createHarness();
+    // 上次认领把当时那个 local 库归档了;这个 LOCAL_DB 是之后新建的。
     mem.addFile(LOCAL_DB);
-    mem.addFile(MARKER, JSON.stringify({ version: 1, claimedOwnerKey: 'whatever' }));
-    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({ status: 'already-claimed' });
+    mem.addFile(
+      MARKER,
+      JSON.stringify({ version: 1, claimedOwnerKey: USER_KEY, adoptedAt: '2026-07-01T00:00:00.000Z' }),
+    );
+
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(result.status).toBe('adopted');
+    expect(phases).toEqual(['confirm', 'running', 'done']);
+  });
+
+  it('别的账号导入完但收尾没走完时静默让路,不问、不导入、不动文件', async () => {
+    const { mem, deps, phases, importLocalData } = createHarness();
+    mem.addFile(LOCAL_DB);
+    mem.addFile(path.join(SECRETS_DIR, `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}k.enc`), 'k');
+    mem.addFile(MARKER, JSON.stringify({ version: 1, importedOwnerKey: 'other-account-key' }));
+
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({
+      status: 'imported-by-other-account',
+    });
     expect(phases).toEqual([]);
+    expect(importLocalData).not.toHaveBeenCalled();
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+    // 它的凭证也不能被本账号顺走。
+    expect(
+      mem.exists(path.join(SECRETS_DIR, `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}k.enc`)),
+    ).toBe(true);
   });
 
   it('本账号此前拒绝过时不再询问', async () => {
@@ -322,6 +356,7 @@ describe('runLocalOwnerDataAdoption 用户拒绝', () => {
     expect(phases).toEqual(['confirm', 'done']);
     expect(importLocalData).not.toHaveBeenCalled();
     expect(readMarker(mem)).toEqual({ version: 1, declinedOwnerKeys: [USER_KEY] });
+    expect(importLocalData).not.toHaveBeenCalled();
     expect(mem.exists(LOCAL_DB)).toBe(true);
     expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'))).toBe(true);
   });
@@ -564,6 +599,81 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
 
     expect((await runLocalOwnerDataAdoption(USER_ID, deps)).status).toBe('adopted');
     expect(archivedDbNames(mem)).toHaveLength(1);
+  });
+
+  it('归档时把残留的 -wal/-shm 一起搬走(不给新建 local 库留失配 WAL)', async () => {
+    const { mem, deps } = createHarness({
+      // 前置的 sidecar 门槛靠 checkpoint 清掉;这里模拟 checkpoint 后又冒出来的残留。
+      fsOverrides: {
+        pathExists: async (p) => {
+          const np = path.normalize(p);
+          if (np === path.normalize(`${LOCAL_DB}-wal`)) return sidecarVisible;
+          return mem.files.has(np) || mem.dirs.has(np);
+        },
+      },
+    });
+    let sidecarVisible = false;
+    mem.addFile(LOCAL_DB);
+    mem.addFile(`${LOCAL_DB}-wal`, 'wal-bytes');
+    // 前置检查时不可见(已 checkpoint),收尾归档时可见。
+    const originalImport = deps.importLocalData;
+    deps.importLocalData = (async (dbPath: string) => {
+      sidecarVisible = true;
+      return originalImport(dbPath);
+    }) as typeof deps.importLocalData;
+
+    await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    const archived = archivedDbNames(mem);
+    expect(archived).toHaveLength(1);
+    expect([...mem.files.keys()].some((f) => f.endsWith('-wal') && f.includes('.adopted-'))).toBe(
+      true,
+    );
+    expect(mem.exists(`${LOCAL_DB}-wal`)).toBe(false);
+  });
+
+  it('db 运行时不支持导入 tx(inline worker 回滚口)时推迟,不写 marker、不报失败', async () => {
+    const { mem, deps, phases } = createHarness();
+    mem.addFile(LOCAL_DB);
+    deps.importLocalData = async () => {
+      throw Object.assign(new Error('unknown tx: localOwner.importData'), { code: 'UNKNOWN_TX' });
+    };
+
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({
+      status: 'deferred',
+      reason: 'import-unsupported-runtime',
+    });
+    expect(phases).toEqual(['confirm', 'running', 'done']);
+    expect(mem.files.has(path.normalize(MARKER))).toBe(false);
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+  });
+
+  it('存在同 id 会话冲突时按「没全带过来」处理:warn + 保留 local 库', async () => {
+    const { mem, deps } = createHarness({
+      importResult: { inserted: 4, conflictedSessions: 2, skippedByConflict: { messages: 9 } },
+    });
+    mem.addFile(LOCAL_DB);
+
+    expect((await runLocalOwnerDataAdoption(USER_ID, deps)).status).toBe('adopted');
+
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('collide with existing account sessions'),
+      2,
+      'messages=9',
+    );
+    expect(archivedDbNames(mem)).toHaveLength(0);
+  });
+
+  it('导入的定时任务被暂停时记录下来(用户只裁决了对话归属)', async () => {
+    const { mem, deps } = createHarness({ importResult: { inserted: 6, pausedSchedules: 3 } });
+    mem.addFile(LOCAL_DB);
+
+    await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(deps.log.info).toHaveBeenCalledWith(
+      expect.stringContaining('schedules were paused'),
+      3,
+    );
   });
 
   it('导入丢了行时如实 warn 出丢了哪些表、多少行', async () => {

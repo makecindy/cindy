@@ -362,7 +362,13 @@ export interface ImDeleteBindingsArgs {
 /**
  * local 模式(local-v1)库的数据行导入当前账号库(登录后的一次性认领)。事务体
  * 只做 ATTACH + 逐表 `INSERT OR IGNORE`,清单与列交集规则见
- * localDb/localOwnerDataImport.ts。
+ * localDb/localOwnerDataImport.ts(唯一正本)。
+ *
+ * 注意:`client/WorkerThreadTransport.ts` 里的 inline worker 回滚口**故意不实现**
+ * 这个 tx——导入涉及表清单、外键父子顺序、会话冲突过滤,复制一份等着 drift 的
+ * 风险大于收益(那份 inline 代码本身也是待删除的打包回滚口)。它会返回
+ * UNKNOWN_TX,认领流程按「当前 db 运行时不支持」推迟,下次在正常 file worker
+ * 下照常认领,不影响数据安全。
  */
 export interface LocalOwnerImportDataArgs {
   /** 已关闭的 local-v1 库文件绝对路径。 */
