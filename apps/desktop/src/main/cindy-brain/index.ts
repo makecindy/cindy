@@ -550,7 +550,7 @@ export function armGhostLifecyclePush(): void {
     // 凭证重存 = 用户已处置被拒记录,按 ghostId 清账(所有 secret 写入
     // 路径都会 emit,无需逐点挂钩);清账后照常重投影广播。
     if (event.source === 'secret') {
-      ghostCredentialRejections.clear(event.ghostId);
+      ghostCredentialRejections().clear(event.ghostId);
     }
     broadcastGhostLifecycleChanged();
   });
@@ -2016,14 +2016,23 @@ let ghostSetupKvStore: GhostKvStore | null = null;
 
 // 运行期凭证被拒台账(secret key 被服务端 401/403 拒绝的失效记录;
 // 生命周期投影折算为 needs_reauth 的事实源之一)。
-const ghostCredentialRejections = createGhostCredentialRejectionsStore({
-  filePath: ghostCredentialRejectionsPath(ownerScopedUserDataPath()),
-  log,
-});
+// 惰性初始化:import 期不触碰 userData(测试环境无 Electron app)。
+let ghostCredentialRejectionsSingleton: ReturnType<
+  typeof createGhostCredentialRejectionsStore
+> | null = null;
+function ghostCredentialRejections() {
+  if (!ghostCredentialRejectionsSingleton) {
+    ghostCredentialRejectionsSingleton = createGhostCredentialRejectionsStore({
+      filePath: ghostCredentialRejectionsPath(ownerScopedUserDataPath()),
+      log,
+    });
+  }
+  return ghostCredentialRejectionsSingleton;
+}
 
 /** networkSlot 在 401/403 重试耗尽后记账;有实际变化时推 setup change。 */
 export function noteGhostCredentialRejected(ghostId: string, secretKey: string): void {
-  if (ghostCredentialRejections.markRejected(ghostId, secretKey)) {
+  if (ghostCredentialRejections().markRejected(ghostId, secretKey)) {
     getGhostSetupChangeBus().emit(ghostId, { source: 'runtime_probe', ref: secretKey });
   }
 }
@@ -2073,7 +2082,7 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   // 运行期凭证被拒台账折算:被 401/403 拒绝过的 secret 按 expired 上报——
   // 与 OAuth 过期同一语义(修复动作 = 重新配置),readiness 随之降
   // needs_reauth,发现层 / 插件页在下一次投影即知。
-  const rejected = ghostCredentialRejections.rejectedKeys(ghostId);
+  const rejected = ghostCredentialRejections().rejectedKeys(ghostId);
   if (rejected.length === 0) return assessment;
   const hasRejection = assessment.groups.some((group) =>
     group.items.some(
