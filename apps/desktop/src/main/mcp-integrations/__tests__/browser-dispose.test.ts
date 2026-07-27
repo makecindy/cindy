@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { stopRuntimeForQuit } from '../browser-dispose.js';
+import {
+  stopRuntimeForQuit,
+  stopRuntimeForQuitIfUsed,
+  trackBrowserRuntimeUsage,
+} from '../browser-dispose.js';
 import type { BrowserControlRequest, BrowserControlResult } from '@cindy/browser-control-runtime';
 
 function fakeLogger() {
-  return { warn: vi.fn() };
+  return { info: vi.fn(), warn: vi.fn() };
 }
 
 describe('stopRuntimeForQuit', () => {
@@ -45,6 +49,58 @@ describe('stopRuntimeForQuit', () => {
     const logger = fakeLogger();
 
     await expect(stopRuntimeForQuit({ call }, logger)).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('stopRuntimeForQuitIfUsed', () => {
+  it('skips the stop dispatch entirely when the runtime was never used', async () => {
+    // The vendored dispatch bridge boots the browser control service before
+    // routing ANY action — so "never used" must mean zero calls, not a no-op stop.
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(async () => ({
+      ok: true,
+      action: 'stop',
+      status: 200,
+    }));
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    await stopRuntimeForQuitIfUsed(tracked, logger);
+
+    expect(call).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('never used this session'),
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('stops normally when the runtime saw traffic this session', async () => {
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
+      async (req) => ({ ok: true, action: req.action, status: 200 }),
+    );
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    await tracked.call({ action: 'status' });
+    await stopRuntimeForQuitIfUsed(tracked, logger);
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(call.mock.calls[1][0]).toEqual({ action: 'stop' });
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('tracking wrapper records usage even when the tracked call rejects', async () => {
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(async () => {
+      throw new Error('dispatch exploded');
+    });
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    await expect(tracked.call({ action: 'status' })).rejects.toThrow('dispatch exploded');
+    await stopRuntimeForQuitIfUsed(tracked, logger);
+
+    // used → stop dispatched; its rejection is swallowed by stopRuntimeForQuit
+    expect(call).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 });

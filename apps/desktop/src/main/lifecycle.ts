@@ -18,6 +18,10 @@
  * 然后 `app.exit(<code>)` 强制退出。`will-quit` / `quit` 事件不会触发——任何
  * 真正必须执行的清理都必须注册到这里, 而不是挂 `will-quit`。
  *
+ * shutdown 开始时同步布防外部硬杀 watchdog (armShutdownHardKillWatchdog):
+ * disposer 挂死、事件循环被 sync 代码阻塞、甚至 app.exit 在 native teardown
+ * 挂死 (JS 已死) 时, 由 detached 外部进程在宽限期后 kill -9 补刀, 保证退出有界。
+ *
  * installQuitHandler() 同时把以下入口都收到这条 disposer chain:
  *
  *   - app.on('before-quit')             —— 用户/代码主动退出 (Cmd+Q / 关窗 / app.quit)
@@ -28,6 +32,8 @@
  * unhandledRejection 只记日志、不退出 —— 悬空 Promise 不必然致命, 让上游决定。
  * 真硬崩 (segfault / kill -9) JS 层无能为力, 这里覆盖不到; 子进程靠 stdin EOF 自死。
  */
+
+import { spawn } from 'node:child_process';
 
 import { app, BrowserWindow, session } from 'electron';
 
@@ -141,17 +147,101 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
   }
 
   // ── Phase 3: post-async ──────────────────────────────────────────────────
+  // 返回 Promise 的 disposer 同样纳入 timeoutMs 预算 (逐个 race, 串行语义不变)。
+  // 此前这里是无界 await —— 生产实证: 单个挂死的 post-async disposer 就能让
+  // "runQuitDisposers completed" 永远打不出来, 进程卡在退出路径上不死。
   for (const d of registry.filter((x) => x.phase === 'post-async')) {
     try {
       const ret = d.fn();
       if (ret && typeof (ret as Promise<unknown>).then === 'function') {
-        await (ret as Promise<unknown>).catch((err) =>
+        const settled = (ret as Promise<unknown>).catch((err) =>
           log.error(`post-async disposer "${d.name}" threw`, err),
         );
+        let timer: NodeJS.Timeout | undefined;
+        let timedOut = false;
+        await Promise.race([
+          settled,
+          new Promise<void>((resolve) => {
+            timer = setTimeout(() => {
+              timedOut = true;
+              resolve();
+            }, timeoutMs);
+          }),
+        ]);
+        clearTimeout(timer);
+        if (timedOut) {
+          log.warn(`post-async disposer "${d.name}" timed out after ${timeoutMs}ms — continuing`);
+        }
       }
     } catch (err) {
       log.error(`post-async disposer "${d.name}" threw`, err);
     }
+  }
+}
+
+/**
+ * 外部硬杀 watchdog 的宽限期 (秒)。disposer 预算 6s 的 3 倍余量; 比更新脚本的
+ * 120s (updateScriptMacOS) 激进得多 —— 这是常规退出路径, 用户在旁边等。
+ */
+export const SHUTDOWN_HARD_KILL_GRACE_SECONDS = 20;
+
+/** 最小 spawn 形状 —— 单测注入 fake 用, 真实实现是 node:child_process 的 spawn。 */
+type WatchdogSpawn = (
+  command: string,
+  args: string[],
+  options: { detached: boolean; stdio: 'ignore'; windowsHide?: boolean },
+) => { unref(): void };
+
+let _watchdogArmed = false;
+
+/**
+ * 布防外部硬杀 watchdog: spawn 一个 detached 的外部杀手进程, 宽限期后对本进程
+ * PID 补 kill。这是唯一能同时覆盖三类退出挂死的手段:
+ *   - sync disposer 阻塞事件循环 (JS 层 setTimeout 根本不会触发)
+ *   - post-async 无界 await (Phase 3 已加预算, 这里是第二道保险)
+ *   - app.exit() 在 native teardown 挂死 —— 实证见 updateScriptMacOS.ts:
+ *     2026-07-06 观测到 exit 已打日志但 PID 存活 32h, 彼时 JS 事件循环已死,
+ *     进程无法自救, 只有外部进程能补刀。
+ *
+ * 正常退出时本进程早已死透, 补刀落空无害 (kill 静默失败)。PID 复用窗口的取舍:
+ * 20s 内 OS 把同一 PID 回收再分配给别的进程的概率极小, 沿用 updateScriptMacOS
+ * 外部 kill -9 兜底的既有先例, 不做额外防护。
+ *
+ * 幂等: 进程生命周期内只布防一次。spawn/pid/platform 可注入, 便于单测;
+ * 布防失败只 warn, 绝不阻断正常退出。
+ */
+export function armShutdownHardKillWatchdog(
+  options: {
+    spawn?: WatchdogSpawn;
+    pid?: number;
+    platform?: NodeJS.Platform;
+    graceSeconds?: number;
+  } = {},
+): void {
+  if (_watchdogArmed) return;
+  _watchdogArmed = true;
+  const spawnFn = options.spawn ?? spawn;
+  const pid = options.pid ?? process.pid;
+  const platform = options.platform ?? process.platform;
+  const graceSeconds = options.graceSeconds ?? SHUTDOWN_HARD_KILL_GRACE_SECONDS;
+  log.info(`arming shutdown hard-kill watchdog: pid=${pid} grace=${graceSeconds}s`);
+  try {
+    if (platform === 'win32') {
+      // `timeout /t` 在无控制台的 detached 进程里不可用 ("输入重定向不受支持"),
+      // `ping -n <N+1>` 是标准的 cmd 延时 hack (首个包立即发, 之后每包间隔 1s)。
+      spawnFn(
+        process.env.comspec ?? 'cmd.exe',
+        ['/d', '/s', '/c', `ping -n ${graceSeconds + 1} 127.0.0.1 >nul & taskkill /f /pid ${pid}`],
+        { detached: true, windowsHide: true, stdio: 'ignore' },
+      ).unref();
+    } else {
+      spawnFn('/bin/sh', ['-c', `sleep ${graceSeconds}; kill -9 ${pid} 2>/dev/null`], {
+        detached: true,
+        stdio: 'ignore',
+      }).unref();
+    }
+  } catch (err) {
+    log.warn('failed to arm shutdown hard-kill watchdog (continuing shutdown)', err);
   }
 }
 
@@ -172,6 +262,9 @@ function beginShutdown(timeoutMs: number, reason: string): Promise<void> {
   _isDisposing = true;
   log.info(`beginShutdown timeoutMs=${timeoutMs} reason=${reason}`);
   noteShutdownBegin(reason);
+  // 先布防外部硬杀 watchdog 再跑 disposer chain —— disposer 或 app.exit 挂死时
+  // 由外部进程在宽限期后补刀, 保证退出永远有界。
+  armShutdownHardKillWatchdog();
   _disposeStarted = runQuitDisposers(timeoutMs)
     .then(() => {
       log.info('runQuitDisposers completed');

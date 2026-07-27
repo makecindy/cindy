@@ -29,6 +29,14 @@ const mocks = vi.hoisted(() => ({
     error: vi.fn(),
   },
   disableDevTerminalMirror: vi.fn(),
+  // 默认 spawn stub —— beginShutdown 会布防真实 watchdog, 不 mock 的话
+  // render-process-gone 等用例会真的 spawn `sleep 20; kill -9 <vitest pid>`,
+  // 慢跑/watch 模式下会把测试进程杀掉。
+  spawn: vi.fn(() => ({ unref: vi.fn() })),
+}));
+
+vi.mock('node:child_process', () => ({
+  spawn: mocks.spawn,
 }));
 
 vi.mock('../logger', async () => {
@@ -145,6 +153,26 @@ describe('runQuitDisposers', () => {
     expect(elapsed).toBeLessThan(200);
   });
 
+  it('post-async disposer that never resolves is bounded by timeout — later post-async still runs', async () => {
+    const { onQuit, runQuitDisposers } = await freshLifecycle();
+    let laterRan = false;
+
+    // 永不 resolve 的 post-async disposer (生产事故形态: 无界 await 卡死退出)
+    onQuit('hang-post', () => new Promise(() => { /* never */ }), 'post-async');
+    onQuit('later-post', () => { laterRan = true; }, 'post-async');
+
+    const start = Date.now();
+    await runQuitDisposers(50);
+    const elapsed = Date.now() - start;
+
+    expect(laterRan).toBe(true);
+    // 单个 post-async 预算 50ms, 实际不应远超 (无其它阻塞)
+    expect(elapsed).toBeLessThan(500);
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('post-async disposer "hang-post" timed out after 50ms'),
+    );
+  });
+
   it('rejected async disposer does not break the chain', async () => {
     const { onQuit, runQuitDisposers } = await freshLifecycle();
     let postRan = false;
@@ -156,6 +184,93 @@ describe('runQuitDisposers', () => {
     await runQuitDisposers(500);
 
     expect(postRan).toBe(true);
+  });
+});
+
+describe('armShutdownHardKillWatchdog', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function fakeSpawn() {
+    const child = { unref: vi.fn() };
+    const spawn = vi.fn(() => child);
+    return { spawn, child };
+  }
+
+  it('POSIX (darwin): /bin/sh -c "sleep <grace>; kill -9 <pid>" — detached + ignore + unref', async () => {
+    const { armShutdownHardKillWatchdog, SHUTDOWN_HARD_KILL_GRACE_SECONDS } =
+      await freshLifecycle();
+    const { spawn, child } = fakeSpawn();
+
+    armShutdownHardKillWatchdog({ spawn, pid: 12345, platform: 'darwin' });
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const [cmd, args, opts] = spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      Record<string, unknown>,
+    ];
+    expect(cmd).toBe('/bin/sh');
+    expect(args).toEqual([
+      '-c',
+      `sleep ${SHUTDOWN_HARD_KILL_GRACE_SECONDS}; kill -9 12345 2>/dev/null`,
+    ]);
+    expect(opts).toEqual({ detached: true, stdio: 'ignore' });
+    expect(child.unref).toHaveBeenCalledTimes(1);
+    expect(mocks.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining(`grace=${SHUTDOWN_HARD_KILL_GRACE_SECONDS}s`),
+    );
+  });
+
+  it('win32: cmd.exe /d /s /c "ping -n <grace+1> … & taskkill /f /pid <pid>" — windowsHide + unref', async () => {
+    const { armShutdownHardKillWatchdog, SHUTDOWN_HARD_KILL_GRACE_SECONDS } =
+      await freshLifecycle();
+    const { spawn, child } = fakeSpawn();
+
+    armShutdownHardKillWatchdog({ spawn, pid: 67890, platform: 'win32' });
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const [cmd, args, opts] = spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      Record<string, unknown>,
+    ];
+    // 非 Windows 测试机上没有 comspec 环境变量, 走 'cmd.exe' 兜底
+    expect(cmd).toBe(process.env.comspec ?? 'cmd.exe');
+    expect(args).toEqual([
+      '/d',
+      '/s',
+      '/c',
+      `ping -n ${SHUTDOWN_HARD_KILL_GRACE_SECONDS + 1} 127.0.0.1 >nul & taskkill /f /pid 67890`,
+    ]);
+    expect(opts).toEqual({ detached: true, windowsHide: true, stdio: 'ignore' });
+    expect(child.unref).toHaveBeenCalledTimes(1);
+  });
+
+  it('is idempotent — a second arm does not spawn again', async () => {
+    const { armShutdownHardKillWatchdog } = await freshLifecycle();
+    const { spawn } = fakeSpawn();
+
+    armShutdownHardKillWatchdog({ spawn, pid: 1, platform: 'darwin' });
+    armShutdownHardKillWatchdog({ spawn, pid: 1, platform: 'darwin' });
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('spawn throwing does not propagate (watchdog failure must not block shutdown)', async () => {
+    const { armShutdownHardKillWatchdog } = await freshLifecycle();
+    const spawn = vi.fn(() => {
+      throw new Error('spawn-boom');
+    });
+
+    expect(() =>
+      armShutdownHardKillWatchdog({ spawn, pid: 1, platform: 'darwin' }),
+    ).not.toThrow();
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('failed to arm shutdown hard-kill watchdog'),
+      expect.any(Error),
+    );
   });
 });
 
@@ -226,6 +341,8 @@ describe('installQuitHandler render-process-gone', () => {
       await vi.waitFor(() => {
         expect(app.exit).toHaveBeenCalledWith(1);
       });
+      // beginShutdown 应布防外部硬杀 watchdog (走默认 spawn, 被顶部 mock 接住)
+      expect(mocks.spawn).toHaveBeenCalledTimes(1);
     } finally {
       restore();
     }
