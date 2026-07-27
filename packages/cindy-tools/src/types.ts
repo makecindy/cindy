@@ -107,11 +107,18 @@ export interface CindyGhostInfo {
   name: string;
   /** 显式触发指令(用户敲 /<command> 点名调用);未声明则省略。 */
   command?: string;
+  /**
+   * 配置就绪态(ready / needs_setup / needs_reauth / degraded / blocked /
+   * unknown)。缺省视同 ready(旧 Host 口径);非 ready 的条目 tools 为空。
+   */
+  readiness?: string;
   tools: CindyGhostToolInfo[];
   /**
-   * Host 现查的配置评估。支持 Setup Runtime 的 Host 应尽量返回；评估
-   * 读取/计算失败时字段省略,且此时 tools 必须为空并带 message 说明——
-   * 评估失败按未就绪处理,Agent 不得把字段缺失解释为 ready 或自行放行。
+   * Host 现查的配置评估。state=required 的条目 tools 必须为空(不派发
+   * 可盲调的工具面),Agent 引用它的正确动作是基于本 assessment 发起
+   * setup 配置卡;评估读取/计算失败时字段省略,且此时 tools 同样必须
+   * 为空并带 message 说明——评估失败按未就绪处理,Agent 不得把字段
+   * 缺失解释为 ready 或自行放行。
    */
   setup?: CindyGhostSetupAssessment;
   /** 条目级诊断(如配置评估失败时的处置指引);正常条目省略。 */
@@ -267,7 +274,18 @@ export interface CindyGhostsMcpDeps {
    * 会话内工具定义恒定(prompt 缓存安全);装/卸/唤醒/沉睡在新会话生效,
    * 实时清单仍以 ghost_list 为准。缺省 = 不注入(描述与今日基线一致)。
    */
-  getRosterItems?(): Array<{ id: string; name: string; command?: string; description?: string }>;
+  getRosterItems?(): Array<{
+    id: string;
+    name: string;
+    command?: string;
+    description?: string;
+    /**
+     * 配置就绪态摘要(ready / needs_setup / needs_reauth / degraded /
+     * blocked / unknown)。非 ready 的条目只做发现与配置引导,不提供
+     * 可调用工具;由 Host 现查注入,缺省视同 ready(旧 Host 口径)。
+     */
+    readiness?: string;
+  }>;
   /** 意识编写手册(markdown,随主机版本走;agent 写意识前先读)。 */
   forgeGuide(): Promise<string>;
   /**

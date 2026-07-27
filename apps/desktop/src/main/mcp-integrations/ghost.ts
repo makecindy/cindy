@@ -53,11 +53,13 @@ import { withCardToken } from '../cindy-brain/cardService.js';
 import { drainGhostCallMedia } from '../cindy-brain/ghostMediaLedger.js';
 import {
   getGhostCardService,
+  getGhostLifecycleProjection,
   getGhostManager,
   getGhostPipeDispatcher,
   getGhostSetupAssessment,
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
+import { readinessSummary } from '../cindy-brain/ghostLifecycle.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
@@ -533,6 +535,10 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
     // 描述花名册全量,运行期 ghost_list / ghost_call 仍按真实 workdir 拦)。
     getRosterItems() {
       const workdir = resolveSessionContext()?.workingDir ?? null;
+      // 降级暴露(D1):未就绪的插件仍进花名册但带 readiness 标记,agent
+      // 看得见「用户装了什么」却没有可派发工具——引导配置的正确动作靠
+      // 标记 + 花名册头说明驱动,而不是盲调失败。
+      const projection = new Map(getGhostLifecycleProjection().map((e) => [e.id, e]));
       return getGhostManager()
         .list()
         .filter(
@@ -545,11 +551,13 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         )
         .map((g) => {
           const recall = g.manifest.whenToUse ?? g.manifest.description;
+          const readiness = projection.get(g.manifest.id)?.readiness;
           return {
             id: g.manifest.id,
             name: g.manifest.name,
             ...(g.manifest.command ? { command: g.manifest.command } : {}),
             ...(recall ? { description: recall } : {}),
+            ...(readiness ? { readiness } : {}),
           };
         });
     },
@@ -557,6 +565,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       // 现查同样按会话 workdir 滤掉目录级禁用的意识(ALS 恢复的真实语境
       // 优先)——模型主动 ghost_list 也看不到被禁用的条目,清单层面干净。
       const workdir = resolveSessionContext()?.workingDir ?? null;
+      const projection = new Map(getGhostLifecycleProjection().map((e) => [e.id, e]));
       return getGhostManager()
         .list()
         .filter(
@@ -568,39 +577,38 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
             !isGhostDisabledForWorkdir(g.manifest.id, workdir),
         )
         .map((g) => {
-          let setup: CindyGhostInfo['setup'];
-          let assessmentFailed = false;
-          try {
-            setup = getGhostSetupAssessment(g.manifest.id);
-          } catch (error) {
-            // 评估失败 = 显式降级:条目不省(插件仍然可发现)、不伪造 setup
-            // 字段(缺失 ≠ ready 的契约不变),但工具清空——agent 拿不到可
-            // 派发面,只能按 message 引导用户去插件页排查;ghost_call 侧的
-            // strict setup gate 不变,兜底仍会在派发前拦截。
-            assessmentFailed = true;
-            log.warn('ghost setup assessment unavailable in roster', {
-              ghostId: g.manifest.id,
-              errorType: error instanceof Error ? error.name : typeof error,
-            });
-          }
+          // 就绪度统一走生命周期投影:非 ready 一律不派发工具(降级暴露),
+          // needs_setup/needs_reauth 附脱敏 assessment 供 agent 编排配置卡,
+          // unknown/degraded 只给处置指引;ghost_call 的 strict setup gate
+          // 不变,兜底仍在派发前拦截凭上文记忆硬调的调用。
+          const entry = projection.get(g.manifest.id);
+          const readiness = entry?.readiness ?? 'unknown';
+          const callable = readiness === 'ready';
           return {
             id: g.manifest.id,
             name: g.manifest.name,
             ...(g.manifest.command ? { command: g.manifest.command } : {}),
-            ...(setup ? { setup } : {}),
-            ...(assessmentFailed
-              ? {
+            readiness,
+            ...(entry?.setup ? { setup: entry.setup } : {}),
+            ...(callable
+              ? {}
+              : {
                   message:
-                    '该插件的配置状态暂时无法判定,工具未派发;请引导用户打开 Cindy 插件页检查该插件状态后重试。',
-                }
-              : {}),
-            tools: assessmentFailed
-              ? []
-              : (g.manifest.tools ?? []).map((t) => ({
+                    readinessSummary({
+                      id: g.manifest.id,
+                      name: g.manifest.name,
+                      enabled: g.enabled,
+                      readiness,
+                    }) ??
+                    '该插件当前不可用;请引导用户到插件页检查,不要盲调。',
+                }),
+            tools: callable
+              ? (g.manifest.tools ?? []).map((t) => ({
                   name: t.name,
                   description: t.description,
                   ...(t.parameters ? { parameters: t.parameters } : {}),
-                })),
+                }))
+              : [],
           };
         });
     },

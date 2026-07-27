@@ -45,6 +45,18 @@ const setupAssessmentMock = vi.fn((_ghostId: string) => ({
   revision: 0,
   groups: [],
 }));
+const lifecycleProjectionMock = vi.fn(
+  (): Array<{
+    id: string;
+    name: string;
+    enabled: boolean;
+    readiness: 'ready' | 'needs_setup' | 'needs_reauth' | 'degraded' | 'blocked' | 'unknown';
+    setup?: unknown;
+  }> => [
+    { id: 'art', name: 'Ghost art', enabled: true, readiness: 'ready' },
+    { id: 'other', name: 'Ghost other', enabled: true, readiness: 'ready' },
+  ],
+);
 const ensureReadyMock = vi.fn(
   async (_request: GhostSetupEnsureRequest): Promise<GhostSetupEnsureResult> => ({
     ok: true as const,
@@ -62,6 +74,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
   getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null }),
   getGhostSetupAssessment: setupAssessmentMock,
+  getGhostLifecycleProjection: lifecycleProjectionMock,
   isGhostAvailableForActiveSession: () => true,
 }));
 vi.mock('../../cindy-brain/ghostSetupCoordinator.js', () => ({
@@ -136,6 +149,11 @@ beforeEach(() => {
   dispatchMock.mockClear();
   setupAssessmentMock.mockReset();
   setupAssessmentMock.mockReturnValue({ state: 'ready', revision: 0, groups: [] });
+  lifecycleProjectionMock.mockReset();
+  lifecycleProjectionMock.mockReturnValue([
+    { id: 'art', name: 'Ghost art', enabled: true, readiness: 'ready' },
+    { id: 'other', name: 'Ghost other', enabled: true, readiness: 'ready' },
+  ]);
   ensureReadyMock.mockReset();
   ensureReadyMock.mockResolvedValue({
     ok: true,
@@ -193,26 +211,68 @@ describe('花名册 / ghost_list 过滤', () => {
     expect((await deps.listAwakeGhosts()).map((g) => g.id)).toEqual(['art', 'other']);
   });
 
-  it('单插件 setup assessment 失败按未就绪降级:不省条目、清空工具、不带 setup', async () => {
-    setupAssessmentMock.mockImplementation((ghostId) => {
-      if (ghostId === 'art') throw new SyntaxError('malformed setup storage');
-      return { state: 'ready', revision: 0, groups: [] };
-    });
+  it('投影 unknown(评估失败)的插件不派发工具,其余插件不受影响', async () => {
+    lifecycleProjectionMock.mockReturnValue([
+      { id: 'art', name: 'Ghost art', enabled: true, readiness: 'unknown' },
+      { id: 'other', name: 'Ghost other', enabled: true, readiness: 'ready' },
+    ]);
 
     const ghosts = await makeDeps().listAwakeGhosts();
 
     expect(ghosts.map((ghost) => ghost.id)).toEqual(['art', 'other']);
     expect(ghosts[0]?.setup).toBeUndefined();
     expect(ghosts[0]?.tools).toEqual([]);
-    expect(ghosts[0]?.message).toContain('配置状态暂时无法判定');
-    expect(ghosts[1]?.setup).toEqual({ state: 'ready', revision: 0, groups: [] });
-    expect(ghosts[1]?.tools.length).toBeGreaterThan(0);
-    expect(logWarnMock).toHaveBeenCalledWith('ghost setup assessment unavailable in roster', {
-      ghostId: 'art',
-      errorType: 'SyntaxError',
-    });
-    expect(JSON.stringify(ghosts)).not.toContain('malformed setup storage');
+    expect(ghosts[0]?.message).toContain('配置状态');
+    expect(ghosts[1]?.tools).toHaveLength(1);
+    expect(ghosts[1]?.message).toBeUndefined();
   });
+
+  it('needs_setup 的插件降级暴露:带脱敏 assessment、不派发工具', async () => {
+    const assessment = {
+      state: 'required' as const,
+      revision: 3,
+      groups: [
+        {
+          id: 'manifest:1',
+          mode: 'any_of' as const,
+          items: [
+            {
+              ref: 'secret:key',
+              kind: 'secret' as const,
+              label: 'API Key',
+              state: 'missing' as const,
+              actions: [],
+            },
+          ],
+        },
+      ],
+    };
+    lifecycleProjectionMock.mockReturnValue([
+      { id: 'art', name: 'Ghost art', enabled: true, readiness: 'needs_setup', setup: assessment },
+      { id: 'other', name: 'Ghost other', enabled: true, readiness: 'ready' },
+    ]);
+
+    const ghosts = await makeDeps().listAwakeGhosts();
+
+    expect(ghosts[0]?.readiness).toBe('needs_setup');
+    expect(ghosts[0]?.setup).toEqual(assessment);
+    expect(ghosts[0]?.tools).toEqual([]);
+    expect(ghosts[0]?.message).toContain('配置');
+    expect(ghosts[1]?.tools).toHaveLength(1);
+  });
+
+  it('花名册快照携带 readiness 标记(降级暴露的可发现面)', () => {
+    lifecycleProjectionMock.mockReturnValue([
+      { id: 'art', name: 'Ghost art', enabled: true, readiness: 'needs_setup' },
+      { id: 'other', name: 'Ghost other', enabled: true, readiness: 'ready' },
+    ]);
+
+    const roster = makeDeps().getRosterItems?.() ?? [];
+
+    expect(roster.find((r) => r.id === 'art')?.readiness).toBe('needs_setup');
+    expect(roster.find((r) => r.id === 'other')?.readiness).toBe('ready');
+  });
+
 });
 
 describe('ghost_call 兜底拒绝', () => {
