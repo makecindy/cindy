@@ -407,7 +407,7 @@ function GhostCardCanvas({
       // 图片点击的四级路由:data-ghost-action(动作按钮)> data-ghost-link
       // (外链,均由下面的循环挂)> data-ghost-model(3D 预览 → 应用内 3D
       // 查看器)> 普通看大图 lightbox。
-      if (!img.dataset.ghostAction && !img.dataset.ghostLink) {
+      if (!img.closest('[data-ghost-action], [data-ghost-link]')) {
         img.style.cursor = 'pointer';
         const modelUrl = img.dataset.ghostModel;
         const galleryId = modelUrl

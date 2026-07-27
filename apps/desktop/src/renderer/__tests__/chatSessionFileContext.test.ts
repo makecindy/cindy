@@ -52,7 +52,10 @@ import {
 import { collectSessionImageSrcs, type RenderItem } from '../components/chat/MessageStream';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '../../shared/remoteMediaUrl';
 import type { GhostCardSnapshot } from '@/cindy-brain/ghostCardStore';
-import { ghostCardGalleryId } from '@/cindy-brain/ghostCardGallery';
+import {
+  createGhostCardSpawnIndex,
+  ghostCardGalleryId,
+} from '@/cindy-brain/ghostCardGallery';
 import { GHOST_CARD_SPAWN_SEP } from '../../shared/ghost';
 
 describe('sessionFileOrigin(纯函数)', () => {
@@ -297,6 +300,7 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
       },
     ];
 
+    expect(createGhostCardSpawnIndex(ghostCards).get('card-1')).toHaveLength(1);
     expect(collectSessionImageSrcs(mixedItems, undefined, ghostCards)).toEqual([
       { src: userImage },
       { src: rootImage, galleryId: ghostCardGalleryId('card-1', 0) },

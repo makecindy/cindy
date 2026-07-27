@@ -158,7 +158,10 @@ import {
   subscribeGhostCards,
   type GhostCardSnapshot,
 } from '@/cindy-brain/ghostCardStore';
-import { collectGhostCardGalleryImages } from '@/cindy-brain/ghostCardGallery';
+import {
+  collectGhostCardGalleryImages,
+  createGhostCardSpawnIndex,
+} from '@/cindy-brain/ghostCardGallery';
 import { ChatImageView } from './ChatImageView';
 import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
 import { GhostFulfillmentContext } from './GhostSummonCard';
@@ -686,6 +689,7 @@ export function collectSessionImageSrcs(
   const push = (url: string, meta?: Omit<GalleryImage, 'src'>): void =>
     void out.push({ src: rewriteToRemoteMediaOrigin(url, mediaOrigin), ...meta });
   const out: GalleryImage[] = [];
+  const ghostCardSpawnIndex = ghostCards ? createGhostCardSpawnIndex(ghostCards) : undefined;
   for (const item of items) {
     if (item.type === 'fork_origin') {
       continue;
@@ -699,6 +703,7 @@ export function collectSessionImageSrcs(
           item.callId,
           ghostCards,
           !item.settled && isSessionStreaming,
+          ghostCardSpawnIndex!,
         )) {
           push(image.src, { galleryId: image.galleryId });
         }
@@ -733,6 +738,7 @@ export function collectSessionImageSrcs(
           msg.clientId,
           ghostCards,
           false,
+          ghostCardSpawnIndex!,
         )) {
           push(image.src, { galleryId: image.galleryId });
         }

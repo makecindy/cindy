@@ -24,6 +24,7 @@ describe('ghost card iframe canvas styling', () => {
     expect(source).toContain('extractGhostCardGallerySrcs(renderedCardHtml)');
     expect(source).toContain('data-gallery-src={src}');
     expect(source).toMatch(/<ImageLightbox[\s\S]*galleryId=\{lightbox\.galleryId\}[\s\S]*enableGallery/);
+    expect(source).toContain("img.closest('[data-ghost-action], [data-ghost-link]')");
     expect(source).toContain('sandbox="allow-same-origin"');
   });
 });

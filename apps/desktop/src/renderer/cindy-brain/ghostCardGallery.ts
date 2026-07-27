@@ -7,45 +7,32 @@
  * any new capability.
  */
 
-import { GHOST_CARD_SPAWN_SEP } from '../../shared/ghost';
+import { ghostCardRootCallId } from '../../shared/ghost';
 import type { GhostCardEntry, GhostCardSnapshot } from './ghostCardStore';
 import type { GalleryImage } from '@/components/chat/ImageGalleryContext';
 
-const IMG_TAG_RE = /<img\b[^>]*>/gi;
-const ATTR_RE = /([A-Za-z_:][A-Za-z0-9:._-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
 const CINDY_MEDIA_IMAGE_RE = /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.(?:png|jpe?g|gif|webp)$/;
 
 type ReadyGhostCardEntry = Extract<GhostCardEntry, { status: 'ready' }>;
-
-function parseAttributes(tag: string): Map<string, string> {
-  const attrs = new Map<string, string>();
-  ATTR_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = ATTR_RE.exec(tag)) !== null) {
-    attrs.set(match[1].toLowerCase(), match[2] ?? match[3] ?? match[4] ?? '');
-  }
-  return attrs;
-}
+type SpawnCard = { callId: string; entry: ReadyGhostCardEntry };
+export type GhostCardSpawnIndex = ReadonlyMap<string, readonly SpawnCard[]>;
 
 /**
  * Returns only images whose click route opens ImageLightbox. Action/link images
  * remain card controls, while model posters continue to open ModelLightbox.
  */
 export function extractGhostCardGallerySrcs(html: string): string[] {
-  const srcs: string[] = [];
-  for (const tag of html.match(IMG_TAG_RE) ?? []) {
-    const attrs = parseAttributes(tag);
-    const src = attrs.get('src')?.trim() ?? '';
-    if (
-      CINDY_MEDIA_IMAGE_RE.test(src) &&
-      !attrs.has('data-ghost-action') &&
-      !attrs.has('data-ghost-link') &&
-      !attrs.has('data-ghost-model')
-    ) {
-      srcs.push(src);
-    }
-  }
-  return srcs;
+  const cardDocument = new DOMParser().parseFromString(html, 'text/html');
+  return [...cardDocument.querySelectorAll<HTMLImageElement>('img[src]')]
+    .filter((img) => {
+      const src = img.getAttribute('src')?.trim() ?? '';
+      return (
+        CINDY_MEDIA_IMAGE_RE.test(src) &&
+        !img.closest('[data-ghost-action], [data-ghost-link]') &&
+        !img.dataset.ghostModel
+      );
+    })
+    .map((img) => img.getAttribute('src')!.trim());
 }
 
 /** Stable identity used to locate duplicate URLs at the exact clicked card image. */
@@ -64,6 +51,25 @@ function projectCard(callId: string, entry: ReadyGhostCardEntry, running: boolea
   }));
 }
 
+/** Builds the root → spawned-card lookup once for one session gallery projection. */
+export function createGhostCardSpawnIndex(snapshot: GhostCardSnapshot): GhostCardSpawnIndex {
+  const mutable = new Map<string, SpawnCard[]>();
+  for (const [callId, entry] of snapshot.byCallId) {
+    if (entry.status !== 'ready') continue;
+    const rootCallId = ghostCardRootCallId(callId);
+    if (rootCallId === callId) continue;
+    const cards = mutable.get(rootCallId) ?? [];
+    cards.push({ callId, entry });
+    mutable.set(rootCallId, cards);
+  }
+  for (const cards of mutable.values()) {
+    cards.sort((left, right) =>
+      left.callId < right.callId ? -1 : left.callId > right.callId ? 1 : 0,
+    );
+  }
+  return mutable;
+}
+
 /**
  * Projects a rendered root card followed by its spawned cards, matching
  * GhostToolCard's DOM order. Only entries belonging to this root call are read.
@@ -72,6 +78,7 @@ export function collectGhostCardGalleryImages(
   rootCallId: string,
   snapshot: GhostCardSnapshot,
   rootRunning: boolean,
+  spawnIndex: GhostCardSpawnIndex,
 ): GalleryImage[] {
   const root = snapshot.byCallId.get(rootCallId);
   const images: GalleryImage[] = [];
@@ -79,14 +86,7 @@ export function collectGhostCardGalleryImages(
     images.push(...projectCard(rootCallId, root, rootRunning || root.state === 'working'));
   }
 
-  const spawnPrefix = rootCallId + GHOST_CARD_SPAWN_SEP;
-  const spawned = [...snapshot.byCallId.entries()]
-    .filter(
-      (entry): entry is [string, ReadyGhostCardEntry] =>
-        entry[0].startsWith(spawnPrefix) && entry[1].status === 'ready',
-    )
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-  for (const [callId, entry] of spawned) {
+  for (const { callId, entry } of spawnIndex.get(rootCallId) ?? []) {
     images.push(...projectCard(callId, entry, entry.state === 'working'));
   }
   return images;
