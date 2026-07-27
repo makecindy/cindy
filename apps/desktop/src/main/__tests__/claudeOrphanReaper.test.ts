@@ -393,6 +393,32 @@ describe('reapClaudeOrphans', () => {
     await expect(quit).resolves.toEqual(expect.objectContaining({ scannedTotal: 0 }));
   });
 
+  it('claims the native snapshot slot before same-tick callers can overlap it', async () => {
+    const callbacks: Array<(processes: WindowsProcessRow[]) => void> = [];
+    const getAllProcesses = vi.fn((cb: (processes: WindowsProcessRow[]) => void) => {
+      callbacks.push(cb);
+    });
+    const flush = async () => {
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    };
+    const { reapClaudeOrphans } = await importReaper({
+      platform: 'win32',
+      getAllProcesses,
+    });
+
+    const first = reapClaudeOrphans();
+    const second = reapClaudeOrphans();
+    await flush();
+    expect(getAllProcesses).toHaveBeenCalledTimes(1);
+
+    callbacks[0]([]);
+    await flush();
+    expect(getAllProcesses).toHaveBeenCalledTimes(2);
+
+    callbacks[1]([]);
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+  });
+
   it('does not throw when killing fails', async () => {
     const execFileSync = vi.fn(() => {
       throw new Error('already gone');

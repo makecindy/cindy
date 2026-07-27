@@ -5583,9 +5583,14 @@ onQuit(
   'sync',
 );
 
-// Pre-async 阶段: 串行 await。Claude ownership snapshot + tree reap 必须在任何
-// 并发 teardown 之前完成；否则 proxy / maker 先关会让直接 Claude 进程退出并丢失
-// 可证明归属的 PPID 链。
+// Pre-async 阶段: 串行 await。先封住新的 session startup 并排空已在途 startup，
+// 再做 Claude ownership snapshot + tree reap；否则 snapshot 期间新拉起的 Claude
+// 不在清理集合里，而并发 teardown 又会让直接进程退出并丢失可证明归属的 PPID 链。
+onQuit(
+  'quiesce-maker-session-starts',
+  () => getMakerIfReady()?.quiesceSessionStarts(),
+  'pre-async',
+);
 onQuit(
   'reap-claude-orphans',
   () => reapClaudeOrphans({ reapCurrentSession: true }).then(() => undefined),

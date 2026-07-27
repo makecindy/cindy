@@ -41,9 +41,13 @@ describe('Windows startup PowerShell compatibility', () => {
     const bootstrap = read('src/main/bootstrap-electron.ts');
     // Match the disposer name literal rather than the whole onQuit(...) call so
     // the assertion survives prettier wrapping the registration across lines.
+    const quiesceRegistration = bootstrap.indexOf("'quiesce-maker-session-starts'");
     const reaperRegistration = bootstrap.indexOf("'reap-claude-orphans'");
     const makerRegistration = bootstrap.indexOf("onQuit('shutdown-maker'");
 
+    expect(quiesceRegistration).toBeGreaterThan(-1);
+    expect(bootstrap.slice(quiesceRegistration, reaperRegistration)).toContain("'pre-async'");
+    expect(quiesceRegistration).toBeLessThan(reaperRegistration);
     expect(reaperRegistration).toBeGreaterThan(-1);
     expect(bootstrap.slice(reaperRegistration, makerRegistration)).toContain("'pre-async'");
     expect(reaperRegistration).toBeLessThan(makerRegistration);
@@ -63,8 +67,17 @@ describe('Windows startup PowerShell compatibility', () => {
   it('ships the native snapshot runtime as an externalized packaged dependency', () => {
     const viteConfig = read('vite.main.config.ts');
     const forgeConfig = read('forge.config.ts');
+    const processTreeEntry = readRepo(
+      'node_modules/@vscode/windows-process-tree/lib/index.js',
+    );
 
     expect(viteConfig).toContain("'@vscode/windows-process-tree'");
+    // The package's JS entry is safe to import on POSIX: only win32 evaluates
+    // the native require. Non-Windows packages intentionally ship lib/ without
+    // windows_process_tree.node.
+    expect(processTreeEntry).toContain(
+      "process.platform === 'win32' ? require('../build/Release/windows_process_tree.node') : undefined",
+    );
     expect(forgeConfig).toContain('copyWindowsProcessTreeRuntime(src, dst, targetPlatform)');
     expect(forgeConfig).toContain("if (targetPlatform !== 'win32') return;");
     expect(forgeConfig).toContain(

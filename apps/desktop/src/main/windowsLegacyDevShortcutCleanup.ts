@@ -344,14 +344,37 @@ async function collectShortcutFiles(
   return shortcuts;
 }
 
-function isArgumentlessDevElectronShortcut(details: LegacyShortcutDetails): boolean {
+const DEV_ELECTRON_TARGET_SUFFIX = '\\node_modules\\electron\\dist\\electron.exe';
+
+function isCindyDevCheckoutTarget(target: string): boolean {
+  if (!target.endsWith(DEV_ELECTRON_TARGET_SUFFIX)) return false;
+  const checkoutDir = target.slice(0, -DEV_ELECTRON_TARGET_SUFFIX.length);
+  return (
+    /(?:^|\\)(?:cindy|xdt-maker)$/.test(checkoutDir) ||
+    /(?:^|\\)(?:cindy|xdt-maker)\\\.(?:cindy|xdt)-worktrees\\[^\\]+$/.test(checkoutDir)
+  );
+}
+
+function isOwnedArgumentlessDevElectronShortcut(
+  shortcutPath: string,
+  details: LegacyShortcutDetails,
+): boolean {
   if (typeof details.target !== 'string' || details.target.length === 0) return false;
   const target = details.target.replace(/\//g, '\\').toLowerCase();
   // Whitespace-only arguments are equivalent to no arguments — a `.lnk` may store
   // a trailing space or empty COMMAND_LINE_ARGUMENTS, and the legacy dev links we
   // target carry none. Trim before deciding so those are still recognized.
   const hasArgs = (details.args ?? '').trim().length > 0;
-  return target.endsWith('\\node_modules\\electron\\dist\\electron.exe') && !hasArgs;
+  // Electron.lnk is the one generic filename historically registered for Cindy
+  // dev, but other Electron apps can create the same link. Require both that name
+  // and a Cindy/xdt-maker checkout-shaped target before deleting anything found
+  // by the recursive scan. The product-specific XdtMakerDev.lnk is handled by the
+  // exact-name fast path above.
+  return (
+    path.basename(shortcutPath).toLowerCase() === 'electron.lnk' &&
+    isCindyDevCheckoutTarget(target) &&
+    !hasArgs
+  );
 }
 
 async function runCleanup(
@@ -392,7 +415,7 @@ async function runCleanup(
       continue;
     }
     if (shouldStop()) return;
-    if (!details || !isArgumentlessDevElectronShortcut(details)) continue;
+    if (!details || !isOwnedArgumentlessDevElectronShortcut(shortcutPath, details)) continue;
     try {
       await deps.unlink(shortcutPath);
       if (shouldStop()) return;
@@ -412,9 +435,10 @@ async function runCleanup(
 
 /**
  * Best-effort cleanup entrypoint. The known SnoreToast shortcut is removed by
- * name; the recursive fallback only removes argumentless links whose resolved
- * target is a development Electron binary. Slow or redirected Start Menu
- * storage must not delay the rest of application startup.
+ * name; the recursive fallback only removes the known Electron.lnk shape when
+ * its resolved target proves it belongs to a Cindy/xdt-maker development
+ * checkout. Slow or redirected Start Menu storage must not delay the rest of
+ * application startup.
  */
 export async function cleanupLegacyDevShortcuts(
   overrides?: Partial<LegacyDevShortcutCleanupDeps>,

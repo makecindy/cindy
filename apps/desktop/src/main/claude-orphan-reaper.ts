@@ -156,6 +156,11 @@ function delay(ms: number): Promise<void> {
 }
 
 async function getWindowsProcessSnapshot(): Promise<IProcessInfo[]> {
+  // Claim this queue slot synchronously. If two callers enter in the same tick,
+  // the second must observe this slot rather than the same already-resolved
+  // `previous` promise, otherwise both can start a native enumeration after their
+  // first await. Keep the slot chained behind `previous`: if our wait budget
+  // expires, later callers still cannot bypass the native scan ahead of us.
   // Phase 1 — wait for any in-flight native enumeration to drain before issuing
   // ours. The package hands every callback queued during one enumeration the
   // SAME snapshot and only clears `requestInProgress` after that callback drains,
@@ -163,6 +168,14 @@ async function getWindowsProcessSnapshot(): Promise<IProcessInfo[]> {
   // We cap the wait and, on expiry, return [] WITHOUT calling getAllProcesses —
   // enqueuing then would coalesce onto the stale in-flight scan.
   const previous = nativeSnapshotChain;
+  let releaseSlot!: () => void;
+  const slot = new Promise<void>((resolve) => {
+    releaseSlot = resolve;
+  });
+  nativeSnapshotChain = previous.then(
+    () => slot,
+    () => slot,
+  );
   const drained = await Promise.race([
     previous.then(
       () => true,
@@ -171,6 +184,7 @@ async function getWindowsProcessSnapshot(): Promise<IProcessInfo[]> {
     delay(WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS).then(() => false),
   ]);
   if (!drained) {
+    releaseSlot();
     log.debug('windows process snapshot timed out waiting for prior scan', {
       timeoutMs: WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS,
     });
@@ -183,10 +197,7 @@ async function getWindowsProcessSnapshot(): Promise<IProcessInfo[]> {
   // slow prior scan could make quit resolve [] before its fresh scan even runs,
   // missing the live Claude tree right before transport teardown).
   const nativeCall = runNativeProcessSnapshot();
-  nativeSnapshotChain = nativeCall.then(
-    () => undefined,
-    () => undefined,
-  );
+  void nativeCall.then(releaseSlot, releaseSlot);
 
   return new Promise<IProcessInfo[]>((resolve) => {
     let settled = false;

@@ -149,6 +149,12 @@ export class Maker {
     { promise: Promise<Session> }
   >();
   /**
+   * 退出期先停止接收新的 session startup，再等待已经进入 createSession 的调用
+   * 完成。这样宿主可以在不 teardown 现有 session 的前提下取得稳定的进程快照。
+   */
+  private sessionStartsQuiesced = false;
+  private readonly pendingSessionStarts = new Set<Promise<Session>>();
+  /**
    * 同一 business session 的 vendor id 写入必须串行。invalid-resume CAS 只有排在
    * 已在途的 session_id update 之后执行，才能保证旧写入不会在清空后反向覆盖。
    */
@@ -182,6 +188,23 @@ export class Maker {
    * 继续聊"以及多个后台入口同时恢复同一会话的场景。
    */
   async createSession(opts: CreateSessionOptions): Promise<Session> {
+    if (this.sessionStartsQuiesced) {
+      throw new Error('Maker is shutting down; new session starts are not accepted');
+    }
+
+    // 注册 pending 不得跨 await：quiesceSessionStarts() 与 createSession() 在同一
+    // event loop tick 交错时，必须要么看到这次 startup，要么让它命中上面的拒绝。
+    const pending = this.createSessionTracked(opts);
+    this.pendingSessionStarts.add(pending);
+    try {
+      return await pending;
+    } finally {
+      this.pendingSessionStarts.delete(pending);
+    }
+  }
+
+  /** createSession 的既有 singleflight 实现；外围统一负责退出期 startup drain。 */
+  private async createSessionTracked(opts: CreateSessionOptions): Promise<Session> {
     if (!opts.id) {
       return this.createSessionOnce(opts);
     }
@@ -202,6 +225,17 @@ export class Maker {
       if (this.inFlightSessionCreations.get(opts.id) === creation) {
         this.inFlightSessionCreations.delete(opts.id);
       }
+    }
+  }
+
+  /**
+   * 永久停止本 Maker 接受新的 session startup，并等待所有已进入 createSession()
+   * 的调用完成。幂等；只冻结 launch，不关闭或 detach 已有 session。
+   */
+  async quiesceSessionStarts(): Promise<void> {
+    this.sessionStartsQuiesced = true;
+    while (this.pendingSessionStarts.size > 0) {
+      await Promise.allSettled(Array.from(this.pendingSessionStarts));
     }
   }
 
@@ -505,6 +539,10 @@ export class Maker {
    * 失败一律 swallow + 聚合日志, 不抛 (before-quit 阶段不能阻断退出流程)。
    */
   async shutdown(): Promise<void> {
+    // 直接调用 shutdown() 的宿主也必须先封住 launch；Desktop 会在更早的
+    // pre-async 阶段显式调用，以便在 teardown 前取得稳定的进程快照。
+    await this.quiesceSessionStarts();
+
     // snapshot 必须先做 (status listener 在 close 完成后会从 activeSessions 删条目,
     // 不 snapshot 则迭代到一半 Map mutate)。
     const sessSnapshot = Array.from(this.activeSessions.values());

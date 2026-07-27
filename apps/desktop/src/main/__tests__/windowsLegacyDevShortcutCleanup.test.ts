@@ -89,33 +89,36 @@ describe('cleanupLegacyDevShortcuts', () => {
     expect(removed).toEqual([knownShortcut]);
   });
 
-  it('recursively removes only argumentless dev Electron shortcuts', async () => {
+  it('recursively removes only argumentless Electron links owned by Cindy checkouts', async () => {
     const nestedDir = path.join(START_MENU, 'Nested');
+    const argsDir = path.join(START_MENU, 'Args');
     const rootDevShortcut = path.join(START_MENU, 'Electron.lnk');
-    const nestedDevShortcut = path.join(nestedDir, 'OldElectron.lnk');
-    const shortcutWithArgs = path.join(START_MENU, 'KeepArgs.lnk');
+    const nestedDevShortcut = path.join(nestedDir, 'Electron.lnk');
+    const shortcutWithArgs = path.join(argsDir, 'Electron.lnk');
     const unrelatedShortcut = path.join(START_MENU, 'Other.lnk');
     const { deps, files, removed } = makeHarness({
       dirs: {
         [START_MENU]: [
           dirEntry('Nested', 'directory'),
+          dirEntry('Args', 'directory'),
           dirEntry('Electron.lnk', 'file'),
-          dirEntry('KeepArgs.lnk', 'file'),
           dirEntry('Other.lnk', 'file'),
           dirEntry('README.txt', 'file'),
         ],
-        [nestedDir]: [dirEntry('OldElectron.lnk', 'file')],
+        [nestedDir]: [dirEntry('Electron.lnk', 'file')],
+        [argsDir]: [dirEntry('Electron.lnk', 'file')],
       },
       files: {
         [rootDevShortcut]: {
-          target: 'C:/repo/node_modules/electron/dist/electron.exe',
+          target: 'C:/repo/xdt-maker/node_modules/electron/dist/electron.exe',
         },
         [nestedDevShortcut]: {
-          target: 'D:\\code\\node_modules\\electron\\dist\\electron.exe',
+          target:
+            'D:\\code\\cindy\\.cindy-worktrees\\old-session\\node_modules\\electron\\dist\\electron.exe',
           args: '',
         },
         [shortcutWithArgs]: {
-          target: 'C:\\repo\\node_modules\\electron\\dist\\electron.exe',
+          target: 'C:\\repo\\cindy\\node_modules\\electron\\dist\\electron.exe',
           args: 'C:\\repo',
         },
         [unrelatedShortcut]: {
@@ -131,13 +134,42 @@ describe('cleanupLegacyDevShortcuts', () => {
     expect(files.has(unrelatedShortcut)).toBe(true);
   });
 
+  it('keeps other Electron projects and non-legacy shortcut names', async () => {
+    const otherDir = path.join(START_MENU, 'OtherProject');
+    const otherElectron = path.join(otherDir, 'Electron.lnk');
+    const renamedCindyLink = path.join(START_MENU, 'CindyPreview.lnk');
+    const { deps, files, removed } = makeHarness({
+      dirs: {
+        [START_MENU]: [
+          dirEntry('OtherProject', 'directory'),
+          dirEntry('CindyPreview.lnk', 'file'),
+        ],
+        [otherDir]: [dirEntry('Electron.lnk', 'file')],
+      },
+      files: {
+        [otherElectron]: {
+          target: 'C:\\repos\\other-app\\node_modules\\electron\\dist\\electron.exe',
+        },
+        [renamedCindyLink]: {
+          target: 'C:\\repos\\cindy\\node_modules\\electron\\dist\\electron.exe',
+        },
+      },
+    });
+
+    await cleanupLegacyDevShortcuts(deps);
+
+    expect(files.has(otherElectron)).toBe(true);
+    expect(files.has(renamedCindyLink)).toBe(true);
+    expect(removed).toEqual([]);
+  });
+
   it('treats whitespace-only arguments as argumentless and still removes the link', async () => {
     const whitespaceArgsShortcut = path.join(START_MENU, 'Electron.lnk');
     const { deps, files, removed } = makeHarness({
       dirs: { [START_MENU]: [dirEntry('Electron.lnk', 'file')] },
       files: {
         [whitespaceArgsShortcut]: {
-          target: 'C:\\repo\\node_modules\\electron\\dist\\electron.exe',
+          target: 'C:\\repo\\cindy\\node_modules\\electron\\dist\\electron.exe',
           args: '   ',
         },
       },

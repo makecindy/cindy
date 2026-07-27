@@ -71,7 +71,10 @@ function createHandle(overrides: Partial<AgentSessionHandle>): AgentSessionHandl
   };
 }
 
-function createAgent(handle: AgentSessionHandle): BaseAgent {
+function createAgent(
+  handle: AgentSessionHandle,
+  startSession = vi.fn(async () => handle),
+): BaseAgent {
   return {
     capabilities: {
       switchModel: { supported: false, reason: 'not-implemented' },
@@ -81,12 +84,51 @@ function createAgent(handle: AgentSessionHandle): BaseAgent {
       rewind: { supported: false, reason: 'not-implemented' },
       memory: { supported: false, reason: 'not-implemented' },
     } as never,
-    startSession: vi.fn(async () => handle),
+    startSession,
     dispose: vi.fn(async () => undefined),
   } as unknown as BaseAgent;
 }
 
 describe('Maker.shutdown', () => {
+  it('quiesces new session starts and waits for an in-flight start without closing it', async () => {
+    let resolveStart!: (handle: AgentSessionHandle) => void;
+    const handle = createHandle({});
+    const startPending = new Promise<AgentSessionHandle>((resolve) => {
+      resolveStart = resolve;
+    });
+    const startSession = vi.fn(() => startPending);
+    const maker = new Maker({
+      agents: { 'claude-code': createAgent(handle, startSession) },
+      storage: createStorage(),
+      logger,
+    });
+    const options = {
+      agentKind: 'claude-code' as const,
+      workingDir: '/w',
+      model: 'm',
+    };
+
+    const creation = maker.createSession({ ...options, id: 'in-flight' });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(startSession).toHaveBeenCalledTimes(1);
+
+    let quiesced = false;
+    const drain = maker.quiesceSessionStarts().then(() => {
+      quiesced = true;
+    });
+    await Promise.resolve();
+    expect(quiesced).toBe(false);
+    await expect(
+      maker.createSession({ ...options, id: 'late-start' }),
+    ).rejects.toThrow('new session starts are not accepted');
+
+    resolveStart(handle);
+    await expect(creation).resolves.toBeDefined();
+    await drain;
+    expect(quiesced).toBe(true);
+    expect(startSession).toHaveBeenCalledTimes(1);
+  });
+
   it('detaches remote-capable sessions instead of full-closing them', async () => {
     const close = vi.fn(async () => undefined);
     const detach = vi.fn(async () => undefined);
