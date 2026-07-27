@@ -4,6 +4,7 @@ import type { ModelAccessGatewayModel } from '../modelAccess.js';
 import {
   gatewayPricingCatalog,
   resolveGatewayCatalogCurrency,
+  resolveGatewayPricingCurrency,
 } from '../modelPriceQuote.js';
 
 function model(
@@ -143,5 +144,72 @@ describe('gatewayPricingCatalog currency', () => {
       'CNY',
       'CNY',
     ]);
+  });
+});
+
+describe('resolveGatewayPricingCurrency', () => {
+  it('reuses the declared currency from the projected XD catalog', () => {
+    expect(
+      resolveGatewayPricingCurrency({
+        xd: {
+          a: {
+            providerId: 'xd',
+            modelId: 'a',
+            currency: 'CNY',
+            source: 'gateway',
+            approximate: false,
+            inputPerMtok: 1,
+            outputPerMtok: 2,
+          },
+        },
+      }),
+    ).toBe('CNY');
+  });
+
+  it('falls back to USD for empty or mixed projected catalogs', () => {
+    expect(resolveGatewayPricingCurrency(null)).toBe('USD');
+    expect(resolveGatewayPricingCurrency({})).toBe('USD');
+    expect(
+      resolveGatewayPricingCurrency({
+        xd: {
+          cny: {
+            providerId: 'xd',
+            modelId: 'cny',
+            currency: 'CNY',
+            source: 'gateway',
+            approximate: false,
+            inputPerMtok: 1,
+            outputPerMtok: 2,
+          },
+          usd: {
+            providerId: 'xd',
+            modelId: 'usd',
+            currency: 'USD',
+            source: 'gateway',
+            approximate: false,
+            inputPerMtok: 1,
+            outputPerMtok: 2,
+          },
+        },
+      }),
+    ).toBe('USD');
+  });
+
+  it('falls back to USD for invalid persisted currency values', () => {
+    expect(
+      resolveGatewayPricingCurrency({
+        xd: {
+          invalid: {
+            providerId: 'xd',
+            modelId: 'invalid',
+            currency: 'EUR' as unknown as 'USD',
+            source: 'gateway',
+            approximate: false,
+            inputPerMtok: 1,
+            outputPerMtok: 2,
+          },
+        },
+      }),
+    ).toBe('USD');
   });
 });

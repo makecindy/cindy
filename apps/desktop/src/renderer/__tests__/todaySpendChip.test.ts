@@ -151,11 +151,18 @@ describe('TodaySpendChip dashboard routing', () => {
   });
 
   it('formats gateway quota amounts with the gateway-native currency', () => {
+    expect(source).toContain('const pricing = useModelPricing();');
     expect(source).toContain(
-      'formatCompactMoney(gatewayMoney(claudeQuota.spend))',
+      'const gatewayCurrency = resolveGatewayPricingCurrency(pricing);',
     );
     expect(source).toContain(
-      'formatCompactMoney(gatewayMoney(claudeQuota.maxBudget))',
+      "formatCompactMoney(gatewayMoney(claudeQuota.spend, 'actual-cost', gatewayCurrency))",
+    );
+    expect(source).toContain(
+      "formatCompactMoney(gatewayMoney(claudeQuota.maxBudget, 'actual-cost', gatewayCurrency))",
+    );
+    expect(source).toContain(
+      'const slots = computeMetricSlots(claudeQuota, sessionMoney, t, gatewayCurrency);',
     );
     expect(source).not.toContain('formatCompactUsd(claudeQuota.');
   });

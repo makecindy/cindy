@@ -29,6 +29,7 @@ import {
   formatMoney,
 } from '@/lib/usageFormat';
 import { useClaudeAccountUsage } from '@/hooks/useClaudeAccountUsage';
+import { useModelPricing } from '@/hooks/useModelPricing';
 import { useUsageHistory, type UsageHistoryPayload } from '@/hooks/useUsageHistory';
 import { useAuth } from '@/contexts/AuthContext';
 import { UsageDailyBars } from './UsageDailyBars';
@@ -39,6 +40,7 @@ import {
   type RegionalMoney,
   zeroUsageMoney,
 } from '../../../shared/regionalMoney';
+import { resolveGatewayPricingCurrency } from '../../../shared/modelPriceQuote';
 
 const COLLAPSED_STORAGE_KEY = 'homeUsageDashboard.collapsed';
 /** 与 useUsageHistory 的拉取窗口一致 (20 周)。 */
@@ -175,6 +177,8 @@ export function HomeUsageDashboard(): React.JSX.Element {
   const hasHistoryData = history !== null;
   // 月度预算与右下角 chip 同源 (XD gateway key 的 LiteLLM spend, 与 vendor 无关)
   const claudeQuota = useClaudeAccountUsage(true);
+  const pricing = useModelPricing();
+  const gatewayCurrency = resolveGatewayPricingCurrency(pricing);
 
   const hasMonthly = !!claudeQuota && claudeQuota.maxBudget > 0;
 
@@ -188,7 +192,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
 
   const accountTodayMoney =
     typeof claudeQuota?.todaySpend === 'number'
-      ? gatewayMoney(claudeQuota.todaySpend)
+      ? gatewayMoney(claudeQuota.todaySpend, 'actual-cost', gatewayCurrency)
       : null;
   const hasAccountTodaySpend = accountTodayMoney !== null;
 
@@ -201,7 +205,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
   const softDailyLimitMoney =
     softDailyLimit === null
       ? null
-      : gatewayMoney(softDailyLimit);
+      : gatewayMoney(softDailyLimit, 'actual-cost', gatewayCurrency);
   const todayValue = !hasSpendValue
     ? UNKNOWN_VALUE
     : softDailyLimitMoney
@@ -352,7 +356,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
           <StatCell
             value={
               hasMonthly
-                ? `${formatCompactMoney(gatewayMoney(claudeQuota.spend))} / ${formatCompactMoney(gatewayMoney(claudeQuota.maxBudget))}`
+                ? `${formatCompactMoney(gatewayMoney(claudeQuota.spend, 'actual-cost', gatewayCurrency))} / ${formatCompactMoney(gatewayMoney(claudeQuota.maxBudget, 'actual-cost', gatewayCurrency))}`
                 : `${UNKNOWN_VALUE} / ${UNKNOWN_VALUE}`
             }
             label={t('usageDashboard.monthly')}

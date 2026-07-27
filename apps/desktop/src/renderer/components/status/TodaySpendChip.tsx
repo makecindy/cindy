@@ -50,6 +50,7 @@ import { useClaudeSessionRoute } from '@/hooks/useClaudeSessionRoute';
 import { useSessionSpend } from '@/hooks/useSessionSpend';
 import { useSessionEstimatedValue } from '@/hooks/useSessionEstimatedValue';
 import { useSessionTokens } from '@/hooks/useSessionTokens';
+import { useModelPricing } from '@/hooks/useModelPricing';
 import { useChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotContext';
 import {
   requestCodexAccountRefresh,
@@ -76,7 +77,12 @@ import { useXaiRateLimit, type XaiRateLimitSnapshot } from '@/hooks/useXaiRateLi
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
-import { gatewayMoney, type RegionalMoney } from '../../../shared/regionalMoney';
+import {
+  gatewayMoney,
+  type MoneyCurrency,
+  type RegionalMoney,
+} from '../../../shared/regionalMoney';
+import { resolveGatewayPricingCurrency } from '../../../shared/modelPriceQuote';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../../shared/subscriptionModels';
 import {
   RESET_PENDING_MAX_MS,
@@ -140,6 +146,7 @@ function computeMetricSlots(
   claudeQuota: ClaudeAccountUsageSnapshot | null,
   sessionMoney: RegionalMoney | null,
   t: TFunction,
+  gatewayCurrency: MoneyCurrency,
 ): Record<MetricKey, MetricSlot> {
   const slots: Record<MetricKey, MetricSlot> = {
     daily: { label: t('todaySpend.dailyLimitLabel', { spend: '$—', limit: '$—' }), available: false },
@@ -151,8 +158,8 @@ function computeMetricSlots(
     // monthly 永远跟 cycle 一起拿到; daily 走单独 endpoint 可能拉不到 (todaySpend=null) → 隐藏
     slots.monthly = {
       label: t('todaySpend.monthlyLimitLabel', {
-        spend: formatCompactMoney(gatewayMoney(claudeQuota.spend)),
-        limit: formatCompactMoney(gatewayMoney(claudeQuota.maxBudget)),
+        spend: formatCompactMoney(gatewayMoney(claudeQuota.spend, 'actual-cost', gatewayCurrency)),
+        limit: formatCompactMoney(gatewayMoney(claudeQuota.maxBudget, 'actual-cost', gatewayCurrency)),
       }),
       available: true,
     };
@@ -161,9 +168,9 @@ function computeMetricSlots(
       slots.daily = {
         label: t('todaySpend.dailyLimitLabel', {
           spend: formatCompactMoney(
-            gatewayMoney(claudeQuota.todaySpend),
+            gatewayMoney(claudeQuota.todaySpend, 'actual-cost', gatewayCurrency),
           ),
-          limit: formatCompactMoney(gatewayMoney(softLimit)),
+          limit: formatCompactMoney(gatewayMoney(softLimit, 'actual-cost', gatewayCurrency)),
         }),
         available: true,
       };
@@ -1066,6 +1073,8 @@ export function TodaySpendChip({
     (((vendorKey === 'cc' && !isClaudeSubscription && !isSubscriptionBridge && !ccBillingFormPending) || isCodexApi)
       && !isDeviceLinkRemote),
   );
+  const pricing = useModelPricing();
+  const gatewayCurrency = resolveGatewayPricingCurrency(pricing);
   // Claude 订阅账号余量 (5h/周/分模型窗口, 端点 + proxy 旁路 headers 双源)。bridge 模型形态
   // 优先(不消耗 Claude 订阅额度),此时不读。
   const claudeSubscriptionUsage = useClaudeSubscriptionUsage(
@@ -1308,7 +1317,7 @@ export function TodaySpendChip({
       latestTurnUsage,
     );
   } else {
-    const slots = computeMetricSlots(claudeQuota, sessionMoney, t);
+    const slots = computeMetricSlots(claudeQuota, sessionMoney, t, gatewayCurrency);
     const chipSegments = getGatewayChipSegments(slots);
     const codexApiHasTokenFallback = isCodexApi
       && !slots.session.available

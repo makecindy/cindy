@@ -137,6 +137,28 @@ export function gatewayPricingCatalog(
   return Object.keys(xd).length > 0 ? { xd } : {};
 }
 
+/**
+ * Resolve the currency of the already-projected XD pricing catalog.
+ *
+ * Account quota endpoints return bare numbers without a currency field. Reuse
+ * the currency from the same server-declared model pricing snapshot so quota
+ * and per-turn amounts cannot disagree. Invalid/mixed/empty snapshots retain
+ * the Gateway-native USD fallback instead of guessing from the build region.
+ */
+export function resolveGatewayPricingCurrency(
+  pricing: ModelPricingCatalog | null | undefined,
+): MoneyCurrency {
+  const quotes = Object.values(pricing?.xd ?? {});
+  if (quotes.length === 0) return GATEWAY_NATIVE_CURRENCY;
+  const currency = quotes[0].currency;
+  if (currency !== 'USD' && currency !== 'CNY') {
+    return GATEWAY_NATIVE_CURRENCY;
+  }
+  return quotes.every((quote) => quote.currency === currency)
+    ? currency
+    : GATEWAY_NATIVE_CURRENCY;
+}
+
 function subscriptionQuote(
   providerId: string,
   modelId: string,

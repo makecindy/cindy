@@ -19,7 +19,11 @@ const heatmapSource = readFileSync(
 describe('HomeUsageDashboard source contract', () => {
   it('uses the Claude account daily spend for the visible today amount when available', () => {
     expect(source).toMatch(
-      /const accountTodayMoney =\s+typeof claudeQuota\?\.todaySpend === 'number'\s+\? gatewayMoney\(claudeQuota\.todaySpend\)\s+: null;/,
+      /const accountTodayMoney =\s+typeof claudeQuota\?\.todaySpend === 'number'\s+\? gatewayMoney\(claudeQuota\.todaySpend, 'actual-cost', gatewayCurrency\)\s+: null;/,
+    );
+    expect(source).toContain('const pricing = useModelPricing();');
+    expect(source).toContain(
+      'const gatewayCurrency = resolveGatewayPricingCurrency(pricing);',
     );
     expect(source).toContain('const hasAccountTodaySpend = accountTodayMoney !== null;');
     expect(source).toContain('const layoutHistory = history ?? emptyLayoutHistory;');
@@ -40,6 +44,15 @@ describe('HomeUsageDashboard source contract', () => {
       /hasSpendValue \?\s+formatMoney\(displayTodaySpend\)\s+:\s+UNKNOWN_VALUE/,
     );
     expect(source).toContain('warning={showLocalSpendAnomaly}');
+    expect(source).toContain(
+      "gatewayMoney(softDailyLimit, 'actual-cost', gatewayCurrency)",
+    );
+    expect(source).toContain(
+      "gatewayMoney(claudeQuota.spend, 'actual-cost', gatewayCurrency)",
+    );
+    expect(source).toContain(
+      "gatewayMoney(claudeQuota.maxBudget, 'actual-cost', gatewayCurrency)",
+    );
   });
 
   it('keeps a fixed empty layout while usage history is still loading or empty', () => {
