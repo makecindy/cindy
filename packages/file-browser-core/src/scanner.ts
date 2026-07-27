@@ -72,7 +72,11 @@ export interface FileStat {
 function assertInsideWorkdir(workdir: string, relPath: string): string {
   // Normalize and reject anything that escapes the workdir. We resolve to
   // absolute and verify the resolved path starts with workdir + sep.
-  const cleaned = relPath.replace(/\\/g, '/').replace(/^\.?\/+/, '');
+  // Strip a leading "./" (and any redundant slashes right after it) but NOT a
+  // bare leading "/": an absolute path must survive to the reject below —
+  // stripping it would silently reinterpret "/etc/passwd" as
+  // "<workdir>/etc/passwd", contradicting this function's documented contract.
+  const cleaned = relPath.replace(/\\/g, '/').replace(/^\.\/+/, '');
   if (cleaned === '' || cleaned === '.') return '';
   if (cleaned.startsWith('/')) {
     throw new Error(`absolute path not allowed: ${relPath}`);
