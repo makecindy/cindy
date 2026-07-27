@@ -32,10 +32,16 @@ const loginOwnerPrefix = (() => {
   try {
     const uuid = globalThis.crypto?.randomUUID?.();
     if (uuid) return uuid;
+    const entropy = new Uint32Array(4);
+    globalThis.crypto?.getRandomValues?.(entropy);
+    if (entropy.some((value) => value !== 0)) {
+      return `renderer-${[...entropy].map((value) => value.toString(16)).join('-')}`;
+    }
   } catch {
-    // Older Electron/jsdom may expose crypto without randomUUID.
+    // Older Electron/jsdom may not expose the Web Crypto methods.
   }
-  return `renderer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  // The token is also bound to event.sender in Main, so this fallback supplies uniqueness only.
+  return `renderer-${Date.now().toString(36)}`;
 })();
 
 const cancelledLoginResult = (): CodexLoginResult => ({
@@ -71,10 +77,13 @@ function getOrStartCodexLogin(
     if (pendingCodexLogin.mode === mode) return pendingCodexLogin;
 
     const previous = pendingCodexLogin.promise;
+    const previousOwnerId = pendingCodexLogin.ownerId;
     const generation = ++loginGeneration;
     const ownerId = nextLoginOwnerId();
     try {
-      void window.electronAPI.maker.auth.cancelLogin('codex').catch(() => undefined);
+      void window.electronAPI.maker.auth
+        .cancelLogin('codex', { releaseOwner: true, ownerId: previousOwnerId })
+        .catch(() => undefined);
     } catch {
       // Cancellation is best-effort; synchronous bridge failures must not abort mode switching.
     }

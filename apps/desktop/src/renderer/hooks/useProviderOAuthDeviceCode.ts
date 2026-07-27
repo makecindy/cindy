@@ -16,10 +16,16 @@ const providerOAuthOwnerPrefix = (() => {
   try {
     const uuid = globalThis.crypto?.randomUUID?.();
     if (uuid) return uuid;
+    const entropy = new Uint32Array(4);
+    globalThis.crypto?.getRandomValues?.(entropy);
+    if (entropy.some((value) => value !== 0)) {
+      return `provider-oauth-${[...entropy].map((value) => value.toString(16)).join('-')}`;
+    }
   } catch {
-    // Older Electron/jsdom may expose crypto without randomUUID.
+    // Older Electron/jsdom may not expose the Web Crypto methods.
   }
-  return `provider-oauth-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  // Main also binds this token to event.sender; fallback uniqueness is not an auth boundary.
+  return `provider-oauth-${Date.now().toString(36)}`;
 })();
 
 function nextProviderOAuthOwnerId(): string {

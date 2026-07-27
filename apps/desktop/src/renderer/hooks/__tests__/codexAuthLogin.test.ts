@@ -17,7 +17,7 @@ describe('triggerCodexLoginOnce', () => {
 
   it('coalesces only the same mode and serializes a conflicting mode after cancellation', async () => {
     const browser = deferred<{ authenticated: boolean }>();
-    const triggerLogin = vi.fn((_: string, options?: { mode?: string }) =>
+    const triggerLogin = vi.fn((_: string, options?: { mode?: string; ownerId?: string }) =>
       options?.mode === 'device-code'
         ? Promise.resolve({ authenticated: true })
         : browser.promise,
@@ -36,7 +36,10 @@ describe('triggerCodexLoginOnce', () => {
     await Promise.resolve();
 
     expect(duplicate).toBe(first);
-    expect(cancelLogin).toHaveBeenCalledWith('codex');
+    expect(cancelLogin).toHaveBeenCalledWith('codex', {
+      releaseOwner: true,
+      ownerId: triggerLogin.mock.calls[0]?.[1]?.ownerId,
+    });
     expect(triggerLogin).toHaveBeenCalledTimes(1);
 
     browser.resolve({ authenticated: false });
@@ -76,7 +79,7 @@ describe('triggerCodexLoginOnce', () => {
 
   it('continues a mode switch when cancellation throws synchronously', async () => {
     const browser = deferred<{ authenticated: boolean }>();
-    const triggerLogin = vi.fn((_: string, options?: { mode?: string }) =>
+    const triggerLogin = vi.fn((_: string, options?: { mode?: string; ownerId?: string }) =>
       options?.mode === 'device-code'
         ? Promise.resolve({ authenticated: true })
         : browser.promise,
@@ -143,7 +146,7 @@ describe('triggerCodexLoginOnce', () => {
   it('does not let an old-mode owner cleanup cancel the queued new-mode login', async () => {
     const browser = deferred<{ authenticated: boolean; errorReason?: string }>();
     const deviceCode = deferred<{ authenticated: boolean; errorReason?: string }>();
-    const triggerLogin = vi.fn((_: string, options?: { mode?: string }) =>
+    const triggerLogin = vi.fn((_: string, options?: { mode?: string; ownerId?: string }) =>
       options?.mode === 'device-code' ? deviceCode.promise : browser.promise,
     );
     const cancelLogin = vi.fn(async () => undefined);
@@ -157,6 +160,10 @@ describe('triggerCodexLoginOnce', () => {
     const browserOwner = acquireCodexLogin('browser');
     const deviceOwner = acquireCodexLogin('device-code');
     expect(cancelLogin).toHaveBeenCalledOnce();
+    expect(cancelLogin).toHaveBeenLastCalledWith('codex', {
+      releaseOwner: true,
+      ownerId: triggerLogin.mock.calls[0]?.[1]?.ownerId,
+    });
 
     browserOwner.release({ cancelIfLastOwner: true });
     expect(cancelLogin).toHaveBeenCalledOnce();
