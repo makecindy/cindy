@@ -37,7 +37,7 @@ describe('providerModelFetchRequestSignature', () => {
     );
   });
 
-  it('uses credential-stripped headers for no-auth requests', () => {
+  it('uses credential-stripped headers when credentials are not supplied from the form', () => {
     const changedCredential = {
       ...fields,
       headers: [
@@ -52,12 +52,14 @@ describe('providerModelFetchRequestSignature', () => {
         { name: 'X-Tenant', value: 'other' },
       ],
     };
-    expect(providerModelFetchRequestSignature(fields, 'none')).toBe(
-      providerModelFetchRequestSignature(changedCredential, 'none'),
-    );
-    expect(providerModelFetchRequestSignature(fields, 'none')).not.toBe(
-      providerModelFetchRequestSignature(changedEffectiveHeader, 'none'),
-    );
+    for (const authMode of ['oauth', 'none'] as const) {
+      expect(providerModelFetchRequestSignature(fields, authMode)).toBe(
+        providerModelFetchRequestSignature(changedCredential, authMode),
+      );
+      expect(providerModelFetchRequestSignature(fields, authMode)).not.toBe(
+        providerModelFetchRequestSignature(changedEffectiveHeader, authMode),
+      );
+    }
   });
 });
 

@@ -53,7 +53,7 @@ export function providerModelFetchRequestSignature(
     const name = header.name.trim();
     if (name) headers[name] = header.value.trim();
   }
-  const effectiveHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
+  const effectiveHeaders = authMode === 'apiKey' ? headers : stripCredentialHeaders(headers);
   return JSON.stringify({
     authMode,
     baseUrl: fields.baseUrl.trim(),
