@@ -176,6 +176,27 @@ export function classifyDeviceSendSuccess(channel: string): BreakerSettleOutcome
   return BREAKER_NEUTRAL_INVOKE_CHANNELS.has(channel) ? 'inconclusive' : 'responded';
 }
 
+/**
+ * openLink 专用的终态 relay 应答码(review P1):relay 明确回答了目标设备的
+ * 状态(开关关闭 / 不在线 / 版本不符)——「响应性」判定就此失去意义,继续
+ * 保持 unresponsive 会让设备被永远探测,横幅还压着更可操作的真实状态
+ * (如「已关闭允许远程控制」)。按真实应答关熔断,把 UI 让给对应的错误态;
+ * 开关重开 / 设备上线后的首次请求若再超时,熔断照常重新累计。
+ * NOT_CONNECTED / LINK_NOT_OPEN 等传输层失败仍不定论,超时仍计失败。
+ */
+const TERMINAL_LINK_OPEN_ERROR_CODES: ReadonlySet<string> = new Set([
+  'DEVICE_OFFLINE',
+  'REMOTE_DISABLED',
+  'VERSION_MISMATCH',
+]);
+
+export function classifyLinkOpenFailure(error: unknown): BreakerSettleOutcome {
+  if (error instanceof DeviceLinkError && TERMINAL_LINK_OPEN_ERROR_CODES.has(error.code)) {
+    return 'responded';
+  }
+  return classifyDeviceSendFailure(error);
+}
+
 /** 登出 / 进程内切号:清空熔断状态与 UI 镜像,避免串到下一个账号。 */
 export function resetDeviceResponsivenessTracking(): void {
   breaker.resetAll();

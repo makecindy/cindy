@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DeviceLinkError,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   REMOTE_INVOKE_ALLOWLIST,
+  type DeviceLinkErrorCode,
 } from '@cindy/device-link';
 import {
   BREAKER_NEUTRAL_INVOKE_CHANNELS,
   buildDeviceResponsivenessProbeArgs,
   classifyDeviceSendSuccess,
+  classifyLinkOpenFailure,
   DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
 } from '@/device-link/unresponsiveDevicesStore';
 
@@ -52,5 +55,24 @@ describe('classifyDeviceSendSuccess(成功回包 → 熔断信号分类)', () =>
     expect(classifyDeviceSendSuccess('local-db:messages:list')).toBe('responded');
     expect(classifyDeviceSendSuccess('maker:send')).toBe('responded');
     expect(classifyDeviceSendSuccess('file-browser:remote-op')).toBe('responded');
+  });
+});
+
+describe('classifyLinkOpenFailure(openLink 失败 → 熔断信号分类)', () => {
+  const err = (code: DeviceLinkErrorCode) => new DeviceLinkError(code, code);
+
+  it('终态 relay 应答(开关关闭 / 不在线 / 版本不符)按真实应答关熔断(review P1)', () => {
+    // 设备状态已由 relay 明确回答,「响应性」判定失去意义:继续 unresponsive
+    // 会让设备被永远探测,横幅还压着更可操作的错误态(如「已关闭远程控制」)。
+    expect(classifyLinkOpenFailure(err('REMOTE_DISABLED'))).toBe('responded');
+    expect(classifyLinkOpenFailure(err('DEVICE_OFFLINE'))).toBe('responded');
+    expect(classifyLinkOpenFailure(err('VERSION_MISMATCH'))).toBe('responded');
+  });
+
+  it('传输层失败维持不定论,超时仍计失败', () => {
+    expect(classifyLinkOpenFailure(err('NOT_CONNECTED'))).toBe('inconclusive');
+    expect(classifyLinkOpenFailure(err('LINK_NOT_OPEN'))).toBe('inconclusive');
+    expect(classifyLinkOpenFailure(err('INVOKE_TIMEOUT'))).toBe('timeout');
+    expect(classifyLinkOpenFailure(new Error('boom'))).toBe('inconclusive');
   });
 });

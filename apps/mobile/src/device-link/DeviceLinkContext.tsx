@@ -42,6 +42,7 @@ import { clearAllDeviceModelMeta, evictDeviceModelMeta } from '@/device-link/dev
 import { dispatchFileBrowserWatchEvent } from '@/device-link/fileBrowserWatch';
 import { resolveMobileInvokeTimeoutMs } from '@/device-link/invokeTimeouts';
 import { rehydrateDeviceLinkTopics } from '@/device-link/rehydrate';
+import { invalidateTransientScheduleIndexFailures } from '@/session/scheduleIndex';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { createRnWebSocket } from '@/device-link/rnWebSocket';
 import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
@@ -59,6 +60,7 @@ import {
   buildDeviceResponsivenessProbeArgs,
   classifyDeviceSendFailure,
   classifyDeviceSendSuccess,
+  classifyLinkOpenFailure,
   DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
   isDeviceProbeDue,
   resetDeviceResponsivenessTracking,
@@ -248,6 +250,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       run = (async () => {
         let lastTransientFailures = 0;
         try {
+          // 链路已恢复(rehydrate 只在 online 时运行,重连必经):普通断线期间
+          // 产生的 schedule-index 瞬态负缓存立即失效,让本轮 reseed 拉到新数据
+          // 而不是吃 30s TTL 内的旧 rejected promise(review P1)。
+          invalidateTransientScheduleIndexFailures();
           do {
             state.rerun = false;
             if (client.getStatus() !== 'online') return;
@@ -787,7 +793,9 @@ async function sendOpenLink(client: DeviceLinkClient, deviceId: string): Promise
     return accepted;
   } catch (err) {
     // 超时仍计失败:link-open 都等不到回包说明被控端连链路层都没在应答。
-    settleDeviceSend(deviceId, slot, classifyDeviceSendFailure(err));
+    // 终态 relay 应答(REMOTE_DISABLED / DEVICE_OFFLINE / VERSION_MISMATCH)
+    // 关熔断,把 UI 让给对应的可操作错误态(review P1:否则设备被永远探测)。
+    settleDeviceSend(deviceId, slot, classifyLinkOpenFailure(err));
     throw err;
   }
 }

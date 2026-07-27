@@ -32,6 +32,9 @@ describe('resolveMobileInvokeTimeoutMs', () => {
     expect(resolveMobileInvokeTimeoutMs('maker:send')).toBe(30_000);
     // regenerate-title:OAuth 刷新(~10s)+ 标题请求自身 12s,合法总预算 ~22s。
     expect(resolveMobileInvokeTimeoutMs('maker:regenerate-title')).toBe(30_000);
+    // create-session:冷启动 app-server / agent 拉起无更短 deadline;goal 路径
+    // 无稳定客户端会话 id,误超时重试会建出第二个会话。
+    expect(resolveMobileInvokeTimeoutMs('maker:create-session')).toBe(30_000);
     expect(MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS['device-link:media:fetch']).toBe(30_000);
   });
 

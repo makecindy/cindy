@@ -33,7 +33,10 @@ import { INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
  *    ensureRemoteReadyForSessionStart(SSH 就绪窗口 20s)再落库/派发;误超时后
  *    桌面仍会接收并发出该消息,用户重试会把同一条消息发两遍;
  *  - maker:regenerate-title:桌面路径先 getValidClaudeAiOAuth(刷新最长 ~10s)
- *    再发标题请求(自身 TITLE_TIMEOUT_MS=12s),合法总预算 ~22s。
+ *    再发标题请求(自身 TITLE_TIMEOUT_MS=12s),合法总预算 ~22s;
+ *  - maker:create-session:桌面 await maker.createSession → agent.startSession /
+ *    Codex host.ensureStarted,冷启动 app-server 无更短 deadline;goal 路径无
+ *    稳定的客户端会话 id,误超时后重试会建出第二个会话。
  * 新增合法慢通道优先登记协议契约表(桌面控制端共用),仅 mobile 特有差异放这里。
  */
 export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
@@ -41,6 +44,7 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   'device-link:voice:dictionary-learning': 30_000,
   'device-link:voice:transcribe': 30_000,
   'file-browser:remote-op': 30_000,
+  'maker:create-session': 30_000,
   'maker:fork': 30_000,
   'maker:get-context-usage': 30_000,
   'maker:regenerate-title': 30_000,

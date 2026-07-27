@@ -74,6 +74,8 @@ interface ScheduleIndexThrottleEntry {
   failedAt: number | null;
   /** 失败原因是 DEVICE_UNRESPONSIVE(熔断快速失败);恢复旁路判定用。 */
   failedUnresponsive: boolean;
+  /** 失败原因是瞬态链路问题(NOT_CONNECTED 等);重连失效判定用。 */
+  failedTransient: boolean;
 }
 
 const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>();
@@ -103,7 +105,13 @@ export function loadSessionScheduleIndexThrottled(
     if (withinTtl && !failedUnresponsiveButRecovered) return existing.promise;
   }
   const promise = load();
-  const entry: ScheduleIndexThrottleEntry = { at: now(), promise, failedAt: null, failedUnresponsive: false };
+  const entry: ScheduleIndexThrottleEntry = {
+    at: now(),
+    promise,
+    failedAt: null,
+    failedUnresponsive: false,
+    failedTransient: false,
+  };
   scheduleIndexThrottleEntries.set(key, entry);
   promise.then(
     () => {
@@ -120,10 +128,26 @@ export function loadSessionScheduleIndexThrottled(
         // 同样享受「恢复即旁路」而不是干等 30s TTL。
         entry.failedUnresponsive =
           isDeviceUnresponsiveRemoteError(error) || unresponsiveDevicesStore.has(key);
+        entry.failedTransient = !entry.failedUnresponsive && isTransientRemoteError(error);
       }
     },
   );
   return promise;
+}
+
+/**
+ * 重连恢复钩子(review P1):普通断线(NOT_CONNECTED 等瞬态失败)产生的负缓存
+ * 在链路恢复后立即失效——否则 30s 失败 TTL 内重连触发的 reseed 会吃到旧的
+ * rejected promise,设备详情页把索引替换成空集、首页保留陈旧数据,且没有任何
+ * 定时器在 TTL 过期后补拉。由 DeviceLinkContext 在每轮 rehydrate(只在 online
+ * 时运行,重连必经)开始时调用;熔断类负缓存不受影响(走各自的恢复旁路)。
+ */
+export function invalidateTransientScheduleIndexFailures(): void {
+  for (const [key, entry] of scheduleIndexThrottleEntries) {
+    if (entry.failedAt !== null && entry.failedTransient) {
+      scheduleIndexThrottleEntries.delete(key);
+    }
+  }
 }
 
 /** 测试用:清空节流登记表。 */

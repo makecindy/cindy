@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { unresponsiveDevicesStore } from '@/device-link/unresponsiveDevicesStore';
 import {
+  invalidateTransientScheduleIndexFailures,
   loadSessionScheduleIndex,
   loadSessionScheduleIndexThrottled,
   replaceSessionScheduleIndexEntries,
@@ -333,6 +334,29 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).rejects.toThrow('boom');
     await Promise.resolve();
     await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now, force: true })).resolves.toBeInstanceOf(Map);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('瞬态失败(NOT_CONNECTED)的负缓存在重连失效钩子后立即重拉(review P1)', async () => {
+    // 普通断线的负缓存若挺过重连,30s 内 reseed 会吃旧 rejected promise,
+    // 详情页替换成空索引且无人补拉;rehydrate 开始时调用失效钩子解决。
+    resetScheduleIndexThrottleForTesting();
+    const load = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('not connected'), { code: 'NOT_CONNECTED' }))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const now = () => 1000;
+    await expect(loadSessionScheduleIndexThrottled('dev-n', load, { now })).rejects.toMatchObject({
+      code: 'NOT_CONNECTED',
+    });
+    await Promise.resolve();
+    // 失效前:TTL 内复用负缓存
+    await expect(loadSessionScheduleIndexThrottled('dev-n', load, { now })).rejects.toMatchObject({
+      code: 'NOT_CONNECTED',
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+    // 重连(rehydrate 开始)→ 瞬态负缓存失效 → 立即重拉
+    invalidateTransientScheduleIndexFailures();
+    await expect(loadSessionScheduleIndexThrottled('dev-n', load, { now })).resolves.toBeInstanceOf(Map);
     expect(load).toHaveBeenCalledTimes(2);
   });
 
