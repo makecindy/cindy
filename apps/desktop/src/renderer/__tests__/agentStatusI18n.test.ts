@@ -16,6 +16,8 @@ describe('localizeAgentStatus', () => {
   it('localizes Cindy-owned static status labels', () => {
     expect(localizeAgentStatus('Thinking...', i18n.t)).toBe('正在思考…');
     expect(localizeAgentStatus('Editing files...', i18n.t)).toBe('正在编辑文件…');
+    expect(localizeAgentStatus('Working', i18n.t)).toBe('正在工作…');
+    expect(localizeAgentStatus('Running', i18n.t)).toBe('运行中…');
     expect(localizeAgentStatus('Done', i18n.t)).toBe('已完成');
   });
 

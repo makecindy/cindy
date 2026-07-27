@@ -9,6 +9,8 @@ const STATUS_KEYS = new Map<string, string>([
   ['compacting', 'ccAgent.agentStatus.compacting'],
   ['done', 'ccAgent.agentStatus.done'],
   ['just wait', 'ccAgent.agentStatus.waiting'],
+  ['working', 'ccAgent.agentStatus.working'],
+  ['running', 'ccAgent.agentStatus.running'],
 ]);
 
 const TURN_START_NAME_PATTERNS = [

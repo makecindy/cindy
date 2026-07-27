@@ -72,4 +72,22 @@ describe('PermissionPrompt i18n', () => {
 
     expect(screen.getByText('允许 Bash？')).toBeTruthy();
   });
+
+  it('keeps the session boundary explicit in the English approval label', async () => {
+    await i18n.changeLanguage('en');
+
+    render(
+      <PermissionPrompt
+        permission={{
+          requestId: 'permission-4',
+          toolName: 'exec',
+          input: { command: 'pwd' },
+          suggestions: [{ destination: 'session' }],
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Always allow for this session')).toBeTruthy();
+  });
 });

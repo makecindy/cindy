@@ -4941,6 +4941,8 @@
       "compacting": "正在压缩上下文…",
       "done": "已完成",
       "waiting": "请稍候…",
+      "working": "正在工作…",
+      "running": "运行中…",
       "turnStart": "正在处理，{{name}}",
       "issueTip": "{{name}}，试试用 /issue 给我们提反馈或建议",
       "runningTool": "{{tool}} 运行中…"

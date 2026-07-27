@@ -68,7 +68,7 @@
       "permissionPromptTitle": "Confirm permission",
       "permissionPromptTitleWithTool": "Allow {{toolName}}?",
       "allowOnce": "Allow once",
-      "alwaysAllowForSession": "Always allow",
+      "alwaysAllowForSession": "Always allow for this session",
       "deny": "Deny"
     }
   },
@@ -4951,6 +4951,8 @@
       "compacting": "Compacting context…",
       "done": "Done",
       "waiting": "Just wait…",
+      "working": "Working…",
+      "running": "Running…",
       "turnStart": "{{status}}",
       "issueTip": "{{name}}, try /issue to send us feedback or suggestions",
       "runningTool": "{{tool}} running…"

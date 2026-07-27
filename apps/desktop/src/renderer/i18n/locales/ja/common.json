@@ -4941,6 +4941,8 @@
       "compacting": "コンテキストを圧縮中…",
       "done": "完了",
       "waiting": "少々お待ちください…",
+      "working": "作業中…",
+      "running": "実行中…",
       "turnStart": "{{name}} さん、対応中です…",
       "issueTip": "{{name}} さん、/issue でフィードバックや提案をお寄せください",
       "runningTool": "{{tool}} を実行中…"
