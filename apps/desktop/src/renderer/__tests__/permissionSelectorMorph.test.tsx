@@ -118,12 +118,20 @@ describe('PermissionSelector (MorphPopover pilot)', () => {
 
     fireEvent.keyDown(listbox, { key: 'ArrowDown' });
     expect(document.activeElement).toBe(defaultOption);
+    expect(defaultOption.tabIndex).toBe(0);
+    expect(bypassOption.tabIndex).toBe(-1);
     fireEvent.keyDown(listbox, { key: 'ArrowUp' });
     expect(document.activeElement).toBe(bypassOption);
+    expect(bypassOption.tabIndex).toBe(0);
+    expect(defaultOption.tabIndex).toBe(-1);
     fireEvent.keyDown(listbox, { key: 'Home' });
     expect(document.activeElement).toBe(defaultOption);
+    expect(defaultOption.tabIndex).toBe(0);
+    expect(bypassOption.tabIndex).toBe(-1);
     fireEvent.keyDown(listbox, { key: 'End' });
     expect(document.activeElement).toBe(bypassOption);
+    expect(bypassOption.tabIndex).toBe(0);
+    expect(defaultOption.tabIndex).toBe(-1);
   });
 
   it('点击选项回调 onPermissionModeChange 并收合卸载', async () => {

@@ -106,6 +106,7 @@ export function PermissionSelector({
 }: PermissionSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [focusedOptionId, setFocusedOptionId] = useState<string | null>(null);
   const selectedOptionRef = useRef<HTMLButtonElement>(null);
   const agentKind = vendorKeyToAgentKind(vendorKey);
   // device-link:deviceId 非空 → 权限档从被控端读(本地会话 undefined,行为不变)。
@@ -138,12 +139,19 @@ export function PermissionSelector({
   const isIconOnly = iconOnly && isCreateAgentVariant;
 
   useEffect(() => {
+    if (!open) {
+      setFocusedOptionId(null);
+    }
+  }, [open]);
+
+  useEffect(() => {
     const previousLength = previousOptionsLengthRef.current;
     previousOptionsLengthRef.current = options.length;
     if (!open || previousLength !== 0 || options.length === 0) return;
 
     // capability cache miss 时，选项可能晚于弹层首次 autofocus 才返回。仅在菜单仍打开且
     // 选项从空变为可用时补聚焦一次，使 chip / field 的当前权限 tooltip 都与选择一致。
+    setFocusedOptionId(effectiveMode);
     const frame = requestAnimationFrame(() => {
       selectedOptionRef.current?.focus({ preventScroll: true });
     });
@@ -270,7 +278,10 @@ export function PermissionSelector({
                 ? enabledOptions.length - 1
                 : (activeIndex - 1 + enabledOptions.length) % enabledOptions.length;
           }
-          enabledOptions[nextIndex]?.focus({ preventScroll: true });
+          const nextOption = enabledOptions[nextIndex];
+          if (!nextOption) return;
+          setFocusedOptionId(nextOption.dataset.permissionMode ?? null);
+          nextOption.focus({ preventScroll: true });
         }}
       >
         {options.map((option) => {
@@ -298,7 +309,8 @@ export function PermissionSelector({
                 }}
                 role="option"
                 aria-selected={isSelected}
-                tabIndex={isSelected ? 0 : -1}
+                data-permission-mode={option.id}
+                tabIndex={(focusedOptionId ?? effectiveMode) === option.id ? 0 : -1}
                 className={cn(
                   'flex w-full items-center gap-3 rounded-[8px] px-3 py-2',
                   'transition-colors',
