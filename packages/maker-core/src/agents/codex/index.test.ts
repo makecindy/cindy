@@ -891,6 +891,24 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await handle.close();
   });
 
+  it('omits metadata-only resume for remote Codex versions older than 0.125.0', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.124.0' });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-legacy-remote-resume',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      remoteHostId: 'legacy-remote',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)?.[1] as {
+      excludeTurns?: boolean;
+    };
+    expect(params.excludeTurns).toBeUndefined();
+    await handle.close();
+  });
+
   it('omits thread/start developerInstructions and registers prompt when codex proxy is active', async () => {
     const runtimeConfig = { systemPrompt: 'HOST PRODUCT PROMPT' };
     const userPrompt = [
@@ -6671,6 +6689,26 @@ describe('CodexAgent plan mode', () => {
       mode: 'default',
       settings: PLAN_SETTINGS,
     });
+    await handle.close();
+  });
+
+  it('uses the resolved resume model for the default collaboration marker', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installTurnHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-default-model-resume',
+      model: 'gpt-5',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    });
+
+    await handle.send({ type: 'user', content: 'continue normally' });
+
+    const [, params] = turnStartCalls(host)[0] as [string, {
+      collaborationMode?: { mode: string; settings: { model: string } };
+    }];
+    expect(params.collaborationMode?.settings.model).toBe('gpt-5.4');
+    expect(handle.model).toBe('gpt-5.4');
     await handle.close();
   });
 

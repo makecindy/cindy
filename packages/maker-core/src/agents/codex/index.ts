@@ -309,21 +309,27 @@ function mapPermissionToCodex(
   }
 }
 
+function codexUserAgentAtLeast(
+  userAgent: string | undefined,
+  minimum: readonly [number, number, number],
+): boolean {
+  const match = /\/(\d+)\.(\d+)\.(\d+)(?:[-+ )]|$)/.exec(userAgent ?? '');
+  if (!match) return false;
+  const version = [Number(match[1]), Number(match[2]), Number(match[3])] as const;
+  for (let i = 0; i < minimum.length; i += 1) {
+    if (version[i]! > minimum[i]!) return true;
+    if (version[i]! < minimum[i]!) return false;
+  }
+  return true;
+}
+
 /**
  * `approvalsReviewer` is verified against the app-server bundled with Codex 0.144.6.
  * Remote hosts may keep an older standalone binary across desktop upgrades, so parse the
  * initialize userAgent and conservatively omit the field unless that verified floor is met.
  */
 function supportsCodexApprovalsReviewer(userAgent: string | undefined): boolean {
-  const match = /\/(\d+)\.(\d+)\.(\d+)(?:[-+ )]|$)/.exec(userAgent ?? '');
-  if (!match) return false;
-  const version = [Number(match[1]), Number(match[2]), Number(match[3])] as const;
-  const minimum = [0, 144, 6] as const;
-  for (let i = 0; i < minimum.length; i += 1) {
-    if (version[i]! > minimum[i]!) return true;
-    if (version[i]! < minimum[i]!) return false;
-  }
-  return true;
+  return codexUserAgentAtLeast(userAgent, [0, 144, 6]);
 }
 
 /**
@@ -334,6 +340,15 @@ function supportsCodexApprovalsReviewer(userAgent: string | undefined): boolean 
  */
 function supportsCodexReadonlyReferenceDirs(userAgent: string | undefined): boolean {
   return supportsCodexApprovalsReviewer(userAgent);
+}
+
+/**
+ * `excludeTurns` was introduced in Codex 0.125.0 and later marked experimental.
+ * Older remote daemons can outlive desktop upgrades, so omit the unknown field
+ * and preserve their legacy full-history resume behavior.
+ */
+function supportsCodexResumeExcludeTurns(userAgent: string | undefined): boolean {
+  return codexUserAgentAtLeast(userAgent, [0, 125, 0]);
 }
 
 const READONLY_REFERENCES_PERMISSION_PROFILE = 'cindy-readonly-references';
@@ -2076,6 +2091,7 @@ export class CodexAgent extends BaseAgent {
     if (initResp.codexHome) this.codexHome = initResp.codexHome;
     const approvalsReviewerSupported = supportsCodexApprovalsReviewer(initResp.userAgent);
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
+    const resumeExcludeTurnsSupported = supportsCodexResumeExcludeTurns(initResp.userAgent);
     if (mutableExtraDirs.length > 0 && !readonlyReferenceDirsSupported) {
       releaseHostBindingLeaseIfNeeded();
       throw new Error(
@@ -2410,7 +2426,7 @@ export class CodexAgent extends BaseAgent {
       const useProxyChannel = isCodexProxyChannelReady();
       const params: ThreadResumeParams = {
         threadId: opts.resumeSessionId,
-        excludeTurns: true,
+        ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
         cwd: opts.workingDir,
         ...currentThreadWorkspaceConfig(),
         ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
@@ -2427,6 +2443,9 @@ export class CodexAgent extends BaseAgent {
         assertCurrentHost('thread/resume');
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+        }
+        if (mutableModel === 'gpt-5' && resp.model) {
+          mutableModel = resp.model;
         }
         threadId = resp.thread.id;
         if (useProxyChannel) {
@@ -4115,7 +4134,7 @@ export class CodexAgent extends BaseAgent {
               host.subscribeThread(threadId, handlers);
               const resumeParams: ThreadResumeParams = {
                 threadId,
-                excludeTurns: true,
+                ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
                 cwd: opts.workingDir,
                 ...currentThreadWorkspaceConfig(),
                 ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
