@@ -19,7 +19,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
-import { machineIdSync } from 'node-machine-id';
+import { resolveDeviceId } from './deviceId.js';
 import {
   AuthApiError,
   CindyAuthClient,
@@ -227,8 +227,12 @@ let sessionInvalidationPromise: Promise<void> | null = null;
  * dev-only 覆盖:设了 `XDT_DEVICE_ID_OVERRIDE` 则用它——用于在同一台机器上跑多个
  * desktop 实例模拟「多设备」(device-link 跨设备远程控制本地联调)。deviceId 只是
  * 同账号下区分设备的标识、非鉴权凭证(鉴权走 auth-server 签发的 JWT),覆盖无安全风险。
+ *
+ * 惰性解析(统一走 getDeviceId()):resolveDeviceId() 会取硬件指纹,取值前先补 PATH 的
+ * /usr/sbin:/sbin(Finder 启动的 GUI 进程 PATH 极简,bare ioreg 找不到会抛),取不到则回落
+ * 到一个随机 fallback,绝不因取设备 ID 失败而让主进程启动即崩溃。放在使用点惰性调用,避免
+ * 模块顶层求值(会早于单实例锁)。
  */
-const deviceId = process.env.XDT_DEVICE_ID_OVERRIDE?.trim() || machineIdSync();
 
 let loginFlowState: AuthFlowState | null = null;
 let providerConfig: ProviderConfig | null = null;
@@ -261,7 +265,7 @@ function createAuthClient(): CindyAuthClient {
   return new CindyAuthClient({
     baseUrl: authServerUrl(),
     region: AUTH_REGION,
-    deviceId,
+    deviceId: getDeviceId(),
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
     fetch: scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
@@ -398,7 +402,7 @@ function requestAuthRefresh(refreshToken: string): Promise<AuthRefreshResult> {
   // 客户端 abort,重试旧 token 会触发 INVALID_REFRESH_TOKEN。
   return apiFetch<RefreshResponse | AuthErrorResponse>('/api/auth/refresh', {
     method: 'POST',
-    body: { refreshToken, deviceId },
+    body: { refreshToken, deviceId: getDeviceId() },
     timeoutMs: 0,
   });
 }
@@ -922,7 +926,7 @@ function snapshotAuthState(): AuthState {
     canEnterApp: appSession.mode !== 'signed-out',
     isAuthenticated: isCloudAuthenticated,
     isCanary: currentUser !== null && canaryFlagStore.read(),
-    deviceId,
+    deviceId: getDeviceId(),
     hasAccountDeletionReceipt: readSafe(ACCOUNT_DELETION_RECEIPT_KEY) !== null,
     accountDeletionRestored: accountDeletionRestoredNoticePending,
   };
@@ -937,7 +941,7 @@ function snapshotLoggedOutAuthState(): AuthState {
     canEnterApp: false,
     isAuthenticated: false,
     isCanary: false,
-    deviceId,
+    deviceId: getDeviceId(),
     hasAccountDeletionReceipt: readSafe(ACCOUNT_DELETION_RECEIPT_KEY) !== null,
     accountDeletionRestored: false,
   };
@@ -1226,9 +1230,12 @@ export function getCurrentMembershipDisplayName(): string | undefined {
   return displayName || undefined;
 }
 
-/** SkillHub 跨设备识别：本机 deviceId（machineIdSync 结果），登录前后都可用 */
+/**
+ * SkillHub 跨设备识别：本机 deviceId,登录前后都可用。
+ * 通常是硬件指纹;取不到时是本次运行的随机 fallback;dev 下可被 XDT_DEVICE_ID_OVERRIDE 覆盖。
+ */
 export function getDeviceId(): string {
-  return deviceId;
+  return resolveDeviceId();
 }
 
 export function getAuthState(): AuthState {
@@ -2358,7 +2365,7 @@ export async function logout(): Promise<void> {
   if (currentAccessToken) {
     apiFetch('/api/auth/logout', {
       method: 'POST',
-      body: { deviceId },
+      body: { deviceId: getDeviceId() },
       token: currentAccessToken,
     }).catch(() => {});
   }
