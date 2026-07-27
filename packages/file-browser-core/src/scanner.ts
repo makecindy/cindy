@@ -78,7 +78,11 @@ function assertInsideWorkdir(workdir: string, relPath: string): string {
   // "<workdir>/etc/passwd", contradicting this function's documented contract.
   const cleaned = relPath.replace(/\\/g, '/').replace(/^\.\/+/, '');
   if (cleaned === '' || cleaned === '.') return '';
-  if (cleaned.startsWith('/')) {
+  // POSIX absolute ("/x") and Windows drive-letter absolute ("C:/x", from "C:\x"
+  // after the backslash normalization above) are both rejected here. The drive
+  // check matters because a drive-letter path has no leading slash, so without it
+  // "C:/Windows" would slip through as a relative "C:" dir under the workdir.
+  if (cleaned.startsWith('/') || /^[a-zA-Z]:/.test(cleaned)) {
     throw new Error(`absolute path not allowed: ${relPath}`);
   }
   const abs = path.resolve(workdir, cleaned);

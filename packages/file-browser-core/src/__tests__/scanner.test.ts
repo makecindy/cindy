@@ -112,6 +112,15 @@ describe('file-browser scanner path boundaries', () => {
       await expect(statEntry(root, '\\Windows\\system32')).rejects.toThrow(
         /absolute path not allowed/,
       );
+      // Windows drive-letter absolutes have no leading slash after normalization
+      // ('C:\\x' -> 'C:/x'), so they must be rejected by an explicit drive check
+      // rather than slipping through as a relative 'C:' dir under the workdir.
+      await expect(statEntry(root, 'C:\\Windows\\system32')).rejects.toThrow(
+        /absolute path not allowed/,
+      );
+      await expect(readFile(root, 'C:/Windows/system32')).rejects.toThrow(
+        /absolute path not allowed/,
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
