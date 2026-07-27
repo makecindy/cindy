@@ -712,15 +712,17 @@ export function GhostPluginPage() {
     refreshVisibleMarketIcons,
   );
 
-  const handleInstallFromMarket = useCallback(async () => {
-    if (!marketDetail) return;
+  // 详情页安装按钮与市场卡片「安装」共用同一实现:入参为完整 detail(含
+  // manifest),确认框据此展示权限清单——装完即开=运行授权,清单不可省。
+  // 卡片入口先经 pluginMarket.detail 拉到完整 manifest 再进本函数。
+  const runMarketInstall = useCallback(async (detail: PluginMarketDetail) => {
     // 确认框等待期间也持有 lease。账号/模式切换会清除当前 lease,
     // 旧确认回调恢复后必须先验权,不能在新会话里继续安装。
-    const marketBusyLease = acquireMarketBusy(marketDetail.pluginId);
+    const marketBusyLease = acquireMarketBusy(detail.pluginId);
     if (!marketBusyLease) return;
     // 详情页按钮在 update-available 态复用本入口,后端走原位更新并保留
     // 生效状态 —— 文案必须分支,不能对更新路径承诺"装完即开"(review P1)。
-    const isUpdate = marketDetail.installState === 'update-available';
+    const isUpdate = detail.installState === 'update-available';
     // 装完即开意味着"确认安装"就是运行授权,确认框里必须如实展示权限清单
     // (与本地装入确认框同一信息量,review P1):首装展示完整清单,更新展示
     // 与已装版本的权限 diff,并据此决定 allowPermissionExpansion(否则扩权
@@ -729,13 +731,13 @@ export function GhostPluginPage() {
     // 缺目标时,用既有 listSync 向 Main 现查一次。仍缺失说明状态已经变化,
     // 让后端按原有校验拒绝,绝不能拿新清单和自己做 diff 吞掉新增权限。
     let installedGhost =
-      ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
+      ghosts.find((ghost) => ghost.manifest.id === detail.ghostId) ?? null;
     if (isUpdate && !installedGhost) {
       try {
         installedGhost =
           window.electronAPI.ghosts
             .listSync()
-            .ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
+            .ghosts.find((ghost) => ghost.manifest.id === detail.ghostId) ?? null;
       } catch {
         // bridge 不可用/状态切换时保持 null;下面不展示伪造的空 diff,
         // 安装调用也不放开 permission expansion,Main 会按真实状态 fail closed。
@@ -752,14 +754,14 @@ export function GhostPluginPage() {
       return;
     }
     const diff = isUpdate
-      ? diffGhostPermissionItems(installedGhost!.manifest, marketDetail.manifest)
+      ? diffGhostPermissionItems(installedGhost!.manifest, detail.manifest)
       : null;
     try {
       const confirmed = await confirm({
         title: isUpdate
-          ? t('settings.ghosts.updateConfirm.title', { name: marketDetail.name })
+          ? t('settings.ghosts.updateConfirm.title', { name: detail.name })
           : t('settings.ghosts.market.installConfirmTitle', {
-              name: marketDetail.name,
+              name: detail.name,
             }),
         description: isUpdate
           ? t('settings.ghosts.market.updateConfirmDescription')
@@ -770,7 +772,7 @@ export function GhostPluginPage() {
         content: isUpdate ? (
           <GhostUpdateReview diff={diff!} />
         ) : (
-          <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
+          <GhostPermissionList items={ghostPermissionItems(detail.manifest)} />
         ),
         maxWidth: 520,
         confirmText: isUpdate
@@ -782,8 +784,8 @@ export function GhostPluginPage() {
         autoFocusConfirm: true,
       });
       if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
-      const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId, {
-        expectedReleaseId: marketDetail.releaseId,
+      const result = await window.electronAPI.pluginMarket.install(detail.pluginId, {
+        expectedReleaseId: detail.releaseId,
         ...(isUpdate && diff!.added.length > 0
           ? { allowPermissionExpansion: true }
           : {}),
@@ -816,11 +818,36 @@ export function GhostPluginPage() {
     confirm,
     ghosts,
     isMarketBusyLeaseActive,
-    marketDetail,
     refreshMarket,
     releaseMarketBusy,
     t,
   ]);
+
+  const handleInstallFromMarket = useCallback(async () => {
+    if (!marketDetail) return;
+    await runMarketInstall(marketDetail);
+  }, [marketDetail, runMarketInstall]);
+
+  // 市场卡片「安装」直达:先拉完整 detail(含权限清单所需 manifest),
+  // 成功即进入统一安装确认;失败(网络/状态变化)落回原详情入口。
+  const handleCardInstall = useCallback(
+    async (pluginId: string) => {
+      const marketBusyLease = acquireMarketBusy(pluginId);
+      if (!marketBusyLease) return;
+      try {
+        const detail = await window.electronAPI.pluginMarket.detail(pluginId);
+        if (!isMarketBusyLeaseActive(marketBusyLease)) return;
+        await runMarketInstall(detail);
+      } catch (error) {
+        if (isMarketBusyLeaseActive(marketBusyLease)) {
+          toast.error(t(pluginMarketErrorKey(error)));
+        }
+      } finally {
+        releaseMarketBusy(marketBusyLease);
+      }
+    },
+    [acquireMarketBusy, isMarketBusyLeaseActive, releaseMarketBusy, runMarketInstall, t],
+  );
 
   if (marketDetail) {
     return (
@@ -1038,6 +1065,7 @@ export function GhostPluginPage() {
                       item={catalogItem.item}
                       busy={marketBusyId !== null}
                       onSelect={() => void handleSelectMarket(catalogItem.item.pluginId)}
+                      onInstall={() => void handleCardInstall(catalogItem.item.pluginId)}
                       onIconLoadError={handleMarketIconLoadError}
                     />
                   ),
@@ -1115,14 +1143,18 @@ export function MarketPluginCard({
   item,
   busy,
   onSelect,
+  onInstall,
   onIconLoadError,
 }: {
   item: PluginMarketItem;
   busy: boolean;
   onSelect: () => void;
+  /** 未安装时右侧主按钮直达安装(先拉完整 detail,确认框照常展示权限清单)。 */
+  onInstall: () => void;
   onIconLoadError: () => void;
 }) {
   const { t } = useTranslation();
+  const installable = item.installState === 'not-installed';
   return (
     <article
       className={cn(
@@ -1179,7 +1211,7 @@ export function MarketPluginCard({
       </button>
       <button
         type="button"
-        onClick={onSelect}
+        onClick={installable ? onInstall : onSelect}
         disabled={busy || item.installState === 'conflict'}
         className={cn(
           'inline-flex h-8 shrink-0 items-center gap-1.5 self-center rounded-lg border border-[var(--border-default)] px-3 text-12 font-medium text-[var(--text-primary)]',
@@ -1187,11 +1219,13 @@ export function MarketPluginCard({
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40',
         )}
       >
-        <ChevronRight size={13} aria-hidden="true" />
+        {installable ? null : <ChevronRight size={13} aria-hidden="true" />}
         {t(
           item.installState === 'conflict'
             ? 'settings.ghosts.market.conflict'
-            : 'settings.ghosts.market.details',
+            : installable
+              ? 'settings.ghosts.market.install'
+              : 'settings.ghosts.market.details',
         )}
       </button>
     </article>

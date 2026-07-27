@@ -242,6 +242,7 @@ describe('GhostPluginCard', () => {
         item={marketPlugin}
         busy={false}
         onSelect={vi.fn()}
+        onInstall={vi.fn()}
         onIconLoadError={vi.fn()}
       />,
     );
@@ -255,6 +256,40 @@ describe('GhostPluginCard', () => {
     expect(screen.getByText('google-calendar').className).toContain('truncate');
     expect(screen.getByText('google-calendar').className).toContain('min-w-0');
     expect(screen.getByText('Cindy').className).toContain('truncate');
+  });
+
+  it('routes the trailing action to install for not-installed items, details otherwise', () => {
+    const onInstall = vi.fn();
+    const onSelect = vi.fn();
+    const { rerender } = render(
+      <MarketPluginCard
+        item={marketPlugin}
+        busy={false}
+        onSelect={onSelect}
+        onInstall={onInstall}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+
+    // 未安装:右侧按钮直达安装(确认框仍在后续 detail 流程里展示权限清单)。
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.market.install' }));
+    expect(onInstall).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+
+    // 已安装:右侧按钮回到「详情」入口。
+    rerender(
+      <MarketPluginCard
+        item={{ ...marketPlugin, installState: 'installed' }}
+        busy={false}
+        onSelect={onSelect}
+        onInstall={onInstall}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: /settings\.ghosts\.market\.details/ }),
+    );
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 });
 
