@@ -270,6 +270,7 @@ import { WindowManualDragController } from './windowManualDrag';
 import { initDeviceLinkService, releaseDeviceLinkOwnershipBeforeLogout } from './device-link';
 import {
   getUpdateRelaunchControllers,
+  hasInFlightRemoteInvokes,
   setSessionsSubscribedListener,
 } from './device-link/dispatch';
 import {
@@ -3523,7 +3524,9 @@ const registerIpcHandlers = () => {
         // held by every eligible device block updates forever.
         return hasUpdateRelaunchBusyActivity({
           readSynchronousBusy: () =>
-            getUpdateRelaunchControllers().length > 0 || anySessionInTurn(getMakerCore()),
+            getUpdateRelaunchControllers().length > 0 ||
+            hasInFlightRemoteInvokes() ||
+            anySessionInTurn(getMakerCore()),
           readScheduleBusy: () => readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
         });
       });
@@ -5551,10 +5554,10 @@ app.on('ready', async () => {
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
   initDeviceLinkService({
-    onUpdateRelaunchControllersChanged: (controllers) => {
+    onUpdateRelaunchBusyChanged: (busy) => {
       const transition = decideUpdateRelaunchBusyTransition(
         updateRelaunchRemoteBusy,
-        controllers.length > 0,
+        busy,
       );
       updateRelaunchRemoteBusy = transition.nextBusy;
       if (transition.shouldNotify) notifyUpdateAutoRelaunchBusyStateChanged();

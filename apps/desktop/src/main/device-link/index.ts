@@ -49,12 +49,13 @@ import { keepAwakeController } from './power-blocker';
 import {
   wireInboundDispatch,
   setControllersChangedListener,
+  setRemoteInvokeBusyChangedListener,
   dropAllControllers,
   handleControllerOffline,
 } from './dispatch';
 import { setBusyProbe, helloBusy, pollBusyChange, resetBusyDedupe } from './busyReporter';
 import { resetAll as resetSubscriptionRefs, snapshotSubscriptions } from './subscriptionRefcount';
-import { getControllersForTopic, type ActiveController } from './subscriptions';
+import { getControllersForTopic } from './subscriptions';
 import {
   MobileNotifyDeduper,
   buildSessionNotifyPayload,
@@ -190,7 +191,7 @@ function wsUrl(): string {
 
 /** Host integrations that consume device-link lifecycle state. */
 export interface DeviceLinkServiceOptions {
-  onUpdateRelaunchControllersChanged?: (controllers: readonly ActiveController[]) => void;
+  onUpdateRelaunchBusyChanged?: (busy: boolean) => void;
 }
 
 export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): void {
@@ -262,11 +263,21 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
   });
 
-  // 先注册控制端变化监听，再接线入站帧；否则接线后的首个 subscribe 可能落在空窗期，
-  // 让被控横幅和无人值守更新的 busy 边沿都漏掉。
+  let updateRelaunchControllersBusy = false;
+  let remoteInvokeBusy = false;
+  const notifyUpdateRelaunchBusy = (): void => {
+    options.onUpdateRelaunchBusyChanged?.(updateRelaunchControllersBusy || remoteInvokeBusy);
+  };
+
+  // 先注册远程活动监听，再接线入站帧；否则首个 subscribe / invoke 可能落在空窗期。
   setControllersChangedListener((controllers, updateRelaunchControllers) => {
     broadcast(DEVICE_LINK_PUSH.CONTROLLED_STATE, { controllers });
-    options.onUpdateRelaunchControllersChanged?.(updateRelaunchControllers);
+    updateRelaunchControllersBusy = updateRelaunchControllers.length > 0;
+    notifyUpdateRelaunchBusy();
+  });
+  setRemoteInvokeBusyChangedListener((busy) => {
+    remoteInvokeBusy = busy;
+    notifyUpdateRelaunchBusy();
   });
 
   // 被控端:接线入站隧道(link-open / invoke / link-close → 本机 handler dispatch)
@@ -351,6 +362,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 已由上面 stop() 的 onDemote 执行过一次,linkTornDown 标记拦截重复清理。
     teardownActiveLink();
     setControllersChangedListener(null);
+    setRemoteInvokeBusyChangedListener(null);
     client = null;
   });
 

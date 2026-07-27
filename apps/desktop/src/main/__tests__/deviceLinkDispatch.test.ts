@@ -377,9 +377,11 @@ describe('dispatchLocalInvoke', () => {
 import {
   wireInboundDispatch,
   setControllersChangedListener,
+  setRemoteInvokeBusyChangedListener,
   setSessionsSubscribedListener,
   getActiveControllers,
   getUpdateRelaunchControllers,
+  hasInFlightRemoteInvokes,
   dropAllControllers,
 } from '../device-link/dispatch';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
@@ -459,6 +461,41 @@ describe('被控端控制链路生命周期', () => {
     feed({ v: 1, kind: 'link-close', src: 'ctrl-c', payload: { reason: 'user' } });
     expect(getActiveControllers()).toHaveLength(0);
     expect(hasBroadcastTapListener()).toBe(false);
+  });
+
+  it('非订阅 remote invoke 在结果发送前持有更新 busy lease', async () => {
+    remoteControlEnabled = true;
+    let resolveInvoke: ((value: string[]) => void) | undefined;
+    registry.register(
+      'maker:list-active',
+      () =>
+        new Promise<string[]>((resolve) => {
+          resolveInvoke = resolve;
+        }),
+    );
+    const busyChanges: boolean[] = [];
+    setRemoteInvokeBusyChangedListener((busy) => busyChanges.push(busy));
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-1',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: [] },
+    });
+
+    expect(hasInFlightRemoteInvokes()).toBe(true);
+    expect(busyChanges).toEqual([true]);
+    resolveInvoke?.(['s1']);
+    await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(false));
+    expect(busyChanges).toEqual([true, false]);
+    expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-1',
+      payload: { ok: true, result: ['s1'] },
+    });
   });
 });
 

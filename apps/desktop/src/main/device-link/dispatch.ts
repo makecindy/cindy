@@ -249,12 +249,23 @@ type ControllersChangedListener = (
 ) => void;
 let onControllersChanged: ControllersChangedListener | null = null;
 
+/** 非订阅类远程 invoke 在途状态；用于给无人值守更新持有短期 busy lease。 */
+type RemoteInvokeBusyChangedListener = (busy: boolean) => void;
+let onRemoteInvokeBusyChanged: RemoteInvokeBusyChangedListener | null = null;
+let inFlightRemoteInvokeCount = 0;
+
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
 let onSessionsSubscribed: SessionsSubscribedListener | null = null;
 
 export function setControllersChangedListener(cb: ControllersChangedListener | null): void {
   onControllersChanged = cb;
+}
+
+export function setRemoteInvokeBusyChangedListener(
+  cb: RemoteInvokeBusyChangedListener | null,
+): void {
+  onRemoteInvokeBusyChanged = cb;
 }
 
 export function setSessionsSubscribedListener(cb: SessionsSubscribedListener | null): void {
@@ -267,6 +278,32 @@ export function getActiveControllers(): ActiveController[] {
 
 export function getUpdateRelaunchControllers(): ActiveController[] {
   return subscriptions.getUpdateRelaunchControllers();
+}
+
+export function hasInFlightRemoteInvokes(): boolean {
+  return inFlightRemoteInvokeCount > 0;
+}
+
+function notifyRemoteInvokeBusyChanged(busy: boolean): void {
+  try {
+    onRemoteInvokeBusyChanged?.(busy);
+  } catch (err) {
+    log.warn(`remote invoke busy listener failed: ${String(err)}`);
+  }
+}
+
+function acquireRemoteInvokeBusyLease(): () => void {
+  const wasBusy = hasInFlightRemoteInvokes();
+  inFlightRemoteInvokeCount += 1;
+  if (!wasBusy) notifyRemoteInvokeBusyChanged(true);
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    inFlightRemoteInvokeCount = Math.max(0, inFlightRemoteInvokeCount - 1);
+    if (!hasInFlightRemoteInvokes()) notifyRemoteInvokeBusyChanged(false);
+  };
 }
 
 function notifySessionsSubscribed(controllerDeviceId: string): void {
@@ -541,8 +578,13 @@ async function handleInvoke(
     client.sendInvokeResult(src, requestId, handleSubscriptionFrame(src, payload));
     return;
   }
-  const result = await runInvoke(src, payload);
-  sendInvokeResultSafe(client, src, requestId, result, payload?.channel, payload?.args);
+  const releaseBusyLease = acquireRemoteInvokeBusyLease();
+  try {
+    const result = await runInvoke(src, payload);
+    sendInvokeResultSafe(client, src, requestId, result, payload?.channel, payload?.args);
+  } finally {
+    releaseBusyLease();
+  }
 }
 
 /**
@@ -1061,12 +1103,15 @@ export const __testing = {
   reset(): void {
     subscriptions.__testing.reset();
     onControllersChanged = null;
+    onRemoteInvokeBusyChanged = null;
+    inFlightRemoteInvokeCount = 0;
     onSessionsSubscribed = null;
     activeClient = null;
     setBroadcastTapListener(null);
   },
   getActiveControllers,
   getUpdateRelaunchControllers,
+  hasInFlightRemoteInvokes,
   sendInvokeResultSafe,
   projectInvokeResultForTunnel,
   forwardPush,
