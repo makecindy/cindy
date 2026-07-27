@@ -211,10 +211,13 @@ describe('mobile settings overview', () => {
     expect(source).toContain('isTestFlightBuild: IS_TESTFLIGHT_BUILD');
     expect(source).toContain('const updateCheckEnabled = bundleCheckEnabled || updatesEnabled');
     expect(source).toContain('checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined');
+    expect(source).toContain('const [updateOutcome, setUpdateOutcome] = useState<ManualUpdateCheckOutcome | null>(null);');
+    expect(source).toContain('manualUpdateCheckMessage(updateOutcome, {');
+    expect(source).toContain('setUpdateOutcome(outcome);');
+    expect(source).not.toContain('const [updateMessage, setUpdateMessage]');
+    expect(source).not.toContain('setUpdateMessage(');
     expect(source).toContain("'settings.version.testFlightCheckAction'");
     expect(source).toContain("'settings.version.testFlightCheckingAccessibility'");
-    expect(source).toContain("'settings.version.testFlightNoContentUpdate'");
-    expect(source).toContain("'settings.version.testFlightContentUpdateUnavailable'");
     expect(source).toContain("testID=\"settings.testFlightUpdateHint\"");
     expect(source).toContain("{t('settings.version.testFlightUpdateManaged')}");
     expect(source).toContain("{t('settings.version.bundleVersion', { version: appVersion })}");

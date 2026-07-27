@@ -65,7 +65,11 @@ import {
 } from '@/notifications/pushNotifications';
 import { buildMobileUpdateInfoRows, currentMobileOtaVersion } from '@/settings/updateInfo';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
-import { runManualUpdateCheck } from '@/update/manualUpdateCheck';
+import {
+  manualUpdateCheckMessage,
+  runManualUpdateCheck,
+  type ManualUpdateCheckOutcome,
+} from '@/update/manualUpdateCheck';
 import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
 import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -94,7 +98,7 @@ export default function SettingsScreen() {
     useState(false);
   const [debugExpanded, setDebugExpanded] = useState(false);
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
-  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [updateOutcome, setUpdateOutcome] = useState<ManualUpdateCheckOutcome | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
@@ -159,6 +163,14 @@ export default function SettingsScreen() {
     isTestFlightBuild: IS_TESTFLIGHT_BUILD,
   });
   const updateCheckEnabled = bundleCheckEnabled || updatesEnabled;
+  // 保存未翻译的结果，语言切换触发重渲染时用当前 t() 重新生成提示。
+  const updateMessage = useMemo(
+    () => updateOutcome && manualUpdateCheckMessage(updateOutcome, {
+      isTestFlightBuild: IS_TESTFLIGHT_BUILD,
+      t,
+    }),
+    [t, updateOutcome],
+  );
 
   const aboutSection = overview.sections.find((section) => section.id === 'about');
   const debugSection = overview.sections.find((section) => section.id === 'debug');
@@ -228,7 +240,7 @@ export default function SettingsScreen() {
     // 审核模式:入口按钮已隐藏,这里再挡一层(状态由代码保证,不依赖 UI 层记得隐藏)。
     if (REVIEW_MODE || !updateCheckEnabled || updateCheckInFlightRef.current) return;
     updateCheckInFlightRef.current = true;
-    setUpdateMessage(null);
+    setUpdateOutcome(null);
     try {
       const outcome = await runManualUpdateCheck({
         checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,
@@ -238,31 +250,19 @@ export default function SettingsScreen() {
         reload: () => Updates.reloadAsync(),
         onPhase: (phase) => setUpdatePhase(phase),
       });
+      setUpdateOutcome(outcome);
       if (outcome.kind === 'bundle-update-available') {
         setUpdatePhase('idle');
-        setUpdateMessage(t('settings.version.bundleUpdateFound'));
       } else if (outcome.kind === 'up-to-date') {
         setUpdatePhase('uptodate');
-        setUpdateMessage(t(
-          IS_TESTFLIGHT_BUILD
-            ? 'settings.version.testFlightNoContentUpdate'
-            : 'settings.version.upToDate',
-        ));
       } else if (outcome.kind === 'ota-unavailable') {
         setUpdatePhase('uptodate');
-        setUpdateMessage(t(
-          IS_TESTFLIGHT_BUILD
-            ? 'settings.version.testFlightContentUpdateUnavailable'
-            : 'settings.version.bundleUpToDateNoOta',
-        ));
       } else if (outcome.kind === 'reloading') {
         setUpdatePhase('downloading');
-        setUpdateMessage(t('settings.version.downloadedRestarting'));
       } else if (outcome.kind === 'busy') {
         setUpdatePhase('idle');
       } else {
         setUpdatePhase('error');
-        setUpdateMessage(outcome.message);
       }
     } finally {
       updateCheckInFlightRef.current = false;
