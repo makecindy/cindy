@@ -267,29 +267,44 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             // subscribe 甚至根本不会发包。探测窗口到点就发一条真正穿过
             // runInvoke → local-db 的最小读(见 DEVICE_RESPONSIVENESS_PROBE_CHANNEL),
             // 由它的回包决定熔断开合;这也是无业务流量时的主动恢复通道。
-            const openDevices = grantedPlans.filter(
-              (plan) => unresponsiveDevicesStore.has(plan.deviceId),
-            );
+            // 探测候选取 registry 计划与 unresponsive 集合的并集(review P1):
+            // 仅有直接 invoke、从未登记 openLink/subscribe 的设备(如只停留在
+            // 首页的设备行)不在 registry 里,熔断 open 后若不纳入,它既收不到
+            // 探测也不占未完成信号,会在没有业务流量时永久停留在未响应态。
+            const openDeviceIds = new Set<string>();
+            for (const plan of grantedPlans) {
+              if (unresponsiveDevicesStore.has(plan.deviceId)) openDeviceIds.add(plan.deviceId);
+            }
+            for (const deviceId of unresponsiveDevicesStore.getSnapshot()) {
+              if (!revokedDevicesStore.has(deviceId)) openDeviceIds.add(deviceId);
+            }
             const plans = grantedPlans.filter(
               (plan) => !unresponsiveDevicesStore.has(plan.deviceId),
             );
-            for (const plan of openDevices) {
-              if (!isDeviceProbeDue(plan.deviceId)) continue;
-              await probeUnresponsiveDevice(client, plan.deviceId);
-            }
+            // 探测与健康设备的 rehydrate 并发跑(review P1):探测一台死设备最长
+            // 要等 openLink + DB 读两次超时(~30s),串行在前会把其它健康桌面的
+            // 订阅恢复 / 快照回填拖住整轮;多台 open 设备之间仍串行,避免探测
+            // 本身成为并发突发。
+            const probeRun = (async () => {
+              for (const deviceId of openDeviceIds) {
+                if (!isDeviceProbeDue(deviceId)) continue;
+                await probeUnresponsiveDevice(client, deviceId);
+              }
+            })();
             const result = await rehydrateDeviceLinkTopics(plans, {
               openLink: (deviceId) => sendOpenLinkOnce(client, deviceId),
               subscribe: (deviceId, topics) => sendTrackedSubscribe(client, deviceId, topics),
               requestSessionsReseed: (deviceId) => remoteSessionStore.requestReseed(deviceId),
               rebuildSessionSnapshot: (deviceId, sessionId) => rebuildSessionSnapshot(client, deviceId, sessionId),
             });
+            await probeRun;
             // 探测后仍 open 的设备持续计入"未完成"信号(review P1:不能在探测
             // 真正跑完并成功前撤掉重试安排),退避重试循环(2s→30s)继续走:
             // 窗口未到的轮次只做本地检查,零管道流量。探测成功关熔断会触发
             // 下方 effect 的 store 订阅,补一轮全量 rehydrate 把该设备的订阅 /
             // 快照拉回来。
-            const stillOpenDevices = openDevices.filter(
-              (plan) => unresponsiveDevicesStore.has(plan.deviceId),
+            const stillOpenDevices = [...openDeviceIds].filter(
+              (deviceId) => unresponsiveDevicesStore.has(deviceId),
             ).length;
             lastTransientFailures = result.transientFailures + stillOpenDevices;
           } while (state.rerun && client.getStatus() === 'online');

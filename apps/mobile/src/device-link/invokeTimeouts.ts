@@ -25,7 +25,10 @@ import { INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
  *  - maker:get-context-usage:非运行中会话走 lazy-create 分支
  *    (ensureRemoteReadyForSessionStart + bootstrapSession),SSH 工作区仅就绪
  *    等待就允许 20s,再叠会话拉起;15s 会在桌面端继续启动时提前掐断,反复
- *    尝试还会误开设备级熔断。
+ *    尝试还会误开设备级熔断;
+ *  - maker:usage:codex-rate-limits / codex-rate-limit-reset:账号 app-server
+ *    冷启动或 RPC 慢时无更短 deadline;reset 还串行做消耗 + 身份校验 + 额度
+ *    刷新且有真实副作用,误超时后桌面会继续完成消耗,重试有重复扣减风险。
  * 新增合法慢通道优先登记协议契约表(桌面控制端共用),仅 mobile 特有差异放这里。
  */
 export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
@@ -36,6 +39,8 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   'maker:fork': 30_000,
   'maker:get-context-usage': 30_000,
   'maker:rewind:commit': 30_000,
+  'maker:usage:codex-rate-limit-reset': 30_000,
+  'maker:usage:codex-rate-limits': 30_000,
 };
 
 export const MOBILE_SCHEDULE_CHANNEL_TIMEOUT_MS = 40_000;

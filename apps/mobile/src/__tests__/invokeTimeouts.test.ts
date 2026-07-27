@@ -24,6 +24,10 @@ describe('resolveMobileInvokeTimeoutMs', () => {
     expect(resolveMobileInvokeTimeoutMs('maker:rewind:commit')).toBe(30_000);
     // context-usage:非运行中会话走 lazy-create(SSH 就绪等待 20s + 会话拉起)。
     expect(resolveMobileInvokeTimeoutMs('maker:get-context-usage')).toBe(30_000);
+    // codex rate-limit 读/消耗:账号 app-server 冷启动无更短 deadline;reset
+    // 有真实副作用,误超时后重试有重复扣减风险。
+    expect(resolveMobileInvokeTimeoutMs('maker:usage:codex-rate-limits')).toBe(30_000);
+    expect(resolveMobileInvokeTimeoutMs('maker:usage:codex-rate-limit-reset')).toBe(30_000);
     expect(MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS['device-link:media:fetch']).toBe(30_000);
   });
 
