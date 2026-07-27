@@ -408,6 +408,21 @@ html:lang(ko) {
      ProseMirror's DOMObserver may restore that style and enter an update loop. */
   tab-size: 8ch;
 }
+/* The fallback unindented row must remain one inline-block; character-scoped
+   ProseMirror decorations would split it into several full-width fragments.
+   This local composite face covers only CJK punctuation, so Latin text and
+   digits continue through the configured UI font while punctuation resolves
+   to a full-width platform CJK face. */
+@font-face {
+  font-family: 'Cindy CJK Punctuation';
+  src:
+    local('PingFang SC'), local('Hiragino Sans GB'), local('Microsoft YaHei UI'),
+    local('Microsoft YaHei'), local('Noto Sans CJK SC'), local('Source Han Sans SC');
+  unicode-range: U+3000-303F, U+FF00-FFEF;
+}
+.ProseMirror .composer-list-cjk-punctuation-font {
+  font-family: 'Cindy CJK Punctuation', var(--app-font-ui, var(--app-font-ui-default));
+}
 .ProseMirror .composer-list-cjk-font {
   font-family:
     'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC',

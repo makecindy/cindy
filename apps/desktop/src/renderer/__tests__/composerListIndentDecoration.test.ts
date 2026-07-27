@@ -96,9 +96,12 @@ describe('buildListIndentDecorations', () => {
     );
   });
 
-  it('advances indented tabs to deterministic 8ch tab stops', () => {
-    expect(listPrefixIndentStyle('  \t1. ')).toContain('--composer-list-hang:9.8ch;');
+  it('reserves a deterministic 8ch slot for every indented tab', () => {
+    expect(listPrefixIndentStyle('  \t1. ')).toContain('--composer-list-hang:10.6ch;');
     expect(listPrefixIndentStyle('\t\t1. ')).toContain('--composer-list-hang:17.8ch;');
+    expect(listPrefixIndentStyle('1、\t')).toContain(
+      '--composer-list-hang:calc(9ch + 1em);',
+    );
   });
 
   it('decorates the full content of a single-line item', () => {
@@ -715,6 +718,9 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     expect(unindentedRows).toHaveLength(1);
     expect(unindentedRows?.[0]?.textContent).toBe('有新增游戏数的用户数、占全部用户比例。');
     expect(unindentedRows?.[0]?.classList.contains('composer-list-cjk-font')).toBe(false);
+    expect(
+      unindentedRows?.[0]?.classList.contains('composer-list-cjk-punctuation-font'),
+    ).toBe(true);
     expect(unindentedRows?.[0]?.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
   });
 
@@ -876,6 +882,9 @@ describe('wiring contract', () => {
     expect(css).toContain('.ProseMirror .composer-list-long-run-marker');
     expect(css).toContain('.ProseMirror .composer-list-long-run-body');
     expect(css).toContain('.ProseMirror .composer-list-tab-indent');
+    expect(css).toContain('.ProseMirror .composer-list-cjk-punctuation-font');
+    expect(css).toContain("font-family: 'Cindy CJK Punctuation'");
+    expect(css).toContain('unicode-range: U+3000-303F, U+FF00-FFEF;');
     expect(css).toContain('tab-size: 8ch;');
     expect(css).toContain('white-space: pre;');
     const fallbackPrefixRule = css.match(

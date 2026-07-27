@@ -62,9 +62,11 @@ function listPrefixIndentValues(prefix: string): ListIndentValues {
     if (char >= '0' && char <= '9') {
       ch += 1;
     } else if (char === '\t') {
-      // CSS uses `tab-size: 8ch`, so each tab advances to the next 8ch
-      // stop rather than adding eight space-glyph widths.
-      ch = (Math.floor(ch / TAB_SIZE) + 1) * TAB_SIZE;
+      // Reserve a full 8ch slot for each tab. The browser's native tab advance
+      // is at most 8ch, so this remains safe when an earlier full-width marker
+      // contributes `em` that cannot participate in deterministic ch-only
+      // tab-stop arithmetic.
+      ch += TAB_SIZE;
     } else if (char === '、' || char === '\u3000') {
       em += 1;
     } else {
@@ -233,9 +235,15 @@ export function buildListIndentDecorations(
       const match = matchListPrefix(line.text);
       if (!match) {
         if (hasFallbackLine && lines.length > 1 && line.end > line.start) {
+          const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(line.text);
           decorations.push(
             Decoration.inline(contentBase + line.start, contentBase + line.end, {
-              class: 'composer-list-fallback-unindented',
+              class: [
+                'composer-list-fallback-unindented',
+                hasCjkPunctuation ? 'composer-list-cjk-punctuation-font' : '',
+              ]
+                .filter(Boolean)
+                .join(' '),
             }),
           );
         }
