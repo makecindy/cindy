@@ -1180,7 +1180,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     isStateSnapshot: boolean,
   ): void {
     const { label } = lane.config;
-    if (payload.provider !== lane.config.provider || !laneCapabilityReady(lane)) {
+    // 两种丢帧原因分开记日志: 走错线(多 lane 下另一类问题)≠ 能力协商未完成
+    if (payload.provider !== lane.config.provider) {
+      log.warn(`provider bind state for ${payload.provider} dropped on ${label} lane`);
+      return;
+    }
+    if (!laneCapabilityReady(lane)) {
       log.warn(`provider bind state dropped before ${label} capability negotiation`);
       return;
     }
@@ -1779,10 +1784,15 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       return;
     }
     if (msg.type === 'provider.prefs.state') {
-      // transportReady 已保证 lane 非空且能力协商完成; 这里只再校验帧的 provider 归属
-      if (lane === null || msg.payload.provider !== lane.config.provider) {
+      // transportReady 已保证 lane 非空且能力协商完成; 这里只再校验帧的 provider
+      // 归属, 两种丢帧原因分开记日志(同 handleProviderBindStatus)
+      if (lane === null) {
+        log.warn(`provider prefs state dropped before ${expectedProvider} transport handshake`);
+        return;
+      }
+      if (msg.payload.provider !== lane.config.provider) {
         log.warn(
-          `provider prefs state dropped before ${lane?.config.label ?? expectedProvider} capability negotiation`,
+          `provider prefs state for ${msg.payload.provider} dropped on ${lane.config.label} lane`,
         );
         return;
       }
