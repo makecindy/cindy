@@ -18,6 +18,7 @@ import {
   replaceGatewayModelPricing,
   trackGatewayModelPricingSync,
 } from '../usage/modelPricing.js';
+import { isPricedGatewayModel } from '../../shared/modelPriceQuote.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   MODEL_ACCESS_STATUS_CHANNEL,
@@ -144,12 +145,14 @@ function applyGatewayModels(models: ModelAccessGatewayModel[]): void {
   // dev overlay。空成功响应会同时清空模型和价格；请求失败不会调用本函数，
   // 因而保留上一份完整成功快照。
   const pricing = replaceGatewayModelPricing(models);
+  // 分母只算会产生报价的条目:免费/无价条目按设计不出报价,不该把健康目录
+  // 也报成覆盖不足。此时覆盖缺口只剩一种成因——币种声明与目录冲突被丢弃,
+  // 这在 #587 之前是全程静默的,这行日志让现场可判。
+  const pricedCount = models.filter(isPricedGatewayModel).length;
   const quoteCount = Object.keys(pricing.xd ?? {}).length;
-  if (models.length > 0 && quoteCount < models.length) {
-    // 报价覆盖不足此前是静默的(目录币种冲突或缺价字段都会整条丢弃),
-    // #587 只能从空缓存反推;这里留一行日志让现场可判。
+  if (quoteCount < pricedCount) {
     log.warn(
-      `xd gateway pricing quotes cover ${quoteCount}/${models.length} models`,
+      `xd gateway pricing quotes cover ${quoteCount}/${pricedCount} priced models (${models.length} total)`,
     );
   }
   // dev:本地目录文件(catalog/providers.json)的 cindyModelMeta 段覆盖服务端下发的

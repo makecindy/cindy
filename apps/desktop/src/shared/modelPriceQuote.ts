@@ -68,12 +68,15 @@ function declaredCurrency(
  *   - 与目录币种冲突的声明条目由 gatewayPricingCatalog 丢弃报价(退回 SDK
  *     实报 USD 兜底),而不是改标币种——错标单位正是本模块要杜绝的事。
  */
+/** 该条目是否会产生报价(与币种无关;目录币种裁决与覆盖率统计共用此判定)。 */
+export function isPricedGatewayModel(model: ModelAccessGatewayModel): boolean {
+  return gatewayModelPriceQuote(model) !== undefined;
+}
+
 export function resolveGatewayCatalogCurrency(
   models: readonly ModelAccessGatewayModel[],
 ): MoneyCurrency {
-  const priced = models.filter(
-    (model) => gatewayModelPriceQuote(model) !== undefined,
-  );
+  const priced = models.filter(isPricedGatewayModel);
   if (priced.length === 0) return GATEWAY_NATIVE_CURRENCY;
   const first = declaredCurrency(priced[0]);
   if (!first || first === GATEWAY_NATIVE_CURRENCY) return GATEWAY_NATIVE_CURRENCY;
