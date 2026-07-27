@@ -37,8 +37,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { machineIdSync } from 'node-machine-id';
+import { createLogger } from './logger';
+
+const log = createLogger('deviceId');
 
 const DEVICE_ID_FILENAME = 'device-id';
+/** Prefix of ids minted when hardware can't be identified. Also used to detect them. */
+const FALLBACK_PREFIX = 'fallback-';
 
 /**
  * Ensure the system bin directories are on PATH so `node-machine-id`'s bare
@@ -180,19 +185,52 @@ function probeHardwareId(): string | null {
     // out a blank device id and never stabilise (blank reads back as null).
     return probed || null;
   } catch (err) {
-    process.stderr.write(
-      `[cindy] machineIdSync() failed (${(err as Error)?.message ?? err})\n`,
-    );
+    // Route through the rotating main logger, not process.stderr: on a packaged
+    // Finder launch (exactly the failure this module guards) stderr is invisible
+    // and would leave no trace in the documented diagnostic logs.
+    log.warn(`machineIdSync() failed: ${(err as Error)?.message ?? err}`);
     return null;
   }
 }
 
 /**
+ * Reconcile a successful hardware probe against whatever is already stored, and
+ * return the id to use (and persist). The rules keep every shared-userData
+ * process converging on one value while never silently invalidating an
+ * already-registered identity:
+ *
+ *   - nothing stored → publish the hardware id exclusively (racers adopt the
+ *     winner, whichever value that turns out to be);
+ *   - stored === hardware id → use it;
+ *   - stored is a `fallback-*` → KEEP it. It may already be registered with the
+ *     server (refresh token bound to it); replacing it with the hardware id would
+ *     trip DEVICE_MISMATCH and log the user out. Keeping it also makes a
+ *     probe-success process converge with a probe-failure process that already
+ *     published a fallback for this shared userData.
+ *   - stored is a *different* hardware id → userData was copied/restored from
+ *     another machine → re-pin to this machine's id.
+ */
+function reconcileHardwareId(file: string | null, hardwareId: string): string {
+  if (!file) {
+    // userData unavailable this early: use the hardware id now and persist when
+    // ready, so a later probe failure can reuse it.
+    deferPersistWhenReady(hardwareId);
+    return hardwareId;
+  }
+  const stored = readPersistedDeviceId(file);
+  if (!stored) return createDeviceIdExclusive(file, hardwareId);
+  if (stored === hardwareId) return stored;
+  if (stored.startsWith(FALLBACK_PREFIX)) return stored;
+  writeDeviceIdAtomic(file, hardwareId);
+  return hardwareId;
+}
+
+/**
  * Resolve the device id, honouring the `XDT_DEVICE_ID_OVERRIDE` dev override,
- * then the live hardware probe (authoritative when available), then the last
- * stored id (reused only when the probe fails), then a freshly minted UUID
- * fallback. Result is memoised so every call site in the process agrees on one
- * id, and so the persistent-storage side effect happens at most once per process.
+ * then the live hardware probe (reconciled against any stored id), then the last
+ * stored id (reused when the probe fails), then a freshly minted UUID fallback.
+ * Result is memoised so every call site in the process agrees on one id, and so
+ * the persistent-storage side effect happens at most once per process.
  */
 export function resolveDeviceId(): string {
   if (cached) return cached;
@@ -207,18 +245,12 @@ export function resolveDeviceId(): string {
   const hardwareId = probeHardwareId();
 
   if (hardwareId) {
-    // Hardware id wins. Keep the stored copy in sync (so a later probe *failure*
-    // reuses this exact id, and so a userData copied here is re-pinned to this
-    // machine) — but only rewrite when it actually changed.
-    if (file && readPersistedDeviceId(file) !== hardwareId) {
-      writeDeviceIdAtomic(file, hardwareId);
-    }
-    cached = hardwareId;
+    cached = reconcileHardwareId(file, hardwareId);
     return cached;
   }
 
-  // Probe failed: prefer the last successfully stored id so a transient failure
-  // doesn't churn identity or log the user out.
+  // Probe failed: prefer the last stored id so a transient failure doesn't churn
+  // identity or log the user out.
   if (file) {
     const persisted = readPersistedDeviceId(file);
     if (persisted) {
@@ -229,7 +261,7 @@ export function resolveDeviceId(): string {
 
   // Hardware can't be identified and nothing is stored yet: mint a stable
   // fallback, created exclusively so concurrent first launches converge.
-  const fallback = `fallback-${crypto.randomUUID()}`;
+  const fallback = `${FALLBACK_PREFIX}${crypto.randomUUID()}`;
   if (file) {
     cached = createDeviceIdExclusive(file, fallback);
   } else {

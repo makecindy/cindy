@@ -71,7 +71,7 @@ installInvokeCapture();
 //   - --passive / XDT_SCHEDULER_PASSIVE:定时任务自动触发让位给同机另一实例。
 // 必须在 app 'ready' 前调用。仅 dev(非 packaged)生效,生产忽略,零线上影响。
 import { machineIdSync } from 'node-machine-id';
-import { ensureSystemBinPathForMachineId } from './deviceId.js';
+import { ensureSystemBinPathForMachineId } from './deviceId';
 import {
   resolveDevCliFlags,
   shouldEnforcePassiveMigrationCompatibility,

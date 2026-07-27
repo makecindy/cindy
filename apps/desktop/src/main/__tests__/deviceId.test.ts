@@ -23,6 +23,10 @@ const { appMock, machineIdSync } = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({ app: appMock }));
 vi.mock('node-machine-id', () => ({ machineIdSync }));
+// Isolate from the real main logger (touches electron app paths + fs at import).
+vi.mock('../logger', () => ({
+  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+}));
 
 async function loadFresh() {
   vi.resetModules();
@@ -96,6 +100,17 @@ describe('resolveDeviceId', () => {
     const { resolveDeviceId } = await loadFresh();
     expect(resolveDeviceId()).toBe('this-machine-hw');
     expect(fs.readFileSync(path.join(tmpDir, 'device-id'), 'utf8')).toBe('this-machine-hw');
+  });
+
+  it('已确立的 fallback 身份在指纹恢复后被保留,不被硬件 ID 覆盖(避免 DEVICE_MISMATCH 登出)', async () => {
+    // 磁盘上是首启指纹失败时铸的 fallback(可能已在服务端注册);本次指纹恢复了。
+    fs.writeFileSync(path.join(tmpDir, 'device-id'), 'fallback-established-uuid', 'utf8');
+    machineIdSync.mockReturnValue('now-available-hw');
+
+    const { resolveDeviceId } = await loadFresh();
+    // 保留 fallback,不改判成硬件 ID。
+    expect(resolveDeviceId()).toBe('fallback-established-uuid');
+    expect(fs.readFileSync(path.join(tmpDir, 'device-id'), 'utf8')).toBe('fallback-established-uuid');
   });
 
   it('machineIdSync 返回空串时视作失败,不落盘空 ID,改用 fallback', async () => {
