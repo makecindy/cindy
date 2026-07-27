@@ -229,29 +229,32 @@ function TopicList({ intro, topics }: { intro?: string; topics: ReleaseNoteTopic
   return (
     <div className="flex flex-col items-center px-7">
       {intro && (
-        <div className="w-full max-w-[760px] pb-3 text-13 text-[var(--cmd-palette-item-meta)]">
+        <div className="w-full max-w-[760px] pb-3 text-13 break-words text-[var(--cmd-palette-item-meta)]">
           {intro}
         </div>
       )}
       {topics.map((topic, i) => (
         <div key={`${i}-${topic.title}`} className="w-full max-w-[760px] py-3">
-          <div className="mb-1.5 flex items-baseline gap-2">
+          {/* flex-wrap + min-w-0: long titles shrink/wrap and an overlong
+              contributor list drops to its own right-aligned line instead of
+              overflowing the dialog at narrow widths. */}
+          <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-1">
             {topic.emoji && <span className="text-15 leading-none">{topic.emoji}</span>}
             <span
               className={cn(
-                'text-15 font-semibold leading-none tracking-tight',
+                'min-w-0 break-words text-15 font-semibold leading-tight tracking-tight',
                 'text-[var(--msg-assistant-text)]',
               )}
             >
               {topic.title}
             </span>
             {topic.contributors.length > 0 && (
-              <span className="ml-auto whitespace-nowrap text-12 text-[var(--cmd-palette-item-meta)]">
+              <span className="ml-auto max-w-full break-words text-right text-12 text-[var(--cmd-palette-item-meta)]">
                 {topic.contributors.join(' · ')}
               </span>
             )}
           </div>
-          <div className="text-sm leading-[1.7] text-[var(--msg-assistant-text)]">
+          <div className="text-sm leading-[1.7] break-words text-[var(--msg-assistant-text)]">
             {topic.text}
           </div>
         </div>
