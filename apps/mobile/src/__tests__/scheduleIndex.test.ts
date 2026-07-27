@@ -335,7 +335,7 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
-  it('DEVICE_UNRESPONSIVE:批循环命中即 break,剩余 listRuns 不再发', async () => {
+  it('DEVICE_UNRESPONSIVE:批循环命中立即止损并上抛,不产出部分索引', async () => {
     const listRuns = vi.fn(async () => {
       throw Object.assign(
         new Error('target device dev-1 is unresponsive (circuit open)'),
@@ -352,11 +352,14 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
         listRuns,
       },
     } as unknown as Pick<MobileMakerTransport, 'schedule'>;
-    const index = await loadSessionScheduleIndex(maker);
+    // 上抛而不是截断成功(review P1):部分索引若被当成功提交,会进入 30s 正
+    // 缓存,首页/详情页拿着不完整徽标还以为是新鲜数据;上抛让节流层走失败负
+    // 缓存,熔断恢复后重拉全量。
+    await expect(loadSessionScheduleIndex(maker)).rejects.toMatchObject({
+      code: 'DEVICE_UNRESPONSIVE',
+    });
     // 熔断快速失败会在每个 listRuns 上重复出现:第一个命中后立即止损
     expect(listRuns).toHaveBeenCalledTimes(1);
-    // schedules 列表已到手:targetSessionId 绑定的兜底条目仍然可用(名称 / 分组不丢)
-    expect(index.get('session-a')).toMatchObject({ scheduleId: 'sched-1', scheduleName: 'a' });
   });
 
   it('listRuns 串行执行(同一时刻最多一个在途,不挤占 device-link 管道)', async () => {

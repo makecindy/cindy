@@ -58,6 +58,11 @@ export interface DeviceResponsivenessBreaker {
   settle(deviceId: string, wasProbe: boolean, outcome: BreakerSettleOutcome): void;
   isOpen(deviceId: string): boolean;
   /**
+   * 清除单个设备的全部熔断状态(撤权等「该设备的响应性已无意义」的场景);
+   * open 中则触发 onOpenChanged(false)。
+   */
+  clear(deviceId: string): void;
+  /**
    * 只读:open 且探测窗口已到、无在途探测 —— 即「现在发一个请求会成为探测」。
    * 给 rehydrate 这类自动恢复路径做**主动探测**判定用:设备恢复但用户没有发起
    * 任何业务请求时,half-open 不能只靠业务流量被动触发,否则设备会无限期停留
@@ -138,6 +143,12 @@ export function createDeviceResponsivenessBreaker(
     acquire,
     settle,
     isOpen: (deviceId) => states.get(deviceId)?.open === true,
+    clear: (deviceId) => {
+      const state = states.get(deviceId);
+      if (!state) return;
+      states.delete(deviceId);
+      if (state.open) options.onOpenChanged?.(deviceId, false);
+    },
     probeDue: (deviceId) => {
       const state = states.get(deviceId);
       if (!state?.open || state.probeInFlight) return false;

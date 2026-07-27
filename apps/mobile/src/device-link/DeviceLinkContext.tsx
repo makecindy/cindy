@@ -6,7 +6,6 @@ import {
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   FILE_BROWSER_EVENT_CHANNEL,
-  INVOKE_TIMEOUT_OVERRIDES_MS,
   PROTOCOL_VERSION,
   type DeviceLinkConnectionIssue,
   type DeviceLinkStatus,
@@ -41,6 +40,7 @@ import { normalizeMobileAgentCapabilities } from '@/session/agentCapabilities';
 import { evictComposerPaletteCacheForDevice, resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearAllDeviceModelMeta, evictDeviceModelMeta } from '@/device-link/deviceModelMetaCache';
 import { dispatchFileBrowserWatchEvent } from '@/device-link/fileBrowserWatch';
+import { resolveMobileInvokeTimeoutMs } from '@/device-link/invokeTimeouts';
 import { rehydrateDeviceLinkTopics } from '@/device-link/rehydrate';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { createRnWebSocket } from '@/device-link/rnWebSocket';
@@ -111,20 +111,6 @@ interface RehydrateRetryState {
 /** 补齐仍有瞬时失败时的退避重跑曲线:2s → 4s → … → 30s 封顶。 */
 const REHYDRATE_RETRY_BASE_MS = 2_000;
 const REHYDRATE_RETRY_MAX_MS = 30_000;
-
-/**
- * mobile 侧的 invoke 超时补充表(优先于协议契约表 INVOKE_TIMEOUT_OVERRIDES_MS)。
- * media:fetch 是「桌面拉文件再传 OSS」的长操作(最大 2GB,15-30s 属正常),
- * 收紧后的默认 15s 会掐断此前能成功的传输(review P1);30s 与收紧前的全局
- * 默认一致,保持该通道行为零回归。新增合法慢通道时优先登记进协议契约表
- * (桌面控制端共用),仅 mobile 特有的差异才放这里。
- */
-const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
-  'device-link:media:fetch': 30_000,
-  // searchCollect 在桌面端有 20s 的执行预算(SEARCH_COLLECT_TIMEOUT_MS),15s
-  // 默认会在合法慢搜索(大 workdir / SSH)完成前掐断;30s 同收紧前默认,零回归。
-  'file-browser:remote-op': 30_000,
-};
 
 /**
  * 退后台断开连接前的宽限:几秒内切回前台的快速 App 切换不触发整套
@@ -335,7 +321,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         handshakeTimeoutMs: 12_000,
         // 请求超时收紧到 15s(默认 30s):被控端卡死时 30s 才失败让用户干等半分钟,
         // 也把熔断器凑齐「连续超时」信号的时间拖长一倍。长执行通道(desktop-cmd:run /
-        // worktree:create 等)在 sendInvoke 按 INVOKE_TIMEOUT_OVERRIDES_MS 单独放宽,
+        // worktree:create / schedule 等)在 sendInvoke 按 invokeTimeouts 解析规则单独放宽,
         // 与桌面控制端同一张协议契约表,不受此默认值影响。
         requestTimeoutMs: 15_000,
       },
@@ -779,7 +765,9 @@ async function sendInvoke<T>(
     result = await client.invoke(
       deviceId,
       { channel, args },
-      MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS[channel] ?? INVOKE_TIMEOUT_OVERRIDES_MS[channel],
+      // 长通道(media / 文件搜索 / schedule 就绪窗口等)按 invokeTimeouts 解析
+      // 规则保留更长窗口,避免 mobile 收紧的默认 15s 误伤合法慢操作。
+      resolveMobileInvokeTimeoutMs(channel),
     );
   } catch (err) {
     settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));

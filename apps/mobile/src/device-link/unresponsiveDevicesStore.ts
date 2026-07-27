@@ -8,6 +8,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { DeviceLinkError, type DeviceLinkErrorCode } from '@cindy/device-link';
+import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
 import {
   createDeviceResponsivenessBreaker,
   type BreakerSettleOutcome,
@@ -85,11 +86,6 @@ const breaker = createDeviceResponsivenessBreaker({
 });
 
 /**
- * 发送门禁(DeviceLinkContext 四条 send* 路径的第一步):熔断 open 且无探测
- * 窗口时抛 DEVICE_UNRESPONSIVE 快速失败(不等重连、不上管道);返回值 = 本次
- * 请求是否为探测(单飞),必须原样回传给 settleDeviceSend。
- */
-/**
  * 只读:该设备当前是否「探测已到窗口」——rehydrate 等自动恢复路径据此决定
  * 是否把熔断 open 的设备重新纳入本轮(它的首个请求会自然成为探测)。
  */
@@ -97,6 +93,11 @@ export function isDeviceProbeDue(deviceId: string): boolean {
   return breaker.probeDue(deviceId);
 }
 
+/**
+ * 发送门禁(DeviceLinkContext 四条 send* 路径的第一步):熔断 open 且无探测
+ * 窗口时抛 DEVICE_UNRESPONSIVE 快速失败(不等重连、不上管道);返回值 = 本次
+ * 请求是否为探测(单飞),必须原样回传给 settleDeviceSend。
+ */
 export function acquireDeviceSendSlot(deviceId: string): boolean {
   const decision = breaker.acquire(deviceId);
   if (decision === 'reject') throw createDeviceUnresponsiveError(deviceId);
@@ -108,7 +109,21 @@ export function settleDeviceSend(
   wasProbe: boolean,
   outcome: BreakerSettleOutcome,
 ): void {
-  breaker.settle(deviceId, wasProbe, outcome);
+  // 撤权竞态防护(review P1):撤权时桌面端发 link-close(revoked) 但不 resolve
+  // 在途请求,它们随后超时——这不是"设备无响应",是访问被收回。已撤权设备的
+  // 超时一律降级为不定论,不再计入熔断,避免 unresponsive 状态与撤权状态并存。
+  const effective = outcome === 'timeout' && revokedDevicesStore.has(deviceId)
+    ? 'inconclusive'
+    : outcome;
+  breaker.settle(deviceId, wasProbe, effective);
+}
+
+/**
+ * 清除单个设备的熔断状态与 UI 镜像。撤权时调用:设备的「响应性」已无意义,
+ * 且撤权有自己的专属 UI,不应再叠加「电脑端未响应」降级态。
+ */
+export function clearDeviceResponsivenessTrackingFor(deviceId: string): void {
+  breaker.clear(deviceId);
 }
 
 /**

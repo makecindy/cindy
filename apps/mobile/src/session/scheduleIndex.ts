@@ -25,19 +25,18 @@ export async function loadSessionScheduleIndex(
   const pairs: Array<readonly [string, RemoteScheduleRun[]]> = [];
   for (const schedule of schedules) {
     let runs: RemoteScheduleRun[] = [];
-    let deviceUnresponsive = false;
     try {
       runs = normalizeScheduleRuns(await maker.schedule.listRuns(schedule.id, SCHEDULE_INDEX_RUN_LIMIT));
     } catch (error) {
       if (options.throwOnTransientRunListError && isTransientRemoteError(error)) throw error;
+      // 目标设备熔断 open(DEVICE_UNRESPONSIVE 快速失败):剩余 N-1 个 listRuns 会
+      // 同样逐个失败,立即止损。**上抛而不是截断成功**(review P1):把部分索引当
+      // 成功返回会被调用方提交并进入 30s 正缓存——首页/详情页拿着不完整徽标还
+      // 以为是新鲜数据;上抛让节流层走失败负缓存,熔断恢复后重拉全量。
+      if (isDeviceUnresponsiveRemoteError(error)) throw error;
       runs = [];
-      deviceUnresponsive = isDeviceUnresponsiveRemoteError(error);
     }
     pairs.push([schedule.id, runs] as const);
-    // 目标设备熔断 open(DEVICE_UNRESPONSIVE 快速失败):剩余 N-1 个 listRuns 会
-    // 同样地逐个失败,立即止损跳出。缺 runs 只影响未读徽标,schedule 名称 / 分组
-    // 由 schedules 列表兜底,下一轮(熔断恢复或负缓存过期后)自然补齐。
-    if (deviceUnresponsive) break;
   }
   return buildSessionScheduleIndex(schedules, new Map(pairs));
 }
