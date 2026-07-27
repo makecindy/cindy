@@ -3807,6 +3807,7 @@
       "assessmentReadFailed": "Couldn't read the plugin setup status.",
       "setupIncomplete": "Plugin setup is not complete.",
       "setupChangedDuringResume": "Plugin setup changed while the call was resuming. Please complete setup and try again.",
+      "setupCompletedRediscover": "Setup complete. Run ghost_list again to get the plugin's current tools, then call with a real tool name.",
       "chooseOne": "Choose one setup method",
       "restoreAria": "Restore {{name}} settings",
       "minimizeAria": "Minimize {{name}} settings",

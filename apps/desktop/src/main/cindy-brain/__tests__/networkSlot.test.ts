@@ -132,7 +132,7 @@ function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
 const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
 
 describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', () => {
-  it('401/403 重试耗尽后按 user 源 secret key 上报;2xx/其它 4xx 不上报', async () => {
+  it('401 直接按 user 源 secret key 上报;2xx/其它 4xx 不上报', async () => {
     const noteCredentialRejected = vi.fn();
     const { slot } = makeSlot({
       fetchImpl: vi.fn(async () => fakeResponse({ status: 401 })) as never,
@@ -206,56 +206,40 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
     expect(noteCredentialRejected).toHaveBeenCalledTimes(1);
   });
 
-  it('422 + 令牌失效类 body 对纯 key 型 user 凭证记账;业务 422 不记', async () => {
-    // Brave 对无效订阅令牌回 422(非标),body 含 "subscription token is invalid"。
+  it('403 仅当 body 含凭证失效信号才记账;限流/业务 403 不记', async () => {
+    // 403 语义宽(GitHub 限流、越权、封禁):无凭证类信号时不记账,避免误标。
     const noteCredentialRejected = vi.fn();
-    const { slot } = makeSlot({
+    const { slot: rateLimited } = makeSlot({
       fetchImpl: vi.fn(async () =>
-        fakeResponse({ status: 422, body: '{"error":"The provided subscription token is invalid"}' }),
+        fakeResponse({ status: 403, body: '{"message":"API rate limit exceeded"}' }),
       ) as never,
       noteCredentialRejected,
     });
-    await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    await rateLimited.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
+
+    // body 出现凭证失效信号 → 按被拒记账(同样只记命中 host 的 key)。
+    noteCredentialRejected.mockClear();
+    const { slot: revoked } = makeSlot({
+      fetchImpl: vi.fn(async () =>
+        fakeResponse({ status: 403, body: '{"error":"token revoked by user"}' }),
+      ) as never,
+      noteCredentialRejected,
+    });
+    await revoked.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
     expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'brave_api_key');
-    // 同样只记命中 host 的 brave_api_key,不殃及 tavily_api_key
     expect(noteCredentialRejected).not.toHaveBeenCalledWith('web-search', 'tavily_api_key');
     expect(noteCredentialRejected).toHaveBeenCalledTimes(1);
 
-    // 业务语义校验失败的 422(body 无凭证类关键词)不记账。
+    // "invalid" 被刻意排除在关键词外:业务参数校验的 403 不误伤。
     noteCredentialRejected.mockClear();
-    const { slot: bizSlot } = makeSlot({
+    const { slot: bizErr } = makeSlot({
       fetchImpl: vi.fn(async () =>
-        fakeResponse({ status: 422, body: '{"error":"query must be at least 3 characters"}' }),
+        fakeResponse({ status: 403, body: '{"error":"invalid date range"}' }),
       ) as never,
       noteCredentialRejected,
     });
-    await bizSlot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
-    expect(noteCredentialRejected).not.toHaveBeenCalled();
-  });
-
-  it('422 时带 exchange 的凭证不记账(交换链有自己的 401 语义)', async () => {
-    const noteCredentialRejected = vi.fn();
-    const { slot } = makeSlot({
-      getGhost: () =>
-        fakeGhost({
-          network: {
-            hosts: ['api.search.brave.com'],
-            secrets: [
-              {
-                key: 'ex_key',
-                label: 'Ex',
-                inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.search.brave.com'] },
-                exchange: { url: 'https://api.search.brave.com/exchange' } as never,
-              },
-            ],
-          },
-        }),
-      fetchImpl: vi.fn(async () =>
-        fakeResponse({ status: 422, body: '{"error":"token is invalid"}' }),
-      ) as never,
-      noteCredentialRejected,
-    });
-    await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    await bizErr.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
     expect(noteCredentialRejected).not.toHaveBeenCalled();
   });
 });

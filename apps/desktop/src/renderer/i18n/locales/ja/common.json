@@ -3806,6 +3806,7 @@
       "assessmentReadFailed": "プラグインの設定状態を読み取れませんでした。",
       "setupIncomplete": "プラグインの設定が完了していません。",
       "setupChangedDuringResume": "呼び出し再開中にプラグインの設定が変更されました。設定を完了してから再試行してください。",
+      "setupCompletedRediscover": "設定が完了しました。ghost_list で現在利用可能なツール一覧を再取得し、実際のツール名で呼び出してください。",
       "chooseOne": "設定方法を1つ選択してください",
       "restoreAria": "{{name}} の設定を展開",
       "minimizeAria": "{{name}} の設定を折りたたむ",

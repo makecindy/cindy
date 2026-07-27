@@ -358,6 +358,60 @@ describe('ghost_call 兜底拒绝', () => {
     expect(grantAttachmentsMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
+
+  it('setup_plan + 占位 tool 名:配置卡可达(不报 TOOL_NOT_FOUND),完成后 setupCompleted 早退不派发', async () => {
+    // 降级暴露下未就绪插件 ghost_list tools 为空,agent 只能传占位 tool 名
+    // 配合 setup_plan 发起配置卡——前置/复验的 manifest.tools 校验都必须
+    // 对 setup_plan 豁免,否则 agent 永远走不到 ensureReady。
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'placeholder-tool-name',
+      args: {},
+      setupPlan: {
+        assessmentRevision: 1,
+        steps: [
+          {
+            id: 's1',
+            requirementRefs: ['secret:api_key'],
+            title: '填入 Key',
+            description: 'd',
+            actionId: 'a1',
+          },
+        ],
+      },
+    });
+
+    // ensureReady 被触达(配置卡链路可达),且带上了 plan。
+    expect(ensureReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ghostId: 'art', plan: expect.anything() }),
+    );
+    // 配置完成后 setupCompleted 早退,占位 tool 不被派发。
+    expect(result).toMatchObject({ ok: true, result: { setupCompleted: true } });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('setup_plan 但 tool 是真实声明名:配置完成后照常派发', async () => {
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      setupPlan: {
+        assessmentRevision: 1,
+        steps: [
+          {
+            id: 's1',
+            requirementRefs: ['secret:api_key'],
+            title: 't',
+            description: 'd',
+            actionId: 'a1',
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, result: 'done' });
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('session-context 宿主铸造', () => {

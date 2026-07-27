@@ -188,7 +188,7 @@ export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
                         `scheduler.editor.script.capabilityWarn.${
                           CAPABILITY_WARN_I18N_SUFFIX[
                             warn.state as Exclude<CapabilityRuntimeState, 'ok'>
-                          ] ?? 'ghostNeedsSetup'
+                          ]
                         }`,
                         { name: warn.ghostName ?? '' },
                       )}

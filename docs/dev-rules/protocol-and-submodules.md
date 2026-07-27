@@ -37,14 +37,15 @@
 
 ## 2. 插件来源
 
-- **第一方内置播种**：`builtinGhostProvisioner` 从随包种子 submodule
-  （official / xd 等 provisioning.json 声明）在启动期静默安装与覆盖更新第一方
-  插件——这是受信任的第一方通道，不经用户确认，属预期行为（2026-07-27 拍板）；
-  用户的 `.disabled` 停用标记与手动安装不受播种回收影响。
-- **市场 `defaultInstall`**：服务端策展的默认安装条目在 snapshot 内静默安装并
-  启用，不经确认弹窗——同样是预期行为；未配置的插件装完进入「已启用 · 待
-  配置」态（生命周期投影 needs_setup，工具不对 agent 派发，卡片带待配置徽章），
-  配置复杂度由产品承担而不是由确认弹窗承担。
+- **第一方内置播种**：`builtinGhostProvisioner` 从随包种子目录（official / xd 等
+  provisioning.json 声明）在启动期静默安装与覆盖更新第一方插件——这是**现状陈述**
+  （机制见 `builtinGhostProvisioner.ts`），用户的 `.disabled` 停用标记与手动安装不
+  受播种回收影响。
+- **市场 `defaultInstall`**：服务端策展的默认安装条目当前在 snapshot 内静默安装并
+  启用，不经确认弹窗——同为**现状陈述**；未配置的插件装完进入「已启用 · 待
+  配置」态（生命周期投影 needs_setup，工具不对 agent 派发，卡片带待配置徽章）。
+- 预装 / installPolicy 的策展策略仍是**待定决策**（见 plugin-lifecycle issue P1 的
+  二选一事项，需 owner 确认），最终策略确定后再更新本节。
 - 用户手动安装 `.cindy` 包一律走装入确认框；第三方插件不存在无确认通道。
 - 没有任何插件时启动和开发不应因此失败。
 - 不要引入**新**的无确认第三方分发通道；需要推荐第三方插件时走 SkillHub 的

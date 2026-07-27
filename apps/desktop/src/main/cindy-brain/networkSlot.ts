@@ -688,12 +688,13 @@ const SECRET_EXCHANGE_RESPONSE_MAX_BYTES = 256 * 1024;
 /** 交换失败时回给意识的错误里,上游响应体摘录长度上限(诊断用,不泄凭证)。 */
 const SECRET_EXCHANGE_ERROR_SNIPPET_CHARS = 200;
 
-// 部分上游(如 Brave)对无效订阅令牌回 422 而非 401/403。对纯 user 源
-// key 型凭证(无 exchange、非 oauth),422 且 body 含令牌/失效类关键词时
-// 同样按凭证被拒记账;业务语义校验失败的 422 命中不了关键词,不误伤。
+// 403 语义很宽(GitHub 限流、越权、封禁都回 403),不能一律当凭证被拒——
+// 要求响应体出现凭证失效类信号才记账。401 本身就是强信号,无需探测。
+// 关键词刻意不含 "invalid":业务参数校验错误(如 "invalid date range")
+// 也命中它,会把好 key 误记为被拒。
 const CREDENTIAL_REJECTION_PROBE_BYTES = 2048;
 const CREDENTIAL_REJECTION_BODY_RE =
-  /token|subscription|api[\s_-]?key|invalid|unauthori[sz]ed|credential/i;
+  /token|subscription|api[\s_-]?key|unauthori[sz]ed|credential|forbidden|revoked|expired|denied/i;
 
 async function probeCredentialRejectionBody(response: Response): Promise<boolean> {
   try {
@@ -1201,20 +1202,17 @@ export class GhostNetworkSlot {
             ghostNetworkHostMatches(pattern, responseHost),
           ),
         );
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
+        // 401 = 服务端明确不认这份凭证,直接记账。
         for (const decl of injectableKeys) {
           this.deps.noteCredentialRejected?.(ghostId, decl.key);
         }
-      } else if (response.status === 422) {
-        // 非标凭证失效信号(如 Brave 对无效订阅令牌回 422):只对纯 key 型
-        // user 源凭证记账,且要求 body 出现令牌/失效类关键词,避免把插件
-        // 业务语义校验失败的 422 误标为凭证被拒。
-        const plainKeys = injectableKeys
-          .filter((decl) => decl.exchange === undefined)
-          .map((decl) => decl.key);
-        if (plainKeys.length > 0 && (await probeCredentialRejectionBody(response))) {
-          for (const key of plainKeys) {
-            this.deps.noteCredentialRejected?.(ghostId, key);
+      } else if (response.status === 403) {
+        // 403 语义宽(限流/越权/封禁都可能):仅当 body 出现凭证失效类信号
+        // 才按被拒记账,避免把限流页误标 needs_reauth 钉死好插件。
+        if (injectableKeys.length > 0 && (await probeCredentialRejectionBody(response))) {
+          for (const decl of injectableKeys) {
+            this.deps.noteCredentialRejected?.(ghostId, decl.key);
           }
         }
       }

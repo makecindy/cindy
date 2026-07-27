@@ -540,6 +540,13 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
     // 过」保守过滤,宁可花名册少一条召回线索,也不让 Codex 会话在描述层
     // 看见 Claude 会话已经看不见的意识(运行期 ghost_list / ghost_call 仍
     // 按真实 workdir 精确拦,误伤只在描述快照层,不产生能力差异)。
+    //
+    // ⚠️ 显式取舍(2026-07-27,review 要求披露):这是 issue 1.4 两个给定
+    // 方案之外的第三方案。代价——用户只要在**某一个**项目里停用过某插件,
+    // 所有空 workdir 会话(不只 Codex)的花名册就失去这条召回线索,即便该
+    // 插件在别处仍可用。选它是因为「描述层看见但运行期被拦」比「描述层
+    // 一致不可见」更难向 agent 解释;若后续认为召回代价过高,可回退为
+    // 已知限制(建线期不过滤、运行期精确拦,即原行为 + readiness 标记)。
     getRosterItems() {
       const workdir = resolveSessionContext()?.workingDir ?? null;
       // 降级暴露(D1):未就绪的插件仍进花名册但带 readiness 标记,agent
@@ -677,8 +684,14 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         };
       }
       // grant_only never dispatches and intentionally ignores its tool field.
+      // setup_plan(发起配置卡)同样豁免工具名前置校验:降级暴露下未就绪插件
+      // 在 ghost_list 里 tools 为空,agent 拿不到"合法"工具名,若此处仍强
+      // 校验 manifest.tools,agent 永远走不到 ensureReady 发起配置卡这一步。
+      // 有 setup_plan 时以 ensureReady 的配置引导为准,tool 仅作可选上下文;
+      // 就绪态的正常盲调仍走下面的严格校验。
       if (
         !grantOnly &&
+        !setupPlan &&
         !(target.manifest.tools ?? []).some((candidate) => candidate.name === tool)
       ) {
         return {
@@ -731,6 +744,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       }
       if (
         !grantOnly &&
+        !setupPlan &&
         !(refreshed.manifest.tools ?? []).some((candidate) => candidate.name === tool)
       ) {
         return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `${t('newChat.pluginSetup.targetToolNotFound')} (${tool})` };
@@ -747,6 +761,21 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           errorCode: 'SETUP_REQUIRED',
           message: t('newChat.pluginSetup.setupChangedDuringResume'),
           setup: finalAssessment,
+        };
+      }
+      // setup_plan 配置引导完成但未给出可派发的真实工具名(降级暴露下
+      // ghost_list 对该插件 tools 为空,agent 只能占位):配置卡跑完即返回,
+      // 不盲目派发占位 tool——agent 重新 ghost_list 拿到真实工具名后再调。
+      if (
+        setupPlan &&
+        !(refreshed.manifest.tools ?? []).some((candidate) => candidate.name === tool)
+      ) {
+        return {
+          ok: true,
+          result: {
+            setupCompleted: true,
+            message: t('newChat.pluginSetup.setupCompletedRediscover'),
+          },
         };
       }
       // 批量预授权(grant_only):只过户不派发。它与普通调用共用上面的

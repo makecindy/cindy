@@ -3806,6 +3806,7 @@
       "assessmentReadFailed": "플러그인 설정 상태를 읽을 수 없습니다.",
       "setupIncomplete": "플러그인 설정이 완료되지 않았습니다.",
       "setupChangedDuringResume": "호출 재개 중 플러그인 설정이 변경되었습니다. 설정을 완료한 후 다시 시도하세요.",
+      "setupCompletedRediscover": "설정이 완료되었습니다. ghost_list로 현재 사용 가능한 도구 목록을 다시 가져온 뒤 실제 도구 이름으로 호출하세요.",
       "chooseOne": "설정 방법을 하나 선택하세요",
       "restoreAria": "{{name}} 설정 펼치기",
       "minimizeAria": "{{name}} 설정 접기",

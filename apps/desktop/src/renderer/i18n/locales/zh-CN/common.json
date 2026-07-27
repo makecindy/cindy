@@ -3806,6 +3806,7 @@
       "assessmentReadFailed": "无法读取插件配置状态。",
       "setupIncomplete": "插件尚未完成配置。",
       "setupChangedDuringResume": "插件配置在调用恢复前发生变化，请完成设置后重试。",
+      "setupCompletedRediscover": "配置已完成。请重新用 ghost_list 获取该插件当前可用的工具清单，再用真实工具名调用。",
       "chooseOne": "选择一种配置方式",
       "restoreAria": "展开 {{name}} 设置",
       "minimizeAria": "收起 {{name}} 设置",
