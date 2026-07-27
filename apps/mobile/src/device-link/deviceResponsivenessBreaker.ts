@@ -111,6 +111,10 @@ export function createDeviceResponsivenessBreaker(
   };
 
   const acquire = (deviceId: string): BreakerSendSlot => {
+    // 首次发放即登记(review):仅 acquire 过、还没有任何 settle/state 的设备也
+    // 必须被 resetAll 的全量翻篇覆盖,否则登出前的在途请求会在切号后按当前代
+    // 被采信,把旧账号的超时累进新账号的计数。
+    if (!generations.has(deviceId)) generations.set(deviceId, 0);
     const generation = generationOf(deviceId);
     const state = states.get(deviceId);
     if (!state?.open) return { decision: 'allow', generation };

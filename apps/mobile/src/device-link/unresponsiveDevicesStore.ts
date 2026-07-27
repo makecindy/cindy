@@ -146,12 +146,34 @@ export function clearDeviceResponsivenessTrackingFor(deviceId: string): void {
  * 发送失败 → 熔断信号分类:仅 INVOKE_TIMEOUT(等满超时无回包)计失败;其余
  * (NOT_CONNECTED / relay 层错误 / 断连批量 reject)是本机链路问题,不定论。
  * 注意:invoke-result 携带的业务错误(ok:false)不会走到这里——收到 result
- * 帧本身就是真实回包,发送路径在 unwrap 前已按 responded 上报。
+ * 帧本身就是真实回包,发送路径在 unwrap 前已按成功分类上报。
  */
 export function classifyDeviceSendFailure(error: unknown): BreakerSettleOutcome {
   return error instanceof DeviceLinkError && error.code === 'INVOKE_TIMEOUT'
     ? 'timeout'
     : 'inconclusive';
+}
+
+/**
+ * 被控端 dispatch 在 runInvoke 里、进入 dispatchLocalInvoke(IPC/DB 路径)之前
+ * 特判应答的 invoke 通道(dispatch.ts:media:fetch / voice:* 三条,credential-sync
+ * 已下线但保留匹配):它们的成功只证明桌面进程与 device-link 服务活着,不证明
+ * 打开熔断的 IPC/DB 子系统已恢复。half-open 时这类请求可能抢到探测席位,若按
+ * responded 收尾会误关熔断、放进新一轮 DB 请求突发(review P1 第七轮)——与
+ * 控制帧(subscribe/unsubscribe/link-accept)同语义,成功一律按不定论收尾。
+ * 走 dispatchLocalInvoke 的其余通道(含代表性探测与全部业务 DB 读写)的回包
+ * 仍是有效恢复证据。超时分类不受影响(classifyDeviceSendFailure)。
+ */
+export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
+  'device-link:media:fetch',
+  'device-link:voice:credential-sync',
+  'device-link:voice:dictionary-learning',
+  'device-link:voice:transcribe',
+]);
+
+/** 发送成功 → 熔断信号分类:dispatch 特判通道不定论,其余为真实恢复证据。 */
+export function classifyDeviceSendSuccess(channel: string): BreakerSettleOutcome {
+  return BREAKER_NEUTRAL_INVOKE_CHANNELS.has(channel) ? 'inconclusive' : 'responded';
 }
 
 /** 登出 / 进程内切号:清空熔断状态与 UI 镜像,避免串到下一个账号。 */

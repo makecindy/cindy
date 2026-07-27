@@ -230,6 +230,20 @@ describe('generation:恢复前派出的旧请求结果不采信(review P1)', () 
     h.breaker.settle(DEV, stale, 'responded'); // 旧代晚到成功:忽略
     expect(h.breaker.isOpen(DEV)).toBe(true);
   });
+
+  it('resetAll 覆盖「仅 acquire 过、无任何 settle」的设备(review:切号旧账不入新账)', () => {
+    const h = harness();
+    // dev-2 只发放过席位,从未 settle:没有 state,代数登记必须发生在 acquire 时
+    const stale = h.breaker.acquire('dev-2');
+    h.breaker.resetAll();
+    h.breaker.settle('dev-2', stale, 'timeout');
+    h.breaker.settle('dev-2', stale, 'timeout');
+    h.breaker.settle('dev-2', stale, 'timeout');
+    expect(h.breaker.isOpen('dev-2')).toBe(false);
+    // 新代请求照常计数
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD; i++) timeoutOnce(h.breaker, 'dev-2');
+    expect(h.breaker.isOpen('dev-2')).toBe(true);
+  });
 });
 
 describe('clear(单设备清除,撤权场景)', () => {

@@ -58,6 +58,7 @@ import {
   acquireDeviceSendSlot,
   buildDeviceResponsivenessProbeArgs,
   classifyDeviceSendFailure,
+  classifyDeviceSendSuccess,
   DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
   isDeviceProbeDue,
   resetDeviceResponsivenessTracking,
@@ -822,8 +823,10 @@ async function sendInvoke<T>(
     settleDeviceSend(deviceId, slot, classifyDeviceSendFailure(err));
     throw err;
   }
-  // 收到 invoke-result 帧即为目标设备真实回包(即使 ok:false 的业务错误)→ 重置熔断。
-  settleDeviceSend(deviceId, slot, 'responded');
+  // 收到 invoke-result 帧即为目标设备真实回包(即使 ok:false 的业务错误)。但
+  // dispatch 特判通道(media/voice,见 BREAKER_NEUTRAL_INVOKE_CHANNELS)的成功
+  // 不走 IPC/DB 路径,不作恢复证据——按通道分类收尾(review P1)。
+  settleDeviceSend(deviceId, slot, classifyDeviceSendSuccess(channel));
   return unwrapInvoke<T>(result);
 }
 

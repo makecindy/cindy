@@ -5,7 +5,9 @@ import {
   REMOTE_INVOKE_ALLOWLIST,
 } from '@cindy/device-link';
 import {
+  BREAKER_NEUTRAL_INVOKE_CHANNELS,
   buildDeviceResponsivenessProbeArgs,
+  classifyDeviceSendSuccess,
   DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
 } from '@/device-link/unresponsiveDevicesStore';
 
@@ -27,5 +29,28 @@ describe('DEVICE_RESPONSIVENESS_PROBE_CHANNEL 契约', () => {
     expect(buildDeviceResponsivenessProbeArgs()).toEqual([1, 'all', { includePinned: true }]);
     // 每次新数组,调用方可安全透传给 invoke(不共享可变引用)。
     expect(buildDeviceResponsivenessProbeArgs()).not.toBe(buildDeviceResponsivenessProbeArgs());
+  });
+});
+
+describe('classifyDeviceSendSuccess(成功回包 → 熔断信号分类)', () => {
+  it('dispatch 特判通道(media / voice)成功按不定论,不作恢复证据(review P1)', () => {
+    // 这四条在被控端 runInvoke 里、dispatchLocalInvoke 之前特判应答,IPC/DB
+    // 卡死时照常成功;half-open 时抢到探测席位不得误关熔断。
+    expect([...BREAKER_NEUTRAL_INVOKE_CHANNELS].sort()).toEqual([
+      'device-link:media:fetch',
+      'device-link:voice:credential-sync',
+      'device-link:voice:dictionary-learning',
+      'device-link:voice:transcribe',
+    ]);
+    for (const channel of BREAKER_NEUTRAL_INVOKE_CHANNELS) {
+      expect(classifyDeviceSendSuccess(channel)).toBe('inconclusive');
+    }
+  });
+
+  it('代表性探测与业务 DB 通道的成功仍是有效恢复证据', () => {
+    expect(classifyDeviceSendSuccess(DEVICE_RESPONSIVENESS_PROBE_CHANNEL)).toBe('responded');
+    expect(classifyDeviceSendSuccess('local-db:messages:list')).toBe('responded');
+    expect(classifyDeviceSendSuccess('maker:send')).toBe('responded');
+    expect(classifyDeviceSendSuccess('file-browser:remote-op')).toBe('responded');
   });
 });
