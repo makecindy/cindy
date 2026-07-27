@@ -3657,7 +3657,7 @@
       "title": "更新公告",
       "newFeatures": "新功能",
       "bugFixes": "问题修复",
-      "craftedBy": "出品",
+      "thanksTo": "感谢",
       "gotIt": "我知道了",
       "ariaDescription": "版本 {{version}} 的更新说明",
       "ariaDescriptionSpan": "自 v{{from}} 起累计 {{count}} 个版本的更新说明",

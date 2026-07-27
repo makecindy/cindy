@@ -48,6 +48,14 @@ export interface RawSection {
   items: RawItem[];
 }
 
+/** Topic-format (v2) block: one user-facing theme with a short narrative. */
+export interface RawTopic {
+  emoji?: string;
+  title: string;
+  text: string;
+  contributors?: string[];
+}
+
 export interface RawReleaseNotes {
   version: string;
   date: string;
@@ -60,7 +68,12 @@ export interface RawReleaseNotes {
   githash?: string;
   /** Flat contributor list — collective hall-of-fame on top of per-item `by`. */
   contributors: string[];
-  sections: RawSection[];
+  /** Legacy author-grouped sections. Absent on topic-format payloads. */
+  sections?: RawSection[];
+  /** Topic-format blocks. Non-empty ⇒ renderer uses the topic layout. */
+  topics?: RawTopic[];
+  /** Optional one-line lead above the topics (e.g. PR/commit counts). */
+  intro?: string;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────

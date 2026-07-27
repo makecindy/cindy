@@ -3658,7 +3658,7 @@
       "title": "What's New",
       "newFeatures": "New Features",
       "bugFixes": "Bug Fixes",
-      "craftedBy": "Crafted by",
+      "thanksTo": "Thanks to",
       "gotIt": "Got it",
       "ariaDescription": "Release notes for version {{version}}",
       "ariaDescriptionSpan": "Release notes for {{count}} versions since v{{from}}",

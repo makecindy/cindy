@@ -3657,7 +3657,7 @@
       "title": "업데이트 소식",
       "newFeatures": "새로운 기능",
       "bugFixes": "버그 수정",
-      "craftedBy": "제작",
+      "thanksTo": "감사",
       "gotIt": "확인",
       "ariaDescription": "버전 {{version}} 릴리스 노트",
       "ariaDescriptionSpan": "v{{from}} 이후 {{count}}개 버전의 릴리스 노트",

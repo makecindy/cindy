@@ -3657,7 +3657,7 @@
       "title": "更新情報",
       "newFeatures": "新機能",
       "bugFixes": "不具合修正",
-      "craftedBy": "制作",
+      "thanksTo": "感謝",
       "gotIt": "了解しました",
       "ariaDescription": "バージョン {{version}} のリリースノート",
       "ariaDescriptionSpan": "v{{from}} 以降 {{count}} バージョン分のリリースノート",

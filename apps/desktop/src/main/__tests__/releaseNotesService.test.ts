@@ -76,7 +76,7 @@ describe('releaseNotesService', () => {
     response.emit('end');
 
     const notes = await promise;
-    const item = notes?.sections[0]?.items[0]?.list[0];
+    const item = notes?.sections?.[0]?.items[0]?.list[0];
     expect(item).toContain('断线恢复');
     expect(item).not.toContain('�');
   });
