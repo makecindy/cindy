@@ -107,4 +107,33 @@ describe('releaseNotesService', () => {
     // 两次都真正发起了请求——坏 payload 没有进程级缓存,CDN 修正后可生效。
     expect(requestMock).toHaveBeenCalledTimes(2);
   });
+
+  it('sections 非空但全部畸形(无任何有效 bullet)同样按失败处理不缓存', async () => {
+    const { fetchReleaseNotes } = await import('../releaseNotesService');
+
+    const payload = JSON.stringify({
+      version: '0.1.21',
+      date: '2026-07-31',
+      contributors: ['A'],
+      sections: [
+        { title: 'Bug Fixes', items: [{ name: 'X' }, { name: 'Y', list: [42] }] },
+        { items: [{ name: 'Z', list: ['有内容但缺 title'] }] },
+      ],
+    });
+
+    const fetchOnce = async () => {
+      const request = new MockRequest();
+      const response = new MockResponse();
+      requestMock.mockReturnValueOnce(request);
+      const promise = fetchReleaseNotes('0.1.21');
+      request.emit('response', response);
+      response.emit('data', Buffer.from(payload, 'utf8'));
+      response.emit('end');
+      return promise;
+    };
+
+    expect(await fetchOnce()).toBeNull();
+    expect(await fetchOnce()).toBeNull();
+    expect(requestMock).toHaveBeenCalledTimes(2);
+  });
 });
