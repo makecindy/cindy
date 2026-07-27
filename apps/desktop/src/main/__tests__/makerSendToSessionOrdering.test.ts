@@ -414,7 +414,8 @@ describe('sendToSession ordering', () => {
     // 同 sendPersistedUserMessageToSession 的顺序硬约束(Codex review P2):
     // prompt preview 可先发,但 accepted 副作用仍必须等落库成功后才执行。
     expectOrder(block, 'notifyAgentIslandUserPrompt(previewSessionMeta', 'await createDbMessage(targetSessionId, {');
-    expectOrder(block, 'await createDbMessage(targetSessionId, {', 'await runAcceptedCallback(onAccepted, targetSessionId, clientId);');
+    expectOrder(block, 'await createDbMessage(targetSessionId, {', 'await runAcceptedCallback(');
+    expect(block).toContain('claimWorkerRuntimeOnAccepted,');
     const liveBranch = extractBetween(
       block,
       'const live = maker.getSession(targetSessionId);',
@@ -472,13 +473,18 @@ describe('sendToSession ordering', () => {
     );
 
     expect(resumeBranch).toContain('const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);');
+    expect(resumeBranch).toContain('orcaRuntimeReleased: current.idleSince !== null,');
+    expect(resumeBranch).toContain("if (releaseState === 'releasing')");
+    expect(resumeBranch).toContain('await maker.closeSession(target.sessionId);');
     expect(resumeBranch).toContain('...(extraDirs.length > 0 ? { extraDirs } : {}),');
     expectOrder(resumeBranch, 'const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);', 'const opts = buildCreateOptsWithStderr({');
     expectOrder(resumeBranch, '...(extraDirs.length > 0 ? { extraDirs } : {}),', 'await bootstrapSession(opts);');
     expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
     expect(serviceDepsBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
-    expect(switchFocusIpcBlock).toContain('const didResume = await resumeOrcaWorkerSessionIfMissing(target);');
-    expect(switchFocusMcpBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
+    expect(switchFocusIpcBlock).toContain('const refreshedWorkers = await listWorkersByLead(b.leadSessionId);');
+    expect(switchFocusIpcBlock).toContain('await resumeOrcaWorkerSessionIfMissing(refreshedTarget)');
+    expect(switchFocusMcpBlock).toContain('const refreshedWorkers = await listWorkersByLead(leadSessionId);');
+    expect(switchFocusMcpBlock).toContain('await resumeOrcaWorkerSessionIfMissing(refreshedTarget);');
   });
 
   it('keeps IPC and MCP createWorker delegated to the shared lifecycle service', () => {
@@ -548,11 +554,11 @@ describe('sendToSession ordering', () => {
     expect(serviceTerminalBlock).toContain('clearRuntimeState(params.sessionId);');
     expect(serviceTerminalBlock).toContain("worker.status === 'done' || worker.status === 'error' || worker.status === 'idle'");
     expect(serviceTerminalBlock).toContain('const manualInterrupt = deps.getManualInterrupt(params.sessionId);');
-    expect(serviceTerminalBlock).toContain('await deps.markWorkerIdle(link.workerId);');
+    expect(serviceTerminalBlock).toContain("await deps.updateWorkerStatus(link.workerId, 'idle');");
     expect(serviceTerminalBlock).toContain("log.info('worker manual interrupt: suppressed auto-bridge'");
     expectOrder(serviceTerminalBlock, "worker.status === 'done' || worker.status === 'error' || worker.status === 'idle'", 'const manualInterrupt = deps.getManualInterrupt(params.sessionId);');
-    expectOrder(serviceTerminalBlock, 'const manualInterrupt = deps.getManualInterrupt(params.sessionId);', 'await deps.markWorkerIdle(link.workerId);');
-    expectOrder(serviceTerminalBlock, 'await deps.markWorkerIdle(link.workerId);', 'await deps.updateWorkerStatus(link.workerId, params.status);');
+    expectOrder(serviceTerminalBlock, 'const manualInterrupt = deps.getManualInterrupt(params.sessionId);', "await deps.updateWorkerStatus(link.workerId, 'idle');");
+    expectOrder(serviceTerminalBlock, "await deps.updateWorkerStatus(link.workerId, 'idle');", 'await deps.updateWorkerStatus(link.workerId, params.status);');
     expectOrder(serviceTerminalBlock, "worker.status === 'done' || worker.status === 'error' || worker.status === 'idle'", 'await bridgeWorkerCompletion(');
     const manualBlock = extractBetween(
       serviceTerminalBlock,
@@ -562,7 +568,7 @@ describe('sendToSession ordering', () => {
     expect(manualBlock).not.toContain('sendToSession');
   });
 
-  it('marks worker idle and clears auto-bridge state before aborting worker sessions', () => {
+  it('persists worker idle before runtime release and clears auto-bridge state afterward', () => {
     const serviceIdleBlock = extractBetween(
       orcaTeamServiceSource,
       "async function idleWorker(params: { callerLeadSessionId: string; workerId: string; expectedStatus?: 'done' }): Promise<OrcaOkResult> {",
@@ -573,19 +579,31 @@ describe('sendToSession ordering', () => {
       'const orcaTeamService = createOrcaTeamService({',
       '  });\n  orcaTeamServiceForEvents = orcaTeamService;',
     );
+    const manualIdleBlock = extractBetween(
+      serviceIdleBlock,
+      'if (!params.expectedStatus) {',
+      'const expectedUpdatedAt = Date.parse(worker.updatedAt);',
+    );
+    const acknowledgedIdleBlock = extractBetween(
+      serviceIdleBlock,
+      'const expectedUpdatedAt = Date.parse(worker.updatedAt);',
+      'return withWorkerTransition(found.worker.id, async () => {',
+    );
 
     expect(source).toContain('registerOrcaWorkerControlHandlers(createElectronIpcHandlerRegistry(), {');
     expect(source).toContain('idleWorker: (params) => orcaTeamService.idleWorker(params),');
     expect(serviceIdleBlock).toContain('clearRuntimeState(worker.sessionId);');
-    expect(serviceIdleBlock).toContain('await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus)');
-    expect(serviceIdleBlock).toContain('await deps.markWorkerIdle(worker.id)');
+    expect(serviceIdleBlock).toContain('const didIdle = await deps.markWorkerIdleIfStatus(');
+    expect(serviceIdleBlock).toContain('await deps.releaseWorkerRuntime(worker)');
     expect(serviceIdleBlock).toContain('await deps.hasPendingWorkerInput(worker.sessionId)');
     expect(serviceIdleBlock).toContain('deps.hasSendToSessionLock(worker.sessionId)');
-    expect(serviceIdleBlock).toContain("await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker');");
-    expectOrder(serviceIdleBlock, 'await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus)', 'clearRuntimeState(worker.sessionId);');
-    expectOrder(serviceIdleBlock, 'clearRuntimeState(worker.sessionId);', "await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker');");
+    expect(serviceIdleBlock).toContain('await deps.closeWorkerSessionIfIdle(worker.sessionId)');
+    expectOrder(manualIdleBlock, 'await deps.releaseWorkerRuntime(worker)', 'clearRuntimeState(worker.sessionId);');
+    expectOrder(acknowledgedIdleBlock, 'const didIdle = await deps.markWorkerIdleIfStatus(', 'await deps.closeWorkerSessionIfIdle(worker.sessionId)');
+    expectOrder(acknowledgedIdleBlock, 'await deps.closeWorkerSessionIfIdle(worker.sessionId)', 'clearRuntimeState(worker.sessionId);');
 
-    expect(serviceDepsBlock).toContain('if (sendToSessionLocks.has(sessionId)) return false;');
+    expect(serviceDepsBlock).toContain("if (sendToSessionLocks.has(sessionId)) return 'busy';");
+    expect(serviceDepsBlock).toContain("if (!sess) return 'missing';");
     expect(serviceDepsBlock).toContain('await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);');
     expect(serviceDepsBlock).toContain('if (!inputCoordinator.isQueueRestored(sessionId)) return true;');
   });
@@ -599,19 +617,19 @@ describe('sendToSession ordering', () => {
     const serviceArchiveBlock = extractBetween(
       orcaTeamServiceSource,
       'async function archiveWorker(params: { callerLeadSessionId: string; workerId: string }): Promise<OrcaOkResult> {',
-      'return {',
+      '/** 排队消息 source 判定',
     );
 
     expect(disableBlock).toContain('orcaTeamService.clearAutoBridgeState(w.sessionId);');
     expect(disableBlock).not.toContain('clearWorkerAutoBridgeState(w.sessionId);');
-    expectOrder(disableBlock, 'orcaTeamService.clearAutoBridgeState(w.sessionId);', 'await sess.abort();');
+    expectOrder(disableBlock, 'orcaTeamService.clearAutoBridgeState(w.sessionId);', 'await releaseOrcaWorkerRuntime(w);');
     expect(source).toContain('archiveWorker: (params) => orcaTeamService.archiveWorker(params),');
     expect(serviceArchiveBlock).toContain('clearRuntimeState(worker.sessionId);');
-    expect(serviceArchiveBlock).toContain("await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');");
+    expect(serviceArchiveBlock).toContain('await deps.releaseWorkerRuntime(worker)');
     expect(serviceArchiveBlock).toContain('await deps.archiveWorkerSession(worker.sessionId);');
     expect(serviceArchiveBlock).toContain("await deps.updateWorkerStatus(worker.id, 'done');");
-    expectOrder(serviceArchiveBlock, 'clearRuntimeState(worker.sessionId);', "await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');");
-    expectOrder(serviceArchiveBlock, "await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');", 'await deps.archiveWorkerSession(worker.sessionId);');
+    expectOrder(serviceArchiveBlock, 'await deps.releaseWorkerRuntime(worker)', 'clearRuntimeState(worker.sessionId);');
+    expectOrder(serviceArchiveBlock, 'clearRuntimeState(worker.sessionId);', 'await deps.archiveWorkerSession(worker.sessionId);');
     expectOrder(serviceArchiveBlock, 'await deps.archiveWorkerSession(worker.sessionId);', "await deps.updateWorkerStatus(worker.id, 'done');");
   });
 
@@ -674,7 +692,8 @@ describe('sendToSession ordering', () => {
     expectOrder(orcaTeamServiceSource, 'if (autoBridge.get(sessionId) !== current) return false;', "if (currentWorker?.status !== 'running') return;");
     expectOrder(orcaTeamServiceSource, "if (currentWorker?.status !== 'running') return;", 'await deps.updateWorkerStatus(params.worker.id, params.previousStatus);');
     expect(serviceDispatchBlock).toContain('dispatchOutcome: dispatchFailureFromThrown(err, params.dispatchMeta),');
-    expect(orcaTeamServiceSource).toContain("createHostSendFailure('SEND_FAILED'");
+    expect(orcaTeamServiceSource).toContain("const code = err && typeof err === 'object'");
+    expect(orcaTeamServiceSource).toContain('createHostSendFailure(code,');
   });
 
   it('returns sendToWorker wake metadata from the dispatch boundary', () => {
@@ -687,7 +706,16 @@ describe('sendToSession ordering', () => {
     );
 
     expect(serviceDispatchBlock).toContain('const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;');
-    expectOrder(serviceDispatchBlock, 'const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;', "if ((target.status === 'idle' || target.status === 'done') && !wasLiveBeforeDispatch) {");
+    expectOrder(
+      serviceDispatchBlock,
+      'const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;',
+      'target.idleSince !== null',
+    );
+    expect(serviceDispatchBlock).toContain('target.idleSince !== null ||');
+    expect(serviceDispatchBlock).toContain(
+      "((target.status === 'idle' || target.status === 'done') && !wasLiveBeforeDispatch)",
+    );
+    expect(serviceDispatchBlock).toContain('await deps.claimWorkerRuntimeForSend(');
     expect(returnBlock).toContain('wakeKind: dispatchResult.wakeKind,');
     expect(returnBlock).toContain('targetTitle: dispatchResult.targetTitle,');
     expect(returnBlock).toContain('targetLastUserSendAt: dispatchResult.targetLastUserSendAt,');

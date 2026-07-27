@@ -1,4 +1,5 @@
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { t } from '../i18n.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 import { throwOrcaServiceFailure } from './orcaServiceFailure.js';
@@ -12,6 +13,7 @@ export interface OrcaWorkerControlHandlerDeps {
   idleWorker(params: { callerLeadSessionId: string; workerId: string; expectedStatus?: IdleWorkerExpectedStatus }): Promise<OrcaWorkerControlResult>;
   archiveWorker(params: { callerLeadSessionId: string; workerId: string }): Promise<OrcaWorkerControlResult>;
   logInfo(message: string, fields?: Record<string, unknown>): void;
+  logWarn(message: string, fields?: Record<string, unknown>): void;
 }
 
 /** WORKER_IDLE / WORKER_ARCHIVE 只做 IPC 参数校验和错误码翻译，业务归属检查留在 OrcaTeamService。 */
@@ -29,10 +31,23 @@ export function registerOrcaWorkerControlHandlers(
         workerId: b.workerId,
         ...(forcedExpectedStatus ? { expectedStatus: forcedExpectedStatus } : b.expectedStatus ? { expectedStatus: b.expectedStatus } : {}),
       });
-    } catch (err) {
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+    } catch (error) {
+      deps.logWarn('idleWorker IPC failed', {
+        workerId: b.workerId,
+        err: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('INTERNAL', t('newChat.collaboration.idleWorkerFailed'));
     }
-    if (!result.ok) throwOrcaServiceFailure(result);
+    if (!result.ok) {
+      if (result.errorCode === 'INTERNAL') {
+        deps.logWarn('idleWorker service failed', {
+          workerId: b.workerId,
+          err: result.message,
+        });
+        throwIpcError('INTERNAL', t('newChat.collaboration.idleWorkerFailed'));
+      }
+      throwOrcaServiceFailure(result);
+    }
     deps.logInfo('idleWorker done', { workerId: b.workerId });
     return result;
   };
@@ -52,10 +67,23 @@ export function registerOrcaWorkerControlHandlers(
         callerLeadSessionId: b.leadSessionId,
         workerId: b.workerId,
       });
-    } catch (err) {
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+    } catch (error) {
+      deps.logWarn('archiveWorker IPC failed', {
+        workerId: b.workerId,
+        err: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('INTERNAL', t('newChat.collaboration.archiveWorkerFailed'));
     }
-    if (!result.ok) throwOrcaServiceFailure(result);
+    if (!result.ok) {
+      if (result.errorCode === 'INTERNAL') {
+        deps.logWarn('archiveWorker service failed', {
+          workerId: b.workerId,
+          err: result.message,
+        });
+        throwIpcError('INTERNAL', t('newChat.collaboration.archiveWorkerFailed'));
+      }
+      throwOrcaServiceFailure(result);
+    }
     deps.logInfo('archiveWorker done', { workerId: b.workerId });
     return result;
   });

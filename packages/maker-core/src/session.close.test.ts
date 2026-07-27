@@ -52,4 +52,241 @@ describe('Session close lifecycle', () => {
     expect(session.getStatus()).toBe('closed');
     expect(close).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps an idle session active and retries after its runtime close fails', async () => {
+    const close = vi.fn()
+      .mockRejectedValueOnce(new Error('archive failed'))
+      .mockResolvedValueOnce(undefined);
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+
+    await expect(session.closeIfIdle({ releaseRuntime: true })).rejects.toThrow('archive failed');
+    expect(session.getStatus()).toBe('active');
+
+    await expect(session.closeIfIdle({ releaseRuntime: true })).resolves.toBe(true);
+    expect(session.getStatus()).toBe('closed');
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenNthCalledWith(1, { releaseRuntime: true });
+    expect(close).toHaveBeenNthCalledWith(2, { releaseRuntime: true });
+  });
+
+  it('does not leak a failed runtime-release intent into a later generic close', async () => {
+    const close = vi.fn()
+      .mockRejectedValueOnce(new Error('archive failed'))
+      .mockResolvedValueOnce(undefined);
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      isClosed: () => false,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+
+    await expect(session.close({ releaseRuntime: true })).rejects.toThrow('archive failed');
+    await session.close();
+
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenNthCalledWith(1, { releaseRuntime: true });
+    expect(close).toHaveBeenNthCalledWith(2, undefined);
+  });
+
+  it('upgrades an in-flight generic close when a runtime release is requested', async () => {
+    const genericClose = createDeferred();
+    const close = vi.fn()
+      .mockImplementationOnce(() => genericClose.promise)
+      .mockResolvedValueOnce(undefined);
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+
+    const firstClose = session.close();
+    const releaseClose = session.close({ releaseRuntime: true });
+
+    expect(releaseClose).toBe(firstClose);
+    expect(close).toHaveBeenCalledOnce();
+
+    genericClose.resolve();
+    await Promise.all([firstClose, releaseClose]);
+
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenNthCalledWith(1, undefined);
+    expect(close).toHaveBeenNthCalledWith(2, { releaseRuntime: true });
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('applies a runtime release after a generic close has already completed', async () => {
+    const close = vi.fn(async () => undefined);
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+
+    await session.close();
+    await session.close({ releaseRuntime: true });
+
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenNthCalledWith(1, undefined);
+    expect(close).toHaveBeenNthCalledWith(2, { releaseRuntime: true });
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('lets an idle runtime release upgrade an in-flight generic close', async () => {
+    const genericClose = createDeferred();
+    const close = vi.fn()
+      .mockImplementationOnce(() => genericClose.promise)
+      .mockResolvedValueOnce(undefined);
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+
+    const firstClose = session.close();
+    const releaseClose = session.closeIfIdle({ releaseRuntime: true });
+
+    expect(close).toHaveBeenCalledOnce();
+
+    genericClose.resolve();
+    await expect(releaseClose).resolves.toBe(true);
+    await firstClose;
+
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenNthCalledWith(1, undefined);
+    expect(close).toHaveBeenNthCalledWith(2, { releaseRuntime: true });
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('closes the outer Session when an upgraded runtime release fails after local teardown', async () => {
+    const genericClose = createDeferred();
+    let handleClosed = false;
+    const close = vi.fn()
+      .mockImplementationOnce(async () => {
+        await genericClose.promise;
+        handleClosed = true;
+      })
+      .mockRejectedValueOnce(new Error('archive failed after local teardown'));
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      isClosed: () => handleClosed,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+
+    const firstClose = session.close();
+    const releaseClose = session.close({ releaseRuntime: true });
+    genericClose.resolve();
+
+    await expect(firstClose).rejects.toThrow('archive failed after local teardown');
+    await expect(releaseClose).rejects.toThrow('archive failed after local teardown');
+
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('closes an idle session after its event loop enters the error state', async () => {
+    const close = vi.fn(async () => undefined);
+    const crashingEvents: AsyncIterable<never> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<never>> {
+            throw new Error('events crashed');
+          },
+        };
+      },
+    };
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      events: () => crashingEvents,
+      isTurnRunning: () => false,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+    const enteredError = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'error') resolve();
+      });
+    });
+
+    session.onEvent(() => undefined);
+    await enteredError;
+
+    await expect(session.closeIfIdle({ releaseRuntime: true })).resolves.toBe(true);
+    expect(close).toHaveBeenCalledWith({ releaseRuntime: true });
+    expect(session.getStatus()).toBe('closed');
+  });
 });

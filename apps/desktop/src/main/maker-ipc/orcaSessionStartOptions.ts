@@ -18,12 +18,15 @@ interface OrcaWorkerLink {
   workerId: string;
   teamId: string;
   leadSessionId: string;
+  idleSince: string | null;
+  updatedAt: string;
 }
 
 export interface OrcaSessionStartOptionsDeps {
   getSessionRole(sessionId: string): Promise<OrcaRole | null>;
   getWorkerLink(workerSessionId: string): Promise<OrcaWorkerLink | null>;
   warn(message: string, meta: Record<string, unknown>): void;
+  now?(): number;
 }
 
 const log = createLogger('maker-ipc:orca-session-start');
@@ -32,7 +35,23 @@ const defaultDeps: OrcaSessionStartOptionsDeps = {
   getSessionRole: getSessionOrcaRole,
   getWorkerLink: (workerSessionId) => getWorkerLink({ workerSessionId }),
   warn: (message, meta) => log.warn(message, meta),
+  now: Date.now,
 };
+
+function runtimeReleaseVendorOptions(
+  link: OrcaWorkerLink,
+  now: number,
+): Record<string, unknown> {
+  if (link.idleSince === null) return { orcaRuntimeReleased: false };
+  const expectedIdleSince = Date.parse(link.idleSince);
+  const expectedUpdatedAt = Date.parse(link.updatedAt);
+  return {
+    orcaRuntimeReleased: true,
+    orcaRuntimeReleaseIdleSince: expectedIdleSince,
+    orcaRuntimeReleaseUpdatedAt: expectedUpdatedAt,
+    orcaRuntimeResumedAt: Math.max(now, expectedUpdatedAt + 1),
+  };
+}
 
 /**
  * 从持久化 role/link 恢复 Orca session 启动参数。所有 dormant resume 入口必须在
@@ -53,6 +72,15 @@ export async function synthesizeOrcaVendorOptionsFromDb(
   }
   if (existingRole === 'worker') {
     o.orcaRole ??= 'worker';
+    if (o.resumeSessionId) {
+      const link = await deps.getWorkerLink(sessionId);
+      if (link) {
+        o.vendorOptions = {
+          ...(o.vendorOptions ?? {}),
+          ...runtimeReleaseVendorOptions(link, deps.now?.() ?? Date.now()),
+        };
+      }
+    }
     return true;
   }
 
@@ -87,6 +115,7 @@ export async function synthesizeOrcaVendorOptionsFromDb(
       orcaLeadSessionId: link.leadSessionId,
       orcaWorkerId: link.workerId,
       orcaWorkerSessionId: sessionId,
+      ...runtimeReleaseVendorOptions(link, deps.now?.() ?? Date.now()),
     };
     return true;
   }

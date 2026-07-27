@@ -105,19 +105,32 @@ describe('orcaTeamStore', () => {
   });
 
   it('executes worker status CAS updates and only rolls back idle acknowledgements', async () => {
-    const { markWorkerIdleIfStatus, restoreWorkerDoneIfIdle } = await import('../orcaTeamStore.js');
+    const {
+      markWorkerIdleIfStatus,
+      restoreWorkerDoneIfIdle,
+      restoreWorkerStatusIfIdle,
+    } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();
     setCurrentDbClient(client, 'test-user');
 
     await seedOrcaWorkers(client);
-    await client.exec('UPDATE orca_workers SET status = ? WHERE id = ?', ['done', 'worker-1']);
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, updated_at = ? WHERE id = ?',
+      ['done', 100_000, 'worker-1'],
+    );
 
-    await expect(markWorkerIdleIfStatus('worker-1', 'done')).resolves.toBe(true);
-    await expect(markWorkerIdleIfStatus('worker-1', 'done')).resolves.toBe(false);
+    await expect(markWorkerIdleIfStatus('worker-1', 'done', 99_999)).resolves.toBe(false);
+    await expect(markWorkerIdleIfStatus('worker-1', 'done', 100_000)).resolves.toBe(true);
+    await expect(markWorkerIdleIfStatus('worker-1', 'done', 100_000)).resolves.toBe(false);
     await expect(restoreWorkerDoneIfIdle('worker-1')).resolves.toBe(true);
     await expect(restoreWorkerDoneIfIdle('worker-1')).resolves.toBe(false);
-    await client.exec('UPDATE orca_workers SET status = ? WHERE id = ?', ['running', 'worker-2']);
-    await expect(restoreWorkerDoneIfIdle('worker-2')).resolves.toBe(false);
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, updated_at = ? WHERE id = ?',
+      ['running', 101_000, 'worker-2'],
+    );
+    await expect(markWorkerIdleIfStatus('worker-2', 'running', 101_000)).resolves.toBe(true);
+    await expect(restoreWorkerStatusIfIdle('worker-2', 'running')).resolves.toBe(true);
+    await expect(restoreWorkerStatusIfIdle('worker-2', 'running')).resolves.toBe(false);
 
     await expect(
       client.query<{ id: string; status: string; idle_since: number | null }>(
@@ -127,6 +140,317 @@ describe('orcaTeamStore', () => {
       { id: 'worker-1', status: 'done', idle_since: null },
       { id: 'worker-2', status: 'running', idle_since: null },
     ]);
+  });
+
+  it('clears a restored runtime marker and keeps failures eligible for lazy resume', async () => {
+    const { clearWorkerIdleReleaseMarker } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, idle_since = ?, updated_at = ? WHERE id = ?',
+      ['done', 123_000, 123_000, 'worker-1'],
+    );
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, idle_since = ?, updated_at = ? WHERE id = ?',
+      ['error', 124_000, 124_000, 'worker-2'],
+    );
+
+    await expect(clearWorkerIdleReleaseMarker({
+      workerId: 'worker-1',
+      sessionId: 'worker-session-1',
+      expectedIdleSince: 123_000,
+      expectedUpdatedAt: 122_999,
+      resumedAt: 125_000,
+    })).resolves.toBe(false);
+    await expect(clearWorkerIdleReleaseMarker({
+      workerId: 'worker-1',
+      sessionId: 'worker-session-1',
+      expectedIdleSince: 123_000,
+      expectedUpdatedAt: 123_000,
+      resumedAt: 125_000,
+    })).resolves.toBe(true);
+    await expect(clearWorkerIdleReleaseMarker({
+      workerId: 'worker-1',
+      sessionId: 'worker-session-1',
+      expectedIdleSince: 123_000,
+      expectedUpdatedAt: 123_000,
+      resumedAt: 125_000,
+    })).resolves.toBe(false);
+    await expect(clearWorkerIdleReleaseMarker({
+      workerId: 'worker-2',
+      sessionId: 'worker-session-2',
+      expectedIdleSince: 124_000,
+      expectedUpdatedAt: 124_000,
+      resumedAt: 125_001,
+    })).resolves.toBe(true);
+    await expect(
+      client.query<{ id: string; status: string; idle_since: number | null }>(
+        'SELECT id, status, idle_since FROM orca_workers ORDER BY id',
+      ),
+    ).resolves.toEqual([
+      { id: 'worker-1', status: 'done', idle_since: null },
+      { id: 'worker-2', status: 'idle', idle_since: null },
+    ]);
+  });
+
+  it('persists a runtime release after a terminal status update races the close', async () => {
+    const {
+      markWorkerRuntimeReleaseIntent,
+      restoreWorkerRuntimeRelease,
+    } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, updated_at = ? WHERE id = ?',
+      ['error', 99_000, 'worker-1'],
+    );
+
+    await expect(
+      markWorkerRuntimeReleaseIntent('worker-1', 'wrong-session', 123_000),
+    ).resolves.toBe(false);
+    await expect(
+      markWorkerRuntimeReleaseIntent('worker-1', 'worker-session-1', 123_000),
+    ).resolves.toBe(true);
+    await expect(
+      markWorkerRuntimeReleaseIntent('worker-1', 'worker-session-1', 124_000),
+    ).resolves.toBe(false);
+    await expect(
+      client.queryOne<{ status: string; idle_since: number | null; updated_at: number }>(
+        'SELECT status, idle_since, updated_at FROM orca_workers WHERE id = ?',
+        ['worker-1'],
+      ),
+    ).resolves.toEqual({ status: 'idle', idle_since: 123_000, updated_at: 123_000 });
+
+    await client.exec('UPDATE orca_workers SET status = ? WHERE id = ?', ['error', 'worker-1']);
+    await expect(
+      restoreWorkerRuntimeRelease(
+        'worker-1',
+        'worker-session-1',
+        123_000,
+        'done',
+        125_000,
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      client.queryOne<{ status: string; idle_since: number | null; updated_at: number }>(
+        'SELECT status, idle_since, updated_at FROM orca_workers WHERE id = ?',
+        ['worker-1'],
+      ),
+    ).resolves.toEqual({ status: 'error', idle_since: null, updated_at: 125_000 });
+  });
+
+  it('restores the previous worker status when a runtime release is rolled back', async () => {
+    const {
+      markWorkerRuntimeReleaseIntent,
+      restoreWorkerRuntimeRelease,
+    } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    await client.exec('UPDATE orca_workers SET status = ? WHERE id = ?', ['done', 'worker-1']);
+
+    await expect(
+      markWorkerRuntimeReleaseIntent('worker-1', 'worker-session-1', 123_000),
+    ).resolves.toBe(true);
+    await expect(
+      restoreWorkerRuntimeRelease(
+        'worker-1',
+        'worker-session-1',
+        123_000,
+        'done',
+        124_000,
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      restoreWorkerRuntimeRelease(
+        'worker-1',
+        'worker-session-1',
+        123_000,
+        'done',
+        125_000,
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      client.queryOne<{ status: string; idle_since: number | null; updated_at: number }>(
+        'SELECT status, idle_since, updated_at FROM orca_workers WHERE id = ?',
+        ['worker-1'],
+      ),
+    ).resolves.toEqual({ status: 'done', idle_since: null, updated_at: 124_000 });
+  });
+
+  it('rejects a stale runtime release candidate after another instance updates it', async () => {
+    const { markWorkerRuntimeReleaseIntent } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    const scannedUpdatedAt = 100_000;
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, idle_since = NULL, updated_at = ? WHERE id = ?',
+      ['done', scannedUpdatedAt, 'worker-1'],
+    );
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, idle_since = NULL, updated_at = ? WHERE id = ?',
+      ['running', 120_000, 'worker-1'],
+    );
+
+    await expect(
+      markWorkerRuntimeReleaseIntent(
+        'worker-1',
+        'worker-session-1',
+        123_000,
+        scannedUpdatedAt,
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      client.queryOne<{ status: string; idle_since: number | null; updated_at: number }>(
+        'SELECT status, idle_since, updated_at FROM orca_workers WHERE id = ?',
+        ['worker-1'],
+      ),
+    ).resolves.toEqual({ status: 'running', idle_since: null, updated_at: 120_000 });
+  });
+
+  it('acknowledges release completion and prevents a concurrent send from consuming its intent', async () => {
+    const {
+      acknowledgeWorkerRuntimeRelease,
+      claimWorkerRuntimeForSend,
+      markWorkerRuntimeReleaseIntent,
+    } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    await expect(
+      markWorkerRuntimeReleaseIntent('worker-1', 'worker-session-1', 123_000),
+    ).resolves.toBe(true);
+    await expect(
+      claimWorkerRuntimeForSend('worker-1', 'worker-session-1', 123_001),
+    ).resolves.toBe(false);
+    await expect(
+      acknowledgeWorkerRuntimeRelease('worker-1', 'worker-session-1', 123_000),
+    ).resolves.toBe(true);
+    await expect(
+      acknowledgeWorkerRuntimeRelease('worker-1', 'worker-session-1', 123_002),
+    ).resolves.toBe(false);
+    await expect(
+      client.queryOne<{ idle_since: number | null; updated_at: number }>(
+        'SELECT idle_since, updated_at FROM orca_workers WHERE id = ?',
+        ['worker-1'],
+      ),
+    ).resolves.toEqual({ idle_since: 123_000, updated_at: 123_001 });
+  });
+
+  it('claims a send before an idle watcher can persist a stale release snapshot', async () => {
+    const {
+      claimWorkerRuntimeForSend,
+      markWorkerRuntimeReleaseIntent,
+    } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, idle_since = NULL, updated_at = ? WHERE id = ?',
+      ['done', 100_000, 'worker-1'],
+    );
+
+    await expect(
+      claimWorkerRuntimeForSend('worker-1', 'worker-session-1', 100_000),
+    ).resolves.toBe(true);
+    await expect(
+      client.queryOne<{ updated_at: number }>(
+        'SELECT updated_at FROM orca_workers WHERE id = ?',
+        ['worker-1'],
+      ),
+    ).resolves.toEqual({ updated_at: 100_001 });
+    await expect(
+      markWorkerRuntimeReleaseIntent(
+        'worker-1',
+        'worker-session-1',
+        123_000,
+        100_000,
+      ),
+    ).resolves.toBe(false);
+  });
+
+  it('does not let an activity touch acknowledge a concurrent release intent', async () => {
+    const {
+      markWorkerRuntimeReleaseIntent,
+      touchWorkerRuntimeIfUnreleased,
+    } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    await client.exec(
+      'UPDATE orca_workers SET idle_since = NULL, updated_at = ? WHERE id = ?',
+      [100_000, 'worker-1'],
+    );
+
+    await expect(touchWorkerRuntimeIfUnreleased('worker-1', 99_000)).resolves.toBe(true);
+    await expect(
+      markWorkerRuntimeReleaseIntent(
+        'worker-1',
+        'worker-session-1',
+        123_000,
+        100_001,
+      ),
+    ).resolves.toBe(true);
+    await expect(touchWorkerRuntimeIfUnreleased('worker-1', 124_000)).resolves.toBe(false);
+    await expect(
+      client.queryOne<{ idle_since: number | null; updated_at: number }>(
+        'SELECT idle_since, updated_at FROM orca_workers WHERE id = ?',
+        ['worker-1'],
+      ),
+    ).resolves.toEqual({ idle_since: 123_000, updated_at: 123_000 });
+  });
+
+  it('advances task-status versions monotonically without acknowledging a release intent', async () => {
+    const {
+      markWorkerRuntimeReleaseIntent,
+      updateWorkerStatus,
+    } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, idle_since = NULL, updated_at = ? WHERE id = ?',
+      ['done', 100_000, 'worker-1'],
+    );
+    await updateWorkerStatus('worker-1', 'running');
+    const running = await client.queryOne<{ updated_at: number }>(
+      'SELECT updated_at FROM orca_workers WHERE id = ?',
+      ['worker-1'],
+    );
+    expect(running).toBeDefined();
+    const runningUpdatedAt = running!.updated_at;
+    expect(runningUpdatedAt).toBeGreaterThan(100_000);
+
+    await expect(
+      markWorkerRuntimeReleaseIntent(
+        'worker-1',
+        'worker-session-1',
+        120_000,
+        runningUpdatedAt,
+      ),
+    ).resolves.toBe(true);
+    await updateWorkerStatus('worker-1', 'done');
+    await expect(
+      client.queryOne<{ status: string; idle_since: number; updated_at: number }>(
+        'SELECT status, idle_since, updated_at FROM orca_workers WHERE id = ?',
+        ['worker-1'],
+      ),
+    ).resolves.toEqual({
+      status: 'done',
+      idle_since: 120_000,
+      updated_at: 120_000,
+    });
   });
 
   function createTestDbClient(): DbClient {

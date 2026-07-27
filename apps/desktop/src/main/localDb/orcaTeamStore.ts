@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron';
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from './client/current.js';
@@ -65,6 +65,8 @@ export interface OrcaWorkerLinkRecord {
   teamId: string;
   workerSessionId: string;
   leadSessionId: string;
+  idleSince: string | null;
+  updatedAt: string;
   leadSession: {
     sessionId: string;
     agentKind: MakerAgentKind;
@@ -272,7 +274,17 @@ export async function markWorkersStatusByTeam(
   const now = Date.now();
   await db
     .update(orcaWorkers)
-    .set({ status, updatedAt: now })
+    .set({
+      status,
+      updatedAt: sql`CASE
+        WHEN ${orcaWorkers.idleSince} IS NULL THEN
+          CASE WHEN ${now} > ${orcaWorkers.updatedAt}
+            THEN ${now}
+            ELSE ${orcaWorkers.updatedAt} + 1
+          END
+        ELSE ${orcaWorkers.updatedAt}
+      END`,
+    })
     .where(eq(orcaWorkers.teamId, teamId));
 }
 
@@ -310,7 +322,17 @@ export async function reconcileInactiveTeamWorkersForLead(
   // orca_workers 收敛 done(对齐 markWorkersStatusByTeam;已 done 的重写无副作用)。
   await db
     .update(orcaWorkers)
-    .set({ status: 'done', updatedAt: now })
+    .set({
+      status: 'done',
+      updatedAt: sql`CASE
+        WHEN ${orcaWorkers.idleSince} IS NULL THEN
+          CASE WHEN ${now} > ${orcaWorkers.updatedAt}
+            THEN ${now}
+            ELSE ${orcaWorkers.updatedAt} + 1
+          END
+        ELSE ${orcaWorkers.updatedAt}
+      END`,
+    })
     .where(inArray(orcaWorkers.teamId, teamIds));
 
   if (ids.length === 0) return [];
@@ -424,6 +446,8 @@ export async function getWorkerLink(input: {
     teamId: row.team.id,
     workerSessionId: row.worker.sessionId,
     leadSessionId: row.team.leadSessionId,
+    idleSince: msToIso(row.worker.idleSince),
+    updatedAt: new Date(row.worker.updatedAt).toISOString(),
     leadSession: {
       sessionId: row.leadSession.id,
       agentKind: fromDbAgentKind(row.leadSession.agentKind),
@@ -459,38 +483,246 @@ export async function updateWorkerStatus(
   status: OrcaWorkerStatus,
 ): Promise<void> {
   const db = getDbClient().drizzle;
+  const updatedAt = Date.now();
   await db
     .update(orcaWorkers)
     .set({
       status,
-      updatedAt: Date.now(),
+      // A non-running task status may arrive while provider release is being
+      // acknowledged. Preserve that release protocol timestamp; only the
+      // release helpers below may move an existing marker between states.
+      updatedAt: status === 'running'
+        ? sql`CASE
+            WHEN ${updatedAt} > ${orcaWorkers.updatedAt}
+              THEN ${updatedAt}
+            ELSE ${orcaWorkers.updatedAt} + 1
+          END`
+        : sql`CASE
+            WHEN ${orcaWorkers.idleSince} IS NOT NULL
+              THEN ${orcaWorkers.updatedAt}
+            WHEN ${updatedAt} > ${orcaWorkers.updatedAt}
+              THEN ${updatedAt}
+            ELSE ${orcaWorkers.updatedAt} + 1
+          END`,
       ...(status === 'running' ? { idleSince: null } : {}),
     })
     .where(eq(orcaWorkers.id, workerId));
+}
+
+/**
+ * Persist that a Worker runtime was restored before thread/resume. A released
+ * error Worker becomes idle so a transient resume failure remains eligible for
+ * lazy recreation; other task statuses retain their existing semantics.
+ */
+export async function clearWorkerIdleReleaseMarker(input: {
+  workerId: string;
+  sessionId: string;
+  expectedIdleSince: number;
+  expectedUpdatedAt: number;
+  resumedAt: number;
+}): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const result = await db
+    .update(orcaWorkers)
+    .set({
+      idleSince: null,
+      status: sql`CASE WHEN ${orcaWorkers.status} = 'error' THEN 'idle' ELSE ${orcaWorkers.status} END`,
+      updatedAt: input.resumedAt,
+    })
+    .where(and(
+      eq(orcaWorkers.id, input.workerId),
+      eq(orcaWorkers.sessionId, input.sessionId),
+      eq(orcaWorkers.idleSince, input.expectedIdleSince),
+      eq(orcaWorkers.updatedAt, input.expectedUpdatedAt),
+    ))
+    .run();
+  return result.changes > 0;
+}
+
+/**
+ * Persist a runtime-release intent before the external provider close. The matching
+ * acknowledgement advances updated_at after teardown. Callers may pin the scanned
+ * updatedAt so another instance cannot start a turn and then have that newer row
+ * overwritten by this release.
+ */
+export async function markWorkerRuntimeReleaseIntent(
+  workerId: string,
+  sessionId: string,
+  releasedAt: number,
+  expectedUpdatedAt?: number,
+): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const result = await db
+    .update(orcaWorkers)
+    .set({ status: 'idle', idleSince: releasedAt, updatedAt: releasedAt })
+    .where(and(
+      eq(orcaWorkers.id, workerId),
+      eq(orcaWorkers.sessionId, sessionId),
+      isNull(orcaWorkers.idleSince),
+      inArray(orcaWorkers.status, ACTIVE_WORKER_STATUSES),
+      ...(expectedUpdatedAt === undefined
+        ? []
+        : [eq(orcaWorkers.updatedAt, expectedUpdatedAt)]),
+    ))
+    .run();
+  return result.changes > 0;
+}
+
+/**
+ * Acknowledge that provider teardown completed for the current release intent.
+ * `updated_at > idle_since` distinguishes this durable completion from the
+ * in-flight/crash-recovery form where both timestamps are equal.
+ */
+export async function acknowledgeWorkerRuntimeRelease(
+  workerId: string,
+  sessionId: string,
+  completedAt: number,
+): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const result = await db
+    .update(orcaWorkers)
+    .set({
+      updatedAt: sql`CASE
+        WHEN ${completedAt} > ${orcaWorkers.idleSince}
+          THEN ${completedAt}
+        ELSE ${orcaWorkers.idleSince} + 1
+      END`,
+    })
+    .where(and(
+      eq(orcaWorkers.id, workerId),
+      eq(orcaWorkers.sessionId, sessionId),
+      isNotNull(orcaWorkers.idleSince),
+      eq(orcaWorkers.updatedAt, orcaWorkers.idleSince),
+    ))
+    .run();
+  return result.changes > 0;
+}
+
+/**
+ * Reserve a Worker row for an accepted send without consuming a runtime-release
+ * marker. A concurrent watcher intent wins by making this CAS fail; a successful
+ * claim changes updated_at so a watcher holding an older snapshot cannot archive
+ * the newly accepted turn.
+ */
+export async function claimWorkerRuntimeForSend(
+  workerId: string,
+  sessionId: string,
+  claimedAt: number,
+): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const result = await db
+    .update(orcaWorkers)
+    .set({
+      updatedAt: sql`CASE
+        WHEN ${claimedAt} > ${orcaWorkers.updatedAt}
+          THEN ${claimedAt}
+        ELSE ${orcaWorkers.updatedAt} + 1
+      END`,
+    })
+    .where(and(
+      eq(orcaWorkers.id, workerId),
+      eq(orcaWorkers.sessionId, sessionId),
+      isNull(orcaWorkers.idleSince),
+      inArray(orcaWorkers.status, ACTIVE_WORKER_STATUSES),
+    ))
+    .run();
+  return result.changes > 0;
+}
+
+/**
+ * Postpone idle release only while no release intent exists. The monotonic write
+ * cannot accidentally turn a concurrent `updated_at == idle_since` intent into
+ * an acknowledged release.
+ */
+export async function touchWorkerRuntimeIfUnreleased(
+  workerId: string,
+  touchedAt: number,
+): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const result = await db
+    .update(orcaWorkers)
+    .set({
+      updatedAt: sql`CASE
+        WHEN ${touchedAt} > ${orcaWorkers.updatedAt}
+          THEN ${touchedAt}
+        ELSE ${orcaWorkers.updatedAt} + 1
+      END`,
+    })
+    .where(and(
+      eq(orcaWorkers.id, workerId),
+      isNull(orcaWorkers.idleSince),
+    ))
+    .run();
+  return result.changes > 0;
+}
+
+/**
+ * Roll back an explicitly busy runtime-release intent without overwriting a
+ * terminal task status that raced the provider close. The timestamp pins this attempt.
+ */
+export async function restoreWorkerRuntimeRelease(
+  workerId: string,
+  sessionId: string,
+  releasedAt: number,
+  previousStatus: OrcaWorkerStatus,
+  restoredAt: number,
+): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const result = await db
+    .update(orcaWorkers)
+    .set({
+      status: sql<OrcaWorkerStatus>`CASE
+        WHEN ${orcaWorkers.status} = 'idle' THEN ${previousStatus}
+        ELSE ${orcaWorkers.status}
+      END`,
+      idleSince: null,
+      updatedAt: restoredAt,
+    })
+    .where(and(
+      eq(orcaWorkers.id, workerId),
+      eq(orcaWorkers.sessionId, sessionId),
+      eq(orcaWorkers.idleSince, releasedAt),
+    ))
+    .run();
+  return result.changes > 0;
 }
 
 /** Atomically marks a worker idle only while it still has the expected status. */
 export async function markWorkerIdleIfStatus(
   workerId: string,
   expectedStatus: OrcaWorkerStatus,
+  expectedUpdatedAt: number,
 ): Promise<boolean> {
   const db = getDbClient().drizzle;
   const now = Date.now();
   const result = await db
     .update(orcaWorkers)
     .set({ status: 'idle', idleSince: now, updatedAt: now })
-    .where(and(eq(orcaWorkers.id, workerId), eq(orcaWorkers.status, expectedStatus)))
+    .where(and(
+      eq(orcaWorkers.id, workerId),
+      eq(orcaWorkers.status, expectedStatus),
+      isNull(orcaWorkers.idleSince),
+      eq(orcaWorkers.updatedAt, expectedUpdatedAt),
+    ))
     .run();
   return result.changes > 0;
 }
 
 /** Restores a raced done acknowledgement only while the worker is still idle. */
 export async function restoreWorkerDoneIfIdle(workerId: string): Promise<boolean> {
+  return restoreWorkerStatusIfIdle(workerId, 'done');
+}
+
+/** Roll back a persistence-first runtime release only while the Worker is still idle. */
+export async function restoreWorkerStatusIfIdle(
+  workerId: string,
+  status: Exclude<OrcaWorkerStatus, 'idle'>,
+): Promise<boolean> {
   const db = getDbClient().drizzle;
   const now = Date.now();
   const result = await db
     .update(orcaWorkers)
-    .set({ status: 'done', idleSince: null, updatedAt: now })
+    .set({ status, idleSince: null, updatedAt: now })
     .where(and(eq(orcaWorkers.id, workerId), eq(orcaWorkers.status, 'idle')))
     .run();
   return result.changes > 0;

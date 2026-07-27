@@ -105,6 +105,31 @@ export interface OrcaLifecycleService {
   enableTeam(params: OrcaEnableTeamParams): Promise<OrcaEnableTeamResult>;
 }
 
+export interface CreatedWorkerRollbackCloseDeps {
+  hasSession(sessionId: string): boolean;
+  closeSession(sessionId: string): Promise<void>;
+  logWarn(message: string, fields: Record<string, unknown>): void;
+}
+
+export async function closeCreatedWorkerForRollback(
+  deps: CreatedWorkerRollbackCloseDeps,
+  params: { workerId: string; workerSessionId: string },
+): Promise<void> {
+  if (!deps.hasSession(params.workerSessionId)) return;
+  try {
+    // Creation can fail before the first rollout exists. A generic close tears
+    // down the local Session without requiring provider runtime archival.
+    await deps.closeSession(params.workerSessionId);
+  } catch (error) {
+    deps.logWarn('rollbackCreatedWorker close failed; preserving Worker', {
+      workerId: params.workerId,
+      workerSessionId: params.workerSessionId,
+      err: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
 function internalFailure(err: unknown): OrcaInternalFailure {
   return {
     ok: false,
@@ -239,10 +264,32 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     failure?: Extract<OrcaEnableTeamResult, { ok: false }>;
   }): Promise<Extract<OrcaEnableTeamResult, { ok: false }>> {
     if (params.workerId && params.workerSessionId) {
-      await deps.rollbackCreatedWorker({
-        workerId: params.workerId,
-        workerSessionId: params.workerSessionId,
-      }).catch(() => undefined);
+      try {
+        await deps.rollbackCreatedWorker({
+          workerId: params.workerId,
+          workerSessionId: params.workerSessionId,
+        });
+      } catch {
+        // The Worker runtime still exists, so keep its team active and restore
+        // Lead reachability best-effort. A later start_team/end_team can then
+        // retry cleanup instead of stranding a hidden Worker in a failed team.
+        try {
+          await deps.setSessionOrcaRole(params.leadSessionId, 'lead');
+          deps.clearKnownNonOrcaSession(params.leadSessionId);
+          await deps.setLeadVendorOptions({
+            leadSessionId: params.leadSessionId,
+            teamId: params.teamId,
+            workerId: params.workerId,
+            workerSessionId: params.workerSessionId,
+          });
+        } catch {
+          // Keep the active team as the durable recovery anchor even when the
+          // live Lead refresh is temporarily unavailable.
+        }
+        deps.broadcastSessionCreated(params.workerSessionId);
+        deps.broadcastOrcaWorkerChanged(params.leadSessionId);
+        return params.failure ?? internalFailure(params.err);
+      }
     }
     await deps.markTeamEnded(params.teamId, 'failed').catch(() => undefined);
     await deps.setSessionOrcaRole(params.leadSessionId, null).catch(() => undefined);

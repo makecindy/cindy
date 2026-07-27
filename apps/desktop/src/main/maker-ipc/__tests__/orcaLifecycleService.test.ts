@@ -2,6 +2,7 @@ import type { AgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  closeCreatedWorkerForRollback,
   createOrcaLifecycleService,
   ORCA_WORKER_READY_MESSAGE,
   type OrcaLifecycleDeps,
@@ -103,6 +104,63 @@ function createDeps(overrides: Partial<OrcaLifecycleDeps> = {}) {
     service: createOrcaLifecycleService(deps),
   };
 }
+
+describe('closeCreatedWorkerForRollback', () => {
+  it('uses a generic close before allowing Worker cleanup', async () => {
+    const deps = {
+      hasSession: vi.fn(() => true),
+      closeSession: vi.fn(async () => undefined),
+      logWarn: vi.fn(),
+    };
+
+    await expect(closeCreatedWorkerForRollback(deps, {
+      workerId: 'worker-1',
+      workerSessionId: 'worker-session-1',
+    })).resolves.toBeUndefined();
+
+    expect(deps.closeSession).toHaveBeenCalledWith('worker-session-1');
+    expect(deps.logWarn).not.toHaveBeenCalled();
+  });
+
+  it('logs and rejects close failures so the caller does not remove the Worker', async () => {
+    const deps = {
+      hasSession: vi.fn(() => true),
+      closeSession: vi.fn(async () => {
+        throw new Error('local close failed');
+      }),
+      logWarn: vi.fn(),
+    };
+
+    await expect(closeCreatedWorkerForRollback(deps, {
+      workerId: 'worker-1',
+      workerSessionId: 'worker-session-1',
+    })).rejects.toThrow('local close failed');
+
+    expect(deps.logWarn).toHaveBeenCalledWith(
+      'rollbackCreatedWorker close failed; preserving Worker',
+      {
+        workerId: 'worker-1',
+        workerSessionId: 'worker-session-1',
+        err: 'local close failed',
+      },
+    );
+  });
+
+  it('skips close when the local Session is already gone', async () => {
+    const deps = {
+      hasSession: vi.fn(() => false),
+      closeSession: vi.fn(async () => undefined),
+      logWarn: vi.fn(),
+    };
+
+    await expect(closeCreatedWorkerForRollback(deps, {
+      workerId: 'worker-1',
+      workerSessionId: 'worker-session-1',
+    })).resolves.toBeUndefined();
+
+    expect(deps.closeSession).not.toHaveBeenCalled();
+  });
+});
 
 describe('OrcaLifecycleService', () => {
   it('starts a team without creating a worker and refreshes lead state', async () => {
@@ -614,6 +672,47 @@ describe('OrcaLifecycleService', () => {
       'markTeamEnded:team-1:failed',
       'setSessionOrcaRole:lead-1:null',
       'clearLeadVendorOptions:lead-1',
+    ]);
+  });
+
+  it('keeps a failed setup team active when the created Worker cannot be closed', async () => {
+    const { calls, service } = createDeps({
+      sendWorkerReadyPlaceholder: vi.fn(async (params) => {
+        calls.push(`sendWorkerReadyPlaceholder:${params.entrypoint}:${params.context}`);
+        throw new Error('ready placeholder failed');
+      }),
+      rollbackCreatedWorker: vi.fn(async ({ workerId, workerSessionId }) => {
+        calls.push(`rollbackCreatedWorker:${workerId}:${workerSessionId}`);
+        throw new Error('worker close failed');
+      }),
+    });
+
+    await expect(
+      service.enableTeam({
+        leadSessionId: 'lead-1',
+        workerAgent: 'codex',
+        role: 'reviewer',
+        label: 'reviewer',
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: 'ready placeholder failed',
+    });
+
+    expect(calls).toEqual([
+      'createActiveTeam:lead-1',
+      'createWorkerInTeam:team-1:reviewer',
+      'setSessionOrcaRole:lead-1:lead',
+      'clearKnownNonOrcaSession:lead-1',
+      'setLeadVendorOptions:lead-1:worker-session-1',
+      'sendWorkerReadyPlaceholder:enable_collab_mode:enable_collab_mode/worker-session-1/worker-ready-placeholder',
+      'rollbackCreatedWorker:worker-1:worker-session-1',
+      'setSessionOrcaRole:lead-1:lead',
+      'clearKnownNonOrcaSession:lead-1',
+      'setLeadVendorOptions:lead-1:worker-session-1',
+      'broadcastSessionCreated:worker-session-1',
+      'broadcastOrcaWorkerChanged:lead-1',
     ]);
   });
 

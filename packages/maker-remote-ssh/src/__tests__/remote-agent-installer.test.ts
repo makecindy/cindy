@@ -39,6 +39,9 @@ describe('remote agent installer', () => {
   it('runs install.sh with --release when a Codex release arg is present', () => {
     expect(BOOTSTRAP_SH).toContain('INSTALLER_URL="https://github.com/openai/codex/releases/download/rust-v$CODEX_RELEASE/install.sh"');
     expect(BOOTSTRAP_SH).toContain('sh "$INSTALLER_TMP" --release "$CODEX_RELEASE"');
+    expect(BOOTSTRAP_SH).toContain('[[ "$V" =~ ([0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?) ]]');
+    expect(BOOTSTRAP_SH).toContain('DETECTED_RELEASE="${BASH_REMATCH[1]}"');
+    expect(BOOTSTRAP_SH).toContain('MANAGED_RELEASE="$CODEX_RELEASE"');
   });
 
   it('pins Claude Code for probe and install, and rejects a stale sentinel version', async () => {
@@ -61,7 +64,7 @@ describe('remote agent installer', () => {
     expect(probe.installed).toBe(false);
     expect(calls[0].command).toContain(`'${PINNED_CLAUDE_CODE_VERSION}'`);
     expect(calls[0].input).toContain(
-      '[ "${V%% *}" = "$CLAUDE_RELEASE" ]',
+      'MANAGED_RELEASE="$CLAUDE_RELEASE"',
     );
 
     await installRemoteAgent(host, 'claude-code');
@@ -70,7 +73,32 @@ describe('remote agent installer', () => {
       'NPM_PKG="@anthropic-ai/claude-code@$CLAUDE_RELEASE"',
     );
     expect(calls[1].input).toContain(
-      'Claude Code version ${V%% *} != managed pin $CLAUDE_RELEASE',
+      '$AGENT_KIND version $DETECTED_RELEASE != managed pin $MANAGED_RELEASE',
     );
+  });
+
+  it('pins Codex for probe and rejects a stale sentinel version', async () => {
+    const calls: Array<{ command: string; input: string }> = [];
+    const host = {
+      exec: async (command: string, opts: { input?: string }) => {
+        calls.push({ command, input: opts.input ?? '' });
+        return {
+          exitCode: 0,
+          stdout: [
+            'INSTALL_DIR /home/u/.xdt-server/v1',
+            'NOT_INSTALLED',
+          ].join('\n'),
+          stderr: '',
+        };
+      },
+    } as Pick<RemoteHost, 'exec'> as RemoteHost;
+
+    const probe = await probeRemoteAgent(host, 'codex');
+
+    expect(probe.installed).toBe(false);
+    expect(calls[0].command).toContain(`'${PINNED_CODEX_RELEASE_VERSION}'`);
+    expect(calls[0].input).toContain('[[ "$V" =~ ([0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?) ]]');
+    expect(calls[0].input).toContain('DETECTED_RELEASE="${BASH_REMATCH[1]}"');
+    expect(calls[0].input).toContain('MANAGED_RELEASE="$CODEX_RELEASE"');
   });
 });

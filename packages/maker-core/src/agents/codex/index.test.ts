@@ -4,7 +4,7 @@ import os from 'node:os';
 import { promises as fs } from 'node:fs';
 
 import { CodexAgent } from './index.js';
-import { Method } from './app-server/protocol.js';
+import { JSONRPC_ERROR_CODE, Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
 import type { AgentDeps } from '../base-agent.js';
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
@@ -19,7 +19,9 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
   class MockCodexTransport {
     static threadSeq = 1;
     static failThreadStart = false;
+    static failThreadArchive = false;
     static dropThreadUnsubscribe = false;
+    static archivedThreadIds = new Set<string>();
     static beforeThreadStartResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
     static onCreate: ((transport: MockCodexTransport) => void) | null = null;
 
@@ -82,6 +84,14 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
         return;
       }
       if (req.method === 'thread/resume') {
+        const threadId = (req.params as { threadId?: unknown } | undefined)?.threadId;
+        if (typeof threadId === 'string' && MockCodexTransport.archivedThreadIds.has(threadId)) {
+          this.emitLine({
+            id: req.id,
+            error: { code: -32000, message: `session ${threadId} is archived. Run \`codex unarchive ${threadId}\` to unarchive it first.` },
+          });
+          return;
+        }
         this.emitLine({
           id: req.id,
           result: {
@@ -116,6 +126,22 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
       if (req.method === 'thread/unsubscribe') {
         if (MockCodexTransport.dropThreadUnsubscribe) return;
         this.emitLine({ id: req.id, result: { status: 'unsubscribed' } });
+        return;
+      }
+      if (req.method === 'thread/archive') {
+        if (MockCodexTransport.failThreadArchive) {
+          this.emitLine({ id: req.id, error: { code: -32000, message: 'thread archive boom' } });
+          return;
+        }
+        const threadId = (req.params as { threadId?: unknown } | undefined)?.threadId;
+        if (typeof threadId === 'string') MockCodexTransport.archivedThreadIds.add(threadId);
+        this.emitLine({ id: req.id, result: {} });
+        return;
+      }
+      if (req.method === 'thread/unarchive') {
+        const threadId = (req.params as { threadId?: unknown } | undefined)?.threadId;
+        if (typeof threadId === 'string') MockCodexTransport.archivedThreadIds.delete(threadId);
+        this.emitLine({ id: req.id, result: { thread: { id: threadId } } });
         return;
       }
       if (req.method === 'skills/list') {
@@ -227,7 +253,9 @@ beforeEach(() => {
   createdTransports.length = 0;
   MockCodexTransport.threadSeq = 1;
   MockCodexTransport.failThreadStart = false;
+  MockCodexTransport.failThreadArchive = false;
   MockCodexTransport.dropThreadUnsubscribe = false;
+  MockCodexTransport.archivedThreadIds.clear();
   MockCodexTransport.beforeThreadStartResponse = null;
   MockCodexTransport.onCreate = null;
 });
@@ -277,6 +305,17 @@ function createDeps(
     binaryPath: process.execPath,
     logger: createNoopLogger(),
     ...overrides,
+  };
+}
+
+function releasedWorkerVendorOptions() {
+  return {
+    orcaRole: 'worker' as const,
+    orcaWorkerId: 'worker-1',
+    orcaRuntimeReleased: true,
+    orcaRuntimeReleaseIdleSince: 100,
+    orcaRuntimeReleaseUpdatedAt: 100,
+    orcaRuntimeResumedAt: 101,
   };
 }
 
@@ -351,6 +390,11 @@ function installFakeHost(
     if (method === Method.ThreadRollback) {
       return { thread: { id: 'rollback-thread-id' } };
     }
+    if (method === Method.ThreadArchive) return {};
+    if (method === Method.ThreadUnarchive) {
+      const threadId = (params as { threadId?: unknown }).threadId;
+      return { thread: { id: threadId } };
+    }
     throw new Error(`unexpected method: ${method}`);
   });
   const subscribeThread = vi.fn((_threadId: string, handlers: ThreadEventHandlers) => {
@@ -358,6 +402,9 @@ function installFakeHost(
     return { release: vi.fn() };
   });
   const unsubscribeThread = vi.fn(async (_threadId: string) => {});
+  const archiveThread = vi.fn(async (threadId: string) => request(Method.ThreadArchive, { threadId }));
+  const unarchiveThread = vi.fn(async (threadId: string) => request(Method.ThreadUnarchive, { threadId }));
+  const hasActiveClient = vi.fn(() => true);
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
   const getRemoteCompactionProviderId = vi.fn(() => opts.remoteCompactionProviderId ?? null);
   const host = {
@@ -365,6 +412,9 @@ function installFakeHost(
     request,
     subscribeThread,
     unsubscribeThread,
+    archiveThread,
+    unarchiveThread,
+    hasActiveClient,
     isCodexProxyActive,
     getRemoteCompactionProviderId,
     getConnectionId: () => 'test-connection',
@@ -1889,6 +1939,30 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('allows a stale Worker handle to close after its local host is force-retired', async () => {
+    const agent = new CodexAgent(createDeps());
+    const staleHandle = await agent.startSession({
+      sessionId: 'session-worker-before-auth-restart',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire');
+
+    await expect(staleHandle.close()).resolves.toBeUndefined();
+    const replacementHandle = await agent.startSession({
+      sessionId: 'session-worker-after-auth-restart',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+    expect(createdTransports).toHaveLength(2);
+
+    await replacementHandle.close();
+    await agent.dispose();
+  });
+
   it('collapses in-flight turn state with a terminal transport error when the local host is force-retired', async () => {
     // 回归 2026-07-19:auth 失效触发 retiring host with active sessions 时,原实现
     // 静默清 subscribers 再杀进程,session 收不到任何终态事件 → isTurnRunning 永久
@@ -3224,7 +3298,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('start-thread-id');
   });
 
-  it('unsubscribes the app-server thread when closing a local session without stopping the shared host', async () => {
+  it('archives a Worker thread before unsubscribing its local session without stopping the shared host', async () => {
     const agent = new CodexAgent(createDeps());
     const handle = await agent.startSession({
       sessionId: 'session-codex-mcp-runtime-release',
@@ -3236,16 +3310,378 @@ describe('CodexAgent MCP thread context hooks', () => {
     const transport = createdTransports[0];
     expect(transport).toBeDefined();
 
-    await handle.close();
+    await handle.close({ releaseRuntime: true });
 
-    const unsubscribe = transport!.lines
-      .map((line) => JSON.parse(line) as { method?: string; params?: unknown })
-      .find((request) => request.method === Method.ThreadUnsubscribe);
-    expect(unsubscribe).toMatchObject({
+    const requests = transport!.lines
+      .map((line) => JSON.parse(line) as { method?: string; params?: unknown });
+    const archiveIndex = requests.findIndex((request) => request.method === Method.ThreadArchive);
+    const unsubscribeIndex = requests.findIndex((request) => request.method === Method.ThreadUnsubscribe);
+    expect(requests[archiveIndex]).toMatchObject({
+      method: Method.ThreadArchive,
+      params: { threadId: 'thread-1' },
+    });
+    expect(requests[unsubscribeIndex]).toMatchObject({
       method: Method.ThreadUnsubscribe,
       params: { threadId: 'thread-1' },
     });
+    expect(archiveIndex).toBeGreaterThanOrEqual(0);
+    expect(unsubscribeIndex).toBeGreaterThan(archiveIndex);
     expect(transport!.closed).toBe(false);
+  });
+
+  it('keeps a Worker close retryable when thread/archive fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.archiveThread.mockRejectedValueOnce(new Error('thread archive boom'));
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-archive-retry',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await expect(handle.close({ releaseRuntime: true })).rejects.toThrow('thread archive boom');
+    await expect(handle.close({ releaseRuntime: true })).resolves.toBeUndefined();
+
+    expect(host.archiveThread).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts a precise already-archived response when retrying Worker close', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.archiveThread.mockRejectedValueOnce(Object.assign(
+      new Error('session thread-1 is archived'),
+      { code: JSONRPC_ERROR_CODE.INVALID_REQUEST },
+    ));
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-already-archived',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await expect(handle.close({ releaseRuntime: true })).resolves.toBeUndefined();
+
+    expect(host.archiveThread).toHaveBeenCalledOnce();
+  });
+
+  it('does not swallow unrelated INVALID_REQUEST errors from thread/archive', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.archiveThread.mockRejectedValueOnce(Object.assign(
+      new Error('no rollout exists for thread'),
+      { code: JSONRPC_ERROR_CODE.INVALID_REQUEST },
+    ));
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-invalid-archive',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await expect(handle.close({ releaseRuntime: true })).rejects.toThrow('no rollout exists');
+  });
+
+  it('finishes Worker close without restarting an app-server client lost to transport failure', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.hasActiveClient.mockReturnValue(false);
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-dead-host',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await expect(handle.close({ releaseRuntime: true })).resolves.toBeUndefined();
+
+    expect(host.archiveThread).not.toHaveBeenCalled();
+  });
+
+  it('keeps a remote Worker release retryable when its local proxy client is unavailable', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.hasActiveClient.mockReturnValue(false);
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-worker-inactive-proxy',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      remoteHostId: 'remote-host-1',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await expect(handle.close({ releaseRuntime: true })).rejects.toThrow(
+      'remote Worker runtime release was not acknowledged',
+    );
+
+    expect(host.archiveThread).not.toHaveBeenCalled();
+    expect(handle.isClosed?.()).toBe(true);
+  });
+
+  it('keeps a remote Worker release retryable after archive loses its proxy connection', async () => {
+    const archiveError = new Error('remote proxy disconnected during archive');
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.archiveThread.mockImplementationOnce(async () => {
+      host.hasActiveClient.mockReturnValue(false);
+      throw archiveError;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-worker-interrupted-archive',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      remoteHostId: 'remote-host-1',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await expect(handle.close({ releaseRuntime: true })).rejects.toBe(archiveError);
+
+    expect(host.archiveThread).toHaveBeenCalledOnce();
+    expect(handle.isClosed?.()).toBe(true);
+  });
+
+  it('keeps a remote Worker release retryable when its local host binding is stale', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const hosts = (agent as unknown as { hosts: Map<string, unknown> }).hosts;
+    hosts.set('remote:remote-host-1', host);
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-worker-stale-host',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      remoteHostId: 'remote-host-1',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+    hosts.delete('remote:remote-host-1');
+
+    await expect(handle.close({ releaseRuntime: true })).rejects.toThrow(
+      'app-server was replaced before thread/archive',
+    );
+
+    expect(host.archiveThread).not.toHaveBeenCalled();
+    expect(handle.isClosed?.()).toBe(true);
+  });
+
+  it('does not archive a Worker thread during a generic resumable close', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-generic-close',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await handle.close();
+
+    expect(host.archiveThread).not.toHaveBeenCalled();
+  });
+
+  it('can archive a Worker runtime after its generic local close already completed', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-close-upgrade',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await handle.close();
+    await handle.close({ releaseRuntime: true });
+
+    expect(host.archiveThread).toHaveBeenCalledOnce();
+  });
+
+  it('unarchives a persistently released Worker before thread/resume', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method !== Method.ThreadResume) return undefined;
+      return {
+        thread: { id: 'archived-worker-id' },
+        model: 'gpt-5.4',
+        modelProvider: 'openai',
+        cwd: '/repo',
+      };
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-resume-archived',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+      vendorOptions: releasedWorkerVendorOptions(),
+    });
+
+    expect(host.unarchiveThread).toHaveBeenCalledWith('123e4567-e89b-12d3-a456-426614174000');
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('does not resume a released Worker when thread/unarchive fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadUnarchive) throw new Error('thread/unarchive transport timeout');
+      return undefined;
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'session-worker-resume-stale-marker',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174001',
+      vendorOptions: releasedWorkerVendorOptions(),
+    })).rejects.toThrow('thread/unarchive transport timeout');
+
+    expect(host.unarchiveThread).toHaveBeenCalledOnce();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(0);
+    await agent.dispose();
+  });
+
+  it('resumes a Worker with a legacy pre-archive release marker', async () => {
+    const onCodexThreadUnarchived = vi.fn(async () => undefined);
+    const agent = new CodexAgent(createDeps({}, { onCodexThreadUnarchived }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadUnarchive) {
+        throw Object.assign(
+          new Error('restore precondition failed'),
+          { code: JSONRPC_ERROR_CODE.INVALID_REQUEST },
+        );
+      }
+      return undefined;
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-resume-legacy-marker',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174004',
+      vendorOptions: releasedWorkerVendorOptions(),
+    });
+
+    expect(host.unarchiveThread).toHaveBeenCalledOnce();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    expect(onCodexThreadUnarchived).toHaveBeenCalledWith({
+      sessionId: 'session-worker-resume-legacy-marker',
+      threadId: '123e4567-e89b-12d3-a456-426614174004',
+      workerId: 'worker-1',
+      expectedIdleSince: 100,
+      expectedUpdatedAt: 100,
+      resumedAt: 101,
+    });
+    await handle.close();
+  });
+
+  it('does not swallow unrelated INVALID_REQUEST errors while restoring a released Worker', async () => {
+    const onCodexThreadUnarchived = vi.fn(async () => undefined);
+    const agent = new CodexAgent(createDeps({}, { onCodexThreadUnarchived }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadUnarchive) {
+        throw Object.assign(
+          new Error('unknown thread id'),
+          { code: JSONRPC_ERROR_CODE.INVALID_REQUEST },
+        );
+      }
+      if (method === Method.ThreadResume) {
+        throw new Error('thread/resume failed: unknown thread id');
+      }
+      return undefined;
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'session-worker-invalid-unarchive',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174009',
+      vendorOptions: releasedWorkerVendorOptions(),
+    })).rejects.toThrow('thread/resume failed: unknown thread id');
+
+    expect(host.unarchiveThread).toHaveBeenCalledOnce();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    expect(onCodexThreadUnarchived).not.toHaveBeenCalled();
+    await agent.dispose();
+  });
+
+  it('retries release-marker persistence after Worker unarchive already succeeded', async () => {
+    let unarchiveAttempts = 0;
+    const onCodexThreadUnarchived = vi.fn()
+      .mockRejectedValueOnce(new Error('release marker persistence failed'))
+      .mockResolvedValueOnce(undefined);
+    const agent = new CodexAgent(createDeps({}, { onCodexThreadUnarchived }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadUnarchive && ++unarchiveAttempts === 2) {
+        throw Object.assign(
+          new Error('thread is not archived'),
+          { code: JSONRPC_ERROR_CODE.INVALID_REQUEST },
+        );
+      }
+      return undefined;
+    });
+    const startOptions = {
+      sessionId: 'session-worker-resume-marker-retry',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174005',
+      vendorOptions: releasedWorkerVendorOptions(),
+    };
+
+    await expect(agent.startSession(startOptions))
+      .rejects.toThrow('release marker persistence failed');
+
+    const handle = await agent.startSession(startOptions);
+
+    expect(host.unarchiveThread).toHaveBeenCalledTimes(2);
+    expect(onCodexThreadUnarchived).toHaveBeenCalledTimes(2);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('persists a successful Worker unarchive before a failing thread/resume', async () => {
+    const onCodexThreadUnarchived = vi.fn(async () => undefined);
+    const agent = new CodexAgent(createDeps({}, { onCodexThreadUnarchived }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) {
+        expect(onCodexThreadUnarchived).toHaveBeenCalledOnce();
+        throw new Error('thread/resume transport timeout');
+      }
+      return undefined;
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'session-worker-resume-after-unarchive',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174003',
+      vendorOptions: releasedWorkerVendorOptions(),
+    })).rejects.toThrow('thread/resume transport timeout');
+
+    expect(host.unarchiveThread).toHaveBeenCalledOnce();
+    expect(onCodexThreadUnarchived).toHaveBeenCalledWith({
+      sessionId: 'session-worker-resume-after-unarchive',
+      threadId: '123e4567-e89b-12d3-a456-426614174003',
+      workerId: 'worker-1',
+      expectedIdleSince: 100,
+      expectedUpdatedAt: 100,
+      resumedAt: 101,
+    });
+    await agent.dispose();
+  });
+
+  it('does not unarchive a Worker without a persisted release marker', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-resume-active',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174002',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    expect(host.unarchiveThread).not.toHaveBeenCalled();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    await handle.close();
   });
 
   it('finishes closing when the app-server stays connected without answering thread/unsubscribe', async () => {

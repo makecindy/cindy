@@ -31,7 +31,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { DL_SESSION_REFERENCE_CAPABILITY_CHANNEL } from '@cindy/device-link';
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { BrowserWindow, ipcMain } from 'electron';
 import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
 import {
@@ -135,6 +135,7 @@ import {
 import { maybeGenerateSessionTaskSummary } from '../sessionTaskSummary.js';
 import {
   addOrUpdateWorker,
+  acknowledgeWorkerRuntimeRelease,
   archiveSingleWorkerSession,
   archiveWorkersByTeam,
   createActiveTeam,
@@ -143,10 +144,14 @@ import {
   getWorkerLink,
   isActiveWorkerStatus,
   listWorkersByLead,
+  claimWorkerRuntimeForSend,
   markTeamEnded,
   markWorkersStatusByTeam,
   markWorkerIdleIfStatus,
+  markWorkerRuntimeReleaseIntent,
+  restoreWorkerRuntimeRelease,
   restoreWorkerDoneIfIdle,
+  restoreWorkerStatusIfIdle,
   reconcileInactiveTeamWorkersForLead,
   releaseWorkerCreationReservation,
   removeWorker,
@@ -154,6 +159,7 @@ import {
   reserveWorkerCreation,
   setSessionOrcaRole,
   setWorkerFocus,
+  touchWorkerRuntimeIfUnreleased,
   updateWorkerStatus,
 } from '../localDb/orcaTeamStore.js';
 import { messages, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
@@ -324,13 +330,21 @@ import {
 import { createMakerSendTransaction } from './makerSendTransaction.js';
 import { registerMakerMessageDeleteHandler } from './messageDeleteHandler.js';
 import { normalizeUserMessage, materializeQueuedOssAttachments } from './normalizeAttachments.js';
+import {
+  createOrcaRuntimeRelease,
+  getOrcaRuntimeReleaseState,
+} from './orcaRuntimeRelease.js';
 import { AGENT_ISLAND_DISPLAY_CONFIG } from '../agent-island/displayConfig.js';
 import {
   shouldClearAgentIslandSessionForOrcaWorker,
   shouldNotifyAgentIslandForSession as shouldNotifyAgentIslandForSessionByPolicy,
 } from '../agent-island/notificationPolicy.js';
 import { getAgentIslandService } from '../agent-island/service.js';
-import { createOrcaLifecycleService, ORCA_WORKER_READY_MESSAGE } from './orcaLifecycleService.js';
+import {
+  closeCreatedWorkerForRollback,
+  createOrcaLifecycleService,
+  ORCA_WORKER_READY_MESSAGE,
+} from './orcaLifecycleService.js';
 import { throwOrcaServiceFailure } from './orcaServiceFailure.js';
 import { createOrcaTeamService, findFocusTargetWorker, type ListWorkerQueuedMessagesResult, type OrcaTeamService, type OrcaWorkerEffort, type WorkerQueuedMessageControlResult } from './orcaTeamService.js';
 import {
@@ -3955,13 +3969,68 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     teamId: string;
     leadSessionId: string;
     sessionId: string;
-  }): Promise<boolean> {
-    const live = maker.getSession(target.sessionId);
-    if (live) return false;
-
+    idleSince: string | null;
+    updatedAt: string;
+  }): Promise<number | null> {
     const db = getDbClient().drizzle;
+    const currentWorkers = await listWorkersByLead(target.leadSessionId);
+    const current = currentWorkers.find((worker) => worker.id === target.id);
+    if (!current) return null;
+
+    const stateChangedError = (): Error => {
+      const error = new Error(
+        `SESSION_RUNNING: worker session ${target.sessionId} runtime state changed during resume`,
+      );
+      (error as { code?: string }).code = 'SESSION_RUNNING';
+      return error;
+    };
+    if (
+      current.sessionId !== target.sessionId ||
+      current.idleSince !== target.idleSince ||
+      current.updatedAt !== target.updatedAt
+    ) {
+      throw stateChangedError();
+    }
+
+    const releaseState = getOrcaRuntimeReleaseState(current, Date.now());
+    if (releaseState === 'releasing') {
+      const error = new Error(
+        `SESSION_RUNNING: worker session ${target.sessionId} runtime release is in progress`,
+      );
+      (error as { code?: string }).code = 'SESSION_RUNNING';
+      throw error;
+    }
+
+    const live = maker.getSession(target.sessionId);
+    if (live && current.idleSince === null) return null;
+    if (live) {
+      if (live.isTurnRunning()) {
+        const error = new Error(
+          `SESSION_RUNNING: worker session ${target.sessionId} has an active turn`,
+        );
+        (error as { code?: string }).code = 'SESSION_RUNNING';
+        throw error;
+      }
+      // Another shared-userData instance may have archived the common Codex
+      // thread while this process still owns an idle local Session. Retire that
+      // stale ownership before bootstrapping through thread/unarchive.
+      await maker.closeSession(target.sessionId);
+    }
+
     const [row] = await db.select().from(sessions).where(eq(sessions.id, target.sessionId)).limit(1);
-    if (!row) return false;
+    if (!row) return null;
+
+    const expectedUpdatedAt = Date.parse(current.updatedAt);
+    const expectedIdleSince = current.idleSince === null
+      ? null
+      : Date.parse(current.idleSince);
+    if (
+      !Number.isFinite(expectedUpdatedAt) ||
+      (expectedIdleSince !== null && !Number.isFinite(expectedIdleSince))
+    ) {
+      throw new Error(`worker ${target.id} has an invalid runtime release version`);
+    }
+    const resumedAt = Math.max(Date.now(), expectedUpdatedAt + 1);
 
     const workerVendorOptions = {
       orcaRole: 'worker' as const,
@@ -3969,6 +4038,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       orcaLeadSessionId: target.leadSessionId,
       orcaWorkerId: target.id,
       orcaWorkerSessionId: target.sessionId,
+      orcaRuntimeReleased: current.idleSince !== null,
+      ...(expectedIdleSince === null
+        ? {}
+        : {
+            orcaRuntimeReleaseIdleSince: expectedIdleSince,
+            orcaRuntimeReleaseUpdatedAt: expectedUpdatedAt,
+            orcaRuntimeResumedAt: resumedAt,
+          }),
     };
     const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);
     const opts = buildCreateOptsWithStderr({
@@ -3985,9 +4062,47 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       vendorOptions: workerVendorOptions,
       ...(extraDirs.length > 0 ? { extraDirs } : {}),
     });
-    const { session: resumedSession } = await bootstrapSession(opts);
-    await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
-    return true;
+    try {
+      const { session: resumedSession } = await bootstrapSession(opts);
+      await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
+      // Codex clears a persisted marker in onCodexThreadUnarchived. Claude and
+      // unmarked ownership recreation have no provider callback, so claim the
+      // exact snapshot here before exposing the local Session to dispatch.
+      if (current.session.agentKind !== 'codex' || expectedIdleSince === null) {
+        const result = await db.update(orcaWorkers)
+          .set({
+            idleSince: null,
+            updatedAt: resumedAt,
+            ...(expectedIdleSince === null
+              ? {}
+              : {
+                  status: sql`CASE
+                    WHEN ${orcaWorkers.status} = 'error' THEN 'idle'
+                    ELSE ${orcaWorkers.status}
+                  END`,
+                }),
+          })
+          .where(and(
+            eq(orcaWorkers.id, current.id),
+            eq(orcaWorkers.sessionId, current.sessionId),
+            expectedIdleSince === null
+              ? isNull(orcaWorkers.idleSince)
+              : eq(orcaWorkers.idleSince, expectedIdleSince),
+            eq(orcaWorkers.updatedAt, expectedUpdatedAt),
+          ))
+          .run();
+        if (result.changes === 0) throw stateChangedError();
+      }
+      return resumedAt;
+    } catch (error) {
+      await maker.closeSession(target.sessionId).catch((closeError) => {
+        log.warn('orca worker resume: failed to retire raced local ownership', {
+          sessionId: target.sessionId,
+          err: closeError instanceof Error ? closeError.message : String(closeError),
+        });
+      });
+      throw error;
+    }
   }
 
   async function ensureRemoteReadyForSessionStart(params: {
@@ -4625,6 +4740,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         };
       }
 
+      const claimWorkerRuntimeOnAccepted = async (): Promise<void> => {
+        const workerLink = await getWorkerLink({ workerSessionId: targetSessionId });
+        if (workerLink) {
+          const claimed = await claimWorkerRuntimeForSend(
+            workerLink.workerId,
+            targetSessionId,
+            Date.now(),
+          );
+          if (!claimed) {
+            const error = new Error(
+              `SESSION_RUNNING: worker session ${targetSessionId} runtime release won the send race`,
+            );
+            (error as { code?: string }).code = 'SESSION_RUNNING';
+            throw error;
+          }
+        }
+        await onAccepted?.();
+      };
+
       // 崩溃恢复:在路由决策前加载快照,确保恢复的排队 prompt 不被跳过。
       // 失败时 shouldQueueNewTurn 仍返回 true(未恢复即入队),消息不丢。
       await inputCoordinator.ensureQueueRestored(targetSessionId).catch(() => undefined);
@@ -4637,7 +4771,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
           clientId: qClientId,
           meta,
           dbRow,
-          onAccepted,
+          onAccepted: claimWorkerRuntimeOnAccepted,
           onAcceptedRollback,
           origin,
         });
@@ -4674,7 +4808,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
           role: 'user',
           content: persistedContent ?? message,
         });
-        await runAcceptedCallback(onAccepted, targetSessionId, clientId);
+        await runAcceptedCallback(
+          claimWorkerRuntimeOnAccepted,
+          targetSessionId,
+          clientId,
+        );
       };
 
       const live = maker.getSession(targetSessionId);
@@ -4687,7 +4825,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
             clientId,
             meta,
             dbRow,
-            onAccepted,
+            onAccepted: claimWorkerRuntimeOnAccepted,
             onAcceptedRollback,
             origin,
           });
@@ -4742,7 +4880,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
               clientId,
               meta,
               dbRow,
-              onAccepted,
+              onAccepted: claimWorkerRuntimeOnAccepted,
               onAcceptedRollback,
               origin,
             });
@@ -4830,7 +4968,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
             clientId,
             meta,
             dbRow,
-            onAccepted,
+            onAccepted: claimWorkerRuntimeOnAccepted,
             onAcceptedRollback,
             origin,
           });
@@ -5217,6 +5355,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     }
   }
 
+  const releaseOrcaWorkerRuntime = createOrcaRuntimeRelease({
+    getSession: (sessionId) => maker.getSession(sessionId) ?? null,
+    resumeSession: (worker) => resumeOrcaWorkerSessionIfMissing(worker),
+    retireSession: (sessionId) => maker.closeSession(sessionId),
+    markRelease: markWorkerRuntimeReleaseIntent,
+    acknowledgeRelease: acknowledgeWorkerRuntimeRelease,
+    now: Date.now,
+    log,
+  });
+
   /**
    * disableOrcaInternal — 关闭 lead session 当前的协同模式。
    *   1. 查 active team;不存在则尝试兜底修复悬空 lead(见下),再返回
@@ -5268,24 +5416,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     const activeWorkers = workers.filter((w) => w.teamId === team.id);
     for (const w of activeWorkers) {
       orcaTeamService.clearAutoBridgeState(w.sessionId);
-      const sess = maker.getSession(w.sessionId);
-      if (sess) {
-        try {
-          if (sess.isTurnRunning?.()) {
-            await sess.abort();
-          }
-        } catch (err) {
-          log.warn('disableOrca: abort failed (continuing to close)', {
-            sessionId: w.sessionId, err: err instanceof Error ? err.message : String(err),
-          });
-        }
-        try {
-          await maker.closeSession(w.sessionId);
-        } catch (err) {
-          log.warn('disableOrca: closeSession failed', {
-            sessionId: w.sessionId, err: err instanceof Error ? err.message : String(err),
-          });
-        }
+      try {
+        // Keep each successful close recoverable until the final team/session
+        // archive transaction completes. If a later Worker fails, earlier
+        // releases can still be resumed or retried from their persisted marker.
+        await releaseOrcaWorkerRuntime(w);
+      } catch (err) {
+        log.warn('disableOrca: closeSession failed; leaving team active for retry', {
+          sessionId: w.sessionId, err: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
       }
       cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
       forgetKnownOrcaWorkerSession(w.sessionId);
@@ -5305,7 +5445,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
 
   ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA, async (_e, leadSessionId: unknown) => {
     if (typeof leadSessionId !== 'string') throwIpcError('INVALID_PARAMS', 'leadSessionId required');
-    return disableOrcaInternal(leadSessionId);
+    try {
+      return await disableOrcaInternal(leadSessionId);
+    } catch (error) {
+      log.warn('SESSION_DISABLE_ORCA failed', {
+        leadSessionId,
+        err: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('INTERNAL', t('newChat.collaboration.stopFailed'));
+    }
   });
 
   // ─── Orca worker IPC handlers ────────────────────────────────────────────
@@ -5366,7 +5514,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     // to 'running' — that only happens when actual work is dispatched via sendToWorker.
     if (target.status === 'idle') {
       try {
-        const didResume = await resumeOrcaWorkerSessionIfMissing(target);
+        const refreshedWorkers = await listWorkersByLead(b.leadSessionId);
+        const refreshedTarget = refreshedWorkers.find((worker) => worker.id === target.id);
+        const didResume = refreshedTarget
+          ? await resumeOrcaWorkerSessionIfMissing(refreshedTarget)
+          : null;
         if (didResume) {
           log.info('switchFocus: resumed idle worker (session only, no status change)', { workerId: target.id, sessionId: target.sessionId });
         }
@@ -5385,11 +5537,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     idleWorker: (params) => orcaTeamService.idleWorker(params),
     archiveWorker: (params) => orcaTeamService.archiveWorker(params),
     logInfo: (message, fields) => log.info(message, fields),
+    logWarn: (message, fields) => log.warn(message, fields),
   });
 
   ipcMain.handle(MAKER_INVOKE.TEAM_END, async (_e, leadSessionId: unknown) => {
     if (typeof leadSessionId !== 'string') throwIpcError('INVALID_PARAMS', 'leadSessionId required');
-    const result = await disableOrcaInternal(leadSessionId);
+    let result: { ok: true };
+    try {
+      result = await disableOrcaInternal(leadSessionId);
+    } catch (error) {
+      log.warn('TEAM_END failed', {
+        leadSessionId,
+        err: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('INTERNAL', t('newChat.collaboration.stopFailed'));
+    }
     broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId: leadSessionId as string });
     return result;
   });
@@ -5412,26 +5574,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       await resumeOrcaWorkerSessionIfMissing(target);
     },
     updateWorkerStatus,
-    markWorkerIdle: async (workerId) => {
-      const now = Date.now();
-      const db = getDbClient().drizzle;
-      await db.update(orcaWorkers)
-        .set({ status: 'idle', idleSince: now, updatedAt: now })
-        .where(eq(orcaWorkers.id, workerId));
-    },
+    claimWorkerRuntimeForSend,
     markWorkerIdleIfStatus,
     restoreWorkerDoneIfIdle,
+    restoreWorkerStatusIfIdle,
+    acknowledgeWorkerRuntimeRelease,
     closeWorkerSession: async (sessionId) => {
       const sess = maker.getSession(sessionId);
       if (sess) {
         await sess.abort();
       }
-      await maker.closeSession(sessionId);
+      await maker.closeSession(sessionId, { releaseRuntime: true });
     },
+    releaseWorkerRuntime: releaseOrcaWorkerRuntime,
     closeWorkerSessionIfIdle: async (sessionId) => {
-      if (sendToSessionLocks.has(sessionId)) return false;
+      if (sendToSessionLocks.has(sessionId)) return 'busy';
       const sess = maker.getSession(sessionId);
-      return sess ? sess.closeIfIdle() : true;
+      if (!sess) return 'missing';
+      return await sess.closeIfIdle({ releaseRuntime: true }) ? 'closed' : 'busy';
     },
     hasPendingWorkerInput: async (sessionId) => {
       await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
@@ -5512,6 +5672,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       return { accepted: result.ok };
     },
     log,
+    now: Date.now,
   });
   orcaTeamServiceForEvents = orcaTeamService;
 
@@ -5599,6 +5760,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     },
     closeWorkerSession: async (sessionId) => {
       if (!maker.getSession(sessionId)) return;
+      // Failed Worker creation has no resumable runtime contract yet. A generic
+      // close avoids thread/archive rejecting a thread with no rollout.
       await maker.closeSession(sessionId);
     },
     archiveWorkerSession: archiveSingleWorkerSession,
@@ -5668,10 +5831,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       });
     },
     rollbackCreatedWorker: async ({ workerId, workerSessionId }) => {
-      const workerSession = maker.getSession(workerSessionId);
-      if (workerSession) {
-        await maker.closeSession(workerSessionId).catch(() => undefined);
-      }
+      await closeCreatedWorkerForRollback({
+        hasSession: (sessionId) => Boolean(maker.getSession(sessionId)),
+        closeSession: (sessionId) => maker.closeSession(sessionId),
+        logWarn: (message, fields) => log.warn(message, fields),
+      }, { workerId, workerSessionId });
       forgetKnownOrcaWorkerSession(workerSessionId);
       await archiveSingleWorkerSession(workerSessionId).catch(() => undefined);
       await removeWorker(workerId);
@@ -5708,13 +5872,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = createOrcaIdleReleaseWatcher({
     readIdleReleaseMinutes: () => readCollaborationSettings().workerIdleReleaseMinutes,
-    listCandidates: async (updatedBefore) => {
+    listCandidates: async (idleUpdatedBefore, interruptedReleaseBefore) => {
       const db = getDbClient().drizzle;
-      return db
+      const rows = await db
         .select({
           id: orcaWorkers.id,
+          teamId: orcaWorkers.teamId,
           sessionId: orcaWorkers.sessionId,
           leadSessionId: orcaTeams.leadSessionId,
+          agentKind: sessions.agentKind,
           status: orcaWorkers.status,
           idleSince: orcaWorkers.idleSince,
           updatedAt: orcaWorkers.updatedAt,
@@ -5723,34 +5889,71 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
         .innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
         .where(and(
-          isNull(orcaWorkers.idleSince),
           inArray(orcaWorkers.status, ORCA_IDLE_RELEASE_STATUSES),
-          sql`${orcaWorkers.updatedAt} < ${updatedBefore}`,
+          or(
+            and(
+              isNull(orcaWorkers.idleSince),
+              sql`${orcaWorkers.updatedAt} < ${idleUpdatedBefore}`,
+            ),
+            and(
+              isNotNull(orcaWorkers.idleSince),
+              eq(orcaWorkers.updatedAt, orcaWorkers.idleSince),
+              sql`${orcaWorkers.updatedAt} < ${interruptedReleaseBefore}`,
+            ),
+          ),
           eq(orcaTeams.status, 'active'),
           eq(sessions.status, 'active'),
         ));
+      return rows.map((row) => ({
+        ...row,
+        agentKind: row.agentKind === 'codex' ? 'codex' as const : 'claude-code' as const,
+      }));
     },
     getSession: (sessionId) => maker.getSession(sessionId) ?? null,
     withSessionLock: withSendToSessionLock,
     hasPendingInput: hasPendingIdleReleaseInput,
     markReleased: async (candidate, releasedAt) => {
-      // Drizzle proxy 的 UPDATE ... RETURNING 会执行写入但返回空数组；这里直接用
-      // DbClient async exec 的 changes 做原子 compare-and-set 结果判定。
-      const result = await getDbClient().exec(
-        `UPDATE orca_workers
-         SET status = 'idle', idle_since = ?, updated_at = ?
-         WHERE id = ? AND status = ? AND idle_since IS NULL AND updated_at = ?`,
-        [releasedAt, releasedAt, candidate.id, candidate.status, candidate.updatedAt],
+      // Persist the recovery marker before provider teardown. A crash after this
+      // write remains recoverable even if thread/archive already completed.
+      return markWorkerRuntimeReleaseIntent(
+        candidate.id,
+        candidate.sessionId,
+        releasedAt,
+        candidate.updatedAt,
       );
-      return result.changes === 1;
+    },
+    restoreRelease: async (candidate, releasedAt, restoredAt) => {
+      return restoreWorkerRuntimeRelease(
+        candidate.id,
+        candidate.sessionId,
+        releasedAt,
+        candidate.status,
+        restoredAt,
+      );
+    },
+    acknowledgeRelease: async (candidate, completedAt) => {
+      return acknowledgeWorkerRuntimeRelease(
+        candidate.id,
+        candidate.sessionId,
+        completedAt,
+      );
     },
     touchWorker: async (workerId, updatedAt) => {
-      await getDbClient().drizzle
-        .update(orcaWorkers)
-        .set({ updatedAt })
-        .where(eq(orcaWorkers.id, workerId));
+      await touchWorkerRuntimeIfUnreleased(workerId, updatedAt);
     },
-    closeSession: (sessionId) => maker.closeSession(sessionId),
+    closeSessionIfIdle: async (candidate, releasedAt) => {
+      const session = maker.getSession(candidate.sessionId);
+      if (!session) {
+        await releaseOrcaWorkerRuntime({
+          ...candidate,
+          idleSince: new Date(releasedAt).toISOString(),
+          updatedAt: new Date(candidate.updatedAt).toISOString(),
+          session: { agentKind: candidate.agentKind },
+        });
+        return 'closed-and-acknowledged';
+      }
+      return (await session.closeIfIdle({ releaseRuntime: true })) ? 'closed' : 'busy';
+    },
     broadcastWorkerChanged: (leadSessionId) => {
       broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
     },
@@ -5888,7 +6091,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         // dispatched (sendToWorker). Setting 'running' here without a task causes
         // the icon to flash indefinitely (no turn → turn-done never fires).
         if (target.status === 'idle') {
-          await resumeOrcaWorkerSessionIfMissing(target);
+          const refreshedWorkers = await listWorkersByLead(leadSessionId);
+          const refreshedTarget = refreshedWorkers.find((worker) => worker.id === target.id);
+          if (refreshedTarget) {
+            await resumeOrcaWorkerSessionIfMissing(refreshedTarget);
+          }
         }
         broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
         return { ok: true, workerId: target.id };
@@ -5909,7 +6116,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
         return { ok: true };
       } catch (err) {
-        return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
+        log.warn('endTeam tool failed', {
+          leadSessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        return { ok: false, errorCode: 'INTERNAL', message: 'failed to end collaboration' };
       }
     },
     archiveWorker: async ({ callerLeadSessionId, workerId }) => {

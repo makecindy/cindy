@@ -30,7 +30,12 @@ import type {
   ListCustomizationsResult,
 } from './types/customizations.js';
 import { Session, generateSessionId } from './session.js';
-import type { BaseAgent, StartSessionOptions, OneShotOptions } from './agents/base-agent.js';
+import type {
+  AgentSessionCloseOptions,
+  BaseAgent,
+  StartSessionOptions,
+  OneShotOptions,
+} from './agents/base-agent.js';
 import type { MemoryStatus, MemorySetResult, MemoryResetResult } from './types/memory.js';
 import type { ConsumeAccountRateLimitResetCreditParams } from './types/account-rate-limits.js';
 import type { SessionStorage, SessionMeta } from './interfaces/session-storage.js';
@@ -475,10 +480,10 @@ export class Maker {
   }
 
   /** 关闭并移除一个 session */
-  async closeSession(id: string): Promise<void> {
+  async closeSession(id: string, options?: AgentSessionCloseOptions): Promise<void> {
     const sess = this.activeSessions.get(id);
     if (sess) {
-      await sess.close();
+      await sess.close(options);
       // status listener 会自动清理 activeSessions 并 emit
     }
     // 已经不在内存里就 no-op —— 没有持久化的运行态需要更新。

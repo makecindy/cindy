@@ -985,8 +985,8 @@ function orcaSetWorkerFocus(db: Database.Database, args: unknown): void {
   const teamId = expectString(payload.teamId, 'teamId');
   const workerId = expectString(payload.workerId, 'workerId');
   const now = expectNumber(payload.now, 'now');
-  const clearOthers = db.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1');
-  const setOne = db.prepare('UPDATE orca_workers SET focused = 1, updated_at = ? WHERE id = ?');
+  const clearOthers = db.prepare('UPDATE orca_workers SET focused = 0, updated_at = CASE WHEN idle_since IS NULL THEN MAX(updated_at + 1, ?) ELSE updated_at END WHERE team_id = ? AND focused = 1');
+  const setOne = db.prepare('UPDATE orca_workers SET focused = 1, updated_at = CASE WHEN idle_since IS NULL THEN MAX(updated_at + 1, ?) ELSE updated_at END WHERE id = ?');
   db.transaction(() => {
     clearOthers.run(now, teamId);
     setOne.run(now, workerId);

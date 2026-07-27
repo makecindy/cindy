@@ -35,4 +35,51 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     const calls = registerSource.match(/await clearLeadOrcaRoleState\(leadSessionId\)/g) ?? [];
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('keeps the active team retryable when a Worker runtime close fails', () => {
+    const disableStart = registerSource.indexOf('async function disableOrcaInternal');
+    const disableEnd = registerSource.indexOf('ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA', disableStart);
+    const disableBlock = registerSource.slice(disableStart, disableEnd);
+    const closeIndex = disableBlock.indexOf('await releaseOrcaWorkerRuntime(w);');
+    const rethrowIndex = disableBlock.indexOf('throw err;', closeIndex);
+    const finalizeIndex = disableBlock.indexOf("await markTeamEnded(team.id, 'completed');");
+
+    expect(closeIndex).toBeGreaterThanOrEqual(0);
+    expect(rethrowIndex).toBeGreaterThan(closeIndex);
+    expect(finalizeIndex).toBeGreaterThan(rethrowIndex);
+  });
+
+  it('persists each Worker release before provider close so partial team shutdown remains recoverable', () => {
+    expect(registerSource).toContain('const releaseOrcaWorkerRuntime = createOrcaRuntimeRelease({');
+    expect(registerSource).toContain('markRelease: markWorkerRuntimeReleaseIntent');
+    expect(registerSource).toContain('acknowledgeRelease: acknowledgeWorkerRuntimeRelease');
+  });
+
+  it('uses a generic close for failed Worker creation before the thread has a rollout', () => {
+    const creationServiceStart = registerSource.indexOf(
+      'const orcaWorkerCreationService = createOrcaWorkerCreationService({',
+    );
+    const lifecycleServiceStart = registerSource.indexOf(
+      'const orcaLifecycleService = createOrcaLifecycleService({',
+      creationServiceStart,
+    );
+    const creationServiceBlock = registerSource.slice(creationServiceStart, lifecycleServiceStart);
+
+    expect(creationServiceBlock).toContain('await maker.closeSession(sessionId);');
+    expect(creationServiceBlock).not.toContain(
+      'await maker.closeSession(sessionId, { releaseRuntime: true });',
+    );
+  });
+
+  it('maps disable IPC failures to a stable message', () => {
+    const handlerStart = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA',
+    );
+    const handlerEnd = registerSource.indexOf('// ─── Orca worker IPC handlers', handlerStart);
+    const handlerBlock = registerSource.slice(handlerStart, handlerEnd);
+
+    expect(handlerBlock).toContain(
+      "throwIpcError('INTERNAL', t('newChat.collaboration.stopFailed'));",
+    );
+  });
 });

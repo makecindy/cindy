@@ -305,11 +305,11 @@ Codex thread start / resume 成功后必须注册 `threadId -> session context`�
 
 #### 10. Worker 回收要克制（状态：无损 idle release 已落地）
 
-Worker 的价值在于上下文可延续、可观察、可介入。PR #340 已落地无损的 idle release：idle watcher 在 Worker 超过设置的空闲阈值、没有运行中的 turn 或排队输入时，关闭本进程持有的 Maker runtime，并以 CAS 原子写入 `status = idle` 和 `idle_since`。`idle_since != null` 是 runtime 已释放的持久化标记，不是 `idle/running/done/error` 之外的第五种 Worker 状态；Worker 记录、session、历史和上下文都继续保留。
+Worker 的价值在于上下文可延续、可观察、可介入。PR #340 已落地无损的 idle release：idle watcher 在 Worker 超过设置的空闲阈值、没有运行中的 turn 或排队输入时，先以 CAS 持久化 `status = idle` 和 `idle_since` 作为可恢复的释放意图，再关闭本进程持有的 Maker runtime；只有明确的 busy/send 竞争才回滚本次标记，无法区分“归档未执行”与“服务端已归档但响应超时”的 close error 必须保留 intent，在 lease 过期后继续对账。显式 `archive_worker` 与 `end_team` 的 provider runtime 释放也必须复用这条“先标记、后关闭”边界：最终 session/team 归档前的 DB 失败或多 Worker 部分失败时，已经关闭的 runtime 仍可从标记恢复或幂等重试。持久化优先保证进程在 provider 关闭前后退出都不会留下“thread 已归档但没有恢复标记”的不可恢复窗口；尚未执行归档的标记由 resume 的幂等兼容路径清理。`idle_since != null` 是 runtime 已释放或正在释放的持久化标记，不是 `idle/running/done/error` 之外的第五种 Worker 状态；终态事件可以继续更新 task status，但不能改写 release protocol timestamp。无需 schema migration 的确认协议复用 `updated_at`：`updated_at == idle_since` 表示 release 正在执行或异常中断，provider close 成功后必须以 CAS 写成 `updated_at > idle_since`；只有后一种已确认 marker 可立即被 resume 消费。前一种 marker 在 30 秒 lease 内由原 release owner 独占，其他实例不得 resume 或开始 turn；lease 过期后才允许重建 ownership 并对账。Worker 记录、session、历史和上下文都继续保留。
 
-再次向该 Worker 派发任务时，既有 resume 链路会复用或重建 runtime，并在任务被接受时恢复运行态。共享 userData 多实例下，watcher 只释放本进程实际持有 runtime 的 Worker；没有本地 runtime 的记录保持不变，由其 runtime owner 负责处理。
+再次向该 Worker 派发任务时，既有 resume 链路会复用或重建 runtime，并在任务被接受时恢复运行态。共享 userData 多实例下，没有 release marker 时 watcher 只释放本进程实际持有 runtime 的 Worker；lease 已过期的 intent 则允许任一实例重建缺失 ownership 并完成对账。派发 accepted 边界必须以 `idle_since IS NULL` 做持久化 CAS claim：send 先赢会更新 `updated_at`，让持有旧快照的 watcher 无法写 release intent；release intent 先赢则 send 必须 fail closed。即使当前进程仍有 live Session，看到已确认或 lease 已过期的 marker 也必须先关闭 stale local ownership，再走 unarchive/reconcile，不能直接向共享 daemon 的 thread 发送。
 
-这套机制只等价于无损 hibernate，不等价于 archive/delete。`idle_worker/archive_worker/end_team` 仍保留显式控制语义；长期 Worker 的自动有损回收，以及 persistent/ephemeral 分型后的差异化回收策略，仍应保持保守并在后续单独落地。
+这套机制只等价于无损 hibernate，不等价于 archive/delete。`idle_worker/archive_worker/end_team` 仍保留显式控制语义；其中 runtime release marker 只是这些操作完成最终持久化前的恢复护栏。`Session.close({ releaseRuntime: true })` 是比普通 resumable close 更强的关闭意图：两者并发时必须在 Session 进入 closed 前升级并补做 provider runtime release，普通 close 不能代替它报告成功；release 失败且 handle 仍存活时必须清掉进程内的升级意图，避免后续普通 close 在无持久化 marker 时误归档。缺失的 Claude Session 已表示其 CLI 进程 runtime 终止，不应为释放而重建；缺失的 Codex Session 不等价于 persistent app-server runtime 已释放，idle watcher、显式 archive/end 与 done 确认都必须带 marker 重建 ownership 后再归档。Worker 创建失败的补偿路径例外使用普通 close，因为首个 rollout 可能尚未建立；close 失败时必须保留 Worker 记录和 active team 作为后续清理入口，不能删除持久化关联或把 Worker 封进不可达的 failed team。Codex `thread/archive` 超时后仍按失败处理；若本地 handle 同时完成 teardown，必须保留 marker 供重试判断 already-archived。只有重试收到结构化且明确表示 thread 已归档的响应，或 app-server transport 已退出并确认 runtime 不再存活时，才允许完成本地关闭；旧版 `idle_since` marker 的 unarchive 兼容只在收到结构化 `INVALID_REQUEST` 后尝试一次真实 `thread/resume`，resume 成功才清理 marker，失败继续 fail closed，不解析人类可读错误文案。长期 Worker 的自动有损回收，以及 persistent/ephemeral 分型后的差异化回收策略，仍应保持保守并在后续单独落地。
 
 ## Part 2 · 未来规划
 
@@ -339,7 +339,7 @@ Orca 的长期方向不是“进入一个固定协同模式”，而是在主线
 
 ### Worker 生命周期分型
 
-当前 schema 尚未落地 persistent/ephemeral 字段和分型策略。PR #340 先提供了与类型无关的 idle release/resume 基础能力：所有合法 Worker 状态都可在空闲超时后释放本地 runtime，以 `idle_since != null` 记录释放结果。下面两类是后续分型后的目标策略：
+当前 schema 尚未落地 persistent/ephemeral 字段和分型策略。PR #340 先提供了与类型无关的 idle release/resume 基础能力：所有合法 Worker 状态都可在空闲超时后释放本地 runtime，以 `idle_since != null` 记录释放结果。`idle_since` 与 `updated_at` 共同编码 release intent / acknowledgement；手动中断只改变 task status，不写 release marker，focus、team/status 等普通字段更新也不得推进已有 marker 的协议时间戳。下面两类是后续分型后的目标策略：
 
 Worker 计划分两类：
 

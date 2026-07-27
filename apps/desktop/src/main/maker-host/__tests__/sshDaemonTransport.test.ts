@@ -33,6 +33,9 @@ import path from 'node:path';
 import {
   WS_GUID,
   computeWsAccept,
+  createCodexDaemonAutoStartDisabledError,
+  decideCodexDaemonVersionAction,
+  isManagedCodexDaemonVersion,
   shellQuote,
 } from '../codex-remote-transport';
 
@@ -59,6 +62,51 @@ describe('computeWsAccept', () => {
   it('produces different output for different keys', () => {
     expect(computeWsAccept('AAAAAAAAAAAAAAAAAAAAAA==')).not.toBe(
       computeWsAccept('BBBBBBBBBBBBBBBBBBBBBA=='),
+    );
+  });
+});
+
+describe('isManagedCodexDaemonVersion', () => {
+  it('accepts the managed daemon version from camel- or snake-case output', () => {
+    expect(isManagedCodexDaemonVersion({ cliVersion: 'codex-cli 0.145.0' })).toBe(true);
+    expect(isManagedCodexDaemonVersion({ app_server_version: '0.145.0' })).toBe(true);
+  });
+
+  it('rejects stale or unversioned daemon output', () => {
+    expect(isManagedCodexDaemonVersion({ cli_version: 'codex-cli 0.144.0' })).toBe(false);
+    expect(isManagedCodexDaemonVersion({ socketPath: '/tmp/codex.sock' })).toBe(false);
+  });
+
+  it('rejects a stale app-server even when the local CLI is managed', () => {
+    expect(isManagedCodexDaemonVersion({
+      cliVersion: 'codex-cli 0.145.0',
+      appServerVersion: 'codex-app-server 0.144.0',
+    })).toBe(false);
+  });
+});
+
+describe('decideCodexDaemonVersionAction', () => {
+  it('reuses the managed daemon regardless of auto-start policy', () => {
+    expect(decideCodexDaemonVersionAction({ cliVersion: 'codex-cli 0.145.0' }, true))
+      .toBe('reuse');
+    expect(decideCodexDaemonVersionAction({ cliVersion: 'codex-cli 0.145.0' }, false))
+      .toBe('reuse');
+  });
+
+  it('restarts a stale daemon only when auto-start is enabled', () => {
+    const stale = { cliVersion: 'codex-cli 0.144.0' };
+
+    expect(decideCodexDaemonVersionAction(stale, true)).toBe('restart');
+    expect(decideCodexDaemonVersionAction(stale, false)).toBe('reject');
+  });
+});
+
+describe('createCodexDaemonAutoStartDisabledError', () => {
+  it('reports unavailable and incompatible daemon probe failures without hiding the cause', () => {
+    expect(createCodexDaemonAutoStartDisabledError(
+      new Error('daemon version is stale'),
+    ).message).toBe(
+      'daemon unavailable or incompatible and autoStartDaemon=false: daemon version is stale',
     );
   });
 });

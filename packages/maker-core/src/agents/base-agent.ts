@@ -301,6 +301,20 @@ export interface AgentDeps {
   prepareCodexResumeSession?: (threadId: string) => Promise<string | void>;
 
   /**
+   * Codex 专用钩子：Worker thread/unarchive 成功后，让 host 立即持久化 runtime
+   * 已恢复的事实。必须在 thread/resume 前完成，避免 resume 临时失败后重复调用
+   * 非幂等的 thread/unarchive。
+   */
+  onCodexThreadUnarchived?: (args: {
+    sessionId: string;
+    threadId: string;
+    workerId: string;
+    expectedIdleSince: number;
+    expectedUpdatedAt: number;
+    resumedAt: number;
+  }) => Promise<void>;
+
+  /**
    * Codex 专用:把已拼好的产品级 system prompt 同步登记到 host 的 codex proxy registry。
    *
    * 约束:
@@ -635,6 +649,11 @@ export interface BackgroundTaskSnapshot {
   title?: string;
 }
 
+/** Provider-neutral close intent used by lifecycle owners that release a dormant runtime. */
+export interface AgentSessionCloseOptions {
+  releaseRuntime?: boolean;
+}
+
 /**
  * 一个已启动的 agent 会话句柄。
  * 上层 Session 类持有此句柄并对外暴露 UI 友好的 API。
@@ -692,8 +711,11 @@ export interface AgentSessionHandle {
    */
   listBackgroundTasks?(): BackgroundTaskSnapshot[];
 
-  /** 关闭会话，清理子进程 */
-  close(): Promise<void>;
+  /** 关闭本地会话；releaseRuntime 仅用于显式的无损 dormant release。 */
+  close(options?: AgentSessionCloseOptions): Promise<void>;
+
+  /** Whether provider-local teardown has already made this handle unusable. */
+  isClosed?(): boolean;
 
   /**
    * Detach from a long-lived remote session without terminating the upstream

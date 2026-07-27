@@ -13,6 +13,7 @@ function createDeps() {
     idleWorker: vi.fn(async (): Promise<WorkerControlResult> => ({ ok: true, workerId: 'worker-1' })),
     archiveWorker: vi.fn(async (): Promise<WorkerControlResult> => ({ ok: true, workerId: 'worker-1' })),
     logInfo: vi.fn(),
+    logWarn: vi.fn(),
   };
 }
 
@@ -173,7 +174,7 @@ describe('Orca worker control IPC handlers', () => {
     ).rejects.toMatchObject({ code: 'WORKER_NOT_FOUND' });
   });
 
-  it('maps thrown service errors to INTERNAL instead of leaking raw exceptions', async () => {
+  it('maps thrown service errors to a stable INTERNAL message without leaking raw exceptions', async () => {
     const harness = new IpcHarness();
     const deps = createDeps();
     deps.archiveWorker.mockRejectedValueOnce(new Error('store failed'));
@@ -184,6 +185,77 @@ describe('Orca worker control IPC handlers', () => {
         leadSessionId: 'lead-1',
         workerId: 'worker-1',
       }),
-    ).rejects.toMatchObject({ code: 'INTERNAL' });
+    ).rejects.toMatchObject({
+      code: 'INTERNAL',
+      message: expect.not.stringContaining('store failed'),
+    });
+    expect(deps.logWarn).toHaveBeenCalledWith('archiveWorker IPC failed', {
+      workerId: 'worker-1',
+      err: 'store failed',
+    });
+  });
+
+  it('logs idle service exceptions before returning a stable IPC error', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    deps.idleWorker.mockRejectedValueOnce(new Error('provider failed'));
+    registerOrcaWorkerControlHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.WORKER_IDLE, {
+        leadSessionId: 'lead-1',
+        workerId: 'worker-1',
+      }),
+    ).rejects.toMatchObject({
+      code: 'INTERNAL',
+      message: expect.not.stringContaining('provider failed'),
+    });
+    expect(deps.logWarn).toHaveBeenCalledWith('idleWorker IPC failed', {
+      workerId: 'worker-1',
+      err: 'provider failed',
+    });
+  });
+
+  it('logs returned INTERNAL failures without exposing their raw details', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    deps.idleWorker.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: 'idle database path failed',
+    });
+    deps.archiveWorker.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: 'archive provider token failed',
+    });
+    registerOrcaWorkerControlHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.WORKER_IDLE, {
+        leadSessionId: 'lead-1',
+        workerId: 'worker-1',
+      }),
+    ).rejects.toMatchObject({
+      code: 'INTERNAL',
+      message: expect.not.stringContaining('idle database path failed'),
+    });
+    await expect(
+      harness.invoke(MAKER_INVOKE.WORKER_ARCHIVE, {
+        leadSessionId: 'lead-1',
+        workerId: 'worker-1',
+      }),
+    ).rejects.toMatchObject({
+      code: 'INTERNAL',
+      message: expect.not.stringContaining('archive provider token failed'),
+    });
+    expect(deps.logWarn).toHaveBeenCalledWith('idleWorker service failed', {
+      workerId: 'worker-1',
+      err: 'idle database path failed',
+    });
+    expect(deps.logWarn).toHaveBeenCalledWith('archiveWorker service failed', {
+      workerId: 'worker-1',
+      err: 'archive provider token failed',
+    });
   });
 });

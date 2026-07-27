@@ -1325,6 +1325,56 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('orca.setWorkerFocus preserves runtime-release protocol timestamps', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 'lead');
+      await seedSession(client, 'worker-1', { orcaRole: 'worker' });
+      await seedSession(client, 'worker-2', { orcaRole: 'worker' });
+      await client.exec(
+        'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+        ['team-1', 'lead', 'active', 1, 1],
+      );
+      await client.exec(
+        `INSERT INTO orca_workers (
+          id, team_id, session_id, status, focused, idle_since, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'worker-1',
+          'team-1',
+          'worker-1',
+          'idle',
+          1,
+          100,
+          1,
+          100,
+          'worker-2',
+          'team-1',
+          'worker-2',
+          'done',
+          0,
+          null,
+          1,
+          500,
+        ],
+      );
+
+      await client.tx('orca.setWorkerFocus', {
+        teamId: 'team-1',
+        workerId: 'worker-2',
+        now: 200,
+      });
+
+      await expect(
+        client.query(
+          'SELECT id, focused, idle_since, updated_at FROM orca_workers ORDER BY id',
+        ),
+      ).resolves.toEqual([
+        { id: 'worker-1', focused: 0, idle_since: 100, updated_at: 100 },
+        { id: 'worker-2', focused: 1, idle_since: null, updated_at: 501 },
+      ]);
+    });
+  });
+
   it('orca.removeWorker deletes the worker and archives its session atomically', async () => {
     await withClient(async (client) => {
       await seedSession(client, 'lead');

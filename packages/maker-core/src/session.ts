@@ -36,7 +36,12 @@ import type {
 } from './types/events.js';
 import { isTerminalAgentErrorEvent } from './types/events.js';
 import type { ContextUsageData } from './types/context-usage.js';
-import type { AgentSessionHandle, BackgroundTaskSnapshot, SendOptions } from './agents/base-agent.js';
+import type {
+  AgentSessionCloseOptions,
+  AgentSessionHandle,
+  BackgroundTaskSnapshot,
+  SendOptions,
+} from './agents/base-agent.js';
 import type { Logger } from './interfaces/logger.js';
 
 export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
@@ -187,6 +192,11 @@ export class Session {
    * 同时请求关闭；所有调用方都必须等到 transport / 子进程真正释放后才能继续回收 worktree。
    */
   private closePromise: Promise<void> | null = null;
+  /**
+   * releaseRuntime 是比普通 resumable close 更强的意图。普通 close 已在途时，
+   * 后到的 Worker 生命周期关闭会把该意图升级，并在 Session 进入 closed 前补做一次。
+   */
+  private closeReleaseRuntimeRequested = false;
   private eventLoopStarted = false;
   private sendReservation: SendReservation | null = null;
   /**
@@ -367,12 +377,16 @@ export class Session {
     return this.handle.listBackgroundTasks?.() ?? [];
   }
 
-  close(): Promise<void> {
+  close(options?: AgentSessionCloseOptions): Promise<void> {
+    if (options?.releaseRuntime === true) {
+      this.closeReleaseRuntimeRequested = true;
+    }
     if (this.closePromise) return this.closePromise;
-    if (this.status === 'closed') return Promise.resolve();
+    if (this.status === 'closed' && options?.releaseRuntime !== true) {
+      return Promise.resolve();
+    }
 
-    this.closePromise = this.performClose();
-    return this.closePromise;
+    return this.startClose(options);
   }
 
   /**
@@ -380,26 +394,80 @@ export class Session {
    * close reservation are synchronous, so a concurrent send either wins first
    * and keeps the session open, or observes closePromise and is rejected.
    */
-  closeIfIdle(): Promise<boolean> {
-    if (this.status !== 'active' || this.closePromise || this.isTurnRunning()) {
+  closeIfIdle(options?: AgentSessionCloseOptions): Promise<boolean> {
+    if (
+      (this.status !== 'active' && this.status !== 'error') ||
+      this.isTurnRunning()
+    ) {
       return Promise.resolve(false);
     }
-    this.closePromise = this.performClose();
-    return this.closePromise.then(() => true);
+    if (this.closePromise) {
+      if (options?.releaseRuntime !== true) return Promise.resolve(false);
+      // An idle-runtime scan may race a resumable generic close. The scan has
+      // already established that no turn is running, so preserve its stronger
+      // release intent and await the shared close instead of reporting busy.
+      this.closeReleaseRuntimeRequested = true;
+      return this.closePromise.then(() => true);
+    }
+    return this.startClose(options).then(() => true);
   }
 
-  private async performClose(): Promise<void> {
-    try {
-      this.cancelSendReservation(this.sendReservation);
-      await this.handle.close();
-    } finally {
-      this.sendReservation = null;
-      this.currentTurnOrigin = null;
-      this.setStatus('closed');
-      this.eventListeners.clear();
-      this.statusListeners.clear();
-      this.interactionListener = null;
+  private startClose(options?: AgentSessionCloseOptions): Promise<void> {
+    if (options?.releaseRuntime === true) {
+      this.closeReleaseRuntimeRequested = true;
     }
+    const pending = this.performClose(options);
+    const tracked = pending.catch((error: unknown) => {
+      // A failed Worker archive must leave its runtime reachable so the idle
+      // watcher can retry instead of persisting a false "released" state.
+      if (this.closePromise === tracked) this.closePromise = null;
+      throw error;
+    });
+    this.closePromise = tracked;
+    return tracked;
+  }
+
+  private async performClose(options?: AgentSessionCloseOptions): Promise<void> {
+    this.cancelSendReservation(this.sendReservation);
+    try {
+      let releaseRuntimeApplied = false;
+      do {
+        const applyReleaseRuntime = this.closeReleaseRuntimeRequested;
+        await this.handle.close(
+          applyReleaseRuntime
+            ? { ...options, releaseRuntime: true }
+            : options,
+        );
+        releaseRuntimeApplied ||= applyReleaseRuntime;
+        // handle.close() is the only await in this loop. A stronger close
+        // intent that arrives while it is in flight is observed here before
+        // Session status changes to closed.
+      } while (this.closeReleaseRuntimeRequested && !releaseRuntimeApplied);
+    } catch (error) {
+      // Provider release can fail after a generic close already completed its
+      // local teardown. Remove that unusable Session so lifecycle retry can
+      // recreate ownership instead of dispatching through a closed handle.
+      if (this.handle.isClosed?.()) {
+        this.finalizeClose();
+      } else {
+        // A still-live handle remains reachable for a direct close retry.
+        this.sendReservation = null;
+        this.closeReleaseRuntimeRequested = false;
+      }
+      throw error;
+    }
+    this.finalizeClose();
+  }
+
+  private finalizeClose(): void {
+    this.sendReservation = null;
+    this.closePromise = null;
+    this.closeReleaseRuntimeRequested = false;
+    this.currentTurnOrigin = null;
+    this.setStatus('closed');
+    this.eventListeners.clear();
+    this.statusListeners.clear();
+    this.interactionListener = null;
   }
 
   async detach(): Promise<void> {

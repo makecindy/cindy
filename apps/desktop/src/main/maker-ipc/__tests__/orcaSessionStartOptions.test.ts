@@ -47,8 +47,11 @@ describe('persisted Orca session start options', () => {
         workerId: 'worker-1',
         teamId: 'team-1',
         leadSessionId: 'lead-session',
+        idleSince: '2026-07-25T10:00:00.000Z',
+        updatedAt: '2026-07-25T10:00:00.001Z',
       }),
       warn: vi.fn(),
+      now: () => Date.parse('2026-07-25T10:00:00.002Z'),
     })).resolves.toBe(true);
 
     expect(opts.orcaRole).toBe('worker');
@@ -58,9 +61,44 @@ describe('persisted Orca session start options', () => {
       orcaLeadSessionId: 'lead-session',
       orcaWorkerId: 'worker-1',
       orcaWorkerSessionId: 'worker-session',
+      orcaRuntimeReleased: true,
+      orcaRuntimeReleaseIdleSince: Date.parse('2026-07-25T10:00:00.000Z'),
+      orcaRuntimeReleaseUpdatedAt: Date.parse('2026-07-25T10:00:00.001Z'),
+      orcaRuntimeResumedAt: Date.parse('2026-07-25T10:00:00.002Z'),
     });
     expect(opts.userPrompt).toEqual(expect.any(String));
     expect(opts.userPrompt).not.toHaveLength(0);
+  });
+
+  it('refreshes the persisted runtime-release marker on an explicit Worker resume', async () => {
+    const opts = {
+      ...baseOpts('worker-session'),
+      resumeSessionId: 'codex-thread-id',
+      vendorOptions: {
+        orcaRole: 'worker',
+        orcaRuntimeReleased: false,
+      },
+    };
+    const getWorkerLink = vi.fn().mockResolvedValue({
+      workerId: 'worker-1',
+      teamId: 'team-1',
+      leadSessionId: 'lead-session',
+      idleSince: '2026-07-25T10:00:00.000Z',
+      updatedAt: '2026-07-25T10:00:00.001Z',
+    });
+
+    await preparePersistedOrcaSessionStart('worker-session', opts, {
+      getSessionRole: vi.fn(),
+      getWorkerLink,
+      warn: vi.fn(),
+      now: () => Date.parse('2026-07-25T10:00:00.002Z'),
+    });
+
+    expect(getWorkerLink).toHaveBeenCalledWith('worker-session');
+    expect(opts.vendorOptions.orcaRuntimeReleased).toBe(true);
+    expect((opts.vendorOptions as Record<string, unknown>).orcaRuntimeResumedAt).toBe(
+      Date.parse('2026-07-25T10:00:00.002Z'),
+    );
   });
 
   it('does not cache an explicit Orca role as non-Orca before its row is persisted', async () => {

@@ -101,6 +101,7 @@ import {
   resolveEffectiveCredentialModeFromAuthSource,
 } from '../credential-mode.js';
 import {
+  JSONRPC_ERROR_CODE,
   Method,
   type AskForApproval,
   type ApprovalsReviewer,
@@ -224,6 +225,24 @@ function isImageGenerationPayloadWithoutId(payload: unknown): boolean {
   if (!type.startsWith('image_generation') && !type.startsWith('imageGeneration')) return false;
   const id = record.id;
   return typeof id !== 'string' || id.trim().length === 0;
+}
+
+function isAlreadyArchivedThreadError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = 'code' in error ? error.code : undefined;
+  if (code !== JSONRPC_ERROR_CODE.INVALID_REQUEST) return false;
+  const message = error instanceof Error
+    ? error.message
+    : 'message' in error && typeof error.message === 'string'
+      ? error.message
+      : '';
+  return /\b(?:already|is)\s+archived\b/i.test(message);
+}
+
+function isInvalidRequestError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = 'code' in error ? error.code : undefined;
+  return code === JSONRPC_ERROR_CODE.INVALID_REQUEST;
 }
 
 function hasUnsafeForkRolloutPayload(line: string): boolean {
@@ -1969,6 +1988,7 @@ export class CodexAgent extends BaseAgent {
     let lastTurnTokenUsage: TokenUsageBreakdown | null = null;
     let lastModelContextWindow: number | null = null;
     let closed = false;
+    let runtimeReleased = false;
     let subscriptionInvalidatedByTransport = false;
     let subscription: ThreadSubscription | null = null;
     let interactionResolver: InteractionResolver | null = null;
@@ -2460,7 +2480,76 @@ export class CodexAgent extends BaseAgent {
       try {
         acquireHostBindingLeaseIfNeeded();
         assertCurrentHost('thread/resume');
-        const resp = await host.request<ThreadResumeResponse>(Method.ThreadResume, params);
+        let resumedAfterInvalidUnarchive: ThreadResumeResponse | undefined;
+        // idle_since is the persisted acknowledgement that this Worker's
+        // runtime was released. Avoid parsing Codex's human-readable error
+        // text to decide whether thread/unarchive is required.
+        if (vo.orcaRole === 'worker' && vo.orcaRuntimeReleased === true) {
+          const releasedThreadId = opts.resumeSessionId;
+          log.info('thread/resume restoring released Worker thread', {
+            resumeSessionId: releasedThreadId,
+          });
+          assertCurrentHost('thread/unarchive');
+          // A failed restore must remain retryable. Do not hide timeouts,
+          // transport failures, or temporary server errors behind a resume
+          // request that is guaranteed to fail while the thread is archived.
+          try {
+            await host.unarchiveThread(releasedThreadId);
+          } catch (error) {
+            // PR #340 wrote idle_since after thread/unsubscribe. A Worker that
+            // was already dormant before this archive-based release shipped
+            // therefore has a legacy marker but no archived Codex thread.
+            // INVALID_REQUEST is the only structured compatibility signal, but
+            // it can also mean an unknown thread. A real resume distinguishes
+            // those cases without relying on the app-server's English text.
+            if (!isInvalidRequestError(error)) throw error;
+            log.warn('thread/unarchive rejected Worker release marker; probing thread/resume', {
+              resumeSessionId: releasedThreadId,
+              code: JSONRPC_ERROR_CODE.INVALID_REQUEST,
+            });
+            resumedAfterInvalidUnarchive = await host.request<ThreadResumeResponse>(
+              Method.ThreadResume,
+              params,
+            );
+            assertCurrentHost('thread/resume after invalid unarchive');
+          }
+          // thread/unarchive is not idempotent. Persist its success before
+          // thread/resume so a temporary resume failure does not cause the next
+          // startup to unarchive the already-restored thread again.
+          vo.orcaRuntimeReleased = false;
+          const onCodexThreadUnarchived = this.deps.onCodexThreadUnarchived;
+          if (onCodexThreadUnarchived) {
+            if (!opts.sessionId) {
+              throw new Error('Released Codex Worker restore requires a local sessionId');
+            }
+            const workerId = vo.orcaWorkerId;
+            const expectedIdleSince = vo.orcaRuntimeReleaseIdleSince;
+            const expectedUpdatedAt = vo.orcaRuntimeReleaseUpdatedAt;
+            const resumedAt = vo.orcaRuntimeResumedAt;
+            if (
+              typeof workerId !== 'string' ||
+              typeof expectedIdleSince !== 'number' ||
+              !Number.isFinite(expectedIdleSince) ||
+              typeof expectedUpdatedAt !== 'number' ||
+              !Number.isFinite(expectedUpdatedAt) ||
+              typeof resumedAt !== 'number' ||
+              !Number.isFinite(resumedAt)
+            ) {
+              throw new Error('Released Codex Worker restore requires a pinned runtime release snapshot');
+            }
+            await onCodexThreadUnarchived({
+              sessionId: opts.sessionId,
+              threadId: releasedThreadId,
+              workerId,
+              expectedIdleSince,
+              expectedUpdatedAt,
+              resumedAt,
+            });
+          }
+          assertCurrentHost('thread/resume after unarchive');
+        }
+        const resp = resumedAfterInvalidUnarchive
+          ?? await host.request<ThreadResumeResponse>(Method.ThreadResume, params);
         assertCurrentHost('thread/resume');
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
@@ -3971,6 +4060,7 @@ export class CodexAgent extends BaseAgent {
       get model() { return mutableModel; },
       get codexProxyActive() { return hostUsesCodexProxy; },
       get codexProductPromptDelivery() { return codexProductPromptDelivery; },
+      isClosed() { return closed; },
 
       async send(message: UserMessage, sendOpts?: SendOptions) {
         if (rejectClosedOrCancelledSend(sendOpts, 'before start')) {
@@ -4358,17 +4448,80 @@ export class CodexAgent extends BaseAgent {
         return currentTurnId;
       },
 
-      async close() {
-        if (closed) return;
-        closed = true;
-        unregisterCodexMcpContext(threadId);
-        // 把挂起的 approval 强制 deny + emit interaction_dismissed (UI 关 dialog),
-        // 否则 server 那边没回 response 会卡; UI 上的 PermissionPrompt 也会留尸
-        try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
-        try { dismissAllPendingUserInput('session_closed'); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
-        try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
-        try { await subscription?.release(); } catch (e) { log.warn('release threw', { error: String(e) }); }
-        try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
+      async close(options) {
+        // Only an explicit dormant runtime release archives a Worker thread.
+        // Generic resumable closes (/clear, auth retry, rehydrate) must keep the
+        // thread directly resumable and therefore use subscription release only.
+        const shouldReleaseRuntime =
+          vo.orcaRole === 'worker' &&
+          options?.releaseRuntime === true &&
+          !runtimeReleased;
+        if (closed && !shouldReleaseRuntime) return;
+        let releaseErrorAfterLocalClose: unknown;
+        if (shouldReleaseRuntime) {
+          if (skipIfStaleHost('thread/archive')) {
+            if (opts.remoteHostId) {
+              releaseErrorAfterLocalClose = staleHostError('thread/archive');
+            } else {
+              // Retiring a local app-server process reclaims its runtime.
+              runtimeReleased = true;
+            }
+          } else if (!host.hasActiveClient()) {
+            if (opts.remoteHostId) {
+              releaseErrorAfterLocalClose = new Error(
+                'Codex remote Worker runtime release was not acknowledged because the app-server proxy is unavailable',
+              );
+            } else {
+              // A local transport exit also terminates the app-server process.
+              log.warn('thread/archive skipped because app-server client is unavailable', { threadId });
+              runtimeReleased = true;
+            }
+          } else {
+            try {
+              await host.archiveThread(threadId);
+              assertCurrentHost('thread/archive');
+              runtimeReleased = true;
+            } catch (error) {
+              // A timeout may race with a successful server-side archive. The
+              // next retry receives a precise structured "already archived"
+              // result; accept only that deterministic acknowledgement.
+              if (isAlreadyArchivedThreadError(error)) {
+                log.warn('thread/archive already completed before retry response', { threadId });
+                runtimeReleased = true;
+              } else if (!isCurrentHost() || !host.hasActiveClient()) {
+                // A remote daemon survives its local proxy, so retain the
+                // archive error after completing local teardown. A recreated
+                // Session can reconnect and retry with the durable marker.
+                log.warn('thread/archive interrupted by app-server shutdown; completing local close', {
+                  threadId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+                if (opts.remoteHostId) {
+                  releaseErrorAfterLocalClose = error;
+                } else {
+                  runtimeReleased = true;
+                }
+              } else {
+                throw error;
+              }
+            }
+          }
+        }
+        // Session may upgrade a generic close while it is in flight. In that
+        // case only the provider archive above is new; local teardown already
+        // completed during the first close call.
+        if (!closed) {
+          closed = true;
+          unregisterCodexMcpContext(threadId);
+          // 把挂起的 approval 强制 deny + emit interaction_dismissed (UI 关 dialog),
+          // 否则 server 那边没回 response 会卡; UI 上的 PermissionPrompt 也会留尸
+          try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
+          try { dismissAllPendingUserInput('session_closed'); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
+          try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
+          try { await subscription?.release(); } catch (e) { log.warn('release threw', { error: String(e) }); }
+          try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
+        }
+        if (releaseErrorAfterLocalClose) throw releaseErrorAfterLocalClose;
       },
 
       events(): AsyncIterable<AgentEvent> {

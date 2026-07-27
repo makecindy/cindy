@@ -8,6 +8,7 @@ import type {
   CollabDispatchSuccessOutcome,
 } from './collabSendOutcome.js';
 import { rebuildQueuedOrcaLeadMessage } from './orcaInterAgentDispatcher.js';
+import { getOrcaRuntimeReleaseState } from './orcaRuntimeRelease.js';
 
 /**
  * OrcaTeamService 只接管已存在 worker 的派活、释放、归档与 auto-bridge。
@@ -28,6 +29,7 @@ export interface OrcaWorkerRecordSnapshot {
   role: string;
   focused: boolean;
   idleSince: string | null;
+  updatedAt: string;
   session: {
     title: string;
     agentKind: AgentKind;
@@ -183,12 +185,27 @@ export interface OrcaTeamServiceDeps {
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null;
   resumeWorkerSession(worker: OrcaWorkerRecordSnapshot, link: OrcaWorkerLinkSnapshot): Promise<void>;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
-  markWorkerIdle(workerId: string): Promise<void>;
-  markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
+  claimWorkerRuntimeForSend(workerId: string, sessionId: string, claimedAt: number): Promise<boolean>;
+  markWorkerIdleIfStatus(
+    workerId: string,
+    expectedStatus: 'done',
+    expectedUpdatedAt: number,
+  ): Promise<boolean>;
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
+  restoreWorkerStatusIfIdle(
+    workerId: string,
+    status: Exclude<OrcaWorkerStatus, 'idle'>,
+  ): Promise<boolean>;
+  acknowledgeWorkerRuntimeRelease(
+    workerId: string,
+    sessionId: string,
+    completedAt: number,
+  ): Promise<boolean>;
   closeWorkerSession(sessionId: string): Promise<void>;
-  /** 与 Session.send reservation 原子互斥；false 表示 direct send/turn 已先取得会话。 */
-  closeWorkerSessionIfIdle(sessionId: string): Promise<boolean>;
+  /** Persist release intent before closing so archive/end-team failures remain resumable. */
+  releaseWorkerRuntime(worker: OrcaWorkerRecordSnapshot): Promise<void>;
+  /** 与 Session.send reservation 原子互斥，并区分 busy 与 ownership 已消失。 */
+  closeWorkerSessionIfIdle(sessionId: string): Promise<'closed' | 'busy' | 'missing'>;
   /** pending / dispatch-boundary / recovery 输入任一存在时返回 true。 */
   hasPendingWorkerInput(sessionId: string): Promise<boolean>;
   /** send_to_session 的恢复/直发锁覆盖 bootstrap 到 Session.send reservation 的窗口。 */
@@ -227,6 +244,7 @@ export interface OrcaTeamServiceDeps {
     info(message: string, fields?: Record<string, unknown>): void;
     warn(message: string, fields?: Record<string, unknown>): void;
   };
+  now(): number;
 }
 
 /** Orca worker 生命周期服务。错误以结构化 result 返回，IPC adapter 再转 throwIpcError。 */
@@ -505,8 +523,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   }
 
   function dispatchFailureFromThrown(err: unknown, meta: DispatchWorkerTaskParams['dispatchMeta']): CollabDispatchFailureOutcome {
+    const code = err && typeof err === 'object' && (err as { code?: unknown }).code === 'SESSION_RUNNING'
+      ? 'SESSION_RUNNING'
+      : 'SEND_FAILED';
     return {
-      ...createHostSendFailure('SEND_FAILED', err instanceof Error ? err.message : String(err)),
+      ...createHostSendFailure(code, err instanceof Error ? err.message : String(err)),
       source: meta.source,
       context: meta.context,
     };
@@ -556,21 +577,39 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       };
     }
 
-    const workers = await deps.listWorkersByLead(link.leadSessionId);
-    const target = workers.find((worker) => worker.sessionId === params.targetSessionId);
-    if (!target) {
-      return {
-        dispatched: false,
-        dispatchOutcome: {
-          ...createHostSendFailure('SESSION_NOT_FOUND', `worker session ${params.targetSessionId} not found`),
-          source: params.dispatchMeta.source,
-          context: params.dispatchMeta.context,
-        },
-      };
-    }
-
-    await reserveWorkerDispatch(target.id);
+    // Reserve before reading the Worker snapshot. Lifecycle transitions either
+    // see this active reservation or finish first; a dispatch that waited for
+    // them then reads their final status/release marker instead of stale state.
+    await reserveWorkerDispatch(link.workerId);
     try {
+      const workers = await deps.listWorkersByLead(link.leadSessionId);
+      const target = workers.find((worker) => worker.sessionId === params.targetSessionId);
+      if (!target) {
+        return {
+          dispatched: false,
+          dispatchOutcome: {
+            ...createHostSendFailure('SESSION_NOT_FOUND', `worker session ${params.targetSessionId} not found`),
+            source: params.dispatchMeta.source,
+            context: params.dispatchMeta.context,
+          },
+        };
+      }
+
+      const releaseState = getOrcaRuntimeReleaseState(target, deps.now());
+      if (releaseState === 'releasing') {
+        return {
+          dispatched: false,
+          dispatchOutcome: {
+            ...createHostSendFailure(
+              'SESSION_RUNNING',
+              `worker session ${target.sessionId} runtime release is in progress`,
+            ),
+            source: params.dispatchMeta.source,
+            context: params.dispatchMeta.context,
+          },
+        };
+      }
+
       let acceptedSnapshot: {
         previousStatus: OrcaWorkerStatus;
         previousPending: AutoBridgeState | undefined;
@@ -590,7 +629,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       let result: DispatchWorkerMessageResult;
       const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;
       try {
-        if ((target.status === 'idle' || target.status === 'done') && !wasLiveBeforeDispatch) {
+        if (
+          target.idleSince !== null ||
+          ((target.status === 'idle' || target.status === 'done') && !wasLiveBeforeDispatch)
+        ) {
           await deps.resumeWorkerSession(target, link);
         }
         result = await deps.dispatchWorkerMessage({
@@ -599,6 +641,18 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           workerId: link.workerId,
           dispatchMeta: params.dispatchMeta,
           onAccepted: async () => {
+            const claimed = await deps.claimWorkerRuntimeForSend(
+              target.id,
+              target.sessionId,
+              deps.now(),
+            );
+            if (!claimed) {
+              const error = new Error(
+                `SESSION_RUNNING: worker session ${target.sessionId} runtime release won the send race`,
+              );
+              (error as { code?: string }).code = 'SESSION_RUNNING';
+              throw error;
+            }
             const currentWorkers = await deps.listWorkersByLead(link.leadSessionId);
             const currentWorker = currentWorkers.find((worker) => worker.id === target.id);
             const previousPending = autoBridge.get(params.targetSessionId);
@@ -654,7 +708,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         targetLastUserSendAt: result.targetLastUserSendAt,
       };
     } finally {
-      await releaseWorkerDispatch(target.id);
+      await releaseWorkerDispatch(link.workerId);
     }
   }
 
@@ -738,9 +792,52 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         };
       }
 
-      const didIdle = params.expectedStatus
-        ? await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus)
-        : (await deps.markWorkerIdle(worker.id), true);
+      if (!params.expectedStatus) {
+        try {
+          // Reuse the timestamped release marker so only an explicit busy race
+          // can clear this attempt without overwriting a newer task status.
+          await deps.releaseWorkerRuntime(worker);
+        } catch (error) {
+          deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+          return workerRuntimeCloseFailure('idleWorker', worker.sessionId, error);
+        }
+        await deps.updateWorkerStatus(worker.id, 'idle');
+        clearRuntimeState(worker.sessionId);
+        deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+        return { ok: true, workerId: worker.id };
+      }
+
+      // A missing Codex Session does not prove that its persistent app-server
+      // runtime was released. Recreate ownership and archive it behind the
+      // timestamped marker before acknowledging the viewed done state.
+      if (
+        worker.session.agentKind === 'codex' &&
+        deps.getLiveSession(worker.sessionId) === null
+      ) {
+        try {
+          await deps.releaseWorkerRuntime(worker);
+        } catch (error) {
+          deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+          return workerRuntimeCloseFailure('idleWorker', worker.sessionId, error);
+        }
+        clearRuntimeState(worker.sessionId);
+        deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+        return { ok: true, workerId: worker.id };
+      }
+
+      const expectedUpdatedAt = Date.parse(worker.updatedAt);
+      if (!Number.isFinite(expectedUpdatedAt)) {
+        return {
+          ok: false,
+          errorCode: 'WORKER_STATE_CHANGED',
+          message: `worker ${params.workerId} has an invalid state version`,
+        };
+      }
+      const didIdle = await deps.markWorkerIdleIfStatus(
+        worker.id,
+        params.expectedStatus,
+        expectedUpdatedAt,
+      );
       if (!didIdle) {
         return {
           ok: false,
@@ -754,7 +851,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       };
       // Queue state can change while the DB CAS awaits I/O. Preserve newly queued
       // follow-ups before close, then use Session.closeIfIdle for atomic send/close ordering.
-      if (params.expectedStatus && await deps.hasPendingWorkerInput(worker.sessionId)) {
+      if (await deps.hasPendingWorkerInput(worker.sessionId)) {
         await rollbackDoneAcknowledgement();
         return {
           ok: false,
@@ -762,26 +859,41 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           message: `worker ${params.workerId} has queued input`,
         };
       }
-      if (params.expectedStatus) {
-        const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker');
-        if (!didClose) {
-          await rollbackDoneAcknowledgement();
-          return {
-            ok: false,
-            errorCode: 'WORKER_STATE_CHANGED',
-            message: `worker ${params.workerId} has an active turn`,
-          };
-        }
+      let closeResult: 'closed' | 'busy' | 'missing';
+      try {
+        closeResult = await deps.closeWorkerSessionIfIdle(worker.sessionId);
+      } catch (error) {
+        // Provider teardown may have completed before an archive acknowledgement
+        // timed out. Keep the intent for lease-expired reconciliation.
+        deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+        return workerRuntimeCloseFailure('idleWorker', worker.sessionId, error);
+      }
+      if (closeResult !== 'closed') {
+        await rollbackDoneAcknowledgement();
+        return {
+          ok: false,
+          errorCode: 'WORKER_STATE_CHANGED',
+          message: closeResult === 'busy'
+            ? `worker ${params.workerId} has an active turn`
+            : `worker ${params.workerId} session ownership changed during runtime release`,
+        };
+      }
+      const acknowledged = await deps.acknowledgeWorkerRuntimeRelease(
+        worker.id,
+        worker.sessionId,
+        deps.now(),
+      );
+      if (!acknowledged) {
+        return {
+          ok: false,
+          errorCode: 'WORKER_STATE_CHANGED',
+          message: `worker ${params.workerId} release acknowledgement changed`,
+        };
       }
       clearRuntimeState(worker.sessionId);
-      if (!params.expectedStatus) {
-        await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker');
-      }
       deps.broadcastOrcaWorkerChanged(link.leadSessionId);
       return { ok: true, workerId: worker.id };
     };
-
-    if (!params.expectedStatus) return performIdle(found);
 
     return withWorkerTransition(found.worker.id, async () => {
       if ((activeWorkerDispatches.get(found.worker.id) ?? 0) > 0) {
@@ -800,15 +912,44 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   async function archiveWorker(params: { callerLeadSessionId: string; workerId: string }): Promise<OrcaOkResult> {
     const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
     if (!found.ok) return workerRefFailureForControl(params.workerId, found);
-    const { link, worker } = found;
 
-    clearRuntimeState(worker.sessionId);
-    deps.forgetWorkerSession?.(worker.sessionId);
-    await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');
-    await deps.archiveWorkerSession(worker.sessionId);
-    await deps.updateWorkerStatus(worker.id, 'done');
-    deps.broadcastOrcaWorkerChanged(link.leadSessionId);
-    return { ok: true, workerId: worker.id };
+    return withWorkerTransition(found.worker.id, async () => {
+      if ((activeWorkerDispatches.get(found.worker.id) ?? 0) > 0) {
+        return {
+          ok: false,
+          errorCode: 'WORKER_STATE_CHANGED',
+          message: `worker ${params.workerId} has a dispatch in progress`,
+        };
+      }
+      const current = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
+      if (!current.ok) return workerRefFailureForControl(params.workerId, current);
+      const { link, worker } = current;
+
+      try {
+        await deps.releaseWorkerRuntime(worker);
+      } catch (error) {
+        return workerRuntimeCloseFailure('archiveWorker', worker.sessionId, error);
+      }
+      clearRuntimeState(worker.sessionId);
+      deps.forgetWorkerSession?.(worker.sessionId);
+      try {
+        await deps.archiveWorkerSession(worker.sessionId);
+        await deps.updateWorkerStatus(worker.id, 'done');
+      } catch (error) {
+        deps.log.warn('archiveWorker: failed to persist worker archive', {
+          workerId: worker.id,
+          sessionId: worker.sessionId,
+          err: error instanceof Error ? error.message : String(error),
+        });
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: 'archiveWorker: failed to persist worker archive',
+        };
+      }
+      deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+      return { ok: true, workerId: worker.id };
+    });
   }
 
   /** 排队消息 source 判定:worker 队列里 orca 条目只可能来自其 lead(通信拓扑为 Lead↔Worker)。 */
@@ -957,27 +1098,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     return { ok: true, workerId: resolved.link.workerId, queuedMessageId: params.queuedMessageId };
   }
 
-  async function closeWorkerSessionBestEffort(sessionId: string, owner: string): Promise<void> {
-    try {
-      await deps.closeWorkerSession(sessionId);
-    } catch (err) {
-      deps.log.warn(`${owner}: close worker session failed`, {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  async function closeWorkerSessionIfIdleBestEffort(sessionId: string, owner: string): Promise<boolean> {
-    try {
-      return await deps.closeWorkerSessionIfIdle(sessionId);
-    } catch (err) {
-      deps.log.warn(`${owner}: close idle worker session failed`, {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-      return true;
-    }
+  function workerRuntimeCloseFailure(owner: string, sessionId: string, error: unknown): OrcaOkResult {
+    const message = error instanceof Error ? error.message : String(error);
+    deps.log.warn(`${owner}: close worker session failed`, {
+      sessionId,
+      err: message,
+    });
+    return {
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: `${owner}: failed to release worker runtime: ${message}`,
+    };
   }
 
   return {
@@ -1035,7 +1166,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
       const manualInterrupt = deps.getManualInterrupt(params.sessionId);
       if (manualInterrupt) {
-        await deps.markWorkerIdle(link.workerId);
+        // Manual stop changes task status only. idle_since is reserved for the
+        // provider runtime release protocol and is written by the watcher later.
+        await deps.updateWorkerStatus(link.workerId, 'idle');
         deps.broadcastOrcaWorkerChanged(link.leadSessionId);
         clearRuntimeState(params.sessionId);
         deps.log.info('worker manual interrupt: suppressed auto-bridge', {

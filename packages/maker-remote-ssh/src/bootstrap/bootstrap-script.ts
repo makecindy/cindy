@@ -264,14 +264,24 @@ verify_binary() {
     V="$("$NODE_BIN" "$BIN_PATH" --version 2>>"$_STDERR_LOG" | head -1 || true)"
   fi
 
-  if [ -n "$V" ] &&
-     { [ "$AGENT_KIND" != "claude-code" ] || [ "${'$'}{V%% *}" = "$CLAUDE_RELEASE" ]; }; then
-    emit "READY $V"
-    rm -f "$_STDERR_LOG"
-    return 0
-  fi
   if [ -n "$V" ]; then
-    emit "INSTALL_LOG [verify-fail] Claude Code version ${'$'}{V%% *} != managed pin $CLAUDE_RELEASE"
+    if [ "$AGENT_KIND" = "codex" ]; then
+      if [[ "$V" =~ ([0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?) ]]; then
+        DETECTED_RELEASE="${'$'}{BASH_REMATCH[1]}"
+      else
+        DETECTED_RELEASE=""
+      fi
+      MANAGED_RELEASE="$CODEX_RELEASE"
+    else
+      DETECTED_RELEASE="${'$'}{V%% *}"
+      MANAGED_RELEASE="$CLAUDE_RELEASE"
+    fi
+    if [ "$DETECTED_RELEASE" = "$MANAGED_RELEASE" ]; then
+      emit "READY $V"
+      rm -f "$_STDERR_LOG"
+      return 0
+    fi
+    emit "INSTALL_LOG [verify-fail] $AGENT_KIND version $DETECTED_RELEASE != managed pin $MANAGED_RELEASE"
   fi
   # Diagnostics on failure — these go to INSTALL_LOG so the desktop main process
   # logs them (silent install pipeline forwards INSTALL_LOG lines verbatim).
