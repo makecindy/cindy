@@ -314,6 +314,11 @@ interface ModelSelectorProps {
   useMorphPopover?: boolean;
   /** Popover 弹出方向,默认 "top"（底部工具栏向上弹），dialog 内嵌场景传 "bottom"。 */
   popoverSide?: 'top' | 'bottom';
+  /**
+   * 模型列表最多露出的标准行数；超出后列表自身滚动。
+   * 不传时沿用通用面板的 300px 上限，供 Settings 等紧凑场景按行数收窄。
+   */
+  maxVisibleModelRows?: number;
   /** 关闭模型的 effort / Fast 编辑入口；只选择模型 id 的设置项使用。 */
   configurationEnabled?: boolean;
   /** 可选的列表首行兜底值，例如“不指定（使用原逻辑）”。 */
@@ -371,6 +376,8 @@ interface ModelSelectorContentProps {
   excludeChatBridgedCodex?: boolean;
   /** 选中后是否自动关闭。Popover 场景传入,内嵌场景不传。 */
   onDismiss?: () => void;
+  /** 语义同 ModelSelectorProps.maxVisibleModelRows。 */
+  maxVisibleModelRows?: number;
   /** 模型信息 / 选项浮层的额外样式。供嵌套在高层级 overlay 中的调用方覆盖默认 z-index。 */
   overlayContentClassName?: string;
   currentProviderId?: string | null;
@@ -432,6 +439,7 @@ function ModelSelectorContentView({
   excludeSubscriptionDirect,
   excludeChatBridgedCodex,
   onDismiss,
+  maxVisibleModelRows,
   overlayContentClassName,
   currentProviderId,
   onProviderChange,
@@ -1444,6 +1452,14 @@ function ModelSelectorContentView({
         // -mr-2 把滚动条挪进面板右侧 8px 留白;scrollbar-gutter:stable 让无滚动时
         // 行宽与有滚动时一致(否则行会比搜索框宽 8px);细滚动条见 globals.css
         className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+        style={
+          maxVisibleModelRows === undefined
+            ? undefined
+            : {
+                // 标准模型行 = 20px 字高 + 上下各 8px padding；行间 gap 为 2px。
+                maxHeight: `${Math.max(1, Math.floor(maxVisibleModelRows)) * 36 + Math.max(0, Math.floor(maxVisibleModelRows) - 1) * 2}px`,
+              }
+        }
         role="listbox"
         aria-label="Model list"
         onScroll={() => {
@@ -1513,6 +1529,7 @@ export function ModelSelector({
   visualVariant = 'default',
   useMorphPopover = false,
   popoverSide = 'top',
+  maxVisibleModelRows,
   configurationEnabled = true,
   fallbackOption,
   reselectEmitsChange = false,
@@ -1946,6 +1963,7 @@ export function ModelSelector({
       excludeSubscriptionDirect={excludeSubscriptionDirect}
       excludeChatBridgedCodex={excludeChatBridgedCodex}
       onDismiss={() => setOpen(false)}
+      maxVisibleModelRows={maxVisibleModelRows}
       currentProviderId={currentProviderId}
       onProviderChange={onProviderChange}
       onNavigateToProviders={onNavigateToProviders}
