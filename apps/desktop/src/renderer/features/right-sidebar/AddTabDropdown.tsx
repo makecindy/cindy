@@ -115,15 +115,17 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
     return () => cancelAnimationFrame(raf);
   }, [anchorRef, onClose]);
 
-  // 焦点:portal 在 body 末尾,原生 tab 序从「+」按钮出发够不到菜单,打开时必须
-  // 显式把焦点移进容器(focus 容器而非首项 —— 鼠标打开时首项不该无端高亮,键盘
-  // 用户按 Tab 即进入第一个 menuitem)。卸载时若焦点仍困在菜单里(DOM 摘除后落回
-  // body)则还给「+」按钮:⌘W 关 tab 的归属按 activeElement 判定,焦点丢在 body
-  // 会让下一次 ⌘W 误关整个窗口;焦点已被用户主动移去别处时不抢。
+  // 焦点:portal 在 body 末尾,原生 tab 序从「+」按钮出发够不到菜单,打开时把焦点
+  // 落到第一个可用 menuitem 上(DESIGN.md 焦点规范:浮层打开焦点落主控件 —— 键盘
+  // Enter/Space 打开后直接可再按 Enter 选中;鼠标打开时首项走 focus-visible,不会
+  // 无端高亮)。卸载时若焦点仍困在菜单里(DOM 摘除后落回 body)则还给「+」按钮:
+  // ⌘W 关 tab 的归属按 activeElement 判定,焦点丢在 body 会让下一次 ⌘W 误关整个
+  // 窗口;焦点已被用户主动移去别处时不抢。
   useEffect(() => {
     const menuEl = ref.current;
     const anchor = anchorRef.current;
-    menuEl?.focus();
+    const firstItem = menuEl?.querySelector<HTMLButtonElement>('[role="menuitem"]:not([disabled])');
+    (firstItem ?? menuEl)?.focus();
     return () => {
       const active = document.activeElement;
       if (active === document.body || (menuEl && menuEl.contains(active))) {
@@ -268,7 +270,9 @@ function DropdownItem({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] leading-snug text-[var(--text-primary)] transition-colors',
+        // focus-visible 与 hover 同款背景:键盘打开时首项自动聚焦要有可见落点,
+        // 鼠标交互不触发 focus-visible,无视觉噪音。
+        'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] leading-snug text-[var(--text-primary)] transition-colors focus:outline-none focus-visible:bg-[var(--surface-hover)]',
         disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-[var(--surface-hover)]',
       )}
     >
