@@ -132,6 +132,30 @@ describe('detect — agents', () => {
     expect(agents!.subItems).toHaveLength(1);
     expect(agents!.subItems![0].targetPath).toMatch(/\.codex[\\/]agents[\\/]foo\.toml$/);
   });
+
+  it('to-codex: 普通 Markdown 不应被误报为可迁移 agent', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude', 'agents'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, '.claude', 'agents', 'codebase-explorer.md'),
+      '# 代码库探索代理',
+    );
+
+    const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
+
+    expect(r.items.find((i) => i.kind === 'agents')).toBeUndefined();
+  });
+
+  it('to-codex: 缺少 name 元数据的 Claude agent 不应被误报', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude', 'agents'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, '.claude', 'agents', 'without-name.md'),
+      '---\ndescription: only description\n---\nbody',
+    );
+
+    const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
+
+    expect(r.items.find((i) => i.kind === 'agents')).toBeUndefined();
+  });
 });
 
 describe('detect — mcp', () => {
