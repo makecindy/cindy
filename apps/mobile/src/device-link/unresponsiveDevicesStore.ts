@@ -11,6 +11,7 @@ import { DeviceLinkError, type DeviceLinkErrorCode } from '@cindy/device-link';
 import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
 import {
   createDeviceResponsivenessBreaker,
+  type BreakerSendSlot,
   type BreakerSettleOutcome,
 } from '@/device-link/deviceResponsivenessBreaker';
 
@@ -109,18 +110,19 @@ export function buildDeviceResponsivenessProbeArgs(): unknown[] {
 
 /**
  * 发送门禁(DeviceLinkContext 四条 send* 路径的第一步):熔断 open 且无探测
- * 窗口时抛 DEVICE_UNRESPONSIVE 快速失败(不等重连、不上管道);返回值 = 本次
- * 请求是否为探测(单飞),必须原样回传给 settleDeviceSend。
+ * 窗口时抛 DEVICE_UNRESPONSIVE 快速失败(不等重连、不上管道);返回的席位票据
+ * (含探测标记与设备代数)必须原样回传给 settleDeviceSend——代数不匹配的
+ * 旧请求结果会被忽略(review P1:恢复前派出的长超时请求不再污染新一代计数)。
  */
-export function acquireDeviceSendSlot(deviceId: string): boolean {
-  const decision = breaker.acquire(deviceId);
-  if (decision === 'reject') throw createDeviceUnresponsiveError(deviceId);
-  return decision === 'probe';
+export function acquireDeviceSendSlot(deviceId: string): BreakerSendSlot {
+  const slot = breaker.acquire(deviceId);
+  if (slot.decision === 'reject') throw createDeviceUnresponsiveError(deviceId);
+  return slot;
 }
 
 export function settleDeviceSend(
   deviceId: string,
-  wasProbe: boolean,
+  slot: BreakerSendSlot,
   outcome: BreakerSettleOutcome,
 ): void {
   // 撤权竞态防护(review P1):撤权时桌面端发 link-close(revoked) 但不 resolve
@@ -129,7 +131,7 @@ export function settleDeviceSend(
   const effective = outcome === 'timeout' && revokedDevicesStore.has(deviceId)
     ? 'inconclusive'
     : outcome;
-  breaker.settle(deviceId, wasProbe, effective);
+  breaker.settle(deviceId, slot, effective);
 }
 
 /**

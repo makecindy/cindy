@@ -22,6 +22,8 @@ describe('resolveMobileInvokeTimeoutMs', () => {
     // rewind:commit:DB 读 + 线程回滚 + Git 回退 + SQLite 事务,非幂等——误超时
     // 后对话与文件已被回退,重试会作用在已变更的历史上。
     expect(resolveMobileInvokeTimeoutMs('maker:rewind:commit')).toBe(30_000);
+    // context-usage:非运行中会话走 lazy-create(SSH 就绪等待 20s + 会话拉起)。
+    expect(resolveMobileInvokeTimeoutMs('maker:get-context-usage')).toBe(30_000);
     expect(MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS['device-link:media:fetch']).toBe(30_000);
   });
 

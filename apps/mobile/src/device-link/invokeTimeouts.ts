@@ -21,7 +21,11 @@ import { INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
  *    仍会建出并广播新会话,用户重试会分叉出重复副本;
  *  - maker:rewind:commit:transcript/DB 读 + SDK/Codex 线程回滚 + Git 文件回退 +
  *    收尾 SQLite 事务,同样非幂等——误超时后对话与文件已被回退,重试会作用在
- *    已变更的历史上。
+ *    已变更的历史上;
+ *  - maker:get-context-usage:非运行中会话走 lazy-create 分支
+ *    (ensureRemoteReadyForSessionStart + bootstrapSession),SSH 工作区仅就绪
+ *    等待就允许 20s,再叠会话拉起;15s 会在桌面端继续启动时提前掐断,反复
+ *    尝试还会误开设备级熔断。
  * 新增合法慢通道优先登记协议契约表(桌面控制端共用),仅 mobile 特有差异放这里。
  */
 export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
@@ -30,6 +34,7 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   'device-link:voice:transcribe': 30_000,
   'file-browser:remote-op': 30_000,
   'maker:fork': 30_000,
+  'maker:get-context-usage': 30_000,
   'maker:rewind:commit': 30_000,
 };
 

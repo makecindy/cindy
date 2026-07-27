@@ -750,11 +750,11 @@ function sendOpenLinkWithAccessHandling(
 
 async function sendOpenLink(client: DeviceLinkClient, deviceId: string): Promise<LinkAcceptPayload> {
   // 熔断门禁放在连接等待之前:open 时快速失败,不消耗 1.5s 重连等待也不上管道。
-  const probe = acquireDeviceSendSlot(deviceId);
+  const slot = acquireDeviceSendSlot(deviceId);
   try {
     await ensureOnlineForRequest(client);
   } catch (err) {
-    settleDeviceSend(deviceId, probe, 'inconclusive');
+    settleDeviceSend(deviceId, slot, 'inconclusive');
     throw err;
   }
   try {
@@ -769,11 +769,11 @@ async function sendOpenLink(client: DeviceLinkClient, deviceId: string): Promise
     // 超时后再 open,形成周期性风暴。这里按不定论处理:不关熔断也不计失败;
     // openLink 若是探测,单飞席位随之释放、退避窗口不动,紧随其后的 subscribe
     // (真实 invoke 通道)会立即接棒成为新探测,由它的回包决定开合。
-    settleDeviceSend(deviceId, probe, 'inconclusive');
+    settleDeviceSend(deviceId, slot, 'inconclusive');
     return accepted;
   } catch (err) {
     // 超时仍计失败:link-open 都等不到回包说明被控端连链路层都没在应答。
-    settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));
+    settleDeviceSend(deviceId, slot, classifyDeviceSendFailure(err));
     throw err;
   }
 }
@@ -796,7 +796,7 @@ async function sendInvoke<T>(
   opts?: { preSend?: () => void },
 ): Promise<T> {
   // 熔断门禁放在连接等待之前:open 时快速失败,不消耗 1.5s 重连等待也不上管道。
-  const probe = acquireDeviceSendSlot(deviceId);
+  const slot = acquireDeviceSendSlot(deviceId);
   try {
     await ensureOnlineForRequest(client);
     // 连接就绪后、真正发送前的最后检查点:重连等待期间调用方状态可能已失效
@@ -804,7 +804,7 @@ async function sendInvoke<T>(
     opts?.preSend?.();
   } catch (err) {
     // 未真正发送(等待连接失败 / preSend 中止):对设备响应性不定论。
-    settleDeviceSend(deviceId, probe, 'inconclusive');
+    settleDeviceSend(deviceId, slot, 'inconclusive');
     throw err;
   }
   let result: InvokeResultPayload;
@@ -819,11 +819,11 @@ async function sendInvoke<T>(
       resolveMobileInvokeTimeoutMs(channel),
     );
   } catch (err) {
-    settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));
+    settleDeviceSend(deviceId, slot, classifyDeviceSendFailure(err));
     throw err;
   }
   // 收到 invoke-result 帧即为目标设备真实回包(即使 ok:false 的业务错误)→ 重置熔断。
-  settleDeviceSend(deviceId, probe, 'responded');
+  settleDeviceSend(deviceId, slot, 'responded');
   return unwrapInvoke<T>(result);
 }
 
@@ -841,11 +841,11 @@ async function sendSubscribe(
   topics: readonly string[],
 ): Promise<void> {
   // subscribe 同样走隧道请求超时等待(默认 15s),一样计入并受熔断限制(见 sendInvoke 注释)。
-  const probe = acquireDeviceSendSlot(deviceId);
+  const slot = acquireDeviceSendSlot(deviceId);
   try {
     await ensureOnlineForRequest(client);
   } catch (err) {
-    settleDeviceSend(deviceId, probe, 'inconclusive');
+    settleDeviceSend(deviceId, slot, 'inconclusive');
     throw err;
   }
   let result: InvokeResultPayload;
@@ -855,14 +855,14 @@ async function sendSubscribe(
       args: [{ topics, controllerName: mobileDeviceName() }],
     });
   } catch (err) {
-    settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));
+    settleDeviceSend(deviceId, slot, classifyDeviceSendFailure(err));
     throw err;
   }
   // subscribe/unsubscribe 是控制帧,被控端 dispatch 在 runInvoke 之前特判应答
   // (review P1):IPC/DB 卡死时照常回包,成功不能作为熔断恢复证据——探测窗口
   // 到点时页面卸载恰好发的一条控制帧会抢占探测席位并误关熔断。与 openLink
   // 同语义:成功按不定论,超时仍计失败(连控制帧都不应答 = 彻底无响应)。
-  settleDeviceSend(deviceId, probe, 'inconclusive');
+  settleDeviceSend(deviceId, slot, 'inconclusive');
   unwrapInvoke(result);
 }
 
@@ -871,11 +871,11 @@ async function sendUnsubscribe(
   deviceId: string,
   topics: readonly string[],
 ): Promise<void> {
-  const probe = acquireDeviceSendSlot(deviceId);
+  const slot = acquireDeviceSendSlot(deviceId);
   try {
     await ensureOnlineForRequest(client);
   } catch (err) {
-    settleDeviceSend(deviceId, probe, 'inconclusive');
+    settleDeviceSend(deviceId, slot, 'inconclusive');
     throw err;
   }
   let result: InvokeResultPayload;
@@ -885,11 +885,11 @@ async function sendUnsubscribe(
       args: [{ topics }],
     });
   } catch (err) {
-    settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));
+    settleDeviceSend(deviceId, slot, classifyDeviceSendFailure(err));
     throw err;
   }
   // 控制帧成功按不定论,不作熔断恢复证据(同 sendSubscribe,review P1)。
-  settleDeviceSend(deviceId, probe, 'inconclusive');
+  settleDeviceSend(deviceId, slot, 'inconclusive');
   unwrapInvoke(result);
 }
 

@@ -22,6 +22,18 @@
 
 export type BreakerAcquireDecision = 'allow' | 'probe' | 'reject';
 
+/**
+ * acquire 发放的席位票据,settle 时原样带回。generation 是发放时该设备的代数:
+ * responded / clear / resetAll 都会递增代数,settle 时代数不匹配 = 这是恢复
+ * (或清除)之前派出的旧请求,其结果一律不采信(review P1:熔断 open 前派出的
+ * 30/40s 长超时请求,会在探测成功关熔断之后才陆续超时,若照常计数,3 条陈旧
+ * 超时会立刻把刚恢复的熔断重新打开)。
+ */
+export interface BreakerSendSlot {
+  decision: BreakerAcquireDecision;
+  generation: number;
+}
+
 export type BreakerSettleOutcome =
   /** 收到目标设备真实回包(含业务错误应答)。 */
   | 'responded'
@@ -50,12 +62,12 @@ export interface DeviceResponsivenessBreakerOptions {
 export interface DeviceResponsivenessBreaker {
   /**
    * 发送前门禁:closed → 'allow';open 且探测窗口已到、无在途探测 → 'probe'
-   * (调用方必须以同一 wasProbe 调 settle 释放单飞);其余 → 'reject'(调用方
-   * 应快速失败,不上管道)。
+   * (调用方必须把返回的票据原样带给 settle 以释放单飞);其余 → 'reject'
+   * (调用方应快速失败,不上管道)。
    */
-  acquire(deviceId: string): BreakerAcquireDecision;
-  /** 请求收尾上报。wasProbe 必须回传 acquire 的结果('probe' → true)。 */
-  settle(deviceId: string, wasProbe: boolean, outcome: BreakerSettleOutcome): void;
+  acquire(deviceId: string): BreakerSendSlot;
+  /** 请求收尾上报。slot 必须是 acquire 返回的票据;代数不匹配的旧请求被忽略。 */
+  settle(deviceId: string, slot: BreakerSendSlot, outcome: BreakerSettleOutcome): void;
   isOpen(deviceId: string): boolean;
   /**
    * 清除单个设备的全部熔断状态(撤权等「该设备的响应性已无意义」的场景);
@@ -90,22 +102,37 @@ export function createDeviceResponsivenessBreaker(
   const probeBackoffMaxMs = options.probeBackoffMaxMs ?? BREAKER_PROBE_BACKOFF_MAX_MS;
   const now = options.now ?? Date.now;
   const states = new Map<string, DeviceBreakerState>();
-
-  const acquire = (deviceId: string): BreakerAcquireDecision => {
-    const state = states.get(deviceId);
-    if (!state?.open) return 'allow';
-    if (state.probeInFlight) return 'reject';
-    if (now() - state.openedAt < state.probeBackoffMs) return 'reject';
-    state.probeInFlight = true;
-    return 'probe';
+  // 每设备代数:responded / clear / resetAll 递增。settle 只采信「派发时代数
+  // 仍是当前代」的结果——恢复前派出的长超时请求晚到的超时不再污染新一代计数。
+  const generations = new Map<string, number>();
+  const generationOf = (deviceId: string): number => generations.get(deviceId) ?? 0;
+  const bumpGeneration = (deviceId: string): void => {
+    generations.set(deviceId, generationOf(deviceId) + 1);
   };
 
-  const settle = (deviceId: string, wasProbe: boolean, outcome: BreakerSettleOutcome): void => {
+  const acquire = (deviceId: string): BreakerSendSlot => {
+    const generation = generationOf(deviceId);
+    const state = states.get(deviceId);
+    if (!state?.open) return { decision: 'allow', generation };
+    if (state.probeInFlight) return { decision: 'reject', generation };
+    if (now() - state.openedAt < state.probeBackoffMs) return { decision: 'reject', generation };
+    state.probeInFlight = true;
+    return { decision: 'probe', generation };
+  };
+
+  const settle = (deviceId: string, slot: BreakerSendSlot, outcome: BreakerSettleOutcome): void => {
+    // 旧代请求(恢复 / 清除之前派出):结果一律不采信。探测席位也无需释放——
+    // 代数递增的同时旧 state 必然已被删除,新一代 state 的 probeInFlight 从
+    // false 起步。
+    if (slot.generation !== generationOf(deviceId)) return;
+    const wasProbe = slot.decision === 'probe';
     const state = states.get(deviceId);
     // 无论结果如何,探测单飞先释放:inconclusive 的探测(如探测期间掉线)不该
     // 永久占住唯一探测席位;窗口基准未动,下一次 acquire 会立即放行新探测。
     if (state && wasProbe) state.probeInFlight = false;
     if (outcome === 'responded') {
+      // 真实回包即代数翻篇:此后到达的、更早派出的请求结果全部失效。
+      bumpGeneration(deviceId);
       if (!state) return;
       const wasOpen = state.open;
       states.delete(deviceId);
@@ -144,6 +171,8 @@ export function createDeviceResponsivenessBreaker(
     settle,
     isOpen: (deviceId) => states.get(deviceId)?.open === true,
     clear: (deviceId) => {
+      // 清除同样翻篇:撤权等场景下,在途请求的任何结果都不该再影响该设备。
+      bumpGeneration(deviceId);
       const state = states.get(deviceId);
       if (!state) return;
       states.delete(deviceId);
@@ -155,6 +184,10 @@ export function createDeviceResponsivenessBreaker(
       return now() - state.openedAt >= state.probeBackoffMs;
     },
     resetAll: () => {
+      // 全量翻篇(登出 / 切号):所有已知设备代数递增,在途结果全部作废。
+      for (const deviceId of new Set([...states.keys(), ...generations.keys()])) {
+        bumpGeneration(deviceId);
+      }
       const openIds = [...states.entries()].filter(([, s]) => s.open).map(([id]) => id);
       states.clear();
       for (const deviceId of openIds) options.onOpenChanged?.(deviceId, false);
