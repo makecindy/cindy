@@ -4822,16 +4822,17 @@ describe('CodexAgent steer', () => {
 
   it('normalizes a server-side active-turn-id mismatch for the normal-send fallback', async () => {
     const agent = new CodexAgent(createDeps());
+    const serverError = Object.assign(
+      new Error(
+        'codex app-server turn/steer error -32600: expected active turn id '
+        + '`019fa22b-2461-7842-b852-082c0f82676a` but found '
+        + '`dda88981-5aca-4b99-90c7-68488deaccc8`',
+      ),
+      { code: -32600 },
+    );
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnSteer) {
-        throw Object.assign(
-          new Error(
-            'codex app-server turn/steer error -32600: expected active turn id '
-            + '`019fa22b-2461-7842-b852-082c0f82676a` but found '
-            + '`dda88981-5aca-4b99-90c7-68488deaccc8`',
-          ),
-          { code: -32600 },
-        );
+        throw serverError;
       }
       return undefined;
     });
@@ -4850,9 +4851,11 @@ describe('CodexAgent steer', () => {
       turn: { id: '019fa22b-2461-7842-b852-082c0f82676a' },
     });
 
-    await expect(handle.steer({ type: 'user', content: 'steer message' })).rejects.toThrow(
-      /No active Codex turn to steer/,
-    );
+    await expect(handle.steer({ type: 'user', content: 'steer message' })).rejects.toMatchObject({
+      message: 'No active Codex turn to steer',
+      cause: serverError,
+    });
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(1);
     expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(0);
     await handle.close();
   });

@@ -608,8 +608,12 @@ function parseLeadingSlashToken(text: string): { name: string; rest: string } | 
 }
 
 function isExpectedTurnIdMismatchError(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? (error as { code?: unknown }).code
+      : undefined;
   const message = error instanceof Error ? error.message : String(error);
-  return /expected active turn id\b.*\bbut found\b/i.test(message);
+  return code === -32600 && /expected active turn id\b[\s\S]*\bbut found\b/i.test(message);
 }
 
 // 插话 (steer) 时 turn/steer RPC 的 ack 有界等待上限。AppServerClient.request
@@ -4343,7 +4347,7 @@ export class CodexAgent extends BaseAgent {
             // app-server 已明确拒绝该 stale expectedTurnId,消息没有注入其它 turn。
             // 标记 RPC 已 settle,避免把这类确定性拒绝误当成 timeout/abort 在飞请求。
             ackSettled = true;
-            throw new Error('No active Codex turn to steer');
+            throw new Error('No active Codex turn to steer', { cause: error });
           }
           throw error;
         } finally {
