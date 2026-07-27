@@ -214,10 +214,11 @@ export function GhostPluginDetailView({
               <h1 className="truncate text-28 font-medium leading-[34px] text-[var(--text-primary)]">
                 {detail.name}
               </h1>
-              <div className="flex items-center gap-2">
-                <GhostPluginMetadata author={detail.author} version={detail.version} />
-                <GhostReadinessBadge readiness={readiness} />
-              </div>
+              <GhostPluginMetadata
+                author={detail.author}
+                version={detail.version}
+                trailing={<GhostReadinessBadge readiness={readiness} />}
+              />
             </div>
 
             <div
@@ -388,9 +389,12 @@ export function GhostPluginDetailView({
 export function GhostPluginMetadata({
   author,
   version,
+  trailing,
 }: {
   author?: string | null;
   version: string;
+  /** 尾随在版本号后的行内元素(readiness 徽章);与文本同一基线。 */
+  trailing?: ReactNode;
 }) {
   const { t } = useTranslation();
   return (
@@ -404,6 +408,7 @@ export function GhostPluginMetadata({
         </>
       ) : null}
       <span className="shrink-0">v{version}</span>
+      {trailing ? <span className="inline-flex shrink-0 translate-y-[-1px]">{trailing}</span> : null}
     </div>
   );
 }
