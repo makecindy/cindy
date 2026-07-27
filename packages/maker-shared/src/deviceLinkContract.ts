@@ -2,6 +2,9 @@ import { BRAND_NAME } from './branding.js';
 
 export const DEVICE_LINK_SUBSCRIBE_CHANNEL = 'device-link:subscribe';
 export const DEVICE_LINK_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
+/** Marker passed as sessions:get arg[1] only by background list reconciliation probes. */
+export const DEVICE_LINK_RECONCILIATION_PROBE_MARKER =
+  'device-link:sessions-reconciliation-probe';
 export const DEVICE_LINK_MEDIA_FETCH_CHANNEL = 'device-link:media:fetch';
 export const DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL = 'device-link:voice:transcribe';
 export const DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL = 'device-link:voice:credential-sync';

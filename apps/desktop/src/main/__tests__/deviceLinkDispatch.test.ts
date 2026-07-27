@@ -386,6 +386,7 @@ import {
 } from '../device-link/dispatch';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
 import { SESSION_ACTIVITY_CHANNEL, type Envelope } from '@cindy/device-link';
+import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { MAKER_PUSH } from '../maker-ipc/channels';
 
 /** 最小 fake client:捕获 onFrame handler,记录出站调用 */
@@ -498,9 +499,15 @@ describe('被控端控制链路生命周期', () => {
     });
   });
 
-  it.each(['local-db:sessions:list', 'local-db:sessions:get'])(
-    '后台 %s reconciliation 不持有更新 busy lease',
-    async (channel) => {
+  it.each([
+    { channel: 'local-db:sessions:list', args: [] },
+    {
+      channel: 'local-db:sessions:get',
+      args: ['s1', DEVICE_LINK_RECONCILIATION_PROBE_MARKER],
+    },
+  ])(
+    '后台 $channel reconciliation 不持有更新 busy lease',
+    async ({ channel, args }) => {
       remoteControlEnabled = true;
       registry.register(channel, () => []);
       const busyChanges: boolean[] = [];
@@ -513,7 +520,7 @@ describe('被控端控制链路生命周期', () => {
         kind: 'invoke',
         id: `invoke-${channel}`,
         src: 'ctrl-a',
-        payload: { channel, args: [] },
+        payload: { channel, args },
       });
 
       await vi.waitFor(() =>
@@ -527,6 +534,41 @@ describe('被控端控制链路生命周期', () => {
       expect(busyChanges).toEqual([]);
     },
   );
+
+  it('普通 sessions:get 交互读取仍持有更新 busy lease', async () => {
+    remoteControlEnabled = true;
+    let resolveInvoke: ((value: { id: string }) => void) | undefined;
+    registry.register(
+      'local-db:sessions:get',
+      () =>
+        new Promise<{ id: string }>((resolve) => {
+          resolveInvoke = resolve;
+        }),
+    );
+    const busyChanges: boolean[] = [];
+    setRemoteInvokeBusyChangedListener((busy) => busyChanges.push(busy));
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-interactive-get',
+      src: 'ctrl-a',
+      payload: { channel: 'local-db:sessions:get', args: ['s1'] },
+    });
+
+    expect(hasInFlightRemoteInvokes()).toBe(true);
+    expect(busyChanges).toEqual([true]);
+    resolveInvoke?.({ id: 's1' });
+    await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(false));
+    expect(busyChanges).toEqual([true, false]);
+    expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-interactive-get',
+      payload: { ok: true, result: { id: 's1' } },
+    });
+  });
 
   it.each([
     {

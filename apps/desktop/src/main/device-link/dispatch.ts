@@ -39,7 +39,10 @@ import {
   type LinkOpenPayload,
   type Topic,
 } from '@cindy/device-link';
-import type { MobileVoiceDictionaryLearningRequest } from '@cindy/maker-shared/device-link-contract';
+import {
+  DEVICE_LINK_RECONCILIATION_PROBE_MARKER,
+  type MobileVoiceDictionaryLearningRequest,
+} from '@cindy/maker-shared/device-link-contract';
 import {
   resolveProviderLogoKind,
   type ProviderLogoRouting,
@@ -84,7 +87,6 @@ const REMOTE_INVOKE_FRAME_SAFETY_BYTES = 1024;
 // interactive activity would refresh the updater quiet period forever for sessions-only viewers.
 const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:list',
-  'local-db:sessions:get',
 ]);
 const textEncoder = new TextEncoder();
 
@@ -322,6 +324,12 @@ function shouldAcquireRemoteInvokeBusyLease(
   if (!readDeviceLinkSettings().remoteControlEnabled) return false;
   if (isControllerRevoked(src)) return false;
   if (!REMOTE_INVOKE_ALLOWLIST.has(payload.channel)) return false;
+  if (
+    payload.channel === 'local-db:sessions:get' &&
+    payload.args?.[1] === DEVICE_LINK_RECONCILIATION_PROBE_MARKER
+  ) {
+    return false;
+  }
   return !UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS.has(payload.channel);
 }
 
