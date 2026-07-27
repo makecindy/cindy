@@ -89,6 +89,19 @@ const PROVIDER_TITLE_KEY: Record<string, string> = {
 
 // 配置面板锚在主菜单内缩 8px 的模型行上；补偿这段内缩，让两块面板贴边但不重叠。
 const MODEL_OPTIONS_SIDE_OFFSET = 8;
+const MODEL_LIST_DEFAULT_MAX_HEIGHT_PX = 300;
+// 折扣模型的价格会叠成两行：27.5px 价格栈 + 16px 纵向 padding，向上取整为 44px。
+const MODEL_LIST_CONSTRAINED_ROW_HEIGHT_PX = 44;
+const MODEL_LIST_ROW_GAP_PX = 2;
+
+export function modelListMaxHeightForRows(maxVisibleRows?: number): number | undefined {
+  if (maxVisibleRows === undefined || !Number.isFinite(maxVisibleRows)) return undefined;
+  const rows = Math.max(1, Math.floor(maxVisibleRows));
+  return Math.min(
+    MODEL_LIST_DEFAULT_MAX_HEIGHT_PX,
+    rows * MODEL_LIST_CONSTRAINED_ROW_HEIGHT_PX + Math.max(0, rows - 1) * MODEL_LIST_ROW_GAP_PX,
+  );
+}
 
 function providerDisplayName(p: ProviderView, t: (key: string) => string): string {
   const key = PROVIDER_TITLE_KEY[p.id];
@@ -453,6 +466,7 @@ function ModelSelectorContentView({
   pricing,
 }: ModelSelectorContentProps & { pricing: ModelPricingCatalog | null }) {
   const { t } = useTranslation();
+  const constrainedListMaxHeight = modelListMaxHeightForRows(maxVisibleModelRows);
   // session-agent-switch:两步式引擎切换的浏览态。browseVendor 初始 = 会话当前引擎;
   // 切到另一家 tab 只是「浏览目标引擎的模型」,选中模型行才真正触发切换事务。
   const [browseVendor, setBrowseVendor] = useState<'cc' | 'codex'>(
@@ -1221,6 +1235,7 @@ function ModelSelectorContentView({
             }}
             className={cn(
               'flex w-full cursor-pointer items-center justify-between rounded-[8px] px-3 py-2',
+              constrainedListMaxHeight !== undefined && 'min-h-11',
               'transition-colors duration-100 hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
               isSelected && 'bg-[var(--model-item-hover)]',
               isEditingThis &&
@@ -1453,12 +1468,9 @@ function ModelSelectorContentView({
         // 行宽与有滚动时一致(否则行会比搜索框宽 8px);细滚动条见 globals.css
         className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
         style={
-          maxVisibleModelRows === undefined
+          constrainedListMaxHeight === undefined
             ? undefined
-            : {
-                // 标准模型行 = 20px 字高 + 上下各 8px padding；行间 gap 为 2px。
-                maxHeight: `${Math.max(1, Math.floor(maxVisibleModelRows)) * 36 + Math.max(0, Math.floor(maxVisibleModelRows) - 1) * 2}px`,
-              }
+            : { maxHeight: `${constrainedListMaxHeight}px` }
         }
         role="listbox"
         aria-label="Model list"

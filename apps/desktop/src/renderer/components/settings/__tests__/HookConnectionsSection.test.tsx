@@ -18,6 +18,7 @@ const ipc = vi.hoisted(() => ({
   openExternal: vi.fn(),
 }));
 const dialog = vi.hoisted(() => ({ confirm: vi.fn() }));
+const workspacePrefsEditor = vi.hoisted(() => ({ render: vi.fn() }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -66,7 +67,10 @@ vi.mock('../HookWorkspacePrefsEditor', () => ({
     selectTeam: vi.fn(),
     showTeamChip: false,
   }),
-  WorkspacePrefsEditor: () => null,
+  WorkspacePrefsEditor: (props: { alias: string; maxVisibleModelRows?: number }) => {
+    workspacePrefsEditor.render(props);
+    return null;
+  },
 }));
 
 import { deriveAlias, HookConnectionsSection, workspaceRowsToMap } from '../HookConnectionsSection';
@@ -149,6 +153,31 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     expect(workspaceRowsToMap([{ alias: ' repo ', dir: ' /tmp/repo ' }])).toEqual({
       repo: '/tmp/repo',
     });
+  });
+
+  it('limits only the Slack built-in chat model list to six visible rows', async () => {
+    ipc.get.mockResolvedValue({
+      hook: {
+        ...BASE_HOOK,
+        enabled: true,
+        status: 'connected',
+      },
+    });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(SLACK_CARD);
+    await waitFor(() =>
+      expect(workspacePrefsEditor.render).toHaveBeenCalledWith(
+        expect.objectContaining({ alias: 'chat', maxVisibleModelRows: 6 }),
+      ),
+    );
+
+    workspacePrefsEditor.render.mockClear();
+    await expandChannelCard(TELEGRAM_CARD);
+    await waitFor(() => expect(workspacePrefsEditor.render).toHaveBeenCalled());
+    expect(workspacePrefsEditor.render).toHaveBeenCalledWith(
+      expect.objectContaining({ alias: 'chat', maxVisibleModelRows: undefined }),
+    );
   });
 
   it('offers an explicit link action when Telegram is enabled but unbound', async () => {
