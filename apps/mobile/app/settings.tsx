@@ -39,7 +39,15 @@ import {
   ScreenHeader,
   StatusDot,
 } from '@/components/MobilePrimitives';
-import { AUTH_API_BASE_URL, AUTH_REGION, DESKTOP_PACKAGE_VERSION, DEVICE_LINK_API_BASE_URL, IS_OTA_SELFHOST, REVIEW_MODE } from '@/config/env';
+import {
+  AUTH_API_BASE_URL,
+  AUTH_REGION,
+  DESKTOP_PACKAGE_VERSION,
+  DEVICE_LINK_API_BASE_URL,
+  IS_OTA_SELFHOST,
+  IS_TESTFLIGHT_BUILD,
+  REVIEW_MODE,
+} from '@/config/env';
 import { LEGAL_LINKS } from '@/config/legalLinks';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
@@ -56,6 +64,7 @@ import {
   writePushEnabled,
 } from '@/notifications/pushNotifications';
 import { buildMobileUpdateInfoRows, currentMobileOtaVersion } from '@/settings/updateInfo';
+import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
 import { runManualUpdateCheck } from '@/update/manualUpdateCheck';
 import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
 import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
@@ -139,12 +148,17 @@ export default function SettingsScreen() {
   const updateInfoRows = useMemo(() => buildMobileUpdateInfoRows(currentlyRunning), [currentlyRunning, t]);
   const otaVersion = useMemo(() => currentMobileOtaVersion(currentlyRunning), [currentlyRunning, t]);
   const canaryChannel = useCanaryChannelGate(IS_OTA_SELFHOST);
-  // 自建变体的统一入口先查整包;无整包时再由 checkForUpdate 继续查 JS OTA。
+  // 允许整包分发时统一入口先查整包;TestFlight 等禁用整包的环境直接进入 JS OTA。
   const { checkNow: checkBundleUpdate } = useBundleUpdatePrompt({
     auto: false,
     isCanary: canaryChannel.isCanary,
   });
-  const updateCheckEnabled = IS_OTA_SELFHOST || updatesEnabled;
+  const bundleCheckEnabled = shouldCheckBundleUpdate({
+    isSelfHosted: IS_OTA_SELFHOST,
+    isReviewMode: REVIEW_MODE,
+    isTestFlightBuild: IS_TESTFLIGHT_BUILD,
+  });
+  const updateCheckEnabled = bundleCheckEnabled || updatesEnabled;
 
   const aboutSection = overview.sections.find((section) => section.id === 'about');
   const debugSection = overview.sections.find((section) => section.id === 'debug');
@@ -217,7 +231,7 @@ export default function SettingsScreen() {
     setUpdateMessage(null);
     try {
       const outcome = await runManualUpdateCheck({
-        checkBundleUpdate: IS_OTA_SELFHOST ? checkBundleUpdate : undefined,
+        checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,
         otaEnabled: updatesEnabled,
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
@@ -229,10 +243,18 @@ export default function SettingsScreen() {
         setUpdateMessage(t('settings.version.bundleUpdateFound'));
       } else if (outcome.kind === 'up-to-date') {
         setUpdatePhase('uptodate');
-        setUpdateMessage(t('settings.version.upToDate'));
+        setUpdateMessage(t(
+          IS_TESTFLIGHT_BUILD
+            ? 'settings.version.testFlightNoContentUpdate'
+            : 'settings.version.upToDate',
+        ));
       } else if (outcome.kind === 'ota-unavailable') {
         setUpdatePhase('uptodate');
-        setUpdateMessage(t('settings.version.bundleUpToDateNoOta'));
+        setUpdateMessage(t(
+          IS_TESTFLIGHT_BUILD
+            ? 'settings.version.testFlightContentUpdateUnavailable'
+            : 'settings.version.bundleUpToDateNoOta',
+        ));
       } else if (outcome.kind === 'reloading') {
         setUpdatePhase('downloading');
         setUpdateMessage(t('settings.version.downloadedRestarting'));
@@ -245,7 +267,7 @@ export default function SettingsScreen() {
     } finally {
       updateCheckInFlightRef.current = false;
     }
-  }, [checkBundleUpdate, t, updateCheckEnabled, updatesEnabled]);
+  }, [bundleCheckEnabled, checkBundleUpdate, t, updateCheckEnabled, updatesEnabled]);
 
   const updateSelfDeviceNameDraft = useCallback((value: string) => {
     selfDeviceNameDraftRef.current = value;
@@ -560,7 +582,11 @@ export default function SettingsScreen() {
   const updateBusy = updatePhase === 'checking' || updatePhase === 'downloading';
   const updateButtonLabel = updatePhase === 'checking' ? t('settings.version.checking')
     : updatePhase === 'downloading' ? t('settings.version.updating')
-    : t('settings.version.checkAction');
+    : t(
+      IS_TESTFLIGHT_BUILD
+        ? 'settings.version.testFlightCheckAction'
+        : 'settings.version.checkAction',
+    );
 
   if (selfDeviceNameEditing) {
     return (
@@ -607,7 +633,7 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* 版本:只保留统一检查入口,自建线严格先查整包、无整包再查热更。 */}
+        {/* 版本:只保留统一检查入口;允许整包分发时先查整包,否则直接查热更。 */}
         <SettingsGroup title={t('settings.version.sectionTitle')}>
           {[
             <View key="version" style={styles.versionRow} testID="settings.version">
@@ -619,17 +645,38 @@ export default function SettingsScreen() {
                 {IS_OTA_SELFHOST && DESKTOP_PACKAGE_VERSION ? (
                   <Text style={styles.rowDetail} numberOfLines={1} testID="settings.desktopVersion">{t('settings.version.desktopVersion', { version: DESKTOP_PACKAGE_VERSION })}</Text>
                 ) : null}
+                {IS_TESTFLIGHT_BUILD ? (
+                  <Text style={styles.rowDetail} numberOfLines={2} testID="settings.testFlightUpdateHint">
+                    {t('settings.version.testFlightUpdateManaged')}
+                  </Text>
+                ) : null}
                 {updateMessage ? (
                   <Text style={styles.rowDetail} numberOfLines={2} testID="settings.updateMessage">{updateMessage}</Text>
                 ) : !REVIEW_MODE && !updatesEnabled ? (
-                  <Text style={styles.rowDetail} numberOfLines={1}>{t('settings.version.devNoOta')}</Text>
+                  <Text style={styles.rowDetail} numberOfLines={2}>
+                    {t(
+                      IS_TESTFLIGHT_BUILD
+                        ? 'settings.version.testFlightContentUpdateUnavailable'
+                        : 'settings.version.devNoOta',
+                    )}
+                  </Text>
                 ) : null}
               </View>
               {/* 审核模式(清单 review 命中当前二进制版本):隐藏检查更新入口,版本号照常展示 */}
               {!REVIEW_MODE ? (
                 <MainWindowActionButton
                   action={{
-                    accessibilityLabel: updateBusy ? t('settings.version.checkingAccessibility') : t('settings.version.checkAction'),
+                    accessibilityLabel: updateBusy
+                      ? t(
+                        IS_TESTFLIGHT_BUILD
+                          ? 'settings.version.testFlightCheckingAccessibility'
+                          : 'settings.version.checkingAccessibility',
+                      )
+                      : t(
+                        IS_TESTFLIGHT_BUILD
+                          ? 'settings.version.testFlightCheckAction'
+                          : 'settings.version.checkAction',
+                      ),
                     busy: updateBusy,
                     disabled: !updateCheckEnabled,
                     label: updateButtonLabel,

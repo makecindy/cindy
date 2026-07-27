@@ -201,14 +201,22 @@ describe('mobile settings overview', () => {
     expect(accountActionsIndex).toBeGreaterThan(filingNumberIndex);
   });
 
-  it('keeps one update action and shows both full-package and OTA versions', () => {
+  it('keeps one update action, scopes TestFlight checks to OTA, and shows both versions', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
 
     expect(source.match(/testID: 'settings\.checkUpdateButton'/g)).toHaveLength(1);
     expect(source).not.toContain('settings.checkBundleUpdateButton');
     expect(source).not.toContain('testID="settings.bundleUpdate"');
     expect(source).toContain('runManualUpdateCheck({');
-    expect(source).toContain('checkBundleUpdate: IS_OTA_SELFHOST ? checkBundleUpdate : undefined');
+    expect(source).toContain('isTestFlightBuild: IS_TESTFLIGHT_BUILD');
+    expect(source).toContain('const updateCheckEnabled = bundleCheckEnabled || updatesEnabled');
+    expect(source).toContain('checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined');
+    expect(source).toContain("'settings.version.testFlightCheckAction'");
+    expect(source).toContain("'settings.version.testFlightCheckingAccessibility'");
+    expect(source).toContain("'settings.version.testFlightNoContentUpdate'");
+    expect(source).toContain("'settings.version.testFlightContentUpdateUnavailable'");
+    expect(source).toContain("testID=\"settings.testFlightUpdateHint\"");
+    expect(source).toContain("{t('settings.version.testFlightUpdateManaged')}");
     expect(source).toContain("{t('settings.version.bundleVersion', { version: appVersion })}");
     expect(source).toContain(
       "testID=\"settings.otaVersion\">{t('settings.version.otaVersion', { version: otaVersion })}",

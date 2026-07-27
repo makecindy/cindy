@@ -71,7 +71,7 @@ describe('runManualUpdateCheck', () => {
     expect(input.checkOtaUpdate).not.toHaveBeenCalled();
   });
 
-  it('keeps non-self-host builds on their existing OTA-only path', async () => {
+  it('keeps OTA checks available when the caller disables full-package checks', async () => {
     const input = deps();
     await expect(runManualUpdateCheck(input)).resolves.toEqual({ kind: 'up-to-date' });
     expect(input.checkOtaUpdate).toHaveBeenCalledOnce();

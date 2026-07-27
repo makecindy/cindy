@@ -157,8 +157,10 @@ describe('createResumeUpdateChecker 整包路径', () => {
 
   it('bundleCheckEnabled=false → skipped,不拉 /latest', async () => {
     const deps = makeDeps({ bundleCheckEnabled: false });
-    const { bundle } = await runOnce(deps);
+    const { ota, bundle } = await runOnce(deps);
+    expect(ota).toBe('up-to-date');
     expect(bundle).toBe('skipped');
+    expect(deps.checkForUpdateAsync).toHaveBeenCalledOnce();
     expect(deps.fetchLatest).not.toHaveBeenCalled();
   });
 

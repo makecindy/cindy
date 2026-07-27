@@ -13,6 +13,17 @@
   ],
   "terms": [
     {
+      "id": "content-update",
+      "status": "proposed",
+      "en": "Content Update",
+      "translations": {
+        "zh-CN": "内容更新",
+        "ja": "コンテンツ更新",
+        "ko": "콘텐츠 업데이트"
+      },
+      "note": "指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。"
+    },
+    {
       "id": "device-code",
       "status": "proposed",
       "en": "Device Code",
