@@ -1661,11 +1661,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         ? status === 'connected'
         : lane !== null && lane.status === 'connected' && laneCapabilityReady(lane);
     if (!transportReady) {
-      // A socket before welcome, or Telegram reaching an old/partially
-      // rolled-out node, is not an authenticated business channel. Fail closed
-      // before any local workspace/model/session data source or dispatcher is
-      // touched, while still returning terminal replies for request/ack-shaped
-      // frames so the server does not leave an operation hanging.
+      // A socket before welcome, or a provider-neutral lane reaching an
+      // old/partially rolled-out node, is not an authenticated business
+      // channel. Fail closed before any local workspace/model/session data
+      // source or dispatcher is touched, while still returning terminal
+      // replies for request/ack-shaped frames so the server does not leave an
+      // operation hanging.
       if (msg.type === 'query.request') {
         send(
           makeQueryResponse({
