@@ -630,7 +630,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   const telegramLane = createNeutralLane(telegramConfig);
   /** 全部 provider-neutral 线; 遍历顺序即启动 / hello 重发顺序。 */
   const lanes: readonly NeutralProviderLane[] = [telegramLane];
-  const laneByProvider = new Map<HookProvider, NeutralProviderLane>(
+  // key 收窄到 NeutralHookProvider: 'slack' 走 legacy 线, 在编译期就挡在本表外
+  const laneByProvider = new Map<NeutralHookProvider, NeutralProviderLane>(
     lanes.map((lane) => [lane.config.provider, lane]),
   );
   /**
