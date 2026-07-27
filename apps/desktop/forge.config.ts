@@ -1076,6 +1076,16 @@ if (isWin) {
         // 接受)/ dev 'CindyDev'(仍与正式包隔离)。显式设值防 app-builder
         // 回落 package.json productName 造成 dev 与正式包同目录。
         productName: CINDY_EXE,
+        // Setup.exe 与 Uninstall <App>.exe 的 FileDescription 版本资源。
+        // app-builder-lib 只从 metadata(= apps/desktop/package.json)取
+        // description,没有顶层 config 字段;extraMetadata 是唯一的覆盖通道
+        // (packager.ts 在读完 package.json 后 deepAssign 进 metadata)。
+        // 这里显式设值与 packagerConfig.win32metadata 同源:不设时回落
+        // package.json 的 npm 包描述,UAC 提权弹窗、文件属性、快捷方式悬停
+        // 提示上就会显示那段面向开发者的文本(Issue: 安装/卸载显示错误描述)。
+        // prepackaged 模式下 doPack 直接 return,extraMetadata 不会重写
+        // 已由 electron-forge 打好的 app.asar 内 package.json。
+        extraMetadata: { description: CINDY_EXE },
         nsis: {
           oneClick: false,
           allowToChangeInstallationDirectory: true,
