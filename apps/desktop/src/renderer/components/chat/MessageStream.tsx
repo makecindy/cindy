@@ -296,7 +296,9 @@ interface WorkGroupRenderItem {
   durationMs?: number;
   /** 当前是否是仍在执行的尾部动作段。完成态时间线始终 false。 */
   isStreaming: boolean;
-  /** 工作段首个真实活动的 epoch ms,供 live elapsed ticker 使用。 */
+  /** 工作段起点 epoch ms,供 live elapsed ticker 使用。优先是上一个边界
+   *  (用户消息/上一句正文,可能早于段内首个活动),边界缺失时退回首个活动
+   *  时间戳 —— 与 durationMs 的段起点同源(见 createWorkGroup)。 */
   startedAtMs?: number;
 }
 
