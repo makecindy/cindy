@@ -39,7 +39,6 @@ import {
   Plus,
   Scan,
   Settings,
-  Square,
   Target,
   X,
   Zap,
@@ -184,6 +183,7 @@ import {
   VoiceMicWaveCaret,
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
+import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { useComposerResize } from '@/session/useComposerResize';
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
@@ -757,7 +757,16 @@ export default function NewRemoteSessionScreen() {
     [draft, draftContent],
   );
   const composerHasMessage = draft.firstMessage.trim().length > 0;
-  const composerShowCreateButton = composerHasMessage || attachments.length > 0 || pendingUploads.length > 0;
+  // 语音生命周期内创建按钮常驻(与会话页发送槽同理,对齐桌面):录音中点创建
+  // = 结束录音并用转写创建(create() 已有 listening 分支);否则首段转写落地的
+  // 瞬间按钮冒出来,右对齐工具排会把语音胶囊整格推左。voiceIsBusy 在下方声明,
+  // 这里直接展开同一表达式,避免声明顺序对调。
+  const composerShowCreateButton = composerHasMessage
+    || attachments.length > 0
+    || pendingUploads.length > 0
+    || voiceState === 'listening'
+    || voiceState === 'submitting'
+    || voiceState === 'refining';
   const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
   const voiceIsListening = voiceState === 'listening';
   const voiceIsProcessing = voiceState === 'submitting' || voiceState === 'refining';
@@ -768,10 +777,15 @@ export default function NewRemoteSessionScreen() {
   // 在途上传落定后再组首条消息,抢点创建不会丢图(#589 的 attachmentBusy 门由此取代)。
   const canCreate = !createValidation && !creating && !voiceIsProcessing;
   const voiceIsBusy = voiceIsListening || voiceIsProcessing;
+  // 「按下即录」的乐观反馈(与会话页/桌面同款,详见 [sessionId].tsx 同名状态注释)。
+  const [voiceStartPending, setVoiceStartPending] = useState(false);
+  const voiceStartedOnPressInRef = useRef(false);
+  // 录音计时(红点+m:ss 胶囊,与会话页/桌面同形态);pillWidth 同步驱动工具排占位。
+  const voiceRecordingTimer = useMobileVoiceRecordingTimer(voiceIsListening || voiceStartPending);
   // 手机语音只保留官方托管路径,错误引导仅剩系统麦克风权限一条。
   const canOpenVoiceSettings = isMobileVoiceMicPermissionError(voiceError);
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
-  // 录音状态由输入框内的语音按钮形态(Mic / Square / spinner)表达。
+  // 录音状态由输入框内的语音按钮形态(Mic / 红点计时胶囊 / spinner)表达。
   const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);
   const composerVoicePlacement = voiceUiAvailable
     ? resolveMobileComposerVoiceButtonPlacement({
@@ -1657,11 +1671,12 @@ export default function NewRemoteSessionScreen() {
     }
   }, [finishVoiceRecording, startVoiceRecording, voiceState]);
 
-  // Speculative warm-up on touch-down of the mic button (audio session + ASR
-  // connect, see mobileVoicePrewarm): both cold-start costs overlap the press
-  // gesture instead of following the tap. Skipped when the tap will stop the
-  // current recording rather than start a new one.
+  // Touch-down of the mic button = start recording (desktop pointerdown 同款,
+  // 2026-07-27 定案):按下瞬间起录,开头一个字不丢;松手属于同一手势,由
+  // voiceStartedOnPressInRef 吞掉 onPress 的 toggle。预热仍在最前,与启动重叠。
+  // Skipped when the tap will stop the current recording rather than start a new one.
   const handleVoiceButtonPressIn = useCallback(() => {
+    voiceStartedOnPressInRef.current = false;
     if (creating || voiceIsProcessing) return;
     if (voiceRecordingActiveRef.current || voiceState === 'listening') return;
     if (!selectedDeviceId || !isMobileRealtimeAudioAvailable()) return;
@@ -1674,7 +1689,14 @@ export default function NewRemoteSessionScreen() {
       refreshAccessToken: () => auth.refreshAccessToken(),
       apiFetch: auth.apiFetch,
     });
-  }, [creating, selectedDeviceId, voiceIsProcessing, voiceState]);
+    // 启动已在途/停止在途时不重复发起,也不把这次按下标成「已起录」。
+    if (voiceStartupInFlightRef.current || voiceStopInFlightRef.current) return;
+    voiceStartedOnPressInRef.current = true;
+    setVoiceStartPending(true);
+    void startVoiceRecording()
+      .catch(() => undefined)
+      .finally(() => setVoiceStartPending(false));
+  }, [creating, selectedDeviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
   useEffect(() => {
     return () => {
@@ -1807,7 +1829,7 @@ export default function NewRemoteSessionScreen() {
       </Pressable>
       <ComposerToolbarSpacer />
       {composerVoicePlacement?.inline || composerVoicePlacement?.floating
-        ? <ComposerToolbarVoiceSlot />
+        ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
         : null}
       {composerShowCreateButton ? renderCreateButton() : null}
     </>
@@ -1868,12 +1890,21 @@ export default function NewRemoteSessionScreen() {
       accessibilityState={{ busy: voiceIsProcessing || undefined, disabled: creating || undefined }}
       disabled={creating || voiceIsProcessing}
       hitSlop={10}
-      onPress={toggleVoiceRecording}
+      onPress={() => {
+        if (voiceStartedOnPressInRef.current) {
+          // 本次按下已在 pressIn 起录:松手不当作「再点一下停止」。
+          voiceStartedOnPressInRef.current = false;
+          return;
+        }
+        toggleVoiceRecording();
+      }}
       onPressIn={handleVoiceButtonPressIn}
       style={({ pressed }) => [
         styles.composerIconButton,
         buttonStyle,
-        voiceIsListening && styles.composerIconButtonActive,
+        // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening。
+        voiceRecordingTimer.label !== null && styles.composerIconButtonActive,
+        voiceRecordingTimer.label !== null && { width: voiceRecordingTimer.pillWidth },
         (creating || voiceIsProcessing) && styles.disabled,
         pressed && styles.pressed,
       ]}
@@ -1881,10 +1912,9 @@ export default function NewRemoteSessionScreen() {
     >
       {voiceIsProcessing ? (
         <ActivityIndicator color={colors.textSecondary} size="small" />
-      ) : voiceIsListening ? (
-        // 录音停止:红色描边方块(对齐桌面 activeRecording 的 --settings-badge-error),
-        // 与「停止任务」的中性色实心方块区分开。
-        <Square color={colors.statusRecording} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      ) : voiceRecordingTimer.label !== null ? (
+        // 录音中:胶囊展开为脉冲红点 + 计时(对齐桌面/会话页),点胶囊任意位置停止。
+        <VoiceRecordingPillContent label={voiceRecordingTimer.label} testID="newSession.voiceRecordingPill" />
       ) : (
         <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
       )}
