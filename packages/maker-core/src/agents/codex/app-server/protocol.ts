@@ -854,6 +854,12 @@ export interface ItemCompletedNotification {
   params: { threadId: string; turnId: string; item: ItemEnvelope; completedAtMs?: number };
 }
 
+/** Streaming assistant text emitted before the final agentMessage item completes. */
+export interface AgentMessageDeltaNotification {
+  method: 'item/agentMessage/delta';
+  params: { threadId: string; turnId: string; itemId: string; delta: string };
+}
+
 export type PlanEntryStatus = 'pending' | 'in_progress' | 'completed';
 
 export interface PlanEntry {
@@ -1079,6 +1085,7 @@ export type ServerNotification =
   | ItemStartedNotification
   | ItemUpdatedNotification
   | ItemCompletedNotification
+  | AgentMessageDeltaNotification
   | ReasoningSummaryTextDeltaNotification
   | ReasoningSummaryPartAddedNotification
   | ReasoningTextDeltaNotification

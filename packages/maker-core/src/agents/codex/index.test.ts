@@ -5175,6 +5175,46 @@ describe('CodexAgent rewind', () => {
 });
 
 describe('CodexAgent turn lifecycle', () => {
+  it('routes agent message deltas into streaming text before final calibration', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-agent-message-delta',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1' },
+    });
+    handlers.agentMessageDelta?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'message-1',
+      delta: 'streamed text',
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'text',
+      data: { text: 'streamed text', isFinal: false },
+    });
+
+    handlers.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: { type: 'agentMessage', id: 'message-1', text: 'streamed text' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'text',
+      data: { text: 'streamed text', isFinal: true },
+    });
+    await handle.close();
+  });
+
   it('clears running state and emits done status after terminal error notification', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);

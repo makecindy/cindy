@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { AppServerClient, detectAuthInvalidationReason } from './client.js';
+import { AppServerHost } from './host.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
 
@@ -58,6 +59,49 @@ const logger: Logger = {
   fatal: vi.fn(),
   child: () => logger,
 };
+
+describe('AppServerHost agent message delta subscription', () => {
+  it('keeps agent message delta enabled and routes it to the thread subscriber', async () => {
+    const transport = new FakeTransport();
+    const deltaHandler = vi.fn();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'test', title: 'Test', version: '0.0.0' },
+    });
+    host.subscribeThread('thread-1', { agentMessageDelta: deltaHandler });
+
+    const started = host.ensureStarted();
+    expect(transport.lines).toHaveLength(1);
+    const initializeRequest = JSON.parse(transport.lines[0]!) as {
+      id: number;
+      params: { capabilities: { optOutNotificationMethods: string[] } };
+    };
+    expect(initializeRequest.params.capabilities.optOutNotificationMethods)
+      .not.toContain('item/agentMessage/delta');
+    transport.emitLine({
+      id: initializeRequest.id,
+      result: {
+        userAgent: 'codex-test',
+        codexHome: '/tmp/codex',
+        platformFamily: 'unix',
+        platformOs: 'linux',
+      },
+    });
+    await started;
+
+    const params = {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'message-1',
+      delta: 'streamed',
+    };
+    transport.emitLine({ method: 'item/agentMessage/delta', params });
+    expect(deltaHandler).toHaveBeenCalledWith(params);
+
+    await host.shutdown('test complete');
+  });
+});
 
 describe('detectAuthInvalidationReason', () => {
   const cloudAuthError = (message: string, data: Record<string, unknown> = {}) => ({
