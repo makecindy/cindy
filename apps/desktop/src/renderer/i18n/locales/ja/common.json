@@ -653,6 +653,13 @@
       "analyticsSaveFailed": "利用統計の設定を保存できませんでした",
       "debugLogLabel": "デバッグログ",
       "debugLogDescription": "有効にすると詳細なデバッグログを出力します:main/maker logger が debug レベルになり、新しい Claude Code セッションは API リクエスト URL/ステータス/レイテンシ、Node レベルの DNS/TCP/TLS ハンドシェイクのタイミング、SDK 内部情報も出力します。ログ量が大きいため、調査が終わったらオフにしてください。dev モードでは常に有効です。",
+      "legal": {
+        "termsOfServiceLabel": "利用規約",
+        "privacyPolicyLabel": "プライバシーポリシー",
+        "view": "表示",
+        "viewDocument": "{{document}}を表示",
+        "openFailed": "文書を開けませんでした。システムのブラウザー設定を確認してください"
+      },
       "social": {
         "title": "Cindy とつながる",
         "discordLabel": "Discord",

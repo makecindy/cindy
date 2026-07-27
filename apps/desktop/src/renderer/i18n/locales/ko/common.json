@@ -653,6 +653,13 @@
       "analyticsSaveFailed": "사용 통계 설정을 저장하지 못했습니다",
       "debugLogLabel": "디버그 로그",
       "debugLogDescription": "활성화하면 전체 디버그 로그를 출력합니다: main/maker logger가 debug 레벨로 올라가며, 새 Claude Code 세션은 API 요청 URL/상태/지연 시간, Node 레벨 DNS/TCP/TLS 핸드셰이크 타이밍 및 SDK 내부 정보도 출력합니다. 로그 양이 많으므로 문제 해결 후에는 꺼주세요. dev 모드에서는 항상 켜져 있습니다.",
+      "legal": {
+        "termsOfServiceLabel": "서비스 이용약관",
+        "privacyPolicyLabel": "개인정보 처리방침",
+        "view": "보기",
+        "viewDocument": "{{document}} 보기",
+        "openFailed": "문서를 열 수 없습니다. 시스템 브라우저 설정을 확인해 주세요"
+      },
       "social": {
         "title": "Cindy와 연결하기",
         "discordLabel": "Discord",

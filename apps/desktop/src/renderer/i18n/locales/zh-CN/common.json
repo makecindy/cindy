@@ -653,6 +653,13 @@
       "analyticsSaveFailed": "保存使用统计设置失败",
       "debugLogLabel": "Debug 日志",
       "debugLogDescription": "开启后输出全量调试日志：main/maker logger 抬到 debug 级，新建的 Claude Code 会话额外输出 API 请求 URL/状态/耗时、Node 层 DNS/TCP/TLS 握手时序，以及 SDK 内部信息。日志量较大，定位问题后请关闭。dev 模式下始终开启。",
+      "legal": {
+        "termsOfServiceLabel": "用户协议",
+        "privacyPolicyLabel": "隐私政策",
+        "view": "查看",
+        "viewDocument": "查看{{document}}",
+        "openFailed": "无法打开协议，请检查系统浏览器设置"
+      },
       "social": {
         "title": "和 Cindy 联系",
         "discordLabel": "Discord",

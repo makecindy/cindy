@@ -653,6 +653,13 @@
       "analyticsSaveFailed": "Failed to save usage statistics settings",
       "debugLogLabel": "Debug logs",
       "debugLogDescription": "When enabled, emits verbose debug logs: main/maker logger raised to debug level; new Claude Code sessions also log API request URL/status/latency, Node-level DNS/TCP/TLS handshake timing, and SDK internals. Output is large — turn off after troubleshooting. Always on in dev mode.",
+      "legal": {
+        "termsOfServiceLabel": "Terms of Service",
+        "privacyPolicyLabel": "Privacy Policy",
+        "view": "View",
+        "viewDocument": "View {{document}}",
+        "openFailed": "Unable to open the document. Check your system browser settings."
+      },
       "social": {
         "title": "Connect with Cindy",
         "discordLabel": "Discord",
