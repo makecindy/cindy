@@ -71,9 +71,9 @@ async function listFilesByExt(p: string, ext: string): Promise<string[]> {
 }
 
 /**
- * Claude agent 文件必须包含可解析且非空的 `name` 元数据，转换器才会生成
- * Codex 的 TOML 文件。检测阶段使用同一条约束，避免把普通 Markdown
- * 误报为可迁移代理。
+ * 检测阶段要求 Claude agent 文件包含可解析 YAML 中的非空字符串 `name`，
+ * 避免把普通 Markdown 误报为可迁移代理。转换器对缺少或假值 `name` 的源文件
+ * 会跳过，但不在这里重复执行转换。
  */
 async function isConvertibleClaudeAgentFile(p: string): Promise<boolean> {
   try {
