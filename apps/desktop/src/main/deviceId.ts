@@ -24,9 +24,14 @@ import path from 'node:path';
 export function ensureSystemBinPathForMachineId(): void {
   if (process.platform !== 'darwin' && process.platform !== 'linux') return;
   const required = ['/usr/sbin', '/sbin'];
-  const current = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
-  const missing = required.filter((dir) => !current.includes(dir));
+  const raw = process.env.PATH ?? '';
+  // Membership check only — the Set may include empty segments; that's fine, we
+  // only look up the required dirs.
+  const present = new Set(raw.split(path.delimiter));
+  const missing = required.filter((dir) => !present.has(dir));
   if (missing.length === 0) return;
-  // Append: only a fallback lookup location, don't shadow earlier PATH entries.
-  process.env.PATH = [...current, ...missing].join(path.delimiter);
+  // Append missing dirs, preserving the original PATH string verbatim (including
+  // any empty segments, which mean CWD on Unix) so we don't change PATH order or
+  // semantics — only add fallback lookup locations at the end.
+  process.env.PATH = raw === '' ? missing.join(path.delimiter) : [raw, ...missing].join(path.delimiter);
 }

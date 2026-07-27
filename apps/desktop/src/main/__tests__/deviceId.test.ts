@@ -51,4 +51,15 @@ describe('ensureSystemBinPathForMachineId', () => {
     expect(dirs[0]).toBe('/opt/homebrew/bin'); // 原有优先项仍在最前
     if (PATCHES_PATH) expect(dirs).toContain('/usr/sbin');
   });
+
+  it('保留原 PATH 的空段(Unix 下代表 CWD),不改语义', () => {
+    // 中间的空段(::)在 Unix 下表示当前目录;补齐时不能把它过滤掉。
+    process.env.PATH = '/usr/bin::/bin';
+    ensureSystemBinPathForMachineId();
+    if (PATCHES_PATH) {
+      expect(process.env.PATH).toBe('/usr/bin::/bin:/usr/sbin:/sbin');
+    } else {
+      expect(process.env.PATH).toBe('/usr/bin::/bin');
+    }
+  });
 });
