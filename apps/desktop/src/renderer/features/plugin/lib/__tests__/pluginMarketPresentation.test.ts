@@ -74,6 +74,22 @@ describe('orderPluginCatalogItems', () => {
     ).toEqual(['market:market', 'installed:local-z', 'installed:local-a']);
   });
 
+  it('keeps a conflicting market card and its local install at the server position', () => {
+    const first = marketItem('plugin-first', 'first', 'not-installed');
+    const conflict = marketItem('plugin-conflict', 'collision', 'conflict');
+    const third = marketItem('plugin-third', 'third', 'not-installed');
+
+    const ordered = orderPluginCatalogItems(
+      [first, conflict, third],
+      [{ id: 'collision' }],
+      [first, conflict, third],
+    );
+
+    expect(
+      ordered.map(({ kind, item }) => `${kind}:${kind === 'installed' ? item.id : item.ghostId}`),
+    ).toEqual(['market:first', 'market:collision', 'installed:collision', 'market:third']);
+  });
+
   it('preserves server order after search or origin filters remove entries', () => {
     const first = marketItem('plugin-first', 'first', 'not-installed');
     const hidden = marketItem('plugin-hidden', 'hidden', 'not-installed');
