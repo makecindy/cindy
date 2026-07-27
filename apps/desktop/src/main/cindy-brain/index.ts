@@ -77,6 +77,10 @@ import {
   handleGhostSetupStatusRequest,
 } from './ghostSetupStatus.js';
 import { getGhostSetupChangeBus } from './ghostSetupChangeBus.js';
+import {
+  projectGhostLifecycles,
+  type GhostLifecycleEntry,
+} from './ghostLifecycle.js';
 import { GhostSetupManifestTracker } from './ghostSetupManifestTracker.js';
 import type { GhostSetupActionResult } from './ghostSetupCoordinator.js';
 import type { GhostSetupInteractionResponseTarget } from './ghostSetupInteractionBridge.js';
@@ -514,6 +518,31 @@ export function isGhostAvailableForActiveSession(id: string): boolean {
   return !isCindyAccountGhostId(id) || getAppCapabilities().canUseCindyAccountServices;
 }
 
+/**
+ * 生命周期投影变更广播(UI 徽章 / 发现层热更的单一推送通道)。
+ * 只在投影内容实际变化时发送——setup change bus 的 focus 唤醒等元数据
+ * 事件不会产生有效 diff,避免每次窗口聚焦都全量推送。
+ */
+let lastLifecycleBroadcastJson: string | null = null;
+export function broadcastGhostLifecycleChanged(): void {
+  const projection = getGhostLifecycleProjection();
+  const json = JSON.stringify(projection);
+  if (json === lastLifecycleBroadcastJson) return;
+  lastLifecycleBroadcastJson = json;
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (window.isDestroyed()) return;
+    window.webContents.send('ghosts:lifecycle-changed', { entries: projection });
+  });
+}
+
+let lifecyclePushArmed = false;
+/** 装配一次投影推送:setup 变化(凭证/连接/kv/oauth)驱动重投影广播。 */
+export function armGhostLifecyclePush(): void {
+  if (lifecyclePushArmed) return;
+  lifecyclePushArmed = true;
+  getGhostSetupChangeBus().subscribeAll(() => broadcastGhostLifecycleChanged());
+}
+
 function availableGhosts(): InstalledGhost[] {
   return getGhostManager().list().filter((ghost) =>
     isGhostAvailableForActiveSession(ghost.manifest.id),
@@ -858,6 +887,8 @@ export function getGhostRuntime(): GhostRuntime {
         // 崩溃/熄灯时把该意识名下的在途工具调用收掉(结构化失败给 agent)。
         getGhostPipeDispatcher().onRuntimeState(id, state);
         broadcastGhostRuntimeStates();
+        // 崩溃/熔断进出 degraded 态,生命周期投影随 runtime 变化热更。
+        if (state === 'crashed' || state === 'fused') broadcastGhostLifecycleChanged();
       },
     });
   }
@@ -2011,6 +2042,34 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
           configId === 'model-provider' && isModelAccessReady(),
       }),
     },
+  );
+}
+
+/**
+ * 生命周期统一投影(agent 发现层 / 插件页 UI / scheduler 共用口径)。
+ * 聚合现有存储的现查读取:启用态(GhostManager)、账号面、runtime 崩溃/熔断、
+ * setup 评估;单插件评估失败按 unknown 降级,不拖垮整份清单。
+ */
+export function getGhostLifecycleProjection(): GhostLifecycleEntry[] {
+  const runtime = getGhostRuntime();
+  return projectGhostLifecycles(
+    getGhostManager()
+      .list()
+      .map((ghost) => ({
+        id: ghost.manifest.id,
+        name: ghost.manifest.name,
+        enabled: ghost.enabled,
+      })),
+    {
+      isAccountAvailable: isGhostAvailableForActiveSession,
+      runtimeStateOf: (id) => runtime.listStates()[id],
+      assess: getGhostSetupAssessment,
+    },
+    (id, error) =>
+      log.warn('ghost lifecycle assessment degraded to unknown', {
+        ghostId: id,
+        errorType: error instanceof Error ? error.name : typeof error,
+      }),
   );
 }
 
@@ -3254,6 +3313,12 @@ export function registerGhostIpc(): void {
     }),
   );
 
+  // ── 生命周期统一投影(插件页徽章 / 后续多端只读清单的事实源)──
+  // 查询型 handler:现查现算不缓存,返回的投影与发现层 / scheduler 同一份
+  // 纯函数口径。renderer 侧配合 ghosts:lifecycle-changed 推送热更。
+  armGhostLifecyclePush();
+  ipcMain.handle('ghosts:lifecycle', () => ({ entries: getGhostLifecycleProjection() }));
+
   // ── 面板媒体换发(拖拽引渡 + 右键菜单)──────────────────────────────
   // 只由宿主 renderer(可信应用层)调用——意识面板零桥碰不到 IPC。
   // 校验链与 preview 闸同纪律(纯逻辑在 previewGate.resolveGhostPanelMedia):
@@ -3730,6 +3795,9 @@ function broadcastGhostProvisioning(active: boolean): void {
 
 function broadcastGhostsChanged(ghosts: InstalledGhost[]): void {
   getGhostSetupManifestTracker().note(ghosts);
+  // 装/卸/启用/沉睡都会改写投影;借同一时机热更(顺序先于清单广播,
+  // renderer 收到清单时已能拿到一致的生命周期快照)。
+  broadcastGhostLifecycleChanged();
   const visible = ghosts.filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;

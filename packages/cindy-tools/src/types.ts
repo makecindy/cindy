@@ -109,10 +109,13 @@ export interface CindyGhostInfo {
   command?: string;
   tools: CindyGhostToolInfo[];
   /**
-   * Host 现查的配置评估。支持 Setup Runtime 的 Host 应尽量返回，但评估
-   * 读取/计算失败时可省略；Agent 不得把字段缺失解释为 ready 或自行放行。
+   * Host 现查的配置评估。支持 Setup Runtime 的 Host 应尽量返回；评估
+   * 读取/计算失败时字段省略,且此时 tools 必须为空并带 message 说明——
+   * 评估失败按未就绪处理,Agent 不得把字段缺失解释为 ready 或自行放行。
    */
   setup?: CindyGhostSetupAssessment;
+  /** 条目级诊断(如配置评估失败时的处置指引);正常条目省略。 */
+  message?: string;
 }
 
 /** ghost_call 的结构化失败分类(host 侧产生,总机原样透传给 agent)。 */

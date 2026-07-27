@@ -3,9 +3,9 @@
  * ---------------------------------------------------------------------------
  * 能力**目录**是静态白名单(@cindy/maker-scheduler 的 SCRIPT_CAPABILITIES,授权
  * 语义、任务的持久配置);本模块解决的是另一半——**可用性**(瞬时状态):jira.*
- * 走 xd-atlassian 意识,意识未装入 / 沉睡时任务触发必失败。表单在能力选择器里
- * 按本探测结果标注警示,但**不过滤清单**——建任务时的意识状态不代表任务运行时
- * 的状态,藏掉选项会挡住"先建任务、稍后唤醒意识"的正常路径。
+ * 走 xd-atlassian 意识,意识未装入 / 沉睡 / 配置未就绪时任务触发必失败。表单在
+ * 能力选择器里按本探测结果标注警示,但**不过滤清单**——建任务时的意识状态不
+ * 代表任务运行时的状态,藏掉选项会挡住"先建任务、稍后唤醒/配置意识"的正常路径。
  */
 import { SCRIPT_CAPABILITIES, type ScriptCapability } from '@cindy/maker-scheduler';
 
@@ -21,7 +21,11 @@ const CAPABILITY_GHOST_DEPS: Partial<Record<ScriptCapability, string>> = {
   'feishu.read': 'xd-feishu',
 };
 
-export type ScriptCapabilityRuntimeState = 'ok' | 'ghost-missing' | 'ghost-asleep';
+export type ScriptCapabilityRuntimeState =
+  | 'ok'
+  | 'ghost-missing'
+  | 'ghost-asleep'
+  | 'ghost-needs-setup';
 
 export interface ScriptCapabilityStatus {
   capability: ScriptCapability;
@@ -35,6 +39,12 @@ export interface GhostStateSnapshot {
   name: string;
   /** InstalledGhost.enabled:false = 沉睡(能力不注册,broker 调用会失败)。 */
   enabled: boolean;
+  /**
+   * 配置就绪态(host 现查注入):'ready' 之外的值把能力标为 ghost-needs-setup。
+   * 缺省视为 ready——不感知 setup 的旧调用方口径不变;评估失败时由调用方
+   * 显式传非 ready 值,绝不把「判定失败」折叠成「可用」。
+   */
+  setupState?: 'ready' | 'required';
 }
 
 export function resolveScriptCapabilityStatuses(
@@ -46,6 +56,9 @@ export function resolveScriptCapabilityStatuses(
     const ghost = ghosts.find((g) => g.id === depId);
     if (!ghost) return { capability, state: 'ghost-missing' as const, ghostName: depId };
     if (!ghost.enabled) return { capability, state: 'ghost-asleep' as const, ghostName: ghost.name };
+    if (ghost.setupState !== undefined && ghost.setupState !== 'ready') {
+      return { capability, state: 'ghost-needs-setup' as const, ghostName: ghost.name };
+    }
     return { capability, state: 'ok' as const };
   });
 }

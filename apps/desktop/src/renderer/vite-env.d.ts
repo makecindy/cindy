@@ -1026,6 +1026,18 @@ interface ElectronAPI {
      * 引导去配置。未装 NOT_FOUND。
      */
     setupStatus: (id: string) => Promise<import('../shared/ghost').GhostSetupStatus>;
+    /**
+     * 生命周期统一投影(插件页徽章 / 发现层同口径):readiness 为主键,
+     * 配合 onLifecycleChanged 推送热更,首帧拉一次快照。
+     */
+    lifecycle: () => Promise<{
+      entries: import('../shared/ghostLifecycle').GhostLifecycleEntry[];
+    }>;
+    onLifecycleChanged: (
+      callback: (payload: {
+        entries: import('../shared/ghostLifecycle').GhostLifecycleEntry[];
+      }) => void,
+    ) => () => void;
     /** 最近使用顺序变化（发送 /卸载），多窗口同步。 */
     onRecentUsageChanged: (
       callback: (payload: { ids: string[] }) => void,

@@ -65,7 +65,7 @@ import {
   stabilizeHookCommand,
 } from '../scheduler-host/hook-script-generator.js';
 import { resolveScriptCapabilityStatuses } from '../scheduler-host/script-capability-status.js';
-import { getGhostManager } from '../cindy-brain/index.js';
+import { getGhostManager, getGhostSetupAssessment } from '../cindy-brain/index.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { getAgentIslandService } from '../agent-island/service.js';
@@ -587,7 +587,17 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     try {
       const ghosts = getGhostManager()
         .list()
-        .map((g) => ({ id: g.manifest.id, name: g.manifest.name, enabled: g.enabled }));
+        .map((g) => {
+          // 配置就绪度纳入能力警示:评估失败按未就绪处理(显式传非 ready),
+          // 不让「判定失败」折叠成「可用」把任务放行到运行时必败。
+          let setupState: 'ready' | 'required' = 'ready';
+          try {
+            setupState = getGhostSetupAssessment(g.manifest.id).state;
+          } catch {
+            setupState = 'required';
+          }
+          return { id: g.manifest.id, name: g.manifest.name, enabled: g.enabled, setupState };
+        });
       return { statuses: resolveScriptCapabilityStatuses(ghosts) };
     } catch (err) {
       log.warn(`script capability status probe failed (non-fatal): ${String(err)}`);

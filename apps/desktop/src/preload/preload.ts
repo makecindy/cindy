@@ -820,6 +820,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 配置就绪检查(插件页「使用」前置门;main 现查凭证/账号/连接/kv)。 */
     setupStatus: (id: string): Promise<unknown> =>
       ipcRenderer.invoke('ghosts:setup-status', id),
+    lifecycle: (): Promise<{ entries: unknown[] }> =>
+      ipcRenderer.invoke('ghosts:lifecycle'),
+    onLifecycleChanged: (callback: (payload: { entries: unknown[] }) => void) => {
+      const listener = (_event: unknown, payload: { entries: unknown[] }) =>
+        callback(payload);
+      ipcRenderer.on('ghosts:lifecycle-changed', listener);
+      return () => {
+        ipcRenderer.removeListener('ghosts:lifecycle-changed', listener);
+      };
+    },
     install: (
       lizFilePath: string,
       opts: { enable?: boolean; expectedPackageSha256: string },

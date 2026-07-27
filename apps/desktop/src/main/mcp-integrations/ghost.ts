@@ -569,13 +569,16 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         )
         .map((g) => {
           let setup: CindyGhostInfo['setup'];
+          let assessmentFailed = false;
           try {
             setup = getGhostSetupAssessment(g.manifest.id);
           } catch (error) {
-            // Roster discovery is best-effort per plugin. Keep this plugin
-            // discoverable without claiming it is ready; ghost_call retains
-            // the strict setup gate and will fail before dispatch.
-            log.warn('ghost setup assessment omitted from roster', {
+            // 评估失败 = 显式降级:条目不省(插件仍然可发现)、不伪造 setup
+            // 字段(缺失 ≠ ready 的契约不变),但工具清空——agent 拿不到可
+            // 派发面,只能按 message 引导用户去插件页排查;ghost_call 侧的
+            // strict setup gate 不变,兜底仍会在派发前拦截。
+            assessmentFailed = true;
+            log.warn('ghost setup assessment unavailable in roster', {
               ghostId: g.manifest.id,
               errorType: error instanceof Error ? error.name : typeof error,
             });
@@ -585,11 +588,19 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
             name: g.manifest.name,
             ...(g.manifest.command ? { command: g.manifest.command } : {}),
             ...(setup ? { setup } : {}),
-            tools: (g.manifest.tools ?? []).map((t) => ({
-              name: t.name,
-              description: t.description,
-              ...(t.parameters ? { parameters: t.parameters } : {}),
-            })),
+            ...(assessmentFailed
+              ? {
+                  message:
+                    '该插件的配置状态暂时无法判定,工具未派发;请引导用户打开 Cindy 插件页检查该插件状态后重试。',
+                }
+              : {}),
+            tools: assessmentFailed
+              ? []
+              : (g.manifest.tools ?? []).map((t) => ({
+                  name: t.name,
+                  description: t.description,
+                  ...(t.parameters ? { parameters: t.parameters } : {}),
+                })),
           };
         });
     },

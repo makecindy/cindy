@@ -96,8 +96,24 @@ export class GhostSetupChangeBus {
     };
   }
 
+  /**
+   * Subscribe to every plugin's change events(e.g. the lifecycle projection
+   * broadcaster, which re-reads all stores on any signal). Distinct from
+   * emitAll: this receives events for ghostIds that have no keyed subscriber.
+   */
+  subscribeAll(listener: GhostSetupChangeListener): () => void {
+    this.wildcardListeners.add(listener);
+    return () => {
+      this.wildcardListeners.delete(listener);
+    };
+  }
+
   private notify(event: GhostSetupChangeEvent): void {
-    for (const listener of this.listeners.get(event.ghostId) ?? []) {
+    const targets = [
+      ...(this.listeners.get(event.ghostId) ?? []),
+      ...this.wildcardListeners,
+    ];
+    for (const listener of targets) {
       try {
         listener(event);
       } catch (error) {
@@ -112,6 +128,8 @@ export class GhostSetupChangeBus {
       }
     }
   }
+
+  private readonly wildcardListeners = new Set<GhostSetupChangeListener>();
 }
 
 const ghostSetupChangeBus = new GhostSetupChangeBus();

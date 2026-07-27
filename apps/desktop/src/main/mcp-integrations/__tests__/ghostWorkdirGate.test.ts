@@ -193,7 +193,7 @@ describe('花名册 / ghost_list 过滤', () => {
     expect((await deps.listAwakeGhosts()).map((g) => g.id)).toEqual(['art', 'other']);
   });
 
-  it('单插件 setup assessment 失败只省略该 setup，不拖垮健康清单', async () => {
+  it('单插件 setup assessment 失败按未就绪降级:不省条目、清空工具、不带 setup', async () => {
     setupAssessmentMock.mockImplementation((ghostId) => {
       if (ghostId === 'art') throw new SyntaxError('malformed setup storage');
       return { state: 'ready', revision: 0, groups: [] };
@@ -203,8 +203,11 @@ describe('花名册 / ghost_list 过滤', () => {
 
     expect(ghosts.map((ghost) => ghost.id)).toEqual(['art', 'other']);
     expect(ghosts[0]?.setup).toBeUndefined();
+    expect(ghosts[0]?.tools).toEqual([]);
+    expect(ghosts[0]?.message).toContain('配置状态暂时无法判定');
     expect(ghosts[1]?.setup).toEqual({ state: 'ready', revision: 0, groups: [] });
-    expect(logWarnMock).toHaveBeenCalledWith('ghost setup assessment omitted from roster', {
+    expect(ghosts[1]?.tools.length).toBeGreaterThan(0);
+    expect(logWarnMock).toHaveBeenCalledWith('ghost setup assessment unavailable in roster', {
       ghostId: 'art',
       errorType: 'SyntaxError',
     });
