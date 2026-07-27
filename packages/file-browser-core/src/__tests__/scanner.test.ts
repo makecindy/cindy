@@ -126,6 +126,21 @@ describe('file-browser scanner path boundaries', () => {
     }
   });
 
+  it('treats a drive-letter-looking relative name (no separator) as workdir-relative', async () => {
+    // A Windows drive *absolute* is 'C:/x' (drive + separator); a bare 'C:foo'
+    // has no separator and is a legal POSIX filename. The guard must reject only
+    // the former, so this must resolve as a normal workdir-relative entry.
+    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));
+    try {
+      await fsWriteFile(path.join(root, 'C:foo'), 'hi', 'utf8');
+      const stat = await statEntry(root, 'C:foo');
+      expect(stat.relPath).toBe('C:foo');
+      expect(stat.type).toBe('file');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects parent-traversal that escapes the workdir', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));
     try {

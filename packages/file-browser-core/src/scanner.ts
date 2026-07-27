@@ -80,9 +80,11 @@ function assertInsideWorkdir(workdir: string, relPath: string): string {
   if (cleaned === '' || cleaned === '.') return '';
   // POSIX absolute ("/x") and Windows drive-letter absolute ("C:/x", from "C:\x"
   // after the backslash normalization above) are both rejected here. The drive
-  // check matters because a drive-letter path has no leading slash, so without it
-  // "C:/Windows" would slip through as a relative "C:" dir under the workdir.
-  if (cleaned.startsWith('/') || /^[a-zA-Z]:/.test(cleaned)) {
+  // check requires a separator after the colon ("C:/") so it matches only true
+  // drive-*absolute* paths — a bare "C:foo" is a legal POSIX filename (and mere
+  // drive-relative on Windows), so it must fall through to the workdir check
+  // rather than being rejected as absolute.
+  if (cleaned.startsWith('/') || /^[a-zA-Z]:\//.test(cleaned)) {
     throw new Error(`absolute path not allowed: ${relPath}`);
   }
   const abs = path.resolve(workdir, cleaned);
