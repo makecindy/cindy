@@ -31,12 +31,22 @@ export interface UsageTrackedBrowserRuntime extends Pick<BrowserControlRuntime, 
    * the control service provably booted and served real traffic this session.
    */
   everCalled(): boolean;
+  /**
+   * Resolves once every in-flight NON-stop call has settled (results and
+   * rejections are swallowed). The quit path awaits this before reading
+   * `everCalled()` — quitting while the very first call is still booting the
+   * managed Chrome must not be misread as "never used" (review P1): that call
+   * can finish launching Chrome right after we skipped the stop, orphaning the
+   * process and its locked user-data-dir.
+   */
+  settleInFlight(): Promise<void>;
 }
 
 export function trackBrowserRuntimeUsage(
   inner: Pick<BrowserControlRuntime, 'call'>,
 ): UsageTrackedBrowserRuntime {
   let everCalled = false;
+  const inFlight = new Set<Promise<unknown>>();
   return {
     call(request) {
       const result = inner.call(request);
@@ -53,7 +63,7 @@ export function trackBrowserRuntimeUsage(
       // proven, so stay conservative; a skipped quit-stop is recovered by the
       // vendored stale-lock path on next launch (see stopRuntimeForQuit docs).
       if (request.action !== 'stop') {
-        void result.then(
+        const settled = result.then(
           (response) => {
             if ((response as { ok?: unknown } | null | undefined)?.ok !== false) {
               everCalled = true;
@@ -63,10 +73,19 @@ export function trackBrowserRuntimeUsage(
             // Rejected dispatch proves nothing about service liveness — ignore.
           },
         );
+        inFlight.add(settled);
+        void settled.finally(() => inFlight.delete(settled));
       }
       return result;
     },
     everCalled: () => everCalled,
+    settleInFlight: async () => {
+      // Snapshot-loop until quiescent: an in-flight call may itself trigger
+      // follow-up calls (e.g. login flow chaining start → focus).
+      while (inFlight.size > 0) {
+        await Promise.all([...inFlight]);
+      }
+    },
   };
 }
 
@@ -80,6 +99,12 @@ export async function stopRuntimeForQuitIfUsed(
   runtime: UsageTrackedBrowserRuntime,
   logger: QuitInfoLogger,
 ): Promise<void> {
+  // Quit can race the very first call (e.g. openBrowserForLogin still awaiting
+  // `start`): wait for in-flight calls to settle before deciding, otherwise a
+  // still-booting Chrome would be misread as "never used" and outlive the app.
+  // Bounded externally: this runs inside the async disposer phase (timeoutMs
+  // race) with the hard-kill watchdog behind it.
+  await runtime.settleInFlight();
   if (!runtime.everCalled()) {
     logger.info('browser runtime never used this session — skipping quit-time stop');
     return;

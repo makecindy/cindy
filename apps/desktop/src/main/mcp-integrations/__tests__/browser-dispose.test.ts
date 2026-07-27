@@ -136,3 +136,47 @@ describe('stopRuntimeForQuitIfUsed', () => {
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
   });
 });
+
+describe('stopRuntimeForQuitIfUsed — quit racing an in-flight first call (review P1)', () => {
+  it('waits for a still-booting call; success → stop dispatched', async () => {
+    let resolveFirst!: (r: BrowserControlResult) => void;
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>((req) =>
+      req.action === 'stop'
+        ? Promise.resolve({ ok: true, action: req.action, status: 200 })
+        : new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+    );
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    void tracked.call({ action: 'start' });
+    const quit = stopRuntimeForQuitIfUsed(tracked, logger);
+    // 在途启动尚未落定,quit 必须等待而不是立即判"never used"
+    resolveFirst({ ok: true, action: 'start', status: 200 });
+    await quit;
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(call.mock.calls[1][0]).toEqual({ action: 'stop' });
+  });
+
+  it('waits for a still-booting call; failure → skip (service liveness unproven)', async () => {
+    let rejectFirst!: (err: Error) => void;
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectFirst = reject;
+        }),
+    );
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    void tracked.call({ action: 'start' }).catch(() => undefined);
+    const quit = stopRuntimeForQuitIfUsed(tracked, logger);
+    rejectFirst(new Error('boot exploded'));
+    await quit;
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
+  });
+});
