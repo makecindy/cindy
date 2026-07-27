@@ -24,7 +24,7 @@ import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { machineIdSync } from 'node-machine-id';
+import { resolveDeviceId } from './deviceId';
 import windowStateKeeper from 'electron-window-state';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import {
@@ -2931,8 +2931,10 @@ const registerIpcHandlers = () => {
     },
   );
 
-  // Device ID (hardware-based, survives app reinstall)
-  const machineId = machineIdSync();
+  // Device ID (hardware-based, survives app reinstall). resolveDeviceId() is
+  // crash-safe: it patches PATH for bare `ioreg` and falls back to a persisted
+  // UUID rather than throwing (see deviceId.ts).
+  const machineId = resolveDeviceId();
   ipcMain.handle('get-device-id', () => machineId);
 
   // CC 网络调试开关 — renderer Settings → Experimental "CC 网络调试日志" 操作此值。

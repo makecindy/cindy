@@ -71,6 +71,7 @@ installInvokeCapture();
 //   - --passive / XDT_SCHEDULER_PASSIVE:定时任务自动触发让位给同机另一实例。
 // 必须在 app 'ready' 前调用。仅 dev(非 packaged)生效,生产忽略,零线上影响。
 import { machineIdSync } from 'node-machine-id';
+import { ensureSystemBinPathForMachineId } from './deviceId.js';
 import {
   resolveDevCliFlags,
   shouldEnforcePassiveMigrationCompatibility,
@@ -135,6 +136,9 @@ if (devFlags.needsIsolatedDeviceId) {
   const nameSegment = devFlags.isolationName ? `${devFlags.isolationName}-` : '';
   let isolatedDeviceId: string;
   try {
+    // Finder-launched GUI PATH omits /usr/sbin, so bare `ioreg` would throw and
+    // drop us into the fixed-string fallback below; patch PATH first.
+    ensureSystemBinPathForMachineId();
     const hashBudget = 60 - nameSegment.length; // 'dev-'(4) + nameSegment + hash = 64
     isolatedDeviceId = `dev-${nameSegment}${machineIdSync().slice(0, hashBudget)}`;
   } catch {

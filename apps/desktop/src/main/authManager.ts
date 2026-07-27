@@ -19,7 +19,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
-import { machineIdSync } from 'node-machine-id';
+import { resolveDeviceId } from './deviceId';
 import {
   AuthApiError,
   CindyAuthClient,
@@ -227,8 +227,12 @@ let sessionInvalidationPromise: Promise<void> | null = null;
  * dev-only 覆盖:设了 `XDT_DEVICE_ID_OVERRIDE` 则用它——用于在同一台机器上跑多个
  * desktop 实例模拟「多设备」(device-link 跨设备远程控制本地联调)。deviceId 只是
  * 同账号下区分设备的标识、非鉴权凭证(鉴权走 auth-server 签发的 JWT),覆盖无安全风险。
+ *
+ * resolveDeviceId() 内部对硬件指纹取值做了容错:补齐 PATH 里的 /usr/sbin:/sbin(Finder
+ * 启动的 GUI 进程 PATH 极简,bare `ioreg` 找不到会抛),抛了则回落到 userData 里持久化的
+ * UUID——绝不因取设备 ID 失败而让主进程在启动时崩溃。
  */
-const deviceId = process.env.XDT_DEVICE_ID_OVERRIDE?.trim() || machineIdSync();
+const deviceId = resolveDeviceId();
 
 let loginFlowState: AuthFlowState | null = null;
 let providerConfig: ProviderConfig | null = null;
