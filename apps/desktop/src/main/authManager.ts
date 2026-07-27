@@ -230,9 +230,14 @@ let sessionInvalidationPromise: Promise<void> | null = null;
  *
  * resolveDeviceId() 内部对硬件指纹取值做了容错:补齐 PATH 里的 /usr/sbin:/sbin(Finder
  * 启动的 GUI 进程 PATH 极简,bare `ioreg` 找不到会抛),抛了则回落到 userData 里持久化的
- * UUID——绝不因取设备 ID 失败而让主进程在启动时崩溃。
+ * UUID——绝不因取设备 ID 失败而让主进程在启动时崩溃。结果在 resolveDeviceId 内部 memoize。
+ *
+ * 统一走 getDeviceId() 惰性解析,不在模块顶层调:resolveDeviceId 会读硬件指纹并写
+ * userData/device-id,属持久化副作用。authManager 是 bootstrap-electron 的静态依赖,模块
+ * 顶层求值会早于单实例锁(requestSingleInstanceLock),让一个马上会被判为副实例的进程也去
+ * 探测硬件、抢着落盘身份。改为在真正用到设备 ID 时(登录/续期/SkillHub,均在取得启动归属
+ * 之后)才解析。
  */
-const deviceId = resolveDeviceId();
 
 let loginFlowState: AuthFlowState | null = null;
 let providerConfig: ProviderConfig | null = null;
@@ -265,7 +270,7 @@ function createAuthClient(): CindyAuthClient {
   return new CindyAuthClient({
     baseUrl: authServerUrl(),
     region: AUTH_REGION,
-    deviceId,
+    deviceId: getDeviceId(),
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
     fetch: scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
@@ -402,7 +407,7 @@ function requestAuthRefresh(refreshToken: string): Promise<AuthRefreshResult> {
   // 客户端 abort,重试旧 token 会触发 INVALID_REFRESH_TOKEN。
   return apiFetch<RefreshResponse | AuthErrorResponse>('/api/auth/refresh', {
     method: 'POST',
-    body: { refreshToken, deviceId },
+    body: { refreshToken, deviceId: getDeviceId() },
     timeoutMs: 0,
   });
 }
@@ -926,7 +931,7 @@ function snapshotAuthState(): AuthState {
     canEnterApp: appSession.mode !== 'signed-out',
     isAuthenticated: isCloudAuthenticated,
     isCanary: currentUser !== null && canaryFlagStore.read(),
-    deviceId,
+    deviceId: getDeviceId(),
     hasAccountDeletionReceipt: readSafe(ACCOUNT_DELETION_RECEIPT_KEY) !== null,
     accountDeletionRestored: accountDeletionRestoredNoticePending,
   };
@@ -941,7 +946,7 @@ function snapshotLoggedOutAuthState(): AuthState {
     canEnterApp: false,
     isAuthenticated: false,
     isCanary: false,
-    deviceId,
+    deviceId: getDeviceId(),
     hasAccountDeletionReceipt: readSafe(ACCOUNT_DELETION_RECEIPT_KEY) !== null,
     accountDeletionRestored: false,
   };
@@ -1232,7 +1237,7 @@ export function getCurrentMembershipDisplayName(): string | undefined {
 
 /** SkillHub 跨设备识别：本机 deviceId（machineIdSync 结果），登录前后都可用 */
 export function getDeviceId(): string {
-  return deviceId;
+  return resolveDeviceId();
 }
 
 export function getAuthState(): AuthState {
@@ -2362,7 +2367,7 @@ export async function logout(): Promise<void> {
   if (currentAccessToken) {
     apiFetch('/api/auth/logout', {
       method: 'POST',
-      body: { deviceId },
+      body: { deviceId: getDeviceId() },
       token: currentAccessToken,
     }).catch(() => {});
   }
