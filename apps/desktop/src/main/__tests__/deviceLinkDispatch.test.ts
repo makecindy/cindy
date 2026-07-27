@@ -497,6 +497,33 @@ describe('被控端控制链路生命周期', () => {
       payload: { ok: true, result: ['s1'] },
     });
   });
+
+  it('后台 sessions:list reconciliation 不持有更新 busy lease', async () => {
+    remoteControlEnabled = true;
+    registry.register('local-db:sessions:list', () => []);
+    const busyChanges: boolean[] = [];
+    setRemoteInvokeBusyChangedListener((busy) => busyChanges.push(busy));
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-list',
+      src: 'ctrl-a',
+      payload: { channel: 'local-db:sessions:list', args: [] },
+    });
+
+    await vi.waitFor(() =>
+      expect(calls.invokeResult).toContainEqual({
+        dst: 'ctrl-a',
+        requestId: 'invoke-list',
+        payload: { ok: true, result: [] },
+      }),
+    );
+    expect(hasInFlightRemoteInvokes()).toBe(false);
+    expect(busyChanges).toEqual([]);
+  });
 });
 
 // ─── 订阅 registry + topic-scoped fan-out + set-* 持久化回流(push 驱动重构)──────
@@ -599,6 +626,42 @@ describe('被控端订阅 registry + topic 转发', () => {
       channel: 'maker:event',
       payload: { sessionId: 's1', event: { t: 1 } },
     });
+  });
+
+  it('现代 subscribe 会替换 link-open 安装的 legacy wildcard', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-modern',
+      src: 'ctrl-modern',
+      payload: {
+        controllerName: 'Modern',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+    expect(getUpdateRelaunchControllers()).toEqual([
+      { deviceId: 'ctrl-modern', name: 'Modern' },
+    ]);
+
+    feed(subFrame('ctrl-modern', SUB, ['sessions'], 'Modern'));
+
+    expect(dispatchTesting.getActiveControllers()).toEqual([]);
+    expect(dispatchTesting.getUpdateRelaunchControllers()).toEqual([]);
+
+    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
+    tapWindowBroadcast('maker:event', { sessionId: 's1', event: {} });
+    expect(calls.push).toEqual([
+      {
+        dst: 'ctrl-modern',
+        channel: 'local-db:sessions:created',
+        payload: { sessionId: 's1' },
+      },
+    ]);
   });
 
   it('无人值守更新忽略纯 sessions viewer，但保护文件浏览和实际会话控制', () => {

@@ -80,6 +80,11 @@ const REMOTE_TOOL_USE_METADATA_STRING_LIMIT = 1024;
 const REMOTE_INVOKE_TRUNCATION_SUFFIX = '\n\n[remote content truncated: payload too large]';
 const REMOTE_INVOKE_TRUNCATED_CONTENT = '[remote content truncated: payload too large]';
 const REMOTE_INVOKE_FRAME_SAFETY_BYTES = 1024;
+// Remote project viewers reconcile this list on a timer. Treating that background read as
+// interactive activity would refresh the updater quiet period forever for sessions-only viewers.
+const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
+  'local-db:sessions:list',
+]);
 const textEncoder = new TextEncoder();
 
 /** 远控 push 的紧凑重试预算:只在首发超 2MB 后使用,避免大 tool 输出反复打爆 relay 帧。 */
@@ -578,7 +583,10 @@ async function handleInvoke(
     client.sendInvokeResult(src, requestId, handleSubscriptionFrame(src, payload));
     return;
   }
-  const releaseBusyLease = acquireRemoteInvokeBusyLease();
+  const releaseBusyLease =
+    payload?.channel && UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS.has(payload.channel)
+      ? () => undefined
+      : acquireRemoteInvokeBusyLease();
   try {
     const result = await runInvoke(src, payload);
     sendInvokeResultSafe(client, src, requestId, result, payload?.channel, payload?.args);
@@ -899,6 +907,9 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
       : undefined;
   const isSub = payload.channel === DL_SUBSCRIBE_CHANNEL;
   if (isSub) {
+    // link-open provisionally installs legacy '*' for old clients. A valid modern subscribe frame
+    // proves topic support, so replace that compatibility firehose instead of retaining it forever.
+    subscriptions.unsubscribe(src, [LEGACY_TOPIC]);
     subscriptions.subscribe(src, topics, name);
   } else {
     subscriptions.unsubscribe(src, topics);
