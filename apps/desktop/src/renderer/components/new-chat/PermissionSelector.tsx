@@ -222,7 +222,7 @@ export function PermissionSelector({
       <div
         role="listbox"
         aria-label={t('newChat.permissionSelector.listAria')}
-        className="flex flex-col gap-1"
+        className="flex flex-col gap-0.5"
       >
         {options.map((option) => {
           const Icon = PERMISSION_ICONS[option.id] ?? Hand;
