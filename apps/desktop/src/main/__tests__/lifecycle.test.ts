@@ -1,8 +1,9 @@
 /**
  * lifecycle.test.ts
  * ---------------------------------------------------------------------------
- * 单测覆盖 runQuitDisposers 的三阶段编排语义:
+ * 单测覆盖 runQuitDisposers 的四阶段编排语义:
  *   - sync 串行, 抛错不影响后续
+ *   - pre-async 串行 await, 必须早于所有 async teardown
  *   - async 并发, 整体超时兜底
  *   - post-async 串行, 必须晚于 async (用于 db close 这种依赖 async 产物的清理)
  *
@@ -84,23 +85,27 @@ describe('runQuitDisposers', () => {
     vi.useRealTimers();
   });
 
-  it('runs sync → async → post-async in order', async () => {
+  it('runs sync → pre-async → async → post-async in order', async () => {
     const { onQuit, runQuitDisposers } = await freshLifecycle();
     const log: string[] = [];
 
     onQuit('a-sync', () => { log.push('a-sync'); }, 'sync');
-    onQuit('b-async', async () => {
+    onQuit('b-pre-async', async () => {
       await new Promise((r) => setTimeout(r, 10));
-      log.push('b-async');
+      log.push('b-pre-async');
+    }, 'pre-async');
+    onQuit('c-async', async () => {
+      await new Promise((r) => setTimeout(r, 10));
+      log.push('c-async');
     }, 'async');
-    onQuit('c-post', async () => {
+    onQuit('d-post', async () => {
       await new Promise((r) => setTimeout(r, 5));
-      log.push('c-post');
+      log.push('d-post');
     }, 'post-async');
 
     await runQuitDisposers(1000);
 
-    expect(log).toEqual(['a-sync', 'b-async', 'c-post']);
+    expect(log).toEqual(['a-sync', 'b-pre-async', 'c-async', 'd-post']);
   });
 
   it('sync disposer that throws does not block subsequent disposers', async () => {
@@ -143,6 +148,24 @@ describe('runQuitDisposers', () => {
     expect(postRan).toBe(true);
     // 超时 50ms, 实际不应远超 (无其它阻塞)
     expect(elapsed).toBeLessThan(200);
+  });
+
+  it('pre-async phase honors per-disposer timeout — later phases still run', async () => {
+    const { onQuit, runQuitDisposers } = await freshLifecycle();
+    const log: string[] = [];
+
+    // 永不 resolve 的 pre-async disposer 不能无限阻塞整条 shutdown。
+    onQuit('hang-pre', () => new Promise(() => { /* never */ }), 'pre-async');
+    onQuit('after-pre', () => { log.push('after-pre'); }, 'pre-async');
+    onQuit('post', () => { log.push('post'); }, 'post-async');
+
+    const start = Date.now();
+    await runQuitDisposers(50);
+    const elapsed = Date.now() - start;
+
+    // 卡住的 disposer 超时后, 后续 pre-async 与 post-async 仍然执行。
+    expect(log).toEqual(['after-pre', 'post']);
+    expect(elapsed).toBeLessThan(400);
   });
 
   it('rejected async disposer does not break the chain', async () => {

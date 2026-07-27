@@ -1,0 +1,93 @@
+diff --git a/src/process.cc b/src/process.cc
+index ad63727..942962a 100644
+--- a/src/process.cc
++++ b/src/process.cc
+@@ -24,6 +24,8 @@ uint32_t GetRawProcessList(std::vector<ProcessInfo>& process_info,
+         ProcessInfo pinfo;
+         pinfo.pid = process_entry.th32ProcessID;
+         pinfo.ppid = process_entry.th32ParentProcessID;
++        pinfo.creationTime = 0;
++        GetProcessCreationTime(pinfo);
+ 
+         if (MEMORY & process_data_flags) {
+           GetProcessMemoryUsage(pinfo);
+@@ -37,7 +39,7 @@ uint32_t GetRawProcessList(std::vector<ProcessInfo>& process_info,
+         process_info.push_back(std::move(pinfo));
+         process_count++;
+       }
+-    } while (process_count < 1024 && Process32Next(snapshot_handle, &process_entry));
++    } while (Process32Next(snapshot_handle, &process_entry));
+   }
+ 
+   CloseHandle(snapshot_handle);
+@@ -62,6 +64,31 @@ void GetProcessMemoryUsage(ProcessInfo& process_info) {
+   CloseHandle(hProcess);
+ }
+ 
++// Populates the process creation time as Unix epoch milliseconds (left at 0 when
++// the process cannot be opened or queried). Lets the caller tell a process that
++// predates it from one it spawned - a distinction PID alone loses after reuse.
++void GetProcessCreationTime(ProcessInfo& process_info) {
++  HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_info.pid);
++  if (hProcess == NULL) {
++    return;
++  }
++
++  FILETIME creationTime, exitTime, kernelTime, userTime;
++  if (GetProcessTimes(hProcess, &creationTime, &exitTime, &kernelTime, &userTime)) {
++    ULARGE_INTEGER ct;
++    ct.LowPart = creationTime.dwLowDateTime;
++    ct.HighPart = creationTime.dwHighDateTime;
++    // FILETIME counts 100ns intervals since 1601-01-01; 116444736000000000 of
++    // them elapse before the Unix epoch. Convert the remainder to milliseconds.
++    const ULONGLONG EPOCH_DIFF_100NS = 116444736000000000ULL;
++    if (ct.QuadPart > EPOCH_DIFF_100NS) {
++      process_info.creationTime = (ct.QuadPart - EPOCH_DIFF_100NS) / 10000ULL;
++    }
++  }
++
++  CloseHandle(hProcess);
++}
++
+ // Per documentation, it is not recommended to add or subtract values from the FILETIME
+ // structure, or to cast it to ULARGE_INTEGER as this can cause alignment faults on 64-bit Windows.
+ // Copy the high and low part to a ULARGE_INTEGER and peform arithmetic on that instead.
+diff --git a/src/process.h b/src/process.h
+index 3c9b852..7f544e2 100644
+--- a/src/process.h
++++ b/src/process.h
+@@ -21,6 +21,7 @@ struct ProcessInfo {
+   DWORD pid;
+   DWORD ppid;
+   DWORD memory; // Reported in bytes
++  unsigned long long creationTime; // Unix epoch ms of process start; 0 if unavailable
+   std::string commandLine;
+ };
+ 
+@@ -34,6 +35,8 @@ uint32_t GetRawProcessList(std::vector<ProcessInfo>& process_info, DWORD flags);
+ 
+ void GetProcessMemoryUsage(ProcessInfo& process_info);
+ 
++void GetProcessCreationTime(ProcessInfo& process_info);
++
+ void GetCpuUsage(Cpu& cpu_info, bool first_run);
+ 
+ #endif  // SRC_PROCESS_H_
+diff --git a/src/process_worker.cc b/src/process_worker.cc
+index f59559d..891734b 100644
+--- a/src/process_worker.cc
++++ b/src/process_worker.cc
+@@ -43,6 +43,13 @@ void GetProcessesWorker::OnOK() {
+           Napi::String::New(env, pinfo.commandLine));
+     }
+ 
++    // Left undefined when the creation time could not be queried, so callers can
++    // distinguish "unknown" from a real timestamp instead of seeing a bogus 0.
++    if (pinfo.creationTime != 0) {
++      object.Set("creationTime",
++                 Napi::Number::New(env, static_cast<double>(pinfo.creationTime)));
++    }
++
+     result.Set(i, object);
+   }
+ 

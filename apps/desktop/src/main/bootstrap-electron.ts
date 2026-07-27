@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
-import { execFile, execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { machineIdSync } from 'node-machine-id';
 import windowStateKeeper from 'electron-window-state';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
@@ -253,7 +253,7 @@ import {
   broadcastVoiceInputPowerState,
   installVoiceInputPowerRelease,
 } from './voice-input/powerReleaseNotifier';
-import { reapClaudeOrphansSync } from './claude-orphan-reaper';
+import { reapClaudeOrphans } from './claude-orphan-reaper';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
@@ -485,6 +485,7 @@ import {
 } from './deepLink.js';
 import { registerFolderContextMenu } from './folderContextMenu.js';
 import { healWindowsShortcuts } from './windowsShortcutSelfHeal.js';
+import { cleanupLegacyDevShortcuts } from './windowsLegacyDevShortcutCleanup.js';
 import { CURRENT_APP_ID } from '../shared/brandRegion.js';
 import {
   readWindowBehaviorSettings,
@@ -947,14 +948,17 @@ authManager.setAccountSwitchTeardown(async () => {
 });
 authManager.setAuthSessionTeardown(teardownAuthAccountBoundary);
 
-try {
-  reapClaudeOrphansSync();
-} catch (err) {
-  // Defensive: reapClaudeOrphansSync already catches its own scan/kill errors
-  // and logs to debug. This only fires on truly unexpected throws (e.g. module
-  // load failure) and must never abort bootstrap.
+// Fire-and-forget startup cleanup: Windows enumeration is an async native
+// snapshot, so it neither blocks the first frame nor launches PowerShell.
+// reapCurrentSession:false — this pass runs concurrently with bootstrap, so it
+// must only reap historical orphans (dead parent) and never a claude.exe whose
+// parent is us: that would be a session launched moments after cold start, not
+// an orphan. Quit-time cleanup is the one that reaps live current-session trees.
+void reapClaudeOrphans({ reapCurrentSession: false }).catch((err) => {
+  // Defensive: reapClaudeOrphans already catches its own scan/kill errors.
+  // This only fires on truly unexpected failures and must never abort bootstrap.
   createLogger('claude-orphan-reaper').warn('initial reap threw', { error: String(err) });
-}
+});
 
 // ── 启动诊断 (issue #758) ────────────────────────────────────────────────
 // 上次异常退出尸检 (run marker) + Crashpad 本地 minidump + crash dump 扫描。
@@ -5111,80 +5115,6 @@ async function runSmokeTest(userId: string): Promise<void> {
 // (cn=com.xd.cindycn / global=com.xd.cindy；未注入 region 时默认 global)。
 const WINDOWS_APP_USER_MODEL_ID = CURRENT_APP_ID;
 
-/**
- * 清理 Start Menu 里指向 dev `node_modules\electron\dist\electron.exe` 的残留 .lnk。
- *
- * 背景：这类 .lnk 的 target 是裸 dev electron.exe、Arguments 为空，被 Windows 注册
- * 成 AUMID 后（如 `XdtMaker.Dev`、`electron.app.xdt-maker`），一旦 toast 点击触发
- * AUMID 激活机制，就会启动一个没有 app 参数的 electron.exe，弹出 Electron 默认
- * 欢迎页 —— 用户视角看就是"通知点了之后跳到一个空白 Electron 页"。
- *
- * 已知来源：
- *   - 老版本 SnoreToast `-install` 留下的 `XdtMakerDev.lnk`（AUMID `XdtMaker.Dev`）
- *   - Electron 自身按 productName 自动注册的 `Electron.lnk`（AUMID `electron.app.xdt-maker`），
- *     dev 第一次启动后偶现
- *
- * 策略：
- *   1. 快路径：按已知文件名（XdtMakerDev.lnk）直删
- *   2. 防御扫描：枚举 Start Menu Programs 下所有 .lnk，凡是 target 指向
- *      `node_modules\electron\dist\electron.exe` 且 Arguments 为空的一律删除
- *
- * 静默 try/catch：用户手动删过 / 没装过 / 权限问题 / PowerShell 异常都不影响主流程。
- */
-function cleanupLegacyDevShortcut(): Promise<void> {
-  if (process.platform !== 'win32') return Promise.resolve();
-  const appData = process.env.APPDATA;
-  if (!appData) return Promise.resolve();
-  const startMenuDir = path.join(appData, 'Microsoft\\Windows\\Start Menu\\Programs');
-
-  // 快路径
-  const knownLnk = path.join(startMenuDir, 'XdtMakerDev.lnk');
-  try {
-    if (fs.existsSync(knownLnk)) {
-      fs.unlinkSync(knownLnk);
-      console.log('[AUMID] cleaned up legacy dev shortcut: %s', knownLnk);
-    }
-  } catch (err) {
-    console.warn('[AUMID] failed to remove legacy dev shortcut: %s', err);
-  }
-
-  // 防御扫描：解析 .lnk target 必须走 WScript.Shell COM，所以走 PowerShell。
-  // 单引号包路径并把内部 `'` 转成 `''`（PS 单引号字符串转义）。
-  const psRoot = startMenuDir.replace(/'/g, "''");
-  const ps =
-    `$sh = New-Object -ComObject WScript.Shell; ` +
-    `$root = '${psRoot}'; ` +
-    `if (Test-Path $root) { ` +
-    `Get-ChildItem -Path $root -Recurse -Filter *.lnk -ErrorAction SilentlyContinue | ForEach-Object { ` +
-    `try { ` +
-    `$lnk = $sh.CreateShortcut($_.FullName); ` +
-    `if ($lnk.TargetPath -match '(?i)node_modules\\\\electron\\\\dist\\\\electron\\.exe$' -and -not $lnk.Arguments) { ` +
-    `Remove-Item -LiteralPath $_.FullName -Force; ` +
-    `Write-Output ('removed: ' + $_.FullName) ` +
-    `} ` +
-    `} catch {} ` +
-    `} ` +
-    `}`;
-
-  return new Promise((resolve) => {
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', ps],
-      { timeout: 8000, windowsHide: true },
-      (err, stdout) => {
-        if (err) {
-          console.warn('[AUMID] dev shortcut scan failed: %s', err.message);
-        } else if (stdout.trim()) {
-          for (const line of stdout.trim().split(/\r?\n/)) {
-            console.log('[AUMID] %s', line);
-          }
-        }
-        resolve();
-      },
-    );
-  });
-}
-
 app.on('ready', async () => {
   // Smoke-test flag short-circuit: skip all normal init paths.
   const smoke = parseSmokeArgs();
@@ -5267,7 +5197,13 @@ app.on('ready', async () => {
   //
   // 必须在创建任何 Notification 之前调用。macOS / Linux 不需要。
   if (process.platform === 'win32') {
-    await cleanupLegacyDevShortcut();
+    // 旧开发快捷方式清理是 best-effort 后台维护；即使 Start Menu 位于慢速
+    // 或重定向存储，也不能阻塞 AUMID 与其余 ready 初始化。
+    void cleanupLegacyDevShortcuts().catch((err) => {
+      createLogger('legacyDevShortcutCleanup').warn('startup cleanup threw', {
+        error: String(err),
+      });
+    });
     app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
     console.log('[AUMID] runtime=%s', WINDOWS_APP_USER_MODEL_ID);
   }
@@ -5616,15 +5552,14 @@ app.on('ready', async () => {
 //   - process.on('uncaughtException')—— main 进程未捕获异常
 //   - app.on('render-process-gone')  —— renderer 崩 (main 还活)
 //
-// 三个阶段串成 sync → async(并发+6s 超时, 见下方 installQuitHandler) → post-async,
+// 四个阶段串成 sync → pre-async(串行 await) → async(并发+6s 超时,
+// 见下方 installQuitHandler) → post-async,
 // 然后 app.exit(<code>)。
 // 散落的 fire-and-forget 已经收掉, 进程不会在 disposer 跑完之前死。
 // 真硬崩 (segfault / kill -9) JS 层无能为力, 子进程靠 stdin EOF 自死。
 // ---------------------------------------------------------------------------
 
 // Sync 阶段: 同步触发, 不等结果。只放真正同步的清理 (释放本地句柄 / 取消定时器)。
-//   - reap-claude-children: 必须在 shutdown-maker 之前同步完成；SDK abort 掐掉
-//     claude.exe 后 Windows 上子进程会被 reparent 到 System, PPID 链断了就无法安全识别。
 //   - authManager / google auth: 同步释放定时器+回调引用。
 //     注意 token.dispose() 只清内存状态, 不删盘上的 refresh token (那是 logout 干的)。
 // interrupted-turn-resume:退出编排一启动就冻结「turn 在飞」标记的写入 —— 否则
@@ -5635,13 +5570,6 @@ onQuit(
   'session-active-turn-freeze',
   () => {
     freezeSessionActiveTurnMarkers();
-  },
-  'sync',
-);
-onQuit(
-  'reap-claude-children',
-  () => {
-    reapClaudeOrphansSync();
   },
   'sync',
 );
@@ -5665,6 +5593,20 @@ onQuit(
     disposeProviderAccessAuthListener = null;
   },
   'sync',
+);
+
+// Pre-async 阶段: 串行 await。先封住新的 session startup 并排空已在途 startup，
+// 再做 Claude ownership snapshot + tree reap；否则 snapshot 期间新拉起的 Claude
+// 不在清理集合里，而并发 teardown 又会让直接进程退出并丢失可证明归属的 PPID 链。
+onQuit(
+  'quiesce-maker-session-starts',
+  () => getMakerIfReady()?.quiesceSessionStarts(),
+  'pre-async',
+);
+onQuit(
+  'reap-claude-orphans',
+  () => reapClaudeOrphans({ reapCurrentSession: true }).then(() => undefined),
+  'pre-async',
 );
 
 // Async 阶段: 并发跑, 6s 超时兜底。
