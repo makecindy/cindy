@@ -336,6 +336,28 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
+  it('末项竞态的 INVOKE_TIMEOUT 失败:熔断 open 时同样按未响应记负缓存,恢复即旁路', async () => {
+    // 末项竞态抛的是原始 INVOKE_TIMEOUT(非快速失败码);节流层补查 store
+    // (key 即 deviceId)才能让这类失败同样享受「恢复即旁路」。
+    resetScheduleIndexThrottleForTesting();
+    const load = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('invoke timed out'), { code: 'INVOKE_TIMEOUT' }))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const now = () => 1000;
+    unresponsiveDevicesStore.markUnresponsive('dev-t');
+    try {
+      await expect(loadSessionScheduleIndexThrottled('dev-t', load, { now })).rejects.toMatchObject({
+        code: 'INVOKE_TIMEOUT',
+      });
+      await Promise.resolve();
+      unresponsiveDevicesStore.clearUnresponsive('dev-t');
+      await expect(loadSessionScheduleIndexThrottled('dev-t', load, { now })).resolves.toBeInstanceOf(Map);
+      expect(load).toHaveBeenCalledTimes(2);
+    } finally {
+      unresponsiveDevicesStore.clearUnresponsive('dev-t');
+    }
+  });
+
   it('DEVICE_UNRESPONSIVE 负缓存:熔断仍 open 时复用,恢复后立即旁路重拉(review P1)', async () => {
     // 熔断关闭触发的 reseed/重载若在失败 TTL 内吃到同一个 rejected promise,
     // 索引会被 catch 路径替换成空集,且无定时器在 TTL 过期后补拉——徽标要等
@@ -394,6 +416,28 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     });
     // 熔断快速失败会在每个 listRuns 上重复出现:第一个命中后立即止损
     expect(listRuns).toHaveBeenCalledTimes(1);
+  });
+
+  it('末项竞态:最后一个 listRuns 的超时恰好开熔断时同样上抛,不产出部分索引(review P1)', async () => {
+    // 该超时是凑满阈值的第 3 条:settle 开了熔断,但本次在途请求抛出的仍是
+    // 原始 INVOKE_TIMEOUT 而非快速失败码——必须查实时熔断状态兜住。
+    let calls = 0;
+    const maker = {
+      schedule: {
+        list: async () => [
+          { id: 'sched-1', name: 'a', status: 'active', targetSessionId: 'session-a' },
+          { id: 'sched-2', name: 'b', status: 'active', targetSessionId: 'session-b' },
+        ],
+        listRuns: vi.fn(async () => {
+          calls += 1;
+          if (calls === 1) return [];
+          throw Object.assign(new Error('invoke timed out'), { code: 'INVOKE_TIMEOUT' });
+        }),
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+    await expect(
+      loadSessionScheduleIndex(maker, { isDeviceUnresponsive: () => calls >= 2 }),
+    ).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
   });
 
   it('listRuns 串行执行(同一时刻最多一个在途,不挤占 device-link 管道)', async () => {

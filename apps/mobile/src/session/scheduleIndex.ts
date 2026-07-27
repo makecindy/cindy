@@ -10,6 +10,12 @@ const SCHEDULE_INDEX_RUN_LIMIT = 50;
 
 type LoadSessionScheduleIndexOptions = {
   throwOnTransientRunListError?: boolean;
+  /**
+   * 该目标设备当前是否熔断 open(实时查询)。最后一项 listRuns 的超时恰好把
+   * 熔断打开时,catch 到的还是原始 INVOKE_TIMEOUT 而非快速失败码——只按错误码
+   * 判断会把残缺索引当成功提交进 30s 正缓存(review P1)。
+   */
+  isDeviceUnresponsive?: () => boolean;
 };
 
 export async function loadSessionScheduleIndex(
@@ -34,7 +40,11 @@ export async function loadSessionScheduleIndex(
       // 同样逐个失败,立即止损。**上抛而不是截断成功**(review P1):把部分索引当
       // 成功返回会被调用方提交并进入 30s 正缓存——首页/详情页拿着不完整徽标还
       // 以为是新鲜数据;上抛让节流层走失败负缓存,熔断恢复后重拉全量。
-      if (isDeviceUnresponsiveRemoteError(error)) throw error;
+      // isDeviceUnresponsive 兜住末项竞态(review P1):最后一项的超时恰好凑满
+      // 阈值开熔断时,抛的是 INVOKE_TIMEOUT,只看错误码会漏判。
+      if (isDeviceUnresponsiveRemoteError(error) || options.isDeviceUnresponsive?.()) {
+        throw error;
+      }
       runs = [];
     }
     pairs.push([schedule.id, runs] as const);
@@ -105,7 +115,11 @@ export function loadSessionScheduleIndexThrottled(
     (error) => {
       if (scheduleIndexThrottleEntries.get(key) === entry) {
         entry.failedAt = now();
-        entry.failedUnresponsive = isDeviceUnresponsiveRemoteError(error);
+        // 末项竞态下抛出的是原始 INVOKE_TIMEOUT(见 loadSessionScheduleIndex
+        // 注释),此时熔断已 open——补查 store(key 即 deviceId),保证这类失败
+        // 同样享受「恢复即旁路」而不是干等 30s TTL。
+        entry.failedUnresponsive =
+          isDeviceUnresponsiveRemoteError(error) || unresponsiveDevicesStore.has(key);
       }
     },
   );
@@ -121,7 +135,9 @@ export function loadDeviceSessionScheduleIndex(
   deviceId: string,
   invoke: RemoteInvoke,
 ): Promise<Map<string, RemoteSessionScheduleInfo>> {
-  return loadSessionScheduleIndex(createMobileMakerTransport({ deviceId, invoke }));
+  return loadSessionScheduleIndex(createMobileMakerTransport({ deviceId, invoke }), {
+    isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId),
+  });
 }
 
 export function replaceSessionScheduleIndexEntries(

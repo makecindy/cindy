@@ -28,6 +28,10 @@ describe('resolveMobileInvokeTimeoutMs', () => {
     // 有真实副作用,误超时后重试有重复扣减风险。
     expect(resolveMobileInvokeTimeoutMs('maker:usage:codex-rate-limits')).toBe(30_000);
     expect(resolveMobileInvokeTimeoutMs('maker:usage:codex-rate-limit-reset')).toBe(30_000);
+    // send:接收前等 SSH 就绪(20s 窗口);非幂等,误超时重试会把消息发两遍。
+    expect(resolveMobileInvokeTimeoutMs('maker:send')).toBe(30_000);
+    // regenerate-title:OAuth 刷新(~10s)+ 标题请求自身 12s,合法总预算 ~22s。
+    expect(resolveMobileInvokeTimeoutMs('maker:regenerate-title')).toBe(30_000);
     expect(MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS['device-link:media:fetch']).toBe(30_000);
   });
 

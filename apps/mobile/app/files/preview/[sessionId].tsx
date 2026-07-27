@@ -33,6 +33,7 @@ import { goBackGuarded } from '@/utils/backGuard';
 import { useAuth } from '@/auth/AuthContext';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
@@ -145,6 +146,13 @@ export default function RemoteFilePreviewScreen() {
     unmountedRef.current = true;
   }, []);
 
+  // deviceUnresponsive 进依赖(review P1):深链进入且无缓存会话时,首次
+  // getSession 若撞上熔断 open 会拿到 DEVICE_UNRESPONSIVE 快速失败;本页只
+  // track openLink、不持有 topic,恢复 rehydrate 的 reseed 也覆盖不到——不随
+  // 熔断状态翻转重跑的话,探测成功后预览页仍永久空白。翻转重跑最多多发一次
+  // 轻量请求(open 期间是本地快速失败,零管道流量)。
+  const unresponsiveDevices = useUnresponsiveDevices();
+  const deviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
   useEffect(() => {
     if (knownSession) {
       setSession(knownSession);
@@ -155,9 +163,13 @@ export default function RemoteFilePreviewScreen() {
       await openLink(deviceId);
       return maker.getSession(sessionId);
     })
-      .then(setSession)
+      .then((loaded) => {
+        setSession(loaded);
+        // 清掉熔断 open 期间留下的错误快照,恢复后不再残留降级横幅。
+        setError(null);
+      })
       .catch((err) => setError(formatRemoteError(err)));
-  }, [deviceId, knownSession, maker, openLink, sessionId]);
+  }, [deviceId, deviceUnresponsive, knownSession, maker, openLink, sessionId]);
 
   // absPath 单文件模式:不列目录,直接以合成 item 装单页 pager。
   useEffect(() => {

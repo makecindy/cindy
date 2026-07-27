@@ -28,7 +28,12 @@ import { INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
  *    尝试还会误开设备级熔断;
  *  - maker:usage:codex-rate-limits / codex-rate-limit-reset:账号 app-server
  *    冷启动或 RPC 慢时无更短 deadline;reset 还串行做消耗 + 身份校验 + 额度
- *    刷新且有真实副作用,误超时后桌面会继续完成消耗,重试有重复扣减风险。
+ *    刷新且有真实副作用,误超时后桌面会继续完成消耗,重试有重复扣减风险;
+ *  - maker:send:makerSendTransaction 接收消息前会等
+ *    ensureRemoteReadyForSessionStart(SSH 就绪窗口 20s)再落库/派发;误超时后
+ *    桌面仍会接收并发出该消息,用户重试会把同一条消息发两遍;
+ *  - maker:regenerate-title:桌面路径先 getValidClaudeAiOAuth(刷新最长 ~10s)
+ *    再发标题请求(自身 TITLE_TIMEOUT_MS=12s),合法总预算 ~22s。
  * 新增合法慢通道优先登记协议契约表(桌面控制端共用),仅 mobile 特有差异放这里。
  */
 export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
@@ -38,7 +43,9 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   'file-browser:remote-op': 30_000,
   'maker:fork': 30_000,
   'maker:get-context-usage': 30_000,
+  'maker:regenerate-title': 30_000,
   'maker:rewind:commit': 30_000,
+  'maker:send': 30_000,
   'maker:usage:codex-rate-limit-reset': 30_000,
   'maker:usage:codex-rate-limits': 30_000,
 };

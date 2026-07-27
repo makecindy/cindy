@@ -16,7 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
-import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
+import { unresponsiveDevicesStore, useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { goBackGuarded } from '@/utils/backGuard';
 import { configureCollapseAnimation } from '@/utils/collapseAnimation';
 import { useGuardedPush } from '@/utils/useGuardedPush';
@@ -187,7 +187,7 @@ export default function DeviceDetailScreen() {
       remoteSessionStore.setDeviceSessions(deviceId, deviceName, Array.isArray(list) ? list : []);
       // 节流缓存与首页共用同一 key(deviceId):两页交替浏览时不重复全量拉取(单飞 + TTL,
       // 拥塞背景见 scheduleIndex 注释)。
-      void loadSessionScheduleIndexThrottled(deviceId, () => loadSessionScheduleIndex(maker))
+      void loadSessionScheduleIndexThrottled(deviceId, () => loadSessionScheduleIndex(maker, { isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId) }))
         .then(setScheduleIndex)
         .catch(() => setScheduleIndex(new Map()));
       setLastSyncedAt(Date.now());
@@ -226,7 +226,7 @@ export default function DeviceDetailScreen() {
       scheduleEventSnapshot.scheduleListVersion === 0
       && scheduleEventSnapshot.unreadClearVersion === 0
     ) return;
-    void loadSessionScheduleIndexThrottled(deviceId, () => loadSessionScheduleIndex(maker), { force: true })
+    void loadSessionScheduleIndexThrottled(deviceId, () => loadSessionScheduleIndex(maker, { isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId) }), { force: true })
       .then(setScheduleIndex)
       .catch(() => {
         // 失败保留旧徽标,与整页 load 的容错口径一致。
