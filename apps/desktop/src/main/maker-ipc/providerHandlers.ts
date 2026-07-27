@@ -2,13 +2,13 @@
  * provider:* IPC handlers。
  *
  *   - PROVIDER_LIST（只读：目录元数据 + 各供应商实时连接状态）。
- *   - PROVIDER_CUSTOM_CREATE / UPDATE / DELETE（自定义供应商**配置** CRUD，配置入 localDb）。
+ *   - PROVIDER_CUSTOM_CREATE / UPDATE / DELETE（自定义供应商配置 + API key CRUD）。
  *
  * 内置三家（Anthropic / OpenAI / XD）的「连接 / 断开」**复用各 agent 已有的鉴权通道**，不另立通道。
  * 自定义供应商用 CRUD 替代连接/断开。
  *
- * update 的密钥与配置在同一 provider mutation queue 内暂存 / 回滚，避免多个窗口并发
- * 编辑时出现“配置 A + 密钥 B”的撕裂。create/delete 仍复用通用 safe-storage IPC。
+ * create / update / delete 的密钥与配置在同一 provider mutation queue 内暂存 / 回滚，
+ * 避免多个窗口并发编辑时出现“配置 A + 密钥 B”或旧回滚覆盖新写入。
  *
  * 副作用（CRUD 成功后刷新 active-catalog + 广播 PROVIDER_CHANGED）经 deps 注入，
  * handler body 可脱 Electron 用 IpcHarness + 内存 db 直接 invoke 单测（规则 14）。
@@ -126,8 +126,11 @@ export interface ProviderHandlerDeps {
    * 可回滚地移除 OAuth 凭证。null 表示持久删除失败；返回闭包供配置写失败时恢复旧 blob。
    */
   removeOAuthCredentials(providerId: string): (() => boolean) | null;
-  /** 自定义 provider API key 的 main 侧 IO；与配置更新共用 per-provider mutation queue。 */
-  readCustomProviderKey(providerId: string, agent: AgentKind): string | null;
+  /**
+   * 自定义 provider API key 的严格快照读取：不存在返回 null，不可解密 / 不可读时抛错。
+   * 与配置 CRUD 共用 per-provider mutation queue。
+   */
+  readCustomProviderKeyForMutation(providerId: string, agent: AgentKind): string | null;
   storeCustomProviderKey(providerId: string, agent: AgentKind, value: string): boolean;
   removeCustomProviderKey(
     providerId: string,
@@ -300,6 +303,7 @@ export function registerProviderHandlers(
     }
   };
   type KeySnapshot = { agent: AgentKind; previous: string | null };
+  type KeyMutation = { agent: AgentKind; replacement: string | null };
   const restoreProviderKeys = (
     providerId: string,
     snapshots: readonly KeySnapshot[],
@@ -314,29 +318,51 @@ export function registerProviderHandlers(
     }
     return restored;
   };
-  const stageProviderKeys = (
+  const planProviderKeyMutations = (
     config: CustomProviderConfig,
     keys: RuntimeKeys,
+    mode: 'create' | 'update',
+  ): KeyMutation[] => {
+    const mutations: KeyMutation[] = [];
+    const usesApiKey = !config.auth || config.auth.method === 'apiKey';
+    for (const agent of VALID_AGENTS as readonly AgentKind[]) {
+      const replacement = keys[agent]?.trim();
+      if (mode === 'create') {
+        if (usesApiKey && config.runtimes[agent] && replacement) {
+          mutations.push({ agent, replacement });
+        }
+        continue;
+      }
+      const shouldRemove = !usesApiKey || !config.runtimes[agent];
+      if (shouldRemove) mutations.push({ agent, replacement: null });
+      else if (replacement) mutations.push({ agent, replacement });
+    }
+    return mutations;
+  };
+  const stageProviderKeys = (
+    providerId: string,
+    mutations: readonly KeyMutation[],
   ): KeySnapshot[] => {
     const snapshots: KeySnapshot[] = [];
-    const usesApiKey = !config.auth || config.auth.method === 'apiKey';
     try {
-      for (const agent of VALID_AGENTS as readonly AgentKind[]) {
-        const replacement = keys[agent]?.trim();
-        const shouldRemove = !usesApiKey || !config.runtimes[agent];
-        if (!shouldRemove && !replacement) continue;
-        const previous = deps.readCustomProviderKey(config.id, agent);
-        const succeeded = shouldRemove
-          ? deps.removeCustomProviderKey(config.id, agent).success
-          : deps.storeCustomProviderKey(config.id, agent, replacement!);
+      for (const { agent, replacement } of mutations) {
+        let previous: string | null;
+        try {
+          previous = deps.readCustomProviderKeyForMutation(providerId, agent);
+        } catch {
+          throwIpcError('INTERNAL', `failed to read existing ${agent} provider credential`);
+        }
+        snapshots.push({ agent, previous });
+        const succeeded = replacement === null
+          ? deps.removeCustomProviderKey(providerId, agent).success
+          : deps.storeCustomProviderKey(providerId, agent, replacement);
         if (!succeeded) {
           throwIpcError('INTERNAL', `failed to update ${agent} provider credential`);
         }
-        snapshots.push({ agent, previous });
       }
       return snapshots;
     } catch (error) {
-      if (!restoreProviderKeys(config.id, snapshots)) {
+      if (!restoreProviderKeys(providerId, snapshots)) {
         throwIpcError('INTERNAL', 'provider credential update failed and could not be rolled back');
       }
       throw error;
@@ -361,16 +387,34 @@ export function registerProviderHandlers(
     deps.broadcastChanged();
   }
 
-  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, async (_event, input: unknown, keyInput?: unknown) => {
     const v = validateCustomProviderConfig(input);
     if (!v.ok) throwIpcError(v.code, v.message);
+    const keys = parseRuntimeKeys(keyInput);
+    if (!keys) throwIpcError('INVALID_PARAMS', 'invalid provider runtime keys');
     const config = input as CustomProviderConfig;
-    if (await customProviderExists(config.id)) {
-      throwIpcError('ALREADY_EXISTS', `custom provider '${config.id}' already exists`);
-    }
-    await createCustomProvider(config);
-    await afterChange();
-    return { ok: true };
+    return withProviderConfigMutation(config.id, async () => {
+      if (await customProviderExists(config.id)) {
+        throwIpcError('ALREADY_EXISTS', `custom provider '${config.id}' already exists`);
+      }
+      const keySnapshots = stageProviderKeys(
+        config.id,
+        planProviderKeyMutations(config, keys, 'create'),
+      );
+      try {
+        await createCustomProvider(config);
+      } catch (error) {
+        if (!restoreProviderKeys(config.id, keySnapshots)) {
+          throwIpcError(
+            'INTERNAL',
+            'provider creation failed and credentials could not be rolled back',
+          );
+        }
+        throw error;
+      }
+      await afterChange();
+      return { ok: true };
+    });
   });
 
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, async (_event, input: unknown, keyInput?: unknown) => {
@@ -392,7 +436,10 @@ export function registerProviderHandlers(
           || oauthDescriptorSignature(previous) !== oauthDescriptorSignature(config);
         // API key 的写 / 删与配置更新处于同一 main 队列；若后续 OAuth 清理或 DB 写失败，
         // 用原值回滚，确保并发窗口不能把另一份配置和密钥拼在一起。
-        const keySnapshots = stageProviderKeys(config, keys);
+        const keySnapshots = stageProviderKeys(
+          config.id,
+          planProviderKeyMutations(config, keys, 'update'),
+        );
         // 先阻止在途 flow 写回，再改描述符；否则旧 flow 可能在 clear 后迟到落一枚旧 token。
         if (shouldResetOAuth) deps.oauthCancel(config.id);
         // 旧 client / endpoint 下签发的 token 不能沿用到新 OAuth 描述符；切到 API key /
@@ -446,18 +493,28 @@ export function registerProviderHandlers(
       const generation = beginOAuthMutation(providerId);
       try {
         deps.oauthCancel(providerId);
+        const keySnapshots = stageProviderKeys(
+          providerId,
+          (VALID_AGENTS as readonly AgentKind[]).map((agent) => ({
+            agent,
+            replacement: null,
+          })),
+        );
         // OAuth 形态自定义供应商的凭证 blob 一并清掉（apiKey 形态无 blob，幂等无害）。
-        const restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
-        if (!restoreOAuthCredentials) {
-          throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
-        }
+        let restoreOAuthCredentials: (() => boolean) | null = null;
         try {
+          restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
+          if (!restoreOAuthCredentials) {
+            throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
+          }
           await deleteCustomProvider(providerId);
         } catch (err) {
-          if (!restoreOAuthCredentials()) {
+          const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
+          const keysRestored = restoreProviderKeys(providerId, keySnapshots);
+          if (!oauthRestored || !keysRestored) {
             throwIpcError(
               'INTERNAL',
-              'provider deletion failed and existing OAuth credentials could not be restored',
+              'provider deletion failed and existing credentials could not be restored',
             );
           }
           throw err;

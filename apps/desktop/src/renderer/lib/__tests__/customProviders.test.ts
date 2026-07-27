@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
-
 import {
   appendDiscoveredCustomProviderModels,
   createCustomProvider,
@@ -144,45 +142,39 @@ describe('appendDiscoveredCustomProviderModels', () => {
 });
 
 describe('custom provider credential lifecycle', () => {
-  it('never stores supplied API keys for a no-auth provider', async () => {
-    const safeStorageStore = vi.fn();
+  it('submits create config and keys through one main-process mutation', async () => {
+    const create = vi.fn(async () => ({ ok: true }));
     vi.stubGlobal('window', {
       electronAPI: {
-        maker: { createCustomProvider: vi.fn(async () => ({ ok: true })) },
-        safeStorageStore,
+        maker: { createCustomProvider: create },
       },
     });
 
-    await createCustomProvider({
-      id: 'local',
-      name: 'Local',
-      auth: { method: 'none' },
+    const config = {
+      id: 'new-provider',
+      name: 'New provider',
+      auth: { method: 'apiKey' as const },
       runtimes: {
         codex: {
-          baseUrl: 'http://127.0.0.1:4000/v1',
-          models: [{ id: 'local-model', name: 'Local Model' }],
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'model', name: 'Model' }],
         },
       },
-    }, { codex: 'must-not-be-stored' });
+    };
+    const keys = { codex: 'new-key' };
+    await createCustomProvider(config, keys);
 
-    expect(safeStorageStore).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledWith(config, keys);
   });
 
-  it('rolls back a newly created provider and partial keys when credential storage fails', async () => {
-    const create = vi.fn(async () => ({ ok: true }));
-    const removeProvider = vi.fn(async () => ({ ok: true }));
-    const safeStorageStore = vi.fn()
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
-    const safeStorageRemove = vi.fn(async () => true);
+  it('surfaces an atomic main-process create failure', async () => {
     vi.stubGlobal('window', {
       electronAPI: {
         maker: {
-          createCustomProvider: create,
-          deleteCustomProvider: removeProvider,
+          createCustomProvider: vi.fn().mockRejectedValue(
+            new Error('credential staging failed'),
+          ),
         },
-        safeStorageStore,
-        safeStorageRemove,
       },
     });
     const config = {
@@ -204,19 +196,7 @@ describe('custom provider credential lifecycle', () => {
     await expect(createCustomProvider(config, {
       'claude-code': 'first-key',
       codex: 'second-key',
-    })).rejects.toThrow('Failed to store codex provider credential');
-
-    expect(create).toHaveBeenCalledWith(config);
-    expect(removeProvider).toHaveBeenCalledWith(config.id);
-    expect(safeStorageRemove).toHaveBeenCalledTimes(2);
-    expect(safeStorageRemove).toHaveBeenNthCalledWith(
-      1,
-      customProviderSecretStorageKey(config.id, 'claude-code'),
-    );
-    expect(safeStorageRemove).toHaveBeenNthCalledWith(
-      2,
-      customProviderSecretStorageKey(config.id, 'codex'),
-    );
+    })).rejects.toThrow('credential staging failed');
   });
 
   it('submits replacement keys with the config through one main-process mutation', async () => {

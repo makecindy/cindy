@@ -905,9 +905,13 @@ function buildOutput({
   push("SECTION 1: Bundled components (non-npm)");
   push("=".repeat(78));
   for (const e of manualEntries) {
+    const versionSuffix = `(${e.version})`;
+    const heading = e.name.endsWith(versionSuffix)
+      ? e.name
+      : `${e.name} ${e.version}`;
     push();
     push("-".repeat(78));
-    push(`${e.name} ${e.version}`);
+    push(heading);
     push(`License: ${e.license}`);
     if (e.url) push(`Source: ${e.url}`);
     push("-".repeat(78));

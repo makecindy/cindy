@@ -51,7 +51,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-LiteLLM mascot SVG path (adapted) adapted
+LiteLLM mascot SVG path (adapted)
 License: MIT
 Source: https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg
 ------------------------------------------------------------------------------

@@ -3111,7 +3111,7 @@ necessary.  Here is a sample; alter the names:
 That's all there is to it!
 
 ------------------------------------------------------------------------------
-Code Island NotchPanelShape & mascot parameters (adapted) adapted
+Code Island NotchPanelShape & mascot parameters (adapted)
 License: MIT
 Source: https://github.com/wxtsky/CodeIsland
 ------------------------------------------------------------------------------
@@ -3684,7 +3684,7 @@ FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ------------------------------------------------------------------------------
-LiteLLM mascot SVG path (adapted) adapted
+LiteLLM mascot SVG path (adapted)
 License: MIT
 Source: https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg
 ------------------------------------------------------------------------------

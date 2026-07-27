@@ -5,10 +5,8 @@
  * 本地加密，与内置 XD 网关 key 同机制；main 路由 resolve 时按 (id, agent) 读出注入鉴权头）。
  *
  * 顺序约定：
- *   - create：先写配置（IPC 在重名 / 非法时 reject，避免误覆盖既有同 id 的 key），成功后存各 runtime 的密钥；
- *     密钥写入失败时尽力回滚新配置与所有可能已写入的 runtime 密钥。
- *   - update：配置 + 密钥一次提交给 main，由 main 的 per-provider queue 原子暂存 / 回滚。
- *   - delete：先删配置，再清所有 runtime 的密钥（幂等）。
+ *   - create / update / delete：配置 + 密钥一次提交给 main，由 main 的 per-provider queue
+ *     串行暂存 / 回滚，跨窗口 mutation 不会被较早请求的迟到回滚覆盖。
  */
 
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
@@ -21,8 +19,6 @@ import type {
   ProviderView,
   ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
-
-const ALL_AGENTS: readonly AgentKind[] = ['claude-code', 'codex'];
 
 /** per-runtime 密钥输入：键为 agent，值为该 runtime 的 API key（空串 = 不改 / 不存）。 */
 export type RuntimeKeys = Partial<Record<AgentKind, string>>;
@@ -120,51 +116,12 @@ export async function readCustomProviderKey(
   }
 }
 
-async function storeKey(providerId: string, agent: AgentKind, key: string): Promise<void> {
-  const stored = await window.electronAPI.safeStorageStore(
-    customProviderSecretStorageKey(providerId, agent),
-    key,
-  );
-  if (!stored) throw new Error(`Failed to store ${agent} provider credential`);
-}
-
-/** 写入配置中各 runtime 的密钥（仅非空的）。 */
-async function saveKeys(config: CustomProviderConfig, keys: RuntimeKeys): Promise<void> {
-  for (const agent of ALL_AGENTS) {
-    const key = keys[agent]?.trim();
-    if (config.runtimes[agent] && key) await storeKey(config.id, agent, key);
-  }
-}
-
-async function removeKeysBestEffort(providerId: string): Promise<void> {
-  for (const agent of ALL_AGENTS) {
-    try {
-      await window.electronAPI.safeStorageRemove(customProviderSecretStorageKey(providerId, agent));
-    } catch {
-      /* 无配置时孤儿 .enc 不可达；清理失败不应掩盖原始创建错误。 */
-    }
-  }
-}
-
-/** 新建：先写配置；密钥保存失败时尽力回滚配置与所有可能已写入的 runtime 密钥。 */
+/** 新建：配置与 runtime 密钥交给 main 的同一 provider mutation queue。 */
 export async function createCustomProvider(
   config: CustomProviderConfig,
   keys: RuntimeKeys,
 ): Promise<void> {
-  await window.electronAPI.maker.createCustomProvider(config);
-  if (!config.auth || config.auth.method === 'apiKey') {
-    try {
-      await saveKeys(config, keys);
-    } catch (error) {
-      try {
-        await window.electronAPI.maker.deleteCustomProvider(config.id);
-      } catch {
-        /* 回滚是 best-effort；保留原始密钥写入错误给调用方。 */
-      }
-      await removeKeysBestEffort(config.id);
-      throw error;
-    }
-  }
+  await window.electronAPI.maker.createCustomProvider(config, keys);
 }
 
 /** 编辑：main 在同一 provider mutation queue 内提交配置与 runtime 密钥。 */
@@ -175,8 +132,7 @@ export async function updateCustomProvider(
   await window.electronAPI.maker.updateCustomProvider(config, keys);
 }
 
-/** 删除：先删配置，再清所有 runtime 密钥（幂等，失败忽略）。 */
+/** 删除：main 在同一 provider mutation queue 内清配置与所有凭证。 */
 export async function deleteCustomProvider(providerId: string): Promise<void> {
   await window.electronAPI.maker.deleteCustomProvider(providerId);
-  await removeKeysBestEffort(providerId);
 }

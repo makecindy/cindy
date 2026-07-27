@@ -407,7 +407,7 @@ import {
   updateCustomProviderIfUnchanged,
 } from '../maker-host/custom-provider-store.js';
 import {
-  readCustomProviderKey,
+  readCustomProviderKeyForMutation,
   removeCustomProviderKey,
   storeCustomProviderKey,
 } from '../secrets/providerSecretStore.js';
@@ -3504,7 +3504,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         ...(rollbackCredentials ? { rollbackCredentials } : {}),
       };
     },
-    readCustomProviderKey,
+    readCustomProviderKeyForMutation,
     storeCustomProviderKey,
     removeCustomProviderKey,
     oauthLogout: async (providerId) => {

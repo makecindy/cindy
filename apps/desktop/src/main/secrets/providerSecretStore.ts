@@ -51,8 +51,8 @@ const OWNER_STORAGE_KEY = 'provider_secret_owner';
  *
  * 注意:本 store 的 set / remove **不触发** 任何副作用(例如 api_key 变更后重建
  * Codex —— 那是 safe-storage IPC 层 onApiKeyChangedMaybeRestartCodex 的职责)。
- * 当前没有"main 端写供应商 key"的路径(写入都走 renderer → IPC),set / remove
- * 仅为 API 对称而提供;未来若有 main 端写 api_key 的需求,需自行补副作用。
+ * main 端写路径仅限自定义供应商 CRUD 的 per-provider mutation queue；若扩展到
+ * 需要重建运行时的内置 provider key，必须同步补对应副作用。
  */
 
 /** 低层加密 KV(按 safeStorage 存储键名读写),抽出以便注入测试。 */
@@ -374,6 +374,45 @@ export function readCustomProviderKey(providerId: string, agent: string): string
       'read custom provider key failed',
     );
     return null;
+  }
+}
+
+/**
+ * 配置 CRUD 回滚前的严格 API key 快照读取。
+ * 仅 ENOENT 表示“没有旧 key”；owner / 加密不可用、文件读取或解密失败都必须抛错，
+ * 防止调用方把暂时不可读的现有凭证误判为空并永久删除。
+ */
+export function readCustomProviderKeyForMutation(
+  providerId: string,
+  agent: string,
+): string | null {
+  const logicalKey = customProviderSecretStorageKey(providerId, agent);
+  const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
+  if (!scopedKey) throw new Error('provider secret owner is unavailable');
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('provider credential encryption is unavailable');
+  }
+  let encoded: string;
+  try {
+    encoded = fs.readFileSync(path.join(secretDir(), `${scopedKey}.enc`), 'utf-8');
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'read custom provider key snapshot failed',
+    );
+    throw new Error('existing provider credential is unreadable');
+  }
+  try {
+    return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+  } catch (err) {
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'decrypt custom provider key snapshot failed',
+    );
+    throw new Error('existing provider credential is unreadable');
   }
 }
 

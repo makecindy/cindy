@@ -3606,10 +3606,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listProviders: (): Promise<{ providers: import('@cindy/model-providers').ProviderView[] }> =>
       ipcRenderer.invoke('maker:provider:list'),
 
-    // 自定义供应商配置 CRUD（update 同时提交 runtime 密钥，由 main 原子排队）。
+    // 自定义供应商配置 CRUD（配置与 runtime 密钥均由 main 原子排队）。
     createCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
-    ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:provider:custom:create', config),
+      keys: Partial<Record<'claude-code' | 'codex', string>>,
+    ): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:provider:custom:create', config, keys),
     updateCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
       keys: Partial<Record<'claude-code' | 'codex', string>>,

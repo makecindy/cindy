@@ -203,6 +203,10 @@ test("desktop resources include both open-source and restricted disclosures", ()
     read("apps/desktop/resources/THIRD-PARTY-NOTICES.txt"),
     /LiteLLM mascot SVG path \(adapted\).*Copyright \(c\) 2026 Berri AI/s,
   );
+  assert.doesNotMatch(
+    read("apps/desktop/resources/THIRD-PARTY-NOTICES.txt"),
+    /LiteLLM mascot SVG path \(adapted\) adapted/,
+  );
   for (const platform of ["ios", "android"]) {
     const mobileNotice = read(
       `docs/legal/notices/mobile-${platform}.txt`,
@@ -210,6 +214,10 @@ test("desktop resources include both open-source and restricted disclosures", ()
     assert.match(
       mobileNotice,
       /LiteLLM mascot SVG path \(adapted\).*Copyright \(c\) 2026 Berri AI/s,
+    );
+    assert.doesNotMatch(
+      mobileNotice,
+      /LiteLLM mascot SVG path \(adapted\) adapted/,
     );
   }
   assert.ok(

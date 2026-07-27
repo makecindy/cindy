@@ -68,7 +68,7 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     oauthLogout: vi.fn(async () => {}),
     oauthCancel: vi.fn(() => {}),
     removeOAuthCredentials: vi.fn(() => () => true),
-    readCustomProviderKey: vi.fn(() => null),
+    readCustomProviderKeyForMutation: vi.fn(() => null),
     storeCustomProviderKey: vi.fn(() => true),
     removeCustomProviderKey: vi.fn(() => ({ success: true })),
     scanLocalCli: vi.fn(async () => []),
@@ -125,6 +125,90 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(await listCustomProviders()).toHaveLength(1);
     expect(deps.refreshCatalog).toHaveBeenCalledOnce();
     expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+  });
+
+  it('rolls back partial create keys before any provider config is committed', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string>();
+    const storeCalls: string[] = [];
+    const removeCalls: AgentKind[] = [];
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: vi.fn(
+        (_providerId, agent) => keys.get(agent) ?? null,
+      ),
+      storeCustomProviderKey: vi.fn((_providerId, agent, value) => {
+        storeCalls.push(`${agent}:${value}`);
+        if (agent === 'codex') return false;
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent) => {
+        removeCalls.push(agent);
+        keys.delete(agent);
+        return { success: true };
+      }),
+    }));
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'partial-create',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'codex-model', name: 'Codex model' }],
+        },
+      },
+    };
+
+    await expect(
+      harness.invoke(
+        MAKER_INVOKE.PROVIDER_CUSTOM_CREATE,
+        config,
+        { 'claude-code': 'first-key', codex: 'second-key' },
+      ),
+    ).rejects.toThrow(/failed to update codex provider credential/);
+
+    expect(await listCustomProviders()).toEqual([]);
+    expect(keys.size).toBe(0);
+    expect(storeCalls).toEqual([
+      'claude-code:first-key',
+      'codex:second-key',
+    ]);
+    expect(removeCalls).toEqual(['codex', 'claude-code']);
+  });
+
+  it('does not stage supplied API keys when creating a no-auth provider', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'local-no-auth',
+      auth: { method: 'none' },
+      runtimes: {
+        codex: {
+          ...validConfig.runtimes.codex!,
+          baseUrl: 'http://127.0.0.1:4000/v1',
+        },
+      },
+    };
+
+    await expect(
+      harness.invoke(
+        MAKER_INVOKE.PROVIDER_CUSTOM_CREATE,
+        config,
+        { codex: 'must-not-be-stored' },
+      ),
+    ).resolves.toEqual({ ok: true });
+
+    expect(deps.readCustomProviderKeyForMutation).not.toHaveBeenCalled();
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
   });
 
   it('rejects invalid config (bad id) with INVALID_PARAMS and does not write', async () => {
@@ -384,7 +468,9 @@ describe('provider:custom:* CRUD handlers', () => {
     const keys = new Map<AgentKind, string>([['codex', 'old-key']]);
     const storeCalls: string[] = [];
     registerProviderHandlers(harness, makeDeps({
-      readCustomProviderKey: vi.fn((_providerId, agent) => keys.get(agent) ?? null),
+      readCustomProviderKeyForMutation: vi.fn(
+        (_providerId, agent) => keys.get(agent) ?? null,
+      ),
       storeCustomProviderKey: vi.fn((_providerId, agent, value) => {
         storeCalls.push(`${agent}:${value}`);
         keys.set(agent, value);
@@ -417,6 +503,124 @@ describe('provider:custom:* CRUD handlers', () => {
     expect((await listCustomProviders())[0]?.name).toBe(validConfig.name);
   });
 
+  it('aborts before overwriting an existing key that cannot be read for rollback', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string>();
+    let unreadable = false;
+    const readCustomProviderKeyForMutation = vi.fn((_providerId, agent: AgentKind) => {
+      if (unreadable && agent === 'claude-code') {
+        throw new Error('encryption temporarily unavailable');
+      }
+      return keys.get(agent) ?? null;
+    });
+    const storeCustomProviderKey = vi.fn((_providerId, agent: AgentKind, value: string) => {
+      keys.set(agent, value);
+      return true;
+    });
+    const removeCustomProviderKey = vi.fn((_providerId, agent: AgentKind) => {
+      keys.delete(agent);
+      return { success: true };
+    });
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation,
+      storeCustomProviderKey,
+      removeCustomProviderKey,
+    }));
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'strict-snapshot',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(
+      MAKER_INVOKE.PROVIDER_CUSTOM_CREATE,
+      config,
+      { 'claude-code': 'old-key' },
+    );
+    unreadable = true;
+    storeCustomProviderKey.mockClear();
+    removeCustomProviderKey.mockClear();
+
+    await expect(
+      harness.invoke(
+        MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE,
+        { ...config, name: 'Must not persist' },
+        { 'claude-code': 'replacement-key' },
+      ),
+    ).rejects.toThrow(/failed to read existing claude-code provider credential/);
+
+    expect(keys.get('claude-code')).toBe('old-key');
+    expect(storeCustomProviderKey).not.toHaveBeenCalled();
+    expect(removeCustomProviderKey).not.toHaveBeenCalled();
+    expect((await listCustomProviders())[0]?.name).toBe(config.name);
+  });
+
+  it('serializes create key staging with a later cross-window update', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string>();
+    const storeCalls: string[] = [];
+    let releaseRefresh!: () => void;
+    let reachedRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const firstReachedRefresh = new Promise<void>((resolve) => {
+      reachedRefresh = resolve;
+    });
+    let refreshCount = 0;
+    const refreshCatalog = vi.fn(async () => {
+      refreshCount += 1;
+      if (refreshCount === 1) {
+        reachedRefresh();
+        await refreshGate;
+      }
+    });
+    registerProviderHandlers(harness, makeDeps({
+      refreshCatalog,
+      readCustomProviderKeyForMutation: vi.fn(
+        (_providerId, agent) => keys.get(agent) ?? null,
+      ),
+      storeCustomProviderKey: vi.fn((_providerId, agent, value) => {
+        storeCalls.push(`${agent}:${value}`);
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent) => {
+        keys.delete(agent);
+        return { success: true };
+      }),
+    }));
+
+    const create = harness.invoke(
+      MAKER_INVOKE.PROVIDER_CUSTOM_CREATE,
+      validConfig,
+      { codex: 'created-key' },
+    );
+    await firstReachedRefresh;
+    const update = harness.invoke(
+      MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE,
+      { ...validConfig, name: 'Later edit' },
+      { codex: 'updated-key' },
+    );
+    await Promise.resolve();
+
+    expect(storeCalls).toEqual(['codex:created-key']);
+    expect((await listCustomProviders())[0]?.name).toBe(validConfig.name);
+
+    releaseRefresh();
+    await expect(create).resolves.toEqual({ ok: true });
+    await expect(update).resolves.toEqual({ ok: true });
+    expect(storeCalls).toEqual(['codex:created-key', 'codex:updated-key']);
+    expect(keys.get('codex')).toBe('updated-key');
+    expect((await listCustomProviders())[0]?.name).toBe('Later edit');
+  });
+
   it('serializes API key staging with config updates across concurrent renderer edits', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -438,7 +642,9 @@ describe('provider:custom:* CRUD handlers', () => {
     });
     const deps = makeDeps({
       refreshCatalog,
-      readCustomProviderKey: vi.fn((_providerId, agent) => keys.get(agent) ?? null),
+      readCustomProviderKeyForMutation: vi.fn(
+        (_providerId, agent) => keys.get(agent) ?? null,
+      ),
       storeCustomProviderKey: vi.fn((_providerId, agent, value) => {
         storeCalls.push(`${agent}:${value}`);
         keys.set(agent, value);
@@ -481,19 +687,36 @@ describe('provider:custom:* CRUD handlers', () => {
     mountDb();
     const harness = new IpcHarness();
     const calls: string[] = [];
+    const keys = new Map<AgentKind, string>();
     const deps = makeDeps({
       oauthCancel: vi.fn(() => calls.push('cancel')),
       removeOAuthCredentials: vi.fn(() => {
         calls.push('clear');
         return () => true;
       }),
+      readCustomProviderKeyForMutation: vi.fn(
+        (_providerId, agent) => keys.get(agent) ?? null,
+      ),
+      storeCustomProviderKey: vi.fn((_providerId, agent, value) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent) => {
+        keys.delete(agent);
+        return { success: true };
+      }),
     });
     registerProviderHandlers(harness, deps);
-    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+    await harness.invoke(
+      MAKER_INVOKE.PROVIDER_CUSTOM_CREATE,
+      validConfig,
+      { codex: 'delete-me' },
+    );
 
     const del = await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, 'openrouter');
     expect(del).toEqual({ ok: true });
     expect(await listCustomProviders()).toEqual([]);
+    expect(keys.size).toBe(0);
     expect(calls).toEqual(['cancel', 'clear']);
 
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, '')).rejects.toThrow(
@@ -504,14 +727,33 @@ describe('provider:custom:* CRUD handlers', () => {
   it('does not delete a provider when OAuth credential removal fails', async () => {
     mountDb();
     const harness = new IpcHarness();
-    const deps = makeDeps({ removeOAuthCredentials: vi.fn(() => null) });
+    const keys = new Map<AgentKind, string>();
+    const deps = makeDeps({
+      removeOAuthCredentials: vi.fn(() => null),
+      readCustomProviderKeyForMutation: vi.fn(
+        (_providerId, agent) => keys.get(agent) ?? null,
+      ),
+      storeCustomProviderKey: vi.fn((_providerId, agent, value) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent) => {
+        keys.delete(agent);
+        return { success: true };
+      }),
+    });
     registerProviderHandlers(harness, deps);
-    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+    await harness.invoke(
+      MAKER_INVOKE.PROVIDER_CUSTOM_CREATE,
+      validConfig,
+      { codex: 'must-survive' },
+    );
 
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, 'openrouter'),
     ).rejects.toThrow(/INTERNAL.*failed to remove existing OAuth credentials/);
     expect(await listCustomProviders()).toHaveLength(1);
+    expect(keys.get('codex')).toBe('must-survive');
   });
 });
 

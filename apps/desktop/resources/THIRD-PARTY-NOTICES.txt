@@ -3111,7 +3111,7 @@ necessary.  Here is a sample; alter the names:
 That's all there is to it!
 
 ------------------------------------------------------------------------------
-Code Island NotchPanelShape & mascot parameters (adapted) adapted
+Code Island NotchPanelShape & mascot parameters (adapted)
 License: MIT
 Source: https://github.com/wxtsky/CodeIsland
 ------------------------------------------------------------------------------
@@ -3378,7 +3378,7 @@ Electron 自身捆绑了 Chromium、Node.js、V8 等组件,其完整许可证集
 (LICENSES.chromium.html)由 Electron 打包流程自动包含在应用安装目录中。
 
 ------------------------------------------------------------------------------
-LiteLLM mascot SVG path (adapted) adapted
+LiteLLM mascot SVG path (adapted)
 License: MIT
 Source: https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg
 ------------------------------------------------------------------------------
