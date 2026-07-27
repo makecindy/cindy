@@ -4159,7 +4159,16 @@ export class CodexAgent extends BaseAgent {
                 ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
                 ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
               };
-              await host.request<ThreadResumeResponse>(Method.ThreadResume, resumeParams);
+              const resumeResp = await host.request<ThreadResumeResponse>(Method.ThreadResume, resumeParams);
+              if (mutableModel === 'gpt-5' && resumeResp.model) {
+                mutableModel = resumeResp.model;
+                turnParams.effort = clampEffortForCodex(mutableModel, mutableEffort);
+                if (turnParams.collaborationMode) {
+                  turnParams.collaborationMode.settings.model = mutableModel;
+                  turnParams.collaborationMode.settings.reasoning_effort =
+                    clampEffortForCodex(mutableModel, mutableEffort);
+                }
+              }
               if (collaborationMode?.mode === 'default') {
                 planModeDefaultMarkerNeeded = true;
                 if (turnParams.collaborationMode?.mode === 'default') {

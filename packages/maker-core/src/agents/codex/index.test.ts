@@ -6858,6 +6858,59 @@ describe('CodexAgent plan mode', () => {
     await handle.close();
   });
 
+  it('uses the resolved resume model when a default turn retries after a daemon restart', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turnStartCount = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        return {
+          thread: { id: 'start-thread-id' },
+          model: 'gpt-5',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
+      }
+      if (method === Method.TurnStart) {
+        turnStartCount += 1;
+        if (turnStartCount === 1) return { turn: { id: 'turn-1' } };
+        if (turnStartCount === 2) throw new Error('thread not found');
+        return { turn: { id: `turn-${turnStartCount}` } };
+      }
+      if (method === Method.ThreadResume) {
+        return {
+          thread: { id: 'start-thread-id' },
+          model: 'gpt-5.4',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-plan-exit-retry-default-model',
+      model: 'gpt-5',
+      workingDir: '/repo',
+      planMode: true,
+    });
+    handle.setInteractionResolver(async () => ({ kind: 'plan_review', behavior: 'allow' }));
+
+    await handle.send({ type: 'user', content: 'make a plan' });
+    runPlanTurn(host, 'turn-1', '1. do X\n2. do Y');
+
+    await vi.waitFor(() => {
+      expect(turnStartCalls(host)).toHaveLength(3);
+    });
+    const [, retryParams] = turnStartCalls(host)[2] as [string, {
+      collaborationMode?: { mode: string; settings: { model: string; reasoning_effort: string } };
+    }];
+    expect(retryParams.collaborationMode?.settings).toMatchObject({
+      model: 'gpt-5.4',
+      reasoning_effort: 'high',
+    });
+    expect(handle.model).toBe('gpt-5.4');
+    await handle.close();
+  });
+
   it('emits a terminal event when the approved plan implementation turn cannot start', async () => {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;
