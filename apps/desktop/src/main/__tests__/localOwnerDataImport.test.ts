@@ -47,7 +47,8 @@ const ACCOUNT_SCHEMA = `
   CREATE TABLE schedules (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active'
+    status TEXT NOT NULL DEFAULT 'active',
+    target_session_id TEXT
   );
   CREATE TABLE session_goals (
     id TEXT PRIMARY KEY,
@@ -365,6 +366,35 @@ describe('importLocalOwnerData 同 id 会话冲突', () => {
     ).toEqual({ title: '本机新会话' });
     // 被故意跳过的子行不算成 schema 不兼容的丢行。
     expect(result.droppedRows.messages).toBeUndefined();
+  });
+
+  it('可空的会话引用列为 NULL 时照常导入(NOT IN 对 NULL 的坑)', () => {
+    accountDb
+      .prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)')
+      .run('shared-id', '账号侧', 10);
+    seedLocalDb((db) => {
+      // 制造一个冲突会话,让冲突过滤生效。
+      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('shared-id', '本机', 1);
+      // 这条定时任务不关联任何会话(target_session_id 为 NULL),必须照常并入。
+      db.prepare(
+        "INSERT INTO schedules (id, name, status, target_session_id) VALUES (?,?,'active',NULL)",
+      ).run('sch-null', '不关联会话的任务');
+      // 这条关联冲突会话,应被跳过。
+      db.prepare(
+        "INSERT INTO schedules (id, name, status, target_session_id) VALUES (?,?,'active',?)",
+      ).run('sch-conflict', '关联冲突会话的任务', 'shared-id');
+    });
+
+    const result = importLocalOwnerData(accountDb, localDbPath);
+
+    const ids = accountDb
+      .prepare('SELECT id FROM schedules ORDER BY id')
+      .all()
+      .map((r) => (r as { id: string }).id);
+    expect(ids).toEqual(['sch-null']);
+    expect(result.skippedByConflict.schedules).toBe(1);
+    // NULL 那条是正常并入的,不该被算成丢行。
+    expect(result.droppedRows.schedules).toBeUndefined();
   });
 
   it('无冲突时不建过滤临时表、不误伤任何子行', () => {

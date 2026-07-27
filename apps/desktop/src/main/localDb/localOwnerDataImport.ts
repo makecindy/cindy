@@ -235,8 +235,13 @@ export function importLocalOwnerData(
           conflictedSessions > 0 && table !== 'sessions'
             ? SESSION_REF_COLUMNS.find((col) => sharedCols.includes(col))
             : undefined;
+        // NULL-safe:`col NOT IN (...)` 在 col 为 NULL 时结果是 NULL(被 WHERE 当假),
+        // 而 target_session_id / lead_session_id 都是可空列——不显式放行 NULL 的话,
+        // 只要出现一个冲突会话,所有「不关联任何会话」的行都会被误跳过
+        // (Copilot review)。
         const conflictFilter = refCol
-          ? ` WHERE ${quoteId(refCol)} NOT IN (SELECT id FROM temp.${quoteId(CONFLICT_TEMP_TABLE)})`
+          ? ` WHERE (${quoteId(refCol)} IS NULL OR ${quoteId(refCol)} NOT IN` +
+            ` (SELECT id FROM temp.${quoteId(CONFLICT_TEMP_TABLE)}))`
           : '';
         if (refCol) {
           const skipped = Number(
@@ -280,7 +285,8 @@ export function importLocalOwnerData(
         // 核验时排除「因会话冲突而故意跳过」的行——它们没进来是设计使然,
         // 已单独记在 skippedByConflict 里,不该再算成 schema 不兼容的丢行。
         const conflictExclusion = refCol
-          ? ` AND s.${quoteId(refCol)} NOT IN (SELECT id FROM temp.${quoteId(CONFLICT_TEMP_TABLE)})`
+          ? ` AND (s.${quoteId(refCol)} IS NULL OR s.${quoteId(refCol)} NOT IN` +
+            ` (SELECT id FROM temp.${quoteId(CONFLICT_TEMP_TABLE)}))`
           : '';
         const dropped = db
           .prepare(
