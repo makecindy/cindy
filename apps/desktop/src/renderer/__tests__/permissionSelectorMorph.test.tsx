@@ -195,6 +195,14 @@ describe('PermissionSelector triggerVariant', () => {
     expect(onChange).toHaveBeenCalledWith('bypassPermissions');
   });
 
+  it('field 形态打开时同样聚焦当前选中权限', async () => {
+    renderSelector({ triggerVariant: 'field', permissionMode: 'bypassPermissions' });
+    fireEvent.click(getTrigger());
+
+    const selectedOption = await screen.findByRole('option', { name: '完全访问' });
+    await waitFor(() => expect(document.activeElement).toBe(selectedOption));
+  });
+
   it('ariaContext 前置到 trigger 可及名(多实例同屏读屏区分,不传则原样)', () => {
     renderSelector({ triggerVariant: 'field', ariaContext: '权限模式 · chat' });
     expect(screen.getByRole('button', { name: '权限模式 · chat:默认权限' })).toBeTruthy();
