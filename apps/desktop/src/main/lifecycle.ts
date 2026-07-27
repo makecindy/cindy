@@ -207,9 +207,12 @@ let _watchdogArmed = false;
  *     2026-07-06 观测到 exit 已打日志但 PID 存活 32h, 彼时 JS 事件循环已死,
  *     进程无法自救, 只有外部进程能补刀。
  *
- * 正常退出时本进程早已死透, 补刀落空无害 (kill 静默失败)。PID 复用窗口的取舍:
- * 20s 内 OS 把同一 PID 回收再分配给别的进程的概率极小, 沿用 updateScriptMacOS
- * 外部 kill -9 兜底的既有先例, 不做额外防护。
+ * 正常退出时本进程早已死透, 补刀落空无害 (kill 静默失败)。PID 复用防护 (review
+ * P1 两轮): 映像名/命令行校验区分不了同一 App 的两次运行 (正常退出后更新器立即
+ * 重启、新实例在宽限期内拿到复用 PID 会被误杀), 所以 watchdog 在布防时刻 (本进程
+ * 必然存活) 先捕获目标 PID 的**进程创建时间**, 补刀前重取一次, 不一致 = PID 已易主,
+ * 放弃。残余窗口只剩 "本进程在 watchdog 子进程完成首次捕获前 (毫秒级) 就退出且
+ * PID 立即复用给另一个同路径进程", 视为可接受。
  *
  * 幂等: 进程生命周期内只布防一次。spawn/pid/platform 可注入, 便于单测;
  * 布防失败只 warn, 绝不阻断正常退出。
@@ -232,27 +235,34 @@ export function armShutdownHardKillWatchdog(
   const graceSeconds = options.graceSeconds ?? SHUTDOWN_HARD_KILL_GRACE_SECONDS;
   const execPath = options.execPath ?? process.execPath;
   try {
-    // 杀前校验进程身份 (review P1): 宽限期内 OS 复用了该 PID 时, 盲杀会误伤
-    // 无关进程。POSIX 比对 ps 的 command 是否仍含本进程 execPath;Windows 比对
-    // tasklist 的映像名。校验不过 = 本进程已死且 PID 易主, 直接放弃补刀。
+    // 杀前校验进程身份 (review P1 两轮): 宽限期内 OS 复用了该 PID 时, 盲杀会误伤。
+    // 映像名/命令行校验区分不了同一 App 的两次运行 (更新器重启的新实例), 所以以
+    // **进程创建时间**为身份锚点: 布防时刻本进程必然存活, watchdog 子进程先捕获
+    // 目标 PID 的创建时间, 补刀前重取比对, 不一致 = PID 已易主, 放弃补刀。
     const child =
       platform === 'win32'
         ? (() => {
-            const imageName = execPath.split(/[\\/]/).pop() ?? 'Cindy.exe';
-            // `timeout /t` 在无控制台的 detached 进程里不可用 ("输入重定向不受支持"),
-            // `ping -n <N+1>` 是标准的 cmd 延时 hack (首个包立即发, 之后每包间隔 1s)。
-            // 环境变量规范拼写是 COMSPEC (Windows env 大小写不敏感, 但代码里用规范名,
-            // 对齐 terminal/shellResolver 的既有约定);不能假设 cmd.exe 一定在 PATH。
+            // cmd 拿不到进程创建时间 (wmic 已从新版 Windows 移除), 改用 Windows
+            // PowerShell 5.1 —— 所有受支持 Windows 内置, 用 SystemRoot 绝对路径,
+            // 不假设它在 PATH。属性读取走 Select-Object -ExpandProperty 而非语言级
+            // .StartTime, 兼容企业锁死环境的 Constrained Language Mode (其下语言级
+            // 属性访问被禁, cmdlet 内部反射不受限);取不到创建时间时直接退出不杀,
+            // 失败方向是"少杀"而非"误杀"。字符串 -eq 大小写不敏感, 路径比对安全。
+            const psExe =
+              `${process.env.SystemRoot ?? 'C:\\Windows'}` +
+              '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+            const script =
+              `$ErrorActionPreference='SilentlyContinue'; ` +
+              `$started = Get-Process -Id ${pid} | Select-Object -ExpandProperty StartTime; ` +
+              `if (-not $started) { exit }; ` +
+              `Start-Sleep -Seconds ${graceSeconds}; ` +
+              `$p = Get-Process -Id ${pid}; ` +
+              `if ($p -and ($p | Select-Object -ExpandProperty StartTime) -eq $started ` +
+              `-and ($p | Select-Object -ExpandProperty Path) -eq '${execPath.replace(/'/g, "''")}') ` +
+              `{ Stop-Process -Id ${pid} -Force }`;
             return spawnFn(
-              process.env.COMSPEC ?? 'cmd.exe',
-              [
-                '/d',
-                '/s',
-                '/c',
-                `ping -n ${graceSeconds + 1} 127.0.0.1 >nul & ` +
-                  `tasklist /FI "PID eq ${pid}" /NH | findstr /I /C:"${imageName}" >nul && ` +
-                  `taskkill /f /pid ${pid}`,
-              ],
+              psExe,
+              ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script],
               { detached: true, windowsHide: true, stdio: 'ignore' },
             );
           })()
@@ -260,7 +270,12 @@ export function armShutdownHardKillWatchdog(
             '/bin/sh',
             [
               '-c',
-              `sleep ${graceSeconds}; ` +
+              // lstart 是完整启动时间字符串 (秒级), 同 PID + 同启动秒 + 同 execPath
+              // 的碰撞视为不可能。捕获时进程已死则直接退出 (不需要补刀)。
+              `started="$(ps -p ${pid} -o lstart= 2>/dev/null)"; ` +
+                `[ -n "$started" ] || exit 0; ` +
+                `sleep ${graceSeconds}; ` +
+                `[ "$(ps -p ${pid} -o lstart= 2>/dev/null)" = "$started" ] && ` +
                 `ps -p ${pid} -o command= 2>/dev/null | grep -qF '${execPath.replace(/'/g, `'\\''`)}' && ` +
                 `kill -9 ${pid} 2>/dev/null`,
             ],

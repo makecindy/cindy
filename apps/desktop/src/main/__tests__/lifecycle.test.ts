@@ -198,7 +198,7 @@ describe('armShutdownHardKillWatchdog', () => {
     return { spawn, child };
   }
 
-  it('POSIX (darwin): /bin/sh -c "sleep <grace>; kill -9 <pid>" — detached + ignore + unref', async () => {
+  it('POSIX (darwin): /bin/sh 捕获 lstart → sleep → lstart+command 双校验后 kill -9 — detached + ignore + unref', async () => {
     const { armShutdownHardKillWatchdog, SHUTDOWN_HARD_KILL_GRACE_SECONDS } =
       await freshLifecycle();
     const { spawn, child } = fakeSpawn();
@@ -217,11 +217,16 @@ describe('armShutdownHardKillWatchdog', () => {
       Record<string, unknown>,
     ];
     expect(cmd).toBe('/bin/sh');
-    // 杀前身份校验(review P1):ps 的 command 仍含本进程 execPath 才补刀,
-    // PID 复用给无关进程时校验不过、放弃补刀。
+    // 杀前身份校验(review P1 两轮):命令行匹配区分不了同一 App 的两次运行
+    // (更新器重启的新实例复用 PID 会被误杀), 所以布防时先捕获进程创建时间
+    // (lstart), 补刀前重取比对;不一致 = PID 已易主, 放弃。execPath grep 保留
+    // 作第二道校验。
     expect(args).toEqual([
       '-c',
-      `sleep ${SHUTDOWN_HARD_KILL_GRACE_SECONDS}; `
+      'started="$(ps -p 12345 -o lstart= 2>/dev/null)"; '
+      + '[ -n "$started" ] || exit 0; '
+      + `sleep ${SHUTDOWN_HARD_KILL_GRACE_SECONDS}; `
+      + '[ "$(ps -p 12345 -o lstart= 2>/dev/null)" = "$started" ] && '
       + "ps -p 12345 -o command= 2>/dev/null | grep -qF '/Apps/Cindy Test/Electron' && "
       + 'kill -9 12345 2>/dev/null',
     ]);
@@ -232,7 +237,7 @@ describe('armShutdownHardKillWatchdog', () => {
     );
   });
 
-  it('win32: cmd.exe /d /s /c "ping -n <grace+1> … & taskkill /f /pid <pid>" — windowsHide + unref', async () => {
+  it('win32: PowerShell 捕获 StartTime → Start-Sleep → StartTime+Path 双校验后 Stop-Process — windowsHide + unref', async () => {
     const { armShutdownHardKillWatchdog, SHUTDOWN_HARD_KILL_GRACE_SECONDS } =
       await freshLifecycle();
     const { spawn, child } = fakeSpawn();
@@ -241,7 +246,7 @@ describe('armShutdownHardKillWatchdog', () => {
       spawn,
       pid: 67890,
       platform: 'win32',
-      execPath: 'C\\Cindy\\Cindy.exe'.replace(/\\\\/g, '\\'),
+      execPath: 'C:\\Cindy\\Cindy.exe',
     });
 
     expect(spawn).toHaveBeenCalledTimes(1);
@@ -250,18 +255,32 @@ describe('armShutdownHardKillWatchdog', () => {
       string[],
       Record<string, unknown>,
     ];
-    // 规范拼写 COMSPEC(Windows env 大小写不敏感, 代码用规范名对齐 shellResolver);
-    // 非 Windows 测试机上没有该变量, 走 'cmd.exe' 兜底。
-    expect(cmd).toBe(process.env.COMSPEC ?? 'cmd.exe');
-    // 杀前身份校验:tasklist 映像名仍匹配本进程 exe 才 taskkill。
-    expect(args).toEqual([
-      '/d',
-      '/s',
-      '/c',
-      `ping -n ${SHUTDOWN_HARD_KILL_GRACE_SECONDS + 1} 127.0.0.1 >nul & `
-      + 'tasklist /FI "PID eq 67890" /NH | findstr /I /C:"Cindy.exe" >nul && '
-      + 'taskkill /f /pid 67890',
+    // cmd/tasklist 只能比映像名, 区分不了两次运行;换 Windows PowerShell 5.1
+    // (SystemRoot 绝对路径, 不依赖 PATH) 以进程创建时间为身份锚点。
+    expect(cmd).toBe(
+      `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
+    );
+    expect(args.slice(0, 5)).toEqual([
+      '-NoProfile',
+      '-NonInteractive',
+      '-WindowStyle',
+      'Hidden',
+      '-Command',
     ]);
+    const script = args[5];
+    // 布防时捕获创建时间;取不到 (进程已死) 则直接退出, 失败方向永远是"少杀"。
+    expect(script).toContain(
+      '$started = Get-Process -Id 67890 | Select-Object -ExpandProperty StartTime; if (-not $started) { exit }; ',
+    );
+    expect(script).toContain(`Start-Sleep -Seconds ${SHUTDOWN_HARD_KILL_GRACE_SECONDS}; `);
+    // 补刀前 StartTime + Path 双校验;属性读取走 Select-Object -ExpandProperty
+    // 兼容 Constrained Language Mode。
+    expect(script).toContain(
+      '$p = Get-Process -Id 67890; '
+      + 'if ($p -and ($p | Select-Object -ExpandProperty StartTime) -eq $started '
+      + "-and ($p | Select-Object -ExpandProperty Path) -eq 'C:\\Cindy\\Cindy.exe') "
+      + '{ Stop-Process -Id 67890 -Force }',
+    );
     expect(opts).toEqual({ detached: true, windowsHide: true, stdio: 'ignore' });
     expect(child.unref).toHaveBeenCalledTimes(1);
   });
