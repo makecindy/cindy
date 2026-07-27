@@ -121,6 +121,9 @@ const REHYDRATE_RETRY_MAX_MS = 30_000;
  */
 const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   'device-link:media:fetch': 30_000,
+  // searchCollect 在桌面端有 20s 的执行预算(SEARCH_COLLECT_TIMEOUT_MS),15s
+  // 默认会在合法慢搜索(大 workdir / SSH)完成前掐断;30s 同收紧前默认,零回归。
+  'file-browser:remote-op': 30_000,
 };
 
 /**
@@ -418,12 +421,20 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     // 熔断恢复回填:探测成功可能发生在任意业务请求上(不局限某个页面),设备从
     // unresponsive 集合移除时补一次 rehydrate——它 open 期间被跳过的订阅 / 快照
     // 不该等到下一次重连或回前台才回来。只在「有设备恢复」时触发,open 方向不动。
+    // 双向触发(review P1):
+    // - 设备恢复(移除):补一次 rehydrate,把 open 期间被跳过的订阅/快照拉回来;
+    // - 设备进入 open(新增):也要触发一次——熔断可能由普通页面请求凑满超时打开,
+    //   此刻若没有已在跑的 rehydrate 退避循环,probeDue 过滤逻辑根本无人执行,
+    //   主动探测永远不会启动。触发的这轮会因 skippedOpenDevices>0 进入 2s→30s
+    //   退避循环,成为探测心跳(每轮零管道流量,窗口到了自动带上探测)。
     let lastUnresponsiveSnapshot = unresponsiveDevicesStore.getSnapshot();
     const offUnresponsive = unresponsiveDevicesStore.subscribe(() => {
       const next = unresponsiveDevicesStore.getSnapshot();
-      const recovered = [...lastUnresponsiveSnapshot].some((deviceId) => !next.has(deviceId));
+      const changed =
+        next.size !== lastUnresponsiveSnapshot.size
+        || [...lastUnresponsiveSnapshot].some((deviceId) => !next.has(deviceId));
       lastUnresponsiveSnapshot = next;
-      if (recovered) void rehydrateWithClient(client);
+      if (changed) void rehydrateWithClient(client);
     });
 
     // 退后台的断连宽限状态:stopTimer 挂着表示还没真正 stop;backgroundAt 用于

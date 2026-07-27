@@ -84,9 +84,17 @@ export function loadSessionScheduleIndexThrottled(
   const promise = load();
   const entry: ScheduleIndexThrottleEntry = { at: now(), promise, failedAt: null };
   scheduleIndexThrottleEntries.set(key, entry);
-  promise.catch(() => {
-    if (scheduleIndexThrottleEntries.get(key) === entry) entry.failedAt = now();
-  });
+  promise.then(
+    () => {
+      // TTL 语义是「完成后 TTL 内复用」:一轮 load 本身耗时较长(1+N 串行)时,
+      // 若从启动时刻起算,可复用窗口会被吃掉大半甚至直接过期(review 反馈)。
+      // 成功落定时把基准挪到 resolve 时刻;在途期间的复用由单飞(同一 promise)保证。
+      if (scheduleIndexThrottleEntries.get(key) === entry) entry.at = now();
+    },
+    () => {
+      if (scheduleIndexThrottleEntries.get(key) === entry) entry.failedAt = now();
+    },
+  );
   return promise;
 }
 
