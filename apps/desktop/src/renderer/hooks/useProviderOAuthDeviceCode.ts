@@ -7,38 +7,44 @@ export interface ProviderOAuthDeviceCode {
 }
 
 /**
- * 订阅某个通用 OAuth 供应商的 Device Grant 短期代码。
+ * 管理某个通用 OAuth 登录的组件 ownership；Device Grant 流可同时订阅短期代码。
  * 代码只在组件内存中保留；切换供应商、取消或卸载都会清空。
  */
-export function useProviderOAuthDeviceCode(providerId: string | null) {
+export function useProviderOAuthDeviceCode(
+  providerId: string | null,
+  options?: { observeProgress?: boolean },
+) {
+  const observeProgress = options?.observeProgress ?? true;
   const [deviceCode, setDeviceCode] = useState<ProviderOAuthDeviceCode | null>(null);
   const ownedLoginRef = useRef<{ providerId: string; token: symbol } | null>(null);
 
   useEffect(() => {
     setDeviceCode(null);
     if (!providerId) return undefined;
-    const unsubscribe = window.electronAPI.maker.onProviderOAuthProgress((progress) => {
-      if (progress.providerId !== providerId || progress.phase !== 'device-code') return;
-      setDeviceCode({
-        verificationUrl: progress.verificationUrl,
-        userCode: progress.userCode,
-        expiresAt: progress.expiresAt,
-      });
-    });
+    const unsubscribe = observeProgress
+      ? window.electronAPI.maker.onProviderOAuthProgress((progress) => {
+          if (progress.providerId !== providerId || progress.phase !== 'device-code') return;
+          setDeviceCode({
+            verificationUrl: progress.verificationUrl,
+            userCode: progress.userCode,
+            expiresAt: progress.expiresAt,
+          });
+        })
+      : undefined;
     return () => {
-      unsubscribe();
+      unsubscribe?.();
       if (ownedLoginRef.current?.providerId === providerId) {
         ownedLoginRef.current = null;
         try {
-          void Promise.resolve(
-            window.electronAPI.maker.providerOAuthCancel(providerId),
-          ).catch(() => undefined);
+          void Promise.resolve(window.electronAPI.maker.providerOAuthCancel(providerId)).catch(
+            () => undefined,
+          );
         } catch {
           // Cleanup is best-effort; synchronous bridge failures must not escape effect teardown.
         }
       }
     };
-  }, [providerId]);
+  }, [observeProgress, providerId]);
 
   const beginOwnedLogin = useCallback(() => {
     if (!providerId) return () => undefined;

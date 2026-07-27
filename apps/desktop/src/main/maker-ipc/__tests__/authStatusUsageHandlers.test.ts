@@ -1,4 +1,4 @@
-import type { Maker } from '@cindy/maker-core';
+import type { AuthState, Maker } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 import { parseCodexDeviceCodeProgress, registerMakerAuthHandlers } from '../authHandlers';
 import { MAKER_INVOKE, MAKER_PUSH } from '../channels';
@@ -17,12 +17,7 @@ describe('maker auth IPC handlers', () => {
     const harness = new IpcHarness();
     const getAgentAuthState = vi.fn().mockResolvedValue({ authenticated: true });
 
-    registerMakerAuthHandlers(
-      harness,
-      createMakerStub({ getAgentAuthState }),
-      vi.fn(),
-      () => null,
-    );
+    registerMakerAuthHandlers(harness, createMakerStub({ getAgentAuthState }), vi.fn(), () => null);
 
     await expect(harness.invoke(MAKER_INVOKE.AUTH_GET_STATE, 'codex')).resolves.toEqual({
       authenticated: true,
@@ -37,19 +32,18 @@ describe('maker auth IPC handlers', () => {
     const refreshAgentLocalModels = vi.fn().mockResolvedValue(true);
     const triggerAgentLogin = vi
       .fn()
-      .mockImplementation(async (
-        _agentKind,
-        options: { mode?: string; onProgress: (msg: string) => void },
-      ) => {
-        options.onProgress('stdout:https://example.test/oauth');
-        options.onProgress('stderr:waiting');
-        options.onProgress('done');
-        return {
-          authenticated: true,
-          authSource: 'oauth',
-          identity: { email: 'dev@example.test' },
-        };
-      });
+      .mockImplementation(
+        async (_agentKind, options: { mode?: string; onProgress: (msg: string) => void }) => {
+          options.onProgress('stdout:https://example.test/oauth');
+          options.onProgress('stderr:waiting');
+          options.onProgress('done');
+          return {
+            authenticated: true,
+            authSource: 'oauth',
+            identity: { email: 'dev@example.test' },
+          };
+        },
+      );
 
     registerMakerAuthHandlers(
       harness,
@@ -99,14 +93,15 @@ describe('maker auth IPC handlers', () => {
   it('extracts a split ANSI-colored Codex device code and emits a structured progress event', async () => {
     const harness = new IpcHarness();
     const broadcast = vi.fn();
-    const triggerAgentLogin = vi.fn().mockImplementation(async (
-      _agentKind,
-      options: { mode?: string; onProgress: (msg: string) => void },
-    ) => {
-      options.onProgress('stdout:\u001b[1mhttps://auth.openai.com/codex/device\u001b[0m');
-      options.onProgress('stderr:Enter code \u001b[32mRUH2-7E2VH\u001b[0m');
-      return { authenticated: false, errorReason: 'login_cancelled' };
-    });
+    const triggerAgentLogin = vi
+      .fn()
+      .mockImplementation(
+        async (_agentKind, options: { mode?: string; onProgress: (msg: string) => void }) => {
+          options.onProgress('stdout:\u001b[1mhttps://auth.openai.com/codex/device\u001b[0m');
+          options.onProgress('stderr:Enter code \u001b[32mRUH2-7E2VH\u001b[0m');
+          return { authenticated: false, errorReason: 'login_cancelled' };
+        },
+      );
 
     registerMakerAuthHandlers(
       harness,
@@ -135,16 +130,17 @@ describe('maker auth IPC handlers', () => {
   it('reassembles URL and code tokens split across arbitrary stdout chunks', async () => {
     const harness = new IpcHarness();
     const broadcast = vi.fn();
-    const triggerAgentLogin = vi.fn().mockImplementation(async (
-      _agentKind,
-      options: { mode?: string; onProgress: (msg: string) => void },
-    ) => {
-      options.onProgress('stdout:Open https://auth.openai.com/cod');
-      options.onProgress('stdout:ex/device\nEnter code AB');
-      options.onProgress('stdout:CD-EF');
-      options.onProgress('stdout:GH\n');
-      return { authenticated: false, errorReason: 'login_cancelled' };
-    });
+    const triggerAgentLogin = vi
+      .fn()
+      .mockImplementation(
+        async (_agentKind, options: { mode?: string; onProgress: (msg: string) => void }) => {
+          options.onProgress('stdout:Open https://auth.openai.com/cod');
+          options.onProgress('stdout:ex/device\nEnter code AB');
+          options.onProgress('stdout:CD-EF');
+          options.onProgress('stdout:GH\n');
+          return { authenticated: false, errorReason: 'login_cancelled' };
+        },
+      );
 
     registerMakerAuthHandlers(
       harness,
@@ -169,12 +165,7 @@ describe('maker auth IPC handlers', () => {
   it('rejects unsupported login modes before invoking Maker', async () => {
     const harness = new IpcHarness();
     const triggerAgentLogin = vi.fn();
-    registerMakerAuthHandlers(
-      harness,
-      createMakerStub({ triggerAgentLogin }),
-      vi.fn(),
-      () => null,
-    );
+    registerMakerAuthHandlers(harness, createMakerStub({ triggerAgentLogin }), vi.fn(), () => null);
 
     await expect(
       harness.invoke(MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', { mode: 'password' }),
@@ -190,7 +181,9 @@ describe('maker auth IPC handlers', () => {
   it('keeps login successful and requests disk fallback when live model refresh fails', async () => {
     const harness = new IpcHarness();
     const onCodexAuthChange = vi.fn().mockResolvedValue(undefined);
-    const triggerAgentLogin = vi.fn().mockResolvedValue({ authenticated: true, authSource: 'oauth' });
+    const triggerAgentLogin = vi
+      .fn()
+      .mockResolvedValue({ authenticated: true, authSource: 'oauth' });
     const refreshAgentLocalModels = vi.fn().mockRejectedValue(new Error('model/list unavailable'));
 
     registerMakerAuthHandlers(
@@ -211,11 +204,16 @@ describe('maker auth IPC handlers', () => {
     const harness = new IpcHarness();
     const broadcast = vi.fn();
     let resolveRefresh!: (value: boolean) => void;
-    const refreshAgentLocalModels = vi.fn(() => new Promise<boolean>((resolve) => {
-      resolveRefresh = resolve;
-    }));
+    const refreshAgentLocalModels = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+    );
     const onCodexAuthChange = vi.fn().mockResolvedValue(undefined);
-    const triggerAgentLogin = vi.fn().mockResolvedValue({ authenticated: true, authSource: 'oauth' });
+    const triggerAgentLogin = vi
+      .fn()
+      .mockResolvedValue({ authenticated: true, authSource: 'oauth' });
     const logoutAgent = vi.fn().mockResolvedValue(undefined);
 
     registerMakerAuthHandlers(
@@ -248,10 +246,14 @@ describe('maker auth IPC handlers', () => {
     const harness = new IpcHarness();
     const broadcast = vi.fn();
     const cancelAgentLogin = vi.fn();
+    const logoutAgent = vi.fn().mockResolvedValue(undefined);
     let finishRefresh!: (value: boolean) => void;
-    const refreshAgentLocalModels = vi.fn(() => new Promise<boolean>((resolve) => {
-      finishRefresh = resolve;
-    }));
+    const refreshAgentLocalModels = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
     const triggerAgentLogin = vi.fn().mockResolvedValue({
       authenticated: true,
       authSource: 'oauth',
@@ -260,7 +262,12 @@ describe('maker auth IPC handlers', () => {
 
     registerMakerAuthHandlers(
       harness,
-      createMakerStub({ triggerAgentLogin, refreshAgentLocalModels, cancelAgentLogin }),
+      createMakerStub({
+        triggerAgentLogin,
+        refreshAgentLocalModels,
+        cancelAgentLogin,
+        logoutAgent,
+      }),
       broadcast,
       () => null,
       onCodexAuthChange,
@@ -268,19 +275,146 @@ describe('maker auth IPC handlers', () => {
 
     const login = harness.invoke(MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex');
     await vi.waitFor(() => expect(refreshAgentLocalModels).toHaveBeenCalledOnce());
-    await harness.invoke(MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex');
+    const cancel = harness.invoke(MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex');
     finishRefresh(true);
 
     await expect(login).resolves.toEqual({
       authenticated: false,
       errorReason: 'login_cancelled',
     });
+    await expect(cancel).resolves.toBeUndefined();
     expect(cancelAgentLogin).toHaveBeenCalledWith('codex');
-    expect(onCodexAuthChange).not.toHaveBeenCalled();
-    expect(broadcast).not.toHaveBeenCalledWith(
-      MAKER_PUSH.AUTH_STATE_CHANGED,
-      expect.objectContaining({ authenticated: true }),
+    expect(logoutAgent).toHaveBeenCalledWith('codex');
+    expect(onCodexAuthChange).toHaveBeenCalledOnce();
+    expect(onCodexAuthChange).toHaveBeenCalledWith(false, false, expect.any(Function));
+    expect(broadcast).toHaveBeenCalledWith(MAKER_PUSH.AUTH_STATE_CHANGED, {
+      agentKind: 'codex',
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+  });
+
+  it('reuses adapter-stage durable cancellation, then performs cache cleanup and one push', async () => {
+    const harness = new IpcHarness();
+    const broadcast = vi.fn();
+    const cancelAgentLogin = vi.fn();
+    const logoutAgent = vi.fn().mockResolvedValue(undefined);
+    const onCodexAuthChange = vi.fn().mockResolvedValue(undefined);
+    let finishLogin!: (state: { authenticated: false; errorReason: string }) => void;
+    const triggerAgentLogin = vi.fn(
+      () =>
+        new Promise<{ authenticated: false; errorReason: string }>((resolve) => {
+          finishLogin = resolve;
+        }),
     );
+
+    registerMakerAuthHandlers(
+      harness,
+      createMakerStub({ triggerAgentLogin, cancelAgentLogin, logoutAgent }),
+      broadcast,
+      () => null,
+      onCodexAuthChange,
+    );
+
+    const login = harness.invoke(MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex');
+    await vi.waitFor(() => expect(triggerAgentLogin).toHaveBeenCalledOnce());
+    const cancel = harness.invoke(MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex');
+    finishLogin({ authenticated: false, errorReason: 'login_cancelled' });
+
+    await expect(login).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+    await expect(cancel).resolves.toBeUndefined();
+    expect(logoutAgent).not.toHaveBeenCalled();
+    expect(onCodexAuthChange).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    expect(broadcast).toHaveBeenCalledWith(MAKER_PUSH.AUTH_STATE_CHANGED, {
+      agentKind: 'codex',
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+  });
+
+  it('treats Cancel with no in-flight login as a state-preserving no-op', async () => {
+    const harness = new IpcHarness();
+    const broadcast = vi.fn();
+    const cancelAgentLogin = vi.fn();
+    const logoutAgent = vi.fn();
+    const onCodexAuthChange = vi.fn();
+
+    registerMakerAuthHandlers(
+      harness,
+      createMakerStub({ cancelAgentLogin, logoutAgent }),
+      broadcast,
+      () => null,
+      onCodexAuthChange,
+    );
+
+    await expect(harness.invoke(MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex')).resolves.toBeUndefined();
+    expect(cancelAgentLogin).not.toHaveBeenCalled();
+    expect(logoutAgent).not.toHaveBeenCalled();
+    expect(onCodexAuthChange).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('does not let an older Cancel cleanup disconnect a newer login', async () => {
+    const harness = new IpcHarness();
+    const broadcast = vi.fn();
+    const cancelAgentLogin = vi.fn();
+    const logoutAgent = vi.fn().mockResolvedValue(undefined);
+    const onCodexAuthChange = vi.fn().mockResolvedValue(undefined);
+    let finishFirst!: (state: AuthState) => void;
+    let finishSecond!: (state: AuthState) => void;
+    const triggerAgentLogin = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<AuthState>((resolve) => {
+            finishFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<AuthState>((resolve) => {
+            finishSecond = resolve;
+          }),
+      );
+
+    registerMakerAuthHandlers(
+      harness,
+      createMakerStub({ triggerAgentLogin, cancelAgentLogin, logoutAgent }),
+      broadcast,
+      () => null,
+      onCodexAuthChange,
+    );
+
+    const first = harness.invoke(MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex');
+    await vi.waitFor(() => expect(triggerAgentLogin).toHaveBeenCalledTimes(1));
+    const cancel = harness.invoke(MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex');
+    const second = harness.invoke(MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex');
+    await vi.waitFor(() => expect(triggerAgentLogin).toHaveBeenCalledTimes(2));
+
+    finishFirst({ authenticated: false, errorReason: 'login_cancelled' });
+    finishSecond({ authenticated: true, authSource: 'api-key' });
+
+    await expect(first).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+    await expect(cancel).resolves.toBeUndefined();
+    await expect(second).resolves.toEqual({
+      authenticated: true,
+      authSource: 'api-key',
+    });
+    expect(logoutAgent).not.toHaveBeenCalled();
+    expect(onCodexAuthChange).not.toHaveBeenCalled();
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    expect(broadcast).toHaveBeenCalledWith(MAKER_PUSH.AUTH_STATE_CHANGED, {
+      agentKind: 'codex',
+      authenticated: true,
+      authSource: 'api-key',
+    });
   });
 
   it('does not refresh Codex models when login fails', async () => {
@@ -382,12 +516,18 @@ describe('maker auth IPC handlers', () => {
     const harness = new IpcHarness();
     let finishLogout!: () => void;
     let finishFinalization!: () => void;
-    const logoutAgent = vi.fn(() => new Promise<void>((resolve) => {
-      finishLogout = resolve;
-    }));
-    const onCodexAuthChange = vi.fn(() => new Promise<void>((resolve) => {
-      finishFinalization = resolve;
-    }));
+    const logoutAgent = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishLogout = resolve;
+        }),
+    );
+    const onCodexAuthChange = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFinalization = resolve;
+        }),
+    );
     const triggerAgentLogin = vi.fn().mockResolvedValue({
       authenticated: false,
       errorReason: 'login_cancelled',
@@ -422,12 +562,15 @@ describe('maker auth IPC handlers', () => {
   it('cancels a login request while it is queued behind logout finalization', async () => {
     const harness = new IpcHarness();
     let finishLogout!: () => void;
-    const logoutAgent = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          finishLogout = resolve;
-        }),
-    );
+    const logoutAgent = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishLogout = resolve;
+          }),
+      )
+      .mockResolvedValue(undefined);
     const triggerAgentLogin = vi.fn().mockResolvedValue({
       authenticated: true,
       authSource: 'oauth',
@@ -447,7 +590,7 @@ describe('maker auth IPC handlers', () => {
     const login = harness.invoke(MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex');
     expect(triggerAgentLogin).not.toHaveBeenCalled();
 
-    await harness.invoke(MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex');
+    const cancel = harness.invoke(MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex');
     finishLogout();
 
     await expect(logout).resolves.toBeUndefined();
@@ -455,16 +598,21 @@ describe('maker auth IPC handlers', () => {
       authenticated: false,
       errorReason: 'login_cancelled',
     });
+    await expect(cancel).resolves.toBeUndefined();
     expect(cancelAgentLogin).toHaveBeenCalledWith('codex');
+    expect(logoutAgent).toHaveBeenCalledOnce();
     expect(triggerAgentLogin).not.toHaveBeenCalled();
   });
 
   it('waits for a later logout that supersedes the finalization already being awaited', async () => {
     const harness = new IpcHarness();
     const logoutResolvers: Array<() => void> = [];
-    const logoutAgent = vi.fn(() => new Promise<void>((resolve) => {
-      logoutResolvers.push(resolve);
-    }));
+    const logoutAgent = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          logoutResolvers.push(resolve);
+        }),
+    );
     const triggerAgentLogin = vi.fn().mockResolvedValue({
       authenticated: false,
       errorReason: 'login_cancelled',
@@ -581,8 +729,8 @@ describe('parseCodexDeviceCodeProgress', () => {
   it('finds the official device page after unrelated URLs in cumulative CLI output', () => {
     expect(
       parseCodexDeviceCodeProgress(
-        'Learn more at https://developers.openai.com/codex/auth\n'
-          + 'Open https://auth.openai.com/codex/device and enter ABCD-EFGH',
+        'Learn more at https://developers.openai.com/codex/auth\n' +
+          'Open https://auth.openai.com/codex/device and enter ABCD-EFGH',
       ),
     ).toEqual({
       verificationUrl: 'https://auth.openai.com/codex/device',
@@ -752,19 +900,22 @@ describe('maker usage IPC handlers', () => {
       rateLimits: snapshot,
     });
 
-    registerMakerUsageHandlers(harness, makeUsageDeps({
-      readCodexRateLimits,
-      consumeCodexRateLimitReset,
-    }));
+    registerMakerUsageHandlers(
+      harness,
+      makeUsageDeps({
+        readCodexRateLimits,
+        consumeCodexRateLimitReset,
+      }),
+    );
 
     await expect(harness.invoke(MAKER_INVOKE.USAGE_CODEX_RATE_LIMITS)).resolves.toEqual(snapshot);
-    await expect(harness.invoke(
-      MAKER_INVOKE.USAGE_CODEX_RATE_LIMIT_RESET,
-      '018f4ec7-c6d8-7f10-8d43-9f8791d33000',
-    )).resolves.toEqual({ outcome: 'reset', rateLimits: snapshot });
-    expect(consumeCodexRateLimitReset).toHaveBeenCalledWith(
-      '018f4ec7-c6d8-7f10-8d43-9f8791d33000',
-    );
+    await expect(
+      harness.invoke(
+        MAKER_INVOKE.USAGE_CODEX_RATE_LIMIT_RESET,
+        '018f4ec7-c6d8-7f10-8d43-9f8791d33000',
+      ),
+    ).resolves.toEqual({ outcome: 'reset', rateLimits: snapshot });
+    expect(consumeCodexRateLimitReset).toHaveBeenCalledWith('018f4ec7-c6d8-7f10-8d43-9f8791d33000');
   });
 
   it('rejects arbitrary reset input before it reaches the mutation dependency', async () => {
@@ -772,24 +923,25 @@ describe('maker usage IPC handlers', () => {
     const consumeCodexRateLimitReset = vi.fn();
     registerMakerUsageHandlers(harness, makeUsageDeps({ consumeCodexRateLimitReset }));
 
-    await expect(harness.invoke(
-      MAKER_INVOKE.USAGE_CODEX_RATE_LIMIT_RESET,
-      'credit-id-from-client',
-    )).rejects.toThrow(/idempotencyKey must be a UUID/);
+    await expect(
+      harness.invoke(MAKER_INVOKE.USAGE_CODEX_RATE_LIMIT_RESET, 'credit-id-from-client'),
+    ).rejects.toThrow(/idempotencyKey must be a UUID/);
     expect(consumeCodexRateLimitReset).not.toHaveBeenCalled();
   });
 
   it('encodes stale reset offers as a stable IPC precondition error', async () => {
     const harness = new IpcHarness();
-    const consumeCodexRateLimitReset = vi.fn().mockRejectedValue(
-      new CodexRateLimitResetRejectedError('OFFER_EXPIRED', 'refresh usage'),
-    );
+    const consumeCodexRateLimitReset = vi
+      .fn()
+      .mockRejectedValue(new CodexRateLimitResetRejectedError('OFFER_EXPIRED', 'refresh usage'));
     registerMakerUsageHandlers(harness, makeUsageDeps({ consumeCodexRateLimitReset }));
 
-    await expect(harness.invoke(
-      MAKER_INVOKE.USAGE_CODEX_RATE_LIMIT_RESET,
-      '018f4ec7-c6d8-7f10-8d43-9f8791d33000',
-    )).rejects.toMatchObject({
+    await expect(
+      harness.invoke(
+        MAKER_INVOKE.USAGE_CODEX_RATE_LIMIT_RESET,
+        '018f4ec7-c6d8-7f10-8d43-9f8791d33000',
+      ),
+    ).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
       message: expect.stringContaining('OFFER_EXPIRED'),
     });
@@ -797,9 +949,11 @@ describe('maker usage IPC handlers', () => {
 
   it('encodes account changes during rate-limit reads as a stable IPC precondition error', async () => {
     const harness = new IpcHarness();
-    const readCodexRateLimits = vi.fn().mockRejectedValue(
-      new CodexRateLimitResetRejectedError('ACCOUNT_CHANGED', 'retry after account settles'),
-    );
+    const readCodexRateLimits = vi
+      .fn()
+      .mockRejectedValue(
+        new CodexRateLimitResetRejectedError('ACCOUNT_CHANGED', 'retry after account settles'),
+      );
     registerMakerUsageHandlers(harness, makeUsageDeps({ readCodexRateLimits }));
 
     await expect(harness.invoke(MAKER_INVOKE.USAGE_CODEX_RATE_LIMITS)).rejects.toMatchObject({

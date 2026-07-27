@@ -104,6 +104,10 @@ export function registerMakerAuthHandlers(
   const loginRequestGeneration = new Map<AgentKind, number>();
   const loginCancellationGeneration = new Map<AgentKind, number>();
   const logoutFinalizations = new Map<AgentKind, Promise<void>>();
+  const activeLoginOperations = new Map<
+    AgentKind,
+    { settled: Promise<void>; requiresDurableDisconnect: boolean }
+  >();
   const beginMutation = (kind: AgentKind): number => {
     const generation = (mutationGeneration.get(kind) ?? 0) + 1;
     mutationGeneration.set(kind, generation);
@@ -151,83 +155,132 @@ export function registerMakerAuthHandlers(
     async (_e, agentKind: unknown, rawOptions?: unknown): Promise<AuthState> => {
       const kind = requireAgentKind(agentKind);
       const mode = requireLoginMode(kind, rawOptions);
-      // 先登记请求再等待注销收尾，使等待期间到达的 Cancel 也能作废这次登录。
-      // 此 generation 与 auth mutation 分离，避免排队登录反过来提前作废正在收尾的 logout。
-      const loginGeneration = beginLoginRequest(kind);
-      const cancellationGeneration = currentLoginCancellation(kind);
-      const invalidatedState = (): AuthState =>
-        currentLoginCancellation(kind) !== cancellationGeneration
-          ? cancelledAuthState()
-          : supersededAuthState();
-      // Adapter 会把注销期间到达的登录排在 CLI logout 后面；这里还必须等主进程完成
-      // credential bridge / model snapshot 的注销收尾，再建立新的 mutation generation。
-      // 否则新登录会提前作废旧 generation，导致注销回调被跳过。
-      await waitForLatestLogoutFinalization(kind);
-      if (!isLoginRequestCurrent(kind, loginGeneration)) return invalidatedState();
-      const generation = beginMutation(kind);
-      const isCurrent = (): boolean =>
-        isLoginRequestCurrent(kind, loginGeneration) && isMutationCurrent(kind, generation);
-      const progressText = { stdout: '', stderr: '', other: '' };
-      let emittedDeviceCode = '';
-      const result = await maker.triggerAgentLogin(kind, {
-        mode,
-        onProgress: (msg) => {
-          if (!isCurrent()) return;
-          broadcast(MAKER_PUSH.AUTH_LOGIN_PROGRESS, toLoginProgressPayload(kind, msg, mode));
-          if (kind !== 'codex' || mode !== 'device-code') return;
+      let settleOperation!: () => void;
+      const activeOperation = {
+        settled: new Promise<void>((resolve) => {
+          settleOperation = resolve;
+        }),
+        requiresDurableDisconnect: false,
+      };
+      activeLoginOperations.set(kind, activeOperation);
+      try {
+        // 先登记请求再等待注销收尾，使等待期间到达的 Cancel 也能作废这次登录。
+        // 此 generation 与 auth mutation 分离，避免排队登录反过来提前作废正在收尾的 logout。
+        const loginGeneration = beginLoginRequest(kind);
+        const cancellationGeneration = currentLoginCancellation(kind);
+        const invalidatedState = (): AuthState =>
+          currentLoginCancellation(kind) !== cancellationGeneration
+            ? cancelledAuthState()
+            : supersededAuthState();
+        // Adapter 会把注销期间到达的登录排在 CLI logout 后面；这里还必须等主进程完成
+        // credential bridge / model snapshot 的注销收尾，再建立新的 mutation generation。
+        // 否则新登录会提前作废旧 generation，导致注销回调被跳过。
+        await waitForLatestLogoutFinalization(kind);
+        if (!isLoginRequestCurrent(kind, loginGeneration)) return invalidatedState();
+        const generation = beginMutation(kind);
+        const isCurrent = (): boolean =>
+          isLoginRequestCurrent(kind, loginGeneration) && isMutationCurrent(kind, generation);
+        const progressText = { stdout: '', stderr: '', other: '' };
+        let emittedDeviceCode = '';
+        const result = await maker.triggerAgentLogin(kind, {
+          mode,
+          onProgress: (msg) => {
+            if (!isCurrent()) return;
+            broadcast(MAKER_PUSH.AUTH_LOGIN_PROGRESS, toLoginProgressPayload(kind, msg, mode));
+            if (kind !== 'codex' || mode !== 'device-code') return;
 
-          const stream = progressStream(msg);
-          progressText[stream] = (progressText[stream] + progressDetail(msg)).slice(
-            -MAX_LOGIN_PROGRESS_CHARS,
-          );
-          // stdout / stderr 是互相独立的字节流，只在两条流之间加分隔；同一流的
-          // data chunk 必须原样拼接，chunk 边界可能恰好落在 URL 或设备码中间。
-          const deviceCode = parseCodexDeviceCodeProgress(
-            [progressText.stdout, progressText.stderr, progressText.other].join('\n'),
-          );
-          if (!deviceCode) return;
-          const signature = `${deviceCode.verificationUrl}\n${deviceCode.userCode}`;
-          if (signature === emittedDeviceCode) return;
-          emittedDeviceCode = signature;
-          broadcast(MAKER_PUSH.AUTH_LOGIN_PROGRESS, {
-            agentKind: kind,
-            phase: 'device-code',
-            mode,
-            ...deviceCode,
-          });
-        },
-      });
-      if (!isCurrent()) return invalidatedState();
-      if (kind === 'codex' && result.authenticated && result.authSource === 'oauth') {
-        let liveModelsApplied = false;
-        try {
-          liveModelsApplied = await maker.refreshAgentLocalModels('codex');
-        } catch (e) {
-          // 登录本身已成功；实时模型发现失败时由 host 回退磁盘快照，不能把登录判失败。
-          // 但记异常原因(原先静默吞掉,首登无模型时无从诊断是 app-server 起不来还是
-          // model/list RPC 出错)——走统一 logger(规则 12),不影响登录结果。
-          log.warn(
-            `codex live model refresh threw during login: ${e instanceof Error ? e.message : String(e)}`,
-          );
+            const stream = progressStream(msg);
+            progressText[stream] = (progressText[stream] + progressDetail(msg)).slice(
+              -MAX_LOGIN_PROGRESS_CHARS,
+            );
+            // stdout / stderr 是互相独立的字节流，只在两条流之间加分隔；同一流的
+            // data chunk 必须原样拼接，chunk 边界可能恰好落在 URL 或设备码中间。
+            const deviceCode = parseCodexDeviceCodeProgress(
+              [progressText.stdout, progressText.stderr, progressText.other].join('\n'),
+            );
+            if (!deviceCode) return;
+            const signature = `${deviceCode.verificationUrl}\n${deviceCode.userCode}`;
+            if (signature === emittedDeviceCode) return;
+            emittedDeviceCode = signature;
+            broadcast(MAKER_PUSH.AUTH_LOGIN_PROGRESS, {
+              agentKind: kind,
+              phase: 'device-code',
+              mode,
+              ...deviceCode,
+            });
+          },
+        });
+        // Adapter 已返回 OAuth 成功后，pending login 会被清掉；若 Cancel 落在后续模型刷新/
+        // bridge 收口阶段，只有 handler 能再建立 durable disconnect。Adapter 自己返回
+        // login_cancelled 的路径已在 finalize 内完成必要清理，不能重复 logout。
+        activeOperation.requiresDurableDisconnect =
+          result.authenticated && result.authSource === 'oauth';
+        if (!isCurrent()) return invalidatedState();
+        if (kind === 'codex' && result.authenticated && result.authSource === 'oauth') {
+          let liveModelsApplied = false;
+          try {
+            liveModelsApplied = await maker.refreshAgentLocalModels('codex');
+          } catch (e) {
+            // 登录本身已成功；实时模型发现失败时由 host 回退磁盘快照，不能把登录判失败。
+            // 但记异常原因(原先静默吞掉,首登无模型时无从诊断是 app-server 起不来还是
+            // model/list RPC 出错)——走统一 logger(规则 12),不影响登录结果。
+            log.warn(
+              `codex live model refresh threw during login: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+          if (!isCurrent()) return invalidatedState();
+          await onCodexAuthChange?.(true, liveModelsApplied, isCurrent);
+          if (!isCurrent()) return invalidatedState();
         }
-        if (!isCurrent()) return invalidatedState();
-        await onCodexAuthChange?.(true, liveModelsApplied, isCurrent);
-        if (!isCurrent()) return invalidatedState();
+        broadcast(MAKER_PUSH.AUTH_STATE_CHANGED, { agentKind: kind, ...result });
+        return result;
+      } finally {
+        if (activeLoginOperations.get(kind) === activeOperation) {
+          activeLoginOperations.delete(kind);
+        }
+        settleOperation();
       }
-      broadcast(MAKER_PUSH.AUTH_STATE_CHANGED, { agentKind: kind, ...result });
-      return result;
     },
   );
 
   registry.handle(MAKER_INVOKE.AUTH_CANCEL_LOGIN, async (_e, agentKind: unknown): Promise<void> => {
     const kind = requireAgentKind(agentKind);
+    const activeOperation = activeLoginOperations.get(kind);
+    // 无在途登录的迟到 Cancel 是彻底的 no-op：既不能翻转已认证状态，也不能推进
+    // generation 后误作废正在收尾的 logout。
+    if (!activeOperation) return;
     // Cancel is an auth mutation too: invalidate handler-level refresh/finalization work even
     // when the CLI process has already exited and the adapter is reconciling credentials. The
     // separate login request generation also covers a request still queued behind logout.
     beginLoginCancellation(kind);
-    beginLoginRequest(kind);
-    beginMutation(kind);
+    const loginGeneration = beginLoginRequest(kind);
+    const generation = beginMutation(kind);
+    const isCurrent = (): boolean =>
+      isLoginRequestCurrent(kind, loginGeneration) && isMutationCurrent(kind, generation);
     maker.cancelAgentLogin(kind);
+
+    // 等被取消 handler 完全退出（含 adapter finalize / model refresh checkpoint），再建立
+    // 唯一的取消收口边界。否则旧 handler 可能在这次清理之后迟到写回缓存或成功广播。
+    await activeOperation.settled;
+    if (!isCurrent()) return;
+    if (kind === 'codex') {
+      if (activeOperation.requiresDurableDisconnect) {
+        try {
+          // Cancel 可能落在 adapter 已返回成功、handler 正刷新模型的窗口；此时 adapter 的
+          // cancelLogin 已无 pending process，必须显式走 durable logout 才不会留下新 token。
+          await maker.logoutAgent(kind);
+        } catch (err) {
+          throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+        }
+      }
+      if (!isCurrent()) return;
+      await onCodexAuthChange?.(false, false, isCurrent);
+    }
+    if (!isCurrent()) return;
+    broadcast(MAKER_PUSH.AUTH_STATE_CHANGED, {
+      agentKind: kind,
+      ...cancelledAuthState(),
+    });
   });
 
   registry.handle(MAKER_INVOKE.AUTH_LOGOUT, async (_e, agentKind: unknown): Promise<void> => {

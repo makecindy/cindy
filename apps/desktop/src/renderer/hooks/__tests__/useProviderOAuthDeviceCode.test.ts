@@ -93,6 +93,20 @@ describe('useProviderOAuthDeviceCode', () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+  it('owns and cancels authorization-code login without subscribing to device progress', () => {
+    const onProgress = window.electronAPI.maker.onProviderOAuthProgress as ReturnType<typeof vi.fn>;
+    const { result, unmount } = renderHook(() =>
+      useProviderOAuthDeviceCode('provider-a', { observeProgress: false }),
+    );
+
+    expect(onProgress).not.toHaveBeenCalled();
+    result.current.beginOwnedLogin();
+    unmount();
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledWith('provider-a');
+  });
+
   it('ignores a synchronous cancellation failure during cleanup', async () => {
     cancel.mockImplementationOnce(() => {
       throw new Error('sync cancellation failure');

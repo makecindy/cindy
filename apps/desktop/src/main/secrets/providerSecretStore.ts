@@ -624,6 +624,36 @@ export const genericOAuthSecretIo = {
       return null;
     }
   },
+  readStrict(providerId: string): string | null {
+    const logicalKey = providerOAuthStorageKey(providerId);
+    const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
+    if (!scopedKey) throw new Error('provider secret owner is unavailable');
+    let encoded: string;
+    try {
+      encoded = fs.readFileSync(path.join(secretDir(), `${scopedKey}.enc`), 'utf-8');
+    } catch (err) {
+      if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      log.warn(
+        { providerId, err: err instanceof Error ? err.message : String(err) },
+        'read generic oauth blob snapshot failed',
+      );
+      throw new Error('existing OAuth credential is unreadable');
+    }
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('provider credential encryption is unavailable');
+    }
+    try {
+      return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+    } catch (err) {
+      log.warn(
+        { providerId, err: err instanceof Error ? err.message : String(err) },
+        'decrypt generic oauth blob snapshot failed',
+      );
+      throw new Error('existing OAuth credential is unreadable');
+    }
+  },
   write(providerId: string, value: string): boolean {
     try {
       return electronSecretIo.write(providerOAuthStorageKey(providerId), value);

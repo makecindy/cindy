@@ -4,15 +4,18 @@
  * 背景:控制端远程会话曾靠 `provider.routing[agent].supportsFastMode` 决定显隐 Fast 开关,
  * 故投影需保留该字段。**现 Fast 能力已收归 per-(provider, agent) 的 `models[agent].supportsFastMode`
  * (唯一真相)**,控制端从隧道带来的 `models` 现查、不再读 routing,于是投影把 routing 的
- * 全部字段整条剥掉(只留 agent 键 + 空对象以维持形状)。本测试锁住三件事:
+ * 执行字段整条剥掉，只保留跨端可用性需要的 `disabled:true` 与可选 wireProtocol。
+ * 本测试锁住五件事:
  *   1. 执行细节字段(upstream / authStrategy / headerDelete / headerOverride / modelIdRewrite /
  *      adapter) → 投影后全部消失(安全边界 D3)。
  *   2. 即便输入里残留 supportsFastMode → 也一并剥掉(routing 不再承载任何 Fast 信息)。
  *   3. models[agent](含 supportsFastMode 显示门控)原样透传 —— Fast 显隐数据源在这里。
- *   4. 品牌只以非敏感 logoKind 透传;重命名 preset 仍可识别,upstream 绝不泄漏。
+ *   4. disabled runtime 在控制端仍保持禁用，不会被共享 registry 重新列为可选。
+ *   5. 品牌只以非敏感 logoKind 透传;重命名 preset 仍可识别,upstream 绝不泄漏。
  * 只 mock electron(app)+ logger,与同目录 dispatchSendSafety.test 同范式。
  */
 import { describe, it, expect, vi } from 'vitest';
+import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 vi.mock('electron', () => ({
@@ -118,6 +121,22 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     expect(routing.codex).toEqual({ wireProtocol: 'openai-chat' });
     expect(routing.codex).not.toHaveProperty('upstream');
     expect(routing.codex).not.toHaveProperty('authStrategy');
+  });
+
+  it('保留 disabled:true 可用性门控，避免禁用 runtime 在控制端重新变成可选', () => {
+    const provider = xdProviderWithFullRouting() as ReturnType<typeof xdProviderWithFullRouting> & {
+      routing: { codex: Record<string, unknown>; 'claude-code': Record<string, unknown> };
+    };
+    provider.routing.codex.disabled = true;
+    const { providers } = project({ providers: [provider] });
+    const routing = providers[0].routing as Record<string, Record<string, unknown>>;
+
+    expect(routing.codex).toEqual({ disabled: true });
+    expect(routing['claude-code']).toEqual({});
+    expect(connectedProvidersForAgent(providers as unknown as ProviderView[], 'codex')).toEqual([]);
+    expect(connectedProvidersForAgent(providers as unknown as ProviderView[], 'claude-code'))
+      .toHaveLength(1);
+    expect(JSON.stringify(routing)).not.toContain(XD_GATEWAY_BASE_URL);
   });
 
   it('models[agent] 原样透传（Fast 显隐数据源:per-provider supportsFastMode）', () => {

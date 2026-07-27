@@ -101,6 +101,29 @@ const DEVICE_PROVIDER = {
   models: { codex: [] },
   connected: false,
 } satisfies ProviderView;
+const AUTH_CODE_PROVIDER = {
+  id: 'auth-code-provider',
+  name: 'Authorization Code Provider',
+  source: 'builtin',
+  agents: ['codex'],
+  auth: {
+    method: 'oauth',
+    oauth: {
+      authorizeUrl: 'https://auth.example.test/authorize',
+      tokenUrl: 'https://auth.example.test/token',
+      clientId: 'auth-code-client',
+      scopes: 'openid',
+    },
+  },
+  routing: {
+    codex: {
+      upstream: 'https://api.example.test/v1',
+      authStrategy: 'oauth-token',
+    },
+  },
+  models: { codex: [] },
+  connected: false,
+} satisfies ProviderView;
 
 const providerOAuthLogin = vi.fn();
 const providerOAuthCancel = vi.fn();
@@ -290,5 +313,28 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     unmount();
     expect(providerOAuthCancel).toHaveBeenCalledOnce();
     expect(providerOAuthCancel).toHaveBeenCalledWith(DEVICE_PROVIDER.id);
+  });
+
+  it('authorization-code 登录期间被父级卸载时取消仍在等待的回环授权', async () => {
+    providerOAuthLogin.mockImplementation(() => new Promise(() => undefined));
+    const { unmount } = render(
+      <AddProviderWizard
+        providers={[AUTH_CODE_PROVIDER]}
+        entry={{ kind: 'builtin', providerId: AUTH_CODE_PROVIDER.id }}
+        onOpenCustomForm={vi.fn()}
+        onClose={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('settings.providers.button.authorize'));
+    await waitFor(() =>
+      expect(providerOAuthLogin).toHaveBeenCalledWith(AUTH_CODE_PROVIDER.id),
+    );
+    expect(providerOAuthProgressListener).toBeNull();
+
+    unmount();
+    expect(providerOAuthCancel).toHaveBeenCalledOnce();
+    expect(providerOAuthCancel).toHaveBeenCalledWith(AUTH_CODE_PROVIDER.id);
   });
 });

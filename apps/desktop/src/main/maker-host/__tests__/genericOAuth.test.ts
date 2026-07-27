@@ -65,6 +65,7 @@ function memStorage(): GenericOAuthStorage & { map: Map<string, string> } {
   return {
     map,
     read: (id) => map.get(id) ?? null,
+    readStrict: (id) => map.get(id) ?? null,
     write: (id, v) => {
       map.set(id, v);
       return true;
@@ -145,6 +146,35 @@ describe('blob 读写 / has / logout', () => {
 
     resetGenericOAuthMemoryCache();
     expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('at-1');
+  });
+
+  it('冷缓存严格快照不可读时在删除前中止，不把现有凭证误判成缺失', () => {
+    storage.map.set('acme', JSON.stringify({ access_token: 'at-1' }));
+    const remove = storage.remove;
+    storage.remove = () => {
+      throw new Error('must not remove');
+    };
+    storage.readStrict = () => {
+      throw new Error('safeStorage unavailable');
+    };
+    resetGenericOAuthMemoryCache();
+
+    expect(removeGenericOAuthCredentialsReversibly('acme')).toBeNull();
+    expect(storage.map.get('acme')).toContain('at-1');
+
+    storage.remove = remove;
+  });
+
+  it('回滚按原始字符串恢复持久 blob，同时恢复删除前的热缓存', () => {
+    const raw = '{ "access_token": "durable", "refresh_token": "rt" }';
+    storage.map.set('acme', raw);
+    resetGenericOAuthMemoryCache();
+    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('durable');
+
+    const restore = removeGenericOAuthCredentialsReversibly('acme');
+    expect(restore?.()).toBe(true);
+    expect(storage.map.get('acme')).toBe(raw);
+    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('durable');
   });
 
   it('凭证删除失败时保留当前登录态并返回失败', () => {

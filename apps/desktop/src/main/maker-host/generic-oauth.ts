@@ -47,6 +47,11 @@ const DEFAULT_TOKEN_TTL_MS = 60 * 60 * 1000;
 // ── 注入点（默认 no-op，host 启动期接线；测试注入内存实现）──────────────────────
 export interface GenericOAuthStorage {
   read(providerId: string): string | null;
+  /**
+   * 配置 mutation 前的严格快照读取：不存在返回 null；读取/解密失败必须抛错，
+   * 不能像热路径 read 一样折叠成“无凭证”。
+   */
+  readStrict(providerId: string): string | null;
   write(providerId: string, value: string): boolean;
   remove(providerId: string): boolean;
 }
@@ -76,7 +81,12 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 let io: GenericOAuthIo = {
-  storage: { read: () => null, write: () => false, remove: () => true },
+  storage: {
+    read: () => null,
+    readStrict: () => null,
+    write: () => false,
+    remove: () => true,
+  },
   fetchImpl: fetch,
   openExternal: async () => {
     throw new Error('generic-oauth openExternal not configured');
@@ -131,19 +141,21 @@ function blobFromTokenResponse(t: TokenResponse, prev?: OAuthTokenBlob | null): 
 // undefined = 尚未从磁盘读过；null = 确认无凭证。凭证只经本模块读写，失效点精确。
 const blobCache = new Map<string, OAuthTokenBlob | null>();
 
+function parseBlob(raw: string | null): OAuthTokenBlob | null {
+  if (!raw) return null;
+  try {
+    const blob = JSON.parse(raw) as OAuthTokenBlob;
+    return typeof blob.access_token === 'string' && blob.access_token.length > 0 ? blob : null;
+  } catch {
+    return null;
+  }
+}
+
 function readBlob(providerId: string): OAuthTokenBlob | null {
   const cached = blobCache.get(providerId);
   if (cached !== undefined) return cached;
   const raw = io.storage.read(providerId);
-  let blob: OAuthTokenBlob | null = null;
-  if (raw) {
-    try {
-      const b = JSON.parse(raw) as OAuthTokenBlob;
-      blob = typeof b.access_token === 'string' && b.access_token.length > 0 ? b : null;
-    } catch {
-      blob = null;
-    }
-  }
+  const blob = parseBlob(raw);
   blobCache.set(providerId, blob);
   return blob;
 }
@@ -181,13 +193,28 @@ export function logoutGenericOAuth(providerId: string): boolean {
 export function removeGenericOAuthCredentialsReversibly(
   providerId: string,
 ): (() => boolean) | null {
-  const previous = readBlob(providerId);
+  let previousRaw: string | null;
+  try {
+    previousRaw = io.storage.readStrict(providerId);
+  } catch (err) {
+    log.warn('generic oauth 凭证严格快照失败，拒绝删除', {
+      providerId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+  const durableBlob = parseBlob(previousRaw);
+  // 已有文件却无法解析也不是“无凭证”。保留原始文件并中止 mutation，避免配置失败回滚时
+  // 把坏/新版 blob 静默删掉；未来格式迁移仍有恢复机会。
+  if (previousRaw !== null && !durableBlob) return null;
+  const cachedBeforeDelete = blobCache.get(providerId);
+  const cacheToRestore = cachedBeforeDelete ?? durableBlob;
   if (!logoutGenericOAuth(providerId)) return null;
   return () => {
-    if (!previous) return true;
-    const restored = io.storage.write(providerId, JSON.stringify(previous));
-    if (restored) blobCache.set(providerId, previous);
-    return restored;
+    if (previousRaw !== null && !io.storage.write(providerId, previousRaw)) return false;
+    if (cacheToRestore !== undefined) blobCache.set(providerId, cacheToRestore);
+    else blobCache.delete(providerId);
+    return true;
   };
 }
 

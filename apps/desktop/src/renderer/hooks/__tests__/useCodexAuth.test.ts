@@ -414,6 +414,27 @@ describe('useCodexAuth lifecycle', () => {
     expect(result.current.state).toEqual({ kind: 'unauthenticated' });
   });
 
+  it('lets an observer-only window leave login-pending when main broadcasts cancellation', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState.mockResolvedValueOnce({ authenticated: false });
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('unauthenticated'));
+    act(() => {
+      loginProgressListener(auth)({ agentKind: 'codex', phase: 'login-pending' });
+    });
+    expect(result.current.state).toEqual({ kind: 'login-pending', mode: 'browser' });
+
+    act(() => {
+      stateChangedListener(auth)({
+        agentKind: 'codex',
+        authenticated: false,
+        errorReason: 'login_cancelled',
+      });
+    });
+    expect(result.current.state).toEqual({ kind: 'unauthenticated' });
+  });
+
   it('keeps reconnect-required after a reconnection attempt is cancelled', async () => {
     const auth = installAuthApi(async () => undefined);
     auth.getState.mockResolvedValueOnce({

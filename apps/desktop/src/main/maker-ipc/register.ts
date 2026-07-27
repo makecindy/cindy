@@ -412,7 +412,10 @@ import {
   storeCustomProviderKey,
 } from '../secrets/providerSecretStore.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
-import { getModelVisibilityMirrorSnapshot, setModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
+import {
+  getModelVisibilityMirrorSnapshot,
+  syncModelVisibilityMirror,
+} from '../maker-host/model-visibility-mirror.js';
 import { setClaudeProxySessionIdResolver } from '../maker-host/anthropic-compat-proxy-host.js';
 import {
   clearClaudeSessionBackgroundActivity,
@@ -7141,10 +7144,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   });
 
   // renderer → main 单向镜像「模型显示/隐藏」override(整张快照,fire-and-forget,不落盘)。
-  // main 缓存供 IM /model 派生模型列表时复用同一套可见性过滤,与应用内列表逐模型一致。
+  // main 缓存供 IM /model 与 device-link provider:list 复用同一套可见性过滤。值实变时
+  // 复用 PROVIDER_CHANGED 目录失效事件，让已连接控制端驱逐缓存并重拉 override 快照。
   // 容错存储(非对象 ⇒ 清空),无错误路径,故不需要 throwIpcError。
   ipcMain.handle(MAKER_INVOKE.MODEL_VISIBILITY_SYNC, async (_e, map: unknown) => {
-    setModelVisibilityMirror(map);
+    syncModelVisibilityMirror(map, () => {
+      broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+    });
   });
 
   // 附加只读引用目录的运行时 closure 推送。DB 持久化由 renderer 同步调

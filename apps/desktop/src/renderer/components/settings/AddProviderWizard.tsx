@@ -289,15 +289,17 @@ export function AddProviderWizard({
   const [presetBaseUrls, setPresetBaseUrls] = useState<PresetBaseUrls>({});
   const [saving, setSaving] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
-  const genericDeviceProviderId =
-    sel?.kind === 'oauth' && sel.provider.auth.oauth?.flow === 'device-code'
-      ? sel.provider.id
-      : null;
+  const genericOAuthProviderId =
+    sel?.kind === 'oauth' && sel.provider.auth.oauth ? sel.provider.id : null;
+  const genericDeviceFlow =
+    sel?.kind === 'oauth' && sel.provider.auth.oauth?.flow === 'device-code';
   const {
     deviceCode: genericDeviceCode,
     clearDeviceCode: clearGenericDeviceCode,
     beginOwnedLogin: beginGenericOwnedLogin,
-  } = useProviderOAuthDeviceCode(genericDeviceProviderId);
+  } = useProviderOAuthDeviceCode(genericOAuthProviderId, {
+    observeProgress: genericDeviceFlow,
+  });
   // Step 3 拉取态
   const [step, setStep] = useState<1 | 2 | 3>(entryProvider ? 2 : 1);
   const [fetchState, setFetchState] = useState<
@@ -1059,7 +1061,7 @@ export function AddProviderWizard({
                 )}
               </div>
               {openAiDeviceLoginPending && <OAuthDeviceCodeCard deviceCode={openAiDeviceCode} />}
-              {genericDeviceProviderId && loggingIn && (
+              {genericDeviceFlow && loggingIn && (
                 <OAuthDeviceCodeCard deviceCode={genericDeviceCode} />
               )}
               {oauthSingleAgentNote && <InfoLine text={oauthSingleAgentNote} />}

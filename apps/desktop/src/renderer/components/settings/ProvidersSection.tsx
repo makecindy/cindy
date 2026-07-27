@@ -559,7 +559,8 @@ function GenericOAuthHeader({
   const connected = provider.connected;
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
   const { deviceCode, clearDeviceCode, beginOwnedLogin } = useProviderOAuthDeviceCode(
-    deviceFlow ? provider.id : null,
+    provider.id,
+    { observeProgress: deviceFlow },
   );
 
   const handleLogin = useCallback(async () => {
@@ -850,7 +851,8 @@ function CustomProviderHeader({
   const isOAuth = provider.auth.method === 'oauth' && !!provider.auth.oauth;
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
   const { deviceCode, clearDeviceCode, beginOwnedLogin } = useProviderOAuthDeviceCode(
-    deviceFlow ? provider.id : null,
+    isOAuth ? provider.id : null,
+    { observeProgress: deviceFlow },
   );
   const handleOAuthClick = useCallback(async () => {
     if (provider.connected) {
