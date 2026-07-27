@@ -27,8 +27,9 @@ interface QuitInfoLogger extends QuitLogger {
  */
 export interface UsageTrackedBrowserRuntime extends Pick<BrowserControlRuntime, 'call'> {
   /**
-   * True iff at least one NON-stop `call` produced an HTTP response — i.e. the
-   * control service provably booted and answered this session.
+   * True iff at least one NON-stop `call` produced an HTTP response since the
+   * last successful `stop` — i.e. the control service provably booted and
+   * answered, and has not been torn down again since.
    */
   everCalled(): boolean;
   /**
@@ -58,9 +59,17 @@ export function trackBrowserRuntimeUsage(
   return {
     call(request) {
       if (quiescing && request.action !== 'stop') {
-        return Promise.reject(
-          new Error('browser runtime is shutting down — new calls are rejected'),
-        );
+        // Resolve (not reject): the underlying runtime's contract is that
+        // `call` always resolves a BrowserControlResult — callers only check
+        // `res.ok` and a rejection here would surface as an unhandled
+        // rejection (review). No `status` field, so this never counts as
+        // usage either.
+        return Promise.resolve({
+          ok: false,
+          action: request.action,
+          errorCode: 'BROWSER_RUNTIME_UNAVAILABLE',
+          message: 'browser runtime is shutting down — new calls are not dispatched',
+        });
       }
       const result = inner.call(request);
       // Mark "used" only when the response carries an HTTP `status`, and only
@@ -90,6 +99,23 @@ export function trackBrowserRuntimeUsage(
         );
         inFlight.add(settled);
         void settled.finally(() => inFlight.delete(settled));
+      } else {
+        // A settled SUCCESSFUL stop proves the service is down again (review
+        // P1: ExternalChromeBackend.dispose stops it mid-session on backend
+        // switch). Keeping usage true past that point would make the
+        // quit-time stop boot the already-stopped service — the exact
+        // startup this wrapper exists to prevent. Later non-stop traffic
+        // flips usage back on. ok:false / rejected stops leave state
+        // unchanged: the service may still be up, and a possibly-redundant
+        // quit stop is the safe direction there.
+        void result.then(
+          (response) => {
+            if ((response as { ok?: unknown } | null | undefined)?.ok === true) {
+              everCalled = false;
+            }
+          },
+          () => {},
+        );
       }
       return result;
     },

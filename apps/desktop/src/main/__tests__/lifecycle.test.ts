@@ -337,6 +337,22 @@ describe('armShutdownHardKillWatchdog', () => {
       expect.any(Error),
     );
   });
+
+  it('sync spawn failure resets the armed flag so a later call can retry (review)', async () => {
+    // 布防标志若在 spawn 前置位且失败不回置,进程余下生命周期都会跳过布防——
+    // watchdog 实际不在位却再也无法重试。
+    const { armShutdownHardKillWatchdog } = await freshLifecycle();
+    const failingSpawn = vi.fn(() => {
+      throw new Error('spawn-boom');
+    });
+    armShutdownHardKillWatchdog({ spawn: failingSpawn, pid: 1, platform: 'darwin' });
+
+    const { spawn, child } = fakeSpawn();
+    armShutdownHardKillWatchdog({ spawn, pid: 1, platform: 'darwin' });
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(child.unref).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('installQuitHandler render-process-gone', () => {

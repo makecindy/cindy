@@ -136,7 +136,10 @@ describe('stopRuntimeForQuitIfUsed', () => {
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
   });
 
-  it('beginQuiescence rejects NEW non-stop calls so nothing can boot mid-shutdown (review P1)', async () => {
+  it('beginQuiescence blocks NEW non-stop calls with a RESOLVED ok:false result (review ×2)', async () => {
+    // 底层 runtime 的契约是 call 永不 reject(总是 resolve BrowserControlResult,
+    // 调用方只看 res.ok)——门禁必须 resolve ok:false 而不是 reject,否则会在
+    // 只检查 res.ok 的调用方处变成 unhandledRejection。
     const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
       async (req) => ({ ok: true, action: req.action, status: 200 }),
     );
@@ -144,7 +147,11 @@ describe('stopRuntimeForQuitIfUsed', () => {
 
     tracked.beginQuiescence();
 
-    await expect(tracked.call({ action: 'status' })).rejects.toThrow('shutting down');
+    const res = await tracked.call({ action: 'status' });
+    expect(res.ok).toBe(false);
+    expect(res.errorCode).toBe('BROWSER_RUNTIME_UNAVAILABLE');
+    // 无 status → 不计使用
+    expect(tracked.everCalled()).toBe(false);
     expect(call).not.toHaveBeenCalled();
     // stop 仍放行(quit 路径自己要发 stop)
     await tracked.call({ action: 'stop' });
@@ -166,6 +173,63 @@ describe('stopRuntimeForQuitIfUsed', () => {
 
     expect(call).toHaveBeenCalledTimes(1);
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
+  });
+
+  it('a successful stop RESETS usage — use → backend-switch stop → quit skips (review P1)', async () => {
+    // 使用后切换后端(ExternalChromeBackend.dispose)已成功停掉服务;若使用态
+    // 终身保留,退出时会再派一次 stop,vendored bridge 会先把已停的服务重新
+    // 拉起——这正是本包装要避免的退出期启动。
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
+      async (req) => ({ ok: true, action: req.action, status: 200 }),
+    );
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    await tracked.call({ action: 'status' });
+    expect(tracked.everCalled()).toBe(true);
+    await tracked.call({ action: 'stop' });
+    expect(tracked.everCalled()).toBe(false);
+    await stopRuntimeForQuitIfUsed(tracked, logger);
+
+    expect(call).toHaveBeenCalledTimes(2); // status + 后端切换的 stop,quit 未再派
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
+  });
+
+  it('a failed stop does NOT reset usage — service may still be up, quit stop stays', async () => {
+    let stopCount = 0;
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
+      async (req) => {
+        if (req.action !== 'stop') return { ok: true, action: req.action, status: 200 };
+        stopCount += 1;
+        return stopCount === 1
+          ? { ok: false, action: req.action, status: 500, errorCode: 'BROWSER_RUNTIME_ACTION_FAILED', message: 'busy' }
+          : { ok: true, action: req.action, status: 200 };
+      },
+    );
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    await tracked.call({ action: 'status' });
+    await tracked.call({ action: 'stop' }); // 失败的 stop:服务可能还活着
+    expect(tracked.everCalled()).toBe(true);
+    await stopRuntimeForQuitIfUsed(tracked, logger);
+
+    expect(call.mock.calls.map(([req]) => req.action)).toEqual(['status', 'stop', 'stop']);
+  });
+
+  it('usage flips back on when non-stop traffic resumes after a successful stop', async () => {
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
+      async (req) => ({ ok: true, action: req.action, status: 200 }),
+    );
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    await tracked.call({ action: 'status' });
+    await tracked.call({ action: 'stop' });
+    await tracked.call({ action: 'start' }); // 服务被重新使用
+    await stopRuntimeForQuitIfUsed(tracked, logger);
+
+    expect(call.mock.calls.map(([r]) => r.action)).toEqual(['status', 'stop', 'start', 'stop']);
   });
 });
 

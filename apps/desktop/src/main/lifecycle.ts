@@ -292,6 +292,9 @@ export function armShutdownHardKillWatchdog(
     // 上可能阻塞 —— watchdog 必须在任何可能卡住的盘 IO 之前先布防好。
     log.info(`arming shutdown hard-kill watchdog: pid=${pid} grace=${graceSeconds}s`);
   } catch (err) {
+    // 同步 spawn 失败 = 实际未布防:回置标志,让后续调用还有机会重试(review)。
+    // 异步 'error' 事件不回置——child 对象已创建,重试会叠出第二个 watchdog。
+    _watchdogArmed = false;
     log.warn('failed to arm shutdown hard-kill watchdog (continuing shutdown)', err);
   }
 }
