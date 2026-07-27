@@ -1337,6 +1337,12 @@ function messageTs(msg: ChatMessage): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
+/** 边界项(用户消息 / assistant 正文)的时间戳;非 message 项(卡片等)返回 null,
+ *  让下一段退回段内锚点,避免把已折叠段的时长重复计入。 */
+function boundaryTs(item: RenderItem | undefined): number | null {
+  return item && item.type === 'message' ? messageTs(item.message) : null;
+}
+
 /** run 首子项的起始时间戳。 */
 function workRunStartTs(it: WorkChildItem): number | null {
   if (it.type === 'tool_segment') return messageTs(it.toolCalls[0]);
@@ -1375,9 +1381,18 @@ function createWorkGroup(
   run: WorkChildItem[],
   nextItem: RenderItem | undefined,
   isStreaming = false,
+  prevBoundaryTs: number | null = null,
 ): Extract<RenderItem, { type: 'work_group' }> {
   const firstActivity = run.find((it) => it.type !== 'message' || it.message.role === 'thinking');
-  const startTs = workRunStartTs(firstActivity ?? run[0]);
+  const anchorTs = workRunStartTs(firstActivity ?? run[0]);
+  // 段起点优先锚上一个边界(用户消息 / 上一句正文),与「正在工作…」活表的墙钟
+  // 口径一致:一次性到达的 thinking 块 createdAt≈结束时刻,只用段内锚点会把
+  // 模型思考整段丢掉(实际 6s 显示 1s,内层相加也对不上外层总表)。边界缺失
+  // (窗口截断)或时序异常(rewind 改序)时退回段内锚点。
+  const startTs =
+    prevBoundaryTs !== null && (anchorTs === null || prevBoundaryTs <= anchorTs)
+      ? prevBoundaryTs
+      : anchorTs;
   const endTs =
     nextItem && nextItem.type === 'message'
       ? messageTs(nextItem.message)
@@ -1400,17 +1415,19 @@ function createWorkGroup(
 function createCompletedWorkGroup(
   run: WorkChildItem[],
   nextItem: RenderItem | undefined,
+  prevBoundaryTs: number | null = null,
 ): WorkGroupRenderItem {
   const hasAssistantText = run.some(
     (item) => item.type === 'message' && item.message.role === 'assistant',
   );
-  if (!hasAssistantText) return createWorkGroup(run, nextItem);
+  if (!hasAssistantText) return createWorkGroup(run, nextItem, false, prevBoundaryTs);
 
   const children: WorkGroupChildItem[] = [];
   let activityRun: WorkChildItem[] = [];
+  let innerPrevBoundaryTs = prevBoundaryTs;
   const flushActivityRun = (activityNextItem: RenderItem | undefined) => {
     if (activityRun.length === 0) return;
-    children.push(createWorkGroup(activityRun, activityNextItem));
+    children.push(createWorkGroup(activityRun, activityNextItem, false, innerPrevBoundaryTs));
     activityRun = [];
   };
 
@@ -1421,10 +1438,11 @@ function createCompletedWorkGroup(
     }
     flushActivityRun(item);
     children.push(item);
+    innerPrevBoundaryTs = boundaryTs(item);
   }
   flushActivityRun(nextItem);
 
-  const outer = createWorkGroup(run, nextItem);
+  const outer = createWorkGroup(run, nextItem, false, prevBoundaryTs);
   return {
     ...outer,
     key: `work-summary-${workGroupClientId(run)}`,
@@ -1433,13 +1451,14 @@ function createCompletedWorkGroup(
   };
 }
 
-function groupLegacyWorkRuns(items: RenderItem[]): RenderItem[] {
+function groupLegacyWorkRuns(items: RenderItem[], turnStartTs: number | null = null): RenderItem[] {
   const out: RenderItem[] = [];
   let run: WorkChildItem[] = [];
+  let prevBoundaryTs = turnStartTs;
 
   const flushRun = (nextItem: RenderItem | undefined) => {
     if (run.length === 0) return;
-    out.push(createWorkGroup(run, nextItem));
+    out.push(createWorkGroup(run, nextItem, false, prevBoundaryTs));
     run = [];
   };
 
@@ -1452,6 +1471,7 @@ function groupLegacyWorkRuns(items: RenderItem[]): RenderItem[] {
     } else {
       flushRun(it);
       out.push(it);
+      prevBoundaryTs = boundaryTs(it);
     }
   }
   flushRun(undefined);
@@ -1465,7 +1485,7 @@ function groupLegacyWorkRuns(items: RenderItem[]): RenderItem[] {
  *  - 最后一段之后还没有新的边界时,该段才标成 streaming,
  *    默认显示 latest-five preview。
  */
-function groupActiveWorkRuns(items: RenderItem[]): RenderItem[] {
+function groupActiveWorkRuns(items: RenderItem[], turnStartTs: number | null = null): RenderItem[] {
   let lastCompletedRunBoundaryIdx = -1;
   for (let i = 0; i < items.length; i++) {
     if (isAssistantAnswerCandidate(items[i]) || isCompactBoundaryItem(items[i])) {
@@ -1476,9 +1496,12 @@ function groupActiveWorkRuns(items: RenderItem[]): RenderItem[] {
   const out: RenderItem[] = [];
   let run: WorkChildItem[] = [];
   let runLastIdx = -1;
+  let prevBoundaryTs = turnStartTs;
   const flushRun = (nextItem: RenderItem | undefined) => {
     if (run.length === 0) return;
-    out.push(createWorkGroup(run, nextItem, runLastIdx > lastCompletedRunBoundaryIdx));
+    out.push(
+      createWorkGroup(run, nextItem, runLastIdx > lastCompletedRunBoundaryIdx, prevBoundaryTs),
+    );
     run = [];
   };
 
@@ -1490,6 +1513,7 @@ function groupActiveWorkRuns(items: RenderItem[]): RenderItem[] {
     } else {
       flushRun(it);
       out.push(it);
+      prevBoundaryTs = boundaryTs(it);
     }
   }
   flushRun(undefined);
@@ -1507,7 +1531,10 @@ function groupActiveWorkRuns(items: RenderItem[]): RenderItem[] {
  * handled:false,交回 groupLegacyWorkRuns 按连续动作折叠。tool_media /
  * agent_plan /运行中子 Agent 等非可归档项保持可见,并作为顺序锚点切开工作组。
  */
-function groupAnsweredTurnItems(turnItems: RenderItem[]): {
+function groupAnsweredTurnItems(
+  turnItems: RenderItem[],
+  turnStartTs: number | null = null,
+): {
   items: RenderItem[];
   handled: boolean;
 } {
@@ -1583,9 +1610,10 @@ function groupAnsweredTurnItems(turnItems: RenderItem[]): {
 
   const out: RenderItem[] = [];
   let run: WorkChildItem[] = [];
+  let prevBoundaryTs = turnStartTs;
   const flushRun = (nextItem: RenderItem | undefined) => {
     if (run.length === 0) return;
-    out.push(createCompletedWorkGroup(run, nextItem));
+    out.push(createCompletedWorkGroup(run, nextItem, prevBoundaryTs));
     run = [];
   };
 
@@ -1596,6 +1624,7 @@ function groupAnsweredTurnItems(turnItems: RenderItem[]): {
     } else {
       flushRun(it);
       out.push(it);
+      prevBoundaryTs = boundaryTs(it);
     }
   }
   flushRun(undefined);
@@ -1743,17 +1772,20 @@ function renderWorkGroupChild(
 export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean): RenderItem[] {
   const out: RenderItem[] = [];
   let currentTurn: RenderItem[] = [];
+  // turn 开场边界(用户消息)的时间戳;窗口截断没见到用户消息时为 null,
+  // 各分组路径退回段内锚点。
+  let turnStartTs: number | null = null;
 
   const flushTurn = (isActiveTail: boolean) => {
     if (currentTurn.length === 0) return;
     const activeStreaming = isActiveTail && isSessionStreaming;
     if (activeStreaming) {
-      out.push(...groupActiveWorkRuns(currentTurn));
+      out.push(...groupActiveWorkRuns(currentTurn, turnStartTs));
       currentTurn = [];
       return;
     }
-    const grouped = groupAnsweredTurnItems(currentTurn);
-    out.push(...(grouped.handled ? grouped.items : groupLegacyWorkRuns(currentTurn)));
+    const grouped = groupAnsweredTurnItems(currentTurn, turnStartTs);
+    out.push(...(grouped.handled ? grouped.items : groupLegacyWorkRuns(currentTurn, turnStartTs)));
     currentTurn = [];
   };
 
@@ -1761,6 +1793,7 @@ export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean):
     if (it.type === 'message' && it.message.role === 'user') {
       flushTurn(false);
       out.push(it);
+      turnStartTs = messageTs(it.message);
       continue;
     }
     currentTurn.push(it);
