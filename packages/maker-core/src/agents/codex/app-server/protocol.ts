@@ -395,6 +395,18 @@ export interface ThreadResumeParams {
    * 用于重启后恢复 host 产品级 prompt。
    */
   developerInstructions?: string;
+  /**
+   * 只恢复 thread 元数据与 live state，不把完整历史塞进单条 NDJSON response。
+   * 历史展示由 Cindy 自己的会话数据负责；需要检查近期 Codex 状态时配合
+   * initialTurnsPage 获取有界摘要。
+   */
+  excludeTurns?: boolean;
+  /** 在 resume response 中附带一页有界的近期 turns。 */
+  initialTurnsPage?: {
+    limit?: number | null;
+    sortDirection?: 'asc' | 'desc' | null;
+    itemsView?: 'notLoaded' | 'summary' | 'full' | null;
+  } | null;
   [k: string]: unknown;
 }
 
@@ -408,6 +420,12 @@ export interface ThreadResumeResponse {
   approvalPolicy: AskForApproval;
   sandbox: SandboxPolicy;
   serviceTier?: ServiceTier | null;
+  /** 仅在请求 initialTurnsPage 时返回。 */
+  initialTurnsPage?: {
+    data: Array<{ id: string; items?: unknown[]; [k: string]: unknown }>;
+    nextCursor: string | null;
+    backwardsCursor: string | null;
+  } | null;
   [k: string]: unknown;
 }
 

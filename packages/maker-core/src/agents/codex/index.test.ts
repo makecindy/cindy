@@ -882,8 +882,16 @@ describe('CodexAgent.startSession developerInstructions', () => {
     });
     const params = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)?.[1] as {
       modelProvider?: string;
+      excludeTurns?: boolean;
+      initialTurnsPage?: unknown;
     };
     expect(params.modelProvider).toBe('cindy_openai');
+    expect(params.excludeTurns).toBe(true);
+    expect(params.initialTurnsPage).toEqual({
+      limit: 100,
+      sortDirection: 'desc',
+      itemsView: 'summary',
+    });
     await handle.close();
   });
 
@@ -6636,6 +6644,50 @@ describe('CodexAgent plan mode', () => {
     });
     const handle = await agent.startSession({
       sessionId: 'session-plan-default-marker-resume',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    });
+
+    await handle.send({ type: 'user', content: 'continue normally' });
+    const [, params] = turnStartCalls(host)[0] as [string, Record<string, unknown>];
+    expect(params.collaborationMode).toEqual({
+      mode: 'default',
+      settings: { ...PLAN_SETTINGS, developer_instructions: '' },
+    });
+    await handle.close();
+  });
+
+  it('reads the latest collaboration marker from the bounded descending resume page', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) {
+        return {
+          thread: { id: 'resume-thread-id', turns: [] },
+          initialTurnsPage: {
+            data: [
+              {
+                id: 'turn-default',
+                items: [collaborationModeItem('Default')],
+              },
+              {
+                id: 'turn-plan',
+                items: [collaborationModeItem('Plan')],
+              },
+            ],
+            nextCursor: null,
+            backwardsCursor: null,
+          },
+          model: 'gpt-5.4',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
+      }
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-paged-plan-history',
       model: 'gpt-5.4',
       workingDir: '/repo',
       resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
