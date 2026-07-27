@@ -4,10 +4,14 @@
  * v2 payload 的 topics/intro 透传、缺 sections 不炸;畸形 topic 条目被丢弃
  * 而不是让弹窗崩溃。模块级缓存:每个用例 vi.resetModules() + 动态 import。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 beforeEach(() => {
   vi.resetModules();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 function stubFetch(payload: unknown) {

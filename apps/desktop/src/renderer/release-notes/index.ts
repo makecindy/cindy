@@ -99,8 +99,9 @@ export async function fetchReleaseNotesIndex(): Promise<string[] | null> {
  * Returns null when the CDN has no entry for this version on the current
  * platform, or when the network/parse fails.
  *
- * The CDN payload uses the same shape as `ReleaseNotes`, so no normalisation
- * is needed — we just memoise and return.
+ * The CDN payload is normalised defensively before caching: missing
+ * `contributors` / `sections` / `topics` become empty arrays, malformed topic
+ * entries are dropped, and legacy author-grouped items are flattened.
  */
 export async function fetchReleaseNotes(
   version: string,
