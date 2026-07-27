@@ -15,6 +15,7 @@ export interface ConfirmDialogProps {
   /**
    * 富内容区(如装意识的逐项权限清单):渲染在 description 之后、复选框之前。
    * 与 description 独立 —— Radix Description 是 <p>,块级列表不能塞进去。
+   * 弹窗触及 80vh 上限时只有本区域滚动,Header 与 Footer 始终留在视口内。
    */
   content?: ReactNode;
   /**
@@ -105,7 +106,7 @@ export function ConfirmDialog({
         <AlertDialog.Content
           className={cn(
             'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'w-full select-none rounded-xl p-4',
+            'flex max-h-[80vh] w-full flex-col overflow-hidden select-none rounded-xl p-4',
             'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
             'data-[state=open]:animate-confirm-content-in',
             'data-[state=closed]:animate-confirm-content-out',
@@ -126,23 +127,33 @@ export function ConfirmDialog({
               : undefined
           }
         >
-          <AlertDialog.Title
-            className={cn('text-lg font-medium text-[var(--confirm-title)]', textClassName)}
-          >
-            {title}
-          </AlertDialog.Title>
-          {description && (
-            <AlertDialog.Description
-              className={cn('mt-2 text-base text-[var(--confirm-desc)]', textClassName)}
+          <div data-confirm-dialog-section="header" className="shrink-0">
+            <AlertDialog.Title
+              className={cn('text-lg font-medium text-[var(--confirm-title)]', textClassName)}
             >
-              {description}
-            </AlertDialog.Description>
+              {title}
+            </AlertDialog.Title>
+            {description && (
+              <AlertDialog.Description
+                className={cn('mt-2 text-base text-[var(--confirm-desc)]', textClassName)}
+              >
+                {description}
+              </AlertDialog.Description>
+            )}
+          </div>
+          {content && (
+            <div
+              data-confirm-dialog-section="content"
+              className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1"
+              style={{ scrollbarGutter: 'stable' }}
+            >
+              {content}
+            </div>
           )}
-          {content && <div className="mt-3">{content}</div>}
           {dontShowAgainLabel && (
             <label
               className={cn(
-                'mt-4 flex cursor-pointer select-none items-center gap-2 text-13',
+                'mt-4 flex shrink-0 cursor-pointer select-none items-center gap-2 text-13',
                 'text-[var(--confirm-desc)]',
               )}
             >
@@ -155,7 +166,10 @@ export function ConfirmDialog({
               {dontShowAgainLabel}
             </label>
           )}
-          <div className="mt-6 flex justify-end gap-2.5">
+          <div
+            data-confirm-dialog-section="footer"
+            className="mt-6 flex shrink-0 justify-end gap-2.5"
+          >
             <AlertDialog.Action asChild>
               <button
                 ref={confirmBtnRef}
@@ -177,11 +191,7 @@ export function ConfirmDialog({
                   confirmDisabled && 'cursor-not-allowed opacity-50 active:scale-100',
                 )}
               >
-                {loading ? (
-                  <Spinner size={14} />
-                ) : (
-                  resolvedConfirmText
-                )}
+                {loading ? <Spinner size={14} /> : resolvedConfirmText}
               </button>
             </AlertDialog.Action>
             {tertiaryText && (
