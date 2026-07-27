@@ -3544,9 +3544,15 @@ interface ElectronAPI {
     /** 自定义 MCP 变更广播订阅（返回 off）。 */
     onMcpChanged: (cb: () => void) => () => void;
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */
-    providerOAuthLogin: (providerId: string) => Promise<{ ok: boolean; reason?: string }>;
+    providerOAuthLogin: (
+      providerId: string,
+      options?: { ownerId?: string },
+    ) => Promise<{ ok: boolean; reason?: string }>;
     providerOAuthLogout: (providerId: string) => Promise<{ ok: true }>;
-    providerOAuthCancel: (providerId: string) => Promise<{ ok: true }>;
+    providerOAuthCancel: (
+      providerId: string,
+      options?: { releaseOwner?: boolean; ownerId?: string },
+    ) => Promise<{ ok: true }>;
     onProviderOAuthProgress: (
       cb: (progress: {
         providerId: string;

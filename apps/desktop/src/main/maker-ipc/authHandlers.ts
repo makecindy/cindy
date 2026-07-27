@@ -32,6 +32,12 @@ export interface CodexDeviceCodeProgress {
   userCode: string;
 }
 
+type CodexDeviceCodeProgressPayload = CodexDeviceCodeProgress & {
+  agentKind: 'codex';
+  phase: 'device-code';
+  mode: 'device-code';
+};
+
 type RendererSender = {
   readonly id: number;
   once?: (event: 'destroyed', listener: () => void) => unknown;
@@ -47,6 +53,7 @@ type ActiveLoginOperation = {
   settledFlag: boolean;
   ownerIds: Set<string>;
   hasUnmanagedOwner: boolean;
+  latestDeviceCodeProgress?: CodexDeviceCodeProgressPayload;
   cancellation?: Promise<void>;
 };
 
@@ -281,12 +288,14 @@ export function registerMakerAuthHandlers(
         const signature = `${deviceCode.verificationUrl}\n${deviceCode.userCode}`;
         if (signature === emittedDeviceCode) return;
         emittedDeviceCode = signature;
-        broadcast(MAKER_PUSH.AUTH_LOGIN_PROGRESS, {
+        const payload: CodexDeviceCodeProgressPayload = {
           agentKind: kind,
           phase: 'device-code',
           mode,
           ...deviceCode,
-        });
+        };
+        operation.latestDeviceCodeProgress = payload;
+        broadcast(MAKER_PUSH.AUTH_LOGIN_PROGRESS, payload);
       },
     });
     // Adapter 已返回 OAuth 成功后，pending login 会被清掉；若 Cancel 落在后续模型刷新/
@@ -406,6 +415,11 @@ export function registerMakerAuthHandlers(
       const current = activeLoginOperations.get(kind);
       if (current?.acceptingOwners && !current.settledFlag && current.mode === mode) {
         registerLoginOwner(kind, current, sender, ownerId);
+        // Device URL/code may have been emitted before this BrowserWindow joined the shared
+        // operation. Re-broadcast the retained payload so the late caller can render and finish it.
+        if (current.latestDeviceCodeProgress) {
+          broadcast(MAKER_PUSH.AUTH_LOGIN_PROGRESS, current.latestDeviceCodeProgress);
+        }
         return current.promise;
       }
 

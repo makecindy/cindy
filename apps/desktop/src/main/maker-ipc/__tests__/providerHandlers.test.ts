@@ -60,6 +60,7 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     listProviders: async () => [],
     getModelVisibilityOverrides: () => ({}),
     refreshCatalog: vi.fn(async () => {}),
+    beginRouteMutation: vi.fn(() => () => {}),
     broadcastChanged: vi.fn(() => {}),
     listPresets: () => [],
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
@@ -965,6 +966,104 @@ describe('provider:oauth mutation ordering', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, 'openrouter'),
     ).rejects.toMatchObject({ code: 'INTERNAL' });
+  });
+
+  it('does not let a stale window release cancel a newer generic OAuth operation', async () => {
+    const harness = new IpcHarness();
+    const pending: Array<{
+      isCurrent: () => boolean;
+      finish: (result: { ok: boolean }) => void;
+    }> = [];
+    const oauthLogin = vi.fn(
+      async (
+        _providerId: string,
+        isCurrent: () => boolean,
+      ): Promise<{ ok: boolean }> =>
+        new Promise((resolve) => {
+          pending.push({ isCurrent, finish: resolve });
+        }),
+    );
+    const oauthCancel = vi.fn();
+    registerProviderHandlers(harness, makeDeps({ oauthLogin, oauthCancel }));
+
+    const first = harness.invokeFrom(
+      101,
+      MAKER_INVOKE.PROVIDER_OAUTH_LOGIN,
+      'openrouter',
+      { ownerId: 'window-101-provider-login' },
+    );
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    const second = harness.invokeFrom(
+      202,
+      MAKER_INVOKE.PROVIDER_OAUTH_LOGIN,
+      'openrouter',
+      { ownerId: 'window-202-provider-login' },
+    );
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    expect(pending[0].isCurrent()).toBe(false);
+    expect(pending[1].isCurrent()).toBe(true);
+
+    await expect(
+      harness.invokeFrom(
+        101,
+        MAKER_INVOKE.PROVIDER_OAUTH_CANCEL,
+        'openrouter',
+        { releaseOwner: true, ownerId: 'window-101-provider-login' },
+      ),
+    ).resolves.toEqual({ ok: true });
+    expect(oauthCancel).not.toHaveBeenCalled();
+    expect(pending[1].isCurrent()).toBe(true);
+
+    await expect(
+      harness.invokeFrom(
+        202,
+        MAKER_INVOKE.PROVIDER_OAUTH_CANCEL,
+        'openrouter',
+        { releaseOwner: true, ownerId: 'window-202-provider-login' },
+      ),
+    ).resolves.toEqual({ ok: true });
+    expect(oauthCancel).toHaveBeenCalledOnce();
+    expect(oauthCancel).toHaveBeenCalledWith('openrouter');
+    expect(pending[1].isCurrent()).toBe(false);
+
+    pending[0].finish({ ok: false });
+    pending[1].finish({ ok: false });
+    await expect(first).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
+    await expect(second).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
+  });
+
+  it('cancels the current owned generic OAuth operation when its window is destroyed', async () => {
+    const harness = new IpcHarness();
+    let isCurrent!: () => boolean;
+    let finishLogin!: (result: { ok: boolean }) => void;
+    const oauthLogin = vi.fn(
+      async (
+        _providerId: string,
+        checkCurrent: () => boolean,
+      ): Promise<{ ok: boolean }> =>
+        new Promise((resolve) => {
+          isCurrent = checkCurrent;
+          finishLogin = resolve;
+        }),
+    );
+    const oauthCancel = vi.fn();
+    registerProviderHandlers(harness, makeDeps({ oauthLogin, oauthCancel }));
+
+    const login = harness.invokeFrom(
+      101,
+      MAKER_INVOKE.PROVIDER_OAUTH_LOGIN,
+      'openrouter',
+      { ownerId: 'window-101-destroyed' },
+    );
+    await vi.waitFor(() => expect(oauthLogin).toHaveBeenCalledOnce());
+    expect(isCurrent()).toBe(true);
+
+    harness.destroySender(101);
+    expect(oauthCancel).toHaveBeenCalledWith('openrouter');
+    expect(isCurrent()).toBe(false);
+
+    finishLogin({ ok: false });
+    await expect(login).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
   });
 
   it('invalidates post-login work when the provider is edited before discovery finishes', async () => {

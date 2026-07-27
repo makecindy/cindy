@@ -26,6 +26,7 @@ import {
 import type { LocalCliDetection } from '../../shared/localCliDetect.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 
+import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   createCustomProvider,
@@ -45,7 +46,68 @@ import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
 const VALID_AGENTS: readonly string[] = ['claude-code', 'codex'];
 const VALID_ADHOC_AUTH_METHODS: readonly string[] = ['apiKey', 'oauth', 'none'];
+const PROVIDER_OAUTH_OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const log = createLogger('maker-ipc:providerHandlers');
 type RuntimeKeys = Partial<Record<AgentKind, string>>;
+
+type ProviderOAuthRendererSender = {
+  readonly id: number;
+  once?: (event: 'destroyed', listener: () => void) => unknown;
+  removeListener?: (event: 'destroyed', listener: () => void) => unknown;
+};
+
+function providerOAuthOptions(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throwIpcError('INVALID_PARAMS', 'provider OAuth options must be an object');
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireProviderOAuthOwnerId(value: unknown, required = false): string | undefined {
+  if (value === undefined) {
+    if (required) throwIpcError('INVALID_PARAMS', 'ownerId is required');
+    return undefined;
+  }
+  if (typeof value !== 'string' || !PROVIDER_OAUTH_OWNER_ID_PATTERN.test(value)) {
+    throwIpcError('INVALID_PARAMS', 'ownerId must be a valid opaque OAuth owner token');
+  }
+  return value;
+}
+
+function requireProviderOAuthLoginOptions(value: unknown): { ownerId?: string } {
+  if (value === undefined) return {};
+  const options = providerOAuthOptions(value);
+  return { ownerId: requireProviderOAuthOwnerId(options.ownerId) };
+}
+
+function requireProviderOAuthCancelOptions(
+  value: unknown,
+): { releaseOwner: boolean; ownerId?: string } {
+  if (value === undefined) return { releaseOwner: false };
+  const options = providerOAuthOptions(value);
+  if (options.releaseOwner !== undefined && typeof options.releaseOwner !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'releaseOwner must be a boolean');
+  }
+  const releaseOwner = options.releaseOwner === true;
+  const ownerId = requireProviderOAuthOwnerId(options.ownerId, releaseOwner);
+  if (!releaseOwner && ownerId) {
+    throwIpcError('INVALID_PARAMS', 'ownerId requires releaseOwner');
+  }
+  return { releaseOwner, ownerId };
+}
+
+function providerOAuthRendererSender(event: unknown): ProviderOAuthRendererSender | null {
+  if (!event || typeof event !== 'object') return null;
+  const sender = (event as { sender?: unknown }).sender;
+  if (!sender || typeof sender !== 'object') return null;
+  const id = (sender as { id?: unknown }).id;
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return null;
+  const once = (sender as { once?: unknown }).once;
+  const removeListener = (sender as { removeListener?: unknown }).removeListener;
+  if (once !== undefined && typeof once !== 'function') return null;
+  if (removeListener !== undefined && typeof removeListener !== 'function') return null;
+  return sender as ProviderOAuthRendererSender;
+}
 
 function parseRuntimeKeys(input: unknown): RuntimeKeys | null {
   if (input === undefined) return {};
@@ -100,6 +162,11 @@ export interface ProviderHandlerDeps {
   getModelVisibilityOverrides(): Record<string, boolean>;
   /** CRUD 成功后重算 active-catalog（生产 = refreshCustomProvidersIntoCatalog）。 */
   refreshCatalog(): Promise<void>;
+  /**
+   * 配置、secret 与 active catalog 切换期间暂停该 provider 的新请求；返回幂等 release。
+   * 生产 = beginProviderRouteMutation。
+   */
+  beginRouteMutation(providerId: string): () => void;
   /** CRUD 成功后广播变更（生产 = 向所有窗口 send PROVIDER_CHANGED）。 */
   broadcastChanged(): void;
   /** 目录 presets 段（生产 = () => getActiveCatalog().presets ?? []）。 */
@@ -265,6 +332,88 @@ export function registerProviderHandlers(
       oauthMutationGeneration.delete(providerId);
     }
   };
+  type ProviderOAuthOwner = {
+    providerId: string;
+    generation: symbol;
+    sender: ProviderOAuthRendererSender;
+  };
+  const providerOAuthOwners = new Map<string, ProviderOAuthOwner>();
+  const providerOAuthSenderOwners = new Map<
+    ProviderOAuthRendererSender,
+    { ownerIds: Set<string>; onDestroyed: () => void }
+  >();
+  const removeProviderOAuthOwner = (
+    ownerId: string,
+    expectedSender?: ProviderOAuthRendererSender,
+    expectedOwner?: ProviderOAuthOwner,
+  ): ProviderOAuthOwner | null => {
+    const owner = providerOAuthOwners.get(ownerId);
+    if (
+      !owner
+      || (expectedSender && owner.sender !== expectedSender)
+      || (expectedOwner && owner !== expectedOwner)
+    ) {
+      return null;
+    }
+    providerOAuthOwners.delete(ownerId);
+    const subscription = providerOAuthSenderOwners.get(owner.sender);
+    subscription?.ownerIds.delete(ownerId);
+    if (subscription && subscription.ownerIds.size === 0) {
+      owner.sender.removeListener?.('destroyed', subscription.onDestroyed);
+      providerOAuthSenderOwners.delete(owner.sender);
+    }
+    return owner;
+  };
+  const cancelOwnedProviderOAuth = (owner: ProviderOAuthOwner): void => {
+    if (!isOAuthMutationCurrent(owner.providerId, owner.generation)) return;
+    const cancellationGeneration = beginOAuthMutation(owner.providerId);
+    try {
+      deps.oauthCancel(owner.providerId);
+    } catch (err) {
+      log.warn('failed to cancel owned provider OAuth login during teardown', {
+        providerId: owner.providerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      finishOAuthMutation(owner.providerId, cancellationGeneration);
+    }
+  };
+  const handleProviderOAuthRendererDestroyed = (
+    sender: ProviderOAuthRendererSender,
+  ): void => {
+    const subscription = providerOAuthSenderOwners.get(sender);
+    if (!subscription) return;
+    for (const ownerId of [...subscription.ownerIds]) {
+      const owner = removeProviderOAuthOwner(ownerId, sender);
+      if (owner) cancelOwnedProviderOAuth(owner);
+    }
+  };
+  const registerProviderOAuthOwner = (
+    providerId: string,
+    generation: symbol,
+    sender: ProviderOAuthRendererSender,
+    ownerId: string,
+  ): ProviderOAuthOwner => {
+    if (providerOAuthOwners.has(ownerId)) {
+      throwIpcError('INVALID_PARAMS', 'ownerId is already bound to another OAuth operation');
+    }
+    let subscription = providerOAuthSenderOwners.get(sender);
+    if (!subscription) {
+      const onDestroyed = (): void => handleProviderOAuthRendererDestroyed(sender);
+      subscription = { ownerIds: new Set(), onDestroyed };
+      providerOAuthSenderOwners.set(sender, subscription);
+      sender.once?.('destroyed', onDestroyed);
+    }
+    const owner = { providerId, generation, sender };
+    subscription.ownerIds.add(ownerId);
+    providerOAuthOwners.set(ownerId, owner);
+    return owner;
+  };
+  const clearProviderOAuthOwners = (providerId: string): void => {
+    for (const [ownerId, owner] of [...providerOAuthOwners]) {
+      if (owner.providerId === providerId) removeProviderOAuthOwner(ownerId);
+    }
+  };
   const providerConfigMutationCounts = new Map<string, number>();
   const providerConfigMutationTails = new Map<string, Promise<void>>();
   const beginProviderConfigMutation = (providerId: string): void => {
@@ -282,6 +431,7 @@ export function registerProviderHandlers(
     providerId: string,
     operation: () => Promise<T>,
   ): Promise<T> => {
+    const finishRouteMutation = deps.beginRouteMutation(providerId);
     const previous = providerConfigMutationTails.get(providerId) ?? Promise.resolve();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -300,6 +450,7 @@ export function registerProviderHandlers(
         providerConfigMutationTails.delete(providerId);
       }
       finishProviderConfigMutation(providerId);
+      finishRouteMutation();
     }
   };
   type KeySnapshot = { agent: AgentKind; previous: string | null };
@@ -571,15 +722,31 @@ export function registerProviderHandlers(
     }
     return input;
   }
-  registry.handle(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, async (_event, providerId: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, async (
+    event,
+    providerId: unknown,
+    rawOptions?: unknown,
+  ) => {
     const id = requireProviderId(providerId);
+    const { ownerId } = requireProviderOAuthLoginOptions(rawOptions);
+    const sender = providerOAuthRendererSender(event);
+    if (ownerId && !sender) {
+      throwIpcError('INVALID_PARAMS', 'ownerId requires an Electron sender');
+    }
+    if (ownerId && providerOAuthOwners.has(ownerId)) {
+      throwIpcError('INVALID_PARAMS', 'ownerId is already bound to another OAuth operation');
+    }
     // 更新事务从旧配置读取、写库到 refresh 完成前是一个整体。期间拒绝新登录，避免 runner
     // 读取旧描述符后在新配置生效时写回旧 client / endpoint 签发的 token。
     if (providerConfigMutationCounts.has(id)) {
       return { ok: false, reason: 'provider_update_in_progress' };
     }
     const generation = beginOAuthMutation(id);
+    let owner: ProviderOAuthOwner | null = null;
     try {
+      if (ownerId && sender) {
+        owner = registerProviderOAuthOwner(id, generation, sender, ownerId);
+      }
       const result = await deps.oauthLogin(id, () => isOAuthMutationCurrent(id, generation));
       if (isOAuthMutationCurrent(id, generation)) {
         return { ok: result.ok, ...(result.reason ? { reason: result.reason } : {}) };
@@ -592,6 +759,7 @@ export function registerProviderHandlers(
       if (isIpcError(err)) throw err;
       throwIpcError('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
     } finally {
+      if (ownerId && owner) removeProviderOAuthOwner(ownerId, sender ?? undefined, owner);
       finishOAuthMutation(id, generation);
     }
   });
@@ -615,8 +783,31 @@ export function registerProviderHandlers(
       finishOAuthMutation(id, generation);
     }
   });
-  registry.handle(MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, async (_event, providerId: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, async (
+    event,
+    providerId: unknown,
+    rawOptions?: unknown,
+  ) => {
     const id = requireProviderId(providerId);
+    const { releaseOwner, ownerId } = requireProviderOAuthCancelOptions(rawOptions);
+    if (releaseOwner) {
+      const sender = providerOAuthRendererSender(event);
+      if (!sender) {
+        throwIpcError('INVALID_PARAMS', 'owner release requires an Electron sender');
+      }
+      const expectedOwner = providerOAuthOwners.get(ownerId!);
+      if (
+        !expectedOwner
+        || expectedOwner.sender !== sender
+        || expectedOwner.providerId !== id
+      ) {
+        return { ok: true };
+      }
+      const owner = removeProviderOAuthOwner(ownerId!, sender, expectedOwner);
+      if (owner) cancelOwnedProviderOAuth(owner);
+      return { ok: true };
+    }
+    clearProviderOAuthOwners(id);
     const generation = beginOAuthMutation(id);
     try {
       deps.oauthCancel(id);

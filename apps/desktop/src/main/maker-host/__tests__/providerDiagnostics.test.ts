@@ -203,6 +203,24 @@ describe('buildProbeRequest', () => {
     expect(headers['x-api-key']).toBeUndefined();
     expect(headers['authorization']).toBeUndefined();
   });
+
+  it('no-auth 探测剥掉表单残留的大小写混合凭证头', () => {
+    const { init } = buildProbeRequest({
+      agent: 'codex',
+      baseUrl: 'http://127.0.0.1:4000/v1',
+      modelId: 'local-model',
+      authMethod: 'none',
+      headers: {
+        Authorization: 'Bearer must-not-leak',
+        'X-API-Key': 'must-not-leak',
+        'X-Tenant': 'local',
+      },
+    });
+    expect(init.headers).toEqual({
+      'content-type': 'application/json',
+      'X-Tenant': 'local',
+    });
+  });
 });
 
 function fakeResponse(status: number, body = ''): Response {

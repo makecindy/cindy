@@ -13,6 +13,7 @@ import { getGrokAccessToken } from '../maker-host/grok-oauth-login.js';
 import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
@@ -232,6 +233,19 @@ async function requestExplicitProviderText(
         transport,
         status: 'skipped',
         reason: 'agent_unavailable',
+      }],
+    };
+  }
+  if (isProviderRouteMutationInProgress(provider.id)) {
+    return {
+      ok: false,
+      reason: 'all_candidates_failed',
+      attempts: [{
+        providerId: provider.id,
+        model,
+        transport,
+        status: 'failed',
+        reason: 'request_failed',
       }],
     };
   }

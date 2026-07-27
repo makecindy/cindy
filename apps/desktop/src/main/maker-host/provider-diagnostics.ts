@@ -89,9 +89,13 @@ function withoutCredentialHeaders(
 
 /** 构造探测请求（纯函数，单测直断言）。header 组合与 provider-route 的 api-key-header 分支对齐。 */
 export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init: RequestInit } {
+  const mustStripCredentialHeaders =
+    !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers: Record<string, string> = {
     'content-type': 'application/json',
-    ...(spec.apiKey ? withoutCredentialHeaders(spec.headers) : (spec.headers ?? {})),
+    ...(mustStripCredentialHeaders
+      ? withoutCredentialHeaders(spec.headers)
+      : (spec.headers ?? {})),
   };
   if (spec.agent === 'claude-code') {
     // Anthropic Messages wire。anthropic-version 为兼容端点普遍要求的必带头。

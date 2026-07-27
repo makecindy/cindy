@@ -295,8 +295,12 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
 
     fireEvent.click(screen.getByText('settings.providers.wizard.authorizeWithDeviceCode'));
     await waitFor(() =>
-      expect(providerOAuthLogin).toHaveBeenCalledWith(DEVICE_PROVIDER.id),
+      expect(providerOAuthLogin).toHaveBeenCalledWith(
+        DEVICE_PROVIDER.id,
+        expect.objectContaining({ ownerId: expect.any(String) }),
+      ),
     );
+    const ownerId = providerOAuthLogin.mock.calls[0]?.[1]?.ownerId;
     act(() => {
       providerOAuthProgressListener?.({
         providerId: DEVICE_PROVIDER.id,
@@ -312,7 +316,10 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
 
     unmount();
     expect(providerOAuthCancel).toHaveBeenCalledOnce();
-    expect(providerOAuthCancel).toHaveBeenCalledWith(DEVICE_PROVIDER.id);
+    expect(providerOAuthCancel).toHaveBeenCalledWith(DEVICE_PROVIDER.id, {
+      releaseOwner: true,
+      ownerId,
+    });
   });
 
   it('authorization-code 登录期间被父级卸载时取消仍在等待的回环授权', async () => {
@@ -329,12 +336,19 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
 
     fireEvent.click(screen.getByText('settings.providers.button.authorize'));
     await waitFor(() =>
-      expect(providerOAuthLogin).toHaveBeenCalledWith(AUTH_CODE_PROVIDER.id),
+      expect(providerOAuthLogin).toHaveBeenCalledWith(
+        AUTH_CODE_PROVIDER.id,
+        expect.objectContaining({ ownerId: expect.any(String) }),
+      ),
     );
+    const ownerId = providerOAuthLogin.mock.calls[0]?.[1]?.ownerId;
     expect(providerOAuthProgressListener).toBeNull();
 
     unmount();
     expect(providerOAuthCancel).toHaveBeenCalledOnce();
-    expect(providerOAuthCancel).toHaveBeenCalledWith(AUTH_CODE_PROVIDER.id);
+    expect(providerOAuthCancel).toHaveBeenCalledWith(AUTH_CODE_PROVIDER.id, {
+      releaseOwner: true,
+      ownerId,
+    });
   });
 });

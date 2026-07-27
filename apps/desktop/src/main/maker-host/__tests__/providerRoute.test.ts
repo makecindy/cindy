@@ -11,6 +11,7 @@ vi.mock('../../appCapabilities.js', () => ({
 import { BUNDLED_CATALOG, buildUserProvider, type AgentKind, type RoutingDescriptor } from '@cindy/model-providers';
 
 import {
+  beginProviderRouteMutation,
   buildLocalHandlerHeaders,
   buildRouteDecision,
   resolveSessionRouteDecision,
@@ -557,6 +558,75 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
       headerOverride: { authorization: 'Bearer sk-or-123' },
       upstreamOverride: 'https://openrouter.ai/api/v1',
       headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+    });
+  });
+
+  it('blocks new routes while endpoint and key switch as one logical mutation', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'openrouter',
+        name: 'OpenRouter',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://old.example/v1',
+            models: [{ id: 'custom-model', name: 'Custom Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'old-key');
+    setSessionProvider('s-user', 'openrouter');
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY)).toMatchObject({
+      upstreamOverride: 'https://old.example/v1',
+      headerOverride: { authorization: 'Bearer old-key' },
+    });
+
+    const finishMutation = beginProviderRouteMutation('openrouter');
+    try {
+      // Secret writes are synchronous and may become visible before the catalog refresh awaits.
+      setCustomProviderKeyReader(() => 'new-key');
+      const decision = await Promise.resolve(
+        resolveSessionRouteDecision('s-user', 'codex', KEY),
+      );
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision!.localHandler!({
+        rawBody: Buffer.from('{}'),
+        parsedBody: { model: 'custom-model' },
+        ctx: { reqId: 1, method: 'POST', url: '/responses', headers: {} },
+        res: { writeHead, end } as never,
+      });
+      expect(writeHead).toHaveBeenCalledWith(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'retry-after': '1',
+      });
+      expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+        error: {
+          type: 'provider_route_updating',
+          code: 'provider_route_updating',
+        },
+      });
+    } finally {
+      finishMutation();
+    }
+
+    setCustomProviders([
+      buildUserProvider({
+        id: 'openrouter',
+        name: 'OpenRouter',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://new.example/v1',
+            models: [{ id: 'custom-model', name: 'Custom Model' }],
+          },
+        },
+      }),
+    ]);
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY)).toMatchObject({
+      upstreamOverride: 'https://new.example/v1',
+      headerOverride: { authorization: 'Bearer new-key' },
     });
   });
 

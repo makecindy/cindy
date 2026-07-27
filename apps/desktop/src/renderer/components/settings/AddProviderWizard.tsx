@@ -297,6 +297,7 @@ export function AddProviderWizard({
     deviceCode: genericDeviceCode,
     clearDeviceCode: clearGenericDeviceCode,
     beginOwnedLogin: beginGenericOwnedLogin,
+    cancelOwnedLogin: cancelGenericOwnedLogin,
   } = useProviderOAuthDeviceCode(genericOAuthProviderId, {
     observeProgress: genericDeviceFlow,
   });
@@ -437,13 +438,15 @@ export function AddProviderWizard({
           ok = r.ok;
           if (!r.ok && r.reason === 'login_cancelled') return;
         } else {
-          const finishOwnedLogin = beginGenericOwnedLogin();
+          const ownedLogin = beginGenericOwnedLogin();
           try {
-            const r = await window.electronAPI.maker.providerOAuthLogin(id);
+            const r = await window.electronAPI.maker.providerOAuthLogin(id, {
+              ownerId: ownedLogin.ownerId,
+            });
             ok = r.ok;
             if (!r.ok && r.reason === 'login_cancelled') return;
           } finally {
-            finishOwnedLogin();
+            ownedLogin.finish();
           }
         }
         if (ok) {
@@ -473,10 +476,10 @@ export function AddProviderWizard({
     if (id === 'anthropic') void window.electronAPI.maker.claudeOAuthCancel();
     else if (id === 'openai') void codexAuth.cancelLogin();
     else if (id === 'xai') void window.electronAPI.maker.xaiOAuthCancel();
-    else void window.electronAPI.maker.providerOAuthCancel(id);
+    else cancelGenericOwnedLogin();
     clearGenericDeviceCode();
     setLoggingIn(false);
-  }, [sel, clearGenericDeviceCode, codexAuth]);
+  }, [sel, clearGenericDeviceCode, cancelGenericOwnedLogin, codexAuth]);
 
   /** 关闭向导:授权等待中先取消再关,不留挂起的 login runner。 */
   const handleClose = useCallback(() => {

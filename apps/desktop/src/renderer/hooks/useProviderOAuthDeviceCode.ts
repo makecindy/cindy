@@ -6,6 +6,27 @@ export interface ProviderOAuthDeviceCode {
   expiresAt?: number;
 }
 
+type OwnedProviderOAuthLogin = {
+  providerId: string;
+  ownerId: string;
+};
+
+let providerOAuthOwnerSequence = 0;
+const providerOAuthOwnerPrefix = (() => {
+  try {
+    const uuid = globalThis.crypto?.randomUUID?.();
+    if (uuid) return uuid;
+  } catch {
+    // Older Electron/jsdom may expose crypto without randomUUID.
+  }
+  return `provider-oauth-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+})();
+
+function nextProviderOAuthOwnerId(): string {
+  providerOAuthOwnerSequence += 1;
+  return `${providerOAuthOwnerPrefix}:${providerOAuthOwnerSequence}`;
+}
+
 /**
  * 管理某个通用 OAuth 登录的组件 ownership；Device Grant 流可同时订阅短期代码。
  * 代码只在组件内存中保留；切换供应商、取消或卸载都会清空。
@@ -16,7 +37,22 @@ export function useProviderOAuthDeviceCode(
 ) {
   const observeProgress = options?.observeProgress ?? true;
   const [deviceCode, setDeviceCode] = useState<ProviderOAuthDeviceCode | null>(null);
-  const ownedLoginRef = useRef<{ providerId: string; token: symbol } | null>(null);
+  const ownedLoginRef = useRef<OwnedProviderOAuthLogin | null>(null);
+
+  const releaseOwnedLogin = useCallback((owned: OwnedProviderOAuthLogin) => {
+    if (ownedLoginRef.current !== owned) return;
+    ownedLoginRef.current = null;
+    try {
+      void Promise.resolve(
+        window.electronAPI.maker.providerOAuthCancel(owned.providerId, {
+          releaseOwner: true,
+          ownerId: owned.ownerId,
+        }),
+      ).catch(() => undefined);
+    } catch {
+      // Cleanup is best-effort; synchronous bridge failures must not escape effect teardown.
+    }
+  }, []);
 
   useEffect(() => {
     setDeviceCode(null);
@@ -33,27 +69,28 @@ export function useProviderOAuthDeviceCode(
       : undefined;
     return () => {
       unsubscribe?.();
-      if (ownedLoginRef.current?.providerId === providerId) {
-        ownedLoginRef.current = null;
-        try {
-          void Promise.resolve(window.electronAPI.maker.providerOAuthCancel(providerId)).catch(
-            () => undefined,
-          );
-        } catch {
-          // Cleanup is best-effort; synchronous bridge failures must not escape effect teardown.
-        }
-      }
+      const owned = ownedLoginRef.current;
+      if (owned?.providerId === providerId) releaseOwnedLogin(owned);
     };
-  }, [observeProgress, providerId]);
+  }, [observeProgress, providerId, releaseOwnedLogin]);
 
   const beginOwnedLogin = useCallback(() => {
-    if (!providerId) return () => undefined;
-    const owned = { providerId, token: Symbol(providerId) };
+    if (!providerId) return { ownerId: undefined, finish: () => undefined };
+    const previous = ownedLoginRef.current;
+    if (previous) releaseOwnedLogin(previous);
+    const owned = { providerId, ownerId: nextProviderOAuthOwnerId() };
     ownedLoginRef.current = owned;
-    return () => {
-      if (ownedLoginRef.current === owned) ownedLoginRef.current = null;
+    return {
+      ownerId: owned.ownerId,
+      finish: () => {
+        if (ownedLoginRef.current === owned) ownedLoginRef.current = null;
+      },
     };
-  }, [providerId]);
+  }, [providerId, releaseOwnedLogin]);
+  const cancelOwnedLogin = useCallback(() => {
+    const owned = ownedLoginRef.current;
+    if (owned) releaseOwnedLogin(owned);
+  }, [releaseOwnedLogin]);
   const clearDeviceCode = useCallback(() => setDeviceCode(null), []);
-  return { deviceCode, clearDeviceCode, beginOwnedLogin };
+  return { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin };
 }

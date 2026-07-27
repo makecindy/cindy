@@ -81,14 +81,16 @@ describe('useProviderOAuthDeviceCode', () => {
       { initialProps: { providerId: 'provider-a' as string | null } },
     );
 
-    result.current.beginOwnedLogin();
+    const owned = result.current.beginOwnedLogin();
     rerender({ providerId: 'provider-b' });
     expect(cancel).toHaveBeenCalledOnce();
-    expect(cancel).toHaveBeenCalledWith('provider-a');
+    expect(cancel).toHaveBeenCalledWith('provider-a', {
+      releaseOwner: true,
+      ownerId: owned.ownerId,
+    });
 
-    result.current.beginOwnedLogin();
-    const finish = result.current.beginOwnedLogin();
-    finish();
+    const nextOwned = result.current.beginOwnedLogin();
+    nextOwned.finish();
     unmount();
     expect(cancel).toHaveBeenCalledOnce();
   });
@@ -100,11 +102,14 @@ describe('useProviderOAuthDeviceCode', () => {
     );
 
     expect(onProgress).not.toHaveBeenCalled();
-    result.current.beginOwnedLogin();
+    const owned = result.current.beginOwnedLogin();
     unmount();
 
     expect(cancel).toHaveBeenCalledOnce();
-    expect(cancel).toHaveBeenCalledWith('provider-a');
+    expect(cancel).toHaveBeenCalledWith('provider-a', {
+      releaseOwner: true,
+      ownerId: owned.ownerId,
+    });
   });
 
   it('ignores a synchronous cancellation failure during cleanup', async () => {
@@ -113,12 +118,15 @@ describe('useProviderOAuthDeviceCode', () => {
     });
     const { result, unmount } = renderHook(() => useProviderOAuthDeviceCode('provider-a'));
 
-    result.current.beginOwnedLogin();
+    const owned = result.current.beginOwnedLogin();
     expect(() => unmount()).not.toThrow();
     await act(async () => {
       await Promise.resolve();
     });
 
-    expect(cancel).toHaveBeenCalledWith('provider-a');
+    expect(cancel).toHaveBeenCalledWith('provider-a', {
+      releaseOwner: true,
+      ownerId: owned.ownerId,
+    });
   });
 });

@@ -3717,12 +3717,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }> }> =>
       ipcRenderer.invoke('maker:session-background-tasks:list', sessionId),
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */
-    providerOAuthLogin: (providerId: string): Promise<{ ok: boolean; reason?: string }> =>
-      ipcRenderer.invoke('maker:provider:oauth:login', providerId),
+    providerOAuthLogin: (
+      providerId: string,
+      options?: { ownerId?: string },
+    ): Promise<{ ok: boolean; reason?: string }> =>
+      ipcRenderer.invoke('maker:provider:oauth:login', providerId, options),
     providerOAuthLogout: (providerId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:provider:oauth:logout', providerId),
-    providerOAuthCancel: (providerId: string): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:provider:oauth:cancel', providerId),
+    providerOAuthCancel: (
+      providerId: string,
+      options?: { releaseOwner?: boolean; ownerId?: string },
+    ): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:provider:oauth:cancel', providerId, options),
     onProviderOAuthProgress: fanOutMakerProviderOAuthProgress,
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。

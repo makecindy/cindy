@@ -558,7 +558,7 @@ function GenericOAuthHeader({
   const [loggingIn, setLoggingIn] = useState(false);
   const connected = provider.connected;
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
-  const { deviceCode, clearDeviceCode, beginOwnedLogin } = useProviderOAuthDeviceCode(
+  const { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } = useProviderOAuthDeviceCode(
     provider.id,
     { observeProgress: deviceFlow },
   );
@@ -566,9 +566,11 @@ function GenericOAuthHeader({
   const handleLogin = useCallback(async () => {
     clearDeviceCode();
     setLoggingIn(true);
-    const finishOwnedLogin = beginOwnedLogin();
+    const ownedLogin = beginOwnedLogin();
     try {
-      const r = await window.electronAPI.maker.providerOAuthLogin(provider.id);
+      const r = await window.electronAPI.maker.providerOAuthLogin(provider.id, {
+        ownerId: ownedLogin.ownerId,
+      });
       if (r.ok) {
         toast.success(t('settings.providers.genericOAuth.toast.loggedIn', { name: provider.name }));
         onChanged();
@@ -582,7 +584,7 @@ function GenericOAuthHeader({
     } catch {
       toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }));
     } finally {
-      finishOwnedLogin();
+      ownedLogin.finish();
       setLoggingIn(false);
     }
   }, [beginOwnedLogin, clearDeviceCode, onChanged, provider.id, provider.name, t]);
@@ -631,7 +633,7 @@ function GenericOAuthHeader({
       }
       onClick={() => {
         if (loggingIn) {
-          void window.electronAPI.maker.providerOAuthCancel(provider.id);
+          cancelOwnedLogin();
           clearDeviceCode();
           setLoggingIn(false);
         } else {
@@ -850,7 +852,7 @@ function CustomProviderHeader({
   const [loggingIn, setLoggingIn] = useState(false);
   const isOAuth = provider.auth.method === 'oauth' && !!provider.auth.oauth;
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
-  const { deviceCode, clearDeviceCode, beginOwnedLogin } = useProviderOAuthDeviceCode(
+  const { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } = useProviderOAuthDeviceCode(
     isOAuth ? provider.id : null,
     { observeProgress: deviceFlow },
   );
@@ -869,16 +871,18 @@ function CustomProviderHeader({
       return;
     }
     if (loggingIn) {
-      void window.electronAPI.maker.providerOAuthCancel(provider.id);
+      cancelOwnedLogin();
       clearDeviceCode();
       setLoggingIn(false);
       return;
     }
     clearDeviceCode();
     setLoggingIn(true);
-    const finishOwnedLogin = beginOwnedLogin();
+    const ownedLogin = beginOwnedLogin();
     try {
-      const r = await window.electronAPI.maker.providerOAuthLogin(provider.id);
+      const r = await window.electronAPI.maker.providerOAuthLogin(provider.id, {
+        ownerId: ownedLogin.ownerId,
+      });
       if (r.ok)
         toast.success(t('settings.providers.genericOAuth.toast.loggedIn', { name: provider.name }));
       else if (r.reason !== 'login_cancelled') {
@@ -889,10 +893,10 @@ function CustomProviderHeader({
     } catch {
       toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }));
     } finally {
-      finishOwnedLogin();
+      ownedLogin.finish();
       setLoggingIn(false);
     }
-  }, [beginOwnedLogin, clearDeviceCode, loggingIn, provider.connected, provider.id, provider.name, t]);
+  }, [beginOwnedLogin, cancelOwnedLogin, clearDeviceCode, loggingIn, provider.connected, provider.id, provider.name, t]);
 
   const trailing = (
     <div className="flex shrink-0 items-center gap-1">

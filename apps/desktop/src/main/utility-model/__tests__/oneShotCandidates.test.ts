@@ -39,6 +39,10 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
   getActiveCatalog: vi.fn(() => ({ providers: [] })),
 }));
 
+vi.mock('../../maker-host/provider-route.js', () => ({
+  isProviderRouteMutationInProgress: vi.fn(() => false),
+}));
+
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: vi.fn(),
 }));
@@ -63,6 +67,7 @@ import { getValidClaudeAiOAuth } from '../../maker-host/claude-oauth-refresh.js'
 import { getGrokAccessToken } from '../../maker-host/grok-oauth-login.js';
 import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
 import { getActiveCatalog } from '../../maker-host/active-catalog.js';
+import { isProviderRouteMutationInProgress } from '../../maker-host/provider-route.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
 import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
 import { getUtilityTextCandidates, requestUtilityText } from '../oneShotCandidates.js';
@@ -75,6 +80,7 @@ const readGrokToken = vi.mocked(getGrokAccessToken);
 const readGenericOAuthToken = vi.mocked(readCachedGenericOAuthAccessToken);
 const fetchMock = vi.mocked(undiciFetch);
 const activeCatalog = vi.mocked(getActiveCatalog);
+const providerRouteMutationInProgress = vi.mocked(isProviderRouteMutationInProgress);
 const readCustomKey = vi.mocked(readCustomProviderKey);
 
 function makerMock(authenticated: boolean): Maker {
@@ -93,6 +99,7 @@ describe('utility one-shot candidates', () => {
     readClaudeOAuth.mockResolvedValue(null);
     readGrokToken.mockRejectedValue(new Error('not authenticated'));
     readGenericOAuthToken.mockReturnValue(null);
+    providerRouteMutationInProgress.mockReturnValue(false);
     readCustomKey.mockReturnValue(null);
     activeCatalog.mockReturnValue({ providers: [] } as never);
     getProfiles.mockReturnValue([
@@ -268,6 +275,47 @@ describe('utility one-shot candidates', () => {
     expect(JSON.parse(String(vi.mocked(fetchMock).mock.calls[0]?.[1]?.body))).toMatchObject({
       model: 'custom-mini',
     });
+  });
+
+  it('does not read or send a custom-provider key while its route is mutating', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'tapsvc',
+        name: 'Tap Service',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://old.example/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          codex: [{ id: 'custom-mini', name: 'Custom Mini', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    providerRouteMutationInProgress.mockReturnValue(true);
+    readCustomKey.mockReturnValue('replacement-secret');
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'tapsvc',
+      agentKind: 'codex',
+      model: 'custom-mini',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'all_candidates_failed',
+      attempts: [expect.objectContaining({
+        providerId: 'tapsvc',
+        status: 'failed',
+        reason: 'request_failed',
+      })],
+    });
+    expect(readCustomKey).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('uses Chat Completions for an explicitly selected openai-chat provider', async () => {

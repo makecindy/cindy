@@ -221,7 +221,9 @@ describe('ProvidersSection — 深链定位', () => {
   });
 
   it('authorization-code 自定义供应商登录期间卸载时取消本视图拥有的授权', async () => {
-    const providerOAuthLogin = vi.fn(() => new Promise(() => undefined));
+    const providerOAuthLogin = vi.fn<
+      (providerId: string, options?: { ownerId?: string }) => Promise<{ ok: boolean }>
+    >(() => new Promise(() => undefined));
     const providerOAuthCancel = vi.fn(async () => ({ ok: true }));
     const onProviderOAuthProgress = vi.fn(() => () => undefined);
     providersState.providers = [
@@ -252,11 +254,20 @@ describe('ProvidersSection — 深链定位', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'settings.providers.button.authorize' }),
     );
-    await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledWith('custom-oauth'));
+    await waitFor(() =>
+      expect(providerOAuthLogin).toHaveBeenCalledWith(
+        'custom-oauth',
+        expect.objectContaining({ ownerId: expect.any(String) }),
+      ),
+    );
+    const ownerId = providerOAuthLogin.mock.calls[0]?.[1]?.ownerId;
     expect(onProviderOAuthProgress).not.toHaveBeenCalled();
 
     view.unmount();
     expect(providerOAuthCancel).toHaveBeenCalledOnce();
-    expect(providerOAuthCancel).toHaveBeenCalledWith('custom-oauth');
+    expect(providerOAuthCancel).toHaveBeenCalledWith('custom-oauth', {
+      releaseOwner: true,
+      ownerId,
+    });
   });
 });

@@ -127,6 +127,63 @@ describe('maker auth IPC handlers', () => {
     });
   });
 
+  it('replays the retained device code when another BrowserWindow joins the login', async () => {
+    const harness = new IpcHarness();
+    const broadcast = vi.fn();
+    let emitProgress!: (msg: string) => void;
+    let finishLogin!: (state: AuthState) => void;
+    const triggerAgentLogin = vi.fn(
+      (_agentKind, options: { onProgress: (msg: string) => void }) =>
+        new Promise<AuthState>((resolve) => {
+          emitProgress = options.onProgress;
+          finishLogin = resolve;
+        }),
+    );
+    registerMakerAuthHandlers(
+      harness,
+      createMakerStub({ triggerAgentLogin }),
+      broadcast,
+      () => null,
+    );
+
+    const first = harness.invokeFrom(101, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', {
+      mode: 'device-code',
+      ownerId: 'window-101-device-code',
+    });
+    await vi.waitFor(() => expect(triggerAgentLogin).toHaveBeenCalledOnce());
+    emitProgress('stdout:https://auth.openai.com/codex/device');
+    emitProgress('stderr:Enter code ABCD-EFGH');
+    await vi.waitFor(() =>
+      expect(broadcast).toHaveBeenCalledWith(MAKER_PUSH.AUTH_LOGIN_PROGRESS, {
+        agentKind: 'codex',
+        phase: 'device-code',
+        mode: 'device-code',
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        userCode: 'ABCD-EFGH',
+      }),
+    );
+
+    broadcast.mockClear();
+    const second = harness.invokeFrom(202, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', {
+      mode: 'device-code',
+      ownerId: 'window-202-device-code',
+    });
+    await vi.waitFor(() =>
+      expect(broadcast).toHaveBeenCalledWith(MAKER_PUSH.AUTH_LOGIN_PROGRESS, {
+        agentKind: 'codex',
+        phase: 'device-code',
+        mode: 'device-code',
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        userCode: 'ABCD-EFGH',
+      }),
+    );
+    expect(triggerAgentLogin).toHaveBeenCalledOnce();
+
+    finishLogin({ authenticated: false, errorReason: 'login_cancelled' });
+    await expect(first).resolves.toMatchObject({ errorReason: 'login_cancelled' });
+    await expect(second).resolves.toMatchObject({ errorReason: 'login_cancelled' });
+  });
+
   it('reassembles URL and code tokens split across arbitrary stdout chunks', async () => {
     const harness = new IpcHarness();
     const broadcast = vi.fn();
