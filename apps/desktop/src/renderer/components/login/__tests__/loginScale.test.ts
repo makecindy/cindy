@@ -58,24 +58,26 @@ describe('panelPlacement(面板恒定 1x,用户拍板 2026-07-23,design.md §11)
     expect(panelPlacement(4000, 4000, 1229).scale).toBe(PANEL_FIXED_SCALE);
   });
 
-  it('(1280, 800) 品牌避让主导:top = 立绘底(400+160×0.3813)+24 ≈ 485.01', () => {
-    const { topY } = panelPlacement(1280, 800, 1229);
-    expect(topY).toBeCloseTo(400 + 160 * (800 / 2098) + 24, 2);
+  // 组高 620(面板 500 + gap 40 + 圆钮 80)→ 屏幕 310;各 clamp 锚点随之下调 30 屏幕 px。
+  // 品牌避让档取 (1280,900):组高 620 后 (1280,800) 的视口底 clamp(466)已压过品牌避让(485)。
+  it('(1280, 900) 品牌避让主导:top = 立绘底(450+160×0.4290)+24 ≈ 542.64', () => {
+    const { topY } = panelPlacement(1280, 900, 1229);
+    expect(topY).toBeCloseTo(450 + 160 * (900 / 2098) + 24, 2);
   });
 
-  it('(800, 600) 视口底 clamp 主导(功能优先压过品牌避让):top = 600-24-280 = 296', () => {
-    expect(panelPlacement(800, 600, 1229).topY).toBe(296);
+  it('(800, 600) 视口底 clamp 主导(功能优先压过品牌避让):top = 600-24-310 = 266', () => {
+    expect(panelPlacement(800, 600, 1229).topY).toBe(266);
   });
 
   it('底部有本地模式操作区时，视口 clamp 为 footer 预留安全空间', () => {
     const placement = panelPlacement(800, 600, 1229, 124);
-    expect(placement.topY).toBe(172);
-    expect(placement.topY + 560 * placement.scale + 124).toBe(576);
+    expect(placement.topY).toBe(142);
+    expect(placement.topY + 620 * placement.scale + 124).toBe(576);
   });
 
-  it('高窗时锚点主导(不触发任何 clamp):(1300, 1400) top = 锚点中心-140', () => {
+  it('高窗时锚点主导(不触发任何 clamp):(1300, 1400) top = 锚点中心-155', () => {
     const s14 = 1400 / 2098;
-    const anchorTop = 700 + (1229 + 280 - 1049) * s14 - 140;
+    const anchorTop = 700 + (1229 + 310 - 1049) * s14 - 155;
     expect(panelPlacement(1300, 1400, 1229).topY).toBeCloseTo(anchorTop, 2);
   });
 
@@ -85,38 +87,43 @@ describe('panelPlacement(面板恒定 1x,用户拍板 2026-07-23,design.md §11)
 });
 
 describe('brandPlacement(品牌块整体让位,用户拍板 2026-07-23 第二轮,design.md §11)', () => {
-  it('① 常态(1280,800):块底 461 < 面板顶 485-12,零让位 = v3.1 原值', () => {
-    const r = brandPlacement(1280, 800);
-    expect(r.scale).toBe(desktopScale(1280, 800).scale);
+  // 组高 560→620 后面板顶整体上移 30 屏幕 px,各档触发窗口随之收紧:
+  // 常态档取 (1280,1000)(原 (1280,800) 现已落进上移档),上移档取 (800,700)
+  // (原 (800,600) 现已落进压缩档);公式与守恒式不变。
+  it('① 常态(1280,1000):块底 576 < 面板顶 600-12,零让位 = v3.1 原值', () => {
+    const r = brandPlacement(1280, 1000);
+    expect(r.scale).toBe(desktopScale(1280, 1000).scale);
     expect(r.translateY).toBe(0);
   });
 
-  it('② 上移档(800,600):面板顶 296,块底 300+160×s 越界 → 整块上移,不压缩', () => {
-    const s6 = 600 / 2098;
-    const r = brandPlacement(800, 600);
-    expect(r.scale).toBe(s6); // 不压缩
-    expect(r.translateY).toBeCloseTo(-(300 + 160 * s6 - (296 - 12)), 2);
+  it('② 上移档(800,700):面板顶 366,块底 350+160×s 越界 → 整块上移,不压缩', () => {
+    const s7 = 700 / 2098;
+    const r = brandPlacement(800, 700);
+    expect(r.scale).toBe(s7); // 不压缩
+    expect(r.translateY).toBeCloseTo(-(350 + 160 * s7 - (366 - 12)), 2);
   });
 
   it('③ 压缩档(800,500):上移到顶仍不够 → 块高压进 [12, 面板顶-12]', () => {
     const r = brandPlacement(800, 500);
-    const limit = 500 - 24 - 280 - 12; // 面板顶(视口底 clamp) - gap = 184
+    const limit = 500 - 24 - 310 - 12; // 面板顶(视口底 clamp) - gap = 154
     expect(r.scale).toBeCloseTo((limit - 12) / 934, 6);
     const blockTop2 = 250 + (275 - 1049) * r.scale;
     expect(r.translateY).toBeCloseTo(12 - blockTop2, 2);
   });
 
   it('让位后块底恰好贴面板顶-12(上移档守恒式)', () => {
-    const s6 = 600 / 2098;
-    const r = brandPlacement(800, 600);
-    const blockBottomAfter = 300 + 160 * s6 + r.translateY;
-    expect(blockBottomAfter).toBeCloseTo(296 - 12, 2);
+    const s7 = 700 / 2098;
+    const r = brandPlacement(800, 700);
+    const blockBottomAfter = 350 + 160 * s7 + r.translateY;
+    expect(blockBottomAfter).toBeCloseTo(366 - 12, 2);
   });
 
   it('品牌让位与登录 footer 使用同一 bottom reserve，避免面板上移后再次遮挡品牌', () => {
     const panelTop = panelPlacement(800, 600, 1229, 124).topY;
     const r = brandPlacement(800, 600, 124);
     const blockBottomAfter = 300 + 160 * r.scale + r.translateY;
-    expect(blockBottomAfter).toBeLessThanOrEqual(panelTop - 12);
+    // 组高 620 后本组合落进压缩档:块底代数上恰好等于 limit(= panelTop-12),
+    // 浮点余量 1e-9(压缩档 scale = (limit-12)/934,乘回 934 未必位精确;实测误差 ~1e-13)。
+    expect(blockBottomAfter).toBeLessThanOrEqual(panelTop - 12 + 1e-9);
   });
 });

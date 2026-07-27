@@ -200,16 +200,6 @@
   "owner": "login-dark"
  },
  {
-  "glob": "apps/desktop/src/renderer/assets/login/icons/guest.svg",
-  "reason": "亮色深圆上的浅色游客图标资产固有色(mdi:user 单色,#EEEEEE;与其它登录图标同口径)",
-  "owner": "login-consent"
- },
- {
-  "glob": "apps/desktop/src/renderer/assets/login/icons/guest-dark.svg",
-  "reason": "暗色白圆上的深色游客图标资产固有色(mdi:user 单色,#2A2828;与其它 *-dark 图标同口径)",
-  "owner": "login-consent"
- },
- {
   "glob": "apps/mobile/src/auth/__tests__/loginConsent.test.ts",
   "reason": "consent 双态色板守卫单测(token 期望 hex/rgba,同 tokenRegistry.test.ts 先例)",
   "owner": "login-consent"

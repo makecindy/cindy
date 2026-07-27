@@ -1348,7 +1348,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** 恢复默认:删掉开关 override,同意事实保留。 */
   resetAnalyticsEnabled: (): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:settings-reset-enabled'),
-  /** 登录页协议门放行时调用一次(含游客);幂等。 */
+  /** 登录页协议门放行时调用一次(个人账号登录链路;SSO 与跳过登录豁免不调用);幂等。 */
   acceptPrivacyConsent: (): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:consent-accept'),
   onAnalyticsSettingsChange: (

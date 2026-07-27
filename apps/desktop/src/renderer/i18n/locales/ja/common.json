@@ -2947,7 +2947,6 @@
     "ssoEntry": "企業 SSO でサインイン",
     "localModeEntry": "ログインをスキップ",
     "localModeOpening": "ローカルモードを開いています…",
-    "returnToLocalMode": "ローカルモードに戻る",
     "localModeDescription": "Cindy アカウントは不要です。データはこのデバイスに保存され、クラウドモデル、デバイス間アクセス、マーケットサービスは利用できません。",
     "consentStatement": "<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を読み、同意します",
     "consentDialog": {
