@@ -6,6 +6,7 @@ import {
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   FILE_BROWSER_EVENT_CHANNEL,
+  INVOKE_TIMEOUT_OVERRIDES_MS,
   PROTOCOL_VERSION,
   type DeviceLinkConnectionIssue,
   type DeviceLinkStatus,
@@ -53,6 +54,13 @@ import {
 } from '@/device-link/topicRegistry';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
+import {
+  acquireDeviceSendSlot,
+  classifyDeviceSendFailure,
+  resetDeviceResponsivenessTracking,
+  settleDeviceSend,
+  unresponsiveDevicesStore,
+} from '@/device-link/unresponsiveDevicesStore';
 import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { updatePresenceAvailability } from '@/device-link/presenceRecovery';
@@ -218,7 +226,13 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           do {
             state.rerun = false;
             if (client.getStatus() !== 'online') return;
-            const result = await rehydrateDeviceLinkTopics(registryRef.current.snapshot(), {
+            // 熔断 open 的设备跳过补齐:它的每一步都会快速失败(DEVICE_UNRESPONSIVE,
+            // permanent 不计瞬时重试),还会白白占用探测单飞窗口。恢复(探测成功关熔断)
+            // 后由下方 effect 里的 store 订阅补触发一次全量补齐回填。
+            const plans = registryRef.current
+              .snapshot()
+              .filter((plan) => !unresponsiveDevicesStore.has(plan.deviceId));
+            const result = await rehydrateDeviceLinkTopics(plans, {
               openLink: (deviceId) => sendOpenLinkOnce(client, deviceId),
               subscribe: (deviceId, topics) => sendTrackedSubscribe(client, deviceId, topics),
               requestSessionsReseed: (deviceId) => remoteSessionStore.requestReseed(deviceId),
@@ -261,6 +275,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       remoteSessionStore.clear();
       remoteScheduleEventStore.clearAll();
       revokedDevicesStore.clearAll();
+      resetDeviceResponsivenessTracking();
       // 登出 / 进程内切号:清掉所有 per-account 残留,避免下一个账号串到上一个账号的数据。
       // - 供应商目录是 module 级单例缓存(useDeviceProviders 按 deviceId 命中),不随组件卸载清;
       // - lastPresenceSnapshot 是本 context 的 state,home 屏据它 patch 设备列表。
@@ -295,6 +310,11 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         pongMissLimit: 1,
         getTokenTimeoutMs: 10_000,
         handshakeTimeoutMs: 12_000,
+        // 请求超时收紧到 15s(默认 30s):被控端卡死时 30s 才失败让用户干等半分钟,
+        // 也把熔断器凑齐「连续超时」信号的时间拖长一倍。长执行通道(desktop-cmd:run /
+        // worktree:create 等)在 sendInvoke 按 INVOKE_TIMEOUT_OVERRIDES_MS 单独放宽,
+        // 与桌面控制端同一张协议契约表,不受此默认值影响。
+        requestTimeoutMs: 15_000,
       },
     });
     clientRef.current = client;
@@ -375,6 +395,17 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     }));
     client.start();
 
+    // 熔断恢复回填:探测成功可能发生在任意业务请求上(不局限某个页面),设备从
+    // unresponsive 集合移除时补一次 rehydrate——它 open 期间被跳过的订阅 / 快照
+    // 不该等到下一次重连或回前台才回来。只在「有设备恢复」时触发,open 方向不动。
+    let lastUnresponsiveSnapshot = unresponsiveDevicesStore.getSnapshot();
+    const offUnresponsive = unresponsiveDevicesStore.subscribe(() => {
+      const next = unresponsiveDevicesStore.getSnapshot();
+      const recovered = [...lastUnresponsiveSnapshot].some((deviceId) => !next.has(deviceId));
+      lastUnresponsiveSnapshot = next;
+      if (recovered) void rehydrateWithClient(client);
+    });
+
     // 退后台的断连宽限状态:stopTimer 挂着表示还没真正 stop;backgroundAt 用于
     // 回前台时判断 JS 是否在计时器触发前就被挂起(见 BACKGROUND_SUSPEND_SUSPECT_MS)。
     const backgroundState: { stopTimer: ReturnType<typeof setTimeout> | null; backgroundAt: number } = {
@@ -434,6 +465,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     return () => {
       sub.remove();
       clearBackgroundStopTimer();
+      offUnresponsive();
       offFrame();
       offPresence();
       offStatus();
@@ -657,12 +689,27 @@ function sendOpenLinkWithAccessHandling(
 }
 
 async function sendOpenLink(client: DeviceLinkClient, deviceId: string): Promise<LinkAcceptPayload> {
-  await ensureOnlineForRequest(client);
-  return client.openLink(deviceId, {
-    controllerName: mobileDeviceName(),
-    protocolVersion: PROTOCOL_VERSION,
-    appVersion: Constants.expoConfig?.version ?? '0.0.0',
-  });
+  // 熔断门禁放在连接等待之前:open 时快速失败,不消耗 1.5s 重连等待也不上管道。
+  const probe = acquireDeviceSendSlot(deviceId);
+  try {
+    await ensureOnlineForRequest(client);
+  } catch (err) {
+    settleDeviceSend(deviceId, probe, 'inconclusive');
+    throw err;
+  }
+  try {
+    const accepted = await client.openLink(deviceId, {
+      controllerName: mobileDeviceName(),
+      protocolVersion: PROTOCOL_VERSION,
+      appVersion: Constants.expoConfig?.version ?? '0.0.0',
+    });
+    // link-accept 是目标设备的真实回包 → 重置熔断计数。
+    settleDeviceSend(deviceId, probe, 'responded');
+    return accepted;
+  } catch (err) {
+    settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));
+    throw err;
+  }
 }
 
 function sendInvokeWithAccessHandling<T>(
@@ -682,11 +729,29 @@ async function sendInvoke<T>(
   args: unknown[],
   opts?: { preSend?: () => void },
 ): Promise<T> {
-  await ensureOnlineForRequest(client);
-  // 连接就绪后、真正发送前的最后检查点:重连等待期间调用方状态可能已失效
-  // (写被同字段新写取代),抛错即中止发送。
-  opts?.preSend?.();
-  const result = await client.invoke(deviceId, { channel, args });
+  // 熔断门禁放在连接等待之前:open 时快速失败,不消耗 1.5s 重连等待也不上管道。
+  const probe = acquireDeviceSendSlot(deviceId);
+  try {
+    await ensureOnlineForRequest(client);
+    // 连接就绪后、真正发送前的最后检查点:重连等待期间调用方状态可能已失效
+    // (写被同字段新写取代),抛错即中止发送。
+    opts?.preSend?.();
+  } catch (err) {
+    // 未真正发送(等待连接失败 / preSend 中止):对设备响应性不定论。
+    settleDeviceSend(deviceId, probe, 'inconclusive');
+    throw err;
+  }
+  let result: InvokeResultPayload;
+  try {
+    // 长执行通道(desktop-cmd:run / worktree:create 等)按协议契约表放宽超时,
+    // 与桌面控制端用法对齐,避免 mobile 收紧的默认 15s 误伤合法慢操作。
+    result = await client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
+  } catch (err) {
+    settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));
+    throw err;
+  }
+  // 收到 invoke-result 帧即为目标设备真实回包(即使 ok:false 的业务错误)→ 重置熔断。
+  settleDeviceSend(deviceId, probe, 'responded');
   return unwrapInvoke<T>(result);
 }
 
@@ -703,11 +768,25 @@ async function sendSubscribe(
   deviceId: string,
   topics: readonly string[],
 ): Promise<void> {
-  await ensureOnlineForRequest(client);
-  const result = await client.invoke(deviceId, {
-    channel: DL_SUBSCRIBE_CHANNEL,
-    args: [{ topics, controllerName: mobileDeviceName() }],
-  });
+  // subscribe 同样走隧道请求超时等待(默认 15s),一样计入并受熔断限制(见 sendInvoke 注释)。
+  const probe = acquireDeviceSendSlot(deviceId);
+  try {
+    await ensureOnlineForRequest(client);
+  } catch (err) {
+    settleDeviceSend(deviceId, probe, 'inconclusive');
+    throw err;
+  }
+  let result: InvokeResultPayload;
+  try {
+    result = await client.invoke(deviceId, {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [{ topics, controllerName: mobileDeviceName() }],
+    });
+  } catch (err) {
+    settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));
+    throw err;
+  }
+  settleDeviceSend(deviceId, probe, 'responded');
   unwrapInvoke(result);
 }
 
@@ -716,11 +795,24 @@ async function sendUnsubscribe(
   deviceId: string,
   topics: readonly string[],
 ): Promise<void> {
-  await ensureOnlineForRequest(client);
-  const result = await client.invoke(deviceId, {
-    channel: DL_UNSUBSCRIBE_CHANNEL,
-    args: [{ topics }],
-  });
+  const probe = acquireDeviceSendSlot(deviceId);
+  try {
+    await ensureOnlineForRequest(client);
+  } catch (err) {
+    settleDeviceSend(deviceId, probe, 'inconclusive');
+    throw err;
+  }
+  let result: InvokeResultPayload;
+  try {
+    result = await client.invoke(deviceId, {
+      channel: DL_UNSUBSCRIBE_CHANNEL,
+      args: [{ topics }],
+    });
+  } catch (err) {
+    settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));
+    throw err;
+  }
+  settleDeviceSend(deviceId, probe, 'responded');
   unwrapInvoke(result);
 }
 

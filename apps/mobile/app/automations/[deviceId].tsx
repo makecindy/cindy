@@ -13,6 +13,7 @@ import { Text, TextInput } from '@/components/AppText';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { ConnectionBanner } from '@/components/ConnectionBanner';
+import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { goBackGuarded } from '@/utils/backGuard';
 import {
   MainWindowActionButton,
@@ -118,6 +119,9 @@ export default function AutomationsScreen() {
   const router = useRouter();
   const { width: screenWidth } = useWindowDimensions();
   const { connectionIssue, openLink, status, subscribe, unsubscribe } = useDeviceLink();
+  // 熔断 open(电脑端未响应):relay 可能仍 online,banner 文案单独入参。
+  const unresponsiveDevices = useUnresponsiveDevices();
+  const deviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
   const maker = useMobileMakerTransport(deviceId);
   const scheduleEventSnapshot = useRemoteScheduleEventSnapshot(deviceId);
   const remoteSessions = useRemoteSessions();
@@ -741,6 +745,7 @@ export default function AutomationsScreen() {
       />
 
       <ConnectionBanner
+        deviceUnresponsive={deviceUnresponsive}
         error={error}
         issue={connectionIssue}
         lastSyncedAt={lastSyncedAt}

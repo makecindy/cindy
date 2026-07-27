@@ -49,6 +49,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text, TextInput } from '@/components/AppText';
 import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
+import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { goBackGuarded } from '@/utils/backGuard';
 import { useAuth } from '@/auth/AuthContext';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
@@ -146,7 +147,9 @@ export default function RemoteFileBrowserScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const showConnectionBanner = useShowConnectionBanner(status, error, connectionIssue);
+  const unresponsiveDevices = useUnresponsiveDevices();
+  const deviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
+  const showConnectionBanner = useShowConnectionBanner(status, error, connectionIssue, deviceUnresponsive);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -775,6 +778,7 @@ export default function RemoteFileBrowserScreen() {
       {showConnectionBanner ? (
         <ConnectionBanner
           density="compact"
+          deviceUnresponsive={deviceUnresponsive}
           error={error}
           issue={connectionIssue}
           lastSyncedAt={lastSyncedAt}

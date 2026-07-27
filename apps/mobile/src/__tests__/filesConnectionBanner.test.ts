@@ -9,9 +9,9 @@ describe('mobile files page connection banner noise budget', () => {
     expect(source.split('<ConnectionBanner').length).toBe(2);
 
     // banner 渲染条件与会话页对齐(useShowConnectionBanner):请求级 error /
-    // 可分类连接问题立即显示;普通弱网断线持续超过防闪窗口后也显示;
-    // 连接正常时不渲染常驻状态条。
-    expect(source).toContain('useShowConnectionBanner(status, error, connectionIssue)');
+    // 可分类连接问题 / 目标设备熔断 open(电脑端未响应)立即显示;普通弱网断线
+    // 持续超过防闪窗口后也显示;连接正常时不渲染常驻状态条。
+    expect(source).toContain('useShowConnectionBanner(status, error, connectionIssue, deviceUnresponsive)');
     expect(source).toContain('{showConnectionBanner ? (');
     expect(source).toContain('density="compact"');
     expect(source).toContain('variant="inline"');

@@ -1,3 +1,4 @@
+import { isDeviceUnresponsiveRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { createMobileMakerTransport, type MobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { normalizeScheduleList, normalizeScheduleRuns } from '@/scheduler/scheduleModel';
@@ -24,13 +25,19 @@ export async function loadSessionScheduleIndex(
   const pairs: Array<readonly [string, RemoteScheduleRun[]]> = [];
   for (const schedule of schedules) {
     let runs: RemoteScheduleRun[] = [];
+    let deviceUnresponsive = false;
     try {
       runs = normalizeScheduleRuns(await maker.schedule.listRuns(schedule.id, SCHEDULE_INDEX_RUN_LIMIT));
     } catch (error) {
       if (options.throwOnTransientRunListError && isTransientRemoteError(error)) throw error;
       runs = [];
+      deviceUnresponsive = isDeviceUnresponsiveRemoteError(error);
     }
     pairs.push([schedule.id, runs] as const);
+    // 目标设备熔断 open(DEVICE_UNRESPONSIVE 快速失败):剩余 N-1 个 listRuns 会
+    // 同样地逐个失败,立即止损跳出。缺 runs 只影响未读徽标,schedule 名称 / 分组
+    // 由 schedules 列表兜底,下一轮(熔断恢复或负缓存过期后)自然补齐。
+    if (deviceUnresponsive) break;
   }
   return buildSessionScheduleIndex(schedules, new Map(pairs));
 }
@@ -42,13 +49,19 @@ export async function loadSessionScheduleIndex(
  *  - 同 key 在途请求直接复用(单飞);
  *  - 完成后 TTL 内的触发复用上次结果(index 只喂次要徽标,短暂陈旧无感);
  *  - `force`(用户显式操作,如标记已读后的重建)绕过 TTL 立即重拉;
- *  - 失败不占坑:reject 后清除条目,下次触发正常重试。
+ *  - 失败负缓存:reject 后失败 TTL 内复用同一个 rejected promise,不重放 1+N 批次
+ *    (参照 remoteMediaResolveQueue)。旧的「失败即清坑」+ 多触发源交叠,是 2026-07
+ *    被控端无响应事故里首页反复全量重放、堆积请求风暴的放大器之一;`force` 照常穿透。
  */
 export const SCHEDULE_INDEX_THROTTLE_TTL_MS = 30_000;
+/** 失败负缓存时长:窗口内的被动触发直接吃上次失败,不再压请求上管道。 */
+export const SCHEDULE_INDEX_FAILURE_TTL_MS = 30_000;
 
 interface ScheduleIndexThrottleEntry {
   at: number;
   promise: Promise<Map<string, RemoteSessionScheduleInfo>>;
+  /** 该轮加载失败的时刻;非 null 表示条目处于负缓存态。 */
+  failedAt: number | null;
 }
 
 const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>();
@@ -56,17 +69,23 @@ const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>
 export function loadSessionScheduleIndexThrottled(
   key: string,
   load: () => Promise<Map<string, RemoteSessionScheduleInfo>>,
-  options: { force?: boolean; ttlMs?: number; now?: () => number } = {},
+  options: { force?: boolean; ttlMs?: number; failureTtlMs?: number; now?: () => number } = {},
 ): Promise<Map<string, RemoteSessionScheduleInfo>> {
   const now = options.now ?? Date.now;
   const ttlMs = options.ttlMs ?? SCHEDULE_INDEX_THROTTLE_TTL_MS;
+  const failureTtlMs = options.failureTtlMs ?? SCHEDULE_INDEX_FAILURE_TTL_MS;
   const existing = scheduleIndexThrottleEntries.get(key);
-  if (!options.force && existing && now() - existing.at < ttlMs) return existing.promise;
+  if (!options.force && existing) {
+    const withinTtl = existing.failedAt !== null
+      ? now() - existing.failedAt < failureTtlMs
+      : now() - existing.at < ttlMs;
+    if (withinTtl) return existing.promise;
+  }
   const promise = load();
-  const entry: ScheduleIndexThrottleEntry = { at: now(), promise };
+  const entry: ScheduleIndexThrottleEntry = { at: now(), promise, failedAt: null };
   scheduleIndexThrottleEntries.set(key, entry);
   promise.catch(() => {
-    if (scheduleIndexThrottleEntries.get(key) === entry) scheduleIndexThrottleEntries.delete(key);
+    if (scheduleIndexThrottleEntries.get(key) === entry) entry.failedAt = now();
   });
   return promise;
 }

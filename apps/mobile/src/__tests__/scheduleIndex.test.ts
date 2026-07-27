@@ -5,6 +5,7 @@ import {
   loadSessionScheduleIndexThrottled,
   replaceSessionScheduleIndexEntries,
   resetScheduleIndexThrottleForTesting,
+  SCHEDULE_INDEX_FAILURE_TTL_MS,
   SCHEDULE_INDEX_THROTTLE_TTL_MS,
 } from '@/session/scheduleIndex';
 import type { RemoteSessionScheduleInfo } from '@/session/sessionList';
@@ -301,17 +302,61 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
-  it('失败不占坑:reject 后下一次触发正常重试', async () => {
+  it('失败负缓存:reject 后 TTL 内复用同一次失败不重放批次,过期后正常重试', async () => {
+    resetScheduleIndexThrottleForTesting();
+    const load = vi.fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    let at = 1000;
+    const now = () => at;
+    await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).rejects.toThrow('boom');
+    // 失败时间戳写入是微任务,先让它落地。
+    await Promise.resolve();
+    // 失败 TTL 内的被动触发直接吃负缓存(同一个 rejected promise),不再压请求上管道:
+    // 旧的「失败即清坑」+ 多触发源交叠,是被控端无响应时反复全量重放的放大器。
+    at += SCHEDULE_INDEX_FAILURE_TTL_MS - 1;
+    await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).rejects.toThrow('boom');
+    expect(load).toHaveBeenCalledTimes(1);
+    // 负缓存过期后正常重试
+    at += 1;
+    await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).resolves.toBeInstanceOf(Map);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('失败负缓存:force(用户显式动作)穿透负缓存立即重拉', async () => {
     resetScheduleIndexThrottleForTesting();
     const load = vi.fn()
       .mockRejectedValueOnce(new Error('boom'))
       .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
     const now = () => 1000;
     await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).rejects.toThrow('boom');
-    // reject 清坑是微任务,先让它落地。
     await Promise.resolve();
-    await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).resolves.toBeInstanceOf(Map);
+    await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now, force: true })).resolves.toBeInstanceOf(Map);
     expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('DEVICE_UNRESPONSIVE:批循环命中即 break,剩余 listRuns 不再发', async () => {
+    const listRuns = vi.fn(async () => {
+      throw Object.assign(
+        new Error('target device dev-1 is unresponsive (circuit open)'),
+        { code: 'DEVICE_UNRESPONSIVE' },
+      );
+    });
+    const maker = {
+      schedule: {
+        list: async () => [
+          { id: 'sched-1', name: 'a', status: 'active', targetSessionId: 'session-a' },
+          { id: 'sched-2', name: 'b', status: 'active' },
+          { id: 'sched-3', name: 'c', status: 'active' },
+        ],
+        listRuns,
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+    const index = await loadSessionScheduleIndex(maker);
+    // 熔断快速失败会在每个 listRuns 上重复出现:第一个命中后立即止损
+    expect(listRuns).toHaveBeenCalledTimes(1);
+    // schedules 列表已到手:targetSessionId 绑定的兜底条目仍然可用(名称 / 分组不丢)
+    expect(index.get('session-a')).toMatchObject({ scheduleId: 'sched-1', scheduleName: 'a' });
   });
 
   it('listRuns 串行执行(同一时刻最多一个在途,不挤占 device-link 管道)', async () => {
