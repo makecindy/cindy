@@ -68,6 +68,7 @@ import { GhostPluginIcon } from './GhostPluginIcon';
 import { MarketPluginDetailView } from './MarketPluginDetailView';
 import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker';
 import {
+  orderPluginCatalogItems,
   pluginPresentationOrigin,
   type PluginPresentationOrigin,
 } from './lib/pluginMarketPresentation';
@@ -361,6 +362,10 @@ export function GhostPluginPage() {
             (item) => pluginPresentationOrigin(item) === effectiveOriginFilter,
           ),
     [effectiveOriginFilter, searchedAvailableMarketItems],
+  );
+  const catalogItems = useMemo(
+    () => orderPluginCatalogItems(marketItems, items, availableMarketItems),
+    [availableMarketItems, items, marketItems],
   );
   const originCounts = useMemo(() => {
     const counts: Record<PluginPresentationOrigin, number> = {
@@ -917,34 +922,40 @@ export function GhostPluginPage() {
               />
             ) : null}
 
-            {items.length > 0 || availableMarketItems.length > 0 ? (
+            {catalogItems.length > 0 ? (
               <div className={cn('plugin-motion-stagger', PLUGIN_MANAGEMENT_CARD_GRID_CLASS)}>
-                {items.map((item) => (
-                  <GhostPluginCard
-                    key={item.id}
-                    item={item}
-                    sourceLabel={t(`settings.ghosts.page.origin.${item.origin}`)}
-                    onSelect={() => setSelectedId(item.id)}
-                    onAction={() => void handleUseGhost(item.id)}
-                    updateVersion={item.marketUpdate?.version}
-                    updateBusy={item.marketUpdate !== null && marketBusyId !== null}
-                    onUpdate={
-                      item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
-                    }
-                    effectiveEnabled={effectiveEnabled(item.id, item.enabled)}
-                    toggleDisabled={scopeDir !== null && !item.enabled}
-                    onToggle={(enabled) => void handleToggle(item.id, enabled)}
-                  />
-                ))}
-                {availableMarketItems.map((item) => (
-                  <MarketPluginCard
-                    key={item.pluginId}
-                    item={item}
-                    busy={marketBusyId !== null}
-                    onSelect={() => void handleSelectMarket(item.pluginId)}
-                    onIconLoadError={handleMarketIconLoadError}
-                  />
-                ))}
+                {catalogItems.map((catalogItem) =>
+                  catalogItem.kind === 'installed' ? (
+                    <GhostPluginCard
+                      key={`installed:${catalogItem.item.id}`}
+                      item={catalogItem.item}
+                      sourceLabel={t(`settings.ghosts.page.origin.${catalogItem.item.origin}`)}
+                      onSelect={() => setSelectedId(catalogItem.item.id)}
+                      onAction={() => void handleUseGhost(catalogItem.item.id)}
+                      updateVersion={catalogItem.item.marketUpdate?.version}
+                      updateBusy={catalogItem.item.marketUpdate !== null && marketBusyId !== null}
+                      onUpdate={
+                        catalogItem.item.marketUpdate
+                          ? () => void handleMarketUpdate(catalogItem.item.id)
+                          : undefined
+                      }
+                      effectiveEnabled={effectiveEnabled(
+                        catalogItem.item.id,
+                        catalogItem.item.enabled,
+                      )}
+                      toggleDisabled={scopeDir !== null && !catalogItem.item.enabled}
+                      onToggle={(enabled) => void handleToggle(catalogItem.item.id, enabled)}
+                    />
+                  ) : (
+                    <MarketPluginCard
+                      key={`market:${catalogItem.item.pluginId}`}
+                      item={catalogItem.item}
+                      busy={marketBusyId !== null}
+                      onSelect={() => void handleSelectMarket(catalogItem.item.pluginId)}
+                      onIconLoadError={handleMarketIconLoadError}
+                    />
+                  ),
+                )}
               </div>
             ) : !legacyRecoveryStatus ? (
               <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-5 py-10 text-center">
