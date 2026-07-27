@@ -62,4 +62,15 @@ describe('ensureSystemBinPathForMachineId', () => {
       expect(process.env.PATH).toBe('/usr/bin::/bin');
     }
   });
+
+  it('PATH 未设置(undefined)时:darwin/linux 只置系统目录,其它平台维持 undefined', () => {
+    delete process.env.PATH;
+    ensureSystemBinPathForMachineId();
+    if (PATCHES_PATH) {
+      // 空/未设 PATH 只置系统目录,不刻意保留空段 / CWD(见 deviceId.ts)。
+      expect(process.env.PATH).toBe('/usr/sbin:/sbin');
+    } else {
+      expect(process.env.PATH).toBeUndefined();
+    }
+  });
 });
