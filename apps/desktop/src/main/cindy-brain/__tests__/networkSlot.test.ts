@@ -129,6 +129,63 @@ function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
 
 const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
 
+describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', () => {
+  it('401/403 重试耗尽后按 user 源 secret key 上报;2xx/其它 4xx 不上报', async () => {
+    const noteCredentialRejected = vi.fn();
+    const { slot } = makeSlot({
+      fetchImpl: vi.fn(async () => fakeResponse({ status: 401 })) as never,
+      noteCredentialRejected,
+    });
+    const r = await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    // 401 原样回给意识(代发成功,对方说不行),但台账已记
+    expect(r.ok).toBe(true);
+    expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'brave_api_key');
+    expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'tavily_api_key');
+
+    noteCredentialRejected.mockClear();
+    const { slot: okSlot } = makeSlot({ noteCredentialRejected });
+    await okSlot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
+
+    noteCredentialRejected.mockClear();
+    const { slot: s500 } = makeSlot({
+      fetchImpl: vi.fn(async () => fakeResponse({ status: 500 })) as never,
+      noteCredentialRejected,
+    });
+    await s500.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
+  });
+
+  it('oauth 源凭证不重复记账(已有自己的 expired 链路)', async () => {
+    const noteCredentialRejected = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () =>
+        fakeGhost({
+          network: {
+            hosts: ['api.search.brave.com'],
+            secrets: [
+              {
+                key: 'google_token',
+                label: 'Google',
+                source: 'oauth',
+                inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.search.brave.com'] },
+                oauth: { provider: 'google', scopes: ['x'] } as never,
+              },
+            ],
+          },
+        }),
+      fetchImpl: vi.fn(async () => fakeResponse({ status: 403 })) as never,
+      noteCredentialRejected,
+      oauthTokens: {
+        getFreshAccessToken: async () => ({ ok: true as const, accessToken: 'tok', accountId: 'a1' }),
+        invalidateAccessToken: () => {},
+      },
+    });
+    await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
+  });
+});
+
 describe('networkSlot · 载荷与 URL 校验', () => {
   it('url 缺失/非 https/带端口/内嵌凭证/不是绝对地址一律拒', async () => {
     const { slot } = makeSlot();

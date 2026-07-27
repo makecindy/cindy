@@ -130,6 +130,12 @@ export interface NetworkSlotDeps {
   /** 归一化后的 mime 是否可入总仓(生产为 cindy-media 的 supportedMime)。 */
   isSupportedMediaMime(mime: string): boolean;
   /**
+   * 运行期凭证被拒上报(生产为 index.ts 的 noteGhostCredentialRejected):
+   * 401/403 重试耗尽后按 secret key 记账,生命周期投影折算 needs_reauth。
+   * 未注入时不上报(单测 / 旧接线保持原口径)。
+   */
+  noteCredentialRejected?(ghostId: string, secretKey: string): void;
+  /**
    * OAuth 凭证通道(source:'oauth';生产注入 GhostOauthAccountManager)。
    * 出网时现取新鲜 access token(内部缓存 + 单飞刷新),401 时经
    * invalidateAccessToken 作废后整链重试一次(与 exchange 同套路)。
@@ -1153,6 +1159,19 @@ export class GhostNetworkSlot {
         break;
       }
       if (!response) return { ok: false, message: '请求未获得响应' };
+
+      // 运行期凭证被拒记账:401/403 到达这里 = exchange/oauth 的单飞重试
+      // 已耗尽(或根本没有可重试的凭证形态),服务端明确不认这份凭证。
+      // user 源 key 被吊销后不会再有任何信号——在这里按 secret key 记
+      // 台账,生命周期投影折算 needs_reauth,发现层与插件页即知;OAuth /
+      // 连接有自己的 expired 链路,不重复记账。
+      if (response.status === 401 || response.status === 403) {
+        for (const decl of net.secrets ?? []) {
+          if ((decl.source ?? 'user') === 'user') {
+            this.deps.noteCredentialRejected?.(ghostId, decl.key);
+          }
+        }
+      }
 
       // ── 响应收敛:媒体落仓 / 文本透传;体积护栏;响应头白名单 ──────────
       const contentType = response.headers.get('content-type') ?? '';

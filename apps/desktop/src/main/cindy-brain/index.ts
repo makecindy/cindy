@@ -80,6 +80,10 @@ import {
 } from './ghostSetupStatus.js';
 import { getGhostSetupChangeBus } from './ghostSetupChangeBus.js';
 import {
+  createGhostCredentialRejectionsStore,
+  ghostCredentialRejectionsPath,
+} from './ghostCredentialRejections.js';
+import {
   projectGhostLifecycles,
   type GhostLifecycleEntry,
 } from './ghostLifecycle.js';
@@ -542,7 +546,14 @@ let lifecyclePushArmed = false;
 export function armGhostLifecyclePush(): void {
   if (lifecyclePushArmed) return;
   lifecyclePushArmed = true;
-  getGhostSetupChangeBus().subscribeAll(() => broadcastGhostLifecycleChanged());
+  getGhostSetupChangeBus().subscribeAll((event) => {
+    // 凭证重存 = 用户已处置被拒记录,按 ghostId 清账(所有 secret 写入
+    // 路径都会 emit,无需逐点挂钩);清账后照常重投影广播。
+    if (event.source === 'secret') {
+      ghostCredentialRejections.clear(event.ghostId);
+    }
+    broadcastGhostLifecycleChanged();
+  });
 }
 
 function availableGhosts(): InstalledGhost[] {
@@ -2003,6 +2014,20 @@ function getGhostConnectionManager(): GhostConnectionManager {
 
 let ghostSetupKvStore: GhostKvStore | null = null;
 
+// 运行期凭证被拒台账(secret key 被服务端 401/403 拒绝的失效记录;
+// 生命周期投影折算为 needs_reauth 的事实源之一)。
+const ghostCredentialRejections = createGhostCredentialRejectionsStore({
+  filePath: ghostCredentialRejectionsPath(ownerScopedUserDataPath()),
+  log,
+});
+
+/** networkSlot 在 401/403 重试耗尽后记账;有实际变化时推 setup change。 */
+export function noteGhostCredentialRejected(ghostId: string, secretKey: string): void {
+  if (ghostCredentialRejections.markRejected(ghostId, secretKey)) {
+    getGhostSetupChangeBus().emit(ghostId, { source: 'runtime_probe', ref: secretKey });
+  }
+}
+
 /**
  * Runtime-authoritative setup assessment used by ghost_list and ghost_call.
  * Unlike the legacy plugin-page projection this path is strict: storage or
@@ -2017,7 +2042,7 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   const oauthManager = getGhostOauthAccountManager();
   const connectionManager = getGhostConnectionManager();
   let kvSnapshot: Record<string, unknown> | null = null;
-  return evaluateGhostSetupAssessment(
+  const assessment = evaluateGhostSetupAssessment(
     runtimeManifest,
     {
       secretSaved: (key) => ghostSecretSaved(ghostId, key),
@@ -2045,6 +2070,34 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
       }),
     },
   );
+  // 运行期凭证被拒台账折算:被 401/403 拒绝过的 secret 按 expired 上报——
+  // 与 OAuth 过期同一语义(修复动作 = 重新配置),readiness 随之降
+  // needs_reauth,发现层 / 插件页在下一次投影即知。
+  const rejected = ghostCredentialRejections.rejectedKeys(ghostId);
+  if (rejected.length === 0) return assessment;
+  const hasRejection = assessment.groups.some((group) =>
+    group.items.some(
+      (item) =>
+        item.kind === 'secret' &&
+        item.state === 'satisfied' &&
+        rejected.includes(item.ref.replace(/^secret:/, '')),
+    ),
+  );
+  if (!hasRejection) return assessment;
+  return {
+    ...assessment,
+    state: 'required',
+    groups: assessment.groups.map((group) => ({
+      ...group,
+      items: group.items.map((item) =>
+        item.kind === 'secret' &&
+        item.state === 'satisfied' &&
+        rejected.includes(item.ref.replace(/^secret:/, ''))
+          ? { ...item, state: 'expired' as const }
+          : item,
+      ),
+    })),
+  };
 }
 
 /**
@@ -2229,6 +2282,7 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
         return ghost ? { ...ghost, manifest: withRuntimeFiloGoogleClient(ghost.manifest) } : null;
       },
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
+      noteCredentialRejected: noteGhostCredentialRejected,
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
       getLoginEmail: () => getAuthState().user?.email ?? null,
       // 用 Node 侧全局 fetch(undici)而非 Electron net.fetch:redirect:'manual'

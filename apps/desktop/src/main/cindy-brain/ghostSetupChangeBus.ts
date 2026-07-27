@@ -14,6 +14,9 @@ export type GhostSetupChangeSource =
   | 'manifest'
   | 'host_config'
   | 'workdir_policy'
+  // 运行期探测(networkSlot 凭证被拒、健康探活):不携带配置已变的承诺,
+  // 订阅方重新评估后自行判断 readiness 是否变化。
+  | 'runtime_probe'
   | 'focus';
 
 export interface GhostSetupChangeEvent {
