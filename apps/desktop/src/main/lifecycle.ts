@@ -197,8 +197,29 @@ type WatchdogSpawn = (
 };
 
 let _watchdogArmed = false;
-/** 异步 spawn 失败后的单次重试闸(防 error→重试→error 无限循环)。 */
-let _watchdogSpawnRetried = false;
+/**
+ * watchdog spawn 总尝试预算(同步/异步失败共享计数,防 error→重试死循环):
+ * 3 次足以吸收 EAGAIN(fork 上限)这类瞬时抖动;仍然全失败 = 环境级问题
+ * (ENOENT/EACCES),本进程从内部**不可能**布防任何外部补刀,重试再多也无意义
+ * (review:此为可接受的终态)。耗尽时打一条明确的缺席标记(error 级),让
+ * 退出尸检一眼看出"这次 shutdown 没有外部兜底"。
+ */
+const WATCHDOG_MAX_SPAWN_ATTEMPTS = 3;
+let _watchdogSpawnAttempts = 0;
+
+function noteWatchdogSpawnFailure(err: unknown, options: Parameters<typeof armShutdownHardKillWatchdog>[0]): void {
+  _watchdogArmed = false;
+  if (_watchdogSpawnAttempts < WATCHDOG_MAX_SPAWN_ATTEMPTS) {
+    log.warn('shutdown hard-kill watchdog process failed to start (retrying)', err);
+    armShutdownHardKillWatchdog(options);
+    return;
+  }
+  log.error(
+    `shutdown hard-kill watchdog UNAVAILABLE after ${_watchdogSpawnAttempts} spawn attempts — ` +
+      'external kill backstop ABSENT for this shutdown (continuing without it)',
+    err,
+  );
+}
 
 /**
  * 布防外部硬杀 watchdog: spawn 一个 detached 的外部杀手进程, 宽限期后对本进程
@@ -230,7 +251,9 @@ export function armShutdownHardKillWatchdog(
   } = {},
 ): void {
   if (_watchdogArmed) return;
+  if (_watchdogSpawnAttempts >= WATCHDOG_MAX_SPAWN_ATTEMPTS) return; // 预算耗尽,缺席标记已打
   _watchdogArmed = true;
+  _watchdogSpawnAttempts += 1;
   const spawnFn = options.spawn ?? spawn;
   const pid = options.pid ?? process.pid;
   const platform = options.platform ?? process.platform;
@@ -287,25 +310,18 @@ export function armShutdownHardKillWatchdog(
     // 不挂 listener 会变成 uncaughtException, 且 watchdog 实际未布防却无任何
     // 日志痕迹 —— 这里 warn 留痕, 让退出尸检能看出"补刀兜底当时不在位"。
     child.once?.('error', (err) => {
-      log.warn('shutdown hard-kill watchdog process failed to start (continuing shutdown)', err);
-      // 异步启动失败 = 实际未布防(review P1):回置标志并立即重试一次——
-      // EACCES/EAGAIN(fork 上限)这类瞬时失败第二次往往能成;仍失败则放弃
-      // (ENOENT 级环境缺失重试无意义),单次重试闸防 error→重试死循环。
-      _watchdogArmed = false;
-      if (!_watchdogSpawnRetried) {
-        _watchdogSpawnRetried = true;
-        armShutdownHardKillWatchdog(options);
-      }
+      // 异步启动失败 = 实际未布防(review P1 两轮):回置标志,预算内立即重试,
+      // 耗尽则打缺席标记(见 noteWatchdogSpawnFailure)。
+      noteWatchdogSpawnFailure(err, options);
     });
     child.unref();
     // log 放在 spawn 之后 (review P1): 统一 logger 同步写日志文件, 坏盘/网络盘
     // 上可能阻塞 —— watchdog 必须在任何可能卡住的盘 IO 之前先布防好。
     log.info(`arming shutdown hard-kill watchdog: pid=${pid} grace=${graceSeconds}s`);
   } catch (err) {
-    // 同步 spawn 失败 = 实际未布防:回置标志,让后续调用还有机会重试(review)。
-    // 异步 'error' 事件不回置——child 对象已创建,重试会叠出第二个 watchdog。
-    _watchdogArmed = false;
-    log.warn('failed to arm shutdown hard-kill watchdog (continuing shutdown)', err);
+    // 同步 spawn 失败 = 实际未布防:与异步 error 共享尝试预算,预算内重试,
+    // 耗尽打缺席标记(日志由 noteWatchdogSpawnFailure 统一输出)。
+    noteWatchdogSpawnFailure(err, options);
   }
 }
 

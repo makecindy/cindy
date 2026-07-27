@@ -333,14 +333,15 @@ describe('armShutdownHardKillWatchdog', () => {
       armShutdownHardKillWatchdog({ spawn, pid: 1, platform: 'darwin' }),
     ).not.toThrow();
     expect(mocks.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('failed to arm shutdown hard-kill watchdog'),
+      expect.stringContaining('watchdog process failed to start'),
       expect.any(Error),
     );
   });
 
-  it('async spawn "error" resets the flag and retries ONCE (review P1: watchdog must not stay absent)', async () => {
-    // 异步启动失败(ENOENT/EACCES)时 watchdog 实际不在位;shutdown 又只布防
-    // 一次——必须回置并立即重试,否则退出挂死将无人补刀。单次重试闸防死循环。
+  it('async spawn "error" retries within the 3-attempt budget, then marks the backstop ABSENT (review ×2)', async () => {
+    // 异步启动失败(ENOENT/EACCES)时 watchdog 实际不在位:预算内立即重试
+    // (吸收 EAGAIN 类瞬时抖动);全部失败 = 环境级问题,进程内不可能布防任何
+    // 外部补刀——打明确的缺席标记(error 级)供退出尸检定位,不再无限重试。
     const { armShutdownHardKillWatchdog } = await freshLifecycle();
     const children: Array<{ once: ReturnType<typeof vi.fn>; unref: ReturnType<typeof vi.fn> }> = [];
     const spawn = vi.fn(() => {
@@ -351,28 +352,40 @@ describe('armShutdownHardKillWatchdog', () => {
 
     armShutdownHardKillWatchdog({ spawn, pid: 1, platform: 'darwin' });
     expect(spawn).toHaveBeenCalledTimes(1);
-    // 第一个 child 异步报错 → 立即重试布防第二个
+    // 第 1、2 个 child 异步报错 → 各自立即重试
     (children[0].once.mock.calls[0][1] as (err: Error) => void)(new Error('EACCES'));
     expect(spawn).toHaveBeenCalledTimes(2);
-    // 第二个也报错:重试闸已用,不再无限重试
     (children[1].once.mock.calls[0][1] as (err: Error) => void)(new Error('EACCES'));
-    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(spawn).toHaveBeenCalledTimes(3);
+    // 第 3 个也报错:预算耗尽 → 缺席标记,不再重试
+    (children[2].once.mock.calls[0][1] as (err: Error) => void)(new Error('EACCES'));
+    expect(spawn).toHaveBeenCalledTimes(3);
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('external kill backstop ABSENT'),
+      expect.any(Error),
+    );
+    // 预算耗尽后再布防:no-op(环境已证实无法 spawn)
+    armShutdownHardKillWatchdog({ spawn, pid: 1, platform: 'darwin' });
+    expect(spawn).toHaveBeenCalledTimes(3);
   });
 
-  it('sync spawn failure resets the armed flag so a later call can retry (review)', async () => {
-    // 布防标志若在 spawn 前置位且失败不回置,进程余下生命周期都会跳过布防——
-    // watchdog 实际不在位却再也无法重试。
+  it('sync spawn failure consumes the shared budget and marks ABSENT on exhaustion (review)', async () => {
+    // 同步 throw 与异步 error 共享 3 次预算:同一环境级失败在一次布防里就地
+    // 重试到耗尽并打缺席标记;之后其它入口的布防调用 no-op,不再空转。
     const { armShutdownHardKillWatchdog } = await freshLifecycle();
     const failingSpawn = vi.fn(() => {
       throw new Error('spawn-boom');
     });
     armShutdownHardKillWatchdog({ spawn: failingSpawn, pid: 1, platform: 'darwin' });
+    expect(failingSpawn).toHaveBeenCalledTimes(3);
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('external kill backstop ABSENT'),
+      expect.any(Error),
+    );
 
-    const { spawn, child } = fakeSpawn();
+    const { spawn } = fakeSpawn();
     armShutdownHardKillWatchdog({ spawn, pid: 1, platform: 'darwin' });
-
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(child.unref).toHaveBeenCalledTimes(1);
+    expect(spawn).not.toHaveBeenCalled();
   });
 });
 
