@@ -262,14 +262,15 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
   });
 
-  // 被控端:接线入站隧道(link-open / invoke / link-close → 本机 handler dispatch)
-  wireInboundDispatch(client);
-
-  // 被控端可见性:控制端集合变化 → 广播给 renderer 状态条
+  // 先注册控制端变化监听，再接线入站帧；否则接线后的首个 subscribe 可能落在空窗期，
+  // 让被控横幅和无人值守更新的 busy 边沿都漏掉。
   setControllersChangedListener((controllers) => {
     broadcast(DEVICE_LINK_PUSH.CONTROLLED_STATE, { controllers });
     options.onControllersChanged?.(controllers);
   });
+
+  // 被控端:接线入站隧道(link-open / invoke / link-close → 本机 handler dispatch)
+  wireInboundDispatch(client);
 
   // busy presence:每 5s 探一次本机是否有 turn 在跑,变化才上报(dedupe by value)
   startBusyReporting();

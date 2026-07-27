@@ -30,6 +30,9 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
 
     expect(deviceLinkHost).toContain('wireInboundDispatch,');
     expect(deviceLinkHost).toContain('wireInboundDispatch(client);');
+    expect(deviceLinkHost.indexOf('setControllersChangedListener((controllers) =>')).toBeLessThan(
+      deviceLinkHost.indexOf('wireInboundDispatch(client);'),
+    );
   });
 
   it('replays desktop subscriptions when a remote device becomes controllable again', () => {
