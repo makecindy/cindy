@@ -89,7 +89,9 @@ describe('stopRuntimeForQuitIfUsed', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it('tracking wrapper records usage even when the tracked call rejects', async () => {
+  it('does not count a rejected call as usage — service liveness unproven', async () => {
+    // Review P1: marking at dispatch time would treat a failed-boot call as
+    // "service is up", and the quit-time stop would then re-run the boot.
     const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(async () => {
       throw new Error('dispatch exploded');
     });
@@ -99,8 +101,38 @@ describe('stopRuntimeForQuitIfUsed', () => {
     await expect(tracked.call({ action: 'status' })).rejects.toThrow('dispatch exploded');
     await stopRuntimeForQuitIfUsed(tracked, logger);
 
-    // used → stop dispatched; its rejection is swallowed by stopRuntimeForQuit
-    expect(call).toHaveBeenCalledTimes(2);
-    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
+  });
+
+  it('does not count an ok:false result as usage — startup failures surface as not-ok', async () => {
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
+      async (req) => ({ ok: false, action: req.action, status: 500 }),
+    );
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    await tracked.call({ action: 'status' });
+    await stopRuntimeForQuitIfUsed(tracked, logger);
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
+  });
+
+  it('does not count a stop dispatch as usage — teardown is not traffic', async () => {
+    // Review P1: ExternalChromeBackend.dispose (backend switching) sends a
+    // stop through the same wrapper; counting it would make the quit path
+    // dispatch a second stop that re-boots the service.
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
+      async (req) => ({ ok: true, action: req.action, status: 200 }),
+    );
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    await tracked.call({ action: 'stop' });
+    await stopRuntimeForQuitIfUsed(tracked, logger);
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
   });
 });

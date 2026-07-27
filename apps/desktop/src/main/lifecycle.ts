@@ -190,7 +190,11 @@ type WatchdogSpawn = (
   command: string,
   args: string[],
   options: { detached: boolean; stdio: 'ignore'; windowsHide?: boolean },
-) => { unref(): void };
+) => {
+  unref(): void;
+  /** ChildProcess 的 'error' 事件订阅; fake 可省略 (可选调用)。 */
+  once?(event: 'error', listener: (err: Error) => void): unknown;
+};
 
 let _watchdogArmed = false;
 
@@ -226,20 +230,26 @@ export function armShutdownHardKillWatchdog(
   const graceSeconds = options.graceSeconds ?? SHUTDOWN_HARD_KILL_GRACE_SECONDS;
   log.info(`arming shutdown hard-kill watchdog: pid=${pid} grace=${graceSeconds}s`);
   try {
-    if (platform === 'win32') {
-      // `timeout /t` 在无控制台的 detached 进程里不可用 ("输入重定向不受支持"),
-      // `ping -n <N+1>` 是标准的 cmd 延时 hack (首个包立即发, 之后每包间隔 1s)。
-      spawnFn(
-        process.env.comspec ?? 'cmd.exe',
-        ['/d', '/s', '/c', `ping -n ${graceSeconds + 1} 127.0.0.1 >nul & taskkill /f /pid ${pid}`],
-        { detached: true, windowsHide: true, stdio: 'ignore' },
-      ).unref();
-    } else {
-      spawnFn('/bin/sh', ['-c', `sleep ${graceSeconds}; kill -9 ${pid} 2>/dev/null`], {
-        detached: true,
-        stdio: 'ignore',
-      }).unref();
-    }
+    const child =
+      platform === 'win32'
+        ? // `timeout /t` 在无控制台的 detached 进程里不可用 ("输入重定向不受支持"),
+          // `ping -n <N+1>` 是标准的 cmd 延时 hack (首个包立即发, 之后每包间隔 1s)。
+          spawnFn(
+            process.env.comspec ?? 'cmd.exe',
+            ['/d', '/s', '/c', `ping -n ${graceSeconds + 1} 127.0.0.1 >nul & taskkill /f /pid ${pid}`],
+            { detached: true, windowsHide: true, stdio: 'ignore' },
+          )
+        : spawnFn('/bin/sh', ['-c', `sleep ${graceSeconds}; kill -9 ${pid} 2>/dev/null`], {
+            detached: true,
+            stdio: 'ignore',
+          });
+    // spawn 的失败可能在返回后经 'error' 事件异步上报 (ENOENT/EACCES 等);
+    // 不挂 listener 会变成 uncaughtException, 且 watchdog 实际未布防却无任何
+    // 日志痕迹 —— 这里 warn 留痕, 让退出尸检能看出"补刀兜底当时不在位"。
+    child.once?.('error', (err) => {
+      log.warn('shutdown hard-kill watchdog process failed to start (continuing shutdown)', err);
+    });
+    child.unref();
   } catch (err) {
     log.warn('failed to arm shutdown hard-kill watchdog (continuing shutdown)', err);
   }

@@ -26,7 +26,10 @@ interface QuitInfoLogger extends QuitLogger {
  * That service boot is an exit-hang amplifier we must not run during quit.
  */
 export interface UsageTrackedBrowserRuntime extends Pick<BrowserControlRuntime, 'call'> {
-  /** True iff at least one `call` went through this wrapper. */
+  /**
+   * True iff at least one NON-stop `call` completed with an ok result — i.e.
+   * the control service provably booted and served real traffic this session.
+   */
   everCalled(): boolean;
 }
 
@@ -36,8 +39,32 @@ export function trackBrowserRuntimeUsage(
   let everCalled = false;
   return {
     call(request) {
-      everCalled = true;
-      return inner.call(request);
+      const result = inner.call(request);
+      // Mark "used" only when the call SETTLES successfully, and only for
+      // non-stop actions (review feedback, both P1):
+      //  - marking at dispatch time would treat a still-booting or failed-boot
+      //    call as "service is up", and the quit-time stop would then re-run
+      //    the service boot we are trying to avoid;
+      //  - `stop` itself is teardown, not usage — ExternalChromeBackend.dispose
+      //    dispatches one during backend switching, and counting it would make
+      //    the quit path dispatch a second stop that re-boots the service.
+      // An ok:false result means the dispatch bridge answered but the action
+      // failed (startup failures surface here too) — service liveness is not
+      // proven, so stay conservative; a skipped quit-stop is recovered by the
+      // vendored stale-lock path on next launch (see stopRuntimeForQuit docs).
+      if (request.action !== 'stop') {
+        void result.then(
+          (response) => {
+            if ((response as { ok?: unknown } | null | undefined)?.ok !== false) {
+              everCalled = true;
+            }
+          },
+          () => {
+            // Rejected dispatch proves nothing about service liveness — ignore.
+          },
+        );
+      }
+      return result;
     },
     everCalled: () => everCalled,
   };

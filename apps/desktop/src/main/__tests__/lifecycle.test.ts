@@ -193,7 +193,7 @@ describe('armShutdownHardKillWatchdog', () => {
   });
 
   function fakeSpawn() {
-    const child = { unref: vi.fn() };
+    const child = { once: vi.fn(), unref: vi.fn() };
     const spawn = vi.fn(() => child);
     return { spawn, child };
   }
@@ -256,6 +256,34 @@ describe('armShutdownHardKillWatchdog', () => {
     armShutdownHardKillWatchdog({ spawn, pid: 1, platform: 'darwin' });
 
     expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('async spawn "error" event is warn-logged, not an uncaughtException (review P1)', async () => {
+    // spawn 可能在返回后经 'error' 事件异步报失败 (ENOENT/EACCES); 必须挂
+    // listener 留痕, 否则 watchdog 静默未布防且错误落入 uncaughtException。
+    const { armShutdownHardKillWatchdog } = await freshLifecycle();
+    const { spawn, child } = fakeSpawn();
+
+    armShutdownHardKillWatchdog({ spawn, pid: 1, platform: 'darwin' });
+
+    expect(child.once).toHaveBeenCalledWith('error', expect.any(Function));
+    const errorListener = child.once.mock.calls[0][1] as (err: Error) => void;
+    expect(() => errorListener(new Error('ENOENT'))).not.toThrow();
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('watchdog process failed to start'),
+      expect.any(Error),
+    );
+  });
+
+  it('tolerates fake spawn children without once() (listener attach is optional)', async () => {
+    const { armShutdownHardKillWatchdog } = await freshLifecycle();
+    const child = { unref: vi.fn() };
+    const spawn = vi.fn(() => child);
+
+    expect(() =>
+      armShutdownHardKillWatchdog({ spawn, pid: 1, platform: 'darwin' }),
+    ).not.toThrow();
+    expect(child.unref).toHaveBeenCalledTimes(1);
   });
 
   it('spawn throwing does not propagate (watchdog failure must not block shutdown)', async () => {
