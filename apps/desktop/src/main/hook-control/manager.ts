@@ -1053,7 +1053,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   }
 
   /**
-   * Bind replies are not globally ordered with Telegram callbacks. Keep the
+   * Bind replies are not globally ordered with the provider's own callbacks
+   * (for example a user completing the bind inside the provider app). Keep the
    * local state monotonic by accepting only the newest request reply and only
    * events that name the current attempt/binding. The first state snapshot
    * after a welcome is the sole exception: it is authoritative and may clear
