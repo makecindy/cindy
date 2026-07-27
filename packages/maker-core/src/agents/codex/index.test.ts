@@ -4820,6 +4820,43 @@ describe('CodexAgent steer', () => {
     await handle.close();
   });
 
+  it('normalizes a server-side active-turn-id mismatch for the normal-send fallback', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnSteer) {
+        throw Object.assign(
+          new Error(
+            'codex app-server turn/steer error -32600: expected active turn id '
+            + '`019fa22b-2461-7842-b852-082c0f82676a` but found '
+            + '`dda88981-5aca-4b99-90c7-68488deaccc8`',
+          ),
+          { code: -32600 },
+        );
+      }
+      return undefined;
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-steer-server-active-turn-mismatch',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      userPrompt: 'USER PROMPT',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).not.toBeNull();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: '019fa22b-2461-7842-b852-082c0f82676a' },
+    });
+
+    await expect(handle.steer({ type: 'user', content: 'steer message' })).rejects.toThrow(
+      /No active Codex turn to steer/,
+    );
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(0);
+    await handle.close();
+  });
+
   it('resolves as delivered when the turn ends before the steer acknowledgement arrives', async () => {
     // review #939 第二轮 P1: ack 与 turn 终态乱序——server 已确认接受注入,消息
     // 已进 rollout,必须按**已投递**成功返回;抛 NO_ACTIVE_TURN 会让 coordinator

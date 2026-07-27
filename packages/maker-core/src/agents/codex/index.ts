@@ -607,6 +607,11 @@ function parseLeadingSlashToken(text: string): { name: string; rest: string } | 
   return { name: match[1], rest: match[2] ?? '' };
 }
 
+function isExpectedTurnIdMismatchError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /expected active turn id\b.*\bbut found\b/i.test(message);
+}
+
 // 插话 (steer) 时 turn/steer RPC 的 ack 有界等待上限。AppServerClient.request
 // 本身没有超时, app-server 卡死时裸 await 会永久挂起 → coordinator steering marker
 // 永久残留 → 后续插话点击被静默吞掉。正常情况下 ack 是毫秒级, 10s 足够宽裕。
@@ -4265,9 +4270,10 @@ export class CodexAgent extends BaseAgent {
         // 没有被打断,它们仍然有效。
         // (历史:2026-06 曾以「模型继续旧工具计划」为由改成 interrupt+follow-up,
         // 那正是注入语义的预期行为,现按统一产品决策回归注入。)
-        // expectedTurnId 是 stale-client 防线:server 端 turn 已结束时报
-        // "no active turn to steer" 而不是伪装成功,coordinator 按 NO_ACTIVE_TURN
-        // fallback 成普通派发,消息不丢。
+        // expectedTurnId 是 stale-client 防线:server 端 turn 已结束时会报
+        // "no active turn to steer",或在当前已有另一 turn 时报告 expected/found
+        // id 不匹配。后者同样是明确的 pre-accept 拒绝,需归一化为 no-active-turn,
+        // 让 coordinator fallback 成普通派发,消息不丢。
         log.debug('steer ▶ inject into active turn', {
           threadId,
           turnId: steeredTurnId,
@@ -4332,6 +4338,14 @@ export class CodexAgent extends BaseAgent {
             );
           });
           ackSettled = true;
+        } catch (error) {
+          if (isExpectedTurnIdMismatchError(error)) {
+            // app-server 已明确拒绝该 stale expectedTurnId,消息没有注入其它 turn。
+            // 标记 RPC 已 settle,避免把这类确定性拒绝误当成 timeout/abort 在飞请求。
+            ackSettled = true;
+            throw new Error('No active Codex turn to steer');
+          }
+          throw error;
         } finally {
           if (!ackSettled) {
             // 超时 / abort 后请求仍在飞:迟到成功说明消息已注入但上层已按失败
