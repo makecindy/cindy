@@ -55,6 +55,13 @@ export function trackBrowserRuntimeUsage(
 ): UsageTrackedBrowserRuntime {
   let everCalled = false;
   let quiescing = false;
+  // Usage epoch: bumped on every SUCCESSFUL stop. A non-stop call only marks
+  // usage if the epoch it was dispatched under is still current — a call that
+  // was in flight across a backend-switch stop (BackendRouter.setBackend
+  // disposes the old backend without draining its calls) settles against a
+  // service that has since been torn down, and must not re-mark usage
+  // (review ×2: late settle would re-enable the quit-time stop → boot).
+  let usageEpoch = 0;
   const inFlight = new Set<Promise<unknown>>();
   return {
     call(request) {
@@ -88,10 +95,15 @@ export function trackBrowserRuntimeUsage(
       // A wrongly-skipped quit-stop is recovered by the vendored stale-lock
       // path on next launch (see stopRuntimeForQuit docs).
       if (request.action !== 'stop') {
+        const dispatchEpoch = usageEpoch;
         const settled = result.then(
           (response) => {
             const status = (response as { status?: unknown } | null | undefined)?.status;
-            if (typeof status === 'number') everCalled = true;
+            // Epoch must still match: a success settling after a later
+            // successful stop belongs to the torn-down service instance.
+            if (typeof status === 'number' && dispatchEpoch === usageEpoch) {
+              everCalled = true;
+            }
           },
           () => {
             // Rejected dispatch proves nothing about service liveness — ignore.
@@ -112,6 +124,9 @@ export function trackBrowserRuntimeUsage(
           (response) => {
             if ((response as { ok?: unknown } | null | undefined)?.ok === true) {
               everCalled = false;
+              // Invalidate in-flight pre-stop calls' usage marking (see
+              // usageEpoch above).
+              usageEpoch += 1;
             }
           },
           () => {},

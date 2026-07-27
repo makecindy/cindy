@@ -217,6 +217,32 @@ describe('stopRuntimeForQuitIfUsed', () => {
     expect(call.mock.calls.map(([req]) => req.action)).toEqual(['status', 'stop', 'stop']);
   });
 
+  it('a pre-stop call settling AFTER a successful stop does not re-mark usage (review ×2)', async () => {
+    // BackendRouter.setBackend 处理旧后端 dispose 时不等其在途调用排空:在途
+    // 调用可能在 stop 成功重置之后才 settle——它应答的是已被拆掉的服务实例,
+    // 若翻回使用态,退出路径会再派 stop 把服务重新拉起。epoch 必须拦住它。
+    let resolveSlow!: (r: BrowserControlResult) => void;
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>((req) =>
+      req.action === 'stop'
+        ? Promise.resolve({ ok: true, action: req.action, status: 200 })
+        : new Promise((resolve) => {
+            resolveSlow = resolve;
+          }),
+    );
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    const slow = tracked.call({ action: 'snapshot' }); // stop 前已在途
+    await tracked.call({ action: 'stop' }); // 后端切换的成功 stop
+    resolveSlow({ ok: true, action: 'snapshot', status: 200 }); // 晚到的旧应答
+    await slow;
+    expect(tracked.everCalled()).toBe(false);
+
+    await stopRuntimeForQuitIfUsed(tracked, logger);
+    expect(call.mock.calls.map(([req]) => req.action)).toEqual(['snapshot', 'stop']); // quit 未再派
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
+  });
+
   it('usage flips back on when non-stop traffic resumes after a successful stop', async () => {
     const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
       async (req) => ({ ok: true, action: req.action, status: 200 }),
