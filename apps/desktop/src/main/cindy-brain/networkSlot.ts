@@ -688,6 +688,24 @@ const SECRET_EXCHANGE_RESPONSE_MAX_BYTES = 256 * 1024;
 /** 交换失败时回给意识的错误里,上游响应体摘录长度上限(诊断用,不泄凭证)。 */
 const SECRET_EXCHANGE_ERROR_SNIPPET_CHARS = 200;
 
+// 部分上游(如 Brave)对无效订阅令牌回 422 而非 401/403。对纯 user 源
+// key 型凭证(无 exchange、非 oauth),422 且 body 含令牌/失效类关键词时
+// 同样按凭证被拒记账;业务语义校验失败的 422 命中不了关键词,不误伤。
+const CREDENTIAL_REJECTION_PROBE_BYTES = 2048;
+const CREDENTIAL_REJECTION_BODY_RE =
+  /token|subscription|api[\s_-]?key|invalid|unauthori[sz]ed|credential/i;
+
+async function probeCredentialRejectionBody(response: Response): Promise<boolean> {
+  try {
+    const probe = await readBodyCapped(response.clone(), CREDENTIAL_REJECTION_PROBE_BYTES);
+    if ('gateBusy' in probe) return false;
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(probe.bytes);
+    return CREDENTIAL_REJECTION_BODY_RE.test(text);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 按点分路径读 JSON(不支持数组下标;路径不通返回 undefined)。只认自有
  * 属性(hasOwn):__proto__ / constructor 这类原型链段名一律取不到值。
@@ -1169,6 +1187,18 @@ export class GhostNetworkSlot {
         for (const decl of net.secrets ?? []) {
           if ((decl.source ?? 'user') === 'user') {
             this.deps.noteCredentialRejected?.(ghostId, decl.key);
+          }
+        }
+      } else if (response.status === 422) {
+        // 非标凭证失效信号(如 Brave 对无效订阅令牌回 422):只对纯 key 型
+        // user 源凭证记账,且要求 body 出现令牌/失效类关键词,避免把插件
+        // 业务语义校验失败的 422 误标为凭证被拒。
+        const plainKeys = (net.secrets ?? [])
+          .filter((decl) => (decl.source ?? 'user') === 'user' && decl.exchange === undefined)
+          .map((decl) => decl.key);
+        if (plainKeys.length > 0 && (await probeCredentialRejectionBody(response))) {
+          for (const key of plainKeys) {
+            this.deps.noteCredentialRejected?.(ghostId, key);
           }
         }
       }

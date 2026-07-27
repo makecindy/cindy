@@ -66,11 +66,13 @@ function fakeResponse(params: {
 } = {}): Response {
   const { status = 200, headers = { 'content-type': 'application/json' }, body = '{"ok":1}' } = params;
   const buf = typeof body === 'string' ? new TextEncoder().encode(body).buffer : body;
-  return {
+  const res = {
     status,
     headers: new Headers(headers),
     arrayBuffer: async () => buf,
-  } as unknown as Response;
+  } as unknown as Response & { clone?: () => Response };
+  res.clone = () => fakeResponse(params);
+  return res as unknown as Response;
 }
 
 function mp3WithId3(tagSize = 0): Uint8Array {
@@ -180,6 +182,57 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
         getFreshAccessToken: async () => ({ ok: true as const, accessToken: 'tok', accountId: 'a1' }),
         invalidateAccessToken: () => {},
       },
+    });
+    await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
+  });
+
+  it('422 + 令牌失效类 body 对纯 key 型 user 凭证记账;业务 422 不记', async () => {
+    // Brave 对无效订阅令牌回 422(非标),body 含 "subscription token is invalid"。
+    const noteCredentialRejected = vi.fn();
+    const { slot } = makeSlot({
+      fetchImpl: vi.fn(async () =>
+        fakeResponse({ status: 422, body: '{"error":"The provided subscription token is invalid"}' }),
+      ) as never,
+      noteCredentialRejected,
+    });
+    await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'brave_api_key');
+    expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'tavily_api_key');
+
+    // 业务语义校验失败的 422(body 无凭证类关键词)不记账。
+    noteCredentialRejected.mockClear();
+    const { slot: bizSlot } = makeSlot({
+      fetchImpl: vi.fn(async () =>
+        fakeResponse({ status: 422, body: '{"error":"query must be at least 3 characters"}' }),
+      ) as never,
+      noteCredentialRejected,
+    });
+    await bizSlot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
+  });
+
+  it('422 时带 exchange 的凭证不记账(交换链有自己的 401 语义)', async () => {
+    const noteCredentialRejected = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () =>
+        fakeGhost({
+          network: {
+            hosts: ['api.search.brave.com'],
+            secrets: [
+              {
+                key: 'ex_key',
+                label: 'Ex',
+                inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.search.brave.com'] },
+                exchange: { url: 'https://api.search.brave.com/exchange' } as never,
+              },
+            ],
+          },
+        }),
+      fetchImpl: vi.fn(async () =>
+        fakeResponse({ status: 422, body: '{"error":"token is invalid"}' }),
+      ) as never,
+      noteCredentialRejected,
     });
     await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
     expect(noteCredentialRejected).not.toHaveBeenCalled();
