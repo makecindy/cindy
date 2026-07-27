@@ -366,6 +366,22 @@ describe('translateResponsesRequest', () => {
     }), { capabilities })).toThrow("input content part 'input_audio'");
   });
 
+  it('allows normalized user-like roles such as latest_reminder to carry images', () => {
+    const imageUrl = 'data:image/png;base64,eA==';
+    const out = translateResponsesRequest(base({
+      input: [{
+        type: 'message',
+        role: 'latest_reminder',
+        content: [{ type: 'input_image', image_url: imageUrl }],
+      }],
+    }), { capabilities: { imageInput: 'image_url' } });
+
+    expect(out.messages).toEqual([{
+      role: 'user',
+      content: [{ type: 'image_url', image_url: { url: imageUrl } }],
+    }]);
+  });
+
   it('drops Codex built-in tools (namespace/web_search) but keeps standard function tools', () => {
     const dropped: Array<[string, number]> = [];
     const out = translateResponsesRequest(base({

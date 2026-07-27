@@ -8,7 +8,6 @@ import {
   type ChatMessage,
   type ChatToolCallExtraContent,
   type ChatUserContentPart,
-  type ResponsesContentPart,
   type ResponsesFunctionTool,
   type ResponsesInputItem,
   type ResponsesRequest,
@@ -67,6 +66,7 @@ function customToolArguments(input: unknown): string {
 function messageContent(
   item: Extract<ResponsesInputItem, { role: string }>,
   itemIndex: number,
+  developerRole: ChatDeveloperRole,
   imageInput: ChatImageInput | undefined,
 ): string | ChatUserContentPart[] {
   if (typeof item.content === 'string') return item.content;
@@ -90,8 +90,11 @@ function messageContent(
       continue;
     }
     if (part.type === 'input_image') {
+      const normalizedRole = item.role === 'assistant'
+        ? 'assistant'
+        : normalizeRole(item.role, developerRole);
       if (
-        item.role !== 'user'
+        normalizedRole !== 'user'
         || imageInput !== 'image_url'
         || part.file_id !== undefined
         || typeof part.image_url !== 'string'
@@ -184,6 +187,7 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
       const content = messageContent(
         item as Extract<ResponsesInputItem, { role: string }>,
         index,
+        opts.developerRole,
         opts.imageInput,
       );
       if (item.role === 'assistant') {
