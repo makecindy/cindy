@@ -64,6 +64,13 @@ describe('loginMessages 4 语 catalog', () => {
     expect(loginMessages.ko.phonePlaceholder).toBe('휴대전화 번호');
   });
 
+  it('「跳过登录」新 key 四语沿用桌面 login.localModeEntry 译法(产品拍板 2026-07-27)', () => {
+    expect(loginMessages['zh-CN'].skipLogin).toBe('跳过登录');
+    expect(loginMessages.en.skipLogin).toBe('Skip Sign-In');
+    expect(loginMessages.ja.skipLogin).toBe('ログインをスキップ');
+    expect(loginMessages.ko.skipLogin).toBe('로그인 건너뛰기');
+  });
+
   it('登录错误码 4 语齐全且非空', () => {
     const codes = Object.keys(authErrorMessages);
     expect(codes.length).toBeGreaterThan(0);

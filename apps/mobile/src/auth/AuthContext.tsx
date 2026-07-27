@@ -46,6 +46,7 @@ import {
 import { syncCanaryChannelAfterAuth } from '@/auth/canaryChannelSync';
 import { ensureDeviceId } from '@/auth/deviceId';
 import { isAccessTokenExpiring } from '@/auth/jwt';
+import { persistLocalMode, readLocalMode } from '@/auth/localModeStore';
 import { getAuthLocale } from '@/auth/loginMessages';
 import { acquireNativeSocialCredential } from '@/auth/nativeSocial';
 import {
@@ -138,6 +139,12 @@ export interface AuthContextValue {
   initialized: boolean;
   isBusy: boolean;
   isAuthenticated: boolean;
+  /**
+   * 「跳过登录」态:无账号也可进主界面(产品拍板 2026-07-27)。与 isAuthenticated
+   * **正交**——本态下没有 token / user,业务请求仍会 UNAUTHENTICATED,只有路由门
+   * (NavigationGate / index)把它与已登录并列放行。跨重启保留(localModeStore)。
+   */
+  isLocalMode: boolean;
   user: MobileUser | null;
   deviceId: string | null;
   loginState: AuthFlowState | null;
@@ -146,6 +153,8 @@ export interface AuthContextValue {
   accountDeletionRestored: boolean;
   clearAuthError(): void;
   consumeAccountDeletionRestored(): void;
+  /** 「跳过登录」:置本机无账号态并落盘,路由门随即放行主界面(不经协议门)。 */
+  enterLocalMode(): Promise<void>;
   dispatchLoginAction(action: MobileLoginAction): Promise<boolean>;
   completeOAuthCallback(callbackUrl: string): Promise<void>;
   logout(): Promise<void>;
@@ -174,6 +183,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       initialized: true,
       isBusy: false,
       isAuthenticated: true,
+      // 可视 mock 走「已登录」桩,与「跳过登录」无账号态无关
+      isLocalMode: false,
       user: visualMockUser,
       deviceId: 'visual-mock-phone',
       loginState: null,
@@ -182,6 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accountDeletionRestored: false,
       clearAuthError: () => undefined,
       consumeAccountDeletionRestored: () => undefined,
+      enterLocalMode: async () => undefined,
       dispatchLoginAction: async () => true,
       completeOAuthCallback: async () => undefined,
       logout: async () => undefined,
@@ -228,6 +240,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pendingAccountTokenRef = useRef<string | null>(null);
   const [user, setUser] = useState<MobileUser | null>(null);
   const userRef = useRef<MobileUser | null>(null);
+  // 「跳过登录」无账号态(产品拍板 2026-07-27):冷启动从 localModeStore 恢复,
+  // 真正登录成功即清除(账号优先),登出/终止会话一并清除 → 回到登录页。
+  const [localMode, setLocalMode] = useState(false);
+  const localModeRef = useRef(false);
   const [loginState, setLoginState] = useState<AuthFlowState | null>(null);
   const loginStateRef = useRef<AuthFlowState | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -340,6 +356,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAccessToken(token);
   }, []);
 
+  /**
+   * 「跳过登录」态的唯一写入口:同步 ref/state + 落盘(ref 供非 render 路径读)。
+   *
+   * 内存(ref/state)同步写入即 last-write-wins;盘上顺序由 `persistLocalMode` 内部的
+   * 写队列保证(见 localModeStore 注释)——所以「点跳过」与「登录成功清标记」并发时,
+   * 最终盘上态一定等于最后一次调用的值,不会出现内存账号态 / 盘上仍是无账号态的分叉。
+   */
+  const applyLocalMode = useCallback((next: boolean): Promise<void> => {
+    localModeRef.current = next;
+    setLocalMode(next);
+    return persistLocalMode(next);
+  }, []);
+
   // 用户资料的唯一写入口:同步 state + 持久化快照。快照让弱网冷启动能先以
   // 缓存资料恢复“已登录”视图,token 由后台刷新补齐。
   const applyUser = useCallback(
@@ -347,8 +376,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       userRef.current = next;
       setUser(next);
       void serializeUserProfileMutation(() => writeCachedUserProfile(next));
+      // 账号优先:一旦拿到真实身份(登录成功 / 冷启动恢复),清掉「跳过登录」标记——
+      // 否则用户登出后会被这条陈旧标记留在主界面,而不是回到登录页。
+      // applyUser 本身是同步入口,这里只能 fire-and-forget;但清标记已进 store 的写队列,
+      // 迟到的 setItem('1') 不可能再压过它(best-effort 失败仍按文件头语义静默)。
+      if (next && localModeRef.current) void applyLocalMode(false);
     },
-    [serializeUserProfileMutation],
+    [applyLocalMode, serializeUserProfileMutation],
   );
 
   const clearAuthError = useCallback(() => setAuthError(null), []);
@@ -558,14 +592,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 服务模式开关与 BYOK LiteLLM key,防止桌面 key 继续躺在 secure storage。
           clearAllMobileVoiceCredentials().catch(() => undefined),
         ]);
-        const [storedRefreshToken, cachedUser, storedDeletionReceipt] =
-          await Promise.all([
+        const [
+          storedRefreshToken,
+          cachedUser,
+          storedDeletionReceipt,
+          storedLocalMode,
+        ] = await Promise.all([
           getSecureItem(REFRESH_TOKEN_KEY).catch(() => null),
           readCachedUserProfile(),
           getSecureItem(ACCOUNT_DELETION_RECEIPT_KEY).catch(() => null),
+          readLocalMode(),
         ]);
+        if (cancelled) return;
         if (storedDeletionReceipt) {
           setAccountDeletionReceipt(storedDeletionReceipt);
+        }
+        // 「跳过登录」态恢复:先按盘上标记置位,让路由门在 initialized 时就放行主界面
+        // (不必等网络);下面若刷出真实身份,applyUser 会把标记清掉(账号优先)。
+        if (storedLocalMode) {
+          localModeRef.current = true;
+          setLocalMode(true);
         }
         // 弱网冷启动:先用本地会话痕迹恢复已登录视图,再走网络刷新。
         if (storedRefreshToken && cachedUser) {
@@ -977,6 +1023,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [acceptOutcome, completeOAuthCallback, updateLoginState],
   );
 
+  /**
+   * 「跳过登录」:置无账号态。**不过协议门**(产品拍板 2026-07-27:跳过登录不弹服务
+   * 条款/隐私协议弹窗、不需勾选;其它个人登录链路的协议门不变),因此这里既不写
+   * 统计同意、也不碰 loginState —— 只置标记 + 落盘,路由门自行放行主界面。
+   */
+  const enterLocalMode = useCallback(async () => {
+    await applyLocalMode(true);
+  }, [applyLocalMode]);
+
   const clearLocalSession = useCallback(async () => {
     // 任何登录态清除路径(logout / terminateSession / 账号注销 / ACCOUNT_UNAVAILABLE)
     // 都先 best-effort 注销移动推送 token —— 只挂在 logout 会漏掉终止路径,设备会
@@ -987,6 +1042,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshInFlightRef.current = null;
     setToken(null);
     applyUser(null);
+    // 登出 / 会话终止一并退出「跳过登录」态:否则清掉账号后仍被标记留在主界面,
+    // 用户拿不到「回到登录页」的结果(路由门是「有账号 ∨ 已跳过」)。
+    await applyLocalMode(false);
     updateLoginState(null);
     setAccountDeletionRestored(false);
     pendingAccountTokenRef.current = null;
@@ -1022,6 +1080,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       deleteSecureItem(LEGACY_USER_PROFILE_KEY).catch(() => undefined),
     ]);
   }, [
+    applyLocalMode,
     applyUser,
     serializeRefreshTokenMutation,
     serializeUserProfileMutation,
@@ -1228,6 +1287,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isBusy,
       // 以 user 为准:弱网冷启动 token 可能尚未刷到,但会话仍可降级恢复。
       isAuthenticated: user !== null,
+      isLocalMode: localMode,
       user,
       deviceId,
       loginState,
@@ -1236,6 +1296,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accountDeletionRestored,
       clearAuthError,
       consumeAccountDeletionRestored,
+      enterLocalMode,
       dispatchLoginAction,
       completeOAuthCallback,
       logout,
@@ -1261,12 +1322,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       consumeAccountDeletionRestored,
       deviceId,
       dispatchLoginAction,
+      enterLocalMode,
       getAccessToken,
       getAccountDeletionAvailability,
       getAccountDeletionStatus,
       refresh,
       initialized,
       isBusy,
+      localMode,
       loginState,
       logout,
       requestAccountDeletionChallenge,

@@ -11,6 +11,7 @@ import {
   rectsIntersect,
   type LoginKeyboardShiftInput,
 } from '../loginKeyboardAvoidance';
+import { LOGIN_KEYBOARD_DOCK_ANCHOR_Y } from '../loginSkinLayout';
 
 /**
  * PR4b 键盘契约参数化单测(Step 5b.1 冻结向量;SC-7 slice pr4b keyboard 行)。
@@ -225,6 +226,51 @@ describe('loginKeyboard U-8b 键盘可见性硬标准(参数化冻结向量)', (
   });
 });
 
+describe('loginKeyboard 停靠锚 = error 槽底(用户 2026-07-27 拍板;面板 440→500 后的锚点校准)', () => {
+  /**
+   * 停靠位移 = 锚物理 y + 10 - 键盘顶;锚物理 y = 组顶 + 锚设计 y × groupScale
+   * (phone loginGroupScale=1 → groupScale = 屏宽/750)。这里固定组顶与键盘顶,
+   * 只换锚的设计 y,量化「改锚」在典型屏幕上的位移差(引擎本身零改动)。
+   */
+  const dockedShift = (screenWidth: number, anchorDesignY: number) => {
+    const groupScale = screenWidth / 750;
+    const result = computeLoginKeyboardShift({
+      platform: 'ios',
+      visible: true,
+      keyboard: { x: 0, y: 200, width: screenWidth, height: 400 },
+      panelBottomY: 100 + anchorDesignY * groupScale,
+      // union 顶远离 safeTop:maxShift 充裕,不进 clamped-fallback(锚差本身是被测对象)
+      controlsUnion: { x: 0, y: 400, width: screenWidth - 60, height: 100 },
+      viewportWidth: screenWidth,
+      viewportHeight: 800,
+      safeTop: 0,
+      fullViewportHeight: 800,
+      systemBarBottom: 0,
+    });
+    expect(result.mode).toBe('docked');
+    return result.shift;
+  };
+
+  it.each([375, 393, 430, 360])(
+    '屏宽 %ipt:锚 430 比「沿用面板底 500」少 70 设计px、比改版前面板底 440 少 10 设计px',
+    (width) => {
+      const groupScale = width / 750;
+      const now = dockedShift(width, LOGIN_KEYBOARD_DOCK_ANCHOR_Y);
+      const ifPanelBottom = dockedShift(width, 500);
+      const beforeRedesign = dockedShift(width, 440);
+      expect(ifPanelBottom - now).toBeCloseTo(70 * groupScale, 10);
+      expect(beforeRedesign - now).toBeCloseTo(10 * groupScale, 10);
+      // 位移仍为正(键盘确实被避让),没有因为改锚而退化成不位移
+      expect(now).toBeGreaterThan(0);
+    },
+  );
+
+  it('iPhone SE 档(375pt,groupScale 0.5)绝对值:锚 430 → 125,面板底 500 → 160', () => {
+    expect(dockedShift(375, LOGIN_KEYBOARD_DOCK_ANCHOR_Y)).toBe(125);
+    expect(dockedShift(375, 500)).toBe(160);
+  });
+});
+
 describe('loginKeyboard 接线(hook 订阅拓扑 + 登录页测量拓扑,读源码断言)', () => {
   const hookSource = readFileSync(
     resolve(process.cwd(), 'src/session/useMobileKeyboardState.ts'),
@@ -251,8 +297,10 @@ describe('loginKeyboard 接线(hook 订阅拓扑 + 登录页测量拓扑,读源�
     expect(loginSource).toContain('外层未变换测量 wrapper');
     expect(loginSource).toContain('translateY: -keyboardShift');
     expect(loginSource).toContain('computeLoginKeyboardShift');
-    // 停靠贴附锚 = 面板底;union = 输入框顶到主按钮底
-    expect(loginSource).toContain('loginSizes.panelHeight * groupScale');
+    // 停靠贴附锚 = error 槽底(用户 2026-07-27 拍板:面板 440→500 后不再用面板底,
+    // 否则每次停靠多顶 60 设计px);union = 输入框顶到主按钮底
+    expect(loginSource).toContain('LOGIN_KEYBOARD_DOCK_ANCHOR_Y * groupScale');
+    expect(loginSource).not.toContain('loginSizes.panelHeight * groupScale');
     expect(loginSource).toContain('LOGIN_CONTROL.inputY * groupScale');
     // Android 未缩窗兜底:page 跟踪全高 + 传系统栏底(computeDockedKeyboardTop)
     expect(loginSource).toContain('fullViewportHeight');

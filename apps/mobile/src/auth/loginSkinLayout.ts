@@ -36,7 +36,7 @@ export interface LoginStageLayout {
   slogan: LoginStageBox;
   /** WORD_MARK 可见图形框(黑红新资产 423×145 在框内 contain 等比适配) */
   word: LoginStageBox;
-  /** Log_in 组(680×560)顶边 y(设计 px) */
+  /** Log_in 组(680×620)顶边 y(设计 px) */
   loginY: number;
 }
 
@@ -48,30 +48,63 @@ export const LOGIN_STAGE_MIN_DESIGN_HEIGHT = 600;
 export const LOGIN_STAGE_MAX_DESIGN_HEIGHT = 1800;
 
 /**
- * 短屏档(designHeight=1334;inner 几何 347:2884 实测,wave3.5 旧表)。
- * 2026-07-24 用户拍板:协议行距屏幕底过近,视觉+功能区整体上移 40 设计px(hero 不动)——
- * slogan.y 480.33→440.33、word.y 594.48→554.48、loginY 734→694。
+ * 短屏档(designHeight=1334;**登录改版新稿 figma 705:915「Log in_iPhone_750x1334」逐字段实测**)。
+ *
+ * 2026-07-27 面板增高改版(面板 440→500,新增「跳过登录」槽)整档换基准值:
+ *  - cindy(立绘)599×720 @(75,87)——新稿 hero 上移 20(旧稿 y=107);
+ *  - slogan 取容器内 Vector 可见图形框:容器 @(385,387) + vector(77.55,21.37)
+ *    → (462.55, 408.37);尺寸 254.01×72.8 稿内未变(新旧稿 slogan 容器同为 364×106.03);
+ *  - word 取字标图像框:主容器 @(35,422) + WORD_MARK 容器内字标 @(173,65)
+ *    → (208,487),335×115(旧 352.93×120.54);
+ *  - loginY = 主容器 y 422 + Log_in 组在主容器内 y 200 = 622(旧 694);组底
+ *    622+682=1304,距屏底 30(= 新稿服务条款距屏底实测值)。
+ *
+ * ⚠ 2026-07-24「整体上移 40 设计px」拍板由本次新稿**取代**:那条拍板是为了修旧稿
+ * 「协议行距屏底仅 -22(溢出)」;新稿自带 30 的底距,不再叠加 40 偏移。
+ *
+ * ⚠ 2026-07-27 用户审 demo 第二次拍板「短屏走方案 B:立绘上移」——slogan 在本档没有
+ * 下移余量(底 481.17 距字标顶 487 仅 5.83 设计px,再移即压字标),故改为把立绘整体上移
+ * 27:cindy y 87 → 60。像素级实测(hero 资产脸部 skin 连通域 x402..552 / y315..475,
+ * slogan 资产 ink 5244px,双方按各自 contain 折算到 stage 后求交):
+ *  - 改前 dh=1334 slogan ink ∩ 脸 = 91px(dh 1360..1500 区间最高 113px)= 用户看到的压脸;
+ *  - 改后 dh ≤1450 全段 ink ∩ 脸 = **0**,1500..1624 残留 3..9px(仅下巴尖,由 LONG 档
+ *    自身落位决定,受「slogan 底距字标 24」上限约束,不是本档能再改的);
+ *  - 顶部不裁切:hero 资产不透明内容起于 y=86(上方是透明留白),折算后可见发顶
+ *    = 60 + 86×0.79823 = 128.6,仍在 Status Bar 下沿(115.67)之下 12.9 设计px;
+ *  - 底部:可见内容止于资产 y=696 且是淡出渐隐(alpha 69→21),上移后尾部由「藏在面板下
+ *    20.6」变成「露出面板上 6.4」——LONG 档本来就露 25,同款观感,无硬切边。
  */
 export const LOGIN_STAGE_SHORT = {
   designHeight: 1334,
-  cindy: { x: 75, y: 107, w: 599, h: 720 },
-  slogan: { x: 462.55, y: 440.33, w: 254.01, h: 72.8 },
-  word: { x: 199, y: 554.48, w: 352.93, h: 120.54 },
-  loginY: 694,
+  cindy: { x: 75, y: 60, w: 599, h: 720 },
+  slogan: { x: 462.55, y: 408.37, w: 254.01, h: 72.8 },
+  word: { x: 208, y: 487, w: 335, h: 115 },
+  loginY: 622,
 } as const;
 
 /**
- * 长屏档(designHeight=1624;358:434 实测)。立绘 y=116 双区统一
- * (〔已拍板 2026-07-19〕国区 116 vs 国际区旧帧 96 为设计稿内部不一致,取最新批次帧)。
- * 2026-07-24 用户拍板:协议行距屏幕底过近,视觉+功能区整体上移 40 设计px(hero 不动)——
- * slogan.y 686→646、word.y 814→774、loginY 973→933。
+ * 长屏档(designHeight=1624;**新稿 figma 705:799「Log in_iPhone_750x1624」逐字段实测**)。
+ *
+ * 2026-07-27 面板增高改版同批换基准值:
+ *  - cindy 750×902 @(0,106)——新稿 hero 上移 10(旧稿 y=116);
+ *  - slogan 可见图形框 = 容器 @(362.57,545.32) + vector(82.33,22.68) → (444.9,568),
+ *    269.66×77.29(= 旧 321×92 的 0.84x,与新稿 slogan 容器 460×134→386.43×112.57 同比例);
+ *  - word 字标图像框 = 主容器 @(35,627) + 字标 @(147,42.17) → (182,669.17),387×132.18;
+ *  - loginY = 627 + 200 = 827(旧 933);组底 827+682=1509,距屏底 115(新稿实测)。
+ *
+ * 立绘 y 双区统一口径沿用(〔已拍板 2026-07-19〕取最新批次帧),本次即新稿的 106。
+ *
+ * ⚠ 2026-07-27 用户审 demo 拍板:slogan 下移避脸,距字标 24px。新稿实测 slogan inner
+ * y=536.68 时其顶边落在立绘下巴线(390×844 帧下巴 ≈ stage y 540.7),文字压脸;
+ * 故 inner y 536.68 → 568(下移 31.32,容器 y 514 → 545.32 同量平移,x/宽高不动),
+ * slogan 底 645.29 距字标框顶 669.17 留 23.88 ≈ 24 设计px、距下巴线下方 27。
  */
 export const LOGIN_STAGE_LONG = {
   designHeight: 1624,
-  cindy: { x: 0, y: 116, w: 750, h: 902 },
-  slogan: { x: 387, y: 646, w: 321, h: 92 },
-  word: { x: 175, y: 774, w: 401, h: 137 },
-  loginY: 933,
+  cindy: { x: 0, y: 106, w: 750, h: 902 },
+  slogan: { x: 444.9, y: 568, w: 269.66, h: 77.29 },
+  word: { x: 182, y: 669.17, w: 387, h: 132.18 },
+  loginY: 827,
 } as const;
 
 function lerp(a: number, b: number, t: number): number {
@@ -85,9 +118,9 @@ function lerpBox(a: LoginStageBox, b: LoginStageBox, t: number): LoginStageBox {
  * 纯函数:物理 viewport → 750 stage 布局(U-8a「照 demo」逐式落码)。
  * - scale = viewportWidth / 750;designHeight = viewportHeight / scale,clamp [600,1800];
  * - dh < 1334:功能区优先——视觉区按 v=max(0.25,(dh-600)/734) 以 (375,0) 为锚连续压缩,
- *   loginY = max(0, dh-640)(功能区 680×560 + 底距不缩放、锚定底部;
- *   2026-07-24 拍板整体上移 40 设计px 后由 dh-600 改 dh-640,与 SHORT.loginY=694
- *   在 dh=1334 处保持连续:1334-640=694);
+ *   loginY = max(0, dh-712)(功能区 680×620 + 协议行溢出 + 底距不缩放、锚定底部;
+ *   712 = 组底 682 + 新稿底距 30,与 SHORT.loginY=622 在 dh=1334 处保持连续:
+ *   1334-712=622。2026-07-27 面板增高改版由 dh-640 改 dh-712);
  * - 1334 ≤ dh ≤ 1624:t=(dh-1334)/290 全字段线性插值(含 loginY);
  * - dh > 1624:t clamp 1(长屏几何原样)。
  */
@@ -115,8 +148,9 @@ export function resolveLoginStage(
       cindy: cs(LOGIN_STAGE_SHORT.cindy),
       slogan: cs(LOGIN_STAGE_SHORT.slogan),
       word: cs(LOGIN_STAGE_SHORT.word),
-      // 2026-07-24 拍板:整体上移 40 设计px(dh-600 → dh-640),dh=1334 边界与 SHORT.loginY=694 连续
-      loginY: Math.max(0, designHeight - 640),
+      // 2026-07-27 面板增高(组底 622→682):锚常量随之 dh-640 → dh-712,
+      // dh=1334 边界与 SHORT.loginY=622 连续(712 = 组底 682 + 新稿底距 30)
+      loginY: Math.max(0, designHeight - 712),
     };
   }
   const t = Math.max(
@@ -177,7 +211,7 @@ export interface LoginPadStageSpec {
   cindy: LoginStageBox;
   slogan: LoginStageBox;
   word: LoginStageBox;
-  /** Log_in 组(680×560 设计系)在 stage 坐标的落位 x/y */
+  /** Log_in 组(680×620 设计系)在 stage 坐标的落位 x/y */
   loginX: number;
   loginY: number;
   /** Log_in 组内容追加缩放(相对 750 手机稿控件尺寸) */
@@ -191,20 +225,28 @@ export interface LoginPadStageSpec {
 /**
  * iPad/平板竖屏 stage(§3.6 条2:基准 744×1133,控件 ≈0.794117 等比;
  * 五要素可见图形框 = demo ipadPortrait() 仲裁值——wave3 帧(358:473/484/779/485/487)
- * 的字标/SLOGAN 框按旧资产绘制,新黑红资产的可见框以 demo 呈现收口;
- * splashOffset 158 = (1133-656.81)/2-80,demo 注释同式)。
+ * 的字标/SLOGAN 框按旧资产绘制,新黑红资产的可见框以 demo 呈现收口)。
+ *
+ * 2026-07-27 面板增高(440→500,组底 622→682 设计px)在竖屏上会把组底从 1114.94 推到
+ * 1162.59 > stage 1133,触发消费端安全区抬升(liftPx)把整组上顶、压住字标。**新稿没有
+ * pad 帧**,故按三条不变量把品牌簇与登录组一起上移 60×0.794117 = 47.64702:
+ *  ① 组底仍落 1114.94(与改版前逐像素一致,lift 仍 ≈0);
+ *  ② 字标框底↔面板顶间距仍 14.84(cindy/slogan/word/loginY 同量上移,内部关系不变);
+ *  ③ splash 期簇位不变——splashOffset 158→206 后 word.y+splashOffset = 672.46
+ *     ≈ 改版前 672.11,spinner 常量 (352,804) 无需跟改。
+ * 竖屏几何需设计侧回看确认(横屏 1180×820 组底 774.95 < 820,无需上移,原值不动)。
  */
 export const LOGIN_PAD_PORTRAIT_STAGE: LoginPadStageSpec = {
   width: 744,
   height: 1133,
-  cindy: { x: 99, y: 80, w: 546, h: 656.814514 },
-  slogan: { x: 465.42, y: 434.6, w: 247.03, h: 70.8 },
-  word: { x: 237.6, y: 514.11, w: 269.51, h: 92.05 },
+  cindy: { x: 99, y: 32.35298, w: 546, h: 656.814514 },
+  slogan: { x: 465.42, y: 386.95298, w: 247.03, h: 70.8 },
+  word: { x: 237.6, y: 466.46298, w: 269.51, h: 92.05 },
   loginX: 105,
-  loginY: 621,
+  loginY: 573.35298,
   loginGroupScale: 0.794117,
   spinner: { x: 352, y: 804, size: 40 },
-  splashOffset: 158,
+  splashOffset: 206,
 } as const;
 
 /**
@@ -212,6 +254,9 @@ export const LOGIN_PAD_PORTRAIT_STAGE: LoginPadStageSpec = {
  * 控件 ≈0.655357 等比;五要素可见图形框 = demo ipadLandscape() 仲裁值
  * (wave3 帧 358:805/808/806/810 框按旧资产绘制,同上收口);
  * splashOffset 0 = 358:833 定稿横屏无位移变体,spinner 48×48 @(853,479)(368:908))。
+ *
+ * 2026-07-27 面板增高:横屏组底 328 + 682×0.655357 = 774.95 仍在 stage 820 内
+ * (底距 45.05,改版前 84.37),字标框底 294.12↔面板顶 328 间距不变 → 几何原值不动。
  */
 export const LOGIN_PAD_LANDSCAPE_STAGE: LoginPadStageSpec = {
   width: 1180,
@@ -249,7 +294,7 @@ export interface LoginSurfaceLayout {
   cindy: LoginStageBox;
   slogan: LoginStageBox;
   word: LoginStageBox;
-  /** Log_in 组(680×560 设计系)在 stage 坐标的落位与内容追加缩放 */
+  /** Log_in 组(680×620 设计系)在 stage 坐标的落位与内容追加缩放 */
   loginX: number;
   loginY: number;
   loginGroupScale: number;
@@ -343,8 +388,12 @@ export function resolveLoginSurface(
       键名刻意用 font/radius 而非 fontSize/borderRadius:这些是设计稿几何数据,
       不是样式声明,同时避开 typography/design token 守护测试的字面量扫描。) ── */
 
-/** Log_in 组(demo loginGroup(35, loginY, 1, "mobile"):x=35,680×560)。 */
-export const LOGIN_GROUP = { x: 35, width: 680, height: 560 } as const;
+/**
+ * Log_in 组(demo loginGroup(35, loginY, 1, "mobile"):x=35,680×620)。
+ * 2026-07-27 面板增高改版:高 560→620(面板 500 + gap 40 + 圆钮行 80),
+ * 与 loginSizes.flowHeight 同源同值(figma 705:915 主容器内 Log_in 组高 620)。
+ */
+export const LOGIN_GROUP = { x: 35, width: 680, height: 620 } as const;
 /** 标题(figma §5.1:y=31 h=38 32 Bold 居中)。 */
 export const LOGIN_TITLE = { y: 31, height: 38, font: 32 } as const;
 /** 说明/提示类行高(DESIGN.md §16.2:20px 字号 → 23px;副标题与 Text_link 槽共用,与桌面 SUBTITLE / SSO_ORG_HINT.lineHeight 同值)。 */
@@ -364,12 +413,52 @@ export const LOGIN_CONTROL = {
 } as const;
 /** 主按钮 loading spinner(247:1546:24×24 @(487,27))。 */
 export const LOGIN_SPINNER = { size: 24, x: 487, y: 27 } as const;
-/** 第三方圆钮行(figma §4.5:y=480(面板 440+gap 40)、80×80 r50、icon 48、gap 70)。 */
-export const LOGIN_SOCIAL = { y: 480, size: 80, gap: 70, icon: 48 } as const;
+/** 第三方圆钮行(figma §4.5:y=540(面板 500+gap 40)、80×80 r50、icon 48、gap 70)。 */
+export const LOGIN_SOCIAL = { y: 540, size: 80, gap: 70, icon: 48 } as const;
 /** 返回按钮(figma §4.6:@(20,20) 60×60 r40)。 */
 export const LOGIN_BACK = { x: 20, y: 20, size: 60, radius: 40, icon: 24 } as const;
-/** 错误提示:占满主按钮底(380)→面板底(440)整段,文案在段内垂直居中(2026-07-24 拍板)。 */
-export const LOGIN_ERROR_TEXT = { y: 380, width: 680, height: 60, font: 20 } as const;
+/**
+ * 错误提示:主按钮底(380)起 680×50 槽,文案在段内垂直居中。
+ * 2026-07-27 面板增高改版:槽顶 y=380 不动,高 60→50——新稿(figma 705:1067 error_text
+ * 680×50 @y=380)在其正下方接「跳过登录」槽(430..490),两者同时可见且不重叠。
+ */
+export const LOGIN_ERROR_TEXT = { y: 380, width: 680, height: 50, font: 20 } as const;
+
+/**
+ * 「跳过登录」文字按钮(新稿 figma 705:1068 容器 / 705:1069 文本):
+ * 面板内 680×60 槽 @y=430(接 error 槽底,槽底 490 距面板底 500 留 10 内边距);
+ * 文本 24 Regular 下划线、行框 29(稿内文本 96×29 @容器 (292,15) = 槽内水平+垂直居中)。
+ *
+ * 组件定性:**文字按钮(text button)**,与 Text_link 文字链接是两种组件——色走
+ * secondaryText(#6F6F6F 双模同值,用户 2026-07-27 拍板维持),不复用 linkText 族。
+ *
+ * pressPadX = 命中区在**当前语言实际渲染文字宽度**左右各扩 50 设计px(用户 2026-07-27
+ * 拍板;可点区随语言自适应:zh 96 → 196、en/ja/ko 各按自身文本宽 +100)。
+ * **不用 hitSlop**——RN 的 hitSlop 不越父 View 边界(Android 界外触摸不派发),
+ * 与协议 radio 同一套「放大 Pressable bounds」仓内约定(DESIGN.md §16.4);
+ * 命中区高度占满 60 槽位(phone ~0.5 缩放 ≈30pt,与返回钮 60 设计px 同档),
+ * 向上不侵入主按钮下沿、向下不越面板底;槽宽 680 兜住最长语言的 +100 扩张。
+ */
+export const LOGIN_SKIP_LOGIN = {
+  y: 430,
+  width: 680,
+  height: 60,
+  font: 24,
+  lineHeight: 29,
+  pressPadX: 50,
+} as const;
+
+/**
+ * 键盘停靠贴附锚(面板坐标 y;= error 槽底 430)。
+ *
+ * 用户 2026-07-27 拍板:面板 440→500 后若继续拿**面板底**当停靠锚,停靠键盘下的整组
+ * 位移会比改版前多顶 60 设计px(短屏上更容易触发 clamped-fallback、把品牌/标题挤掉),
+ * 故锚点改到 error 槽底——保持改版前的物理位移量;新增的「跳过登录」槽(430..490)
+ * 允许在键盘弹起时被遮挡(它不是输入链路必需元素,收键盘即可见)。
+ * 停靠引擎本身(10px 贴附 + safe-top 上限 + clamped-fallback 兜底)不变。
+ */
+export const LOGIN_KEYBOARD_DOCK_ANCHOR_Y =
+  LOGIN_ERROR_TEXT.y + LOGIN_ERROR_TEXT.height;
 /**
  * 方式行(figma §4.9 + demo method-row:540×100 r60;标题 24 Bold/副行 20 左对齐 x=67;
  * 左 icon 24 box @(27,37)/person 18×20 @(30,39);右 share 18 @(490,40);
@@ -400,25 +489,27 @@ export const LOGIN_SSO_ORG_HINT_TOP = 244;
 
 /**
  * 协议同意行(consent PR;figma 600:660「服务条款」行,与桌面 CONSENT_ROW 同参数源):
- * 行 680×40 @登录组下方 22 设计px(组高 560 → 行顶 y=582);radio 命中区 24、
+ * 行 680×40 @登录组下方 22 设计px(组高 620 → 行顶 y=642;2026-07-27 面板增高
+ * 440→500 后由 582 顺移 60,新稿 705:1075 服务条款行在主容器 y=842 = 组内 642 印证);
+ * radio 命中区 24、
  * 圈体 20 r9 + 2px 描边(选中态为对勾);文字 20 Regular,radio-文字间距 6.5。
  * 行内容水平居中(文字宽随语言变化,flex 居中,几何语义与稿等价)。
  */
 export const LOGIN_CONSENT_ROW = {
-  y: 582,
+  y: 642,
   width: 680,
   height: 40,
   gap: 6.5,
   font: 20,
   /** 声明文字行高(figma 600:661 文本框 23 高,与桌面协议行同值) */
   lineHeight: 23,
-  /** 行底(622)超出登录组(560)的设计 px,安全区抬升按此追加预留 */
+  /** 行底(682)超出登录组(620)的设计 px,安全区抬升按此追加预留 */
   bottomOverflow: 62,
   /**
    * 对勾线宽 3(figma 600:632 stroke-width 3 round,设计 px)。
    * pressSize 88 = 无障碍触摸目标(codex P1):登录组 phone 缩放 ~0.5 → 88 设计px
    * ≈ 44 物理pt(iOS HIG)/ ≥48dp 近似达标;命中区右下锚定扩张(向左/向上),
-   * 右缘与视觉 24 槽位右缘对齐(不侵入协议链接命中区)、底缘与协议行底 622 对齐
+   * 右缘与视觉 24 槽位右缘对齐(不侵入协议链接命中区)、底缘与协议行底 682 对齐
    * (不越父容器 flowBottom bounds——Android 界外触摸不派发,hitSlop 方案已被否)。
    */
   radio: { hitSize: 24, ringSize: 20, ringRadius: 9, ringStroke: 2, checkStroke: 3, pressSize: 88 },

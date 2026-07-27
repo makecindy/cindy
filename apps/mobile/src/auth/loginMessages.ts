@@ -31,6 +31,9 @@ const messages = {
     emailCode: '发送邮箱验证码',
     ssoRequired: '该组织要求使用企业 SSO 登录。',
     ssoEntry: '使用企业 SSO 登录',
+    // 「跳过登录」= 无账号进主界面(产品拍板 2026-07-27)。四语沿用桌面
+    // login.localModeEntry 现译法,不自造(i18n/GLOSSARY.md 未登记该术语,按现状复用)。
+    skipLogin: '跳过登录',
     consentStatement: '我已阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私协议</privacy>',
     consentDialogTitle: '服务条款和隐私协议',
     consentDialogBody: '请阅读并同意 Cindy 的以下协议后继续：<terms>服务条款</terms>、<privacy>隐私协议</privacy>',
@@ -132,6 +135,7 @@ const messages = {
     emailCode: 'Send an email code',
     ssoRequired: 'Your organization requires enterprise SSO.',
     ssoEntry: 'Sign in with enterprise SSO',
+    skipLogin: 'Skip Sign-In',
     consentStatement:
       'I have read and agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>',
     consentDialogTitle: 'Terms of Service & Privacy Policy',
@@ -249,6 +253,7 @@ const messages = {
     emailCode: 'メールで認証コードを送信',
     ssoRequired: 'この組織ではエンタープライズ SSO でのログインが必須です。',
     ssoEntry: 'エンタープライズ SSO でログイン',
+    skipLogin: 'ログインをスキップ',
     consentStatement:
       '<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を読み、同意します',
     consentDialogTitle: '利用規約とプライバシーポリシー',
@@ -359,6 +364,7 @@ const messages = {
     emailCode: '이메일 인증 코드 보내기',
     ssoRequired: '이 조직은 기업 SSO 로그인을 요구합니다.',
     ssoEntry: '기업 SSO로 로그인',
+    skipLogin: '로그인 건너뛰기',
     consentStatement:
       '<terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>을 읽고 동의합니다',
     consentDialogTitle: '서비스 이용약관 및 개인정보 처리방침',

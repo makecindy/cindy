@@ -85,6 +85,11 @@ import {
   type MobileHomeDeviceFilterItem,
   type MobileHomeProjectGroup,
 } from '@/session/mobileHome';
+import {
+  isNoAccountHomeMode,
+  resolveHomeInitialPhase,
+  runHomeRemoteSync,
+} from '@/session/homeRemoteSyncGate';
 import { buildHomeSections, homeRowBefore, type HomeRow, type HomeSection } from '@/session/homeSections';
 import { readHomeViewPreferences, saveHomeViewPreferences } from '@/session/homeViewPreferenceStore';
 import {
@@ -170,8 +175,12 @@ export default function HomeScreen() {
   // 连点会各自触发一次裸 push,把同一页压进栈 N 层(返回也要 N 次)。
   const guardedPush = useGuardedPush();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
-  const { apiFetch, deviceId: selfDeviceId, user } = useAuth();
-  // 首页列表持久缓存按账号键控(401 掉线换号不串数据);首页仅登录后可达,user 理应非空。
+  const { apiFetch, deviceId: selfDeviceId, isLocalMode, user } = useAuth();
+  // 「跳过登录」无账号态(产品拍板 2026-07-27):没有 access token,任何鉴权请求必然
+  // UNAUTHENTICATED。首页在此态下一次远程同步都不发(否则首屏固定「同步失败」、重试永不
+  // 可能成功),只呈现既有的「无可控制电脑」引导空态;有账号路径逐条不变。见 homeRemoteSyncGate。
+  const noAccountMode = isNoAccountHomeMode({ hasAccount: user !== null, isLocalMode });
+  // 首页列表持久缓存按账号键控(401 掉线换号不串数据);无账号态 userId 为空 → 不读缓存。
   const homeCacheUserId = user?.id ?? '';
   const { connectionEpoch, connectionIssue, invoke, lastPresenceSnapshot, status, subscribe } = useDeviceLink();
   const revokedDevices = useRevokedDevices();
@@ -339,95 +348,100 @@ export default function HomeScreen() {
   }, [homeCacheUserId, invoke, markDeviceOffline, refreshDeviceScheduleIndex, statusFilter, subscribe, updateDeviceConnectionState]);
 
   const loadHome = useCallback(async (options: { visible?: boolean } = {}) => {
-    if (!deviceIdentityCacheReady) return;
-    const visible = options.visible === true;
-    if (visible) setRefreshing(true);
-    if (syncInFlightRef.current) {
-      return syncInFlightRef.current.finally(() => {
+    // 无账号态的唯一收口:全部入口(冷启动 / 重连 effect、连接条同步钮、下拉刷新,
+    // 以及重命名成功回拉、连接引导 onRecheck)都经这里,
+    // 闸门与「短路即零请求」的语义抽到 runHomeRemoteSync(注入 sync,可 spy 断言调用次数);
+    // 放行后原样返回 in-flight promise,下拉刷新的 await 语义不变。
+    return runHomeRemoteSync({ noAccountMode, deviceIdentityCacheReady }, () => {
+      const visible = options.visible === true;
+      if (visible) setRefreshing(true);
+      if (syncInFlightRef.current) {
+        return syncInFlightRef.current.finally(() => {
+          if (visible) setRefreshing(false);
+        });
+      }
+
+      const rawTask = (async () => {
+        setError(null);
+        // 记录 REST 请求发起时的 presence 纪元:在请求飞行期间收到过 presence 补丁的设备,
+        // 以 devicesRef 里的实时状态为准,不被"请求发起时刻"的过期 REST 快照改回离线。
+        // 典型场景:开 App 时桌面端正好重连——REST 快照还是 offline,presence-changed(online)
+        // 已把设备补成在线并 hydrate 出会话;若整体覆盖,presence 不会再广播事件来纠正,
+        // 首页会卡死在「会话都在、设备全不可用(新建对话按钮灰)」直到手动下拉刷新。
+        const presenceEpochAtFetchStart = presenceFreshnessRef.current.epoch;
+        const mergeFreshPresence = (list: readonly DeviceView[]) => mergeDeviceViewsWithFreshPresence(
+          list,
+          devicesRef.current,
+          collectFreshPresenceDeviceIds(presenceFreshnessRef.current, presenceEpochAtFetchStart),
+        );
+        // 设备清单 REST 是整轮同步的闸门:它一次失败整个 loadHome 就失败,而每设备的
+        // WS hydrate 已有瞬时重试——闸门自己也必须重试,否则一次弱网抖动就把首页
+        // 卡在「同步失败」等手动下拉。maxAttempts 收敛到 3:它前置于全部 hydrate,
+        // 不值得为它烧满 6 次退避。
+        const res = await withTransientRemoteRetry(
+          () => apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
+            baseUrl: DEVICE_LINK_API_BASE_URL,
+            timeoutMs: DEVICE_LIST_TIMEOUT_MS,
+          }),
+          { maxAttempts: 3 },
+        );
+        const now = Date.now();
+        const serverDevices = mergeFreshPresence(reconcileDeviceViews(res.devices).devices);
+        const deviceRows = toDeviceListItems(serverDevices, now, revokedDevices);
+        const availableRows = deviceRows.filter((item) => item.canOpen);
+        setDeviceConnectionStates((current) => pruneHomeDeviceConnectionStates(
+          current,
+          new Set(availableRows.map((item) => item.device.deviceId)),
+        ));
+        const unavailableDeviceIds = new Set(deviceRows.filter((item) => !item.canOpen).map((item) => item.device.deviceId));
+        for (const deviceId of unavailableDeviceIds) remoteSessionStore.removeDevice(deviceId);
+        // 整表对账:REST 全量清单是权威。unavailableDeviceIds 只覆盖「在清单里但不可用」,
+        // 冷启动从缓存种入、随后被解绑(完全不在清单里)的设备不会出现在其中,不对账
+        // 就成了无法消除的幽灵项;快照回写也会把它一直续进缓存。按差集清 shard。
+        const knownDeviceIds = new Set(deviceRows.map((item) => item.device.deviceId));
+        const ghostDeviceIds = new Set<string>();
+        for (const session of remoteSessionStore.getSessions()) {
+          const shardId = session.deviceLinkDeviceId;
+          if (shardId && !knownDeviceIds.has(shardId)) ghostDeviceIds.add(shardId);
+        }
+        for (const deviceId of ghostDeviceIds) remoteSessionStore.removeDevice(deviceId);
+
+        const failures: string[] = [];
+        const offlineDeviceIds = new Set<string>();
+        await Promise.all(availableRows.map(async (item) => {
+          const result = await hydrateDeviceSessions(item.device);
+          if (result.failure) failures.push(result.failure);
+          if (result.offline) offlineDeviceIds.add(item.device.deviceId);
+        }));
+
+        // 收尾再合并一次:hydrate 阶段(可能持续数秒)里新到的 presence 补丁同样不能被覆盖掉。
+        const nextDevices = reconcileDeviceViews(
+          mergeFreshPresence(markDeviceViewsOffline(serverDevices, offlineDeviceIds)),
+        ).devices;
+        devicesRef.current = nextDevices;
+        setDevices(nextDevices);
+        lastSyncedAtRef.current = now;
+        setLastSyncedAt(now);
+        setError(failures.length > 0 ? failures.slice(0, 2).join('；') : null);
+        // loadHome 整轮成功后也回写一次:覆盖「设备全部下线 / 会话清空」的收敛场景——
+        // 此时没有任何 hydrate 成功,只有这里能把缓存里的陈旧设备清掉。
+        scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
+      })();
+
+      const task = rawTask
+        .catch((err) => {
+          setError(formatRemoteError(err));
+        })
+        .finally(() => {
+          if (syncInFlightRef.current === task) syncInFlightRef.current = null;
+        });
+
+      syncInFlightRef.current = task;
+      return task.finally(() => {
         if (visible) setRefreshing(false);
       });
-    }
-
-    const rawTask = (async () => {
-      setError(null);
-      // 记录 REST 请求发起时的 presence 纪元:在请求飞行期间收到过 presence 补丁的设备,
-      // 以 devicesRef 里的实时状态为准,不被"请求发起时刻"的过期 REST 快照改回离线。
-      // 典型场景:开 App 时桌面端正好重连——REST 快照还是 offline,presence-changed(online)
-      // 已把设备补成在线并 hydrate 出会话;若整体覆盖,presence 不会再广播事件来纠正,
-      // 首页会卡死在「会话都在、设备全不可用(新建对话按钮灰)」直到手动下拉刷新。
-      const presenceEpochAtFetchStart = presenceFreshnessRef.current.epoch;
-      const mergeFreshPresence = (list: readonly DeviceView[]) => mergeDeviceViewsWithFreshPresence(
-        list,
-        devicesRef.current,
-        collectFreshPresenceDeviceIds(presenceFreshnessRef.current, presenceEpochAtFetchStart),
-      );
-      // 设备清单 REST 是整轮同步的闸门:它一次失败整个 loadHome 就失败,而每设备的
-      // WS hydrate 已有瞬时重试——闸门自己也必须重试,否则一次弱网抖动就把首页
-      // 卡在「同步失败」等手动下拉。maxAttempts 收敛到 3:它前置于全部 hydrate,
-      // 不值得为它烧满 6 次退避。
-      const res = await withTransientRemoteRetry(
-        () => apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
-          baseUrl: DEVICE_LINK_API_BASE_URL,
-          timeoutMs: DEVICE_LIST_TIMEOUT_MS,
-        }),
-        { maxAttempts: 3 },
-      );
-      const now = Date.now();
-      const serverDevices = mergeFreshPresence(reconcileDeviceViews(res.devices).devices);
-      const deviceRows = toDeviceListItems(serverDevices, now, revokedDevices);
-      const availableRows = deviceRows.filter((item) => item.canOpen);
-      setDeviceConnectionStates((current) => pruneHomeDeviceConnectionStates(
-        current,
-        new Set(availableRows.map((item) => item.device.deviceId)),
-      ));
-      const unavailableDeviceIds = new Set(deviceRows.filter((item) => !item.canOpen).map((item) => item.device.deviceId));
-      for (const deviceId of unavailableDeviceIds) remoteSessionStore.removeDevice(deviceId);
-      // 整表对账:REST 全量清单是权威。unavailableDeviceIds 只覆盖「在清单里但不可用」,
-      // 冷启动从缓存种入、随后被解绑(完全不在清单里)的设备不会出现在其中,不对账
-      // 就成了无法消除的幽灵项;快照回写也会把它一直续进缓存。按差集清 shard。
-      const knownDeviceIds = new Set(deviceRows.map((item) => item.device.deviceId));
-      const ghostDeviceIds = new Set<string>();
-      for (const session of remoteSessionStore.getSessions()) {
-        const shardId = session.deviceLinkDeviceId;
-        if (shardId && !knownDeviceIds.has(shardId)) ghostDeviceIds.add(shardId);
-      }
-      for (const deviceId of ghostDeviceIds) remoteSessionStore.removeDevice(deviceId);
-
-      const failures: string[] = [];
-      const offlineDeviceIds = new Set<string>();
-      await Promise.all(availableRows.map(async (item) => {
-        const result = await hydrateDeviceSessions(item.device);
-        if (result.failure) failures.push(result.failure);
-        if (result.offline) offlineDeviceIds.add(item.device.deviceId);
-      }));
-
-      // 收尾再合并一次:hydrate 阶段(可能持续数秒)里新到的 presence 补丁同样不能被覆盖掉。
-      const nextDevices = reconcileDeviceViews(
-        mergeFreshPresence(markDeviceViewsOffline(serverDevices, offlineDeviceIds)),
-      ).devices;
-      devicesRef.current = nextDevices;
-      setDevices(nextDevices);
-      lastSyncedAtRef.current = now;
-      setLastSyncedAt(now);
-      setError(failures.length > 0 ? failures.slice(0, 2).join('；') : null);
-      // loadHome 整轮成功后也回写一次:覆盖「设备全部下线 / 会话清空」的收敛场景——
-      // 此时没有任何 hydrate 成功,只有这里能把缓存里的陈旧设备清掉。
-      scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
-    })();
-
-    const task = rawTask
-      .catch((err) => {
-        setError(formatRemoteError(err));
-      })
-      .finally(() => {
-        if (syncInFlightRef.current === task) syncInFlightRef.current = null;
-      });
-
-    syncInFlightRef.current = task;
-    return task.finally(() => {
-      if (visible) setRefreshing(false);
     });
-  }, [apiFetch, deviceIdentityCacheReady, homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, revokedDevices]);
+  }, [apiFetch, deviceIdentityCacheReady, homeCacheUserId, hydrateDeviceSessions, noAccountMode, reconcileDeviceViews, revokedDevices]);
 
   // 冷启动先画缓存:上次 loadHome 成功的设备+会话快照种入 store,先把列表画出来(消除首屏强制
   // spinner);loadHome 返回后由 setDeviceSessions / removeDevice 正常覆盖收敛。缓存为空时列表
@@ -793,9 +807,17 @@ export default function HomeScreen() {
     screenWidth,
   });
   const connectionError = describeRemoteError(error);
-  const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;
-  const initialHomeLoading = !initialHomeSettled && !connectionError;
-  const initialHomeError = !initialHomeSettled && !!connectionError;
+  // 首屏相位收在纯函数里(无账号态直接 ready:它永不发起同步,lastSyncedAt 恒 null,
+  // 沿用旧式判定会永久 spinner)。
+  const initialHomePhase = resolveHomeInitialPhase({
+    deviceIdentityCacheReady,
+    hasConnectionError: !!connectionError,
+    lastSyncedAt,
+    noAccountMode,
+  });
+  const initialHomeSettled = initialHomePhase === 'ready';
+  const initialHomeLoading = initialHomePhase === 'loading';
+  const initialHomeError = initialHomePhase === 'error';
   // 首次同步完成后校验恢复/当前选中的设备,不成立时回退「所有对话」并同步持久化:
   // - 设备已不存在(解绑):home.selectedDeviceId 是归一化后的口径,查不到会变 null,
   //   若不回退,表头显示旧设备名而列表实际展示全部会话,两者口径不一致。
@@ -803,8 +825,10 @@ export default function HomeScreen() {
   //   loadHome 已移除其会话、pickPrimaryDevice 也返回 null,继续停留会卡在空列表 +
   //   新建按钮置灰。只对恢复的选择做一次性校验,不改变用户会话内手动选择后设备
   //   转为离线的既有行为(手动选择时设备必然可用)。
+  // 无账号态例外:它的 settled 不代表同步过设备清单(闸门下从未同步),拿空清单去"校验"
+  // 会把上一个登录账号存的设备筛选偏好清掉——此态不校验、不写盘。
   useEffect(() => {
-    if (!initialHomeSettled || !selectedDeviceId) return;
+    if (noAccountMode || !initialHomeSettled || !selectedDeviceId) return;
     const missing = home.selectedDeviceId === null;
     let restoredUnavailable = false;
     if (!missing && restoredSelectionUnvalidatedRef.current) {
@@ -816,10 +840,12 @@ export default function HomeScreen() {
     setSelectedDeviceId(null);
     setRestoredDeviceName(null);
     void saveHomeViewPreferences({ selectedDevice: null });
-  }, [home.deviceFilters, home.selectedDeviceId, initialHomeSettled, selectedDeviceId]);
+  }, [home.deviceFilters, home.selectedDeviceId, initialHomeSettled, noAccountMode, selectedDeviceId]);
   // 连接层失败原因(鉴权失效/被顶号/超限/版本不符)比请求级 error 更根因:非 online 时优先展示。
   const activeConnectionIssue = status !== 'online' ? connectionIssue : null;
-  const showConnectionRow = !!connectionError || status !== 'online';
+  // 无账号态没有 relay 连接(DeviceLinkContext 在 !isAuthenticated 时就 stop 了),此时
+  // 「已断开 + 同步钮」既是必然状态也是死按钮(同步被闸门拦住),整条不渲染。
+  const showConnectionRow = !noAccountMode && (!!connectionError || status !== 'online');
   const connectionTone = activeConnectionIssue
     ? 'off'
     : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
@@ -1294,7 +1320,10 @@ export default function HomeScreen() {
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.key}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void loadHome({ visible: true })} />}
+        // 无账号态不挂下拉刷新:同步被闸门拦住,留着只是个拉不出结果的手势。
+        refreshControl={noAccountMode
+          ? undefined
+          : <RefreshControl refreshing={refreshing} onRefresh={() => void loadHome({ visible: true })} />}
         stickySectionHeadersEnabled={false}
         contentContainerStyle={[
           styles.listContent,

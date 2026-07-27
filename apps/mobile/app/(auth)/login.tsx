@@ -17,6 +17,7 @@ import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from '@/
 import { acceptPrivacyConsent } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb } from '@/analytics/mobileTapdb';
 import { isNativeSocialProviderSupported } from '@/auth/nativeSocial';
+import { isSkipLoginDisabled, requestSkipLogin } from '@/auth/skipLoginGate';
 import { Text, TextInput } from '@/components/AppText';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import {
@@ -34,6 +35,7 @@ import {
   LOGIN_DELETION_BUBBLE,
   LOGIN_ERROR_TEXT,
   LOGIN_GROUP,
+  LOGIN_KEYBOARD_DOCK_ANCHOR_Y,
   LOGIN_LOADING_RING,
   LOGIN_METHOD_ROW,
   LOGIN_SSO_ORG_HINT_TOP,
@@ -58,6 +60,7 @@ import {
   LoginResendCountdown,
   LoginSkinInput,
   LoginSkinPhoneInput,
+  LoginSkipLoginLink,
   LoginSocialButton,
   LoginSocialGlyph,
   LoginSocialRow,
@@ -120,8 +123,8 @@ export default function LoginScreen() {
      未勾选拦截弹窗 + 同意后续接。过门点(产品拍板 2026-07-24 二次):手机号提交、
      邮箱提交(discover 前)、method-choice 个人行发码、社交圆钮(Apple/Google/
      未来微信)——个人登录一律先同意再发起,含仅触发方式查询的 email discover
-     (拍板压过审查侧「无副作用可放行」建议)。豁免仅限显式企业 SSO 入口。
-     手机端无游客登录(远程连接客户端必须有账号,产品拍板 2026-07-24)。
+     (拍板压过审查侧「无副作用可放行」建议)。豁免:显式企业 SSO 入口、
+     「跳过登录」入口(产品拍板 2026-07-27:无账号进主界面不弹协议弹窗、不需勾选)。
      pending 动作只存本组件(不进 AuthContext 状态机;仓规 9)。 ── */
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [consentDialogOpen, setConsentDialogOpen] = useState(false);
@@ -187,6 +190,29 @@ export default function LoginScreen() {
       setConsentDialogOpen(false);
     }
   }, [consentDialogOpen, auth.isAuthenticated, auth.isBusy, auth.loginState?.step]);
+  /*
+   * 「跳过登录」= 无账号进主界面(产品拍板 2026-07-27,推翻 2026-07-24「手机/pad 必须
+   * 有账号」;新稿 figma 705:1068/1069 已在面板内画出该入口)。
+   * **刻意不过 requireConsent**:该入口不弹服务条款/隐私协议弹窗、不需勾选 radio
+   * (拍板);其余个人登录链路的协议门保持不变。置态与持久化都在 AuthContext
+   * (enterLocalMode),本组件不自管路由——NavigationGate 的「有账号 ∨ 已跳过」门
+   * 在标记置位后自动 replace 到主界面。
+   *
+   * 登录未决(isBusy / 未 initialized)时禁用:否则路由先切主界面、迟到的登录结果再写
+   * user 清标记,最终态取决于异步完成顺序(2026-07-27 P1)。门在 skipLoginGate,组件的
+   * 原生 disabled 与 handler guard 双保险 —— 与桌面 openLocalMode 同款。
+   */
+  const skipDisabled = isSkipLoginDisabled({
+    isBusy: auth.isBusy,
+    initialized: auth.initialized,
+  });
+  const skipLogin = () => {
+    requestSkipLogin({
+      isBusy: auth.isBusy,
+      initialized: auth.initialized,
+      enterLocalMode: auth.enterLocalMode,
+    });
+  };
   const openLegalLink = (kind: 'terms' | 'privacy') => {
     // 系统默认浏览器打开(settings.tsx 同款 Linking 模式);URL 按构建区域分流
     void Linking.openURL(
@@ -498,6 +524,14 @@ export default function LoginScreen() {
             testID="login.continueButton"
           />
           {identifierErrorNode}
+          {/* 面板内「跳过登录」文字按钮(新稿 705:1068 槽 430..490):与 error 槽
+              (380..430)首尾相接、同时可见不重叠;不过协议门(见 skipLogin 注) */}
+          <LoginSkipLoginLink
+            disabled={skipDisabled}
+            label={loginText('skipLogin')}
+            onPress={skipLogin}
+            testID="login.skipLoginButton"
+          />
         </LoginPanel>
         {/* App Store 合规(Guideline 4):Apple 入口为圆钮行第一颗(iOS only,沿用
             socialProviders.includes('apple') 即 isNativeSocialProviderSupported 判定,
@@ -1100,8 +1134,11 @@ export default function LoginScreen() {
       platform: Platform.OS === 'android' ? 'android' : 'ios',
       visible: keyboard.visible,
       keyboard: keyboard.rect,
-      // 停靠贴附锚 = 面板底(Step 5b.1:panelBottom + 10 - keyboardTop)
-      panelBottomY: groupBaseline.y + loginSizes.panelHeight * groupScale,
+      // 停靠贴附锚 = error 槽底(面板坐标 430;Step 5b.1 的 anchor + 10 - keyboardTop 公式不变)。
+      // 用户 2026-07-27 拍板:面板 440→500 后不再用面板底当锚(否则每次停靠多顶 60 设计px),
+      // 「跳过登录」槽 430..490 允许被键盘遮挡——见 LOGIN_KEYBOARD_DOCK_ANCHOR_Y 注。
+      panelBottomY:
+        groupBaseline.y + LOGIN_KEYBOARD_DOCK_ANCHOR_Y * groupScale,
       // 悬浮相交判定锚 = 当前输入框 ∪ 主按钮(U-8b;输入框顶到主按钮底)
       controlsUnion: {
         x: groupBaseline.x + LOGIN_CONTROL.x * groupScale,

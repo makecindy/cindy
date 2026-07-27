@@ -178,7 +178,10 @@ describe('loginHandoff 接线(Provider/reporter 拓扑 + 清理,读源码断言)
     expect(layoutSource).toContain('<EndpointHandoffBridge status={endpointGate.status} />');
     expect(layoutSource).toContain("dispatchHandoff({ type: 'ota-ready' })");
     expect(layoutSource).toContain('<AuthHandoffBridge />');
-    expect(layoutSource).toContain("dispatch({ type: 'auth-init', authenticated: auth.isAuthenticated })");
+    // 「跳过登录」态与已登录同属直入分支(产品拍板 2026-07-27):登录页不挂载,
+    // readiness 不能等 panel-mounted,故 authenticated 取「有账号 ∨ 已跳过」
+    expect(layoutSource).toContain('const authenticated = auth.isAuthenticated || auth.isLocalMode');
+    expect(layoutSource).toContain("dispatch({ type: 'auth-init', authenticated })");
     expect(loginSource).toContain("handoffDispatch?.({ type: 'panel-mounted' })");
     expect(stageSource).toContain("handoff?.dispatch({ type: 'assets-ready' })");
     // endpoint→OTA→auth 既有挂载顺序不变:OTA 上报在 RootAfterEndpoints、auth 桥在 AuthProvider 内

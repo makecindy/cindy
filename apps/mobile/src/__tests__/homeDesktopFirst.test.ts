@@ -240,7 +240,9 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'syncing');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'failed');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'idle');");
-    expect(source).toContain("const showConnectionRow = !!connectionError || status !== 'online';");
+    // 有账号路径的口径不变(错误 ∨ 非 online 就出条);唯一例外是无账号「跳过登录」态
+    // (没有 relay 连接 + 同步被闸门拦住,整条不渲染,行为断言见 homeNoAccountMode.test.ts)。
+    expect(source).toContain("const showConnectionRow = !noAccountMode && (!!connectionError || status !== 'online');");
     expect(source).toContain("connectionStates={deviceConnectionStates}");
     expect(source).toContain('function DeviceMenuItem');
     expect(source).toContain("tone={status === 'online' ? 'ready' : 'off'}");
@@ -340,7 +342,10 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('mergeDeviceViewsWithFreshPresence(');
     expect(source).toContain('markPresenceFresh(presenceFreshnessRef.current, lastPresenceSnapshot.deviceId);');
     expect(source).toContain('collectFreshPresenceDeviceIds(presenceFreshnessRef.current, presenceEpochAtFetchStart)');
-    expect(source).toContain('refreshControl={<RefreshControl refreshing={refreshing}');
+    // 下拉刷新仍绑 loadHome({ visible: true });唯一例外是无账号态不挂 refreshControl
+    // (同步被闸门拦住,留着只是拉不出结果的手势,行为断言见 homeNoAccountMode.test.ts)。
+    expect(source).toContain('refreshControl={noAccountMode');
+    expect(source).toContain(': <RefreshControl refreshing={refreshing} onRefresh={() => void loadHome({ visible: true })} />}');
     expect(source).toContain('onRefresh={() => void loadHome({ visible: true })}');
     expect(source).toContain('onPress={() => void loadHome({ visible: true })}');
     expect(source).toContain('patchDeviceViewsWithPresence(');
@@ -354,9 +359,14 @@ describe('mobile home desktop-first surface', () => {
   it('does not show the no-device empty state before startup sync settles', () => {
     const source = readSource('app/devices/index.tsx');
 
-    expect(source).toContain('const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;');
-    expect(source).toContain('const initialHomeLoading = !initialHomeSettled && !connectionError;');
-    expect(source).toContain('const initialHomeError = !initialHomeSettled && !!connectionError;');
+    // 首屏相位收敛到纯函数 resolveHomeInitialPhase(判定逐条行为断言见
+    // homeNoAccountMode.test.ts:有账号路径仍是「缓存就绪 + lastSyncedAt 落地才 settled,
+    // 否则按有无 connectionError 分 error / loading」)。
+    expect(source).toContain('const initialHomePhase = resolveHomeInitialPhase({');
+    expect(source).toContain('    deviceIdentityCacheReady,\n    hasConnectionError: !!connectionError,\n    lastSyncedAt,');
+    expect(source).toContain("const initialHomeSettled = initialHomePhase === 'ready';");
+    expect(source).toContain("const initialHomeLoading = initialHomePhase === 'loading';");
+    expect(source).toContain("const initialHomeError = initialHomePhase === 'error';");
     expect(source).toContain('const hasOpenableLiveDevice = deviceModels.some((item) => item.canOpen);');
     // 首次 loadHome 落地前(含失败态)FAB 只认 live 设备:首页列表缓存画出的会话会合成出
     // 「可用」的 primaryDevice,但缓存设备不能当 live 设备开新会话(settle 后回归 primaryDevice 语义)。
