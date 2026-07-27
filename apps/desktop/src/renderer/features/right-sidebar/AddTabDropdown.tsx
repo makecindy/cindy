@@ -142,9 +142,12 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
     (firstItem ?? menuEl)?.focus();
     return () => {
       const active = document.activeElement;
-      if (menuEl && menuEl.contains(active)) {
-        anchor?.querySelector('button')?.focus();
-      }
+      if (!menuEl || !menuEl.contains(active)) return;
+      // 面板收起触发的关闭(如 ⌘W 关掉最后一个 tab):「+」已随宿主 aside 缩进
+      // w-0 不可见,焦点还给它会落在不可见控件上 —— 跳过,让焦点自然回落。
+      const pane = anchor?.closest('[data-panel-drag-root="right-tabs"]');
+      if (pane?.hasAttribute('data-pane-collapsed')) return;
+      anchor?.querySelector('button')?.focus();
     };
   }, [anchorRef]);
 
