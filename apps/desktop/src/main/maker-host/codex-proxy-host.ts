@@ -209,6 +209,39 @@ function isGoogleGeminiChatUpstream(upstream: string): boolean {
   }
 }
 
+const MOONSHOT_CHAT_HOSTS = new Set(['api.moonshot.cn', 'api.moonshot.ai']);
+
+function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined): string {
+  return stripPrefix && model.startsWith(stripPrefix)
+    ? model.slice(stripPrefix.length)
+    : model;
+}
+
+/**
+ * 图片桥接必须按已验证的上游能力显式开启。这里认官方 Moonshot DNS 边界 + Kimi K3
+ * 上游 model，不认 provider id（预设创建后会生成用户自定义 id），也不对所有
+ * openai-chat 供应商放开。未命中继续沿用 fail-closed 默认。
+ */
+export function chatBridgeCapabilitiesForRoute(
+  upstream: string,
+  realModel: string,
+  fallback: ChatBridgeCapabilities = CHAT_BRIDGE_DEFAULT_CAPABILITIES,
+): ChatBridgeCapabilities {
+  if (realModel !== 'kimi-k3') return fallback;
+  try {
+    const url = new URL(upstream);
+    if (url.protocol !== 'https:' || !MOONSHOT_CHAT_HOSTS.has(url.hostname.toLowerCase())) {
+      return fallback;
+    }
+  } catch {
+    return fallback;
+  }
+  return {
+    ...fallback,
+    imageInput: 'image_url',
+  };
+}
+
 /**
  * Chat bridge 上游只收 host 明确构造的 header。绝不把 Codex/ChatGPT 请求 header
  * 原样透传，防止账号 id、OpenAI OAuth bearer 或内部 session 元数据泄漏给第三方。
@@ -216,17 +249,19 @@ function isGoogleGeminiChatUpstream(upstream: string): boolean {
 function createChatBridgeDecision(
   route: Awaited<ReturnType<typeof resolveSessionRoute>>,
   instructions: string | undefined,
+  wireModel: string,
 ): RoutingDecision | null {
   if (!route || route.routing.wireProtocol !== 'openai-chat') return null;
   const { headers } = buildLocalHandlerHeaders(route, 'codex');
   const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
+  const realModel = rewriteChatBridgeModel(wireModel, stripPrefix);
   // localHandler 绕过 proxy 的 responseObserver,自定义(user)供应商的上游错误不会被
   // createProviderUpstreamErrorObserver 看到。这里显式把非 2xx 上游错误喂回同一广播通道,
   // 让 Chat 桥接会话与透明自定义供应商一样弹结构化 providerError.* 提示。内置来源不广播
   // (与 observer 的 user-only 语义一致)。
   const providerId = route.providerId;
   const providerName = getActiveCatalog().providers.find((p) => p.id === providerId)?.name ?? providerId;
-  const capabilities: ChatBridgeCapabilities = isGoogleGeminiChatUpstream(
+  const baseCapabilities: ChatBridgeCapabilities = isGoogleGeminiChatUpstream(
     route.routing.upstream,
   )
     ? {
@@ -239,6 +274,11 @@ function createChatBridgeDecision(
         googleThoughtSignaturePlaceholder: true,
       }
     : CHAT_BRIDGE_DEFAULT_CAPABILITIES;
+  const capabilities = chatBridgeCapabilitiesForRoute(
+    route.routing.upstream,
+    realModel,
+    baseCapabilities,
+  );
   const onUpstreamError = route.providerSource === 'user'
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
@@ -248,9 +288,7 @@ function createChatBridgeDecision(
     upstreamBase: route.routing.upstream,
     ...(route.routing.requestPath ? { chatCompletionsPath: route.routing.requestPath } : {}),
     buildHeaders: async () => headers,
-    rewriteModel: (model: string) => stripPrefix && model.startsWith(stripPrefix)
-      ? model.slice(stripPrefix.length)
-      : model,
+    rewriteModel: (model: string) => rewriteChatBridgeModel(model, stripPrefix),
     capabilities,
     ...(onUpstreamError ? { onUpstreamError } : {}),
   }, { logger: log });
@@ -1269,7 +1307,11 @@ export function createModelRoutingTransform(): RoutingTransform {
       const selectedRouting = getSessionRoutingDescriptor(sessionId, 'codex', model || undefined);
       if (selectedRouting?.wireProtocol === 'openai-chat' && ctx.method === 'POST' && model) {
         return resolveSessionRoute(sessionId, 'codex', model).then((localRoute) =>
-          createChatBridgeDecision(localRoute, threadId ? registry.get(threadId) : undefined));
+          createChatBridgeDecision(
+            localRoute,
+            threadId ? registry.get(threadId) : undefined,
+            model,
+          ));
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。
