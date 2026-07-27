@@ -143,7 +143,15 @@ function applyGatewayModels(models: ModelAccessGatewayModel[]): void {
   // 同一次 /models 响应先建立 provider-scoped 价格投影，再做仅影响展示元数据的
   // dev overlay。空成功响应会同时清空模型和价格；请求失败不会调用本函数，
   // 因而保留上一份完整成功快照。
-  replaceGatewayModelPricing(models);
+  const pricing = replaceGatewayModelPricing(models);
+  const quoteCount = Object.keys(pricing.xd ?? {}).length;
+  if (models.length > 0 && quoteCount < models.length) {
+    // 报价覆盖不足此前是静默的(目录币种冲突或缺价字段都会整条丢弃),
+    // #587 只能从空缓存反推;这里留一行日志让现场可判。
+    log.warn(
+      `xd gateway pricing quotes cover ${quoteCount}/${models.length} models`,
+    );
+  }
   // dev:本地目录文件(catalog/providers.json)的 cindyModelMeta 段覆盖服务端下发的
   // 元数据,改本地 json + 重启即可自测,无需发 OSS / 等服务端热加载;只覆盖同 id,
   // 清单成员资格仍以网关为准。packaged 不走此分支(语义见 devMetaOverlay.ts)。
