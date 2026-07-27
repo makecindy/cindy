@@ -55,6 +55,8 @@ import { cn } from '@/lib/utils';
 import type { GhostPermissionItem, GhostToolDecl, InstalledGhost } from '../../../shared/ghost';
 import { type GhostPluginDetail } from './lib/ghostPluginViewModel';
 import { GhostPluginIcon } from './GhostPluginIcon';
+import { GhostReadinessBadge } from './GhostReadinessBadge';
+import { useGhostReadiness } from '@/cindy-brain/lifecycleProjection';
 import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
 import './plugin-motion.css';
 
@@ -134,6 +136,7 @@ export function GhostPluginDetailView({
   toggleDisabled,
 }: GhostPluginDetailViewProps) {
   const { t } = useTranslation();
+  const readiness = useGhostReadiness(detail.id);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
@@ -210,7 +213,10 @@ export function GhostPluginDetailView({
               <h1 className="truncate text-28 font-medium leading-[34px] text-[var(--text-primary)]">
                 {detail.name}
               </h1>
-              <GhostPluginMetadata author={detail.author} version={detail.version} />
+              <div className="flex items-center gap-2">
+                <GhostPluginMetadata author={detail.author} version={detail.version} />
+                <GhostReadinessBadge readiness={readiness} />
+              </div>
             </div>
 
             <div

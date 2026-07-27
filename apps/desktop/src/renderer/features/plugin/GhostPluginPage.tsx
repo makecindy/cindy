@@ -66,6 +66,8 @@ import {
 } from './PluginManagementLayout';
 import { GhostPluginDetailView } from './GhostPluginDetailView';
 import { GhostPluginIcon } from './GhostPluginIcon';
+import { GhostReadinessBadge } from './GhostReadinessBadge';
+import { useGhostReadiness } from '@/cindy-brain/lifecycleProjection';
 import { MarketPluginDetailView } from './MarketPluginDetailView';
 import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker';
 import {
@@ -1294,6 +1296,7 @@ export function GhostPluginCard({
   toggleDisabled?: boolean;
 }) {
   const { t } = useTranslation();
+  const readiness = useGhostReadiness(item.id);
   return (
     <article
       className={cn(
@@ -1322,6 +1325,7 @@ export function GhostPluginCard({
                 {t('settings.ghosts.market.updateAvailable')}
               </span>
             ) : null}
+            <GhostReadinessBadge readiness={readiness} />
           </span>
           <span className="mt-1 flex min-w-0 items-center gap-1.5 text-11 text-[var(--text-tertiary)]">
             {sourceLabel ? (

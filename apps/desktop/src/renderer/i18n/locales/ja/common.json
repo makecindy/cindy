@@ -2406,6 +2406,12 @@
         "description": "パネルと機能が削除されます。レイアウト位置は保持され、再インストール時に元の位置へ復元されます。",
         "cancel": "キャンセル"
       },
+      "readiness": {
+        "needsSetup": "要設定",
+        "needsReauth": "要再認証",
+        "degraded": "異常",
+        "unknown": "状態不明"
+      },
       "setupGate": {
         "title": "「{{name}}」は設定が必要です",
         "descriptionMissing": "使用する前に次の設定が必要です：{{items}}。今すぐプラグイン設定を開きますか？",

@@ -2406,6 +2406,12 @@
         "description": "패널과 기능이 제거됩니다. 레이아웃 위치는 유지되며 다시 설치하면 원래 자리로 복원됩니다.",
         "cancel": "취소"
       },
+      "readiness": {
+        "needsSetup": "설정 필요",
+        "needsReauth": "재인증 필요",
+        "degraded": "오류 발생",
+        "unknown": "상태 알 수 없음"
+      },
       "setupGate": {
         "title": "“{{name}}” 플러그인은 설정이 필요합니다",
         "descriptionMissing": "사용하기 전에 다음 설정이 필요합니다: {{items}}. 지금 플러그인 설정을 열까요?",

@@ -2406,6 +2406,12 @@
         "description": "面板与能力将随之移除；布局位置会保留，重新安装时原位复活。",
         "cancel": "取消"
       },
+      "readiness": {
+        "needsSetup": "待配置",
+        "needsReauth": "需重新授权",
+        "degraded": "运行异常",
+        "unknown": "状态未知"
+      },
       "setupGate": {
         "title": "「{{name}}」还需要完成配置",
         "descriptionMissing": "使用前还需要配置：{{items}}。现在前往插件配置页完成设置吗？",

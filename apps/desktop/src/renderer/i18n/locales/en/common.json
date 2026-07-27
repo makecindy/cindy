@@ -2407,6 +2407,12 @@
         "description": "Its panel and capabilities will be removed. Its layout spot is kept and restored if you install it again.",
         "cancel": "Cancel"
       },
+      "readiness": {
+        "needsSetup": "Setup needed",
+        "needsReauth": "Re-authorize",
+        "degraded": "Malfunctioning",
+        "unknown": "Unknown state"
+      },
       "setupGate": {
         "title": "“{{name}}” Needs Setup",
         "descriptionMissing": "Before using it, set up: {{items}}. Open the plugin settings now?",
