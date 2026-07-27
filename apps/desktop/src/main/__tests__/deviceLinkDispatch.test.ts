@@ -379,6 +379,7 @@ import {
   setControllersChangedListener,
   setSessionsSubscribedListener,
   getActiveControllers,
+  getUpdateRelaunchControllers,
   dropAllControllers,
 } from '../device-link/dispatch';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
@@ -565,8 +566,13 @@ describe('被控端订阅 registry + topic 转发', () => {
 
   it('无人值守更新忽略纯 sessions viewer，但保护文件浏览和实际会话控制', () => {
     remoteControlEnabled = true;
-    const changes: ActiveController[][] = [];
-    setControllersChangedListener((controllers) => changes.push(controllers));
+    const changes: Array<{
+      controlled: ActiveController[];
+      updateBusy: ActiveController[];
+    }> = [];
+    setControllersChangedListener((controlled, updateBusy) =>
+      changes.push({ controlled, updateBusy }),
+    );
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);
 
@@ -577,23 +583,35 @@ describe('被控端订阅 registry + topic 转发', () => {
     feed(subFrame('ctrl-viewer', SUB, ['sessions'], 'Viewer'));
 
     expect(getActiveControllers()).toEqual([]);
-    expect(changes.at(-1)).toEqual([]);
+    expect(getUpdateRelaunchControllers()).toEqual([]);
+    expect(changes.at(-1)).toEqual({ controlled: [], updateBusy: [] });
 
     feed(subFrame('ctrl-viewer', SUB, ['fs-watch:/repo'], 'Viewer'));
-    expect(getActiveControllers()).toEqual([
+    expect(getActiveControllers()).toEqual([]);
+    expect(getUpdateRelaunchControllers()).toEqual([
       { deviceId: 'ctrl-viewer', name: 'Viewer' },
     ]);
-    expect(changes.at(-1)).toEqual([{ deviceId: 'ctrl-viewer', name: 'Viewer' }]);
+    expect(changes.at(-1)).toEqual({
+      controlled: [],
+      updateBusy: [{ deviceId: 'ctrl-viewer', name: 'Viewer' }],
+    });
 
     feed(subFrame('ctrl-viewer', UNSUB, ['fs-watch:/repo']));
     expect(getActiveControllers()).toEqual([]);
-    expect(changes.at(-1)).toEqual([]);
+    expect(getUpdateRelaunchControllers()).toEqual([]);
+    expect(changes.at(-1)).toEqual({ controlled: [], updateBusy: [] });
 
     feed(subFrame('ctrl-viewer', SUB, ['session:s1'], 'Viewer'));
     expect(getActiveControllers()).toEqual([
       { deviceId: 'ctrl-viewer', name: 'Viewer' },
     ]);
-    expect(changes.at(-1)).toEqual([{ deviceId: 'ctrl-viewer', name: 'Viewer' }]);
+    expect(getUpdateRelaunchControllers()).toEqual([
+      { deviceId: 'ctrl-viewer', name: 'Viewer' },
+    ]);
+    expect(changes.at(-1)).toEqual({
+      controlled: [{ deviceId: 'ctrl-viewer', name: 'Viewer' }],
+      updateBusy: [{ deviceId: 'ctrl-viewer', name: 'Viewer' }],
+    });
   });
 
   it('多控制端:各只收自己订阅 session 的 push', () => {

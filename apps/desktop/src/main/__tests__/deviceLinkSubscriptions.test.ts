@@ -29,7 +29,7 @@ describe('subscriptions registry', () => {
     expect(subs.getControllersForTopic('session:zzz')).toContain('legacy');
   });
 
-  it('活跃控制端 = 持 session、fs-watch 或 "*";纯 sessions 订阅者不算', () => {
+  it('横幅只认 session / "*";更新 busy 额外保护 fs-watch', () => {
     subs.subscribe('observer', ['sessions'], 'Obs');
     expect(subs.getControlControllers()).toEqual([]); // 只看列表 → 不亮横幅
 
@@ -37,13 +37,21 @@ describe('subscriptions registry', () => {
     expect(subs.getControlControllers()).toEqual([{ deviceId: 'controller', name: 'Ctrl' }]);
 
     subs.subscribe('file-browser', ['fs-watch:/repo'], 'Files');
-    expect(subs.getControlControllers()).toContainEqual({
+    expect(subs.getControlControllers()).not.toContainEqual({
+      deviceId: 'file-browser',
+      name: 'Files',
+    });
+    expect(subs.getUpdateRelaunchControllers()).toContainEqual({
       deviceId: 'file-browser',
       name: 'Files',
     });
 
     subs.subscribe('legacy', ['*'], 'Old');
     expect(subs.getControlControllers().map((c) => c.deviceId).sort()).toEqual([
+      'controller',
+      'legacy',
+    ]);
+    expect(subs.getUpdateRelaunchControllers().map((c) => c.deviceId).sort()).toEqual([
       'controller',
       'file-browser',
       'legacy',

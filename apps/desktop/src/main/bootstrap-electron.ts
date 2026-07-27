@@ -269,7 +269,7 @@ import { WindowManualDragController } from './windowManualDrag';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import { initDeviceLinkService, releaseDeviceLinkOwnershipBeforeLogout } from './device-link';
 import {
-  getActiveControllers,
+  getUpdateRelaunchControllers,
   setSessionsSubscribedListener,
 } from './device-link/dispatch';
 import {
@@ -3518,12 +3518,12 @@ const registerIpcHandlers = () => {
     // 由 prepareCodexExtraSpawnConfig 懒启动(幂等);此处不再按全局开关 eager-start。
     try {
       setUpdateAutoRelaunchBusyProbe(async () => {
-        // A remote operator may be reading an active session without an agent turn.
-        // Keep that control path alive, but do not let the lightweight `sessions`
-        // list subscription held by every eligible device block updates forever.
+        // A remote operator may be viewing a live session or file tree without an agent turn.
+        // Keep those paths alive, but do not let the lightweight `sessions` list subscription
+        // held by every eligible device block updates forever.
         return hasUpdateRelaunchBusyActivity({
           readSynchronousBusy: () =>
-            getActiveControllers().length > 0 || anySessionInTurn(getMakerCore()),
+            getUpdateRelaunchControllers().length > 0 || anySessionInTurn(getMakerCore()),
           readScheduleBusy: () => readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
         });
       });
@@ -5551,7 +5551,7 @@ app.on('ready', async () => {
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
   initDeviceLinkService({
-    onControllersChanged: (controllers) => {
+    onUpdateRelaunchControllersChanged: (controllers) => {
       const transition = decideUpdateRelaunchBusyTransition(
         updateRelaunchRemoteBusy,
         controllers.length > 0,

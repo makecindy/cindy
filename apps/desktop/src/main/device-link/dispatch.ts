@@ -242,8 +242,11 @@ function projectInvokeResultForTunnel(channel: string, result: unknown): unknown
 /** 持有 client 的引用(转发 push 用);wireInboundDispatch 接入时设置。 */
 let activeClient: DeviceLinkClient | null = null;
 
-/** 控制端集合变化时通知 host(更新「正在被控」状态条) */
-type ControllersChangedListener = (controllers: ActiveController[]) => void;
+/** 订阅集合变化时一次性通知 host UI 控制态与更新重启安全态。 */
+type ControllersChangedListener = (
+  controllers: ActiveController[],
+  updateRelaunchControllers: ActiveController[],
+) => void;
 let onControllersChanged: ControllersChangedListener | null = null;
 
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
@@ -260,6 +263,10 @@ export function setSessionsSubscribedListener(cb: SessionsSubscribedListener | n
 
 export function getActiveControllers(): ActiveController[] {
   return subscriptions.getControlControllers();
+}
+
+export function getUpdateRelaunchControllers(): ActiveController[] {
+  return subscriptions.getUpdateRelaunchControllers();
 }
 
 function notifySessionsSubscribed(controllerDeviceId: string): void {
@@ -413,11 +420,15 @@ function truncateRemoteString(value: string, state: TruncationState): string {
 /**
  * 同步「转发 tap 开关」与「被控横幅」到当前 registry 状态。任何 registry 变更后调用:
  *  - registry 非空 → 注册 forwardPush tap(无监听时 broadcast-tap 是 O(1) no-op);空 → 注销。
- *  - 活跃控制端集 = 持 session:<id> / fs-watch:<workdir> / legacy '*' 的订阅者。
+ *  - UI 活跃控制端集 = 持 session:<id> / legacy '*' 的订阅者。
+ *  - 更新重启阻塞集额外包含 fs-watch:<workdir>，但不扩大 UI 被控横幅语义。
  */
 function syncForwarding(): void {
   setBroadcastTapListener(subscriptions.isEmpty() ? null : forwardPush);
-  onControllersChanged?.(subscriptions.getControlControllers());
+  onControllersChanged?.(
+    subscriptions.getControlControllers(),
+    subscriptions.getUpdateRelaunchControllers(),
+  );
 }
 
 /** 把所有订阅控制端踢掉(被控开关关闭 / 用户一键断开 / 退出时调用) */
@@ -1055,6 +1066,7 @@ export const __testing = {
     setBroadcastTapListener(null);
   },
   getActiveControllers,
+  getUpdateRelaunchControllers,
   sendInvokeResultSafe,
   projectInvokeResultForTunnel,
   forwardPush,

@@ -147,24 +147,33 @@ export function getControllersForTopic(topic: Topic): string[] {
 }
 
 function isControlTopic(t: StoredTopic): boolean {
-  return t === LEGACY_TOPIC || t.startsWith('session:') || t.startsWith('fs-watch:');
+  return t === LEGACY_TOPIC || t.startsWith('session:');
 }
 
-/**
- * 持有具体 session、文件树 watch 或 legacy `'*'` 的控制端 —— 被控横幅展示这些，
- * 无人值守更新也把它们视为活跃远程操作。纯 `sessions` 列表订阅不算。
- */
-export function getControlControllers(): ActiveController[] {
+function collectControllers(matches: (topic: StoredTopic) => boolean): ActiveController[] {
   const out: ActiveController[] = [];
   for (const [id, e] of registry) {
     for (const t of e.topics) {
-      if (isControlTopic(t)) {
+      if (matches(t)) {
         out.push({ deviceId: id, name: e.name });
         break;
       }
     }
   }
   return out;
+}
+
+/** 持有具体 session 或 legacy `'*'` 的控制端；只用于被控横幅与 `controlledBy`。 */
+export function getControlControllers(): ActiveController[] {
+  return collectControllers(isControlTopic);
+}
+
+/**
+ * 会阻止无人值守更新重启的远程活动。
+ * `fs-watch` 虽不触发被控横幅，但代表有人正在实时浏览文件树，重启仍应延后。
+ */
+export function getUpdateRelaunchControllers(): ActiveController[] {
+  return collectControllers((topic) => isControlTopic(topic) || topic.startsWith('fs-watch:'));
 }
 
 export const __testing = {

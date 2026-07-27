@@ -190,7 +190,7 @@ function wsUrl(): string {
 
 /** Host integrations that consume device-link lifecycle state. */
 export interface DeviceLinkServiceOptions {
-  onControllersChanged?: (controllers: readonly ActiveController[]) => void;
+  onUpdateRelaunchControllersChanged?: (controllers: readonly ActiveController[]) => void;
 }
 
 export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): void {
@@ -264,9 +264,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
 
   // 先注册控制端变化监听，再接线入站帧；否则接线后的首个 subscribe 可能落在空窗期，
   // 让被控横幅和无人值守更新的 busy 边沿都漏掉。
-  setControllersChangedListener((controllers) => {
+  setControllersChangedListener((controllers, updateRelaunchControllers) => {
     broadcast(DEVICE_LINK_PUSH.CONTROLLED_STATE, { controllers });
-    options.onControllersChanged?.(controllers);
+    options.onUpdateRelaunchControllersChanged?.(updateRelaunchControllers);
   });
 
   // 被控端:接线入站隧道(link-open / invoke / link-close → 本机 handler dispatch)
