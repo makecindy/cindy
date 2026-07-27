@@ -13,6 +13,12 @@ describe('resolveMobileInvokeTimeoutMs', () => {
     // 词典学习:桌面 advisor 的 managed refiner 单次尝试空闲窗 12s 且会换备选
     // profile 重试,合法执行可超 15s;15s 默认误超时会把后台学习计入熔断失败。
     expect(resolveMobileInvokeTimeoutMs('device-link:voice:dictionary-learning')).toBe(30_000);
+    // 语音转写:桌面端 OSS 下载 + 批量网关转写,两段都无更短 deadline,中速网络
+    // 合法可超 15s,连续几条误超时会错误打开设备级熔断。
+    expect(resolveMobileInvokeTimeoutMs('device-link:voice:transcribe')).toBe(30_000);
+    // fork:载入完整消息前缀 + SDK fork + 事务批量拷贝,大会话 15-30s;非幂等,
+    // 误超时后桌面仍会建出新会话,重试会分叉重复副本。
+    expect(resolveMobileInvokeTimeoutMs('maker:fork')).toBe(30_000);
     expect(MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS['device-link:media:fetch']).toBe(30_000);
   });
 
