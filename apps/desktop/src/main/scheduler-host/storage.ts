@@ -423,6 +423,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     expectedNextFireAt: number,
     run: ScheduleRun,
   ): Promise<Schedule | null> {
+    if (run.scheduleId !== id) {
+      throw new Error('run.scheduleId must match scheduleId');
+    }
     if (this.getDbClient) {
       const claimed = await this.getDbClient().tx('scheduler.claimDueFireAndInsertRun', {
         scheduleId: id,
@@ -441,7 +444,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return db.transaction(() => {
       const result = db
         .update(schedules)
-        .set({ nextFireAt: null, lastFiredAt: run.firedAt })
+        .set({ nextFireAt: null, lastFiredAt: run.firedAt, activeClaimFiredAt: run.firedAt })
         .where(
           and(
             eq(schedules.id, id),

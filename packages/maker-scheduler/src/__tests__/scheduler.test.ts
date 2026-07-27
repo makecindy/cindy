@@ -120,10 +120,12 @@ class InMemoryStorage implements ScheduleStorage {
     expectedNextFireAt: number,
     run: ScheduleRun,
   ): Promise<Schedule | null> {
+    if (run.scheduleId !== id) throw new Error('run.scheduleId must match scheduleId');
     const ex = this.schedules.get(id);
     if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
     ex.nextFireAt = undefined;
     ex.lastFiredAt = run.firedAt;
+    ex.activeClaimFiredAt = run.firedAt;
     this.runs.set(run.id, { ...run });
     return { ...ex };
   }
@@ -388,6 +390,30 @@ describe('Scheduler', () => {
     expect(runs[0].sessionId).toBe(`sess-${sch.id}`);
   });
 
+  it('automatic finish preserves a newer manual lastFiredAt while clearing its claim marker', async () => {
+    const storage = new InMemoryStorage();
+    const clock = new FakeClock();
+    const fireTime = Date.UTC(2026, 0, 1, 0, 1, 5);
+    const manualAt = fireTime + 1_000;
+    const local = makeHarness({
+      storage,
+      clock,
+      runnerImpl: async (s) => {
+        await storage.update(s.id, { lastFiredAt: manualAt });
+        return { sessionId: `sess-${s.id}` };
+      },
+    });
+    const sch = await local.scheduler.create({ ...baseInput });
+    clock.setTo(fireTime);
+
+    await local.scheduler.tick();
+
+    const after = await local.storage.get(sch.id);
+    expect(after?.lastFiredAt).toBe(manualAt);
+    expect(after?.activeClaimFiredAt).toBeUndefined();
+    expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 2, 0));
+  });
+
   it('one-shot schedule moves to expired after fire', async () => {
     const sch = await h.scheduler.create({ ...baseInput, recurring: false });
     h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
@@ -526,6 +552,31 @@ describe('Scheduler', () => {
     expect(after?.lastFiredAt).toBeUndefined();
   });
 
+  it('deferred automatic fire preserves a concurrent manual lastFiredAt', async () => {
+    const RETRY = 90_000;
+    const storage = new InMemoryStorage();
+    const clock = new FakeClock();
+    const fireTime = Date.UTC(2026, 0, 1, 0, 1, 5);
+    const manualAt = fireTime + 1_000;
+    const local = makeHarness({
+      storage,
+      clock,
+      runnerImpl: async (s) => {
+        await storage.update(s.id, { lastFiredAt: manualAt });
+        return { sessionId: `sess-${s.id}`, deferred: true, deferRetryMs: RETRY };
+      },
+    });
+    const sch = await local.scheduler.create({ ...baseInput });
+    clock.setTo(fireTime);
+
+    await local.scheduler.tick();
+
+    const after = await local.storage.get(sch.id);
+    expect(after?.nextFireAt).toBe(fireTime + RETRY);
+    expect(after?.lastFiredAt).toBe(manualAt);
+    expect(after?.activeClaimFiredAt).toBeUndefined();
+  });
+
   it('deferred runNow 同样撤销 run、不通知、nextFireAt 前移、还原 lastFiredAt', async () => {
     const RETRY = 90_000;
     const local = makeHarness({
@@ -555,6 +606,38 @@ describe('Scheduler', () => {
     // (这里 baseInput 没跑过 → undefined),否则顺延却显示成"已触发",且 Once 任务
     // 重启会因 lastFiredAt 已设而吞掉重试。
     expect(after?.lastFiredAt).toBeUndefined();
+  });
+
+  it('deferred runNow preserves an in-flight automatic claim instead of re-arming', async () => {
+    const RETRY = 90_000;
+    const local = makeHarness({
+      runnerImpl: async (s) => ({ sessionId: `sess-${s.id}`, deferred: true, deferRetryMs: RETRY }),
+    });
+    const sch = await local.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+    const claimedAt = Date.UTC(2026, 0, 1, 0, 1, 5);
+    await local.storage.update(sch.id, {
+      nextFireAt: undefined,
+      lastFiredAt: claimedAt,
+      activeClaimFiredAt: claimedAt,
+    });
+    local.storage.runs.set('run-live-claim', {
+      id: 'run-live-claim',
+      scheduleId: sch.id,
+      firedAt: claimedAt,
+      status: 'running',
+      heartbeatAt: claimedAt,
+    });
+    local.clock.setTo(claimedAt + 1_000);
+
+    await local.scheduler.runNow(sch.id);
+
+    const after = await local.storage.get(sch.id);
+    expect(after?.nextFireAt).toBeUndefined();
+    expect(after?.lastFiredAt).toBe(claimedAt);
+    expect(after?.activeClaimFiredAt).toBe(claimedAt);
+    expect(await local.scheduler.listRuns(sch.id)).toEqual([
+      expect.objectContaining({ id: 'run-live-claim', status: 'running' }),
+    ]);
   });
 
   it('heartbeat schedule passes targetSessionId through to runner.fire', async () => {
@@ -1955,13 +2038,64 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     const a = makeHarness({ storage, clock });
     const sch = await a.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
 
-    await storage.update(sch.id, { nextFireAt: undefined, lastFiredAt: clock.now() });
-    insertRunningRun(storage, 'run-live-claim', sch.id, clock.now(), clock.now());
+    const claimedAt = clock.now();
+    await storage.update(sch.id, {
+      nextFireAt: undefined,
+      lastFiredAt: claimedAt,
+      activeClaimFiredAt: claimedAt,
+    });
+    insertRunningRun(storage, 'run-live-claim', sch.id, claimedAt, clock.now());
 
     const b = makeHarness({ storage, clock });
     await b.scheduler.start();
 
     expect((await storage.get(sch.id))?.nextFireAt).toBeUndefined();
+    await b.scheduler.stop();
+  });
+
+  it('start() backfills activeClaimFiredAt for an upgraded live claim', async () => {
+    const storage = new InMemoryStorage();
+    const clock = new FakeClock();
+    const a = makeHarness({ storage, clock });
+    const sch = await a.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+
+    const claimedAt = clock.now();
+    await storage.update(sch.id, {
+      nextFireAt: undefined,
+      lastFiredAt: claimedAt,
+    });
+    insertRunningRun(storage, 'run-live-legacy-claim', sch.id, claimedAt, clock.now());
+
+    const b = makeHarness({ storage, clock });
+    await b.scheduler.start();
+
+    const after = await storage.get(sch.id);
+    expect(after?.nextFireAt).toBeUndefined();
+    expect(after?.activeClaimFiredAt).toBe(claimedAt);
+    await b.scheduler.stop();
+  });
+
+  it('start() preserves a live automatic claim after runNow overwrites lastFiredAt', async () => {
+    const storage = new InMemoryStorage();
+    const clock = new FakeClock();
+    const a = makeHarness({ storage, clock });
+    const sch = await a.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+
+    const claimedAt = clock.now();
+    await storage.update(sch.id, {
+      nextFireAt: undefined,
+      lastFiredAt: claimedAt,
+      activeClaimFiredAt: claimedAt,
+    });
+    insertRunningRun(storage, 'run-live-claim', sch.id, claimedAt, clock.now());
+    const manualAt = claimedAt + 1_000;
+    await storage.update(sch.id, { lastFiredAt: manualAt });
+
+    const b = makeHarness({ storage, clock });
+    await b.scheduler.start();
+
+    expect((await storage.get(sch.id))?.nextFireAt).toBeUndefined();
+    expect((await storage.get(sch.id))?.lastFiredAt).toBe(manualAt);
     await b.scheduler.stop();
   });
 
@@ -2117,13 +2251,19 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
     await h.scheduler.start();
     // 模拟另一实例认领后崩溃:nextFireAt 被置空 + 留下心跳过期的 running 行
-    await h.storage.update(sch.id, { nextFireAt: undefined });
-    insertRunningRun(h.storage, 'run-claimed-dead', sch.id, h.clock.now(), h.clock.now());
+    const claimedAt = h.clock.now();
+    await h.storage.update(sch.id, {
+      nextFireAt: undefined,
+      lastFiredAt: claimedAt,
+      activeClaimFiredAt: claimedAt,
+    });
+    insertRunningRun(h.storage, 'run-claimed-dead', sch.id, claimedAt, h.clock.now());
     await advancePastSweep(h);
     expect(h.storage.runs.get('run-claimed-dead')?.status).toBe('interrupted');
     // 排期已恢复:interval 语义 = base(createdAt,没跑完过) + intervalMs
     const after = await h.storage.get(sch.id);
     expect(after?.nextFireAt).toBe(sch.createdAt + 3_600_000);
+    expect(after?.activeClaimFiredAt).toBeUndefined();
     await h.scheduler.stop();
   });
 
@@ -2132,7 +2272,11 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
     await h.scheduler.start();
     const claimedAt = h.clock.now();
-    await h.storage.update(sch.id, { nextFireAt: undefined, lastFiredAt: claimedAt });
+    await h.storage.update(sch.id, {
+      nextFireAt: undefined,
+      lastFiredAt: claimedAt,
+      activeClaimFiredAt: claimedAt,
+    });
     // 心跳过期的僵尸 + 心跳新鲜的活 run 并存(如 runNow 僵尸 + 认领执行中)
     insertRunningRun(h.storage, 'run-dead', sch.id, claimedAt - 1_000, h.clock.now());
     insertRunningRun(h.storage, 'run-live', sch.id, claimedAt, h.clock.now() + 90_000);
@@ -2144,12 +2288,38 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     await h.scheduler.stop();
   });
 
+  it('清扫后升级旧 live claim marker 缺失时仍不抢排并补写 marker', async () => {
+    const h = makeHarness();
+    const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+    await h.scheduler.start();
+    const claimedAt = h.clock.now();
+    await h.storage.update(sch.id, {
+      nextFireAt: undefined,
+      lastFiredAt: claimedAt,
+    });
+    insertRunningRun(h.storage, 'run-dead', sch.id, claimedAt - 1_000, h.clock.now());
+    insertRunningRun(h.storage, 'run-live-legacy-claim', sch.id, claimedAt, h.clock.now() + 90_000);
+
+    await advancePastSweep(h);
+
+    expect(h.storage.runs.get('run-dead')?.status).toBe('interrupted');
+    expect(h.storage.runs.get('run-live-legacy-claim')?.status).toBe('running');
+    const after = await h.storage.get(sch.id);
+    expect(after?.nextFireAt).toBeUndefined();
+    expect(after?.activeClaimFiredAt).toBe(claimedAt);
+    await h.scheduler.stop();
+  });
+
   it('清扫后只剩手动 runNow running 行时,不把它当自动认领并恢复排期', async () => {
     const h = makeHarness();
     const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
     await h.scheduler.start();
     const claimedAt = h.clock.now();
-    await h.storage.update(sch.id, { nextFireAt: undefined, lastFiredAt: claimedAt });
+    await h.storage.update(sch.id, {
+      nextFireAt: undefined,
+      lastFiredAt: claimedAt,
+      activeClaimFiredAt: claimedAt,
+    });
     insertRunningRun(h.storage, 'run-claimed-dead', sch.id, claimedAt, h.clock.now());
     insertRunningRun(h.storage, 'run-manual-live', sch.id, claimedAt + 1, h.clock.now() + 90_000);
 
@@ -2157,7 +2327,9 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
 
     expect(h.storage.runs.get('run-claimed-dead')?.status).toBe('interrupted');
     expect(h.storage.runs.get('run-manual-live')?.status).toBe('running');
-    expect((await h.storage.get(sch.id))?.nextFireAt).toBe(sch.createdAt + 3_600_000);
+    const after = await h.storage.get(sch.id);
+    expect(after?.nextFireAt).toBe(sch.createdAt + 3_600_000);
+    expect(after?.activeClaimFiredAt).toBeUndefined();
     await h.scheduler.stop();
   });
 
@@ -2197,7 +2369,11 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     await h.scheduler.start();
     const t0 = h.clock.now();
     const liveFiredAt = t0 - 600_000;
-    await h.storage.update(sch.id, { nextFireAt: undefined, lastFiredAt: liveFiredAt });
+    await h.storage.update(sch.id, {
+      nextFireAt: undefined,
+      lastFiredAt: liveFiredAt,
+      activeClaimFiredAt: liveFiredAt,
+    });
     // 长跑中的活 claim run(心跳新鲜),firedAt 最老
     insertRunningRun(h.storage, 'run-live-old', sch.id, liveFiredAt, t0 + 90_000);
     // 其后落库的 12 条终态行,把活 run 挤出 listRuns(…, 10) 的窗口

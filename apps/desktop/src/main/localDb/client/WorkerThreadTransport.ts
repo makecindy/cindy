@@ -791,8 +791,13 @@ function schedulerClaimDueFireAndInsertRun(readyDb, args) {
 
   return readyDb.transaction(() => {
     const claim = readyDb.prepare(
-      "UPDATE schedules SET next_fire_at = NULL, last_fired_at = ? WHERE id = ? AND status = 'active' AND next_fire_at = ?",
-    ).run(expectNumber(run.firedAt, 'run.firedAt'), scheduleId, expectedNextFireAt);
+      "UPDATE schedules SET next_fire_at = NULL, last_fired_at = ?, active_claim_fired_at = ? WHERE id = ? AND status = 'active' AND next_fire_at = ?",
+    ).run(
+      expectNumber(run.firedAt, 'run.firedAt'),
+      expectNumber(run.firedAt, 'run.firedAt'),
+      scheduleId,
+      expectedNextFireAt,
+    );
     if (claim.changes === 0) return false;
 
     readyDb.prepare(
@@ -811,7 +816,7 @@ function schedulerClaimDueFireAndInsertRun(readyDb, args) {
       run.estimatedValueAmount == null ? 0 : expectNumber(run.estimatedValueAmount, 'run.estimatedValueAmount'),
       nullableString(run.costCurrency),
       run.costIsApproximate === true || run.costIsApproximate === 1 ? 1 : 0,
-      nullableString(run.costAttribution) || 'exact',
+      nullableString(run.costAttribution) ?? 'exact',
       nullableString(run.resultText),
       nullableString(run.preRunHookResult),
       nullableNumber(run.readAt),

@@ -120,10 +120,12 @@ class InMemoryStorage implements ScheduleStorage {
     expectedNextFireAt: number,
     run: ScheduleRun,
   ): Promise<Schedule | null> {
+    if (run.scheduleId !== id) throw new Error('run.scheduleId must match scheduleId');
     const ex = this.schedules.get(id);
     if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
     ex.nextFireAt = undefined;
     ex.lastFiredAt = run.firedAt;
+    ex.activeClaimFiredAt = run.firedAt;
     this.runs.set(run.id, { ...run });
     return { ...ex };
   }

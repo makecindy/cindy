@@ -23,9 +23,9 @@ export interface ScheduleStorage {
    * 原子认领一次自动触发并写入对应的 running run。多实例启动归一会用
    * running run 判断 nextFireAt=NULL 是否代表"另一个实例正在执行";因此
    * claim 与 running 行必须同事务可见,不能先清 nextFireAt 再晚些 insertRun。
-   * 实现同时把 schedules.lastFiredAt 写成 run.firedAt,作为"这条 running
-   * run 是自动 claim owner"的轻量标记;手动 runNow 的 running 行不应阻止
-   * 崩溃认领后的补排。
+   * 实现同时把 schedules.lastFiredAt 写成 run.firedAt 给 UI 反映触发时间,并把
+   * schedules.activeClaimFiredAt 写成 run.firedAt 作为"这条 running run 是自动
+   * claim owner"的标记;手动 runNow 可更新 lastFiredAt,但不能覆盖 claim 标记。
    */
   claimDueFireAndInsertRun(
     id: string,

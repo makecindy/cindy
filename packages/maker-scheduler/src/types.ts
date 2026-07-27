@@ -223,6 +223,13 @@ export interface Schedule {
   createdAt: number;
   updatedAt: number;
   lastFiredAt?: number;
+  /**
+   * Internal marker for an automatic claim whose schedule row has nextFireAt
+   * cleared while its running row is still expected to finish and re-arm it.
+   * Manual runNow updates lastFiredAt for UI, so the claim marker must be
+   * independent from lastFiredAt.
+   */
+  activeClaimFiredAt?: number;
   /** 上一次终态完成（success/failed/aborted）的时间戳。从未跑完过 = undefined。 */
   lastFinishedAt?: number;
   nextFireAt?: number;

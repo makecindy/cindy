@@ -638,6 +638,7 @@ export const schedules = sqliteTable(
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     lastFiredAt: integer('last_fired_at'),
+    activeClaimFiredAt: integer('active_claim_fired_at'),
     /**
      * 上一次终态完成时间（success/failed/aborted）。NULL = 从未跑完过。
      * 与 lastFiredAt 区分：fired = 触发开始时间，finished = 跑到终点的时间。

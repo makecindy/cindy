@@ -558,6 +558,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     lastFiredAt: row.lastFiredAt ?? undefined,
+    activeClaimFiredAt: row.activeClaimFiredAt ?? undefined,
     lastFinishedAt: row.lastFinishedAt ?? undefined,
     nextFireAt: row.nextFireAt ?? undefined,
     expireAt: row.expireAt ?? undefined,
@@ -601,6 +602,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
     lastFiredAt: s.lastFiredAt ?? null,
+    activeClaimFiredAt: s.activeClaimFiredAt ?? null,
     lastFinishedAt: s.lastFinishedAt ?? null,
     nextFireAt: s.nextFireAt ?? null,
     expireAt: s.expireAt ?? null,
@@ -660,8 +662,11 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'status')) out.status = patch.status as ScheduleStatus;
   if (hasKey(patch, 'createdAt')) out.createdAt = patch.createdAt as number;
   if (hasKey(patch, 'updatedAt')) out.updatedAt = patch.updatedAt as number;
-  // 三个可空时间戳：undefined 也要写成 null（业务语义"清空 nextFireAt"）
+  // 可空时间戳：undefined 也要写成 null（业务语义"清空 nextFireAt"）
   if (hasKey(patch, 'lastFiredAt')) out.lastFiredAt = patch.lastFiredAt ?? null;
+  if (hasKey(patch, 'activeClaimFiredAt')) {
+    out.activeClaimFiredAt = patch.activeClaimFiredAt ?? null;
+  }
   if (hasKey(patch, 'lastFinishedAt')) out.lastFinishedAt = patch.lastFinishedAt ?? null;
   if (hasKey(patch, 'nextFireAt')) out.nextFireAt = patch.nextFireAt ?? null;
   if (hasKey(patch, 'expireAt')) out.expireAt = patch.expireAt ?? null;

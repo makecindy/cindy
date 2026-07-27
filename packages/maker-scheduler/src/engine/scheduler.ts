@@ -314,20 +314,31 @@ export class Scheduler extends EventEmitter {
       // "another instance owns an automatic claim". Compute first so manual /
       // one-shot schedules that cannot be re-armed do not pay an N+1 running-run
       // query, then only preserve a live automatic claim whose run matches the
-      // claim marker stamped by claimDueFireAndInsertRun().
+      // dedicated claim marker stamped by claimDueFireAndInsertRun(). runNow
+      // intentionally updates lastFiredAt for UI, so lastFiredAt is not a safe
+      // claim marker for new data. The lastFiredAt fallback only covers rows
+      // upgraded while an old-version automatic claim is still running; when it
+      // matches a live run, backfill the dedicated marker.
+      const claimFiredAt = current.activeClaimFiredAt ?? current.lastFiredAt;
       if (
         current.nextFireAt === undefined &&
         next !== undefined &&
-        current.lastFiredAt !== undefined &&
-        await this.storage.hasRunningRuns(current.id, { firedAt: current.lastFiredAt })
+        claimFiredAt !== undefined &&
+        await this.storage.hasRunningRuns(current.id, { firedAt: claimFiredAt })
       ) {
+        if (current.activeClaimFiredAt === undefined) {
+          current = (await this.storage.update(current.id, { activeClaimFiredAt: claimFiredAt })) ?? current;
+        }
         this.activeSchedules.set(current.id, current);
         continue;
       }
       if (next !== current.nextFireAt) {
-        const updated = await this.storage.update(current.id, { nextFireAt: next });
+        const updated = await this.storage.update(current.id, {
+          nextFireAt: next,
+          activeClaimFiredAt: undefined,
+        });
         if (updated) current = updated;
-        else current = { ...current, nextFireAt: next };
+        else current = { ...current, nextFireAt: next, activeClaimFiredAt: undefined };
       }
       this.activeSchedules.set(current.id, current);
     }
@@ -586,10 +597,17 @@ export class Scheduler extends EventEmitter {
       }
       this.silencedRuns.delete(runId);
       const retryAt = finishedAt + (deferRetryMs ?? 60_000);
-      const updated = await this.storage.update(schedule.id, {
+      const currentBeforeDefer = await this.storage.get(schedule.id);
+      const deferPatch: Partial<Schedule> = {
         nextFireAt: retryAt,
-        lastFiredAt: previousLastFiredAt,
-      });
+      };
+      if (currentBeforeDefer?.lastFiredAt === firedAt) {
+        deferPatch.lastFiredAt = previousLastFiredAt;
+      }
+      if (currentBeforeDefer?.activeClaimFiredAt === firedAt) {
+        deferPatch.activeClaimFiredAt = undefined;
+      }
+      const updated = await this.storage.update(schedule.id, deferPatch);
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(updated.id, updated);
       }
@@ -673,6 +691,16 @@ export class Scheduler extends EventEmitter {
     // agent 调 schedule_update 自适应降档改 cron）。用 fire 时刻的快照重排会把
     // 刚改好的新节奏覆盖回旧值。行已不存在时回退快照（storage.update 是 no-op）。
     const current = (await this.storage.get(schedule.id)) ?? schedule;
+    const finishPatch = (patch: Partial<Schedule>): Partial<Schedule> => {
+      const out = { ...patch };
+      if ((current.lastFiredAt ?? Number.NEGATIVE_INFINITY) <= firedAt) {
+        out.lastFiredAt = firedAt;
+      }
+      if (current.activeClaimFiredAt === firedAt) {
+        out.activeClaimFiredAt = undefined;
+      }
+      return out;
+    };
     if (current.recurring) {
       // intervalMs 模式：finishedAt + N（时间已经走到 finishedAt，不需要再 max(now,...)）。
       // cron 模式：保持原行为，从 finishedAt 找下一个壁钟槽位。
@@ -680,11 +708,10 @@ export class Scheduler extends EventEmitter {
         current.intervalMs !== undefined
           ? finishedAt + current.intervalMs
           : nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone);
-      const updated = await this.storage.update(schedule.id, {
-        lastFiredAt: firedAt,
+      const updated = await this.storage.update(schedule.id, finishPatch({
         lastFinishedAt: finishedAt,
         nextFireAt: next,
-      });
+      }));
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(updated.id, updated);
       }
@@ -694,17 +721,15 @@ export class Scheduler extends EventEmitter {
       // 不覆盖 'paused'，只补 timing 字段；行已删（delete 豁免场景）storage.update
       // 是 no-op，直接写 'expired' 也安全。
       if (current.status === 'paused') {
-        await this.storage.update(schedule.id, {
-          lastFiredAt: firedAt,
+        await this.storage.update(schedule.id, finishPatch({
           lastFinishedAt: finishedAt,
-        });
+        }));
       } else {
-        await this.storage.update(schedule.id, {
-          lastFiredAt: firedAt,
+        await this.storage.update(schedule.id, finishPatch({
           lastFinishedAt: finishedAt,
           status: 'expired',
           nextFireAt: undefined,
-        });
+        }));
       }
       // Do not re-add to activeSchedules.
     }
@@ -815,8 +840,10 @@ export class Scheduler extends EventEmitter {
       // schedule.lastFiredAt。否则:① 顺延却显示成"已触发",违背"顺延不留可见记录";
       // ② 对 recurring=false 的 Once 任务,lastFiredAt 一旦落地,重启时
       // computeNextFireAt 会因 lastFiredAt 已设而返回 undefined → 顺延的重试被吞掉。
+      const preservesAutomaticClaim =
+        schedule.nextFireAt === undefined && schedule.activeClaimFiredAt !== undefined;
       const updated = await this.storage.update(schedule.id, {
-        nextFireAt: retryAt,
+        ...(preservesAutomaticClaim ? {} : { nextFireAt: retryAt }),
         lastFiredAt: schedule.lastFiredAt,
       });
       if (updated && updated.status === 'active') {
@@ -1113,7 +1140,11 @@ export class Scheduler extends EventEmitter {
     // exemptRunId:调用方自己所在的 run(agent 在任务内 pause 自己的 schedule)不 abort,
     // 让它自然跑完 —— 语义与豁免理由见 abortInflightAndWait。
     await this.abortInflightAndWait(id, opts?.exemptRunId);
-    const updated = await this.storage.update(id, { status: 'paused', updatedAt: this.clock.now() });
+    const updated = await this.storage.update(id, {
+      status: 'paused',
+      updatedAt: this.clock.now(),
+      activeClaimFiredAt: undefined,
+    });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
     this.activeSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
@@ -1139,6 +1170,7 @@ export class Scheduler extends EventEmitter {
       status: 'active',
       updatedAt: now,
       nextFireAt: next,
+      activeClaimFiredAt: undefined,
     });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
     this.activeSchedules.set(id, updated);
@@ -1309,16 +1341,34 @@ export class Scheduler extends EventEmitter {
       if (schedule.nextFireAt !== undefined) return;
       // 该 schedule 仍有与自动 claim 标记匹配的 running 行 → 不抢排,等执行方
       // fireOne 收口时按 recurring 语义重排。手动 runNow 的 running 行不能阻止
-      // 崩溃认领补排,否则 runNow 完成后不会恢复 nextFireAt。
+      // 崩溃认领补排,否则 runNow 完成后不会恢复 nextFireAt。lastFiredAt fallback
+      // 仅用于升级中缺少 activeClaimFiredAt 的旧 claim,命中后补写新标记。
+      const claimFiredAt = schedule.activeClaimFiredAt ?? schedule.lastFiredAt;
       if (
-        schedule.lastFiredAt !== undefined &&
-        await this.storage.hasRunningRuns(scheduleId, { firedAt: schedule.lastFiredAt })
-      ) return;
+        claimFiredAt !== undefined &&
+        await this.storage.hasRunningRuns(scheduleId, { firedAt: claimFiredAt })
+      ) {
+        if (schedule.activeClaimFiredAt === undefined) {
+          const updated = await this.storage.update(scheduleId, { activeClaimFiredAt: claimFiredAt });
+          if (updated && updated.status === 'active') {
+            this.activeSchedules.set(scheduleId, updated);
+          }
+        }
+        return;
+      }
       // manual / 已消耗的一次性任务 computeNextFireAt 返回 undefined → 与 start()
       // 归一同款:保持无排期,不强行续命。
       const next = computeNextFireAt(schedule, now);
-      if (next === undefined) return;
-      const updated = await this.storage.update(scheduleId, { nextFireAt: next });
+      if (next === undefined) {
+        if (schedule.activeClaimFiredAt !== undefined) {
+          await this.storage.update(scheduleId, { activeClaimFiredAt: undefined });
+        }
+        return;
+      }
+      const updated = await this.storage.update(scheduleId, {
+        nextFireAt: next,
+        activeClaimFiredAt: undefined,
+      });
       // 内存副本同步跟上,不等下一轮 30s DB 同步。
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(scheduleId, updated);

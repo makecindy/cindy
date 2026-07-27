@@ -157,6 +157,7 @@ const SCHEDULER_DDL = [
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       last_fired_at INTEGER,
+      active_claim_fired_at INTEGER,
       last_finished_at INTEGER,
       next_fire_at INTEGER,
       expire_at INTEGER
@@ -420,7 +421,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
-  it('claimDueFireAndInsertRun: 同事务置空 next_fire_at、写 last_fired_at 并插入 running 行', async () => {
+  it('claimDueFireAndInsertRun: 同事务置空 next_fire_at、写 claim 标记并插入 running 行', async () => {
     const harness = createStorageHarness();
     const due = 1_700_000_060_000;
     const firedAt = 1_700_000_061_000;
@@ -439,6 +440,18 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(await harness.storage.listRuns('sch-claim-run')).toHaveLength(0);
       expect((await harness.storage.get('sch-claim-run'))?.nextFireAt).toBe(due);
 
+      await expect(
+        harness.storage.claimDueFireAndInsertRun('sch-claim-run', due, {
+          id: 'run-wrong-schedule',
+          scheduleId: 'sch-other',
+          firedAt,
+          status: 'running',
+          heartbeatAt: firedAt,
+        }),
+      ).rejects.toThrow('run.scheduleId must match scheduleId');
+      expect(await harness.storage.listRuns('sch-claim-run')).toHaveLength(0);
+      expect((await harness.storage.get('sch-claim-run'))?.nextFireAt).toBe(due);
+
       const claimed = await harness.storage.claimDueFireAndInsertRun('sch-claim-run', due, {
         id: 'run-hit',
         scheduleId: 'sch-claim-run',
@@ -449,6 +462,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       });
       expect(claimed?.nextFireAt).toBeUndefined();
       expect(claimed?.lastFiredAt).toBe(firedAt);
+      expect(claimed?.activeClaimFiredAt).toBe(firedAt);
       expect(await harness.storage.hasRunningRuns('sch-claim-run', { firedAt })).toBe(true);
       expect(await harness.storage.hasRunningRuns('sch-claim-run', { firedAt: firedAt + 1 })).toBe(false);
       expect(await harness.storage.listRuns('sch-claim-run')).toEqual([
@@ -515,6 +529,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(claimedWithRun?.id).toBe('sch-proxy-run');
       expect(claimedWithRun?.nextFireAt).toBeUndefined();
       expect(claimedWithRun?.lastFiredAt).toBe(firedAt);
+      expect(claimedWithRun?.activeClaimFiredAt).toBe(firedAt);
       expect(await storage.hasRunningRuns('sch-proxy-run', { firedAt })).toBe(true);
       expect(await storage.listRuns('sch-proxy-run')).toEqual([
         expect.objectContaining({ id: 'run-proxy', status: 'running', firedAt }),
