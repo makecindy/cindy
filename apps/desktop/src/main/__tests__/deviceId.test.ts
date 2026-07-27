@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 
-import { ensureSystemBinPathForMachineId } from '../deviceId';
+import { ensureSystemBinPathForMachineId } from '../deviceId.js';
 
 const PATCHES_PATH = process.platform === 'darwin' || process.platform === 'linux';
 
