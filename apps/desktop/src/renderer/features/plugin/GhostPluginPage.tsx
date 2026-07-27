@@ -741,17 +741,12 @@ export function GhostPluginPage() {
         description: isUpdate
           ? t('settings.ghosts.market.updateConfirmDescription')
           : t('settings.ghosts.market.installConfirmDescription'),
-        content: (
-          <div
-            className="overflow-y-auto overscroll-contain pr-1"
-            style={{ maxHeight: 'min(56vh, 520px)', scrollbarGutter: 'stable' }}
-          >
-            {isUpdate ? (
-              <GhostPermissionDiffView diff={diff!} />
-            ) : (
-              <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
-            )}
-          </div>
+        // ConfirmDialog 统一持有唯一正文 scrollport,调用方只提供内容;短窗口下
+        // 不会因嵌套 overscroll-contain 阻断滚动链、截掉权限清单尾部。
+        content: isUpdate ? (
+          <GhostPermissionDiffView diff={diff!} />
+        ) : (
+          <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
         ),
         maxWidth: 520,
         confirmText: isUpdate

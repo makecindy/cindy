@@ -243,8 +243,9 @@ export function GhostTrustSummary({ trust }: { trust: GhostTrustInfo }) {
 }
 
 /**
- * 安装确认的紧凑内容区:简介可折叠,作者/版本单列,详情只在弹窗内部滚动。
- * 安全相关权限不做总折叠,避免为了短而牺牲知情确认。
+ * 安装确认的紧凑内容区:简介可折叠,作者/版本单列。滚动由 ConfirmDialog
+ * 正文区统一持有,避免与本组件形成嵌套 scrollport。安全相关权限不做总折叠,
+ * 避免为了短而牺牲知情确认。
  */
 export function GhostInstallReview({
   description,
@@ -259,27 +260,26 @@ export function GhostInstallReview({
 }) {
   const { t } = useTranslation();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const reviewRef = useRef<HTMLDivElement>(null);
   const canCollapseDescription = Boolean(
     description && (description.length > 160 || description.includes('\n')),
   );
 
   const revealScrollbar = () => {
     requestAnimationFrame(() => {
-      if (scrollRef.current) flashScrollbar(scrollRef.current);
+      const scrollBody = reviewRef.current?.closest<HTMLElement>(
+        '[data-confirm-dialog-section="body"]',
+      );
+      if (scrollBody) flashScrollbar(scrollBody);
     });
   };
 
-  // 初次出现以及展开介绍/工具后都短暂亮出滚动条,明确告诉用户内容还能往下看。
+  // 初次出现以及展开介绍/工具后短暂亮出父级正文滚动条,保留可滚动提示,
+  // 但不再由本组件创建第二个 scrollport。
   useEffect(revealScrollbar, []);
 
   return (
-    <div
-      ref={scrollRef}
-      className="overflow-y-auto overscroll-contain pr-1"
-      style={{ maxHeight: 'min(56vh, 520px)', scrollbarGutter: 'stable' }}
-      onClickCapture={revealScrollbar}
-    >
+    <div ref={reviewRef} onClickCapture={revealScrollbar}>
       {description && (
         <div>
           <p

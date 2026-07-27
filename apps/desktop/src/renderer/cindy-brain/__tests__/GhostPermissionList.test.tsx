@@ -75,9 +75,9 @@ describe('GhostPermissionList(装入全量清单)', () => {
         items={[]}
       />,
     );
-    const scrollArea = container.firstElementChild as HTMLElement;
-    expect(scrollArea.classList.contains('overflow-y-auto')).toBe(true);
-    expect(scrollArea.style.maxHeight).toBe('min(56vh, 520px)');
+    const review = container.firstElementChild as HTMLElement;
+    expect(review.classList.contains('overflow-y-auto')).toBe(false);
+    expect(review.style.maxHeight).toBe('');
     const trigger = screen.getByRole('button', { expanded: false });
     expect(trigger.textContent).toBe('settings.ghosts.installConfirm.expandDescription');
     fireEvent.click(trigger);

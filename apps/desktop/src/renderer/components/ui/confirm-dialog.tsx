@@ -15,7 +15,8 @@ export interface ConfirmDialogProps {
   /**
    * 富内容区(如装意识的逐项权限清单):渲染在 description 之后、复选框之前。
    * 与 description 独立 —— Radix Description 是 <p>,块级列表不能塞进去。
-   * 弹窗触及 80vh 上限时只有本区域滚动,Header 与 Footer 始终留在视口内。
+   * 弹窗触及 80vh 上限时,description 与本区域共用正文滚动区;Title 与 Footer
+   * 始终留在视口内。
    */
   content?: ReactNode;
   /**
@@ -133,21 +134,21 @@ export function ConfirmDialog({
             >
               {title}
             </AlertDialog.Title>
-            {description && (
-              <AlertDialog.Description
-                className={cn('mt-2 text-base text-[var(--confirm-desc)]', textClassName)}
-              >
-                {description}
-              </AlertDialog.Description>
-            )}
           </div>
-          {content && (
+          {(description || content) && (
             <div
-              data-confirm-dialog-section="content"
-              className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1"
+              data-confirm-dialog-section="body"
+              className="mt-2 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1"
               style={{ scrollbarGutter: 'stable' }}
             >
-              {content}
+              {description && (
+                <AlertDialog.Description
+                  className={cn('text-base text-[var(--confirm-desc)]', textClassName)}
+                >
+                  {description}
+                </AlertDialog.Description>
+              )}
+              {content && <div className={cn(description && 'mt-3')}>{content}</div>}
             </div>
           )}
           {dontShowAgainLabel && (
