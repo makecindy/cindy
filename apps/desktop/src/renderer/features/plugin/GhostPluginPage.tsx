@@ -700,13 +700,36 @@ export function GhostPluginPage() {
     // 装完即开意味着"确认安装"就是运行授权,确认框里必须如实展示权限清单
     // (与本地装入确认框同一信息量,review P1):首装展示完整清单,更新展示
     // 与已装版本的权限 diff,并据此决定 allowPermissionExpansion(否则扩权
-    // 更新从本入口必被 main 的 PRECONDITION_FAILED 拦下)。
-    const installedGhost =
+    // 更新从本入口必被 main 的 PRECONDITION_FAILED 拦下)。更新详情来自 Main
+    // 的现查事实,renderer 的 ghosts 推送缓存可能短暂滞后;仅在 update 态且缓存
+    // 缺目标时,用既有 listSync 向 Main 现查一次。仍缺失说明状态已经变化,
+    // 让后端按原有校验拒绝,绝不能拿新清单和自己做 diff 吞掉新增权限。
+    let installedGhost =
       ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
-    const diff = diffGhostPermissionItems(
-      installedGhost?.manifest ?? marketDetail.manifest,
-      marketDetail.manifest,
-    );
+    if (isUpdate && !installedGhost) {
+      try {
+        installedGhost =
+          window.electronAPI.ghosts
+            .listSync()
+            .ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
+      } catch {
+        // bridge 不可用/状态切换时保持 null;下面不展示伪造的空 diff,
+        // 安装调用也不放开 permission expansion,Main 会按真实状态 fail closed。
+      }
+    }
+    if (isUpdate && !installedGhost) {
+      // detail 仍说可更新、Main 的实时已装清单却没有目标:这是明确的状态
+      // 变化,不要展示伪造的空 diff 后让用户确认一次必失败的更新。
+      if (isMarketBusyLeaseActive(marketBusyLease)) {
+        toast.error(t('settings.ghosts.market.errors.stateChanged'));
+      }
+      releaseMarketBusy(marketBusyLease);
+      await refreshMarket();
+      return;
+    }
+    const diff = isUpdate
+      ? diffGhostPermissionItems(installedGhost!.manifest, marketDetail.manifest)
+      : null;
     try {
       const confirmed = await confirm({
         title: isUpdate
@@ -723,7 +746,7 @@ export function GhostPluginPage() {
             style={{ maxHeight: 'min(56vh, 520px)', scrollbarGutter: 'stable' }}
           >
             {isUpdate ? (
-              <GhostPermissionDiffView diff={diff} />
+              <GhostPermissionDiffView diff={diff!} />
             ) : (
               <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
             )}
@@ -741,7 +764,7 @@ export function GhostPluginPage() {
       if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
       const result = await window.electronAPI.pluginMarket.install(
         marketDetail.pluginId,
-        isUpdate && diff.added.length > 0 ? { allowPermissionExpansion: true } : undefined,
+        isUpdate && diff!.added.length > 0 ? { allowPermissionExpansion: true } : undefined,
       );
       if (!isMarketBusyLeaseActive(marketBusyLease)) return;
       // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
