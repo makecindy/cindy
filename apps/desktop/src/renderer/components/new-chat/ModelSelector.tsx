@@ -15,9 +15,11 @@ import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { MorphPopover } from '@/components/ui/morph-popover';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
+import { BrandArrow } from '@/components/icons/BrandArrow';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { Tip } from '@/components/ui/tooltip';
 import { FastModeToggle } from './FastModeToggle';
 import { VendorSegmentedSwitcher } from './VendorSegmentedSwitcher';
 import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabilities';
@@ -252,7 +254,7 @@ function ModelPromotionBadge({ children }: { children: ReactNode }) {
   return (
     <span
       data-model-promotion-badge
-      className="inline-flex shrink-0 items-center rounded-full bg-[var(--accent-cta-bg)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--accent-pure-cta-fg)]"
+      className="inline-flex min-w-0 max-w-[140px] shrink items-center truncate rounded-full bg-[var(--accent-cta-bg)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--accent-pure-cta-fg)]"
     >
       {children}
     </span>
@@ -1274,14 +1276,49 @@ function ModelSelectorContentView({
                   )}
                 </span>
                 {(isSubscriptionModel || isBudgetModel || rowPromotionLabel) && (
-                  <span data-model-tags className="ml-auto flex shrink-0 items-center gap-1.5">
-                    {isSubscriptionModel && (
-                      <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-[11px] font-medium text-[var(--text-secondary)]">
-                        {t('settings.providers.models.subscription')}
-                      </span>
-                    )}
+                  <span data-model-tags className="ml-auto flex min-w-0 shrink items-center gap-1.5">
+                    {isSubscriptionModel &&
+                      (rowPrice?.kind === 'priced' ? (
+                        <Tip text={t('settings.providers.models.subscription')}>
+                          <span
+                            data-model-subscription-badge="pill"
+                            aria-label={t('settings.providers.models.subscription')}
+                            className="inline-flex h-[20px] shrink-0 items-center gap-1.5 rounded-full bg-black/[0.04] px-2 py-0.5 text-11 transition-colors hover:bg-black/[0.08] dark:bg-white/[0.08] dark:hover:bg-white/[0.14]"
+                          >
+                            <BrandArrow size={12} className="shrink-0 text-[#FF3B30] dark:text-[#FF453A]" />
+                            <span className="sr-only">{t('settings.providers.models.subscription')}</span>
+                            <span
+                              data-model-price-stack={rowPrice.original ? 'true' : undefined}
+                              className={cn(
+                                'flex tabular-nums text-11 font-normal leading-[1.25]',
+                                rowPrice.original ? 'flex-col items-end' : 'items-center',
+                              )}
+                            >
+                              <span className="text-[var(--text-secondary)]">
+                                {formatModelPricePair(rowPrice.current)}
+                              </span>
+                              {rowPrice.original && (
+                                <span className="text-[var(--text-tertiary)] line-through">
+                                  {formatModelPricePair(rowPrice.original)}
+                                </span>
+                              )}
+                            </span>
+                          </span>
+                        </Tip>
+                      ) : (
+                        <Tip text={t('settings.providers.models.subscription')}>
+                          <span
+                            data-model-subscription-badge="compact"
+                            aria-label={t('settings.providers.models.subscription')}
+                            className="inline-flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded-full bg-black/[0.04] transition-colors hover:bg-black/[0.08] dark:bg-white/[0.08] dark:hover:bg-white/[0.14]"
+                          >
+                            <BrandArrow size={12} className="text-[#FF3B30] dark:text-[#FF453A]" />
+                            <span className="sr-only">{t('settings.providers.models.subscription')}</span>
+                          </span>
+                        </Tip>
+                      ))}
                     {isBudgetModel && (
-                      <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--model-budget-badge-bg)] px-2 py-[1px] text-[11px] font-medium text-[var(--model-budget-badge-text)]">
+                      <span className="inline-flex min-w-0 max-w-[120px] shrink items-center truncate rounded-full bg-[var(--model-budget-badge-bg)] px-2 py-[1px] text-[11px] font-medium text-[var(--model-budget-badge-text)]">
                         {t('newChat.modelSelector.meta.budgetDiscount')}
                       </span>
                     )}
@@ -1292,9 +1329,9 @@ function ModelSelectorContentView({
                 )}
               </span>
             </span>
-            {(rowPrice?.kind === 'priced' || isSelected) && (
+            {((rowPrice?.kind === 'priced' && !isSubscriptionModel) || isSelected) && (
               <span className="ml-2 flex shrink-0 items-center gap-1.5">
-                {rowPrice?.kind === 'priced' && (
+                {rowPrice?.kind === 'priced' && !isSubscriptionModel && (
                   <span
                     data-model-price-stack={rowPrice.original ? 'true' : undefined}
                     className={cn(
@@ -1464,9 +1501,8 @@ function ModelSelectorContentView({
       {/* 模型列表 —— 单栏;分段(供应商)或 flat。 */}
       <div
         ref={listRef}
-        // -mr-2 把滚动条挪进面板右侧 8px 留白;scrollbar-gutter:stable 让无滚动时
-        // 行宽与有滚动时一致(否则行会比搜索框宽 8px);细滚动条见 globals.css
-        className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+        // pr-1 保持内缩边距,使滚动条与左右内边距对称内嵌(避免贴死面板卡片外框);细滚动条见 globals.css
+        className="morph-panel-list-scroll flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain pr-1"
         style={
           constrainedListMaxHeight === undefined
             ? undefined
@@ -2004,6 +2040,7 @@ export function ModelSelector({
         onOpenChange={(next) => setOpen(disabled ? false : next)}
         side={popoverSide}
         align="end"
+        panelWidth={isFieldTrigger ? undefined : 320}
         wrapperClassName="min-w-0 max-w-full shrink"
         panelClassName="p-0"
         panelAriaLabel={ariaLabel}
