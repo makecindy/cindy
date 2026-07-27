@@ -86,31 +86,61 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
   // 摆位规则:默认从 anchor 左边往右展开;右边装不下翻成右对齐(贴 anchor 右边
   // 向左展开);最后整体 clamp 进视口(两侧留 VIEWPORT_PADDING)。
   //
-  // 用 useLayoutEffect 在 paint 之前同步定位,避免 1 帧"先冒出再挪位"的闪烁。
+  // 跟随:portal 后菜单不再随面板布局流动,打开期间用 rAF 轮询 anchor rect ——
+  // 位置变了(键盘触发的布局变化 / 面板换位 / 拖宽侧栏)同步重摆;anchor 从布局
+  // 中消失(关掉最后一个 tab 面板收起)直接关闭,避免菜单悬空残留在旧坐标。
+  // 每帧一次 getBoundingClientRect 只发生在菜单打开的短窗口内,成本可忽略。
+  //
+  // 用 useLayoutEffect 在 paint 之前完成首次定位,避免 1 帧"先冒出再挪位"的闪烁。
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
   useLayoutEffect(() => {
-    const measure = () => {
+    let raf = 0;
+    const track = () => {
       const anchor = anchorRef.current;
-      if (!anchor) return;
-      const rect = anchor.getBoundingClientRect();
+      const rect = anchor?.getBoundingClientRect();
+      if (!anchor || !rect || (rect.width === 0 && rect.height === 0)) {
+        onClose();
+        return;
+      }
       const alignRight = window.innerWidth - rect.left < DROPDOWN_WIDTH + VIEWPORT_PADDING;
       const raw = alignRight ? rect.right - DROPDOWN_WIDTH : rect.left;
       const maxLeft = window.innerWidth - DROPDOWN_WIDTH - VIEWPORT_PADDING;
       const left = Math.max(VIEWPORT_PADDING, Math.min(raw, maxLeft));
-      setPos({ top: rect.bottom + ANCHOR_GAP, left });
+      const top = rect.bottom + ANCHOR_GAP;
+      setPos((prev) => (prev && prev.top === top && prev.left === left ? prev : { top, left }));
+      raf = requestAnimationFrame(track);
     };
-    measure();
-    // 打开期间窗口 resize(如键盘触发缩放)时跟随重排;面板拖宽窄走 mousedown,
-    // 会先命中 outside-close,不需要额外监听。
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    track();
+    return () => cancelAnimationFrame(raf);
+  }, [anchorRef, onClose]);
+
+  // 焦点:portal 在 body 末尾,原生 tab 序从「+」按钮出发够不到菜单,打开时必须
+  // 显式把焦点移进容器(focus 容器而非首项 —— 鼠标打开时首项不该无端高亮,键盘
+  // 用户按 Tab 即进入第一个 menuitem)。卸载时若焦点仍困在菜单里(DOM 摘除后落回
+  // body)则还给「+」按钮:⌘W 关 tab 的归属按 activeElement 判定,焦点丢在 body
+  // 会让下一次 ⌘W 误关整个窗口;焦点已被用户主动移去别处时不抢。
+  useEffect(() => {
+    const menuEl = ref.current;
+    const anchor = anchorRef.current;
+    menuEl?.focus();
+    return () => {
+      const active = document.activeElement;
+      if (active === document.body || (menuEl && menuEl.contains(active))) {
+        anchor?.querySelector('button')?.focus();
+      }
+    };
   }, [anchorRef]);
 
   // 点 outside / Escape 关闭(模式参考 RolePillDropdown 的 click-outside 实现)
   useEffect(() => {
     const onMouseDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      const target = e.target as Node;
+      if (!ref.current || ref.current.contains(target)) return;
+      // 「+」按钮自身不算 outside:mousedown 先 onClose、click 再 toggle 会把菜单
+      // 重新打开,导致点「+」永远关不上;关闭交给按钮自己的 onClick toggle。
+      if (anchorRef.current?.contains(target)) return;
+      onClose();
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -121,7 +151,7 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
       document.removeEventListener('mousedown', onMouseDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [onClose]);
+  }, [anchorRef, onClose]);
 
   const enabled = MENU_ITEMS.filter((m) => m.enabled).sort((a, b) => a.order - b.order);
   const coming = MENU_ITEMS.filter((m) => !m.enabled).sort((a, b) => a.order - b.order);
@@ -133,7 +163,17 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
     <div
       ref={ref}
       role="menu"
-      className="fixed z-50 w-[220px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
+      // 编程式容器焦点(见上方焦点 effect),不渲染 focus ring;Tab 离开菜单时关闭
+      // (relatedTarget 为 null 的失焦交给 mousedown-outside / Escape 处理)。
+      tabIndex={-1}
+      // RSB 交互领地标记:MainLayout 的 ⌘W 归属判定(RSB_TERRITORY_SELECTOR)靠它
+      // 识别 portal 到 body 的右栏浮层 —— 菜单打开期间 ⌘W 仍应关右栏 tab 而非窗口。
+      data-rsb-territory=""
+      onBlur={(e) => {
+        const next = e.relatedTarget as Node | null;
+        if (next && ref.current && !ref.current.contains(next)) onClose();
+      }}
+      className="fixed z-50 w-[220px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1 outline-none"
       style={{
         boxShadow: 'var(--shadow-menu)',
         top: pos?.top ?? 0,

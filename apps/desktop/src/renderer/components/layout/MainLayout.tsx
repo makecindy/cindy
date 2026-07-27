@@ -88,6 +88,15 @@ import {
 const SIDEBAR_RAIL_KEY = 'sidebar-rail';
 
 /**
+ * RSB 交互领地:aside 本体(data-panel-drag-root="right-tabs")+ portal 到 body 的
+ * RSB 浮层(data-rsb-territory,如 TabStrip「+」菜单)。浮层 DOM 挂在 body 尾,
+ * 但交互语义仍属右栏 —— ⌘W 归属的两层判定(activeElement / 最近 pointer 交互)
+ * 都用本 selector。浮层不能复用 data-panel-drag-root:PanelDragController 会把
+ * 该标记内的长按识别成拖面板手势。
+ */
+const RSB_TERRITORY_SELECTOR = '[data-panel-drag-root="right-tabs"], [data-rsb-territory]';
+
+/**
  * 右栏折叠态:per-session 记忆(切 A → B 不串扰,新 session 默认 collapsed=true
  * 不主动占地)。B2a 起读写统一走 collapsePrefs(按注册表 collapseMemory 声明分发),
  * 存储位置与键不变,这两个包装只固化 right-tabs 的默认值与空 sessionId 短路。
@@ -1011,7 +1020,8 @@ export function MainLayout() {
   // (有意为之: 焦点在 composer 等输入框里时 ⌘W 关窗符合 mac 惯例, 不被面板的
   // 历史交互抢走); 右侧栏里大量区域不可聚焦 (review diff 正文 / 面板空白处),
   // 点击后焦点被 blur 回 body, 此时回落到最近一次 pointerdown / wheel 交互是否
-  // 落在 aside (data-panel-drag-root="right-tabs") 内 —— 否则用户明明在面板里
+  // 落在 RSB 领地 (RSB_TERRITORY_SELECTOR: aside 本体或 RSB 的 body portal 浮层)
+  // 内 —— 否则用户明明在面板里
   // 操作, ⌘W 却把整个窗口收起来 (Codex review P2, wheel 补充同轮 P2)。副作用上
   // 这也让"连续 ⌘W 逐个关 tab"可用: 关 tab 后焦点落回 body, 交互标记仍在面板内。
   // detached / 折叠态下两层判定都不可能命中内嵌 aside, 直接走窗口分支;
@@ -1021,9 +1031,7 @@ export function MainLayout() {
   useEffect(() => {
     const handler = (e: Event) => {
       const target = e.target instanceof Element ? e.target : null;
-      lastInteractionInRsbRef.current = Boolean(
-        target?.closest('[data-panel-drag-root="right-tabs"]'),
-      );
+      lastInteractionInRsbRef.current = Boolean(target?.closest(RSB_TERRITORY_SELECTOR));
     };
     window.addEventListener('pointerdown', handler, true);
     // wheel 必须 passive —— 只记录区域, 不 preventDefault, 不能拖累滚动性能。
@@ -1041,7 +1049,7 @@ export function MainLayout() {
     const activeEl = document.activeElement;
     const userInRsb =
       activeEl && activeEl !== document.body
-        ? Boolean(activeEl.closest('[data-panel-drag-root="right-tabs"]'))
+        ? Boolean(activeEl.closest(RSB_TERRITORY_SELECTOR))
         : lastInteractionInRsbRef.current;
     if (sessionId && !rsbDetached && !isRightSidebarCollapsed && userInRsb) {
       const bucket = getBucket(sessionId);
