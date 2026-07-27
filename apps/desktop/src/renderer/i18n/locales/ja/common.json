@@ -656,7 +656,6 @@
       "legal": {
         "termsOfServiceLabel": "利用規約",
         "privacyPolicyLabel": "プライバシーポリシー",
-        "view": "表示",
         "viewDocument": "{{document}}を表示",
         "openFailed": "文書を開けませんでした。システムのブラウザー設定を確認してください"
       },

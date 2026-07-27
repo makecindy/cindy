@@ -656,7 +656,6 @@
       "legal": {
         "termsOfServiceLabel": "서비스 이용약관",
         "privacyPolicyLabel": "개인정보 처리방침",
-        "view": "보기",
         "viewDocument": "{{document}} 보기",
         "openFailed": "문서를 열 수 없습니다. 시스템 브라우저 설정을 확인해 주세요"
       },

@@ -195,7 +195,7 @@ function LegalLinkRow({ label, url }: { label: string; url: string }) {
       <button
         aria-label={t('settings.about.legal.viewDocument', { document: label })}
         className={cn(
-          '-mr-1 flex select-none items-center gap-1.5 rounded-full px-3 py-1.5',
+          '-mr-1 flex select-none items-center gap-1.5 rounded-full px-6 py-2.5',
           'text-12 font-medium text-[var(--settings-section-title)]',
           'border border-[var(--settings-theme-card-border)]',
           'transition-colors hover:bg-[var(--surface-hover)] active:scale-[0.98]',
@@ -205,7 +205,7 @@ function LegalLinkRow({ label, url }: { label: string; url: string }) {
         title={url}
         type="button"
       >
-        {t('settings.about.legal.view')}
+        {t('settings.about.legal.viewDocument', { document: label })}
         <ExternalLink aria-hidden size={13} strokeWidth={1.7} />
       </button>
     </div>

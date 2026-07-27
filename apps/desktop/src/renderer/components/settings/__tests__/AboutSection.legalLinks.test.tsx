@@ -38,18 +38,26 @@ describe('AboutSection legal links', () => {
   it('renders both legal documents and opens the region-selected URLs externally', async () => {
     render(<LegalLinksRows />);
 
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'settings.about.legal.viewDocument:settings.about.legal.termsOfServiceLabel',
-      }),
+    const termsButton = screen.getByRole('button', {
+      name: 'settings.about.legal.viewDocument:settings.about.legal.termsOfServiceLabel',
+    });
+    expect(termsButton.textContent).toContain(
+      'settings.about.legal.viewDocument:settings.about.legal.termsOfServiceLabel',
     );
+    expect(termsButton.className).toContain('px-6');
+    expect(termsButton.className).toContain('py-2.5');
+
+    fireEvent.click(termsButton);
     await waitFor(() => expect(openExternal).toHaveBeenCalledWith(LEGAL_LINKS.termsOfService));
 
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'settings.about.legal.viewDocument:settings.about.legal.privacyPolicyLabel',
-      }),
+    const privacyButton = screen.getByRole('button', {
+      name: 'settings.about.legal.viewDocument:settings.about.legal.privacyPolicyLabel',
+    });
+    expect(privacyButton.textContent).toContain(
+      'settings.about.legal.viewDocument:settings.about.legal.privacyPolicyLabel',
     );
+
+    fireEvent.click(privacyButton);
     await waitFor(() => expect(openExternal).toHaveBeenCalledWith(LEGAL_LINKS.privacyPolicy));
   });
 
