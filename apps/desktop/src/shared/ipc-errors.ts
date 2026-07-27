@@ -11,6 +11,9 @@ export type IpcErrorCode =
   | 'SCHEDULER_NOT_READY'
   | 'PERMISSION_DENIED'
   | 'UNSUPPORTED_CAPABILITY'
+  // 插件已启用/已操作,但配置就绪判定失败(存储损坏等);与「未配置」严格
+  // 区分——renderer 弹系统错误,不进入配置引导流。
+  | 'SETUP_STATUS_UNAVAILABLE'
   | 'APP_SHORTCUTS_WRITE_FAILED'
   | 'NO_ACTIVE_TURN'
   | 'SESSION_RUNNING'

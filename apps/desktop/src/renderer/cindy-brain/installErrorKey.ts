@@ -15,6 +15,8 @@ export function ghostInstallErrorKey(code: string | undefined): string {
       return 'settings.ghosts.errors.idReserved';
     case 'NOT_FOUND':
       return 'settings.ghosts.errors.sourceMissing';
+    case 'SETUP_STATUS_UNAVAILABLE':
+      return 'settings.ghosts.errors.setupStatusUnavailable';
     default:
       return 'settings.ghosts.errors.generic';
   }

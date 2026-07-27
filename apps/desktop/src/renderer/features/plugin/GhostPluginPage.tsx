@@ -407,6 +407,20 @@ export function GhostPluginPage() {
     }
   }, [selectedDetail, t]);
 
+  // 打开插件详情并滚到「配置」区(启用即引导 / 就绪弹窗的「去配置」动作)。
+  // 详情视图可能尚未挂载,滚动排到渲染之后的下一帧;减弱动效时改即时定位。
+  const openGhostConfiguration = useCallback((id: string) => {
+    setSelectedId(id);
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document
+          .getElementById('ghost-configuration-title')
+          ?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+      });
+    });
+  }, []);
+
   const handleToggle = useCallback(
     async (id: string, enabled: boolean) => {
       try {
@@ -425,13 +439,29 @@ export function GhostPluginPage() {
             ),
           );
         } else {
-          await window.electronAPI.ghosts.setEnabled(id, enabled);
+          const result = await window.electronAPI.ghosts.setEnabled(id, enabled);
+          // 启用即引导:启用成功但配置未就绪时,main 已把 setup 载荷随响应
+          // 返回——立即弹配置流,插件留在「已启用 · 待配置」显式态,而不是
+          // 开关弹回(凭证过期 ≠ 用户想关掉它;意图保留 + 状态可见)。
+          if (enabled && result.setup && !result.setup.ready) {
+            const ghost = ghosts.find((candidate) => candidate.manifest.id === id);
+            const goConfigure = await confirm({
+              title: t('settings.ghosts.setupGate.title', {
+                name: ghost?.manifest.name ?? id,
+              }),
+              description: formatSetupGateDescription(result.setup, t),
+              confirmText: t('settings.ghosts.setupGate.configure'),
+              cancelText: t('settings.ghosts.setupGate.cancel'),
+              autoFocusConfirm: true,
+            });
+            if (goConfigure) openGhostConfiguration(id);
+          }
         }
       } catch (error) {
         toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
       }
     },
-    [ghosts, t],
+    [confirm, ghosts, openGhostConfiguration, t],
   );
 
   // 市场更新流程由列表卡片和详情页共用:先取目标 release 的完整 manifest 做
@@ -548,20 +578,6 @@ export function GhostPluginPage() {
     });
     navigate('/cc-agent/new');
   }, [navigate, t]);
-
-  // 打开插件详情并滚到「配置」区(就绪弹窗的「去配置」动作)。详情视图
-  // 可能尚未挂载,滚动排到渲染之后的下一帧;减弱动效时改即时定位。
-  const openGhostConfiguration = useCallback((id: string) => {
-    setSelectedId(id);
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        document
-          .getElementById('ghost-configuration-title')
-          ?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
-      });
-    });
-  }, []);
 
   const handleUseGhost = useCallback(
     async (id: string) => {

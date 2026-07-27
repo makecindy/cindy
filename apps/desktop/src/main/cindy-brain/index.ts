@@ -23,6 +23,7 @@ import {
   type GhostManifest,
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
+  type GhostSetupStatus,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
@@ -74,6 +75,7 @@ import {
 } from './ghostKvStore.js';
 import {
   evaluateGhostSetupAssessment,
+  evaluateGhostSetup,
   handleGhostSetupStatusRequest,
 } from './ghostSetupStatus.js';
 import { getGhostSetupChangeBus } from './ghostSetupChangeBus.js';
@@ -2074,6 +2076,37 @@ export function getGhostLifecycleProjection(): GhostLifecycleEntry[] {
 }
 
 /**
+ * 插件页「使用」同口径的就绪评估(strict=false,与 setup-status 同一探针组)。
+ * set-enabled 启用门禁复用此结果决定是否给 renderer 回 setup 引导载荷;
+ * 评估抛错不捕获——handler 映射为 SETUP_STATUS_UNAVAILABLE,由 renderer
+ * 弹系统错误,绝不折叠成「未配置」静默放配置流。
+ */
+function evaluateGhostSetupForPluginPage(ghost: InstalledGhost): GhostSetupStatus {
+  const ghostId = ghost.manifest.id;
+  const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
+  const oauthManager = getGhostOauthAccountManager();
+  const connectionManager = getGhostConnectionManager();
+  let kvSnapshot: Record<string, unknown> | null = null;
+  return evaluateGhostSetup(runtimeManifest, {
+    secretSaved: (key) => ghostSecretSaved(ghostId, key),
+    oauthStatus: (key) => {
+      const decl = runtimeManifest.network?.secrets?.find((s) => s.key === key)?.oauth;
+      const accounts = oauthManager.listAccounts(ghostId, key);
+      return {
+        clientConfigured: oauthManager.clientConfigured(ghostId, key, decl),
+        connected: accounts.filter((a) => a.status === 'connected').length,
+        expired: accounts.filter((a) => a.status === 'expired').length,
+      };
+    },
+    connectionCount: (key) => connectionManager.list(ghostId, key).length,
+    kvValue: (key) => {
+      if (kvSnapshot === null) kvSnapshot = ghostSetupKvStore?.readStrict(ghostId) ?? {};
+      return kvSnapshot[key];
+    },
+  });
+}
+
+/**
  * Executes only Host-generated setup actions. The action id is revalidated by
  * the coordinator against a fresh assessment before this entry is called.
  */
@@ -3612,6 +3645,28 @@ export function registerGhostIpc(): void {
       runtime.resetFuse(id); // 重新唤醒 = 清熔断记账,可再拉起
       const ghost = findAvailableGhost(id);
       if (ghost) spawnIfResident(ghost); // 常驻意识:唤醒即启动
+      // 启用即引导(D2):启用成功后当场就绪评估,未 ready 时把 setup 载荷
+      // 交回 renderer 立即弹配置流——插件进入「已启用 · 待配置」显式态,
+      // 而不是「开着但静默不可用」。评估失败抛专属错误码:启用已生效,
+      // 由 renderer 弹系统错误,绝不把判定失败折叠成「未配置」。
+      if (ghost) {
+        let setup: GhostSetupStatus;
+        try {
+          setup = evaluateGhostSetupForPluginPage(ghost);
+        } catch (error) {
+          log.error('set-enabled setup evaluation failed', {
+            id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throwIpcError(
+            'SETUP_STATUS_UNAVAILABLE',
+            '插件已启用,但配置状态判定失败;请检查插件页状态',
+          );
+        }
+        if (!setup.ready) {
+          return { ok: true, setup };
+        }
+      }
     }
     return { ok: true };
   });

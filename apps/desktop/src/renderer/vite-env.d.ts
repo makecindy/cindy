@@ -1084,7 +1084,15 @@ interface ElectronAPI {
     }>;
     uninstall: (id: string) => Promise<{ ok: true }>;
     /** 启用/停用(停用 = 面板休眠,布局位置保留)。 */
-    setEnabled: (id: string, enabled: boolean) => Promise<{ ok: true }>;
+    /**
+     * 全局启用/停用。启用成功且配置未就绪时返回 setup 载荷(与
+     * setupStatus 同结构),renderer 应立即弹配置引导(启用即引导);
+     * 就绪判定失败 reject SETUP_STATUS_UNAVAILABLE(启用仍生效,弹系统错误)。
+     */
+    setEnabled: (
+      id: string,
+      enabled: boolean,
+    ) => Promise<{ ok: true; setup?: import('../shared/ghost').GhostSetupStatus }>;
     /** 目录级禁用清单(插件页项目范围视图;sendSync 切换同帧渲染)。 */
     workdirPrefsSync: (workdir: string) => { disabled: string[] };
     /** 写/清一条目录级例外(disabled=false 即清除,回到跟随全局)。 */
