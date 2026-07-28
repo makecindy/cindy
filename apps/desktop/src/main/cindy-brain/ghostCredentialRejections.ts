@@ -113,7 +113,7 @@ export function createGhostCredentialRejectionsStore(args: {
   return {
     rejectedKeys(ghostId) {
       const ghosts = load().ghosts;
-      return Object.hasOwn(ghosts, ghostId) ? ghosts[ghostId] : [];
+      return Object.hasOwn(ghosts, ghostId) ? [...ghosts[ghostId]] : [];
     },
     markRejected(ghostId, secretKey) {
       const file = load();

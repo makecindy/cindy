@@ -58,4 +58,14 @@ describe('ghostCredentialRejections 台账', () => {
     expect(store.clearConnection('constructor', 'gitlab', 'connection-1')).toBe(true);
     expect(store.rejectedKeys('constructor')).toEqual([]);
   });
+
+  it('读取结果不会泄露内部缓存数组', () => {
+    const store = createGhostCredentialRejectionsStore({ filePath });
+    expect(store.markRejected('web-search', 'brave_api_key')).toBe(true);
+
+    const returnedKeys = store.rejectedKeys('web-search') as string[];
+    returnedKeys.push('injected_key');
+
+    expect(store.rejectedKeys('web-search')).toEqual(['brave_api_key']);
+  });
 });
