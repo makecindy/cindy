@@ -177,8 +177,10 @@ describe('sessionComposerLayout', () => {
     expect(layout.statusText).toBe('正在听');
   });
 
-  it('keeps the composer editable while listening and waits for text before showing send', () => {
-    const layout = buildSessionComposerLayout({
+  it('keeps the send slot present through the whole voice lifecycle', () => {
+    // 语音生命周期内发送槽常驻(对齐桌面主槽永远占位,2026-07-25 定案):
+    // listening 即使草稿空也可按(结束录音并发送),润色期禁用占位,布局不塌。
+    const listening = buildSessionComposerLayout({
       attachmentBusy: false,
       attachmentCount: 0,
       attachmentPickerOpen: false,
@@ -189,20 +191,35 @@ describe('sessionComposerLayout', () => {
       voiceState: 'listening',
     });
 
-    expect(layout.primaryAction).toBe('none');
-    expect(layout.send).toEqual({
-      disabled: true,
-      disabledReason: '输入文字、添加附件或引用后才能发送。',
+    expect(listening.send).toEqual({
+      disabled: false,
+      disabledReason: null,
       label: '发送',
-      visible: false,
+      visible: true,
     });
-    expect(layout.input).toMatchObject({
+    expect(listening.input).toMatchObject({
       disabled: false,
       disabledReason: null,
       placeholder: '正在听……',
     });
-    expect(layout.guidanceText).toBe('正在听，文字出现后会显示发送；点输入框可结束语音并弹出键盘。');
-    expect(layout.statusText).toBe('正在听');
+    expect(listening.guidanceText).toBe('正在听；点发送会结束语音并发送识别的文字，点输入框可结束语音并弹出键盘。');
+    expect(listening.statusText).toBe('正在听');
+
+    const refining = buildSessionComposerLayout({
+      attachmentBusy: false,
+      attachmentCount: 0,
+      attachmentPickerOpen: false,
+      canStop: false,
+      draftText: '',
+      queueBusy: false,
+      sending: false,
+      voiceState: 'refining',
+    });
+    expect(refining.send).toMatchObject({
+      disabled: true,
+      disabledReason: '语音正在处理，完成后再发送。',
+      visible: true,
+    });
   });
 
   it('hides stop in the normal idle composer but keeps running work stoppable while send is primary', () => {

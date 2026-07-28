@@ -24,6 +24,8 @@ interface ControllerEntry {
   /** 友好名(横幅展示用),来自 link-open / subscribe 的 controllerName。 */
   name: string;
   topics: Set<StoredTopic>;
+  /** link-open 声明的 append-only 控制端能力；旧控制端缺省为空集。 */
+  capabilities: Set<string>;
 }
 
 /** 控制本机的控制端信息(被控端可见性状态条用)。 */
@@ -82,7 +84,11 @@ function topicStillHeld(topic: StoredTopic): boolean {
 function getOrCreate(deviceId: string, name?: string): ControllerEntry {
   let e = registry.get(deviceId);
   if (!e) {
-    e = { name: name ?? deviceId.slice(0, 8), topics: new Set() };
+    e = {
+      name: name ?? deviceId.slice(0, 8),
+      topics: new Set(),
+      capabilities: new Set(),
+    };
     registry.set(deviceId, e);
   } else if (name) {
     e.name = name;
@@ -91,11 +97,19 @@ function getOrCreate(deviceId: string, name?: string): ControllerEntry {
 }
 
 /** 订阅:把 topics 并入该控制端(name 可选,subscribe/link-open 携带时更新)。 */
-export function subscribe(deviceId: string, topics: readonly string[], name?: string): void {
+export function subscribe(
+  deviceId: string,
+  topics: readonly string[],
+  name?: string,
+  capabilities?: readonly string[],
+): void {
   // Empty/fully-filtered subscribe frames must not create a registry entry:
   // getSubscribedControllers() treats every entry as update-relaunch busy.
   if (topics.length === 0) return;
   const e = getOrCreate(deviceId, name);
+  if (capabilities) {
+    e.capabilities = new Set(capabilities.filter((value) => typeof value === 'string'));
+  }
   for (const t of topics) e.topics.add(t as StoredTopic);
   // 幂等重放也通知(控制端断链重连后 replay subscribe → 消费方按幂等语义恢复 watch)。
   notifySubscribed(topics);
@@ -153,6 +167,11 @@ export function getControllersForTopic(topic: Topic): string[] {
     if (e.topics.has(LEGACY_TOPIC) || e.topics.has(topic)) out.push(id);
   }
   return out;
+}
+
+/** 查询 link-open 协商出的控制端能力；未知/已断链控制端一律 false。 */
+export function controllerSupports(deviceId: string, capability: string): boolean {
+  return registry.get(deviceId)?.capabilities.has(capability) === true;
 }
 
 function isControlTopic(t: StoredTopic): boolean {

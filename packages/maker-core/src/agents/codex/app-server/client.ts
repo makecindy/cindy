@@ -74,24 +74,39 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Detect a definitive Codex authentication failure from a correlated JSON-RPC
  * error response. Codex Desktop uses this same protocol boundary: stderr stays
- * diagnostic-only, while auth state changes require cloudRequirements plus an
- * explicit Auth/relogin action from app-server.
+ * diagnostic-only, while auth state changes require a structured Auth/relogin
+ * signal from app-server (cloudRequirements / cloudConfigBundle), or the
+ * narrowly-matched config-load wrapper around codex-rs' permanent token
+ * refresh failure.
  */
 export function detectAuthInvalidationReason(error: JsonRpcErrorObject): string | null {
   const data = isRecord(error.data) ? error.data : null;
-  if (
-    data?.reason !== 'cloudRequirements' ||
-    (data.errorCode !== 'Auth' && data.action !== 'relogin')
-  ) {
+  // 两种结构化 provenance 都是 app-server 主动声明的鉴权失效:
+  //  - cloudRequirements: turn 级 cloud 依赖检查失败 (Auth/relogin)。
+  //  - cloudConfigBundle: 配置加载阶段 cloud config bundle 拉取撞鉴权失败
+  //    (config_errors.rs 对 Auth code 附 action=relogin)。
+  const hasStructuredAuthSignal =
+    (data?.reason === 'cloudRequirements' || data?.reason === 'cloudConfigBundle') &&
+    (data?.errorCode === 'Auth' || data?.action === 'relogin');
+  // 文本兜底 (窄门): 非 cloud-config-bundle 的错误链不带结构化 data, 但 message 仍是
+  // app-server 生成的 "failed to load configuration: {err}" 包装; 其中 codex-rs 的
+  // "Your access token could not be refreshed ..." 句族只出自永久性 refresh 失败
+  // (revoked / expired / reused / account mismatch), 重试必然复现。两段都要求命中,
+  // 避免 correlated response error 里偶发回显的孤立关键词触发凭证清除。
+  const isTextualConfigLoadRefreshFailure =
+    !hasStructuredAuthSignal &&
+    /failed to load configuration:/i.test(error.message) &&
+    /access token could not be refreshed/i.test(error.message);
+  if (!hasStructuredAuthSignal && !isTextualConfigLoadRefreshFailure) {
     return null;
   }
 
-  const nestedError = isRecord(data.error) ? data.error : null;
+  const nestedError = isRecord(data?.error) ? data.error : null;
   const diagnostic = [
     error.message,
-    typeof data.message === 'string' ? data.message : '',
-    typeof data.detail === 'string' ? data.detail : '',
-    typeof data.code === 'string' ? data.code : '',
+    typeof data?.message === 'string' ? data.message : '',
+    typeof data?.detail === 'string' ? data.detail : '',
+    typeof data?.code === 'string' ? data.code : '',
     typeof nestedError?.message === 'string' ? nestedError.message : '',
     typeof nestedError?.code === 'string' ? nestedError.code : '',
   ].join('\n');
@@ -102,15 +117,20 @@ export function detectAuthInvalidationReason(error: JsonRpcErrorObject): string 
   if (/token_invalidated|authentication token has been invalidated/i.test(diagnostic)) {
     return 'token_invalidated';
   }
-  if (/token_revoked|authentication token has been revoked/i.test(diagnostic)) {
+  if (
+    /token_revoked|authentication token has been revoked|refresh token (?:was|has been) revoked/i.test(
+      diagnostic,
+    )
+  ) {
     return 'token_revoked';
   }
   if (/refresh token was already used|refresh_token.*already used/i.test(diagnostic)) {
     return 'refresh_token_reused';
   }
 
-  // The structured Auth/relogin signal is itself definitive even when the
-  // app-server does not expose the provider-specific token error code.
+  // Both gates above are definitive on their own (structured Auth/relogin, or the
+  // permanent refresh-failure sentence family — e.g. the "has expired" / account
+  // mismatch variants) even without a provider-specific token error code.
   return 'token_invalidated';
 }
 

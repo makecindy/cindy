@@ -19,6 +19,8 @@
 
 import { randomUUID } from 'node:crypto';
 
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+
 import { MAKER_PUSH } from '../maker-ipc/channels';
 
 export interface IssueDraft {
@@ -33,6 +35,11 @@ export interface IssueEnvInfo {
   platform: string;
   arch: string;
   osVersion: string;
+  /**
+   * 本构建的区域身份(中国版 / 国际版 / 开发版)。构建期烘焙、运行时不可切换,
+   * 但同一个版本号在两区是两个不同的包——反馈里没有它就分不清用户装的是哪一个。
+   */
+  region: CindyRegion;
 }
 
 /** 确认后真正写入 GitHub 的身份；卡片必须原样展示，避免把平台代提交误认成用户本人。 */

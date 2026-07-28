@@ -176,8 +176,11 @@ export interface GoalControllerDeps {
    * goal 设了却发不出第一轮"的关键。
    */
   ensureSession(sessionId: string): Promise<SessionLike | undefined>;
-  /** 发下一轮前落实运行中登记的 deferred agent switch,并 bootstrap 新 live session。 */
-  applyPendingAgentSwitch?: (sessionId: string) => Promise<void>;
+  /**
+   * 锁住本 session、落实 deferred agent switch 并 bootstrap 新 live session。
+   * 调用方在重新读取 live session 且 Session.send 返回后执行 release。
+   */
+  acquirePendingAgentSwitch?: (sessionId: string) => Promise<() => void>;
   /** ← maker-ipc/register.isSessionInTurn(main 侧 turn 活跃跟踪)。 */
   isSessionInTurn(sessionId: string): boolean;
   beforeDispatchUserTurn?: (sessionId: string) => void | Promise<void>;

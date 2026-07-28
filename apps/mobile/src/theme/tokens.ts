@@ -146,7 +146,7 @@ export interface ThemeColors {
 export interface LoginSkinColors {
   /** 登录画布底(亮 #EDEDED / 暗 #1F1F1E,figma 532:585 暗色帧实测;纯平,PR#104 拍板) */
   bgBase: string;
-  /** 品牌红 accent(Global pill/字标红元素;禁止用作页面背景——wave4 改判;跨模式不变) */
+  /** 品牌红 accent(区域徽标/字标红元素;禁止用作页面背景——wave4 改判;跨模式不变) */
   brandAccent: string;
   /** 品牌深红 pressed/hover(跨模式不变) */
   brandAccentPressed: string;
@@ -200,7 +200,7 @@ export interface LoginSkinColors {
   overlayButtonPressed: string;
   /** 浅底控件(方式行/返回钮)pressed 叠层(两模式黑 8%) */
   overlayControlPressed: string;
-  /** 浅底钮白描边/Global pill(两模式 #FFFFFF;推导,待 Figma 精确) */
+  /** 浅底钮白描边/区域徽标(两模式 #FFFFFF;推导,待 Figma 精确) */
   invertedButtonBorder: string;
   /** 大 loading 环轨(亮 rgba(42,40,40,.18) / 暗 rgba(212,212,212,.18) 推导,待 Figma) */
   loadingRingTrack: string;

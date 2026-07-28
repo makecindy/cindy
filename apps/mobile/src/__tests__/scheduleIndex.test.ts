@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { unresponsiveDevicesStore } from '@/device-link/unresponsiveDevicesStore';
 import {
+  invalidateOfflineScheduleIndexFailureFor,
+  invalidateTransientScheduleIndexFailures,
   loadSessionScheduleIndex,
   loadSessionScheduleIndexThrottled,
   replaceSessionScheduleIndexEntries,
   resetScheduleIndexThrottleForTesting,
+  SCHEDULE_INDEX_FAILURE_TTL_MS,
   SCHEDULE_INDEX_THROTTLE_TTL_MS,
 } from '@/session/scheduleIndex';
 import type { RemoteSessionScheduleInfo } from '@/session/sessionList';
@@ -301,17 +305,207 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
-  it('失败不占坑:reject 后下一次触发正常重试', async () => {
+  it('失败负缓存:reject 后 TTL 内复用同一次失败不重放批次,过期后正常重试', async () => {
+    resetScheduleIndexThrottleForTesting();
+    const load = vi.fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    let at = 1000;
+    const now = () => at;
+    await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).rejects.toThrow('boom');
+    // 失败时间戳写入是微任务,先让它落地。
+    await Promise.resolve();
+    // 失败 TTL 内的被动触发直接吃负缓存(同一个 rejected promise),不再压请求上管道:
+    // 旧的「失败即清坑」+ 多触发源交叠,是被控端无响应时反复全量重放的放大器。
+    at += SCHEDULE_INDEX_FAILURE_TTL_MS - 1;
+    await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).rejects.toThrow('boom');
+    expect(load).toHaveBeenCalledTimes(1);
+    // 负缓存过期后正常重试
+    at += 1;
+    await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).resolves.toBeInstanceOf(Map);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('失败负缓存:force(用户显式动作)穿透负缓存立即重拉', async () => {
     resetScheduleIndexThrottleForTesting();
     const load = vi.fn()
       .mockRejectedValueOnce(new Error('boom'))
       .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
     const now = () => 1000;
     await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).rejects.toThrow('boom');
-    // reject 清坑是微任务,先让它落地。
     await Promise.resolve();
-    await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).resolves.toBeInstanceOf(Map);
+    await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now, force: true })).resolves.toBeInstanceOf(Map);
     expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('瞬态失败(NOT_CONNECTED)的负缓存在重连失效钩子后立即重拉(review P1)', async () => {
+    // 普通断线的负缓存若挺过重连,30s 内 reseed 会吃旧 rejected promise,
+    // 详情页替换成空索引且无人补拉;rehydrate 开始时调用失效钩子解决。
+    resetScheduleIndexThrottleForTesting();
+    const load = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('not connected'), { code: 'NOT_CONNECTED' }))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const now = () => 1000;
+    await expect(loadSessionScheduleIndexThrottled('dev-n', load, { now })).rejects.toMatchObject({
+      code: 'NOT_CONNECTED',
+    });
+    await Promise.resolve();
+    // 失效前:TTL 内复用负缓存
+    await expect(loadSessionScheduleIndexThrottled('dev-n', load, { now })).rejects.toMatchObject({
+      code: 'NOT_CONNECTED',
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+    // 重连(rehydrate 开始)→ 瞬态负缓存失效 → 立即重拉
+    invalidateTransientScheduleIndexFailures();
+    await expect(loadSessionScheduleIndexThrottled('dev-n', load, { now })).resolves.toBeInstanceOf(Map);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('DEVICE_OFFLINE 负缓存:仅该设备 presence 恢复时失效,全局重连钩子不碰(review P1)', async () => {
+    // DEVICE_OFFLINE 是逐设备状态:若挂在全局重连钩子上,B 设备的任何 rehydrate
+    // 都会反复清掉仍离线的 A 设备的 30s 负缓存,请求风暴止损失效。
+    resetScheduleIndexThrottleForTesting();
+    const load = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('device offline'), { code: 'DEVICE_OFFLINE' }))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const now = () => 1000;
+    await expect(loadSessionScheduleIndexThrottled('dev-o', load, { now })).rejects.toMatchObject({
+      code: 'DEVICE_OFFLINE',
+    });
+    await Promise.resolve();
+    // 全局重连钩子(NOT_CONNECTED 类专用)不清 DEVICE_OFFLINE 负缓存
+    invalidateTransientScheduleIndexFailures();
+    await expect(loadSessionScheduleIndexThrottled('dev-o', load, { now })).rejects.toMatchObject({
+      code: 'DEVICE_OFFLINE',
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+    // 别的设备 presence 恢复也不清
+    invalidateOfflineScheduleIndexFailureFor('dev-other');
+    await expect(loadSessionScheduleIndexThrottled('dev-o', load, { now })).rejects.toMatchObject({
+      code: 'DEVICE_OFFLINE',
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+    // 该设备 presence 恢复:立即失效、重拉
+    invalidateOfflineScheduleIndexFailureFor('dev-o');
+    await expect(loadSessionScheduleIndexThrottled('dev-o', load, { now })).resolves.toBeInstanceOf(Map);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('DEVICE_OFFLINE 的 message-only 形态同样按离线分类(review:不只认 code)', async () => {
+    resetScheduleIndexThrottleForTesting();
+    const load = vi.fn()
+      .mockRejectedValueOnce(new Error('[DEVICE_OFFLINE] target host not online'))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const now = () => 1000;
+    await expect(loadSessionScheduleIndexThrottled('dev-m', load, { now })).rejects.toThrow('DEVICE_OFFLINE');
+    await Promise.resolve();
+    invalidateOfflineScheduleIndexFailureFor('dev-m');
+    await expect(loadSessionScheduleIndexThrottled('dev-m', load, { now })).resolves.toBeInstanceOf(Map);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('末项竞态的 INVOKE_TIMEOUT 失败:熔断 open 时同样按未响应记负缓存,恢复即旁路', async () => {
+    // 末项竞态抛的是原始 INVOKE_TIMEOUT(非快速失败码);节流层补查 store
+    // (key 即 deviceId)才能让这类失败同样享受「恢复即旁路」。
+    resetScheduleIndexThrottleForTesting();
+    const load = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('invoke timed out'), { code: 'INVOKE_TIMEOUT' }))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const now = () => 1000;
+    unresponsiveDevicesStore.markUnresponsive('dev-t');
+    try {
+      await expect(loadSessionScheduleIndexThrottled('dev-t', load, { now })).rejects.toMatchObject({
+        code: 'INVOKE_TIMEOUT',
+      });
+      await Promise.resolve();
+      unresponsiveDevicesStore.clearUnresponsive('dev-t');
+      await expect(loadSessionScheduleIndexThrottled('dev-t', load, { now })).resolves.toBeInstanceOf(Map);
+      expect(load).toHaveBeenCalledTimes(2);
+    } finally {
+      unresponsiveDevicesStore.clearUnresponsive('dev-t');
+    }
+  });
+
+  it('DEVICE_UNRESPONSIVE 负缓存:熔断仍 open 时复用,恢复后立即旁路重拉(review P1)', async () => {
+    // 熔断关闭触发的 reseed/重载若在失败 TTL 内吃到同一个 rejected promise,
+    // 索引会被 catch 路径替换成空集,且无定时器在 TTL 过期后补拉——徽标要等
+    // 无关触发源才回来。恢复(设备移出 unresponsive 集合)必须使负缓存失效。
+    resetScheduleIndexThrottleForTesting();
+    const unresponsiveError = Object.assign(
+      new Error('target device dev-1 is unresponsive (circuit open)'),
+      { code: 'DEVICE_UNRESPONSIVE' },
+    );
+    const load = vi.fn()
+      .mockRejectedValueOnce(unresponsiveError)
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const now = () => 1000;
+    unresponsiveDevicesStore.markUnresponsive('dev-1');
+    try {
+      await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).rejects.toMatchObject({
+        code: 'DEVICE_UNRESPONSIVE',
+      });
+      await Promise.resolve();
+      // 熔断仍 open:失败 TTL 内复用负缓存,不压请求
+      await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).rejects.toMatchObject({
+        code: 'DEVICE_UNRESPONSIVE',
+      });
+      expect(load).toHaveBeenCalledTimes(1);
+      // 设备恢复(探测成功关熔断):TTL 未过也立即旁路重拉
+      unresponsiveDevicesStore.clearUnresponsive('dev-1');
+      await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).resolves.toBeInstanceOf(Map);
+      expect(load).toHaveBeenCalledTimes(2);
+    } finally {
+      unresponsiveDevicesStore.clearUnresponsive('dev-1');
+    }
+  });
+
+  it('DEVICE_UNRESPONSIVE:批循环命中立即止损并上抛,不产出部分索引', async () => {
+    const listRuns = vi.fn(async () => {
+      throw Object.assign(
+        new Error('target device dev-1 is unresponsive (circuit open)'),
+        { code: 'DEVICE_UNRESPONSIVE' },
+      );
+    });
+    const maker = {
+      schedule: {
+        list: async () => [
+          { id: 'sched-1', name: 'a', status: 'active', targetSessionId: 'session-a' },
+          { id: 'sched-2', name: 'b', status: 'active' },
+          { id: 'sched-3', name: 'c', status: 'active' },
+        ],
+        listRuns,
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+    // 上抛而不是截断成功(review P1):部分索引若被当成功提交,会进入 30s 正
+    // 缓存,首页/详情页拿着不完整徽标还以为是新鲜数据;上抛让节流层走失败负
+    // 缓存,熔断恢复后重拉全量。
+    await expect(loadSessionScheduleIndex(maker)).rejects.toMatchObject({
+      code: 'DEVICE_UNRESPONSIVE',
+    });
+    // 熔断快速失败会在每个 listRuns 上重复出现:第一个命中后立即止损
+    expect(listRuns).toHaveBeenCalledTimes(1);
+  });
+
+  it('末项竞态:最后一个 listRuns 的超时恰好开熔断时同样上抛,不产出部分索引(review P1)', async () => {
+    // 该超时是凑满阈值的第 3 条:settle 开了熔断,但本次在途请求抛出的仍是
+    // 原始 INVOKE_TIMEOUT 而非快速失败码——必须查实时熔断状态兜住。
+    let calls = 0;
+    const maker = {
+      schedule: {
+        list: async () => [
+          { id: 'sched-1', name: 'a', status: 'active', targetSessionId: 'session-a' },
+          { id: 'sched-2', name: 'b', status: 'active', targetSessionId: 'session-b' },
+        ],
+        listRuns: vi.fn(async () => {
+          calls += 1;
+          if (calls === 1) return [];
+          throw Object.assign(new Error('invoke timed out'), { code: 'INVOKE_TIMEOUT' });
+        }),
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+    await expect(
+      loadSessionScheduleIndex(maker, { isDeviceUnresponsive: () => calls >= 2 }),
+    ).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
   });
 
   it('listRuns 串行执行(同一时刻最多一个在途,不挤占 device-link 管道)', async () => {

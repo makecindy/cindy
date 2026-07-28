@@ -12,18 +12,36 @@
  * active-catalog 统一持有；连接状态每次实时读（凭证变化要立即反映）。
  */
 
-import { buildRegistry, type Catalog, type ConnectionState, type ProviderView } from '@cindy/model-providers';
+import {
+  buildRegistry,
+  type Catalog,
+  type ConnectionState,
+  type ModelDiscoveryFailureState,
+  type ProviderModelDiscoveryFailure,
+  type ProviderView,
+} from '@cindy/model-providers';
+
+/**
+ * 读取连接态时是否允许附带**本机副作用**（绑定自愈、随之而来的清单拉取）。
+ *
+ * 纯读取一律安全，但自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。这条
+ * 通道（`maker:provider:list`）同时服务于 device-link 与可能不受信的渲染上下文，所以副作用
+ * 只在调用方明确是「本机主页面」时才放行；其余一律降级为纯读（PR #548 review）。
+ */
+export interface ConnectionReadOptions {
+  allowSideEffects: boolean;
+}
 
 /** 内置三家供应商「是否已连接」的判定器（由 host 注入，读各自凭证存储）。 */
 export interface ProviderConnectionReaders {
   /** XD 网关：托管 api_key 是否存在。 */
-  xd: () => boolean | Promise<boolean>;
+  xd: (opts: ConnectionReadOptions) => boolean | Promise<boolean>;
   /** Anthropic：系统 Claude.ai OAuth 是否登录。 */
-  anthropic: () => boolean | Promise<boolean>;
+  anthropic: (opts: ConnectionReadOptions) => boolean | Promise<boolean>;
   /** OpenAI：Codex 是否 OAuth 登录。 */
-  openai: () => boolean | Promise<boolean>;
+  openai: (opts: ConnectionReadOptions) => boolean | Promise<boolean>;
   /** xAI：SuperGrok OAuth 是否登录(responses-bridge 直连 api.x.ai)。 */
-  xai: () => boolean | Promise<boolean>;
+  xai: (opts: ConnectionReadOptions) => boolean | Promise<boolean>;
 }
 
 export interface ProviderServiceDeps {
@@ -36,11 +54,34 @@ export interface ProviderServiceDeps {
    * （生产 = generic-oauth 的 hasGenericOAuthLogin）。缺省 = 一律未连接。
    */
   genericOAuthConnected?: (providerId: string) => boolean;
+  /**
+   * 动态清单发现的最近一次失败（生产 = anthropic 的 getAnthropicModelDiscoveryFailure）。
+   * 只有「清单唯一来源是动态发现」的供应商需要，缺席 = 该供应商没有这种失败态。
+   *
+   * `connected` 是本次快照刚算出的连接态，直接传下去供实现复用：这些判定往往要读凭证库
+   * （macOS 上是一次同步的 Keychain 子进程），同一次 listProviders 里不该读第二遍。
+   */
+  modelDiscoveryFailure?: (
+    providerId: string,
+    connected: boolean,
+  ) => ProviderModelDiscoveryFailure | null;
 }
 
 export interface ProviderService {
-  /** 当前供应商视图（含实时连接状态）。 */
-  listProviders(): Promise<ProviderView[]>;
+  /**
+   * 当前供应商视图（含实时连接状态）。
+   *
+   * `allowSideEffects` 缺省为 false —— 副作用要显式请求，默认值必须是安全的那一侧：漏传
+   * 只会少做一次自愈，传反了则是把特权变更敞给不受信的调用方。
+   *
+   * 判据不是「调用得频不频繁」，而是**这次读取由谁驱动**：
+   *   · 主进程自己的业务逻辑（IM、scheduler、hook-control、title、Orca 路由…）跑在本机
+   *     owner 的授权下，自愈只会把本机凭证绑给当前 owner —— 显式传 true，否则这些入口会
+   *     重新出现「凭证在场却从未认领 / 清单从不刷新」（PR #548 review）。
+   *   · 跨进程边界进来的（renderer IPC、device-link 合成 event）按 sender 可信度决定，
+   *     见 providerHandlers 的 isTrustedSender。
+   */
+  listProviders(opts?: Partial<ConnectionReadOptions>): Promise<ProviderView[]>;
 }
 
 /**
@@ -48,12 +89,13 @@ export interface ProviderService {
  * 连接状态每次实时读（凭证变化要立即反映）。
  */
 export function createProviderService(deps: ProviderServiceDeps): ProviderService {
-  async function listProviders(): Promise<ProviderView[]> {
+  async function listProviders(opts?: Partial<ConnectionReadOptions>): Promise<ProviderView[]> {
+    const readOpts: ConnectionReadOptions = { allowSideEffects: opts?.allowSideEffects === true };
     const [xd, anthropic, openai, xai] = await Promise.all([
-      Promise.resolve(deps.connection.xd()),
-      Promise.resolve(deps.connection.anthropic()),
-      Promise.resolve(deps.connection.openai()),
-      Promise.resolve(deps.connection.xai()),
+      Promise.resolve(deps.connection.xd(readOpts)),
+      Promise.resolve(deps.connection.anthropic(readOpts)),
+      Promise.resolve(deps.connection.openai(readOpts)),
+      Promise.resolve(deps.connection.xai(readOpts)),
     ]);
     const catalog = deps.getCatalog();
     const connected: ConnectionState = { xd, anthropic, openai, xai };
@@ -63,7 +105,10 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
       // 该规则与 source 无关，覆盖远端目录下发的 built-in/self-hosted 条目。
       if (p.auth.method === 'none') {
-        connected[p.id] = true;
+        connected[p.id] = p.agents.some((agent) => {
+          const routing = p.routing[agent];
+          return routing !== undefined && routing.disabled !== true;
+        });
       }
       // 通用 OAuth 供应商（带 auth.oauth 描述符，内置目录下发或用户自建皆同）：
       // 连接态 = 本机是否有凭证 blob（登录过才算连接）。
@@ -74,7 +119,14 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       // 替代「连接 / 断开」，没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。
       else if (p.source === 'user') connected[p.id] = true;
     }
-    return buildRegistry(catalog, connected);
+    const discoveryFailures: ModelDiscoveryFailureState = {};
+    if (deps.modelDiscoveryFailure) {
+      for (const p of catalog.providers) {
+        const failure = deps.modelDiscoveryFailure(p.id, connected[p.id] === true);
+        if (failure) discoveryFailures[p.id] = failure;
+      }
+    }
+    return buildRegistry(catalog, connected, discoveryFailures);
   }
 
   return { listProviders };

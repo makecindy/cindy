@@ -108,6 +108,11 @@ interface ImageLightboxProps {
   src: string;
   onClose: () => void;
   /**
+   * Stable identity of the clicked gallery item. Needed when the source lives
+   * inside an iframe, where the host DOM active-marker fallback cannot reach.
+   */
+  galleryId?: string;
+  /**
    * 会话内翻图。开启后,lightbox 提供左右箭头 + ←/→ 键盘翻页 + "n / 总数" 计数,
    * 在当前会话的所有图片间切换。
    *
@@ -327,6 +332,7 @@ export function ImageLightbox({
   src,
   onClose,
   enableGallery = false,
+  galleryId,
   sessionId: sessionIdProp,
   annotationEdit,
   initialStrokes,
@@ -351,6 +357,13 @@ export function ImageLightbox({
   // 不然会套用会话画廊、起始落到不相干的第 0 张图。
   const [gallery] = useState<{ items: readonly GalleryImage[]; start: number }>(() => {
     if (!enableGallery) return { items: [{ src }], start: 0 };
+    const keyedIndex =
+      galleryId && sessionImages
+        ? sessionImages.findIndex((item) => item.galleryId === galleryId)
+        : -1;
+    if (sessionImages && keyedIndex >= 0) {
+      return { items: sessionImages, start: keyedIndex };
+    }
     if (sessionImages?.some((g) => g.src === src)) {
       return { items: sessionImages, start: resolveStartIndexInFull(sessionImages, src) };
     }

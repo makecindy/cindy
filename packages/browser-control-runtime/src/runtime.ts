@@ -152,6 +152,7 @@ export function planDispatch(req: BrowserControlRequest): DispatchPlan {
           ref: req.ref,
           inputRef: req.inputRef,
           element: req.element,
+          query: req.query,
           targetId: req.targetId,
           timeoutMs: req.timeoutMs,
         },

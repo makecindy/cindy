@@ -17,10 +17,18 @@ export { createAnthropicCompatProxy } from './server.js';
 export {
   createEnvOutboundProxyResolver,
   hasProxyEnvConfig,
+  isLoopbackHostname,
   parseOutboundProxyUrl,
   redactProxyUrlForLog,
+  stripIpv6Brackets,
+  TunnelingHttpsAgent,
 } from './outbound-proxy.js';
-export type { OutboundProxyResolver, OutboundProxyTarget } from './outbound-proxy.js';
+export type {
+  OutboundProxyAgent,
+  OutboundProxyResolver,
+  OutboundProxyTarget,
+} from './outbound-proxy.js';
+export { socks5Connect, Socks5HttpAgent, Socks5HttpsAgent } from './socks5.js';
 export {
   createInstructionsInjectionTransform,
   createInstructionsRegistry,

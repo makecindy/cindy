@@ -373,6 +373,35 @@ describe('sendToSession ordering', () => {
     expect(handlerBlock).toContain('return anySessionInTurn(maker);');
   });
 
+  it('serializes SET_MODEL behind the send-time agent switch for the same session', () => {
+    const setModelBlock = extractBetween(
+      source,
+      'ipcMain.handle(MAKER_INVOKE.SET_MODEL',
+      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
+    );
+    const directSendSwitchBlock = extractBetween(
+      source,
+      'pendingAgentSwitchApplyHolder = async (sessionId, signal) =>',
+      'ipcMain.handle(MAKER_INVOKE.MARK_ORCA_ROLE',
+    );
+
+    expect(setModelBlock).toContain(
+      'return withSendToSessionLock(sessionId, async () => {',
+    );
+    expectOrder(
+      setModelBlock,
+      'return withSendToSessionLock(sessionId, async () => {',
+      'applySetModelThenCancelAgentSwitchIntent(',
+    );
+    expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId);');
+    expectOrder(
+      directSendSwitchBlock,
+      'const release = await acquireSendToSessionLock(sessionId);',
+      'applyPendingAgentSwitchIfIdle(',
+    );
+    expectOrder(directSendSwitchBlock, 'applyPendingAgentSwitchIfIdle(', 'return release;');
+  });
+
   it('publishes Agent Island prompt preview from send intent and wires commit rollback', () => {
     const makerSendCreateDbMessageBlock = extractBetween(
       source,

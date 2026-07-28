@@ -53,6 +53,10 @@ import {
 } from '@/cindy-brain/ghostCardStore';
 import { useGhostCardThemeVars } from '@/cindy-brain/useGhostCardThemeVars';
 import {
+  extractGhostCardGallerySrcs,
+  ghostCardGalleryId,
+} from '@/cindy-brain/ghostCardGallery';
+import {
   GHOST_CARD_ACTION_INFLIGHT_MS,
   GHOST_CARD_ACTION_PROMPT_MAX_LEN,
   GHOST_CARD_HEIGHT_MAX,
@@ -166,7 +170,7 @@ function GhostCardCanvas({
   const { t } = useTranslation();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const anchorRef = useRef<HTMLDivElement | null>(null);
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{ src: string; galleryId: string } | null>(null);
   // data-ghost-model 声明的 3D 预览:点击开应用内 3D 查看器(GLB 已在媒体
   // 总仓,blob 来源直读,预览图作 poster)。
   const [modelView, setModelView] = useState<{ url: string; poster: string } | null>(null);
@@ -211,6 +215,11 @@ function GhostCardCanvas({
   // 只立 pending 标记,等 commit 落地后的 effect 再放开缓动开关。
   const settledOnceRef = useRef(false);
   const pendingSettleRef = useRef(false);
+  const renderedCardHtml = running && animatedHtml ? animatedHtml : html;
+  const gallerySrcs = useMemo(
+    () => extractGhostCardGallerySrcs(renderedCardHtml),
+    [renderedCardHtml],
+  );
 
   const measureHeight = useCallback(() => {
     const doc = iframeRef.current?.contentDocument;
@@ -374,6 +383,7 @@ function GhostCardCanvas({
     const doc = iframeRef.current?.contentDocument;
     if (!doc) return;
     const imgs = doc.querySelectorAll<HTMLImageElement>('img[src^="cindy-media://"]');
+    let galleryImageIndex = 0;
     imgs.forEach((img) => {
       // 量高写回会让 height prop 变化 → effect 重跑,对同一份未重载的文档
       // 再走到这里;dataset 标记去重,避免重复挂监听(srcDoc 换新文档时
@@ -397,9 +407,12 @@ function GhostCardCanvas({
       // 图片点击的四级路由:data-ghost-action(动作按钮)> data-ghost-link
       // (外链,均由下面的循环挂)> data-ghost-model(3D 预览 → 应用内 3D
       // 查看器)> 普通看大图 lightbox。
-      if (!img.dataset.ghostAction && !img.dataset.ghostLink) {
+      if (!img.closest('[data-ghost-action], [data-ghost-link]')) {
         img.style.cursor = 'pointer';
         const modelUrl = img.dataset.ghostModel;
+        const galleryId = modelUrl
+          ? null
+          : ghostCardGalleryId(callId, galleryImageIndex++);
         img.addEventListener('click', (e) => {
           e.stopPropagation();
           // 点击发生在 iframe 里,焦点会留在 guest 文档——keydown 不跨文档冒泡,
@@ -407,7 +420,7 @@ function GhostCardCanvas({
           // GhostMediaLightboxHost 同坑同解:blur 掉 iframe,键盘立即归位)。
           iframeRef.current?.blur();
           if (modelUrl) setModelView({ url: modelUrl, poster: img.src });
-          else setLightboxSrc(img.src);
+          else if (galleryId) setLightbox({ src: img.src, galleryId });
         });
       }
       // 右键 → 宿主图片菜单(复制图片 / 打开所在目录,与基座 ChatImageView 同
@@ -596,7 +609,7 @@ function GhostCardCanvas({
         <iframe
           ref={iframeRef}
           sandbox="allow-same-origin"
-          srcDoc={buildCardSrcDoc(running && animatedHtml ? animatedHtml : html, themeVars)}
+          srcDoc={buildCardSrcDoc(renderedCardHtml, themeVars)}
           onLoad={attachClickBridge}
           title={ariaTitle}
           className="block w-full border-0"
@@ -626,6 +639,17 @@ function GhostCardCanvas({
           </div>
         ) : null}
       </div>
+      {/* iframe 子文档不在宿主 querySelector 范围内。镜像零尺寸标记让既有
+          DOM 位置映射仍看到完整顺序，避免相同 URL 的普通附件被错定位到
+          插件图片；真正的图片和点击处理仍留在沙箱 iframe 内。 */}
+      {gallerySrcs.map((src, imageIndex) => (
+        <span
+          key={ghostCardGalleryId(callId, imageIndex)}
+          hidden
+          aria-hidden
+          data-gallery-src={src}
+        />
+      ))}
 
       {/* ── data-ghost-prompt 输入面板(宿主交互面,与 lightbox 同层;体验与
           老基座 ChatImageActions 的 imgPrompt popover 一致:textarea + 回车
@@ -825,8 +849,14 @@ function GhostCardCanvas({
         </DropdownMenu>
       ) : null}
 
-      {lightboxSrc ? (
-        <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} sessionId={sessionId} />
+      {lightbox ? (
+        <ImageLightbox
+          src={lightbox.src}
+          galleryId={lightbox.galleryId}
+          enableGallery
+          onClose={() => setLightbox(null)}
+          sessionId={sessionId}
+        />
       ) : null}
       {modelView ? (
         <ModelLightbox

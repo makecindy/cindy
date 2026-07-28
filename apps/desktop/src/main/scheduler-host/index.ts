@@ -25,7 +25,7 @@ import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import {
-  applyPendingAgentSwitchForDirectSend,
+  acquirePendingAgentSwitchForDirectSend,
   broadcastSessionCreated,
   enqueueSchedulerPrompt,
   hasQueuedSchedulerPrompt,
@@ -74,7 +74,7 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     logger: deps.logger,
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
-    applyPendingAgentSwitch: applyPendingAgentSwitchForDirectSend,
+    acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
     onSessionCreated: broadcastSessionCreated,
     // 心跳撞忙排队桥:实现挂在 maker-ipc/register.ts 的 coordinator 装配处
     // (holder 未就绪时 isSessionBusy 返回 false → runner 走原直发路径)。

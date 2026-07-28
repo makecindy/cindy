@@ -209,7 +209,9 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(permissionSelectorSource).toContain("'truncate'");
     expect(modelSelectorSource).not.toContain('border-[var(--create-agent-control-border)]');
     expect(modelSelectorSource).toContain('border border-transparent bg-transparent');
-    expect(modelSelectorSource).toContain('min-w-[72px] max-w-full shrink overflow-hidden');
+    expect(modelSelectorSource).toContain("'h-[30px] max-w-full shrink overflow-hidden px-2.5'");
+    expect(modelSelectorSource).toContain("? 'w-[64px] min-w-[64px]'");
+    expect(modelSelectorSource).toContain("? 'w-[148px] min-w-[72px]'");
     expect(modelSelectorSource).not.toContain('w-[206px] min-w-[160px] max-w-[206px] shrink');
     expect(modelSelectorSource).not.toContain('max-w-[180px] truncate');
 
@@ -259,7 +261,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(sendButtonSource).toContain(
       "'flex shrink-0 items-center justify-center rounded-full transition-[color,background-color,transform]'",
     );
-    expect(modelSelectorSource).toContain("'h-[30px] min-w-[72px] max-w-full shrink overflow-hidden");
+    expect(modelSelectorSource).toContain("'h-[30px] max-w-full shrink overflow-hidden px-2.5'");
     expect(modelSelectorSource).not.toContain("'h-[30px] min-w-max shrink-0");
     expect(modelSelectorSource).not.toContain("'h-[30px] w-[206px] min-w-[160px] max-w-[206px]");
     expect(modelSelectorSource).toContain("? 'truncate'");

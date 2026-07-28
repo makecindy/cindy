@@ -130,10 +130,24 @@ function parseCommandRouteRequest(raw: unknown): RsbWindowCommandRouteRequest {
   if (typeof request.allowOpen !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'request.allowOpen required (boolean)');
   }
+  if (request.userInitiated !== undefined && typeof request.userInitiated !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'request.userInitiated must be boolean');
+  }
   return {
     command: parseCommand(request.command),
     allowOpen: request.allowOpen,
+    ...(request.userInitiated === undefined ? {} : { userInitiated: request.userInitiated }),
   };
+}
+
+/** open 的可选 payload:缺省(旧签名 / 无参调用)= 用户手势,保持既有聚焦行为。 */
+function parseOpenUserInitiated(raw: unknown): boolean {
+  if (raw === undefined || raw === null) return true;
+  const r = requireObject(raw, 'options');
+  if (r.userInitiated !== undefined && typeof r.userInitiated !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'options.userInitiated must be boolean');
+  }
+  return r.userInitiated !== false;
 }
 
 export function registerRsbWindowIpc(opts: {
@@ -144,8 +158,8 @@ export function registerRsbWindowIpc(opts: {
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_GET_STATE, () => controller.getState());
 
-  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_OPEN, () => {
-    controller.open();
+  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_OPEN, (_e, payload: unknown) => {
+    controller.open({ userInitiated: parseOpenUserInitiated(payload) });
   });
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_CLOSE, () => {

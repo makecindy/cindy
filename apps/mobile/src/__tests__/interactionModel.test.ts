@@ -217,11 +217,18 @@ describe('interactionModel', () => {
     // 取消出口:没有出口 + 卡接管输入框 = 会话锁死(线上已复现)。
     expect(interactionPanelSource).toContain("if (kind === 'plugin_setup')");
     expect(interactionPanelSource).toContain('buildPluginSetupCancelDecision(item.request)');
-    expect(interactionPanelSource).toContain('interaction.unsupported.cancelButton');
-    // 未知 kind 仍回退到 UnsupportedCard 的合并摘要:每行各自 numberOfLines 会把
-    // 总高度放大成 6 × 行数。
-    expect(interactionPanelSource).toContain("const summaryText = (summaryLines ?? [contentToPreview(request)])");
+    // testID 与 UnsupportedCard 区分开,UI 测试才能精确定位这张卡的取消按钮(#540 review)。
+    expect(interactionPanelSource).toContain('interaction.pluginSetup.cancelButton');
+    expect(interactionPanelSource).not.toContain('interaction.unsupported.cancelButton');
+    // 未知 kind 仍回退到 UnsupportedCard 的 request 预览,整段一次限行:每行各自
+    // numberOfLines 会把总高度放大成 6 × 行数。
+    expect(interactionPanelSource).toContain('const summaryText = contentToPreview(request);');
     expect(interactionPanelSource).not.toContain('lines.map((line, index)');
+    // plugin_setup 移出 UnsupportedCard 后,当初为它加的形参不能留成没人走的分支。
+    // 钉形参声明与 JSX 传参本身,不做全文匹配——注释里可以照常说明这段历史。
+    for (const dead of ['summaryLines?:', 'summaryLines={', 'kindLabel?:', 'kindLabel={']) {
+      expect(interactionPanelSource, dead).not.toContain(dead);
+    }
     // 取消由被控端按 expectedRevision 裁决,不能乐观撤卡(撤了可能其实没取消);
     // 但仍要按该 revision 封顶抑制,否则取消前发出的慢快照会把卡写回来。
     expect(interactionPanelSource).toContain('optimisticDismiss: false');
@@ -288,6 +295,8 @@ describe('interactionModel', () => {
           'interaction.pluginSetup.desktopActionHint',
           'interaction.pluginSetup.inlineFormAction',
           'interaction.pluginSetup.inlineFormActionGeneric',
+          // 读屏聚合分隔符:硬编码「，」会让非中文 locale 念出中文标点(#540 review)
+          'interaction.pluginSetup.a11ySeparator',
         ]) {
           expect(i18n.t(key), `${locale} ${key}`).not.toBe(key);
         }

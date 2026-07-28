@@ -71,15 +71,19 @@ export function broadcastSessionPatched(sessionId: string, patch: Record<string,
 function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
   void (async () => {
-    const [mh, recycle] = await Promise.all([
+    const [mh, recycle, routeLock] = await Promise.all([
       import('../../maker-host/index.js'),
       import('../../worktree/sessionRemovalRecycle.js'),
+      import('../../maker-ipc/register.js'),
     ]);
     if (!(await recycle.isSessionStillRemovable(sessionId))) return;
-    await mh
-      .getMakerIfReady()
-      ?.closeSession(sessionId)
-      .catch(() => undefined);
+    await routeLock.withSendToSessionLock(sessionId, async () => {
+      if (!(await recycle.isSessionStillRemovable(sessionId))) return;
+      await mh
+        .getMakerIfReady()
+        ?.closeSession(sessionId)
+        .catch(() => undefined);
+    });
     await recycle.recycleWorktreeForRemovedSession(sessionId);
   })().catch((err) => {
     log.warn('worktree recycle after session status change failed', {

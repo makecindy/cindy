@@ -15,7 +15,7 @@ import { createScenarioFetch } from '@cindy/auth-client/fixtures';
  * `providers:global-social` 场景只换服务端 provider 组合、不冒充构建区域。
  * 本文件把 `CURRENT_CINDY_REGION` 与 `VITE_CINDY_AUTH_REGION` 双双置为 global,
  * 锁住「登录面板改版四件事(面板 500 / 删游客圆钮 / 面板内跳过登录 / 跳过免协议门)
- * 在国际区同样生效」——即区域分支只影响 identifier 形态、Global 徽标、协议 URL
+ * 在国际区同样生效」——即区域分支只影响 identifier 形态、区域徽标、协议 URL
  * 与服务端 social 组合,不影响面板几何与本地模式入口。
  */
 
@@ -102,10 +102,12 @@ afterEach(() => {
 });
 
 describe('Global 构建变体:登录改版四件事同样生效', () => {
-  it('确实处于 Global 变体(Global 徽标 + 邮箱 identifier + 协议链接走 protocol.xd.com)', async () => {
+  it('确实处于 Global 变体(不挂区域徽标 + 邮箱 identifier + 协议链接走 protocol.xd.com)', async () => {
     mount(await globalIdentifierState());
-    // 徽标只在 global 构建渲染(cn 构建下 globalPill=undefined)
-    expect(screen.getByTestId('login-global-pill')).toBeTruthy();
+    // global 构建不挂徽标(#554 起的产品叙事硬规则,DESIGN.md §16.3:不得回退);
+    // cn / dev 才标注。徽标的三档区域映射本身由 LoginPage.regionPill.test 覆盖,
+    // 这里只用「无徽标」为 global 变体做一处正向确认。
+    expect(screen.queryByTestId('login-region-pill')).toBeNull();
     expect((screen.getByTestId('login-input') as HTMLInputElement).placeholder).toBe(
       'login.emailPlaceholder',
     );

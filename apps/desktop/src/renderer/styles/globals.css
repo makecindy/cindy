@@ -13,7 +13,7 @@
       'Inter Variable', Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
       'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC',
       'Source Han Sans SC', 'Segoe UI', Roboto, sans-serif;
-    /* 默认代码字体走 Codex / 系统等宽风格(mac 上 SF Mono 不对网页暴露字体名,
+    /* 默认代码字体使用系统等宽字体(mac 上 SF Mono 不对网页暴露字体名,
        实际命中 Menlo;Win 命中 Consolas)。JetBrains Mono 已降级为可选预设、不再是
        默认。CJK 显式回退 PingFang/雅黑,保证代码块中英混排统一等宽。 */
     --app-font-code-default:
@@ -113,8 +113,8 @@
 
   /* F3: Global disable focus outline — Chromium default :focus-visible draws
      a yellow/orange ring on buttons, options and menu items after Esc/click
-     transitions focus. Claude Desktop has no such ring; suppress it on every
-     non-input element. Inputs keep their focus hint via --*-border-focus. */
+     transitions focus. Suppress it on non-input elements while inputs keep
+     their focus hint via --*-border-focus. */
   *:focus,
   *:focus-visible {
     outline: none !important;
@@ -326,14 +326,14 @@ html:lang(ko) {
    (command-palette F2.5). The Placeholder extension injects
    `p.is-editor-empty::before` with the placeholder text in a `data-*`
    attribute; we style it to match the old textarea placeholder. */
-.ProseMirror p.is-editor-empty:first-child::before {
+.ProseMirror > p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   color: var(--chat-input-placeholder-subtle);
   float: left;
   height: 0;
   pointer-events: none;
 }
-[data-voice-draft-active='true'] .ProseMirror p.is-editor-empty:first-child::before {
+[data-voice-draft-active='true'] .ProseMirror > p.is-editor-empty:first-child::before {
   content: none;
 }
 .ProseMirror {
@@ -346,6 +346,58 @@ html:lang(ko) {
 .cm-editor .cm-dropCursor {
   border-left-color: var(--caret-accent) !important;
 }
+/* Structured composer lists keep markers and body text in the same layout
+   tree. Continuation lines therefore follow the list item content edge
+   without decoration-owned width measurements. */
+[data-chat-input-root] .ProseMirror :is(ul, ol) {
+  margin: 0;
+  --composer-list-padding: 1.5em;
+  padding-inline-start: var(--composer-list-padding, 1.5em);
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='2'] {
+  --composer-list-padding: 2.2em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='3'] {
+  --composer-list-padding: 2.8em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='4'] {
+  --composer-list-padding: 3.4em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='5'] {
+  --composer-list-padding: 4em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='6'] {
+  --composer-list-padding: 4.6em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='7'] {
+  --composer-list-padding: 5.2em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='8'] {
+  --composer-list-padding: 5.8em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='9'] {
+  --composer-list-padding: 6.4em;
+}
+[data-chat-input-root] .ProseMirror ul {
+  list-style-type: disc;
+}
+[data-chat-input-root] .ProseMirror ol {
+  list-style-type: decimal;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker=')'] > li::marker {
+  content: counter(list-item) ') ';
+}
+[data-chat-input-root] .ProseMirror ol[data-marker='、'] > li::marker {
+  content: counter(list-item) '、';
+}
+[data-chat-input-root] .ProseMirror li {
+  padding-inline-start: 0.15em;
+  overflow-wrap: anywhere;
+}
+[data-chat-input-root] .ProseMirror li > p {
+  margin: 0;
+}
+
 /* composer 列表行缩进(ComposerListIndentDecoration):单行列表使用段落级
    decoration,多行列表的无特殊标点行使用 inline-block 换行容器。padding-left
    留出"基础缩进 + 前缀宽度",首行再用负 text-indent 把列表标记悬挂回基础
@@ -371,10 +423,14 @@ html:lang(ko) {
 .ProseMirror .composer-list-fallback-prefix {
   display: inline-block;
   box-sizing: border-box;
-  width: calc(1em + var(--composer-list-fallback-indent, 1.25em));
-  margin-left: calc(-1em - var(--composer-list-fallback-indent, 1.25em));
-  white-space: nowrap;
+  width: var(--composer-list-fallback-indent, 1.25em);
+  margin-left: calc(0px - var(--composer-list-fallback-indent, 1.25em));
+  white-space: pre;
   vertical-align: top;
+}
+.ProseMirror .composer-list-fallback-long-run-body {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 .ProseMirror .composer-list-fallback-unindented {
   display: inline-block;
@@ -399,9 +455,74 @@ html:lang(ko) {
   overflow-wrap: anywhere;
 }
 .ProseMirror .composer-list-tab-indent {
-  /* Keep the fallback and the browser's tab advance deterministic until the
-     plugin view replaces the CSS variables with a measured Range width. */
-  tab-size: 8;
+  /* Keep the browser's tab advance aligned with the deterministic prefix-width
+     estimate. Do not measure and rewrite decoration DOM from a plugin view:
+     ProseMirror's DOMObserver may restore that style and enter an update loop. */
+  tab-size: 8ch;
+}
+/* The fallback unindented row must remain one inline-block; character-scoped
+   ProseMirror decorations would split it into several full-width fragments.
+   The local face covers the same ranges as CjkPunctDecoration, while the
+   bundled faces cover the punctuation glyphs HarmonyOS actually ships. Latin
+   text and digits continue through the configured UI font. Keep the asset
+   names aligned with the exact-pinned font package. */
+@font-face {
+  font-family: 'Cindy CJK Punctuation Local';
+  src:
+    local('PingFang SC'),
+    local('Hiragino Sans GB'),
+    local('Microsoft YaHei UI'),
+    local('Microsoft YaHei'),
+    local('Noto Sans CJK SC'),
+    local('Source Han Sans SC');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+3000-303F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: 'Cindy CJK Punctuation Bundled';
+  src: url('../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular_256855.woff2')
+    format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+3001-3002, U+3008-3011, U+3014-3017;
+}
+@font-face {
+  font-family: 'Cindy CJK Punctuation Bundled';
+  src: url('../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular_312071.woff2')
+    format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range:
+    U+3000, U+3003, U+3005-3007, U+3012-3013, U+3018-301B, U+301D-301E, U+3021-3029, U+303E;
+}
+@font-face {
+  font-family: 'Cindy CJK Punctuation Bundled';
+  src: url('../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular_ac4458.woff2')
+    format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range:
+    U+FF01-FF03, U+FF05-FF0A, U+FF0C-FF1B, U+FF1F-FF3D, U+FF3F, U+FF41-FF5B, U+FF5D, U+FF5F-FF60,
+    U+FFE6;
+}
+@font-face {
+  font-family: 'Cindy CJK Punctuation Bundled';
+  src: url('../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular_ea8896.woff2')
+    format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+FF04, U+FF0B, U+FF1C-FF1E, U+FF3E, U+FF40, U+FF5C, U+FF5E, U+FFE0-FFE5;
+}
+.ProseMirror .composer-list-cjk-punctuation-font {
+  font-family:
+    'Cindy CJK Punctuation Local', 'Cindy CJK Punctuation Bundled',
+    var(--app-font-ui, var(--app-font-ui-default));
 }
 .ProseMirror .composer-list-cjk-font {
   font-family:

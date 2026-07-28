@@ -125,7 +125,7 @@
         {
           "photosPermission": "Cindy needs photo library access to attach images to remote sessions.",
           "cameraPermission": "Cindy needs camera access to attach photos to remote sessions.",
-          "microphonePermission": false
+          "microphonePermission": "Cindy needs microphone access for voice input in remote sessions."
         }
       ],
       [

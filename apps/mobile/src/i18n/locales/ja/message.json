@@ -55,7 +55,7 @@
     "agentSwitchLabel": "{{from}} から {{to}} に切り替えました",
     "agentSwitchViewHandoff": "{{label}}、引き継ぎ内容を表示",
     "sessionResumedPill": "元のセッションを再開しました",
-    "handoffContentDesc": "引き継ぎ内容——切り替え時に新しいエンジンへ送るコンテキスト要約（あなたのメッセージには表示されません）",
+    "handoffContentDesc": "引き継ぎ内容——切り替え時に新しいエンジンへ送るコンテキスト要約。原文は英語（チャット履歴には含まれず、ここでのみ表示）",
     "openDiagramDetail": "図の詳細を開く",
     "sessionChipFallback": "セッション {{id}}",
     "imageFallbackTitle": "画像",

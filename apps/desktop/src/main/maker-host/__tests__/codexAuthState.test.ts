@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildCodexLoginTerminationPlan,
+  codexLoginArgs,
   requireCodexOAuthLoginState,
   resolveCodexLoginCleanupPreflight,
   resolveCodexLoginExitState,
@@ -11,6 +12,17 @@ import {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('codexLoginArgs', () => {
+  it('uses the official browser flow by default', () => {
+    expect(codexLoginArgs()).toEqual(['login']);
+    expect(codexLoginArgs('browser')).toEqual(['login']);
+  });
+
+  it('uses the official device authorization flow when requested', () => {
+    expect(codexLoginArgs('device-code')).toEqual(['login', '--device-auth']);
+  });
 });
 
 describe('requireCodexOAuthLoginState', () => {

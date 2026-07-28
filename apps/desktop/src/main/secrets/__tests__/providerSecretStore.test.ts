@@ -34,6 +34,7 @@ vi.mock('../../appSessionState', () => ({
 
 import {
   createProviderSecretStore,
+  readCustomProviderKeyForMutation,
   readGhostSecretTailFromIo,
   setProviderSecretsClearedListener,
   type SecretStorageIo,
@@ -139,6 +140,21 @@ describe('providerSecrets registry', () => {
     const valid = /^[a-zA-Z0-9_-]+$/;
     for (const id of PROVIDER_SECRET_IDS) {
       expect(providerSecretStorageKey(id)).toMatch(valid);
+    }
+  });
+
+  it('strict custom-provider snapshot treats a missing file as absent when encryption is unavailable', () => {
+    const previousMode = sessionState.mode;
+    const previousOwnerId = sessionState.dataOwnerId;
+    sessionState.mode = 'cloud';
+    sessionState.dataOwnerId = `missing-key-owner-${process.pid}`;
+    try {
+      expect(
+        readCustomProviderKeyForMutation(`missing-key-provider-${process.pid}`, 'codex'),
+      ).toBeNull();
+    } finally {
+      sessionState.mode = previousMode;
+      sessionState.dataOwnerId = previousOwnerId;
     }
   });
 });

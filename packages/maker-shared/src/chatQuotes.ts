@@ -54,7 +54,7 @@ const QUOTE_BLOCK_MARKER_LINE = `> ${QUOTE_BLOCK_MARKER}`;
 export function stripChatQuoteMarkerLines(content: string): string {
   return content
     .split('\n')
-    .filter((line) => line !== QUOTE_BLOCK_MARKER_LINE)
+    .filter((line) => line.trimStart() !== QUOTE_BLOCK_MARKER_LINE)
     .join('\n');
 }
 
@@ -186,7 +186,11 @@ export function parseChatQuoteSegments(
   let index = 0;
   while (index < lines.length) {
     const line = lines[index];
-    const marked = line === QUOTE_BLOCK_MARKER_LINE;
+    const markerIndent =
+      line.trimStart() === QUOTE_BLOCK_MARKER_LINE
+        ? line.slice(0, line.length - line.trimStart().length)
+        : null;
+    const marked = markerIndent !== null;
     const legacyLeading = allowLegacyLeadingQuotes && line.startsWith('> ');
     if (!marked && !legacyLeading) {
       textLines.push(line);
@@ -203,12 +207,13 @@ export function parseChatQuoteSegments(
     const quoteLines: string[] = [];
     while (index < lines.length) {
       const quoteLine = lines[index];
-      if (quoteLine.startsWith('> ')) {
-        quoteLines.push(quoteLine.slice(2));
+      const quotePrefix = `${markerIndent ?? ''}>`;
+      if (quoteLine.startsWith(`${quotePrefix} `)) {
+        quoteLines.push(quoteLine.slice(quotePrefix.length + 1));
         index += 1;
         continue;
       }
-      if (quoteLine === '>') {
+      if (quoteLine === quotePrefix) {
         quoteLines.push('');
         index += 1;
         continue;

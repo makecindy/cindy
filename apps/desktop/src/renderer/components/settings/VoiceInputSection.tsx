@@ -10,10 +10,10 @@ import { Tip } from '@/components/ui/tooltip';
 import { useAuth } from '@/contexts/AuthContext';
 import { SUPPORTED_LOCALES } from '@/i18n';
 import { cn } from '@/lib/utils';
+import { dictionaryTermKey } from '@cindy/voice-input-core';
 import {
   MAX_VOICE_INPUT_REFINEMENT_INSTRUCTIONS_CHARS,
   MAX_VOICE_INPUT_DICTIONARY_CSV_BYTES,
-  createManualVoiceInputDictionaryEntry,
   getVoiceInputSettings,
   mergeVoiceInputDictionaryCsvTerms,
   normalizeVoiceInputDictionaryEntryText,
@@ -1059,7 +1059,10 @@ export function VoiceInputSection() {
     setRefinementEnabled,
     setRefinementInstructions,
     setAutoDictionaryEnabled,
-    setDictionaryEntries,
+    setDictionarySyncEnabled,
+    addDictionaryEntry: addDictionarySettingEntry,
+    importDictionaryEntries: importDictionarySettingEntries,
+    renameDictionaryEntry: renameDictionarySettingEntry,
     deleteDictionaryEntry: deleteDictionarySettingEntry,
     setShortcut,
   } = useVoiceInputSettings();
@@ -1568,12 +1571,15 @@ export function VoiceInputSection() {
   );
 
   const addDictionaryEntry = useCallback(() => {
-    const entry = createManualVoiceInputDictionaryEntry(newDictionaryEntryText);
-    if (!entry) return;
-    setDictionaryEntries([...settings.dictionaryEntries, entry]);
-    setNewDictionaryEntryText('');
-    setAddingDictionaryEntry(false);
-  }, [newDictionaryEntryText, setDictionaryEntries, settings.dictionaryEntries]);
+    const text = normalizeVoiceInputDictionaryEntryText(newDictionaryEntryText);
+    if (!text) return;
+    // 等主进程确认写入成功再清草稿关面板:失败时保留用户输入,别让他重打一遍。
+    void addDictionarySettingEntry(text).then((ok) => {
+      if (!ok) return;
+      setNewDictionaryEntryText('');
+      setAddingDictionaryEntry(false);
+    });
+  }, [addDictionarySettingEntry, newDictionaryEntryText]);
 
   const closeDictionaryEntryDialog = useCallback(() => {
     setAddingDictionaryEntry(false);
@@ -1624,7 +1630,20 @@ export function VoiceInputSection() {
       return;
     }
 
-    setDictionaryEntries(merged.entries);
+    // 容量与去重裁决仍由 mergeVoiceInputDictionaryCsvTerms 负责(下面的统计文案依赖
+    // 它的计数),但写入只提交「本次真正新增的词条文本」,由主进程按手动词条认领。
+    // 去重键必须与同步主键同一套折叠(locale 无关),否则土耳其语这类 locale 下
+    // 会出现「明明已存在却被当成新增」或反之,导入结果与实际合并结果对不上。
+    const existingKeys = new Set(
+      settings.dictionaryEntries.map((entry) => dictionaryTermKey(entry.text)),
+    );
+    const imported = await importDictionarySettingEntries(
+      merged.entries
+        .filter((entry) => !existingKeys.has(dictionaryTermKey(entry.text)))
+        .map((entry) => entry.text),
+    );
+    // 写入失败时错误提示已经弹过了,不能再报一次"导入成功"。
+    if (!imported) return;
     closeDictionaryEntryDialog();
     const skippedCount =
       parsed.duplicateRowCount +
@@ -1644,7 +1663,7 @@ export function VoiceInputSection() {
     );
   }, [
     closeDictionaryEntryDialog,
-    setDictionaryEntries,
+    importDictionarySettingEntries,
     settings.dictionaryEntries,
     t,
   ]);
@@ -1662,33 +1681,22 @@ export function VoiceInputSection() {
   const saveEditingDictionaryEntry = useCallback(() => {
     if (!editingDictionaryEntryId) return;
     const text = normalizeVoiceInputDictionaryEntryText(editingDictionaryEntryText);
+    // 清空文本仍然等于删除该词条(与改动前的交互一致)。
     if (!text) {
-      setDictionaryEntries(
-        settings.dictionaryEntries.filter((entry) => entry.id !== editingDictionaryEntryId),
-      );
-      cancelEditingDictionaryEntry();
+      void deleteDictionarySettingEntry(editingDictionaryEntryId).then((ok) => {
+        if (ok) cancelEditingDictionaryEntry();
+      });
       return;
     }
-    const now = Date.now();
-    setDictionaryEntries(
-      settings.dictionaryEntries.map((entry) =>
-        entry.id === editingDictionaryEntryId
-          ? {
-              ...entry,
-              text,
-              source: 'manual',
-              updatedAt: now,
-            }
-          : entry,
-      ),
-    );
-    cancelEditingDictionaryEntry();
+    void renameDictionarySettingEntry(editingDictionaryEntryId, text).then((ok) => {
+      if (ok) cancelEditingDictionaryEntry();
+    });
   }, [
     cancelEditingDictionaryEntry,
+    deleteDictionarySettingEntry,
     editingDictionaryEntryId,
     editingDictionaryEntryText,
-    setDictionaryEntries,
-    settings.dictionaryEntries,
+    renameDictionarySettingEntry,
   ]);
 
   const deleteDictionaryEntry = useCallback(
@@ -1949,6 +1957,23 @@ export function VoiceInputSection() {
                       checked={settings.autoDictionaryEnabled}
                       onCheckedChange={setAutoDictionaryEnabled}
                       aria-label={t('settings.voiceInput.refinement.dictionary.autoLearning.ariaLabel')}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-[12px] border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2.5">
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <p className="text-13 font-medium text-[var(--settings-section-title)]">
+                        {t('settings.voiceInput.refinement.dictionary.deviceSync.label')}
+                      </p>
+                      <p className="text-12 leading-[1.35] text-[var(--settings-section-sublabel)] opacity-70">
+                        {t('settings.voiceInput.refinement.dictionary.deviceSync.hint')}
+                      </p>
+                    </div>
+
+                    <Switch
+                      checked={settings.dictionarySyncEnabled}
+                      onCheckedChange={setDictionarySyncEnabled}
+                      aria-label={t('settings.voiceInput.refinement.dictionary.deviceSync.ariaLabel')}
                     />
                   </div>
 

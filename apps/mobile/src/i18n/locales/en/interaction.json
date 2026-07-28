@@ -182,9 +182,9 @@
   "pluginSetup": {
     "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
     "chooseOne": "Choose one setup method",
-    "stepsHeading": "Setup steps",
     "progress": "{{satisfied}}/{{total}} completed",
     "desktopActionHint": "On your computer: {{action}}",
+    "a11ySeparator": ", ",
     "phase": {
       "pending": "Pending",
       "action_running": "In progress…",
@@ -199,6 +199,8 @@
       "ACTION_STALE": "This setup changed. Choose the setup action again.",
       "AUTH_CANCELLED": "Authorization was cancelled. Authorize the account again when ready.",
       "AUTH_FAILED": "Couldn't authorize the account. Try again.",
+      "AUTH_NETWORK": "Couldn't reach the authorization service. Check your network and try again.",
+      "AUTH_SERVICE_UNAVAILABLE": "The authorization service is temporarily unavailable. Try again later.",
       "INLINE_INVALID": "This configuration is invalid. Check it and try again.",
       "INLINE_UNAVAILABLE": "This Cindy version can't save this configuration in chat. Update Cindy and try again.",
       "SAVE_FAILED": "Couldn't save this configuration. Try again.",

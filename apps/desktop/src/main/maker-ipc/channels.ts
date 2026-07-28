@@ -380,8 +380,8 @@ export const MAKER_INVOKE = {
    */
   PROVIDER_LIST: 'maker:provider:list',
   /**
-   * 自定义模型供应商 CRUD（配置入 localDb，密钥另走通用 safe-storage IPC）。
-   * create/update 入参 = CustomProviderConfig；delete 入参 = providerId。
+   * 自定义模型供应商 CRUD（配置入 localDb；update 的 runtime 密钥与配置原子排队）。
+   * create/update 入参 = config + runtimeKeys；delete 入参 = providerId。
    * 成功后 main 重算 active-catalog 并广播 PROVIDER_CHANGED（见 MAKER_PUSH）。
    */
   PROVIDER_CUSTOM_CREATE: 'maker:provider:custom:create',
@@ -437,6 +437,20 @@ export const MAKER_INVOKE = {
    * renderer 直接按空列表继续渲染,检测建议是增强而非依赖)。只读、无密钥材料。
    */
   PROVIDER_LOCAL_CLI_SCAN: 'maker:provider:local-cli-scan',
+  /**
+   * 「清单唯一来源是动态发现」的供应商（当前只有 anthropic 订阅）立即重新拉一次清单。
+   *
+   * 发现失败时 host 只对**暂时性**归因（连不上 / 超时 / 上游 5xx）做有限次退避重试，
+   * 且绝不无限轮询；地域拒绝、凭证被拒等确定性答复一次都不重试。所以自动重试停手后，
+   * 用户仍需要一个「立刻再试一次」的入口：设置页在失败态下渲染「重试」，点了走这条
+   * 通道，并重新开启一轮退避。返回查询型结构化结果 { ok, failure? }（规则 13 例外条款：
+   * renderer 要按 failure.kind 渲染分类文案）。只读、无密钥材料。
+   *
+   * **本通道自身不广播**：列表刷新由发现流程内部收口——成功经 active-catalog 的
+   * markChanged、失败经 setAnthropicDiscoveryFailureListener。handler 再广播一次只会让
+   * renderer 白 refetch 一遍。
+   */
+  PROVIDER_MODELS_REDISCOVER: 'maker:provider:models-rediscover',
   // Scheduler (Phase 4) — 9 个 invoke handler，对应 Scheduler 公共 API
   SCHEDULE_LIST: 'maker:schedule:list',
   SCHEDULE_GET: 'maker:schedule:get',

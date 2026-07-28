@@ -81,6 +81,29 @@ export const DL_VOICE_CREDENTIAL_SYNC_CHANNEL = 'device-link:voice:credential-sy
 export const DL_VOICE_DICTIONARY_LEARNING_CHANNEL = 'device-link:voice:dictionary-learning';
 
 /**
+ * 手机端拉取被控桌面的语音词典快照(只读)。
+ *
+ * 桌面之间的词典靠 push 帧对等同步,但手机在后台不维持 WebSocket、收不到 push,
+ * 所以改为需要时主动拉一份。返回的是**只读投影**:词条文本 + 频次 + 别名,外加一个
+ * 版本向量(`stateVector`)供手机判断多台电脑的快照谁包含谁。化身、墓碑、抑制项、
+ * 时钟都不外泄 —— 手机不参与合并,不持有可写状态,避免移动端词典分叉。
+ *
+ * 符合准入判据:不依赖 event.sender、无本机 UI 副作用、词典真相在被控端。
+ *
+ * ## 已知限制:与电脑之间的同步不一致
+ *
+ * invoke 属于 relay 的 CONTROL_KINDS,转发前会校验目标的 remoteControlEnabled;
+ * 而电脑之间的词典同步走 push,不受该开关限制。结果是同一个功能有两套前提:用户
+ * 开了「词典同步」后电脑之间就通了,手机却还要额外打开「允许同账号设备控制本机」
+ * ——那个开关的语义是「允许别人操作我」,和「读一份词典」并不对应,用户撞上时基本
+ * 猜不到该去开什么。
+ *
+ * 后续可改为推送:桌面在 presence 看到手机上线时主动 push 只读投影,零配置且与
+ * 电脑之间同一条通道;本 channel 保留作为手机主动刷新的兜底。
+ */
+export const DL_VOICE_DICTIONARY_GET_CHANNEL = 'device-link:voice:dictionary:get';
+
+/**
  * M3 核心集:远程会话全生命周期(新建/发消息/事件流/审批/中断/运行时切换)+ 基础读模型。
  * M4 将扩展 scheduler / orca worker / rewind / usage 等完整控制面。
  */
@@ -208,6 +231,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   DL_VOICE_CREDENTIAL_SYNC_CHANNEL,
   // voice dictionary learning evidence 回写(被控端 dispatch 拦截执行,不落 ipcMain handler)。
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
+  // 手机拉取被控桌面的词典只读快照(被控端 dispatch 拦截执行,不落 ipcMain handler;
+  // 老被控端不识别时回 CHANNEL_NOT_ALLOWED,手机据此回退到「无词典」而不是报错)。
+  DL_VOICE_DICTIONARY_GET_CHANNEL,
 ];
 
 /**

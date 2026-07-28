@@ -21,6 +21,7 @@
  * - User-initiated stopSession (NOT called on session switch anymore)
  */
 
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { applyCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
 import type { MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
@@ -88,6 +89,7 @@ import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
 import {
+  parseIssueEnvRegion,
   parseIssueSubmissionIdentity,
   type IssueSubmissionIdentity,
 } from '@/lib/issueConfirmPayload';
@@ -116,7 +118,7 @@ const log = createLogger('CcAgentChatStore');
 // + setState),用于会话切换卡顿归因;<30ms 不打,避免噪音。
 const perfLog = createLogger('perf/session-switch');
 export const EMPTY_TASK_UPDATES: ReadonlyMap<string, AgentTaskUpdate> = new Map();
-/** Max consecutive auto auth-retries per remote session before surfacing the error. */
+/** Max consecutive legacy CC/XD auto auth-retries per remote session before surfacing the error. */
 const MAX_REMOTE_AUTH_RETRIES = 2;
 /** Bound best-effort main-side /clear guard arming so local cleanup cannot hang forever. */
 const CLEAR_SESSION_GUARD_TIMEOUT_MS = 500;
@@ -359,7 +361,7 @@ export interface ChatMessage {
   /** F-MSG-DOC: document/file attachments (path) for rendering as @path in message stream */
   files?: Array<{ name: string; path: string }>;
   /**
-   * Remote auth-retry / cc-mgr upgrade retry payload: the original send's
+   * Legacy CC/XD remote auth-retry / cc-mgr upgrade retry payload: the original send's
    * attachments + mentions, kept on the user message so an auto-retry (or the
    * UpgradeBanner resend) can replay the exact same turn. Set at send time,
    * not persisted to the server.
@@ -572,8 +574,18 @@ export interface PendingPlanReview {
 export interface PendingIssueConfirm {
   requestId: string;
   draft: { title: string; body: string; type: 'bug' | 'feature' };
-  /** 只读展示的环境信息(main 会附进 issue body)。 */
-  env: { appVersion: string; platform: string; arch: string; osVersion: string };
+  /**
+   * 只读展示的环境信息(main 会附进 issue body)。`region` 是本构建的区域身份
+   * (中国版 / 国际版 / 开发版);main 侧 payload 未带时按 undefined 处理,卡片
+   * 省略该段而不是猜一个区域。
+   */
+  env: {
+    appVersion: string;
+    platform: string;
+    arch: string;
+    osVersion: string;
+    region?: CindyRegion;
+  };
   /** main 已经选定、确认后不会自动切换的实际 GitHub 作者身份。 */
   submissionIdentity: IssueSubmissionIdentity;
 }
@@ -2159,22 +2171,17 @@ export function handleStreamEvent(
         };
       }
 
-      // stage === 'redacted' —— 落库已收口 main(onThinkingEvent),renderer 只做 UI。
-      return {
-        ...state,
-        messages: [
-          ...state.messages,
-          {
-            clientId: data.blockId,
-            role: 'thinking',
-            content: '',
-            isStreaming: false,
-            thinkingRedacted: true,
-            createdAt: new Date().toISOString(),
-            ...assistantMetaFields,
-          },
-        ],
-      };
+      // stage === 'redacted' —— 加密推理不进渲染列表。
+      //
+      // 这类块没有任何明文可读,卡片只能显示"无法显示的思考过程";上游(如 Grok 开了
+      // 服务端搜索)一轮能产出十几条,会把真实产出淹掉。落库仍由 main(onThinkingEvent)
+      // 照旧收口、encrypted_content 也不受影响(回放走 agent 侧 transcript,不依赖这里),
+      // 这里只是不展示。恢复展示 = 删掉这个提前 return,并同步 mapServerMessages 的同名过滤。
+      //
+      // 不展示 ≠ 丢事件:仍按本函数开头的不变量刷新 lastAgentMeta(带 agentMeta 的事件都要刷,
+      // mid-turn 抢救 assistant 累积流时拿它当 fallback)。否则这条事件携带的 model /
+      // parentUuid 会被静默吞掉。
+      return incomingMeta ? { ...state, lastAgentMeta: incomingMeta } : state;
     }
 
     case 'agent_task_update': {
@@ -3463,7 +3470,7 @@ function initGlobalListeners(): void {
     // parent_tool_use_id / sdkSessionId / model / ... 提取并塞在 event 顶层, 这里把它转到
     // CCAgentStreamEvent.agentMeta 让 handleStreamEvent 落库 messages.agent_meta 行,
     // fork / rewind 反向找 prior assistant 锚点要靠这个字段。
-    // Remote auth-retry: 在 reducer 写 error 之前拦截,避免 error banner 闪烁。
+    // Legacy CC/XD remote auth-retry: 在 reducer 写 error 之前拦截,避免 error banner 闪烁。
     if (event.type === 'error') {
       const errData =
         (event.data as { sdkError?: string; message?: string; errorStatus?: number }) ?? {};
@@ -3476,6 +3483,7 @@ function initGlobalListeners(): void {
       if (
         isAuthError &&
         preSnap.remoteHostId &&
+        preSnap.agentKind === 'claude-code' &&
         !preSnap._authRetryInFlight &&
         authRetryCount < MAX_REMOTE_AUTH_RETRIES
       ) {
@@ -3576,13 +3584,22 @@ function initGlobalListeners(): void {
         }
       }
       // guard fall-through（cap 超限 / 已重试同消息）：重试不会发生。
-      // main 侧对所有 remote auth error 均跳过持久化；在此补落。
+      // 仅 legacy CC/XD 在此补落：main 侧只对 CC remote auth error 跳过持久化
+      // （isRemoteAuthRetryErrorEvent 对 codex 直接返回 false），由这里的 deferred
+      // IPC 兜底。Codex remote auth error 在 main 侧走正常 onTurnErrorEvent 热路径
+      // 落库；这里再落会双写——Codex 事件无 agentMeta，main 又在广播后 reset turn
+      // 身份，两次落库的 dedup key 对不上，重开会话会出现重复错误卡。
       // 限制仅当 preSnap.remoteHostId 已加载时才触发：
       //   - 对于已加载的远程会话，能确认无 retry 在途，可安全落库。
       //   - 对于从未打开的后台会话（remoteHostId 为 null），无法判断另一个窗口
       //     是否正在 retry；贸然落库若 retry 成功会留下虚假错误卡，不落库则
       //     等价于旧行为（重启后错误丢失）—— 保守起见不做 deferred。
-      if (isAuthError && preSnap.remoteHostId && !preSnap._authRetryInFlight) {
+      if (
+        isAuthError &&
+        preSnap.remoteHostId &&
+        preSnap.agentKind === 'claude-code' &&
+        !preSnap._authRetryInFlight
+      ) {
         void makerApiFor(sessionId).input.persistTurnErrorDeferred(
           sessionId,
           event.data as Record<string, unknown> | null,
@@ -3788,9 +3805,16 @@ function initGlobalListeners(): void {
       // ephemeral 卡片(同 permission 语义,无 persistId 不落库),直接写 state,
       // 不走 handleStreamEvent —— 它不属于 agent 事件流。
       const draft = request.draft as PendingIssueConfirm['draft'] | undefined;
-      const env = request.env as PendingIssueConfirm['env'] | undefined;
+      // region 必须先 Omit 掉再重建成 unknown:交叉类型做不到这件事
+      // (`CindyRegion & unknown` 仍是 `CindyRegion`),那样写会让 TS 以为 IPC 传来的
+      // region 已经是合法值,下面的白名单校验看着像在校验、实际没有类型层面的约束。
+      const rawEnv = request.env as
+        | (Omit<PendingIssueConfirm['env'], 'region'> & { region?: unknown })
+        | undefined;
       const submissionIdentity = parseIssueSubmissionIdentity(request.submissionIdentity);
-      if (!draft || !env || !submissionIdentity) return;
+      if (!draft || !rawEnv || !submissionIdentity) return;
+      // region 过一遍白名单:非法值宁可不展示区域,也不能把 CN 版说成默认版。
+      const env = { ...rawEnv, region: parseIssueEnvRegion(rawEnv.region) };
       setState(sessionId, (s) => ({
         ...s,
         pendingIssueConfirm: {
@@ -4435,7 +4459,10 @@ function initGlobalListeners(): void {
       } | null;
       if (!p || typeof p.name !== 'string') return;
       if (typeof p.sessionId !== 'string' || typeof p.url !== 'string') return;
-      void openUrlInSidebarBrowser(p.sessionId, p.url).catch(() => {
+      // userInitiated:false —— 这是插件在后台干完活自己要求开的页,不是用户点的。
+      // 标签照常落地、内容照常加载,但不得把侧边栏子窗口抢到前台打断用户
+      // (detached 形态 + Windows 上 focus() 即抢前台)。
+      void openUrlInSidebarBrowser(p.sessionId, p.url, { userInitiated: false }).catch(() => {
         /* 标签落地失败(会话桶异常等)不致命,静默 */
       });
       toast.info(i18n.t('chat.ghostPreview.opened'), {
@@ -5112,12 +5139,16 @@ function ensureInitialMessages(sessionId: string): void {
         return;
       }
 
-      // orphan-tool_result-backfill: 初始页若全是 tool_result 行,它们的
-      // 配对 tool_use 父消息位于更老的位置(不在本页中)。MessageStream
-      // 会丢弃所有 orphan tool_result —— 结果是 DB 里有 2000+ 条消息,
-      // 重启后 ChatView 渲染 0 项,看起来"内容消失了"。
-      // 这里继续往前翻页,直到出现非 tool_result 行(可渲染锚点)或翻完。
-      // 上限 10 页(500 行)防御异常长的连续 tool_result 队列。
+      // no-anchor-backfill: 初始页若全是"渲染后不留可见锚点"的行,映射结果就是空列表,
+      // 而 MessageStream 在 visibleRenderItems.length === 0 时不触发自动翻页 —— 结果是
+      // DB 里有 2000+ 条消息,重启后 ChatView 渲染 0 项,看起来"内容消失了"。
+      // 两类命中(见 isNonAnchorHistoryRow):
+      //   - 全是 tool_result:配对的 tool_use 父消息在更老的页里,orphan 会被丢弃;
+      //   - 全是被隐藏的 thinking 行:如一轮搜索密集、在产出可见正文前就失败的会话,
+      //     最新 50 行可能全是加密推理;
+      //   - 合成指令行:渲染 null,混在上面两类里同样撑不出可见锚点。
+      // 这里继续往前翻页,直到出现可渲染锚点或翻完。
+      // 上限 10 页(500 行)防御异常长的连续无锚点队列。
       let merged: Message[] = existing;
       let oldestRow = oldestMessageRow(merged, 'newest-first');
       if (!oldestRow) {
@@ -5136,7 +5167,7 @@ function ensureInitialMessages(sessionId: string): void {
       while (
         hasMore &&
         pagesFetched < MAX_BACKFILL_PAGES &&
-        merged.every((m) => m.role === 'tool_result')
+        merged.every(isNonAnchorHistoryRow)
       ) {
         pagesFetched += 1;
         try {
@@ -5152,7 +5183,7 @@ function ensureInitialMessages(sessionId: string): void {
           oldestRow = oldestMessageRow(merged, 'newest-first') ?? oldestRow;
           hasMore = serverMessagePageHasMore(older);
         } catch (err) {
-          log.warn('orphan-tool_result backfill failed', err);
+          log.warn('no-anchor history backfill failed', err);
           break;
         }
       }
@@ -8041,6 +8072,8 @@ export const makerChatStore = {
   __hydratePersistedMessageForTest: hydratePersistedMessage,
   /** Exposed for tests only. */
   __mapServerMessagesForTest: mapServerMessages,
+  /** Exposed for tests only: 历史初始页 backfill 的"无可见锚点"判定。 */
+  __isNonAnchorHistoryRowForTest: isNonAnchorHistoryRow,
   /** Exposed for tests only. */
   __mergeMessagesForTest: mergeMessages,
   /** Exposed for tests only. */
@@ -8292,6 +8325,47 @@ function isSyntheticTriggerRow(m: Message): boolean {
   return false;
 }
 
+/**
+ * 该 thinking 服务端行是否**不进渲染列表**(DB 行照旧保留,只是不展示)。
+ *
+ * 两类:
+ *   - `isRedacted` 加密推理:没有任何明文可读,卡片只能显示"无法显示的思考过程",对用户是
+ *     纯噪音;上游开服务端工具后一轮能出十几条,会淹掉真实产出。与 live 路径
+ *     (handleStreamEvent 的 stage==='redacted')同判定。
+ *   - omitted-display 占位行(空文本 + 0 时长,非 redacted):不复原成 "Thought for 1s" 卡片。
+ *     上游恢复明文下发后新数据自然不再命中。
+ *
+ * 单一来源:mapServerMessages 的过滤与 `isNonAnchorHistoryRow` 的 backfill 判定都用它,
+ * 避免"过滤掉了却没触发补页"这类漂移。将来要恢复展示某一类,只改这里。
+ */
+function isHiddenThinkingRow(m: Message): boolean {
+  if (m.role !== 'thinking' || !m.content || typeof m.content !== 'object') return false;
+  const c = m.content as Record<string, unknown>;
+  if (c.isRedacted === true) return true;
+  const text = typeof c.text === 'string' ? c.text : '';
+  const durationMs = typeof c.durationMs === 'number' ? c.durationMs : 0;
+  return isOmittedThinkingPlaceholder(text, durationMs);
+}
+
+/**
+ * 该服务端行**渲染后不会留下可见锚点**(初始页全是这类行时必须继续往前翻页)。
+ *
+ * 三类:
+ *   - `tool_result`:配对的 tool_use 父消息可能在更老的页里,MessageStream 会丢弃 orphan;
+ *   - 被 `isHiddenThinkingRow` 过滤掉的行:直接不进渲染列表;
+ *   - 合成指令行(`isSyntheticTriggerRow`):MessageStream 渲染 null、content 置空,
+ *     与 `loadOlderMessages` 的可见锚点判定同口径(见该处「合成指令行渲染 null,不算可见
+ *     锚点」)。少了这一类,一页里只要混进一条合成 user 行就会被当成锚点提前停止回填,
+ *     而它映射后同样不产生可见内容 —— 症状与完全不回填一样。
+ *
+ * 任何组合占满整页,都会让映射结果为空,而 MessageStream 在 `visibleRenderItems.length === 0`
+ * 时不触发自动翻页 —— 结果是 DB 里有几千条消息、重开会话却渲染 0 项,更老的用户/助手消息
+ * 再也拉不回来。
+ */
+function isNonAnchorHistoryRow(m: Message): boolean {
+  return m.role === 'tool_result' || isHiddenThinkingRow(m) || isSyntheticTriggerRow(m);
+}
+
 function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   // Build per-clientId createdAt lookup so we can patch it onto every
   // mapped ChatMessage uniformly (each branch below builds a different
@@ -8304,19 +8378,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   const remoteRowsTrimmedById = new Map(
     serverMsgs.map((m) => [m.clientId, m.agentMeta?.remoteRowsTrimmed === true]),
   );
-  const filtered = serverMsgs.filter((m) => {
-    // 历史里的 omitted-display thinking 占位行(空文本 + 0 时长,非 redacted)
-    // 与 live 路径同判定,不复原成 "Thought for 1s" 卡片。DB 行保留不动,
-    // 上游恢复明文下发后新数据自然不再命中。
-    if (m.role === 'thinking' && m.content && typeof m.content === 'object') {
-      const c = m.content as Record<string, unknown>;
-      const text = typeof c.text === 'string' ? c.text : '';
-      const durationMs = typeof c.durationMs === 'number' ? c.durationMs : 0;
-      if (c.isRedacted !== true && isOmittedThinkingPlaceholder(text, durationMs)) return false;
-      return true;
-    }
-    return true;
-  });
+  const filtered = serverMsgs.filter((m) => !isHiddenThinkingRow(m));
   const ordered = filtered.sort(compareMessageTimeline);
   const legacyUserTurnCosts = projectLegacyUserTurnCosts(ordered);
   const mapped = ordered.map((m) => {

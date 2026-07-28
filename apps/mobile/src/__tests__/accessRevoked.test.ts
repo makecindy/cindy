@@ -90,3 +90,40 @@ describe('mobile device-link access revocation', () => {
     expect(revokedDevicesStore.has('dev-1')).toBe(false);
   });
 });
+
+describe('撤权与「设备无响应」熔断的竞态(review P1)', () => {
+  it('markDeviceAccessRevoked 清掉该设备的熔断状态与 UI 镜像', async () => {
+    const { acquireDeviceSendSlot, settleDeviceSend, unresponsiveDevicesStore } =
+      await import('@/device-link/unresponsiveDevicesStore');
+    const { markDeviceAccessRevoked, clearDeviceAccessRevoked } =
+      await import('@/device-link/accessRevoked');
+    const dev = 'revoke-breaker-dev';
+    clearDeviceAccessRevoked(dev);
+    for (let i = 0; i < 3; i++) {
+      const probe = acquireDeviceSendSlot(dev);
+      settleDeviceSend(dev, probe, 'timeout');
+    }
+    expect(unresponsiveDevicesStore.has(dev)).toBe(true);
+
+    markDeviceAccessRevoked(dev);
+    expect(unresponsiveDevicesStore.has(dev)).toBe(false);
+    clearDeviceAccessRevoked(dev);
+  });
+
+  it('已撤权设备的在途超时降级为不定论,不再把熔断重新打开', async () => {
+    const { acquireDeviceSendSlot, settleDeviceSend, unresponsiveDevicesStore } =
+      await import('@/device-link/unresponsiveDevicesStore');
+    const { markDeviceAccessRevoked, clearDeviceAccessRevoked } =
+      await import('@/device-link/accessRevoked');
+    const dev = 'revoke-race-dev';
+    clearDeviceAccessRevoked(dev);
+    markDeviceAccessRevoked(dev);
+    // link-close(revoked) 后,撤权前发出的在途请求陆续超时——不应计入熔断
+    for (let i = 0; i < 5; i++) {
+      const probe = acquireDeviceSendSlot(dev);
+      settleDeviceSend(dev, probe, 'timeout');
+    }
+    expect(unresponsiveDevicesStore.has(dev)).toBe(false);
+    clearDeviceAccessRevoked(dev);
+  });
+});

@@ -25,7 +25,9 @@ import path from 'node:path';
 import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
 
 import { createMakerLogger } from './logger-adapter.js';
+import { outboundFetch } from './outbound-fetch.js';
 import { getGrokAccessToken } from './grok-oauth-login.js';
+import { invalidateXaiBridgeAuth } from './xai-auth-invalidation-host.js';
 import { chatgptAccountIdFromIdToken, desktopCodexAuthAdapter } from './auth-adapters.js';
 import {
   bearerAccessTokenFromHeaders,
@@ -33,6 +35,7 @@ import {
 } from './chatgpt-bridge-auth-invalidation.js';
 import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
+import { xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 
 const log = createMakerLogger('cc-bridge');
@@ -130,7 +133,7 @@ async function refreshIfNeeded(authPath: string, current: CodexAuthFile): Promis
     log.info('bridge 兜底刷新 codex access_token', { last_refresh: fresh.last_refresh });
     // 必须带超时:本 fetch 在 _refreshChain mutex 内,undici 默认 headersTimeout 5 分钟,
     // auth.openai.com 挂起会让所有排队的 chatgpt/ 请求一起卡住。超时走 catch → 本次用旧 token。
-    const res = await fetch(OPENAI_TOKEN_URL, {
+    const res = await outboundFetch(OPENAI_TOKEN_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -279,12 +282,22 @@ function xaiProviderConfig(): BridgeProviderConfig {
     maxOutputTokensSupported: true,
     // grok-code-fast / grok-build 系列不支持 reasoningEffort(实测 400),其余 grok 模型支持。
     supportsReasoning: (model) => !(model.startsWith('grok-code') || model.startsWith('grok-build')),
+    // Grok 的 X 实时视野来自 xAI 服务端工具 x_search:不声明就搜不了 X(见 xai-server-side-tools.ts)。
+    serverSideTools: xaiServerSideTools,
     buildHeaders: async () => ({
       authorization: `Bearer ${await getGrokAccessToken()}`,
     }),
     // api.x.ai 无 ChatGPT 那种订阅窗口端点;尽力抓响应头 x-ratelimit-* 给底部 chip 展示,
     // 拿不到(上游不返头)则 renderer 诚实降级为仅价值估算。
     onRateLimit: (info) => recordXaiRateLimitSnapshot(info),
+    // 上游判定 OAuth 凭证失效时收口本地登录态。缺这一步的话:token 被服务端提前作废后
+    // 本地 expires_at 仍未到期 → 永不刷新 → 每次请求都 403,而「设置 → 模型供应商」还
+    // 一直显示已连接,用户没有任何线索该去重连。
+    onUpstreamError: async ({ status, body, requestHeaders }) => {
+      const failedAccessToken = bearerAccessTokenFromHeaders(requestHeaders);
+      if (!failedAccessToken) return;
+      await invalidateXaiBridgeAuth({ status, body, failedAccessToken });
+    },
   };
 }
 
@@ -301,6 +314,9 @@ export function getResponsesBridgeHandler(): ResponsesBridgeHandler | null {
     _handler = createResponsesHandler({
       providers: [codexProviderConfig(), xaiProviderConfig()],
       logger: log,
+      // 订阅直连的上游(chatgpt.com / api.x.ai)由 handler 自己发出,不经 compat-proxy
+      // 的转发层,拿不到那边的出站代理;必须显式注入(见 outbound-fetch.ts)。
+      fetchImpl: outboundFetch,
     });
   } catch (err) {
     _handler = null;

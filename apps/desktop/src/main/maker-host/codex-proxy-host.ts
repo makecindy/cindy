@@ -59,9 +59,12 @@ import {
 import { getSessionProvider } from './session-provider-store.js';
 import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
+import { createXaiProxyAuthInvalidationObserver } from './xai-auth-invalidation-host.js';
+import { xaiServerSideTools } from './xai-server-side-tools.js';
 import { encryptedStripController, imageGenerationStripController } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
+import { outboundFetch } from './outbound-fetch.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
@@ -291,7 +294,9 @@ function createChatBridgeDecision(
     rewriteModel: (model: string) => rewriteChatBridgeModel(model, stripPrefix),
     capabilities,
     ...(onUpstreamError ? { onUpstreamError } : {}),
-  }, { logger: log });
+    // localHandler 分支的上游请求由 chat bridge 自己发,绕开了 compat-proxy 转发层的
+    // 出站代理;显式注入代理感知 fetch(见 outbound-fetch.ts)。
+  }, { logger: log, fetchImpl: outboundFetch });
   return {
     localHandler: ({ rawBody, parsedBody, res }) => {
       let body = parsedBody;
@@ -637,6 +642,52 @@ function sanitizeXaiTools(body: Record<string, unknown>): Record<string, unknown
 }
 
 /**
+ * 给 xAI 会话恒定补上 xAI 的服务端搜索工具(当前是 `x_search`,Grok 原生搜 X)。
+ *
+ * Codex 自己只会声明 OpenAI 系的内建工具,不知道 xAI 还有 x_search;不补的话用户选了
+ * Grok 也拿不到 X 的实时视野(见 xai-server-side-tools.ts)。补在**已有 tools 末尾**:
+ * 位置固定 + 只由 model 决定 → 同一会话逐轮请求的 tools 列表恒定,不破坏前缀稳定性。
+ * 上游已经带了同名工具(用户/Codex 自己声明过)则原样保留,不重复也不覆盖其参数。
+ *
+ * `tool_choice:'required'`(必须调用所提供工具之一)的处理与 bridge 侧同口径:required 作用于
+ * 整个 tools 数组,附加服务端工具后模型可能用 x_search 顶替调用方强制要的 function call。
+ * 这里同样**不**因此摘掉工具声明(那会让 tools 前缀在会话中途变动),而是在能精确表达时把
+ * tool_choice 收窄成指名唯一那个 function;有多个 function tool 时 Responses 无法表达
+ * 「required 但只限这几个」,保留 required 并接受该残余风险。
+ */
+function narrowXaiForcedToolChoice(
+  body: Record<string, unknown>,
+  tools: unknown[],
+): Record<string, unknown> | null {
+  if (body.tool_choice !== 'required') return null;
+  const functionTools = tools.filter(
+    (tool) => isPlainObject(tool) && tool.type === 'function' && typeof tool.name === 'string',
+  );
+  if (functionTools.length !== 1) return null;
+  const only = functionTools[0] as Record<string, unknown>;
+  return { ...body, tool_choice: { type: 'function', name: only.name } };
+}
+
+function ensureXaiServerSideTools(body: Record<string, unknown>): Record<string, unknown> | null {
+  const realModel = xaiRealModelId(body.model);
+  if (!realModel) return null;
+  const serverTools = xaiServerSideTools(realModel);
+  if (serverTools.length === 0) return null;
+
+  const existing = Array.isArray(body.tools) ? body.tools : [];
+  const declaredTypes = new Set(
+    existing.map((tool) => (isPlainObject(tool) && typeof tool.type === 'string' ? tool.type : '')),
+  );
+  const missing = serverTools.filter((tool) => !declaredTypes.has(tool.type));
+  // 工具已齐时仍要判 tool_choice 收窄:x_search 可能是上游自己声明的。
+  const nextTools = missing.length > 0 ? [...existing, ...missing] : existing;
+  const withTools = missing.length > 0 ? { ...body, tools: nextTools } : body;
+  const narrowed = narrowXaiForcedToolChoice(withTools, nextTools);
+  if (narrowed) return narrowed;
+  return missing.length > 0 ? withTools : null;
+}
+
+/**
  * ByteDance Seed accepts standard function tools and web search. Codex also
  * emits namespaced and other built-in descriptors that Volcengine rejects
  * before the request reaches the model. Its web-search descriptor must also
@@ -921,6 +972,14 @@ function createXaiResponsesCompatTransform(): RequestTransform {
     const withSanitizedTools = sanitizeXaiTools(current);
     if (withSanitizedTools) {
       current = withSanitizedTools;
+      changed = true;
+    }
+
+    // 补服务端工具排在 sanitize 之后:先按 xAI schema 清掉 Codex 专属工具,再追加 x_search,
+    // 保证注入项不会被同一轮的裁剪逻辑改形或丢掉。
+    const withServerSideTools = ensureXaiServerSideTools(current);
+    if (withServerSideTools) {
+      current = withServerSideTools;
       changed = true;
     }
 
@@ -1411,8 +1470,9 @@ export async function ensureCodexProxyReady(): Promise<void> {
         upstream: () => buildCodexGatewayBaseUrl(),
         transformRequest: createTransformRequestChain(),
         routingTransform: createModelRoutingTransform(),
-        // 组合两个只读观察器:service-tier 抽取 + 自定义供应商上游错误分类广播
-        // (后者仅 status≥400 且会话路由到 user 供应商时才 tee,成功路径零开销)。
+        // 组合三个只读观察器:service-tier 抽取 + 自定义供应商上游错误分类广播 + xAI 凭证
+        // 失效收口(后两者分别仅在 status≥400 路由到 user 供应商、401/403 且上游为 api.x.ai
+        // 时才 tee,成功路径零开销)。
         responseObserver: composeResponseObservers(
           createCodexResponseObserver(),
           createProviderUpstreamErrorObserver({
@@ -1425,6 +1485,9 @@ export async function ensureCodexProxyReady(): Promise<void> {
             resolveUserProviderName: (providerId) =>
               getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,
           }),
+          // xai 是 builtin 来源,上面那个 observer 的 user-only 语义覆盖不到它;订阅 OAuth
+          // 被上游作废后必须有人收口,否则 codex agent 下会连环 403 而 UI 仍显示已连接。
+          createXaiProxyAuthInvalidationObserver(),
         ),
         maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
         // 请求体 dump 默认关(dev trace 级别 + agent 高并发会刷爆 main event loop

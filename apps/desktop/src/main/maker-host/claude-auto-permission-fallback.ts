@@ -124,13 +124,11 @@ export function createClaudeAutoClassifierFailureObserver(
   resolveSessionId: (sdkSessionId: string) => string | null,
 ): ResponseObserver {
   return (ctx: ResponseObserverCtx) => {
-    // 分类器请求的任何错误响应都意味着这一轮没拿到 verdict、CLI 会 fail-closed 把工具拦下,
-    // 一律当作「分类器不可用」触发降级——不再限于 429/5xx:
-    //   - 429 限流 / 5xx 服务故障(过载、宕机);
-    //   - 4xx 模型/参数层不可用(404 模型不存在、400 参数被拒、401/403 鉴权失效)。
-    // 降级到 ask 是安全方向(把 auto 收紧成人工授权,绝不放宽),瞬时 4xx 造成的单向降级
-    // 用户随时可手动切回 auto;coordinator 侧仍会复核持久态为 auto 并按 session 去重。
-    if (ctx.status < 400) return undefined;
+    // 分类器错误本身仍由 Claude Code fail-closed 为人工审批。这里只决定是否触发降级协调器：
+    // 限流/过载/上游故障等瞬时错误直接短路，不切 runtime、不持久化 ask、也不广播降级。
+    if (ctx.status < 400 || ctx.status === 408 || ctx.status === 429 || ctx.status >= 500) {
+      return undefined;
+    }
     const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
     if (!sdkSessionId) return undefined;
     const sessionId = resolveSessionId(sdkSessionId);
