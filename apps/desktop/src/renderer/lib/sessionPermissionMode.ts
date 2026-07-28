@@ -46,17 +46,32 @@ export type PermissionModeChangeOutcome =
 const desyncedSessions = new Set<string>();
 
 /**
- * 失配标记必须**活过 renderer reload**:agent 在 main 侧,崩溃恢复页(AppCrashScreen)
- * 重载 renderer 时它照常活着并保持在新档。只存内存的话,重载后标记没了、DB 仍是旧档,
- * 用户重选显示中的那一档又被同档短路吃掉 —— Full access 就此静默留存且无恢复路径。
- * 所以内存 Set 之外再落一份 localStorage(读取时取并集,写入成功时两处一起清)。
+ * 失配标记的存活期要**正好卡在两条线之间**,用 sessionStorage 落盘:
+ *
+ * - **必须活过 renderer reload**。agent 在 main 侧,崩溃恢复页(AppCrashScreen)走的是
+ *   `window.location.reload()`,页面重来而 agent 照常活着、仍停在新档。只存内存的话
+ *   重载后标记就没了、DB 又是旧档,用户重选显示中的那一档会被同档短路吃掉 ——
+ *   Full access 静默留存且无恢复路径。sessionStorage 在同一 browsing context 内
+ *   跨 reload 保留,正好覆盖这条。
+ * - **不能活过 Electron 重启**。整个应用重启后 agent runtime 也没了,下一个 runtime
+ *   直接按持久化的 DB 档位重建 —— 此刻 runtime 与 DB 本就一致,失配已不存在。标记若
+ *   还在(localStorage 就会),`isDesynced` 会继续绕过同档短路,用户在后来某张权限卡片
+ *   上点"当前已选中的档"就白调一次 setPermissionMode,把一条无关请求 dismiss 掉。
+ *   新窗口 = 新 browsing context,sessionStorage 自然清空,正好覆盖这条。
+ *
+ * 诚实说明近似:sessionStorage 绑的是**窗口**生命周期,不完全等于 agent runtime 的。
+ * 同一窗口内单个会话的 runtime 若被重建(close/reopen),标记会短暂滞留。要精确到
+ * runtime 需要 main 下发一个 runtime 世代 id 供比对,那是新增协议面;当前近似把风险
+ * 从"永久滞留"收窄到"本窗口内且用户一直没去对账",而 desynced 提示本身就在催对账,
+ * 对账一次即清除。
+ *
  * storage 不可用(隐私模式 / 测试环境)时静默退化为纯内存,不影响主流程。
  */
 const DESYNC_STORAGE_PREFIX = 'cindy:permission-mode-desync:';
 
 function desyncStorage(): Storage | null {
   try {
-    return typeof window !== 'undefined' ? (window.localStorage ?? null) : null;
+    return typeof window !== 'undefined' ? (window.sessionStorage ?? null) : null;
   } catch {
     return null;
   }

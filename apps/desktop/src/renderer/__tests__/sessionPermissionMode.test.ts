@@ -48,7 +48,7 @@ const confirmNever = vi.fn(async () => {
 // worker 进程内跨文件共享,用后必须还原,否则后跑的用例会捡到这个假 window。
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
 
-/** 失配标记要活过 renderer reload,所以模块会往 localStorage 落一份。 */
+/** 失配标记要活过 renderer reload、但不跨 Electron 重启,所以模块落在 sessionStorage。 */
 function createMemoryStorage(): Storage {
   const map = new Map<string, string>();
   return {
@@ -73,7 +73,7 @@ beforeEach(() => {
   storage = createMemoryStorage();
   (globalThis as unknown as { window: unknown }).window = {
     electronAPI: { maker: { setPermissionMode: localSetPermissionMode } },
-    localStorage: storage,
+    sessionStorage: storage,
   };
 });
 
@@ -201,7 +201,7 @@ describe('applySessionPermissionModeChange', () => {
   // agent 在 main 侧,renderer 崩溃恢复页会 reload 页面而它照常活着并保持在新档。
   // 失配标记只存内存的话,reload 后重选显示中的档又被同档短路吃掉 —— Full access
   // 就此静默留存且无恢复路径。
-  it('失配标记落 localStorage,活过 renderer reload', async () => {
+  it('失配标记落 sessionStorage,活过 renderer reload', async () => {
     const RELOAD_SESSION = 'perm-mode-survives-reload';
     sessionUpdate.mockRejectedValueOnce(new Error('db down'));
 
@@ -231,6 +231,44 @@ describe('applySessionPermissionModeChange', () => {
     expect(localSetPermissionMode).toHaveBeenCalledWith(RELOAD_SESSION, 'ask');
     // 对账成功后标记一并清掉。
     expect(storage.getItem(`cindy:permission-mode-desync:${RELOAD_SESSION}`)).toBeNull();
+  });
+
+  // Electron 整个重启后 agent runtime 也没了,下一个 runtime 直接按 DB 档位重建 ——
+  // 此刻 runtime 与 DB 本就一致,失配不存在。标记若还在(用 localStorage 就会),
+  // 后续在权限卡片上点"当前已选中的档"会白调一次 setPermissionMode,把一条无关请求
+  // dismiss 掉。sessionStorage 随新窗口清空,正好卡住这条边界。
+  it('失配标记不跨窗口存活:新 browsing context 下同档恢复短路', async () => {
+    const RESTART_SESSION = 'perm-mode-restart';
+    sessionUpdate.mockRejectedValueOnce(new Error('db down'));
+
+    await applySessionPermissionModeChange({
+      sessionId: RESTART_SESSION,
+      currentMode: 'ask',
+      nextMode: 'bypassPermissions',
+      confirmFullAccess: vi.fn(async () => true),
+      hasPendingInteraction: true,
+    });
+    expect(storage.getItem(`cindy:permission-mode-desync:${RESTART_SESSION}`)).toBe('1');
+
+    // 模拟 Electron 重启:模块内存态 + 窗口 sessionStorage 一起换新。
+    vi.resetModules();
+    const freshStorage = createMemoryStorage();
+    (globalThis as unknown as { window: unknown }).window = {
+      electronAPI: { maker: { setPermissionMode: localSetPermissionMode } },
+      sessionStorage: freshStorage,
+    };
+    const restarted = await import('@/lib/sessionPermissionMode');
+    localSetPermissionMode.mockClear();
+
+    const outcome = await restarted.applySessionPermissionModeChange({
+      sessionId: RESTART_SESSION,
+      currentMode: 'ask',
+      nextMode: 'ask',
+      confirmFullAccess: confirmNever,
+    });
+
+    expect(outcome).toBe('unchanged');
+    expect(localSetPermissionMode).not.toHaveBeenCalled();
   });
 
   it('运行时失败直接告败,不落库', async () => {
