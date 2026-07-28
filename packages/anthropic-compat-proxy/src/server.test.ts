@@ -1414,6 +1414,38 @@ describe('anthropic-compat-proxy empty-assistant-message recovery (moonshot/kimi
     expect(upstream.bodies).toHaveLength(2);
   });
 
+  it('also recovers when the stale assistant carries an empty text block instead of empty thinking', async () => {
+    // PR #821 review 实测反馈形态: bridge 清理路径的 text-only 空块。
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEmptyAssistantMessageRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'text', text: '' }] },
+        { role: 'user', content: 'continue' },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(JSON.parse(upstream.bodies[1]).messages).toHaveLength(2);
+  });
+
   it('decodes a gzip-encoded moonshot 400 and still triggers the retry', async () => {
     const upstream = await startFakeUpstream((idx, _body, res) => {
       if (idx === 0) {

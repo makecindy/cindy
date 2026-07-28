@@ -454,9 +454,12 @@ export function stripEmptyTextFromBody(rawBody: Buffer): Buffer | null {
  *
  * 处理(与 kimi code 官方客户端的兜底策略同构——发送出去的请求不允许带空 assistant):
  *   1. assistant 消息 content 为 string 且为空白 → 整条丢弃;
- *   2. assistant 消息 content 为数组:先剥空 thinking 块(判别式与
- *      stripEmptyThinkingFromBody 一致,有内容/签名空的块保留),剥完为空(含原生
- *      content:[])→ 整条丢弃;剥完仍有 text/tool_use → 保留净化后的消息。
+ *   2. assistant 消息 content 为数组:先剥空 thinking 块与空 text 块(判别式与
+ *      stripEmptyThinkingFromBody / stripEmptyTextFromBody 一致,有内容/签名空的块
+ *      保留),剥完为空(含原生 content:[])→ 整条丢弃;剥完仍有 text/tool_use →
+ *      保留净化后的消息。空 text 块一并剥的原因:moonshot 的 must-not-be-empty 校验
+ *      对 bridge 清理路径产出的 text-only 空块消息同样命中(PR #821 review 实测反馈),
+ *      只剥 thinking 会让该形态 strip 不出东西、重试被跳过,会话继续卡死。
  *   user 消息一律不动(线上命中的只有 assistant;user 空消息无实测证据,不扩散)。
  *
  * 安全性: 空消息不含任何对话信息,丢弃不改变语义;含 tool_use 的轮次剥完非空,
@@ -495,9 +498,9 @@ export function stripEmptyAssistantMessagesFromBody(rawBody: Buffer): Buffer | n
       keptMessages.push(msg); // 异常形态不猜,原样保留
       continue;
     }
-    const keptContent = content.filter((block) => !isEmptyThinkingBlock(block));
+    const keptContent = content.filter((block) => !isEmptyThinkingBlock(block) && !isEmptyTextBlock(block));
     if (keptContent.length === 0) {
-      changed = true; // 空壳(content:[] 或剥空 thinking 后为空)→ 整条丢弃
+      changed = true; // 空壳(content:[] 或剥空 thinking/空 text 后为空)→ 整条丢弃
       continue;
     }
     if (keptContent.length !== content.length) {

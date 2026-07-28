@@ -568,6 +568,50 @@ describe('stripEmptyAssistantMessagesFromBody', () => {
     expect(stripEmptyAssistantMessagesFromBody(body)).toBeNull();
   });
 
+  it('drops a text-only empty-block assistant message (bridge cleanup path shape)', () => {
+    // PR #821 review: bridge 清理路径产出的 text-only 空块同样命中 moonshot 空消息校验,
+    // 只剥 thinking 会让 strip 返回 null、重试被跳过。
+    const body = buf({
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'text', text: '' }] },
+        { role: 'user', content: 'continue' },
+      ],
+    });
+    const out = stripEmptyAssistantMessagesFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages).toHaveLength(2);
+    expect(parsed.messages.map((m: { role: string }) => m.role)).toEqual(['user', 'user']);
+  });
+
+  it('drops a mixed empty thinking + empty text assistant message, keeps real content siblings', () => {
+    const body = buf({
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: '', signature: '' },
+            { type: 'text', text: '' },
+          ],
+        },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: '' },
+            { type: 'text', text: 'real' },
+          ],
+        },
+      ],
+    });
+    const out = stripEmptyAssistantMessagesFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages).toHaveLength(1);
+    expect(parsed.messages[0].content).toEqual([{ type: 'text', text: 'real' }]);
+  });
+
   it('returns null for non-JSON / missing messages', () => {
     expect(stripEmptyAssistantMessagesFromBody(Buffer.from('not json', 'utf8'))).toBeNull();
     expect(stripEmptyAssistantMessagesFromBody(buf({ model: 'x' }))).toBeNull();
