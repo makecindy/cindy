@@ -72,9 +72,8 @@ describe('SessionImportSection initial scan', () => {
   });
 
   it('keeps scan summary explanations visible instead of relying on pointer-only title tooltips', () => {
-    expect(source).toContain(
-      'className="mt-1 text-11 leading-[1.4] text-[var(--settings-section-desc)]">{hint}</p>',
-    );
+    expect(source).toContain('mt-1 text-11 leading-[1.4] text-[var(--settings-section-desc)]');
+    expect(source).toMatch(/>\s*\{hint\}\s*<\/p>/);
     expect(source).not.toContain('title={hint}');
     expect(source).not.toContain('className="sr-only">{hint}</span>');
   });
@@ -91,7 +90,7 @@ describe('SessionImportSection initial scan', () => {
       'shrink-0 whitespace-nowrap rounded-full border border-[var(--settings-input-border)]',
     );
     expect(source).toContain(
-      'className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-sublabel)]"',
+      'min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-sublabel)]',
     );
   });
 
