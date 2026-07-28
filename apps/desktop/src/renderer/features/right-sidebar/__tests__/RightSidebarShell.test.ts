@@ -421,6 +421,24 @@ describe('RightSidebarShell empty state', () => {
     ).toBe('no-drag');
   });
 
+  it('does not reserve rail ChromeActions space in fullscreen', async () => {
+    installElectronApi(tabsIpc, true);
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+        railChromeActionsHitHole: true,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByTestId('right-sidebar-unified-topbar')).toBeTruthy());
+    expect(screen.queryByTestId('right-sidebar-rail-chrome-actions-hit-hole')).toBeNull();
+    expect(screen.queryByTestId('right-sidebar-rail-chrome-actions-spacer')).toBeNull();
+  });
+
   it('renders detach/maximize in the topbar when panel is docked left (mac M2), spacer when right or maximized', async () => {
     // 贴左:窗口右上浮层只剩折叠 toggle(恒钉窗口右上角,2026-07-09 Lizi 口径),
     // detach / maximize 是面板自属控件,必须由 Shell 顶栏右端自渲染,否则面板

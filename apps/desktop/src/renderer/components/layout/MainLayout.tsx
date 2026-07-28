@@ -54,6 +54,7 @@ import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
 import { useSidebarResize } from '@/hooks/useSidebarResize';
 import { useSidebarCardMode } from '@/hooks/useSidebarCardMode';
 import { useSidebarPeek } from '@/hooks/useSidebarPeek';
+import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import {
   useRightSidebarResize,
   RIGHT_SIDEBAR_AVAILABLE_WIDTH_FALLBACK,
@@ -345,6 +346,7 @@ export function MainLayout() {
     return undefined;
   }, [isDragging]);
   const isMac = window.electronAPI?.platform === 'darwin';
+  const { isFullscreen } = useMacFullscreen();
   const {
     open: noticeOpen,
     mode: noticeMode,
@@ -402,6 +404,8 @@ export function MainLayout() {
   // RightSidebar 的 unified topbar。peek 抽屉会强制退出 rail，不能沿用 rail 命中区。
   const hasRailChromeActions =
     !isSettingsRoute &&
+    isMac &&
+    !isFullscreen &&
     isRailMode &&
     !isSidebarCollapsed &&
     !sidebarPeek.isPeekVisible;

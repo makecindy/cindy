@@ -151,7 +151,9 @@ export function RightSidebarShell({
   // rail 邻位时浮动 ChromeActions 从工具面板左缘开始。命中洞保持 absolute
   // 对齐窗口坐标；另加正常流中的 spacer，把 TabStrip 推到按钮簇之后。
   const railChromeActionsSpacerWidth =
-    unifiedTopbar && railChromeActionsHitHole ? CHROME_ACTIONS_GEOMETRY.clusterWidth : 0;
+    unifiedTopbar && !isFullscreen && railChromeActionsHitHole
+      ? CHROME_ACTIONS_GEOMETRY.clusterWidth
+      : 0;
   const { t } = useTranslation();
 
   // RSB browser bridge (Phase 2):在 Shell 整个生命周期内只 init 一次。bridge 内部
@@ -390,7 +392,7 @@ export function RightSidebarShell({
           className="relative flex h-[46px] shrink-0 flex-none items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-2"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
-          {railChromeActionsHitHole && (
+          {!isFullscreen && railChromeActionsHitHole && (
             <div
               aria-hidden
               data-testid="right-sidebar-rail-chrome-actions-hit-hole"
