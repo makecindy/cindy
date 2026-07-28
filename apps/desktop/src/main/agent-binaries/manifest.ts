@@ -22,6 +22,21 @@ export interface VendorAsset {
 }
 
 /**
+ * version 会成为 userData 下的一层目录名，必须是单个、有限长度的安全 path segment。
+ * 这既阻断 manifest 通过 `../` / 分隔符逃逸安装根，也让后续 spawn 的命令路径只可能
+ * 指向受管目录（CodeQL js/command-line-injection）。
+ */
+function isSafeVersionDirectoryName(value: string): boolean {
+  return (
+    value.length > 0
+    && value.length <= 128
+    && value !== '.'
+    && value !== '..'
+    && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)
+  );
+}
+
+/**
  * 按 manifestField 字符串索引 manifest 顶层，提取 vendor binary 资产。
  *
  * - 字段缺失 / 类型错 → 返回 undefined（不抛错，让上层决定降级策略）
@@ -35,6 +50,7 @@ export function getVendorAsset(manifest: Manifest, manifestField: string): Vendo
   if (!raw || typeof raw !== 'object') return undefined;
   const obj = raw as Record<string, unknown>;
   if (typeof obj.version !== 'string') return undefined;
+  if (!isSafeVersionDirectoryName(obj.version)) return undefined;
   if (typeof obj.file !== 'string') return undefined;
   if (typeof obj.sha256 !== 'string') return undefined;
   if (typeof obj.size !== 'number') return undefined;

@@ -96,9 +96,9 @@ export function ImBotSection({
   const effectiveGroup = cindyGroupAvailable ? group : 'personal';
 
   return (
-    <div className="flex flex-col gap-2 px-1">
+    <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <h2 className="text-15 font-medium text-[var(--text-primary)]">
+        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
           {t('settings.sections.imBot')}
         </h2>
         <span className="rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">

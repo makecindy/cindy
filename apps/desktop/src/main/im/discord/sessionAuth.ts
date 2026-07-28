@@ -6,6 +6,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import { createLogger } from '../../logger';
 import { getMaker } from '../../maker-host';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
+import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { hasCustomProviderKey } from '../../maker-host/provider-route';
 import {
   resolveImSessionDefaults,
@@ -75,7 +76,13 @@ export async function checkDiscordSessionAuth(
 export function registerDiscordSessionAuthIpc(config: ImOrchestratorConfig): void {
   if (registered) return;
   registered = true;
-  ipcMain.handle(DISCORD_SESSION_AUTH_CHECK_CHANNEL, async () => checkDiscordSessionAuth(config));
+  ipcMain.handle(DISCORD_SESSION_AUTH_CHECK_CHANNEL, async (event) => {
+    // 这条通道读连接态时会放行本机绑定自愈(写绑定文件、协调 Codex 凭证硬链、发起带凭证的
+    // Anthropic 清单发现),不该被子 frame / WebView 触发。只有设置页会调它,不在 device-link
+    // allowlist 里,可以直接用会抛的守卫(PR #548 review)。
+    assertTrustedAppRendererEvent(event);
+    return checkDiscordSessionAuth(config);
+  });
 }
 
 function createDefaultAuthDeps(): ImAuthCheckDeps {
@@ -83,7 +90,7 @@ function createDefaultAuthDeps(): ImAuthCheckDeps {
     readXdGatewayApiKey,
     hasCustomProviderKey,
     getAgentAuthState: (agentKind) => getMaker().getAgentAuthState(agentKind),
-    listProviders: () => getDesktopProviderService().listProviders(),
+    listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: true }),
     warn: (message) => log.warn(message),
   };
 }

@@ -159,6 +159,22 @@ export function validateNewSessionDraft(
   return null;
 }
 
+/**
+ * 校验失败是否**仅**缺正文/附件(项目路径与模型均已通过)。
+ * 语音听写中「点创建 = 停录并用转写创建」的豁免判定:只有这一类失败会被
+ * 最终转写补上,才允许放行。结构化判定,与 validateNewSessionDraft 同模块
+ * 同顺序维护——不要在调用方比对本地化文案(locale 异步恢复时 memo 住的
+ * 旧语言文案与新 t() 输出不等,豁免会静默失效)。
+ */
+export function isNewSessionDraftMissingPayloadOnly(
+  draft: NewSessionDraft,
+  content: NewSessionDraftContentState = {},
+): boolean {
+  if (draft.workspaceKind === 'project' && !draft.workingDir.trim()) return false;
+  if (!draft.model.trim()) return false;
+  return !hasFirstMessagePayload(draft, content);
+}
+
 export function summarizeNewSessionDraft(
   draft: NewSessionDraft,
   content: NewSessionDraftContentState = {},

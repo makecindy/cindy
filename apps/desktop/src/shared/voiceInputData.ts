@@ -76,6 +76,23 @@ export interface VoiceInputSettings {
   refinementEnabled: boolean;
   refinementInstructions: string;
   autoDictionaryEnabled: boolean;
+  /**
+   * 是否在本账号的桌面设备之间自动同步词典(**有效值** = 默认 + 用户 override)。
+   *
+   * 刻意不复用 device-link 的「允许被控」开关:那个开关的语义是「允许别的设备操作
+   * 我这台电脑」,而词典同步是自己设备之间的数据流动,两者该分开决定。
+   *
+   * 读这个字段即可;写请走 {@link dictionarySyncEnabledOverride}。
+   */
+  dictionarySyncEnabled: boolean;
+  /**
+   * 用户对上面那个开关的显式选择;`undefined` = 从未自定义,跟随当前版本默认值。
+   *
+   * 按 `docs/dev-rules/configuration-and-overrides.md` §2,持久化只记录 override,
+   * 不把默认值固化进用户配置 —— 否则任何一次无关的设置保存都会把所有用户永久钉死
+   * 在当时的默认值上,以后改默认值也带不动他们,「恢复默认」也失去意义。
+   */
+  dictionarySyncEnabledOverride?: boolean | null;
   dictionaryEntries: VoiceInputDictionaryEntry[];
   dictionaryCandidates: VoiceInputDictionaryCandidate[];
   suppressedAutomaticDictionaryTexts: string[];
@@ -97,6 +114,9 @@ export type VoiceInputDictionaryLearningEvidence = Pick<
   DictationDictionaryAdviceInput,
   'source' | 'rawTranscriptText' | 'beforeText' | 'afterText' | 'context'
 >;
+
+/** 词典跨设备同步的系统默认值。改这里即可让未自定义的用户随版本跟随。 */
+export const DEFAULT_DICTIONARY_SYNC_ENABLED = true;
 
 export const MAX_VOICE_INPUT_REFINEMENT_INSTRUCTIONS_CHARS = 1_000;
 export const MAX_VOICE_INPUT_DICTIONARY_ENTRIES = 1_000;
@@ -405,6 +425,8 @@ export function getDefaultVoiceInputSettings(
     refinementEnabled: true,
     refinementInstructions: DEFAULT_VOICE_INPUT_REFINEMENT_INSTRUCTIONS,
     autoDictionaryEnabled: true,
+    // 有效值 = 默认;override 缺省不写(见 dictionarySyncEnabledOverride 注释)。
+    dictionarySyncEnabled: DEFAULT_DICTIONARY_SYNC_ENABLED,
     dictionaryEntries: [],
     dictionaryCandidates: [],
     suppressedAutomaticDictionaryTexts: [],
@@ -457,6 +479,10 @@ export function normalizeVoiceInputSettings(
       typeof candidate.autoDictionaryEnabled === 'boolean'
         ? candidate.autoDictionaryEnabled
         : defaults.autoDictionaryEnabled,
+    // 只认 override 字段。历史数据里可能存过有效值(本 PR 早期版本),那时无法
+    // 区分「用户选的」和「当时的默认」——按规则 §3 只做一次性兼容:仅当它与当前
+    // 默认不同时才当作用户的显式选择,相同则视为未自定义。
+    ...normalizeDictionarySyncOverride(candidate),
     dictionaryEntries: normalizeVoiceInputDictionaryEntries(
       candidate.dictionaryEntries ?? (candidate as { customDictionary?: unknown }).customDictionary,
     ),
@@ -852,6 +878,36 @@ export function createVoiceInputHistoryEntry(text: string, timestamp = Date.now(
     text: normalizedText,
     createdAt: timestamp,
   };
+}
+
+/**
+ * 把持久化里的 override 归一成 { 有效值, override? }。
+ *
+ * 返回的对象直接展开进 settings:没有 override 时**不产生该字段**,这样它不会被
+ * 写回用户配置。
+ */
+function normalizeDictionarySyncOverride(
+  candidate: Partial<VoiceInputSettings>,
+): Pick<VoiceInputSettings, 'dictionarySyncEnabled'> & { dictionarySyncEnabledOverride?: boolean } {
+  // null = 用户要求恢复默认:丢掉 override,重新跟随当前版本默认值。
+  if (candidate.dictionarySyncEnabledOverride === null) {
+    return { dictionarySyncEnabled: DEFAULT_DICTIONARY_SYNC_ENABLED };
+  }
+  const override = typeof candidate.dictionarySyncEnabledOverride === 'boolean'
+    ? candidate.dictionarySyncEnabledOverride
+    : legacyDictionarySyncOverride(candidate.dictionarySyncEnabled);
+  if (override === undefined) return { dictionarySyncEnabled: DEFAULT_DICTIONARY_SYNC_ENABLED };
+  return { dictionarySyncEnabled: override, dictionarySyncEnabledOverride: override };
+}
+
+/**
+ * 一次性兼容:本 PR 早期版本把有效值直接写进了配置,没有自定义标记。
+ * 规则 §3 不允许靠旧值猜意图,所以只在它与当前默认**不同**时才认作显式选择——
+ * 那种值只可能来自用户主动关闭;与默认相同的一律当作未自定义。
+ */
+function legacyDictionarySyncOverride(value: unknown): boolean | undefined {
+  if (typeof value !== 'boolean') return undefined;
+  return value === DEFAULT_DICTIONARY_SYNC_ENABLED ? undefined : value;
 }
 
 function isVoiceInputLanguage(value: unknown): value is VoiceInputLanguage {

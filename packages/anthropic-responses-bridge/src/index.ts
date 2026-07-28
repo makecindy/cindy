@@ -35,8 +35,10 @@ export type {
   BridgeProviderConfig,
   BridgeUpstreamErrorInfo,
   BridgeWireProtocol,
+  ResponsesFunctionTool,
   ResponsesInputItem,
   ResponsesRequest,
+  ResponsesServerTool,
   ResponsesTool,
   UpstreamRateLimitInfo,
 } from './types.js';

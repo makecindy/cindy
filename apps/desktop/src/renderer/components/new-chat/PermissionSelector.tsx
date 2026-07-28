@@ -135,8 +135,9 @@ export function PermissionSelector({
   const isCreateAgentVariant = visualVariant === 'create-agent';
   const isFieldTrigger = triggerVariant === 'field';
   const previousOptionsLengthRef = useRef(options.length);
-  // 窄态工具条(#562):新建对话框空间不足时权限入口图标化,防与语音/发送重叠。
-  const isIconOnly = iconOnly && isCreateAgentVariant;
+  // 窄态工具条:权限语义由 tooltip + aria-label 保留，视觉收成固定宽图标。
+  // 普通会话在侧栏 + 浏览器 split-pane 下同样会变窄，不能只处理 create-agent。
+  const isIconOnly = iconOnly && !isFieldTrigger;
 
   useEffect(() => {
     if (!open) {

@@ -64,7 +64,8 @@ export type DeviceLinkErrorCode = RelayErrorCode
   | 'VOICE_TRANSCRIBE_FAILED' // 出方向手机语音转写失败(被控端下载音频 / ASR 出错)
   | 'VOICE_CREDENTIAL_SYNC_FAILED' // 手机语音云端 ASR/refine 临时 credential 同步失败(历史,新桌面已不再返回)
   | 'VOICE_CREDENTIAL_SYNC_REMOVED' // 穿透 credential 同步能力已下线:手机语音改走 Cindy 官方托管服务,旧手机据此提示升级
-  | 'VOICE_DICTIONARY_LEARNING_FAILED'; // 手机语音词典学习 evidence 回写失败
+  | 'VOICE_DICTIONARY_LEARNING_FAILED' // 手机语音词典学习 evidence 回写失败
+  | 'VOICE_DICTIONARY_GET_FAILED'; // 手机拉取被控桌面词典快照失败(读同步状态出错)
 
 /** 带结构化错误码的异常,贯穿 client / host 两层 */
 export class DeviceLinkError extends Error {
@@ -98,7 +99,15 @@ export interface LinkOpenPayload {
   controllerName: string;
   protocolVersion: number;
   appVersion: string;
+  /**
+   * 控制端支持的端到端可选能力（append-only）。旧控制端缺省为空集；
+   * 被控端只有在能力明确声明时才发送对应的新 wire 字段。
+   */
+  capabilities?: string[];
 }
+
+/** 控制端能安全消费完整 ProviderLogoKind（含 #527 新增品牌）的 maker:provider:list 投影。 */
+export const CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 = 'provider-logo-kinds-v2';
 
 export interface LinkAcceptPayload {
   appVersion: string;

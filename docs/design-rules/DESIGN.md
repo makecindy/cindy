@@ -415,6 +415,7 @@ Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plu
 | `--overlay-modal` / `--overlay-lightbox` | rgba | rgba (deeper) | Modal / lightbox backdrop |
 | `--perm-auto-selected-text` | `#417CDD` | `#417CDD` | Auto Approval accent, finalized 2026-07-17 (same value both modes; replaces #000050/#00D9C5) |
 | Toast `#417CDD / #2AAE5B / #F3A115 / #D91F37` | (hardcoded in Toast.tsx, VARIANT_MAP exported) | same | Finalized 2026-07-17 (Toast exemption lifted, merged into the status-color family) |
+| `--file-badge-pdf/-doc/-sheet/-slide/-code` + `--file-badge-fg` | `#B23A26` / `#2C5CA8` / `#2E7D4F` / `#A25A12` / `#5B49A8`, fg `#FFFFFF` | same | File-type badges on the self-drawn attachment icon (2026-07-27). Bound to *what the file is*, not to the theme, so both modes share one value. Each accent is picked for ≥4.5:1 against `--file-badge-fg` (5.96 / 6.56 / 5.05 / 5.24 / 7.09) — the badge label renders at 10px (Micro Label floor, §3), so AA small-text applies. `--file-badge-fg` is a standalone white: `--accent-pure-cta-fg` flips to black in Dark and cannot be borrowed. |
 
 Never freestyle these semantic colors as hardcoded hex — always go through the corresponding token.
 
@@ -442,7 +443,7 @@ The implementation truth is `builtinThemes` in `apps/desktop/src/renderer/themes
 2. Register it in `builtinThemes` in `themes/registry.ts`
 3. The Light/Dark Theme dropdowns in Settings → Appearance pick it up automatically
 
-Use any existing non-default theme under `themes/builtin/` as a template.
+Use any existing non-default theme under `apps/desktop/src/renderer/themes/builtin/` as a template.
 
 ### Token Naming Conventions
 
@@ -461,6 +462,17 @@ CSS variable names are always kebab-case. Dot-style ids (VSCode's `sidebar.itemA
 5. **Never** use `bg-[#xxx] dark:bg-[#xxx]` hardcoded pairs — the pre-P2 anti-pattern; it was migrated away once and new code must not reintroduce it
 
 This section is the authoritative token-usage text; i18n rules for UI copy live in `docs/dev-rules/engineering-conventions.md` §5.
+
+### External Theme Import (VSCode / Obsidian)
+
+Settings → Appearance can import a VSCode color theme (`*.json` / jsonc) or an Obsidian `theme.css` and convert it into a local theme. Implementation: `apps/desktop/src/shared/theme-import/` (pure conversion) + `apps/desktop/src/main/local-themes/importer.ts` (dialog / read / write). Rules that govern it:
+
+- **One template, taken from the hand-ported community themes.** The seven ported themes under `apps/desktop/src/renderer/themes/builtin/` (one-dark-pro, github-dark, eclipse, material-ocean-hc, monokai-pro, atom-one-light, solarized-light) share a byte-identical key set of 91 tokens derived from 13 palette roles. `apps/desktop/src/shared/theme-import/palette.ts` is that derivation, code-ified; `one-dark-pro.ts`'s header comment is the source-of-truth for which VSCode key feeds which role. The template is **allow-list only** — it emits exactly those 91 base ids, plus optional Markdown tokens (`md-h1-fg`…`md-h6-fg` / `md-strong-fg`) when the source theme provides heading or bold colors.
+- **Exemption families are never imported.** `--login-*`, brand red, `--destructive`, `--error-*`, `--warning-accent`, `--status-bar-accent`, `--focus-ring*`, `--diff-*`, shadows and overlays stay at their spec values under every imported theme (see the exemption table above and §16). `apps/desktop/src/shared/theme-import/protected-tokens.ts` enforces it as a second gate; the import report tells the user how many tokens were held back.
+- **`-hsl` tokens are computed, not copied.** Both forms of a color must denote the same color, so the converter derives every HSL triplet from its hex via `toHslTriplet()`. (Note: a few hand-written builtin themes carry approximate HSL values — `github-dark`'s `SURFACE_BG_HSL` was copied off one-dark-pro. Those are left as-is; new imports are exact.)
+- **Markdown text colors go through `--md-h1-fg`…`--md-h6-fg` / `--md-strong-fg`, and default to `inherit`.** Before these tokens existed, Markdown headings and bold text inherited their color from the container (`baseComponents` sets size/weight only). Defaulting to `var(--text-primary)` would have repainted headings inside blockquotes, tool cards and secondary-text regions, so the defaults are `inherit` — every built-in theme renders exactly as before. Imported themes fill them from Obsidian `--hN-color` / `--bold-color` or VSCode `markup.heading` / `markup.bold`. Guard: `themes/__tests__/markdownColorTokens.test.ts`.
+- **Obsidian import is a palette import, not a theme port.** Only CSS custom properties are read; selectors, layout, radii and fonts are discarded — Cindy's layout and typography stay owned by §3/§5. Values that cannot be evaluated statically (`color-mix()`, undefined `var()`) are skipped and reported rather than guessed.
+- **Local themes may declare an optional `family`.** Same-family light + dark variants merge into one switchable family (`themes/families.ts`); files without the field keep behaving exactly as before (family id = theme id). Obsidian's dual-mode CSS uses this to land as a single theme that follows Light/Dark mode.
 
 ## 11. Voice & Content(微文案规范)
 
@@ -782,7 +794,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 登录页是**黑白反色**体系（亮色 = 白底墨字 / 深色 = 深底米字），与编辑器主界面解耦，亮 / 深两模式镜像同构：
 
 - **面板 / 控件走墨黑–米白反色，深色镜像反相**：亮色白面板 `#FBFBFB` + 米白控件 `#EEEEEE` + 墨黑主按钮 `#2A2828`；深色反相为深面板 `#312F2F` + 深控件 `#2C2A2A` + 白主按钮 `#EEEEEE`。**两模式的面板 / 控件底色与文字都不出现纯黑 `#000` 或纯白 `#fff`**（`figma-component-spec §1.1`）；细描边例外——暗色主按钮 / 圆钮的 `#FFFFFF` 白边为 figma `white_button` 实测值，不受此限。
-- **品牌红 `#DF0C27` 只用于 Global pill 与字标红元素等品牌 accent，跨模式不变**；**禁止作页面背景**（wave4 改判，见 `token-decision-table §3` 对 `#df0c27` 的语义判定），不渗入面板内部（呼应 §15.10 红色边界）。画布底走 `--login-bg-base`（亮 `#EDEDED` / 深 `#1F1F1E`），红只经 `--login-brand-accent` 消费。错误红 `#D91F37` 同样跨模式不变（语义豁免，呼应 §10 豁免族）。
+- **品牌红 `#DF0C27` 只用于区域徽标（旧称 Global pill，见 §16.3）与字标红元素等品牌 accent，跨模式不变**；**禁止作页面背景**（wave4 改判，见 `token-decision-table §3` 对 `#df0c27` 的语义判定），不渗入面板内部（呼应 §15.10 红色边界）。画布底走 `--login-bg-base`（亮 `#EDEDED` / 深 `#1F1F1E`），红只经 `--login-brand-accent` 消费。错误红 `#D91F37` 同样跨模式不变（语义豁免，呼应 §10 豁免族）。
 - **`--login-*` 调色板双态目标值** —— token 已注册于 `apps/desktop/src/renderer/themes/colors.ts`（dark 槽位当前为 light 占位值）。下表为深色实现的目标规格，经 Figma 组件库 Dark symbol 逐个核验；实现 PR 须将 dark 槽位更新为本表 dark 列的值：
 
 | token | light | dark | 核验源 |
@@ -850,7 +862,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 
   | 槽 | 宽×字号 | ≈汉字上限 | ≈拉丁字符上限 |
   |---|---|---:|---:|
-  | 标题 | 680 @32 Bold（Global 变体为 inline 组：标题 shrink-to-fit + 2px 间隔 + 70px 徽标，可用宽 680−72=608，按 608 算；v2 2026-07-25，原「标题 span 固定 236」几何作废） | 20（Global 变体 18） | 40（Global 变体 36） |
+  | 标题 | 680 @32 Bold（徽标变体为 inline 组：标题 shrink-to-fit + 2px 间隔 + 区域徽标，徽标宽随文案自适应，按现役最宽的 `Dev`（实测 51.7，非本表估宽公式的 46——公式是文案自检用的保守估算，徽标宽度以实测为准）算可用宽 680−54=626；v3 2026-07-27，原「固定 70px 徽标」几何随 Global 徽标撤除一并作废） | 20（徽标变体 18） | 40（徽标变体 37） |
   | 副标题（≤2 行，2026-07-24 拍板） | 540 @20 × 2 行 | 50 | 102 |
   | Text_link / hint / 倒计时 | 540 @20 | 25 | 51 |
   | 主按钮 CTA | 448 @24 Bold（540 − 双侧 46 padding） | 17 | 35 |
@@ -870,7 +882,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 |---|---|---|---|---|
 | `LoginPanel` | 双 | 白面板容器 | `children`, `testId` | 680×440 r36 `--login-panel-bg` + inset 1px border；桌面由 `LoginStage` 承载缩放 |
 | `LoginStage` | 桌面 | 1819×2098 画布「面板宿主」层，等比缩放 + z 序 | `children`, `ssoOrgGroupY`, `groupStyle` | 登录组 @(570, 1229 / 1227) 680×560；品牌层在 `LoginBrandStage` |
-| `LoginTitleBlock` | 双 | 标题 + 副标题 | `title`, `subtitle`, `globalPill?` | 标题 y=31 h=38 32 Bold `--login-title-text`；副标题 @(70,75) 540 宽 ≤2 行顶对齐 20 Regular `--login-secondary-text`（2026-07-24 拍板，原 599×23 单行作废） |
+| `LoginTitleBlock` | 双 | 标题 + 副标题 | `title`, `subtitle`, `regionPill?`（桌面） | 标题 y=31 h=38 32 Bold `--login-title-text`；副标题 @(70,75) 540 宽 ≤2 行顶对齐 20 Regular `--login-secondary-text`（2026-07-24 拍板，原 599×23 单行作废）。区域徽标见下方专条 |
 | `LoginInput` / `LoginSkinInput` | 桌 / 手 | 通用输入框 | `value`, `onChange`, `placeholder`, `center?`, `error?`, `prefix?` | @(70,158) 540×80 r40 `--login-control-bg`；边 placeholder→active；`center`=验证码居中变体 |
 | `LoginSkinPhoneInput` | 手机 | 手机号 + 固定国家码前缀 | `prefix`, … | 同 `LoginSkinInput` 几何，前缀不可点 |
 | `LoginPrimaryButton` | 双 | 主按钮（五态） | `label / children`, `onClick / onPress`, `disabled`, `loading / busy` | @(70,300) 540×80 r40 `--login-primary-button-bg / -border / -text`；disabled 白 70% 叠层 + 边 `--login-control-border-disabled` + 文字 opacity 0.8；loading spinner 24@(487,27) |
@@ -883,6 +895,14 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 | `LoginMethodRow` | 双 | 方式选择行（企业 / 个人） | `top`, `title`, `subtitle`, `icon`(enterprise / person), `onClick` | 540×100 r60 `--login-action-control-bg` / `--login-control-border`；左图标 24@(27,37) / person 18×20@(30,39)；右 share 18@(490,40)；文字 @(67) 垂直居中 |
 | `LoginErrorText` | 双 | 错误提示 | `children` | @(0,380) 680×50 20 `--login-error-fg` |
 | `LoginLoadingRing` | 双 | 大 loading 环（浏览器 / 准备态） | `y`, `label` | 64×64 @(308, 158 / 193)；轨道 `--login-loading-ring-track`，内弧 `--login-primary-button-bg`（Splash 转圈环 64×64@(308,188) 同轨道 token，内弧为 `--login-secondary-text`） |
+
+**区域徽标（`LoginTitleBlock` 的 `regionPill`，桌面；figma §4.10 胶囊 h30 r40，2026-07-27 改判）**：标题右侧品牌红胶囊，`--login-brand-accent` 底 + `--login-inverted-button-border` 白字 16 Bold，inline 组内 gap 2、垂直居中于 38 行框。
+
+- **挂哪些区域**：`cn` → `CN`；`dev` → `Dev`；**`global` 不挂**。这是产品叙事的硬规则而非视觉遗漏——Cindy 是「天生全球」的产品，默认版本不给自己贴标签自证是全球版，只有为特定法规单独构建的版本才被标注（不对称命名）。旧实现给 global 挂 `Global` 徽标，读出来反而是「存在一个本土主场版、这是它的出口型号」，与叙事相反。**给 global 恢复徽标即回退该决策，不得回退。**
+- **为什么 cn / dev 仍标**：两者连的都不是 global 端点（cn 走国内端点、dev 走独立 dev 端点），登录页是用户确认自己连向哪个后端的位置；dev 另有并存场景——`CindyDev` 保持独立可执行名，可与正式包同机共存。⚠️ **不要把 cn 的理由写成「区分同机双装的 cn / global」**：2026-07-26 起两者可执行名同为 `Cindy`、安装目录与快捷方式同名互抢，该双装场景已**明确放弃支持**（见 `packages/maker-shared/src/brandIdentity.ts` 的 `executableNameByRegion` doc）。
+- **宽度自适应**：由 `REGION_PILL.paddingX`（11）撑开，不再固定 70px——70 是为 `Global` 一词量身定的，`CN` / `Dev` 在固定宽里会留大片空白。11 由原几何反推（(70 − `Global` 6 拉丁字符 @16 Bold ≈ 48) / 2），保住 figma 的左右留白密度。
+- **文案不翻译**：四语同文的区域代号（承袭旧 `login.globalRegion` 的做法），但仍走 i18n（`login.regionPill.*`），以便日后改判为「中国大陆版」这类可译文案时不必回改组件。
+- **手机端无此变体**：`apps/mobile` 的 `LoginTitleBlock` 不接 `regionPill`（移动端未做区域徽标）。
 
 **组件库新增（2026-07-24，目标规格，随游客登录 / 协议 UI 实现 PR 落地）**：
 - **协议勾选 radio**（figma `radiobutton 600:627`，四态双模式）：24×24 命中区，圈 20×20 r9 + 2px 描边，选中为**对勾**（非圆点）。亮：未选 `#F1F0F1` 底 / `#434343` 边 → 选中 `#2A2828` 实底 + 白勾；暗：未选 `#2A2828` 底 / `#F1F0F1` 边 → 选中 `#F1F0F1` 底 + `#2A2828` 勾——选中反色与登录黑白反色体系同构。用于登录页 `服务条款` 协议行。

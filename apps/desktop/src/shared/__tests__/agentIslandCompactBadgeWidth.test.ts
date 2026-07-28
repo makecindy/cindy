@@ -72,9 +72,12 @@ describe('getAgentIslandCompactBadgeWidth', () => {
     }
   });
 
-  it('单个计数走 22pt 最小宽度,active/total 才随位数变宽', () => {
+  it('单个计数在 22pt 最小宽度内不变宽,超出后同样按位数增长', () => {
     expect(getAgentIslandCompactBadgeWidth({ activeSessionCount: 0, sessionCount: 1 })).toBe(22);
     expect(getAgentIslandCompactBadgeWidth({ activeSessionCount: 0, sessionCount: 12 })).toBe(22);
+    // 位数够多时单个计数也会超过最小宽度 —— 公式对两种形态都是按 segment 长度算的。
+    expect(getAgentIslandCompactBadgeWidth({ activeSessionCount: 0, sessionCount: 1234 }))
+      .toBeGreaterThan(22);
     const oneDigit = getAgentIslandCompactBadgeWidth({ activeSessionCount: 1, sessionCount: 2 });
     const twoDigits = getAgentIslandCompactBadgeWidth({ activeSessionCount: 11, sessionCount: 12 });
     expect(twoDigits).toBeGreaterThan(oneDigit);
@@ -377,6 +380,47 @@ describe('snapAgentIslandCompactHardwareContentWidth', () => {
     // 计数回落后必须收缩回旧的 basic 宽度,不能停在为宽徽标撑开的宽度上。
     expect(narrow).toBe(persisted);
     expect(narrow).toBeLessThan(wide);
+  });
+
+  it('介于旧 basic 与新 basic 之间的自由宽度不被吞掉', () => {
+    // 回归:用户此前把岛拖到 280(旧 basic 264 之上,属自由宽度)。若按放大后的 basicWidth
+    // 判定,280 会被"升级"成 306,再被 native 的持久化归一化写回 264,永久覆盖用户偏好。
+    const notchWidth = 200;
+    const screenMetrics = { hasNotch: true, notchWidth };
+    const baseBasic = notchWidth + AGENT_ISLAND_COMPACT_HARDWARE_ACTIVE_EXTRA_WIDTH;
+    for (const pillSnapshot of [
+      { activeSessionCount: 11, sessionCount: 12 },
+      { activeSessionCount: 123, sessionCount: 456 },
+    ]) {
+      const widened = getAgentIslandDefaultContentWidth({
+        expanded: false,
+        hasSession: true,
+        screenMetrics,
+        pillSnapshot,
+      });
+      for (const freeWidth of [baseBasic + 16, widened - 4]) {
+        expect(
+          snapAgentIslandCompactHardwareContentWidth({
+            desiredWidth: freeWidth,
+            clampedWidth: freeWidth,
+            maxWidth: 920,
+            hasSession: true,
+            screenMetrics,
+            pillSnapshot,
+          }),
+          `自由宽度 ${freeWidth} 被吸附掉了`,
+        ).toBe(freeWidth);
+      }
+      // 恰好停在旧 basic 吸附位的仍然跟随到新 basic。
+      expect(snapAgentIslandCompactHardwareContentWidth({
+        desiredWidth: baseBasic,
+        clampedWidth: baseBasic,
+        maxWidth: 920,
+        hasSession: true,
+        screenMetrics,
+        pillSnapshot,
+      })).toBe(widened);
+    }
   });
 
   it('不传 pillSnapshot 时吸附行为与旧实现完全一致', () => {

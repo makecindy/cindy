@@ -1,5 +1,11 @@
 import { Extension, type Editor } from '@tiptap/core';
-import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
+import {
+  Plugin,
+  PluginKey,
+  TextSelection,
+  type EditorState,
+  type Transaction,
+} from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import type { VoiceInputDraftSource } from '@cindy/voice-input-core';
@@ -43,10 +49,29 @@ function clampPosition(doc: PMNode, position: number): number {
   return Math.max(0, Math.min(position, doc.content.size));
 }
 
+/**
+ * Snap a position onto the nearest place that can hold inline content.
+ *
+ * The draft/caret widgets are inline: rendered at a position whose parent is
+ * NOT a textblock (0 or a boundary between blocks), ProseMirror puts them in
+ * the doc-level DOM — an inline span between two `<p>`s, which the browser then
+ * gives its own line. That reads as a stray blank line above the dictation
+ * caret. Anchors reach such a position whenever the composer document is
+ * rebuilt wholesale while dictation is live (external draft restore does a
+ * `replace(0, size)`), because mapping a collapsed anchor across a full
+ * replacement pushes it out to the block boundary.
+ */
+function clampToInlinePosition(doc: PMNode, position: number): number {
+  const clamped = clampPosition(doc, position);
+  const $pos = doc.resolve(clamped);
+  if ($pos.parent.isTextblock) return clamped;
+  return TextSelection.near($pos, 1).from;
+}
+
 function clampRange(doc: PMNode, from: number, to: number): { from: number; to: number } {
-  const safeFrom = clampPosition(doc, Math.min(from, to));
-  const safeTo = clampPosition(doc, Math.max(from, to));
-  return { from: safeFrom, to: safeTo };
+  const safeFrom = clampToInlinePosition(doc, Math.min(from, to));
+  const safeTo = clampToInlinePosition(doc, Math.max(from, to));
+  return safeFrom <= safeTo ? { from: safeFrom, to: safeTo } : { from: safeFrom, to: safeFrom };
 }
 
 /**
@@ -263,8 +288,13 @@ export function createVoiceInputDraftPlugin(): Plugin<VoiceInputDraftDecorationS
           }
         }
         if (tr.docChanged) {
-          const mappedFrom = tr.mapping.map(old.from, -1);
-          const mappedTo = tr.mapping.map(old.to, 1);
+          // A collapsed anchor must stay collapsed: mapping it with opposite
+          // biases grows it into a range, and a non-empty range makes the
+          // `voice-input-draft-replaced` decoration hide whatever text now sits
+          // inside it (a full-document rebuild would blank the existing draft).
+          const collapsed = old.from === old.to;
+          const mappedFrom = tr.mapping.map(old.from, collapsed ? 1 : -1);
+          const mappedTo = collapsed ? mappedFrom : tr.mapping.map(old.to, 1);
           return createState(
             tr.doc,
             old.text,

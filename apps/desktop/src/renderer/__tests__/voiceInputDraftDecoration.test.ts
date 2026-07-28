@@ -225,6 +225,57 @@ describe('voice input draft decoration anti-flicker contract', () => {
     expect(node.dataset.voiceDraftSource).toBeUndefined();
   });
 
+  // 录音期间输入框文档被整段重建(外部草稿通知走 setContent → replace(0, size))时,
+  // 折叠锚点跨整篇映射会被推到 block 边界:widget 的 pos 落在 doc 层,ProseMirror 就
+  // 把这个 inline span 渲染到 <p> 外面,浏览器给它单独一行 —— 表现为"第一句话出现前
+  // 先多一个换行"。锚点必须留在段落内的 inline 位置。
+  it('keeps the caret anchor inside the paragraph when the document is rebuilt wholesale', () => {
+    const { plugin, state } = makeState('');
+    const listening = applyDraftMeta(state, {
+      text: '',
+      source: null,
+      from: 1,
+      to: 1,
+      caretState: 'listening',
+    });
+    expect(plugin.getState(listening)).toMatchObject({ from: 1, to: 1 });
+
+    const rebuilt = listening.apply(
+      listening.tr.replaceWith(
+        0,
+        listening.doc.content.size,
+        schema.nodes.paragraph.create(),
+      ),
+    );
+    const anchor = plugin.getState(rebuilt);
+    expect(anchor).toMatchObject({ from: 1, to: 1 });
+    const widget = plugin.getState(rebuilt)?.decorations.find()[0];
+    expect(widget?.from).toBe(1);
+    expect(rebuilt.doc.resolve(widget!.from).parent.isTextblock).toBe(true);
+  });
+
+  it('keeps a collapsed anchor collapsed across a full-document replacement', () => {
+    const { plugin, state } = makeState('已经上屏的文字');
+    const listening = applyDraftMeta(state, {
+      text: '流式草稿',
+      source: 'partial',
+      from: 1 + '已经上屏的文字'.length,
+      to: 1 + '已经上屏的文字'.length,
+      caretState: 'listening',
+    });
+    const rebuilt = listening.apply(
+      listening.tr.replaceWith(
+        0,
+        listening.doc.content.size,
+        schema.nodes.paragraph.create(null, schema.text('已经上屏的文字')),
+      ),
+    );
+    const anchor = plugin.getState(rebuilt);
+    // 膨胀成区间会让 voice-input-draft-replaced 把正文整段 display:none 隐藏掉。
+    expect(anchor?.from).toBe(anchor?.to);
+    expect(rebuilt.doc.resolve(anchor!.from).parent.isTextblock).toBe(true);
+  });
+
   it('deduplicates identical setVoiceInputDraftDecoration calls without dispatching', () => {
     const { state } = makeState('前文');
     let current = state;

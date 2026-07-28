@@ -16,6 +16,9 @@ const h = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
   webContentsSend: vi.fn(),
   closeSession: vi.fn(),
+  withSendToSessionLock: vi.fn(
+    async (_sessionId: string, task: () => Promise<unknown>) => task(),
+  ),
   isSessionStillRemovable: vi.fn(),
   recycleWorktreeForRemovedSession: vi.fn(),
   userDataPath: '',
@@ -45,6 +48,9 @@ vi.mock('../agent-island/service.js', () => ({
 vi.mock('../imageCacheStore', () => ({ removeSession: vi.fn() }));
 vi.mock('../maker-host/index.js', () => ({
   getMakerIfReady: () => ({ closeSession: h.closeSession }),
+}));
+vi.mock('../maker-ipc/register.js', () => ({
+  withSendToSessionLock: h.withSendToSessionLock,
 }));
 vi.mock('../worktree/sessionRemovalRecycle.js', () => ({
   isSessionStillRemovable: h.isSessionStillRemovable,
@@ -131,8 +137,24 @@ describe('setSessionsStatusInDb', () => {
       expect(h.isSessionStillRemovable).toHaveBeenCalledWith('s1');
     });
 
+    expect(h.withSendToSessionLock).not.toHaveBeenCalled();
     expect(h.closeSession).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
+  });
+
+  it('serializes archive-driven close with the session route lock', async () => {
+    h.tx.mockResolvedValueOnce([
+      { sessionId: 's1', title: 'T1', workingDir: '/repo', workspaceKind: 'project', status: 'archived' },
+    ]);
+
+    await setSessionsStatusInDb(['s1'], 'archived');
+    await vi.waitFor(() => {
+      expect(h.closeSession).toHaveBeenCalledWith('s1');
+    });
+
+    expect(h.withSendToSessionLock).toHaveBeenCalledWith('s1', expect.any(Function));
+    expect(h.isSessionStillRemovable).toHaveBeenCalledTimes(2);
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith('s1');
   });
 
   it('keeps batch archived status wired to worktree recycle scheduling', () => {

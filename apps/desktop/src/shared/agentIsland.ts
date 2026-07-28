@@ -455,8 +455,11 @@ export const AGENT_ISLAND_COMPACT_HARDWARE_IDLE_EXTRA_WIDTH = 64;
 export const AGENT_ISLAND_COMPACT_HARDWARE_ACTIVE_EXTRA_WIDTH = 64;
 export const AGENT_ISLAND_COMPACT_HARDWARE_HIDDEN_PULL_DISTANCE = 48;
 // Compact count-badge metrics, kept in sync with `PillBadge` in
-// `native/agent-island/macos-agent-island-helper.swift`. Only used to reserve carrier
-// width; the native helper still measures the real font for what it draws.
+// `native/agent-island/macos-agent-island-helper.swift`. These describe the *nominal*
+// width used to reserve carrier space — the native helper computes the same nominal
+// value (it does not measure the font for layout), while the badge itself is still
+// drawn by SwiftUI with the real font. The nominal value is an upper bound of what
+// gets drawn, so reserved space is never short.
 export const AGENT_ISLAND_COMPACT_BADGE_MIN_WIDTH = 22;
 export const AGENT_ISLAND_COMPACT_BADGE_ACTIVE_TOTAL_MIN_WIDTH = 30;
 export const AGENT_ISLAND_COMPACT_BADGE_CONTENT_INSET = 2;
@@ -636,7 +639,10 @@ export function snapAgentIslandCompactHardwareContentWidth(input: {
   if (input.desiredWidth <= hiddenThreshold) {
     return hiddenWidth;
   }
-  if (input.desiredWidth <= basicWidth) {
+  // 只有落在与徽标无关的 basic 吸附位及以下的宽度才升级到当前(可能更宽的)basic。
+  // 用 basicWidth 判定会把介于两个吸附点之间的自由宽度(如旧 basic 264 与 11/12 的 306
+  // 之间的 280)一并吞掉,再被 native 的持久化归一化改写成 264,永久覆盖用户偏好。
+  if (input.desiredWidth <= baseBasicWidth) {
     return basicWidth;
   }
   return input.clampedWidth;

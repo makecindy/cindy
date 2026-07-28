@@ -598,6 +598,33 @@ describe('ghost · 清单校验', () => {
     }, parsed.manifest).ok).toBe(false);
   });
 
+  it('locale 外部 key 累加器使用无原型字典，JSON 自有 __proto__ 属性不会丢失', () => {
+    const manifest: GhostManifest = {
+      schemaVersion: 2,
+      id: 'defensive-locale',
+      name: 'Defensive locale',
+      version: '1.0.0',
+      kind: 'chip',
+      entry: 'main.js',
+      slots: ['panel'],
+      panel: { html: 'panel.html' },
+      setup: {
+        requires: [{ anyOf: [{ kind: 'kv', key: '__proto__', label: 'Base label' }] }],
+      },
+    };
+    const rawLocale = JSON.parse('{"setup":{"kv":{"__proto__":{"label":"Localized label"}}}}');
+    const resource = validateGhostManifestLocaleResource(rawLocale, manifest);
+    expect(resource.ok).toBe(true);
+    if (!resource.ok) return;
+    expect(Object.getPrototypeOf(resource.resource.setup?.kv)).toBeNull();
+    expect(Object.prototype.hasOwnProperty.call(resource.resource.setup?.kv, '__proto__')).toBe(true);
+    expect(resolveGhostManifestLocale(manifest, resource.resource).setup?.requires[0]?.anyOf[0]).toEqual({
+      kind: 'kv',
+      key: '__proto__',
+      label: 'Localized label',
+    });
+  });
+
   it('icon:可选包内相对路径,扩展名白名单;非法路径/扩展名 → 拒', () => {
     const base = validateGhostManifest({ ...goodManifest(), icon: 'assets/icon.png' });
     expect(base.ok && (base as { ok: true; manifest: GhostManifest }).manifest.icon).toBe('assets/icon.png');
@@ -931,6 +958,70 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         Array.from({ length: 17 }, (_, i) => ({ name: `t${i}`, description: 'y' })),
       ).ok,
     ).toBe(false);
+  });
+
+  it('会进入 locale 对象索引的清单 key 统一拒绝对象保留键名', () => {
+    const reservedKeys = ['__proto__', 'constructor', 'prototype'];
+    const withoutPanel = (manifest: Record<string, unknown>) => {
+      const result = { ...manifest };
+      delete result.panel;
+      return result;
+    };
+
+    for (const key of reservedKeys) {
+      expect(validateGhostManifest(withoutPanel({
+        ...goodManifest(),
+        slots: ['tool'],
+        tools: [{ name: key, description: 'Reserved tool' }],
+      })).ok, `tool ${key}`).toBe(false);
+
+      expect(validateGhostManifest({
+        ...goodManifest(),
+        settingsHtml: 'settings.html',
+        slots: ['panel', 'network'],
+        network: {
+          hosts: ['api.example.com'],
+          secrets: [{
+            key,
+            label: 'Reserved secret',
+            inject: { header: 'Authorization', format: 'Bearer {value}' },
+          }],
+        },
+      }).ok, `network secret ${key}`).toBe(false);
+
+      expect(validateGhostManifest({
+        ...goodManifest(),
+        settingsHtml: 'settings.html',
+        slots: ['panel', 'network'],
+        network: {
+          hosts: [],
+          connections: [{
+            key,
+            label: 'Reserved connection',
+            inject: { header: 'Authorization', format: 'Bearer {value}' },
+          }],
+        },
+      }).ok, `network connection ${key}`).toBe(false);
+
+      expect(validateGhostManifest({
+        ...goodManifest(),
+        settingsHtml: 'settings.html',
+        slots: ['panel', 'node'],
+        node: {
+          entry: 'node/worker.cjs',
+          protocol: 'json-rpc-stdio',
+          secretBindings: [{ key, label: 'Reserved node secret', methods: ['run'] }],
+        },
+      }).ok, `node secret ${key}`).toBe(false);
+
+      expect(validateGhostManifest(JSON.parse(JSON.stringify({
+        ...goodManifest(),
+        settingsHtml: 'settings.html',
+        setup: {
+          requires: [{ anyOf: [{ kv: key, label: 'Reserved setup value' }] }],
+        },
+      }))).ok, `setup kv ${key}`).toBe(false);
+    }
   });
 
   it('panel.html 与 panel 槽必须成对出现', () => {

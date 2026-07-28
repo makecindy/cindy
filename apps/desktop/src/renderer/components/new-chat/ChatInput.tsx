@@ -17,7 +17,8 @@ import { useTranslation } from 'react-i18next';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
-import { TextLightbox } from '@/components/chat/TextLightbox';
+import { formatBytes, TextLightbox } from '@/components/chat/TextLightbox';
+import { AttachmentTypeThumb } from './AttachmentTypeThumb';
 import { useEditor, EditorContent } from '@tiptap/react';
 import Document from '@tiptap/extension-document';
 import Paragraph from '@tiptap/extension-paragraph';
@@ -25,9 +26,20 @@ import Text from '@tiptap/extension-text';
 import History from '@tiptap/extension-history';
 import Placeholder from '@tiptap/extension-placeholder';
 import HardBreak from '@tiptap/extension-hard-break';
-import type { Editor } from '@tiptap/core';
+import type { Editor, JSONContent } from '@tiptap/core';
 import { CjkPunctDecoration } from './CjkPunctDecoration';
 import { ComposerListIndentDecoration } from './ComposerListIndentDecoration';
+import {
+  ComposerBulletList,
+  ComposerListItem,
+  ComposerOrderedList,
+  handleStructuredListBackspace,
+  handleStructuredListBreak,
+  hasTrailingPlainListParagraph,
+  isTopLevelBlockSelection,
+  isTrailingEmptyTopLevelParagraph,
+  promoteTrailingPlainListParagraph,
+} from './ComposerListNodes';
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
 import {
   setVoiceInputDraftDecoration,
@@ -37,7 +49,6 @@ import {
 import { MentionDragCaretDecoration, setMentionDragCaret } from './MentionDragCaretDecoration';
 import { GhostCommandDecoration, setGhostCommandRoster } from './GhostCommandDecoration';
 import {
-  getDecoratedSlashCommandMatches,
   replaceSlashCommandRunWithText,
   setSlashCommandRoster,
   SlashCommandDecoration,
@@ -49,19 +60,12 @@ import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { Tip } from '@/components/ui/tooltip';
 import type { AttachedFile, MentionedResource, ImageAnnotationStroke } from '@/lib/fileTypes';
-import { formatQuoteForSend } from '@/lib/chatQuotes';
 import {
   commentPreviewTag,
   formatBrowserCommentsForSend,
   removeBrowserCommentAndRepairChains,
   type BrowserCommentDraftItem,
 } from '@/lib/browserComments';
-import { formatMentionRef } from '@/lib/mentionRefFormat';
-import {
-  parseProjectDeepLinkHref,
-  parseSessionDeepLinkHref,
-  projectDisplayName,
-} from '@/lib/deepLink';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { shouldOpenTextLightbox } from '@/lib/filePreview';
 import {
@@ -69,6 +73,7 @@ import {
   saveDraft as saveComposerDraft,
   clearDraft as clearComposerDraft,
   subscribeDraft as subscribeComposerDraft,
+  tiptapDocHasContent,
 } from '@/lib/composerDraftStore';
 import { subscribeSessionLinkInsert } from '@/lib/composerActionsBus';
 import { ModelSelector, type ModelMemoryAccessors } from './ModelSelector';
@@ -111,17 +116,12 @@ import { ComposerQuoteNode } from './ComposerQuoteNode';
 import {
   COMPOSER_QUOTE_NODE_TYPE,
   composerHistoryEntryToDocument,
-  composerQuoteAttrsToChatQuote,
-  serializeComposerContentBlocksWithRanges,
   type ComposerHistoryEntry,
-  type ComposerQuoteAttrs,
-  type ComposerSerializedBlock,
 } from '@/lib/composerQuoteDocument';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import {
   pastedSessionChipAttrs,
   resolveSessionMessageReferencesForSend,
-  serializeSessionChipText,
   resolveSessionChipTitles,
 } from './sessionLinkPaste';
 import {
@@ -131,10 +131,9 @@ import {
   LONG_PASTE_MAX_CHARS,
   segmentPastedContent,
   pastedProjectChipAttrs,
-  serializeProjectChipText,
 } from './pastePipeline';
 import { upgradePastedPathsToChips, type PendingPathRange } from './pathPaste';
-import { docContainsAtomChip } from './composerDocState';
+import { composerDocIsEmpty } from './composerDocState';
 import {
   isComposerBlankPointerTarget,
   isInteractiveFocusedElement,
@@ -148,17 +147,23 @@ import {
 } from './PastedTextChipNode';
 import { ToolPayloadLightbox } from '@/components/chat/ToolPayloadLightbox';
 import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model';
-import { Selection } from '@tiptap/pm/state';
+import { Selection, TextSelection } from '@tiptap/pm/state';
 import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
 import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
-import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
 import { scanAtResources, filterAtResources, type AtResourceItem } from '@/lib/atResourceService';
+import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
 import { getNextPermissionMode } from '@/lib/permissionModeCycle';
 import { matchesKeyboardEvent } from '../../../shared/appShortcuts';
 import { createLogger } from '@/lib/logger';
+import { serializeEditorContent, serializeEditorSlice } from './composerContentSerialization';
+import {
+  composerDocumentContainsList,
+  normalizeComposerDocumentJSON,
+  plainTextToComposerDocument,
+} from '@/lib/composerListDocument';
 import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabilities';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
@@ -513,7 +518,7 @@ interface ChatInputProps {
   onRememberedEffortChange?: (modelId: string, effort: Effort) => void;
   /** Enables wrapping for narrow split-pane layouts such as Orca. Defaults to false. */
   compactToolbar?: boolean;
-  /** 窄态新建对话时使用紧凑单行工具栏，保留所有操作入口。 */
+  /** 强制使用紧凑单行工具栏；容器测宽也会自动进入同一状态。 */
   narrowToolbar?: boolean;
   /**
    * 工具行采用更紧凑的视觉密度 (字号 -1px, 协同 toggle 只剩 logo)。
@@ -634,221 +639,12 @@ function hasFocusMovedToInteractiveElement(focusAnchor: Element | null, editor: 
 }
 
 /**
- * Serialize the Tiptap document to the plain-string format the Agent SDK
- * expects (command-palette F6):
- *   - file chip  → `@{relPath}`
- *   - dir chip   → `@{relPath}/`
- *   - agent chip → `@.claude/agents/{name}.md` (falls back to `@{name}` when
- *                  the host tells us the mapping is stale — see submit handler)
- *   - session chip → `[title](cindy://session/…)` / bare deep link href
- *   - plain text → as-is
- * Paragraphs are joined with `\n`.
- */
-function serializeEditorContent(editor: Editor): {
-  text: string;
-  mentions: MentionedResource[];
-  hasQuotes: boolean;
-  agentReferences: AgentInputReference[];
-  pastedTextRanges: PastedTextRange[];
-  slashCommandRanges: SlashCommandRange[];
-} {
-  const doc = editor.state.doc;
-  const decoratedSlashMatches = getDecoratedSlashCommandMatches(editor);
-  const blocks: ComposerSerializedBlock[] = [];
-  const mentions: MentionedResource[] = [];
-  const seenMentions = new Set<string>();
-  let hasQuotes = false;
-
-  const addMention = (attrs: MentionChipAttrs) => {
-    // slash 不是资源;session / project 深链不进 mentions(不是文件系统资源,
-    // MentionedResource.type 也不含它们)——只序列化进正文文本。
-    if (attrs.kind === 'slash' || attrs.kind === 'session' || attrs.kind === 'project') return;
-    const key = `${attrs.kind}:${attrs.path}`;
-    if (seenMentions.has(key)) return;
-    seenMentions.add(key);
-    mentions.push({ type: attrs.kind, name: attrs.label, path: attrs.path });
-  };
-
-  doc.forEach((pNode, paragraphOffset) => {
-    if (pNode.type.name === COMPOSER_QUOTE_NODE_TYPE) {
-      hasQuotes = true;
-      blocks.push({
-        kind: 'quote',
-        text: formatQuoteForSend(composerQuoteAttrsToChatQuote(pNode.attrs as ComposerQuoteAttrs)),
-      });
-      return;
-    }
-    if (pNode.type.name !== 'paragraph') return;
-    let buf = '';
-    let bufAgentReferences: AgentInputReference[] = [];
-    let bufPastedTextRanges: PastedTextRange[] = [];
-    let bufSlashCommandRanges: SlashCommandRange[] = [];
-    let emittedInlineSegment = false;
-    const flushText = (force = false) => {
-      if (!force && !buf) return;
-      blocks.push({
-        kind: 'text',
-        text: buf,
-        ...(bufAgentReferences.length > 0 ? { agentReferences: bufAgentReferences } : {}),
-        ...(bufPastedTextRanges.length > 0 ? { pastedTextRanges: bufPastedTextRanges } : {}),
-        ...(bufSlashCommandRanges.length > 0 ? { slashCommandRanges: bufSlashCommandRanges } : {}),
-      });
-      buf = '';
-      bufAgentReferences = [];
-      bufPastedTextRanges = [];
-      bufSlashCommandRanges = [];
-      emittedInlineSegment = true;
-    };
-    pNode.forEach((child, childOffset) => {
-      if (child.type.name === COMPOSER_QUOTE_NODE_TYPE) {
-        flushText();
-        hasQuotes = true;
-        blocks.push({
-          kind: 'quote',
-          text: formatQuoteForSend(
-            composerQuoteAttrsToChatQuote(child.attrs as ComposerQuoteAttrs),
-          ),
-        });
-        emittedInlineSegment = true;
-      } else if (child.type.name === 'mentionChip') {
-        const attrs = child.attrs as MentionChipAttrs;
-        addMention(attrs);
-        if (attrs.kind === 'slash') {
-          buf += `/${attrs.path} `;
-        } else if (attrs.kind === 'session') {
-          // 会话深链 chip:有标题 → `[标题](href)`(消息侧 / 手机端 markdown
-          // 链路显式 label 优先),标题未解析 → 裸 href。
-          const wire = serializeSessionChipText(attrs);
-          const start = buf.length;
-          buf += wire;
-          const target = parseSessionDeepLinkHref(attrs.path);
-          if (target?.messageClientId) {
-            bufAgentReferences.push({
-              kind: 'message',
-              start,
-              end: buf.length,
-              href: attrs.path,
-              sessionId: target.sessionId,
-              messageClientId: target.messageClientId,
-              ...(attrs.agentText ? { text: attrs.agentText } : {}),
-              ...(attrs.agentTextTruncated ? { truncated: true } : {}),
-            });
-          } else if (target) {
-            bufAgentReferences.push({
-              kind: 'session',
-              start,
-              end: buf.length,
-              href: attrs.path,
-              sessionId: target.sessionId,
-              ...(attrs.titled && attrs.label ? { title: attrs.label } : {}),
-            });
-          }
-        } else if (attrs.kind === 'project') {
-          // 项目深链 chip:同 session 的取舍——显式标题走 markdown 形式,
-          // 目录名占位是 href 可推导的,裸 href 即可(消息侧自行取 basename)。
-          const wire = serializeProjectChipText(attrs);
-          const start = buf.length;
-          buf += wire;
-          const target = parseProjectDeepLinkHref(attrs.path);
-          if (target) {
-            bufAgentReferences.push({
-              kind: 'project',
-              start,
-              end: buf.length,
-              href: attrs.path,
-              name: attrs.label || projectDisplayName(target.workingDir),
-              workingDir: target.workingDir,
-            });
-          }
-        } else if (attrs.kind === 'dir') {
-          // 含空格的 path 用 `@"..."` 引号形式序列化（formatMentionRef），否则
-          // 下游 `@\S+` 切词会从空格处把 chip 截断。dir 的尾 `/` 一并纳入引号内，
-          // 与 maker-core quotedMentionText 的 dir 形式 `@"path/"` 对齐。
-          buf += `@${formatMentionRef(`${attrs.path}/`)}`;
-        } else if (attrs.kind === 'agent') {
-          // F2.7: agent chip serializes to `@.claude/agents/{name}.md` when
-          // the stored path is canonical (contains `/`), else falls back to
-          // `@{name}` — spec: "映射失败按裸名 @{name} 退化发送".
-          // insertAtResource stores the canonical path when the scan found
-          // the file; the fallback branch fires for chips whose source file
-          // vanished between scan and submit (or any future code path that
-          // can only recover the bare name) so Agent reports the error back
-          // inline instead of us silently dropping the mention.
-          const p = attrs.path;
-          if (p.includes('/')) {
-            // Canonical path — emit as-is (already `.claude/agents/foo.md`)
-            buf += `@${formatMentionRef(p)}`;
-          } else {
-            // Bare-name fallback — strip any accidental `.md` tail, emit
-            // just the label so Agent can diagnose "unknown agent"
-            const bare = p.replace(/\.md$/, '');
-            buf += `@${formatMentionRef(bare)}`;
-          }
-        } else {
-          buf += `@${formatMentionRef(attrs.path)}`;
-        }
-      } else if (child.type.name === 'pastedTextChip') {
-        // Agent 仍收到完整原文；本地只记录纯展示 range，让发送后能恢复同款
-        // chip，而不往 prompt 塞任何 marker 或改变缓存前缀。
-        const attrs = child.attrs as PastedTextChipAttrs;
-        const start = buf.length;
-        buf += attrs.text;
-        bufPastedTextRanges.push({ start, end: buf.length, display: attrs.display });
-      } else if (child.type.name === 'hardBreak') {
-        // Shift+Enter inserts a Tiptap HardBreak node (inline <br>).
-        // Without this branch the node is silently dropped and the sent
-        // message loses all line breaks. Translate to '\n' here so the
-        // downstream UserMessage (whitespace-pre-wrap) renders it correctly.
-        buf += '\n';
-      } else if (child.isText) {
-        const childText = child.text ?? '';
-        const bufferStart = buf.length;
-        const documentStart = paragraphOffset + 1 + childOffset;
-        buf += childText;
-        for (const match of decoratedSlashMatches) {
-          if (match.from < documentStart || match.to > documentStart + childText.length) continue;
-          bufSlashCommandRanges.push({
-            start: bufferStart + match.from - documentStart,
-            end: bufferStart + match.to - documentStart,
-          });
-        }
-      }
-    });
-    // Preserve truly empty paragraphs as line breaks, but do not synthesize an
-    // empty text segment after a quote chip at the end of a paragraph.
-    flushText(!emittedInlineSegment);
-  });
-
-  const serialized = serializeComposerContentBlocksWithRanges(blocks);
-  return { ...serialized, mentions, hasQuotes };
-}
-
-/**
  * Is the editor document "empty" (no text and no chips)? Used to mimic the
  * textarea's `message.trim().length > 0` gate for the Send button.
  */
 function isEditorEmpty(editor: Editor | null): boolean {
   if (!editor) return true;
-  const doc = editor.state.doc;
-  if (doc.childCount === 0) return true;
-  let hasContent = false;
-  doc.descendants((node) => {
-    if (hasContent) return false;
-    if (
-      node.type.name === 'mentionChip' ||
-      node.type.name === 'pastedTextChip' ||
-      node.type.name === COMPOSER_QUOTE_NODE_TYPE
-    ) {
-      hasContent = true;
-      return false;
-    }
-    if (node.isText && (node.text ?? '').trim().length > 0) {
-      hasContent = true;
-      return false;
-    }
-    return true;
-  });
-  return !hasContent;
+  return composerDocIsEmpty(editor.state.doc);
 }
 
 /**
@@ -927,9 +723,8 @@ function detectTrigger(editor: Editor): TriggerState {
 
   // Slash detection — mirror @ semantics: trigger when `/` sits at the start
   // of the current paragraph OR is preceded by whitespace, with no whitespace
-  // between it and the caret. Matches Codex desktop behaviour. (The old
-  // "must be doc[0]" rule was too strict — users couldn't fire / after a
-  // Shift+Enter or in the middle of a sentence.)
+  // between it and the caret. The previous "must be doc[0]" rule was too
+  // strict — users couldn't fire / after a Shift+Enter or in a sentence.
   const slashIdx = textSoFar.lastIndexOf('/');
   if (slashIdx >= 0) {
     const beforeSlash = slashIdx === 0 ? '' : textSoFar[slashIdx - 1];
@@ -1184,7 +979,7 @@ export function ChatInput({
   const userHistoryRef = useRef(userHistory);
   userHistoryRef.current = userHistory;
   const historyIndexRef = useRef(-1); // -1 = current draft (not browsing)
-  const draftRef = useRef(''); // saves draft when user starts browsing
+  const draftRef = useRef<JSONContent | null>(null); // saves draft when user starts browsing
   const hydratedHistoryDocumentRef = useRef<ProseMirrorNode | null>(null);
 
   // ── composer-draft-per-session ─────────────────────────────────────
@@ -1257,6 +1052,8 @@ export function ChatInput({
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
   const composerMentionDragActiveRef = useRef(false);
+  const suppressListNormalizationRef = useRef(false);
+  const listPromotionQueuedRef = useRef(false);
   const lastComposerSelectionFromRef = useRef<number | null>(null);
   const internalMentionDragActiveRef = useRef(false);
   const [workingDir, setWorkingDir] = useState<string | null>(initialWorkingDir ?? null);
@@ -1531,9 +1328,10 @@ export function ChatInput({
   }, [initialWorkingDir]);
 
   // ── Tiptap editor ──────────────────────────────────────────────────
-  // A minimal editor: plain text + hard-break + history + our atomic
-  // mention chip node. We do NOT include StarterKit because it brings
-  // headings / lists / marks we don't want in a chat input.
+  // The composer remains intentionally small: it has paragraphs, hard breaks,
+  // atomic chips, and only the list nodes needed to preserve Markdown list
+  // structure while editing. It does not use StarterKit, whose headings and
+  // marks are not part of the chat input contract.
   const editor = useEditor({
     // Match the legacy textarea's `autoFocus` prop — on mount, focus the
     // editor at the end so the user can continue typing after restored text.
@@ -1546,6 +1344,9 @@ export function ChatInput({
       Document,
       Paragraph,
       Text,
+      ComposerListItem,
+      ComposerBulletList,
+      ComposerOrderedList,
       ComposerHardBreak,
       History,
       Placeholder.configure({
@@ -1570,6 +1371,7 @@ export function ChatInput({
       SlashCommandDecoration,
     ],
     editorProps: {
+      clipboardTextSerializer: (slice) => serializeEditorSlice(editorRef.current, slice),
       attributes: {
         class: cn(
           // py + 负 my:.ProseMirror 自身是 overflow 裁剪容器,inline 装饰
@@ -1604,6 +1406,16 @@ export function ChatInput({
         dragend: () => {
           internalMentionDragActiveRef.current = false;
           setMentionDragCaret(editorRef.current, null);
+          return false;
+        },
+        compositionend: (view) => {
+          // The final IME commit can bypass input rules. Wait until
+          // ProseMirror releases its native composition DOM, then promote a
+          // trailing Markdown list row if one was committed as plain text.
+          setTimeout(() => {
+            if (view.isDestroyed || view.composing) return;
+            promoteTrailingPlainListParagraph(view);
+          }, 0);
           return false;
         },
       },
@@ -1709,6 +1521,41 @@ export function ChatInput({
         const segments = text
           ? segmentPastedContent(text, { workingDir: workingDirRef.current })
           : null;
+        // Plain Markdown pasted into the final empty row should enter the same
+        // structured document model as a typed list marker. Paste does not run
+        // Tiptap input rules, so normalize it explicitly at this boundary.
+        if (text && !segments) {
+          const normalizedPaste = plainTextToComposerDocument(text);
+          const { state } = view;
+          const { $from } = state.selection;
+          const pasteIntoTrailingEmptyLine = isTrailingEmptyTopLevelParagraph(view);
+          const pasteIntoBlockSelection = isTopLevelBlockSelection(view);
+
+          if (
+            composerDocumentContainsList(normalizedPaste) &&
+            (pasteIntoTrailingEmptyLine || pasteIntoBlockSelection)
+          ) {
+            event.preventDefault();
+            const paragraphPosition = $from.before(1);
+            const replacement = (normalizedPaste.content ?? []).map((node) =>
+              state.schema.nodeFromJSON(node),
+            );
+            if (pasteIntoTrailingEmptyLine && $from.parent.content.size > 0) {
+              replacement.unshift(state.schema.nodes.paragraph.create());
+            }
+            const fragment = Fragment.from(replacement);
+            const tr = pasteIntoTrailingEmptyLine
+              ? state.tr.replaceWith(
+                  paragraphPosition,
+                  paragraphPosition + $from.parent.nodeSize,
+                  fragment,
+                )
+              : state.tr.replaceSelection(new Slice(fragment, 0, 0));
+            if (pasteIntoTrailingEmptyLine) tr.setSelection(TextSelection.atEnd(tr.doc));
+            view.dispatch(tr.scrollIntoView());
+            return true;
+          }
+        }
         if (segments) {
           event.preventDefault();
           const { state } = view;
@@ -1759,9 +1606,14 @@ export function ChatInput({
             }
           }
           flushText();
-          view.dispatch(
-            state.tr.replaceSelection(new Slice(Fragment.from(nodes), 0, 0)).scrollIntoView(),
-          );
+          suppressListNormalizationRef.current = true;
+          try {
+            view.dispatch(
+              state.tr.replaceSelection(new Slice(Fragment.from(nodes), 0, 0)).scrollIntoView(),
+            );
+          } finally {
+            suppressListNormalizationRef.current = false;
+          }
           const ed = editorRef.current;
           if (ed) {
             resolveSessionChipTitles(ed);
@@ -1849,6 +1701,20 @@ export function ChatInput({
           return false;
         }
 
+        // A history undo intentionally restores the marker as plain text. Keep
+        // the queued live promotion from immediately converting it again.
+        if (
+          event.key.toLowerCase() === 'z' &&
+          (event.metaKey || event.ctrlKey) &&
+          !event.shiftKey &&
+          !event.altKey
+        ) {
+          suppressListNormalizationRef.current = true;
+          queueMicrotask(() => {
+            suppressListNormalizationRef.current = false;
+          });
+        }
+
         // ↑ / ↓ — browse user message history when editor is empty
         if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
           const history = userHistoryRef.current;
@@ -1863,8 +1729,8 @@ export function ChatInput({
           // 浏览中途新增/修改任意 chip 后 eq 失配,仍不介入。
           const isUnmodifiedHydratedHistory =
             idx >= 0 && hydratedHistoryDocumentRef.current?.eq(editorInstance) === true;
-          if (docContainsAtomChip(editorInstance) && !isUnmodifiedHydratedHistory) return false;
-          const isEmpty = editorInstance.textContent.trim().length === 0;
+          if (!isUnmodifiedHydratedHistory && !composerDocIsEmpty(editorInstance)) return false;
+          const isEmpty = composerDocIsEmpty(editorInstance);
           const replaceWithHistoryEntry = (entry: ComposerHistoryEntry) => {
             const historyDocument = view.state.schema.nodeFromJSON(
               composerHistoryEntryToDocument(entry),
@@ -1883,7 +1749,7 @@ export function ChatInput({
             if (idx === -1 && !isEmpty) return false;
             if (idx === -1) {
               // Save current draft before browsing
-              draftRef.current = editorInstance.textContent;
+              draftRef.current = view.state.doc.toJSON();
             }
             const next = Math.min(idx + 1, history.length - 1);
             if (next === idx) return false; // already at oldest
@@ -1901,12 +1767,14 @@ export function ChatInput({
               // Restore draft
               const draft = draftRef.current;
               if (draft) {
-                tr.replaceWith(0, view.state.doc.content.size, view.state.schema.text(draft));
+                const draftDocument = view.state.schema.nodeFromJSON(draft);
+                tr.replaceWith(0, view.state.doc.content.size, draftDocument.content);
               } else {
                 tr.delete(0, view.state.doc.content.size);
               }
               view.dispatch(tr);
               hydratedHistoryDocumentRef.current = null;
+              draftRef.current = null;
             } else {
               replaceWithHistoryEntry(history[next]);
             }
@@ -1915,9 +1783,9 @@ export function ChatInput({
           }
         }
 
-        // Backspace — 空列表项整体回删(对齐 Claude):行内容只剩前缀(如
-        // "2. ")且光标在行尾时,一次退格删掉整个前缀并回到上一行行尾,
-        // 而不是一个字符一个字符啃前缀。带修饰键(词删 / 行删)不拦截。
+        // Backspace — structured list items exit through the schema command;
+        // legacy plain Markdown rows keep the prefix-deletion fallback so
+        // pasted and restored text remains editable without a migration pass.
         if (
           event.key === 'Backspace' &&
           !event.metaKey &&
@@ -1925,15 +1793,15 @@ export function ChatInput({
           !event.altKey &&
           !event.shiftKey &&
           !event.isComposing &&
-          applyListBackspace(view)
+          (handleStructuredListBackspace(view) || applyListBackspace(view))
         ) {
           event.preventDefault();
           return true;
         }
 
-        // Shift/Alt+Enter — markdown 列表接续(纯文本):当前行以列表 / 待办 /
-        // 引用前缀开头时,换行后自动补下一个前缀(序号 +1);前缀后无内容时改为
-        // 清掉前缀退出列表。其余情况 return false 走 ComposerHardBreak 默认换行。
+        // Shift/Alt+Enter — split or exit a structured item. The plain-text
+        // fallback remains for old drafts and pasted Markdown that has not
+        // gone through an input rule.
         if (
           event.key === 'Enter' &&
           (event.shiftKey || event.altKey) &&
@@ -1941,7 +1809,7 @@ export function ChatInput({
           !event.ctrlKey &&
           !event.isComposing
         ) {
-          if (applyListContinuation(view)) {
+          if (handleStructuredListBreak(view) || applyListContinuation(view)) {
             event.preventDefault();
             return true;
           }
@@ -1991,6 +1859,24 @@ export function ChatInput({
     },
     // Tick state on every update so triggerState below recomputes.
     onUpdate: ({ editor: ed }) => {
+      if (
+        !suppressListNormalizationRef.current &&
+        !ed.view.composing &&
+        !listPromotionQueuedRef.current &&
+        hasTrailingPlainListParagraph(ed.view)
+      ) {
+        listPromotionQueuedRef.current = true;
+        queueMicrotask(() => {
+          listPromotionQueuedRef.current = false;
+          if (
+            !ed.isDestroyed &&
+            !suppressListNormalizationRef.current &&
+            !ed.view.composing
+          ) {
+            promoteTrailingPlainListParagraph(ed.view);
+          }
+        });
+      }
       setTick((t) => t + 1);
       if (!composerMentionDragActiveRef.current) {
         lastComposerSelectionFromRef.current = ed.state.selection.from;
@@ -2692,10 +2578,10 @@ export function ChatInput({
       // alone.
       if (storageKey !== undefined) {
         const draft = getComposerDraft(storageKey);
-        if (draft?.text && editor.isEmpty) {
+        if (draft?.text && composerDocIsEmpty(editor.state.doc)) {
           isRestoringRef.current = true;
           try {
-            editor.commands.setContent(draft.text);
+            editor.commands.setContent(normalizeComposerDocumentJSON(draft.text));
           } finally {
             isRestoringRef.current = false;
           }
@@ -2753,7 +2639,7 @@ export function ChatInput({
       try {
         const draft = storageKey !== undefined ? getComposerDraft(storageKey) : undefined;
         if (draft?.text) {
-          editor.commands.setContent(draft.text);
+          editor.commands.setContent(normalizeComposerDocumentJSON(draft.text));
         } else {
           editor.commands.clearContent();
         }
@@ -2768,7 +2654,7 @@ export function ChatInput({
       // arrow-key history was relative to the previous session.
       historyIndexRef.current = -1;
       hydratedHistoryDocumentRef.current = null;
-      draftRef.current = '';
+      draftRef.current = null;
 
       if (!focusOnStorageKeyChangeRef.current) return;
       if (disableAutofocusRef.current || disabledRef.current) return;
@@ -2823,17 +2709,24 @@ export function ChatInput({
       setBrowserComments(draft.browserComments ?? []);
       // 同值外部写入不做全量 setContent,避免把用户停在中段的光标弹到末尾、
       // 打断 IME 组合。appendQuoteToDraft 会改变正文文档,自然走下方 setContent。
+      // 空草稿在存储里可能是 `{doc:[空 paragraph]}` 而不是 undefined,而右侧对
+      // "编辑器为空"一律折叠成 null。两侧判空口径必须一致,否则每次外部草稿通知都
+      // 会拿一份空文档整段 setContent:doc 被原地重建,所有按位置存活的状态(语音
+      // 草稿锚点等)被迫跨整篇映射(#720 后语音录音时首行多一个空行的成因)。
+      const draftDocument = draft.text ? normalizeComposerDocumentJSON(draft.text) : null;
+      const normalizedDraftText =
+        draftDocument && tiptapDocHasContent(draftDocument) ? draftDocument : null;
       const textUnchanged =
-        JSON.stringify(draft.text ?? null) ===
-        JSON.stringify(editor.isEmpty ? null : editor.getJSON());
+        JSON.stringify(normalizedDraftText) ===
+        JSON.stringify(composerDocIsEmpty(editor.state.doc) ? null : editor.getJSON());
       if (textUnchanged) {
         if (!editor.isFocused) editor.commands.focus();
         return;
       }
       isRestoringRef.current = true;
       try {
-        if (draft.text) {
-          editor.commands.setContent(draft.text);
+        if (normalizedDraftText) {
+          editor.commands.setContent(normalizedDraftText);
           editor.commands.focus('end');
         } else {
           editor.commands.clearContent();
@@ -3537,7 +3430,7 @@ export function ChatInput({
       setBrowserComments([]);
       historyIndexRef.current = -1;
       hydratedHistoryDocumentRef.current = null;
-      draftRef.current = '';
+      draftRef.current = null;
       // composer-draft-per-session: drop the saved draft now that this
       // session's content has been sent. Without this, switching away then
       // back would re-restore the just-sent text/files into the composer.
@@ -4855,9 +4748,10 @@ export function ChatInput({
   const showTopSlot = !!topSlot;
   const showFusedWrapper = showQueuePanel || showTopSlot;
   const isCreateAgentVariant = visualVariant === 'create-agent';
-  const useNarrowToolbar =
-    isCreateAgentVariant &&
-    (narrowToolbar || (toolbarWidth != null && toolbarWidth < 600));
+  // split-pane 同时打开侧栏 / 会话 / 浏览器时，普通会话 composer 也会落到窄容器。
+  // 这里必须按 card 实际宽度统一切 compact，而不是只照顾 create-agent；否则普通
+  // 会话仍走两组 max-content flex，长模型名会把权限入口挤进语音 / 发送固定动作区。
+  const useNarrowToolbar = narrowToolbar || (toolbarWidth != null && toolbarWidth < 600);
   const useCompactMiddleToolbar =
     isCreateAgentVariant && (toolbarWidth == null ? narrowToolbar : toolbarWidth < 600);
   const useUltraCompactToolbar =
@@ -5109,8 +5003,8 @@ export function ChatInput({
               />
             )}
 
-            {/* browser-comment-chip(Codex 风格):页面评论收敛为一个「N 条注释」
-            胶囊,hover 浮出逐条预览(截图缩略 + 目标标签 + 评论文字,可逐条删),
+            {/* Browser comment chip:页面评论收敛为一个「N 条注释」胶囊,
+            hover 浮出逐条预览(截图缩略 + 目标标签 + 评论文字,可逐条删),
             X 清空全部。发送时序列化为 `# Browser comments:` 段 + 截图附件。 */}
             {browserComments.length > 0 && (
               <div className="pb-1.5">
@@ -5254,7 +5148,7 @@ export function ChatInput({
                   // 页面评论走丢弃语义(清 state + 清截图缓存):目标不接管评论截图,
                   // 与发送后清空(消息接管截图,不清缓存)不同,这里不清会留磁盘孤儿。
                   clearBrowserComments();
-                  draftRef.current = '';
+                  draftRef.current = null;
                   if (storageKey) clearComposerDraft(storageKey);
                 }}
               />
@@ -5618,7 +5512,6 @@ function VoiceInputButton({
   canReleaseToSend,
   releaseToSendActive,
   onReleaseToSendChange,
-  visualVariant,
   className,
 }: {
   state: import('@cindy/voice-input-core').VoiceInputState;
@@ -6034,11 +5927,29 @@ function ThumbnailItem({
     setTextLightboxOpen(true);
   }, [file]);
 
+  // 图片缩略图恒为 56×56 方块;其余附件走横向文件卡,宽度随文件名自适应
+  // (上限 220px)。判定条件必须与下面渲染分支一致——缓存写失败、既无 url 也无
+  // base64 的图片同样落到文件卡分支。
+  const isImageThumb = file.category === 'image' && Boolean(file.url || file.base64);
+  // 副行是「类型 · 大小」;无扩展名(Makefile 之类)或 size 缺失时按存在的部分给。
+  // file.size 是拖入那一刻的快照:文件在托盘期间被改写后,发出去的是新内容,卡片
+  // 却还报旧字节数。缩略图复核时 main 会把当前 stat 大小一并带回,这里优先用它。
+  const extLabel = file.ext.replace('.', '').toUpperCase();
+  const [liveByteSize, setLiveByteSize] = useState<number | null>(null);
+  const shownSize = liveByteSize ?? file.size;
+  // 复核回来的 0 是**真实的当前大小**(文件被清空了),要照实显示 0 B;只有拿不到
+  // 复核值、且快照本身就是 0/缺失时才省掉大小段。
+  const hasSize =
+    Number.isFinite(shownSize) && (liveByteSize !== null ? shownSize >= 0 : shownSize > 0);
+  const metaLine = [extLabel || null, hasSize ? formatBytes(shownSize) : null]
+    .filter(Boolean)
+    .join(' · ');
+
   return (
     <div
       ref={thumbRef}
       className="group relative shrink-0"
-      style={{ width: 56, height: 56 }}
+      style={isImageThumb ? { width: 56, height: 56 } : { height: 56, maxWidth: 220 }}
       onPointerEnter={() => setIsHovered(true)}
       onPointerLeave={() => setIsHovered(false)}
     >
@@ -6069,12 +5980,31 @@ function ThumbnailItem({
             ) : null}
           </span>
         ) : (
+          // 文件卡(2026-07-27):图标块 + 文件名 + 「类型 · 大小」。此前是一个只印
+          // 扩展名的 56×56 方块,并排两份 PDF 根本认不出谁是谁——文件名必须直接
+          // 可见,不能只挂在 hover tooltip 上。
           <div
-            className="flex h-full w-full items-center justify-center rounded-lg"
-            style={{ backgroundColor: 'var(--file-chip-bg)' }}
+            className="flex h-full w-full items-center gap-2 rounded-xl px-2"
+            style={{ backgroundColor: 'var(--surface-chip)' }}
           >
-            <span className="text-sm font-medium uppercase text-white">
-              {file.ext.replace('.', '')}
+            <span
+              // 缩略区比卡片底再抬一层:--file-chip-bg 与 --surface-chip 在 Light
+              // 下只差一档灰(#D8D9DB / #e5e5e5),实机上根本看不出块。内容由
+              // AttachmentTypeThumb 决定:优先系统缩略图,拿不到回落自绘类型图标。
+              className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg"
+              style={{ backgroundColor: 'var(--surface-elevated)' }}
+            >
+              <AttachmentTypeThumb file={file} onByteSize={setLiveByteSize} />
+            </span>
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="truncate text-xs" style={{ color: 'var(--text-primary)' }}>
+                {file.name}
+              </span>
+              {metaLine ? (
+                <span className="truncate text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                  {metaLine}
+                </span>
+              ) : null}
             </span>
           </div>
         )}

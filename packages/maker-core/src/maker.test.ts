@@ -174,6 +174,37 @@ describe('Maker session creation singleflight', () => {
   });
 });
 
+describe('Maker session close events', () => {
+  it('preserves the explicit close reason and exact Session identity', async () => {
+    const maker = new Maker({
+      agents: {
+        codex: createAgent(async () => createHandle({ id: 'thread-1' })),
+      },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const closed = vi.fn();
+    maker.on((event) => {
+      if (event.type === 'session:closed') closed(event);
+    });
+    const session = await maker.createSession({
+      id: 'session-1',
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+    });
+
+    await maker.closeSession('session-1', 'agent-switch');
+
+    expect(closed).toHaveBeenCalledWith({
+      type: 'session:closed',
+      sessionId: 'session-1',
+      session,
+      reason: 'agent-switch',
+    });
+  });
+});
+
 describe('Maker before-start lifecycle hook', () => {
   it('awaits host preparation before starting the agent', async () => {
     const order: string[] = [];

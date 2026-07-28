@@ -42,7 +42,7 @@ describe('SessionImportSection initial scan', () => {
 
   it('places project selection before the expand control and indents project child rows', () => {
     expect(source).toContain('grid min-h-14 grid-cols-[16px_20px_minmax(0,1fr)_auto] items-center gap-x-2 px-4 py-2');
-    expect(source).toContain('className="flex h-6 w-5 items-center justify-center rounded-md');
+    expect(source).toContain('className="flex h-6 w-5 items-center justify-center rounded-full');
     expect(source).toMatch(
       /checked=\{selectedCount === group\.items\.length\}[\s\S]*onClick=\{\(\) => toggleGroup\(group\.key\)\}/,
     );
@@ -71,10 +71,26 @@ describe('SessionImportSection initial scan', () => {
     );
   });
 
+  it('keeps scan summary explanations visible instead of relying on pointer-only title tooltips', () => {
+    expect(source).toContain('mt-1 text-11 leading-[1.4] text-[var(--settings-section-desc)]');
+    expect(source).toMatch(/>\s*\{hint\}\s*<\/p>/);
+    expect(source).not.toContain('title={hint}');
+    expect(source).not.toContain('className="sr-only">{hint}</span>');
+  });
+
   it('surfaces selections hidden by the current filters next to the import button', () => {
     expect(source).toContain('const hiddenSelectedCount = selectedItems.length - visibleSelectedCount;');
     expect(source).toMatch(
       /\{hiddenSelectedCount > 0 && \([\s\S]*selectedOutsideFilter[\s\S]*count: hiddenSelectedCount/,
+    );
+  });
+
+  it('keeps metadata pills on one line and lets long session titles truncate instead of stretching rows', () => {
+    expect(source).toContain(
+      'shrink-0 whitespace-nowrap rounded-full border border-[var(--settings-input-border)]',
+    );
+    expect(source).toContain(
+      'min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-sublabel)]',
     );
   });
 

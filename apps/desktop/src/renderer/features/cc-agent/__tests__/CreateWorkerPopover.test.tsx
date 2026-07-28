@@ -88,12 +88,21 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: mocks.localProviders, loading: mocks.providersLoading }),
+  useProviders: () => ({
+    providers: mocks.localProviders.map((provider) => ({
+      ...provider,
+      routing: Object.fromEntries(provider.agents.map((agent) => [agent, {}])),
+    })),
+    loading: mocks.providersLoading,
+  }),
 }));
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
   useDeviceProviders: () => ({
-    providers: mocks.remoteProviders,
+    providers: mocks.remoteProviders.map((provider) => ({
+      ...provider,
+      routing: Object.fromEntries(provider.agents.map((agent) => [agent, {}])),
+    })),
     loading: mocks.providersLoading,
     error: null,
   }),

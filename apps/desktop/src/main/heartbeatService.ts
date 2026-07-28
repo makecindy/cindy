@@ -24,6 +24,7 @@ import * as authManager from './authManager';
 import { createLogger } from './logger';
 import { onQuit } from './lifecycle';
 import { getClientEndpoint } from './clientEndpointsService';
+import { outboundFetch } from './maker-host/outbound-fetch';
 
 const log = createLogger('heartbeat');
 
@@ -50,6 +51,8 @@ function startCloudHeartbeat(uid: string): void {
   handle = createHeartbeatClient({
     endpoint,
     intervalMs: DEFAULT_INTERVAL_MS,
+    // 走吃系统代理的通道:代理网络下裸 undici 直连会让心跳恒失败(静默 warn)。
+    fetchImpl: outboundFetch,
     host: {
       // 每次 tick 读活的 auth 状态:离开 cloud 后旧 handle 立刻拿不到 uid
       // (client 对 null 跳过本次上报),不依赖 stop 的时序竞争。

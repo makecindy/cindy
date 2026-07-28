@@ -18,6 +18,7 @@ import type {
   ComputerMcpToolName,
 } from '@cindy/mcps';
 import { createLogger } from '../logger.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 
 const logger = createLogger('mcp/cindy_computer');
 const DRIVER_COMMAND = 'cua-driver';
@@ -2848,7 +2849,8 @@ function startDriverUpdateCheck(fetchImpl: typeof fetch): Promise<Omit<ComputerD
  * 进行中不发起刷新(装完缓存会被清)。fetchImpl 可注入用于测试。
  */
 export async function checkComputerDriverUpdate(
-  fetchImpl: typeof fetch = fetch,
+  // 默认吃系统代理:api.github.com / raw.githubusercontent.com 都是境外端点。
+  fetchImpl: typeof fetch = outboundFetch,
 ): Promise<ComputerDriverUpdateCheck> {
   const updating = driverUpdateInstallInFlight !== null;
   if (cachedDriverUpdateCheck) {
@@ -3012,7 +3014,7 @@ export async function updateComputerDriver(
     let stopSampler: () => void = () => {};
     // preflight + install 立即收进同一个 Promise,避免并发点击各起一轮安装。
     driverUpdateInstallInFlight = (async () => {
-      const targetVersion = await revalidateComputerDriverUpdateTarget(opts?.fetchImpl ?? fetch);
+      const targetVersion = await revalidateComputerDriverUpdateTarget(opts?.fetchImpl ?? outboundFetch);
       if (!targetVersion) {
         throw new ComputerDriverError('no verified installable cua-driver update is available');
       }

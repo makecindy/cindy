@@ -28,6 +28,18 @@ export interface CapabilityEntry {
 
 export const CAPABILITIES: readonly CapabilityEntry[] = [
   {
+    key: 'about-cindy',
+    title: `${BRAND_NAME} 自身信息(产品身份 / 开源仓库 / 源码位置)`,
+    oneLiner: `${BRAND_NAME} 是什么、谁做的、开不开源、源码在哪、agent 跑在哪、版本号怎么查, 以及模型接入(官方服务 / 复用 Coding Plan / 自带 API key / 本地模型)与分区域官网下载定价。`,
+    detail: [
+      `【是什么】${BRAND_NAME} 是 XD Inc. 出品的开源 AI 助手(open-source AI assistant), 以桌面 / 移动客户端形态交付, 源码 https://github.com/makecindy/cindy (Apache-2.0)。官网分区域: 中国大陆 https://cindy.cn, 国际版 https://cindy.app —— 给下载 / 定价链接前先确认用户所在区域, 不要一律给国际版。`,
+      `【身份归本条, 执行位置不归】问"你是谁 / 你是什么"以本条为准, 不要用训练数据猜, 也不要凭工作目录路径或工具名反推。但 ${BRAND_NAME} 只是编排方(管会话、工具、上下文与 memory; 底层 harness 是 Claude Code 或 Codex, 可中途切换且上下文连续), 不代表代码在哪执行: agent 进程与 workdir 可能在本机, 也可能在 SSH 远程工作区的远端主机(文件与进程都在远端), 或经设备互联隧道驱动的被控桌面端。问"你跑在哪 / 文件在哪台机器"时以当前会话实际工作区为准, 拿不准就说明, 不要断言。`,
+      `【源码范围】该仓库是客户端本体(desktop、mobile 及共享 packages 的 pnpm monorepo), 服务端不在其中也不开源。安装版不携带源码, agent 侧无法推断用户是否 clone 过、clone 在哪: 要读改源码就让用户给路径或用工程模式打开, 不要假设固定路径, 更不要因为工作目录里出现品牌名就断定当前目录是源码仓库。`,
+      `【版本号不要猜】本条不含版本号。CN 版可在"设置 → 关于"看到客户端版本; 国际版该页当前不展示它(只有更新开关与 agent 二进制版本), 别把用户支使过去空找。用 submit_github_issue 提反馈时客户端版本 / OS / 界面语言由系统自动附加, 不用 agent 填。`,
+      `【模型怎么来】登录官方 ${BRAND_NAME} 服务按量透明扣费、授权已付费的 Claude Code / Codex Coding Plan 继续用(不重复付费)、接自己的 API key, 或跑本地模型。价格见对应区域官网。`,
+    ].join(' '),
+  },
+  {
     key: 'ai-chat',
     title: 'AI 对话',
     oneLiner: '与 Claude Code / Codex agent 实时对话,支持代码执行、工具调用、多模态输入。',

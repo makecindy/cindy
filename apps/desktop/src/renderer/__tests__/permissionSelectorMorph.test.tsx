@@ -195,6 +195,18 @@ describe('PermissionSelector triggerVariant', () => {
     expect(cls).not.toContain('settings-input-bg');
   });
 
+  it('普通会话的超窄态也收成图标，field 形态不受影响', () => {
+    const { unmount } = renderSelector({ iconOnly: true });
+    const compactTrigger = getTrigger();
+    expect(compactTrigger.className).toContain('w-[34px]');
+    expect(compactTrigger.textContent).toBe('');
+    expect(compactTrigger.getAttribute('aria-label')).toContain('默认权限');
+
+    unmount();
+    renderSelector({ iconOnly: true, triggerVariant: 'field' });
+    expect(getTrigger().textContent).toContain('默认权限');
+  });
+
   it('field 形态:输入面样式,与 ModelSelector 的 field trigger 同规格(pill,§4 Select 触发器)', () => {
     renderSelector({ triggerVariant: 'field' });
     const cls = getTrigger().className;

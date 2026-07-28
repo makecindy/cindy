@@ -14,12 +14,14 @@ import type {
  *  - host.getUid() 返回 null 时跳过本次 tick (不算失败),适用于登录态切换间隙
  *  - 没有 schedule jitter / no backoff / no retry —— 反正下一个 tick 还会再来,
  *    重试只会浪费电
- *  - 不依赖 Electron / Node 子系统,仅用 globalThis.fetch + AbortSignal.timeout
+ *  - 不依赖 Electron / Node 子系统,仅用注入的 fetchImpl(缺省 globalThis.fetch)
+ *    + AbortSignal.timeout
  *
  * 调用方负责生命周期 (stop()) 与 uid 来源切换 (通过 getUid 动态返回不同 id)。
  */
 export function createHeartbeatClient(opts: HeartbeatClientOptions): HeartbeatHandle {
   const timeoutMs = opts.timeoutMs ?? 5_000;
+  const fetchImpl = opts.fetchImpl ?? fetch;
   const log = opts.host.logger;
   const url = trimTrailingSlash(opts.endpoint) + '/heartbeat';
 
@@ -46,7 +48,7 @@ export function createHeartbeatClient(opts: HeartbeatClientOptions): HeartbeatHa
     }
 
     try {
-      const res = await fetch(url, {
+      const res = await fetchImpl(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

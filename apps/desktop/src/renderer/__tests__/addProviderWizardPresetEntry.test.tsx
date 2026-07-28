@@ -67,6 +67,48 @@ const deepseekPreset = {
   name: 'DeepSeek',
   runtimes: { 'claude-code': { baseUrl: 'https://api.deepseek.com/anthropic', models: [] } },
 };
+const liteLlmPreset = {
+  id: 'litellm',
+  name: 'LiteLLM Proxy',
+  authMethod: 'none' as const,
+  runtimes: {
+    codex: {
+      baseUrl: 'http://127.0.0.1:4000/v1',
+      baseUrlEditable: true,
+      requestPath: '/tenant/acme/infer',
+      models: [],
+    },
+  },
+};
+const unsafeNoAuthDiscoveryPreset = {
+  id: 'unsafe-no-auth-discovery',
+  name: 'Unsafe no-auth discovery',
+  authMethod: 'none' as const,
+  runtimes: {
+    codex: {
+      baseUrl: 'http://127.0.0.1:4000/v1',
+      modelsUrl: 'https://remote.example/v1/models',
+      models: [],
+    },
+  },
+};
+const openCodePreset = {
+  id: 'opencode-go',
+  name: 'OpenCode Go',
+  runtimes: {
+    'claude-code': {
+      baseUrl: 'https://opencode.ai/zen/go',
+      modelsUrl: 'https://opencode.ai/zen/go/v1/models',
+      models: [{ id: 'minimax-m3', name: 'MiniMax M3' }],
+    },
+    codex: {
+      baseUrl: 'https://opencode.ai/zen/go/v1',
+      wireProtocol: 'openai-chat' as const,
+      modelsUrl: 'https://opencode.ai/zen/go/v1/models',
+      models: [{ id: 'glm-5.2', name: 'GLM-5.2' }],
+    },
+  },
+};
 
 function renderWizard(presetId: string) {
   return render(
@@ -83,7 +125,14 @@ function renderWizard(presetId: string) {
 beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
-      listProviderPresets: vi.fn(async () => ({ presets: [deepseekPreset] })),
+      listProviderPresets: vi.fn(async () => ({
+        presets: [
+          deepseekPreset,
+          liteLlmPreset,
+          unsafeNoAuthDiscoveryPreset,
+          openCodePreset,
+        ],
+      })),
       // 列模型失败场景兜底(Greptile P1 回归):官方 API 预设必须靠推荐模型仍可完成。
       fetchProviderModels: vi.fn(async () => ({ ok: false, code: 'NETWORK' })),
     },
@@ -230,6 +279,100 @@ describe('AddProviderWizard — preset 直达', () => {
       baseUrl: 'http://localhost:11434/custom',
       requestPath: '/tenant/acme/infer',
     });
+  });
+
+  it('LiteLLM:模型发现失败时可手填模型 ID，并以 none 鉴权保存', async () => {
+    renderWizard('litellm');
+
+    await waitFor(() => expect(screen.getByDisplayValue('LiteLLM Proxy')).not.toBeNull());
+    expect(screen.queryByPlaceholderText('sk-…')).toBeNull();
+    expect(screen.getByText('settings.providers.wizard.noAuthNote')).not.toBeNull();
+
+    const endpoint = screen.getByDisplayValue('http://127.0.0.1:4000/v1');
+    fireEvent.change(endpoint, { target: { value: 'http://localhost:4100/v1' } });
+    const next = screen
+      .getByText('settings.providers.wizard.next')
+      .closest('button') as HTMLButtonElement;
+    expect(next.disabled).toBe(false);
+    fireEvent.click(next);
+
+    const manualModel = await screen.findByPlaceholderText(
+      'settings.providers.wizard.manualModelPlaceholder',
+    );
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'codex',
+        baseUrl: 'http://localhost:4100/v1',
+        authMethod: 'none',
+        apiKey: null,
+      }),
+    );
+    fireEvent.change(manualModel, { target: { value: 'local-model' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.addManualModel'));
+    expect(screen.getByText('local-model')).not.toBeNull();
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        auth: { method: 'none' },
+        runtimes: {
+          codex: expect.objectContaining({
+            baseUrl: 'http://localhost:4100/v1',
+            requestPath: '/tenant/acme/infer',
+            models: [{ id: 'local-model', name: 'local-model' }],
+          }),
+        },
+      }),
+    );
+    expect(vi.mocked(createCustomProvider).mock.calls[0][1]).toEqual({});
+  });
+
+  it('none 预设的远端 modelsUrl 会在第二步阻止继续', async () => {
+    renderWizard('unsafe-no-auth-discovery');
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('Unsafe no-auth discovery')).not.toBeNull(),
+    );
+    const next = screen.getByText('settings.providers.wizard.next')
+      .closest('button') as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+    expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalled();
+  });
+
+  it('共享模型目录不会扩大 OpenCode 的逐协议模型归属', async () => {
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({
+      ok: true,
+      models: [
+        { id: 'minimax-m3', name: 'MiniMax M3' },
+        { id: 'glm-5.2', name: 'GLM-5.2' },
+      ],
+    });
+    renderWizard('opencode-go');
+
+    await waitFor(() => expect(screen.getByDisplayValue('OpenCode Go')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.getByText('MiniMax M3')).not.toBeNull());
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+    expect(config.runtimes['claude-code']?.models.map((model) => model.id)).toEqual(['minimax-m3']);
+    expect(config.runtimes.codex?.models.map((model) => model.id)).toEqual(['glm-5.2']);
+  });
+
+  it('LiteLLM:清空可编辑端点后不回退预设地址，也不能继续', async () => {
+    renderWizard('litellm');
+
+    const endpoint = await screen.findByDisplayValue('http://127.0.0.1:4000/v1');
+    fireEvent.change(endpoint, { target: { value: '   ' } });
+
+    const next = screen.getByText('settings.providers.wizard.next')
+      .closest('button') as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+    expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalled();
+    expect(createCustomProvider).not.toHaveBeenCalled();
   });
 
   it('presetId 不存在 → 回落目录第一步', async () => {

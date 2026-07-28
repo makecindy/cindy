@@ -81,12 +81,19 @@ export const TITLE = { y: 31, height: 38, fontSize: 32 } as const;
 /** 副标题:540@70 ≤2 行顶对齐,槽高 = 行高 × 最大行数(DESIGN.md §16.2,2026-07-24 拍板)。 */
 export const SUBTITLE = { x: 70, y: 75, width: 540, fontSize: 20, lineHeight: 23, maxLines: 2 } as const;
 /**
- * Global 徽标(figma §4.10 胶囊 70×30 r40)。v2 inline 组方案(用户裁定 2026-07-25):
+ * 区域徽标(figma §4.10 胶囊 h30 r40)。v2 inline 组方案(用户裁定 2026-07-25):
  * 标题文字 shrink-to-fit 单行 + 徽标紧随其后 gap 2 设计px,组整体相对面板水平居中——
  * 修复旧固定跨度方案(标题 span 固定 236 @185 + 徽标绝对 @425)在 en/ja/ko 下
  * 标题与徽标重叠的问题;GLOBAL_TITLE_SPAN 随之废弃删除。
+ *
+ * 宽度自适应(2026-07-27 拍板):原 width 固定 70 是为 "Global" 一词量身定的。
+ * 按「不对称命名」翻转后 global 版不再挂徽标(默认版本不必自证是全球版),徽标
+ * 只服务 cn(CN)/dev(Dev),文案短得多,固定宽会在胶囊里留大片空白。改由 paddingX
+ * 撑开:11 = 原几何反推((70 − "Global" 6 拉丁字符 @16 Bold ≈ 48) / 2),既保住
+ * figma 的左右留白密度,又让胶囊跟随文案收窄。fontSize 一并从组件内硬编码收进
+ * token(几何值单点,呼应 DESIGN.md §16.2「几何常量固化在常量文件」)。
  */
-export const GLOBAL_PILL = { width: 70, height: 30, radius: 40, gap: 2 } as const;
+export const REGION_PILL = { height: 30, radius: 40, gap: 2, paddingX: 11, fontSize: 16 } as const;
 export const CONTROL = {
   x: 70,
   inputY: 158,

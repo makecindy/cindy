@@ -53,6 +53,7 @@ import {
   type ClaudeAiOAuth,
 } from './claude-credentials-store.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { outboundFetch } from './outbound-fetch.js';
 
 const log = desktopMakerLogger.child('claude-oauth-refresh');
 
@@ -120,7 +121,7 @@ export interface SubscriptionProfile {
  */
 export async function fetchSubscriptionProfile(
   accessToken: string,
-  fetchFn: typeof fetch = fetch,
+  fetchFn: typeof fetch = outboundFetch,
 ): Promise<SubscriptionProfile | null> {
   try {
     const res = await fetchFn(PROFILE_URL, {
@@ -693,7 +694,8 @@ function getDefaultRefresher(): ReturnType<typeof createClaudeOAuthRefresher> {
     defaultRefresher = createClaudeOAuthRefresher({
       readOAuth: readClaudeAiOAuth,
       writeOAuth: writeClaudeAiOAuth,
-      fetchFn: fetch,
+      // 刷新与 profile 回填都打境外端点,必须吃系统代理(见 outbound-fetch.ts)。
+      fetchFn: outboundFetch,
       now: Date.now,
       lockDir: defaultLockDir,
       onInvalidGrant: () => invalidGrantHandler?.(),

@@ -97,6 +97,9 @@
     "incomplete": "음성 입력이 완료되지 않았습니다. 다시 시도하세요.",
     "missingRefinerTargetProvider": "모바일 음성 다듬기에는 {{appName}} 음성 세션이 필요합니다(refinerTargetProvider 누락).",
     "emptyTranscript": "음성이 감지되었지만 텍스트를 인식하지 못했습니다. 다시 시도해 주세요.",
+    "connectionInterrupted": "음성 연결이 중단되었습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
+    "recognitionStalled": "음성 인식 결과가 더 이상 오지 않습니다. 다시 시도하세요.",
+    "transcriptKept": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 바로 이어서 편집할 수 있습니다.",
     "micPermission": "마이크 권한이 꺼져 있습니다. 시스템 설정에서 {{appName}}의 마이크 사용을 허용해 주세요.",
     "realtimeAudioUnavailable": "현재 설치 패키지는 실시간 음성 입력을 지원하지 않습니다. 네이티브 녹음 모듈이 포함된 테스트 빌드를 설치해 주세요."
   }

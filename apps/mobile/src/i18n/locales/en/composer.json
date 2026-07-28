@@ -97,6 +97,9 @@
     "incomplete": "Voice input didn't finish. Try again.",
     "missingRefinerTargetProvider": "Mobile voice refinement needs a {{appName}} voice session (refinerTargetProvider is missing).",
     "emptyTranscript": "Speech was detected but no text was recognized. Try again.",
+    "connectionInterrupted": "The voice connection was interrupted. Check your network and try again.",
+    "recognitionStalled": "Voice recognition stopped returning results. Try again.",
+    "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",
     "micPermission": "Microphone access is turned off. Allow {{appName}} to use the microphone in system settings.",
     "realtimeAudioUnavailable": "This build does not support realtime voice input. Install a test build that includes the native recording module."
   }

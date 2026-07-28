@@ -37,6 +37,7 @@ function mapWireTheme(theme: LocalThemeWire): Theme {
     id: theme.id,
     name: theme.name,
     type: theme.type,
+    ...(theme.family ? { family: theme.family } : {}),
     // 加载期兼容归一化:把 text-placeholder slot 引入前创建的旧本地主题统一收口
     // 到新 slot(详见 local-themes-normalize.ts / docs/design-rules/cindy-design-system.md §13 G3)。
     colors: normalizeLocalThemeColors(theme.colors),
@@ -47,7 +48,9 @@ function mapWireTheme(theme: LocalThemeWire): Theme {
 }
 
 function signatureOf(themes: Theme[]): string {
-  return JSON.stringify(themes.map((t) => [t.id, t.type, t.name, t.colors, t.brand]));
+  return JSON.stringify(
+    themes.map((t) => [t.id, t.type, t.name, t.family, t.colors, t.brand]),
+  );
 }
 
 /** Returns true if the cache content actually changed. */

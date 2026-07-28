@@ -3,6 +3,8 @@
   "resync": "Resync",
   "resyncing": "Resyncing",
   "syncShort": "Sync",
+  "deviceUnresponsiveTitle": "Computer not responding",
+  "deviceUnresponsiveHint": "Your computer isn't answering right now. Retrying automatically.",
   "connectStep1": "Install and open {{appName}} on your computer",
   "connectStep2": "Sign in with the same account as your phone",
   "connectStep3": "Under Settings → Remote Access, turn on \"Allow same-account devices to control this computer\"",

@@ -102,7 +102,9 @@ export interface WorkGroupBlockProps {
   durationMs?: number;
   /** True while this is the active trailing work run. */
   isStreaming?: boolean;
-  /** Epoch ms of the first real activity, used for the live elapsed ticker. */
+  /** Work-run start epoch ms for the live elapsed ticker: the previous
+   *  boundary (user message / preceding text) when available — may predate
+   *  the first activity — falling back to the first activity timestamp. */
   startedAtMs?: number;
   childItems: WorkGroupChild[];
 }

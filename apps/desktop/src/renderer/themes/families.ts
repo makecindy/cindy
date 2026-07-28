@@ -9,6 +9,7 @@ import { oneDarkPro } from './builtin/one-dark-pro';
 import { solarizedLight } from './builtin/solarized-light';
 import { cindyDark } from './builtin/cindy-dark';
 import { cindyLight } from './builtin/cindy-light';
+import { LOCAL_THEME_SUFFIX } from '../../shared/local-themes';
 import { getLocalThemes } from './local-themes';
 import type { Theme, ThemeType } from './types';
 
@@ -49,13 +50,40 @@ const BUILTIN_FAMILIES: ThemeFamily[] = [
   },
 ];
 
+/**
+ * 本地主题 → 家族。
+ *
+ * 默认每个 JSON 各自成家族（family id = theme.id，已带 `-local` 后缀）。声明了
+ * `family` 的文件按该键分组，让一次导入产出的 light + dark 合成一个可跟随模式
+ * 切换的主题。分组键同样补 `-local` 后缀：设置页用 `isLocalThemeId(family.id)`
+ * 决定「本地」badge 与刷新后的重选，且能避免用户写的 family 名撞上 builtin
+ * 家族 id（如 `github`）把内置主题遮蔽掉。
+ *
+ * 无 `family` 字段的老主题走的还是 `theme.id` 这条路径，家族 id 与行为逐字不变，
+ * 已持久化的 lightThemeId / darkThemeId 不会失效。
+ */
 function buildLocalFamilies(): ThemeFamily[] {
-  return getLocalThemes().map((theme) => ({
-    id: theme.id,
-    name: theme.name,
-    light: theme.type === 'light' ? theme : null,
-    dark: theme.type === 'dark' ? theme : null,
-  }));
+  const families: ThemeFamily[] = [];
+  const byKey = new Map<string, ThemeFamily>();
+  for (const theme of getLocalThemes()) {
+    const key = theme.family ? `${theme.family}${LOCAL_THEME_SUFFIX}` : theme.id;
+    const existing = byKey.get(key);
+    if (existing) {
+      // 同 family 同 type 撞车时保留先出现的（loader 按文件名排序，结果确定）。
+      if (theme.type === 'light') existing.light ??= theme;
+      else existing.dark ??= theme;
+      continue;
+    }
+    const family: ThemeFamily = {
+      id: key,
+      name: theme.name,
+      light: theme.type === 'light' ? theme : null,
+      dark: theme.type === 'dark' ? theme : null,
+    };
+    byKey.set(key, family);
+    families.push(family);
+  }
+  return families;
 }
 
 export function getThemeFamilies(): ThemeFamily[] {

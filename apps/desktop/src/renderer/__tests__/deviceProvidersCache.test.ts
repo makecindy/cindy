@@ -10,7 +10,10 @@ beforeEach(() => {
   vi.resetModules();
 });
 
-type Providers = { providers: Array<{ id: string }> };
+type Providers = {
+  providers: Array<{ id: string }>;
+  modelVisibilityOverrides?: Record<string, boolean>;
+};
 const result = (deviceId: string): Providers => ({ providers: [{ id: `${deviceId}-xd` }] });
 
 /** stub window.electronAPI.deviceLink.invoke,返回 spy。 */
@@ -25,7 +28,9 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     const invoke = stubDeviceLink();
     const mod = await import('@/hooks/useDeviceProviders');
     await mod.prefetchDeviceProviders('dev-1');
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:provider:list', []);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:provider:list', [{
+      capabilities: ['provider-logo-kinds-v2'],
+    }]);
   });
 
   it('缓存命中:同设备二次 prefetch 不再发请求', async () => {
@@ -34,6 +39,30 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     await mod.prefetchDeviceProviders('dev-1');
     await mod.prefetchDeviceProviders('dev-1');
     expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('缓存并通知被控端的模型可见性 override 快照', async () => {
+    const overrides = { 'codex:openai:hidden-model': false };
+    const invoke = vi.fn(async () => ({
+      ...result('dev-1'),
+      modelVisibilityOverrides: overrides,
+    }));
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+    const listener = vi.fn();
+    mod.subscribeDeviceProviders('dev-1', listener);
+
+    await mod.prefetchDeviceProviders('dev-1');
+
+    expect(mod.getCachedDeviceProviders('dev-1')).toEqual({
+      providers: [{ id: 'dev-1-xd' }],
+      modelVisibilityOverrides: overrides,
+    });
+    expect(listener).toHaveBeenCalledWith({
+      status: 'ready',
+      providers: [{ id: 'dev-1-xd' }],
+      modelVisibilityOverrides: overrides,
+    });
   });
 
   it('inflight 去重:同设备并发只发一次', async () => {
@@ -48,8 +77,12 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     const mod = await import('@/hooks/useDeviceProviders');
     await mod.prefetchDeviceProviders('dev-1');
     await mod.prefetchDeviceProviders('dev-2');
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:provider:list', []);
-    expect(invoke).toHaveBeenCalledWith('dev-2', 'maker:provider:list', []);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:provider:list', [{
+      capabilities: ['provider-logo-kinds-v2'],
+    }]);
+    expect(invoke).toHaveBeenCalledWith('dev-2', 'maker:provider:list', [{
+      capabilities: ['provider-logo-kinds-v2'],
+    }]);
     expect(invoke).toHaveBeenCalledTimes(2);
     // dev-2 已缓存:再 prefetch 不重拉(隔离 + 命中)。
     await mod.prefetchDeviceProviders('dev-2');

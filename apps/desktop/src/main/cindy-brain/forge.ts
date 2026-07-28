@@ -820,6 +820,10 @@ key、未知字段、原清单没有的条目、类型或长度不合格、文�
 不一致、无效 JSON 或单文件超过 64KB 都会在 Forge 打包期、内置播种期与安装期拒绝。
 清单列表、详情页、Panel 标题、安装/配置提示和 Agent 工具目录都消费同一份本地化结果。
 
+所有会作为对象索引的稳定标识——tool name、network secrets / connections key、
+node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`constructor\` 或
+\`prototype\`；这些名称是宿主保留键，打包时会直接拒绝。
+
 十五个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图)、\`agent\`(让
 当前 Agent 开始一个普通用户回合,见 §4.11)、\`panel\`(常驻
 面板)、\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
@@ -849,7 +853,7 @@ Claude Code 与 Codex 都能发现,见 §4.16)、\`workspace\`(请主机为项�
   "entries": ["node/build.cjs"],       // 可选 ≤4 条:额外工作进程入口(每入口一个独立进程,调用时用 entry 指名,见 §4.12.1;不能与 entry / 浏览器沙箱 entry / 彼此重复)
   "childSpawn": true,                  // 可选:worker 可请宿主代启申报入口的原样 stdio 子进程(见 §4.12.4;装入确认框单列一行)
   "secretBindings": [{                 // 可选 1–4 条:safeStorage 持久化凭证按方法临时注入 Worker
-    "key": "mail_code",                // 插件内唯一,小写字母开头,1–32 位小写/数字/下划线
+    "key": "mail_code",                // 插件内唯一,小写字母开头,1–32 位小写/数字/下划线;禁用宿主保留键(见 §2.1)
     "label": "邮箱授权码",             // 安装确认与设置页展示名
     "methods": ["mail/action"],         // 只在这些 JSON-RPC 方法中注入,每条 1–128 位
     "entry": "node/worker.cjs",         // 可选:逐字命中 node.entry/entries;缺省仅主入口
@@ -898,7 +902,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 "network": {
   "hosts": ["api.example.com", "*.weather.com"],   // 1–8 条;小写域名至少两段;通配只允许最左 "*.";装入确认框逐条展示给用户
   "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
-    "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32
+    "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键(见 §2.1)
     "label": "Example API Token",                   // 给用户看的名称(设置页/确认框)
     "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段)
     "hint": "在控制台生成后粘贴",                     // 可选提示(主机 Setup 卡与 settingsHtml 都会用到)
@@ -932,7 +936,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
     }
   }],
   "connections": [{                                 // 可选 0–2 条:多连接声明——"地址 + 凭证成对多条"(自建实例场景如 GitLab,详见 §4.7「多连接」)。声明了 connections 时 hosts 可缺省/为空(静态域名与动态连接至少有其一);声明 connections 必须同时声明 settingsHtml
-    "key": "gitlab",                                // 小写字母开头,小写/数字/下划线,1–32;与 secrets[].key 共用命名空间,撞名拒装
+    "key": "gitlab",                                // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键;与 secrets[].key 共用命名空间,撞名拒装
     "label": "GitLab 实例",                          // 给用户看的连接类型名(1–64 字;确认框与设置页展示)
     "hint": "填实例域名与 Personal Access Token",     // 可选 ≤200 字提示(建议写进你的 settingsHtml 文案)
     "inject": { "header": "Private-Token", "format": "{value}" },  // 凭证注入形态(规则同 secrets 的 inject);**不允许**声明 inject.hosts——凭证恒只注入对应连接自身的地址,写了拒装
@@ -959,7 +963,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 - 条目三种引用:\`secret:<key>\`(\`network.secrets\` 或 \`node.secretBindings\` 声明的
   凭证:Node 绑定与 user 源查已保存、oauth 源查已连接账号;账号全过期时主机弹「重新连接」
   话术)、\`connection:<key>\`(该连接声明下至少添加一条)、
-  \`{ "kv": "<键名>", "label": "..." }\`(你 /kv 参数里的顶层键非空;键名主机无先验,
+  \`{ "kv": "<键名>", "label": "..." }\`(你 /kv 参数里的顶层键非空且不能是宿主保留键;键名主机无先验,
   label 必填)。Node 凭证同样可参与 setup.requires。
 - 引用必须逐字指向已声明的 key,悬空引用**打包期就拒**;\`login-email\` 源凭证恒就绪,
   引用它同样拒(没有配置动作可引导)。kv 引用要求已声明 settingsHtml(没有设置页没人填)。
@@ -974,7 +978,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 
 \`\`\`json
 "tools": [{
-  "name": "gen_image",
+  "name": "gen_image", // 小写字母开头,1–64 位小写/数字/下划线/连字符;禁用宿主保留键(见 §2.1)
   "description": "根据文字描述生成一张图片,并把它挂进画廊面板。返回可在聊天中渲染的图片地址。",
   "parameters": {
     "type": "object",

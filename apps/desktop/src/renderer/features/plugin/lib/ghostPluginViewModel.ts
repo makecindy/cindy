@@ -14,6 +14,7 @@ import {
   type GhostToolDecl,
   type InstalledGhost,
 } from '../../../../shared/ghost';
+import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 export interface GhostPluginListItem {
   id: string;
@@ -35,6 +36,50 @@ export interface GhostPluginDetail extends GhostPluginListItem {
   cindyCapabilities: readonly string[];
   panelMinWidth: number | null;
   installDir: string | null;
+}
+
+/**
+ * 展示投影只覆盖用户能看到的四个字段；运行时仍完全来自本地安装包。
+ *
+ * `iconDataUrl` 是有意要求存在的字段：市场项的 `icon: null` 也必须覆盖本地
+ * 包图标，而不是因为缺少 URL 又显示旧图标。
+ */
+export interface GhostPluginMarketPresentation {
+  name: string;
+  description: string;
+  author: string | null;
+  iconDataUrl: string | undefined;
+}
+
+/**
+ * Returns a market presentation only when the installed package is the exact
+ * market-owned version. A local install, a conflicting ghostId, an unavailable
+ * market item, or a pending version update must keep using its local manifest.
+ */
+export function marketPresentationForInstalledGhost(
+  ghost: Pick<InstalledGhost, 'manifest'>,
+  marketItem:
+    | Pick<
+        PluginMarketItem,
+        'ghostId' | 'installState' | 'version' | 'name' | 'description' | 'author' | 'icon'
+      >
+    | null
+    | undefined,
+): GhostPluginMarketPresentation | null {
+  if (
+    !marketItem ||
+    marketItem.ghostId !== ghost.manifest.id ||
+    marketItem.installState !== 'installed' ||
+    marketItem.version !== ghost.manifest.version
+  ) {
+    return null;
+  }
+  return {
+    name: marketItem.name,
+    description: marketItem.description ?? '',
+    author: marketItem.author,
+    iconDataUrl: marketItem.icon?.url,
+  };
 }
 
 export type GhostFallbackIconKind =
@@ -101,12 +146,20 @@ export function sortGhostPluginItemsByRecentUse<T extends Pick<GhostPluginListIt
  * 这里刻意不加入安装量、使用量、认证徽章等旧原型字段;这些字段在 Ghost
  * runtime 中没有事实来源,页面不应继续展示伪数据。
  */
-export function toGhostPluginListItem(ghost: InstalledGhost): GhostPluginListItem {
+export function toGhostPluginListItem(
+  ghost: InstalledGhost,
+  presentation?: GhostPluginMarketPresentation | null,
+): GhostPluginListItem {
   const { manifest } = ghost;
-  return {
-    id: manifest.id,
+  const display = presentation ?? {
     name: manifest.name,
     description: manifest.description ?? '',
+    iconDataUrl: ghost.iconDataUrl,
+  };
+  return {
+    id: manifest.id,
+    name: display.name,
+    description: display.description,
     version: manifest.version,
     enabled: ghost.enabled,
     canUse: Boolean(manifest.command),
@@ -116,7 +169,7 @@ export function toGhostPluginListItem(ghost: InstalledGhost): GhostPluginListIte
       publisherVerified: false,
       reviewed: false,
     },
-    ...(ghost.iconDataUrl !== undefined ? { iconDataUrl: ghost.iconDataUrl } : {}),
+    ...(display.iconDataUrl !== undefined ? { iconDataUrl: display.iconDataUrl } : {}),
   };
 }
 
@@ -124,13 +177,16 @@ export function toGhostPluginListItem(ghost: InstalledGhost): GhostPluginListIte
  * 详情页复用列表 adapter 的基础字段,再补充 manifest 明确声明的权限与工具。
  * 权限与详情卡共用 shared/ghost.ts 的纯推导函数,不在 renderer 复制规则。
  */
-export function toGhostPluginDetail(ghost: InstalledGhost): GhostPluginDetail {
-  const listItem = toGhostPluginListItem(ghost);
+export function toGhostPluginDetail(
+  ghost: InstalledGhost,
+  presentation?: GhostPluginMarketPresentation | null,
+): GhostPluginDetail {
+  const listItem = toGhostPluginListItem(ghost, presentation);
   const { manifest } = ghost;
   return {
     ...listItem,
     trust: listItem.trust!,
-    author: manifest.author ?? null,
+    author: presentation ? presentation.author : manifest.author ?? null,
     contents: ghostContentKeys(manifest),
     permissions: ghostPermissionItems(manifest),
     tools: manifest.tools ?? [],

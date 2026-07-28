@@ -356,10 +356,20 @@
       "localThemes": {
         "title": "本地主题",
         "export": "新建本地副本",
+        "import": "导入 VSCode / Obsidian 主题",
         "openDir": "打开主题目录",
         "refresh": "刷新",
         "exportSuccess": "已生成 {{file}}，替换示例图片路径并保存后点\"刷新\"即可生效",
         "exportFailed": "导出失败：{{error}}",
+        "importSuccess": "已导入 {{name}}（{{themeCount}} 个方案），在上方主题列表里选它即可",
+        "importPartial": "已导入 {{name}}（{{themeCount}} 个方案）。{{skipped}} 项语义色按规范不变，{{unresolved}} 项取值无法识别，{{derived}} 项由邻近色近似推导",
+        "importFailed": "导入失败：{{error}}",
+        "importUnsupported": "这个文件不是可识别的 VSCode 或 Obsidian 主题",
+        "importUsesInclude": "该 VSCode 主题通过 include 继承配色，无法独立导入",
+        "importNotAFile": "选择一个文件，而非文件夹",
+        "importTooLarge": "文件太大，无法作为主题导入",
+        "importWriteError": "无法保存主题，检查磁盘空间与权限",
+        "importInternalError": "无法读取或处理该文件，尝试重新选择",
         "openDirFailed": "打开目录失败：{{error}}",
         "refreshed": "已刷新本地主题"
       },
@@ -654,6 +664,12 @@
       "analyticsSaveFailed": "保存使用统计设置失败",
       "debugLogLabel": "Debug 日志",
       "debugLogDescription": "开启后输出全量调试日志：main/maker logger 抬到 debug 级，新建的 Claude Code 会话额外输出 API 请求 URL/状态/耗时、Node 层 DNS/TCP/TLS 握手时序，以及 SDK 内部信息。日志量较大，定位问题后请关闭。dev 模式下始终开启。",
+      "legal": {
+        "termsOfServiceLabel": "服务条款",
+        "privacyPolicyLabel": "隐私协议",
+        "viewDocument": "查看{{document}}",
+        "openFailed": "无法打开文档，请检查系统浏览器设置"
+      },
       "social": {
         "title": "和 Cindy 联系",
         "discordLabel": "Discord",
@@ -893,6 +909,11 @@
             "hint": "当你手动修正语音输入里的词时，系统会先记录候选；多次确认后自动加入词典。",
             "externalAppMacOnly": "外部 App 粘贴后的自动学习目前仅支持 macOS；App 内语音输入不受影响。",
             "ariaLabel": "切换词典自动学习"
+          },
+          "deviceSync": {
+            "label": "在我的设备之间同步",
+            "hint": "词典会在同时在线的电脑之间自动合并，内容端到端传输，不经服务器保存。",
+            "ariaLabel": "切换词典跨设备同步"
           },
           "add": "新词",
           "save": "保存",
@@ -1138,7 +1159,9 @@
         "logout": "登出",
         "connect": "连接",
         "disconnect": "断开",
-        "cancel": "取消"
+        "cancel": "取消",
+        "retry": "重新获取模型列表",
+        "retrying": "正在重新获取…"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -1206,6 +1229,8 @@
           "wireProtocol": "上游协议",
           "baseUrl": "基础 URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
+          "requestPath": "精确请求路径（可选）",
+          "requestPathHelp": "留空会使用所选协议的标准路径。只有供应商使用非标准推理接口时，才填写以 / 开头的路径。",
           "apiKey": "API 密钥",
           "apiKeyPlaceholder": "API 密钥",
           "apiKeyEditPlaceholder": "保持不变(已保存)",
@@ -1237,8 +1262,9 @@
           "nameRequired": "请填写显示名称",
           "runtimeRequired": "请至少配置一个 Runtime（填写它的基础 URL 和模型）",
           "baseUrlInvalid": "基础 URL 必须是合法的 http(s) 地址",
+          "requestPathInvalid": "精确请求路径需以单个 / 开头，不含片段标识或 .、.. 路径段；空格和不安全字符请使用百分号编码",
           "modelRequired": "请至少添加一个模型",
-          "oauthInvalid": "OAuth 配置不完整：四个字段均必填，且两个端点必须是 https 地址"
+          "oauthInvalid": "OAuth 配置不完整：所有字段均必填，且两个端点必须是安全的 https 地址"
         },
         "toast": {
           "created": "已添加供应商",
@@ -1280,9 +1306,17 @@
           "label": "鉴权方式",
           "apiKey": "API 密钥",
           "oauth": "OAuth 订阅授权",
-          "oauthHelp": "适用于提供 OAuth 登录的订阅制供应商。保存后在供应商列表点「授权」完成浏览器登录，凭证仅加密存储在本机。",
+          "none": "无需鉴权",
+          "noneHelp": "适用于本机或受信任的自托管 Proxy。Cindy 会移除 CLI 自带的订阅凭证和账号头，再把请求发往该端点。",
+          "oauthHelp": "适用于提供 OAuth 登录的供应商。可选择浏览器回调或设备码流程，保存后从供应商列表发起授权。凭证仅加密存储在本机。",
+          "flowLabel": "OAuth 流程",
+          "flow": {
+            "authorization-code": "浏览器回调（PKCE）",
+            "device-code": "设备码"
+          },
           "fields": {
             "authorizeUrl": "授权端点 (Authorize URL)",
+            "deviceAuthorizationUrl": "设备授权端点 (Device Authorization URL)",
             "tokenUrl": "令牌端点 (Token URL)",
             "clientId": "Client ID",
             "scopes": "Scopes（空格分隔）"
@@ -1332,7 +1366,27 @@
         "singleAgentNote": "仅支持 {{agent}}",
         "emptyModels": "授权后自动发现可用模型",
         "emptyList": "点击左下角「添加供应商」接入你的第一个模型来源",
-        "emptyModelsConnected": "已连接，正在自动发现可用模型；若持续为空，请稍后重试。"
+        "emptyModelsConnected": "已连接，正在自动发现可用模型；若持续为空，请稍后重试。",
+        "discoveryFailed": {
+          "network": "无法连接到该供应商，因此拿不到模型列表。请检查网络或 Proxy 设置后重试。",
+          "timeout": "连接该供应商超时，因此拿不到模型列表。请检查网络后重试。",
+          "upstream": "该供应商暂时无法返回模型列表。请稍后重试。",
+          "regionBlocked": "该供应商未在你当前所在地区提供服务，因此拿不到模型列表。你可以改用其它供应商。",
+          "unauthorized": "该供应商拒绝了当前授权，因此拿不到模型列表。请断开后重新连接。",
+          "forbidden": "该供应商拒绝了这次请求，因此拿不到模型列表。若你正在使用 Proxy 或 VPN，请更换出口后重试。",
+          "rejected": "该供应商拒绝了这次请求，因此拿不到模型列表。请稍后重试或改用其它供应商。",
+          "empty": "该供应商没有返回任何可用模型。请确认账号权限后重试。"
+        },
+        "discoveryFailedStale": {
+          "network": "无法连接到该供应商，下面是上次获取的模型列表。请检查网络或 Proxy 设置后重试。",
+          "timeout": "连接该供应商超时，下面是上次获取的模型列表。请检查网络后重试。",
+          "upstream": "该供应商暂时无法返回模型列表，下面是上次获取的结果。请稍后重试。",
+          "regionBlocked": "该供应商未在你当前所在地区提供服务，下面是上次获取的模型列表。你可以改用其它供应商。",
+          "unauthorized": "该供应商拒绝了当前授权，下面是上次获取的模型列表。请断开后重新连接。",
+          "forbidden": "该供应商拒绝了这次请求，下面是上次获取的模型列表。若你正在使用 Proxy 或 VPN，请更换出口后重试。",
+          "rejected": "该供应商拒绝了这次请求，下面是上次获取的模型列表。请稍后重试或改用其它供应商。",
+          "empty": "该供应商这次没有返回任何可用模型，下面是上次获取的列表。请确认账号权限后重试。"
+        }
       },
       "detect": {
         "groupLabel": "检测到本机 CLI",
@@ -1349,14 +1403,17 @@
         "stepModels": "选择模型",
         "searchPlaceholder": "搜索供应商…",
         "groupSubscription": "订阅授权 · 推荐",
-        "groupApiKey": "API Key 供应商 · 预设随目录更新",
+        "groupApiKey": "API 与自托管 Proxy · 预设随目录更新",
         "groupCustom": "自定义",
         "metaOAuth": "订阅授权",
         "metaApiKey": "API Key",
+        "metaNoAuth": "本机 / 自托管 · 无需鉴权",
         "customTitle": "自定义端点",
         "customMeta": "接入任意 OpenAI / Anthropic 兼容的模型来源",
         "pickHint": "鉴权方式由供应商定义决定；OAuth 端点与基础 URL 由预设携带，无需手填。",
         "oauthDesc": "通过浏览器完成订阅授权，无需 API Key",
+        "deviceOAuthDesc": "使用一次性设备码，在供应商验证页面完成授权",
+        "authorizeInBrowser": "在浏览器中授权",
         "authorizeWithDeviceCode": "使用设备码",
         "preparingDeviceCode": "正在生成设备码…",
         "deviceCodePrompt": "请在验证页面输入以下一次性设备码：",
@@ -1370,10 +1427,16 @@
         "authorizeFailed": "「{{name}}」授权失败，请重试",
         "nameLabel": "显示名称",
         "onlyAgentNote": "此供应商仅支持 {{agent}}",
+        "endpointLabel": "{{agent}} 基础 URL",
+        "noAuthNote": "此 Proxy 无需客户端密钥；Cindy 会在转发前移除 CLI 的订阅凭证。",
         "bridgedNote": "Cindy 桥接（Chat Completions）",
         "docsLink": "查看接入文档",
         "fetching": "正在验证连接并获取模型列表…",
         "fetchFailed": "模型列表获取失败——可先按预设推荐模型完成添加，稍后在详情里刷新",
+        "manualModelHint": "未发现可用模型，请填写此 Proxy 实际提供的模型 ID。",
+        "manualModelLabel": "{{agent}} 模型 ID",
+        "manualModelPlaceholder": "例如 local-model",
+        "addManualModel": "添加模型",
         "recommended": "推荐",
         "modelsHint": "勾选的模型将出现在对话的模型选择器中，对可用的 CLI 同时生效；之后可在供应商详情里随时调整。",
         "noModelSelected": "请至少勾选一个模型",
@@ -2994,7 +3057,10 @@
       "errorBody": "请回到 {{appName}} 重新登录。",
       "returnButton": "回到 {{appName}}"
     },
-    "globalRegion": "Global",
+    "regionPill": {
+      "cn": "CN",
+      "dev": "Dev"
+    },
     "errors": {
       "fallback": "登录失败，请稍后重试",
       "AUTH_SERVICE_UNAVAILABLE": "登录服务暂不可用",
@@ -4256,6 +4322,7 @@
       "refining": "正在润色",
       "result": "语音输入",
       "inputFailed": "输入失败",
+      "transcriptKept": "已保留识别出的文字",
       "permissionRequired": "需要授权",
       "error": "语音输入失败"
     },
@@ -4293,7 +4360,11 @@
     "apiKeyRequired": "需要先配置 API Key，才能使用语音输入。",
     "cindyServiceUnavailable": "Cindy 官方语音服务暂不可用，请检查网络或切换服务来源。",
     "asrServiceUnavailable": "语音识别服务连接失败，请检查网络或稍后重试。",
-    "emptyTranscript": "检测到了语音，但没有识别出文字，请重试。"
+    "emptyTranscript": "检测到了语音，但没有识别出文字，请重试。",
+    "connectionInterrupted": "语音连接中断了，请检查网络后重试。",
+    "recognitionStalled": "语音识别没有继续返回结果，请重试。",
+    "transcriptKept": "{{message}}（识别出的文字已经保留，可以直接编辑）",
+    "transcriptKeptOverlay": "{{message}}（识别出的文字已经保留，可以复制后继续用）"
   },
   "chat": {
     "askUserQuestion": {
@@ -4733,7 +4804,8 @@
       "agentSwitch": {
         "label": "已从 {{from}} 切换到 {{to}}",
         "toggleHint": "查看交接内容",
-        "handoffTitle": "交接内容——切换时发送给新引擎的上下文摘要(不会出现在你的消息里)",
+        "handoffTitle": "交接内容——切换时发送给新引擎的上下文摘要(不计入对话记录，仅在此展示)",
+        "handoffTitleEnglishSource": "交接内容——切换时发送给新引擎的上下文摘要，原文为英文(不计入对话记录，仅在此展示)",
         "resumedBadge": "已续接原对话"
       }
     },
@@ -6299,6 +6371,9 @@
       "identityGithubUser": "提交身份：GitHub 用户 @{{login}}(本人)",
       "identityPlatform": "提交身份：Cindy 平台代提交(GitHub App {{login}})",
       "envLine": "提交时将自动附加：客户端 {{appVersion}} · {{platform}} {{arch}} · 界面语言 {{uiLanguage}}",
+      "regionLine": "版本区域：{{region}}",
+      "regionCodeCn": "CN",
+      "regionCodeDev": "Dev",
       "submit": "提交",
       "cancel": "取消"
     },

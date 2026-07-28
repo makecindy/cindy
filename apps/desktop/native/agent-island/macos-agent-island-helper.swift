@@ -1957,8 +1957,8 @@ struct AgentIslandLayout: Equatable {
     let layoutScreenMetrics = hardwareNotchLayoutEnabled
       ? screenMetrics
       : screenMetrics.disablingHardwareNotchLayout()
-    // Only the compact hardware-notch layout reserves room for the badge; skip the font
-    // measurement on every other layout tick.
+    // Only the compact hardware-notch layout reserves room for the badge; every other
+    // layout tick skips the reservation entirely and passes 0.
     let compactBadgeWidth = !expanded && layoutScreenMetrics.hasNotch && hasSession
       ? PillBadge.intrinsicWidth(pillSnapshot: state.pillSnapshot, compact: true)
       : 0
@@ -2116,7 +2116,11 @@ struct AgentIslandLayout: Equatable {
     if desiredWidth <= hiddenThreshold {
       return hiddenWidth
     }
-    if desiredWidth <= basicWidth {
+    // Only widths at or below the badge-independent basic snap upgrade to the current
+    // (possibly wider) basic. Comparing against `basicWidth` would swallow free widths
+    // sitting between the two snap points, and `persistedCompactContentWidth` would then
+    // canonicalize them away — permanently overwriting the user's preference.
+    if desiredWidth <= baseBasicWidth {
       return basicWidth
     }
     return clampedWidth

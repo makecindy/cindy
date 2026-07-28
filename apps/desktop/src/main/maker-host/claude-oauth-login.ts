@@ -27,6 +27,7 @@ import {
 } from '../oauthResultPage.js';
 import { describeErrorChain } from '../utils/errorChain.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { outboundFetch } from './outbound-fetch.js';
 import { writeClaudeAiOAuth } from './claude-credentials-store.js';
 import { bindNativeProviderAuth } from './nativeProviderAuthBinding.js';
 import { backfillClaudeSubscriptionProfile } from './claude-oauth-refresh.js';
@@ -101,7 +102,10 @@ async function exchangeCodeForTokens(
   port: number,
   signal: AbortSignal,
 ): Promise<TokenExchangeResponse> {
-  const res = await fetch(TOKEN_URL, {
+  // outboundFetch:换 token 是 main 自己发的 HTTPS 请求,不经浏览器。裸 undici fetch
+  // 不吃系统代理,代理软件跑「系统代理」模式时授权页正常、这一步却直连出网,被上游按
+  // 来源拒(实测 403)。
+  const res = await outboundFetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

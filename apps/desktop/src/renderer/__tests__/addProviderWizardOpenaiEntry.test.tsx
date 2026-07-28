@@ -113,7 +113,7 @@ describe('AddProviderWizard — OpenAI 检测建议直达', () => {
     renderWizard('openai', onDone);
 
     // 授权步可见、可交互;onDone 不得被立即触发。
-    expect(screen.getByText('settings.providers.button.authorize')).not.toBeNull();
+    expect(screen.getByText('settings.providers.wizard.authorizeInBrowser')).not.toBeNull();
     expect(onDone).not.toHaveBeenCalled();
   });
 
@@ -122,9 +122,10 @@ describe('AddProviderWizard — OpenAI 检测建议直达', () => {
     const onDone = vi.fn();
     renderWizard('openai', onDone);
 
-    fireEvent.click(screen.getByText('settings.providers.button.authorize'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.authorizeInBrowser'));
     await waitFor(() => expect(onDone).toHaveBeenCalledWith('openai'));
     expect(triggerLoginMock).toHaveBeenCalledTimes(1);
+    expect(triggerLoginMock).toHaveBeenCalledWith('browser');
   });
 
   it('anthropic entry 直达 → 授权步正常渲染(对照组)', () => {

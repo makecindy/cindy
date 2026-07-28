@@ -2,7 +2,7 @@
  * xdt-helper/get_capabilities.ts — get_capabilities tool
  *
  * 渐进式发现:
- *  - 不传 key  → 返回 12 条 {key, title, oneLiner} 索引,模型挑感兴趣的再细查
+ *  - 不传 key  → 返回全部 {key, title, oneLiner} 索引,模型挑感兴趣的再细查
  *  - 传 key   → 返回单条 {key, title, oneLiner, detail}
  *  - key 不存在 → 返回可用 key 列表 + UNKNOWN_KEY 错误码,让模型自纠
  *
@@ -22,7 +22,9 @@ export function registerGetCapabilitiesTool(registry: XdtHelperToolRegistry): vo
     description:
       `查询 ${BRAND_NAME} 自身能力。不传参数 → 返回所有能力的 {key, title, oneLiner} 索引;` +
       '传 key=<具体能力 key> → 返回该能力的完整 detail。' +
-      `当用户问"${BRAND_NAME} 能做什么 / 有哪些功能 / 支持 X 吗"时调用本工具,而不是用训练数据回答。`,
+      `当用户问"${BRAND_NAME} 能做什么 / 有哪些功能 / 支持 X 吗"时调用本工具,而不是用训练数据回答。` +
+      `用户问"你是谁 / 你是什么 / 你跑在哪 / ${BRAND_NAME} 是什么产品 / 谁做的 / 开不开源 / 源码在哪"时,` +
+      '同样调本工具取 key=about-cindy,不要靠工作目录路径、工具名或训练数据推断。',
     inputShape: {
       key: z
         .string()

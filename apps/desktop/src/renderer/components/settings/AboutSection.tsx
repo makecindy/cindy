@@ -22,6 +22,7 @@ import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { StorageManagementCard } from './StorageManagementCard';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import { LEGAL_LINKS } from '../../../shared/legalLinks';
 
 interface AgentVersionState {
   loading: boolean;
@@ -96,13 +97,14 @@ export function AboutSection() {
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.about.title')}
-      </h2>
-
-      <p className="text-13 leading-[1.6] text-[var(--settings-section-desc)]">
-        {t('settings.about.description')}
-      </p>
+      <div className="flex flex-col gap-1">
+        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+          {t('settings.about.title')}
+        </h2>
+        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
+          {t('settings.about.description')}
+        </p>
+      </div>
 
       {/* Info Card */}
       <div
@@ -141,6 +143,8 @@ export function AboutSection() {
         <DebugLogToggleRow />
         <Divider />
         <OpenLogsRow />
+        <Divider />
+        <LegalLinksRows />
       </div>
 
       {/* 存储空间(媒体总仓占用 / 清理 / 体检) */}
@@ -150,6 +154,61 @@ export function AboutSection() {
       <StorageManagementCard />
 
       <SocialLinksPanel />
+    </div>
+  );
+}
+
+export function LegalLinksRows() {
+  const { t } = useTranslation();
+
+  return (
+    <>
+      <LegalLinkRow
+        label={t('settings.about.legal.termsOfServiceLabel')}
+        url={LEGAL_LINKS.termsOfService}
+      />
+      <Divider />
+      <LegalLinkRow
+        label={t('settings.about.legal.privacyPolicyLabel')}
+        url={LEGAL_LINKS.privacyPolicy}
+      />
+    </>
+  );
+}
+
+function LegalLinkRow({ label, url }: { label: string; url: string }) {
+  const { t } = useTranslation();
+
+  const handleOpen = async () => {
+    try {
+      const result = await window.electronAPI.openExternal(url);
+      if (!result.success) {
+        toast.error(t('settings.about.legal.openFailed'));
+      }
+    } catch {
+      toast.error(t('settings.about.legal.openFailed'));
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-3 px-[18px] py-4">
+      <span className="select-none text-13 text-[var(--settings-section-sublabel)]">{label}</span>
+      <button
+        aria-label={t('settings.about.legal.viewDocument', { document: label })}
+        className={cn(
+          '-mr-1 flex select-none items-center gap-1.5 rounded-full px-6 py-2.5',
+          'text-12 font-medium text-[var(--settings-section-title)]',
+          'border border-[var(--settings-theme-card-border)]',
+          'transition-colors hover:bg-[var(--surface-hover)] active:scale-[0.98]',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]',
+        )}
+        onClick={() => void handleOpen()}
+        title={url}
+        type="button"
+      >
+        {t('settings.about.legal.viewDocument', { document: label })}
+        <ExternalLink aria-hidden size={13} strokeWidth={1.7} />
+      </button>
     </div>
   );
 }
