@@ -23,10 +23,11 @@ describe('isValidHttpHeaderName', () => {
 });
 
 describe('isValidHttpHeaderValue', () => {
-  it('accepts printable values and horizontal tab', () => {
+  it('accepts printable values, horizontal tab, and obs-text (0x80-0xff)', () => {
     expect(isValidHttpHeaderValue('cindy')).toBe(true);
     expect(isValidHttpHeaderValue('a\tb')).toBe(true);
     expect(isValidHttpHeaderValue('')).toBe(true);
+    expect(isValidHttpHeaderValue('\x80\xff')).toBe(true);
   });
 
   it('rejects control characters and newlines (header injection)', () => {
@@ -34,6 +35,14 @@ describe('isValidHttpHeaderValue', () => {
     expect(isValidHttpHeaderValue('a\rb')).toBe(false);
     expect(isValidHttpHeaderValue('a\x00b')).toBe(false);
     expect(isValidHttpHeaderValue('a\x7fb')).toBe(false);
+  });
+
+  it('rejects code points above 0xFF that Headers/undici cannot encode', () => {
+    // ByteString 只能承载 0x00-0xFF：中文 / emoji 存得下但发不出去，入口就该挡掉。
+    expect(isValidHttpHeaderValue('中文')).toBe(false);
+    expect(isValidHttpHeaderValue('🙂')).toBe(false);
+    // 边界：é = U+00E9 落在 obs-text（0x80-0xFF）内，仍放行。
+    expect(isValidHttpHeaderValue('café')).toBe(true);
   });
 });
 

@@ -1114,6 +1114,19 @@ describe('provider:test-connection handler', () => {
           requestPath: '/unescaped path',
         },
       },
+      // renderer 直传的 headers 必须在 main 入口复校：协议头、非法名、发不出去的值都拒。
+      {
+        kind: 'adhoc',
+        spec: { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', headers: { 'Content-Length': '0' } },
+      },
+      {
+        kind: 'adhoc',
+        spec: { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', headers: { 'Bad Name': 'v' } },
+      },
+      {
+        kind: 'adhoc',
+        spec: { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', headers: { 'X-Label': '中文' } },
+      },
       { kind: 'saved', providerId: '', agent: 'codex' },
     ];
     for (const input of bad) {

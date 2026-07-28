@@ -20,12 +20,15 @@ export function isValidHttpHeaderName(name: string): boolean {
 }
 
 /**
- * HTTP field-value 运行期守卫：拒绝除水平制表符（\t = \x09）外的所有控制字符。
- * 与 Node/undici、Rust `http::HeaderValue` 的运行期校验同口径。
+ * HTTP field-value 运行期守卫：只放行 RFC 9110 field-value 允许的字节 ——
+ * 水平制表符（HTAB = \x09）、可见 ASCII + 空格（\x20–\x7e）与 obs-text（\x80–\xff）。
+ * 因此拒绝控制字符、DEL（\x7f），以及**任何 > 0xFF 的码点**（如中文 / emoji）：
+ * 头值最终要经 `Headers` / undici 编成 ByteString，码点必须落在 0x00–0xFF，否则
+ * 底层会在构造请求头时直接抛错。入口挡在这里，避免用户存下 / 测试一个根本发不出去的配置。
  */
 export function isValidHttpHeaderValue(value: string): boolean {
   // eslint-disable-next-line no-control-regex
-  return !/[\x00-\x08\x0a-\x1f\x7f]/.test(value);
+  return /^[\t\x20-\x7e\x80-\xff]*$/.test(value);
 }
 
 /**

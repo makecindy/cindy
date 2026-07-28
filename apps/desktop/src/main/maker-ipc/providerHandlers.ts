@@ -17,6 +17,9 @@
 import {
   isLoopbackProviderUrl,
   isProviderRequestPath,
+  isProtectedCustomProviderHeaderName,
+  isValidHttpHeaderName,
+  isValidHttpHeaderValue,
   type AgentKind,
   type CustomProviderConfig,
   type ProviderModelDiscoveryFailure,
@@ -255,6 +258,23 @@ export interface ProviderHandlerDeps {
 }
 
 /** 校验 PROVIDER_TEST_CONNECTION 入参形状（确定性代码校验，非法直接 INVALID_PARAMS）。 */
+/**
+ * adhoc 测试 / 模型拉取的 headers 是 renderer 直传、不经 custom-provider-store，
+ * 所以协议头黑名单与名/值合法性必须在 IPC 入口这里复校（与 store.validateRuntime 同口径）：
+ * 只信 renderer 表单校验会被绕过（见 electron-security-and-process-boundaries.md §5）。
+ * 形状 / 类型不对或含非法、协议头 → 返回 false，由调用方 INVALID_PARAMS 拒绝。
+ */
+function isValidHeadersRecord(headers: unknown): boolean {
+  if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return false;
+  for (const [k, v] of Object.entries(headers as Record<string, unknown>)) {
+    if (typeof v !== 'string') return false;
+    if (!isValidHttpHeaderName(k)) return false;
+    if (isProtectedCustomProviderHeaderName(k)) return false;
+    if (!isValidHttpHeaderValue(v)) return false;
+  }
+  return true;
+}
+
 function parseTestInput(input: unknown): ProviderTestInput | null {
   if (!input || typeof input !== 'object') return null;
   const i = input as Record<string, unknown>;
@@ -282,10 +302,7 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
     if (spec.authMethod === 'none' && !isLoopbackProviderUrl(spec.baseUrl)) return null;
     if (typeof spec.modelId !== 'string' || spec.modelId.length === 0) return null;
     if (spec.apiKey !== undefined && spec.apiKey !== null && typeof spec.apiKey !== 'string') return null;
-    if (spec.headers !== undefined) {
-      if (!spec.headers || typeof spec.headers !== 'object' || Array.isArray(spec.headers)) return null;
-      if (Object.values(spec.headers as Record<string, unknown>).some((v) => typeof v !== 'string')) return null;
-    }
+    if (spec.headers !== undefined && !isValidHeadersRecord(spec.headers)) return null;
     if (spec.wireProtocol !== undefined) {
       const allowed = spec.agent === 'claude-code'
         ? ['anthropic-messages']
@@ -344,10 +361,7 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     )
   ) return null;
   if (spec.apiKey !== undefined && spec.apiKey !== null && typeof spec.apiKey !== 'string') return null;
-  if (spec.headers !== undefined) {
-    if (!spec.headers || typeof spec.headers !== 'object' || Array.isArray(spec.headers)) return null;
-    if (Object.values(spec.headers as Record<string, unknown>).some((v) => typeof v !== 'string')) return null;
-  }
+  if (spec.headers !== undefined && !isValidHeadersRecord(spec.headers)) return null;
   return {
     agent: spec.agent as AgentKind,
     baseUrl: spec.baseUrl,
