@@ -70,6 +70,15 @@ describe('validateCustomHeaderRows', () => {
     expect(result).toEqual({ ok: true, headers: { 'X-Env': 'b' } });
   });
 
+  it('dedupes case-insensitively so only one header reaches upstream', () => {
+    const result = validateCustomHeaderRows([
+      { name: 'X-Env', value: 'a' },
+      { name: 'x-env', value: 'b' },
+    ]);
+    // Later occurrence wins both casing and value; no second `X-Env` key survives.
+    expect(result).toEqual({ ok: true, headers: { 'x-env': 'b' } });
+  });
+
   it('reports the first invalid name with its index', () => {
     const result = validateCustomHeaderRows([
       { name: 'X-Ok', value: '1' },

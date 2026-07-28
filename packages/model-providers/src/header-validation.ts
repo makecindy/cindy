@@ -64,7 +64,9 @@ export type CustomHeaderValidation =
 export function validateCustomHeaderRows(
   rows: readonly CustomHeaderRow[],
 ): CustomHeaderValidation {
-  const headers: Record<string, string> = {};
+  // 按小写名归并，实现大小写不敏感的 last-wins：重名（无论大小写）复用同一槽位，
+  // 名字大小写与值都取最后一次出现的，避免向上游发出 `X-Env` 与 `x-env` 两个同名头。
+  const byLowerName = new Map<string, { name: string; value: string }>();
   for (let i = 0; i < rows.length; i += 1) {
     const name = rows[i].name.trim();
     if (!name) continue;
@@ -78,6 +80,10 @@ export function validateCustomHeaderRows(
     if (!isValidHttpHeaderValue(value)) {
       return { ok: false, reason: 'invalid-value', index: i, name };
     }
+    byLowerName.set(name.toLowerCase(), { name, value });
+  }
+  const headers: Record<string, string> = {};
+  for (const { name, value } of byLowerName.values()) {
     headers[name] = value;
   }
   return { ok: true, headers };
