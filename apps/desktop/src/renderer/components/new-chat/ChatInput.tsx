@@ -4640,8 +4640,9 @@ export function ChatInput({
             cancelText: t('newChat.chatInput.fullAccessConfirmation.cancel'),
           }),
       });
-      // unchanged = 点回当前档,一次写入都没发生,没有新状态要回流。
-      if (outcome === 'cancelled' || outcome === 'unchanged') return;
+      // unchanged = 点回当前档;busy = 同一会话已有切档在途。两者都没产生新状态,
+      // 也都不该打扰用户(busy 是连点的正常结果,不是错误)。
+      if (outcome === 'cancelled' || outcome === 'unchanged' || outcome === 'busy') return;
       if (outcome === 'desynced') {
         // 生效档位未知时不能说"已保留原设置",见 CCAgentSessionView 同款分支。
         toast.error(t('newChat.chatInput.permissionSwitchDesynced'));

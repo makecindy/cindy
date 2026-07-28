@@ -2339,27 +2339,16 @@ export function CCAgentSessionView({
   // 解决、agent 又产生了新的 pending。写入前要能核对"还是发起时那条请求"。
   const pendingPermissionRequestIdRef = useRef<string | undefined>(undefined);
   pendingPermissionRequestIdRef.current = pendingPermission?.requestId;
-  // 防重入:连点档位或狂按轮切快捷键会并发起多条 runtime + DB 写,最终档位取决于
-  // 异步完成顺序(且失败回滚会滚到错档)。in-flight 期间后续请求直接 no-op ——
-  // 与下面 compactRequestInFlightRef 同一套约定。
-  //
-  // 存的是"正在切档的 sessionId 集合",两个都不能省:
-  // - 不能是 boolean:本组件实例跨会话复用,用户在确认框/远程调用挂起期间切到别的
-  //   会话,新会话的点击与 Shift+Tab 会被这面陈旧的旗子静默吞掉。
-  // - 不能是单个 sessionId 标量:A 在途时切到 B 发起切档会覆盖掉 A 的标记,B 一完成
-  //   就把槽清空,此时回到 A 又能再起一条链 —— 两条 A 的 runtime + DB 写并发,最终
-  //   档位取决于完成顺序,先发的那条若落库失败还会拿它捕获的旧档把 runtime 回滚,
-  //   覆盖掉更新的选择。
-  // 用 Set 逐会话记账:进入时 add、finally 只 delete 自己,天然按会话隔离且无覆盖。
-  const permissionModeChangeInFlightRef = useRef<Set<string>>(new Set());
+  // 防重入的会话级锁在 applySessionPermissionModeChange 内部(模块级 Set)。
+  // 不放在本组件:Orca 的 worker 面板以 workerSessionId 为 key,切走再切回来这个
+  // 实例已经 unmount 重建,组件内的锁会是全新的空集合 —— 上一次还在等隧道回包的
+  // 切档就拦不住了。锁必须与视图挂载无关。
   const handlePermissionCardModeChange = useCallback(
     async (nextMode: PermissionMode) => {
       if (!sessionId) return;
-      if (permissionModeChangeInFlightRef.current.has(sessionId)) return;
-      permissionModeChangeInFlightRef.current.add(sessionId);
       // 钉住发起本次切换的那条请求(见 pendingPermissionRequestIdRef 定义处)。
       const originRequestId = pendingPermissionRequestIdRef.current;
-      try {
+      {
         const outcome = await applySessionPermissionModeChange({
           sessionId,
           // 粘滞身份:relay 重连时 store 索引会被 clear(),但本视图仍按远程渲染
@@ -2383,8 +2372,9 @@ export function CCAgentSessionView({
           // dismissAllPending,误伤这期间新产生、用户没看过的请求(见该参数顶注)。
           hasPendingInteraction: true,
         });
-        // unchanged = 点回当前档,一次写入都没发生,没有新状态要回流。
-        if (outcome === 'cancelled' || outcome === 'unchanged') return;
+        // unchanged = 点回当前档;busy = 同一会话已有切档在途。两者都没产生新状态,
+        // 也不该打扰用户(busy 是连点/重入的正常结果,不是错误)。
+        if (outcome === 'cancelled' || outcome === 'unchanged' || outcome === 'busy') return;
         if (outcome === 'desynced') {
           // 生效档位未知时不能说"已保留原设置"—— 刚切 Full access 失败的话,
           // 那句话会让用户以为还在询问档,而 agent 可能真的已经免询问。
@@ -2396,9 +2386,6 @@ export function CCAgentSessionView({
           return;
         }
         handlePermissionModeDidChange();
-      } finally {
-        // 只销自己这条记账,不碰其它会话在途的标记。
-        permissionModeChangeInFlightRef.current.delete(sessionId);
       }
     },
     [confirmDialog, handlePermissionModeDidChange, remoteDeviceId, sessionId, t],

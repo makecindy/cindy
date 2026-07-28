@@ -271,6 +271,72 @@ describe('applySessionPermissionModeChange', () => {
     expect(localSetPermissionMode).not.toHaveBeenCalled();
   });
 
+  // 锁记在模块级而非组件:Orca worker 面板以 workerSessionId 为 key,切走再回来
+  // 视图已 remount,组件内的锁会是全新空集合,拦不住上一次还在等隧道回包的切档。
+  it('同一会话已有切档在途时,第二次直接 busy', async () => {
+    const BUSY_SESSION = 'perm-mode-busy';
+    let releaseFirst: (() => void) | undefined;
+    localSetPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseFirst = resolve; }),
+    );
+
+    const first = applySessionPermissionModeChange({
+      sessionId: BUSY_SESSION,
+      currentMode: 'ask',
+      nextMode: 'acceptEdits',
+      confirmFullAccess: confirmNever,
+    });
+    await Promise.resolve();
+
+    const second = await applySessionPermissionModeChange({
+      sessionId: BUSY_SESSION,
+      currentMode: 'ask',
+      nextMode: 'auto',
+      confirmFullAccess: confirmNever,
+    });
+    expect(second).toBe('busy');
+
+    releaseFirst?.();
+    expect(await first).toBe('ok');
+
+    // 前一条落地后锁释放,后续切档照常。
+    const third = await applySessionPermissionModeChange({
+      sessionId: BUSY_SESSION,
+      currentMode: 'acceptEdits',
+      nextMode: 'auto',
+      confirmFullAccess: confirmNever,
+    });
+    expect(third).toBe('ok');
+  });
+
+  // 回滚成功 = runtime 与 DB 重新对齐。若这次本就是在给旧失配对账,标记必须清掉,
+  // 否则后续"点当前已选中的档"会继续绕过同档短路,在卡片上白 dismiss 一条请求。
+  it('回滚成功时清掉旧失配标记,并如实报 failed', async () => {
+    const RECONCILE_SESSION = 'perm-mode-rollback-clears';
+    // 先制造一次失配。
+    sessionUpdate.mockRejectedValueOnce(new Error('db down'));
+    await applySessionPermissionModeChange({
+      sessionId: RECONCILE_SESSION,
+      currentMode: 'ask',
+      nextMode: 'bypassPermissions',
+      confirmFullAccess: vi.fn(async () => true),
+      hasPendingInteraction: true,
+    });
+    expect(storage.getItem(`cindy:permission-mode-desync:${RECONCILE_SESSION}`)).toBe('1');
+
+    // 对账时又落库失败,但回滚成功 → 失配消除。
+    sessionUpdate.mockRejectedValueOnce(new Error('db down again'));
+    const outcome = await applySessionPermissionModeChange({
+      sessionId: RECONCILE_SESSION,
+      currentMode: 'ask',
+      nextMode: 'ask',
+      confirmFullAccess: confirmNever,
+    });
+
+    expect(outcome).toBe('failed');
+    expect(storage.getItem(`cindy:permission-mode-desync:${RECONCILE_SESSION}`)).toBeNull();
+  });
+
   it('运行时失败直接告败,不落库', async () => {
     localSetPermissionMode.mockRejectedValueOnce(new Error('runtime down'));
 

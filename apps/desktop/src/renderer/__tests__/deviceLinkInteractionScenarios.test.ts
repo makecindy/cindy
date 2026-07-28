@@ -715,12 +715,16 @@ describe('远程交互接线不变式', () => {
   // sessionId 标量(A 在途时被 B 覆盖,B 一完成清空槽,回到 A 就能再起一条并发链 ——
   // 两条 A 的 runtime + DB 写乱序落地,先发的那条落库失败还会拿旧档回滚覆盖新选择)。
   // 逐会话记账是唯一正确形态,锁死它。
-  it('权限卡片切档按会话逐个记账(Set),不得退回布尔或单槽标量', () => {
-    const src = read('features/cc-agent/CCAgentSessionView.tsx');
-    expect(src).toContain('const permissionModeChangeInFlightRef = useRef<Set<string>>(new Set());');
-    expect(src).toContain('permissionModeChangeInFlightRef.current.has(sessionId)');
-    expect(src).toContain('permissionModeChangeInFlightRef.current.add(sessionId)');
-    expect(src).toContain('permissionModeChangeInFlightRef.current.delete(sessionId)');
+  it('切档防重入锁按会话记在模块级,不得挂回组件 ref', () => {
+    const src = read('lib/sessionPermissionMode.ts');
+    expect(src).toContain('const inFlightSessions = new Set<string>();');
+    expect(src).toContain("if (inFlightSessions.has(sessionId)) return 'busy';");
+    expect(src).toContain('inFlightSessions.add(sessionId)');
+    expect(src).toContain('inFlightSessions.delete(sessionId)');
+    // Orca worker 面板以 workerSessionId 为 key,切走再回来视图会 remount ——
+    // 组件内的锁会变成一只全新的空集合,拦不住上一次还在等隧道回包的切档。
+    const view = read('features/cc-agent/CCAgentSessionView.tsx');
+    expect(view).not.toContain('permissionModeChangeInFlightRef');
   });
 
   it('composer 与权限卡片共用同一条切档路径,各自负责失败 toast', () => {

@@ -32,7 +32,16 @@ export type PermissionModeChangeOutcome =
   | 'unchanged'
   | 'cancelled'
   | 'failed'
-  | 'desynced';
+  | 'desynced'
+  | 'busy';
+
+/**
+ * 同一会话正在进行中的切档。防重入必须**按会话记在模块级**,不能挂组件 ref:
+ * Orca 的 worker 面板以 workerSessionId 为 key,从 worker A 切到 B 再切回来,
+ * A 的视图已经 unmount 又重建,组件内的锁是一只全新的空 Set —— A 上一次还在等
+ * 隧道回包的切档就拦不住了,两条写入会乱序落地。模块级注册表与视图挂载无关。
+ */
+const inFlightSessions = new Set<string>();
 
 /**
  * runtime 与持久化已知失配的会话。
@@ -162,16 +171,50 @@ export async function applySessionPermissionModeChange({
     return 'unchanged';
   }
 
-  if (requiresFullAccessConfirmation(currentMode, nextMode)) {
-    const confirmed = await confirmFullAccess();
-    if (!confirmed) return 'cancelled';
+  // 从这里往下会真正写入,先上会话级重入锁(见 inFlightSessions 顶注)。
+  // 连点档位、狂按轮切、或视图 remount 后再次发起,都会在这里被挡住 —— 否则多条
+  // runtime + DB 写乱序落地,最终档位取决于完成顺序。
+  if (sessionId) {
+    if (inFlightSessions.has(sessionId)) return 'busy';
+    inFlightSessions.add(sessionId);
   }
 
-  // 确认门可能挂了很久,写入前再确认这次切换仍然属于发起它的那条请求。
-  if (assertStillApplicable && !assertStillApplicable()) return 'cancelled';
+  try {
+    if (requiresFullAccessConfirmation(currentMode, nextMode)) {
+      const confirmed = await confirmFullAccess();
+      if (!confirmed) return 'cancelled';
+    }
 
-  if (!sessionId) return 'ok';
+    // 确认门可能挂了很久,写入前再确认这次切换仍然属于发起它的那条请求。
+    if (assertStillApplicable && !assertStillApplicable()) return 'cancelled';
 
+    if (!sessionId) return 'ok';
+
+    return await writeSessionPermissionMode({
+      sessionId,
+      deviceId,
+      currentMode,
+      nextMode,
+      hasPendingInteraction,
+    });
+  } finally {
+    if (sessionId) inFlightSessions.delete(sessionId);
+  }
+}
+
+async function writeSessionPermissionMode({
+  sessionId,
+  deviceId,
+  currentMode,
+  nextMode,
+  hasPendingInteraction,
+}: {
+  sessionId: string;
+  deviceId?: string;
+  currentMode: PermissionMode;
+  nextMode: PermissionMode;
+  hasPendingInteraction: boolean;
+}): Promise<PermissionModeChangeOutcome> {
   try {
     if (deviceId) {
       // 控制端纯镜像:运行时隧道 setPermissionMode,被控端持久化后广播回流更新分片。
@@ -204,6 +247,11 @@ export async function applySessionPermissionModeChange({
           // DB 写入失败时尽力恢复运行时，保持用户看到的旧设置与实际行为一致。
           try {
             await window.electronAPI.maker.setPermissionMode(sessionId, currentMode);
+            // 回滚成功 = runtime 与 DB 重新对齐在 currentMode 上。若这次本来就是
+            // 在给旧失配对账,此刻失配已经消除,标记必须一并清掉:留着它会让后续
+            // "点当前已选中的档"继续绕过同档短路,在权限卡片上白白 dismiss 掉一条
+            // 无关请求。清掉后外层 catch 也会如实报 failed(原设置确实保住了)。
+            clearDesynced(sessionId);
           } catch (rollbackError) {
             // 回滚也失败:UI/DB 停在旧档,活着的 agent 却留在新档。记账,让"重选显示中
             // 的那一档"能绕过同档短路去强制对账(见 desyncedSessions 顶注)。
