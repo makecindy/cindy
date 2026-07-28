@@ -684,10 +684,12 @@ describe('handleGhostSetupStatusRequest · IPC handler 主体(规则 14)', () =>
         {
           ref: 'client_config:model-provider',
           label: '模型',
-          kind: 'key',
+          kind: 'client_config',
         },
       ],
     ]);
+    // Host 级 client_config 需求存在即标记,renderer 据此路由到客户端设置页。
+    expect(status.requiresClientSettings).toBe(true);
   });
 
   it('探针意外抛错原样上抛(不折叠成「未配置」;renderer 侧 fail-open)', () => {

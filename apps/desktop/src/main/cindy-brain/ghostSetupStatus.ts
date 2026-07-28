@@ -385,9 +385,11 @@ export function evaluateGhostSetup(
             ? 'oauth'
             : item.kind === 'connection'
               ? 'connection'
-              : item.kind === 'plugin_config'
-                ? 'kv'
-                : 'key',
+              : item.kind === 'client_config'
+                ? 'client_config'
+                : item.kind === 'plugin_config'
+                  ? 'kv'
+                  : 'key',
       };
       if (item.state === 'expired') {
         if (!seenReauthRefs.has(legacyItem.ref)) {
@@ -402,7 +404,19 @@ export function evaluateGhostSetup(
   }
 
   const ready = missingGroups.length === 0 && reauth.length === 0;
-  return { ready, missingGroups: ready ? [] : missingGroups, reauth: ready ? [] : reauth };
+  // Host 级 client_config 需求存在即标记:renderer 据此把「去配置」路由到
+  // 客户端设置页(插件配置区解决不了模型供应商这类 Host 凭证)。
+  const requiresClientSettings =
+    !ready &&
+    assessment.groups.some((group) =>
+      group.items.some((item) => item.kind === 'client_config' && item.state !== 'satisfied'),
+    );
+  return {
+    ready,
+    missingGroups: ready ? [] : missingGroups,
+    reauth: ready ? [] : reauth,
+    ...(requiresClientSettings ? { requiresClientSettings: true } : {}),
+  };
 }
 
 /**

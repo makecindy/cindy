@@ -437,6 +437,20 @@ export function GhostPluginPage() {
     });
   }, []);
 
+  // 「去配置」的统一落点:Host 级 client_config 需求(模型供应商未就绪
+  // 等)必须路由到客户端设置页——插件配置区加不了 XD/模型凭证,留在
+  // 原处确认只会让需求继续悬着。
+  const openConfigurationForStatus = useCallback(
+    (id: string, status?: GhostSetupStatus) => {
+      if (status?.requiresClientSettings) {
+        navigate('/settings?tab=providers');
+        return;
+      }
+      openGhostConfiguration(id);
+    },
+    [navigate, openGhostConfiguration],
+  );
+
   const handleToggle = useCallback(
     async (id: string, enabled: boolean, displayName: string) => {
       try {
@@ -474,14 +488,14 @@ export function GhostPluginPage() {
               cancelText: t('settings.ghosts.setupGate.cancel'),
               autoFocusConfirm: true,
             });
-            if (goConfigure) openGhostConfiguration(id);
+            if (goConfigure) openConfigurationForStatus(id, result.setup as GhostSetupStatus);
           }
         }
       } catch (error) {
         toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
       }
     },
-    [confirm, ghosts, openGhostConfiguration, t],
+    [confirm, ghosts, openConfigurationForStatus, t],
   );
 
   // 市场更新流程由列表卡片和详情页共用:先取目标 release 的完整 manifest 做
@@ -632,7 +646,7 @@ export function GhostPluginPage() {
           // 主操作「去配置」非破坏性,默认焦点落主按钮(弹窗契约的适用场景)。
           autoFocusConfirm: true,
         });
-        if (goConfigure) openGhostConfiguration(id);
+        if (goConfigure) openConfigurationForStatus(id, setupStatus);
         return;
       }
       // 生命周期前置门(在 setupStatus 之后):配置就绪不代表运行态可用——
@@ -681,7 +695,7 @@ export function GhostPluginPage() {
       });
       navigate('/cc-agent/new');
     },
-    [confirm, ghosts, navigate, openGhostConfiguration, t],
+    [confirm, ghosts, navigate, openConfigurationForStatus, t],
   );
 
   const handleUse = useCallback(() => {

@@ -46,6 +46,19 @@ describe('resolveScriptCapabilityStatuses', () => {
     expect(statuses.find((s) => s.capability === 'sessions.dispatch')?.state).toBe('ok');
   });
 
+  it('blocked 优先于 asleep:禁用的账号托管插件提示登录而非打开开关', () => {
+    // 本地模式下 xd-atlassian 被禁用且投影 blocked:recovery 动作是
+    // 登录/恢复云端(main 拒绝启用),不能误导成「沉睡,打开开关」。
+    const statuses = resolveScriptCapabilityStatuses([
+      { id: 'xd-atlassian', name: 'XD Atlassian', enabled: false, readiness: 'blocked' },
+    ]);
+    expect(statuses.find((s) => s.capability === 'jira.read')).toEqual({
+      capability: 'jira.read',
+      state: 'ghost-blocked',
+      ghostName: 'XD Atlassian',
+    });
+  });
+
   it('marks jira capabilities ghost-missing (name falls back to id) when not installed', () => {
     const statuses = resolveScriptCapabilityStatuses([]);
     expect(statuses.find((s) => s.capability === 'jira.comment')).toEqual({

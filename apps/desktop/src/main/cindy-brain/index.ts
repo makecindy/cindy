@@ -554,8 +554,8 @@ export function armGhostLifecyclePush(): void {
   // 多次唤醒只算一次投影/序列化(记账仍逐事件同步执行,不丢清账)。
   let coalesced = false;
   getGhostSetupChangeBus().subscribeAll((event) => {
-    // 凭证重存 = 用户已处置被拒记录,按 ghostId 清账(所有 secret 写入
-    // 路径都会 emit,无需逐点挂钩);清账后照常重投影广播。
+    // 凭证重存 = 用户已处置被拒记录(主写入路径已在 emit 前清账;此处幂等
+    // 兜底,覆盖未来新增的写入路径)。清账后照常重投影广播。
     if (event.source === 'secret') {
       if (event.ref) {
         ghostCredentialRejections().clearSecret(event.ghostId, event.ref);
@@ -2846,11 +2846,16 @@ export function registerGhostIpc(): void {
         tail: (id, key) => readGhostSecretTail(id, key),
         store: (id, key, value) => {
           const stored = storeGhostSecret(id, key, value);
+          // 先清账再唤醒:bus notify 先调 keyed 的 setup coordinator(同步
+          // 重估),wildcard 的清账在它之后——若先 emit,coordinator 拿到的
+          // 还是带 expired 的过期评估,配置卡永远停在被拒态完不成。
+          if (stored) ghostCredentialRejections().clearSecret(id, key);
           if (stored) getGhostSetupChangeBus().emit(id, { source: 'secret', ref: key });
           return stored;
         },
         remove: (id, key) => {
           removeGhostSecret(id, key);
+          ghostCredentialRejections().clearSecret(id, key);
           getGhostSetupChangeBus().emit(id, { source: 'secret', ref: key });
         },
       },

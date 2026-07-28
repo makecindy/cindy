@@ -60,6 +60,12 @@ export function resolveScriptCapabilityStatuses(
     if (!depId) return { capability, state: 'ok' as const };
     const ghost = ghosts.find((g) => g.id === depId);
     if (!ghost) return { capability, state: 'ghost-missing' as const, ghostName: depId };
+    // blocked 优先于 asleep:账号托管插件(xd-atlassian/xd-feishu)在云端
+    // 会话缺失时被禁用,recovery 动作是登录/恢复云端(main 也会拒绝启用),
+    // 不能误导成「沉睡,打开开关就好」。
+    if (ghost.readiness === 'blocked') {
+      return { capability, state: 'ghost-blocked' as const, ghostName: ghost.name };
+    }
     if (!ghost.enabled) return { capability, state: 'ghost-asleep' as const, ghostName: ghost.name };
     switch (ghost.readiness) {
       case undefined:
@@ -71,11 +77,6 @@ export function resolveScriptCapabilityStatuses(
         // unknown = 就绪评估本身失败(配置存储读不出/损坏),打开配置页
         // 解决不了,文案必须指向「状态未知需检查」而非「未配置」。
         return { capability, state: 'ghost-unknown' as const, ghostName: ghost.name };
-      case 'blocked':
-        // blocked = 云端会话缺失/账号服务不可用(如 xd-atlassian/xd-feishu
-        // 这类 Cindy 账号插件),修复动作是登录/恢复云端,不是「去配置」,
-        // 单独成态避免误导成 needs-setup。
-        return { capability, state: 'ghost-blocked' as const, ghostName: ghost.name };
       case 'needs_reauth':
         return { capability, state: 'ghost-needs-reauth' as const, ghostName: ghost.name };
       case 'degraded':

@@ -1308,10 +1308,14 @@ export class GhostNetworkSlot {
       // (注入的是换来的令牌)与 login-email 型虽不在这里记账,但它们与
       // 直连 key 并存时 401 归属同样不明——只数可记账 key 会把「令牌
       // 被拒」错记到直连 key 头上。
-      const injectedSecretCount = (net.secrets ?? []).filter((decl) =>
-        (decl.inject.hosts ?? net.hosts).some((pattern) =>
-          ghostNetworkHostMatches(pattern, responseHost),
-        ),
+      // oauth 声明不在这里计:它们由 responseOauthKeys(最终跳实际注入面)
+      // 计数——两处都数会把 oauth 算两遍,把本可唯一归因的场景误判歧义。
+      const injectedSecretCount = (net.secrets ?? []).filter(
+        (decl) =>
+          decl.source !== 'oauth' &&
+          (decl.inject.hosts ?? net.hosts).some((pattern) =>
+            ghostNetworkHostMatches(pattern, responseHost),
+          ),
       ).length;
       // oauth/连接取最终响应那一跳的实际注入面(跨跳累计的 oauthInjected
       // 含上一跳凭证,不随重定向出网,不能归因)。

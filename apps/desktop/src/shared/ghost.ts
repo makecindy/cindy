@@ -919,7 +919,7 @@ export interface GhostSetupStatusItem {
   ref: string;
   /** 展示名(secret/connection 取 network 声明的 label;kv 取 setup 声明的 label)。 */
   label: string;
-  kind: 'key' | 'oauth' | 'connection' | 'kv';
+  kind: 'key' | 'oauth' | 'connection' | 'kv' | 'client_config';
 }
 
 /** 意识配置就绪状态(main 侧 evaluateGhostSetup 产出)。 */
@@ -932,6 +932,12 @@ export interface GhostSetupStatus {
   missingGroups: GhostSetupStatusItem[][];
   /** OAuth 账号存在但全部过期的条目(文案区分「重新连接」)。ready 时恒为空。 */
   reauth: GhostSetupStatusItem[];
+  /**
+   * 有任一未满足需求是 Host 级 client_config(修复动作是 open_client_settings,
+   * 如模型供应商未就绪)——弹窗「去配置」应路由到客户端设置页,而不是
+   * 插件配置区(那里加不了 XD/模型凭证,确认后需求仍悬着)。
+   */
+  requiresClientSettings?: boolean;
 }
 
 /** Setup Runtime 暴露给 Agent / Renderer 的需求类型；不包含任何配置值。 */
