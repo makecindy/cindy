@@ -702,6 +702,18 @@ describe('远程交互接线不变式', () => {
     expect(sameModeGuard).toBeLessThan(src.indexOf('requiresFullAccessConfirmation('));
   });
 
+  // 这一处已经错过两轮:先是 boolean(旧会话的旗子吞掉新会话的点击),再是单个
+  // sessionId 标量(A 在途时被 B 覆盖,B 一完成清空槽,回到 A 就能再起一条并发链 ——
+  // 两条 A 的 runtime + DB 写乱序落地,先发的那条落库失败还会拿旧档回滚覆盖新选择)。
+  // 逐会话记账是唯一正确形态,锁死它。
+  it('权限卡片切档按会话逐个记账(Set),不得退回布尔或单槽标量', () => {
+    const src = read('features/cc-agent/CCAgentSessionView.tsx');
+    expect(src).toContain('const permissionModeChangeInFlightRef = useRef<Set<string>>(new Set());');
+    expect(src).toContain('permissionModeChangeInFlightRef.current.has(sessionId)');
+    expect(src).toContain('permissionModeChangeInFlightRef.current.add(sessionId)');
+    expect(src).toContain('permissionModeChangeInFlightRef.current.delete(sessionId)');
+  });
+
   it('composer 与权限卡片共用同一条切档路径,各自负责失败 toast', () => {
     for (const rel of [
       'components/new-chat/ChatInput.tsx',

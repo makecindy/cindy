@@ -2328,16 +2328,20 @@ export function CCAgentSessionView({
   // 异步完成顺序(且失败回滚会滚到错档)。in-flight 期间后续请求直接 no-op ——
   // 与下面 compactRequestInFlightRef 同一套约定。
   //
-  // 存的是"正在切档的那个 sessionId"而非 boolean:本组件实例跨会话复用,若存 boolean,
-  // 用户在确认框/远程调用挂起期间切到别的会话,新会话的点击与 Shift+Tab 会被这面
-  // 陈旧的旗子静默吞掉。按 sessionId 比对则天然按会话隔离——旧会话的确认框没处理完
-  // 时回到旧会话仍然拦(那本来就该拦),新会话不受影响。
-  const permissionModeChangeInFlightRef = useRef<string | null>(null);
+  // 存的是"正在切档的 sessionId 集合",两个都不能省:
+  // - 不能是 boolean:本组件实例跨会话复用,用户在确认框/远程调用挂起期间切到别的
+  //   会话,新会话的点击与 Shift+Tab 会被这面陈旧的旗子静默吞掉。
+  // - 不能是单个 sessionId 标量:A 在途时切到 B 发起切档会覆盖掉 A 的标记,B 一完成
+  //   就把槽清空,此时回到 A 又能再起一条链 —— 两条 A 的 runtime + DB 写并发,最终
+  //   档位取决于完成顺序,先发的那条若落库失败还会拿它捕获的旧档把 runtime 回滚,
+  //   覆盖掉更新的选择。
+  // 用 Set 逐会话记账:进入时 add、finally 只 delete 自己,天然按会话隔离且无覆盖。
+  const permissionModeChangeInFlightRef = useRef<Set<string>>(new Set());
   const handlePermissionCardModeChange = useCallback(
     async (nextMode: PermissionMode) => {
       if (!sessionId) return;
-      if (permissionModeChangeInFlightRef.current === sessionId) return;
-      permissionModeChangeInFlightRef.current = sessionId;
+      if (permissionModeChangeInFlightRef.current.has(sessionId)) return;
+      permissionModeChangeInFlightRef.current.add(sessionId);
       try {
         const outcome = await applySessionPermissionModeChange({
           sessionId,
@@ -2363,10 +2367,8 @@ export function CCAgentSessionView({
         }
         handlePermissionModeDidChange();
       } finally {
-        // 只清自己那面旗:期间若已切走会话并由新会话占用,不要替它清。
-        if (permissionModeChangeInFlightRef.current === sessionId) {
-          permissionModeChangeInFlightRef.current = null;
-        }
+        // 只销自己这条记账,不碰其它会话在途的标记。
+        permissionModeChangeInFlightRef.current.delete(sessionId);
       }
     },
     [confirmDialog, handlePermissionModeDidChange, remoteDeviceId, sessionId, t],
