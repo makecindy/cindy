@@ -2127,6 +2127,12 @@ export class CodexAgent extends BaseAgent {
     // turn id 在同一 thread 内唯一;墓碑随 session handle 释放,不跨 session 泄漏。
     const completedTurnIds = new Set<string>();
     const terminalErroredTurnIds = new Set<string>();
+    // 只有已收到 turn/started 的 turn 才能把 no-active + listener resume 当作
+    // 权威终态屏障：此时 server listener 必然先建立过 active snapshot，而
+    // no-active 又证明它已消费 terminal event。若本地只有 turn/start response
+    // 尚未见 started，server 可能只是 core 已 idle、terminal 仍排在 listener
+    // 队列中；该启动竞态下不得根据 metadata 提前立 tombstone。
+    const observedTurnStartedIds = new Set<string>();
     // daemon 后端 retry-loop 的终局升级 (issue #677): 远端摸不到 Codex 后端时
     // daemon 无限 willRetry, turn 永不收口。同 turn 重试超阈值 → 合成终态错误,
     // 走与终态 error 完全相同的收口路径 (terminalErroredTurnIds + Done status)。
@@ -4410,6 +4416,7 @@ export class CodexAgent extends BaseAgent {
         if (shouldIgnoreStaleTurnEvent(params.turn.id)) return;
         // 终态已先到的 turn (墓碑) 不得被乱序晚到的 started 重新置活。
         if (turnsCompletedBeforeStartResp.has(params.turn.id)) return;
+        observedTurnStartedIds.add(params.turn.id);
         threadMayHaveRollout = true;
         const wasSameTurn = currentTurnId === params.turn.id;
         currentTurnId = params.turn.id;
@@ -5316,10 +5323,11 @@ export class CodexAgent extends BaseAgent {
           if (isNoActiveTurnInterruptError(e)) {
             // no-active 只证明 server 已空闲,不能据此伪造 interrupted:真实 turn
             // 可能已 completed/failed,伪造会丢 usage、structured plan 与 plan_review。
-            // 先守 captured id,再用 metadata-only resume 穿过 app-server 的
-            // thread listener: running-thread resume response 与 turn notifications
-            // 在服务端同一队列串行,因此 response 是权威 stream boundary,不是
-            // 基于静默时长的推测。屏障后仍未收到 turn/completed 才查持久化终态。
+            // 先守 captured id。对已观察到 turn/started 的 turn,再用
+            // metadata-only resume 穿过 app-server 的 thread listener:
+            // running-thread resume response 与 turn notifications 在服务端同一
+            // 队列串行,因此 response 是权威 stream boundary,不是基于静默时长
+            // 的推测。屏障后仍未收到 turn/completed 才查持久化终态。
             if (!isTurnInFlight || currentTurnId !== interruptedTurnId) {
               log.debug('turn/interrupt no-active rejection arrived after local turn advanced', {
                 interruptedTurnId,
@@ -5328,6 +5336,7 @@ export class CodexAgent extends BaseAgent {
               });
               return;
             }
+            const hadObservedTurnStart = observedTurnStartedIds.has(interruptedTurnId);
             try {
               await host.request<ThreadResumeResponse>(
                 Method.ThreadResume,
@@ -5341,6 +5350,16 @@ export class CodexAgent extends BaseAgent {
                   interruptedTurnId,
                   currentTurnId,
                   isTurnInFlight,
+                });
+                return;
+              }
+              if (!hadObservedTurnStart) {
+                // turn/start response 可以早于 turn/started。若 core 又极快结束，
+                // interrupt 会因 !is_running 返回 no-active，但 terminal event
+                // 可能仍未进入 listener；resume command 的 biased queue 此时不能
+                // 证明它在 terminal 之后。保留状态等待真实通知，避免吞内容/用量。
+                log.warn('turn/interrupt no-active arrived before turn/started was observed; preserving local state', {
+                  turnId: interruptedTurnId,
                 });
                 return;
               }

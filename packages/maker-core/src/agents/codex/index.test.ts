@@ -5926,6 +5926,42 @@ describe('CodexAgent abort', () => {
     await handle.close();
   });
 
+  it('does not treat resume as a terminal boundary before turn/started was observed', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: 'turn-start-response-only' } };
+      }
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadResume) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-before-turn-started',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    // The turn/start response establishes the local id, but no turn/started
+    // notification has crossed the server listener yet.
+    await handle.send({ type: 'user', content: 'fast turn' });
+    expect(handle.getCurrentTurnId?.()).toBe('turn-start-response-only');
+
+    await expect(handle.abort()).resolves.toBeUndefined();
+
+    expect(handle.getCurrentTurnId?.()).toBe('turn-start-response-only');
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadTurnsList,
+    )).toHaveLength(0);
+    await handle.close();
+  });
+
   it('does not reconcile a message-only no-active error with another RPC code', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
