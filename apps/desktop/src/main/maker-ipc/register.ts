@@ -3486,10 +3486,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     refreshProvider: (providerId) =>
       refreshBuiltinProviderModels(providerId, {
         refreshXd: options.refreshXdGatewayModels,
-        refreshAnthropic: async () => {
-          await refreshAnthropicModelsFromHttp();
-          return getAnthropicModelDiscoveryFailure() === null;
-        },
+        refreshAnthropic: refreshAnthropicModelsFromHttp,
         refreshOpenAi: () => maker.refreshAgentLocalModels(
           'codex',
           { credentialMode: 'oauth-bearer' },

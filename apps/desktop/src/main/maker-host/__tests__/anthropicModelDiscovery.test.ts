@@ -1348,7 +1348,7 @@ describe('HTTP 发现失败的归因与选择性重试', () => {
     });
     try {
       vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
-      await expect(refreshAnthropicModelsFromHttp()).resolves.toBeUndefined();
+      await expect(refreshAnthropicModelsFromHttp()).resolves.toBe(false);
       expect(getAnthropicModelDiscoveryFailure()?.kind).toBe('network');
     } finally {
       setAnthropicDiscoveryFailureListener(null);

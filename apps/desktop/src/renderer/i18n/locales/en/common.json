@@ -1342,7 +1342,7 @@
         "splitDone": "Done",
         "capabilityNote": "Not available in {{agent}}",
         "divergedChip": "Hidden in {{agent}}",
-        "refreshAria": "Refresh Model List",
+        "refreshAria": "Refresh model list (additions only)",
         "refreshBuiltinAria": "Refresh Model List",
         "refreshingAria": "Refreshing model list…",
         "refreshDone": "Model list refreshed",
