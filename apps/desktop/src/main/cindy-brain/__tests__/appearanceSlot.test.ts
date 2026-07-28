@@ -60,6 +60,10 @@ function harness(overrides: Partial<ConstructorParameters<typeof GhostAppearance
       }),
       save,
       savePreset,
+      saveWithPreset: async (appearance, mediaHashes, ghostId, customized) => {
+        await save(appearance, mediaHashes, ghostId, customized);
+        return savePreset(appearance, mediaHashes, ghostId);
+      },
       listPresets: async () => [],
       activatePreset: async () => null,
       deletePreset: async () => false,

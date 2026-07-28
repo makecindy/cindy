@@ -362,12 +362,76 @@ async function saveGhostAppearancePresetUnsafe(
   return presetSummary(preset);
 }
 
+async function restorePresetState(before: PersistedAppearancePresetLibrary): Promise<void> {
+  const after = await readPresetLibrary();
+  const beforeById = new Map(before.presets.map((preset) => [preset.id, preset]));
+  for (const preset of after.presets) {
+    const previous = beforeById.get(preset.id);
+    if (!previous) {
+      await Promise.all(
+        (['background', 'brandIcon', 'brandLogo'] as const).map((asset) =>
+          removeRefs({ refKind: 'skin-preset', refId: presetRefId(preset.id, asset) }),
+        ),
+      );
+      continue;
+    }
+    const previousHashes = hashesFromSnapshot(previous.snapshot);
+    await releaseReplacedPresetMedia(preset.id, previousHashes);
+    await retainPresetMedia(preset.id, previousHashes, previous.sourceGhostId);
+  }
+  for (const previous of before.presets) {
+    if (after.presets.some((preset) => preset.id === previous.id)) continue;
+    await retainPresetMedia(previous.id, hashesFromSnapshot(previous.snapshot), previous.sourceGhostId);
+  }
+  await atomicWriteJson(presetsFilePath(), before);
+}
+
 export function saveGhostAppearancePreset(
   snapshot: GhostAppearanceSnapshot,
   mediaHashes: AppearanceMediaHashes = hashesFromSnapshot(snapshot),
   ghostId?: string,
 ): Promise<GhostAppearancePresetSummary> {
   return serializeMutation(() => saveGhostAppearancePresetUnsafe(snapshot, mediaHashes, ghostId));
+}
+
+export function saveGhostAppearanceWithPreset(
+  snapshot: GhostAppearanceSnapshot,
+  mediaHashes: AppearanceMediaHashes,
+  ghostId: string,
+  customized: { dim: boolean; surfaceOpacity: boolean },
+): Promise<GhostAppearancePresetSummary> {
+  return serializeMutation(async () => {
+    const previousAppearance = await readGhostAppearance();
+    const previousPresets = await readPresetLibrary();
+    try {
+      const preset = await saveGhostAppearancePresetUnsafe(snapshot, mediaHashes, ghostId);
+      await saveGhostAppearanceUnsafe(snapshot, mediaHashes, ghostId, customized);
+      return preset;
+    } catch (error) {
+      try {
+        if (previousAppearance) {
+          await saveGhostAppearanceUnsafe(
+            previousAppearance,
+            hashesFromSnapshot(previousAppearance),
+            undefined,
+            { dim: true, surfaceOpacity: true },
+          );
+        } else {
+          await fs.rm(filePath(), { force: true });
+          await Promise.all(
+            (['skin-background', 'skin-brand-icon', 'skin-brand-logo'] as const).map((refKind) =>
+              removeRefs({ refKind, refId: REF_ID }),
+            ),
+          );
+        }
+        await restorePresetState(previousPresets);
+      } catch {
+        // Preserve the original failure; the recycler grace period protects any
+        // references that need a later reconciliation pass.
+      }
+      throw error;
+    }
+  });
 }
 
 function findPreset(

@@ -147,6 +147,7 @@ import {
   resetGhostAppearance,
   saveGhostAppearance,
   saveGhostAppearancePreset,
+  saveGhostAppearanceWithPreset,
 } from './appearanceStore.js';
 import { removeWhiteSkinLogoBackground, validateStaticSkinImage } from './skinLogoProcessor.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
@@ -1484,6 +1485,7 @@ export function getGhostAppearanceSlot(): GhostAppearanceSlot {
       },
       save: saveGhostAppearance,
       savePreset: saveGhostAppearancePreset,
+      saveWithPreset: saveGhostAppearanceWithPreset,
       listPresets: listGhostAppearancePresets,
       activatePreset: activateGhostAppearancePreset,
       deletePreset: deleteGhostAppearancePreset,

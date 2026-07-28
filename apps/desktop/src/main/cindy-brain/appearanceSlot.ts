@@ -70,6 +70,16 @@ export interface AppearanceSlotDeps {
     },
     ghostId?: string,
   ): Promise<GhostAppearancePresetSummary>;
+  saveWithPreset(
+    appearance: GhostAppearanceSnapshot,
+    mediaHashes: {
+      background?: string;
+      brandIcon?: string;
+      brandLogo?: string;
+    },
+    ghostId: string,
+    customized: { dim: boolean; surfaceOpacity: boolean },
+  ): Promise<GhostAppearancePresetSummary>;
   listPresets(): Promise<GhostAppearancePresetSummary[]>;
   activatePreset(preset: string): Promise<GhostAppearanceSnapshot | null>;
   deletePreset(preset: string): Promise<boolean>;
@@ -185,19 +195,10 @@ export class GhostAppearanceSlot {
         brandLogo: hashFromMediaUrl(appearance.brand?.logo?.url),
       };
       try {
-        await this.deps.save(appearance, mediaHashes, ghostId, {
+        const preset = await this.deps.saveWithPreset(appearance, mediaHashes, ghostId, {
           dim: true,
           surfaceOpacity: true,
         });
-        let preset: GhostAppearancePresetSummary | undefined;
-        try {
-          preset = await this.deps.savePreset(appearance, mediaHashes, ghostId);
-        } catch (error) {
-          this.deps.log?.warn('ghost appearance current preset save skipped', {
-            ghostId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
         this.deps.broadcast(appearance);
         return { ok: true, appearance, preset };
       } catch (error) {
@@ -458,19 +459,16 @@ export class GhostAppearanceSlot {
       updatedAt: (this.deps.now ?? Date.now)(),
     };
     try {
-      await this.deps.save(appearance, mediaHashes, ghostId, {
-        dim: patching || request.dim !== undefined,
-        surfaceOpacity: patching || request.surfaceOpacity !== undefined,
-      });
       if (appearance.name) {
-        try {
-          await this.deps.savePreset(appearance, mediaHashes, ghostId);
-        } catch (error) {
-          this.deps.log?.warn('ghost appearance preset save skipped', {
-            ghostId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+        await this.deps.saveWithPreset(appearance, mediaHashes, ghostId, {
+          dim: patching || request.dim !== undefined,
+          surfaceOpacity: patching || request.surfaceOpacity !== undefined,
+        });
+      } else {
+        await this.deps.save(appearance, mediaHashes, ghostId, {
+          dim: patching || request.dim !== undefined,
+          surfaceOpacity: patching || request.surfaceOpacity !== undefined,
+        });
       }
     } catch (error) {
       this.deps.log?.warn('ghost appearance save failed', {
