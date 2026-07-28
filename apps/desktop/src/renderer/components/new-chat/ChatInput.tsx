@@ -74,6 +74,7 @@ import {
   saveDraft as saveComposerDraft,
   clearDraft as clearComposerDraft,
   subscribeDraft as subscribeComposerDraft,
+  tiptapDocHasContent,
 } from '@/lib/composerDraftStore';
 import { subscribeSessionLinkInsert } from '@/lib/composerActionsBus';
 import { ModelSelector, type ModelMemoryAccessors } from './ModelSelector';
@@ -2705,9 +2706,13 @@ export function ChatInput({
       setBrowserComments(draft.browserComments ?? []);
       // 同值外部写入不做全量 setContent,避免把用户停在中段的光标弹到末尾、
       // 打断 IME 组合。appendQuoteToDraft 会改变正文文档,自然走下方 setContent。
-      const normalizedDraftText = draft.text
-        ? normalizeComposerDocumentJSON(draft.text)
-        : null;
+      // 空草稿在存储里可能是 `{doc:[空 paragraph]}` 而不是 undefined,而右侧对
+      // "编辑器为空"一律折叠成 null。两侧判空口径必须一致,否则每次外部草稿通知都
+      // 会拿一份空文档整段 setContent:doc 被原地重建,所有按位置存活的状态(语音
+      // 草稿锚点等)被迫跨整篇映射(#720 后语音录音时首行多一个空行的成因)。
+      const draftDocument = draft.text ? normalizeComposerDocumentJSON(draft.text) : null;
+      const normalizedDraftText =
+        draftDocument && tiptapDocHasContent(draftDocument) ? draftDocument : null;
       const textUnchanged =
         JSON.stringify(normalizedDraftText) ===
         JSON.stringify(composerDocIsEmpty(editor.state.doc) ? null : editor.getJSON());

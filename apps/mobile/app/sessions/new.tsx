@@ -135,6 +135,7 @@ import {
   buildRecentWorkspaceOptions,
   filterRemoteDirectoryEntries,
   normalizeCreateSessionResult,
+  isNewSessionDraftMissingPayloadOnly,
   parseNewSessionDeviceOptions,
   pickAgentDefaultRuntime,
   pickInitialNewSessionWorkspace,
@@ -782,10 +783,22 @@ export default function NewRemoteSessionScreen() {
   const deviceSelectorDisabled = creating || voiceIsProcessing || !deviceHasChoices;
   // 上传中不再挡创建:附件走乐观管线(pendingUploads),create() 内部会 await 全部
   // 在途上传落定后再组首条消息,抢点创建不会丢图(#589 的 attachmentBusy 门由此取代)。
-  // listening 时豁免「缺正文/附件」校验:此刻点创建 = 结束录音并用转写创建
-  // (create() 的 listening 分支),最终转写在 create() 内部重新校验;不豁免的话
-  // 空草稿录音期间创建按钮永远按不动,「点创建停录并创建」形同虚设(review P1)。
-  const canCreate = (!createValidation || voiceIsListening) && !creating && !voiceIsProcessing;
+  // listening 时**只**豁免「缺正文/附件」这一条校验:此刻点创建 = 结束录音并用
+  // 转写创建(create() 的 listening 分支),最终转写在 create() 内部重新校验;
+  // 不豁免的话空草稿录音期间创建按钮永远按不动。缺项目路径/模型等其它校验不
+  // 豁免——那些不会被转写补上,放行只会「可点但必失败」(review 二轮收窄)。
+  // validateNewSessionDraft 的校验顺序是 路径→模型→正文,命中缺正文文案即代表
+  // 前两项都已通过。
+  // 结构化判定,不比对本地化文案:locale 异步恢复(如深链直达后语言落地)时
+  // memo 住的旧语言校验文案与新 t() 输出不等,字符串比对会让豁免静默失效
+  // (review 三轮收口)。
+  const createValidationIsMissingPayload = useMemo(
+    () => isNewSessionDraftMissingPayloadOnly(draft, draftContent),
+    [draft, draftContent],
+  );
+  const canCreate = (!createValidation || (voiceIsListening && createValidationIsMissingPayload))
+    && !creating
+    && !voiceIsProcessing;
   const voiceIsBusy = voiceIsListening || voiceIsProcessing;
   // 录音计时(红点+m:ss 胶囊,与会话页/桌面同形态);pillWidth 同步驱动工具排占位。
   // counting 只认真实采集,启动链路(权限弹窗等)不计入时长,pending 期显示 0:00。

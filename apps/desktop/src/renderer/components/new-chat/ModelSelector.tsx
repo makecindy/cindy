@@ -27,7 +27,6 @@ import { useModelPricing } from '@/hooks/useModelPricing';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
-  formatModelPricePair,
   modelPriceDiscountLabelValues,
   modelPriceDetailRows,
   modelPricePresentation,
@@ -92,8 +91,8 @@ const PROVIDER_TITLE_KEY: Record<string, string> = {
 // 配置面板锚在主菜单内缩 8px 的模型行上；补偿这段内缩，让两块面板贴边但不重叠。
 const MODEL_OPTIONS_SIDE_OFFSET = 8;
 const MODEL_LIST_DEFAULT_MAX_HEIGHT_PX = 300;
-// 折扣模型的价格会叠成两行：27.5px 价格栈 + 16px 纵向 padding，向上取整为 44px。
-const MODEL_LIST_CONSTRAINED_ROW_HEIGHT_PX = 44;
+// 一级菜单只保留单行模型信息与必要标签：20px 内容 + 16px 纵向 padding。
+const MODEL_LIST_ROW_HEIGHT_PX = 36;
 const MODEL_LIST_ROW_GAP_PX = 2;
 
 export function modelListMaxHeightForRows(maxVisibleRows?: number): number | undefined {
@@ -101,7 +100,7 @@ export function modelListMaxHeightForRows(maxVisibleRows?: number): number | und
   const rows = Math.max(1, Math.floor(maxVisibleRows));
   return Math.min(
     MODEL_LIST_DEFAULT_MAX_HEIGHT_PX,
-    rows * MODEL_LIST_CONSTRAINED_ROW_HEIGHT_PX + Math.max(0, rows - 1) * MODEL_LIST_ROW_GAP_PX,
+    rows * MODEL_LIST_ROW_HEIGHT_PX + Math.max(0, rows - 1) * MODEL_LIST_ROW_GAP_PX,
   );
 }
 
@@ -1272,7 +1271,7 @@ function ModelSelectorContentView({
             }}
             className={cn(
               'flex w-full cursor-pointer items-center justify-between rounded-[8px] px-3 py-2',
-              constrainedListMaxHeight !== undefined && 'min-h-11',
+              constrainedListMaxHeight !== undefined && 'min-h-9',
               'transition-colors duration-100 hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
               isSelected && 'bg-[var(--model-item-hover)]',
               isEditingThis &&
@@ -1295,7 +1294,7 @@ function ModelSelectorContentView({
               )}
               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                 <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <span className="truncate text-14 font-medium text-[var(--model-item-text)]">
+                  <span className="truncate text-14 font-medium leading-5 text-[var(--model-item-text)]">
                     {model.displayName}
                   </span>
                   {rowEffort && (
@@ -1330,29 +1329,9 @@ function ModelSelectorContentView({
                 )}
               </span>
             </span>
-            {(rowPrice?.kind === 'priced' || isSelected) && (
-              <span className="ml-2 flex shrink-0 items-center gap-1.5">
-                {rowPrice?.kind === 'priced' && (
-                  <span
-                    data-model-price-stack={rowPrice.original ? 'true' : undefined}
-                    className={cn(
-                      'flex tabular-nums text-11 font-normal leading-[1.25]',
-                      rowPrice.original ? 'flex-col items-end' : 'items-center',
-                    )}
-                  >
-                    <span className="text-[var(--text-secondary)]">
-                      {formatModelPricePair(rowPrice.current)}
-                    </span>
-                    {rowPrice.original && (
-                      <span className="text-[var(--text-tertiary)] line-through">
-                        {formatModelPricePair(rowPrice.original)}
-                      </span>
-                    )}
-                  </span>
-                )}
-                {isSelected && (
-                  <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
-                )}
+            {isSelected && (
+              <span className="ml-2 flex shrink-0 items-center">
+                <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
               </span>
             )}
           </div>

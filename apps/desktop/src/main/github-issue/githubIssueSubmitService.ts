@@ -10,6 +10,9 @@
  * 模块保持 electron-free,全部依赖注入(规则 14),单测直接调 submitGithubIssueWithConfirm。
  */
 
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+
+import { ISSUE_REGION_CODE } from '../../shared/issueRegionCode.js';
 import type {
   IssueConfirmDecision,
   IssueDraft,
@@ -75,6 +78,8 @@ export interface GithubIssueSubmitServiceDeps {
   ) => Promise<GithubIssuePostResponse>;
   getAppVersion: () => string;
   getOsInfo: () => { platform: string; arch: string; osVersion: string };
+  /** 本构建的区域身份(构建期烘焙);同版本号的 cn / global 是两个不同的包。 */
+  getRegion: () => CindyRegion;
   /** main 侧 OS locale,仅当 renderer 未回传 uiLanguage 时兜底。 */
   getFallbackLocale: () => string;
   /** 当前 Cindy membership 的展示名,仅用于 issue 正文标记提交人。 */
@@ -92,6 +97,7 @@ export async function submitGithubIssueWithConfirm(
   const env: IssueEnvInfo = {
     appVersion: deps.getAppVersion(),
     ...deps.getOsInfo(),
+    region: deps.getRegion(),
   };
 
   let submissionIdentity: IssueSubmissionIdentity;
@@ -131,9 +137,12 @@ export async function submitGithubIssueWithConfirm(
     decision.type !== req.type;
 
   const uiLanguage = decision.uiLanguage ?? deps.getFallbackLocale();
+  const regionCode = ISSUE_REGION_CODE[env.region];
   const envBlock = [
     '',
     '---',
+    // global 不写这一行 —— 缺失即默认区域,理由见 ISSUE_REGION_CODE(与确认卡片同源)。
+    ...(regionCode ? [`**版本区域**: ${regionCode}`] : []),
     `**OS**: ${env.platform} ${env.arch} (${env.osVersion})`,
     `**界面语言**: ${uiLanguage}`,
   ].join('\n');

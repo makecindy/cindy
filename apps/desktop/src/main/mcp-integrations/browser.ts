@@ -8,7 +8,7 @@
 import './browser-runtime-env.js';
 import fs from 'node:fs';
 import nodePath from 'node:path';
-import { ipcMain } from 'electron';
+import { app, ipcMain } from 'electron';
 import {
   createBrowserControlRuntime,
   type BrowserControlRuntime,
@@ -182,6 +182,16 @@ const vendoredRuntime = trackBrowserRuntimeUsage(
 
 const externalBackend = new ExternalChromeBackend(vendoredRuntime, logger);
 
+type SessionUploadRootResolver = (sessionId: string) => Promise<string[]>;
+
+let resolveSessionUploadRoots: SessionUploadRootResolver = async () => [];
+
+export function setBrowserSessionUploadRootResolver(
+  resolver: SessionUploadRootResolver,
+): void {
+  resolveSessionUploadRoots = resolver;
+}
+
 /**
  * RSB-webview backend instance (Phase 3+). Lazily constructed because the
  * TabRegistry singleton must be available — which it is right after this
@@ -190,6 +200,8 @@ const externalBackend = new ExternalChromeBackend(vendoredRuntime, logger);
 const rsbBackend = new RsbWebviewBackend({
   registry: getRsbBrowserBridge(),
   getActiveSessionId: () => getActiveRsbSessionId(),
+  artifactRoot: () => nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'),
+  resolveUploadRoots: (sessionId) => resolveSessionUploadRoots(sessionId),
   bridge: {
     // Lazy main-window lookup. Phase 2 uses the same pattern; once the host
     // window is available the dispatch lands cleanly, before that the request
@@ -317,6 +329,8 @@ export async function setActiveBrowserBackendKind(kind: BackendKind): Promise<vo
  */
 export function getBrowserMcpDeps(): {
   getRuntime(): BrowserControlRuntime;
+  supportsResourceDownloads(): boolean;
+  supportsSemanticQueries(): boolean;
   logger: typeof logger;
   getUserRecipes(): Promise<UserRecipesResult>;
   saveUserRecipe(input: Parameters<typeof writeUserRecipe>[0]): Promise<WriteUserRecipeResult>;
@@ -331,6 +345,8 @@ export function getBrowserMcpDeps(): {
     // the backend split. Swapping the active backend (Phase 5) is invisible from
     // @cindy/mcps' perspective.
     getRuntime: () => router,
+    supportsResourceDownloads: () => router.kind === 'rsb-webview',
+    supportsSemanticQueries: () => router.kind === 'rsb-webview',
     logger,
   };
 }

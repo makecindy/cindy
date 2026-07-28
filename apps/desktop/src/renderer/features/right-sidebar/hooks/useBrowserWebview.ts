@@ -95,10 +95,9 @@ export interface UseBrowserWebviewResult {
 
 /**
  * @param visible 本 tab 当前是否真的展示给用户(active && shellVisible)。
- *   用于"淘汰后重建":资源看门狗 / LRU 淘汰会销毁后台 tab 的 pool entry,而
- *   Shell 常驻挂载所有 TabBody(不卸载),acquire effect 不会自然重跑 —— 这里
- *   监听 pool release,等 tab 重新可见时 bump epoch 重新 acquire,否则用户切回
- *   被淘汰的 tab 会看到空壳。不可见期间保持懒惰,不为看不见的 tab 重建 webview。
+ *   用于"淘汰后重建":资源看门狗 / LRU 淘汰会销毁 pool entry。可见 tab 被
+ *   release 时由通知重跑 acquire；后台 tab 切回可见时由 visible 变化自然重跑。
+ *   不可见期间保持懒惰,不为看不见的 tab 重建 webview。
  */
 export function useBrowserWebview(
   tabId: string,
@@ -128,33 +127,36 @@ export function useBrowserWebview(
   // 需要读当前 crash 值来决定升级 / 挂起,useState 闭包会 stale,走 ref。
   const crashRef = useRef(crash);
   crashRef.current = crash;
-  // 淘汰后重建:entry 被 pool release 后置位;tab 重新可见时 bump epoch 让
-  // acquire effect 重跑(见函数头注释)。
+  // Pool 生命周期通知触发 effect 重跑：可见 entry 被释放，或隐藏 hook 需要
+  // 观察 Agent 后续显式创建的 entry。
   const [entryEpoch, setEntryEpoch] = useState(0);
-  const releasedRef = useRef(false);
   const visibleRef = useRef(visible === true);
   visibleRef.current = visible === true;
 
   useEffect(() => {
-    const unsub = browserWebviewPool.onRelease((releasedTabId) => {
+    const unsubRelease = browserWebviewPool.onRelease((releasedTabId) => {
       if (releasedTabId !== tabId) return;
+      // 已释放的 wrapper 不再属于 Pool，先撤销发布，避免下一次渲染把旧代际
+      // 重新接回 DOM。webviewRef 保留到新 entry 到来，用于识别代际并复位状态。
+      setWrapper(null);
       // 可见中被 release(理论上只有用户关 tab —— 此时本组件即将 unmount,
       // bump 一次也无害);不可见的淘汰恢复推迟到重新可见。
       if (visibleRef.current) {
         setEntryEpoch((e) => e + 1);
-      } else {
-        releasedRef.current = true;
       }
     });
-    return unsub;
+    const unsubEntryCreated = browserWebviewPool.onEntryCreated((createdTabId) => {
+      if (createdTabId !== tabId || visibleRef.current) return;
+      // Agent open / ensure 可显式为隐藏 tab 创建 entry。当前 effect 之前因 entry
+      // 不存在而没有监听 webview；通知后只绑定观察，不改变可见性或主动导航。
+      setEntryEpoch((e) => e + 1);
+    });
+    return () => {
+      unsubRelease();
+      unsubEntryCreated();
+    };
   }, [tabId]);
 
-  useEffect(() => {
-    if (visible && releasedRef.current) {
-      releasedRef.current = false;
-      setEntryEpoch((e) => e + 1);
-    }
-  }, [visible]);
   const setObservedUrl = useCallback((nextUrl: string) => {
     const suppress = suppressStaleUrlRef.current;
     if (suppress) {
@@ -172,8 +174,20 @@ export function useBrowserWebview(
   }, []);
 
   useEffect(() => {
-    const entry = browserWebviewPool.acquire(tabId);
-    if (webviewRef.current && webviewRef.current !== entry.webview) {
+    // Shell 会常驻挂载所有 TabBody；没有明确可见时，只复用已有 entry，不首次
+    // 物化 webview，避免恢复会话就在后台加载持久化 URL。
+    const existing = browserWebviewPool.peek(tabId);
+    if (!existing && visible !== true) return;
+    // 可见意味着一次真实访问，必须走 acquire() 更新 LRU；隐藏时只 peek，避免
+    // Agent 显式创建的后台 entry 因 hook 观察而被误算成用户访问。
+    const entry = visible === true ? browserWebviewPool.acquire(tabId) : existing;
+    if (!entry) return;
+    const observingNewWebview = webviewRef.current !== entry.webview;
+    if (observingNewWebview) {
+      navigationAttemptsRef.current = [];
+      navigationFuseTrippedRef.current = false;
+    }
+    if (webviewRef.current && observingNewWebview) {
       // 重新物化(淘汰后再激活):上一代 webview 的观测 state 全部失效。复位为
       // 空值,让 BrowserTabBody 的"按 wrapper 代际"首次导航重新驱动加载,否则
       // stale url 会让导航判定"已在目标页"而跳过。
@@ -186,11 +200,24 @@ export function useBrowserWebview(
       setCanGoBack(false);
       setCanGoForward(false);
       setIsAudible(false);
+      crashRef.current = null;
       setCrash(null);
       setResourceAlert(null);
     }
     webviewRef.current = entry.webview;
     setWrapper(entry.wrapper);
+
+    if (observingNewWebview && entry.guestFailure) {
+      const cause = entry.guestFailure.kind === 'render-process-gone'
+        ? consumePendingKillCause(tabId)
+        : null;
+      const restored = {
+        reason: entry.guestFailure.reason,
+        ...(cause === 'memory' ? { cause: 'resource-memory' as const } : {}),
+      };
+      crashRef.current = restored;
+      setCrash(restored);
+    }
 
     // canGoBack/Forward 不是 event 字段,得在每次导航后主动查 —— webview API
     // 提供 `canGoBack()` / `canGoForward()` 同步方法。
@@ -369,7 +396,7 @@ export function useBrowserWebview(
       // **不**释放 pool entry —— webview DOM 节点继续保活,切回该 tab 时可直接
       // 复用。释放是 plugin 在用户主动关闭 tab 时显式调 pool.release(tabId)。
     };
-  }, [tabId, sessionId, setObservedUrl, entryEpoch]);
+  }, [tabId, sessionId, setObservedUrl, entryEpoch, visible]);
 
   const navigate = useCallback((nextUrl: string) => {
     const wv = webviewRef.current;
@@ -428,7 +455,9 @@ export function useBrowserWebview(
   const dismissResourceAlert = useCallback(() => setResourceAlert(null), []);
 
   return {
-    wrapper,
+    // 隐藏时仍观察已有 entry 的 guest 生命周期，但不把 wrapper 交给 caller，
+    // 避免隐藏 Body 把它移出停车区并触发首次导航。
+    wrapper: visible === true ? wrapper : null,
     url,
     title,
     favicon,

@@ -35,6 +35,7 @@ import {
 } from './chatgpt-bridge-auth-invalidation.js';
 import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
+import { xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 
 const log = createMakerLogger('cc-bridge');
@@ -281,6 +282,8 @@ function xaiProviderConfig(): BridgeProviderConfig {
     maxOutputTokensSupported: true,
     // grok-code-fast / grok-build 系列不支持 reasoningEffort(实测 400),其余 grok 模型支持。
     supportsReasoning: (model) => !(model.startsWith('grok-code') || model.startsWith('grok-build')),
+    // Grok 的 X 实时视野来自 xAI 服务端工具 x_search:不声明就搜不了 X(见 xai-server-side-tools.ts)。
+    serverSideTools: xaiServerSideTools,
     buildHeaders: async () => ({
       authorization: `Bearer ${await getGrokAccessToken()}`,
     }),

@@ -740,8 +740,12 @@ export function registerProviderHandlers(
     }
   });
 
-  // 获取模型列表：查询型结构化返回（同上例外条款）；网络/上游失败在结果 code 里，不抛。
-  registry.handle(MAKER_INVOKE.PROVIDER_MODELS_FETCH, async (_event, input: unknown) => {
+  // 获取模型列表：查询型结构化返回（同上例外条款）；仅网络/上游失败在结果 code 里，不抛。
+  registry.handle(MAKER_INVOKE.PROVIDER_MODELS_FETCH, async (event, input: unknown) => {
+    // 这条查询会把 renderer 提供的 API key / 自定义 headers 带到目标 endpoint；
+    // 与重新发现一样，必须先确认调用方是 Cindy 自有顶层页面，避免 WebView / 子 frame
+    // 把 Main 变成可向任意 http(s) 地址发凭证请求的代理。
+    assertTrustedProviderMutationSender(event);
     const parsed = parseModelsFetchInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid models-fetch input');
     return deps.fetchModels(parsed);

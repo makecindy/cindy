@@ -27,6 +27,20 @@ export function pluginPresentationOrigin(
 }
 
 /**
+ * Main's install state is authoritative for the update affordance.
+ *
+ * A same-version `update-available` item can be a legacy-adopted install whose
+ * bytes have not been verified against the market release. Version equality
+ * alone cannot suppress that replacement path; same-release metadata refreshes
+ * are already reported as `installed` by Main.
+ */
+export function pluginUpdateForInstalledVersion(
+  item: PluginMarketItem | null | undefined,
+): PluginMarketItem | null {
+  return item?.installState === 'update-available' ? item : null;
+}
+
+/**
  * Keeps the complete catalog in server order while rendering an installed card
  * for market records already owned by this client. Local-only installs have no
  * server position, so they remain visible after the ordered market catalog.

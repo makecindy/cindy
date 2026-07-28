@@ -356,10 +356,20 @@
       "localThemes": {
         "title": "Local themes",
         "export": "Create local copy",
+        "import": "Import VSCode / Obsidian theme",
         "openDir": "Open themes folder",
         "refresh": "Refresh",
         "exportSuccess": "Created {{file}}. Replace the example image paths, save, then click \"Refresh\".",
         "exportFailed": "Export failed: {{error}}",
+        "importSuccess": "Imported {{name}} ({{themeCount}} variant(s)). Pick it in the theme list above.",
+        "importPartial": "Imported {{name}} ({{themeCount}} variant(s)). {{skipped}} semantic colors stay unchanged per spec, {{unresolved}} values could not be read, and {{derived}} roles were approximated from nearby colors.",
+        "importFailed": "Import failed: {{error}}",
+        "importUnsupported": "This file is not a recognizable VSCode or Obsidian theme.",
+        "importUsesInclude": "This VSCode theme inherits colors via \"include\" and cannot be imported standalone.",
+        "importNotAFile": "Select a file, not a folder.",
+        "importTooLarge": "File is too large to import as a theme.",
+        "importWriteError": "Could not save the theme. Check disk space and permissions.",
+        "importInternalError": "The file could not be read or processed. Try selecting it again.",
         "openDirFailed": "Failed to open folder: {{error}}",
         "refreshed": "Local themes refreshed"
       },
@@ -654,6 +664,12 @@
       "analyticsSaveFailed": "Failed to save usage statistics settings",
       "debugLogLabel": "Debug logs",
       "debugLogDescription": "When enabled, emits verbose debug logs: main/maker logger raised to debug level; new Claude Code sessions also log API request URL/status/latency, Node-level DNS/TCP/TLS handshake timing, and SDK internals. Output is large — turn off after troubleshooting. Always on in dev mode.",
+      "legal": {
+        "termsOfServiceLabel": "Terms of Service",
+        "privacyPolicyLabel": "Privacy Policy",
+        "viewDocument": "View {{document}}",
+        "openFailed": "Unable to open the document. Check your system browser settings."
+      },
       "social": {
         "title": "Connect with Cindy",
         "discordLabel": "Discord",
@@ -6364,6 +6380,9 @@
       "identityGithubUser": "Submitting identity: GitHub user @{{login}} (you)",
       "identityPlatform": "Submitting identity: Cindy platform (GitHub App {{login}})",
       "envLine": "Attached automatically on submit: client {{appVersion}} · {{platform}} {{arch}} · UI language {{uiLanguage}}",
+      "regionLine": "Build region: {{region}}",
+      "regionCodeCn": "CN",
+      "regionCodeDev": "Dev",
       "submit": "Submit",
       "cancel": "Cancel"
     },

@@ -863,8 +863,14 @@ describe('new session composer surface', () => {
     // 语音生命周期内创建按钮常驻(2026-07-25 对齐桌面):录音中点创建=结束录音并
     // 用转写创建;否则首段转写落地瞬间按钮冒出来会把语音胶囊整格推左。
     expect(newSource).toContain("|| voiceStartPending\n    || voiceState === 'listening'\n    || voiceState === 'submitting'\n    || voiceState === 'refining';");
-    // listening 时豁免缺正文校验:点创建 = 停录并用最终转写创建(review P1)。
-    expect(newSource).toContain('const canCreate = (!createValidation || voiceIsListening) && !creating && !voiceIsProcessing;');
+    // listening 时只豁免「缺正文/附件」校验(路径/模型等其它校验不放行,
+    // 否则按钮可点但必失败):点创建 = 停录并用最终转写创建(review 二轮收窄)。
+    // 判定必须是结构化的 isNewSessionDraftMissingPayloadOnly,禁止比对本地化
+    // 文案——locale 异步恢复时字符串比对会静默失效(review 三轮收口)。
+    expect(newSource).toContain('isNewSessionDraftMissingPayloadOnly(draft, draftContent)');
+    expect(newSource).not.toContain("=== t('session.new.enterFirstMessageOrAttachment')");
+    expect(newSource).toContain('const canCreate = (!createValidation || (voiceIsListening && createValidationIsMissingPayload))');
+    expect(newSource).not.toContain('(!createValidation || voiceIsListening) &&');
     expect(newSource).toContain('const composerShowCreateButton = composerHasMessage');
     expect(newSource).toContain('const deviceSelectorDisabled = creating || voiceIsProcessing || !deviceHasChoices;');
     // 按下即录(pressIn 起录):同一手势的松手由 voiceStartedOnPressInRef 吞掉,

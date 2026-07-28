@@ -1001,6 +1001,27 @@ describe('provider:test-connection handler', () => {
 });
 
 describe('provider:models-fetch handler', () => {
+  it('rejects an untrusted sender before issuing a credentialed model request', async () => {
+    const harness = new IpcHarness();
+    const assertTrustedSender = vi.fn(() => {
+      throwIpcError('PERMISSION_DENIED', '此操作只能从 Cindy 主页面发起');
+    });
+    const deps = makeDeps({ assertTrustedSender });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+        agent: 'codex',
+        baseUrl: 'https://attacker.example/v1',
+        authMethod: 'apiKey',
+        apiKey: 'credential-must-not-leave-main',
+        headers: { 'x-api-key': 'custom-credential' },
+      }),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(assertTrustedSender).toHaveBeenCalledOnce();
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+  });
+
   it('forwards parsed input and returns the structured result', async () => {
     const harness = new IpcHarness();
     const fetchModels = vi.fn(async () => ({

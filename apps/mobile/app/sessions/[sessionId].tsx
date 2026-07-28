@@ -3697,6 +3697,19 @@ export default function SessionScreen() {
     return () => subscription.remove();
   }, [cancelVoiceForAppBackground]);
 
+  // 手势被系统/滚动终止时的撤销:比 app 后台版多一步——同时作废还开着的麦克风
+  // 权限请求。后台版必须让权限弹窗存活(见上方 AppState 注释:权限弹窗会短暂
+  // 触发 background),手势取消恰相反:首次使用时按下即录会先弹权限,此时
+  // startupInFlight/controller 都还是 false,只作废预热不够——权限批准归来后
+  // 启动会继续、麦克风开录,而那次按下早已被取消(review P1)。
+  const cancelVoiceForGestureTermination = useCallback(() => {
+    voicePermissionRequestSeqRef.current += 1;
+    voicePermissionRequestAbortRef.current?.abort();
+    voicePermissionRequestAbortRef.current = null;
+    voicePermissionRequestInFlightRef.current = false;
+    cancelVoiceForAppBackground();
+  }, [cancelVoiceForAppBackground]);
+
   useEffect(() => {
     return () => {
       const controller = voiceControllerSessionRef.current;
@@ -3882,7 +3895,7 @@ export default function SessionScreen() {
         // 正常松手(含拖出按钮后松开)不走这里,对齐桌面「pointercancel 才撤销」。
         if (!voiceStartedOnPressInRef.current) return;
         voiceStartedOnPressInRef.current = false;
-        cancelVoiceForAppBackground();
+        cancelVoiceForGestureTermination();
       }}
       style={[
         styles.composerInlineToolButton,

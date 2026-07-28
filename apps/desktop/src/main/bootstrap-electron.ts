@@ -356,6 +356,7 @@ import {
 import {
   disposeBrowserRuntime,
   registerBrowserBackendIpc,
+  setBrowserSessionUploadRootResolver,
   setMainWindowAccessorForBackend,
   setEnsureHostForBackend,
   setIsDetachedForBackend,
@@ -1097,6 +1098,15 @@ registerTabOpResultHandler({
 setMainWindowAccessorForBackend(() => rsbWindowController.getHostWebContents());
 setEnsureHostForBackend(() => rsbWindowController.ensureOpenForAutomation());
 setIsDetachedForBackend(() => readRsbWindowSettings().detached);
+setBrowserSessionUploadRootResolver(async (sessionId) => {
+  try {
+    const meta = await getMakerCore().getSessionMeta(sessionId);
+    if (!meta?.workDir || meta.remoteHostId) return [];
+    return [meta.workDir];
+  } catch {
+    return [];
+  }
+});
 registerBrowserBackendIpc();
 
 // ── 应用级快捷键 override 存储 IPC ──────────────────────────────────────

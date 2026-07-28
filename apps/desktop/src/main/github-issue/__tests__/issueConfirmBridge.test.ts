@@ -9,7 +9,13 @@ import { IssueConfirmBridge } from '../issueConfirmBridge';
 import { MAKER_PUSH } from '../../maker-ipc/channels';
 
 const DRAFT = { title: '标题标题标题', body: '正文'.repeat(20), type: 'bug' as const };
-const ENV = { appVersion: '0.0.112', platform: 'darwin', arch: 'arm64', osVersion: '25.5.0' };
+const ENV = {
+  appVersion: '0.0.112',
+  platform: 'darwin',
+  arch: 'arm64',
+  osVersion: '25.5.0',
+  region: 'cn' as const,
+};
 const IDENTITY = { kind: 'github-user', login: 'octocat' } as const;
 
 function lastRequestId(broadcast: ReturnType<typeof vi.fn>): string {

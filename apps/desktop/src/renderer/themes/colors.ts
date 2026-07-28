@@ -66,6 +66,41 @@ registerColor('md-table-bg', {
   light: 'rgba(236, 236, 234, 0.55)',
   dark: 'rgba(44, 44, 42, 0.55)',
 }, 'Markdown 编辑器表格行 / 表头半透明背景');
+// ── Markdown 正文语义色(标题 h1-h6 + 加粗)──
+// 默认值刻意是 `inherit` 而不是 var(--text-primary):这些元素在引入 token 之前
+// 的颜色就是从容器继承来的(baseComponents 只给字号字重,不给 color)。若默认改成
+// 具体色槽,blockquote / tool card / secondary 文字区里的 Markdown 标题与加粗会
+// 由弱化色变回主色 —— 那才是真的改动现有观感。`inherit` 让默认主题渲染结果逐
+// 像素不变,同时给外部主题导入(VSCode markup.heading / Obsidian --hN-color)留出
+// 可覆盖的槽位。详见 docs/design-rules/DESIGN.md §10「外部主题导入」。
+registerColor('md-h1-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H1 文字色(默认继承容器文字色)');
+registerColor('md-h2-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H2 文字色(默认继承容器文字色)');
+registerColor('md-h3-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H3 文字色(默认继承容器文字色)');
+registerColor('md-h4-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H4 文字色(默认继承容器文字色)');
+registerColor('md-h5-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H5 文字色(默认继承容器文字色)');
+registerColor('md-h6-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H6 文字色(默认继承容器文字色)');
+registerColor('md-strong-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown 加粗文字色(默认继承容器文字色)');
 registerColor('border-default', {
   light: '#d7d7d4',
   dark: '#3c3c3a',

@@ -39,6 +39,7 @@ function makeDeps(over: Partial<GithubIssueSubmitServiceDeps> = {}) {
     postIssue,
     getAppVersion: () => '0.0.112',
     getOsInfo: () => ({ platform: 'darwin', arch: 'arm64', osVersion: '25.5.0' }),
+    getRegion: () => 'cn',
     getFallbackLocale: () => 'en',
     getSubmitterName: () => 'Carol',
     ...over,
@@ -76,7 +77,13 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(confirm).toHaveBeenCalledWith(
       'sess-1',
       { title: REQ.title, body: REQ.body, type: 'bug' },
-      { appVersion: '0.0.112', platform: 'darwin', arch: 'arm64', osVersion: '25.5.0' },
+      {
+        appVersion: '0.0.112',
+        platform: 'darwin',
+        arch: 'arm64',
+        osVersion: '25.5.0',
+        region: 'cn',
+      },
       PLATFORM_IDENTITY,
     );
     expect(postIssue).toHaveBeenCalledTimes(1);
@@ -87,6 +94,7 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(posted.appVersion).toBe('0.0.112');
     expect(posted.userName).toBe('Carol');
     expect(posted.description).toContain('用户改过的正文');
+    expect(posted.description).toContain('**版本区域**: CN');
     expect(posted.description).toContain('**OS**: darwin arm64 (25.5.0)');
     expect(posted.description).toContain('**界面语言**: ja');
     expect(res).toEqual({
@@ -96,6 +104,32 @@ describe('submitGithubIssueWithConfirm', () => {
       finalTitle: '用户改过的标题',
       editedByUser: true,
     });
+  });
+
+  it('env 块只标注非默认区域: cn → CN / dev → Dev,global 省略该行', async () => {
+    for (const [region, label] of [
+      ['cn', '**版本区域**: CN'],
+      ['dev', '**版本区域**: Dev'],
+    ] as const) {
+      const { deps, confirm, postIssue } = makeDeps({ getRegion: () => region });
+      await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+      // 卡片展示的区域必须与最终写进 issue 的是同一个值。
+      expect(confirm.mock.calls[0]![2]).toMatchObject({ region });
+      expect(postIssue.mock.calls[0]![1]().description).toContain(label);
+    }
+  });
+
+  it('global 是默认区域: 不写版本区域行,「没有这一行」即国际版', async () => {
+    const { deps, confirm, postIssue } = makeDeps({ getRegion: () => 'global' });
+    await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+    // 区域本身照常传给卡片(卡片自己决定不渲染),但正文里不能出现这一行。
+    expect(confirm.mock.calls[0]![2]).toMatchObject({ region: 'global' });
+    const description = postIssue.mock.calls[0]![1]().description!;
+    expect(description).not.toContain('版本区域');
+    expect(description).not.toContain('global');
+    // 其余 env 行不受影响,不能因为省略区域行把 env 块整段搞坏。
+    expect(description).toContain('**OS**: darwin arm64 (25.5.0)');
+    expect(description).toContain('**界面语言**: zh-CN');
   });
 
   it('身份解析收到当前 session workingDir', async () => {
@@ -160,6 +194,7 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(res).toMatchObject({ ok: true, finalTitle: 't'.repeat(200) });
     const posted = postIssue.mock.calls[0]![1]();
     expect(posted.description!.length).toBeLessThanOrEqual(5000);
+    expect(posted.description).toContain('**版本区域**: CN');
     expect(posted.description).toContain('**界面语言**: zh-CN');
   });
 

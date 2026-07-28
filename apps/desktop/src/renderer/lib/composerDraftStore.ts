@@ -134,7 +134,7 @@ const presenceCache = new Map<string, boolean>();
  * Empty paragraphs / whitespace-only → no content. 两处判定必须同步演进,
  * 否则「只含 chip 的草稿」侧边栏不亮未发送标记(review P2)。
  */
-function tiptapDocHasContent(node: JSONContent | null | undefined): boolean {
+export function tiptapDocHasContent(node: JSONContent | null | undefined): boolean {
   if (!node) return false;
   if (
     node.type === 'mentionChip' ||

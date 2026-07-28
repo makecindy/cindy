@@ -359,9 +359,10 @@ describe('ModelSelector trigger variants', () => {
     expect(modelListMaxHeightForRows()).toBeUndefined();
     expect(modelListMaxHeightForRows(Number.NaN)).toBeUndefined();
     expect(modelListMaxHeightForRows(Number.POSITIVE_INFINITY)).toBeUndefined();
-    expect(modelListMaxHeightForRows(0)).toBe(44);
-    expect(modelListMaxHeightForRows(6)).toBe(274);
-    expect(modelListMaxHeightForRows(7)).toBe(300);
+    expect(modelListMaxHeightForRows(0)).toBe(36);
+    expect(modelListMaxHeightForRows(6)).toBe(226);
+    expect(modelListMaxHeightForRows(7)).toBe(264);
+    expect(modelListMaxHeightForRows(8)).toBe(300);
     expect(modelListMaxHeightForRows(100)).toBe(300);
   });
 
@@ -991,7 +992,7 @@ describe('ModelSelector trigger variants', () => {
     expect(screen.getByTestId('model-options-popover').className).toContain('z-[10020]');
   });
 
-  it('keeps non-Gateway prices in their source currency without an approximate marker', () => {
+  it('keeps non-Gateway prices in model details without repeating them in the primary row', () => {
     vi.useFakeTimers();
     render(
       React.createElement(ModelSelectorContent, {
@@ -1016,7 +1017,7 @@ describe('ModelSelector trigger variants', () => {
     expect(within(options).getByText('Source: Anthropic')).toBeTruthy();
     expect(within(options).getByText('200K context')).toBeTruthy();
     const priceTitle = within(options).getByText('newChat.modelSelector.pricing.title');
-    expect(row.textContent).toContain('$3 / $15');
+    expect(row.textContent).not.toContain('$3 / $15');
     expect(row.textContent).not.toContain('¥');
     expect(row.textContent).not.toContain('≈');
     expect(within(options).getByText('$3')).toBeTruthy();
@@ -1051,7 +1052,41 @@ describe('ModelSelector trigger variants', () => {
     vi.useRealTimers();
   });
 
-  it('keeps discounted Gateway prices aligned between the row and model details', () => {
+  it('keeps non-price access labels in the primary model row', () => {
+    providersRef.providers = [
+      {
+        ...(providersRef.DEFAULT_PROVIDERS[0] as Record<string, unknown>),
+        access: { kind: 'subscription', product: 'Claude Pro' },
+      },
+    ];
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+        }),
+      );
+
+      const row = screen.getByRole('option', { name: /Opus 4\.8/ });
+      const tags = row.querySelector('[data-model-tags]');
+      expect(tags).not.toBeNull();
+      expect(
+        within(tags as HTMLElement).getByText('settings.providers.models.subscription'),
+      ).toBeTruthy();
+      expect(row.textContent).not.toContain('$3 / $15');
+      expect(row.querySelector('[data-model-promotion-badge]')).toBeNull();
+    } finally {
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
+  it('keeps discounted Gateway prices in details while retaining the primary-row label', () => {
     providersRef.providers = [
       {
         id: 'xd',
@@ -1103,21 +1138,17 @@ describe('ModelSelector trigger variants', () => {
         }),
       );
 
-      // 行内折后价在上、标准价划线在下,折价徽标挂在模型名一侧的 tags 区。
+      // 一级菜单保持单行并保留折价标签；折后价和标准价只在完整详情展示。
       const row = screen.getByRole('option', { name: /Qwen 3\.7/ });
-      expect(row.className).toContain('min-h-11');
-      expect(screen.getByRole('listbox', { name: 'Model list' }).style.maxHeight).toBe('274px');
-      expect(row.textContent).toContain('¥6 / ¥18');
-      expect(row.textContent).toContain('¥12 / ¥36');
+      expect(row.className).toContain('min-h-9');
+      expect(within(row).getByText('Qwen 3.7').className).toContain('leading-5');
+      expect(screen.getByRole('listbox', { name: 'Model list' }).style.maxHeight).toBe('226px');
+      expect(row.textContent).not.toContain('¥6 / ¥18');
+      expect(row.textContent).not.toContain('¥12 / ¥36');
       const rowBadge = within(row).getByText('立省 50%');
       expect(rowBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
       expect(rowBadge.parentElement?.hasAttribute('data-model-tags')).toBe(true);
-      const priceStack = within(row).getByText('¥6 / ¥18').parentElement;
-      expect(priceStack?.getAttribute('data-model-price-stack')).toBe('true');
-      expect(priceStack).not.toBe(rowBadge.parentElement);
-      expect(rowBadge.compareDocumentPosition(priceStack as Node)).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING,
-      );
+      expect(row.querySelector('[data-model-price-stack]')).toBeNull();
 
       fireEvent.pointerEnter(row);
       const details = screen.getByRole('group', { name: /Qwen 3\.7/ });
@@ -1139,7 +1170,7 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
-  it('shows explicit double-zero Gateway models as free in the row and model details', () => {
+  it('keeps explicit free labels in the row while leaving full information in details', () => {
     providersRef.providers = [
       {
         id: 'xd',
