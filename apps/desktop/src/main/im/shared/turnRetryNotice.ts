@@ -1,0 +1,68 @@
+/**
+ * main/im/shared/turnRetryNotice.ts
+ * ---------------------------------------------------------------------------
+ * 把「agent 正在自动重试」这类**非终止** error 事件翻成一行渠道可读的状态说明,
+ * 供 Slack / Telegram hook 与飞书 / Discord 的进度区共用。
+ *
+ * 为什么需要它: 上游过载(Codex 的 `Selected model is at capacity` / Anthropic
+ * 529)现在会被自动退避重试 —— Codex 由 maker-core 接管重投, Claude 由 SDK 自己
+ * 重试, 两者都以 `isTerminal:false, willRetry:true` 的 error 事件透出进度
+ * (见 maker-core 的 agents/shared/overload-error.ts)。桌面端 ErrorBanner 会显示
+ * 「模型服务繁忙, 正在自动重试」, 但渠道侧此前对非终止 error 一律静默:
+ *
+ *   - hook 的进度快照只由 text / thinking / tool_use 事件驱动;
+ *   - IM turnRunner 的 error 分支对非终止 error 直接 return。
+ *
+ * 而过载重投**只在本 turn 零产出时**发生(maker-core 的
+ * currentTurnProducedOutput 守卫), 于是那段退避窗口(交互式约 22-38s)里过程区
+ * 与正文都是空的, 渠道那条占位消息一个字都不变 —— 用户看到的就是"卡死了"。
+ *
+ * 只认过载一类, 其它非终止 error(429 / 5xx / 网络重连等)保持既有静默行为:
+ * 它们的 message 是内部英文串, 渠道侧没有对应的中文表达, 贸然透出等于把裸英文
+ * 推给用户(这也是 maker-core 侧 claude translator 只透过载类的同一条理由)。
+ * 将来要放开某一类, 在这里按 kind 补一条文案即可, 不要直接外发原文。
+ *
+ * 文案硬编码中文, 与 hook-control/interactions.ts 的卡片按钮、dispatcher.ts 的
+ * NOTICE_* 同规 —— 渠道侧文案不进 renderer 的 locale 文件
+ * (见 docs/dev-rules/engineering-conventions.md §5)。
+ */
+
+import { parseOverloadError, parseOverloadRetryProgress } from '@cindy/maker-core';
+
+/**
+ * 非终止 error 事件的 data -> 状态说明文案; 不是"正在自动重试的过载错误"时返回
+ * null(调用方保持原有静默)。
+ *
+ * 调用方必须**先**用 isTerminalAgentErrorEvent 排除终止型错误: 退避耗尽后的终止
+ * error 文案一样命中过载判定, 但那时该走失败收口, 不是"正在重试"。
+ */
+export function overloadRetryNotice(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null;
+  const record = data as { message?: unknown; errorStatus?: unknown };
+  const message = typeof record.message === 'string' ? record.message : '';
+  const errorStatus = typeof record.errorStatus === 'number' ? record.errorStatus : undefined;
+  if (message.length === 0 && errorStatus === undefined) return null;
+  if (parseOverloadError(message, errorStatus) === null) return null;
+  const progress = parseOverloadRetryProgress(message);
+  // 次数缺省(上游没带 attempt/max_retries)时不编造分母, 只说明正在重试。
+  return progress
+    ? `模型服务繁忙，正在自动重试（${progress.attempt}/${progress.maxAttempts}）…`
+    : '模型服务繁忙，正在自动重试…';
+}
+
+/**
+ * 终止型过载错误 -> 渠道可读的失败说明; 非过载错误返回 null(调用方沿用原文)。
+ *
+ * 渠道侧与桌面端的处境不同: 桌面端 ErrorBanner 上有「重试」按钮, 而**桌面端点
+ * 重试起的是一个新 turn, 结果不会回流到渠道**(渠道消息以 turn 的 requestId 为
+ * 键, 那一轮已经收口)。所以这里必须把"在原渠道重发这条消息"说出来 —— 否则用户
+ * 在桌面端点了重试、任务确实在跑, 但渠道那条消息永远停在失败上, 只能干等。
+ */
+export function overloadFailureNotice(message: string, errorStatus?: number): string | null {
+  if (parseOverloadError(message, errorStatus) === null) return null;
+  return (
+    '⚠️ 模型服务繁忙（上游暂时没有可用容量），自动重试多次后仍未成功。' +
+    '请直接在这里重发这条消息重试，或在 Cindy 里换一个模型。' +
+    '（在桌面端点「重试」也能继续任务，但结果不会回到这条消息里。）'
+  );
+}

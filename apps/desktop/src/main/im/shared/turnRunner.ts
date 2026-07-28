@@ -101,8 +101,10 @@ import {
   markActivityWriting,
   pushToolStep,
   renderActivity,
+  setActivityNotice,
   type TurnActivityState,
 } from './turnActivity';
+import { overloadRetryNotice } from './turnRetryNotice';
 import {
   toCoreAgentKind,
   touchUserSent as repoTouchUserSent,
@@ -1451,7 +1453,8 @@ export function createTurnRunner(
           transpondScheduledEvent(state, event);
         }
         // done / 终止型 error 同时是"session 空闲了"的信号 — 触发排队消息派发。
-        // 非终止 error 表示底层仍在自动恢复，不能抢跑下一条消息。
+        // 非终止 error 表示底层仍在自动恢复，不能抢跑下一条消息（放行排队消息会让
+        // 下一条撞上 SESSION_RUNNING）。
         if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
           maybeDispatchNextQueued(state, userId);
           return;
@@ -1485,8 +1488,12 @@ export function createTurnRunner(
           return handleTurnDoneAsync(state, userId);
         case 'error':
           // 可重试错误只是进行中状态；保持当前 turn、卡片和排队消息不动，
-          // 等后续 text / done 或终止型 error 正常收口。
-          if (!isTerminalAgentErrorEvent(event)) return;
+          // 等后续 text / done 或终止型 error 正常收口。顺带把「正在自动重试」透进
+          // 过程区——Codex 的网络重连(#790)与两侧的过载自动重试都走这条，零产出时
+          // 渠道那条消息本来一帧都收不到。
+          if (!isTerminalAgentErrorEvent(event)) {
+            return handleRetryNoticeEvent(turn, event);
+          }
           return handleTurnErrorAsync(state, userId, event.data);
         case 'session_id':
           return persistSdkSessionId(localSessionId, event.data);
@@ -1633,6 +1640,26 @@ export function createTurnRunner(
     void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
   }
 
+  /**
+   * 非终止 error → 过程区状态行 + 卡片刷新。turn 不收口。
+   *
+   * 只对"正在自动重试的过载"出提示(见 turnRetryNotice.ts): 其它非终止 error 的
+   * message 是内部英文串, 没有对应中文表达, 保持既有静默。
+   *
+   * **要惰性建卡**(与 ensureActivityTicker「ticker 不该是创建卡片的理由」相反):
+   * 过载重投只在本 turn 零产出时发生(maker-core 的 currentTurnProducedOutput
+   * 守卫), 那时卡片一定还没建 —— 只刷已有 handle 等于什么都不显示, 用户发完消息
+   * 后除了一个 👀 表情什么反馈都没有。这张卡不会变成垃圾: 重试成功后正文继续落在
+   * 同一张卡上, 重试耗尽时 handleTurnErrorAsync 会把它 finalize 成失败说明。
+   */
+  function handleRetryNoticeEvent(turn: TurnState, event: AgentEvent): void {
+    const notice = overloadRetryNotice(event.data);
+    if (notice === null) return;
+    if (!setActivityNotice(turn.activity, notice)) return;
+    ensureActivityTicker(turn);
+    void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
+  }
+
   function ensureActivityTicker(turn: TurnState): void {
     if (turn.activityTicker || turn.done) return;
     turn.activityTicker = setInterval(() => {
@@ -1760,6 +1787,15 @@ export function createTurnRunner(
         // 卡。非终止 error 当进行中处理,不转播(后随事件继续刷,最终由 done/终止 error 收口)。
         if (isTerminalAgentErrorEvent(event)) {
           return void finalizeTranspond(state, extractErrMessage(event.data));
+        }
+        // 自动重试中: 在过程区留一行, 但**只刷已存在的**转播卡。与用户 turn 的
+        // 取舍不同 —— 转播是自动任务的旁路展示, 没有人在等它; 为一条重试提示开卡,
+        // 万一那轮重试成功后 agent 零输出收口, thread 里就多出一张只有标题的卡。
+        {
+          const notice = overloadRetryNotice(event.data);
+          if (notice !== null && setActivityNotice(t.activity, notice)) {
+            t.streamingHandle?.replace(composeTranspondView(t, false));
+          }
         }
         return;
       default:

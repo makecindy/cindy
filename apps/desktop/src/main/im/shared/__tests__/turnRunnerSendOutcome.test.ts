@@ -1307,6 +1307,72 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(unsub).toHaveBeenCalledTimes(1);
   });
 
+  it('holds the turn open on a non-terminal error and surfaces the auto-retry notice', async () => {
+    const handle = {
+      messageId: 'stream-retry',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+
+    // 过载重投只在本 turn **零产出**时发生, 所以这里刻意不先发 text: 卡片此刻
+    // 还不存在, 提示必须能把它建出来, 否则用户除了 👀 表情什么都看不到。
+    // 非终止 error = agent 正在自愈。此前这里无条件收口: 卡片被判失败、turn
+    // 出队、排队消息立刻放行, 而 agent 其实还在跑。
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model. (auto-retry 2/4)',
+        isTerminal: false,
+        willRetry: true,
+      },
+    });
+    await flushMicrotasks();
+
+    expect(onTurnComplete).not.toHaveBeenCalled();
+    expect(handle.finalize).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalled();
+    const retryView = handle.replace.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(retryView).toContain('模型服务繁忙，正在自动重试（2/4）…');
+
+    // 重试成功: 同一张卡继续收口, 状态行随真实进展消失。
+    h.emit({ type: 'text', data: { text: 'done at last', isFinal: false } });
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    const finalView = String(handle.finalize.mock.calls[0][0]);
+    expect(finalView).toContain('done at last');
+    expect(finalView).not.toContain('自动重试');
+  });
+
+  it('still finalizes as failed on a terminal error', async () => {
+    const handle = {
+      messageId: 'stream-fatal',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+
+    h.emit({ type: 'text', data: { text: 'partial', isFinal: false } });
+    await flushMicrotasks(); // 等卡片 handle 建好, 收口才走 finalize 而非另发一条
+    h.emit({ type: 'error', data: { message: 'process exited with code 1', isTerminal: true } });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    expect(String(handle.finalize.mock.calls[0][0])).toContain('process exited with code 1');
+  });
+
   it('keeps streaming resumed-turn output into the same turn after a silentStop resume', async () => {
     const handle = {
       messageId: 'stream-resume',

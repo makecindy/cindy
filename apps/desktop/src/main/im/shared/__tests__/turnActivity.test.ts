@@ -10,6 +10,7 @@ import {
   pushThinkingStep,
   pushToolStep,
   renderActivity,
+  setActivityNotice,
 } from '../turnActivity';
 
 describe('formatToolStep — shared friendly wording', () => {
@@ -120,6 +121,7 @@ describe('rolling window and replay de-duplication', () => {
     pushToolStep(activity, 'Read', { file_path: '/repo/a.ts' }, 'read-a');
 
     expect(Object.keys(activity).sort()).toEqual([
+      'notice',
       'recentSteps',
       'startedAt',
       'totalSteps',
@@ -155,5 +157,62 @@ describe('renderActivity', () => {
     const activity = createTurnActivity(0);
     markActivityWriting(activity);
     expect(renderActivity(activity, 1_000)).toBe('');
+  });
+});
+
+describe('activity notice — 自动重试期间的单行状态', () => {
+  it('零工作项时也渲染, 且省掉没有信息量的「0 项」', () => {
+    // 这条是本机制存在的理由: 过载自动重试只发生在零产出的 turn 上, 若此时
+    // renderActivity 仍返回空串, 渠道那条消息在整个退避窗口里一个字都不变。
+    const activity = createTurnActivity(0);
+    expect(renderActivity(activity, 8_000)).toBe('');
+
+    expect(setActivityNotice(activity, '模型服务繁忙，正在自动重试（2/4）…')).toBe(true);
+    expect(renderActivity(activity, 8_000).split('\n')).toEqual([
+      '⚙️ 工作中 · 8s',
+      '> ⏳ 模型服务繁忙，正在自动重试（2/4）…',
+    ]);
+  });
+
+  it('不占 step 槽位, 挂在已有步骤之后, 并让最后一步收成已完成', () => {
+    const activity = createTurnActivity(0);
+    pushToolStep(activity, 'Read', { file_path: '/x/relay.ts' }, 'read-1');
+    setActivityNotice(activity, '模型服务繁忙，正在自动重试（1/4）…');
+
+    expect(activity.totalSteps).toBe(1);
+    expect(renderActivity(activity, 5_000).split('\n')).toEqual([
+      '⚙️ 工作中 · 1 项 · 5s',
+      '> ✓ 读取 relay.ts',
+      '> ⏳ 模型服务繁忙，正在自动重试（1/4）…',
+    ]);
+  });
+
+  it('重复内容不算变化(不浪费渠道 update 配额)', () => {
+    const activity = createTurnActivity(0);
+    expect(setActivityNotice(activity, '模型服务繁忙，正在自动重试（1/4）…')).toBe(true);
+    expect(setActivityNotice(activity, '模型服务繁忙，正在自动重试（1/4）…')).toBe(false);
+    expect(setActivityNotice(activity, '模型服务繁忙，正在自动重试（2/4）…')).toBe(true);
+    expect(setActivityNotice(activity, null)).toBe(true);
+    expect(activity.notice).toBeNull();
+    expect(setActivityNotice(activity, '   ')).toBe(false);
+  });
+
+  it('任何真实进展都清掉过期状态行', () => {
+    const withTool = createTurnActivity(0);
+    setActivityNotice(withTool, '模型服务繁忙，正在自动重试（1/4）…');
+    pushToolStep(withTool, 'Grep', { pattern: 'x' }, 'grep-1');
+    expect(withTool.notice).toBeNull();
+
+    const withThinking = createTurnActivity(0);
+    setActivityNotice(withThinking, '模型服务繁忙，正在自动重试（1/4）…');
+    pushThinkingStep(withThinking, { stage: 'final', blockId: 't1', text: '继续检查' });
+    expect(withThinking.notice).toBeNull();
+
+    const withText = createTurnActivity(0);
+    setActivityNotice(withText, '模型服务繁忙，正在自动重试（1/4）…');
+    markActivityWriting(withText);
+    expect(withText.notice).toBeNull();
+    // 正文已在流, 过程区回到"无内容"→ 与旧行为逐字一致(纯文本快答无 chrome)。
+    expect(renderActivity(withText, 1_000)).toBe('');
   });
 });
