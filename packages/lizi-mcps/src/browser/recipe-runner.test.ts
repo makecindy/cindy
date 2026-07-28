@@ -179,6 +179,23 @@ describe('runRecipe', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('rejects (before any step) a numeric input beyond the safe-integer range', async () => {
+    // A 19-digit snowflake id passed as a JSON number was already rounded by
+    // JSON.parse — stringifying it would navigate to the WRONG resource, so the
+    // runner must fail loudly instead of dispatching the corrupted value.
+    const { call, calls } = mockCall();
+    const res = await runRecipe(SEARCH_RECIPE, { q: 1892345678901234567 }, { call });
+    expect(res.ok).toBe(false);
+    expect(res.message).toMatch(/safe-integer range.*pass it as a string/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('still coerces safe numbers (e.g. limit: 25) to strings', async () => {
+    const { call } = mockCall();
+    const res = await runRecipe(SEARCH_RECIPE, { q: 25 }, { call });
+    expect(res.ok).toBe(true);
+  });
+
   it('fails loudly (never dispatches) when a saved recipe navigates to file://', async () => {
     // The recipe path calls runtime.call directly, so the scheme guard must live
     // in stepToRequest — a malicious saved recipe must not reach file:// even

@@ -276,6 +276,20 @@ export async function runRecipe(
     // (rule 9: code-enforced).
     if (value !== undefined && value !== null && typeof value !== 'string') {
       if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+        // A number beyond the safe-integer range was ALREADY rounded by
+        // JSON.parse before we ever saw it (e.g. a 19-digit X snowflake id),
+        // so String(value) would bake the corrupted value into a URL/JS step.
+        // Fail loudly BEFORE any step runs instead of navigating with it.
+        if (typeof value === 'number' && Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+          return {
+            ok: false,
+            recipe: recipe.id,
+            steps: [],
+            message:
+              `recipe input "${name}" exceeds the JSON safe-integer range and has lost precision — ` +
+              'pass it as a string (e.g. a 19-digit tweet id must be quoted)',
+          };
+        }
         vars[name] = String(value);
       } else {
         return {
