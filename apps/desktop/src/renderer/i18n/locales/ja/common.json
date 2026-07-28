@@ -4017,9 +4017,12 @@
         "placeholder": "モデルを選択",
         "aria": "モデルを選択。現在：{{model}}",
         "ariaWithEffort": "モデルを選択。現在：{{model}}、推論強度：{{effort}}",
+        "pendingAria": "モデルを選択。次のメッセージ：{{agent}} · {{model}}",
+        "pendingAriaWithEffort": "モデルを選択。次のメッセージ：{{agent}} · {{model}}、推論強度：{{effort}}",
         "agent": {
           "claudeCode": "Claude Code",
-          "codex": "Codex"
+          "codex": "Codex",
+          "pending": "次回：{{agent}}"
         }
       },
       "category": {

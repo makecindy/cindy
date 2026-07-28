@@ -267,6 +267,32 @@ function ModelPromotionBadge({ children }: { children: ReactNode }) {
   );
 }
 
+export interface ModelSelectorAgentIdentity {
+  vendorKey: 'cc' | 'codex';
+  /**
+   * current = 已由会话/runtime 元数据确认的当前 Agent；
+   * pending = 已登记、将在下一条消息应用的切换目标。
+   */
+  state: 'current' | 'pending';
+}
+
+export function resolveModelSelectorAgentIdentity(
+  runtimeAgentKind: AgentKind | null | undefined,
+  pendingTarget: AgentKind | null | undefined,
+): ModelSelectorAgentIdentity | undefined {
+  if (pendingTarget) {
+    return {
+      vendorKey: pendingTarget === 'codex' ? 'codex' : 'cc',
+      state: 'pending',
+    };
+  }
+  if (!runtimeAgentKind) return undefined;
+  return {
+    vendorKey: runtimeAgentKind === 'codex' ? 'codex' : 'cc',
+    state: 'current',
+  };
+}
+
 interface ModelSelectorProps {
   modelId: string;
   effort: Effort;
@@ -302,9 +328,10 @@ interface ModelSelectorProps {
   vendorKey?: 'cc' | 'codex';
   /**
    * 已创建会话的 trigger 同时展示 Agent 与模型，避免 Claude Code 使用 OpenAI 模型时
-   * 只看来源图标而误判成 Codex。紧凑布局仅视觉收起 Agent，aria/title 仍保留完整身份。
+   * 只看来源图标而误判成 Codex。必须由权威 session/runtime 身份或明确切换 intent 提供，
+   * 不得从用于模型列表过滤的 vendorKey 推断。紧凑布局仅视觉收起，aria/title 保留完整语义。
    */
-  showAgentIdentity?: boolean;
+  agentIdentity?: ModelSelectorAgentIdentity;
   /** device-link 远程会话所属被控端 id;非空 = 列被控端的模型 + 退化为纯列表(不分供应商段)。 */
   deviceId?: string;
   /**
@@ -1552,7 +1579,7 @@ export function ModelSelector({
   onFastModeChange,
   modelMemory,
   vendorKey,
-  showAgentIdentity = false,
+  agentIdentity,
   deviceId,
   excludeSubscriptionDirect,
   excludeChatBridgedCodex,
@@ -1663,12 +1690,16 @@ export function ModelSelector({
     : (currentModel?.displayName ??
       (unknownLabel !== '' ? unknownLabel : null) ??
       t('newChat.modelSelector.trigger.placeholder'));
-  const agentIdentityLabel =
-    showAgentIdentity && vendorKey && !fallbackOption?.active
-      ? vendorKey === 'cc'
+  const agentName =
+    agentIdentity && !fallbackOption?.active
+      ? agentIdentity.vendorKey === 'cc'
         ? t('newChat.modelSelector.trigger.agent.claudeCode')
         : t('newChat.modelSelector.trigger.agent.codex')
       : null;
+  const agentIdentityLabel =
+    agentName && agentIdentity?.state === 'pending'
+      ? t('newChat.modelSelector.trigger.agent.pending', { agent: agentName })
+      : agentName;
   const displayIdentityLabel = agentIdentityLabel
     ? `${agentIdentityLabel} · ${displayLabel}`
     : displayLabel;
@@ -1777,12 +1808,23 @@ export function ModelSelector({
     ? t('newChat.modelSelector.source.connect')
     : showSourceDisconnected
       ? `${t('newChat.modelSelector.source.disconnected')}: ${displayIdentityLabel}`
-      : effortLabel
-        ? t('newChat.modelSelector.trigger.ariaWithEffort', {
-            model: displayIdentityLabel,
-            effort: effortLabel,
-          })
-        : t('newChat.modelSelector.trigger.aria', { model: displayIdentityLabel });
+      : agentIdentity?.state === 'pending' && agentName
+        ? effortLabel
+          ? t('newChat.modelSelector.trigger.pendingAriaWithEffort', {
+              agent: agentName,
+              model: displayLabel,
+              effort: effortLabel,
+            })
+          : t('newChat.modelSelector.trigger.pendingAria', {
+              agent: agentName,
+              model: displayLabel,
+            })
+        : effortLabel
+          ? t('newChat.modelSelector.trigger.ariaWithEffort', {
+              model: displayIdentityLabel,
+              effort: effortLabel,
+            })
+          : t('newChat.modelSelector.trigger.aria', { model: displayIdentityLabel });
   // compact 会隐藏断连状态文字；原生 title 仍需保留同一状态，避免鼠标用户悬停
   // 错误图标时只看到模型名、无法判断发送为何被阻断。
   const triggerTitle = showSourceDisconnected ? baseAriaLabel : displayIdentityLabel;
