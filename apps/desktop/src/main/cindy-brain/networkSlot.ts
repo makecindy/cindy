@@ -1812,7 +1812,24 @@ export class GhostNetworkSlot {
           response.status === 401 ||
           (response.status === 403 && CREDENTIAL_REJECTION_BODY_RE.test(responseText))
         ) {
-          this.noteCredentialRejected(ghostId, secret.key);
+          // 与直连 key / 连接 token 同口径的竞态防护:交换请求带旧源 key
+          // 在途,用户已重存新 key(写入事件先行清账),迟到的 401/403 若
+          // 按稳定 key 名记账,会把新凭证翻成 needs_reauth。记账前比对
+          // 源值指纹,已变更(或已删除)则跳过。
+          const currentRaw = this.deps.readSecret(ghostId, secret.key);
+          const currentFingerprint =
+            currentRaw === null || currentRaw.length === 0
+              ? null
+              : createHash('sha256').update(currentRaw).digest('hex').slice(0, 16);
+          const injectedFingerprint = createHash('sha256').update(raw).digest('hex').slice(0, 16);
+          if (currentFingerprint === injectedFingerprint) {
+            this.noteCredentialRejected(ghostId, secret.key);
+          } else {
+            this.deps.log?.info('ghost credential rejection skipped: exchange source changed in flight', {
+              ghostId,
+              secretKey: secret.key,
+            });
+          }
         }
         const snippet = responseText.slice(0, SECRET_EXCHANGE_ERROR_SNIPPET_CHARS);
         throw new Error(

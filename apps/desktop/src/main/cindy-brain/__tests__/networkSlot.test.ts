@@ -418,6 +418,64 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
     expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'brave_api_key');
   });
 
+  it('交换在途时源 key 被替换,迟到的交换 401 不误记新 key', async () => {
+    // 竞态:交换请求带旧源 key 在途,用户已重存新 key(写入事件先行
+    // 清账),旧交换迟到的 401 若按稳定 key 名记账,会把新凭证翻成
+    // needs_reauth。记账前比对源值指纹,已变更则跳过。
+    const noteCredentialRejected = vi.fn();
+    let currentSecret = 'old-key';
+    let resolveExchange!: (r: Response) => void;
+    const fetchImpl = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveExchange = resolve;
+        }),
+    );
+    const exchangeGhost = () =>
+      fakeGhost({
+        network: {
+          hosts: ['api.search.brave.com'],
+          secrets: [
+            {
+              key: 'brave_api_key',
+              label: 'Brave Key',
+              inject: { header: 'X-Subscription-Token', format: '{value}', hosts: ['api.search.brave.com'] },
+              exchange: {
+                url: 'https://api.search.brave.com/token',
+                bodyFormat: '{"key":"{value}"}',
+                tokenPath: 'token',
+                ttlSeconds: 3600,
+              } as never,
+            },
+          ],
+        },
+      });
+    const { slot } = makeSlot({
+      getGhost: exchangeGhost,
+      readSecret: vi.fn(() => currentSecret) as never,
+      fetchImpl: fetchImpl as never,
+      noteCredentialRejected,
+    });
+    const pending = slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    // 等交换请求发出后(旧值已入交换体)模拟用户重存新 key,再放行 401。
+    await new Promise((r) => setImmediate(r));
+    expect(fetchImpl).toHaveBeenCalledWith('https://api.search.brave.com/token', expect.anything());
+    currentSecret = 'new-key';
+    resolveExchange(fakeResponse({ status: 401 }));
+    await pending;
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
+
+    // 对照:源值未变(现值指纹 = 注入指纹)时,交换 401 照常记账。
+    noteCredentialRejected.mockClear();
+    const { slot: stable } = makeSlot({
+      getGhost: exchangeGhost,
+      fetchImpl: vi.fn(async () => fakeResponse({ status: 401 })) as never,
+      noteCredentialRejected,
+    });
+    await stable.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'brave_api_key');
+  });
+
   it('403 仅当 body 含凭证失效信号才记账;限流/业务 403 不记', async () => {
     // 403 语义宽(GitHub 限流、越权、封禁):无凭证类信号时不记账,避免误标。
     const noteCredentialRejected = vi.fn();
