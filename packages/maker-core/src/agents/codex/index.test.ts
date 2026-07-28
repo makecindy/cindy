@@ -21,6 +21,7 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
     static failThreadStart = false;
     static dropThreadUnsubscribe = false;
     static dropModelList = false;
+    static dropInitialize = false;
     static beforeThreadStartResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
     static onCreate: ((transport: MockCodexTransport) => void) | null = null;
 
@@ -50,6 +51,7 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
         return;
       }
       if (req.method === 'initialize') {
+        if (MockCodexTransport.dropInitialize) return;
         this.emitLine({
           id: req.id,
           result: {
@@ -231,6 +233,7 @@ beforeEach(() => {
   MockCodexTransport.failThreadStart = false;
   MockCodexTransport.dropThreadUnsubscribe = false;
   MockCodexTransport.dropModelList = false;
+  MockCodexTransport.dropInitialize = false;
   MockCodexTransport.beforeThreadStartResponse = null;
   MockCodexTransport.onCreate = null;
 });
@@ -765,7 +768,7 @@ describe('CodexAgent.refreshLocalModels', () => {
       const agent = new CodexAgent(createDeps());
       const refresh = agent.refreshLocalModels({ credentialMode: 'oauth-bearer' });
       const refreshExpectation = expect(refresh).rejects.toThrow(
-        'codex app-server model/list timed out after 20000ms',
+        'codex app-server model refresh timed out after 20000ms',
       );
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(20_000);
@@ -776,6 +779,38 @@ describe('CodexAgent.refreshLocalModels', () => {
       expect(Array.from(
         (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
       )).not.toContain('local-control:oauth-bearer');
+      await agent.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds initialize with the control-plane deadline and rebuilds on retry', async () => {
+    vi.useFakeTimers();
+    try {
+      MockCodexTransport.dropInitialize = true;
+      const agent = new CodexAgent(createDeps({}, {
+        onCodexLocalModelsListed: vi.fn().mockResolvedValue(undefined),
+      }));
+      const refresh = agent.refreshLocalModels({ credentialMode: 'oauth-bearer' });
+      const refreshExpectation = expect(refresh).rejects.toThrow(
+        'codex app-server model refresh timed out after 20000ms',
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await refreshExpectation;
+      expect(createdTransports).toHaveLength(1);
+      expect(createdTransports[0].closed).toBe(true);
+      expect(Array.from(
+        (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
+      )).not.toContain('local-control:oauth-bearer');
+
+      MockCodexTransport.dropInitialize = false;
+      await expect(
+        agent.refreshLocalModels({ credentialMode: 'oauth-bearer' }),
+      ).resolves.toBe(true);
+      expect(createdTransports).toHaveLength(2);
       await agent.dispose();
     } finally {
       vi.useRealTimers();

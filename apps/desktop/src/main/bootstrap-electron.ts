@@ -398,6 +398,7 @@ import {
 import {
   createAppFocusAutoRefreshTracker,
   requestProviderModelAutoRefresh,
+  resetProviderModelAutoRefreshCooldowns,
 } from './maker-host/provider-model-auto-refresh.js';
 import {
   readImDefaultSettingsState,
@@ -2755,6 +2756,7 @@ const registerIpcHandlers = () => {
     // 数据,不抛 throwIpcError(符合规则 13 查询型例外:renderer 需要 reason 做不同 UI)。
     const result = await runClaudeOAuthLogin();
     if (result.ok) {
+      resetProviderModelAutoRefreshCooldowns('anthropic');
       // 登录可直接覆盖旧账号凭证,不一定先走登出。先跨授权世代清掉旧清单 / 缓存并
       // 等待旧 SDK 持久化收尾;即使后续 proxy 初始化失败也绝不保留 A 账号清单。
       await clearAnthropicDiscoveredModels();
@@ -2777,6 +2779,7 @@ const registerIpcHandlers = () => {
     // 如实抛 IPC 错误让 renderer 提示失败(规则 13)。
     try {
       disconnectClaudeAiOAuth();
+      resetProviderModelAutoRefreshCooldowns('anthropic');
     } catch (err) {
       throwIpcError(
         'INTERNAL',
@@ -2798,6 +2801,7 @@ const registerIpcHandlers = () => {
   // 上游作废 xAI 凭证、收口自动登出后,走和手动登出完全一致的 UI 收尾(广播 + 清账号级
   // 限流快照),否则用户会停在「显示已连接、请求连环 403」的假状态。
   setXaiAuthInvalidatedHandler(() => {
+    resetProviderModelAutoRefreshCooldowns('xai');
     clearXaiRateLimitSnapshot();
     broadcastXaiAuthStateChanged();
   });
@@ -2809,6 +2813,7 @@ const registerIpcHandlers = () => {
     // 登录成功即生效:订阅直连 handler 每请求经 buildHeaders 现取凭证,无需任何"就绪"步骤。
     const result = await runGrokOAuthLogin();
     if (result.ok) {
+      resetProviderModelAutoRefreshCooldowns('xai');
       // 登录成功后广播 provider 变更 —— 其它已打开的窗口(聊天/模型选择器等)跟随刷新
       // xAI 连接态,不再等 remount/手动刷新(对齐 CLAUDE_OAUTH_LOGIN 的 broadcastClaudeAuthStateChanged)。
       // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
@@ -2821,6 +2826,7 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT, async () => {
     try {
       logoutGrok();
+      resetProviderModelAutoRefreshCooldowns('xai');
     } catch (err) {
       throwIpcError(
         'INTERNAL',

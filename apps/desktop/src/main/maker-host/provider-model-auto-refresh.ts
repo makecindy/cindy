@@ -25,6 +25,7 @@ export const PROVIDER_MODEL_FOREGROUND_BACKGROUND_THRESHOLD_MS = 15 * 60_000;
 export interface ProviderModelAutoRefreshDeps {
   listProviders(options: { allowSideEffects: true }): Promise<ProviderView[]>;
   refreshProvider(providerId: BuiltinRefreshableProviderId): Promise<void>;
+  getScopeKey?: () => string | number;
   now(): number;
   log: Pick<Logger, 'debug' | 'warn'>;
 }
@@ -32,6 +33,7 @@ export interface ProviderModelAutoRefreshDeps {
 export interface ProviderModelRefreshCoordinator {
   requestAutoRefresh(trigger: ProviderModelAutoRefreshTrigger): Promise<void>;
   refreshManually(providerId: BuiltinRefreshableProviderId): Promise<void>;
+  resetCooldowns(providerId?: BuiltinRefreshableProviderId): void;
 }
 
 export function createProviderModelRefreshCoordinator(
@@ -39,16 +41,57 @@ export function createProviderModelRefreshCoordinator(
   cooldownMs = PROVIDER_MODEL_AUTO_REFRESH_COOLDOWN_MS,
   failureCooldownMs = PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS,
 ): ProviderModelRefreshCoordinator {
-  const inFlight = new Map<BuiltinRefreshableProviderId, Promise<void>>();
+  const inFlight = new Map<
+    BuiltinRefreshableProviderId,
+    { promise: Promise<void>; scopeGeneration: number; providerGeneration: number }
+  >();
   const lastAttemptAt = new Map<BuiltinRefreshableProviderId, number>();
   const lastFailureAt = new Map<BuiltinRefreshableProviderId, number>();
+  const providerGenerations = new Map<BuiltinRefreshableProviderId, number>();
+  let scopeKey = deps.getScopeKey?.();
+  let scopeGeneration = 0;
+
+  function syncScope(): void {
+    const nextScopeKey = deps.getScopeKey?.();
+    if (nextScopeKey === scopeKey) return;
+    scopeKey = nextScopeKey;
+    scopeGeneration += 1;
+    lastAttemptAt.clear();
+    lastFailureAt.clear();
+    inFlight.clear();
+    providerGenerations.clear();
+    deps.log.debug('provider model auto-refresh scope changed', { scopeGeneration });
+  }
+
+  function resetCooldowns(providerId?: BuiltinRefreshableProviderId): void {
+    if (providerId) {
+      lastAttemptAt.delete(providerId);
+      lastFailureAt.delete(providerId);
+      providerGenerations.set(
+        providerId,
+        (providerGenerations.get(providerId) ?? 0) + 1,
+      );
+      inFlight.delete(providerId);
+      return;
+    }
+    lastAttemptAt.clear();
+    lastFailureAt.clear();
+  }
 
   function refresh(
     providerId: BuiltinRefreshableProviderId,
     force: boolean,
   ): Promise<void> {
+    syncScope();
+    const providerGeneration = providerGenerations.get(providerId) ?? 0;
     const existing = inFlight.get(providerId);
-    if (existing) return existing;
+    if (
+      existing?.scopeGeneration === scopeGeneration &&
+      existing.providerGeneration === providerGeneration
+    ) {
+      return existing.promise;
+    }
+    const generation = scopeGeneration;
 
     const now = deps.now();
     const previousAttempt = lastAttemptAt.get(providerId);
@@ -73,22 +116,37 @@ export function createProviderModelRefreshCoordinator(
       .then(() => deps.refreshProvider(providerId))
       .then(
         () => {
-          lastFailureAt.delete(providerId);
+          if (
+            scopeGeneration === generation &&
+            (providerGenerations.get(providerId) ?? 0) === providerGeneration
+          ) {
+            lastFailureAt.delete(providerId);
+          }
         },
         (error: unknown) => {
-          lastFailureAt.set(providerId, deps.now());
+          if (
+            scopeGeneration === generation &&
+            (providerGenerations.get(providerId) ?? 0) === providerGeneration
+          ) {
+            lastFailureAt.set(providerId, deps.now());
+          }
           throw error;
         },
       )
       .finally(() => {
-        if (inFlight.get(providerId) === flight) inFlight.delete(providerId);
+        if (inFlight.get(providerId)?.promise === flight) inFlight.delete(providerId);
       });
-    inFlight.set(providerId, flight);
+    inFlight.set(providerId, {
+      promise: flight,
+      scopeGeneration: generation,
+      providerGeneration,
+    });
     return flight;
   }
 
   return {
     async requestAutoRefresh(trigger): Promise<void> {
+      syncScope();
       let providers: ProviderView[];
       try {
         providers = await deps.listProviders({ allowSideEffects: true });
@@ -100,6 +158,7 @@ export function createProviderModelRefreshCoordinator(
         return;
       }
 
+      syncScope();
       const connectedIds = new Set<BuiltinRefreshableProviderId>();
       for (const provider of providers) {
         if (
@@ -129,6 +188,7 @@ export function createProviderModelRefreshCoordinator(
     refreshManually(providerId): Promise<void> {
       return refresh(providerId, true);
     },
+    resetCooldowns,
   };
 }
 
@@ -144,6 +204,12 @@ export function configureProviderModelAutoRefresh(
     now: deps.now ?? Date.now,
     log: deps.log ?? log,
   });
+}
+
+export function resetProviderModelAutoRefreshCooldowns(
+  providerId?: BuiltinRefreshableProviderId,
+): void {
+  configuredCoordinator?.resetCooldowns(providerId);
 }
 
 /**

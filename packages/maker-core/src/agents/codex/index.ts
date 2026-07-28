@@ -279,6 +279,7 @@ export function hostKey(remoteHostId?: string | null): string {
 
 const LOCAL_CONTROL_PLANE_HOST_PREFIX = 'local-control:';
 const CODEX_MODEL_LIST_RPC_TIMEOUT_MS = 20_000;
+const CODEX_MODEL_REFRESH_DEADLINE_MS = 20_000;
 
 function localControlPlaneHostKey(credentialMode: AgentCredentialMode): string {
   return `${LOCAL_CONTROL_PLANE_HOST_PREFIX}${credentialMode}`;
@@ -1557,6 +1558,37 @@ export class CodexAgent extends BaseAgent {
    * 同时也是 cache ready barrier；分页全部读完后才一次性交给宿主，避免 UI 看到半份目录。
    */
   override async refreshLocalModels(options?: RefreshLocalModelsOptions): Promise<boolean> {
+    const credentialMode = options?.credentialMode;
+    if (!credentialMode) return this.refreshLocalModelsWithinDeadline(options);
+
+    const key = localControlPlaneHostKey(credentialMode);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new AppServerRequestTimeoutError('model refresh', CODEX_MODEL_REFRESH_DEADLINE_MS));
+      }, CODEX_MODEL_REFRESH_DEADLINE_MS);
+    });
+    try {
+      return await Promise.race([
+        this.refreshLocalModelsWithinDeadline(options),
+        deadline,
+      ]);
+    } catch (error) {
+      if (error instanceof AppServerRequestTimeoutError) {
+        await this.retireHostKey(key, 'Codex control-plane model refresh timed out', {
+          failIfActive: false,
+          logPrefix: 'codex model refresh',
+        });
+      }
+      throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  private async refreshLocalModelsWithinDeadline(
+    options?: RefreshLocalModelsOptions,
+  ): Promise<boolean> {
     const credentialMode = options?.credentialMode;
     // 显式 provider 刷新使用独立 control-plane app-server。不能为了发一次 model/list
     // 切换共享 local host 的凭证形态：切换协调器会关闭空闲会话，忙碌会话则直接拒绝。

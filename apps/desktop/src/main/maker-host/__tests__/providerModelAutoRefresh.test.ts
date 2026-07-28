@@ -22,12 +22,15 @@ function view(
 function deferred(): {
   promise: Promise<void>;
   resolve(): void;
+  reject(error: unknown): void;
 } {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 describe('provider model auto-refresh coordinator', () => {
@@ -92,6 +95,37 @@ describe('provider model auto-refresh coordinator', () => {
     expect(refreshProvider).toHaveBeenCalledOnce();
 
     await coordinator.refreshManually('xd');
+    expect(refreshProvider).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts fresh work after an account scope change and ignores stale failures', async () => {
+    let now = 1_000;
+    let scope = 1;
+    const first = deferred();
+    const refreshProvider = vi
+      .fn<(providerId: BuiltinRefreshableProviderId) => Promise<void>>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true)],
+      refreshProvider,
+      getScopeKey: () => scope,
+      now: () => now,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    const oldAccountRefresh = coordinator.requestAutoRefresh('providers-open');
+    await vi.waitFor(() => expect(refreshProvider).toHaveBeenCalledOnce());
+
+    scope = 2;
+    await coordinator.requestAutoRefresh('model-selector-open');
+    expect(refreshProvider).toHaveBeenCalledTimes(2);
+
+    first.reject(new Error('old account failed late'));
+    await oldAccountRefresh;
+
+    now += PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
+    await coordinator.requestAutoRefresh('foreground');
     expect(refreshProvider).toHaveBeenCalledTimes(2);
   });
 
