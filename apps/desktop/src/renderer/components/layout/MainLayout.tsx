@@ -396,6 +396,20 @@ export function MainLayout() {
     isCollapsed: isSidebarCollapsed,
     enabled: !isSettingsRoute,
   });
+  // ChromeActions 固定在窗口左上。rail 态下它跨到内容区，必须由当前最左且可见
+  // 的面板顶栏挖 no-drag 命中区：默认是 chat-main；工具面板换到左侧时则交给
+  // RightSidebar 的 unified topbar。peek 抽屉会强制退出 rail，不能沿用 rail 命中区。
+  const hasRailChromeActions =
+    !isSettingsRoute &&
+    isRailMode &&
+    !isSidebarCollapsed &&
+    !sidebarPeek.isPeekVisible;
+  const rightSidebarOwnsRailChromeActions =
+    hasRailChromeActions &&
+    rightSidebarSide === 'left' &&
+    !isRightSidebarCollapsed &&
+    !rsbDetached &&
+    !isRightSidebarMaximized;
   // peek 中固定展开(pinning)时若持久化的 rail 模式还开着:退出 rail —— 用户
   // 刚在全宽抽屉里预览并选择固定,落到 78px 窄轨会与所见不符且造成宽度跳变。
   useEffect(() => {
@@ -1190,7 +1204,7 @@ export function MainLayout() {
                 <ContentHeaderSlot
                   sidebarVisible={!isSettingsRoute && !isSidebarCollapsed && !isRailMode}
                   showCollapsedActions={!isSettingsRoute && (isSidebarCollapsed || isRailMode)}
-                  isSidebarRail={!isSettingsRoute && isRailMode && !isSidebarCollapsed}
+                  isSidebarRail={hasRailChromeActions && !rightSidebarOwnsRailChromeActions}
                   // M2(2026-07-09 口径修订):mac 右上浮层随面板在场常驻(折叠
                   // toggle 永远钉窗口右上角),ContentHeader 右端占位不再分侧别。
                   rightSidebarAvailable={rightSidebarAvailable}
@@ -1241,6 +1255,7 @@ export function MainLayout() {
                   onMaximize={handleMaximizeRightSidebar}
                   isMaximized={isRightSidebarMaximized}
                   reserveLeftChromeActions={isRightSidebarMaximized && isSidebarCollapsed}
+                  railChromeActionsHitHole={rightSidebarOwnsRailChromeActions}
                   sessionId={rightSidebarSessionId}
                   workdir={rightSidebarWorkdirInfo.workdir}
                   remoteHostId={rightSidebarWorkdirInfo.remoteHostId}

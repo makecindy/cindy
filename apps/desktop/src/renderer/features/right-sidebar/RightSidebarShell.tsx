@@ -100,6 +100,8 @@ interface RightSidebarShellProps {
    * 子窗口不应消费这段空间。
    */
   reserveLeftChromeActions?: boolean;
+  /** 工具面板处于最左 rail 邻位时，顶栏为浮动 ChromeActions 挖 no-drag 命中区。 */
+  railChromeActionsHitHole?: boolean;
   /** 「在新窗口中打开侧边栏」;仅 Win 端 TabBar 内渲染按钮(Mac 走 MainLayout 浮层)。 */
   onDetach?: () => void;
   /** TabBar 横带是否作为窗口拖拽区(见 TabBar 同名 prop):主窗口内嵌形态传
@@ -133,6 +135,7 @@ export function RightSidebarShell({
   panelSide = 'right',
   onAllTabsClosed,
   reserveLeftChromeActions = false,
+  railChromeActionsHitHole = false,
 }: RightSidebarShellProps) {
   const { isFullscreen } = useMacFullscreen();
   const chromeActionsLeft =
@@ -383,6 +386,19 @@ export function RightSidebarShell({
           className="relative flex h-[46px] shrink-0 flex-none items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-2"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
+          {railChromeActionsHitHole && (
+            <div
+              aria-hidden
+              data-testid="right-sidebar-rail-chrome-actions-hit-hole"
+              className="absolute left-0 top-0 h-full"
+              style={
+                {
+                  width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
+                  WebkitAppRegion: 'no-drag',
+                } as React.CSSProperties
+              }
+            />
+          )}
           {leftChromeActionsSpacerWidth > 0 && (
             <div
               aria-hidden
