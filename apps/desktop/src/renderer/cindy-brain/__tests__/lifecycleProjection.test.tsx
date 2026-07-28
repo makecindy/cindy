@@ -1,11 +1,20 @@
 // @vitest-environment jsdom
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+type LifecycleChanged = (payload: {
+  entries: {
+    id: string;
+    name: string;
+    enabled: boolean;
+    readiness: 'ready' | 'needs_setup' | 'needs_reauth' | 'degraded' | 'blocked' | 'unknown';
+  }[];
+}) => void;
 
 import { __resetLifecycleProjectionForTest, useGhostReadiness } from '../lifecycleProjection';
 
 const unsubscribeLifecycleChanged = vi.fn();
-const onLifecycleChanged = vi.fn(() => unsubscribeLifecycleChanged);
+const onLifecycleChanged = vi.fn((_callback: LifecycleChanged) => unsubscribeLifecycleChanged);
 const lifecycle = vi.fn(async () => ({ entries: [] }));
 
 beforeEach(() => {
@@ -42,5 +51,30 @@ describe('lifecycleProjection', () => {
 
     render(<Probe />);
     expect(onLifecycleChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it('初始化查询不覆盖订阅期间收到的最新投影', async () => {
+    onLifecycleChanged.mockImplementationOnce((callback) => {
+      callback({
+        entries: [
+          {
+            id: 'search',
+            name: 'Search',
+            enabled: true,
+            readiness: 'needs_setup',
+          },
+        ],
+      });
+      return unsubscribeLifecycleChanged;
+    });
+
+    let rendered: ReturnType<typeof render> | undefined;
+    await act(async () => {
+      rendered = render(<Probe />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(rendered?.container.textContent).toBe('needs_setup');
   });
 });

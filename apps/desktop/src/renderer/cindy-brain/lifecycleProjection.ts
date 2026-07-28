@@ -15,19 +15,28 @@ let entries = new Map<string, GhostLifecycleEntry>();
 const listeners = new Set<() => void>();
 let initialized = false;
 let unsubscribeLifecycleChanged: (() => void) | null = null;
+let initializationGeneration = 0;
+let lifecycleChangeVersion = 0;
 
 function ensureInitialized(): void {
   if (initialized) return;
   initialized = true;
   const api = window.electronAPI?.ghosts;
   if (!api?.onLifecycleChanged || !api.lifecycle) return;
+  const generation = initializationGeneration;
+  const snapshotVersion = lifecycleChangeVersion;
   unsubscribeLifecycleChanged = api.onLifecycleChanged(({ entries: next }) => {
+    if (generation !== initializationGeneration) return;
+    lifecycleChangeVersion += 1;
     entries = new Map(next.map((entry) => [entry.id, entry]));
     listeners.forEach((listener) => listener());
   });
   void api
     .lifecycle()
     .then(({ entries: next }) => {
+      if (generation !== initializationGeneration || snapshotVersion !== lifecycleChangeVersion) {
+        return;
+      }
       entries = new Map(next.map((entry) => [entry.id, entry]));
       listeners.forEach((listener) => listener());
     })
@@ -60,6 +69,8 @@ export function __resetLifecycleProjectionForTest(): void {
     /* 测试环境销毁 bridge 后仍需完成本地状态清理 */
   }
   unsubscribeLifecycleChanged = null;
+  initializationGeneration += 1;
+  lifecycleChangeVersion += 1;
   entries = new Map();
   listeners.clear();
   initialized = false;
