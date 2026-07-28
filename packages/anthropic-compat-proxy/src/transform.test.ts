@@ -143,6 +143,50 @@ describe('stripEncryptedContentFromBody', () => {
     const parsed = JSON.parse(out!.toString('utf8'));
     expect(parsed.input).toEqual([{ type: 'message', role: 'user', content: 'hi' }]);
   });
+
+  // codex wire: Compaction.encrypted_content 必填、ContextCompaction 可选 —— 不带密文的
+  // context_compaction 是合法的可读压缩变体,不是空壳,删掉等于静默丢上下文。
+  it('preserves a blob-less context_compaction (legitimate readable variant)', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'context_compaction', id: 'cc_1', summary: 'earlier turns' },
+        { type: 'reasoning', encrypted_content: 'ENC' },
+      ],
+    });
+    const out = stripEncryptedContentFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.input).toEqual([{ type: 'context_compaction', id: 'cc_1', summary: 'earlier turns' }]);
+  });
+
+  // 空壳判定锚在协议层顶层 input[];嵌套结构里同名的 input 数组是别人的业务数据,
+  // 不能按 type 形状猜着删(删密文键仍然全树递归,那是定向删键)。
+  it('does not touch nested input arrays that are not protocol history', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'reasoning', encrypted_content: 'ENC' },
+        {
+          type: 'message',
+          role: 'user',
+          content: 'hi',
+          payload: { input: [{ type: 'compaction' }, { type: 'reasoning' }] },
+        },
+      ],
+    });
+    const out = stripEncryptedContentFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.input).toEqual([
+      {
+        type: 'message',
+        role: 'user',
+        content: 'hi',
+        payload: { input: [{ type: 'compaction' }, { type: 'reasoning' }] },
+      },
+    ]);
+  });
 });
 
 describe('stripToolUseProviderSpecificFieldsFromBody', () => {

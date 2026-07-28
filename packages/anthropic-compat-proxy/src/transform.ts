@@ -152,49 +152,50 @@ function isReasoningItemWithoutEncryptedContent(item: unknown): boolean {
   return typeof item.encrypted_content !== 'string' || item.encrypted_content.length === 0;
 }
 
-/** 没有 blob 的压缩空壳 —— 上游无法解码, 留着必 400, 只能丢。 */
-function isCompactionItemWithoutBlob(item: unknown): boolean {
-  if (!isPlainObject(item) || !isCompactionItem(item)) return false;
+/**
+ * 缺 blob 的 `compaction` 空壳 —— 上游无法解码, 留着必 400, 只能丢。
+ *
+ * **只认 `compaction`, 不认 `context_compaction`**: codex wire 上 `Compaction.encrypted_content`
+ * 必填、`ContextCompaction.encrypted_content` 可选 —— 后者不带密文是合法的可读压缩变体
+ * (codex-proxy 的跨来源压缩兼容 transform 同样只处理带密文的项, 明文变体原样透传)。
+ * 把它当空壳删掉会静默丢掉真实的压缩上下文。
+ */
+function isCompactionShellWithoutBlob(item: unknown): boolean {
+  if (!isPlainObject(item) || item.type !== 'compaction') return false;
   return typeof item.encrypted_content !== 'string' || item.encrypted_content.length === 0;
 }
 
 /**
- * 从 Responses-style `input[]` 丢掉解不开也修不好的空壳 item:
- *   - 无 blob 的压缩块 (**恒丢**): 本函数不再制造这种空壳 (见 deepDeleteEncryptedContent),
- *     但请求体可能已经带着它进来, 兜底丢掉, 别让它打到上游换一个 400;
+ * 丢掉 Responses 请求体**协议层** `input[]` 里解不开也修不好的空壳 item:
+ *   - 缺 blob 的 `compaction` (**恒丢**): 本模块不再制造这种空壳
+ *     (见 deepDeleteEncryptedContent), 但请求体可能已经带着它进来, 兜底丢掉,
+ *     别让它打到上游换一个 400;
  *   - 无 encrypted_content 的 reasoning (**仅 dropReasoningShells**): 只删
  *     encrypted_content 键时,xAI 会把残留 reasoning item 判成 ModelInput 反序列化失败
  *     (422)。这一条只在本轮确实剥掉过密文时才做 —— 没剥过的请求里,"reasoning 只带
  *     summary" 是合法形态, 不该顺手删掉。
+ *
+ * **只看顶层 `input`, 不递归**: Responses 请求体的协议历史只有顶层这一个 `input[]`;
+ * 嵌套结构里同名的 `input` 数组(工具参数、业务对象等)不是协议历史, 按 `type` 形状
+ * 猜着删会静默改坏别人的数据。删密文键可以全树递归(定向删键, 只会少发不会发错),
+ * 判定"整项该不该留"必须锚在协议层。
  */
-function deepDropEncryptedShellInputItems(node: unknown, dropReasoningShells: boolean): number {
+function dropEncryptedShellInputItems(body: unknown, dropReasoningShells: boolean): number {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return 0;
+
   let removed = 0;
-  if (Array.isArray(node)) {
-    for (const item of node) removed += deepDropEncryptedShellInputItems(item, dropReasoningShells);
-    return removed;
-  }
-  if (!isPlainObject(node)) return 0;
-
-  if (Array.isArray(node.input)) {
-    const kept: unknown[] = [];
-    for (const item of node.input) {
-      if (
-        isCompactionItemWithoutBlob(item) ||
-        (dropReasoningShells && isReasoningItemWithoutEncryptedContent(item))
-      ) {
-        removed += 1;
-        continue;
-      }
-      removed += deepDropEncryptedShellInputItems(item, dropReasoningShells);
-      kept.push(item);
+  const kept: unknown[] = [];
+  for (const item of body.input) {
+    if (
+      isCompactionShellWithoutBlob(item) ||
+      (dropReasoningShells && isReasoningItemWithoutEncryptedContent(item))
+    ) {
+      removed += 1;
+      continue;
     }
-    node.input = kept;
+    kept.push(item);
   }
-
-  for (const key of Object.keys(node)) {
-    if (key === 'input') continue;
-    removed += deepDropEncryptedShellInputItems(node[key], dropReasoningShells);
-  }
+  if (removed > 0) body.input = kept;
   return removed;
 }
 
@@ -224,9 +225,10 @@ export function stripEncryptedContentFromBody(rawBody: Buffer): Buffer | null {
     return null;
   }
   const removedKeys = deepDeleteEncryptedContent(parsed);
-  // 空壳清理独立计数: 请求体里可能只带着一个没有 blob 的压缩空壳 (没有任何
+  // 空壳清理独立计数: 请求体里可能只带着一个缺 blob 的 compaction 空壳 (没有任何
   // encrypted_content 键可删), 那一样是必须处理的坏 payload, 不能因 removedKeys=0 放行。
-  const removedShells = deepDropEncryptedShellInputItems(parsed, removedKeys > 0);
+  // 这一步只扫顶层 input[] (单次线性扫描), 不是第二遍深度遍历。
+  const removedShells = dropEncryptedShellInputItems(parsed, removedKeys > 0);
   if (removedKeys === 0 && removedShells === 0) return null;
   try {
     return Buffer.from(JSON.stringify(parsed), 'utf8');
