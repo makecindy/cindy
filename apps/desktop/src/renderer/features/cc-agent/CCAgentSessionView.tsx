@@ -149,6 +149,7 @@ import {
   getGhostMediaUriFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
+import { getDroppedFileItems } from '@/lib/fileDrop';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
@@ -2726,31 +2727,17 @@ export function CCAgentSessionView({
             if (sessionId) void attachGhostMediaToSession(ghostMediaUri, sessionId, t);
             return;
           }
-          if (e.dataTransfer.files.length > 0) {
-            const files: File[] = [];
-            for (let i = 0; i < e.dataTransfer.items.length; i++) {
-              const item = e.dataTransfer.items[i];
-              const entry = item.webkitGetAsEntry?.();
-              const file = e.dataTransfer.files[i];
-              if (!file) continue;
-              if (entry?.isDirectory) {
-                let folderPath = '';
-                try {
-                  folderPath = window.electronAPI.getFilePath(file);
-                } catch {
-                  /* ignore */
-                }
-                if (folderPath) attachmentState.addFolderPath(folderPath);
-              } else {
-                files.push(file);
-              }
+          const { files, directories } = getDroppedFileItems(e.dataTransfer);
+          for (const directory of directories) {
+            let folderPath = '';
+            try {
+              folderPath = window.electronAPI.getFilePath(directory);
+            } catch {
+              /* ignore */
             }
-            if (files.length > 0) {
-              const dt = new DataTransfer();
-              for (const f of files) dt.items.add(f);
-              attachmentState.addFiles(dt.files);
-            }
+            if (folderPath) attachmentState.addFolderPath(folderPath);
           }
+          if (files.length > 0) attachmentState.addFiles(files);
         }}
       >
         {showOrcaLeadIdentityBar && (

@@ -2089,6 +2089,10 @@ const createWindow = () => {
       // Feishu OAuth 走 will-navigate 自定义 scheme + 主窗自身 webContents,
       // 跟嵌套 webview 是两条独立路径,不受影响。
       webviewTag: true,
+      // File drops are handled by renderer attachment/global-drop handlers.
+      // Do not let Chromium navigate the main window to a local dropped path
+      // when a platform-specific drag event misses a target.
+      navigateOnDragDrop: false,
     },
   });
   markAppContentWindow(mainWindow);

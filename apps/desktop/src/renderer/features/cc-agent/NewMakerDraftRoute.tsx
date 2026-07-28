@@ -129,6 +129,7 @@ import {
   getGhostMediaUriFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
+import { getDroppedFileItems } from '@/lib/fileDrop';
 import { createLogger } from '@/lib/logger';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
@@ -2256,22 +2257,11 @@ export function NewMakerDraftRoute() {
             void attachGhostMediaToSession(ghostMediaUri, NEW_MAKER_DRAFT_KEY, t);
             return;
           }
-          if (e.dataTransfer.files.length > 0) {
-            const files: File[] = [];
-            for (let i = 0; i < e.dataTransfer.items.length; i++) {
-              const item = e.dataTransfer.items[i];
-              const entry = item.webkitGetAsEntry?.();
-              const file = e.dataTransfer.files[i];
-              if (!file) continue;
-              if (!entry?.isDirectory) files.push(file);
-            }
-            if (files.length > 0) {
-              e.preventDefault();
-              e.stopPropagation();
-              const dt = new DataTransfer();
-              for (const f of files) dt.items.add(f);
-              attachmentState.addFiles(dt.files);
-            }
+          const { files } = getDroppedFileItems(e.dataTransfer);
+          if (files.length > 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            attachmentState.addFiles(files);
           }
         }}
       >
