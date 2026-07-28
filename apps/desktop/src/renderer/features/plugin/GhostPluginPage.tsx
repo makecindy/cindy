@@ -78,6 +78,7 @@ import {
 import { pluginMarketErrorKey } from './lib/pluginMarketErrorKey';
 import { usePluginIconRefresh } from './lib/usePluginIconRefresh';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
+import { usePluginMarketLocaleRefresh } from './lib/usePluginMarketLocaleRefresh';
 import './plugin-motion.css';
 
 const MAX_VISIBLE_INSTALLED_GHOSTS = 5;
@@ -105,7 +106,8 @@ const PRESENTATION_FILTERS: readonly PluginPresentationFilter[] = [
  * interaction shape, while every displayed field comes from InstalledGhost.
  */
 export function GhostPluginPage() {
-  const { t } = useTranslation();
+  const { i18n, t } = useTranslation();
+  const marketLocale = i18n.resolvedLanguage ?? i18n.language;
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { confirm, confirmWithCheckbox } = useConfirmDialog();
@@ -691,6 +693,11 @@ export function GhostPluginPage() {
       if (requestId === marketDetailRequestRef.current) throw error;
     }
   }, []);
+  usePluginMarketLocaleRefresh(
+    marketLocale,
+    () => refreshMarket(true),
+    marketDetail?.pluginId ? () => refreshVisibleMarketDetail(marketDetail.pluginId) : undefined,
+  );
   const visibleMarketIcons = useMemo(
     () => [...marketItems.map((item) => item.icon), marketDetail?.icon],
     [marketDetail?.icon, marketItems],

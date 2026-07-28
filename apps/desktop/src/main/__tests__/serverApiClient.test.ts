@@ -22,7 +22,7 @@ vi.mock('../authManager', () => ({
   refresh: mocks.refresh,
   invalidateSession: mocks.invalidateSession,
 }));
-vi.mock('../i18n', () => ({
+vi.mock('../i18n.js', () => ({
   getResolvedMainLocale: () => 'zh-CN',
 }));
 vi.mock('../logger', () => ({
