@@ -43,6 +43,7 @@ import {
   MOBILE_REDIRECT_URL,
   OAUTH_BROKER_API_BASE_URL,
 } from '@/config/env';
+import { invalidateInFlightAuth } from '@/auth/authGeneration';
 import { syncCanaryChannelAfterAuth } from '@/auth/canaryChannelSync';
 import { ensureDeviceId } from '@/auth/deviceId';
 import { isAccessTokenExpiring } from '@/auth/jwt';
@@ -270,6 +271,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (reason?: 'ACCOUNT_UNAVAILABLE') => Promise<void>
   >(async () => undefined);
   // Logout bumps this generation so a late refresh cannot resurrect the session.
+  // 会话切换路径统一经 invalidateInFlightAuth(authGeneration.ts)bump,别再散写 ++。
   const authGenerationRef = useRef(0);
   // SecureStore operations are asynchronous. Serialize mutations so logout always
   // wins over a refresh/login write that was already inside the native storage call.
@@ -425,7 +427,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const acceptOutcome = useCallback(
-    async (outcome: LoginOutcome, did: string): Promise<void> => {
+    async (
+      outcome: LoginOutcome,
+      did: string,
+      // 调用方在**发起网络请求之前**捕获的 generation。给了就先复核:期间发生过会话切换
+      // (登出 / 会话终止 / 进入「跳过登录」无账号态)即整条丢弃。
+      // 为什么必须由调用方捕获:acceptOutcome 自己下面 `++authGenerationRef.current`,
+      // 只跟自己比必然相等 —— 对「请求已在飞、期间被 invalidateInFlightAuth 作废」这类
+      // 竞态天然免疫,不复核就会把迟到的登录结果落成 user,推翻用户刚做的选择
+      // (2026-07-28 review P1:冷启动 OAuth 深链回调 + 点「跳过登录」)。
+      expectedGeneration?: number,
+    ): Promise<void> => {
+      if (
+        expectedGeneration !== undefined &&
+        authGenerationRef.current !== expectedGeneration
+      ) {
+        throw authCodeError('AUTH_FLOW_SUPERSEDED');
+      }
       await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
       if (outcome.status === 'ok' || outcome.status === 'select_account') {
         // 成功登录后，当前会话已明确属于本次登录的 passport。无论是否恢复了
@@ -731,6 +749,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (browserCompletionRef.current) return browserCompletionRef.current;
       const run = (async () => {
         setIsBusy(true);
+        // 在第一个 await 之前捕获:code 兑换是一次网络往返,期间用户可能点「跳过登录」
+        // (冷启动深链回调时登录页处于 loginState=null 的兜底屏,入口可点),
+        // 那次 invalidateInFlightAuth 必须能让本次回调结果作废(见 acceptOutcome 注)。
+        const expectedGeneration = authGenerationRef.current;
         try {
           if (!matchesOAuthCallbackUrl(callbackUrl, MOBILE_REDIRECT_URL)) {
             throw authCodeError('INVALID_AUTH_CODE');
@@ -744,7 +766,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           ).exchangeAuthorizationCode(callback.code, pending.codeVerifier);
           deviceIdRef.current = pending.deviceId;
           setDeviceId(pending.deviceId);
-          await acceptOutcome(outcome, pending.deviceId);
+          await acceptOutcome(outcome, pending.deviceId, expectedGeneration);
           setAuthError(null);
         } catch (error) {
           const code = authErrorCode(error);
@@ -1036,11 +1058,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /**
    * 「跳过登录」:置无账号态。**不过协议门**(产品拍板 2026-07-27:跳过登录不弹服务
    * 条款/隐私协议弹窗、不需勾选;其它个人登录链路的协议门不变),因此这里既不写
-   * 统计同意、也不碰 loginState —— 只置标记 + 落盘,路由门自行放行主界面。
+   * 统计同意、也不碰 loginState —— 只置标记 + 落盘 + 清存量凭证,路由门自行放行主界面。
    */
   const enterLocalMode = useCallback(async () => {
+    // 与完整登录态清除路径(clearLocalSession)共用同一套 generation 作废机制:
+    // 启动 refresh 超过 AUTH_STARTUP_GATE_TIMEOUT_MS 后界面已放行,但那条请求仍在飞;
+    // 不 bump 的话它迟到成功仍会 applyUser() → 清掉「跳过」标记并把用户登录进去,
+    // 而用户刚刚明确选了「不登录」(2026-07-28 review P1)。bump 后 refresh / loadMe /
+    // canary 同步的 generation 校验全部落空,迟到结果被丢弃(失败结果本就无副作用)。
+    // 必须在 await 之前同步执行,否则落盘那段异步窗口里迟到结果照样能落地。
+    invalidateInFlightAuth({
+      authGeneration: authGenerationRef,
+      refreshInFlight: refreshInFlightRef,
+    });
+    // 存量 refresh token 一并删掉(2026-07-28 review P1-B,lead 裁决方案 A)。
+    // 「跳过登录」的产品语义就是「我现在不要账号」;而上面 bump 之后,那条在途 refresh
+    // 拿回的**轮换后新 token 已不会落盘**(写入也在 generation 守卫内),盘上留下的是
+    // 服务端已消耗掉的旧 token —— 留着零价值,反而制造怪状:下次冷启动 initialize 无条件
+    // 对存量 token 发 refresh → 401 → isRejectedRefresh → terminateSession →
+    // clearLocalSession → applyLocalMode(false),把用户选的无账号态清掉、踢回登录页。
+    // 删掉后下次冷启动读不到 token,refresh 直接 return null,干净留在无账号态。
+    // 范围只取 REFRESH_TOKEN_KEY:initialize 里唯一会触发 refresh 的存量痕迹就是它
+    // (legacy 键在 initialize 开头已被无条件清理;user profile 快照的恢复条件是
+    // 「token 与快照同时存在」,且 !storedRefreshToken 时 initialize 会顺手删掉它)。
+    // 走 serializeRefreshTokenMutation:保证本次删除排在任何已入队的写入之后生效。
+    await serializeRefreshTokenMutation(() =>
+      deleteSecureItem(REFRESH_TOKEN_KEY).catch(() => undefined),
+    );
     await applyLocalMode(true);
-  }, [applyLocalMode]);
+  }, [applyLocalMode, serializeRefreshTokenMutation]);
 
   const clearLocalSession = useCallback(async () => {
     // 任何登录态清除路径(logout / terminateSession / 账号注销 / ACCOUNT_UNAVAILABLE)
@@ -1048,8 +1094,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 继续收到旧账号的任务通知。token 此刻可能已失效(账号不可用),失败静默,
     // 残留由 server 侧 APNs 410 回收与换账号重注册的让位逻辑兜底。
     await unregisterPushTokenBestEffort(accessTokenRef.current);
-    authGenerationRef.current += 1;
-    refreshInFlightRef.current = null;
+    invalidateInFlightAuth({
+      authGeneration: authGenerationRef,
+      refreshInFlight: refreshInFlightRef,
+    });
     setToken(null);
     applyUser(null);
     // 登出 / 会话终止一并退出「跳过登录」态:否则清掉账号后仍被标记留在主界面,

@@ -192,7 +192,7 @@ describe('无账号通路(store / 路由门)区无关', () => {
     expect(indexSource).toContain('if (!auth.isAuthenticated && !auth.isLocalMode)');
     // enterLocalMode 全链不读 region
     const start = authSource.indexOf('const enterLocalMode = useCallback');
-    const body = authSource.slice(start, authSource.indexOf('}, [applyLocalMode]);', start));
+    const body = authSource.slice(start, authSource.indexOf('const clearLocalSession = useCallback', start));
     expect(body).not.toMatch(/AUTH_REGION|region/);
   });
 });

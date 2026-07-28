@@ -10,25 +10,34 @@
  * apps/desktop/src/renderer/components/login/LoginPage.tsx 的 `openLocalMode`
  * (`isLoading || localModePending` guard + `disabled` prop)。
  *
- * 口径:只看 auth 自身是否未决(`isBusy` / 未 `initialized`),**不看** mobile 配置缺失
- * (`getMobileConfigIssues()`)—— 跳过登录不发任何请求,配置缺失恰恰是用户最需要这个
- * 逃生入口的场景,不能被登录按钮那条 `disabled` 一并锁死。
+ * 口径:只看「会产出身份的动作是否未决」+ auth 冷启动是否已收敛,**不看** mobile 配置
+ * 缺失(`getMobileConfigIssues()`)、**也不看** provider bootstrap 那类不产出身份的忙碌
+ * —— 跳过登录不发任何请求,配置缺失 / 认证服务不可达恰恰是用户最需要这个逃生入口的
+ * 场景,不能被登录按钮那条 `disabled` 一并锁死(2026-07-28 review P2)。
  */
 
 /** 判门所需的 auth 状态切片(只取会造成竞态的两项)。 */
 export type SkipLoginGateState = {
-  /** auth 是否有动作在飞(discover / 发码 / 社交登录 / OAuth 回调完成) */
-  isBusy: boolean;
+  /**
+   * **会产出身份**的登录提交在飞(发码 / 验证码 / 社交 / SSO 回调完成 / 选择账号):
+   * 这类动作落地会 `applyUser` 并清「跳过」标记,与跳过登录构成竞态,必须锁门。
+   *
+   * 刻意**不含** provider bootstrap(冷启动 `dispatch({type:'reset'})` →
+   * `getProviders()`):它只填 `loginState`、永不产出身份,而它挂住 / 失败(离线、
+   * 认证服务不可达)正是最需要逃生入口的时刻。调用方按「`isBusy` ∧ 已有 loginState」
+   * 推导即可,不需要额外状态机(见 login.tsx 的 `skipDisabled`)。
+   */
+  loginSubmissionInFlight: boolean;
   /** auth 冷启动恢复是否已收敛(未收敛时本地态还可能被盘上值推翻) */
   initialized: boolean;
 };
 
 /** 入口是否应处于禁用态(交互禁用;视觉按文字按钮口径不变色)。 */
 export function isSkipLoginDisabled({
-  isBusy,
+  loginSubmissionInFlight,
   initialized,
 }: SkipLoginGateState): boolean {
-  return isBusy || !initialized;
+  return loginSubmissionInFlight || !initialized;
 }
 
 /**

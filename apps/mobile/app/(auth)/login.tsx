@@ -198,17 +198,27 @@ export default function LoginScreen() {
    * (enterLocalMode),本组件不自管路由——NavigationGate 的「有账号 ∨ 已跳过」门
    * 在标记置位后自动 replace 到主界面。
    *
-   * 登录未决(isBusy / 未 initialized)时禁用:否则路由先切主界面、迟到的登录结果再写
-   * user 清标记,最终态取决于异步完成顺序(2026-07-27 P1)。门在 skipLoginGate,组件的
-   * 原生 disabled 与 handler guard 双保险 —— 与桌面 openLocalMode 同款。
+   * 登录提交未决(会产出身份的动作在飞 / 未 initialized)时禁用:否则路由先切主界面、
+   * 迟到的登录结果再写 user 清标记,最终态取决于异步完成顺序(2026-07-27 P1)。门在
+   * skipLoginGate,组件的原生 disabled 与 handler guard 双保险 —— 与桌面 openLocalMode 同款。
+   *
+   * 「会产出身份」= `isBusy` ∧ 已有 loginState:所有产出身份的提交(发码 / 验证码 /
+   * 社交 / 选账号 / SSO)都发生在某个 loginState 之上。冷启动那次 `dispatch({reset})`
+   * → `getProviders()` 也会抬起 isBusy,但此刻 loginState 仍为 null 且它永不产出身份;
+   * 若把它算进门里,认证服务挂住 / 离线时逃生入口反而被锁死 —— 与「门刻意不看
+   * configIssues」的理由自相矛盾(2026-07-28 review P2)。唯一 loginState=null 的真实
+   * 提交是冷启动 OAuth 深链回调:它在源头闭环 —— `completeOAuthCallback` 发起 code 兑换
+   * 前捕获 auth generation、`acceptOutcome` 落地前复核,期间 `enterLocalMode` 的
+   * `invalidateInFlightAuth` 一 bump 就整条丢弃(AuthContext 同名注释),不靠本门兜。
    */
+  const loginSubmissionInFlight = auth.isBusy && auth.loginState !== null;
   const skipDisabled = isSkipLoginDisabled({
-    isBusy: auth.isBusy,
+    loginSubmissionInFlight,
     initialized: auth.initialized,
   });
   const skipLogin = () => {
     requestSkipLogin({
-      isBusy: auth.isBusy,
+      loginSubmissionInFlight,
       initialized: auth.initialized,
       enterLocalMode: auth.enterLocalMode,
     });
@@ -1061,6 +1071,16 @@ export default function LoginScreen() {
           testID="login.retryButton"
         />
         {errorNode}
+        {/* 这一态就是冷启动 provider bootstrap 在飞 / 刚失败时用户看到的屏(loginState
+            仍为 null):离线或认证服务不可达时最需要逃生入口,却一度整屏没渲染它,
+            承诺落空(2026-07-28 review P2)。复用 identifier / config 面板的同一组件、
+            同一 handler、同一门,槽位同为面板内 430..490(error 槽 380..430 首尾相接)。 */}
+        <LoginSkipLoginLink
+          disabled={skipDisabled}
+          label={loginText('skipLogin')}
+          onPress={skipLogin}
+          testID="login.skipLoginButton"
+        />
       </LoginPanel>
     );
   };
