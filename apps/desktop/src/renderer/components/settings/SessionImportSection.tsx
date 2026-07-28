@@ -167,7 +167,7 @@ export function SessionImportSection() {
   }, [runScan, selectedItems, t]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-4">
       <header className="flex shrink-0 flex-col items-stretch justify-between gap-3 xl:flex-row xl:items-end xl:gap-6">
         <div className="flex min-w-0 max-w-[620px] flex-col gap-1">
           <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
@@ -550,7 +550,7 @@ function SessionImportRow({
   return (
     <label
       className={cn(
-        'flex cursor-pointer items-start gap-3 py-3 hover:bg-[var(--settings-menu-bg-hover)]',
+        'flex min-w-0 cursor-pointer items-start gap-3 py-3 hover:bg-[var(--settings-menu-bg-hover)]',
         isProjectChild ? 'pl-[40px] pr-4' : 'px-4',
       )}
     >
@@ -558,26 +558,26 @@ function SessionImportRow({
         type="checkbox"
         checked={checked}
         onChange={onToggle}
-        className="mt-1 h-4 w-4 accent-[var(--settings-menu-text-selected)]"
+        className="mt-1 h-4 w-4 shrink-0 accent-[var(--settings-menu-text-selected)]"
       />
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="rounded-full border border-[var(--settings-input-border)] px-1.5 py-0.5 text-10 uppercase text-[var(--settings-section-desc)]">
+        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+          <span className="shrink-0 whitespace-nowrap rounded-full border border-[var(--settings-input-border)] px-1.5 py-0.5 text-10 uppercase text-[var(--settings-section-desc)]">
             {item.source === 'codex' ? 'Codex' : 'Claude'}
           </span>
           {item.archived && (
-            <span className="rounded-full border border-[var(--settings-input-border)] px-1.5 py-0.5 text-10 text-[var(--settings-section-desc)]">
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-[var(--settings-input-border)] px-1.5 py-0.5 text-10 text-[var(--settings-section-desc)]">
               {t('settings.sessionImport.archived')}
             </span>
           )}
           {item.workspaceKind === 'dialogue' && (
-            <span className="rounded-full border border-[var(--settings-input-border)] px-1.5 py-0.5 text-10 text-[var(--settings-section-desc)]">
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-[var(--settings-input-border)] px-1.5 py-0.5 text-10 text-[var(--settings-section-desc)]">
               {t('settings.sessionImport.filters.dialogue')}
             </span>
           )}
           <p
             title={item.title || undefined}
-            className="truncate text-13 font-medium text-[var(--settings-section-sublabel)]"
+            className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-sublabel)]"
           >
             {item.title || t('settings.sessionImport.untitled')}
           </p>

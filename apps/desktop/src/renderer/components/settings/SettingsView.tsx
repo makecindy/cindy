@@ -258,7 +258,7 @@ export function SettingsView() {
           <div
             key={activeTab}
             className={cn(
-              'mx-auto w-full max-w-[920px] animate-fade-in',
+              'mx-auto w-full min-w-0 max-w-[920px] px-1 animate-fade-in',
               activeTab === 'import' ? 'h-full min-h-0' : 'pb-32',
             )}
           >

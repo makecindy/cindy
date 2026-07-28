@@ -78,6 +78,15 @@ describe('SessionImportSection initial scan', () => {
     );
   });
 
+  it('keeps metadata pills on one line and lets long session titles truncate instead of stretching rows', () => {
+    expect(source).toContain(
+      'shrink-0 whitespace-nowrap rounded-full border border-[var(--settings-input-border)]',
+    );
+    expect(source).toContain(
+      'className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-sublabel)]"',
+    );
+  });
+
   it('uses the sidebar time formatter for project and session-row timestamps', () => {
     expect(source).toContain(
       "import { formatSidebarTime, formatSidebarTimeAbsolute } from '@/features/cc-agent/lib/formatSidebarTime';",
