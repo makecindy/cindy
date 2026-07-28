@@ -89,9 +89,18 @@ describe('composer atomic chip presentation', () => {
   });
 
   it('keeps the caret and prose 4px away from every composer pill', () => {
-    const gapRule = globalsSource.match(
-      /\.ProseMirror :is\(\s*\[data-mention-chip\],\s*\[data-pasted-text-chip\],\s*\[data-composer-quote\],\s*\.ghost-cmd-pill,\s*\.slash-cmd-pill\s*\) \{([\s\S]*?)\n\}/,
-    )?.[1];
+    const requiredSelectors = [
+      '[data-mention-chip]',
+      '[data-pasted-text-chip]',
+      '[data-composer-quote]',
+      '.ghost-cmd-pill',
+      '.slash-cmd-pill',
+    ];
+    const gapRule = [
+      ...globalsSource.matchAll(/\.ProseMirror :is\(([\s\S]*?)\) \{([\s\S]*?)\r?\n\}/g),
+    ].find(([, selectors]) =>
+      requiredSelectors.every((selector) => selectors?.includes(selector)),
+    )?.[2];
 
     expect(gapRule).toContain('margin-inline: 4px');
   });
