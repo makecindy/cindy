@@ -448,6 +448,28 @@
       ]
     },
     {
+      "id": "mascot-black-cat",
+      "status": "proposed",
+      "en": "Black Cat",
+      "translations": {
+        "zh-CN": "黑猫",
+        "ja": "黒猫",
+        "ko": "검은 고양이"
+      },
+      "note": "灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色本体是黑猫形象,四语先采用直译并登记为待讨论,避免后续界面出现「ブラックキャット / 블랙캣」等音译与直译混用。"
+    },
+    {
+      "id": "mascot-erika",
+      "status": "proposed",
+      "en": "Erika",
+      "translations": {
+        "zh-CN": "Erika",
+        "ja": "Erika",
+        "ko": "Erika"
+      },
+      "note": "灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。"
+    },
+    {
       "id": "plugin",
       "status": "decided",
       "en": "Plugin",
@@ -827,28 +849,6 @@
       "exempt": [
         "desktop:sessionShare.import.useWorktreeHint"
       ]
-    },
-    {
-      "id": "mascot-black-cat",
-      "status": "proposed",
-      "en": "Black Cat",
-      "translations": {
-        "zh-CN": "黑猫",
-        "ja": "黒猫",
-        "ko": "검은 고양이"
-      },
-      "note": "灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色本体是黑猫形象,四语先采用直译并登记为待讨论,避免后续界面出现「ブラックキャット / 블랙캣」等音译与直译混用。"
-    },
-    {
-      "id": "mascot-erika",
-      "status": "proposed",
-      "en": "Erika",
-      "translations": {
-        "zh-CN": "Erika",
-        "ja": "Erika",
-        "ko": "Erika"
-      },
-      "note": "灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。"
     }
   ]
 }

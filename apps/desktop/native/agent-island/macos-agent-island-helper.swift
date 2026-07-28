@@ -821,7 +821,7 @@ enum AgentIslandMascotCatalog {
   static let skins: [String] = [
     "cindy",
     "blackcat",
-    defaultAgentIslandMascotSkin,
+    "pululu",
     "tarara",
     "boli",
     "whitesnow",
