@@ -30,7 +30,8 @@ type CapabilityRuntimeState =
   | 'ghost-needs-setup'
   | 'ghost-needs-reauth'
   | 'ghost-blocked'
-  | 'ghost-degraded';
+  | 'ghost-degraded'
+  | 'ghost-unknown';
 interface CapabilityRuntimeStatus {
   state: CapabilityRuntimeState;
   ghostName?: string;
@@ -44,6 +45,7 @@ const CAPABILITY_WARN_I18N_SUFFIX: Record<Exclude<CapabilityRuntimeState, 'ok'>,
   'ghost-needs-reauth': 'ghostNeedsReauth',
   'ghost-blocked': 'ghostBlocked',
   'ghost-degraded': 'ghostDegraded',
+  'ghost-unknown': 'ghostUnknown',
 };
 
 export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {

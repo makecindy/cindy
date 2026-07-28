@@ -45,6 +45,7 @@ import {
   ghostPermissionItems,
   type GhostSetupStatus,
 } from '../../../shared/ghost';
+import type { GhostLifecycleEntry, GhostReadiness } from '../../../shared/ghostLifecycle';
 import type {
   PluginMarketDetail,
   PluginMarketItem,
@@ -68,7 +69,7 @@ import {
 import { GhostPluginDetailView } from './GhostPluginDetailView';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { GhostReadinessBadge } from './GhostReadinessBadge';
-import { getGhostLifecycleEntrySnapshot, useGhostReadiness } from '@/cindy-brain/lifecycleProjection';
+import { useGhostReadiness } from '@/cindy-brain/lifecycleProjection';
 import { MarketPluginDetailView } from './MarketPluginDetailView';
 import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker';
 import {
@@ -453,6 +454,12 @@ export function GhostPluginPage() {
           );
         } else {
           const result = await window.electronAPI.ghosts.setEnabled(id, enabled);
+          // 启用已生效但配置评估失败(部分成功):据实提示,不走 catch 的
+          // 「操作失败」口径——开关保持开,插件进入显式的状态未知态。
+          if (enabled && (result as { setupStatusUnavailable?: boolean }).setupStatusUnavailable) {
+            toast.error(t('settings.ghosts.errors.setupStatusUnavailable'));
+            return;
+          }
           // 启用即引导:启用成功但配置未就绪时,main 已把 setup 载荷随响应
           // 返回——立即弹配置流,插件留在「已启用 · 待配置」显式态,而不是
           // 开关弹回(凭证过期 ≠ 用户想关掉它;意图保留 + 状态可见)。
@@ -596,15 +603,6 @@ export function GhostPluginPage() {
     async (id: string, displayName: string) => {
       const ghost = ghosts.find((candidate) => candidate.manifest.id === id);
       if (!ghost?.manifest.command) return;
-      // 生命周期前置门:setupStatus 只看配置字段,运行态熔断/崩溃时仍可能
-      // 报 ready;此时 ghost_list 已降级为 tools: []、调用只会拿到
-      // GHOST_CRASHED,带进会话等于让用户面对一个用不了目标插件的对话。
-      // degraded/unknown 一律拦下并指向恢复动作,与发现层口径保持一致。
-      const readiness = getGhostLifecycleEntrySnapshot(id)?.readiness ?? 'ready';
-      if (readiness === 'degraded' || readiness === 'unknown') {
-        toast.error(t(`settings.ghosts.readiness.${readiness}`));
-        return;
-      }
       // 使用前置门:点击时现查配置就绪度(main 侧确定性判定),未就绪先
       // 弹窗引导去配置。查询失败与 lifecycle unknown 同口径 fail-closed:
       // 不把用户带进一个注定无法发现/调用目标插件的会话。
@@ -612,7 +610,17 @@ export function GhostPluginPage() {
       try {
         setupStatus = await window.electronAPI.ghosts.setupStatus(id);
       } catch (error) {
-        toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
+        // setupStatus 只应抛 SETUP_STATUS_UNAVAILABLE(探针失败);复用
+        // ghostInstallErrorKey 会把 NOT_FOUND 等意外码错配成「所选文件找
+        // 不到」这类装入语义,不相干的码一律落通用错误文案。
+        const code = extractIpcError(error)?.code;
+        toast.error(
+          t(
+            code === 'SETUP_STATUS_UNAVAILABLE'
+              ? 'settings.ghosts.errors.setupStatusUnavailable'
+              : 'settings.ghosts.errors.generic',
+          ),
+        );
         return;
       }
       if (!setupStatus.ready) {
@@ -625,6 +633,25 @@ export function GhostPluginPage() {
           autoFocusConfirm: true,
         });
         if (goConfigure) openGhostConfiguration(id);
+        return;
+      }
+      // 生命周期前置门(在 setupStatus 之后):配置就绪不代表运行态可用——
+      // 熔断/崩溃的插件 setupStatus 仍报 ready,但 ghost_list 已降级
+      // tools: []、调用只会拿到 GHOST_CRASHED。renderer 快照是异步装载的
+      // (首帧/崩溃推送可能未到),不能拿缓存缺失当 ready 放行——权威现查
+      // main 投影;查询失败 fail-closed,与 setupStatus 失败同口径。
+      let readiness: GhostReadiness;
+      try {
+        const { entries } = await window.electronAPI.ghosts.lifecycle();
+        readiness =
+          (entries as GhostLifecycleEntry[]).find((entry) => entry.id === id)?.readiness ??
+          'unknown';
+      } catch {
+        toast.error(t('settings.ghosts.readiness.unknown'));
+        return;
+      }
+      if (readiness !== 'ready') {
+        toast.error(t(`settings.ghosts.readiness.${readiness}`));
         return;
       }
       const existing = getComposerDraft(NEW_MAKER_DRAFT_KEY);

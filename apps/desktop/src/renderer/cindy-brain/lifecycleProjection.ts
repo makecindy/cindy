@@ -61,11 +61,6 @@ export function useGhostLifecycleEntry(id: string): GhostLifecycleEntry | undefi
   return useSyncExternalStore(subscribe, () => entries.get(id));
 }
 
-/** 非 React 路径现读当前快照(事件回调里按任意 id 判定 readiness 用)。 */
-export function getGhostLifecycleEntrySnapshot(id: string): GhostLifecycleEntry | undefined {
-  return entries.get(id);
-}
-
 /** 仅测试用:重置模块状态。 */
 export function __resetLifecycleProjectionForTest(): void {
   try {

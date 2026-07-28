@@ -86,12 +86,12 @@ export function projectGhostLifecycles(
   });
 }
 
-/** 派生视图:agent 可发现 = 全局启用 + 未 workdir 停用 + 非 blocked。 */
+/** 派生视图:agent 可发现 = 全局启用 + 未 workdir 停用(含 blocked:降级暴露)。 */
 export function isDiscoverable(entry: GhostLifecycleEntry, workdirDisabled: boolean): boolean {
-  return entry.enabled && !workdirDisabled && entry.readiness !== 'blocked';
+  return entry.enabled && !workdirDisabled;
 }
 
-/** 派生视图:agent 可调用 = 可发现 + 就绪。 */
+/** 派生视图:agent 可调用 = 可发现 + 就绪(blocked 只能发现,不可调用)。 */
 export function isCallable(entry: GhostLifecycleEntry, workdirDisabled: boolean): boolean {
   return isDiscoverable(entry, workdirDisabled) && entry.readiness === 'ready';
 }
@@ -103,6 +103,8 @@ export function readinessSummary(entry: GhostLifecycleEntry): string | null {
       return '需要完成配置后才能使用;正确动作是发起配置引导,不要盲调。';
     case 'needs_reauth':
       return '授权已过期,需要重新连接;正确动作是发起重新授权引导,不要盲调。';
+    case 'blocked':
+      return '需要登录并恢复云端服务后可用;请引导用户完成登录,不要盲调。';
     case 'degraded':
       return '插件运行异常(崩溃或已熔断);请引导用户到插件页重载,不要重试调用。';
     case 'unknown':

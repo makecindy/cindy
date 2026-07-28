@@ -60,6 +60,7 @@ import {
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
 import { readinessSummary } from '../cindy-brain/ghostLifecycle.js';
+import type { GhostReadiness } from '../../shared/ghostLifecycle.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import {
   isGhostDisabledForWorkdir,
@@ -552,6 +553,9 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       // 降级暴露(D1):未就绪的插件仍进花名册但带 readiness 标记,agent
       // 看得见「用户装了什么」却没有可派发工具——引导配置的正确动作靠
       // 标记 + 花名册头说明驱动,而不是盲调失败。
+      // 账号不可用的插件同样留在花名册:此时投影 readiness=blocked,靠
+      // 标记表达「需登录/恢复云端」,而不是从清单里抹掉(发现层语义与
+      // ghost_list 一致:可发现、零工具派发)。
       const projection = new Map(getGhostLifecycleProjection().map((e) => [e.id, e]));
       const disabledSomewhere = workdir ? null : new Set(listAllWorkdirDisabledGhostIds());
       return getGhostManager()
@@ -559,7 +563,6 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         .filter(
           (g) =>
             g.enabled &&
-            isGhostAvailableForActiveSession(g.manifest.id) &&
             g.manifest.kind === 'chip' &&
             (g.manifest.tools?.length ?? 0) > 0 &&
             (workdir
@@ -567,7 +570,10 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
               : !disabledSomewhere?.has(g.manifest.id)),
         )
         .map((g) => {
-          const readiness = projection.get(g.manifest.id)?.readiness;
+          // 账号会话外投影不会给这些插件出条目,补上 blocked 标记。
+          const readiness = isGhostAvailableForActiveSession(g.manifest.id)
+            ? projection.get(g.manifest.id)?.readiness
+            : 'blocked';
           return {
             id: g.manifest.id,
             name: g.manifest.name,
@@ -579,6 +585,8 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
     async listAwakeGhosts(): Promise<CindyGhostInfo[]> {
       // 现查同样按会话 workdir 滤掉目录级禁用的意识(ALS 恢复的真实语境
       // 优先)——模型主动 ghost_list 也看不到被禁用的条目,清单层面干净。
+      // 账号不可用插件不滤掉:readiness=blocked 降级暴露(tools: []),
+      // agent 看得见「装了但需登录/恢复云端」,而不是清单里凭空消失。
       const workdir = resolveSessionContext()?.workingDir ?? null;
       const projection = new Map(getGhostLifecycleProjection().map((e) => [e.id, e]));
       return getGhostManager()
@@ -586,7 +594,6 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         .filter(
           (g) =>
             g.enabled &&
-            isGhostAvailableForActiveSession(g.manifest.id) &&
             g.manifest.kind === 'chip' &&
             (g.manifest.tools?.length ?? 0) > 0 &&
             !isGhostDisabledForWorkdir(g.manifest.id, workdir),
@@ -596,8 +603,12 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           // needs_setup/needs_reauth 附脱敏 assessment 供 agent 编排配置卡,
           // unknown/degraded 只给处置指引;ghost_call 的 strict setup gate
           // 不变,兜底仍在派发前拦截凭上文记忆硬调的调用。
-          const entry = projection.get(g.manifest.id);
-          const readiness = entry?.readiness ?? 'unknown';
+          // 账号会话外的插件投影不出条目,显式按 blocked 暴露。
+          const available = isGhostAvailableForActiveSession(g.manifest.id);
+          const entry = available ? projection.get(g.manifest.id) : undefined;
+          const readiness: GhostReadiness = available
+            ? (entry?.readiness ?? 'unknown')
+            : 'blocked';
           const callable = readiness === 'ready';
           return {
             id: g.manifest.id,

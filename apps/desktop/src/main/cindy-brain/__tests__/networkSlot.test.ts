@@ -290,6 +290,56 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
     // 已由「只记命中最终 host 的凭证」用例覆盖,此处不再重复。
   });
 
+  it('跨 host 重定向后按最终跳归因:上一跳 oauth 不干扰最终 host 唯一 user key', async () => {
+    // brave 域注入 oauth token;302 跳到 tavily 域后改注 tavily user key。
+    // 最终 401 的归属只看最后一跳(tavily key 唯一),上一跳的 oauth 凭证
+    // 不随重定向出网,不能把归因搅成「歧义」漏记。
+    const noteCredentialRejected = vi.fn();
+    const fetchImpl = vi
+      .fn()
+      // attempt 0:brave 域(oauth)→ 302 → tavily 域(user key)→ 401;
+      // 401 且注过 oauth → attempt 1 重走整链,最终仍 401。
+      .mockResolvedValueOnce(
+        fakeResponse({ status: 302, headers: { location: 'https://api.tavily.com/search' } }),
+      )
+      .mockResolvedValueOnce(fakeResponse({ status: 401 }))
+      .mockResolvedValueOnce(
+        fakeResponse({ status: 302, headers: { location: 'https://api.tavily.com/search' } }),
+      )
+      .mockResolvedValueOnce(fakeResponse({ status: 401 }));
+    const { slot } = makeSlot({
+      getGhost: () =>
+        fakeGhost({
+          network: {
+            hosts: ['api.search.brave.com', '*.tavily.com'],
+            secrets: [
+              {
+                key: 'google_token',
+                label: 'Google',
+                source: 'oauth',
+                inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.search.brave.com'] },
+                oauth: { provider: 'google', scopes: ['x'] } as never,
+              },
+              {
+                key: 'tavily_api_key',
+                label: 'Tavily Key',
+                inject: { header: 'X-Api-Key', format: '{value}', hosts: ['*.tavily.com'] },
+              },
+            ],
+          },
+        }),
+      fetchImpl: fetchImpl as never,
+      noteCredentialRejected,
+      oauthTokens: {
+        getFreshAccessToken: async () => ({ ok: true as const, accessToken: 'tok', accountId: 'a1' }),
+        invalidateAccessToken: () => {},
+      },
+    });
+    await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'tavily_api_key');
+    expect(noteCredentialRejected).toHaveBeenCalledTimes(1);
+  });
+
   it('403 仅当 body 含凭证失效信号才记账;限流/业务 403 不记', async () => {
     // 403 语义宽(GitHub 限流、越权、封禁):无凭证类信号时不记账,避免误标。
     const noteCredentialRejected = vi.fn();

@@ -29,7 +29,8 @@ export type ScriptCapabilityRuntimeState =
   | 'ghost-needs-setup'
   | 'ghost-needs-reauth'
   | 'ghost-blocked'
-  | 'ghost-degraded';
+  | 'ghost-degraded'
+  | 'ghost-unknown';
 
 export interface ScriptCapabilityStatus {
   capability: ScriptCapability;
@@ -65,8 +66,11 @@ export function resolveScriptCapabilityStatuses(
       case 'ready':
         return { capability, state: 'ok' as const };
       case 'needs_setup':
-      case 'unknown':
         return { capability, state: 'ghost-needs-setup' as const, ghostName: ghost.name };
+      case 'unknown':
+        // unknown = 就绪评估本身失败(配置存储读不出/损坏),打开配置页
+        // 解决不了,文案必须指向「状态未知需检查」而非「未配置」。
+        return { capability, state: 'ghost-unknown' as const, ghostName: ghost.name };
       case 'blocked':
         // blocked = 云端会话缺失/账号服务不可用(如 xd-atlassian/xd-feishu
         // 这类 Cindy 账号插件),修复动作是登录/恢复云端,不是「去配置」,

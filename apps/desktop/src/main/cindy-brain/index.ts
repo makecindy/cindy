@@ -3766,8 +3766,10 @@ export function registerGhostIpc(): void {
       if (ghost) spawnIfResident(ghost); // 常驻意识:唤醒即启动
       // 启用即引导(D2):启用成功后当场就绪评估,未 ready 时把 setup 载荷
       // 交回 renderer 立即弹配置流——插件进入「已启用 · 待配置」显式态,
-      // 而不是「开着但静默不可用」。评估失败抛专属错误码:启用已生效,
-      // 由 renderer 弹系统错误,绝不把判定失败折叠成「未配置」。
+      // 而不是「开着但静默不可用」。评估失败不抛 IPC 错误:启用已持久化
+      // 并可能已拉起常驻进程,此时 reject 会让 renderer 把「已成功」报告
+      // 成「操作失败」。改回结构化部分成功载荷(ok + setupStatusUnavailable
+      // 标记),renderer 据实提示「已启用,配置状态判定失败」。
       if (ghost) {
         let setup: GhostSetupStatus;
         try {
@@ -3777,10 +3779,7 @@ export function registerGhostIpc(): void {
             id,
             error: error instanceof Error ? error.message : String(error),
           });
-          throwIpcError(
-            'SETUP_STATUS_UNAVAILABLE',
-            '插件已启用,但配置状态判定失败;请检查插件页状态',
-          );
+          return { ok: true, setupStatusUnavailable: true };
         }
         if (!setup.ready) {
           return { ok: true, setup };

@@ -1086,6 +1086,11 @@ export class GhostNetworkSlot {
     let usedExchange = inject0.usedExchange;
     const oauthInjected = new Map(inject0.oauthInjected);
     let responseConnectionRefs = new Set(inject0.connectionRefs);
+    // 最终响应所在那一跳实际注入的 oauth key 集合(被拒归因专用):
+    // oauthInjected 是跨 attempt/跨跳累计面(401 单飞重试要靠它作废令牌),
+    // 但重定向换 host 后上一跳的 oauth 凭证不会跟着走,拿累计面归因会把
+    // 最终跳唯一的 user key 误判成「归属不明」而漏记。hop>0 逐跳覆盖。
+    let responseOauthKeys = new Set(inject0.oauthInjected.keys());
 
     // ── 在途并发闸(常量硬顶,防死循环刷单;不是配额)──────────────────
     const inflight = this.inflight.get(ghostId) ?? 0;
@@ -1140,6 +1145,8 @@ export class GhostNetworkSlot {
       // 服务端提前作废,作废本地缓存重换/重刷一次再整链重试;第二次仍
       // 401 就原样回给意识。
       let response: Response | null = null;
+      // 重定向链最后一跳的请求 URL(被拒归因在 response.url 缺失时回退用)。
+      let lastHopUrl = url;
       for (let attempt = 0; attempt < 2; attempt++) {
         if (attempt > 0) {
           this.invalidateExchangedTokens(ghostId, net.secrets ?? []);
@@ -1150,6 +1157,7 @@ export class GhostNetworkSlot {
           if (reInject.error) return { ok: false, message: reInject.error };
           for (const [k, v] of reInject.oauthInjected) oauthInjected.set(k, v);
           responseConnectionRefs = new Set(reInject.connectionRefs);
+          responseOauthKeys = new Set(reInject.oauthInjected.keys());
           this.deps.log?.info('ghost fetch-request 401 → re-auth retry', {
             ghostId, callId, host: url.hostname,
           });
@@ -1172,6 +1180,7 @@ export class GhostNetworkSlot {
             usedExchange ||= hopInject.usedExchange;
             for (const [k, v] of hopInject.oauthInjected) oauthInjected.set(k, v);
             responseConnectionRefs = new Set(hopInject.connectionRefs);
+            responseOauthKeys = new Set(hopInject.oauthInjected.keys());
           }
           response = await this.deps.fetchImpl(currentUrl.toString(), {
             method: currentMethod,
@@ -1207,6 +1216,7 @@ export class GhostNetworkSlot {
           }
           currentUrl = nextUrl;
         }
+        lastHopUrl = currentUrl;
         if (!response) break;
         if (response.status === 401 && (usedExchange || oauthInjected.size > 0) && attempt === 0) {
           // 丢弃本次响应体(best-effort),换新令牌整链重试一次。
@@ -1234,14 +1244,17 @@ export class GhostNetworkSlot {
       // 会把好 key 误翻 needs_reauth 并摘掉工具。台账只记 secret key 名、
       // 不存值,事后也无法按值区分;宁可漏记(用户按错误提示重存坏 key 后
       // 下一次 401 若已可归因仍会被捕),不可错杀。
-      // 最终 host 以 response.url 为准(经重定向后);取不到才退回请求 host。
+      // 最终 host 以 response.url 为准(经重定向后);取不到(测试假体等)
+      // 退回重定向链最后一跳的请求 URL——此时所有重定向已校验在放行域内,
+      // 比退回初始请求 host 更贴近真实出局面。
       let responseHost = url.hostname;
       try {
         const finalUrl = (response as { url?: string }).url;
         if (finalUrl) responseHost = new URL(finalUrl).hostname;
       } catch {
-        /* 非绝对地址等异常:退回请求 host */
+        /* 非绝对地址等异常:退回最终一跳的请求 host */
       }
+      if (!((response as { url?: string }).url)) responseHost = lastHopUrl.hostname;
       const injectableKeys = (net.secrets ?? [])
         .filter((decl) => (decl.source ?? 'user') === 'user')
         .filter((decl) => decl.exchange === undefined)
@@ -1251,9 +1264,10 @@ export class GhostNetworkSlot {
           ),
         );
       // 最终注入集合:user 源注入按 scope 重算(injectSecrets 无记录面,
-      // scope 命中且值可读即注入);oauth/连接取 injectSecrets 的实际注入面。
+      // scope 命中且值可读即注入);oauth/连接取最终响应那一跳的实际注入面
+      // (跨跳累计的 oauthInjected 含上一跳凭证,不随重定向出网,不能归因)。
       const attributionCount =
-        injectableKeys.length + oauthInjected.size + responseConnectionRefs.size;
+        injectableKeys.length + responseOauthKeys.size + responseConnectionRefs.size;
       if (attributionCount !== 1) {
         if (response.status === 401 || response.status === 403) {
           this.deps.log?.info('ghost credential rejection attribution ambiguous, skip ledger', {

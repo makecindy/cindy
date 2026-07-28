@@ -140,11 +140,13 @@ describe('派生视图', () => {
     assessment: READY,
   });
 
-  it('discoverable = 启用 && 非 workdir 停用 && 非 blocked', () => {
+  it('discoverable = 启用 && 非 workdir 停用(blocked 降级暴露仍可发现)', () => {
     expect(isDiscoverable(ready, false)).toBe(true);
     expect(isDiscoverable(ready, true)).toBe(false);
     expect(isDiscoverable({ ...ready, enabled: false }, false)).toBe(false);
-    expect(isDiscoverable(blocked, false)).toBe(false);
+    // blocked 降级暴露:花名册/ghost_list 可发现但零工具派发(2026-07-28
+    // review 定案:发现层语义统一为「可发现、按 readiness 决定是否派发」)。
+    expect(isDiscoverable(blocked, false)).toBe(true);
     // needs_setup 仍可发现(降级暴露:列出但不派发工具)
     expect(isDiscoverable(needsSetup, false)).toBe(true);
   });
@@ -152,12 +154,13 @@ describe('派生视图', () => {
   it('callable = discoverable && ready', () => {
     expect(isCallable(ready, false)).toBe(true);
     expect(isCallable(needsSetup, false)).toBe(false);
+    expect(isCallable(blocked, false)).toBe(false);
     expect(isCallable(ready, true)).toBe(false);
   });
 
   it('readinessSummary:非 ready 给出处置指引,ready 无摘要', () => {
     expect(readinessSummary(ready)).toBeNull();
     expect(readinessSummary(needsSetup)).toContain('配置');
-    expect(readinessSummary(blocked)).toBeNull();
+    expect(readinessSummary(blocked)).toContain('登录');
   });
 });
