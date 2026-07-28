@@ -419,13 +419,26 @@ function describeTierStatus(manifestWorkspaces, tier) {
 	return entries.length ? entries.join(" ") : "Tier is not declared in manifest.";
 }
 
+// corepack／npm 安装的 pnpm 把 npm_execpath 指向 JS 入口（pnpm.cjs），只有这类路径能交给
+// node 执行；原生二进制发行版（standalone 安装的 pnpm／pnpm.exe）必须直接当可执行文件调用，
+// 否则 node 会把 Mach-O／PE 当脚本解析并抛 SyntaxError，让每个 workspace 秒挂在假失败上。
+const PNPM_JS_ENTRY_EXTENSIONS = new Set([".js", ".cjs", ".mjs"]);
+// Windows 上只有这两类扩展能被 spawn 直接拉起；.cmd／.bat 之类的命令包装必须过 shell，
+// 而 shell:true 无法安全传递带空格的路径，因此退回 PATH 解析（与无 npm_execpath 时同路）。
+const WINDOWS_DIRECT_EXEC_EXTENSIONS = new Set([".exe", ".com"]);
+
 export function resolvePnpmInvocation(args, env = process.env) {
 	const npmExecPath = env.npmExecPath ?? env.npm_execpath;
 	const execPath = env.execPath ?? process.execPath;
-	if (npmExecPath)
-		return { command: execPath, args: [npmExecPath, ...args], shell: false };
 	const platform = env.platform ?? process.platform;
 	const isWindows = platform === "win32";
+	if (npmExecPath) {
+		const extension = path.extname(npmExecPath).toLowerCase();
+		if (PNPM_JS_ENTRY_EXTENSIONS.has(extension))
+			return { command: execPath, args: [npmExecPath, ...args], shell: false };
+		if (!isWindows || WINDOWS_DIRECT_EXEC_EXTENSIONS.has(extension))
+			return { command: npmExecPath, args, shell: false };
+	}
 	return { command: "pnpm", args, shell: isWindows };
 }
 

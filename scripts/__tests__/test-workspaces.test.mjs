@@ -678,7 +678,7 @@ test("workspace concurrency defaults to a bounded CPU count and accepts both CLI
 	);
 });
 
-test("resolvePnpmInvocation uses current pnpm through node when npm_execpath is present on any platform", () => {
+test("resolvePnpmInvocation uses current pnpm through node when npm_execpath points at a JS entry on any platform", () => {
 	assert.deepEqual(
 		resolvePnpmInvocation(["--dir", "apps/server", "run", "test"], {
 			execPath: "C:/node/node.exe",
@@ -709,6 +709,67 @@ test("resolvePnpmInvocation uses current pnpm through node when npm_execpath is 
 			shell: false,
 		},
 	);
+});
+
+test("resolvePnpmInvocation runs a native pnpm binary directly instead of feeding it to node", () => {
+	// pnpm 的原生二进制发行版（standalone 安装）把 npm_execpath 指向可执行文件本身；
+	// 交给 node 会抛 SyntaxError: Invalid or unexpected token，把整轮测试变成假失败。
+	assert.deepEqual(
+		resolvePnpmInvocation(["--dir", "/repo/apps/server", "run", "test"], {
+			execPath: "/usr/local/bin/node",
+			npmExecPath:
+				"/Users/dev/Library/pnpm/.tools/@pnpm+macos-arm64/10.33.2/node_modules/@pnpm/macos-arm64/pnpm",
+			platform: "darwin",
+		}),
+		{
+			command:
+				"/Users/dev/Library/pnpm/.tools/@pnpm+macos-arm64/10.33.2/node_modules/@pnpm/macos-arm64/pnpm",
+			args: ["--dir", "/repo/apps/server", "run", "test"],
+			shell: false,
+		},
+	);
+	assert.deepEqual(
+		resolvePnpmInvocation(["--version"], {
+			execPath: "/usr/bin/node",
+			npmExecPath: "/home/dev/.local/share/pnpm/pnpm",
+			platform: "linux",
+		}),
+		{
+			command: "/home/dev/.local/share/pnpm/pnpm",
+			args: ["--version"],
+			shell: false,
+		},
+	);
+	assert.deepEqual(
+		resolvePnpmInvocation(["--version"], {
+			execPath: "C:/node/node.exe",
+			npmExecPath: "C:/Users/dev/AppData/Local/pnpm/pnpm.exe",
+			platform: "win32",
+		}),
+		{
+			command: "C:/Users/dev/AppData/Local/pnpm/pnpm.exe",
+			args: ["--version"],
+			shell: false,
+		},
+	);
+});
+
+test("resolvePnpmInvocation falls back to PATH for Windows command wrappers", () => {
+	// .cmd／.bat 只能过 shell 执行，而 shell:true 无法安全传递带空格的路径，
+	// 因此让 cmd.exe 通过 PATH/PATHEXT 自己解析 pnpm。
+	for (const npmExecPath of [
+		"C:/Program Files/nodejs/pnpm.cmd",
+		"C:/Program Files/nodejs/pnpm.bat",
+	]) {
+		assert.deepEqual(
+			resolvePnpmInvocation(["--version"], {
+				execPath: "C:/node/node.exe",
+				npmExecPath,
+				platform: "win32",
+			}),
+			{ command: "pnpm", args: ["--version"], shell: true },
+		);
+	}
 });
 
 test("resolvePnpmInvocation fallback shell behavior is explicit per platform", () => {
