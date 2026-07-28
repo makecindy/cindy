@@ -6,6 +6,7 @@ import headImageLight from '@/assets/head-image-light.png';
 import { logoDark, logoLight } from '@/hooks/useBrandLogo';
 import { cn } from '@/lib/utils';
 import type { Theme, ThemeBrandAsset } from '@/themes/types';
+import { useSkinAppearance } from '@/cindy-brain/skinAppearanceStore';
 
 /**
  * ThemeBrandLockup — 新建对话页与设置预览共用的品牌锁定组件。
@@ -85,11 +86,20 @@ export interface ThemeBrandLockupProps {
 }
 
 export function ThemeBrandLockup({ theme, className, testId }: ThemeBrandLockupProps) {
+  const skinAppearance = useSkinAppearance();
   const dark = isDarkTheme(theme);
   const defaultIcon: ThemeBrandAsset = { src: dark ? headImageDark : headImageLight };
   const defaultLogo: ThemeBrandAsset = { src: dark ? logoDark : logoLight };
-  const customIcon = theme?.brand?.icon;
-  const customLogo = theme?.brand?.logo;
+  const skinIconUrl = skinAppearance?.brand?.icon?.url;
+  const skinLogoUrl = skinAppearance?.brand?.logo?.url;
+  const customIcon = useMemo<ThemeBrandAsset | undefined>(
+    () => (skinIconUrl ? { src: skinIconUrl } : theme?.brand?.icon),
+    [skinIconUrl, theme?.brand?.icon],
+  );
+  const customLogo = useMemo<ThemeBrandAsset | undefined>(
+    () => (skinLogoUrl ? { src: skinLogoUrl } : theme?.brand?.logo),
+    [skinLogoUrl, theme?.brand?.logo],
+  );
   const [iconFailed, setIconFailed] = useState(false);
   const [logoFailed, setLogoFailed] = useState(false);
 

@@ -25,6 +25,7 @@ import {
   Megaphone,
   PanelLeft,
   PanelRight,
+  Palette,
   Sparkles,
   ShieldAlert,
   Terminal,
@@ -59,6 +60,7 @@ const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   preview: AppWindow,
   skill: GraduationCap,
   workspace: FolderPlus,
+  appearance: Palette,
 };
 
 function itemIcon(item: GhostPermissionItem): LucideIcon {

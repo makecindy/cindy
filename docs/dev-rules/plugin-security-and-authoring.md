@@ -28,7 +28,7 @@
 | 身份卡字段与校验、管子协议类型 | `apps/desktop/src/shared/ghost.ts`（`validateGhostManifest`、`cindy.send` / `cindy.onHostMessage` 类型） |
 | 打包限制 | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir` |
 | 运行时、沙箱进程与生命周期 | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts` |
-| 能力 slot（网络／通知／文件系统／技能／宿主等） | `apps/desktop/src/main/cindy-brain/networkSlot.ts`、`notifySlot.ts`、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts` |
+| 能力 slot（网络／通知／文件系统／技能／宿主／外观等） | `apps/desktop/src/main/cindy-brain/networkSlot.ts`、`notifySlot.ts`、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`appearanceSlot.ts` |
 | 面板供片、注入主题 token 与协议 | `apps/desktop/src/renderer/cindy-brain/ghostPanelTheme.ts`、`cindy-ghost://` 分支 |
 | 权限注入／更新确认 UI | `apps/desktop/src/renderer/cindy-brain/GhostPermissionList.tsx` |
 | 远程／手机版能力准入白名单 | `packages/device-link/src/allowlist.ts` |
@@ -95,6 +95,20 @@
   宿主绝对路径或不必要的字节暴露给沙箱**。媒体字节须走
   [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的统一入库。
 - 面板供片与注入的主题 token 只用 `ghostPanelTheme.ts` 白名单内的值，不扩大暴露面。
+- `appearance` 槽只允许宿主预置调色板与账本确认属于当前插件的图片指纹；不得接受
+  插件自报 CSS、DOM 操作、任意颜色、任意 URL 或本机路径。背景、首页品牌头像与 Logo
+  分别挂独立持久引用，替换／恢复默认时只清理对应业务引用，不直接删除共享 blob。
+  品牌图只覆盖获准的首页品牌位，加载失败必须回落默认资产，不得扩散到登录、账号头像
+  或其它工作 UI。首页 Logo 应为横向文字字标；模型生成时先要求纯白底高对比文字图，
+  再由宿主确定性去白底并裁切，不依赖模型伪造透明通道。其它插件、聊天或本地已有图片必须先走 `ghost_call` 顶层
+  `attachments` 的统一入库／过户，再由插件读取 `msg.args.attachments` 中的指纹
+  交给 appearance 槽；不应强制绑定某个出图通道。
+- `appearance apply` 表示整套替换；`appearance patch` 表示微调当前皮肤。patch 未提供
+  的字段必须沿用当前快照，图片字段只有显式 `null` 才移除；没有活动皮肤时 fail closed。
+  保存 patch 时必须继续保留未修改媒体的业务引用，不能因请求只带一张头像就释放背景或 Logo。
+  带名称的皮肤可保存为账号级预设；预设媒体使用独立持久引用，切换皮肤或恢复默认不得
+  回收。预设列表、另存、激活和删除均由 appearance 槽完成，插件不得自行保存宿主 URL
+  或绕过槽读写外观文件。
 
 ## 5. 作者契约与编写手册同步
 

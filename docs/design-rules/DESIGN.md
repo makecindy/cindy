@@ -22,6 +22,20 @@ What makes this system distinctive is the combination of a single geometric sans
 - No mascots or decorative artwork in the working UI — brand imagery appears only on sanctioned brand surfaces (see §15.7 / §16)
 - Extreme content restraint — each surface presents one clear idea
 
+**User-invoked skin exception (2026-07-28):** an explicitly appearance-capable plugin may place a
+user-requested image behind the working UI, replace the sanctioned home-screen avatar /
+logo brand lockup, and tint neutral surface tokens through the host-owned `appearance`
+capability. This is an opt-in personalization layer, not a new
+default visual language. The host owns the fixed palette, Light/Dark mapping, contrast
+surfaces, persistence, and reset path; plugins cannot inject CSS, access the host DOM,
+provide arbitrary colors/URLs, or override semantic permission, danger, focus, status,
+diff, and status colors. Skin brand images never replace account identity or login branding,
+and must fall back to Cindy defaults when unavailable. Content surfaces remain sufficiently
+opaque for legibility, and restoring the default removes the entire override.
+The home logo remains a horizontal typographic wordmark—not an avatar, emblem, square tile,
+or app icon. Generated wordmarks use a plain white working canvas that the host converts to
+transparent pixels and trims before display.
+
 ## 2. Color Palette & Roles
 
 > **Multi-theme note**: the values in this section are the concrete **Default Light / Default Dark** (base theme) palette, given as the visual-spec reference sample. At runtime **every color is consumed through a token** (see §10 Theme System & Token Reference), so the same component automatically renders each theme's own colors under other themes (Eclipse / One Dark Pro / Monokai Pro, …). **When implementing components, always write tokens, never hex** — rules in §10.

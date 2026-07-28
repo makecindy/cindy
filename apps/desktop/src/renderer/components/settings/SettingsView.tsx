@@ -182,6 +182,7 @@ export function SettingsView() {
 
   return (
     <div
+      data-cindy-skin-transparent-layer="true"
       className="h-full w-full overflow-hidden bg-[var(--settings-bg)]"
       role="main"
       aria-label={t('settings.title')}

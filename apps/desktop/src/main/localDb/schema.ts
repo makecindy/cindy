@@ -1257,7 +1257,7 @@ export const mediaRefs = sqliteTable(
     hash: text('hash')
       .notNull()
       .references((): AnySQLiteColumn => mediaBlobs.hash, { onDelete: 'cascade' }),
-    /** 'message' | 'session-attachment' | 'ghost-gallery' | 'import'(联合类型见 ledger.ts)。 */
+    /** 业务引用类型联合见 cindy-media/ledger.ts（含 message / ghost-gallery / skin-background / skin-preset 等）。 */
     refKind: text('ref_kind').notNull(),
     /** 引用方 id:消息 clientId / 会话 id / 意识 id。 */
     refId: text('ref_id').notNull(),

@@ -28,6 +28,7 @@ import {
   MoreVertical,
   PanelLeft,
   PanelRight,
+  Palette,
   Radio,
   Sparkles,
   Terminal,
@@ -94,6 +95,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   preview: AppWindow,
   skill: GraduationCap,
   workspace: FolderPlus,
+  appearance: Palette,
 };
 
 /** Chooses a visual affordance without changing the host-owned permission title or meaning. */

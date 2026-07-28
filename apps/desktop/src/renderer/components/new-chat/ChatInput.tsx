@@ -4800,6 +4800,7 @@ export function ChatInput({
       <div ref={paletteAnchorRef} className="relative w-full">
         <div
           ref={mergedCardRef}
+          data-cindy-skin-glass-card={showFusedWrapper ? 'true' : undefined}
           className={cn(
             'flex w-full flex-col gap-0',
             showFusedWrapper && [
@@ -4841,6 +4842,7 @@ export function ChatInput({
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: this area handles drag/drop; keyboard attachment flow uses the picker controls. */}
           <div
+            data-cindy-skin-glass-card={!showFusedWrapper ? 'true' : undefined}
             className={cn(
               'relative flex max-h-[300px] w-full flex-col justify-between px-[11px] pt-[11px] pb-[6px]',
               // 新建对话框内容列变宽后适当加高编辑区,让整框比例更舒展(用户改稿 2026-07-22)。

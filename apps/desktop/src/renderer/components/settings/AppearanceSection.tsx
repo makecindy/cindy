@@ -41,6 +41,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
 import { FontFamilyPicker, type FontPreset } from './FontFamilyPicker';
+import { useSkinAppearance } from '../../cindy-brain/skinAppearanceStore';
 
 const log = createLogger('settings/AppearanceSection');
 
@@ -315,6 +316,21 @@ export function AppearanceSection() {
   } = useFontSettings();
   const { mode: sidebarViewMode, setMode: setSidebarViewMode } = useSidebarCardMode();
   const { t } = useTranslation();
+  const skinAppearance = useSkinAppearance();
+  const [resettingSkin, setResettingSkin] = useState(false);
+  const resetSkin = useCallback(async () => {
+    if (!skinAppearance || resettingSkin) return;
+    setResettingSkin(true);
+    try {
+      await window.electronAPI.ghosts.resetAppearance();
+      toast.success(t('settings.defaults.restored'));
+    } catch (error) {
+      log.warn('failed to reset skin appearance', { error });
+      toast.error(t('settings.defaults.restoreFailed'));
+    } finally {
+      setResettingSkin(false);
+    }
+  }, [resettingSkin, skinAppearance, t]);
   const [localThemesVersion, setLocalThemesVersion] = useState(0);
   const [uiSizeInput, setUiSizeInput] = useState(String(uiSize));
   const [codeSizeInput, setCodeSizeInput] = useState(String(codeSize));
@@ -500,6 +516,27 @@ export function AppearanceSection() {
       <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
         {t('settings.appearance.title')}
       </h2>
+
+      {skinAppearance ? (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-4">
+          <div className="min-w-0">
+            <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+              {skinAppearance.name ?? t('settings.appearance.title')}
+            </p>
+            <p className="mt-1 text-12 text-[var(--settings-section-sublabel)]">
+              {t('settings.defaults.customizedBadge')}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="shrink-0 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2 text-12 text-[var(--settings-section-sublabel)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+            disabled={resettingSkin}
+            onClick={() => void resetSkin()}
+          >
+            {t('settings.defaults.restore')}
+          </button>
+        </div>
+      ) : null}
 
       {/* Theme card — rounded 12, Card bg, 1px Board, padding 20 */}
       <div

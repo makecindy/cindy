@@ -213,5 +213,20 @@
   "glob": "apps/mobile/src/auth/__tests__/loginConsent.test.ts",
   "reason": "consent 双态色板守卫单测(token 期望 hex/rgba,同 tokenRegistry.test.ts 先例)",
   "owner": "login-consent"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/cindy-brain/SkinBackdrop.tsx",
+  "reason": "宿主受控换肤层(DESIGN.md §1 skin exception):6 palette × Light/Dark 的 governed 落值表 + hsl() token 组装与 dim 蒙版,值即皮肤数据源,非组件硬编码",
+  "owner": "cindy-skin"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/cindy-brain/__tests__/SkinBackdrop.contract.test.ts",
+  "reason": "换肤合同测试断言值守护(expect toContain hsl 模板),非样式硬编码",
+  "owner": "cindy-skin"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/features/cc-agent/CCAgentSessionView.tsx",
+  "reason": "hsl(var(--content-area)) 合法 token 消费(规则16 HSL wrap);换肤 data-attr 改行形态后重新入账(同 VendorIcon 先例)",
+  "owner": "cindy-skin"
  }
 ]

@@ -2710,6 +2710,7 @@ export function CCAgentSessionView({
         />
       )}
       <section
+        data-cindy-skin-transparent-layer="true"
         className="relative flex h-full w-full flex-col bg-content-area"
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
         onDragEnter={(e) => {
@@ -2839,7 +2840,15 @@ export function CCAgentSessionView({
         {/* Scroll container — full height, bottom padding reserves space for input overlay.
            key={sessionId}: force a full remount on session switch so scroll state,
            refs, and ResizeObservers are fresh — guarantees per-session isolation. */}
-        <div className="relative min-h-0 flex-1">
+        <div
+          data-cindy-skin-message-viewport="true"
+          className="relative min-h-0 flex-1"
+          style={
+            {
+              '--cindy-composer-overlay-height': `${overlayHeight}px`,
+            } as CSSProperties
+          }
+        >
           {/* perf/session-switch 探针纯诊断:仅 DEV 用 Profiler 量 MessageStream commit,
             生产直接渲染 el(见上方 messageStreamEl),不引入多余 Profiler fiber。 */}
           {import.meta.env.DEV ? (
@@ -2861,11 +2870,17 @@ export function CCAgentSessionView({
         >
           {/* Gradient mask: transparent → content-area */}
           <div className="pointer-events-none h-8 w-full">
-            <div className="h-full w-full bg-gradient-to-t from-[hsl(var(--content-area))] to-transparent" />
+            <div
+              data-cindy-skin-transparent-layer="true"
+              className="h-full w-full bg-gradient-to-t from-[hsl(var(--content-area))] to-transparent"
+            />
           </div>
 
           {/* Solid background zone */}
-          <div className="pointer-events-auto flex w-full flex-col items-center bg-[hsl(var(--content-area))] pb-5">
+          <div
+            data-cindy-skin-transparent-layer="true"
+            className="pointer-events-auto flex w-full flex-col items-center bg-[hsl(var(--content-area))] pb-5"
+          >
             {/* Running Status Bar (F-SDK-3) — hidden while a plan review is pending (FP-7)。
               turn 结束但后台子任务仍在调模型时,状态栏保持点亮(shimmer 呼吸)显示
               后台运行文案 + 右侧「全部停止」入口 —— 替代原独立横幅(Lizi 拍板:

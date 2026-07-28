@@ -14,6 +14,7 @@ import { LayoutRoot } from '@/layout/LayoutRoot';
 import { PanelDragController } from '@/layout/PanelDragController';
 import { GhostMediaLightboxHost } from '@/cindy-brain/GhostMediaLightboxHost';
 import { GhostPanelBubbleLayer } from '@/cindy-brain/GhostPanelBubbleLayer';
+import { SkinBackdrop } from '@/cindy-brain/SkinBackdrop';
 import { ContentAvailableWidthProvider } from '@/layout/paneWidths';
 import {
   migrateLegacySidebarCollapsed,
@@ -1125,12 +1126,18 @@ export function MainLayout() {
       isCollapsed={sidebarPeek.isPeekVisible ? false : isSidebarCollapsed || isRailMode}
     >
       <div
-        ref={rowRef}
+        data-cindy-main-layout="true"
         className={cn(
-          'relative flex h-screen bg-content-area text-foreground',
+          'relative isolate h-screen overflow-hidden bg-content-area text-foreground',
           isDragging && 'select-none cursor-col-resize',
         )}
       >
+        <SkinBackdrop />
+        <div
+          ref={rowRef}
+          data-cindy-skin-foreground="true"
+          className="relative z-10 flex h-full"
+        >
         {/* 左侧占位块 wrapper(B1a):透传容器,包住 pinning spacer + Sidebar,
             作为可用宽度测量的唯一观测目标(见上方 useLayoutEffect 注释)。
             flex + shrink-0 与 aside 原有的 flex child 行为一致,不改变布局;
@@ -1349,6 +1356,7 @@ export function MainLayout() {
             />
           </div>
         )}
+        </div>
       </div>
       {/* Update notice dialog -- mounted inside FeatureSidebarSlotProvider (ThemeProvider scope) */}
       {releaseNotes && (

@@ -13,6 +13,17 @@
   ],
   "terms": [
     {
+      "id": "cindy-appearance",
+      "status": "proposed",
+      "en": "Cindy appearance",
+      "translations": {
+        "zh-CN": "Cindy 外观",
+        "ja": "Cindy の外観",
+        "ko": "Cindy 외관"
+      },
+      "note": "宿主受控的可恢复外观覆盖层：插件只能选预置调色板并使用已核验归属的背景图片。先以「外观」承载能力与权限文案，避免与既有编辑器 Theme 混称；待产品确认后再决定是否将面向用户的命令概念统一命名为「皮肤 / Skin」。"
+    },
+    {
       "id": "active",
       "status": "decided",
       "en": "Active",
