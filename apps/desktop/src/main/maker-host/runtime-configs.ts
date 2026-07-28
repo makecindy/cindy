@@ -10,6 +10,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
+import { claudeBehaviorFlagsForSpawn } from './claude-behavior-flags.js';
+import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
 import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
@@ -75,13 +77,9 @@ function readMakerMemoryEnabled(): boolean {
   return readMemorySettings().maker;
 }
 
-const staticClaudeBehaviorFlags = {
-  CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS: '1',
-  CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
-  // 网关 upstream 透传 tool_reference 块, 显式开启 ToolSearch
-  // 否则 CC 看到非 first-party host 默认 disable, 每次请求都全量塞工具定义。
-  ENABLE_TOOL_SEARCH: 'auto',
-};
+// behaviorFlags 拆到 claude-behavior-flags.ts(零依赖,可单测)。attribution 归因块
+// 按 spawn 形态决定 —— oauth-spawn 禁用 '0' 会让订阅直连的 Auto 分类器子请求被上游
+// 429,auto 模式所有写操作 fail-closed(issue #758),详见该模块头注释。
 
 /**
  * Claude Code 真正的上游 endpoint —— 既给本地 anthropic-compat-proxy 做 upstream,
@@ -122,9 +120,15 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
   // 这样 AgentRuntimeConfig 接口(endpoint?: string)在结构类型上仍然成立 ——
   // 每次访问 runtimeConfig.endpoint 都会执行 endpointFn, 拿到当时最新的兼容模式状态。
   const config: AgentRuntimeConfig = {
-    // behaviorFlags 现在全是静态值 (压缩阈值已拆到 autoCompactThresholdPct getter),
-    // 直接当普通属性挂; 引用共享无妨 —— env-builder 只读不改。
-    behaviorFlags: staticClaudeBehaviorFlags,
+    // behaviorFlags 用函数形态:env-builder 在每次 spawn 时以该 spawn 的 credentialMode
+    // 调用 —— gateway-key spawn(显式 XD source / SSH remote)保持禁归因且不读钥匙串,
+    // 其余形态按**当时**的 Claude.ai 订阅连接态决定(判据与 proxy 同源)。会话中途
+    // 连/断订阅只影响新 spawn —— 与 cc 子进程凭证冻结语义一致。
+    behaviorFlags: (ctx) =>
+      claudeBehaviorFlagsForSpawn({
+        credentialMode: ctx.credentialMode,
+        oauthConnected: hasClaudeAiOAuth,
+      }),
     // xdt-maker 产品级 system prompt 注入：host 共用段 (host-system-prompt.md)
     // + Claude 专属段 (claude-system-prompt.md)，按顺序拼接后给 maker-core append。
     systemPrompt: composeHostPrompt(claudeSystemPrompt),

@@ -118,9 +118,14 @@ export function createLiziMcpProviders(
       // `runtime.call(req)` 内部把 `__mcpSessionId` 挂到 req 上。vendored runtime
       // 不识别这个字段会忽略;host 端 RsbWebviewBackend 优先读它,fallback 才走
       // `getActiveSessionId`(给非 MCP 路径,如设置页直接调 status 用)。
+      //
+      // sessionId 必须在 **tool-call 时** 解析,不能只在 factory 期读闭包:Codex
+      // HTTP bridge 的 server factory 阶段 ctx 是全局空值(sessionId undefined),
+      // 真实 session 由 bridge 按 params._meta.threadId 在 tool-call 时写进
+      // AsyncLocalStorage。factory 期绑死闭包会让 Codex agent 的所有浏览器请求
+      // 退回 UI-焦点推断 → tab 落进用户正在看的无关 session。
       toClaudeSdkConfig: (ctx) => {
         const baseDeps = opts.browser!;
-        const sessionId = ctx.sessionId;
         return {
           type: 'sdk',
           name: 'cindy_browser',
@@ -128,16 +133,18 @@ export function createLiziMcpProviders(
             ...baseDeps,
             getRuntime: () => {
               const inner = baseDeps.getRuntime();
-              if (!sessionId) return inner;
               return {
-                call: (req) =>
-                  inner.call({
+                call: (req) => {
+                  const sessionId = resolveLiziMcpSessionContext(ctx).sessionId;
+                  if (!sessionId) return inner.call(req);
+                  return inner.call({
                     ...req,
                     // Extra field on the request — vendored runtime ignores
                     // unknown keys, host RsbWebviewBackend reads it as the
                     // authoritative agent session.
                     __mcpSessionId: sessionId,
-                  } as typeof req),
+                  } as typeof req);
+                },
               };
             },
           }),

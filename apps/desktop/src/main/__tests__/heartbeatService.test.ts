@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
     user: null,
   } as TestAuthState,
   authListener: null as AuthListener | null,
+  authRealm: 'cn' as 'cn' | 'global',
   createHeartbeatClient: vi.fn(),
   heartbeatStop: vi.fn(),
   unsubscribeAuth: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock('@cindy/heartbeat-client', () => ({
 
 vi.mock('../authManager', () => ({
   getAuthState: () => mocks.authState,
+  getActiveAuthRealm: () => mocks.authRealm,
   onAuthStateChange: (listener: AuthListener) => {
     mocks.authListener = listener;
     return mocks.unsubscribeAuth;
@@ -47,7 +49,7 @@ vi.mock('../authManager', () => ({
 }));
 
 vi.mock('../clientEndpointsService', () => ({
-  getClientEndpoint: () => 'https://heartbeat.example.test',
+  getClientEndpoint: () => `https://heartbeat.${mocks.authRealm}.example.test`,
 }));
 
 vi.mock('../lifecycle', () => ({
@@ -87,6 +89,7 @@ describe('heartbeat service app-mode isolation', () => {
     vi.setSystemTime(new Date(2026, 6, 22, 23, 59, 0));
     vi.resetModules();
     mocks.authState = authState('signed-out');
+    mocks.authRealm = 'cn';
     mocks.authListener = null;
     mocks.onQuitDisposer = null;
     mocks.createHeartbeatClient.mockReset().mockReturnValue({
@@ -116,7 +119,7 @@ describe('heartbeat service app-mode isolation', () => {
     expect(mocks.createHeartbeatClient).toHaveBeenCalledTimes(1);
 
     const options = mocks.createHeartbeatClient.mock.calls[0][0];
-    expect(options.endpoint).toBe('https://heartbeat.example.test');
+    expect(options.endpoint).toBe('https://heartbeat.cn.example.test');
     expect(options.host.getUid()).toBe('cloud-user-1');
 
     pushAuthState(authState('local'));
@@ -136,34 +139,43 @@ describe('heartbeat service app-mode isolation', () => {
     expect(mocks.createHeartbeatClient.mock.calls[1][0].host.getUid()).toBe('cloud-user-2');
   });
 
-  it('keeps the TapDB daily-active cadence across signed-out, local, and cloud modes', async () => {
+  it('restarts Cindy heartbeat when the same authenticated owner moves to another realm', async () => {
+    mocks.authState = authState('cloud', 'cloud-user-1');
     const { initHeartbeatService } = await loadService();
     initHeartbeatService();
 
+    mocks.authRealm = 'global';
+    pushAuthState(authState('cloud', 'cloud-user-1'));
+
+    expect(mocks.heartbeatStop).toHaveBeenCalledTimes(1);
+    expect(mocks.createHeartbeatClient).toHaveBeenCalledTimes(2);
+    expect(mocks.createHeartbeatClient.mock.calls[1][0].endpoint).toBe(
+      'https://heartbeat.global.example.test',
+    );
+  });
+
+  it('never broadcasts to renderers, even across local-midnight boundaries', async () => {
+    // 回归钉子:TapDB 的 0 点跨天续报(tapdb:daily-active)已删——它曾把所有过夜
+    // 挂机设备的活跃压在 00:00-00:01,在 TapDB 小时趋势上制造 0 点尖峰。活跃现在
+    // 由 renderer 侧交互驱动,main 的心跳服务不得再有任何面向 renderer 的广播。
+    const { initHeartbeatService } = await loadService();
+    initHeartbeatService();
+
+    // 连跨三个本地日,期间任意切换 app-mode,都不允许出现广播或多余定时器行为。
     vi.setSystemTime(new Date(2026, 6, 23, 0, 0, 0));
     await vi.advanceTimersByTimeAsync(60_000);
-
     pushAuthState(authState('local'));
     vi.setSystemTime(new Date(2026, 6, 24, 0, 0, 0));
     await vi.advanceTimersByTimeAsync(60_000);
-
     pushAuthState(authState('cloud', 'cloud-user-1'));
     vi.setSystemTime(new Date(2026, 6, 25, 0, 0, 0));
     await vi.advanceTimersByTimeAsync(60_000);
 
+    expect(mocks.rendererSend).not.toHaveBeenCalled();
     expect(mocks.createHeartbeatClient).toHaveBeenCalledTimes(1);
-    expect(mocks.rendererSend).toHaveBeenNthCalledWith(1, 'tapdb:daily-active', {
-      date: '2026-07-23',
-    });
-    expect(mocks.rendererSend).toHaveBeenNthCalledWith(2, 'tapdb:daily-active', {
-      date: '2026-07-24',
-    });
-    expect(mocks.rendererSend).toHaveBeenNthCalledWith(3, 'tapdb:daily-active', {
-      date: '2026-07-25',
-    });
   });
 
-  it('cleans up both loops and the auth subscription on quit', async () => {
+  it('cleans up the heartbeat and the auth subscription on quit', async () => {
     mocks.authState = authState('cloud', 'cloud-user-1');
     const { initHeartbeatService } = await loadService();
     initHeartbeatService();

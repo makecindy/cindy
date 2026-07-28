@@ -35,6 +35,25 @@
  *     page_hide 由 reportPageHide 自行守闸
  *   - 重新打开 → optInTracking() 并补一次 app_start
  *
+ * 活跃口径(2026-07-28 起,交互驱动):
+ *   活跃事件(page_view #tag=app_engaged)只由用户对 Cindy 窗口的真实动作触发:
+ *   窗口获得焦点 / 窗口内按键 / 窗口内按下指针,10 分钟内存节流。TapDB 的活跃
+ *   指标按天与小时去重,事件时间戳因此落在真实使用时刻;账号口径的 setUser
+ *   (→ user_login,TapDB 账号 DAU 的唯一触发源)跟随当天首条活跃事件发出。
+ *   桌面端同类先例:Firefox active ticks(近期输入 + 聚焦才计使用)。
+ *
+ *   刻意不做的事:
+ *   - 不监听 mousemove(高频)与 wheel(高频且涉及滚动合成路径);纯滚动阅读
+ *     超过节流窗口且全程不点不敲的场景,由下一次 focus / 点击 / 按键兜住
+ *   - 不用定时器、不做跨天检测:第二天的首条事件由用户当天第一次动作自然触发,
+ *     曾经的 0 点定时续报(main 的 tapdbTimer → tapdb:daily-active 广播)已删,
+ *     它把所有过夜挂机设备的活跃压在 00:00-00:01,制造小时趋势的 0 点尖峰,
+ *     且把「进程活着」误报成「用户活跃」
+ *   - 节流状态不持久化:窗口 reload 后最多提前一条,服务端按天去重,无害
+ *
+ *   SDK 发送层已核实(vendored 1.0.0):未配置 batch 时无 BatchConsumer,每条
+ *   事件独立 AjaxTask 即发即弃(失败至多原地重试 3 次后丢弃),不存在堆积面。
+ *
  * Overlay 窗口(voice-input-overlay / voice-input-dictionary-toast)不引入此模块,
  * 避免一次浮窗弹出被算成一次 PV。
  */
@@ -76,8 +95,46 @@ let sdkAppliedAllowed: boolean | null = null;
 /** 每收到一次广播 +1;用于丢弃 IPC 往返期间已经过期的初始快照。 */
 let settingsEpoch = 0;
 let currentUserId: string | null = null;
-let lastActiveDate: string | null = null;
 let lastSetUserDate: string | null = null;
+
+// ── Engagement throttle ─────────────────────────────────────────────────────
+
+/** 交互活跃上报的节流窗口。远大于单次输入间隔,一天上限 144 条。 */
+const ENGAGED_REPORT_INTERVAL_MS = 10 * 60 * 1000;
+/**
+ * 跨窗口共享的「上次 app_engaged 上报时刻」localStorage key。detached 侧栏等
+ * 窗口跑同一 renderer 入口,module 态各窗口独立 —— 只靠内存窗口,多窗口交替
+ * 交互会成倍多发 app_engaged。
+ */
+const ENGAGED_SHARED_LAST_REPORT_KEY = 'tapdb.lastEngagedReportAt';
+/**
+ * 下一次允许上报活跃的时刻(epoch ms)。仅内存:reload 丢失只会让上报提前一条,
+ * 服务端按天去重,无害。任何 tag 的上报(含 app_start)都会推进它,避免冷启动
+ * app_start 后紧跟的第一次点击立刻再发一条。
+ */
+let nextEngagedReportAt = 0;
+/**
+ * 上次上报那天的本地午夜(epoch ms)。跨过它意味着换日:即便还在节流窗口内
+ * (如 23:55 报过、00:03 再交互),也放行补报,否则新一天头 10 分钟的活跃
+ * (连同当日 setUser)会被前一天的窗口整个吞掉。
+ */
+let engagedDayEndsAt = 0;
+
+/**
+ * 交互信号统一入口(focus / keydown / pointerdown)。绝大多数调用在第一行的
+ * 数值比较后返回 —— 高频输入路径上零分配、不足 1μs,不碰输入管线。
+ * 闸检查放在节流窗口推进之前:未放行期间的交互不消耗窗口,放行后首次交互立报。
+ */
+function onEngagedSignal(): void {
+  const now = Date.now();
+  if (now < nextEngagedReportAt && now < engagedDayEndsAt) return;
+  if (!sdkInitialized || !reportingAllowed) return;
+  try {
+    reportActive('app_engaged');
+  } catch (err) {
+    log.error('engaged report failed (non-fatal)', err);
+  }
+}
 
 // ── Gate ────────────────────────────────────────────────────────────────────
 
@@ -110,11 +167,12 @@ export function initTapdb(): void {
           TapDBAPI.logout();
           log.info('logout');
           lastSetUserDate = null;
-        } else {
-          const today = getLocalDateKey();
-          if (nextUserId !== previousUserId || lastSetUserDate !== today) {
-            reportSetUser(nextUserId, 'auth_state', today);
-          }
+        } else if (nextUserId !== previousUserId) {
+          // 仅在身份真正变化时绑定。auth:state-change 也会由**定时 token 刷新**
+          // 广播 —— 若这里按「跨天」补 setUser,挂机过夜的机器会在无人交互时
+          // 凭空产生当日账号活跃,正是本次「活跃改交互驱动」要消灭的假 DAU;
+          // 跨天重绑由交互路径(reportActive)负责,只在真实交互时发生。
+          reportSetUser(nextUserId, 'auth_state');
         }
       } catch (err) {
         log.error('auth state binding failed (non-fatal)', err);
@@ -124,18 +182,34 @@ export function initTapdb(): void {
     log.error('onAuthStateChange subscription failed (non-fatal)', err);
   }
 
-  // 跨天检测复用 main 进程 heartbeat 的 60s 节拍;renderer 只负责调用 TapDB SDK。
+  // 身份补种:登录**之后**才打开的二级窗口(独立侧栏等)错过了 auth:state-change
+  // 的初始广播,currentUserId 停在 null —— 半夜定时 token 刷新的广播会被误判成
+  // 「身份变化」触发非交互 setUser(假 DAU)。挂完订阅后主动读一次当前身份;
+  // 只在仍未从广播学到身份时写入,不与并发广播竞争,也不触发任何上报。
   try {
-    window.electronAPI.onTapdbDailyActive((payload) => {
-      try {
-        if (!sdkInitialized || !reportingAllowed) return;
-        reportActive('app_daily_active', payload.date);
-      } catch (err) {
-        log.error('daily active report failed (non-fatal)', err);
-      }
-    });
+    const seed = window.electronAPI.authInitialize?.();
+    if (seed) {
+      void seed
+        .then((state) => {
+          if (currentUserId !== null) return;
+          if (state?.isAuthenticated && state.user?.id) currentUserId = state.user.id;
+        })
+        .catch(() => {
+          // 静默:读不到就维持广播驱动的原行为。
+        });
+    }
   } catch (err) {
-    log.error('daily active subscription failed (non-fatal)', err);
+    log.error('auth identity seed failed (non-fatal)', err);
+  }
+
+  // 交互驱动的活跃信号(见文件头「活跃口径」)。capture 挂在 window 捕获阶段,
+  // 业务代码的 stopPropagation 挡不住;onEngagedSignal 自带节流与同意闸。
+  try {
+    window.addEventListener('focus', onEngagedSignal);
+    window.addEventListener('keydown', onEngagedSignal, { capture: true });
+    window.addEventListener('pointerdown', onEngagedSignal, { capture: true });
+  } catch (err) {
+    log.error('engagement listeners failed (non-fatal)', err);
   }
 
   // page_hide 由本模块自己发,不走 SDK 的 autoTrack —— SDK 的 trackPageHideEvent
@@ -222,7 +296,6 @@ function applyReportingAllowed(next: boolean): void {
       // autoTrack.pageHide,改由 reportPageHide 自己守闸(见 initTapdb)。
       TapDBAPI.optOutTracking();
       sdkAppliedAllowed = false;
-      lastActiveDate = null;
       lastSetUserDate = null;
       log.info('reporting disabled (opt-out)');
       return;
@@ -310,14 +383,40 @@ function applySuperProperties(): void {
   });
 }
 
-function reportActive(tag: 'app_start' | 'app_daily_active', dateKey = getLocalDateKey()): void {
-  const today = dateKey;
-  if (lastActiveDate === today && tag === 'app_daily_active') return;
+function reportActive(tag: 'app_start' | 'app_engaged'): void {
+  // 先推进节流窗口再上报:即便 pvEvent 抛异常,10 分钟内也不再重试(fire-and-forget,
+  // 防止持续输入在 SDK 故障时反复触发)。app_start 同样消耗窗口,避免启动瞬间双发。
+  const now = Date.now();
+  nextEngagedReportAt = now + ENGAGED_REPORT_INTERVAL_MS;
+  engagedDayEndsAt = nextLocalMidnightMs(now);
+
+  // 跨窗口去重(仅 app_engaged;低频路径,localStorage 读写开销无关紧要):
+  // 同 origin 全窗口共享上次上报时刻,窗口内且同一天则本窗口静默让位 ——
+  // 内存窗口已推进,不重复发。localStorage 不可用时退化为每窗口独立节流。
+  // app_start 是窗口生命周期语义,不参与共享去重;setUser 幂等,不做跨窗口协调。
+  if (tag === 'app_engaged') {
+    try {
+      const sharedLast = Number(window.localStorage.getItem(ENGAGED_SHARED_LAST_REPORT_KEY));
+      if (
+        Number.isFinite(sharedLast) &&
+        now - sharedLast < ENGAGED_REPORT_INTERVAL_MS &&
+        getLocalDateKey(new Date(sharedLast)) === getLocalDateKey(new Date(now))
+      ) {
+        // 让位时本窗口的下一次尝试对齐共享窗口终点,而不是从现在顺延满 10 分钟 ——
+        // 否则两窗口交替交互会把实际上报间隔拉长到近 20 分钟。
+        nextEngagedReportAt = sharedLast + ENGAGED_REPORT_INTERVAL_MS;
+        return;
+      }
+      window.localStorage.setItem(ENGAGED_SHARED_LAST_REPORT_KEY, String(now));
+    } catch {
+      // localStorage 不可用:退化为每窗口独立节流(原行为)。
+    }
+  }
 
   TapDBAPI.pvEvent({ '#tag': tag });
-  lastActiveDate = today;
-  log.info(`active ${tag} ${today}`);
+  log.info(`active ${tag}`);
 
+  const today = getLocalDateKey();
   if (currentUserId !== null && lastSetUserDate !== today) {
     reportSetUser(currentUserId, tag, today);
   }
@@ -325,7 +424,7 @@ function reportActive(tag: 'app_start' | 'app_daily_active', dateKey = getLocalD
 
 function reportSetUser(
   userId: string,
-  reason: 'auth_state' | 'app_daily_active' | 'app_start',
+  reason: 'auth_state' | 'app_engaged' | 'app_start',
   dateKey = getLocalDateKey(),
 ): void {
   TapDBAPI.setUser(userId);
@@ -340,6 +439,13 @@ function getLocalDateKey(date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
+/** nowMs 所在本地日的下一个午夜(epoch ms)。 */
+function nextLocalMidnightMs(nowMs: number): number {
+  const d = new Date(nowMs);
+  d.setHours(24, 0, 0, 0);
+  return d.getTime();
+}
+
 export const __testing = {
   reset(): void {
     gateMounted = false;
@@ -348,7 +454,13 @@ export const __testing = {
     sdkAppliedAllowed = null;
     settingsEpoch = 0;
     currentUserId = null;
-    lastActiveDate = null;
     lastSetUserDate = null;
+    nextEngagedReportAt = 0;
+    engagedDayEndsAt = 0;
+    try {
+      window.localStorage.removeItem(ENGAGED_SHARED_LAST_REPORT_KEY);
+    } catch {
+      // 测试环境无 localStorage 时忽略。
+    }
   },
 };

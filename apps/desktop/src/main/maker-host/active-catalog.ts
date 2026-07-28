@@ -575,6 +575,29 @@ export function setActiveCatalog(catalog: Catalog): void {
 }
 
 /**
+ * 只把一次新目录里的模型快照投影到当前基础目录，保留当前 provider 的 routing/auth
+ * 与其它 provider。手动模型刷新可因此即时更新列表，而不会在活跃 turn 中途替换
+ * 上游、鉴权策略、modelPrefixes 或 rewrite 等运行时路由字段。
+ */
+export function setProviderModelsFromCatalog(providerId: string, catalog: Catalog): void {
+  const incoming = catalog.providers.find((provider) => provider.id === providerId);
+  if (!incoming) {
+    throw new Error(`catalog does not contain provider '${providerId}'`);
+  }
+  const current = base ?? BUNDLED_CATALOG;
+  if (!current.providers.some((provider) => provider.id === providerId)) {
+    throw new Error(`active catalog does not contain provider '${providerId}'`);
+  }
+  base = {
+    ...current,
+    providers: current.providers.map((provider) =>
+      provider.id === providerId ? { ...provider, models: incoming.models } : provider,
+    ),
+  };
+  markChanged();
+}
+
+/**
  * 注入 / 刷新用户自定义供应商(CRUD 后、或换账号 DB 重开后调用)。
  * 传入的是已 `buildUserProvider` 展开的标准 `Provider[]`(**不含 API key**)。
  */

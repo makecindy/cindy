@@ -143,6 +143,7 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
+      requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
     },
   };
 });
@@ -244,6 +245,7 @@ describe('ProvidersSection — 深链定位', () => {
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       maker: {
         scanLocalCli: vi.fn(async () => ({ detections: [] })),
+        requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
         providerOAuthLogin,
         providerOAuthCancel,
         onProviderOAuthProgress,

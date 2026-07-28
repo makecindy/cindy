@@ -216,7 +216,13 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
         assistant = flushAssistant(messages, assistant, opts);
         const role = normalizeRole(item.role, opts.developerRole);
         if (role === 'user') {
-          messages.push({ role, content });
+          // 空 user(纯空白文本且无图片)整条跳过 —— Codex auto-compact 会把
+          // 无文字的纯图片消息折叠成空 input_text,部分上游(Moonshot/Kimi)
+          // 会以 "message at position N with role 'user' must not be empty" 400。
+          const isEmptyUser =
+            (typeof content === 'string' && content.trim().length === 0)
+            || (Array.isArray(content) && content.length === 0);
+          if (!isEmptyUser) messages.push({ role, content });
         } else {
           if (typeof content !== 'string') {
             throw new UnsupportedResponsesFeatureError(`input[${index}].content`);

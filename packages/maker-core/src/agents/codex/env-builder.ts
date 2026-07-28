@@ -44,8 +44,13 @@ export async function buildCodexEnv(
     if (typeof v === 'string') env[k] = v;
   }
 
-  if (runtimeConfig.behaviorFlags) {
-    Object.assign(env, runtimeConfig.behaviorFlags);
+  // 函数形态按 spawn 凭证形态求值(与 claude-code/env-builder 同语义;Codex 当前无业务 flag)。
+  const behaviorFlags =
+    typeof runtimeConfig.behaviorFlags === 'function'
+      ? runtimeConfig.behaviorFlags({ credentialMode: options.credentialMode })
+      : runtimeConfig.behaviorFlags;
+  if (behaviorFlags) {
+    Object.assign(env, behaviorFlags);
   }
   // endpoint 字段：Codex SDK 当前无对应 env，跳过
   const authOptions = options.credentialMode

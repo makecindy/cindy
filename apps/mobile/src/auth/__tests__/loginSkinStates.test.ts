@@ -168,10 +168,12 @@ describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
     expect(loginSource).toContain('setSsoOrgMode(false);');
   });
 
-  it('sso-org-filled:企业 ID 提交接线(discover-sso-org dispatch verbatim)', () => {
-    expect(loginSource).toContain(
-      "void auth.dispatchLoginAction({ type: 'discover-sso-org', org: value })",
-    );
+  it('sso-org-filled:企业 ID 直接发现，仅在状态机判定跨区后确认', () => {
+    expect(loginSource).toContain("type: 'discover-sso-org'");
+    expect(loginSource).toContain("auth.loginState?.step === 'realm-confirmation'");
+    expect(loginSource).toContain("type: 'confirm-sso-realm'");
+    expect(loginSource).toContain("type: 'cancel-sso-realm'");
+    expect(loginSource).not.toContain('crossRegionConsent');
     expect(loginSource).toContain('testID="login.ssoOrgContinueButton"');
     expect(loginSource).toContain('disabled={disabled || !ssoOrg.trim()}');
   });

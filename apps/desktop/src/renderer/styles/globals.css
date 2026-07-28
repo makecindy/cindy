@@ -881,6 +881,59 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
+/* 页面不可见时冻结常驻装饰动画(闸门见 lib/hiddenAnimationGate.ts)。
+   主窗 backgroundThrottling 在有 running turn 时被主动关闭以保住流式输出,
+   于是隐藏窗口里的 infinite 动画会继续推进并持续触发样式重算;实测 10 个动画
+   令样式重算 29.8/s,冻结后 5.7/s(-81%),renderer CPU 12.4% → 6.0%。
+
+   ⚠️ 新增任何 `animation: ... infinite` 时必须同步把它的元素加进本清单。
+   `hiddenAnimationGate.test.ts` 会扫描本文件所有 infinite 规则并逐条核对,漏了会直接
+   测试失败——不要改测试绕过,补选择器即可。清单按「真正挂动画的那个元素」(选择器的
+   最后一段)收敛,所以祖先条件不同、落点相同的规则只需一条。
+
+   只列 infinite 装饰动画。一次性动画(.status-bar-done / .session-card--settle /
+   .card-col-fade / ghost-bubble 进出场 / ghost-panel 展开收起)刻意不纳入:它们总时长
+   有限、省不到东西,却会在隐藏期被冻在中途帧,恢复可见时反而突兀。这也是这里用
+   allowlist 而不是「全局暂停 + 一次性例外」的原因——漏掉 infinite 只是少省一点 CPU,
+   漏掉一次性动画却会造成可见的视觉异常。
+
+   用 animation-play-state 而非 animation: none —— 后者会让元素跳回静止态
+   (opacity 回到 1),恢复可见的瞬间比冻结更显眼。冻结点落在动画自身的取值区间内,
+   恢复后接着播,用户不可察觉。
+
+   Tailwind 的 animate-spin / animate-pulse 用 [class*=] 匹配,以覆盖
+   motion-safe:animate-pulse 这类变体编译出的转义类名。任意值工具类
+   (animate-[spin_2.4s_linear_infinite] 之类,见 GhostSummonCard)不含 animate-spin
+   子串,靠 [class*='infinite'] 兜住:Tailwind 把 keyframes 简写原样编进类名,
+   循环动画必然带 infinite 字面量,而一次性的 animate-[xxx_200ms_ease-out] 不会。 */
+[data-app-hidden='true'] [data-voice-spinner-arc],
+[data-app-hidden='true'] [data-voice-mic-bar],
+[data-app-hidden='true'] .status-bar-shimmer,
+[data-app-hidden='true'] .session-status-breathing,
+[data-app-hidden='true'] .session-card-bar::before,
+[data-app-hidden='true'] .session-card-dot,
+[data-app-hidden='true'] .session-running-dot,
+[data-app-hidden='true'] .thinking-dot,
+[data-app-hidden='true'] .ghost-card-sweep,
+[data-app-hidden='true'] .ghost-bubble-face,
+[data-app-hidden='true'] .agent-island-mascot-character,
+[data-app-hidden='true'] .agent-island-mascot-keyboard,
+[data-app-hidden='true'] .agent-island-mascot-key,
+[data-app-hidden='true'] .agent-island-mascot-eyes,
+[data-app-hidden='true'] .agent-island-mascot-sparkle,
+[data-app-hidden='true'] [class*='animate-spin'],
+[data-app-hidden='true'] [class*='animate-pulse'],
+[data-app-hidden='true'] [class*='infinite'],
+/* drawio viewer(vendor/drawio/viewer-static.min.js)把循环动画以 inline style 直接写到
+   SVG 元素上(flowAnimation 的流动虚线、加载 spinner),类名既不含 animate-* 也不含
+   infinite,前面几条都够不着;它又是压缩过的第三方脚本,不归 globals.css / tsx 扫描管。
+   按容器整棵子树冻结 —— 容器形态是 <div class="mxgraph" data-mxgraph="{json}">,
+   见 DrawioPreview.tsx。 */
+[data-app-hidden='true'] [data-mxgraph],
+[data-app-hidden='true'] [data-mxgraph] * {
+  animation-play-state: paused !important;
+}
+
 /* Running indicator — three horizontal dots, scale-up wave from left to right.
    Color uses currentColor so the parent span controls accent vs gray. */
 .session-running-dots {

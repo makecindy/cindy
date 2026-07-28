@@ -16,6 +16,7 @@
  */
 
 import type { AgentEvent, AgentTaskStatus, AgentTaskUsage, AgentTaskUpdateEventData } from '../../types/events.js';
+import { normalizeWorkflowProgressEntries } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
@@ -833,6 +834,8 @@ function toClaudeTaskUpdate(msg: {
   summary?: string;
   usage?: Record<string, number | undefined>;
   last_tool_name?: string;
+  // SDK .d.ts 未声明、运行时存在的字段;无契约,必须经 normalize 收窄后才能下发。
+  workflow_progress?: unknown;
 }, rt: RuntimeState, getSubagentTaskUsage?: (taskId: string) => AgentTaskUsage | undefined): AgentTaskUpdateEventData | null {
   if (!msg.task_id) return null;
   const parentToolUseId = msg.tool_use_id
@@ -856,6 +859,8 @@ function toClaudeTaskUpdate(msg: {
     ? rt.resolvedSubagentModelByParentToolUseId.get(parentToolUseId)
       ?? rt.streamModelByParentToolUseId.get(parentToolUseId)
     : undefined;
+  // CLI 对纯心跳帧节流省略该字段;收窄失败/缺失都不下发(undefined = 下游沿用上一帧)。
+  const workflowProgress = normalizeWorkflowProgressEntries(msg.workflow_progress);
   return {
     provider: 'claude-code',
     taskId: msg.task_id,
@@ -870,6 +875,7 @@ function toClaudeTaskUpdate(msg: {
     ...(msg.last_tool_name ? { lastToolName: msg.last_tool_name } : {}),
     ...(usage ? { usage } : {}),
     ...(model ? { model } : {}),
+    ...(workflowProgress ? { workflowProgress } : {}),
   };
 }
 

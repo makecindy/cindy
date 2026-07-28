@@ -422,7 +422,7 @@ export function ProjectNode({
             onClick={() => {
               beginRename();
             }}
-            className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+            className={MENU_ITEM_CLASS}
           >
             {t('ccAgent.sidebar.projectAction.rename')}
           </DropdownMenuItem>

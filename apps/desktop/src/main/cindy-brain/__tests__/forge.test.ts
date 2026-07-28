@@ -274,7 +274,18 @@ describe('scaffoldGhostDir', () => {
       if (!result.ok) return;
       expect(result.files).toContain('ghost.json');
       expect(result.files).toContain('main.js');
+      expect(result.files).toContain('assets/icon.png');
       expect(result.files.includes('node/worker.cjs')).toBe(template.startsWith('node-'));
+
+      // 骨架默认带占位图标(#809):清单声明 + 文件真实存在且是 PNG。
+      const manifestJson = JSON.parse(
+        await fs.promises.readFile(path.join(dir, 'ghost.json'), 'utf8'),
+      ) as { icon?: string };
+      expect(manifestJson.icon).toBe('assets/icon.png');
+      const iconBytes = await fs.promises.readFile(path.join(dir, 'assets/icon.png'));
+      expect(iconBytes.subarray(0, 8)).toEqual(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      );
 
       const packed = await packGhostDir(dir);
       expect(packed.ok, JSON.stringify(packed)).toBe(true);
@@ -492,6 +503,13 @@ describe('FORGE_GUIDE', () => {
       '创建工作区会话(workspace 槽)',
       'cindy.workspace',
       "kind: 'ensure-session'",
+      // 2026-07-28 图标与官方仓门禁(#809):§1/§2 的 icon 字段说明、
+      // §8.1 官方插件仓的四语言 locale 与 assets/icon.png 惯例。
+      '"icon": "assets/icon.png"',
+      '不收 svg',
+      '发布到官方插件仓的额外门禁',
+      'makecindy/cindy-official-plugins',
+      '四语言 locale 缺一不可',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

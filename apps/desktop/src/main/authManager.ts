@@ -23,8 +23,13 @@ import { machineIdSync } from 'node-machine-id';
 import {
   AuthApiError,
   CindyAuthClient,
+  discoverSsoOrgRealm,
+  parseAccountDeletionReceiptRecord,
+  parseAuthSessionRecord,
   reduceAuthFlow,
+  serializeAccountDeletionReceiptRecord,
   ssoOrgDiscoveryToMethods,
+  serializeAuthSessionRecord,
   type AuthFlowState,
   type AuthMembership,
   type AuthRegion,
@@ -59,10 +64,7 @@ import {
   renderAuthLoopbackPage,
   type AuthLoopbackDevBridge,
 } from './authLoopbackCallback';
-import {
-  createDesktopPollCredentials,
-  runHostedCallbackPolling,
-} from './authHostedCallback';
+import { createDesktopPollCredentials, runHostedCallbackPolling } from './authHostedCallback';
 // dev-only 登录 scenario harness(implementation-plan Step 0 WHAT4):静态 import
 // (main 禁运行时动态 import),生产构建由 vite alias 把整模块替换为空 stub
 // (vite.main.config.ts),运行时另有 app.isPackaged guard 双保险。
@@ -71,7 +73,14 @@ import { resolveLoginScenarioFetch } from '@cindy/auth-client/fixtures';
 import { createLogger } from './logger';
 import { buildFocusDeepLink } from './deepLink';
 import { getResolvedMainLocale, t } from './i18n';
-import { getClientEndpoint } from './clientEndpointsService.js';
+import {
+  activateClientEndpointRealm,
+  getClientEndpoint,
+  getClientEndpointForRealm,
+  getClientEndpointRealmConfig,
+  loadClientEndpointsForRealm,
+  resetClientEndpointRealm,
+} from './clientEndpointsService.js';
 import {
   parseDesktopLoginAction,
   type DesktopAccountDeletionChallenge,
@@ -114,11 +123,12 @@ const AUTH_REGION: AuthRegion =
   import.meta.env.VITE_CINDY_AUTH_REGION === 'global' ? 'global' : 'cn';
 // 端点惰性读取(勿固化成模块级常量):远程清单在 app.ready 内解析,
 // 顶层求值会把值钉死在烘焙值上。clientEndpointsService 的烘焙值已含 dev fallback。
-// auth 清单字段不分 region——国内/海外两条 CDN 各发各的清单,无脑取即可。
-function authServerUrl(): string {
-  return getClientEndpoint('authApiBaseUrl');
+// 默认读取构建区域；组织 SSO 发现后按冻结的 session realm 读取对应清单。
+function authServerUrl(realm: AuthRegion = activeAuthRealm): string {
+  return getClientEndpointForRealm(realm, 'authApiBaseUrl');
 }
-const REFRESH_TOKEN_KEY = 'cindy_auth_refresh_token';
+const AUTH_SESSION_KEY = 'cindy_auth_session_v1';
+const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'cindy_auth_refresh_token';
 const ACCOUNT_DELETION_RECEIPT_KEY = 'cindy_auth_account_deletion_receipt';
 const LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'cindy_auth_account_refresh_token';
 const LEGACY_REFRESH_TOKEN_KEY = 'refresh_token';
@@ -218,6 +228,10 @@ let authSessionTeardown: AuthSessionTeardown | null = null;
 
 let accessToken: string | null = null;
 let currentUser: CurrentUser | null = null;
+/** 已登录会话区域；安装包区域 AUTH_REGION 始终不变。 */
+let activeAuthRealm: AuthRegion = AUTH_REGION;
+/** 企业发现成功后冻结到整次 SSO 流程，reset/cancel/失败回收时清除。 */
+let pendingAuthRealm: AuthRegion | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshPromise: Promise<boolean> | null = null;
 let sessionInvalidationPromise: Promise<void> | null = null;
@@ -244,11 +258,16 @@ let loginActionPromise: Promise<DesktopLoginActionResult> | null = null;
 // main-only until the final resource-token login commits.
 let pendingAccountDeletionRestored = false;
 let accountDeletionRestoredNoticePending = false;
-// Set only after auth-server has accepted deletion. The identity guard keeps a
-// late confirmation from tearing down a different account selected meanwhile.
-let confirmedAccountDeletionAuthIdentity: string | null = null;
+// Set only after auth-server has accepted deletion. The credential guard keeps a
+// late confirmation from tearing down another account or realm selected meanwhile.
+let confirmedAccountDeletionCredential: {
+  identity: string;
+  realm: AuthRegion;
+} | null = null;
 
-function createAuthClient(): CindyAuthClient {
+function createAuthClient(
+  realm: AuthRegion = pendingAuthRealm ?? activeAuthRealm,
+): CindyAuthClient {
   // 登录 scenario harness 注入点(仅 client 构造参数,不替换 client、不 fake 方法;
   // zod schema/错误归一/REGION_MISMATCH 路径全真)。guard:!app.isPackaged +
   // XDT_LOGIN_SCENARIO(值域见 implementation-plan 附录 A,经 restart 脚本
@@ -256,17 +275,60 @@ function createAuthClient(): CindyAuthClient {
   const scenarioFetch = resolveLoginScenarioFetch({
     devModeActive: !app.isPackaged,
     scenario: process.env.XDT_LOGIN_SCENARIO,
-    region: AUTH_REGION,
+    region: realm,
   });
   return new CindyAuthClient({
-    baseUrl: authServerUrl(),
-    region: AUTH_REGION,
+    baseUrl: authServerUrl(realm),
+    region: realm,
     deviceId,
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
     fetch: scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
   });
 }
+
+// ── passive 共享实例闸门 ────────────────────────────────────────────────────
+
+/**
+ * 共享 userData 的 passive dev 实例(`--preserve-running` / `--passive` 非 isolated)。
+ *
+ * 这类实例复用 primary 的登录态,但**不得销毁整机共享的 auth 持久状态**——与
+ * owner-namespace 迁移(ownerNamespaceMigration.ts)、localDb schema
+ * (localDb/index.ts)同一条契约。受约束的是「删除 / 作废 / 消费」这类破坏性动作:
+ *   1. 磁盘 refresh token 文件(整机一份,删了 primary 下次续期就被踢);
+ *   2. 服务端 refresh token(按 (user, device) 一对一存,passive 与 primary 共用
+ *      同一 deviceId,调登出会把 primary 的那份一起作废);
+ *   3. relogin marker(一次性、整机一份,被 passive 消费掉 primary 就再也看不到);
+ *   4. canary flag 与账号删除 receipt(账号派生状态,删掉会让 primary 拉错 manifest
+ *      或丢掉进行中的删除挑战)。
+ *
+ * **续期不在约束内**:passive 照常排 refresh timer,轮换后正常 writeSafe 写回新
+ * token。轮换写入的是有效凭证,primary 侧由 replacement-retry 消化;停掉续期反而
+ * 会让 passive 的 access token 过期后无自愈路径(详见 scheduleRefresh 的注释)。
+ *
+ * 2026-07-27 事故:两个 MIGRATE_FAILED 的 passive 实例在 LocalDbGate fatal 界面点
+ * 「返回登录」,logout 删掉整机 refresh token,正在使用的 primary 在下一个 refresh
+ * 周期(隔了 19 / 46 分钟)被判定 credential-lost 强制重登。同源事故 2026-07-23 已
+ * 发生过一次,当时只把静默半死改成明确弹重登(见 authSessionExpiredDetection.test.ts),
+ * 没有堵住 passive 的销毁权。
+ *
+ * packaged 恒不设置该 env(index.ts 启动时对 packaged / isolated 显式 delete 兜底,
+ * 防 ambient env 污染),线上零影响;`--isolated` 沙箱有独立 userData 与 deviceId,
+ * 本来就不共享,不受此闸门约束。
+ */
+function isPassiveSharedUserDataInstance(): boolean {
+  return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
+}
+
+/**
+ * passive 实例「本进程已登出」的墓碑(进程内,不落盘)。
+ *
+ * passive 登出保留磁盘 token(那是 primary 的),于是登出后任何 initialize() ——
+ * 副窗 mount、右侧栏子窗口、renderer reload —— 都会读到仍在的 token 把本进程
+ * 冷启动登回去,还顺手轮换一次共享 token。有了墓碑,「只登出本进程」才是稳定的:
+ * 直到用户在本进程显式登录或重启进程为止。
+ */
+let passiveLocalSignOut = false;
 
 // ── safeStorage helpers ─────────────────────────────────────────────────────
 
@@ -306,7 +368,8 @@ function isPersistedSecretAbsent(key: string): boolean {
   }
 }
 
-function writeSafe(key: string, value: string): boolean {  try {
+function writeSafe(key: string, value: string): boolean {
+  try {
     if (!safeStorage.isEncryptionAvailable()) return false;
     const dir = SAFE_STORAGE_DIR();
     fs.mkdirSync(dir, { recursive: true });
@@ -329,14 +392,113 @@ function removeSafe(key: string): void {
   }
 }
 
+function readPersistedAuthSession() {
+  return parseAuthSessionRecord(readSafe(AUTH_SESSION_KEY));
+}
+
+function readPersistedRefreshToken(realm = activeAuthRealm): string | null {
+  const session = readPersistedAuthSession();
+  return session?.realm === realm ? session.refreshToken : null;
+}
+
+function writePersistedAuthSession(refreshToken: string, realm = activeAuthRealm): boolean {
+  return writeSafe(AUTH_SESSION_KEY, serializeAuthSessionRecord(realm, refreshToken));
+}
+
+function readPersistedAccountDeletionReceipt() {
+  const raw = readSafe(ACCOUNT_DELETION_RECEIPT_KEY);
+  const record = parseAccountDeletionReceiptRecord(raw);
+  if (record) return record;
+  // Older builds stored the opaque receipt directly. Those receipts could only
+  // have been issued by the build region, so preserve that deterministic
+  // migration rule without trying another region.
+  return raw && !raw.trimStart().startsWith('{')
+    ? { version: 1 as const, realm: AUTH_REGION, receiptToken: raw }
+    : null;
+}
+
+function writePersistedAccountDeletionReceipt(
+  receiptToken: string,
+  realm: AuthRegion,
+  authIdentity: string,
+): boolean {
+  return writeSafe(
+    ACCOUNT_DELETION_RECEIPT_KEY,
+    serializeAccountDeletionReceiptRecord(realm, receiptToken, authIdentity),
+  );
+}
+
+/**
+ * 只在磁盘内容仍等于 `expected` 时删除(compare-and-delete)。
+ *
+ * 共享 userData 下,「判定这枚 token 已失效」与「执行删除」之间存在窗口:另一个
+ * 实例可能刚好在这中间写入了有效的替换 token。无条件删就会把别人刚写的有效凭证
+ * 删掉——正是本 PR 要防的失败模式。冷启动路径尤其危险:它带 transient 重试与
+ * replacement recheck,从判定到删除可能隔了数秒。
+ *
+ * 读不出来(加密不可用 / IO 抖动 / 解密失败)时一律不删:宁可留一枚已失效的
+ * token(下次 refresh 自然会再判一次),也不能误删有效凭证。
+ *
+ * 内容比对之外再校验一次文件身份(inode / mtime / size),把「读到的是旧值、删掉的
+ * 却是刚写入的新文件」这段 TOCTOU 收紧到两次 stat 之间。
+ *
+ * **这不是真正原子的 compare-and-delete**:POSIX 没有按路径的 CAS unlink,而本模块
+ * 的写入侧(writeSafe 直接 writeFileSync 覆盖)同样不原子。要彻底消除竞态,得把整个
+ * safeStorage 层改成「临时文件 + rename 写入 + 跨进程锁」,那是独立重构,不在本次
+ * 范围内。当前收益是把窗口从数秒级压到一次 syscall,且真正高频的那条路径
+ * (passive)已经完全不删。
+ */
+type RemoveIfUnchangedResult =
+  /** 确实删掉了(或删除时文件已不在,目标状态达成)。 */
+  | 'deleted'
+  /** 磁盘上的已经不是本次判定的那一枚,按约定不删。 */
+  | 'changed'
+  /** 删除真的失败了(权限 / IO):凭证还在盘上,调用方不得当成已清理。 */
+  | 'failed';
+
+function removeSafeIfUnchanged(key: string, expected: string): RemoveIfUnchangedResult {
+  const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
+  // 三态:拿到身份 / 文件确定不在(ENOENT) / stat 本身失败。后两者必须分开——
+  // 「已经不在」是目标状态达成,「读不到状态」是我们不敢动它。
+  type Identity = { kind: 'ok'; id: string } | { kind: 'absent' } | { kind: 'error' };
+  const identity = (): Identity => {
+    try {
+      const s = fs.statSync(filepath);
+      return { kind: 'ok', id: `${s.ino}:${s.mtimeMs}:${s.size}` };
+    } catch (err) {
+      return (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+        ? { kind: 'absent' }
+        : { kind: 'error' };
+    }
+  };
+  const before = identity();
+  if (before.kind === 'absent') return 'deleted';
+  if (before.kind === 'error') return 'failed';
+  if (readSafe(key) !== expected) return 'changed';
+  // 读内容期间文件被换掉(另一个实例写入了替换凭证)→ 那枚不在本次判定范围内。
+  const after = identity();
+  if (after.kind === 'absent') return 'deleted';
+  if (after.kind === 'error') return 'failed';
+  if (after.id !== before.id) return 'changed';
+  try {
+    // 不走 removeSafe():它吞掉所有 unlink 错误,会让调用方把「没删成」当成
+    // 「已清理」并据此打日志。这里必须如实区分。
+    fs.unlinkSync(filepath);
+    return 'deleted';
+  } catch (err) {
+    // 这一瞬别人已经删掉了 → 目标状态达成,算成功。
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return 'deleted';
+    // EPERM / EACCES / EBUSY 等:凭证仍在盘上。
+    log.warn(`failed to delete persisted secret ${key}: ${(err as Error).message}`);
+    return 'failed';
+  }
+}
+
 // ── PKCE (Node.js native crypto) ────────────────────────────────────────────
 
 function generatePKCE(): { codeVerifier: string; codeChallenge: string } {
   const codeVerifier = crypto.randomBytes(32).toString('base64url');
-  const codeChallenge = crypto
-    .createHash('sha256')
-    .update(codeVerifier)
-    .digest('base64url');
+  const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
   return { codeVerifier, codeChallenge };
 }
 
@@ -368,9 +530,8 @@ async function apiFetch<T>(
   }
   const effectiveTimeout = options?.timeoutMs ?? API_FETCH_TIMEOUT_MS;
   const controller = new AbortController();
-  const timer = effectiveTimeout > 0
-    ? setTimeout(() => controller.abort(), effectiveTimeout)
-    : undefined;
+  const timer =
+    effectiveTimeout > 0 ? setTimeout(() => controller.abort(), effectiveTimeout) : undefined;
   try {
     const response = await net.fetch(url, {
       method,
@@ -393,13 +554,17 @@ async function apiFetch<T>(
   }
 }
 
-function requestAuthRefresh(refreshToken: string): Promise<AuthRefreshResult> {
+function requestAuthRefresh(
+  refreshToken: string,
+  realm = activeAuthRealm,
+): Promise<AuthRefreshResult> {
   // refresh 是 token-rotating 端点,禁用 abort timeout——若服务端已轮换但
   // 客户端 abort,重试旧 token 会触发 INVALID_REFRESH_TOKEN。
   return apiFetch<RefreshResponse | AuthErrorResponse>('/api/auth/refresh', {
     method: 'POST',
     body: { refreshToken, deviceId },
     timeoutMs: 0,
+    baseUrl: authServerUrl(realm),
   });
 }
 
@@ -582,7 +747,8 @@ async function openSystemBrowserAuthorization(
   input: BrowserAuthorizationInput,
   signal: AbortSignal,
 ): Promise<{ code: string } | { error: string }> {
-  const hostedCallbackUrl = getClientEndpoint('authDesktopCallbackUrl');
+  const loginRealm = pendingAuthRealm ?? activeAuthRealm;
+  const hostedCallbackUrl = getClientEndpointForRealm(loginRealm, 'authDesktopCallbackUrl');
   return hostedCallbackUrl
     ? openHostedBrowserAuthorization(input, hostedCallbackUrl, signal)
     : openLoopbackBrowserAuthorization(input, signal);
@@ -603,7 +769,9 @@ async function openLoopbackBrowserAuthorization(
       return renderAuthLoopbackPage({
         htmlLang: getResolvedMainLocale(),
         variant: isError ? 'error' : 'success',
-        title: t(isError ? 'login.browserCallback.errorTitle' : 'login.browserCallback.successTitle'),
+        title: t(
+          isError ? 'login.browserCallback.errorTitle' : 'login.browserCallback.successTitle',
+        ),
         body: t(isError ? 'login.browserCallback.errorBody' : 'login.browserCallback.successBody'),
         detail: isError ? result.error : undefined,
         action: {
@@ -680,10 +848,15 @@ function scheduleRefresh(token: string): void {
     clearTimeout(refreshTimer);
     refreshTimer = null;
   }
+  // 续期节奏对 passive 实例不设闸门。本 PR 的契约是「passive 不写/不删共享的
+  // auth 持久状态」;「谁负责续期」是正交问题,不在这里解决。让 passive 停止续期
+  // 会让它的 access token 过期后再无替换途径(primary 的续期只更新磁盘 token,
+  // 不更新本进程内存态),而 updateServerProfile 等直接走 apiFetch 的路径没有
+  // 401 refresh/retry,会一直失败到进程重启——resume 也救不了,系统不休眠就不触发。
+  // 轮换本身不会踢人:2026-07-27 两个实例每 55 分钟互刷一次,primary 每次都靠
+  // replacement-retry 恢复,一次没掉线;把 primary 踢下线的是删除凭证。
   try {
-    const payload = JSON.parse(
-      Buffer.from(token.split('.')[1], 'base64').toString('utf-8'),
-    );
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf-8'));
     const delay = (payload.exp - 300) * 1000 - Date.now();
     if (delay <= 0) {
       refresh();
@@ -796,6 +969,7 @@ let coldStartAuthInFlight: Promise<AuthState> | null = null;
 function scheduleRefreshRetryAfterTransientFailure(): void {
   if (refreshTimer !== null) {
     clearTimeout(refreshTimer);
+    refreshTimer = null;
   }
   refreshTimer = setTimeout(() => void refresh(), RUNTIME_REFRESH_RETRY_MS);
 }
@@ -811,6 +985,7 @@ async function runAuthRefreshWithReplacementRetry(
   initialRefreshToken: string,
   opts: {
     phase: 'cold-start' | 'runtime';
+    realm: AuthRegion;
     withTransientRetry: boolean;
     rateLimitDelayMs?: number;
     onFailure?: (info: RefreshFailureInfo) => void;
@@ -824,8 +999,8 @@ async function runAuthRefreshWithReplacementRetry(
   failureAction?: RefreshFailureAction;
 }> {
   const run = await runRefreshWithReplacementRetry(initialRefreshToken, {
-    doRefresh: requestAuthRefresh,
-    readLatestStoredToken: () => readSafe(REFRESH_TOKEN_KEY),
+    doRefresh: (refreshToken) => requestAuthRefresh(refreshToken, opts.realm),
+    readLatestStoredToken: () => readPersistedRefreshToken(opts.realm),
     transientRetry: opts.withTransientRetry
       ? {
           rateLimitDelayMs: opts.rateLimitDelayMs,
@@ -923,7 +1098,7 @@ function snapshotAuthState(): AuthState {
     isAuthenticated: isCloudAuthenticated,
     isCanary: currentUser !== null && canaryFlagStore.read(),
     deviceId,
-    hasAccountDeletionReceipt: readSafe(ACCOUNT_DELETION_RECEIPT_KEY) !== null,
+    hasAccountDeletionReceipt: readPersistedAccountDeletionReceipt() !== null,
     accountDeletionRestored: accountDeletionRestoredNoticePending,
   };
 }
@@ -938,7 +1113,7 @@ function snapshotLoggedOutAuthState(): AuthState {
     isAuthenticated: false,
     isCanary: false,
     deviceId,
-    hasAccountDeletionReceipt: readSafe(ACCOUNT_DELETION_RECEIPT_KEY) !== null,
+    hasAccountDeletionReceipt: readPersistedAccountDeletionReceipt() !== null,
     accountDeletionRestored: false,
   };
 }
@@ -1016,7 +1191,13 @@ function resetLoginFlowState(): void {
   pendingLoginTicket = null;
   pendingBindTicket = null;
   pendingSsoVerificationTicket = null;
+  pendingAuthRealm = null;
   pendingAccountDeletionRestored = false;
+}
+
+function resetActiveAuthRealmToBuild(): void {
+  activeAuthRealm = AUTH_REGION;
+  resetClientEndpointRealm();
 }
 
 async function reloadPerAccountIntegrationsFromDisk(_accessToken: string | null): Promise<void> {
@@ -1075,7 +1256,7 @@ function clearAuth(
   pendingAccountToken = null;
   currentUser = null;
   accountDeletionRestoredNoticePending = false;
-  confirmedAccountDeletionAuthIdentity = null;
+  confirmedAccountDeletionCredential = null;
   resetLoginFlowState();
   persistedRefreshTokenNeedsIdentityCheck = false;
   lastAcceptedRefreshToken = null;
@@ -1085,12 +1266,29 @@ function clearAuth(
     refreshTimer = null;
   }
   if (!opts.preservePersistedRefreshToken) {
-    removeSafe(REFRESH_TOKEN_KEY);
-    removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
-    removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+    if (isPassiveSharedUserDataInstance()) {
+      // passive 共享实例无权删整机凭证:它的登出只清本进程内存态,磁盘 token 留给
+      // primary(见 isPassiveSharedUserDataInstance 的事故记录)。同时立墓碑,否则
+      // 下一次 initialize() 会拿 primary 的 token 把本进程登回去。
+      passiveLocalSignOut = true;
+      log.info(
+        'passive shared-userData instance keeps the persisted refresh token (local sign-out only)',
+      );
+    } else {
+      removeSafe(AUTH_SESSION_KEY);
+      removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
+      removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
+      removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+    }
   }
+  resetActiveAuthRealmToBuild();
   // 未登录时固定使用 stable；同步中的旧请求会被 authStateEpoch 守卫丢弃。
-  canaryFlagStore.clear();
+  // canary-flag.json 同样是整机一份的账号派生状态:passive 清掉它,packaged primary
+  // 下次更新轮询就会把自己当 stable 用户,拉到错误的 manifest(见 manifestService
+  // fetchManifest)。passive 只登出本进程,不改这个共享文件。
+  if (!isPassiveSharedUserDataInstance()) {
+    canaryFlagStore.clear();
+  }
   // provider key(XD / Mivo)是绑定账号的本机密钥,**不在登出时清** —— 同账号重新登录 /
   // 会话过期重登需保留,避免每次都重填(本地 only 后服务器已无副本可拉回)。换账号导致的
   // 串号边界改由 login / 冷启动时 providerSecretStore.reconcileOwner 处理:owner 变了才清。
@@ -1128,7 +1326,9 @@ async function expireRuntimeAuth(
     if (accountSwitchTeardown) {
       await accountSwitchTeardown({ previousUserId, nextUserId: 'signed-out' });
     } else {
-      log.warn('runtime auth expiry teardown hook is not registered; falling back to localDb close');
+      log.warn(
+        'runtime auth expiry teardown hook is not registered; falling back to localDb close',
+      );
     }
   } catch (err) {
     // A teardown failure must not restore an expired credential. Continue with
@@ -1212,6 +1412,11 @@ export function getAccessToken(): string | null {
   return accessToken;
 }
 
+/** 当前已认证会话的数据区域；主进程长连接据此识别同账号的跨区切换。 */
+export function getActiveAuthRealm(): AuthRegion {
+  return activeAuthRealm;
+}
+
 /** SkillHub v0.2.1: 返回当前登录用户 id（cuid），未登录时返回 null */
 export function getCurrentUserId(): string | null {
   return currentUser?.id ?? null;
@@ -1279,16 +1484,23 @@ function currentAccountDeletionAuthIdentity(): string | null {
 
 function commitAccountDeletionConfirmation(
   expectedIdentity: string,
+  expectedRealm: AuthRegion,
   status: AccountDeletionStatus,
 ): AccountDeletionStatus {
-  if (currentAccountDeletionAuthIdentity() !== expectedIdentity) {
+  if (
+    currentAccountDeletionAuthIdentity() !== expectedIdentity ||
+    activeAuthRealm !== expectedRealm
+  ) {
     throw new AuthApiError(
       'AUTH_FLOW_SUPERSEDED',
       409,
       'Account deletion was superseded by a newer auth action',
     );
   }
-  confirmedAccountDeletionAuthIdentity = expectedIdentity;
+  confirmedAccountDeletionCredential = {
+    identity: expectedIdentity,
+    realm: expectedRealm,
+  };
   return status;
 }
 
@@ -1311,9 +1523,7 @@ async function runProtectedAuthRequest<T>(request: () => Promise<T>): Promise<T>
 /** Server-controlled visibility and verification channel for personal-account deletion. */
 export function getAccountDeletionAvailability(): Promise<AccountDeletionAvailability> {
   const token = requireAccountDeletionAccessToken();
-  return runProtectedAuthRequest(() =>
-    createAuthClient().getAccountDeletionAvailability(token),
-  );
+  return runProtectedAuthRequest(() => createAuthClient().getAccountDeletionAvailability(token));
 }
 
 /**
@@ -1322,12 +1532,29 @@ export function getAccountDeletionAvailability(): Promise<AccountDeletionAvailab
  * desktop's immediate local logout after confirmation.
  */
 export async function requestAccountDeletionChallenge(): Promise<DesktopAccountDeletionChallenge> {
-  confirmedAccountDeletionAuthIdentity = null;
+  confirmedAccountDeletionCredential = null;
   const token = requireAccountDeletionAccessToken();
+  const expectedIdentity = currentAccountDeletionAuthIdentity();
+  const expectedRealm = activeAuthRealm;
+  if (!expectedIdentity) {
+    throw new AuthApiError('UNAUTHENTICATED', 401, 'Account deletion requires an active login');
+  }
   const challenge = await runProtectedAuthRequest(() =>
-    createAuthClient().requestAccountDeletionChallenge(token),
+    createAuthClient(expectedRealm).requestAccountDeletionChallenge(token),
   );
-  if (!writeSafe(ACCOUNT_DELETION_RECEIPT_KEY, challenge.receiptToken)) {
+  if (
+    currentAccountDeletionAuthIdentity() !== expectedIdentity ||
+    activeAuthRealm !== expectedRealm
+  ) {
+    throw new AuthApiError(
+      'AUTH_FLOW_SUPERSEDED',
+      409,
+      'Account deletion was superseded by a newer auth action',
+    );
+  }
+  if (
+    !writePersistedAccountDeletionReceipt(challenge.receiptToken, expectedRealm, expectedIdentity)
+  ) {
     throw new AuthApiError(
       'ACCOUNT_DELETION_RECEIPT_STORE_FAILED',
       0,
@@ -1355,22 +1582,34 @@ export async function confirmAccountDeletion(input: {
   if (!expectedIdentity) {
     throw new AuthApiError('UNAUTHENTICATED', 401, 'Account deletion requires an active login');
   }
-  confirmedAccountDeletionAuthIdentity = null;
-  const receiptToken = readSafe(ACCOUNT_DELETION_RECEIPT_KEY);
-  if (!receiptToken) {
+  confirmedAccountDeletionCredential = null;
+  const receipt = readPersistedAccountDeletionReceipt();
+  if (!receipt) {
     throw new AuthApiError(
       'ACCOUNT_DELETION_RECEIPT_MISSING',
       400,
       'Request a new account deletion challenge',
     );
   }
-  const client = createAuthClient();
+  if (
+    receipt.version !== 2 ||
+    receipt.authIdentity !== expectedIdentity ||
+    receipt.realm !== activeAuthRealm
+  ) {
+    removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
+    throw new AuthApiError(
+      'ACCOUNT_DELETION_RECEIPT_MISSING',
+      400,
+      'Request a new account deletion challenge',
+    );
+  }
+  const client = createAuthClient(receipt.realm);
   let status: AccountDeletionStatus;
   try {
     status = await runProtectedAuthRequest(() =>
       client.confirmAccountDeletion(token, {
         ...input,
-        receiptToken,
+        receiptToken: receipt.receiptToken,
         acknowledged: true,
       }),
     );
@@ -1379,20 +1618,33 @@ export async function confirmAccountDeletion(input: {
       error instanceof AuthApiError &&
       ['NETWORK_ERROR', 'REQUEST_TIMEOUT', 'INVALID_RESPONSE'].includes(error.code);
     if (!ambiguous) throw error;
-    const recovered = await client.getAccountDeletionStatus(receiptToken).catch(() => null);
+    const recovered = await client.getAccountDeletionStatus(receipt.receiptToken).catch(() => null);
     if (!recovered || recovered.status === 'cancelled') throw error;
     status = recovered;
   }
-  return commitAccountDeletionConfirmation(expectedIdentity, status);
+  return commitAccountDeletionConfirmation(expectedIdentity, receipt.realm, status);
 }
 
 /** Query the persisted receipt without requiring an authenticated session. */
 export async function getAccountDeletionStatus(): Promise<AccountDeletionStatus | null> {
-  const receiptToken = readSafe(ACCOUNT_DELETION_RECEIPT_KEY);
-  if (!receiptToken) return null;
-  return createAuthClient().getAccountDeletionStatus(receiptToken);
+  const receipt = readPersistedAccountDeletionReceipt();
+  if (!receipt) return null;
+  await loadClientEndpointsForRealm(receipt.realm);
+  return createAuthClient(receipt.realm).getAccountDeletionStatus(receipt.receiptToken);
 }
 
+/**
+ * 显式清除账号删除 receipt。
+ *
+ * 注意这不只是 logout 的内部步骤:它经 `auth:account-deletion:clear-receipt`
+ * (bootstrap-electron.ts)暴露给 renderer,用户在登录页处理无效/已取消的挑战、
+ * 或 dismiss 已完成的删除状态时会直接调到。这类显式清理在 passive 实例上必须
+ * 照常生效 —— 否则 receipt 永远留在盘上,`snapshotAuthState()` 每次启动又把它
+ * 报出来,dismiss 不掉。
+ *
+ * 需要保护的只有「passive 登出顺带清掉 primary 的 receipt」那条隐式路径,闸门
+ * 因此加在 logout() 的调用点上,不在这里。
+ */
 export function clearAccountDeletionReceipt(): void {
   removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
 }
@@ -1411,8 +1663,9 @@ export function consumeAccountDeletionRestoredNotice(): boolean {
  */
 export function isConfirmedAccountDeletionSessionCurrent(): boolean {
   return (
-    confirmedAccountDeletionAuthIdentity !== null &&
-    currentAccountDeletionAuthIdentity() === confirmedAccountDeletionAuthIdentity
+    confirmedAccountDeletionCredential !== null &&
+    currentAccountDeletionAuthIdentity() === confirmedAccountDeletionCredential.identity &&
+    activeAuthRealm === confirmedAccountDeletionCredential.realm
   );
 }
 
@@ -1522,19 +1775,46 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
     return snapshotAuthState();
   }
 
+  // passive 实例在本进程登出过:磁盘上的 token 是 primary 的,不能拿它把自己登回去
+  // （副窗 mount / renderer reload 都会走到这里）。直到显式登录或进程重启为止。
+  if (passiveLocalSignOut) {
+    log.info('passive shared-userData instance stays signed out locally (tombstone)');
+    commitActiveAppSession('signed-out');
+    return snapshotLoggedOutAuthState();
+  }
+
   // release-relogin-on-update: if the auto-updater dropped a relogin marker
   // for *this* version, wipe persisted auth and force the user back to the
   // OAuth flow. The flag is one-shot: once consumed, subsequent launches
   // see no marker and no refresh_token, so the user stays logged out
   // naturally until they sign in (rather than getting kicked every launch).
+  //
+  // marker 是一次性的、整机一份:passive 若消费它,primary 就再也看不到这次
+  // requireRelogin 更新的标记,而 passive 顺带删掉的又正是 primary 的 token ——
+  // 本 PR 要防的失败被原样重现。
+  //
+  // 但「不消费」不等于「可以无视」:marker 命中说明这个版本要求重新登录,passive
+  // 跑的是同一个版本,拿旧 token 冷启动登录正是 marker 想避免的事。所以 passive
+  // 照样保持登出(复用 passiveLocalSignOut 墓碑,避免副窗 initialize() 又绕回来),
+  // 只是不动磁盘 token、不消费 marker —— 那两件事留给 primary。
   const reloginFlag = readReloginFlag();
   if (reloginFlag && reloginFlag.version === app.getVersion()) {
+    if (isPassiveSharedUserDataInstance()) {
+      log.info(
+        'relogin marker hit for v%s — passive shared-userData instance stays signed out, leaving the marker and token to the primary',
+        reloginFlag.version,
+      );
+      passiveLocalSignOut = true;
+      commitActiveAppSession('signed-out');
+      return snapshotLoggedOutAuthState();
+    }
     log.info(
       'relogin marker hit for v%s — clearing persisted auth',
       reloginFlag.version,
     );
     lastAcceptedRefreshToken = null;
-    removeSafe(REFRESH_TOKEN_KEY);
+    removeSafe(AUTH_SESSION_KEY);
+    removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
     pendingAccountToken = null;
     removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
     removeSafe(LEGACY_REFRESH_TOKEN_KEY);
@@ -1544,21 +1824,54 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   }
 
   // Old Feishu-auth refresh tokens are intentionally not portable to auth-server.
-  removeSafe(LEGACY_REFRESH_TOKEN_KEY);
   // 早期测试版曾持久化 account refresh token；该会话现已收窄为登录期内存态。
-  removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
-  const storedToken = readSafe(REFRESH_TOKEN_KEY);
-  if (!storedToken) {
+  //
+  // 三个 legacy 凭证文件同样是整机一份,而 dev + packaged 共库双开是受支持的场景
+  // (--preserve-running):老构建的 primary 可能还在消费它们,passive 只是启动一下
+  // 就把它们删掉,等于删了对方的活凭证。清理属于「搬家式迁移」,留给独占启动的
+  // 非 passive 实例做。
+  if (!isPassiveSharedUserDataInstance()) {
+    removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+    removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
+  }
+  let persistedSession = readPersistedAuthSession();
+  if (!persistedSession) {
+    // 旧版只保存裸 refresh token；迁移时按安装包区域解释，并以单个加密 JSON
+    // 原子记录替代，确保 token 与 realm 永不分离。passive 可以写入有效的新记录，
+    // 但旧文件仍留给可能正在消费它的旧版 primary。
+    const legacyToken = readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
+    if (legacyToken && writePersistedAuthSession(legacyToken, AUTH_REGION)) {
+      if (!isPassiveSharedUserDataInstance()) {
+        removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
+      }
+      persistedSession = { version: 1, realm: AUTH_REGION, refreshToken: legacyToken };
+    }
+  }
+  if (!persistedSession) {
     commitActiveAppSession('signed-out');
     return snapshotLoggedOutAuthState();
   }
+  try {
+    await loadClientEndpointsForRealm(persistedSession.realm);
+    activateClientEndpointRealm(persistedSession.realm);
+    activeAuthRealm = persistedSession.realm;
+  } catch (error) {
+    // 对端区域清单暂不可用时保留原子凭据；退回构建区 refresh 会把有效 token
+    // 当成非法凭据，因此本次仅以未登录放行 UI，下一次 initialize/重启可重试。
+    log.warn('persisted auth realm manifest unavailable; keeping session for retry', error);
+    commitActiveAppSession('signed-out');
+    return snapshotLoggedOutAuthState();
+  }
+  const storedToken = persistedSession.refreshToken;
 
   // 进程内去重:主窗流程还挂着(黑洞网络)时,副窗 / 右侧栏窗口 mount 触发的
   // initialize() 复用同一个 in-flight promise,避免并发轮换同一枚 refresh token。
   if (coldStartAuthInFlight === null) {
-    coldStartAuthInFlight = runColdStartRefreshFlow(storedToken).finally(() => {
-      coldStartAuthInFlight = null;
-    });
+    coldStartAuthInFlight = runColdStartRefreshFlow(storedToken, persistedSession.realm).finally(
+      () => {
+        coldStartAuthInFlight = null;
+      },
+    );
   }
   // 黑洞 / captive-portal 网络护栏:限时等待,超时先以未登录返回解锁 splash,
   // 流程继续后台跑;迟到成功由流程内部广播登录态(renderer 自动跳回主界面)。
@@ -1576,8 +1889,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
       log.info(
         `cold-start auth settled after startup gate timeout — isAuthenticated=${state.isAuthenticated}`,
       ),
-    onLateError: (err) =>
-      log.error('cold-start auth flow threw after startup gate timeout', err),
+    onLateError: (err) => log.error('cold-start auth flow threw after startup gate timeout', err),
   });
 }
 
@@ -1587,7 +1899,10 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
  * authStateEpoch:用户手动登录 / 登出过就整体丢弃迟到结果,绝不覆盖更新的登录态、
  * 不删除新登录写入的 refresh token(见 authStateEpoch 常量注释)。
  */
-async function runColdStartRefreshFlow(storedToken: string): Promise<AuthState> {
+async function runColdStartRefreshFlow(
+  storedToken: string,
+  storedRealm: AuthRegion,
+): Promise<AuthState> {
   const epochAtStart = authStateEpoch;
   let releaseBoundary: (() => void) | null = null;
   const epochChanged = (point: string): boolean => {
@@ -1613,6 +1928,7 @@ async function runColdStartRefreshFlow(storedToken: string): Promise<AuthState> 
       failureAction,
     } = await runAuthRefreshWithReplacementRetry(storedToken, {
       phase: 'cold-start',
+      realm: storedRealm,
       withTransientRetry: true,
       rateLimitDelayMs: 0,
       onFailure: ({ attempt, status, code, definitive, willRetry }) =>
@@ -1625,17 +1941,52 @@ async function runColdStartRefreshFlow(storedToken: string): Promise<AuthState> 
     if (epochChanged('after-refresh')) {
       return snapshotAuthState();
     }
+    const latestSession = readPersistedAuthSession();
+    if (latestSession && latestSession.realm !== storedRealm) {
+      // 共享 userData 的另一个实例已切到其它区域。旧区域请求无论成功失败都不能
+      // 覆盖/删除新原子记录；本实例本次以未登录返回，后续 initialize 可加载新清单。
+      log.warn('cold-start auth realm changed on disk; discarding stale refresh result');
+      commitActiveAppSession('signed-out');
+      return snapshotLoggedOutAuthState();
+    }
     if (!refreshResult.ok) {
       // 只在「确定性凭据失效」时清除 token。429 限流 / 5xx / 断网等瞬时失败保留 token,
       // 让下次启动(或后续 refresh)能恢复登录,避免冷启动撞限流 / 网络抖动即被永久登出。
       // 与运行时 refresh() 的清除条件保持一致(共用 authRefreshFailure)。
       const action: RefreshFailureAction = failureAction ?? { kind: 'transient-failure' };
       if (action.kind === 'definitive-failure') {
-        log.warn(
-          'cold-start refresh: definitive credential failure — clearing persisted refresh token',
-        );
         lastAcceptedRefreshToken = null;
-        removeSafe(REFRESH_TOKEN_KEY);
+        if (isPassiveSharedUserDataInstance()) {
+          // passive 只对本进程判定失效:磁盘 token 是整机共用的,而 passive 冷启动拿到
+          // INVALID_REFRESH_TOKEN 最常见的原因恰恰是 primary 刚轮换过它。删掉就是把
+          // primary 踢下线。
+          log.warn(
+            'cold-start refresh: definitive credential failure — passive shared-userData instance starts logged out and keeps the persisted refresh token',
+          );
+        } else {
+          const expectedSession = serializeAuthSessionRecord(storedRealm, storedToken);
+          switch (removeSafeIfUnchanged(AUTH_SESSION_KEY, expectedSession)) {
+            case 'deleted':
+              log.warn(
+                'cold-start refresh: definitive credential failure — cleared persisted auth session',
+              );
+              break;
+            case 'changed':
+              // 判定失败后磁盘会话已被换掉(另一个实例写入了新 token 或 realm):
+              // 那枚不在本次判定范围内,不能删。
+              log.warn(
+                'cold-start refresh: definitive credential failure, but the persisted auth session changed meanwhile — keeping the replacement',
+              );
+              break;
+            case 'failed':
+              // 删除真的失败了:凭证仍在盘上,下次启动会再判一次。不能报成已清理。
+              log.error(
+                'cold-start refresh: definitive credential failure, but deleting the persisted auth session failed — it is still on disk',
+              );
+              break;
+          }
+        }
+        resetActiveAuthRealmToBuild();
       } else if (action.kind === 'replacement-retry') {
         log.warn(
           `cold-start refresh failed for a stale token after ${attempts} attempt(s) — keeping latest refresh token, starting logged out`,
@@ -1672,7 +2023,7 @@ async function runColdStartRefreshFlow(storedToken: string): Promise<AuthState> 
       releaseBoundary = null;
       return snapshotAuthState();
     }
-    writeSafe(REFRESH_TOKEN_KEY, refreshData.refreshToken);
+    writePersistedAuthSession(refreshData.refreshToken);
     lastAcceptedRefreshToken = refreshData.refreshToken;
 
     accessToken = refreshData.accessToken;
@@ -1704,7 +2055,10 @@ async function runColdStartRefreshFlow(storedToken: string): Promise<AuthState> 
     // **之后**的本地状态同步代码(writeSafe / provider owner reconcile 等)抛异常——
     // 此时新 refresh token 已轮换并落盘,删除它只会把有效凭据丢掉。保留 token、记录
     // 错误,本次以未登录返回,留待下次启动自愈。
-    log.error('cold-start auth initialize threw after refresh — keeping persisted refresh token', err);
+    log.error(
+      'cold-start auth initialize threw after refresh — keeping persisted refresh token',
+      err,
+    );
     // 迟到守卫③:异常清理同样不能覆盖用户手动登录后的状态。
     if (!epochChanged('catch')) {
       accessToken = null;
@@ -1717,9 +2071,7 @@ async function runColdStartRefreshFlow(storedToken: string): Promise<AuthState> 
     releaseBoundary?.();
     releaseBoundary = null;
     if (!epochChanged('catch-return')) commitActiveAppSession('signed-out');
-    return epochChanged('catch-return-state')
-      ? snapshotAuthState()
-      : snapshotLoggedOutAuthState();
+    return epochChanged('catch-return-state') ? snapshotAuthState() : snapshotLoggedOutAuthState();
   }
 }
 
@@ -1730,12 +2082,42 @@ async function loadLoginProviders(): Promise<AuthFlowState> {
   pendingBindTicket = null;
   pendingSsoVerificationTicket = null;
   pendingAccountDeletionRestored = false;
-  providerConfig = await createAuthClient().getProviders();
+  pendingAuthRealm = null;
+  providerConfig = await createAuthClient(AUTH_REGION).getProviders();
   loginFlowState = reduceAuthFlow(loginFlowState, {
     type: 'providers-loaded',
     providers: providerConfig,
   });
   return loginFlowState;
+}
+
+async function discoverOrganizationRealm(org: string) {
+  // 新的一次组织发现不得复用上一轮成功结果；只有本轮双区判定成功后才重新冻结。
+  pendingAuthRealm = null;
+  const realmConfig = getClientEndpointRealmConfig();
+  if (!realmConfig.crossRealmOrgLoginEnabled || !realmConfig.realmManifestBaseUrls) {
+    pendingAuthRealm = AUTH_REGION;
+    return createAuthClient(AUTH_REGION).discoverSsoOrg(org);
+  }
+
+  // 先并行加载/校验两区清单，再并行做 home-realm discovery。任一清单或请求
+  // 不可用都 fail closed，不凭另一侧成功结果猜区域；只有发现结果跨出安装包
+  // 区域时，后续状态机才要求用户确认。
+  try {
+    await Promise.all([loadClientEndpointsForRealm('cn'), loadClientEndpointsForRealm('global')]);
+  } catch {
+    throw new AuthApiError(
+      'ORG_REALM_UNAVAILABLE',
+      503,
+      'Unable to load both enterprise auth region manifests',
+    );
+  }
+  const selected = await discoverSsoOrgRealm(org, {
+    cn: createAuthClient('cn'),
+    global: createAuthClient('global'),
+  });
+  pendingAuthRealm = selected.region;
+  return selected.discovery;
 }
 
 export async function getLoginState(): Promise<DesktopLoginActionResult> {
@@ -1810,14 +2192,20 @@ async function completeLogin(
     accessToken = outcome.accessToken;
     persistedRefreshTokenNeedsIdentityCheck = false;
     clearReplacementIntegrationReloadTimers();
-    writeSafe(REFRESH_TOKEN_KEY, outcome.refreshToken);
+    const committedRealm = pendingAuthRealm ?? AUTH_REGION;
+    activateClientEndpointRealm(committedRealm);
+    activeAuthRealm = committedRealm;
+    writePersistedAuthSession(outcome.refreshToken, committedRealm);
     removeSafe(LEGACY_REFRESH_TOKEN_KEY);
     lastAcceptedRefreshToken = outcome.refreshToken;
     removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
     accountDeletionRestoredNoticePending = deletionWasRestored;
     clearReloginFlag();
+    // 显式登录解除 passive 本地登出墓碑(见 passiveLocalSignOut)。
+    passiveLocalSignOut = false;
     currentUser = nextUser;
     commitActiveAppSession('cloud', currentUser.id);
+    pendingAuthRealm = null;
   } finally {
     releaseBoundary?.();
   }
@@ -1870,7 +2258,15 @@ async function acceptLoginOutcome(outcome: LoginOutcome): Promise<AuthFlowState>
 }
 
 async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginActionResult> {
-  const client = createAuthClient();
+  const startsBuildRealmFlow =
+    action.type === 'discover' ||
+    action.type === 'request-code' ||
+    action.type === 'verify-code' ||
+    (action.type === 'start-browser' && action.kind === 'social');
+  if (startsBuildRealmFlow) pendingAuthRealm = null;
+  const client = createAuthClient(
+    startsBuildRealmFlow ? AUTH_REGION : pendingAuthRealm ?? activeAuthRealm,
+  );
   const stateBeforeAction = loginFlowState?.step === 'error' ? null : loginFlowState;
   try {
     // Cancellation is intercepted by dispatchLoginAction so it can settle the
@@ -1880,6 +2276,43 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
     }
     if (action.type === 'reset') {
       return { success: true, state: await loadLoginProviders() };
+    }
+    if (action.type === 'confirm-sso-realm') {
+      const confirmation = loginFlowState;
+      if (
+        confirmation?.step !== 'realm-confirmation' ||
+        pendingAuthRealm !== confirmation.targetRegion
+      ) {
+        throw new AuthApiError(
+          'INVALID_AUTH_ACTION',
+          400,
+          'No enterprise region switch is waiting for confirmation',
+        );
+      }
+      discoveredMethods = confirmation.methods;
+      loginFlowState = reduceAuthFlow(loginFlowState, {
+        type: 'discovery-loaded',
+        email: '',
+        methods: confirmation.methods,
+      });
+      return { success: true, state: loginFlowState };
+    }
+    if (action.type === 'cancel-sso-realm') {
+      const confirmation = loginFlowState;
+      if (confirmation?.step !== 'realm-confirmation') {
+        throw new AuthApiError(
+          'INVALID_AUTH_ACTION',
+          400,
+          'No enterprise region switch is waiting for cancellation',
+        );
+      }
+      pendingAuthRealm = null;
+      discoveredMethods = [];
+      loginFlowState = reduceAuthFlow(loginFlowState, {
+        type: 'providers-loaded',
+        providers: confirmation.providers,
+      });
+      return { success: true, state: loginFlowState };
     }
     if (!providerConfig) await loadLoginProviders();
 
@@ -1895,10 +2328,29 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
     }
 
     // 企业 SSO 入口（按组织 ID/slug/已验证域名）：结果映射进 method-choice，
-    // 使 start-browser 的 connectionId 白名单校验与连接选择 UI 直接复用。
+    // 同区域直接进入连接选择；跨区域先进入确认状态，确认后才把连接写入
+    // start-browser 白名单并允许继续 SSO。
     if (action.type === 'discover-sso-org') {
-      const discovery = await client.discoverSsoOrg(action.org.trim().toLowerCase());
-      discoveredMethods = ssoOrgDiscoveryToMethods(discovery);
+      const discovery = await discoverOrganizationRealm(action.org.trim().toLowerCase());
+      const methods = ssoOrgDiscoveryToMethods(discovery);
+      if (discovery.region !== AUTH_REGION) {
+        if (!providerConfig) {
+          throw new AuthApiError(
+            'AUTH_SERVICE_UNAVAILABLE',
+            503,
+            'Login provider configuration is unavailable',
+          );
+        }
+        discoveredMethods = [];
+        loginFlowState = reduceAuthFlow(loginFlowState, {
+          type: 'realm-switch-required',
+          targetRegion: discovery.region,
+          providers: providerConfig,
+          methods,
+        });
+        return { success: true, state: loginFlowState };
+      }
+      discoveredMethods = methods;
       loginFlowState = reduceAuthFlow(loginFlowState, {
         type: 'discovery-loaded',
         email: '',
@@ -2081,12 +2533,14 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       'INVALID_AUTH_CODE',
       'INVALID_TOKEN',
       'TOKEN_EXPIRED',
+      'USER_CANCELLED',
     ].includes(code);
     if (flowCannotRetry) {
       pendingAccountToken = null;
       pendingLoginTicket = null;
       pendingBindTicket = null;
       pendingSsoVerificationTicket = null;
+      pendingAuthRealm = null;
     }
     // Keep the last usable screen so validation/network failures can be retried
     // without discarding the entered identifier or requesting another code.
@@ -2144,7 +2598,19 @@ export async function refresh(): Promise<boolean> {
       );
       return true;
     };
-    const storedToken = readSafe(REFRESH_TOKEN_KEY);
+    const persistedSession = readPersistedAuthSession();
+    const refreshRealm = persistedSession?.realm ?? activeAuthRealm;
+    if (persistedSession && persistedSession.realm !== activeAuthRealm) {
+      try {
+        await loadClientEndpointsForRealm(persistedSession.realm);
+      } catch (error) {
+        log.warn('runtime auth realm manifest unavailable; retrying later', error);
+        scheduleRefreshRetryAfterTransientFailure();
+        return false;
+      }
+    }
+    const storedToken =
+      persistedSession?.realm === refreshRealm ? persistedSession.refreshToken : null;
     if (!storedToken) {
       // 磁盘 refresh token 消失但本进程仍持有活会话:本进程内 logout 会同步清内存态
       // 并取消 refresh timer,冷启动 / 已登出时 currentUser 为 null —— 所以这个组合
@@ -2153,7 +2619,7 @@ export async function refresh(): Promise<boolean> {
       // 「自以为登录、实际已死」的半死状态(模型源消失、device-link 无限 401)。
       if (currentUser !== null) {
         if (refreshWasSuperseded('missing-persisted-token')) return false;
-        if (!isPersistedSecretAbsent(REFRESH_TOKEN_KEY)) {
+        if (!isPersistedSecretAbsent(AUTH_SESSION_KEY)) {
           // 文件还在但读/解密失败(或加密暂不可用):瞬时故障,不能按凭证丢失
           // 强踢用户;保留会话,等下个 refresh 周期或 device-link 自救重试。
           log.warn(
@@ -2190,9 +2656,17 @@ export async function refresh(): Promise<boolean> {
       const { result, failureAction, replacementRetries } =
         await runAuthRefreshWithReplacementRetry(storedToken, {
           phase: 'runtime',
+          realm: refreshRealm,
           withTransientRetry: false,
         });
       if (refreshWasSuperseded('after-refresh')) return false;
+      const latestSession = readPersistedAuthSession();
+      if (latestSession && latestSession.realm !== refreshRealm) {
+        // 另一实例在请求期间完成了跨区域登录；旧区域结果不得覆盖或删除新记录。
+        log.warn('runtime auth realm changed on disk; discarding stale refresh result');
+        scheduleRefreshRetryAfterTransientFailure();
+        return false;
+      }
       if (!result.ok) {
         const action: RefreshFailureAction = failureAction ?? { kind: 'transient-failure' };
         const code = getRefreshErrorCode(result);
@@ -2200,7 +2674,8 @@ export async function refresh(): Promise<boolean> {
           log.warn(
             `runtime refresh: definitive credential failure code=${code} — clearing auth, notifying session expired`,
           );
-          const previousUserId = currentUser?.id ?? getActiveAppSession().dataOwnerId ?? 'signed-out';
+          const previousUserId =
+            currentUser?.id ?? getActiveAppSession().dataOwnerId ?? 'signed-out';
           await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code));
         } else if (action.kind === 'replacement-retry') {
           log.warn(
@@ -2216,6 +2691,7 @@ export async function refresh(): Promise<boolean> {
         return false;
       }
 
+      const authRealmChanged = refreshRealm !== activeAuthRealm;
       const data = result.data as RefreshResponse;
       const needsIdentityCheck =
         replacementRetries > 0 ||
@@ -2226,7 +2702,7 @@ export async function refresh(): Promise<boolean> {
         // instance. Verify / reconcile the account before accepting its access token,
         // otherwise renderer state could still show account A while API calls use B.
         persistedRefreshTokenNeedsIdentityCheck = true;
-        writeSafe(REFRESH_TOKEN_KEY, data.refreshToken);
+        writePersistedAuthSession(data.refreshToken, refreshRealm);
         lastAcceptedRefreshToken = data.refreshToken;
 
         const previousUserId = currentUser?.id ?? null;
@@ -2280,6 +2756,10 @@ export async function refresh(): Promise<boolean> {
           }
         }
 
+        if (authRealmChanged) {
+          activateClientEndpointRealm(refreshRealm);
+          activeAuthRealm = refreshRealm;
+        }
         accessToken = data.accessToken;
         currentUser = nextUser;
         try {
@@ -2294,7 +2774,10 @@ export async function refresh(): Promise<boolean> {
             await clearPerAccountIntegrations();
             await reloadPerAccountIntegrationsFromDisk(accessToken);
           } catch (err) {
-            log.error('reload per-account integrations after replacement account switch failed', err);
+            log.error(
+              'reload per-account integrations after replacement account switch failed',
+              err,
+            );
           }
           if (refreshWasSuperseded('after-integration-reload')) return false;
           scheduleReplacementIntegrationReloadRetries(currentUser.id);
@@ -2306,20 +2789,27 @@ export async function refresh(): Promise<boolean> {
         });
         scheduleRefresh(data.accessToken);
         notifyRenderer();
-        if (previousUserId !== currentUser.id) {
+        if (previousUserId !== currentUser.id || authRealmChanged) {
           notifyAuthListeners();
         }
         return true;
       }
 
+      if (authRealmChanged) {
+        activateClientEndpointRealm(refreshRealm);
+        activeAuthRealm = refreshRealm;
+      }
       accessToken = data.accessToken;
       currentUser = mergeMembershipWithExisting(data.membership, currentUser);
       commitActiveAppSession('cloud', currentUser.id);
       persistedRefreshTokenNeedsIdentityCheck = false;
-      writeSafe(REFRESH_TOKEN_KEY, data.refreshToken);
+      writePersistedAuthSession(data.refreshToken);
       lastAcceptedRefreshToken = data.refreshToken;
       scheduleRefresh(data.accessToken);
       notifyRenderer();
+      if (authRealmChanged) {
+        notifyAuthListeners();
+      }
       return true;
     } catch (err) {
       if (refreshWasSuperseded('catch')) return false;
@@ -2340,6 +2830,7 @@ export async function refresh(): Promise<boolean> {
 
 export async function logout(): Promise<void> {
   const currentAccessToken = accessToken;
+  const currentAuthBaseUrl = authServerUrl(activeAuthRealm);
   // 注意:真实登出入口(bootstrap auth:logout handler)在调用本函数**之前**已
   // dispose DbClient 并释放 device-link 持有权(releaseDeviceLinkOwnershipBeforeLogout);
   // 需要在 DB 关闭前收尾写入的逻辑应挂在那条链路上,而不是本函数内(此时已太晚)。
@@ -2352,14 +2843,27 @@ export async function logout(): Promise<void> {
   }
   // Ordinary logout abandons an unconfirmed challenge. Confirmed deletion uses
   // clearLocalSessionAfterAccountDeletion() and intentionally preserves receipt.
-  clearAccountDeletionReceipt();
+  //
+  // receipt 也是整机一份:primary 发起账号删除挑战后,passive 一次本地登出就会删掉
+  // 它,primary 随后 confirmAccountDeletion() 直接 ACCOUNT_DELETION_RECEIPT_MISSING。
+  // 闸门只加在这条隐式路径上——renderer 主动调的显式清理仍照常生效(见
+  // clearAccountDeletionReceipt 的注释)。
+  if (isPassiveSharedUserDataInstance()) {
+    log.info('passive shared-userData instance keeps the account-deletion receipt on logout');
+  } else {
+    clearAccountDeletionReceipt();
+  }
   clearAuth();
 
-  if (currentAccessToken) {
+  // passive 共享实例跳过服务端登出:refresh token 按 (user, device) 一对一存,而它与
+  // primary 共用同一 deviceId——调这一发会把 primary 的那份一起作废,即使本地文件留着,
+  // primary 下次续期照样拿到确定性失败被踢。
+  if (currentAccessToken && !isPassiveSharedUserDataInstance()) {
     apiFetch('/api/auth/logout', {
       method: 'POST',
       body: { deviceId },
       token: currentAccessToken,
+      baseUrl: currentAuthBaseUrl,
     }).catch(() => {});
   }
 }
@@ -2371,9 +2875,7 @@ export async function logout(): Promise<void> {
 export function handleResume(): void {
   if (accessToken === null) return;
   try {
-    const payload = JSON.parse(
-      Buffer.from(accessToken.split('.')[1], 'base64').toString('utf-8'),
-    );
+    const payload = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64').toString('utf-8'));
     if (payload.exp * 1000 - Date.now() <= 5 * 60 * 1000) {
       refresh();
     }

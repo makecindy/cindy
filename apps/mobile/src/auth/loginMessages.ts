@@ -31,9 +31,11 @@ const messages = {
     emailCode: '发送邮箱验证码',
     ssoRequired: '该组织要求使用企业 SSO 登录。',
     ssoEntry: '使用企业 SSO 登录',
-    consentStatement: '我已阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私协议</privacy>',
+    consentStatement:
+      '我已阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私协议</privacy>',
     consentDialogTitle: '服务条款和隐私协议',
-    consentDialogBody: '请阅读并同意 Cindy 的以下协议后继续：<terms>服务条款</terms>、<privacy>隐私协议</privacy>',
+    consentDialogBody:
+      '请阅读并同意 Cindy 的以下协议后继续：<terms>服务条款</terms>、<privacy>隐私协议</privacy>',
     consentAgree: '同意',
     consentDisagree: '暂不同意',
     ssoOrgTitle: '企业 SSO 登录',
@@ -41,6 +43,11 @@ const messages = {
     ssoOrgPlaceholder: '企业 ID、slug 或域名',
     ssoOrgHint: '不知道企业登录标识？请联系企业管理员。',
     ssoOrgDetected: '选择企业「{org}」的单点登录方式',
+    realmConsentTitle: '连接企业所在区域',
+    realmConsentBodyCn: '你的企业位于中国大陆区。\n继续后，Cindy 会连接该区域。',
+    realmConsentBodyGlobal: '你的企业位于国际区。\n继续后，Cindy 会连接该区域。',
+    realmConsentAgree: '继续登录',
+    realmConsentDisagree: '取消',
     ssoVerificationTitle: '验证企业联系方式',
     ssoVerificationSubtitle:
       '首次登录需要验证身份提供方返回的联系方式 {target}。',
@@ -146,6 +153,13 @@ const messages = {
     ssoOrgHint:
       "Don't know your enterprise sign-in identifier? Ask your admin.",
     ssoOrgDetected: 'Choose a single sign-on connection for "{org}"',
+    realmConsentTitle: 'Connect to your enterprise region',
+    realmConsentBodyCn:
+      'Your enterprise is in Mainland China.\nContinue to connect Cindy to this region.',
+    realmConsentBodyGlobal:
+      'Your enterprise is in the Global region.\nContinue to connect Cindy to this region.',
+    realmConsentAgree: 'Continue sign-in',
+    realmConsentDisagree: 'Cancel',
     ssoVerificationTitle: 'Verify your work identity',
     ssoVerificationSubtitle:
       'First-time sign-in requires verification of the contact returned by your identity provider: {target}.',
@@ -260,10 +274,19 @@ const messages = {
     ssoOrgSubtitle:
       '会社 ID、組織 slug、または確認済みドメインを入力すると、所属組織のシングルサインオンに進みます。',
     ssoOrgPlaceholder: '会社 ID、slug、またはドメイン',
-    ssoOrgHint: '企業のログイン識別子が不明な場合は、管理者にお問い合わせください。',
+    ssoOrgHint:
+      '企業のログイン識別子が不明な場合は、管理者にお問い合わせください。',
     ssoOrgDetected: '組織「{org}」のシングルサインオン方法を選択',
+    realmConsentTitle: '企業のリージョンに接続',
+    realmConsentBodyCn:
+      'この企業は中国本土リージョンにあります。\n続行すると Cindy はこの地域に接続します。',
+    realmConsentBodyGlobal:
+      'この企業はグローバルリージョンにあります。\n続行すると Cindy はこの地域に接続します。',
+    realmConsentAgree: 'ログインを続ける',
+    realmConsentDisagree: 'キャンセル',
     ssoVerificationTitle: '企業の連絡先を確認',
-    ssoVerificationSubtitle: '初回ログイン時、IdP が返した連絡先 {target} の確認が必要です。',
+    ssoVerificationSubtitle:
+      '初回ログイン時、IdP が返した連絡先 {target} の確認が必要です。',
     enterCode: '認証コードを入力',
     codeSentTo: '認証コードの送信先:',
     codePlaceholder: '6桁の認証コード',
@@ -298,9 +321,11 @@ const messages = {
     accountDeletionScreenTitle: 'アカウントを削除',
     accountDeletionLoading: 'アカウントの状態を確認しています…',
     accountDeletionUnavailableTitle: 'この操作は現在利用できません',
-    accountDeletionUnavailableCopy: '設定画面に戻って、後でもう一度お試しください。',
+    accountDeletionUnavailableCopy:
+      '設定画面に戻って、後でもう一度お試しください。',
     accountDeletionVerifyTitle: 'アカウントの所有権を確認',
-    accountDeletionCodeSent: '認証コードを {target} に送信しました。10 分間有効です。',
+    accountDeletionCodeSent:
+      '認証コードを {target} に送信しました。10 分間有効です。',
     accountDeletionAcknowledgeA11y: 'アカウント削除の影響を理解したことを確認',
     accountDeletionAcknowledgeCopy:
       '理解しています：この端末はすぐにログアウトします。他のクライアントはログイン状態が無効になった後にログアウトします。30 日以内に再ログインすれば取り消せます。期限が過ぎると Cindy ログインアカウントは完全に削除され、復元できません。',
@@ -323,8 +348,10 @@ const messages = {
       '認証コードが正しくないか、有効期限が切れています。確認して再試行してください。',
     accountDeletionErrorAttempts:
       '認証の試行回数が多すぎます。認証コードを再送信してください。',
-    accountDeletionErrorRate: '操作が頻繁すぎます。しばらくしてからお試しください。',
-    accountDeletionErrorPending: 'アカウントはすでに削除待機期間に入っています。',
+    accountDeletionErrorRate:
+      '操作が頻繁すぎます。しばらくしてからお試しください。',
+    accountDeletionErrorPending:
+      'アカウントはすでに削除待機期間に入っています。',
     accountDeletionErrorProcessing: 'アカウントの削除処理はすでに進行中です。',
     accountDeletionErrorUnavailable: 'この操作は現在利用できません。',
     accountDeletionErrorNetwork:
@@ -367,12 +394,21 @@ const messages = {
     consentAgree: '동의',
     consentDisagree: '동의 안 함',
     ssoOrgTitle: '기업 SSO 로그인',
-    ssoOrgSubtitle: '회사 ID, 조직 slug 또는 인증된 도메인을 입력하면 소속 조직의 SSO 로그인으로 이동합니다.',
+    ssoOrgSubtitle:
+      '회사 ID, 조직 slug 또는 인증된 도메인을 입력하면 소속 조직의 SSO 로그인으로 이동합니다.',
     ssoOrgPlaceholder: '회사 ID, slug 또는 도메인',
     ssoOrgHint: '기업 로그인 식별자를 모르시나요? 관리자에게 문의하세요.',
     ssoOrgDetected: '"{org}" 조직의 SSO 연결을 선택하세요',
+    realmConsentTitle: '기업 지역에 연결',
+    realmConsentBodyCn:
+      '이 기업은 중국 본토 지역에 있습니다.\n계속하면 Cindy가 해당 지역에 연결됩니다.',
+    realmConsentBodyGlobal:
+      '이 기업은 글로벌 지역에 있습니다.\n계속하면 Cindy가 해당 지역에 연결됩니다.',
+    realmConsentAgree: '로그인 계속',
+    realmConsentDisagree: '취소',
     ssoVerificationTitle: '기업 신원 확인',
-    ssoVerificationSubtitle: '최초 로그인 시 ID 공급자가 반환한 연락처 {target} 확인이 필요합니다.',
+    ssoVerificationSubtitle:
+      '최초 로그인 시 ID 공급자가 반환한 연락처 {target} 확인이 필요합니다.',
     enterCode: '인증 코드 입력',
     codeSentTo: '인증 코드 전송 대상:',
     codePlaceholder: '6자리 인증 코드',
@@ -406,9 +442,11 @@ const messages = {
     accountDeletionScreenTitle: '계정 삭제',
     accountDeletionLoading: '계정 상태를 확인하는 중…',
     accountDeletionUnavailableTitle: '현재 이 작업을 사용할 수 없습니다',
-    accountDeletionUnavailableCopy: '설정 화면으로 돌아가 나중에 다시 시도해 주세요.',
+    accountDeletionUnavailableCopy:
+      '설정 화면으로 돌아가 나중에 다시 시도해 주세요.',
     accountDeletionVerifyTitle: '계정 소유권 확인',
-    accountDeletionCodeSent: '인증 코드를 {target}(으)로 보냈습니다. 10분간 유효합니다.',
+    accountDeletionCodeSent:
+      '인증 코드를 {target}(으)로 보냈습니다. 10분간 유효합니다.',
     accountDeletionAcknowledgeA11y: '계정 삭제의 영향을 이해했음을 확인',
     accountDeletionAcknowledgeCopy:
       '이해합니다: 이 기기는 즉시 로그아웃됩니다. 다른 클라이언트는 로그인 상태가 무효화된 후 로그아웃됩니다. 30일 이내에 다시 로그인하면 취소할 수 있습니다. 기한이 지나면 Cindy 로그인 계정은 영구적으로 삭제되며 복구할 수 없습니다.',
@@ -431,7 +469,8 @@ const messages = {
       '인증 코드가 올바르지 않거나 만료되었습니다. 확인 후 다시 시도해 주세요.',
     accountDeletionErrorAttempts:
       '인증 시도가 너무 많습니다. 인증 코드를 다시 보내주세요.',
-    accountDeletionErrorRate: '요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요.',
+    accountDeletionErrorRate:
+      '요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요.',
     accountDeletionErrorPending: '계정이 이미 삭제 대기 기간에 들어갔습니다.',
     accountDeletionErrorProcessing: '계정 삭제가 이미 진행 중입니다.',
     accountDeletionErrorUnavailable: '현재 이 작업을 사용할 수 없습니다.',
@@ -477,7 +516,10 @@ export function resolveLoginLocale(
 
 /** 生效语言:设置里的手动选择优先,未选择时跟随系统语言(4 语主干)。 */
 export function getLoginLanguage(): LoginLocale {
-  return getManualLocaleOverride() ?? resolveLoginLocale(getLocales()[0]?.languageTag);
+  return (
+    getManualLocaleOverride() ??
+    resolveLoginLocale(getLocales()[0]?.languageTag)
+  );
 }
 
 /**
@@ -586,6 +628,18 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
     en: 'Company not found, or it has no SSO connection enabled.',
     ja: '会社が見つからないか、SSO ログインが有効になっていません。',
     ko: '회사를 찾을 수 없거나 SSO 로그인이 활성화되어 있지 않습니다.',
+  },
+  ORG_REALM_AMBIGUOUS: {
+    'zh-CN': '该企业标识同时存在于两个区域，请联系企业管理员处理。',
+    en: 'This enterprise identifier exists in both regions. Contact your administrator.',
+    ja: 'この企業識別子は両方の地域に存在します。管理者にお問い合わせください。',
+    ko: '이 기업 식별자가 두 지역에 모두 존재합니다. 관리자에게 문의하세요.',
+  },
+  ORG_REALM_UNAVAILABLE: {
+    'zh-CN': '暂时无法确认企业所在区域，请检查网络后重试。',
+    en: 'Cindy cannot verify the enterprise region right now. Check your connection and retry.',
+    ja: '企業の地域を現在確認できません。ネットワークを確認して再試行してください。',
+    ko: '현재 기업 지역을 확인할 수 없습니다. 네트워크를 확인한 후 다시 시도하세요.',
   },
   SSO_EMAIL_REQUIRED: {
     'zh-CN': '该企业身份未提供有效邮箱，请联系企业管理员检查 IdP 配置。',

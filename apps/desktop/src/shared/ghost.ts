@@ -1782,6 +1782,12 @@ export function layoutWithGhostPanel(layout: Layout, manifest: GhostManifest): L
 
 export type ManifestValidation = { ok: true; manifest: GhostManifest } | { ok: false; reason: string };
 
+const GHOST_MANIFEST_RESERVED_RECORD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isGhostManifestReservedRecordKey(value: string): boolean {
+  return GHOST_MANIFEST_RESERVED_RECORD_KEYS.has(value);
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -1830,7 +1836,7 @@ function ghostJsonPointerChild(pointer: string, segment: string | number): strin
 function collectGhostSchemaLocaleShape(
   schema: unknown,
   pointer = '',
-  result: Record<string, GhostSchemaLocaleShape> = {},
+  result: Record<string, GhostSchemaLocaleShape> = Object.create(null) as Record<string, GhostSchemaLocaleShape>,
 ): Record<string, GhostSchemaLocaleShape> {
   if (!isPlainObject(schema)) return result;
   const title = typeof schema.title === 'string';
@@ -1961,7 +1967,7 @@ export function validateGhostManifestLocaleResource(
     const actualNames = Object.keys(raw.tools);
     const unknown = actualNames.find((name) => !expectedNames.has(name));
     if (unknown) return { ok: false, reason: `locale.tools 含未知工具 ${JSON.stringify(unknown)}` };
-    tools = {};
+    tools = Object.create(null) as NonNullable<GhostManifestLocaleResource['tools']>;
     for (const tool of manifest.tools) {
       const localized = raw.tools[tool.name];
       if (localized === undefined) continue; // 缺译:该工具整体回退原文
@@ -2011,7 +2017,7 @@ export function validateGhostManifestLocaleResource(
             reason: `locale.tools[${JSON.stringify(tool.name)}].parameters 含未知路径 ${JSON.stringify(unknownPointer)}`,
           };
         }
-        parameters = {};
+        parameters = Object.create(null) as Record<string, GhostSchemaLocaleText>;
         for (const pointer of parameterPointers) {
           const shape = parameterShape[pointer];
           const localizedText = localized.parameters[pointer];
@@ -2103,7 +2109,7 @@ export function validateGhostManifestLocaleResource(
     if (unknownKey) {
       return { ok: false, reason: `${fieldPath} 含未知 key ${JSON.stringify(unknownKey)}` };
     }
-    const labels: Record<string, { label: string; hint?: string }> = {};
+    const labels = Object.create(null) as Record<string, { label: string; hint?: string }>;
     for (const declaration of declarations) {
       const localized = rawValue[declaration.key];
       if (localized === undefined) continue; // 缺译:该项回退原文
@@ -2209,13 +2215,15 @@ export function validateGhostManifestLocaleResource(
     }
     const kv = validateLocalizedLabels(raw.setup.kv, 'locale.setup.kv', [...setupKvDecls.values()]);
     if (!kv.ok) return kv;
-    setup = kv.labels !== undefined
-      ? {
-          kv: Object.fromEntries(
-            Object.entries(kv.labels).map(([key, localized]) => [key, { label: localized.label }]),
-          ),
-        }
-      : {};
+    if (kv.labels !== undefined) {
+      const localizedKv = Object.create(null) as Record<string, { label: string }>;
+      for (const [key, localized] of Object.entries(kv.labels)) {
+        localizedKv[key] = { label: localized.label };
+      }
+      setup = { kv: localizedKv };
+    } else {
+      setup = {};
+    }
   }
 
   return {
@@ -2593,6 +2601,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     const seenNames = new Set<string>();
     for (const t of raw.tools) {
       if (!isPlainObject(t)) return { ok: false, reason: 'tools 每项必须是对象' };
+      if (typeof t.name === 'string' && isGhostManifestReservedRecordKey(t.name)) {
+        return { ok: false, reason: `tools[].name 不允许使用对象保留键名 ${JSON.stringify(t.name)}` };
+      }
       if (typeof t.name !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(t.name)) {
         return { ok: false, reason: 'tools[].name 必须是小写字母开头的 1–64 位小写/数字/下划线/连字符' };
       }
@@ -2833,6 +2844,12 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           return {
             ok: false,
             reason: `node.secretBindings[] 含不允许的字段 ${JSON.stringify(unknownBindingField)}`,
+          };
+        }
+        if (typeof binding.key === 'string' && isGhostManifestReservedRecordKey(binding.key)) {
+          return {
+            ok: false,
+            reason: `node.secretBindings[].key 不允许使用对象保留键名 ${JSON.stringify(binding.key)}`,
           };
         }
         if (typeof binding.key !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(binding.key)) {
@@ -3178,6 +3195,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       const seenKeys = new Set<string>();
       for (const s of n.secrets) {
         if (!isPlainObject(s)) return { ok: false, reason: 'network.secrets 每项必须是对象' };
+        if (typeof s.key === 'string' && isGhostManifestReservedRecordKey(s.key)) {
+          return { ok: false, reason: `network.secrets[].key 不允许使用对象保留键名 ${JSON.stringify(s.key)}` };
+        }
         if (typeof s.key !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(s.key)) {
           return { ok: false, reason: 'network.secrets[].key 必须是小写字母开头的 1–32 位小写/数字/下划线' };
         }
@@ -3733,6 +3753,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       const nodeSecretKeySet = new Set((node?.secretBindings ?? []).map((s) => s.key));
       for (const c of n.connections) {
         if (!isPlainObject(c)) return { ok: false, reason: 'network.connections 每项必须是对象' };
+        if (typeof c.key === 'string' && isGhostManifestReservedRecordKey(c.key)) {
+          return { ok: false, reason: `network.connections[].key 不允许使用对象保留键名 ${JSON.stringify(c.key)}` };
+        }
         if (typeof c.key !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(c.key)) {
           return { ok: false, reason: 'network.connections[].key 必须是小写字母开头的 1–32 位小写/数字/下划线' };
         }
@@ -3859,6 +3882,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             item = { kind: 'connection', key: refKey };
           }
         } else if (isPlainObject(it)) {
+          if (typeof it.kv === 'string' && isGhostManifestReservedRecordKey(it.kv)) {
+            return { ok: false, reason: `setup kv 条目的 kv 不允许使用对象保留键名 ${JSON.stringify(it.kv)}` };
+          }
           if (typeof it.kv !== 'string' || !GHOST_SETUP_KV_KEY_RE.test(it.kv)) {
             return { ok: false, reason: 'setup kv 条目的 kv 必须是 1–64 位字母/数字/下划线/点/连字符的键名' };
           }

@@ -395,6 +395,52 @@ describe('RightSidebarShell empty state', () => {
     );
   });
 
+  it('adds a no-drag hit hole when the unified topbar is the rail ChromeActions owner', async () => {
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+        railChromeActionsHitHole: true,
+      }),
+    );
+
+    const topbar = await screen.findByTestId('right-sidebar-unified-topbar');
+    const hitHole = screen.getByTestId('right-sidebar-rail-chrome-actions-hit-hole');
+    expect(topbar.contains(hitHole)).toBe(true);
+    expect(hitHole.style.width).toBe(`${CHROME_ACTIONS_GEOMETRY.clusterWidth}px`);
+    expect(
+      (hitHole.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion,
+    ).toBe('no-drag');
+    const spacer = screen.getByTestId('right-sidebar-rail-chrome-actions-spacer');
+    expect(spacer.style.width).toBe(`${CHROME_ACTIONS_GEOMETRY.clusterWidth}px`);
+    expect(
+      (spacer.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion,
+    ).toBe('no-drag');
+  });
+
+  it('does not reserve rail ChromeActions space in fullscreen', async () => {
+    installElectronApi(tabsIpc, true);
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+        railChromeActionsHitHole: true,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByTestId('right-sidebar-unified-topbar')).toBeTruthy());
+    await waitFor(() => {
+      expect(screen.queryByTestId('right-sidebar-rail-chrome-actions-hit-hole')).toBeNull();
+      expect(screen.queryByTestId('right-sidebar-rail-chrome-actions-spacer')).toBeNull();
+    });
+  });
+
   it('renders detach/maximize in the topbar when panel is docked left (mac M2), spacer when right or maximized', async () => {
     // 贴左:窗口右上浮层只剩折叠 toggle(恒钉窗口右上角,2026-07-09 Lizi 口径),
     // detach / maximize 是面板自属控件,必须由 Shell 顶栏右端自渲染,否则面板

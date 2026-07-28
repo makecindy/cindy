@@ -1724,13 +1724,14 @@ export function VoiceInputSection() {
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.voiceInput.title')}
-      </h2>
-
-      <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-        {t('settings.voiceInput.description')}
-      </p>
+      <div className="flex flex-col gap-1">
+        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+          {t('settings.voiceInput.title')}
+        </h2>
+        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
+          {t('settings.voiceInput.description')}
+        </p>
+      </div>
 
       <VoiceInputServiceSourceCard />
 

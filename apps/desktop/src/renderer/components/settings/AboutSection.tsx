@@ -97,13 +97,14 @@ export function AboutSection() {
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.about.title')}
-      </h2>
-
-      <p className="text-13 leading-[1.6] text-[var(--settings-section-desc)]">
-        {t('settings.about.description')}
-      </p>
+      <div className="flex flex-col gap-1">
+        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+          {t('settings.about.title')}
+        </h2>
+        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
+          {t('settings.about.description')}
+        </p>
+      </div>
 
       {/* Info Card */}
       <div

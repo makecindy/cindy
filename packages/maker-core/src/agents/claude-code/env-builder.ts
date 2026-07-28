@@ -190,8 +190,13 @@ export async function buildClaudeEnv(
   const cleanEnv = mode === 'remote' ? {} : cleanProcessEnv();
   const env: Record<string, string> = { ...cleanEnv };
 
-  if (runtimeConfig.behaviorFlags) {
-    Object.assign(env, runtimeConfig.behaviorFlags);
+  // 函数形态按本次 spawn 的凭证形态求值(如 attribution 归因块只对 gateway-key 禁用)。
+  const behaviorFlags =
+    typeof runtimeConfig.behaviorFlags === 'function'
+      ? runtimeConfig.behaviorFlags({ credentialMode: options.credentialMode })
+      : runtimeConfig.behaviorFlags;
+  if (behaviorFlags) {
+    Object.assign(env, behaviorFlags);
   }
   // 远端模式优先用 remoteEndpoint（真上游网关）—— 本地 endpoint 是 loopback proxy URL，
   // 远端机器够不到（见 runtime-config.ts remoteEndpoint 文档 + index.ts 的 loopback guard）。

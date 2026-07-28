@@ -11,7 +11,7 @@
  */
 
 import { useState } from 'react';
-import { ChevronRight, FileDiff, FolderOpen, Globe, Puzzle, Terminal } from 'lucide-react';
+import { ChevronRight, FileDiff, FolderOpen, Globe, ListTodo, Puzzle, Terminal } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -23,6 +23,7 @@ interface EmptyStateProps {
   onAddBrowserTab: () => void;
   onAddTerminalTab: () => void;
   onAddReviewTab: () => void;
+  onAddBackgroundTasksTab: () => void;
   /** 启用中的插件页签 menu 项(listGhostTabMenuMetas 产物);缺省/空 = 不渲染插件行。 */
   ghostTabMetas?: TabKindMenuMeta[];
   onAddGhostTab?: (kind: TabKindId) => void;
@@ -33,6 +34,7 @@ export function EmptyState({
   onAddBrowserTab,
   onAddTerminalTab,
   onAddReviewTab,
+  onAddBackgroundTasksTab,
   ghostTabMetas = [],
   onAddGhostTab,
 }: EmptyStateProps) {
@@ -65,6 +67,14 @@ export function EmptyState({
           label={t('rightSidebar.tabs.empty.openReview')}
           sub={t('rightSidebar.tabs.empty.reviewSub')}
           onClick={onAddReviewTab}
+        />
+        {/* 后台任务:顺序与 + dropdown 一致(review order=15 → background-tasks
+            order=17 → browser order=20)。 */}
+        <ActionRow
+          icon={ListTodo}
+          label={t('rightSidebar.tabs.empty.openBackgroundTasks')}
+          sub={t('rightSidebar.tabs.empty.backgroundTasksSub')}
+          onClick={onAddBackgroundTasksTab}
         />
         <ActionRow
           icon={Globe}

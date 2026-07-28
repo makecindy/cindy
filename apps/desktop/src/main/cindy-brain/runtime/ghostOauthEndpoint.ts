@@ -53,7 +53,11 @@ export interface GhostOauthEndpointManager {
     ghostId: string,
     secretKey: string,
     decl: GhostOauthDecl,
-    opts?: { scopes?: readonly string[]; clientId?: string },
+    opts?: {
+      scopes?: readonly string[];
+      clientId?: string;
+      deliveryHosts?: readonly string[];
+    },
   ): Promise<GhostOauthConnectResult>;
   disconnectAccount(ghostId: string, secretKey: string, accountId: string): void;
   setDefaultAccount(ghostId: string, secretKey: string, accountId: string): boolean;
@@ -67,13 +71,15 @@ export async function handleGhostOauthRequest(args: {
   readBodyText: () => Promise<string>;
   /** 当前清单里 source:'oauth' 的凭证(key → 授权详单;现查在装清单,不吃缓存)。 */
   oauthSecrets: ReadonlyMap<string, GhostOauthDecl>;
+  /** 清单 network.hosts 白名单——跨源 code 投递允许面的派生输入(见 connectAccount)。 */
+  networkHosts?: readonly string[];
   manager: GhostOauthEndpointManager;
   ghostId: string;
   /** Successful semantic persistence only; never receives credential values. */
   onChanged?: (secretKey: string) => void;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }): Promise<GhostOauthRequestOutcome> {
-  const { method, pathname, readBodyText, oauthSecrets, manager, ghostId, log } = args;
+  const { method, pathname, readBodyText, oauthSecrets, networkHosts, manager, ghostId, log } = args;
   const notifyChanged = (secretKey: string): void => {
     try {
       args.onChanged?.(secretKey);
@@ -230,14 +236,17 @@ export async function handleGhostOauthRequest(args: {
       return { status: 400 };
     }
     try {
-      const opts =
-        scopesOverride !== undefined || clientIdOverride !== undefined
-          ? {
-              ...(scopesOverride !== undefined ? { scopes: scopesOverride } : {}),
-              ...(clientIdOverride !== undefined ? { clientId: clientIdOverride } : {}),
-            }
-          : undefined;
-      const result = await manager.connectAccount(ghostId, secretKey, decl, opts);
+      const opts = {
+        ...(scopesOverride !== undefined ? { scopes: scopesOverride } : {}),
+        ...(clientIdOverride !== undefined ? { clientId: clientIdOverride } : {}),
+        ...(networkHosts?.length ? { deliveryHosts: networkHosts } : {}),
+      };
+      const result = await manager.connectAccount(
+        ghostId,
+        secretKey,
+        decl,
+        Object.keys(opts).length > 0 ? opts : undefined,
+      );
       // 结构化透传(ok:false 也是 200——授权被拒/超时是业务态不是协议错;
       // detail 可能含服务端错误摘录,已由引擎保证不含凭证字节)。
       return { status: 200, body: JSON.stringify(result) };

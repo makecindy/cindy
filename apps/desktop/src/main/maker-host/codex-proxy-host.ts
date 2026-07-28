@@ -78,6 +78,8 @@ const threadToSession = new Map<string, string>();
 
 let _handle: ProxyHandle | null = null;
 let _startPromise: Promise<void> | null = null;
+const _controlPlaneHandles = new Map<CodexProxyAuthInjection, ProxyHandle>();
+const _controlPlaneStartPromises = new Map<CodexProxyAuthInjection, Promise<void>>();
 let _disposeGeneration = 0;
 let dumpSeq = 0;
 
@@ -213,6 +215,22 @@ function isGoogleGeminiChatUpstream(upstream: string): boolean {
 }
 
 const MOONSHOT_CHAT_HOSTS = new Set(['api.moonshot.cn', 'api.moonshot.ai']);
+/** 火山方舟(豆包)官方 DNS 边界:ark.<region>.volces.com(如 ark.cn-beijing.volces.com)。 */
+const VOLCENGINE_ARK_CHAT_HOST_RE = /^ark\.[a-z0-9-]+\.volces\.com$/;
+/**
+ * 豆包 Seed 系列 model id 的版本前缀:doubao-seed-<major>-<minor>-…。
+ * 只放行 1.6 起的版本——Seed 品牌线从 1.6 开始原生多模态(官方 Chat Completions
+ * 支持 image_url);万一上游日后出现更低版本号的 seed 变体,不被顺带放行。
+ */
+const DOUBAO_SEED_VERSION_RE = /^doubao-seed-(\d+)-(\d+)(?:-|$)/;
+
+function isDoubaoVisionModel(model: string): boolean {
+  const m = DOUBAO_SEED_VERSION_RE.exec(model);
+  if (!m) return false;
+  const major = Number(m[1]);
+  const minor = Number(m[2]);
+  return major > 1 || (major === 1 && minor >= 6);
+}
 
 function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined): string {
   return stripPrefix && model.startsWith(stripPrefix)
@@ -221,28 +239,35 @@ function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined):
 }
 
 /**
- * 图片桥接必须按已验证的上游能力显式开启。这里认官方 Moonshot DNS 边界 + Kimi K3
- * 上游 model，不认 provider id（预设创建后会生成用户自定义 id），也不对所有
- * openai-chat 供应商放开。未命中继续沿用 fail-closed 默认。
+ * 图片桥接必须按已验证的上游能力显式开启。这里认官方 DNS 边界 + 上游 model
+ * (Moonshot 的 Kimi K3、火山方舟的豆包 Seed 系列),不认 provider id(预设创建后
+ * 会生成用户自定义 id),也不对所有 openai-chat 供应商放开。未命中继续沿用
+ * fail-closed 默认——无图片能力的上游(如 DeepSeek)保持发送前显式报错,不静默吞图。
  */
 export function chatBridgeCapabilitiesForRoute(
   upstream: string,
   realModel: string,
   fallback: ChatBridgeCapabilities = CHAT_BRIDGE_DEFAULT_CAPABILITIES,
 ): ChatBridgeCapabilities {
-  if (realModel !== 'kimi-k3') return fallback;
-  try {
-    const url = new URL(upstream);
-    if (url.protocol !== 'https:' || !MOONSHOT_CHAT_HOSTS.has(url.hostname.toLowerCase())) {
-      return fallback;
-    }
-  } catch {
-    return fallback;
-  }
+  if (!isVerifiedImageChatRoute(upstream, realModel)) return fallback;
   return {
     ...fallback,
     imageInput: 'image_url',
   };
+}
+
+function isVerifiedImageChatRoute(upstream: string, realModel: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(upstream);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:') return false;
+  const host = url.hostname.toLowerCase();
+  if (realModel === 'kimi-k3') return MOONSHOT_CHAT_HOSTS.has(host);
+  if (isDoubaoVisionModel(realModel)) return VOLCENGINE_ARK_CHAT_HOST_RE.test(host);
+  return false;
 }
 
 /**
@@ -1343,13 +1368,15 @@ export function decideCodexRoute(opts: {
   return { upstreamOverride: CODEX_OAUTH_UPSTREAM };
 }
 
-export function createModelRoutingTransform(): RoutingTransform {
+export function createModelRoutingTransform(
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): RoutingTransform {
   return (body, ctx) => {
     // body 可能为 undefined —— 无 body 的 GET(典型: codex models-manager 的 `GET /models` 轮询,
     // 引擎现在也会对它跑路由)。不再因 body 非对象就短路;会话解析只依赖 headers,model 字段可选。
     const model = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
     const gatewayKey = _readGatewayKey();
-    const authInjection = getCodexProxyAuthInjection();
+    const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
     const sessionId = threadId ? threadToSession.get(threadId) : undefined;
 
@@ -1451,6 +1478,46 @@ function createTransformRequestChain(): RequestTransform[] {
   return transforms;
 }
 
+function createCodexProxyHandle(
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): Promise<ProxyHandle> {
+  return createAnthropicCompatProxy({
+    // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
+    upstream: () => buildCodexGatewayBaseUrl(),
+    transformRequest: createTransformRequestChain(),
+    // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
+    // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
+    routingTransform: createModelRoutingTransform(frozenAuthInjection),
+    responseObserver: composeResponseObservers(
+      createCodexResponseObserver(),
+      createProviderUpstreamErrorObserver({
+        agent: 'codex',
+        resolveUserProviderId: (requestHeaders) => {
+          const threadId = selectedThreadIdFromHeaders(requestHeaders);
+          const sessionId = threadId ? threadToSession.get(threadId) : undefined;
+          return sessionId ? getUserProviderIdForSession(sessionId) : null;
+        },
+        resolveUserProviderName: (providerId) =>
+          getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,
+      }),
+      createXaiProxyAuthInvalidationObserver(),
+    ),
+    maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
+    debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
+    recoveryRules: [
+      createEncryptedContentRecoveryRule({
+        enabled: () => readSilentEncryptedRetrySettings().enabled,
+        onRetry: (threadId, model) => encryptedStripController.markActive(threadId, model),
+      }),
+      createImageGenerationIdRecoveryRule({
+        onRetry: (threadId, model) => imageGenerationStripController.markActive(threadId, model),
+      }),
+    ],
+    logger: log,
+    resolveOutboundProxy: resolveDesktopOutboundProxy,
+  });
+}
+
 /**
  * 启动本地 Codex prompt proxy。幂等 —— 重复调用直接返回已缓存状态。
  *
@@ -1464,51 +1531,7 @@ export async function ensureCodexProxyReady(): Promise<void> {
   const generation = _disposeGeneration;
   _startPromise = (async () => {
     try {
-      const handle = await createAnthropicCompatProxy({
-        // 默认上游 = gateway(含 /v1); 「普通模型 + oauth」由 routingTransform override 到 ChatGPT。
-        // 函数形态:model-access 下发切换网关 endpoint 后,常驻 proxy 每请求现取(按值 memoize)。
-        upstream: () => buildCodexGatewayBaseUrl(),
-        transformRequest: createTransformRequestChain(),
-        routingTransform: createModelRoutingTransform(),
-        // 组合三个只读观察器:service-tier 抽取 + 自定义供应商上游错误分类广播 + xAI 凭证
-        // 失效收口(后两者分别仅在 status≥400 路由到 user 供应商、401/403 且上游为 api.x.ai
-        // 时才 tee,成功路径零开销)。
-        responseObserver: composeResponseObservers(
-          createCodexResponseObserver(),
-          createProviderUpstreamErrorObserver({
-            agent: 'codex',
-            resolveUserProviderId: (requestHeaders) => {
-              const threadId = selectedThreadIdFromHeaders(requestHeaders);
-              const sessionId = threadId ? threadToSession.get(threadId) : undefined;
-              return sessionId ? getUserProviderIdForSession(sessionId) : null;
-            },
-            resolveUserProviderName: (providerId) =>
-              getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,
-          }),
-          // xai 是 builtin 来源,上面那个 observer 的 user-only 语义覆盖不到它;订阅 OAuth
-          // 被上游作废后必须有人收口,否则 codex agent 下会连环 403 而 UI 仍显示已连接。
-          createXaiProxyAuthInvalidationObserver(),
-        ),
-        maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
-        // 请求体 dump 默认关(dev trace 级别 + agent 高并发会刷爆 main event loop
-        // 与日志盘);诊断请求体时设 XDT_PROXY_DUMP_REQUEST_BODY=1 显式开启。
-        debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
-        // Codex 走 OpenAI Responses API, 从不打 Anthropic Messages API, 不会出现空 thinking 块 400
-        // → 挂 Responses 专属恢复规则, 不挂 thinking 规则。
-        recoveryRules: [
-          createEncryptedContentRecoveryRule({
-            enabled: () => readSilentEncryptedRetrySettings().enabled,
-            onRetry: (threadId, model) => encryptedStripController.markActive(threadId, model),
-          }),
-          createImageGenerationIdRecoveryRule({
-            onRetry: (threadId, model) => imageGenerationStripController.markActive(threadId, model),
-          }),
-        ],
-        logger: log,
-        // 上游连接跟随代理环境变量 / 系统代理(非 TUN 的代理软件场景);无代理配置时直连,
-        // 行为与之前字节级一致。见 outbound-proxy-resolver.ts。
-        resolveOutboundProxy: resolveDesktopOutboundProxy,
-      });
+      const handle = await createCodexProxyHandle();
       if (generation !== _disposeGeneration) {
         await handle.dispose().catch((err) => {
           log.warn('codex proxy start raced with dispose; disposing fresh handle failed', {
@@ -1530,6 +1553,72 @@ export async function ensureCodexProxyReady(): Promise<void> {
     }
   })();
   return _startPromise;
+}
+
+/**
+ * 为一次独立 control-plane app-server 提供冻结鉴权形态的专用 proxy。
+ * 它不读取也不改写 session host 的全局 auth injection；同形态可安全复用同一端口。
+ */
+export async function ensureCodexControlPlaneProxyReady(
+  authInjection: CodexProxyAuthInjection,
+): Promise<void> {
+  if (_controlPlaneHandles.has(authInjection)) return;
+  const existing = _controlPlaneStartPromises.get(authInjection);
+  if (existing) return existing;
+
+  const generation = _disposeGeneration;
+  let start!: Promise<void>;
+  start = (async () => {
+    try {
+      const handle = await createCodexProxyHandle(authInjection);
+      if (generation !== _disposeGeneration) {
+        await handle.dispose().catch((err) => {
+          log.warn('codex control-plane proxy start raced with dispose', {
+            authInjection,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        });
+        return;
+      }
+      _controlPlaneHandles.set(authInjection, handle);
+      log.info('codex control-plane proxy ready', {
+        authInjection,
+        url: handle.url,
+        upstream: buildCodexGatewayBaseUrl(),
+      });
+    } catch (err) {
+      _controlPlaneHandles.delete(authInjection);
+      log.error('codex control-plane proxy failed to start', {
+        authInjection,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      if (_controlPlaneStartPromises.get(authInjection) === start) {
+        _controlPlaneStartPromises.delete(authInjection);
+      }
+    }
+  })();
+  _controlPlaneStartPromises.set(authInjection, start);
+  return start;
+}
+
+export function isCodexControlPlaneProxyHandleReady(
+  authInjection: CodexProxyAuthInjection,
+): boolean {
+  return _controlPlaneHandles.has(authInjection);
+}
+
+export function getCodexControlPlaneProxyEndpoint(
+  authInjection: CodexProxyAuthInjection,
+): string {
+  const handle = _controlPlaneHandles.get(authInjection);
+  if (handle) return handle.url;
+  const fallbackEndpoint = buildCodexGatewayBaseUrl();
+  log.warn('codex control-plane proxy not ready, falling back to direct gateway', {
+    authInjection,
+    fallbackEndpoint,
+  });
+  return fallbackEndpoint;
 }
 
 /**
@@ -1618,13 +1707,30 @@ export async function disposeCodexProxy(): Promise<void> {
     await _startPromise.catch(() => undefined);
   }
 
-  if (!_handle) return;
-
   const h = _handle;
   _handle = null;
-  try {
-    await h.dispose();
-  } catch (err) {
-    log.warn('codex proxy dispose failed', { err: err instanceof Error ? err.message : String(err) });
+
+  if (_controlPlaneStartPromises.size > 0) {
+    await Promise.allSettled(_controlPlaneStartPromises.values());
+    _controlPlaneStartPromises.clear();
   }
+  const controlPlaneHandles = Array.from(_controlPlaneHandles.values());
+  _controlPlaneHandles.clear();
+
+  if (h) {
+    try {
+      await h.dispose();
+    } catch (err) {
+      log.warn('codex proxy dispose failed', { err: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  await Promise.all(controlPlaneHandles.map(async (handle) => {
+    try {
+      await handle.dispose();
+    } catch (err) {
+      log.warn('codex control-plane proxy dispose failed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }));
 }

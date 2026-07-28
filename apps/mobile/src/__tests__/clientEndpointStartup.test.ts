@@ -41,7 +41,10 @@ const FULL_MANIFEST_OBJECT = {
 const FULL_MANIFEST = JSON.stringify(FULL_MANIFEST_OBJECT);
 
 const okFetch = (text: string) => async () => ({ ok: true as const, text });
-const failFetch = (detail: string) => async () => ({ ok: false as const, detail });
+const failFetch = (detail: string) => async () => ({
+  ok: false as const,
+  detail,
+});
 /** 关掉自动重试预算,测"单次尝试"原语义(不然失败路径会白等真实 backoff)。 */
 const NO_AUTO_RETRY = { autoRetryDelaysMs: [] as readonly number[] };
 
@@ -56,7 +59,9 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
 
     expect(outcome).toEqual({ ok: true, source: 'cdn' });
     expect(env.AUTH_API_BASE_URL).toBe('https://auth-next.example.com');
-    expect(env.OAUTH_BROKER_API_BASE_URL).toBe('https://oauth-next.example.com');
+    expect(env.OAUTH_BROKER_API_BASE_URL).toBe(
+      'https://oauth-next.example.com',
+    );
     expect(env.DEVICE_LINK_API_BASE_URL).toBe('https://relay-next.example.com');
     // 语音网关地址与清单解耦(xdGatewayBaseUrl 已退役):保持构建期 env 值不动。
     expect(env.MOBILE_VOICE_LITELLM_BASE_URL).toBe(
@@ -65,6 +70,31 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
     // 非自建变体(IS_OTA_SELFHOST=false):mobileUpdateBaseUrl 不覆写,恒空串。
     expect(env.OTA_SERVER_BASE_URL).toBe('');
     expect(env.REVIEW_MODE).toBe(false);
+  });
+
+  it('清单自报区域与构建区域不一致时阻断，缺少 region 的老清单仍兼容', async () => {
+    const { env, startup } = await freshModules();
+    const mismatchedRegion =
+      env.BUILD_AUTH_REGION === 'cn' ? 'global' : 'cn';
+    await expect(
+      startup.runStartupEndpointResolve({
+        fetchManifest: okFetch(
+          JSON.stringify({
+            ...FULL_MANIFEST_OBJECT,
+            region: mismatchedRegion,
+          }),
+        ),
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: `region-mismatch:${env.BUILD_AUTH_REGION}:${mismatchedRegion}`,
+    });
+
+    await expect(
+      startup.runStartupEndpointResolve({
+        fetchManifest: okFetch(FULL_MANIFEST),
+      }),
+    ).resolves.toEqual({ ok: true, source: 'cdn' });
   });
 
   it('清单 review 命中二进制版本号且非 TestFlight → REVIEW_MODE=true', async () => {
@@ -128,10 +158,7 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
         return JSON.stringify(manifest);
       })(),
     ],
-    [
-      '字段空串',
-      JSON.stringify({ ...FULL_MANIFEST_OBJECT, heartbeatUrl: '' }),
-    ],
+    ['字段空串', JSON.stringify({ ...FULL_MANIFEST_OBJECT, heartbeatUrl: '' })],
   ] as const)('%s → 放行并按空串回写', async (_label, text) => {
     const { startup } = await freshModules();
     const apply = vi.fn();
@@ -206,7 +233,10 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
       ...NO_AUTO_RETRY,
     });
 
-    expect(outcome).toEqual({ ok: false, reason: 'fetch-failed:timeout-10000ms' });
+    expect(outcome).toEqual({
+      ok: false,
+      reason: 'fetch-failed:timeout-10000ms',
+    });
     expect(apply).not.toHaveBeenCalled();
     expect(env.DEVICE_LINK_API_BASE_URL).toBe('https://relay.example.invalid');
   });
@@ -214,7 +244,8 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
   it('fetch 抛错视同拉取失败并阻断(reason 带 name);下一次重试成功后才回写', async () => {
     const { env, startup } = await freshModules();
     const initialAuthApiBaseUrl = env.AUTH_API_BASE_URL;
-    const fetchManifest = vi.fn<FetchManifest>()
+    const fetchManifest = vi
+      .fn<FetchManifest>()
       .mockRejectedValueOnce(new TypeError('Network request failed'))
       .mockResolvedValueOnce({ ok: true, text: FULL_MANIFEST });
 
@@ -238,11 +269,17 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
   describe('返回失败前的自动重试(首装瞬时失败自愈)', () => {
     it('拉取失败后自动重试成功:闸门不进错误屏', async () => {
       const { env, startup } = await freshModules();
-      const fetchManifest = vi.fn<FetchManifest>()
+      const fetchManifest = vi
+        .fn<FetchManifest>()
         .mockResolvedValueOnce({ ok: false, detail: 'timeout-10000ms' })
-        .mockResolvedValueOnce({ ok: false, detail: 'TypeError:Network request failed' })
+        .mockResolvedValueOnce({
+          ok: false,
+          detail: 'TypeError:Network request failed',
+        })
         .mockResolvedValueOnce({ ok: true, text: FULL_MANIFEST });
-      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+      const sleep = vi
+        .fn<(ms: number) => Promise<void>>()
+        .mockResolvedValue(undefined);
 
       const outcome = await startup.runStartupEndpointResolve({
         fetchManifest,
@@ -258,7 +295,8 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
 
     it('预算用尽才阻断,reason 是最后一次的错误码', async () => {
       const { startup } = await freshModules();
-      const fetchManifest = vi.fn<FetchManifest>()
+      const fetchManifest = vi
+        .fn<FetchManifest>()
         .mockResolvedValueOnce({ ok: false, detail: 'AbortError:Aborted' })
         .mockResolvedValue({ ok: false, detail: 'timeout-10000ms' });
 
@@ -269,14 +307,20 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
       });
 
       expect(fetchManifest).toHaveBeenCalledTimes(3); // 首发 + 2 次自动重试
-      expect(outcome).toEqual({ ok: false, reason: 'fetch-failed:timeout-10000ms' });
+      expect(outcome).toEqual({
+        ok: false,
+        reason: 'fetch-failed:timeout-10000ms',
+      });
     });
 
     it('清单非法(配置事故)不消耗重试预算', async () => {
       const { startup } = await freshModules();
-      const fetchManifest = vi.fn<FetchManifest>()
+      const fetchManifest = vi
+        .fn<FetchManifest>()
         .mockResolvedValue({ ok: true, text: 'not-json{' });
-      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+      const sleep = vi
+        .fn<(ms: number) => Promise<void>>()
+        .mockResolvedValue(undefined);
 
       const outcome = await startup.runStartupEndpointResolve({
         fetchManifest,
@@ -291,9 +335,12 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
 
     it('missing-manifest-base-url(打包配置事故)不消耗重试预算', async () => {
       const { startup } = await freshModules();
-      const fetchManifest = vi.fn<FetchManifest>()
+      const fetchManifest = vi
+        .fn<FetchManifest>()
         .mockResolvedValue({ ok: false, detail: 'missing-manifest-base-url' });
-      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+      const sleep = vi
+        .fn<(ms: number) => Promise<void>>()
+        .mockResolvedValue(undefined);
 
       const outcome = await startup.runStartupEndpointResolve({
         fetchManifest,
@@ -301,33 +348,48 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
         sleep,
       });
 
-      expect(outcome).toEqual({ ok: false, reason: 'fetch-failed:missing-manifest-base-url' });
-      expect(fetchManifest).toHaveBeenCalledTimes(1);
-      expect(sleep).not.toHaveBeenCalled();
-    });
-
-    it.each([403, 404, 301])('HTTP %d(永久性错误)不消耗重试预算', async (status) => {
-      const { startup } = await freshModules();
-      const fetchManifest = vi.fn<FetchManifest>()
-        .mockResolvedValue({ ok: false, detail: `http-${status}` });
-      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
-
-      const outcome = await startup.runStartupEndpointResolve({
-        fetchManifest,
-        autoRetryDelaysMs: [10, 20],
-        sleep,
+      expect(outcome).toEqual({
+        ok: false,
+        reason: 'fetch-failed:missing-manifest-base-url',
       });
-
-      expect(outcome).toEqual({ ok: false, reason: `fetch-failed:http-${status}` });
       expect(fetchManifest).toHaveBeenCalledTimes(1);
       expect(sleep).not.toHaveBeenCalled();
     });
+
+    it.each([403, 404, 301])(
+      'HTTP %d(永久性错误)不消耗重试预算',
+      async (status) => {
+        const { startup } = await freshModules();
+        const fetchManifest = vi
+          .fn<FetchManifest>()
+          .mockResolvedValue({ ok: false, detail: `http-${status}` });
+        const sleep = vi
+          .fn<(ms: number) => Promise<void>>()
+          .mockResolvedValue(undefined);
+
+        const outcome = await startup.runStartupEndpointResolve({
+          fetchManifest,
+          autoRetryDelaysMs: [10, 20],
+          sleep,
+        });
+
+        expect(outcome).toEqual({
+          ok: false,
+          reason: `fetch-failed:http-${status}`,
+        });
+        expect(fetchManifest).toHaveBeenCalledTimes(1);
+        expect(sleep).not.toHaveBeenCalled();
+      },
+    );
 
     it('HTTP 502(瞬时服务端错误)仍消耗重试预算', async () => {
       const { startup } = await freshModules();
-      const fetchManifest = vi.fn<FetchManifest>()
+      const fetchManifest = vi
+        .fn<FetchManifest>()
         .mockResolvedValue({ ok: false, detail: 'http-502' });
-      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+      const sleep = vi
+        .fn<(ms: number) => Promise<void>>()
+        .mockResolvedValue(undefined);
 
       const outcome = await startup.runStartupEndpointResolve({
         fetchManifest,
@@ -385,10 +447,117 @@ describe('isReviewModeActive(送审版本号匹配纯函数)', () => {
     expect(env.isReviewModeActive('1.4.0', '')).toBe(false);
     expect(env.isReviewModeActive('', '')).toBe(false);
   });
+
+  it('android 恒 false:清单 review 命中同版本号也不冻结安卓的更新检查', async () => {
+    const { env } = await freshModules();
+    // iOS 保持原语义(命中即进审核模式),android 在同样输入下豁免。
+    expect(env.isReviewModeActive('0.1.0', '0.1.0', false, 'ios')).toBe(true);
+    expect(env.isReviewModeActive('0.1.0', '0.1.0', false, 'android')).toBe(false);
+    // TestFlight 豁免与平台豁免互不干扰。
+    expect(env.isReviewModeActive('0.1.0', '0.1.0', true, 'android')).toBe(false);
+    // 平台未知(内联缺失且 Constants.platform 无平台段)时不弱化 iOS 送审合规。
+    expect(env.isReviewModeActive('0.1.0', '0.1.0', false, '')).toBe(true);
+  });
+
+  it('APP_PLATFORM 取 EXPO_OS 内联值;缺失时回落 Constants.platform 平台段', async () => {
+    process.env.EXPO_OS = 'android';
+    try {
+      const { env } = await freshModules();
+      expect(env.APP_PLATFORM).toBe('android');
+      // 平台默认参数走 APP_PLATFORM,安卓 bundle 下审核模式恒关。
+      expect(env.isReviewModeActive('0.1.0', '0.1.0')).toBe(false);
+    } finally {
+      delete process.env.EXPO_OS;
+      vi.resetModules();
+    }
+  });
+
+  it('EXPO_OS 内联缺失时回落 Constants.platform 平台段(安卓豁免不靠单一信号)', async () => {
+    // 这条兜底是「安卓被审核模式误冻结热更」的最后一道防线:babel 内联一旦失效
+    // (自定义 babel 配置等),没有它就会静默回归高代价故障,故单独断言。
+    delete process.env.EXPO_OS;
+    const platformCases = [
+      { manifest: { android: { versionCode: 12 } }, expected: 'android' },
+      { manifest: { ios: { buildNumber: '12' } }, expected: 'ios' },
+      // 无平台段(web / 结构变化)→ 空串,走平台未知语义。
+      { manifest: {}, expected: '' },
+    ];
+    for (const { manifest, expected } of platformCases) {
+      vi.doMock('expo-constants', () => ({
+        default: { expoConfig: null, platform: manifest },
+      }));
+      try {
+        vi.resetModules();
+        const env = await import('@/config/env');
+        expect(env.APP_PLATFORM).toBe(expected);
+        // 兜底判出 android 时同样恒豁免审核模式。
+        expect(env.isReviewModeActive('0.1.0', '0.1.0')).toBe(expected !== 'android');
+      } finally {
+        vi.doUnmock('expo-constants');
+        vi.resetModules();
+      }
+    }
+  });
+
+  it('APP_PLATFORM 只认 ios / android:其余内联值收敛为空串,不逸出取值域', async () => {
+    // web / 未来新平台 / 被改写成意外值时都按「拿不到平台」处理(此处
+    // Constants.platform 亦无平台段),而不是把原值透传给平台门控。
+    for (const value of ['web', 'ANDROID_TV', 'unknown']) {
+      process.env.EXPO_OS = value;
+      try {
+        const { env } = await freshModules();
+        expect(env.APP_PLATFORM).toBe('');
+      } finally {
+        delete process.env.EXPO_OS;
+        vi.resetModules();
+      }
+    }
+  });
 });
 
 describe('applyResolvedClientEndpoints', () => {
-  it('auth 单一字段无脑取:undefined 不修改,空串明确清空', async () => {
+  it('构建区域缓存跟随 token 端点局部覆写,realm reset 不退回旧清单', async () => {
+    const { env, startup } = await freshModules();
+    await expect(
+      startup.runStartupEndpointResolve({
+        fetchManifest: okFetch(
+          JSON.stringify({ ...FULL_MANIFEST_OBJECT, region: 'cn' }),
+        ),
+      }),
+    ).resolves.toEqual({ ok: true, source: 'cdn' });
+    env.applyResolvedClientEndpoints({
+      authApiBaseUrl: 'https://auth.override.example.com',
+      deviceLinkApiBaseUrl: 'https://device.override.example.com',
+      voiceApiBaseUrl: 'https://voice.override.example.com',
+    });
+    expect(
+      env.getMobileEndpointForRealm(
+        env.BUILD_AUTH_REGION,
+        'authApiBaseUrl',
+      ),
+    ).toBe(env.AUTH_API_BASE_URL);
+    expect(
+      env.getMobileEndpointForRealm(
+        env.BUILD_AUTH_REGION,
+        'deviceLinkApiBaseUrl',
+      ),
+    ).toBe(env.DEVICE_LINK_API_BASE_URL);
+    expect(
+      env.getMobileEndpointForRealm(
+        env.BUILD_AUTH_REGION,
+        'voiceApiBaseUrl',
+      ),
+    ).toBe(env.VOICE_API_BASE_URL);
+    env.activateMobileSessionRealm(env.BUILD_AUTH_REGION);
+    env.resetMobileSessionRealm();
+    expect(env.AUTH_API_BASE_URL).toBe('https://auth.override.example.com');
+    expect(env.DEVICE_LINK_API_BASE_URL).toBe(
+      'https://device.override.example.com',
+    );
+    expect(env.VOICE_API_BASE_URL).toBe('https://voice.override.example.com');
+  });
+
+  it('构建区域 auth 字段:undefined 不修改,空串明确清空', async () => {
     const { env } = await freshModules();
     env.applyResolvedClientEndpoints({
       authApiBaseUrl: 'https://auth-new.example.com',
@@ -398,5 +567,148 @@ describe('applyResolvedClientEndpoints', () => {
     expect(env.AUTH_API_BASE_URL).toBe('https://auth-new.example.com');
     env.applyResolvedClientEndpoints({ authApiBaseUrl: '' });
     expect(env.AUTH_API_BASE_URL).toBe('');
+  });
+
+  it('组织会话切换 token 消费端点,退出后恢复构建区域且不改变更新端点', async () => {
+    const { env, startup } = await freshModules();
+    await expect(
+      startup.runStartupEndpointResolve({
+        fetchManifest: okFetch(FULL_MANIFEST),
+      }),
+    ).resolves.toEqual({ ok: true, source: 'cdn' });
+
+    const buildUpdateBaseUrl = env.OTA_SERVER_BASE_URL;
+    const peerRegion = env.BUILD_AUTH_REGION === 'cn' ? 'global' : 'cn';
+    const peerManifest = {
+      ...FULL_MANIFEST_OBJECT,
+      authApiBaseUrl: `https://auth.${peerRegion}.example.com`,
+      oauthBrokerApiBaseUrl: `https://oauth.${peerRegion}.example.com`,
+      deviceLinkApiBaseUrl: `https://device.${peerRegion}.example.com`,
+      voiceApiBaseUrl: `https://voice.${peerRegion}.example.com`,
+      mobileUpdateBaseUrl: `https://update.${peerRegion}.example.com`,
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      text: async () => JSON.stringify(peerManifest),
+    } as Response);
+    try {
+      await env.loadMobileEndpointsForRealm(peerRegion);
+      env.activateMobileSessionRealm(peerRegion);
+
+      expect(env.AUTH_API_BASE_URL).toBe(peerManifest.authApiBaseUrl);
+      expect(env.OAUTH_BROKER_API_BASE_URL).toBe(
+        peerManifest.oauthBrokerApiBaseUrl,
+      );
+      expect(env.DEVICE_LINK_API_BASE_URL).toBe(
+        peerManifest.deviceLinkApiBaseUrl,
+      );
+      expect(env.VOICE_API_BASE_URL).toBe(peerManifest.voiceApiBaseUrl);
+      expect(env.OTA_SERVER_BASE_URL).toBe(buildUpdateBaseUrl);
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `${env.ENDPOINT_MANIFEST_PEER_BASE_URL}/endpoint.json?t=`,
+        ),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+
+      env.resetMobileSessionRealm();
+      expect(env.AUTH_API_BASE_URL).toBe(FULL_MANIFEST_OBJECT.authApiBaseUrl);
+      expect(env.OAUTH_BROKER_API_BASE_URL).toBe(
+        FULL_MANIFEST_OBJECT.oauthBrokerApiBaseUrl,
+      );
+      expect(env.DEVICE_LINK_API_BASE_URL).toBe(
+        FULL_MANIFEST_OBJECT.deviceLinkApiBaseUrl,
+      );
+      expect(env.VOICE_API_BASE_URL).toBe(FULL_MANIFEST_OBJECT.voiceApiBaseUrl);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('不依赖远端跨区字段，按构建期可信地址加载旧格式对端清单', async () => {
+    const { env, startup } = await freshModules();
+    const buildRegion = env.BUILD_AUTH_REGION;
+    const peerRegion = buildRegion === 'cn' ? 'global' : 'cn';
+    await expect(
+      startup.runStartupEndpointResolve({
+        fetchManifest: okFetch(FULL_MANIFEST),
+      }),
+    ).resolves.toEqual({ ok: true, source: 'cdn' });
+
+    const realmConfig = env.getMobileEndpointRealmConfig();
+    expect(realmConfig.crossRealmOrgLoginEnabled).toBe(true);
+    expect(realmConfig.realmManifestBaseUrls[buildRegion]).toBe(
+      env.ENDPOINT_MANIFEST_BASE_URL,
+    );
+    expect(realmConfig.realmManifestBaseUrls[peerRegion]).toBe(
+      env.ENDPOINT_MANIFEST_PEER_BASE_URL,
+    );
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          ...FULL_MANIFEST_OBJECT,
+          authApiBaseUrl: `https://auth.${peerRegion}.example.com`,
+        }),
+    } as Response);
+    try {
+      await expect(
+        env.loadMobileEndpointsForRealm(peerRegion),
+      ).resolves.toMatchObject({
+        authApiBaseUrl: `https://auth.${peerRegion}.example.com`,
+      });
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `${env.ENDPOINT_MANIFEST_PEER_BASE_URL}/endpoint.json?t=`,
+        ),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('对端清单自报 region 时必须与目标区域一致，拒绝后不污染缓存', async () => {
+    const { env, startup } = await freshModules();
+    const buildRegion = env.BUILD_AUTH_REGION;
+    const peerRegion = buildRegion === 'cn' ? 'global' : 'cn';
+    await expect(
+      startup.runStartupEndpointResolve({
+        fetchManifest: okFetch(FULL_MANIFEST),
+      }),
+    ).resolves.toEqual({ ok: true, source: 'cdn' });
+
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            ...FULL_MANIFEST_OBJECT,
+            region: buildRegion,
+          }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            ...FULL_MANIFEST_OBJECT,
+            authApiBaseUrl: `https://auth.${peerRegion}.example.com`,
+          }),
+      } as Response);
+    try {
+      await expect(
+        env.loadMobileEndpointsForRealm(peerRegion),
+      ).rejects.toThrow(`region-mismatch:${peerRegion}:${buildRegion}`);
+      await expect(
+        env.loadMobileEndpointsForRealm(peerRegion),
+      ).resolves.toMatchObject({
+        authApiBaseUrl: `https://auth.${peerRegion}.example.com`,
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });

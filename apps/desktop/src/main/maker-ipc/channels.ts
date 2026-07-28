@@ -377,8 +377,19 @@ export const MAKER_INVOKE = {
    * 实时连接状态（XD=gateway key / Anthropic=Claude.ai OAuth / OpenAI=Codex OAuth）。
    * 供应商的「连接 / 断开」复用各 agent 已有的鉴权通道（CLAUDE_OAUTH_* / AUTH_* / 登录托管），
    * 不另立重复通道。
-   */
+  */
   PROVIDER_LIST: 'maker:provider:list',
+  /**
+   * 内置四家模型清单手动刷新。入参仅允许 xd / anthropic / openai / xai；
+   * Main 按各家既有真源分派，不接收 URL、凭证或任意执行参数。
+   * 属被控端全局账号/目录操作，不进 device-link allowlist。
+   */
+  PROVIDER_MODELS_REFRESH: 'maker:provider:models-refresh',
+  /**
+   * Renderer 上报自动刷新时机；只接受 providers-open / model-selector-open，
+   * Main 统一处理连接状态、冷却与 in-flight 去重。前台恢复不经 Renderer IPC。
+   */
+  PROVIDER_MODELS_AUTO_REFRESH: 'maker:provider:models-auto-refresh',
   /**
    * 自定义模型供应商 CRUD（配置入 localDb；update 的 runtime 密钥与配置原子排队）。
    * create/update 入参 = config + runtimeKeys；delete 入参 = providerId。

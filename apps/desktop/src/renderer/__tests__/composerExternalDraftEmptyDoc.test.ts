@@ -38,4 +38,20 @@ describe('external draft notification empty-document handling', () => {
     expect(block).toContain('tiptapDocHasContent(');
     expect(block).not.toMatch(/const normalizedDraftText = draft\.text\s*\n?\s*\?/);
   });
+
+  // 同一口径也必须覆盖 storageKey 对齐分支:它依赖 voiceInput.isBusy,录音开始与
+  // 结束各重跑一次。漏判空时新建对话页(草稿键固定、常留一份空正文)会在语音结束
+  // 时重建 doc,把插入点推到 block 边界 —— 上屏文字前多一个空行。
+  it('also collapses an empty draft document on the storageKey-aligned hydration path', () => {
+    const start = chatInput.indexOf('// First-mount hydration path');
+    expect(start).toBeGreaterThan(-1);
+    const end = chatInput.indexOf('editorStorageKeyRef.current = storageKey;', start);
+    expect(end).toBeGreaterThan(start);
+    const block = chatInput.slice(start, end);
+
+    expect(block).toContain('tiptapDocHasContent(draft.text)');
+    expect(block).toContain('composerDocIsEmpty(editor.state.doc)');
+    // 不能再直接拿 draft.text 当"有草稿"的判据。
+    expect(block).not.toMatch(/if \(draft\?\.text && composerDocIsEmpty/);
+  });
 });

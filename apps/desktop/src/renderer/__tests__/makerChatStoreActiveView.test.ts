@@ -290,7 +290,12 @@ describe('makerChatStore active view tracking', () => {
     ]);
   });
 
-  it('preserves the search jump cursor when initial history resolves later', async () => {
+  // 首拉未回来就深跳 → 只能用 around 孤岛下沿播种游标(那时窗口里只有孤岛)。首拉的最新页
+  // 落地后,游标必须**交还给最新页的下沿**:缺失区间比孤岛更新,继续保留更老的孤岛游标会让
+  // 普通翻页与孤岛感知补齐都只请求"比孤岛更老"的行,那段洞永远拉不回来(#676 review codex P1)。
+  // 本用例原来断言的是"保留孤岛游标",那是修复前的行为;新断言同时守住播种(跳转当时)与
+  // 交还(最新页落地后)两个阶段。
+  it('hands the cursor back to the latest page when initial history resolves after a jump', async () => {
     const sessionId = sid('search-jump-initial-race');
     vi.stubGlobal('window', {
       electronAPI: {
@@ -325,7 +330,9 @@ describe('makerChatStore active view tracking', () => {
 
     makerChatStore.ensureInitialMessages(sessionId);
     await makerChatStore.loadAroundMessage(sessionId, 'hit', { radius: 60 });
+    // 阶段一:窗口里只有孤岛 → 必须播种,游标为 null 会让下一次翻页从最新重开、把跳转位置顶掉。
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-hit-context');
+    expect(makerChatStore.getSnapshot(sessionId).historyWindowHasIsland).toBe(true);
 
     resolveInitialList([
       dbMessage(sessionId, 'latest-page-oldest', 'latest page oldest', '2026-05-19T00:10:00.000Z'),
@@ -342,7 +349,10 @@ describe('makerChatStore active view tracking', () => {
       'client-latest-page-oldest',
       'client-latest-page-newest',
     ]);
-    expect(snapshot.oldestMessageId).toBe('older-hit-context');
+    // 阶段二:最新页落地 → 游标交还给它的下沿,往上翻才会穿过孤岛与尾段之间的缺失区间。
+    expect(snapshot.oldestMessageId).toBe('latest-page-oldest');
+    // 洞还在,孤岛标记不清 —— 下一次跳转仍会尝试补齐。
+    expect(snapshot.historyWindowHasIsland).toBe(true);
   });
 
   it('keeps loadOlder history chronological after thinking timestamps are backdated', async () => {

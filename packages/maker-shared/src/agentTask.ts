@@ -22,6 +22,111 @@ export interface AgentTaskUsage {
   durationMs?: number;
 }
 
+/**
+ * `workflow_progress` 数组条目 —— Claude Code CLI 在 `task_progress` 系统事件上
+ * 原生携带的 workflow 进度树节点(`workflow_phase` 分组行 / `workflow_agent` 逐 agent
+ * 行)。字段无公开契约(SDK .d.ts 未声明;实测 CLI 2.1.219 稳定发送,且对纯心跳帧
+ * 按 CLI 侧节流**省略整个数组**表示"沿用上一帧"),因此除 type/index 外一律
+ * optional、防御式收窄;`state` 原样透传(事件流实测词表:start / progress / done /
+ * error;wf 落盘文件另有 queued / running / failed / stopped / killed,消费端按
+ * 两套词表兼容)。
+ */
+export interface WorkflowProgressEntry {
+  type: 'workflow_phase' | 'workflow_agent';
+  index: number;
+  /** phase 标题(workflow_phase 条目)。 */
+  title?: string;
+  /** 脚本里 agent() 的 label(workflow_agent 条目)。 */
+  label?: string;
+  phaseIndex?: number;
+  phaseTitle?: string;
+  agentId?: string;
+  model?: string;
+  state?: string;
+  queuedAt?: number;
+  startedAt?: number;
+  lastProgressAt?: number;
+  lastToolName?: string;
+  lastToolSummary?: string;
+  resultPreview?: string;
+  promptPreview?: string;
+  error?: string;
+  attempt?: number;
+  cached?: boolean;
+  agentType?: string;
+}
+
+// 防御上限:该字段无契约且随 maker:event 跨进程/跨设备转发,坏数据与超长文本
+// 必须在进入任务模型前收口(截断上限同时约束 IPC/隧道 payload 体量)。
+const WORKFLOW_PROGRESS_MAX_ENTRIES = 2000;
+const WORKFLOW_PROGRESS_PREVIEW_MAX = 300; // resultPreview / promptPreview / error
+const WORKFLOW_PROGRESS_SUMMARY_MAX = 160; // lastToolSummary
+const WORKFLOW_PROGRESS_TEXT_MAX = 200; // label / title / phaseTitle 等短文本
+
+const WORKFLOW_PROGRESS_STRING_FIELDS: ReadonlyArray<readonly [string, number]> = [
+  ['title', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['label', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['phaseTitle', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['agentId', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['model', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['state', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['lastToolName', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['agentType', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['lastToolSummary', WORKFLOW_PROGRESS_SUMMARY_MAX],
+  ['resultPreview', WORKFLOW_PROGRESS_PREVIEW_MAX],
+  ['promptPreview', WORKFLOW_PROGRESS_PREVIEW_MAX],
+  ['error', WORKFLOW_PROGRESS_PREVIEW_MAX],
+];
+
+const WORKFLOW_PROGRESS_NUMBER_FIELDS: ReadonlyArray<string> = [
+  'phaseIndex',
+  'queuedAt',
+  'startedAt',
+  'lastProgressAt',
+  'attempt',
+];
+
+function clampedString(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * 防御式收窄一段来路不明的 workflow_progress 数组(SDK 事件与远程 maker:event
+ * 转发共用此收口)。坏条目跳过、超长截断、超量丢弃;没有任何合法条目时返回
+ * undefined —— 与 CLI 节流帧的"缺失 = 沿用旧树"语义对齐,交给 merge 保留上一帧。
+ */
+export function normalizeWorkflowProgressEntries(
+  raw: unknown,
+): WorkflowProgressEntry[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: WorkflowProgressEntry[] = [];
+  for (const item of raw) {
+    if (out.length >= WORKFLOW_PROGRESS_MAX_ENTRIES) break;
+    if (!item || typeof item !== 'object') continue;
+    const e = item as Record<string, unknown>;
+    if (e.type !== 'workflow_phase' && e.type !== 'workflow_agent') continue;
+    const index = finiteNumber(e.index);
+    if (index === undefined) continue;
+    const entry: Record<string, unknown> = { type: e.type, index };
+    for (const [key, max] of WORKFLOW_PROGRESS_STRING_FIELDS) {
+      const value = clampedString(e[key], max);
+      if (value !== undefined) entry[key] = value;
+    }
+    for (const key of WORKFLOW_PROGRESS_NUMBER_FIELDS) {
+      const value = finiteNumber(e[key]);
+      if (value !== undefined) entry[key] = value;
+    }
+    if (typeof e.cached === 'boolean') entry.cached = e.cached;
+    out.push(entry as unknown as WorkflowProgressEntry);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 export interface AgentTaskUpdate {
   provider: 'claude-code' | 'codex';
   taskId: string;
@@ -38,6 +143,11 @@ export interface AgentTaskUpdate {
   model?: string;
   reasoningEffort?: string;
   receiverThreadIds?: string[];
+  /**
+   * workflow 逐 agent 进度树(taskType=local_workflow 时由 task_progress 事件携带)。
+   * CLI 对纯心跳帧节流省略本字段,merge 必须沿用上一帧,绝不能清空。
+   */
+  workflowProgress?: WorkflowProgressEntry[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -81,6 +191,7 @@ export function normalizeAgentTaskUpdate(
         ...(typeof usageRaw.durationMs === 'number' ? { durationMs: usageRaw.durationMs } : {}),
       }
     : undefined;
+  const workflowProgress = normalizeWorkflowProgressEntries(raw.workflowProgress);
   return {
     provider,
     taskId: taskId ?? parentToolUseId!,
@@ -99,6 +210,7 @@ export function normalizeAgentTaskUpdate(
     ...(Array.isArray(raw.receiverThreadIds)
       ? { receiverThreadIds: raw.receiverThreadIds.filter((id): id is string => typeof id === 'string') }
       : {}),
+    ...(workflowProgress ? { workflowProgress } : {}),
     ...(typeof raw.createdAt === 'string' && raw.createdAt ? { createdAt: raw.createdAt } : {}),
     ...(typeof raw.updatedAt === 'string' && raw.updatedAt ? { updatedAt: raw.updatedAt } : {}),
   };
@@ -116,6 +228,8 @@ export function mergeAgentTaskUpdate(prev: AgentTaskUpdate | undefined, next: Ag
     summary: next.summary ?? prev.summary,
     outputFile: next.outputFile ?? prev.outputFile,
     lastToolName: next.lastToolName ?? prev.lastToolName,
+    // CLI 节流帧不带 workflowProgress(undefined = 沿用旧树),必须保留上一帧。
+    workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,
     updatedAt: next.updatedAt ?? prev.updatedAt,
   };

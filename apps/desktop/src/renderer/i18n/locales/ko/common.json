@@ -267,6 +267,11 @@
           "keyHint": "개인 키 파일을 직접 읽습니다. 암호를 저장하지 않으므로 암호화된 키는 지원되지 않습니다 — ssh-agent 를 사용할 수 없을 때만 사용하세요."
         },
         "identityFile": "개인 키 파일 경로",
+        "agentProxy": "Agent 트래픽을 로컬 프록시로 우회",
+        "agentProxyTip": "원격에 127.0.0.1 포트를 열고 SSH 터널로 이 컴퓨터의 프록시로 중계합니다. 원격 codex / Claude Code 트래픽이 그 경로로 나갑니다",
+        "agentProxyAddr": "로컬 프록시 주소",
+        "agentProxyHint": "원격 127.0.0.1에 포트를 열고 SSH 터널로 로컬 프록시(예: Clash 7890)로 중계합니다. {{appName}}은(는) 프록시를 제공하지 않고 터널만 만듭니다. 원격 Agent의 HTTPS_PROXY가 터널 포트를 가리키고, 도메인은 프록시에서 해석됩니다. 전환 후 원격 codex daemon이 한 번 재시작됩니다.",
+        "agentProxyAddrInvalid": "host:port 형식이어야 합니다(예: 127.0.0.1:7890)",
         "cancel": "취소",
         "submit": "머신 추가"
       },
@@ -282,6 +287,11 @@
         "statusInstalled": "설치됨",
         "statusNotInstalled": "설치되지 않음",
         "claudeCodeName": "Claude Code",
+        "agentProxyTitle": "Agent 프록시 터널",
+        "agentProxyActive": "원격 127.0.0.1:{{port}} → 로컬 {{target}} · 설정됨",
+        "agentProxyPending": "터널 설정 중 → 로컬 {{target}}",
+        "agentProxyWaiting": "호스트 미연결 — 재연결 후 자동 설정 → 로컬 {{target}}",
+        "agentProxyError": "터널 설정 실패: {{message}}",
         "button": {
           "install": "설치",
           "reinstall": "재설치",
@@ -492,6 +502,14 @@
       "soundPreviewAria": "{{event}} 사운드 미리 듣기",
       "skinAnimationAria": "{{skin}} 미리보기 애니메이션 전환",
       "skins": {
+        "cindy": {
+          "name": "Cindy",
+          "description": "Cindy 본인. 실행 중인 작업을 지켜봅니다."
+        },
+        "blackcat": {
+          "name": "검은 고양이",
+          "description": "차분한 검은 고양이. 어두운 노치 속에서도 노란 눈이 또렷합니다."
+        },
         "pululu": {
           "name": "Pululu",
           "description": "TapFamily의 차분한 수호 담당. 동그란 머리와 진심 어린 태도로 어수선한 작업도 지켜줍니다."
@@ -519,6 +537,10 @@
         "muffin": {
           "name": "Muffin",
           "description": "부드러운 블루 그레이 분위기의 동료. 실행 중인 작업을 더 가볍고 친근하게 보여줍니다."
+        },
+        "erika": {
+          "name": "Erika",
+          "description": "초승달 머리 장식을 한 Erika. 따뜻한 갈색 눈으로 긴 작업을 조용히 함께합니다."
         }
       },
       "soundEvents": {
@@ -1342,9 +1364,12 @@
         "capabilityNote": "{{agent}}에서는 사용 불가",
         "divergedChip": "{{agent}}에서 숨김",
         "refreshAria": "모델 목록 새로고침(추가만)",
+        "refreshBuiltinAria": "모델 목록 새로고침",
+        "refreshingAria": "모델 목록 새로고침 중…",
+        "refreshDone": "모델 목록을 새로고침했습니다",
         "refreshAdded": "새 모델 {{count}}개를 발견했습니다",
         "refreshNoNew": "모델 목록이 최신 상태입니다. 새 항목이 없습니다",
-        "refreshFailed": "모델 목록 새로고침에 실패했습니다. 잠시 후 다시 시도해 주세요"
+        "refreshFailed": "모델 목록을 새로고침하지 못했습니다. 잠시 후 다시 시도해 주세요"
       },
       "genericOAuth": {
         "subtitle": "구독 인증 로그인 (OAuth)",
@@ -3024,6 +3049,13 @@
     "ssoOrgPlaceholder": "회사 ID, slug 또는 도메인",
     "ssoOrgHint": "기업 로그인 식별자를 모르시나요? 관리자에게 문의하세요",
     "ssoOrgDetected": "\"{{org}}\"의 통합 로그인 방식을 선택하세요",
+    "realmConsent": {
+      "title": "기업 지역에 연결",
+      "bodyCn": "이 기업은 중국 본토 지역에 있습니다.\n계속하면 Cindy가 해당 지역에 연결됩니다.",
+      "bodyGlobal": "이 기업은 글로벌 지역에 있습니다.\n계속하면 Cindy가 해당 지역에 연결됩니다.",
+      "agree": "로그인 계속",
+      "disagree": "취소"
+    },
     "ssoVerificationTitle": "기업 신원 확인",
     "ssoVerificationSubtitle": "최초 로그인 시 ID 공급자가 반환한 연락처 {{target}} 확인이 필요합니다",
     "enterCode": "인증 코드 입력",
@@ -3072,6 +3104,8 @@
       "RATE_LIMITED": "시도가 너무 많습니다. 잠시 후 다시 시도하세요.",
       "SSO_LOGIN_REQUIRED": "이 조직은 SSO 로그인이 필요합니다.",
       "ORG_SSO_NOT_FOUND": "해당 기업을 찾을 수 없거나 SSO 로그인이 활성화되어 있지 않습니다",
+      "ORG_REALM_AMBIGUOUS": "이 기업 식별자가 두 지역에 모두 존재합니다. 관리자에게 문의하세요.",
+      "ORG_REALM_UNAVAILABLE": "현재 기업 지역을 확인할 수 없습니다. 네트워크를 확인한 후 다시 시도하세요.",
       "SSO_EMAIL_REQUIRED": "기업 신원에서 유효한 이메일을 받지 못했습니다. 관리자에게 IdP 설정을 확인해 달라고 요청하세요.",
       "INVALID_SSO_VERIFICATION_TICKET": "기업 신원 확인이 만료되었습니다. SSO 로그인을 다시 시작하세요.",
       "SOCIAL_TOKEN_INVALID": "제공자 인증이 만료되었습니다.",
@@ -3160,6 +3194,8 @@
       "balanceAvailable": "잔액 사용 가능",
       "balanceDepleted": "잔액 소진",
       "balanceUnlimited": "잔액 무제한",
+      "resetCreditsAvailableLine": "사용 가능한 재설정: {{count}}회",
+      "resetCreditEarliestExpiryLine": "가장 빠른 만료: {{at}}",
       "windowLine": "{{label}} 남음 {{remaining}} (사용 {{used}})",
       "windowSegment": "{{label}} {{remaining}} 남음",
       "resetAt": "{{at}} 재설정",
@@ -3309,6 +3345,7 @@
         "browser": "브라우저",
         "terminal": "터미널",
         "review": "리뷰",
+        "backgroundTasks": "백그라운드 작업",
         "collaboration": "협업",
         "unknown": "알 수 없는 탭",
         "ghostPanel": "플러그인 패널"
@@ -3332,6 +3369,8 @@
         "fileSub": "Files",
         "openReview": "리뷰 열기",
         "reviewSub": "Review",
+        "openBackgroundTasks": "백그라운드 작업 열기",
+        "backgroundTasksSub": "Background tasks",
         "openBrowser": "브라우저 열기",
         "browserSub": "Browser",
         "openTerminal": "터미널 열기",
@@ -3693,6 +3732,16 @@
       "touchCountAria_other": "{{count}}회 편집됨",
       "expandAllAria": "모든 파일 펼치기",
       "collapseAllAria": "모든 파일 접기"
+    },
+    "backgroundTasks": {
+      "running": "실행 중",
+      "completed": "완료",
+      "empty": "이 세션에는 아직 백그라운드 작업이 없습니다",
+      "stop": "중지",
+      "back": "뒤로",
+      "progressSummary": "{{done}}/{{total}} Agent",
+      "tokens": "{{value}} tokens",
+      "noProgress": "진행 상황 정보가 아직 없습니다"
     }
   },
   "update": {
@@ -4003,7 +4052,14 @@
       "trigger": {
         "placeholder": "모델 선택",
         "aria": "모델 선택. 현재: {{model}}",
-        "ariaWithEffort": "모델 선택. 현재: {{model}}, 추론 강도: {{effort}}"
+        "ariaWithEffort": "모델 선택. 현재: {{model}}, 추론 강도: {{effort}}",
+        "pendingAria": "모델 선택. 다음 메시지: {{agent}} · {{model}}",
+        "pendingAriaWithEffort": "모델 선택. 다음 메시지: {{agent}} · {{model}}, 추론 강도: {{effort}}",
+        "agent": {
+          "claudeCode": "Claude Code",
+          "codex": "Codex",
+          "pending": "다음: {{agent}}"
+        }
       },
       "category": {
         "anthropic": "Anthropic",
@@ -4287,6 +4343,12 @@
       "editTitle": "붙여넣은 텍스트 편집",
       "cancelEdit": "편집 취소",
       "saveEdit": "텍스트 저장"
+    },
+    "permissionPrompt": {
+      "alwaysAllowScoped": "이 세션에서 {{scope}} 항상 허용",
+      "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
+      "alwaysAllowSessionHint": "이번 요청 한 번이 아니라 이 세션 전체에 적용됩니다.",
+      "ruleSeparator": ", "
     }
   },
   "onboarding": {
@@ -4411,6 +4473,9 @@
         "stopped": "중지됨"
       },
       "stop": "이 작업 중지",
+      "openInPanel": "백그라운드 작업 패널에서 열기",
+      "workflowProgressLine": "{{phase}} · {{done}}/{{total}} Agent",
+      "workflowProgressCount": "{{done}}/{{total}} Agent",
       "tokens": "{{count}} tokens",
       "toolUses_one": "도구 호출 {{count}}회",
       "toolUses_other": "도구 호출 {{count}}회",
@@ -4957,13 +5022,19 @@
     "workflowTree": {
       "agentsCount": "에이전트 {{count}}개",
       "attempt": "{{count}}번째 시도",
+      "endedEarly": "완료 전에 종료됨",
       "state": {
         "queued": "대기 중",
+        "pending": "대기 중",
+        "start": "시작 중",
         "running": "실행 중",
+        "progress": "실행 중",
         "done": "완료",
         "completed": "완료",
         "failed": "실패",
-        "stopped": "중지됨"
+        "error": "실패",
+        "stopped": "중지됨",
+        "killed": "강제 종료됨"
       }
     },
     "credentialSwitchWait": {
@@ -6367,13 +6438,20 @@
       "typeFeature": "기능 제안",
       "titleLabel": "제목",
       "bodyLabel": "본문(Markdown)",
-      "identityGithubUser": "제출 계정: GitHub 사용자 @{{login}}(본인)",
-      "identityPlatform": "제출 계정: Cindy 플랫폼 대리 제출(GitHub App {{login}})",
+      "submissionMethodLabel": "게시 방식",
+      "identityGithubUser": "GitHub 계정 @{{login}}에서 직접 게시",
+      "identityGithubUserHint": "GitHub의 Issue 작성자가 되며 직접 수정하거나 닫을 수 있습니다",
+      "identityPlatform": "Cindy에서 대신 게시(GitHub App {{login}})",
+      "identityPlatformHint": "GitHub의 Issue 작성자가 아니므로 직접 수정하거나 닫을 수 없습니다",
+      "publicNameLabel": "공개 서명",
+      "publicNameHint": "이 서명은 Issue 본문에 공개적으로 표시됩니다",
+      "anonymous": "익명",
+      "useAnonymous": "익명 서명 사용",
       "envLine": "제출 시 자동으로 첨부됩니다: 클라이언트 {{appVersion}} · {{platform}} {{arch}} · 표시 언어 {{uiLanguage}}",
       "regionLine": "지역: {{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
-      "submit": "제출",
+      "submit": "피드백 제출",
       "cancel": "취소"
     },
     "redirect": {
@@ -7239,11 +7317,6 @@
     },
     "hub": {
       "learnButton": "이 스킬 학습하기"
-    }
-  },
-  "workflows": {
-    "toast": {
-      "none": "이 세션에서 실행 중인 워크플로우가 없습니다"
     }
   },
   "planMode": {
