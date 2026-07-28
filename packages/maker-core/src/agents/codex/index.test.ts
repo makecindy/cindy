@@ -7114,7 +7114,7 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
-  it('activates a buffered turnStarted when the turn/start response returns the same id (codex R9 P2)', async () => {
+  it('activates and records a buffered turnStarted when the turn/start response accepts it', async () => {
     // 同款 pending 窗口, 但到达的 started 就是在飞 RPC 自己的 (合法
     // started-before-resp 与孤儿守卫共存): 缓冲期间不激活; 响应 id 一致 →
     // 正常激活, 不发 interrupt。
@@ -7127,6 +7127,20 @@ describe('CodexAgent turn lifecycle', () => {
         attempt += 1;
         if (attempt === 1) return firstStart.promise;
         return secondStart.promise;
+      }
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadResume) return {};
+      if (method === Method.ThreadTurnsList) {
+        return {
+          data: [{ id: 'early-turn', status: 'completed' }],
+          nextCursor: null,
+          backwardsCursor: null,
+        };
       }
       return undefined;
     });
@@ -7164,6 +7178,22 @@ describe('CodexAgent turn lifecycle', () => {
     expect(
       host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt),
     ).toBe(false);
+
+    // 该合法 started 虽曾被缓冲,仍必须记为 observed:服务端若已完成,
+    // no-active Stop 应穿过 listener 屏障查询真实终态并解除本地 running。
+    await expect(handle.abort()).resolves.toBeUndefined();
+    expect(host.request).toHaveBeenCalledWith(
+      Method.ThreadTurnsList,
+      {
+        threadId: 'start-thread-id',
+        limit: 20,
+        sortDirection: 'desc',
+        itemsView: 'notLoaded',
+      },
+      { timeoutMs: 3_000 },
+    );
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
     await handle.close();
   });
 

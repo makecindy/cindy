@@ -4937,7 +4937,10 @@ export class CodexAgent extends BaseAgent {
               bufferedOrphanTurnIds.clear();
               if (wasBuffered) {
                 // 合法 started 曾被缓冲: 补做 turnStarted 正常路径被跳过的
-                // per-turn 状态重置 (与 turnStarted handler 同款)。
+                // 观察标记与 per-turn 状态重置 (与 turnStarted handler 同款)。
+                // 该标记也是 no-active 恢复使用 listener 终态屏障的前提；
+                // 遗漏会让已确认合法的 buffered turn 永久停在假忙状态。
+                observedTurnStartedIds.add(resp.turn.id);
                 proposedPlanText = null;
                 translatorRt.lastAuthErrorKey = null;
                 translatorRt.networkRetryNotice = null;
