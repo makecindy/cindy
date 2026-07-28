@@ -5658,8 +5658,13 @@ describe('CodexAgent abort', () => {
     await handle.close();
   });
 
-  it('reconciles the authoritative completed turn without losing usage, cache, or plans', async () => {
+  it('drains late content, usage, cache, and plans before authoritative reconciliation', async () => {
     let turnStartCount = 0;
+    let emitLateTurnPayload = (): void => {};
+    const plan = [
+      { step: 'Inspect', status: 'completed' as const },
+      { step: 'Patch', status: 'in_progress' as const },
+    ];
     const logger = createNoopLogger();
     const debugLog = vi.spyOn(logger, 'debug');
     const agent = new CodexAgent(createDeps({}, { logger }));
@@ -5671,6 +5676,9 @@ describe('CodexAgent abort', () => {
         );
       }
       if (method === Method.ThreadTurnsList) {
+        // Simulate the metadata response overtaking terminal-stream payloads
+        // that are already in flight on the transport.
+        setTimeout(() => emitLateTurnPayload(), 0);
         return {
           data: [{ id: 'turn-stale-local', status: 'completed' }],
           nextCursor: null,
@@ -5701,51 +5709,65 @@ describe('CodexAgent abort', () => {
       interactions.push(request);
       return { kind: 'plan_review', behavior: 'deny' };
     });
+    emitLateTurnPayload = () => {
+      handlers.tokenUsageUpdated?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-stale-local',
+        tokenUsage: {
+          total: {
+            totalTokens: 108,
+            inputTokens: 100,
+            cachedInputTokens: 40,
+            outputTokens: 5,
+            reasoningOutputTokens: 3,
+          },
+          last: {
+            totalTokens: 108,
+            inputTokens: 100,
+            cachedInputTokens: 40,
+            outputTokens: 5,
+            reasoningOutputTokens: 3,
+          },
+          modelContextWindow: 272000,
+        },
+      });
+      handlers.turnPlanUpdated?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-stale-local',
+        plan,
+      });
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-stale-local',
+        item: {
+          type: 'agentMessage',
+          id: 'turn-stale-local-message',
+          text: 'late final content',
+        },
+      });
+      handlers.reasoningSummaryTextDelta?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-stale-local',
+        itemId: 'turn-stale-local-reasoning',
+        delta: 'late reasoning',
+        summaryIndex: 0,
+      });
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-stale-local',
+        item: {
+          type: 'plan',
+          id: 'turn-stale-local-plan',
+          text: '1. inspect\n2. patch',
+        },
+      } as never);
+    };
 
     await handle.send({ type: 'user', content: 'make a plan' });
     handlers.turnStarted?.({
       threadId: 'start-thread-id',
       turn: { id: 'turn-stale-local' },
     });
-    handlers.tokenUsageUpdated?.({
-      threadId: 'start-thread-id',
-      turnId: 'turn-stale-local',
-      tokenUsage: {
-        total: {
-          totalTokens: 108,
-          inputTokens: 100,
-          cachedInputTokens: 40,
-          outputTokens: 5,
-          reasoningOutputTokens: 3,
-        },
-        last: {
-          totalTokens: 108,
-          inputTokens: 100,
-          cachedInputTokens: 40,
-          outputTokens: 5,
-          reasoningOutputTokens: 3,
-        },
-        modelContextWindow: 272000,
-      },
-    });
-    const plan = [
-      { step: 'Inspect', status: 'completed' as const },
-      { step: 'Patch', status: 'in_progress' as const },
-    ];
-    handlers.turnPlanUpdated?.({
-      threadId: 'start-thread-id',
-      turnId: 'turn-stale-local',
-      plan,
-    });
-    handlers.itemCompleted?.({
-      threadId: 'start-thread-id',
-      turnId: 'turn-stale-local',
-      item: {
-        type: 'plan',
-        id: 'turn-stale-local-plan',
-        text: '1. inspect\n2. patch',
-      },
-    } as never);
     expect(handle.isTurnRunning?.()).toBe(true);
 
     await expect(handle.abort()).resolves.toBeUndefined();
@@ -5763,11 +5785,26 @@ describe('CodexAgent abort', () => {
       { timeoutMs: 3_000 },
     );
 
+    const reconciledEvents: AgentEvent[] = [];
     let done: AgentEvent | null = null;
     for (let i = 0; i < 30 && !done; i += 1) {
       const event = await nextEvent(iterator);
+      reconciledEvents.push(event);
       if (event.type === 'done') done = event;
     }
+    expect(reconciledEvents).toContainEqual(expect.objectContaining({
+      type: 'text',
+      data: expect.objectContaining({
+        text: 'late final content',
+      }),
+    }));
+    expect(reconciledEvents).toContainEqual(expect.objectContaining({
+      type: 'thinking',
+      data: expect.objectContaining({
+        stage: 'delta',
+        text: 'late reasoning',
+      }),
+    }));
     expect(done).toMatchObject({
       type: 'done',
       data: {
