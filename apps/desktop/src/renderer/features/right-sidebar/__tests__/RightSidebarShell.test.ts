@@ -435,8 +435,10 @@ describe('RightSidebarShell empty state', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('right-sidebar-unified-topbar')).toBeTruthy());
-    expect(screen.queryByTestId('right-sidebar-rail-chrome-actions-hit-hole')).toBeNull();
-    expect(screen.queryByTestId('right-sidebar-rail-chrome-actions-spacer')).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByTestId('right-sidebar-rail-chrome-actions-hit-hole')).toBeNull();
+      expect(screen.queryByTestId('right-sidebar-rail-chrome-actions-spacer')).toBeNull();
+    });
   });
 
   it('renders detach/maximize in the topbar when panel is docked left (mac M2), spacer when right or maximized', async () => {
