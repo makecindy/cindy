@@ -15,6 +15,7 @@ import { useNavigate } from 'react-router-dom';
 import { Folder, MessageSquarePlus, Mic, Pen, TriangleAlert, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
+import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { formatBytes, TextLightbox } from '@/components/chat/TextLightbox';
 import { AttachmentTypeThumb } from './AttachmentTypeThumb';
@@ -153,8 +154,7 @@ import { scanAtResources, filterAtResources, type AtResourceItem } from '@/lib/a
 import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
-import { canonicalizePermissionMode, getNextPermissionMode } from '@/lib/permissionModeCycle';
-import { applySessionPermissionModeChange } from '@/lib/sessionPermissionMode';
+import { getNextPermissionMode } from '@/lib/permissionModeCycle';
 import { matchesKeyboardEvent } from '../../../shared/appShortcuts';
 import { createLogger } from '@/lib/logger';
 import { serializeEditorContent, serializeEditorSlice } from './composerContentSerialization';
@@ -207,7 +207,7 @@ import { COMPOSER_MENTION_MIME, decodeComposerMentionPayload } from '@/lib/compo
 import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
-import { makerApiForDevice } from '@/lib/makerTransport';
+import { makerApiFor, makerApiForDevice } from '@/lib/makerTransport';
 
 const log = createLogger('ChatInput');
 // perf-baseline(与 MessageStream / sidebar 的 perf/session-switch 探针同通道):
@@ -4614,48 +4614,47 @@ export function ChatInput({
     navigate('/settings?tab=providers');
   }, [navigate]);
 
-  // 切档语义(确认门 / 远程分支 / runtime-first / 回滚)统一由
-  // applySessionPermissionModeChange 持有 —— 权限卡片内的同款入口走同一条路径。
-  // 这里只留 composer 侧的壳:文案、失败 toast 和 SSoT 回调。
   const handlePermissionModeChange = useCallback(
     async (newMode: PermissionMode) => {
-      const outcome = await applySessionPermissionModeChange({
-        sessionId,
-        // 与 composer 其它远程写入同源取值(prop 优先, 回退 store 索引)。
-        deviceId: sessionId ? (deviceLinkDeviceId ?? getSessionDeviceId(sessionId)) : undefined,
-        // 归一后再比:持久化值可能是 legacy `default` 或另一 agent 的专有档,而
-        // PermissionSelector 显示的选中项走的是同一份 capabilities 归一。不归一的话
-        // 「点界面上已选中的那项」会被判成真实切档,绕过同档短路白写一次
-        // setPermissionMode(进而 dismissAllPending)。与权限卡片同一处理。
-        currentMode: canonicalizePermissionMode(
-          activePermissionModeRef.current,
-          permissionCycleOptionsRef.current,
-        ),
-        nextMode: newMode,
-        confirmFullAccess: () =>
-          confirmDialog({
-            title: t('newChat.chatInput.fullAccessConfirmation.title'),
-            description: t('newChat.chatInput.fullAccessConfirmation.description'),
-            confirmText: t('newChat.chatInput.fullAccessConfirmation.confirm'),
-            cancelText: t('newChat.chatInput.fullAccessConfirmation.cancel'),
-          }),
-      });
-      // unchanged = 点回当前档;busy = 同一会话已有切档在途。两者都没产生新状态,
-      // 也都不该打扰用户(busy 是连点的正常结果,不是错误)。
-      if (outcome === 'cancelled' || outcome === 'unchanged' || outcome === 'busy') return;
-      if (outcome === 'desynced') {
-        // 生效档位未知时不能说"已保留原设置",见 CCAgentSessionView 同款分支。
-        toast.error(t('newChat.chatInput.permissionSwitchDesynced'));
-        return;
+      const previousMode = activePermissionModeRef.current;
+      if (requiresFullAccessConfirmation(previousMode, newMode)) {
+        const confirmed = await confirmDialog({
+          title: t('newChat.chatInput.fullAccessConfirmation.title'),
+          description: t('newChat.chatInput.fullAccessConfirmation.description'),
+          confirmText: t('newChat.chatInput.fullAccessConfirmation.confirm'),
+          cancelText: t('newChat.chatInput.fullAccessConfirmation.cancel'),
+        });
+        if (!confirmed) return;
       }
-      if (outcome === 'failed') {
+      try {
+        if (sessionId) {
+          if (getSessionDeviceId(sessionId)) {
+            // 控制端纯镜像:运行时隧道 setPermissionMode,被控端持久化后广播回流更新分片。
+            await makerApiFor(sessionId).setPermissionMode(sessionId, newMode);
+          } else {
+            // runtime-first:运行时成功后才持久化，避免 UI/DB 先显示已切换而实际 agent 仍是旧档。
+            await window.electronAPI.maker.setPermissionMode(sessionId, newMode);
+            try {
+              await sessionService.update(sessionId, { permissionMode: newMode });
+            } catch (persistError) {
+              // DB 写入失败时尽力恢复运行时，保持用户看到的旧设置与实际行为一致。
+              try {
+                await window.electronAPI.maker.setPermissionMode(sessionId, previousMode);
+              } catch (rollbackError) {
+                log.warn('permission runtime rollback failed:', rollbackError);
+              }
+              throw persistError;
+            }
+          }
+        }
+        // SSoT: notify parent so it refreshes `session.permissionMode` → props update.
+        onPermissionModeDidChange?.(newMode);
+      } catch (err) {
+        log.warn('permission change failed:', err);
         toast.error(t('newChat.chatInput.permissionSwitchFailed'));
-        return;
       }
-      // SSoT: notify parent so it refreshes `session.permissionMode` → props update.
-      onPermissionModeDidChange?.(newMode);
     },
-    [sessionId, deviceLinkDeviceId, onPermissionModeDidChange, t, confirmDialog],
+    [sessionId, onPermissionModeDidChange, t, confirmDialog],
   );
   useEffect(() => {
     handlePermissionModeChangeRef.current = handlePermissionModeChange;

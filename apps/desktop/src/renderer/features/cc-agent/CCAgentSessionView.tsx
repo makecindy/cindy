@@ -56,8 +56,6 @@ import { createWorkerLabel } from './workerLabel';
 import { TakeoverMask } from '@/components/new-chat/TakeoverMask';
 import { WorktreeCreatingOverlay } from '@/components/new-chat/WorktreeCreatingOverlay';
 import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
-import { applySessionPermissionModeChange } from '@/lib/sessionPermissionMode';
-import { canonicalizePermissionMode } from '@/lib/permissionModeCycle';
 import { IssueConfirmCard } from './IssueConfirmCard';
 import { RenameSessionsConfirmCard } from './RenameSessionsConfirmCard';
 import { GhostGrantConfirmCard } from './GhostGrantConfirmCard';
@@ -65,7 +63,7 @@ import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionProm
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
-import { InteractionPromptHost, useInteractionPromptSlot } from '@/components/interaction-portal';
+import { InteractionPromptHost } from '@/components/interaction-portal';
 import { MessageStream } from '@/components/chat/MessageStream';
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
 import {
@@ -1165,13 +1163,6 @@ export function CCAgentSessionView({
   const providers = remoteDeviceId ? deviceProviders : localProviders;
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
-  // 权限卡片的档位入口必须跟"正在跑的"引擎走,不能用 displayAgentKind ——
-  // 后者会乐观跟随 agentSwitchIntent(用户浏览了另一个引擎的模型但还没发送),
-  // 而 pendingPermission 属于当前活着的 session。用 intent 的档位清单会列出对方
-  // 引擎的专有档(如 Claude 的 acceptEdits),选中后对活着的 Codex session 调
-  // set-permission-mode 会被判不支持,卡片承诺的切换根本落不了地。
-  const liveAgentKind = session?.agentKind === 'codex' ? 'codex' : 'claude-code';
-  const { capabilities: liveSessionCaps } = useAgentCapabilities(liveAgentKind, remoteDeviceId);
   // 报错「真实已读」:终止错误的 ErrorBanner 在本视图内固定展示,视图真实可见 +
   // 窗口聚焦驻留后经 badge 桥接 ack 灵动岛 / 清红角标。`error` 合并了 recoverable
   // 错误(agent 仍在跑,不算已读),再用 store 的 terminal 判定过滤;渲染由同一
@@ -2314,83 +2305,6 @@ export function CCAgentSessionView({
   }, [sessionId, session, handleSend, t]);
 
   const { confirm: confirmDialog } = useConfirmDialog();
-
-  // 权限卡片内的档位切换 —— 卡片顶替 composer 期间 ChatInput 不挂载,composer 上的
-  // 权限 chip 与 Shift+Tab 轮切一起失效,用户就没法在连续授权里切到自动放行。
-  // 与 ChatInput 共用 applySessionPermissionModeChange,语义(确认门 / 远程分支 /
-  // runtime-first / 回滚)只此一份。注意:切档会由 maker-core 的 dismissAllPending
-  // 连带结掉当前这条 pending(放宽→allow,其它→deny),与 composer 上切档同语义。
-  //
-  // 当前档走 ref 而非 useCallback 闭包:confirm 弹窗 + runtime + 落库是多次 await,
-  // 期间 session 分片可能已被上一次切换刷新,闭包里的旧值会让确认门与回滚基准漂移。
-  // 卡片是否被 portal 到常驻可见的 slot(doc-browse 中栏)——决定快捷键归属,见下方
-  // shortcutsActive。
-  const interactionPromptSlot = useInteractionPromptSlot();
-  // 归一后再用:会话里可能存着 legacy `default` 或另一 agent 的专有档,而卡片显示的
-  // 选中项走的是 capabilities 归一(不在清单里 → 落到首项 ask)。不归一就会出现
-  // 「点界面上已选中的那项 = 一次真实切档」,绕过同档短路、白白 dismiss 掉 pending。
-  const cardPermissionMode = canonicalizePermissionMode(
-    (session?.permissionMode as PermissionMode) ?? 'ask',
-    liveSessionCaps?.permissionModes ?? [],
-  );
-  const sessionPermissionModeRef = useRef<PermissionMode>('ask');
-  sessionPermissionModeRef.current = cardPermissionMode;
-  // Full access 确认框可能一直开着,期间原请求可能已被别处(灵动岛 / 另一个控制端)
-  // 解决、agent 又产生了新的 pending。写入前要能核对"还是发起时那条请求"。
-  const pendingPermissionRequestIdRef = useRef<string | undefined>(undefined);
-  pendingPermissionRequestIdRef.current = pendingPermission?.requestId;
-  // 防重入的会话级锁在 applySessionPermissionModeChange 内部(模块级 Set)。
-  // 不放在本组件:Orca 的 worker 面板以 workerSessionId 为 key,切走再切回来这个
-  // 实例已经 unmount 重建,组件内的锁会是全新的空集合 —— 上一次还在等隧道回包的
-  // 切档就拦不住了。锁必须与视图挂载无关。
-  const handlePermissionCardModeChange = useCallback(
-    async (nextMode: PermissionMode) => {
-      if (!sessionId) return;
-      // 钉住发起本次切换的那条请求(见 pendingPermissionRequestIdRef 定义处)。
-      const originRequestId = pendingPermissionRequestIdRef.current;
-      {
-        const outcome = await applySessionPermissionModeChange({
-          sessionId,
-          // 粘滞身份:relay 重连时 store 索引会被 clear(),但本视图仍按远程渲染
-          // (见 remoteDeviceId 定义处)。身份必须与渲染判定同源,否则远程切档会
-          // 误落本机分支。
-          deviceId: remoteDeviceId,
-          currentMode: sessionPermissionModeRef.current,
-          nextMode,
-          confirmFullAccess: () =>
-            confirmDialog({
-              title: t('newChat.chatInput.fullAccessConfirmation.title'),
-              description: t('newChat.chatInput.fullAccessConfirmation.description'),
-              confirmText: t('newChat.chatInput.fullAccessConfirmation.confirm'),
-              cancelText: t('newChat.chatInput.fullAccessConfirmation.cancel'),
-            }),
-          // 确认期间原请求若已被别处解决(此刻要么没有 pending,要么换成了另一条),
-          // 就别再写了 —— 否则 dismissAllPending 会替用户放行他没看过的新请求。
-          assertStillApplicable: () =>
-            pendingPermissionRequestIdRef.current === originRequestId,
-          // 卡片场景恒有挂起请求:落库失败时不要回滚 runtime,回滚会再触发一次
-          // dismissAllPending,误伤这期间新产生、用户没看过的请求(见该参数顶注)。
-          hasPendingInteraction: true,
-        });
-        // unchanged = 点回当前档;busy = 同一会话已有切档在途。两者都没产生新状态,
-        // 也不该打扰用户(busy 是连点/重入的正常结果,不是错误)。
-        if (outcome === 'cancelled' || outcome === 'unchanged' || outcome === 'busy') return;
-        if (outcome === 'desynced') {
-          // 生效档位未知时不能说"已保留原设置"—— 刚切 Full access 失败的话,
-          // 那句话会让用户以为还在询问档,而 agent 可能真的已经免询问。
-          toast.error(t('newChat.chatInput.permissionSwitchDesynced'));
-          return;
-        }
-        if (outcome === 'failed') {
-          toast.error(t('newChat.chatInput.permissionSwitchFailed'));
-          return;
-        }
-        handlePermissionModeDidChange();
-      }
-    },
-    [confirmDialog, handlePermissionModeDidChange, remoteDeviceId, sessionId, t],
-  );
-
   // 防双击重入:ConfirmDialogProvider 是队列语义,弹窗 mount 前的连续点击会入队
   // 多个 confirm,逐个确认就会发多次 compact 请求。in-flight 期间后续点击直接 no-op。
   const compactRequestInFlightRef = useRef(false);
@@ -3161,26 +3075,6 @@ export function CCAgentSessionView({
                   <PermissionPrompt
                     permission={pendingPermission}
                     onRespond={respondToPermission}
-                    // 本视图是多实例的(Orca 下 lead 与 worker 各一个,右栏折叠时
-                    // body 仍挂载)。看不见的实例不得抢 window 级快捷键,否则一次
-                    // 按键会把看不见的那张卡上的请求也一并结掉。
-                    // 但归属要跟着**卡片实际渲染的位置**:doc-browse 里 rail 一折叠
-                    // viewVisible 就是 false,而卡片这时恰恰被 portal 到了常驻可见的
-                    // 中栏 slot —— 那张卡看得见、点得动,快捷键不能跟着 rail 一起哑掉。
-                    shortcutsActive={viewVisible || !!interactionPromptSlot}
-                    modeSwitch={{
-                      // 归一后的档(见 cardPermissionMode 定义处):否则点界面上已选中
-                      // 的那项会被判成真实切档,白白结掉手里的 pending。
-                      permissionMode: cardPermissionMode,
-                      onPermissionModeChange: handlePermissionCardModeChange,
-                      // live 引擎(非 displayAgentKind),见 liveAgentKind 定义处。
-                      vendorKey: liveAgentKind === 'codex' ? 'codex' : 'cc',
-                      deviceId: remoteDeviceId,
-                      cycleOptions: liveSessionCaps?.permissionModes ?? [],
-                      // 远程断链/被控端离线时切档必失败(与 composer 的
-                      // disabled={remoteSessionUnavailable} 同一判定),不给假入口。
-                      disabled: remoteSessionUnavailable,
-                    }}
                   />
                 ) : pendingAskUser ? (
                   <AskUserQuestionPrompt

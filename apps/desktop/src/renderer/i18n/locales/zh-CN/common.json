@@ -4208,7 +4208,6 @@
       "remoteSwitchFailed": "远程设置切换失败，未生效",
       "switchFailed": "设置切换失败，未生效",
       "permissionSwitchFailed": "权限模式切换失败，已保留原设置",
-      "permissionSwitchDesynced": "权限模式切换失败，且无法确认当前生效的档位，请重新选一次以核对",
       "fullAccessConfirmation": {
         "title": "开启 Full access？",
         "description": "Full access 会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
@@ -4273,6 +4272,10 @@
       "editTitle": "编辑粘贴的文本",
       "cancelEdit": "取消编辑",
       "saveEdit": "保存文本"
+    },
+    "permissionPrompt": {
+      "alwaysAllowScoped": "本对话都允许 {{scope}}",
+      "alwaysAllowScopedHint": "作用于整个对话，且只限这里列出的范围。"
     }
   },
   "onboarding": {

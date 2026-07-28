@@ -674,73 +674,23 @@ describe('远程交互接线不变式', () => {
     expect(src).toContain(': getMakerMemoryEnabled()');
   });
 
-  // 切档语义已从 ChatInput 抽到 lib/sessionPermissionMode.ts —— 权限卡片顶替
-  // composer 期间 ChatInput 不挂载,卡片上的同款入口必须走同一条路径,不变式跟着搬家。
-  it('setPermissionMode 远程按 deviceId 直连隧道,本机才走本机 IPC', () => {
-    const src = read('lib/sessionPermissionMode.ts');
-    // 按 deviceId 直连:makerApiFor(sessionId) 会回查 store 路由,relay 重连窗口内
-    // 索引已 clear,远程写入会静默退化成本机 IPC。身份只认调用方入参。
-    expect(src).toContain('makerApiForDevice(deviceId).setPermissionMode');
-    expect(src).not.toContain('getSessionDeviceId');
+  it('ChatInput 的 setPermissionMode 远程经隧道(makerApiFor),本机才走本机 IPC', () => {
+    const src = read('components/new-chat/ChatInput.tsx');
+    expect(src).toContain('makerApiFor(sessionId).setPermissionMode');
     const runtimeSet = src.indexOf(
-      'await window.electronAPI.maker.setPermissionMode(sessionId, nextMode);',
+      'await window.electronAPI.maker.setPermissionMode(sessionId, newMode);',
     );
     const persistSet = src.indexOf(
-      'await sessionService.update(sessionId, { permissionMode: nextMode });',
+      'await sessionService.update(sessionId, { permissionMode: newMode });',
     );
     expect(runtimeSet).toBeGreaterThan(-1);
     expect(persistSet).toBeGreaterThan(runtimeSet);
     expect(src).toContain(
-      'await window.electronAPI.maker.setPermissionMode(sessionId, currentMode);',
+      'await window.electronAPI.maker.setPermissionMode(sessionId, previousMode);',
     );
-    expect(src).toContain('requiresFullAccessConfirmation(currentMode, nextMode)');
-    expect(src).toContain("if (!confirmed) return 'cancelled';");
-    // 同档短路必须在确认门之前:maker-core 的 setPermissionMode 不管档位变没变都会
-    // dismissAllPending,点回当前档就会顺手结掉手里的 pending 请求。
-    const sameModeGuard = src.indexOf('if (currentMode === nextMode &&');
-    expect(sameModeGuard).toBeGreaterThan(-1);
-    expect(sameModeGuard).toBeLessThan(src.indexOf('requiresFullAccessConfirmation('));
-    // 但 runtime 与持久化已知失配时不得短路 —— 那时"重选显示中的档"是用户唯一的
-    // 对账手段(回滚失败后 UI 停在旧档、agent 留在新档)。
-    expect(src).toContain('desyncedSessions.has(sessionId)');
-    expect(src).toContain('desyncedSessions.add(sessionId)');
-    expect(src).toContain('desyncedSessions.delete(sessionId)');
-    // 确认门之后、写入之前的最后一道校验,把切换钉在发起它的那条请求上。
-    const staleGuard = src.indexOf('assertStillApplicable()');
-    expect(staleGuard).toBeGreaterThan(src.indexOf('await confirmFullAccess()'));
-    expect(staleGuard).toBeLessThan(src.indexOf('setPermissionMode(sessionId, nextMode)'));
-  });
-
-  // 这一处已经错过两轮:先是 boolean(旧会话的旗子吞掉新会话的点击),再是单个
-  // sessionId 标量(A 在途时被 B 覆盖,B 一完成清空槽,回到 A 就能再起一条并发链 ——
-  // 两条 A 的 runtime + DB 写乱序落地,先发的那条落库失败还会拿旧档回滚覆盖新选择)。
-  // 逐会话记账是唯一正确形态,锁死它。
-  it('切档防重入锁按会话记在模块级,不得挂回组件 ref', () => {
-    const src = read('lib/sessionPermissionMode.ts');
-    expect(src).toContain('const inFlightSessions = new Set<string>();');
-    expect(src).toContain("if (inFlightSessions.has(sessionId)) return 'busy';");
-    expect(src).toContain('inFlightSessions.add(sessionId)');
-    expect(src).toContain('inFlightSessions.delete(sessionId)');
-    // Orca worker 面板以 workerSessionId 为 key,切走再回来视图会 remount ——
-    // 组件内的锁会变成一只全新的空集合,拦不住上一次还在等隧道回包的切档。
-    const view = read('features/cc-agent/CCAgentSessionView.tsx');
-    expect(view).not.toContain('permissionModeChangeInFlightRef');
-  });
-
-  it('composer 与权限卡片共用同一条切档路径,各自负责失败 toast', () => {
-    for (const rel of [
-      'components/new-chat/ChatInput.tsx',
-      'features/cc-agent/CCAgentSessionView.tsx',
-    ]) {
-      const src = read(rel);
-      expect(src).toContain('applySessionPermissionModeChange({');
-      // 各自不得再私搭一套 setPermissionMode 写入(否则远程/回滚语义会分叉)。
-      expect(src).not.toContain('.setPermissionMode(sessionId,');
-      expect(src).toContain("toast.error(t('newChat.chatInput.permissionSwitchFailed'))");
-      // 两个入口都必须先把当前档归一再比,否则「点界面上已选中的那项」会被判成
-      // 真实切档,白写一次 setPermissionMode 并连带 dismiss 掉手里的 pending。
-      expect(src).toContain('canonicalizePermissionMode(');
-    }
+    expect(src).toContain('requiresFullAccessConfirmation(previousMode, newMode)');
+    expect(src).toContain('if (!confirmed) return;');
+    expect(src).toContain("toast.error(t('newChat.chatInput.permissionSwitchFailed'))");
   });
 
   it('ChatInput 的 Fast 草稿默认同步必须等 onFastModeChange 成功后才执行', () => {

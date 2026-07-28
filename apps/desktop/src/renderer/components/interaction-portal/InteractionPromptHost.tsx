@@ -14,10 +14,10 @@
  * caller pass an explicit `hasInteraction` flag keeps the gate cheap.
  */
 
-import { type ReactNode } from 'react';
+import { useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
-import { useInteractionPromptSlot } from './useInteractionPromptSlot';
+import { getSlotElement, subscribeSlot } from './store';
 
 export interface InteractionPromptHostProps {
   /**
@@ -41,8 +41,9 @@ export function InteractionPromptHost({
   children,
   placeholder,
 }: InteractionPromptHostProps) {
-  // 模块级 slot 信号(useSyncExternalStore,并发渲染安全)。返回 HTMLElement | null。
-  const slot = useInteractionPromptSlot();
+  // useSyncExternalStore reads the module-level slot signal correctly
+  // even under concurrent rendering. Returns the current HTMLElement | null.
+  const slot = useSyncExternalStore(subscribeSlot, getSlotElement, getSlotElement);
 
   if (!hasInteraction || !slot) {
     return <>{children}</>;
