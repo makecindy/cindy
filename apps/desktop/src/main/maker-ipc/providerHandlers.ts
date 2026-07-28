@@ -27,7 +27,11 @@ import { isIpcError } from '../../shared/ipc-errors.js';
 import {
   BUILTIN_REFRESHABLE_PROVIDER_IDS,
   isBuiltinRefreshableProviderId,
+  isProviderModelAutoRefreshRendererTrigger,
+  PROVIDER_MODEL_AUTO_REFRESH_RENDERER_TRIGGERS,
   type BuiltinRefreshableProviderId,
+  type ProviderModelAutoRefreshRendererTrigger,
+  type ProviderModelAutoRefreshResult,
   type ProviderModelRefreshResult,
 } from '../../shared/providerModelRefresh.js';
 
@@ -72,6 +76,10 @@ export interface ProviderHandlerDeps {
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
   /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
   refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
+  /** Renderer 自动刷新提示；Main 侧负责静默失败、冷却和跨窗口去重。 */
+  requestModelsAutoRefresh(
+    trigger: ProviderModelAutoRefreshRendererTrigger,
+  ): Promise<void>;
   /** 新增的特权刷新入口只接受 Cindy 自有顶层 Renderer。 */
   assertTrustedSender(event: unknown): void;
   /**
@@ -209,6 +217,21 @@ export function registerProviderHandlers(
         throwIpcError('INTERNAL', `model list refresh failed for '${providerId}'`);
       }
       return { ok: true, providerId };
+    },
+  );
+
+  registry.handle(
+    MAKER_INVOKE.PROVIDER_MODELS_AUTO_REFRESH,
+    async (event, trigger: unknown): Promise<ProviderModelAutoRefreshResult> => {
+      deps.assertTrustedSender(event);
+      if (!isProviderModelAutoRefreshRendererTrigger(trigger)) {
+        throwIpcError(
+          'INVALID_PARAMS',
+          `trigger must be one of: ${PROVIDER_MODEL_AUTO_REFRESH_RENDERER_TRIGGERS.join(', ')}`,
+        );
+      }
+      await deps.requestModelsAutoRefresh(trigger);
+      return { ok: true };
     },
   );
 

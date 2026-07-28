@@ -3470,6 +3470,10 @@ interface ElectronAPI {
     refreshBuiltinProviderModels: (
       providerId: import('../shared/providerModelRefresh').BuiltinRefreshableProviderId,
     ) => Promise<import('../shared/providerModelRefresh').ProviderModelRefreshResult>;
+    /** 静默请求 Main 在冷却允许时刷新已连接内置供应商。 */
+    requestProviderModelsAutoRefresh: (
+      trigger: import('../shared/providerModelRefresh').ProviderModelAutoRefreshRendererTrigger,
+    ) => Promise<import('../shared/providerModelRefresh').ProviderModelAutoRefreshResult>;
 
     // 自定义供应商配置 CRUD（密钥另走通用 safeStorage IPC，不经这里）。
     createCustomProvider: (

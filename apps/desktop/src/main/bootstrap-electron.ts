@@ -392,6 +392,10 @@ import {
   readMemorySettingsState,
 } from './maker-host/memory-settings-store.js';
 import {
+  createAppFocusAutoRefreshTracker,
+  requestProviderModelAutoRefresh,
+} from './maker-host/provider-model-auto-refresh.js';
+import {
   readImDefaultSettingsState,
   resetImDefaultSettings,
   resetImDefaultSettingsChannel,
@@ -1485,6 +1489,12 @@ let mainWindowRef: BrowserWindow | null = null;
 // 而白屏,且窗口会带着烘焙端点绕过"拉不到清单不放行"的语义。
 let startupWindowCreationAllowed = false;
 let appFocusSyncTimer: ReturnType<typeof setTimeout> | null = null;
+const providerModelFocusRefreshTracker = createAppFocusAutoRefreshTracker({
+  now: Date.now,
+  onMeaningfulForeground: () => {
+    void requestProviderModelAutoRefresh('foreground');
+  },
+});
 let mainWindowBackgroundThrottlingAllowed = true;
 const isUpdateRelaunchCandidate =
   process.platform === 'darwin' && isMacOSUpdateRelaunch(process.argv);
@@ -1702,6 +1712,14 @@ function handleUpdatePresentationUnlock(): void {
   updatePresentationRecovery?.onScreenUnlock();
 }
 
+function handleProviderModelSystemResume(): void {
+  void requestProviderModelAutoRefresh('system-resume');
+}
+
+function handleProviderModelScreenUnlock(): void {
+  void requestProviderModelAutoRefresh('screen-unlock');
+}
+
 function initializeUpdatePresentationRecovery(): void {
   if (!updatePresentationRecovery || updatePresentationRecoveryInitialized) return;
   updatePresentationRecoveryInitialized = true;
@@ -1725,6 +1743,7 @@ function hasFocusedAppWindow(): boolean {
 
 function syncAppFocusState(clearAttentionWhenFocused = false): void {
   const appFocused = hasFocusedAppWindow();
+  providerModelFocusRefreshTracker.sync(appFocused);
   if (appFocused && clearAttentionWhenFocused) clearAllSessionAttention();
   getAgentIslandService()?.setAppFocused(appFocused);
 }
@@ -5581,7 +5600,9 @@ app.on('ready', async () => {
   // ── System resume: refresh tokens after sleep/hibernate ──
   powerMonitor.on('resume', () => {
     authManager.handleResume();
+    handleProviderModelSystemResume();
   });
+  powerMonitor.on('unlock-screen', handleProviderModelScreenUnlock);
 
   // Memory diagnostics — dev only, log per-process memory every 30s
   if (!app.isPackaged) {

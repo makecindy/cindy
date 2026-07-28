@@ -393,6 +393,11 @@ import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/act
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
 import { refreshBuiltinProviderModels } from '../maker-host/provider-model-refresh.js';
+import {
+  configureProviderModelAutoRefresh,
+  refreshProviderModelsManually,
+  requestProviderModelAutoRefresh,
+} from '../maker-host/provider-model-auto-refresh.js';
 import { refreshAnthropicModelsFromHttp } from '../maker-host/model-discovery/anthropic.js';
 import { setProviderUpstreamErrorBroadcaster } from '../maker-host/provider-upstream-error-observer.js';
 import {
@@ -3418,15 +3423,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 模型供应商目录（只读）+ 自定义供应商 CRUD —— handler body 注入 listProviders / 副作用，
   // 便于脱 Electron + 内存 db 单测。CRUD 成功后刷新 active-catalog 并广播 PROVIDER_CHANGED，
   // 让设置页列表 + 对话模型选择器（各 useProviders 实例）live 刷新。
-  registerProviderHandlers(createElectronIpcHandlerRegistry(), {
+  configureProviderModelAutoRefresh({
     listProviders: () => getDesktopProviderService().listProviders(),
-    getModelVisibilityOverrides: () => getModelVisibilityMirrorSnapshot(),
-    refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
-    broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {}),
-    listPresets: () => getActiveCatalog().presets ?? [],
-    testConnection: (input) => testProviderConnection(input),
-    fetchModels: (spec) => fetchProviderModels(spec),
-    refreshBuiltinModels: (providerId) =>
+    refreshProvider: (providerId) =>
       refreshBuiltinProviderModels(providerId, {
         refreshXd: options.refreshXdGatewayModels,
         refreshAnthropic: refreshAnthropicModelsFromHttp,
@@ -3438,6 +3437,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await refreshActiveCatalogFromSource();
         },
       }),
+  });
+
+  registerProviderHandlers(createElectronIpcHandlerRegistry(), {
+    listProviders: () => getDesktopProviderService().listProviders(),
+    getModelVisibilityOverrides: () => getModelVisibilityMirrorSnapshot(),
+    refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
+    broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {}),
+    listPresets: () => getActiveCatalog().presets ?? [],
+    testConnection: (input) => testProviderConnection(input),
+    fetchModels: (spec) => fetchProviderModels(spec),
+    refreshBuiltinModels: refreshProviderModelsManually,
+    requestModelsAutoRefresh: requestProviderModelAutoRefresh,
     assertTrustedSender: (event) =>
       assertTrustedAppRendererEvent(event as IpcMainInvokeEvent),
     scanLocalCli: () => scanLocalCliAuth(createLocalCliScanDeps()),

@@ -14,8 +14,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 
-const { refreshBuiltinModelsSpy, wizardSpy } = vi.hoisted(() => ({
+const { refreshBuiltinModelsSpy, requestAutoRefreshSpy, wizardSpy } = vi.hoisted(() => ({
   refreshBuiltinModelsSpy: vi.fn(async () => ({ ok: true, providerId: 'xd' as const })),
+  requestAutoRefreshSpy: vi.fn(async () => ({ ok: true as const })),
   wizardSpy: vi.fn(),
 }));
 
@@ -136,6 +137,7 @@ beforeEach(() => {
     maker: {
       scanLocalCli: vi.fn(async () => scanResult),
       refreshBuiltinProviderModels: refreshBuiltinModelsSpy,
+      requestProviderModelsAutoRefresh: requestAutoRefreshSpy,
     },
   };
 });
@@ -149,6 +151,7 @@ describe('ProvidersSection — 双栏管理', () => {
   it('Cindy AI 置顶默认选中;未连接内置渠道不占行;零模型仍可手动刷新', async () => {
     // ProvidersSection 内部消费 useSearchParams(深链定位),测试需要 Router 上下文。
     render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+    expect(requestAutoRefreshSpy).toHaveBeenCalledWith('providers-open');
 
     // 详情头 + 左栏行都显示 xd 标题(默认选中第一行 = xd)。
     expect(

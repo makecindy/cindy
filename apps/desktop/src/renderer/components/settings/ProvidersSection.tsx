@@ -1138,6 +1138,14 @@ export function ProvidersSection() {
     setRefreshingProviderId(null);
   }, []);
 
+  // 进入「模型供应商」页时只上报一个静默刷新提示。是否真正访问上游由 Main
+  // 根据连接状态、30 分钟冷却和全局 in-flight 决定，失败不打扰用户。
+  useEffect(() => {
+    void window.electronAPI.maker
+      .requestProviderModelsAutoRefresh('providers-open')
+      .catch(() => undefined);
+  }, []);
+
   // 本机 CLI 扫描:挂载时一次(失败静默空数组;检测建议是增强,不是依赖)。
   useEffect(() => {
     let cancelled = false;

@@ -386,6 +386,11 @@ export const MAKER_INVOKE = {
    */
   PROVIDER_MODELS_REFRESH: 'maker:provider:models-refresh',
   /**
+   * Renderer 上报自动刷新时机；只接受 providers-open / model-selector-open，
+   * Main 统一处理连接状态、冷却与 in-flight 去重。前台恢复不经 Renderer IPC。
+   */
+  PROVIDER_MODELS_AUTO_REFRESH: 'maker:provider:models-auto-refresh',
+  /**
    * 自定义模型供应商 CRUD（配置入 localDb，密钥另走通用 safe-storage IPC）。
    * create/update 入参 = CustomProviderConfig；delete 入参 = providerId。
    * 成功后 main 重算 active-catalog 并广播 PROVIDER_CHANGED（见 MAKER_PUSH）。
