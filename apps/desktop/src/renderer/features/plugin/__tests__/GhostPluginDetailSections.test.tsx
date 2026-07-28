@@ -163,6 +163,39 @@ describe('Ghost plugin detail sections', () => {
     expect(detailActions?.className).toContain('flex-nowrap');
   });
 
+  it('routes a projected detail icon failure to market recovery', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const onIconLoadError = vi.fn();
+    const { container } = render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={{
+          ...detail,
+          iconDataUrl: 'https://plugins.example.invalid/icon.png?signature=current',
+        }}
+        panelStatus="Docked"
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+        onIconLoadError={onIconLoadError}
+      />,
+    );
+
+    fireEvent.error(container.querySelector('img') as HTMLImageElement);
+
+    expect(onIconLoadError).toHaveBeenCalledTimes(1);
+  });
+
   it('disables every market update entry while an update is busy', async () => {
     vi.stubGlobal(
       'ResizeObserver',

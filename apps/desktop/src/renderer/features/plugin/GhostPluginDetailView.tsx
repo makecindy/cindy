@@ -73,6 +73,7 @@ interface GhostPluginDetailViewProps {
   updateBusy?: boolean;
   onUninstall: () => void;
   toggleDisabled: boolean;
+  onIconLoadError?: () => void;
 }
 
 const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
@@ -132,6 +133,7 @@ export function GhostPluginDetailView({
   updateBusy = false,
   onUninstall,
   toggleDisabled,
+  onIconLoadError,
 }: GhostPluginDetailViewProps) {
   const { t } = useTranslation();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
@@ -205,6 +207,7 @@ export function GhostPluginDetailView({
               iconId={detail.id}
               iconName={detail.name}
               size="detail"
+              onIconLoadError={onIconLoadError}
             />
             <div className="min-w-0">
               <h1 className="truncate text-28 font-medium leading-[34px] text-[var(--text-primary)]">

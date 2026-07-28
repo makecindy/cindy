@@ -77,6 +77,7 @@ import {
 } from './lib/pluginMarketPresentation';
 import { pluginMarketErrorKey } from './lib/pluginMarketErrorKey';
 import { usePluginIconRefresh } from './lib/usePluginIconRefresh';
+import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
 import './plugin-motion.css';
 
 const MAX_VISIBLE_INSTALLED_GHOSTS = 5;
@@ -191,22 +192,8 @@ export function GhostPluginPage() {
     marketDetailRequestRef.current += 1;
     void refreshMarket();
   }, [refreshMarket, mode, dataOwnerId]);
-  useEffect(() => {
-    const refreshWhenVisible = () => {
-      if (document.visibilityState !== 'visible') return;
-      // Focus/visibility events can fire in pairs when switching between Cindy and
-      // another app. Keep the market fresh without turning every focus event into
-      // a request storm; explicit installs and icon renewal still refresh directly.
-      if (Date.now() - lastMarketRefreshAtRef.current < 30_000) return;
-      void refreshMarket(true).catch(() => undefined);
-    };
-    window.addEventListener('focus', refreshWhenVisible);
-    document.addEventListener('visibilitychange', refreshWhenVisible);
-    return () => {
-      window.removeEventListener('focus', refreshWhenVisible);
-      document.removeEventListener('visibilitychange', refreshWhenVisible);
-    };
-  }, [refreshMarket]);
+  const refreshMarketOnForeground = useCallback(() => refreshMarket(true), [refreshMarket]);
+  usePluginMarketForegroundRefresh(refreshMarketOnForeground, lastMarketRefreshAtRef);
   useEffect(() => {
     if (installedGhostIdsKeyRef.current === installedGhostIdsKey) return;
     installedGhostIdsKeyRef.current = installedGhostIdsKey;
@@ -434,7 +421,7 @@ export function GhostPluginPage() {
   }, [selectedDetail, t]);
 
   const handleToggle = useCallback(
-    async (id: string, enabled: boolean) => {
+    async (id: string, enabled: boolean, displayName: string) => {
       try {
         const dir = scopeDirRef.current;
         if (dir) {
@@ -445,9 +432,7 @@ export function GhostPluginPage() {
               enabled
                 ? 'settings.ghosts.toast.projectEnabled'
                 : 'settings.ghosts.toast.projectDisabled',
-              {
-                name: ghosts.find((ghost) => ghost.manifest.id === id)?.manifest.name ?? id,
-              },
+              { name: displayName },
             ),
           );
         } else {
@@ -457,7 +442,7 @@ export function GhostPluginPage() {
         toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
       }
     },
-    [ghosts, t],
+    [t],
   );
 
   // 市场更新流程由列表卡片和详情页共用:先取目标 release 的完整 manifest 做
@@ -590,7 +575,7 @@ export function GhostPluginPage() {
   }, []);
 
   const handleUseGhost = useCallback(
-    async (id: string) => {
+    async (id: string, displayName: string) => {
       const ghost = ghosts.find((candidate) => candidate.manifest.id === id);
       if (!ghost?.manifest.command) return;
       // 使用前置门:点击时现查配置就绪度(main 侧确定性判定),未就绪先
@@ -604,7 +589,7 @@ export function GhostPluginPage() {
       }
       if (setupStatus && !setupStatus.ready) {
         const goConfigure = await confirm({
-          title: t('settings.ghosts.setupGate.title', { name: ghost.manifest.name }),
+          title: t('settings.ghosts.setupGate.title', { name: displayName }),
           description: formatSetupGateDescription(setupStatus, t),
           confirmText: t('settings.ghosts.setupGate.configure'),
           cancelText: t('settings.ghosts.setupGate.cancel'),
@@ -634,8 +619,10 @@ export function GhostPluginPage() {
   );
 
   const handleUse = useCallback(() => {
-    if (selectedGhost) void handleUseGhost(selectedGhost.manifest.id);
-  }, [handleUseGhost, selectedGhost]);
+    if (selectedGhost && selectedDetail) {
+      void handleUseGhost(selectedGhost.manifest.id, selectedDetail.name);
+    }
+  }, [handleUseGhost, selectedDetail, selectedGhost]);
 
   const handleUninstall = useCallback(async () => {
     if (!selectedDetail) return;
@@ -857,7 +844,7 @@ export function GhostPluginPage() {
             : undefined
         }
         onBack={() => setSelectedId(null)}
-        onToggle={(enabled) => void handleToggle(selectedDetail.id, enabled)}
+        onToggle={(enabled) => void handleToggle(selectedDetail.id, enabled, selectedDetail.name)}
         onUse={handleUse}
         onUpdate={() => void handleUpdate()}
         updateLabel={
@@ -873,6 +860,7 @@ export function GhostPluginPage() {
         updateBusy={selectedMarketUpdate !== null && marketBusyId !== null}
         onUninstall={() => void handleUninstall()}
         toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
+        onIconLoadError={handleMarketIconLoadError}
       />
     );
   }
@@ -947,6 +935,7 @@ export function GhostPluginPage() {
                 expanded={installedExpanded}
                 onExpandedChange={setInstalledExpanded}
                 onSelect={setSelectedId}
+                onIconLoadError={handleMarketIconLoadError}
               />
             </section>
           ) : null}
@@ -1025,7 +1014,9 @@ export function GhostPluginPage() {
                       item={catalogItem.item}
                       sourceLabel={t(`settings.ghosts.page.origin.${catalogItem.item.origin}`)}
                       onSelect={() => setSelectedId(catalogItem.item.id)}
-                      onAction={() => void handleUseGhost(catalogItem.item.id)}
+                      onAction={() =>
+                        void handleUseGhost(catalogItem.item.id, catalogItem.item.name)
+                      }
                       updateVersion={catalogItem.item.marketUpdate?.version}
                       updateBusy={catalogItem.item.marketUpdate !== null && marketBusyId !== null}
                       onUpdate={
@@ -1038,7 +1029,10 @@ export function GhostPluginPage() {
                         catalogItem.item.enabled,
                       )}
                       toggleDisabled={scopeDir !== null && !catalogItem.item.enabled}
-                      onToggle={(enabled) => void handleToggle(catalogItem.item.id, enabled)}
+                      onToggle={(enabled) =>
+                        void handleToggle(catalogItem.item.id, enabled, catalogItem.item.name)
+                      }
+                      onIconLoadError={handleMarketIconLoadError}
                     />
                   ) : (
                     <MarketPluginCard
@@ -1295,6 +1289,7 @@ export function GhostPluginCard({
   onToggle,
   effectiveEnabled,
   toggleDisabled = false,
+  onIconLoadError,
 }: {
   item: GhostPluginListItem;
   sourceLabel?: string;
@@ -1307,6 +1302,7 @@ export function GhostPluginCard({
   onToggle?: (enabled: boolean) => void;
   effectiveEnabled?: boolean;
   toggleDisabled?: boolean;
+  onIconLoadError?: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -1326,7 +1322,12 @@ export function GhostPluginCard({
         className="flex min-w-0 flex-1 items-start gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         aria-label={item.name}
       >
-        <GhostPluginIcon iconDataUrl={item.iconDataUrl} iconId={item.id} iconName={item.name} />
+        <GhostPluginIcon
+          iconDataUrl={item.iconDataUrl}
+          iconId={item.id}
+          iconName={item.name}
+          onIconLoadError={onIconLoadError}
+        />
         <span className="flex min-w-0 flex-1 flex-col self-stretch pt-0.5">
           <span className="flex min-w-0 items-center gap-2">
             <span className="truncate text-15 font-medium text-[var(--text-primary)]">
@@ -1404,9 +1405,11 @@ export function GhostPluginCard({
 export function InstalledGhostShortcut({
   item,
   onSelect,
+  onIconLoadError,
 }: {
   item: GhostPluginListItem;
   onSelect: (id: string) => void;
+  onIconLoadError?: () => void;
 }) {
   return (
     <Tip text={item.name} side="bottom" delay={250}>
@@ -1421,7 +1424,12 @@ export function InstalledGhostShortcut({
         )}
         aria-label={item.name}
       >
-        <GhostPluginIcon iconDataUrl={item.iconDataUrl} iconId={item.id} iconName={item.name} />
+        <GhostPluginIcon
+          iconDataUrl={item.iconDataUrl}
+          iconId={item.id}
+          iconName={item.name}
+          onIconLoadError={onIconLoadError}
+        />
       </button>
     </Tip>
   );
@@ -1433,11 +1441,13 @@ export function InstalledGhostQueue({
   expanded,
   onExpandedChange,
   onSelect,
+  onIconLoadError,
 }: {
   items: readonly GhostPluginListItem[];
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   onSelect: (id: string) => void;
+  onIconLoadError?: () => void;
 }) {
   const { t } = useTranslation();
   const hasOverflow = items.length > MAX_VISIBLE_INSTALLED_GHOSTS;
@@ -1452,7 +1462,12 @@ export function InstalledGhostQueue({
       )}
     >
       {visibleItems.map((item) => (
-        <InstalledGhostShortcut key={item.id} item={item} onSelect={onSelect} />
+        <InstalledGhostShortcut
+          key={item.id}
+          item={item}
+          onSelect={onSelect}
+          onIconLoadError={onIconLoadError}
+        />
       ))}
       {hasOverflow ? (
         <button
@@ -1491,6 +1506,7 @@ export function InstalledGhostQueue({
                       iconId={item.id}
                       iconName={item.name}
                       size="mini"
+                      onIconLoadError={onIconLoadError}
                     />
                   </span>
                 ))}
