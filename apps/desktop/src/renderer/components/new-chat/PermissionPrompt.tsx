@@ -226,6 +226,9 @@ export function PermissionPrompt({
       // IME 组合期间的 Enter(确认候选词)不算快捷键;焦点在可编辑元素上时
       // (侧栏重命名/查找栏等)也不劫持按键,避免把输入操作误判成授权决定。
       if (e.isComposing) return;
+      // 长按会连发 keydown。卡片卸载前这些重复事件都会命中 handler,把同一条请求
+      // 重复 settle(重复发 IPC)。授权是一次性决定,按住不该等于按了很多次。
+      if (e.repeat) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
@@ -245,7 +248,6 @@ export function PermissionPrompt({
       if (
         cycle &&
         !cycle.disabled &&
-        !e.repeat &&
         getAppShortcutCombos('cycle-permission-mode').some((combo) =>
           matchesKeyboardEvent(e, combo),
         )

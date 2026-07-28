@@ -4208,6 +4208,7 @@
       "remoteSwitchFailed": "원격 설정 변경 실패: 적용되지 않음",
       "switchFailed": "설정 변경 실패: 적용되지 않음",
       "permissionSwitchFailed": "권한 모드 변경에 실패해 이전 설정을 유지했습니다",
+      "permissionSwitchDesynced": "권한 모드 변경에 실패했으며 현재 적용된 모드를 확인할 수 없습니다. 다시 선택해 맞춰 주세요",
       "fullAccessConfirmation": {
         "title": "Full access를 활성화할까요?",
         "description": "Full access는 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. Cindy가 작업 공간 밖의 파일을 수정하고 네트워크 명령을 묻지 않고 실행할 수 있습니다. 기본 제공 고위험 작업은 계속 확인을 요청합니다.",

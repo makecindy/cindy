@@ -301,6 +301,18 @@ describe('PermissionPrompt modeSwitch', () => {
     expect(onPermissionModeChange).not.toHaveBeenCalled();
   });
 
+  // 授权是一次性决定:长按 Enter 连发的 keydown 不能把同一条请求重复 settle。
+  it('长按连发的重复 keydown 只作数一次', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt permission={PERMISSION} onRespond={onRespond} />);
+
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' });
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', repeat: true });
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', repeat: true });
+
+    expect(onRespond).toHaveBeenCalledTimes(1);
+  });
+
   it('没有 modeSwitch 时 Shift+Tab 不做任何事', () => {
     const onRespond = vi.fn();
     render(<PermissionPrompt permission={PERMISSION} onRespond={onRespond} />);

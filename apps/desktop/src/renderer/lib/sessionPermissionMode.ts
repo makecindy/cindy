@@ -21,9 +21,18 @@ const log = createLogger('sessionPermissionMode');
  * - `ok`        已生效(runtime + 持久化都成功,或无 sessionId 的纯本地草稿态)
  * - `unchanged` 目标档就是当前档,一次写入都没发生(见下方同档短路)
  * - `cancelled` 用户在 Full access 二次确认里点了取消,或确认期间原请求已失效
- * - `failed`    runtime 或持久化失败,已尽力回滚;调用方负责提示
+ * - `failed`    写入失败,但**原设置确实保住了**(runtime 没动过,或已成功回滚)
+ * - `desynced`  写入失败且**生效档位未知**:runtime 可能已经切了,而 UI/DB 停在旧档。
+ *               和 `failed` 必须分开报 —— 后者的文案是"已保留原设置",在这里是假保证:
+ *               用户刚切 Full access 失败,界面告诉他"还是询问档",agent 却可能真的
+ *               在免询问。调用方要提示去重新选一次对账。
  */
-export type PermissionModeChangeOutcome = 'ok' | 'unchanged' | 'cancelled' | 'failed';
+export type PermissionModeChangeOutcome =
+  | 'ok'
+  | 'unchanged'
+  | 'cancelled'
+  | 'failed'
+  | 'desynced';
 
 /**
  * runtime 与持久化已知失配的会话。
@@ -130,6 +139,8 @@ export async function applySessionPermissionModeChange({
     return 'ok';
   } catch (err) {
     log.warn('permission change failed:', err);
-    return 'failed';
+    // 上面两条失败路径只在"生效档位可能已经变了"时记账。据此区分提示语:
+    // 记了账 → 不能说"已保留原设置"(那是假保证),要让用户重选一次对账。
+    return desyncedSessions.has(sessionId) ? 'desynced' : 'failed';
   }
 }

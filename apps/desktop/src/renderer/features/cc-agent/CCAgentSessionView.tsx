@@ -2382,6 +2382,12 @@ export function CCAgentSessionView({
         });
         // unchanged = 点回当前档,一次写入都没发生,没有新状态要回流。
         if (outcome === 'cancelled' || outcome === 'unchanged') return;
+        if (outcome === 'desynced') {
+          // 生效档位未知时不能说"已保留原设置"—— 刚切 Full access 失败的话,
+          // 那句话会让用户以为还在询问档,而 agent 可能真的已经免询问。
+          toast.error(t('newChat.chatInput.permissionSwitchDesynced'));
+          return;
+        }
         if (outcome === 'failed') {
           toast.error(t('newChat.chatInput.permissionSwitchFailed'));
           return;

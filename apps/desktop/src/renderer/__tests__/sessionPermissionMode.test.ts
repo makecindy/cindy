@@ -221,7 +221,7 @@ describe('applySessionPermissionModeChange', () => {
       nextMode: 'acceptEdits',
       confirmFullAccess: confirmNever,
     });
-    expect(first).toBe('failed');
+    expect(first).toBe('desynced');
 
     // 用户重选界面上显示的 ask:必须真的写一次 runtime,而不是 'unchanged'。
     localSetPermissionMode.mockResolvedValue(undefined);
@@ -261,7 +261,7 @@ describe('applySessionPermissionModeChange', () => {
       nextMode: 'bypassPermissions',
       confirmFullAccess: vi.fn(async () => true),
     });
-    expect(first).toBe('failed');
+    expect(first).toBe('desynced');
 
     // 重选界面上显示的 ask:必须真的再走一次隧道,而不是被短路成 'unchanged'。
     const reconcile = await applySessionPermissionModeChange({

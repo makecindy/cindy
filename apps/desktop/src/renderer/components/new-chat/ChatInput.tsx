@@ -4642,6 +4642,11 @@ export function ChatInput({
       });
       // unchanged = 点回当前档,一次写入都没发生,没有新状态要回流。
       if (outcome === 'cancelled' || outcome === 'unchanged') return;
+      if (outcome === 'desynced') {
+        // 生效档位未知时不能说"已保留原设置",见 CCAgentSessionView 同款分支。
+        toast.error(t('newChat.chatInput.permissionSwitchDesynced'));
+        return;
+      }
       if (outcome === 'failed') {
         toast.error(t('newChat.chatInput.permissionSwitchFailed'));
         return;
