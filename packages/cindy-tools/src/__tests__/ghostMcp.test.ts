@@ -514,7 +514,9 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
         ],
       },
     });
-    expect(JSON.stringify(payload)).not.toMatch(/externalLink|storageKey|console\.example\.com/);
+    expect(JSON.stringify(payload)).not.toMatch(
+      /externalLink|storageKey|console\.example\.com/,
+    );
   });
 
   it("host 回调抛错 → INTERNAL,不抛穿", async () => {
@@ -976,7 +978,7 @@ describe("formatGhostRoster(花名册快照:语义召回数据源)", () => {
     const text = formatGhostRoster([
       {
         id: "art",
-        name: "画图",
+        name: `画图\n${"插件".repeat(40)}`,
         command: "画图",
         description: "用 Cindy 的图像能力\n画图与改图。",
       },
@@ -985,8 +987,9 @@ describe("formatGhostRoster(花名册快照:语义召回数据源)", () => {
     ]);
     expect(text).toContain("【本机插件清单");
     expect(text).toContain(
-      "- 画图(id: art,指令 $画图):用 Cindy 的图像能力 画图与改图。",
+      `- 画图 ${"插件".repeat(30)}插(id: art,指令 $画图):用 Cindy 的图像能力 画图与改图。`,
     );
+    expect(text).not.toContain("画图\n插件");
     expect(text).toContain("- 裸插件(id: bare)");
     expect(text).toContain("- 搜索(id: search) [needs_setup]");
     expect(text).toContain("未就绪");

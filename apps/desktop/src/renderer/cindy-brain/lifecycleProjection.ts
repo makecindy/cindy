@@ -14,13 +14,14 @@ import type { GhostLifecycleEntry, GhostReadiness } from '../../shared/ghostLife
 let entries = new Map<string, GhostLifecycleEntry>();
 const listeners = new Set<() => void>();
 let initialized = false;
+let unsubscribeLifecycleChanged: (() => void) | null = null;
 
 function ensureInitialized(): void {
   if (initialized) return;
   initialized = true;
   const api = window.electronAPI?.ghosts;
   if (!api?.onLifecycleChanged || !api.lifecycle) return;
-  api.onLifecycleChanged(({ entries: next }) => {
+  unsubscribeLifecycleChanged = api.onLifecycleChanged(({ entries: next }) => {
     entries = new Map(next.map((entry) => [entry.id, entry]));
     listeners.forEach((listener) => listener());
   });
@@ -53,6 +54,12 @@ export function useGhostLifecycleEntry(id: string): GhostLifecycleEntry | undefi
 
 /** 仅测试用:重置模块状态。 */
 export function __resetLifecycleProjectionForTest(): void {
+  try {
+    unsubscribeLifecycleChanged?.();
+  } catch {
+    /* 测试环境销毁 bridge 后仍需完成本地状态清理 */
+  }
+  unsubscribeLifecycleChanged = null;
   entries = new Map();
   listeners.clear();
   initialized = false;

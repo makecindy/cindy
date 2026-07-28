@@ -52,7 +52,9 @@ export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
   const [query, setQuery] = useState('');
   // 运行时可用性(意识装入/唤醒态):只做警示装饰,不过滤清单——建任务时的
   // 意识状态不代表任务触发时的状态。探测失败静默降级为"不标注"。
-  const [runtimeStatuses, setRuntimeStatuses] = useState<Record<string, CapabilityRuntimeStatus>>({});
+  const [runtimeStatuses, setRuntimeStatuses] = useState<Record<string, CapabilityRuntimeStatus>>(
+    {},
+  );
   useEffect(() => {
     let cancelled = false;
     window.electronAPI.maker.schedule
@@ -60,7 +62,8 @@ export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
       .then((result) => {
         if (cancelled) return;
         const next: Record<string, CapabilityRuntimeStatus> = {};
-        for (const s of result.statuses) next[s.capability] = { state: s.state, ghostName: s.ghostName };
+        for (const s of result.statuses)
+          next[s.capability] = { state: s.state, ghostName: s.ghostName };
         setRuntimeStatuses(next);
       })
       .catch(() => undefined);
@@ -153,8 +156,7 @@ export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
           )}
           {filtered.map((option) => {
             const selected = value.includes(option.id);
-            const status = runtimeStatuses[option.id];
-            const warn = status && status.state !== 'ok' ? status : null;
+            const warn = runtimeStatuses[option.id];
             return (
               <button
                 key={option.id}
@@ -177,18 +179,20 @@ export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
                   <Check size={11} strokeWidth={3} />
                 </span>
                 <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="text-xs font-medium text-[var(--msg-assistant-text)]">{option.label}</span>
+                  <span className="text-xs font-medium text-[var(--msg-assistant-text)]">
+                    {option.label}
+                  </span>
                   {option.desc && (
-                    <span className="text-11 leading-[1.4] text-[var(--cmd-palette-item-meta)]">{option.desc}</span>
+                    <span className="text-11 leading-[1.4] text-[var(--cmd-palette-item-meta)]">
+                      {option.desc}
+                    </span>
                   )}
-                  {warn && (
+                  {warn && warn.state !== 'ok' && (
                     <span className="flex items-center gap-1 text-11 leading-[1.4] text-[var(--error-fg)]">
                       <AlertTriangle size={11} className="shrink-0" />
                       {t(
                         `scheduler.editor.script.capabilityWarn.${
-                          CAPABILITY_WARN_I18N_SUFFIX[
-                            warn.state as Exclude<CapabilityRuntimeState, 'ok'>
-                          ]
+                          CAPABILITY_WARN_I18N_SUFFIX[warn.state]
                         }`,
                         { name: warn.ghostName ?? '' },
                       )}
