@@ -42,7 +42,7 @@ import { clearAllDeviceModelMeta, evictDeviceModelMeta } from '@/device-link/dev
 import { dispatchFileBrowserWatchEvent } from '@/device-link/fileBrowserWatch';
 import { resolveMobileInvokeTimeoutMs } from '@/device-link/invokeTimeouts';
 import { rehydrateDeviceLinkTopics } from '@/device-link/rehydrate';
-import { invalidateTransientScheduleIndexFailures } from '@/session/scheduleIndex';
+import { invalidateOfflineScheduleIndexFailureFor, invalidateTransientScheduleIndexFailures } from '@/session/scheduleIndex';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { createRnWebSocket } from '@/device-link/rnWebSocket';
 import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
@@ -447,7 +447,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         return;
       }
       clearPresenceWipeTimer(wipeTimers, snap.deviceId);
-      if (presence.recovered) void rehydrateWithClient(client);
+      if (presence.recovered) {
+        // 该设备 presence 恢复:它的 DEVICE_OFFLINE 负缓存就地失效(逐设备,
+        // 不走全局重连钩子,review P1),随后的 rehydrate/reseed 拉到新数据。
+        invalidateOfflineScheduleIndexFailureFor(snap.deviceId);
+        void rehydrateWithClient(client);
+      }
     });
     const offFrame = client.onFrame((env) => routeFrame(env, {
       onAccessRevoked: (deviceId) => remoteSubscribedTopicsRef.current.delete(deviceId),

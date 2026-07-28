@@ -159,12 +159,16 @@ export default function RemoteFilePreviewScreen() {
   // 代数驱动两件事:pager effect 重列目录;FlatList key 掺入代数让预览子页
   // 整体重挂载(refs 归零、重新拉取)。翻转沿极少发生,重挂载代价可接受。
   const [recoveryEpoch, setRecoveryEpoch] = useState(0);
-  const prevDeviceUnresponsiveRef = useRef(deviceUnresponsive);
+  const prevBreakerStateRef = useRef({ deviceId, unresponsive: deviceUnresponsive });
   useEffect(() => {
-    const was = prevDeviceUnresponsiveRef.current;
-    prevDeviceUnresponsiveRef.current = deviceUnresponsive;
-    if (was && !deviceUnresponsive) setRecoveryEpoch((epoch) => epoch + 1);
-  }, [deviceUnresponsive]);
+    const prev = prevBreakerStateRef.current;
+    prevBreakerStateRef.current = { deviceId, unresponsive: deviceUnresponsive };
+    // 换设备不是恢复沿(review):页面保持挂载但路由参数换了设备时,「上一台
+    // 未响应、这一台正常」不该触发整个 pager 重挂载——新设备的加载由各 effect
+    // 的 deviceId 依赖自然驱动。
+    if (prev.deviceId !== deviceId) return;
+    if (prev.unresponsive && !deviceUnresponsive) setRecoveryEpoch((epoch) => epoch + 1);
+  }, [deviceId, deviceUnresponsive]);
   useEffect(() => {
     if (knownSession) {
       setSession(knownSession);
@@ -191,10 +195,24 @@ export default function RemoteFilePreviewScreen() {
   }, [singleAbsPath]);
 
   // 同目录 pager:列父目录 → 文件项按浏览页同款排序;失败时退化为单文件。
+  // 重建列表时锚定「当前可见文件」而非固定 initialRelPath(review P1):恢复
+  // 重列 / 排序切换发生在用户已翻页之后时,重置回初始文件会让 FlatList 的
+  // 原生滚动位置与 pageIndex(标题 / 分享 / 下载的目标)指向两个不同文件。
+  // setPageIndex 后再显式 scrollToOffset 重锚一次(initialScrollIndex 只在
+  // 首挂载生效,items key 变化不会重置 contentOffset)。
   useEffect(() => {
     if (!deviceId || !workdir || !initialRelPath) return undefined;
     let cancelled = false;
     const dirRel = parentRelPath(initialRelPath) ?? '';
+    const anchorRelPath = currentRelPathRef.current ?? initialRelPath;
+    const anchorTo = (index: number): void => {
+      setPageIndex(index);
+      requestAnimationFrame(() => {
+        if (!cancelled) {
+          pagerRef.current?.scrollToOffset({ animated: false, offset: index * pageWidthRef.current });
+        }
+      });
+    };
     void withTransientRemoteRetry(async () => {
       await openLink(deviceId);
       return maker.fileBrowser.listDir(workdir, dirRel);
@@ -206,19 +224,20 @@ export default function RemoteFilePreviewScreen() {
         const files = buildFileBrowserGridItems(normalizeRemoteOpDirEntries(raw), sortMode, Date.now())
           .filter((item) => item.kind === 'file')
           .filter((item) => item.thumb !== 'image' || item.relPath === initialRelPath);
-        const index = files.findIndex((item) => item.relPath === initialRelPath);
+        let index = files.findIndex((item) => item.relPath === anchorRelPath);
+        if (index < 0) index = files.findIndex((item) => item.relPath === initialRelPath);
         if (files.length === 0 || index < 0) {
           setSiblings([fallbackItem(initialRelPath)]);
-          setPageIndex(0);
+          anchorTo(0);
           return;
         }
         setSiblings(files);
-        setPageIndex(index);
+        anchorTo(index);
       })
       .catch(() => {
         if (cancelled) return;
         setSiblings([fallbackItem(initialRelPath)]);
-        setPageIndex(0);
+        anchorTo(0);
       });
     return () => {
       cancelled = true;
@@ -227,6 +246,18 @@ export default function RemoteFilePreviewScreen() {
 
   const current = siblings?.[pageIndex] ?? null;
   const pagerRef = useRef<FlatList<FileBrowserGridItem>>(null);
+  // 当前可见文件路径镜像(pager 重建锚定用;不能进上面 effect 的依赖,否则
+  // 每次翻页都会重列目录)。
+  const currentRelPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    currentRelPathRef.current = current?.relPath ?? null;
+  }, [current]);
+  // pageWidth 镜像:重锚回调里读现值,不把 pageWidth 拉进列表 effect 依赖
+  // (旋转已有专门的重锚 effect)。
+  const pageWidthRef = useRef(pageWidth);
+  useEffect(() => {
+    pageWidthRef.current = pageWidth;
+  }, [pageWidth]);
 
   // 旋转(宽度变化)时按当前页重锚:FlatList 保留的是旧宽度下的像素 contentOffset,
   // 不重锚会停在两页中间(处理方式对齐 ImageLightbox)。

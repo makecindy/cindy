@@ -74,22 +74,33 @@ interface ScheduleIndexThrottleEntry {
   failedAt: number | null;
   /** 失败原因是 DEVICE_UNRESPONSIVE(熔断快速失败);恢复旁路判定用。 */
   failedUnresponsive: boolean;
-  /** 失败原因是瞬态链路问题(NOT_CONNECTED 等);重连失效判定用。 */
+  /** 失败原因是本机链路问题(NOT_CONNECTED / LINK_NOT_OPEN);重连全局失效。 */
   failedTransient: boolean;
+  /** 失败原因是目标设备离线(DEVICE_OFFLINE);仅该设备 presence 恢复时失效。 */
+  failedOffline: boolean;
 }
 
 const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>();
 
 /**
- * 链路/目标不可达(NOT_CONNECTED / LINK_NOT_OPEN / DEVICE_OFFLINE):重连或
- * presence 恢复即可解除的失败类别。DEVICE_OFFLINE 必须包含(review):目标
- * 桌面离线时 reject 的就是它,不认的话 presence 恢复落在 30s 负缓存窗内,
- * reseed 会吃旧 rejected promise,详情页被换成空索引且无人补拉。
- * 不含 INVOKE_TIMEOUT——「设备不回包」不是断线,不能被重连钩子清掉。
+ * 本机链路未通(NOT_CONNECTED / LINK_NOT_OPEN):重连即恢复,重连钩子全局失效。
+ * 不含 INVOKE_TIMEOUT——「设备不回包」不是断线,不能被重连钩子清掉;也不含
+ * DEVICE_OFFLINE——那是逐设备状态,归 isDeviceOfflineError(review:全局失效
+ * 会让 B 设备的任何 rehydrate 反复清掉仍离线的 A 设备的负缓存,止损失效)。
  */
 function isLocalLinkDownError(error: unknown): boolean {
   const code = (error as { code?: unknown } | null | undefined)?.code;
-  return code === 'NOT_CONNECTED' || code === 'LINK_NOT_OPEN' || code === 'DEVICE_OFFLINE';
+  return code === 'NOT_CONNECTED' || code === 'LINK_NOT_OPEN';
+}
+
+/**
+ * 目标设备离线(DEVICE_OFFLINE):负缓存只在**该设备**presence 恢复时失效
+ * (invalidateOfflineScheduleIndexFailureFor,key 即 deviceId)。不认它的话,
+ * presence 恢复落在 30s 负缓存窗内,reseed 会吃旧 rejected promise,详情页被
+ * 换成空索引且无人补拉(review P1)。
+ */
+function isDeviceOfflineError(error: unknown): boolean {
+  return (error as { code?: unknown } | null | undefined)?.code === 'DEVICE_OFFLINE';
 }
 
 export function loadSessionScheduleIndexThrottled(
@@ -123,6 +134,7 @@ export function loadSessionScheduleIndexThrottled(
     failedAt: null,
     failedUnresponsive: false,
     failedTransient: false,
+    failedOffline: false,
   };
   scheduleIndexThrottleEntries.set(key, entry);
   promise.then(
@@ -144,6 +156,7 @@ export function loadSessionScheduleIndexThrottled(
         // INVOKE_TIMEOUT(目标不回包)也算 transient,若沿用,重连失效钩子会把
         // 「设备不回包」的负缓存也当断线恢复清掉,削弱止损效果。
         entry.failedTransient = !entry.failedUnresponsive && isLocalLinkDownError(error);
+        entry.failedOffline = !entry.failedUnresponsive && isDeviceOfflineError(error);
       }
     },
   );
@@ -162,6 +175,19 @@ export function invalidateTransientScheduleIndexFailures(): void {
     if (entry.failedAt !== null && entry.failedTransient) {
       scheduleIndexThrottleEntries.delete(key);
     }
+  }
+}
+
+/**
+ * 逐设备失效钩子(review P1):DEVICE_OFFLINE 的负缓存只在该设备 presence
+ * 恢复时清除(DeviceLinkContext 的 presence.recovered 分支调用,key 即
+ * deviceId)——若挂在全局重连钩子上,别的设备的任何 rehydrate 都会反复清掉
+ * 仍离线设备的 30s 负缓存,请求风暴止损失效。
+ */
+export function invalidateOfflineScheduleIndexFailureFor(deviceId: string): void {
+  const entry = scheduleIndexThrottleEntries.get(deviceId);
+  if (entry && entry.failedAt !== null && entry.failedOffline) {
+    scheduleIndexThrottleEntries.delete(deviceId);
   }
 }
 

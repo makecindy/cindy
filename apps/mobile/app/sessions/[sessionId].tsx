@@ -2914,6 +2914,21 @@ export default function SessionScreen() {
     return () => clearTimeout(timer);
   }, [currentSession, deviceId, load, loading, sessionId, status]);
 
+  // 熔断恢复沿补全量同步(review P1):connectionError 已按陈旧过滤,恢复后为
+  // null,下面按 error 驱动的自动重试不会再触发;而探测关熔断不会给本页任何
+  // 其它信号(rehydrate 只补消息/交互,不刷 session 元数据与 lastSyncedAt),
+  // cacheSeeded 会话的 composer 会永远停在 syncing。在 open→closed 翻转沿
+  // 直接补一次 load;换设备不算恢复沿(路由复用同一挂载实例时)。
+  const prevBreakerStateRef = useRef({ deviceId, unresponsive: isDeviceUnresponsive });
+  useEffect(() => {
+    const prev = prevBreakerStateRef.current;
+    prevBreakerStateRef.current = { deviceId, unresponsive: isDeviceUnresponsive };
+    if (prev.deviceId !== deviceId) return;
+    if (!prev.unresponsive || isDeviceUnresponsive) return;
+    if (!deviceId || !sessionId || status !== 'online') return;
+    void load();
+  }, [deviceId, isDeviceUnresponsive, load, sessionId, status]);
+
   useEffect(() => {
     if (!connectionError) {
       if (!loading) autoRetrySyncKeyRef.current = null;
