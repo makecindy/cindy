@@ -57,6 +57,8 @@ interface UpdateBannerProps {
   onOpenVersionNotice?: (version: string) => void;
 }
 
+type SessionTurnCheck = 'pending' | 'idle' | 'busy';
+
 export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerProps) {
   const { status, version, errorCode } = useUpdateStatus();
   // 用户主动关闭态(仅本次进程内存,由 UserInfoSection 的火焰按钮唤回)。
@@ -67,7 +69,8 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   const [confirming, setConfirming] = useState(false);
   // 复用关闭窗口保护链路的权威 busy 探针：只统计仍在执行的逻辑 turn，
   // 不把 keepalive、已结束但仍在渲染收尾的状态误判为运行中任务。
-  const [hasSessionInTurn, setHasSessionInTurn] = useState(false);
+  const [sessionTurnCheck, setSessionTurnCheck] = useState<SessionTurnCheck>('idle');
+  const hasSessionInTurn = sessionTurnCheck === 'busy';
   // 进入确认态后把焦点移到「取消」按钮 —— 键盘用户点入口键后原触发元素会卸载,
   // 若不主动聚焦,焦点会丢失、无法继续操作。刻意聚焦「取消」而非「确认」:让默认落在
   // 安全动作上,避免再按一次 Enter/Space 就直接更新的误操作(即 Radix 对破坏性操作
@@ -111,18 +114,18 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // ready 主界面出现，但仍与 WindowControls 保持同样的安全兜底语义。
   useEffect(() => {
     if (!confirming) {
-      setHasSessionInTurn(false);
+      setSessionTurnCheck('idle');
       return;
     }
 
     let cancelled = false;
-    setHasSessionInTurn(false);
+    setSessionTurnCheck('pending');
     void window.electronAPI.anySessionInTurn()
       .then((busy) => {
-        if (!cancelled) setHasSessionInTurn(busy);
+        if (!cancelled) setSessionTurnCheck(busy ? 'busy' : 'idle');
       })
       .catch(() => {
-        if (!cancelled) setHasSessionInTurn(false);
+        if (!cancelled) setSessionTurnCheck('idle');
       });
 
     return () => {
@@ -181,6 +184,13 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     setConfirming(false);
   };
 
+  const beginConfirming = () => {
+    // Mark the check as pending synchronously so a click in the first render
+    // after opening cannot bypass the busy-state query.
+    setSessionTurnCheck('pending');
+    setConfirming(true);
+  };
+
   // 用户点 X:整块 banner 收起,同时把确认态一并复位,避免下次通过火焰按钮唤回时
   // 直接落在「确认重启」界面(那是两步流程的第二步,越过第一步显示不合适)。
   // 传入当前 status/version 让 store 记录快照,用于后续区分「同一更新 remount」
@@ -201,6 +211,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   if (dismissed && (status === 'ready' || isPreparing)) return null;
 
   const handleRelaunch = () => {
+    if (sessionTurnCheck === 'pending') return;
     const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
     window.electronAPI.relaunchToUpdate(theme);
   };
@@ -277,12 +288,13 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
           <Tip text={t('update.banner.confirmTooltip')} side="right">
             <button
               onClick={handleRelaunch}
+              disabled={sessionTurnCheck === 'pending'}
               aria-label={t('update.banner.confirmAria')}
               className={cn(
                 'flex w-full items-center justify-center py-2 transition-colors',
                 // Bare ghost icon on the sidebar — use the readable foreground, not the
                 // on-fill pill text color (which is dark-on-dark in E1D neutral themes).
-                'text-foreground hover:bg-sidebar-item-hover',
+                'text-foreground hover:bg-sidebar-item-hover disabled:cursor-wait disabled:opacity-70',
               )}
             >
               <Check className="h-5 w-5" strokeWidth={2.25} />
@@ -315,7 +327,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
         >
           <button
             ref={relaunchTriggerRef}
-            onClick={() => { if (!isPreparing) setConfirming(true); }}
+            onClick={() => { if (!isPreparing) beginConfirming(); }}
             disabled={isPreparing}
             aria-label={isPreparing
               ? t('update.banner.preparingAria')
@@ -433,12 +445,13 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
           <div className="flex w-full flex-col gap-2">
             <button
               onClick={handleRelaunch}
+              disabled={sessionTurnCheck === 'pending'}
               aria-label={t('update.banner.confirmAria')}
               className={cn(
                 'flex w-full items-center justify-center gap-2 rounded-full border py-2',
                 'text-[13px] font-medium transition-colors',
                 'bg-[var(--update-btn-bg)] border-[var(--update-btn-border)] text-[var(--update-btn-text)]',
-                'hover:bg-[var(--update-btn-hover)]',
+                'hover:bg-[var(--update-btn-hover)] disabled:cursor-wait disabled:opacity-70',
               )}
             >
               {t('update.banner.confirmButton')}
@@ -459,7 +472,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
         ) : (
           <button
             ref={relaunchTriggerRef}
-            onClick={() => setConfirming(true)}
+            onClick={beginConfirming}
             aria-label={t('update.banner.ariaExpanded', { version: version ?? '' })}
             className={cn(
               'flex w-full items-center justify-center gap-2 rounded-full border py-2',
