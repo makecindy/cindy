@@ -36,15 +36,6 @@ function stepVarRefs(step: Recipe['steps'][number]): Set<string> {
   return refs;
 }
 
-/** All `{{var}}` names referenced anywhere a recipe interpolates. */
-function referencedVars(recipe: Recipe): Set<string> {
-  const refs = new Set<string>();
-  for (const step of recipe.steps) for (const name of stepVarRefs(step)) refs.add(name);
-  if (recipe.output) {
-    for (const m of recipe.output.matchAll(new RegExp(VAR_RE.source, 'g'))) refs.add(m[1]);
-  }
-  return refs;
-}
 
 describe('bundled recipe catalog', () => {
   it('loads at least the known catalog size', () => {
@@ -59,36 +50,29 @@ describe('bundled recipe catalog', () => {
     }
   });
 
-  it('every {{var}} reference is satisfied by a declared input or a PRECEDING `as`', () => {
-    // Mirrors runRecipe's execution order: `as` lands in vars only AFTER its
-    // step succeeds, so a step may only reference inputs and earlier steps'
-    // `as` — a later producer would still throw "missing recipe variable".
-    for (const [id, recipe] of recipes) {
-      const available = new Set(Object.keys(recipe.inputs ?? {}));
-      recipe.steps.forEach((step, i) => {
-        for (const name of stepVarRefs(step)) {
-          expect(
-            available.has(name),
-            `recipe ${id}: step ${i} (${step.action}) references {{${name}}} before any input/preceding-as provides it`,
-          ).toBe(true);
-        }
-        if (step.as) available.add(step.as);
-      });
-      if (recipe.output) {
-        for (const m of recipe.output.matchAll(new RegExp(VAR_RE.source, 'g'))) {
-          expect(available.has(m[1]), `recipe ${id}: output references {{${m[1]}}} with no source`).toBe(true);
-        }
-      }
-    }
-  });
-
-  it('every referenced input is declared required (the runner has no defaults)', () => {
+  it('every {{var}} reference resolves in execution order (preceding `as` or required input)', () => {
+    // Mirrors runRecipe exactly: `as` lands in vars only AFTER its step
+    // succeeds, and the runner has no input defaults. So at each reference
+    // point the variable must come from a PRECEDING step's `as`, or be a
+    // `required:true` input — a later producer, an undeclared name, or an
+    // optional input referenced before its producer would all throw
+    // "missing recipe variable" at runtime.
     for (const [id, recipe] of recipes) {
       const inputs = recipe.inputs ?? {};
-      const asNames = new Set(recipe.steps.map((s) => s.as).filter(Boolean));
-      for (const name of referencedVars(recipe)) {
-        if (asNames.has(name)) continue; // produced mid-run, not an input (ordering guarded above)
-        expect(inputs[name]?.required, `recipe ${id}: input "${name}" must be required:true`).toBe(true);
+      const produced = new Set<string>();
+      const checkRef = (name: string, where: string) => {
+        if (produced.has(name)) return; // satisfied by a preceding step's `as`
+        expect(
+          inputs[name]?.required,
+          `recipe ${id}: ${where} references {{${name}}}, which is neither a preceding step's \`as\` nor a required:true input`,
+        ).toBe(true);
+      };
+      recipe.steps.forEach((step, i) => {
+        for (const name of stepVarRefs(step)) checkRef(name, `step ${i} (${step.action})`);
+        if (step.as) produced.add(step.as);
+      });
+      if (recipe.output) {
+        for (const m of recipe.output.matchAll(new RegExp(VAR_RE.source, 'g'))) checkRef(m[1], 'output');
       }
     }
   });
