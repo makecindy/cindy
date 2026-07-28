@@ -751,6 +751,7 @@ export function MainLayout() {
     rightSidebarAvailable,
     rightSidebarLoaded: rsbWindow.loaded,
     isRightSidebarCollapsed,
+    isRightSidebarMaximized,
     rsbDetached,
   });
   const handleMaximizeRightSidebar = useCallback(() => {
