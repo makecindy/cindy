@@ -273,20 +273,25 @@ function createAuthClient(): CindyAuthClient {
 /**
  * 共享 userData 的 passive dev 实例(`--preserve-running` / `--passive` 非 isolated)。
  *
- * 这类实例复用 primary 的登录态,但对共享状态保持只读——与 owner-namespace 迁移
- * (ownerNamespaceMigration.ts)、localDb schema(localDb/index.ts)同一条契约。auth
- * 侧的共享物有三个,passive 一个都不能改:
+ * 这类实例复用 primary 的登录态,但**不得销毁整机共享的 auth 持久状态**——与
+ * owner-namespace 迁移(ownerNamespaceMigration.ts)、localDb schema
+ * (localDb/index.ts)同一条契约。受约束的是「删除 / 作废 / 消费」这类破坏性动作:
  *   1. 磁盘 refresh token 文件(整机一份,删了 primary 下次续期就被踢);
  *   2. 服务端 refresh token(按 (user, device) 一对一存,passive 与 primary 共用
  *      同一 deviceId,调登出会把 primary 的那份一起作废);
- *   3. 由前者派生的续期节奏(定时 refresh 会轮换共享 token,让 primary 反复走
- *      replacement-retry)。
+ *   3. relogin marker(一次性、整机一份,被 passive 消费掉 primary 就再也看不到);
+ *   4. canary flag 与账号删除 receipt(账号派生状态,删掉会让 primary 拉错 manifest
+ *      或丢掉进行中的删除挑战)。
+ *
+ * **续期不在约束内**:passive 照常排 refresh timer,轮换后正常 writeSafe 写回新
+ * token。轮换写入的是有效凭证,primary 侧由 replacement-retry 消化;停掉续期反而
+ * 会让 passive 的 access token 过期后无自愈路径(详见 scheduleRefresh 的注释)。
  *
  * 2026-07-27 事故:两个 MIGRATE_FAILED 的 passive 实例在 LocalDbGate fatal 界面点
  * 「返回登录」,logout 删掉整机 refresh token,正在使用的 primary 在下一个 refresh
  * 周期(隔了 19 / 46 分钟)被判定 credential-lost 强制重登。同源事故 2026-07-23 已
  * 发生过一次,当时只把静默半死改成明确弹重登(见 authSessionExpiredDetection.test.ts),
- * 没有堵住 passive 的写入权。
+ * 没有堵住 passive 的销毁权。
  *
  * packaged 恒不设置该 env(index.ts 启动时对 packaged / isolated 显式 delete 兜底,
  * 防 ambient env 污染),线上零影响;`--isolated` 沙箱有独立 userData 与 deviceId,

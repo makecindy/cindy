@@ -7,10 +7,13 @@ import { describe, expect, it } from 'vitest';
  * Electron,node 测试环境无法直接 import,沿用 authSessionExpiredDetection.test.ts 的
  * 源码守卫模式)。
  *
- * 守护的契约:passive 共享实例可以**用**登录态,但不能**写/删**整机共享的 auth 持久
- * 状态——refresh token 文件、服务端 device token(登出会连坐作废)、relogin marker、
- * canary flag、账号删除 receipt。「谁负责续期」是正交问题,不在本契约内:passive
- * 照常续期,否则它的 access token 过期后没有任何自愈路径。
+ * 守护的契约:passive 共享实例可以**用**登录态,但不得**删除 / 作废 / 消费**整机共享
+ * 的 auth 持久状态——refresh token 文件、服务端 device token(登出会连坐作废)、
+ * relogin marker(一次性,被消费掉 primary 就看不到)、canary flag、账号删除 receipt。
+ *
+ * 约束的是破坏性动作,不是写入本身:passive 照常续期并写回轮换后的新 token(写入的
+ * 是有效凭证,primary 侧由 replacement-retry 消化);停掉续期反而会让它的 access
+ * token 过期后没有任何自愈路径。
  *
  * 2026-07-27 事故:两个 MIGRATE_FAILED 的 passive 实例(05:30 与 07:51)在 LocalDbGate
  * fatal 界面点「返回登录」,logout 删掉整机 refresh token;正在使用的 primary 分别在
