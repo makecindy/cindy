@@ -1,9 +1,11 @@
 /**
  * analyticsSettingsService.test.ts —— 存量同意迁移的触发边界。
  *
- * 这个边界是本次改动最容易被改坏的地方:迁移只能认**冷启动恢复出来的**登录态。
- * 如果放宽成「任何时候看到登录就算同意」,新的企业 SSO 登录会被误判为已同意——
- * 而登录页的协议门恰恰豁免了 SSO 入口,那些用户从没点过「同意」。
+ * 这个边界是本次改动最容易被改坏的地方,两条都不能放宽:
+ *  1. 迁移只能认**冷启动恢复出来的**登录态。放宽成「任何时候看到登录就算同意」,
+ *     新的企业 SSO 登录会被误判为已同意——登录页的协议门恰恰豁免了 SSO 入口。
+ *  2. 只有**真实账号**算已登录。本地模式(跳过登录)同样免协议门,把它算成已登录
+ *     等于给从未同意隐私协议的用户静默打开采集。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -28,14 +30,26 @@ vi.mock('../authManager', () => ({
   onAuthStateChange: () => () => {},
 }));
 
-const migrateExistingLoginAsConsented = vi.fn((_signedIn: boolean) => true);
+/**
+ * 盘上那份 analytics-settings.json 的内存替身。
+ *
+ * 迁移替身会真的往里写 privacyConsentAccepted,这样「有没有被静默开启采集」可以按
+ * 落盘结果断言,而不是只看函数被调了几次——隐私红线要看结果。
+ */
+const fakeSettings = { privacyConsentAccepted: false, analyticsEnabled: true };
+function migrateIntoFakeSettings(signedIn: boolean): boolean {
+  if (!signedIn) return false;
+  if (fakeSettings.privacyConsentAccepted) return false;
+  fakeSettings.privacyConsentAccepted = true;
+  return true;
+}
+const migrateExistingLoginAsConsented = vi.fn(migrateIntoFakeSettings);
 vi.mock('../analytics-settings-store', () => ({
-  migrateExistingLoginAsConsented: (signedIn: boolean) =>
-    migrateExistingLoginAsConsented(signedIn),
+  migrateExistingLoginAsConsented: (signedIn: boolean) => migrateExistingLoginAsConsented(signedIn),
   acceptPrivacyConsent: vi.fn(),
   setAnalyticsEnabled: vi.fn(),
   isAnalyticsAllowed: () => false,
-  readAnalyticsSettings: () => ({ privacyConsentAccepted: false, analyticsEnabled: true }),
+  readAnalyticsSettings: () => ({ ...fakeSettings }),
 }));
 
 async function importService() {
@@ -45,8 +59,10 @@ async function importService() {
 
 beforeEach(() => {
   isLocalMode.mockReturnValue(false);
+  fakeSettings.privacyConsentAccepted = false;
+  fakeSettings.analyticsEnabled = true;
   migrateExistingLoginAsConsented.mockClear();
-  migrateExistingLoginAsConsented.mockReturnValue(true);
+  migrateExistingLoginAsConsented.mockImplementation(migrateIntoFakeSettings);
 });
 
 afterEach(() => {
@@ -60,15 +76,48 @@ describe('cold-start consent migration', () => {
     service.noteAuthColdStartState({ isAuthenticated: true }, null);
 
     expect(migrateExistingLoginAsConsented).toHaveBeenCalledTimes(1);
+    expect(fakeSettings.privacyConsentAccepted).toBe(true);
   });
 
-  it('migrates a restored local-mode (guest) session too', async () => {
+  // 「跳过登录」= 不创建账号、不上报数据(2026-07-27 拍板),刻意免协议门。把它当成
+  // 已登录会在下一次冷启动静默写入 privacyConsentAccepted,等于未经同意开启采集。
+  it('never migrates a restored local-mode (skip-login) session', async () => {
     isLocalMode.mockReturnValue(true);
     const service = await importService();
 
     service.noteAuthColdStartState({ isAuthenticated: false }, null);
 
+    expect(migrateExistingLoginAsConsented).not.toHaveBeenCalled();
+    expect(fakeSettings.privacyConsentAccepted).toBe(false);
+  });
+
+  it('never migrates when the pending cold start settles into local mode', async () => {
+    isLocalMode.mockReturnValue(true);
+    const service = await importService();
+
+    const pending = Promise.resolve({ isAuthenticated: false });
+    service.noteAuthColdStartState({ isAuthenticated: false }, pending);
+    await pending;
+    await Promise.resolve();
+
+    expect(migrateExistingLoginAsConsented).not.toHaveBeenCalled();
+    expect(fakeSettings.privacyConsentAccepted).toBe(false);
+  });
+
+  // 本地模式不迁移 ≠ 永久拉黑本机:用户之后真的登录账号,下一次冷启动照常迁移。
+  it('still migrates on a later cold start after the user really signs in', async () => {
+    isLocalMode.mockReturnValue(true);
+    const localOnly = await importService();
+    localOnly.noteAuthColdStartState({ isAuthenticated: false }, null);
+    expect(fakeSettings.privacyConsentAccepted).toBe(false);
+
+    // 新进程:模块级 guard 重置,这次冷启动恢复出的是真实账号。
+    isLocalMode.mockReturnValue(false);
+    const signedIn = await importService();
+    signedIn.noteAuthColdStartState({ isAuthenticated: true }, null);
+
     expect(migrateExistingLoginAsConsented).toHaveBeenCalledTimes(1);
+    expect(fakeSettings.privacyConsentAccepted).toBe(true);
   });
 
   it('does not migrate a signed-out cold start', async () => {
@@ -77,6 +126,7 @@ describe('cold-start consent migration', () => {
     service.noteAuthColdStartState({ isAuthenticated: false }, null);
 
     expect(migrateExistingLoginAsConsented).not.toHaveBeenCalled();
+    expect(fakeSettings.privacyConsentAccepted).toBe(false);
   });
 
   it('ignores logins that happen after the cold-start verdict (e.g. enterprise SSO)', async () => {

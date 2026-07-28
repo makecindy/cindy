@@ -145,6 +145,54 @@ describe('跳过登录 in-flight 门(skipLoginGate)', () => {
   });
 });
 
+/**
+ * 逃生口落地(Codex review P1):门刻意不看 configIssues,但配置错误屏一度根本没渲染
+ * 这个入口——承诺落空。这里同时锁「config 面板内有入口」与「该态下门确实放行」。
+ */
+describe('配置错误屏同样承载跳过入口', () => {
+  it('config 面板内挂同一个 LoginSkipLoginLink(同组件 / 同 handler / 同门)', () => {
+    const panelStart = loginSource.indexOf('<LoginPanel testID="login.configPanel">');
+    expect(panelStart).toBeGreaterThan(0);
+    const panelBlock = loginSource.slice(
+      panelStart,
+      loginSource.indexOf('</LoginPanel>', panelStart),
+    );
+    expect(panelBlock).toContain('<LoginSkipLoginLink');
+    const jsx = panelBlock.slice(
+      panelBlock.indexOf('<LoginSkipLoginLink'),
+      panelBlock.indexOf('/>', panelBlock.indexOf('<LoginSkipLoginLink')),
+    );
+    // 复用 identifier 屏的同一 handler 与同一门,不新造组件、不复制样式
+    expect(jsx).toContain('disabled={skipDisabled}');
+    expect(jsx).toContain('onPress={skipLogin}');
+    expect(jsx).toContain("label={loginText('skipLogin')}");
+  });
+
+  it('config 面板的入口可点:configIssues 只禁用登录按钮,不禁用跳过门', () => {
+    // 登录按钮那条 disabled 含 configIssues(见上一个 describe 的源码断言),跳过门不含,
+    // 所以配置坏掉 + auth 已 initialized 时点击照常派发 enterLocalMode。
+    const enterLocalMode = vi.fn(async () => undefined);
+
+    expect(
+      requestSkipLogin({ isBusy: false, initialized: true, enterLocalMode }),
+    ).toBe(true);
+    expect(enterLocalMode).toHaveBeenCalledTimes(1);
+  });
+
+  it('identifier 屏入口不受影响(回归):第一处仍在 identifier 面板内', () => {
+    const identifierStart = loginSource.indexOf(
+      '<LoginPanel testID="login.panel.identifier">',
+    );
+    const configStart = loginSource.indexOf('<LoginPanel testID="login.configPanel">');
+    const firstLink = loginSource.indexOf('<LoginSkipLoginLink');
+    expect(identifierStart).toBeGreaterThan(0);
+    expect(firstLink).toBeGreaterThan(identifierStart);
+    expect(firstLink).toBeLessThan(configStart);
+    // 全文件恰好两处:identifier + config,别处不再散落
+    expect(loginSource.split('<LoginSkipLoginLink').length - 1).toBe(2);
+  });
+});
+
 describe('路由门:有账号 ∨ 已跳过', () => {
   it('NavigationGate 与 index 同门放行,且门只在这两处', () => {
     expect(layoutSource).toContain('const canEnterApp = auth.isAuthenticated || auth.isLocalMode');

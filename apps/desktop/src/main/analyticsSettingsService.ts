@@ -89,6 +89,14 @@ function broadcastSettingsChange(): void {
  * 会被误判成已同意。冷启动恢复出来的登录态则不同——那是本次改动之前就存在的
  * 会话,属于产品拍板(2026-07-25)的"不再二次打扰"范围。
  *
+ * 为什么本地模式(跳过登录)**不算**已登录:冷启动可能恢复出三种状态——
+ *   1. 真实账号(cloud):经登录页进入,链路一直带《用户协议》《隐私政策》表述 → 可迁移
+ *   2. 本地模式(跳过登录):2026-07-27 拍板「不创建账号、不上报数据」,刻意免协议门,
+ *      这类用户从未同意过隐私协议 → 绝不可迁移
+ *   3. 完全未登录:新装 → 不迁移
+ * 把 2 当成 1 会让「跳过登录」的用户在下一次冷启动被静默写入 privacyConsentAccepted,
+ * 等于未经同意打开采集(隐私红线)。
+ *
  * 迁移本身还有第二道闸:store 里已经有 override 时一律跳过(见
  * analytics-settings-store.migrateExistingLoginAsConsented)。
  */
@@ -113,7 +121,10 @@ export function noteAuthColdStartState(
 ): void {
   if (migrationEvaluated) return;
 
-  const signedIn = state.isAuthenticated || authManager.isLocalMode();
+  // `!isLocalMode()` 在当前实现下是冗余的(local 会话拿不到 isAuthenticated),但这里
+  // 保留它做 fail closed:哪天本地模式改成也带 canEnterApp / authenticated 语义,
+  // 也不会静默把免协议门的用户迁移成「已同意」。
+  const signedIn = state.isAuthenticated && !authManager.isLocalMode();
   if (signedIn) {
     migrationEvaluated = true;
     migrateOrLog();
@@ -127,7 +138,7 @@ export function noteAuthColdStartState(
       .then((finalState) => {
         if (migrationEvaluated) return;
         migrationEvaluated = true;
-        const finalSignedIn = finalState.isAuthenticated || authManager.isLocalMode();
+        const finalSignedIn = finalState.isAuthenticated && !authManager.isLocalMode();
         if (finalSignedIn) migrateOrLog();
       })
       .catch(() => {
@@ -136,7 +147,9 @@ export function noteAuthColdStartState(
     return;
   }
 
-  // 冷启动确定未登录 = 新装用户,不迁移;此后只有登录页的协议门能写入同意。
+  // 冷启动确定没有真实账号(未登录 / 跳过登录的本地模式)= 不迁移;此后只有登录页的
+  // 协议门能写入同意。本地模式用户之后真的登录账号时走的就是那道门,与新装用户一致;
+  // 本次不迁移也不会永久拉黑本机——下次冷启动若恢复出真实账号,迁移窗口照常打开。
   migrationEvaluated = true;
 }
 

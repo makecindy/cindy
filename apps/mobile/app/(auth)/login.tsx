@@ -1017,6 +1017,16 @@ export default function LoginScreen() {
             </Text>
           ))}
         </View>
+        {/* 配置坏掉时最需要这个逃生入口:跳过登录不发任何请求,所以 skipDisabled 刻意
+            不含 configIssues(见 skipDisabled 注 + loginSkipLocalMode 测)。这里复用
+            identifier 面板的同一组件与同一 handler,槽位同为面板内 430..490;config 清单
+            从 y=109 起排(单条 20px 行 + 10 gap),撑不到该槽,两者不重叠。 */}
+        <LoginSkipLoginLink
+          disabled={skipDisabled}
+          label={loginText('skipLogin')}
+          onPress={skipLogin}
+          testID="login.skipLoginButton"
+        />
       </LoginPanel>
     );
   };

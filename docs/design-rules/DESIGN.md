@@ -964,6 +964,8 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 | `browser-redirect` | 社交 / SSO 跳浏览器验证，等待回调 | `LoginLoadingRing` + `LoginPrimaryButton`（取消）+ `LoginTitleBlock` |
 | `completed` / `error` | 登录成功 / 失败（含 browser 回调终态页）；`error` 步桌面另有面板下方 footer 的「跳过登录」**逃生入口**（登录服务不可用时仍能进本地模式，同样不过协议门） | 成功无面板（进主界面）；error = `LoginTitleBlock` + `LoginPrimaryButton`（重试）+ `LoginErrorText` + footer 本地模式按钮（桌面）；browser 回调页 `oauthResultPage`（系统浏览器独立 HTML，main 侧内联常量,色值与 `--login-callback-*` token 同源——renderer CSS var 不可达,改值需两处同步） |
 
+**配置错误屏同样承载「跳过登录」逃生入口（移动端）**：`getMobileConfigIssues()` 命中（如 auth base URL 非法）时面板切到 config 提示态，该面板内仍渲染同一个 `LoginSkipLoginLink`（同槽 @(0,430)、同 handler、同 in-flight 门）——跳过登录不发任何网络请求，配置坏掉时恰恰最需要这个入口。
+
 **协议门（consent gate）过门点与豁免（2026-07-27 更新）**：`identifier` 屏的协议同意行是一道**发起前拦截**——未勾选时点过门入口先弹服务条款 / 隐私协议弹窗，同意后续接原动作；同意即写入统计采集同意。
 
 | | 入口 |
