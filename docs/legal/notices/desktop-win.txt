@@ -289,7 +289,7 @@ Electron 自身捆绑了 Chromium、Node.js、V8 等组件,其完整许可证集
 (LICENSES.chromium.html)由 Electron 打包流程自动包含在应用安装目录中。
 
 ------------------------------------------------------------------------------
-TapDB SDK (vendored) vendored
+TapDB SDK (vendored)
 License: Apache-2.0
 Source: https://www.taptap.cn/developer
 ------------------------------------------------------------------------------
@@ -839,7 +839,7 @@ Source: https://sqlite.org
 SQLite is in the public domain. See https://sqlite.org/copyright.html
 
 ------------------------------------------------------------------------------
-openclaw fs-safe sources (vendored) vendored
+openclaw fs-safe sources (vendored)
 License: MIT
 Source: https://github.com/openclaw/openclaw
 ------------------------------------------------------------------------------
@@ -866,13 +866,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-Lobe Icons SVG paths (vendored) 5.14.0
+LiteLLM mascot SVG path (adapted)
 License: MIT
-Source: https://github.com/lobehub/lobe-icons/tree/v5.14.0
+Source: https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg
 ------------------------------------------------------------------------------
 MIT License
 
-Copyright (c) 2023 LobeHub
+Copyright (c) 2026 Berri AI
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -893,13 +893,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-LiteLLM mascot SVG path (adapted)
+Lobe Icons SVG paths (vendored) 5.14.0
 License: MIT
-Source: https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg
+Source: https://github.com/lobehub/lobe-icons/tree/v5.14.0
 ------------------------------------------------------------------------------
 MIT License
 
-Copyright (c) 2026 Berri AI
+Copyright (c) 2023 LobeHub
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -3565,11 +3565,10 @@ necessary.  Here is a sample; alter the names:
 That's all there is to it!
 
 ==============================================================================
-SECTION 2: npm packages (772 packages)
+SECTION 2: npm packages (771 packages)
 ==============================================================================
 
 - @antfu/install-pkg@1.1.0 — MIT — https://github.com/antfu/install-pkg
-- @anthropic-ai/sdk@0.81.0 — MIT — https://github.com/anthropics/anthropic-sdk-typescript
 - @anthropic-ai/sdk@0.91.1 — MIT — https://github.com/anthropics/anthropic-sdk-typescript
 - @babel/runtime@7.29.7 — MIT — https://github.com/babel/babel
 - @braintree/sanitize-url@7.1.2 — MIT — https://github.com/braintree/sanitize-url
@@ -25208,7 +25207,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[120] Applies to: npm:@anthropic-ai/sdk@0.81.0, npm:@anthropic-ai/sdk@0.91.1
+[120] Applies to: npm:@anthropic-ai/sdk@0.91.1
 ------------------------------------------------------------------------------
 Copyright 2023 Anthropic, PBC.
 

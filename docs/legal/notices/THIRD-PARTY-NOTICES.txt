@@ -3947,7 +3947,7 @@ Apache License
 Copyright (c) OpenAI
 
 ------------------------------------------------------------------------------
-openclaw fs-safe sources (vendored) vendored
+openclaw fs-safe sources (vendored)
 License: MIT
 Source: https://github.com/openclaw/openclaw
 ------------------------------------------------------------------------------
@@ -4035,7 +4035,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-TapDB SDK (vendored) vendored
+TapDB SDK (vendored)
 License: Apache-2.0
 Source: https://www.taptap.cn/developer
 ------------------------------------------------------------------------------
@@ -4267,12 +4267,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ==============================================================================
-SECTION 2: npm packages (1310 packages)
+SECTION 2: npm packages (1309 packages)
 ==============================================================================
 
 - @adobe/css-tools@4.5.0 — MIT — https://github.com/adobe/css-tools
 - @antfu/install-pkg@1.1.0 — MIT — https://github.com/antfu/install-pkg
-- @anthropic-ai/sdk@0.81.0 — MIT — https://github.com/anthropics/anthropic-sdk-typescript
 - @anthropic-ai/sdk@0.91.1 — MIT — https://github.com/anthropics/anthropic-sdk-typescript
 - @babel/code-frame@7.29.7 — MIT — https://github.com/babel/babel
 - @babel/compat-data@7.29.7 — MIT — https://github.com/babel/babel
@@ -26462,7 +26461,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[121] Applies to: npm:@anthropic-ai/sdk@0.81.0, npm:@anthropic-ai/sdk@0.91.1
+[121] Applies to: npm:@anthropic-ai/sdk@0.91.1
 ------------------------------------------------------------------------------
 Copyright 2023 Anthropic, PBC.
 
