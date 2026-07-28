@@ -310,6 +310,15 @@ interface LargeReadGate {
   tryAcquire: () => boolean;
 }
 
+interface ReadBodyCappedOptions {
+  /**
+   * A cloned response used only for a prefix probe must not await cancellation
+   * after hitting the cap: a tee branch can wait for the original response to
+   * be consumed before its cancellation promise settles.
+   */
+  awaitCancelOnTruncate?: boolean;
+}
+
 /**
  * 流式读响应体,硬顶 maxBytes:超限即停读并取消流。绝不整体缓冲——
  * 白名单域名可能是意识作者自己的服务器,恶意吐超大响应不能拖垮主进程。
@@ -323,12 +332,20 @@ async function readBodyCapped(
 async function readBodyCapped(
   response: Response,
   maxBytes: number,
+  largeGate: undefined,
+  options?: ReadBodyCappedOptions,
+): Promise<{ bytes: Uint8Array; truncated: boolean }>;
+async function readBodyCapped(
+  response: Response,
+  maxBytes: number,
   largeGate: LargeReadGate,
+  options?: ReadBodyCappedOptions,
 ): Promise<{ bytes: Uint8Array; truncated: boolean } | { gateBusy: true }>;
 async function readBodyCapped(
   response: Response,
   maxBytes: number,
   largeGate?: LargeReadGate,
+  options?: ReadBodyCappedOptions,
 ): Promise<{ bytes: Uint8Array; truncated: boolean } | { gateBusy: true }> {
   const body = (response as { body?: ReadableStream<Uint8Array> | null }).body;
   if (!body) {
@@ -352,11 +369,8 @@ async function readBodyCapped(
       if (!value || value.byteLength === 0) continue;
       if (!gateAcquired && largeGate && total + value.byteLength > largeGate.thresholdBytes) {
         if (!largeGate.tryAcquire()) {
-          try {
-            await reader.cancel();
-          } catch {
-            /* 取消失败不影响拒绝结果 */
-          }
+          const cancel = reader.cancel();
+          void cancel.catch(() => undefined);
           return { gateBusy: true };
         }
         gateAcquired = true;
@@ -373,10 +387,15 @@ async function readBodyCapped(
     }
   } finally {
     if (truncated) {
-      try {
-        await reader.cancel();
-      } catch {
-        /* 取消失败不影响已读结果 */
+      const cancel = reader.cancel();
+      if (options?.awaitCancelOnTruncate === false) {
+        void cancel.catch(() => undefined);
+      } else {
+        try {
+          await cancel;
+        } catch {
+          /* 取消失败不影响已读结果 */
+        }
       }
     }
   }
@@ -690,15 +709,20 @@ const SECRET_EXCHANGE_ERROR_SNIPPET_CHARS = 200;
 
 // 403 语义很宽(GitHub 限流、越权、封禁都回 403),不能一律当凭证被拒——
 // 要求响应体出现凭证失效类信号才记账。401 本身就是强信号,无需探测。
-// 关键词刻意不含 "invalid":业务参数校验错误(如 "invalid date range")
-// 也命中它,会把好 key 误记为被拒。
+// 必须同时出现凭证名词和失效/拒绝信号;单独的 forbidden、denied 或
+// invalid 可能只是 WAF、权限页、限流或业务参数错误,不能把好 key 误记为被拒。
 const CREDENTIAL_REJECTION_PROBE_BYTES = 2048;
 const CREDENTIAL_REJECTION_BODY_RE =
-  /token|subscription|api[\s_-]?key|unauthori[sz]ed|credential|forbidden|revoked|expired|denied/i;
+  /(?:(?:token|subscription|api[\s_-]?key|credential)[\s\S]{0,96}(?:revoked|expired|unauthori[sz]ed|denied|invalid)|(?:revoked|expired|unauthori[sz]ed|denied|invalid)[\s\S]{0,96}(?:token|subscription|api[\s_-]?key|credential))/i;
 
 async function probeCredentialRejectionBody(response: Response): Promise<boolean> {
   try {
-    const probe = await readBodyCapped(response.clone(), CREDENTIAL_REJECTION_PROBE_BYTES);
+    const probe = await readBodyCapped(
+      response.clone(),
+      CREDENTIAL_REJECTION_PROBE_BYTES,
+      undefined,
+      { awaitCancelOnTruncate: false },
+    );
     if ('gateBusy' in probe) return false;
     const text = new TextDecoder('utf-8', { fatal: false }).decode(probe.bytes);
     return CREDENTIAL_REJECTION_BODY_RE.test(text);

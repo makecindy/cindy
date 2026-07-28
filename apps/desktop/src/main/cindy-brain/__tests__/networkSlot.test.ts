@@ -241,6 +241,16 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
     });
     await bizErr.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
     expect(noteCredentialRejected).not.toHaveBeenCalled();
+
+    noteCredentialRejected.mockClear();
+    const { slot: waf } = makeSlot({
+      fetchImpl: vi.fn(async () =>
+        fakeResponse({ status: 403, body: '<html><title>403 Forbidden</title></html>' }),
+      ) as never,
+      noteCredentialRejected,
+    });
+    await waf.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
   });
 });
 
