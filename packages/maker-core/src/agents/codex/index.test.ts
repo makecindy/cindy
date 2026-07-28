@@ -5962,6 +5962,110 @@ describe('CodexAgent abort', () => {
     await handle.close();
   });
 
+  it('stops no-active reconciliation when the session closes during the resume boundary', async () => {
+    const resumeBoundary = deferred<Record<string, unknown>>();
+    const interactions: InteractionRequest[] = [];
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadResume) return resumeBoundary.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-close-during-resume-boundary',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      planMode: true,
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handle.setInteractionResolver(async (request) => {
+      interactions.push(request);
+      return { kind: 'plan_review', behavior: 'deny' };
+    });
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-closes-during-resume-boundary' },
+    });
+
+    const abortPromise = handle.abort();
+    await waitForExpectation(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.ThreadResume,
+        { threadId: 'start-thread-id', excludeTurns: true },
+        { timeoutMs: 3_000 },
+      );
+    });
+    await handle.close();
+    resumeBoundary.resolve({});
+    await expect(abortPromise).resolves.toBeUndefined();
+
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadTurnsList,
+    )).toHaveLength(0);
+    expect(interactions).toHaveLength(0);
+  });
+
+  it('stops no-active reconciliation when the session closes during terminal lookup', async () => {
+    const terminalLookup = deferred<{
+      data: Array<{ id: string; status: string }>;
+      nextCursor: null;
+      backwardsCursor: null;
+    }>();
+    const interactions: InteractionRequest[] = [];
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadResume) return {};
+      if (method === Method.ThreadTurnsList) return terminalLookup.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-close-during-terminal-lookup',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      planMode: true,
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handle.setInteractionResolver(async (request) => {
+      interactions.push(request);
+      return { kind: 'plan_review', behavior: 'deny' };
+    });
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-closes-during-terminal-lookup' },
+    });
+
+    const abortPromise = handle.abort();
+    await waitForExpectation(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.ThreadTurnsList,
+        expect.anything(),
+        { timeoutMs: 3_000 },
+      );
+    });
+    await handle.close();
+    terminalLookup.resolve({
+      data: [{ id: 'turn-closes-during-terminal-lookup', status: 'completed' }],
+      nextCursor: null,
+      backwardsCursor: null,
+    });
+    await expect(abortPromise).resolves.toBeUndefined();
+
+    expect(interactions).toHaveLength(0);
+  });
+
   it('does not reconcile a message-only no-active error with another RPC code', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {

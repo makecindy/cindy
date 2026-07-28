@@ -5345,11 +5345,12 @@ export class CodexAgent extends BaseAgent {
               );
               // 屏障前的真实 notification 已按序送达;若它已自然收口就不再查询、
               // 不再合成 tombstone。
-              if (!isTurnInFlight || currentTurnId !== interruptedTurnId) {
-                log.debug('turn stream completed before authoritative resume boundary', {
+              if (closed || !isTurnInFlight || currentTurnId !== interruptedTurnId) {
+                log.debug('turn reconciliation no longer applicable after authoritative resume boundary', {
                   interruptedTurnId,
                   currentTurnId,
                   isTurnInFlight,
+                  closed,
                 });
                 return;
               }
@@ -5374,11 +5375,12 @@ export class CodexAgent extends BaseAgent {
                 { timeoutMs: NO_ACTIVE_TURN_RECONCILE_TIMEOUT_MS },
               );
               // 查询期间真实 notification 仍可能收口,或用户已发起新 turn。
-              if (!isTurnInFlight || currentTurnId !== interruptedTurnId) {
-                log.debug('turn status lookup completed after local turn advanced', {
+              if (closed || !isTurnInFlight || currentTurnId !== interruptedTurnId) {
+                log.debug('turn reconciliation no longer applicable after terminal lookup', {
                   interruptedTurnId,
                   currentTurnId,
                   isTurnInFlight,
+                  closed,
                 });
                 return;
               }
@@ -5390,6 +5392,7 @@ export class CodexAgent extends BaseAgent {
                     || turn.status === 'interrupted'),
               );
               if (terminalTurn) {
+                if (closed || !isTurnInFlight || currentTurnId !== interruptedTurnId) return;
                 log.info('turn/interrupt found server already idle; reconciling authoritative terminal state', {
                   turnId: interruptedTurnId,
                   status: terminalTurn.status,
