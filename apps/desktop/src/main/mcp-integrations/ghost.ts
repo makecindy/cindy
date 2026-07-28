@@ -718,7 +718,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       const setup = await setupCoordinator.ensureReady({
         sessionId: ghostSetupInteractionSessionId(sessionContext),
         ghostId,
-        ...(!grantOnly ? { tool } : {}),
+        ...(!grantOnly && !setupPlan ? { tool } : {}),
         workingDir: sessionWorkdir,
         ...(setupPlan ? { plan: setupPlan } : {}),
       });

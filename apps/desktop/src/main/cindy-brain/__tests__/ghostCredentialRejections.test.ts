@@ -31,6 +31,10 @@ describe('ghostCredentialRejections 台账', () => {
     const reloaded = createGhostCredentialRejectionsStore({ filePath });
     expect(reloaded.rejectedKeys('web-search')).toEqual(['brave_api_key', 'tavily_api_key']);
 
+    expect(reloaded.clearSecret('web-search', 'brave_api_key')).toBe(true);
+    expect(reloaded.rejectedKeys('web-search')).toEqual(['tavily_api_key']);
+    expect(reloaded.clearSecret('web-search', 'brave_api_key')).toBe(false);
+
     expect(reloaded.clear('web-search')).toBe(true);
     expect(reloaded.clear('web-search')).toBe(false);
     expect(reloaded.rejectedKeys('web-search')).toEqual([]);

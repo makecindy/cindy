@@ -79,6 +79,15 @@ describe('evaluateGhostSetup · 启发式回落(无 setup 声明)', () => {
     expect(
       evaluateGhostSetup(m, probes({ secretSaved: (key) => key === 'tavily_api_key' })).ready,
     ).toBe(true);
+    expect(
+      evaluateGhostSetup(m, probes({ secretSaved: (key) => key === 'tavily_api_key' }), {
+        rejectedSecretKeys: ['tavily_api_key'],
+      }),
+    ).toEqual({
+      ready: false,
+      missingGroups: [[{ ref: 'secret:brave_api_key', label: 'Brave API Key', kind: 'key' }]],
+      reauth: [{ ref: 'secret:tavily_api_key', label: 'Tavily API Key', kind: 'key' }],
+    });
   });
 
   it('全未配置时缺失项合成一个 anyOf 组并带展示 label', () => {
@@ -128,10 +137,7 @@ describe('evaluateGhostSetup · 启发式回落(无 setup 声明)', () => {
       [{ ref: 'secret:mail_authorization_code', label: '邮箱授权码', kind: 'key' }],
     ]);
     expect(
-      evaluateGhostSetup(
-        m,
-        probes({ secretSaved: (key) => key === 'mail_authorization_code' }),
-      ),
+      evaluateGhostSetup(m, probes({ secretSaved: (key) => key === 'mail_authorization_code' })),
     ).toEqual({ ready: true, missingGroups: [], reauth: [] });
     expect(
       evaluateGhostSetupAssessment(m, probes(), { revision: 1 }).groups[0]?.items[0],

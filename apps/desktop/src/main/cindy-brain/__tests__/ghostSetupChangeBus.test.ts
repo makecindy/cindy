@@ -88,4 +88,20 @@ describe('GhostSetupChangeBus', () => {
     expect(gmail).toHaveBeenCalledOnce();
     expect(art).toHaveBeenCalledOnce();
   });
+
+  it('wakes wildcard subscribers when no keyed waiter exists', () => {
+    const bus = new GhostSetupChangeBus();
+    const wildcard = vi.fn();
+    bus.subscribeAll(wildcard);
+
+    expect(bus.emitAll({ source: 'host_config', ref: 'model-provider' })).toEqual([
+      {
+        ghostId: '',
+        source: 'host_config',
+        ref: 'model-provider',
+        revision: 0,
+      },
+    ]);
+    expect(wildcard).toHaveBeenCalledOnce();
+  });
 });

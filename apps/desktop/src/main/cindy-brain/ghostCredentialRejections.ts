@@ -27,6 +27,8 @@ export interface GhostCredentialRejectionsStore {
   markRejected(ghostId: string, secretKey: string): boolean;
   /** 凭证重存后清账;返回是否有实际变化。 */
   clear(ghostId: string): boolean;
+  /** 只清理刚刚被重存的 secret,不影响同插件的其它被拒 key。 */
+  clearSecret(ghostId: string, secretKey: string): boolean;
 }
 
 interface RejectionFile {
@@ -80,9 +82,10 @@ export function createGhostCredentialRejectionsStore(args: {
       try {
         fs.renameSync(tempPath, filePath);
       } catch (error) {
-        const code = error && typeof error === 'object' && 'code' in error
-          ? (error as NodeJS.ErrnoException).code
-          : undefined;
+        const code =
+          error && typeof error === 'object' && 'code' in error
+            ? (error as NodeJS.ErrnoException).code
+            : undefined;
         if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EEXIST')) {
           throw error;
         }
@@ -110,6 +113,17 @@ export function createGhostCredentialRejectionsStore(args: {
       const file = load();
       if (!(ghostId in file.ghosts)) return false;
       delete file.ghosts[ghostId];
+      persist();
+      return true;
+    },
+    clearSecret(ghostId, secretKey) {
+      const file = load();
+      const keys = file.ghosts[ghostId];
+      if (!keys) return false;
+      const nextKeys = keys.filter((key) => key !== secretKey);
+      if (nextKeys.length === keys.length) return false;
+      if (nextKeys.length === 0) delete file.ghosts[ghostId];
+      else file.ghosts[ghostId] = nextKeys;
       persist();
       return true;
     },

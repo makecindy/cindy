@@ -83,7 +83,20 @@ export class GhostSetupChangeBus {
    * the event carries no plugin/provider routing table.
    */
   emitAll(change: { source: GhostSetupChangeSource; ref?: string }): GhostSetupChangeEvent[] {
-    return Array.from(this.listeners.keys()).map((ghostId) => this.emit(ghostId, change));
+    const ghostIds = Array.from(this.listeners.keys());
+    if (ghostIds.length === 0 && this.wildcardListeners.size > 0) {
+      // Shared host config has no keyed waiter to provide a real ghostId. The
+      // wildcard subscriber only needs a wake signal, not a target identity.
+      const event: GhostSetupChangeEvent = {
+        ghostId: '',
+        source: change.source,
+        ...(change.ref ? { ref: change.ref } : {}),
+        revision: 0,
+      };
+      this.notify(event);
+      return [event];
+    }
+    return ghostIds.map((ghostId) => this.emit(ghostId, change));
   }
 
   subscribe(ghostId: string, listener: GhostSetupChangeListener): () => void {
@@ -112,10 +125,7 @@ export class GhostSetupChangeBus {
   }
 
   private notify(event: GhostSetupChangeEvent): void {
-    const targets = [
-      ...(this.listeners.get(event.ghostId) ?? []),
-      ...this.wildcardListeners,
-    ];
+    const targets = [...(this.listeners.get(event.ghostId) ?? []), ...this.wildcardListeners];
     for (const listener of targets) {
       try {
         listener(event);

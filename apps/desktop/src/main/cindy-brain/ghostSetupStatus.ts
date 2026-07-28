@@ -313,11 +313,32 @@ export function evaluateGhostSetupAssessment(
 export function evaluateGhostSetup(
   manifest: GhostManifest,
   probes: GhostSetupProbes,
+  options: { rejectedSecretKeys?: readonly string[] } = {},
 ): GhostSetupStatus {
-  const assessment = evaluateGhostSetupAssessment(manifest, probes, {
+  let assessment = evaluateGhostSetupAssessment(manifest, probes, {
     revision: 0,
     strict: false,
   });
+  if (options.rejectedSecretKeys && options.rejectedSecretKeys.length > 0) {
+    const rejected = new Set(options.rejectedSecretKeys);
+    const groups = assessment.groups.map((group) => ({
+      ...group,
+      items: group.items.map((item) =>
+        item.kind === 'secret' &&
+        item.state === 'satisfied' &&
+        rejected.has(item.ref.replace(/^secret:/, ''))
+          ? { ...item, state: 'expired' as const }
+          : item,
+      ),
+    }));
+    assessment = {
+      ...assessment,
+      state: groups.every((group) => group.items.some((item) => item.state === 'satisfied'))
+        ? 'ready'
+        : 'required',
+      groups,
+    };
+  }
   const missingGroups: GhostSetupStatusItem[][] = [];
   const reauth: GhostSetupStatusItem[] = [];
   const seenReauthRefs = new Set<string>();

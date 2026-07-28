@@ -385,6 +385,7 @@ describe('ghost_call 兜底拒绝', () => {
     expect(ensureReadyMock).toHaveBeenCalledWith(
       expect.objectContaining({ ghostId: 'art', plan: expect.anything() }),
     );
+    expect(ensureReadyMock.mock.calls[0]?.[0]).not.toHaveProperty('tool');
     // 配置完成后 setupCompleted 早退,占位 tool 不被派发。
     expect(result).toMatchObject({ ok: true, result: { setupCompleted: true } });
     expect(dispatchMock).not.toHaveBeenCalled();

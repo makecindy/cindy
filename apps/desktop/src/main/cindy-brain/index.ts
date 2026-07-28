@@ -550,7 +550,9 @@ export function armGhostLifecyclePush(): void {
     // 凭证重存 = 用户已处置被拒记录,按 ghostId 清账(所有 secret 写入
     // 路径都会 emit,无需逐点挂钩);清账后照常重投影广播。
     if (event.source === 'secret') {
-      ghostCredentialRejections().clear(event.ghostId);
+      if (event.ref) {
+        ghostCredentialRejections().clearSecret(event.ghostId, event.ref);
+      }
     }
     broadcastGhostLifecycleChanged();
   });
@@ -583,6 +585,7 @@ export function suspendCindyAccountGhosts(): void {
 export function suspendAllGhosts(): void {
   runtimeSingleton?.destroyAll();
   brainRootCache = null;
+  resetGhostCredentialRejectionsStore();
 }
 let ipcRegistered = false;
 
@@ -900,8 +903,8 @@ export function getGhostRuntime(): GhostRuntime {
         // 崩溃/熄灯时把该意识名下的在途工具调用收掉(结构化失败给 agent)。
         getGhostPipeDispatcher().onRuntimeState(id, state);
         broadcastGhostRuntimeStates();
-        // 崩溃/熔断进出 degraded 态,生命周期投影随 runtime 变化热更。
-        if (state === 'crashed' || state === 'fused') broadcastGhostLifecycleChanged();
+        // runtime 进入或离开 degraded 态时,生命周期投影随 runtime 变化热更。
+        broadcastGhostLifecycleChanged();
       },
     });
   }
@@ -2020,6 +2023,10 @@ let ghostSetupKvStore: GhostKvStore | null = null;
 let ghostCredentialRejectionsSingleton: ReturnType<
   typeof createGhostCredentialRejectionsStore
 > | null = null;
+export function resetGhostCredentialRejectionsStore(): void {
+  ghostCredentialRejectionsSingleton = null;
+}
+
 function ghostCredentialRejections() {
   if (!ghostCredentialRejectionsSingleton) {
     ghostCredentialRejectionsSingleton = createGhostCredentialRejectionsStore({
@@ -2060,8 +2067,8 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
         const accounts = oauthManager.listAccounts(ghostId, key);
         return {
           clientConfigured: oauthManager.clientConfigured(ghostId, key, decl),
-          connected: accounts.filter((account) => account.status === 'connected').length,
-          expired: accounts.filter((account) => account.status === 'expired').length,
+        connected: accounts.filter((a) => a.status === 'connected').length,
+        expired: accounts.filter((a) => a.status === 'expired').length,
         };
       },
       connectionCount: (key) => connectionManager.list(ghostId, key).length,
@@ -2084,28 +2091,22 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   // needs_reauth,发现层 / 插件页在下一次投影即知。
   const rejected = ghostCredentialRejections().rejectedKeys(ghostId);
   if (rejected.length === 0) return assessment;
-  const hasRejection = assessment.groups.some((group) =>
-    group.items.some(
-      (item) =>
-        item.kind === 'secret' &&
-        item.state === 'satisfied' &&
-        rejected.includes(item.ref.replace(/^secret:/, '')),
+  const groups = assessment.groups.map((group) => ({
+    ...group,
+    items: group.items.map((item) =>
+      item.kind === 'secret' &&
+      item.state === 'satisfied' &&
+      rejected.includes(item.ref.replace(/^secret:/, ''))
+        ? { ...item, state: 'expired' as const }
+        : item,
     ),
-  );
-  if (!hasRejection) return assessment;
+  }));
   return {
     ...assessment,
-    state: 'required',
-    groups: assessment.groups.map((group) => ({
-      ...group,
-      items: group.items.map((item) =>
-        item.kind === 'secret' &&
-        item.state === 'satisfied' &&
-        rejected.includes(item.ref.replace(/^secret:/, ''))
-          ? { ...item, state: 'expired' as const }
-          : item,
-      ),
-    })),
+    state: groups.every((group) => group.items.some((item) => item.state === 'satisfied'))
+      ? 'ready'
+      : 'required',
+    groups,
   };
 }
 
@@ -2149,23 +2150,27 @@ function evaluateGhostSetupForPluginPage(ghost: InstalledGhost): GhostSetupStatu
   const oauthManager = getGhostOauthAccountManager();
   const connectionManager = getGhostConnectionManager();
   let kvSnapshot: Record<string, unknown> | null = null;
-  return evaluateGhostSetup(runtimeManifest, {
-    secretSaved: (key) => ghostSecretSaved(ghostId, key),
-    oauthStatus: (key) => {
-      const decl = runtimeManifest.network?.secrets?.find((s) => s.key === key)?.oauth;
-      const accounts = oauthManager.listAccounts(ghostId, key);
-      return {
-        clientConfigured: oauthManager.clientConfigured(ghostId, key, decl),
-        connected: accounts.filter((a) => a.status === 'connected').length,
-        expired: accounts.filter((a) => a.status === 'expired').length,
-      };
+  return evaluateGhostSetup(
+    runtimeManifest,
+    {
+      secretSaved: (key) => ghostSecretSaved(ghostId, key),
+      oauthStatus: (key) => {
+        const decl = runtimeManifest.network?.secrets?.find((s) => s.key === key)?.oauth;
+        const accounts = oauthManager.listAccounts(ghostId, key);
+        return {
+          clientConfigured: oauthManager.clientConfigured(ghostId, key, decl),
+          connected: accounts.filter((account) => account.status === 'connected').length,
+          expired: accounts.filter((account) => account.status === 'expired').length,
+        };
+      },
+      connectionCount: (key) => connectionManager.list(ghostId, key).length,
+      kvValue: (key) => {
+        if (kvSnapshot === null) kvSnapshot = ghostSetupKvStore?.readStrict(ghostId) ?? {};
+        return kvSnapshot[key];
+      },
     },
-    connectionCount: (key) => connectionManager.list(ghostId, key).length,
-    kvValue: (key) => {
-      if (kvSnapshot === null) kvSnapshot = ghostSetupKvStore?.readStrict(ghostId) ?? {};
-      return kvSnapshot[key];
-    },
-  });
+    { rejectedSecretKeys: ghostCredentialRejections().rejectedKeys(ghostId) },
+  );
 }
 
 /**
