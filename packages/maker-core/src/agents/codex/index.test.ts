@@ -5688,6 +5688,37 @@ describe('CodexAgent abort', () => {
     await handle.close();
   });
 
+  it('does not reconcile a message-only no-active error with another RPC code', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('no active turn to interrupt'),
+          { code: -32000 },
+        );
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-non-invalid-request',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-still-running' },
+    });
+
+    await expect(handle.abort()).resolves.toBeUndefined();
+
+    expect(handle.getCurrentTurnId?.()).toBe('turn-still-running');
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await handle.close();
+  });
+
   it('does not clear a newer turn when a no-active interrupt rejection arrives late', async () => {
     const interruptGate = deferred<Record<string, unknown>>();
     const agent = new CodexAgent(createDeps());

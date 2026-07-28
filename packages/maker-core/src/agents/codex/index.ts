@@ -652,8 +652,12 @@ function isExpectedTurnIdMismatchError(error: unknown): boolean {
 }
 
 function isNoActiveTurnInterruptError(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? (error as { code?: unknown }).code
+      : undefined;
   const message = error instanceof Error ? error.message : String(error);
-  return /\bno active(?: codex)? turn to interrupt\b/i.test(message);
+  return code === -32600 && /\bno active(?: codex)? turn to interrupt\b/i.test(message);
 }
 
 // 插话 (steer) 时 turn/steer RPC 的 ack 有界等待上限。AppServerClient.request
