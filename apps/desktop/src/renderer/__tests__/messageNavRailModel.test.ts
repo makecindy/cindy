@@ -49,6 +49,27 @@ describe('deriveNavRailEntries', () => {
     expect(deriveNavRailEntries([])).toEqual([]);
   });
 
+  it('运行中插话(delivery=steer)不算新一轮,不产生刻度', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '第一问' }),
+      msg({ clientId: 's1', role: 'user', content: '插话:别用这个库', delivery: 'steer' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '继续回答第一问' }),
+    ];
+    const entries = deriveNavRailEntries(messages);
+    expect(entries.map((e) => e.id)).toEqual(['u1']);
+    // 回答摘要仍归属真实提问,不被插话截走。
+    expect(entries[0].answerExcerpt).toBe('继续回答第一问');
+  });
+
+  it('无文本也无附件名的 user 消息(预览为空)不产生刻度', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '' }),
+      msg({ clientId: 'u2', role: 'user', content: '   \n  ' }),
+      msg({ clientId: 'u3', role: 'user', content: '真提问' }),
+    ];
+    expect(deriveNavRailEntries(messages).map((e) => e.id)).toEqual(['u3']);
+  });
+
   it('回答摘要取该轮第一条非空 assistant 正文,跳过 thinking / tool 行', () => {
     const messages = [
       msg({ clientId: 'u1', role: 'user', content: '第一问' }),
@@ -190,13 +211,18 @@ describe('pickActiveNavId', () => {
     expect(pickActiveNavId([], 100, () => null)).toBeNull();
   });
 
-  it('从末尾反向短路:命中后不再访问更早的条目', () => {
-    const touched: number[] = [];
-    pickActiveNavId(ids, 100, (i) => {
-      touched.push(i);
-      return i >= 2 ? 900 : 50;
+  it('二分查找:千级条目单次判定只测 O(log n) 个锚点', () => {
+    // 每次 topAt = querySelector + getBoundingClientRect(强制布局读),
+    // 且在 rAF 里逐帧调用 — 访问次数必须是对数级(PR #830 review)。
+    const n = 1024;
+    const bigIds = Array.from({ length: n }, (_, i) => `u${i}`);
+    let touched = 0;
+    const active = pickActiveNavId(bigIds, 100, (i) => {
+      touched += 1;
+      return i * 100;
     });
-    expect(touched).toEqual([3, 2, 1]);
+    expect(active).toBe('u1'); // 顶边 100 恰好压线
+    expect(touched).toBeLessThanOrEqual(Math.ceil(Math.log2(n)) + 2);
   });
 });
 

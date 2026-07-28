@@ -121,7 +121,14 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
     if (m.role === 'user') {
       if (m.isSyntheticTrigger) continue;
       if (m.systemCardType) continue;
-      entries.push({ id: m.clientId, preview: promptPreviewLine(m.content) });
+      // 运行中插话(steer)不是新一轮问答:MessageStream 的轮次语义也不把
+      // 它当边界,算成刻度会把进行中的回答错挂到插话名下(PR #830 review)。
+      if (m.delivery === 'steer') continue;
+      const preview = promptPreviewLine(m.content);
+      // 无文本也无附件名 → 预览为空,刻度无法识别、aria 读出来是空尾巴,
+      // 不当成提问(PR #830 review)。
+      if (!preview) continue;
+      entries.push({ id: m.clientId, preview });
       continue;
     }
     if (m.role !== 'assistant') continue;
@@ -182,8 +189,6 @@ export function normalizeExcerpt(raw: string): string {
  * @param topAt 取第 i 条的顶边位置(getBoundingClientRect().top)。
  *   `null` = 该消息在渲染窗口外未挂载。渲染窗口是"锚点 → 末尾"的后缀切片,
  *   未挂载必然在窗口起点之前、也就在视口上方 —— 视作"已越过阈值"。
- *   访问器形态是刻意的:从末尾反向短路,靠后会话里每帧只需测量视口附近
- *   几条,不用为几百条历史全量 querySelector。
  * @param thresholdTop 视口顶部阈值线(容器 top + fudge)。fudge 要盖过
  *   scroll-mt-20 的 80px 锚点偏移,跳转落定后目标自身恰好压线变为当前项。
  */
@@ -193,13 +198,39 @@ export function pickActiveNavId(
   topAt: (index: number) => number | null,
 ): string | null {
   if (ids.length === 0) return null;
-  for (let i = ids.length - 1; i >= 0; i--) {
-    const top = topAt(i);
-    if (top === null || top <= thresholdTop) {
-      return ids[i];
+  const idx = lastIndexAtOrBelow(ids.length, thresholdTop, topAt, true);
+  return idx >= 0 ? ids[idx] : ids[0];
+}
+
+/**
+ * 二分查找"最后一个顶边不超过 limit 的条目下标"(找不到返回 -1)。
+ *
+ * 前提:tops 随文档序单调不减,未挂载(null)视作 -∞ 且只出现在前缀
+ * (渲染窗口是"锚点 → 末尾"的后缀切片)。每次 topAt 是一次
+ * querySelector + getBoundingClientRect 强制布局读,且判定在 rAF 里逐帧
+ * 跑 —— 线性反向扫描在"滚动到长会话历史顶部"场景下每帧要测几百个锚点,
+ * 二分降到 O(log n)(PR #830 review)。
+ */
+function lastIndexAtOrBelow(
+  count: number,
+  limit: number,
+  topAt: (index: number) => number | null,
+  inclusive: boolean,
+): number {
+  let lo = 0;
+  let hi = count - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const top = topAt(mid) ?? Number.NEGATIVE_INFINITY;
+    if (inclusive ? top <= limit : top < limit) {
+      found = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
     }
   }
-  return ids[0];
+  return found;
 }
 
 /** 范围判定的底部容差:轮次顶边至少要探进视口底这么多像素才算可见。 */
@@ -237,21 +268,12 @@ export function pickVisibleNavRange(
 ): NavRailVisibleRange | null {
   const n = ids.length;
   if (n === 0) return null;
-  const top = (i: number) => topAt(i) ?? Number.NEGATIVE_INFINITY;
-  // 末端:最后一个"轮次起点已进入视口底之上"的条目(从末尾反向短路)。
-  let endIndex = -1;
-  for (let i = n - 1; i >= 0; i--) {
-    if (top(i) < viewBottom) {
-      endIndex = i;
-      break;
-    }
-  }
+  // 末端:最后一个"轮次起点已进入视口底之上"的条目。
+  const endIndex = lastIndexAtOrBelow(n, viewBottom, topAt, false);
   if (endIndex < 0) return null;
-  // 起端:向前吞并所有"轮次终点仍在视口顶之下"的更早轮次。
-  let startIndex = endIndex;
-  while (startIndex > 0 && top(startIndex) > viewTop) {
-    startIndex--;
-  }
+  // 起端:最后一个"顶边仍在视口顶之上(含压线)"的条目 —— 它以及它之后
+  // 到 endIndex 的轮次都有内容落在视口里;不存在时视口从第一条开始。
+  const startIndex = Math.min(endIndex, Math.max(0, lastIndexAtOrBelow(n, viewTop, topAt, true)));
   return { startIndex, endIndex };
 }
 

@@ -109,6 +109,9 @@ export function MessageNavRail({
   const pendingTimerRef = useRef<number | null>(null);
   const idleTimerRef = useRef<number | null>(null);
   const hoveringRef = useRef(false);
+  // 容器左缘缓存,给高频 mousemove 的左缘唤醒判定用,免得每次事件都
+  // getBoundingClientRect 强制布局读;measure(scroll/resize 都会触发)时刷新。
+  const containerLeftRef = useRef(0);
   // 测量回调经 rAF 异步触发,entries / 布局参数用 ref 透传拿最新值,
   // 避免把大数组挂进依赖链让监听器反复重挂。
   const entriesRef = useRef(entries);
@@ -150,6 +153,7 @@ export function MessageNavRail({
     const root = scrollRef.current;
     if (!root) return;
     const containerRect = root.getBoundingClientRect();
+    containerLeftRef.current = containerRect.left;
     setHasRoom(hasNavRailRoom(containerRect.width, contentMaxWidthRef.current));
     setAvailHeight(
       Math.max(
@@ -205,9 +209,11 @@ export function MessageNavRail({
       scheduleMeasure();
     };
     // 左缘唤醒走 mousemove 探测而不是铺一层 pointer-events 热区:
-    // 留白区常被用来起手划选文本,热区会吃掉 mousedown。
+    // 留白区常被用来起手划选文本,热区会吃掉 mousedown。左缘坐标用
+    // measure 缓存的值(窗口纯平移导致的极小误差可接受),不在高频事件里
+    // 强制布局读。
     const onMouseMove = (e: MouseEvent) => {
-      if (e.clientX - root.getBoundingClientRect().left <= WAKE_GUTTER_PX) {
+      if (e.clientX - containerLeftRef.current <= WAKE_GUTTER_PX) {
         wake();
       }
     };
@@ -301,9 +307,19 @@ export function MessageNavRail({
   const plan = planNavRailTicks(entries.length, availHeight);
   const shown = entries.slice(plan.startIndex);
   const displayActiveId = pendingId ?? activeId;
-  // 可见范围 id → 下标(渲染时按 id 回查,测量与渲染间 entries 变更也不会错位)。
-  const rangeStartIdx = visibleRange ? entries.findIndex((e) => e.id === visibleRange.startId) : -1;
-  const rangeEndIdx = visibleRange ? entries.findIndex((e) => e.id === visibleRange.endId) : -1;
+  // 可见范围 id → 下标(渲染时按 id 回查,测量与渲染间 entries 变更也不会
+  // 错位)。单次遍历同时定位两端,滚动高频重渲下不扫两遍数组。
+  let rangeStartIdx = -1;
+  let rangeEndIdx = -1;
+  if (visibleRange) {
+    for (let i = 0; i < entries.length; i++) {
+      if (entries[i].id === visibleRange.startId) rangeStartIdx = i;
+      if (entries[i].id === visibleRange.endId) {
+        rangeEndIdx = i;
+        if (rangeStartIdx >= 0) break;
+      }
+    }
+  }
   // 空闲档只是减淡、仍然可见可点,指针事件常开(悬停刻度本身就会唤醒全亮)。
   const tickEvents = 'pointer-events-auto';
 
@@ -379,9 +395,11 @@ export function MessageNavRail({
             // 覆盖类刻意与 TooltipContent 的原类同形式(任意值 bg-[...] /
             // text-[...]),确保 tailwind-merge 归入同一冲突组、后写的必胜,
             // 不赌歧义值的分组启发式。
+            // 阴影不覆盖:继承 TooltipContent 基座的浮层阴影决策,本卡不引入
+            // 新的深度样式(PR #830 review)。
             contentClassName={cn(
               'max-w-[380px] break-normal px-3 py-2',
-              'border-[var(--border-default)] bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] shadow-sm',
+              'border-[var(--border-default)] bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))]',
               'dark:border-[var(--border-default)]',
             )}
           >
@@ -395,9 +413,11 @@ export function MessageNavRail({
               onClick={() => handleTickClick(entry.id)}
               onMouseEnter={handleTickMouseEnter}
               onMouseLeave={handleTickMouseLeave}
-              // 命中区吃满整格纵距,刻度线本体只有 2px 高。
+              // 命中区吃满整格纵距,刻度线本体只有 2px 高。焦点环用全局
+              // --focus-ring token(AgentTaskCard 同款),键盘 Tab 可见
+              // (PR #830 review:纯 outline-none 会让键盘用户丢焦点)。
               className={cn(
-                'group flex w-full items-center focus-visible:outline-none',
+                'group flex w-full items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                 tickEvents,
               )}
               style={{ height: plan.pitchPx }}
