@@ -20,10 +20,21 @@ const log = createLogger('sessionPermissionMode');
 /**
  * - `ok`        已生效(runtime + 持久化都成功,或无 sessionId 的纯本地草稿态)
  * - `unchanged` 目标档就是当前档,一次写入都没发生(见下方同档短路)
- * - `cancelled` 用户在 Full access 二次确认里点了取消,什么都没改
+ * - `cancelled` 用户在 Full access 二次确认里点了取消,或确认期间原请求已失效
  * - `failed`    runtime 或持久化失败,已尽力回滚;调用方负责提示
  */
 export type PermissionModeChangeOutcome = 'ok' | 'unchanged' | 'cancelled' | 'failed';
+
+/**
+ * runtime 与持久化已知失配的会话。
+ *
+ * 本机路径是 runtime-first:runtime 写成功、落库失败时会尽力把 runtime 回滚。
+ * 但回滚本身也可能失败 —— 那一刻 UI/DB 还显示旧档,活着的 agent 却已经在新档上
+ * (切 Full access 时尤其危险:界面写着"询问",agent 实际免询问)。这种状态下必须
+ * 允许用户"重选界面上显示的那一档"来强制对账,所以同档短路要对这些会话失效。
+ * 一旦有一次写入完整成功,失配即解除。
+ */
+const desyncedSessions = new Set<string>();
 
 export interface ApplySessionPermissionModeChangeParams {
   /** 无 sessionId = 新建对话草稿,只走 confirm 门,不落 runtime/DB。 */
@@ -40,6 +51,14 @@ export interface ApplySessionPermissionModeChangeParams {
   nextMode: PermissionMode;
   /** 进入 Full access 时的二次确认;返回 false 即放弃本次切换。 */
   confirmFullAccess: () => Promise<boolean>;
+  /**
+   * 确认门通过之后、真正写入之前的最后一道校验;返回 false 则放弃(算 `cancelled`)。
+   *
+   * 用于把这次切换钉在发起它的那条 pending 请求上:Full access 确认框可以一直开着,
+   * 期间原请求可能已被别处(灵动岛 / 另一个控制端)解决,agent 又产生了新的 pending。
+   * 此时若照旧写入,dismissAllPending 会把用户根本没看过的新请求一并放行。
+   */
+  assertStillApplicable?: () => boolean;
 }
 
 export async function applySessionPermissionModeChange({
@@ -48,18 +67,27 @@ export async function applySessionPermissionModeChange({
   currentMode,
   nextMode,
   confirmFullAccess,
+  assertStillApplicable,
 }: ApplySessionPermissionModeChangeParams): Promise<PermissionModeChangeOutcome> {
   // 同档短路,必须在确认门之前:PermissionSelector 的选项 onClick 无条件回调(点当前
   // 选中项也会进来),而 maker-core 的 setPermissionMode 无论档位变没变都会
   // dismissAllPending —— 不短路的话,用户在权限卡片上点开菜单又点回当前档,手里那条
   // pending 请求就被"顺手"结掉了(放宽→allow,其它→deny),而他自以为什么都没改。
   // composer 上同样受益:少一次无谓的 runtime + DB 写。
-  if (currentMode === nextMode) return 'unchanged';
+  //
+  // 例外:runtime 与持久化已知失配的会话不短路 —— 那时"重选显示中的档"正是用户
+  // 唯一的对账手段(见 desyncedSessions 顶注)。
+  if (currentMode === nextMode && !(sessionId && desyncedSessions.has(sessionId))) {
+    return 'unchanged';
+  }
 
   if (requiresFullAccessConfirmation(currentMode, nextMode)) {
     const confirmed = await confirmFullAccess();
     if (!confirmed) return 'cancelled';
   }
+
+  // 确认门可能挂了很久,写入前再确认这次切换仍然属于发起它的那条请求。
+  if (assertStillApplicable && !assertStillApplicable()) return 'cancelled';
 
   if (!sessionId) return 'ok';
 
@@ -79,11 +107,16 @@ export async function applySessionPermissionModeChange({
         try {
           await window.electronAPI.maker.setPermissionMode(sessionId, currentMode);
         } catch (rollbackError) {
+          // 回滚也失败:UI/DB 停在旧档,活着的 agent 却留在新档。记账,让"重选显示中
+          // 的那一档"能绕过同档短路去强制对账(见 desyncedSessions 顶注)。
+          desyncedSessions.add(sessionId);
           log.warn('permission runtime rollback failed:', rollbackError);
         }
         throw persistError;
       }
     }
+    // 一次完整成功的写入即代表 runtime 与持久化重新对上。
+    desyncedSessions.delete(sessionId);
     return 'ok';
   } catch (err) {
     log.warn('permission change failed:', err);

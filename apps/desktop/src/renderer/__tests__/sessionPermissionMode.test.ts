@@ -206,6 +206,79 @@ describe('applySessionPermissionModeChange', () => {
     expect(remoteSetPermissionMode).not.toHaveBeenCalled();
   });
 
+  // runtime 写成功、落库失败、回滚也失败 → UI/DB 停在旧档,活着的 agent 却在新档。
+  // 这时"重选界面上显示的那一档"是用户唯一的对账手段,不能被同档短路吃掉。
+  it('回滚失败后同档重选能强制对账,成功后恢复短路', async () => {
+    const DESYNC_SESSION = 'perm-mode-desync';
+    sessionUpdate.mockRejectedValueOnce(new Error('db down'));
+    localSetPermissionMode
+      .mockResolvedValueOnce(undefined) // 写 nextMode 成功
+      .mockRejectedValueOnce(new Error('rollback down')); // 回滚失败
+
+    const first = await applySessionPermissionModeChange({
+      sessionId: DESYNC_SESSION,
+      currentMode: 'ask',
+      nextMode: 'acceptEdits',
+      confirmFullAccess: confirmNever,
+    });
+    expect(first).toBe('failed');
+
+    // 用户重选界面上显示的 ask:必须真的写一次 runtime,而不是 'unchanged'。
+    localSetPermissionMode.mockResolvedValue(undefined);
+    const reconcile = await applySessionPermissionModeChange({
+      sessionId: DESYNC_SESSION,
+      currentMode: 'ask',
+      nextMode: 'ask',
+      confirmFullAccess: confirmNever,
+    });
+    expect(reconcile).toBe('ok');
+    expect(localSetPermissionMode).toHaveBeenLastCalledWith(DESYNC_SESSION, 'ask');
+
+    // 对账成功后失配解除,同档短路恢复生效。
+    localSetPermissionMode.mockClear();
+    const afterReconcile = await applySessionPermissionModeChange({
+      sessionId: DESYNC_SESSION,
+      currentMode: 'ask',
+      nextMode: 'ask',
+      confirmFullAccess: confirmNever,
+    });
+    expect(afterReconcile).toBe('unchanged');
+    expect(localSetPermissionMode).not.toHaveBeenCalled();
+  });
+
+  // Full access 确认框可以一直开着,期间原请求可能已被别处(灵动岛 / 另一个控制端)
+  // 解决、agent 又产生了新的 pending。照旧写入会让 dismissAllPending 放行用户没看过的
+  // 那条新请求。
+  it('确认后原请求已失效则放弃写入', async () => {
+    const assertStillApplicable = vi.fn(() => false);
+
+    const outcome = await applySessionPermissionModeChange({
+      sessionId: SESSION_ID,
+      currentMode: 'ask',
+      nextMode: 'bypassPermissions',
+      confirmFullAccess: vi.fn(async () => true),
+      assertStillApplicable,
+    });
+
+    expect(outcome).toBe('cancelled');
+    expect(assertStillApplicable).toHaveBeenCalledOnce();
+    expect(localSetPermissionMode).not.toHaveBeenCalled();
+    expect(sessionUpdate).not.toHaveBeenCalled();
+  });
+
+  it('原请求仍在则照常写入', async () => {
+    const outcome = await applySessionPermissionModeChange({
+      sessionId: SESSION_ID,
+      currentMode: 'ask',
+      nextMode: 'acceptEdits',
+      confirmFullAccess: confirmNever,
+      assertStillApplicable: () => true,
+    });
+
+    expect(outcome).toBe('ok');
+    expect(localSetPermissionMode).toHaveBeenCalledWith(SESSION_ID, 'acceptEdits');
+  });
+
   it('无 sessionId(新建草稿)只过确认门,不碰 runtime/DB', async () => {
     const outcome = await applySessionPermissionModeChange({
       currentMode: 'ask',

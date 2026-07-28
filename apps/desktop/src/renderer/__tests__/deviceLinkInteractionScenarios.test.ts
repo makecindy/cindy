@@ -697,9 +697,18 @@ describe('远程交互接线不变式', () => {
     expect(src).toContain("if (!confirmed) return 'cancelled';");
     // 同档短路必须在确认门之前:maker-core 的 setPermissionMode 不管档位变没变都会
     // dismissAllPending,点回当前档就会顺手结掉手里的 pending 请求。
-    const sameModeGuard = src.indexOf("if (currentMode === nextMode) return 'unchanged';");
+    const sameModeGuard = src.indexOf('if (currentMode === nextMode &&');
     expect(sameModeGuard).toBeGreaterThan(-1);
     expect(sameModeGuard).toBeLessThan(src.indexOf('requiresFullAccessConfirmation('));
+    // 但 runtime 与持久化已知失配时不得短路 —— 那时"重选显示中的档"是用户唯一的
+    // 对账手段(回滚失败后 UI 停在旧档、agent 留在新档)。
+    expect(src).toContain('desyncedSessions.has(sessionId)');
+    expect(src).toContain('desyncedSessions.add(sessionId)');
+    expect(src).toContain('desyncedSessions.delete(sessionId)');
+    // 确认门之后、写入之前的最后一道校验,把切换钉在发起它的那条请求上。
+    const staleGuard = src.indexOf('assertStillApplicable()');
+    expect(staleGuard).toBeGreaterThan(src.indexOf('await confirmFullAccess()'));
+    expect(staleGuard).toBeLessThan(src.indexOf('setPermissionMode(sessionId, nextMode)'));
   });
 
   // 这一处已经错过两轮:先是 boolean(旧会话的旗子吞掉新会话的点击),再是单个

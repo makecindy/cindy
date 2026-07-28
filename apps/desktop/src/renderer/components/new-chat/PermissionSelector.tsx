@@ -20,6 +20,7 @@ import {
   type PermissionModeDescriptor,
 } from '@/hooks/useAgentCapabilities';
 import type { PermissionMode } from '@/lib/userPreferences.types';
+import { canonicalizePermissionMode } from '@/lib/permissionModeCycle';
 
 interface PermissionSelectorProps {
   permissionMode: PermissionMode;
@@ -66,10 +67,13 @@ function vendorKeyToAgentKind(v: 'cc' | 'codex'): AgentKind {
   return v === 'codex' ? 'codex' : 'claude-code';
 }
 
-/** Codex 不支持 acceptEdits/plan, 落到 ask 兜底 */
+/**
+ * Codex 不支持 acceptEdits/plan, 落到 ask 兜底。
+ * 规则本体已抽到 lib/permissionModeCycle 的 canonicalizePermissionMode ——
+ * 显示选中项、同档比较、Shift+Tab 轮切必须共用同一道归一(见该函数顶注)。
+ */
 function normalizeMode(mode: PermissionMode, options: PermissionModeDescriptor[]): PermissionMode {
-  if (options.some((o) => o.id === mode)) return mode;
-  return options[0]?.id ?? mode;
+  return canonicalizePermissionMode(mode, options);
 }
 
 function getModeTone(mode: PermissionMode): 'auto' | 'bypassPermissions' | null {

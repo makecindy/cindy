@@ -57,6 +57,7 @@ import { TakeoverMask } from '@/components/new-chat/TakeoverMask';
 import { WorktreeCreatingOverlay } from '@/components/new-chat/WorktreeCreatingOverlay';
 import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
 import { applySessionPermissionModeChange } from '@/lib/sessionPermissionMode';
+import { canonicalizePermissionMode } from '@/lib/permissionModeCycle';
 import { IssueConfirmCard } from './IssueConfirmCard';
 import { RenameSessionsConfirmCard } from './RenameSessionsConfirmCard';
 import { GhostGrantConfirmCard } from './GhostGrantConfirmCard';
@@ -64,7 +65,7 @@ import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionProm
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
-import { InteractionPromptHost } from '@/components/interaction-portal';
+import { InteractionPromptHost, useInteractionPromptSlot } from '@/components/interaction-portal';
 import { MessageStream } from '@/components/chat/MessageStream';
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
 import {
@@ -2322,8 +2323,22 @@ export function CCAgentSessionView({
   //
   // 当前档走 ref 而非 useCallback 闭包:confirm 弹窗 + runtime + 落库是多次 await,
   // 期间 session 分片可能已被上一次切换刷新,闭包里的旧值会让确认门与回滚基准漂移。
+  // 卡片是否被 portal 到常驻可见的 slot(doc-browse 中栏)——决定快捷键归属,见下方
+  // shortcutsActive。
+  const interactionPromptSlot = useInteractionPromptSlot();
+  // 归一后再用:会话里可能存着 legacy `default` 或另一 agent 的专有档,而卡片显示的
+  // 选中项走的是 capabilities 归一(不在清单里 → 落到首项 ask)。不归一就会出现
+  // 「点界面上已选中的那项 = 一次真实切档」,绕过同档短路、白白 dismiss 掉 pending。
+  const cardPermissionMode = canonicalizePermissionMode(
+    (session?.permissionMode as PermissionMode) ?? 'ask',
+    liveSessionCaps?.permissionModes ?? [],
+  );
   const sessionPermissionModeRef = useRef<PermissionMode>('ask');
-  sessionPermissionModeRef.current = (session?.permissionMode as PermissionMode) ?? 'ask';
+  sessionPermissionModeRef.current = cardPermissionMode;
+  // Full access 确认框可能一直开着,期间原请求可能已被别处(灵动岛 / 另一个控制端)
+  // 解决、agent 又产生了新的 pending。写入前要能核对"还是发起时那条请求"。
+  const pendingPermissionRequestIdRef = useRef<string | undefined>(undefined);
+  pendingPermissionRequestIdRef.current = pendingPermission?.requestId;
   // 防重入:连点档位或狂按轮切快捷键会并发起多条 runtime + DB 写,最终档位取决于
   // 异步完成顺序(且失败回滚会滚到错档)。in-flight 期间后续请求直接 no-op ——
   // 与下面 compactRequestInFlightRef 同一套约定。
@@ -2342,6 +2357,8 @@ export function CCAgentSessionView({
       if (!sessionId) return;
       if (permissionModeChangeInFlightRef.current.has(sessionId)) return;
       permissionModeChangeInFlightRef.current.add(sessionId);
+      // 钉住发起本次切换的那条请求(见 pendingPermissionRequestIdRef 定义处)。
+      const originRequestId = pendingPermissionRequestIdRef.current;
       try {
         const outcome = await applySessionPermissionModeChange({
           sessionId,
@@ -2358,6 +2375,10 @@ export function CCAgentSessionView({
               confirmText: t('newChat.chatInput.fullAccessConfirmation.confirm'),
               cancelText: t('newChat.chatInput.fullAccessConfirmation.cancel'),
             }),
+          // 确认期间原请求若已被别处解决(此刻要么没有 pending,要么换成了另一条),
+          // 就别再写了 —— 否则 dismissAllPending 会替用户放行他没看过的新请求。
+          assertStillApplicable: () =>
+            pendingPermissionRequestIdRef.current === originRequestId,
         });
         // unchanged = 点回当前档,一次写入都没发生,没有新状态要回流。
         if (outcome === 'cancelled' || outcome === 'unchanged') return;
@@ -3147,9 +3168,14 @@ export function CCAgentSessionView({
                     // 本视图是多实例的(Orca 下 lead 与 worker 各一个,右栏折叠时
                     // body 仍挂载)。看不见的实例不得抢 window 级快捷键,否则一次
                     // 按键会把看不见的那张卡上的请求也一并结掉。
-                    shortcutsActive={viewVisible}
+                    // 但归属要跟着**卡片实际渲染的位置**:doc-browse 里 rail 一折叠
+                    // viewVisible 就是 false,而卡片这时恰恰被 portal 到了常驻可见的
+                    // 中栏 slot —— 那张卡看得见、点得动,快捷键不能跟着 rail 一起哑掉。
+                    shortcutsActive={viewVisible || !!interactionPromptSlot}
                     modeSwitch={{
-                      permissionMode: (session?.permissionMode as PermissionMode) ?? 'ask',
+                      // 归一后的档(见 cardPermissionMode 定义处):否则点界面上已选中
+                      // 的那项会被判成真实切档,白白结掉手里的 pending。
+                      permissionMode: cardPermissionMode,
                       onPermissionModeChange: handlePermissionCardModeChange,
                       // live 引擎(非 displayAgentKind),见 liveAgentKind 定义处。
                       vendorKey: liveAgentKind === 'codex' ? 'codex' : 'cc',
