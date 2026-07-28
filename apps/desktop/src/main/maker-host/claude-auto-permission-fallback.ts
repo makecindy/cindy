@@ -70,14 +70,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function firstSystemText(system: unknown): string | null {
+/**
+ * oauth-spawn 的 CC 默认开归因(claude-behavior-flags.ts,issue #758),会把
+ * `x-anthropic-billing-header: cc_version=...` 作为 system 数组**第一个** text block
+ * 注入 —— 分类器身份前缀被顶到其后。匹配前必须跳过归因块,否则 oauth-spawn 下
+ * 分类器故障全部漏检、auto→ask 降级失灵。
+ */
+const ATTRIBUTION_SYSTEM_BLOCK_PREFIX = 'x-anthropic-billing-header:';
+
+function classifierIdentityText(system: unknown): string | null {
   if (typeof system === 'string') return system;
-  if (!Array.isArray(system) || system.length === 0) return null;
-  const first = system[0];
-  if (!isRecord(first) || first.type !== 'text' || typeof first.text !== 'string') {
-    return null;
+  if (!Array.isArray(system)) return null;
+  for (const block of system) {
+    if (!isRecord(block) || block.type !== 'text' || typeof block.text !== 'string') {
+      return null;
+    }
+    if (block.text.startsWith(ATTRIBUTION_SYSTEM_BLOCK_PREFIX)) continue;
+    return block.text;
   }
-  return first.text;
+  return null;
 }
 
 /**
@@ -92,8 +103,8 @@ const CLASSIFIER_MAX_TOKENS_CEILING = 16384;
  * 精确识别 Claude Code 内部 Auto 安全分类器请求。双判据都满足才算命中:
  *
  * 主判据 —— 分类器独有的 system 前缀:分类器请求带 `skipSystemPromptPrefix`,其 system 段
- * 恒以 CLASSIFIER_SYSTEM_PREFIX 开头;普通主 turn 的 system 是 Claude Code 常规 prompt,
- * 二者完全区分。前缀是分类器身份,本身已足够;
+ * (跳过可能存在的归因块后)恒以 CLASSIFIER_SYSTEM_PREFIX 开头;普通主 turn 的 system 是
+ * Claude Code 常规 prompt,二者完全区分。前缀是分类器身份,本身已足够;
  *
  * 副判据 —— max_tokens 上界(防御性,收窄理论碰撞面):不用固定值(分类器三种形态 max_tokens
  * 各不相同,早期实现取定值 64 只覆盖一条、漏检 fast/thinking,漏检时降级不触发、会话继续
@@ -113,7 +124,7 @@ export function isClaudeAutoClassifierRequest(requestBody: Buffer): boolean {
   if (typeof parsed.max_tokens !== 'number' || parsed.max_tokens > CLASSIFIER_MAX_TOKENS_CEILING) {
     return false;
   }
-  return firstSystemText(parsed.system)?.startsWith(CLASSIFIER_SYSTEM_PREFIX) === true;
+  return classifierIdentityText(parsed.system)?.startsWith(CLASSIFIER_SYSTEM_PREFIX) === true;
 }
 
 /**

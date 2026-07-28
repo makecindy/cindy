@@ -64,6 +64,32 @@ describe('Claude Auto classifier request detection', () => {
     ).toBe(true);
   });
 
+  it('skips the leading attribution block injected by oauth-spawn CC (issue #758)', () => {
+    // oauth-spawn 归因默认开:system[0] 是 `x-anthropic-billing-header: ...`,
+    // 分类器身份前缀在其后 —— 检测必须跳过归因块,否则降级失灵。
+    const attribution = {
+      type: 'text',
+      text: 'x-anthropic-billing-header: cc_version=2.1.112.system; cc_entrypoint=cli; cch=00000;',
+    };
+    expect(
+      isClaudeAutoClassifierRequest(
+        requestBody({
+          system: [attribution, { type: 'text', text: `${CLASSIFIER_PREFIX}\nRules` }],
+        }),
+      ),
+    ).toBe(true);
+    // 归因块后面跟的是普通主 turn prompt → 仍不得命中。
+    expect(
+      isClaudeAutoClassifierRequest(
+        requestBody({
+          system: [attribution, { type: 'text', text: 'You are Claude Code, Anthropic official CLI' }],
+        }),
+      ),
+    ).toBe(false);
+    // 只有归因块、没有任何身份前缀 → 不命中。
+    expect(isClaudeAutoClassifierRequest(requestBody({ system: [attribution] }))).toBe(false);
+  });
+
   it('detects every classifier max_tokens shape (fast 256 / stage1 64 / thinking 8192)', () => {
     // 不再依赖固定 max_tokens——三条分类器路径(含 +k 变体)都必须命中,
     // 否则 fast / thinking 路径的 429 会漏检、不触发降级。
