@@ -404,12 +404,6 @@ export function MainLayout() {
     isRailMode &&
     !isSidebarCollapsed &&
     !sidebarPeek.isPeekVisible;
-  const rightSidebarOwnsRailChromeActions =
-    hasRailChromeActions &&
-    rightSidebarSide === 'left' &&
-    !isRightSidebarCollapsed &&
-    !rsbDetached &&
-    !isRightSidebarMaximized;
   // peek 中固定展开(pinning)时若持久化的 rail 模式还开着:退出 rail —— 用户
   // 刚在全宽抽屉里预览并选择固定,落到 78px 窄轨会与所见不符且造成宽度跳变。
   useEffect(() => {
@@ -746,6 +740,12 @@ export function MainLayout() {
   // - 折叠 RSB 时自动退出(否则 maximize 状态下点折叠会导致主区 hidden + RSB 也 0 宽 → 全黑)
   // - 不持久化:刷新 / 切 session 默认非 maximize,跟"临时聚焦视图"语义一致
   const [isRightSidebarMaximized, setIsRightSidebarMaximized] = useState(false);
+  const rightSidebarOwnsRailChromeActions =
+    hasRailChromeActions &&
+    rightSidebarSide === 'left' &&
+    !isRightSidebarCollapsed &&
+    !rsbDetached &&
+    !isRightSidebarMaximized;
   const handleMaximizeRightSidebar = useCallback(() => {
     setIsRightSidebarMaximized((v) => !v);
   }, []);
