@@ -333,4 +333,21 @@ describe('quickStartTextToTiptapDoc', () => {
     expect(plainText.marks).toBeUndefined();
     expect(markedText.marks).toEqual([{ type: 'quickStartPill' }]);
   });
+
+  it('goes through plainText normalization (lists become bulletList nodes) and marks leaf text', () => {
+    const doc = quickStartTextToTiptapDoc('- item1\n- item2');
+    // Walk tree to find every text node; they must all carry quickStartPill mark.
+    const textNodes: { text?: string; marks?: unknown[] }[] = [];
+    const walk = (n: JSONContent) => {
+      if (n.type === 'text') textNodes.push({ text: n.text, marks: n.marks });
+      (n.content ?? []).forEach(walk);
+    };
+    walk(doc);
+    expect(textNodes.length).toBeGreaterThanOrEqual(2);
+    for (const tn of textNodes) {
+      expect(tn.marks).toEqual(
+        expect.arrayContaining([{ type: 'quickStartPill' }]),
+      );
+    }
+  });
 });
