@@ -1666,8 +1666,8 @@ export function ModelSelector({
   const agentIdentityLabel =
     showAgentIdentity && vendorKey && !fallbackOption?.active
       ? vendorKey === 'cc'
-        ? 'Claude Code'
-        : 'Codex'
+        ? t('newChat.modelSelector.trigger.agent.claudeCode')
+        : t('newChat.modelSelector.trigger.agent.codex')
       : null;
   const displayIdentityLabel = agentIdentityLabel
     ? `${agentIdentityLabel} · ${displayLabel}`

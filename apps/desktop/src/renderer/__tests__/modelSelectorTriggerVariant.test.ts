@@ -28,6 +28,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'effortLevels.xhigh': '超高',
         'settings.providers.anthropic.title': 'Anthropic',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
+        'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
+        'newChat.modelSelector.trigger.agent.codex': 'Codex',
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
       };

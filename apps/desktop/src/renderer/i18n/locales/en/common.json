@@ -4017,7 +4017,11 @@
       "trigger": {
         "placeholder": "Select model",
         "aria": "Select model. Current: {{model}}",
-        "ariaWithEffort": "Select model. Current: {{model}}, effort: {{effort}}"
+        "ariaWithEffort": "Select model. Current: {{model}}, effort: {{effort}}",
+        "agent": {
+          "claudeCode": "Claude Code",
+          "codex": "Codex"
+        }
       },
       "category": {
         "anthropic": "Anthropic",

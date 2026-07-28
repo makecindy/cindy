@@ -4016,7 +4016,11 @@
       "trigger": {
         "placeholder": "选择模型",
         "aria": "选择模型。当前：{{model}}",
-        "ariaWithEffort": "选择模型。当前：{{model}}，推理强度：{{effort}}"
+        "ariaWithEffort": "选择模型。当前：{{model}}，推理强度：{{effort}}",
+        "agent": {
+          "claudeCode": "Claude Code",
+          "codex": "Codex"
+        }
       },
       "category": {
         "anthropic": "Anthropic",
