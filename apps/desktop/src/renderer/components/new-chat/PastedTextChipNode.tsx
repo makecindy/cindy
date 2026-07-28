@@ -99,6 +99,8 @@ function PastedTextChipNodeView({ node, selected }: NodeViewProps) {
         tooltipContentClassName="max-h-64 w-80 max-w-[70vw] overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere]"
         ariaLabel={attrs.display}
         selected={selected}
+        // 同 MentionChipNode:composer 的原子节点不参与文字级 selection。
+        textSelectable={false}
         className="cursor-pointer"
       />
     </NodeViewWrapper>

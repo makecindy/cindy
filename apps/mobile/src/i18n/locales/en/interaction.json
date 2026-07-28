@@ -31,10 +31,17 @@
     "pendingRequests": "Pending requests",
     "queueSwitchTo": "Switch to {{position}} pending request: {{label}}",
     "queueSwitchGeneric": "Switch pending request",
+    "queuePositionCurrent": "current",
+    "queuePositionNext": "next",
+    "queuePositionNth": "no. {{index}}",
+    "composerBlockedByPending": "Handle the pending request from your computer before typing again.",
     "missingRequestId": "This remote interaction has no requestId, so the decision can't be sent back.",
     "issueConfirmUnsupported": "Issue submission is confirmed only on your computer. Go back to the desktop app to confirm or cancel.",
     "unsupportedType": "This remote interaction type isn't supported on mobile yet.",
     "unsupportedKind": "Unsupported",
+    "desktopOnlyKind": "On Computer",
+    "cancelRequest": "Cancel This Request",
+    "cancelRequestAccessibility": "Cancel this remote request",
     "awaitingAnswer": "Awaiting answer",
     "continueAccessibility": "Continue the remote question",
     "continue": "Continue",
@@ -79,6 +86,32 @@
     "planFeedbackRequired": "Enter feedback before submitting.",
     "planFeedbackSubmit": "Submit plan feedback",
     "planFeedbackAccessibility": "Give feedback to change the plan"
+  },
+  "kinds": {
+    "permission": {
+      "title": "Permission Needed on Your Computer",
+      "label": "Permission"
+    },
+    "ask_user_question": {
+      "title": "Agent Needs an Answer",
+      "label": "Question"
+    },
+    "plan_review": {
+      "title": "Plan Needs Your Review",
+      "label": "Plan"
+    },
+    "issue_confirm": {
+      "title": "Issue Needs Confirmation",
+      "label": "Issue"
+    },
+    "plugin_setup": {
+      "title": "Plugin Setup Needed on Your Computer",
+      "label": "Plugin"
+    },
+    "fallback": {
+      "title": "Remote Request Needs Attention",
+      "label": "Request"
+    }
   },
   "rewind": {
     "readError": "Couldn't read the rewind preview. Sync again and retry.",
@@ -145,5 +178,44 @@
     "enable": "Turn on",
     "icloudTimeout": "The photo is still downloading from iCloud and timed out. Check your network and retry.",
     "photoNotReadable": "This photo can't be read right now (it may not have finished downloading from iCloud). Try again later."
+  },
+  "pluginSetup": {
+    "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
+    "chooseOne": "Choose one setup method",
+    "progress": "{{satisfied}}/{{total}} completed",
+    "desktopActionHint": "On your computer: {{action}}",
+    "a11ySeparator": ", ",
+    "phase": {
+      "pending": "Pending",
+      "action_running": "In progress…",
+      "waiting_external": "Waiting for authorization…",
+      "verifying": "Verifying…",
+      "satisfied": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "error": {
+      "ACTION_FAILED": "Couldn't complete this setup action. Try again.",
+      "ACTION_STALE": "This setup changed. Choose the setup action again.",
+      "AUTH_CANCELLED": "Authorization was cancelled. Authorize the account again when ready.",
+      "AUTH_FAILED": "Couldn't authorize the account. Try again.",
+      "AUTH_NETWORK": "Couldn't reach the authorization service. Check your network and try again.",
+      "AUTH_SERVICE_UNAVAILABLE": "The authorization service is temporarily unavailable. Try again later.",
+      "INLINE_INVALID": "This configuration is invalid. Check it and try again.",
+      "INLINE_UNAVAILABLE": "This Cindy version can't save this configuration in chat. Update Cindy and try again.",
+      "SAVE_FAILED": "Couldn't save this configuration. Try again.",
+      "WINDOW_CLOSED": "The window that started setup was closed. Return to the session and try again.",
+      "TARGET_UNAVAILABLE": "This plugin is disabled, uninstalled, or unavailable. Check the plugin and try again.",
+      "ASSESSMENT_FAILED": "Couldn't refresh the setup status. Try again.",
+      "TIMEOUT": "Setup timed out. Try again."
+    },
+    "action": {
+      "oauth_connect": "Authorize",
+      "open_plugin_settings": "Open settings",
+      "manage_connection": "Manage connections",
+      "open_client_settings": "Open model settings"
+    },
+    "inlineFormAction": "Enter {{label}} on your computer",
+    "inlineFormActionGeneric": "Enter one setting on your computer"
   }
 }

@@ -71,15 +71,19 @@ export function broadcastSessionPatched(sessionId: string, patch: Record<string,
 function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
   void (async () => {
-    const [mh, recycle] = await Promise.all([
+    const [mh, recycle, routeLock] = await Promise.all([
       import('../../maker-host/index.js'),
       import('../../worktree/sessionRemovalRecycle.js'),
+      import('../../maker-ipc/register.js'),
     ]);
     if (!(await recycle.isSessionStillRemovable(sessionId))) return;
-    await mh
-      .getMakerIfReady()
-      ?.closeSession(sessionId)
-      .catch(() => undefined);
+    await routeLock.withSendToSessionLock(sessionId, async () => {
+      if (!(await recycle.isSessionStillRemovable(sessionId))) return;
+      await mh
+        .getMakerIfReady()
+        ?.closeSession(sessionId)
+        .catch(() => undefined);
+    });
     await recycle.recycleWorktreeForRemovedSession(sessionId);
   })().catch((err) => {
     log.warn('worktree recycle after session status change failed', {
@@ -424,38 +428,131 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
 }
 
 /**
- * 远控首条输入自动标题的资格检查。必须在 enqueue 接受前调用:
- * - title 仍是桌面草稿占位
- * - 还没有 userSendAt
- * - 还没有已落库消息
+ * 自动标题的统一归一化:折叠空白 → trim → 截断 40 字。先 trim 再截断,避免前导
+ * 大量空白吃满长度得到空标题。落库出口与占位覆写方都用它算出同一个串。
  */
-export async function isUntitledDraftSessionBeforeFirstInput(id: string): Promise<boolean> {
-  const db = getDbClient().drizzle;
-  const row = await selectSessionWithCount(db, id);
-  return (
-    !!row &&
-    row.title === DEFAULT_DRAFT_SESSION_TITLE &&
-    row.userSendAt === null &&
-    row.messageCount === 0
-  );
+export function normalizeAutoTitle(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
+}
+
+/** fork 出来的会话的占位标题前缀("[Fork] …" / "[Fork·已剥离] …")。 */
+const FORK_PLACEHOLDER_TITLE_PREFIX = '[Fork';
+
+let _onUserTitleWritten: ((sessionId: string) => void) | null = null;
+
+/**
+ * 注入「用户手动写过标题」的通知(传 null 清除;由 maker-ipc 的自动起名模块注册)。
+ *
+ * 为什么条件写不够:`persistSessionTitleIfStillDraft` 靠 `WHERE title = 期望值` 实现
+ * user rename wins,但用户把标题改成**与占位逐字相同**的串时这条件仍然成立,随后的
+ * 智能标题会把他刚保存的名字覆盖掉(PR #510 review P1)。`sessions` 表没有「谁写的」
+ * 这一列,所以由改名出口显式说一声,自动起名据此收手。
+ */
+export function setOnUserSessionTitleWritten(fn: ((sessionId: string) => void) | null): void {
+  _onUserTitleWritten = fn;
+}
+
+/** 用户改名出口统一调这个(自动起名自己的写入**不**调)。 */
+function noteUserTitleWritten(sessionId: string): void {
+  try {
+    _onUserTitleWritten?.(sessionId);
+  } catch {
+    // 自动起名是附属功能,通知失败不该影响改名主流程。
+  }
 }
 
 /**
- * 自动标题落库出口。只在 title 仍是草稿占位时写入，避免后台标题覆盖用户手动改名。
+ * 自动标题的资格检查:title 仍是系统占位。系统占位有三种 ——
+ *
+ *   1. `DEFAULT_DRAFT_SESSION_TITLE`:建会话时的默认标题;
+ *   2. fork 占位("[Fork…" 前缀 **且** 有 parentSessionId):fork 会话天然带历史
+ *      消息,要在用户发出第一句话时才被替换。额外要求 parentSessionId,避免用户
+ *      手动改名成 "[Fork] ..." 的普通会话被误判成占位;
+ *   3. `synthesizedPlaceholder`:调用方上次为纯附件消息写入的合成占位(文件名 /
+ *      「图片」等),让「先只贴图、后打字」的会话在用户打字时把标题换成他写的内容。
+ *
+ * 只看标题、不要求「零消息且无 userSendAt」:首条输入是纯附件(无文本)时会话已经
+ * 有消息和 userSendAt,旧口径会让它永久停在 "New Maker"。标题仍是系统占位本身就
+ * 等价于「既没被自动起名、也没被用户改名」,足以作为门槛。
+ */
+export interface OverwritableAutoTitleTarget {
+  /** 当前可覆写的标题 —— 直接用作条件写的期望值。 */
+  title: string;
+  /**
+   * DB 里的权威 agentKind。**不要信调用方快照**:另一个窗口或设备切过 agent 时,
+   * 入队时构建的 createOpts 可能已经过期(lazy-create 的
+   * `reconcileCreateOptsAgainstDb` 处理的正是同一类漂移),用错 agent 会让标题
+   * 走错供应商 —— 纯 Codex / 纯 Claude 用户会因此只拿到 fallback 标题。
+   */
+  agentKind: 'claude-code' | 'codex';
+  /**
+   * 是否仍停在建会话时的裸默认标题。合成占位(纯附件消息)只允许覆写这一种 ——
+   * fork 占位与上一条附件写下的合成占位都要保留到用户真正打字为止。
+   */
+  isDefaultDraftTitle: boolean;
+}
+
+export async function getOverwritableAutoTitle(
+  id: string,
+  synthesizedPlaceholder?: string | null,
+): Promise<OverwritableAutoTitleTarget | null> {
+  const db = getDbClient().drizzle;
+  const row = await selectSessionWithCount(db, id);
+  if (!row) return null;
+  const agentKind = row.agentKind === 'codex' ? 'codex' : 'claude-code';
+  const overwritable =
+    row.title === DEFAULT_DRAFT_SESSION_TITLE ||
+    (!!row.parentSessionId && row.title.startsWith(FORK_PLACEHOLDER_TITLE_PREFIX)) ||
+    (!!synthesizedPlaceholder && row.title === synthesizedPlaceholder);
+  if (!overwritable) return null;
+  return {
+    title: row.title,
+    agentKind,
+    isDefaultDraftTitle: row.title === DEFAULT_DRAFT_SESSION_TITLE,
+  };
+}
+
+/**
+ * 布尔版资格检查(给 enqueue 前的廉价预检用)。真正执行起名的路径用
+ * {@link getOverwritableAutoTitle},因为它还要拿当前标题当条件写的期望值 ——
+ * fork 占位与合成占位都不等于草稿默认值,猜期望值会让写入直接落空。
+ */
+export async function isUntitledSessionAwaitingAutoTitle(
+  id: string,
+  synthesizedPlaceholder?: string | null,
+): Promise<boolean> {
+  return (await getOverwritableAutoTitle(id, synthesizedPlaceholder)) !== null;
+}
+
+/**
+ * 自动标题落库出口。只在 title 仍等于 `expectedTitle` 时写入,避免后台标题覆盖
+ * 用户手动改名。
+ *
+ * `expectedTitle` 默认是草稿占位;远控立即占位链路在写完占位后,用占位串作为
+ * 期望值再写智能标题——用户在等待窗口内手动改名时期望值不匹配,写入被拒绝。
  */
 export async function persistSessionTitleIfStillDraft(
   sessionId: string,
   title: string,
+  expectedTitle: string = DEFAULT_DRAFT_SESSION_TITLE,
 ): Promise<boolean> {
-  const cleanTitle = title.replace(/\s+/g, ' ').trim().slice(0, 40);
+  const cleanTitle = normalizeAutoTitle(title);
   if (!cleanTitle || cleanTitle === DEFAULT_DRAFT_SESSION_TITLE) return false;
 
   const db = getDbClient().drizzle;
+  // 目标值与期望值相同 → UPDATE 无事可做,但**不能凭期望值直接报成功**:期望值
+  // 可能已经过期(用户在资格检查之后手动改了名),那时库里根本不是这个标题。
+  // 读一次真实标题再回答,避免调用方把"没写成"当成"已写入"(PR #510 review)。
+  if (cleanTitle === expectedTitle) {
+    const current = await selectSessionWithCount(db, sessionId);
+    return !!current && current.title === cleanTitle;
+  }
+
   const setObj = sessionPatchToRow({ title: cleanTitle }, { bumpUpdatedAt: false });
   await db
     .update(sessions)
     .set(setObj)
-    .where(and(eq(sessions.id, sessionId), eq(sessions.title, DEFAULT_DRAFT_SESSION_TITLE)));
+    .where(and(eq(sessions.id, sessionId), eq(sessions.title, expectedTitle)));
 
   const row = await selectSessionWithCount(db, sessionId);
   if (!row || row.title !== cleanTitle) return false;
@@ -840,6 +937,13 @@ export function registerSessionIpc(): void {
     const setObj = sessionPatchToRow(p as Parameters<typeof sessionPatchToRow>[0], {
       bumpUpdatedAt: !isSettingsOnly,
     });
+    // 用户手动改名(重命名框 / 侧边栏)走这条:告诉自动起名收手。同值改名不会让
+    // 条件写落空,不显式说一声的话智能标题会把他刚保存的名字盖掉(review P1)。
+    // **必须先于 UPDATE**:写库是一次 worker RPC 往返,改名提交与这里拿到回执之间
+    // 有真实时间差,在那期间智能标题仍能满足 `WHERE title = 期望值` 把名字盖掉。
+    // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
+    // 按下过保存,这个方向的偏差是安全的。
+    if (typeof p.title === 'string') noteUserTitleWritten(sid);
     await db.update(sessions).set(setObj).where(eq(sessions.id, sid));
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
     // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
@@ -974,6 +1078,8 @@ export async function patchSessionMetaInDb(
 
   const db = getDbClient().drizzle;
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
+  // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
+  if (patch.title !== undefined) noteUserTitleWritten(sessionId);
   await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
   const row = await selectSessionWithCount(db, sessionId);
   if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
@@ -1076,6 +1182,9 @@ export async function renameSessionTitlesInDb(
 
   if (dryRun) return preview;
 
+  // 批量改名(MCP 工具)同样是"人给的名字",自动起名不得再覆盖;与上面两条出口
+  // 一样先记号后写库,不给并发的智能标题留窗口。
+  for (const change of changes) noteUserTitleWritten(change.sessionId);
   const applied = await getDbClient()
     .tx('sessions.renameTitles', { changes })
     .catch((err) => {

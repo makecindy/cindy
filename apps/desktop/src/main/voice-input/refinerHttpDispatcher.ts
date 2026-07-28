@@ -1,6 +1,7 @@
-import { Agent } from 'undici';
+import { Agent, type Dispatcher } from 'undici';
 
 import { createLogger } from '../logger.js';
+import { resolveOutboundDispatcher } from '../maker-host/outbound-fetch.js';
 
 const log = createLogger('voice-input:refine-dispatcher');
 
@@ -50,15 +51,32 @@ export function resolveRefinerHttpDispatcherOptions(
  *   being misclassified as unreachable.
  */
 export function createRefinerHttpDispatcher(): Agent {
-  const options = resolveRefinerHttpDispatcherOptions();
-  return new Agent({
+  return new Agent(refinerAgentOptions(resolveRefinerHttpDispatcherOptions()));
+}
+
+/** 上面两种池共用的 undici Agent 配置(直连池与代理池同调优)。 */
+function refinerAgentOptions(options: RefinerHttpDispatcherOptions): Agent.Options {
+  return {
     keepAliveTimeout: options.keepAliveMs,
     keepAliveMaxTimeout: 600_000,
     connections: 4,
     connect: {
       autoSelectFamilyAttemptTimeout: options.connectAttemptTimeoutMs,
     },
+  };
+}
+
+/**
+ * 取本次请求该用的池:系统代理生效时给一个同调优的代理池(见
+ * `maker-host/outbound-fetch.ts` —— 裸 undici 不吃系统代理,`chatgpt.com` 这类境外
+ * refiner 上游在「系统代理」模式下会直连失败),否则原样用调用方的直连池。
+ */
+export async function resolveRefinerDispatcher(url: string, direct: Agent): Promise<Dispatcher> {
+  const resolved = await resolveOutboundDispatcher(url, {
+    fallback: direct,
+    agentOptions: refinerAgentOptions(resolveRefinerHttpDispatcherOptions()),
   });
+  return resolved ?? direct;
 }
 
 function readPositiveIntegerEnv(

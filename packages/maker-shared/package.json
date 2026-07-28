@@ -27,6 +27,7 @@
     "./fixtures": "./src/fixtures.ts",
     "./interaction": "./src/interaction.ts",
     "./math-markdown": "./src/mathMarkdown.ts",
+    "./mention-ref": "./src/mentionRef.ts",
     "./mermaid-autofix": "./src/mermaidAutofix.ts",
     "./message-render": "./src/messageRender.ts",
     "./message-normalize": "./src/messageNormalize.ts",
@@ -55,6 +56,7 @@
     "./thinking-text": "./src/thinkingText.ts",
     "./tool-use-descriptor": "./src/toolUseDescriptor.ts",
     "./work-activity-projection": "./src/workActivityProjection.ts",
+    "./worktree-paths": "./src/worktreePaths.ts",
     "./codex-usage-buckets": "./src/codexUsageBuckets.ts"
   },
   "scripts": {
@@ -63,7 +65,7 @@
     "lint": "eslint src/"
   },
   "author": {
-    "name": "X.D. Network Inc.",
+    "name": "XD Inc.",
     "email": "feedback@cindy.app"
   },
   "license": "Apache-2.0",

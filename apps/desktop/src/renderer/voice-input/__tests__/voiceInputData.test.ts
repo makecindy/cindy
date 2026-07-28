@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createVoiceInputShortcutFromMacNativeKeys,
+  getDefaultVoiceInputSettings,
   isVoiceInputMacNativeKeyboardShortcutPressed,
   isVoiceInputMacNativeKeyboardShortcutTargetDown,
   isVoiceInputModifierShortcut,
+  normalizeVoiceInputSettings,
   normalizeVoiceInputShortcut,
   voiceInputShortcutNeedsMacNativeListener,
 } from '../../../shared/voiceInputData';
@@ -13,6 +15,20 @@ import {
   createVoiceInputShortcutFromEvent,
   getVoiceInputBareModifierCodeFromEvent,
 } from '../shortcut';
+
+describe('voice input language defaults', () => {
+  it('defaults Global to auto and Mainland China to Simplified Chinese', () => {
+    expect(getDefaultVoiceInputSettings('darwin', 'global').language).toBe('auto');
+    expect(getDefaultVoiceInputSettings('darwin', 'cn').language).toBe('zh-CN');
+    expect(getDefaultVoiceInputSettings('darwin', 'dev').language).toBe('auto');
+  });
+
+  it('keeps an explicit language instead of replacing it with the region default', () => {
+    expect(normalizeVoiceInputSettings({ language: 'en' }, 'darwin', 'cn').language).toBe('en');
+    expect(normalizeVoiceInputSettings({ language: 'auto' }, 'darwin', 'cn').language).toBe('auto');
+    expect(normalizeVoiceInputSettings({}, 'darwin', 'cn').language).toBe('zh-CN');
+  });
+});
 
 describe('voice input shortcut normalization', () => {
   it('keeps legacy keyboard shortcuts compatible', () => {

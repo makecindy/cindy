@@ -132,6 +132,16 @@ export interface MakerSessionAgentSwitchHandlerDeps {
       fastMode?: boolean;
     },
   ): Promise<void>;
+  /**
+   * DB 提交成功后同步跨引擎 provider route。这里只在显式携带 providerId 的
+   * 生命周期切换边界调用，避免普通 create/resume 的异步 DB 读取覆盖运行时 SET_MODEL。
+   */
+  setSessionProvider(sessionId: string, providerId: string | null): void;
+  /**
+   * 新的跨引擎选择淘汰较早的 deferred model/provider 选择。后者可能正在等待
+   * close 完成，必须先清登记，避免它在新 agent route 提交后回写旧 provider。
+   */
+  supersedePendingCredentialSwitch?(sessionId: string): void;
   /** 返回边界行 clientId(resume 回落时原子改写定位用)。 */
   insertBoundaryMessage(sessionId: string, content: AgentSwitchBoundaryContent): Promise<string>;
   /**
@@ -297,6 +307,8 @@ export async function performSessionAgentSwitch(
   if (providerId !== undefined && providerId !== null && typeof providerId !== 'string') {
     throwIpcError('INVALID_PARAMS', 'providerId must be string | null');
   }
+  const normalizedProviderId =
+    typeof providerId === 'string' ? providerId.trim() || null : providerId;
 
   const row = await deps.getSessionRow(sessionId);
   throwIfAgentSwitchAborted(signal);
@@ -322,6 +334,10 @@ export async function performSessionAgentSwitch(
     return { switched: false, agentKind: targetAgentKind, model, engineReady: true };
   }
 
+  // 跨引擎选择比此前登记的凭证切换更新；即使旧切换已在 await close，清掉登记后
+  // 它也会在收口前重读并放弃，避免 DB 已是新 agent、内存 route 却被旧 provider 覆盖。
+  deps.supersedePendingCredentialSwitch?.(sessionId);
+
   // 意图制:外部调用(非 applyNow)一律只登记意图——空闲/运行中同一语义,
   // 用户反复改选零成本;renderer 乐观显示意图,真切换在下一条消息发送时刻执行。
   // 重复登记 = 覆盖(同一意图的最新表达)。
@@ -329,7 +345,7 @@ export async function performSessionAgentSwitch(
     const intent: PendingAgentSwitchIntent = {
       targetAgentKind,
       model,
-      providerId: providerId as string | null | undefined,
+      providerId: normalizedProviderId,
       ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
       ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
     };
@@ -389,11 +405,14 @@ export async function performSessionAgentSwitch(
     await deps.applyAgentSwitchToDb(sessionId, {
       agentKind: toDbKind,
       model,
-      providerId: providerId as string | null | undefined,
+      providerId: normalizedProviderId,
       sdkSessionId: parked?.sdkSessionId ?? null,
       ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
       ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
     });
+    if (normalizedProviderId !== undefined) {
+      deps.setSessionProvider(sessionId, normalizedProviderId);
+    }
 
     const boundaryContent: AgentSwitchBoundaryContent = {
       fromAgentKind: fromDbKind,
@@ -459,7 +478,7 @@ export async function performSessionAgentSwitch(
               deps.pendingSwitches?.set(sessionId, {
                 targetAgentKind,
                 model,
-                providerId: providerId as string | null | undefined,
+                providerId: normalizedProviderId,
                 ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
                 ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
                 resumeFallbackRecovery: {
@@ -481,7 +500,7 @@ export async function performSessionAgentSwitch(
             deps.pendingSwitches?.set(sessionId, {
               targetAgentKind,
               model,
-              providerId: providerId as string | null | undefined,
+              providerId: normalizedProviderId,
               ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
               ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
               resumeFallbackRecovery: {

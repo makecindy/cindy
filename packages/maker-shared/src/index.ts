@@ -44,3 +44,4 @@ export * from './systemCard.js';
 export * from './toolUseDescriptor.js';
 export * from './thinkingText.js';
 export * from './workActivityProjection.js';
+export * from './worktreePaths.js';

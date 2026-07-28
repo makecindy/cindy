@@ -3,7 +3,7 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-linux",
-  "documentNamespace": "https://cindy.app/spdx/desktop-linux/71ca5d23b32ae6e9265183d63607f7fc4dc7376308cfffc4cf746d2dc7918531",
+  "documentNamespace": "https://cindy.app/spdx/desktop-linux/a2a52b563135833de6f30063b0ebe53d9da3b35b98cf4547b31f5257258b127a",
   "creationInfo": {
     "created": "2026-07-26T02:38:39Z",
     "creators": [
@@ -46,6 +46,16 @@
       "SPDXID": "SPDXRef-Package-e01faf6cc0ab33f1",
       "versionInfo": "41.2.0",
       "downloadLocation": "https://github.com/electron/electron",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "LiteLLM mascot SVG path (adapted)",
+      "SPDXID": "SPDXRef-Package-5cfa9bdbf62d839b",
+      "versionInfo": "adapted",
+      "downloadLocation": "https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -13419,6 +13429,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-e01faf6cc0ab33f1"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-5cfa9bdbf62d839b"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

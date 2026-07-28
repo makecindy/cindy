@@ -25,7 +25,9 @@ import {
   renderOAuthResultPage,
   type OAuthResultPageLang,
 } from '../oauthResultPage.js';
+import { describeErrorChain } from '../utils/errorChain.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { outboundFetch } from './outbound-fetch.js';
 import { writeClaudeAiOAuth } from './claude-credentials-store.js';
 import { bindNativeProviderAuth } from './nativeProviderAuthBinding.js';
 import { backfillClaudeSubscriptionProfile } from './claude-oauth-refresh.js';
@@ -69,27 +71,9 @@ function parseScopes(scopeString?: string): string[] {
   return scopeString?.split(' ').filter(Boolean) ?? [];
 }
 
-const MAX_CAUSE_DEPTH = 4;
-
-// undici 把网络层失败包成裸 'fetch failed' TypeError,可行动的细节(每个地址族的
-// connect ETIMEDOUT / ECONNREFUSED)藏在 cause 链和 AggregateError.errors 里 ——
-// 只记 message 的话日志里永远只剩 'fetch failed',区分不了"端点挂了"和"本机网络路径断了"。
-export function describeErrorChain(err: unknown): string {
-  if (!(err instanceof Error)) return String(err);
-  const parts: string[] = [];
-  let current: unknown = err;
-  for (let depth = 0; depth <= MAX_CAUSE_DEPTH && current instanceof Error; depth += 1) {
-    const code = (current as NodeJS.ErrnoException).code;
-    let part = current.message || (code ? String(code) : current.name);
-    if (code && current.message && !current.message.includes(String(code))) part += ` (${code})`;
-    if (current instanceof AggregateError && current.errors.length > 0) {
-      part += ` [${current.errors.map((e) => (e instanceof Error ? e.message : String(e))).join('; ')}]`;
-    }
-    parts.push(part);
-    current = current.cause;
-  }
-  return parts.filter(Boolean).join(' <- ');
-}
+// 实现搬到 main/utils/errorChain.ts(device-link OSS 上传也要展开 undici 的
+// 裸 'fetch failed');这里保留导出,原有调用方与单测的 import 路径不变。
+export { describeErrorChain };
 
 function buildAuthUrl(opts: { codeChallenge: string; state: string; port: number }): string {
   const url = new URL(CLAUDE_AI_AUTHORIZE_URL);
@@ -118,7 +102,10 @@ async function exchangeCodeForTokens(
   port: number,
   signal: AbortSignal,
 ): Promise<TokenExchangeResponse> {
-  const res = await fetch(TOKEN_URL, {
+  // outboundFetch:换 token 是 main 自己发的 HTTPS 请求,不经浏览器。裸 undici fetch
+  // 不吃系统代理,代理软件跑「系统代理」模式时授权页正常、这一步却直连出网,被上游按
+  // 来源拒(实测 403)。
+  const res = await outboundFetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

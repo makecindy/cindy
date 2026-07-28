@@ -37,6 +37,7 @@ import {
   readCodexDiscoveredModelsForAuthRefresh,
 } from './codex-model-discovery.js';
 import {
+  getAnthropicModelDiscoveryFailure,
   loadAnthropicModelsFromDiskCache,
   refreshAnthropicModelsFromHttp,
 } from './model-discovery/anthropic.js';
@@ -65,7 +66,7 @@ import { getActiveAppSession } from '../appSessionState.js';
 import { filterProviderCatalogForAccount } from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
-  isNativeProviderAuthBound,
+  claimDetectedNativeProviderAuth,
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
@@ -278,6 +279,51 @@ export async function refreshCustomProvidersIntoCatalog(): Promise<void> {
   }
 }
 
+/**
+ * 连接态读取路径上的绑定自愈(同步凭证的两家:anthropic / xai)。
+ *
+ * 写失败绝不抛穿:connection 回调服务于 listProviders,抛出会让整份供应商列表取不到,
+ * 比「这一次没认领上」严重得多 —— 下一次读取还会再试。Codex 的同款自愈挂在异步
+ * reconcile 收口(见 auth-adapters.claimDetectedCodexOAuthBinding),因为它的凭证是
+ * 惰性物化的;这两家的凭证同步可读,在读连接态时就地认领即可。
+ */
+function claimNativeProviderAuthOnRead(
+  provider: 'anthropic' | 'xai',
+  hasCredential: () => boolean,
+  onClaimed?: () => void,
+): void {
+  try {
+    if (!claimDetectedNativeProviderAuth(provider, hasCredential)) return;
+    log.info('native provider credential auto-bound to current owner', { provider });
+    onClaimed?.();
+    // 认领成功 = 这家供应商刚从「未连接」翻成「已连接」,但只有触发这次读取的那个调用方
+    // 拿到了新快照。其它窗口会一直留着 connected:false;配对的手机 / 控制端更是只认
+    // maker:provider:changed 这一条推送来失效缓存,不广播就永远停在旧快照
+    // (PR #548 review)。显式登录 / 登出路径本来就会广播,自愈这条同样得补上。
+    notifyNativeProviderClaimed();
+  } catch (err) {
+    log.warn('native provider auth binding claim failed', { provider, error: String(err) });
+  }
+}
+
+let nativeProviderClaimListener: (() => void) | null = null;
+
+/**
+ * 注册「绑定自愈成功」的收口（desktop host 装配时接 PROVIDER_CHANGED 广播；传 null 解绑）。
+ * 监听器不可抛——广播失败不该反过来把这次认领算作失败。
+ */
+export function setNativeProviderClaimListener(listener: (() => void) | null): void {
+  nativeProviderClaimListener = listener;
+}
+
+function notifyNativeProviderClaimed(): void {
+  try {
+    nativeProviderClaimListener?.();
+  } catch (err) {
+    log.warn('native provider claim broadcast failed', { error: String(err) });
+  }
+}
+
 let singleton: ProviderService | null = null;
 
 /**
@@ -312,16 +358,53 @@ export function getDesktopProviderService(): ProviderService {
     getCatalog: getDesktopSelectableCatalog,
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
-      anthropic: () => isNativeProviderAuthBound('anthropic') && hasClaudeAiOAuth(),
-      // openai 不再前置 isNativeProviderAuthBound 短路:hasCodexOAuthLogin →
-      // getAccessToken 内部已是「reconcile(含首个 owner 绑定自愈)→ 绑定校验 → 读
-      // token」的完整口径,未绑定仍 fail-closed 返回 null;前置短路反而会拦掉
-      // listProviders 路径触发绑定自愈的机会(claimDetectedCodexOAuthBinding)。
-      openai: () => desktopCodexAuthAdapter.hasCodexOAuthLogin(),
-      xai: () => isNativeProviderAuthBound('xai') && hasGrokOAuthLogin(),
+      // 三家 native provider 统一口径:先跑一次绑定自愈,再读「绑定 + 凭证」的连接态。
+      // hasClaudeAiOAuth / hasCodexOAuthLogin / hasGrokOAuthLogin 内部都已校验绑定,
+      // 所以这里不再前置 isNativeProviderAuthBound —— 前置短路是纯冗余,而且会把
+      // listProviders 挡在自愈之前,正是「设置页已连接 / 聊天无来源」假报的成因(#294)。
+      anthropic: ({ allowSideEffects }) => {
+        // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
+        // 同时服务 device-link 与可能不受信的渲染上下文,所以副作用只在本机主页面发起时
+        // 才放行,其余降级为纯读(PR #548 review)。
+        if (!allowSideEffects) return hasClaudeAiOAuth();
+        claimNativeProviderAuthOnRead('anthropic', hasClaudeAiOAuthUnbound, () => {
+          // anthropic 清单的唯一来源是动态发现,而发现只在启动期与显式 OAuth 登录成功
+          // 时触发。绑定是在这两个时机之后才建立的,启动期那次早被登录态 gate 掉 ——
+          // 不在认领成功时补拉一次,供应商会停在「已连接 + 零模型」直到下次重启。
+          //
+          // 磁盘缓存要先补:启动期的 loadAnthropicModelsFromDiskCache 同样因当时未绑定而
+          // 早退了。先把上次成功的清单摆出来,再去拉最新的 —— 否则这次 HTTP 一旦超时或
+          // 失败,明明有可用的缓存清单,用户还是一个模型都选不了(PR #548 review)。
+          void loadAnthropicModelsFromDiskCache()
+            .catch(() => undefined)
+            .finally(() => {
+              void refreshAnthropicModelsFromHttp();
+            });
+        });
+        return hasClaudeAiOAuth();
+      },
+      // openai 的自愈挂在 adapter 的 reconcile 收口里(#294 既有形态),这里同样要受开关约束:
+      // hasCodexOAuthLogin() 经 getAccessToken 触发 reconcileWithSystemCodex,它会把本机 CLI
+      // 凭证硬链进 codex-home 并为首个 owner 补写绑定 —— 判据不是「有没有发上游请求」,而是
+      // 「不受信 sender 能不能引发特权状态变更」,建硬链和写绑定都在其内(PR #548 review)。
+      openai: ({ allowSideEffects }) =>
+        allowSideEffects
+          ? desktopCodexAuthAdapter.hasCodexOAuthLogin()
+          : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
+      xai: ({ allowSideEffects }) => {
+        if (allowSideEffects) claimNativeProviderAuthOnRead('xai', hasGrokOAuthLoginUnbound);
+        return hasGrokOAuthLogin();
+      },
     },
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(providerId),
+    // 动态清单发现的失败归因：目前只有 anthropic 是「清单唯一来源是动态发现」的供应商，
+    // 拉不到就是零模型 —— UI 要据此讲明失败理由，而不是一直说「正在发现」。
+    //
+    // 连接态直接沿用本次快照已经算好的那个：它内部要读凭证库，macOS 上每读一次就是一个
+    // 同步的 `security` 子进程，同一次 listProviders 不该为此阻塞主线程两回（PR #548 review）。
+    modelDiscoveryFailure: (providerId, connected) =>
+      providerId === 'anthropic' ? getAnthropicModelDiscoveryFailure(connected) : null,
   });
   return singleton;
 }

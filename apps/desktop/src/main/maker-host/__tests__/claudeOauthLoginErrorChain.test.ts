@@ -64,6 +64,16 @@ describe('describeErrorChain', () => {
     expect(describeErrorChain(noMsg)).toBe('ETIMEDOUT');
   });
 
+  it('AggregateError 分支同样补 code / 回退空 message,不在聚合段留空洞', () => {
+    const bareCode = Object.assign(new Error(''), { code: 'ECONNREFUSED' });
+    const needsAnnotation = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    const aggregate = new AggregateError([bareCode, needsAnnotation], '');
+    const top = new TypeError('fetch failed', { cause: aggregate });
+
+    const out = describeErrorChain(top);
+    expect(out).toContain('[ECONNREFUSED; socket hang up (ECONNRESET)]');
+  });
+
   it('cause 链深度有界:超过上限截断,不无限展开', () => {
     let leaf: Error = new Error('depth-7');
     for (let i = 6; i >= 1; i -= 1) {

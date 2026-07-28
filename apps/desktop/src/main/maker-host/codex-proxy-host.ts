@@ -59,9 +59,11 @@ import {
 import { getSessionProvider } from './session-provider-store.js';
 import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
+import { createXaiProxyAuthInvalidationObserver } from './xai-auth-invalidation-host.js';
 import { encryptedStripController, imageGenerationStripController } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
+import { outboundFetch } from './outbound-fetch.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
@@ -201,6 +203,47 @@ const CHAT_BRIDGE_DEFAULT_CAPABILITIES: ChatBridgeCapabilities = {
   forceAutoToolChoice: true,
 };
 
+function isGoogleGeminiChatUpstream(upstream: string): boolean {
+  try {
+    return new URL(upstream).hostname === 'generativelanguage.googleapis.com';
+  } catch {
+    return false;
+  }
+}
+
+const MOONSHOT_CHAT_HOSTS = new Set(['api.moonshot.cn', 'api.moonshot.ai']);
+
+function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined): string {
+  return stripPrefix && model.startsWith(stripPrefix)
+    ? model.slice(stripPrefix.length)
+    : model;
+}
+
+/**
+ * 图片桥接必须按已验证的上游能力显式开启。这里认官方 Moonshot DNS 边界 + Kimi K3
+ * 上游 model，不认 provider id（预设创建后会生成用户自定义 id），也不对所有
+ * openai-chat 供应商放开。未命中继续沿用 fail-closed 默认。
+ */
+export function chatBridgeCapabilitiesForRoute(
+  upstream: string,
+  realModel: string,
+  fallback: ChatBridgeCapabilities = CHAT_BRIDGE_DEFAULT_CAPABILITIES,
+): ChatBridgeCapabilities {
+  if (realModel !== 'kimi-k3') return fallback;
+  try {
+    const url = new URL(upstream);
+    if (url.protocol !== 'https:' || !MOONSHOT_CHAT_HOSTS.has(url.hostname.toLowerCase())) {
+      return fallback;
+    }
+  } catch {
+    return fallback;
+  }
+  return {
+    ...fallback,
+    imageInput: 'image_url',
+  };
+}
+
 /**
  * Chat bridge 上游只收 host 明确构造的 header。绝不把 Codex/ChatGPT 请求 header
  * 原样透传，防止账号 id、OpenAI OAuth bearer 或内部 session 元数据泄漏给第三方。
@@ -208,16 +251,36 @@ const CHAT_BRIDGE_DEFAULT_CAPABILITIES: ChatBridgeCapabilities = {
 function createChatBridgeDecision(
   route: Awaited<ReturnType<typeof resolveSessionRoute>>,
   instructions: string | undefined,
+  wireModel: string,
 ): RoutingDecision | null {
   if (!route || route.routing.wireProtocol !== 'openai-chat') return null;
   const { headers } = buildLocalHandlerHeaders(route, 'codex');
   const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
+  const realModel = rewriteChatBridgeModel(wireModel, stripPrefix);
   // localHandler 绕过 proxy 的 responseObserver,自定义(user)供应商的上游错误不会被
   // createProviderUpstreamErrorObserver 看到。这里显式把非 2xx 上游错误喂回同一广播通道,
   // 让 Chat 桥接会话与透明自定义供应商一样弹结构化 providerError.* 提示。内置来源不广播
   // (与 observer 的 user-only 语义一致)。
   const providerId = route.providerId;
   const providerName = getActiveCatalog().providers.find((p) => p.id === providerId)?.name ?? providerId;
+  const baseCapabilities: ChatBridgeCapabilities = isGoogleGeminiChatUpstream(
+    route.routing.upstream,
+  )
+    ? {
+        ...CHAT_BRIDGE_DEFAULT_CAPABILITIES,
+        // Gemini 的 OpenAI 兼容层原生理解 reasoning_effort 和具名 tool choice；同时不需要
+        // DeepSeek/Kimi 的 reasoning_content 占位。工具回放则必须带 Google thought signature。
+        reasoningField: 'reasoning_effort',
+        toolCallReasoningPlaceholder: false,
+        forceAutoToolChoice: false,
+        googleThoughtSignaturePlaceholder: true,
+      }
+    : CHAT_BRIDGE_DEFAULT_CAPABILITIES;
+  const capabilities = chatBridgeCapabilitiesForRoute(
+    route.routing.upstream,
+    realModel,
+    baseCapabilities,
+  );
   const onUpstreamError = route.providerSource === 'user'
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
@@ -225,13 +288,14 @@ function createChatBridgeDecision(
     : undefined;
   const handler = createResponsesChatHandler({
     upstreamBase: route.routing.upstream,
+    ...(route.routing.requestPath ? { chatCompletionsPath: route.routing.requestPath } : {}),
     buildHeaders: async () => headers,
-    rewriteModel: (model: string) => stripPrefix && model.startsWith(stripPrefix)
-      ? model.slice(stripPrefix.length)
-      : model,
-    capabilities: CHAT_BRIDGE_DEFAULT_CAPABILITIES,
+    rewriteModel: (model: string) => rewriteChatBridgeModel(model, stripPrefix),
+    capabilities,
     ...(onUpstreamError ? { onUpstreamError } : {}),
-  }, { logger: log });
+    // localHandler 分支的上游请求由 chat bridge 自己发,绕开了 compat-proxy 转发层的
+    // 出站代理;显式注入代理感知 fetch(见 outbound-fetch.ts)。
+  }, { logger: log, fetchImpl: outboundFetch });
   return {
     localHandler: ({ rawBody, parsedBody, res }) => {
       let body = parsedBody;
@@ -1247,7 +1311,11 @@ export function createModelRoutingTransform(): RoutingTransform {
       const selectedRouting = getSessionRoutingDescriptor(sessionId, 'codex', model || undefined);
       if (selectedRouting?.wireProtocol === 'openai-chat' && ctx.method === 'POST' && model) {
         return resolveSessionRoute(sessionId, 'codex', model).then((localRoute) =>
-          createChatBridgeDecision(localRoute, threadId ? registry.get(threadId) : undefined));
+          createChatBridgeDecision(
+            localRoute,
+            threadId ? registry.get(threadId) : undefined,
+            model,
+          ));
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。
@@ -1347,8 +1415,9 @@ export async function ensureCodexProxyReady(): Promise<void> {
         upstream: () => buildCodexGatewayBaseUrl(),
         transformRequest: createTransformRequestChain(),
         routingTransform: createModelRoutingTransform(),
-        // 组合两个只读观察器:service-tier 抽取 + 自定义供应商上游错误分类广播
-        // (后者仅 status≥400 且会话路由到 user 供应商时才 tee,成功路径零开销)。
+        // 组合三个只读观察器:service-tier 抽取 + 自定义供应商上游错误分类广播 + xAI 凭证
+        // 失效收口(后两者分别仅在 status≥400 路由到 user 供应商、401/403 且上游为 api.x.ai
+        // 时才 tee,成功路径零开销)。
         responseObserver: composeResponseObservers(
           createCodexResponseObserver(),
           createProviderUpstreamErrorObserver({
@@ -1361,6 +1430,9 @@ export async function ensureCodexProxyReady(): Promise<void> {
             resolveUserProviderName: (providerId) =>
               getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,
           }),
+          // xai 是 builtin 来源,上面那个 observer 的 user-only 语义覆盖不到它;订阅 OAuth
+          // 被上游作废后必须有人收口,否则 codex agent 下会连环 403 而 UI 仍显示已连接。
+          createXaiProxyAuthInvalidationObserver(),
         ),
         maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
         // 请求体 dump 默认关(dev trace 级别 + agent 高并发会刷爆 main event loop

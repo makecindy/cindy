@@ -2139,8 +2139,8 @@ export function registerVoiceInputIpc(): void {
           });
           return true;
         },
-        onError: (message, code) => {
-          if (runId) emit({ type: 'error', runId, message, code });
+        onError: (message, code, details) => {
+          if (runId) emit({ type: 'error', runId, message, code, transcriptKept: details?.transcriptKept });
         },
       },
     });

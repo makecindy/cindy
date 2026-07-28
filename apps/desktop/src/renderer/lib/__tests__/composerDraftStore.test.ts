@@ -89,6 +89,24 @@ describe('draftHasContent', () => {
       ),
     ).toBe(true);
   });
+
+  it('counts an empty structured list item as content', () => {
+    expect(
+      draftHasContent(
+        draft({
+          text: {
+            type: 'doc',
+            content: [
+              {
+                type: 'bulletList',
+                content: [{ type: 'listItem', content: [{ type: 'paragraph' }] }],
+              },
+            ],
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('owner isolation', () => {

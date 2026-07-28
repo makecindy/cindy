@@ -39,6 +39,10 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
   getActiveCatalog: vi.fn(() => ({ providers: [] })),
 }));
 
+vi.mock('../../maker-host/provider-route.js', () => ({
+  isProviderRouteMutationInProgress: vi.fn(() => false),
+}));
+
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: vi.fn(),
 }));
@@ -63,6 +67,7 @@ import { getValidClaudeAiOAuth } from '../../maker-host/claude-oauth-refresh.js'
 import { getGrokAccessToken } from '../../maker-host/grok-oauth-login.js';
 import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
 import { getActiveCatalog } from '../../maker-host/active-catalog.js';
+import { isProviderRouteMutationInProgress } from '../../maker-host/provider-route.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
 import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
 import { getUtilityTextCandidates, requestUtilityText } from '../oneShotCandidates.js';
@@ -75,6 +80,7 @@ const readGrokToken = vi.mocked(getGrokAccessToken);
 const readGenericOAuthToken = vi.mocked(readCachedGenericOAuthAccessToken);
 const fetchMock = vi.mocked(undiciFetch);
 const activeCatalog = vi.mocked(getActiveCatalog);
+const providerRouteMutationInProgress = vi.mocked(isProviderRouteMutationInProgress);
 const readCustomKey = vi.mocked(readCustomProviderKey);
 
 function makerMock(authenticated: boolean): Maker {
@@ -93,6 +99,7 @@ describe('utility one-shot candidates', () => {
     readClaudeOAuth.mockResolvedValue(null);
     readGrokToken.mockRejectedValue(new Error('not authenticated'));
     readGenericOAuthToken.mockReturnValue(null);
+    providerRouteMutationInProgress.mockReturnValue(false);
     readCustomKey.mockReturnValue(null);
     activeCatalog.mockReturnValue({ providers: [] } as never);
     getProfiles.mockReturnValue([
@@ -270,6 +277,259 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it('does not read or send a custom-provider key while its route is mutating', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'tapsvc',
+        name: 'Tap Service',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://old.example/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          codex: [{ id: 'custom-mini', name: 'Custom Mini', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    providerRouteMutationInProgress.mockReturnValue(true);
+    readCustomKey.mockReturnValue('replacement-secret');
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'tapsvc',
+      agentKind: 'codex',
+      model: 'custom-mini',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'all_candidates_failed',
+      attempts: [expect.objectContaining({
+        providerId: 'tapsvc',
+        status: 'failed',
+        reason: 'request_failed',
+      })],
+    });
+    expect(readCustomKey).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('uses Chat Completions for an explicitly selected openai-chat provider', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'chat-only',
+        name: 'Chat Only',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://chat.example/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          codex: [{ id: 'chat-model', name: 'Chat Model', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    readCustomKey.mockReturnValue('chat-secret');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({
+        choices: [{ message: { content: 'chat result' } }],
+      }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'chat-only',
+      agentKind: 'codex',
+      model: 'chat-model',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      text: 'chat result',
+      transport: 'litellm-chat-completions',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://chat.example/v1/chat/completions',
+      expect.anything(),
+    );
+    expect(JSON.parse(String(vi.mocked(fetchMock).mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: 'chat-model',
+      messages: [{ role: 'user', content: 'generate' }],
+    });
+  });
+
+  it('uses an explicitly configured custom-provider request path', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'exact-path',
+        name: 'Exact Path',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'none' },
+        routing: {
+          codex: {
+            upstream: 'http://127.0.0.1:4000',
+            requestPath: '/tenant/acme/infer?stream=1',
+            authStrategy: 'none',
+          },
+        },
+        models: {
+          codex: [{ id: 'local-model', name: 'Local Model', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => 'data: {"type":"response.output_text.delta","delta":"ok"}\ndata: [DONE]\n',
+    } as never);
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'exact-path',
+      agentKind: 'codex',
+      model: 'local-model',
+    });
+
+    expect(result).toMatchObject({ ok: true, providerId: 'exact-path' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:4000/tenant/acme/infer?stream=1',
+      expect.objectContaining({
+        headers: expect.not.objectContaining({
+          Authorization: expect.anything(),
+          'x-api-key': expect.anything(),
+        }),
+      }),
+    );
+  });
+
+  it('fails closed when an explicitly selected no-auth runtime is disabled', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'legacy-remote',
+        name: 'Legacy Remote',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'none' },
+        routing: {
+          codex: {
+            upstream: 'https://remote.example/v1',
+            authStrategy: 'none',
+            disabled: true,
+          },
+        },
+        models: {
+          codex: [{ id: 'legacy-model', name: 'Legacy Model', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'legacy-remote',
+      agentKind: 'codex',
+      model: 'legacy-model',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'no_candidate',
+      attempts: [{
+        providerId: 'legacy-remote',
+        model: 'legacy-model',
+        status: 'skipped',
+        reason: 'endpoint_missing',
+      }],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects base URL userinfo when applying an exact provider request path', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'exact-path-query',
+        name: 'Exact Path Query',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'none' },
+        routing: {
+          codex: {
+            upstream: 'https://user:pass@custom.example/api?tenant=alpha',
+            requestPath: '/infer?stream=1&mode=fast',
+            authStrategy: 'none',
+          },
+        },
+        models: {
+          codex: [{ id: 'local-model', name: 'Local Model', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'exact-path-query',
+      agentKind: 'codex',
+      model: 'local-model',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      attempts: [expect.objectContaining({ providerId: 'exact-path-query', reason: 'request_failed' })],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('uses a legacy header-only custom-provider credential when safeStorage is empty', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'legacy-header',
+        name: 'Legacy Header',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://custom.example/v1',
+            authStrategy: 'api-key-header',
+            headerOverride: {
+              Authorization: 'Bearer legacy-secret',
+              'X-Tenant': 'tenant-a',
+            },
+          },
+        },
+        models: {
+          codex: [{ id: 'legacy-mini', name: 'Legacy Mini', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () =>
+        'data: {"type":"response.output_text.delta","delta":"ok"}\ndata: [DONE]\n',
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'legacy-header',
+      agentKind: 'codex',
+      model: 'legacy-mini',
+    });
+
+    expect(result).toMatchObject({ ok: true, providerId: 'legacy-header' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://custom.example/v1/responses',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer legacy-secret',
+          'X-Tenant': 'tenant-a',
+        }),
+      }),
+    );
+  });
+
   it('does not fall back to XD after an explicitly selected custom provider returns 401', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
@@ -315,6 +575,12 @@ describe('utility one-shot candidates', () => {
           'claude-code': {
             upstream: 'https://custom.example/api',
             authStrategy: 'api-key-header',
+            headerOverride: {
+              authorization: 'Bearer stale-lowercase',
+              Authorization: 'Bearer stale-uppercase',
+              'X-API-Key': 'stale-key',
+              'x-tenant': 'tenant-a',
+            },
           },
         },
         models: {
@@ -337,6 +603,10 @@ describe('utility one-shot candidates', () => {
     const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> };
     expect(init.headers['anthropic-version']).toBe('2023-06-01');
     expect(init.headers['x-api-key']).toBe('custom-secret');
+    expect(init.headers.Authorization).toBe('Bearer custom-secret');
+    expect(init.headers.authorization).toBeUndefined();
+    expect(init.headers['X-API-Key']).toBeUndefined();
+    expect(init.headers['x-tenant']).toBe('tenant-a');
   });
 
   it('uses a generic OAuth token for a custom Claude provider without sending x-api-key', async () => {
@@ -438,6 +708,51 @@ describe('utility one-shot candidates', () => {
     expect(init.headers.Authorization).toBe('Bearer oauth-access-token');
     expect(init.headers.authorization).toBeUndefined();
     expect(init.headers['anthropic-version']).toBeUndefined();
+  });
+
+  it('routes a descriptor-backed no-auth builtin through the generic utility transport', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'catalog-local',
+        name: 'Catalog Local',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'none' },
+        routing: {
+          codex: {
+            upstream: 'http://127.0.0.1:4000/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'none',
+          },
+        },
+        models: {
+          codex: [{ id: 'catalog-model', name: 'Catalog Model', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({
+        choices: [{ message: { content: 'catalog result' } }],
+      }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'catalog-local',
+      agentKind: 'codex',
+      model: 'catalog-model',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      text: 'catalog result',
+      providerId: 'catalog-local',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:4000/v1/chat/completions',
+      expect.anything(),
+    );
+    expect(readCustomKey).not.toHaveBeenCalled();
   });
 
   it('can infer a unique custom provider when an older caller omits providerId', async () => {

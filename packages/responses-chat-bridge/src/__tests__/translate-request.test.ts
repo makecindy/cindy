@@ -114,6 +114,100 @@ describe('translateResponsesRequest', () => {
     expect((plain.messages[0] as { reasoning_content?: string }).reasoning_content).toBeUndefined();
   });
 
+  it('injects the official Gemini thought-signature fallback on only the first call in each step', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'function_call',
+          call_id: 'c1',
+          name: 'Read',
+          arguments: '{}',
+          extra_content: {
+            vendor: { cache_key: 'keep-me' },
+            google: { other_extension: 'keep-me-too' },
+          },
+        },
+        { type: 'function_call', call_id: 'c2', name: 'Search', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'c1', output: 'ok' },
+        { type: 'function_call_output', call_id: 'c2', output: 'ok' },
+      ],
+    }), { capabilities: { googleThoughtSignaturePlaceholder: true } });
+    const assistant = out.messages[0] as {
+      tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }>;
+    };
+    expect(assistant.tool_calls?.[0]?.extra_content).toEqual({
+      vendor: { cache_key: 'keep-me' },
+      google: {
+        other_extension: 'keep-me-too',
+        thought_signature: 'skip_thought_signature_validator',
+      },
+    });
+    expect(assistant.tool_calls?.[1]?.extra_content).toBeUndefined();
+
+    const plain = translateResponsesRequest(base({
+      input: [{ type: 'function_call', call_id: 'c1', name: 'Read', arguments: '{}' }],
+    }));
+    expect(
+      (plain.messages[0] as { tool_calls?: Array<{ extra_content?: unknown }> })
+        .tool_calls?.[0]?.extra_content,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    '',
+    '   ',
+    123,
+    { malformed: true },
+  ])('replaces an invalid Gemini thought signature: %j', (thoughtSignature) => {
+    const out = translateResponsesRequest(base({
+      input: [{
+        type: 'function_call',
+        call_id: 'c1',
+        name: 'Read',
+        arguments: '{}',
+        extra_content: {
+          google: { thought_signature: thoughtSignature as string },
+        },
+      }],
+    }), { capabilities: { googleThoughtSignaturePlaceholder: true } });
+    expect(
+      (out.messages[0] as {
+        tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }>;
+      }).tool_calls?.[0]?.extra_content?.google?.thought_signature,
+    ).toBe('skip_thought_signature_validator');
+  });
+
+  it('drops malformed Google tool-call metadata instead of spreading it as an object', () => {
+    const input = base({
+      input: [{
+        type: 'function_call',
+        call_id: 'c1',
+        name: 'Read',
+        arguments: '{}',
+        extra_content: {
+          vendor: { cache_key: 'keep-me' },
+          google: 'malformed',
+        },
+      }],
+    });
+    const plain = translateResponsesRequest(input);
+    expect(
+      (plain.messages[0] as { tool_calls?: Array<{ extra_content?: unknown }> })
+        .tool_calls?.[0]?.extra_content,
+    ).toEqual({ vendor: { cache_key: 'keep-me' } });
+
+    const gemini = translateResponsesRequest(input, {
+      capabilities: { googleThoughtSignaturePlaceholder: true },
+    });
+    expect(
+      (gemini.messages[0] as { tool_calls?: Array<{ extra_content?: unknown }> })
+        .tool_calls?.[0]?.extra_content,
+    ).toEqual({
+      vendor: { cache_key: 'keep-me' },
+      google: { thought_signature: 'skip_thought_signature_validator' },
+    });
+  });
+
   it('normalizes custom tool history and flattens text-like tool output parts', () => {
     const out = translateResponsesRequest(base({
       input: [
@@ -203,6 +297,89 @@ describe('translateResponsesRequest', () => {
     expect(() => translateResponsesRequest(base({
       input: [{ type: 'computer_call', id: 'x' }],
     }))).toThrowError(UnsupportedResponsesFeatureError);
+  });
+
+  it('translates capability-gated Kimi user images and preserves replayed history order', () => {
+    const imageUrl = 'data:image/png;base64,aW1hZ2U=';
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'before' },
+            { type: 'input_image', image_url: imageUrl },
+            { type: 'input_text', text: 'after' },
+          ],
+        },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'seen' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue' }] },
+      ],
+    }), { capabilities: { imageInput: 'image_url' } });
+
+    expect(out.messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'before' },
+          { type: 'image_url', image_url: { url: imageUrl } },
+          { type: 'text', text: 'after' },
+        ],
+      },
+      { role: 'assistant', content: 'seen' },
+      { role: 'user', content: 'continue' },
+    ]);
+  });
+
+  it('keeps pure-text JSON shape unchanged when image capability is enabled', () => {
+    const out = translateResponsesRequest(base({
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'hello' },
+          { type: 'input_text', text: ' world' },
+        ],
+      }],
+    }), { capabilities: { imageInput: 'image_url' } });
+
+    expect(out.messages).toEqual([{ role: 'user', content: 'hello world' }]);
+  });
+
+  it('keeps invalid or non-user image inputs fail-closed even with image capability', () => {
+    const capabilities = { imageInput: 'image_url' as const };
+    expect(() => translateResponsesRequest(base({
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_image', file_id: 'file_1' }] }],
+    }), { capabilities })).toThrow("input content part 'input_image'");
+    expect(() => translateResponsesRequest(base({
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_image' }] }],
+    }), { capabilities })).toThrow("input content part 'input_image'");
+    expect(() => translateResponsesRequest(base({
+      input: [{
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'input_image', image_url: 'data:image/png;base64,eA==' }],
+      }],
+    }), { capabilities })).toThrow("input content part 'input_image'");
+    expect(() => translateResponsesRequest(base({
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_audio', audio_url: 'x' }] }],
+    }), { capabilities })).toThrow("input content part 'input_audio'");
+  });
+
+  it('allows normalized user-like roles such as latest_reminder to carry images', () => {
+    const imageUrl = 'data:image/png;base64,eA==';
+    const out = translateResponsesRequest(base({
+      input: [{
+        type: 'message',
+        role: 'latest_reminder',
+        content: [{ type: 'input_image', image_url: imageUrl }],
+      }],
+    }), { capabilities: { imageInput: 'image_url' } });
+
+    expect(out.messages).toEqual([{
+      role: 'user',
+      content: [{ type: 'image_url', image_url: { url: imageUrl } }],
+    }]);
   });
 
   it('drops Codex built-in tools (namespace/web_search) but keeps standard function tools', () => {

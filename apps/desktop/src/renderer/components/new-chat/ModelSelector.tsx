@@ -34,6 +34,7 @@ import {
 } from '@/lib/modelPriceFormat';
 import {
   filterChatBridgedCodexProviders,
+  isDeviceModelVisible,
   providerMonogram,
   resolveVisibleModelAgentKind,
   selectVisibleModels,
@@ -53,6 +54,7 @@ import {
   visibleModelUnion,
   type ProviderView,
 } from '@cindy/model-providers';
+import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
@@ -89,6 +91,19 @@ const PROVIDER_TITLE_KEY: Record<string, string> = {
 
 // 配置面板锚在主菜单内缩 8px 的模型行上；补偿这段内缩，让两块面板贴边但不重叠。
 const MODEL_OPTIONS_SIDE_OFFSET = 8;
+const MODEL_LIST_DEFAULT_MAX_HEIGHT_PX = 300;
+// 折扣模型的价格会叠成两行：27.5px 价格栈 + 16px 纵向 padding，向上取整为 44px。
+const MODEL_LIST_CONSTRAINED_ROW_HEIGHT_PX = 44;
+const MODEL_LIST_ROW_GAP_PX = 2;
+
+export function modelListMaxHeightForRows(maxVisibleRows?: number): number | undefined {
+  if (maxVisibleRows === undefined || !Number.isFinite(maxVisibleRows)) return undefined;
+  const rows = Math.max(1, Math.floor(maxVisibleRows));
+  return Math.min(
+    MODEL_LIST_DEFAULT_MAX_HEIGHT_PX,
+    rows * MODEL_LIST_CONSTRAINED_ROW_HEIGHT_PX + Math.max(0, rows - 1) * MODEL_LIST_ROW_GAP_PX,
+  );
+}
 
 function providerDisplayName(p: ProviderView, t: (key: string) => string): string {
   const key = PROVIDER_TITLE_KEY[p.id];
@@ -101,6 +116,7 @@ export function ProviderMark({
   providerId,
   name,
   routing,
+  logoKind,
   colorClass = 'text-[var(--model-trigger-text)]',
   withMargin = true,
   dense = false,
@@ -108,6 +124,7 @@ export function ProviderMark({
   providerId: string;
   name?: string;
   routing?: ProviderView['routing'];
+  logoKind?: ProviderView['logoKind'];
   colorClass?: string;
   withMargin?: boolean;
   /** 列表行前缀用 dense:比 trigger 小一档(约 -10%)。两套静态尺寸,JIT 友好。 */
@@ -115,11 +132,12 @@ export function ProviderMark({
 }) {
   const common = cn(withMargin && 'mr-1.5', 'shrink-0', colorClass);
   const markSize = dense ? 12.3 : 13;
-  if (hasProviderLogo(providerId, routing)) {
+  if (isProviderLogoKind(logoKind) || hasProviderLogo(providerId, routing)) {
     return (
       <ProviderLogoMark
         providerId={providerId}
         routing={routing}
+        logoKind={logoKind}
         size={markSize}
         className={
           providerId === 'xd'
@@ -156,6 +174,7 @@ export function ModelIconMark({
   providerId,
   name,
   routing,
+  logoKind,
   colorClass = 'text-[var(--model-trigger-text)]',
   withMargin = true,
   dense = false,
@@ -166,6 +185,7 @@ export function ModelIconMark({
   providerId: string;
   name?: string;
   routing?: ProviderView['routing'];
+  logoKind?: ProviderView['logoKind'];
   colorClass?: string;
   withMargin?: boolean;
   dense?: boolean;
@@ -188,6 +208,7 @@ export function ModelIconMark({
       providerId={providerId}
       name={name}
       routing={routing}
+      logoKind={logoKind}
       colorClass={colorClass}
       withMargin={withMargin}
       dense={dense}
@@ -314,6 +335,11 @@ interface ModelSelectorProps {
   useMorphPopover?: boolean;
   /** Popover 弹出方向,默认 "top"（底部工具栏向上弹），dialog 内嵌场景传 "bottom"。 */
   popoverSide?: 'top' | 'bottom';
+  /**
+   * 模型列表最多露出的标准行数；超出后列表自身滚动。
+   * 不传时沿用通用面板的 300px 上限，供 Settings 等紧凑场景按行数收窄。
+   */
+  maxVisibleModelRows?: number;
   /** 关闭模型的 effort / Fast 编辑入口；只选择模型 id 的设置项使用。 */
   configurationEnabled?: boolean;
   /** 可选的列表首行兜底值，例如“不指定（使用原逻辑）”。 */
@@ -371,6 +397,8 @@ interface ModelSelectorContentProps {
   excludeChatBridgedCodex?: boolean;
   /** 选中后是否自动关闭。Popover 场景传入,内嵌场景不传。 */
   onDismiss?: () => void;
+  /** 语义同 ModelSelectorProps.maxVisibleModelRows。 */
+  maxVisibleModelRows?: number;
   /** 模型信息 / 选项浮层的额外样式。供嵌套在高层级 overlay 中的调用方覆盖默认 z-index。 */
   overlayContentClassName?: string;
   currentProviderId?: string | null;
@@ -432,6 +460,7 @@ function ModelSelectorContentView({
   excludeSubscriptionDirect,
   excludeChatBridgedCodex,
   onDismiss,
+  maxVisibleModelRows,
   overlayContentClassName,
   currentProviderId,
   onProviderChange,
@@ -445,6 +474,7 @@ function ModelSelectorContentView({
   pricing,
 }: ModelSelectorContentProps & { pricing: ModelPricingCatalog | null }) {
   const { t } = useTranslation();
+  const constrainedListMaxHeight = modelListMaxHeightForRows(maxVisibleModelRows);
   // session-agent-switch:两步式引擎切换的浏览态。browseVendor 初始 = 会话当前引擎;
   // 切到另一家 tab 只是「浏览目标引擎的模型」,选中模型行才真正触发切换事务。
   const [browseVendor, setBrowseVendor] = useState<'cc' | 'codex'>(
@@ -733,12 +763,19 @@ function ModelSelectorContentView({
       agent: currentAgentKind,
       selectedModelId: modelId,
       selectedProviderId: activeSourceId,
-      // device-link 远程会话:被控端目录「是啥就是啥」,绝不套控制端本机的可见性 override
-      // —— modelVisibilityPrefs 是控制端本机 UI 偏好(设置→供应商的隐藏开关),与被控端无关,
-      // 套上去会让远程列表变成「被控端目录 ∩ 控制端隐藏开关」,跟被控端实际清单对不上。
-      // 本机会话仍按用户本机开关过滤(行为不变)。
+      // device-link 远程会话使用被控端随 provider:list 返回的 override 快照，绝不套
+      // 控制端本机 modelVisibilityPrefs。旧被控端不回传快照时 fail-open，保持兼容。
       isVisible: deviceId
-        ? () => true
+        ? (pid, mid) => {
+            const p = connected.find((x) => x.id === pid);
+            const cat = p ? getModel(p, mid, currentAgentKind) : undefined;
+            return isDeviceModelVisible(
+              remoteProviders.modelVisibilityOverrides,
+              currentAgentKind,
+              pid,
+              { id: mid, defaultEnabled: cat?.defaultEnabled },
+            );
+          }
         : (pid, mid) => {
             const p = connected.find((x) => x.id === pid);
             const cat = p ? getModel(p, mid, currentAgentKind) : undefined;
@@ -759,6 +796,7 @@ function ModelSelectorContentView({
     query,
     visibilityVersion,
     deviceId,
+    remoteProviders.modelVisibilityOverrides,
   ]);
 
   const flatModels = useMemo(() => {
@@ -774,9 +812,22 @@ function ModelSelectorContentView({
     // 本地 flat 入口（子代理模型、Worker 等）没有 provider sections 帮忙过滤，必须显式复用
     // 会话选择器 / IM `/model` 的同一套「已连接来源 × 用户可见模型」规则。否则设置页里
     // 已忽略或仅由断开来源提供的目录项仍会被列出来，选中后没有可用路由。
-    // device-link 的目录来自被控端，不能叠加控制端本机的可见性偏好，保持原样。
+    // device-link 使用被控端 override；旧被控端没有快照时保持历史 fail-open。
     const selectableIds = deviceId
-      ? null
+      ? remoteProviders.modelVisibilityOverrides === undefined
+        ? null
+        : new Set(
+            (agentKind ? [agentKind] : (['claude-code', 'codex'] as const)).flatMap((agent) =>
+              visibleModelUnion(providers, agent, (providerId, model) =>
+                isDeviceModelVisible(
+                  remoteProviders.modelVisibilityOverrides,
+                  agent,
+                  providerId,
+                  model,
+                ),
+              ).map((model) => model.id),
+            ),
+          )
       : new Set(
           (agentKind ? [agentKind] : (['claude-code', 'codex'] as const)).flatMap((agent) =>
             visibleModelUnion(providers, agent, (providerId, model) =>
@@ -789,7 +840,17 @@ function ModelSelectorContentView({
     return selectable.filter(
       (m) => m.displayName.toLowerCase().includes(q) || m.id.toLowerCase().includes(q),
     );
-  }, [sections, visibleModels, query, browsing, agentKind, providers, deviceId, visibilityVersion]);
+  }, [
+    sections,
+    visibleModels,
+    query,
+    browsing,
+    agentKind,
+    providers,
+    deviceId,
+    visibilityVersion,
+    remoteProviders.modelVisibilityOverrides,
+  ]);
 
   // 选中判定:flat 模式只比模型 id;分段模式还要比供应商(同模型多供应商下只高亮当前来源那行)。
   // 浏览目标引擎态恒 false:当前会话模型属于旧引擎,目标列表里同 id 行(如 gpt-5.5
@@ -1070,9 +1131,7 @@ function ModelSelectorContentView({
                         {t(`newChat.modelSelector.pricing.${row.kind}`)}
                       </span>
                       <span className="flex items-center justify-end gap-1.5 tabular-nums">
-                        <span className="text-[var(--model-item-text)]">
-                          {row.value}
-                        </span>
+                        <span className="text-[var(--model-item-text)]">{row.value}</span>
                         {row.originalValue && (
                           <span className="text-[var(--text-tertiary)] line-through">
                             {row.originalValue}
@@ -1213,6 +1272,7 @@ function ModelSelectorContentView({
             }}
             className={cn(
               'flex w-full cursor-pointer items-center justify-between rounded-[8px] px-3 py-2',
+              constrainedListMaxHeight !== undefined && 'min-h-11',
               'transition-colors duration-100 hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
               isSelected && 'bg-[var(--model-item-hover)]',
               isEditingThis &&
@@ -1227,6 +1287,7 @@ function ModelSelectorContentView({
                   providerId={provider.id}
                   name={provider.name}
                   routing={provider.routing}
+                  logoKind={provider.logoKind}
                   colorClass="text-[var(--text-secondary)]"
                   withMargin={false}
                   dense
@@ -1444,6 +1505,11 @@ function ModelSelectorContentView({
         // -mr-2 把滚动条挪进面板右侧 8px 留白;scrollbar-gutter:stable 让无滚动时
         // 行宽与有滚动时一致(否则行会比搜索框宽 8px);细滚动条见 globals.css
         className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+        style={
+          constrainedListMaxHeight === undefined
+            ? undefined
+            : { maxHeight: `${constrainedListMaxHeight}px` }
+        }
         role="listbox"
         aria-label="Model list"
         onScroll={() => {
@@ -1513,6 +1579,7 @@ export function ModelSelector({
   visualVariant = 'default',
   useMorphPopover = false,
   popoverSide = 'top',
+  maxVisibleModelRows,
   configurationEnabled = true,
   fallbackOption,
   reselectEmitsChange = false,
@@ -1585,8 +1652,7 @@ export function ModelSelector({
   // 用户既看不到自己存的是什么,也看不到实际会跑什么。unknownModelLabel 让这类调用方
   // 给出诊断性文案(通常是裸 id),行为与本组件接管前一致。
   // unknown label 空串/全空白按缺省处理(否则 ?? 不回落,trigger 渲染成空白)。
-  const unknownLabel =
-    modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
+  const unknownLabel = modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
   const displayLabel = fallbackOption?.active
     ? fallbackOption.label
     : (currentModel?.displayName ??
@@ -1794,6 +1860,7 @@ export function ModelSelector({
             providerId={currentProviderId}
             name={disconnectedProvider?.name}
             routing={disconnectedProvider?.routing}
+            logoKind={disconnectedProvider?.logoKind}
             colorClass="text-[var(--error-fg)]"
           />
           <span
@@ -1839,6 +1906,7 @@ export function ModelSelector({
               providerId={activeSourceId}
               name={triggerActiveProvider?.name}
               routing={triggerActiveProvider?.routing}
+              logoKind={triggerActiveProvider?.logoKind}
               colorClass={
                 isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : undefined
               }
@@ -1946,6 +2014,7 @@ export function ModelSelector({
       excludeSubscriptionDirect={excludeSubscriptionDirect}
       excludeChatBridgedCodex={excludeChatBridgedCodex}
       onDismiss={() => setOpen(false)}
+      maxVisibleModelRows={maxVisibleModelRows}
       currentProviderId={currentProviderId}
       onProviderChange={onProviderChange}
       onNavigateToProviders={onNavigateToProviders}

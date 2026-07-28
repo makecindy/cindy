@@ -94,6 +94,7 @@ function provider(
     id,
     name: id,
     agents,
+    routing: Object.fromEntries(agents.map((agent) => [agent, {}])),
     models,
     connected: true,
     ...extra,

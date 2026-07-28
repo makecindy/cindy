@@ -13,3 +13,5 @@
 
 - [`core-product-principles.md`](core-product-principles.md)：Cindy 的目的、连接本质、
   Core 边界，以及 Agent、Skill、插件的产品分工。
+- [`region-and-editions.md`](region-and-editions.md)：Global 与中国大陆版的关系、
+  身份命名与默认值方向、区域相关 UI 标注与对外口径。

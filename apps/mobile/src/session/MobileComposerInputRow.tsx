@@ -17,16 +17,39 @@ import { Mic } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { iconSize, iconStroke, useThemedStyles, type ThemeColors } from '@/theme';
-import { radius, spacing, typeScale } from '@/theme/tokens';
+import { radius, spacing } from '@/theme/tokens';
+import {
+  COMPOSER_SINGLE_LINE_HEIGHT,
+  COMPOSER_TEXT_HORIZONTAL_PADDING,
+  COMPOSER_TEXT_LINE_HEIGHT,
+  COMPOSER_TEXT_STYLE,
+  COMPOSER_TEXT_VERTICAL_PADDING,
+} from '@/session/composerTextMetrics';
 
-export const MOBILE_COMPOSER_INPUT_LINE_HEIGHT = 22;
-export const MOBILE_COMPOSER_INPUT_VERTICAL_PADDING = 3;
-export const MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT = 28;
+/**
+ * Composer 草稿文本的排版档。正本在 `composerTextMetrics`——原生输入框、WebView 富文本
+ * 编辑器与语音听写覆盖层共用同一档,任一处漂移都会让听写文字与真实输入框换行位置错开
+ * (详见该文件注释)。此处只做转出,页面按既有名字引用。
+ */
+export const MOBILE_COMPOSER_DRAFT_TEXT_STYLE = COMPOSER_TEXT_STYLE;
+
+/**
+ * 输入区的单行**内容高度**(不含上下内边距) = 单行文字行高:两者同源,保证「单行」
+ * 正好装一行文字。含内边距的单行可视高度是 MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT。
+ */
+export const MOBILE_COMPOSER_INPUT_LINE_HEIGHT = COMPOSER_TEXT_LINE_HEIGHT;
+export const MOBILE_COMPOSER_INPUT_VERTICAL_PADDING = COMPOSER_TEXT_VERTICAL_PADDING;
+export const MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT = COMPOSER_SINGLE_LINE_HEIGHT;
 export const MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES = 12;
 export const MOBILE_COMPOSER_INPUT_MAX_HEIGHT = (MOBILE_COMPOSER_INPUT_LINE_HEIGHT * MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES)
   + (MOBILE_COMPOSER_INPUT_VERTICAL_PADDING * 2);
 export const MOBILE_COMPOSER_CONTROL_SIZE = 34;
 export const MOBILE_COMPOSER_TOOL_GAP = 6;
+/**
+ * 触控目标下限(mobile-design-guide「主操作命中区 ≥ 44×44」,iOS HIG 同值)。
+ * 语音听写期间「点输入区停止听写」的命中层用它撑起 inputFrame(见 inputFrameMinHeight)。
+ */
+export const MOBILE_COMPOSER_MIN_TOUCH_TARGET = 44;
 const isExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 /** 语音按钮 absolute 锚点距 composer 内容区右缘的距离(voiceButtonAnchor.right);
@@ -85,6 +108,12 @@ export interface MobileComposerInputRowProps {
    * null / undefined 走内容自动增长（现状行为）。
    */
   inputFrameHeight?: number | Animated.Value | null;
+  /**
+   * 输入区（inputFrame）的最小高度。给语音听写用：听写期间「点输入区停止听写」的命中层
+   * 盖在 inputFrame 上，而单行听写时 inputFrame 只有 28pt，不满足触控目标 44pt；
+   * hitSlop 解决不了——RN 的命中区不会越过父视图边界，必须让父容器本身够高。
+   */
+  inputFrameMinHeight?: number;
   /** Rich composer replacement for the plain TextInput. */
   inputElement?: ReactNode;
   inputOverlay?: ReactNode;
@@ -158,6 +187,7 @@ export function MobileComposerInputRow({
   floatingVoiceButton,
   floatingVoiceButtonStyle,
   inputFrameHeight,
+  inputFrameMinHeight,
   inputElement,
   inputOverlay,
   inputRef,
@@ -189,6 +219,13 @@ export function MobileComposerInputRow({
 }: MobileComposerInputRowProps) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
   const cardLayout = cardActive === true;
+  // RN 里显式 height 压过 minHeight:manual 定高(用户拖过高度)时 frameHeight 可能小于
+  // inputFrameMinHeight,直接铺开会把听写停止命中区又压回不足 44pt。数值高度在这里
+  // 先 clamp;拖拽中的 Animated 值无法在 JS 侧 clamp(会打断跟手),那一瞬保持动画值,
+  // 松手结算成数值后重新受本 clamp 约束。
+  const resolvedInputFrameHeight = typeof inputFrameHeight === 'number' && inputFrameMinHeight != null
+    ? Math.max(inputFrameHeight, inputFrameMinHeight)
+    : inputFrameHeight;
   // useCallback 稳定引用,避免每次 render 都向原生 TextInputWrapper diff 新函数 prop。
   // images-loading:原生刚检测到图片粘贴意图(数据还在后台读),先画占位;
   // images:原生侧已阻止默认粘贴,上抛进附件链路(占位在此兑现);
@@ -255,7 +292,8 @@ export function MobileComposerInputRow({
         <Animated.View
           style={[
             styles.inputFrame,
-            inputFrameHeight != null && { height: inputFrameHeight },
+            inputFrameMinHeight != null && { minHeight: inputFrameMinHeight },
+            resolvedInputFrameHeight != null && { height: resolvedInputFrameHeight },
           ]}
         >
           {inputElement ?? (onPasteImages && !isExpoGo ? (
@@ -294,13 +332,15 @@ export function ComposerToolbarSpacer() {
 }
 
 /**
- * card 工具排中语音按钮的等宽占位。真实语音按钮由 MobileComposerInputRow
- * 以 absolute 锚点渲染（保证两态同一实例、位置平滑过渡），工具排用本占位
- * 在 flex 流里为它留出位置。
+ * 工具排 / 输入行 flex 流中语音按钮的等宽占位。真实语音按钮由
+ * MobileComposerInputRow 以 absolute 锚点渲染（保证两态同一实例、位置平滑
+ * 过渡），流内用本占位为它留出位置。录音中胶囊(红点+计时)比常态宽,由
+ * `width` 传入当前胶囊宽度(useMobileVoiceRecordingTimer.pillWidth),占位随
+ * 之变宽把左邻按钮推开——胶囊只向左生长,右缘(与发送键的邻接关系)不动。
  */
-export function ComposerToolbarVoiceSlot() {
+export function ComposerToolbarVoiceSlot({ width }: { width?: number }) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
-  return <View style={styles.toolbarVoiceSlot} />;
+  return <View style={[styles.toolbarVoiceSlot, width != null && { width }]} />;
 }
 
 export interface ComposerResizeGrabberProps {
@@ -518,16 +558,17 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     height: MOBILE_COMPOSER_CONTROL_SIZE,
     width: MOBILE_COMPOSER_CONTROL_SIZE,
   },
+  // 字号 / 行高 / 水平内边距全部走 composerTextMetrics:WebView 富文本编辑器与语音
+  // 听写覆盖层用同一份度量,三边换行位置必须逐字一致(见该文件注释)。
   input: {
     backgroundColor: 'transparent',
     borderWidth: 0,
     color: colors.textPrimary,
     flex: 1,
-    fontSize: typeScale.body,
-    lineHeight: MOBILE_COMPOSER_INPUT_LINE_HEIGHT,
+    ...COMPOSER_TEXT_STYLE,
     maxHeight: MOBILE_COMPOSER_INPUT_MAX_HEIGHT,
     minHeight: MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
-    paddingHorizontal: spacing.xs,
+    paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING,
     paddingVertical: MOBILE_COMPOSER_INPUT_VERTICAL_PADDING,
     textAlignVertical: 'top',
   },

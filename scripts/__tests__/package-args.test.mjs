@@ -1,16 +1,26 @@
 // 桌面打包参数解析与产物架构命名的单测（apps/desktop/scripts/ci/package-lib.mjs）。
 //
 // 这层是「在哪台机器上能打出哪个包、包叫什么名字」的唯一判定点，错了会直接
-// 顶着错误的架构后缀发出安装包。用 node 内置 test runner，不依赖 vitest：
-// 被测模块是纯函数、零 IO，可直接 `node --test scripts/__tests__/`。
+// 顶着错误的架构后缀发出安装包。用 node 内置 test runner，不依赖 vitest。
+// 被测逻辑以纯函数为主，版本占位契约包含少量仓库内文件 IO。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 import {
   PLATFORM_ARCHS,
+  VERSIONLESS_VERSION,
   debianArch,
   parsePackageArgs,
 } from '../../apps/desktop/scripts/ci/package-lib.mjs';
+
+test('Desktop 默认版本与 versionless 打包哨兵一致', () => {
+  const desktopPackageJson = JSON.parse(fs.readFileSync(
+    new URL('../../apps/desktop/package.json', import.meta.url),
+    'utf8',
+  ));
+  assert.equal(desktopPackageJson.version, VERSIONLESS_VERSION);
+});
 
 test('PLATFORM_ARCHS: linux 支持 x64 与 arm64', () => {
   assert.deepEqual([...PLATFORM_ARCHS.linux].sort(), ['arm64', 'x64']);

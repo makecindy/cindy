@@ -63,6 +63,22 @@ restart 无法同时多开**。真要并行多个 dev 实例，走下面三条�
 Agent 自身仍只走 restart 命令，不直接调 human-only 的 `dev:desktop*`。共享同一 userData
 多开时，非 primary 实例用 `--passive` 让出定时任务调度（见上）。
 
+### 使用统计（TapDB）在 dev 下不上报
+
+dev 构建**默认不初始化 TapDB**，与用户是否同意《隐私政策》、统计开关是否打开无关。闸在
+main 侧 `analytics-settings-store.ts` 的 `isReportingBuild()`（`app.isPackaged !== true`
+默认关），renderer 只消费 `allowed` 这个结论。
+
+原因：TapDB Web SDK 的设备身份（`device_id`）写在 renderer 的 localStorage 里，而
+localStorage 按 **origin + userData 目录** 分家——dev 的 renderer 从
+`http://localhost:<vite 端口>` 加载（并行多开时端口自增），`--isolated[=<名字>]` 与
+`XDT_USER_DATA_DIR` 每条沙箱又各有一份。于是一个开发者一天能凭空造出几十台「新增设备」，
+把线上新增设备／转化率／次日留存全部带偏（2026-07-26 复盘：某地区单人一天 78 台设备、
+新增账号 1、次日留存 2.6%）。dev 与 release 目前共用同一个 TapDB appId，只能在闸上区分。
+
+要验证上报链路本身时，手动设 `XDT_TAPDB_DEV=1` 放行（严格等于 `1`，其它值一律视为关）。
+**这会把 dev 数据打进线上 app，用完即撤，不要写进任何脚本或 `.env`。**
+
 ## 何时需要重启
 
 - 修改 main、preload、MCP、原生依赖或 package 运行时代码后需要重启。
@@ -86,6 +102,9 @@ pnpm test:unit
 
 - 改 TypeScript 至少运行相关类型检查和定向测试。
 - 跨模块、共享 package、构建链或广泛重构再扩大到 Desktop 全量测试、构建或根级单测。
+- 调整 Desktop Vitest worker 或测试分池前，先读取
+  [`desktop-unit-test-performance.md`](desktop-unit-test-performance.md)，并用其中的
+  benchmark 在相同测试范围下做前后对比。
 - 数据库 migration、协议、更新器、权限与用户数据另有高风险专项规则；命中时先读取
   对应规则，不以本页命令替代专项验证。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。

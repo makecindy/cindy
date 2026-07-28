@@ -12,6 +12,7 @@
  */
 
 import {
+  isModelVisible,
   providerOffersModel,
   providersForAgent,
   sessionModelSupportsFastMode,
@@ -89,6 +90,23 @@ export function resolveFastSupported(params: {
 export function providerMonogram(name: string): string {
   const ch = Array.from(name.trim())[0] ?? '?';
   return ch.toUpperCase();
+}
+
+/**
+ * 被控端模型可见性判定。override 缺失表示旧被控端，保持历史 fail-open；
+ * 现代被控端则复用共享的「显式 override 优先，否则目录默认值」口径。
+ */
+export function isDeviceModelVisible(
+  overrides: Record<string, boolean> | undefined,
+  agent: AgentKind,
+  providerId: string,
+  model: Pick<CatalogModel, 'id' | 'defaultEnabled'>,
+): boolean {
+  if (overrides === undefined) return true;
+  return isModelVisible(
+    overrides[`${agent}:${providerId}:${model.id}`],
+    model.defaultEnabled,
+  );
 }
 
 /** Whether a provider relies on the local Responses-to-Chat handler for Codex. */

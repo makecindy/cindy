@@ -22,8 +22,8 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight as fontWeightToken, radius, typeScale } from '@/theme/tokens';
 import {
   PROVIDER_LOGO_PATHS,
+  isProviderLogoKind,
   resolveProviderLogoKind,
-  type ProviderLogoKind,
   type ProviderLogoRouting,
 } from '@cindy/model-providers/branding';
 import { resolveModelIconKind } from '@cindy/model-providers/sections';
@@ -65,7 +65,7 @@ export interface MobileProviderMarkProps {
   /** 用户重命名 provider 后用持久化 upstream 继续识别品牌。 */
   routing?: ProviderLogoRouting;
   /** 被控端剥离 routing 前解析出的非敏感品牌;device-link 场景优先使用。 */
-  logoKind?: ProviderLogoKind;
+  logoKind?: string;
   /** 供应商展示名(monogram 取首字母;官方 mark 分支不消费)。 */
   name: string;
   /** mark 单色;缺省 textSecondary(列表行口径,trigger 场景可传 textPrimary)。 */
@@ -80,7 +80,9 @@ export function MobileProviderMark({ providerId, routing, logoKind, name, color 
   // 官方 mark 比 monogram 容器缩一档(桌面同比:行内 mark ≈ 12.3 vs 容器 18),避免视觉过重。
   const glyph = 13;
 
-  const kind = logoKind ?? resolveProviderLogoKind(providerId ?? '', routing);
+  const kind = isProviderLogoKind(logoKind)
+    ? logoKind
+    : resolveProviderLogoKind(providerId ?? '', routing);
 
   switch (kind) {
     case 'anthropic':
@@ -138,7 +140,7 @@ export interface MobileModelIconMarkProps {
   /** 回落用的来源供应商 id / 展示名(与 MobileProviderMark 同语义)。 */
   providerId?: string;
   routing?: ProviderLogoRouting;
-  logoKind?: ProviderLogoKind;
+  logoKind?: string;
   name: string;
   color?: string;
 }

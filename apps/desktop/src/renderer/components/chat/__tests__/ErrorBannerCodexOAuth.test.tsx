@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ErrorBanner } from '../ErrorBanner';
 import { useCodexAuth } from '@/hooks/useCodexAuth';
+import { useCodexSessionExpiredPrompt } from '@/hooks/useCodexSessionExpiredPrompt';
 
 type AuthStateChangedPayload = {
   agentKind: 'claude-code' | 'codex';
@@ -137,7 +138,12 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       screen.getByRole('button', { name: 'chat.errorBanner.codexSessionExpiredLogin' }),
     );
 
-    await waitFor(() => expect(mocks.triggerLogin).toHaveBeenCalledWith('codex'));
+    await waitFor(() =>
+      expect(mocks.triggerLogin).toHaveBeenCalledWith(
+        'codex',
+        expect.objectContaining({ ownerId: expect.any(String) }),
+      ),
+    );
     expect(mocks.confirm).not.toHaveBeenCalled();
     expect(mocks.toastSuccess).toHaveBeenCalledWith('logic.toasts.codexConnected');
     expect(await screen.findByText('chat.errorBanner.codexSessionReconnected')).toBeTruthy();
@@ -180,7 +186,12 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       screen.getByRole('button', { name: 'chat.errorBanner.codexSessionExpiredLogin' }),
     );
 
-    await waitFor(() => expect(mocks.triggerLogin).toHaveBeenCalledWith('codex'));
+    await waitFor(() =>
+      expect(mocks.triggerLogin).toHaveBeenCalledWith(
+        'codex',
+        expect.objectContaining({ ownerId: expect.any(String) }),
+      ),
+    );
     expect(mocks.toastError).not.toHaveBeenCalled();
     expect(screen.getByText('chat.errorBanner.codexSessionExpired')).toBeTruthy();
     expect(
@@ -235,9 +246,33 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       screen.getByRole('button', { name: 'chat.errorBanner.codexSessionExpiredLogin' }),
     );
 
-    await waitFor(() => expect(mocks.triggerLogin).toHaveBeenCalledWith('codex'));
+    await waitFor(() =>
+      expect(mocks.triggerLogin).toHaveBeenCalledWith(
+        'codex',
+        expect.objectContaining({ ownerId: expect.any(String) }),
+      ),
+    );
     expect(await screen.findByText('chat.errorBanner.codexSessionReconnected')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+  });
+
+  it('classifies the wrapped thread/resume refresh-token failure as reconnect, not retry', () => {
+    render(
+      <ErrorBanner
+        error="LAZY_CREATE_FAILED: Failed to resume Codex thread: Error: codex app-server thread/resume error -32600: failed to load configuration: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again."
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+        modelId="gpt-5.4"
+        providerId="openai"
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.codexSessionExpired')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'chat.errorBanner.codexSessionExpiredLogin' }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
   });
 
   it('does not classify a non-OpenAI provider error as ChatGPT reconnect', () => {
@@ -439,6 +474,63 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     });
 
     expect(await screen.findByText('chat.errorBanner.codexSessionReconnected')).toBeTruthy();
-    expect(mocks.triggerLogin).toHaveBeenCalledWith('codex');
+    expect(mocks.triggerLogin).toHaveBeenCalledWith(
+      'codex',
+      expect.objectContaining({ ownerId: expect.any(String) }),
+    );
+  });
+
+  it('cancels an owned reconnect when its prompt owner unmounts', async () => {
+    const login = deferred<AuthStateChangedPayload>();
+    mocks.triggerLogin.mockImplementation(() => login.promise);
+    const prompt = renderHook(() =>
+      useCodexSessionExpiredPrompt({ confirmBeforeLogin: false }),
+    );
+
+    act(() => {
+      expect(prompt.result.current('token_revoked')).toBe(true);
+    });
+    await waitFor(() =>
+      expect(mocks.triggerLogin).toHaveBeenCalledWith(
+        'codex',
+        expect.objectContaining({ ownerId: expect.any(String) }),
+      ),
+    );
+
+    prompt.unmount();
+    expect(mocks.cancelLogin).toHaveBeenCalledOnce();
+    expect(mocks.cancelLogin).toHaveBeenCalledWith('codex', {
+      releaseOwner: true,
+      ownerId: expect.any(String),
+    });
+
+    await act(async () => {
+      login.resolve({
+        agentKind: 'codex',
+        authenticated: false,
+        errorReason: 'login_cancelled',
+      });
+      await login.promise;
+    });
+  });
+
+  it('does not start reconnect after unmount while confirmation is pending', async () => {
+    const confirmation = deferred<boolean>();
+    mocks.confirm.mockImplementationOnce(() => confirmation.promise);
+    const prompt = renderHook(() => useCodexSessionExpiredPrompt());
+
+    act(() => {
+      expect(prompt.result.current('token_revoked')).toBe(true);
+    });
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledOnce());
+
+    prompt.unmount();
+    await act(async () => {
+      confirmation.resolve(true);
+      await confirmation.promise;
+    });
+
+    expect(mocks.triggerLogin).not.toHaveBeenCalled();
+    expect(mocks.cancelLogin).not.toHaveBeenCalled();
   });
 });

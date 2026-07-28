@@ -26,6 +26,7 @@
   },
   "screen": {
     "composerSyncing": "正在同步对话数据，同步完成后即可发送。",
+    "composerSessionNotSynced": "当前对话还没有同步完成。",
     "composerCreating": "对话创建中，首条消息发出后即可继续发送。",
     "nextAgentSwitch": "下条切到 {{agent}} · {{model}}",
     "createFailedTitle": "对话创建失败",

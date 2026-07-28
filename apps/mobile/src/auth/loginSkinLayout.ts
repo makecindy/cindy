@@ -439,31 +439,37 @@ export const LOGIN_CONSENT_DIALOG = {
   button: { y: 260, width: 260, height: 80, radius: 40, font: 24, disagreeX: 70, agreeX: 350 },
 } as const;
 
-/* ── 账号注销提示气泡(figma 678:1075,2026-07-26 用户拍板;**浮层,物理 pt/dp,
-      不走 750 stage 设计 px 缩放**——气泡渲染在 stage 之外的 viewport 坐标浮层,
-      盖过立绘/字标/面板/社交行,不参与滚动与布局流) ── */
+/* ── 账号注销提示气泡(figma 678:1075) ──
+      浮层:渲染在登录组之外的 viewport 坐标层,盖过立绘/字标/面板/社交行,
+      不参与布局流与滚动。
+      ⚠ 几何**全部是各构图 stage 的设计单位**,不是物理 pt/dp——与登录组同乘
+      surface.scale 后才是屏幕值(2026-07-26 修正:初版把设计单位当物理 pt 用,
+      宽度写死 335、内部几何未折算,气泡与面板比例失真)。 */
 
-/** 注销气泡定位输出(物理 pt/dp,viewport 坐标)。 */
+/** 注销气泡落位与折算结果(除 scale 外均为物理 pt/dp,viewport 坐标)。 */
 export interface LoginDeletionBubbleFrame {
   top: number;
   left: number;
   width: number;
+  /** 设计单位 → 物理 pt 的缩放系数(= surface.scale;内部几何消费端按此折算) */
+  scale: number;
 }
 
 /**
- * 注销提示气泡布局常量(figma 678:1075;单位物理 pt/dp):
- * 圆角 22、四边 padding 20、1px 描边、不透明底;标题/正文 20/23 Regular 居中,
- * 标题↔正文 5、正文↔「我知道了」22、「我知道了」↔气泡底 20(= padding,
- * 文案再长底距不变);高度内容撑开,禁止固定高;无图标/阴影/动画。
- * - phone:top = safe-area 顶(insets.top,间距 0),宽 min(335, 屏宽−2×20),水平居中;
- * - pad:top = 72 固定(已含状态栏之下安全余量),宽 556(与 CINDY 字标同宽);
- *   pad-landscape 中轴 = 登录 stage 右半屏中心(左立绘右表单双栏,字标在右栏
- *   正中——stage 1180 系字标/登录组中心均 ≈885=0.75×1180;用 stage 坐标换算,
- *   窄边受限居中的 viewport(iPad mini 横屏等)下仍与字标同轴);
- *   pad-portrait 中轴 = 屏幕中心(竖排构图,字标/表单均居中,右半屏中心会把
- *   气泡推出屏幕右缘);left 仅 clamp 到屏内(margin ≥ 0)——基准画布右缘余量
- *   17 是「556 宽 + 右半屏中轴」的结果而非独立参数,不额外设最小边距;
- *   退化窄横屏(stage 自身 scale 触底,如 1000×690)气泡贴右缘也不出屏。
+ * 注销提示气泡设计常量(figma 678:1075「注销状态」组件集;**stage 设计单位**)。
+ *
+ * 内部几何由组件子元素坐标反算自洽:标题 text @(20,20) h=23、正文 text @(20,48) h=23
+ * → padding 20、标题↔正文 5、行高 23、底距 20;无钮变体总高 91 = 20+23+5+23+20。
+ * 高度由内容撑开,禁止固定高;无图标/阴影/动画。
+ *
+ * 各端落位(设计单位,乘 surface.scale 得屏幕值):
+ * - phone(stage 750):宽 670 @x=40(750−670−40=40 → 等价水平居中);
+ *   top 取 safe-area 顶(设计 y=116 即 Status Bar 高 115.67 的下沿,间距 0);
+ * - pad-landscape(stage 1180×820):宽 556 = WORD_MARK 框宽(figma 679:1201 x=607 w=556,
+ *   用户 2026-07-26 拍板「与字标同宽」),x=607 → 中心 885 与登录组中心 884.8 同轴;
+ *   top 72(底边 72+91=163,距字标框顶 177 留 14,与设计标注位置吻合);
+ * - pad-portrait(stage 744×1133):字标框宽按可见图形等比反算
+ *   269.51 ×(556/297.32)≈ 504,水平居中于字标轴(≈ stage 中心 372);top 同 72。
  */
 export const LOGIN_DELETION_BUBBLE = {
   radius: 22,
@@ -473,38 +479,75 @@ export const LOGIN_DELETION_BUBBLE = {
   lineHeight: LOGIN_COPY_LINE_HEIGHT,
   titleBodyGap: 5,
   bodyLinkGap: 22,
-  /** 「我知道了」热区扩张(视觉不变):23 行高 + 上下 12 → 47 ≥ 44;左右 20 余量 */
-  linkHitSlop: { top: 12, bottom: 12, left: 20, right: 20 },
-  /** 屏幕两侧最小边距(phone 宽 = min(maxWidth, 屏宽−2×sideMargin)) */
-  sideMargin: 20,
-  phone: { maxWidth: 335 },
-  pad: { width: 556, top: 72, landscapeCenterRatio: 0.75 },
+  phone: { width: 670, x: 40, stageWidth: LOGIN_STAGE_WIDTH },
+  padLandscape: { width: 556, x: 607, top: 72 },
+  padPortrait: { width: 504, top: 72 },
 } as const;
 
 /**
- * 纯函数:surface 构图 + safe-area 顶 → 气泡 viewport 落位(figma 678:1075;
- * 断点三分支与 resolveLoginSurfaceMode 同语义,消费端直接传 useLoginSurface() 输出)。
+ * 纯函数:surface 构图 + safe-area 顶 → 气泡 viewport 落位(figma 678:1075)。
+ * 设计单位经 surface.scale 折算为物理 pt;left 钳制在屏内(不出屏、不贴负边)。
+ * 断点三分支与 resolveLoginSurfaceMode 同语义,消费端直接传 useLoginSurface() 输出。
  */
+/**
+ * 「我知道了」热区(物理 pt):RN 的 hitSlop **不会越过父 View 边界**(双端一致),
+ * 上/下扩张只能取「气泡内可用空间」——上限 = 正文↔链接间距、下限 = 气泡下 padding
+ * (均为设计单位 × scale),写大了是虚标(Codex 审查 PR #494 指出:320pt 窗口下
+ * 名义 45.8pt 实际被裁到 ≈30pt)。不追未缩放的 44pt 绝对下限:整个登录系统按 stage
+ * 缩放(320pt 窗口下登录主按钮本身仅 ≈34pt 高),孤立保 44 需打破「正文↔链接 22 /
+ * 底距 20 恒定」的拍板视觉;热区随系统同步缩放、边界内取最大。左右两侧文本外富余
+ * 充足,固定 20。
+ */
+export function resolveDeletionBubbleLinkHitSlop(scale: number): {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+} {
+  const { bodyLinkGap, padding } = LOGIN_DELETION_BUBBLE;
+  return {
+    top: Math.min(18, bodyLinkGap * scale),
+    bottom: Math.min(18, padding * scale),
+    left: 20,
+    right: 20,
+  };
+}
+
 export function resolveDeletionBubbleFrame(
   surface: LoginSurfaceLayout,
   safeTop: number,
 ): LoginDeletionBubbleFrame {
-  const { sideMargin, phone, pad } = LOGIN_DELETION_BUBBLE;
+  const { phone, padLandscape, padPortrait } = LOGIN_DELETION_BUBBLE;
+  const { scale } = surface;
+  const clampLeft = (left: number, width: number) =>
+    Math.max(0, Math.min(left, surface.viewportWidth - width));
+
   if (surface.mode === 'phone') {
-    const width = Math.min(phone.maxWidth, surface.viewportWidth - sideMargin * 2);
-    return { left: (surface.viewportWidth - width) / 2, top: safeTop, width };
+    const width = phone.width * scale;
+    return {
+      left: clampLeft((surface.viewportWidth - width) / 2, width),
+      top: safeTop,
+      width,
+      scale,
+    };
   }
-  const width = pad.width;
-  const center =
-    surface.mode === 'pad-landscape'
-      ? surface.offsetX +
-        surface.stageWidth * pad.landscapeCenterRatio * surface.scale
-      : surface.viewportWidth / 2;
-  const left = Math.max(
-    0,
-    Math.min(center - width / 2, surface.viewportWidth - width),
-  );
-  return { left, top: pad.top, width };
+  if (surface.mode === 'pad-landscape') {
+    const width = padLandscape.width * scale;
+    const left = surface.offsetX + padLandscape.x * scale;
+    return {
+      left: clampLeft(left, width),
+      top: surface.offsetY + padLandscape.top * scale,
+      width,
+      scale,
+    };
+  }
+  const width = padPortrait.width * scale;
+  return {
+    left: clampLeft((surface.viewportWidth - width) / 2, width),
+    top: surface.offsetY + padPortrait.top * scale,
+    width,
+    scale,
+  };
 }
 
 // 态叠层 / 浅底钮白描边 / loading 环底圈色:原 LOGIN_PRESSED_OVERLAY /

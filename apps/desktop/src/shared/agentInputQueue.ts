@@ -9,8 +9,12 @@
  */
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
+import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
 import {
+  describeAgentInputReference,
   projectAgentFacingText,
+  projectLiteralUserText,
+  readAgentInputReferences,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
 
@@ -512,6 +516,234 @@ export function getAgentFacingText(queued: AgentInputQueuedMessage): string {
     quotesEncoded: queued.chatMessage.quotesEncoded === true,
     agentReferences: queued.agentReferences,
   });
+}
+
+/**
+ * 无文本消息合成占位标题时用到的本地化类别词。只在拿不到任何具体名字(粘贴的
+ * 截图没有文件名)时兜底,所以只需要这两个。
+ */
+export interface AutoTitleFallbackLabels {
+  /** 「图片」 */
+  image: string;
+  /** 「文件」 */
+  file: string;
+}
+
+export interface AutoTitleSeed {
+  /** 起名素材。 */
+  text: string;
+  /**
+   * true  = 用户真的写了文字(含选中文字引用的正文),可以作为标题模型的输入素材。
+   * false = 本地合成的描述(附件文件名 / @mention 名 / 被引用会话标题)。这类串
+   *         **只能当占位标题,绝不能喂给标题模型** —— 模型拿不到实质内容,会返回
+   *         「我没有看到用户消息的内容」这类回复或硬编一个无关标题。
+   */
+  isUserText: boolean;
+}
+
+/** 路径 basename,兼容 POSIX 与 Windows 分隔符。 */
+function baseName(path: string): string {
+  return path.split(/[\\/]/).pop() ?? '';
+}
+
+function collapse(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+/** 被引用的会话 / 项目 / 消息 —— 手里就有现成的标题或名字,优先用它。 */
+function describeReferences(queued: AgentInputQueuedMessage): string | null {
+  const references = readAgentInputReferences(queued.agentReferences, queued.text);
+  for (const reference of references) {
+    const described = describeAgentInputReference(reference);
+    if (described) return described;
+  }
+  return null;
+}
+
+/** @mention 的文件 / 目录 / agent 名。 */
+function describeMentions(queued: AgentInputQueuedMessage): string | null {
+  for (const mention of queued.mentions ?? []) {
+    const name = collapse(mention.name || baseName(mention.path));
+    if (name) return name;
+  }
+  return null;
+}
+
+/**
+ * 附件文件名(`需求评审.pdf` 比「文件」信息量大得多)。
+ *
+ * `clipboard://` 系的附件(粘贴截图、图片查看器「发送到对话」、浏览器注释、插件
+ * 拖入)没有用户可辨认的文件名:useAttachments 等处按 `clipboard-<ts>.png` /
+ * `annotated-<ts>.png` 这类实现名同时填 `name` 与 `originalName`,真实来源只体现在
+ * `path` 的 scheme 上。因此按 **path** 判定,而不是看名字长什么样 —— 否则会拿
+ * `clipboard-1753...png` 当标题(PR #510 review P1)。这类附件跳过,让类别词兜底。
+ */
+function describeFileName(queued: AgentInputQueuedMessage): string | null {
+  for (const file of queued.files ?? []) {
+    if (file.path?.startsWith('clipboard://')) continue;
+    const name = collapse(baseName(file.originalName || file.name || ''));
+    if (name) return name;
+  }
+  return null;
+}
+
+/** 最后兜底:有附件但一个具体名字都拿不到时,用类别词。 */
+function describeFileCategory(
+  queued: AgentInputQueuedMessage,
+  labels: AutoTitleFallbackLabels,
+): string | null {
+  const first = (queued.files ?? [])[0];
+  if (!first) return null;
+  return first.category === 'image' ? labels.image : labels.file;
+}
+
+/**
+ * mention chip 在 wire text 里被序列化成 `@<path>`,path 含空格 / 引号时是
+ * `@"<path>"`(见 ChatInput.serializeEditorContent → formatMentionRef)。这些
+ * token 是用户"点选"出来的资源,不是他写的散文 —— 判定「有没有真正的文字」时
+ * 必须先剔除,否则纯 @mention 消息会被当成用户文字发给标题模型,
+ * describeMentions 永远走不到(PR #510 review)。
+ *
+ * 用 wire 格式的官方 tokenizer(`MENTION_TOKEN_SPLIT` + `parseMentionToken`)切词
+ * 并按解析出的 ref 匹配,而不是手工拼候选串 —— 手工拼法漏掉了引号形式。
+ *
+ * 只剔除与本条消息 mentions 对应的 token:用户手打的 `@某人` 没有对应 mention
+ * 条目,会原样保留,不会被误判成无文字。
+ */
+
+/**
+ * 是否含字母 / 数字 / 汉字。两处用途都只针对**剔除 token 后的残渣**,不用来判断
+ * 用户原样写下的消息:他真打了 `???` 就该拿 `???` 当标题(所见即所得,与本机
+ * Codex 式即时占位一致),这里无权替他判定「这不算话」。
+ */
+const HAS_WORD_CHAR = /[\p{L}\p{N}]/u;
+
+/**
+ * 这些字符出现在 ref 后面时**不能**当作 token 边界 —— 它们本身就可能是路径的一
+ * 部分,把它当边界会在 `@foo` + `.bar` 这类情形下切坏一个更长的真实路径。
+ * 括号刻意不在此列:`(见 @a/b.ts)` 里的 `)` 判成边界才切得干净,而真的带括号的
+ * 文件名会在精确匹配那一步就命中。
+ */
+const REF_CONTINUATION_CHARS = new Set(['.', '/', '\\', '-', '_', '~', '+', '=', '#', '@', '%', '&', '$']);
+
+/**
+ * ref 是纯 ASCII 而紧随其后的是非 ASCII 字母时,认边界。
+ *
+ * chip 序列化后面若直接跟正文,中间没有任何分隔符(`@src/index.ts这里为什么会崩`
+ * ——中文用户不打空格,ChatInput 也不会替他补),`@\S+` 会把两者吞成一个 token。
+ * 仓库里的路径几乎全是 ASCII,真含中文的路径会在精确匹配那一步整体命中,所以
+ * 「ASCII 路径 + 紧跟一个汉字/假名」这个形状判成边界是安全的(PR #510 review P1)。
+ */
+function isScriptChangeBoundary(ref: string, next: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  if (!/^[\x00-\x7F]*$/.test(ref)) return false;
+  return /[^\x00-\x7F]/.test(next) && /\p{L}/u.test(next);
+}
+
+function isRefBoundary(ch: string): boolean {
+  if (HAS_WORD_CHAR.test(ch)) return false;
+  return !REF_CONTINUATION_CHARS.has(ch);
+}
+
+/**
+ * 裸形式 token 后面紧跟标点(`@src/index.ts,`)时,`@\S+` 会把标点一并吞进同一段,
+ * 精确匹配落空 —— 整条消息于是被当成用户散文,wire token 漏进标题素材
+ * (PR #510 review)。这里退一步做「最长 ref 前缀 + 边界」匹配,返回剩下的尾巴。
+ * 匹配不上返回 null(保持原样,绝不猜)。
+ */
+function splitTrailingAfterRef(ref: string, refs: ReadonlySet<string>): string | null {
+  let matched: string | null = null;
+  for (const candidate of refs) {
+    if (candidate.length >= ref.length) continue;
+    if (!ref.startsWith(candidate)) continue;
+    const next = ref.charAt(candidate.length);
+    // `.` 只在它是 token **最后一个字符**时算边界:`@a/b.ts.`(英文句末)要拆,
+    // 而 `@foo` + `.bar` 这种「更长的真实路径」不能被拆坏(review)。
+    const trailingPeriod = next === '.' && candidate.length + 1 === ref.length;
+    if (
+      !isRefBoundary(next) &&
+      !isScriptChangeBoundary(candidate, next) &&
+      !trailingPeriod
+    ) {
+      continue;
+    }
+    if (matched === null || candidate.length > matched.length) matched = candidate;
+  }
+  return matched === null ? null : ref.slice(matched.length);
+}
+
+function stripMentionTokens(text: string, queued: AgentInputQueuedMessage): string {
+  const mentions = queued.mentions ?? [];
+  if (mentions.length === 0) return text.trim();
+  // 只按 path 匹配:wire token 一律是 `@${formatMentionRef(path)}`(dir 多一个尾
+  // `/`)。不能把 name 也当 token —— 用户同时插了 chip `@src/index.ts` 又在正文里
+  // 手打 `@index.ts` 时会把后者一并删掉,把「有文字」误判成「无文字」。
+  // agent chip 无需特例:它的 path 本身就存的是 name(见 ChatInput 的 chip attrs)。
+  const refs = new Set<string>();
+  for (const mention of mentions) {
+    if (!mention.path) continue;
+    refs.add(mention.path);
+    refs.add(`${mention.path}/`);
+  }
+  let strippedAny = false;
+  const rest = text
+    .split(MENTION_TOKEN_SPLIT)
+    .map((part) => {
+      if (!part.startsWith('@')) return part;
+      const { ref, quoted } = parseMentionToken(part);
+      if (refs.has(ref)) {
+        strippedAny = true;
+        return ' ';
+      }
+      // 引号形式的边界由引号本身界定,tokenizer 已经切干净,不做前缀匹配。
+      if (quoted) return part;
+      const trailing = splitTrailingAfterRef(ref, refs);
+      if (trailing === null) return part;
+      strippedAny = true;
+      return ` ${trailing}`;
+    })
+    .join('')
+    .trim();
+  // 剔除后只剩标点(`@a/b.ts,` 这种「chip + 一个逗号」)时不算用户文字,否则标题
+  // 会变成一个孤零零的逗号,还会被当成实质内容送进标题模型。
+  //
+  // 刻意只在**确实剔除过 token** 时收紧:没有 mention 的消息一律原样透传,哪怕
+  // 只有标点或表情。那是用户亲手打下的全部内容,拿它当标题是「所见即所得」;
+  // 这里的残渣则从来不是他写的整条消息,两者不能同一把尺子(review)。
+  if (strippedAny && !HAS_WORD_CHAR.test(rest)) return '';
+  return rest;
+}
+
+/**
+ * 推导会话自动起名的素材。
+ *
+ * 用户写了字 → 原样返回(isUserText=true),照旧走「占位 + 标题模型」。
+ * 用户一个字没写(只贴图 / 只拖文件 / 只 @ 一个文件 / 只引用一个会话)→ 用手上
+ * 的本地信息合成一句能描述这条消息的话(isUserText=false),只当占位标题用。
+ *
+ * 合成时优先取**具体名字**:附件文件名 → @mention 名 → 被引用会话/项目标题;
+ * 一个都拿不到才回落到「图片」「文件」这类类别词。
+ *
+ * 都拿不到 → null,调用方保留默认标题。
+ */
+export function deriveAutoTitleSeed(
+  queued: AgentInputQueuedMessage,
+  labels: AutoTitleFallbackLabels,
+): AutoTitleSeed | null {
+  const literal = projectLiteralUserText({
+    text: queued.text,
+    quotesEncoded: queued.chatMessage.quotesEncoded === true,
+    agentReferences: queued.agentReferences,
+  });
+  const prose = stripMentionTokens(literal, queued);
+  if (prose) return { text: prose, isUserText: true };
+
+  const described =
+    describeFileName(queued) ??
+    describeMentions(queued) ??
+    describeReferences(queued) ??
+    describeFileCategory(queued, labels);
+  return described ? { text: described, isUserText: false } : null;
 }
 
 export function buildMakerUserMessage(

@@ -59,7 +59,24 @@ describe('openUrlInSidebarBrowser', () => {
       favicon: null,
       isAudible: false,
     });
-    expect(requestRightSidebarVisibility).toHaveBeenCalledWith('open', { sessionId: 's1' });
+    expect(requestRightSidebarVisibility).toHaveBeenCalledWith('open', {
+      sessionId: 's1',
+      userInitiated: true,
+    });
+  });
+
+  it('插件 preview 开页(userInitiated:false)照常落标签,但不请求抢焦点', async () => {
+    await openUrlInSidebarBrowser('s1', 'https://example.com/', { userInitiated: false });
+
+    expect(routeSidebarCommand).toHaveBeenCalledWith(
+      { type: 'open-web-browser', sessionId: 's1', url: 'https://example.com/' },
+      { userInitiated: false },
+    );
+    expect(addTab).toHaveBeenCalled();
+    expect(requestRightSidebarVisibility).toHaveBeenCalledWith('open', {
+      sessionId: 's1',
+      userInitiated: false,
+    });
   });
 
   it('does not request visibility when addTab rejects (caller surfaces the error)', async () => {
@@ -73,15 +90,19 @@ describe('openUrlInSidebarBrowser', () => {
 
     await openUrlInSidebarBrowser('remote-lead', 'https://example.com/');
 
-    expect(routeSidebarCommand).toHaveBeenCalledWith({
-      type: 'open-web-browser',
-      sessionId: 'remote-lead',
-      url: 'https://example.com/',
-    });
+    expect(routeSidebarCommand).toHaveBeenCalledWith(
+      {
+        type: 'open-web-browser',
+        sessionId: 'remote-lead',
+        url: 'https://example.com/',
+      },
+      { userInitiated: true },
+    );
     expect(ensureHydrated).not.toHaveBeenCalled();
     expect(addTab).not.toHaveBeenCalled();
     expect(requestRightSidebarVisibility).toHaveBeenCalledWith('open', {
       sessionId: 'remote-lead',
+      userInitiated: true,
     });
   });
 

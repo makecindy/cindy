@@ -18,6 +18,7 @@ import {
   replaceGatewayModelPricing,
   trackGatewayModelPricingSync,
 } from '../usage/modelPricing.js';
+import { isPricedGatewayModel } from '../../shared/modelPriceQuote.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   MODEL_ACCESS_STATUS_CHANNEL,
@@ -139,11 +140,24 @@ let modelsSyncRerunQueued = false;
 let authGeneration = 0;
 let lastAuthUserId: string | null = null;
 
-function applyGatewayModels(models: ModelAccessGatewayModel[]): void {
+function applyGatewayModels(
+  models: ModelAccessGatewayModel[],
+  authenticatedUserId?: string,
+): void {
   // 同一次 /models 响应先建立 provider-scoped 价格投影，再做仅影响展示元数据的
   // dev overlay。空成功响应会同时清空模型和价格；请求失败不会调用本函数，
   // 因而保留上一份完整成功快照。
-  replaceGatewayModelPricing(models);
+  const pricing = replaceGatewayModelPricing(models, authenticatedUserId);
+  // 分母只算会产生报价的条目:免费/无价条目按设计不出报价,不该把健康目录
+  // 也报成覆盖不足。此时覆盖缺口只剩一种成因——币种声明与目录冲突被丢弃,
+  // 这在 #587 之前是全程静默的,这行日志让现场可判。
+  const pricedCount = models.filter(isPricedGatewayModel).length;
+  const quoteCount = Object.keys(pricing.xd ?? {}).length;
+  if (quoteCount < pricedCount) {
+    log.warn(
+      `xd gateway pricing quotes cover ${quoteCount}/${pricedCount} priced models (${models.length} total)`,
+    );
+  }
   // dev:本地目录文件(catalog/providers.json)的 cindyModelMeta 段覆盖服务端下发的
   // 元数据,改本地 json + 重启即可自测,无需发 OSS / 等服务端热加载;只覆盖同 id,
   // 清单成员资格仍以网关为准。packaged 不走此分支(语义见 devMetaOverlay.ts)。
@@ -155,7 +169,10 @@ function applyGatewayModels(models: ModelAccessGatewayModel[]): void {
   setXdGatewayModels(effective);
 }
 
-async function runModelsSync(myGen: number): Promise<void> {
+async function runModelsSync(
+  myGen: number,
+  authenticatedUserId: string,
+): Promise<void> {
   let payload: { models: ModelAccessGatewayModel[] };
   try {
     payload = await serverApiFetch<{ models: ModelAccessGatewayModel[] }>(MODELS_PATH, {
@@ -171,16 +188,24 @@ async function runModelsSync(myGen: number): Promise<void> {
   const models = (payload.models ?? []).filter((m) => typeof m?.id === 'string' && m.id);
   if (models.length === 0) {
     log.warn('xd gateway models fetch returned empty list; clearing current list');
-    applyGatewayModels([]);
+    applyGatewayModels([], authenticatedUserId);
     return;
   }
   log.info(`xd gateway models synced: ${models.length}`);
-  applyGatewayModels(models);
+  applyGatewayModels(models, authenticatedUserId);
 }
 
 /** 触发一次模型目录同步(同世代 single-flight;旧世代在途时为新账号排队补发)。 */
 function scheduleModelsSync(): void {
   const gen = authGeneration;
+  // localDb takeover and /models run independently during startup. Capture the
+  // authenticated owner here instead of asking localDb who owns the cache only
+  // after the network response arrives.
+  const authenticatedUserId = lastAuthUserId;
+  if (!authenticatedUserId) {
+    log.warn('xd gateway models sync skipped: authenticated user id unavailable');
+    return;
+  }
   if (modelsSyncInflight) {
     if (modelsSyncGen === gen) return; // 同账号在途,复用
     if (!modelsSyncRerunQueued) {
@@ -194,7 +219,7 @@ function scheduleModelsSync(): void {
     return;
   }
   modelsSyncGen = gen;
-  modelsSyncInflight = runModelsSync(gen)
+  modelsSyncInflight = runModelsSync(gen, authenticatedUserId)
     .catch((err) => {
       log.warn('xd gateway models sync threw', {
         error: err instanceof Error ? err.message : String(err),

@@ -55,6 +55,15 @@ export type SidebarVisibilityRequest = 'open' | 'close';
 export interface SidebarVisibilityRequestOptions {
   sessionId?: string;
   animate?: boolean;
+  /**
+   * 这次请求是不是用户当次手势直接要求的。缺省 true —— 既有调用点几乎全是
+   * 用户手势(点链接 / 菜单 / 按钮),观感不变。
+   *
+   * 程序自发的请求(插件 preview 槽开页、agent 浏览器自动化 tab-op)必须传
+   * false:detached 形态下订阅方只更新折叠存档 / 送内容,**不得**把子窗口
+   * show + focus 抢走用户当前前台应用(Windows 上 focus() 就是抢前台)。
+   */
+  userInitiated?: boolean;
 }
 
 type Listener = (

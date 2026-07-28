@@ -473,13 +473,13 @@ registerColor('login-panel-border', {
   light: '#D4D4D4',
   dark: '#434343',
 }, 'Login — 面板 1px inside 描边(亮色 #D4D4D4 / 暗色 #434343;DESIGN.md §16.1)');
-// 品牌红 accent 族:wave4 改判后 #DF0C27 语义限定为 accent(Global pill/字标
+// 品牌红 accent 族:wave4 改判后 #DF0C27 语义限定为 accent(区域徽标/字标
 // 红元素等品牌点缀),禁止表达页面/画板背景——命名刻意不含 bg/background
 // (token-decision-table.md 原案名 login-brand-bg 已随改判弃用)。
 registerColor('login-brand-accent', {
   light: '#DF0C27',
   dark: '#DF0C27',
-}, 'Login — 品牌红 accent(Global pill/字标红元素;禁止用作页面背景,wave4 改判)');
+}, 'Login — 品牌红 accent(区域徽标/字标红元素;禁止用作页面背景,wave4 改判)');
 registerColor('login-brand-accent-pressed', {
   light: '#A61629',
   dark: '#A61629',
@@ -546,7 +546,7 @@ registerColor('login-action-control-bg', {
 registerColor('login-back-border', {
   light: '#FFFFFF',
   dark: '#434343',
-}, 'Login — 返回钮描边(亮色白 / 暗色 #434343;figma 549:897。Global pill 白字仍走 login-inverted-button-border)');
+}, 'Login — 返回钮描边(亮色白 / 暗色 #434343;figma 549:897。区域徽标白字仍走 login-inverted-button-border)');
 registerColor('login-control-border', {
   light: '#D4D4D4',
   dark: '#434343',
@@ -602,7 +602,7 @@ registerColor('login-disabled-button-text', {
 registerColor('login-inverted-button-border', {
   light: '#FFFFFF',
   dark: '#FFFFFF',
-}, 'Login — 浅底钮白描边/Global pill 白字(两模式同值 #FFFFFF;推导,待 Figma 精确)');
+}, 'Login — 浅底钮白描边/区域徽标白字(两模式同值 #FFFFFF;推导,待 Figma 精确)');
 registerColor('login-link-text', {
   light: '#2A2828',
   dark: '#EEEEEE',
@@ -798,6 +798,33 @@ registerColor('file-remove-bg', {
   light: '#525252',
   dark: '#737373',
 }, 'Mid Gray');
+// 附件卡自绘文件图标的类型角标(§10 theme-invariant 例外族):颜色跟「这份文件是
+// 什么」绑定,不随明暗翻转,两模式同值。取值都按白字 ≥4.5:1 选过(pdf 5.96 /
+// doc 6.56 / sheet 5.05 / slide 5.24 / code 7.09),角标文字恒用 file-badge-fg。
+registerColor('file-badge-pdf', {
+  light: '#B23A26',
+  dark: '#B23A26',
+}, '文件类型角标 — PDF(theme-invariant;× file-badge-fg = 5.96:1)');
+registerColor('file-badge-doc', {
+  light: '#2C5CA8',
+  dark: '#2C5CA8',
+}, '文件类型角标 — 文档(theme-invariant;× file-badge-fg = 6.56:1)');
+registerColor('file-badge-sheet', {
+  light: '#2E7D4F',
+  dark: '#2E7D4F',
+}, '文件类型角标 — 表格(theme-invariant;× file-badge-fg = 5.05:1)');
+registerColor('file-badge-slide', {
+  light: '#A25A12',
+  dark: '#A25A12',
+}, '文件类型角标 — 幻灯片(theme-invariant;× file-badge-fg = 5.24:1)');
+registerColor('file-badge-code', {
+  light: '#5B49A8',
+  dark: '#5B49A8',
+}, '文件类型角标 — 代码(theme-invariant;× file-badge-fg = 7.09:1)');
+registerColor('file-badge-fg', {
+  light: '#FFFFFF',
+  dark: '#FFFFFF',
+}, '文件类型角标前景 — 恒白(不能借 accent-pure-cta-fg:那个会在 Dark 翻成黑)');
 registerColor('chat-input-chip-bg', {
   light: 'var(--surface-chip)',
   dark: 'var(--surface-chip)',

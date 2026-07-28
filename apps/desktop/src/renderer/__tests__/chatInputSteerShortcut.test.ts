@@ -23,11 +23,20 @@ describe('ChatInput steer shortcut contract', () => {
       '// Plain Enter keeps the existing queue semantics.',
       'return true;\n        }\n        return false;',
     );
+    const windowComposerSteerBlock = extractBetween(
+      windowKeydownBlock,
+      'if (\n        showStopButtonRef.current &&',
+      "if (\n        currentState === 'listening'",
+    );
+    const editorSteerChoice = extractBetween(
+      editorEnterBlock,
+      'const wantsSteer =',
+      "void dispatchSendRef.current(wantsSteer ? 'steer' : 'queue');",
+    );
 
     expect(chatInputSource).toContain('const composerCanSubmitRef = useRef(false);');
     expect(chatInputSource).toContain('composerCanSubmitRef.current = !sendButtonDisabled;');
     expect(windowKeydownBlock).toContain('showStopButtonRef.current');
-    expect(windowKeydownBlock).toContain('composerCanSubmitRef.current');
     expect(windowKeydownBlock).toContain('isComposerEnterTarget(event.target)');
     expect(windowKeydownBlock).toContain("event.key === 'Enter'");
     expect(windowKeydownBlock).toContain('event.metaKey || event.ctrlKey');
@@ -39,11 +48,15 @@ describe('ChatInput steer shortcut contract', () => {
     expect(chatInputSource).toContain('turnRunning={showStopButton}');
     expect(chatInputSource).toContain('onSteer={onQueueSteer ? handleQueueSteer : undefined}');
     expect(editorEnterBlock).toContain("event.key === 'Enter' && !event.shiftKey && !event.altKey");
-    expect(editorEnterBlock).toContain('composerCanSubmitRef.current');
     expect(editorEnterBlock).toContain("voiceInputStateRef.current !== 'listening'");
     expect(editorEnterBlock).toContain(
       "void dispatchSendRef.current(wantsSteer ? 'steer' : 'queue');",
     );
+    // Tiptap's document is current before React's send-button effect updates
+    // composerCanSubmitRef. The shortcut must not use that lagging UI mirror
+    // to choose between steer and normal queue delivery.
+    expect(windowComposerSteerBlock).not.toContain('composerCanSubmitRef.current');
+    expect(editorSteerChoice).not.toContain('composerCanSubmitRef.current');
   });
 
   it('steers without an interrupt confirmation gate (same-turn injection)', () => {

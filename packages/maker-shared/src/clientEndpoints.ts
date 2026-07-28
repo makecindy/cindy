@@ -72,6 +72,14 @@ export const CLIENT_ENDPOINT_KEYS = [
   // auth 不分 cn/global:国内/海外是两条 CDN 各发各的清单,清单本身已 region 化,
   // 客户端无脑取本字段即可。
   'authApiBaseUrl',
+  // desktop 系统浏览器登录的**服务端托管回调**地址(auth-server 路由,精确值需与
+  // 服务端 redirect_uri allowlist 逐字符一致)。非空 = 走托管回调链路:回调页停在
+  // 自有域名、授权码由客户端轮询取回,浏览器地址栏不再出现 127.0.0.1 与 code;
+  // 空 = 回落到 RFC 8252 loopback(现状行为)。这也是本能力的灰度/回滚开关——
+  // 服务端出问题时清空本字段即可回退,客户端不必发版。
+  // 不 bump schemaVersion:纯增可选字段,老清单缺失即 '',老客户端按未知字段忽略
+  // (同 review / cdnBaseUrl 先例,理由见上方版本注释)。
+  'authDesktopCallbackUrl',
   'deviceLinkApiBaseUrl',
   'oauthBrokerApiBaseUrl',
   // oss-server(公开资产直传预签名,当前场景:头像上传)。
@@ -133,6 +141,7 @@ export const CLIENT_ENDPOINT_REVIEW_KEY = 'review';
 /** 各字段允许的 URL 协议白名单。 */
 const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   authApiBaseUrl: ['https:'],
+  authDesktopCallbackUrl: ['https:'],
   deviceLinkApiBaseUrl: ['https:'],
   oauthBrokerApiBaseUrl: ['https:'],
   ossApiBaseUrl: ['https:'],

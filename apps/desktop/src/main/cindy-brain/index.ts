@@ -85,6 +85,7 @@ import { handleGhostSecretsRequest } from './runtime/ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
 import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoint.js';
 import { GhostOauthAccountManager, type GhostOauthDecl } from './ghostOauthAccounts.js';
+import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
@@ -161,6 +162,7 @@ import {
   storeGhostSecret,
 } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import {
   CINDY_CAPABILITY_KEYS,
   readGhostCindyOverrides,
@@ -1196,6 +1198,24 @@ export function createGhostSessionTap(sessionId: string): {
  * 快路径:没有任何启用意识声明钩子 → 零开销放行(不查 DB 不进网关),
  * 绝大多数用户走这条。任何异常收敛为放行(fail-open),绝不卡发送热路径。
  */
+/**
+ * 是否装有**启用中**的 will-user-message 拦截意识(纯本地判定,不触发钩子)。
+ *
+ * 调用方(自动起名)据此决定要不要把用户原话送去标题模型:那是一次独立的 AI 发送,
+ * 而拦截钩的全部意义就是不让某些内容到达 AI。这里只问"有没有人在管",不重复询问
+ * 钩子本身 —— 重复询问会让 Ghost 对同一条消息被问两次,产生它没预期的副作用。
+ */
+export function hasEnabledUserMessageHookGhost(): boolean {
+  try {
+    return availableGhosts().some(
+      (g) => g.enabled && g.manifest.subscribe?.hooks?.includes('will-user-message'),
+    );
+  } catch {
+    // 判定不了就按"有人在管"处理:宁可少一个智能标题,也不把内容送出去。
+    return true;
+  }
+}
+
 export async function screenGhostUserMessage(
   sessionId: string,
   text: string,
@@ -1862,8 +1882,10 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
         store: (ghostId, storageKey, value) => storeGhostSecret(ghostId, storageKey, value),
         remove: (ghostId, storageKey) => removeGhostSecret(ghostId, storageKey),
       },
-      // 与 networkSlot 同选型:Node 侧全局 fetch(undici),不吃系统代理。
-      fetchImpl: (url, init) => fetch(url, init as RequestInit),
+      // 与 networkSlot 同选型:Node 侧 undici fetch(Chromium 栈的 manual redirect 给
+      // opaqueredirect,守不住逐跳白名单),但经 outboundFetch 拿到系统代理 ——
+      // 意识 OAuth 的 token 端点(Google / Atlassian 等)多在境外。
+      fetchImpl: (url, init) => outboundFetch(url, init as RequestInit),
       openExternal: (url) => shell.openExternal(url),
       // tokenBroker 声明的意识(仅第一方,门控在装入闸与连接闸)经独立
       // oauth-broker 服务换/刷 token:serverApiFetch 自带登录 JWT 注入与
@@ -2040,11 +2062,10 @@ export async function executeGhostSetupAction(args: {
       ? { ok: true }
       : {
           ok: false,
-          errorCode: connected.error === 'CANCELLED' ? 'AUTH_CANCELLED' : 'AUTH_FAILED',
-          message:
-            connected.error === 'CANCELLED'
-              ? t('newChat.pluginSetup.oauthCancelled')
-              : connected.detail ?? t('newChat.pluginSetup.oauthFailed').replace('{{detail}}', connected.error),
+          errorCode: mapGhostOauthConnectError(connected.error),
+          // interaction snapshot 只传稳定 errorCode；detail 可能含服务路径或
+          // 上游诊断，留在 Main，不下放 Renderer。
+          message: connected.detail ?? connected.error,
         };
   }
 
@@ -2121,13 +2142,13 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
       getLoginEmail: () => getAuthState().user?.email ?? null,
-      // 用 Node 侧全局 fetch(undici)而非 Electron net.fetch:redirect:'manual'
-      // 在 undici 下如实返回 3xx + Location,本槽据此逐跳校验白名单;Chromium
-      // 栈的 manual 会给 opaqueredirect(读不到 Location),无法逐跳守门。
-      // 代价是不吃系统代理设置,意识自带服务场景可接受,有诉求再评估。
+      // 用 Node 侧 undici fetch 而非 Electron net.fetch:redirect:'manual' 在 undici
+      // 下如实返回 3xx + Location,本槽据此逐跳校验白名单;Chromium 栈的 manual 会给
+      // opaqueredirect(读不到 Location),无法逐跳守门。系统代理由 outboundFetch 补上
+      // (意识声明的域名大量在境外,裸 undici 直连在「系统代理」模式下出不去)。
       // init 收窄:body 的 Uint8Array 在 lib.dom 的 BodyInit 泛型下对不齐,
       // 运行时 undici 原生支持,按 RequestInit 交给 fetch。
-      fetchImpl: (url, init) => fetch(url, init as RequestInit),
+      fetchImpl: (url, init) => outboundFetch(url, init as RequestInit),
       // 媒体模式(as:'media'):字节直落总仓 + ghost-gallery 记账(出生=该
       // 意识,与 cindy 槽产物同一记账口径),走统一入库助手 ingestMedia
       // (规则 25)。mime 白名单同一来源(blobStore),槽内归一化后再判。
@@ -2352,7 +2373,6 @@ export async function installOrUpdateMarketGhostPackage(
   expected: {
     ghostId: string;
     version: string;
-    initiallyEnabled?: boolean;
   },
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
@@ -2381,10 +2401,12 @@ export async function installOrUpdateMarketGhostPackage(
     // mutation.
     releaseMutation = beginGhostMutation(mutationOwner);
     if (!installed) {
-      // defaultInstall 首次装入即启用；手动市场安装仍保持沉睡，等待用户主动开启。
-      return installAndDock(manager, cindyFilePath, {
-        enable: expected.initiallyEnabled === true,
-      });
+      // 2026-07-26 定案:市场首装一律装完即开(defaultInstall 与手动安装归一),
+      // 用户不必再手动点一次开关。市场包走官方分发链路(服务端校验 + sha256
+      // 校验下载),且确认框如实展示权限清单,确认安装即授权运行;本地 .cindy
+      // 文件装入的初始启用态仍由确认框勾选决定(勾选默认开启,main 侧
+      // installAndDock 缺省不启用,授权判断始终来自 UI 显式值)。
+      return installAndDock(manager, cindyFilePath, { enable: true });
     }
 
     const runtime = getGhostRuntime();

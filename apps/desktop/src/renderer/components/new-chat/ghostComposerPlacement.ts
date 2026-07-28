@@ -47,8 +47,16 @@ export function placeGhostAtComposerStart(
     );
   } else {
     const firstBlock = doc.firstChild;
-    if (!firstBlock?.isTextblock) return false;
-    transaction.insertText(`$${command} `, 1);
+    if (firstBlock?.isTextblock) {
+      transaction.insertText(`$${command} `, 1);
+    } else {
+      const paragraphType = editor.state.schema.nodes.paragraph;
+      if (!paragraphType) return false;
+      transaction.insert(
+        0,
+        paragraphType.create(null, editor.state.schema.text(`$${command} `)),
+      );
+    }
   }
 
   editor.view.dispatch(transaction);

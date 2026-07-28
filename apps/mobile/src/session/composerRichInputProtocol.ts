@@ -1,4 +1,10 @@
 export type ComposerWebMessage =
+  /**
+   * focus 只代表「编辑器现在有 DOM 焦点」,**不代表用户点了输入框**:WKWebView 在输入区
+   * 展开、拿到 native 焦点后会自己恢复 DOM 焦点并派发它。用户意图类动作(如「点输入框
+   * → 停止语音听写」)不能挂在这里,否则收起态点语音、输入框展开的瞬间就会误触发,把刚
+   * 开始的听写掐断(2026-07 实机日志确认)。
+   */
   | { type: 'ready' | 'focus' | 'blur' }
   | { type: 'height'; height: number }
   | { type: 'change'; document: unknown }

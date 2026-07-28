@@ -10,6 +10,7 @@ const VALID_MANIFEST = {
   schemaVersion: 1,
   apiBaseUrl: 'https://api.example.com',
   authApiBaseUrl: 'https://auth.example.com',
+  authDesktopCallbackUrl: 'https://auth.example.com/api/auth/desktop/callback',
   deviceLinkApiBaseUrl: 'https://device-link.example.com',
   oauthBrokerApiBaseUrl: 'https://oauth.example.com',
   ossApiBaseUrl: 'https://oss.example.com',

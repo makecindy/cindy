@@ -1,4 +1,5 @@
 import type { AgentKind } from '@cindy/maker-core';
+import type { AuthStrategy } from '@cindy/model-providers';
 
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort, OrcaWorkerStatus } from './orcaTeamService.js';
@@ -59,6 +60,15 @@ export interface OrcaWorkerProviderSnapshot {
   >;
   /** true 表示该来源必须写入 session provider store 才能注入自己的 API key/OAuth token。 */
   requiresExplicitRoute?: boolean;
+}
+
+/** 自带凭证或明确无鉴权的第三方路由都不能回落到 worker/lead 的默认上游。 */
+export function providerRouteRequiresExplicitSelection(
+  authStrategy: AuthStrategy | undefined,
+): boolean {
+  return authStrategy === 'api-key-header'
+    || authStrategy === 'oauth-token'
+    || authStrategy === 'none';
 }
 
 /** 同一次 provider registry 快照派生出的可用性与默认模型路由，避免两次读取产生竞态。 */

@@ -23,6 +23,9 @@ export const TEST_CDN_BASE_URL = 'https://cdn.test.invalid/app';
 
 export const TEST_CLIENT_ENDPOINTS: ClientEndpointMap = {
   authApiBaseUrl: 'https://auth.test.invalid',
+  // **故意留空**:该字段非空即把系统浏览器登录切到 hosted 轮询链路,默认注入会让
+  // 既有 loopback 登录测试整体改道。要测 hosted 路径的用例自己覆盖这一个 key。
+  authDesktopCallbackUrl: '',
   deviceLinkApiBaseUrl: 'https://device.test.invalid',
   oauthBrokerApiBaseUrl: 'https://oauth.test.invalid',
   ossApiBaseUrl: 'https://oss.test.invalid',

@@ -75,8 +75,14 @@ export interface WsLike {
   on(event: 'error', cb: (err: Error) => void): void;
 }
 
-/** 创建一条带鉴权 header 的 ws 连接 */
-export type WsFactory = (url: string, headers: Record<string, string>) => WsLike;
+/**
+ * 创建一条带鉴权 header 的 ws 连接。允许返回 Promise —— host 建连前可能要先做异步
+ * 准备(如 desktop 现取系统代理拿 http agent)。
+ */
+export type WsFactory = (
+  url: string,
+  headers: Record<string, string>,
+) => WsLike | Promise<WsLike>;
 
 export interface DeviceLinkLogger {
   debug(...args: unknown[]): void;
@@ -584,12 +590,34 @@ export class DeviceLinkClient {
 
     let ws: WsLike;
     try {
-      ws = this.opts.createWebSocket(this.opts.getWsUrl(), {
+      ws = await this.opts.createWebSocket(this.opts.getWsUrl(), {
         authorization: `Bearer ${token}`,
       });
     } catch (err) {
+      // 异步工厂可能在更新的一轮 connect 已经起来之后才 reject —— 那是过期尝试的失败,
+      // 不能据此改状态或排重连(scheduleReconnect 的 connect() 会顶掉那条更新的、
+      // 可能健康的连接)。与工厂成功分支用同一道 stopped/epoch 闸(review 2026-07-27 P1)。
+      if (this.stopped || epoch !== this.connEpoch) {
+        this.log.debug?.('stale createWebSocket rejection ignored', err);
+        return;
+      }
       this.log.warn('createWebSocket failed', err);
       this.scheduleReconnect();
+      return;
+    }
+    // 工厂可能是异步的(host 建连前要准备代理 agent 等):期间可能已 stop 或换了
+    // 连接世代 —— 那这条 socket 是孤儿,关掉再退,别挂到 this.ws 上。
+    if (this.stopped || epoch !== this.connEpoch) {
+      try {
+        // 必须先挂 error 监听再 close:孤儿 socket 大概率还在 CONNECTING,close() 会让
+        // ws 异步 emit 'error'(如 "WebSocket was closed before the connection was
+        // established"),而 EventEmitter 对无监听的 'error' 是直接抛 —— 那会变成主进程
+        // 的未捕获异常(review 2026-07-27 P1)。
+        ws.on('error', () => {});
+        ws.close();
+      } catch (err) {
+        this.log.debug?.('closing orphan websocket failed', err);
+      }
       return;
     }
     this.ws = ws;

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildNoProviderMessage,
   createOrcaWorkerCreationService,
+  providerRouteRequiresExplicitSelection,
   type OrcaWorkerCreationDeps,
   type OrcaWorkerProviderRoutingContext,
   type OrcaWorkerProviderSnapshot,
@@ -15,6 +16,22 @@ import { isActiveWorkerStatus } from '../../../shared/orca-worker-status';
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const WORKER_SESSION_ID = '123e4567-e89b-42d3-a456-426614174000';
+
+describe('providerRouteRequiresExplicitSelection', () => {
+  it.each(['api-key-header', 'oauth-token', 'none'] as const)(
+    'keeps %s routes pinned to the selected provider',
+    (strategy) => {
+      expect(providerRouteRequiresExplicitSelection(strategy)).toBe(true);
+    },
+  );
+
+  it.each(['oauth-passthrough', 'provider-oauth-header', 'gateway-key', undefined] as const)(
+    'does not force an explicit route for %s',
+    (strategy) => {
+      expect(providerRouteRequiresExplicitSelection(strategy)).toBe(false);
+    },
+  );
+});
 
 function providerRoutingContext(
   availability: Record<AgentKind, OrcaWorkerProviderSnapshot[]>,

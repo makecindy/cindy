@@ -79,15 +79,28 @@ describe('LoginPage account deletion status', () => {
     const bubble = await screen.findByRole('region', {
       name: 'accountDeletion.status.pendingTitle',
     });
-    // 浮层定位类(figma 678:1075:窗口顶 72、z-30 盖过 stage、水平居中、宽 670 clamp)
-    expect(bubble.className).toContain('absolute');
-    expect(bubble.className).toContain('top-[72px]');
-    expect(bubble.className).toContain('z-30');
-    expect(bubble.className).toContain('left-1/2');
-    expect(bubble.className).toContain('w-[min(670px,calc(100vw-48px))]');
+    // 定位与缩放由 wrapper 承担:absolute / 水平居中 / z-30 盖过 stage
+    const wrapper = screen.getByTestId('login-deletion-bubble-scale');
+    expect(wrapper.contains(bubble)).toBe(true);
+    expect(wrapper.className).toContain('absolute');
+    expect(wrapper.className).toContain('z-30');
+    expect(wrapper.className).toContain('left-1/2');
+    // 几何是设计单位(figma 678:1075 的 2x 稿)× PANEL_FIXED_SCALE:
+    // 顶距 72×0.5=36 CSS px、宽 670 设计单位、可视宽按 100vw-24 反算钳制
+    expect(wrapper.style.top).toBe('36px');
+    expect(wrapper.style.transform).toBe('translateX(-50%) scale(0.5)');
+    expect(wrapper.style.transformOrigin).toBe('top center');
+    expect(wrapper.style.width).toBe('670px');
+    expect(wrapper.style.maxWidth).toBe('calc(200vw - 48px)');
+    // 内层按设计单位书写(不再是 CSS px 字面量),缩放后即设计稿比例
+    expect(bubble.style.borderRadius).toBe('22px');
+    expect(bubble.style.padding).toBe('20px');
+    // 描边按 1/PANEL_FIXED_SCALE 设计单位补偿,缩放后 = 1 物理 px(DESIGN.md §16.4)
+    expect(bubble.style.borderWidth).toBe('2px');
     // 不再渲染进 LoginStage 文档流(修复前被 absolute 面板 100% 覆盖的 bug 根因)
     const stage = screen.getByTestId('login-stage');
     expect(stage.contains(bubble)).toBe(false);
+    expect(stage.contains(wrapper)).toBe(false);
     // pending 态无「我知道了」按钮
     expect(screen.queryByRole('button', { name: 'accountDeletion.status.dismissButton' })).toBeNull();
   });

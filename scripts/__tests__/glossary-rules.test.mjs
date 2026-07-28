@@ -29,7 +29,7 @@ import {
   makeSourceTermMatcher,
 } from '../shared/glossary-rules.mjs';
 import { validateAgainstSchema } from '../shared/json-schema-lite.mjs';
-import { renderGlossaryDoc } from '../shared/glossary-doc.mjs';
+import { normalizeDocEol, renderGlossaryDoc } from '../shared/glossary-doc.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 
@@ -342,9 +342,23 @@ test('glossary.json: locales 与 desktop SUPPORTED_LOCALES 一致', () => {
 test('GLOSSARY.md 与 glossary.json 同步', () => {
   const doc = fs.readFileSync(path.join(ROOT, 'i18n', 'GLOSSARY.md'), 'utf8');
   assert.equal(
-    doc,
-    renderGlossaryDoc(glossary),
+    normalizeDocEol(doc),
+    normalizeDocEol(renderGlossaryDoc(glossary)),
     'i18n/GLOSSARY.md 已过期,运行 pnpm i18n:glossary-doc 重新生成',
+  );
+});
+
+// 契约:同步校验只看内容,不看行尾。autocrlf=true 的 Windows checkout 会把
+// GLOSSARY.md 转成 CRLF,而渲染结果恒为 LF;若比较不归一化,门禁在 Windows 上
+// 必红且无法自愈(重新生成写 LF,下次 checkout 又变 CRLF)。
+test('GLOSSARY.md 同步校验对 CRLF 检出不误报', () => {
+  const rendered = renderGlossaryDoc(glossary);
+  const asCrlf = rendered.replace(/\n/g, '\r\n');
+  assert.notEqual(asCrlf, rendered, '前置条件:CRLF 版本应与 LF 版本逐字符不同');
+  assert.equal(
+    normalizeDocEol(asCrlf),
+    normalizeDocEol(rendered),
+    'CRLF 检出必须被判为同步——比较前要归一化行尾',
   );
 });
 

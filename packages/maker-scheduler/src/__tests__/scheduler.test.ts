@@ -737,6 +737,40 @@ describe('Scheduler', () => {
     expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 5, 10, 0));
   });
 
+  it('resume() with intervalMs cold-starts from now even when the last run is recent', async () => {
+    // Regression: resume is documented as a cold start ("起新一轮 N 倒计时"), matching
+    // update()'s `now + intervalMs`. A schedule that finished 17:22:25 with a 1h
+    // interval, resumed at 17:40:00 (well within that hour), must re-arm at
+    // now + 1h = 18:40:00 — NOT lastFinishedAt + 1h = 18:22:25. The latter is
+    // start()/restart's "respect the original cadence" semantics, which must not
+    // leak into a user-initiated resume.
+    h.storage.schedules.set('hourly', {
+      id: 'hourly',
+      name: 'every hour',
+      prompt: 'p',
+      kind: 'cron',
+      cronExpr: '0 * * * *',
+      intervalMs: 60 * 60_000,
+      timezone: 'UTC',
+      recurring: true,
+      manual: false,
+      agentKind: 'claude-code',
+      workspaceKind: 'project',
+      useWorktree: false,
+      notify: { desktop: false, feishu: false },
+      status: 'paused',
+      createdAt: Date.UTC(2026, 0, 1, 16, 0, 0),
+      updatedAt: 0,
+      lastFiredAt: Date.UTC(2026, 0, 1, 17, 22, 18),
+      lastFinishedAt: Date.UTC(2026, 0, 1, 17, 22, 25),
+      nextFireAt: Date.UTC(2026, 0, 1, 18, 22, 25),
+    });
+    h.clock.setTo(Date.UTC(2026, 0, 1, 17, 40, 0));
+    await h.scheduler.resume('hourly');
+    const after = await h.storage.get('hourly');
+    expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 18, 40, 0));
+  });
+
   // ── update() 在用户编辑时是否立刻取消 pending fire ──
   // 用户体感："Next 13:50" 还有 9 分钟到，我把 Every 10min 改成 Every 5min，
   // 应该看到 nextFireAt 立刻刷成 now+5min（取消旧的 13:50）。

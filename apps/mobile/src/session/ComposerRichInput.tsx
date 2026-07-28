@@ -12,6 +12,7 @@ import {
 } from '@/session/composerDocument';
 import { composerNodesForBoundedPlainTextPaste } from '@/session/composerPaste';
 import { buildComposerRichInputHtml, type ComposerRichInputTheme } from '@/session/composerRichInputHtml';
+import { COMPOSER_SINGLE_LINE_HEIGHT } from '@/session/composerTextMetrics';
 import {
   parseComposerWebMessage,
   type ComposerWebMessage,
@@ -23,7 +24,6 @@ export interface ComposerRichInputHandle {
   blur(): void;
   focus(): void;
   insertNode(node: ComposerNode): void;
-  setSelectionToEnd(): void;
 }
 
 export interface ComposerRichInputProps {
@@ -175,7 +175,11 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
           }
           inject(`window.cindyComposer.insertNode(${JSON.stringify(node)});`);
         },
-        setSelectionToEnd: focusEditor,
+        // 注意:曾有过 setSelectionToEnd: focusEditor 的别名——web 侧 placeCaretAtEnd
+        // 必须 root.focus(),而 keyboardDisplayRequiresUserAction={false} 让任何程序化
+        // focus 都会弹软键盘。「只挪选区不聚焦」在这个 WebView 编辑器上不成立,需要
+        // caret 在末尾的调用方请显式用 focus / applyDocumentAndSetSelectionToEnd,
+        // 并自行承担弹键盘的语义。
       };
       if (typeof forwardedRef === 'function') forwardedRef(handle);
       else forwardedRef.current = handle;
@@ -326,7 +330,9 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         return;
       }
       if (message.type === 'height') {
-        if (Number.isFinite(message.height)) onHeightChange?.(Math.max(28, Math.min(maxHeight, message.height)));
+        if (Number.isFinite(message.height)) {
+          onHeightChange?.(Math.max(COMPOSER_SINGLE_LINE_HEIGHT, Math.min(maxHeight, message.height)));
+        }
         return;
       }
       if (message.type === 'focus') return onFocus?.();
@@ -361,6 +367,13 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         ref={webViewRef}
         accessibilityHint={accessibilityHint}
         accessibilityLabel={accessibilityLabel}
+        // hidden 期间(语音听写)把整棵子树从无障碍树里摘掉。opacity: 0 只影响视觉与
+        // hitTest,读屏焦点仍能落到这个不可见的 textbox 上;而它的 focus 已不再停止听写
+        // (停听写只认覆盖层的真实触摸),读屏用户会卡在一个「按了没反应」的输入框里。
+        // iOS 用 accessibilityElementsHidden,Android 用 importantForAccessibility,
+        // 两端都要给,少一个就会在该平台留下幽灵焦点。
+        accessibilityElementsHidden={hidden}
+        importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
         allowFileAccess={false}
         // iOS 给 WKWebView 里的可编辑区域挂一条系统表单导航条(上一项 / 下一项 /
         // 完成),iOS 26 起画成键盘上方的独立浮动胶囊。composer 只有这一个字段,
@@ -406,6 +419,6 @@ const styles = StyleSheet.create({
     // react-native-webview defaults the native child to flex: 1. Override it
     // because this composer drives the child with an explicit measured height.
     flex: 0,
-    minHeight: 28,
+    minHeight: COMPOSER_SINGLE_LINE_HEIGHT,
   },
 });

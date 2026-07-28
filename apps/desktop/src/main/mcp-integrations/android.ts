@@ -25,6 +25,7 @@ import {
   type AndroidAutomationSettings,
 } from '../android-automation-settings-store.js';
 import { createLogger } from '../logger.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 
 const logger = createLogger('mcp/cindy_android');
 
@@ -480,7 +481,8 @@ async function downloadPlatformToolsZip(url: string): Promise<Buffer> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), platformToolsDownloadTimeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    // dl.google.com:境外下载,必须吃系统代理(见 maker-host/outbound-fetch.ts)。
+    const response = await outboundFetch(url, { signal: controller.signal });
     if (!response.ok) {
       throw new AndroidDriverError(
         'ANDROID_DRIVER_ERROR',

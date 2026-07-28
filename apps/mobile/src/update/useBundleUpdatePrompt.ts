@@ -10,9 +10,17 @@ import { Alert, Linking, Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import { i18n } from '@/i18n';
-import { IS_OTA_SELFHOST, REVIEW_MODE } from '@/config/env';
+import {
+  IS_OTA_SELFHOST,
+  IS_TESTFLIGHT_BUILD,
+  REVIEW_MODE,
+} from '@/config/env';
 import { fetchLatestRelease } from './fetchLatestRelease';
-import { evaluateBundleUpdate, preferredInstallUrl } from './bundleUpdate';
+import {
+  evaluateBundleUpdate,
+  preferredInstallUrl,
+  shouldCheckBundleUpdate,
+} from './bundleUpdate';
 import type { BundleUpdateCheckOutcome } from './manualUpdateCheck';
 import { markForcedPrompted } from './resumeUpdateCheck';
 import { isCanaryChannel } from './canaryChannelStore';
@@ -76,6 +84,11 @@ export function useBundleUpdatePrompt({
   isCanary = isCanaryChannel(),
 }: Options = {}) {
   const [state, setState] = useState<CheckState>('idle');
+  const bundleCheckEnabled = shouldCheckBundleUpdate({
+    isSelfHosted: IS_OTA_SELFHOST,
+    isReviewMode: REVIEW_MODE,
+    isTestFlightBuild: IS_TESTFLIGHT_BUILD,
+  });
   const inFlightChannels = useRef(new Set<boolean>());
   const channelEpochRef = useRef(0);
   const previousChannelRef = useRef(isCanary);
@@ -87,8 +100,8 @@ export function useBundleUpdatePrompt({
   }
 
   const checkNow = useCallback(async (): Promise<BundleUpdateCheckOutcome> => {
-    // 审核模式:入口按钮已隐藏,这里再挡一层(状态由代码保证,不依赖 UI 层记得隐藏)。
-    if (!IS_OTA_SELFHOST || REVIEW_MODE) return 'skipped';
+    // 审核模式与 TestFlight 都禁止整包外跳；这里再挡一层，不依赖调用方记得隐藏入口。
+    if (!bundleCheckEnabled) return 'skipped';
     if (inFlightChannels.current.has(isCanary)) return 'busy';
     inFlightChannels.current.add(isCanary);
     const requestEpoch = channelEpochRef.current;
@@ -127,14 +140,14 @@ export function useBundleUpdatePrompt({
     } finally {
       inFlightChannels.current.delete(isCanary);
     }
-  }, [isCanary, notifyWhenUpToDate]);
+  }, [bundleCheckEnabled, isCanary, notifyWhenUpToDate]);
 
   useEffect(() => {
-    if (auto && IS_OTA_SELFHOST) void checkNow();
+    if (auto && bundleCheckEnabled) void checkNow();
     // auto hook 在登录/切账号导致 channel 变化时再检查一次，避免新的账号
     // 继续沿用旧账号的 release 指针；手动检查入口仍由调用方通过 checkNow 触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auto, isCanary]);
+  }, [auto, bundleCheckEnabled, isCanary]);
 
   return { state, checkNow };
 }

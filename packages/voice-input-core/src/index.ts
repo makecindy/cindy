@@ -5,4 +5,5 @@ export * from './VoiceTimelineLogger';
 export * from './DictationRefiner';
 export * from './DictationExternalEditInspector';
 export * from './DictationDictionaryAdvisor';
+export * from './dictionary-sync';
 export * from './streamingJson';

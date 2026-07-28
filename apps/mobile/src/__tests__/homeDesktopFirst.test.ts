@@ -236,7 +236,10 @@ describe('mobile home desktop-first surface', () => {
     const source = readSource('app/devices/index.tsx');
 
     expect(source).toContain("type HomeDeviceConnectionState = 'idle' | 'syncing' | 'failed';");
-    expect(source).toContain('const [deviceConnectionStates, setDeviceConnectionStates]');
+    expect(source).toContain('const [rawDeviceConnectionStates, setDeviceConnectionStates]');
+    // 熔断 open 的设备复用 failed 渲染路径:内部态映射(merged memo)覆盖在 hydrate 状态之上
+    expect(source).toContain('const unresponsiveDevices = useUnresponsiveDevices();');
+    expect(source).toContain("for (const deviceId of unresponsiveDevices) merged[deviceId] = 'failed';");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'syncing');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'failed');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'idle');");
@@ -284,6 +287,10 @@ describe('mobile home desktop-first surface', () => {
     expect(sessionRowSource).toContain('numberOfLines={1}');
     expect(sessionRowSource).toContain('buildRemoteSessionCardPreview(item, { running })');
     expect(sessionRowSource).toContain('testID={`home.sessionRowPreview.${item.session.id}`}');
+    expect(sessionRowSource).toContain('const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;');
+    expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionListRowSingleLine');
+    expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionIconCellSingleLine');
+    expect(sessionRowSource).toContain('{showPreviewLine ? (');
     expect(sessionRowSource).not.toContain('numberOfLines={2}');
     // 相对时间下沉到独家订阅分钟心跳的叶子组件(行主体 memo 化后由它单独保鲜,风暴修复)
     expect(sessionRowSource).toContain('<SessionRelativeTime lastActivityAt={item.lastActivityAt}');
@@ -305,12 +312,14 @@ describe('mobile home desktop-first surface', () => {
     expect(automationTimerSource).toContain('borderColor: colors.border');
     expect(sessionRowSource).not.toContain('SessionBadge');
     expect(source).toContain('const HOME_SESSION_ROW_HEIGHT = 78;');
+    expect(source).toContain('const HOME_SESSION_SINGLE_LINE_ROW_HEIGHT = 60;');
     expect(source).toContain('const CINDY_LIST_ROW_HEIGHT = 60;');
     // 用户改稿 2026-07-21:列表首页回退 XD-MAKER 通栏样式(legacy 变体),色彩体系沿用 07-20 定稿。
     expect(source).toContain('variant="legacy"');
     expect(source).not.toContain('variant="cindyList"');
     expect(source).toContain("type HomeSessionRowVariant = 'legacy' | 'cindyList';");
     expect(stylesSource).toContain('height: HOME_SESSION_ROW_HEIGHT');
+    expect(stylesSource).toContain('height: HOME_SESSION_SINGLE_LINE_ROW_HEIGHT');
     expect(stylesSource).toContain('height: CINDY_LIST_ROW_HEIGHT');
     expect(stylesSource).toContain('height: lineHeight.micro');
     // 通栏回退:项目子行回 surface 全宽底(用户改稿 2026-07-21)。

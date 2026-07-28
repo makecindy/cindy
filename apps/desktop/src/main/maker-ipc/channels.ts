@@ -195,6 +195,9 @@ export const MAKER_INVOKE = {
   RUN: 'maker:run',
   // Chat utility (Stage 2 C1) — 不是 session 级 API,但走 maker.* 命名空间统一管理
   GENERATE_TITLE: 'maker:generate-title',
+  // 会话自动起名(权威实现在 main):立即占位 + 智能标题覆盖,条件写保证 user rename wins。
+  // 本机发送由 renderer 触发;device-link 远控由被控端 enqueue 直接调同一实现。
+  AUTO_TITLE: 'maker:auto-title',
   // 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(读 DB 素材,失败返 null)
   REGENERATE_TITLE: 'maker:regenerate-title',
   HELP_ASK: 'maker:help:ask',
@@ -377,8 +380,8 @@ export const MAKER_INVOKE = {
    */
   PROVIDER_LIST: 'maker:provider:list',
   /**
-   * 自定义模型供应商 CRUD（配置入 localDb，密钥另走通用 safe-storage IPC）。
-   * create/update 入参 = CustomProviderConfig；delete 入参 = providerId。
+   * 自定义模型供应商 CRUD（配置入 localDb；update 的 runtime 密钥与配置原子排队）。
+   * create/update 入参 = config + runtimeKeys；delete 入参 = providerId。
    * 成功后 main 重算 active-catalog 并广播 PROVIDER_CHANGED（见 MAKER_PUSH）。
    */
   PROVIDER_CUSTOM_CREATE: 'maker:provider:custom:create',
@@ -434,6 +437,20 @@ export const MAKER_INVOKE = {
    * renderer 直接按空列表继续渲染,检测建议是增强而非依赖)。只读、无密钥材料。
    */
   PROVIDER_LOCAL_CLI_SCAN: 'maker:provider:local-cli-scan',
+  /**
+   * 「清单唯一来源是动态发现」的供应商（当前只有 anthropic 订阅）立即重新拉一次清单。
+   *
+   * 发现失败时 host 只对**暂时性**归因（连不上 / 超时 / 上游 5xx）做有限次退避重试，
+   * 且绝不无限轮询；地域拒绝、凭证被拒等确定性答复一次都不重试。所以自动重试停手后，
+   * 用户仍需要一个「立刻再试一次」的入口：设置页在失败态下渲染「重试」，点了走这条
+   * 通道，并重新开启一轮退避。返回查询型结构化结果 { ok, failure? }（规则 13 例外条款：
+   * renderer 要按 failure.kind 渲染分类文案）。只读、无密钥材料。
+   *
+   * **本通道自身不广播**：列表刷新由发现流程内部收口——成功经 active-catalog 的
+   * markChanged、失败经 setAnthropicDiscoveryFailureListener。handler 再广播一次只会让
+   * renderer 白 refetch 一遍。
+   */
+  PROVIDER_MODELS_REDISCOVER: 'maker:provider:models-rediscover',
   // Scheduler (Phase 4) — 9 个 invoke handler，对应 Scheduler 公共 API
   SCHEDULE_LIST: 'maker:schedule:list',
   SCHEDULE_GET: 'maker:schedule:get',
@@ -642,6 +659,8 @@ export const MAKER_PUSH = {
    * 模型选择器 live 刷新）。无 payload；收到即重拉 listProviders。
    */
   PROVIDER_CHANGED: 'maker:provider:changed',
+  /** 通用 OAuth Device Grant 的短期验证码进度（仅 renderer 展示，不落盘/不进日志）。 */
+  PROVIDER_OAUTH_PROGRESS: 'maker:provider:oauth:progress',
   /**
    * 自定义 MCP 服务器增删改后广播（renderer 设置页 McpServersSection refetch）。
    * 无 payload；收到即重拉 listCustomMcpServers。

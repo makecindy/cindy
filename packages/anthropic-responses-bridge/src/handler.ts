@@ -164,6 +164,13 @@ export interface ResponsesHandlerOptions {
   /** 供应商配置列表(按 model 前缀路由)。前缀需互不为前缀关系,避免歧义。 */
   providers: BridgeProviderConfig[];
   logger?: BridgeLogger;
+  /**
+   * 上游 fetch。默认全局 fetch(undici)—— 它**不吃系统代理**,宿主在「系统代理」模式
+   * 下必须注入自己的代理感知实现(desktop 注入 maker-host/outbound-fetch),否则
+   * chatgpt.com / api.x.ai 这类境外上游会裸直连失败。形态与
+   * responses-chat-bridge 的同名选项一致。
+   */
+  fetchImpl?: typeof fetch;
 }
 
 // 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
@@ -186,6 +193,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
   }
   const providers = opts.providers.map((p) => ({ ...p, upstreamBase: trimTrailingSlashes(p.upstreamBase) }));
   const log = opts.logger ?? {};
+  const fetchImpl = opts.fetchImpl ?? fetch;
   let reqSeq = 0;
 
   async function handle({ parsedBody, ctx, res, prefs }: BridgeHandleArgs): Promise<void> {
@@ -259,7 +267,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
 
     let upstream: Response;
     try {
-      upstream = await fetch(`${provider.upstreamBase}/responses`, {
+      upstream = await fetchImpl(`${provider.upstreamBase}/responses`, {
         method: 'POST',
         headers: {
           ...providerHeaders,

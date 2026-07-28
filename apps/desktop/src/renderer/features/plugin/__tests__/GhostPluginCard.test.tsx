@@ -256,6 +256,36 @@ describe('GhostPluginCard', () => {
     expect(screen.getByText('google-calendar').className).toContain('min-w-0');
     expect(screen.getByText('Cindy').className).toContain('truncate');
   });
+
+  it('distinguishes unavailable conflicts from busy market operations', () => {
+    const { rerender } = render(
+      <MarketPluginCard
+        item={{ ...marketPlugin, installState: 'conflict' }}
+        busy={false}
+        onSelect={vi.fn()}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+
+    const cardBody = screen.getByRole('button', { name: 'Google Calendar' });
+    expect((cardBody as HTMLButtonElement).disabled).toBe(true);
+    expect(cardBody.className).toContain('disabled:cursor-not-allowed');
+    expect(cardBody.className).not.toContain('disabled:cursor-wait');
+
+    rerender(
+      <MarketPluginCard
+        item={marketPlugin}
+        busy
+        onSelect={vi.fn()}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+
+    const busyCardBody = screen.getByRole('button', { name: 'Google Calendar' });
+    expect((busyCardBody as HTMLButtonElement).disabled).toBe(true);
+    expect(busyCardBody.className).toContain('disabled:cursor-wait');
+    expect(busyCardBody.className).not.toContain('disabled:cursor-not-allowed');
+  });
 });
 
 describe('LegacyGhostRecoveryNotice', () => {

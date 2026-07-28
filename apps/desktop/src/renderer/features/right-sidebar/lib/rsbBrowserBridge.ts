@@ -389,7 +389,9 @@ async function handleTabOpRequest(
       // Visibility command runs AFTER the eager-spawn so that by the time
       // MainLayout reads the new collapsed-state archive (when user later
       // switches to this session), the webview is already prepared.
-      requestRightSidebarVisibility('open', { sessionId: req.sessionId });
+      // userInitiated:false —— agent 自动化开的标签,不是用户点的:侧边栏该展开
+      // 就展开,但 detached 子窗口不得抢走用户当前前台应用的焦点。
+      requestRightSidebarVisibility('open', { sessionId: req.sessionId, userInitiated: false });
       result = { reqId, ok: true, tabId: newTab.id };
     } else if (req.op === 'focus') {
       // store.setActiveTab no-ops if the id is already active (returns void on
@@ -400,8 +402,9 @@ async function handleTabOpRequest(
         result = { reqId, ok: false, error: `tab ${req.tabId} not found` };
       } else {
         await setActiveTab(req.sessionId, req.tabId);
-        // Same rationale as open: focus implies the user should see the tab.
-        requestRightSidebarVisibility('open', { sessionId: req.sessionId });
+        // Same rationale as open: focus implies the user should see the tab —
+        // but it's still the agent acting, so no OS-level focus steal.
+        requestRightSidebarVisibility('open', { sessionId: req.sessionId, userInitiated: false });
         result = { reqId, ok: true, tabId: req.tabId };
       }
     } else if (req.op === 'ensure') {

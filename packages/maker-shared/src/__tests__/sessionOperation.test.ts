@@ -13,8 +13,10 @@ describe('shared session operation model', () => {
     })).toEqual({
       canUseComposer: false,
       composerDisabledReason: '当前会话还没有同步完成。',
+      composerDisabledReasonSource: 'session-syncing',
       composerSlot: 'missing-session',
       messageHistoryMode: 'hidden',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: false,
     });
@@ -26,8 +28,10 @@ describe('shared session operation model', () => {
     })).toEqual({
       canUseComposer: false,
       composerDisabledReason: '网络或被控端暂时不可用，可以稍后重新同步。',
+      composerDisabledReasonSource: 'caller-provided',
       composerSlot: 'editable',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: false,
     });
@@ -38,9 +42,11 @@ describe('shared session operation model', () => {
       readOnlyReason: '协作模式手机版第一版为只读安全降级。',
     })).toEqual({
       canUseComposer: false,
-      composerDisabledReason: '先处理当前授权或提问后才能继续输入。',
+      composerDisabledReason: '先处理电脑端的待处理请求后才能继续输入。',
+      composerDisabledReasonSource: 'pending-interaction',
       composerSlot: 'pending-interaction',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'composer',
       showPendingInteraction: true,
       showQueue: false,
     });
@@ -52,8 +58,10 @@ describe('shared session operation model', () => {
     })).toMatchObject({
       canUseComposer: false,
       composerDisabledReason: '协作模式手机版第一版为只读安全降级。',
+      composerDisabledReasonSource: 'caller-provided',
       composerSlot: 'read-only',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showQueue: true,
     });
 
@@ -63,8 +71,10 @@ describe('shared session operation model', () => {
     })).toEqual({
       canUseComposer: true,
       composerDisabledReason: null,
+      composerDisabledReasonSource: null,
       composerSlot: 'editable',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: true,
     });
@@ -275,8 +285,10 @@ describe('shared session composer action model', () => {
     expect(runningWithDraft.guidanceText).toBe('点发送后会进入桌面端队列，按当前会话设置执行。');
   });
 
-  it('keeps the composer editable while voice input is listening but waits for text before showing send', () => {
-    const layout = buildSessionComposerLayout({
+  it('keeps the send slot present and usable through the whole voice lifecycle', () => {
+    // 语音生命周期内发送槽常驻(对齐桌面主槽永远占位):转写落地前后布局不变,
+    // 否则首段转写让发送键冒出来的瞬间,语音按钮整格左移、原位变成停止任务。
+    const listening = buildSessionComposerLayout({
       attachmentBusy: false,
       attachmentCount: 0,
       attachmentPickerOpen: false,
@@ -287,20 +299,52 @@ describe('shared session composer action model', () => {
       voiceState: 'listening',
     });
 
-    expect(layout.primaryAction).toBe('none');
-    expect(layout.send).toEqual({
-      disabled: true,
-      disabledReason: '输入文字、添加附件或引用后才能发送。',
+    // listening + 空草稿:发送可见且可按,语义是「结束录音并发送」(finish-and-send)。
+    expect(listening.send).toEqual({
+      disabled: false,
+      disabledReason: null,
       label: '发送',
-      visible: false,
+      visible: true,
     });
-    expect(layout.input).toMatchObject({
+    expect(listening.input).toMatchObject({
       disabled: false,
       disabledReason: null,
       placeholder: '正在听……',
     });
-    expect(layout.guidanceText).toBe('正在听，文字出现后会显示发送；点输入框可结束语音并弹出键盘。');
-    expect(layout.statusText).toBe('正在听');
+    expect(listening.guidanceText).toBe('正在听；点发送会结束语音并发送识别的文字，点输入框可结束语音并弹出键盘。');
+    expect(listening.statusText).toBe('正在听');
+
+    // submitting/refining + 空草稿:转写还没落地,发送保持可见但禁用,布局不塌。
+    for (const voiceState of ['submitting', 'refining'] as const) {
+      const processing = buildSessionComposerLayout({
+        attachmentBusy: false,
+        attachmentCount: 0,
+        attachmentPickerOpen: false,
+        canStop: false,
+        draftText: '',
+        queueBusy: false,
+        sending: false,
+        voiceState,
+      });
+      expect(processing.send).toMatchObject({
+        disabled: true,
+        disabledReason: '语音正在处理，完成后再发送。',
+        visible: true,
+      });
+    }
+
+    // 语音结束(done)且草稿仍空:发送槽随语音生命周期一起收场。
+    const doneEmpty = buildSessionComposerLayout({
+      attachmentBusy: false,
+      attachmentCount: 0,
+      attachmentPickerOpen: false,
+      canStop: false,
+      draftText: '',
+      queueBusy: false,
+      sending: false,
+      voiceState: 'done',
+    });
+    expect(doneEmpty.send.visible).toBe(false);
   });
 
   it('marks busy operations with disabled reasons without changing layout shape', () => {

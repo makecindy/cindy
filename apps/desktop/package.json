@@ -1,8 +1,8 @@
 {
   "name": "desktop",
   "productName": "Cindy",
-  "version": "1.0.0",
-  "description": "Cindy desktop client (真实版本号在 release 时由脚本通过 APP_VERSION 注入,见 forge.config.ts)",
+  "version": "0.0.0",
+  "description": "Cindy desktop client",
   "main": ".vite/build/index.js",
   "private": true,
   "scripts": {
@@ -36,10 +36,11 @@
     "test:migration": "pnpm --dir ../.. test:runner && node ../../scripts/test-workspaces.mjs --tier migration",
     "test:migration-replay": "node ../../scripts/ensure-deps.mjs && node ../../scripts/ensure-dev-runtime-assets.mjs && vitest run src/main/localDb/__tests__/migrationReplay.test.ts",
     "test:watch": "vitest",
-    "preview:oauth-pages": "tsx scripts/preview-oauth-pages.ts"
+    "preview:oauth-pages": "tsx scripts/preview-oauth-pages.ts",
+    "export:login-callback-template": "tsx scripts/export-login-callback-template.ts"
   },
   "author": {
-    "name": "X.D. Network Inc.",
+    "name": "XD Inc.",
     "email": "feedback@cindy.app"
   },
   "license": "Apache-2.0",
@@ -125,7 +126,7 @@
     "electron-window-state": "^5.0.3",
     "fix-path": "^5.0.0",
     "gray-matter": "^4.0.3",
-    "harmonyos-sans-sc-webfont-splitted": "^1.1.0",
+    "harmonyos-sans-sc-webfont-splitted": "1.1.0",
     "highlight.js": "^11.11.1",
     "html-to-image": "^1.11.13",
     "i18next": "^26.1.0",

@@ -89,6 +89,12 @@ describe('applyListContinuation on a real editor', () => {
     expect(docText(ed)).toBe('1、第一项\n2、');
   });
 
+  it('does not continue ordered dot text without a separator space before CJK text', () => {
+    const ed = makeEditor(['1.中文项']);
+    expect(applyListContinuation(ed.view)).toBe(false);
+    expect(docText(ed)).toBe('1.中文项');
+  });
+
   it('splits mid-line: caret inside the item carries the remainder to the new item', () => {
     const ed = makeEditor(['1. abcdef']);
     // 光标放在 "abc|def" 中间(pos 1 是段首,"1. abc" 共 6 字符 → pos 7)

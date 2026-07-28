@@ -6,7 +6,10 @@
  */
 export function isCodexOAuthReconnectRequired(reason: string | undefined): boolean {
   if (!reason) return false;
-  return /app_session_terminated|token_invalidated|token_revoked|refresh_token_reused|Your session has ended|authentication token has been invalidated|authentication token has been revoked|refresh token was already used|refresh_token.*already used|bridge auth unavailable for chatgpt\//i.test(
+  // "access token could not be refreshed" 覆盖 codex-rs 永久刷新失败的整个文案家族
+  // (revoked / expired / already used / account mismatch / unknown)——这些句式只在
+  // refresh token 已不可用时产生，重试必然无效，只能重新连接。
+  return /app_session_terminated|token_invalidated|token_revoked|refresh_token_reused|Your session has ended|authentication token has been invalidated|authentication token has been revoked|refresh token was already used|refresh_token.*already used|access token could not be refreshed|refresh token (?:was|has been) revoked|bridge auth unavailable for chatgpt\//i.test(
     reason,
   );
 }

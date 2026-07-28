@@ -22,6 +22,7 @@ import {
   deriveModelsDiscoveryUrl,
   hasGenericOAuthLogin,
   logoutGenericOAuth,
+  removeGenericOAuthCredentialsReversibly,
   readCachedGenericOAuthAccessToken,
   refreshGenericOAuthIfNeeded,
   discoverGenericOAuthModels,
@@ -50,18 +51,28 @@ const OAUTH: OAuthProviderDescriptor = {
   scopes: 'openid offline_access',
   modelsDiscoveryUrl: 'https://api.acme.example/v1/models',
 };
+const DEVICE_OAUTH: OAuthProviderDescriptor = {
+  flow: 'device-code',
+  deviceAuthorizationUrl: 'https://auth.acme.example/oauth2/device',
+  tokenUrl: 'https://auth.acme.example/oauth2/token',
+  clientId: 'device-client-1',
+  scopes: 'openid offline_access',
+  modelsDiscoveryUrl: 'https://api.acme.example/v1/models',
+};
 
 function memStorage(): GenericOAuthStorage & { map: Map<string, string> } {
   const map = new Map<string, string>();
   return {
     map,
     read: (id) => map.get(id) ?? null,
+    readStrict: (id) => map.get(id) ?? null,
     write: (id, v) => {
       map.set(id, v);
       return true;
     },
     remove: (id) => {
       map.delete(id);
+      return true;
     },
   };
 }
@@ -70,11 +81,13 @@ let storage = memStorage();
 let nowMs = 1_000_000;
 let fetchCalls: { url: string; body?: string; headers?: Record<string, string> }[] = [];
 let fetchResponder: (url: string) => Response = () => new Response('{}', { status: 500 });
+let openedUrls: string[] = [];
 
 beforeEach(() => {
   storage = memStorage();
   nowMs = 1_000_000;
   fetchCalls = [];
+  openedUrls = [];
   resetGenericOAuthMemoryCache();
   configureGenericOAuth({
     storage,
@@ -87,6 +100,12 @@ beforeEach(() => {
       });
       return fetchResponder(String(url));
     }) as typeof fetch,
+    openExternal: async (url) => {
+      openedUrls.push(url);
+    },
+    sleep: async (ms) => {
+      nowMs += ms;
+    },
   });
 });
 
@@ -115,6 +134,55 @@ describe('blob 读写 / has / logout', () => {
     storage.map.set('acme', 'not-json');
     resetGenericOAuthMemoryCache();
     expect(hasGenericOAuthLogin('acme')).toBe(false);
+  });
+
+  it('可回滚删除会在配置写失败后恢复原 OAuth blob', () => {
+    seedBlob('acme', { access_token: 'at-1', refresh_token: 'rt-1' });
+
+    const restore = removeGenericOAuthCredentialsReversibly('acme');
+    expect(restore).not.toBeNull();
+    expect(storage.map.has('acme')).toBe(false);
+    expect(restore?.()).toBe(true);
+
+    resetGenericOAuthMemoryCache();
+    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('at-1');
+  });
+
+  it('冷缓存严格快照不可读时在删除前中止，不把现有凭证误判成缺失', () => {
+    storage.map.set('acme', JSON.stringify({ access_token: 'at-1' }));
+    const remove = storage.remove;
+    storage.remove = () => {
+      throw new Error('must not remove');
+    };
+    storage.readStrict = () => {
+      throw new Error('safeStorage unavailable');
+    };
+    resetGenericOAuthMemoryCache();
+
+    expect(removeGenericOAuthCredentialsReversibly('acme')).toBeNull();
+    expect(storage.map.get('acme')).toContain('at-1');
+
+    storage.remove = remove;
+  });
+
+  it('回滚按原始字符串恢复持久 blob，同时恢复删除前的热缓存', () => {
+    const raw = '{ "access_token": "durable", "refresh_token": "rt" }';
+    storage.map.set('acme', raw);
+    resetGenericOAuthMemoryCache();
+    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('durable');
+
+    const restore = removeGenericOAuthCredentialsReversibly('acme');
+    expect(restore?.()).toBe(true);
+    expect(storage.map.get('acme')).toBe(raw);
+    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('durable');
+  });
+
+  it('凭证删除失败时保留当前登录态并返回失败', () => {
+    seedBlob('acme', { access_token: 'at-1' });
+    storage.remove = () => false;
+
+    expect(logoutGenericOAuth('acme')).toBe(false);
+    expect(hasGenericOAuthLogin('acme')).toBe(true);
   });
 });
 
@@ -181,6 +249,61 @@ describe('登录流与凭证落盘失败', () => {
     expect(JSON.parse(storage.map.get('acme')!).access_token).toBe('at-new');
   });
 
+  it('迟到取消只回滚本次登录写入的凭证，不误删更新的 blob', async () => {
+    autoAuthorize();
+    fetchResponder = () =>
+      new Response(JSON.stringify({ access_token: 'at-new', expires_in: 3600 }), { status: 200 });
+    let rollback: (() => boolean) | undefined;
+
+    const res = await runGenericOAuthLogin(
+      { id: 'acme', name: 'Acme' },
+      OAUTH,
+      { onCredentialPersisted: (fn) => { rollback = fn; } },
+    );
+    expect(res.ok).toBe(true);
+    expect(rollback).toBeTypeOf('function');
+
+    storage.map.set('acme', JSON.stringify({ access_token: 'newer-login' }));
+    expect(rollback?.()).toBe(true);
+    expect(JSON.parse(storage.map.get('acme')!).access_token).toBe('newer-login');
+  });
+
+  it('取消回滚用严格持久读取核对本次 token，不受热路径 fail-soft 读取影响', async () => {
+    autoAuthorize();
+    fetchResponder = () =>
+      new Response(JSON.stringify({ access_token: 'at-new', expires_in: 3600 }), { status: 200 });
+    let rollback: (() => boolean) | undefined;
+
+    await runGenericOAuthLogin(
+      { id: 'acme', name: 'Acme' },
+      OAUTH,
+      { onCredentialPersisted: (fn) => { rollback = fn; } },
+    );
+    storage.read = () => null;
+
+    expect(rollback?.()).toBe(true);
+    expect(storage.map.has('acme')).toBe(false);
+  });
+
+  it('取消回滚无法严格核对持久 token 时报告失败并保留凭证', async () => {
+    autoAuthorize();
+    fetchResponder = () =>
+      new Response(JSON.stringify({ access_token: 'at-new', expires_in: 3600 }), { status: 200 });
+    let rollback: (() => boolean) | undefined;
+
+    await runGenericOAuthLogin(
+      { id: 'acme', name: 'Acme' },
+      OAUTH,
+      { onCredentialPersisted: (fn) => { rollback = fn; } },
+    );
+    storage.readStrict = () => {
+      throw new Error('safeStorage unavailable');
+    };
+
+    expect(rollback?.()).toBe(false);
+    expect(JSON.parse(storage.map.get('acme')!).access_token).toBe('at-new');
+  });
+
   it('登录时 storage.write 失败 → 硬失败且不留「已连接」内存态（回归：防重启后授权静默丢失）', async () => {
     autoAuthorize();
     storage.write = () => false;
@@ -201,6 +324,196 @@ describe('登录流与凭证落盘失败', () => {
     await refreshGenericOAuthIfNeeded('acme', OAUTH);
     expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('new'); // 内存态已是新 token
     expect(JSON.parse(storage.map.get('acme')!).access_token).toBe('old'); // 盘上还是旧值
+  });
+
+  it('Device Grant：展示一次性代码，按 pending / slow_down 轮询并安全落盘', async () => {
+    const waits: number[] = [];
+    configureGenericOAuth({ sleep: async (ms) => void waits.push(ms) });
+    let tokenPolls = 0;
+    fetchResponder = (url) => {
+      if (url === DEVICE_OAUTH.deviceAuthorizationUrl) {
+        return new Response(
+          JSON.stringify({
+            device_code: 'secret-device-code',
+            user_code: 'ABCD-EFGH',
+            verification_uri: 'https://auth.acme.example/device',
+            verification_uri_complete: 'https://auth.acme.example/device?user_code=ABCD-EFGH',
+            expires_in: 600,
+            interval: 1,
+          }),
+          { status: 200 },
+        );
+      }
+      tokenPolls += 1;
+      if (tokenPolls === 1) {
+        return new Response(JSON.stringify({ error: 'authorization_pending' }), { status: 400 });
+      }
+      if (tokenPolls === 2) {
+        return new Response(JSON.stringify({ error: 'slow_down' }), { status: 400 });
+      }
+      return new Response(
+        JSON.stringify({
+          access_token: 'device-access',
+          refresh_token: 'device-refresh',
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      );
+    };
+    const progress: unknown[] = [];
+
+    const result = await runGenericOAuthLogin(
+      { id: 'device', name: 'Device Provider' },
+      DEVICE_OAUTH,
+      { onProgress: (event) => progress.push(event) },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(progress).toEqual([
+      {
+        phase: 'device-code',
+        verificationUrl: 'https://auth.acme.example/device?user_code=ABCD-EFGH',
+        userCode: 'ABCD-EFGH',
+        expiresAt: nowMs + 10 * 60_000,
+      },
+    ]);
+    expect(waits).toEqual([1_000, 1_000, 6_000]);
+    expect(openedUrls).toEqual([]);
+    expect(new URLSearchParams(fetchCalls[0]?.body).get('client_id')).toBe('device-client-1');
+    expect(new URLSearchParams(fetchCalls[1]?.body).get('grant_type')).toBe(
+      'urn:ietf:params:oauth:grant-type:device_code',
+    );
+    const persisted = storage.map.get('device')!;
+    expect(JSON.parse(persisted).access_token).toBe('device-access');
+    expect(persisted).not.toContain('secret-device-code');
+    expect(persisted).not.toContain('ABCD-EFGH');
+  });
+
+  it('Device Grant：持续 pending 时按注入时钟到期，不会无限轮询', async () => {
+    let tokenPolls = 0;
+    fetchResponder = (url) => {
+      if (url === DEVICE_OAUTH.deviceAuthorizationUrl) {
+        return new Response(
+          JSON.stringify({
+            device_code: 'secret-device-code',
+            user_code: 'ABCD-EFGH',
+            verification_uri: 'https://auth.acme.example/device',
+            expires_in: 2,
+            interval: 1,
+          }),
+          { status: 200 },
+        );
+      }
+      tokenPolls += 1;
+      return new Response(JSON.stringify({ error: 'authorization_pending' }), { status: 400 });
+    };
+
+    const result = await runGenericOAuthLogin(
+      { id: 'device', name: 'Device Provider' },
+      DEVICE_OAUTH,
+      { onProgress: () => undefined },
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'device_code_expired' });
+    expect(tokenPolls).toBe(2);
+    expect(nowMs).toBe(1_002_000);
+    expect(storage.map.has('device')).toBe(false);
+  });
+
+  it('Device Grant：标准 client_id/scope 不会被扩展参数覆盖', async () => {
+    fetchResponder = () => new Response('{}', { status: 200 });
+    const result = await runGenericOAuthLogin(
+      { id: 'device', name: 'Device Provider' },
+      {
+        ...DEVICE_OAUTH,
+        extraDeviceParams: {
+          client_id: 'wrong-client',
+          scope: 'wrong-scope',
+          audience: 'models',
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'invalid_device_authorization_response',
+    });
+    const body = new URLSearchParams(fetchCalls[0]?.body);
+    expect(body.getAll('client_id')).toEqual(['device-client-1']);
+    expect(body.getAll('scope')).toEqual(['openid offline_access']);
+    expect(body.get('audience')).toBe('models');
+  });
+
+  it('Authorization Code：标准 PKCE 参数不会被扩展参数或端点 query 覆盖', async () => {
+    configureGenericOAuth({
+      openExternal: async (authUrl) => {
+        openedUrls.push(authUrl);
+        cancelGenericOAuthLogin('acme');
+      },
+    });
+    const result = await runGenericOAuthLogin(
+      { id: 'acme', name: 'Acme' },
+      {
+        ...OAUTH,
+        authorizeUrl: `${OAUTH.authorizeUrl}?client_id=endpoint-client`,
+        extraAuthParams: {
+          client_id: 'wrong-client',
+          scope: 'wrong-scope',
+          audience: 'models',
+        },
+      },
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'login_cancelled' });
+    const authUrl = new URL(openedUrls[0]!);
+    expect(authUrl.searchParams.getAll('client_id')).toEqual(['client-1']);
+    expect(authUrl.searchParams.getAll('scope')).toEqual(['openid offline_access']);
+    expect(authUrl.searchParams.get('audience')).toBe('models');
+  });
+
+  it('Device Grant：进度回调后取消，不再轮询或写入凭证', async () => {
+    fetchResponder = () =>
+      new Response(
+        JSON.stringify({
+          device_code: 'secret-device-code',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'https://auth.acme.example/device',
+          expires_in: 600,
+        }),
+        { status: 200 },
+      );
+
+    const result = await runGenericOAuthLogin(
+      { id: 'device', name: 'Device Provider' },
+      DEVICE_OAUTH,
+      { onProgress: () => cancelGenericOAuthLogin('device') },
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'login_cancelled' });
+    expect(fetchCalls).toHaveLength(1);
+    expect(storage.map.has('device')).toBe(false);
+  });
+
+  it('Device Grant：拒绝非 https 验证页响应', async () => {
+    fetchResponder = () =>
+      new Response(
+        JSON.stringify({
+          device_code: 'secret-device-code',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'http://auth.acme.example/device',
+          expires_in: 600,
+        }),
+        { status: 200 },
+      );
+
+    const result = await runGenericOAuthLogin(
+      { id: 'device', name: 'Device Provider' },
+      DEVICE_OAUTH,
+    );
+    expect(result).toEqual({
+      ok: false,
+      reason: 'invalid_device_authorization_response',
+    });
   });
 });
 
@@ -244,7 +557,7 @@ describe('discoverGenericOAuthModels', () => {
     fetchResponder = () => new Response(JSON.stringify({ data: [{ id: 'm' }] }), { status: 200 });
     await discoverGenericOAuthModels('acme', OAUTH, 'https://derived.example/v1/models');
     expect(fetchCalls[0]?.url).toBe('https://derived.example/v1/models');
-    const { modelsDiscoveryUrl: _omit, ...noDiscovery } = OAUTH;
+    const noDiscovery = { ...OAUTH, modelsDiscoveryUrl: undefined };
     expect(await discoverGenericOAuthModels('acme', noDiscovery)).toBeNull();
     expect(fetchCalls).toHaveLength(1); // 第二次没发请求
   });
@@ -257,6 +570,15 @@ describe('deriveModelsDiscoveryUrl', () => {
       'https://api.acme.example/anthropic/v1/models',
     );
     expect(deriveModelsDiscoveryUrl('https://api.acme.example/')).toBe('https://api.acme.example/v1/models');
+  });
+
+  it('基于 pathname 追加模型端点，保留 query 并丢弃 fragment', () => {
+    expect(deriveModelsDiscoveryUrl('https://api.acme.example/v1?tenant=a#ignored')).toBe(
+      'https://api.acme.example/v1/models?tenant=a',
+    );
+    expect(deriveModelsDiscoveryUrl('https://api.acme.example/root/?tenant=a')).toBe(
+      'https://api.acme.example/root/v1/models?tenant=a',
+    );
   });
 });
 

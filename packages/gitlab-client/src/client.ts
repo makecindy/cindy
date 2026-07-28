@@ -1,8 +1,9 @@
 /**
  * GitLab REST API v4 客户端。
  *
- * 零外部依赖 — 仅使用全局 fetch(Node 18+ / Electron 28+)。
- * 所有方法均可在 main 进程直接调用。
+ * 零外部依赖 — 默认用全局 fetch(Node 18+ / Electron 28+),也可经
+ * `GitlabClientConfig.fetchImpl` 注入自己的实现(desktop 注入代理感知 fetch:Node /
+ * Electron 主进程下的全局 fetch 是 undici,不读系统代理)。所有方法均可在 main 进程直接调用。
  */
 
 import type {
@@ -95,6 +96,8 @@ export class GitlabClient {
    * (cross-project / user-scope calls). Project-scoped methods route through
    * {@link requireProject} which throws a clear error in that case. */
   private readonly projectId: string | null;
+  /** 出网通道(见 GitlabClientConfig.fetchImpl)。 */
+  private readonly fetchImpl: typeof fetch;
 
   constructor(config: GitlabClientConfig) {
     this.baseUrl = trimTrailingSlashes(config.baseUrl);
@@ -105,6 +108,7 @@ export class GitlabClient {
     this.projectId = config.projectPath
       ? encodeURIComponent(config.projectPath)
       : null;
+    this.fetchImpl = config.fetchImpl ?? fetch;
   }
 
   /** Return the encoded project id or fail fast when the caller invoked a
@@ -1281,7 +1285,7 @@ export class GitlabClient {
           });
     form.append('file', blob, params.filename);
 
-    const res = await fetch(url, {
+    const res = await this.fetchImpl(url, {
       method: 'POST',
       headers: { 'PRIVATE-TOKEN': this.token },
       body: form,
@@ -1331,7 +1335,7 @@ export class GitlabClient {
     }
 
     // 认证请求禁止自动跟随跨 host 重定向:PRIVATE-TOKEN 绝不重放到另一个 host。
-    const res = await fetchWithSafeRedirect(url, init);
+    const res = await fetchWithSafeRedirect(url, init, undefined, this.fetchImpl);
 
     // 304 Not Modified 对幂等写端点(如 POST /projects/:id/star 已 star / unstar
     // 未 star)是"操作 no-op、状态和目标一致"的成功语义,GitLab 不返 body。
@@ -1365,7 +1369,7 @@ export class GitlabClient {
     const res = await fetchWithSafeRedirect(url, {
       method,
       headers: { 'PRIVATE-TOKEN': this.token },
-    });
+    }, undefined, this.fetchImpl);
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new GitlabApiError(

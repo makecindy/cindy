@@ -408,3 +408,98 @@ describe('vendor grouping metadata (xai 静态清单)', () => {
     }
   });
 });
+
+describe('provider OAuth and upstream URL validation', () => {
+  const oauthCatalog = (): Catalog => ({
+    version: '1',
+    providers: [{
+      id: 'oauth-provider',
+      name: 'OAuth Provider',
+      source: 'builtin',
+      agents: ['codex'],
+      auth: {
+        method: 'oauth',
+        oauth: {
+          flow: 'authorization-code',
+          authorizeUrl: 'https://auth.example/authorize',
+          tokenUrl: 'https://auth.example/token',
+          clientId: 'client',
+          scopes: 'openid',
+        },
+      },
+      routing: {
+        codex: {
+          upstream: 'https://api.example/v1',
+          authStrategy: 'oauth-token',
+        },
+      },
+      models: { codex: [model('m1')] },
+    }],
+  });
+
+  it('rejects fields from the other OAuth flow', () => {
+    const authorizationCode = oauthCatalog();
+    Object.assign(authorizationCode.providers[0]!.auth.oauth!, {
+      deviceAuthorizationUrl: 'https://auth.example/device',
+    });
+    expect(() => parseCatalog(authorizationCode)).toThrow(/device-code fields/);
+
+    const deviceCode = oauthCatalog();
+    deviceCode.providers[0]!.auth.oauth = {
+      flow: 'device-code',
+      deviceAuthorizationUrl: 'https://auth.example/device',
+      tokenUrl: 'https://auth.example/token',
+      clientId: 'client',
+      scopes: 'openid',
+      authorizeUrl: 'https://auth.example/authorize',
+    } as never;
+    expect(() => parseCatalog(deviceCode)).toThrow(/authorization-code fields/);
+  });
+
+  it('rejects reserved OAuth extra params case-insensitively', () => {
+    const catalog = oauthCatalog();
+    catalog.providers[0]!.auth.oauth!.extraAuthParams = {
+      Client_Id: 'shadow-client',
+    };
+    expect(() => parseCatalog(catalog)).toThrow(/cannot override 'Client_Id'/);
+  });
+
+  it('rejects an OAuth descriptor on a non-OAuth auth method', () => {
+    const catalog = oauthCatalog();
+    catalog.providers[0]!.auth = {
+      method: 'none',
+      oauth: catalog.providers[0]!.auth.oauth,
+    } as never;
+    expect(() => parseCatalog(catalog)).toThrow(/auth\.oauth not allowed for none method/);
+  });
+
+  it('rejects an upstream URL with embedded credentials', () => {
+    const catalog = oauthCatalog();
+    catalog.providers[0]!.routing.codex!.upstream = 'https://user:pass@api.example/v1';
+    expect(() => parseCatalog(catalog)).toThrow(/upstream invalid/);
+  });
+});
+
+describe('buildRegistry 的清单发现失败投影', () => {
+  const failure = {
+    kind: 'regionBlocked' as const,
+    at: '2026-07-27T00:00:00.000Z',
+    detail: 'HTTP 403: {"error":{"type":"unsupported_country_region_territory"}}',
+  };
+
+  it('剥掉 detail 再下发 —— 原始上游响应体不出 Main', () => {
+    const views = buildRegistry(BUNDLED_CATALOG, { anthropic: true }, { anthropic: failure });
+    const anthropic = views.find((p) => p.id === 'anthropic');
+    expect(anthropic?.modelDiscoveryFailure).toEqual({ kind: 'regionBlocked', at: failure.at });
+    expect(anthropic?.modelDiscoveryFailure).not.toHaveProperty('detail');
+    // 原对象不被就地改坏:host 侧还要拿 detail 写日志。
+    expect(failure.detail).toContain('unsupported_country_region_territory');
+  });
+
+  it('没有失败态的供应商不长出该字段;稀疏 map 缺键也不报错', () => {
+    const views = buildRegistry(BUNDLED_CATALOG, { anthropic: true }, { anthropic: null });
+    expect(views.find((p) => p.id === 'anthropic')?.modelDiscoveryFailure).toBeUndefined();
+    const bare = buildRegistry(BUNDLED_CATALOG, { anthropic: true });
+    expect(bare.find((p) => p.id === 'anthropic')?.modelDiscoveryFailure).toBeUndefined();
+  });
+});

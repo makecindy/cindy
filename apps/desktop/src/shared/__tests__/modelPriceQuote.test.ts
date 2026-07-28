@@ -58,6 +58,40 @@ describe('resolveGatewayCatalogCurrency', () => {
       ]),
     ).toBe('USD');
   });
+
+  it('excludes price-less entries from the vote — a metadata-only sibling cannot pin CNY catalogs to USD', () => {
+    expect(
+      resolveGatewayCatalogCurrency([
+        model('a', { currency: 'CNY' }),
+        model('doc', {
+          inputCostPerToken: undefined,
+          outputCostPerToken: undefined,
+        }),
+      ]),
+    ).toBe('CNY');
+  });
+
+  it('excludes zero-priced (free) entries from the vote', () => {
+    expect(
+      resolveGatewayCatalogCurrency([
+        model('a', { currency: 'CNY' }),
+        model('free', { inputCostPerToken: 0, outputCostPerToken: 0 }),
+      ]),
+    ).toBe('CNY');
+  });
+
+  it('still keeps the catalog USD when a priced entry lacks the declaration', () => {
+    expect(
+      resolveGatewayCatalogCurrency([
+        model('a', { currency: 'CNY' }),
+        model('b'),
+        model('doc', {
+          inputCostPerToken: undefined,
+          outputCostPerToken: undefined,
+        }),
+      ]),
+    ).toBe('USD');
+  });
 });
 
 describe('gatewayPricingCatalog currency', () => {
@@ -92,5 +126,22 @@ describe('gatewayPricingCatalog currency', () => {
     ]);
     expect(Object.keys(catalog.xd)).toEqual(['b']);
     expect(catalog.xd.b.currency).toBe('USD');
+  });
+
+  it('keeps every CNY quote when the only undeclared sibling is price-less (#587 regression)', () => {
+    const catalog = gatewayPricingCatalog([
+      model('a', { currency: 'CNY' }),
+      model('b', { currency: 'CNY' }),
+      model('doc', {
+        inputCostPerToken: undefined,
+        outputCostPerToken: undefined,
+      }),
+      model('free', { inputCostPerToken: 0, outputCostPerToken: 0 }),
+    ]);
+    expect(Object.keys(catalog.xd)).toEqual(['a', 'b']);
+    expect(Object.values(catalog.xd).map((quote) => quote.currency)).toEqual([
+      'CNY',
+      'CNY',
+    ]);
   });
 });

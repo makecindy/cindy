@@ -38,6 +38,31 @@ export const LOGIN_GROUP = {
 } as const;
 
 /**
+ * 注销状态提示气泡(figma 678:1075「注销状态」组件集;桌面实例 679:1172 落位于帧 678:750)。
+ *
+ * ⚠ 全部数值是 **1819×2098 设计画布单位(2x 稿)**,不是 CSS px——渲染时与登录组同乘
+ * `PANEL_FIXED_SCALE`(=0.5),屏幕上得到宽 335 / 顶距 36 CSS px,与登录面板
+ * (680×0.5=340)基本同宽,与设计稿里 670 vs 680 的关系一致。
+ * (2026-07-26 修正:初版把这些设计单位当 CSS px 直接用,气泡在屏幕上宽了整一倍。)
+ *
+ * 内部几何由组件子元素坐标反算自洽:标题 text @(20,20) h=23、正文 text @(20,48) h=23
+ * → padding 20、标题↔正文 5、行高 23、底距 20,无钮变体总高 91 = 20+23+5+23+20。
+ */
+export const LOGIN_DELETION_BUBBLE = {
+  /** 距窗口顶固定间距(顶对齐,不随窗口高度变化;figma y=72) */
+  top: 72,
+  width: 670,
+  radius: 22,
+  padding: 20,
+  font: 20,
+  lineHeight: 23,
+  titleBodyGap: 5,
+  bodyLinkGap: 22,
+  /** 「我知道了」热区上下 padding(视觉间距由等量负 margin 抵消) */
+  linkHitPadding: 11,
+} as const;
+
+/**
  * 登录面板下方的本地模式操作区。
  *
  * 这块区域不再脱离登录 stage 固定在窗口底部：stage 会为它预留空间，避免小窗口
@@ -56,12 +81,19 @@ export const TITLE = { y: 31, height: 38, fontSize: 32 } as const;
 /** 副标题:540@70 ≤2 行顶对齐,槽高 = 行高 × 最大行数(DESIGN.md §16.2,2026-07-24 拍板)。 */
 export const SUBTITLE = { x: 70, y: 75, width: 540, fontSize: 20, lineHeight: 23, maxLines: 2 } as const;
 /**
- * Global 徽标(figma §4.10 胶囊 70×30 r40)。v2 inline 组方案(用户裁定 2026-07-25):
+ * 区域徽标(figma §4.10 胶囊 h30 r40)。v2 inline 组方案(用户裁定 2026-07-25):
  * 标题文字 shrink-to-fit 单行 + 徽标紧随其后 gap 2 设计px,组整体相对面板水平居中——
  * 修复旧固定跨度方案(标题 span 固定 236 @185 + 徽标绝对 @425)在 en/ja/ko 下
  * 标题与徽标重叠的问题;GLOBAL_TITLE_SPAN 随之废弃删除。
+ *
+ * 宽度自适应(2026-07-27 拍板):原 width 固定 70 是为 "Global" 一词量身定的。
+ * 按「不对称命名」翻转后 global 版不再挂徽标(默认版本不必自证是全球版),徽标
+ * 只服务 cn(CN)/dev(Dev),文案短得多,固定宽会在胶囊里留大片空白。改由 paddingX
+ * 撑开:11 = 原几何反推((70 − "Global" 6 拉丁字符 @16 Bold ≈ 48) / 2),既保住
+ * figma 的左右留白密度,又让胶囊跟随文案收窄。fontSize 一并从组件内硬编码收进
+ * token(几何值单点,呼应 DESIGN.md §16.2「几何常量固化在常量文件」)。
  */
-export const GLOBAL_PILL = { width: 70, height: 30, radius: 40, gap: 2 } as const;
+export const REGION_PILL = { height: 30, radius: 40, gap: 2, paddingX: 11, fontSize: 16 } as const;
 export const CONTROL = {
   x: 70,
   inputY: 158,

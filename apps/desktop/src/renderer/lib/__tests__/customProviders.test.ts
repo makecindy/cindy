@@ -1,10 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   appendDiscoveredCustomProviderModels,
+  createCustomProvider,
   customProviderModelConfigFromCatalogModel,
+  providerViewToCustomProviderConfig,
   replaceCustomProviderModelId,
+  updateCustomProvider,
 } from '../customProviders';
+import type { ProviderView } from '@cindy/model-providers';
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('replaceCustomProviderModelId', () => {
   it('drops hidden metadata when the model id changes', () => {
@@ -66,6 +73,53 @@ describe('customProviderModelConfigFromCatalogModel', () => {
   });
 });
 
+describe('providerViewToCustomProviderConfig', () => {
+  it('preserves no-auth and exact request-path fields through the edit round trip', () => {
+    const provider = {
+      id: 'local-chat',
+      name: 'Local Chat',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'none' },
+      access: { kind: 'api' },
+      routing: {
+        codex: {
+          upstream: 'http://127.0.0.1:4000/v1',
+          authStrategy: 'none',
+          wireProtocol: 'openai-chat',
+          requestPath: '/tenant/acme/infer?stream=1',
+          modelsUrl: 'http://127.0.0.1:4000/v1/models',
+        },
+      },
+      models: {
+        codex: [{
+          id: 'local-model',
+          name: 'Local Model',
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      connected: true,
+    } satisfies ProviderView;
+
+    expect(providerViewToCustomProviderConfig(provider)).toEqual({
+      id: 'local-chat',
+      name: 'Local Chat',
+      auth: { method: 'none' },
+      runtimes: {
+        codex: {
+          baseUrl: 'http://127.0.0.1:4000/v1',
+          requestPath: '/tenant/acme/infer?stream=1',
+          wireProtocol: 'openai-chat',
+          modelsUrl: 'http://127.0.0.1:4000/v1/models',
+          models: [{ id: 'local-model', name: 'Local Model' }],
+        },
+      },
+    });
+  });
+});
+
 describe('appendDiscoveredCustomProviderModels', () => {
   it('only appends unknown models and defaults them to hidden', () => {
     const result = appendDiscoveredCustomProviderModels(
@@ -84,5 +138,118 @@ describe('appendDiscoveredCustomProviderModels', () => {
       ],
       addedIds: ['new'],
     });
+  });
+});
+
+describe('custom provider credential lifecycle', () => {
+  it('submits create config and keys through one main-process mutation', async () => {
+    const create = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: { createCustomProvider: create },
+      },
+    });
+
+    const config = {
+      id: 'new-provider',
+      name: 'New provider',
+      auth: { method: 'apiKey' as const },
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'model', name: 'Model' }],
+        },
+      },
+    };
+    const keys = { codex: 'new-key' };
+    await createCustomProvider(config, keys);
+
+    expect(create).toHaveBeenCalledWith(config, keys);
+  });
+
+  it('surfaces an atomic main-process create failure', async () => {
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: {
+          createCustomProvider: vi.fn().mockRejectedValue(
+            new Error('credential staging failed'),
+          ),
+        },
+      },
+    });
+    const config = {
+      id: 'partial-create',
+      name: 'Partial create',
+      auth: { method: 'apiKey' as const },
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'codex-model', name: 'Codex model' }],
+        },
+      },
+    };
+
+    await expect(createCustomProvider(config, {
+      'claude-code': 'first-key',
+      codex: 'second-key',
+    })).rejects.toThrow('credential staging failed');
+  });
+
+  it('submits replacement keys with the config through one main-process mutation', async () => {
+    const update = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: { updateCustomProvider: update },
+      },
+    });
+
+    const config = {
+      id: 'switch-to-key',
+      name: 'Switch to key',
+      auth: { method: 'apiKey' as const },
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'm1', name: 'M1' }],
+        },
+      },
+    };
+    await updateCustomProvider(
+      config,
+      { codex: 'replacement-key' },
+    );
+
+    expect(update).toHaveBeenCalledWith(config, { codex: 'replacement-key' });
+  });
+
+  it('surfaces an atomic main-process update failure', async () => {
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: {
+          updateCustomProvider: vi.fn().mockRejectedValue(new Error('credential rollback failed')),
+        },
+      },
+    });
+
+    await expect(
+      updateCustomProvider(
+        {
+          id: 'switch-to-key',
+          name: 'Switch to key',
+          auth: { method: 'apiKey' },
+          runtimes: {
+            codex: {
+              baseUrl: 'https://api.example/v1',
+              models: [{ id: 'm1', name: 'M1' }],
+            },
+          },
+        },
+        { codex: 'replacement-key' },
+      ),
+    ).rejects.toThrow('credential rollback failed');
   });
 });

@@ -9,7 +9,8 @@
  *    国内《APP违法违规收集使用个人信息行为认定方法》也把「未经同意收集」列为违规。
  *  - analyticsEnabled：同意之后的 opt-out 开关,默认开启,用户可随时在设置里关闭。
  *
- * 有效上报条件 = privacyConsentAccepted && analyticsEnabled(见 isAnalyticsAllowed)。
+ * 有效上报条件 = 正式构建 && privacyConsentAccepted && analyticsEnabled
+ * (见 isAnalyticsAllowed;构建闸的理由见 isReportingBuild)。
  *
  * 关于「恢复默认」:consent 是事实记录而非配置,不提供 UI 级 reset。resetAnalyticsSettings
  * 只用于测试与显式的账号数据清理,调用后用户会重新落回「未同意」。
@@ -113,9 +114,54 @@ export function readAnalyticsSettingsState(): OverrideSettingsState<AnalyticsSet
   return store.readState();
 }
 
-/** 有效上报条件:同意在先,开关在后。任一为 false 都不得上报。 */
+/**
+ * dev 逃生口:严格 `XDT_TAPDB_DEV=1` 才让非 packaged 构建上报,其它任何值
+ * ('0' / 'true' / 空串)都视为关——与 devCliFlags 的 XDT_ISOLATED 同款约定,不做
+ * 布尔猜测。只在需要验证上报链路本身时手动打开,打开即污染线上口径。
+ */
+const DEV_REPORTING_ENV = 'XDT_TAPDB_DEV';
+
+/** 构建闸的结论只在第一次求值时记一条日志,避免每次广播都刷屏。 */
+let buildGateLogged = false;
+
+/**
+ * 构建 flavor 闸:默认只有 packaged 构建允许上报,dev 可通过 XDT_TAPDB_DEV=1 手动放行。
+ *
+ * 为什么必须有这道闸:TapDB Web SDK 的设备身份(device_id)写在 renderer 的
+ * localStorage 里,而 localStorage 按 **origin + userData 目录** 分家 ——
+ *   - dev 的 renderer 从 `http://localhost:<vite 端口>` 加载(packaged 走 file://),
+ *     并行多开时端口自增(5173 / 5174 / …),每个端口一份全新 localStorage;
+ *   - `--isolated[=<名字>]` / `XDT_USER_DATA_DIR` 每条沙箱一份独立 localStorage,
+ *     沙箱删掉重建又是一份。
+ * 而 SDK init 时的 `isInitDeviceLogin` 会发 device_login,正是 TapDB 后台认定
+ * 「新增设备」的事件。于是一个开发者每天能凭空造出几十台"新增设备",把线上
+ * 新增设备 / 转化率 / 次日留存全部带偏(2026-07-26 复盘:某地区单人一天 78 台设备、
+ * 新增账号 1、次日留存 2.6%)。dev 与 release 目前共用同一个 TapDB appId,只能在
+ * 闸上区分;将来 dev 拿到独立 appId 后这道闸仍应保留(默认不上报)。
+ *
+ * 严格判 `=== true`:非 Electron 宿主或测试 mock 拿不到 isPackaged 时按 dev 处理
+ * (fail closed,宁可少报不可乱报)。
+ */
+function isReportingBuild(): boolean {
+  if (app.isPackaged === true) return true;
+  const devOptIn = process.env[DEV_REPORTING_ENV] === '1';
+  if (!buildGateLogged) {
+    buildGateLogged = true;
+    log.info('analytics build gate evaluated', { packaged: false, devOptIn });
+  }
+  return devOptIn;
+}
+
+/**
+ * 有效上报条件:构建闸在最前,然后同意在先、开关在后。任一为 false 都不得上报。
+ *
+ * 构建闸不写盘、不改 privacyConsentAccepted / analyticsEnabled —— 那两个字段是用户
+ * 的持久真相(dev 与正式版共享同一份 userData 时必须保持一致),设置页照常显示真实
+ * 开关状态,dev 下只是没有任何字节发出去。
+ */
 export function isAnalyticsAllowed(): boolean {
   probeRecordOnce();
+  if (!isReportingBuild()) return false;
   const value = store.read();
   return value.privacyConsentAccepted && value.analyticsEnabled;
 }
@@ -198,6 +244,8 @@ export function resetAnalyticsSettings(): AnalyticsSettings {
 export const __testing = {
   normalize,
   DEFAULTS,
+  isReportingBuild,
+  DEV_REPORTING_ENV,
   resetProbe(): void {
     recordProbe = null;
   },

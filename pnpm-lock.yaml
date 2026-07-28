@@ -297,7 +297,7 @@ importers:
         specifier: ^4.0.3
         version: 4.0.3
       harmonyos-sans-sc-webfont-splitted:
-        specifier: ^1.1.0
+        specifier: 1.1.0
         version: 1.1.0(patch_hash=272e3ded46880ee2f9eaff39327b8465de6df4072271de03caf73950e6e57822)(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)
       highlight.js:
         specifier: ^11.11.1

@@ -97,33 +97,38 @@ describe('Claude Auto classifier request detection', () => {
 });
 
 describe('createClaudeAutoClassifierFailureObserver', () => {
-  it('reports classifier failures across 4xx and 5xx with the resolved business session id', () => {
-    // 任何错误响应都意味着分类器没给 verdict、CLI 会 fail-closed——4xx(模型/参数/鉴权
-    // 不可用)与 5xx(限流/服务故障)都必须触发降级,不再限于 429/5xx。
+  it('keeps Auto for transient classifier failures', () => {
+    const listener = vi.fn();
+    setClaudeAutoClassifierUnavailableListener(listener);
+    const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1');
+
+    expect(observer(ctx({ status: 408 }))).toBeUndefined();
+    expect(observer(ctx({ status: 429 }))).toBeUndefined();
+    expect(observer(ctx({ status: 503 }))).toBeUndefined();
+    expect(observer(ctx({ status: 529 }))).toBeUndefined();
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('reports non-transient classifier failures with the resolved business session id', () => {
     const signals: unknown[] = [];
     setClaudeAutoClassifierUnavailableListener((signal) => signals.push(signal));
     const observer = createClaudeAutoClassifierFailureObserver((sdkId) =>
       sdkId === 'sdk-1' ? 'session-1' : null,
     );
 
-    expect(observer(ctx({ status: 429 }))).toBeUndefined();
     expect(observer(ctx({ status: 400 }))).toBeUndefined();
     expect(observer(ctx({ status: 401 }))).toBeUndefined();
+    expect(observer(ctx({ status: 403 }))).toBeUndefined();
     expect(observer(ctx({ status: 404 }))).toBeUndefined();
-    expect(
-      observer(
-        ctx({
-          status: 503,
-          requestBody: requestBody({ system: `${CLASSIFIER_PREFIX}\nRules` }),
-        }),
-      ),
-    ).toBeUndefined();
+    expect(observer(ctx({ status: 422 }))).toBeUndefined();
+
     expect(signals).toEqual([
-      { sessionId: 'session-1', agentKind: 'claude-code', status: 429 },
       { sessionId: 'session-1', agentKind: 'claude-code', status: 400 },
       { sessionId: 'session-1', agentKind: 'claude-code', status: 401 },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 403 },
       { sessionId: 'session-1', agentKind: 'claude-code', status: 404 },
-      { sessionId: 'session-1', agentKind: 'claude-code', status: 503 },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 422 },
     ]);
   });
 

@@ -12,6 +12,7 @@ import {
   formatRemoteError,
   humanizeRemoteError,
   isAccessRevokedRemoteError,
+  isDeviceUnresponsiveRemoteError,
   isPreconditionFailedRemoteError,
   isMobileRemoteInvokeChannel,
   isTransientRemoteError,
@@ -148,6 +149,12 @@ describe('device-link shared contract', () => {
     expect(isTransientRemoteError(Object.assign(new Error('remote disabled'), { code: 'REMOTE_DISABLED' }))).toBe(false);
     expect(isTransientRemoteError("[CHANNEL_NOT_ALLOWED] channel 'x' not allowed")).toBe(false);
     expect(isTransientRemoteError(new Error('unexpected'))).toBe(false);
+    // 熔断快速失败必须是 permanent:归为瞬时会让 withTransientRemoteRetry 把
+    // 本地直拒再重试 6 次,熔断等于白做。code 与 message 两种形态都要拦住。
+    expect(isTransientRemoteError(
+      Object.assign(new Error('target device dev-1 is unresponsive (circuit open)'), { code: 'DEVICE_UNRESPONSIVE' }),
+    )).toBe(false);
+    expect(isTransientRemoteError('[DEVICE_UNRESPONSIVE] target device dev-1 is unresponsive')).toBe(false);
 
     const op = vi.fn()
       .mockRejectedValueOnce(new Error('DbClient not ready'))
@@ -160,5 +167,24 @@ describe('device-link shared contract', () => {
     const permanent = vi.fn().mockRejectedValue(new Error('[REMOTE_DISABLED] remote control disabled'));
     await expect(withTransientRemoteRetry(permanent, { sleep: noSleep })).rejects.toThrow('remote control disabled');
     expect(permanent).toHaveBeenCalledTimes(1);
+
+    // 熔断快速失败不重试:一次上抛,让调用方走降级路径
+    const unresponsive = vi.fn().mockRejectedValue(
+      Object.assign(new Error('target device dev-1 is unresponsive (circuit open)'), { code: 'DEVICE_UNRESPONSIVE' }),
+    );
+    await expect(withTransientRemoteRetry(unresponsive, { sleep: noSleep })).rejects.toThrow('unresponsive');
+    expect(unresponsive).toHaveBeenCalledTimes(1);
+  });
+
+  it('recognizes device-unresponsive breaker fast-fails and maps them to readable copy', () => {
+    expect(isDeviceUnresponsiveRemoteError(
+      Object.assign(new Error('target device dev-1 is unresponsive (circuit open)'), { code: 'DEVICE_UNRESPONSIVE' }),
+    )).toBe(true);
+    expect(isDeviceUnresponsiveRemoteError('[DEVICE_UNRESPONSIVE] target device dev-1 is unresponsive')).toBe(true);
+    expect(isDeviceUnresponsiveRemoteError(new Error('[DEVICE_UNRESPONSIVE] fast fail'))).toBe(true);
+    expect(isDeviceUnresponsiveRemoteError(new Error('unexpected'))).toBe(false);
+    expect(isDeviceUnresponsiveRemoteError(Object.assign(new Error('offline'), { code: 'DEVICE_OFFLINE' }))).toBe(false);
+    expect(describeRemoteError('[DEVICE_UNRESPONSIVE] target device dev-1 is unresponsive'))
+      .toBe('电脑端未响应，正在自动重试，请稍后再试。');
   });
 });

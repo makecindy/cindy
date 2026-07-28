@@ -290,6 +290,41 @@ export function projectAgentFacingText(source: AgentFacingTextSource): string {
 }
 
 /**
+ * 只取用户自己写下的正文:引用 span 被整段剔除(而不是像
+ * {@link projectAgentFacingText} 那样替换成 `[Referenced ...]` 语义块),引用块
+ * marker 行按 quotesEncoded 剥离。
+ *
+ * 用途是判定「这条消息里有没有真正可用于起名的文字」。会话/项目引用展开后的
+ * 语义块是给模型看的机器格式,既不该出现在标题里,也不该被当成"用户打了字"
+ * 的证据 —— 拿它去起名会得到 `[Referenced conversation] Title: ...` 这种标题,
+ * 或让标题模型对着一坨元数据硬编。
+ *
+ * 注意:选中文字引用(blockquote)的正文**会**保留 —— 那是真实文字内容,可以
+ * 起出有意义的标题。
+ */
+export function projectLiteralUserText(source: AgentFacingTextSource): string {
+  const references = readAgentInputReferences(source.agentReferences, source.text);
+  const stripMarkers = source.quotesEncoded === true;
+  if (references.length === 0) return projectLiteralText(source.text, stripMarkers).trim();
+
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const reference of references) {
+    parts.push(projectLiteralText(source.text.slice(cursor, reference.start), stripMarkers));
+    cursor = reference.end;
+  }
+  parts.push(projectLiteralText(source.text.slice(cursor), stripMarkers));
+  return parts.join('').trim();
+}
+
+/** 被引用对象的可读名字(会话标题 / 项目名 / 被引用消息正文)。取不到 → null。 */
+export function describeAgentInputReference(reference: AgentInputReference): string | null {
+  if (reference.kind === 'session') return oneLine(reference.title ?? '') || null;
+  if (reference.kind === 'project') return oneLine(reference.name) || null;
+  return oneLine(reference.text ?? '') || null;
+}
+
+/**
  * Project the persisted `{text, quotesEncoded, agentReferences}` envelope.
  * Returns null for non-user/unknown shapes so callers can keep their existing
  * assistant/tool extraction logic.

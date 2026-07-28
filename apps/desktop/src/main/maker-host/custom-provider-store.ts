@@ -12,13 +12,18 @@
  * （测试用 `setCurrentDbClient` 注入内存 db，见 __tests__）。
  */
 
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 
 import type {
   AgentKind,
   CustomProviderConfig,
   CustomProviderRuntimeConfig,
   OAuthProviderDescriptor,
+} from '@cindy/model-providers';
+import {
+  findReservedOAuthExtraParam,
+  isLoopbackProviderUrl,
+  isProviderRequestPath,
 } from '@cindy/model-providers';
 
 import { getDbClient } from '../localDb/client/current.js';
@@ -41,6 +46,23 @@ function invalid(message: string): ValidationResult {
   return { ok: false, code: 'INVALID_PARAMS', message };
 }
 
+function validateNoAuthLoopbackBoundary(
+  auth: CustomProviderConfig['auth'],
+  runtimes: Partial<Record<AgentKind, CustomProviderRuntimeConfig>>,
+): ValidationResult {
+  if (auth?.method !== 'none') return { ok: true };
+  for (const [agent, runtime] of Object.entries(runtimes)) {
+    if (!runtime) continue;
+    if (!isLoopbackProviderUrl(runtime.baseUrl)) {
+      return invalid(`runtime '${agent}' baseUrl must be loopback when auth method is none`);
+    }
+    if (runtime.modelsUrl !== undefined && !isLoopbackProviderUrl(runtime.modelsUrl)) {
+      return invalid(`runtime '${agent}' modelsUrl must be loopback when auth method is none`);
+    }
+  }
+  return { ok: true };
+}
+
 function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (!rt || typeof rt !== 'object') return invalid(`runtime '${agent}' must be an object`);
   const r = rt as Record<string, unknown>;
@@ -52,8 +74,17 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (u.protocol !== 'http:' && u.protocol !== 'https:') {
       return invalid(`runtime '${agent}' baseUrl must be http(s)`);
     }
+    if (u.username || u.password) {
+      return invalid(`runtime '${agent}' baseUrl must not contain embedded credentials`);
+    }
   } catch {
     return invalid(`runtime '${agent}' baseUrl is not a valid URL`);
+  }
+  if (
+    r.requestPath !== undefined
+    && !isProviderRequestPath(r.requestPath)
+  ) {
+    return invalid(`runtime '${agent}' requestPath invalid`);
   }
   if (!Array.isArray(r.models)) return invalid(`runtime '${agent}' models must be an array`);
   for (const m of r.models) {
@@ -113,40 +144,132 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   return { ok: true };
 }
 
-/** 校验用户填写的 OAuth 描述符（与目录 parseCatalog 的 validateOAuthDescriptor 同规则）。 */
-function validateOAuthSection(auth: unknown): ValidationResult {
+/** 校验用户填写的鉴权描述符（OAuth 部分与目录校验保持同规则）。 */
+function validateAuthSection(auth: unknown): ValidationResult {
   if (!auth || typeof auth !== 'object') return invalid('auth must be an object');
   const a = auth as Record<string, unknown>;
-  if (a.method !== 'apiKey' && a.method !== 'oauth') return invalid("auth.method must be 'apiKey' | 'oauth'");
-  if (a.method === 'apiKey') {
-    if (a.oauth !== undefined) return invalid('auth.oauth not allowed for apiKey method');
+  if (a.method !== 'apiKey' && a.method !== 'oauth' && a.method !== 'none') {
+    return invalid("auth.method must be 'apiKey' | 'oauth' | 'none'");
+  }
+  if (a.method === 'apiKey' || a.method === 'none') {
+    if (a.oauth !== undefined) return invalid(`auth.oauth not allowed for ${a.method} method`);
     return { ok: true };
   }
   const d = a.oauth;
   if (!d || typeof d !== 'object') return invalid('auth.oauth required for oauth method');
   const o = d as Record<string, unknown>;
-  for (const field of ['authorizeUrl', 'tokenUrl', 'clientId', 'scopes'] as const) {
+  const flow = o.flow ?? 'authorization-code';
+  if (flow !== 'authorization-code' && flow !== 'device-code') {
+    return invalid("auth.oauth.flow must be 'authorization-code' | 'device-code'");
+  }
+  const allowedFields = new Set(
+    flow === 'device-code'
+      ? [
+          'flow',
+          'tokenUrl',
+          'clientId',
+          'scopes',
+          'modelsDiscoveryUrl',
+          'deviceAuthorizationUrl',
+          'extraDeviceParams',
+        ]
+      : [
+          'flow',
+          'tokenUrl',
+          'clientId',
+          'scopes',
+          'modelsDiscoveryUrl',
+          'authorizeUrl',
+          'redirectPort',
+          'extraAuthParams',
+        ],
+  );
+  const unknownField = Object.keys(o).find((field) => !allowedFields.has(field));
+  if (unknownField) return invalid(`auth.oauth.${unknownField} is not allowed`);
+  if (
+    flow === 'authorization-code'
+    && (o.deviceAuthorizationUrl !== undefined || o.extraDeviceParams !== undefined)
+  ) {
+    return invalid('auth.oauth device-code fields not allowed for authorization-code');
+  }
+  if (
+    flow === 'device-code'
+    && (
+      o.authorizeUrl !== undefined
+      || o.extraAuthParams !== undefined
+      || o.redirectPort !== undefined
+    )
+  ) {
+    return invalid('auth.oauth authorization-code fields not allowed for device-code');
+  }
+  for (const field of ['tokenUrl', 'clientId', 'scopes'] as const) {
     if (typeof o[field] !== 'string' || (o[field] as string).trim().length === 0) {
       return invalid(`auth.oauth.${field} required`);
     }
   }
-  for (const field of ['authorizeUrl', 'tokenUrl'] as const) {
+  const endpointFields =
+    flow === 'device-code'
+      ? (['deviceAuthorizationUrl', 'tokenUrl'] as const)
+      : (['authorizeUrl', 'tokenUrl'] as const);
+  for (const field of endpointFields) {
+    if (typeof o[field] !== 'string' || (o[field] as string).trim().length === 0) {
+      return invalid(`auth.oauth.${field} required`);
+    }
     try {
       const u = new URL(o[field] as string);
       // OAuth 端点强制 https:回调虽在回环,但授权码/token 交换绝不能明文出网。
-      if (u.protocol !== 'https:') return invalid(`auth.oauth.${field} must be https`);
+      if (u.protocol !== 'https:' || u.username || u.password) {
+        return invalid(`auth.oauth.${field} must be https`);
+      }
     } catch {
       return invalid(`auth.oauth.${field} is not a valid URL`);
     }
   }
   if (o.redirectPort !== undefined) {
     if (
+      flow !== 'authorization-code'
+      ||
       typeof o.redirectPort !== 'number'
       || !Number.isInteger(o.redirectPort)
       || o.redirectPort <= 0
       || o.redirectPort >= 65536
     ) {
       return invalid('auth.oauth.redirectPort invalid');
+    }
+  }
+  for (const field of ['extraAuthParams', 'extraDeviceParams'] as const) {
+    if (o[field] === undefined) continue;
+    if (!o[field] || typeof o[field] !== 'object' || Array.isArray(o[field])) {
+      return invalid(`auth.oauth.${field} invalid`);
+    }
+    if (
+      Object.values(o[field] as Record<string, unknown>).some(
+        (value) => typeof value !== 'string',
+      )
+    ) {
+      return invalid(`auth.oauth.${field} invalid`);
+    }
+    const collision = findReservedOAuthExtraParam(
+      o[field] as Record<string, unknown>,
+      flow,
+    );
+    if (collision) {
+      return invalid(`auth.oauth.${field} cannot override '${collision}'`);
+    }
+  }
+  if (o.modelsDiscoveryUrl !== undefined) {
+    try {
+      const url = new URL(String(o.modelsDiscoveryUrl));
+      if (
+        typeof o.modelsDiscoveryUrl !== 'string'
+        || url.protocol !== 'https:'
+        || url.username
+        || url.password
+      ) {
+        return invalid('auth.oauth.modelsDiscoveryUrl must be https');
+      }
+    } catch {
+      return invalid('auth.oauth.modelsDiscoveryUrl is not a valid URL');
     }
   }
   return { ok: true };
@@ -166,7 +289,7 @@ export function validateCustomProviderConfig(config: unknown): ValidationResult 
   if (c.name.length > MAX_NAME_LEN) return invalid(`name too long (max ${MAX_NAME_LEN})`);
 
   if (c.auth !== undefined) {
-    const a = validateOAuthSection(c.auth);
+    const a = validateAuthSection(c.auth);
     if (!a.ok) return a;
   }
 
@@ -181,7 +304,10 @@ export function validateCustomProviderConfig(config: unknown): ValidationResult 
     const r = validateRuntime(k, rts[k]);
     if (!r.ok) return r;
   }
-  return { ok: true };
+  return validateNoAuthLoopbackBoundary(
+    c.auth as CustomProviderConfig['auth'],
+    rts as Partial<Record<AgentKind, CustomProviderRuntimeConfig>>,
+  );
 }
 
 /** 规整单个 runtime（trim baseUrl、去重 models、裁 headers）。 */
@@ -203,6 +329,7 @@ function normalizeRuntime(rt: CustomProviderRuntimeConfig): CustomProviderRuntim
     rt.headers && Object.keys(rt.headers).length > 0 ? { ...rt.headers } : undefined;
   const out: CustomProviderRuntimeConfig = { baseUrl: rt.baseUrl.trim(), models };
   if (rt.wireProtocol) out.wireProtocol = rt.wireProtocol;
+  if (rt.requestPath && rt.requestPath.trim()) out.requestPath = rt.requestPath.trim();
   if (headers) out.headers = headers;
   if (rt.modelsUrl && rt.modelsUrl.trim()) out.modelsUrl = rt.modelsUrl.trim();
   return out;
@@ -216,21 +343,38 @@ function normalizeConfig(config: CustomProviderConfig): CustomProviderConfig {
     if (rt) runtimes[agent] = normalizeRuntime(rt);
   }
   const out: CustomProviderConfig = { id: config.id, name: config.name.trim(), runtimes };
-  // auth 规整：apiKey（默认形态）不落 auth 字段；oauth 落 trim 过的描述符。
+  // auth 规整：apiKey（默认形态）不落 auth 字段；none / oauth 显式落盘。
   if (config.auth?.method === 'oauth' && config.auth.oauth) {
     const d = config.auth.oauth;
-    const oauth: OAuthProviderDescriptor = {
-      authorizeUrl: d.authorizeUrl.trim(),
-      tokenUrl: d.tokenUrl.trim(),
-      clientId: d.clientId.trim(),
-      scopes: d.scopes.trim(),
-    };
-    if (d.redirectPort !== undefined) oauth.redirectPort = d.redirectPort;
-    if (d.extraAuthParams && Object.keys(d.extraAuthParams).length > 0) {
-      oauth.extraAuthParams = { ...d.extraAuthParams };
+    let oauth: OAuthProviderDescriptor;
+    if (d.flow === 'device-code') {
+      oauth = {
+        flow: 'device-code',
+        deviceAuthorizationUrl: d.deviceAuthorizationUrl.trim(),
+        tokenUrl: d.tokenUrl.trim(),
+        clientId: d.clientId.trim(),
+        scopes: d.scopes.trim(),
+      };
+      if (d.extraDeviceParams && Object.keys(d.extraDeviceParams).length > 0) {
+        oauth.extraDeviceParams = { ...d.extraDeviceParams };
+      }
+    } else {
+      oauth = {
+        ...(d.flow === 'authorization-code' ? { flow: 'authorization-code' as const } : {}),
+        authorizeUrl: d.authorizeUrl.trim(),
+        tokenUrl: d.tokenUrl.trim(),
+        clientId: d.clientId.trim(),
+        scopes: d.scopes.trim(),
+      };
+      if (d.redirectPort !== undefined) oauth.redirectPort = d.redirectPort;
+      if (d.extraAuthParams && Object.keys(d.extraAuthParams).length > 0) {
+        oauth.extraAuthParams = { ...d.extraAuthParams };
+      }
     }
     if (d.modelsDiscoveryUrl) oauth.modelsDiscoveryUrl = d.modelsDiscoveryUrl.trim();
     out.auth = { method: 'oauth', oauth };
+  } else if (config.auth?.method === 'none') {
+    out.auth = { method: 'none' };
   }
   return out;
 }
@@ -268,10 +412,11 @@ function parseAuth(raw: string | null): CustomProviderConfig['auth'] {
   } catch {
     return undefined;
   }
-  const r = validateOAuthSection(v);
+  const r = validateAuthSection(v);
   if (!r.ok) return undefined;
-  const a = v as { method: 'apiKey' | 'oauth'; oauth?: OAuthProviderDescriptor };
-  return a.method === 'oauth' ? a : undefined;
+  const a = v as CustomProviderConfig['auth'];
+  if (a?.method === 'oauth' || a?.method === 'none') return a;
+  return undefined;
 }
 
 /** 安全解析 runtimes JSON（坏数据兜底为 {}，逐字段防御）。 */
@@ -315,6 +460,9 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
     ) {
       entry.wireProtocol = r.wireProtocol;
     }
+    if (isProviderRequestPath(r.requestPath)) {
+      entry.requestPath = r.requestPath;
+    }
     if (r.headers && typeof r.headers === 'object' && !Array.isArray(r.headers)) {
       entry.headers = r.headers as Record<string, string>;
     }
@@ -326,7 +474,16 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
 
 function rowToConfig(row: typeof customProviders.$inferSelect): CustomProviderConfig {
   const auth = parseAuth(row.auth);
-  return { id: row.id, name: row.name, ...(auth ? { auth } : {}), runtimes: parseRuntimes(row.runtimes) };
+  const runtimes = parseRuntimes(row.runtimes);
+  // #527 之前保存的远程 auth:none 记录保留原始表单数据，供设置页展示和修复。
+  // buildUserProvider 会把不满足当前 loopback 边界的 runtime 标成 disabled；路由解析
+  // 一律拒绝 disabled 描述符，因此不会把历史远程 endpoint 重新解释成 API-key 路由。
+  return {
+    id: row.id,
+    name: row.name,
+    ...(auth ? { auth } : {}),
+    runtimes,
+  };
 }
 
 /** 列出当前账号的全部自定义供应商（按 sortOrder 升序，再按 createdAt）。 */
@@ -394,10 +551,47 @@ export async function updateCustomProvider(
       name: c.name,
       runtimes: JSON.stringify(c.runtimes),
       auth: c.auth ? JSON.stringify(c.auth) : null,
-      updatedAt: now,
+      updatedAt: Math.max(now, existing.updatedAt + 1),
     })
     .where(eq(customProviders.id, id));
   return c;
+}
+
+/**
+ * 仅当配置仍与调用方读取的快照一致时更新。供 OAuth 登录后的异步模型发现使用：
+ * 用户若在网络请求期间编辑了供应商，旧结果不能覆盖新配置。
+ */
+export async function updateCustomProviderIfUnchanged(
+  id: string,
+  expected: CustomProviderConfig,
+  config: CustomProviderConfig,
+  now: number = Date.now(),
+): Promise<boolean> {
+  const expectedConfig = normalizeConfig({ ...expected, id });
+  const nextConfig = normalizeConfig({ ...config, id });
+  const db = getDbClient().drizzle;
+  const existing = await db.select().from(customProviders).where(eq(customProviders.id, id)).get();
+  if (!existing) return false;
+  const expectedRuntimes = JSON.stringify(expectedConfig.runtimes);
+  const expectedAuth = expectedConfig.auth ? JSON.stringify(expectedConfig.auth) : null;
+  if (
+    existing.name !== expectedConfig.name
+    || existing.runtimes !== expectedRuntimes
+    || existing.auth !== expectedAuth
+  ) return false;
+  const result = await db
+    .update(customProviders)
+    .set({
+      name: nextConfig.name,
+      runtimes: JSON.stringify(nextConfig.runtimes),
+      auth: nextConfig.auth ? JSON.stringify(nextConfig.auth) : null,
+      updatedAt: Math.max(now, existing.updatedAt + 1),
+    })
+    .where(and(
+      eq(customProviders.id, id),
+      eq(customProviders.updatedAt, existing.updatedAt),
+    ));
+  return result.changes === 1;
 }
 
 /** 删除（幂等：不存在也不报错）。 */

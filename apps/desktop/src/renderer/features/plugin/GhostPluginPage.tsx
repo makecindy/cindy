@@ -34,7 +34,7 @@ import {
 import { patchDraft } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { confirmAndInstallGhost, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
-import { GhostPermissionDiffView } from '@/cindy-brain/GhostPermissionList';
+import { GhostPermissionList, GhostUpdateReview } from '@/cindy-brain/GhostPermissionList';
 import { cn } from '@/lib/utils';
 import { Switch } from '@/components/ui/switch';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
@@ -42,6 +42,7 @@ import { findSplitChildByPanelKind } from '../../../shared/layoutTree';
 import {
   diffGhostPermissionItems,
   ghostPanelKind,
+  ghostPermissionItems,
   type GhostSetupStatus,
 } from '../../../shared/ghost';
 import type {
@@ -68,6 +69,7 @@ import { GhostPluginIcon } from './GhostPluginIcon';
 import { MarketPluginDetailView } from './MarketPluginDetailView';
 import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker';
 import {
+  orderPluginCatalogItems,
   pluginPresentationOrigin,
   type PluginPresentationOrigin,
 } from './lib/pluginMarketPresentation';
@@ -362,6 +364,10 @@ export function GhostPluginPage() {
           ),
     [effectiveOriginFilter, searchedAvailableMarketItems],
   );
+  const catalogItems = useMemo(
+    () => orderPluginCatalogItems(marketItems, items, availableMarketItems),
+    [availableMarketItems, items, marketItems],
+  );
   const originCounts = useMemo(() => {
     const counts: Record<PluginPresentationOrigin, number> = {
       public: 0,
@@ -451,13 +457,14 @@ export function GhostPluginPage() {
             from: installedGhost?.manifest.version ?? next.version,
             to: next.version,
           }),
-          content: <GhostPermissionDiffView diff={diff} />,
+          content: <GhostUpdateReview diff={diff} />,
           maxWidth: 520,
           confirmText: t('settings.ghosts.updateConfirm.confirm'),
           cancelText: t('settings.ghosts.updateConfirm.cancel'),
         });
         if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
         const result = await window.electronAPI.pluginMarket.install(marketItem.pluginId, {
+          expectedReleaseId: next.releaseId,
           allowPermissionExpansion: diff.added.length > 0,
         });
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
@@ -693,23 +700,88 @@ export function GhostPluginPage() {
     // 旧确认回调恢复后必须先验权,不能在新会话里继续安装。
     const marketBusyLease = acquireMarketBusy(marketDetail.pluginId);
     if (!marketBusyLease) return;
+    // 详情页按钮在 update-available 态复用本入口,后端走原位更新并保留
+    // 生效状态 —— 文案必须分支,不能对更新路径承诺"装完即开"(review P1)。
+    const isUpdate = marketDetail.installState === 'update-available';
+    // 装完即开意味着"确认安装"就是运行授权,确认框里必须如实展示权限清单
+    // (与本地装入确认框同一信息量,review P1):首装展示完整清单,更新展示
+    // 与已装版本的权限 diff,并据此决定 allowPermissionExpansion(否则扩权
+    // 更新从本入口必被 main 的 PRECONDITION_FAILED 拦下)。更新详情来自 Main
+    // 的现查事实,renderer 的 ghosts 推送缓存可能短暂滞后;仅在 update 态且缓存
+    // 缺目标时,用既有 listSync 向 Main 现查一次。仍缺失说明状态已经变化,
+    // 让后端按原有校验拒绝,绝不能拿新清单和自己做 diff 吞掉新增权限。
+    let installedGhost =
+      ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
+    if (isUpdate && !installedGhost) {
+      try {
+        installedGhost =
+          window.electronAPI.ghosts
+            .listSync()
+            .ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
+      } catch {
+        // bridge 不可用/状态切换时保持 null;下面不展示伪造的空 diff,
+        // 安装调用也不放开 permission expansion,Main 会按真实状态 fail closed。
+      }
+    }
+    if (isUpdate && !installedGhost) {
+      // detail 仍说可更新、Main 的实时已装清单却没有目标:这是明确的状态
+      // 变化,不要展示伪造的空 diff 后让用户确认一次必失败的更新。
+      if (isMarketBusyLeaseActive(marketBusyLease)) {
+        toast.error(t('settings.ghosts.market.errors.stateChanged'));
+      }
+      releaseMarketBusy(marketBusyLease);
+      await refreshMarket();
+      return;
+    }
+    const diff = isUpdate
+      ? diffGhostPermissionItems(installedGhost!.manifest, marketDetail.manifest)
+      : null;
     try {
       const confirmed = await confirm({
-        title: t('settings.ghosts.market.installConfirmTitle', {
-          name: marketDetail.name,
-        }),
-        description: t('settings.ghosts.market.installConfirmDescription'),
-        confirmText: t('settings.ghosts.market.install'),
-        cancelText: t('settings.ghosts.installConfirm.cancel'),
+        title: isUpdate
+          ? t('settings.ghosts.updateConfirm.title', { name: marketDetail.name })
+          : t('settings.ghosts.market.installConfirmTitle', {
+              name: marketDetail.name,
+            }),
+        description: isUpdate
+          ? t('settings.ghosts.market.updateConfirmDescription')
+          : t('settings.ghosts.market.installConfirmDescription'),
+        // 限高与滚动交给共享 ConfirmDialog(max-h-[85vh] + 内部滚动区 + 打开时
+        // 闪一下滚动条),这里不再自套一层 min(56vh,520px) —— 两层限高会让
+        // "到底了没有"取决于内外层谁先触底(2026-07-27 收口)。
+        content: isUpdate ? (
+          <GhostUpdateReview diff={diff!} />
+        ) : (
+          <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
+        ),
+        maxWidth: 520,
+        confirmText: isUpdate
+          ? t('settings.ghosts.updateConfirm.confirm')
+          : t('settings.ghosts.market.install'),
+        cancelText: isUpdate
+          ? t('settings.ghosts.updateConfirm.cancel')
+          : t('settings.ghosts.installConfirm.cancel'),
         autoFocusConfirm: true,
       });
       if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
-      const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId);
+      const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId, {
+        expectedReleaseId: marketDetail.releaseId,
+        ...(isUpdate && diff!.added.length > 0
+          ? { allowPermissionExpansion: true }
+          : {}),
+      });
       if (!isMarketBusyLeaseActive(marketBusyLease)) return;
+      // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
+      // 用"已更新"(生效状态未被改变)。
       toast.success(
-        t('settings.ghosts.toast.installedAsleep', {
-          name: result.ghost.manifest.name,
-        }),
+        isUpdate
+          ? t('settings.ghosts.toast.updated', {
+              name: result.ghost.manifest.name,
+              version: result.ghost.manifest.version,
+            })
+          : t('settings.ghosts.toast.installed', {
+              name: result.ghost.manifest.name,
+            }),
       );
       setMarketDetail(null);
       setSelectedId(result.ghost.manifest.id);
@@ -724,6 +796,7 @@ export function GhostPluginPage() {
   }, [
     acquireMarketBusy,
     confirm,
+    ghosts,
     isMarketBusyLeaseActive,
     marketDetail,
     refreshMarket,
@@ -917,34 +990,40 @@ export function GhostPluginPage() {
               />
             ) : null}
 
-            {items.length > 0 || availableMarketItems.length > 0 ? (
+            {catalogItems.length > 0 ? (
               <div className={cn('plugin-motion-stagger', PLUGIN_MANAGEMENT_CARD_GRID_CLASS)}>
-                {items.map((item) => (
-                  <GhostPluginCard
-                    key={item.id}
-                    item={item}
-                    sourceLabel={t(`settings.ghosts.page.origin.${item.origin}`)}
-                    onSelect={() => setSelectedId(item.id)}
-                    onAction={() => void handleUseGhost(item.id)}
-                    updateVersion={item.marketUpdate?.version}
-                    updateBusy={item.marketUpdate !== null && marketBusyId !== null}
-                    onUpdate={
-                      item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
-                    }
-                    effectiveEnabled={effectiveEnabled(item.id, item.enabled)}
-                    toggleDisabled={scopeDir !== null && !item.enabled}
-                    onToggle={(enabled) => void handleToggle(item.id, enabled)}
-                  />
-                ))}
-                {availableMarketItems.map((item) => (
-                  <MarketPluginCard
-                    key={item.pluginId}
-                    item={item}
-                    busy={marketBusyId !== null}
-                    onSelect={() => void handleSelectMarket(item.pluginId)}
-                    onIconLoadError={handleMarketIconLoadError}
-                  />
-                ))}
+                {catalogItems.map((catalogItem) =>
+                  catalogItem.kind === 'installed' ? (
+                    <GhostPluginCard
+                      key={`installed:${catalogItem.item.id}`}
+                      item={catalogItem.item}
+                      sourceLabel={t(`settings.ghosts.page.origin.${catalogItem.item.origin}`)}
+                      onSelect={() => setSelectedId(catalogItem.item.id)}
+                      onAction={() => void handleUseGhost(catalogItem.item.id)}
+                      updateVersion={catalogItem.item.marketUpdate?.version}
+                      updateBusy={catalogItem.item.marketUpdate !== null && marketBusyId !== null}
+                      onUpdate={
+                        catalogItem.item.marketUpdate
+                          ? () => void handleMarketUpdate(catalogItem.item.id)
+                          : undefined
+                      }
+                      effectiveEnabled={effectiveEnabled(
+                        catalogItem.item.id,
+                        catalogItem.item.enabled,
+                      )}
+                      toggleDisabled={scopeDir !== null && !catalogItem.item.enabled}
+                      onToggle={(enabled) => void handleToggle(catalogItem.item.id, enabled)}
+                    />
+                  ) : (
+                    <MarketPluginCard
+                      key={`market:${catalogItem.item.pluginId}`}
+                      item={catalogItem.item}
+                      busy={marketBusyId !== null}
+                      onSelect={() => void handleSelectMarket(catalogItem.item.pluginId)}
+                      onIconLoadError={handleMarketIconLoadError}
+                    />
+                  ),
+                )}
               </div>
             ) : !legacyRecoveryStatus ? (
               <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-5 py-10 text-center">
@@ -1039,7 +1118,12 @@ export function MarketPluginCard({
         type="button"
         onClick={onSelect}
         disabled={busy || item.installState === 'conflict'}
-        className="flex min-w-0 flex-1 items-start gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-wait"
+        className={cn(
+          'flex min-w-0 flex-1 items-start gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+          item.installState === 'conflict'
+            ? 'disabled:cursor-not-allowed'
+            : 'disabled:cursor-wait',
+        )}
         aria-label={item.name}
       >
         <GhostPluginIcon

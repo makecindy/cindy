@@ -1,10 +1,10 @@
 {
  "gate": "interaction",
  "pass": true,
- "total": 45,
- "passed": 45,
+ "total": 48,
+ "passed": 48,
  "failures": 0,
- "generatedAt": "2026-07-25T21:42:39.853Z",
+ "generatedAt": "2026-07-26T05:42:37.014Z",
  "results": [
   {
    "id": "overlay:desk",
@@ -69,12 +69,12 @@
   {
    "id": "gap-link:desk:completed",
    "pass": true,
-   "detail": "正文↔我知道了=22.0(期望 22)"
+   "detail": "正文↔我知道了=11.0(期望 11.0 = 22×0.5000)"
   },
   {
    "id": "gap-bottom:desk:completed",
    "pass": true,
-   "detail": "我知道了↔气泡底=21.0(拍板恒定 20)"
+   "detail": "我知道了↔气泡底=11.0(期望 10.0 = padding 20×0.5000,含 1px 描边容差)"
   },
   {
    "id": "copy-center:desk:completed",
@@ -84,17 +84,17 @@
   {
    "id": "hit-area:desk:completed",
    "pass": true,
-   "detail": "命中区 104×45(≥44)"
+   "detail": "命中区 60×23(期望高 22.5 = (23+2×11)×0.5000)"
   },
   {
    "id": "gap-link:desk:stress",
    "pass": true,
-   "detail": "正文↔我知道了=22.0(期望 22)"
+   "detail": "正文↔我知道了=11.0(期望 11.0 = 22×0.5000)"
   },
   {
    "id": "gap-bottom:desk:stress",
    "pass": true,
-   "detail": "我知道了↔气泡底=21.0(拍板恒定 20)"
+   "detail": "我知道了↔气泡底=11.0(期望 10.0 = padding 20×0.5000,含 1px 描边容差)"
   },
   {
    "id": "copy-center:desk:stress",
@@ -104,22 +104,22 @@
   {
    "id": "hit-area:desk:stress",
    "pass": true,
-   "detail": "命中区 104×45(≥44)"
+   "detail": "命中区 60×23(期望高 22.5 = (23+2×11)×0.5000)"
   },
   {
    "id": "stress-grows:desk",
    "pass": true,
-   "detail": "压力态撑高 184 > completed 138"
+   "detail": "压力态撑高 94 > completed 71 + 17.3"
   },
   {
    "id": "gap-link:phone:completed",
    "pass": true,
-   "detail": "正文↔我知道了=22.0(期望 22)"
+   "detail": "正文↔我知道了=11.4(期望 11.4 = 22×0.5200)"
   },
   {
    "id": "gap-bottom:phone:completed",
    "pass": true,
-   "detail": "我知道了↔气泡底=21.0(拍板恒定 20)"
+   "detail": "我知道了↔气泡底=11.4(期望 10.4 = padding 20×0.5200,含 1px 描边容差)"
   },
   {
    "id": "copy-center:phone:completed",
@@ -129,17 +129,17 @@
   {
    "id": "hit-area:phone:completed",
    "pass": true,
-   "detail": "命中区 120×47(≥44)"
+   "detail": "命中区 82×33.8(期望高 33.8,边界内取最大;整个登录 stage 同缩放)"
   },
   {
    "id": "gap-link:phone:stress",
    "pass": true,
-   "detail": "正文↔我知道了=22.0(期望 22)"
+   "detail": "正文↔我知道了=11.4(期望 11.4 = 22×0.5200)"
   },
   {
    "id": "gap-bottom:phone:stress",
    "pass": true,
-   "detail": "我知道了↔气泡底=21.0(拍板恒定 20)"
+   "detail": "我知道了↔气泡底=11.4(期望 10.4 = padding 20×0.5200,含 1px 描边容差)"
   },
   {
    "id": "copy-center:phone:stress",
@@ -149,87 +149,102 @@
   {
    "id": "hit-area:phone:stress",
    "pass": true,
-   "detail": "命中区 120×47(≥44)"
+   "detail": "命中区 82×33.8(期望高 33.8,边界内取最大;整个登录 stage 同缩放)"
   },
   {
    "id": "stress-grows:phone",
    "pass": true,
-   "detail": "压力态撑高 276 > completed 138"
+   "detail": "压力态撑高 97 > completed 73 + 17.9"
   },
   {
    "id": "desk-clamp:800",
    "pass": true,
-   "detail": "宽=670.0(期望 670=min(670,800-48))"
+   "detail": "宽=335.0(期望 335.0=min(670×0.5, 800-24))"
   },
   {
    "id": "desk-top:800",
    "pass": true,
-   "detail": "top=72.0(恒定 72)"
+   "detail": "top=36.0(恒定 72×0.5=36.0)"
   },
   {
    "id": "desk-center:800",
    "pass": true,
-   "detail": "left=65.0(水平居中)"
+   "detail": "left=232.5(水平居中)"
   },
   {
    "id": "desk-clamp:717",
    "pass": true,
-   "detail": "宽=669.0(期望 669=min(670,717-48))"
+   "detail": "宽=335.0(期望 335.0=min(670×0.5, 717-24))"
   },
   {
    "id": "desk-top:717",
    "pass": true,
-   "detail": "top=72.0(恒定 72)"
+   "detail": "top=36.0(恒定 72×0.5=36.0)"
   },
   {
    "id": "desk-center:717",
    "pass": true,
-   "detail": "left=24.0(水平居中)"
+   "detail": "left=191.0(水平居中)"
   },
   {
    "id": "desk-clamp:600",
    "pass": true,
-   "detail": "宽=552.0(期望 552=min(670,600-48))"
+   "detail": "宽=335.0(期望 335.0=min(670×0.5, 600-24))"
   },
   {
    "id": "desk-top:600",
    "pass": true,
-   "detail": "top=72.0(恒定 72)"
+   "detail": "top=36.0(恒定 72×0.5=36.0)"
   },
   {
    "id": "desk-center:600",
    "pass": true,
-   "detail": "left=24.0(水平居中)"
+   "detail": "left=132.5(水平居中)"
   },
   {
    "id": "phone-clamp:390",
    "pass": true,
-   "detail": "宽=335.0(期望 335=min(335,390-40))"
+   "detail": "宽=348.4(期望 348.4 = 670×0.5200)"
+  },
+  {
+   "id": "phone-margin:390",
+   "pass": true,
+   "detail": "左边距=20.8(期望 20.8 = 设计 40×0.5200)"
   },
   {
    "id": "phone-center:390",
    "pass": true,
-   "detail": "left=27.5(水平居中)"
+   "detail": "left=20.8(水平居中)"
   },
   {
    "id": "phone-clamp:374",
    "pass": true,
-   "detail": "宽=334.0(期望 334=min(335,374-40))"
+   "detail": "宽=334.1(期望 334.1 = 670×0.4987)"
+  },
+  {
+   "id": "phone-margin:374",
+   "pass": true,
+   "detail": "左边距=19.9(期望 19.9 = 设计 40×0.4987)"
   },
   {
    "id": "phone-center:374",
    "pass": true,
-   "detail": "left=20.0(水平居中)"
+   "detail": "left=19.9(水平居中)"
   },
   {
    "id": "phone-clamp:335",
    "pass": true,
-   "detail": "宽=295.0(期望 295=min(335,335-40))"
+   "detail": "宽=299.3(期望 299.3 = 670×0.4467)"
+  },
+  {
+   "id": "phone-margin:335",
+   "pass": true,
+   "detail": "左边距=17.9(期望 17.9 = 设计 40×0.4467)"
   },
   {
    "id": "phone-center:335",
    "pass": true,
-   "detail": "left=20.0(水平居中)"
+   "detail": "left=17.9(水平居中)"
   }
  ]
 }

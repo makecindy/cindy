@@ -25,11 +25,14 @@ import {
   formatHostHeader,
   isLoopbackHostname,
   OutboundProxyAgentPool,
+  outboundProxyAgentKey,
   parseOutboundProxyUrl,
   redactProxyUrlForLog,
+  TunnelingHttpsAgent,
+  type OutboundProxyAgent,
   type OutboundProxyTarget,
-  type TunnelingHttpsAgent,
 } from './outbound-proxy.js';
+import { Socks5HttpAgent, Socks5HttpsAgent } from './socks5.js';
 import { stripNonAnthropicFields, stripToolUseProviderSpecificFields } from './transform.js';
 import type {
   LocalRequestHandler,
@@ -103,6 +106,7 @@ interface UpstreamTarget {
   port: number;
   protocol: 'http:' | 'https:';
   basePath: string;  // 上游路径前缀(例 "" 或 "/v1")
+  baseQuery: string; // 不含前导 '?'
 }
 
 /**
@@ -111,8 +115,11 @@ interface UpstreamTarget {
  */
 interface ResolvedOutboundProxy {
   target: OutboundProxyTarget;
-  /** https 上游用的 CONNECT 隧道 agent;http 上游走绝对形式请求,不需要 agent。 */
-  agent?: TunnelingHttpsAgent;
+  /**
+   * 转发要挂的 agent。HTTP 代理:https 上游用 CONNECT 隧道 agent,http 上游走绝对形式
+   * 请求不需要 agent(undefined);SOCKS5:两种上游都靠 agent 建隧道,恒有值。
+   */
+  agent?: OutboundProxyAgent;
 }
 
 function parseUpstream(upstream: string): UpstreamTarget {
@@ -125,6 +132,7 @@ function parseUpstream(upstream: string): UpstreamTarget {
     port: u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80),
     protocol: u.protocol,
     basePath: u.pathname.replace(/\/+$/, ''),  // 去末尾斜杠,防止后面拼出双斜杠
+    baseQuery: u.search.slice(1),
   };
 }
 
@@ -138,7 +146,8 @@ function formatUpstreamBase(t: UpstreamTarget): string {
   return (
     `${t.protocol}//${t.hostname}` +
     (t.port === defaultPort ? '' : `:${t.port}`) +
-    t.basePath
+    t.basePath +
+    (t.baseQuery ? `?${t.baseQuery}` : '')
   );
 }
 
@@ -249,6 +258,33 @@ function respondRoutingFailure(
     return;
   }
   res.destroy(err instanceof Error ? err : new Error(String(err)));
+}
+
+/** 路由层是最后的信任边界；任何调用方给出的路径覆盖都必须保持同源且不可注入 header。 */
+function isSafePathOverride(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const queryIndex = value.indexOf('?');
+  const pathname = queryIndex === -1 ? value : value.slice(0, queryIndex);
+  const hasEncodedPathSeparator = /%(?:2f|5c)/i.test(pathname);
+  const hasDotSegment = pathname
+    .split('/')
+    .some((segment) => {
+      const normalizedDots = segment.replace(/%2e/gi, '.');
+      return normalizedDots === '.' || normalizedDots === '..';
+    });
+  return (
+    value.length >= 1
+    && value.length <= 2_048
+    && value.startsWith('/')
+    && !value.startsWith('//')
+    && !value.includes('#')
+    && !value.includes('\\')
+    && !/[^\u0021-\u007e]/.test(value)
+    && /^\/[A-Za-z0-9\-._~%!$&()*+,;=:@/?]*$/.test(value)
+    && !/%(?![0-9A-Fa-f]{2})/.test(value)
+    && !hasEncodedPathSeparator
+    && !hasDotSegment
+  );
 }
 
 function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
@@ -604,6 +640,8 @@ function forward(
   clientModel = '',
   // 请求处理层解析好的出站代理;undefined = 直连(与扩展前字节级一致)。
   outboundProxy?: ResolvedOutboundProxy,
+  // 精确推理路径覆盖；省略时沿用客户端原始 path。
+  pathOverride?: string,
 ): void {
   // 客户端已断开(典型:400 缓冲期间断开后走到透明重试)——'close' 已经发过,
   // 下面挂的中断传播 listener 永远不会触发,直接不发起上游请求。
@@ -622,7 +660,14 @@ function forward(
     }
   }
   const reqFn = actualTarget.protocol === 'https:' ? httpsRequest : httpRequest;
-  const upstreamPath = `${actualTarget.basePath}${path.startsWith('/') ? path : '/' + path}`;
+  const routedPath = pathOverride ?? path;
+  const queryIndex = routedPath.indexOf('?');
+  const routedPathname = queryIndex === -1 ? routedPath : routedPath.slice(0, queryIndex);
+  const routedQuery = queryIndex === -1 ? '' : routedPath.slice(queryIndex + 1);
+  const upstreamPathname =
+    `${actualTarget.basePath}${routedPathname.startsWith('/') ? routedPathname : '/' + routedPathname}`;
+  const upstreamQuery = [actualTarget.baseQuery, routedQuery].filter(Boolean).join('&');
+  const upstreamPath = upstreamQuery ? `${upstreamPathname}?${upstreamQuery}` : upstreamPathname;
 
   // http.request 会把 options 原样透传给 agent.createConnection → net.connect,
   // 所以 socket 级 connect 选项运行时有效;但 @types/node 的 RequestOptions 没收录
@@ -641,7 +686,12 @@ function forward(
     autoSelectFamilyAttemptTimeout: UPSTREAM_CONNECT_ATTEMPT_TIMEOUT_MS,
   };
   if (outboundProxy) {
-    if (actualTarget.protocol === 'https:') {
+    if (outboundProxy.target.kind === 'socks5') {
+      // SOCKS5 是 L4 隧道:握手由 agent 完成,请求本身照常发给真实上游 ——
+      // hostname / port / path / Host 头一律不动(没有绝对形式请求这回事),
+      // 目标域名也不在本地解析,交给代理端(见 socks5.ts 文件头)。
+      upstreamOptions.agent = outboundProxy.agent;
+    } else if (actualTarget.protocol === 'https:') {
       // https 上游:经 CONNECT 隧道 agent 转发(TLS 端到端,代理只见密文)。
       upstreamOptions.agent = outboundProxy.agent;
     } else {
@@ -758,6 +808,7 @@ function forward(
             responseObserver,
             clientModel,
             outboundProxy,
+            pathOverride,
           );
           return;
         }
@@ -774,6 +825,7 @@ function forward(
               upstreamBase: formatUpstreamBase(actualTarget),
               status,
               requestHeaders: headers,
+              outboundHeaders: actualHeaders,
               responseHeaders: flattenResponseHeaders(upstreamRes.headers),
               requestBody: body,
             }) ?? null;
@@ -823,6 +875,7 @@ function forward(
           upstreamBase: formatUpstreamBase(actualTarget),
           status,
           requestHeaders: headers,
+          outboundHeaders: actualHeaders,
           responseHeaders: flattenResponseHeaders(upstreamRes.headers),
           requestBody: body,
         }) ?? null;
@@ -992,7 +1045,20 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     overrideTarget?: UpstreamTarget;
     headerOverride?: Record<string, string>;
     headerDelete?: readonly string[];
+    pathOverride?: string;
   } | null => {
+    const pathOverride = decision?.pathOverride;
+    if (pathOverride !== undefined && !isSafePathOverride(pathOverride)) {
+      respondRoutingFailure(
+        res,
+        logger,
+        reqId,
+        502,
+        'selected request path invalid',
+        new Error('routingTransform returned an unsafe pathOverride'),
+      );
+      return null;
+    }
     let overrideTarget: UpstreamTarget | undefined;
     try {
       overrideTarget = decision?.upstreamOverride
@@ -1014,6 +1080,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       overrideTarget,
       headerOverride: decision?.headerOverride,
       headerDelete: decision?.headerDelete,
+      pathOverride,
     };
   };
 
@@ -1056,9 +1123,21 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       proxy: parsed.url,
       upstream: upstreamOrigin,
     });
+    const agentKey = outboundProxyAgentKey(parsed, target.protocol);
+    if (parsed.kind === 'socks5') {
+      // SOCKS5 两种上游都要 agent:https 在隧道上做 TLS,http 直接用隧道当连接。
+      return {
+        target: parsed,
+        agent: outboundAgentPool.get(agentKey, () => (target.protocol === 'https:'
+          ? new Socks5HttpsAgent(parsed)
+          : new Socks5HttpAgent(parsed))),
+      };
+    }
     return {
       target: parsed,
-      agent: target.protocol === 'https:' ? outboundAgentPool.get(parsed) : undefined,
+      agent: target.protocol === 'https:'
+        ? outboundAgentPool.get(agentKey, () => new TunnelingHttpsAgent(parsed))
+        : undefined,
     };
   };
 
@@ -1137,6 +1216,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         opts.responseObserver,
         '',
         await resolveOutboundForTarget(route.target, reqId),
+        route.pathOverride,
       );
       return;
     }
@@ -1269,6 +1349,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       opts.responseObserver,
       extractBodyModel(rawBody),
       await resolveOutboundForTarget(route.target, reqId),
+      route.pathOverride,
     );
   });
 

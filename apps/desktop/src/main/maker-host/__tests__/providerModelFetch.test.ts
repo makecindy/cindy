@@ -4,7 +4,7 @@
  * （模式同 providerDiagnostics.test.ts）。
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import {
   buildModelsFetchRequest,
@@ -28,6 +28,14 @@ describe('buildModelsFetchRequest', () => {
     ).toBe('https://openrouter.ai/api/v1/models');
   });
 
+  it('preserves base URL query parameters while appending the discovery pathname', () => {
+    expect(
+      buildModelsFetchRequest(
+        spec({ agent: 'codex', baseUrl: 'https://openrouter.ai/api/v1?tenant=a#ignored' }),
+      ).url,
+    ).toBe('https://openrouter.ai/api/v1/models?tenant=a');
+  });
+
   it('explicit modelsUrl wins over derivation only when same-host as baseUrl', () => {
     // 同主机（Moonshot 形态：baseUrl …/anthropic，列模型在同 host 的 /v1/models）→ 采用。
     expect(
@@ -42,10 +50,19 @@ describe('buildModelsFetchRequest', () => {
   });
 
   it('cc wire sends anthropic-version + x-api-key + Bearer; codex wire sends Bearer only', () => {
-    const cc = buildModelsFetchRequest(spec()).init.headers as Record<string, string>;
+    const cc = buildModelsFetchRequest(spec({
+      headers: {
+        Authorization: 'Bearer stale',
+        'X-API-Key': 'stale',
+        'x-extra': '1',
+      },
+    })).init.headers as Record<string, string>;
     expect(cc['anthropic-version']).toBe('2023-06-01');
     expect(cc['x-api-key']).toBe('sk-test');
     expect(cc['authorization']).toBe('Bearer sk-test');
+    expect(cc.Authorization).toBeUndefined();
+    expect(cc['X-API-Key']).toBeUndefined();
+    expect(cc['x-extra']).toBe('1');
 
     const codex = buildModelsFetchRequest(spec({ agent: 'codex' })).init.headers as Record<string, string>;
     expect(codex['anthropic-version']).toBeUndefined();
@@ -60,9 +77,58 @@ describe('buildModelsFetchRequest', () => {
     expect(h['authorization']).toBeUndefined();
     expect(h['x-extra']).toBe('1');
   });
+
+  it.each(['none', 'oauth'] as const)(
+    'strips legacy credential headers for %s auth even without an apiKey',
+    (authMethod) => {
+      const h = buildModelsFetchRequest(spec({
+        authMethod,
+        apiKey: null,
+        headers: {
+          Authorization: 'Bearer legacy',
+          'X-API-Key': 'legacy',
+          'x-extra': '1',
+        },
+      })).init.headers as Record<string, string>;
+
+      expect(h.Authorization).toBeUndefined();
+      expect(h['X-API-Key']).toBeUndefined();
+      expect(h.authorization).toBeUndefined();
+      expect(h['x-api-key']).toBeUndefined();
+      expect(h['x-extra']).toBe('1');
+    },
+  );
 });
 
 describe('fetchProviderModels', () => {
+  it.each([
+    {
+      baseUrl: 'https://remote.example/v1',
+      modelsUrl: null,
+    },
+    {
+      baseUrl: 'http://127.0.0.1:4000/v1',
+      modelsUrl: 'https://remote.example/v1/models',
+    },
+  ])('returns a structured failure for non-loopback no-auth discovery: %j', async (urls) => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const result = await fetchProviderModels(
+      spec({
+        ...urls,
+        authMethod: 'none',
+        apiKey: null,
+      }),
+      fetchImpl,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'UNKNOWN',
+      detail: 'no-auth provider model discovery requires loopback URLs',
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('parses OpenAI {data:[{id}]} shape, preferring display_name/name for labels', async () => {
     const r = await fetchProviderModels(spec(), async () =>
       fakeResponse(

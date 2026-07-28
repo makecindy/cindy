@@ -273,6 +273,37 @@ const RESULT_ICON: Record<OAuthResultPageVariant, string> = {
 };
 
 /**
+ * 结果页内联布局脚本(U-10:整卡等比缩放 + 水平居中)。
+ *
+ * 抽成导出常量而不是直接内联在模板串里,是为了让**需要它 CSP sha256 的一方直接对
+ * 这段源文本取值**——托管回调把结果页搬到 auth-server 后,导出脚本要为每页算
+ * `script-src 'sha256-…'`。从渲染完成的 HTML 里反向抠这段,既依赖 HTML 解析细节,
+ * 也会被 CodeQL 当成「对渲染结果做哈希」误报。直接引用常量则两端拿到同一份逐字节
+ * 内容。
+ *
+ * 改动这里等于改动 CSP hash,必须重新导出模板并同步到 auth-server。
+ */
+export const LOGIN_CALLBACK_LAYOUT_SCRIPT = `
+/* U-10 demo 冻结公式:卡内 680 几何零响应式,整卡等比缩放,transform-origin=top
+   center 语义经「缩放尺寸 wrapper + margin auto」实现水平居中;stage 布局高度取
+   缩放后尺寸,缩到仍放不下时溢出走 body 纵向滚动,不裁 CTA。 */
+(function(){
+var card=document.getElementById('card'),stage=document.getElementById('stage');
+function fit(){
+var w=window.innerWidth,h=window.innerHeight;
+var topOffset=w<760?88:80;
+var scale=Math.min(1,(w-32)/680,(h-topOffset-24)/680);
+card.style.transform='scale('+scale+')';
+stage.style.width=(680*scale)+'px';
+stage.style.height=(680*scale)+'px';
+stage.style.marginTop=topOffset+'px';
+}
+window.addEventListener('resize',fit);
+fit();
+})();
+`;
+
+/**
  * wave4 新品牌回调卡(仅 pageKind='desktop-login',PR3)。
  *
  * 参数权威:callback-pages-classification.md「新设计三类卡片规格」(figma §6.1,
@@ -335,25 +366,7 @@ ${detail}
 ${action}
 </main>
 </div>
-<script>
-/* U-10 demo 冻结公式:卡内 680 几何零响应式,整卡等比缩放,transform-origin=top
-   center 语义经「缩放尺寸 wrapper + margin auto」实现水平居中;stage 布局高度取
-   缩放后尺寸,缩到仍放不下时溢出走 body 纵向滚动,不裁 CTA。 */
-(function(){
-var card=document.getElementById('card'),stage=document.getElementById('stage');
-function fit(){
-var w=window.innerWidth,h=window.innerHeight;
-var topOffset=w<760?88:80;
-var scale=Math.min(1,(w-32)/680,(h-topOffset-24)/680);
-card.style.transform='scale('+scale+')';
-stage.style.width=(680*scale)+'px';
-stage.style.height=(680*scale)+'px';
-stage.style.marginTop=topOffset+'px';
-}
-window.addEventListener('resize',fit);
-fit();
-})();
-</script>
+<script>${LOGIN_CALLBACK_LAYOUT_SCRIPT}</script>
 </body>
 </html>`;
 }
