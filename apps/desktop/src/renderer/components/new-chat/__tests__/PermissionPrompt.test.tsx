@@ -17,6 +17,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PermissionModeDescriptor } from '@/hooks/useAgentCapabilities';
 import type { PendingPermission } from '@/lib/makerChatStore';
 
+// 仓库同款 i18n mock:t 返回 key 本身(带参时拼上参数便于断言)。
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, args?: Record<string, unknown>) =>
+      args && Object.keys(args).length > 0 ? `${key}:${JSON.stringify(args)}` : key,
+  }),
+}));
+
 // 真实 PermissionSelector 会拉 capabilities / i18n / MorphPopover;这里只验它被挂上、
 // 拿到了当前档,弹层与配色由 PermissionSelector 自己的用例负责。
 vi.mock('../PermissionSelector', () => ({
@@ -51,7 +59,7 @@ describe('PermissionPrompt modeSwitch', () => {
     render(<PermissionPrompt permission={PERMISSION} onRespond={vi.fn()} />);
 
     expect(screen.queryByTestId('permission-chip')).toBeNull();
-    expect(screen.getByText('Allow once')).toBeTruthy();
+    expect(screen.getByText('agentIsland.native.allowOnce')).toBeTruthy();
   });
 
   it('传入时把当前档挂到卡片上', () => {
@@ -162,6 +170,40 @@ describe('PermissionPrompt modeSwitch', () => {
 
     expect(onRespond).not.toHaveBeenCalled();
     document.body.removeChild(dialog);
+  });
+
+  // 档位菜单是 MorphPopover,portal 到 body、不在卡片 DOM 子树内。不挡的话键盘用户
+  // 在菜单里按 Esc 关菜单会顺带 Deny 掉请求,按 Enter 选档会先被 Allow once 截胡。
+  it.each([
+    ['权限档菜单(listbox)', { role: 'listbox' }],
+    ['MorphPopover 面板', { 'data-morph-side': 'top' }],
+    ['chip trigger(aria-haspopup)', { 'aria-haspopup': 'listbox' }],
+  ])('%s 里的 Enter / Esc 不穿透到卡片动作', (_label, attrs) => {
+    const onRespond = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={PERMISSION}
+        onRespond={onRespond}
+        modeSwitch={{
+          permissionMode: 'ask',
+          onPermissionModeChange: vi.fn(),
+          vendorKey: 'cc',
+          cycleOptions: CYCLE_OPTIONS,
+        }}
+      />,
+    );
+
+    const layer = document.createElement('div');
+    for (const [k, v] of Object.entries(attrs)) layer.setAttribute(k, v);
+    const option = document.createElement('button');
+    layer.appendChild(option);
+    document.body.appendChild(layer);
+
+    fireEvent.keyDown(option, { key: 'Enter', code: 'Enter', bubbles: true });
+    fireEvent.keyDown(option, { key: 'Escape', code: 'Escape', bubbles: true });
+
+    expect(onRespond).not.toHaveBeenCalled();
+    document.body.removeChild(layer);
   });
 
   it('没有 modeSwitch 时 Shift+Tab 不做任何事', () => {

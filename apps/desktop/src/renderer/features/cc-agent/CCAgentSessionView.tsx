@@ -1164,6 +1164,13 @@ export function CCAgentSessionView({
   const providers = remoteDeviceId ? deviceProviders : localProviders;
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
+  // 权限卡片的档位入口必须跟"正在跑的"引擎走,不能用 displayAgentKind ——
+  // 后者会乐观跟随 agentSwitchIntent(用户浏览了另一个引擎的模型但还没发送),
+  // 而 pendingPermission 属于当前活着的 session。用 intent 的档位清单会列出对方
+  // 引擎的专有档(如 Claude 的 acceptEdits),选中后对活着的 Codex session 调
+  // set-permission-mode 会被判不支持,卡片承诺的切换根本落不了地。
+  const liveAgentKind = session?.agentKind === 'codex' ? 'codex' : 'claude-code';
+  const { capabilities: liveSessionCaps } = useAgentCapabilities(liveAgentKind, remoteDeviceId);
   // 报错「真实已读」:终止错误的 ErrorBanner 在本视图内固定展示,视图真实可见 +
   // 窗口聚焦驻留后经 badge 桥接 ack 灵动岛 / 清红角标。`error` 合并了 recoverable
   // 错误(agent 仍在跑,不算已读),再用 store 的 terminal 判定过滤;渲染由同一
@@ -2320,11 +2327,17 @@ export function CCAgentSessionView({
   // 防重入:连点档位或狂按轮切快捷键会并发起多条 runtime + DB 写,最终档位取决于
   // 异步完成顺序(且失败回滚会滚到错档)。in-flight 期间后续请求直接 no-op ——
   // 与下面 compactRequestInFlightRef 同一套约定。
-  const permissionModeChangeInFlightRef = useRef(false);
+  //
+  // 存的是"正在切档的那个 sessionId"而非 boolean:本组件实例跨会话复用,若存 boolean,
+  // 用户在确认框/远程调用挂起期间切到别的会话,新会话的点击与 Shift+Tab 会被这面
+  // 陈旧的旗子静默吞掉。按 sessionId 比对则天然按会话隔离——旧会话的确认框没处理完
+  // 时回到旧会话仍然拦(那本来就该拦),新会话不受影响。
+  const permissionModeChangeInFlightRef = useRef<string | null>(null);
   const handlePermissionCardModeChange = useCallback(
     async (nextMode: PermissionMode) => {
-      if (permissionModeChangeInFlightRef.current) return;
-      permissionModeChangeInFlightRef.current = true;
+      if (!sessionId) return;
+      if (permissionModeChangeInFlightRef.current === sessionId) return;
+      permissionModeChangeInFlightRef.current = sessionId;
       try {
         const outcome = await applySessionPermissionModeChange({
           sessionId,
@@ -2350,7 +2363,10 @@ export function CCAgentSessionView({
         }
         handlePermissionModeDidChange();
       } finally {
-        permissionModeChangeInFlightRef.current = false;
+        // 只清自己那面旗:期间若已切走会话并由新会话占用,不要替它清。
+        if (permissionModeChangeInFlightRef.current === sessionId) {
+          permissionModeChangeInFlightRef.current = null;
+        }
       }
     },
     [confirmDialog, handlePermissionModeDidChange, remoteDeviceId, sessionId, t],
@@ -3129,9 +3145,10 @@ export function CCAgentSessionView({
                     modeSwitch={{
                       permissionMode: (session?.permissionMode as PermissionMode) ?? 'ask',
                       onPermissionModeChange: handlePermissionCardModeChange,
-                      vendorKey: isCodex ? 'codex' : 'cc',
+                      // live 引擎(非 displayAgentKind),见 liveAgentKind 定义处。
+                      vendorKey: liveAgentKind === 'codex' ? 'codex' : 'cc',
                       deviceId: remoteDeviceId,
-                      cycleOptions: sessionCaps?.permissionModes ?? [],
+                      cycleOptions: liveSessionCaps?.permissionModes ?? [],
                       // 远程断链/被控端离线时切档必失败(与 composer 的
                       // disabled={remoteSessionUnavailable} 同一判定),不给假入口。
                       disabled: remoteSessionUnavailable,

@@ -87,6 +87,25 @@ function formatToolInput(toolName: string, input: Record<string, unknown>): stri
   }
 }
 
+/**
+ * 这些容器里的按键不归卡片管 —— 卡片的 Enter/Esc/Shift+Tab 是挂在 window 上的,
+ * 不挡就会劫持掉浮层自己的键盘语义:
+ * - `dialog` / `alertdialog`:切 Full access 时弹的二次确认框(卡片仍挂载),
+ *   不挡则确认框上的 Enter 顺带 Allow once、Esc 顺带 Deny。
+ * - `listbox` / `data-morph-side`:权限档 chip 的 MorphPopover 弹层。它 portal 到
+ *   body,不在卡片 DOM 子树内,只能靠 role / 属性认。不挡则键盘用户在菜单里按 Esc
+ *   关菜单会顺带 Deny 掉请求、按 Enter 选档会先被 Allow once 截胡。
+ * - `aria-haspopup`:chip trigger 自身。Tab 到它按 Enter 的语义是"打开菜单",
+ *   不是"批准这条请求"——不挡则菜单根本打不开,请求却被批了。
+ */
+const SHORTCUT_OPT_OUT_SELECTOR = [
+  '[role="dialog"]',
+  '[role="alertdialog"]',
+  '[role="listbox"]',
+  '[data-morph-side]',
+  '[aria-haspopup]',
+].join(', ');
+
 function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
   if (!Array.isArray(suggestions)) return [];
   return suggestions.filter((suggestion) =>
@@ -155,12 +174,11 @@ export function PermissionPrompt({ permission, onRespond, modeSwitch }: Permissi
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
-      // 模态里的按键一律不穿透到卡片:切 Full access 会在卡片仍挂载时弹二次确认,
-      // 而确认框聚焦的是普通 <button>(不在上面的排除列表里)且不 stopPropagation ——
-      // 不挡的话在确认框上按 Enter 会顺带 Allow once、按 Esc 会顺带 Deny,
-      // 等于用键盘替用户回答了这条工具请求。
+      // 浮层(确认框 / 档位菜单 / chip trigger)里的按键一律不穿透到卡片,
+      // 见 SHORTCUT_OPT_OUT_SELECTOR 顶注。这些浮层聚焦的都是普通 <button>,
+      // 不在上面的排除列表里,且都不 stopPropagation。
       // closest 走可选调用:事件直接派发到 window / document 时 target 不是 Element。
-      if (target?.closest?.('[role="dialog"], [role="alertdialog"]')) return;
+      if (target?.closest?.(SHORTCUT_OPT_OUT_SELECTOR)) return;
       // cycle-permission-mode (registry 默认 Shift+Tab, 用户可改绑) —— 补齐卡片期间
       // 失效的键盘路径: ChatInput 不挂载时它的 TipTap handler 一起没了。
       // 轮切与点 chip 走同一条切档路径, 因此同样会由 maker-core 结掉当前 pending
