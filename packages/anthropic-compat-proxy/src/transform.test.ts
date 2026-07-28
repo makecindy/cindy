@@ -3,11 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { createThreadStripController } from './thread-strip-controller.js';
 import {
   createActiveStripTransform,
+  createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  stripEmptyAssistantMessagesFromBody,
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
   stripEncryptedContentFromBody,
@@ -463,6 +465,115 @@ describe('stripEmptyTextFromBody', () => {
   });
 });
 
+describe('stripEmptyAssistantMessagesFromBody', () => {
+  it('drops a thinking-only empty assistant message (moonshot/kimi interrupted placeholder)', () => {
+    // 线上污染形态(2026-07-28): 流首包空 thinking 占位被中断持久化。
+    const body = buf({
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: '' }] },
+        { role: 'user', content: 'continue' },
+      ],
+    });
+    const out = stripEmptyAssistantMessagesFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages).toHaveLength(2);
+    expect(parsed.messages.map((m: { role: string }) => m.role)).toEqual(['user', 'user']);
+  });
+
+  it('drops a native empty content-array assistant message', () => {
+    const body = buf({
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [] },
+      ],
+    });
+    const out = stripEmptyAssistantMessagesFromBody(body);
+    expect(out).not.toBeNull();
+    expect(JSON.parse(out!.toString('utf8')).messages).toHaveLength(1);
+  });
+
+  it('drops a blank string-content assistant message, keeps a non-blank one', () => {
+    const body = buf({
+      messages: [
+        { role: 'assistant', content: '   ' },
+        { role: 'assistant', content: 'real answer' },
+      ],
+    });
+    const out = stripEmptyAssistantMessagesFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages).toHaveLength(1);
+    expect(parsed.messages[0].content).toBe('real answer');
+  });
+
+  it('strips empty thinking but keeps sibling text / tool_use blocks', () => {
+    const body = buf({
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: '', signature: '' },
+            { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } },
+          ],
+        },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: '', signature: '' },
+            { type: 'text', text: 'done' },
+          ],
+        },
+      ],
+    });
+    const out = stripEmptyAssistantMessagesFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages).toHaveLength(2);
+    expect(parsed.messages[0].content).toEqual([
+      { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } },
+    ]);
+    expect(parsed.messages[1].content).toEqual([{ type: 'text', text: 'done' }]);
+  });
+
+  it('keeps a content-bearing thinking block (empty signature is tolerated)', () => {
+    const body = buf({
+      messages: [
+        { role: 'assistant', content: [{ type: 'thinking', thinking: 'real reasoning', signature: '' }] },
+      ],
+    });
+    expect(stripEmptyAssistantMessagesFromBody(body)).toBeNull();
+  });
+
+  it('never touches user messages, even empty ones', () => {
+    const body = buf({
+      messages: [
+        { role: 'user', content: [] },
+        { role: 'user', content: 'hi' },
+      ],
+    });
+    expect(stripEmptyAssistantMessagesFromBody(body)).toBeNull();
+  });
+
+  it('returns null for a clean body (cache-safe no-op)', () => {
+    const body = buf({
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+      ],
+    });
+    expect(stripEmptyAssistantMessagesFromBody(body)).toBeNull();
+  });
+
+  it('returns null for non-JSON / missing messages', () => {
+    expect(stripEmptyAssistantMessagesFromBody(Buffer.from('not json', 'utf8'))).toBeNull();
+    expect(stripEmptyAssistantMessagesFromBody(buf({ model: 'x' }))).toBeNull();
+  });
+});
+
 describe('createThreadStripController', () => {
   it('marks active threads and clears them when model changes', () => {
     const controller = createThreadStripController();
@@ -645,6 +756,35 @@ describe('recovery rule factories', () => {
     expect(rule.matches('each thinking block must contain thinking')).toBe(false);
     expect(
       rule.strip(buf({ messages: [{ role: 'assistant', content: [{ type: 'text', text: '' }] }] })),
+    ).not.toBeNull();
+  });
+
+  it('empty-assistant-message rule matches the moonshot error text, is always-on by default, and strips empty assistant messages', () => {
+    const rule = createEmptyAssistantMessageRecoveryRule();
+    expect(rule.id).toBe('empty_assistant_message');
+    expect(rule.enabled()).toBe(true);
+    // 线上实测 moonshot 400 原文(2026-07-28,经 LiteLLM passthrough,两个独立会话):
+    expect(
+      rule.matches(
+        'Invalid request: the message at position 693 with role \'assistant\' must not be empty',
+      ),
+    ).toBe(true);
+    expect(
+      rule.matches(
+        JSON.stringify({
+          error: {
+            type: 'invalid_request_error',
+            message: "Invalid request: the message at position 275 with role 'assistant' must not be empty",
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(rule.matches('each thinking block must contain thinking')).toBe(false);
+    expect(rule.matches('invalid_encrypted_content')).toBe(false);
+    expect(
+      rule.strip(
+        buf({ messages: [{ role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: '' }] }] }),
+      ),
     ).not.toBeNull();
   });
 
