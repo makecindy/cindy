@@ -567,13 +567,11 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
               : !disabledSomewhere?.has(g.manifest.id)),
         )
         .map((g) => {
-          const recall = g.manifest.whenToUse ?? g.manifest.description;
           const readiness = projection.get(g.manifest.id)?.readiness;
           return {
             id: g.manifest.id,
             name: g.manifest.name,
             ...(g.manifest.command ? { command: g.manifest.command } : {}),
-            ...(recall ? { description: recall } : {}),
             ...(readiness ? { readiness } : {}),
           };
         });

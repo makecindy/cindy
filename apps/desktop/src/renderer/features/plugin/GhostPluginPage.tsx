@@ -597,15 +597,16 @@ export function GhostPluginPage() {
       const ghost = ghosts.find((candidate) => candidate.manifest.id === id);
       if (!ghost?.manifest.command) return;
       // 使用前置门:点击时现查配置就绪度(main 侧确定性判定),未就绪先
-      // 弹窗引导去配置。查询失败不拦——运行期 networkSlot 仍会兜底报错,
-      // 这里拦不住只是少了一次前置提醒,不能因此把能用的插件挡在门外。
-      let setupStatus: GhostSetupStatus | null = null;
+      // 弹窗引导去配置。查询失败与 lifecycle unknown 同口径 fail-closed:
+      // 不把用户带进一个注定无法发现/调用目标插件的会话。
+      let setupStatus: GhostSetupStatus;
       try {
         setupStatus = await window.electronAPI.ghosts.setupStatus(id);
-      } catch {
-        setupStatus = null;
+      } catch (error) {
+        toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
+        return;
       }
-      if (setupStatus && !setupStatus.ready) {
+      if (!setupStatus.ready) {
         const goConfigure = await confirm({
           title: t('settings.ghosts.setupGate.title', { name: displayName }),
           description: formatSetupGateDescription(setupStatus, t),
