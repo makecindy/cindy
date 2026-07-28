@@ -153,6 +153,18 @@ export default function RemoteFilePreviewScreen() {
   // 轻量请求(open 期间是本地快速失败,零管道流量)。
   const unresponsiveDevices = useUnresponsiveDevices();
   const deviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
+  // 熔断恢复代数(review P1):open→closed 翻转沿 +1。仅重试 getSession 不够——
+  // 会话已缓存时,同目录 pager 可能已退化成单文件、文本/PDF/音视频子页已落进
+  // 失败态,而子页用 requestedRef/loadedRef 防重复请求,失败后绝不自行重试。
+  // 代数驱动两件事:pager effect 重列目录;FlatList key 掺入代数让预览子页
+  // 整体重挂载(refs 归零、重新拉取)。翻转沿极少发生,重挂载代价可接受。
+  const [recoveryEpoch, setRecoveryEpoch] = useState(0);
+  const prevDeviceUnresponsiveRef = useRef(deviceUnresponsive);
+  useEffect(() => {
+    const was = prevDeviceUnresponsiveRef.current;
+    prevDeviceUnresponsiveRef.current = deviceUnresponsive;
+    if (was && !deviceUnresponsive) setRecoveryEpoch((epoch) => epoch + 1);
+  }, [deviceUnresponsive]);
   useEffect(() => {
     if (knownSession) {
       setSession(knownSession);
@@ -211,7 +223,7 @@ export default function RemoteFilePreviewScreen() {
     return () => {
       cancelled = true;
     };
-  }, [deviceId, initialRelPath, maker, openLink, sortMode, workdir]);
+  }, [deviceId, initialRelPath, maker, openLink, recoveryEpoch, sortMode, workdir]);
 
   const current = siblings?.[pageIndex] ?? null;
   const pagerRef = useRef<FlatList<FileBrowserGridItem>>(null);
@@ -365,7 +377,7 @@ export default function RemoteFilePreviewScreen() {
         ref={pagerRef}
         horizontal
         initialScrollIndex={pageIndex}
-        keyExtractor={(item) => item.key}
+        keyExtractor={(item) => `${item.key}:${recoveryEpoch}`}
         onMomentumScrollEnd={(event) => {
           const next = Math.round(event.nativeEvent.contentOffset.x / pageWidth);
           if (next !== pageIndex && next >= 0 && next < siblings.length) setPageIndex(next);

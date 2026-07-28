@@ -24,10 +24,12 @@ export type BreakerAcquireDecision = 'allow' | 'probe' | 'reject';
 
 /**
  * acquire 发放的席位票据,settle 时原样带回。generation 是发放时该设备的代数:
- * responded / clear / resetAll 都会递增代数,settle 时代数不匹配 = 这是恢复
- * (或清除)之前派出的旧请求,其结果一律不采信(review P1:熔断 open 前派出的
- * 30/40s 长超时请求,会在探测成功关熔断之后才陆续超时,若照常计数,3 条陈旧
- * 超时会立刻把刚恢复的熔断重新打开)。
+ * 清理性事件(responded 关闭 open / 清零失败计数、clear、resetAll)递增代数,
+ * settle 时代数不匹配 = 这是恢复(或清除)之前派出的旧请求,其结果一律不采信
+ * (review P1:熔断 open 前派出的 30/40s 长超时请求,会在探测成功关熔断之后
+ * 才陆续超时,若照常计数,3 条陈旧超时会立刻把刚恢复的熔断重新打开)。
+ * 无状态时的 responded 不翻代(review:否则健康并发下一个快回包会作废同期
+ * 在途请求的超时,连续超时被低估、熔断反而难打开)。
  */
 export interface BreakerSendSlot {
   decision: BreakerAcquireDecision;
@@ -102,8 +104,9 @@ export function createDeviceResponsivenessBreaker(
   const probeBackoffMaxMs = options.probeBackoffMaxMs ?? BREAKER_PROBE_BACKOFF_MAX_MS;
   const now = options.now ?? Date.now;
   const states = new Map<string, DeviceBreakerState>();
-  // 每设备代数:responded / clear / resetAll 递增。settle 只采信「派发时代数
-  // 仍是当前代」的结果——恢复前派出的长超时请求晚到的超时不再污染新一代计数。
+  // 每设备代数:清理性事件(responded 清态、clear、resetAll)递增。settle 只
+  // 采信「派发时代数仍是当前代」的结果——恢复前派出的长超时请求晚到的超时
+  // 不再污染新一代计数。
   const generations = new Map<string, number>();
   const generationOf = (deviceId: string): number => generations.get(deviceId) ?? 0;
   const bumpGeneration = (deviceId: string): void => {
@@ -135,9 +138,12 @@ export function createDeviceResponsivenessBreaker(
     // 永久占住唯一探测席位;窗口基准未动,下一次 acquire 会立即放行新探测。
     if (state && wasProbe) state.probeInFlight = false;
     if (outcome === 'responded') {
-      // 真实回包即代数翻篇:此后到达的、更早派出的请求结果全部失效。
-      bumpGeneration(deviceId);
+      // 只在真的清理了状态(open 关闭 / 失败计数清零)时才翻代(review:
+      // 早先「每次 responded 都翻代」会让健康并发场景里一个较快的回包把
+      // 同期在途请求随后的超时全部作废——连续超时被低估,熔断反而难打开)。
+      // 无状态时的 responded 没有可作废的东西,不翻代,同期超时照常累计。
       if (!state) return;
+      bumpGeneration(deviceId);
       const wasOpen = state.open;
       states.delete(deviceId);
       if (wasOpen) options.onOpenChanged?.(deviceId, false);

@@ -39,6 +39,9 @@ describe('resolveMobileInvokeTimeoutMs', () => {
     // agent;两者有真实副作用,误超时重试会改动/重启已在跑的 goal。
     expect(resolveMobileInvokeTimeoutMs('maker:goal:set')).toBe(30_000);
     expect(resolveMobileInvokeTimeoutMs('maker:goal:resume')).toBe(30_000);
+    // message:delete:提交前 await closeSession(远端 close RPC 自带 15s 超时),
+    // 破坏性操作,误超时后删除已生效、mobile 却报失败。
+    expect(resolveMobileInvokeTimeoutMs('maker:message:delete')).toBe(30_000);
     expect(MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS['device-link:media:fetch']).toBe(30_000);
   });
 

@@ -80,10 +80,16 @@ interface ScheduleIndexThrottleEntry {
 
 const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>();
 
-/** 本机链路未通(NOT_CONNECTED / LINK_NOT_OPEN):重连即恢复的失败类别。 */
+/**
+ * 链路/目标不可达(NOT_CONNECTED / LINK_NOT_OPEN / DEVICE_OFFLINE):重连或
+ * presence 恢复即可解除的失败类别。DEVICE_OFFLINE 必须包含(review):目标
+ * 桌面离线时 reject 的就是它,不认的话 presence 恢复落在 30s 负缓存窗内,
+ * reseed 会吃旧 rejected promise,详情页被换成空索引且无人补拉。
+ * 不含 INVOKE_TIMEOUT——「设备不回包」不是断线,不能被重连钩子清掉。
+ */
 function isLocalLinkDownError(error: unknown): boolean {
   const code = (error as { code?: unknown } | null | undefined)?.code;
-  return code === 'NOT_CONNECTED' || code === 'LINK_NOT_OPEN';
+  return code === 'NOT_CONNECTED' || code === 'LINK_NOT_OPEN' || code === 'DEVICE_OFFLINE';
 }
 
 export function loadSessionScheduleIndexThrottled(

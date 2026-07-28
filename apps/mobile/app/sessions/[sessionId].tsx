@@ -62,6 +62,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { useGuardedBack } from '@/utils/useGuardedBack';
 import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
+import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
@@ -1159,9 +1160,14 @@ export default function SessionScreen() {
   const isDeviceAccessRevoked = !!deviceId && revokedDevices.has(deviceId);
   // 熔断 open:被控电脑「进程活着但不回包」的半死态;relay status 恒 online,必须单独入参。
   const isDeviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
-  const connectionError = isDeviceAccessRevoked
-    ? '[ACCESS_REVOKED] access revoked by target device'
-    : error;
+  // 熔断已关后残留的 DEVICE_UNRESPONSIVE 错误按陈旧丢弃,且必须一次性解析、
+  // 两个消费方共用(review P1):banner 用它,下面的 remoteUnavailableReason 也
+  // 用它——否则恢复后横幅消失了,composer 却仍被 stale 快照锁在不可用态,
+  // 直到手动同步才解开。
+  const connectionError = resolveEffectiveConnectionError(
+    isDeviceAccessRevoked ? '[ACCESS_REVOKED] access revoked by target device' : error,
+    isDeviceUnresponsive,
+  );
   // 弱网普通断线也要有可见信号(消息流静默停更没有任何提示),经防闪延迟后显示
   const showConnectionBanner = useShowConnectionBanner(status, connectionError, connectionIssue, isDeviceUnresponsive);
   const hasCurrentSession = currentSession !== null;

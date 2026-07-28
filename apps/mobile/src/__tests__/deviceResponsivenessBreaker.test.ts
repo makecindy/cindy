@@ -199,7 +199,7 @@ describe('generation:恢复前派出的旧请求结果不采信(review P1)', () 
     openBreaker(h);
   });
 
-  it('普通 responded 也翻篇:之前在途请求的晚到超时不计入连续计数', () => {
+  it('清零失败计数的 responded 翻篇:之前在途请求的晚到超时不计入连续计数', () => {
     const h = harness();
     const stale = h.breaker.acquire(DEV);
     timeoutOnce(h.breaker);
@@ -209,6 +209,20 @@ describe('generation:恢复前派出的旧请求结果不采信(review P1)', () 
     timeoutOnce(h.breaker);
     timeoutOnce(h.breaker);
     expect(h.breaker.isOpen(DEV)).toBe(false); // 新代只累计了 2 次
+  });
+
+  it('无状态时的 responded 不翻篇:健康并发下同期超时照常累计(review)', () => {
+    // 若每次 responded 都翻代,健康并发里一个较快回包会把同期在途请求随后的
+    // 超时全部作废——连续超时被低估,设备真卡死时熔断反而难打开。
+    const h = harness();
+    const slow1 = h.breaker.acquire(DEV);
+    const slow2 = h.breaker.acquire(DEV);
+    const slow3 = h.breaker.acquire(DEV);
+    settleOnce(h.breaker, 'responded'); // 快请求先回包:无状态,不翻代
+    h.breaker.settle(DEV, slow1, 'timeout');
+    h.breaker.settle(DEV, slow2, 'timeout');
+    h.breaker.settle(DEV, slow3, 'timeout');
+    expect(h.breaker.isOpen(DEV)).toBe(true); // 3 条同期超时照常开断路器
   });
 
   it('clear(撤权)翻篇:清除前在途请求的超时不会重建计数', () => {
@@ -225,6 +239,7 @@ describe('generation:恢复前派出的旧请求结果不采信(review P1)', () 
   it('旧代 responded 同样不采信(不会误关新一代已 open 的熔断)', () => {
     const h = harness();
     const stale = h.breaker.acquire(DEV);
+    timeoutOnce(h.breaker); // 产生失败计数,让下面的 responded 构成清理性翻篇
     settleOnce(h.breaker, 'responded'); // 翻篇:stale 变旧代
     openBreaker(h); // 新代 open
     h.breaker.settle(DEV, stale, 'responded'); // 旧代晚到成功:忽略

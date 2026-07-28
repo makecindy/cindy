@@ -360,6 +360,24 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
+  it('DEVICE_OFFLINE 失败同属重连失效类别:presence 恢复后立即重拉(review P1)', async () => {
+    // 目标桌面离线时 reject 的是 DEVICE_OFFLINE(shared 分类也视为 transient);
+    // 不认它的话,presence 恢复落在 30s 负缓存窗内,reseed 会吃旧 rejected
+    // promise,详情页被换成空索引且无人补拉。
+    resetScheduleIndexThrottleForTesting();
+    const load = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('device offline'), { code: 'DEVICE_OFFLINE' }))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const now = () => 1000;
+    await expect(loadSessionScheduleIndexThrottled('dev-o', load, { now })).rejects.toMatchObject({
+      code: 'DEVICE_OFFLINE',
+    });
+    await Promise.resolve();
+    invalidateTransientScheduleIndexFailures();
+    await expect(loadSessionScheduleIndexThrottled('dev-o', load, { now })).resolves.toBeInstanceOf(Map);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
   it('末项竞态的 INVOKE_TIMEOUT 失败:熔断 open 时同样按未响应记负缓存,恢复即旁路', async () => {
     // 末项竞态抛的是原始 INVOKE_TIMEOUT(非快速失败码);节流层补查 store
     // (key 即 deviceId)才能让这类失败同样享受「恢复即旁路」。

@@ -37,6 +37,9 @@ import { INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
  *  - maker:create-session:桌面 await maker.createSession → agent.startSession /
  *    Codex host.ensureStarted,冷启动 app-server 无更短 deadline;goal 路径无
  *    稳定的客户端会话 id,误超时后重试会建出第二个会话;
+ *  - maker:message:delete:桌面提交删除前先读 handoff 历史并 await
+ *    maker.closeSession(Claude 远端 close 的 cc-manager RPC 自带 15s 超时),
+ *    合法可贴着 15s 边界;破坏性操作,误超时后删除实际已生效,mobile 却报失败;
  *  - maker:goal:set / goal:resume:GoalController.ensureSession 的
  *    restoreSessionForGoal 同样 await createSession 重启持久化 agent,冷启动
  *    可超 15s;两者都有真实副作用(set 落库目标并发首轮,resume 先标 active),
@@ -53,6 +56,7 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   'maker:get-context-usage': 30_000,
   'maker:goal:resume': 30_000,
   'maker:goal:set': 30_000,
+  'maker:message:delete': 30_000,
   'maker:regenerate-title': 30_000,
   'maker:rewind:commit': 30_000,
   'maker:send': 30_000,
