@@ -3165,6 +3165,8 @@
       "balanceAvailable": "Balance available",
       "balanceDepleted": "Balance depleted",
       "balanceUnlimited": "Balance Unlimited",
+      "resetCreditsAvailableLine": "Available resets: {{count}}",
+      "resetCreditEarliestExpiryLine": "Earliest expiry: {{at}}",
       "windowLine": "{{label}} {{remaining}} left ({{used}} used)",
       "windowSegment": "{{label}} {{remaining}} left",
       "resetAt": "resets {{at}}",

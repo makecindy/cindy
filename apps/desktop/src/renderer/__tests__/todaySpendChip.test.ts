@@ -16,6 +16,12 @@ const rendererTypesPath = resolve(__dirname, '..', 'vite-env.d.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
 const preloadSource = readFileSync(preloadPath, 'utf8').replace(/\r\n/g, '\n');
 const rendererTypesSource = readFileSync(rendererTypesPath, 'utf8').replace(/\r\n/g, '\n');
+const localeSources = ['en', 'zh-CN', 'ja', 'ko'].map((locale) =>
+  readFileSync(
+    resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'),
+    'utf8',
+  ).replace(/\r\n/g, '\n'),
+);
 
 describe('TodaySpendChip dashboard routing', () => {
   it('separates the latest user-round total from final-segment token details', () => {
@@ -128,13 +134,24 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain(
       'useCodexRateLimits(isCodexOauth && !isAnyRemoteSession)',
     );
-    // 直接复用 Mobile 的汇总与本地时间格式,tooltip 只追加重置卡相关行。
+    // 复用 Mobile 的中性汇总字段；Desktop 按当前界面语言渲染 label / 次数 / 本地时间。
     expect(source).toContain('summarizeCodexRateLimitReset');
     // 复用 chip 现有 tick 时间基准,跨日时本地时间文案会重新格式化。
     expect(source).toContain(
       'summarizeCodexRateLimitReset(codexRateLimits, windowLabelNowMs)',
     );
-    expect(source).toContain('resetSummary?.resetRows');
+    expect(source).toContain('resetSummary?.hasResetCreditCount');
+    expect(source).toContain('resetSummary?.earliestExpiryAt');
+    expect(source).toContain("t('todaySpend.codex.resetCreditsAvailableLine'");
+    expect(source).toContain("t('todaySpend.codex.resetCreditEarliestExpiryLine'");
+    expect(source).toContain('i18n.resolvedLanguage ?? i18n.language');
+    expect(source).not.toContain('resetSummary?.resetRows');
+    for (const localeSource of localeSources) {
+      expect(localeSource).toContain('"resetCreditsAvailableLine"');
+      expect(localeSource).toContain('"resetCreditEarliestExpiryLine"');
+    }
+    // 长时间挂载时每次重新悬停都会刷新，首次瞬态失败与外部消费/授予不会永久陈旧。
+    expect(source).toContain('onMouseEnter={refreshCodexRateLimits}');
   });
 
   it('keeps Codex OAuth subscription details in the chip and tooltip', () => {

@@ -3164,6 +3164,8 @@
       "balanceAvailable": "잔액 사용 가능",
       "balanceDepleted": "잔액 소진",
       "balanceUnlimited": "잔액 무제한",
+      "resetCreditsAvailableLine": "사용 가능한 재설정: {{count}}회",
+      "resetCreditEarliestExpiryLine": "가장 빠른 만료: {{at}}",
       "windowLine": "{{label}} 남음 {{remaining}} (사용 {{used}})",
       "windowSegment": "{{label}} {{remaining}} 남음",
       "resetAt": "{{at}} 재설정",

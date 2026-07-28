@@ -238,6 +238,28 @@ function formatResetAt(epochSeconds: number | null | undefined): string | null {
   ).format(date);
 }
 
+/** Codex 重置卡到期时间：沿用产品的“当天时分、跨天月日+时分”，按界面语言本地化。 */
+function formatResetCreditExpiryAt(
+  epochSeconds: number | null | undefined,
+  nowMs: number,
+  locale: string,
+): string | null {
+  if (typeof epochSeconds !== 'number' || !Number.isFinite(epochSeconds) || epochSeconds <= 0) {
+    return null;
+  }
+  const date = new Date(epochSeconds * 1000);
+  const now = new Date(nowMs);
+  const sameDay = date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+  return new Intl.DateTimeFormat(
+    locale,
+    sameDay
+      ? { hour: 'numeric', minute: '2-digit' }
+      : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' },
+  ).format(date);
+}
+
 /**
  * chip 主体用的紧凑剩余时长(距 reset 还有多久): 单级精度 + 向上取整 ——
  * 「7天」/「3小时」/「45分钟」/「41秒」。Codex 与 Claude 订阅两种形态统一用它当窗口
@@ -459,6 +481,7 @@ function buildCodexTooltipNode(
   sessionValueMoney: RegionalMoney | null,
   resetSummary: CodexRateLimitResetSummary | null,
   t: TFunction,
+  locale: string,
   usageDashboardLabel: string | null,
   nowMs: number,
   latestTurnUsage: LatestTurnUsageSummary | null,
@@ -466,7 +489,7 @@ function buildCodexTooltipNode(
   const lines: string[] = [];
   if (!snapshot) {
     lines.push(t('todaySpend.codex.waitingDetail'));
-    pushCodexResetCreditLines(lines, resetSummary);
+    pushCodexResetCreditLines(lines, resetSummary, t, locale, nowMs);
     appendLatestTurnUsageLines(lines, latestTurnUsage, t);
     pushDashboardLinkLine(lines, usageDashboardLabel);
     return buildTooltipNode(lines);
@@ -497,7 +520,7 @@ function buildCodexTooltipNode(
     lines.push(t('todaySpend.codex.balanceAvailable'));
   }
   pushSessionValueLines(lines, sessionValueMoney, sessionTokens, t);
-  pushCodexResetCreditLines(lines, resetSummary);
+  pushCodexResetCreditLines(lines, resetSummary, t, locale, nowMs);
 
   for (const window of getCodexWindowUsages(snapshot, t, nowMs)) {
     const base = t('todaySpend.codex.windowLine', {
@@ -864,13 +887,26 @@ function pushSessionValueLines(
   }
 }
 
-/** 与 Mobile 共用同一组 label/value 与本地时间格式；账号行不进入紧凑 tooltip。 */
+/** 与 Mobile 共用中性汇总字段；Desktop label、次数和时间按当前界面语言展示。 */
 function pushCodexResetCreditLines(
   lines: string[],
   resetSummary: CodexRateLimitResetSummary | null,
+  t: TFunction,
+  locale: string,
+  nowMs: number,
 ): void {
-  for (const row of resetSummary?.resetRows ?? []) {
-    lines.push(`${row.label}：${row.value}`);
+  if (resetSummary?.hasResetCreditCount) {
+    lines.push(t('todaySpend.codex.resetCreditsAvailableLine', {
+      count: resetSummary.availableCount,
+    }));
+  }
+  const expiryAt = formatResetCreditExpiryAt(
+    resetSummary?.earliestExpiryAt,
+    nowMs,
+    locale,
+  );
+  if (expiryAt) {
+    lines.push(t('todaySpend.codex.resetCreditEarliestExpiryLine', { at: expiryAt }));
   }
 }
 
@@ -961,7 +997,8 @@ export function TodaySpendChip({
   remoteHostId,
   deviceLinkDeviceId,
 }: TodaySpendChipProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const formatterLocale = i18n.resolvedLanguage ?? i18n.language;
   // device-link 远程会话:turn 跑在被控端、消耗被控端账号,计费形态(订阅/网关)与账号
   // 余量的事实都在被控端 —— 本机的 route 观察 / 账号快照与之无关,一律不读、不据此分类。
   const isDeviceLinkRemote = Boolean(deviceLinkDeviceId);
@@ -1075,7 +1112,10 @@ export function TodaySpendChip({
     // 促销桶, 见 useAccountUsage.matchCodexBucketForModel)。
     modelId,
   );
-  const codexRateLimits = useCodexRateLimits(isCodexOauth && !isAnyRemoteSession);
+  const {
+    snapshot: codexRateLimits,
+    refresh: refreshCodexRateLimits,
+  } = useCodexRateLimits(isCodexOauth && !isAnyRemoteSession);
   // xAI 限流快照同为本机 main 抓的 —— 远程会话(SSH / device-link)同样抑制,回落价值估算。
   const xaiRateLimit = useXaiRateLimit(usesXaiQuotaForm && !isAnyRemoteSession);
   // cc 与 codex-api 共用同一把 XD gateway key 的 LiteLLM quota; codex-oauth 不订阅。
@@ -1288,6 +1328,7 @@ export function TodaySpendChip({
       sessionEstimatedValueMoney,
       codexResetSummary,
       t,
+      formatterLocale,
       usageDashboardLabel,
       windowLabelNowMs,
       latestTurnUsage,
@@ -1424,7 +1465,12 @@ export function TodaySpendChip({
   );
 
   return (
-    <div ref={chipRef} className="inline-flex h-5 shrink-0 items-center gap-3">
+    <div
+      ref={chipRef}
+      className="inline-flex h-5 shrink-0 items-center gap-3"
+      onMouseEnter={refreshCodexRateLimits}
+      onFocusCapture={refreshCodexRateLimits}
+    >
       <Tip text={tooltipNode}>
         {isDashboardClickable ? (
           <button
