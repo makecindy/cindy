@@ -48,13 +48,32 @@ const confirmNever = vi.fn(async () => {
 // worker 进程内跨文件共享,用后必须还原,否则后跑的用例会捡到这个假 window。
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
 
+/** 失配标记要活过 renderer reload,所以模块会往 localStorage 落一份。 */
+function createMemoryStorage(): Storage {
+  const map = new Map<string, string>();
+  return {
+    get length() {
+      return map.size;
+    },
+    clear: () => map.clear(),
+    getItem: (k: string) => map.get(k) ?? null,
+    key: (i: number) => [...map.keys()][i] ?? null,
+    removeItem: (k: string) => void map.delete(k),
+    setItem: (k: string, v: string) => void map.set(k, v),
+  } as Storage;
+}
+
+let storage: Storage;
+
 beforeEach(() => {
   vi.clearAllMocks();
   remoteSetPermissionMode.mockResolvedValue(undefined);
   localSetPermissionMode.mockResolvedValue(undefined);
   sessionUpdate.mockResolvedValue(undefined);
+  storage = createMemoryStorage();
   (globalThis as unknown as { window: unknown }).window = {
     electronAPI: { maker: { setPermissionMode: localSetPermissionMode } },
+    localStorage: storage,
   };
 });
 
@@ -177,6 +196,41 @@ describe('applySessionPermissionModeChange', () => {
     // 只有切档那一次写入,没有第二次(回滚)。
     expect(localSetPermissionMode).toHaveBeenCalledTimes(1);
     expect(localSetPermissionMode).toHaveBeenCalledWith(PENDING_SESSION, 'bypassPermissions');
+  });
+
+  // agent 在 main 侧,renderer 崩溃恢复页会 reload 页面而它照常活着并保持在新档。
+  // 失配标记只存内存的话,reload 后重选显示中的档又被同档短路吃掉 —— Full access
+  // 就此静默留存且无恢复路径。
+  it('失配标记落 localStorage,活过 renderer reload', async () => {
+    const RELOAD_SESSION = 'perm-mode-survives-reload';
+    sessionUpdate.mockRejectedValueOnce(new Error('db down'));
+
+    await applySessionPermissionModeChange({
+      sessionId: RELOAD_SESSION,
+      currentMode: 'ask',
+      nextMode: 'bypassPermissions',
+      confirmFullAccess: vi.fn(async () => true),
+      hasPendingInteraction: true,
+    });
+
+    expect(storage.getItem(`cindy:permission-mode-desync:${RELOAD_SESSION}`)).toBe('1');
+
+    // 模拟 reload:内存态整个丢掉,只剩 storage。
+    vi.resetModules();
+    const reloaded = await import('@/lib/sessionPermissionMode');
+    localSetPermissionMode.mockClear();
+
+    const reconcile = await reloaded.applySessionPermissionModeChange({
+      sessionId: RELOAD_SESSION,
+      currentMode: 'ask',
+      nextMode: 'ask',
+      confirmFullAccess: confirmNever,
+    });
+
+    expect(reconcile).toBe('ok');
+    expect(localSetPermissionMode).toHaveBeenCalledWith(RELOAD_SESSION, 'ask');
+    // 对账成功后标记一并清掉。
+    expect(storage.getItem(`cindy:permission-mode-desync:${RELOAD_SESSION}`)).toBeNull();
   });
 
   it('运行时失败直接告败,不落库', async () => {

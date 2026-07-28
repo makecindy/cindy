@@ -239,6 +239,25 @@ export function PermissionPrompt({
       if (target?.closest?.(SHORTCUT_OPT_OUT_SELECTOR)) return;
       // 焦点在普通按钮/链接上 = 用户正在用键盘导航,全局快捷键让位给原生语义。
       if (isInteractiveTarget(target)) return;
+      // 卡片印在按钮上的三个决定键**优先于**任何可改绑的快捷键。cycle-permission-mode
+      // 允许被改绑成 Ctrl+Enter,若让它先判,按下 Ctrl+Enter 会变成切档(从 ask 切到
+      // acceptEdits 反而 deny 掉请求),而按钮上白纸黑字写着"Always allow" —— 界面
+      // 承诺什么,按键就必须做什么。
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        handleAlwaysAllow();
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleAllowOnce();
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDeny();
+        return;
+      }
       // cycle-permission-mode (registry 默认 Shift+Tab, 用户可改绑) —— 补齐卡片期间
       // 失效的键盘路径: ChatInput 不挂载时它的 TipTap handler 一起没了。
       // 轮切与点 chip 走同一条切档路径, 因此同样会由 maker-core 结掉当前 pending
@@ -256,18 +275,7 @@ export function PermissionPrompt({
         if (next) {
           e.preventDefault();
           cycle.onPermissionModeChange(next);
-          return;
         }
-      }
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        handleAlwaysAllow();
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        handleAllowOnce();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        handleDeny();
       }
     };
 

@@ -313,6 +313,32 @@ describe('PermissionPrompt modeSwitch', () => {
     expect(onRespond).toHaveBeenCalledTimes(1);
   });
 
+  // cycle-permission-mode 允许被改绑成 Ctrl+Enter。卡片按钮上白纸黑字写着
+  // "Always allow",界面承诺什么按键就得做什么 —— 决定键优先于可改绑的轮切键。
+  it('轮切键被改绑到 Ctrl+Enter 时,卡片印的决定键仍然优先', () => {
+    const onRespond = vi.fn();
+    const onPermissionModeChange = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={{ ...PERMISSION, suggestions: [{ destination: 'session' }] }}
+        onRespond={onRespond}
+        modeSwitch={{
+          permissionMode: 'ask',
+          onPermissionModeChange,
+          vendorKey: 'cc',
+          cycleOptions: CYCLE_OPTIONS,
+        }}
+      />,
+    );
+
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', ctrlKey: true });
+
+    expect(onRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: 'allow', decisionClassification: 'user_permanent' }),
+    );
+    expect(onPermissionModeChange).not.toHaveBeenCalled();
+  });
+
   it('没有 modeSwitch 时 Shift+Tab 不做任何事', () => {
     const onRespond = vi.fn();
     render(<PermissionPrompt permission={PERMISSION} onRespond={onRespond} />);

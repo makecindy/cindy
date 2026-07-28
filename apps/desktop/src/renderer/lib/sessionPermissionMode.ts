@@ -45,6 +45,50 @@ export type PermissionModeChangeOutcome =
  */
 const desyncedSessions = new Set<string>();
 
+/**
+ * 失配标记必须**活过 renderer reload**:agent 在 main 侧,崩溃恢复页(AppCrashScreen)
+ * 重载 renderer 时它照常活着并保持在新档。只存内存的话,重载后标记没了、DB 仍是旧档,
+ * 用户重选显示中的那一档又被同档短路吃掉 —— Full access 就此静默留存且无恢复路径。
+ * 所以内存 Set 之外再落一份 localStorage(读取时取并集,写入成功时两处一起清)。
+ * storage 不可用(隐私模式 / 测试环境)时静默退化为纯内存,不影响主流程。
+ */
+const DESYNC_STORAGE_PREFIX = 'cindy:permission-mode-desync:';
+
+function desyncStorage(): Storage | null {
+  try {
+    return typeof window !== 'undefined' ? (window.localStorage ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+function markDesynced(sessionId: string): void {
+  desyncedSessions.add(sessionId);
+  try {
+    desyncStorage()?.setItem(`${DESYNC_STORAGE_PREFIX}${sessionId}`, '1');
+  } catch {
+    // storage 写不进去(配额 / 隐私模式)时退化为纯内存标记。
+  }
+}
+
+function clearDesynced(sessionId: string): void {
+  desyncedSessions.delete(sessionId);
+  try {
+    desyncStorage()?.removeItem(`${DESYNC_STORAGE_PREFIX}${sessionId}`);
+  } catch {
+    // 同上。
+  }
+}
+
+function isDesynced(sessionId: string): boolean {
+  if (desyncedSessions.has(sessionId)) return true;
+  try {
+    return desyncStorage()?.getItem(`${DESYNC_STORAGE_PREFIX}${sessionId}`) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export interface ApplySessionPermissionModeChangeParams {
   /** 无 sessionId = 新建对话草稿,只走 confirm 门,不落 runtime/DB。 */
   sessionId?: string;
@@ -99,7 +143,7 @@ export async function applySessionPermissionModeChange({
   //
   // 例外:runtime 与持久化已知失配的会话不短路 —— 那时"重选显示中的档"正是用户
   // 唯一的对账手段(见 desyncedSessions 顶注)。
-  if (currentMode === nextMode && !(sessionId && desyncedSessions.has(sessionId))) {
+  if (currentMode === nextMode && !(sessionId && isDesynced(sessionId))) {
     return 'unchanged';
   }
 
@@ -126,7 +170,7 @@ export async function applySessionPermissionModeChange({
         // 镜像都停在旧档。控制端没有可靠回滚手段(再发一次隧道调用同样可能失败,
         // 被控端此刻的真实状态也不可知),只能记账,让"重选显示中的那一档"绕过
         // 同档短路去强制对账。
-        desyncedSessions.add(sessionId);
+        markDesynced(sessionId);
         throw remoteError;
       }
     } else {
@@ -139,7 +183,7 @@ export async function applySessionPermissionModeChange({
           // 有挂起请求时不回滚 —— 回滚是又一次 setPermissionMode,会再触发一次
           // dismissAllPending:撤不回上一次已经结掉的那条(切到放行档时它可能已在
           // 执行),却会连带结掉这期间新产生、用户没看过的请求。见 hasPendingInteraction。
-          desyncedSessions.add(sessionId);
+          markDesynced(sessionId);
           log.warn('permission persist failed with pending interaction; skipping rollback');
         } else {
           // DB 写入失败时尽力恢复运行时，保持用户看到的旧设置与实际行为一致。
@@ -148,7 +192,7 @@ export async function applySessionPermissionModeChange({
           } catch (rollbackError) {
             // 回滚也失败:UI/DB 停在旧档,活着的 agent 却留在新档。记账,让"重选显示中
             // 的那一档"能绕过同档短路去强制对账(见 desyncedSessions 顶注)。
-            desyncedSessions.add(sessionId);
+            markDesynced(sessionId);
             log.warn('permission runtime rollback failed:', rollbackError);
           }
         }
@@ -156,12 +200,12 @@ export async function applySessionPermissionModeChange({
       }
     }
     // 一次完整成功的写入即代表 runtime 与持久化重新对上。
-    desyncedSessions.delete(sessionId);
+    clearDesynced(sessionId);
     return 'ok';
   } catch (err) {
     log.warn('permission change failed:', err);
     // 上面两条失败路径只在"生效档位可能已经变了"时记账。据此区分提示语:
     // 记了账 → 不能说"已保留原设置"(那是假保证),要让用户重选一次对账。
-    return desyncedSessions.has(sessionId) ? 'desynced' : 'failed';
+    return isDesynced(sessionId) ? 'desynced' : 'failed';
   }
 }
