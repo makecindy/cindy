@@ -4566,6 +4566,53 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('stays busy while the retry turn/start RPC is still in flight', async () => {
+      // 退避计时器到点后 timer 已清空、turn 尚未激活，中间那段 RPC 在途窗口若报
+      // idle，并发 send 会被接受并把原消息静默丢掉（review #844 copilot）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<unknown>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            return turnStarts === 1 ? { turn: { id: 'turn-1' } } : retryStart.promise;
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-inflight-busy',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+
+        // 退避到点：计时器已清，RPC 在途，turn 还没激活。
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        retryStart.resolve({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('marks the dead turn as terminally handled so its late turn/completed cannot close the UI', async () => {
       // app-server 在容量错误后还会为该 turn 发正常的 turn/completed(failed)。
       // 没有墓碑，handleTurnCompleted 会 emit terminal error + done，把刚透出的

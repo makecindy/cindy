@@ -2155,6 +2155,14 @@ export class CodexAgent extends BaseAgent {
       retry: () => Promise<void>;
       attempt: number;
       timer: ReturnType<typeof setTimeout> | null;
+      /**
+       * 重投的 turn/start RPC 是否在途。计时器到点后 `timer` 已清空、新 turn 又
+       * 尚未激活，中间这段窗口若报 idle，并发 send 会被误接受并把原消息静默丢掉。
+       * 刻意用独立标记而不是复用 `isTurnStartPending`：后者在正常 send 路径上被
+       * 既有语义要求保持 idle（终态先于 turn/start 响应到达时，coordinator 必须
+       * 看到 idle 才能收口，否则 send 挂死），不能一起收紧。
+       */
+      inFlight: boolean;
     } | null = null;
     let closed = false;
     let subscriptionInvalidatedByTransport = false;
@@ -5249,6 +5257,7 @@ export class CodexAgent extends BaseAgent {
         overloadRetry = {
           attempt: 0,
           timer: null,
+          inFlight: false,
           retry: async () => {
             const state = overloadRetry;
             // 发出前复检：本轮 send 的取消信号在退避等待期间才 abort（coordinator
@@ -5261,6 +5270,9 @@ export class CodexAgent extends BaseAgent {
             assertCurrentHost('turn/start overload retry');
             resubscribeAfterTransportErrorIfNeeded();
             isTurnStartPending = true;
+            // RPC 在途也算忙（见 isTurnRunning 注释）：计时器已清、turn 未激活的
+            // 这段窗口若报 idle，并发 send 会把原消息挤掉。
+            state.inFlight = true;
             try {
               const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams);
               // **发出后再复检**：RPC 在途期间 Stop / close / 撤单都拦不住它——
@@ -5297,6 +5309,7 @@ export class CodexAgent extends BaseAgent {
               markTurnConfigAccepted();
               handleTurnStartResp(resp);
             } finally {
+              state.inFlight = false;
               isTurnStartPending = false;
               flushDeferredTerminalTurnCompletionsIfIdle();
             }
@@ -5847,12 +5860,20 @@ export class CodexAgent extends BaseAgent {
       },
 
       isTurnRunning() {
-        // 过载退避等待期间 app-server 侧确实没有活着的 turn（isTurnInFlight 为
-        // false），但**逻辑上这一轮还没结束**：重投计时器仍持着原消息。
-        // Session.send() 用本方法做并发守卫，只看 isTurnInFlight 会让退避窗口里
-        // 到达的新 send 被接受，而 send() 开头的 cancelOverloadRetry 会把原消息
-        // 静默丢掉。把待重投也算作忙，让新消息走正常排队路径。
-        return isTurnInFlight || overloadRetry?.timer != null;
+        // 本方法是 Session.send() 的 in-flight guard 判据（另见上方 turn/start
+        // 失败收口处的注释）。过载重投把这一轮拆成了两段 app-server 侧「没有活着
+        // 的 turn」但逻辑上没结束的窗口，只看 isTurnInFlight 都会漏：并发 send
+        // 被误接受后，send() 开头的 cancelOverloadRetry 会把原消息静默丢掉。
+        //
+        //  - `timer != null`：退避等待中，计时器持着原消息；
+        //  - `inFlight`：计时器已到点、重投 RPC 在途、新 turn 尚未激活。
+        //
+        // 两者都在 retry() 的 finally / cancelOverloadRetry 里必定复位。
+        // **不把 `isTurnStartPending` 一起算进来**：正常 send 路径上它必须保持
+        // idle 语义——终态先于 turn/start 响应到达时（协议允许的乱序），
+        // coordinator 要看到 idle 才能收口，否则 send 挂死（既有用例
+        // "accepts terminal error before TurnStartResponse…" 锁的就是这条）。
+        return isTurnInFlight || overloadRetry?.timer != null || overloadRetry?.inFlight === true;
       },
     };
 
