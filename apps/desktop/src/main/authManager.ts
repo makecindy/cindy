@@ -784,14 +784,13 @@ function scheduleRefresh(token: string): void {
     clearTimeout(refreshTimer);
     refreshTimer = null;
   }
-  if (isPassiveSharedUserDataInstance()) {
-    // passive 共享实例不主动续期:定时 refresh 会轮换整机共用的 refresh token,让
-    // primary 每轮都走 replacement-retry(2026-07-27 两边日志每 55 分钟互刷一次
-    // 「refresh token changed on disk」就是这么来的)。冷启动那一次 refresh 仍保留
-    // ——passive 需要它换取 access token;之后的续期节奏交给 primary。
-    log.info('passive shared-userData instance skips scheduled refresh (primary owns renewal)');
-    return;
-  }
+  // 续期节奏对 passive 实例不设闸门。本 PR 的契约是「passive 不写/不删共享的
+  // auth 持久状态」;「谁负责续期」是正交问题,不在这里解决。让 passive 停止续期
+  // 会让它的 access token 过期后再无替换途径(primary 的续期只更新磁盘 token,
+  // 不更新本进程内存态),而 updateServerProfile 等直接走 apiFetch 的路径没有
+  // 401 refresh/retry,会一直失败到进程重启——resume 也救不了,系统不休眠就不触发。
+  // 轮换本身不会踢人:2026-07-27 两个实例每 55 分钟互刷一次,primary 每次都靠
+  // replacement-retry 恢复,一次没掉线;把 primary 踢下线的是删除凭证。
   try {
     const payload = JSON.parse(
       Buffer.from(token.split('.')[1], 'base64').toString('utf-8'),
@@ -909,12 +908,6 @@ function scheduleRefreshRetryAfterTransientFailure(): void {
   if (refreshTimer !== null) {
     clearTimeout(refreshTimer);
     refreshTimer = null;
-  }
-  if (isPassiveSharedUserDataInstance()) {
-    // 同 scheduleRefresh:passive 不接管续期,瞬时失败也不排重试,免得把整机共用的
-    // refresh token 又轮换一次。
-    log.info('passive shared-userData instance skips refresh retry (primary owns renewal)');
-    return;
   }
   refreshTimer = setTimeout(() => void refresh(), RUNTIME_REFRESH_RETRY_MS);
 }
@@ -2585,16 +2578,6 @@ export async function logout(): Promise<void> {
 /**
  * Called on system resume (powerMonitor 'resume' event).
  * If the app JWT is expired or expiring within 5 minutes, trigger a refresh.
- *
- * 唤醒续期对 passive 实例**有意不加闸门**（与 scheduleRefresh 的处理不同）。
- *
- * passive 让出的是「周期性主动轮换」——那是每 55 分钟一次、与 primary 规律对撞的
- * 噪音源。但它不能连按需续期一起让出:access token 过期后,primary 的续期只更新
- * 磁盘上的 refresh token,不会更新本进程内存里的 access token,而
- * getAccountDeletionAvailability() / updateServerProfile() 这类直接走 apiFetch 的
- * 路径拿不到 401 重试,会一直失败到进程重启。resume 是低频事件,让它作为按需自愈
- * 入口，代价（一次轮换）由 primary 侧既有的 replacement-retry 消化——轮换本身不会
- * 踢人，把 primary 踢下线的是删除凭证，那条已由 clearAuth 的闸门堵住。
  */
 export function handleResume(): void {
   if (accessToken === null) return;

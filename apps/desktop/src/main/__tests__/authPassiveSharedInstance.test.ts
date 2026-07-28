@@ -7,9 +7,10 @@ import { describe, expect, it } from 'vitest';
  * Electron,node 测试环境无法直接 import,沿用 authSessionExpiredDetection.test.ts 的
  * 源码守卫模式)。
  *
- * 守护的契约:passive 共享实例可以**用**登录态,但不能**改**它。三个共享物——磁盘
- * refresh token 文件、服务端按 (user, device) 一对一存的 refresh token、由前者派生的
- * 续期节奏——一个都不能动。
+ * 守护的契约:passive 共享实例可以**用**登录态,但不能**写/删**整机共享的 auth 持久
+ * 状态——refresh token 文件、服务端 device token(登出会连坐作废)、relogin marker、
+ * canary flag、账号删除 receipt。「谁负责续期」是正交问题,不在本契约内:passive
+ * 照常续期,否则它的 access token 过期后没有任何自愈路径。
  *
  * 2026-07-27 事故:两个 MIGRATE_FAILED 的 passive 实例(05:30 与 07:51)在 LocalDbGate
  * fatal 界面点「返回登录」,logout 删掉整机 refresh token;正在使用的 primary 分别在
@@ -65,23 +66,23 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(body.indexOf("apiFetch('/api/auth/logout'")).toBeGreaterThan(guardIdx);
   });
 
-  it('续期节奏:passive 共享实例既不排定时 refresh,也不排瞬时失败重试', () => {
+  it('续期节奏不设闸门:passive 照常排 timer,否则 access token 过期后无自愈路径', () => {
+    // 本 PR 的契约是「不写/不删共享的 auth 持久状态」;「谁负责续期」是正交问题。
+    // 曾经让 passive 停止续期，被两个 reviewer 从相反方向指出问题：停掉之后
+    // access token 过期就再无替换途径（primary 的续期只更新磁盘 token，不更新本
+    // 进程内存态），而 updateServerProfile 等直接走 apiFetch 的路径没有 401
+    // refresh/retry，会一直失败到进程重启——resume 也救不了，系统不休眠就不触发。
+    // 轮换本身不会踢人（primary 侧 replacement-retry 兜底），踢人的是删除凭证。
     const scheduleBody = sliceBody('function scheduleRefresh(token: string): void {', '\n}\n');
-    const passiveIdx = scheduleBody.indexOf('if (isPassiveSharedUserDataInstance()) {');
-    expect(passiveIdx).toBeGreaterThan(-1);
-    // 早退必须发生在排 timer 之前。
-    expect(scheduleBody.indexOf('setTimeout(')).toBeGreaterThan(passiveIdx);
-    expect(scheduleBody.slice(passiveIdx)).toContain('return;');
+    expect(scheduleBody).not.toContain('if (isPassiveSharedUserDataInstance()) {');
+    expect(scheduleBody).toContain('refreshTimer = setTimeout(');
 
     const retryBody = sliceBody(
       'function scheduleRefreshRetryAfterTransientFailure(): void {',
       '\n}\n',
     );
-    const retryPassiveIdx = retryBody.indexOf('if (isPassiveSharedUserDataInstance()) {');
-    expect(retryPassiveIdx).toBeGreaterThan(-1);
-    expect(retryBody.indexOf('refreshTimer = setTimeout(')).toBeGreaterThan(retryPassiveIdx);
-    // 早退前必须把已清掉的 timer 置 null,不留悬空引用。
-    expect(retryBody.slice(0, retryPassiveIdx)).toContain('refreshTimer = null;');
+    expect(retryBody).not.toContain('isPassiveSharedUserDataInstance');
+    expect(retryBody).toContain('refreshTimer = setTimeout(');
   });
 
   it('refresh 本身不被 passive 拦:冷启动仍能换 access token,凭证缺席仍走过期出口', () => {
@@ -91,7 +92,7 @@ describe('passive shared-userData instance auth isolation', () => {
     );
 
     // passive 需要冷启动那一次 refresh 才有可用会话;拦掉 refresh() 本身会让它拿不到
-    // access token。闸门只加在「排 timer」和「删凭证」上,不加在 refresh 入口。
+    // access token。闸门只加在「写/删共享持久状态」上,不加在 refresh 入口。
     expect(body).not.toContain('isPassiveSharedUserDataInstance');
     // 且 passive 被 primary 换掉 token 时仍明确过期(只影响本进程、不删盘),
     // 不得退回 2026-07-23 那种静默半死。
@@ -99,13 +100,8 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(body).toContain('preservePersistedRefreshToken: true');
   });
 
-  it('唤醒续期有意不加闸门:passive 让出的是周期轮换,不是按需自愈', () => {
+  it('唤醒续期同样不设闸门', () => {
     const body = sliceBody('export function handleResume(): void {', '\n}\n');
-
-    // 拦掉 resume 会让 passive 的 access token 过期后再无替换：primary 的续期只更新
-    // 磁盘 refresh token，不更新本进程内存里的 access token，而直接走 apiFetch 的
-    // 路径（getAccountDeletionAvailability / updateServerProfile）拿不到 401 重试。
-    // 这条断言把取舍钉住，避免后续 review 来回改。
     expect(body).not.toContain('isPassiveSharedUserDataInstance');
     expect(body).toContain('refresh();');
   });
