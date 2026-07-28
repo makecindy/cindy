@@ -68,6 +68,18 @@ export interface ApplySessionPermissionModeChangeParams {
    * 此时若照旧写入,dismissAllPending 会把用户根本没看过的新请求一并放行。
    */
   assertStillApplicable?: () => boolean;
+  /**
+   * 调用这次切换时是否有挂起的交互请求(权限卡片场景恒为 true)。
+   *
+   * 有的话,落库失败时**不做 runtime 回滚**。回滚本身也是一次 setPermissionMode,
+   * 同样会触发 maker-core 的 dismissAllPending:
+   * - 它撤销不了前一次调用已经结掉的那条请求 —— 切到放行档时那条可能已经在执行了,
+   *   把档位调回来只影响后续请求;
+   * - 更糟的是,它会连带结掉这期间 agent 新产生、用户根本没看过的请求。
+   * 宁可留下 runtime 与持久化的失配(记账 + 提示用户重选对账),也不要为了让 DB 好看
+   * 再误伤一次。无挂起请求时 dismissAllPending 是 no-op,回滚照旧,行为不变。
+   */
+  hasPendingInteraction?: boolean;
 }
 
 export async function applySessionPermissionModeChange({
@@ -77,6 +89,7 @@ export async function applySessionPermissionModeChange({
   nextMode,
   confirmFullAccess,
   assertStillApplicable,
+  hasPendingInteraction = false,
 }: ApplySessionPermissionModeChangeParams): Promise<PermissionModeChangeOutcome> {
   // 同档短路,必须在确认门之前:PermissionSelector 的选项 onClick 无条件回调(点当前
   // 选中项也会进来),而 maker-core 的 setPermissionMode 无论档位变没变都会
@@ -122,14 +135,22 @@ export async function applySessionPermissionModeChange({
       try {
         await sessionService.update(sessionId, { permissionMode: nextMode });
       } catch (persistError) {
-        // DB 写入失败时尽力恢复运行时，保持用户看到的旧设置与实际行为一致。
-        try {
-          await window.electronAPI.maker.setPermissionMode(sessionId, currentMode);
-        } catch (rollbackError) {
-          // 回滚也失败:UI/DB 停在旧档,活着的 agent 却留在新档。记账,让"重选显示中
-          // 的那一档"能绕过同档短路去强制对账(见 desyncedSessions 顶注)。
+        if (hasPendingInteraction) {
+          // 有挂起请求时不回滚 —— 回滚是又一次 setPermissionMode,会再触发一次
+          // dismissAllPending:撤不回上一次已经结掉的那条(切到放行档时它可能已在
+          // 执行),却会连带结掉这期间新产生、用户没看过的请求。见 hasPendingInteraction。
           desyncedSessions.add(sessionId);
-          log.warn('permission runtime rollback failed:', rollbackError);
+          log.warn('permission persist failed with pending interaction; skipping rollback');
+        } else {
+          // DB 写入失败时尽力恢复运行时，保持用户看到的旧设置与实际行为一致。
+          try {
+            await window.electronAPI.maker.setPermissionMode(sessionId, currentMode);
+          } catch (rollbackError) {
+            // 回滚也失败:UI/DB 停在旧档,活着的 agent 却留在新档。记账,让"重选显示中
+            // 的那一档"能绕过同档短路去强制对账(见 desyncedSessions 顶注)。
+            desyncedSessions.add(sessionId);
+            log.warn('permission runtime rollback failed:', rollbackError);
+          }
         }
         throw persistError;
       }

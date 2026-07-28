@@ -2379,6 +2379,9 @@ export function CCAgentSessionView({
           // 就别再写了 —— 否则 dismissAllPending 会替用户放行他没看过的新请求。
           assertStillApplicable: () =>
             pendingPermissionRequestIdRef.current === originRequestId,
+          // 卡片场景恒有挂起请求:落库失败时不要回滚 runtime,回滚会再触发一次
+          // dismissAllPending,误伤这期间新产生、用户没看过的请求(见该参数顶注)。
+          hasPendingInteraction: true,
         });
         // unchanged = 点回当前档,一次写入都没发生,没有新状态要回流。
         if (outcome === 'cancelled' || outcome === 'unchanged') return;

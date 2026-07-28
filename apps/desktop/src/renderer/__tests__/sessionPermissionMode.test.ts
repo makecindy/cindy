@@ -158,6 +158,27 @@ describe('applySessionPermissionModeChange', () => {
     expect(localSetPermissionMode).toHaveBeenNthCalledWith(2, SESSION_ID, 'ask');
   });
 
+  // 回滚是又一次 setPermissionMode,同样触发 dismissAllPending。有挂起请求时它
+  // 撤不回上一次已经结掉的那条(切到放行档时可能已在执行),却会连带结掉这期间
+  // 新产生、用户没看过的请求 —— 宁可留下失配也不要再误伤一次。
+  it('有挂起请求时落库失败不回滚,只记失配', async () => {
+    const PENDING_SESSION = 'perm-mode-pending-no-rollback';
+    sessionUpdate.mockRejectedValueOnce(new Error('db down'));
+
+    const outcome = await applySessionPermissionModeChange({
+      sessionId: PENDING_SESSION,
+      currentMode: 'ask',
+      nextMode: 'bypassPermissions',
+      confirmFullAccess: vi.fn(async () => true),
+      hasPendingInteraction: true,
+    });
+
+    expect(outcome).toBe('desynced');
+    // 只有切档那一次写入,没有第二次(回滚)。
+    expect(localSetPermissionMode).toHaveBeenCalledTimes(1);
+    expect(localSetPermissionMode).toHaveBeenCalledWith(PENDING_SESSION, 'bypassPermissions');
+  });
+
   it('运行时失败直接告败,不落库', async () => {
     localSetPermissionMode.mockRejectedValueOnce(new Error('runtime down'));
 
