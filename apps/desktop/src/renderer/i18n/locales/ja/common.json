@@ -2473,7 +2473,8 @@
         "needsSetup": "要設定",
         "needsReauth": "要再認証",
         "degraded": "異常",
-        "unknown": "状態不明"
+        "unknown": "状態不明",
+        "blocked": "ログインしてクラウドサービスを復旧すると利用できます"
       },
       "setupGate": {
         "title": "「{{name}}」は設定が必要です",

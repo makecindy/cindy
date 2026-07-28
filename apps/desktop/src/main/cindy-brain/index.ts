@@ -3409,10 +3409,13 @@ export function registerGhostIpc(): void {
   // oauth 判定用运行时清单(filo-google 的内置 client 是运行时注入的,读原始
   // 清单会把「开箱即用」误判成未配置)。判定只管存在性:user 凭证只查加密
   // 文件存在(不解密);key 有效性仍由运行期 networkSlot 出网 fail-fast 兜底。
-  // 探针意外抛错不捕获——invoke reject 后 renderer 放行(fail-open),
-  // 不把「查询失败」折叠成「未配置」误拦。
-  ipcMain.handle('ghosts:setup-status', (_event, id: unknown) =>
-    handleGhostSetupStatusRequest({
+  // 探针意外抛错统一折成 SETUP_STATUS_UNAVAILABLE(结构化 IPC 错误,见
+  // engineering-conventions 的错误编码规则)——renderer 据 code 给专用
+  // 恢复文案;裸异常穿透 invoke 会让 renderer 认不出失败类型,跌回通用
+  // 错误。INVALID_PARAMS / NOT_FOUND 等已编码错误原样透传。
+  ipcMain.handle('ghosts:setup-status', (_event, id: unknown) => {
+    try {
+      return handleGhostSetupStatusRequest({
       id,
       getRuntimeManifest: (ghostId) => {
         const ghost = findAvailableGhost(ghostId);
@@ -3462,8 +3465,16 @@ export function registerGhostIpc(): void {
           clientConfigReady: (configId) =>
             configId === 'model-provider' && isModelAccessReady(),
         }),
-    }),
-  );
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code) throw error;
+      log.error('setup-status evaluation failed', {
+        id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('SETUP_STATUS_UNAVAILABLE', '配置状态判定失败;请检查插件页状态');
+    }
+  });
 
   // ── 生命周期统一投影(插件页徽章 / 后续多端只读清单的事实源)──
   // 查询型 handler:现查现算不缓存,返回的投影与发现层 / scheduler 同一份

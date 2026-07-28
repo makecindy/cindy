@@ -2473,7 +2473,8 @@
         "needsSetup": "설정 필요",
         "needsReauth": "재인증 필요",
         "degraded": "오류 발생",
-        "unknown": "상태 알 수 없음"
+        "unknown": "상태 알 수 없음",
+        "blocked": "로그인하고 클라우드 서비스를 복구해야 사용할 수 있습니다"
       },
       "setupGate": {
         "title": "“{{name}}” 플러그인은 설정이 필요합니다",

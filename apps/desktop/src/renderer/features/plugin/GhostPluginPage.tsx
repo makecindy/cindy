@@ -651,7 +651,18 @@ export function GhostPluginPage() {
         return;
       }
       if (readiness !== 'ready') {
-        toast.error(t(`settings.ghosts.readiness.${readiness}`));
+        // readiness(snake_case)→ i18n key(camelCase)显式映射:模板串拼
+        // `readiness.${readiness}` 在 needs_setup/needs_reauth/blocked 下
+        // 会拼出不存在的 key(i18next 直出原始 key 串)。目录无 blocked
+        // 徽章 key(徽章组件对 blocked 不渲染),用 setupGate 的重连话术。
+        const READINESS_TOAST_KEY: Record<Exclude<GhostReadiness, 'ready'>, string> = {
+          needs_setup: 'settings.ghosts.readiness.needsSetup',
+          needs_reauth: 'settings.ghosts.readiness.needsReauth',
+          degraded: 'settings.ghosts.readiness.degraded',
+          unknown: 'settings.ghosts.readiness.unknown',
+          blocked: 'settings.ghosts.readiness.blocked',
+        };
+        toast.error(t(READINESS_TOAST_KEY[readiness]));
         return;
       }
       const existing = getComposerDraft(NEW_MAKER_DRAFT_KEY);

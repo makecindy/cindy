@@ -2474,7 +2474,8 @@
         "needsSetup": "Setup needed",
         "needsReauth": "Re-authorize",
         "degraded": "Malfunctioning",
-        "unknown": "Unknown state"
+        "unknown": "Unknown state",
+        "blocked": "Sign in and restore cloud services to use"
       },
       "setupGate": {
         "title": "“{{name}}” Needs Setup",
