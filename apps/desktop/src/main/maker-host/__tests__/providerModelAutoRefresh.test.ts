@@ -36,20 +36,22 @@ describe('provider model auto-refresh coordinator', () => {
     const refreshProvider =
       vi.fn<(providerId: BuiltinRefreshableProviderId) => Promise<void>>();
     refreshProvider.mockResolvedValue(undefined);
+    const listProviders = vi.fn(async (_options: { allowSideEffects: true }) => [
+      view('xd', true),
+      view('anthropic', true),
+      view('openai', false),
+      view('custom-provider', true),
+      view('xai', true, 'user'),
+    ]);
     const coordinator = createProviderModelRefreshCoordinator({
-      listProviders: async () => [
-        view('xd', true),
-        view('anthropic', true),
-        view('openai', false),
-        view('custom-provider', true),
-        view('xai', true, 'user'),
-      ],
+      listProviders,
       refreshProvider,
       now: () => now,
       log: { debug: vi.fn(), warn: vi.fn() },
     });
 
     await coordinator.requestAutoRefresh('providers-open');
+    expect(listProviders).toHaveBeenLastCalledWith({ allowSideEffects: true });
     expect(refreshProvider.mock.calls.map(([id]) => id)).toEqual(['xd', 'anthropic']);
 
     await coordinator.requestAutoRefresh('model-selector-open');

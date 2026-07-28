@@ -23,7 +23,7 @@ export const PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS = 5 * 60_000;
 export const PROVIDER_MODEL_FOREGROUND_BACKGROUND_THRESHOLD_MS = 15 * 60_000;
 
 export interface ProviderModelAutoRefreshDeps {
-  listProviders(): Promise<ProviderView[]>;
+  listProviders(options: { allowSideEffects: true }): Promise<ProviderView[]>;
   refreshProvider(providerId: BuiltinRefreshableProviderId): Promise<void>;
   now(): number;
   log: Pick<Logger, 'debug' | 'warn'>;
@@ -91,7 +91,7 @@ export function createProviderModelRefreshCoordinator(
     async requestAutoRefresh(trigger): Promise<void> {
       let providers: ProviderView[];
       try {
-        providers = await deps.listProviders();
+        providers = await deps.listProviders({ allowSideEffects: true });
       } catch (err) {
         deps.log.warn('provider model auto-refresh could not list providers', {
           trigger,
