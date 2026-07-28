@@ -33,6 +33,12 @@ import type {
   ResponsesToolChoice,
 } from './types.js';
 
+const TOOL_RESULT_IMAGE_OMITTED =
+  '[image omitted: this tool returned an image, but this provider route only supports ' +
+  'plain-text tool results, so the image data was not delivered. Do not guess or fabricate ' +
+  'the image contents. Ask the user to paste the relevant content as text or attach the image ' +
+  'directly to a chat message.]';
+
 /** system(string 或 text block 数组)拍平成 instructions 字符串。 */
 function systemToInstructions(system: AnthropicMessagesRequest['system']): string | undefined {
   if (system == null) return undefined;
@@ -57,8 +63,8 @@ function toolResultToString(content: unknown): string {
           const rec = b as Record<string, unknown>;
           if (rec.type === 'text' && typeof rec.text === 'string') return rec.text;
           // 工具结果里嵌图片等非文本内容:Responses 的 function_call_output 只吃字符串,
-          // 退化成占位描述,不丢整条(模型仍知道该工具产出过内容)。
-          if (rec.type === 'image') return '[image]';
+          // 退化成明确的文本说明,既不丢整条,也避免模型猜测无法送达的图像内容。
+          if (rec.type === 'image') return TOOL_RESULT_IMAGE_OMITTED;
           return JSON.stringify(rec);
         }
         return String(b);

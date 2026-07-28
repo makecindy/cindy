@@ -179,6 +179,48 @@ describe('translateRequest', () => {
     expect(out.input).toEqual([{ type: 'function_call_output', call_id: 'c1', output: 'r1\nr2' }]);
   });
 
+  it('explains omitted tool-result images without forwarding image data', () => {
+    const secretImageData = 'base64-image-data-must-not-leak';
+    const out = translateRequest(
+      {
+        model: 'chatgpt/gpt-5.5',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'image-call',
+                content: [
+                  {
+                    type: 'image',
+                    source: {
+                      type: 'base64',
+                      media_type: 'image/png',
+                      data: secretImageData,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      { model: 'gpt-5.5' },
+    );
+
+    const output = out.input[0];
+    expect(output).toMatchObject({
+      type: 'function_call_output',
+      call_id: 'image-call',
+    });
+    if (output.type !== 'function_call_output') throw new Error('expected function_call_output');
+    expect(output.output).toContain('only supports plain-text tool results');
+    expect(output.output).toContain('Do not guess or fabricate');
+    expect(output.output).toContain('attach the image directly to a chat message');
+    expect(output.output).not.toContain(secretImageData);
+  });
+
   it('serverSideTools 恒定追加在 function tools 之后(位置固定 → 前缀稳定)', () => {
     const req: AnthropicMessagesRequest = {
       model: 'xai/grok-4.5',
