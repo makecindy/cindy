@@ -12,6 +12,7 @@ describe('cindy_wechat proactive routing', () => {
   it('sends only to the host-resolved known peer', async () => {
     const sendMessage = vi.fn(async () => ({ ok: true, messageId: 'msg-1' }));
     const server = createWechatMcpServer({
+      getActivePeerIdForSession: () => null,
       getMostRecentPeerId: () => 'peer-history',
       getPeerId: () => 'peer-session',
       sendMessage,
@@ -36,6 +37,7 @@ describe('cindy_wechat proactive routing', () => {
   it('fails closed when no peer has ever been observed', async () => {
     const sendMessage = vi.fn();
     const server = createWechatMcpServer({
+      getActivePeerIdForSession: () => null,
       getMostRecentPeerId: () => null,
       getPeerId: () => null,
       sendMessage,
@@ -63,6 +65,7 @@ describe('cindy_wechat proactive routing', () => {
     await fs.writeFile(absPath, 'png-bytes');
     const sendFile = vi.fn(async () => ({ ok: true, messageId: 'media-1' }));
     const server = createWechatMcpServer({
+      getActivePeerIdForSession: () => null,
       getMostRecentPeerId: () => 'peer-history',
       getPeerId: () => 'peer-session',
       sendMessage: vi.fn(),
@@ -96,6 +99,7 @@ describe('cindy_wechat proactive routing', () => {
     await fs.writeFile(outsidePath, 'not-for-wechat');
     const sendFile = vi.fn();
     const server = createWechatMcpServer({
+      getActivePeerIdForSession: () => null,
       getMostRecentPeerId: () => 'peer-history',
       getPeerId: () => 'peer-session',
       sendMessage: vi.fn(),

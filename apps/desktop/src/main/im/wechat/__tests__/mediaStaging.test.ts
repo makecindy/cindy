@@ -4,8 +4,8 @@ import type { WechatTransport } from '@cindy/wechat-ilink';
 
 const mocks = vi.hoisted(() => ({
   decodeWechatSilkToWav: vi.fn(),
+  ingestMedia: vi.fn(),
   resolveSafe: vi.fn(),
-  writeBlob: vi.fn(),
 }));
 
 vi.mock('../silkDecoder', () => ({
@@ -14,7 +14,10 @@ vi.mock('../silkDecoder', () => ({
 
 vi.mock('../../../cindy-media/blobStore', () => ({
   resolveSafe: mocks.resolveSafe,
-  writeBlob: mocks.writeBlob,
+}));
+
+vi.mock('../../../cindy-media/ingest', () => ({
+  ingestMedia: mocks.ingestMedia,
 }));
 
 import { __testing, stageWechatTaskMedia } from '../mediaStaging';
@@ -23,8 +26,8 @@ import { pcmS16leToWav, WavOutputLimitError } from '../silkWav';
 describe('WeChat media staging validation', () => {
   beforeEach(() => {
     mocks.decodeWechatSilkToWav.mockReset();
+    mocks.ingestMedia.mockReset();
     mocks.resolveSafe.mockReset();
-    mocks.writeBlob.mockReset();
   });
 
   it('detects supported image bytes instead of trusting platform metadata', () => {
@@ -70,6 +73,40 @@ describe('WeChat media staging validation', () => {
     );
   });
 
+  it('records a staged media blob before exposing its attachment', async () => {
+    const hash = 'a'.repeat(64);
+    mocks.ingestMedia.mockResolvedValueOnce({
+      hash,
+      ext: '.png',
+      mimeType: 'image/png',
+      bytes: 8,
+      url: `cindy-media://blobs/${hash}.png`,
+      deduplicated: false,
+      refIds: [],
+    });
+    mocks.resolveSafe.mockReturnValueOnce({ absPath: 'C:\\media\\wechat-image.png' });
+
+    const result = await stageWechatTaskMedia(
+      stageArgs({
+        media: [{ kind: 'image' }],
+        downloadMedia: vi
+          .fn()
+          .mockResolvedValue(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+      }),
+    );
+
+    expect(mocks.ingestMedia).toHaveBeenCalledWith({
+      buffer: expect.any(Uint8Array),
+      mimeType: 'image/png',
+      isCache: false,
+      refs: [],
+    });
+    expect(mocks.ingestMedia.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.resolveSafe.mock.invocationCallOrder[0]!,
+    );
+    expect(result.mediaRefs).toHaveLength(1);
+  });
+
   it('distinguishes download, decode, and staging failures', async () => {
     const downloadFailed = await stageWechatTaskMedia(
       stageArgs({
@@ -90,7 +127,7 @@ describe('WeChat media staging validation', () => {
     );
     expect(decodeFailed.unsupportedMedia).toEqual(['voice:decode-failed']);
 
-    mocks.writeBlob.mockRejectedValueOnce(new Error('disk full'));
+    mocks.ingestMedia.mockRejectedValueOnce(new Error('disk full'));
     const stagingFailed = await stageWechatTaskMedia(
       stageArgs({
         media: [{ kind: 'image' }],

@@ -259,7 +259,14 @@ export function createLiziMcpProviders(
         name: 'cindy_wechat',
         instance: createWechatMcpServer({
           ...opts.wechatBot!,
-          getPeerId: () => readWechatPeerId(ctx) ?? opts.wechatBot!.getMostRecentPeerId(),
+          getPeerId: async () => {
+            const current = resolveLiziMcpSessionContext(ctx);
+            return (
+              readWechatPeerId(current) ??
+              (await opts.wechatBot!.getActivePeerIdForSession(current.sessionId)) ??
+              (await opts.wechatBot!.getMostRecentPeerId())
+            );
+          },
           workingDir: ctx.workingDir,
         }),
       }),

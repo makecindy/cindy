@@ -143,6 +143,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       logger: createLogger('mcp/cindy_feishu_bot'),
     },
     wechatBot: {
+      getActivePeerIdForSession: (sessionId) =>
+        wechatIm.getActivePeerIdForSession(sessionId),
       getMostRecentPeerId: () => wechatIm.getMostRecentPeerId(),
       sendMessage: async (peerId, text) => {
         try {

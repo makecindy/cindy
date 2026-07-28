@@ -6,6 +6,7 @@ import type { IMAttachment } from '@cindy/im';
 import type { WechatMediaRef, WechatTransport } from '@cindy/wechat-ilink';
 
 import * as blobStore from '../../cindy-media/blobStore';
+import { ingestMedia } from '../../cindy-media/ingest';
 import type {
   WechatPollFileAttachmentInput,
   WechatPollMediaBlobInput,
@@ -74,9 +75,15 @@ export async function stageWechatTaskMedia(args: {
     }
     try {
       if (detected.storage === 'cindy-media') {
-        const written = await blobStore.writeBlob({
+        // Poll commit happens after downloads finish. Ingest with no refs
+        // before exposing the URL so duplicate, overload, stale-cursor, and
+        // interaction-only paths leave a recycler-visible zero-ref ledger row
+        // instead of an untracked content-addressed file.
+        const written = await ingestMedia({
           buffer: bytes,
           mimeType: detected.mimeType,
+          isCache: false,
+          refs: [],
         });
         const resolved = blobStore.resolveSafe(written.url);
         result.attachments.push({

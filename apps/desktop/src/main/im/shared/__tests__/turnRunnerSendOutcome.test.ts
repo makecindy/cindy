@@ -1161,6 +1161,32 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
+  it('reports the attached Desktop route before provider startup', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const onRouteResolved = vi.fn();
+    const beforeProviderStart = vi.fn(async () => undefined);
+
+    const dispatch = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-attached-route',
+      text: 'route this turn',
+      attachments: [],
+      queueMode: 'external',
+      onRouteResolved,
+      beforeProviderStart,
+    });
+
+    expect(dispatch.kind).toBe('accepted');
+    expect(onRouteResolved).toHaveBeenCalledWith('desktop-attached-session');
+    expect(onRouteResolved.mock.invocationCallOrder[0]).toBeLessThan(
+      beforeProviderStart.mock.invocationCallOrder[0]!,
+    );
+
+    h.emit({ type: 'done', data: {} });
+    if (dispatch.kind === 'accepted') await dispatch.terminal;
+  });
+
   it('returns busy without copying external work into the in-memory queue', async () => {
     const h = setupSession(async () => ({ accepted: true }));
     const first = await getRunner().dispatchAgentTurn({

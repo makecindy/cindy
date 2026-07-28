@@ -139,6 +139,9 @@ export interface WechatBotSendFileResult {
 
 /** Host bridge for the personal WeChat proactive-message MCP. */
 export interface WechatBotMcpHostDeps {
+  getActivePeerIdForSession(
+    sessionId: string | undefined,
+  ): Promise<string | null> | string | null;
   getMostRecentPeerId(): Promise<string | null> | string | null;
   sendMessage(peerId: string, text: string): Promise<WechatBotSendMessageResult>;
   sendFile(

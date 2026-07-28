@@ -1,12 +1,32 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { IMHost } from '@cindy/im';
-import type { WechatCredentials, WechatTransport } from '@cindy/wechat-ilink';
+import {
+  WechatIlinkError,
+  type WechatCredentials,
+  type WechatTransport,
+} from '@cindy/wechat-ilink';
 
 import type { DbClient } from '../../../localDb/client/DbClient';
 import { __testing, sessionIdFor, WechatIM, type WechatIMDeps } from '../WechatIM';
 
+const mediaMocks = vi.hoisted(() => ({
+  removeReleasedWechatFiles: vi.fn(async () => undefined),
+}));
+
+vi.mock('../mediaStaging', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../mediaStaging')>();
+  return {
+    ...actual,
+    removeReleasedWechatFiles: mediaMocks.removeReleasedWechatFiles,
+  };
+});
+
 describe('WechatIM host boundary', () => {
+  beforeEach(() => {
+    mediaMocks.removeReleasedWechatFiles.mockClear();
+  });
+
   it('derives a stable session id without exposing either platform identifier', () => {
     const first = sessionIdFor('bot-secret-id', 'peer-secret-id');
     expect(first).toBe(sessionIdFor('bot-secret-id', 'peer-secret-id'));
@@ -53,6 +73,55 @@ describe('WechatIM host boundary', () => {
         },
       ] as never),
     ).toBe(true);
+  });
+
+  it('keeps staged files only for accepted poll tasks', () => {
+    const accepted = __testing.acceptedPollTaskIds({
+      committed: true,
+      insertedTaskIds: ['accepted', 'overload'],
+      duplicateTaskIds: ['duplicate'],
+      rejectedTaskIds: ['overload'],
+    });
+    expect([...accepted]).toEqual(['accepted']);
+    expect(
+      [...__testing.acceptedPollTaskIds({
+        committed: false,
+        reason: 'stale-cursor',
+        activeBindingEpoch: 'binding-1',
+        currentCursor: 'newer',
+      })],
+    ).toEqual([]);
+  });
+
+  it('marks permanent local outbox failures terminal while retaining transport retries', () => {
+    expect(
+      __testing.classifyOutboxSendError(
+        Object.assign(new Error('missing attachment'), { code: 'ENOENT' }),
+      ),
+    ).toEqual({ code: 'ENOENT', retryable: false });
+    expect(
+      __testing.classifyOutboxSendError(
+        new WechatIlinkError('NETWORK_ERROR', 'temporary network failure', true),
+      ),
+    ).toEqual({ code: 'NETWORK_ERROR', retryable: true });
+  });
+
+  it('stops every active peer before an epoch can finish shutting down', async () => {
+    const stopActiveTurn = vi.fn(async () => ({ stopped: true }));
+    await __testing.stopActiveWechatTurns(
+      { stopActiveTurn } as never,
+      'bot-1',
+      ['peer-1', 'peer-1', 'peer-2'],
+    );
+    expect(stopActiveTurn).toHaveBeenCalledTimes(2);
+    expect(stopActiveTurn).toHaveBeenCalledWith({
+      botContextId: 'bot-1',
+      userId: 'peer-1',
+    });
+    expect(stopActiveTurn).toHaveBeenCalledWith({
+      botContextId: 'bot-1',
+      userId: 'peer-2',
+    });
   });
 
   it('returns to needs_reauth when cancelling an authorization for an existing binding', () => {
@@ -156,6 +225,130 @@ describe('WechatIM host boundary', () => {
     expect(testHost.secrets.write).not.toHaveBeenCalled();
     expect(im.getState()).toMatchObject({ phase: 'disabled_by_policy', bound: false });
   });
+
+  it('rolls back a newly activated binding when the account generation becomes stale', async () => {
+    const previous = { bindingEpoch: 'binding-previous', cursor: 'cursor-previous' };
+    let activationFinished = false;
+    let newBindingEpoch = '';
+    const activateCalls: Array<Record<string, unknown>> = [];
+    const db = fakeDb({
+      queryOne: vi.fn(async (sql: string) =>
+        sql.includes('FROM wechat_sync_state') ? previous : undefined,
+      ) as DbClient['queryOne'],
+      tx: vi.fn(async (name: string, args: Record<string, unknown>) => {
+        if (name !== 'wechatActivateBindingEpoch') return null;
+        activateCalls.push(args);
+        if (activateCalls.length === 1) {
+          newBindingEpoch = String(args.bindingEpoch);
+          activationFinished = true;
+          return {
+            activated: true,
+            previousActiveEpoch: previous.bindingEpoch,
+            activeBindingEpoch: newBindingEpoch,
+          };
+        }
+        return {
+          activated: true,
+          previousActiveEpoch: newBindingEpoch,
+          activeBindingEpoch: previous.bindingEpoch,
+        };
+      }),
+    });
+    const testHost = host({
+      secretRead: (name) =>
+        name === 'wechat_data_key_v1' ? Buffer.alloc(32, 1).toString('base64') : null,
+    });
+    const authorizationTransport = authorizationTransportReturning({
+      token: 'new-token',
+      botId: 'new-bot',
+      userId: 'new-user',
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+    });
+    const createTransport = vi.fn(() => authorizationTransport);
+    const im = new WechatIM(
+      deps({
+        host: testHost,
+        getDbClient: () => db,
+        createTransport,
+        isAccountGenerationCurrent: () => !activationFinished,
+      }),
+    );
+
+    await im.authorize();
+    await vi.waitFor(() => expect(activateCalls).toHaveLength(2));
+
+    expect(activateCalls[1]).toMatchObject({
+      bindingEpoch: previous.bindingEpoch,
+      expectedActiveEpoch: newBindingEpoch,
+      initialCursor: previous.cursor,
+    });
+    expect(testHost.secrets.remove).toHaveBeenCalledWith(
+      `wechat_credentials_${newBindingEpoch}`,
+    );
+    expect(createTransport).toHaveBeenCalledOnce();
+    await im.dispose();
+  });
+
+  it('removes staged files returned while replacing the previous binding', async () => {
+    const previous = { bindingEpoch: 'binding-previous', cursor: 'cursor-previous' };
+    const released = ['C:\\wechat-staged\\old-file.pdf'];
+    const db = fakeDb({
+      query: vi.fn(async () => []),
+      queryOne: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM wechat_sync_state')) return previous;
+        if (sql.includes('COUNT(*) AS count')) return { count: 0 };
+        return undefined;
+      }) as DbClient['queryOne'],
+      tx: vi.fn(async (name: string, args: Record<string, unknown>) => {
+        switch (name) {
+          case 'wechatActivateBindingEpoch':
+            return {
+              activated: true,
+              previousActiveEpoch: previous.bindingEpoch,
+              activeBindingEpoch: String(args.bindingEpoch),
+            };
+          case 'wechatCloseBindingEpoch':
+            return { closed: true };
+          case 'wechatUnbindCleanup':
+            return { deletedTasks: 1, deletedMediaRefs: 0, filePaths: released };
+          case 'wechatLeaseNextTask':
+            return null;
+          default:
+            return null;
+        }
+      }),
+    });
+    const testHost = host({
+      secretRead: (name) =>
+        name === 'wechat_data_key_v1' ? Buffer.alloc(32, 2).toString('base64') : null,
+    });
+    const authTransport = authorizationTransportReturning({
+      token: 'new-token',
+      botId: 'new-bot',
+      userId: 'new-user',
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+    });
+    const liveTransport = blockingLiveTransport();
+    const createTransport = vi
+      .fn()
+      .mockReturnValueOnce(authTransport)
+      .mockReturnValueOnce(liveTransport);
+    const im = new WechatIM(
+      deps({
+        host: testHost,
+        getDbClient: () => db,
+        createTransport,
+      }),
+    );
+
+    await im.authorize();
+    await vi.waitFor(() =>
+      expect(mediaMocks.removeReleasedWechatFiles).toHaveBeenCalledWith(released),
+    );
+    await vi.waitFor(() => expect(im.getState().phase).toBe('connected'));
+
+    await im.dispose();
+  });
 });
 
 function deps(overrides: Partial<WechatIMDeps> & { host?: IMHost } = {}): WechatIMDeps {
@@ -176,11 +369,16 @@ function deps(overrides: Partial<WechatIMDeps> & { host?: IMHost } = {}): Wechat
   };
 }
 
-function host(options: { secretAvailable?: boolean } = {}): IMHost {
+function host(
+  options: {
+    secretAvailable?: boolean;
+    secretRead?: (name: string) => string | null;
+  } = {},
+): IMHost {
   return {
     secrets: {
       isAvailable: () => options.secretAvailable ?? true,
-      read: vi.fn(() => null),
+      read: vi.fn(options.secretRead ?? (() => null)),
       write: vi.fn(() => true),
       remove: vi.fn(),
     },
@@ -195,14 +393,42 @@ function host(options: { secretAvailable?: boolean } = {}): IMHost {
   };
 }
 
-function fakeDb(): DbClient {
+function fakeDb(overrides: Partial<DbClient> = {}): DbClient {
   return {
-    tx: vi.fn(),
-    query: vi.fn(),
-    queryOne: vi.fn(),
-    exec: vi.fn(),
+    tx: overrides.tx ?? vi.fn(),
+    query: overrides.query ?? vi.fn(),
+    queryOne: overrides.queryOne ?? vi.fn(),
+    exec: overrides.exec ?? vi.fn(),
     drizzle: {} as DbClient['drizzle'],
     vecAvailable: false,
-    dispose: vi.fn(),
+    dispose: overrides.dispose ?? vi.fn(),
   };
+}
+
+function authorizationTransportReturning(credentials: WechatCredentials): WechatTransport {
+  return {
+    beginAuthorization: vi.fn(async () => ({
+      id: 'challenge',
+      qrCodeUrl: 'https://ilinkai.weixin.qq.com/qr/challenge',
+      createdAt: 1,
+    })),
+    waitAuthorization: vi.fn(async () => credentials),
+  } as unknown as WechatTransport;
+}
+
+function blockingLiveTransport(): WechatTransport {
+  return {
+    notifyStart: vi.fn(async () => undefined),
+    notifyStop: vi.fn(async () => undefined),
+    poll: vi.fn(
+      (_cursor: string, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+            { once: true },
+          );
+        }),
+    ),
+  } as unknown as WechatTransport;
 }

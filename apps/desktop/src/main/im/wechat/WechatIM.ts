@@ -82,6 +82,7 @@ interface WechatTaskPayload {
 
 interface ActiveTask {
   task: WechatTask;
+  routeSessionId?: string;
   terminalCommitted: boolean;
 }
 
@@ -370,8 +371,11 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     const key = this.#readDataKey();
     if (!key) throw new Error('WECHAT_DATA_KEY_UNAVAILABLE');
     const store = this.#store ?? new WechatTaskStore(this.#deps.getDbClient(), key);
-    await store.closeBindingEpoch(active.bindingEpoch, this.#now());
+    // Stop the live agent turn while its binding is still valid. Closing the
+    // rows first lets a late terminal callback race with cleanup and leaves
+    // the attached Desktop session running after the user has unbound.
     await this.#stopEpoch();
+    await store.closeBindingEpoch(active.bindingEpoch, this.#now());
     const cleanup = await store.unbindCleanup(active.bindingEpoch);
     await removeReleasedWechatFiles(cleanup.filePaths);
     this.host.secrets.remove(`${CREDENTIAL_PREFIX}${active.bindingEpoch}`);
@@ -449,6 +453,16 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     const epoch = this.#epoch;
     if (!epoch || this.#compatibilityDisabled || epoch.abort.signal.aborted) return null;
     return this.#requireStore().getMostRecentPeer(epoch.binding.bindingEpoch);
+  }
+
+  getActivePeerIdForSession(sessionId: string | undefined): string | null {
+    if (!sessionId) return null;
+    const peers = [...this.#activeTasks.entries()]
+      .filter(
+        ([, active]) => (active.routeSessionId ?? active.task.sessionId) === sessionId,
+      )
+      .map(([peerId]) => peerId);
+    return peers.length === 1 ? peers[0]! : null;
   }
 
   async handleTextInteraction(
@@ -663,15 +677,37 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       expectedActiveEpoch: previous?.bindingEpoch ?? null,
       now: this.#now(),
     });
-    if (!activated.activated || !this.#isGenerationCurrent(generation)) {
+    if (
+      !activated.activated ||
+      !this.#isGenerationCurrent(generation) ||
+      !this.#isCompatibilityRevisionAllowed(compatibilityRevision)
+    ) {
+      let restoredPrevious = false;
+      if (activated.activated) {
+        if (previous) {
+          const rollback = await store.activateBindingEpoch({
+            bindingEpoch: previous.bindingEpoch,
+            expectedActiveEpoch: bindingEpoch,
+            initialCursor: previous.cursor,
+            now: this.#now(),
+          });
+          restoredPrevious = rollback.activated;
+        } else {
+          await store.closeBindingEpoch(bindingEpoch, this.#now());
+        }
+      }
       this.host.secrets.remove(`${CREDENTIAL_PREFIX}${bindingEpoch}`);
+      this.#hasBinding = activated.activated
+        ? restoredPrevious
+        : activated.activeBindingEpoch !== null;
       throw new Error('WECHAT_BINDING_EPOCH_STALE');
     }
     this.#hasBinding = true;
     await this.#stopEpoch();
     if (previous) {
       await store.closeBindingEpoch(previous.bindingEpoch, this.#now());
-      await store.unbindCleanup(previous.bindingEpoch);
+      const cleanup = await store.unbindCleanup(previous.bindingEpoch);
+      await removeReleasedWechatFiles(cleanup.filePaths);
       this.host.secrets.remove(`${CREDENTIAL_PREFIX}${previous.bindingEpoch}`);
     }
     if (!this.#isCompatibilityRevisionAllowed(compatibilityRevision)) return;
@@ -726,6 +762,16 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     this.#epoch = null;
     if (!epoch) return;
     epoch.abort.abort();
+    for (const [peerId, pending] of this.#pendingInteractions) {
+      clearTimeout(pending.timer);
+      pending.resolve(defaultWechatInteractionDecision(pending.request, 'wechat_binding_stopped'));
+      this.#pendingInteractions.delete(peerId);
+    }
+    await stopActiveWechatTurns(
+      this.#turnRuntime?.runner ?? null,
+      epoch.credentials.ilinkBotId,
+      this.#activeTasks.keys(),
+    );
     await epoch.drain;
     try {
       await epoch.transport.notifyStop(new AbortController().signal);
@@ -735,11 +781,6 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       });
     }
     this.#activeTasks.clear();
-    for (const [peerId, pending] of this.#pendingInteractions) {
-      clearTimeout(pending.timer);
-      pending.resolve(defaultWechatInteractionDecision(pending.request, 'wechat_binding_stopped'));
-      this.#pendingInteractions.delete(peerId);
-    }
   }
 
   async #pollLoop(
@@ -796,7 +837,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           });
           await removeUncommittedWechatFiles(
             allFileAttachments,
-            new Set(committed.committed ? committed.insertedTaskIds : []),
+            acceptedPollTaskIds(committed),
           );
           if (committed.committed) {
             for (const message of result.messages) {
@@ -981,6 +1022,11 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         beforeProviderStart: async () => {
           const accepted = await this.#requireStore().markAccepted(task.bindingEpoch, task.id);
           if (!accepted) throw new Error('WECHAT_ACCEPT_CAS_REJECTED');
+        },
+        onRouteResolved: (sessionId) => {
+          if (this.#activeTasks.get(task.peerId) === active) {
+            active.routeSessionId = sessionId;
+          }
         },
         turnPermissionPolicy: createWechatTurnPermissionPolicy(task.id, {
           onInteractionStateChange: (state) => {
@@ -1310,22 +1356,24 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           await store.markOutboxDelivered(bindingEpoch, item.id, this.#now());
           break;
         } catch (error) {
-          const safe = asWechatIlinkError(error);
-          const retryNow = safe.retryable && immediateAttempt < 2;
+          const failure = classifyOutboxSendError(error);
+          const retryNow = failure.retryable && immediateAttempt < 2;
           await store.recordOutboxFailure({
             bindingEpoch,
             outboxId: item.id,
-            nextRetryAt: retryNow
-              ? this.#now()
-              : this.#now() + retryDelay(item.attempts + immediateAttempt + 1),
-            terminal: false,
-            errorCode: safe.code,
+            nextRetryAt: failure.retryable
+              ? retryNow
+                ? this.#now()
+                : this.#now() + retryDelay(item.attempts + immediateAttempt + 1)
+              : this.#now(),
+            terminal: !failure.retryable,
+            errorCode: failure.code,
           });
-          if (safe.code === 'AUTH_REPLACED' || safe.code === 'AUTH_EXPIRED') {
+          if (failure.code === 'AUTH_REPLACED' || failure.code === 'AUTH_EXPIRED') {
             this.#setState({
               ...this.#state,
               phase: 'needs_reauth',
-              errorCode: safe.code.toLowerCase(),
+              errorCode: failure.code.toLowerCase(),
             });
             return;
           }
@@ -1606,6 +1654,46 @@ function platformSequence(
   return (message.createdAt ?? receivedAt) * 100 + index;
 }
 
+function acceptedPollTaskIds(
+  result: Awaited<ReturnType<WechatTaskStore['commitPollBatch']>>,
+): ReadonlySet<string> {
+  if (!result.committed) return new Set();
+  const rejected = new Set(result.rejectedTaskIds);
+  return new Set(result.insertedTaskIds.filter((taskId) => !rejected.has(taskId)));
+}
+
+const PERMANENT_OUTBOX_ERROR_CODES = new Set([
+  'ENOENT',
+  'WECHAT_FILE_EMPTY',
+  'WECHAT_FILE_TOO_LARGE',
+  'WECHAT_OUTBOX_MEDIA_INVALID',
+  'WECHAT_OUTBOX_TASK_MISSING',
+]);
+
+function classifyOutboxSendError(error: unknown): { code: string; retryable: boolean } {
+  const explicitCode =
+    error instanceof Error && 'code' in error
+      ? String((error as NodeJS.ErrnoException).code ?? '')
+      : '';
+  const localCode = explicitCode || (error instanceof Error ? error.message : '');
+  if (PERMANENT_OUTBOX_ERROR_CODES.has(localCode)) {
+    return { code: safeMachineCode(localCode), retryable: false };
+  }
+  const safe = asWechatIlinkError(error);
+  return { code: safe.code, retryable: safe.retryable };
+}
+
+async function stopActiveWechatTurns(
+  runner: ImTurnRunner | null,
+  botContextId: string,
+  peerIds: Iterable<string>,
+): Promise<void> {
+  if (!runner) return;
+  await Promise.all(
+    [...new Set(peerIds)].map((userId) => runner.stopActiveTurn({ botContextId, userId })),
+  );
+}
+
 function retryDelay(attempt: number): number {
   return [1_000, 5_000, 30_000, 120_000][Math.min(Math.max(attempt - 1, 0), 3)];
 }
@@ -1820,11 +1908,14 @@ function machineErrorCode(error: unknown): string {
 }
 
 export const __testing = {
+  acceptedPollTaskIds,
   authorizationCancelPhase,
+  classifyOutboxSendError,
   hasWechatTaskContent,
   normalizeFinalOutputText,
   formatWechatInteractionPrompt,
   parseWechatInteractionReply,
+  stopActiveWechatTurns,
 };
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

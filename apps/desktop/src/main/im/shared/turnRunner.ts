@@ -286,6 +286,8 @@ export interface ImRunAgentTurnArgs {
   outputCardMessageId?: string;
   outputCardPrefix?: string;
   onTurnComplete?: () => void;
+  /** Reports the concrete channel/default or attached Desktop session before provider startup. */
+  onRouteResolved?: (sessionId: string) => void;
   /** Keep fire-and-forget work inside the ingress account's drain boundary. */
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
   /** Optional per-turn host policy (personal WeChat routes confirmations to Desktop). */
@@ -535,6 +537,7 @@ export function createTurnRunner(
       target = created.target;
     }
     const row = target.row;
+    args.onRouteResolved?.(row.id);
     if (!target.authChecked) {
       const auth = await checkImRouteAuthDetailed(row, undefined, authCheckDeps());
       if (!auth.ok) {
