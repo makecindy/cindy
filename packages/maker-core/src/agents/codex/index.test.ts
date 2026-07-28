@@ -5628,8 +5628,41 @@ describe('CodexAgent MCP thread context hooks', () => {
 });
 
 describe('CodexAgent abort', () => {
-  it('reconciles a stale local turn when the server reports no active turn to interrupt', async () => {
+  it('does not add a terminal lookup when turn/interrupt is acknowledged', async () => {
     const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-acknowledged',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-acknowledged' },
+    });
+    await expect(handle.abort()).resolves.toBeUndefined();
+
+    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+      threadId: 'start-thread-id',
+      turnId: 'turn-acknowledged',
+    });
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadTurnsList,
+    )).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('reconciles the authoritative completed turn without losing usage, cache, or plans', async () => {
+    let turnStartCount = 0;
+    const logger = createNoopLogger();
+    const debugLog = vi.spyOn(logger, 'debug');
+    const agent = new CodexAgent(createDeps({}, { logger }));
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnInterrupt) {
         throw Object.assign(
@@ -5637,8 +5670,20 @@ describe('CodexAgent abort', () => {
           { code: -32600 },
         );
       }
+      if (method === Method.ThreadTurnsList) {
+        return {
+          data: [{ id: 'turn-stale-local', status: 'completed' }],
+          nextCursor: null,
+          backwardsCursor: null,
+        };
+      }
       if (method === Method.TurnStart) {
-        return { turn: { id: 'turn-after-stale-interrupt' } };
+        turnStartCount += 1;
+        return {
+          turn: {
+            id: turnStartCount === 1 ? 'turn-stale-local' : 'turn-after-stale-interrupt',
+          },
+        };
       }
       return undefined;
     });
@@ -5646,30 +5691,120 @@ describe('CodexAgent abort', () => {
       sessionId: 'session-abort-server-no-active-turn',
       model: 'gpt-5.4',
       workingDir: '/repo',
+      planMode: true,
     });
     const handlers = host.getThreadHandlers();
     if (!handlers) throw new Error('expected thread handlers');
     const iterator = handle.events()[Symbol.asyncIterator]();
+    const interactions: InteractionRequest[] = [];
+    handle.setInteractionResolver(async (request) => {
+      interactions.push(request);
+      return { kind: 'plan_review', behavior: 'deny' };
+    });
 
+    await handle.send({ type: 'user', content: 'make a plan' });
     handlers.turnStarted?.({
       threadId: 'start-thread-id',
       turn: { id: 'turn-stale-local' },
     });
+    handlers.tokenUsageUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-stale-local',
+      tokenUsage: {
+        total: {
+          totalTokens: 108,
+          inputTokens: 100,
+          cachedInputTokens: 40,
+          outputTokens: 5,
+          reasoningOutputTokens: 3,
+        },
+        last: {
+          totalTokens: 108,
+          inputTokens: 100,
+          cachedInputTokens: 40,
+          outputTokens: 5,
+          reasoningOutputTokens: 3,
+        },
+        modelContextWindow: 272000,
+      },
+    });
+    const plan = [
+      { step: 'Inspect', status: 'completed' as const },
+      { step: 'Patch', status: 'in_progress' as const },
+    ];
+    handlers.turnPlanUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-stale-local',
+      plan,
+    });
+    handlers.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-stale-local',
+      item: {
+        type: 'plan',
+        id: 'turn-stale-local-plan',
+        text: '1. inspect\n2. patch',
+      },
+    } as never);
     expect(handle.isTurnRunning?.()).toBe(true);
 
     await expect(handle.abort()).resolves.toBeUndefined();
 
     expect(handle.isTurnRunning?.()).toBe(false);
     expect(handle.getCurrentTurnId?.()).toBeNull();
-    await expect(nextEvent(iterator)).resolves.toMatchObject({
+    expect(host.request).toHaveBeenCalledWith(
+      Method.ThreadTurnsList,
+      {
+        threadId: 'start-thread-id',
+        limit: 20,
+        sortDirection: 'desc',
+        itemsView: 'notLoaded',
+      },
+      { timeoutMs: 3_000 },
+    );
+
+    let done: AgentEvent | null = null;
+    for (let i = 0; i < 30 && !done; i += 1) {
+      const event = await nextEvent(iterator);
+      if (event.type === 'done') done = event;
+    }
+    expect(done).toMatchObject({
       type: 'done',
-      data: expect.objectContaining({
-        cancelled: true,
+      data: {
+        type: 'codex/event/task_complete',
+        usage: {
+          promptTokens: 60,
+          completionTokens: 8,
+          reasoningTokens: 0,
+          cachedTokens: 40,
+        },
         raw: expect.objectContaining({
           id: 'turn-stale-local',
-          status: 'interrupted',
+          status: 'completed',
         }),
+        plan,
+      },
+    });
+    expect(debugLog).toHaveBeenCalledWith(
+      'SDK ◀ turn end',
+      expect.objectContaining({
+        cacheStats: {
+          turn: {
+            hitRate: '40.0%',
+            read: 40,
+            create: 0,
+            uncached: 60,
+            apiCalls: 1,
+          },
+          session: expect.any(Object),
+        },
       }),
+    );
+    await waitForExpectation(() => {
+      expect(interactions).toContainEqual(expect.objectContaining({
+        kind: 'plan_review',
+        plan: '1. inspect\n2. patch',
+      }));
     });
 
     await handle.send({ type: 'user', content: 'continue after recovery' });
@@ -5680,7 +5815,7 @@ describe('CodexAgent abort', () => {
     // keep that late event from clearing the newer turn.
     handlers.turnCompleted?.({
       threadId: 'start-thread-id',
-      turn: { id: 'turn-stale-local', status: 'interrupted' },
+      turn: { id: 'turn-stale-local', status: 'completed' },
     });
     expect(handle.getCurrentTurnId?.()).toBe('turn-after-stale-interrupt');
     expect(handle.isTurnRunning?.()).toBe(true);
@@ -5715,6 +5850,45 @@ describe('CodexAgent abort', () => {
     await expect(handle.abort()).resolves.toBeUndefined();
 
     expect(handle.getCurrentTurnId?.()).toBe('turn-still-running');
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(host.request).not.toHaveBeenCalledWith(
+      Method.ThreadTurnsList,
+      expect.anything(),
+      expect.anything(),
+    );
+    await handle.close();
+  });
+
+  it('preserves local state when the authoritative terminal lookup fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadTurnsList) {
+        throw new Error('thread turn lookup unavailable');
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-terminal-lookup-failed',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-preserved' },
+    });
+
+    await expect(handle.abort()).resolves.toBeUndefined();
+
+    expect(handle.getCurrentTurnId?.()).toBe('turn-preserved');
     expect(handle.isTurnRunning?.()).toBe(true);
     await handle.close();
   });
@@ -5764,6 +5938,11 @@ describe('CodexAgent abort', () => {
 
     expect(handle.getCurrentTurnId?.()).toBe('turn-newer');
     expect(handle.isTurnRunning?.()).toBe(true);
+    expect(host.request).not.toHaveBeenCalledWith(
+      Method.ThreadTurnsList,
+      expect.anything(),
+      expect.anything(),
+    );
     await handle.close();
   });
 });

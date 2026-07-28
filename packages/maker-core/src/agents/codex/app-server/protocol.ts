@@ -815,6 +815,26 @@ export interface TurnCompletedNotification {
 }
 
 /**
+ * `thread/turns/list` — bounded turn-history lookup.
+ *
+ * Stop reconciliation uses metadata-only turns from the newest page so a lost
+ * terminal notification can be recovered without loading the full transcript.
+ */
+export interface ThreadTurnsListParams {
+  threadId: string;
+  cursor?: string | null;
+  limit?: number | null;
+  sortDirection?: 'asc' | 'desc' | null;
+  itemsView?: 'notLoaded' | 'summary' | 'full' | null;
+}
+
+export interface ThreadTurnsListResponse {
+  data: Array<TurnCompletedNotification['params']['turn']>;
+  nextCursor: string | null;
+  backwardsCursor: string | null;
+}
+
+/**
  * v2.rs ThreadTokenUsageUpdatedNotification: { thread_id, turn_id, token_usage: ThreadTokenUsage }
  * - total: 整个 thread 累计 (我们用它当 cumulative snapshot)
  * - last: 上次 turn 的增量 (我们用它给 usage tracker ingestApiCallUsage)
@@ -1107,6 +1127,7 @@ export const Method = {
   ThreadFork: 'thread/fork',
   ThreadRollback: 'thread/rollback',
   ThreadUnsubscribe: 'thread/unsubscribe',
+  ThreadTurnsList: 'thread/turns/list',
   ThreadSettingsUpdate: 'thread/settings/update',
   TurnStart: 'turn/start',
   TurnSteer: 'turn/steer',
