@@ -57,6 +57,7 @@ describe('getRemoteClaudeEnv', () => {
     expect(env).toMatchObject({
       ANTHROPIC_API_KEY: 'sk-xd-gateway-key',
       ANTHROPIC_BASE_URL: TEST_XD_GATEWAY_BASE_URL,
+      CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
       ENABLE_TOOL_SEARCH: 'auto',
       DISABLE_TELEMETRY: '1',
     });

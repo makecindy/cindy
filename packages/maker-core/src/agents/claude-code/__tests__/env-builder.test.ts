@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentRuntimeConfig } from '../../../interfaces/runtime-config.js';
-import { buildClaudeEnv } from '../env-builder.js';
+import { buildClaudeEnv, stripSensitiveAnthropicEnv } from '../env-builder.js';
 
 const MODEL_CONTEXT_WINDOWS_ENV = 'XDT_MAKER_MODEL_CONTEXT_WINDOWS';
 
@@ -29,6 +29,7 @@ describe('buildClaudeEnv', () => {
   const originalTerm = process.env.TERM;
   const originalPsOutputRendering = process.env.PSStyle__OutputRendering;
   const originalSubagentModel = process.env.CLAUDE_CODE_SUBAGENT_MODEL;
+  const originalAttributionHeader = process.env.CLAUDE_CODE_ATTRIBUTION_HEADER;
 
   afterEach(() => {
     if (originalDisableCron === undefined) {
@@ -46,6 +47,7 @@ describe('buildClaudeEnv', () => {
     restore('TERM', originalTerm);
     restore('PSStyle__OutputRendering', originalPsOutputRendering);
     restore('CLAUDE_CODE_SUBAGENT_MODEL', originalSubagentModel);
+    restore('CLAUDE_CODE_ATTRIBUTION_HEADER', originalAttributionHeader);
   });
 
   it('disables Claude Code native cron for host-managed sessions', async () => {
@@ -327,6 +329,32 @@ describe('buildClaudeEnv', () => {
       expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
       expect(env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
       expect(env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL).toBeUndefined();
+    });
+
+    it('从宿主环境剥离继承的 attribution 开关，避免 SDK 二次合并回子进程', async () => {
+      const hostEnv: NodeJS.ProcessEnv = {
+        CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
+        KEEP_ME: '1',
+      };
+      expect(stripSensitiveAnthropicEnv(hostEnv)).toContain('CLAUDE_CODE_ATTRIBUTION_HEADER');
+      expect(hostEnv.CLAUDE_CODE_ATTRIBUTION_HEADER).toBeUndefined();
+      expect(hostEnv.KEEP_ME).toBe('1');
+
+      process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = '0';
+      const env = await buildClaudeEnv(
+        createAuthAdapter({ CLAUDE_CODE_OAUTH_TOKEN: 'at-live' }),
+        {},
+      );
+      expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBeUndefined();
+    });
+
+    it('固定网关 host 仍可通过 behaviorFlags 显式重加 attribution 禁用开关', async () => {
+      const env = await buildClaudeEnv(
+        createAuthAdapter({ ANTHROPIC_API_KEY: 'sk-gw' }),
+        { behaviorFlags: { CLAUDE_CODE_ATTRIBUTION_HEADER: '0' } },
+      );
+
+      expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
     });
 
     it('合并顺序:process.env 的订阅 token 被剥离,authEnv 注入值存活', async () => {

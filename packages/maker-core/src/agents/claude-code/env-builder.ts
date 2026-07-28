@@ -87,6 +87,9 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'CLAUDE_CODE_OAUTH_SCOPES',
   'CLAUDE_CODE_SUBSCRIPTION_TYPE',
   'CLAUDE_CODE_RATE_LIMIT_TIER',
+  // 请求归因开关也不能从启动 Cindy 的 shell 继承。Claude Agent SDK 会在 spawn 时
+  // 再次合并 process.env；固定网关 host 如需禁用归因，应通过 behaviorFlags 显式重加。
+  'CLAUDE_CODE_ATTRIBUTION_HEADER',
   // endpoint 重定向
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_UNIX_SOCKET',

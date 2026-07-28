@@ -84,6 +84,7 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     // 落到 ② 段 gatewayDefaultRouteDecision:换网关 key(绝不是 upstreamOverride api.x.ai)。
     expect(decision).toEqual({
       headerOverride: { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' },
+      headerDelete: ['x-anthropic-billing-header'],
     });
   });
 
@@ -93,11 +94,23 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
     );
-    expect(decision).toBeNull();
+    expect(decision).toEqual({
+      headerDelete: ['x-anthropic-billing-header'],
+    });
   });
 
   it('claude-haiku 分类器请求(无网关 key 的 oauth-spawn)→ 直连 Anthropic 订阅', () => {
     gatewayKey = null;
+    const transform = createModelRoutingTransform();
+    const decision = transform(
+      { model: 'claude-haiku-4-5-20251001' },
+      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+    );
+    expect(decision).toEqual({ upstreamOverride: 'https://api.anthropic.com' });
+  });
+
+  it('显式 Anthropic 订阅路由保留 attribution header', () => {
+    setSessionProvider('sess-grok', 'anthropic');
     const transform = createModelRoutingTransform();
     const decision = transform(
       { model: 'claude-haiku-4-5-20251001' },

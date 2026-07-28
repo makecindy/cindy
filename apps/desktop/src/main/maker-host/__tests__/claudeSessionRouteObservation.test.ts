@@ -72,7 +72,7 @@ describe('claude session route observation (routing transform ② 段)', () => {
       { model: 'claude-opus-4-8[1m]' },
       ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
     );
-    expect(decision).toBeNull();  // passthrough
+    expect(decision).toEqual({ headerDelete: ['x-anthropic-billing-header'] });
     expect(readClaudeSessionRoute('sess-1')).toBe('gateway');
   });
 
@@ -83,7 +83,10 @@ describe('claude session route observation (routing transform ② 段)', () => {
       { model: 'claude-opus-4-8[1m]' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
-    expect(decision).toEqual({ headerOverride: { 'x-api-key': 'sk-live' } });
+    expect(decision).toEqual({
+      headerOverride: { 'x-api-key': 'sk-live' },
+      headerDelete: ['x-anthropic-billing-header'],
+    });
     expect(readClaudeSessionRoute('sess-1')).toBe('gateway');
   });
 
@@ -103,7 +106,7 @@ describe('claude session route observation (routing transform ② 段)', () => {
       { model: 'gpt-5.5[1m]' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
-    expect(decision).toBeNull();
+    expect(decision).toEqual({ headerDelete: ['x-anthropic-billing-header'] });
     expect(readClaudeSessionRoute('sess-1')).toBeNull();
   });
 

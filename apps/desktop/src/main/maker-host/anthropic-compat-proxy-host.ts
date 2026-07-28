@@ -31,6 +31,7 @@ import {
   stripNonAnthropicFields,
   stripToolUseProviderSpecificFields,
   type ProxyHandle,
+  type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
 
@@ -127,6 +128,20 @@ function hasHeader(headers: Readonly<Record<string, string>>, name: string): boo
   return false;
 }
 
+const CLAUDE_ATTRIBUTION_HEADER = 'x-anthropic-billing-header';
+
+/**
+ * Claude Code 的 attribution header 会让 Cindy 网关 / 第三方 upstream 绕过 prompt cache，
+ * 但 Anthropic OAuth 直连要求保留它。按最终 request route 删除，而不是按整个 spawn
+ * 设置 CLAUDE_CODE_ATTRIBUTION_HEADER，才能兼容同一 OAuth 进程里的两种流量。
+ */
+function withoutClaudeAttribution(decision: RoutingDecision = {}): RoutingDecision {
+  return {
+    ...decision,
+    headerDelete: [...new Set([...(decision.headerDelete ?? []), CLAUDE_ATTRIBUTION_HEADER])],
+  };
+}
+
 /**
  * per-request 路由 transform。两段:
  *   ① 会话显式选了供应商 → 据 catalog 统一路由(per-session,取代全局开关推断)。
@@ -199,7 +214,15 @@ export function createModelRoutingTransform(): RoutingTransform {
       // 不在订阅直连供应商(xai / openai-cc)声明的 modelPrefixes 范围内 → 返回 null,
       // 落到下方 ② 段 spawn 默认路由,分类器照常走网关/直连(issue #886)。
       const perSession = resolveSessionRouteDecision(sessionId, 'claude-code', gatewayKey, wireModel);
-      if (perSession) return perSession;
+      if (perSession) {
+        if (getSessionProvider(sessionId) === 'anthropic') return perSession;
+        if ('then' in perSession) {
+          return perSession.then((resolved) =>
+            resolved ? withoutClaudeAttribution(resolved) : null,
+          );
+        }
+        return withoutClaudeAttribution(perSession);
+      }
     }
 
     // ② 未显式选供应商 → 据请求凭证判定 spawn 形态(见上方注释)。
@@ -210,13 +233,13 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (hasHeader(ctx.headers, 'x-api-key')) {
       // gateway-spawn:自带网关 key,passthrough。
       if (recordDefaultRoute) recordClaudeSessionRoute(sessionId, 'gateway');
-      return null;
+      return withoutClaudeAttribution();
     }
     const decision = gatewayDefaultRouteDecision('claude-code', gatewayKey);
     if (decision) {
       // oauth-spawn 默认:全量换网关 key(防订阅 token 泄漏到网关)。
       if (recordDefaultRoute) recordClaudeSessionRoute(sessionId, 'gateway');
-      return decision;
+      return withoutClaudeAttribution(decision);
     }
     // 没网关 key:Anthropic 模型只能直连(唯一出路),其余 passthrough + 记一条诊断。
     // 判据 = 前缀地板 ∪ 目录 anthropic 供应商模型集合(新家族改 OSS 目录即可,无需发版)。
@@ -228,7 +251,7 @@ export function createModelRoutingTransform(): RoutingTransform {
       // 无 key 的非 Anthropic 模型 passthrough 大概率 401 —— 路由归属不明确, 不记录。
       log.warn('claude oauth-spawn but no gateway key; non-anthropic passthrough (可能 401)', { wireModel });
     }
-    return null;
+    return withoutClaudeAttribution();
   };
 }
 
