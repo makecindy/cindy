@@ -9,7 +9,7 @@
   },
   "matrix": {
     "platforms": ["desk"],
-    "regions": ["cn", "global"],
+    "regions": ["cn", "global", "dev"],
     "systems": ["mac"],
     "themes": ["light", "dark"],
     "langs": ["zh-CN", "en", "ja", "ko"]
@@ -97,7 +97,8 @@
       { "id": "cn-light-zh", "prefs": { "plat": "desk", "region": "cn", "os": "mac", "mode": "light", "lang": "zh-CN" } },
       { "id": "cn-dark-ja", "prefs": { "plat": "desk", "region": "cn", "os": "mac", "mode": "dark", "lang": "ja" } },
       { "id": "global-light-en", "prefs": { "plat": "desk", "region": "global", "os": "mac", "mode": "light", "lang": "en" } },
-      { "id": "global-dark-ko", "prefs": { "plat": "desk", "region": "global", "os": "mac", "mode": "dark", "lang": "ko" } }
+      { "id": "global-dark-ko", "prefs": { "plat": "desk", "region": "global", "os": "mac", "mode": "dark", "lang": "ko" } },
+      { "id": "dev-light-en", "prefs": { "plat": "desk", "region": "dev", "os": "mac", "mode": "light", "lang": "en" } }
     ],
     "noClip": [".lp-title", ".lp-subtitle"],
     "inputs": [

@@ -68,8 +68,12 @@ import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-
 import {
   getDesktopSelectableCatalog,
   refreshDiscoveredCodexModels,
+  setNativeProviderClaimListener,
 } from './createDesktopProviderService.js';
-import { clearAnthropicDiscoveredModels } from './model-discovery/anthropic.js';
+import {
+  clearAnthropicDiscoveredModels,
+  setAnthropicDiscoveryFailureListener,
+} from './model-discovery/anthropic.js';
 import {
   buildDesktopClaudeRuntimeConfig,
   desktopCodexRuntimeConfig,
@@ -155,6 +159,42 @@ setActiveCatalogChangedListener((revision) => {
       error: error instanceof Error ? error.message : String(error),
     });
     return;
+  }
+});
+
+/**
+ * anthropic 清单发现的失败态变化 → 广播 PROVIDER_CHANGED。
+ *
+ * 归因不进 active catalog(清单没变,没有 revision 可言),但 renderer 往往在拉取失败
+ * **之前**就取走了 provider 快照(15s 超时那条路径尤其明显)。不主动通知,设置页会一直
+ * 停在「正在发现」而不是讲明失败理由(PR #548 review)。
+ */
+setAnthropicDiscoveryFailureListener(() => {
+  try {
+    // 复用既有的「刷 capabilities + 广播」收口:清单确实没变,这一步只是把 provider
+    // 快照重新推给 renderer,让它重取带上失败归因的 listProviders。
+    refreshSelectableModelsAndBroadcast({});
+  } catch (error) {
+    desktopMakerLogger.warn('anthropic discovery failure broadcast failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
+/**
+ * 本机凭证绑定自愈成功 → 广播 PROVIDER_CHANGED。
+ *
+ * 连接态刚从 false 翻成 true，但只有触发那次读取的调用方拿到了新快照。其它窗口留在
+ * 「未连接」，配对的手机 / 控制端更是只认这条推送来失效缓存（PR #548 review）。
+ * anthropic 那条链路碰巧能在清单变化时顺带广播，xAI 则完全没有出口 —— 统一在这里补。
+ */
+setNativeProviderClaimListener(() => {
+  try {
+    refreshSelectableModelsAndBroadcast({});
+  } catch (error) {
+    desktopMakerLogger.warn('native provider claim broadcast failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 });
 

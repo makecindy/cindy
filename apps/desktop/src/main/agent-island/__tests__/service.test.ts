@@ -78,7 +78,21 @@ const mocks = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
   showMessageBox: vi.fn(),
   openExternal: vi.fn(),
+  readdir: vi.fn<(...args: unknown[]) => Promise<string[]>>(() => Promise.resolve([])),
 }));
+
+// 受保护目录引导会由 Main 亲自 readdir 核实一次;只替换这一个 API,其余 fs/promises
+// 保持真实。默认让读取失败(EPERM),模拟 macOS 真的拒绝了访问。
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs/promises')>()),
+  readdir: mocks.readdir,
+}));
+
+function tccDeniedError(): NodeJS.ErrnoException {
+  const error = new Error('EPERM: operation not permitted, scandir') as NodeJS.ErrnoException;
+  error.code = 'EPERM';
+  return error;
+}
 
 vi.mock('electron', () => {
   return {
@@ -148,6 +162,8 @@ beforeEach(() => {
   mocks.showMessageBox.mockResolvedValue({ response: 1, checkboxChecked: false });
   mocks.openExternal.mockReset();
   mocks.openExternal.mockResolvedValue(undefined);
+  mocks.readdir.mockReset();
+  mocks.readdir.mockRejectedValue(tccDeniedError());
   resetEpermGuidanceForTest();
 });
 
@@ -1608,6 +1624,41 @@ describe('AgentIslandService native publishing', () => {
 
       expect(mocks.showMessageBox).not.toHaveBeenCalled();
       expect(mocks.openExternal).not.toHaveBeenCalled();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it('stays silent when the folder is readable, and still guides on a later real denial', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, publish: vi.fn(() => true) },
+      });
+      const event: AgentEvent = {
+        type: 'tool_result_full',
+        source: 'claude-code',
+        data: {
+          toolUseId: 'tool-1',
+          fullText: `EPERM: operation not permitted, open '${protectedFolderFile('Documents', 'blocked.txt')}'`,
+        },
+      };
+
+      // 粗筛命中,但 Main 亲自读得动 → 那条 EPERM 与 TCC 无关,不得打扰用户。
+      mocks.readdir.mockResolvedValue([]);
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'claude-code' }, event);
+      await vi.waitFor(() => expect(mocks.readdir).toHaveBeenCalledTimes(1));
+      expect(mocks.showMessageBox).not.toHaveBeenCalled();
+
+      // 等首轮探测完整收尾并释放同目录的探测占位,否则第二条事件会被串行化挡掉。
+      await new Promise((resolve) => setImmediate(resolve));
+
+      // 且没有吃掉该目录的提醒名额:之后真被系统拒绝时仍然提示。
+      mocks.readdir.mockRejectedValue(tccDeniedError());
+      service.handleAgentEvent({ sessionId: 's2', agentKind: 'claude-code' }, event);
+      await vi.waitFor(() => expect(mocks.showMessageBox).toHaveBeenCalledTimes(1));
     } finally {
       platformSpy.mockRestore();
     }

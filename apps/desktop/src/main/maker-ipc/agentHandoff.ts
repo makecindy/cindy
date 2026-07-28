@@ -97,7 +97,7 @@ const COMMAND_TOOL_NAMES = new Set(['Bash', 'shell', 'exec_command', 'local_shel
 
 function truncate(text: string, cap: number): string {
   if (text.length <= cap) return text;
-  return `${text.slice(0, cap)}…(截断)`;
+  return `${text.slice(0, cap)}…(truncated)`;
 }
 
 /** 折叠换行成单行(提要区用)。 */
@@ -212,7 +212,7 @@ function splitTurns(messages: HandoffSourceMessage[]): Turn[] {
       case 'assistant': {
         const text = extractPlainText(msg.content);
         if (text) {
-          current.detailLines.push(`[助手]\n${truncate(text, RECENT_TEXT_CAP)}`);
+          current.detailLines.push(`[Assistant]\n${truncate(text, RECENT_TEXT_CAP)}`);
           current.lastAssistantText = text;
         }
         break;
@@ -226,20 +226,20 @@ function splitTurns(messages: HandoffSourceMessage[]): Turn[] {
         } catch {
           inputDigest = '';
         }
-        current.detailLines.push(`[工具] ${name}${inputDigest ? `: ${truncate(inputDigest, TOOL_INPUT_CAP)}` : ''}`);
+        current.detailLines.push(`[Tool] ${name}${inputDigest ? `: ${truncate(inputDigest, TOOL_INPUT_CAP)}` : ''}`);
         break;
       }
       case 'error': {
         const text = extractPlainText(msg.content);
-        if (text) current.detailLines.push(`[错误] ${truncate(oneLine(text), 200)}`);
+        if (text) current.detailLines.push(`[Error] ${truncate(oneLine(text), 200)}`);
         break;
       }
       case 'ask_user': {
-        current.detailLines.push('[向用户提问并获得了回答]');
+        current.detailLines.push('[Asked the user a question and got an answer]');
         break;
       }
       case 'plan_review': {
-        current.detailLines.push('[提交了计划供用户审阅]');
+        current.detailLines.push('[Submitted a plan for the user to review]');
         break;
       }
       default:
@@ -260,7 +260,7 @@ function collapseDetailLines(lines: string[]): string[] {
   const omitted = normalized.length - kept;
   return [
     ...normalized.slice(0, DETAIL_LINES_EDGE_CAP),
-    `(中间 ${omitted} 条工具调用略)`,
+    `(${omitted} tool calls omitted)`,
     ...normalized.slice(-DETAIL_LINES_EDGE_CAP),
   ];
 }
@@ -276,15 +276,51 @@ export function buildHandoffText(
   const turns = splitTurns(messages);
   // 超出硬上限时逐档收缩逐字区(4→3→2→1 轮)重组——绝不能从尾部硬切:
   // 检索指引与结束标记在尾部,是最不能丢的段。收缩到 1 轮仍超限才走最后的
-  // 尾部截断保险(实际不可达:各区预算之和 < 上限)。
+  // 尾部截断保险。
   for (let recentCount = RECENT_TURNS; recentCount >= 1; recentCount--) {
     const text = assembleHandoffText(turns, messages, opts, recentCount);
     if (text.length <= HANDOFF_HARD_CAP || recentCount === 1) {
-      return text.length > HANDOFF_HARD_CAP ? text.slice(0, HANDOFF_HARD_CAP) : text;
+      return capPreservingTerminator(text, opts);
     }
   }
   /* istanbul ignore next -- 循环必然 return */
-  return assembleHandoffText(turns, messages, opts, 1).slice(0, HANDOFF_HARD_CAP);
+  return capPreservingTerminator(assembleHandoffText(turns, messages, opts, 1), opts);
+}
+
+const REBUILD_TERMINATOR = "== End of rebuild note; the user's new message follows ==";
+const HANDOFF_TERMINATOR = "== End of handoff note; the user's new message follows ==";
+const FORK_TERMINATOR = "== End of fork note; the user's new message follows ==";
+
+/** 结束标记——交接正文与"用户的新消息"之间唯一的分隔,任何情况下都要留住。 */
+function handoffTerminator(opts: BuildHandoffOptions): string {
+  return opts.reason === 'message-deletion' ? REBUILD_TERMINATOR : HANDOFF_TERMINATOR;
+}
+
+/** 拆出已有文本尾部的结束标记(含其前置空行),供二次裁剪时原样保留。 */
+function splitTrailingTerminator(text: string): [body: string, tail: string] {
+  for (const terminator of [HANDOFF_TERMINATOR, REBUILD_TERMINATOR, FORK_TERMINATOR]) {
+    const trimmed = text.trimEnd();
+    if (!trimmed.endsWith(terminator)) continue;
+    const tailStart = trimmed.length - terminator.length;
+    return [text.slice(0, tailStart), text.slice(tailStart)];
+  }
+  return [text, ''];
+}
+
+/**
+ * 兜底截断:宁可从正文中部切,也必须保住尾部的结束标记。
+ *
+ * 裸 `slice(0, CAP)` 会把结束标记连同检索指引的尾巴一起削掉,新用户消息就失去了与
+ * 内部历史的显式分隔——工具密集的长历史(逐字区已收缩到 1 轮仍超限)真会走到这里,
+ * 英文 framing 比原中文长,触达上限更容易。
+ */
+function capPreservingTerminator(text: string, opts: BuildHandoffOptions): string {
+  if (text.length <= HANDOFF_HARD_CAP) return text;
+  const terminator = handoffTerminator(opts);
+  const separator = '\n\n';
+  const room = HANDOFF_HARD_CAP - terminator.length - separator.length;
+  if (room <= 0) return terminator.slice(0, HANDOFF_HARD_CAP);
+  return `${text.slice(0, room)}${separator}${terminator}`;
 }
 
 function assembleHandoffText(
@@ -299,36 +335,39 @@ function assembleHandoffText(
   const sections: string[] = [];
   if (opts.reason === 'message-deletion') {
     sections.push(
-      `[会话上下文重建·内部上下文]\n` +
-        `本会话的本地记录已由用户编辑,当前原生会话上下文因此失效。` +
-        `下面是编辑后的有效对话历史;只把这些记录视为此前对话,不要尝试恢复、引用或推断未列出的消息。` +
-        `请以第一人称自然续接,不要向用户提及本段重建说明。` +
-        `开始改动前先核对工作区实际状态(如 git status / git diff / 读相关文件):` +
-        `记述与工作区冲突时,一律以工作区现状为准;` +
-        `对更早的细节没有把握时,优先读取实际文件与代码核实,不要凭摘要臆断。`,
+      `[Session context rebuild · internal context]\n` +
+        `The user edited this conversation's local record, which invalidated the current native session context. ` +
+        `Below is the valid conversation history after that edit; treat only these records as the prior conversation, ` +
+        `and do not try to recover, cite, or infer messages that are not listed. ` +
+        `Continue naturally in the first person, and do not mention this rebuild note to the user. ` +
+        `Before making any change, check the actual workspace state (e.g. git status / git diff / reading the relevant files): ` +
+        `when the record conflicts with the workspace, the workspace always wins; ` +
+        `when you are unsure about an earlier detail, read the real files and code to confirm rather than guessing from the summary.`,
     );
   } else if (opts.mode === 'delta') {
     // 归位续接:目标引擎 resume 了自己的停泊原生会话,已持有离场前的完整记忆。
     // 只补"离开期间"的进展;同时防御 resume 静默失效——指引它以工作区与检索为准,
     // 而不是断言"你一定记得"。
     sections.push(
-      `[会话交接·内部上下文]\n` +
-        `你(${opts.toLabel})此前处理过本会话,期间曾切换给 ${opts.fromLabel} 引擎接手,现在切回由你继续。` +
-        `你离场前的对话记忆应仍然有效;下面是你离开期间发生的进展记录,请合并进你的理解后以第一人称自然续接。` +
-        `不要向用户提及本段交接说明,也不要提及引擎切换过程。` +
-        `开始改动前先核对工作区实际状态(如 git status / git diff / 读相关文件):` +
-        `记述、你的记忆与工作区三者冲突时,一律以工作区现状为准;` +
-        `对离开期间的细节没有把握时,优先读取实际文件与代码核实,不要凭摘要臆断。`,
+      `[Session handoff · internal context]\n` +
+        `You (${opts.toLabel}) worked on this conversation before; it was handed over to the ${opts.fromLabel} engine for a while, and now it is switching back to you. ` +
+        `Your memory of the conversation from before you left should still be valid; below is a record of what happened while you were away. ` +
+        `Merge it into your understanding and continue naturally in the first person. ` +
+        `Do not mention this handoff note to the user, and do not mention the engine switch. ` +
+        `Before making any change, check the actual workspace state (e.g. git status / git diff / reading the relevant files): ` +
+        `when the record, your own memory, and the workspace disagree, the workspace always wins; ` +
+        `when you are unsure about something from while you were away, read the real files and code to confirm rather than guessing from the summary.`,
     );
   } else {
     sections.push(
-      `[会话交接·内部上下文]\n` +
-        `本会话此前由 ${opts.fromLabel} 引擎驱动,现在起由你(${opts.toLabel})继续。` +
-        `下面是这场对话的既往记录——这是你与用户之间同一场对话的延续,请以第一人称自然续接。` +
-        `不要向用户提及本段交接说明,不要说"根据交接摘要/记录"之类的话。` +
-        `开始改动前先核对工作区实际状态(如 git status / git diff / 读相关文件):` +
-        `记述与工作区冲突时,一律以工作区现状为准;` +
-        `对更早的细节没有把握时,优先读取实际文件与代码核实,不要凭摘要臆断。`,
+      `[Session handoff · internal context]\n` +
+        `This conversation was previously driven by the ${opts.fromLabel} engine; from here on you (${opts.toLabel}) continue it. ` +
+        `Below is the prior record of this conversation — it is the same conversation between you and the user, ` +
+        `so continue naturally in the first person. ` +
+        `Do not mention this handoff note to the user, and do not say things like "according to the handoff summary/record". ` +
+        `Before making any change, check the actual workspace state (e.g. git status / git diff / reading the relevant files): ` +
+        `when the record conflicts with the workspace, the workspace always wins; ` +
+        `when you are unsure about an earlier detail, read the real files and code to confirm rather than guessing from the summary.`,
     );
   }
 
@@ -339,22 +378,22 @@ function assembleHandoffText(
   if (work.changedFiles.length > 0 || work.commands.length > 0) {
     const lines: string[] = [];
     if (work.changedFiles.length > 0) {
-      lines.push('改动过的文件:');
+      lines.push('Files changed:');
       for (const f of work.changedFiles) lines.push(`- ${f}`);
     }
     if (work.commands.length > 0) {
-      lines.push('执行过的命令(最近几条):');
+      lines.push('Commands run (most recent):');
       for (const cmd of work.commands) lines.push(`- ${cmd}`);
     }
-    sections.push(`== 工作状态(自动提取)==\n${lines.join('\n')}`);
+    sections.push(`== Work state (auto-extracted) ==\n${lines.join('\n')}`);
   }
 
   if (earlier.length > 0) {
     const lines: string[] = [];
     for (const t of earlier) {
-      if (t.userText) lines.push(`- 用户: ${truncate(oneLine(t.userText), DIGEST_LINE_CAP)}`);
+      if (t.userText) lines.push(`- User: ${truncate(oneLine(t.userText), DIGEST_LINE_CAP)}`);
       if (t.lastAssistantText) {
-        lines.push(`  回应: ${truncate(oneLine(t.lastAssistantText), DIGEST_LINE_CAP)}`);
+        lines.push(`  Reply: ${truncate(oneLine(t.lastAssistantText), DIGEST_LINE_CAP)}`);
       }
     }
     // 预算内保留最新的提要行,最旧的先丢
@@ -368,12 +407,12 @@ function assembleHandoffText(
         kept.unshift(lines[i]);
         used += cost;
       }
-      digest = `(更早内容已省略)\n${kept.join('\n')}`;
+      digest = `(earlier content omitted)\n${kept.join('\n')}`;
     }
     sections.push(
       opts.mode === 'delta'
-        ? `== 你离开期间·较早进展提要 ==\n${digest}`
-        : `== 较早对话提要 ==\n${digest}`,
+        ? `== Earlier progress while you were away ==\n${digest}`
+        : `== Earlier conversation digest ==\n${digest}`,
     );
   }
 
@@ -381,18 +420,18 @@ function assembleHandoffText(
     const blocks: string[] = [];
     for (const t of recent) {
       const parts: string[] = [];
-      if (t.userText) parts.push(`[用户]\n${truncate(t.userText, RECENT_TEXT_CAP)}`);
+      if (t.userText) parts.push(`[User]\n${truncate(t.userText, RECENT_TEXT_CAP)}`);
       parts.push(...collapseDetailLines(t.detailLines));
       if (parts.length > 0) blocks.push(parts.join('\n'));
     }
     sections.push(
       opts.mode === 'delta'
-        ? `== 你离开期间的对话记录 ==\n${blocks.join('\n---\n')}`
-        : `== 最近对话记录 ==\n${blocks.join('\n---\n')}`,
+        ? `== Conversation while you were away ==\n${blocks.join('\n---\n')}`
+        : `== Recent conversation ==\n${blocks.join('\n---\n')}`,
     );
   } else if (opts.mode === 'delta') {
     // 切走后一条消息都没发就切回:显式说明,避免引擎误以为漏了记录。
-    sections.push('== 你离开期间没有新的对话消息 ==');
+    sections.push('== No new messages while you were away ==');
   }
 
   if (opts.sessionId) {
@@ -400,23 +439,77 @@ function assembleHandoffText(
     // 翻到原文。工具名 / 参数是确定性事实(@cindy/mcps xdt-helper,session_ids 过滤,
     // 两个工具均支持),写死在指引里比让模型自己发现可靠(规则 9)。
     sections.push(
-      `== 早期原文检索(需要时用)==\n` +
-        `本会话 id:${opts.sessionId}\n` +
-        `以上摘要之外的早期对话原文可随时检索(工具在 cindy_helper 的 history 类目):\n` +
-        `- 按内容找:search_chat_history,args {"query":"<关键词>","session_ids":["${opts.sessionId}"]}\n` +
-        `- 按时间/角色拉原文:get_chat_history,args {"session_ids":["${opts.sessionId}"],"roles":["user","assistant"]}(hasMore 用 nextCursor 翻页)\n` +
-        `用户追问的细节不在上文时,先检索原文再回答,不要凭提要猜;检索到的旧内容与工作区现状冲突时,以工作区为准。仅在需要时使用,不必每轮都查。`,
+      `== Retrieving earlier verbatim history (use when needed) ==\n` +
+        `Session id: ${opts.sessionId}\n` +
+        `Earlier conversation text beyond the digest above can be retrieved at any time (tools live under cindy_helper's history category):\n` +
+        `- By content: search_chat_history, args {"query":"<keywords>","session_ids":["${opts.sessionId}"]}\n` +
+        `- By time/role: get_chat_history, args {"session_ids":["${opts.sessionId}"],"roles":["user","assistant"]} (page through with nextCursor when hasMore)\n` +
+        `When the user asks about a detail that is not in the context above, retrieve the original text before answering instead of guessing from the digest; ` +
+        `when retrieved history conflicts with the current workspace, the workspace wins. Use this only when needed, not on every turn.`,
     );
   }
 
-  sections.push(
-    opts.reason === 'message-deletion'
-      ? '== 上下文重建说明结束,以下是用户的新消息 =='
-      : '== 交接说明结束,以下是用户的新消息 ==',
-  );
+  sections.push(handoffTerminator(opts));
   // 不在组装阶段做任何截断——超限收缩由 buildHandoffText 的外层循环负责
   // (收缩逐字区保住首尾),尾部硬切只是外层最后的保险。
   return sections.join('\n\n');
+}
+
+/**
+ * fork 出的子会话注入给模型的来源标记。
+ *
+ * 为什么只有一行:fork 的上下文是原会话前缀的**完整**拷贝,模型不缺记忆,只缺
+ * "我是谁、我从哪来" 这一个元信息。agent-switch 那种逐字摘要 + 检索指引在这里
+ * 是纯浪费——真需要翻原会话时,history 类工具本来就在工具列表里,不必手把手教。
+ *
+ * 措辞对两种 fork 都成立:消息级 fork 与 forkSessionStripEncrypted(后者
+ * forkedAtMessageId 为 null,不存在"某条消息"),所以只陈述"从哪个会话分叉",
+ * 不提分叉点。
+ */
+export function buildForkOriginHandoff(parentSessionId: string): string {
+  return `${forkOriginFactLine(parentSessionId)}\n\n${FORK_TERMINATOR}`;
+}
+
+function forkOriginFactLine(parentSessionId: string): string {
+  return (
+    `[Session fork · internal context]\n` +
+    `This conversation was forked by the user from another conversation (id: ${parentSessionId}). ` +
+    `Do not mention this note or that id to the user.`
+  );
+}
+
+/**
+ * 把来源标记**并进**已有的 pending 交接,而不是替换它。
+ *
+ * 必须组合的原因:在引擎切换后的首条 user 消息上 fork 时,fork 事务会刻意把复制
+ * 过去的 agent_switch 边界重置为 `consumed: false`(见 WorkerThreadTransport 的
+ * sanitizeForkedMessageContent 与 fork.ts 的 resetHandoffBoundaryClientId),让子会话
+ * 首次发送时仍拿得到完整的跨引擎交接。若来源标记直接顶掉它,子会话会在没有切换前
+ * 上下文的情况下起跑——那正是交接机制本身要防的失忆。
+ *
+ * 顺序:来源标记在前(只是"我是谁"的元信息),交接正文在后,由交接自带的结束标记
+ * 统一收尾,避免出现两个"以下是用户的新消息"。
+ */
+export function composeForkOriginHandoff(
+  parentSessionId: string,
+  pendingHandoff: string | null,
+): string {
+  if (!pendingHandoff) return buildForkOriginHandoff(parentSessionId);
+  const fact = forkOriginFactLine(parentSessionId);
+  const composed = `${fact}\n\n${pendingHandoff}`;
+  if (composed.length <= HANDOFF_HARD_CAP) return composed;
+  // 交接正文可能**已经**被 buildHandoffText 顶到上限(工具密集的长历史),再前置
+  // fork 事实就会顶破它。从正文中部裁,两头都留住:前面的 fork 事实与它自带的结束
+  // 标记——否则这条路径正好在最需要分隔的长历史上丢掉分隔。
+  const [body, tail] = splitTrailingTerminator(pendingHandoff);
+  const separator = '\n\n';
+  // 两个 separator:fact 与正文之间、正文与结束标记之间。后者不能省——正文被从中部
+  // 裁开后末尾多半停在半句上,结束标记直接贴上去就毁掉了"显式分隔"这个不变量本身。
+  const room = HANDOFF_HARD_CAP - fact.length - separator.length * 2 - tail.length;
+  // 极端情形(当前上限下不可达)也要守住优先级:交接关系到跨引擎的对话连续性,
+  // 来源标记只是元信息——挤不下时丢后者,绝不能反过来把整段交接换成一行来源说明。
+  if (room <= 0) return pendingHandoff;
+  return `${fact}${separator}${body.slice(0, room).trimEnd()}${separator}${tail}`;
 }
 
 /** send 路径的 wire 消息形态(与 makerSendTransaction 的 IpcUserMessage 对齐)。 */
@@ -455,19 +548,80 @@ export interface AgentHandoffPendingRegistry {
   consume(sessionId: string): void;
   /** session 删除 / 关闭清理,避免 Map 泄漏。 */
   clear(sessionId: string): void;
+  /**
+   * 墓碑式失效:留下 null 条目,后续 peek 直接返回 null,**不回落 DB**。
+   *
+   * 给 `/clear` 用。本地 `/clear` 的 `cleared_at` 是 renderer 侧 fire-and-forget 写入
+   * 的(main 只在 device-link 远程调用时自己落库),handler 返回到那次写入提交之间有
+   * 个窗口;若此刻用 `clear()` 删掉条目,恰好撞上 hook / scheduler 等直发路径的 send,
+   * peek 会回落到**尚未更新 cleared_at** 的 DB 行,把旧交接重建出来并缓存,而后来的
+   * DB 更新不会让那份缓存失效。留墓碑就没有这个窗口——真有新交接时 `set()` 会覆盖它。
+   */
+  invalidate(sessionId: string): void;
 }
 
 export function createAgentHandoffPendingRegistry(
   queryPending: (sessionId: string) => Promise<string | null>,
   onConsume?: (sessionId: string) => void,
+  /**
+   * 内存命中时的补充组合钩子。存在的理由:交接不只由 queryPending 产出——
+   * agent-switch / 消息删除会直接 `set` 进内存(register.ts 的 setPendingHandoff),
+   * 那条路径不经过 DB fallback。fork 出的子会话若在首发前切了引擎,内存里就只有
+   * 切换交接,来源标记会被整条跳过。这里对**非 null 的内存值**再过一次组合,把两
+   * 者并起来;null(已 consume)不触发,消费语义不变。
+   *
+   * 只对 `set` 进来的值生效:queryPending 的产出已经组合过,再过一遍会让首发未
+   * accepted 的重试拿到两份来源标记(下面的 composedByQuery 就是这道闸)。
+   */
+  decorateCached?: (sessionId: string, handoff: string) => Promise<string>,
 ): AgentHandoffPendingRegistry {
   const pending = new Map<string, string | null>();
+  /** 值由 queryPending 产出(已含组合结果)的 session,decorate 必须跳过它们。 */
+  const composedByQuery = new Set<string>();
+  /**
+   * 每个 session 的状态代次。peek 里两处 await 之后都要写回 Map,而 `/clear` 与
+   * `set` 可能正好落在那个窗口里——不带代次校验地写回,会把 clear 掉的旧交接原样
+   * 塞回缓存并标成已组合,下一次 send 就绕过 `cleared_at` 把旧上下文灌进用户刚
+   * 清空的会话。任何改变状态的入口都递增它,await 后代次不符就丢弃本次结果。
+   */
+  const generation = new Map<string, number>();
+  const bump = (sessionId: string): void => {
+    generation.set(sessionId, (generation.get(sessionId) ?? 0) + 1);
+  };
+  const genOf = (sessionId: string): number => generation.get(sessionId) ?? 0;
   return {
     set(sessionId, handoff) {
       pending.set(sessionId, handoff);
+      // 外部直接塞进来的交接没经过 queryPending 的组合,重新纳入 decorate 范围。
+      composedByQuery.delete(sessionId);
+      bump(sessionId);
     },
     async peek(sessionId) {
-      if (pending.has(sessionId)) return pending.get(sessionId) ?? null;
+      if (pending.has(sessionId)) {
+        const cached = pending.get(sessionId) ?? null;
+        if (cached === null || !decorateCached || composedByQuery.has(sessionId)) return cached;
+        const gen = genOf(sessionId);
+        try {
+          const decorated = await decorateCached(sessionId, cached);
+          // 期间被 clear / set:本次结果基于已作废的状态,既不写回也不返回——
+          // 返回它等于把 clear 掉的交接注入这一次发送。
+          if (genOf(sessionId) !== gen) return null;
+          // 组合结果回写并标记为已组合:同一条待注入交接在 consume 之前可能被 peek
+          // 多次(首发被拒后的重试),没有这步每次都要重跑一遍 decorate 的 DB 查询,
+          // 而且要靠 decorate 自身幂等才不会叠加。
+          pending.set(sessionId, decorated);
+          composedByQuery.add(sessionId);
+          return decorated;
+        } catch {
+          // 失败路径同样要看代次:decorate 抛错(如查询瞬时失败)期间若发生 /clear,
+          // 退回 cached 等于把已作废的交接注入这次发送——那正是代次校验要拦的事。
+          if (genOf(sessionId) !== gen) return null;
+          // 组合失败不能吞掉本来就该注入的交接——退回未组合的原值,且不写缓存,
+          // 下次 peek 仍会重试组合。
+          return cached;
+        }
+      }
+      const gen = genOf(sessionId);
       let fromDb: string | null = null;
       try {
         fromDb = await queryPending(sessionId);
@@ -475,15 +629,26 @@ export function createAgentHandoffPendingRegistry(
         // 查询失败按无 pending 处理(不阻塞发送);下次 send 重查。
         return null;
       }
+      if (genOf(sessionId) !== gen) return null;
       pending.set(sessionId, fromDb);
+      composedByQuery.add(sessionId);
       return fromDb;
     },
     consume(sessionId) {
       pending.set(sessionId, null);
+      composedByQuery.delete(sessionId);
+      bump(sessionId);
       onConsume?.(sessionId);
     },
     clear(sessionId) {
       pending.delete(sessionId);
+      composedByQuery.delete(sessionId);
+      bump(sessionId);
+    },
+    invalidate(sessionId) {
+      pending.set(sessionId, null);
+      composedByQuery.delete(sessionId);
+      bump(sessionId);
     },
   };
 }

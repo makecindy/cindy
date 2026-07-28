@@ -5,17 +5,17 @@ import { resolve } from 'node:path';
 const markdownRenderer = readFileSync(
   resolve(__dirname, '..', 'components', 'chat', 'MarkdownRenderer.tsx'),
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 
 const localPathResolver = readFileSync(
   resolve(__dirname, '..', 'lib', 'localPathResolver.ts'),
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 
 const textLightbox = readFileSync(
   resolve(__dirname, '..', 'components', 'chat', 'TextLightbox.tsx'),
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 
 describe('Markdown target rendering contract', () => {
   it('funnels markdown links and inline code through the shared target classifier', () => {
@@ -62,7 +62,9 @@ describe('Markdown target rendering contract', () => {
     // 粘贴内容,会把整个节点连同路径文字丢掉,只在原位留下一个断行——用户看到的
     // 就是"文件名凭空消失"。`<code>` 既是语义正解(这个 chip 本来就是行内代码
     // 升级来的),粘出去还会落成对方的行内代码。
-    const chipBody = markdownRenderer.match(/function FileTargetChip\([\s\S]*?\n}\n/)?.[0];
+    const chipBody = markdownRenderer.match(
+      /function FileTargetChip\([\s\S]*?\r?\n}\r?\n/,
+    )?.[0];
     expect(chipBody).toBeDefined();
     expect(chipBody).toContain('<code');
     expect(chipBody).not.toContain('<button');

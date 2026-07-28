@@ -11,6 +11,10 @@ import { BrowserTabBody } from '../BrowserTabBody';
 const browserNavigate = vi.fn();
 let browserState: UseBrowserWebviewResult;
 
+const poolMocks = vi.hoisted(() => ({
+  currentWrapper: null as HTMLDivElement | null,
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
@@ -24,9 +28,12 @@ vi.mock('../../../hooks/useBrowserWebview', () => ({
 vi.mock('../../../lib/browserWebviewPool', () => ({
   browserWebviewPool: {
     release: vi.fn(),
-    // useBrowserComment 经 peek 取 webview 挂 ipc-message 监听;导航测试里没有
-    // 真 webview,返回 null 即可(hook 对 null 全程静默降级)。
-    peek: vi.fn(() => null),
+    // BrowserTabBody 还会调用 useBrowserComment；该 hook 经 peek 获取 webview
+    // 并监听 ipc-message。导航测试没有真 webview，wrapper 仅用于验证 layout
+    // cleanup 的 Pool 代际归属。
+    peek: vi.fn(() => poolMocks.currentWrapper
+      ? { wrapper: poolMocks.currentWrapper, webview: null }
+      : null),
   },
 }));
 
@@ -59,7 +66,11 @@ function makeBrowserState(
   };
 }
 
-function renderBrowserTab(stateUrl: string, patchState = vi.fn()): ReactElement {
+function renderBrowserTab(
+  stateUrl: string,
+  patchState = vi.fn(),
+  active = true,
+): ReactElement {
   const ctx: TabKindHostContext = {
     tabId: 'tab-browser',
     sessionId: 'session-a',
@@ -70,7 +81,7 @@ function renderBrowserTab(stateUrl: string, patchState = vi.fn()): ReactElement 
     setCloseInterceptor: vi.fn(() => () => undefined),
   };
   return createElement(BrowserTabBody, {
-    active: true,
+    active,
     ctx,
     state: {
       url: stateUrl,
@@ -95,8 +106,57 @@ describe('BrowserTabBody navigation', () => {
 
   afterEach(() => {
     cleanup();
+    poolMocks.currentWrapper = null;
+    document.getElementById('browser-webview-pool')?.remove();
     vi.clearAllMocks();
     browserState = makeBrowserState();
+  });
+
+  it('keeps an eagerly created hidden wrapper parked without navigating', () => {
+    const parking = document.createElement('div');
+    parking.id = 'browser-webview-pool';
+    document.body.appendChild(parking);
+    parking.appendChild(sharedWrapper);
+    poolMocks.currentWrapper = sharedWrapper;
+    browserState = makeBrowserState({ wrapper: sharedWrapper, url: '' });
+
+    const view = render(renderBrowserTab('https://example.com/persisted', vi.fn(), false));
+
+    expect(sharedWrapper.parentElement).toBe(parking);
+    expect(browserNavigate).not.toHaveBeenCalled();
+
+    view.rerender(renderBrowserTab('https://example.com/persisted', vi.fn(), true));
+
+    expect(sharedWrapper.parentElement).not.toBe(parking);
+    expect(browserNavigate).toHaveBeenCalledOnce();
+    expect(browserNavigate).toHaveBeenCalledWith('https://example.com/persisted');
+  });
+
+  it('does not reconnect a released wrapper when a replacement arrives', () => {
+    const parking = document.createElement('div');
+    parking.id = 'browser-webview-pool';
+    document.body.appendChild(parking);
+    parking.appendChild(sharedWrapper);
+    poolMocks.currentWrapper = sharedWrapper;
+    browserState = makeBrowserState({ wrapper: sharedWrapper });
+    const patchState = vi.fn();
+    const view = render(renderBrowserTab('https://www.taptap.cn/', patchState));
+
+    expect(sharedWrapper.isConnected).toBe(true);
+    poolMocks.currentWrapper = null;
+    sharedWrapper.remove();
+    browserState = makeBrowserState({ wrapper: null });
+    view.rerender(renderBrowserTab('https://www.taptap.cn/', patchState));
+
+    const replacement = document.createElement('div');
+    parking.appendChild(replacement);
+    poolMocks.currentWrapper = replacement;
+    browserState = makeBrowserState({ wrapper: replacement, url: '' });
+    view.rerender(renderBrowserTab('https://www.taptap.cn/', patchState));
+
+    expect(sharedWrapper.isConnected).toBe(false);
+    expect(replacement.isConnected).toBe(true);
+    expect(replacement.parentElement).not.toBe(parking);
   });
 
   it('does not patch the old webview URL back over a user-entered navigation while loading', () => {

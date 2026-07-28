@@ -48,4 +48,14 @@ describe('ghostCredentialRejections 台账', () => {
     expect(store.markRejected('any', 'k')).toBe(true);
     expect(store.rejectedKeys('any')).toEqual(['k']);
   });
+
+  it('使用 own-key 查找,并能按连接 identity 清账', () => {
+    const store = createGhostCredentialRejectionsStore({ filePath });
+    expect(store.rejectedKeys('constructor')).toEqual([]);
+    expect(store.markRejected('constructor', 'connection:gitlab:connection-1')).toBe(true);
+    expect(store.rejectedKeys('constructor')).toEqual(['connection:gitlab:connection-1']);
+
+    expect(store.clearConnection('constructor', 'gitlab', 'connection-1')).toBe(true);
+    expect(store.rejectedKeys('constructor')).toEqual([]);
+  });
 });

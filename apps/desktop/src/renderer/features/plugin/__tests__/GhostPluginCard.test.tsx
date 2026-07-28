@@ -127,6 +127,37 @@ describe('GhostPluginCard', () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
+  it('routes projected icon failures from installed cards and shortcuts to market recovery', () => {
+    const onIconLoadError = vi.fn();
+    const projected = {
+      ...installedPlugin,
+      iconDataUrl: 'https://plugins.example.invalid/icon.png?signature=current',
+    };
+    const { container, rerender } = render(
+      <GhostPluginCard
+        item={projected}
+        onSelect={vi.fn()}
+        onAction={vi.fn()}
+        onIconLoadError={onIconLoadError}
+      />,
+    );
+
+    fireEvent.error(container.querySelector('img') as HTMLImageElement);
+    expect(onIconLoadError).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <InstalledGhostQueue
+        items={[projected]}
+        expanded={false}
+        onExpandedChange={vi.fn()}
+        onSelect={vi.fn()}
+        onIconLoadError={onIconLoadError}
+      />,
+    );
+    fireEvent.error(container.querySelector('img') as HTMLImageElement);
+    expect(onIconLoadError).toHaveBeenCalledTimes(2);
+  });
+
   it('surfaces the market update state with a badge and a direct update action', () => {
     const onAction = vi.fn();
     const onUpdate = vi.fn();
@@ -290,6 +321,38 @@ describe('GhostPluginCard', () => {
       screen.getByRole('button', { name: /settings\.ghosts\.market\.details/ }),
     );
     expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it('distinguishes unavailable conflicts from busy market operations', () => {
+    const { rerender } = render(
+      <MarketPluginCard
+        item={{ ...marketPlugin, installState: 'conflict' }}
+        busy={false}
+        onSelect={vi.fn()}
+        onInstall={vi.fn()}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+
+    const cardBody = screen.getByRole('button', { name: 'Google Calendar' });
+    expect((cardBody as HTMLButtonElement).disabled).toBe(true);
+    expect(cardBody.className).toContain('disabled:cursor-not-allowed');
+    expect(cardBody.className).not.toContain('disabled:cursor-wait');
+
+    rerender(
+      <MarketPluginCard
+        item={marketPlugin}
+        busy
+        onSelect={vi.fn()}
+        onInstall={vi.fn()}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+
+    const busyCardBody = screen.getByRole('button', { name: 'Google Calendar' });
+    expect((busyCardBody as HTMLButtonElement).disabled).toBe(true);
+    expect(busyCardBody.className).toContain('disabled:cursor-wait');
+    expect(busyCardBody.className).not.toContain('disabled:cursor-not-allowed');
   });
 });
 

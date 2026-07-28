@@ -395,6 +395,11 @@ export interface ThreadResumeParams {
    * 用于重启后恢复 host 产品级 prompt。
    */
   developerInstructions?: string;
+  /**
+   * 只恢复 thread 元数据与 live state，不把完整历史塞进单条 NDJSON response。
+   * 历史展示由 Cindy 自己的会话数据负责。
+   */
+  excludeTurns?: boolean;
   [k: string]: unknown;
 }
 

@@ -69,6 +69,8 @@ export async function handleGhostConnectionsRequest(args: {
   confirmAddHost: (declLabel: string, host: string) => Promise<boolean>;
   /** Any committed connection mutation; used to re-assess setup readiness. */
   onChanged?: (declKey: string) => void;
+  /** Existing connection token/label update; used to clear its rejection state. */
+  onUpdated?: (declKey: string, connectionId: string) => void;
   /** New-connection user notice, separate from the complete mutation hook. */
   onAdded?: (declKey: string) => void;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
@@ -173,6 +175,7 @@ export async function handleGhostConnectionsRequest(args: {
       if (!result.ok) return json(200, { ok: false, error: result.error });
       try {
         notifyChanged(declKey);
+        if (result.updated) args.onUpdated?.(declKey, result.connection.id);
         if (!result.updated) args.onAdded?.(declKey);
       } catch (err) {
         log?.warn('ghost connections change 通知失败(不影响入库结果)', { ghostId, declKey, err: String(err) });

@@ -206,6 +206,21 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
     expect(noteCredentialRejected).toHaveBeenCalledTimes(1);
   });
 
+  it('台账写入失败不覆盖原始 401 响应', async () => {
+    const { slot } = makeSlot({
+      fetchImpl: vi.fn(async () => fakeResponse({ status: 401, body: '{"error":"bad key"}' })) as never,
+      noteCredentialRejected: () => {
+        throw new Error('disk full');
+      },
+    });
+    const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL });
+    expect(r.ok).toBe(true);
+    if (r.ok && 'body' in r) {
+      expect(r.status).toBe(401);
+      expect(r.body).toContain('bad key');
+    }
+  });
+
   it('403 仅当 body 含凭证失效信号才记账;限流/业务 403 不记', async () => {
     // 403 语义宽(GitHub 限流、越权、封禁):无凭证类信号时不记账,避免误标。
     const noteCredentialRejected = vi.fn();
@@ -1473,6 +1488,7 @@ describe('networkSlot · 凭证交换(key 换令牌二段式)', () => {
     tokenResponses?: Array<() => Response | Promise<Response>>;
     /** 业务端点的响应序列(同上)。 */
     apiResponses?: Array<() => Response | Promise<Response>>;
+    noteCredentialRejected?: NetworkSlotDeps['noteCredentialRejected'];
   } = {}) {
     const tokenResponses = params.tokenResponses ?? [
       () => fakeResponse({ body: '{"session_id":"s1","session":"tok-1"}' }),
@@ -1498,6 +1514,7 @@ describe('networkSlot · 凭证交换(key 换令牌二段式)', () => {
       getGhost: () => fakeGhost({ network: exchangeNetwork(params.exchangeOverrides) }),
       fetchImpl: fetchImpl as unknown as NetworkSlotDeps['fetchImpl'],
       readSecret,
+      noteCredentialRejected: params.noteCredentialRejected,
     });
     return { slot, fetchImpl, readSecret };
   }
@@ -1618,16 +1635,19 @@ describe('networkSlot · 凭证交换(key 换令牌二段式)', () => {
   });
 
   it('交换端点非 2xx:整单结构化失败,错误带状态码与摘录、不发业务请求、不泄 key', async () => {
+    const noteCredentialRejected = vi.fn();
     const { slot, fetchImpl } = makeExchangeSlot({
-      tokenResponses: [() => fakeResponse({ status: 403, body: 'invalid subscriber' })],
+      tokenResponses: [() => fakeResponse({ status: 401, body: 'invalid subscriber' })],
+      noteCredentialRejected,
     });
     const r = await slot.handleFetchRequest('web-search', { url: API_URL });
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.message).toContain('403');
+      expect(r.message).toContain('401');
       expect(r.message).toContain('invalid subscriber');
       expect(r.message).not.toContain('mivo-raw-key');
     }
+    expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'mivo_api_key');
     expect(apiCalls(fetchImpl)).toHaveLength(0);
   });
 
@@ -1893,7 +1913,13 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
     hostsFor: () => Object.keys(tokens),
     tokenFor: (_ghostId, hostname) => {
       const value = tokens[hostname];
-      return value === null || value === undefined ? null : { value, ...inject };
+      return value === null || value === undefined
+        ? null
+        : {
+            value,
+            ...inject,
+            credentialRef: `connection:gitlab:${hostname}`,
+          };
     },
   });
 
@@ -1949,6 +1975,23 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toContain('重新添加');
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('连接收到 401 时按匹配的 connection identity 记账', async () => {
+    const noteCredentialRejected = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: CONN_ONLY_NETWORK }),
+      fetchImpl: vi.fn(async () => fakeResponse({ status: 401 })) as never,
+      connections: connDeps({ 'gitlab.example.com': 'glpat-real' }),
+      noteCredentialRejected,
+    });
+    await slot.handleFetchRequest('web-search', {
+      url: 'https://gitlab.example.com/api/v4/user',
+    });
+    expect(noteCredentialRejected).toHaveBeenCalledWith(
+      'web-search',
+      'connection:gitlab:gitlab.example.com',
+    );
   });
 
   it('deps.connections 未注入时连接声明 fail-closed:动态地址不放行', async () => {

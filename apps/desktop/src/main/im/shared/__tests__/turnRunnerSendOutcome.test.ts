@@ -455,7 +455,20 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       },
     ]);
     mocks.bindingGet.mockReturnValue(undefined);
-    mocks.desktopSessionRows.mockResolvedValue([]);
+    mocks.desktopSessionRows.mockResolvedValue([
+      {
+        id: 'feishu-session',
+        status: 'active',
+        agentKind: 'claude-code',
+        workingDir: 'F:\\XDMaker',
+        model: 'claude-opus-4-7',
+        effort: 'xhigh',
+        permissionMode: 'bypassPermissions',
+        fastMode: false,
+        sdkSessionId: null,
+        providerId: null,
+      },
+    ]);
     mocks.findActiveSession.mockResolvedValue({
       id: 'feishu-session',
       agentKind: 'claude-code',
@@ -586,14 +599,25 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   });
 
   it('applies a deferred switch and sends the first queued IM message through the refreshed session', async () => {
+    const order: string[] = [];
     const oldSession = createSessionHarness(async () => ({
       accepted: false,
       reason: 'cancelled-before-dispatch',
     }));
-    const switchedSession = createSessionHarness(async () => ({
-      accepted: false,
-      reason: 'cancelled-before-dispatch',
-    }));
+    const switchedSession = createSessionHarness(async () => {
+      order.push('send');
+      // agent switch 已完成后的关闭不属于切换自己的瞬态 close，必须正常清缓存。
+      emitMakerEvent({
+        type: 'session:closed',
+        sessionId: 'feishu-session',
+        session: switchedSession.session,
+        reason: 'requested',
+      });
+      return {
+        accepted: false,
+        reason: 'cancelled-before-dispatch',
+      };
+    });
     let live: Session | undefined = oldSession.session;
     const maker = {
       createSession: vi.fn(async () => oldSession.session),
@@ -606,12 +630,22 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       }),
     };
     mocks.getMaker.mockReturnValue(maker);
-    const applyPendingAgentSwitch = vi.fn(async () => {
+    const releaseAgentSwitchLock = vi.fn(() => {
+      order.push('release');
+    });
+    const acquirePendingAgentSwitch = vi.fn(async () => {
+      order.push('apply');
       live = switchedSession.session;
-      emitMakerEvent({ type: 'session:closed', sessionId: 'feishu-session' });
+      emitMakerEvent({
+        type: 'session:closed',
+        sessionId: 'feishu-session',
+        session: oldSession.session,
+        reason: 'agent-switch',
+      });
+      return releaseAgentSwitchLock;
     });
     const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
-      applyPendingAgentSwitch,
+      acquirePendingAgentSwitch,
     });
 
     try {
@@ -623,10 +657,110 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         attachments: [],
       });
 
-      expect(applyPendingAgentSwitch).toHaveBeenCalledWith('feishu-session');
+      expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('feishu-session');
       expect(oldSession.send).not.toHaveBeenCalled();
       expect(switchedSession.send).toHaveBeenCalledTimes(1);
       expect(mocks.wireSessionToIpcExternal).toHaveBeenLastCalledWith(switchedSession.session);
+      expect(order).toEqual(['apply', 'send', 'release']);
+      expect(localRunner.getMakerSessionById('feishu-session')).toBeNull();
+    } finally {
+      localRunner.disposeAllSessions();
+    }
+  });
+
+  it('does not suppress a requested close during no-op switch acquisition', async () => {
+    const oldSession = createSessionHarness(async () => ({ accepted: true }));
+    let live: Session | undefined = oldSession.session;
+    const maker = {
+      createSession: vi.fn(async () => oldSession.session),
+      getSession: vi.fn(() => live),
+      on: vi.fn((listener: (event: MakerEvent) => void) => {
+        makerEventListeners.push(listener);
+        return () => {
+          makerEventListeners = makerEventListeners.filter((candidate) => candidate !== listener);
+        };
+      }),
+    };
+    mocks.getMaker.mockReturnValue(maker);
+    const acquirePendingAgentSwitch = vi.fn(async () => {
+      live = undefined;
+      emitMakerEvent({
+        type: 'session:closed',
+        sessionId: 'feishu-session',
+        session: oldSession.session,
+        reason: 'requested',
+      });
+      return vi.fn();
+    });
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      acquirePendingAgentSwitch,
+    });
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-close-race',
+        text: 'do not recreate',
+        attachments: [],
+      });
+
+      expect(oldSession.send).not.toHaveBeenCalled();
+      expect(maker.createSession).toHaveBeenCalledTimes(1);
+      expect(localRunner.getMakerSessionById('feishu-session')).toBeNull();
+    } finally {
+      localRunner.disposeAllSessions();
+    }
+  });
+
+  it('does not suppress a concurrent close of the replacement session', async () => {
+    const oldSession = createSessionHarness(async () => ({ accepted: true }));
+    const switchedSession = createSessionHarness(async () => ({ accepted: true }));
+    let live: Session | undefined = oldSession.session;
+    const maker = {
+      createSession: vi.fn(async () => oldSession.session),
+      getSession: vi.fn(() => live),
+      on: vi.fn((listener: (event: MakerEvent) => void) => {
+        makerEventListeners.push(listener);
+        return () => {
+          makerEventListeners = makerEventListeners.filter((candidate) => candidate !== listener);
+        };
+      }),
+    };
+    mocks.getMaker.mockReturnValue(maker);
+    const acquirePendingAgentSwitch = vi.fn(async () => {
+      live = switchedSession.session;
+      emitMakerEvent({
+        type: 'session:closed',
+        sessionId: 'feishu-session',
+        session: oldSession.session,
+        reason: 'agent-switch',
+      });
+      live = undefined;
+      emitMakerEvent({
+        type: 'session:closed',
+        sessionId: 'feishu-session',
+        session: switchedSession.session,
+        reason: 'requested',
+      });
+      return vi.fn();
+    });
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      acquirePendingAgentSwitch,
+    });
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-replacement-close-race',
+        text: 'do not send after replacement closes',
+        attachments: [],
+      });
+
+      expect(oldSession.send).not.toHaveBeenCalled();
+      expect(switchedSession.send).not.toHaveBeenCalled();
+      expect(localRunner.getMakerSessionById('feishu-session')).toBeNull();
     } finally {
       localRunner.disposeAllSessions();
     }
@@ -1112,7 +1246,12 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
     expect(getRunner().getMakerSessionById('feishu-session')).toBe(first.session);
 
-    emitMakerEvent({ type: 'session:closed', sessionId: 'feishu-session' });
+    emitMakerEvent({
+      type: 'session:closed',
+      sessionId: 'feishu-session',
+      session: first.session,
+      reason: 'requested',
+    });
 
     expect(getRunner().getMakerSessionById('feishu-session')).toBeNull();
 

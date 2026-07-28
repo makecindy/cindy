@@ -2,6 +2,13 @@ import type { ChildProcess } from 'node:child_process';
 
 import type { AuthState } from '@cindy/maker-core';
 
+export type CodexLoginMode = 'browser' | 'device-code';
+
+/** 官方 Codex CLI 的两种交互登录入口。 */
+export function codexLoginArgs(mode: CodexLoginMode = 'browser'): string[] {
+  return mode === 'device-code' ? ['login', '--device-auth'] : ['login'];
+}
+
 /** 平台化的 Codex 登录子进程终止方案。 */
 export type CodexLoginTerminationPlan =
   | { kind: 'windows-handle'; signal: 'SIGKILL' }

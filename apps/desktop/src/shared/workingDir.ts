@@ -1,3 +1,5 @@
+import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
+
 import { getManagedWorktreeBasePath } from './managedWorktreePaths';
 
 /**
@@ -58,9 +60,7 @@ export function normalizeWorkingDirForGrouping(raw: string | null | undefined): 
   const out = normalizeWorkingDirForProjectSettings(raw);
   if (out == null) return null;
 
-  return out
-    .replace(/\/\.worktrees\/[^/]+(?:\/.*)?$/, '')
-    .replace(/\/\.claude\/worktrees\/[^/]+(?:\/.*)?$/, '');
+  return collapseWorktreeDirForGrouping(out);
 }
 
 function stripWindowsLongPathPrefix(p: string): string {

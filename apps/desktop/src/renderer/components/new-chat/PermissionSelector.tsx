@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Hand,
   CodeXml,
@@ -106,6 +106,8 @@ export function PermissionSelector({
 }: PermissionSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [focusedOptionId, setFocusedOptionId] = useState<string | null>(null);
+  const selectedOptionRef = useRef<HTMLButtonElement>(null);
   const agentKind = vendorKeyToAgentKind(vendorKey);
   // device-link:deviceId 非空 → 权限档从被控端读(本地会话 undefined,行为不变)。
   const { capabilities } = useAgentCapabilities(agentKind, deviceId);
@@ -132,8 +134,29 @@ export function PermissionSelector({
   const triggerDescription = descriptionOf(current, effectiveMode);
   const isCreateAgentVariant = visualVariant === 'create-agent';
   const isFieldTrigger = triggerVariant === 'field';
+  const previousOptionsLengthRef = useRef(options.length);
   // 窄态工具条(#562):新建对话框空间不足时权限入口图标化,防与语音/发送重叠。
   const isIconOnly = iconOnly && isCreateAgentVariant;
+
+  useEffect(() => {
+    if (!open) {
+      setFocusedOptionId(null);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    const previousLength = previousOptionsLengthRef.current;
+    previousOptionsLengthRef.current = options.length;
+    if (!open || previousLength !== 0 || options.length === 0) return;
+
+    // capability cache miss 时，选项可能晚于弹层首次 autofocus 才返回。仅在菜单仍打开且
+    // 选项从空变为可用时补聚焦一次，使 chip / field 的当前权限 tooltip 都与选择一致。
+    setFocusedOptionId(effectiveMode);
+    const frame = requestAnimationFrame(() => {
+      selectedOptionRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, options.length, effectiveMode]);
 
   /** chip 内容行(icon + label + chevron) */
   const triggerContent = (
@@ -219,7 +242,48 @@ export function PermissionSelector({
   );
 
   const optionsList = (
-      <div role="listbox" aria-label={t('newChat.permissionSelector.listAria')}>
+      <div
+        role="listbox"
+        aria-label={t('newChat.permissionSelector.listAria')}
+        className="flex flex-col gap-0.5"
+        onKeyDown={(event) => {
+          if (
+            event.key !== 'ArrowDown' &&
+            event.key !== 'ArrowUp' &&
+            event.key !== 'Home' &&
+            event.key !== 'End'
+          ) {
+            return;
+          }
+
+          const enabledOptions = Array.from(
+            event.currentTarget.querySelectorAll<HTMLButtonElement>(
+              '[role="option"]:not([disabled])',
+            ),
+          );
+          if (enabledOptions.length === 0) return;
+
+          event.preventDefault();
+          const activeIndex = enabledOptions.indexOf(document.activeElement as HTMLButtonElement);
+          let nextIndex: number;
+          if (event.key === 'Home') {
+            nextIndex = 0;
+          } else if (event.key === 'End') {
+            nextIndex = enabledOptions.length - 1;
+          } else if (event.key === 'ArrowDown') {
+            nextIndex = activeIndex < 0 ? 0 : (activeIndex + 1) % enabledOptions.length;
+          } else {
+            nextIndex =
+              activeIndex < 0
+                ? enabledOptions.length - 1
+                : (activeIndex - 1 + enabledOptions.length) % enabledOptions.length;
+          }
+          const nextOption = enabledOptions[nextIndex];
+          if (!nextOption) return;
+          setFocusedOptionId(nextOption.dataset.permissionMode ?? null);
+          nextOption.focus({ preventScroll: true });
+        }}
+      >
         {options.map((option) => {
           const Icon = PERMISSION_ICONS[option.id] ?? Hand;
           const isSelected = effectiveMode === option.id;
@@ -234,12 +298,19 @@ export function PermissionSelector({
               contentClassName="max-w-[280px] whitespace-normal break-words text-left"
             >
               <button
+                type="button"
+                ref={isSelected ? selectedOptionRef : undefined}
+                // MorphPopover 打开后优先聚焦当前选中项；否则会聚焦列表首项，
+                // 触发“默认权限”的 focus tooltip，造成介绍与当前权限不一致。
+                data-morph-autofocus={isSelected ? '' : undefined}
                 onClick={() => {
                   onPermissionModeChange(option.id);
                   setOpen(false);
                 }}
                 role="option"
                 aria-selected={isSelected}
+                data-permission-mode={option.id}
+                tabIndex={(focusedOptionId ?? effectiveMode) === option.id ? 0 : -1}
                 className={cn(
                   'flex w-full items-center gap-3 rounded-[8px] px-3 py-2',
                   'transition-colors',
@@ -296,6 +367,14 @@ export function PermissionSelector({
           align="end"
           sideOffset={4}
           collisionPadding={8}
+          onOpenAutoFocus={(event) => {
+            // Radix 默认聚焦首个可交互项；与 MorphPopover 保持一致，聚焦当前选中权限，
+            // 使 focus tooltip 的介绍与 field trigger 当前值一致。
+            if (selectedOptionRef.current) {
+              event.preventDefault();
+              selectedOptionRef.current.focus({ preventScroll: true });
+            }
+          }}
           className={cn(
             // 面板宽度绑定 trigger 宽度(DESIGN.md §Select & Dropdown: 不许比触发它的
             // 控件更宽或更窄;Radix 语义即 --radix-popover-trigger-width)。行内容自带

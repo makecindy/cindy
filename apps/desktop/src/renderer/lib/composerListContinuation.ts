@@ -2,15 +2,10 @@ import type { EditorView } from '@tiptap/pm/view';
 import type { ResolvedPos } from '@tiptap/pm/model';
 
 /**
- * Composer 列表接续(纯文本 markdown 辅助):Shift/Alt+Enter 换行时,若当前行
- * 以列表 / 待办 / 引用前缀开头且有内容,自动在新行补下一个前缀(有序列表序号
- * +1);前缀后没有内容时(空项)则清掉前缀退出列表。普通 Enter 保持"发送"
- * 语义不变(2026-07 产品定案:Enter=发送的
- * 肌肉记忆优先,不做 Claude 式"列表内 Enter 继续列表")。
- *
- * ChatInput 是刻意的纯文本编辑器(不引入富文本 list schema),这里是 GitHub
- * 评论框式的"前缀接续"实现:发送给 agent 的内容仍是纯 markdown 文本,
- * 消息管线 / 草稿存储 / mention chip 均不受影响。
+ * Composer 纯文本 Markdown 列表的兼容接续。结构化 bullet / ordered list
+ * 由编辑器 schema 处理；本模块继续覆盖粘贴或旧草稿中的文本前缀，以及尚未
+ * 结构化的待办和引用前缀。Shift/Alt+Enter 接续或退出当前项，普通 Enter
+ * 始终保持发送语义。
  */
 
 export type ListContinuation =
@@ -26,11 +21,11 @@ export interface ListPrefixMatch {
 
 // 顺序敏感:checkbox 必须先于 bullet 匹配(`- [ ] ` 也满足 bullet 的模式)。
 // checkbox 允许行在 `]` 处截止(`(\s+|$)`),这样 "- [ ]" 也能识别成空项退出。
-const CHECKBOX_RE = /^(\s*)([-*])(\s+)\[[ xX]\](\s+|$)/;
-const BULLET_RE = /^(\s*)([-*•])(\s+)/;
-const ORDERED_RE = /^(\s*)(\d{1,6})([.)])(\s+)/;
+const CHECKBOX_RE = /^(\s*)([-+*])(\s+)\[[ xX]\](\s+|$)/;
+const BULLET_RE = /^(\s*)([-+*•])(\s+)/;
+const ORDERED_RE = /^(\s*)(\d{1,9})([.)])(\s+)/;
 // 中文顿号序号(`1、`)不要求后随空格,符合中文输入习惯。
-const ORDERED_CJK_RE = /^(\s*)(\d{1,6})(、)(\s*)/;
+const ORDERED_CJK_RE = /^(\s*)(\d{1,9})(、)(\s*)/;
 const QUOTE_RE = /^(\s*)(>)(\s+)/;
 
 /**
@@ -84,7 +79,7 @@ export function computeListContinuation(
   if (!match) return null;
   const rest = lineBeforeCaret.slice(match.prefixLength);
   // 空项判定看**整行**(光标前 rest + 光标后正文):否则 `1. |todo`(光标在标记后、
-  // 正文前)会被当成空项退出、删掉标记留下裸 "todo"(codex P2)。光标后仍有正文时
+  // 正文前)会被当成空项退出、删掉标记留下裸 "todo"。光标后仍有正文时
   // 走 continue —— 在光标处插换行 + 下一前缀,把 "todo" 顺成下一项(拆分列表)。
   if (rest.trim().length === 0 && lineAfterCaret.trim().length === 0) return { action: 'exit' };
   return { action: 'continue', insert: match.nextPrefix };
@@ -162,7 +157,7 @@ export function applyListContinuation(view: EditorView): boolean {
 }
 
 /**
- * 空列表项整体回删(对齐 Claude):当前行只剩前缀(如 "2. ")且光标在行尾时,
+ * 空列表项整体回删:当前行只剩前缀(如 "2. ")且光标在行尾时,
  * 一次 Backspace 删掉整个前缀——有上一行则连同前面的换行一起删,光标落到
  * 上一行行尾;是首行则只删前缀(等效退出列表)。其余情况返回 false,调用方
  * 走默认退格。

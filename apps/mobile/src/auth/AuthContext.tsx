@@ -70,6 +70,10 @@ import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
+import {
+  clearAllMobileVoiceDictionaryCaches,
+  setMobileVoiceDictionaryAccountScope,
+} from '@/session/mobileVoiceDictionaryCache';
 import { clearAllMobileVoiceInputHistories } from '@/session/mobileVoiceHistoryStore';
 import { visualMockApiFetch, visualMockUser } from '@/debug/visualMock';
 import {
@@ -670,6 +674,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     else void clearTapdbUser();
   }, [initialized, user?.id]);
 
+  // 词典缓存的落盘键按账号分区。登出清理是尽力而为的(索引可能读不出来),分区让
+  // 「没删干净」不再等于「下个账号能读到上个账号的词条并发给润色模型」。
+  useEffect(() => {
+    setMobileVoiceDictionaryAccountScope(user?.id ?? '');
+  }, [user?.id]);
+
   const completeOAuthCallback = useCallback(
     (callbackUrl: string): Promise<void> => {
       if (browserCompletionRef.current) return browserCompletionRef.current;
@@ -997,6 +1007,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 覆盖历史穿透凭据、服务模式与 BYOK key 三类存量存储键(功能已删除)。
     await clearAllMobileVoiceCredentials().catch(() => undefined);
     await clearAllMobileVoiceInputHistories().catch(() => undefined);
+    // 词典缓存按 host 设备分区、不含账号身份:同一台电脑在两个账号下是同一个
+    // deviceId,不清就会让下一个账号读到上一个账号的词条并发给润色模型。
+    await clearAllMobileVoiceDictionaryCaches().catch(() => undefined);
     await clearCachedSessionMessages().catch(() => undefined);
     // 首页设备+会话快照与消息缓存一样属于账号数据,登出必须清掉。
     await clearCachedHomeListSnapshot().catch(() => undefined);

@@ -262,11 +262,20 @@ export class GhostConnectionManager {
    * (调用方按"凭证未配置"快速失败)。
    */
   resolveTokenByHost(ghostId: string, declKey: string, hostname: string): string | null {
+    return this.resolveConnectionByHost(ghostId, declKey, hostname)?.value ?? null;
+  }
+
+  resolveConnectionByHost(
+    ghostId: string,
+    declKey: string,
+    hostname: string,
+  ): { id: string; value: string } | null {
     const target = hostname.trim().toLowerCase();
     const manifest = parseManifest(this.deps.vault.read(ghostId, connectionsKey(declKey)));
     const row = manifest.connections.find((c) => c.host === target);
     if (!row) return null;
-    return this.deps.vault.read(ghostId, tokenKey(declKey, row.id));
+    const value = this.deps.vault.read(ghostId, tokenKey(declKey, row.id));
+    return value === null ? null : { id: row.id, value };
   }
 
   private toView(

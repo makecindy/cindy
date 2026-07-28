@@ -57,6 +57,8 @@ export interface GhostSetupProbes {
   oauthStatus(key: string): GhostSetupOauthProbe;
   /** 该连接声明键下已添加的连接条数。 */
   connectionCount(key: string): number;
+  /** 该连接声明键下连接的稳定 identity,用于排除已被拒的单条连接。 */
+  connectionIds?(key: string): readonly string[];
   /** 意识 /kv 顶层键的当前值(无文件 / 无键 → undefined)。 */
   kvValue(key: string): unknown;
 }
@@ -69,6 +71,8 @@ export interface EvaluateGhostSetupOptions {
   revision: number;
   /** Host 内配置（例如图片 Provider）形成的虚拟需求组。 */
   additionalGroups?: GhostSetupAssessmentGroup[];
+  /** 运行期被拒的连接 identity(ref = connection:<decl>:<id>)。 */
+  rejectedConnectionRefs?: readonly string[];
   /**
    * 运行时 gate 必须严格拒绝 manifest 漂移；旧插件页投影为兼容历史
    * fail-open 行为可传 false。
@@ -79,6 +83,8 @@ export interface EvaluateGhostSetupOptions {
 export interface EvaluateGhostSetupStatusOptions {
   /** 运行期被拒的 secret key；按 expired 参与 any-of 重算。 */
   rejectedSecretKeys?: readonly string[];
+  /** 运行期被拒的连接 identity(ref = connection:<decl>:<id>)。 */
+  rejectedConnectionRefs?: readonly string[];
   /** Host 拥有的虚拟配置需求组(例如图片模型配置)。 */
   additionalGroups?: GhostSetupAssessmentGroup[];
 }
@@ -200,6 +206,7 @@ function verdictOf(
   req: GhostSetupRequirement,
   probes: GhostSetupProbes,
   strict: boolean,
+  rejectedConnectionRefs: ReadonlySet<string>,
 ): ItemVerdict {
   if (req.kind === 'kv') {
     if (strict && !manifest.settingsHtml) {
@@ -217,6 +224,14 @@ function verdictOf(
       throw new GhostSetupAssessmentError(
         `setup requirement ${requirementRef(req)} is not declared`,
       );
+    }
+    const connectionIds = probes.connectionIds?.(req.key);
+    if (connectionIds && connectionIds.length > 0) {
+      const rejected = connectionIds.filter((id) =>
+        rejectedConnectionRefs.has(`connection:${req.key}:${id}`),
+      );
+      if (rejected.length === connectionIds.length) return 'expired';
+      return 'satisfied';
     }
     return probes.connectionCount(req.key) > 0 ? 'satisfied' : 'missing';
   }
@@ -257,6 +272,7 @@ function toAssessmentItem(
   req: GhostSetupRequirement,
   probes: GhostSetupProbes,
   strict: boolean,
+  rejectedConnectionRefs: ReadonlySet<string>,
 ): GhostSetupAssessmentItem {
   const ref = requirementRef(req);
   const legacy = toStatusItem(manifest, req);
@@ -278,7 +294,7 @@ function toAssessmentItem(
     kind,
     label: legacy.label,
     ...(userSecretDecl?.hint ? { description: userSecretDecl.hint } : {}),
-    state: verdictOf(manifest, req, probes, strict),
+    state: verdictOf(manifest, req, probes, strict, rejectedConnectionRefs),
     actions:
       kind === 'secret' && userSecretDecl
         ? inlineSecretAction(manifest, ref, legacy.label, userSecretDecl.hint, userSecretDecl.url)
@@ -299,10 +315,13 @@ export function evaluateGhostSetupAssessment(
     throw new GhostSetupAssessmentError('setup assessment revision must be a non-negative integer');
   }
   const strict = options.strict ?? true;
+  const rejectedConnectionRefs = new Set(options.rejectedConnectionRefs);
   const manifestGroups = deriveRequirementGroups(manifest).map((group, index) => ({
     id: `manifest:${index + 1}`,
     mode: 'any_of' as const,
-    items: group.map((req) => toAssessmentItem(manifest, req, probes, strict)),
+    items: group.map((req) =>
+      toAssessmentItem(manifest, req, probes, strict, rejectedConnectionRefs),
+    ),
   }));
   const groups = [...manifestGroups, ...(options.additionalGroups ?? [])];
   const ready = groups.every((group) => group.items.some((item) => item.state === 'satisfied'));
@@ -326,6 +345,7 @@ export function evaluateGhostSetup(
     revision: 0,
     strict: false,
     additionalGroups: options.additionalGroups,
+    rejectedConnectionRefs: options.rejectedConnectionRefs,
   });
   if (options.rejectedSecretKeys && options.rejectedSecretKeys.length > 0) {
     const rejected = new Set(options.rejectedSecretKeys);
@@ -400,6 +420,8 @@ export function handleGhostSetupStatusRequest(args: {
   probesFor: (manifest: GhostManifest) => GhostSetupProbes;
   /** 运行期被拒台账(可选,供已启用插件的「使用」路径保持同口径)。 */
   rejectedSecretKeysFor?: (manifest: GhostManifest) => readonly string[];
+  /** 运行期被拒连接 identity(可选,供已启用插件的「使用」路径保持同口径)。 */
+  rejectedConnectionRefsFor?: (manifest: GhostManifest) => readonly string[];
   /** Host 配置形成的虚拟需求组(可选,与 lifecycle / enable 路径保持同口径)。 */
   additionalGroupsFor?: (manifest: GhostManifest) => GhostSetupAssessmentGroup[];
 }): GhostSetupStatus {
@@ -411,6 +433,7 @@ export function handleGhostSetupStatusRequest(args: {
   if (!manifest) throwIpcError('NOT_FOUND', `意识 ${id} 未安装`);
   return evaluateGhostSetup(manifest, args.probesFor(manifest), {
     rejectedSecretKeys: args.rejectedSecretKeysFor?.(manifest),
+    rejectedConnectionRefs: args.rejectedConnectionRefsFor?.(manifest),
     additionalGroups: args.additionalGroupsFor?.(manifest),
   });
 }

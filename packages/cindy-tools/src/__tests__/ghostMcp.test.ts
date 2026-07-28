@@ -388,6 +388,18 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
     });
     await handleGhostCall(deps, {
       ghost_id: "mivo",
+      grant_only: true,
+      attachments: ["C:/outside/c.png"],
+    });
+    expect(callGhostTool).toHaveBeenLastCalledWith({
+      ghostId: "mivo",
+      tool: "",
+      args: {},
+      grantOnly: true,
+      attachments: ["C:/outside/c.png"],
+    });
+    await handleGhostCall(deps, {
+      ghost_id: "mivo",
       tool: "submit_gen_video",
       grant_only: false,
     });

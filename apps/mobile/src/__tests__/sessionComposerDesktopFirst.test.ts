@@ -21,7 +21,7 @@ describe('mobile session composer desktop-first surface', () => {
     const composerInputEnd = source.indexOf('/>', source.indexOf('value={draft}', composerInputStart)) + 2;
     const composerInputSource = source.slice(composerInputStart, composerInputEnd);
     const attachmentButtonStart = source.indexOf('const renderComposerAttachmentButton = () => (');
-    const attachmentButtonEnd = source.indexOf('const renderComposerTrailingActions = () => (', attachmentButtonStart);
+    const attachmentButtonEnd = source.indexOf('const renderComposerStopButton = () => (', attachmentButtonStart);
     const attachmentButtonSource = source.slice(attachmentButtonStart, attachmentButtonEnd);
     const trailingActionsStart = attachmentButtonEnd;
     const trailingActionsEnd = source.indexOf('const resumeQueue = () => {', trailingActionsStart);
@@ -30,7 +30,6 @@ describe('mobile session composer desktop-first surface', () => {
     const voiceButtonEnd = source.indexOf('const removeRemoteFileAttachment = useCallback', voiceButtonStart);
     const voiceButtonSource = source.slice(voiceButtonStart, voiceButtonEnd);
     const floatingVoiceIndex = composerInputSource.indexOf('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
-    const floatingVoiceStyleIndex = composerInputSource.indexOf('floatingVoiceButtonStyle={composerFloatingVoiceButtonStyle}');
     const sendIndex = composerInputSource.indexOf('trailing={composerCardActive ? null : renderComposerTrailingActions()}');
     const composerSurfaceStart = source.indexOf('composerSurface: {');
     // composerOverlayPanel 已随「模型下拉改 ModelPickerSheet 浮窗」删除,锚到下一个样式键。
@@ -287,7 +286,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerHasText = draft.trim().length > 0;');
     expect(source).toContain('const composerQuoteCount = composerDocumentQuotes(composerDocument).length;');
     expect(source).toContain('const composerHasPayload = composerHasText || attachments.length > 0 || pendingUploads.length > 0 || composerQuoteCount > 0;');
-    expect(source).toContain('const composerShowSendButton = composerLayout.send.visible && (!voiceIsListening || composerHasPayload);');
+    expect(source).toContain('const composerShowSendButton = composerLayout.send.visible || voiceStartPending;');
+    expect(source).not.toContain('composerLayout.send.visible && (!voiceIsListening || composerHasPayload)');
     expect(source).toContain('const latestDocument = latestDraft.trim()');
     expect(source).toContain('reconcileComposerProjectedText(documentBeforeStop, latestDraft)');
     expect(source).toContain('if (options.sendAfterTranscribe && (composerDocumentHasContent(latestDocument) || attachments.length > 0))');
@@ -300,10 +300,12 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerVoicePlacement = voiceUiAvailable');
     expect(source).toContain('hasTrailingAction: composerSendSlotIsStop || composerShowSendButton');
     expect(source).toContain('const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (');
-    // 录音状态由语音按钮形态表达（Mic / Square / spinner），状态行只承载错误。
+    // 录音状态由语音按钮形态表达（Mic / 红点计时胶囊 / spinner），状态行只承载错误。
     expect(source).toContain('const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);');
-    expect(voiceButtonSource).toContain(') : voiceIsListening ? (');
-    expect(voiceButtonSource).toContain('<Square');
+    expect(voiceButtonSource).toContain(') : voiceRecordingTimer.label !== null ? (');
+    expect(voiceButtonSource).toContain('<VoiceRecordingPillContent');
+    // 录音中语音按钮展开成红点+计时胶囊,右缘锚定、只向左生长;旧的红框 Square 形态不再使用。
+    expect(voiceButtonSource).not.toContain('<Square');
     expect(voiceStatusIndex).toBeGreaterThan(-1);
     expect(composerScrollIndex).toBeGreaterThan(-1);
     expect(voiceStatusIndex).toBeLessThan(composerScrollIndex);
@@ -316,7 +318,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(sharedSource).toContain('ref={inputRef as never}');
     expect(source).toContain('ref={voiceDraftScrollRef}');
     expect(source).toContain('contentContainerStyle={styles.voiceDraftOverlayContent}');
-    expect(source).toContain('composerInputRef.current?.setSelectionToEnd();');
+    // 听写期间禁止碰隐藏编辑器的 caret(2026-07-28):setSelectionToEnd 底层是
+    // focusEditor,WebView 程序化 focus + keyboardDisplayRequiresUserAction=false
+    // 会在点语音的同时弹出软键盘。听写文字由覆盖层渲染,caret 只在用户点输入框
+    // (停止听写并有意打字)时由 WebKit 按触点放置。
+    expect(source).not.toContain('setSelectionToEnd');
     expect(source).toContain('voiceDraftScrollRef.current?.scrollToEnd({ animated: false });');
     expect(source).toContain('caretHidden={voiceIsListening}');
     expect(source).toContain('const handleComposerInputPressIn = useCallback(() => {');
@@ -400,7 +406,7 @@ describe('mobile session composer desktop-first surface', () => {
     );
     expect(finishVoiceSource).toContain('voiceStopInFlightRef.current = false;');
     expect(composerInputSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
-    expect(composerInputSource).toContain('floatingVoiceButtonStyle={composerFloatingVoiceButtonStyle}');
+    expect(composerInputSource).not.toContain('floatingVoiceButtonStyle=');
     expect(composerInputSource).toContain('voicePlacement={composerVoicePlacement}');
     expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
     expect(sharedSource).toContain('styles.voiceButtonAnchor,');
@@ -409,16 +415,33 @@ describe('mobile session composer desktop-first surface', () => {
     // 录音中语音按钮以「红色停止方块」可见,禁止任何 opacity:0 隐藏样式回归
     // (旧 gestureAnchor 设计曾把听写中的按钮隐藏,会让停止录音无可见控件)。
     expect(source).not.toContain('composerInlineToolButtonGestureAnchor');
-    expect(source).toContain('const composerFloatingVoiceButtonStyle = composerShowInlineStop && composerShowSendButton');
-    expect(source).toContain('styles.composerFloatingVoiceButtonWithInlineStop');
-    expect(source).toContain('composerFloatingVoiceButtonWithInlineStop: {');
-    expect(source).toContain('right: spacing.md + (MOBILE_COMPOSER_CONTROL_SIZE * 2) + (MOBILE_COMPOSER_TOOL_GAP * 2)');
+    // 语音锚点只剩两档(12 / 52):停止任务在语音左边后,第三档(92)已删除。
+    // 若回归三档,录音期间首段转写落地会让语音按钮整格横跳,原位正好变成停止任务。
+    expect(source).not.toContain('composerFloatingVoiceButtonWithInlineStop');
+    expect(source).not.toContain('composerFloatingVoiceButtonStyle');
+    // 槽位顺序不变量(对齐桌面 2026-07-25 定案):停止任务 → 语音占位 → 发送槽。
+    const toolbarStart = source.indexOf('const renderComposerToolbar = () => (');
+    const toolbarEnd = source.indexOf('const renderComposerInputOverlay', toolbarStart);
+    const toolbarSource = source.slice(toolbarStart, toolbarEnd);
+    const toolbarInlineStopIndex = toolbarSource.indexOf('{renderComposerInlineStop()}');
+    const toolbarVoiceSlotIndex = toolbarSource.indexOf('<ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />');
+    const toolbarSendSlotIndex = toolbarSource.indexOf('{renderComposerSendSlot()}');
+    expect(toolbarInlineStopIndex).toBeGreaterThan(-1);
+    expect(toolbarVoiceSlotIndex).toBeGreaterThan(toolbarInlineStopIndex);
+    expect(toolbarSendSlotIndex).toBeGreaterThan(toolbarVoiceSlotIndex);
+    const trailingFragmentStart = source.indexOf('const renderComposerTrailingActions = () => (');
+    const trailingFragmentEnd = source.indexOf('const resumeQueue = () => {', trailingFragmentStart);
+    const trailingFragmentSource = source.slice(trailingFragmentStart, trailingFragmentEnd);
+    const trailingInlineStopIndex = trailingFragmentSource.indexOf('{renderComposerInlineStop()}');
+    const trailingVoiceSlotIndex = trailingFragmentSource.indexOf('<ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />');
+    const trailingSendSlotIndex = trailingFragmentSource.indexOf('{renderComposerSendSlot()}');
+    expect(trailingInlineStopIndex).toBeGreaterThan(-1);
+    expect(trailingVoiceSlotIndex).toBeGreaterThan(trailingInlineStopIndex);
+    expect(trailingSendSlotIndex).toBeGreaterThan(trailingVoiceSlotIndex);
     expect(voiceButtonSource).toContain('buttonStyle');
     expect(floatingVoiceIndex).toBeGreaterThan(-1);
-    expect(floatingVoiceStyleIndex).toBeGreaterThan(-1);
     expect(sendIndex).toBeGreaterThan(-1);
     expect(floatingVoiceIndex).toBeLessThan(sendIndex);
-    expect(floatingVoiceStyleIndex).toBeLessThan(sendIndex);
     expect(inlineButtonStyle).toContain('height: 34');
     expect(inlineButtonStyle).toContain('width: 34');
     expect(inlineButtonStyle).not.toContain('height: 36');
@@ -541,7 +564,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('<Text style={styles.voiceCancelText}>设置</Text>');
   });
 
-  it('projects mobile voice feedback into the composer draft without adding a recording timer', () => {
+  it('projects mobile voice feedback into the composer draft with the recording timer pill', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
     const sharedSource = readTextLf(resolve(process.cwd(), 'src/session/MobileComposerInputRow.tsx'), 'utf8');
     const voiceStart = source.indexOf('const startVoiceRecording = useCallback(async () => {');
@@ -586,6 +609,21 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('testID="session.voiceStatus"');
     expect(source).not.toContain('mobileVoiceStateLabel(voiceState)');
     expect(source).toContain('const canOpenVoiceSettings = isMobileVoiceMicPermissionError(voiceError);');
+    // 录音计时胶囊(红点 + m:ss,2026-07-25 用户定案对齐桌面)走共享 VoiceRecordingPill;
+    // 计时/宽度状态集中在 useMobileVoiceRecordingTimer,页面不得再自造 duration 状态。
+    expect(source).toContain("import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';");
+    // 计时输入含 pressIn 乐观 pending(按下即录的即时反馈,对齐桌面 activeRecording)。
+    // expanded 含乐观 pending(按下即展开),counting 只认真实采集——启动链路
+    // (权限弹窗等)不计入录音时长(review P1)。
+    expect(source).toContain('expanded: voiceIsListening || voiceStartPending,');
+    expect(source).toContain('counting: voiceIsListening,');
+    expect(source).toContain('const voiceStartedOnPressInRef = useRef(false);');
+    // pending 世代守卫:切会话后旧启动收尾不得塌掉新录音的乐观胶囊(review P1)。
+    expect(source).toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
+    // 手势被系统/滚动打断时撤销按下即录(review P1)。
+    expect(source).toContain('cancelVoiceForAppBackground();');
+    expect(source).toContain('testID="session.voiceRecordingPill"');
+    expect(source).toContain('{ width: voiceRecordingTimer.pillWidth }');
     expect(source).not.toContain('voiceDuration');
     expect(source).not.toContain('recordingDuration');
     expect(source).not.toContain('formatVoiceDuration');

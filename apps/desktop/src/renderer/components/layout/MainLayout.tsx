@@ -686,7 +686,11 @@ export function MainLayout() {
         if (targetSessionId === currentSessionId) {
           writeCollapsedFor(targetSessionId, targetCollapsed);
           if (visibility === 'open') {
-            void window.electronAPI.rightSidebarWindow.open().catch(() => undefined);
+            // userInitiated 透传:插件 preview / agent 自动化(false)只把内容送进
+            // 子窗口,不 show+focus 抢用户前台;用户手势(缺省 true)行为不变。
+            void window.electronAPI.rightSidebarWindow
+              .open({ userInitiated: opts.userInitiated !== false })
+              .catch(() => undefined);
           } else {
             void window.electronAPI.rightSidebarWindow.close().catch(() => undefined);
           }
@@ -832,7 +836,11 @@ export function MainLayout() {
     void bootstrapRsbWindowState().then((s) => {
       if (!s) return;
       if (s.detached && s.lastOpen && !s.open) {
-        void window.electronAPI.rightSidebarWindow.open().catch(() => undefined);
+        // 启动恢复不是用户当次手势:窗口照常回到上次位置,但走 showInactive,
+        // 不在冷启动瞬间把焦点从主窗(或用户别的应用)抢过去。
+        void window.electronAPI.rightSidebarWindow
+          .open({ userInitiated: false })
+          .catch(() => undefined);
       }
     });
     // 插件面板独立窗口的重启恢复(同款语义,按 ghostId 逐个):detached &&

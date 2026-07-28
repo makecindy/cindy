@@ -81,13 +81,33 @@ describe('createResponsesChatHandler', () => {
     ) as typeof fetch;
     const handler = createResponsesChatHandler({
       upstreamBase: 'https://provider.example/gateway?tenant=acme',
-      chatCompletionsPath: '/infer?stream=1',
+      chatCompletionsPath: '/infer?stream=1&next=%2fadmin',
       buildHeaders: async () => ({}),
     }, { fetchImpl });
     const res = new FakeResponse();
     await handler.handle({ parsedBody: { model: 'm', input: 'hi' }, res: res as never });
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://provider.example/gateway/infer?tenant=acme&stream=1',
+      'https://provider.example/gateway/infer?tenant=acme&stream=1&next=%2fadmin',
+      expect.anything(),
+    );
+  });
+
+  it('trims a long trailing-slash run in linear time before applying the chat path', async () => {
+    const fetchImpl = vi.fn(async () =>
+      streamResponse([
+        { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ]),
+    ) as typeof fetch;
+    const handler = createResponsesChatHandler({
+      upstreamBase: `https://provider.example/v1${'/'.repeat(4_096)}`,
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+
+    await handler.handle({ parsedBody: { model: 'm', input: 'hi' }, res: res as never });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://provider.example/v1/chat/completions',
       expect.anything(),
     );
   });
@@ -98,8 +118,14 @@ describe('createResponsesChatHandler', () => {
     ['a raw non-ASCII chat path', 'https://provider.example/v1', '/café'],
     ['a control character in the chat path', 'https://provider.example/v1', '/chat\u007f'],
     ['a backslash in the chat path', 'https://provider.example/v1', '/v1\\chat'],
+    ['a dot segment in the chat path', 'https://provider.example/v1', '/../admin'],
+    ['an encoded dot segment in the chat path', 'https://provider.example/v1', '/%2e%2e/admin'],
+    ['an encoded slash in the chat path', 'https://provider.example/v1', '/%2e%2e%2fadmin'],
+    ['an encoded backslash in the chat path', 'https://provider.example/v1', '/safe%5Cpart'],
+    ['a WHATWG-normalized character in the chat path', 'https://provider.example/v1', '/a<b'],
     ['an incomplete percent escape', 'https://provider.example/v1', '/chat%2'],
     ['an invalid percent escape', 'https://provider.example/v1', '/%ZZ'],
+    ['an oversized chat path', 'https://provider.example/v1', `/${'a'.repeat(2_048)}`],
   ])('reports %s as configuration failure before fetching', async (_case, upstreamBase, chatCompletionsPath) => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const buildHeaders = vi.fn(async () => ({ authorization: 'Bearer secret' }));

@@ -68,7 +68,7 @@ import { formatVoiceInputShortcut } from './shortcut';
 import { VoiceInputMicWaveIcon } from './VoiceInputMicWaveIcon';
 import { getVoiceInputWorkletUrl } from './workletUrl';
 import { VoiceInputPointerHintLayer } from './VoiceInputPointerHintLayer';
-import { isVoiceInputServiceConnectionError } from './overlayErrors';
+import { isVoiceInputServiceConnectionError, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
 import {
   resolveVoiceInputReadinessRecovery,
   type VoiceInputRecoverySettingsTab,
@@ -96,7 +96,10 @@ type StartReadyState = {
 };
 type GlobalOverlayCommand = { type: 'start' | 'submit' | 'cancel' };
 type CloseOverlayOptions = { preservePasteTarget?: boolean };
-type PasteErrorCode = 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed';
+// 'retained' is not a paste failure: the dictation session itself died and the
+// recognized text was kept for copying. It reuses the paste-error layout but
+// carries the session's own error text instead of a paste hint.
+type PasteErrorCode = 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'retained';
 type PermissionPromptKind = 'microphone' | 'accessibility';
 
 function resetOverlayFocus(): void {
@@ -142,6 +145,9 @@ function getPasteErrorHintKey(errorCode: PasteErrorCode | null): string {
       return 'voiceInputOverlay.pasteErrors.unconfirmed';
     case 'permission':
       return 'voiceInputOverlay.pasteErrors.permission';
+    case 'retained':
+      // Callers render the session error instead; this is only a safety net.
+      return 'voiceInputOverlay.status.transcriptKept';
     case 'failed':
     default:
       return 'voiceInputOverlay.pasteErrors.failed';
@@ -372,10 +378,29 @@ export function VoiceInputOverlay() {
     if (audioMs > 0) recordVoiceInputUsage(audioMs, terminalOutcomeRef.current);
   }, []);
 
-  const formatVoiceInputError = useCallback((message: string, code?: VoiceInputErrorCode): string => {
-    if (code === 'empty_transcript') return t('voiceInputOverlay.emptyTranscript');
+  const formatVoiceInputStartError = useCallback((message: string): string => {
+    if (isVoiceInputServiceConnectionError(message)) {
+      return t('voiceInputOverlay.asrServiceUnavailable');
+    }
     return message;
   }, [t]);
+
+  const formatVoiceInputError = useCallback((
+    message: string,
+    code?: VoiceInputErrorCode,
+    transcriptKept?: boolean,
+  ): string => {
+    // Coded failures carry an English debug `message`; the localized sentence
+    // comes from the code. Uncoded ones come from a provider — normalize them
+    // through the same connection mapping the start path uses, so the identical
+    // transport failure reads the same whether or not salvage happened, and raw
+    // ECONNRESET/"fetch failed" strings never reach the user.
+    const cause = code ? t(VOICE_INPUT_ERROR_CODE_KEYS[code]) : formatVoiceInputStartError(message);
+    // Overlay-specific retention copy: its transcript is a read-only HUD with a
+    // Copy button, so telling users to "edit it directly" (what the composers
+    // say) would name an action they cannot take here.
+    return transcriptKept ? t('voiceInputOverlay.transcriptKeptOverlay', { message: cause }) : cause;
+  }, [formatVoiceInputStartError, t]);
 
   const appendAudioChunk = useCallback((chunk: PcmChunk) => {
     sentAudioMsRef.current += chunk.trace.durationMs;
@@ -390,13 +415,6 @@ export function VoiceInputOverlay() {
     }
     return false;
   }, []);
-
-  const formatVoiceInputStartError = useCallback((message: string): string => {
-    if (isVoiceInputServiceConnectionError(message)) {
-      return t('voiceInputOverlay.asrServiceUnavailable');
-    }
-    return message;
-  }, [t]);
 
   const cancelStartedRun = useCallback((startPromise: Promise<StartVoiceInputResult>) => {
     void startPromise
@@ -1248,30 +1266,39 @@ export function VoiceInputOverlay() {
         case 'error': {
           log.warn('global voice input error:', event.message);
           terminalOutcomeRef.current = 'failed';
-          const formattedMessage = formatVoiceInputError(event.message, event.code);
+          const formattedMessage = formatVoiceInputError(event.message, event.code, event.transcriptKept);
           if (promptCodexSessionExpired(formattedMessage)) {
             codexSessionPromptActiveRef.current = true;
           }
-          // Preserve already-recognized text for the user to copy. The
-          // overlay's existing "paste failed" UI does exactly this — render
-          // the captured draft + a copy button — so reuse that path. The
-          // distinction from a real paste failure (no text was ever delivered
-          // to the target app vs. paste was rejected by the target) is not
-          // worth a separate UI surface; what matters is the user does not
-          // lose the transcription they just produced.
+          // Preserve already-recognized text for the user to copy, reusing the
+          // "paste failed" layout (transcript + copy button). It is tagged
+          // 'retained' rather than 'failed' because no paste was attempted:
+          // that distinction drives which hint the panel shows, so a dropped
+          // session is not reported as the target app rejecting input.
           const recognizedText = (finalTextRef.current || draftTextRef.current).trim();
-          if (closingRef.current && recognizedText) {
+          if (closingRef.current && recognizedText && !event.transcriptKept) {
             // Stop-time provider errors can arrive after ASR has produced a
             // stable transcript while refinement is still running. Treating
             // that late error as completion makes the global overlay paste raw
             // ASR text before the refined result arrives. Keep waiting for
             // done/refined here; waitForDone still has its timeout fallback.
+            //
+            // A retained-transcript failure is the opposite case: the run is
+            // already terminal, so nothing further will arrive. Skipping the
+            // setup below would leave the overlay open showing the transcript
+            // with no explanation and no copy button (stopAndPaste bails out on
+            // the error state without pasting).
             break;
           }
-          setError(formatVoiceInputStartError(formattedMessage));
+          // formatVoiceInputError already normalized the cause (including the
+          // connection mapping) and appended the retention note, so this must
+          // not run the finished sentence through the start-error mapper again
+          // — that would swap the whole thing for the generic
+          // service-unavailable copy and drop the retention half.
+          setError(formattedMessage);
           if (recognizedText) {
             pendingPasteTextRef.current = recognizedText;
-            setPasteErrorCode('failed');
+            setPasteErrorCode(event.transcriptKept ? 'retained' : 'failed');
             setHasPasteError(true);
           }
           setVoiceState('error');
@@ -1297,7 +1324,7 @@ export function VoiceInputOverlay() {
           break;
       }
     });
-  }, [formatVoiceInputError, formatVoiceInputStartError, promptCodexSessionExpired, resolveDoneWaiters, setVoiceState]);
+  }, [formatVoiceInputError, promptCodexSessionExpired, resolveDoneWaiters, setVoiceState]);
 
   useEffect(() => {
     const unsubscribe = window.electronAPI.voiceInput.onGlobalOverlayCommand((command: GlobalOverlayCommand) => {
@@ -1393,13 +1420,18 @@ export function VoiceInputOverlay() {
   const closeTooltip = t('voiceInputOverlay.closeWithShortcut', { shortcut: 'Esc' });
   const statusLabel = useMemo(() => {
     if (hasPermissionPrompt) return t('voiceInputOverlay.status.permissionRequired');
+    if (pasteErrorCode === 'retained') return t('voiceInputOverlay.status.transcriptKept');
     if (hasPasteError) return t('voiceInputOverlay.status.inputFailed');
     if (hasBlockingError) return t('voiceInputOverlay.status.error');
     if (state === 'refining') return t('voiceInputOverlay.status.refining');
     if (state === 'submitting') return t('voiceInputOverlay.status.submitting');
     return t('voiceInputOverlay.status.listening');
-  }, [hasBlockingError, hasPasteError, hasPermissionPrompt, state, t]);
-  const pasteFailureHint = t(getPasteErrorHintKey(pasteErrorCode));
+  }, [hasBlockingError, hasPasteError, hasPermissionPrompt, pasteErrorCode, state, t]);
+  // The retained-transcript panel shows the session's own error (cause + "text
+  // was kept"); every other code is an actual paste failure with its own hint.
+  const pasteFailureHint = pasteErrorCode === 'retained'
+    ? error ?? t('voiceInputOverlay.status.transcriptKept')
+    : t(getPasteErrorHintKey(pasteErrorCode));
   const permissionPromptHint = permissionPrompt
     ? t(`voiceInputOverlay.permissionPrompts.${permissionPrompt}.hint`)
     : '';

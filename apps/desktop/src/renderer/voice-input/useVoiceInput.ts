@@ -59,7 +59,8 @@ import { resolveVoiceInputStartGuards } from './startGuards';
 import { getVoiceInputWorkletUrl } from './workletUrl';
 import { buildRefinementPreviewText } from './refinementPreviewText';
 import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
-import { isVoiceInputServiceConnectionError } from './overlayErrors';
+import { mapEditorTextRange, type EditorTextRange } from './editorRangeMapping';
+import { isVoiceInputServiceConnectionError, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
 import {
   VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS,
 } from '../../shared/voiceInputDictionaryLearning';
@@ -85,10 +86,7 @@ type SubmittedTextRange = {
   historyEntryId: string | null;
 };
 
-export type EditorTextRange = {
-  from: number;
-  to: number;
-};
+export type { EditorTextRange } from './editorRangeMapping';
 
 type DictionaryLearningWatch = {
   segmentId: string;
@@ -189,6 +187,12 @@ export function useVoiceInput(
   const startAttemptIdRef = useRef(0);
   const startReadyRef = useRef<StartReadyState | null>(null);
   const ownedRunIdRef = useRef<string | null>(null);
+  // Whether this run's transcript actually reached the editor. The main-process
+  // onSubmitted bridge is fire-and-forget — it emits the event and synthesizes a
+  // range, so the controller's transcriptKept flag only means "the bridge took
+  // it", not "the composer has it". If the editor was gone (route/session
+  // change), insertSubmittedText() returns null and only this side knows.
+  const transcriptLandedRef = useRef(false);
   const stopInFlightRef = useRef(false);
   const stopInFlightPromiseRef = useRef<Promise<void> | null>(null);
   const inlineErrorDismissTimerRef = useRef<number | null>(null);
@@ -368,16 +372,30 @@ export function useVoiceInput(
     }, INLINE_ERROR_AUTO_DISMISS_MS);
   }, [clearInlineErrorDismissTimer]);
 
-  const formatVoiceInputError = useCallback((message: string, code?: VoiceInputErrorCode): string => {
-    if (code === 'empty_transcript') return t('voiceInputOverlay.emptyTranscript');
-    return message;
-  }, [t]);
-
   const formatVoiceInputStartError = useCallback((message: string): string => {
     return isVoiceInputServiceConnectionError(message)
       ? t('voiceInputOverlay.asrServiceUnavailable')
       : message;
   }, [t]);
+
+  const formatVoiceInputError = useCallback((
+    message: string,
+    code?: VoiceInputErrorCode,
+    transcriptKept?: boolean,
+  ): string => {
+    // Coded failures are the controller's own; their `message` is an English
+    // debug string, so the localized sentence has to come from the code.
+    // Uncoded ones come from a provider — run them through the same connection
+    // mapping the start path uses, so one transport failure reads the same on
+    // both paths and raw ECONNRESET/"fetch failed" strings stay out of the UI.
+    // Anything that is not a transport string (auth, quota, protocol) survives
+    // verbatim, since that message is its only description.
+    const cause = code ? t(VOICE_INPUT_ERROR_CODE_KEYS[code]) : formatVoiceInputStartError(message);
+    // Retention is appended to the cause, never substituted for it: the user
+    // still needs to know whether this was a dropped socket or an expired
+    // credential, and they also need to know their words are in the composer.
+    return transcriptKept ? t('voiceInputOverlay.transcriptKept', { message: cause }) : cause;
+  }, [formatVoiceInputStartError, t]);
 
   const appendAudioChunk = useCallback((chunk: PcmChunk) => {
     sentAudioMsRef.current += chunk.trace.durationMs;
@@ -933,6 +951,7 @@ export function useVoiceInput(
         case 'submitted':
           {
             const range = insertSubmittedText(event.text);
+            transcriptLandedRef.current = Boolean(range);
             if (range) {
               const historyEntryId = recordVoiceInputHistory(event.text);
               submittedRangesRef.current.set(event.segment.id, {
@@ -1002,7 +1021,12 @@ export function useVoiceInput(
         case 'error': {
           log.warn('voice input error:', event.message);
           terminalOutcomeRef.current = 'failed';
-          const formattedMessage = formatVoiceInputError(event.message, event.code);
+          // Only this side knows whether the text really made it into the
+          // editor: the main-process bridge answers onSubmitted synchronously
+          // with a synthesized range, so transcriptKept alone would promise
+          // retention even when insertSubmittedText() found no live editor.
+          const transcriptKept = event.transcriptKept === true && transcriptLandedRef.current;
+          const formattedMessage = formatVoiceInputError(event.message, event.code, transcriptKept);
           promptCodexSessionExpired(formattedMessage);
           commitUsageStats();
           void (async () => {
@@ -1059,6 +1083,15 @@ export function useVoiceInput(
     if (!editor) return;
     const handleTransaction = ({ transaction }: { transaction: Transaction }) => {
       inspectDictionaryLearningTransaction(transaction);
+      // The insertion point is captured from the selection when dictation
+      // starts, and the composer is read-only while it runs — but programmatic
+      // writes (draft restore, quote insertion, …) bypass that and shift every
+      // offset after them. A stale offset is worst exactly where it is used
+      // last: the salvage path replaces that range after a failure, which would
+      // eat whatever text now occupies it. Ride along on ProseMirror's mapping.
+      if (!transaction.docChanged || applyingVoiceTextRef.current) return;
+      insertionRangeRef.current = mapEditorTextRange(insertionRangeRef.current, transaction);
+      draftDisplayRangeRef.current = mapEditorTextRange(draftDisplayRangeRef.current, transaction);
     };
     editor.on('transaction', handleTransaction);
     return () => {
@@ -1339,6 +1372,7 @@ export function useVoiceInput(
 
     runIdRef.current = result.runId;
     ownedRunIdRef.current = result.runId;
+    transcriptLandedRef.current = false;
     if (!isActiveStartAttempt(attemptId)) {
       resolveStartReadyState(attemptId, { ok: false, error: 'Voice input start was cancelled.' });
       await stopEngine();

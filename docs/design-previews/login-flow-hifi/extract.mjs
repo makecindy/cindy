@@ -82,7 +82,7 @@ const geometry = {
   panel: wrapObj(tokens.PANEL, TOKENS_TS, 'PANEL'),
   title: wrapObj(tokens.TITLE, TOKENS_TS, 'TITLE'),
   subtitle: wrapObj(tokens.SUBTITLE, TOKENS_TS, 'SUBTITLE'),
-  globalPill: wrapObj(tokens.GLOBAL_PILL, TOKENS_TS, 'GLOBAL_PILL'),
+  regionPill: wrapObj(tokens.REGION_PILL, TOKENS_TS, 'REGION_PILL'),
   control: wrapObj(tokens.CONTROL, TOKENS_TS, 'CONTROL'),
   spinner: wrapObj(tokens.SPINNER, TOKENS_TS, 'SPINNER'),
   social: wrapObj(tokens.SOCIAL, TOKENS_TS, 'SOCIAL'),
@@ -172,7 +172,7 @@ const COPY_KEYS = [
   'verifying', 'signIn', 'resendCode', 'resendCountdown', 'chooseAccount', 'chooseAccountSubtitle',
   'personalAccount', 'binding.phoneTitle', 'binding.phoneSubtitle', 'binding.emailTitle',
   'binding.emailSubtitle', 'sendCode', 'completeSignIn', 'preparing', 'preparingSubtitle',
-  'unavailable', 'retry', 'browserWaiting', 'globalRegion',
+  'unavailable', 'retry', 'browserWaiting', 'regionPill.cn', 'regionPill.dev',
   'errors.fallback', 'errors.INVALID_CODE', 'errors.AUTH_SERVICE_UNAVAILABLE',
   'social.apple', 'social.google', 'social.wechat',
 ];

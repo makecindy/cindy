@@ -33,6 +33,7 @@ import { goBackGuarded } from '@/utils/backGuard';
 import { useAuth } from '@/auth/AuthContext';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
@@ -145,6 +146,29 @@ export default function RemoteFilePreviewScreen() {
     unmountedRef.current = true;
   }, []);
 
+  // deviceUnresponsive 进依赖(review P1):深链进入且无缓存会话时,首次
+  // getSession 若撞上熔断 open 会拿到 DEVICE_UNRESPONSIVE 快速失败;本页只
+  // track openLink、不持有 topic,恢复 rehydrate 的 reseed 也覆盖不到——不随
+  // 熔断状态翻转重跑的话,探测成功后预览页仍永久空白。翻转重跑最多多发一次
+  // 轻量请求(open 期间是本地快速失败,零管道流量)。
+  const unresponsiveDevices = useUnresponsiveDevices();
+  const deviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
+  // 熔断恢复代数(review P1):open→closed 翻转沿 +1。仅重试 getSession 不够——
+  // 会话已缓存时,同目录 pager 可能已退化成单文件、文本/PDF/音视频子页已落进
+  // 失败态,而子页用 requestedRef/loadedRef 防重复请求,失败后绝不自行重试。
+  // 代数驱动两件事:pager effect 重列目录;FlatList key 掺入代数让预览子页
+  // 整体重挂载(refs 归零、重新拉取)。翻转沿极少发生,重挂载代价可接受。
+  const [recoveryEpoch, setRecoveryEpoch] = useState(0);
+  const prevBreakerStateRef = useRef({ deviceId, unresponsive: deviceUnresponsive });
+  useEffect(() => {
+    const prev = prevBreakerStateRef.current;
+    prevBreakerStateRef.current = { deviceId, unresponsive: deviceUnresponsive };
+    // 换设备不是恢复沿(review):页面保持挂载但路由参数换了设备时,「上一台
+    // 未响应、这一台正常」不该触发整个 pager 重挂载——新设备的加载由各 effect
+    // 的 deviceId 依赖自然驱动。
+    if (prev.deviceId !== deviceId) return;
+    if (prev.unresponsive && !deviceUnresponsive) setRecoveryEpoch((epoch) => epoch + 1);
+  }, [deviceId, deviceUnresponsive]);
   useEffect(() => {
     if (knownSession) {
       setSession(knownSession);
@@ -155,9 +179,13 @@ export default function RemoteFilePreviewScreen() {
       await openLink(deviceId);
       return maker.getSession(sessionId);
     })
-      .then(setSession)
+      .then((loaded) => {
+        setSession(loaded);
+        // 清掉熔断 open 期间留下的错误快照,恢复后不再残留降级横幅。
+        setError(null);
+      })
       .catch((err) => setError(formatRemoteError(err)));
-  }, [deviceId, knownSession, maker, openLink, sessionId]);
+  }, [deviceId, deviceUnresponsive, knownSession, maker, openLink, sessionId]);
 
   // absPath 单文件模式:不列目录,直接以合成 item 装单页 pager。
   useEffect(() => {
@@ -167,10 +195,24 @@ export default function RemoteFilePreviewScreen() {
   }, [singleAbsPath]);
 
   // 同目录 pager:列父目录 → 文件项按浏览页同款排序;失败时退化为单文件。
+  // 重建列表时锚定「当前可见文件」而非固定 initialRelPath(review P1):恢复
+  // 重列 / 排序切换发生在用户已翻页之后时,重置回初始文件会让 FlatList 的
+  // 原生滚动位置与 pageIndex(标题 / 分享 / 下载的目标)指向两个不同文件。
+  // setPageIndex 后再显式 scrollToOffset 重锚一次(initialScrollIndex 只在
+  // 首挂载生效,items key 变化不会重置 contentOffset)。
   useEffect(() => {
     if (!deviceId || !workdir || !initialRelPath) return undefined;
     let cancelled = false;
     const dirRel = parentRelPath(initialRelPath) ?? '';
+    const anchorRelPath = currentRelPathRef.current ?? initialRelPath;
+    const anchorTo = (index: number): void => {
+      setPageIndex(index);
+      requestAnimationFrame(() => {
+        if (!cancelled) {
+          pagerRef.current?.scrollToOffset({ animated: false, offset: index * pageWidthRef.current });
+        }
+      });
+    };
     void withTransientRemoteRetry(async () => {
       await openLink(deviceId);
       return maker.fileBrowser.listDir(workdir, dirRel);
@@ -182,27 +224,40 @@ export default function RemoteFilePreviewScreen() {
         const files = buildFileBrowserGridItems(normalizeRemoteOpDirEntries(raw), sortMode, Date.now())
           .filter((item) => item.kind === 'file')
           .filter((item) => item.thumb !== 'image' || item.relPath === initialRelPath);
-        const index = files.findIndex((item) => item.relPath === initialRelPath);
+        let index = files.findIndex((item) => item.relPath === anchorRelPath);
+        if (index < 0) index = files.findIndex((item) => item.relPath === initialRelPath);
         if (files.length === 0 || index < 0) {
           setSiblings([fallbackItem(initialRelPath)]);
-          setPageIndex(0);
+          anchorTo(0);
           return;
         }
         setSiblings(files);
-        setPageIndex(index);
+        anchorTo(index);
       })
       .catch(() => {
         if (cancelled) return;
         setSiblings([fallbackItem(initialRelPath)]);
-        setPageIndex(0);
+        anchorTo(0);
       });
     return () => {
       cancelled = true;
     };
-  }, [deviceId, initialRelPath, maker, openLink, sortMode, workdir]);
+  }, [deviceId, initialRelPath, maker, openLink, recoveryEpoch, sortMode, workdir]);
 
   const current = siblings?.[pageIndex] ?? null;
   const pagerRef = useRef<FlatList<FileBrowserGridItem>>(null);
+  // 当前可见文件路径镜像(pager 重建锚定用;不能进上面 effect 的依赖,否则
+  // 每次翻页都会重列目录)。
+  const currentRelPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    currentRelPathRef.current = current?.relPath ?? null;
+  }, [current]);
+  // pageWidth 镜像:重锚回调里读现值,不把 pageWidth 拉进列表 effect 依赖
+  // (旋转已有专门的重锚 effect)。
+  const pageWidthRef = useRef(pageWidth);
+  useEffect(() => {
+    pageWidthRef.current = pageWidth;
+  }, [pageWidth]);
 
   // 旋转(宽度变化)时按当前页重锚:FlatList 保留的是旧宽度下的像素 contentOffset,
   // 不重锚会停在两页中间(处理方式对齐 ImageLightbox)。
@@ -353,7 +408,7 @@ export default function RemoteFilePreviewScreen() {
         ref={pagerRef}
         horizontal
         initialScrollIndex={pageIndex}
-        keyExtractor={(item) => item.key}
+        keyExtractor={(item) => `${item.key}:${recoveryEpoch}`}
         onMomentumScrollEnd={(event) => {
           const next = Math.round(event.nativeEvent.contentOffset.x / pageWidth);
           if (next !== pageIndex && next >= 0 && next < siblings.length) setPageIndex(next);

@@ -107,11 +107,15 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   useLayoutEffect(() => {
     const slot = slotRef.current;
     const wrapper = browser.wrapper;
-    if (!slot || !wrapper) return;
+    if (!tabVisible || !slot || !wrapper) return;
     slot.appendChild(wrapper);
     return () => {
-      // pool 的 ensureContainer 仍然在,把 wrapper 挪回去。即使 pool container
-      // 被外部清掉(理论上不会发生),wrapper.remove() 也无害。
+      // release / LRU 淘汰后的旧 wrapper 已不再属于 Pool，不能因 React effect
+      // cleanup 被重新接回 DOM；只有当前代际仍归 Pool 持有时才停回停车区。
+      if (browserWebviewPool.peek(tabId)?.wrapper !== wrapper) {
+        wrapper.remove();
+        return;
+      }
       const parking = document.getElementById('browser-webview-pool');
       if (parking) {
         parking.appendChild(wrapper);
@@ -119,7 +123,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         wrapper.remove();
       }
     };
-  }, [browser.wrapper]);
+  }, [browser.wrapper, tabId, tabVisible]);
 
   // hook 事件 → patchState。注意 onPatchState 引用稳定,这里只在 url / title /
   // favicon 真实改变(由 webview 推上来)时才写回,不会无限循环。
@@ -174,7 +178,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // 是空的,必须重新用持久化 URL 驱动一次加载(review P1:淘汰后空壳)。
   useEffect(() => {
     const wrapper = browser.wrapper;
-    if (!wrapper || lastNavigatedWrapperRef.current === wrapper) return;
+    if (!tabVisible || !wrapper || lastNavigatedWrapperRef.current === wrapper) return;
     lastNavigatedWrapperRef.current = wrapper;
     const nextUrl = stateUrlRef.current || 'about:blank';
     const currentUrl = browserUrlRef.current;
@@ -182,7 +186,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     // about:blank 默认状态下也要 navigate,确保 webview 真的处于 about:blank,
     // 不会停留在 pool 创建时未 setAttribute('src') 的"未初始化"状态。
     navigateRef.current(nextUrl);
-  }, [tabId, browser.wrapper]);
+  }, [tabId, browser.wrapper, tabVisible]);
 
   const reloadRef = useRef(browser.reload);
   const goBackRef = useRef(browser.goBack);

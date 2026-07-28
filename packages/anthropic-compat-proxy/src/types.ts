@@ -116,7 +116,20 @@ export interface ResponseObserverCtx {
   readonly url: string;
   readonly upstreamBase: string;
   readonly status: number;
+  /**
+   * 客户端(agent 子进程)发来的原始请求头,**未**经路由改写。
+   * 反解会话归属(thread-id 等 agent 自带 header)用这个。
+   */
   readonly requestHeaders: Readonly<Record<string, string>>;
+  /**
+   * 实际发往上游的请求头 —— 已应用 RoutingDecision 的 headerOverride 与 headerDelete。
+   *
+   * 凡是要判断「这次请求究竟用了哪把凭证」的观察器必须读它:供应商 OAuth 是路由期注入的,
+   * requestHeaders 里的 authorization 仍是子进程自带的那把,拿它做等值关联必然对不上。
+   *
+   * 省略时按 requestHeaders 理解(没有路由改写 = 发出去的就是收到的)。
+   */
+  readonly outboundHeaders?: Readonly<Record<string, string>>;
   readonly responseHeaders: Readonly<Record<string, string>>;
   readonly requestBody: Buffer;
 }
@@ -224,9 +237,11 @@ export interface ProxyOptions {
    */
   maxRequestBodyBytes?: number;
   /**
-   * 可选: 出站(上游方向)代理解析器。per-request 以最终上游 origin 现取:返回
-   * http:// 代理地址 = 该请求经代理转发(https 上游走 CONNECT 隧道、http 上游走
-   * 绝对形式);返回 null / 抛错 = 直连(fail-open)。loopback 上游不会被调用。
+   * 可选: 出站(上游方向)代理解析器。per-request 以最终上游 origin 现取:
+   *   - `http://` 代理地址 = 经该代理转发(https 上游走 CONNECT 隧道、http 上游走绝对形式)
+   *   - `socks5://`(含 socks5h / socks 别名)= 经 SOCKS5 隧道转发,两种上游都走隧道,
+   *     且**上游域名交给代理端解析**(见 socks5.ts;本地 DNS 解不出上游时这是唯一出路)
+   *   - 返回 null / 其它 scheme / 抛错 = 直连(fail-open)。loopback 上游不会被调用。
    * 宿主用它接系统代理(Electron resolveProxy)或代理环境变量
    * (createEnvOutboundProxyResolver)。不传 = 永远直连,与扩展前字节级一致。
    */

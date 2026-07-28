@@ -1076,6 +1076,22 @@ if (isWin) {
         // 接受)/ dev 'CindyDev'(仍与正式包隔离)。显式设值防 app-builder
         // 回落 package.json productName 造成 dev 与正式包同目录。
         productName: CINDY_EXE,
+        // Setup.exe 与 Uninstall <App>.exe 的 FileDescription 版本资源。
+        // app-builder-lib 只从 metadata(= apps/desktop/package.json)取
+        // description,没有顶层 config 字段;extraMetadata 是唯一的覆盖通道
+        // (packager.ts 在读完 package.json 后 deepAssign 进 metadata)。
+        // 不设时回落 package.json 的 npm 包描述,UAC 提权弹窗、文件属性、
+        // 快捷方式悬停提示上就会显示那段面向开发者的文本。
+        //
+        // ⚠️ 取 displayName 而非 CINDY_EXE:展示名两区(含 dev)共用 'Cindy',
+        // 而 exe 名 dev 派生为 'CindyDev'。用后者会让 dev 包的安装器显示
+        // CindyDev、装完的主 exe 却显示 Cindy(win32metadata 同样取
+        // displayName)——安装前后自相矛盾,正是本次要消除的那类不一致。
+        // 文件名层的区分由 productName / shortcutName 承担,与展示层解耦。
+        //
+        // prepackaged 模式下 doPack 直接 return,extraMetadata 不会重写
+        // 已由 electron-forge 打好的 app.asar 内 package.json。
+        extraMetadata: { description: BRAND_IDENTITY.displayName },
         nsis: {
           oneClick: false,
           allowToChangeInstallationDirectory: true,
@@ -1131,11 +1147,13 @@ const config: ForgeConfig = {
     appBundleId: CINDY_APP_ID,
     // exe 资源元数据(任务管理器进程名、文件右键属性的显示层)。只影响展示,
     // 与 exe 文件名 / AUMID / userData 等标识符解耦;显示层两区共用 Cindy
-    // (与 mac 显示名口径一致)。
+    // (与 mac 显示名口径一致)。FileDescription 走 BRAND_IDENTITY.displayName,
+    // 与 NSIS maker 的 extraMetadata.description 同一表达式——安装器/卸载器
+    // 与主 exe 的「说明」字段必须同值,否则 dev 包会安装前后显示两个名字。
     win32metadata: {
       CompanyName: 'XD',
       ProductName: 'Cindy',
-      FileDescription: 'Cindy',
+      FileDescription: BRAND_IDENTITY.displayName,
     },
     icon: 'resources/icon',
     // 自定义 URL scheme: xdt-maker://session/<id> | xdt-maker://project/<encoded-workingDir>

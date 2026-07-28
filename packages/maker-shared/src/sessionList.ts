@@ -5,6 +5,7 @@ import type { RemoteSchedule, RemoteScheduleRun, RemoteScheduleRunStatus } from 
 import { toMillis } from './scheduleModel.js';
 import { sessionCollaborationLabel, sessionWorktreeLabel } from './sessionIdentity.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
+import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
 
 export interface RemoteSessionListSessionLike {
   _count?: { messages?: number } | null;
@@ -220,7 +221,9 @@ export function summarizeRemoteSessionOverview(
     if (session.status === 'active') active += 1;
     if (session.status === 'archived') archived += 1;
     if (session.pinnedAt) pinned += 1;
-    if (session.workingDir) projects.add(session.workingDir);
+    // 与 buildProjectSections 同一把折叠口径:worktree 会话算进它所属主仓,
+    // 否则概览里的项目数会比列表里的项目分区多出来。
+    if (session.workingDir) projects.add(collapseWorktreeDirForGrouping(session.workingDir));
     if ((pendingInteractionIndex.get(session.id) ?? 0) > 0) waiting += 1;
     if (isAutomationSession(session, scheduleIndex)) automation += 1;
   }
@@ -375,7 +378,9 @@ function buildProjectSections(
   const projectGroups = new Map<string, RemoteSessionListItem[]>();
   for (const item of items) {
     if (isDialogueSession(item.session)) continue;
-    const key = item.session.workingDir ?? 'unknown';
+    // worktree 会话按 base repo 归组(与首页 projectGroupKey、桌面侧栏同一口径),
+    // 否则每个 worktree 会单独成一个随机名分区。
+    const key = item.session.workingDir ? collapseWorktreeDirForGrouping(item.session.workingDir) : 'unknown';
     const list = projectGroups.get(key) ?? [];
     list.push(item);
     projectGroups.set(key, list);

@@ -236,7 +236,10 @@ describe('mobile home desktop-first surface', () => {
     const source = readSource('app/devices/index.tsx');
 
     expect(source).toContain("type HomeDeviceConnectionState = 'idle' | 'syncing' | 'failed';");
-    expect(source).toContain('const [deviceConnectionStates, setDeviceConnectionStates]');
+    expect(source).toContain('const [rawDeviceConnectionStates, setDeviceConnectionStates]');
+    // 熔断 open 的设备复用 failed 渲染路径:内部态映射(merged memo)覆盖在 hydrate 状态之上
+    expect(source).toContain('const unresponsiveDevices = useUnresponsiveDevices();');
+    expect(source).toContain("for (const deviceId of unresponsiveDevices) merged[deviceId] = 'failed';");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'syncing');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'failed');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'idle');");

@@ -66,12 +66,12 @@ function currentKeyCacheIdentity(): string {
   }
 }
 
-function currentScope(): string {
+function currentScope(userId?: string): string {
   return [
     'v1',
     `region=${CURRENT_CINDY_REGION}`,
     `base=${getClientEndpoint('modelAccessApiBaseUrl').trim()}`,
-    `user=${getCurrentDbClientUserId() ?? 'anonymous'}`,
+    `user=${userId ?? getCurrentDbClientUserId() ?? 'anonymous'}`,
     currentKeyCacheIdentity(),
   ].join('|');
 }
@@ -222,8 +222,13 @@ function broadcastPricing(pricing: ModelPricingCatalog | null): void {
  */
 export function replaceGatewayModelPricing(
   models: readonly ModelAccessGatewayModel[],
+  authenticatedUserId?: string,
 ): ModelPricingCatalog {
-  const scope = currentScope();
+  // /models can finish a few milliseconds before localDb takeover has exposed
+  // its user through getCurrentDbClientUserId(). The model-access caller
+  // therefore passes the authenticated user captured when the request starts,
+  // so a valid startup snapshot is never persisted under `anonymous`.
+  const scope = currentScope(authenticatedUserId);
   const pricing = gatewayPricingCatalog(models);
   cache = pricing;
   cacheScope = scope;

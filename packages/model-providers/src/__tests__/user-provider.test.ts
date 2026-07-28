@@ -176,6 +176,29 @@ describe('buildUserProvider (per-runtime)', () => {
     expect(p.auth).toEqual({ method: 'none' });
     expect(p.access).toEqual({ kind: 'api' });
     expect(p.routing.codex?.authStrategy).toBe('none');
+    expect(p.routing.codex?.disabled).toBeUndefined();
+  });
+
+  it('keeps a legacy remote no-auth runtime editable but disables its route', () => {
+    const p = buildUserProvider({
+      ...codexOnly,
+      id: 'legacy-remote-no-auth',
+      auth: { method: 'none' },
+      runtimes: {
+        codex: {
+          baseUrl: 'https://remote.example/v1',
+          models: [{ id: 'legacy-model', name: 'Legacy model' }],
+        },
+      },
+    });
+
+    expect(p.agents).toEqual(['codex']);
+    expect(p.routing.codex).toMatchObject({
+      upstream: 'https://remote.example/v1',
+      authStrategy: 'none',
+      disabled: true,
+    });
+    expect(p.models.codex?.map((model) => model.id)).toEqual(['legacy-model']);
   });
 
   it('supports two runtimes with independent baseUrl + models, stable agent order', () => {

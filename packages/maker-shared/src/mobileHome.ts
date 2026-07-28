@@ -9,6 +9,7 @@ import {
   type RemoteSessionStatusFilter,
 } from './sessionList.js';
 import { stripTrailingPathSeparators } from './pathText.js';
+import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
 
 export const MOBILE_HOME_ALL_DEVICES = 'all';
 
@@ -583,7 +584,12 @@ function normalizeProjectWorkingDir(value: string | null | undefined): string {
   // 此时把紧跟 "X:" 的第一个分隔符保留下来。
   if (end === 2 && trimmed.length > 2 && trimmed[1] === ':' && isAsciiLetter(trimmed[0])) end = 3;
   // 全是斜杠时(end === 0)保留 trim 后原值,与旧 `replace(...) || value` 语义一致。
-  return end > 0 ? trimmed.slice(0, end) : trimmed;
+  const withoutTrailingSeparators = end > 0 ? trimmed.slice(0, end) : trimmed;
+  // worktree 会话折叠到 base repo(与桌面侧栏 normalizeWorkingDirForGrouping 同一口径):
+  // 不折叠的话每个 worktree 都会变成一个独立「项目」,标题是随机 worktree 名(serene-lovelace
+  // 之类),Slack / 定时任务这类自动建 worktree 的会话尤其明显。worktree 身份仍由会话行与
+  // 会话菜单的 worktreePath 单独展示,信息不丢。
+  return collapseWorktreeDirForGrouping(withoutTrailingSeparators);
 }
 
 function isAsciiLetter(ch: string): boolean {

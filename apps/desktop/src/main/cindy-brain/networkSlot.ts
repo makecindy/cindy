@@ -134,7 +134,7 @@ export interface NetworkSlotDeps {
    * 401/403 重试耗尽后按 secret key 记账,生命周期投影折算 needs_reauth。
    * 未注入时不上报(单测 / 旧接线保持原口径)。
    */
-  noteCredentialRejected?(ghostId: string, secretKey: string): void;
+  noteCredentialRejected?(ghostId: string, credentialRef: string): void;
   /**
    * OAuth 凭证通道(source:'oauth';生产注入 GhostOauthAccountManager)。
    * 出网时现取新鲜 access token(内部缓存 + 单飞刷新),401 时经
@@ -169,7 +169,10 @@ export interface NetworkSlotDeps {
    */
   connections?: {
     hostsFor(ghostId: string): string[];
-    tokenFor(ghostId: string, hostname: string): { value: string; header: string; format: string } | null;
+    tokenFor(
+      ghostId: string,
+      hostname: string,
+    ): { value: string; header: string; format: string; credentialRef?: string } | null;
   };
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -762,6 +765,18 @@ export class GhostNetworkSlot {
 
   constructor(private readonly deps: NetworkSlotDeps) {}
 
+  private noteCredentialRejected(ghostId: string, credentialRef: string): void {
+    try {
+      this.deps.noteCredentialRejected?.(ghostId, credentialRef);
+    } catch (error) {
+      this.deps.log?.warn('ghost credential rejection ledger update failed', {
+        ghostId,
+        credentialRef,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   /**
    * 处理一条 fetch-request(ghost-pipe:send 的 invoke 返回值即本结果)。
    * 永不 reject——一切失败折叠成 { ok:false, message }。
@@ -1070,6 +1085,7 @@ export class GhostNetworkSlot {
     if (inject0.error) return { ok: false, message: inject0.error };
     let usedExchange = inject0.usedExchange;
     const oauthInjected = new Map(inject0.oauthInjected);
+    let responseConnectionRefs = new Set(inject0.connectionRefs);
 
     // ── 在途并发闸(常量硬顶,防死循环刷单;不是配额)──────────────────
     const inflight = this.inflight.get(ghostId) ?? 0;
@@ -1133,6 +1149,7 @@ export class GhostNetworkSlot {
           const reInject = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, url.hostname, net.hosts, requestHeaders, authAccount);
           if (reInject.error) return { ok: false, message: reInject.error };
           for (const [k, v] of reInject.oauthInjected) oauthInjected.set(k, v);
+          responseConnectionRefs = new Set(reInject.connectionRefs);
           this.deps.log?.info('ghost fetch-request 401 → re-auth retry', {
             ghostId, callId, host: url.hostname,
           });
@@ -1154,6 +1171,7 @@ export class GhostNetworkSlot {
             if (hopInject.error) return { ok: false, message: hopInject.error };
             usedExchange ||= hopInject.usedExchange;
             for (const [k, v] of hopInject.oauthInjected) oauthInjected.set(k, v);
+            responseConnectionRefs = new Set(hopInject.connectionRefs);
           }
           response = await this.deps.fetchImpl(currentUrl.toString(), {
             method: currentMethod,
@@ -1221,6 +1239,7 @@ export class GhostNetworkSlot {
       }
       const injectableKeys = (net.secrets ?? [])
         .filter((decl) => (decl.source ?? 'user') === 'user')
+        .filter((decl) => decl.exchange === undefined)
         .filter((decl) =>
           (decl.inject.hosts ?? net.hosts).some((pattern) =>
             ghostNetworkHostMatches(pattern, responseHost),
@@ -1229,14 +1248,23 @@ export class GhostNetworkSlot {
       if (response.status === 401) {
         // 401 = 服务端明确不认这份凭证,直接记账。
         for (const decl of injectableKeys) {
-          this.deps.noteCredentialRejected?.(ghostId, decl.key);
+          this.noteCredentialRejected(ghostId, decl.key);
+        }
+        for (const ref of responseConnectionRefs) {
+          this.noteCredentialRejected(ghostId, ref);
         }
       } else if (response.status === 403) {
         // 403 语义宽(限流/越权/封禁都可能):仅当 body 出现凭证失效类信号
         // 才按被拒记账,避免把限流页误标 needs_reauth 钉死好插件。
-        if (injectableKeys.length > 0 && (await probeCredentialRejectionBody(response))) {
+        if (
+          (injectableKeys.length > 0 || responseConnectionRefs.size > 0) &&
+          (await probeCredentialRejectionBody(response))
+        ) {
           for (const decl of injectableKeys) {
-            this.deps.noteCredentialRejected?.(ghostId, decl.key);
+            this.noteCredentialRejected(ghostId, decl.key);
+          }
+          for (const ref of responseConnectionRefs) {
+            this.noteCredentialRejected(ghostId, ref);
           }
         }
       }
@@ -1468,6 +1496,8 @@ export class GhostNetworkSlot {
     usedExchange: boolean;
     /** 本次注入过的 oauth 凭证(secretKey → 实际用的账号 id;401 作废用)。 */
     oauthInjected: Map<string, string>;
+    /** 本次注入过的连接 identity,用于最终响应的被拒归因。 */
+    connectionRefs: string[];
   }> {
     // 声明的凭证头一律主机独占:先把意识自带(或上一跳残留)的任何大小写
     // 变体删干净,再按本 host 注入——不管这条凭证这一跳注不注入都要删,
@@ -1486,7 +1516,9 @@ export class GhostNetworkSlot {
       const scope = secret.inject.hosts ?? allHosts;
       if (!scope.some((pattern) => ghostNetworkHostMatches(pattern, hostname))) continue;
       const resolved = await this.resolveSecretValue(ghostId, secret, authAccount);
-      if ('error' in resolved) return { error: resolved.error, usedExchange, oauthInjected };
+      if ('error' in resolved) {
+        return { error: resolved.error, usedExchange, oauthInjected, connectionRefs: [] };
+      }
       if (secret.exchange !== undefined) usedExchange = true;
       if (resolved.oauthAccountId !== undefined) oauthInjected.set(secret.key, resolved.oauthAccountId);
       // 函数式替换同 performExchange:凭证/令牌含 $ 不得触发特殊序列解释。
@@ -1505,13 +1537,20 @@ export class GhostNetworkSlot {
             error: `连接地址 ${hostname} 的凭证读取失败——请到主界面侧边栏「插件」的本插件详情页重新添加该连接`,
             usedExchange,
             oauthInjected,
+            connectionRefs: [],
           };
         }
         deleteHeaderVariants(headers, tok.header);
         headers[tok.header] = tok.format.replace('{value}', () => tok.value);
+        return {
+          error: null,
+          usedExchange,
+          oauthInjected,
+          connectionRefs: tok.credentialRef ? [tok.credentialRef] : [],
+        };
       }
     }
-    return { error: null, usedExchange, oauthInjected };
+    return { error: null, usedExchange, oauthInjected, connectionRefs: [] };
   }
 
   /**
@@ -1624,9 +1663,14 @@ export class GhostNetworkSlot {
       }
       if (response.status < 200 || response.status >= 300) {
         const { bytes } = await readBodyCapped(response, SECRET_EXCHANGE_RESPONSE_MAX_BYTES);
-        const snippet = new TextDecoder('utf-8', { fatal: false })
-          .decode(bytes)
-          .slice(0, SECRET_EXCHANGE_ERROR_SNIPPET_CHARS);
+        const responseText = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+        if (
+          response.status === 401 ||
+          (response.status === 403 && CREDENTIAL_REJECTION_BODY_RE.test(responseText))
+        ) {
+          this.noteCredentialRejected(ghostId, secret.key);
+        }
+        const snippet = responseText.slice(0, SECRET_EXCHANGE_ERROR_SNIPPET_CHARS);
         throw new Error(
           `凭证「${secret.label}」换取令牌失败:HTTP ${response.status}${snippet ? ` - ${snippet}` : ''}`,
         );

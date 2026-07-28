@@ -179,6 +179,26 @@ describe('evaluateGhostSetup · 启发式回落(无 setup 声明)', () => {
     });
     expect(evaluateGhostSetup(m, probes()).ready).toBe(false);
     expect(evaluateGhostSetup(m, probes({ connectionCount: () => 2 })).ready).toBe(true);
+    const configured = probes({
+      connectionCount: () => 2,
+      connectionIds: () => ['connection-a', 'connection-b'],
+    });
+    expect(
+      evaluateGhostSetup(m, configured, {
+        rejectedConnectionRefs: ['connection:gitlab_conn:connection-a'],
+      }).ready,
+    ).toBe(true);
+    expect(
+      evaluateGhostSetup(m, configured, {
+        rejectedConnectionRefs: [
+          'connection:gitlab_conn:connection-a',
+          'connection:gitlab_conn:connection-b',
+        ],
+      }),
+    ).toMatchObject({
+      ready: false,
+      reauth: [{ ref: 'connection:gitlab_conn', kind: 'connection' }],
+    });
   });
 });
 

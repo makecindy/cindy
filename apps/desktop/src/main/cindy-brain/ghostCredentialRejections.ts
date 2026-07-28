@@ -29,6 +29,8 @@ export interface GhostCredentialRejectionsStore {
   clear(ghostId: string): boolean;
   /** 只清理刚刚被重存的 secret,不影响同插件的其它被拒 key。 */
   clearSecret(ghostId: string, secretKey: string): boolean;
+  /** 连接 token 更新后清除该连接的被拒状态。 */
+  clearConnection(ghostId: string, declKey: string, connectionId: string): boolean;
 }
 
 interface RejectionFile {
@@ -37,6 +39,10 @@ interface RejectionFile {
 }
 
 const FILE_NAME = 'ghost-credential-rejections.json';
+
+export function ghostConnectionRejectionRef(declKey: string, connectionId: string): string {
+  return `connection:${declKey}:${connectionId}`;
+}
 
 export function createGhostCredentialRejectionsStore(args: {
   filePath: string;
@@ -50,34 +56,37 @@ export function createGhostCredentialRejectionsStore(args: {
     try {
       const raw = fs.readFileSync(filePath, 'utf8');
       const parsed = JSON.parse(raw) as Partial<RejectionFile>;
-      cache = {
-        ghosts:
-          parsed && typeof parsed === 'object' && parsed.ghosts && typeof parsed.ghosts === 'object'
-            ? Object.fromEntries(
-                Object.entries(parsed.ghosts).map(([id, keys]) => [
-                  id,
-                  Array.isArray(keys) ? keys.filter((k): k is string => typeof k === 'string') : [],
-                ]),
-              )
-            : {},
-      };
+      const ghosts = Object.create(null) as Record<string, string[]>;
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        parsed.ghosts &&
+        typeof parsed.ghosts === 'object'
+      ) {
+        for (const [id, keys] of Object.entries(parsed.ghosts)) {
+          ghosts[id] = Array.isArray(keys)
+            ? keys.filter((k): k is string => typeof k === 'string')
+            : [];
+        }
+      }
+      cache = { ghosts };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         log?.warn('credential rejections ledger unreadable, treating as empty', {
           error: error instanceof Error ? error.message : String(error),
         });
       }
-      cache = { ghosts: {} };
+      cache = { ghosts: Object.create(null) as Record<string, string[]> };
     }
     return cache;
   };
 
   const persist = (): void => {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    // 原子写:先落临时文件再 rename,进程崩溃/断电不会留下半截 JSON
-    // 把台账打坏(与 plugin-market ledger 同模式,含 Windows 替换处理)。
     const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
     try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      // 原子写:先落临时文件再 rename,进程崩溃/断电不会留下半截 JSON
+      // 把台账打坏(与 plugin-market ledger 同模式,含 Windows 替换处理)。
       fs.writeFileSync(tempPath, JSON.stringify(cache), { mode: 0o600, flag: 'wx' });
       try {
         fs.renameSync(tempPath, filePath);
@@ -92,6 +101,10 @@ export function createGhostCredentialRejectionsStore(args: {
         fs.rmSync(filePath, { force: true });
         fs.renameSync(tempPath, filePath);
       }
+    } catch (error) {
+      log?.warn('credential rejections ledger write failed, keeping runtime state', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       fs.rmSync(tempPath, { force: true });
     }
@@ -99,11 +112,12 @@ export function createGhostCredentialRejectionsStore(args: {
 
   return {
     rejectedKeys(ghostId) {
-      return load().ghosts[ghostId] ?? [];
+      const ghosts = load().ghosts;
+      return Object.hasOwn(ghosts, ghostId) ? ghosts[ghostId] : [];
     },
     markRejected(ghostId, secretKey) {
       const file = load();
-      const keys = file.ghosts[ghostId] ?? [];
+      const keys = Object.hasOwn(file.ghosts, ghostId) ? file.ghosts[ghostId] : [];
       if (keys.includes(secretKey)) return false;
       file.ghosts[ghostId] = [...keys, secretKey];
       persist();
@@ -111,7 +125,7 @@ export function createGhostCredentialRejectionsStore(args: {
     },
     clear(ghostId) {
       const file = load();
-      if (!(ghostId in file.ghosts)) return false;
+      if (!Object.hasOwn(file.ghosts, ghostId)) return false;
       delete file.ghosts[ghostId];
       persist();
       return true;
@@ -126,6 +140,9 @@ export function createGhostCredentialRejectionsStore(args: {
       else file.ghosts[ghostId] = nextKeys;
       persist();
       return true;
+    },
+    clearConnection(ghostId, declKey, connectionId) {
+      return this.clearSecret(ghostId, ghostConnectionRejectionRef(declKey, connectionId));
     },
   };
 }

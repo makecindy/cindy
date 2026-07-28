@@ -56,7 +56,14 @@ function makeEditor(lines: string[]): Editor {
   });
   editor = new Editor({
     element: document.createElement('div'),
-    extensions: [Document, Paragraph, Text, HardBreak, TestAtom, ComposerListIndentDecoration],
+    extensions: [
+      Document,
+      Paragraph,
+      Text,
+      HardBreak,
+      TestAtom,
+      ComposerListIndentDecoration,
+    ],
     content: { type: 'doc', content: [{ type: 'paragraph', content }] },
   });
   return editor;
@@ -75,6 +82,11 @@ afterEach(() => {
 });
 
 describe('buildListIndentDecorations', () => {
+  it('keeps fallback decoration for rows that have not been promoted yet', () => {
+    const ed = makeEditor(['1. one', '  - nested', '> quote']);
+    expect(indentSpans(ed)).toEqual(['1. one', '  - nested', '> quote']);
+  });
+
   it('builds paired hanging-indent variables without embedding user text', () => {
     const latinStyle = listPrefixIndentStyle('2. ');
     expect(latinStyle).toContain('--composer-list-hang:1.8ch;');
@@ -908,7 +920,9 @@ describe('wiring contract', () => {
     expect(src).toContain(
       "import { ComposerListIndentDecoration } from './ComposerListIndentDecoration';",
     );
-    expect(src).toMatch(/CjkPunctDecoration,\s*\n\s*ComposerListIndentDecoration,/);
+    expect(src).toMatch(
+      /CjkPunctDecoration,\s*\n\s*ComposerListIndentDecoration,/,
+    );
   });
 
   it('globals.css defines the indent class', () => {

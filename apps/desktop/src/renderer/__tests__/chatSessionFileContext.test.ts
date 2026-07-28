@@ -51,6 +51,12 @@ import {
 } from '../components/chat/ChatSessionFileContext';
 import { collectSessionImageSrcs, type RenderItem } from '../components/chat/MessageStream';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '../../shared/remoteMediaUrl';
+import type { GhostCardSnapshot } from '@/cindy-brain/ghostCardStore';
+import {
+  createGhostCardSpawnIndex,
+  ghostCardGalleryId,
+} from '@/cindy-brain/ghostCardGallery';
+import { GHOST_CARD_SPAWN_SEP } from '../../shared/ghost';
 
 describe('sessionFileOrigin(纯函数)', () => {
   it('deviceId 优先于 remoteHostId,两者皆空回落 local 单例', () => {
@@ -235,5 +241,71 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
     });
     expect(remote[0].annotationSourceUrl).toBeUndefined();
     expect(remote[0].annotationStrokes).toBeUndefined();
+  });
+
+  it('按消息流顺序合并用户图、插件生成图、衍生图和卡后回锚图', () => {
+    const userImage = `cindy-media://blobs/${'1'.repeat(64)}.png`;
+    const rootImage = `cindy-media://blobs/${'2'.repeat(64)}.png`;
+    const spawnImage = `cindy-media://blobs/${'3'.repeat(64)}.png`;
+    const anchoredImage = `cindy-media://blobs/${'4'.repeat(64)}.png`;
+    const spawnCallId = `card-1${GHOST_CARD_SPAWN_SEP}001`;
+    const ghostCards: GhostCardSnapshot = {
+      version: 1,
+      liveCards: [],
+      byCallId: new Map([
+        [
+          'card-1',
+          {
+            status: 'ready',
+            ghostId: 'cindy-art',
+            html: `<img src="${rootImage}">`,
+            height: 200,
+          },
+        ],
+        [
+          spawnCallId,
+          {
+            status: 'ready',
+            ghostId: 'cindy-art',
+            html: `<img src="${spawnImage}">`,
+            height: 200,
+          },
+        ],
+      ]),
+    };
+    const mixedItems: RenderItem[] = [
+      {
+        type: 'message',
+        key: 'u-gallery',
+        message: {
+          clientId: 'u-gallery',
+          role: 'user',
+          content: 'compare',
+          images: [{ url: userImage }],
+        } as never,
+      },
+      {
+        type: 'ghost_card',
+        key: 'ghostcard-tool-1',
+        callId: 'card-1',
+        ghostId: 'cindy-art',
+        tool: 'generate',
+        toolCall: {
+          clientId: 'tool-1',
+          role: 'assistant',
+          content: '',
+        } as never,
+        settled: true,
+        media: [{ kind: 'image', url: anchoredImage }],
+      },
+    ];
+
+    expect(createGhostCardSpawnIndex(ghostCards).get('card-1')).toHaveLength(1);
+    expect(collectSessionImageSrcs(mixedItems, undefined, ghostCards)).toEqual([
+      { src: userImage },
+      { src: rootImage, galleryId: ghostCardGalleryId('card-1', 0) },
+      { src: spawnImage, galleryId: ghostCardGalleryId(spawnCallId, 0) },
+      { src: anchoredImage },
+    ]);
   });
 });

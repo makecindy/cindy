@@ -10,11 +10,11 @@ import {
   CONSENT_ROW,
   CONTROL,
   ERROR_TEXT,
-  GLOBAL_PILL,
   LOADING_RING,
   LOGIN_COLORS,
   METHOD_ROW,
   PANEL,
+  REGION_PILL,
   SOCIAL,
   SPINNER,
   SUBTITLE,
@@ -62,19 +62,21 @@ export function LoginPanel({ children, testId }: { children: ReactNode; testId?:
 /**
  * 标题块(figma §5.1:标题 y=31 h=38 32 Bold;副标题 @(70,75) 540 宽 ≤2 行顶对齐
  * 20 Regular——2026-07-24 拍板,原 figma 单行 599@41 作废,见 DESIGN.md §16.2)。
- * global 变体(v2 inline 组,用户裁定 2026-07-25):标题 shrink-to-fit 单行 + Global pill
+ * 区域徽标变体(v2 inline 组,用户裁定 2026-07-25):标题 shrink-to-fit 单行 + 徽标
  * 紧随其后 gap 2 设计px,组整体相对面板水平居中;原 v1 固定几何(span @185 w236 +
  * pill @425,4)作废,见 DESIGN.md §16.2 与 figma-component-spec §4.10 的 v2 批注。
+ * 徽标挂哪些区域由调用方决定(2026-07-27 起 global 不挂,见 LoginPage)。
  */
 export function LoginTitleBlock({
   title,
   subtitle,
-  globalPill,
+  regionPill,
   subtitleMaxLines = SUBTITLE.maxLines,
 }: {
   title: string;
   subtitle?: ReactNode;
-  globalPill?: string;
+  /** 区域徽标文案(如 CN / Dev);省略即不挂徽标。 */
+  regionPill?: string;
   /** 副标题行数上限(登录屏默认 2;Splash 故障指引等长文案宿主可放宽)。 */
   subtitleMaxLines?: number;
 }) {
@@ -96,30 +98,33 @@ export function LoginTitleBlock({
           color: LOGIN_COLORS.titleText,
         }}
       >
-        {globalPill ? (
+        {regionPill ? (
           // inline 组(用户裁定 2026-07-25):标题 shrink-to-fit 单行 + 徽标紧随
           // gap 2 设计px,组整体随外层 text-center 相对面板水平居中;徽标垂直
           // 居中于 38 行框(等价旧 top:4)。align-top 抵消 inline-flex 默认
           // baseline 对齐带来的行框偏移。
           <span
             className="inline-flex max-w-full items-center justify-center whitespace-nowrap align-top"
-            style={{ gap: GLOBAL_PILL.gap, height: TITLE.height }}
+            style={{ gap: REGION_PILL.gap, height: TITLE.height }}
           >
             <span className="whitespace-nowrap">{title}</span>
             <span
-              data-testid="login-global-pill"
+              data-testid="login-region-pill"
+              // 宽度由 padding 撑开(见 REGION_PILL doc):徽标文案随区域变化,
+              // 固定宽只对 "Global" 成立。shrink-0 保证标题超长时先挤标题不挤徽标。
               className="shrink-0 text-center font-bold"
               style={{
-                width: GLOBAL_PILL.width,
-                height: GLOBAL_PILL.height,
-                borderRadius: GLOBAL_PILL.radius,
+                height: REGION_PILL.height,
+                paddingLeft: REGION_PILL.paddingX,
+                paddingRight: REGION_PILL.paddingX,
+                borderRadius: REGION_PILL.radius,
                 background: LOGIN_COLORS.brandAccent,
                 color: LOGIN_COLORS.invertedButtonBorder,
-                fontSize: 16,
-                lineHeight: `${GLOBAL_PILL.height}px`,
+                fontSize: REGION_PILL.fontSize,
+                lineHeight: `${REGION_PILL.height}px`,
               }}
             >
-              {globalPill}
+              {regionPill}
             </span>
           </span>
         ) : (

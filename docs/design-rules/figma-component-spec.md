@@ -33,7 +33,7 @@
 
 | 色板文本 / 用途 | Hex / alpha | Figma nodeId | 参数 |
 |---|---|---|---|
-| 品牌色 | `#DF0C27` / 100% | swatch `228:1042`; 文本 `228:1051`, `228:1058` | ~~全屏红底~~〔已作废(wave4 2026-07-20)：页面背景改白底体系,见 §10;`#DF0C27` 限 accent〕、`Global` pill、字标红元素 |
+| 品牌色 | `#DF0C27` / 100% | swatch `228:1042`; 文本 `228:1051`, `228:1058` | ~~全屏红底~~〔已作废(wave4 2026-07-20)：页面背景改白底体系,见 §10;`#DF0C27` 限 accent〕、区域徽标（原 `Global` pill，见 §4.10）、字标红元素 |
 | highlight | `#A61629` / 100% | swatch `228:1043`; 文本 `228:1050`, `228:1052` | 高亮 / 强调色；当前登录帧未见大面积使用 |
 | 背景 | `#2A2828` / 100% | swatch `228:1044`; 文本 `228:1064`, `228:1065` | 黑色主按钮、第三方圆钮、深色背景 |
 | 卡片、输入框 | `#312F2F` / 100% | swatch `228:1045`; 文本 `228:1055`, `228:1059` | Dark 回调卡片；该 swatch 带 `backdrop-blur-[50px]` |
@@ -107,7 +107,7 @@ Color System 文字样式：`PingFang SC` Semibold，色名 36px，hex 28px，�
 | Text link 倒计时 | HarmonyOS Sans SC | Regular | 20 | normal | 0 | `#D4D4D4` | `247:1614`, `347:1831` |
 | Text link 可重发 | HarmonyOS Sans SC | Regular | 20 | normal + underline | 0 | `#2A2828` | `247:1612`, `347:1859` |
 | Text link hover | HarmonyOS Sans SC | Regular | 20 | normal + underline | 0 | `#4A4848` | `358:792`, text `358:793` |
-| `Global` pill | HarmonyOS Sans SC | Bold | 16 | normal | 0 | `#FFFFFF` | `347:1519`, `347:1592` |
+| 区域徽标（原 `Global` pill，见 §4.10） | HarmonyOS Sans SC | Bold | 16 | normal | 0 | `#FFFFFF` | `347:1519`, `347:1592` |
 | SSO 行标题 | HarmonyOS Sans SC | Bold | 24 | normal | 0 | `#252222` | `329:956`, `347:1696` |
 | SSO 行副文案 | HarmonyOS Sans SC | Regular | 20 | normal | 0 | `#6F6F6F` | `329:956`, `347:1696` |
 | 回调卡标题 | HarmonyOS Sans SC | Bold | 32 | normal | 0 | Light `#252222` / Dark `#D4D4D4` | `343:355`, `347:2503` |
@@ -127,7 +127,7 @@ Color System 文字样式：`PingFang SC` Semibold，色名 36px，hex 28px，�
 | 6 | `Log_in` 容器 | 面板 + 第三方入口整体 | `347:1278`, `347:1487`, `347:1794` |
 | 7 | `Log_in_bg` 面板 | 白色输入面板 / 状态面板 | `347:1279`, `347:1488`, `347:1964` |
 | 8 | 标题 / 副标题文本组 | 欢迎标题、流程说明 | `347:1001`, `347:1491`, `347:1798` |
-| 9 | `Global` pill | 国际区标识 | `347:1519`, `347:1592`, `347:3004` |
+| 9 | 区域徽标（原 `Global` pill） | ~~国际区标识~~〔已作废(v3 2026-07-27)：改为标注需单独构建的区域，cn→`CN` / dev→`Dev`，global 不挂；见 §4.10 与 DESIGN.md §16.3〕 | `347:1519`, `347:1592`, `347:3004` |
 | 10 | `input_2` | 手机 / 邮箱通用输入框 | source `247:1569`; instances `347:1280`, `347:1587` |
 | 11 | `input_验证码` | 6 位验证码输入框 | source `329:1229`; instances `347:1830`, `347:1858` |
 | 12 | `log_in_button` | 主按钮 / CTA | source `247:1539`; instances `347:1000`, `347:1832` |
@@ -331,11 +331,20 @@ Symbol `247:2158`，尺寸 680 x 50。
 
 wave3 追加 · 2026-07-19：桌面 `LOG IN_企业 SSO 登录` 两排同名帧参数一致；按第二排 `358:689` / `358:711` / `358:733` 入规范，第一排同参数帧为 `358:511` / `358:601` / `358:631`。选择列表页新实例 `358:745` 为单行企业 SSO：x=70 y=148 w=540 h=100，fill `#EEEEEE`，stroke `#D4D4D4`，radius 60；标题 `以企业身份登录`，副文案 `通过 user@example.com SSO 单点登录`。组件集仍为 `329:957`，normal/hover/pressed 节点分别是 `329:956` / `329:991` / `329:1009`。
 
-### 4.10 `Global` pill
+### 4.10 区域徽标（原 `Global` pill）
+
+> ⚠️ **v3 改判（2026-07-27）：本节下表的「固定 70 宽」与「文本恒为 `Global`」已作废。**
+> 现行规格以 `DESIGN.md` §16.3「区域徽标」专条为准：
+> - **挂哪些区域**：`cn` → `CN`；`dev` → `Dev`；**`global` 不挂徽标**（产品叙事硬规则，非视觉遗漏；给 global 恢复徽标即回退该决策）。原「国际区标识」的定位随之作废——徽标现在标注的是**需单独构建的区域**，不是国际区。
+> - **宽度**：由 `REGION_PILL.paddingX`（11）左右撑开，随文案自适应，不再固定 70。11 由原几何反推（(70 − `Global` 实宽) / 2），故 figma 帧上 `Global` 文本的 x=11 留白与新规格一致。
+> - 高 30 / radius 40 / Fill `#DF0C27` / 文本 Bold 16 `#FFFFFF` / inline 紧随标题间隔 2 设计px —— **这些不变**，下表仍有效。
+>
+> 下表保留作 figma 帧的历史记录（帧上文本确为 `Global`）。落码值单点在
+> `apps/desktop/src/renderer/components/login/loginDesignTokens.ts` 的 `REGION_PILL`。
 
 | 状态 | 平台 | nodeId | 尺寸 / 位置 | Fill | Radius | 文本 |
 |---|---|---|---|---|---:|---|
-| visible | 双端 | `347:1519`, `347:1592`, `347:1749`, `347:3004` | 70 x 30；**v2（2026-07-25 裁定）：inline 紧随标题、间隔 2 设计px、随组居中**（figma 帧上的 x=425 y=4 为 v1 历史值，作废） | `#DF0C27` | 40 | `Global`，Bold 16，`#FFFFFF`，x=11 y=6，49 x 19 |
+| visible | 双端 | `347:1519`, `347:1592`, `347:1749`, `347:3004` | ~~70 x 30~~〔已作废(v3 2026-07-27)：宽度改 paddingX 11 自适应，高 30 不变〕；**v2（2026-07-25 裁定）：inline 紧随标题、间隔 2 设计px、随组居中**（figma 帧上的 x=425 y=4 为 v1 历史值，作废） | `#DF0C27` | 40 | ~~`Global`~~〔已作废(v3 2026-07-27)：按区域取值 `CN` / `Dev`，global 不挂〕，Bold 16，`#FFFFFF`，x=11 y=6，49 x 19 |
 | hover | 仅桌面端 | 未提供独立 node | 同 visible | 同 visible | 40 | 移动端不实现 hover |
 
 ### 4.11 立绘 / 字标 / 签名素材
@@ -387,7 +396,7 @@ wave3 追加 · 2026-07-19：桌面 `LOG IN_企业 SSO 登录` 两排同名帧�
 
 | 状态 | nodeId | 面板 / 关键组件 | 差异 |
 |---|---|---|---|
-| 邮箱默认 | `347:1472` | input `347:1489`; button `347:1490`; third-party `347:1493` | `Global` pill visible；placeholder `请输入邮箱`；第三方 Apple / Google / SSO |
+| 邮箱默认 | `347:1472` | input `347:1489`; button `347:1490`; third-party `347:1493` | ~~`Global` pill visible~~〔已作废(v3 2026-07-27)：该帧为 figma 历史记录；现行 global 构建**不挂徽标**，见 §4.10〕；placeholder `请输入邮箱`；第三方 Apple / Google / SSO |
 | 邮箱输入中 | `347:1523` | input `347:1540`; button `347:1541` | 文本 `user@`，input focus stroke `#2A2828` |
 | 邮箱错误 | `347:1727` | input `347:1744`; error `347:1776` | input stroke `#D91F37`；错误文案 `请输入正确邮箱` |
 | 邮箱继续中 | `347:1570` | input `347:1587`; button `347:1588` | 文本 `user@example.com`；按钮 `继续中...` + spinner |
@@ -462,7 +471,7 @@ wave3 追加 · 2026-07-19：桌面 `LOG IN_企业 SSO 登录` 两排同名帧�
 | 项 | 国区 | 国际区 | 结论 |
 |---|---|---|---|
 | 主流程 | 手机号登录 | 邮箱登录 + 企业/个人登录方式选择 | 布局同构，文案和中间流程不同 |
-| 标题行 | `欢迎使用 CINDY`，标题 x=222 w=236 | `欢迎使用 CINDY` + `Global` pill；**v2（2026-07-25 裁定）：标题 shrink-to-fit 单行 + pill 紧随 2px，组整体居中**（figma 帧上的标题 x=185 w=236、pill x=425 为 v1 历史值，作废——固定跨度对 en/ja/ko 长译文会重叠） | 国际区多 pill，面板尺寸不变 |
+| 标题行 | `欢迎使用 CINDY` **+ 区域徽标 `CN`**，标题 x=222 w=236 | `欢迎使用 CINDY`，**不挂徽标**（v3 2026-07-27 起；~~原为标题 + `Global` pill~~ 已作废） | **徽标归属自 v3 反转**：cn 挂 `CN`、dev 挂 `Dev`、global 不挂（本表无 dev 列，dev 的标题行同 cn，仅徽标文案不同）；~~国际区多 pill~~〔已作废(v3 2026-07-27)〕。挂徽标时的排布：**v2（2026-07-25 裁定）标题 shrink-to-fit 单行 + 徽标紧随 2px，组整体居中**（figma 帧上的标题 x=185 w=236、pill x=425 为 v1 历史值，作废——固定跨度对 en/ja/ko 长译文会重叠）。面板尺寸不变。详见 §4.10 与 DESIGN.md §16.3 |
 | 第三方入口 | Apple + SSO；group x=225 w=230 | Apple + Google + SSO；group x=150 w=380 | 圆钮尺寸 80、gap 70 一致 |
 | 输入框默认文案 | `请输入手机号` / `请输入手机号(含国家区号）` | 桌面 `请输入邮箱`；移动仍是手机号文案 | 移动国际文案需确认 |
 | 验证码副标题 | `验证码已发送至 +86 13666666666` | `验证码已发送至 user@example.com` | 组件尺寸一致，文案不同 |

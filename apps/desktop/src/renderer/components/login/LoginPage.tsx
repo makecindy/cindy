@@ -61,6 +61,27 @@ import { PANEL_FIXED_SCALE } from './loginScale';
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './consentGate';
 
 /**
+ * 标题旁区域徽标的 i18n key(2026-07-27 拍板)。
+ *
+ * **global 故意缺席**:Cindy 是「天生全球」的产品,默认版本不需要给自己贴标签
+ * 证明是全球版——只有为特定法规单独构建的版本才被标注(不对称命名)。旧实现给
+ * global 挂 "Global" 徽标,读出来反而是「存在一个本土主场版、这是它的出口型号」,
+ * 与叙事相反。cn / dev 仍标注:两者连的都不是 global 端点(cn 走国内端点、dev
+ * 走独立 dev 端点),登录页是用户确认自己连向哪个后端的位置;dev 另有并存场景
+ * ——CindyDev 保持独立可执行名,可与正式包同机共存。⚠️ 别把 cn 的理由写成
+ * 「区分同机双装的 cn / global」:2026-07-26 起两者可执行名同为 Cindy、安装
+ * 目录与快捷方式同名互抢,该双装场景已明确放弃支持(见 brandIdentity.ts 的
+ * executableNameByRegion doc)。
+ *
+ * 值为四语同文的区域代号(与旧 login.globalRegion 一致:区域标识不翻译),仍走
+ * i18n 以便日后改判为「中国大陆版」这类可译文案时不必回改组件。
+ */
+const REGION_PILL_KEY: Partial<Record<typeof CURRENT_CINDY_REGION, string>> = {
+  cn: 'login.regionPill.cn',
+  dev: 'login.regionPill.dev',
+};
+
+/**
  * LoginPage — 桌面登录(wave4 白底体系 + figma §4 组件库)。
  *
  * 呈现层职责:凭证/票据全在 main(useLogin dispatch IPC),本组件只做视图状态机
@@ -217,6 +238,9 @@ export function LoginPage() {
     return () => reportPanelBottomReserve(null);
   }, [reportPanelBottomReserve]);
   const isGlobalBuild = import.meta.env.VITE_CINDY_AUTH_REGION === 'global';
+  // 徽标读 CURRENT_CINDY_REGION 而非上面的 env 字面比较:未注入区域的本地 dev
+  // 构建经 resolveCindyRegion 落到默认 global,正确地不挂徽标(而非误挂 Dev)。
+  const regionPillKey = REGION_PILL_KEY[CURRENT_CINDY_REGION];
   // identifier 形态 = 构建区域确定性推导(用户拍板 2026-07-21:手机/邮箱分区互斥,
   // 双 tab 切换移除);providers 仅兜底区域首选方式未下发的场景。
   const identifierKind: VerificationKind = useMemo(
@@ -377,7 +401,7 @@ export function LoginPage() {
             <LoginTitleBlock
               title={t('login.title')}
               subtitle={t('login.subtitle')}
-              globalPill={isGlobalBuild ? t('login.globalRegion') : undefined}
+              regionPill={regionPillKey ? t(regionPillKey) : undefined}
             />
             <LoginInput
               autoFocus

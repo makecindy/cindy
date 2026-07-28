@@ -56,7 +56,16 @@ function stateChangedListener(auth: ReturnType<typeof installAuthApi>) {
 
 function loginProgressListener(auth: ReturnType<typeof installAuthApi>) {
   const calls = auth.onLoginProgress.mock.calls as unknown as Array<
-    [(payload: { agentKind: string; phase: string; detail?: string }) => void]
+    [(
+      payload: {
+        agentKind: string;
+        phase: string;
+        mode?: 'browser' | 'device-code';
+        detail?: string;
+        verificationUrl?: string;
+        userCode?: string;
+      },
+    ) => void]
   >;
   return calls[0][0];
 }
@@ -113,6 +122,39 @@ describe('useCodexAuth lifecycle', () => {
     });
 
     expect(result.current.state.kind).toBe('unauthenticated');
+  });
+
+  it('reconciles and surfaces a failed durable cancellation instead of claiming disconnect', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.cancelLogin.mockRejectedValue(
+      new Error('[INTERNAL] failed to persist Codex disconnect state'),
+    );
+    auth.getState
+      .mockResolvedValueOnce({
+        authenticated: true,
+        identity: 'user@example.com',
+        authSource: 'oauth' as const,
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        identity: 'user@example.com',
+        authSource: 'oauth' as const,
+      });
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('authenticated'));
+    await act(async () => {
+      await result.current.cancelLogin();
+    });
+
+    expect(auth.cancelLogin).toHaveBeenCalledWith('codex');
+    expect(auth.getState).toHaveBeenCalledTimes(2);
+    expect(result.current.state).toEqual({
+      kind: 'authenticated',
+      identity: 'user@example.com',
+      expiresAt: undefined,
+      authSource: 'oauth',
+    });
   });
 
   it('returns failed while retaining a generic main-process login reason', async () => {
@@ -204,7 +246,7 @@ describe('useCodexAuth lifecycle', () => {
     act(() => {
       loginProgressListener(auth)({ agentKind: 'codex', phase: 'login-pending' });
     });
-    expect(result.current.state).toEqual({ kind: 'login-pending' });
+    expect(result.current.state).toEqual({ kind: 'login-pending', mode: 'browser' });
 
     await act(async () => {
       initialState.resolve({
@@ -215,7 +257,7 @@ describe('useCodexAuth lifecycle', () => {
       await initialState.promise;
     });
 
-    expect(result.current.state).toEqual({ kind: 'login-pending' });
+    expect(result.current.state).toEqual({ kind: 'login-pending', mode: 'browser' });
 
     act(() => {
       stateChangedListener(auth)({
@@ -282,7 +324,118 @@ describe('useCodexAuth lifecycle', () => {
       await expect(firstOutcome).resolves.toBe('authenticated');
       await expect(secondOutcome).resolves.toBe('authenticated');
     });
-    expect(auth.triggerLogin).toHaveBeenCalledWith('codex');
+    expect(auth.triggerLogin).toHaveBeenCalledWith(
+      'codex',
+      expect.objectContaining({ ownerId: expect.any(String) }),
+    );
+  });
+
+  it('keeps a shared owned login until the last owner unmounts and ignores observers', async () => {
+    const auth = installAuthApi(async () => undefined);
+    const login = deferred<TestAuthState>();
+    auth.triggerLogin.mockImplementation(() => login.promise);
+    const firstOwner = renderHook(() => useCodexAuth());
+    const secondOwner = renderHook(() => useCodexAuth());
+    const observer = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(firstOwner.result.current.state.kind).toBe('authenticated'));
+    await waitFor(() => expect(secondOwner.result.current.state.kind).toBe('authenticated'));
+    await waitFor(() => expect(observer.result.current.state.kind).toBe('authenticated'));
+
+    let firstOutcome!: ReturnType<typeof firstOwner.result.current.triggerLogin>;
+    let secondOutcome!: ReturnType<typeof secondOwner.result.current.triggerLogin>;
+    act(() => {
+      firstOutcome = firstOwner.result.current.triggerLogin('device-code');
+      secondOutcome = secondOwner.result.current.triggerLogin('device-code');
+    });
+    await waitFor(() =>
+      expect(auth.triggerLogin).toHaveBeenCalledWith(
+        'codex',
+        expect.objectContaining({ mode: 'device-code', ownerId: expect.any(String) }),
+      ),
+    );
+    expect(auth.triggerLogin).toHaveBeenCalledOnce();
+
+    observer.unmount();
+    firstOwner.unmount();
+    expect(auth.cancelLogin).not.toHaveBeenCalled();
+
+    secondOwner.unmount();
+    expect(auth.cancelLogin).toHaveBeenCalledOnce();
+    expect(auth.cancelLogin).toHaveBeenCalledWith('codex', {
+      releaseOwner: true,
+      ownerId: expect.any(String),
+    });
+
+    // 即使 bridge 取消失败、main 最终回了成功，已卸载 owner 也只能观察到 cancelled，
+    // 不能在关闭向导后迟到弹出“连接成功”或更新卸载组件。
+    login.resolve({ authenticated: true, authSource: 'oauth' });
+    await act(async () => {
+      await expect(firstOutcome).resolves.toBe('cancelled');
+      await expect(secondOutcome).resolves.toBe('cancelled');
+    });
+  });
+
+  it('does not start a login through a retained callback after its owner unmounts', async () => {
+    const auth = installAuthApi(async () => undefined);
+    const owner = renderHook(() => useCodexAuth());
+    await waitFor(() => expect(owner.result.current.state.kind).toBe('authenticated'));
+    const triggerAfterUnmount = owner.result.current.triggerLogin;
+
+    owner.unmount();
+    await expect(triggerAfterUnmount('device-code')).resolves.toBe('cancelled');
+
+    expect(auth.triggerLogin).not.toHaveBeenCalled();
+    expect(auth.cancelLogin).not.toHaveBeenCalled();
+  });
+
+  it('keeps the device code visible while later waiting output arrives', async () => {
+    const auth = installAuthApi(async () => undefined);
+    const login = deferred<TestAuthState>();
+    auth.triggerLogin.mockImplementation(() => login.promise);
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('authenticated'));
+    let attempt!: Promise<string>;
+    act(() => {
+      attempt = result.current.triggerLogin('device-code');
+    });
+    await waitFor(() =>
+      expect(auth.triggerLogin).toHaveBeenCalledWith(
+        'codex',
+        expect.objectContaining({ mode: 'device-code', ownerId: expect.any(String) }),
+      ),
+    );
+
+    act(() => {
+      loginProgressListener(auth)({
+        agentKind: 'codex',
+        phase: 'device-code',
+        mode: 'device-code',
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        userCode: 'RUH2-7E2VH',
+      });
+      loginProgressListener(auth)({
+        agentKind: 'codex',
+        phase: 'login-pending',
+        mode: 'device-code',
+        detail: 'Waiting for authorization',
+      });
+    });
+
+    expect(result.current.state).toEqual({
+      kind: 'login-pending',
+      mode: 'device-code',
+      deviceCode: {
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        userCode: 'RUH2-7E2VH',
+      },
+    });
+
+    login.resolve({ authenticated: false, errorReason: 'login_cancelled' });
+    await act(async () => {
+      await expect(attempt).resolves.toBe('cancelled');
+    });
   });
 
   it('does not treat a Cindy AI API key as a connected ChatGPT account', () => {
@@ -356,6 +509,27 @@ describe('useCodexAuth lifecycle', () => {
       });
     });
 
+    expect(result.current.state).toEqual({ kind: 'unauthenticated' });
+  });
+
+  it('lets an observer-only window leave login-pending when main broadcasts cancellation', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState.mockResolvedValueOnce({ authenticated: false });
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('unauthenticated'));
+    act(() => {
+      loginProgressListener(auth)({ agentKind: 'codex', phase: 'login-pending' });
+    });
+    expect(result.current.state).toEqual({ kind: 'login-pending', mode: 'browser' });
+
+    act(() => {
+      stateChangedListener(auth)({
+        agentKind: 'codex',
+        authenticated: false,
+        errorReason: 'login_cancelled',
+      });
+    });
     expect(result.current.state).toEqual({ kind: 'unauthenticated' });
   });
 

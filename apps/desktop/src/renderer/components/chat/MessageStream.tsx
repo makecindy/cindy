@@ -158,6 +158,10 @@ import {
   subscribeGhostCards,
   type GhostCardSnapshot,
 } from '@/cindy-brain/ghostCardStore';
+import {
+  collectGhostCardGalleryImages,
+  createGhostCardSpawnIndex,
+} from '@/cindy-brain/ghostCardGallery';
 import { ChatImageView } from './ChatImageView';
 import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
 import { GhostFulfillmentContext } from './GhostSummonCard';
@@ -664,9 +668,10 @@ export function findRestorableViewportItemIdx(items: RenderItem[], viewportTopKe
 
 /**
  * 从全量 render items 里按渲染顺序抽出会话内所有图片的 src,作为 lightbox 翻图
- * 的数据源(全量,不受渲染窗口裁剪影响)。只收**结构化、确定会渲染成图**的两类:
+ * 的数据源(全量,不受渲染窗口裁剪影响)。只收**结构化、确定会渲染成图**的三类:
  *   - tool-output 图(art 出图 / 飞书拉图等)→ tool_media item 的 image 项
  *   - 用户上传图 → user message 的 images(url 或 data:base64,与 UserMessage 同款拼法)
+ *   - 插件生成图 → ghost card 及其衍生卡中会打开 ImageLightbox 的图片
  *
  * 不收正文 Markdown 内嵌图:用正则扫文本会误抓代码块里当作文本展示的 ![]() 语法,
  * 虚增计数 / 让翻页跳到无效图(codex review);要准确得复刻 MarkdownRenderer 的
@@ -676,18 +681,36 @@ export function findRestorableViewportItemIdx(items: RenderItem[], viewportTopKe
 export function collectSessionImageSrcs(
   items: RenderItem[],
   mediaOrigin?: RemoteMediaOrigin,
+  ghostCards?: GhostCardSnapshot,
+  isSessionStreaming = false,
 ): GalleryImage[] {
   // 远程会话:画廊 src 必须与渲染出的 <img data-gallery-src> 同样改写到 cindy-remote-media://,
   // 否则 ImageLightbox 的画廊 src 匹配对不上、退化成仅当前窗口翻图 + 计数错。
   const push = (url: string, meta?: Omit<GalleryImage, 'src'>): void =>
     void out.push({ src: rewriteToRemoteMediaOrigin(url, mediaOrigin), ...meta });
   const out: GalleryImage[] = [];
+  const ghostCardSpawnIndex = ghostCards ? createGhostCardSpawnIndex(ghostCards) : undefined;
   for (const item of items) {
     if (item.type === 'fork_origin') {
       continue;
     } else if (item.type === 'tool_media') {
       for (const m of item.items) {
         if (m.kind === 'image' && m.url) push(m.url);
+      }
+    } else if (item.type === 'ghost_card') {
+      if (ghostCards) {
+        for (const image of collectGhostCardGalleryImages(
+          item.callId,
+          ghostCards,
+          !item.settled && isSessionStreaming,
+          ghostCardSpawnIndex!,
+        )) {
+          push(image.src, { galleryId: image.galleryId });
+        }
+      }
+      // 回锚媒体渲染在卡片及其衍生卡之后，画廊顺序必须与 DOM 一致。
+      for (const media of item.media ?? []) {
+        if (media.kind === 'image' && media.url) push(media.url);
       }
     } else if (item.type === 'message') {
       const msg = item.message;
@@ -708,6 +731,16 @@ export function collectSessionImageSrcs(
           } else {
             push(`data:${img.mimeType};base64,${img.base64}`);
           }
+        }
+      } else if (msg.role === 'assistant' && ghostCards) {
+        // will-assistant-message 出口钩子的自绘卡以消息 clientId 为根 callId。
+        for (const image of collectGhostCardGalleryImages(
+          msg.clientId,
+          ghostCards,
+          false,
+          ghostCardSpawnIndex!,
+        )) {
+          push(image.src, { galleryId: image.galleryId });
         }
       }
     }
@@ -2082,8 +2115,14 @@ export function MessageStream({
     [sessionFileValue],
   );
   const sessionImageSrcs = useMemo(
-    () => collectSessionImageSrcs(allRenderItems, galleryMediaOrigin),
-    [allRenderItems, galleryMediaOrigin],
+    () =>
+      collectSessionImageSrcs(
+        allRenderItems,
+        galleryMediaOrigin,
+        ghostCardSnapshot,
+        isSessionStreaming,
+      ),
+    [allRenderItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
   );
 
   // 把可见窗口往前(更早)推 RENDER_WINDOW_GROWTH_ITEMS 个 item,用于滚到顶时的客户端扩窗。

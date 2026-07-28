@@ -541,12 +541,13 @@ export async function handleGhostCall(
   agentToolUseId?: string,
 ): Promise<McpTextResult> {
   try {
-    if (!input.tool && !input.setup_plan) {
+    if (!input.tool && !input.setup_plan && input.grant_only !== true) {
       return textResult(
         {
           ok: false,
           errorCode: "TOOL_NOT_FOUND",
-          message: "普通插件调用必须提供 tool；仅 setup_plan 配置引导可省略 tool。",
+          message:
+            "普通插件调用必须提供 tool；仅 setup_plan 配置引导或 grant_only 预授权可省略 tool。",
         },
         true,
       );

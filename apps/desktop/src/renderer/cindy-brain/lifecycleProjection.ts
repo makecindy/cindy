@@ -75,3 +75,8 @@ export function __resetLifecycleProjectionForTest(): void {
   listeners.clear();
   initialized = false;
 }
+
+if (import.meta.hot) {
+  import.meta.hot.accept(() => {});
+  import.meta.hot.dispose(__resetLifecycleProjectionForTest);
+}

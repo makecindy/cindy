@@ -70,6 +70,7 @@ const slotOverrides = {
   'accent-soft': BLUE_SOFT,
   'accent-hover': BLUE_DEEP,
   'accent-pure-cta-fg': '#ffffff',
+  'status-badge-fg': '#1F1F1F',
 } as const;
 
 const singletonOverrides = {
