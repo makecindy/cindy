@@ -4274,8 +4274,9 @@
       "saveEdit": "텍스트 저장"
     },
     "permissionPrompt": {
-      "alwaysAllowScoped": "이 대화에서 {{scope}} 항상 허용",
-      "alwaysAllowScopedHint": "대화 전체에 적용되며, 여기에 표시된 범위에만 해당합니다."
+      "alwaysAllowScoped": "이 세션에서 {{scope}} 항상 허용",
+      "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
+      "ruleSeparator": ", "
     }
   },
   "onboarding": {

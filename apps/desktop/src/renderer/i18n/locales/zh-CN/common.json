@@ -4275,7 +4275,8 @@
     },
     "permissionPrompt": {
       "alwaysAllowScoped": "本对话都允许 {{scope}}",
-      "alwaysAllowScopedHint": "作用于整个对话，且只限这里列出的范围。"
+      "alwaysAllowScopedHint": "作用于整个对话，且只限这里列出的范围。",
+      "ruleSeparator": "、"
     }
   },
   "onboarding": {

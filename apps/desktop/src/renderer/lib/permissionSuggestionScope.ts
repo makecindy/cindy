@@ -30,21 +30,32 @@ function describeRule(rule: unknown): string | null {
 }
 
 /**
- * @returns 逗号分隔的规则清单(如 `Bash(curl:*)`),无可描述规则时返回 null。
+ * @returns 规则清单(如 `['Bash(curl:*)']`),**只在能把全部授权项描述完整时**才返回;
+ *          否则返回 null,调用方退回不声称范围的原文案。
+ *
+ * 「描述不全就整体放弃」是安全要求,不是洁癖:点下按钮会把 suggestions 里**每一项**
+ * 都作为 updatedPermissions 转发出去。只要有一项没被写进文案(比如混进来一条 setMode
+ * 或 replaceRules),按钮就会一边宣称「只允许这一类」,一边顺手改掉权限档位或应用
+ * 未列出的规则 —— 授权文案说谎比文案笼统严重得多。
+ *
+ * 不返回拼好的字符串:分隔符是语言相关的(中日用 `、`,英韩用 `, `),硬编码会把
+ * 顿号漏进英文句子。拼接交给调用方按当前语言做(DESIGN.md 文案规范:标点不跨语言)。
  */
-export function describeSessionPermissionScope(suggestions: readonly unknown[]): string | null {
+export function describeSessionPermissionScope(suggestions: readonly unknown[]): string[] | null {
   if (!Array.isArray(suggestions)) return null;
   const labels: string[] = [];
   for (const suggestion of suggestions) {
-    if (!isRecord(suggestion)) continue;
-    if (suggestion.type !== 'addRules') continue;
-    if (suggestion.behavior !== 'allow') continue;
-    if (!Array.isArray(suggestion.rules)) continue;
+    // 任何一项无法完整描述 → 整体放弃(见顶注)。
+    if (!isRecord(suggestion)) return null;
+    if (suggestion.type !== 'addRules') return null;
+    if (suggestion.behavior !== 'allow') return null;
+    if (!Array.isArray(suggestion.rules) || suggestion.rules.length === 0) return null;
     for (const rule of suggestion.rules) {
       const label = describeRule(rule);
-      // 同一条规则可能在多个 suggestion 里重复出现,去重后再拼。
-      if (label && !labels.includes(label)) labels.push(label);
+      if (!label) return null;
+      // 同一条规则可能在多个 suggestion 里重复出现,去重后再列。
+      if (!labels.includes(label)) labels.push(label);
     }
   }
-  return labels.length > 0 ? labels.join('、') : null;
+  return labels.length > 0 ? labels : null;
 }

@@ -4275,8 +4275,9 @@
       "saveEdit": "Save Text"
     },
     "permissionPrompt": {
-      "alwaysAllowScoped": "Always allow {{scope}} in this conversation",
-      "alwaysAllowScopedHint": "Applies to the whole conversation, only for what is listed here."
+      "alwaysAllowScoped": "Always Allow {{scope}} in This Session",
+      "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
+      "ruleSeparator": ", "
     }
   },
   "onboarding": {

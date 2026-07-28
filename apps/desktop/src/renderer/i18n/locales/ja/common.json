@@ -4274,8 +4274,9 @@
       "saveEdit": "テキストを保存"
     },
     "permissionPrompt": {
-      "alwaysAllowScoped": "この会話では {{scope}} を常に許可",
-      "alwaysAllowScopedHint": "この会話全体に適用され、ここに挙げた範囲にのみ及びます。"
+      "alwaysAllowScoped": "このセッションでは {{scope}} を常に許可",
+      "alwaysAllowScopedHint": "このセッション全体に適用され、ここに挙げた範囲にのみ及びます。",
+      "ruleSeparator": "、"
     }
   },
   "onboarding": {

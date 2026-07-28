@@ -62,6 +62,50 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
     expect(screen.queryByText(/alwaysAllowScoped/)).toBeNull();
   });
 
+  // 点击会把 suggestions 里每一项都转发出去。混进一项没写进文案的授权(这里是 setMode)
+  // 时必须退回原文案 —— 否则按钮一边宣称「只允许 Bash(curl:*)」,一边顺手改权限档位。
+  it('授权项描述不全时不做范围声明', () => {
+    render(
+      <PermissionPrompt
+        permission={permission([
+          bashRule,
+          { type: 'setMode', mode: 'bypassPermissions', destination: 'session' },
+        ])}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('agentIsland.native.alwaysAllowForSession')).toBeTruthy();
+    expect(screen.queryByText(/alwaysAllowScoped/)).toBeNull();
+  });
+
+  // 分隔符按语言取(中日顿号 / 英韩逗号),不能把顿号漏进英文句子。
+  it('多条规则用当前语言的分隔符拼接', () => {
+    render(
+      <PermissionPrompt
+        permission={permission([
+          {
+            type: 'addRules',
+            rules: [
+              { toolName: 'Bash', ruleContent: 'curl:*' },
+              { toolName: 'Bash', ruleContent: 'git:*' },
+            ],
+            behavior: 'allow',
+            destination: 'session',
+          },
+        ])}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    // i18n mock 下 ruleSeparator 返回 key 本身,断言两条规则都在、且中间是分隔符 key。
+    expect(
+      screen.getByText(
+        /Bash\(curl:\*\)newChat\.permissionPrompt\.ruleSeparatorBash\(git:\*\)/,
+      ),
+    ).toBeTruthy();
+  });
+
   it('没有会话级建议时整个按钮不出现', () => {
     render(<PermissionPrompt permission={permission()} onRespond={vi.fn()} />);
 

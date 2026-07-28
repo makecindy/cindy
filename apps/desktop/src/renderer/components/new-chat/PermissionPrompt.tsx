@@ -79,10 +79,13 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
   const canAlwaysAllowForSession = sessionSuggestions.length > 0;
   // 这个按钮加的是 agent 给的一条具体规则(Bash 多为 `curl:*` 这类前缀模式),
   // 范围远小于「总是允许」的字面。把范围写到按钮上,别让用户猜。
-  const allowScope = useMemo(
+  // 描述不全时返回 null(见该函数顶注:点击会转发**全部** suggestions,文案漏项就是说谎),
+  // 此时退回不声称范围的原文案。分隔符按当前语言取 —— 顿号不能漏进英文句子。
+  const scopeLabels = useMemo(
     () => describeSessionPermissionScope(sessionSuggestions),
     [sessionSuggestions],
   );
+  const allowScope = scopeLabels?.join(t('newChat.permissionPrompt.ruleSeparator')) ?? null;
 
   // ── Action handlers ──
 
