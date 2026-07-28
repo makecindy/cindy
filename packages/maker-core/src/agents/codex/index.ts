@@ -4440,6 +4440,20 @@ export class CodexAgent extends BaseAgent {
         state.timer = null;
         if (closed || overloadRetry !== state) return;
         void state.retry().catch((error) => {
+          // 取消之后 RPC 才 reject：Stop / close / 新 send 都已经各自收口过这一轮
+          // （abort 与新 send 会把 overloadRetry 置 null，close 会置 closed）。
+          // 此时再报一次 terminal error + Done 会让 UI 二次收口，并把用户主动停止
+          // 误报成「重投失败」。只留日志。
+          // 成功路径的同款复检在 retry() 内部（cancelledMidFlight）；reject 会绕过
+          // 那一段直接落到这里，两条路都要判。
+          if (closed || overloadRetry !== state) {
+            log.info('codex overload retry rejected after cancellation — not surfacing', {
+              attempt,
+              error: String(error),
+              threadId,
+            });
+            return;
+          }
           // 重投本身失败（含容量再次不足）：转终止错误交回用户，不在这里递归重排——
           // 递归会绕过预算上限，容量故障期把额度烧光。
           log.error('codex overload retry failed', { attempt, error: String(error), threadId });

@@ -4566,6 +4566,64 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('does not surface a failure when the retry RPC rejects after cancellation', async () => {
+      // 取消之后 RPC 才 reject 时，reject 会绕过成功路径的取消复检直接落到 catch。
+      // 那里若无条件收口，用户主动 Stop 会被误报成「重投失败」并二次收口
+      // （review #844 greptile）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<unknown>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            return turnStarts === 1 ? { turn: { id: 'turn-1' } } : retryStart.promise;
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-reject-after-cancel',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        // 先取消，再让在途的重投 RPC 失败。
+        await handle.abort?.();
+        retryStart.reject(new Error('connection reset during retry'));
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 不得再补一条 terminal error / Done。
+        expect(
+          events.some((e) => e.type === 'error' && (e.data as { isTerminal?: boolean }).isTerminal === true),
+        ).toBe(false);
+        expect(
+          events.some((e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === false),
+        ).toBe(false);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('stays busy while the retry turn/start RPC is still in flight', async () => {
       // 退避计时器到点后 timer 已清空、turn 尚未激活，中间那段 RPC 在途窗口若报
       // idle，并发 send 会被接受并把原消息静默丢掉（review #844 copilot）。
