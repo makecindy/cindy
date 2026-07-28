@@ -196,6 +196,20 @@ describe('runRecipe', () => {
     expect(res.ok).toBe(true);
   });
 
+  it('rejects an unsafe number even when the variable is NOT declared in inputs', async () => {
+    // RecipeSchema allows `inputs` to be omitted while vars is seeded with every
+    // caller entry — the safe-integer guard must not be bypassable that way.
+    const { call, calls } = mockCall();
+    const undeclared: Recipe = {
+      id: 'undeclared',
+      steps: [{ action: 'navigate', url: 'https://example.com/{{q}}' }],
+    };
+    const res = await runRecipe(undeclared, { q: 1892345678901234567 }, { call });
+    expect(res.ok).toBe(false);
+    expect(res.message).toMatch(/safe-integer range/);
+    expect(calls).toHaveLength(0);
+  });
+
   it('fails loudly (never dispatches) when a saved recipe navigates to file://', async () => {
     // The recipe path calls runtime.call directly, so the scheme guard must live
     // in stepToRequest — a malicious saved recipe must not reach file:// even
