@@ -5,15 +5,14 @@
  * either:
  *   - Electron native API on the guest `WebContents` (navigate / screenshot /
  *     pdf / console)
+ *   - a bounded CDP session on the guest `WebContents` (snapshot / act)
  *   - the renderer's RSB store via the request/response bridge (open /
  *     focus / close)
  *   - the `TabRegistry` for status / tabs / profiles / doctor
  *
- * Scope (Phase 3): low-complexity actions only. Phase 4 layers CDP-driven
- * snapshot / act / extract / requests / responseBody / upload on top. Actions
- * not implemented in this phase respond with `BROWSER_RUNTIME_ACTION_FAILED`
- * + a clear message ("action 'X' not yet supported in rsb-webview backend")
- * so the MCP layer still surfaces a structured error.
+ * Actions outside the sidebar browser's current capability set respond with
+ * `BROWSER_RUNTIME_ACTION_FAILED` + a clear explanation, so the MCP layer still
+ * surfaces a structured error.
  *
  * Why this lives in main: the `WebContents` handles + CDP debugger access are
  * main-only; the backend has no business in the renderer. The renderer owns
@@ -21,9 +20,11 @@
  */
 
 import type {
+  BrowserActRequest,
   BrowserControlRequest,
   BrowserControlResult,
 } from '@cindy/browser-control-runtime';
+import { isPublicHttpResourceUrl } from '@cindy/browser-control-runtime';
 import type { WebContents } from 'electron';
 
 import type { TabRegistry } from '../../rsb-browser-bridge/registry.js';
@@ -34,10 +35,22 @@ import type {
   BackendResult,
   BrowserBackend,
 } from './types.js';
+import { RsbWebviewAutomation } from './rsb-webview-automation.js';
+import { artifactSessionRoot, RsbWebviewArtifacts } from './rsb-webview-artifacts.js';
+import { RsbWebviewDialogs } from './rsb-webview-dialogs.js';
+import { RsbWebviewNetwork } from './rsb-webview-network.js';
+import { resolveUploadFiles } from './rsb-webview-upload-policy.js';
 
 interface BackendLogger {
   info(message: string, ...args: unknown[]): void;
   warn(message: string, ...args: unknown[]): void;
+}
+
+interface BrowserActivity {
+  action: BrowserControlRequest['action'];
+  finishedAt: string;
+  ok: boolean;
+  targetId?: string;
 }
 
 export interface RsbWebviewBackendOptions {
@@ -60,6 +73,8 @@ export interface RsbWebviewBackendOptions {
   /** Bridge config — same shape `registerTabOpResultHandler` uses. */
   bridge: RendererBridgeOptions;
   logger: BackendLogger;
+  artifactRoot?: () => string;
+  resolveUploadRoots?: (sessionId: string) => Promise<string[]>;
   /**
    * Timing overrides for the detached-window tab re-registration wait (tests
    * only — production uses the defaults below).
@@ -79,6 +94,7 @@ export interface RsbWebviewBackendOptions {
  */
 const TAB_REATTACH_TOTAL_MS = 5000;
 const TAB_REATTACH_POLL_MS = 250;
+const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
 
 /**
  * Standard error payload for an action we can't service. Keeps the shape
@@ -125,10 +141,60 @@ function safeTabMeta(wc: WebContents): { url: string; title: string } {
   return { url, title };
 }
 
+function mayStartDownload(request: BrowserActRequest): boolean {
+  return request.kind === 'click'
+    || request.kind === 'clickCoords'
+    || request.kind === 'press'
+    || request.kind === 'select'
+    || (
+      (request.kind === 'type' || request.kind === 'fill')
+      && request.submit === true
+    );
+}
+
+async function loadUrlWithTimeout(
+  wc: WebContents,
+  url: string,
+  timeoutMs: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      wc.loadURL(url),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          try {
+            wc.stop();
+          } catch {
+            // The guest may already be gone; the timeout must still settle.
+          }
+          reject(new Error(`navigation timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export class RsbWebviewBackend implements BrowserBackend {
   readonly kind = 'rsb-webview' as const;
+  private readonly automation: RsbWebviewAutomation;
+  private readonly artifacts?: RsbWebviewArtifacts;
+  private readonly dialogs: RsbWebviewDialogs;
+  private readonly network: RsbWebviewNetwork;
+  private readonly activity: BrowserActivity[] = [];
+  private readonly activeCalls = new Set<Promise<BackendResult>>();
+  private disposing = false;
 
-  constructor(private readonly opts: RsbWebviewBackendOptions) {}
+  constructor(private readonly opts: RsbWebviewBackendOptions) {
+    this.automation = new RsbWebviewAutomation(opts.logger);
+    this.artifacts = opts.artifactRoot
+      ? new RsbWebviewArtifacts(opts.artifactRoot, opts.logger)
+      : undefined;
+    this.dialogs = new RsbWebviewDialogs(opts.logger);
+    this.network = new RsbWebviewNetwork(opts.logger);
+  }
 
   /**
    * Read the agent session id from an MCP-injected request, or fall back to
@@ -142,24 +208,41 @@ export class RsbWebviewBackend implements BrowserBackend {
   }
 
   async call(request: BackendRequest): Promise<BackendResult> {
+    if (this.disposing) return actionFailed(request.action, 'browser backend is disposing');
+    const operation = (async (): Promise<BackendResult> => {
+      try {
+        const result = await this.dispatch(request);
+        this.recordActivity(request, result.ok);
+        return result;
+      } catch (err) {
+        this.opts.logger.warn('rsb-webview backend.call threw', {
+          action: request.action,
+          err,
+        });
+        const result = actionFailed(
+          request.action,
+          err instanceof Error ? err.message : String(err),
+        );
+        this.recordActivity(request, false);
+        return result;
+      }
+    })();
+    this.activeCalls.add(operation);
     try {
-      return await this.dispatch(request);
-    } catch (err) {
-      this.opts.logger.warn('rsb-webview backend.call threw', {
-        action: request.action,
-        err,
-      });
-      return actionFailed(
-        request.action,
-        err instanceof Error ? err.message : String(err),
-      );
+      return await operation;
+    } finally {
+      this.activeCalls.delete(operation);
     }
   }
 
   async dispose(): Promise<void> {
-    // Nothing to tear down. Switching away from this backend doesn't kill
-    // any tabs — the user's RSB stays as-is. Pin set decays naturally as
-    // automation steps finish (in Phase 3 there are no pins).
+    this.disposing = true;
+    await Promise.allSettled([...this.activeCalls]);
+    // Switching backends never closes the user's tabs. Only the listeners and
+    // debugger attachments owned by this backend are released.
+    await this.artifacts?.dispose();
+    this.dialogs.dispose();
+    this.network.dispose();
   }
 
   // ── dispatch ──────────────────────────────────────────────────────────────
@@ -186,6 +269,8 @@ export class RsbWebviewBackend implements BrowserBackend {
         return this.handleClose(request);
       case 'navigate':
         return this.handleNavigate(request);
+      case 'snapshot':
+        return this.handleSnapshot(request);
       case 'screenshot':
         return this.handleScreenshot(request);
       case 'pdf':
@@ -194,11 +279,15 @@ export class RsbWebviewBackend implements BrowserBackend {
         return this.handleConsole(request);
       case 'act':
         return this.handleAct(request);
+      case 'upload':
+        return this.handleUpload(request);
+      case 'dialog':
+        return this.handleDialog(request);
+      case 'requests':
+        return this.handleRequests(request);
+      case 'responseBody':
+        return this.handleResponseBody(request);
       default:
-        // Snapshot / extract / requests / responseBody / upload / dialog —
-        // Phase 4 CDP territory. `act` supports `evaluate` only in this phase
-        // (handled above); `act:click` / `act:type` / etc. require CDP Input
-        // domain and ARIA snapshot infrastructure that lands in a follow-up.
         return actionFailed(
           request.action,
           `action '${request.action}' not yet supported in rsb-webview backend`,
@@ -226,6 +315,10 @@ export class RsbWebviewBackend implements BrowserBackend {
       activeSessionId: sessionId,
       totalRegisteredTabs: this.opts.registry.listAll().length,
       pinnedTabs: this.opts.registry.listPinned(),
+      dialogs: this.dialogs.diagnostics(),
+      ...(this.artifacts ? { artifacts: this.artifacts.diagnostics(sessionId ?? undefined) } : {}),
+      network: this.network.diagnostics(),
+      recentActivity: this.activity.slice(-20),
     });
   }
 
@@ -280,6 +373,7 @@ export class RsbWebviewBackend implements BrowserBackend {
     if (!result.ok) {
       return actionFailed(req.action, result.error);
     }
+    if (result.tabId) void this.observeOpenedTab(result.tabId);
     return actionOk(req.action, {
       targetId: result.tabId,
       tabId: result.tabId,
@@ -313,6 +407,7 @@ export class RsbWebviewBackend implements BrowserBackend {
       this.opts.bridge,
     );
     if (!result.ok) return actionFailed(req.action, result.error);
+    this.automation.forgetTab(tabId);
     return actionOk(req.action, { tabId });
   }
 
@@ -326,8 +421,36 @@ export class RsbWebviewBackend implements BrowserBackend {
     const resolved = await this.resolveTabForDirectAction(req, tabId);
     if (!resolved.ok) return resolved.result;
     return this.withTabPin(tabId, async () => {
-      await resolved.wc.loadURL(url);
+      this.automation.forgetTab(tabId);
+      await this.tryObservePageSignals(resolved.wc, tabId);
+      await loadUrlWithTimeout(
+        resolved.wc,
+        url,
+        req.timeoutMs ?? DEFAULT_NAVIGATION_TIMEOUT_MS,
+      );
       return actionOk(req.action, { tabId, url });
+    });
+  }
+
+  private async handleSnapshot(req: BackendRequest): Promise<BackendResult> {
+    const tabId = await this.resolveDirectActionTarget(req);
+    if (!tabId) return actionFailed(req.action, 'targetId required');
+    const resolved = await this.resolveTabForDirectAction(req, tabId);
+    if (!resolved.ok) return resolved.result;
+    return this.withTabPin(tabId, async () => {
+      await this.tryObservePageSignals(resolved.wc, tabId);
+      const dialog = this.dialogs.pending(resolved.wc);
+      if (dialog) {
+        return actionOk(req.action, {
+          format: req.snapshotFormat ?? 'ai',
+          targetId: tabId,
+          url: resolved.wc.getURL(),
+          barrier: { kind: 'page-dialog', dialog },
+          stats: { lines: 0, chars: 0, refs: 0, interactive: 0 },
+        });
+      }
+      const data = await this.automation.snapshot(tabId, resolved.wc, req);
+      return actionOk(req.action, data);
     });
   }
 
@@ -366,78 +489,215 @@ export class RsbWebviewBackend implements BrowserBackend {
     });
   }
 
-  /**
-   * Phase 4 lite — `act:evaluate` only. The CDP-driven act variants
-   * (click / type / press / hover / drag / select / fill / wait / clickCoords /
-   * resize) need an ARIA snapshot + Input domain subsystem that ships in a
-   * dedicated follow-up. evaluate is dispatch-cheap because it maps straight
-   * to `webContents.executeJavaScript` — included here so recipes that rely
-   * on evaluate (the majority of L1 / L2 site recipes) work today.
-   */
   private async handleAct(req: BackendRequest): Promise<BackendResult> {
-    const tabId = await this.resolveDirectActionTarget(req);
-    if (!tabId) return actionFailed(req.action, 'targetId required');
-    const resolved = await this.resolveTabForDirectAction(req, tabId);
-    if (!resolved.ok) return resolved.result;
-    const wc = resolved.wc;
-
-    const inner = (req as { request?: { kind?: string; fn?: string; as?: string } }).request;
+    const inner = (req as { request?: BrowserActRequest & { as?: string } }).request;
     if (!inner || typeof inner !== 'object') {
       return actionFailed(req.action, 'request body required');
     }
-    if (inner.kind !== 'evaluate') {
-      return actionFailed(
-        req.action,
-        `act:${String(inner.kind)} not yet supported in rsb-webview backend (Phase 4)`,
-      );
+    if (
+      typeof req.targetId === 'string'
+      && typeof inner.targetId === 'string'
+      && req.targetId !== inner.targetId
+    ) {
+      return actionFailed(req.action, 'targetId mismatch between act request and nested request');
     }
-    if (typeof inner.fn !== 'string' || inner.fn === '') {
-      return actionFailed(req.action, 'evaluate.fn (JS expression source) required');
+    const automationRequest = inner.timeoutMs === undefined && req.timeoutMs !== undefined
+      ? { ...inner, timeoutMs: req.timeoutMs }
+      : inner;
+    const requestWithInnerTarget = {
+      ...req,
+      ...(typeof req.targetId === 'string'
+        ? {}
+        : typeof inner.targetId === 'string'
+          ? { targetId: inner.targetId }
+          : {}),
+    } as BackendRequest;
+    if (inner.kind === 'close') {
+      const result = await this.handleClose(requestWithInnerTarget);
+      if (!result.ok || !result.data || typeof result.data !== 'object') return result;
+      return {
+        ...result,
+        data: { ...(result.data as Record<string, unknown>), kind: 'close' },
+      };
     }
 
-    // Safety / parity model:
-    //
-    // The vendored runtime's `act:evaluate` builds an in-page evaluator that
-    // does literally `eval("(" + fnSource + ")")` then calls the resulting
-    // function (see pw-tools-core.interactions.ts:1107-1131). The attack
-    // surface of "agent-provided JS runs in the guest page" is the SAME there
-    // — both forms are arbitrary JS in same-origin context. We mirror that
-    // pattern verbatim instead of a naive `(${fn})()` concat so:
-    //   (a) the architectural threat model is identical, not "subtly different
-    //       in a way only this code knows";
-    //   (b) we get the same "did not produce a function" guard for free;
-    //   (c) `JSON.stringify` ensures fn text is a JS string literal — no IIFE
-    //       escape via `})(); window.x=...;((`-style payloads.
-    // The caller's `fn` is still arbitrary JS that runs in the page; that's the
-    // designed capability (recipe authors do same-origin fetch / DOM scraping
-    // / page mutations through it). The guard only stops "smuggle multiple
-    // statements past the IIFE wrapper".
-    const wrapped = `(() => {
-      var candidate = eval("(" + ${JSON.stringify(inner.fn)} + ")");
-      if (typeof candidate !== "function") {
-        throw new Error("evaluate source did not produce a function");
-      }
-      var result = candidate();
-      return Promise.resolve(result);
-    })()`;
-    return this.withTabPin(tabId, async () => {
-      let value: unknown;
-      try {
-        value = await wc.executeJavaScript(wrapped, /* userGesture */ false);
-      } catch (err) {
-        return actionFailed(
-          req.action,
-          err instanceof Error ? err.message : String(err),
-        );
-      }
+    const tabId = await this.resolveDirectActionTarget(requestWithInnerTarget);
+    if (!tabId) return actionFailed(req.action, 'targetId required');
+    const resolved = await this.resolveTabForDirectAction(requestWithInnerTarget, tabId);
+    if (!resolved.ok) return resolved.result;
+    const wc = resolved.wc;
+    const humanVerification = this.automation.getHumanVerificationBarrier(tabId);
+    if (humanVerification) {
       return actionOk(req.action, {
         tabId,
-        kind: 'evaluate',
-        // `as` is an output-variable name the recipe-runner uses to alias the
-        // returned value. Surfaced verbatim so the runner's substitution
-        // ({{var}}) works without an extra translation step.
-        ...(typeof inner.as === 'string' ? { as: inner.as } : {}),
-        result: value,
+        kind: inner.kind,
+        barrier: humanVerification,
+      });
+    }
+
+    if (inner.kind === 'saveResource') {
+      if (!this.artifacts) return actionFailed(req.action, 'managed downloads are unavailable');
+      if (typeof inner.url !== 'string' || !isPublicHttpResourceUrl(inner.url)) {
+        return actionFailed(req.action, 'saveResource.url must be an http(s) URL from snapshot(urls:true)');
+      }
+      this.automation.assertResource(tabId, inner.url);
+      const sessionId = this.resolveSessionId(requestWithInnerTarget);
+      if (!sessionId) return actionFailed(req.action, 'no active RSB session');
+      return this.withTabPin(tabId, async () => {
+        await this.tryObservePageSignals(wc, tabId);
+        const captured = await this.artifacts!.capture(
+          wc,
+          { sessionId, timeoutMs: inner.timeoutMs ?? req.timeoutMs },
+          async () => {
+            wc.downloadURL(inner.url!);
+            return undefined;
+          },
+        );
+        if (!captured.downloads.some((artifact) => artifact.state === 'completed')) {
+          return actionFailed(req.action, 'resource download did not complete');
+        }
+        return actionOk(req.action, {
+          tabId,
+          kind: inner.kind,
+          url: inner.url,
+          downloads: captured.downloads,
+        });
+      });
+    }
+
+    if (inner.kind === 'evaluate') {
+      if (typeof inner.fn !== 'string' || inner.fn === '') {
+        return actionFailed(req.action, 'evaluate.fn (JS expression source) required');
+      }
+      return this.withTabPin(tabId, async () => {
+        await this.tryObservePageSignals(wc, tabId);
+        let value: unknown;
+        try {
+          value = await this.automation.evaluate(tabId, wc, automationRequest);
+        } catch (err) {
+          return actionFailed(
+            req.action,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+        return actionOk(req.action, {
+          tabId,
+          kind: 'evaluate',
+          ...(typeof inner.as === 'string' ? { as: inner.as } : {}),
+          result: value,
+        });
+      });
+    }
+
+    return this.withTabPin(tabId, async (retainTabPin) => {
+      await this.tryObserveNetwork(wc, tabId);
+      const opening = await this.tryWatchPageDialog(wc, tabId);
+      const pendingDialog = opening ? this.dialogs.pending(wc) : undefined;
+      if (pendingDialog) {
+        opening?.cancel();
+        return actionOk(req.action, {
+          tabId,
+          kind: inner.kind,
+          barrier: { kind: 'page-dialog', dialog: pendingDialog },
+        });
+      }
+
+      const actionStartedAt = Date.now();
+      const runAction = async () => {
+        const dialogBeforeStart = opening ? this.dialogs.pending(wc) : undefined;
+        if (dialogBeforeStart) {
+          opening?.cancel();
+          return {
+            tabId,
+            kind: inner.kind,
+            barrier: { kind: 'page-dialog', dialog: dialogBeforeStart },
+          };
+        }
+        const actionPromise = this.automation.act(tabId, wc, automationRequest, {
+          nativeKeyDispatch: async (type, keyCode, modifiers) => {
+            const sendInputEvent = (wc as unknown as {
+              sendInputEvent?: (event: {
+                type: 'keyDown' | 'keyUp';
+                keyCode: string;
+                modifiers?: string[];
+              }) => void;
+            }).sendInputEvent;
+            if (!sendInputEvent) throw new Error('native keyboard input is unavailable');
+            sendInputEvent({ type, keyCode, modifiers });
+          },
+          waitForNetworkIdle: (timeoutMs) => this.network.waitForIdle(wc, { timeoutMs }),
+        });
+        if (!opening) return actionPromise;
+        const outcome = await Promise.race([
+          actionPromise.then((value) => ({ type: 'action' as const, value })),
+          opening.opened.then((dialog) => ({ type: 'dialog' as const, dialog })),
+        ]);
+        if (outcome.type === 'action') {
+          opening.cancel();
+          const closedDialog = this.dialogs.recent(
+            wc,
+            undefined,
+            actionStartedAt,
+          );
+          if (closedDialog && closedDialog.type !== 'alert') {
+            return {
+              tabId,
+              kind: inner.kind,
+              barrier: { kind: 'page-dialog', dialog: closedDialog },
+            };
+          }
+          if (closedDialog) {
+            return {
+              ...outcome.value,
+              dialogs: [{ ...closedDialog, handled: true }],
+            };
+          }
+          return outcome.value;
+        }
+        if (outcome.dialog.type === 'alert') {
+          const value = await actionPromise;
+          const closedDialog = this.dialogs.recent(wc, outcome.dialog.id);
+          return {
+            ...value,
+            dialogs: [{
+              ...(closedDialog ?? outcome.dialog),
+              handled: true,
+            }],
+          };
+        }
+        void actionPromise.catch((err) => {
+          this.opts.logger.warn('browser action failed after a page dialog opened', {
+            tabId,
+            actionKind: inner.kind,
+            err,
+          });
+        });
+        retainTabPin();
+        void actionPromise.then(
+          () => this.opts.registry.unpin(tabId),
+          () => this.opts.registry.unpin(tabId),
+        );
+        return {
+          tabId,
+          kind: inner.kind,
+          barrier: { kind: 'page-dialog', dialog: outcome.dialog },
+        };
+      };
+
+      const captured = this.artifacts
+        && mayStartDownload(inner)
+        ? await this.artifacts.capture(
+          wc,
+          {
+            sessionId: this.resolveSessionId(requestWithInnerTarget) ?? 'rsb',
+            timeoutMs: inner.timeoutMs ?? req.timeoutMs,
+          },
+          runAction,
+        )
+        : { value: await runAction(), downloads: [] };
+      return actionOk(req.action, {
+        ...captured.value,
+        ...(captured.downloads.length > 0 ? { downloads: captured.downloads } : {}),
       });
     });
   }
@@ -459,7 +719,222 @@ export class RsbWebviewBackend implements BrowserBackend {
     });
   }
 
+  private async handleUpload(req: BackendRequest): Promise<BackendResult> {
+    const sessionId = this.resolveSessionId(req);
+    if (!sessionId) return actionFailed(req.action, 'no active RSB session');
+    const tabId = await this.resolveDirectActionTarget(req);
+    if (!tabId) return actionFailed(req.action, 'targetId required');
+    const resolved = await this.resolveTabForDirectAction(req, tabId);
+    if (!resolved.ok) return resolved.result;
+    return this.withTabPin(tabId, async () => {
+      const roots = [
+        ...(this.opts.artifactRoot
+          ? [artifactSessionRoot(this.opts.artifactRoot(), sessionId)]
+          : []),
+        ...(this.opts.resolveUploadRoots
+          ? await this.opts.resolveUploadRoots(sessionId)
+          : []),
+      ];
+      const paths = await resolveUploadFiles(req.paths, roots);
+      await this.tryObservePageSignals(resolved.wc, tabId);
+      const data = await this.automation.setFiles(tabId, resolved.wc, {
+        ...req,
+        paths,
+      });
+      return actionOk(req.action, data);
+    });
+  }
+
+  private async handleDialog(req: BackendRequest): Promise<BackendResult> {
+    const tabId = await this.resolveDirectActionTarget(req);
+    if (!tabId) return actionFailed(req.action, 'targetId required');
+    const resolved = await this.resolveTabForDirectAction(req, tabId);
+    if (!resolved.ok) return resolved.result;
+    return this.withTabPin(tabId, async () => {
+      let dialog;
+      try {
+        dialog = await this.dialogs.respond(resolved.wc, {
+          dialogId: req.dialogId,
+          accept: req.accept,
+          promptText: req.promptText,
+          timeoutMs: req.timeoutMs,
+        });
+      } catch (err) {
+        if (
+          !(err instanceof Error)
+          || err.message !== 'no page dialog is pending'
+          || req.accept !== true
+        ) {
+          throw err;
+        }
+        const armed = this.dialogs.armNext(resolved.wc, {
+          accept: true,
+          promptText: req.promptText,
+          timeoutMs: req.timeoutMs,
+        });
+        void armed.response.catch((responseErr) => {
+          this.opts.logger.warn('prepared page dialog response expired', {
+            tabId,
+            err: responseErr,
+          });
+        });
+        return actionOk(req.action, {
+          tabId,
+          armed: true,
+          retryRequired: true,
+        });
+      }
+      if (dialog.deferred) {
+        if (
+          dialog.closedBy === 'armed'
+          || dialog.type === 'alert'
+          || req.accept !== true
+        ) {
+          return actionOk(req.action, {
+            tabId,
+            dialog,
+            handled: true,
+          });
+        }
+        const armed = this.dialogs.armNext(resolved.wc, {
+          accept: true,
+          promptText: req.promptText,
+          timeoutMs: req.timeoutMs,
+        });
+        void armed.response.catch((err) => {
+          this.opts.logger.warn('prepared page dialog response expired', {
+            tabId,
+            err,
+          });
+        });
+        return actionOk(req.action, {
+          tabId,
+          dialog,
+          armed: true,
+          retryRequired: true,
+        });
+      }
+      return actionOk(req.action, { tabId, dialog });
+    });
+  }
+
+  private async handleRequests(req: BackendRequest): Promise<BackendResult> {
+    const tabId = await this.resolveDirectActionTarget(req);
+    if (!tabId) return actionFailed(req.action, 'targetId required');
+    const resolved = await this.resolveTabForDirectAction(req, tabId);
+    if (!resolved.ok) return resolved.result;
+    return this.withTabPin(tabId, async () => {
+      await this.network.observe(resolved.wc);
+      const requests = this.network.readRequests(resolved.wc, {
+        filter: typeof req.filter === 'string' ? req.filter : undefined,
+        clear: req.clear === true,
+      });
+      return actionOk(req.action, { tabId, requests });
+    });
+  }
+
+  private async handleResponseBody(req: BackendRequest): Promise<BackendResult> {
+    const tabId = await this.resolveDirectActionTarget(req);
+    if (!tabId) return actionFailed(req.action, 'targetId required');
+    if (typeof req.url !== 'string' || req.url.trim() === '') {
+      return actionFailed(req.action, 'responseBody.url required');
+    }
+    const resolved = await this.resolveTabForDirectAction(req, tabId);
+    if (!resolved.ok) return resolved.result;
+    return this.withTabPin(tabId, async () => {
+      const response = await this.network.readResponseBody(resolved.wc, {
+        url: req.url!,
+        maxChars: req.maxChars,
+        timeoutMs: req.timeoutMs,
+      });
+      return actionOk(req.action, { tabId, response });
+    });
+  }
+
   // ── helpers ───────────────────────────────────────────────────────────────
+
+  private recordActivity(req: BackendRequest, ok: boolean): void {
+    const directTarget = (req as { targetId?: unknown }).targetId;
+    const nestedTarget = (req as { request?: { targetId?: unknown } }).request?.targetId;
+    const targetId = typeof directTarget === 'string' && directTarget !== ''
+      ? directTarget
+      : typeof nestedTarget === 'string' && nestedTarget !== ''
+        ? nestedTarget
+        : undefined;
+    this.activity.push({
+      action: req.action,
+      finishedAt: new Date().toISOString(),
+      ok,
+      ...(targetId ? { targetId } : {}),
+    });
+    if (this.activity.length > 200) {
+      this.activity.splice(0, this.activity.length - 200);
+    }
+  }
+
+  private async tryWatchPageDialog(
+    wc: WebContents,
+    tabId: string,
+  ): Promise<ReturnType<RsbWebviewDialogs['watchOpening']> | undefined> {
+    try {
+      await this.dialogs.observe(wc);
+      return this.dialogs.watchOpening(wc);
+    } catch (err) {
+      // Dialog capture enriches an action but should not make the action fail
+      // when another debugger client owns the guest or Page.enable is refused.
+      this.opts.logger.warn('RSB page dialog observation unavailable', { tabId, err });
+      return undefined;
+    }
+  }
+
+  private async tryObserveNetwork(wc: WebContents, tabId: string): Promise<void> {
+    try {
+      await this.network.observe(wc);
+    } catch (err) {
+      // Network capture enriches normal browsing actions but must not prevent
+      // the underlying page action when DevTools owns the debugger.
+      this.opts.logger.warn('RSB network observation unavailable', { tabId, err });
+    }
+  }
+
+  private async tryObservePageSignals(wc: WebContents, tabId: string): Promise<void> {
+    await this.tryObserveNetwork(wc, tabId);
+    try {
+      await this.dialogs.observe(wc);
+    } catch (err) {
+      this.opts.logger.warn('RSB page dialog observation unavailable', { tabId, err });
+    }
+  }
+
+  /**
+   * Arm Network.enable as soon as the renderer reports a newly-created tab.
+   * `open` starts navigation in the renderer, so waiting until a later
+   * `requests` call would lose the document's initial requests.
+   */
+  private async observeOpenedTab(tabId: string): Promise<void> {
+    try {
+      const deadline = Date.now() + 2_000;
+      for (;;) {
+        const wc = this.opts.registry.getWebContentsByTabId(tabId);
+        if (wc) {
+          await this.tryObservePageSignals(wc, tabId);
+          return;
+        }
+        if (Date.now() >= deadline) {
+          this.opts.logger.warn('new browser tab was not reported before network capture arm', {
+            tabId,
+          });
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    } catch (err) {
+      this.opts.logger.warn('failed to arm network capture for new browser tab', {
+        tabId,
+        err,
+      });
+    }
+  }
 
   /**
    * Per-action automation pin. Wraps an action body so the targeted tab is
@@ -486,12 +961,18 @@ export class RsbWebviewBackend implements BrowserBackend {
    * acceptable until real concurrent use-cases emerge, then upgrade to
    * refcount.
    */
-  private async withTabPin<T>(tabId: string, body: () => Promise<T>): Promise<T> {
+  private async withTabPin<T>(
+    tabId: string,
+    body: (retainTabPin: () => void) => Promise<T>,
+  ): Promise<T> {
     this.opts.registry.pin(tabId);
+    let retained = false;
     try {
-      return await body();
+      return await body(() => {
+        retained = true;
+      });
     } finally {
-      this.opts.registry.unpin(tabId);
+      if (!retained) this.opts.registry.unpin(tabId);
     }
   }
 
@@ -510,7 +991,7 @@ export class RsbWebviewBackend implements BrowserBackend {
   private extractTargetId(req: BackendRequest): string | null {
     const v = (req as { targetId?: unknown }).targetId;
     if (typeof v === 'string' && v !== '') return v;
-    const sessionId = this.opts.getActiveSessionId();
+    const sessionId = this.resolveSessionId(req);
     if (!sessionId) return null;
     const records = this.opts.registry.listBySession(sessionId);
     // Last reported wins — RsbBrowserBridge replaces a tab's record on every

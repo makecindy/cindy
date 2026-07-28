@@ -20,7 +20,7 @@ describe('MobileProviderMark', () => {
     const source = readSource('src/session/MobileProviderMark.tsx');
 
     expect(source).toContain("from '@cindy/model-providers/branding';");
-    expect(source).toContain("logoKind ?? resolveProviderLogoKind(providerId ?? '', routing)");
+    expect(source).toContain('isProviderLogoKind(logoKind) ? logoKind : resolveProviderLogoKind(');
     expect(source).toContain('<Path d={PROVIDER_LOGO_PATHS[kind]} fill={fill} />');
     expect(source).toContain('{providerMonogram(name)}');
     expect(source).not.toContain('switch (providerId)');
@@ -50,5 +50,16 @@ describe('MobileProviderMark', () => {
     expect(draft).toContain('logoKind={activeSourceProvider.logoKind}');
     expect(session).toContain('routing={composerPillSourceProvider?.routing}');
     expect(session).toContain('logoKind={composerPillSourceProvider?.logoKind}');
+  });
+
+  it('advertises the full-logo capability on refresh and subscription frames', () => {
+    const context = readSource('src/device-link/DeviceLinkContext.tsx');
+
+    expect(context).toContain(
+      "'maker:provider:list', [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }]",
+    );
+    expect(context).toContain(
+      'capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2]',
+    );
   });
 });

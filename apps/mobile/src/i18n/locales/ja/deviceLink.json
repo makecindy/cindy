@@ -3,6 +3,8 @@
   "resync": "再同期",
   "resyncing": "再同期しています",
   "syncShort": "同期",
+  "deviceUnresponsiveTitle": "パソコンが応答していません",
+  "deviceUnresponsiveHint": "パソコンが一時的に応答していません。自動的に再試行しています。",
   "connectStep1": "パソコンに {{appName}} をインストールして起動する",
   "connectStep2": "スマートフォンと同じアカウントでログインする",
   "connectStep3": "「設定 → リモート接続」で「同じアカウントのデバイスにこのパソコンの操作を許可」をオンにする",

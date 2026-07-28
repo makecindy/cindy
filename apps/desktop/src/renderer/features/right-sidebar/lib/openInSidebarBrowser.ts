@@ -36,16 +36,32 @@ export function pathToFileUrl(absPath: string): string {
   return `file://${encoded}`;
 }
 
+export interface OpenUrlInSidebarBrowserOptions {
+  /**
+   * false = 不是用户当次手势(插件 preview 槽开页):标签照常开、内容照常加载,
+   * 但 detached 形态下不得把子窗口 show + focus 抢走用户前台。缺省 true。
+   */
+  userInitiated?: boolean;
+}
+
 /** 在指定 session 的侧边栏浏览器里新开一个页签加载 url,并确保侧边栏可见。 */
-export async function openUrlInSidebarBrowser(sessionId: string, url: string): Promise<void> {
-  const routeResult = await routeSidebarCommand({
-    type: 'open-web-browser',
-    sessionId,
-    url,
-  });
+export async function openUrlInSidebarBrowser(
+  sessionId: string,
+  url: string,
+  options: OpenUrlInSidebarBrowserOptions = {},
+): Promise<void> {
+  const userInitiated = options.userInitiated !== false;
+  const routeResult = await routeSidebarCommand(
+    {
+      type: 'open-web-browser',
+      sessionId,
+      url,
+    },
+    { userInitiated },
+  );
   if (routeResult !== 'attached') {
     if (routeResult !== 'routed') return;
-    requestRightSidebarVisibility('open', { sessionId });
+    requestRightSidebarVisibility('open', { sessionId, userInitiated });
     return;
   }
   // store.addTab 的乐观写以 bucket 已 hydrate 为前提(见 store 内
@@ -61,5 +77,5 @@ export async function openUrlInSidebarBrowser(sessionId: string, url: string): P
     favicon: null,
     isAudible: false,
   });
-  requestRightSidebarVisibility('open', { sessionId });
+  requestRightSidebarVisibility('open', { sessionId, userInitiated });
 }

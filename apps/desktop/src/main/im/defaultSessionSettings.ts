@@ -232,7 +232,7 @@ function resolveProviderId(
 
 async function listProvidersForDefaults(): Promise<ProviderView[] | null> {
   try {
-    return await getDesktopProviderService().listProviders();
+    return await getDesktopProviderService().listProviders({ allowSideEffects: true });
   } catch (err) {
     log.warn('im default provider catalog unavailable; falling back to maker capabilities', {
       error: err instanceof Error ? err.message : String(err),

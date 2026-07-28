@@ -473,6 +473,30 @@ describe('startGhostOauthFlow', () => {
     expect(broker.exchange).toHaveBeenCalledTimes(1);
   });
 
+  it('tokenBroker 服务不可用时保留 SERVICE_UNAVAILABLE 分类', async () => {
+    const broker: GhostOauthBrokerClient = {
+      exchange: vi.fn(async () => ({
+        ok: false as const,
+        error: 'SERVICE_UNAVAILABLE' as const,
+        invalidGrant: false,
+      })),
+      refresh: vi.fn(),
+    };
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, tokenBroker: 'feishu' },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      broker,
+      openExternal: (url) => {
+        browserRedirect(url, (authorizeUrl) => ({
+          code: 'c-unavailable',
+          state: authorizeUrl.searchParams.get('state') ?? '',
+        }));
+      },
+    });
+
+    expect(result).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE', detail: undefined });
+  });
+
   it('tokenBroker + pkce:false(jira/slack 形态):授权页无 challenge,broker 不收 verifier', async () => {
     const broker: GhostOauthBrokerClient = {
       exchange: vi.fn(

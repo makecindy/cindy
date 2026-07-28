@@ -8,7 +8,7 @@
  * OpenAI 会出现弹窗一闪即逝，且 provider 仍保持未连接。
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,6 +23,8 @@ const { triggerLogin, cancelLogin, codexAuthMock } = vi.hoisted(() => ({
     state: { kind: 'authenticated', authSource: 'oauth' } as {
       kind: string;
       authSource?: string;
+      mode?: 'browser' | 'device-code';
+      deviceCode?: { verificationUrl: string; userCode: string };
     },
   },
 }));
@@ -75,10 +77,71 @@ const OPENAI_PROVIDER = {
   models: { codex: [] },
   connected: false,
 } satisfies ProviderView;
+const DEVICE_PROVIDER = {
+  id: 'device-provider',
+  name: 'Device Provider',
+  source: 'builtin',
+  agents: ['codex'],
+  auth: {
+    method: 'oauth',
+    oauth: {
+      flow: 'device-code',
+      deviceAuthorizationUrl: 'https://auth.example.test/device',
+      tokenUrl: 'https://auth.example.test/token',
+      clientId: 'device-client',
+      scopes: 'openid',
+    },
+  },
+  routing: {
+    codex: {
+      upstream: 'https://api.example.test/v1',
+      authStrategy: 'oauth-token',
+    },
+  },
+  models: { codex: [] },
+  connected: false,
+} satisfies ProviderView;
+const AUTH_CODE_PROVIDER = {
+  id: 'auth-code-provider',
+  name: 'Authorization Code Provider',
+  source: 'builtin',
+  agents: ['codex'],
+  auth: {
+    method: 'oauth',
+    oauth: {
+      authorizeUrl: 'https://auth.example.test/authorize',
+      tokenUrl: 'https://auth.example.test/token',
+      clientId: 'auth-code-client',
+      scopes: 'openid',
+    },
+  },
+  routing: {
+    codex: {
+      upstream: 'https://api.example.test/v1',
+      authStrategy: 'oauth-token',
+    },
+  },
+  models: { codex: [] },
+  connected: false,
+} satisfies ProviderView;
+
+const providerOAuthLogin = vi.fn();
+const providerOAuthCancel = vi.fn();
+type ProviderOAuthProgress = {
+  providerId: string;
+  phase: 'device-code';
+  verificationUrl: string;
+  userCode: string;
+  expiresAt: number;
+};
+let providerOAuthProgressListener: ((progress: ProviderOAuthProgress) => void) | null = null;
 
 beforeEach(() => {
   triggerLogin.mockReset();
   cancelLogin.mockReset();
+  providerOAuthLogin.mockReset();
+  providerOAuthCancel.mockReset();
+  providerOAuthProgressListener = null;
   codexAuthMock.state = { kind: 'authenticated', authSource: 'oauth' };
   // 登录成功 = 快照翻转到 authenticated;完成边界必须由这次翻转驱动。
   triggerLogin.mockImplementation(async () => {
@@ -88,6 +151,14 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       listProviderPresets: vi.fn(async () => ({ presets: [] })),
+      providerOAuthLogin,
+      providerOAuthCancel,
+      onProviderOAuthProgress: vi.fn((listener: (progress: ProviderOAuthProgress) => void) => {
+        providerOAuthProgressListener = listener;
+        return () => {
+          if (providerOAuthProgressListener === listener) providerOAuthProgressListener = null;
+        };
+      }),
     },
   };
 });
@@ -110,7 +181,7 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
       />,
     );
 
-    expect(screen.getByText('settings.providers.button.authorize')).not.toBeNull();
+    expect(screen.getByText('settings.providers.wizard.authorizeInBrowser')).not.toBeNull();
     await waitFor(() => expect(onDone).not.toHaveBeenCalled());
   });
 
@@ -129,9 +200,10 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
       />,
     );
 
-    fireEvent.click(screen.getByText('settings.providers.button.authorize'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.authorizeInBrowser'));
 
     await waitFor(() => expect(triggerLogin).toHaveBeenCalledTimes(1));
+    expect(triggerLogin).toHaveBeenCalledWith('browser');
     await waitFor(() => expect(onDone).toHaveBeenCalledWith('openai'));
   });
 
@@ -150,14 +222,133 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
       />,
     );
 
-    fireEvent.click(screen.getByText('settings.providers.button.authorize'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.authorizeInBrowser'));
 
     await waitFor(() => expect(triggerLogin).toHaveBeenCalledTimes(1));
     // 先等授权流程 settle(按钮从「取消」回到「授权」= loggingIn 已复位),
     // 再做负向断言——避免「负向 waitFor」首查即过、断言早于异步流程收尾。
     await waitFor(() =>
-      expect(screen.getByText('settings.providers.button.authorize')).not.toBeNull(),
+      expect(screen.getByText('settings.providers.wizard.authorizeInBrowser')).not.toBeNull(),
     );
     expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it('设备码路径展示代码，并支持复制和打开官方验证页', async () => {
+    codexAuthMock.state = { kind: 'unauthenticated' };
+    triggerLogin.mockImplementation(() => {
+      codexAuthMock.state = {
+        kind: 'login-pending',
+        mode: 'device-code',
+        deviceCode: {
+          verificationUrl: 'https://auth.openai.com/codex/device',
+          userCode: 'RUH2-7E2VH',
+        },
+      };
+      return new Promise<string>(() => undefined);
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const openExternal = vi.fn().mockResolvedValue({ success: true });
+    (
+      window.electronAPI as unknown as {
+        openExternal: typeof openExternal;
+      }
+    ).openExternal = openExternal;
+
+    render(
+      <AddProviderWizard
+        providers={[OPENAI_PROVIDER]}
+        entry={{ kind: 'builtin', providerId: 'openai' }}
+        onOpenCustomForm={vi.fn()}
+        onClose={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('settings.providers.wizard.authorizeWithDeviceCode'));
+    await waitFor(() => expect(screen.getByText('RUH2-7E2VH')).not.toBeNull());
+    expect(triggerLogin).toHaveBeenCalledWith('device-code');
+
+    fireEvent.click(screen.getByText('settings.providers.wizard.copyDeviceCode'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.openVerificationPage'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('RUH2-7E2VH'));
+    await waitFor(() =>
+      expect(openExternal).toHaveBeenCalledWith('https://auth.openai.com/codex/device'),
+    );
+  });
+
+  it('目录声明 Device Grant 时，添加流程直接展示供应商设备码', async () => {
+    providerOAuthLogin.mockImplementation(() => new Promise(() => undefined));
+    const { unmount } = render(
+      <AddProviderWizard
+        providers={[DEVICE_PROVIDER]}
+        entry={{ kind: 'builtin', providerId: DEVICE_PROVIDER.id }}
+        onOpenCustomForm={vi.fn()}
+        onClose={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(providerOAuthProgressListener).not.toBeNull());
+
+    fireEvent.click(screen.getByText('settings.providers.wizard.authorizeWithDeviceCode'));
+    await waitFor(() =>
+      expect(providerOAuthLogin).toHaveBeenCalledWith(
+        DEVICE_PROVIDER.id,
+        expect.objectContaining({ ownerId: expect.any(String) }),
+      ),
+    );
+    const ownerId = providerOAuthLogin.mock.calls[0]?.[1]?.ownerId;
+    act(() => {
+      providerOAuthProgressListener?.({
+        providerId: DEVICE_PROVIDER.id,
+        phase: 'device-code',
+        verificationUrl: 'https://auth.example.test/device',
+        userCode: 'TEST-CODE',
+        expiresAt: Date.now() + 300_000,
+      });
+    });
+
+    expect(await screen.findByText('TEST-CODE')).not.toBeNull();
+    expect(screen.getByText(/auth\.example\.test/)).not.toBeNull();
+
+    unmount();
+    expect(providerOAuthCancel).toHaveBeenCalledOnce();
+    expect(providerOAuthCancel).toHaveBeenCalledWith(DEVICE_PROVIDER.id, {
+      releaseOwner: true,
+      ownerId,
+    });
+  });
+
+  it('authorization-code 登录期间被父级卸载时取消仍在等待的回环授权', async () => {
+    providerOAuthLogin.mockImplementation(() => new Promise(() => undefined));
+    const { unmount } = render(
+      <AddProviderWizard
+        providers={[AUTH_CODE_PROVIDER]}
+        entry={{ kind: 'builtin', providerId: AUTH_CODE_PROVIDER.id }}
+        onOpenCustomForm={vi.fn()}
+        onClose={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('settings.providers.button.authorize'));
+    await waitFor(() =>
+      expect(providerOAuthLogin).toHaveBeenCalledWith(
+        AUTH_CODE_PROVIDER.id,
+        expect.objectContaining({ ownerId: expect.any(String) }),
+      ),
+    );
+    const ownerId = providerOAuthLogin.mock.calls[0]?.[1]?.ownerId;
+    expect(providerOAuthProgressListener).toBeNull();
+
+    unmount();
+    expect(providerOAuthCancel).toHaveBeenCalledOnce();
+    expect(providerOAuthCancel).toHaveBeenCalledWith(AUTH_CODE_PROVIDER.id, {
+      releaseOwner: true,
+      ownerId,
+    });
   });
 });

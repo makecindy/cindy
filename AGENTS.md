@@ -44,6 +44,10 @@
   提的，提交者身份不构成例外。
 - 新增或调整产品功能、判断能力应进入 Core / Skill / 插件、设计人机交互或多端体验
   前，必须先读 `docs/product-rules/core-product-principles.md`。
+- 新增或修改按区域（`cn` / `global`）分支的逻辑、构建身份与命名、端点选择、区域相关
+  UI 标注，或涉及两个版本关系的对外文案前，必须先读
+  `docs/product-rules/region-and-editions.md`：**无限定词身份归 Global，未显式指定
+  区域一律落在 `global`，只标注中国大陆版**。
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
   `docs/design-rules/DESIGN.md`；设计文档索引见
   `docs/design-rules/cindy-design-system.md`。

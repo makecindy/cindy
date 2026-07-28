@@ -62,9 +62,11 @@ import { useAuth } from '@/auth/AuthContext';
 import { useGuardedBack } from '@/utils/useGuardedBack';
 import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
+import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
+import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import {
   describeRemoteError,
   formatRemoteError,
@@ -257,6 +259,7 @@ import {
   VoiceMicWaveCaret,
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
+import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { useComposerResize } from '@/session/useComposerResize';
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
@@ -334,6 +337,10 @@ import {
   recordMobileVoiceInputHistoryForHost,
   updateMobileVoiceInputHistoryEntryForHost,
 } from '@/session/mobileVoiceHistoryStore';
+import {
+  hydrateMobileVoiceDictionary,
+  refreshMobileVoiceDictionary,
+} from '@/session/mobileVoiceDictionaryCache';
 import {
   playMobileVoiceInputEndCue,
 } from '@/session/mobileVoiceCue';
@@ -658,6 +665,7 @@ export default function SessionScreen() {
     unsubscribe,
   } = useDeviceLink();
   const revokedDevices = useRevokedDevices();
+  const unresponsiveDevices = useUnresponsiveDevices();
   const maker = useMobileMakerTransport(deviceId);
   const sessions = useRemoteSessions();
   const messages = useSessionMessages(sessionId, deviceId);
@@ -1151,11 +1159,18 @@ export default function SessionScreen() {
   );
   const localCodexRateLimitControl = canUseLocalCodexRateLimitControl(currentSession);
   const isDeviceAccessRevoked = !!deviceId && revokedDevices.has(deviceId);
-  const connectionError = isDeviceAccessRevoked
-    ? '[ACCESS_REVOKED] access revoked by target device'
-    : error;
+  // 熔断 open:被控电脑「进程活着但不回包」的半死态;relay status 恒 online,必须单独入参。
+  const isDeviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
+  // 熔断已关后残留的 DEVICE_UNRESPONSIVE 错误按陈旧丢弃,且必须一次性解析、
+  // 两个消费方共用(review P1):banner 用它,下面的 remoteUnavailableReason 也
+  // 用它——否则恢复后横幅消失了,composer 却仍被 stale 快照锁在不可用态,
+  // 直到手动同步才解开。
+  const connectionError = resolveEffectiveConnectionError(
+    isDeviceAccessRevoked ? '[ACCESS_REVOKED] access revoked by target device' : error,
+    isDeviceUnresponsive,
+  );
   // 弱网普通断线也要有可见信号(消息流静默停更没有任何提示),经防闪延迟后显示
-  const showConnectionBanner = useShowConnectionBanner(status, connectionError, connectionIssue);
+  const showConnectionBanner = useShowConnectionBanner(status, connectionError, connectionIssue, isDeviceUnresponsive);
   const hasCurrentSession = currentSession !== null;
   const currentAgentKind = useMemo(
     () => currentSession ? agentKindForSession(currentSession) : null,
@@ -1597,26 +1612,56 @@ export default function SessionScreen() {
     voiceState,
   ]);
   const compactComposer = composerLayout.density === 'compact';
-  const composerSendSlotIsStop = composerLayout.stop.visible && composerLayout.send.disabled && !sending;
+  // 「按下即录」的乐观反馈(对齐桌面 activeRecording = listening || longPressActive):
+  // pressIn 发起启动的同时置 pending,胶囊立刻展开计时,不等 ASR/权限链路把 state
+  // 翻到 listening——否则启动慢时按钮有一段「按了没反应」。启动完成(成功进
+  // listening / 失败报错)后由 finally 收回;成功路径收回时 listening 已为 true,
+  // 计时输入保持连续,不会闪断重置。声明在槽位 flags 之前:pending 期就要占住发送槽。
+  const [voiceStartPending, setVoiceStartPending] = useState(false);
+  // pending 的世代号:本组件会随 sessionId 复用,上一个会话的启动收尾不能把
+  // 当前会话刚展开的乐观胶囊收掉——finally 只在世代未前进时清 pending。
+  const voiceStartPendingSeqRef = useRef(0);
+  // pressIn 已起录的标记:同一次手势的松手(onPress)不能再被当作「再点一下停止」。
+  const voiceStartedOnPressInRef = useRef(false);
+  // 发送槽双语义(对齐桌面 ChatInput 的主槽判定,voice busy = listening|submitting|refining):
+  // 任务执行中且发送不可用、又没有语音在进行时,停止任务顶替发送位;语音一旦开始,
+  // 发送键回到发送位(录音期=「结束并发送」,润色期=禁用态占位),停止任务退到
+  // 语音按钮**左边**的独立槽。语音按钮由此永远是发送槽的左邻,右缘位置与是否有
+  // 草稿/是否录音/任务是否执行全部无关——录音胶囊只向左生长,「原地再点一下」
+  // 永远是停止录音,不会误停任务。
+  const composerSendSlotIsStop = composerLayout.stop.visible
+    && composerLayout.send.disabled
+    && !sending
+    && !voiceIsBusy
+    && !voiceStartPending;
   // 降级 composer(未同步/离线):输入框可编辑并持续保存草稿,但发送禁用,
   // 直到 currentSession 和远端连接恢复后自动恢复可发送。
   const composerSendDisabled = composerLayout.send.disabled;
   const composerShowInlineStop = composerLayout.stop.visible && !composerSendSlotIsStop && !sending;
   const composerHasPayload = composerHasText || attachments.length > 0 || pendingUploads.length > 0 || composerQuoteCount > 0;
-  const composerShowSendButton = composerLayout.send.visible && (!voiceIsListening || composerHasPayload);
-  const composerFloatingVoiceButtonStyle = composerShowInlineStop && composerShowSendButton
-    ? styles.composerFloatingVoiceButtonWithInlineStop
-    : undefined;
+  // send.visible 在语音生命周期内恒 true(sessionOperation.ts),这里不再按
+  // voiceIsListening 二次过滤——那正是「首段转写落地瞬间发送键冒出来」的跳变源。
+  // 乐观 pending 期(state 还是 idle)同样要占住发送槽:否则空草稿按下语音时
+  // 胶囊先在 12pt 档展开,listening 一到发送键出现又整体跳到 52pt 档。
+  const composerShowSendButton = composerLayout.send.visible || voiceStartPending;
   const composerVoicePlacement = voiceUiAvailable
     ? resolveMobileComposerVoiceButtonPlacement({
       // 行尾有发送或占发送位的停止按钮时让位;附件-only(无文字)同样命中。
       hasTrailingAction: composerSendSlotIsStop || composerShowSendButton,
     })
     : undefined;
+  // 录音计时(红点+m:ss 胶囊);pillWidth 同时驱动语音按钮与工具排占位 slot,
+  // 胶囊展开时把左邻的停止任务按钮推开,而不是盖住它。expanded 含乐观 pending
+  // (按下即展开),counting 只认真实采集(listening)——启动链路(权限弹窗等)
+  // 不计入录音时长,pending 期显示静止的 0:00。
+  const voiceRecordingTimer = useMobileVoiceRecordingTimer({
+    expanded: voiceIsListening || voiceStartPending,
+    counting: voiceIsListening,
+  });
   const composerEffectiveContentHeight = composerInputContentHeight;
   const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
-  // 录音状态由输入框内的语音按钮形态(Mic / Square / spinner)表达。
+  // 录音状态由输入框内的语音按钮形态(Mic / 红点计时胶囊 / spinner)表达。
   const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);
   const nativeShellLayout = useMemo(() => buildSessionNativeShellLayout({
     attachmentPickerOpen: false,
@@ -1813,10 +1858,14 @@ export default function SessionScreen() {
         />
       ) : null}
       <ComposerToolbarSpacer />
+      {/* 工具排右段顺序:[停止任务][语音占位][发送槽]。停止任务在语音左边
+         (对齐桌面),语音占位宽度随录音胶囊(红点+计时)展开,把停止任务
+          推开——语音右缘与发送槽的邻接关系全程不变。 */}
+      {renderComposerInlineStop()}
       {composerVoicePlacement?.inline || composerVoicePlacement?.floating
-        ? <ComposerToolbarVoiceSlot />
+        ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
         : null}
-      {renderComposerTrailingActions()}
+      {renderComposerSendSlot()}
     </>
   );
   const renderComposerInputOverlay = () => voiceIsListening ? (
@@ -1855,7 +1904,7 @@ export default function SessionScreen() {
       >
         {voiceDraftShowsListeningPrompt ? (
           <View style={styles.voiceDraftListeningPrompt}>
-            <VoiceMicWaveCaret color={colors.statusReady} testID="session.voiceMicCaret" />
+            <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
             <Text style={styles.voiceDraftListeningText}>{composerLayout.input.placeholder}</Text>
           </View>
         ) : (
@@ -1876,7 +1925,7 @@ export default function SessionScreen() {
                 },
               ]}
             >
-              <VoiceMicWaveCaret color={colors.statusReady} testID="session.voiceMicCaret" />
+              <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
             </View>
           </View>
         )}
@@ -1954,18 +2003,19 @@ export default function SessionScreen() {
     applyComposerDraft(value, queueEditingRef.current ? { persist: false } : undefined);
   }, [applyComposerDraft]);
 
-  const moveComposerCaretToEnd = useCallback(() => {
-    composerInputRef.current?.setSelectionToEnd();
-  }, []);
-
+  // 听写期间只滚动覆盖层跟随最新文字,**不碰隐藏编辑器的 caret**(2026-07-28):
+  // 旧实现每段转写都把选区挪到末尾,而富文本编辑器的选区操作底层是 WebView
+  // 程序化 focus,配合 keyboardDisplayRequiresUserAction={false} 会在点语音的
+  // 同时弹出软键盘。#551 之前这个 focus 表现为「听写刚开始就被掐断」(focus 即
+  // 停听写),#551 修掉掐断后它幸存为弹键盘。听写中输入框本就隐藏(覆盖层渲染
+  // 草稿),caret 无意义;落焦统一放在听写结束点(finishVoiceRecording)。
   useEffect(() => {
     if (!voiceIsListening) return undefined;
     const frame = requestAnimationFrame(() => {
-      moveComposerCaretToEnd();
       voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
     });
     return () => cancelAnimationFrame(frame);
-  }, [composerInputContentHeight, composerInputVisibleHeight, draft, moveComposerCaretToEnd, voiceIsListening]);
+  }, [composerInputContentHeight, composerInputVisibleHeight, draft, voiceIsListening]);
 
   useEffect(() => {
     if (voiceIsListening && draft.length > 0) return;
@@ -2900,6 +2950,21 @@ export default function SessionScreen() {
     return () => clearTimeout(timer);
   }, [currentSession, deviceId, load, loading, sessionId, status]);
 
+  // 熔断恢复沿补全量同步(review P1):connectionError 已按陈旧过滤,恢复后为
+  // null,下面按 error 驱动的自动重试不会再触发;而探测关熔断不会给本页任何
+  // 其它信号(rehydrate 只补消息/交互,不刷 session 元数据与 lastSyncedAt),
+  // cacheSeeded 会话的 composer 会永远停在 syncing。在 open→closed 翻转沿
+  // 直接补一次 load;换设备不算恢复沿(路由复用同一挂载实例时)。
+  const prevBreakerStateRef = useRef({ deviceId, unresponsive: isDeviceUnresponsive });
+  useEffect(() => {
+    const prev = prevBreakerStateRef.current;
+    prevBreakerStateRef.current = { deviceId, unresponsive: isDeviceUnresponsive };
+    if (prev.deviceId !== deviceId) return;
+    if (!prev.unresponsive || isDeviceUnresponsive) return;
+    if (!deviceId || !sessionId || status !== 'online') return;
+    void load();
+  }, [deviceId, isDeviceUnresponsive, load, sessionId, status]);
+
   useEffect(() => {
     if (!connectionError) {
       if (!loading) autoRetrySyncKeyRef.current = null;
@@ -3439,9 +3504,13 @@ export default function SessionScreen() {
       // Claim the connection prewarmed at pressIn (if any): its credential is
       // already resolved and its ASR WebSocket already connecting, so the
       // handshake overlaps the press gesture instead of following it.
+      // 词典快照拉取不进 await:它只影响润色提示的丰富度,拉不到(桌面离线、老版本
+      // 被控端)就用上次缓存,绝不为它推迟开麦。本次拉到的内容供下一次润色使用。
+      void refreshMobileVoiceDictionary(deviceId, () => maker.getVoiceDictionary());
       const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([
         takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null),
         getMobileVoiceInputHistoryForHost(deviceId),
+        hydrateMobileVoiceDictionary(deviceId),
       ]);
       claimedPrewarm = prewarmedVoice;
       const credential = prewarmedVoice?.credential
@@ -3628,6 +3697,19 @@ export default function SessionScreen() {
     return () => subscription.remove();
   }, [cancelVoiceForAppBackground]);
 
+  // 手势被系统/滚动终止时的撤销:比 app 后台版多一步——同时作废还开着的麦克风
+  // 权限请求。后台版必须让权限弹窗存活(见上方 AppState 注释:权限弹窗会短暂
+  // 触发 background),手势取消恰相反:首次使用时按下即录会先弹权限,此时
+  // startupInFlight/controller 都还是 false,只作废预热不够——权限批准归来后
+  // 启动会继续、麦克风开录,而那次按下早已被取消(review P1)。
+  const cancelVoiceForGestureTermination = useCallback(() => {
+    voicePermissionRequestSeqRef.current += 1;
+    voicePermissionRequestAbortRef.current?.abort();
+    voicePermissionRequestAbortRef.current = null;
+    voicePermissionRequestInFlightRef.current = false;
+    cancelVoiceForAppBackground();
+  }, [cancelVoiceForAppBackground]);
+
   useEffect(() => {
     return () => {
       const controller = voiceControllerSessionRef.current;
@@ -3678,8 +3760,11 @@ export default function SessionScreen() {
       const latestDraft = await controller.stop();
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
       setVoiceState('done');
+      // 听写结束落焦(既有行为,显式 focus 承担弹键盘语义):focus 的 web 侧
+      // 实现即 placeCaretAtEnd,caret 落在转写文字末尾。听写**进行中**禁止任何
+      // 程序化 focus(见 voiceIsListening 滚动效应的注释)。
       requestAnimationFrame(() => {
-        moveComposerCaretToEnd();
+        composerInputRef.current?.focus();
       });
       // chat-text-quote:纯引用(无转写文字、无附件)也要发出去——发送按钮在
       // quote-only 时可见,漏了引用会变成「点发送只停了录音、消息没发」。
@@ -3700,7 +3785,7 @@ export default function SessionScreen() {
     } finally {
       voiceStopInFlightRef.current = false;
     }
-  }, [attachments.length, moveComposerCaretToEnd, t, voiceState]);
+  }, [attachments.length, t, voiceState]);
 
   const openVoiceSettings = useCallback(() => {
     void Linking.openSettings().catch((err) => {
@@ -3724,11 +3809,13 @@ export default function SessionScreen() {
     }
   }, [finishVoiceRecording, startVoiceRecording, voiceState]);
 
-  // Speculative warm-up on touch-down of the mic button (audio session + ASR
-  // connect, see mobileVoicePrewarm): both cold-start costs overlap the press
-  // gesture instead of following the tap. Skipped when the tap will stop the
+  // Touch-down of the mic button = start recording (desktop pointerdown 同款,
+  // 2026-07-27 定案):按下瞬间起录,开头一个字不丢;松手 <320ms 视为「点击开始」
+  // (录音继续),≥320ms(onLongPress 成立)后松手走停止/拖发。预热(audio session
+  // + ASR connect)仍在最前,与启动重叠。Skipped when the tap will stop the
   // current recording rather than start a new one.
   const handleVoiceButtonPressIn = useCallback(() => {
+    voiceStartedOnPressInRef.current = false;
     if (voiceIsProcessing) return;
     if (voiceRecordingActiveRef.current || voiceState === 'listening') return;
     if (!deviceId || !isMobileRealtimeAudioAvailable()) return;
@@ -3741,7 +3828,19 @@ export default function SessionScreen() {
       refreshAccessToken: () => auth.refreshAccessToken(),
       apiFetch: auth.apiFetch,
     });
-  }, [deviceId, voiceIsProcessing, voiceState]);
+    // 启动已在途/停止在途时不重复发起,也不把这次按下标成「已起录」——
+    // 否则松手的 onPress 会被吞掉,用户失去 toggle 能力。
+    if (voiceStartupInFlightRef.current || voiceStopInFlightRef.current) return;
+    voiceStartedOnPressInRef.current = true;
+    const pendingSeq = ++voiceStartPendingSeqRef.current;
+    setVoiceStartPending(true);
+    void startVoiceRecording()
+      .catch(() => undefined)
+      .finally(() => {
+        // 只收自己世代的 pending:切会话后旧启动的收尾不能塌掉新录音的胶囊。
+        if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);
+      });
+  }, [deviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
   const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
     <RouteActionButton
@@ -3757,6 +3856,8 @@ export default function SessionScreen() {
         voiceLongPressActiveRef.current = true;
         voiceSuppressNextPressRef.current = true;
         measureSendButtonTarget();
+        // 录音已在 pressIn 起了;这里只兜 pressIn 守卫路径没起成的边缘
+        // (startVoiceRecording 自带重入守卫,重复调用无害)。
         if (!voiceRecordingActiveRef.current) void startVoiceRecording();
       }}
       onPress={() => {
@@ -3764,10 +3865,19 @@ export default function SessionScreen() {
           voiceSuppressNextPressRef.current = false;
           return;
         }
+        if (voiceStartedOnPressInRef.current) {
+          // 本次按下已在 pressIn 起录:这次松手属于同一手势,不再当作
+          // 「再点一下停止」;下一次完整点击才会 toggle 停止。
+          voiceStartedOnPressInRef.current = false;
+          return;
+        }
         toggleVoiceRecording();
       }}
       onPressOut={(event) => {
         if (!voiceLongPressActiveRef.current) return;
+        // 长按路径在此收尾,本次按下的生命周期结束;标记同步清掉,
+        // 手势取消(onTouchCancel)不再重复处理。
+        voiceStartedOnPressInRef.current = false;
         const shouldSend = updateVoiceReleaseToSendTarget(event);
         voiceLongPressActiveRef.current = false;
         voiceSuppressNextPressRef.current = true;
@@ -3779,19 +3889,30 @@ export default function SessionScreen() {
         void finishVoiceRecording({ sendAfterTranscribe: shouldSend });
       }}
       onResponderMove={updateVoiceReleaseToSendTarget}
+      onTouchCancel={() => {
+        // 手势被系统/滚动打断(responder termination):撤销这次按下误触发的
+        // 录音——用户本意是滚动列表,不能留下一个还在采集的麦克风(review P1)。
+        // 正常松手(含拖出按钮后松开)不走这里,对齐桌面「pointercancel 才撤销」。
+        if (!voiceStartedOnPressInRef.current) return;
+        voiceStartedOnPressInRef.current = false;
+        cancelVoiceForGestureTermination();
+      }}
       style={[
         styles.composerInlineToolButton,
         buttonStyle,
-        composerLayout.voice.active && styles.composerToolButtonPrimary,
+        // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening——
+        // 否则按下瞬间胶囊已展开、底色却要等 ASR 连上才变,闪一次半成品态。
+        voiceRecordingTimer.label !== null && styles.composerToolButtonPrimary,
+        voiceRecordingTimer.label !== null && { width: voiceRecordingTimer.pillWidth },
       ]}
       testID="session.voiceButton"
     >
       {voiceIsProcessing ? (
         <ActivityIndicator color={colors.textSecondary} size="small" />
-      ) : voiceIsListening ? (
-        // 录音停止:红色描边方块(对齐桌面 activeRecording 的 --settings-badge-error),
-        // 与「停止任务」的中性色实心方块区分开。
-        <Square color={colors.statusRecording} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      ) : voiceRecordingTimer.label !== null ? (
+        // 录音中:胶囊展开为脉冲红点 + 计时(对齐桌面 activeRecording 形态),
+        // 点胶囊任意位置停止录音;右缘锚定不动,只向左生长。
+        <VoiceRecordingPillContent label={voiceRecordingTimer.label} testID="session.voiceRecordingPill" />
       ) : (
         <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
       )}
@@ -4751,63 +4872,46 @@ export default function SessionScreen() {
     />
   ) : null);
 
-  const renderComposerTrailingActions = () => (
+  // 停止任务按钮(实心中性方块)。两处使用:语音/发送左边的独立槽(inline)、
+  // 发送位顶替(sendSlotIsStop);同一颗按钮的两个宿主位置,样式与行为一致。
+  const renderComposerStopButton = () => (
+    <RouteActionButton
+      accessibilityLabel={t('session.screen.stopSession')}
+      accessibilityHint={composerLayout.stop.disabledReason ?? undefined}
+      disabled={composerLayout.stop.disabled}
+      hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+      onPress={stopSession}
+      pressedStyle={styles.sendButtonPressed}
+      style={[
+        styles.sendButton,
+        composerLayout.stop.disabled && styles.sendButtonInactive,
+      ]}
+      testID="session.stopButton"
+    >
+      {stopPending ? (
+        <ActivityIndicator color={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText} size="small" />
+      ) : (
+        <Square
+          color={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText}
+          // 停止钮实心 Square:10px 填充块语义(非阶梯图标),零描边即语义本身
+          // (designTokenDiscipline ALLOWLIST 登记豁免)。
+          size={10}
+          strokeWidth={0}
+          fill={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText}
+        />
+      )}
+    </RouteActionButton>
+  );
+
+  // 停止任务次槽:渲染在语音按钮**左边**(对齐桌面 2026-07-25 定案),不夹在
+  // 语音与发送之间——右对齐按钮组里语音永远是发送槽的左邻,录音胶囊只向左
+  // 生长,「原地再点一下」永远是停止录音,不会误停任务。
+  const renderComposerInlineStop = () => composerShowInlineStop ? renderComposerStopButton() : null;
+
+  const renderComposerSendSlot = () => (
     <>
-      {composerShowInlineStop ? (
-        <RouteActionButton
-          accessibilityLabel={t('session.screen.stopSession')}
-          accessibilityHint={composerLayout.stop.disabledReason ?? undefined}
-          disabled={composerLayout.stop.disabled}
-          hitSlop={COMPOSER_CONTROL_HIT_SLOP}
-          onPress={stopSession}
-          pressedStyle={styles.sendButtonPressed}
-          style={[
-            styles.sendButton,
-            composerLayout.stop.disabled && styles.sendButtonInactive,
-          ]}
-          testID="session.stopButton"
-        >
-          {stopPending ? (
-            <ActivityIndicator color={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText} size="small" />
-          ) : (
-            <Square
-              color={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText}
-              // 停止钮实心 Square:10px 填充块语义(非阶梯图标),零描边即语义本身
-              // (designTokenDiscipline ALLOWLIST 登记豁免)。
-              size={10}
-              strokeWidth={0}
-              fill={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText}
-            />
-          )}
-        </RouteActionButton>
-      ) : null}
       {composerSendSlotIsStop ? (
-        <RouteActionButton
-          accessibilityLabel={t('session.screen.stopSession')}
-          accessibilityHint={composerLayout.stop.disabledReason ?? undefined}
-          disabled={composerLayout.stop.disabled}
-          hitSlop={COMPOSER_CONTROL_HIT_SLOP}
-          onPress={stopSession}
-          pressedStyle={styles.sendButtonPressed}
-          style={[
-            styles.sendButton,
-            composerLayout.stop.disabled && styles.sendButtonInactive,
-          ]}
-          testID="session.stopButton"
-        >
-          {stopPending ? (
-            <ActivityIndicator color={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText} size="small" />
-          ) : (
-            <Square
-              color={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText}
-              // 停止钮实心 Square:10px 填充块语义(非阶梯图标),零描边即语义本身
-              // (designTokenDiscipline ALLOWLIST 登记豁免)。
-              size={10}
-              strokeWidth={0}
-              fill={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText}
-            />
-          )}
-        </RouteActionButton>
+        renderComposerStopButton()
       ) : composerShowSendButton ? (
         <RouteActionButton
           ref={sendButtonRef}
@@ -4835,6 +4939,19 @@ export default function SessionScreen() {
           )}
         </RouteActionButton>
       ) : null}
+    </>
+  );
+
+  // 简洁态(非卡片)输入行行尾的按钮组:[停止任务][语音占位][发送槽]。
+  // 语音按钮本体是 absolute 锚点浮标(右缘 52pt 档),占位 slot 在 flex 流里
+  // 为它留出与发送槽相邻的位置,停止任务被推到占位左边,不落进语音的命中带。
+  const renderComposerTrailingActions = () => (
+    <>
+      {renderComposerInlineStop()}
+      {composerShowInlineStop && composerVoicePlacement?.floating
+        ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
+        : null}
+      {renderComposerSendSlot()}
     </>
   );
 
@@ -6456,6 +6573,7 @@ export default function SessionScreen() {
             {showConnectionBanner ? (
               <ConnectionBanner
                 density="compact"
+                deviceUnresponsive={isDeviceUnresponsive}
                 error={connectionError}
                 issue={connectionIssue}
                 lastSyncedAt={lastSyncedAt}
@@ -7112,7 +7230,6 @@ export default function SessionScreen() {
                     compact={compactComposer && !composerCardActive}
                     editable={!composerLayout.input.disabled}
                     floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}
-                    floatingVoiceButtonStyle={composerFloatingVoiceButtonStyle}
                     cursorColor={colors.inputCaret}
                     inputFrameHeight={composerResize.frameHeight}
                     // 听写期间把输入区撑到 44pt 触控目标:命中层盖在 inputFrame 上,
@@ -7674,6 +7791,8 @@ interface RouteActionButtonProps {
   onPressIn?: PressableProps['onPressIn'];
   onPressOut?: PressableProps['onPressOut'];
   onResponderMove?: PressableProps['onResponderMove'];
+  /** responder 被系统/滚动终止时的回调(正常松手不触发);语音按钮用它撤销按下即录。 */
+  onTouchCancel?: PressableProps['onTouchCancel'];
   pressedStyle?: StyleProp<ViewStyle>;
   style?: StyleProp<ViewStyle>;
   testID?: string;
@@ -7695,6 +7814,7 @@ const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function Rout
   onPressIn,
   onPressOut,
   onResponderMove,
+  onTouchCancel,
   pressedStyle,
   style,
   testID,
@@ -7723,6 +7843,7 @@ const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function Rout
       onPressIn={interactionDisabled ? undefined : onPressIn}
       onPressOut={interactionDisabled ? undefined : onPressOut}
       onResponderMove={interactionDisabled ? undefined : onResponderMove}
+      onTouchCancel={interactionDisabled ? undefined : onTouchCancel}
       style={({ pressed }) => [
         style,
         pressed && resolvedPressedStyle,
@@ -8326,9 +8447,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     height: 34,
     width: 34,
-  },
-  composerFloatingVoiceButtonWithInlineStop: {
-    right: spacing.md + (MOBILE_COMPOSER_CONTROL_SIZE * 2) + (MOBILE_COMPOSER_TOOL_GAP * 2),
   },
   composerToolButtonActive: {
     backgroundColor: colors.surfaceChip,

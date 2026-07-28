@@ -123,6 +123,163 @@ describe('createBrowserMcpServer', () => {
     await h.cleanup();
   });
 
+  it('passes through a page resource and rejects unsafe resource URLs', async () => {
+    const h = await makeHarness();
+    await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'browser',
+        args: {
+          action: 'act',
+          targetId: 't1',
+          request: {
+            kind: 'saveResource',
+            url: 'https://cdn.example.test/archive.zip',
+          },
+        },
+      },
+    });
+    expect(h.calls).toEqual([
+      {
+        action: 'act',
+        targetId: 't1',
+        request: {
+          kind: 'saveResource',
+          url: 'https://cdn.example.test/archive.zip',
+        },
+      },
+    ]);
+
+    const blocked = await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'browser',
+        args: {
+          action: 'act',
+          targetId: 't1',
+          request: { kind: 'saveResource', url: 'file:///tmp/secret' },
+        },
+      },
+    });
+    expect(h.calls).toHaveLength(1);
+    const parsed = JSON.parse(
+      (blocked.content as Array<{ text: string }>)[0].text,
+    ) as { ok: boolean; message?: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.message).toMatch(/http\(s\)/);
+
+    const credentialed = await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'browser',
+        args: {
+          action: 'act',
+          targetId: 't1',
+          request: {
+            kind: 'saveResource',
+            url: 'https://user:secret@cdn.example.test/archive.zip',
+          },
+        },
+      },
+    });
+    expect(h.calls).toHaveLength(1);
+    const credentialedResult = JSON.parse(
+      (credentialed.content as Array<{ text: string }>)[0].text,
+    ) as { ok: boolean };
+    expect(credentialedResult.ok).toBe(false);
+    await h.cleanup();
+  });
+
+  it('re-evaluates resource download support when the backend changes', async () => {
+    let downloadsSupported = true;
+    const h = await makeHarness({
+      supportsResourceDownloads: () => downloadsSupported,
+    });
+    const request = {
+      name: 'browser',
+      args: {
+        action: 'act',
+        targetId: 't1',
+        request: {
+          kind: 'saveResource',
+          url: 'https://cdn.example.test/archive.zip',
+        },
+      },
+    };
+
+    await h.client.callTool({ name: 'call_tool', arguments: request });
+    expect(h.calls).toHaveLength(1);
+
+    downloadsSupported = false;
+    const blocked = await h.client.callTool({ name: 'call_tool', arguments: request });
+    expect(h.calls).toHaveLength(1);
+    expect(JSON.parse((blocked.content as Array<{ text: string }>)[0].text)).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+    });
+
+    downloadsSupported = true;
+    await h.client.callTool({ name: 'call_tool', arguments: request });
+    expect(h.calls).toHaveLength(2);
+    await h.cleanup();
+  });
+
+  it('rejects semantic queries when the active backend does not support them', async () => {
+    let semanticQueriesSupported = true;
+    const h = await makeHarness({
+      supportsSemanticQueries: () => semanticQueriesSupported,
+    });
+    const request = {
+      name: 'browser',
+      args: {
+        action: 'act',
+        targetId: 't1',
+        request: {
+          kind: 'click',
+          query: { role: 'button', name: 'Continue' },
+        },
+      },
+    };
+
+    await h.client.callTool({ name: 'call_tool', arguments: request });
+    expect(h.calls).toHaveLength(1);
+
+    semanticQueriesSupported = false;
+    const blocked = await h.client.callTool({ name: 'call_tool', arguments: request });
+    expect(h.calls).toHaveLength(1);
+    expect(JSON.parse((blocked.content as Array<{ text: string }>)[0].text)).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+    });
+    await h.cleanup();
+  });
+
+  it('rejects blank element query strings before calling the runtime', async () => {
+    const h = await makeHarness();
+    for (const field of ['css', 'role', 'name', 'text', 'label', 'placeholder', 'testId']) {
+      const blocked = await h.client.callTool({
+        name: 'call_tool',
+        arguments: {
+          name: 'browser',
+          args: {
+            action: 'act',
+            targetId: 't1',
+            request: {
+              kind: 'click',
+              query: { [field]: '   ' },
+            },
+          },
+        },
+      });
+      expect(JSON.parse((blocked.content as Array<{ text: string }>)[0].text)).toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+      });
+    }
+    expect(h.calls).toHaveLength(0);
+    await h.cleanup();
+  });
+
   it('compiles extract into an act:evaluate call', async () => {
     const h = await makeHarness();
     await h.client.callTool({

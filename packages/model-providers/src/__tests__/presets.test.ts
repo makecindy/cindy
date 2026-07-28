@@ -89,6 +89,49 @@ describe('sanitizePresets', () => {
       expect(p.runtimes['claude-code']?.modelsUrl).toBeUndefined();
     }
   });
+
+  it('authMethod / baseUrlEditable 只接受受支持的枚举与布尔值', () => {
+    const valid = {
+      ...VALID_PRESET,
+      id: 'local-proxy',
+      authMethod: 'none',
+      runtimes: {
+        codex: {
+          baseUrl: 'http://127.0.0.1:4000/v1',
+          baseUrlEditable: true,
+          models: [{ id: 'local', name: 'Local' }],
+        },
+      },
+    };
+    expect(sanitizePresets([valid])).toEqual([valid]);
+    expect(sanitizePresets([{ ...valid, id: 'bad-auth', authMethod: 'oauth' }])).toEqual([]);
+    expect(sanitizePresets([{
+      ...valid,
+      id: 'bad-editable',
+      runtimes: { codex: { ...valid.runtimes.codex, baseUrlEditable: 'yes' } },
+    }])).toEqual([]);
+  });
+
+  it('requestPath 合法时保留；跨主机、fragment 与 CRLF 形态剥字段但保留预设', () => {
+    const runtime = (requestPath: unknown) => ({
+      codex: {
+        baseUrl: 'https://x.example/v1',
+        models: [{ id: 'm', name: 'M' }],
+        requestPath,
+      },
+    });
+    const out = sanitizePresets([
+      { id: 'good-path', name: 'Good', runtimes: runtime('/custom/infer?tenant=1') },
+      { id: 'authority-path', name: 'Bad', runtimes: runtime('//evil.example/infer') },
+      { id: 'fragment-path', name: 'Bad', runtimes: runtime('/infer#secret') },
+      { id: 'newline-path', name: 'Bad', runtimes: runtime('/infer\r\nx: y') },
+    ]);
+    expect(out).toHaveLength(4);
+    expect(out[0]!.runtimes.codex?.requestPath).toBe('/custom/infer?tenant=1');
+    for (const preset of out.slice(1)) {
+      expect(preset.runtimes.codex?.requestPath).toBeUndefined();
+    }
+  });
 });
 
 describe('parseCatalog presets 容错', () => {
@@ -174,6 +217,24 @@ describe('regionHint 归一化与 locale 排序', () => {
     );
   });
 
+  it('智谱与 Z.AI Coding Plan 使用同一厂商分组并按 locale 排区域顺序', () => {
+    const presets = sanitizePresets([
+      mk('zai-coding-plan-global', 'global'),
+      mk('zhipu-coding-plan-cn', 'cn'),
+      mk('volcengine-coding-plan'),
+    ]);
+    expect(sortPresetsForLocale(presets, 'zh-CN').map((p) => p.id)).toEqual([
+      'volcengine-coding-plan',
+      'zhipu-coding-plan-cn',
+      'zai-coding-plan-global',
+    ]);
+    expect(sortPresetsForLocale(presets, 'en').map((p) => p.id)).toEqual([
+      'volcengine-coding-plan',
+      'zai-coding-plan-global',
+      'zhipu-coding-plan-cn',
+    ]);
+  });
+
   it('内置目录的双端点厂商 cn/global 各有一条', () => {
     const presets = BUNDLED_CATALOG.presets ?? [];
     for (const vendor of ['zhipu-glm', 'moonshot-kimi', 'minimax']) {
@@ -207,6 +268,20 @@ describe('parseCatalog oauth 描述符校验', () => {
 
   it('完整描述符通过', () => {
     expect(() => parseCatalog(catalogWithAuth({ method: 'oauth', oauth }))).not.toThrow();
+    expect(() =>
+      parseCatalog(
+        catalogWithAuth({
+          method: 'oauth',
+          oauth: {
+            flow: 'device-code',
+            deviceAuthorizationUrl: 'https://auth.acme.example/device',
+            tokenUrl: 'https://auth.acme.example/token',
+            clientId: 'device-client',
+            scopes: 'openid',
+          },
+        }),
+      ),
+    ).not.toThrow();
   });
 
   it('缺字段 / 非 https / 非法端口 → parse 失败（回退 bundled 的路径）', () => {
@@ -219,6 +294,20 @@ describe('parseCatalog oauth 描述符校验', () => {
     expect(() =>
       parseCatalog(catalogWithAuth({ method: 'oauth', oauth: { ...oauth, redirectPort: 99999 } })),
     ).toThrow(/redirectPort/);
+    expect(() =>
+      parseCatalog(
+        catalogWithAuth({
+          method: 'oauth',
+          oauth: {
+            flow: 'device-code',
+            deviceAuthorizationUrl: 'http://auth.acme.example/device',
+            tokenUrl: oauth.tokenUrl,
+            clientId: oauth.clientId,
+            scopes: oauth.scopes,
+          },
+        }),
+      ),
+    ).toThrow(/deviceAuthorizationUrl/);
   });
 
   it('扩展参数不能覆盖 OAuth 标准字段', () => {
@@ -255,10 +344,16 @@ describe('BUNDLED_CATALOG 首批预设自检', () => {
     expect(sanitizePresets(presets)).toHaveLength(presets.length);
   });
 
-  it('内置预设 baseUrl 均为 https', () => {
+  it('内置预设仅允许 https；明确无鉴权且可编辑的回环代理可使用 http', () => {
     for (const p of BUNDLED_CATALOG.presets ?? []) {
       for (const rt of Object.values(p.runtimes)) {
-        expect(rt.baseUrl.startsWith('https://')).toBe(true);
+        const url = new URL(rt.baseUrl);
+        const secureLocal =
+          p.authMethod === 'none'
+          && rt.baseUrlEditable === true
+          && url.protocol === 'http:'
+          && (url.hostname === '127.0.0.1' || url.hostname === 'localhost');
+        expect(url.protocol === 'https:' || secureLocal, `${p.id}: ${rt.baseUrl}`).toBe(true);
       }
     }
   });
@@ -287,5 +382,82 @@ describe('MiniMax OpenAI Responses 预设契约 (issue #345)', () => {
         { id: 'MiniMax-M2.5', name: 'MiniMax M2.5' },
       ],
     });
+  });
+});
+
+describe('官方渠道预设契约', () => {
+  const preset = (id: string) =>
+    BUNDLED_CATALOG.presets?.find((candidate) => candidate.id === id);
+
+  it('LiteLLM 是可编辑回环端点，并明确走无鉴权而非复用 CLI 订阅凭证', () => {
+    const liteLlm = preset('litellm');
+    expect(liteLlm?.authMethod).toBe('none');
+    expect(liteLlm?.runtimes.codex).toEqual(expect.objectContaining({
+      baseUrl: 'http://127.0.0.1:4000/v1',
+      baseUrlEditable: true,
+      models: [],
+    }));
+  });
+
+  it('LongCat 同时提供 Anthropic Messages 与官方 Codex Responses 端点', () => {
+    expect(preset('longcat')?.runtimes).toEqual({
+      'claude-code': {
+        baseUrl: 'https://api.longcat.chat/anthropic',
+        modelsUrl: 'https://api.longcat.chat/openai/v1/models',
+        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000 }],
+      },
+      codex: {
+        baseUrl: 'https://api.longcat.chat/openai/v1',
+        modelsUrl: 'https://api.longcat.chat/openai/v1/models',
+        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000 }],
+      },
+    });
+  });
+
+  it.each([
+    ['zhipu-coding-plan-cn', 'https://open.bigmodel.cn/api/coding/paas/v4'],
+    ['zai-coding-plan-global', 'https://api.z.ai/api/coding/paas/v4'],
+    ['volcengine-coding-plan', 'https://ark.cn-beijing.volces.com/api/coding/v3'],
+    ['tencentcloud-coding-plan', 'https://api.lkeap.cloud.tencent.com/coding/v3'],
+  ])('%s 使用专属 Coding Plan OpenAI Chat 端点', (id, baseUrl) => {
+    expect(preset(id)?.runtimes.codex).toEqual(expect.objectContaining({
+      baseUrl,
+      wireProtocol: 'openai-chat',
+    }));
+  });
+
+  it('小米按量与 Token Plan 凭证不会混用端点', () => {
+    expect(preset('xiaomi-mimo-api-cn')?.runtimes.codex?.baseUrl)
+      .toBe('https://api.xiaomimimo.com/v1');
+    expect(preset('xiaomi-mimo-token-plan-cn')?.runtimes.codex?.baseUrl)
+      .toBe('https://token-plan-cn.xiaomimimo.com/v1');
+  });
+
+  it('OpenCode Go 按官方逐模型协议拆成 Claude Messages 与 Codex Chat 两个 runtime', () => {
+    const go = preset('opencode-go');
+    expect(go?.runtimes['claude-code']?.models.map((model) => model.id)).toContain('minimax-m3');
+    expect(go?.runtimes.codex?.models.map((model) => model.id)).toContain('glm-5.2');
+    expect(go?.runtimes.codex?.wireProtocol).toBe('openai-chat');
+    expect(go?.runtimes['claude-code']?.modelsUrl)
+      .toBe('https://opencode.ai/zen/go/v1/models');
+  });
+
+  it('Vercel AI Gateway 使用 Messages 与 Responses 原生端点', () => {
+    const vercel = preset('vercel-ai-gateway');
+    expect(vercel?.runtimes['claude-code']?.baseUrl).toBe('https://ai-gateway.vercel.sh');
+    expect(vercel?.runtimes.codex?.baseUrl).toBe('https://ai-gateway.vercel.sh/v1');
+    expect(vercel?.runtimes.codex?.wireProtocol).toBeUndefined();
+  });
+
+  it('Google Gemini API 走公开 OpenAI Chat 兼容端点，不依赖 Gemini CLI 私有接口', () => {
+    const gemini = preset('google-gemini-api');
+    expect(gemini?.runtimes['claude-code']).toBeUndefined();
+    expect(gemini?.runtimes.codex).toEqual(expect.objectContaining({
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      wireProtocol: 'openai-chat',
+      modelsUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/models',
+    }));
+    expect(gemini?.runtimes.codex?.models.map((model) => model.id))
+      .toContain('gemini-3.6-flash');
   });
 });

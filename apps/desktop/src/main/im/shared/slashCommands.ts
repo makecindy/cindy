@@ -140,7 +140,7 @@ export function createSlashHandlers(
         // 保证 IM 列表与应用内逐模型一致。currentProviderId 优先取会话持久化的 providerId。
         const agentKind = row.agentKind;
         const currentProviderId = getSessionProvider(row.id) ?? row.providerId;
-        const providers = await getDesktopProviderService().listProviders();
+        const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
         const connected = connectedProvidersForAgent(providers, agentKind);
         const sections = buildProviderSections({
           providers: connected,

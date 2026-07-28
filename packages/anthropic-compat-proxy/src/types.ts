@@ -116,7 +116,20 @@ export interface ResponseObserverCtx {
   readonly url: string;
   readonly upstreamBase: string;
   readonly status: number;
+  /**
+   * 客户端(agent 子进程)发来的原始请求头,**未**经路由改写。
+   * 反解会话归属(thread-id 等 agent 自带 header)用这个。
+   */
   readonly requestHeaders: Readonly<Record<string, string>>;
+  /**
+   * 实际发往上游的请求头 —— 已应用 RoutingDecision 的 headerOverride 与 headerDelete。
+   *
+   * 凡是要判断「这次请求究竟用了哪把凭证」的观察器必须读它:供应商 OAuth 是路由期注入的,
+   * requestHeaders 里的 authorization 仍是子进程自带的那把,拿它做等值关联必然对不上。
+   *
+   * 省略时按 requestHeaders 理解(没有路由改写 = 发出去的就是收到的)。
+   */
+  readonly outboundHeaders?: Readonly<Record<string, string>>;
   readonly responseHeaders: Readonly<Record<string, string>>;
   readonly requestBody: Buffer;
 }

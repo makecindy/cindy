@@ -97,6 +97,9 @@
     "incomplete": "音声入力が完了しませんでした。もう一度お試しください。",
     "missingRefinerTargetProvider": "モバイル版の音声推敲には {{appName}} の音声セッションが必要です（refinerTargetProvider がありません）。",
     "emptyTranscript": "音声を検出しましたが、テキストを認識できませんでした。もう一度お試しください。",
+    "connectionInterrupted": "音声接続が中断されました。ネットワークを確認してからやり直してください。",
+    "recognitionStalled": "音声認識の結果が返ってこなくなりました。もう一度お試しください。",
+    "transcriptKept": "{{message}}（ここまで認識したテキストは保持しており、そのまま編集できます）",
     "micPermission": "マイクの権限が許可されていません。システム設定で {{appName}} にマイクの使用を許可してください。",
     "realtimeAudioUnavailable": "現在のビルドはリアルタイム音声入力に対応していません。ネイティブ録音モジュールを含むテストビルドをインストールしてください。"
   }

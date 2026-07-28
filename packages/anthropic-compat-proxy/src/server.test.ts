@@ -651,11 +651,11 @@ describe('anthropic-compat-proxy routingTransform', () => {
     proxy = await createAnthropicCompatProxy({
       upstream: `${custom.url}/base?tenant=acme`,
       transformRequest: [],
-      routingTransform: () => ({ pathOverride: '/infer?stream=1' }),
+      routingTransform: () => ({ pathOverride: '/infer?stream=1&next=%2fadmin' }),
     });
 
     await post(proxy.url, { model: 'custom-model' });
-    expect(custom.paths).toEqual(['/base/infer?tenant=acme&stream=1']);
+    expect(custom.paths).toEqual(['/base/infer?tenant=acme&stream=1&next=%2fadmin']);
   });
 
   it.each([
@@ -668,10 +668,16 @@ describe('anthropic-compat-proxy routingTransform', () => {
     '/infer\u007fmode',
     '/infer\u0085mode',
     '/café',
+    '/../admin',
+    '/.%2e/admin',
+    '/%2e%2e%2fadmin',
+    '/safe%5Cpart',
+    '/a<b',
     '/infer%2',
     '/%ZZ',
     '/模型',
     '/v1\\messages',
+    `/${'a'.repeat(2_048)}`,
   ])('rejects an unsafe path override before contacting the upstream: %j', async (pathOverride) => {
     const custom = await startFakeUpstream((_i, _b, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -1085,6 +1091,52 @@ describe('anthropic-compat-proxy routingTransform', () => {
     expect(observedStatus).toBe(400);
     expect(chunks.join('')).toBe(errBody);
     expect(observedEnd).toBe(true);
+  });
+
+  it('exposes the final routed headers to the observer, not the client-sent ones', async () => {
+    // 回归:供应商 OAuth 是路由期经 headerOverride 注入的。观察器若只拿得到 requestHeaders,
+    // 就只能看到 agent 子进程自带的那把 bearer —— 任何「这次请求用了哪把凭证」的判断
+    // (如 xAI 凭证失效收口的等值关联)都会永远对不上,整条链路的收口静默失效。
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(403, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ code: 'unauthenticated:bad-credentials' }));
+    });
+    upstreamClose = upstream.close;
+    let observedRequestAuth: string | undefined;
+    let observedOutboundAuth: string | undefined;
+    let observedOutboundBeta: string | undefined;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      routingTransform: () => ({
+        headerOverride: { authorization: 'Bearer routed-xai-token' },
+        headerDelete: ['anthropic-beta'],
+      }),
+      responseObserver: (ctx) => {
+        observedRequestAuth = ctx.requestHeaders.authorization;
+        observedOutboundAuth = ctx.outboundHeaders?.authorization;
+        observedOutboundBeta = ctx.outboundHeaders?.['anthropic-beta'];
+        return null;
+      },
+    });
+
+    const r = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'thread-id': 'thread-a',
+        authorization: 'Bearer client-subprocess-token',
+        'anthropic-beta': 'oauth-2025-04-20',
+      },
+      body: JSON.stringify({ model: 'gpt-5.5', input: [] }),
+    });
+
+    expect(r.status).toBe(403);
+    // 客户端原始头保持原样(反解 thread-id 等会话归属仍靠它)。
+    expect(observedRequestAuth).toBe('Bearer client-subprocess-token');
+    // 实际发往上游的是路由注入后的凭证,且 headerDelete 已生效。
+    expect(observedOutboundAuth).toBe('Bearer routed-xai-token');
+    expect(observedOutboundBeta).toBeUndefined();
   });
 });
 

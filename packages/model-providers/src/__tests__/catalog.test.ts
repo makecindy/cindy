@@ -479,3 +479,27 @@ describe('provider OAuth and upstream URL validation', () => {
     expect(() => parseCatalog(catalog)).toThrow(/upstream invalid/);
   });
 });
+
+describe('buildRegistry 的清单发现失败投影', () => {
+  const failure = {
+    kind: 'regionBlocked' as const,
+    at: '2026-07-27T00:00:00.000Z',
+    detail: 'HTTP 403: {"error":{"type":"unsupported_country_region_territory"}}',
+  };
+
+  it('剥掉 detail 再下发 —— 原始上游响应体不出 Main', () => {
+    const views = buildRegistry(BUNDLED_CATALOG, { anthropic: true }, { anthropic: failure });
+    const anthropic = views.find((p) => p.id === 'anthropic');
+    expect(anthropic?.modelDiscoveryFailure).toEqual({ kind: 'regionBlocked', at: failure.at });
+    expect(anthropic?.modelDiscoveryFailure).not.toHaveProperty('detail');
+    // 原对象不被就地改坏:host 侧还要拿 detail 写日志。
+    expect(failure.detail).toContain('unsupported_country_region_territory');
+  });
+
+  it('没有失败态的供应商不长出该字段;稀疏 map 缺键也不报错', () => {
+    const views = buildRegistry(BUNDLED_CATALOG, { anthropic: true }, { anthropic: null });
+    expect(views.find((p) => p.id === 'anthropic')?.modelDiscoveryFailure).toBeUndefined();
+    const bare = buildRegistry(BUNDLED_CATALOG, { anthropic: true });
+    expect(bare.find((p) => p.id === 'anthropic')?.modelDiscoveryFailure).toBeUndefined();
+  });
+});

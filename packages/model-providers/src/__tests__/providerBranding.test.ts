@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { BUNDLED_CATALOG } from '../catalog.js';
 import {
   hasProviderLogo,
+  isProviderLogoKind,
   PROVIDER_LOGO_PATHS,
   resolveProviderLogoKind,
 } from '../providerBranding.js';
@@ -29,8 +30,29 @@ describe('provider branding', () => {
     expect(PROVIDER_LOGO_PATHS.xai).not.toBe(PROVIDER_LOGO_PATHS.openrouter);
   });
 
+  it('only infers Vercel branding from the exact AI Gateway host', () => {
+    expect(resolveProviderLogoKind('renamed', {
+      codex: { upstream: 'https://ai-gateway.vercel.sh/v1' },
+    })).toBe('vercel');
+    expect(resolveProviderLogoKind('renamed', {
+      codex: { upstream: 'https://my-openrouter-proxy.vercel.sh/v1' },
+    })).toBeNull();
+    expect(resolveProviderLogoKind('renamed', {
+      codex: { upstream: 'https://tenant.ai-gateway.vercel.sh/v1' },
+    })).toBeNull();
+  });
+
+  it('guards runtime logo values before indexing shared paths', () => {
+    expect(isProviderLogoKind('vercel')).toBe(true);
+    expect(isProviderLogoKind('future-brand')).toBe(false);
+    expect(isProviderLogoKind(null)).toBe(false);
+  });
+
   it('keeps preset branding after a user-facing provider id changes', () => {
     for (const preset of BUNDLED_CATALOG.presets ?? []) {
+      // Self-hosted presets can be moved to any host; after the id is renamed there is
+      // intentionally no trustworthy hostname from which to infer the vendor mark.
+      if (Object.values(preset.runtimes).some((runtime) => runtime?.baseUrlEditable)) continue;
       const routing: Record<string, { upstream: string }> = {};
       for (const [agent, runtime] of Object.entries(preset.runtimes)) {
         if (runtime) routing[agent] = { upstream: runtime.baseUrl };

@@ -772,6 +772,23 @@ describe('plan change projection', () => {
     });
   });
 
+  it('accepts a Stripe Hosted Invoice redirect for an awaiting upgrade', () => {
+    expect(projectBillingPlanChange(planChange({
+      quotedCurrency: 'usd',
+      paymentAction: {
+        type: 'REDIRECT',
+        url: 'https://invoice.stripe.com/i/acct_fixture/test_fixture',
+        expiresAt: now,
+      },
+    }))).toMatchObject({
+      status: 'AWAITING_PAYMENT',
+      paymentAction: {
+        type: 'REDIRECT',
+        url: 'https://invoice.stripe.com/i/acct_fixture/test_fixture',
+      },
+    });
+  });
+
   it.each([
     ['unknown status', { status: 'FUTURE_STATUS' }],
     ['unknown change type', { changeType: 'SIDEGRADE' }],

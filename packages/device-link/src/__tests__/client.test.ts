@@ -598,6 +598,77 @@ describe('DeviceLinkClient', () => {
     client.stop();
   });
 
+  it('异步 WsFactory:resolve 时世代已变 → 关掉孤儿 socket 且不挂到 client 上', async () => {
+    const sockets: FakeWs[] = [];
+    let release!: (ws: WsLike) => void;
+    const client = new DeviceLinkClient({
+      getWsUrl: () => 'ws://test/api/device-link/ws',
+      getToken: async () => 'jwt-token',
+      getHello: () => ({
+        deviceName: 'Test Mac',
+        platform: 'darwin',
+        appVersion: '1.0.0',
+        remoteControlEnabled: true,
+        busy: false,
+      }),
+      // 首轮工厂悬挂(模拟解析代理 agent 的异步往返),由测试决定何时 resolve。
+      createWebSocket: () =>
+        new Promise<WsLike>((resolve) => {
+          release = resolve;
+        }),
+      timing: { reconnectBaseMs: 5, reconnectMaxMs: 40 },
+    });
+    client.start();
+    await tick();
+    // 工厂还没 resolve 时先 stop:世代作废
+    client.stop();
+    const orphan = new FakeWs();
+    sockets.push(orphan);
+    release(orphan);
+    await tick();
+    // 孤儿被关掉,且不会成为 client 的当前连接(stop 后状态恒为 stopped)
+    expect(orphan.closed).not.toBeNull();
+    expect(client.getStatus()).toBe('stopped');
+  });
+
+  it('异步 WsFactory:过期的 reject 被忽略,不改状态也不排重连', async () => {
+    const statuses: string[] = [];
+    let rejectFirst!: (err: Error) => void;
+    let factoryCalls = 0;
+    const client = new DeviceLinkClient({
+      getWsUrl: () => 'ws://test/api/device-link/ws',
+      getToken: async () => 'jwt-token',
+      getHello: () => ({
+        deviceName: 'Test Mac',
+        platform: 'darwin',
+        appVersion: '1.0.0',
+        remoteControlEnabled: true,
+        busy: false,
+      }),
+      createWebSocket: () => {
+        factoryCalls += 1;
+        if (factoryCalls === 1) {
+          return new Promise<WsLike>((_resolve, reject) => {
+            rejectFirst = reject;
+          });
+        }
+        return new FakeWs();
+      },
+      timing: { reconnectBaseMs: 5, reconnectMaxMs: 40 },
+    });
+    client.onStatusChange((s) => statuses.push(s));
+    client.start();
+    await tick();
+    // 第一轮工厂还悬着时 stop:该轮世代已作废
+    client.stop();
+    statuses.length = 0;
+    rejectFirst(new Error('proxy agent unavailable'));
+    await tick(20);
+    // 过期失败既不改状态,也不排重连(不会有第二个 socket / 新的 connecting)
+    expect(statuses).toEqual([]);
+    expect(factoryCalls).toBe(1);
+  });
+
   it('握手超时(open 后 hello-ack 一直不来)→ 强制断开走退避重连', async () => {
     const h = makeHarness({ timing: { handshakeTimeoutMs: 15, reconnectBaseMs: 5, reconnectMaxMs: 40 } });
     h.client.start();

@@ -13,7 +13,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ModelDescriptor } from '@/hooks/useAgentCapabilities';
-import { filterChatBridgedCodexProviders, selectVisibleModels } from '@/lib/providerModels';
+import {
+  filterChatBridgedCodexProviders,
+  isDeviceModelVisible,
+  selectVisibleModels,
+} from '@/lib/providerModels';
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
 
 /** 被控端 capabilities.availableModels 形态(renderer ModelDescriptor)。 */
@@ -27,6 +31,7 @@ function provider(id: string, agent: AgentKind, modelIds: string[]): ProviderVie
     id,
     name: id,
     agents: [agent],
+    routing: { [agent]: {} },
     models: {
       [agent]: modelIds.map((mid) => ({
         id: mid,
@@ -119,6 +124,27 @@ describe('selectVisibleModels — device-link「以被控端为准」', () => {
     });
     // 'shared' 只出现一次(cc 先见),顺序 = cc 全量 + codex 新增。
     expect(ids(out)).toEqual(['shared', 'cc-only', 'cx-only']);
+  });
+});
+
+describe('isDeviceModelVisible — 使用被控端可见性快照', () => {
+  const model = { id: 'gpt-5.5', defaultEnabled: true };
+
+  it('显式 override 优先于目录默认值', () => {
+    expect(
+      isDeviceModelVisible(
+        { 'codex:openai:gpt-5.5': false },
+        'codex',
+        'openai',
+        model,
+      ),
+    ).toBe(false);
+  });
+
+  it('现代被控端无 override 时跟随目录默认值，旧被控端缺快照时 fail-open', () => {
+    const defaultHidden = { id: 'preview-model', defaultEnabled: false };
+    expect(isDeviceModelVisible({}, 'codex', 'openai', defaultHidden)).toBe(false);
+    expect(isDeviceModelVisible(undefined, 'codex', 'openai', defaultHidden)).toBe(true);
   });
 });
 

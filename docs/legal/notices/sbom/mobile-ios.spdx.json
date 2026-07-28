@@ -3,7 +3,7 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-mobile-ios",
-  "documentNamespace": "https://cindy.app/spdx/mobile-ios/bcbee371f2714b4c4f18b156d42dd7bfd99ed8e2fd7e7a89d3dd3873c39324cf",
+  "documentNamespace": "https://cindy.app/spdx/mobile-ios/9cae3d29bee1df233432e6dd0978265ea2d61b380b2e50bf92a64c3516a1cccf",
   "creationInfo": {
     "created": "2026-07-26T02:38:39Z",
     "creators": [
@@ -19,6 +19,26 @@
       "filesAnalyzed": false,
       "licenseConcluded": "OFL-1.1",
       "licenseDeclared": "OFL-1.1",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "LiteLLM mascot SVG path (adapted)",
+      "SPDXID": "SPDXRef-Package-5cfa9bdbf62d839b",
+      "versionInfo": "adapted",
+      "downloadLocation": "https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "Lobe Icons SVG paths (vendored)",
+      "SPDXID": "SPDXRef-Package-82458194310410e0",
+      "versionInfo": "5.14.0",
+      "downloadLocation": "https://github.com/lobehub/lobe-icons/tree/v5.14.0",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
       "copyrightText": "NOASSERTION"
     },
     {
@@ -10254,6 +10274,16 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4aed76e603981340"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-5cfa9bdbf62d839b"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-82458194310410e0"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

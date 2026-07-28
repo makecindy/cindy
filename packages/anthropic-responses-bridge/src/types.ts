@@ -94,13 +94,25 @@ export type ResponsesContentPart =
   | { type: 'output_text'; text: string }
   | { type: 'input_image'; image_url: string };
 
-export interface ResponsesTool {
+export interface ResponsesFunctionTool {
   type: 'function';
   name: string;
   description?: string;
   strict?: boolean;
   parameters: Record<string, unknown>;
 }
+
+/**
+ * 上游自带的**服务端工具**声明(不是本地 function tool):模型在上游侧自行执行,
+ * 客户端既不收工具调用请求、也不回 tool_result。当前用于 xAI 的 `x_search`(原生
+ * 搜 X)/ `web_search`。形状按各上游 schema 透传,只约束必须有 `type`。
+ */
+export interface ResponsesServerTool {
+  type: string;
+  [k: string]: unknown;
+}
+
+export type ResponsesTool = ResponsesFunctionTool | ResponsesServerTool;
 
 export type ResponsesToolChoice = 'auto' | 'none' | 'required' | { type: 'function'; name: string };
 
@@ -186,6 +198,13 @@ export interface BridgeProviderConfig {
    * 对 reasoningEffort 报 400)bridge 将**完全不发** reasoning 字段。省略 = 全部支持。
    */
   supportsReasoning?: (model: string) => boolean;
+  /**
+   * 该(去前缀后的)model 恒定附加的上游**服务端工具**声明(如 xAI 的 `{ type: 'x_search' }`)。
+   * 返回值按 model 决定、**同一会话内必须恒定**——服务端工具同样进请求前缀,会话中途增删会
+   * 破坏 prompt 前缀稳定性(见 docs/dev-rules/maker-core-and-agent-behavior.md §3.1)。
+   * 省略 / 返回空数组 = 不附加。附加位置恒为 function tools 之后,顺序稳定。
+   */
+  serverSideTools?: (model: string) => ResponsesServerTool[];
   /**
    * Fast 模式(host 经 prefs.fast 闭包传入)映射到的 Responses `service_tier` 值。codex 后端为
    * 'priority'(models_cache 的 service_tiers 声明,UI 名 "Fast")。省略 = 该 provider 不支持

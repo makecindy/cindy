@@ -2,6 +2,7 @@ import { app } from 'electron';
 
 import * as authManager from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { ServerApiError, serverApiFetch } from '../serverApiClient.js';
 import { getAppCapabilities, requireAppCapability } from '../appCapabilities.js';
 
@@ -135,7 +136,7 @@ export class CindyVoiceRunContext {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), VOICE_REFINE_WARMUP_TIMEOUT_MS);
     try {
-      const response = await fetch(
+      const response = await outboundFetch(
         `${baseUrl}/api/voice/sessions/${encodeURIComponent(sessionId)}/refine-warmup`,
         {
           method: 'POST',

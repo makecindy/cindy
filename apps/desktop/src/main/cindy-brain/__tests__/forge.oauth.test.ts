@@ -22,6 +22,7 @@ describe('FORGE_GUIDE · oauth 凭证章节', () => {
       'clientConfigured',
       'authAccount',
       'AUTH_EXPIRED',
+      'SERVICE_UNAVAILABLE',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

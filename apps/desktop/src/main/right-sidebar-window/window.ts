@@ -22,7 +22,19 @@ import { installSelectionContextMenu } from '../selection-context-menu.js';
 
 const log = createLogger('right-sidebar-window');
 
-export function createRightSidebarWindow(): BrowserWindow {
+export interface CreateRightSidebarWindowOptions {
+  /**
+   * 建窗是不是用户当次手势要求的。缺省 true = 首帧就绪后 show()(拿焦点)。
+   * false(插件 preview / agent 自动化)走 showInactive():窗口照常出现在原位,
+   * 但不夺走用户当前前台应用的焦点。
+   */
+  userInitiated?: boolean;
+}
+
+export function createRightSidebarWindow(
+  options: CreateRightSidebarWindowOptions = {},
+): BrowserWindow {
+  const userInitiated = options.userInitiated !== false;
   const platformOptions =
     process.platform === 'darwin'
       ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 12, y: 16 } }
@@ -67,7 +79,9 @@ export function createRightSidebarWindow(): BrowserWindow {
   installExternalLinkGuards(win);
 
   win.once('ready-to-show', () => {
-    if (!win.isDestroyed()) win.show();
+    if (win.isDestroyed()) return;
+    if (userInitiated) win.show();
+    else win.showInactive();
   });
 
   const hash = '/sidebar-window';

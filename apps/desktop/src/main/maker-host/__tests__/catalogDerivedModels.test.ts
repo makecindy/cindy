@@ -102,6 +102,32 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(deriveAvailableModels(cat, 'codex').find((m) => m.id === 'gpt-5.5')?.contextWindow).toBe(272_000);
   });
 
+  it('跳过 routing.disabled runtime，且不占用同模型的 first-wins', () => {
+    const cat = injectedCatalog();
+    const openai = cat.providers.find((provider) => provider.id === 'openai')!;
+    const xd = cat.providers.find((provider) => provider.id === 'xd')!;
+    const openaiCodexRoute = openai.routing.codex;
+    if (!openaiCodexRoute) throw new Error('OpenAI Codex route fixture missing');
+    openai.routing.codex = {
+      ...openaiCodexRoute,
+      disabled: true,
+    };
+    openai.models.codex = [
+      model('disabled-only', { name: 'Disabled only' }),
+      model('gpt-5.5', { name: 'Disabled first', contextWindow: 111 }),
+    ];
+    xd.models.codex = [
+      model('gpt-5.5', { name: 'Enabled later', contextWindow: 222 }),
+    ];
+
+    const derived = deriveAvailableModels(cat, 'codex');
+    expect(derived.some((candidate) => candidate.id === 'disabled-only')).toBe(false);
+    expect(derived.find((candidate) => candidate.id === 'gpt-5.5')).toMatchObject({
+      displayName: 'Enabled later',
+      contextWindow: 222,
+    });
+  });
+
   it('runtime refresh replaces both agent model lists in place so existing sessions keep the live reference', () => {
     const claudeModels: ModelDescriptor[] = [{ id: 'stale-claude', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
     const codexModels: ModelDescriptor[] = [{ id: 'stale-codex', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];

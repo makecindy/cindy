@@ -262,16 +262,28 @@ function respondRoutingFailure(
 
 /** 路由层是最后的信任边界；任何调用方给出的路径覆盖都必须保持同源且不可注入 header。 */
 function isSafePathOverride(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const queryIndex = value.indexOf('?');
+  const pathname = queryIndex === -1 ? value : value.slice(0, queryIndex);
+  const hasEncodedPathSeparator = /%(?:2f|5c)/i.test(pathname);
+  const hasDotSegment = pathname
+    .split('/')
+    .some((segment) => {
+      const normalizedDots = segment.replace(/%2e/gi, '.');
+      return normalizedDots === '.' || normalizedDots === '..';
+    });
   return (
-    typeof value === 'string'
-    && value.length >= 1
+    value.length >= 1
     && value.length <= 2_048
     && value.startsWith('/')
     && !value.startsWith('//')
     && !value.includes('#')
     && !value.includes('\\')
     && !/[^\u0021-\u007e]/.test(value)
+    && /^\/[A-Za-z0-9\-._~%!$&()*+,;=:@/?]*$/.test(value)
     && !/%(?![0-9A-Fa-f]{2})/.test(value)
+    && !hasEncodedPathSeparator
+    && !hasDotSegment
   );
 }
 
@@ -813,6 +825,7 @@ function forward(
               upstreamBase: formatUpstreamBase(actualTarget),
               status,
               requestHeaders: headers,
+              outboundHeaders: actualHeaders,
               responseHeaders: flattenResponseHeaders(upstreamRes.headers),
               requestBody: body,
             }) ?? null;
@@ -862,6 +875,7 @@ function forward(
           upstreamBase: formatUpstreamBase(actualTarget),
           status,
           requestHeaders: headers,
+          outboundHeaders: actualHeaders,
           responseHeaders: flattenResponseHeaders(upstreamRes.headers),
           requestBody: body,
         }) ?? null;
