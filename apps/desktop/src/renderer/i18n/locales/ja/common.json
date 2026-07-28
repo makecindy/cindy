@@ -3908,6 +3908,7 @@
       "preparingAria": "新しいバージョンを準備中、お待ちください",
       "confirmTitle": "再起動して更新?",
       "confirmHint": "アプリが自動的に再起動します",
+      "confirmBusyHint": "実行中のタスクがあります。再起動すると中断されます",
       "confirmButton": "再起動",
       "cancel": "キャンセル",
       "confirmTooltip": "再起動して更新を適用",

@@ -3908,6 +3908,7 @@
       "preparingAria": "새 버전 준비 중입니다. 잠시만 기다려 주세요",
       "confirmTitle": "재시작하여 업데이트?",
       "confirmHint": "앱이 자동으로 재시작됩니다",
+      "confirmBusyHint": "아직 실행 중인 작업이 있습니다. 재시작하면 작업이 중단됩니다",
       "confirmButton": "재시작",
       "cancel": "취소",
       "confirmTooltip": "재시작하여 업데이트 적용",

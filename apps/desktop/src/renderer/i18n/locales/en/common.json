@@ -3909,6 +3909,7 @@
       "preparingAria": "Preparing newer version, please wait",
       "confirmTitle": "Restart to update?",
       "confirmHint": "The app will restart automatically",
+      "confirmBusyHint": "A task is still running. Restarting will interrupt it",
       "confirmButton": "Restart now",
       "cancel": "Cancel",
       "confirmTooltip": "Confirm restart to apply the update",

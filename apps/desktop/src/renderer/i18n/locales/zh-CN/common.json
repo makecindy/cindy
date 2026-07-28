@@ -3908,6 +3908,7 @@
       "preparingAria": "正在准备新版本，请稍候",
       "confirmTitle": "确认重启更新？",
       "confirmHint": "应用会自动重启",
+      "confirmBusyHint": "当前仍有任务在执行，重启会直接中断",
       "confirmButton": "确认重启",
       "cancel": "取消",
       "confirmTooltip": "确认重启并应用更新",
