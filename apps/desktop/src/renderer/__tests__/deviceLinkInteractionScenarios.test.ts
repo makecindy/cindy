@@ -733,6 +733,9 @@ describe('远程交互接线不变式', () => {
       // 各自不得再私搭一套 setPermissionMode 写入(否则远程/回滚语义会分叉)。
       expect(src).not.toContain('.setPermissionMode(sessionId,');
       expect(src).toContain("toast.error(t('newChat.chatInput.permissionSwitchFailed'))");
+      // 两个入口都必须先把当前档归一再比,否则「点界面上已选中的那项」会被判成
+      // 真实切档,白写一次 setPermissionMode 并连带 dismiss 掉手里的 pending。
+      expect(src).toContain('canonicalizePermissionMode(');
     }
   });
 

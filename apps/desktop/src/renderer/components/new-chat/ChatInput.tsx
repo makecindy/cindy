@@ -153,7 +153,7 @@ import { scanAtResources, filterAtResources, type AtResourceItem } from '@/lib/a
 import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
-import { getNextPermissionMode } from '@/lib/permissionModeCycle';
+import { canonicalizePermissionMode, getNextPermissionMode } from '@/lib/permissionModeCycle';
 import { applySessionPermissionModeChange } from '@/lib/sessionPermissionMode';
 import { matchesKeyboardEvent } from '../../../shared/appShortcuts';
 import { createLogger } from '@/lib/logger';
@@ -4623,7 +4623,14 @@ export function ChatInput({
         sessionId,
         // 与 composer 其它远程写入同源取值(prop 优先, 回退 store 索引)。
         deviceId: sessionId ? (deviceLinkDeviceId ?? getSessionDeviceId(sessionId)) : undefined,
-        currentMode: activePermissionModeRef.current,
+        // 归一后再比:持久化值可能是 legacy `default` 或另一 agent 的专有档,而
+        // PermissionSelector 显示的选中项走的是同一份 capabilities 归一。不归一的话
+        // 「点界面上已选中的那项」会被判成真实切档,绕过同档短路白写一次
+        // setPermissionMode(进而 dismissAllPending)。与权限卡片同一处理。
+        currentMode: canonicalizePermissionMode(
+          activePermissionModeRef.current,
+          permissionCycleOptionsRef.current,
+        ),
         nextMode: newMode,
         confirmFullAccess: () =>
           confirmDialog({

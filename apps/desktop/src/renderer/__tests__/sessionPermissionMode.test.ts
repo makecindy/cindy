@@ -246,6 +246,35 @@ describe('applySessionPermissionModeChange', () => {
     expect(localSetPermissionMode).not.toHaveBeenCalled();
   });
 
+  // 隧道那端也是 runtime-first:被控端 dispatch 先跑 IPC handler 再 await
+  // persistRemoteSetting,落库失败时 agent 已切档而 DB / 控制端镜像停在旧档。
+  // 控制端无法回滚,只能记账 —— 否则重选显示中的档会被同档短路吃掉,Full access
+  // 就此静默留在生效状态。
+  it('远程落库失败同样记为失配,重选同档能强制对账', async () => {
+    const REMOTE_DESYNC_SESSION = 'perm-mode-remote-desync';
+    remoteSetPermissionMode.mockRejectedValueOnce(new Error('host db down'));
+
+    const first = await applySessionPermissionModeChange({
+      sessionId: REMOTE_DESYNC_SESSION,
+      deviceId: 'device-1',
+      currentMode: 'ask',
+      nextMode: 'bypassPermissions',
+      confirmFullAccess: vi.fn(async () => true),
+    });
+    expect(first).toBe('failed');
+
+    // 重选界面上显示的 ask:必须真的再走一次隧道,而不是被短路成 'unchanged'。
+    const reconcile = await applySessionPermissionModeChange({
+      sessionId: REMOTE_DESYNC_SESSION,
+      deviceId: 'device-1',
+      currentMode: 'ask',
+      nextMode: 'ask',
+      confirmFullAccess: confirmNever,
+    });
+    expect(reconcile).toBe('ok');
+    expect(remoteSetPermissionMode).toHaveBeenLastCalledWith(REMOTE_DESYNC_SESSION, 'ask');
+  });
+
   // Full access 确认框可以一直开着,期间原请求可能已被别处(灵动岛 / 另一个控制端)
   // 解决、agent 又产生了新的 pending。照旧写入会让 dismissAllPending 放行用户没看过的
   // 那条新请求。

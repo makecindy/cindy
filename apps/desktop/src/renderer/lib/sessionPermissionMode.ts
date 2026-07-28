@@ -96,7 +96,17 @@ export async function applySessionPermissionModeChange({
       // 控制端纯镜像:运行时隧道 setPermissionMode,被控端持久化后广播回流更新分片。
       // 按 deviceId 直连隧道 —— makerApiFor(sessionId) 同样要回查 store 路由,
       // 重连窗口内会退化成本机 API,与上面 deviceId 注释同一个坑。
-      await makerApiForDevice(deviceId).setPermissionMode(sessionId, nextMode);
+      try {
+        await makerApiForDevice(deviceId).setPermissionMode(sessionId, nextMode);
+      } catch (remoteError) {
+        // 隧道那端同样是 runtime-first:被控端 dispatch 先跑 IPC handler 再 await
+        // persistRemoteSetting,所以落库失败时 agent 可能已经切档,而 DB 与控制端
+        // 镜像都停在旧档。控制端没有可靠回滚手段(再发一次隧道调用同样可能失败,
+        // 被控端此刻的真实状态也不可知),只能记账,让"重选显示中的那一档"绕过
+        // 同档短路去强制对账。
+        desyncedSessions.add(sessionId);
+        throw remoteError;
+      }
     } else {
       // runtime-first:运行时成功后才持久化，避免 UI/DB 先显示已切换而实际 agent 仍是旧档。
       await window.electronAPI.maker.setPermissionMode(sessionId, nextMode);
