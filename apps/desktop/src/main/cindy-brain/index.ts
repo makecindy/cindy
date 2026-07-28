@@ -1472,7 +1472,7 @@ export function getGhostAppearanceSlot(): GhostAppearanceSlot {
         const info = await ledger.getBlobInfo(hash);
         if (!info) throw new Error('图片资源不存在');
         const { absPath } = blobStore.resolveHashRef(hash, info.ext);
-        const source = await fs.readFile(absPath);
+        const source = await fs.promises.readFile(absPath);
         await validateStaticSkinImage(source);
       },
       removeWhiteLogoBackground: async (hash) => {

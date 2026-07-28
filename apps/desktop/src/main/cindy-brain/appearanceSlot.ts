@@ -185,11 +185,19 @@ export class GhostAppearanceSlot {
         brandLogo: hashFromMediaUrl(appearance.brand?.logo?.url),
       };
       try {
-        const preset = await this.deps.savePreset(appearance, mediaHashes, ghostId);
         await this.deps.save(appearance, mediaHashes, ghostId, {
           dim: true,
           surfaceOpacity: true,
         });
+        let preset: GhostAppearancePresetSummary | undefined;
+        try {
+          preset = await this.deps.savePreset(appearance, mediaHashes, ghostId);
+        } catch (error) {
+          this.deps.log?.warn('ghost appearance current preset save skipped', {
+            ghostId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         this.deps.broadcast(appearance);
         return { ok: true, appearance, preset };
       } catch (error) {
@@ -450,13 +458,20 @@ export class GhostAppearanceSlot {
       updatedAt: (this.deps.now ?? Date.now)(),
     };
     try {
-      if (appearance.name) {
-        await this.deps.savePreset(appearance, mediaHashes, ghostId);
-      }
       await this.deps.save(appearance, mediaHashes, ghostId, {
         dim: patching || request.dim !== undefined,
         surfaceOpacity: patching || request.surfaceOpacity !== undefined,
       });
+      if (appearance.name) {
+        try {
+          await this.deps.savePreset(appearance, mediaHashes, ghostId);
+        } catch (error) {
+          this.deps.log?.warn('ghost appearance preset save skipped', {
+            ghostId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
     } catch (error) {
       this.deps.log?.warn('ghost appearance save failed', {
         ghostId,

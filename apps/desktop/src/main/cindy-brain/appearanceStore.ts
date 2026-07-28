@@ -113,7 +113,9 @@ function normalizePresetName(name: string): string {
   return name.normalize('NFKC').trim().toLocaleLowerCase();
 }
 
-function hashesFromSnapshot(snapshot: GhostAppearanceSnapshot): AppearanceMediaHashes {
+function hashesFromSnapshot(
+  snapshot: Pick<GhostAppearanceSnapshot, 'background' | 'brand'>,
+): AppearanceMediaHashes {
   const hash = (url: string | undefined): string | undefined =>
     url?.match(IMAGE_HASH_RE)?.[0];
   return {
