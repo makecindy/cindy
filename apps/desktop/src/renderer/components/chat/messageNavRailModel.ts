@@ -24,6 +24,12 @@ export interface NavRailEntry {
    */
   preview: string;
   /**
+   * 纯附件且取不到任何文件名时(粘贴截图无 originalName),preview 为空、
+   * 这里记附件数,组件用 i18n 文案("附件 N 件")兜底渲染预览与 aria ——
+   * 纯附件提问是真实提问,必须有刻度(PR #830 review 回归修复)。
+   */
+  attachmentsOnly?: number;
+  /**
    * 该轮回答开头的摘要(已压平空白、截断)。agent 对话里大量提问是
    * "继续 / 不对,重来"这类不含识别信息的短指令,回答摘要才是用户认出
    * "这根刻度是哪一轮"的主载体 — 它是识别的必需品,不是装饰。
@@ -100,6 +106,13 @@ export const NAV_RAIL_TICK_PITCH_PX = 9;
 export const NAV_RAIL_TICK_MIN_PITCH_PX = 5;
 
 /**
+ * 刻度带可用高度低于这个值时导航条不出场(与横向留白门槛同级的纵向门槛)。
+ * 极矮视口 / 输入 overlay 占满高度时,连出场门槛条数的刻度都摆不下,
+ * 硬渲染会溢出压到输入区(PR #830 review)。取值 = 门槛条数 × 标准纵距。
+ */
+export const NAV_RAIL_MIN_AVAIL_HEIGHT_PX = NAV_RAIL_MIN_ENTRIES * NAV_RAIL_TICK_PITCH_PX;
+
+/**
  * 从已加载的 messages 派生导航条目(每条真实提问一根刻度)。
  *
  * 过滤规则与 PrevMessageJumpChip 的 userMessageIds 同源,再加一条:
@@ -124,11 +137,25 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       // 运行中插话(steer)不是新一轮问答:MessageStream 的轮次语义也不把
       // 它当边界,算成刻度会把进行中的回答错挂到插话名下(PR #830 review)。
       if (m.delivery === 'steer') continue;
-      const preview = promptPreviewLine(m.content);
-      // 无文本也无附件名 → 预览为空,刻度无法识别、aria 读出来是空尾巴,
-      // 不当成提问(PR #830 review)。
-      if (!preview) continue;
-      entries.push({ id: m.clientId, preview });
+      // 预览来源按序:正文(含 content 封装内的附件名)→ ChatMessage 顶层
+      // images/files 字段的名字(附件可存在 content 之外,PR #830 review)。
+      let preview = promptPreviewLine(m.content);
+      const attachmentNames = [
+        ...(m.images ?? []).map((image) =>
+          'originalName' in image ? image.originalName : undefined,
+        ),
+        ...(m.files ?? []).map((file) => file.name),
+      ].filter((name): name is string => Boolean(name));
+      if (!preview) preview = attachmentNames.join(' · ');
+      const attachmentCount = (m.images?.length ?? 0) + (m.files?.length ?? 0);
+      if (preview) {
+        entries.push({ id: m.clientId, preview });
+      } else if (attachmentCount > 0) {
+        // 有附件但一个名字都取不到(粘贴截图):仍是真实提问,保留刻度,
+        // 预览文案由组件按 attachmentsOnly 用 i18n 兜底。
+        entries.push({ id: m.clientId, preview: '', attachmentsOnly: attachmentCount });
+      }
+      // 无文本、无附件 → 无法识别的空刻度,不当成提问(PR #830 review)。
       continue;
     }
     if (m.role !== 'assistant') continue;

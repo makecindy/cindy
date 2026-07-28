@@ -4433,6 +4433,8 @@
     "messageNavRail": {
       "aria": "Prompt navigation",
       "jumpAria": "Jump to prompt {{index}}: {{preview}}",
+      "attachmentOnly_one": "{{count}} attachment",
+      "attachmentOnly_other": "{{count}} attachments",
       "hiddenEarlier_one": "{{count}} earlier prompt not shown",
       "hiddenEarlier_other": "{{count}} earlier prompts not shown"
     },

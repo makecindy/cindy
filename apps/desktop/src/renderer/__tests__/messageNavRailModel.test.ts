@@ -61,13 +61,42 @@ describe('deriveNavRailEntries', () => {
     expect(entries[0].answerExcerpt).toBe('继续回答第一问');
   });
 
-  it('无文本也无附件名的 user 消息(预览为空)不产生刻度', () => {
+  it('无文本也无附件的 user 消息(预览为空)不产生刻度', () => {
     const messages = [
       msg({ clientId: 'u1', role: 'user', content: '' }),
       msg({ clientId: 'u2', role: 'user', content: '   \n  ' }),
       msg({ clientId: 'u3', role: 'user', content: '真提问' }),
     ];
     expect(deriveNavRailEntries(messages).map((e) => e.id)).toEqual(['u3']);
+  });
+
+  it('纯附件提问:预览用顶层 images/files 字段的名字,不丢刻度', () => {
+    const messages = [
+      msg({
+        clientId: 'u1',
+        role: 'user',
+        content: '',
+        files: [{ name: '需求文档.pdf', path: '/tmp/需求文档.pdf' }],
+      }),
+    ];
+    const entries = deriveNavRailEntries(messages);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].preview).toBe('需求文档.pdf');
+  });
+
+  it('纯附件且取不到文件名(粘贴截图):保留刻度,记 attachmentsOnly 数量', () => {
+    const messages = [
+      msg({
+        clientId: 'u1',
+        role: 'user',
+        content: '',
+        images: [{ base64: 'xxxx', mimeType: 'image/png' }],
+      }),
+    ];
+    const entries = deriveNavRailEntries(messages);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].preview).toBe('');
+    expect(entries[0].attachmentsOnly).toBe(1);
   });
 
   it('回答摘要取该轮第一条非空 assistant 正文,跳过 thinking / tool 行', () => {

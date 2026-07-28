@@ -3281,9 +3281,10 @@ export function MessageStream({
   // 以及 chip-jump 的 expandWindow/onLoadMore 抑制协议。
   const navRailEntries = useMemo(() => deriveNavRailEntries(messages), [messages]);
 
-  // 入口去重:导航条具备出场资格时抑制"跳到上一条提问"chip —— 同一个
-  // 导航任务只保留一套入口。导航条隐藏的场景(短对话 / 窄窗)chip 回归。
-  const [navRailEligible, setNavRailEligible] = useState(false);
+  // 入口去重:导航条**完整覆盖导航**(出场且刻度未截断)时抑制"跳到上一条
+  // 提问"chip —— 同一个导航任务只保留一套入口。导航条缺席(短对话 / 窄窗 /
+  // 矮视口)或截断了更早刻度的超长会话里 chip 回归兜底(PR #830 review)。
+  const [navRailCoversNav, setNavRailCoversNav] = useState(false);
 
   // ── nav-rail 空闲补页 ──
   // 老会话打开时只加载尾部切片,导航条(整段对话的地图)可能凑不齐条目。
@@ -3710,7 +3711,7 @@ export function MessageStream({
               contentMaxWidth={contentWidth ?? 880}
               bottomOffset={resolvedBottomPadding}
               onJump={handleNavRailJump}
-              onEligibleChange={setNavRailEligible}
+              onNavCoverageChange={setNavRailCoversNav}
               resetKey={sessionId}
             />
 
@@ -3722,8 +3723,8 @@ export function MessageStream({
           近底时 hook 自然返回 null → 不挂入 → 不占行。 */}
             {chipSlot &&
               prevUserMsgVisible &&
-              // 导航条具备出场资格时不再挂本 chip(入口去重,见 navRailEligible)。
-              !navRailEligible &&
+              // 导航条完整覆盖导航时不再挂本 chip(入口去重,见 navRailCoversNav)。
+              !navRailCoversNav &&
               createPortal(
                 <PrevMessageJumpChip preview={prevPreview} onClick={handleJumpToPrevUserMsg} />,
                 chipSlot,

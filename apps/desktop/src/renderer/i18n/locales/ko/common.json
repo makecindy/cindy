@@ -4432,6 +4432,8 @@
     "messageNavRail": {
       "aria": "질문 탐색",
       "jumpAria": "{{index}}번째 질문으로 이동: {{preview}}",
+      "attachmentOnly_one": "첨부파일 {{count}}개",
+      "attachmentOnly_other": "첨부파일 {{count}}개",
       "hiddenEarlier_one": "이전 질문 {{count}}개",
       "hiddenEarlier_other": "이전 질문 {{count}}개"
     },

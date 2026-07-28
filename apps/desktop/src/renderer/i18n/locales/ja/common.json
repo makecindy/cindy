@@ -4432,6 +4432,8 @@
     "messageNavRail": {
       "aria": "質問ナビゲーション",
       "jumpAria": "{{index}} 番目の質問へ移動：{{preview}}",
+      "attachmentOnly_one": "添付ファイル {{count}} 件",
+      "attachmentOnly_other": "添付ファイル {{count}} 件",
       "hiddenEarlier_one": "これより前に {{count}} 件の質問",
       "hiddenEarlier_other": "これより前に {{count}} 件の質問"
     },

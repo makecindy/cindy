@@ -15,8 +15,10 @@
  *     定稿:完全淡出会让人忘记它的存在,减淡保留"地图在这"的心理暗示,
  *     阅读态噪音仍然很低)。
  *
- * 入口去重:导航条具备出场资格(eligible)时,父级抑制右上角"跳到上一条
- * 提问"chip —— 同一个导航任务只保留一套入口(经 onEligibleChange 上报)。
+ * 入口去重:导航条**完整覆盖导航**(出场且未截断)时,父级抑制右上角
+ * "跳到上一条提问"chip —— 同一个导航任务只保留一套入口(经
+ * onNavCoverageChange 上报)。刻度被截断的超长会话里 chip 回归,截断区
+ * 仍有导航可用(PR #830 review)。
  *
  * 几何职责分工:
  *   - 本组件只做 DOM 测量(scroll + ResizeObserver,rAF 节流,与
@@ -39,6 +41,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { useNavigationKeyListener } from './useNavigationKeyListener';
 import {
   NAV_RAIL_ACTIVE_FUDGE_PX,
+  NAV_RAIL_MIN_AVAIL_HEIGHT_PX,
   NAV_RAIL_MIN_ENTRIES,
   NAV_RAIL_RANGE_BOTTOM_EDGE_PX,
   hasNavRailRoom,
@@ -75,11 +78,12 @@ export interface MessageNavRailProps {
   /** 点击刻度 → 跳到该提问。目标可能在渲染窗口外,由父级扩窗后滚动。 */
   onJump: (clientId: string) => void;
   /**
-   * 出场资格变化上报(提问数达标 && 有横向空间)。父级用它做入口去重:
-   * eligible 时抑制"跳到上一条提问"chip。与淡入淡出无关 —— chip 只在
-   * 滚动时出现,而滚动一定会唤醒导航条,按资格抑制即可,信号稳定不闪烁。
+   * "导航条完整覆盖导航"变化上报(出场资格 && 刻度未截断)。父级用它做
+   * 入口去重:覆盖时抑制"跳到上一条提问"chip;导航条缺席或截断了更早
+   * 刻度时 chip 回归。与淡入淡出无关 —— chip 只在滚动时出现,而滚动一定
+   * 会唤醒导航条,按覆盖态抑制即可,信号稳定不闪烁。
    */
-  onEligibleChange?: (eligible: boolean) => void;
+  onNavCoverageChange?: (covers: boolean) => void;
   /** 切会话重置几何与 pending 态(与 usePrevUserMessageInView 同款)。 */
   resetKey?: string;
 }
@@ -90,7 +94,7 @@ export function MessageNavRail({
   contentMaxWidth,
   bottomOffset,
   onJump,
-  onEligibleChange,
+  onNavCoverageChange,
   resetKey,
 }: MessageNavRailProps) {
   const { t } = useTranslation();
@@ -257,16 +261,24 @@ export function MessageNavRail({
     }
   }, [pendingId, activeId]);
 
-  // 出场资格上报(入口去重用);卸载时收回。
-  const eligible = entries.length >= NAV_RAIL_MIN_ENTRIES && hasRoom;
+  // 出场资格:条数、横向留白、纵向空间三道门槛。纵向门槛防极矮视口 /
+  // 输入 overlay 占满高度时刻度溢出压到输入区(PR #830 review)。
+  const eligible =
+    entries.length >= NAV_RAIL_MIN_ENTRIES &&
+    hasRoom &&
+    availHeight >= NAV_RAIL_MIN_AVAIL_HEIGHT_PX;
+  const plan = planNavRailTicks(entries.length, availHeight);
+  // 覆盖态上报(入口去重用);卸载时收回。截断时不算覆盖 —— 被截掉的
+  // 早期区域没有刻度,chip 必须回归兜底。
+  const railCoversNav = eligible && plan.hiddenCount === 0;
   useEffect(() => {
-    onEligibleChange?.(eligible);
-  }, [eligible, onEligibleChange]);
+    onNavCoverageChange?.(railCoversNav);
+  }, [railCoversNav, onNavCoverageChange]);
   useEffect(() => {
     return () => {
-      onEligibleChange?.(false);
+      onNavCoverageChange?.(false);
     };
-  }, [onEligibleChange]);
+  }, [onNavCoverageChange]);
 
   useEffect(() => {
     return () => {
@@ -304,7 +316,6 @@ export function MessageNavRail({
 
   if (!eligible) return null;
 
-  const plan = planNavRailTicks(entries.length, availHeight);
   const shown = entries.slice(plan.startIndex);
   const displayActiveId = pendingId ?? activeId;
   // 可见范围 id → 下标(渲染时按 id 回查,测量与渲染间 entries 变更也不会
@@ -358,7 +369,12 @@ export function MessageNavRail({
         </Tip>
       ) : null}
       {shown.map((entry, i) => {
-        const preview = entry.preview;
+        // 纯附件且无文件名的提问用 i18n 计数文案兜底(模型层不碰 i18n)。
+        const preview =
+          entry.preview ||
+          (entry.attachmentsOnly
+            ? t('chat.messageNavRail.attachmentOnly', { count: entry.attachmentsOnly })
+            : '');
         const isActive = entry.id === displayActiveId;
         const fullIdx = plan.startIndex + i;
         // 该轮次的内容当前正显示在视口里 → 提亮(Codex 同款"屏上内容高亮");
