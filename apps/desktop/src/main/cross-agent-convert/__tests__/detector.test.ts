@@ -156,6 +156,18 @@ describe('detect — agents', () => {
 
     expect(r.items.find((i) => i.kind === 'agents')).toBeUndefined();
   });
+
+  it('to-codex: name 不是字符串的 Claude agent 不应被误报', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude', 'agents'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, '.claude', 'agents', 'numeric-name.md'),
+      '---\nname: 1\n---\nbody',
+    );
+
+    const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
+
+    expect(r.items.find((i) => i.kind === 'agents')).toBeUndefined();
+  });
 });
 
 describe('detect — mcp', () => {
