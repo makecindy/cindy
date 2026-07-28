@@ -29,6 +29,7 @@ import remarkPreserveLocalImagePaths, {
 } from './remarkPreserveLocalImagePaths';
 import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
+import { normalizeStrongDelimiterBoundaries } from './normalizeStrongDelimiterBoundaries';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
 import type { Components, UrlTransform } from 'react-markdown';
 import type { PluggableList } from 'unified';
@@ -1517,7 +1518,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   // 号),会插行的 display 保持源码展示。无定界符时函数原样返回原引用,
   // useMemo + react-markdown 缓存不失效。
   const renderedContent = useMemo(
-    () => normalizeMathDelimiters(throttledContent, { preserveLineCount: emitSourceLines }),
+    () =>
+      normalizeStrongDelimiterBoundaries(
+        normalizeMathDelimiters(throttledContent, { preserveLineCount: emitSourceLines }),
+      ),
     [throttledContent, emitSourceLines],
   );
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
