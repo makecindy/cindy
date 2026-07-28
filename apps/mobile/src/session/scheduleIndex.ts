@@ -83,24 +83,34 @@ interface ScheduleIndexThrottleEntry {
 const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>();
 
 /**
+ * 错误标记匹配:优先结构化 code,兜底 message 文本(review:mobile 各处的
+ * 远端错误存在 message-only 形态,如 devices 页按 '[DEVICE_OFFLINE]' 文本
+ * 回落判定;只认 code 会让这类失败漏掉分类)。
+ */
+function hasRemoteErrorMarker(error: unknown, marker: string): boolean {
+  if ((error as { code?: unknown } | null | undefined)?.code === marker) return true;
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return message.includes(marker);
+}
+
+/**
  * 本机链路未通(NOT_CONNECTED / LINK_NOT_OPEN):重连即恢复,重连钩子全局失效。
  * 不含 INVOKE_TIMEOUT——「设备不回包」不是断线,不能被重连钩子清掉;也不含
  * DEVICE_OFFLINE——那是逐设备状态,归 isDeviceOfflineError(review:全局失效
  * 会让 B 设备的任何 rehydrate 反复清掉仍离线的 A 设备的负缓存,止损失效)。
  */
 function isLocalLinkDownError(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null | undefined)?.code;
-  return code === 'NOT_CONNECTED' || code === 'LINK_NOT_OPEN';
+  return hasRemoteErrorMarker(error, 'NOT_CONNECTED') || hasRemoteErrorMarker(error, 'LINK_NOT_OPEN');
 }
 
 /**
- * 目标设备离线(DEVICE_OFFLINE):负缓存只在**该设备**presence 恢复时失效
+ * 目标设备离线(DEVICE_OFFLINE):负缓存只在**该设备**presence 可用时失效
  * (invalidateOfflineScheduleIndexFailureFor,key 即 deviceId)。不认它的话,
  * presence 恢复落在 30s 负缓存窗内,reseed 会吃旧 rejected promise,详情页被
  * 换成空索引且无人补拉(review P1)。
  */
 function isDeviceOfflineError(error: unknown): boolean {
-  return (error as { code?: unknown } | null | undefined)?.code === 'DEVICE_OFFLINE';
+  return hasRemoteErrorMarker(error, 'DEVICE_OFFLINE');
 }
 
 export function loadSessionScheduleIndexThrottled(

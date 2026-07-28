@@ -391,6 +391,19 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
+  it('DEVICE_OFFLINE 的 message-only 形态同样按离线分类(review:不只认 code)', async () => {
+    resetScheduleIndexThrottleForTesting();
+    const load = vi.fn()
+      .mockRejectedValueOnce(new Error('[DEVICE_OFFLINE] target host not online'))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const now = () => 1000;
+    await expect(loadSessionScheduleIndexThrottled('dev-m', load, { now })).rejects.toThrow('DEVICE_OFFLINE');
+    await Promise.resolve();
+    invalidateOfflineScheduleIndexFailureFor('dev-m');
+    await expect(loadSessionScheduleIndexThrottled('dev-m', load, { now })).resolves.toBeInstanceOf(Map);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
   it('末项竞态的 INVOKE_TIMEOUT 失败:熔断 open 时同样按未响应记负缓存,恢复即旁路', async () => {
     // 末项竞态抛的是原始 INVOKE_TIMEOUT(非快速失败码);节流层补查 store
     // (key 即 deviceId)才能让这类失败同样享受「恢复即旁路」。

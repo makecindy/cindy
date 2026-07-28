@@ -447,12 +447,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         return;
       }
       clearPresenceWipeTimer(wipeTimers, snap.deviceId);
-      if (presence.recovered) {
-        // 该设备 presence 恢复:它的 DEVICE_OFFLINE 负缓存就地失效(逐设备,
-        // 不走全局重连钩子,review P1),随后的 rehydrate/reseed 拉到新数据。
-        invalidateOfflineScheduleIndexFailureFor(snap.deviceId);
-        void rehydrateWithClient(client);
-      }
+      // 每个「可用」快照都清该设备的 DEVICE_OFFLINE 负缓存(review P1 ×2):
+      // 主机在手机连上 relay 之前就离线时,presence 只在变化时广播,首个在线
+      // 快照 recovered=false——只挂 recovered 会漏掉这次恢复,徽标停留到无关
+      // 触发。逐设备且幂等(map 单点查删),不影响其它设备的风暴止损。
+      invalidateOfflineScheduleIndexFailureFor(snap.deviceId);
+      if (presence.recovered) void rehydrateWithClient(client);
     });
     const offFrame = client.onFrame((env) => routeFrame(env, {
       onAccessRevoked: (deviceId) => remoteSubscribedTopicsRef.current.delete(deviceId),
