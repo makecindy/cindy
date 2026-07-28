@@ -24,7 +24,7 @@ describe('isValidHttpHeaderName', () => {
 
 describe('isValidHttpHeaderValue', () => {
   it('accepts printable values and horizontal tab', () => {
-    expect(isValidHttpHeaderValue('cc-switch')).toBe(true);
+    expect(isValidHttpHeaderValue('cindy')).toBe(true);
     expect(isValidHttpHeaderValue('a\tb')).toBe(true);
     expect(isValidHttpHeaderValue('')).toBe(true);
   });
@@ -55,11 +55,11 @@ describe('isProtectedCustomProviderHeaderName', () => {
 describe('validateCustomHeaderRows', () => {
   it('normalizes valid rows and skips blank-name placeholders', () => {
     const result = validateCustomHeaderRows([
-      { name: 'X-Provider', value: ' cc-switch ' },
+      { name: 'X-Provider', value: ' cindy ' },
       { name: '  ', value: 'ignored' },
       { name: ' X-Env ', value: 'prod' },
     ]);
-    expect(result).toEqual({ ok: true, headers: { 'X-Provider': 'cc-switch', 'X-Env': 'prod' } });
+    expect(result).toEqual({ ok: true, headers: { 'X-Provider': 'cindy', 'X-Env': 'prod' } });
   });
 
   it('keeps last-wins on duplicate names (no error)', () => {
