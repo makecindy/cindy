@@ -91,6 +91,37 @@ describe('projectGhostLifecycle 优先级链', () => {
     const entry = projectGhostLifecycle({ ...base, assessment: requiredAssessment('expired') });
     expect(entry.readiness).toBe('needs_reauth');
   });
+
+  it('已满足组里的 expired 备选项不算数:只按未满足组判 needs_reauth', () => {
+    // 组 A 已满足(satisfied + expired 备选项并存),组 B 纯缺失:
+    // 修复动作是配组 B,不是重连组 A 的 expired key——与插件页评估器
+    // 「只从未满足组列 reauth」同口径。
+    const entry = projectGhostLifecycle({
+      ...base,
+      assessment: {
+        state: 'required',
+        revision: 2,
+        groups: [
+          {
+            id: 'manifest:1',
+            mode: 'any_of',
+            items: [
+              { ref: 'secret:old_key', kind: 'secret', label: 'Old Key', state: 'expired', actions: [] },
+              { ref: 'secret:new_key', kind: 'secret', label: 'New Key', state: 'satisfied', actions: [] },
+            ],
+          },
+          {
+            id: 'manifest:2',
+            mode: 'any_of',
+            items: [
+              { ref: 'kv:endpoint', kind: 'plugin_config', label: 'Endpoint', state: 'missing', actions: [] },
+            ],
+          },
+        ],
+      },
+    });
+    expect(entry.readiness).toBe('needs_setup');
+  });
 });
 
 describe('projectGhostLifecycles 批量投影', () => {

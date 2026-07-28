@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { isIpcErrorCode } from '../../shared/ipc-errors.js';
 import {
   type GhostAppRegion,
   CINDY_ACCOUNT_GHOST_IDS,
@@ -3467,7 +3468,10 @@ export function registerGhostIpc(): void {
         }),
       });
     } catch (error) {
-      if ((error as { code?: string }).code) throw error;
+      // 只透传声明过的 IPC 错误码:Node 文件系统错误也带 code(EACCES /
+      // EIO 等),按 truthy 放行会让 renderer 跌回通用错误——这些运行时
+      // 码必须按判定失败包装成 SETUP_STATUS_UNAVAILABLE。
+      if (isIpcErrorCode((error as { code?: unknown }).code)) throw error;
       log.error('setup-status evaluation failed', {
         id,
         error: error instanceof Error ? error.message : String(error),
@@ -3480,7 +3484,12 @@ export function registerGhostIpc(): void {
   // 查询型 handler:现查现算不缓存,返回的投影与发现层 / scheduler 同一份
   // 纯函数口径。renderer 侧配合 ghosts:lifecycle-changed 推送热更。
   armGhostLifecyclePush();
-  ipcMain.handle('ghosts:lifecycle', () => ({ entries: getGhostLifecycleProjection() }));
+  // 只服务可信应用 renderer(插件页/调度器):投影含全量已装插件与 setup
+  // 判定,web 内容不得经 IPC 自取(变更类 ghosts:* 同口径)。
+  ipcMain.handle('ghosts:lifecycle', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return { entries: getGhostLifecycleProjection() };
+  });
 
   // ── 面板媒体换发(拖拽引渡 + 右键菜单)──────────────────────────────
   // 只由宿主 renderer(可信应用层)调用——意识面板零桥碰不到 IPC。

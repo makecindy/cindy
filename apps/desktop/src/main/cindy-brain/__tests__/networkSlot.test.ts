@@ -340,6 +340,83 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
     expect(noteCredentialRejected).toHaveBeenCalledTimes(1);
   });
 
+  it('401 归因歧义(直连 key 与 exchange/login-email 凭证并存)不记账', async () => {
+    // exchange 型注入的是换来的令牌、login-email 型注入的是登录邮箱,
+    // 它们不在此台账记账口径内,但与直连 key 同 host 并存时 401 归属
+    // 同样不明——只数可记账 key 会把令牌被拒错记到直连 key 头上。
+    const noteCredentialRejected = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () =>
+        fakeGhost({
+          network: {
+            hosts: ['api.search.brave.com'],
+            secrets: [
+              {
+                key: 'brave_api_key',
+                label: 'Brave Key',
+                inject: { header: 'X-Subscription-Token', format: '{value}', hosts: ['api.search.brave.com'] },
+              },
+              {
+                key: 'exchanged_key',
+                label: 'Exchanged Key',
+                inject: { header: 'X-Exchanged-Token', format: '{value}', hosts: ['api.search.brave.com'] },
+                exchange: {
+                  url: 'https://api.search.brave.com/token',
+                  bodyFormat: '{"key":"{value}"}',
+                  tokenPath: 'token',
+                  ttlSeconds: 3600,
+                } as never,
+              },
+            ],
+          },
+        }),
+      fetchImpl: vi.fn(async (url: string) =>
+        url.includes('/token')
+          ? fakeResponse({ status: 200, body: '{"token":"exchanged-tok"}' })
+          : fakeResponse({ status: 401 }),
+      ) as never,
+      noteCredentialRejected,
+    });
+    await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
+  });
+
+  it('在途旧凭证的 401 不误记已重存的新凭证(版本指纹比对)', async () => {
+    // 竞态:请求带旧 key 在途,用户已重存新 key(写入事件先行清账),
+    // 旧请求迟到的 401 若按稳定 key 名记账,会把新凭证翻成 needs_reauth。
+    const noteCredentialRejected = vi.fn();
+    let currentSecret = 'BSA-secret';
+    let resolveFetch!: (r: Response) => void;
+    // 注入时拿旧值;fetch 挂起期间用户换新值;401 才返回。
+    const fetchImpl = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    const { slot } = makeSlot({
+      readSecret: vi.fn(() => currentSecret) as never,
+      fetchImpl: fetchImpl as never,
+      noteCredentialRejected,
+    });
+    const pending = slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    // 等注入完成后(旧值已入头)模拟用户重存新 key,再放行 401 响应。
+    await new Promise((r) => setImmediate(r));
+    currentSecret = 'BSA-new-secret';
+    resolveFetch(fakeResponse({ status: 401 }));
+    await pending;
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
+
+    // 对照:值未变(现值指纹 = 注入指纹)时,401 照常记账。
+    noteCredentialRejected.mockClear();
+    const { slot: stable } = makeSlot({
+      fetchImpl: vi.fn(async () => fakeResponse({ status: 401 })) as never,
+      noteCredentialRejected,
+    });
+    await stable.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'brave_api_key');
+  });
+
   it('403 仅当 body 含凭证失效信号才记账;限流/业务 403 不记', async () => {
     // 403 语义宽(GitHub 限流、越权、封禁):无凭证类信号时不记账,避免误标。
     const noteCredentialRejected = vi.fn();

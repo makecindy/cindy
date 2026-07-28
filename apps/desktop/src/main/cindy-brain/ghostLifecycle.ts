@@ -51,9 +51,13 @@ export function projectGhostLifecycle(facts: GhostLifecycleFacts): GhostLifecycl
   if (assessment.state === 'ready') {
     return { ...base, readiness: 'ready' };
   }
-  const hasExpired = assessment.groups.some((group) =>
-    group.items.some((item) => item.state === 'expired'),
-  );
+  // 只在未满足组里找 expired:已满足组(组内任一 alternative 就绪)里的
+  // expired 备选项与修复动作无关——扫全组会把「配另一组就行」的插件
+  // 误判成 needs_reauth,引导用户去重连一把根本用不到的钥匙(插件页
+  // 评估器同样只从未满足组列 reauth,两处口径必须一致)。
+  const hasExpired = assessment.groups
+    .filter((group) => !group.items.some((item) => item.state === 'satisfied'))
+    .some((group) => group.items.some((item) => item.state === 'expired'));
   return {
     ...base,
     readiness: hasExpired ? 'needs_reauth' : 'needs_setup',

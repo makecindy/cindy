@@ -21,7 +21,7 @@
  * 依赖注入(规则 14):凭证读取与 HTTP 执行全部经 deps,单测直测零 Electron。
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
 
@@ -778,6 +778,40 @@ export class GhostNetworkSlot {
   }
 
   /**
+   * 按版本指纹记账:只记「注入时的值现在仍是保险库现值」的 key。
+   * 竞态场景——请求带着旧 key 在途,用户已重存新 key(写入事件先清账),
+   * 旧请求迟到的 401 若按稳定 key 名记账,会把好端端的新凭证翻成
+   * needs_reauth。指纹不一致(值已换)或读不到现值(凭证已删)都跳过;
+   * 指纹缺失(老路径未捕获)按现状记账,不削弱既有覆盖。
+   */
+  private noteRejectionsIfCurrent(
+    ghostId: string,
+    callId: string,
+    decls: readonly GhostSecretDecl[],
+    fingerprints: ReadonlyMap<string, string>,
+  ): void {
+    for (const decl of decls) {
+      const injected = fingerprints.get(decl.key);
+      if (injected !== undefined) {
+        const current = this.deps.readSecret(ghostId, decl.key);
+        const currentFingerprint =
+          current === null || current.length === 0
+            ? null
+            : createHash('sha256').update(current).digest('hex').slice(0, 16);
+        if (currentFingerprint !== injected) {
+          this.deps.log?.info('ghost credential rejection skipped: credential version changed in flight', {
+            ghostId,
+            callId,
+            secretKey: decl.key,
+          });
+          continue;
+        }
+      }
+      this.noteCredentialRejected(ghostId, decl.key);
+    }
+  }
+
+  /**
    * 处理一条 fetch-request(ghost-pipe:send 的 invoke 返回值即本结果)。
    * 永不 reject——一切失败折叠成 { ok:false, message }。
    */
@@ -1091,6 +1125,9 @@ export class GhostNetworkSlot {
     // 但重定向换 host 后上一跳的 oauth 凭证不会跟着走,拿累计面归因会把
     // 最终跳唯一的 user key 误判成「归属不明」而漏记。hop>0 逐跳覆盖。
     let responseOauthKeys = new Set(inject0.oauthInjected.keys());
+    // 同理,最终跳的直连 key 指纹也逐跳覆盖(401 记账前与保险库现值比对,
+    // 在途旧请求的迟到 401 不误记已重存的新凭证)。
+    let responseKeyFingerprints = new Map(inject0.directKeyFingerprints);
 
     // ── 在途并发闸(常量硬顶,防死循环刷单;不是配额)──────────────────
     const inflight = this.inflight.get(ghostId) ?? 0;
@@ -1158,6 +1195,7 @@ export class GhostNetworkSlot {
           for (const [k, v] of reInject.oauthInjected) oauthInjected.set(k, v);
           responseConnectionRefs = new Set(reInject.connectionRefs);
           responseOauthKeys = new Set(reInject.oauthInjected.keys());
+          responseKeyFingerprints = new Map(reInject.directKeyFingerprints);
           this.deps.log?.info('ghost fetch-request 401 → re-auth retry', {
             ghostId, callId, host: url.hostname,
           });
@@ -1181,6 +1219,7 @@ export class GhostNetworkSlot {
             for (const [k, v] of hopInject.oauthInjected) oauthInjected.set(k, v);
             responseConnectionRefs = new Set(hopInject.connectionRefs);
             responseOauthKeys = new Set(hopInject.oauthInjected.keys());
+            responseKeyFingerprints = new Map(hopInject.directKeyFingerprints);
           }
           response = await this.deps.fetchImpl(currentUrl.toString(), {
             method: currentMethod,
@@ -1255,7 +1294,9 @@ export class GhostNetworkSlot {
         /* 非绝对地址等异常:退回最终一跳的请求 host */
       }
       if (!((response as { url?: string }).url)) responseHost = lastHopUrl.hostname;
-      const injectableKeys = (net.secrets ?? [])
+      // 台账可记的 user 源直连 key(exchange 401 归交换源凭证,走
+      // performExchange 自己的记账链路,不在这里重复记)。
+      const trackableKeys = (net.secrets ?? [])
         .filter((decl) => (decl.source ?? 'user') === 'user')
         .filter((decl) => decl.exchange === undefined)
         .filter((decl) =>
@@ -1263,11 +1304,19 @@ export class GhostNetworkSlot {
             ghostNetworkHostMatches(pattern, responseHost),
           ),
         );
-      // 最终注入集合:user 源注入按 scope 重算(injectSecrets 无记录面,
-      // scope 命中且值可读即注入);oauth/连接取最终响应那一跳的实际注入面
-      // (跨跳累计的 oauthInjected 含上一跳凭证,不随重定向出网,不能归因)。
+      // 归因计数必须覆盖最终跳**实际注入的每一份凭证**:exchange 型
+      // (注入的是换来的令牌)与 login-email 型虽不在这里记账,但它们与
+      // 直连 key 并存时 401 归属同样不明——只数可记账 key 会把「令牌
+      // 被拒」错记到直连 key 头上。
+      const injectedSecretCount = (net.secrets ?? []).filter((decl) =>
+        (decl.inject.hosts ?? net.hosts).some((pattern) =>
+          ghostNetworkHostMatches(pattern, responseHost),
+        ),
+      ).length;
+      // oauth/连接取最终响应那一跳的实际注入面(跨跳累计的 oauthInjected
+      // 含上一跳凭证,不随重定向出网,不能归因)。
       const attributionCount =
-        injectableKeys.length + responseOauthKeys.size + responseConnectionRefs.size;
+        injectedSecretCount + responseOauthKeys.size + responseConnectionRefs.size;
       if (attributionCount !== 1) {
         if (response.status === 401 || response.status === 403) {
           this.deps.log?.info('ghost credential rejection attribution ambiguous, skip ledger', {
@@ -1280,9 +1329,7 @@ export class GhostNetworkSlot {
         }
       } else if (response.status === 401) {
         // 401 = 服务端明确不认这份凭证,直接记账。
-        for (const decl of injectableKeys) {
-          this.noteCredentialRejected(ghostId, decl.key);
-        }
+        this.noteRejectionsIfCurrent(ghostId, callId, trackableKeys, responseKeyFingerprints);
         for (const ref of responseConnectionRefs) {
           this.noteCredentialRejected(ghostId, ref);
         }
@@ -1290,12 +1337,10 @@ export class GhostNetworkSlot {
         // 403 语义宽(限流/越权/封禁都可能):仅当 body 出现凭证失效类信号
         // 才按被拒记账,避免把限流页误标 needs_reauth 钉死好插件。
         if (
-          (injectableKeys.length > 0 || responseConnectionRefs.size > 0) &&
+          (trackableKeys.length > 0 || responseConnectionRefs.size > 0) &&
           (await probeCredentialRejectionBody(response))
         ) {
-          for (const decl of injectableKeys) {
-            this.noteCredentialRejected(ghostId, decl.key);
-          }
+          this.noteRejectionsIfCurrent(ghostId, callId, trackableKeys, responseKeyFingerprints);
           for (const ref of responseConnectionRefs) {
             this.noteCredentialRejected(ghostId, ref);
           }
@@ -1531,6 +1576,12 @@ export class GhostNetworkSlot {
     oauthInjected: Map<string, string>;
     /** 本次注入过的连接 identity,用于最终响应的被拒归因。 */
     connectionRefs: string[];
+    /**
+     * 最终注入的直连 user key → 注入值指纹(sha256 前 16 hex,不含秘密,
+     * 不落盘):401 记账前与保险库现值指纹比对,在途旧请求的迟到 401
+     * 不误记用户已重存的新凭证。
+     */
+    directKeyFingerprints: Map<string, string>;
   }> {
     // 声明的凭证头一律主机独占:先把意识自带(或上一跳残留)的任何大小写
     // 变体删干净,再按本 host 注入——不管这条凭证这一跳注不注入都要删,
@@ -1545,15 +1596,22 @@ export class GhostNetworkSlot {
     }
     let usedExchange = false;
     const oauthInjected = new Map<string, string>();
+    const directKeyFingerprints = new Map<string, string>();
     for (const secret of secrets) {
       const scope = secret.inject.hosts ?? allHosts;
       if (!scope.some((pattern) => ghostNetworkHostMatches(pattern, hostname))) continue;
       const resolved = await this.resolveSecretValue(ghostId, secret, authAccount);
       if ('error' in resolved) {
-        return { error: resolved.error, usedExchange, oauthInjected, connectionRefs: [] };
+        return { error: resolved.error, usedExchange, oauthInjected, connectionRefs: [], directKeyFingerprints };
       }
       if (secret.exchange !== undefined) usedExchange = true;
       if (resolved.oauthAccountId !== undefined) oauthInjected.set(secret.key, resolved.oauthAccountId);
+      if ((secret.source ?? 'user') === 'user' && secret.exchange === undefined) {
+        directKeyFingerprints.set(
+          secret.key,
+          createHash('sha256').update(resolved.value).digest('hex').slice(0, 16),
+        );
+      }
       // 函数式替换同 performExchange:凭证/令牌含 $ 不得触发特殊序列解释。
       headers[secret.inject.header] = secret.inject.format.replace('{value}', () => resolved.value);
     }
@@ -1571,6 +1629,7 @@ export class GhostNetworkSlot {
             usedExchange,
             oauthInjected,
             connectionRefs: [],
+            directKeyFingerprints,
           };
         }
         deleteHeaderVariants(headers, tok.header);
@@ -1580,10 +1639,11 @@ export class GhostNetworkSlot {
           usedExchange,
           oauthInjected,
           connectionRefs: tok.credentialRef ? [tok.credentialRef] : [],
+          directKeyFingerprints,
         };
       }
     }
-    return { error: null, usedExchange, oauthInjected, connectionRefs: [] };
+    return { error: null, usedExchange, oauthInjected, connectionRefs: [], directKeyFingerprints };
   }
 
   /**
