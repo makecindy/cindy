@@ -19,27 +19,30 @@ const siteGuides = loadSiteGuides();
 // Same shape as recipe-runner's VAR_RE (kept local: the runner does not export it).
 const VAR_RE = /\{\{\s*([\w-]+)\s*(?:\|\s*([a-z]+)\s*)?\}\}/g;
 
-/** All `{{var}}` names referenced anywhere a recipe interpolates. */
-function referencedVars(recipe: Recipe): Map<string, string[]> {
-  const refs = new Map<string, string[]>();
-  const scan = (text: string | undefined, where: string) => {
+/** `{{var}}` names a single step interpolates. */
+function stepVarRefs(step: Recipe['steps'][number]): Set<string> {
+  const refs = new Set<string>();
+  const scan = (text: string | undefined) => {
     if (!text) return;
-    for (const m of text.matchAll(new RegExp(VAR_RE.source, 'g'))) {
-      const list = refs.get(m[1]) ?? [];
-      list.push(where);
-      refs.set(m[1], list);
-    }
+    for (const m of text.matchAll(new RegExp(VAR_RE.source, 'g'))) refs.add(m[1]);
   };
-  recipe.steps.forEach((step, i) => {
-    scan(step.url, `step ${i} url`);
-    scan(step.selector, `step ${i} selector`);
-    scan(step.fn, `step ${i} fn`);
-    scan(step.value, `step ${i} value`);
-    scan(step.textGone, `step ${i} textGone`);
-    scan(step.filter, `step ${i} filter`);
-    for (const v of step.values ?? []) scan(v, `step ${i} values`);
-  });
-  scan(recipe.output, 'output');
+  scan(step.url);
+  scan(step.selector);
+  scan(step.fn);
+  scan(step.value);
+  scan(step.textGone);
+  scan(step.filter);
+  for (const v of step.values ?? []) scan(v);
+  return refs;
+}
+
+/** All `{{var}}` names referenced anywhere a recipe interpolates. */
+function referencedVars(recipe: Recipe): Set<string> {
+  const refs = new Set<string>();
+  for (const step of recipe.steps) for (const name of stepVarRefs(step)) refs.add(name);
+  if (recipe.output) {
+    for (const m of recipe.output.matchAll(new RegExp(VAR_RE.source, 'g'))) refs.add(m[1]);
+  }
   return refs;
 }
 
@@ -56,14 +59,25 @@ describe('bundled recipe catalog', () => {
     }
   });
 
-  it('every {{var}} reference is satisfied by a declared input or an earlier `as`', () => {
+  it('every {{var}} reference is satisfied by a declared input or a PRECEDING `as`', () => {
+    // Mirrors runRecipe's execution order: `as` lands in vars only AFTER its
+    // step succeeds, so a step may only reference inputs and earlier steps'
+    // `as` — a later producer would still throw "missing recipe variable".
     for (const [id, recipe] of recipes) {
-      const declared = new Set(Object.keys(recipe.inputs ?? {}));
-      for (const step of recipe.steps) if (step.as) declared.add(step.as);
-      for (const [name, wheres] of referencedVars(recipe)) {
-        expect(declared.has(name), `recipe ${id}: {{${name}}} (${wheres.join(', ')}) has no input/as source`).toBe(
-          true,
-        );
+      const available = new Set(Object.keys(recipe.inputs ?? {}));
+      recipe.steps.forEach((step, i) => {
+        for (const name of stepVarRefs(step)) {
+          expect(
+            available.has(name),
+            `recipe ${id}: step ${i} (${step.action}) references {{${name}}} before any input/preceding-as provides it`,
+          ).toBe(true);
+        }
+        if (step.as) available.add(step.as);
+      });
+      if (recipe.output) {
+        for (const m of recipe.output.matchAll(new RegExp(VAR_RE.source, 'g'))) {
+          expect(available.has(m[1]), `recipe ${id}: output references {{${m[1]}}} with no source`).toBe(true);
+        }
       }
     }
   });
@@ -72,8 +86,8 @@ describe('bundled recipe catalog', () => {
     for (const [id, recipe] of recipes) {
       const inputs = recipe.inputs ?? {};
       const asNames = new Set(recipe.steps.map((s) => s.as).filter(Boolean));
-      for (const name of referencedVars(recipe).keys()) {
-        if (asNames.has(name)) continue; // produced mid-run, not an input
+      for (const name of referencedVars(recipe)) {
+        if (asNames.has(name)) continue; // produced mid-run, not an input (ordering guarded above)
         expect(inputs[name]?.required, `recipe ${id}: input "${name}" must be required:true`).toBe(true);
       }
     }
