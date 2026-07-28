@@ -591,6 +591,9 @@ describe('ModelSelector trigger variants', () => {
         onModelChange: vi.fn(),
         onEffortChange: vi.fn(),
         vendorKey: displayAgent === 'codex' ? 'codex' : 'cc',
+        // ChatInput 只在真实 runtime 身份已落定时显示 Agent；intent 期间 vendor/model
+        // 是下一条消息的目标预览，不能把目标 Agent 写成当前身份。
+        showAgentIdentity: !intent,
         currentProviderId: intent?.providerId ?? null,
         onProviderChange: vi.fn(),
         onNavigateToProviders: vi.fn(),
@@ -599,6 +602,11 @@ describe('ModelSelector trigger variants', () => {
 
     const view = render(React.createElement(IntentTrigger, { refresh: 0 }));
     try {
+      let trigger = screen.getByRole('button', {
+        name: /Current: Claude Code · Opus 4\.8/,
+      });
+      expect(trigger.textContent).toContain('Claude Code');
+
       act(() => {
         makerChatStore.noteAgentSwitchIntent(sessionId, 'codex', {
           model: 'gpt-5.5',
@@ -608,8 +616,10 @@ describe('ModelSelector trigger variants', () => {
       });
       view.rerender(React.createElement(IntentTrigger, { refresh: 1 }));
 
-      const trigger = screen.getByRole('button', { name: /Current: GPT-5\.5/ });
+      trigger = screen.getByRole('button', { name: /Current: GPT-5\.5/ });
       expect(trigger.textContent).toContain('GPT-5.5');
+      expect(trigger.textContent).not.toContain('Codex');
+      expect(trigger.getAttribute('aria-label')).not.toContain('Codex');
       // providerId=null 仍应按目标模型的默认可连来源解析 icon。
       expect(trigger.textContent).toContain('Z');
       expect(trigger.textContent).not.toContain('newChat.modelSelector.source.connect');
