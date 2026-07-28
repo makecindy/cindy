@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getDroppedFileItems } from '@/lib/fileDrop';
+import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fileDrop';
 
 function transfer(
   items: Array<{
@@ -26,6 +26,7 @@ describe('getDroppedFileItems', () => {
     expect(getDroppedFileItems(transfer([{ kind: 'file', file }]))).toEqual({
       files: [file],
       directories: [],
+      unclassified: [],
     });
   });
 
@@ -43,13 +44,48 @@ describe('getDroppedFileItems', () => {
     ).toEqual({
       files: [file],
       directories: [directory],
+      unclassified: [],
     });
   });
 
-  it('falls back to the original FileList when Windows exposes no items', () => {
+  it('preserves item-less Windows drops for native path classification', () => {
     const file = { name: 'report.txt' } as File;
 
     expect(getDroppedFileItems(transfer([], [file]))).toEqual({
+      files: [],
+      directories: [],
+      unclassified: [file],
+    });
+  });
+
+  it('classifies item-less directories without replacing the original File objects', async () => {
+    const file = { name: 'report.txt' } as File;
+    const directory = { name: 'project' } as File;
+
+    await expect(
+      classifyUnclassifiedDroppedItems([file, directory], {
+        getFilePath: (item) => `C:\\drop\\${item.name}`,
+        classifyPath: async (path) => ({
+          kind: path.endsWith('\\project') ? 'directory' : 'other',
+        }),
+      }),
+    ).resolves.toEqual({
+      files: [file],
+      directories: [directory],
+    });
+  });
+
+  it('keeps item-less files attachable when native path classification fails', async () => {
+    const file = { name: 'report.txt' } as File;
+
+    await expect(
+      classifyUnclassifiedDroppedItems([file], {
+        getFilePath: () => 'C:\\drop\\report.txt',
+        classifyPath: async () => {
+          throw new Error('stat failed');
+        },
+      }),
+    ).resolves.toEqual({
       files: [file],
       directories: [],
     });

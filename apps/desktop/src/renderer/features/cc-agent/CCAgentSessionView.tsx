@@ -149,7 +149,11 @@ import {
   getGhostMediaUriFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
-import { getDroppedFileItems } from '@/lib/fileDrop';
+import {
+  classifyUnclassifiedDroppedItems,
+  getDroppedFileItems,
+  type DroppedFileItems,
+} from '@/lib/fileDrop';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
@@ -2727,17 +2731,27 @@ export function CCAgentSessionView({
             if (sessionId) void attachGhostMediaToSession(ghostMediaUri, sessionId, t);
             return;
           }
-          const { files, directories } = getDroppedFileItems(e.dataTransfer);
-          for (const directory of directories) {
-            let folderPath = '';
-            try {
-              folderPath = window.electronAPI.getFilePath(directory);
-            } catch {
-              /* ignore */
+          const attachDroppedItems = (items: Pick<DroppedFileItems, 'files' | 'directories'>) => {
+            for (const directory of items.directories) {
+              let folderPath = '';
+              try {
+                folderPath = window.electronAPI.getFilePath(directory);
+              } catch {
+                /* ignore */
+              }
+              if (folderPath) attachmentState.addFolderPath(folderPath);
             }
-            if (folderPath) attachmentState.addFolderPath(folderPath);
+            if (items.files.length > 0) attachmentState.addFiles(items.files);
+          };
+          const droppedItems = getDroppedFileItems(e.dataTransfer);
+          attachDroppedItems(droppedItems);
+          if (droppedItems.unclassified.length > 0) {
+            void classifyUnclassifiedDroppedItems(droppedItems.unclassified, {
+              getFilePath: (file) => window.electronAPI.getFilePath(file),
+              classifyPath: (path) =>
+                window.electronAPI.localDb.sessionShare.classifyPath({ path }),
+            }).then(attachDroppedItems);
           }
-          if (files.length > 0) attachmentState.addFiles(files);
         }}
       >
         {showOrcaLeadIdentityBar && (

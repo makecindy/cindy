@@ -129,7 +129,7 @@ import {
   getGhostMediaUriFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
-import { getDroppedFileItems } from '@/lib/fileDrop';
+import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fileDrop';
 import { createLogger } from '@/lib/logger';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
@@ -2257,11 +2257,23 @@ export function NewMakerDraftRoute() {
             void attachGhostMediaToSession(ghostMediaUri, NEW_MAKER_DRAFT_KEY, t);
             return;
           }
-          const { files } = getDroppedFileItems(e.dataTransfer);
-          if (files.length > 0) {
+          const droppedItems = getDroppedFileItems(e.dataTransfer);
+          if (droppedItems.files.length > 0) {
             e.preventDefault();
             e.stopPropagation();
-            attachmentState.addFiles(files);
+            attachmentState.addFiles(droppedItems.files);
+          }
+          if (droppedItems.unclassified.length > 0) {
+            // Do not synchronously consume item-less entries: a single
+            // directory must keep bubbling to GlobalDropImportListener so it
+            // can become the new session's working directory.
+            void classifyUnclassifiedDroppedItems(droppedItems.unclassified, {
+              getFilePath: (file) => window.electronAPI.getFilePath(file),
+              classifyPath: (path) =>
+                window.electronAPI.localDb.sessionShare.classifyPath({ path }),
+            }).then(({ files }) => {
+              if (files.length > 0) attachmentState.addFiles(files);
+            });
           }
         }}
       >

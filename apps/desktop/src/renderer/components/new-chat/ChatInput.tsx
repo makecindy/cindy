@@ -67,7 +67,11 @@ import {
   type BrowserCommentDraftItem,
 } from '@/lib/browserComments';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
-import { getDroppedFileItems } from '@/lib/fileDrop';
+import {
+  classifyUnclassifiedDroppedItems,
+  getDroppedFileItems,
+  type DroppedFileItems,
+} from '@/lib/fileDrop';
 import { shouldOpenTextLightbox } from '@/lib/filePreview';
 import {
   getDraft as getComposerDraft,
@@ -4954,17 +4958,29 @@ export function ChatInput({
                 if (storageKey) void attachGhostMediaToSession(ghostMediaUri, storageKey, t);
                 return;
               }
-              const { files, directories } = getDroppedFileItems(e.dataTransfer);
-              for (const directory of directories) {
-                let folderPath = '';
-                try {
-                  folderPath = window.electronAPI.getFilePath(directory);
-                } catch {
-                  /* ignore */
+              const attachDroppedItems = (
+                items: Pick<DroppedFileItems, 'files' | 'directories'>,
+              ) => {
+                for (const directory of items.directories) {
+                  let folderPath = '';
+                  try {
+                    folderPath = window.electronAPI.getFilePath(directory);
+                  } catch {
+                    /* ignore */
+                  }
+                  if (folderPath) addFolderPath(folderPath);
                 }
-                if (folderPath) addFolderPath(folderPath);
+                if (items.files.length > 0) addFiles(items.files);
+              };
+              const droppedItems = getDroppedFileItems(e.dataTransfer);
+              attachDroppedItems(droppedItems);
+              if (droppedItems.unclassified.length > 0) {
+                void classifyUnclassifiedDroppedItems(droppedItems.unclassified, {
+                  getFilePath: (file) => window.electronAPI.getFilePath(file),
+                  classifyPath: (path) =>
+                    window.electronAPI.localDb.sessionShare.classifyPath({ path }),
+                }).then(attachDroppedItems);
               }
-              if (files.length > 0) addFiles(files);
             }}
           >
             {/* Drop overlay (F-FI-1) */}
