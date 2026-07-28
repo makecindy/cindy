@@ -5627,6 +5627,116 @@ describe('CodexAgent MCP thread context hooks', () => {
   });
 });
 
+describe('CodexAgent abort', () => {
+  it('reconciles a stale local turn when the server reports no active turn to interrupt', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.TurnStart) {
+        return { turn: { id: 'turn-after-stale-interrupt' } };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-server-no-active-turn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-stale-local' },
+    });
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    await expect(handle.abort()).resolves.toBeUndefined();
+
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: 'done',
+      data: expect.objectContaining({
+        cancelled: true,
+        raw: expect.objectContaining({
+          id: 'turn-stale-local',
+          status: 'interrupted',
+        }),
+      }),
+    });
+
+    await handle.send({ type: 'user', content: 'continue after recovery' });
+    expect(handle.getCurrentTurnId?.()).toBe('turn-after-stale-interrupt');
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    // The real completion may already be in flight. The synthetic tombstone must
+    // keep that late event from clearing the newer turn.
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-stale-local', status: 'interrupted' },
+    });
+    expect(handle.getCurrentTurnId?.()).toBe('turn-after-stale-interrupt');
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    await handle.close();
+  });
+
+  it('does not clear a newer turn when a no-active interrupt rejection arrives late', async () => {
+    const interruptGate = deferred<Record<string, unknown>>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) return interruptGate.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-late-server-no-active-turn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-being-interrupted' },
+    });
+    const abortPromise = handle.abort();
+    await waitForExpectation(() => {
+      expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+        threadId: 'start-thread-id',
+        turnId: 'turn-being-interrupted',
+      });
+    });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-being-interrupted', status: 'interrupted' },
+    });
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-newer' },
+    });
+    interruptGate.reject(
+      Object.assign(
+        new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+        { code: -32600 },
+      ),
+    );
+    await abortPromise;
+
+    expect(handle.getCurrentTurnId?.()).toBe('turn-newer');
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await handle.close();
+  });
+});
+
 describe('CodexAgent steer', () => {
   it('rejects when the session is already closed before steering', async () => {
     const agent = new CodexAgent(createDeps());

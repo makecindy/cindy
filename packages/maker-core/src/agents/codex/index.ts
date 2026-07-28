@@ -651,6 +651,11 @@ function isExpectedTurnIdMismatchError(error: unknown): boolean {
   return code === -32600 && /expected active turn id\b[\s\S]*\bbut found\b/i.test(message);
 }
 
+function isNoActiveTurnInterruptError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\bno active(?: codex)? turn to interrupt\b/i.test(message);
+}
+
 // 插话 (steer) 时 turn/steer RPC 的 ack 有界等待上限。AppServerClient.request
 // 本身没有超时, app-server 卡死时裸 await 会永久挂起 → coordinator steering marker
 // 永久残留 → 后续插话点击被静默吞掉。正常情况下 ack 是毫秒级, 10s 足够宽裕。
@@ -5292,10 +5297,34 @@ export class CodexAgent extends BaseAgent {
       async abort() {
         if (closed || !currentTurnId) return;
         if (skipIfStaleHost('turn/interrupt')) return;
-        dismissPendingUserInputForTurn(currentTurnId, 'turn_interrupted');
+        const interruptedTurnId = currentTurnId;
+        dismissPendingUserInputForTurn(interruptedTurnId, 'turn_interrupted');
         try {
-          await host.request(Method.TurnInterrupt, { threadId, turnId: currentTurnId });
+          await host.request(Method.TurnInterrupt, { threadId, turnId: interruptedTurnId });
         } catch (e) {
+          if (isNoActiveTurnInterruptError(e)) {
+            // Server-side "no active turn" is authoritative: the terminal
+            // notification was lost or arrived before this handle observed it.
+            // Synthesize the same interrupted boundary locally so Stop releases
+            // Session/coordinator locks. Guard the captured id because a late RPC
+            // rejection must never clear a newer turn.
+            if (isTurnInFlight && currentTurnId === interruptedTurnId) {
+              log.info('turn/interrupt found server already idle; reconciling local turn', {
+                turnId: interruptedTurnId,
+              });
+              handleTurnCompleted({
+                threadId,
+                turn: { id: interruptedTurnId, status: 'interrupted' },
+              });
+            } else {
+              log.debug('turn/interrupt no-active rejection arrived after local turn advanced', {
+                interruptedTurnId,
+                currentTurnId,
+                isTurnInFlight,
+              });
+            }
+            return;
+          }
           log.warn('turn/interrupt threw', { error: String(e) });
         }
       },
