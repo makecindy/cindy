@@ -411,6 +411,43 @@ describe('translateResponsesRequest', () => {
     ]);
   });
 
+  it('drops empty user messages produced by auto-compact collapsing image-only turns', () => {
+    // Codex auto-compact 的 replacement_history 把「无文字纯图片」用户消息折叠成单个
+    // 空 input_text；桥接层若原样透传，Moonshot/Kimi 会以
+    // "the message at position N with role 'user' must not be empty" 拒绝整次请求。
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '第一条' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '   ' }] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '继续' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: '第一条' },
+      { role: 'assistant', content: '继续' },
+      { role: 'user', content: '继续' },
+    ]);
+  });
+
+  it('keeps image-only user messages (no text) as valid multimodal content', () => {
+    const imageUrl = 'data:image/png;base64,aW1hZ2U=';
+    const out = translateResponsesRequest(base({
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_image', image_url: imageUrl }],
+      }],
+    }), { capabilities: { imageInput: 'image_url' } });
+
+    expect(out.messages).toEqual([{
+      role: 'user',
+      content: [{ type: 'image_url', image_url: { url: imageUrl } }],
+    }]);
+  });
+
   it('keeps pure-text JSON shape unchanged when image capability is enabled', () => {
     const out = translateResponsesRequest(base({
       input: [{

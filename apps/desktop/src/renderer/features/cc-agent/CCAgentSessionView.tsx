@@ -27,7 +27,6 @@ import { useLocation, useNavigate, useOutletContext, useParams } from 'react-rou
 import { useTranslation } from 'react-i18next';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
-import { setBlockExpanded } from '@/hooks/useExpandedBlockMemory';
 import {
   Activity,
   AlertCircle,
@@ -120,8 +119,11 @@ import { toast } from '@/lib/toast';
 import {
   decodeRemoteErrorMessage,
   makerChatStore,
+  type AgentTaskUpdate,
   type MessageDeliveryMode,
 } from '@/lib/makerChatStore';
+import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
+import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 import { useWorktreeCreation, worktreeCreationStore } from '@/lib/worktreeCreationStore';
@@ -395,27 +397,28 @@ function RightSidebarWorkdirRegistration({
 }
 
 /**
- * /workflows 命中卡片时的短暂描边高亮(模块级单例)。
- *
- * 只保留「当前正在高亮的那张卡 + 它的定时器」:起新高亮前先清掉上一次(无论同张还是另一张),
- * 并把上一张恢复成无 inline boxShadow('' → 回落到样式表)。恢复值恒为 '' 而非「上次读到的
- * boxShadow」,因此快速连按 /workflows 也不会把高亮值当原值存回去、造成描边永久残留。
+ * /workflows:从任务表挑最近的 local_workflow 任务。taskUpdates 里同一任务按
+ * taskId / parentToolUseId 存多个别名键(指向同一 merged 对象),先按引用去重,
+ * 再取 updatedAt/createdAt 最新的一个;时间缺失按 0 参与比较(平局取遍历靠后者)。
  */
-let activeWorkflowFlash: { el: HTMLElement; timer: ReturnType<typeof setTimeout> } | null = null;
-
-function flashWorkflowCard(el: HTMLElement): void {
-  if (activeWorkflowFlash) {
-    clearTimeout(activeWorkflowFlash.timer);
-    activeWorkflowFlash.el.style.boxShadow = '';
-    activeWorkflowFlash = null;
+function findLatestWorkflowTask(
+  taskUpdates: ReadonlyMap<string, AgentTaskUpdate>,
+): AgentTaskUpdate | undefined {
+  let latest: AgentTaskUpdate | undefined;
+  let latestTs = Number.NEGATIVE_INFINITY;
+  const seen = new Set<AgentTaskUpdate>();
+  for (const update of taskUpdates.values()) {
+    if (update.taskType !== 'local_workflow' || seen.has(update)) continue;
+    seen.add(update);
+    const raw = update.updatedAt ?? update.createdAt;
+    const parsed = raw ? Date.parse(raw) : Number.NaN;
+    const ts = Number.isFinite(parsed) ? parsed : 0;
+    if (ts >= latestTs) {
+      latest = update;
+      latestTs = ts;
+    }
   }
-  el.style.transition = 'box-shadow 0.25s ease';
-  el.style.boxShadow = '0 0 0 2px var(--focus-ring)';
-  const timer = setTimeout(() => {
-    el.style.boxShadow = '';
-    if (activeWorkflowFlash?.el === el) activeWorkflowFlash = null;
-  }, 1200);
-  activeWorkflowFlash = { el, timer };
+  return latest;
 }
 
 export function CCAgentSessionView({
@@ -904,6 +907,39 @@ export function CCAgentSessionView({
     sessionId,
     t,
   ]);
+
+  // 后台任务面板行点击 → 聊天流定位对应任务卡:sessionId 匹配当前会话才消费;
+  // 消息不在已加载窗口时先 loadAround 补上下文再定位(与搜索跳转同一收口)。
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    const unsubscribe = subscribeChatTaskFocus((focusSessionId, clientId) => {
+      if (cancelled || focusSessionId !== sessionId) return;
+      const existing = makerChatStore
+        .getSnapshot(sessionId)
+        .messages.some((message) => message.clientId === clientId);
+      if (existing) {
+        requestFocusMessage(clientId);
+        return;
+      }
+      void makerChatStore
+        .loadAroundMessageClientId(sessionId, clientId, { radius: 60 })
+        .then((message) => {
+          if (cancelled) return;
+          requestFocusMessage(message?.clientId ?? clientId);
+          if (!message) toast.error(t('ccAgent.search.jumpFailed'));
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          log.warn('Failed to load chat task focus context:', err);
+          toast.error(t('ccAgent.search.jumpFailed'));
+        });
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [requestFocusMessage, sessionId, t]);
 
   // 选中一个 Worker session 时,如果当前是普通单 session 路由,自动跳到 Lead
   // 普通路由并用 worker query 作为协同 tab 的初始 hint。doc 模式 (`/cc-agent/files/...`) 下不跳——doc 应该一直
@@ -1485,6 +1521,13 @@ export function CCAgentSessionView({
     });
   }, [getHelpCommandsSnapshot, insertSystemCard]);
 
+  // /workflows 要在命令 handler 里读"当下"的任务表;走 ref 镜像,避免 taskUpdates
+  // 高频变化把 IPC 命令监听反复重订阅。
+  const taskUpdatesRef = useRef(taskUpdates);
+  useEffect(() => {
+    taskUpdatesRef.current = taskUpdates;
+  }, [taskUpdates]);
+
   useEffect(() => {
     const unsub = window.electronAPI.maker.onDesktopCommandTriggered((payload) => {
       if (payload.sessionId && payload.sessionId !== sessionId) return;
@@ -1538,26 +1581,16 @@ export function CCAgentSessionView({
         return;
       }
       if (payload.command === 'workflows') {
-        // workflow 进度内联在消息流里(Workflow 工具调用 → workflow 进度卡,AgentTaskCard 带
-        // data-workflow-card / data-workflow-session / data-workflow-expandkey)。/workflows 在
-        // **本会话作用域内**定位最近一张 workflow 卡:展开它 → 滚动到视野中央 → 短暂描边高亮;
-        // 无卡时 toast。数据/展现全在本地,不回 SDK(原生 /workflows 在非交互 SDK 模式下不可用)。
-        // 作用域限定:多个 CCAgentSessionView 可能同挂 DOM(Orca split view / workdir 浏览栏),
-        // 全局 querySelectorAll 会选到别的会话的卡,故按 data-workflow-session 限定当前会话。
-        const scopeSelector = sessionId
-          ? `[data-workflow-session="${CSS.escape(sessionId)}"][data-workflow-card]`
-          : '[data-workflow-card]';
-        const cards = document.querySelectorAll<HTMLElement>(scopeSelector);
-        const last = cards.item(cards.length - 1);
-        if (!last) {
-          toast.warning(t('workflows.toast.none'));
-          return;
-        }
-        // 展开卡片:逐 agent 进度树只在展开区渲染,命令语义是「打开并展开最近一张 workflow 卡」。
-        const expandKey = last.getAttribute('data-workflow-expandkey');
-        if (expandKey) setBlockExpanded(expandKey, true);
-        last.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        flashWorkflowCard(last);
+        // workflow 的主视图在右栏「后台任务」面板:有 live workflow 任务则打开面板
+        // 并定位其详情;没有(如重载后任务表已清空)也打开面板列表 —— 列表基于消息
+        // 扫描,历史 workflow 行仍可见,比 toast「暂无」更符合命令语义。数据/展现
+        // 全在本地,不回 SDK(原生 /workflows 在非交互 SDK 模式下不可用)。
+        if (!sessionId) return;
+        const latest = findLatestWorkflowTask(taskUpdatesRef.current);
+        void openBackgroundTasksTab(
+          sessionId,
+          latest ? { focusTaskId: latest.taskId } : {},
+        );
         return;
       }
       // 'issue' 命令由下方独立 effect 处理(需要 handleSend,其声明在本 effect 之后)。
@@ -3169,6 +3202,15 @@ export function CCAgentSessionView({
                   onSend={handleSend}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
                   sessionId={sessionId}
+                  // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
+                  // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
+                  runtimeAgentKind={
+                    session
+                      ? session.agentKind === 'codex'
+                        ? 'codex'
+                        : 'claude-code'
+                      : null
+                  }
                   initialWorkingDir={session?.workingDir}
                   remoteHostId={session?.remoteHostId ?? null}
                   deviceLinkDeviceId={remoteDeviceId}
@@ -3466,6 +3508,10 @@ export function CCAgentSessionView({
       <SessionNavigationModeProvider
         mode={navigationMode}
         sidebarTargetSessionId={sidebarTargetSessionId}
+        // 只有声明右栏在场的路由主实例(ownsRoute)才是面板宿主:右栏当前显示的
+        // 就是它的 bucket。内嵌实例(worker 面板 / 文件浏览窄 rail / Orca split)
+        // 传 undefined → 面板类入口自行降级,见 useSidebarPanelReachable。
+        sidebarPanelHostSessionId={ownsRoute ? sessionId : undefined}
       >
         <ChatDisplaySnapshotProvider value={chatDisplaySnapshot}>
           <TopRightChipStackProvider>{content}</TopRightChipStackProvider>

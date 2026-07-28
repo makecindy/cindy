@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/core';
+import type { Node as PMNode } from '@tiptap/pm/model';
 import type { Transaction } from '@tiptap/pm/state';
 import { useTranslation } from 'react-i18next';
 import type {
@@ -59,7 +60,12 @@ import { resolveVoiceInputStartGuards } from './startGuards';
 import { getVoiceInputWorkletUrl } from './workletUrl';
 import { buildRefinementPreviewText } from './refinementPreviewText';
 import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
-import { mapEditorTextRange, type EditorTextRange } from './editorRangeMapping';
+import {
+  clampEditorTextRangeToDoc,
+  mapEditorTextRange,
+  resolveInsertedTextRange,
+  type EditorTextRange,
+} from './editorRangeMapping';
 import { isVoiceInputServiceConnectionError, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
 import {
   VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS,
@@ -530,11 +536,12 @@ export function useVoiceInput(
     };
   }, []);
 
-  const clampEditorTextRange = useCallback((range: EditorTextRange, docSize: number): EditorTextRange => {
-    const from = Math.max(0, Math.min(Math.min(range.from, range.to), docSize));
-    const to = Math.max(0, Math.min(Math.max(range.from, range.to), docSize));
-    return { from, to };
-  }, []);
+  // 钳制到「能承载 inline 内容」的位置,而不是只钳到 doc.content.size:后者本身就是
+  // 一个 block 边界,在那里 insertText 会另起一个段落,上屏文字前凭空多一个空行。
+  const clampEditorTextRange = useCallback(
+    (range: EditorTextRange, doc: PMNode): EditorTextRange => clampEditorTextRangeToDoc(range, doc),
+    [],
+  );
 
   const clearDictionaryLearningWatchTimer = useCallback((watch: DictionaryLearningWatch | undefined) => {
     if (watch?.pendingAdviceTimer !== undefined) {
@@ -611,7 +618,7 @@ export function useVoiceInput(
       const { doc } = current.state;
       const range = clampEditorTextRange(
         { from: currentWatch.start, to: currentWatch.end },
-        doc.content.size,
+        doc,
       );
       const afterText = doc.textBetween(range.from, range.to, '\n', '\n');
       if (!afterText || afterText === currentWatch.baselineText) {
@@ -677,7 +684,7 @@ export function useVoiceInput(
       .flatMap((watch) => {
         const start = transaction.mapping.map(watch.start, -1);
         const end = transaction.mapping.map(watch.end, -1);
-        const range = clampEditorTextRange({ from: start, to: end }, transaction.doc.content.size);
+        const range = clampEditorTextRange({ from: start, to: end }, transaction.doc);
         const currentText = transaction.doc.textBetween(range.from, range.to, '\n', '\n');
         if (!currentText) {
           finalizeDictionaryLearningWatch(watch.segmentId, 'clear_input_box');
@@ -762,7 +769,7 @@ export function useVoiceInput(
     const { doc, selection } = current.state;
     const range = clampEditorTextRange(
       insertionRangeRef.current ?? { from: selection.from, to: selection.to },
-      doc.content.size,
+      doc,
     );
     return {
       ...baseContext,
@@ -808,20 +815,22 @@ export function useVoiceInput(
     current.commands.focus();
     const { state, dispatch } = current.view;
     const range = insertionRangeRef.current
-      ? clampEditorTextRange(insertionRangeRef.current, state.doc.content.size)
+      ? clampEditorTextRange(insertionRangeRef.current, state.doc)
       : { from: state.selection.from, to: state.selection.to };
     insertionRangeRef.current = null;
-    const start = range.from;
     applyingVoiceTextRef.current = true;
     try {
-      dispatch(state.tr.insertText(text, range.from, range.to));
+      const transaction = state.tr.insertText(text, range.from, range.to);
+      // 上屏范围必须从事务推导,不能用插入前的 from:替换区间可以合法地从 block
+      // 边界开始(全选后听写就是 0..content.size),ProseMirror 会把 inline 文本
+      // fit 进段落,字形实际落在边界之后。用旧 from 记录会让润色回填、润色预览与
+      // 词典学习 watch 整体错位(润色会因读到截断文本而被丢弃)。
+      const inserted = resolveInsertedTextRange(transaction, range.from, text.length);
+      dispatch(transaction);
+      return inserted;
     } finally {
       applyingVoiceTextRef.current = false;
     }
-    return {
-      start,
-      end: start + text.length,
-    };
   }, [clampEditorTextRange]);
 
   const applyRefinedText = useCallback((event: Extract<VoiceInputRendererEvent, { type: 'refined' }>): boolean => {
@@ -995,10 +1004,13 @@ export function useVoiceInput(
             const range = segmentId ? submittedRangesRef.current.get(segmentId) : undefined;
             const current = editorRef.current;
             if (range && current && !current.isDestroyed) {
-              const docSize = current.state.doc.content.size;
-              if (range.start <= docSize) {
+              const currentDoc = current.state.doc;
+              if (range.start <= currentDoc.content.size) {
                 const baseText = event.segment.basedOnText ?? range.submittedText;
-                draftDisplayRangeRef.current = clampEditorTextRange({ from: range.start, to: range.end }, docSize);
+                draftDisplayRangeRef.current = clampEditorTextRange(
+                  { from: range.start, to: range.end },
+                  currentDoc,
+                );
                 setDraftText(buildRefinementPreviewText(baseText, event.text));
                 setDraftSource('refinement');
               }

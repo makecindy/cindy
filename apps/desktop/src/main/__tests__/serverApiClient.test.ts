@@ -22,6 +22,9 @@ vi.mock('../authManager', () => ({
   refresh: mocks.refresh,
   invalidateSession: mocks.invalidateSession,
 }));
+vi.mock('../i18n.js', () => ({
+  getResolvedMainLocale: () => 'zh-CN',
+}));
 vi.mock('../logger', () => ({
   createLogger: () => mocks.logger,
 }));
@@ -66,7 +69,10 @@ describe('serverApiFetch', () => {
       1,
       'https://github-api.example.com/api/github/issues',
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer token-a' }),
+        headers: expect.objectContaining({
+          'Accept-Language': 'zh-CN',
+          Authorization: 'Bearer token-a',
+        }),
         body: JSON.stringify({ userName: 'Account A' }),
       }),
     );
@@ -74,8 +80,56 @@ describe('serverApiFetch', () => {
       2,
       'https://github-api.example.com/api/github/issues',
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer token-b' }),
+        headers: expect.objectContaining({
+          'Accept-Language': 'zh-CN',
+          Authorization: 'Bearer token-b',
+        }),
         body: JSON.stringify({ userName: 'Account B' }),
+      }),
+    );
+  });
+
+  it('refresh 切换区域后重新解析业务端点，避免新 token 重试到旧区域', async () => {
+    let baseUrl = 'https://resource.cn.example.com';
+    mocks.getAccessToken.mockReturnValueOnce('token-cn').mockReturnValueOnce('token-global');
+    mocks.refresh.mockImplementation(async () => {
+      baseUrl = 'https://resource.global.example.com';
+      return true;
+    });
+    mocks.netFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { code: 'TOKEN_EXPIRED' } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true }),
+      });
+    const resolveBaseUrl = vi.fn(() => baseUrl);
+
+    await expect(
+      serverApiFetch('/api/resource', {
+        baseUrl: resolveBaseUrl,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(resolveBaseUrl).toHaveBeenCalledTimes(2);
+    expect(mocks.netFetch).toHaveBeenNthCalledWith(
+      1,
+      'https://resource.cn.example.com/api/resource',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer token-cn' }),
+      }),
+    );
+    expect(mocks.netFetch).toHaveBeenNthCalledWith(
+      2,
+      'https://resource.global.example.com/api/resource',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer token-global',
+        }),
       }),
     );
   });

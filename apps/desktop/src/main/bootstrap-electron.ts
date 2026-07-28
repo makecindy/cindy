@@ -213,7 +213,11 @@ import {
 } from './device-link/remoteMediaProtocol';
 import { localFileSchemePrivilege, registerLocalFileProtocolHandler } from './localFileProtocol';
 import { audioFileSchemePrivilege, registerAudioFileProtocolHandler } from './audioFileProtocol';
-import { buildSystemPathBlocklist, isPathAllowedAgainst } from './filePathPolicy';
+import {
+  buildSystemPathBlocklist,
+  getSensitiveMediaBlocklist,
+  isPathAllowedAgainst,
+} from './filePathPolicy';
 import { readFileThumbnail } from './fileThumbnail';
 import { resolveShellOpenPathTarget } from './shellOpenPath';
 import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandboxAdapter';
@@ -265,6 +269,7 @@ import {
   markAppContentWindow,
 } from './windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
+import { readFileBytesForPreview } from './fileReadBytes.js';
 import { initHeartbeatService } from './heartbeatService';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { WindowManualDragController } from './windowManualDrag';
@@ -395,6 +400,11 @@ import {
   readMemorySettings,
   readMemorySettingsState,
 } from './maker-host/memory-settings-store.js';
+import {
+  createAppFocusAutoRefreshTracker,
+  requestProviderModelAutoRefresh,
+  resetProviderModelAutoRefreshCooldowns,
+} from './maker-host/provider-model-auto-refresh.js';
 import {
   readImDefaultSettingsState,
   resetImDefaultSettings,
@@ -545,6 +555,7 @@ import {
   initModelAccess,
   noteManualXdKeySaved,
   noteManualXdKeyRemoved,
+  refreshXdGatewayModels,
 } from './model-access/index.js';
 import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
@@ -1503,6 +1514,12 @@ let mainWindowRef: BrowserWindow | null = null;
 // 而白屏,且窗口会带着烘焙端点绕过"拉不到清单不放行"的语义。
 let startupWindowCreationAllowed = false;
 let appFocusSyncTimer: ReturnType<typeof setTimeout> | null = null;
+const providerModelFocusRefreshTracker = createAppFocusAutoRefreshTracker({
+  now: Date.now,
+  onMeaningfulForeground: () => {
+    void requestProviderModelAutoRefresh('foreground');
+  },
+});
 let mainWindowBackgroundThrottlingAllowed = true;
 const isUpdateRelaunchCandidate =
   process.platform === 'darwin' && isMacOSUpdateRelaunch(process.argv);
@@ -1720,6 +1737,14 @@ function handleUpdatePresentationUnlock(): void {
   updatePresentationRecovery?.onScreenUnlock();
 }
 
+function handleProviderModelSystemResume(): void {
+  void requestProviderModelAutoRefresh('system-resume');
+}
+
+function handleProviderModelScreenUnlock(): void {
+  void requestProviderModelAutoRefresh('screen-unlock');
+}
+
 function initializeUpdatePresentationRecovery(): void {
   if (!updatePresentationRecovery || updatePresentationRecoveryInitialized) return;
   updatePresentationRecoveryInitialized = true;
@@ -1743,6 +1768,7 @@ function hasFocusedAppWindow(): boolean {
 
 function syncAppFocusState(clearAttentionWhenFocused = false): void {
   const appFocused = hasFocusedAppWindow();
+  providerModelFocusRefreshTracker.sync(appFocused);
   if (appFocused && clearAttentionWhenFocused) clearAllSessionAttention();
   getAgentIslandService()?.setAppFocused(appFocused);
 }
@@ -2749,6 +2775,7 @@ const registerIpcHandlers = () => {
     // 数据,不抛 throwIpcError(符合规则 13 查询型例外:renderer 需要 reason 做不同 UI)。
     const result = await runClaudeOAuthLogin();
     if (result.ok) {
+      resetProviderModelAutoRefreshCooldowns('anthropic');
       // 登录可直接覆盖旧账号凭证,不一定先走登出。先跨授权世代清掉旧清单 / 缓存并
       // 等待旧 SDK 持久化收尾;即使后续 proxy 初始化失败也绝不保留 A 账号清单。
       await clearAnthropicDiscoveredModels();
@@ -2771,6 +2798,7 @@ const registerIpcHandlers = () => {
     // 如实抛 IPC 错误让 renderer 提示失败(规则 13)。
     try {
       disconnectClaudeAiOAuth();
+      resetProviderModelAutoRefreshCooldowns('anthropic');
     } catch (err) {
       throwIpcError(
         'INTERNAL',
@@ -2792,6 +2820,7 @@ const registerIpcHandlers = () => {
   // 上游作废 xAI 凭证、收口自动登出后,走和手动登出完全一致的 UI 收尾(广播 + 清账号级
   // 限流快照),否则用户会停在「显示已连接、请求连环 403」的假状态。
   setXaiAuthInvalidatedHandler(() => {
+    resetProviderModelAutoRefreshCooldowns('xai');
     clearXaiRateLimitSnapshot();
     broadcastXaiAuthStateChanged();
   });
@@ -2803,6 +2832,7 @@ const registerIpcHandlers = () => {
     // 登录成功即生效:订阅直连 handler 每请求经 buildHeaders 现取凭证,无需任何"就绪"步骤。
     const result = await runGrokOAuthLogin();
     if (result.ok) {
+      resetProviderModelAutoRefreshCooldowns('xai');
       // 登录成功后广播 provider 变更 —— 其它已打开的窗口(聊天/模型选择器等)跟随刷新
       // xAI 连接态,不再等 remount/手动刷新(对齐 CLAUDE_OAUTH_LOGIN 的 broadcastClaudeAuthStateChanged)。
       // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
@@ -2815,6 +2845,7 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT, async () => {
     try {
       logoutGrok();
+      resetProviderModelAutoRefreshCooldowns('xai');
     } catch (err) {
       throwIpcError(
         'INTERNAL',
@@ -3587,6 +3618,7 @@ const registerIpcHandlers = () => {
           setMainWindowBackgroundThrottlingForActiveTurn(isRunning);
           notifyUpdateAutoRelaunchBusyStateChanged();
         },
+        refreshXdGatewayModels,
       });
       registerMakerTitleIpc();
       registerMakerHelpIpc(ipcMaker);
@@ -4272,6 +4304,60 @@ const registerIpcHandlers = () => {
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err), size: 0 };
       }
+    },
+  );
+
+  // Read a local file's raw bytes for in-app rendering (currently PDF preview).
+  // Returns a Uint8Array over structured clone instead of base64: pdf.js
+  // getDocument({ data }) wants bytes, and skipping base64 avoids a large
+  // transient string plus a main-thread atob/charCodeAt decode loop in the
+  // renderer. Same 30MB cap as read-file-for-attachment.
+  //
+  // Path policy is the SENSITIVE-MEDIA blocklist, not the system one used by the
+  // attachment IPCs: this channel replaces the xdt-file:// protocol as the byte
+  // source for PDF preview, and that protocol denies credential / browser-profile
+  // dirs (localFileProtocol.ts). Previewing files out of an agent-writable
+  // workdir means the click authorizes "show this PDF", not "read wherever this
+  // symlink points", so the stricter list is the right one — a workdir
+  // `leak.pdf -> ~/.ssh/id_rsa` must not reach the renderer here when the
+  // protocol it replaced would have refused it. Sibling ImagePreview still goes
+  // through xdt-file://, so this keeps one policy across the file browser.
+  ipcMain.handle(
+    'read-file-bytes',
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      params: { filePath: string; maxSize?: number },
+    ): Promise<{ bytes: Uint8Array; size: number }> => {
+      // Reject any caller that is not the trusted main app renderer — an
+      // auxiliary window / child frame / webview bearing the shared preload
+      // must not be able to pull raw file bytes. Mirrors the shell:open-path
+      // policy (assertTrusted + isPathAllowed) for a path-taking privileged IPC.
+      assertTrustedAppRendererEvent(event);
+      // Validation + policy + regular-file + size-cap + exact-copy live in the
+      // injectable core (fileReadBytes.ts) so they are unit-tested without
+      // Electron; failures throw a sanitized IpcError that rejects the invoke().
+      // O_NOFOLLOW on the final component: the core opens the realpath'd target,
+      // whose last segment is a real file — so a legit open succeeds, but if the
+      // final component was swapped to a symlink in the realpath→open race it
+      // fails (ELOOP) instead of following into a denied file. Falls back to 0
+      // where the platform lacks the flag (Windows), matching saveChatAttachment.
+      const noFollow =
+        typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+      return readFileBytesForPreview(params, {
+        isPathAllowed: (p) => isPathAllowedAgainst(p, getSensitiveMediaBlocklist()),
+        realpath: (p) => fs.promises.realpath(p),
+        // bigint stats: dev/ino identity must not be rounded (see FileIdentityStat).
+        stat: (p) => fs.promises.stat(p, { bigint: true }),
+        open: async (p) => {
+          const handle = await fs.promises.open(p, fs.constants.O_RDONLY | noFollow);
+          return {
+            stat: () => handle.stat({ bigint: true }),
+            read: (buffer, offset, length, position) =>
+              handle.read(buffer, offset, length, position),
+            close: () => handle.close(),
+          };
+        },
+      });
     },
   );
 
@@ -5640,7 +5726,9 @@ app.on('ready', async () => {
   // ── System resume: refresh tokens after sleep/hibernate ──
   powerMonitor.on('resume', () => {
     authManager.handleResume();
+    handleProviderModelSystemResume();
   });
+  powerMonitor.on('unlock-screen', handleProviderModelScreenUnlock);
 
   // Memory diagnostics — dev only, log per-process memory every 30s
   if (!app.isPackaged) {

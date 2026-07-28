@@ -82,6 +82,66 @@ describe('IssueConfirmBridge', () => {
     });
   });
 
+  it('平台代发把建议署名传给卡片，并要求响应带有效公开署名', async () => {
+    const broadcast = vi.fn();
+    const warn = vi.fn();
+    const bridge = new IssueConfirmBridge({ broadcast, logger: { warn } });
+    const platformIdentity = { kind: 'platform', login: 'cindy-issue' } as const;
+    const promise = bridge.request('sess-1', DRAFT, ENV, platformIdentity, '当前昵称');
+    const requestId = lastRequestId(broadcast);
+    expect(broadcast).toHaveBeenCalledWith(
+      MAKER_PUSH.INTERACTION_REQUEST,
+      expect.objectContaining({
+        request: expect.objectContaining({
+          submissionIdentity: platformIdentity,
+          suggestedPublicName: '当前昵称',
+        }),
+      }),
+    );
+
+    expect(
+      bridge.resolve(requestId, {
+        confirmed: true,
+        title: DRAFT.title,
+        body: DRAFT.body,
+        type: DRAFT.type,
+        publicName: '  匿名  ',
+      }),
+    ).toBe(true);
+    await expect(promise).resolves.toMatchObject({
+      confirmed: true,
+      publicName: '匿名',
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('平台代发缺少署名或携带换行时按取消兜底', async () => {
+    for (const publicName of [undefined, '', '第一行\n第二行']) {
+      const broadcast = vi.fn();
+      const warn = vi.fn();
+      const bridge = new IssueConfirmBridge({ broadcast, logger: { warn } });
+      const promise = bridge.request(
+        'sess-1',
+        DRAFT,
+        ENV,
+        { kind: 'platform', login: 'cindy-issue' },
+        '当前昵称',
+      );
+      const requestId = lastRequestId(broadcast);
+      expect(
+        bridge.resolve(requestId, {
+          confirmed: true,
+          title: DRAFT.title,
+          body: DRAFT.body,
+          type: DRAFT.type,
+          publicName,
+        }),
+      ).toBe(true);
+      await expect(promise).resolves.toEqual({ confirmed: false, reason: 'cancelled' });
+      expect(warn).toHaveBeenCalled();
+    }
+  });
+
   it('resolve 取消 decision → cancelled;未知 requestId → 返 false', async () => {
     const broadcast = vi.fn();
     const bridge = new IssueConfirmBridge({ broadcast });

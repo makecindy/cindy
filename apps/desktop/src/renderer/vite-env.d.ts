@@ -2,8 +2,10 @@
 
 interface ImportMetaEnv {
   readonly VITE_CINDY_AUTH_REGION: 'cn' | 'global' | 'dev';
-  /** 端点清单自举基址(唯一烘焙远程 URL);业务端点走 electronAPI.clientEndpoints。 */
+  /** 当前构建区域的端点清单自举基址；业务端点走 electronAPI.clientEndpoints。 */
   readonly VITE_ENDPOINT_MANIFEST_BASE_URL: string;
+  /** 另一物理区域的受信任端点清单自举基址。 */
+  readonly VITE_ENDPOINT_MANIFEST_PEER_BASE_URL: string;
 }
 
 interface ImportMeta {
@@ -44,10 +46,14 @@ interface EnvCheckResult {
 // surface and the core package's contract in sync. `VoiceInputShortcut` is
 // renderer-only (defined in voice-input/shortcut.ts) so it stays inline.
 // HostSnapshot 来自 transport-only package; desktop main 端 wrap 时附加
-// autoConnect 偏好字段 (本地 prefs, 不写入 ~/.ssh/config), 渲染层统一用
+// autoConnect / agentProxy 偏好字段 (本地 prefs, 不写入 ~/.ssh/config), 渲染层统一用
 // 这个扩展类型即可一次拿到完整信息, 不必再为单个字段单独 IPC。
 type RemoteHostSnapshot = import('@cindy/maker-remote-ssh').HostSnapshot & {
   autoConnect: boolean;
+  /** Agent 流量经 SSH 隧道走本地 Proxy 的 per-host 配置; 未开启 → null。 */
+  agentProxy: { enabled: boolean; localHost: string; localPort: number } | null;
+  /** 隧道实时状态 (main 进程内存态); 无记录 → null。 */
+  agentProxyTunnel: { active: boolean; remotePort?: number; lastError?: string } | null;
 };
 /** 设备互联:REST 设备视图(同 shared/deviceLinkIpc.ts DeviceLinkDeviceView) */
 interface DeviceLinkDeviceInfo {
@@ -1576,7 +1582,6 @@ interface ElectronAPI {
   authConsumeAccountDeletionRestoredNotice: () => Promise<boolean>;
   onAuthStateChange: (callback: (state: AuthStateChangePayload) => void) => () => void;
   onAuthSessionExpired: (callback: (state: AuthSessionExpiredPayload) => void) => () => void;
-  onTapdbDailyActive: (callback: (payload: { date: string }) => void) => () => void;
 
   // ── 使用统计(TapDB)同意闸 ──
   getAnalyticsSettings: () => Promise<AnalyticsSettingsPayload>;
@@ -2209,6 +2214,13 @@ interface ElectronAPI {
     truncated?: boolean;
   }>;
 
+  /** Raw-bytes sibling of readFileForAttachment (PDF preview → pdf.js data).
+   *  Rejects with an IpcError on failure (no partial payload). */
+  readFileBytes: (params: {
+    filePath: string;
+    maxSize?: number;
+  }) => Promise<{ bytes: Uint8Array; size: number }>;
+
   // ── File header peek IPC (F-FI-8 fallback inference) ──
   /**
    * Read at most `bytes` (default 8192, hard-cap 64KB) from the head of a
@@ -2805,6 +2817,8 @@ interface ElectronAPI {
       user: string;
       authMethod?: 'agent' | 'key';
       identityFile?: string;
+      /** 「Agent 流量走本地 Proxy」pref; null = 关闭, 缺省 = 不动。 */
+      agentProxy?: { enabled: boolean; localHost: string; localPort: number } | null;
     }) => Promise<{ host: RemoteHostSnapshot }>;
     update: (host: {
       id: string;
@@ -2813,6 +2827,7 @@ interface ElectronAPI {
       user: string;
       authMethod?: 'agent' | 'key';
       identityFile?: string;
+      agentProxy?: { enabled: boolean; localHost: string; localPort: number } | null;
     }) => Promise<{ host: RemoteHostSnapshot }>;
     remove: (id: string) => Promise<{ ok: true }>;
     connect: (id: string) => Promise<{ host: RemoteHostSnapshot | null }>;
@@ -3533,6 +3548,14 @@ interface ElectronAPI {
 
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
     listProviders: () => Promise<{ providers: import('@cindy/model-providers').ProviderView[] }>;
+    /** 复用各内置供应商既有真源刷新模型清单。 */
+    refreshBuiltinProviderModels: (
+      providerId: import('../shared/providerModelRefresh').BuiltinRefreshableProviderId,
+    ) => Promise<import('../shared/providerModelRefresh').ProviderModelRefreshResult>;
+    /** 静默请求 Main 在冷却允许时刷新已连接内置供应商。 */
+    requestProviderModelsAutoRefresh: (
+      trigger: import('../shared/providerModelRefresh').ProviderModelAutoRefreshRendererTrigger,
+    ) => Promise<import('../shared/providerModelRefresh').ProviderModelAutoRefreshResult>;
 
     // 自定义供应商配置 CRUD（配置与 runtime 密钥均由 main 原子排队）。
     createCustomProvider: (
@@ -4356,6 +4379,10 @@ interface ElectronAPI {
         cachedTokens?: number;
       }>;
       getAccount: (agentKind: 'claude-code' | 'codex') => Promise<unknown | null>;
+      /** Codex app-server authoritative windows and banked reset-credit metadata. */
+      getCodexRateLimits: () => Promise<
+        import('@cindy/maker-shared/device-link-contract').MobileCodexRateLimitsResult
+      >;
       /** provider-scoped 模型单价表；XD 价格与 model-access /models 同快照更新。 */
       getModelPricing: () => Promise<
         import('../shared/regionalMoney').ModelPricingCatalog | null

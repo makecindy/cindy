@@ -13,10 +13,10 @@
  * that's Phase C (RemoteAgent as a BaseAgent subclass).
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle2, AlertCircle, Play, Upload, Sparkles } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Play, Upload, Sparkles, Waypoints } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -25,6 +25,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
 import * as sessionService from '@/lib/sessionService';
 import { buildCodexSyncWarning } from '@/utils/codexAuthSync';
+import { remoteSshHostsStore } from '@/lib/remoteSshHostsStore';
 
 type AgentKind = RemoteAgentKind;
 const AGENT_KINDS: ReadonlyArray<AgentKind> = ['claude-code', 'codex'];
@@ -240,9 +241,92 @@ export function RemoteHostDetail({ hostId }: Props) {
         <QuickTestPanel hostId={hostId} availableKinds={installedKinds} />
       )}
 
+      <AgentProxyTunnelCard hostId={hostId} />
+
       {agents.codex.probe?.installed && (
         <StartRemoteSessionPanel hostId={hostId} />
       )}
+    </div>
+  );
+}
+
+// ── agent proxy tunnel status card ──────────────────────────────────────────
+//
+// 「Agent 流量走本地 Proxy」pref 开启时显示隧道实时状态。快照来自
+// remoteSshHostsStore (main 端 status push 驱动, withPrefs 携带 tunnel state)。
+
+function AgentProxyTunnelCard({ hostId }: { hostId: string }) {
+  const { t } = useTranslation();
+  const snap = useSyncExternalStore(
+    (cb) => remoteSshHostsStore.subscribe(cb),
+    () => remoteSshHostsStore.get()?.find((h) => h.config.id === hostId) ?? null,
+  );
+  // 触发一次 ensure, 保证 cold start (没开过 Settings 列表) 也有快照。
+  // ensure() 可能因 IPC 失败 reject — 裸 void 会把 rejection 抛成 renderer
+  // unhandled rejection; 与 useRemoteSshHosts hook 同款 catch 守护
+  // (review: PR #715 copilot R7)。
+  useEffect(() => {
+    void remoteSshHostsStore.ensure().catch(() => {});
+  }, []);
+
+  const pref = snap?.agentProxy ?? null;
+  const tunnel = snap?.agentProxyTunnel ?? null;
+  // pref 已关但 disable 失败 (daemon 没死透, 错误已落 lastError) 时仍渲染
+  // 错误卡片 (codex R17 P2) — 否则 Settings 看起来像成功关闭, 存活 daemon
+  // 还握着指向已拆端口的 proxy env, 用户毫无察觉。
+  if (!pref && !tunnel?.lastError) return null;
+  const localTarget = pref ? `${pref.localHost}:${pref.localPort}` : '';
+
+  let icon;
+  let text: string;
+  let isError = false;
+  if (!pref) {
+    // disable 失败分支: pref 已清, 只有 lastError 可显示。
+    icon = <AlertCircle size={14} />;
+    text = t('settings.remote.detail.agentProxyError', { message: tunnel?.lastError ?? '' });
+    isError = true;
+  } else if (snap?.status !== 'ready') {
+    // 主机断连/重连中: 隧道已 disarm 或正在拆除 — 即使隧道状态快照还没翻到
+    // 非活跃 (断连帧先于 mark-inactive 帧到达), 也优先显示「等待连接」,
+    // 不渲染过期的「已建立」(review: PR #715 收官审查 P2)。断连时
+    // markAgentProxyTunnelInactive 会清掉 lastError, 错误分支只在 ready
+    // 状态 (连接正常但建隧道失败) 下有语义。
+    icon = <AlertCircle size={14} />;
+    text = t('settings.remote.detail.agentProxyWaiting', { target: localTarget });
+  } else if (tunnel?.active && tunnel.remotePort != null) {
+    icon = <CheckCircle2 size={14} />;
+    text = t('settings.remote.detail.agentProxyActive', {
+      port: tunnel.remotePort,
+      target: localTarget,
+    });
+  } else if (tunnel?.lastError) {
+    icon = <AlertCircle size={14} />;
+    text = t('settings.remote.detail.agentProxyError', { message: tunnel.lastError });
+    isError = true;
+  } else {
+    icon = <Spinner size={12} />;
+    text = t('settings.remote.detail.agentProxyPending', { target: localTarget });
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p
+        className="text-13 font-medium"
+        style={{ color: 'var(--settings-section-sublabel)' }}
+      >
+        {t('settings.remote.detail.agentProxyTitle')}
+      </p>
+      <div
+        className="flex items-center gap-2 rounded-lg p-3 text-12"
+        style={{
+          border: '1px solid var(--settings-theme-card-border)',
+          color: isError ? 'var(--error-fg)' : 'var(--settings-integration-subtitle)',
+        }}
+      >
+        <Waypoints size={14} className="shrink-0" />
+        {icon}
+        <span className="break-all">{text}</span>
+      </div>
     </div>
   );
 }
@@ -705,7 +789,7 @@ function QuickTestResult({ result }: { result: RemoteAgentOneShotResult }) {
             style={{
               backgroundColor: 'var(--settings-input-bg, #faf9f5)',
               borderColor: 'var(--settings-input-border, #d7d7d4)',
-              color: 'var(--error-fg, #dc2626)',
+              color: 'var(--error-fg)',
               fontFamily: 'var(--app-font-code, var(--app-font-code-default))',
               margin: 0,
             }}

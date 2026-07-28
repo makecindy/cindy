@@ -2,23 +2,27 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 // Windows 上 git 子进程明显更慢(每次 spawn 数百毫秒),多步 git 编排用例会超默认 5s。
 vi.setConfig({ testTimeout: process.platform === 'win32' ? 60_000 : 30_000 });
 
+import { TestDirectoryTemplate } from '../../../test/vitest/testDirectoryTemplate';
 import { listBranchCommits, readCommitDiff } from '../commitReader';
 import { runGit } from '../gitRunner';
 import type { ReviewScope } from '../types';
 
 const repos: string[] = [];
 
-async function initRepo(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-git-review-commit-'));
-  repos.push(dir);
+const repoTemplate = new TestDirectoryTemplate('xdt-git-review-commit-', async (dir) => {
   await runGit(['init', '-b', 'main'], { cwd: dir });
   await runGit(['config', 'user.email', 'test@xdt.local'], { cwd: dir });
   await runGit(['config', 'user.name', 'XDT Test'], { cwd: dir });
   await runGit(['config', 'commit.gpgsign', 'false'], { cwd: dir });
+});
+
+async function initRepo(): Promise<string> {
+  const dir = await repoTemplate.createCopy();
+  repos.push(dir);
   return dir;
 }
 
@@ -84,6 +88,10 @@ afterEach(async () => {
   await Promise.all(repos.splice(0).map((repoPath) =>
     fs.rm(repoPath, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }),
   ));
+});
+
+afterAll(async () => {
+  await repoTemplate.dispose();
 });
 
 describe('git-review commitReader', () => {

@@ -13,6 +13,7 @@
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 import { ISSUE_REGION_CODE } from '../../shared/issueRegionCode.js';
+import { normalizeIssuePublicName } from '../../shared/issuePublicName.js';
 import type {
   IssueConfirmDecision,
   IssueDraft,
@@ -68,6 +69,7 @@ export interface GithubIssueSubmitServiceDeps {
     draft: IssueDraft,
     env: IssueEnvInfo,
     submissionIdentity: IssueSubmissionIdentity,
+    suggestedPublicName?: string,
   ) => Promise<IssueConfirmDecision>;
   /** 每次发起确认前现查；已绑定但凭证失效时应抛 AUTH_NOT_READY，不能冒充未绑定。 */
   resolveSubmissionIdentity: (workingDir: string) => Promise<IssueSubmissionIdentity>;
@@ -107,11 +109,16 @@ export async function submitGithubIssueWithConfirm(
     return mapSubmitError(err);
   }
 
+  const suggestedPublicName =
+    submissionIdentity.kind === 'platform'
+      ? (normalizeIssuePublicName(deps.getSubmitterName()) ?? undefined)
+      : undefined;
   const decision = await deps.confirm(
     req.sessionId,
     { title: req.title, body: req.body, type: req.type },
     env,
     submissionIdentity,
+    suggestedPublicName,
   );
 
   if (!decision.confirmed) {
@@ -126,6 +133,16 @@ export async function submitGithubIssueWithConfirm(
       ok: false,
       errorCode: 'USER_CANCELLED',
       message: '用户取消了本次 issue 提交。如实告知即可,不要换参数自动重试。',
+    };
+  }
+
+  const confirmedPublicName =
+    submissionIdentity.kind === 'platform' ? normalizeIssuePublicName(decision.publicName) : null;
+  if (submissionIdentity.kind === 'platform' && !confirmedPublicName) {
+    return {
+      ok: false,
+      errorCode: 'USER_CANCELLED',
+      message: '公开署名未确认，本次 issue 未提交。请重新发起并确认署名。',
     };
   }
 
@@ -151,16 +168,13 @@ export async function submitGithubIssueWithConfirm(
   const description = decision.body.slice(0, Math.max(0, bodyBudget)) + envBlock;
 
   try {
-    const result = await deps.postIssue(submissionIdentity, () => {
-      const submitterName = deps.getSubmitterName()?.trim();
-      return {
-        title: finalTitle,
-        description,
-        type: decision.type,
-        appVersion: env.appVersion,
-        ...(submitterName ? { userName: submitterName } : {}),
-      };
-    });
+    const result = await deps.postIssue(submissionIdentity, () => ({
+      title: finalTitle,
+      description,
+      type: decision.type,
+      appVersion: env.appVersion,
+      ...(confirmedPublicName ? { userName: confirmedPublicName } : {}),
+    }));
     return {
       ok: true,
       issueNumber: result.githubIssue.number,

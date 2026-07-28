@@ -267,6 +267,11 @@
           "keyHint": "直接读私钥文件。为了不存密码，不支持加密的密钥 —— 仅在 ssh-agent 不可用时使用。"
         },
         "identityFile": "私钥文件路径",
+        "agentProxy": "Agent 流量走本地 Proxy",
+        "agentProxyTip": "在远端开一个 127.0.0.1 端口，经 SSH 隧道转回本机 Proxy，远端 codex / Claude Code 的流量由此流出",
+        "agentProxyAddr": "本地 Proxy 地址",
+        "agentProxyHint": "在远端 127.0.0.1 开端口，经 SSH 隧道转回本机 Proxy（如 Clash 的 7890）。{{appName}} 不提供 Proxy，只建隧道；远端 agent 的 HTTPS_PROXY 会指向隧道口，域名由你的 Proxy 解析。切换后远端 codex daemon 会重启一次以生效。",
+        "agentProxyAddrInvalid": "格式应为 host:port，例如 127.0.0.1:7890",
         "cancel": "取消",
         "submit": "添加机器"
       },
@@ -282,6 +287,11 @@
         "statusInstalled": "已安装",
         "statusNotInstalled": "未安装",
         "claudeCodeName": "Claude Code",
+        "agentProxyTitle": "Agent Proxy 隧道",
+        "agentProxyActive": "远端 127.0.0.1 端口 {{port}} → 本机 {{target}} · 已建立",
+        "agentProxyPending": "隧道建立中 → 本机 {{target}}",
+        "agentProxyWaiting": "主机未连接，重连后自动建立 → 本机 {{target}}",
+        "agentProxyError": "隧道建立失败：{{message}}",
         "button": {
           "install": "安装",
           "reinstall": "重新安装",
@@ -492,6 +502,14 @@
       "soundPreviewAria": "预览{{event}}音效",
       "skinAnimationAria": "切换{{skin}}的预览动画",
       "skins": {
+        "cindy": {
+          "name": "Cindy",
+          "description": "Cindy 本人出镜，陪你盯着每一次运行。"
+        },
+        "blackcat": {
+          "name": "黑猫",
+          "description": "沉稳的黑猫，黄色眼睛在暗色刘海里格外醒目，适合长时间盯任务。"
+        },
         "pululu": {
           "name": "噗噜噜",
           "description": "TapFamily 里的理性守护担当：圆脑袋负责挡雨，也负责把跑偏的任务稳住。"
@@ -519,6 +537,10 @@
         "muffin": {
           "name": "麦芬",
           "description": "新来的麦芬角色，带着柔和的蓝灰色调，让运行中的任务更轻巧可爱。"
+        },
+        "erika": {
+          "name": "Erika",
+          "description": "戴月牙发饰的 Erika，暖棕色眼神安静又专注，适合陪长任务慢慢跑。"
         }
       },
       "soundEvents": {
@@ -1342,6 +1364,9 @@
         "capabilityNote": "不支持 {{agent}}",
         "divergedChip": "已在 {{agent}} 隐藏",
         "refreshAria": "刷新模型列表(仅新增，不改动现有)",
+        "refreshBuiltinAria": "刷新模型列表",
+        "refreshingAria": "正在刷新模型列表…",
+        "refreshDone": "模型列表已刷新",
         "refreshAdded": "已发现 {{count}} 个新模型",
         "refreshNoNew": "模型列表已是最新，无新增",
         "refreshFailed": "模型列表刷新失败，请稍后再试"
@@ -3110,6 +3135,13 @@
     "ssoOrgPlaceholder": "请输入企业 ID、slug 或域名",
     "ssoOrgHint": "不知道企业登录标识？请联系企业管理员",
     "ssoOrgDetected": "选择企业「{{org}}」的单点登录方式",
+    "realmConsent": {
+      "title": "连接企业所在区域",
+      "bodyCn": "你的企业位于中国大陆区。\n继续后，Cindy 会连接该区域。",
+      "bodyGlobal": "你的企业位于国际区。\n继续后，Cindy 会连接该区域。",
+      "agree": "继续登录",
+      "disagree": "取消"
+    },
     "ssoVerificationTitle": "验证企业联系方式",
     "ssoVerificationSubtitle": "首次登录需要验证身份提供方返回的联系方式 {{target}}",
     "enterCode": "输入验证码",
@@ -3158,6 +3190,8 @@
       "RATE_LIMITED": "操作过于频繁，请稍后再试",
       "SSO_LOGIN_REQUIRED": "该邮箱所属企业要求通过 SSO 登录",
       "ORG_SSO_NOT_FOUND": "未找到该企业，或该企业未启用 SSO 登录",
+      "ORG_REALM_AMBIGUOUS": "该企业标识同时存在于两个区域，请联系企业管理员处理",
+      "ORG_REALM_UNAVAILABLE": "暂时无法确认企业所在区域，请检查网络后重试",
       "SSO_EMAIL_REQUIRED": "该企业身份未提供有效邮箱，请联系企业管理员检查 IdP 配置",
       "INVALID_SSO_VERIFICATION_TICKET": "企业身份验证已过期，请重新发起 SSO 登录",
       "SOCIAL_TOKEN_INVALID": "第三方授权已失效，请重试",
@@ -3246,6 +3280,8 @@
       "balanceAvailable": "余额可用",
       "balanceDepleted": "余额已耗尽",
       "balanceUnlimited": "余额不限",
+      "resetCreditsAvailableLine": "可用重置：{{count}} 次",
+      "resetCreditEarliestExpiryLine": "最早过期：{{at}}",
       "windowLine": "{{label}} 剩余 {{remaining}} (已用 {{used}})",
       "windowSegment": "{{label}} 剩余 {{remaining}}",
       "resetAt": "{{at}} 重置",
@@ -3395,6 +3431,7 @@
         "browser": "浏览器",
         "terminal": "终端",
         "review": "审查",
+        "backgroundTasks": "后台任务",
         "collaboration": "协同",
         "unknown": "未知标签页",
         "ghostPanel": "插件面板"
@@ -3418,6 +3455,8 @@
         "fileSub": "Files",
         "openReview": "打开审查",
         "reviewSub": "Review",
+        "openBackgroundTasks": "打开后台任务",
+        "backgroundTasksSub": "Background tasks",
         "openBrowser": "打开浏览器",
         "browserSub": "Browser",
         "openTerminal": "打开终端",
@@ -3779,6 +3818,16 @@
       "touchCountAria_other": "已修改 {{count}} 次",
       "expandAllAria": "展开所有文件",
       "collapseAllAria": "收起所有文件"
+    },
+    "backgroundTasks": {
+      "running": "运行中",
+      "completed": "已完成",
+      "empty": "本对话暂无后台任务",
+      "stop": "停止",
+      "back": "返回",
+      "progressSummary": "{{done}}/{{total}} Agent",
+      "tokens": "{{value}} tokens",
+      "noProgress": "暂无进度详情"
     }
   },
   "update": {
@@ -4089,7 +4138,14 @@
       "trigger": {
         "placeholder": "选择模型",
         "aria": "选择模型。当前：{{model}}",
-        "ariaWithEffort": "选择模型。当前：{{model}}，推理强度：{{effort}}"
+        "ariaWithEffort": "选择模型。当前：{{model}}，推理强度：{{effort}}",
+        "pendingAria": "选择模型。下条消息：{{agent}} · {{model}}",
+        "pendingAriaWithEffort": "选择模型。下条消息：{{agent}} · {{model}}，推理强度：{{effort}}",
+        "agent": {
+          "claudeCode": "Claude Code",
+          "codex": "Codex",
+          "pending": "下条：{{agent}}"
+        }
       },
       "category": {
         "anthropic": "Anthropic",
@@ -4503,6 +4559,9 @@
         "stopped": "已停止"
       },
       "stop": "停止该任务",
+      "openInPanel": "在后台任务面板中打开",
+      "workflowProgressLine": "{{phase}} · {{done}}/{{total}} Agent",
+      "workflowProgressCount": "{{done}}/{{total}} Agent",
       "tokens": "{{count}} tokens",
       "toolUses_one": "{{count}} 次工具调用",
       "toolUses_other": "{{count}} 次工具调用",
@@ -5049,13 +5108,19 @@
     "workflowTree": {
       "agentsCount": "{{count}} 个 Agent",
       "attempt": "第 {{count}} 次尝试",
+      "endedEarly": "未完成即结束",
       "state": {
         "queued": "排队中",
+        "pending": "排队中",
+        "start": "启动中",
         "running": "运行中",
+        "progress": "运行中",
         "done": "完成",
         "completed": "完成",
         "failed": "失败",
-        "stopped": "已停止"
+        "error": "失败",
+        "stopped": "已停止",
+        "killed": "已终止"
       }
     },
     "credentialSwitchWait": {
@@ -6459,13 +6524,20 @@
       "typeFeature": "功能建议",
       "titleLabel": "标题",
       "bodyLabel": "正文(Markdown)",
-      "identityGithubUser": "提交身份：GitHub 用户 @{{login}}(本人)",
-      "identityPlatform": "提交身份：Cindy 平台代提交(GitHub App {{login}})",
+      "submissionMethodLabel": "发布方式",
+      "identityGithubUser": "通过 GitHub 账号 @{{login}} 直接发布",
+      "identityGithubUserHint": "你将成为该 Issue 的 GitHub 作者，可以在 GitHub 编辑或关闭",
+      "identityPlatform": "由 Cindy 平台代发(GitHub App {{login}})",
+      "identityPlatformHint": "你不是该 Issue 的 GitHub 作者，提交后无法自行编辑或关闭",
+      "publicNameLabel": "公开署名",
+      "publicNameHint": "该署名会公开显示在 Issue 正文中",
+      "anonymous": "匿名",
+      "useAnonymous": "使用匿名署名",
       "envLine": "提交时将自动附加：客户端 {{appVersion}} · {{platform}} {{arch}} · 界面语言 {{uiLanguage}}",
       "regionLine": "版本区域：{{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
-      "submit": "提交",
+      "submit": "提交反馈",
       "cancel": "取消"
     },
     "redirect": {
@@ -7333,11 +7405,6 @@
       "learnButton": "学习此技能"
     }
   },
-  "workflows": {
-    "toast": {
-      "none": "当前对话没有正在运行的 Workflow"
-    }
-  },
   "planMode": {
     "menuItem": "计划模式",
     "indicator": {
@@ -7450,7 +7517,6 @@
         "cancelFailed": "取消订阅失败，请稍后重试。"
       },
       "topupCard": {
-
         "action": "购买点数"
       }
     },

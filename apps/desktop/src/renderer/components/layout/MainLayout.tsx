@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { BrowserWebviewPool } from '@/components/layout/BrowserWebviewPool';
 import { ChromeActions } from '@/components/layout/ChromeActions';
 import { ContentHeaderSlot } from '@/components/layout/ContentHeader';
+import { rightSidebarOwnsRailChromeActions as resolveRightSidebarRailChromeActionsOwner } from '@/components/layout/railChromeActions';
 import { FadeSwitcher } from '@/components/layout/FadeSwitcher';
 import { RightSidebar, type RightSidebarHandle } from '@/components/layout/RightSidebar';
 import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
@@ -53,6 +54,7 @@ import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
 import { useSidebarResize } from '@/hooks/useSidebarResize';
 import { useSidebarCardMode } from '@/hooks/useSidebarCardMode';
 import { useSidebarPeek } from '@/hooks/useSidebarPeek';
+import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import {
   useRightSidebarResize,
   RIGHT_SIDEBAR_AVAILABLE_WIDTH_FALLBACK,
@@ -344,6 +346,7 @@ export function MainLayout() {
     return undefined;
   }, [isDragging]);
   const isMac = window.electronAPI?.platform === 'darwin';
+  const { isFullscreen } = useMacFullscreen();
   const {
     open: noticeOpen,
     mode: noticeMode,
@@ -396,6 +399,16 @@ export function MainLayout() {
     isCollapsed: isSidebarCollapsed,
     enabled: !isSettingsRoute,
   });
+  // ChromeActions 固定在窗口左上。rail 态下它跨到内容区，必须由当前最左且可见
+  // 的面板顶栏挖 no-drag 命中区：默认是 chat-main；工具面板换到左侧时则交给
+  // RightSidebar 的 unified topbar。peek 抽屉会强制退出 rail，不能沿用 rail 命中区。
+  const hasRailChromeActions =
+    !isSettingsRoute &&
+    isMac &&
+    !isFullscreen &&
+    isRailMode &&
+    !isSidebarCollapsed &&
+    !sidebarPeek.isPeekVisible;
   // peek 中固定展开(pinning)时若持久化的 rail 模式还开着:退出 rail —— 用户
   // 刚在全宽抽屉里预览并选择固定,落到 78px 窄轨会与所见不符且造成宽度跳变。
   useEffect(() => {
@@ -736,6 +749,15 @@ export function MainLayout() {
   // - 折叠 RSB 时自动退出(否则 maximize 状态下点折叠会导致主区 hidden + RSB 也 0 宽 → 全黑)
   // - 不持久化:刷新 / 切 session 默认非 maximize,跟"临时聚焦视图"语义一致
   const [isRightSidebarMaximized, setIsRightSidebarMaximized] = useState(false);
+  const rightSidebarOwnsRailChromeActions = resolveRightSidebarRailChromeActionsOwner({
+    hasRailChromeActions,
+    rightSidebarSide,
+    rightSidebarAvailable,
+    rightSidebarLoaded: rsbWindow.loaded,
+    isRightSidebarCollapsed,
+    isRightSidebarMaximized,
+    rsbDetached,
+  });
   const handleMaximizeRightSidebar = useCallback(() => {
     setIsRightSidebarMaximized((v) => !v);
   }, []);
@@ -1198,6 +1220,7 @@ export function MainLayout() {
                 <ContentHeaderSlot
                   sidebarVisible={!isSettingsRoute && !isSidebarCollapsed && !isRailMode}
                   showCollapsedActions={!isSettingsRoute && (isSidebarCollapsed || isRailMode)}
+                  isSidebarRail={hasRailChromeActions && !rightSidebarOwnsRailChromeActions}
                   // M2(2026-07-09 口径修订):mac 右上浮层随面板在场常驻(折叠
                   // toggle 永远钉窗口右上角),ContentHeader 右端占位不再分侧别。
                   rightSidebarAvailable={rightSidebarAvailable}
@@ -1248,6 +1271,7 @@ export function MainLayout() {
                   onMaximize={handleMaximizeRightSidebar}
                   isMaximized={isRightSidebarMaximized}
                   reserveLeftChromeActions={isRightSidebarMaximized && isSidebarCollapsed}
+                  railChromeActionsHitHole={rightSidebarOwnsRailChromeActions}
                   sessionId={rightSidebarSessionId}
                   workdir={rightSidebarWorkdirInfo.workdir}
                   remoteHostId={rightSidebarWorkdirInfo.remoteHostId}

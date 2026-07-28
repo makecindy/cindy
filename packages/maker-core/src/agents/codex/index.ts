@@ -33,6 +33,7 @@ import {
   type AgentDeps,
   type StartSessionOptions,
   type OneShotOptions,
+  type RefreshLocalModelsOptions,
   type SendOptions,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
@@ -80,6 +81,7 @@ import { scanCodexCustomizations } from './customization-scanner.js';
 import { commandExecutionDisplayInput } from './command-display.js';
 import {
   newCodexRuntimeState,
+  isAuthRelatedErrorMessage,
   translateErrorNotification,
   translateItemNotification,
   translateReasoningSummaryTextDelta,
@@ -90,7 +92,13 @@ import {
   extractRolloutUpdatePlanFunctionCallEvent,
   type CodexRuntimeState,
 } from './translator.js';
+import {
+  TurnRetryTracker,
+  buildBackendUnreachableMessage,
+} from './retry-escalation.js';
+import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
+import { AppServerRequestTimeoutError } from './app-server/client.js';
 import { createStdioTransport } from './app-server/stdioTransport.js';
 import { CodexInteractionBroker } from './interaction-broker.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
@@ -275,6 +283,18 @@ function buildCodexDeveloperInstructions(parts: {
  */
 export function hostKey(remoteHostId?: string | null): string {
   return remoteHostId ? `remote:${remoteHostId}` : 'local';
+}
+
+const LOCAL_CONTROL_PLANE_HOST_PREFIX = 'local-control:';
+const CODEX_MODEL_LIST_RPC_TIMEOUT_MS = 20_000;
+const CODEX_MODEL_REFRESH_DEADLINE_MS = 20_000;
+
+function localControlPlaneHostKey(credentialMode: AgentCredentialMode): string {
+  return `${LOCAL_CONTROL_PLANE_HOST_PREFIX}${credentialMode}`;
+}
+
+function isLocalControlPlaneHostKey(key: string): boolean {
+  return key.startsWith(LOCAL_CONTROL_PLANE_HOST_PREFIX);
 }
 
 /**
@@ -648,6 +668,14 @@ const TIGHTEN_INTERRUPT_ACK_TIMEOUT_MS = 10_000;
 // bounded so a live-but-unresponsive daemon cannot freeze the queued message or
 // ignore Stop.
 const PROFILE_LIFECYCLE_ACK_TIMEOUT_MS = 10_000;
+
+// thread/start / thread/resume / turn/start 的 RPC 上限。AppServerClient.request
+// 默认无超时 — 远端 daemon 失联 (SSH 隧道半开 / daemon 挂起但 socket 未断) 时
+// 裸 await 永久挂起, session 永远停在 generating (issue #677 同类断链面)。
+// 60s 足够覆盖慢 SSH 链路 + daemon 冷启动, 超时后走既有的「启动失败」收口
+// (terminal error + Done status)。注意: 超时只代表**我们不再等**, server 侧
+// 可能实际已建 thread/turn — 迟到事件按 stale turn 丢弃, 不影响 UI 复位。
+const CRITICAL_THREAD_RPC_TIMEOUT_MS = 60_000;
 
 // 计划批准后自动发起实施 turn 的固定输入 — 与官方 TUI 逐字一致
 // (codex-rs/tui/src/chatwidget/plan_implementation.rs 的
@@ -1371,9 +1399,13 @@ export class CodexAgent extends BaseAgent {
   private async getHost(
     remoteHostId?: string,
     credentialMode?: AgentCredentialMode,
-    opts: { ignoreBindingLeases?: number } = {},
+    opts: {
+      ignoreBindingLeases?: number;
+      keyOverride?: string;
+      hostPurpose?: 'control-plane';
+    } = {},
   ): Promise<AppServerHost> {
-    const key = hostKey(remoteHostId);
+    const key = opts.keyOverride ?? hostKey(remoteHostId);
     // spawnMode = 调用方原始诉求(undefined 保持 adapter fallback,spawn 行为不变)。
     // 复用判定分两级(review P2:归一化解析走 getState、含 reconcile/fs,不允许进
     // 无条件路径):
@@ -1498,12 +1530,19 @@ export class CodexAgent extends BaseAgent {
         credentialModeResolved: boolean;
         generation: number;
       } | null = null;
-      const promise = this.createHost(remoteHostId, key, spawnMode, generation, (resolvedMode) => {
-        if (inflightEntry) {
-          inflightEntry.credentialMode = resolvedMode;
-          inflightEntry.credentialModeResolved = true;
-        }
-      }).finally(() => {
+      const promise = this.createHost(
+        remoteHostId,
+        key,
+        spawnMode,
+        generation,
+        (resolvedMode) => {
+          if (inflightEntry) {
+            inflightEntry.credentialMode = resolvedMode;
+            inflightEntry.credentialModeResolved = true;
+          }
+        },
+        opts.hostPurpose,
+      ).finally(() => {
         // 成功: this.hosts 已赋值, 后续走快路径; 失败: 清掉 promise 让下次调用能重试
         const current = this.hostPromises.get(key);
         if (current?.promise === promise) this.hostPromises.delete(key);
@@ -1545,30 +1584,86 @@ export class CodexAgent extends BaseAgent {
    * 成功时未必已经触发模型注册表刷新。`model/list` 是官方 app-server 的权威读取面，
    * 同时也是 cache ready barrier；分页全部读完后才一次性交给宿主，避免 UI 看到半份目录。
    */
-  override async refreshLocalModels(): Promise<boolean> {
-    const { key, host } = await this.getUtilityHost();
+  override async refreshLocalModels(options?: RefreshLocalModelsOptions): Promise<boolean> {
+    const credentialMode = options?.credentialMode;
+    if (!credentialMode) return this.refreshLocalModelsWithinDeadline(options);
+
+    const key = localControlPlaneHostKey(credentialMode);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new AppServerRequestTimeoutError('model refresh', CODEX_MODEL_REFRESH_DEADLINE_MS));
+      }, CODEX_MODEL_REFRESH_DEADLINE_MS);
+    });
+    try {
+      return await Promise.race([
+        this.refreshLocalModelsWithinDeadline(options),
+        deadline,
+      ]);
+    } catch (error) {
+      if (error instanceof AppServerRequestTimeoutError) {
+        await this.retireHostKey(key, 'Codex control-plane model refresh timed out', {
+          failIfActive: false,
+          logPrefix: 'codex model refresh',
+        });
+      }
+      throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  private async refreshLocalModelsWithinDeadline(
+    options?: RefreshLocalModelsOptions,
+  ): Promise<boolean> {
+    const credentialMode = options?.credentialMode;
+    // 显式 provider 刷新使用独立 control-plane app-server。不能为了发一次 model/list
+    // 切换共享 local host 的凭证形态：切换协调器会关闭空闲会话，忙碌会话则直接拒绝。
+    const key = credentialMode
+      ? localControlPlaneHostKey(credentialMode)
+      : hostKey();
+    const host = credentialMode
+      ? await this.getHost(undefined, credentialMode, {
+        keyOverride: key,
+        hostPurpose: 'control-plane',
+      })
+      : (await this.getUtilityHost()).host;
     const init = await host.ensureStarted();
     if (init.codexHome) this.codexHome = init.codexHome;
 
     const models: CodexModelListResponse['data'] = [];
     const seenCursors = new Set<string>();
     let cursor: string | null = null;
-    do {
-      const page: CodexModelListResponse = await host.request<CodexModelListResponse>(Method.ModelList, {
-        cursor,
-        limit: 100,
-        includeHidden: false,
-      });
-      models.push(...(Array.isArray(page.data) ? page.data : []));
-      const next: string | null = typeof page.nextCursor === 'string' && page.nextCursor.length > 0
-        ? page.nextCursor
-        : null;
-      if (next && seenCursors.has(next)) {
-        throw new Error(`Codex app-server model/list repeated cursor: ${next}`);
+    try {
+      do {
+        const page: CodexModelListResponse = await host.request<CodexModelListResponse>(
+          Method.ModelList,
+          {
+            cursor,
+            limit: 100,
+            includeHidden: false,
+          },
+          { timeoutMs: CODEX_MODEL_LIST_RPC_TIMEOUT_MS },
+        );
+        models.push(...(Array.isArray(page.data) ? page.data : []));
+        const next: string | null = typeof page.nextCursor === 'string' && page.nextCursor.length > 0
+          ? page.nextCursor
+          : null;
+        if (next && seenCursors.has(next)) {
+          throw new Error(`Codex app-server model/list repeated cursor: ${next}`);
+        }
+        if (next) seenCursors.add(next);
+        cursor = next;
+      } while (cursor !== null);
+    } catch (error) {
+      if (credentialMode && error instanceof AppServerRequestTimeoutError) {
+        await this.retireHostKey(key, 'Codex control-plane model/list timed out', {
+          failIfActive: false,
+          logPrefix: 'codex model list refresh',
+        });
       }
-      if (next) seenCursors.add(next);
-      cursor = next;
-    } while (cursor !== null);
+      throw error;
+    }
 
     // Auth 切换 / logout 可能在分页请求期间 retire 旧 host。旧账号的迟到响应绝不能
     // 覆盖新账号目录；只有仍登记为当前 local host 的结果才允许交给宿主。
@@ -1603,6 +1698,7 @@ export class CodexAgent extends BaseAgent {
     credentialMode: AgentCredentialMode | undefined,
     generation: number,
     onSpawnCredentialModeResolved?: (mode: AgentCredentialMode | undefined) => void,
+    hostPurpose?: 'control-plane',
   ): Promise<AppServerHost> {
     const seq = (this.createHostSeqByKey.get(key) ?? 0) + 1;
     this.createHostSeqByKey.set(key, seq);
@@ -1683,7 +1779,11 @@ export class CodexAgent extends BaseAgent {
         try {
           const cfg = await this.deps.prepareCodexExtraSpawnConfig(
             this.deps.mcpProviders ?? [],
-            { remoteHostId, credentialMode: spawnCredentialMode },
+            {
+              remoteHostId,
+              credentialMode: spawnCredentialMode,
+              ...(hostPurpose ? { hostPurpose } : {}),
+            },
           );
           assertCurrentGeneration('spawn config');
           Object.assign(env, cfg.extraEnv);
@@ -1766,14 +1866,15 @@ export class CodexAgent extends BaseAgent {
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
       // 防止在 JSON-RPC response 分发回调里同步收割自己。远端也走同一结构化协议路径。
       onAuthInvalidated: (reason) => {
+        const usesLocalAuth = !remoteHostId;
         this.deps.logger.warn('codex auth invalidated', {
           reason,
           key,
-          localAuthWillInvalidate: key === hostKey(),
+          localAuthWillInvalidate: usesLocalAuth,
         });
         Promise.resolve()
           .then(async () => {
-            if (key === hostKey()) {
+            if (usesLocalAuth) {
               try {
                 await this.deps.auth.invalidate?.(reason);
               } catch (e) {
@@ -1994,13 +2095,33 @@ export class CodexAgent extends BaseAgent {
     let currentTurnId: string | null = null;
     let isTurnInFlight = false;
     let isTurnStartPending = false;
+    // turn/start RPC 失败(超时/拒绝)后置位: server 可能实际已建 turn,
+    // 迟到的孤儿 turnStarted 由 turnStarted handler 拦下并补 interrupt。
+    let turnStartFailedWithoutTurnId = false;
+    // 孤儿守卫生效期间又有新 turn/start 在飞时, 到达的 turnStarted 归属不明
+    // (协议不带 request id: 可能是失败 RPC 的孤儿, 也可能是在飞 RPC 合法的
+    // started-before-resp) — 先缓冲隔离, 等响应到了按 turnId 对账: 一致激活,
+    // 不一致 interrupt + 墓碑 (codex R9 P2)。缓冲期间不置 currentTurnId,
+    // 孤儿 turn 的 item 事件不会被渲染到本次 send 下。
+    const bufferedOrphanTurnIds = new Set<string>();
     type TurnCompletedParams = Parameters<NonNullable<ThreadEventHandlers['turnCompleted']>>[0];
+    // 缓冲隔离期间到达的**所有** turn 事件按 turnId 排队 (greptile R11 P1 +
+    // codex R12 P1): 对账证明合法时激活后按到达序重放 (早期 item/usage 不丢,
+    // 终态自然收口 send), 证明孤儿时整队丢弃。只拦 turnStarted 或只缓存终态
+    // 都会出反例: 前者让孤儿输出渲染到在飞 send 下, 后者把合法 turn 的
+    // 早期输出/终态永久丢掉 (send 卡 generating)。队列元素是重放闭包 —
+    // 重放时 buffer 已清空且 turn 已激活, 闭包重进 handler 走正常路径。
+    const bufferedTurnEventQueues = new Map<string, Array<() => void>>();
     // 正常完成的 turn 也必须保留墓碑:app-server 允许 turn/completed 早于仍在
     // 后台收尾的 item 事件到达。没有这层墓碑时,currentTurnId 已清空,迟到 item
     // 会重新发出 running status,而该 turn 的 done 已消费完,会话将永久假忙。
     // turn id 在同一 thread 内唯一;墓碑随 session handle 释放,不跨 session 泄漏。
     const completedTurnIds = new Set<string>();
     const terminalErroredTurnIds = new Set<string>();
+    // daemon 后端 retry-loop 的终局升级 (issue #677): 远端摸不到 Codex 后端时
+    // daemon 无限 willRetry, turn 永不收口。同 turn 重试超阈值 → 合成终态错误,
+    // 走与终态 error 完全相同的收口路径 (terminalErroredTurnIds + Done status)。
+    const turnRetryTracker = new TurnRetryTracker();
     const deferredTerminalTurnCompletions = new Map<string, TurnCompletedParams>();
     // 最近一次 thread/tokenUsage/updated 的 last 增量 + contextWindow,
     // 缓存供 turn end 日志读取 (协议本身不在 turn/completed 里带 usage)。
@@ -2142,25 +2263,41 @@ export class CodexAgent extends BaseAgent {
     let initResp: Awaited<ReturnType<AppServerHost['ensureStarted']>>;
     try {
       assertCurrentHost('initialize');
-      initResp = await host.ensureStarted();
+      // 直调也必须有上界 (codex R13 P1): 冷启动 / transport 重建时
+      // bootstrap 挂死 (远端 daemon 无响应 / SSH 通道死) 会让 startSession
+      // 永不返回, UI 无限卡初始化 — 与 request() 的 startup deadline 同款。
+      initResp = await host.ensureStartedWithTimeout(CRITICAL_THREAD_RPC_TIMEOUT_MS, 'startSession initialize');
       assertCurrentHost('initialize');
     } catch (error) {
       releaseHostBindingLeaseIfNeeded();
       throw error;
     }
     if (initResp.codexHome) this.codexHome = initResp.codexHome;
+    // reviewer 路由的凭证模式判定: 远程 daemon 用的是 auth sync 推过去的
+    // 同一份订阅凭证, reviewer 调用发生在 daemon 本地 — 订阅下走 daemon →
+    // chatgpt.com 直连, 与本地订阅同构 (远端出网由用户网络或 agent-proxy
+    // 隧道保障)。resolveAgentCredentialMode 只看 providerId/model, 远程同样
+    // 可判; 默认远程 session (无 providerId + 无前缀 model) 解析不出时,
+    // 兜底用 host 创建时登记的 effective mode (auth fallback 的实际钥匙 —
+    // 订阅即 oauth-bearer), 与本地默认 session 的兜底链对齐 (codex R17 P1)。
+    // 远程订阅与本地订阅同等启用 (#667 的远程一律回退是隧道方案缺位时的
+    // 保守, 隧道落地后放开)。
     const sessionCredentialMode = opts.remoteHostId
-      ? undefined
+      ? resolveAgentCredentialMode({
+          agentKind: 'codex',
+          providerId: opts.providerId,
+          model: opts.model,
+        }) ?? this.hostEffectiveCredentialModes.get(currentHostKey)
       : credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
     const approvalsReviewerProtocolSupported =
       supportsCodexApprovalsReviewerProtocol(initResp.userAgent);
     // Codex's built-in reviewer currently selects the hidden `codex-auto-review`
     // model through the session's model provider. Cindy's gateway, third-party
-    // providers, and remote daemons do not have a verified route for that model.
-    // Keep Auto usable on those routes by falling back to Codex's native
-    // `untrusted` policy instead of letting the first write fail in the reviewer.
-    const approvalsReviewerRouteSupported =
-      !opts.remoteHostId && sessionCredentialMode === 'oauth-bearer';
+    // providers, and other non-subscription credentials do not have a verified
+    // route for that model. Keep Auto usable on those routes by falling back to
+    // Codex's native `untrusted` policy instead of letting the first write fail
+    // in the reviewer.
+    const approvalsReviewerRouteSupported = sessionCredentialMode === 'oauth-bearer';
     const approvalsReviewerSupported =
       approvalsReviewerProtocolSupported && approvalsReviewerRouteSupported;
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
@@ -2533,7 +2670,9 @@ export class CodexAgent extends BaseAgent {
       try {
         acquireHostBindingLeaseIfNeeded();
         assertCurrentHost('thread/resume');
-        const resp = await host.request<ThreadResumeResponse>(Method.ThreadResume, params);
+        const resp = await host.request<ThreadResumeResponse>(Method.ThreadResume, params, {
+          timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+        });
         assertCurrentHost('thread/resume');
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
@@ -2596,7 +2735,9 @@ export class CodexAgent extends BaseAgent {
       try {
         acquireHostBindingLeaseIfNeeded();
         assertCurrentHost('thread/start');
-        const resp = await host.request<ThreadStartResponse>(Method.ThreadStart, params);
+        const resp = await host.request<ThreadStartResponse>(Method.ThreadStart, params, {
+          timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+        });
         assertCurrentHost('thread/start');
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
@@ -3225,6 +3366,10 @@ export class CodexAgent extends BaseAgent {
     const commandExecutionApproval = async (
       params: CommandExecutionRequestApprovalParams,
     ): Promise<CommandExecutionRequestApprovalResponse> => {
+      // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
+      const turnGate = gateServerRequestTurn(params.turnId);
+      if (turnGate === false) return { decision: 'decline' };
+      if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       // requestId: approvalId 优先 (zsh-exec-bridge 多 callback 场景); 否则用 itemId
       const requestId = params.approvalId ?? params.itemId;
       const decision = await awaitApprovalDecision(requestId, 'commandExecution', {
@@ -3243,6 +3388,10 @@ export class CodexAgent extends BaseAgent {
     const fileChangeApproval = async (
       params: FileChangeRequestApprovalParams,
     ): Promise<FileChangeRequestApprovalResponse> => {
+      // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
+      const turnGate = gateServerRequestTurn(params.turnId);
+      if (turnGate === false) return { decision: 'decline' };
+      if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       const requestId = params.itemId;
       const decision = await awaitApprovalDecision(requestId, 'fileChange', {
         kind: 'permission',
@@ -3346,6 +3495,12 @@ export class CodexAgent extends BaseAgent {
     const mcpServerElicitation = async (
       params: McpServerElicitationRequestParams,
     ): Promise<McpServerElicitationRequestResponse> => {
+      // buffered/墓碑 turn 的 elicitation 不得上 UI / auto-approve (codex R12 P1)。
+      const turnGate = gateServerRequestTurn(params.turnId);
+      if (turnGate === false) return { action: 'decline', content: null, _meta: null };
+      if (turnGate instanceof Promise && !(await turnGate)) {
+        return { action: 'decline', content: null, _meta: null };
+      }
       if (!isMcpToolApprovalElicitation(params)) {
         log.warn('unsupported MCP server elicitation -> decline', {
           serverName: params.serverName,
@@ -3416,6 +3571,11 @@ export class CodexAgent extends BaseAgent {
     const permissionsApproval = async (
       params: PermissionsRequestApprovalParams,
     ): Promise<PermissionsRequestApprovalResponse> => {
+      // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒
+      // (空 permissions 即拒绝授权, 与非 accept 分支同款)。
+      const turnGate = gateServerRequestTurn(params.turnId);
+      if (turnGate === false) return { permissions: {}, scope: 'turn' };
+      if (turnGate instanceof Promise && !(await turnGate)) return { permissions: {}, scope: 'turn' };
       const requestId = params.itemId ?? params.turnId;
       const decision = await awaitApprovalDecision(requestId, 'commandExecution', {
         kind: 'permission',
@@ -3560,7 +3720,15 @@ export class CodexAgent extends BaseAgent {
       params: ToolRequestUserInputParams,
       meta: { requestId: string | number },
     ): Promise<ToolRequestUserInputResponse> => {
+      // buffered/墓碑 turn 的输入请求不得上 UI (codex R12 P1) — 空 answers 即拒。
+      const turnGate = gateServerRequestTurn(params.turnId);
+      if (turnGate === false) return { answers: {} };
+      if (turnGate instanceof Promise && !(await turnGate)) return { answers: {} };
       const requestId = String(meta.requestId);
+      // 挂起期间服务端已取消本请求 (greptile R13 P1): 直接回空响应, 不注册
+      // broker 不上 UI — 否则 UI 会等一个服务端已结束的交互, 用户提交后向
+      // 已结束请求发迟到响应。
+      if (resolvedWhileBufferedRequestIds.delete(requestId)) return { answers: {} };
       const questions = normalizeRequestUserInputQuestions(params.questions);
       if (questions.length === 0) return { answers: {} };
       const kind = classifyUserInputRequest(params);
@@ -3594,6 +3762,24 @@ export class CodexAgent extends BaseAgent {
       params: DynamicToolCallParams,
       meta: { requestId: string | number },
     ): Promise<DynamicToolCallResponse> => {
+      // buffered/墓碑 turn 的 tool call 不得上 UI (codex R12 P1)。
+      const turnGate = gateServerRequestTurn(params.turnId);
+      if (turnGate === false) {
+        return {
+          contentItems: [
+            { type: 'inputText', text: 'Request was rejected because the owning turn is no longer active.' },
+          ],
+          success: false,
+        };
+      }
+      if (turnGate instanceof Promise && !(await turnGate)) {
+        return {
+          contentItems: [
+            { type: 'inputText', text: 'Request was rejected because the owning turn is no longer active.' },
+          ],
+          success: false,
+        };
+      }
       if (!isAskUserDynamicTool(params)) {
         return {
           contentItems: [{ type: 'inputText', text: `Unsupported dynamic tool: ${params.tool}` }],
@@ -3601,6 +3787,14 @@ export class CodexAgent extends BaseAgent {
         };
       }
       const requestId = String(meta.requestId);
+      // 挂起期间服务端已取消本请求 (greptile R13 P1): 直接回失败响应, 不注册
+      // broker 不上 UI (与 resolved 的 cancel 响应同款文案)。
+      if (resolvedWhileBufferedRequestIds.delete(requestId)) {
+        return {
+          contentItems: [{ type: 'inputText', text: 'Request was resolved before user input was submitted.' }],
+          success: false,
+        };
+      }
       const questions = normalizeDynamicAskUserQuestions(params.arguments);
       if (questions.length === 0) {
         return {
@@ -3643,6 +3837,12 @@ export class CodexAgent extends BaseAgent {
           data: { requestId, reason: 'server_request_resolved', resolvedAs: 'deny' },
           source: 'codex',
         });
+      } else if (bufferedOrphanTurnIds.size > 0) {
+        // cancel 未命中且有 buffered turn: 可能是挂起中的请求 (尚未注册到
+        // broker) 被服务端取消 (greptile R13 P1) — 记下 requestId, 对账放行
+        // 后 handler 自查回空响应, 不上 UI。requestId 是一次性的 (消费即删),
+        // 最坏泄漏 = 一条字符串, 随 session 释放。
+        resolvedWhileBufferedRequestIds.add(requestId);
       }
     }
 
@@ -3685,11 +3885,151 @@ export class CodexAgent extends BaseAgent {
       return /Codex send (?:cancelled|cannot be accepted)/i.test(text);
     }
 
+    // idle 孤儿判定 (codex R15 P1): 孤儿守卫生效 + 无 RPC 在飞 + 无活跃 turn
+    // 时, 未知 id 的事件只可能来自失败 RPC 的孤儿 turn (合法 turn 的 id 都
+    // 已知)。与 pending 窗口的 buffer 隔离互补: idle 时没有对账 RPC 在飞,
+    // 事件直接按孤儿处理 (立墓碑), 不缓冲。
+    const isIdleOrphanTurnId = (turnId: string | null | undefined): turnId is string =>
+      Boolean(turnId)
+      && turnStartFailedWithoutTurnId
+      && !isTurnStartPending
+      && currentTurnId === null
+      && !completedTurnIds.has(turnId as string)
+      && !terminalErroredTurnIds.has(turnId as string);
+
     const shouldIgnoreStaleTurnEvent =(turnId: string | null | undefined): boolean => {
       if (!turnId) return false;
       if (completedTurnIds.has(turnId)) return true;
       if (terminalErroredTurnIds.has(turnId)) return true;
+      // 缓冲隔离中的歧义 turn (codex R9 P2): id 只拦 turnStarted 不够 —
+      // 缓冲期间 currentTurnId 为 null, 孤儿 turn 的 item/usage/error 会穿透
+      // stale guard 被按当前 pending turn 处理 (旧输出显示在新消息下 / 用量
+      // 计错 turn / 孤儿 error 终结合法新 turn, greptile R10 P1)。其事件一律
+      // 忽略; 若响应证明合法 (id 一致)  buffer 已清空, 后续事件正常。
+      if (bufferedOrphanTurnIds.has(turnId)) return true;
+      // idle 孤儿 (codex R15 P1): 立墓碑并丢弃。补 interrupt 由 turnStarted
+      // 的孤儿分支负责 (幂等); started 不到的孤儿在 daemon 侧自然跑完,
+      // 其 completed 由 turnCompleted handler 的同款判定拦。
+      if (isIdleOrphanTurnId(turnId)) {
+        terminalErroredTurnIds.add(turnId);
+        return true;
+      }
       return currentTurnId !== null && turnId !== currentTurnId;
+    };
+
+    // buffered turn 的事件入口闸 (greptile R11 P1 + codex R12 P1): 命中缓冲
+    // 则把「重进本 handler」的闭包按到达序排进该 turn 的队列, 等对账 —
+    // 合法则激活后按序重放 (早期输出不丢, 终态自然收口), 孤儿则整队丢弃。
+    // 返回 true = 已入队, 调用方直接 return。重放闭包执行时 buffer 已清空
+    // 且 turn 已激活, 重进 handler 会走正常路径, 不会二次入队。
+    //
+    // 孤儿证据可以比它的 turnStarted 先到 (codex R14 P1): error/item 先到
+    // 时 id 尚未入 buffer, 会穿透 stale guard 被按在飞 send 处理 — 孤儿
+    // 守卫生效 + 新 RPC 在飞 + 无活跃 turn 时, 未知 id 视同 started 先进
+    // buffer 再入队, 等对账。
+    const enqueueIfBufferedTurn = (turnId: string | null | undefined, replay: () => void): boolean => {
+      if (!turnId) return false;
+      if (!bufferedOrphanTurnIds.has(turnId)) {
+        if (!(turnStartFailedWithoutTurnId && isTurnStartPending && currentTurnId === null)) {
+          return false;
+        }
+        bufferedOrphanTurnIds.add(turnId);
+        log.debug('buffering ambiguous turn event (evidence before turnStarted) until turn/start response arrives', {
+          turnId,
+          threadId,
+        });
+      }
+      const queue = bufferedTurnEventQueues.get(turnId) ?? [];
+      queue.push(replay);
+      bufferedTurnEventQueues.set(turnId, queue);
+      return true;
+    };
+
+    // buffered turn 的 server request (审批/输入) 挂起信号 (codex R12 P1):
+    // 归属未定前请求不得上 UI — 用户可能为隐藏的孤儿 turn 批准操作, 而
+    // best-effort interrupt 输了竞态时操作会真实执行。每个 buffered id 一组
+    // waiter, 对账时 settle: 合法 → true 继续正常流程; 孤儿 / RPC 失败 →
+    // false, 调用方返回拒绝响应。挂起窗口 = turn/start RPC 窗口 (最坏
+    // 60s), 远小于 daemon 侧审批等待时长。
+    const bufferedReconcileWaiters = new Map<string, Array<(valid: boolean) => void>>();
+    // 挂起期间到达的 serverRequest/resolved (greptile R13 P1): 请求还没注册
+    // 到 broker, cancel 不命中 — 记下 requestId, 对账放行后 handler 自查:
+    // 服务端已取消的请求直接回空响应, 不再上 UI 让用户向已结束的请求提交。
+    const resolvedWhileBufferedRequestIds = new Set<string>();
+
+    const waitForBufferedTurnReconcile = (turnId: string): Promise<boolean> =>
+      new Promise((resolve) => {
+        const waiters = bufferedReconcileWaiters.get(turnId) ?? [];
+        waiters.push(resolve);
+        bufferedReconcileWaiters.set(turnId, waiters);
+      });
+
+    const settleBufferedTurnReconcile = (turnId: string, valid: boolean): void => {
+      const waiters = bufferedReconcileWaiters.get(turnId);
+      if (!waiters) return;
+      bufferedReconcileWaiters.delete(turnId);
+      for (const resolve of waiters) resolve(valid);
+    };
+
+    // 放弃对账时统一释放 (codex R17 P2): close / cancel 边界直接从 send
+    // return、或 session close 时, buffered turn 的挂起请求永远等不到
+    // settle — handler 永远悬挂, dispatchServerRequest 永不返回, server
+    // 侧请求卡死。所有不走路径对账的退出点都必须调用。
+    const abandonBufferedTurns = (reason: string): void => {
+      if (bufferedOrphanTurnIds.size === 0) return;
+      log.debug('abandoning buffered turns', { reason, turnIds: [...bufferedOrphanTurnIds] });
+      for (const bufferedId of bufferedOrphanTurnIds) {
+        settleBufferedTurnReconcile(bufferedId, false);
+      }
+      bufferedOrphanTurnIds.clear();
+      bufferedTurnEventQueues.clear();
+    };
+
+    // server request 入口闸 (codex R12 P1): true = 放行; false = 拒绝
+    // (terminal/completed 墓碑 turn — 批了也没人消费; buffered 孤儿)。
+    // buffered 归属未定 → 返回 Promise 挂起到对账再定。非 async 签名是故意的:
+    // 同步快速路径不引入 microtask 延迟 — handler 第一行的 broker.track 与
+    // 紧随其后的 serverRequest/resolved 存在竞态, 哪怕一跳 await 也会让
+    // resolved 抢在 track 之前到达 (测试回归实证)。
+    const gateServerRequestTurn = (turnId: string | null | undefined): boolean | Promise<boolean> => {
+      if (!turnId) return true;
+      if (terminalErroredTurnIds.has(turnId) || completedTurnIds.has(turnId)) return false;
+      // idle 孤儿 (greptile R16 P1): 无 RPC 在飞时未知 id 的请求只可能来自
+      // 失败 RPC 的孤儿 turn — 直接拒, 不得放行上 UI (用户响应会发往旧
+      // turn, interrupt 输掉竞态时操作会真实执行)。与 notification 的
+      // idle 孤儿闸同款判定, 立墓碑让后续事件一并拦。
+      if (isIdleOrphanTurnId(turnId)) {
+        terminalErroredTurnIds.add(turnId);
+        return false;
+      }
+      // 孤儿守卫 + 已有活跃 turn: id ≠ currentTurnId 的请求来自失败 RPC 的
+      // 孤儿 (codex R17 P1) — 替换 turn 已被接受后, 孤儿迟到的审批/输入
+      // 请求既不是 idle 也不是 buffered, 不得放行上 UI。
+      if (turnStartFailedWithoutTurnId && currentTurnId !== null && turnId !== currentTurnId) {
+        terminalErroredTurnIds.add(turnId);
+        return false;
+      }
+      if (!bufferedOrphanTurnIds.has(turnId)) {
+        // 与 enqueueIfBufferedTurn 同款预缓冲 (codex R15 P1): 孤儿 turn 的
+        // server request 同样可以比它的 turnStarted 先到 — id 未入 buffer
+        // 时若直接放行, 审批框会为隐藏孤儿 turn 上 UI。守卫生效 + RPC 在飞
+        // + 无活跃 turn 时视同 buffered, 挂起到对账。
+        if (!(turnStartFailedWithoutTurnId && isTurnStartPending && currentTurnId === null)) {
+          return true;
+        }
+        bufferedOrphanTurnIds.add(turnId);
+        log.debug('buffering ambiguous turn server request (evidence before turnStarted) until turn/start response arrives', {
+          turnId,
+          threadId,
+        });
+      }
+      // 挂起到对账; waiter 恢复前复查墓碑 (codex R13 P2): 对账先 settle(true)
+      // 再同步重放队列, 队列里若有终态会把该 turn 当场收口 — waiter 在
+      // microtask 里恢复时 turn 已死, 此时再上 UI 就是为一个刚收口的 turn
+      // 批审批。微任务时机保证这次复查一定看到重放后的最终状态。
+      return waitForBufferedTurnReconcile(turnId).then(
+        (valid) => valid && !terminalErroredTurnIds.has(turnId) && !completedTurnIds.has(turnId),
+      );
     };
 
     const stopActiveRolloutPlanFallback = (): void => {
@@ -4084,6 +4424,46 @@ export class CodexAgent extends BaseAgent {
         }
       },
       turnStarted: (params) => {
+        // turn/start RPC 已失败(超时/拒绝)但 daemon 实际已建 turn — 迟到的孤儿
+        // turnStarted 不得重新激活已报终态错误的会话 (greptile P1): 立墓碑 +
+        // 补 interrupt 让 daemon 停掉这个没人消费的 turn。分支先于 stale 闸
+        // (codex R15 P1): 闸对 idle 孤儿只立墓碑, turnStarted 必须走这里补
+        // interrupt; 被闸先拦就发不出了。已墓碑/已完成的 id 不重复进分支
+        // (interrupt 不重复发), 交给下面的闸拦。
+        if (
+          turnStartFailedWithoutTurnId
+          && currentTurnId === null
+          && !terminalErroredTurnIds.has(params.turn.id)
+          && !completedTurnIds.has(params.turn.id)
+        ) {
+          if (isTurnStartPending) {
+            // 新 turn/start 在飞 → 归属不明 (失败 RPC 的孤儿 vs 在飞 RPC 合法的
+            // started-before-resp, 协议层无法区分): 缓冲隔离, 等响应按 turnId
+            // 对账 (codex R9 P2)。直接接受会让孤儿 turn 的 item 事件渲染到
+            // 本次 send 下。
+            bufferedOrphanTurnIds.add(params.turn.id);
+            log.debug('buffering ambiguous turnStarted until turn/start response arrives', {
+              turnId: params.turn.id,
+              threadId,
+            });
+            return;
+          }
+          terminalErroredTurnIds.add(params.turn.id);
+          log.warn('ignoring orphan turnStarted from a failed turn/start — interrupting server-side turn', {
+            turnId: params.turn.id,
+            threadId,
+          });
+          if (threadId) {
+            host.request(Method.TurnInterrupt, { threadId, turnId: params.turn.id })
+              .catch((e: unknown) => {
+                log.warn('orphan turn interrupt failed (best-effort)', {
+                  turnId: params.turn.id,
+                  error: e instanceof Error ? e.message : String(e),
+                });
+              });
+          }
+          return;
+        }
         // terminal error 已经为该 turn 收口时，晚到的 start 只能忽略，等待 completed 做清理。
         if (shouldIgnoreStaleTurnEvent(params.turn.id)) return;
         // 终态已先到的 turn (墓碑) 不得被乱序晚到的 started 重新置活。
@@ -4100,14 +4480,21 @@ export class CodexAgent extends BaseAgent {
         }
         if (!wasSameTurn) currentTurnPlanModeActive = pendingTurnStartPlanMode ?? planCycleActive;
         // 新 turn 开始 → 丢弃上一 turn 未消费的 proposed plan (正常路径已在
-        // handleTurnCompleted 清空, 这里防御 stale)。
-        proposedPlanText = null;
+        // handleTurnCompleted 清空, 这里防御 stale)。same-turn 的晚到 started
+        // 不清 (codex R15 P1): buffered turn 的 item 事件可能先于它的 started
+        // 被重放 (interceptProposedPlanItem 已存 plan), 随后到达的同 id
+        // started 若无条件清空, plan 模式下刚重放的 proposed plan 永久丢失。
+        if (!wasSameTurn) proposedPlanText = null;
         terminalErroredTurnIds.delete(params.turn.id);
         // Reset auth retry-loop dedupe key — 让下一个 turn 重新可以 emit 第一条
         // auth error。详见 translator.translateErrorNotification dedupe 逻辑。
         translatorRt.lastAuthErrorKey = null;
-        // 网络类 retry-loop 透出状态同理:新 turn 重新计数,可再透出一条。
+        // 持续重试透出状态同理 (字段名沿旧称 networkRetryNotice, 实际已对任意
+        // 持续性 willRetry 错误透出, 不限 networkish — issue #677): 新 turn
+        // 重新计数, 可再透出一条。
         translatorRt.networkRetryNotice = null;
+        // retry 升级计数同样按 turn 隔离 — 新 turn 从零计。
+        turnRetryTracker.reset();
         log.debug('SDK ▶ turn start', {
           turnId: params.turn.id,
           model: mutableModel,
@@ -4118,6 +4505,7 @@ export class CodexAgent extends BaseAgent {
         });
       },
       tokenUsageUpdated: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.tokenUsageUpdated?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         const last = params.tokenUsage?.last;
         if (!last) return;
@@ -4141,9 +4529,25 @@ export class CodexAgent extends BaseAgent {
         }
       },
       turnCompleted: (params) => {
+        // buffered turn 的终态同样进队列等对账 (greptile R11 P1 + codex R12 P1):
+        // 合法 → 激活后按序重放, handleTurnCompleted 自然收口 send; 孤儿 →
+        // 整队丢弃。直接处理会让孤儿 completed 提前收口在飞 send
+        // (handleTurnCompleted 在 currentTurnId===null 下也收口 emit done);
+        // 直接丢弃会把尸体 turn 激活成 in-flight, send 永久卡 generating。
+        if (enqueueIfBufferedTurn(params.turn.id, () => handlers.turnCompleted?.(params))) return;
+        // 只拦 idle 孤儿 (codex R15 P1): 无 pending 时它的 completed 会走
+        // currentTurnId===null 的收口分支 emit 假 done。terminal/completed
+        // 墓碑 turn 的迟到 completed 仍走 handleTurnCompleted 的正常
+        // bookkeeping (suppressTerminalUi 分支, 不重复出 UI 事件) — 不能上
+        // 整个 stale 闸。
+        if (isIdleOrphanTurnId(params.turn.id)) {
+          terminalErroredTurnIds.add(params.turn.id);
+          return;
+        }
         handleTurnCompleted(params);
       },
       itemStarted: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemStarted?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
         noteActiveToolContext(params.item, params.turnId);
@@ -4157,6 +4561,7 @@ export class CodexAgent extends BaseAgent {
         });
       },
       itemUpdated: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
         noteActiveToolContext(params.item, params.turnId);
@@ -4169,6 +4574,7 @@ export class CodexAgent extends BaseAgent {
         });
       },
       itemCompleted: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
         noteActiveToolContext(params.item, params.turnId);
@@ -4184,19 +4590,23 @@ export class CodexAgent extends BaseAgent {
         if (isTurnInFlight) pushStatus('Generating...');
       },
       turnPlanUpdated: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.turnPlanUpdated?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         latestPlanByTurn.set(params.turnId, params.plan);
         translatePlanUpdatedNotification(params, eventQueue);
       },
       reasoningSummaryTextDelta: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryTextDelta?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         translateReasoningSummaryTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
       reasoningSummaryPartAdded: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryPartAdded?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         translateReasoningSummaryPartAdded(params, eventQueue, { rt: translatorRt, log });
       },
       reasoningTextDelta: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningTextDelta?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         translateReasoningTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
@@ -4232,6 +4642,7 @@ export class CodexAgent extends BaseAgent {
         }
       },
       autoApprovalReviewStarted: (params: ItemGuardianApprovalReviewStartedNotification) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.autoApprovalReviewStarted?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         log.debug('Codex automatic approval review started', {
           reviewId: params.reviewId,
@@ -4241,6 +4652,7 @@ export class CodexAgent extends BaseAgent {
         });
       },
       autoApprovalReviewCompleted: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.autoApprovalReviewCompleted?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         handleGuardianReviewCompleted(params);
       },
@@ -4250,8 +4662,13 @@ export class CodexAgent extends BaseAgent {
         log.warn('Codex Guardian warning', { threadId: params.threadId, message: params.message });
       },
       error: (params) => {
+        // buffered turn 的 error (含终态) 同样进队列等对账 (greptile R11 P1 +
+        // codex R12 P1): 合法 → 激活后重放走正常终端路径收口 send; 孤儿 →
+        // 丢弃, 不得让孤儿 error 终结合法 send。
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.error?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
-        const isTerminalError = params.willRetry !== true;
+        let effectiveParams = params;
+        let isTerminalError = params.willRetry !== true;
         const isTransportError = params.scope === 'transport';
         if (isTransportError) {
           subscriptionInvalidatedByTransport = true;
@@ -4262,7 +4679,7 @@ export class CodexAgent extends BaseAgent {
         const targetsCurrentTurn =
           params.turnId === currentTurnId || (params.turnId === '' && isTurnInFlight) || targetsPendingTurn;
         if (isTerminalError && isTransportError && !targetsCurrentTurn) {
-          translateErrorNotification(params, eventQueue, { rt: translatorRt, log });
+          translateErrorNotification(effectiveParams, eventQueue, { rt: translatorRt, log });
           return;
         }
         if (isTerminalError && !targetsCurrentTurn) {
@@ -4273,11 +4690,67 @@ export class CodexAgent extends BaseAgent {
           });
           return;
         }
+        // ── retry-loop 终局升级 (issue #677) ──
+        // 远端摸不到 Codex 后端时 daemon 无限发 willRetry=true — 协议层设计上
+        // willRetry 不收口, 但持续性不可达 (403 / Network unreachable / timeout)
+        // 意味着 retry 永远不会成功。同 turn 计数/时长超阈值后合成终态错误,
+        // 落入下面与原生终态 error 完全相同的收口路径。
+        // auth 相关错误 (缺失 401 / 无效凭证 marker) 排除: 它们走 auth 修复 UX
+        // (「同步登录态」/ 重新登录), 升级成「后端不可达」会抢路径并误导排查
+        // (review: PR #715 五轮审核 P1 — 判定与 translator 共用 isAuthRelated*)。
+        // rate-limit / usage-limit (429 / quota) 同样排除 (codex R12 P2):
+        // 那是 provider 让等的正常退避窗口, daemon 的 willRetry 会在窗口后
+        // 成功; 升级成「后端不可达」+ proxy/VPN 引导既误杀可恢复重试又误导
+        // 排查方向。willRetry 透出 (networkRetryNotice) 不受影响, 用户仍能
+        // 看到「在限流退避」。
+        if (!isTerminalError && targetsCurrentTurn) {
+          const rawMessage = params.error?.message ?? '';
+          const retrySignals = extractNonSecretErrorSignals(rawMessage);
+          const isRateLimitBackoff = retrySignals.errorStatus === 429 || retrySignals.usageLimit;
+          if (!isAuthRelatedErrorMessage(rawMessage) && !isRateLimitBackoff) {
+            const decision = turnRetryTracker.track(
+              params.turnId || currentTurnId || '(pending)',
+              Date.now(),
+            );
+            if (decision.escalate) {
+              // 本地收口后 daemon 侧原 turn 还在无限 retry — fire-and-forget 补
+              // interrupt, 否则它继续烧远端资源, 还可能与下一轮 send 的新 turn
+              // 撞车 (review: PR #715 五轮审核 P1)。失败仅 warn: 本地已按终态
+              // 处理, daemon 死亡/重启时该 turn 自然消失。
+              if (params.threadId && params.turnId) {
+                host.request(Method.TurnInterrupt, {
+                  threadId: params.threadId,
+                  turnId: params.turnId,
+                }).catch((e: unknown) => {
+                  log.warn('escalated turn interrupt failed (best-effort)', {
+                    turnId: params.turnId,
+                    error: e instanceof Error ? e.message : String(e),
+                  });
+                });
+              }
+              const message = buildBackendUnreachableMessage({
+                isRemote: Boolean(opts.remoteHostId),
+                remoteHostId: opts.remoteHostId,
+                retryCount: decision.retryCount,
+                elapsedMs: decision.elapsedMs,
+                lastError: rawMessage,
+              });
+              log.error('codex retry-loop escalated to terminal error (backend unreachable)', {
+                threadId: params.threadId,
+                turnId: params.turnId,
+                retryCount: decision.retryCount,
+                elapsedMs: decision.elapsedMs,
+              });
+              effectiveParams = { ...params, willRetry: false, error: { message } };
+              isTerminalError = true;
+            }
+          }
+        }
         const wasTurnRunning = isTurnInFlight || targetsPendingTurn;
-        translateErrorNotification(params, eventQueue, { rt: translatorRt, log });
+        translateErrorNotification(effectiveParams, eventQueue, { rt: translatorRt, log });
         // 与 translator 的 terminal 判定保持一致：willRetry=false 或缺省都视为终态。
         if (!isTerminalError) return;
-        const terminalTurnId = params.turnId || currentTurnId;
+        const terminalTurnId = effectiveParams.turnId || currentTurnId;
         if (terminalTurnId) {
           terminalErroredTurnIds.add(terminalTurnId);
           dismissPendingUserInputForTurn(terminalTurnId, 'turn_failed');
@@ -4429,6 +4902,7 @@ export class CodexAgent extends BaseAgent {
         }
         if (rejectClosedOrCancelledSend(sendOpts, 'after input preparation')) {
           isTurnStartPending = false;
+          abandonBufferedTurns('send cancelled after input preparation');
           flushDeferredTerminalTurnCompletionsIfIdle();
           return;
         }
@@ -4498,6 +4972,51 @@ export class CodexAgent extends BaseAgent {
         // 普通 LLM 错误 / 超时 / auth 失败照原路径报错。
         const handleTurnStartResp = (resp: TurnStartResponse): void => {
           if (resp.turn?.id) {
+            // 缓冲的歧义 started 对账 (codex R9 P2): 本响应确立在飞 RPC 的
+            // turnId — 缓冲里 id 一致的是它的合法 started (下方正常激活),
+            // 不一致的是失败 RPC 的孤儿 (interrupt + 墓碑, 没人消费)。
+            if (bufferedOrphanTurnIds.size > 0) {
+              const wasBuffered = bufferedOrphanTurnIds.has(resp.turn.id);
+              for (const bufferedId of bufferedOrphanTurnIds) {
+                if (bufferedId === resp.turn.id) continue;
+                terminalErroredTurnIds.add(bufferedId);
+                // 孤儿的事件队列整队丢弃 (greptile R11 P1) — 任何事件都不得
+                // 渲染到 / 收口本次 send; 挂起的审批/输入请求按拒绝释放
+                // (codex R12 P1)。
+                bufferedTurnEventQueues.delete(bufferedId);
+                settleBufferedTurnReconcile(bufferedId, false);
+                log.warn('buffered turnStarted proven orphan by turn/start response — interrupting', {
+                  turnId: bufferedId,
+                  acceptedTurnId: resp.turn.id,
+                  threadId,
+                });
+                if (threadId) {
+                  host.request(Method.TurnInterrupt, { threadId, turnId: bufferedId }).catch((e2: unknown) => {
+                    log.warn('buffered orphan turn interrupt failed (best-effort)', {
+                      turnId: bufferedId,
+                      error: e2 instanceof Error ? e2.message : String(e2),
+                    });
+                  });
+                }
+              }
+              bufferedOrphanTurnIds.clear();
+              if (wasBuffered) {
+                // 合法 started 曾被缓冲: 补做 turnStarted 正常路径被跳过的
+                // per-turn 状态重置 (与 turnStarted handler 同款)。
+                proposedPlanText = null;
+                translatorRt.lastAuthErrorKey = null;
+                translatorRt.networkRetryNotice = null;
+                turnRetryTracker.reset();
+              }
+            }
+            // turn/start 成功后孤儿守卫**保持**, 不解除 (codex R14 P1): 失败
+            // RPC 的孤儿证据 (turnStarted/error/completed) 可能任意晚才到 —
+            // 解除后迟到的孤儿 started 在 currentTurnId===null 窗口会被正常
+            // 激活成假 running (会话永久卡)。守卫保持下: 未知 id 的迟到
+            // started 按孤儿墓碑 + interrupt; 合法 turn 的 started 由
+            // currentTurnId 匹配 (重复 started 幂等) 或 buffered 对账放行,
+            // 不受影响。守卫在 RPC 失败路径 (4413) 已把在飞 buffer 坐实孤儿,
+            // 语义依然自洽。
             // 墓碑: 该 turn 的终态已抢在本响应之前到达 (典型: 收紧补中断后
             // turnCompleted(interrupted) 先回), 不得重新置活, 否则会话卡 running。
             const alreadyCompleted = turnsCompletedBeforeStartResp.has(resp.turn.id);
@@ -4507,6 +5026,26 @@ export class CodexAgent extends BaseAgent {
               currentTurnPlanModeActive = turnStartsInPlanMode;
               pendingTurnStartPlanMode = null;
               startRolloutPlanFallback(resp.turn.id);
+              // 合法 buffered turn 激活成功: 挂起的审批/输入请求放行 (走正常
+              // UI 流程), 再按到达序重放缓存事件 (greptile R11 P1 +
+              // codex R12 P1): 早期 item/usage 不再永久丢失; 队列里若有终态
+              // (turn 在缓冲期间已结束), 重放自然收口 send — 不会把尸体 turn
+              // 挂成 in-flight 永久卡 generating。重放闭包重进 handler 时
+              // buffer 已清空 + currentTurnId 已置, 全部走正常路径。
+              settleBufferedTurnReconcile(resp.turn.id, true);
+              const replayQueue = bufferedTurnEventQueues.get(resp.turn.id);
+              if (replayQueue) {
+                bufferedTurnEventQueues.delete(resp.turn.id);
+                log.debug('replaying buffered events for accepted turn', {
+                  turnId: resp.turn.id,
+                  eventCount: replayQueue.length,
+                });
+                for (const replay of replayQueue) replay();
+              }
+            } else {
+              // 未激活 (墓碑): 队列丢弃, 挂起请求按拒绝释放 — 不得穿透。
+              bufferedTurnEventQueues.delete(resp.turn.id);
+              settleBufferedTurnReconcile(resp.turn.id, false);
             }
             // turn/start 在飞期间权限被收紧 → 本 turn 携带的还是旧宽松策略,
             // 拿到 id 立即补中断 (fire-and-forget, 失败仅 warn); turn 已终结则
@@ -4528,9 +5067,14 @@ export class CodexAgent extends BaseAgent {
         };
         let finalErr: unknown = null;
         try {
-          const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams);
+          const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
+            timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+          });
           markTurnConfigAccepted();
           if (rejectClosedOrCancelledSend(sendOpts, 'after turn/start')) {
+            // 本地取消边界直接 return: 挂起的 buffered 请求没有 settle 者
+            // (codex R17 P2), 统一释放。
+            abandonBufferedTurns('send cancelled after turn/start');
             return;
           }
           handleTurnStartResp(resp);
@@ -4565,7 +5109,9 @@ export class CodexAgent extends BaseAgent {
                 ...(resumeModel && resumeModel !== 'gpt-5' ? { model: resumeModel } : {}),
                 ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
               };
-              const resumeResp = await host.request<ThreadResumeResponse>(Method.ThreadResume, resumeParams);
+              const resumeResp = await host.request<ThreadResumeResponse>(Method.ThreadResume, resumeParams, {
+                timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+              });
               if (mutableModel === resumeModel && resumeModel === 'gpt-5' && resumeResp.model) {
                 mutableModel = resumeResp.model;
               }
@@ -4602,9 +5148,12 @@ export class CodexAgent extends BaseAgent {
                 }
               }
               log.info('thread/resume after stale daemon ok, retrying turn/start', { threadId });
-              const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams);
+              const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
+                timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+              });
               markTurnConfigAccepted();
               if (rejectClosedOrCancelledSend(sendOpts, 'after turn/start retry')) {
+                abandonBufferedTurns('send cancelled after turn/start retry');
                 return;
               }
               handleTurnStartResp(resp);
@@ -4629,6 +5178,47 @@ export class CodexAgent extends BaseAgent {
           // failed 分支同语义), 否则 planCycleActive 泄漏, 下一条常规消息仍会
           // 携带 collaborationMode plan(勾选与 chip 早已熄灭, 行为与 UI 脱节)。
           endPlanCycleAfterPreStartFailure('turn/start failed');
+          // RPC 级失败(超时/拒绝)不代表 server 没建 turn — daemon 可能已接受
+          // turn/start 只是响应没回来。立孤儿守卫: 之后迟到的 turnStarted 不得
+          // 重新激活会话 (greptile P1: 已报终态错误的会话又回到 generating)。
+          turnStartFailedWithoutTurnId = true;
+          // turnStarted 也可能已先于响应到达并被接受 (started-before-resp 是
+          // 协议允许的乱序) — 此时 currentTurnId/isTurnInFlight 已置位, 失败
+          // 收口必须把这个活跃 turn 一起收掉: 立墓碑挡后续事件 + 清 turn 状态 +
+          // 补 interrupt (daemon 侧该 turn 还在跑)。否则 UI 已 Done 但
+          // handle.isTurnRunning() 永真, 下一条 send 被 in-flight guard 挡死
+          // (greptile R6 P1)。
+          if (currentTurnId) {
+            const orphanTurnId = currentTurnId;
+            terminalErroredTurnIds.add(orphanTurnId);
+            if (threadId) {
+              host.request(Method.TurnInterrupt, { threadId, turnId: orphanTurnId }).catch((e2: unknown) => {
+                log.warn('turn/start-failure orphan interrupt failed (best-effort)', {
+                  turnId: orphanTurnId,
+                  error: e2 instanceof Error ? e2.message : String(e2),
+                });
+              });
+            }
+            currentTurnId = null;
+            isTurnInFlight = false;
+            currentTurnPlanModeActive = false;
+          }
+          // 缓冲的歧义 started 随本次失败一并坐实孤儿身份 (codex R9 P2):
+          // 没人消费, 全部 interrupt + 墓碑。
+          for (const bufferedId of bufferedOrphanTurnIds) {
+            terminalErroredTurnIds.add(bufferedId);
+            settleBufferedTurnReconcile(bufferedId, false);
+            if (threadId) {
+              host.request(Method.TurnInterrupt, { threadId, turnId: bufferedId }).catch((e2: unknown) => {
+                log.warn('buffered orphan turn interrupt failed (best-effort)', {
+                  turnId: bufferedId,
+                  error: e2 instanceof Error ? e2.message : String(e2),
+                });
+              });
+            }
+          }
+          bufferedOrphanTurnIds.clear();
+          bufferedTurnEventQueues.clear();
           log.error('turn/start failed', { error: String(finalErr) });
           eventQueue.push({
             type: 'error',
@@ -4806,6 +5396,10 @@ export class CodexAgent extends BaseAgent {
         if (closed) return;
         closed = true;
         unregisterCodexMcpContext(threadId);
+        // close 时 buffer 里可能还有等对账的挂起请求 (codex R17 P2):
+        // 统一按拒绝释放, 否则 handler 永远悬挂, dispatchServerRequest
+        // 永不返回, server 侧请求卡死。
+        abandonBufferedTurns('session closed');
         // 把挂起的 approval 强制 deny + emit interaction_dismissed (UI 关 dialog),
         // 否则 server 那边没回 response 会卡; UI 上的 PermissionPrompt 也会留尸
         try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
@@ -5225,16 +5819,24 @@ export class CodexAgent extends BaseAgent {
   }
 
   /**
-   * 本地 Codex OAuth/logout 失效时强制收掉 local host。
+   * 本地 Codex OAuth/logout 失效时强制收掉共享 local host 与独立 control-plane hosts。
    *
-   * 这条路径说明当前 local host 持有的凭证已经不可用，不能因为仍有订阅就继续保留；
-   * 但仍然只处理 local key，不能扩散到 remote host。
+   * 这些 host 都持有本机凭证，账号边界变化后不能继续复用；remote hosts 使用远端
+   * 用户配置，不在本次清理范围内。
    */
   async forceDisposeLocalHostForAuthChange(reason = 'CodexAgent local auth changed'): Promise<void> {
-    await this.retireHostKey(hostKey(), reason, {
-      failIfActive: false,
-      logPrefix: 'codex local auth restart',
-    });
+    const keys = new Set<string>([hostKey()]);
+    for (const key of this.hosts.keys()) {
+      if (isLocalControlPlaneHostKey(key)) keys.add(key);
+    }
+    for (const key of this.hostPromises.keys()) {
+      if (isLocalControlPlaneHostKey(key)) keys.add(key);
+    }
+    await Promise.all(Array.from(keys, (key) =>
+      this.retireHostKey(key, reason, {
+        failIfActive: false,
+        logPrefix: 'codex local auth restart',
+      })));
   }
 
   private async disposeLocalHostForCredentialChangeUnlocked(key: string, reason: string): Promise<void> {
@@ -5354,13 +5956,16 @@ export class CodexAgent extends BaseAgent {
     this.memoryOverride = enabled;
     // 立即 push, 让所有 live thread 通过 server 端 reload_user_config 拿到新值
     try {
-      if (this.hosts.size === 0) {
+      const localSessionHosts = Array.from(this.hosts.entries()).filter(
+        ([key]) => !key.startsWith('remote:') && !isLocalControlPlaneHostKey(key),
+      );
+      if (localSessionHosts.length === 0) {
         log.info('setMemory ◀ no live app-server, will apply on next session');
         return { effective: 'next-session' };
       }
-      await Promise.all(Array.from(this.hosts.entries()).filter(([key]) => !key.startsWith('remote:')).map(async ([key, host]) => {
-        // Remote hosts do not receive Maker Memory, so their native setting is
-        // owned by the target rather than this local manager.
+      await Promise.all(localSessionHosts.map(async ([key, host]) => {
+        // Only thread-serving local hosts receive Maker Memory. Remote hosts own
+        // their native setting; model-list control-plane hosts have no live threads.
         await host.request(Method.ExperimentalFeatureEnablementSet, {
           enablement: { memories: enabled },
         });

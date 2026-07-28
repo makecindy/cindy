@@ -81,7 +81,11 @@ import {
   tiptapDocHasContent,
 } from '@/lib/composerDraftStore';
 import { subscribeSessionLinkInsert } from '@/lib/composerActionsBus';
-import { ModelSelector, type ModelMemoryAccessors } from './ModelSelector';
+import {
+  ModelSelector,
+  resolveModelSelectorAgentIdentity,
+  type ModelMemoryAccessors,
+} from './ModelSelector';
 import {
   createEffortChangeCoordinator,
   enqueueEffortChange,
@@ -289,6 +293,11 @@ interface ChatInputProps {
   ) => boolean | void | Promise<boolean | void>;
   /** Session ID for binding workingDir. When absent, folder picker is hidden. */
   sessionId?: string;
+  /**
+   * 已由 session/runtime 元数据确认的当前 Agent。null/undefined 表示身份尚未加载；
+   * 不能用 vendorKey 的 Claude Code 默认回退冒充真实身份。
+   */
+  runtimeAgentKind?: AgentKind | null;
   /** Initial workingDir from session data. */
   initialWorkingDir?: string | null;
   /**
@@ -788,6 +797,7 @@ function detectTrigger(editor: Editor): TriggerState {
 export function ChatInput({
   onSend,
   sessionId,
+  runtimeAgentKind,
   initialWorkingDir,
   remoteHostId,
   deviceLinkDeviceId,
@@ -2579,10 +2589,17 @@ export function ChatInput({
       // alone.
       if (storageKey !== undefined) {
         const draft = getComposerDraft(storageKey);
-        if (draft?.text && composerDocIsEmpty(editor.state.doc)) {
+        // 判空同外部草稿订阅:草稿正文可能是「空文档 JSON」而不是 undefined。此时
+        // 编辑器本来就是空的,setContent 只会原地重建 doc(replace(0, size)),把按
+        // 位置存活的状态(语音插入点、草稿装饰锚点)推到 block 边界上。本 effect 依赖
+        // voiceInput.isBusy,录音开始与结束各会重跑一次——新建对话页的草稿键固定、
+        // 常留着一份空正文,于是上屏文字前凭空多出一个空行。
+        const draftDocument =
+          draft?.text && tiptapDocHasContent(draft.text) ? draft.text : null;
+        if (draftDocument && composerDocIsEmpty(editor.state.doc)) {
           isRestoringRef.current = true;
           try {
-            editor.commands.setContent(normalizeComposerDocumentJSON(draft.text));
+            editor.commands.setContent(normalizeComposerDocumentJSON(draftDocument));
           } finally {
             isRestoringRef.current = false;
           }
@@ -5275,6 +5292,17 @@ export function ChatInput({
                     onFastModeChange={handleFastModeChange}
                     modelMemory={modelMemory}
                     vendorKey={vendorKey}
+                    // 稳态只接受父层已加载的 session/runtime 身份；intent 存在时则明确标成
+                    // “下条消息”的目标。这样冷启动不猜 Claude Code，切换失败保留 intent
+                    // 供重试时也不会长期隐藏身份或把目标冒充为当前 Agent。
+                    agentIdentity={
+                      sessionId
+                        ? resolveModelSelectorAgentIdentity(
+                            runtimeAgentKind,
+                            agentSwitchIntent?.target,
+                          )
+                        : undefined
+                    }
                     // session-agent-switch:本机已建会话提供显式两步引擎切换(列表顶部
                     // Claude/Codex 分段,先选 Agent 再选模型)。草稿(无 sessionId)与
                     // device-link / SSH 远程会话不传(v1 不支持切换)。

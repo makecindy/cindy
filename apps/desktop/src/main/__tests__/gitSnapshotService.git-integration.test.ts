@@ -3,11 +3,11 @@
  */
 
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { TestDirectoryTemplate } from '../../test/vitest/testDirectoryTemplate';
 import {
   createSnapshot,
   createSnapshotDetailed,
@@ -27,15 +27,13 @@ const originalGitLocaleEnv = {
   LANGUAGE: process.env.LANGUAGE,
 };
 
-async function initRepo(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-create-snapshot-'));
+const repoTemplate = new TestDirectoryTemplate('xdt-create-snapshot-', async (dir) => {
   await gitExec(['init'], dir);
   await gitExec(['config', 'user.email', 'test@xdt.local'], dir);
   await gitExec(['config', 'user.name', 'XDT Test'], dir);
   await gitExec(['config', 'commit.gpgsign', 'false'], dir);
   await gitExec(['config', 'core.autocrlf', 'false'], dir);
-  return dir;
-}
+});
 
 async function writeRepoFile(gitPath: string, content: string | Buffer): Promise<void> {
   const filePath = path.join(repoPath, ...gitPath.split('/'));
@@ -99,7 +97,7 @@ beforeEach(async () => {
   process.env.LC_ALL = 'C';
   process.env.LANG = 'C';
   delete process.env.LANGUAGE;
-  repoPath = await initRepo();
+  repoPath = await repoTemplate.createCopy();
 });
 
 afterEach(async () => {
@@ -110,6 +108,10 @@ afterEach(async () => {
   else process.env.LANG = originalGitLocaleEnv.LANG;
   if (originalGitLocaleEnv.LANGUAGE === undefined) delete process.env.LANGUAGE;
   else process.env.LANGUAGE = originalGitLocaleEnv.LANGUAGE;
+});
+
+afterAll(async () => {
+  await repoTemplate.dispose();
 });
 
 describe('createSnapshot', () => {

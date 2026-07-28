@@ -15,6 +15,7 @@
 
 ## 版本记录
 
+- **2026-07-28**：`DESIGN.md §2` 语义色清单新增警告橙合法消费者「workflow agent 状态方块条的运行中格子」（8×8px 方块，后台任务面板详情 + workflow 聊天卡；done/failed/queued 各走自己的语义 token），并明确「不引入新 token 的消费者由 §2 清单登记即可、需要新 token 才必须先进 §10 豁免表」；`DESIGN.md §5` 新增小例外「status micro-cells（2px）」——≤8px 的非交互状态方块保留 2px 圆角（方块条格子与 SystemCard 分类方块），档位圆角在该尺寸会把方块变成圆点、丢掉大编队一眼总览的「方块条」读法，范围严格限定非交互 / ≤8px / 仅状态，按钮·标签·行·徽章·容器一律仍走三档。
 - **2026-07-26**：`DESIGN.md §10` 新增「External Theme Import (VSCode / Obsidian)」小节——外部主题导入只映射从 7 个人工移植社区主题抽出的 91-token 模板、语义豁免族（`--login-*` / 危险红 / 警告橙 / 焦点蓝 / `--diff-*`）不参与导入、`-hsl` token 精确换算、新增 `--md-h1-fg`…`--md-h6-fg` / `--md-strong-fg`（默认 `inherit`，内置主题观感不变）、本地主题可选 `family` 字段。决策理由与取舍见 [`design-decision-log.md`](./design-decision-log.md) 2026-07-26 条。
 - **2026-07-24（梳理批次 1）**：`DESIGN.md` 整体梳理第一批落地——去除 Ollama 官网叙事（标题改 `Cindy Design System`，§1/§4/§5/§8/§9 重写或删除官网内容）；focus ring 文档追平代码（`#3b82f6` → `#417CDD`）；§2/§9 二级三级文字与 chip 双 slot 表述按 `colors.ts` 修正；§10 移除写死 token 计数与过时豁免行；§12 结构化规格并入 §4（§12 编号留占位）；§13 G1–G4 归档至新建 [`design-decision-log.md`](./design-decision-log.md)；§14/§15/§16 若干失效指向修正。
 - **2026-07-24**：目录整编（设计 md 统一归位 `docs/design-rules/`，本文件升级为索引）。同步 Figma 组件库更新：hover 统一「叠白变亮」口径（旧「白底钮 hover 叠黑」作废）、新增协议勾选 `radiobutton` 四态与双色模式小按钮四母版、`SSO 登录_企业` / `back` 扩 Dark 三态、`white_button` 增 loading 五态（`figma-component-spec §11`、`DESIGN.md §16.5`）。`figma-component-spec.md` / `token-decision-table.md` 自迁移前仓库最后版本恢复并更新至 wave5。

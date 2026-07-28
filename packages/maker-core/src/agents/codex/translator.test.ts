@@ -2,8 +2,9 @@
  * translator.translateErrorNotification — auth retry-loop dedupe + isAuthMissing 触发。
  *
  * 覆盖 fix(desktop,maker-core): 远端 codex daemon 重启 / auth 状态异常的端到端恢复
- * 这一 commit 里 ❶+❹ 修法的核心 invariant:
- *   1. willRetry=true + transient (非 auth) → silent (不 push error event)
+ * 这一 commit 里 ❶+❹ 修法的核心 invariant (❶ 后经 issue #677 泛化):
+ *   1. willRetry=true + transient (非 auth) → 第 1 次 silent; 同 turn 第 2 次透出
+ *      **一条**非终止提示 (#677 起不再限定 networkish pattern), 之后静默
  *   2. willRetry=true + auth 关键字 → push 第一条, 同 thread+turn 后续 dedupe
  *   3. willRetry=true + auth + 不同 turn → key reset, 又能 push
  *   4. willRetry=false → 不论 auth 与否都 push
@@ -347,7 +348,10 @@ describe('translateErrorNotification', () => {
     expect(events).toHaveLength(2);
   });
 
-  it('willRetry=true 非网络非 auth 错误 → 依旧全部静默', async () => {
+  it('willRetry=true 非网络非 auth 错误 → 第 2 次同样透出一条(issue #677 泛化),之后静默', async () => {
+    // #677 之前只透 networkish pattern; 但 "rate limit backing off" / 403 /
+    // websocket unreachable 这类持续性重试同样是「daemon 空转」信号, 用户必须
+    // 能看到一条非终止提示。终局收口由 TurnRetryTracker 升级负责 (不在这里)。
     const rt = newCodexRuntimeState();
     const ctx = makeCtx(rt);
     const q = createAsyncQueue<AgentEvent>();
@@ -359,7 +363,30 @@ describe('translateErrorNotification', () => {
       );
     }
     const events = await collect(q);
-    expect(events).toHaveLength(0);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('error');
+    expect(events[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+  });
+
+  it('willRetry=true 远端后端不可达文案 (403 / websocket unreachable) → 第 2 次透出提示', async () => {
+    // issue #677 的原始断链面: 这两类文案不匹配旧的 networkish pattern,
+    // 远端 daemon retry-loop 时 UI 一条事件都收不到。
+    const rt = newCodexRuntimeState();
+    const ctx = makeCtx(rt);
+    const q = createAsyncQueue<AgentEvent>();
+    const messages = [
+      'unexpected status 403 Forbidden, url: https://chatgpt.com/backend-api/codex/responses',
+      'failed to connect to websocket: Network unreachable',
+    ];
+    for (let round = 0; round < 2; round += 1) {
+      for (const message of messages) {
+        translateErrorNotification(makeParams({ willRetry: true, message }), q, ctx);
+      }
+    }
+    const events = await collect(q);
+    // 同 thread+turn 只透一条 (第 2 次触发时), 与其余重试风暴隔离。
+    expect(events).toHaveLength(1);
+    expect(events[0].data).toMatchObject({ isTerminal: false, willRetry: true });
   });
 });
 

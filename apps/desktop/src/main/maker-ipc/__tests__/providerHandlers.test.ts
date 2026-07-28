@@ -4,6 +4,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 
 import type { AgentKind, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
+import { BUILTIN_REFRESHABLE_PROVIDER_IDS } from '../../../shared/providerModelRefresh.js';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
@@ -67,6 +68,8 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
     fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm1', name: 'M1' }] })),
     rediscoverModels: vi.fn(async () => null),
+    refreshBuiltinModels: vi.fn(async () => {}),
+    requestModelsAutoRefresh: vi.fn(async () => {}),
     // 生产恒定接线（register.ts）。默认桩 = 已接线且信任，好让其余用例只关心自己的分支；
     // 「漏接线」是独立用例，显式不传这个 dep。
     assertTrustedSender: vi.fn(() => {}),
@@ -193,6 +196,141 @@ describe('provider:models-rediscover handler', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic'),
     ).rejects.toThrow(/INTERNAL/);
+  });
+});
+
+describe('provider:models-refresh handler', () => {
+  it('guards the sender, validates the built-in id, and forwards the refresh', async () => {
+    const harness = new IpcHarness();
+    const assertTrustedSender = vi.fn();
+    const refreshBuiltinModels = vi.fn(async () => {});
+    registerProviderHandlers(
+      harness,
+      makeDeps({ assertTrustedSender, refreshBuiltinModels }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'anthropic'),
+    ).resolves.toEqual({ ok: true, providerId: 'anthropic' });
+    expect(assertTrustedSender).toHaveBeenCalledOnce();
+    expect(refreshBuiltinModels).toHaveBeenCalledWith('anthropic');
+  });
+
+  it('rejects unsupported ids before refreshing', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'custom-provider'),
+    ).rejects.toThrow(
+      `[INVALID_PARAMS] providerId must be one of: ${BUILTIN_REFRESHABLE_PROVIDER_IDS.join(', ')}`,
+    );
+    expect(deps.refreshBuiltinModels).not.toHaveBeenCalled();
+  });
+
+  it('does not run the refresh when the sender guard rejects', async () => {
+    const harness = new IpcHarness();
+    const refreshBuiltinModels = vi.fn(async () => {});
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        assertTrustedSender: () => {
+          throw new Error('[PERMISSION_DENIED] untrusted sender');
+        },
+        refreshBuiltinModels,
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'openai'),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(refreshBuiltinModels).not.toHaveBeenCalled();
+  });
+
+  it('maps source refresh failures to a generic IPC error', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        refreshBuiltinModels: async () => {
+          throw new Error('/secret/path should stay in main logs');
+        },
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'xai'),
+    ).rejects.toThrow("[INTERNAL] model list refresh failed for 'xai'");
+  });
+
+  it('preserves structured IPC errors from provider-specific refreshers', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        refreshBuiltinModels: async () => {
+          throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI model list refresh failed.');
+        },
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'xd'),
+    ).rejects.toMatchObject({
+      code: 'MODEL_ACCESS_FAILED',
+      message: '[MODEL_ACCESS_FAILED] Cindy AI model list refresh failed.',
+    });
+  });
+});
+
+describe('provider:models-auto-refresh handler', () => {
+  it('guards the sender and forwards an allowed renderer trigger', async () => {
+    const harness = new IpcHarness();
+    const assertTrustedSender = vi.fn();
+    const requestModelsAutoRefresh = vi.fn(async () => {});
+    registerProviderHandlers(
+      harness,
+      makeDeps({ assertTrustedSender, requestModelsAutoRefresh }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_AUTO_REFRESH, 'model-selector-open'),
+    ).resolves.toEqual({ ok: true });
+    expect(assertTrustedSender).toHaveBeenCalledOnce();
+    expect(requestModelsAutoRefresh).toHaveBeenCalledWith('model-selector-open');
+  });
+
+  it('rejects foreground and unknown renderer triggers', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_AUTO_REFRESH, 'foreground'),
+    ).rejects.toThrow(
+      '[INVALID_PARAMS] trigger must be one of: providers-open, model-selector-open',
+    );
+    expect(deps.requestModelsAutoRefresh).not.toHaveBeenCalled();
+  });
+
+  it('does not forward when the trusted sender guard rejects', async () => {
+    const harness = new IpcHarness();
+    const requestModelsAutoRefresh = vi.fn(async () => {});
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        assertTrustedSender: () => {
+          throw new Error('[PERMISSION_DENIED] untrusted sender');
+        },
+        requestModelsAutoRefresh,
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_AUTO_REFRESH, 'providers-open'),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(requestModelsAutoRefresh).not.toHaveBeenCalled();
   });
 });
 

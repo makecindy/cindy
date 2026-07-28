@@ -418,6 +418,51 @@ describe('makerChatStore text delta batching', () => {
     expect(messages[0]?.clientId).toBe('assistant-1');
   });
 
+  it('updates a repeated web_search tool_use row in place', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'search-1',
+          toolName: 'web_search',
+          input: { query: 'early query' },
+        },
+      },
+      persistId: 'search-message-1',
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'search-1',
+          toolName: 'web_search',
+          input: {
+            query: 'https://example.com/final',
+            action: { type: 'openPage', url: 'https://example.com/final' },
+          },
+        },
+      },
+      persistId: 'search-message-1',
+    });
+
+    const messages = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      clientId: 'search-message-1',
+      role: 'tool_use',
+      toolUseId: 'search-1',
+      toolName: 'web_search',
+      toolInput: {
+        query: 'https://example.com/final',
+        action: { type: 'openPage', url: 'https://example.com/final' },
+      },
+    });
+  });
+
   it('flushes pending text before a permission interaction request on the separate IPC channel', () => {
     const snapshots: Array<{ roles: string[]; pendingPermission: string | null }> = [];
     const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {

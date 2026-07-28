@@ -1,6 +1,13 @@
 import Constants from 'expo-constants';
 
-import { parseClientEndpointManifest } from '@cindy/maker-shared/client-endpoints';
+import {
+  CLIENT_ENDPOINT_KEYS,
+  parseClientEndpointManifest,
+  type ClientEndpointKey,
+  type ClientEndpointMap,
+  type ClientEndpointRegion,
+  type RealmManifestBaseUrls,
+} from '@cindy/maker-shared/client-endpoints';
 
 import type { LoginMessageKey } from '@/auth/loginMessages';
 
@@ -12,17 +19,16 @@ export interface MobileGoogleConfig {
   iosUrlScheme: string;
 }
 
-const configuredExpoExtra = (Constants.expoConfig?.extra as {
-  xdtProductionEnv?: Record<string, string>;
-  cindy?: {
-    regionConfigSource?: string;
-    google?: Partial<MobileGoogleConfig>;
-  };
-} | null) ?? {};
-const configuredBuildEnv = (configuredExpoExtra.xdtProductionEnv ?? {}) as Record<
-  string,
-  string
->;
+const configuredExpoExtra =
+  (Constants.expoConfig?.extra as {
+    xdtProductionEnv?: Record<string, string>;
+    cindy?: {
+      regionConfigSource?: string;
+      google?: Partial<MobileGoogleConfig>;
+    };
+  } | null) ?? {};
+const configuredBuildEnv = (configuredExpoExtra.xdtProductionEnv ??
+  {}) as Record<string, string>;
 const configuredRegionGoogle = configuredExpoExtra.cindy?.google;
 
 function configuredValue(key: string): string {
@@ -33,7 +39,11 @@ export const AUTH_REGION: CindyAuthRegion = (() => {
   const value = configuredValue('EXPO_PUBLIC_CINDY_AUTH_REGION');
   return value === 'global' ? 'global' : value === 'dev' ? 'dev' : 'cn';
 })();
-export const APP_SCHEME = { cn: 'cindycn', global: 'cindy', dev: 'cindydev' }[AUTH_REGION];
+export const BUILD_AUTH_REGION: ClientEndpointRegion =
+  AUTH_REGION === 'global' ? 'global' : 'cn';
+export const APP_SCHEME = { cn: 'cindycn', global: 'cindy', dev: 'cindydev' }[
+  AUTH_REGION
+];
 export const MOBILE_REDIRECT_URL = `${APP_SCHEME}://auth`;
 
 // __DEV__ 端点初值来源:metro 构建期按 AUTH_REGION 把仓内
@@ -59,13 +69,31 @@ const DEV_MANIFEST_PARSED = (() => {
           require('../../../../config/endpoint.dev.json')
         : // eslint-disable-next-line @typescript-eslint/no-require-imports
           require('../../../../config/endpoint.json');
-  const parsed = parseClientEndpointManifest(JSON.stringify(raw), { allowHttp: true });
+  const parsed = parseClientEndpointManifest(JSON.stringify(raw), {
+    allowHttp: true,
+  });
   if (!parsed.ok) {
-    throw new Error(`${manifestPath} invalid (${parsed.reason}) — dev 端点正本必须能过客户端 parser`);
+    throw new Error(
+      `${manifestPath} invalid (${parsed.reason}) — dev 端点正本必须能过客户端 parser`,
+    );
   }
   return parsed;
 })();
-const DEV_MANIFEST: Partial<Record<string, string>> = DEV_MANIFEST_PARSED?.endpoints ?? {};
+const DEV_MANIFEST: Partial<Record<string, string>> =
+  DEV_MANIFEST_PARSED?.endpoints ?? {};
+
+let buildEndpointMap: ClientEndpointMap | null =
+  DEV_MANIFEST_PARSED?.endpoints ?? null;
+let endpointManifestRegion: ClientEndpointRegion | null =
+  DEV_MANIFEST_PARSED?.region ?? null;
+let activeSessionRealm: ClientEndpointRegion = BUILD_AUTH_REGION;
+const realmEndpointCache = new Map<ClientEndpointRegion, ClientEndpointMap>();
+if (buildEndpointMap) {
+  realmEndpointCache.set(
+    endpointManifestRegion ?? BUILD_AUTH_REGION,
+    buildEndpointMap,
+  );
+}
 
 // 显式 env 优先,dev 回落仓内正本;prod 为空串(闸门回填,见上)。
 export const DEFAULT_DEVICE_LINK_API_BASE_URL =
@@ -84,7 +112,10 @@ export interface MobileConfigIssue {
   messageKey: LoginMessageKey;
 }
 
-export function normalizeBaseUrlWithDefault(value: string | undefined, fallback: string): string {
+export function normalizeBaseUrlWithDefault(
+  value: string | undefined,
+  fallback: string,
+): string {
   const trimmed = value?.trim();
   return trimmed ? trimmed.replace(/\/$/, '') : fallback;
 }
@@ -94,7 +125,9 @@ export function normalizeBaseUrlWithDefault(value: string | undefined, fallback:
 // EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL。
 export function resolveDeviceLinkApiBaseUrl(value: string | undefined): string {
   const trimmed = value?.trim();
-  return trimmed ? trimmed.replace(/\/$/, '') : DEFAULT_DEVICE_LINK_API_BASE_URL;
+  return trimmed
+    ? trimmed.replace(/\/$/, '')
+    : DEFAULT_DEVICE_LINK_API_BASE_URL;
 }
 
 export function deviceLinkWsUrl(apiBaseUrl = DEVICE_LINK_API_BASE_URL): string {
@@ -110,9 +143,8 @@ export const DEV_LOGIN_ENABLED = resolveEnvFlag(
   process.env.EXPO_PUBLIC_XDT_DEV_LOGIN_ENABLED,
 );
 
-export const MOBILE_VISUAL_MOCK_ENABLED = __DEV__ && resolveEnvFlag(
-  process.env.EXPO_PUBLIC_CINDY_MOBILE_VISUAL_MOCK,
-);
+export const MOBILE_VISUAL_MOCK_ENABLED =
+  __DEV__ && resolveEnvFlag(process.env.EXPO_PUBLIC_CINDY_MOBILE_VISUAL_MOCK);
 
 export const MOBILE_VISUAL_MOCK_REALDATA_URL = __DEV__
   ? process.env.EXPO_PUBLIC_CINDY_MOBILE_REALDATA_URL?.trim() || ''
@@ -153,8 +185,8 @@ function isHttpUrl(value: string): boolean {
 // 新值(消费点全部是调用时读取,无模块顶层捕获——新增顶层派生前先想清楚)。
 // 初始值即构建期烘焙值;__DEV__ 下闸门不拉取,行为与现状完全一致。
 
-// auth 不分 cn/global 字段:dev 读所选 region 正本(默认 global);prod 由 region 化
-// 清单回填。显式 env 覆写仍最高优先。
+// 默认 auth 来自构建区域清单；组织 SSO 登录时会把 token 消费端点整体切到
+// session realm。显式 env 覆写仍只影响 dev/构建区域初值。
 export let AUTH_API_BASE_URL = normalizeBaseUrlWithDefault(
   configuredValue('EXPO_PUBLIC_CINDY_AUTH_BASE_URL'),
   DEV_MANIFEST.authApiBaseUrl ?? '',
@@ -216,11 +248,32 @@ export let VOICE_API_BASE_URL = normalizeBaseUrlWithDefault(
   DEV_MANIFEST.voiceApiBaseUrl ?? '',
 );
 
+function syncBuildTokenEndpointCache(): void {
+  if (!buildEndpointMap) return;
+  const buildRealm = endpointManifestRegion ?? BUILD_AUTH_REGION;
+  buildEndpointMap = {
+    ...buildEndpointMap,
+    authApiBaseUrl: AUTH_API_BASE_URL,
+    oauthBrokerApiBaseUrl: OAUTH_BROKER_API_BASE_URL,
+    deviceLinkApiBaseUrl: DEVICE_LINK_API_BASE_URL,
+    voiceApiBaseUrl: VOICE_API_BASE_URL,
+  };
+  realmEndpointCache.set(buildRealm, buildEndpointMap);
+}
+
+// __DEV__ 的显式 EXPO_PUBLIC_* 覆写必须同时进入构建区域缓存。认证客户端和
+// logout/reset 现在从 realm cache 取值；只改 live binding 会导致首次登录看似
+// 命中本地服务，后续 realm 激活却悄悄退回仓内正本。
+syncBuildTokenEndpointCache();
+
 // 二进制版本号:审核模式匹配基准。优先原生层版本(iOS CFBundleShortVersionString /
 // Android versionName,OTA 热更后不漂移),expoConfig.version 兜底(dev / 测试环境
 // 拿不到原生值)。与 mobileTapdb 的版本上报取值口径一致。
-export const APP_BINARY_VERSION =
-  (Constants.nativeAppVersion ?? Constants.expoConfig?.version ?? '').trim();
+export const APP_BINARY_VERSION = (
+  Constants.nativeAppVersion ??
+  Constants.expoConfig?.version ??
+  ''
+).trim();
 
 // 运行平台标识:只会是 'ios' / 'android' / ''(拿不到)。审核模式的平台门控要在 env.ts
 // 顶层就能判定,而这里不能引 react-native 的 Platform:env.ts 被 node 环境单测直接
@@ -299,23 +352,41 @@ export let REVIEW_MODE = isReviewModeActive(
 
 // 非 live binding(清单不再承载语音网关地址,启动闸门无覆写路径):env 覆写为空时
 // 即空串。生产语音输入走 VOICE_API_BASE_URL 的托管路径,本值仅供本地 e2e / dev。
-export const MOBILE_VOICE_LITELLM_BASE_URL = DEFAULT_MOBILE_VOICE_LITELLM_BASE_URL
-  ? normalizeBaseUrlWithDefault(DEFAULT_MOBILE_VOICE_LITELLM_BASE_URL, '')
-  : '';
+export const MOBILE_VOICE_LITELLM_BASE_URL =
+  DEFAULT_MOBILE_VOICE_LITELLM_BASE_URL
+    ? normalizeBaseUrlWithDefault(DEFAULT_MOBILE_VOICE_LITELLM_BASE_URL, '')
+    : '';
 
-// 端点清单(endpoint.json)的自举拉取基址(启动闸门专用),按 region 构建期二选一
-// 烘焙(EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL ← region 对应 endpoint*.json 的
-// cdnBaseUrl)。**烘焙常量、不接受远程覆盖**——拉清单的
-// 地址若吃清单自己的字段,配错一次就把自己锁死(与 desktop 同则)。这是客户端
-// 唯一"有感"的烘焙远程 URL。
+// 本区与对端 endpoint.json 的自举拉取基址，均由构建期从两份仓内清单的
+// cdnBaseUrl 注入。**烘焙常量、不接受远程覆盖**——区域身份由受信任地址表
+// 决定，远端清单只提供该区域的业务端点。
 export const ENDPOINT_MANIFEST_BASE_URL = configuredValue(
   'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL',
 ).replace(/\/+$/, '');
+export const ENDPOINT_MANIFEST_PEER_BASE_URL = (
+  // Expo/Metro 只内联静态属性访问；不能改回 configuredValue(dynamicKey)。
+  process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL?.trim() ||
+  configuredBuildEnv.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL?.trim() ||
+  ''
+).replace(/\/+$/, '');
+
+function trustedMobileRealmManifestBaseUrls(): RealmManifestBaseUrls {
+  return BUILD_AUTH_REGION === 'global'
+    ? {
+        cn: ENDPOINT_MANIFEST_PEER_BASE_URL,
+        global: ENDPOINT_MANIFEST_BASE_URL,
+      }
+    : {
+        cn: ENDPOINT_MANIFEST_BASE_URL,
+        global: ENDPOINT_MANIFEST_PEER_BASE_URL,
+      };
+}
 
 /**
  * 启动闸门拉到远程端点清单后回写运行期端点。`undefined` 表示调用方未提供、
- * 不修改;空串表示清单缺失/留空后的权威结果,必须清空旧值。auth 字段不分
- * region——国内/海外两条 CDN 各发各的清单,无脑取。
+ * 不修改;空串表示清单缺失/留空后的权威结果,必须清空旧值。启动清单写入
+ * 构建区域默认值；跨区域组织会话由 activateMobileSessionRealm 整体切换
+ * token 消费端点。
  */
 export function applyResolvedClientEndpoints(resolved: {
   authApiBaseUrl?: string;
@@ -327,12 +398,19 @@ export function applyResolvedClientEndpoints(resolved: {
   reviewVersion?: string | null;
   /** iOS StoreKit 分发环境；TestFlight 保留 OTA、禁用整包外跳。 */
   isTestFlight?: boolean;
+  region?: ClientEndpointRegion | null;
 }): void {
   if (resolved.authApiBaseUrl !== undefined) {
-    AUTH_API_BASE_URL = normalizeBaseUrlWithDefault(resolved.authApiBaseUrl, '');
+    AUTH_API_BASE_URL = normalizeBaseUrlWithDefault(
+      resolved.authApiBaseUrl,
+      '',
+    );
   }
   if (resolved.oauthBrokerApiBaseUrl !== undefined) {
-    OAUTH_BROKER_API_BASE_URL = normalizeBaseUrlWithDefault(resolved.oauthBrokerApiBaseUrl, '');
+    OAUTH_BROKER_API_BASE_URL = normalizeBaseUrlWithDefault(
+      resolved.oauthBrokerApiBaseUrl,
+      '',
+    );
   }
   if (resolved.deviceLinkApiBaseUrl !== undefined) {
     DEVICE_LINK_API_BASE_URL = resolved.deviceLinkApiBaseUrl.replace(/\/$/, '');
@@ -340,6 +418,9 @@ export function applyResolvedClientEndpoints(resolved: {
   if (resolved.voiceApiBaseUrl !== undefined) {
     VOICE_API_BASE_URL = resolved.voiceApiBaseUrl.replace(/\/$/, '');
   }
+  // partial apply 也必须保持构建缓存与 live binding 一致；测试、dev 热重载和
+  // 未来的局部配置刷新都不能在下一次 realm reset 时退回旧值。
+  syncBuildTokenEndpointCache();
   // 仅自建变体吃清单覆写,保住「非自建 ⇒ OTA_SERVER_BASE_URL 恒空串」不变量
   // (调用点虽都有 IS_OTA_SELFHOST 门控,这里再挡一层,变体身份始终由烧包决定)。
   if (resolved.mobileUpdateBaseUrl !== undefined && IS_OTA_SELFHOST) {
@@ -351,13 +432,112 @@ export function applyResolvedClientEndpoints(resolved: {
   if (resolved.isTestFlight !== undefined) {
     IS_TESTFLIGHT_BUILD = resolved.isTestFlight;
   }
-  if (resolved.reviewVersion !== undefined || resolved.isTestFlight !== undefined) {
+  if (
+    resolved.reviewVersion !== undefined ||
+    resolved.isTestFlight !== undefined
+  ) {
     REVIEW_MODE = isReviewModeActive(
       resolvedReviewVersion,
       APP_BINARY_VERSION,
       IS_TESTFLIGHT_BUILD,
     );
   }
+
+  const hasCompleteEndpointMap = CLIENT_ENDPOINT_KEYS.every(
+    (key) => typeof (resolved as Partial<ClientEndpointMap>)[key] === 'string',
+  );
+  if (hasCompleteEndpointMap) {
+    buildEndpointMap = resolved as ClientEndpointMap;
+    endpointManifestRegion = resolved.region ?? null;
+    activeSessionRealm = endpointManifestRegion ?? BUILD_AUTH_REGION;
+    realmEndpointCache.clear();
+    realmEndpointCache.set(activeSessionRealm, buildEndpointMap);
+  }
+}
+
+export function getMobileEndpointRealmConfig(): {
+  buildRegion: ClientEndpointRegion;
+  manifestRegion: ClientEndpointRegion | null;
+  crossRealmOrgLoginEnabled: boolean;
+  realmManifestBaseUrls: RealmManifestBaseUrls;
+} {
+  return {
+    buildRegion: BUILD_AUTH_REGION,
+    manifestRegion: endpointManifestRegion,
+    crossRealmOrgLoginEnabled: AUTH_REGION !== 'dev',
+    realmManifestBaseUrls: trustedMobileRealmManifestBaseUrls(),
+  };
+}
+
+const MOBILE_REALM_MANIFEST_TIMEOUT_MS = 10_000;
+
+/** 当前登录态消费业务请求的区域；与安装包/更新通道所在区域相互独立。 */
+export function getActiveMobileSessionRealm(): ClientEndpointRegion {
+  return activeSessionRealm;
+}
+
+export async function loadMobileEndpointsForRealm(
+  region: ClientEndpointRegion,
+): Promise<ClientEndpointMap> {
+  const cached = realmEndpointCache.get(region);
+  if (cached) return cached;
+  const baseUrl = trustedMobileRealmManifestBaseUrls()[region];
+  if (!baseUrl) {
+    throw new Error('realm-manifest-url-unavailable');
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    MOBILE_REALM_MANIFEST_TIMEOUT_MS,
+  );
+  try {
+    const response = await fetch(`${baseUrl}/endpoint.json?t=${Date.now()}`, {
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`http-${response.status}`);
+    const parsed = parseClientEndpointManifest(await response.text());
+    if (!parsed.ok) throw new Error(parsed.reason);
+    if (parsed.region !== null && parsed.region !== region) {
+      throw new Error(`region-mismatch:${region}:${parsed.region}`);
+    }
+    realmEndpointCache.set(region, parsed.endpoints);
+    return parsed.endpoints;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function getMobileEndpointForRealm(
+  region: ClientEndpointRegion,
+  key: ClientEndpointKey,
+): string {
+  const endpoints = realmEndpointCache.get(region);
+  if (!endpoints)
+    throw new Error(`mobile endpoints for realm '${region}' not loaded`);
+  return endpoints[key];
+}
+
+/** 只切 token 消费端点；mobileUpdate/review/更新身份仍由构建清单控制。 */
+export function activateMobileSessionRealm(region: ClientEndpointRegion): void {
+  const endpoints = realmEndpointCache.get(region);
+  if (!endpoints)
+    throw new Error(`mobile endpoints for realm '${region}' not loaded`);
+  activeSessionRealm = region;
+  AUTH_API_BASE_URL = endpoints.authApiBaseUrl;
+  OAUTH_BROKER_API_BASE_URL = endpoints.oauthBrokerApiBaseUrl;
+  DEVICE_LINK_API_BASE_URL = endpoints.deviceLinkApiBaseUrl;
+  VOICE_API_BASE_URL = endpoints.voiceApiBaseUrl;
+}
+
+export function resetMobileSessionRealm(): void {
+  const buildRealm = endpointManifestRegion ?? BUILD_AUTH_REGION;
+  const endpoints = realmEndpointCache.get(buildRealm) ?? buildEndpointMap;
+  activeSessionRealm = buildRealm;
+  if (!endpoints) return;
+  AUTH_API_BASE_URL = endpoints.authApiBaseUrl;
+  OAUTH_BROKER_API_BASE_URL = endpoints.oauthBrokerApiBaseUrl;
+  DEVICE_LINK_API_BASE_URL = endpoints.deviceLinkApiBaseUrl;
+  VOICE_API_BASE_URL = endpoints.voiceApiBaseUrl;
 }
 
 // 自建分发服务基址,唯一来源是 endpoint.json 的 mobileUpdateBaseUrl:

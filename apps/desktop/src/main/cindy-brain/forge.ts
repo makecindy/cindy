@@ -93,6 +93,7 @@ function scaffoldManifest(input: ForgeScaffoldInput): Record<string, unknown> {
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
+    icon: 'assets/icon.png',
   };
   if (input.template === 'agent-action') {
     return {
@@ -361,10 +362,18 @@ readline.createInterface({ input: process.stdin }).on('line', function (line) {
 `;
 }
 
+/**
+ * 占位图标(128×128 纯色 PNG,离线生成后内嵌)。让「有图标」成为骨架默认:
+ * 不配 icon 的插件在面板和身份头里只有默认拼图占位符,作者往往到发布才发现。
+ * 官方插件仓惯例图标放 assets/icon.png(见 FORGE_GUIDE §8.1),骨架直接对齐。
+ */
+const SCAFFOLD_ICON_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAABEElEQVR42u3SMREAIAwAsfpFAAsKOETgtCyYgGZ4A3+J1leqbmECAEYAIABuY259HAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJgEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAmASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQADodQCqFQAAmACAynYAQtWXyojiIUQAAAAASUVORK5CYII=';
+
 /** 按模板产出相对路径到源码内容的完整映射。 */
-function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string> {
+function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string | Buffer> {
   const manifest = scaffoldManifest(input);
-  const files: Record<string, string> = {
+  const files: Record<string, string | Buffer> = {
     [GHOST_MANIFEST_FILE]: `${JSON.stringify(manifest, null, 2)}\n`,
     'main.js':
       input.template === 'agent-action'
@@ -374,6 +383,7 @@ function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string> {
           : input.template === 'node-mcp'
             ? nodeMcpMainSource()
             : plainMainSource(),
+    'assets/icon.png': Buffer.from(SCAFFOLD_ICON_PNG_BASE64, 'base64'),
   };
   if (input.template === 'node-json-rpc') files['node/worker.cjs'] = nodeJsonRpcWorkerSource();
   if (input.template === 'node-mcp') files['node/worker.cjs'] = nodeMcpWorkerSource();
@@ -444,7 +454,13 @@ export async function scaffoldGhostDir(
     return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
   }
   const files = scaffoldFiles(input);
-  const validation = validateGhostManifest(JSON.parse(files[GHOST_MANIFEST_FILE]));
+  // 显式收窄而非 as 断言:manifest 恒为 JSON 字符串,二进制项(占位图标)另存;
+  // 未来若误把 manifest 写成 Buffer,这里在编译/测试期就报,而不是运行期 parse 炸。
+  const manifestRaw = files[GHOST_MANIFEST_FILE];
+  if (typeof manifestRaw !== 'string') {
+    return { ok: false, errorCode: 'INTERNAL', message: 'scaffold manifest 必须是 JSON 字符串' };
+  }
+  const validation = validateGhostManifest(JSON.parse(manifestRaw));
   if (!validation.ok) {
     return {
       ok: false,
@@ -707,6 +723,8 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 my-ghost/
 ├── ghost.json    ← 身份卡(必须,zip 根部)
 ├── main.js       ← 电子脑:后台逻辑入口(声明了 tools/cindy 时必须)
+├── assets/
+│   └── icon.png  ← 建议:插件图标(声明 icon 字段时必须存在;scaffold 会生成占位图,请替换成自己的)
 ├── locales/      ← 可选:宿主驱动的清单文案翻译(声明 locales 时英文必须存在)
 │   ├── en.json
 │   ├── zh-CN.json
@@ -729,6 +747,7 @@ my-ghost/
   "name": "我的意识",           // 展示名
   "description": "一句话说清这段意识是干嘛的(给人看:装入确认框/详情页)",  // 1–300 字
   "whenToUse": "需要生成图片、插画、配图、修图、P 图、改图时找我",  // 1–300 字,给模型看:进 agent 会话的意识花名册,是"用户不点名时 AI 能不能想起你"的关键。写成场景枚举,可反复调优;缺省时花名册回落用 description
+  "icon": "assets/icon.png",   // 建议:插件图标(包内相对路径;扩展名限 png/jpg/jpeg/webp/gif,不收 svg——svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面)。不配则面板与消息身份头显示默认拼图占位符;官方插件仓惯例放 assets/icon.png
   "locales": {                 // 可选:插件只跟随宿主语言;不支持/缺失语言固定回退 en
     "en": "locales/en.json",
     "zh-CN": "locales/zh-CN.json",
@@ -921,7 +940,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
     },
     "oauth": {                                      // source:"oauth" 时必填(其它来源禁写):主机托管 OAuth 授权详单(见 §4.7)
       "authorizeUrl": "https://accounts.example.com/authorize",  // 授权页(https;域名必须命中 hosts 白名单)
-      "tokenUrl": "https://accounts.example.com/token",          // code/refresh 交换端点(https;域名必须命中 hosts)
+      "tokenUrl": "https://accounts.example.com/token",          // code/refresh 交换端点(https;域名必须命中 hosts)。注:个别服务商(如 xAI)的新版 consent 页不再 302 回 loopback,而是页面 JS 跨源投递授权 code——主机允许的投递来源 = authorizeUrl/tokenUrl 的 origin + hosts 白名单命中的 https 域;consent 页与授权端点不同域时,把 consent 域(如 accounts.x.ai)也声明进 hosts 即可
       "clientId": "xxx.apps.example.com",           // 可选:内置 OAuth 客户端 ID(用户零配置开箱即用;用户在设置页自填的覆盖内置,清除自填即回落)
       "clientIdAlternatives": ["xxx-global.apps.example.com"],  // 可选 ≤8 条:仅 tokenBroker 模式;意识按 app-context 选 App 时,connect 只接受默认值或这里声明的公开 ID
       "clientSecret": "xxx",                        // 可选(须与 clientId 成对):内置 client 的 secret;桌面应用的 client 凭证本非机密,纯 PKCE 服务商可省略
@@ -2494,6 +2513,20 @@ const ensured = await cindy.workspace({
 
 界面最终会区分:Cindy 随包官方、此版本已审核、发布者已验证、未验证/无签名。正式
 签名和审核应由商店/发布流水线完成；本地 Forge 不替用户生成或保存正式密钥。
+
+### 8.1 发布到官方插件仓的额外门禁
+
+要提交到官方插件仓 \`makecindy/cindy-official-plugins\` 的插件,除本手册的打包/装入
+校验外还有仓级 CI 硬门禁,过不了整次发布被拦:
+
+- **四语言 locale 缺一不可**:\`locales\` 必须**恰好**包含 \`zh-CN\` / \`en\` / \`ja\` /
+  \`ko\` 四份,且每份都完整覆盖 \`name\` / \`description\` / \`whenToUse\` 与**全部**
+  \`tools[].description\`(工具键集合与清单逐一对齐)。注意这比 §2.1 的本地门槛
+  (「声明 locales 时英文必须存在、翻译可部分提供」)严格得多;
+- **图标**:惯例统一放 \`assets/icon.png\` 并在清单声明 \`icon\` 字段,不要散落在
+  包根;
+- 其余要求(目录命名、审核流程等)以该仓根部的 \`CONTRIBUTING.md\` 为准,提交前
+  在仓内跑一遍 \`node --test .tests/\` 自查。
 
 ## 9. 常见拒装原因速查
 

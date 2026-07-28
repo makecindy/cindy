@@ -1,11 +1,11 @@
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Windows 上 git 子进程明显更慢(每次 spawn 数百毫秒),多步 git 编排用例会超默认 5s。
 vi.setConfig({ testTimeout: process.platform === 'win32' ? 60_000 : 30_000 });
 
+import { TestDirectoryTemplate } from '../../../test/vitest/testDirectoryTemplate';
 import { readCommitDiff } from '../commitReader';
 import { readBranchDiff } from '../branchReader';
 import { readDiffs } from '../diffReader';
@@ -26,8 +26,7 @@ const oldPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00
 const newPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x03, 0xfe]);
 const worktreePng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x09, 0xf0]);
 
-async function initRepo(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-git-review-image-'));
+const repoTemplate = new TestDirectoryTemplate('xdt-git-review-image-', async (dir) => {
   await runGit(['init', '-b', 'main'], { cwd: dir });
   await runGit(['config', 'user.email', 'test@xdt.local'], { cwd: dir });
   await runGit(['config', 'user.name', 'XDT Test'], { cwd: dir });
@@ -35,8 +34,7 @@ async function initRepo(): Promise<string> {
   await fs.writeFile(path.join(dir, 'seed.txt'), 'seed\n');
   await runGit(['add', 'seed.txt'], { cwd: dir });
   await runGit(['commit', '--no-gpg-sign', '-m', 'seed'], { cwd: dir });
-  return dir;
-}
+});
 
 function scope(branch = 'main'): ReviewScope {
   return {
@@ -88,11 +86,15 @@ function expectDataUrl(side: { dataUrl?: string }, mime: string, bytes: Buffer):
 }
 
 beforeEach(async () => {
-  repoPath = await initRepo();
+  repoPath = await repoTemplate.createCopy();
 });
 
 afterEach(async () => {
   await fs.rm(repoPath, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+});
+
+afterAll(async () => {
+  await repoTemplate.dispose();
 });
 
 describe('git-review imageReader', () => {

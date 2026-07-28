@@ -830,6 +830,13 @@ export function buildRenderItems(
   messages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
   ghostCards?: GhostCardSnapshot,
+  opts?: {
+    /**
+     * 还有更老的历史页没加载(= `messages` 只是窗口、不是全量)。为真时,凡靠
+     * 「父调用在不在 messages 里」做的归属判定都不可信,必须放宽而不是丢弃。
+     */
+    historyWindowIncomplete?: boolean;
+  },
 ): {
   items: RenderItem[];
   singleResultMap: Map<string, string>;
@@ -1285,8 +1292,38 @@ export function buildRenderItems(
   flushSegment();
 
   if (taskUpdates) {
+    // 父会话自己的 Bash 调用集合:local_bash 任务卡(#247 的「后台命令」卡,含
+    // 停止按钮)的**唯一**渲染来源就是本孤儿循环(Bash toolCall 走 tool_segment,
+    // 不进 agent_task 配对分支),必须按 parentToolUseId 命中保留;命不中的才是
+    // workflow / 子 agent 内部启动的后台命令 —— 只进后台任务面板,不进聊天流刷屏
+    // (对齐官方:聊天流只呈现父会话自己的调用)。
+    //
+    // 归属只能靠「父 Bash 调用在不在 messages 里」判定(AgentTaskUpdate 没有
+    // 结构化的「谁 spawn 的」字段),而 messages 是分页窗口(首屏 50 行)。窗口
+    // 不完整时父调用可能只是还没翻到,此时**不丢**:宁可临时多显示 workflow 内部
+    // 的后台命令卡(本 PR 之前就是这个形态),也不能把用户自己还在跑的后台命令
+    // 及其停止按钮从聊天流里抹掉。翻到旧页 / 加载完历史后过滤自动恢复。
+    const historyWindowIncomplete = opts?.historyWindowIncomplete === true;
+    const parentBashToolUseIds = new Set<string>();
+    for (const m of messages) {
+      if (
+        m.role === 'tool_use' &&
+        m.toolName === 'Bash' &&
+        typeof m.toolUseId === 'string' &&
+        m.toolUseId.length > 0
+      ) {
+        parentBashToolUseIds.add(m.toolUseId);
+      }
+    }
     const seenTaskIds = new Set<string>();
     for (const update of taskUpdates.values()) {
+      if (
+        update.taskType === 'local_bash' &&
+        !historyWindowIncomplete &&
+        !(update.parentToolUseId && parentBashToolUseIds.has(update.parentToolUseId))
+      ) {
+        continue;
+      }
       const primaryKey = update.parentToolUseId ?? update.taskId;
       if (
         seenTaskIds.has(update.taskId) ||
@@ -1346,11 +1383,23 @@ function isRunningAgentTask(it: RenderItem): boolean {
   return status === 'running';
 }
 
+/** workflow 卡永远平铺,完成后也不折进工作组:它是后台任务面板的常驻入口,
+ *  折叠掉等于把入口藏起来(产品拍板 2026-07-27:完成后保留痕迹、可点击进
+ *  面板详情;对齐官方——原版完成的 workflow 行留在对话里)。 */
+function isWorkflowTaskItem(it: RenderItem): boolean {
+  return (
+    it.type === 'agent_task' &&
+    (it.update?.taskType === 'local_workflow' || it.toolCall?.toolName === 'Workflow')
+  );
+}
+
 /** preview 中计为一条真实活动的 render item。assistant 进度文字
  *  始终留在主消息流,不占最近 5 条活动窗口。 */
 function isWorkActivityItem(it: RenderItem): it is WorkChildItem {
   return (
     !isRunningAgentTask(it) &&
+    // workflow 卡三条分组路径(answered/legacy/active)统一平铺,见 isWorkflowTaskItem。
+    !isWorkflowTaskItem(it) &&
     (it.type === 'tool_segment' ||
       it.type === 'agent_task' ||
       (it.type === 'message' && it.message.role === 'thinking'))
@@ -1395,6 +1444,22 @@ function workChildClientId(it: WorkChildItem): string {
 function workGroupClientId(run: WorkChildItem[]): string {
   const firstActivity = run.find((it) => it.type !== 'message' || it.message.role === 'thinking');
   return workChildClientId(firstActivity ?? run[0]);
+}
+
+/** 工作组内全部可定位 clientId(嵌套组递归),供组容器的回退锚点使用。 */
+function collectWorkGroupClientIds(children: readonly RenderItem[]): string[] {
+  const ids: string[] = [];
+  for (const child of children) {
+    if (child.type === 'message') ids.push(child.message.clientId);
+    else if (child.type === 'tool_segment') {
+      for (const toolCall of child.toolCalls) ids.push(toolCall.clientId);
+    } else if (child.type === 'agent_task' && child.toolCall) {
+      ids.push(child.toolCall.clientId);
+    } else if (child.type === 'work_group') {
+      ids.push(...collectWorkGroupClientIds(child.children));
+    }
+  }
+  return ids;
 }
 
 function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
@@ -1837,7 +1902,12 @@ function groupAnsweredTurnItems(
 
   for (let i = 0; i < turnItems.length; i++) {
     const it = turnItems[i];
-    if (!sealedAnswers.has(i) && !isRunningAgentTask(it) && isWorkChild(it)) {
+    if (
+      !sealedAnswers.has(i) &&
+      !isRunningAgentTask(it) &&
+      !isWorkflowTaskItem(it) &&
+      isWorkChild(it)
+    ) {
       run.push(it);
     } else {
       flushRun(it);
@@ -2191,8 +2261,11 @@ export function MessageStream({
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
   // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
   const { items: ungroupedRenderItems, singleResultMap } = useMemo(
-    () => buildRenderItems(messages, taskUpdates, ghostCardSnapshot),
-    [messages, taskUpdates, ghostCardSnapshot],
+    () =>
+      buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
+        historyWindowIncomplete: Boolean(hasMoreMessages),
+      }),
+    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages],
   );
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(messages),
@@ -2330,9 +2403,15 @@ export function MessageStream({
     }
     const root = scrollRef.current;
     if (!root) return;
-    const el = root.querySelector(
+    // 精确锚点(message wrapper / 带 toolCall 的任务卡)优先;查不到时退回
+    // 聚合动作块的容器锚点(data-message-client-ids 空格分隔多 clientId)——
+    // 后台 Bash 等工具行渲染在折叠块内,没有独立的行级 DOM 锚点。
+    const el = (root.querySelector(
       `[data-message-client-id="${CSS.escape(focusMessageClientId)}"]`,
-    ) as HTMLElement | null;
+    ) ??
+      root.querySelector(
+        `[data-message-client-ids~="${CSS.escape(focusMessageClientId)}"]`,
+      )) as HTMLElement | null;
     if (!el) return;
     restoringRef.current = false;
     isNearBottomRef.current = false;
@@ -3450,16 +3529,26 @@ export function MessageStream({
                       };
                       const childItems = item.children.map(toWorkGroupChild);
                       return (
-                        <WorkGroupBlock
+                        // data-message-client-ids:组折叠时子卡片/聚合块整体 unmount,
+                        // 精确锚点消失 —— 后台任务面板「点行跳聊天」经 ~= 回退查询
+                        // 落到组容器(与 AgentActionsBlock 的容器锚点同一约定)。
+                        <div
                           key={item.key}
-                          // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
-                          // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
-                          blockId={`work:${item.key.slice('work-'.length)}`}
-                          durationMs={item.durationMs}
-                          isStreaming={item.isStreaming}
-                          startedAtMs={item.startedAtMs}
-                          childItems={childItems}
-                        />
+                          className="scroll-mt-20"
+                          data-message-client-ids={collectWorkGroupClientIds(item.children).join(
+                            ' ',
+                          )}
+                        >
+                          <WorkGroupBlock
+                            // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
+                            // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
+                            blockId={`work:${item.key.slice('work-'.length)}`}
+                            durationMs={item.durationMs}
+                            isStreaming={item.isStreaming}
+                            startedAtMs={item.startedAtMs}
+                            childItems={childItems}
+                          />
+                        </div>
                       );
                     }
 

@@ -9,17 +9,24 @@
  * file 模式的 allowHttp 放行、init 前 getter 抛错(启动时序守卫)、sendSync IPC 形状。
  */
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TEST_CLIENT_ENDPOINTS } from '../../test/vitest/clientEndpointsFixture';
 
 const ipcOn = vi.hoisted(() => vi.fn());
+const netRequest = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({
-  app: { getPath: vi.fn(), getAppPath: vi.fn(() => '/repo/apps/desktop'), isPackaged: false, exit: vi.fn() },
+  app: {
+    getPath: vi.fn(),
+    getAppPath: vi.fn(() => '/repo/apps/desktop'),
+    isPackaged: false,
+    exit: vi.fn(),
+  },
   dialog: { showMessageBoxSync: vi.fn() },
   ipcMain: { on: ipcOn },
-  net: { request: vi.fn() },
+  net: { request: netRequest },
 }));
 
 vi.mock('../logger', () => ({
@@ -27,9 +34,13 @@ vi.mock('../logger', () => ({
 }));
 
 import {
+  activateClientEndpointRealm,
   getClientEndpoint,
+  getClientEndpointForRealm,
   getResolvedClientEndpoints,
+  loadClientEndpointsForRealm,
   registerClientEndpointsIpc,
+  resetClientEndpointRealm,
   resetClientEndpointsForTest,
   resolveClientEndpointsBlocking,
   resolveEndpointSource,
@@ -40,6 +51,7 @@ import {
 afterEach(() => {
   resetClientEndpointsForTest();
   ipcOn.mockClear();
+  netRequest.mockReset();
 });
 
 const FULL_MANIFEST = JSON.stringify({
@@ -84,7 +96,11 @@ describe('resolveEndpointSource(清单来源三选一)', () => {
       },
       { kind: 'cdn' },
     ],
-    ['dev 默认读仓内 cn 正本', { isPackaged: false, env: {} }, { kind: 'file', filePath: DEFAULT_FILE }],
+    [
+      'dev 默认读仓内 cn 正本',
+      { isPackaged: false, env: {} },
+      { kind: 'file', filePath: DEFAULT_FILE },
+    ],
     [
       'dev + XDT_ENDPOINTS_CDN=1 走 CDN',
       { isPackaged: false, env: { XDT_ENDPOINTS_CDN: '1' } },
@@ -125,6 +141,22 @@ const NO_AUTO_RETRY = { autoRetryDelaysMs: [] as readonly number[] };
 const okFetch = (text: string) => async () => ({ ok: true as const, text });
 const failFetch = (detail: string) => async () => ({ ok: false as const, detail });
 
+function mockNetManifest(text: string): void {
+  const request = new EventEmitter() as EventEmitter & {
+    abort: ReturnType<typeof vi.fn>;
+    end: ReturnType<typeof vi.fn>;
+  };
+  request.abort = vi.fn();
+  request.end = vi.fn(() => {
+    const response = new EventEmitter() as EventEmitter & { statusCode: number };
+    response.statusCode = 200;
+    request.emit('response', response);
+    response.emit('data', Buffer.from(text));
+    response.emit('end');
+  });
+  netRequest.mockReturnValueOnce(request);
+}
+
 describe('resolveClientEndpointsBlocking(阻断循环,清单即唯一事实源)', () => {
   it('首次成功:不进 prompt,所有值来自清单', async () => {
     const promptRetry = vi.fn();
@@ -136,6 +168,35 @@ describe('resolveClientEndpointsBlocking(阻断循环,清单即唯一事实源)'
     expect(result?.authApiBaseUrl).toBe('https://auth.remote.example.com');
     expect(result?.cdnBaseUrl).toBe('https://cdn.remote.example.com/app');
     expect(promptRetry).not.toHaveBeenCalled();
+  });
+
+  it('清单自报区域与构建区域不一致时阻断，老清单缺 region 仍兼容', async () => {
+    const promptRetry = vi.fn().mockReturnValue('exit');
+    const mismatch = await resolveClientEndpointsBlocking({
+      fetchManifest: okFetch(
+        JSON.stringify({
+          ...(JSON.parse(FULL_MANIFEST) as object),
+          region: 'global',
+        }),
+      ),
+      promptRetry,
+      exitApp: vi.fn(),
+      expectedRegionWhenPresent: 'cn',
+      ...NO_AUTO_RETRY,
+    });
+    expect(mismatch).toBeNull();
+    expect(promptRetry).toHaveBeenCalledWith('region-mismatch:cn:global');
+
+    await expect(
+      resolveClientEndpointsBlocking({
+        fetchManifest: okFetch(FULL_MANIFEST),
+        promptRetry: vi.fn(),
+        exitApp: vi.fn(),
+        expectedRegionWhenPresent: 'cn',
+      }),
+    ).resolves.toMatchObject({
+      authApiBaseUrl: 'https://auth.remote.example.com',
+    });
   });
 
   it('失败 → prompt 选重试 → 第二次成功(无静默降级)', async () => {
@@ -308,7 +369,13 @@ describe('弹框前的自动重试(mac 首装瞬时失败自愈)', () => {
   it.each([
     ['JSON 非法', 'not json at all'],
     ['schema 版本非法', JSON.stringify({ schemaVersion: 0 })],
-    ['非空值非法', JSON.stringify({ ...(JSON.parse(FULL_MANIFEST) as object), cdnBaseUrl: 'ftp://x.example.com' })],
+    [
+      '非空值非法',
+      JSON.stringify({
+        ...(JSON.parse(FULL_MANIFEST) as object),
+        cdnBaseUrl: 'ftp://x.example.com',
+      }),
+    ],
   ])('%s(配置事故)不消耗重试预算,立刻弹框', async (_label, text) => {
     const fetchManifest = vi.fn<BlockingResolveDeps['fetchManifest']>().mockResolvedValue({
       ok: true,
@@ -416,5 +483,99 @@ describe('getter / IPC', () => {
     expect(event.returnValue).toMatchObject({ websiteUrl: 'https://site.example.com' });
     expect(getResolvedClientEndpoints().websiteUrl).toBe('https://site.example.com');
     expect(getClientEndpoint('websiteUrl')).toBe('https://site.example.com');
+  });
+
+  it('组织会话切换所有 token 消费端点,但安装身份与更新链保持构建区域', () => {
+    const cn = {
+      ...TEST_CLIENT_ENDPOINTS,
+      authApiBaseUrl: 'https://auth.cn.example.com',
+      oauthBrokerApiBaseUrl: 'https://oauth.cn.example.com',
+      deviceLinkApiBaseUrl: 'https://device.cn.example.com',
+      modelAccessApiBaseUrl: 'https://model.cn.example.com',
+      voiceApiBaseUrl: 'https://voice.cn.example.com',
+      websiteUrl: 'https://www.cn.example.com',
+      cdnBaseUrl: 'https://cdn.cn.example.com/app',
+      mobileUpdateBaseUrl: 'https://update.cn.example.com',
+    };
+    const global = {
+      ...TEST_CLIENT_ENDPOINTS,
+      authApiBaseUrl: 'https://auth.global.example.com',
+      oauthBrokerApiBaseUrl: 'https://oauth.global.example.com',
+      deviceLinkApiBaseUrl: 'https://device.global.example.com',
+      modelAccessApiBaseUrl: 'https://model.global.example.com',
+      voiceApiBaseUrl: 'https://voice.global.example.com',
+      websiteUrl: 'https://www.global.example.com',
+      cdnBaseUrl: 'https://cdn.global.example.com/app',
+      mobileUpdateBaseUrl: 'https://update.global.example.com',
+    };
+    resetClientEndpointsForTest(cn, {
+      buildRegion: 'cn',
+      realmEndpoints: { global },
+    });
+
+    expect(getClientEndpoint('authApiBaseUrl')).toBe(cn.authApiBaseUrl);
+    activateClientEndpointRealm('global');
+    expect(getClientEndpoint('authApiBaseUrl')).toBe(global.authApiBaseUrl);
+    expect(getClientEndpoint('oauthBrokerApiBaseUrl')).toBe(global.oauthBrokerApiBaseUrl);
+    expect(getClientEndpoint('deviceLinkApiBaseUrl')).toBe(global.deviceLinkApiBaseUrl);
+    expect(getClientEndpoint('modelAccessApiBaseUrl')).toBe(global.modelAccessApiBaseUrl);
+    expect(getClientEndpoint('voiceApiBaseUrl')).toBe(global.voiceApiBaseUrl);
+
+    expect(getClientEndpoint('websiteUrl')).toBe(cn.websiteUrl);
+    expect(getClientEndpoint('cdnBaseUrl')).toBe(cn.cdnBaseUrl);
+    expect(getClientEndpoint('mobileUpdateBaseUrl')).toBe(cn.mobileUpdateBaseUrl);
+    expect(getClientEndpointForRealm('global', 'cdnBaseUrl')).toBe(cn.cdnBaseUrl);
+
+    resetClientEndpointRealm();
+    expect(getClientEndpoint('authApiBaseUrl')).toBe(cn.authApiBaseUrl);
+  });
+
+  it('不依赖远端跨区字段，按构建期可信地址加载旧格式对端清单', async () => {
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS, {
+      buildRegion: 'cn',
+      realmManifestBaseUrls: {
+        cn: 'https://manifest.cn.example.com/app',
+        global: 'https://manifest.global.example.com/app',
+      },
+    });
+    const globalManifest = {
+      ...(JSON.parse(FULL_MANIFEST) as Record<string, unknown>),
+      authApiBaseUrl: 'https://auth.global.example.com',
+    };
+    mockNetManifest(JSON.stringify(globalManifest));
+
+    await expect(loadClientEndpointsForRealm('global')).resolves.toMatchObject({
+      authApiBaseUrl: 'https://auth.global.example.com',
+    });
+    expect(netRequest).toHaveBeenCalledTimes(1);
+    expect(netRequest).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^https:\/\/manifest\.global\.example\.com\/app\/endpoint\.json\?t=\d+$/,
+      ),
+    );
+  });
+
+  it('对端清单自报 region 时必须与目标区域一致，拒绝后不污染缓存', async () => {
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS, {
+      buildRegion: 'cn',
+      realmManifestBaseUrls: {
+        cn: 'https://manifest.cn.example.com/app',
+        global: 'https://manifest.global.example.com/app',
+      },
+    });
+    const globalManifest = {
+      ...(JSON.parse(FULL_MANIFEST) as Record<string, unknown>),
+      authApiBaseUrl: 'https://auth.global.example.com',
+    };
+    mockNetManifest(JSON.stringify({ ...globalManifest, region: 'cn' }));
+    mockNetManifest(JSON.stringify(globalManifest));
+
+    await expect(loadClientEndpointsForRealm('global')).rejects.toThrow(
+      'region-mismatch:global:cn',
+    );
+    await expect(loadClientEndpointsForRealm('global')).resolves.toMatchObject({
+      authApiBaseUrl: 'https://auth.global.example.com',
+    });
+    expect(netRequest).toHaveBeenCalledTimes(2);
   });
 });

@@ -176,10 +176,11 @@ async function createCindyVoiceSession(input: {
   sourceLanguage?: string;
 }): Promise<CindyVoiceAsrSession> {
   requireAppCapability('canUseCindyAccountServices', 'Cindy voice requires a Cindy account.');
-  const baseUrl = getClientEndpoint('voiceApiBaseUrl');
-  if (!baseUrl) throw new Error('Cindy voice service is unavailable in this region.');
+  if (!getClientEndpoint('voiceApiBaseUrl')) {
+    throw new Error('Cindy voice service is unavailable in this region.');
+  }
   const request = {
-    baseUrl,
+    baseUrl: () => getClientEndpoint('voiceApiBaseUrl'),
     method: 'POST',
     body: {
       mode: 'dictation',

@@ -1,11 +1,11 @@
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Windows 上 git 子进程明显更慢(每次 spawn 数百毫秒),多步 git 编排用例会超默认 5s。
 vi.setConfig({ testTimeout: process.platform === 'win32' ? 60_000 : 30_000 });
 
+import { TestDirectoryTemplate } from '../../../test/vitest/testDirectoryTemplate';
 import { readBranchDiff } from '../branchReader';
 import { readCommitDiff } from '../commitReader';
 import { readDiffs } from '../diffReader';
@@ -21,8 +21,7 @@ import type { FileDiff, ReviewScope } from '../types';
 
 let repoPath: string;
 
-async function initRepo(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-git-review-markdown-'));
+const repoTemplate = new TestDirectoryTemplate('xdt-git-review-markdown-', async (dir) => {
   await runGit(['init', '-b', 'main'], { cwd: dir });
   await runGit(['config', 'user.email', 'test@xdt.local'], { cwd: dir });
   await runGit(['config', 'user.name', 'XDT Test'], { cwd: dir });
@@ -30,8 +29,7 @@ async function initRepo(): Promise<string> {
   await fs.writeFile(path.join(dir, 'seed.txt'), 'seed\n');
   await runGit(['add', 'seed.txt'], { cwd: dir });
   await runGit(['commit', '--no-gpg-sign', '-m', 'seed'], { cwd: dir });
-  return dir;
-}
+});
 
 function scope(branch = 'main'): ReviewScope {
   return {
@@ -108,11 +106,15 @@ function fakeMarkdownDiff(patch: Partial<FileDiff> = {}): FileDiff {
 }
 
 beforeEach(async () => {
-  repoPath = await initRepo();
+  repoPath = await repoTemplate.createCopy();
 });
 
 afterEach(async () => {
   await fs.rm(repoPath, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+});
+
+afterAll(async () => {
+  await repoTemplate.dispose();
 });
 
 describe('git-review markdownReader', () => {

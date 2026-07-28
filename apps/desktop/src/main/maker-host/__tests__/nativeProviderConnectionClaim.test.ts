@@ -77,7 +77,7 @@ vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ mode: 'local' as
 vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyGateway: false }) }));
 vi.mock('../../ownerNamespaceMigration.js', () => ({ hasLegacyOwnerNamespaceClaim: () => false }));
 vi.mock('../../manifestService.js', () => ({ isDev: () => true, getBaseUrl: () => 'https://example.invalid' }));
-vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://example.invalid' }));
+vi.mock('../../clientEndpointsService.js', () => ({ getBuildClientEndpoint: () => 'https://example.invalid', getClientEndpoint: () => 'https://example.invalid' }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   genericOAuthSecretIo: {},
   setProviderSecretsClearedListener: () => {},

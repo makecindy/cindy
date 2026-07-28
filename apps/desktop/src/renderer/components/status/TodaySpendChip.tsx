@@ -34,6 +34,10 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
+import {
+  summarizeCodexRateLimitReset,
+  type CodexRateLimitResetSummary,
+} from '@cindy/maker-shared/session-controls';
 
 import { cn } from '@/lib/utils';
 import {
@@ -72,6 +76,7 @@ import {
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
+import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useXaiRateLimit, type XaiRateLimitSnapshot } from '@/hooks/useXaiRateLimit';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
@@ -227,6 +232,28 @@ function formatResetAt(epochSeconds: number | null | undefined): string | null {
   const sameDay = date.toDateString() === now.toDateString();
   return new Intl.DateTimeFormat(
     undefined,
+    sameDay
+      ? { hour: 'numeric', minute: '2-digit' }
+      : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' },
+  ).format(date);
+}
+
+/** Codex 重置卡到期时间：沿用产品的“当天时分、跨天月日+时分”，按界面语言本地化。 */
+function formatResetCreditExpiryAt(
+  epochSeconds: number | null | undefined,
+  nowMs: number,
+  locale: string,
+): string | null {
+  if (typeof epochSeconds !== 'number' || !Number.isFinite(epochSeconds) || epochSeconds <= 0) {
+    return null;
+  }
+  const date = new Date(epochSeconds * 1000);
+  const now = new Date(nowMs);
+  const sameDay = date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+  return new Intl.DateTimeFormat(
+    locale,
     sameDay
       ? { hour: 'numeric', minute: '2-digit' }
       : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' },
@@ -452,7 +479,9 @@ function buildCodexTooltipNode(
   snapshot: RateLimitSnapshot | null,
   sessionTokens: number | null,
   sessionValueMoney: RegionalMoney | null,
+  resetSummary: CodexRateLimitResetSummary | null,
   t: TFunction,
+  locale: string,
   usageDashboardLabel: string | null,
   nowMs: number,
   latestTurnUsage: LatestTurnUsageSummary | null,
@@ -460,6 +489,7 @@ function buildCodexTooltipNode(
   const lines: string[] = [];
   if (!snapshot) {
     lines.push(t('todaySpend.codex.waitingDetail'));
+    pushCodexResetCreditLines(lines, resetSummary, t, locale, nowMs);
     appendLatestTurnUsageLines(lines, latestTurnUsage, t);
     pushDashboardLinkLine(lines, usageDashboardLabel);
     return buildTooltipNode(lines);
@@ -490,6 +520,7 @@ function buildCodexTooltipNode(
     lines.push(t('todaySpend.codex.balanceAvailable'));
   }
   pushSessionValueLines(lines, sessionValueMoney, sessionTokens, t);
+  pushCodexResetCreditLines(lines, resetSummary, t, locale, nowMs);
 
   for (const window of getCodexWindowUsages(snapshot, t, nowMs)) {
     const base = t('todaySpend.codex.windowLine', {
@@ -856,6 +887,29 @@ function pushSessionValueLines(
   }
 }
 
+/** 与 Mobile 共用中性汇总字段；Desktop label、次数和时间按当前界面语言展示。 */
+function pushCodexResetCreditLines(
+  lines: string[],
+  resetSummary: CodexRateLimitResetSummary | null,
+  t: TFunction,
+  locale: string,
+  nowMs: number,
+): void {
+  if (resetSummary?.hasResetCreditCount) {
+    lines.push(t('todaySpend.codex.resetCreditsAvailableLine', {
+      count: resetSummary.availableCount,
+    }));
+  }
+  const expiryAt = formatResetCreditExpiryAt(
+    resetSummary?.earliestExpiryAt,
+    nowMs,
+    locale,
+  );
+  if (expiryAt) {
+    lines.push(t('todaySpend.codex.resetCreditEarliestExpiryLine', { at: expiryAt }));
+  }
+}
+
 /**
  * xAI(SuperGrok bridge)tooltip —— 尽力档:有限流快照(bridge 抓到 x-ratelimit-* 头)就
  * 显示剩余请求/tokens,拿不到诚实标注「无订阅额度明细」,只显示价值估算 + token 累计。
@@ -943,7 +997,8 @@ export function TodaySpendChip({
   remoteHostId,
   deviceLinkDeviceId,
 }: TodaySpendChipProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const formatterLocale = i18n.resolvedLanguage ?? i18n.language;
   // device-link 远程会话:turn 跑在被控端、消耗被控端账号,计费形态(订阅/网关)与账号
   // 余量的事实都在被控端 —— 本机的 route 观察 / 账号快照与之无关,一律不读、不据此分类。
   const isDeviceLinkRemote = Boolean(deviceLinkDeviceId);
@@ -1057,6 +1112,10 @@ export function TodaySpendChip({
     // 促销桶, 见 useAccountUsage.matchCodexBucketForModel)。
     modelId,
   );
+  const {
+    snapshot: codexRateLimits,
+    refresh: refreshCodexRateLimits,
+  } = useCodexRateLimits(isCodexOauth && !isAnyRemoteSession);
   // xAI 限流快照同为本机 main 抓的 —— 远程会话(SSH / device-link)同样抑制,回落价值估算。
   const xaiRateLimit = useXaiRateLimit(usesXaiQuotaForm && !isAnyRemoteSession);
   // cc 与 codex-api 共用同一把 XD gateway key 的 LiteLLM quota; codex-oauth 不订阅。
@@ -1096,6 +1155,10 @@ export function TodaySpendChip({
           ? t('todaySpend.openClaudeUsage')
           : null;
   const [windowLabelNowMs, setWindowLabelNowMs] = React.useState(() => Date.now());
+  const codexResetSummary = React.useMemo(
+    () => summarizeCodexRateLimitReset(codexRateLimits, windowLabelNowMs),
+    [codexRateLimits, windowLabelNowMs],
+  );
 
   // 当前形态下 chip 展示的限额窗口段 (Codex 订阅 / Claude 订阅共用结构);
   // 其它形态为空数组, 两个 rollup slot 空转。
@@ -1263,7 +1326,9 @@ export function TodaySpendChip({
       accountUsage,
       sessionTokens,
       sessionEstimatedValueMoney,
+      codexResetSummary,
       t,
+      formatterLocale,
       usageDashboardLabel,
       windowLabelNowMs,
       latestTurnUsage,
@@ -1400,7 +1465,12 @@ export function TodaySpendChip({
   );
 
   return (
-    <div ref={chipRef} className="inline-flex h-5 shrink-0 items-center gap-3">
+    <div
+      ref={chipRef}
+      className="inline-flex h-5 shrink-0 items-center gap-3"
+      onMouseEnter={refreshCodexRateLimits}
+      onFocusCapture={refreshCodexRateLimits}
+    >
       <Tip text={tooltipNode}>
         {isDashboardClickable ? (
           <button

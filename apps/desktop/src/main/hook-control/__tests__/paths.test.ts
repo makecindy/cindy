@@ -42,18 +42,18 @@ describe('isPathWithin', () => {
     expect(isPathWithin(process.cwd(), '')).toBe(false);
   });
 
-  it('大小写: Windows 不敏感, 其它平台敏感(规则 15)', () => {
-    // 路径格式和 path 实现都按目标平台构造，避免宿主系统语义污染模拟分支。
-    const windowsBase = path.win32.resolve('C:\\repos\\demo');
-    expect(
-      isPathWithin(windowsBase, path.win32.join(windowsBase.toUpperCase(), 'SUB'), 'win32'),
-    ).toBe(true);
-    expect(isPathWithin(windowsBase.toUpperCase(), windowsBase, 'win32')).toBe(true);
+  it('Windows 路径在任意 CI 主机上都按大小写不敏感和 win32 分隔符判定', () => {
+    const windowsBase = 'C:\\Repos\\Demo';
+    expect(isPathWithin(windowsBase, 'c:\\repos\\demo', 'win32')).toBe(true);
+    expect(isPathWithin(windowsBase, 'c:\\REPOS\\DEMO\\sub', 'win32')).toBe(true);
+    expect(isPathWithin(windowsBase, 'C:\\Repos\\Demo-2', 'win32')).toBe(false);
+    expect(isPathWithin(windowsBase, 'C:\\Repos\\Demo\\sub\\..\\..\\outside', 'win32')).toBe(false);
+  });
 
-    const posixBase = path.posix.resolve('/repos/demo');
-    expect(isPathWithin(posixBase, path.posix.join(posixBase.toUpperCase(), 'SUB'), 'linux')).toBe(
-      false,
-    );
-    expect(isPathWithin(posixBase.toUpperCase(), posixBase, 'linux')).toBe(false);
+  it('POSIX 路径在任意 CI 主机上都保持大小写敏感', () => {
+    const posixBase = '/repos/demo';
+    expect(isPathWithin(posixBase, '/repos/demo/sub', 'linux')).toBe(true);
+    expect(isPathWithin(posixBase, '/REPOS/DEMO/sub', 'linux')).toBe(false);
+    expect(isPathWithin('/REPOS/DEMO', posixBase, 'darwin')).toBe(false);
   });
 });

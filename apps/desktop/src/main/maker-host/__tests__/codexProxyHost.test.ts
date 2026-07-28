@@ -283,11 +283,29 @@ describe('chatBridgeCapabilitiesForRoute', () => {
   });
 
   it.each([
+    ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-2-1-pro-260628'],
+    ['https://ark.ap-southeast-1.volces.com/api/v3/', 'doubao-seed-1-6-vision-260615'],
+  ])('enables image_url for Doubao Seed on official Volcengine Ark host: %s (#771)', async (upstream, model) => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBe('image_url');
+  });
+
+  it.each([
     ['https://api.moonshot.cn/v1', 'kimi-k2.6'],
     ['https://api.deepseek.com/v1', 'kimi-k3'],
     ['https://api.moonshot.cn.evil.example/v1', 'kimi-k3'],
     ['http://api.moonshot.cn/v1', 'kimi-k3'],
     ['not-a-url', 'kimi-k3'],
+    ['https://api.deepseek.com/v1', 'deepseek-v4-pro'],
+    ['https://ark.cn-beijing.volces.com/api/v3', 'deepseek-v4-pro'],
+    ['https://api.deepseek.com/v1', 'doubao-seed-2-1-pro-260628'],
+    ['https://ark.cn-beijing.volces.com.evil.example/api/v3', 'doubao-seed-2-1-pro-260628'],
+    ['http://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-2-1-pro-260628'],
+    // Seed 1.6 之前的版本号不放行(1.6 起才是原生多模态品牌线),锁死版本契约。
+    ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-1-5-pro-260101'],
+    ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-1-0'],
+    ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-pro'],
+    ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-1-5-vision-pro'],
   ])('keeps image input disabled for non-matching route %s / %s', async (upstream, model) => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
     expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBeUndefined();
@@ -365,6 +383,20 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
     // GET /models: body=undefined, headers 无 thread-id → 解析不出 session。
     expect(transform(undefined, { reqId: 1, method: 'GET', url: '/models?client_version=0.135.0', headers: {} }))
       .toEqual({ upstreamOverride: CHATGPT });
+  });
+
+  it('冻结 control-plane auth 形态后不受 session host 的全局模式改写', async () => {
+    const host = await import('../codex-proxy-host.js');
+    host.setCodexProxyAuthInjection('provider-oauth');
+    const transform = host.createModelRoutingTransform('oauth-bearer');
+
+    host.setCodexProxyAuthInjection('provider-oauth');
+    expect(transform(undefined, {
+      reqId: 1,
+      method: 'GET',
+      url: '/models',
+      headers: {},
+    })).toEqual({ upstreamOverride: CHATGPT });
   });
 
   it('env-key + 无 session + 无 model(GET /models)→ null(留默认网关, sk- key 本就有效)', async () => {

@@ -213,5 +213,15 @@
   "glob": "apps/mobile/src/auth/__tests__/loginConsent.test.ts",
   "reason": "consent 双态色板守卫单测(token 期望 hex/rgba,同 tokenRegistry.test.ts 先例)",
   "owner": "login-consent"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/components/settings/AgentIslandSection.tsx",
+  "reason": "灵动岛 mascot 预览的角色素材固有色(眼色/键盘条):与原生 SpriteMascotConfig 一一对应的素材参数,不是界面语义色;改用 token 会与原生渲染脱钩",
+  "owner": "agent-island"
+ },
+ {
+  "glob": "apps/desktop/native/agent-island/macos-agent-island-helper.swift",
+  "reason": "原生 helper 注释里引用的角色素材固有色 hex(便于与设计素材对照);渲染值本身是 Color(red:green:blue:),不经过 renderer token 体系",
+  "owner": "agent-island"
  }
 ]

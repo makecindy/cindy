@@ -42,6 +42,7 @@ export const ssoOrgConnectionSchema = z.object({
 export type SsoOrgConnection = z.infer<typeof ssoOrgConnectionSchema>;
 
 export const ssoOrgDiscoverySchema = z.object({
+  region: authRegionSchema,
   orgName: z.string(),
   // 不设 min(1)：服务端对「企业存在但未启用 SSO」可能返回 200 + connections:[]。
   // 让空数组通过 schema 校验，由 CindyAuthClient.discoverSsoOrg 显式映射成精确的
@@ -214,6 +215,12 @@ export type SsoVerificationChannel = "email" | "sms";
 
 export type AuthFlowState =
   | { step: "identifier"; providers: ProviderConfig }
+  | {
+      step: "realm-confirmation";
+      targetRegion: AuthRegion;
+      providers: ProviderConfig;
+      methods: LoginMethod[];
+    }
   | { step: "method-choice"; email: string; methods: LoginMethod[] }
   | { step: "verification-code"; kind: VerificationKind; identifier: string }
   | { step: "browser-redirect"; label: string }
@@ -239,6 +246,12 @@ export type AuthFlowState =
 
 export type AuthFlowAction =
   | { type: "providers-loaded"; providers: ProviderConfig }
+  | {
+      type: "realm-switch-required";
+      targetRegion: AuthRegion;
+      providers: ProviderConfig;
+      methods: LoginMethod[];
+    }
   | { type: "discovery-loaded"; email: string; methods: LoginMethod[] }
   | { type: "code-requested"; kind: VerificationKind; identifier: string }
   | { type: "browser-started"; label: string }
@@ -267,6 +280,13 @@ export function reduceAuthFlow(
   switch (action.type) {
     case "providers-loaded":
       return { step: "identifier", providers: action.providers };
+    case "realm-switch-required":
+      return {
+        step: "realm-confirmation",
+        targetRegion: action.targetRegion,
+        providers: action.providers,
+        methods: action.methods,
+      };
     case "discovery-loaded":
       return {
         step: "method-choice",

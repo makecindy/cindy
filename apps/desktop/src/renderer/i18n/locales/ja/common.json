@@ -267,6 +267,11 @@
           "keyHint": "秘密鍵ファイルを直接読み込みます。パスフレーズは保存しないため、暗号化された鍵には非対応 — ssh-agent が使えない場合のみご使用ください。"
         },
         "identityFile": "秘密鍵ファイルのパス",
+        "agentProxy": "Agent トラフィックをローカルプロキシ経由にする",
+        "agentProxyTip": "リモートに 127.0.0.1 ポートを開き、SSH トンネルでこのマシンのプロキシに中継します。リモートの codex / Claude Code の通信がそこから出ます",
+        "agentProxyAddr": "ローカルプロキシのアドレス",
+        "agentProxyHint": "リモートの 127.0.0.1 にポートを開き、SSH トンネルでローカルプロキシ（例: Clash の 7890）に中継します。{{appName}} はプロキシを提供せず、トンネルのみを張ります。リモート Agent の HTTPS_PROXY がトンネル口を指し、ドメインはお使いのプロキシ側で解決されます。切り替え後、リモートの codex daemon が一度再起動します。",
+        "agentProxyAddrInvalid": "host:port 形式で入力してください（例: 127.0.0.1:7890）",
         "cancel": "キャンセル",
         "submit": "マシンを追加"
       },
@@ -282,6 +287,11 @@
         "statusInstalled": "インストール済み",
         "statusNotInstalled": "未インストール",
         "claudeCodeName": "Claude Code",
+        "agentProxyTitle": "Agent プロキシトンネル",
+        "agentProxyActive": "リモート 127.0.0.1:{{port}} → ローカル {{target}} · 確立済み",
+        "agentProxyPending": "トンネル確立中 → ローカル {{target}}",
+        "agentProxyWaiting": "ホスト未接続 — 再接続後に自動確立 → ローカル {{target}}",
+        "agentProxyError": "トンネルの確立に失敗: {{message}}",
         "button": {
           "install": "インストール",
           "reinstall": "再インストール",
@@ -492,6 +502,14 @@
       "soundPreviewAria": "{{event}} のサウンドをプレビュー",
       "skinAnimationAria": "{{skin}} のプレビューアニメーションを切り替え",
       "skins": {
+        "cindy": {
+          "name": "Cindy",
+          "description": "Cindy 本人。実行中のタスクをしっかり見守ります。"
+        },
+        "blackcat": {
+          "name": "黒猫",
+          "description": "落ち着いた黒猫。暗いノッチの中でも黄色い瞳がよく目立ちます。"
+        },
         "pululu": {
           "name": "Pululu",
           "description": "TapFamily の落ち着いた守り役。丸い頭とまっすぐな優しさで、荒れがちなタスクも支えます。"
@@ -519,6 +537,10 @@
         "muffin": {
           "name": "Muffin",
           "description": "やわらかなブルーグレーの相棒。実行中のタスクを軽やかで親しみやすく見せます。"
+        },
+        "erika": {
+          "name": "Erika",
+          "description": "三日月の髪飾りをつけた Erika。温かみのある茶色の瞳で、長いタスクに静かに寄り添います。"
         }
       },
       "soundEvents": {
@@ -1342,9 +1364,12 @@
         "capabilityNote": "{{agent}} では利用不可",
         "divergedChip": "{{agent}} で非表示",
         "refreshAria": "モデル一覧を更新(追加のみ)",
+        "refreshBuiltinAria": "モデル一覧を更新",
+        "refreshingAria": "モデル一覧を更新中…",
+        "refreshDone": "モデル一覧を再読み込みしました",
         "refreshAdded": "新しいモデルを {{count}} 件検出しました",
         "refreshNoNew": "モデル一覧は最新です。新規はありません",
-        "refreshFailed": "モデル一覧の更新に失敗しました。しばらくしてからもう一度お試しください"
+        "refreshFailed": "モデル一覧を更新できませんでした。しばらくしてから再試行してください"
       },
       "genericOAuth": {
         "subtitle": "サブスクリプション認証（OAuth）",
@@ -3110,6 +3135,13 @@
     "ssoOrgPlaceholder": "企業 ID、slug、またはドメイン",
     "ssoOrgHint": "企業のログイン識別子が不明な場合は、管理者にお問い合わせください",
     "ssoOrgDetected": "「{{org}}」のシングルサインオン方法を選択してください",
+    "realmConsent": {
+      "title": "企業のリージョンに接続",
+      "bodyCn": "この企業は中国本土リージョンにあります。\n続行すると Cindy はこの地域に接続します。",
+      "bodyGlobal": "この企業はグローバルリージョンにあります。\n続行すると Cindy はこの地域に接続します。",
+      "agree": "ログインを続ける",
+      "disagree": "キャンセル"
+    },
     "ssoVerificationTitle": "企業 ID を確認",
     "ssoVerificationSubtitle": "初回ログインでは ID プロバイダーから返された連絡先 {{target}} の確認が必要です",
     "enterCode": "認証コードを入力",
@@ -3158,6 +3190,8 @@
       "RATE_LIMITED": "試行が多すぎます。少し待ってから再試行してください。",
       "SSO_LOGIN_REQUIRED": "この組織は SSO ログインが必要です。",
       "ORG_SSO_NOT_FOUND": "該当する企業が見つからないか、SSO サインインが有効になっていません",
+      "ORG_REALM_AMBIGUOUS": "この企業識別子は両方の地域に存在します。管理者にお問い合わせください。",
+      "ORG_REALM_UNAVAILABLE": "企業の地域を現在確認できません。ネットワークを確認して再試行してください。",
       "SSO_EMAIL_REQUIRED": "企業 ID から有効なメールアドレスを取得できません。IdP の設定を管理者に確認してください。",
       "INVALID_SSO_VERIFICATION_TICKET": "企業 ID の確認期限が切れました。SSO サインインをやり直してください。",
       "SOCIAL_TOKEN_INVALID": "プロバイダー認証の期限が切れました。",
@@ -3246,6 +3280,8 @@
       "balanceAvailable": "残高あり",
       "balanceDepleted": "残高なし",
       "balanceUnlimited": "残高無制限",
+      "resetCreditsAvailableLine": "利用可能なリセット：{{count}}回",
+      "resetCreditEarliestExpiryLine": "最も早い有効期限：{{at}}",
       "windowLine": "{{label}} 残り {{remaining}} (使用済み {{used}})",
       "windowSegment": "{{label}} 残り {{remaining}}",
       "resetAt": "{{at}} にリセット",
@@ -3395,6 +3431,7 @@
         "browser": "ブラウザ",
         "terminal": "ターミナル",
         "review": "レビュー",
+        "backgroundTasks": "バックグラウンドタスク",
         "collaboration": "コラボ",
         "unknown": "不明なタブ",
         "ghostPanel": "プラグインパネル"
@@ -3418,6 +3455,8 @@
         "fileSub": "Files",
         "openReview": "レビューを開く",
         "reviewSub": "Review",
+        "openBackgroundTasks": "バックグラウンドタスクを開く",
+        "backgroundTasksSub": "Background tasks",
         "openBrowser": "ブラウザを開く",
         "browserSub": "Browser",
         "openTerminal": "ターミナルを開く",
@@ -3779,6 +3818,16 @@
       "touchCountAria_other": "{{count}} 回編集",
       "expandAllAria": "すべてのファイルを展開",
       "collapseAllAria": "すべてのファイルを折りたたむ"
+    },
+    "backgroundTasks": {
+      "running": "実行中",
+      "completed": "完了",
+      "empty": "このセッションにバックグラウンドタスクはまだありません",
+      "stop": "停止",
+      "back": "戻る",
+      "progressSummary": "{{done}}/{{total}} Agent",
+      "tokens": "{{value}} tokens",
+      "noProgress": "進行状況の詳細はまだありません"
     }
   },
   "update": {
@@ -4089,7 +4138,14 @@
       "trigger": {
         "placeholder": "モデルを選択",
         "aria": "モデルを選択。現在：{{model}}",
-        "ariaWithEffort": "モデルを選択。現在：{{model}}、推論強度：{{effort}}"
+        "ariaWithEffort": "モデルを選択。現在：{{model}}、推論強度：{{effort}}",
+        "pendingAria": "モデルを選択。次のメッセージ：{{agent}} · {{model}}",
+        "pendingAriaWithEffort": "モデルを選択。次のメッセージ：{{agent}} · {{model}}、推論強度：{{effort}}",
+        "agent": {
+          "claudeCode": "Claude Code",
+          "codex": "Codex",
+          "pending": "次回：{{agent}}"
+        }
       },
       "category": {
         "anthropic": "Anthropic",
@@ -4503,6 +4559,9 @@
         "stopped": "停止済み"
       },
       "stop": "このタスクを停止",
+      "openInPanel": "バックグラウンドタスクパネルで開く",
+      "workflowProgressLine": "{{phase}} · {{done}}/{{total}} Agent",
+      "workflowProgressCount": "{{done}}/{{total}} Agent",
       "tokens": "{{count}} tokens",
       "toolUses_one": "{{count}} 回のツール使用",
       "toolUses_other": "{{count}} 回のツール使用",
@@ -5049,13 +5108,19 @@
     "workflowTree": {
       "agentsCount": "{{count}} 個のエージェント",
       "attempt": "{{count}} 回目",
+      "endedEarly": "完了前に終了",
       "state": {
         "queued": "待機中",
+        "pending": "待機中",
+        "start": "開始中",
         "running": "実行中",
+        "progress": "実行中",
         "done": "完了",
         "completed": "完了",
         "failed": "失敗",
-        "stopped": "停止"
+        "error": "失敗",
+        "stopped": "停止",
+        "killed": "強制終了"
       }
     },
     "credentialSwitchWait": {
@@ -6459,13 +6524,20 @@
       "typeFeature": "機能要望",
       "titleLabel": "タイトル",
       "bodyLabel": "本文(Markdown)",
-      "identityGithubUser": "送信者:GitHub ユーザー @{{login}}(本人)",
-      "identityPlatform": "送信者:Cindy プラットフォームによる代理送信(GitHub App {{login}})",
+      "submissionMethodLabel": "公開方法",
+      "identityGithubUser": "GitHub アカウント @{{login}} から直接公開",
+      "identityGithubUserHint": "GitHub 上の Issue 作成者となり、自分で編集またはクローズできます",
+      "identityPlatform": "Cindy が代理で公開(GitHub App {{login}})",
+      "identityPlatformHint": "GitHub 上の Issue 作成者にはならず、自分で編集またはクローズできません",
+      "publicNameLabel": "公開署名",
+      "publicNameHint": "この署名は Issue 本文に公開表示されます",
+      "anonymous": "匿名",
+      "useAnonymous": "匿名の署名を使用",
       "envLine": "送信時に自動で付加されます:クライアント {{appVersion}} · {{platform}} {{arch}} · 表示言語 {{uiLanguage}}",
       "regionLine": "リージョン:{{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
-      "submit": "送信",
+      "submit": "フィードバックを送信",
       "cancel": "キャンセル"
     },
     "redirect": {
@@ -7331,11 +7403,6 @@
     },
     "hub": {
       "learnButton": "このスキルを学習"
-    }
-  },
-  "workflows": {
-    "toast": {
-      "none": "このセッションで実行中のワークフローはありません"
     }
   },
   "planMode": {

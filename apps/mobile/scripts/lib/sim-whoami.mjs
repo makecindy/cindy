@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mobileClientBuildEnv } from '../../../../scripts/shared/client-endpoint-build-env.mjs';
+import { mobileClientBundleEnv } from '../../../../scripts/shared/client-endpoint-build-env.mjs';
 import { withLocalMobileRegionConfig } from './mobile-dev-region.mjs';
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -43,7 +43,7 @@ export function extractSimMetroPortArgs(args, defaultPort = 8081) {
 export function resolveMobileSimulatorBundleId(region, options = {}) {
   const run = options.execFile ?? execFileSync;
   const buildEnv = withLocalMobileRegionConfig(
-    mobileClientBuildEnv({ authRegion: region }),
+    mobileClientBundleEnv({ authRegion: region }),
   );
   let raw;
   try {

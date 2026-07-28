@@ -77,6 +77,19 @@ async function ssoOrgListState(org = 'example-corp') {
   });
 }
 
+async function realmConfirmationState(targetRegion: 'cn' | 'global') {
+  const identifier = await identifierState('providers:both');
+  if (identifier.step !== 'identifier') throw new Error('expected identifier');
+  const client = scenarioClient('sso:single', targetRegion);
+  const discovery = await client.discoverSsoOrg('example-corp');
+  return reduceAuthFlow(identifier, {
+    type: 'realm-switch-required',
+    targetRegion,
+    providers: identifier.providers,
+    methods: ssoOrgDiscoveryToMethods(discovery),
+  });
+}
+
 function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.value>) {
   loginHook.value = {
     isLoading: false,
@@ -261,7 +274,7 @@ describe('ssoOrgMode 子视图', () => {
     expect(screen.getByText('login.ssoOrgHint')).toBeTruthy();
   });
 
-  it('sso-org 填写态:输入企业 ID 后继续可用,提交派发 discover-sso-org', async () => {
+  it('sso-org 填写态:直接派发 discover-sso-org，不在查询前弹确认', async () => {
     mount(await identifierState('providers:both'));
     fireEvent.click(screen.getByTestId('login-social-sso'));
     const input = screen.getByTestId('login-sso-org-input') as HTMLInputElement;
@@ -272,6 +285,29 @@ describe('ssoOrgMode 子视图', () => {
     expect(loginHook.value.dispatch).toHaveBeenCalledWith({
       type: 'discover-sso-org',
       org: 'example-corp',
+    });
+    expect(screen.queryByText('login.realmConsent.title')).toBeNull();
+  });
+
+  it('组织区域与安装区域不一致时才显示确认，确认或取消走独立 action', async () => {
+    mount(await realmConfirmationState('global'));
+    expect(screen.getByText('login.realmConsent.title')).toBeTruthy();
+    const bodyText = screen.getByText('login.realmConsent.bodyGlobal');
+    const body = bodyText.closest('#login-consent-dialog-body') as HTMLElement;
+    expect(body).toBeTruthy();
+    expect(body.style.fontSize).toBe('26px');
+    expect(body.style.lineHeight).toBe('40px');
+    expect(body.style.color).toBe('var(--login-secondary-text)');
+    expect(body.className).toContain('whitespace-pre-line');
+
+    fireEvent.click(screen.getByText('login.realmConsent.agree'));
+    expect(loginHook.value.dispatch).toHaveBeenCalledWith({
+      type: 'confirm-sso-realm',
+    });
+
+    fireEvent.click(screen.getByText('login.realmConsent.disagree'));
+    expect(loginHook.value.dispatch).toHaveBeenCalledWith({
+      type: 'cancel-sso-realm',
     });
   });
 

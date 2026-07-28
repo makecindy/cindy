@@ -19,10 +19,12 @@
 import {
   createAnthropicCompatProxy,
   createActiveStripTransform,
+  createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  stripEmptyAssistantMessagesFromBody,
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
   stripEncryptedContentFromBody,
@@ -51,6 +53,7 @@ import {
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
 import { createClaudeAutoClassifierFailureObserver } from './claude-auto-permission-fallback.js';
 import {
+  emptyAssistantStripController,
   emptyTextStripController,
   emptyThinkingStripController,
   encryptedStripController,
@@ -302,6 +305,14 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
           enabled: () => true,
           strip: stripEmptyTextFromBody,
         }),
+        // 空 assistant 消息主动剥离 —— always-on,独立 controller(moonshot/kimi 空
+        // thinking 占位被中断持久化后回放 400 "with role 'assistant' must not be empty";
+        // 与 kimi code 官方客户端的发送前兜底同构)。
+        createActiveStripTransform({
+          controller: emptyAssistantStripController,
+          enabled: () => true,
+          strip: stripEmptyAssistantMessagesFromBody,
+        }),
         // LiteLLM/provider adapter 可能把 provider_specific_fields(null) 挂到 tool_use 上，
         // 严格 Anthropic 入站 schema 不接受该扩展字段。
         stripToolUseProviderSpecificFields,
@@ -321,6 +332,12 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         createEmptyTextRecoveryRule({
           enabled: () => true,
           onRetry: (threadId, model) => emptyTextStripController.markActive(threadId, model),
+        }),
+        // 空 assistant 消息 400 → 丢空消息重发,always-on(moonshot/kimi 空 thinking
+        // 占位污染的会话;恢复一次后该 thread 发送前主动预剥,不再每轮撞 400)。
+        createEmptyAssistantMessageRecoveryRule({
+          enabled: () => true,
+          onRetry: (threadId, model) => emptyAssistantStripController.markActive(threadId, model),
         }),
         createToolUseProviderSpecificFieldsRecoveryRule(),
       ],

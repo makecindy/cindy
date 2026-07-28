@@ -63,13 +63,16 @@ export type AgentIslandDisplaySurface = 'collapsed' | 'sessionList' | 'interacti
 export type AgentIslandLayoutMode = 'compact' | 'normal';
 export type AgentIslandPillStatus = 'idle' | AgentIslandSessionPhase;
 export type AgentIslandMascotSkin =
+  | 'cindy'
+  | 'blackcat'
   | 'pululu'
   | 'tarara'
   | 'boli'
   | 'whitesnow'
   | 'annie'
   | 'chaku'
-  | 'muffin';
+  | 'muffin'
+  | 'erika';
 export type AgentIslandSoundEvent = 'start' | 'attention' | 'complete' | 'error' | 'select';
 export type AgentIslandDisplayTarget =
   | { mode: 'all' }
@@ -121,7 +124,10 @@ export interface AgentIslandDisplayOption {
   };
 }
 
+/** 顺序即设置页「图标皮肤」列表的展示顺序。 */
 export const AGENT_ISLAND_MASCOT_SKINS: readonly AgentIslandMascotSkin[] = [
+  'cindy',
+  'blackcat',
   'pululu',
   'tarara',
   'boli',
@@ -129,6 +135,7 @@ export const AGENT_ISLAND_MASCOT_SKINS: readonly AgentIslandMascotSkin[] = [
   'annie',
   'chaku',
   'muffin',
+  'erika',
 ] as const;
 
 export const AGENT_ISLAND_SOUND_EVENTS: readonly AgentIslandSoundEvent[] = [

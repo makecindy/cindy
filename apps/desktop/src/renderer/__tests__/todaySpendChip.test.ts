@@ -10,8 +10,18 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const sourcePath = resolve(__dirname, '..', 'components', 'status', 'TodaySpendChip.tsx');
+const preloadPath = resolve(__dirname, '..', '..', 'preload', 'preload.ts');
+const rendererTypesPath = resolve(__dirname, '..', 'vite-env.d.ts');
 // Windows CRLF 检出下 \n 字面量断言会失配,统一归一化成 LF 再断言。
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
+const preloadSource = readFileSync(preloadPath, 'utf8').replace(/\r\n/g, '\n');
+const rendererTypesSource = readFileSync(rendererTypesPath, 'utf8').replace(/\r\n/g, '\n');
+const localeSources = ['en', 'zh-CN', 'ja', 'ko'].map((locale) =>
+  readFileSync(
+    resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'),
+    'utf8',
+  ).replace(/\r\n/g, '\n'),
+);
 
 describe('TodaySpendChip dashboard routing', () => {
   it('separates the latest user-round total from final-segment token details', () => {
@@ -107,6 +117,41 @@ describe('TodaySpendChip dashboard routing', () => {
     // 不跨槽回退(账号多限额桶互相污染, 2026-07-24 实报 bug)
     expect(source).toContain("shouldReadLocalCodexAccountUsage ? 'codex' : undefined,");
     expect(source).toContain("isChatgptBridge ? 'openai-web' : 'app-server',");
+  });
+
+  it('shows the shared mobile Codex reset-credit summary for local Desktop sessions', () => {
+    // 主进程已有 authoritative read;Desktop renderer 需补齐 preload + 类型链路。
+    expect(preloadSource).toContain(
+      'getCodexRateLimits: (): Promise<MobileCodexRateLimitsResult>',
+    );
+    expect(preloadSource).toContain(
+      "ipcRenderer.invoke('maker:usage:codex-rate-limits')",
+    );
+    expect(rendererTypesSource).toContain(
+      'getCodexRateLimits: () => Promise<',
+    );
+    // 仅本机 Codex OAuth 会话读取本机账号数据;远程 / bridge 不张冠李戴。
+    expect(source).toContain(
+      'useCodexRateLimits(isCodexOauth && !isAnyRemoteSession)',
+    );
+    // 复用 Mobile 的中性汇总字段；Desktop 按当前界面语言渲染 label / 次数 / 本地时间。
+    expect(source).toContain('summarizeCodexRateLimitReset');
+    // 复用 chip 现有 tick 时间基准,跨日时本地时间文案会重新格式化。
+    expect(source).toContain(
+      'summarizeCodexRateLimitReset(codexRateLimits, windowLabelNowMs)',
+    );
+    expect(source).toContain('resetSummary?.hasResetCreditCount');
+    expect(source).toContain('resetSummary?.earliestExpiryAt');
+    expect(source).toContain("t('todaySpend.codex.resetCreditsAvailableLine'");
+    expect(source).toContain("t('todaySpend.codex.resetCreditEarliestExpiryLine'");
+    expect(source).toContain('i18n.resolvedLanguage ?? i18n.language');
+    expect(source).not.toContain('resetSummary?.resetRows');
+    for (const localeSource of localeSources) {
+      expect(localeSource).toContain('"resetCreditsAvailableLine"');
+      expect(localeSource).toContain('"resetCreditEarliestExpiryLine"');
+    }
+    // 长时间挂载时每次重新悬停都会刷新，首次瞬态失败与外部消费/授予不会永久陈旧。
+    expect(source).toContain('onMouseEnter={refreshCodexRateLimits}');
   });
 
   it('keeps Codex OAuth subscription details in the chip and tooltip', () => {

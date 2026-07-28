@@ -892,7 +892,7 @@ export function LoginConsentDialog({
         </div>
         <div
           id="login-consent-dialog-body"
-          className="absolute text-center"
+          className="absolute whitespace-pre-line text-center"
           style={{
             left: CONSENT_DIALOG.body.x,
             top: CONSENT_DIALOG.body.y,

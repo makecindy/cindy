@@ -53,6 +53,7 @@ import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 
 import type { LocalCliDetection } from '../../../shared/localCliDetect';
+import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
 import type { CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
 // ---------------------------------------------------------------------------
@@ -1127,8 +1128,30 @@ export function ProvidersSection() {
     null | { mode: 'create' } | { mode: 'edit'; config: CustomProviderConfig }
   >(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
-  const [refreshingModels, setRefreshingModels] = useState(false);
   const [rediscovering, setRediscovering] = useState(false);
+  const [refreshingProviderId, setRefreshingProviderId] = useState<string | null>(null);
+  // React state 负责渲染反馈；ref 才是同一事件循环内立即生效的互斥锁，防止双击在
+  // disabled 状态提交到 DOM 前启动两条刷新。
+  const refreshingProviderIdRef = useRef<string | null>(null);
+  const beginProviderRefresh = useCallback((providerId: string): boolean => {
+    if (refreshingProviderIdRef.current !== null) return false;
+    refreshingProviderIdRef.current = providerId;
+    setRefreshingProviderId(providerId);
+    return true;
+  }, []);
+  const finishProviderRefresh = useCallback((providerId: string): void => {
+    if (refreshingProviderIdRef.current !== providerId) return;
+    refreshingProviderIdRef.current = null;
+    setRefreshingProviderId(null);
+  }, []);
+
+  // 进入「模型供应商」页时只上报一个静默刷新提示。是否真正访问上游由 Main
+  // 根据连接状态、30 分钟冷却和全局 in-flight 决定，失败不打扰用户。
+  useEffect(() => {
+    void window.electronAPI.maker
+      .requestProviderModelsAutoRefresh('providers-open')
+      .catch(() => undefined);
+  }, []);
 
   // 本机 CLI 扫描:挂载时一次(失败静默空数组;检测建议是增强,不是依赖)。
   useEffect(() => {
@@ -1264,7 +1287,7 @@ export function ProvidersSection() {
    */
   const handleRefreshModels = useCallback(
     async (p: ProviderView) => {
-      setRefreshingModels(true);
+      if (!beginProviderRefresh(p.id)) return;
       try {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
@@ -1306,10 +1329,27 @@ export function ProvidersSection() {
       } catch {
         toast.error(t('settings.providers.models.refreshFailed'));
       } finally {
-        setRefreshingModels(false);
+        finishProviderRefresh(p.id);
       }
     },
-    [refetch, t],
+    [beginProviderRefresh, finishProviderRefresh, refetch, t],
+  );
+
+  /** 内置四家复用 main 已有的 provider-specific 真源刷新，不在 Renderer 复制网络逻辑。 */
+  const handleRefreshBuiltinModels = useCallback(
+    async (p: ProviderView) => {
+      if (!isBuiltinRefreshableProviderId(p.id) || !beginProviderRefresh(p.id)) return;
+      try {
+        await window.electronAPI.maker.refreshBuiltinProviderModels(p.id);
+        toast.success(t('settings.providers.models.refreshDone'));
+        refetch();
+      } catch {
+        toast.error(t('settings.providers.models.refreshFailed'));
+      } finally {
+        finishProviderRefresh(p.id);
+      }
+    },
+    [beginProviderRefresh, finishProviderRefresh, refetch, t],
   );
 
   /**
@@ -1514,7 +1554,9 @@ export function ProvidersSection() {
                     />
                   </div>
                 )}
-                {providerHasModels(effectiveSelected) && (
+                {(providerHasModels(effectiveSelected) ||
+                  (isBuiltinRefreshableProviderId(effectiveSelected.id) &&
+                    !effectiveSelected.modelDiscoveryFailure)) && (
                   <>
                     <div
                       className="border-t"
@@ -1522,17 +1564,32 @@ export function ProvidersSection() {
                     />
                     <UnifiedModelList
                       provider={effectiveSelected}
-                      {...(effectiveSelected.source === 'user' &&
-                      effectiveSelected.auth.method !== 'oauth'
+                      emptyMessage={t(
+                        effectiveSelected.connected
+                          ? 'settings.providers.detail.emptyModelsConnected'
+                          : 'settings.providers.detail.emptyModels',
+                      )}
+                      {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
                         ? {
-                            onRefresh: () => void handleRefreshModels(effectiveSelected),
-                            refreshing: refreshingModels,
+                            onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
+                            refreshing: refreshingProviderId === effectiveSelected.id,
+                            refreshDisabled: refreshingProviderId !== null,
+                            refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
                           }
-                        : {})}
+                        : effectiveSelected.source === 'user' &&
+                            effectiveSelected.auth.method !== 'oauth'
+                          ? {
+                              onRefresh: () => void handleRefreshModels(effectiveSelected),
+                              refreshing: refreshingProviderId === effectiveSelected.id,
+                              refreshDisabled: refreshingProviderId !== null,
+                            }
+                          : {})}
                     />
                   </>
                 )}
-                {!providerHasModels(effectiveSelected) && (
+                {!providerHasModels(effectiveSelected) &&
+                  (Boolean(effectiveSelected.modelDiscoveryFailure) ||
+                    !isBuiltinRefreshableProviderId(effectiveSelected.id)) && (
                   <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center text-13">
                     {/* 已连接却无模型(如 Codex 刚登录、models_cache 未生成;或网关清单拉取失败)
                         不能沿用未连接的「授权后…」文案——那对已连接供应商自相矛盾。

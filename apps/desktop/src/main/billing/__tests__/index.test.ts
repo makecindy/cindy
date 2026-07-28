@@ -119,10 +119,14 @@ describe('billing IPC', () => {
       observedAt: '2026-07-23T12:00:00.000Z',
     });
     expect(fetch).toHaveBeenCalledWith('/api/model-access/balance', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
     });
+    const baseUrl = fetch.mock.calls[0]?.[1]?.baseUrl;
+    expect(typeof baseUrl === 'function' ? baseUrl() : baseUrl).toBe(
+      'https://model-access.example',
+    );
   });
 
   it('rejects any balance payload before network access', async () => {
@@ -151,7 +155,7 @@ describe('billing IPC', () => {
       promotionalGrantConsistency: 'OBSERVED',
     });
     expect(fetch).toHaveBeenCalledWith('/api/model-access/credit-usage', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
     });
@@ -211,7 +215,7 @@ describe('billing IPC', () => {
     });
 
     expect(fetch).toHaveBeenCalledWith('/api/billing/credit-topup/orders', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
       method: 'POST',
@@ -230,7 +234,7 @@ describe('billing IPC', () => {
       purchaseAttemptId: 'attempt/1',
     });
     expect(fetch).toHaveBeenCalledWith('/api/billing/subscriptions/purchases/attempt%2F1/refresh', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
       method: 'POST',
@@ -254,7 +258,7 @@ describe('billing IPC', () => {
 
     await expect(call(BILLING_INVOKE.CANCEL_CURRENT_SUBSCRIPTION)).resolves.toEqual(canceled);
     expect(fetch).toHaveBeenCalledWith('/api/billing/subscription', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
       method: 'DELETE',
@@ -389,7 +393,7 @@ describe('billing IPC', () => {
       }),
     ).resolves.toEqual(change);
     expect(fetch).toHaveBeenCalledWith('/api/billing/subscription/plan-change-quotes', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
       method: 'POST',
@@ -443,7 +447,7 @@ describe('billing IPC', () => {
 
     await call(BILLING_INVOKE.CANCEL_PLAN_CHANGE, { planChangeId: 'plan/1' });
     expect(fetch).toHaveBeenCalledWith('/api/billing/subscription/plan-changes/plan%2F1', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
       method: 'DELETE',

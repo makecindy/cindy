@@ -81,6 +81,7 @@ const log = createLogger('hook-control');
 let store: SlackHookStore | null = null;
 let manager: HookControlManager | null = null;
 let disposeAuthListener: (() => void) | null = null;
+let observedAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 let codexMcpRefreshPending = false;
 let codexMcpRefreshRunning = false;
 let codexMcpRefreshRetryTimer: NodeJS.Timeout | null = null;
@@ -772,13 +773,21 @@ export function registerHookControlIpc(): void {
   // fail-closed backstop for signed-out/local sessions; activation waits for
   // the next owner DB readiness callback (with app:ready-for-bot as a
   // compatibility retry).
+  observedAuthRealm = authManager.getActiveAuthRealm();
   disposeAuthListener = authManager.onAuthStateChange(() => {
+    const nextRealm = authManager.getActiveAuthRealm();
+    const realmChanged = observedAuthRealm !== null && observedAuthRealm !== nextRealm;
+    observedAuthRealm = nextRealm;
     if (!hookControlAvailable()) {
       void stopHookControlAccount().catch((err: unknown) => {
         log.warn(
           `hook-control account deactivation failed (${err instanceof Error ? err.name : 'unknown'})`,
         );
       });
+    } else if (realmChanged) {
+      // manager.sync() 同时 dispose 两条旧 transport，并用当前清单重读
+      // Slack / Telegram URL；authManager 已在发通知前提交新 token。
+      manager?.sync();
     }
   });
 
@@ -811,5 +820,6 @@ export function disposeHookControl(): void {
   }
   disposeAuthListener?.();
   disposeAuthListener = null;
+  observedAuthRealm = null;
   resetHookControlOwnerBoundary();
 }
