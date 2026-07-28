@@ -6347,6 +6347,9 @@ private enum AgentIslandMascotPreviewAppearance: String, CaseIterable, Identifia
   }
 }
 
+/// 预览窗口的启动开关(命令行参数,不走环境变量:见 AgentIslandMascotPreview 的说明)。
+private let agentIslandMascotPreviewFlag = "--mascot-preview"
+
 private let agentIslandMascotPreviewZooms: [Double] = [1, 2, 3, 4, 6, 8]
 
 /// 角色在产品里的真实渲染尺寸：
@@ -6584,11 +6587,15 @@ private struct AgentIslandMascotPreviewView: View {
   }
 }
 
-/// 由 `XDT_AGENT_ISLAND_MASCOT_PREVIEW=1` 触发的独立预览窗口。
+/// 由命令行参数 `--mascot-preview` 触发的独立预览窗口。
+/// 刻意**不用环境变量**做开关：主进程 spawn helper 时会继承 `process.env`
+/// (见 MacAgentIslandNativeHost.ts)，用户环境里若意外设置了该变量，产品 helper 会进
+/// 预览分支、不 emit ready，被主进程判定超时反复重启。而 spawn 传的 argv 是空数组，
+/// 命令行参数不存在这条泄漏路径。
 /// 走这条分支时 helper 不读 stdin、不创建刘海面板，只当一个纯本地预览器。
 private enum AgentIslandMascotPreview {
   static var isEnabled: Bool {
-    ProcessInfo.processInfo.environment["XDT_AGENT_ISLAND_MASCOT_PREVIEW"] == "1"
+    CommandLine.arguments.dropFirst().contains(agentIslandMascotPreviewFlag)
   }
 
   private static var window: NSWindow?

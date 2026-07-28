@@ -10,7 +10,7 @@
 pnpm --filter desktop preview:island-mascots
 ```
 
-会用 `swiftc` 编译本目录的 helper，并以 `XDT_AGENT_ISLAND_MASCOT_PREVIEW=1` 启动一个
+会用 `swiftc` 编译本目录的 helper，并以命令行参数 `--mascot-preview` 启动一个
 独立预览窗口：**行 = 角色，列 = 动画状态**，可切 Dark / Light / 两种模式同屏、切换真实
 渲染尺寸档位、放大倍数、暂停动画、从头播放。关窗即退出进程。
 

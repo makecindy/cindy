@@ -49,11 +49,12 @@ if (build.status !== 0) {
 }
 
 console.log('[island-preview] 启动预览窗口 (关窗即退出)...');
-const child = spawn(binary, [], {
+// 预览模式走命令行参数而不是环境变量：主进程 spawn helper 时会继承 process.env，
+// 用环境变量当开关会让「用户 shell 里恰好设了它」污染产品运行路径。
+const child = spawn(binary, ['--mascot-preview'], {
   stdio: 'inherit',
   env: {
     ...env,
-    XDT_AGENT_ISLAND_MASCOT_PREVIEW: '1',
     XDT_AGENT_ISLAND_ASSET_DIR: ASSET_DIR,
   },
 });
