@@ -1724,12 +1724,21 @@ function round(value) {
   return value === undefined ? undefined : Math.round(value);
 }
 
+// helper 可以在最终结果之前先流式吐出进度行（capture-target 会先单独吐一行前台
+// 窗口 frame，好让浮窗尽早选屏），所以结果一律取最后一行非空 JSON。
+function parseHelperResult(stdout) {
+  const lines = String(stdout).split('\n').map((line) => line.trim()).filter(Boolean);
+  const lastLine = lines[lines.length - 1];
+  if (lastLine === undefined) throw new Error('Empty helper response');
+  return JSON.parse(lastLine);
+}
+
 async function pasteIntoFrontmostTarget(text) {
   if (process.platform !== 'darwin') {
     throw new Error('--paste is currently supported only on macOS');
   }
   const helper = await buildMacTextInsertionHelper();
-  const capture = JSON.parse(await execFileStdout(helper, ['--command', 'capture-target']));
+  const capture = parseHelperResult(await execFileStdout(helper, ['--command', 'capture-target']));
   if (!capture.ok || !capture.target) {
     throw new Error(capture.error ?? 'Could not capture frontmost paste target');
   }
@@ -1740,7 +1749,7 @@ async function pasteIntoFrontmostTarget(text) {
     '--target-name', capture.target.processName ?? '',
   ];
   const stdout = await spawnWithInput(helper, args, text, 5000);
-  return JSON.parse(stdout);
+  return parseHelperResult(stdout);
 }
 
 async function buildMacTextInsertionHelper() {

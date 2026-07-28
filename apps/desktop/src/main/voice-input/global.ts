@@ -37,6 +37,9 @@ import {
   type MacInputMonitoringPermissionSnapshot,
 } from './MacModifierShortcutListener.js';
 import {
+  computeOverlayPositionRatio,
+  isBoundsCenterOnDisplay,
+  normalizeFocusedWindowFrame,
   resolveDraggedOverlayBounds,
   resolveOverlayInitialBounds,
   type OverlayPlacementDisplay,
@@ -151,6 +154,11 @@ type MacTextInsertionHelperResult = {
   afterNumberOfCharacters?: number;
   enhancedAxAttempted?: boolean;
   enhancedAxHelped?: boolean;
+  /** 流式进度行的事件名；命令的最终结果行没有这个字段。 */
+  event?: string;
+  /** 前台窗口 frame（DIP 屏幕坐标），进度行与最终结果行都会带。 */
+  frame?: unknown;
+  frameSource?: string;
 };
 
 const OVERLAY_QUERY = 'view=voice-input-overlay';
@@ -167,6 +175,9 @@ const OVERLAY_EDGE_PADDING = 24;
 // 拖动时卡片中心距 workArea 水平中线小于该值即吸附到水平居中（灵动岛式，
 // 第一版只做 X 轴中线吸附，不做四边吸附）。
 const OVERLAY_SNAP_THRESHOLD_X = 48;
+// 多屏下等待「前台窗口在哪块屏」的上限。超时就用鼠标所在屏，宁可判定退化
+// 也不让浮窗出现明显延迟；答案迟到时不再挪窗，避免可见的跨屏跳动。
+const OVERLAY_FOCUSED_DISPLAY_DEADLINE_MS = 90;
 const DICTIONARY_TOAST_QUERY = 'view=voice-input-dictionary-toast';
 const DICTIONARY_TOAST_CARD_WIDTH = 360;
 const DICTIONARY_TOAST_CARD_ESTIMATED_HEIGHT = 68;
@@ -228,6 +239,31 @@ let dictionaryToastCloseTimer: NodeJS.Timeout | null = null;
 // 坐标一律由 main 从 screen.getCursorScreenPoint() 读取（DIP 坐标系），
 // 避免 renderer screenX/screenY 在 Windows 缩放下的坐标系不一致问题。
 let overlayDragSession: { startBounds: Rectangle; startCursor: Point } | null = null;
+// 最近一次「浮窗真正呈现在哪」的 bounds。浮窗 hide 后会被停到屏幕外，实时
+// bounds 不能当锚点，全局浮窗路径的词典 toast 靠这份记录跟到同一块屏、同一位置。
+let lastPresentedOverlayBounds: Rectangle | null = null;
+// 从「发布证据」交棒给「显示 toast」的锚点队列，一次性消费。
+//
+// 快照是在粘贴开始前拍的（见 pasteTextToFocusedTarget）：那才是产生这条听写的浮窗
+// 现场。之后的粘贴 await、延迟轮询、模型往返期间用户都可能开新会话，锚点必须跟着
+// 来源会话走，并在显示时用呈现代次复核，否则旧会话的 toast 会盖在新浮窗上。
+//
+// 为什么不需要给每条证据编 ID：锚点的身份就是它的呈现代次。代次变过的锚点对任何
+// 请求都无效（那正是「期间又开过浮窗」），所以取用时直接丢弃过期的、拿代次仍匹配
+// 的那个——见 takeOverlayDictionaryToastAnchor()。
+const pendingDictionaryToastAnchors: DictionaryToastAnchor[] = [];
+// 队列只用于「刚发布、还没出 toast」的证据。renderer 侧若因功能开关未发起 advisor，
+// 对应锚点不会被取走，所以设上限丢最旧，避免无界增长。
+const DICTIONARY_TOAST_ANCHOR_MAX_ENTRIES = 8;
+// 浮窗呈现代次。焦点屏查询是异步的，它的回调必须能认出「这次呈现还算不算数」：
+// 会话被取消（hide / 复位到 idle）或已经开始了新一次呈现时，迟到的回调不得再
+// 定位或显示窗口——浮窗是缓存复用的，hide 并不销毁它，只靠 isDestroyed() 判断
+// 会让已取消的浮窗重新出现。
+let overlayPresentationSeq = 0;
+// 多屏下浮窗会先等最多 90ms 的焦点屏答案再显示。这段窗口里呈现已经开始（麦克风
+// 在录）但窗口还不可见，所以「浮窗是否已打开」不能只看 isVisible()：否则等待期
+// 内再按一次快捷键不会走提交分支，而是又开一次呈现，用户那一下就丢了。
+let overlayPresentationAwaitingShow = false;
 
 type ExternalDictionaryLearningWatch = {
   id: string;
@@ -240,6 +276,12 @@ type ExternalDictionaryLearningWatch = {
   timers: NodeJS.Timeout[];
   completed: boolean;
   inspecting: boolean;
+  /**
+   * 这次听写的浮窗现场，建 watch 时（刚粘贴完、浮窗刚收起）就拍下来。
+   * watch 会延迟轮询几十秒，期间用户可能已经在另一块屏开了新一次浮窗，所以锚点
+   * 必须跟着 watch 走，不能等发布证据时再去读进程级的「最近一次浮窗位置」。
+   */
+  toastAnchor: DictionaryToastAnchor | null;
   pendingEdit?: {
     editedText: string;
     detectedAt: number;
@@ -250,6 +292,21 @@ type ExternalDictionaryLearningWatch = {
 export type DictionaryToastEntryPayload = {
   entryId: string;
   term: string;
+};
+
+/** 一次浮窗听写的「现场」：浮窗当时的位置 + 当时的呈现代次。 */
+export type DictionaryToastAnchor = {
+  bounds: Rectangle;
+  presentationSeq: number;
+};
+
+type DictionaryToastPayload = {
+  entries: DictionaryToastEntryPayload[];
+  /**
+   * 非 null = 该 toast 来自全局浮窗听写，且已绑定产生它的那次浮窗现场，
+   * 显示时贴着那个位置出现（仍要过呈现代次与屏幕存在性复核）。
+   */
+  anchor: DictionaryToastAnchor | null;
 };
 
 const EXTERNAL_DICTIONARY_LEARNING_POLL_DELAYS_MS = [2500, 6500, 14000];
@@ -301,7 +358,17 @@ export function prewarmGlobalVoiceInputOverlay(): void {
 }
 
 export function isGlobalVoiceInputOverlayVisible(): boolean {
-  return Boolean(overlayPresentationActive && getOverlayWindow()?.isVisible());
+  return isOverlayPresentationOpen(getOverlayWindow());
+}
+
+/**
+ * 一次浮窗呈现是否处于「已打开」状态：呈现生效，且窗口已可见或正等着显示。
+ * 快捷键的提交分支、Dock 激活让位判断都必须用这个，而不是裸 isVisible()。
+ */
+function isOverlayPresentationOpen(overlay: BrowserWindow | null): boolean {
+  if (!overlay || overlay.isDestroyed()) return false;
+  if (!overlayPresentationActive) return false;
+  return overlay.isVisible() || overlayPresentationAwaitingShow;
 }
 
 /**
@@ -568,10 +635,14 @@ export function registerGlobalVoiceInputIpc(): void {
     // 走 positionOverlayWindow 的记忆优先路径。
     const bounds = window.getBounds();
     const display = screen.getDisplayMatching(bounds);
+    lastPresentedOverlayBounds = bounds;
     voiceInputOverlayPositionStore.save({
       x: bounds.x,
       y: bounds.y,
       displayId: display?.id,
+      // 同时存屏内相对比例：显示器重排后绝对坐标会失效，比例仍能还原用户
+      // 当时把浮窗放在这块屏的哪个位置。
+      ...(display ? computeOverlayPositionRatio(bounds, display.workArea) : {}),
       updatedAt: Date.now(),
     });
     log.debug('global overlay drag position saved', { x: bounds.x, y: bounds.y });
@@ -582,9 +653,12 @@ export function registerGlobalVoiceInputIpc(): void {
     if (window && event.sender === window.webContents) {
       overlayDragSession = null;
       voiceInputOverlayPositionStore.clear();
-      const cursorPoint = screen.getCursorScreenPoint();
-      const display = screen.getDisplayNearestPoint(cursorPoint);
-      window.setBounds(computeOverlayBounds(display));
+      // 复位到「浮窗当前所在这块屏」的默认位置：双击复位时浮窗已经在用户眼前，
+      // 不该因为鼠标所在屏判定跑到另一块屏上去。
+      const display = screen.getDisplayMatching(window.getBounds());
+      const bounds = computeOverlayBounds(display);
+      lastPresentedOverlayBounds = bounds;
+      window.setBounds(bounds);
       log.debug('global overlay position reset to default');
     }
     return { ok: true };
@@ -658,7 +732,8 @@ export function registerGlobalVoiceInputIpc(): void {
     (_event, payload: unknown): { ok: true } | { ok: false; error: string } => {
       const entries = normalizeDictionaryToastEntries(payload);
       if (entries.length === 0) return { ok: false, error: 'Dictionary toast payload is incomplete.' };
-      showDictionaryToastWindow({ entries });
+      // Renderer 侧（应用内听写）触发的 toast 与全局浮窗位置无关。
+      showDictionaryToastWindow({ entries, anchor: null });
       return { ok: true };
     },
   );
@@ -837,13 +912,14 @@ function stableVoiceInputShortcutKey(shortcut: VoiceInputShortcut): string {
 function handleGlobalVoiceInputShortcut(phase?: Extract<GlobalVoiceInputShortcutPhase, 'start'>): void {
   const invokedAt = Date.now();
   const overlay = getOverlayWindow();
-  const overlayOpen = Boolean(overlay && overlayPresentationActive && overlay.isVisible());
+  const overlayOpen = isOverlayPresentationOpen(overlay);
   log.debug('global shortcut invoked', {
     overlayOpen,
     overlayVisible: Boolean(overlay?.isVisible()),
+    overlayAwaitingShow: overlayPresentationAwaitingShow,
     appFocused: Boolean(BrowserWindow.getFocusedWindow()),
   });
-  if (overlay && overlayPresentationActive && overlay.isVisible()) {
+  if (overlay && overlayOpen) {
     if (phase === 'start') {
       pendingModifierOverlaySuppressNextTap = false;
       pendingModifierOverlaySuppressNextRelease = true;
@@ -891,7 +967,7 @@ function handleGlobalVoiceInputShortcutTap(): void {
   }
   if (sendShortcutToActiveInlineVoiceInput('tap')) return;
   const overlay = getOverlayWindow();
-  if (overlay && overlayPresentationActive && overlay.isVisible()) {
+  if (overlay && isOverlayPresentationOpen(overlay)) {
     overlay.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
     return;
   }
@@ -1119,6 +1195,9 @@ function destroyOverlayWindow(): void {
   overlayWindow = null;
   overlayLoaded = false;
   overlayPresentationActive = false;
+  // 同 setOverlayIdlePresentationState：作废本次呈现，pending 的异步定位回调失效。
+  overlayPresentationSeq += 1;
+  overlayPresentationAwaitingShow = false;
   pendingOverlayStart = null;
   pendingModifierOverlaySubmit = false;
   pendingModifierOverlaySuppressNextTap = false;
@@ -1136,6 +1215,9 @@ function destroyOverlayWindow(): void {
 function setOverlayIdlePresentationState(window: BrowserWindow): void {
   if (window.isDestroyed()) return;
   overlayPresentationActive = false;
+  // 作废本次呈现：pending 的焦点屏回调据此放弃定位与显示。
+  overlayPresentationSeq += 1;
+  overlayPresentationAwaitingShow = false;
   // `show: false` at BrowserWindow construction is not enough on macOS: a
   // prewarmed native window can still be unhidden when the app is activated by
   // a normal menu shortcut such as Cmd+,. Park the warm cache outside visible
@@ -1196,7 +1278,10 @@ function unregisterOverlayCancelShortcut(): void {
 
 async function showOverlayWindow(shortcutInvokedAt = Date.now()): Promise<void> {
   const existing = getOverlayWindow();
-  if (existing?.isVisible()) {
+  // 第一个条件是原有行为（窗口已可见就提交）；第二个补上「呈现已开始、正等着
+  // 显示」这段窗口，否则等待期内的第二次按键会再开一次呈现，renderer 收到重复
+  // start 会忽略，用户那一下等于丢了。
+  if (existing && (existing.isVisible() || isOverlayPresentationOpen(existing))) {
     existing.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
     return;
   }
@@ -1214,9 +1299,8 @@ async function showOverlayWindow(shortcutInvokedAt = Date.now()): Promise<void> 
 }
 
 function createOverlayWindow(shortcutInvokedAt: number): BrowserWindow {
-  const cursorPoint = screen.getCursorScreenPoint();
-  const display = screen.getDisplayNearestPoint(cursorPoint);
-  const bounds = computeOverlayBounds(display);
+  // 建窗时的 bounds 只是占位：真正的定位在 positionOverlayWindow 里按焦点屏做。
+  const bounds = computeOverlayBounds(getCursorDisplay());
   // The global voice overlay behaves like an input-method candidate panel:
   // visible above other apps, not part of normal app switching, and not allowed
   // to take over the text field that will receive the paste.
@@ -1342,7 +1426,16 @@ function normalizeDictionaryToastEntries(payload: unknown): DictionaryToastEntry
     .slice(0, DICTIONARY_TOAST_MAX_ENTRIES);
 }
 
-function showDictionaryToastWindow(payload: { entries: DictionaryToastEntryPayload[] }): void {
+function showDictionaryToastWindow(payload: DictionaryToastPayload): void {
+  // 有浮窗正在呈现（用户正在录音）时不弹 toast。toast 是 alwaysOnTop 的，且它的默认
+  // 位置就是浮窗的默认位置——旧会话的建议迟到时退回默认位置，恰好会盖住正在录音的
+  // 新浮窗五秒。词条本身已经落库，这个提示不重要到值得挡住用户的操作界面。
+  if (isOverlayPresentationOpen(getOverlayWindow())) {
+    log.debug('dictionary toast suppressed: overlay presentation is open', {
+      entries: payload.entries.length,
+    });
+    return;
+  }
   closeDictionaryToastWindow();
   const window = createDictionaryToastWindow(payload);
   dictionaryToastWindow = window;
@@ -1351,15 +1444,26 @@ function showDictionaryToastWindow(payload: { entries: DictionaryToastEntryPaylo
   }, DICTIONARY_TOAST_DURATION_MS);
 }
 
-export function showVoiceInputDictionaryToast(entries: DictionaryToastEntryPayload[]): void {
+/**
+ * `anchor` 只应由全局浮窗那条听写链路传（用 `takeOverlayDictionaryToastAnchor()`
+ * 在请求到达时取得）。应用内听写不传：它的 toast 不能借用浮窗位置，用户可能在另一
+ * 块屏的 Cindy 窗口里操作，甚至浮窗那块屏早已拔掉。
+ */
+export function showVoiceInputDictionaryToast(
+  entries: DictionaryToastEntryPayload[],
+  options?: { anchor?: DictionaryToastAnchor | null },
+): void {
   if (entries.length === 0) return;
-  showDictionaryToastWindow({ entries });
+  showDictionaryToastWindow({
+    entries,
+    anchor: options?.anchor ?? null,
+  });
 }
 
-function createDictionaryToastWindow(payload: { entries: DictionaryToastEntryPayload[] }): BrowserWindow {
-  const cursorPoint = screen.getCursorScreenPoint();
-  const display = screen.getDisplayNearestPoint(cursorPoint);
-  const bounds = computeDictionaryToastBounds(display);
+function createDictionaryToastWindow(payload: DictionaryToastPayload): BrowserWindow {
+  const bounds = computeDictionaryToastBounds(
+    resolveDictionaryToastAnchorBounds(payload.anchor),
+  );
   const window = new BrowserWindow({
     ...bounds,
     frame: false,
@@ -1429,14 +1533,56 @@ function createDictionaryToastWindow(payload: { entries: DictionaryToastEntryPay
 function startLoadedOverlaySession(window: BrowserWindow, shortcutInvokedAt: number): void {
   if (window.isDestroyed()) return;
 
+  const presentationSeq = ++overlayPresentationSeq;
+  // Startup ordering is intentional:
+  // 1. Capture the paste target before showing the overlay. 这一次调用同时带回
+  //    前台窗口 frame，焦点屏由它派生——和 target 同一次 frontmostApplication
+  //    读取，不会出现「浮窗开在 A 屏、粘贴却进了 B 屏的 App」。
+  // 2. Tell the renderer to start microphone capture as soon as it is ready.
+  // 3. Show the overlay on the next tick so UI display no longer gates mic start.
+  //
+  // frame 走流式：helper 读到就单独吐一行，不必等后面的 AX 上下文采集，所以 90ms 的
+  // 选屏截止时间才有意义。helper 会吐两条——先是便宜有界的 CGWindowList（z-order
+  // 近似，一定赶得上截止线），再是权威但可能超时的 AX kAXFocusedWindow。这里保留
+  // 「当前最好的一条」，AX 到了就立刻放行，没到就用已经到手的近似值。
+  //
+  // 要不要采集 frame 在 spawn 之前就定：单屏（或非 macOS）下答案改变不了落屏结果，
+  // 就不让 helper 去读——AX 慢的目标 App 里那几次读取会白白推迟粘贴目标采集。
+  let bestFocusedWindowFrame: Rectangle | null = null;
+  let hasAuthoritativeFrame = false;
+  let resolvePreferredFrame: () => void = () => {};
+  const preferredFrameArrived = new Promise<void>((resolve) => {
+    resolvePreferredFrame = resolve;
+  });
+  const wantsFocusedDisplay = shouldResolveFocusedDisplay();
+  const captureOverlayPromise = captureMacPasteTarget(
+    wantsFocusedDisplay
+      ? {
+        onFocusedWindowFrame: (frame, source) => {
+          if (!frame || hasAuthoritativeFrame) return;
+          bestFocusedWindowFrame = frame;
+          if (source !== 'ax') return;
+          // AX 是权威答案，到了就不再等，也不再被后续行覆盖。
+          hasAuthoritativeFrame = true;
+          resolvePreferredFrame();
+        },
+      }
+      : undefined,
+  );
+  // 兜底：helper 一条 frame 都没吐（AX 与 CGWindowList 都没结果）、走了 osascript
+  // 回退，或整个 capture 失败时，用最终结果收敛，别让选屏一直等到截止线。
+  void captureOverlayPromise
+    .then((captured) => {
+      if (!hasAuthoritativeFrame && captured?.frame) bestFocusedWindowFrame = captured.frame;
+      resolvePreferredFrame();
+    })
+    .catch(() => resolvePreferredFrame());
+  const focusedDisplayQuery = wantsFocusedDisplay
+    ? startFocusedDisplayQuery(preferredFrameArrived, () => bestFocusedWindowFrame)
+    : null;
   positionOverlayWindow(window);
   prepareOverlayForDisplay(window);
 
-  // Startup ordering is intentional:
-  // 1. Capture the paste target before showing the overlay.
-  // 2. Tell the renderer to start microphone capture as soon as it is ready.
-  // 3. Show the overlay on the next tick so UI display no longer gates mic start.
-  const captureOverlayPromise = captureMacPasteTarget();
   overlayPasteTarget = null;
   overlayPasteContext = null;
   overlayPasteTargetPromise = captureOverlayPromise.then((captured) => captured?.target ?? null);
@@ -1472,27 +1618,73 @@ function startLoadedOverlaySession(window: BrowserWindow, shortcutInvokedAt: num
   if (pendingModifierOverlaySubmit) {
     pendingModifierOverlaySubmit = false;
     setImmediate(() => {
-      if (!window.isDestroyed() && overlayPresentationActive) {
-        window.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
+      // 同 show()：这条延迟提交也必须绑定呈现代次。窗口是跨会话复用的，
+      // overlayPresentationActive 是进程级状态，取消后紧接着重启会让它重新为
+      // true，届时旧会话的回调会把刚开始录音的新会话直接提交掉。
+      if (!isCurrentOverlayPresentation(window, presentationSeq)) {
+        log.debug('pending modifier submit dropped: presentation no longer current');
+        return;
       }
+      window.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
     });
   }
-  setImmediate(() => {
-    if (window.isDestroyed()) return;
+  const show = (): void => {
+    // 两条路径（单屏的 setImmediate、多屏的等待回调）都要过这道校验：显示总是
+    // 延后至少一个 tick，期间用户可能已经取消。取消只让缓存窗口进 idle、不销毁，
+    // 所以只查 isDestroyed() 会让已取消的浮窗重新出现。
+    if (!isCurrentOverlayPresentation(window, presentationSeq)) {
+      log.debug('global overlay show skipped: presentation no longer current');
+      return;
+    }
     log.debug('global overlay ready to show', {
       elapsedSinceShortcutMs: Date.now() - shortcutInvokedAt,
     });
+    overlayPresentationAwaitingShow = false;
     window.showInactive();
     // showInactive preserves the user's focused app, but some Electron/macOS
     // combinations can still perturb app-level presence. Restore immediately
     // after showing without focusing the main app.
     scheduleMainAppPresenceRestore('global-voice-overlay-shown');
+  };
+  if (!focusedDisplayQuery) {
+    setImmediate(show);
+    return;
+  }
+  // 多屏：先等一小会儿焦点屏答案，拿到就在显示前重新定位。窗口此刻还没可见，
+  // 所以重定位不会被看成跳动；超时则维持鼠标所在屏的定位直接显示。
+  // 这段等待期里呈现已经算「打开」（麦克风在录），见 overlayPresentationAwaitingShow。
+  overlayPresentationAwaitingShow = true;
+  void focusedDisplayQuery.then((focusedDisplay) => {
+    if (!isCurrentOverlayPresentation(window, presentationSeq)) {
+      // 等待期间用户取消了浮窗、或者已经开始了新一次呈现：这次的答案作废。
+      log.debug('focused display result dropped: overlay presentation no longer current');
+      return;
+    }
+    if (focusedDisplay) positionOverlayWindow(window, focusedDisplay);
+    show();
   });
+}
+
+/** 判断一次异步定位结果是否还属于「当前这次浮窗呈现」。 */
+function isCurrentOverlayPresentation(window: BrowserWindow, presentationSeq: number): boolean {
+  return overlayPresentationSeq === presentationSeq
+    && overlayPresentationActive
+    && overlayWindow === window
+    && !window.isDestroyed();
 }
 
 function showPassiveOverlayWindow(window: BrowserWindow): void {
   if (window.isDestroyed()) return;
-  positionOverlayWindow(window);
+  // 被动呈现走的是「启动失败 / 粘贴失败后把浮窗重新亮出来」，属于同一次会话的延续，
+  // 必须留在它刚才所在的位置：这时重新按鼠标所在屏定位，会让错误提示从用户正在用的
+  // 那块屏跳到鼠标那块屏。浮窗 hide 后被停到屏幕外，所以用最近一次实际呈现的 bounds，
+  // 那块屏已经不存在时才退回默认定位。
+  const previousBounds = lastPresentedOverlayBounds;
+  if (previousBounds && isBoundsCenterOnDisplay(previousBounds, getOverlayPlacementDisplays())) {
+    window.setBounds(previousBounds);
+  } else {
+    positionOverlayWindow(window);
+  }
   registerOverlayCancelShortcut();
   window.setAlwaysOnTop(true, 'floating');
   window.setVisibleOnAllWorkspaces(true, {
@@ -1504,19 +1696,91 @@ function showPassiveOverlayWindow(window: BrowserWindow): void {
   scheduleMainAppPresenceRestore('global-voice-overlay-passive-shown');
 }
 
-function positionOverlayWindow(window: BrowserWindow): void {
-  const cursorPoint = screen.getCursorScreenPoint();
-  const display = screen.getDisplayNearestPoint(cursorPoint);
-  // 记忆优先：用户拖动过就用保存位置（clamp 进现存屏幕可见区域），保存
-  // 位置所在屏幕已不存在或从未拖动过则回退鼠标所在屏幕的默认位置。
-  window.setBounds(resolveOverlayInitialBounds({
+/**
+ * 把浮窗定位到焦点屏。`display` 省略时退回鼠标所在屏。
+ *
+ * 屏内位置沿用「记忆优先」：用户拖动过就用保存位置（clamp 进可见区域），
+ * 保存位置在别的屏上时按相对比例迁移过来，从未拖动过则用该屏默认位置。
+ */
+function positionOverlayWindow(window: BrowserWindow, display = getCursorDisplay()): void {
+  const displays = getOverlayPlacementDisplays();
+  const bounds = resolveOverlayInitialBounds({
     savedPosition: voiceInputOverlayPositionStore.read(),
-    displays: getOverlayPlacementDisplays(),
+    displays,
+    activeDisplay: displays.find((candidate) => candidate.id === display.id) ?? null,
     size: { width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT },
     contentInset: OVERLAY_SHADOW_PADDING,
     edgePadding: OVERLAY_EDGE_PADDING,
     fallbackBounds: computeOverlayBounds(display),
-  }));
+  });
+  lastPresentedOverlayBounds = bounds;
+  window.setBounds(bounds);
+}
+
+function getCursorDisplay(): Display {
+  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+}
+
+/**
+ * 是否值得去问「前台窗口在哪块屏」。false 时既不采集 frame 也不推迟显示，直接用
+ * 鼠标所在屏：
+ * - 只有一块屏时答案唯一；
+ * - 非 macOS 平台没有可用的低成本前台窗口查询（Electron 只能看自己的窗口），
+ *   Windows 一律按鼠标所在屏判定。
+ */
+function shouldResolveFocusedDisplay(): boolean {
+  if (process.platform !== 'darwin') return false;
+  return screen.getAllDisplays().length > 1;
+}
+
+/**
+ * 把前台窗口 frame 换算成「焦点屏」，并给它加显示截止时间。
+ *
+ * `preferredFrameArrived` 在权威答案（AX kAXFocusedWindow）到达、或 capture 整体
+ * 收敛时兑现；截止线到了就用 `readBestFrame()` 当时已有的最好答案（通常是先到的
+ * CGWindowList 近似值），而不是干脆放弃——放弃就退回鼠标所在屏，恰恰是本功能要修的
+ * 那个错。两者都没有才返回 null。
+ *
+ * 注意鼠标所在屏和键盘焦点所在屏可以不同：鼠标停在 A 屏、正在 B 屏的编辑器里打字时，
+ * 粘贴目标在 B 屏，浮窗也应该开在 B 屏，所以这里优先认前台窗口。
+ */
+function startFocusedDisplayQuery(
+  preferredFrameArrived: Promise<void>,
+  readBestFrame: () => Rectangle | null,
+): Promise<Display | null> {
+  const startedAt = Date.now();
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (timedOut: boolean): void => {
+      if (settled) return;
+      settled = true;
+      const frame = readBestFrame();
+      if (!frame) {
+        log.debug('focused display unresolved, falling back to cursor display', {
+          elapsedMs: Date.now() - startedAt,
+          timedOut,
+        });
+        resolve(null);
+        return;
+      }
+      // getDisplayMatching 按重叠面积选屏，跨屏摆放的窗口也能落到主要那块。
+      const display = screen.getDisplayMatching(frame);
+      log.debug('focused display resolved', {
+        elapsedMs: Date.now() - startedAt,
+        displayId: display?.id,
+        // true = 没等到 AX 权威答案，用的是先到的近似 frame。
+        timedOut,
+      });
+      resolve(display ?? null);
+    };
+    const timer = setTimeout(() => settle(true), OVERLAY_FOCUSED_DISPLAY_DEADLINE_MS);
+    void preferredFrameArrived
+      .catch(() => undefined)
+      .then(() => {
+        clearTimeout(timer);
+        settle(false);
+      });
+  });
 }
 
 function getOverlayPlacementDisplays(): OverlayPlacementDisplay[] {
@@ -1539,8 +1803,32 @@ function computeOverlayBounds(display: Display): Rectangle {
   return { x, y, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT };
 }
 
-function computeDictionaryToastBounds(display: Display): Rectangle {
-  const overlayBounds = computeOverlayBounds(display);
+/**
+ * 全局浮窗听写的词典 toast 贴着「产生它的那次浮窗所在的位置」出现。浮窗 hide 后会
+ * 被停到屏幕外的 OVERLAY_IDLE_BOUNDS，实时 bounds 不能当锚点，所以用粘贴前拍下、
+ * 请求到达时按序绑定的快照（见 pendingDictionaryToastAnchors）。
+ *
+ * 三个条件都满足才用它，否则退回鼠标所在屏的默认位置：
+ * - 调用方是全局浮窗链路并带来了自己那次会话的锚点（应用内听写不传）；
+ * - 呈现代次没变——变了说明期间又开过浮窗，这条 toast 会盖在新浮窗上；
+ * - 锚点中心仍落在某块现存屏幕上——否则外接屏拔掉后 toast 会整个落到屏幕外。
+ *
+ * 注意「退回默认位置」本身不足以避免遮挡：默认位置就是浮窗的默认位置。真正在录音
+ * 时的遮挡由 showDictionaryToastWindow() 的「有浮窗呈现就不弹」拦掉。
+ */
+function resolveDictionaryToastAnchorBounds(anchor: DictionaryToastAnchor | null): Rectangle {
+  if (!anchor) return computeOverlayBounds(getCursorDisplay());
+  if (anchor.presentationSeq === overlayPresentationSeq
+    && isBoundsCenterOnDisplay(anchor.bounds, getOverlayPlacementDisplays())) {
+    return anchor.bounds;
+  }
+  log.debug('dictionary toast anchor dropped', {
+    staleSession: anchor.presentationSeq !== overlayPresentationSeq,
+  });
+  return computeOverlayBounds(getCursorDisplay());
+}
+
+function computeDictionaryToastBounds(overlayBounds: Rectangle): Rectangle {
   return {
     x: Math.round(overlayBounds.x + (overlayBounds.width - DICTIONARY_TOAST_WIDTH) / 2),
     y: Math.round(overlayBounds.y + (overlayBounds.height - DICTIONARY_TOAST_HEIGHT) / 2),
@@ -1550,6 +1838,10 @@ function computeDictionaryToastBounds(display: Display): Rectangle {
 }
 
 async function pasteTextToFocusedTarget(text: string, rawTranscriptText?: string): Promise<void> {
+  // 词典 toast 锚点必须在这里、任何 await 之前拍：renderer 已经把浮窗收起并让粘贴
+  // 在后台跑，用户完全可以在 pasteTextToMacTarget() 返回前开下一次会话。等到建 watch
+  // 时再读 lastPresentedOverlayBounds / 呈现代次，拿到的就是新会话的现场了。
+  const toastAnchor = captureOverlayToastAnchor();
   const pasteTarget = await resolveOverlayPasteTarget();
   log.debug(PASTE_DEBUG_TAG, 'paste start', {
     chars: text.length,
@@ -1558,7 +1850,7 @@ async function pasteTextToFocusedTarget(text: string, rawTranscriptText?: string
   });
   if (process.platform === 'darwin') {
     await pasteTextToMacTarget(text, pasteTarget);
-    scheduleExternalDictionaryLearningWatch(text, rawTranscriptText, pasteTarget, overlayPasteContext);
+    scheduleExternalDictionaryLearningWatch(text, rawTranscriptText, pasteTarget, overlayPasteContext, toastAnchor);
     return;
   }
 
@@ -1774,22 +2066,58 @@ function scheduleClipboardRestore(snapshot: ClipboardSnapshot | null, expectedTe
 type CapturedOverlayTarget = {
   target: MacPasteTarget;
   context: MacPasteContext | null;
+  /**
+   * 前台窗口 frame（DIP 屏幕坐标），来自与 target 同一次 helper 调用、同一次
+   * frontmostApplication 读取，所以「浮窗开在哪块屏」与「粘贴进哪个 App」不会
+   * 各自认到不同的前台 App。osascript 兜底路径拿不到 frame。
+   */
+  frame: Rectangle | null;
 };
 
-async function captureMacPasteTarget(): Promise<CapturedOverlayTarget | null> {
+/**
+ * `onFocusedWindowFrame` 会在 helper 吐出前台窗口 frame 行时立刻回调——远早于整个
+ * capture 完成（AX 上下文采集在 Chromium 系编辑器里可能要几百毫秒）。浮窗选屏只等
+ * 这些行，所以不能等最终结果。
+ *
+ * helper 会吐两条：`window-list`（便宜有界的 z-order 近似）和 `ax`（权威的
+ * kAXFocusedWindow，可能超时）。`source` 原样透传，由调用方决定取舍。
+ */
+async function captureMacPasteTarget(
+  options?: { onFocusedWindowFrame?: (frame: Rectangle | null, source: string) => void },
+): Promise<CapturedOverlayTarget | null> {
   if (process.platform !== 'darwin') return null;
+  const onFocusedWindowFrame = options?.onFocusedWindowFrame;
   try {
-    const helperResult = await runMacTextInsertionHelper(['--command', 'capture-target']);
+    // 只有真要用 frame 时才让 helper 去读它：AX 慢的目标 App 里 focusedWindow /
+    // position / size 三次请求各自可能吃满 200ms messaging timeout，而单屏下这个答案
+    // 根本改变不了落屏结果，白白推迟粘贴目标采集。
+    const args = ['--command', 'capture-target'];
+    if (onFocusedWindowFrame) args.push('--with-focused-frame');
+    const helperResult = await runMacTextInsertionHelper(args, {
+      onProgress: onFocusedWindowFrame
+        ? (event) => {
+          if (event.event !== 'focused-window-frame') return;
+          onFocusedWindowFrame(
+            normalizeFocusedWindowFrame(event.frame),
+            typeof event.frameSource === 'string' ? event.frameSource : 'unknown',
+          );
+        }
+        : undefined,
+    });
     if (helperResult.ok && helperResult.target?.processName) {
+      const frame = normalizeFocusedWindowFrame(helperResult.frame);
       log.debug(PASTE_DEBUG_TAG, 'capture target result (native)', {
         target: describePasteTarget(helperResult.target),
         context: summarizePasteContext(helperResult.context),
         enhancedAxAttempted: Boolean(helperResult.enhancedAxAttempted),
         enhancedAxHelped: Boolean(helperResult.enhancedAxHelped),
+        hasFocusedWindowFrame: Boolean(frame),
+        frameSource: helperResult.frameSource,
       });
       return {
         target: helperResult.target,
         context: helperResult.context ?? null,
+        frame,
       };
     }
   } catch (error) {
@@ -1831,6 +2159,8 @@ async function captureMacPasteTarget(): Promise<CapturedOverlayTarget | null> {
     return {
       target: { processName, bundleId: bundleId ?? '', pid },
       context: null,
+      // osascript 只报前台 App，不报窗口几何：焦点屏退回鼠标所在屏。
+      frame: null,
     };
   } catch (error) {
     log.warn('capture paste target failed', { error: stringifyError(error) });
@@ -1843,6 +2173,7 @@ function scheduleExternalDictionaryLearningWatch(
   rawTranscriptText: string | undefined,
   target: MacPasteTarget | null,
   context: MacPasteContext | null,
+  toastAnchor: DictionaryToastAnchor | null,
 ): void {
   if (process.platform !== 'darwin') return;
   cancelExternalDictionaryLearningWatch();
@@ -1875,6 +2206,7 @@ function scheduleExternalDictionaryLearningWatch(
     timers: [],
     completed: false,
     inspecting: false,
+    toastAnchor,
   };
   externalDictionaryLearningWatch = watch;
   EXTERNAL_DICTIONARY_LEARNING_POLL_DELAYS_MS.forEach((delayMs) => {
@@ -2134,7 +2466,7 @@ function finalizePendingExternalDictionaryLearningEdit(
       selectedText: originalContext.selectedText,
       selectionAfter: originalContext.selectionAfter,
     },
-  });
+  }, watch.toastAnchor);
   log.debug('external dictionary learning pending evidence finalized', {
     target: describePasteTarget(watch.target),
     triggerReason,
@@ -2195,6 +2527,8 @@ async function captureMacPasteTargetForLearning(
     return {
       target: helperResult.target,
       context: helperResult.context,
+      // 词典学习只关心文本上下文，不需要窗口几何（浮窗此时早已关掉）。
+      frame: null,
     };
   } catch (error) {
     log.debug('external dictionary learning capture failed', {
@@ -2238,10 +2572,47 @@ function isSameMacPasteTarget(lhs: MacPasteTarget, rhs: MacPasteTarget): boolean
 
 function publishExternalDictionaryLearningEvidence(
   evidence: Pick<DictationDictionaryAdviceInput, 'source' | 'rawTranscriptText' | 'beforeText' | 'afterText' | 'context'>,
+  toastAnchor: DictionaryToastAnchor | null,
 ): void {
   const window = getOverlayWindow();
   if (!window || window.isDestroyed()) return;
+  // 锚点是粘贴开始前拍的（那才是这条证据对应的浮窗现场），这里排进队列，等这条
+  // 证据的建议请求到达 main 时按到达顺序取走。几何值不进 IPC payload：证据要经
+  // renderer 往返，renderer 传回的坐标属于不可信输入。
+  if (toastAnchor) {
+    pendingDictionaryToastAnchors.push(toastAnchor);
+    while (pendingDictionaryToastAnchors.length > DICTIONARY_TOAST_ANCHOR_MAX_ENTRIES) {
+      pendingDictionaryToastAnchors.shift();
+    }
+  }
   window.webContents.send('voice-input:dictionary-learning-evidence', { evidence });
+}
+
+/** 拍下「当前这次浮窗现场」，供之后给它的词典 toast 定位。 */
+function captureOverlayToastAnchor(): DictionaryToastAnchor | null {
+  if (!lastPresentedOverlayBounds) return null;
+  return { bounds: lastPresentedOverlayBounds, presentationSeq: overlayPresentationSeq };
+}
+
+/**
+ * 取走属于「当前这次浮窗呈现」的 toast 锚点，绑定给这一次词典建议请求。
+ *
+ * 身份靠呈现代次，不靠队列位置：代次已经变过的锚点无论给谁都过不了
+ * resolveDictionaryToastAnchorBounds() 的复核（那正是「期间又开过浮窗」的定义），
+ * 所以这里遇到就直接丢弃，继续找代次仍匹配的那个。这样两种情况都不会错位：
+ * - 旧会话的建议迟到（此时已开过新浮窗）→ 它的锚点已过期，取不到，走默认位置；
+ * - renderer 因功能开关没发起请求，锚点留在队列里 → 下次请求会把它当过期丢掉，
+ *   拿到自己那份，不会一直错位一格。
+ *
+ * 必须在请求刚到达、任何 await 之前调用（代次此刻才代表这次请求的来源会话）。
+ * 应用内听写不要调用它。
+ */
+export function takeOverlayDictionaryToastAnchor(): DictionaryToastAnchor | null {
+  while (pendingDictionaryToastAnchors.length > 0) {
+    const candidate = pendingDictionaryToastAnchors.shift();
+    if (candidate && candidate.presentationSeq === overlayPresentationSeq) return candidate;
+  }
+  return null;
 }
 
 // Length-only summary for normal diagnostics. Full text debug is isolated in
@@ -2326,17 +2697,29 @@ function macTextInsertionTargetArgs(pasteTarget: MacPasteTarget): string[] {
   return args;
 }
 
+/**
+ * helper 可以在最终结果之前先流式吐出若干「进度行」（每行一个 JSON，带 `event`
+ * 字段），最后一行才是命令结果。`onProgress` 会在进度行到达时同步回调；只有传了
+ * 它才走 spawn 逐行读取，其余调用保持原来的 execFile 缓冲路径。
+ */
 async function runMacTextInsertionHelper(
   args: string[],
-  options?: { input?: string; timeoutMs?: number },
+  options?: {
+    input?: string;
+    timeoutMs?: number;
+    onProgress?: (event: MacTextInsertionHelperResult) => void;
+  },
 ): Promise<MacTextInsertionHelperResult> {
   const helperPath = await resolveMacTextInsertionHelperPath();
-  const stdout = await execFilePromise(helperPath, args, 'Could not run macOS text insertion helper.', {
-    timeoutMs: options?.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
-    input: options?.input,
-  });
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+  const stdout = options?.onProgress
+    ? await spawnHelperWithProgressPromise(helperPath, args, timeoutMs, options.onProgress)
+    : await execFilePromise(helperPath, args, 'Could not run macOS text insertion helper.', {
+      timeoutMs,
+      input: options?.input,
+    });
   try {
-    return JSON.parse(stdout) as MacTextInsertionHelperResult;
+    return parseMacTextInsertionHelperResult(stdout);
   } catch (error) {
     // Don't include stdout in the error message: the helper may have printed
     // partial JSON or debug output containing AX-captured surrounding text from
@@ -2347,6 +2730,98 @@ async function runMacTextInsertionHelper(
       `Invalid helper response: ${error instanceof Error ? error.message : String(error)}. Stdout bytes: ${stdout.length}.`,
     );
   }
+}
+
+/** 取 stdout 的最后一行 JSON 作为命令结果（前面的行是流式进度事件）。 */
+export function parseMacTextInsertionHelperResult(stdout: string): MacTextInsertionHelperResult {
+  const lines = stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+  const lastLine = lines[lines.length - 1];
+  if (lastLine === undefined) throw new Error('Empty helper response');
+  return JSON.parse(lastLine) as MacTextInsertionHelperResult;
+}
+
+/**
+ * spawn helper 并逐行解析 stdout：非最后一行的 JSON 交给 onProgress，完整 stdout
+ * 仍然返回给调用方按最后一行取结果。只有需要「结果之前先拿到中间事件」的调用会
+ * 走这里（目前只有 capture-target 的前台窗口 frame）。
+ */
+function spawnHelperWithProgressPromise(
+  command: string,
+  args: string[],
+  timeoutMs: number,
+  onProgress: (event: MacTextInsertionHelperResult) => void,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let stdout = '';
+    let pending = '';
+    let stderr = '';
+    let settled = false;
+
+    const settle = (run: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      run();
+    };
+    const timer = setTimeout(() => {
+      settle(() => {
+        child.kill('SIGTERM');
+        reject(new PasteCommandError(
+          'Could not run macOS text insertion helper.',
+          `Helper timed out after ${timeoutMs}ms.`,
+        ));
+      });
+    }, timeoutMs);
+
+    // setEncoding 必须在这里显式设：否则每个 Buffer 各自 toString()，一个跨 chunk
+    // 边界被切开的多字节 UTF-8 字符会两边各变成替换字符。AX 上下文里全是中文这类
+    // 非 ASCII 文本，而最终 JSON 仍能解析成功，损坏会静默流进 refine 与词典学习。
+    // 设了编码后由流内部的 StringDecoder 跨 chunk 保留半个字符。
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+
+    // 每收到一个完整换行就尝试解析：带 event 字段的是进度事件，最后一行结果不在
+    // 这里派发（由调用方从完整 stdout 取）。解析失败的行直接忽略——stdout 可能
+    // 含用户输入框文本，不进日志。
+    child.stdout.on('data', (text: string) => {
+      stdout += text;
+      pending += text;
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const parsed = JSON.parse(trimmed) as MacTextInsertionHelperResult & { event?: string };
+          if (parsed.event) onProgress(parsed);
+        } catch {
+          // 半行 / 非 JSON 输出：忽略，最终结果仍按最后一行解析。
+        }
+      }
+    });
+    child.stderr.on('data', (text: string) => {
+      stderr += text;
+    });
+    child.on('error', (error) => {
+      settle(() => reject(new PasteCommandError(
+        'Could not run macOS text insertion helper.',
+        error.message,
+      )));
+    });
+    child.on('close', (code) => {
+      settle(() => {
+        if (code === 0) {
+          resolve(stdout);
+          return;
+        }
+        reject(new PasteCommandError(
+          'Could not run macOS text insertion helper.',
+          stderr.trim() || `Helper exited with code ${code}.`,
+        ));
+      });
+    });
+  });
 }
 
 let macTextInsertionHelperPathPromise: Promise<string> | null = null;

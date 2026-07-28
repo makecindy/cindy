@@ -255,4 +255,43 @@ describe('voice input global shortcut registration', () => {
     expect(shouldRestoreOverlayPasteTarget(undefined, 'darwin')).toBe(true);
     expect(shouldRestoreOverlayPasteTarget(undefined, 'win32')).toBe(false);
   });
+
+  // helper 会在最终结果之前先流式吐出前台窗口 frame(浮窗选屏只等这一行),所以
+  // 结果解析必须认最后一行,不能把第一行进度事件当成命令结果。
+  describe('parseMacTextInsertionHelperResult', () => {
+    it('多行输出时取最后一行作为结果', async () => {
+      const { parseMacTextInsertionHelperResult } = await import('../global.js');
+      const stdout = [
+        '{"event":"focused-window-frame","frame":{"x":0,"y":0,"width":800,"height":600},"frameSource":"ax"}',
+        '{"ok":true,"target":{"processName":"Chrome","bundleId":"com.google.Chrome","pid":42}}',
+        '',
+      ].join('\n');
+
+      const result = parseMacTextInsertionHelperResult(stdout);
+      expect(result.ok).toBe(true);
+      expect(result.event).toBeUndefined();
+      expect(result.target?.processName).toBe('Chrome');
+    });
+
+    it('单行输出保持原行为', async () => {
+      const { parseMacTextInsertionHelperResult } = await import('../global.js');
+      expect(parseMacTextInsertionHelperResult('{"ok":true,"outcome":"verified_success"}\n').ok)
+        .toBe(true);
+    });
+
+    it('空输出与非法 JSON 抛错(由调用方转成 PasteCommandError)', async () => {
+      const { parseMacTextInsertionHelperResult } = await import('../global.js');
+      expect(() => parseMacTextInsertionHelperResult('   \n\n')).toThrow();
+      expect(() => parseMacTextInsertionHelperResult('not json')).toThrow();
+    });
+  });
+
+  // 词典 toast 锚点按「请求到达顺序」绑定:renderer 收到证据会立刻发起 advisor 请求,
+  // 所以请求到达顺序 == 证据发布顺序,并发只发生在响应上。取走必须是 FIFO 且一次性。
+  describe('takeOverlayDictionaryToastAnchor', () => {
+    it('没有待取锚点时返回 null', async () => {
+      const { takeOverlayDictionaryToastAnchor } = await import('../global.js');
+      expect(takeOverlayDictionaryToastAnchor()).toBeNull();
+    });
+  });
 });
