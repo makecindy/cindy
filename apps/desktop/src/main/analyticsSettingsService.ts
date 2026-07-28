@@ -18,6 +18,7 @@ import * as authManager from './authManager';
 import {
   acceptPrivacyConsent,
   clearAnalyticsEnabledOverride,
+  closeLegacyConsentMigration,
   isAnalyticsAllowed,
   isAnalyticsEnabledCustomized,
   migrateExistingLoginAsConsented,
@@ -99,6 +100,11 @@ function broadcastSettingsChange(): void {
  *
  * 迁移本身还有第二道闸:store 里已经有 override 时一律跳过(见
  * analytics-settings-store.migrateExistingLoginAsConsented)。
+ *
+ * 第三道闸是**持久**的:本函数一旦明确判定「没有存量登录态」(情形 2 / 3),就把结论落盘
+ * (`legacyConsentMigrationClosed`)。否则「跳过登录 → 从本地模式登录 → 企业 SSO」这类
+ * 全程免协议门的链路会在下一次冷启动伪装成情形 1(真实账号 + 零记录)被静默迁移
+ * (2026-07-28 review P1)。
  */
 /**
  * 迁移是 best-effort 的埋点工作,**绝不能把登录拖下水**。
@@ -112,6 +118,26 @@ function migrateOrLog(): void {
     if (migrateExistingLoginAsConsented(true)) broadcastSettingsChange();
   } catch (err) {
     log.warn('existing-login consent migration failed (non-fatal)', err);
+  }
+}
+
+/**
+ * 冷启动**明确**判定「本机没有存量登录态」时,把这个结论落盘,永久关闭迁移窗口。
+ *
+ * 为什么必须持久化(2026-07-28 review P1):模块级 `migrationEvaluated` 只活一个进程,
+ * 下次冷启动窗口照常打开。而「跳过登录」与企业 SSO 都被协议门刻意豁免、一份记录都不写,
+ * 于是「跳过登录 → 从本地模式走登录入口 → 完成 SSO」之后的那次冷启动会看到「真实账号 +
+ * 零记录」,与真正的存量账号无法区分,被静默迁移成已同意 —— 未经同意打开采集。纯 SSO
+ * 新装用户同理。落盘之后,本机就再也不满足「改版前存量账号」的定义。
+ *
+ * 只在结论**明确**时调用:冷启动结果未决 / 异常时不写,免得把真存量用户的窗口误关
+ * (弱网存量用户凭空少统计)。同样是 best-effort,写不进去绝不能把登录拖下水。
+ */
+function closeMigrationWindowOrLog(): void {
+  try {
+    closeLegacyConsentMigration();
+  } catch (err) {
+    log.warn('closing legacy consent migration window failed (non-fatal)', err);
   }
 }
 
@@ -140,17 +166,22 @@ export function noteAuthColdStartState(
         migrationEvaluated = true;
         const finalSignedIn = finalState.isAuthenticated && !authManager.isLocalMode();
         if (finalSignedIn) migrateOrLog();
+        // 明确判定「没有存量登录态」→ 落盘关窗(见 closeMigrationWindowOrLog)。
+        else closeMigrationWindowOrLog();
       })
       .catch(() => {
+        // 结果异常 = 结论不明确:只关本进程的窗,不落盘(否则弱网存量用户会被永久误判)。
         migrationEvaluated = true;
       });
     return;
   }
 
-  // 冷启动确定没有真实账号(未登录 / 跳过登录的本地模式)= 不迁移;此后只有登录页的
-  // 协议门能写入同意。本地模式用户之后真的登录账号时走的就是那道门,与新装用户一致;
-  // 本次不迁移也不会永久拉黑本机——下次冷启动若恢复出真实账号,迁移窗口照常打开。
+  // 冷启动确定没有真实账号(未登录 / 跳过登录的本地模式)= 不迁移,并把这个结论**落盘**:
+  // 本机从此不再是「改版前存量账号」,后续冷启动即便恢复出真实账号也不迁移。此后只有登录页
+  // 的协议门能写入同意——本地模式用户之后真登录走的就是那道门,与新装用户一致(企业 SSO 被
+  // 协议门豁免,那类用户就是不采集,这是刻意的)。
   migrationEvaluated = true;
+  closeMigrationWindowOrLog();
 }
 
 export function initAnalyticsSettingsService(): void {
