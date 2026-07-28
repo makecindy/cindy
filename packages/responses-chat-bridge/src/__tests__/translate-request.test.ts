@@ -299,6 +299,37 @@ describe('translateResponsesRequest', () => {
     }))).toThrowError(UnsupportedResponsesFeatureError);
   });
 
+  it('drops replayed Codex tool_search items without breaking tool-call merging', () => {
+    const dropped: Array<[string, number]> = [];
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: 'hi' },
+        { type: 'tool_search_call', id: 'ts_1' },
+        {
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'shell',
+          arguments: '{"cmd":"ls"}',
+        },
+        { type: 'tool_search_call_output', call_id: 'ts_1', output: {} },
+        { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
+      ],
+    }), { onDroppedInputItem: (type, index) => dropped.push([type, index]) });
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: 'call_1', type: 'function', function: { name: 'shell', arguments: '{"cmd":"ls"}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: 'ok' },
+    ]);
+    expect(dropped).toEqual([['tool_search_call', 1], ['tool_search_call_output', 3]]);
+  });
+
   it('translates capability-gated Kimi user images and preserves replayed history order', () => {
     const imageUrl = 'data:image/png;base64,aW1hZ2U=';
     const out = translateResponsesRequest(base({

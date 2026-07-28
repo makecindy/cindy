@@ -113,6 +113,9 @@ export function createResponsesChatHandler(
           onDroppedTool: (type, index) => {
             log.warn?.('responses-chat bridge dropped non-function tool', { type, index });
           },
+          onDroppedInputItem: (type, index) => {
+            log.warn?.('responses-chat bridge dropped built-in input item', { type, index });
+          },
         });
       } catch (error) {
         if (error instanceof UnsupportedResponsesFeatureError) {

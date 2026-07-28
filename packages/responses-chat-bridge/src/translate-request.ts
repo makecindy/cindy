@@ -123,6 +123,8 @@ interface TranslateInputOptions {
   toolCallReasoningPlaceholder: boolean;
   /** Gemini 3 OpenAI 兼容层:为每步首个回放 tool call 注入官方允许的签名跳过值。 */
   googleThoughtSignaturePlaceholder: boolean;
+  /** 丢弃的无上下文内建 input item(Codex tool_search 等)回调,供 handler 记 log。 */
+  onDroppedInputItem?: (type: string, index: number) => void;
 }
 
 /** cc-switch 的占位口径:kimi/DeepSeek 要求 tool_call assistant 消息带非空 reasoning_content。 */
@@ -273,6 +275,16 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
       // reasoning 本身不承载用户/工具上下文，明确丢弃而不是伪造 assistant 文本。
       continue;
     }
+    if (
+      item.type === 'tool_search_call'
+      || item.type === 'tool_search_output'
+      || item.type === 'tool_search_call_output'
+    ) {
+      // Codex 内建 tool_search 的回放 item：与 namespace/web_search 工具声明同口径，
+      // 对第三方 Chat 上游无意义且不承载用户上下文，剥掉降级而不是拒绝整条请求。
+      opts.onDroppedInputItem?.(String(item.type), index);
+      continue;
+    }
     throw new UnsupportedResponsesFeatureError(`input item '${String(item.type)}'`);
   }
   flushAssistant(messages, assistant, opts);
@@ -336,6 +348,8 @@ export interface TranslateResponsesRequestOptions {
   capabilities?: ChatBridgeCapabilities;
   /** 被剥掉的非 function 工具(Codex 内建 namespace / local_shell 等)回调,供 handler 记 log。 */
   onDroppedTool?: (type: string, index: number) => void;
+  /** 被剥掉的无上下文内建 input item(Codex tool_search 等)回调,供 handler 记 log。 */
+  onDroppedInputItem?: (type: string, index: number) => void;
 }
 
 /** Convert a Codex Responses request to a streaming Chat Completions request. */
@@ -353,6 +367,7 @@ export function translateResponsesRequest(
     imageInput: capabilities.imageInput,
     toolCallReasoningPlaceholder: capabilities.toolCallReasoningPlaceholder === true,
     googleThoughtSignaturePlaceholder: capabilities.googleThoughtSignaturePlaceholder === true,
+    onDroppedInputItem: opts.onDroppedInputItem,
   });
   if (input.instructions) {
     messages.unshift({ role: developerRole, content: input.instructions });
