@@ -108,6 +108,27 @@ class InMemoryStorage implements ScheduleStorage {
         (opts?.firedAt === undefined || r.firedAt === opts.firedAt),
     );
   }
+  async listRunningRunFiredAts(scheduleId: string): Promise<number[]> {
+    return [...this.runs.values()]
+      .filter((r) => r.status === 'running' && r.scheduleId === scheduleId)
+      .map((r) => r.firedAt)
+      .sort((a, b) => b - a);
+  }
+  async rescheduleDeferredAutomaticClaim(
+    id: string,
+    claimFiredAt: number,
+    retryAt: number,
+    previousLastFiredAt?: number,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex || ex.activeClaimFiredAt !== claimFiredAt) return null;
+    ex.nextFireAt = retryAt;
+    if (ex.lastFiredAt === claimFiredAt) {
+      ex.lastFiredAt = previousLastFiredAt;
+    }
+    ex.activeClaimFiredAt = undefined;
+    return { ...ex };
+  }
   // 与真实现相同的 CAS 语义:active 且 nextFireAt 精确匹配才认领(置空),否则 null。
   async claimDueFire(id: string, expectedNextFireAt: number): Promise<Schedule | null> {
     const ex = this.schedules.get(id);
@@ -124,7 +145,9 @@ class InMemoryStorage implements ScheduleStorage {
     const ex = this.schedules.get(id);
     if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
     ex.nextFireAt = undefined;
-    ex.lastFiredAt = run.firedAt;
+    if (ex.lastFiredAt === undefined || ex.lastFiredAt <= run.firedAt) {
+      ex.lastFiredAt = run.firedAt;
+    }
     ex.activeClaimFiredAt = run.firedAt;
     this.runs.set(run.id, { ...run });
     return { ...ex };

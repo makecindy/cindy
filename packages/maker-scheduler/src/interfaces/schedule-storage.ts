@@ -33,6 +33,26 @@ export interface ScheduleStorage {
     run: ScheduleRun,
   ): Promise<Schedule | null>;
 
+  /**
+   * Return firedAt values for currently running rows on one schedule. Startup and
+   * stale-run cleanup use this only for legacy rows that predate
+   * activeClaimFiredAt, where the live automatic owner may not equal
+   * schedules.lastFiredAt.
+   */
+  listRunningRunFiredAts(scheduleId: string): Promise<number[]>;
+
+  /**
+   * Complete a deferred automatic claim in one conditional write. The update must
+   * only clear the active claim marker that belongs to `claimFiredAt`, while
+   * preserving a newer manual runNow lastFiredAt written concurrently.
+   */
+  rescheduleDeferredAutomaticClaim(
+    id: string,
+    claimFiredAt: number,
+    retryAt: number,
+    previousLastFiredAt?: number,
+  ): Promise<Schedule | null>;
+
   insertRun(run: ScheduleRun): Promise<ScheduleRun>;
   updateRun(id: string, patch: Partial<ScheduleRun>): Promise<ScheduleRun | null>;
   listRuns(scheduleId: string, limit?: number): Promise<ScheduleRun[]>;

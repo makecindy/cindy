@@ -465,6 +465,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(claimed?.activeClaimFiredAt).toBe(firedAt);
       expect(await harness.storage.hasRunningRuns('sch-claim-run', { firedAt })).toBe(true);
       expect(await harness.storage.hasRunningRuns('sch-claim-run', { firedAt: firedAt + 1 })).toBe(false);
+      expect(await harness.storage.listRunningRunFiredAts('sch-claim-run')).toEqual([firedAt]);
       expect(await harness.storage.listRuns('sch-claim-run')).toEqual([
         expect.objectContaining({
           id: 'run-hit',
@@ -484,6 +485,30 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         }),
       ).resolves.toBeNull();
       expect(await harness.storage.listRuns('sch-claim-run')).toHaveLength(1);
+
+      await harness.storage.insert(baseSchedule({
+        id: 'sch-preserve-manual',
+        nextFireAt: due,
+        lastFiredAt: firedAt + 10,
+      }));
+      const claimedAfterManual = await harness.storage.claimDueFireAndInsertRun('sch-preserve-manual', due, {
+        id: 'run-preserve-manual',
+        scheduleId: 'sch-preserve-manual',
+        firedAt,
+        status: 'running',
+      });
+      expect(claimedAfterManual?.lastFiredAt).toBe(firedAt + 10);
+      expect(claimedAfterManual?.activeClaimFiredAt).toBe(firedAt);
+
+      const deferred = await harness.storage.rescheduleDeferredAutomaticClaim(
+        'sch-preserve-manual',
+        firedAt,
+        due + 60_000,
+        firedAt - 10,
+      );
+      expect(deferred?.nextFireAt).toBe(due + 60_000);
+      expect(deferred?.lastFiredAt).toBe(firedAt + 10);
+      expect(deferred?.activeClaimFiredAt).toBeUndefined();
     } finally {
       harness.close();
     }
@@ -531,6 +556,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(claimedWithRun?.lastFiredAt).toBe(firedAt);
       expect(claimedWithRun?.activeClaimFiredAt).toBe(firedAt);
       expect(await storage.hasRunningRuns('sch-proxy-run', { firedAt })).toBe(true);
+      expect(await storage.listRunningRunFiredAts('sch-proxy-run')).toEqual([firedAt]);
       expect(await storage.listRuns('sch-proxy-run')).toEqual([
         expect.objectContaining({ id: 'run-proxy', status: 'running', firedAt }),
       ]);
@@ -543,6 +569,30 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         }),
       ).resolves.toBeNull();
       expect(await storage.listRuns('sch-proxy-run')).toHaveLength(1);
+
+      await storage.insert(baseSchedule({
+        id: 'sch-proxy-preserve-manual',
+        nextFireAt: due,
+        lastFiredAt: firedAt + 10,
+      }));
+      const proxyAfterManual = await storage.claimDueFireAndInsertRun('sch-proxy-preserve-manual', due, {
+        id: 'run-proxy-preserve-manual',
+        scheduleId: 'sch-proxy-preserve-manual',
+        firedAt,
+        status: 'running',
+      });
+      expect(proxyAfterManual?.lastFiredAt).toBe(firedAt + 10);
+      expect(proxyAfterManual?.activeClaimFiredAt).toBe(firedAt);
+
+      const proxyDeferred = await storage.rescheduleDeferredAutomaticClaim(
+        'sch-proxy-preserve-manual',
+        firedAt,
+        due + 60_000,
+        firedAt - 10,
+      );
+      expect(proxyDeferred?.nextFireAt).toBe(due + 60_000);
+      expect(proxyDeferred?.lastFiredAt).toBe(firedAt + 10);
+      expect(proxyDeferred?.activeClaimFiredAt).toBeUndefined();
     } finally {
       await client.dispose();
     }

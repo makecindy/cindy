@@ -72,6 +72,27 @@ class InMemoryStorage implements ScheduleStorage {
         (opts?.firedAt === undefined || r.firedAt === opts.firedAt),
     );
   }
+  async listRunningRunFiredAts(scheduleId: string): Promise<number[]> {
+    return [...this.runs.values()]
+      .filter((r) => r.status === 'running' && r.scheduleId === scheduleId)
+      .map((r) => r.firedAt)
+      .sort((a, b) => b - a);
+  }
+  async rescheduleDeferredAutomaticClaim(
+    id: string,
+    claimFiredAt: number,
+    retryAt: number,
+    previousLastFiredAt?: number,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex || ex.activeClaimFiredAt !== claimFiredAt) return null;
+    ex.nextFireAt = retryAt;
+    if (ex.lastFiredAt === claimFiredAt) {
+      ex.lastFiredAt = previousLastFiredAt;
+    }
+    ex.activeClaimFiredAt = undefined;
+    return { ...ex };
+  }
   async deleteRun(id: string): Promise<ScheduleRun | null> {
     const ex = this.runs.get(id);
     if (!ex) return null;
@@ -124,7 +145,9 @@ class InMemoryStorage implements ScheduleStorage {
     const ex = this.schedules.get(id);
     if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
     ex.nextFireAt = undefined;
-    ex.lastFiredAt = run.firedAt;
+    if (ex.lastFiredAt === undefined || ex.lastFiredAt <= run.firedAt) {
+      ex.lastFiredAt = run.firedAt;
+    }
     ex.activeClaimFiredAt = run.firedAt;
     this.runs.set(run.id, { ...run });
     return { ...ex };
@@ -2062,7 +2085,7 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     const claimedAt = clock.now();
     await storage.update(sch.id, {
       nextFireAt: undefined,
-      lastFiredAt: claimedAt,
+      lastFiredAt: claimedAt - 60_000,
     });
     insertRunningRun(storage, 'run-live-legacy-claim', sch.id, claimedAt, clock.now());
 
@@ -2072,6 +2095,28 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     const after = await storage.get(sch.id);
     expect(after?.nextFireAt).toBeUndefined();
     expect(after?.activeClaimFiredAt).toBe(claimedAt);
+    await b.scheduler.stop();
+  });
+
+  it('start() does not treat an unmarked runNow as a live automatic claim', async () => {
+    const storage = new InMemoryStorage();
+    const clock = new FakeClock();
+    const a = makeHarness({ storage, clock });
+    const sch = await a.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+
+    const manualAt = clock.now();
+    await storage.update(sch.id, {
+      nextFireAt: undefined,
+      lastFiredAt: manualAt,
+    });
+    insertRunningRun(storage, 'run-manual-only', sch.id, manualAt, clock.now());
+
+    const b = makeHarness({ storage, clock });
+    await b.scheduler.start();
+
+    const after = await storage.get(sch.id);
+    expect(after?.nextFireAt).toBe(sch.createdAt + 3_600_000);
+    expect(after?.activeClaimFiredAt).toBeUndefined();
     await b.scheduler.stop();
   });
 
@@ -2295,7 +2340,7 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     const claimedAt = h.clock.now();
     await h.storage.update(sch.id, {
       nextFireAt: undefined,
-      lastFiredAt: claimedAt,
+      lastFiredAt: claimedAt - 60_000,
     });
     insertRunningRun(h.storage, 'run-dead', sch.id, claimedAt - 1_000, h.clock.now());
     insertRunningRun(h.storage, 'run-live-legacy-claim', sch.id, claimedAt, h.clock.now() + 90_000);
@@ -2308,6 +2353,41 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     expect(after?.nextFireAt).toBeUndefined();
     expect(after?.activeClaimFiredAt).toBe(claimedAt);
     await h.scheduler.stop();
+  });
+
+  it('pause/resume preserves an exempted automatic claim until the owner finishes', async () => {
+    let resolveRunner!: (v: { sessionId: string }) => void;
+    const local = makeHarness({
+      runnerImpl: () =>
+        new Promise<{ sessionId: string }>((resolve) => {
+          resolveRunner = resolve;
+        }),
+    });
+    const sch = await local.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+    const fireTime = sch.createdAt + 3_600_000 + 5_000;
+    local.clock.setTo(fireTime);
+    const tickPromise = local.scheduler.tick();
+    await new Promise((r) => setTimeout(r, 10));
+    const callerRunId = local.fireCalls[0].ctx.runId;
+    const firedAt = local.fireCalls[0].ctx.firedAt;
+
+    const paused = await local.scheduler.pause(sch.id, { exemptRunId: callerRunId });
+    expect(paused.status).toBe('paused');
+    expect(paused.nextFireAt).toBeUndefined();
+    expect(paused.activeClaimFiredAt).toBe(firedAt);
+
+    const resumed = await local.scheduler.resume(sch.id);
+    expect(resumed.status).toBe('active');
+    expect(resumed.nextFireAt).toBeUndefined();
+    expect(resumed.activeClaimFiredAt).toBe(firedAt);
+
+    resolveRunner({ sessionId: 'sess-caller' });
+    await tickPromise;
+
+    const after = await local.storage.get(sch.id);
+    expect(after?.status).toBe('active');
+    expect(after?.activeClaimFiredAt).toBeUndefined();
+    expect(after?.nextFireAt).toBe(fireTime + 3_600_000);
   });
 
   it('清扫后只剩手动 runNow running 行时,不把它当自动认领并恢复排期', async () => {

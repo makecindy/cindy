@@ -312,19 +312,16 @@ export class Scheduler extends EventEmitter {
       const next = computeNextFireAt(current, now);
       // Empty nextFireAt can mean either "needs startup normalization" or
       // "another instance owns an automatic claim". Compute first so manual /
-      // one-shot schedules that cannot be re-armed do not pay an N+1 running-run
-      // query, then only preserve a live automatic claim whose run matches the
-      // dedicated claim marker stamped by claimDueFireAndInsertRun(). runNow
-      // intentionally updates lastFiredAt for UI, so lastFiredAt is not a safe
-      // claim marker for new data. The lastFiredAt fallback only covers rows
-      // upgraded while an old-version automatic claim is still running; when it
-      // matches a live run, backfill the dedicated marker.
-      const claimFiredAt = current.activeClaimFiredAt ?? current.lastFiredAt;
+      // one-shot schedules that cannot be re-armed do not pay a running-run
+      // query, then preserve only a live automatic owner.
+      const claimFiredAt =
+        current.nextFireAt === undefined && next !== undefined
+          ? await this.findLiveClaimFiredAt(current)
+          : undefined;
       if (
         current.nextFireAt === undefined &&
         next !== undefined &&
-        claimFiredAt !== undefined &&
-        await this.storage.hasRunningRuns(current.id, { firedAt: claimFiredAt })
+        claimFiredAt !== undefined
       ) {
         if (current.activeClaimFiredAt === undefined) {
           current = (await this.storage.update(current.id, { activeClaimFiredAt: claimFiredAt })) ?? current;
@@ -597,17 +594,13 @@ export class Scheduler extends EventEmitter {
       }
       this.silencedRuns.delete(runId);
       const retryAt = finishedAt + (deferRetryMs ?? 60_000);
-      const currentBeforeDefer = await this.storage.get(schedule.id);
-      const deferPatch: Partial<Schedule> = {
-        nextFireAt: retryAt,
-      };
-      if (currentBeforeDefer?.lastFiredAt === firedAt) {
-        deferPatch.lastFiredAt = previousLastFiredAt;
-      }
-      if (currentBeforeDefer?.activeClaimFiredAt === firedAt) {
-        deferPatch.activeClaimFiredAt = undefined;
-      }
-      const updated = await this.storage.update(schedule.id, deferPatch);
+      const updated =
+        (await this.storage.rescheduleDeferredAutomaticClaim(
+          schedule.id,
+          firedAt,
+          retryAt,
+          previousLastFiredAt,
+        )) ?? (await this.storage.get(schedule.id));
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(updated.id, updated);
       }
@@ -1139,11 +1132,15 @@ export class Scheduler extends EventEmitter {
     // 数据弄脏)。abort 触发后 fireOne 的 wasAborted 分支会自己把 run 标 'aborted'。
     // exemptRunId:调用方自己所在的 run(agent 在任务内 pause 自己的 schedule)不 abort,
     // 让它自然跑完 —— 语义与豁免理由见 abortInflightAndWait。
+    const exemptAttempt =
+      opts?.exemptRunId !== undefined ? this.inflightAttempts.get(opts.exemptRunId) : undefined;
+    const preserveExemptedAutomaticClaim =
+      exemptAttempt?.scheduleId === id && exemptAttempt.source === 'automatic';
     await this.abortInflightAndWait(id, opts?.exemptRunId);
     const updated = await this.storage.update(id, {
       status: 'paused',
       updatedAt: this.clock.now(),
-      activeClaimFiredAt: undefined,
+      ...(preserveExemptedAutomaticClaim ? {} : { activeClaimFiredAt: undefined }),
     });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
     this.activeSchedules.delete(id);
@@ -1162,15 +1159,19 @@ export class Scheduler extends EventEmitter {
     // resume 视作冷启动：interval 模式起新一轮 N 倒计时（从 now 起算，与 update() 一致）；
     // cron 模式找下一个壁钟槽位。不要复用 nextIntervalFire —— 它按 lastFinishedAt+N 尊重原
     // 节奏（restart 语义），会让「上次完成不到一个 N 就 resume」比冷启动更早触发。
-    const next =
-      existing.intervalMs !== undefined
+    const preservesLiveClaim =
+      existing.activeClaimFiredAt !== undefined &&
+      await this.storage.hasRunningRuns(id, { firedAt: existing.activeClaimFiredAt });
+    const next = preservesLiveClaim
+      ? undefined
+      : existing.intervalMs !== undefined
         ? now + existing.intervalMs
         : nextCronOrMonthlyFire(existing.cronExpr, now, existing.timezone);
     const updated = await this.storage.update(id, {
       status: 'active',
       updatedAt: now,
       nextFireAt: next,
-      activeClaimFiredAt: undefined,
+      ...(preservesLiveClaim ? {} : { activeClaimFiredAt: undefined }),
     });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
     this.activeSchedules.set(id, updated);
@@ -1339,15 +1340,10 @@ export class Scheduler extends EventEmitter {
       if (!schedule || schedule.status !== 'active') return;
       // nextFireAt 仍在 = 悬置的不是认领(如 runNow 僵尸),排期没坏,不动。
       if (schedule.nextFireAt !== undefined) return;
-      // 该 schedule 仍有与自动 claim 标记匹配的 running 行 → 不抢排,等执行方
-      // fireOne 收口时按 recurring 语义重排。手动 runNow 的 running 行不能阻止
-      // 崩溃认领补排,否则 runNow 完成后不会恢复 nextFireAt。lastFiredAt fallback
-      // 仅用于升级中缺少 activeClaimFiredAt 的旧 claim,命中后补写新标记。
-      const claimFiredAt = schedule.activeClaimFiredAt ?? schedule.lastFiredAt;
-      if (
-        claimFiredAt !== undefined &&
-        await this.storage.hasRunningRuns(scheduleId, { firedAt: claimFiredAt })
-      ) {
+      // 该 schedule 仍有 live automatic claim → 不抢排,等执行方 fireOne 收口时按
+      // recurring 语义重排。手动 runNow 的 running 行不能阻止崩溃认领补排。
+      const claimFiredAt = await this.findLiveClaimFiredAt(schedule);
+      if (claimFiredAt !== undefined) {
         if (schedule.activeClaimFiredAt === undefined) {
           const updated = await this.storage.update(scheduleId, { activeClaimFiredAt: claimFiredAt });
           if (updated && updated.status === 'active') {
@@ -1556,6 +1552,17 @@ export class Scheduler extends EventEmitter {
     if (signal.aborted) return true;
     if ((schedule.executionMode ?? 'agent') === 'script') return false;
     return runError !== undefined && /abort/i.test(runError);
+  }
+
+  private async findLiveClaimFiredAt(schedule: Schedule): Promise<number | undefined> {
+    if (schedule.activeClaimFiredAt !== undefined) {
+      return await this.storage.hasRunningRuns(schedule.id, { firedAt: schedule.activeClaimFiredAt })
+        ? schedule.activeClaimFiredAt
+        : undefined;
+    }
+    const runningFiredAts = await this.storage.listRunningRunFiredAts(schedule.id);
+    const legacyCandidates = runningFiredAts.filter((firedAt) => firedAt !== schedule.lastFiredAt);
+    return legacyCandidates.length === 1 ? legacyCandidates[0] : undefined;
   }
 
   /** 注册一次 fire 的 controller(fireOne/runNow 顶部调用)。两个 map 都要写。 */

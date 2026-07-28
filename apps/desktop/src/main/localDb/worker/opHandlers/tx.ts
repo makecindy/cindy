@@ -1130,9 +1130,15 @@ function schedulerClaimDueFireAndInsertRun(db: Database.Database, args: unknown)
   return db.transaction(() => {
     const claim = db.prepare(
       `UPDATE schedules
-       SET next_fire_at = NULL, last_fired_at = ?, active_claim_fired_at = ?
+       SET next_fire_at = NULL,
+           last_fired_at = CASE
+             WHEN last_fired_at IS NULL OR last_fired_at <= ? THEN ?
+             ELSE last_fired_at
+           END,
+           active_claim_fired_at = ?
        WHERE id = ? AND status = 'active' AND next_fire_at = ?`,
     ).run(
+      expectNumber(run.firedAt, 'run.firedAt'),
       expectNumber(run.firedAt, 'run.firedAt'),
       expectNumber(run.firedAt, 'run.firedAt'),
       scheduleId,

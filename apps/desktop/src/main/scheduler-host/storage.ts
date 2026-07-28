@@ -280,10 +280,6 @@ function turnCostFromAgentMeta(agentMeta: string | null): {
   }
 }
 
-function finitePositiveNumber(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
-}
-
 function chunkArray<T>(items: readonly T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let i = 0; i < items.length; i += size) {
@@ -444,7 +440,15 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return db.transaction(() => {
       const result = db
         .update(schedules)
-        .set({ nextFireAt: null, lastFiredAt: run.firedAt, activeClaimFiredAt: run.firedAt })
+        .set({
+          nextFireAt: null,
+          lastFiredAt: sql`CASE
+            WHEN ${schedules.lastFiredAt} IS NULL OR ${schedules.lastFiredAt} <= ${run.firedAt}
+            THEN ${run.firedAt}
+            ELSE ${schedules.lastFiredAt}
+          END`,
+          activeClaimFiredAt: run.firedAt,
+        })
         .where(
           and(
             eq(schedules.id, id),
@@ -465,6 +469,44 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       }
       return scheduleToCamel(row);
     });
+  }
+
+  async listRunningRunFiredAts(scheduleId: string): Promise<number[]> {
+    const db = this.getDb();
+    const rows = await db
+      .select({ firedAt: scheduleRuns.firedAt })
+      .from(scheduleRuns)
+      .where(and(eq(scheduleRuns.status, 'running'), eq(scheduleRuns.scheduleId, scheduleId)))
+      .orderBy(desc(scheduleRuns.firedAt));
+    return rows.map((row) => row.firedAt);
+  }
+
+  async rescheduleDeferredAutomaticClaim(
+    id: string,
+    claimFiredAt: number,
+    retryAt: number,
+    previousLastFiredAt?: number,
+  ): Promise<Schedule | null> {
+    const db = this.getDb();
+    const result = await db
+      .update(schedules)
+      .set({
+        nextFireAt: retryAt,
+        lastFiredAt: sql`CASE
+          WHEN ${schedules.lastFiredAt} = ${claimFiredAt}
+          THEN ${previousLastFiredAt ?? null}
+          ELSE ${schedules.lastFiredAt}
+        END`,
+        activeClaimFiredAt: null,
+      })
+      .where(and(eq(schedules.id, id), eq(schedules.activeClaimFiredAt, claimFiredAt)))
+      .run();
+    const changes = (result as unknown as { changes?: number }).changes;
+    if (typeof changes !== 'number') {
+      throw new Error('rescheduleDeferredAutomaticClaim: sqlite driver did not report changes count');
+    }
+    if (changes === 0) return null;
+    return this.get(id);
   }
 
   // ---------- ScheduleRun CRUD ----------
