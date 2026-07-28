@@ -444,6 +444,74 @@ describe('ModelSelector trigger variants', () => {
     expect(trigger.getAttribute('aria-label')).toContain('超高');
   });
 
+  it('keeps the session Agent explicit when Claude Code uses an OpenAI-branded model', () => {
+    const model = {
+      id: 'chatgpt/gpt-5.6-terra',
+      displayName: 'GPT-5.6-Terra',
+      contextWindow: 400000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium',
+    };
+    visibleModelsRef.models = [model];
+    providersRef.providers = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: { 'claude-code': {} },
+        connected: true,
+        models: {
+          'claude-code': [
+            {
+              id: model.id,
+              name: model.displayName,
+              contextWindow: model.contextWindow,
+              efforts: model.efforts,
+              defaultEffort: model.defaultEffort,
+            },
+          ],
+        },
+      },
+    ];
+
+    try {
+      const props = {
+        modelId: model.id,
+        effort: 'medium' as Effort,
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc' as const,
+        currentProviderId: 'openai',
+        showAgentIdentity: true,
+      };
+      const view = render(React.createElement(ModelSelector, props));
+
+      let trigger = screen.getByRole('button', {
+        name: /Current: Claude Code · GPT-5\.6-Terra, effort: medium/,
+      });
+      expect(trigger.textContent).toContain('Claude Code');
+      expect(trigger.textContent).toContain('GPT-5.6-Terra');
+      expect(trigger.getAttribute('title')).toBe('Claude Code · GPT-5.6-Terra');
+
+      view.rerender(
+        React.createElement(ModelSelector, {
+          ...props,
+          compactToolbar: true,
+        }),
+      );
+      trigger = screen.getByRole('button', {
+        name: /Current: Claude Code · GPT-5\.6-Terra, effort: medium/,
+      });
+      expect(trigger.textContent).not.toContain('Claude Code');
+      expect(trigger.getAttribute('aria-label')).toContain('Claude Code');
+    } finally {
+      visibleModelsRef.models = null;
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
   it('keeps the disconnected status in the compact trigger title', () => {
     render(
       React.createElement(ModelSelector, {

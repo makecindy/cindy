@@ -5275,6 +5275,9 @@ export function ChatInput({
                     onFastModeChange={handleFastModeChange}
                     modelMemory={modelMemory}
                     vendorKey={vendorKey}
+                    // 已创建会话要同时显式展示 Agent + 模型。来源图标只代表模型路由，
+                    // 不能拿它代替 Agent 身份（例如 Claude Code 也可运行 OpenAI 模型）。
+                    showAgentIdentity={!!sessionId && !!vendorKey}
                     // session-agent-switch:本机已建会话提供显式两步引擎切换(列表顶部
                     // Claude/Codex 分段,先选 Agent 再选模型)。草稿(无 sessionId)与
                     // device-link / SSH 远程会话不传(v1 不支持切换)。
