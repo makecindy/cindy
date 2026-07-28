@@ -32,8 +32,9 @@ const D_GHOST_LIST = [
 ].join("\n");
 
 const D_GHOST_CALL = [
-  "调用某个插件(Ghost)提供的工具。ghost_id 与 tool 来自 ghost_list 的返回,",
-  "或用户消息[插件指令]附带的工具清单;",
+  "调用某个插件(Ghost)提供的工具。普通调用的 ghost_id 与 tool 来自 ghost_list 的返回,",
+  "或用户消息[插件指令]附带的工具清单;当 ghost_list 返回目标插件 tools:[] 且同时提供 setup_plan 时,",
+  "tool 可以省略,仅用于发起 Host 配置引导,配置完成后重新 ghost_list 再调用真实工具;",
   "args 按该工具声明的参数 schema 传 JSON 对象。",
   "执行发生在该插件的独立沙箱中(无文件/网络访问,用 AI 走主机统一通道)。",
   "用户的图片/媒体文件要交给插件处理时,把其地址放进顶层 attachments",
@@ -529,7 +530,7 @@ export async function handleGhostCall(
   deps: CindyGhostsMcpDeps,
   input: {
     ghost_id: string;
-    tool: string;
+    tool?: string;
     args?: Record<string, unknown>;
     attachments?: string[];
     dir?: string;
@@ -540,9 +541,21 @@ export async function handleGhostCall(
   agentToolUseId?: string,
 ): Promise<McpTextResult> {
   try {
+    if (!input.tool && !input.setup_plan) {
+      return textResult(
+        {
+          ok: false,
+          errorCode: "TOOL_NOT_FOUND",
+          message: "普通插件调用必须提供 tool；仅 setup_plan 配置引导可省略 tool。",
+        },
+        true,
+      );
+    }
     const result = await deps.callGhostTool({
       ghostId: input.ghost_id,
-      tool: input.tool,
+      // Host ignores this internal empty context for setup_plan-only calls;
+      // the public MCP schema does not require an invented placeholder.
+      tool: input.tool ?? "",
       args: input.args ?? {},
       ...(input.grant_only === true ? { grantOnly: true } : {}),
       ...(input.attachments && input.attachments.length > 0
@@ -748,7 +761,12 @@ export function createCindyGhostsMcpServer(
     dGhostCall,
     {
       ghost_id: z.string().describe("目标插件 id(来自 ghost_list)"),
-      tool: z.string().describe("工具名(来自 ghost_list 该插件的 tools)"),
+      tool: z
+        .string()
+        .optional()
+        .describe(
+          "普通调用必填，来自 ghost_list 该插件的 tools；仅当目标插件 tools:[] 且同时提供 setup_plan 发起配置引导时可省略，配置完成后重新 ghost_list 获取真实工具名。",
+        ),
       args: z
         .record(z.string(), z.unknown())
         .optional()

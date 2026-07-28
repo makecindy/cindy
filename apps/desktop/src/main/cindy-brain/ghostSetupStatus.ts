@@ -76,6 +76,13 @@ export interface EvaluateGhostSetupOptions {
   strict?: boolean;
 }
 
+export interface EvaluateGhostSetupStatusOptions {
+  /** 运行期被拒的 secret key；按 expired 参与 any-of 重算。 */
+  rejectedSecretKeys?: readonly string[];
+  /** Host 拥有的虚拟配置需求组(例如图片模型配置)。 */
+  additionalGroups?: GhostSetupAssessmentGroup[];
+}
+
 export class GhostSetupAssessmentError extends Error {
   readonly code = 'INVALID_SETUP_REQUIREMENT';
 
@@ -313,11 +320,12 @@ export function evaluateGhostSetupAssessment(
 export function evaluateGhostSetup(
   manifest: GhostManifest,
   probes: GhostSetupProbes,
-  options: { rejectedSecretKeys?: readonly string[] } = {},
+  options: EvaluateGhostSetupStatusOptions = {},
 ): GhostSetupStatus {
   let assessment = evaluateGhostSetupAssessment(manifest, probes, {
     revision: 0,
     strict: false,
+    additionalGroups: options.additionalGroups,
   });
   if (options.rejectedSecretKeys && options.rejectedSecretKeys.length > 0) {
     const rejected = new Set(options.rejectedSecretKeys);
@@ -390,6 +398,10 @@ export function handleGhostSetupStatusRequest(args: {
   getRuntimeManifest: (id: string) => GhostManifest | null;
   /** 按清单构造探针(index.ts 接各存储真身;测试喂假体)。 */
   probesFor: (manifest: GhostManifest) => GhostSetupProbes;
+  /** 运行期被拒台账(可选,供已启用插件的「使用」路径保持同口径)。 */
+  rejectedSecretKeysFor?: (manifest: GhostManifest) => readonly string[];
+  /** Host 配置形成的虚拟需求组(可选,与 lifecycle / enable 路径保持同口径)。 */
+  additionalGroupsFor?: (manifest: GhostManifest) => GhostSetupAssessmentGroup[];
 }): GhostSetupStatus {
   const { id } = args;
   if (typeof id !== 'string' || !isValidGhostId(id)) {
@@ -397,5 +409,8 @@ export function handleGhostSetupStatusRequest(args: {
   }
   const manifest = args.getRuntimeManifest(id);
   if (!manifest) throwIpcError('NOT_FOUND', `意识 ${id} 未安装`);
-  return evaluateGhostSetup(manifest, args.probesFor(manifest));
+  return evaluateGhostSetup(manifest, args.probesFor(manifest), {
+    rejectedSecretKeys: args.rejectedSecretKeysFor?.(manifest),
+    additionalGroups: args.additionalGroupsFor?.(manifest),
+  });
 }

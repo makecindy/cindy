@@ -305,6 +305,39 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
     expect(callGhostTool.mock.calls[0][0].args).not.toHaveProperty("setupPlan");
   });
 
+  it("setup_plan 可省略 undiscoverable tool，普通调用仍拒绝缺少 tool", async () => {
+    const callGhostTool = vi
+      .fn()
+      .mockResolvedValue({ ok: true, result: { setupCompleted: true } });
+    await handleGhostCall(fakeDeps({ callGhostTool }), {
+      ghost_id: "gmail",
+      setup_plan: {
+        assessment_revision: 3,
+        steps: [
+          {
+            id: "step-1",
+            requirement_refs: ["req-1"],
+            title: "连接账号",
+            description: "完成账号授权后将自动继续。",
+            action_id: "action-1",
+          },
+        ],
+      },
+    });
+    expect(callGhostTool).toHaveBeenCalledWith(
+      expect.objectContaining({ ghostId: "gmail", tool: "", setupPlan: expect.anything() }),
+    );
+
+    const failed = await handleGhostCall(fakeDeps({ callGhostTool }), {
+      ghost_id: "gmail",
+    });
+    expect(failed.isError).toBe(true);
+    expect(parsePayload(failed)).toMatchObject({
+      ok: false,
+      errorCode: "TOOL_NOT_FOUND",
+    });
+  });
+
   it("attachments 透传给 host(用户图片过户);空数组不带", async () => {
     const callGhostTool = vi
       .fn()

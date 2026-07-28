@@ -619,6 +619,57 @@ describe('handleGhostSetupStatusRequest · IPC handler 主体(规则 14)', () =>
     expect(status).toEqual({ ready: true, missingGroups: [], reauth: [] });
   });
 
+  it('已启用插件的 setup-status 同时纳入 rejected secret 与 Host 虚拟需求', () => {
+    const m = manifest({
+      slots: ['tool', 'network'],
+      tools: [{ name: 'work', description: '干活' }],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [{ key: 'api_key', label: 'API Key', inject: INJECT }],
+      },
+    });
+    const status = handleGhostSetupStatusRequest({
+      id: 'demo',
+      getRuntimeManifest: () => m,
+      probesFor: () => probes({ secretSaved: () => true }),
+      rejectedSecretKeysFor: () => ['api_key'],
+      additionalGroupsFor: () => [
+        {
+          id: 'host:client_config:model-provider',
+          mode: 'any_of',
+          items: [
+            {
+              ref: 'client_config:model-provider',
+              kind: 'client_config',
+              label: '模型',
+              state: 'missing',
+              actions: [
+                {
+                  id: 'open_client_settings:client_config:model-provider',
+                  kind: 'open_client_settings',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(status.ready).toBe(false);
+    expect(status.reauth).toEqual([
+      { ref: 'secret:api_key', label: 'API Key', kind: 'key' },
+    ]);
+    expect(status.missingGroups).toEqual([
+      [
+        {
+          ref: 'client_config:model-provider',
+          label: '模型',
+          kind: 'key',
+        },
+      ],
+    ]);
+  });
+
   it('探针意外抛错原样上抛(不折叠成「未配置」;renderer 侧 fail-open)', () => {
     const m = manifest({
       slots: ['tool', 'network'],

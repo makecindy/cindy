@@ -2169,7 +2169,13 @@ function evaluateGhostSetupForPluginPage(ghost: InstalledGhost): GhostSetupStatu
         return kvSnapshot[key];
       },
     },
-    { rejectedSecretKeys: ghostCredentialRejections().rejectedKeys(ghostId) },
+    {
+      rejectedSecretKeys: ghostCredentialRejections().rejectedKeys(ghostId),
+      additionalGroups: assessGhostHostSetupRequirements(runtimeManifest, {
+        clientConfigReady: (configId) =>
+          configId === 'model-provider' && isModelAccessReady(),
+      }),
+    },
   );
 }
 
@@ -3411,6 +3417,13 @@ export function registerGhostIpc(): void {
           },
         };
       },
+      rejectedSecretKeysFor: (runtimeManifest) =>
+        ghostCredentialRejections().rejectedKeys(runtimeManifest.id),
+      additionalGroupsFor: (runtimeManifest) =>
+        assessGhostHostSetupRequirements(runtimeManifest, {
+          clientConfigReady: (configId) =>
+            configId === 'model-provider' && isModelAccessReady(),
+        }),
     }),
   );
 
