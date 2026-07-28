@@ -4429,6 +4429,12 @@
       "label_one": "{{count}} 条新消息",
       "label_other": "{{count}} 条新消息"
     },
+    "messageNavRail": {
+      "aria": "提问导航",
+      "jumpAria": "跳转到第 {{index}} 条提问：{{preview}}",
+      "hiddenEarlier_one": "更早还有 {{count}} 条提问",
+      "hiddenEarlier_other": "更早还有 {{count}} 条提问"
+    },
     "messageActionBar": {
       "copy": "复制消息",
       "linkCopied": "链接已复制",

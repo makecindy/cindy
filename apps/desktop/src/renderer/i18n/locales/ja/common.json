@@ -4429,6 +4429,12 @@
       "label_one": "{{count}} 件の新着",
       "label_other": "{{count}} 件の新着"
     },
+    "messageNavRail": {
+      "aria": "質問ナビゲーション",
+      "jumpAria": "{{index}} 番目の質問へ移動：{{preview}}",
+      "hiddenEarlier_one": "これより前に {{count}} 件の質問",
+      "hiddenEarlier_other": "これより前に {{count}} 件の質問"
+    },
     "messageActionBar": {
       "copy": "メッセージをコピー",
       "linkCopied": "リンクをコピーしました",

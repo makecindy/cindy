@@ -4430,6 +4430,12 @@
       "label_one": "{{count}} new message",
       "label_other": "{{count}} new messages"
     },
+    "messageNavRail": {
+      "aria": "Prompt navigation",
+      "jumpAria": "Jump to prompt {{index}}: {{preview}}",
+      "hiddenEarlier_one": "{{count}} earlier prompt not shown",
+      "hiddenEarlier_other": "{{count}} earlier prompts not shown"
+    },
     "messageActionBar": {
       "copy": "Copy message",
       "linkCopied": "Link copied",
