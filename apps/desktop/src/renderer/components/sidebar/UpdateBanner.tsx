@@ -117,7 +117,10 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
 
     let cancelled = false;
     setHasSessionInTurn(false);
-    void window.electronAPI.anySessionInTurn()
+    // Start the probe in a microtask so a synchronously unavailable IPC bridge
+    // is converted into a rejected promise and handled by the same fallback.
+    void Promise.resolve()
+      .then(() => window.electronAPI.anySessionInTurn())
       .then((busy) => {
         if (!cancelled) setHasSessionInTurn(busy);
       })

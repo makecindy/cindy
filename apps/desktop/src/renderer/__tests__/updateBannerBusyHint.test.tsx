@@ -76,7 +76,7 @@ describe('UpdateBanner busy-turn restart hint', () => {
     expect(hint.className).not.toContain('text-[var(--warning-fg)]');
   });
 
-  it('keeps relaunch behavior unchanged while the text-only snapshot is pending', () => {
+  it('keeps relaunch behavior unchanged while the text-only snapshot is pending', async () => {
     let resolveTurnCheck!: (busy: boolean) => void;
     anySessionInTurn.mockImplementation(
       () => new Promise<boolean>((resolve) => { resolveTurnCheck = resolve; }),
@@ -84,6 +84,7 @@ describe('UpdateBanner busy-turn restart hint', () => {
     render(<UpdateBanner isCollapsed={false} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+    await waitFor(() => expect(anySessionInTurn).toHaveBeenCalledTimes(1));
 
     const confirmButton = screen.getByRole('button', { name: 'update.banner.confirmAria' });
     expect((confirmButton as HTMLButtonElement).disabled).toBe(false);
@@ -91,5 +92,17 @@ describe('UpdateBanner busy-turn restart hint', () => {
     expect(relaunchToUpdate).toHaveBeenCalledTimes(1);
 
     resolveTurnCheck(false);
+  });
+
+  it('keeps the neutral hint when the one-shot probe throws synchronously', async () => {
+    anySessionInTurn.mockImplementation(() => {
+      throw new Error('electron bridge is not registered');
+    });
+    render(<UpdateBanner isCollapsed={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+
+    await waitFor(() => expect(anySessionInTurn).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('update.banner.confirmHint')).toBeTruthy();
   });
 });
