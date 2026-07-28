@@ -68,7 +68,7 @@ import {
 import { GhostPluginDetailView } from './GhostPluginDetailView';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { GhostReadinessBadge } from './GhostReadinessBadge';
-import { useGhostReadiness } from '@/cindy-brain/lifecycleProjection';
+import { getGhostLifecycleEntrySnapshot, useGhostReadiness } from '@/cindy-brain/lifecycleProjection';
 import { MarketPluginDetailView } from './MarketPluginDetailView';
 import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker';
 import {
@@ -596,6 +596,15 @@ export function GhostPluginPage() {
     async (id: string, displayName: string) => {
       const ghost = ghosts.find((candidate) => candidate.manifest.id === id);
       if (!ghost?.manifest.command) return;
+      // 生命周期前置门:setupStatus 只看配置字段,运行态熔断/崩溃时仍可能
+      // 报 ready;此时 ghost_list 已降级为 tools: []、调用只会拿到
+      // GHOST_CRASHED,带进会话等于让用户面对一个用不了目标插件的对话。
+      // degraded/unknown 一律拦下并指向恢复动作,与发现层口径保持一致。
+      const readiness = getGhostLifecycleEntrySnapshot(id)?.readiness ?? 'ready';
+      if (readiness === 'degraded' || readiness === 'unknown') {
+        toast.error(t(`settings.ghosts.readiness.${readiness}`));
+        return;
+      }
       // 使用前置门:点击时现查配置就绪度(main 侧确定性判定),未就绪先
       // 弹窗引导去配置。查询失败与 lifecycle unknown 同口径 fail-closed:
       // 不把用户带进一个注定无法发现/调用目标插件的会话。
@@ -850,7 +859,8 @@ export function GhostPluginPage() {
   }, [marketDetail, runMarketInstall]);
 
   // 市场卡片「安装」直达:先拉完整 detail(含权限清单所需 manifest),
-  // 成功即进入统一安装确认;失败(网络/状态变化)落回原详情入口。
+  // 成功即进入统一安装确认;失败(网络/状态变化)toast 错误并留在当前
+  // 列表视图(详情拉取失败没有可落的详情页)。
   const handleCardInstall = useCallback(
     async (pluginId: string) => {
       const marketBusyLease = acquireMarketBusy(pluginId);

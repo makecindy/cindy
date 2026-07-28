@@ -221,6 +221,75 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
     }
   });
 
+  it('401 归因歧义(同 host 多份 user 凭证)不记账', async () => {
+    // 同一 host 同时注入两份 user key:服务端 401 无法指认哪份被拒,
+    // 全记会把好 key 误翻 needs_reauth——歧义时一律不记。
+    const noteCredentialRejected = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () =>
+        fakeGhost({
+          network: {
+            hosts: ['api.search.brave.com'],
+            secrets: [
+              {
+                key: 'brave_api_key',
+                label: 'Brave Key',
+                inject: { header: 'X-Subscription-Token', format: '{value}', hosts: ['api.search.brave.com'] },
+              },
+              {
+                key: 'brave_backup_key',
+                label: 'Brave Backup Key',
+                inject: { header: 'X-Backup-Token', format: '{value}', hosts: ['api.search.brave.com'] },
+              },
+            ],
+          },
+        }),
+      readSecret: vi.fn(() => 'some-secret') as never,
+      fetchImpl: vi.fn(async () => fakeResponse({ status: 401 })) as never,
+      noteCredentialRejected,
+    });
+    await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
+  });
+
+  it('401 归因歧义(user key 与 oauth 并存)不记账;可唯一归因时照常记', async () => {
+    const noteCredentialRejected = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () =>
+        fakeGhost({
+          network: {
+            hosts: ['api.search.brave.com'],
+            secrets: [
+              {
+                key: 'brave_api_key',
+                label: 'Brave Key',
+                inject: { header: 'X-Subscription-Token', format: '{value}', hosts: ['api.search.brave.com'] },
+              },
+              {
+                key: 'google_token',
+                label: 'Google',
+                source: 'oauth',
+                inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.search.brave.com'] },
+                oauth: { provider: 'google', scopes: ['x'] } as never,
+              },
+            ],
+          },
+        }),
+      fetchImpl: vi.fn(async () => fakeResponse({ status: 401 })) as never,
+      noteCredentialRejected,
+      oauthTokens: {
+        getFreshAccessToken: async () => ({ ok: true as const, accessToken: 'tok', accountId: 'a1' }),
+        invalidateAccessToken: () => {},
+      },
+    });
+    await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
+    // user key + oauth token 两份凭证同发,401 归属不明 → 不记任何台账。
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
+
+    // 同域只剩唯一 user key(另一把 scope 不匹配)时,401 照常归因记账——
+    // 已由「只记命中最终 host 的凭证」用例覆盖,此处不再重复。
+  });
+
   it('403 仅当 body 含凭证失效信号才记账;限流/业务 403 不记', async () => {
     // 403 语义宽(GitHub 限流、越权、封禁):无凭证类信号时不记账,避免误标。
     const noteCredentialRejected = vi.fn();
@@ -246,7 +315,9 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
     expect(noteCredentialRejected).not.toHaveBeenCalledWith('web-search', 'tavily_api_key');
     expect(noteCredentialRejected).toHaveBeenCalledTimes(1);
 
-    // "invalid" 被刻意排除在关键词外:业务参数校验的 403 不误伤。
+    // "invalid" 单独出现不算凭证失效信号:判定正则要求 invalid 与
+    // token/api key/credential 等凭证名词同现才记账(见实现侧
+    // CREDENTIAL_REJECTION_BODY_RE);纯业务参数校验的 403 不误伤。
     noteCredentialRejected.mockClear();
     const { slot: bizErr } = makeSlot({
       fetchImpl: vi.fn(async () =>

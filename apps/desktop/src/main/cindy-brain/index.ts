@@ -548,6 +548,10 @@ let lifecyclePushArmed = false;
 export function armGhostLifecyclePush(): void {
   if (lifecyclePushArmed) return;
   lifecyclePushArmed = true;
+  // 一次 emitAll(如 host_config 变更)会按 ghostId 连着唤醒多次;同步回调
+  // 里每次都重投影 + 序列化是白烧 CPU/GC。合并到 microtask:同一 tick 内
+  // 多次唤醒只算一次投影/序列化(记账仍逐事件同步执行,不丢清账)。
+  let coalesced = false;
   getGhostSetupChangeBus().subscribeAll((event) => {
     // 凭证重存 = 用户已处置被拒记录,按 ghostId 清账(所有 secret 写入
     // 路径都会 emit,无需逐点挂钩);清账后照常重投影广播。
@@ -556,7 +560,12 @@ export function armGhostLifecyclePush(): void {
         ghostCredentialRejections().clearSecret(event.ghostId, event.ref);
       }
     }
-    broadcastGhostLifecycleChanged();
+    if (coalesced) return;
+    coalesced = true;
+    queueMicrotask(() => {
+      coalesced = false;
+      broadcastGhostLifecycleChanged();
+    });
   });
 }
 

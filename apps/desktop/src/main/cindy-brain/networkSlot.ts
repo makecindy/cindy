@@ -1229,6 +1229,11 @@ export class GhostNetworkSlot {
       // 只记实际对最终响应 host(重定向后)可注入的凭证:scope 判定与
       // injectSecrets 同口径(inject.hosts ?? net.hosts + 模式匹配),否则
       // 挂在别的 host 的无关 key 会被误翻 needs_reauth。
+      // 归因歧义不记账:同一 host 注了多份凭证(多 user key / user key 与
+      // oauth 或连接 token 并存)时,401/403 无法指认是哪份被拒,全部记账
+      // 会把好 key 误翻 needs_reauth 并摘掉工具。台账只记 secret key 名、
+      // 不存值,事后也无法按值区分;宁可漏记(用户按错误提示重存坏 key 后
+      // 下一次 401 若已可归因仍会被捕),不可错杀。
       // 最终 host 以 response.url 为准(经重定向后);取不到才退回请求 host。
       let responseHost = url.hostname;
       try {
@@ -1245,7 +1250,21 @@ export class GhostNetworkSlot {
             ghostNetworkHostMatches(pattern, responseHost),
           ),
         );
-      if (response.status === 401) {
+      // 最终注入集合:user 源注入按 scope 重算(injectSecrets 无记录面,
+      // scope 命中且值可读即注入);oauth/连接取 injectSecrets 的实际注入面。
+      const attributionCount =
+        injectableKeys.length + oauthInjected.size + responseConnectionRefs.size;
+      if (attributionCount !== 1) {
+        if (response.status === 401 || response.status === 403) {
+          this.deps.log?.info('ghost credential rejection attribution ambiguous, skip ledger', {
+            ghostId,
+            callId,
+            host: responseHost,
+            status: response.status,
+            candidates: attributionCount,
+          });
+        }
+      } else if (response.status === 401) {
         // 401 = 服务端明确不认这份凭证,直接记账。
         for (const decl of injectableKeys) {
           this.noteCredentialRejected(ghostId, decl.key);
