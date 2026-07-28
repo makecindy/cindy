@@ -108,8 +108,24 @@ export const stripToolUseProviderSpecificFields: RequestTransform = (body) => {
 };
 
 /**
+ * Responses `input[]` 里的上下文压缩块 (OpenAI `/v1/responses/compact` 与 xAI 同名接口
+ * 都回这个形态)。它的 `encrypted_content` 装的是**压缩 blob 本体** —— 压缩点之前的
+ * 全部历史,不是可有可无的推理链。
+ */
+function isCompactionItem(node: Record<string, unknown>): boolean {
+  return node.type === 'compaction' || node.type === 'context_compaction';
+}
+
+/**
  * 递归删除 body 里所有 `encrypted_content` 键, 返回删掉的个数。
  * 用于 invalid_encrypted_content 报错后的透明重试 (见 stripEncryptedContentFromBody)。
+ *
+ * **压缩块整块跳过**: 剥掉压缩 blob 换不回一个可用请求 —— 上游收到没有 blob 的
+ * 压缩空壳会直接判 "Could not decode the compaction blob. Ensure it is unmodified
+ * from the compact response." (xAI 实报, 2026-07 Grok 会话卡死)。压缩块该怎么处置
+ * 由上层按目标上游决定 (codex-proxy 的跨来源压缩兼容 transform 会把读不懂的加密块
+ * 换成明文占位), 而那条兼容路径正是以"encrypted_content 非空"为触发条件 —— 在这里
+ * 先剥就等于把它一并绕过。
  */
 function deepDeleteEncryptedContent(node: unknown): number {
   let removed = 0;
@@ -118,6 +134,7 @@ function deepDeleteEncryptedContent(node: unknown): number {
     return removed;
   }
   if (isPlainObject(node)) {
+    if (isCompactionItem(node)) return 0;
     if ('encrypted_content' in node) {
       delete node.encrypted_content;
       removed += 1;
@@ -135,14 +152,25 @@ function isReasoningItemWithoutEncryptedContent(item: unknown): boolean {
   return typeof item.encrypted_content !== 'string' || item.encrypted_content.length === 0;
 }
 
+/** 没有 blob 的压缩空壳 —— 上游无法解码, 留着必 400, 只能丢。 */
+function isCompactionItemWithoutBlob(item: unknown): boolean {
+  if (!isPlainObject(item) || !isCompactionItem(item)) return false;
+  return typeof item.encrypted_content !== 'string' || item.encrypted_content.length === 0;
+}
+
 /**
- * 从 Responses-style `input[]` 丢掉"无 encrypted_content 的 reasoning"空壳。
- * 只删 encrypted_content 键时,xAI 会把残留 reasoning item 判成 ModelInput 反序列化失败 (422)。
+ * 从 Responses-style `input[]` 丢掉解不开也修不好的空壳 item:
+ *   - 无 blob 的压缩块 (**恒丢**): 本函数不再制造这种空壳 (见 deepDeleteEncryptedContent),
+ *     但请求体可能已经带着它进来, 兜底丢掉, 别让它打到上游换一个 400;
+ *   - 无 encrypted_content 的 reasoning (**仅 dropReasoningShells**): 只删
+ *     encrypted_content 键时,xAI 会把残留 reasoning item 判成 ModelInput 反序列化失败
+ *     (422)。这一条只在本轮确实剥掉过密文时才做 —— 没剥过的请求里,"reasoning 只带
+ *     summary" 是合法形态, 不该顺手删掉。
  */
-function deepDropEmptyReasoningInputItems(node: unknown): number {
+function deepDropEncryptedShellInputItems(node: unknown, dropReasoningShells: boolean): number {
   let removed = 0;
   if (Array.isArray(node)) {
-    for (const item of node) removed += deepDropEmptyReasoningInputItems(item);
+    for (const item of node) removed += deepDropEncryptedShellInputItems(item, dropReasoningShells);
     return removed;
   }
   if (!isPlainObject(node)) return 0;
@@ -150,11 +178,14 @@ function deepDropEmptyReasoningInputItems(node: unknown): number {
   if (Array.isArray(node.input)) {
     const kept: unknown[] = [];
     for (const item of node.input) {
-      if (isReasoningItemWithoutEncryptedContent(item)) {
+      if (
+        isCompactionItemWithoutBlob(item) ||
+        (dropReasoningShells && isReasoningItemWithoutEncryptedContent(item))
+      ) {
         removed += 1;
         continue;
       }
-      removed += deepDropEmptyReasoningInputItems(item);
+      removed += deepDropEncryptedShellInputItems(item, dropReasoningShells);
       kept.push(item);
     }
     node.input = kept;
@@ -162,14 +193,14 @@ function deepDropEmptyReasoningInputItems(node: unknown): number {
 
   for (const key of Object.keys(node)) {
     if (key === 'input') continue;
-    removed += deepDropEmptyReasoningInputItems(node[key]);
+    removed += deepDropEncryptedShellInputItems(node[key], dropReasoningShells);
   }
   return removed;
 }
 
 /**
- * 把请求体里所有 `encrypted_content` 键递归删掉, 并丢掉因此变成空壳的 reasoning input item,
- * 返回新的 Buffer。
+ * 把请求体里所有 `encrypted_content` 键递归删掉 (压缩块除外), 并丢掉解不开也修不好的
+ * 空壳 input item, 返回新的 Buffer。
  *
  * 背景: gpt-5.5 等模型经 litellm/Azure 走 OpenAI Responses API (/v1/responses) 时,
  * 请求体的 reasoning item 带 `encrypted_content` (gAAA... 加密推理)。多部署负载均衡把
@@ -178,9 +209,12 @@ function deepDropEmptyReasoningInputItems(node: unknown): number {
  * 删掉 encrypted_content 再重发即可恢复 (代价: 模型丢失上一轮的加密推理链, 可见对话保留)。
  * 若只删键、保留 type=reasoning 空壳,xAI 会再报 ModelInput 422 —— 所以空壳一并丢掉。
  *
+ * **上下文压缩块除外**: 它的 encrypted_content 是压缩 blob 本体, 剥掉只会把请求变成
+ * 上游无法解码的空壳 (详见 deepDeleteEncryptedContent)。
+ *
  * 仅在 server.ts 收到该 400/422 后的"透明重试"路径调用, 正常请求不经过此函数。
  *
- * @returns 删掉了至少一个键或空壳 → 新 Buffer; body 非 JSON / 没有该键 → null (调用方据此决定不重试)
+ * @returns 删掉了至少一个键或空壳 → 新 Buffer; body 非 JSON / 无可剥内容 → null (调用方据此决定不重试)
  */
 export function stripEncryptedContentFromBody(rawBody: Buffer): Buffer | null {
   let parsed: unknown;
@@ -190,8 +224,10 @@ export function stripEncryptedContentFromBody(rawBody: Buffer): Buffer | null {
     return null;
   }
   const removedKeys = deepDeleteEncryptedContent(parsed);
-  if (removedKeys === 0) return null;
-  deepDropEmptyReasoningInputItems(parsed);
+  // 空壳清理独立计数: 请求体里可能只带着一个没有 blob 的压缩空壳 (没有任何
+  // encrypted_content 键可删), 那一样是必须处理的坏 payload, 不能因 removedKeys=0 放行。
+  const removedShells = deepDropEncryptedShellInputItems(parsed, removedKeys > 0);
+  if (removedKeys === 0 && removedShells === 0) return null;
   try {
     return Buffer.from(JSON.stringify(parsed), 'utf8');
   } catch {

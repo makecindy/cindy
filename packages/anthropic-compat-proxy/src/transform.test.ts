@@ -69,6 +69,80 @@ describe('stripEncryptedContentFromBody', () => {
   it('returns null for non-JSON body', () => {
     expect(stripEncryptedContentFromBody(Buffer.from('not json', 'utf8'))).toBeNull();
   });
+
+  // 回归 (2026-07 Grok 会话卡死): 压缩块的 encrypted_content 是压缩 blob 本体,
+  // 剥掉只会留下上游无法解码的空壳 → xAI 400 "Could not decode the compaction blob"。
+  it('keeps the compaction blob intact while stripping reasoning blobs', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'compaction', id: 'cmp_abc', encrypted_content: 'BLOB' },
+        { type: 'reasoning', encrypted_content: 'gAAAAABxyz...', summary: [] },
+        { type: 'message', role: 'user', content: 'hi' },
+      ],
+    });
+    const out = stripEncryptedContentFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.input).toEqual([
+      { type: 'compaction', id: 'cmp_abc', encrypted_content: 'BLOB' },
+      { type: 'message', role: 'user', content: 'hi' },
+    ]);
+  });
+
+  it('keeps context_compaction blobs intact too', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'context_compaction', id: 'cc_1', encrypted_content: 'BLOB' },
+        { type: 'reasoning', encrypted_content: 'ENC' },
+      ],
+    });
+    const out = stripEncryptedContentFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.input).toEqual([{ type: 'context_compaction', id: 'cc_1', encrypted_content: 'BLOB' }]);
+  });
+
+  it('returns null when the only encrypted_content belongs to a compaction item', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'compaction', id: 'cmp_abc', encrypted_content: 'BLOB' },
+        { type: 'message', role: 'user', content: 'hi' },
+      ],
+    });
+    expect(stripEncryptedContentFromBody(body)).toBeNull();
+  });
+
+  it('keeps summary-only reasoning items when nothing was stripped this round', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'compaction', id: 'cmp_abc' },
+        { type: 'reasoning', summary: [{ type: 'summary_text', text: 's' }] },
+      ],
+    });
+    const out = stripEncryptedContentFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    // 压缩空壳必丢;没剥过密文时,只带 summary 的 reasoning 是合法形态,保留。
+    expect(parsed.input).toEqual([{ type: 'reasoning', summary: [{ type: 'summary_text', text: 's' }] }]);
+  });
+
+  it('drops a compaction shell that already arrived without its blob', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'compaction', id: 'cmp_abc' },
+        { type: 'message', role: 'user', content: 'hi' },
+      ],
+    });
+    const out = stripEncryptedContentFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.input).toEqual([{ type: 'message', role: 'user', content: 'hi' }]);
+  });
 });
 
 describe('stripToolUseProviderSpecificFieldsFromBody', () => {
@@ -368,6 +442,31 @@ describe('createActiveStripTransform', () => {
     const out = transform({ model: 'gpt-5.5', input: [{ encrypted_content: 'gAAA' }] }, ctx);
 
     expect(out).toEqual({ model: 'gpt-5.5', input: [{}] });
+  });
+
+  // 主动剥离排在 codex-proxy transform 链首位, 跨来源压缩兼容 transform 排在其后并以
+  // "encrypted_content 非空" 为触发条件。这里先把压缩 blob 剥掉, 那条兼容路径就再也
+  // 认不出压缩块, 空壳会一路打到上游 → xAI 400 "Could not decode the compaction blob"。
+  it('leaves the compaction blob for the downstream cross-provider transform', () => {
+    const controller = createThreadStripController();
+    controller.markActive('thread-a', 'grok-4.5');
+    const transform = createActiveStripTransform({ controller, enabled: () => true, strip: stripEncryptedContentFromBody });
+
+    const out = transform(
+      {
+        model: 'grok-4.5',
+        input: [
+          { type: 'compaction', id: 'cmp_abc', encrypted_content: 'BLOB' },
+          { type: 'reasoning', encrypted_content: 'gAAA' },
+        ],
+      },
+      ctx,
+    );
+
+    expect(out).toEqual({
+      model: 'grok-4.5',
+      input: [{ type: 'compaction', id: 'cmp_abc', encrypted_content: 'BLOB' }],
+    });
   });
 
   it('strips active thread empty thinking blocks', () => {
