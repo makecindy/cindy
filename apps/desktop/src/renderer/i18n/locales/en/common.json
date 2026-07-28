@@ -1238,7 +1238,10 @@
           "runtimeRequired": "Configure at least one runtime (its base URL and models)",
           "baseUrlInvalid": "Base URL must be a valid http(s) address",
           "modelRequired": "Add at least one model",
-          "oauthInvalid": "Incomplete OAuth config: all four fields are required and both endpoints must be https URLs"
+          "oauthInvalid": "Incomplete OAuth config: all four fields are required and both endpoints must be https URLs",
+          "headerNameInvalid": "Invalid request header name: {{name}}",
+          "headerValueInvalid": "Header \"{{name}}\" has an invalid value",
+          "headerProtected": "Header \"{{name}}\" is managed by the system and can't be customized"
         },
         "toast": {
           "created": "Provider added",

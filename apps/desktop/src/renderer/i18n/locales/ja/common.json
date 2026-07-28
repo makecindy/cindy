@@ -1238,7 +1238,10 @@
           "runtimeRequired": "Runtime を 1 つ以上設定してください（ベース URL とモデル）",
           "baseUrlInvalid": "ベース URL は有効な http(s) アドレスである必要があります",
           "modelRequired": "モデルを 1 つ以上追加してください",
-          "oauthInvalid": "OAuth 設定が不完全です：4 つの項目はすべて必須で、両エンドポイントは https である必要があります"
+          "oauthInvalid": "OAuth 設定が不完全です：4 つの項目はすべて必須で、両エンドポイントは https である必要があります",
+          "headerNameInvalid": "リクエストヘッダー名が不正です：{{name}}",
+          "headerValueInvalid": "ヘッダー「{{name}}」の値に使用できない文字が含まれています",
+          "headerProtected": "ヘッダー「{{name}}」はシステムが管理するため、カスタマイズできません"
         },
         "toast": {
           "created": "プロバイダーを追加しました",

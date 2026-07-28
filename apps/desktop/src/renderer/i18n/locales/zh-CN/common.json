@@ -1238,7 +1238,10 @@
           "runtimeRequired": "请至少配置一个 Runtime（填写它的基础 URL 和模型）",
           "baseUrlInvalid": "基础 URL 必须是合法的 http(s) 地址",
           "modelRequired": "请至少添加一个模型",
-          "oauthInvalid": "OAuth 配置不完整：四个字段均必填，且两个端点必须是 https 地址"
+          "oauthInvalid": "OAuth 配置不完整：四个字段均必填，且两个端点必须是 https 地址",
+          "headerNameInvalid": "请求头名称不合法：{{name}}",
+          "headerValueInvalid": "请求头「{{name}}」的值包含非法字符",
+          "headerProtected": "请求头「{{name}}」由系统管理，不能自定义"
         },
         "toast": {
           "created": "已添加供应商",

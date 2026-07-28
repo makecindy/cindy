@@ -30,9 +30,10 @@ import {
 } from '@/lib/customProviders';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 
-import { sortPresetsForLocale } from '@cindy/model-providers';
+import { sortPresetsForLocale, validateCustomHeaderRows } from '@cindy/model-providers';
 import type {
   AgentKind,
+  CustomHeaderInvalidReason,
   CustomProviderConfig,
   ProviderPreset,
   ProviderRuntimeModelConfig,
@@ -87,6 +88,13 @@ interface TestState {
   latencyMs?: number;
 }
 const IDLE_TEST: TestState = { status: 'idle' };
+
+/** 请求头校验失败原因 → i18n 文案键（配 `{ name }` 插值）。 */
+const HEADER_ERROR_KEY: Record<CustomHeaderInvalidReason, string> = {
+  'invalid-name': 'settings.providers.custom.errors.headerNameInvalid',
+  'invalid-value': 'settings.providers.custom.errors.headerValueInvalid',
+  protected: 'settings.providers.custom.errors.headerProtected',
+};
 
 function emptyRuntime(agent: AgentKind): RuntimeFields {
   return {
@@ -432,11 +440,12 @@ export function CustomProviderDialog({ initial, existingIds, onSaved, onClose }:
       toast.error(t('settings.providers.custom.test.needFields'));
       return;
     }
-    const headers: Record<string, string> = {};
-    for (const h of rf.headers) {
-      const n = h.name.trim();
-      if (n) headers[n] = h.value.trim();
+    const headerCheck = validateCustomHeaderRows(rf.headers);
+    if (!headerCheck.ok) {
+      toast.error(t(HEADER_ERROR_KEY[headerCheck.reason], { name: headerCheck.name }));
+      return;
     }
+    const headers = headerCheck.headers;
     setTest((prev) => ({ ...prev, [agent]: { status: 'testing' } }));
     try {
       const result = await window.electronAPI.maker.testProviderConnection({
@@ -489,11 +498,12 @@ export function CustomProviderDialog({ initial, existingIds, onSaved, onClose }:
       toast.error(t('settings.providers.custom.fetch.needBaseUrl'));
       return;
     }
-    const headers: Record<string, string> = {};
-    for (const h of rf.headers) {
-      const n = h.name.trim();
-      if (n) headers[n] = h.value.trim();
+    const headerCheck = validateCustomHeaderRows(rf.headers);
+    if (!headerCheck.ok) {
+      toast.error(t(HEADER_ERROR_KEY[headerCheck.reason], { name: headerCheck.name }));
+      return;
     }
+    const headers = headerCheck.headers;
     // 请求参数签名：响应回来时若该 runtime 的端点/凭证/请求头已被改动，响应按过期丢弃——
     // 不能把旧端点的模型清单当成新端点的填进表单（成功和失败 toast 都不展示）。
     const requestSig = fetchRequestSignature(rf);
@@ -635,11 +645,13 @@ export function CustomProviderDialog({ initial, existingIds, onSaved, onClose }:
         toast.error(t('settings.providers.custom.errors.modelRequired'));
         return;
       }
-      const headers: Record<string, string> = {};
-      for (const h of rf.headers) {
-        const n = h.name.trim();
-        if (n) headers[n] = h.value.trim();
+      const headerCheck = validateCustomHeaderRows(rf.headers);
+      if (!headerCheck.ok) {
+        setActiveTab(a);
+        toast.error(t(HEADER_ERROR_KEY[headerCheck.reason], { name: headerCheck.name }));
+        return;
       }
+      const headers = headerCheck.headers;
       const defaultProtocol = a === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
       runtimes[a] = {
         baseUrl: rf.baseUrl.trim(),
