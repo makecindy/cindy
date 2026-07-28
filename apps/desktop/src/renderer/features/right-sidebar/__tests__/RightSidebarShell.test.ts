@@ -414,6 +414,11 @@ describe('RightSidebarShell empty state', () => {
     expect(
       (hitHole.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion,
     ).toBe('no-drag');
+    const spacer = screen.getByTestId('right-sidebar-rail-chrome-actions-spacer');
+    expect(spacer.style.width).toBe(`${CHROME_ACTIONS_GEOMETRY.clusterWidth}px`);
+    expect(
+      (spacer.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion,
+    ).toBe('no-drag');
   });
 
   it('renders detach/maximize in the topbar when panel is docked left (mac M2), spacer when right or maximized', async () => {

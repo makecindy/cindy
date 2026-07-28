@@ -100,7 +100,7 @@ interface RightSidebarShellProps {
    * 子窗口不应消费这段空间。
    */
   reserveLeftChromeActions?: boolean;
-  /** 工具面板处于最左 rail 邻位时，顶栏为浮动 ChromeActions 挖 no-drag 命中区。 */
+  /** 工具面板处于最左 rail 邻位时，顶栏为浮动 ChromeActions 挖 no-drag 命中区并预留布局空间。 */
   railChromeActionsHitHole?: boolean;
   /** 「在新窗口中打开侧边栏」;仅 Win 端 TabBar 内渲染按钮(Mac 走 MainLayout 浮层)。 */
   onDetach?: () => void;
@@ -148,6 +148,10 @@ export function RightSidebarShell({
     unifiedTopbar && reserveLeftChromeActions
       ? chromeActionsLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth
       : 0;
+  // rail 邻位时浮动 ChromeActions 从工具面板左缘开始。命中洞保持 absolute
+  // 对齐窗口坐标；另加正常流中的 spacer，把 TabStrip 推到按钮簇之后。
+  const railChromeActionsSpacerWidth =
+    unifiedTopbar && railChromeActionsHitHole ? CHROME_ACTIONS_GEOMETRY.clusterWidth : 0;
   const { t } = useTranslation();
 
   // RSB browser bridge (Phase 2):在 Shell 整个生命周期内只 init 一次。bridge 内部
@@ -394,6 +398,19 @@ export function RightSidebarShell({
               style={
                 {
                   width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
+                  WebkitAppRegion: 'no-drag',
+                } as React.CSSProperties
+              }
+            />
+          )}
+          {railChromeActionsSpacerWidth > 0 && (
+            <div
+              aria-hidden
+              data-testid="right-sidebar-rail-chrome-actions-spacer"
+              className="h-full shrink-0"
+              style={
+                {
+                  width: railChromeActionsSpacerWidth,
                   WebkitAppRegion: 'no-drag',
                 } as React.CSSProperties
               }

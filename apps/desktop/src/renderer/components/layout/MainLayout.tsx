@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { BrowserWebviewPool } from '@/components/layout/BrowserWebviewPool';
 import { ChromeActions } from '@/components/layout/ChromeActions';
 import { ContentHeaderSlot } from '@/components/layout/ContentHeader';
+import { rightSidebarOwnsRailChromeActions as resolveRightSidebarRailChromeActionsOwner } from '@/components/layout/railChromeActions';
 import { FadeSwitcher } from '@/components/layout/FadeSwitcher';
 import { RightSidebar, type RightSidebarHandle } from '@/components/layout/RightSidebar';
 import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
@@ -740,12 +741,14 @@ export function MainLayout() {
   // - 折叠 RSB 时自动退出(否则 maximize 状态下点折叠会导致主区 hidden + RSB 也 0 宽 → 全黑)
   // - 不持久化:刷新 / 切 session 默认非 maximize,跟"临时聚焦视图"语义一致
   const [isRightSidebarMaximized, setIsRightSidebarMaximized] = useState(false);
-  const rightSidebarOwnsRailChromeActions =
-    hasRailChromeActions &&
-    rightSidebarSide === 'left' &&
-    !isRightSidebarCollapsed &&
-    !rsbDetached &&
-    !isRightSidebarMaximized;
+  const rightSidebarOwnsRailChromeActions = resolveRightSidebarRailChromeActionsOwner({
+    hasRailChromeActions,
+    rightSidebarSide,
+    rightSidebarAvailable,
+    rightSidebarLoaded: rsbWindow.loaded,
+    isRightSidebarCollapsed,
+    rsbDetached,
+  });
   const handleMaximizeRightSidebar = useCallback(() => {
     setIsRightSidebarMaximized((v) => !v);
   }, []);
