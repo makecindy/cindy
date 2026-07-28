@@ -62,6 +62,17 @@ interface PermissionPromptProps {
   permission: PendingPermission;
   onRespond: (result: CCAgentPermissionResult) => void;
   modeSwitch?: PermissionPromptModeSwitch;
+  /**
+   * 本卡片是否在用户眼前。false = 不注册任何 window 级快捷键(卡片照常渲染)。
+   *
+   * 快捷键挂在 window 上,而 CCAgentSessionView 是**多实例**的:Orca 协同下 lead 与
+   * focused worker 各挂一个,右栏折叠时 body 也仍然挂载。两边同时有 pending 时,
+   * 不 gate 的话一次 Enter / Esc / Shift+Tab 会同时落到看不见的那张卡上 —— 用户
+   * 没看见的工具请求被放行或拒绝(Shift+Tab 尤其隐蔽:切档会连带 dismiss pending)。
+   *
+   * 默认 true:不传的调用方(workdir-browse 等单实例场景)行为不变。
+   */
+  shortcutsActive?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +131,12 @@ function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
 // Component
 // ---------------------------------------------------------------------------
 
-export function PermissionPrompt({ permission, onRespond, modeSwitch }: PermissionPromptProps) {
+export function PermissionPrompt({
+  permission,
+  onRespond,
+  modeSwitch,
+  shortcutsActive = true,
+}: PermissionPromptProps) {
   const { t } = useTranslation();
   const { toolName, input, title, displayName, description, suggestions } = permission;
 
@@ -167,6 +183,8 @@ export function PermissionPrompt({ permission, onRespond, modeSwitch }: Permissi
   // ── Keyboard shortcuts ──
 
   useEffect(() => {
+    // 看不见的实例一律不参与键盘 —— 见 shortcutsActive 顶注。
+    if (!shortcutsActive) return;
     const handler = (e: KeyboardEvent) => {
       // IME 组合期间的 Enter(确认候选词)不算快捷键;焦点在可编辑元素上时
       // (侧栏重命名/查找栏等)也不劫持按键,避免把输入操作误判成授权决定。
@@ -214,7 +232,7 @@ export function PermissionPrompt({ permission, onRespond, modeSwitch }: Permissi
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [handleAllowOnce, handleAlwaysAllow, handleDeny]);
+  }, [handleAllowOnce, handleAlwaysAllow, handleDeny, shortcutsActive]);
 
   // ── Render ──
 

@@ -206,6 +206,52 @@ describe('PermissionPrompt modeSwitch', () => {
     document.body.removeChild(layer);
   });
 
+  // 协同布局下 lead 与 worker 各挂一个 CCAgentSessionView,右栏折叠时 body 仍挂载。
+  // 看不见的实例若也注册 window 快捷键,一次按键会把用户没看见的那张卡上的请求
+  // 一并结掉(Shift+Tab 尤其隐蔽:切档连带 dismiss pending)。
+  it('shortcutsActive=false 时不注册任何 window 快捷键', () => {
+    const onRespond = vi.fn();
+    const onPermissionModeChange = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={PERMISSION}
+        onRespond={onRespond}
+        shortcutsActive={false}
+        modeSwitch={{
+          permissionMode: 'ask',
+          onPermissionModeChange,
+          vendorKey: 'cc',
+          cycleOptions: CYCLE_OPTIONS,
+        }}
+      />,
+    );
+
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' });
+    fireEvent.keyDown(window, { key: 'Escape', code: 'Escape' });
+    pressCyclePermissionMode();
+
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(onPermissionModeChange).not.toHaveBeenCalled();
+    // 卡片本身照常渲染,只是不吃键盘。
+    expect(screen.getByTestId('permission-chip')).toBeTruthy();
+  });
+
+  it('多实例并存时只有可见的那张响应快捷键', () => {
+    const visibleRespond = vi.fn();
+    const hiddenRespond = vi.fn();
+    render(
+      <>
+        <PermissionPrompt permission={PERMISSION} onRespond={hiddenRespond} shortcutsActive={false} />
+        <PermissionPrompt permission={PERMISSION} onRespond={visibleRespond} />
+      </>,
+    );
+
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' });
+
+    expect(visibleRespond).toHaveBeenCalledWith({ behavior: 'allow' });
+    expect(hiddenRespond).not.toHaveBeenCalled();
+  });
+
   it('没有 modeSwitch 时 Shift+Tab 不做任何事', () => {
     const onRespond = vi.fn();
     render(<PermissionPrompt permission={PERMISSION} onRespond={onRespond} />);

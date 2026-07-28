@@ -3144,6 +3144,10 @@ export function CCAgentSessionView({
                   <PermissionPrompt
                     permission={pendingPermission}
                     onRespond={respondToPermission}
+                    // 本视图是多实例的(Orca 下 lead 与 worker 各一个,右栏折叠时
+                    // body 仍挂载)。看不见的实例不得抢 window 级快捷键,否则一次
+                    // 按键会把看不见的那张卡上的请求也一并结掉。
+                    shortcutsActive={viewVisible}
                     modeSwitch={{
                       permissionMode: (session?.permissionMode as PermissionMode) ?? 'ask',
                       onPermissionModeChange: handlePermissionCardModeChange,
