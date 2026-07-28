@@ -4248,7 +4248,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       return clientId;
     },
     applyResumeFallbackAtomically: applyAgentSwitchResumeFallbackAtomically,
-    setPendingHandoff: (sessionId, handoff) => agentHandoffPending.set(sessionId, handoff),
+    setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
+      agentHandoffPending.set(sessionId, handoff, expectedGeneration),
+    readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
     bootstrapSwitchedSession: async (sessionId) => {
       // 切换已提交,从 DB 行(新引擎值)重建 live session。resumeSessionId 直接取
       // 行上的 sdk_session_id:切换事务在有停泊绑定时已把它落成停泊 id(Phase 2
@@ -4312,7 +4314,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     hasBackgroundActivity: getClaudeSessionBackgroundActivity,
     closeSession: (sessionId) => maker.closeSession(sessionId),
     commitDeletion: commitMessageDeletion,
-    setPendingHandoff: (sessionId, handoff) => agentHandoffPending.set(sessionId, handoff),
+    setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
+      agentHandoffPending.set(sessionId, handoff, expectedGeneration),
+    readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
     onCommitted: (
       { sessionId, deletedClientIds, updatedAt, preview, messageCount },
       requestedClientId,
@@ -6991,26 +6995,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     // DB 侧的 cleared_at 抑制拦不住已经落进 registry 内存的那一份(首发被拒后
     // 缓存仍在),下次 send 会把旧血缘灌进用户刚显式清空的上下文。
     //
-    // 用 invalidate(留 null 墓碑)而不是 clear(删条目):本地 /clear 的 cleared_at
-    // 由 renderer fire-and-forget 落库(main 只在 remoteInvoke 分支自己写),删条目会
-    // 让这段窗口内的 headless send 回落到尚未更新 cleared_at 的 DB 行,把旧交接重建
-    // 出来再缓存住。
+    // 用 invalidate(留 null 墓碑)而不是 clear(删条目):删条目会让后续 send 回落到
+    // DB 重建,把旧交接捞回来再缓存住。墓碑同步生效,窗口内的 send 立刻拿到 null;
+    // clear 纪元则要等下面 cleared_at 落库之后才推进。
     agentHandoffPending.invalidate(sid);
     getAgentIslandService()?.notifyQueueEmptied(sid);
     // 清上下文后,active 目标失去其依据(objective 引用的内容已被抹掉)→ 一并清除目标。
     goalClearObserver?.(sid);
-    if (remoteInvoke) {
-      const clearBoundaryMs =
-        typeof clearBoundary === 'number'
-          ? clearBoundary
-          : new Date(clearBoundary).getTime();
-      await clearSessionContextInDb(sid, clearBoundaryMs).catch((err) => {
-        log.warn('remote clear session context persist failed', {
-          sessionId: sid,
-          err: err instanceof Error ? err.message : String(err),
-        });
+    // cleared_at 在 handler 内**同步**落库,本地与远程同一口径。
+    //
+    // 过去本地路径只靠 renderer 事后 fire-and-forget 写这一列,于是 handler 返回到那次
+    // 写入落库之间有个窗口:此刻启动的引擎切换 / 消息删除会读到**尚未标记 clear**的
+    // DB 历史,却又拿到 clear 之后的纪元——纪元校验因此形同虚设,基于已清空历史算出的
+    // 交接会盖掉刚立的墓碑。在这里同步写掉,那个窗口就不存在了;renderer 之后若再写一次
+    // 也是同值幂等。
+    const clearBoundaryMs =
+      typeof clearBoundary === 'number'
+        ? clearBoundary
+        : new Date(clearBoundary).getTime();
+    try {
+      await clearSessionContextInDb(sid, clearBoundaryMs);
+    } catch (err) {
+      // 落库失败不阻断 /clear:内存墓碑已经立了,这一次以及后续 send 都拿不到旧交接。
+      // 残余风险是 DB 里没有 cleared_at,进程重启后 findPendingAgentHandoff 可能把
+      // clear 之前的交接重建出来——renderer 侧随后还会写一次同值(sdkSessionId + clearedAt),
+      // 那是这里的第二次机会。用 error 级别,便于事后从日志确认是否走到过这条路。
+      log.error('clear session context persist failed', {
+        sessionId: sid,
+        remoteInvoke,
+        err: err instanceof Error ? err.message : String(err),
       });
     }
+    // 落库尝试结束后封边界:重立墓碑(清掉这段 await 里用 clear 前纪元挤进来的那份)
+    // + 推进纪元(挡住后面才写回的那批)。顺序不可颠倒,理由见 sealClearBoundary 注释。
+    agentHandoffPending.sealClearBoundary(sid);
     return projection;
   });
 

@@ -16,6 +16,26 @@ export interface UpdateRelaunchScheduleStorage {
   hasRunningRuns: () => Promise<boolean>;
 }
 
+export interface UpdateRelaunchBusyTransition {
+  nextBusy: boolean;
+  shouldNotify: boolean;
+}
+
+/**
+ * Collapse controller-list churn into the only edge the update policy needs.
+ * Busy polls refresh the quiet-period timestamp separately; this notification
+ * only wakes the policy when remote activity starts or fully stops.
+ */
+export function decideUpdateRelaunchBusyTransition(
+  previousBusy: boolean,
+  nextBusy: boolean,
+): UpdateRelaunchBusyTransition {
+  return {
+    nextBusy,
+    shouldNotify: previousBusy !== nextBusy,
+  };
+}
+
 /**
  * Scheduler absence is an expected cold-start state, not a busy-query failure.
  * Once storage is initialized, deliberately propagate query failures so the

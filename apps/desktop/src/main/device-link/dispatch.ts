@@ -41,7 +41,10 @@ import {
   type LinkOpenPayload,
   type Topic,
 } from '@cindy/device-link';
-import type { MobileVoiceDictionaryLearningRequest } from '@cindy/maker-shared/device-link-contract';
+import {
+  DEVICE_LINK_RECONCILIATION_PROBE_MARKER,
+  type MobileVoiceDictionaryLearningRequest,
+} from '@cindy/maker-shared/device-link-contract';
 import {
   resolveProviderLogoKind,
   type ProviderLogoKind,
@@ -105,6 +108,11 @@ const REMOTE_TOOL_USE_METADATA_STRING_LIMIT = 1024;
 const REMOTE_INVOKE_TRUNCATION_SUFFIX = '\n\n[remote content truncated: payload too large]';
 const REMOTE_INVOKE_TRUNCATED_CONTENT = '[remote content truncated: payload too large]';
 const REMOTE_INVOKE_FRAME_SAFETY_BYTES = 1024;
+// Remote project viewers reconcile this list on a timer. Treating that background read as
+// interactive activity would refresh the updater quiet period forever for sessions-only viewers.
+const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
+  'local-db:sessions:list',
+]);
 const textEncoder = new TextEncoder();
 
 /** wire 输入 fail-closed：未知形状视为空能力集，并限制数量/长度避免撑大常驻 registry。 */
@@ -327,13 +335,19 @@ function projectInvokeResultForTunnel(
 /** 持有 client 的引用(转发 push 用);wireInboundDispatch 接入时设置。 */
 let activeClient: DeviceLinkClient | null = null;
 
-/** 控制端集合变化时通知 host(更新「正在被控」状态条) */
-type ControllersChangedListener = (controllers: ActiveController[]) => void;
+/** 订阅集合变化时一次性通知 host UI 控制态与更新重启安全态。 */
+type ControllersChangedListener = (
+  controllers: ActiveController[],
+  updateRelaunchControllers: ActiveController[],
+) => void;
 let onControllersChanged: ControllersChangedListener | null = null;
 
-/** All remote viewers, including lightweight `sessions` subscriptions. */
-type SubscribedControllersChangedListener = (controllers: ActiveController[]) => void;
-let onSubscribedControllersChanged: SubscribedControllersChangedListener | null = null;
+/** 非订阅类远程 invoke 在途状态；用于给无人值守更新持有短期 busy lease。 */
+type RemoteInvokeBusyChangedListener = (busy: boolean) => void;
+let onRemoteInvokeBusyChanged: RemoteInvokeBusyChangedListener | null = null;
+let inFlightRemoteInvokeCount = 0;
+/** Controllers that have successfully demonstrated topic-subscription support on this link. */
+const topicSubscriptionControllers = new Set<string>();
 
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
@@ -343,10 +357,10 @@ export function setControllersChangedListener(cb: ControllersChangedListener | n
   onControllersChanged = cb;
 }
 
-export function setSubscribedControllersChangedListener(
-  cb: SubscribedControllersChangedListener | null,
+export function setRemoteInvokeBusyChangedListener(
+  cb: RemoteInvokeBusyChangedListener | null,
 ): void {
-  onSubscribedControllersChanged = cb;
+  onRemoteInvokeBusyChanged = cb;
 }
 
 export function setSessionsSubscribedListener(cb: SessionsSubscribedListener | null): void {
@@ -357,8 +371,51 @@ export function getActiveControllers(): ActiveController[] {
   return subscriptions.getControlControllers();
 }
 
-export function getSubscribedControllers(): ActiveController[] {
-  return subscriptions.getSubscribedControllers();
+export function getUpdateRelaunchControllers(): ActiveController[] {
+  return subscriptions.getUpdateRelaunchControllers();
+}
+
+export function hasInFlightRemoteInvokes(): boolean {
+  return inFlightRemoteInvokeCount > 0;
+}
+
+function notifyRemoteInvokeBusyChanged(busy: boolean): void {
+  try {
+    onRemoteInvokeBusyChanged?.(busy);
+  } catch (err) {
+    log.warn(`remote invoke busy listener failed: ${String(err)}`);
+  }
+}
+
+function acquireRemoteInvokeBusyLease(): () => void {
+  const wasBusy = hasInFlightRemoteInvokes();
+  inFlightRemoteInvokeCount += 1;
+  if (!wasBusy) notifyRemoteInvokeBusyChanged(true);
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    inFlightRemoteInvokeCount = Math.max(0, inFlightRemoteInvokeCount - 1);
+    if (!hasInFlightRemoteInvokes()) notifyRemoteInvokeBusyChanged(false);
+  };
+}
+
+function shouldAcquireRemoteInvokeBusyLease(
+  src: string,
+  payload: InvokePayload | undefined,
+): boolean {
+  if (!payload || typeof payload.channel !== 'string') return false;
+  if (!readDeviceLinkSettings().remoteControlEnabled) return false;
+  if (isControllerRevoked(src)) return false;
+  if (!REMOTE_INVOKE_ALLOWLIST.has(payload.channel)) return false;
+  if (
+    payload.channel === 'local-db:sessions:get' &&
+    payload.args?.[1] === DEVICE_LINK_RECONCILIATION_PROBE_MARKER
+  ) {
+    return false;
+  }
+  return !UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS.has(payload.channel);
 }
 
 function notifySessionsSubscribed(controllerDeviceId: string): void {
@@ -512,12 +569,15 @@ function truncateRemoteString(value: string, state: TruncationState): string {
 /**
  * 同步「转发 tap 开关」与「被控横幅」到当前 registry 状态。任何 registry 变更后调用:
  *  - registry 非空 → 注册 forwardPush tap(无监听时 broadcast-tap 是 O(1) no-op);空 → 注销。
- *  - 横幅控制端集 = 持 session:<id> / legacy '*' 的订阅者。
+ *  - UI 活跃控制端集 = 持 session:<id> / legacy '*' 的订阅者。
+ *  - 更新重启阻塞集额外包含 fs-watch:<workdir>，但不扩大 UI 被控横幅语义。
  */
 function syncForwarding(): void {
   setBroadcastTapListener(subscriptions.isEmpty() ? null : forwardPush);
-  onControllersChanged?.(subscriptions.getControlControllers());
-  onSubscribedControllersChanged?.(subscriptions.getSubscribedControllers());
+  onControllersChanged?.(
+    subscriptions.getControlControllers(),
+    subscriptions.getUpdateRelaunchControllers(),
+  );
 }
 
 /** 把所有订阅控制端踢掉(被控开关关闭 / 用户一键断开 / 退出时调用) */
@@ -525,10 +585,15 @@ export function dropAllControllers(
   client: DeviceLinkClient,
   reason: 'user' | 'toggle-off' | 'shutdown',
 ): void {
-  for (const dst of subscriptions.getControllerIds()) {
+  const controllerIds = new Set([
+    ...subscriptions.getControllerIds(),
+    ...topicSubscriptionControllers,
+  ]);
+  for (const dst of controllerIds) {
     client.closeLink(dst, reason);
   }
   subscriptions.clearAll();
+  topicSubscriptionControllers.clear();
   syncForwarding();
 }
 
@@ -538,6 +603,7 @@ export function dropAllControllers(
  * 后回收僵尸订阅的兜底信号(正常路径是控制端显式 unsubscribe / link-close)。
  */
 export function handleControllerOffline(deviceId: string): void {
+  topicSubscriptionControllers.delete(deviceId);
   if (subscriptions.clearController(deviceId)) {
     syncForwarding();
   }
@@ -565,6 +631,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       return;
     case 'link-close':
       if (!src) return;
+      topicSubscriptionControllers.delete(src);
       if (subscriptions.clearController(src)) {
         syncForwarding();
       }
@@ -609,12 +676,13 @@ function handleLinkOpen(
       ? payload.controllerName.trim().slice(0, MAX_CONTROLLER_NAME_LEN)
       : src.slice(0, 8);
   // 老控制端无 subscribe 能力:link-open 视作订阅 legacy '*'(全量转发 + 横幅),向后兼容。
-  subscriptions.subscribe(
-    src,
-    [LEGACY_TOPIC],
-    name,
-    sanitizeControllerCapabilities(payload?.capabilities),
-  );
+  // 已在当前 link 上证明支持 topic 的客户端可能重复 open;不能重新装回兼容 wildcard。
+  const capabilities = sanitizeControllerCapabilities(payload?.capabilities);
+  if (topicSubscriptionControllers.has(src)) {
+    subscriptions.updateControllerMetadata(src, name, capabilities);
+  } else {
+    subscriptions.subscribe(src, [LEGACY_TOPIC], name, capabilities);
+  }
   syncForwarding();
   client.sendLinkAccept(src, requestId, {
     appVersion: app.getVersion(),
@@ -635,8 +703,15 @@ async function handleInvoke(
     client.sendInvokeResult(src, requestId, handleSubscriptionFrame(src, payload));
     return;
   }
-  const result = await runInvoke(src, payload);
-  sendInvokeResultSafe(client, src, requestId, result, payload?.channel, payload?.args);
+  const releaseBusyLease = shouldAcquireRemoteInvokeBusyLease(src, payload)
+    ? acquireRemoteInvokeBusyLease()
+    : () => undefined;
+  try {
+    const result = await runInvoke(src, payload);
+    sendInvokeResultSafe(client, src, requestId, result, payload?.channel, payload?.args);
+  } finally {
+    releaseBusyLease();
+  }
 }
 
 /**
@@ -951,7 +1026,16 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
       : undefined;
   const isSub = payload.channel === DL_SUBSCRIBE_CHANNEL;
   if (isSub) {
+    // link-open provisionally installs legacy '*' for old clients. A non-empty modern subscribe
+    // proves topic support, so replace that compatibility firehose and remember the capability
+    // until disconnect. Empty/fully-filtered frames leave legacy compatibility intact.
+    // Add the modern topics first so replacing the last legacy topic does not discard the
+    // controller metadata (including negotiated capabilities) with the registry entry.
     subscriptions.subscribe(src, topics, name, optionalControllerCapabilities(o));
+    if (topics.length > 0) {
+      topicSubscriptionControllers.add(src);
+      subscriptions.unsubscribe(src, [LEGACY_TOPIC]);
+    }
   } else {
     subscriptions.unsubscribe(src, topics);
   }
@@ -1187,13 +1271,16 @@ export const __testing = {
   reset(): void {
     subscriptions.__testing.reset();
     onControllersChanged = null;
-    onSubscribedControllersChanged = null;
+    onRemoteInvokeBusyChanged = null;
+    inFlightRemoteInvokeCount = 0;
+    topicSubscriptionControllers.clear();
     onSessionsSubscribed = null;
     activeClient = null;
     setBroadcastTapListener(null);
   },
   getActiveControllers,
-  getSubscribedControllers,
+  getUpdateRelaunchControllers,
+  hasInFlightRemoteInvokes,
   controllerSupports: subscriptions.controllerSupports,
   optionalControllerCapabilities,
   sendInvokeResultSafe,

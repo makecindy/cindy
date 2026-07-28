@@ -377,14 +377,16 @@ describe('dispatchLocalInvoke', () => {
 import {
   wireInboundDispatch,
   setControllersChangedListener,
-  setSubscribedControllersChangedListener,
+  setRemoteInvokeBusyChangedListener,
   setSessionsSubscribedListener,
   getActiveControllers,
-  getSubscribedControllers,
+  getUpdateRelaunchControllers,
+  hasInFlightRemoteInvokes,
   dropAllControllers,
 } from '../device-link/dispatch';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
 import { SESSION_ACTIVITY_CHANNEL, type Envelope } from '@cindy/device-link';
+import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { MAKER_PUSH } from '../maker-ipc/channels';
 
 /** 最小 fake client:捕获 onFrame handler,记录出站调用 */
@@ -555,6 +557,157 @@ describe('被控端控制链路生命周期', () => {
     expect(getActiveControllers()).toHaveLength(0);
     expect(hasBroadcastTapListener()).toBe(false);
   });
+
+  it('非订阅 remote invoke 在结果发送前持有更新 busy lease', async () => {
+    remoteControlEnabled = true;
+    let resolveInvoke: ((value: string[]) => void) | undefined;
+    registry.register(
+      'maker:list-active',
+      () =>
+        new Promise<string[]>((resolve) => {
+          resolveInvoke = resolve;
+        }),
+    );
+    const busyChanges: boolean[] = [];
+    setRemoteInvokeBusyChangedListener((busy) => busyChanges.push(busy));
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-1',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: [] },
+    });
+
+    expect(hasInFlightRemoteInvokes()).toBe(true);
+    expect(busyChanges).toEqual([true]);
+    resolveInvoke?.(['s1']);
+    await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(false));
+    expect(busyChanges).toEqual([true, false]);
+    expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-1',
+      payload: { ok: true, result: ['s1'] },
+    });
+  });
+
+  it.each([
+    { channel: 'local-db:sessions:list', args: [] },
+    {
+      channel: 'local-db:sessions:get',
+      args: ['s1', DEVICE_LINK_RECONCILIATION_PROBE_MARKER],
+    },
+  ])(
+    '后台 $channel reconciliation 不持有更新 busy lease',
+    async ({ channel, args }) => {
+      remoteControlEnabled = true;
+      registry.register(channel, () => []);
+      const busyChanges: boolean[] = [];
+      setRemoteInvokeBusyChangedListener((busy) => busyChanges.push(busy));
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
+
+      feed({
+        v: 1,
+        kind: 'invoke',
+        id: `invoke-${channel}`,
+        src: 'ctrl-a',
+        payload: { channel, args },
+      });
+
+      await vi.waitFor(() =>
+        expect(calls.invokeResult).toContainEqual({
+          dst: 'ctrl-a',
+          requestId: `invoke-${channel}`,
+          payload: { ok: true, result: [] },
+        }),
+      );
+      expect(hasInFlightRemoteInvokes()).toBe(false);
+      expect(busyChanges).toEqual([]);
+    },
+  );
+
+  it('普通 sessions:get 交互读取仍持有更新 busy lease', async () => {
+    remoteControlEnabled = true;
+    let resolveInvoke: ((value: { id: string }) => void) | undefined;
+    registry.register(
+      'local-db:sessions:get',
+      () =>
+        new Promise<{ id: string }>((resolve) => {
+          resolveInvoke = resolve;
+        }),
+    );
+    const busyChanges: boolean[] = [];
+    setRemoteInvokeBusyChangedListener((busy) => busyChanges.push(busy));
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-interactive-get',
+      src: 'ctrl-a',
+      payload: { channel: 'local-db:sessions:get', args: ['s1'] },
+    });
+
+    expect(hasInFlightRemoteInvokes()).toBe(true);
+    expect(busyChanges).toEqual([true]);
+    resolveInvoke?.({ id: 's1' });
+    await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(false));
+    expect(busyChanges).toEqual([true, false]);
+    expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-interactive-get',
+      payload: { ok: true, result: { id: 's1' } },
+    });
+  });
+
+  it.each([
+    {
+      name: 'remote control disabled',
+      configure: () => {
+        remoteControlEnabled = false;
+      },
+      payload: { channel: 'maker:list-active', args: [] },
+    },
+    {
+      name: 'revoked controller',
+      configure: () => {
+        revokedControllers = ['ctrl-a'];
+      },
+      payload: { channel: 'maker:list-active', args: [] },
+    },
+    {
+      name: 'non-allowlisted channel',
+      configure: () => undefined,
+      payload: { channel: 'shell:open-path', args: [] },
+    },
+    {
+      name: 'malformed payload',
+      configure: () => undefined,
+      payload: undefined,
+    },
+  ])('被拒绝的 $name 不持有更新 busy lease', async ({ configure, payload }) => {
+    configure();
+    const busyChanges: boolean[] = [];
+    setRemoteInvokeBusyChangedListener((busy) => busyChanges.push(busy));
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: `invoke-rejected-${calls.invokeResult.length}`,
+      src: 'ctrl-a',
+      payload,
+    });
+
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(1));
+    expect(hasInFlightRemoteInvokes()).toBe(false);
+    expect(busyChanges).toEqual([]);
+  });
 });
 
 // ─── 订阅 registry + topic-scoped fan-out + set-* 持久化回流(push 驱动重构)──────
@@ -695,24 +848,140 @@ describe('被控端订阅 registry + topic 转发', () => {
     });
   });
 
-  it('纯 sessions viewer 也进入无人值守更新的远控 busy 集合并触发变更通知', () => {
+  it('空 subscribe 保留 legacy wildcard，现代有效 subscribe 替换它且重复 open 不恢复', () => {
     remoteControlEnabled = true;
-    const changes: ActiveController[][] = [];
-    setSubscribedControllersChangedListener((controllers) => changes.push(controllers));
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-modern',
+      src: 'ctrl-modern',
+      payload: {
+        controllerName: 'Modern',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+        capabilities: ['provider-logo-kinds-v2'],
+      },
+    });
+    expect(getUpdateRelaunchControllers()).toEqual([
+      { deviceId: 'ctrl-modern', name: 'Modern' },
+    ]);
+
+    feed(subFrame('ctrl-modern', SUB, ['*', 'garbage', 'session:', 'fs-watch:']));
+    expect(getUpdateRelaunchControllers()).toEqual([
+      { deviceId: 'ctrl-modern', name: 'Modern' },
+    ]);
+
+    feed(subFrame('ctrl-modern', SUB, ['sessions'], 'Modern'));
+
+    expect(dispatchTesting.getActiveControllers()).toEqual([]);
+    expect(dispatchTesting.getUpdateRelaunchControllers()).toEqual([]);
+    expect(dispatchTesting.controllerSupports(
+      'ctrl-modern',
+      'provider-logo-kinds-v2',
+    )).toBe(true);
+
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-modern-again',
+      src: 'ctrl-modern',
+      payload: {
+        controllerName: 'Modern renamed',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+        capabilities: ['provider-logo-kinds-v2'],
+      },
+    });
+    expect(dispatchTesting.getActiveControllers()).toEqual([]);
+    expect(dispatchTesting.getUpdateRelaunchControllers()).toEqual([]);
+    expect(dispatchTesting.controllerSupports(
+      'ctrl-modern',
+      'provider-logo-kinds-v2',
+    )).toBe(true);
+
+    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
+    tapWindowBroadcast('maker:event', { sessionId: 's1', event: {} });
+    expect(calls.push).toEqual([
+      {
+        dst: 'ctrl-modern',
+        channel: 'local-db:sessions:created',
+        payload: { sessionId: 's1' },
+      },
+    ]);
+
+    feed({
+      v: 1,
+      kind: 'link-close',
+      src: 'ctrl-modern',
+      payload: { reason: 'user' },
+    });
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-after-disconnect',
+      src: 'ctrl-modern',
+      payload: {
+        controllerName: 'Modern reconnect',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+    expect(getUpdateRelaunchControllers()).toEqual([
+      { deviceId: 'ctrl-modern', name: 'Modern reconnect' },
+    ]);
+  });
+
+  it('无人值守更新忽略纯 sessions viewer，但保护文件浏览和实际会话控制', () => {
+    remoteControlEnabled = true;
+    const changes: Array<{
+      controlled: ActiveController[];
+      updateBusy: ActiveController[];
+    }> = [];
+    setControllersChangedListener((controlled, updateBusy) =>
+      changes.push({ controlled, updateBusy }),
+    );
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);
 
     feed(subFrame('ctrl-empty', SUB, []));
     feed(subFrame('ctrl-invalid', SUB, ['*', 'garbage', 'session:', 'fs-watch:']));
-    expect(getSubscribedControllers()).toEqual([]);
+    expect(getActiveControllers()).toEqual([]);
 
     feed(subFrame('ctrl-viewer', SUB, ['sessions'], 'Viewer'));
 
     expect(getActiveControllers()).toEqual([]);
-    expect(getSubscribedControllers()).toEqual([
+    expect(getUpdateRelaunchControllers()).toEqual([]);
+    expect(changes.at(-1)).toEqual({ controlled: [], updateBusy: [] });
+
+    feed(subFrame('ctrl-viewer', SUB, ['fs-watch:/repo'], 'Viewer'));
+    expect(getActiveControllers()).toEqual([]);
+    expect(getUpdateRelaunchControllers()).toEqual([
       { deviceId: 'ctrl-viewer', name: 'Viewer' },
     ]);
-    expect(changes.at(-1)).toEqual([{ deviceId: 'ctrl-viewer', name: 'Viewer' }]);
+    expect(changes.at(-1)).toEqual({
+      controlled: [],
+      updateBusy: [{ deviceId: 'ctrl-viewer', name: 'Viewer' }],
+    });
+
+    feed(subFrame('ctrl-viewer', UNSUB, ['fs-watch:/repo']));
+    expect(getActiveControllers()).toEqual([]);
+    expect(getUpdateRelaunchControllers()).toEqual([]);
+    expect(changes.at(-1)).toEqual({ controlled: [], updateBusy: [] });
+
+    feed(subFrame('ctrl-viewer', SUB, ['session:s1'], 'Viewer'));
+    expect(getActiveControllers()).toEqual([
+      { deviceId: 'ctrl-viewer', name: 'Viewer' },
+    ]);
+    expect(getUpdateRelaunchControllers()).toEqual([
+      { deviceId: 'ctrl-viewer', name: 'Viewer' },
+    ]);
+    expect(changes.at(-1)).toEqual({
+      controlled: [{ deviceId: 'ctrl-viewer', name: 'Viewer' }],
+      updateBusy: [{ deviceId: 'ctrl-viewer', name: 'Viewer' }],
+    });
   });
 
   it('多控制端:各只收自己订阅 session 的 push', () => {

@@ -9,6 +9,7 @@ import {
   type MakerSessionAgentSwitchHandlerDeps,
   type PendingAgentSwitchIntent,
 } from '../sessionAgentSwitchHandler';
+import { createAgentHandoffPendingRegistry } from '../agentHandoff';
 import { MAKER_INVOKE } from '../channels';
 import { IpcHarness } from './helpers/ipcHarness';
 
@@ -659,6 +660,7 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
     expect(deps.setPendingHandoff).toHaveBeenLastCalledWith(
       's1',
       expect.stringContaining('最早的问题'),
+      undefined,
     );
   });
 
@@ -672,5 +674,26 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
     expect(bootstrap).toHaveBeenCalledTimes(2);
     const lastPending = vi.mocked(deps.setPendingHandoff).mock.calls.at(-1)![1];
     expect(lastPending).toContain('最早的问题');
+  });
+
+  it('回落覆盖走真实 registry:第二次写入不被自己先前那次的代次挡掉', async () => {
+    // mock deps 的 setPendingHandoff 不带代次语义,挡不住这个回归:同一流程内第一次
+    // 写入会 bump 代次,第二次若仍拿最初的代次就会被 registry 静默丢弃,引擎只剩缺
+    // 早期历史的增量交接。这里接真 registry 验证最终留下的是全量交接。
+    const registry = createAgentHandoffPendingRegistry(async () => null);
+    const bootstrap = vi.fn(async () => {
+      throw new Error('spawn failed');
+    });
+    const { deps } = makeResumeDeps({
+      bootstrapSwitchedSession: bootstrap,
+      setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
+        registry.set(sessionId, handoff, expectedGeneration),
+      readPendingHandoffGeneration: (sessionId) => registry.readGeneration(sessionId),
+    });
+
+    await performSessionAgentSwitch(deps, validParams);
+
+    const pending = await registry.peek('s1');
+    expect(pending).toContain('最早的问题');
   });
 });

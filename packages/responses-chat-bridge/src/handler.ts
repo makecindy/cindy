@@ -130,6 +130,11 @@ export function createResponsesChatHandler(
           onDroppedTool: (type, index) => {
             log.warn?.('responses-chat bridge dropped non-function tool', { type, index });
           },
+          onDroppedInputItem: (type, index) => {
+            // tool_search_* 是 Codex 每轮重放的历史内建 item，属于预期兼容路径，
+            // 不发 warn 避免随会话长度二次增长日志。
+            log.debug?.('responses-chat bridge dropped built-in input item', { type, index });
+          },
         });
       } catch (error) {
         if (error instanceof UnsupportedResponsesFeatureError) {

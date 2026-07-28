@@ -19,17 +19,24 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     const bootstrap = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8');
 
     expect(bootstrap).toMatch(/import \{[^}]*\binitDeviceLinkService\b[^}]*\} from '\.\/device-link';/);
-    expect(bootstrap).toContain('initDeviceLinkService();');
-    expect(bootstrap.indexOf('initDeviceLinkService();')).toBeLessThan(
-      bootstrap.indexOf('registerDeviceLinkIpc();'),
-    );
+    const serviceInit = bootstrap.search(/\binitDeviceLinkService\s*\(\s*\{/);
+    const ipcRegistration = bootstrap.search(/\bregisterDeviceLinkIpc\s*\(\s*\)\s*;/);
+    expect(serviceInit).toBeGreaterThanOrEqual(0);
+    expect(ipcRegistration).toBeGreaterThanOrEqual(0);
+    expect(serviceInit).toBeLessThan(ipcRegistration);
   });
 
   it('wires the DeviceLinkClient inbound frames into controlled-desktop dispatch', () => {
     const deviceLinkHost = readFileSync(resolve(mainRoot, 'device-link/index.ts'), 'utf8');
 
     expect(deviceLinkHost).toContain('wireInboundDispatch,');
-    expect(deviceLinkHost).toContain('wireInboundDispatch(client);');
+    const listenerRegistration = deviceLinkHost.search(
+      /\bsetControllersChangedListener\s*\(\s*\(\s*controllers\s*,\s*updateRelaunchControllers\s*\)\s*=>/,
+    );
+    const inboundWiring = deviceLinkHost.search(/\bwireInboundDispatch\s*\(\s*client\s*\)\s*;/);
+    expect(listenerRegistration).toBeGreaterThanOrEqual(0);
+    expect(inboundWiring).toBeGreaterThanOrEqual(0);
+    expect(listenerRegistration).toBeLessThan(inboundWiring);
   });
 
   it('replays desktop subscriptions when a remote device becomes controllable again', () => {

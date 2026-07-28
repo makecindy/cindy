@@ -4805,6 +4805,7 @@
         "label": "Switched from {{from}} to {{to}}",
         "toggleHint": "View handoff context",
         "handoffTitle": "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)",
+        "handoffTitleEnglishSource": "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)",
         "resumedBadge": "session resumed"
       }
     },

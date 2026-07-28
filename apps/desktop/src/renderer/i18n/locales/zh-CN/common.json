@@ -4803,7 +4803,8 @@
       "agentSwitch": {
         "label": "已从 {{from}} 切换到 {{to}}",
         "toggleHint": "查看交接内容",
-        "handoffTitle": "交接内容——切换时发送给新引擎的上下文摘要，原文为英文(不计入对话记录，仅在此展示)",
+        "handoffTitle": "交接内容——切换时发送给新引擎的上下文摘要(不计入对话记录，仅在此展示)",
+        "handoffTitleEnglishSource": "交接内容——切换时发送给新引擎的上下文摘要，原文为英文(不计入对话记录，仅在此展示)",
         "resumedBadge": "已续接原对话"
       }
     },

@@ -144,6 +144,7 @@ import {
 } from './updateService';
 import {
   createUpdatePresentationRecoveryController,
+  decideUpdateRelaunchBusyTransition,
   hasUpdateRelaunchBusyActivity,
   isMacOSUpdateRelaunch,
   readUpdateRelaunchScheduleBusy,
@@ -270,9 +271,9 @@ import { WindowManualDragController } from './windowManualDrag';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import { initDeviceLinkService, releaseDeviceLinkOwnershipBeforeLogout } from './device-link';
 import {
-  getSubscribedControllers,
+  getUpdateRelaunchControllers,
+  hasInFlightRemoteInvokes,
   setSessionsSubscribedListener,
-  setSubscribedControllersChangedListener,
 } from './device-link/dispatch';
 import {
   registerDeviceLinkIpc,
@@ -2392,9 +2393,6 @@ const registerIpcHandlers = () => {
   setSessionsSubscribedListener(() => {
     getAgentIslandService()?.replaySessionActivity();
   });
-  setSubscribedControllersChangedListener(() => {
-    notifyUpdateAutoRelaunchBusyStateChanged();
-  });
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。
   ipcMain.handle(MAKER_IPC_INVOKE.OPEN_SESSION_IN_NEW_WINDOW, (_e, sessionId: unknown) => {
@@ -3544,12 +3542,14 @@ const registerIpcHandlers = () => {
     // 由 prepareCodexExtraSpawnConfig 懒启动(幂等);此处不再按全局开关 eager-start。
     try {
       setUpdateAutoRelaunchBusyProbe(async () => {
-        // A remote operator may be reading the UI without an active agent turn.
-        // Treat any subscribed view/control session as busy so unattended
-        // relaunch cannot cut the only path back into a home-server install.
+        // A remote operator may be viewing a live session or file tree without an agent turn.
+        // Keep those paths alive, but do not let the lightweight `sessions` list subscription
+        // held by every eligible device block updates forever.
         return hasUpdateRelaunchBusyActivity({
           readSynchronousBusy: () =>
-            getSubscribedControllers().length > 0 || anySessionInTurn(getMakerCore()),
+            getUpdateRelaunchControllers().length > 0 ||
+            hasInFlightRemoteInvokes() ||
+            anySessionInTurn(getMakerCore()),
           readScheduleBusy: () => readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
         });
       });
@@ -5589,7 +5589,17 @@ app.on('ready', async () => {
   // 在线人数心跳:App 启动即上报,内部走 deviceId / userId 兜底,登录前后都活
   initHeartbeatService();
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
-  initDeviceLinkService();
+  let updateRelaunchRemoteBusy = false;
+  initDeviceLinkService({
+    onUpdateRelaunchBusyChanged: (busy) => {
+      const transition = decideUpdateRelaunchBusyTransition(
+        updateRelaunchRemoteBusy,
+        busy,
+      );
+      updateRelaunchRemoteBusy = transition.nextBusy;
+      if (transition.shouldNotify) notifyUpdateAutoRelaunchBusyStateChanged();
+    },
+  });
   registerDeviceLinkIpc();
   // 注:invoke-capture 自检(assertCaptureHealthy)不在这里——maker:create-session / maker:send
   // 由 splash 后的 registerMakerIpcsAfterSplash 延迟注册,此刻尚未注册。自检已挪到该函数末尾
