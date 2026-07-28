@@ -451,15 +451,14 @@ function ScanSummary({ scan }: { scan: ScanResult }) {
 
 function SummaryCell({ label, value, hint }: { label: string; value: number; hint: string }) {
   return (
-    <div
-      title={hint}
-      className="flex min-w-0 items-baseline gap-2 rounded-xl border border-[var(--settings-input-border)] px-3 py-2"
-    >
-      <p className="shrink-0 text-18 font-medium tabular-nums text-[var(--settings-section-title)]">
-        {value}
-      </p>
-      <p className="truncate text-11 text-[var(--settings-section-desc)]">{label}</p>
-      <span className="sr-only">{hint}</span>
+    <div className="min-w-0 rounded-xl border border-[var(--settings-input-border)] px-3 py-2">
+      <div className="flex min-w-0 items-baseline gap-2">
+        <p className="shrink-0 text-18 font-medium tabular-nums text-[var(--settings-section-title)]">
+          {value}
+        </p>
+        <p className="truncate text-11 text-[var(--settings-section-desc)]">{label}</p>
+      </div>
+      <p className="mt-1 text-11 leading-[1.4] text-[var(--settings-section-desc)]">{hint}</p>
     </div>
   );
 }

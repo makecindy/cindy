@@ -71,6 +71,14 @@ describe('SessionImportSection initial scan', () => {
     );
   });
 
+  it('keeps scan summary explanations visible instead of relying on pointer-only title tooltips', () => {
+    expect(source).toContain(
+      'className="mt-1 text-11 leading-[1.4] text-[var(--settings-section-desc)]">{hint}</p>',
+    );
+    expect(source).not.toContain('title={hint}');
+    expect(source).not.toContain('className="sr-only">{hint}</span>');
+  });
+
   it('surfaces selections hidden by the current filters next to the import button', () => {
     expect(source).toContain('const hiddenSelectedCount = selectedItems.length - visibleSelectedCount;');
     expect(source).toMatch(
