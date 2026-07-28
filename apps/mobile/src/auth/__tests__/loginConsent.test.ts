@@ -163,48 +163,16 @@ describe('login.tsx 接线(源码断言)', () => {
     expect(loginSource).toMatch(/Keyboard\.dismiss\(\);[\s\S]{0,400}?setConsentDialogOpen\(true\)/);
   });
 
-  it('协议行 + 弹窗已挂载;安全区抬升含协议行溢出量', () => {
+  it('协议行 + 弹窗已挂载;安全区抬升含协议行溢出量;手机端无游客入口', () => {
     expect(loginSource).toContain('<LoginConsentRow');
     expect(loginSource).toContain('<LoginConsentDialog');
     expect(loginSource).toContain('LOGIN_CONSENT_ROW.bottomOverflow');
     expect(loginSource).toContain("loginText('consentStatement')");
-  });
-
-  /*
-   * 本用例**取代**原「手机端无游客入口」反向断言(旧断言:loginSource 不得出现
-   * authEnterLocal / localModeEntry / GuestGlyph,锁 2026-07-24 拍板「手机/pad 为远程
-   * 连接客户端必须有账号」)。
-   *
-   * 改写依据:**产品拍板 2026-07-27** —— 用户明确要求所有端都有「跳过登录」,且登录
-   * 改版新稿的 iPhone frame(figma 705:1068/1069)已在面板内画出该按钮。旧拍板作废。
-   *
-   * 新断言的意图是两件事,不是某个字面量的有无:
-   *  ① 手机端**存在**「跳过登录」入口(面板内文字按钮 + 无账号进主界面通路);
-   *  ② 该入口**不过协议门**(不弹协议弹窗、不需勾选 radio),而其余个人登录链路的
-   *     协议门保持不变(上面 requireConsent 的 5 个发起点断言仍然生效)。
-   * 若将来实现改名,请连同意图一起核对,**不要**用换字面量的方式让断言过关。
-   */
-  it('「跳过登录」入口存在且不过协议门(产品拍板 2026-07-27 取代 07-24「手机必须有账号」)', () => {
-    // ① 入口挂在 identifier 主视图的面板内,文案走 4 语 catalog 新 key
-    expect(loginSource).toContain('<LoginSkipLoginLink');
-    expect(loginSource).toContain("loginText('skipLogin')");
-    expect(loginSource).toContain('testID="login.skipLoginButton"');
-    // ② 处理函数直接进无账号态,不经 requireConsent
-    const handlerStart = loginSource.indexOf('const skipLogin = () => {');
-    expect(handlerStart).toBeGreaterThan(0);
-    const handlerBody = loginSource.slice(
-      handlerStart,
-      loginSource.indexOf('\n  };', handlerStart),
-    );
-    // 2026-07-27 P1:派发经 skipLoginGate 的 in-flight 门(门本身的行为测试在
-    // loginSkipLocalMode.test.ts),但仍然只进无账号态、不经协议门。
-    expect(handlerBody).toContain('enterLocalMode: auth.enterLocalMode');
-    expect(handlerBody).not.toContain('requireConsent');
-    // ② 续:入口 JSX 自身也不套 requireConsent(onPress 直接指向 skipLogin)
-    const jsxStart = loginSource.indexOf('<LoginSkipLoginLink');
-    const jsxBlock = loginSource.slice(jsxStart, loginSource.indexOf('/>', jsxStart));
-    expect(jsxBlock).toContain('onPress={skipLogin}');
-    expect(jsxBlock).not.toContain('requireConsent');
+    // 手机/pad 为远程连接客户端,必须有账号——不加游客登录(产品拍板 2026-07-24;
+    // 断言不存在游客入口的具体接线:本地模式 IPC / 游客文案 key / 游客图标)
+    expect(loginSource).not.toContain('authEnterLocal');
+    expect(loginSource).not.toContain('localModeEntry');
+    expect(loginSource).not.toContain('GuestGlyph');
   });
 
   it('协议链接经 Linking.openURL 打开(settings.tsx 同款模式)', () => {
@@ -219,10 +187,9 @@ describe('consent radio 无障碍(codex P1 双修:读屏标签 + 44pt 触摸区)
     // 视觉几何冻结:圈体/槽位不随命中区扩大而变
     expect(radio.hitSize).toBe(24);
     expect(radio.ringSize).toBe(20);
-    // 右下锚定不变式:行容器向上扩、底边恒 682(= 组高 620 + bottomOverflow 62;
-    // 2026-07-27 面板 440→500 后组高 560→620),命中区完整落在父容器 flowBottom
-    // bounds 内(Android 界外不派发)
-    expect(LOGIN_CONSENT_ROW.y + LOGIN_CONSENT_ROW.height).toBe(620 + LOGIN_CONSENT_ROW.bottomOverflow);
+    // 右下锚定不变式:行容器向上扩、底边恒 622(= 组高 560 + bottomOverflow 62),
+    // 命中区完整落在父容器 flowBottom bounds 内(Android 界外不派发)
+    expect(LOGIN_CONSENT_ROW.y + LOGIN_CONSENT_ROW.height).toBe(560 + LOGIN_CONSENT_ROW.bottomOverflow);
     expect(radio.pressSize).toBeLessThanOrEqual(LOGIN_CONSENT_ROW.y + LOGIN_CONSENT_ROW.height);
   });
 

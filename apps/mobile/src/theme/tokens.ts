@@ -634,11 +634,10 @@ export const loginSizes = {
   stageTallHeight: 1624,
   stageShortHeight: 1334,
   panelWidth: 680,
-  /** 面板高(2026-07-27 登录改版:440→500,新增面板内「跳过登录」槽 430..490 + 底距 10;figma 705:1062) */
-  panelHeight: 500,
+  panelHeight: 440,
   panelRadius: 36,
-  /** 面板 500 + gap 40 + 圆钮行 80 */
-  flowHeight: 620,
+  /** 面板 440 + gap 40 + 圆钮行 80 */
+  flowHeight: 560,
   controlWidth: 540,
   controlHeight: 80,
   controlRadius: 40,

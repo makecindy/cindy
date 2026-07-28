@@ -69,20 +69,17 @@ function NavigationGate() {
     if (auth.initialized) releaseSplash();
   }, [auth.initialized, releaseSplash]);
 
-  // 路由门 = 「有账号 ∨ 已跳过登录」(产品拍板 2026-07-27:手机端新增无账号进主界面
-  // 通路)。isLocalMode 只放行路由,不伪造登录态——业务侧仍看 isAuthenticated。
-  const canEnterApp = auth.isAuthenticated || auth.isLocalMode;
   useEffect(() => {
     if (!auth.initialized) return;
     const inAuthGroup = segments[0] === '(auth)';
-    if (!canEnterApp && !inAuthGroup) {
+    if (!auth.isAuthenticated && !inAuthGroup) {
       router.replace('/login');
       return;
     }
-    if (canEnterApp && inAuthGroup) {
+    if (auth.isAuthenticated && inAuthGroup) {
       router.replace('/');
     }
-  }, [auth.initialized, canEnterApp, router, segments]);
+  }, [auth.initialized, auth.isAuthenticated, router, segments]);
 
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.accountDeletionRestored) return;
@@ -139,13 +136,10 @@ function AuthHandoffBridge() {
   const auth = useAuth();
   const handoff = useLoginHandoff();
   const dispatch = handoff.dispatch;
-  // 「跳过登录」态与已登录同属 handoff 的**直入分支**:登录页不会挂载,readiness
-  // 不能再等 panel-mounted(否则冷启动进主界面时 handoff 永远停在 splash 相)。
-  const authenticated = auth.isAuthenticated || auth.isLocalMode;
   useEffect(() => {
     if (!auth.initialized) return;
-    dispatch({ type: 'auth-init', authenticated });
-  }, [auth.initialized, authenticated, dispatch]);
+    dispatch({ type: 'auth-init', authenticated: auth.isAuthenticated });
+  }, [auth.initialized, auth.isAuthenticated, dispatch]);
   return null;
 }
 

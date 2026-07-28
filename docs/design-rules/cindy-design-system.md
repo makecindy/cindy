@@ -15,6 +15,7 @@
 
 ## 版本记录
 
+- **2026-07-28（勘误：手机端跳过登录剥离）**：手机端「跳过登录」与无账号通路整体从登录改版中剥离（2026-07-24「手机 / pad 必须有账号」拍板仍有效，07-27 的推翻缺产品侧确认）；手机端只保留纯视觉改版（品牌簇新稿基准 + 避脸），面板 / 组高 / 圆钮行 / 协议行 / error 槽 / 键盘停靠锚全部回到 main 等价值。`DESIGN.md §16` 末尾新增勘误块界定「哪些值只对桌面成立」，详情与依据归档至 [`design-decision-log.md`](./design-decision-log.md)「2026-07-28」条。
 - **2026-07-27（登录改版：面板 500 + 跳过登录）**：`DESIGN.md §16` 几何表换新值（面板 440→500、登录组 560→620、圆钮行 y 480→540、协议行 y 582→642、error 槽回 680×50@380、新增「跳过登录」槽 680×60@430）+ 新增 §16.3「登录文字按钮」组件规格 + §16.4 协议门过门点与豁免表 + §16.2 移动端 stage 几何与键盘停靠锚；`figma-component-spec.md` 新增 §12（wave6 新稿 `700:783` / `705:799` / `705:915` 读取记录、跳过登录逐值规格、新旧稿差异、UNKNOWN 清单）；`token-decision-table.md` §3/§4 改值并登记跳过登录尺寸族（色源复用 `--login-secondary-text`，零新增颜色 token）；被推翻的两条 2026-07-24 产品拍板（游客过协议门 / 手机必须有账号）与 pad 竖屏推导值归档至 [`design-decision-log.md`](./design-decision-log.md)「2026-07-27」条。
 - **2026-07-26**：`DESIGN.md §10` 新增「External Theme Import (VSCode / Obsidian)」小节——外部主题导入只映射从 7 个人工移植社区主题抽出的 91-token 模板、语义豁免族（`--login-*` / 危险红 / 警告橙 / 焦点蓝 / `--diff-*`）不参与导入、`-hsl` token 精确换算、新增 `--md-h1-fg`…`--md-h6-fg` / `--md-strong-fg`（默认 `inherit`，内置主题观感不变）、本地主题可选 `family` 字段。决策理由与取舍见 [`design-decision-log.md`](./design-decision-log.md) 2026-07-26 条。
 - **2026-07-24（梳理批次 1）**：`DESIGN.md` 整体梳理第一批落地——去除 Ollama 官网叙事（标题改 `Cindy Design System`，§1/§4/§5/§8/§9 重写或删除官网内容）；focus ring 文档追平代码（`#3b82f6` → `#417CDD`）；§2/§9 二级三级文字与 chip 双 slot 表述按 `colors.ts` 修正；§10 移除写死 token 计数与过时豁免行；§12 结构化规格并入 §4（§12 编号留占位）；§13 G1–G4 归档至新建 [`design-decision-log.md`](./design-decision-log.md)；§14/§15/§16 若干失效指向修正。

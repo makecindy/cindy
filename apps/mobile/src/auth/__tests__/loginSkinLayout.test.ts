@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 /**
@@ -14,14 +12,7 @@ vi.mock('expo-localization', () => ({
 import {
   createResendDeadline,
   formatResendCountdown,
-  LOGIN_CONSENT_ROW,
-  LOGIN_CONTROL,
   LOGIN_DELETION_BUBBLE,
-  LOGIN_ERROR_TEXT,
-  LOGIN_GROUP,
-  LOGIN_KEYBOARD_DOCK_ANCHOR_Y,
-  LOGIN_SKIP_LOGIN,
-  LOGIN_SOCIAL,
   LOGIN_STAGE_LONG,
   LOGIN_STAGE_SHORT,
   PAD_LANDSCAPE_MIN_SCALE,
@@ -35,7 +26,6 @@ import {
   type LoginStageBox,
 } from '@/auth/loginSkinLayout';
 import { loginMessages } from '@/auth/loginMessages';
-import { loginSizes } from '@/theme/tokens';
 
 function expectBox(actual: LoginStageBox, expected: LoginStageBox) {
   expect(actual.x).toBeCloseTo(expected.x, 6);
@@ -55,7 +45,7 @@ describe('loginSkin 750 stage 布局引擎', () => {
     expect(resolveLoginStage(750, 2000).designHeight).toBe(1800);
   });
 
-  it('短屏档 1334:cindy/slogan/word/loginY 逐字段等于登录改版新稿 figma 705:915 实测值', () => {
+  it('短屏档 1334:品牌簇逐字段等于登录改版新稿 figma 705:915 实测值;loginY 仍是 main 的 694', () => {
     const layout = resolveLoginStage(375, 667); // scale 0.5 → dh 1334
     expect(layout.designHeight).toBe(1334);
     // 立绘 599×720 @(75,60)(新稿 hero y=87,2026-07-27 用户拍板方案 B 再上移 27 避脸)
@@ -64,11 +54,11 @@ describe('loginSkin 750 stage 布局引擎', () => {
     expectBox(layout.slogan, { x: 462.55, y: 408.37, w: 254.01, h: 72.8 });
     // 字标图像框 = 主容器 @(35,422) + WORD_MARK 内字标 @(173,65) = (208,487),335×115
     expectBox(layout.word, { x: 208, y: 487, w: 335, h: 115 });
-    // Log_in 组顶 = 主容器 422 + 组在主容器内 200
-    expect(layout.loginY).toBe(622);
+    // 功能区落位不随本轮视觉改版变化(面板几何 = main:组高 560 + 底距,2026-07-24 拍板)
+    expect(layout.loginY).toBe(694);
   });
 
-  it('长屏档 1624:新稿 figma 705:799 逐字段命中(hero y=106,面板 500 后组顶 827)', () => {
+  it('长屏档 1624:新稿 figma 705:799 品牌簇逐字段命中(hero y=106);loginY 仍是 main 的 933', () => {
     const layout = resolveLoginStage(375, 812); // scale 0.5 → dh 1624
     expect(layout.designHeight).toBe(1624);
     expectBox(layout.cindy, { x: 0, y: 106, w: 750, h: 902 });
@@ -77,7 +67,7 @@ describe('loginSkin 750 stage 布局引擎', () => {
     expectBox(layout.slogan, { x: 444.9, y: 568, w: 269.66, h: 77.29 });
     // 字标 = 主容器 @(35,627) + 字标 @(147,42.17) = (182,669.17),387×132.18
     expectBox(layout.word, { x: 182, y: 669.17, w: 387, h: 132.18 });
-    expect(layout.loginY).toBe(827);
+    expect(layout.loginY).toBe(933);
   });
 
   it('两档间 lerp:designHeight=1479 中点全字段线性插值(含 loginY)', () => {
@@ -87,7 +77,7 @@ describe('loginSkin 750 stage 布局引擎', () => {
     // slogan y 中点 = (408.37 + 568)/2(2026-07-27 LONG 档下移避脸后)
     expectBox(layout.slogan, { x: 453.725, y: 488.185, w: 261.835, h: 75.045 });
     expectBox(layout.word, { x: 195, y: 578.085, w: 361, h: 123.59 });
-    expect(layout.loginY).toBeCloseTo(724.5, 6);
+    expect(layout.loginY).toBeCloseTo(813.5, 6);
   });
 
   it('两档外超长:designHeight clamp 1800 → t=1 长屏几何原样', () => {
@@ -99,11 +89,10 @@ describe('loginSkin 750 stage 布局引擎', () => {
     expect(layout.loginY).toBe(LOGIN_STAGE_LONG.loginY);
   });
 
-  it('两档外短屏:功能区优先 v 压缩视觉区,loginY=max(0,dh-712)(2026-07-27 面板增高:dh-640→dh-712,dh=1334 边界与 SHORT.loginY=622 连续)', () => {
+  it('两档外短屏:功能区优先 v 压缩视觉区,loginY=max(0,dh-640)(2026-07-24 拍板上移 40:dh-600→dh-640,dh=1334 边界与 SHORT.loginY=694 连续)', () => {
     // dh=1000:v=(1000-600)/734≈0.5449591;视觉区以 (375,0) 为锚缩放(v 公式不动)
     const layout = resolveLoginStage(750, 1000);
-    // 712 = 组底 682(组高 620 + 协议行溢出 62)+ 新稿底距 30
-    expect(layout.loginY).toBe(288);
+    expect(layout.loginY).toBe(360);
     expectBox(layout.cindy, {
       x: 211.51226158038146,
       y: 32.697547683923706,
@@ -118,15 +107,7 @@ describe('loginSkin 750 stage 布局引擎', () => {
     expect(LOGIN_STAGE_SHORT.cindy).toEqual({ x: 75, y: 60, w: 599, h: 720 });
   });
 
-  it('新稿底距不变式:两档组底 = designHeight − 30(短屏)/ 在屏内(长屏),字标框底不压面板顶', () => {
-    // 组底 = loginY + 组底 682(组高 620 + 协议行溢出 62)
-    const flowBottom = 682;
-    // 短屏 1334:1304,距屏底 30(= 新稿服务条款距屏底实测)
-    expect(LOGIN_STAGE_SHORT.loginY + flowBottom).toBe(1304);
-    expect(LOGIN_STAGE_SHORT.designHeight - (LOGIN_STAGE_SHORT.loginY + flowBottom)).toBe(30);
-    // 长屏 1624:1509,距屏底 115(新稿实测)
-    expect(LOGIN_STAGE_LONG.loginY + flowBottom).toBe(1509);
-    expect(LOGIN_STAGE_LONG.designHeight - (LOGIN_STAGE_LONG.loginY + flowBottom)).toBe(115);
+  it('品牌簇不重叠不变式:字标框底不压面板顶、slogan 不压字标(两档)', () => {
     // 字标可见框底 < 面板顶:两档都留正间距(面板不透明,压上去会盖住字标)
     expect(LOGIN_STAGE_SHORT.word.y + LOGIN_STAGE_SHORT.word.h).toBeLessThan(
       LOGIN_STAGE_SHORT.loginY,
@@ -159,59 +140,6 @@ describe('loginSkin 750 stage 布局引擎', () => {
     expect(visibleHairTop).toBeGreaterThan(115.67);
     // 长屏档立绘不跟着动(新稿实测值)
     expect(LOGIN_STAGE_LONG.cindy.y).toBe(106);
-  });
-});
-
-describe('loginSkin 面板内几何(2026-07-27 面板 440→500 + 「跳过登录」槽;figma 705:1062/1067/1068)', () => {
-  it('面板 500 / 组 620 / 圆钮行 540 / 协议行 642 派生关系自洽', () => {
-    expect(loginSizes.panelHeight).toBe(500);
-    // 组高 = 面板 500 + gap 40 + 圆钮行 80
-    expect(loginSizes.flowHeight).toBe(620);
-    expect(LOGIN_GROUP.height).toBe(loginSizes.flowHeight);
-    // 圆钮行接面板底 + 40 gap
-    expect(LOGIN_SOCIAL.y).toBe(loginSizes.panelHeight + loginSizes.panelSocialGap);
-    // 协议行接圆钮行底 + 22(新稿 705:1075:主容器 y=842 = 组内 642)
-    expect(LOGIN_CONSENT_ROW.y).toBe(LOGIN_SOCIAL.y + LOGIN_SOCIAL.size + 22);
-    // 协议行底 = 组高 + 溢出量(安全区抬升按此预留)
-    expect(LOGIN_CONSENT_ROW.y + LOGIN_CONSENT_ROW.height).toBe(
-      loginSizes.flowHeight + LOGIN_CONSENT_ROW.bottomOverflow,
-    );
-  });
-
-  it('error 槽(380..430)与「跳过登录」槽(430..490)首尾相接、同时可见不重叠,槽底距面板底 10', () => {
-    // error 槽顶不动(接主按钮底),高 60→50
-    expect(LOGIN_ERROR_TEXT.y).toBe(LOGIN_CONTROL.buttonY + LOGIN_CONTROL.height);
-    expect(LOGIN_ERROR_TEXT.height).toBe(50);
-    // 跳过登录槽紧接 error 槽底,680×60
-    expect(LOGIN_SKIP_LOGIN.y).toBe(LOGIN_ERROR_TEXT.y + LOGIN_ERROR_TEXT.height);
-    expect(LOGIN_SKIP_LOGIN.y).toBe(430);
-    expect(LOGIN_SKIP_LOGIN.width).toBe(loginSizes.panelWidth);
-    expect(LOGIN_SKIP_LOGIN.height).toBe(60);
-    // 槽底 490,距面板底 10(新稿面板下内边距)
-    expect(loginSizes.panelHeight - (LOGIN_SKIP_LOGIN.y + LOGIN_SKIP_LOGIN.height)).toBe(10);
-    // 文本规格:24 Regular,行框 29(稿内文本 96×29)
-    expect(LOGIN_SKIP_LOGIN.font).toBe(24);
-    expect(LOGIN_SKIP_LOGIN.lineHeight).toBe(29);
-    // 命中区:文字按钮(非文字链接),可点区 = 当前语言实际文字宽 + 左右各 50 设计px
-    // (用户 2026-07-27 拍板,原 30 作废);扩张后仍在 680 槽宽内 —— 以最长语言
-    // ja「ログインをスキップ」9 全角 ×24 ≈ 216 估宽算,216+100=316 < 680
-    expect(LOGIN_SKIP_LOGIN.pressPadX).toBe(50);
-    expect(216 + LOGIN_SKIP_LOGIN.pressPadX * 2).toBeLessThan(LOGIN_SKIP_LOGIN.width);
-  });
-
-  it('键盘停靠锚 = error 槽底 430(用户 2026-07-27 拍板;不再用面板底 500)', () => {
-    expect(LOGIN_KEYBOARD_DOCK_ANCHOR_Y).toBe(430);
-    expect(LOGIN_KEYBOARD_DOCK_ANCHOR_Y).toBe(
-      LOGIN_ERROR_TEXT.y + LOGIN_ERROR_TEXT.height,
-    );
-    // 锚在 error 槽底 = 停靠时错误文案完整露出(与改版前面板底 440 同语义);
-    // 面板底(500)比锚低 70 设计px,新增的「跳过登录」槽允许被键盘遮挡
-    expect(loginSizes.panelHeight - LOGIN_KEYBOARD_DOCK_ANCHOR_Y).toBe(70);
-    expect(LOGIN_KEYBOARD_DOCK_ANCHOR_Y).toBeLessThan(loginSizes.panelHeight);
-    // 锚必须落在面板内、且不高于主按钮底(否则主按钮会被键盘压住)
-    expect(LOGIN_KEYBOARD_DOCK_ANCHOR_Y).toBeGreaterThanOrEqual(
-      LOGIN_CONTROL.buttonY + LOGIN_CONTROL.height,
-    );
   });
 });
 
@@ -279,21 +207,18 @@ describe('loginSkin §3.6 平板/横竖屏 surface 构图(PR4b Step 5b.3;adaptat
     expect(resolveLoginSurfaceMode(699, 1000)).toBe('phone');
   });
 
-  it('竖屏 scale = min(w/744, h/1133) 等比居中;loginGroupScale=0.794117;splashOffset=206(面板增高后簇上移 47.647,splash 位不变)', () => {
+  it('竖屏 scale = min(w/744, h/1133) 等比居中;loginGroupScale=0.794117;splashOffset=158', () => {
     const s = resolveLoginSurface(744, 1133);
     expect(s.mode).toBe('pad-portrait');
     expect(s.scale).toBeCloseTo(1, 10);
     expect(s.offsetX).toBeCloseTo(0, 6);
     expect(s.offsetY).toBeCloseTo(0, 6);
     expect(s.loginGroupScale).toBeCloseTo(0.794117, 6);
-    // 2026-07-27 面板增高:品牌簇 + 登录组同量上移 60×0.794117 = 47.64702,
-    // splashOffset 158→206 使 splash 期簇位保持不变(word.y + splashOffset ≈ 672)
-    expect(s.splashOffset).toBe(206);
-    expect(s.word.y + s.splashOffset).toBeCloseTo(672.46, 2);
-    // 组底(含协议行)仍落 1114.94:与改版前逐像素一致,消费端 lift 不被触发放大
-    expect(s.loginY + 682 * s.loginGroupScale).toBeCloseTo(1114.94, 2);
-    // 字标框底↔面板顶间距不变(14.84):增高不许把面板顶推到字标上
-    expect(s.loginY - (s.word.y + s.word.h)).toBeCloseTo(14.84, 2);
+    // pad 帧未参与本轮视觉改版(新稿没有 pad frame):品牌簇与登录组几何、splash 偏移
+    // 全部保持 main 原值。
+    expect(s.splashOffset).toBe(158);
+    // 组底(含协议行溢出 62)落 1114.94,在 stage 1133 内 → 消费端安全区抬升不被触发
+    expect(s.loginY + 622 * s.loginGroupScale).toBeCloseTo(1114.94, 2);
     expect(s.phone).toBeNull();
     // 更矮视口按高度等比缩(w 定 744,h=1000<1133 → scale=min(1,0.8826)=0.8826)
     const tall = resolveLoginSurface(744, 1000);
@@ -308,9 +233,8 @@ describe('loginSkin §3.6 平板/横竖屏 surface 构图(PR4b Step 5b.3;adaptat
     expect(base.scale).toBeCloseTo(1, 10);
     expect(base.loginGroupScale).toBeCloseTo(0.655357, 6);
     expect(base.splashOffset).toBe(0);
-    // 面板增高后横屏组底 774.95 仍在 stage 820 内(底距 45.05)→ 几何原值不动
-    expect(base.loginY + 682 * base.loginGroupScale).toBeCloseTo(774.95, 2);
-    expect(base.loginY + 682 * base.loginGroupScale).toBeLessThan(820);
+    // 横屏组底(含协议行溢出)仍在 stage 820 内 → 几何原值不动
+    expect(base.loginY + 622 * base.loginGroupScale).toBeLessThan(820);
     expect(base.phone).toBeNull();
     // raw<0.85 → 钳到 0.85 下限(§3.6 条3 仅下限;w≥1000∧h≥690∧landscape 命中 pad-landscape 但 raw<0.85)
     const floor = resolveLoginSurface(1100, 690); // min(1100/1180,690/820)=min(0.9322,0.8415)=0.8415
@@ -448,49 +372,3 @@ describe('loginSkin 注销提示气泡浮层布局(figma 678:1075;**stage 设计
   });
 });
 
-/**
- * 「跳过登录」文字按钮的防御性截断契约(DESIGN.md §16.3,修 final-review P1-2)。
- *
- * 组件依赖 RN 运行时、makeStyles 未导出,node vitest 下沿用仓内读源码断言(loginConsent
- * 同款)。锁的是意图:热区仍随语言 shrink-to-fit,但**含 padding 不得越 680 槽** ——
- * 超预算译文走单行 tail ellipsis,而不是被面板 overflow:hidden 静默裁边(可见省略号
- * = 文案 bug,改文案不改布局)。
- */
-describe('LoginSkipLoginLink 防御性截断(桌面 LoginSkipEntry 同款)', () => {
-  const controlsSource = readFileSync(
-    resolve(process.cwd(), 'src/components/LoginSkinControls.tsx'),
-    'utf8',
-  );
-  const pressStyle = (() => {
-    const start = controlsSource.indexOf('  skipLoginPress: {');
-    expect(start).toBeGreaterThan(0);
-    return controlsSource.slice(start, controlsSource.indexOf('  },', start));
-  })();
-  const textStyle = (() => {
-    const start = controlsSource.indexOf('  skipLoginText: {');
-    expect(start).toBeGreaterThan(0);
-    return controlsSource.slice(start, controlsSource.indexOf('  },', start));
-  })();
-
-  it('内层 Pressable 有 maxWidth = 680(槽宽),且宽度仍不写死', () => {
-    expect(pressStyle).toContain('maxWidth: LOGIN_SKIP_LOGIN.width');
-    expect(LOGIN_SKIP_LOGIN.width).toBe(680);
-    // 热区仍 shrink-to-fit:不能出现固定 width(否则整槽变可点、违反 §16.3 自适应热区)
-    expect(pressStyle).not.toMatch(/\bwidth:/);
-    // 左右扩张量不变(热区 = 文字实宽 + 各 50)
-    expect(pressStyle).toContain('paddingHorizontal: LOGIN_SKIP_LOGIN.pressPadX');
-  });
-
-  it('文本可收缩 + 单行 tail ellipsis(maxWidth 触顶时才生效)', () => {
-    // row + flexShrink:1 = RN 标准横向收缩组合(column 下 flexShrink 作用在纵轴,
-    // 横向只能靠隐式测量兜底 —— 不依赖隐式行为)
-    expect(pressStyle).toContain("flexDirection: 'row'");
-    expect(textStyle).toContain('flexShrink: 1');
-    const jsxStart = controlsSource.indexOf('export function LoginSkipLoginLink');
-    const jsx = controlsSource.slice(jsxStart, controlsSource.indexOf('\n}\n', jsxStart));
-    expect(jsx).toContain('numberOfLines={1}');
-    expect(jsx).toContain('ellipsizeMode="tail"');
-    // 槽本体仍只做居中容器、不吃触摸
-    expect(jsx).toContain('pointerEvents="box-none"');
-  });
-});

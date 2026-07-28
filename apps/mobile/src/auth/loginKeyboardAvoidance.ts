@@ -60,12 +60,7 @@ export interface LoginKeyboardShiftInput {
   visible: boolean;
   /** 键盘矩形(endCoordinates;窗口坐标) */
   keyboard: LoginKeyboardRect | null;
-  /**
-   * 未变换基线:停靠贴附锚 y(物理 px)。
-   * 登录页传 **error 槽底**(设计 y=430,见 loginSkinLayout.LOGIN_KEYBOARD_DOCK_ANCHOR_Y;
-   * 用户 2026-07-27 拍板,面板 440→500 后不再用面板底);字段名沿旧不改,
-   * 引擎语义与 10px 贴附公式、clamped-fallback 兜底一律不变。
-   */
+  /** 未变换基线:面板底 y(物理 px;停靠贴附锚) */
   panelBottomY: number;
   /** 未变换基线:「当前输入框 ∪ 主按钮」union 矩形(悬浮相交判定锚) */
   controlsUnion: LoginKeyboardRect;

@@ -59,12 +59,11 @@ describe('login token 守护', () => {
     expect(loginGradients.linear.layerOpacity).toBe(0.05);
   });
 
-  it('登录尺寸阶梯冻结(figma 750 稿刚性功能区;2026-07-27 面板增高 440→500)', () => {
+  it('登录尺寸阶梯冻结(figma 750 稿刚性功能区)', () => {
     expect(loginSizes.panelWidth).toBe(680);
-    // 面板 500 = 新稿 705:1062(旧 440 + 「跳过登录」槽 60)
-    expect(loginSizes.panelHeight).toBe(500);
+    expect(loginSizes.panelHeight).toBe(440);
     expect(loginSizes.panelRadius).toBe(36);
-    expect(loginSizes.flowHeight).toBe(620);
+    expect(loginSizes.flowHeight).toBe(560);
     expect(loginSizes.controlWidth).toBe(540);
     expect(loginSizes.controlHeight).toBe(80);
     expect(loginSizes.controlRadius).toBe(40);

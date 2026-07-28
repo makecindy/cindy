@@ -21,7 +21,6 @@ import {
   LOGIN_GROUP,
   LOGIN_LOADING_RING,
   LOGIN_METHOD_ROW,
-  LOGIN_SKIP_LOGIN,
   LOGIN_SOCIAL,
   LOGIN_SPINNER,
   LOGIN_SUBTITLE,
@@ -446,7 +445,7 @@ export function LoginConsentDialog({
   );
 }
 
-/** 面板(figma §4:680×500 r36 panelBg;wave4 1px inside 描边 368:1383 → RN borderWidth 1)。 */
+/** 面板(figma §4:680×440 r36 panelBg;wave4 1px inside 描边 368:1383 → RN borderWidth 1)。 */
 export function LoginPanel({
   children,
   testID,
@@ -753,7 +752,7 @@ export function LoginPrimaryButton({
 }
 
 /**
- * 第三方圆钮行(figma §4.5:y=540(面板 500 + gap 40)、80×80、gap 70,行内水平居中——demo socialRow left 公式)。
+ * 第三方圆钮行(figma §4.5:y=480、80×80、gap 70,行内水平居中——demo socialRow left 公式)。
  * SSO 圆钮同款,作为行内最后一颗(329:243)。
  */
 export function LoginSocialRow({
@@ -919,58 +918,6 @@ export function LoginErrorText({
       >
         {children}
       </Text>
-    </View>
-  );
-}
-
-/**
- * 「跳过登录」文字按钮(新稿 figma 705:1068 容器 / 705:1069 文本:面板内 680×60 槽
- * @y=430,文本 24 Regular 下划线居中,色 #6F6F6F = secondaryText 双态同值)。
- *
- * 无账号进主界面的唯一入口(产品拍板 2026-07-27),**不过协议门**——由调用方直接接
- * enterLocalMode,不经 requireConsent。
- *
- * 命中区 = 文本左右各扩 pressPadX、高度占满 60 槽位的 Pressable bounds;外层槽用
- * `pointerEvents="box-none"` 只做居中容器、不吃触摸(RN 下全幅透明 View 会挡住下方
- * 控件命中区)。放大 bounds 而非用 slop 扩张(slop 不越父 View 边界、Android 界外
- * 触摸不派发),与协议 radio 同一套仓内约定(DESIGN.md §16.4)。
- *
- * 防御性截断(DESIGN.md §16.3):内层 `maxWidth = 680` + `numberOfLines={1}` + tail
- * ellipsis,仅防极端 locale 把两侧撑出面板被 `overflow:hidden` 静默裁掉;**不是设计许可**
- * ——线上出现可见省略号 = 该语言文案超预算 = 文案 bug(P1,改文案不改布局)。
- *
- * `disabled`(2026-07-27 P1):登录动作未决时必须**交互禁用**,否则跳过与迟到的登录结果
- * 并发,最终落在无账号态还是账号态取决于异步完成顺序(门见 skipLoginGate;桌面
- * LoginSkipEntry 同款 `disabled` prop)。视觉**不变色** —— 文字按钮族只靠下划线给反馈,
- * 禁用态不做颜色/透明度回填(与社交圆钮「行为 guard 零视觉变化」同一仓内约定),
- * 无障碍语义走 `accessibilityState.disabled`。
- */
-export function LoginSkipLoginLink({
-  label,
-  onPress,
-  disabled,
-  testID,
-}: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  testID?: string;
-}) {
-  const styles = useThemedStyles(makeStyles);
-  return (
-    <View pointerEvents="box-none" style={styles.skipLoginSlot}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ disabled }}
-        disabled={disabled}
-        onPress={onPress}
-        style={styles.skipLoginPress}
-        testID={testID}
-      >
-        <Text ellipsizeMode="tail" numberOfLines={1} style={styles.skipLoginText}>
-          {label}
-        </Text>
-      </Pressable>
     </View>
   );
 }
@@ -1509,45 +1456,8 @@ const makeStyles = (colors: ThemeColors) =>
     width: LOGIN_BACK.size,
     zIndex: 2,
   },
-  // 「跳过登录」槽(figma 705:1068):680×60 @y=430,内容水平+垂直居中;
-  // 槽本体不作触摸目标(box-none),命中区在内层 Pressable 上按 pressPadX 扩张。
-  skipLoginSlot: {
-    alignItems: 'center',
-    height: LOGIN_SKIP_LOGIN.height,
-    justifyContent: 'center',
-    left: 0,
-    position: 'absolute',
-    top: LOGIN_SKIP_LOGIN.y,
-    width: LOGIN_SKIP_LOGIN.width,
-  },
-  // 宽度不写死:shrink-to-fit = 文字实宽 + 左右 pressPadX,热区随语言自适应(DESIGN.md §16.3)。
-  // maxWidth 是防御性上界(桌面 LoginSkipEntry 同款,非设计许可):含 padding 不越 680 槽,
-  // 超预算译文走单行 ellipsis 而不是被面板 overflow:hidden 静默裁边。
-  // 线上出现可见省略号 = 该语言文案超预算 = 文案 bug(P1,改文案不改布局)。
-  // row 方向 + 子级 flexShrink:1 = RN 里让文本按可用宽收缩并 ellipsis 的标准组合
-  // (column 下 flexShrink 作用在纵轴,横向收缩只能靠隐式测量,不写死语义)。
-  skipLoginPress: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    height: LOGIN_SKIP_LOGIN.height,
-    justifyContent: 'center',
-    maxWidth: LOGIN_SKIP_LOGIN.width,
-    paddingHorizontal: LOGIN_SKIP_LOGIN.pressPadX,
-  },
-  skipLoginText: {
-    color: colors.login.secondaryText,
-    // maxWidth 触顶时按可用宽收缩(而非溢出按钮盒),numberOfLines=1 才能吃到 tail ellipsis
-    flexShrink: 1,
-    fontSize: LOGIN_SKIP_LOGIN.font,
-    fontWeight: fontWeight.regular,
-    // 显式行框 = 稿内文本高 29(RN 默认行高不足会裁 descender,同 title 处理)
-    lineHeight: LOGIN_SKIP_LOGIN.lineHeight,
-    textAlign: 'center',
-    textDecorationLine: 'underline',
-  },
-  // 错误提示定位:主按钮底(380)起 50 高槽区间,文案垂直居中(用户拍板 2026-07-24;
-  // 旧实现 top 380 顶对齐视觉上紧贴按钮)。2026-07-27 面板增高后槽高 60→50,
-  // 下方接「跳过登录」槽(430..490)。
+  // 错误提示定位:主按钮底(380)与面板底(440)之间的整段区间,文案垂直居中
+  // (用户拍板 2026-07-24;旧实现 top 380 顶对齐视觉上紧贴按钮)。
   errorText: {
     alignItems: 'center',
     height: LOGIN_ERROR_TEXT.height,

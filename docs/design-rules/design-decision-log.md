@@ -12,6 +12,28 @@
 
 ## 2026-07
 
+- **07-28** **手机端「跳过登录」与无账号通路整体剥离(拍板人 = 用户)**——本条**修正**下方
+  两条 07-27 记录(「手机端新增跳过登录入口与无账号通路」及其连带的移动端键盘锚 / 配置错误屏
+  逃生口 / 移动命中区 50),07-27 那两条**作废但保留在册**(决策轨迹不删)。背景:本轮 PR 的
+  任务边界是「登录页只改 UI」;独立核实确认 (a) 手机端在 main 基线(`55e3eac2b`)**从无**
+  游客 / 无账号功能,(b) 2026-07-24 产品拍板「手机 / pad 为远程连接客户端、必须有账号、
+  不加游客登录」**仍然有效**——07-27 的「推翻」缺产品侧确认,且 `loginConsent.test.ts` 里
+  锁死该拍板的反向断言当时被改写掉了。故手机端跳过登录属越界新增功能,整体剥离。
+  **剥离范围**:删 `localModeStore` / `skipLoginGate` / `homeRemoteSyncGate` /
+  `authGeneration` 及其测试;`AuthContext` 回 main 等价(无 `isLocalMode` / `enterLocalMode` /
+  冷启动恢复 / 账号优先清标记,`clearLocalSession` 回裸 generation bump,
+  `acceptOutcome` / `completeOAuthCallback` 的 `expectedGeneration` 一并回退——它是跳过登录
+  review 引出的改动,越界不留);登录页删入口挂载与协议门豁免、路由门回 `isAuthenticated`、
+  首页回 main 行为、删 `LoginSkipLoginLink` 组件与 `skipLogin` 四语 key;几何回 main
+  (面板 440、组 560、圆钮行 480、协议行 582、error 槽 680×60 @380、删 `LOGIN_SKIP_LOGIN` 与
+  键盘停靠锚常量、pad 竖屏推导值回原值);`loginConsent.test.ts` 恢复 2026-07-24 三条反向断言。
+  **保留的手机端视觉改版**(与跳过登录无关,本轮唯一保留项):短屏 / 长屏品牌簇换新稿
+  `705:915` / `705:799` 逐字段基准(cindy / slogan / word),含 07-27 拍板的避脸落值
+  (长屏 slogan 下移 31.32 距字标 24px、短屏立绘上移至 y=60);功能区落位 `loginY`
+  (694 / 933 / `dh-640`)与面板几何同源,**保持 main 原值不动**。
+  **桌面端不动**:桌面本来就有 local-mode 能力,UI 换成「跳过登录」文字按钮合法,
+  07-27 的桌面侧决策继续有效。手机端是否要该功能待产品裁决,届时另开 PR。
+  (→ `DESIGN.md §16` 末尾勘误块 / `cindy-design-system.md` 变更史 2026-07-28 行)
 - **07-27** 登录页改版:**「跳过登录」取代游客圆钮入口,且免协议门**(拍板人 = 用户;
   依据 = figma 新稿 `705:915` / `705:799` / `700:783` + 本轮任务指令)。第三方圆钮行
   删除游客人形圆钮(guest 图标资产一并删除,`count` 按 provider 动态:CN = Apple+SSO

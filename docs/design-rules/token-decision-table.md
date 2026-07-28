@@ -92,6 +92,8 @@
 | `1334` | 移动 short 画板高 | 新增 | `login-mobile-short-height` | 对应约 667pt |
 | `115.672` | 状态栏 mock 高 | 不进产品 token | 无 | 只是 Figma iOS mock；真实 RN 走 safe-area |
 
+> **勘误（2026-07-28）**：「跳过登录」**仅桌面落地**，手机端整体剥离（见 `design-decision-log.md`「2026-07-28」条）。故本表 §4 里 `login-panel-height` 的 `440→500`、`login-skip-entry-*` 尺寸族与「命中区移动端扩 50 / 落码手机 `LOGIN_SKIP_LOGIN`」均只对桌面成立；手机端 `loginSizes.panelHeight` 仍为 `440`、无 `LOGIN_SKIP_LOGIN` 常量。
+
 **「跳过登录」文字按钮的色源（2026-07-27）**：文字色 = `--login-secondary-text`（`#6F6F6F`，light / dark 同值，见 §3 对应行），**不走 `--login-link-*` 族**——文字按钮与文字链接是两种组件，前者不做 hover / pressed 变色，因此本次改版没有新增任何颜色 token。
 
 尺寸新增清单中不包含可由其它 token稳定推导的值（例如社交半径 `80/2`、输入左右边距 `(680-540)/2`）。若实现希望所有数值全命名，可额外补 `login-panel-horizontal-padding=70`、`login-panel-title-y=31`、`login-panel-subtitle-y=75` 等布局常量，但它们更适合在组件局部用结构化对象表达。
