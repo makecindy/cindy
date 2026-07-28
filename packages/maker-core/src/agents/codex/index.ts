@@ -686,12 +686,10 @@ const PROFILE_LIFECYCLE_ACK_TIMEOUT_MS = 10_000;
 const CRITICAL_THREAD_RPC_TIMEOUT_MS = 60_000;
 
 // turn/interrupt 返回 no-active 只能证明 server 已空闲,不能证明真实终态是
-// completed / failed / interrupted。只在该异常路径读取最近一小页 metadata,
-// 且有界等待;正常 stop 路径零额外 RPC。
+// completed / failed / interrupted。只在该异常路径穿过 thread listener 的
+// resume 屏障,再读取最近一小页 metadata;两次 RPC 均有界,正常 stop 零开销。
 const NO_ACTIVE_TURN_RECONCILE_TIMEOUT_MS = 3_000;
 const NO_ACTIVE_TURN_RECONCILE_TURN_LIMIT = 20;
-const NO_ACTIVE_TURN_DRAIN_QUIET_MS = 100;
-const NO_ACTIVE_TURN_DRAIN_MAX_MS = 1_000;
 
 // 计划批准后自动发起实施 turn 的固定输入 — 与官方 TUI 逐字一致
 // (codex-rs/tui/src/chatwidget/plan_implementation.rs 的
@@ -2129,9 +2127,6 @@ export class CodexAgent extends BaseAgent {
     // turn id 在同一 thread 内唯一;墓碑随 session handle 释放,不跨 session 泄漏。
     const completedTurnIds = new Set<string>();
     const terminalErroredTurnIds = new Set<string>();
-    // no-active 终态查询可能抢在同一 turn 仍在路上的 usage / item / plan 事件
-    // 前返回。按 turn 记录事件代次,让异常恢复在立墓碑前等待一个短静默窗口。
-    let activeTurnEventDrain: { turnId: string; version: number } | null = null;
     // daemon 后端 retry-loop 的终局升级 (issue #677): 远端摸不到 Codex 后端时
     // daemon 无限 willRetry, turn 永不收口。同 turn 重试超阈值 → 合成终态错误,
     // 走与终态 error 完全相同的收口路径 (terminalErroredTurnIds + Done status)。
@@ -3844,36 +3839,10 @@ export class CodexAgent extends BaseAgent {
       && !completedTurnIds.has(turnId as string)
       && !terminalErroredTurnIds.has(turnId as string);
 
-    const noteTurnEventActivity = (turnId: string): void => {
-      if (activeTurnEventDrain?.turnId === turnId) {
-        activeTurnEventDrain.version += 1;
-      }
-    };
-
-    const waitForTurnEventDrain = async (turnId: string): Promise<void> => {
-      const drain = { turnId, version: 0 };
-      activeTurnEventDrain = drain;
-      const deadline = Date.now() + NO_ACTIVE_TURN_DRAIN_MAX_MS;
-      let observedVersion = drain.version;
-      try {
-        while (Date.now() < deadline) {
-          const waitMs = Math.min(NO_ACTIVE_TURN_DRAIN_QUIET_MS, deadline - Date.now());
-          if (waitMs <= 0) return;
-          await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
-          if (!isTurnInFlight || currentTurnId !== turnId) return;
-          if (drain.version === observedVersion) return;
-          observedVersion = drain.version;
-        }
-      } finally {
-        if (activeTurnEventDrain === drain) activeTurnEventDrain = null;
-      }
-    };
-
     const shouldIgnoreStaleTurnEvent =(turnId: string | null | undefined): boolean => {
       if (!turnId) return false;
       if (completedTurnIds.has(turnId)) return true;
       if (terminalErroredTurnIds.has(turnId)) return true;
-      noteTurnEventActivity(turnId);
       // 缓冲隔离中的歧义 turn (codex R9 P2): id 只拦 turnStarted 不够 —
       // 缓冲期间 currentTurnId 为 null, 孤儿 turn 的 item/usage/error 会穿透
       // stale guard 被按当前 pending turn 处理 (旧输出显示在新消息下 / 用量
@@ -4146,7 +4115,6 @@ export class CodexAgent extends BaseAgent {
       // 同一个墓碑也负责拦截该 turn 随后迟到的 item / reasoning / started 事件。
       if (completedTurnIds.has(turn.id)) return;
       completedTurnIds.add(turn.id);
-      if (activeTurnEventDrain?.turnId === turn.id) activeTurnEventDrain = null;
       const suppressTerminalUi = terminalErroredTurnIds.has(turn.id);
       deferredTerminalTurnCompletions.delete(turn.id);
       if (currentTurnId === turn.id || currentTurnId === null) {
@@ -5348,7 +5316,10 @@ export class CodexAgent extends BaseAgent {
           if (isNoActiveTurnInterruptError(e)) {
             // no-active 只证明 server 已空闲,不能据此伪造 interrupted:真实 turn
             // 可能已 completed/failed,伪造会丢 usage、structured plan 与 plan_review。
-            // 先守 captured id,再做一次 metadata-only 的有界终态查询。
+            // 先守 captured id,再用 metadata-only resume 穿过 app-server 的
+            // thread listener: running-thread resume response 与 turn notifications
+            // 在服务端同一队列串行,因此 response 是权威 stream boundary,不是
+            // 基于静默时长的推测。屏障后仍未收到 turn/completed 才查持久化终态。
             if (!isTurnInFlight || currentTurnId !== interruptedTurnId) {
               log.debug('turn/interrupt no-active rejection arrived after local turn advanced', {
                 interruptedTurnId,
@@ -5358,6 +5329,21 @@ export class CodexAgent extends BaseAgent {
               return;
             }
             try {
+              await host.request<ThreadResumeResponse>(
+                Method.ThreadResume,
+                { threadId, excludeTurns: true },
+                { timeoutMs: NO_ACTIVE_TURN_RECONCILE_TIMEOUT_MS },
+              );
+              // 屏障前的真实 notification 已按序送达;若它已自然收口就不再查询、
+              // 不再合成 tombstone。
+              if (!isTurnInFlight || currentTurnId !== interruptedTurnId) {
+                log.debug('turn stream completed before authoritative resume boundary', {
+                  interruptedTurnId,
+                  currentTurnId,
+                  isTurnInFlight,
+                });
+                return;
+              }
               const response = await host.request<ThreadTurnsListResponse>(
                 Method.ThreadTurnsList,
                 {
@@ -5368,7 +5354,7 @@ export class CodexAgent extends BaseAgent {
                 },
                 { timeoutMs: NO_ACTIVE_TURN_RECONCILE_TIMEOUT_MS },
               );
-              // 查询期间真实 notification 可能已收口,或用户已发起新 turn。
+              // 查询期间真实 notification 仍可能收口,或用户已发起新 turn。
               if (!isTurnInFlight || currentTurnId !== interruptedTurnId) {
                 log.debug('turn status lookup completed after local turn advanced', {
                   interruptedTurnId,
@@ -5385,19 +5371,6 @@ export class CodexAgent extends BaseAgent {
                     || turn.status === 'interrupted'),
               );
               if (terminalTurn) {
-                // thread/turns/list 是 metadata 响应,可能抢在同一连接中仍在路上的
-                // usage / item / reasoning / plan notification 前到达。先等一个
-                // 短静默窗口;若真实 turn/completed 在此期间收口,下面的 guard
-                // 会退出,否则再用权威终态立 tombstone,避免吞掉返回内容与记账。
-                await waitForTurnEventDrain(interruptedTurnId);
-                if (!isTurnInFlight || currentTurnId !== interruptedTurnId) {
-                  log.debug('turn stream completed while authoritative terminal events were draining', {
-                    interruptedTurnId,
-                    currentTurnId,
-                    isTurnInFlight,
-                  });
-                  return;
-                }
                 log.info('turn/interrupt found server already idle; reconciling authoritative terminal state', {
                   turnId: interruptedTurnId,
                   status: terminalTurn.status,

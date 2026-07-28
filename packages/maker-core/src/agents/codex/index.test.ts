@@ -5655,12 +5655,15 @@ describe('CodexAgent abort', () => {
     expect(host.request.mock.calls.filter(
       ([method]) => method === Method.ThreadTurnsList,
     )).toHaveLength(0);
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    )).toHaveLength(0);
     await handle.close();
   });
 
-  it('drains late content, usage, cache, and plans before authoritative reconciliation', async () => {
+  it('waits for the authoritative resume boundary before reconciling content, usage, cache, and plans', async () => {
     let turnStartCount = 0;
-    let emitLateTurnPayload = (): void => {};
+    const resumeBoundary = deferred<Record<string, unknown>>();
     const plan = [
       { step: 'Inspect', status: 'completed' as const },
       { step: 'Patch', status: 'in_progress' as const },
@@ -5675,10 +5678,8 @@ describe('CodexAgent abort', () => {
           { code: -32600 },
         );
       }
+      if (method === Method.ThreadResume) return resumeBoundary.promise;
       if (method === Method.ThreadTurnsList) {
-        // Simulate the metadata response overtaking terminal-stream payloads
-        // that are already in flight on the transport.
-        setTimeout(() => emitLateTurnPayload(), 0);
         return {
           data: [{ id: 'turn-stale-local', status: 'completed' }],
           nextCursor: null,
@@ -5709,7 +5710,7 @@ describe('CodexAgent abort', () => {
       interactions.push(request);
       return { kind: 'plan_review', behavior: 'deny' };
     });
-    emitLateTurnPayload = () => {
+    const emitLateTurnPayload = () => {
       handlers.tokenUsageUpdated?.({
         threadId: 'start-thread-id',
         turnId: 'turn-stale-local',
@@ -5770,7 +5771,23 @@ describe('CodexAgent abort', () => {
     });
     expect(handle.isTurnRunning?.()).toBe(true);
 
-    await expect(handle.abort()).resolves.toBeUndefined();
+    const abortPromise = handle.abort();
+    await waitForExpectation(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.ThreadResume,
+        { threadId: 'start-thread-id', excludeTurns: true },
+        { timeoutMs: 3_000 },
+      );
+    });
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadTurnsList,
+    )).toHaveLength(0);
+
+    // The listener-serialized resume response is the boundary: payloads can arrive
+    // arbitrarily late before it, without relying on a quiet-period timer.
+    emitLateTurnPayload();
+    resumeBoundary.resolve({});
+    await expect(abortPromise).resolves.toBeUndefined();
 
     expect(handle.isTurnRunning?.()).toBe(false);
     expect(handle.getCurrentTurnId?.()).toBeNull();
@@ -5857,6 +5874,55 @@ describe('CodexAgent abort', () => {
     expect(handle.getCurrentTurnId?.()).toBe('turn-after-stale-interrupt');
     expect(handle.isTurnRunning?.()).toBe(true);
 
+    await handle.close();
+  });
+
+  it('lets the real turn completion win before the resume boundary', async () => {
+    const resumeBoundary = deferred<Record<string, unknown>>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadResume) return resumeBoundary.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-real-completion-before-boundary',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-completes-before-boundary' },
+    });
+    const abortPromise = handle.abort();
+    await waitForExpectation(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.ThreadResume,
+        { threadId: 'start-thread-id', excludeTurns: true },
+        { timeoutMs: 3_000 },
+      );
+    });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-completes-before-boundary', status: 'failed' },
+    });
+    resumeBoundary.resolve({});
+    await expect(abortPromise).resolves.toBeUndefined();
+
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadTurnsList,
+    )).toHaveLength(0);
     await handle.close();
   });
 
