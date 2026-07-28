@@ -87,6 +87,41 @@ describe('createGhostOauthBrokerClient', () => {
     });
   });
 
+  it('账号能力切换等非传输异常→ EXCHANGE_FAILED,不误报 NETWORK', async () => {
+    const client = createGhostOauthBrokerClient({
+      apiPost: vi.fn(async () => {
+        throw Object.assign(new Error('[PRECONDITION_FAILED] app session is switching'), {
+          code: 'PRECONDITION_FAILED',
+        });
+      }),
+      hasLoginToken: () => true,
+    });
+    await expect(client.refresh('jira', { refreshToken: 'rt' })).resolves.toMatchObject({
+      ok: false,
+      error: 'EXCHANGE_FAILED',
+      invalidGrant: false,
+    });
+  });
+
+  it.each([
+    ['HTTP_404', 404],
+    ['INTERNAL_ERROR', 503],
+  ])('broker 路由或服务不可用(%s / %i)→ SERVICE_UNAVAILABLE', async (code, statusCode) => {
+    const client = createGhostOauthBrokerClient({
+      apiPost: vi.fn(async () => {
+        throw apiError(code, statusCode, 'upstream detail must stay in Main');
+      }),
+      hasLoginToken: () => true,
+    });
+    await expect(
+      client.exchange('feishu', { code: 'c', redirectUri: 'http://127.0.0.1/callback' }),
+    ).resolves.toEqual({
+      ok: false,
+      error: 'SERVICE_UNAVAILABLE',
+      invalidGrant: false,
+    });
+  });
+
   it('未知 slug:不打请求直接拒;白名单认 feishu / jira(slack 已随意识退役)', async () => {
     expect(SUPPORTED_TOKEN_BROKERS.has('jira')).toBe(true);
     expect(SUPPORTED_TOKEN_BROKERS.has('feishu')).toBe(true);

@@ -91,6 +91,7 @@ import {
 } from '@/lib/composerDraftStore';
 import type { JSONContent } from '@tiptap/core';
 import { base64ToUint8Array } from '@/lib/fileTypeInference';
+import { calibrateDraftModel } from '@/lib/draftModelCalibration';
 import { showWorktreeError } from '@/lib/worktreeToast';
 import type { CreateWorktreeResp } from '@/lib/worktree.types';
 import * as sessionService from '@/lib/sessionService';
@@ -138,7 +139,7 @@ import {
   type AgentCapabilities,
 } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
-import { isModelEnabled } from '@/state/modelVisibilityPrefs';
+import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import {
   useDeviceProviders,
   evictDeviceProviders,
@@ -149,7 +150,11 @@ import {
   getProjectPickerDisplayName,
   useProjectPickerOptions,
 } from '@/hooks/useProjectPickerOptions';
-import { resolveFastSupported, deriveModelsFromProviders } from '@/lib/providerModels';
+import {
+  resolveFastSupported,
+  deriveModelsFromProviders,
+  filterChatBridgedCodexProviders,
+} from '@/lib/providerModels';
 import { effectiveSourceIdForModel, getModel, providerOffersModel, sessionModelSupportsFastMode, connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
 import {
@@ -533,14 +538,111 @@ export function NewMakerDraftRoute() {
   // 模型级全局预设不靠它隔离,但仍用它校验来源 capability、保留旧 v2 兼容副本并路由
   // device-link 写穿。仅本地草稿用;device-link 走 dlSel 镜像、不读本机记忆
   // (下方 resolveDraftFast 只在本地分支调用)。
+  /**
+   * 草稿实际生效的模型 id —— 种子默认在这里被校准到「确有已连接来源」的模型。
+   *
+   * 必须算在 effectiveSourceId / effort / fast 之前:它们全部按这个模型推导。若只把校准
+   * 结果用在 draftInitialModel 上,会拿新模型配上按旧模型算出来的 effort / fastMode,
+   * 提交一份目标模型根本不支持的组合(PR #548 review)。
+   *
+   * 候选与 ChatInput 的 SSH 可见性同口径 —— 那里由 `!!remoteHostId` 同时驱动两道排除,
+   * 少一道就会把远端根本路由不出去的模型选成默认:
+   *   · 供应商级 `excludeChatBridgedCodex`:Responses→Chat 桥只挂本地 codex-proxy;
+   *   · 模型级 `excludeSubscriptionDirect`:订阅直连(chatgpt/ 、xai/)的 bridge 只挂本地
+   *     compat-proxy。必须逐模型判,同一供应商可能既有可路由模型又有订阅直连模型。
+   * device-link 草稿以被控端镜像为准,整段不校准(被控端跑完整 app,两道排除都不适用)。
+   */
+  // 可见性 override 变更要重算校准候选(与 ModelSelector 同一份订阅源)。
+  const modelVisibilityVersion = useModelVisibilityVersion();
+  const calibrationProviders = useMemo(() => {
+    const base = filterChatBridgedCodexProviders(
+      localProviders,
+      capabilityAgentKind,
+      !!effectiveRemoteHostId,
+    );
+    // 逐模型过滤要落在**候选本身**，而不是只落在「挑哪个模型」那一步：来源解析
+    // (effectiveSourceIdForModel) 吃的是同一份候选，若这里不剔除，被隐藏的条目仍会让它
+    // 选中那个来源 —— 于是 providerId 落 null、main 解析到同一个被用户排除的默认来源，
+    // effort / fast 也从错误的条目推导(PR #548 review)。
+    return base
+      .map((p) => {
+        const models = p.models[capabilityAgentKind] ?? [];
+        const kept = models.filter(
+          (m) =>
+            isModelEnabled(capabilityAgentKind, p.id, m) &&
+            !(effectiveRemoteHostId && isSubscriptionDirectModel(m.id)),
+        );
+        if (kept.length === models.length) return p;
+        return { ...p, models: { ...p.models, [capabilityAgentKind]: kept } };
+      })
+      .filter((p) => (p.models[capabilityAgentKind] ?? []).length > 0);
+  }, [
+    localProviders,
+    capabilityAgentKind,
+    effectiveRemoteHostId,
+    modelVisibilityVersion,
+  ]);
+  /**
+   * **自动**选择用的候选:再剔掉清单发现失败的供应商。
+   *
+   * 失败时我们刻意保留上次成功的清单(设置页也已改口径,明说那是上次获取的结果),但那份
+   * 清单只适合「用户自己点进去选」,不适合当成默认值送人:unauthorized / regionBlocked 这
+   * 类确定性失败下,把从没选过模型的用户自动落到这个来源,首条消息必然失败 —— 正是这套
+   * 校准要消灭的状态(PR #548 review)。
+   *
+   * 用户显式表达过(选过模型、或存了显式来源)时不做这层剔除:他选的就该生效,而且来源解析
+   * 也必须还能指到那个供应商。全部供应商都在失败态时同样退回完整候选 —— 那时没有更好的
+   * 选择,给个陈旧清单也好过一个都挑不出来。
+   */
+  const draftModelChosenByUser = draft.modelChosenByVendor[draft.vendor] === true;
+  const autoCalibrationProviders = useMemo(() => {
+    if (draftModelChosenByUser || chatPrefs.providerId) return calibrationProviders;
+    const healthy = calibrationProviders.filter((p) => !p.modelDiscoveryFailure);
+    return healthy.length > 0 ? healthy : calibrationProviders;
+  }, [calibrationProviders, draftModelChosenByUser, chatPrefs.providerId]);
+  const calibratedDraftModel = useMemo(() => {
+    if (isDeviceLinkDraft) return chatPrefs.model;
+    return calibrateDraftModel({
+      providers: autoCalibrationProviders,
+      agent: capabilityAgentKind,
+      model: chatPrefs.model,
+      chosenByUser: draftModelChosenByUser,
+      providersLoading: localProvidersLoading,
+    });
+  }, [
+    isDeviceLinkDraft,
+    autoCalibrationProviders,
+    capabilityAgentKind,
+    chatPrefs.model,
+    draftModelChosenByUser,
+    localProvidersLoading,
+  ]);
+
   const effectiveSourceId = useMemo<string | null>(() => {
+    // 本地草稿用**过滤后**的候选解析来源:SSH 场景下同一个 model id 可能既被允许的来源
+    // 提供、又被排除掉的 openai-chat 来源提供,拿未过滤的 providers 解析会指到后者 ——
+    // 于是 providerId 落 null、main 挑到被排除的原生默认,而 ChatInput 看到的是允许的
+    // 那个来源、Send 照常放行,最后在远端失败(PR #548 review)。
+    // device-link 草稿以被控端目录为准,不参与本地过滤。
+    //
+    // 用与挑模型同一份候选:自动路径已剔除失败态供应商,来源解析若还看得见它们,就会把刚
+    // 挑好的健康模型重新指回那个已知失败的原生默认来源(PR #548 review)。用户显式表达过时
+    // autoCalibrationProviders 本身就等于完整候选,不受影响。
+    const source = isDeviceLinkDraft ? providers : autoCalibrationProviders;
     return effectiveSourceIdForModel(
-      providers,
+      source,
       chatPrefs.providerId ?? null,
-      chatPrefs.model,
+      calibratedDraftModel,
       capabilityAgentKind,
     );
-  }, [providers, capabilityAgentKind, chatPrefs.providerId, chatPrefs.model]);
+  }, [
+    isDeviceLinkDraft,
+    providers,
+    autoCalibrationProviders,
+    capabilityAgentKind,
+    chatPrefs.providerId,
+    calibratedDraftModel,
+  ]);
 
   // 首页是“下一次创建会话”的配置草稿,没有正在运行的当前模型需要保护。其它对话更新同一模型
   // 的全局预设后,即使该模型正显示在首页 trigger 上,也应立即采用新 effort / fast。真实会话仍
@@ -549,10 +651,17 @@ export function NewMakerDraftRoute() {
   const localDraftEffort = useMemo<Effort>(() => {
     if (isDeviceLinkDraft || !effectiveSourceId) return chatPrefs.effort;
     const provider = providers.find((item) => item.id === effectiveSourceId);
-    const model = provider ? getModel(provider, chatPrefs.model, capabilityAgentKind) : undefined;
+    // 按**校准后**的模型推导:effort 必须和最终提交的模型属于同一个能力集合。
+    const model = provider
+      ? getModel(provider, calibratedDraftModel, capabilityAgentKind)
+      : undefined;
     return resolveNewMakerDraftEffort({
       currentEffort: chatPrefs.effort,
-      presetEffort: getProviderModelEffort(capabilityAgentKind, effectiveSourceId, chatPrefs.model),
+      presetEffort: getProviderModelEffort(
+        capabilityAgentKind,
+        effectiveSourceId,
+        calibratedDraftModel,
+      ),
       efforts: model?.efforts ?? [],
       defaultEffort: model?.defaultEffort ?? null,
     });
@@ -561,7 +670,7 @@ export function NewMakerDraftRoute() {
     effectiveSourceId,
     providers,
     capabilityAgentKind,
-    chatPrefs.model,
+    calibratedDraftModel,
     chatPrefs.effort,
     modelPresetVersion,
   ]);
@@ -777,14 +886,20 @@ export function NewMakerDraftRoute() {
 
   // Fast 可用判定:本地 + device-link 统一走 resolveFastSupported(共享 per-provider 逻辑,
   // 控制端不另写远程判断;旧被控端回退拍平 caps 见 helper)。device-link 的来源/模型取被控端镜像
-  // (dlSel live > deviceLinkInitial seed),本地取 chatPrefs —— 即"被控端会话实际会路由到的来源"。
+  // (dlSel live > deviceLinkInitial seed),本地取**校准后的生效来源** —— 即会话实际会路由
+  // 到的那个来源。
   const supportsFastMode = useMemo(() => {
+    // 本地不能用 chatPrefs.providerId:它常是 null,而 fast 是 per-provider 能力。默认来源
+    // 被隐藏 / SSH 排除、模型由另一个来源提供时,这里会去查那个被排除的来源 —— 要么藏掉本
+    // 该有的 Fast 开关,要么把 Fast 开在不支持它的来源上。effort / fast 记忆 / 写回都已按
+    // effectiveSourceId 推导,只剩这处没跟上(PR #548 review)。
     const providerId = isDeviceLinkDraft
       ? (dlSel?.providerId ?? deviceLinkInitial?.providerId ?? null)
-      : (chatPrefs.providerId ?? null);
+      : effectiveSourceId;
+    // 本地取**校准后**的模型:fast 能力必须按最终提交的那个模型判定。
     const modelId = isDeviceLinkDraft
       ? (dlSel?.model ?? deviceLinkInitial?.model ?? chatPrefs.model)
-      : chatPrefs.model;
+      : calibratedDraftModel;
     return resolveFastSupported({
       deviceId: effectiveDeviceLinkDeviceId,
       deviceProviders,
@@ -798,8 +913,9 @@ export function NewMakerDraftRoute() {
     isDeviceLinkDraft,
     dlSel,
     deviceLinkInitial,
-    chatPrefs.providerId,
+    effectiveSourceId,
     chatPrefs.model,
+    calibratedDraftModel,
     effectiveDeviceLinkDeviceId,
     deviceProviders,
     localProviders,
@@ -814,7 +930,7 @@ export function NewMakerDraftRoute() {
       ? (deviceLinkInitial?.fastMode ?? false)
       : false
     : supportsFastMode
-      ? resolveDraftFast(chatPrefs.model)
+      ? resolveDraftFast(calibratedDraftModel)
       : false;
   // 计划模式草稿态:仅本地草稿支持(device-link 远程草稿 v1 不透传,入口也不显示;
   // 创建后进会话仍可经运行时隧道切换)。
@@ -827,16 +943,49 @@ export function NewMakerDraftRoute() {
     if (isDeviceLinkDraft && deviceLinkInitial) {
       return { model: deviceLinkInitial.model, effort: deviceLinkInitial.effort };
     }
-    return { model: chatPrefs.model, effort: localDraftEffort };
-  }, [isDeviceLinkDraft, deviceLinkInitial, chatPrefs.model, localDraftEffort]);
+    // 校准在 calibratedDraftModel 一处完成,effort / fast / 来源都已按它推导 —— 这里
+    // 直接用,不再单独算一次(否则又会出现模型与能力参数不同源的分叉)。
+    return { model: calibratedDraftModel, effort: localDraftEffort };
+  }, [isDeviceLinkDraft, deviceLinkInitial, calibratedDraftModel, localDraftEffort]);
 
   // 远程草稿的权限档 / 来源同样取镜像 holder;本地走 chatPrefs。
   const chatInitialPermissionMode = isDeviceLinkDraft
     ? (deviceLinkInitial?.permissionMode ?? chatPrefs.permissionMode)
     : chatPrefs.permissionMode;
+  // 显式来源只在**仍是当前生效来源**时才带进建会话。
+  //
+  // 只比对「模型有没有被校准换掉」不够:存储的来源断开 / 不再提供该模型、而另一个已连接
+  // 来源恰好提供同一个 model id 时,校准会原样保留模型 id(它确实可用),相等条件因此成立,
+  // 却把已经失效的来源一起带了下去 —— 而 effectiveSourceId 早已解析到另一个来源。送出去
+  // 就是一对 model / provider 错配,首条请求会打到不服务该模型的上游(PR #548 review)。
+  //
+  // 但「置 null = 交回默认路由」只在两边会解析到同一个来源时才成立:main 的默认解析吃的是
+  // **未过滤**的目录,被用户隐藏、被 SSH 订阅直连排除、被 chat-bridge 排除掉的来源在那边
+  // 依然是候选。此时 UI 高亮 B、main 却路由到 A,会话就从一个用户看不见的来源发出去。所以
+  // 只在默认路由确实落回 effectiveSourceId 时才省略它,不一致时显式带上(PR #548 review)。
+  const localProviderIdForDraft = useMemo<string | null>(() => {
+    if (chatPrefs.providerId && chatPrefs.providerId === effectiveSourceId) {
+      return chatPrefs.providerId;
+    }
+    if (!effectiveSourceId) return null;
+    // 用与 main 同源的解析函数 + 未过滤目录复算一次默认路由,比较的是同一口径。
+    const defaultRouted = effectiveSourceIdForModel(
+      localProviders,
+      null,
+      calibratedDraftModel,
+      capabilityAgentKind,
+    );
+    return defaultRouted === effectiveSourceId ? null : effectiveSourceId;
+  }, [
+    chatPrefs.providerId,
+    effectiveSourceId,
+    localProviders,
+    calibratedDraftModel,
+    capabilityAgentKind,
+  ]);
   const chatInitialProviderId = isDeviceLinkDraft
     ? (deviceLinkInitial?.providerId ?? null)
-    : (chatPrefs.providerId ?? null);
+    : localProviderIdForDraft;
 
   // 弹窗确认添加后的落点:SSH 立即建会话 + navigate;device-link 把当前草稿指向被控端项目,
   // 首条消息发出时走既有 create-on-send 链路(见下方 isDeviceLinkDraft 分支)。
@@ -1071,15 +1220,18 @@ export function NewMakerDraftRoute() {
       }
       // 权威库:per-(agent, 来源, 模型),与 resolveDraftFast 的读源对齐(ModelSelector 的 Edit 面板
       // 对选中模型也会写这一份;此处显式写一遍,使 onFastModeChange 走任何路径都自洽、不依赖选择器侧写)。
+      // 写入键必须与 effectiveFastMode 的读取键同源:两者都用**校准后**的模型。若这里仍写
+      // chatPrefs.model,种子默认被校准后用户切 fast 会写到一个当前根本没在用的模型上 ——
+      // 开关看着没生效,旧模型却被静默改了偏好(PR #548 review)。
       if (effectiveSourceId) {
-        setProviderModelFast(capabilityAgentKind, effectiveSourceId, chatPrefs.model, enabled);
+        setProviderModelFast(capabilityAgentKind, effectiveSourceId, calibratedDraftModel, enabled);
       }
       // per-model 旧库:保留为兜底(retire 计划单列),写入维持向后兼容。
-      setFastModeForModel(chatPrefs.model, enabled);
+      setFastModeForModel(calibratedDraftModel, enabled);
     },
     [
       isDeviceLinkDraft,
-      chatPrefs.model,
+      calibratedDraftModel,
       supportsFastMode,
       effectiveSourceId,
       capabilityAgentKind,

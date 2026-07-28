@@ -11,6 +11,7 @@ vi.mock('../../appCapabilities.js', () => ({
 import { BUNDLED_CATALOG, buildUserProvider, type AgentKind, type RoutingDescriptor } from '@cindy/model-providers';
 
 import {
+  beginProviderRouteMutation,
   buildLocalHandlerHeaders,
   buildRouteDecision,
   resolveSessionRouteDecision,
@@ -473,6 +474,38 @@ describe('none (无鉴权自定义代理 buildRouteDecision)', () => {
     });
   });
 
+  it('disabled 的历史远程无鉴权路由直接 fail closed', async () => {
+    const decision = buildRouteDecision(
+      {
+        upstream: 'https://remote.example/v1',
+        authStrategy: 'none',
+        disabled: true,
+      },
+      KEY,
+      'codex',
+      null,
+    );
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
+
+    const end = vi.fn();
+    await decision!.localHandler!({
+      rawBody: Buffer.from('{}'),
+      parsedBody: { model: 'legacy-model' },
+      ctx: {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: {},
+      },
+      res: { writeHead: vi.fn(), end } as never,
+    });
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: {
+        message: 'The selected provider is disabled; update its endpoint or authentication settings before retrying.',
+      },
+    });
+  });
+
   it('本地 Chat 桥也剥掉复制配置里残留的鉴权与账号头', () => {
     expect(
       buildLocalHandlerHeaders({
@@ -528,6 +561,75 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
     });
   });
 
+  it('blocks new routes while endpoint and key switch as one logical mutation', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'openrouter',
+        name: 'OpenRouter',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://old.example/v1',
+            models: [{ id: 'custom-model', name: 'Custom Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'old-key');
+    setSessionProvider('s-user', 'openrouter');
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY)).toMatchObject({
+      upstreamOverride: 'https://old.example/v1',
+      headerOverride: { authorization: 'Bearer old-key' },
+    });
+
+    const finishMutation = beginProviderRouteMutation('openrouter');
+    try {
+      // Secret writes are synchronous and may become visible before the catalog refresh awaits.
+      setCustomProviderKeyReader(() => 'new-key');
+      const decision = await Promise.resolve(
+        resolveSessionRouteDecision('s-user', 'codex', KEY),
+      );
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision!.localHandler!({
+        rawBody: Buffer.from('{}'),
+        parsedBody: { model: 'custom-model' },
+        ctx: { reqId: 1, method: 'POST', url: '/responses', headers: {} },
+        res: { writeHead, end } as never,
+      });
+      expect(writeHead).toHaveBeenCalledWith(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'retry-after': '1',
+      });
+      expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+        error: {
+          type: 'provider_route_updating',
+          code: 'provider_route_updating',
+        },
+      });
+    } finally {
+      finishMutation();
+    }
+
+    setCustomProviders([
+      buildUserProvider({
+        id: 'openrouter',
+        name: 'OpenRouter',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://new.example/v1',
+            models: [{ id: 'custom-model', name: 'Custom Model' }],
+          },
+        },
+      }),
+    ]);
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY)).toMatchObject({
+      upstreamOverride: 'https://new.example/v1',
+      headerOverride: { authorization: 'Bearer new-key' },
+    });
+  });
+
   it('精确请求路径只覆盖带 model 的推理请求，不改写无 body 的控制面请求', () => {
     setCustomProviders([
       buildUserProvider({
@@ -555,6 +657,52 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
       headerOverride: { authorization: 'Bearer sk-exact' },
       upstreamOverride: 'https://gateway.example/api',
       headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+    });
+  });
+
+  it('disabled runtime 返回本地错误，不允许 proxy 回落到默认供应商', async () => {
+    const disabled = buildUserProvider({
+      id: 'legacy-remote',
+      name: 'Legacy Remote',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://remote.example/v1',
+          models: [{ id: 'legacy-model', name: 'Legacy Model' }],
+        },
+      },
+      auth: { method: 'none' },
+    });
+    expect(disabled.routing.codex?.disabled).toBe(true);
+    setCustomProviders([disabled]);
+    setSessionProvider('s-user', 'legacy-remote');
+
+    const decision = await Promise.resolve(
+      resolveSessionRouteDecision('s-user', 'codex', KEY, 'legacy-model'),
+    );
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
+
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision!.localHandler!({
+      rawBody: Buffer.from('{}'),
+      parsedBody: { model: 'legacy-model' },
+      ctx: {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: {},
+      },
+      res: { writeHead, end } as never,
+    });
+    expect(writeHead).toHaveBeenCalledWith(503, {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+    });
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: {
+        type: 'provider_route_disabled',
+        code: 'provider_route_disabled',
+      },
     });
   });
 

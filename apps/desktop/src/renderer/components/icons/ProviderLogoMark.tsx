@@ -7,8 +7,10 @@
 
 import {
   hasProviderLogo,
+  isProviderLogoKind,
   PROVIDER_LOGO_PATHS,
   resolveProviderLogoKind,
+  type ProviderLogoKind,
   type ProviderLogoRouting,
 } from '@cindy/model-providers/branding';
 
@@ -22,6 +24,8 @@ export type { ProviderLogoRouting };
 interface ProviderLogoMarkProps {
   providerId: string;
   routing?: ProviderLogoRouting;
+  /** Device-link projection resolved this before stripping private routing details. */
+  logoKind?: ProviderLogoKind;
   size?: number;
   className?: string;
 }
@@ -30,10 +34,13 @@ interface ProviderLogoMarkProps {
 export function ProviderLogoMark({
   providerId,
   routing,
+  logoKind,
   size = 14,
   className,
 }: ProviderLogoMarkProps) {
-  const kind = resolveProviderLogoKind(providerId, routing);
+  const kind = isProviderLogoKind(logoKind)
+    ? logoKind
+    : resolveProviderLogoKind(providerId, routing);
   if (!kind) return null;
   if (kind === 'anthropic') return <AnthropicMark size={size} className={className} />;
   if (kind === 'openai') return <OpenAIMark size={size} className={className} />;

@@ -35,14 +35,33 @@ function writeSse(res: ServerResponse, event: unknown, sequenceNumber: number): 
   res.write(`event: ${event.type}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return value.slice(0, end);
+}
+
 function joinUrl(base: string, path: string): string {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const queryIndex = normalizedPath.indexOf('?');
+  const pathname = queryIndex === -1 ? normalizedPath : normalizedPath.slice(0, queryIndex);
+  const hasEncodedPathSeparator = /%(?:2f|5c)/i.test(pathname);
+  const hasDotSegment = pathname
+    .split('/')
+    .some((segment) => {
+      const normalizedDots = segment.replace(/%2e/gi, '.');
+      return normalizedDots === '.' || normalizedDots === '..';
+    });
   if (
-    normalizedPath.startsWith('//')
+    normalizedPath.length > 2_048
+    || normalizedPath.startsWith('//')
     || normalizedPath.includes('#')
     || normalizedPath.includes('\\')
     || /[^\u0021-\u007e]/.test(normalizedPath)
+    || !/^\/[A-Za-z0-9\-._~%!$&()*+,;=:@/?]*$/.test(normalizedPath)
     || /%(?![0-9A-Fa-f]{2})/.test(normalizedPath)
+    || hasEncodedPathSeparator
+    || hasDotSegment
   ) {
     throw new TypeError('invalid chat completions path');
   }
@@ -54,11 +73,9 @@ function joinUrl(base: string, path: string): string {
   ) {
     throw new TypeError('invalid upstream base URL');
   }
-  const queryIndex = normalizedPath.indexOf('?');
-  const pathname = queryIndex === -1 ? normalizedPath : normalizedPath.slice(0, queryIndex);
   const pathQuery = queryIndex === -1 ? '' : normalizedPath.slice(queryIndex + 1);
   const baseQuery = url.search.slice(1);
-  url.pathname = `${url.pathname.replace(/\/+$/, '')}${pathname}`;
+  url.pathname = `${trimTrailingSlashes(url.pathname)}${pathname}`;
   url.search = [baseQuery, pathQuery].filter(Boolean).join('&');
   url.hash = '';
   return url.toString();
@@ -112,6 +129,11 @@ export function createResponsesChatHandler(
           capabilities: provider.capabilities,
           onDroppedTool: (type, index) => {
             log.warn?.('responses-chat bridge dropped non-function tool', { type, index });
+          },
+          onDroppedInputItem: (type, index) => {
+            // tool_search_* 是 Codex 每轮重放的历史内建 item，属于预期兼容路径，
+            // 不发 warn 避免随会话长度二次增长日志。
+            log.debug?.('responses-chat bridge dropped built-in input item', { type, index });
           },
         });
       } catch (error) {

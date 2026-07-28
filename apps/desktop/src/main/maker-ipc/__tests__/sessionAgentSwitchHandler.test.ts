@@ -9,6 +9,7 @@ import {
   type MakerSessionAgentSwitchHandlerDeps,
   type PendingAgentSwitchIntent,
 } from '../sessionAgentSwitchHandler';
+import { createAgentHandoffPendingRegistry } from '../agentHandoff';
 import { MAKER_INVOKE } from '../channels';
 import { IpcHarness } from './helpers/ipcHarness';
 
@@ -43,6 +44,9 @@ function makeDeps(overrides: Partial<MakerSessionAgentSwitchHandlerDeps> = {}): 
     applyAgentSwitchToDb: vi.fn(async () => {
       calls.push('db');
     }),
+    setSessionProvider: vi.fn(() => {
+      calls.push('provider');
+    }),
     insertBoundaryMessage: vi.fn(async () => {
       calls.push('boundary');
       return 'boundary-client-1';
@@ -75,13 +79,14 @@ describe('performSessionAgentSwitch', () => {
     const { deps, calls } = makeDeps();
     const result = await performSessionAgentSwitch(deps, validParams);
     expect(result).toEqual({ switched: true, agentKind: 'codex', model: 'gpt-5.5', engineReady: true });
-    expect(calls).toEqual(['close', 'db', 'boundary', 'pending', 'bootstrap']);
+    expect(calls).toEqual(['close', 'db', 'provider', 'boundary', 'pending', 'bootstrap']);
     expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', {
       agentKind: 'codex',
       model: 'gpt-5.5',
       providerId: null,
       sdkSessionId: null,
     });
+    expect(deps.setSessionProvider).toHaveBeenCalledWith('s1', null);
     const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0][1];
     expect(boundary.fromAgentKind).toBe('cc');
     expect(boundary.toAgentKind).toBe('codex');
@@ -105,9 +110,42 @@ describe('performSessionAgentSwitch', () => {
       model: 'claude-fable-5',
     });
     expect(result.switched).toBe(true);
+    expect(deps.setSessionProvider).not.toHaveBeenCalled();
     const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0][1];
     expect(boundary.fromAgentKind).toBe('codex');
     expect(boundary.toAgentKind).toBe('cc');
+  });
+
+  it('跨引擎 DB 提交后立即覆盖旧 provider route', async () => {
+    const { deps } = makeDeps();
+
+    await performSessionAgentSwitch(deps, {
+      ...validParams,
+      providerId: 'anthropic',
+    });
+
+    expect(deps.setSessionProvider).toHaveBeenCalledWith('s1', 'anthropic');
+    expect(vi.mocked(deps.applyAgentSwitchToDb).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deps.setSessionProvider).mock.invocationCallOrder[0],
+    );
+  });
+
+  it.each([
+    ['空白值', '  ', null],
+    ['首尾空格', ' anthropic ', 'anthropic'],
+  ])('%s providerId 在 DB 与内存路由中使用同一归一化值', async (_case, providerId, expected) => {
+    const { deps } = makeDeps();
+
+    await performSessionAgentSwitch(deps, {
+      ...validParams,
+      providerId,
+    });
+
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ providerId: expected }),
+    );
+    expect(deps.setSessionProvider).toHaveBeenCalledWith('s1', expected);
   });
 
   it('参数校验:非法 sessionId / targetAgentKind / model 抛 INVALID_PARAMS', async () => {
@@ -156,7 +194,7 @@ describe('performSessionAgentSwitch', () => {
     const { deps, calls } = makeDeps({ getLiveSession: vi.fn(() => null) });
     const result = await performSessionAgentSwitch(deps, validParams);
     expect(result.switched).toBe(true);
-    expect(calls).toEqual(['db', 'boundary', 'pending', 'bootstrap']);
+    expect(calls).toEqual(['db', 'provider', 'boundary', 'pending', 'bootstrap']);
   });
 
   it('边界行插入失败降级:仍设 pending 并 bootstrap,返回成功', async () => {
@@ -167,7 +205,7 @@ describe('performSessionAgentSwitch', () => {
     });
     const result = await performSessionAgentSwitch(deps, validParams);
     expect(result.switched).toBe(true);
-    expect(calls).toEqual(['close', 'db', 'pending', 'bootstrap']);
+    expect(calls).toEqual(['close', 'db', 'provider', 'pending', 'bootstrap']);
     expect(deps.log.warn).toHaveBeenCalled();
   });
 
@@ -190,6 +228,7 @@ describe('performSessionAgentSwitch', () => {
     });
     await expect(performSessionAgentSwitch(deps, validParams)).rejects.toThrow('db locked');
     expect(calls).toEqual(['close']);
+    expect(deps.setSessionProvider).not.toHaveBeenCalled();
   });
 });
 
@@ -251,6 +290,19 @@ describe('deferred switch (turn running)', () => {
     });
   });
 
+  it('跨引擎意图淘汰较早的 pending credential switch', async () => {
+    const supersedePendingCredentialSwitch = vi.fn();
+    const { deps, store } = makeDepsWithPending({ supersedePendingCredentialSwitch });
+
+    await performSessionAgentSwitch(deps, validParams);
+
+    expect(supersedePendingCredentialSwitch).toHaveBeenCalledWith('s1');
+    expect(store.get('s1')).toMatchObject({
+      targetAgentKind: 'codex',
+      model: 'gpt-5.5',
+    });
+  });
+
   it('意图制:反复改选只覆盖意图,applyNow 才执行真切换', async () => {
     const { deps, calls, store } = makeDepsWithPending();
     await performSessionAgentSwitch(deps, validParams);
@@ -264,7 +316,7 @@ describe('deferred switch (turn running)', () => {
       skipBootstrap: true,
     });
     expect(result).toMatchObject({ switched: true });
-    expect(calls).toEqual(['close', 'db', 'boundary', 'pending']);
+    expect(calls).toEqual(['close', 'db', 'provider', 'boundary', 'pending']);
   });
 
   it('意图制:effort/fastMode 经意图透传到 applyAgentSwitchToDb', async () => {
@@ -301,7 +353,7 @@ describe('deferred switch (turn running)', () => {
     await applyPendingAgentSwitchIfIdle(deps, 's1');
     expect(store.has('s1')).toBe(false);
     // skipBootstrap:不含 'bootstrap'
-    expect(calls).toEqual(['close', 'db', 'boundary', 'pending']);
+    expect(calls).toEqual(['close', 'db', 'provider', 'boundary', 'pending']);
     expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', {
       agentKind: 'codex',
       model: 'gpt-5.5',
@@ -432,7 +484,7 @@ describe('deferred switch (turn running)', () => {
 
     await applyPendingAgentSwitchIfIdle(deps, 's1', { signal: controller.signal });
 
-    expect(calls).toEqual(['close', 'db', 'boundary', 'pending']);
+    expect(calls).toEqual(['close', 'db', 'provider', 'boundary', 'pending']);
     expect(store.has('s1')).toBe(false);
   });
 });
@@ -511,7 +563,7 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
     const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0][1];
     expect(boundary.resumed).toBe(true);
     // 增量 framing(归位续接),且工作状态区来自全量历史
-    expect(boundary.handoff).toContain('切回由你继续');
+    expect(boundary.handoff).toContain('now it is switching back to you');
     expect(boundary.handoff).toContain('- /repo/a.ts');
     expect(boundary.handoff).not.toContain('最早的问题');
     expect(boundary.handoff).toContain('离开期间的问题');
@@ -608,6 +660,7 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
     expect(deps.setPendingHandoff).toHaveBeenLastCalledWith(
       's1',
       expect.stringContaining('最早的问题'),
+      undefined,
     );
   });
 
@@ -621,5 +674,26 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
     expect(bootstrap).toHaveBeenCalledTimes(2);
     const lastPending = vi.mocked(deps.setPendingHandoff).mock.calls.at(-1)![1];
     expect(lastPending).toContain('最早的问题');
+  });
+
+  it('回落覆盖走真实 registry:第二次写入不被自己先前那次的代次挡掉', async () => {
+    // mock deps 的 setPendingHandoff 不带代次语义,挡不住这个回归:同一流程内第一次
+    // 写入会 bump 代次,第二次若仍拿最初的代次就会被 registry 静默丢弃,引擎只剩缺
+    // 早期历史的增量交接。这里接真 registry 验证最终留下的是全量交接。
+    const registry = createAgentHandoffPendingRegistry(async () => null);
+    const bootstrap = vi.fn(async () => {
+      throw new Error('spawn failed');
+    });
+    const { deps } = makeResumeDeps({
+      bootstrapSwitchedSession: bootstrap,
+      setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
+        registry.set(sessionId, handoff, expectedGeneration),
+      readPendingHandoffGeneration: (sessionId) => registry.readGeneration(sessionId),
+    });
+
+    await performSessionAgentSwitch(deps, validParams);
+
+    const pending = await registry.peek('s1');
+    expect(pending).toContain('最早的问题');
   });
 });

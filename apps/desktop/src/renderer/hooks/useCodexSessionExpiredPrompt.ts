@@ -1,9 +1,9 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
-import { triggerCodexLoginOnce } from './codexAuthLogin';
+import { useOwnedCodexLogin } from './useCodexAuth';
 import { isCodexOAuthReconnectRequired } from './codexAuthRecovery';
 
 export const isCodexSessionExpiredError = isCodexOAuthReconnectRequired;
@@ -16,12 +16,23 @@ export function useCodexSessionExpiredPrompt(options?: {
 }): (error: string) => boolean {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const triggerOwnedLogin = useOwnedCodexLogin();
   const promptedForErrorRef = useRef<string | null>(null);
   const promptActiveRef = useRef(false);
+  const mountedRef = useRef(true);
   const onAuthenticatedRef = useRef(options?.onAuthenticated);
   const onPromptClosedRef = useRef(options?.onPromptClosed);
   onAuthenticatedRef.current = options?.onAuthenticated;
   onPromptClosedRef.current = options?.onPromptClosed;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      promptedForErrorRef.current = null;
+      promptActiveRef.current = false;
+    };
+  }, []);
 
   return useCallback(
     (error: string) => {
@@ -45,6 +56,7 @@ export function useCodexSessionExpiredPrompt(options?: {
             cancelText: t('chat.errorBanner.codexSessionExpiredDialog.cancel'),
             autoFocusConfirm: true,
           });
+          if (!mountedRef.current) return;
           if (!shouldReconnect) {
             closePrompt();
             return;
@@ -52,7 +64,8 @@ export function useCodexSessionExpiredPrompt(options?: {
         }
 
         try {
-          const result = await triggerCodexLoginOnce();
+          const result = await triggerOwnedLogin();
+          if (!mountedRef.current) return;
           if (result.authenticated) {
             onAuthenticatedRef.current?.(error);
             toast.success(t('logic.toasts.codexConnected'));
@@ -60,13 +73,15 @@ export function useCodexSessionExpiredPrompt(options?: {
             toast.error(t('settings.connections.codex.toast.loginFailed'));
           }
         } catch {
-          toast.error(t('settings.connections.codex.toast.loginFailed'));
+          if (mountedRef.current) {
+            toast.error(t('settings.connections.codex.toast.loginFailed'));
+          }
         } finally {
-          closePrompt();
+          if (mountedRef.current) closePrompt();
         }
       })();
       return true;
     },
-    [confirm, options?.confirmBeforeLogin, t],
+    [confirm, options?.confirmBeforeLogin, t, triggerOwnedLogin],
   );
 }

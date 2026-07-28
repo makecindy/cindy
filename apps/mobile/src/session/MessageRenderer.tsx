@@ -2931,6 +2931,17 @@ function CollabCardShell({
 // 提到组件外避免 MobileAgentSwitchCard 每次重渲染都重建闭包。
 const agentSwitchEngineLabel = (kind: unknown): string => (kind === 'codex' ? 'Codex' : 'Claude Code');
 
+// 交接正文是否为英文格式(与 desktop SystemCard.tsx 同款判据)。content.handoff 是持久化
+// 数据:英文化之前落库的行仍是中文正文,升级后展开老卡片看到的就是中文——标题里「原文为
+// 英文」那句只能对新格式说。判据取英文结束标记的公共尾巴:三种英文标记都含它,旧中文标记不含。
+const ENGLISH_HANDOFF_TERMINATOR_TAIL = "; the user's new message follows ==";
+
+function isEnglishSourceHandoff(handoff: string): boolean {
+  // 锚在尾部而非 includes(与 desktop SystemCard.tsx 同款):正文里嵌着历史原文,
+  // 可能自身就含这段尾串,那样旧中文交接会被误判成英文。
+  return handoff.trimEnd().endsWith(ENGLISH_HANDOFF_TERMINATOR_TAIL);
+}
+
 // session-agent-switch 边界卡 —— 1:1 对齐桌面 SystemCard.tsx 的 AgentSwitchCard:
 // 「分隔线 + 居中药丸」语言(⇄ + 已从 X 切换到 Y + · 目标模型 + 可选 · 已续接原会话),
 // 而非通用盒子卡片。药丸可点展开交接摘要面板(切换时发给新引擎的上下文全文,数据来自
@@ -2983,7 +2994,11 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
       {expanded && handoff ? (
         <View style={styles.agentSwitchHandoffPanel}>
           <Text style={styles.agentSwitchHandoffTitle}>
-            {t('message.renderer.handoffContentDesc')}
+            {t(
+              isEnglishSourceHandoff(handoff)
+                ? 'message.renderer.handoffContentDescEnglishSource'
+                : 'message.renderer.handoffContentDesc',
+            )}
           </Text>
           {/* 交接全文内联展开:卡片本身在消息列表(LegendList)内,不再套内层 ScrollView——
               Android 上嵌套竖向滚动会被父列表截获手势导致内层滚不动(Fabric 更甚)。

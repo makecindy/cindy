@@ -182,9 +182,9 @@
   "pluginSetup": {
     "completeOnDesktop": "请在被控桌面完成设置，本卡片会自动更新状态。",
     "chooseOne": "选择一种配置方式",
-    "stepsHeading": "配置步骤",
     "progress": "{{satisfied}}/{{total}} 已完成",
     "desktopActionHint": "在电脑端{{action}}",
+    "a11ySeparator": "，",
     "phase": {
       "pending": "待设置",
       "action_running": "进行中…",
@@ -199,6 +199,8 @@
       "ACTION_STALE": "设置已更新，请重新选择配置操作。",
       "AUTH_CANCELLED": "授权已取消，您可以重新授权。",
       "AUTH_FAILED": "未能完成授权，请重试。",
+      "AUTH_NETWORK": "无法连接授权服务，请检查网络后重试。",
+      "AUTH_SERVICE_UNAVAILABLE": "授权服务暂不可用，请稍后重试。",
       "INLINE_INVALID": "配置内容无效，请检查后重试。",
       "INLINE_UNAVAILABLE": "当前版本无法在对话中保存此配置，请更新 Cindy 后重试。",
       "SAVE_FAILED": "未能保存配置，请重试。",

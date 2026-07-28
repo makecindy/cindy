@@ -234,7 +234,9 @@ function connectedProvider(
     source: 'builtin',
     agents: [agentKind],
     auth: { method: 'managed' },
-    routing: {},
+    routing: {
+      [agentKind]: { upstream: 'https://example.test', authStrategy: 'gateway-key' },
+    },
     models: { [agentKind]: models },
     connected: true,
   };

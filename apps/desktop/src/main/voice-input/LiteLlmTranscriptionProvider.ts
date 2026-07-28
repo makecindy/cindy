@@ -1,4 +1,6 @@
 import type { AsrEvent, AsrProvider } from '@cindy/voice-input-core';
+
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { elevenLabsLanguageCode } from './language.js';
 
 type LiteLlmTranscriptionProviderOptions = {
@@ -104,7 +106,7 @@ export async function transcribeLiteLlmAudioFile(input: LiteLlmAudioFileTranscri
   if (language) form.set('language', language);
   form.set('file', new Blob([exact], { type: mimeType }), fileName);
 
-  const response = await fetch(joinProxyPath(input.baseUrl, '/v1/audio/transcriptions'), {
+  const response = await outboundFetch(joinProxyPath(input.baseUrl, '/v1/audio/transcriptions'), {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${input.proxyApiKey}`,

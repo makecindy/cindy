@@ -123,7 +123,14 @@ export type IpcErrorCode =
   | 'SHARE_EXPORT_FAILED' // 导出编排失败(含超出体积上限)
   | 'SHARE_IMPORT_FAILED' // 导入编排失败(已回滚)
   | 'SHARE_WORKTREE_NOT_GIT' // 导入勾选 worktree 但所选目录不在 git 仓库内
-  | 'SHARE_WORKTREE_FAILED'; // 导入时 worktree 创建失败(已中止导入)
+  | 'SHARE_WORKTREE_FAILED' // 导入时 worktree 创建失败(已中止导入)
+  // 主题导入(local-themes:import)
+  | 'THEME_NOT_A_FILE' // 选中路径不是普通文件
+  | 'THEME_FILE_TOO_LARGE' // 超 4MB 上限
+  | 'THEME_UNSUPPORTED_FILE' // 无法识别为 VSCode / Obsidian 主题
+  | 'THEME_USES_INCLUDE' // VSCode 主题含 include(需基底才能完整解析)
+  | 'THEME_WRITE_ERROR' // 落盘失败(权限/磁盘)
+  | 'THEME_IMPORT_INTERNAL'; // 意外异常
 
 export interface IpcError {
   code: IpcErrorCode;
@@ -226,6 +233,12 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'SHARE_IMPORT_FAILED',
   'SHARE_WORKTREE_NOT_GIT',
   'SHARE_WORKTREE_FAILED',
+  'THEME_NOT_A_FILE',
+  'THEME_FILE_TOO_LARGE',
+  'THEME_UNSUPPORTED_FILE',
+  'THEME_USES_INCLUDE',
+  'THEME_WRITE_ERROR',
+  'THEME_IMPORT_INTERNAL',
 ]);
 
 export function isIpcErrorCode(code: unknown): code is IpcErrorCode {

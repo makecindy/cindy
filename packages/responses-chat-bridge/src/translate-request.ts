@@ -123,6 +123,8 @@ interface TranslateInputOptions {
   toolCallReasoningPlaceholder: boolean;
   /** Gemini 3 OpenAI 兼容层:为每步首个回放 tool call 注入官方允许的签名跳过值。 */
   googleThoughtSignaturePlaceholder: boolean;
+  /** 丢弃的无上下文内建 input item(Codex tool_search 等)回调,供 handler 记 log。 */
+  onDroppedInputItem?: (type: string, index: number) => void;
 }
 
 /** cc-switch 的占位口径:kimi/DeepSeek 要求 tool_call assistant 消息带非空 reasoning_content。 */
@@ -182,6 +184,18 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
   for (let index = 0; index < input.length; index += 1) {
     const item = input[index];
     if (!isPlainObject(item)) throw new UnsupportedResponsesFeatureError(`input[${index}]`);
+    const itemType = typeof item.type === 'string' ? item.type : undefined;
+    if (
+      itemType === 'tool_search_call'
+      || itemType === 'tool_search_output'
+      || itemType === 'tool_search_call_output'
+    ) {
+      // Codex 内建 tool_search 的回放 item：与 namespace/web_search 工具声明同口径，
+      // 对第三方 Chat 上游无意义且不承载用户上下文，必须作为“非边界”item 剥掉降级
+      // —— 在 flushAssistant 之前处理，避免拆分本应合并的 assistant message。
+      opts.onDroppedInputItem?.(itemType, index);
+      continue;
+    }
 
     if ('role' in item && typeof item.role === 'string') {
       const content = messageContent(
@@ -336,6 +350,8 @@ export interface TranslateResponsesRequestOptions {
   capabilities?: ChatBridgeCapabilities;
   /** 被剥掉的非 function 工具(Codex 内建 namespace / local_shell 等)回调,供 handler 记 log。 */
   onDroppedTool?: (type: string, index: number) => void;
+  /** 被剥掉的无上下文内建 input item(Codex tool_search 等)回调,供 handler 记 log。 */
+  onDroppedInputItem?: (type: string, index: number) => void;
 }
 
 /** Convert a Codex Responses request to a streaming Chat Completions request. */
@@ -353,6 +369,7 @@ export function translateResponsesRequest(
     imageInput: capabilities.imageInput,
     toolCallReasoningPlaceholder: capabilities.toolCallReasoningPlaceholder === true,
     googleThoughtSignaturePlaceholder: capabilities.googleThoughtSignaturePlaceholder === true,
+    onDroppedInputItem: opts.onDroppedInputItem,
   });
   if (input.instructions) {
     messages.unshift({ role: developerRole, content: input.instructions });

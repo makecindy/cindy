@@ -1162,7 +1162,7 @@ describe('groupWorkRuns — work-group collapsing', () => {
     expect(items[2].key).toBe('plan-tw1');
   });
 
-  it('computes durationMs from run start createdAt to the terminating text createdAt', () => {
+  it('computes durationMs from the previous boundary (user message) to the terminating text createdAt', () => {
     const seq = [
       withTs(mkUser('u1'), '2026-06-10T10:00:00.000Z'),
       withTs(mkTool('t1', 'Bash'), '2026-06-10T10:00:05.000Z'),
@@ -1171,7 +1171,9 @@ describe('groupWorkRuns — work-group collapsing', () => {
     ];
     const items = build(seq, false);
     const group = items.find((it): it is Extract<RenderItem, { type: 'work_group' }> => it.type === 'work_group');
-    expect(group?.durationMs).toBe(140_000); // 10:00:05 → 10:02:25 = 2m20s
+    // 10:00:00 → 10:02:25 = 2m25s:段起点锚上一边界(用户消息),把首个动作到达前
+    // 的模型思考/延迟计入,与「正在工作…」活表口径一致(见 workGroupDurationAnchor.test)。
+    expect(group?.durationMs).toBe(145_000);
   });
 
   it('computes each nested action duration between assistant work updates', () => {
@@ -1190,10 +1192,12 @@ describe('groupWorkRuns — work-group collapsing', () => {
     const nested = outer.children.filter(
       (child): child is Extract<RenderItem, { type: 'work_group' }> => child.type === 'work_group',
     );
-    expect(outer.durationMs).toBe(18_000);
+    // 外层从上一边界(用户消息 10:00:00)到最终正文 10:00:20 = 20s;
+    // 内层各段从上一句正文起表:t1 = 10:00:01→10:00:10 = 9s,t2 = 10:00:10→10:00:20 = 10s。
+    expect(outer.durationMs).toBe(20_000);
     expect(nested.map((group) => [group.key, group.durationMs])).toEqual([
-      ['work-t1', 8_000],
-      ['work-t2', 8_000],
+      ['work-t1', 9_000],
+      ['work-t2', 10_000],
     ]);
   });
 

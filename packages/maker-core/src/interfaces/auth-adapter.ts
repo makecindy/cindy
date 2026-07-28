@@ -9,6 +9,12 @@
 import type { AuthState } from '../types/common.js';
 
 export type AgentCredentialMode = 'gateway-key' | 'oauth-bearer' | 'provider-oauth';
+export type AgentLoginMode = 'browser' | 'device-code';
+
+export interface AuthLoginOptions {
+  mode?: AgentLoginMode;
+  onProgress?: (msg: string) => void;
+}
 
 export interface AuthAdapterOptions {
   /**
@@ -26,7 +32,7 @@ export interface AuthAdapter {
   getState(options?: AuthAdapterOptions): Promise<AuthState>;
 
   /** 触发登录流程（OAuth 跳浏览器 / API key 弹窗 / 报错） */
-  triggerLogin(opts?: { onProgress?: (msg: string) => void }): Promise<AuthState>;
+  triggerLogin(opts?: AuthLoginOptions): Promise<AuthState>;
 
   /** 退出登录，清理本地凭证 */
   logout(): Promise<void>;

@@ -13,6 +13,7 @@ import {
   setComposerDraftOwner,
   subscribeDraft,
   subscribeDraftPresence,
+  tiptapDocHasContent,
   type ComposerDraft,
 } from '@/lib/composerDraftStore';
 
@@ -82,6 +83,24 @@ describe('draftHasContent', () => {
               {
                 type: 'paragraph',
                 content: [{ type: 'composerQuote', attrs: { text: 'quoted' } }],
+              },
+            ],
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('counts an empty structured list item as content', () => {
+    expect(
+      draftHasContent(
+        draft({
+          text: {
+            type: 'doc',
+            content: [
+              {
+                type: 'bulletList',
+                content: [{ type: 'listItem', content: [{ type: 'paragraph' }] }],
               },
             ],
           },
@@ -253,5 +272,17 @@ describe('draft presence subscription', () => {
 
     unsubPresence();
     unsubContent();
+  });
+
+  // ChatInput 的外部草稿订阅用这个判空把「空文档 JSON」折叠成 null,再与
+  // 「编辑器为空」比较。两侧口径不一致时,每次外部草稿通知都会拿一份空文档整段
+  // setContent,把按位置存活的编辑器状态(语音草稿锚点)连带重建 —— 语音录音时
+  // 首行多出一个空行就是这么来的。
+  it('treats an empty / whitespace-only document as having no content', () => {
+    expect(tiptapDocHasContent(emptyDoc)).toBe(false);
+    expect(tiptapDocHasContent(whitespaceDoc)).toBe(false);
+    expect(tiptapDocHasContent(null)).toBe(false);
+    expect(tiptapDocHasContent(textDoc)).toBe(true);
+    expect(tiptapDocHasContent(mentionDoc)).toBe(true);
   });
 });

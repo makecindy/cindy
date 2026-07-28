@@ -475,6 +475,7 @@ describe('isSelectedSourceDisconnected — 会话显式来源断连判定', () =
       name: id,
       connected,
       agents,
+      routing: Object.fromEntries(agents.map((agent) => [agent, {}])),
       models: { [AGENT]: [{ id: MODEL_ID }] },
     }) as unknown as ProviderView;
 

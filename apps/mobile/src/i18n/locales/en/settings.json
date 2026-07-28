@@ -111,6 +111,22 @@
     "done": "Copied",
     "accessibility": "Copy {{label}}"
   },
+  "voiceDictionary": {
+    "sectionTitle": "Voice dictionary",
+    "label": "View dictionary",
+    "hint": "Your dictionary lives on your computers and syncs between them automatically. This is a read-only view — add or remove terms on a computer.",
+    "openAccessibility": "View voice dictionary",
+    "screenTitle": "Voice dictionary",
+    "entryCount": "{{count}} terms",
+    "aliasSeparator": ", ",
+    "aliases": "Often misheard as: {{aliases}}",
+    "refresh": "Refresh",
+    "refreshing": "Refreshing…",
+    "refreshAccessibility": "Refresh dictionary",
+    "readOnlyHint": "Read-only here — add or remove terms on a computer.",
+    "offlineHint": "None of your computers are online. Showing what was last synced to your phone.",
+    "noDesktops": "No computers yet. Sign in on a computer with the same account and your dictionary will show up here."
+  },
   "deviceNameEditor": {
     "screenTitle": "Device Name",
     "placeholder": "Phone name",

@@ -328,6 +328,7 @@ describe('orca-workers tab actions', () => {
         focusTab: false,
       },
       allowOpen: false,
+      userInitiated: true,
     });
     expect(getBucket('s1').tabs).toEqual([]);
     expect(tabsIpc.upsert).not.toHaveBeenCalled();
@@ -357,6 +358,7 @@ describe('orca-workers tab actions', () => {
         focusTab: true,
       },
       allowOpen: true,
+      userInitiated: true,
     });
   });
 
@@ -369,6 +371,7 @@ describe('orca-workers tab actions', () => {
     expect(mocks.sendCommand).toHaveBeenNthCalledWith(1, {
       command: { type: 'ensure-orca-workers-tab', sessionId: 's1', focusTab: false },
       allowOpen: false,
+      userInitiated: true,
     });
     expect(mocks.sendCommand).toHaveBeenNthCalledWith(2, {
       command: {
@@ -378,6 +381,7 @@ describe('orca-workers tab actions', () => {
         focusTab: false,
       },
       allowOpen: false,
+      userInitiated: true,
     });
   });
 
@@ -400,6 +404,7 @@ describe('orca-workers tab actions', () => {
         focusTab: true,
       },
       allowOpen: true,
+      userInitiated: true,
     });
     expect(requests).toEqual([{ visibility: 'open', opts: { sessionId: 's1' } }]);
     expect(getBucket('s1').tabs).toEqual([]);
@@ -414,6 +419,7 @@ describe('orca-workers tab actions', () => {
     expect(mocks.sendCommand).toHaveBeenCalledWith({
       command: { type: 'close-orca-workers-tab', sessionId: 's1' },
       allowOpen: false,
+      userInitiated: true,
     });
     expect(tabsIpc.close).not.toHaveBeenCalled();
   });

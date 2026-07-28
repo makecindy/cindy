@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Sun, Moon, Monitor, ChevronDown, Check, Copy, FolderOpen, RefreshCw } from 'lucide-react';
+import {
+  Sun,
+  Moon,
+  Monitor,
+  ChevronDown,
+  Check,
+  Copy,
+  FolderOpen,
+  Import as ImportIcon,
+  RefreshCw,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { basename, cn } from '@/lib/utils';
@@ -29,9 +39,20 @@ import { isLocalThemeId } from '../../../shared/local-themes';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
+import { extractIpcError } from '@/utils/ipcError';
 import { FontFamilyPicker, type FontPreset } from './FontFamilyPicker';
 
 const log = createLogger('settings/AppearanceSection');
+
+/** IPC 错误码 → 专门文案；未列出的码落到通用 importFailed。 */
+const IMPORT_ERROR_KEYS: Record<string, string> = {
+  THEME_UNSUPPORTED_FILE: 'settings.appearance.localThemes.importUnsupported',
+  THEME_USES_INCLUDE: 'settings.appearance.localThemes.importUsesInclude',
+  THEME_NOT_A_FILE: 'settings.appearance.localThemes.importNotAFile',
+  THEME_FILE_TOO_LARGE: 'settings.appearance.localThemes.importTooLarge',
+  THEME_WRITE_ERROR: 'settings.appearance.localThemes.importWriteError',
+  THEME_IMPORT_INTERNAL: 'settings.appearance.localThemes.importInternalError',
+};
 
 type ThemeOption = 'light' | 'dark' | 'system';
 
@@ -376,6 +397,46 @@ export function AppearanceSection() {
     );
   }, [familyId, t, theme]);
 
+  const handleImport = useCallback(async () => {
+    let result;
+    try {
+      result = await window.electronAPI.localThemes.importExternal();
+    } catch (err) {
+      const ipcErr = extractIpcError(err);
+      const key = ipcErr ? IMPORT_ERROR_KEYS[ipcErr.code] : undefined;
+      toast.error(
+        key
+          ? t(key)
+          : t('settings.appearance.localThemes.importFailed', { error: ipcErr?.code ?? 'UNKNOWN' }),
+      );
+      return;
+    }
+    if (result.canceled) return;
+    await refreshLocalThemes();
+    const name = result.written[0]?.name ?? '';
+    const skipped = result.report.skippedProtected;
+    const unresolved = result.report.unresolved.length;
+    const derived = result.report.derivedRoles.length;
+    if (skipped > 0 || unresolved > 0 || derived > 0) {
+      toast.success(
+        t('settings.appearance.localThemes.importPartial', {
+          name,
+          themeCount: result.written.length,
+          skipped,
+          unresolved,
+          derived,
+        }),
+      );
+      return;
+    }
+    toast.success(
+      t('settings.appearance.localThemes.importSuccess', {
+        name,
+        themeCount: result.written.length,
+      }),
+    );
+  }, [t]);
+
   const handleOpenDir = useCallback(async () => {
     const result = await window.electronAPI.localThemes.openDir();
     if (!result.success) {
@@ -528,6 +589,11 @@ export function AppearanceSection() {
               icon={Copy}
               label={t('settings.appearance.localThemes.export')}
               onClick={() => { void handleExport(); }}
+            />
+            <LocalThemeIconButton
+              icon={ImportIcon}
+              label={t('settings.appearance.localThemes.import')}
+              onClick={() => { void handleImport(); }}
             />
             <LocalThemeIconButton
               icon={FolderOpen}

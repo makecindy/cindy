@@ -26,14 +26,16 @@ const PERMISSION_MODES = [
   { id: 'auto', displayName: '自动审批', description: 'auto desc' },
   { id: 'bypassPermissions', displayName: '完全访问', description: 'bypass desc' },
 ];
+let mockPermissionModes = PERMISSION_MODES;
 
 vi.mock('@/hooks/useAgentCapabilities', () => ({
-  useAgentCapabilities: () => ({ capabilities: { permissionModes: PERMISSION_MODES } }),
+  useAgentCapabilities: () => ({ capabilities: { permissionModes: mockPermissionModes } }),
 }));
 
 import { PermissionSelector } from '../components/new-chat/PermissionSelector';
 
 afterEach(() => {
+  mockPermissionModes = PERMISSION_MODES;
   cleanup();
   vi.restoreAllMocks();
 });
@@ -63,11 +65,73 @@ describe('PermissionSelector (MorphPopover pilot)', () => {
     expect(listbox).toBeTruthy();
     expect(screen.getAllByRole('option')).toHaveLength(4);
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
-    // 选中档正确标记(焦点策略 2026-07-23 改回落首个可交互项,恢复键盘可达性,见 codex review)
+    // 选中档正确标记
     const selected = screen
       .getAllByRole('option')
       .find((o) => o.getAttribute('aria-selected') === 'true');
     expect(selected).toBeTruthy();
+  });
+
+  it('打开时聚焦当前选中权限，避免 focus tooltip 错指向首个选项', async () => {
+    renderSelector({ permissionMode: 'bypassPermissions' });
+    fireEvent.click(getTrigger());
+
+    const selectedOption = await screen.findByRole('option', { name: '完全访问' });
+    await waitFor(() => expect(document.activeElement).toBe(selectedOption));
+  });
+
+  it.each([
+    ['chip', undefined],
+    ['field', 'field' as const],
+  ])('%s 形态在 capability 异步返回后聚焦当前选中权限', async (_name, triggerVariant) => {
+    mockPermissionModes = [];
+    const { onChange, rerender } = renderSelector({
+      permissionMode: 'bypassPermissions',
+      triggerVariant,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /bypassPermissions/ }));
+    await screen.findByRole('listbox');
+
+    mockPermissionModes = PERMISSION_MODES;
+    rerender(
+      <PermissionSelector
+        permissionMode="bypassPermissions"
+        onPermissionModeChange={onChange}
+        triggerVariant={triggerVariant}
+      />,
+    );
+
+    const selectedOption = await screen.findByRole('option', { name: '完全访问' });
+    await waitFor(() => expect(document.activeElement).toBe(selectedOption));
+  });
+
+  it('从当前权限支持方向键、Home、End 访问全部选项', async () => {
+    renderSelector({ permissionMode: 'bypassPermissions' });
+    fireEvent.click(getTrigger());
+
+    const listbox = await screen.findByRole('listbox');
+    const defaultOption = screen.getByRole('option', { name: '默认权限' });
+    const bypassOption = screen.getByRole('option', { name: '完全访问' });
+    await waitFor(() => expect(document.activeElement).toBe(bypassOption));
+    expect(bypassOption.tabIndex).toBe(0);
+    expect(defaultOption.tabIndex).toBe(-1);
+
+    fireEvent.keyDown(listbox, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(defaultOption);
+    expect(defaultOption.tabIndex).toBe(0);
+    expect(bypassOption.tabIndex).toBe(-1);
+    fireEvent.keyDown(listbox, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(bypassOption);
+    expect(bypassOption.tabIndex).toBe(0);
+    expect(defaultOption.tabIndex).toBe(-1);
+    fireEvent.keyDown(listbox, { key: 'Home' });
+    expect(document.activeElement).toBe(defaultOption);
+    expect(defaultOption.tabIndex).toBe(0);
+    expect(bypassOption.tabIndex).toBe(-1);
+    fireEvent.keyDown(listbox, { key: 'End' });
+    expect(document.activeElement).toBe(bypassOption);
+    expect(bypassOption.tabIndex).toBe(0);
+    expect(defaultOption.tabIndex).toBe(-1);
   });
 
   it('点击选项回调 onPermissionModeChange 并收合卸载', async () => {
@@ -131,6 +195,18 @@ describe('PermissionSelector triggerVariant', () => {
     expect(cls).not.toContain('settings-input-bg');
   });
 
+  it('普通会话的超窄态也收成图标，field 形态不受影响', () => {
+    const { unmount } = renderSelector({ iconOnly: true });
+    const compactTrigger = getTrigger();
+    expect(compactTrigger.className).toContain('w-[34px]');
+    expect(compactTrigger.textContent).toBe('');
+    expect(compactTrigger.getAttribute('aria-label')).toContain('默认权限');
+
+    unmount();
+    renderSelector({ iconOnly: true, triggerVariant: 'field' });
+    expect(getTrigger().textContent).toContain('默认权限');
+  });
+
   it('field 形态:输入面样式,与 ModelSelector 的 field trigger 同规格(pill,§4 Select 触发器)', () => {
     renderSelector({ triggerVariant: 'field' });
     const cls = getTrigger().className;
@@ -185,6 +261,14 @@ describe('PermissionSelector triggerVariant', () => {
 
     fireEvent.click(screen.getByText('完全访问'));
     expect(onChange).toHaveBeenCalledWith('bypassPermissions');
+  });
+
+  it('field 形态打开时同样聚焦当前选中权限', async () => {
+    renderSelector({ triggerVariant: 'field', permissionMode: 'bypassPermissions' });
+    fireEvent.click(getTrigger());
+
+    const selectedOption = await screen.findByRole('option', { name: '完全访问' });
+    await waitFor(() => expect(document.activeElement).toBe(selectedOption));
   });
 
   it('ariaContext 前置到 trigger 可及名(多实例同屏读屏区分,不传则原样)', () => {

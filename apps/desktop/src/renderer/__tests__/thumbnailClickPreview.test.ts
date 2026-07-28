@@ -36,8 +36,10 @@ describe('Attachment thumbnail — click opens lightbox (attachment-thumb-click)
     expect(chatInput).toMatch(
       /import\s+\{\s*ImageLightbox\s*\}\s+from\s+'@\/components\/chat\/ImageLightbox'/,
     );
+    // 该模块还导出 formatBytes(文件卡的大小副行复用它),所以这里只钉
+    // TextLightbox 在具名导入列表里,不锁死整条 import 的成员组成。
     expect(chatInput).toMatch(
-      /import\s+\{\s*TextLightbox\s*\}\s+from\s+'@\/components\/chat\/TextLightbox'/,
+      /import\s+\{[^}]*\bTextLightbox\b[^}]*\}\s+from\s+'@\/components\/chat\/TextLightbox'/,
     );
   });
 

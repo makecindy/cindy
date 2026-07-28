@@ -472,9 +472,11 @@ describe('billing IPC', () => {
     });
   });
 
-  it('opens only public HTTPS Stripe Checkout URLs from the main top-level frame', async () => {
+  it.each([
+    'https://checkout.stripe.com/c/pay/session_fixture#fragment',
+    'https://invoice.stripe.com/i/acct_fixture/test_fixture',
+  ])('opens a public HTTPS Stripe payment URL from the main top-level frame: %s', async (url) => {
     const { call, openExternal } = harness();
-    const url = 'https://checkout.stripe.com/c/pay/session_fixture#fragment';
 
     await expect(call(BILLING_INVOKE.OPEN_PAYMENT_REDIRECT, { url })).resolves.toEqual({
       success: true,
@@ -488,7 +490,9 @@ describe('billing IPC', () => {
     'javascript:alert(1)',
     'stripe://checkout/session',
     'https://checkout.stripe.com.evil.example/c/pay/test',
+    'https://invoice.stripe.com.evil.example/i/test',
     'https://checkout.stripe.com@evil.example/c/pay/test',
+    'https://invoice.stripe.com@evil.example/i/test',
     'https://user:password@checkout.stripe.com/c/pay/test',
     'https://checkout.stripe.com:444/c/pay/test',
     `https://checkout.stripe.com/c/pay/${'x'.repeat(2_100)}`,

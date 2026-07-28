@@ -34,6 +34,15 @@ describe('subscriptions topic lifecycle listeners', () => {
     expect(subscribed).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps negotiated controller capabilities until the controller is cleared', () => {
+    subscriptions.subscribe('c1', ['sessions'], 'Phone', ['provider-logo-kinds-v2']);
+    expect(subscriptions.controllerSupports('c1', 'provider-logo-kinds-v2')).toBe(true);
+    subscriptions.subscribe('c1', ['session:s1'], 'Phone');
+    expect(subscriptions.controllerSupports('c1', 'provider-logo-kinds-v2')).toBe(true);
+    subscriptions.clearController('c1');
+    expect(subscriptions.controllerSupports('c1', 'provider-logo-kinds-v2')).toBe(false);
+  });
+
   it('unsubscribe releases only when no controller still holds the topic', () => {
     subscriptions.subscribe('c1', ['fs-watch:/w1']);
     subscriptions.subscribe('c2', ['fs-watch:/w1']);

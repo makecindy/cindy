@@ -144,6 +144,7 @@ import {
 } from './updateService';
 import {
   createUpdatePresentationRecoveryController,
+  decideUpdateRelaunchBusyTransition,
   hasUpdateRelaunchBusyActivity,
   isMacOSUpdateRelaunch,
   readUpdateRelaunchScheduleBusy,
@@ -213,6 +214,7 @@ import {
 import { localFileSchemePrivilege, registerLocalFileProtocolHandler } from './localFileProtocol';
 import { audioFileSchemePrivilege, registerAudioFileProtocolHandler } from './audioFileProtocol';
 import { buildSystemPathBlocklist, isPathAllowedAgainst } from './filePathPolicy';
+import { readFileThumbnail } from './fileThumbnail';
 import { resolveShellOpenPathTarget } from './shellOpenPath';
 import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandboxAdapter';
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
@@ -241,6 +243,7 @@ import { getDrizzleDir } from './localDb/migrate';
 import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
 import { startEmbeddingHost, stopEmbeddingHost, isEmbeddingHostStarted } from './embedding-host';
 import { readClaudeApiKey } from './maker-host/auth-adapters';
+import { outboundFetch } from './maker-host/outbound-fetch';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import { onQuit, installQuitHandler } from './lifecycle';
 import { initStartupDiagnostics } from './startup-diagnostics';
@@ -268,9 +271,9 @@ import { WindowManualDragController } from './windowManualDrag';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import { initDeviceLinkService, releaseDeviceLinkOwnershipBeforeLogout } from './device-link';
 import {
-  getSubscribedControllers,
+  getUpdateRelaunchControllers,
+  hasInFlightRemoteInvokes,
   setSessionsSubscribedListener,
-  setSubscribedControllersChangedListener,
 } from './device-link/dispatch';
 import {
   registerDeviceLinkIpc,
@@ -354,6 +357,7 @@ import {
 import {
   disposeBrowserRuntime,
   registerBrowserBackendIpc,
+  setBrowserSessionUploadRootResolver,
   setMainWindowAccessorForBackend,
   setEnsureHostForBackend,
   setIsDetachedForBackend,
@@ -410,6 +414,7 @@ import {
   logoutGrok,
   hasGrokOAuthLogin,
 } from './maker-host/grok-oauth-login.js';
+import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation-host.js';
 import {
   readSilentEncryptedRetrySettingsState,
   resetSilentEncryptedRetrySettings,
@@ -764,6 +769,9 @@ function attemptStartEmbeddingHost(): void {
       getApiKey: () => readClaudeApiKey(),
       // 函数形态:model-access 下发切换 endpoint 后,常驻的 embedding host 无需重启。
       gatewayBaseUrl: () => effectiveXdGatewayBaseUrl(),
+      // /v1/embeddings 也要吃系统代理:裸全局 fetch 在「系统代理」模式下裸直连出网
+      // (见 maker-host/outbound-fetch.ts)。
+      fetchImpl: outboundFetch,
       log: createSchedulerLogger('embeddingHost'),
     });
     // chat-history-embedder consumer 注册 + setEnabled(true) 触发 cutoff 落盘。
@@ -997,7 +1005,7 @@ installWebviewHardener();
 // 调用时机远晚于此处构造),状态机本体见 right-sidebar-window/controller.ts。
 const rsbWindowController = new RsbWindowController({
   settings: { read: readRsbWindowSettings, writePatch: writeRsbWindowSettingsPatch },
-  createWindow: () => createRightSidebarWindow(),
+  createWindow: (opts) => createRightSidebarWindow(opts),
   getMainWindow: () => mainWindowRef,
   broadcastState: (state) => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -1096,6 +1104,15 @@ registerTabOpResultHandler({
 setMainWindowAccessorForBackend(() => rsbWindowController.getHostWebContents());
 setEnsureHostForBackend(() => rsbWindowController.ensureOpenForAutomation());
 setIsDetachedForBackend(() => readRsbWindowSettings().detached);
+setBrowserSessionUploadRootResolver(async (sessionId) => {
+  try {
+    const meta = await getMakerCore().getSessionMeta(sessionId);
+    if (!meta?.workDir || meta.remoteHostId) return [];
+    return [meta.workDir];
+  } catch {
+    return [];
+  }
+});
 registerBrowserBackendIpc();
 
 // ── 应用级快捷键 override 存储 IPC ──────────────────────────────────────
@@ -2396,9 +2413,6 @@ const registerIpcHandlers = () => {
   setSessionsSubscribedListener(() => {
     getAgentIslandService()?.replaySessionActivity();
   });
-  setSubscribedControllersChangedListener(() => {
-    notifyUpdateAutoRelaunchBusyStateChanged();
-  });
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。
   ipcMain.handle(MAKER_IPC_INVOKE.OPEN_SESSION_IN_NEW_WINDOW, (_e, sessionId: unknown) => {
@@ -2779,6 +2793,13 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_CANCEL, async () => {
     cancelClaudeOAuthLogin();
     return { authorized: hasClaudeAiOAuth() };
+  });
+
+  // 上游作废 xAI 凭证、收口自动登出后,走和手动登出完全一致的 UI 收尾(广播 + 清账号级
+  // 限流快照),否则用户会停在「显示已连接、请求连环 403」的假状态。
+  setXaiAuthInvalidatedHandler(() => {
+    clearXaiRateLimitSnapshot();
+    broadcastXaiAuthStateChanged();
   });
 
   // xAI(SuperGrok 订阅)OAuth —— 与 claude-oauth 同形态。登录成功后 bridge 的 xai provider 立即可用
@@ -3541,12 +3562,14 @@ const registerIpcHandlers = () => {
     // 由 prepareCodexExtraSpawnConfig 懒启动(幂等);此处不再按全局开关 eager-start。
     try {
       setUpdateAutoRelaunchBusyProbe(async () => {
-        // A remote operator may be reading the UI without an active agent turn.
-        // Treat any subscribed view/control session as busy so unattended
-        // relaunch cannot cut the only path back into a home-server install.
+        // A remote operator may be viewing a live session or file tree without an agent turn.
+        // Keep those paths alive, but do not let the lightweight `sessions` list subscription
+        // held by every eligible device block updates forever.
         return hasUpdateRelaunchBusyActivity({
           readSynchronousBusy: () =>
-            getSubscribedControllers().length > 0 || anySessionInTurn(getMakerCore()),
+            getUpdateRelaunchControllers().length > 0 ||
+            hasInFlightRemoteInvokes() ||
+            anySessionInTurn(getMakerCore()),
           readScheduleBusy: () => readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
         });
       });
@@ -4911,6 +4934,20 @@ const registerIpcHandlers = () => {
     );
   }
 
+  // 附件卡缩略图:系统缩略图服务(macOS QuickLook / Windows Shell)按路径出小预览。
+  // 高权限入口——先过 sender 闸,再由 readFileThumbnail 做路径策略与 payload 校验;
+  // 任何失败都回 null,由 renderer 回落到自绘文件图标。
+  ipcMain.handle(
+    'file:thumbnail',
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      params: { path: string; size: number; revalidate?: boolean },
+    ) => {
+      assertTrustedAppRendererEvent(event);
+      return readFileThumbnail(params);
+    },
+  );
+
   // ── CC Agent SDK IPC handlers (Stage 2 C1 大批退役) ──
   // 老 cc-agent:* handler 全部退役 —— renderer 已切到 maker.* (A4/A5/B/B'/B''/C1/C2)。
   // 各项搬迁去向:
@@ -5573,7 +5610,17 @@ app.on('ready', async () => {
   // 在线人数心跳:App 启动即上报,内部走 deviceId / userId 兜底,登录前后都活
   initHeartbeatService();
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
-  initDeviceLinkService();
+  let updateRelaunchRemoteBusy = false;
+  initDeviceLinkService({
+    onUpdateRelaunchBusyChanged: (busy) => {
+      const transition = decideUpdateRelaunchBusyTransition(
+        updateRelaunchRemoteBusy,
+        busy,
+      );
+      updateRelaunchRemoteBusy = transition.nextBusy;
+      if (transition.shouldNotify) notifyUpdateAutoRelaunchBusyStateChanged();
+    },
+  });
   registerDeviceLinkIpc();
   // 注:invoke-capture 自检(assertCaptureHealthy)不在这里——maker:create-session / maker:send
   // 由 splash 后的 registerMakerIpcsAfterSplash 延迟注册,此刻尚未注册。自检已挪到该函数末尾

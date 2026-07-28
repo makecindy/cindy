@@ -22,6 +22,8 @@ interface LocalThemeJson {
   id: string;
   name: string;
   type: 'light' | 'dark';
+  /** 可选家族键，见 shared/local-themes.ts 的 LocalThemeWire.family。 */
+  family?: string;
   colors: Record<string, string>;
   brand?: LocalThemeBrandConfig;
 }
@@ -134,10 +136,16 @@ function parseLocalThemeJson(raw: unknown): LocalThemeJson {
   }
 
   const brand = parseBrand(raw.brand);
+  // family 只认非空字符串;缺省/空白一律视为"不配对"(每个文件各自成家族),
+  // 保持引入该字段前的行为。
+  const family = typeof raw.family === 'string' && raw.family.trim().length > 0
+    ? raw.family.trim()
+    : undefined;
   return {
     id,
     name,
     type: raw.type,
+    ...(family ? { family } : {}),
     colors,
     ...(brand ? { brand } : {}),
   };

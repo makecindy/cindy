@@ -1,8 +1,9 @@
 /**
- * Tiptap 扩展 —— composer 列表行缩进(纯视觉,对齐 Claude 原生 App 的
- * "进入列表模式"反馈)。
+ * Tiptap 扩展 —— composer 纯文本 Markdown 列表的兼容缩进。
  *
- * 行为:当某一"行"(段落内以 hardBreak 划分)以列表 / 待办 / 引用前缀开头
+ * 结构化 bullet / ordered list 由 schema 和原生列表布局负责；本扩展只处理
+ * 粘贴或旧草稿中仍为文本的列表，以及待办 / 引用前缀。当某一"行"
+ * (段落内以 hardBreak 划分)以列表 / 待办 / 引用前缀开头
  * (`1. ` / `- ` / `- [ ] ` / `> ` 等,与列表接续共用 matchListPrefix 判定),
  * 单行段落使用 node decoration,hardBreak 分隔的多行段落按行使用 inline
  * decoration；连续数字/字母正文使用 marker/body 两个盒子，避免长串把
@@ -19,8 +20,9 @@
  * - decoration 只是渲染层,doc JSON / 草稿存储 / 发送内容里没有任何痕迹;
  * - doc 没变直接复用 DecorationSet,变了全量重扫(chat input 文本量小,
  *   全量成本可忽略,不值得做增量映射);
- * - 只在 doc 发生变化时重算,view.update 不参与 decoration 计算;
- * - 这是纯文本编辑器的视觉缩进,不改变 doc JSON / 发送文本。
+ * - IME composition 开始前临时移除 decoration,结束后的下一轮 task 再按
+ *   当前 doc 补算,避免微软拼音输入时改写 composition DOM;
+ * - 这是兼容文本行的视觉缩进,不改变 doc JSON / 发送文本。
  */
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
@@ -39,8 +41,18 @@ import {
   type VoiceInputReplacementRange,
 } from './VoiceInputDraftDecoration';
 
-const PLUGIN_KEY = new PluginKey<DecorationSet>('composerListIndentDecoration');
 const TAB_SIZE = 8;
+
+type ListDecorationPluginState = {
+  decorations: DecorationSet;
+  suspendedForComposition: boolean;
+};
+
+type CompositionMeta = 'suspend' | 'resume';
+
+const PLUGIN_STATE_KEY = new PluginKey<ListDecorationPluginState>(
+  'composerListIndentDecorationState',
+);
 
 /** 行内一个非文本 inline 节点(mention chip 等)的占位符,与 applyListContinuation 一致。 */
 const ATOM_PLACEHOLDER = '\uFFFC';
@@ -49,7 +61,6 @@ const CJK_PUNCTUATION_RE = /[\u3000-\u303f\uff00-\uffef]/;
 // 普通句子里偶然出现长 token 时，交给 overflow-wrap:anywhere，保留空格
 // 的自然断词行为，避免把整句变成逐字断行。
 const LONG_ALPHANUMERIC_BODY_RE = /^\s*[A-Za-z0-9]{12,}\s*$/;
-
 interface ListIndentValues {
   ch: number;
   em: number;
@@ -62,6 +73,10 @@ function listPrefixIndentValues(prefix: string): ListIndentValues {
     if (char >= '0' && char <= '9') {
       ch += 1;
     } else if (char === '\t') {
+      // Reserve a full 8ch slot for each tab. The browser's native tab advance
+      // is at most 8ch, so this remains safe when an earlier full-width marker
+      // contributes `em` that cannot participate in deterministic ch-only
+      // tab-stop arithmetic.
       ch += TAB_SIZE;
     } else if (char === '、' || char === '\u3000') {
       em += 1;
@@ -185,9 +200,12 @@ export function buildListIndentDecorations(
     lineEndOffset = block.content.size;
     flushLine(); // 段落最后一行
 
+    const compatibilityMatch = (line: (typeof lines)[number]) => {
+      return matchListPrefix(line.text);
+    };
     const lineMatches = lines.map((line) => ({
       line,
-      match: matchListPrefix(line.text),
+      match: compatibilityMatch(line),
     }));
     const hasFallbackLine = lineMatches.some(({ line, match }) => {
       if (!match) return false;
@@ -228,7 +246,7 @@ export function buildListIndentDecorations(
     }
 
     const addLineDecoration = (line: (typeof lines)[number]) => {
-      const match = matchListPrefix(line.text);
+      const match = compatibilityMatch(line);
       if (!match) {
         if (hasFallbackLine && lines.length > 1 && line.end > line.start) {
           const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(line.text);
@@ -236,7 +254,7 @@ export function buildListIndentDecorations(
             Decoration.inline(contentBase + line.start, contentBase + line.end, {
               class: [
                 'composer-list-fallback-unindented',
-                hasCjkPunctuation ? 'composer-list-cjk-font' : '',
+                hasCjkPunctuation ? 'composer-list-cjk-punctuation-font' : '',
               ]
                 .filter(Boolean)
                 .join(' '),
@@ -270,6 +288,13 @@ export function buildListIndentDecorations(
             style: listPrefixIndentStyle(prefix),
           }),
         );
+        if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {
+          decorations.push(
+            Decoration.inline(from + match.prefixLength, to, {
+              class: 'composer-list-fallback-long-run-body',
+            }),
+          );
+        }
         return;
       }
       if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {
@@ -294,7 +319,7 @@ export function buildListIndentDecorations(
 
     if (lines.length === 1) {
       const [line] = lines;
-      const match = line && matchListPrefix(line.text);
+      const match = line && compatibilityMatch(line);
       const prefix = match ? line.text.slice(0, match.prefixLength) : '';
       const body = line && match ? line.text.slice(match.prefixLength) : '';
       const from = line ? contentBase + line.start : contentBase;
@@ -380,40 +405,103 @@ export const ComposerListIndentDecoration = Extension.create({
   name: 'composerListIndentDecoration',
 
   addProseMirrorPlugins() {
+    let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+
     return [
-      new Plugin<DecorationSet>({
-        key: PLUGIN_KEY,
+      new Plugin<ListDecorationPluginState>({
+        key: PLUGIN_STATE_KEY,
         state: {
           init(_config, state: EditorState) {
             const roster = getSlashCommandRoster(state);
-            return buildListIndentDecorations(
-              state.doc,
-              findSlashCommandMatches(state.doc, roster),
-            );
+            return {
+              decorations: buildListIndentDecorations(
+                state.doc,
+                findSlashCommandMatches(state.doc, roster),
+                null,
+              ),
+              suspendedForComposition: false,
+            };
           },
-          apply(tr: Transaction, old: DecorationSet, oldState: EditorState) {
+          apply(tr: Transaction, old: ListDecorationPluginState, oldState: EditorState) {
+            const compositionMeta = tr.getMeta(PLUGIN_STATE_KEY) as CompositionMeta | undefined;
+            if (compositionMeta === 'suspend') {
+              return {
+                decorations: DecorationSet.empty,
+                suspendedForComposition: true,
+              };
+            }
+
             const rosterUpdate = getSlashCommandRosterUpdate(tr);
             const voiceReplacement = resolveVoiceInputReplacementRange(tr, oldState);
-            if (!tr.docChanged && rosterUpdate === undefined && !voiceReplacement.changed) {
+            if (old.suspendedForComposition && compositionMeta !== 'resume') {
+              return old;
+            }
+            if (
+              compositionMeta !== 'resume' &&
+              !tr.docChanged &&
+              rosterUpdate === undefined &&
+              !voiceReplacement.changed
+            ) {
               return old;
             }
             const roster = rosterUpdate ?? getSlashCommandRoster(oldState);
-            return buildListIndentDecorations(
-              tr.doc,
-              findSlashCommandMatches(tr.doc, roster),
-              voiceReplacement.range,
-            );
+            return {
+              decorations: buildListIndentDecorations(
+                tr.doc,
+                findSlashCommandMatches(tr.doc, roster),
+                voiceReplacement.range,
+              ),
+              suspendedForComposition: false,
+            };
           },
         },
         props: {
           decorations(state) {
-            return this.getState(state) ?? DecorationSet.empty;
+            return this.getState(state)?.decorations ?? DecorationSet.empty;
+          },
+          handleDOMEvents: {
+            compositionstart(view) {
+              if (resumeTimer !== null) {
+                clearTimeout(resumeTimer);
+                resumeTimer = null;
+              }
+              if (!PLUGIN_STATE_KEY.getState(view.state)?.suspendedForComposition) {
+                view.dispatch(
+                  view.state.tr
+                    .setMeta(PLUGIN_STATE_KEY, 'suspend' satisfies CompositionMeta)
+                    .setMeta('addToHistory', false),
+                );
+              }
+              return false;
+            },
+            compositionend(view) {
+              if (resumeTimer !== null) clearTimeout(resumeTimer);
+              // ProseMirror's own compositionend handler runs after custom
+              // handlers and flushes pending DOM records in a microtask.
+              // A timer restores decorations after that flush, never while
+              // EditorView.composing still owns the native IME DOM.
+              resumeTimer = setTimeout(() => {
+                resumeTimer = null;
+                if (view.isDestroyed || view.composing) return;
+                if (!PLUGIN_STATE_KEY.getState(view.state)?.suspendedForComposition) return;
+                view.dispatch(
+                  view.state.tr
+                    .setMeta(PLUGIN_STATE_KEY, 'resume' satisfies CompositionMeta)
+                    .setMeta('addToHistory', false),
+                );
+              }, 0);
+              return false;
+            },
           },
         },
-        // 注:曾有一个 view().update 里 `if (view.composing) return` 的"IME 保护",
-        // 但重算发生在上面的 state.apply(只看 tr.docChanged),view.update 在视图更新
-        // 之后才跑、DecorationSet 早已算好,该钩子等价 no-op(greptile P2)——已删除。
-        // 真要在 IME 期跳过重算,应在 apply 里按 composition 事务标记判断,而非此处。
+        view() {
+          return {
+            destroy() {
+              if (resumeTimer !== null) clearTimeout(resumeTimer);
+              resumeTimer = null;
+            },
+          };
+        },
       }),
     ];
   },

@@ -576,6 +576,436 @@
           ]
         }
       }
+    },
+    {
+      "id": "google-gemini-api",
+      "name": "Google Gemini API",
+      "docsUrl": "https://ai.google.dev/gemini-api/docs/openai",
+      "regionHint": "global",
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+          "wireProtocol": "openai-chat",
+          "modelsUrl": "https://generativelanguage.googleapis.com/v1beta/openai/models",
+          "models": [
+            {
+              "id": "gemini-3.6-flash",
+              "name": "Gemini 3.6 Flash",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "gemini-3.5-flash",
+              "name": "Gemini 3.5 Flash",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "gemini-3.5-flash-lite",
+              "name": "Gemini 3.5 Flash-Lite",
+              "contextWindow": 1000000
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "litellm",
+      "name": "LiteLLM Proxy",
+      "docsUrl": "https://docs.litellm.ai/docs/proxy/quick_start",
+      "authMethod": "none",
+      "runtimes": {
+        "codex": {
+          "baseUrl": "http://127.0.0.1:4000/v1",
+          "baseUrlEditable": true,
+          "models": []
+        }
+      }
+    },
+    {
+      "id": "longcat",
+      "name": "LongCat",
+      "docsUrl": "https://longcat.chat/platform/docs/zh/",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://api.longcat.chat/anthropic",
+          "modelsUrl": "https://api.longcat.chat/openai/v1/models",
+          "models": [
+            {
+              "id": "LongCat-2.0",
+              "name": "LongCat 2.0",
+              "contextWindow": 1000000
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://api.longcat.chat/openai/v1",
+          "modelsUrl": "https://api.longcat.chat/openai/v1/models",
+          "models": [
+            {
+              "id": "LongCat-2.0",
+              "name": "LongCat 2.0",
+              "contextWindow": 1000000
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "zhipu-coding-plan-cn",
+      "name": "智谱 GLM Coding Plan（中国大陆）",
+      "nameEn": "Zhipu GLM Coding Plan (China)",
+      "docsUrl": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
+      "regionHint": "cn",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://open.bigmodel.cn/api/anthropic",
+          "models": [
+            {
+              "id": "glm-5.2[1m]",
+              "name": "GLM-5.2 (1M)",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "glm-5.2",
+              "name": "GLM-5.2"
+            },
+            {
+              "id": "glm-5.1",
+              "name": "GLM-5.1"
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "glm-5.2",
+              "name": "GLM-5.2"
+            },
+            {
+              "id": "glm-5.1",
+              "name": "GLM-5.1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "zai-coding-plan-global",
+      "name": "Z.ai GLM Coding Plan (Global)",
+      "docsUrl": "https://docs.z.ai/devpack/overview",
+      "regionHint": "global",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://api.z.ai/api/anthropic",
+          "models": [
+            {
+              "id": "glm-5.2[1m]",
+              "name": "GLM-5.2 (1M)",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "glm-5.2",
+              "name": "GLM-5.2"
+            },
+            {
+              "id": "glm-5.1",
+              "name": "GLM-5.1"
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "glm-5.2",
+              "name": "GLM-5.2"
+            },
+            {
+              "id": "glm-5.1",
+              "name": "GLM-5.1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "xiaomi-mimo-api-cn",
+      "name": "小米 MiMo API（按量）",
+      "nameEn": "Xiaomi MiMo API (pay as you go)",
+      "docsUrl": "https://mimo.mi.com/docs/zh-CN/quick-start/summary/first-api-call",
+      "regionHint": "cn",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://api.xiaomimimo.com/anthropic",
+          "models": [
+            {
+              "id": "mimo-v2.5-pro",
+              "name": "MiMo V2.5 Pro",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "mimo-v2.5",
+              "name": "MiMo V2.5",
+              "contextWindow": 1000000
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://api.xiaomimimo.com/v1",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "mimo-v2.5-pro",
+              "name": "MiMo V2.5 Pro",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "mimo-v2.5",
+              "name": "MiMo V2.5",
+              "contextWindow": 1000000
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "xiaomi-mimo-token-plan-cn",
+      "name": "小米 MiMo Token Plan（包月）",
+      "nameEn": "Xiaomi MiMo Token Plan",
+      "docsUrl": "https://mimo.mi.com/docs/zh-CN/quick-start/summary/first-api-call",
+      "regionHint": "cn",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://token-plan-cn.xiaomimimo.com/anthropic",
+          "models": [
+            {
+              "id": "mimo-v2.5-pro",
+              "name": "MiMo V2.5 Pro",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "mimo-v2.5",
+              "name": "MiMo V2.5",
+              "contextWindow": 1000000
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "mimo-v2.5-pro",
+              "name": "MiMo V2.5 Pro",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "mimo-v2.5",
+              "name": "MiMo V2.5",
+              "contextWindow": 1000000
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "volcengine-coding-plan",
+      "name": "火山方舟 Coding Plan",
+      "nameEn": "Volcengine Ark Coding Plan",
+      "docsUrl": "https://www.volcengine.com/docs/82379/1925114",
+      "regionHint": "cn",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://ark.cn-beijing.volces.com/api/coding",
+          "models": [
+            {
+              "id": "ark-code-latest",
+              "name": "Ark Code Latest"
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "ark-code-latest",
+              "name": "Ark Code Latest"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tencentcloud-coding-plan",
+      "name": "腾讯云 Coding Plan",
+      "nameEn": "Tencent Cloud Coding Plan",
+      "docsUrl": "https://cloud.tencent.com/document/product/1823/130092",
+      "regionHint": "cn",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://api.lkeap.cloud.tencent.com/coding/anthropic",
+          "models": [
+            {
+              "id": "tc-code-latest",
+              "name": "Tencent Code Latest"
+            },
+            {
+              "id": "glm-5",
+              "name": "GLM-5"
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://api.lkeap.cloud.tencent.com/coding/v3",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "tc-code-latest",
+              "name": "Tencent Code Latest"
+            },
+            {
+              "id": "glm-5",
+              "name": "GLM-5"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "opencode-go",
+      "name": "OpenCode Go",
+      "docsUrl": "https://opencode.ai/docs/go/",
+      "regionHint": "global",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://opencode.ai/zen/go",
+          "modelsUrl": "https://opencode.ai/zen/go/v1/models",
+          "models": [
+            {
+              "id": "minimax-m3",
+              "name": "MiniMax M3"
+            },
+            {
+              "id": "minimax-m2.7",
+              "name": "MiniMax M2.7"
+            },
+            {
+              "id": "minimax-m2.5",
+              "name": "MiniMax M2.5"
+            },
+            {
+              "id": "qwen3.7-max",
+              "name": "Qwen3.7 Max"
+            },
+            {
+              "id": "qwen3.7-plus",
+              "name": "Qwen3.7 Plus"
+            },
+            {
+              "id": "qwen3.6-plus",
+              "name": "Qwen3.6 Plus"
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://opencode.ai/zen/go/v1",
+          "wireProtocol": "openai-chat",
+          "modelsUrl": "https://opencode.ai/zen/go/v1/models",
+          "models": [
+            {
+              "id": "grok-4.5",
+              "name": "Grok 4.5"
+            },
+            {
+              "id": "glm-5.2",
+              "name": "GLM-5.2"
+            },
+            {
+              "id": "glm-5.1",
+              "name": "GLM-5.1"
+            },
+            {
+              "id": "kimi-k3",
+              "name": "Kimi K3"
+            },
+            {
+              "id": "kimi-k2.7-code",
+              "name": "Kimi K2.7 Code"
+            },
+            {
+              "id": "kimi-k2.6",
+              "name": "Kimi K2.6"
+            },
+            {
+              "id": "mimo-v2.5",
+              "name": "MiMo V2.5"
+            },
+            {
+              "id": "mimo-v2.5-pro",
+              "name": "MiMo V2.5 Pro"
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "DeepSeek V4 Pro"
+            },
+            {
+              "id": "deepseek-v4-flash",
+              "name": "DeepSeek V4 Flash"
+            },
+            {
+              "id": "hy3",
+              "name": "Hy3"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "vercel-ai-gateway",
+      "name": "Vercel AI Gateway",
+      "docsUrl": "https://vercel.com/docs/ai-gateway/coding-agents",
+      "regionHint": "global",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://ai-gateway.vercel.sh",
+          "modelsUrl": "https://ai-gateway.vercel.sh/v1/models",
+          "models": [
+            {
+              "id": "anthropic/claude-sonnet-4.6",
+              "name": "Claude Sonnet 4.6 (Vercel)"
+            },
+            {
+              "id": "openai/gpt-5.4",
+              "name": "GPT-5.4 (Vercel)"
+            },
+            {
+              "id": "xai/grok-4.5",
+              "name": "Grok 4.5 (Vercel)"
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://ai-gateway.vercel.sh/v1",
+          "modelsUrl": "https://ai-gateway.vercel.sh/v1/models",
+          "models": [
+            {
+              "id": "anthropic/claude-sonnet-4.6",
+              "name": "Claude Sonnet 4.6 (Vercel)"
+            },
+            {
+              "id": "openai/gpt-5.4",
+              "name": "GPT-5.4 (Vercel)"
+            },
+            {
+              "id": "xai/grok-4.5",
+              "name": "Grok 4.5 (Vercel)"
+            }
+          ]
+        }
+      }
     }
   ],
   "cindyModelMeta": {

@@ -3,6 +3,7 @@ import { AppState, Platform } from 'react-native';
 import {
   DeviceLinkClient,
   DeviceLinkError,
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   FILE_BROWSER_EVENT_CHANNEL,
@@ -40,7 +41,9 @@ import { normalizeMobileAgentCapabilities } from '@/session/agentCapabilities';
 import { evictComposerPaletteCacheForDevice, resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearAllDeviceModelMeta, evictDeviceModelMeta } from '@/device-link/deviceModelMetaCache';
 import { dispatchFileBrowserWatchEvent } from '@/device-link/fileBrowserWatch';
+import { resolveMobileInvokeTimeoutMs } from '@/device-link/invokeTimeouts';
 import { rehydrateDeviceLinkTopics } from '@/device-link/rehydrate';
+import { invalidateOfflineScheduleIndexFailureFor, invalidateTransientScheduleIndexFailures } from '@/session/scheduleIndex';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { createRnWebSocket } from '@/device-link/rnWebSocket';
 import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
@@ -53,6 +56,18 @@ import {
 } from '@/device-link/topicRegistry';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
+import {
+  acquireDeviceSendSlot,
+  buildDeviceResponsivenessProbeArgs,
+  classifyDeviceSendFailure,
+  classifyDeviceSendSuccess,
+  classifyLinkOpenFailure,
+  DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
+  isDeviceProbeDue,
+  resetDeviceResponsivenessTracking,
+  settleDeviceSend,
+  unresponsiveDevicesStore,
+} from '@/device-link/unresponsiveDevicesStore';
 import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { updatePresenceAvailability } from '@/device-link/presenceRecovery';
@@ -169,6 +184,27 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     markHeldRemoteTopicsSubscribed(remoteSubscribedTopicsRef.current, registryRef.current, deviceId, toSend);
   }, []);
 
+  // 熔断 open 设备的显式代表性探测:openLink 建链(成功按不定论,不关熔断),
+  // 再发一条真正穿过被控端 runInvoke → dispatchLocalInvoke → local-db 的最小读,
+  // 由 sendInvoke 内部的熔断收尾决定开合(真实回包 → 关;超时 → 加深退避)。
+  // 错误全吞:结果已在 send 层按熔断语义上报,这里不需要二次处理。
+  const probeUnresponsiveDevice = useCallback(
+    async (client: DeviceLinkClient, deviceId: string): Promise<void> => {
+      try {
+        await sendOpenLinkOnce(client, deviceId);
+        await sendInvokeWithAccessHandling(
+          client,
+          deviceId,
+          DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
+          buildDeviceResponsivenessProbeArgs(),
+        );
+      } catch {
+        // swallow — settle 已在 sendOpenLink / sendInvoke 内完成。
+      }
+    },
+    [sendOpenLinkOnce],
+  );
+
   const clearRehydrateRetry = useCallback((resetAttempt: boolean) => {
     const retry = rehydrateRetryRef.current;
     if (retry.timer) {
@@ -215,16 +251,69 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       run = (async () => {
         let lastTransientFailures = 0;
         try {
+          // 链路已恢复(rehydrate 只在 online 时运行,重连必经):普通断线期间
+          // 产生的 schedule-index 瞬态负缓存立即失效,让本轮 reseed 拉到新数据
+          // 而不是吃 30s TTL 内的旧 rejected promise(review P1)。
+          invalidateTransientScheduleIndexFailures();
           do {
             state.rerun = false;
             if (client.getStatus() !== 'online') return;
-            const result = await rehydrateDeviceLinkTopics(registryRef.current.snapshot(), {
+            const allPlans = registryRef.current.snapshot();
+            // 撤权设备直接出局(review P1):撤权是终态,openLink 只会等来
+            // link-close(revoked) + 超时;若不过滤,撤权时清熔断状态触发的这轮
+            // rehydrate 会对它重新 openLink,且其超时已按撤权降级为不定论,
+            // 熔断兜不住,退避循环会为它无限空转。也不计入 transientFailures。
+            const grantedPlans = allPlans.filter(
+              (plan) => !revokedDevicesStore.has(plan.deviceId),
+            );
+            // 熔断 open 的设备整体退出常规 rehydrate(每一步都会本地快速失败),
+            // 改走显式代表性探测(review P1 多轮收敛):不能依赖 openLink /
+            // subscribe 顺带探测——link-accept 与 subscribe 都在被控端 dispatch
+            // 里于 runInvoke 之前特判应答,IPC/DB 卡死时照常回包会误关熔断;
+            // 订阅已被 remoteSubscribedTopicsRef 记录或计划里没有 topic 时,
+            // subscribe 甚至根本不会发包。探测窗口到点就发一条真正穿过
+            // runInvoke → local-db 的最小读(见 DEVICE_RESPONSIVENESS_PROBE_CHANNEL),
+            // 由它的回包决定熔断开合;这也是无业务流量时的主动恢复通道。
+            // 探测候选取 registry 计划与 unresponsive 集合的并集(review P1):
+            // 仅有直接 invoke、从未登记 openLink/subscribe 的设备(如只停留在
+            // 首页的设备行)不在 registry 里,熔断 open 后若不纳入,它既收不到
+            // 探测也不占未完成信号,会在没有业务流量时永久停留在未响应态。
+            const openDeviceIds = new Set<string>();
+            for (const plan of grantedPlans) {
+              if (unresponsiveDevicesStore.has(plan.deviceId)) openDeviceIds.add(plan.deviceId);
+            }
+            for (const deviceId of unresponsiveDevicesStore.getSnapshot()) {
+              if (!revokedDevicesStore.has(deviceId)) openDeviceIds.add(deviceId);
+            }
+            const plans = grantedPlans.filter(
+              (plan) => !unresponsiveDevicesStore.has(plan.deviceId),
+            );
+            // 探测与健康设备的 rehydrate 并发跑(review P1):探测一台死设备最长
+            // 要等 openLink + DB 读两次超时(~30s),串行在前会把其它健康桌面的
+            // 订阅恢复 / 快照回填拖住整轮;多台 open 设备之间仍串行,避免探测
+            // 本身成为并发突发。
+            const probeRun = (async () => {
+              for (const deviceId of openDeviceIds) {
+                if (!isDeviceProbeDue(deviceId)) continue;
+                await probeUnresponsiveDevice(client, deviceId);
+              }
+            })();
+            const result = await rehydrateDeviceLinkTopics(plans, {
               openLink: (deviceId) => sendOpenLinkOnce(client, deviceId),
               subscribe: (deviceId, topics) => sendTrackedSubscribe(client, deviceId, topics),
               requestSessionsReseed: (deviceId) => remoteSessionStore.requestReseed(deviceId),
               rebuildSessionSnapshot: (deviceId, sessionId) => rebuildSessionSnapshot(client, deviceId, sessionId),
             });
-            lastTransientFailures = result.transientFailures;
+            await probeRun;
+            // 探测后仍 open 的设备持续计入"未完成"信号(review P1:不能在探测
+            // 真正跑完并成功前撤掉重试安排),退避重试循环(2s→30s)继续走:
+            // 窗口未到的轮次只做本地检查,零管道流量。探测成功关熔断会触发
+            // 下方 effect 的 store 订阅,补一轮全量 rehydrate 把该设备的订阅 /
+            // 快照拉回来。
+            const stillOpenDevices = [...openDeviceIds].filter(
+              (deviceId) => unresponsiveDevicesStore.has(deviceId),
+            ).length;
+            lastTransientFailures = result.transientFailures + stillOpenDevices;
           } while (state.rerun && client.getStatus() === 'online');
         } finally {
           if (state.inFlight === run) {
@@ -237,7 +326,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       state.inFlight = run;
       return run;
     },
-    [scheduleRehydrateRetry, sendOpenLinkOnce, sendTrackedSubscribe],
+    [probeUnresponsiveDevice, scheduleRehydrateRetry, sendOpenLinkOnce, sendTrackedSubscribe],
   );
 
   useEffect(() => {
@@ -261,6 +350,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       remoteSessionStore.clear();
       remoteScheduleEventStore.clearAll();
       revokedDevicesStore.clearAll();
+      resetDeviceResponsivenessTracking();
       // 登出 / 进程内切号:清掉所有 per-account 残留,避免下一个账号串到上一个账号的数据。
       // - 供应商目录是 module 级单例缓存(useDeviceProviders 按 deviceId 命中),不随组件卸载清;
       // - lastPresenceSnapshot 是本 context 的 state,home 屏据它 patch 设备列表。
@@ -295,6 +385,11 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         pongMissLimit: 1,
         getTokenTimeoutMs: 10_000,
         handshakeTimeoutMs: 12_000,
+        // 请求超时收紧到 15s(默认 30s):被控端卡死时 30s 才失败让用户干等半分钟,
+        // 也把熔断器凑齐「连续超时」信号的时间拖长一倍。长执行通道(desktop-cmd:run /
+        // worktree:create / schedule 等)在 sendInvoke 按 invokeTimeouts 解析规则单独放宽,
+        // 与桌面控制端同一张协议契约表,不受此默认值影响。
+        requestTimeoutMs: 15_000,
       },
     });
     clientRef.current = client;
@@ -353,6 +448,11 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         return;
       }
       clearPresenceWipeTimer(wipeTimers, snap.deviceId);
+      // 每个「可用」快照都清该设备的 DEVICE_OFFLINE 负缓存(review P1 ×2):
+      // 主机在手机连上 relay 之前就离线时,presence 只在变化时广播,首个在线
+      // 快照 recovered=false——只挂 recovered 会漏掉这次恢复,徽标停留到无关
+      // 触发。逐设备且幂等(map 单点查删),不影响其它设备的风暴止损。
+      invalidateOfflineScheduleIndexFailureFor(snap.deviceId);
       if (presence.recovered) void rehydrateWithClient(client);
     });
     const offFrame = client.onFrame((env) => routeFrame(env, {
@@ -367,13 +467,30 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             client,
             deviceId,
             'maker:provider:list',
-            [],
+            [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
           )
         ).catch(() => { /* 下次进入选择器或重连补齐时继续重试。 */ });
         void refreshDeviceCapabilities(client, deviceId);
       },
     }));
     client.start();
+
+    // 熔断状态变化触发 rehydrate:unresponsive 集合的新增与移除都各触发一次
+    // (review P1 + 注释勘误):
+    // - 设备恢复(移除):补一次 rehydrate,把 open 期间被跳过的订阅/快照拉回来;
+    // - 设备进入 open(新增):也要触发一次——熔断可能由普通页面请求凑满超时打开,
+    //   此刻若没有已在跑的 rehydrate 退避循环,代表性探测根本无人发起,
+    //   主动恢复永远不会启动。触发的这轮会因 stillOpenDevices>0 进入 2s→30s
+    //   退避循环,成为探测心跳(窗口未到的轮次零管道流量,到点自动发探测)。
+    let lastUnresponsiveSnapshot = unresponsiveDevicesStore.getSnapshot();
+    const offUnresponsive = unresponsiveDevicesStore.subscribe(() => {
+      const next = unresponsiveDevicesStore.getSnapshot();
+      const changed =
+        next.size !== lastUnresponsiveSnapshot.size
+        || [...lastUnresponsiveSnapshot].some((deviceId) => !next.has(deviceId));
+      lastUnresponsiveSnapshot = next;
+      if (changed) void rehydrateWithClient(client);
+    });
 
     // 退后台的断连宽限状态:stopTimer 挂着表示还没真正 stop;backgroundAt 用于
     // 回前台时判断 JS 是否在计时器触发前就被挂起(见 BACKGROUND_SUSPEND_SUSPECT_MS)。
@@ -434,6 +551,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     return () => {
       sub.remove();
       clearBackgroundStopTimer();
+      offUnresponsive();
       offFrame();
       offPresence();
       offStatus();
@@ -657,12 +775,36 @@ function sendOpenLinkWithAccessHandling(
 }
 
 async function sendOpenLink(client: DeviceLinkClient, deviceId: string): Promise<LinkAcceptPayload> {
-  await ensureOnlineForRequest(client);
-  return client.openLink(deviceId, {
-    controllerName: mobileDeviceName(),
-    protocolVersion: PROTOCOL_VERSION,
-    appVersion: Constants.expoConfig?.version ?? '0.0.0',
-  });
+  // 熔断门禁放在连接等待之前:open 时快速失败,不消耗 1.5s 重连等待也不上管道。
+  const slot = acquireDeviceSendSlot(deviceId);
+  try {
+    await ensureOnlineForRequest(client);
+  } catch (err) {
+    settleDeviceSend(deviceId, slot, 'inconclusive');
+    throw err;
+  }
+  try {
+    const accepted = await client.openLink(deviceId, {
+      controllerName: mobileDeviceName(),
+      protocolVersion: PROTOCOL_VERSION,
+      appVersion: Constants.expoConfig?.version ?? '0.0.0',
+      capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+    });
+    // link-accept 只证明链路层活着,不证明 invoke 路径健康(review P1):事故形态
+    // 正是 link-open 在被控端 IPC/DB 路径之外应答正常、invoke 全部挂死——若凭
+    // link-accept 关熔断,恢复流程会立刻放进订阅 + 快照 + 业务 invoke 突发,3 次
+    // 超时后再 open,形成周期性风暴。这里按不定论处理:不关熔断也不计失败;
+    // openLink 若是探测,单飞席位随之释放、退避窗口不动,紧随其后的 subscribe
+    // (真实 invoke 通道)会立即接棒成为新探测,由它的回包决定开合。
+    settleDeviceSend(deviceId, slot, 'inconclusive');
+    return accepted;
+  } catch (err) {
+    // 超时仍计失败:link-open 都等不到回包说明被控端连链路层都没在应答。
+    // 终态 relay 应答(REMOTE_DISABLED / DEVICE_OFFLINE / VERSION_MISMATCH)
+    // 关熔断,把 UI 让给对应的可操作错误态(review P1:否则设备被永远探测)。
+    settleDeviceSend(deviceId, slot, classifyLinkOpenFailure(err));
+    throw err;
+  }
 }
 
 function sendInvokeWithAccessHandling<T>(
@@ -682,11 +824,38 @@ async function sendInvoke<T>(
   args: unknown[],
   opts?: { preSend?: () => void },
 ): Promise<T> {
-  await ensureOnlineForRequest(client);
-  // 连接就绪后、真正发送前的最后检查点:重连等待期间调用方状态可能已失效
-  // (写被同字段新写取代),抛错即中止发送。
-  opts?.preSend?.();
-  const result = await client.invoke(deviceId, { channel, args });
+  // 熔断门禁放在连接等待之前:open 时快速失败,不消耗 1.5s 重连等待也不上管道。
+  const slot = acquireDeviceSendSlot(deviceId);
+  try {
+    await ensureOnlineForRequest(client);
+    // 连接就绪后、真正发送前的最后检查点:重连等待期间调用方状态可能已失效
+    // (写被同字段新写取代),抛错即中止发送。
+    opts?.preSend?.();
+  } catch (err) {
+    // 未真正发送(等待连接失败 / preSend 中止):对设备响应性不定论。
+    settleDeviceSend(deviceId, slot, 'inconclusive');
+    throw err;
+  }
+  let result: InvokeResultPayload;
+  try {
+    // 长执行通道(desktop-cmd:run / worktree:create 等)按协议契约表放宽超时,
+    // 与桌面控制端用法对齐,避免 mobile 收紧的默认 15s 误伤合法慢操作。
+    result = await client.invoke(
+      deviceId,
+      { channel, args },
+      // 长通道(media / 文件搜索 / schedule 就绪窗口等)按 invokeTimeouts 解析
+      // 规则保留更长窗口,避免 mobile 收紧的默认 15s 误伤合法慢操作。
+      resolveMobileInvokeTimeoutMs(channel),
+    );
+  } catch (err) {
+    settleDeviceSend(deviceId, slot, classifyDeviceSendFailure(err));
+    throw err;
+  }
+  // 收到 invoke-result 帧即为目标设备真实回包(即使 ok:false 的业务错误)。但
+  // dispatch 特判通道(media/voice)的成功不走 IPC/DB 路径,且持有探测席位时
+  // 只有指定探测通道能关熔断(纯内存 IPC handler 的回包不算)——按通道 +
+  // 席位分类收尾(review P1 多轮收敛,见 classifyDeviceSendSuccess)。
+  settleDeviceSend(deviceId, slot, classifyDeviceSendSuccess(channel, slot.decision === 'probe'));
   return unwrapInvoke<T>(result);
 }
 
@@ -703,11 +872,33 @@ async function sendSubscribe(
   deviceId: string,
   topics: readonly string[],
 ): Promise<void> {
-  await ensureOnlineForRequest(client);
-  const result = await client.invoke(deviceId, {
-    channel: DL_SUBSCRIBE_CHANNEL,
-    args: [{ topics, controllerName: mobileDeviceName() }],
-  });
+  // subscribe 同样走隧道请求超时等待(默认 15s),一样计入并受熔断限制(见 sendInvoke 注释)。
+  const slot = acquireDeviceSendSlot(deviceId);
+  try {
+    await ensureOnlineForRequest(client);
+  } catch (err) {
+    settleDeviceSend(deviceId, slot, 'inconclusive');
+    throw err;
+  }
+  let result: InvokeResultPayload;
+  try {
+    result = await client.invoke(deviceId, {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [{
+        topics,
+        controllerName: mobileDeviceName(),
+        capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+      }],
+    });
+  } catch (err) {
+    settleDeviceSend(deviceId, slot, classifyDeviceSendFailure(err));
+    throw err;
+  }
+  // subscribe/unsubscribe 是控制帧,被控端 dispatch 在 runInvoke 之前特判应答
+  // (review P1):IPC/DB 卡死时照常回包,成功不能作为熔断恢复证据——探测窗口
+  // 到点时页面卸载恰好发的一条控制帧会抢占探测席位并误关熔断。与 openLink
+  // 同语义:成功按不定论,超时仍计失败(连控制帧都不应答 = 彻底无响应)。
+  settleDeviceSend(deviceId, slot, 'inconclusive');
   unwrapInvoke(result);
 }
 
@@ -716,11 +907,25 @@ async function sendUnsubscribe(
   deviceId: string,
   topics: readonly string[],
 ): Promise<void> {
-  await ensureOnlineForRequest(client);
-  const result = await client.invoke(deviceId, {
-    channel: DL_UNSUBSCRIBE_CHANNEL,
-    args: [{ topics }],
-  });
+  const slot = acquireDeviceSendSlot(deviceId);
+  try {
+    await ensureOnlineForRequest(client);
+  } catch (err) {
+    settleDeviceSend(deviceId, slot, 'inconclusive');
+    throw err;
+  }
+  let result: InvokeResultPayload;
+  try {
+    result = await client.invoke(deviceId, {
+      channel: DL_UNSUBSCRIBE_CHANNEL,
+      args: [{ topics }],
+    });
+  } catch (err) {
+    settleDeviceSend(deviceId, slot, classifyDeviceSendFailure(err));
+    throw err;
+  }
+  // 控制帧成功按不定论,不作熔断恢复证据(同 sendSubscribe,review P1)。
+  settleDeviceSend(deviceId, slot, 'inconclusive');
   unwrapInvoke(result);
 }
 

@@ -39,6 +39,7 @@ function provider(
     id,
     name: id,
     agents: opts.agents ?? ['codex'],
+    routing: Object.fromEntries((opts.agents ?? ['codex']).map((agent) => [agent, {}])),
     connected: opts.connected ?? true,
     models: { codex: opts.codex, 'claude-code': opts.cc },
   } as unknown as ProviderView;

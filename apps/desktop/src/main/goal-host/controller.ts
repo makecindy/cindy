@@ -594,11 +594,21 @@ export class GoalController {
     // deferred agent switch 的 commit 会关闭旧 live session。必须在 ensureSession
     // 之前执行,随后重新读取/bootstrap 的才是目标引擎;否则这一轮 directive 会继续
     // 发给 fireTurn 开始时捕获的旧 session。
-    await this.deps.applyPendingAgentSwitch?.(sessionId);
-    const session = await this.deps.ensureSession(sessionId);
+    const releaseAgentSwitchLock =
+      (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
+    let session: SessionLike | undefined;
+    try {
+      session = await this.deps.ensureSession(sessionId);
+      if (session) {
+        // 锁内先建立 listener 身份。释放后即使 queued SET_MODEL 立刻关闭该 session，
+        // fireTurn 也能凭 unsubscribers 标记把 listener 迁移到重新创建的新 session。
+        this.resetTurn(sessionId);
+        this.attachListener(sessionId);
+      }
+    } finally {
+      releaseAgentSwitchLock();
+    }
     if (!session) return; // 活化失败(如 device-link 远程不可用)→ 留 dormant,下次打开再试
-    this.resetTurn(sessionId);
-    this.attachListener(sessionId);
     this.emit(state);
     if (!this.isBusy(sessionId)) {
       await this.fireTurn(sessionId);
@@ -988,31 +998,37 @@ export class GoalController {
       this.scheduleContinuation(sessionId);
       return;
     }
-    // fireTurn 每次都可能是登记 deferred intent 后的第一条直发消息。apply 会关闭
-    // 旧引擎并 bootstrap 目标引擎,所以必须在拿 session 引用之前执行。
-    await this.deps.applyPendingAgentSwitch?.(sessionId);
-    const session = await this.deps.ensureSession(sessionId);
-    if (!session) {
-      this.deps.logger.warn('[goal] no live session to fire (resume failed)', { sessionId, kind });
-      return;
-    }
-    // deferred switch 可能刚把 live session 换成目标引擎的新对象;本会话若有 goal
-    // listener,必须迁到新 session,否则这轮 turn 的 done/error 事件进不了 finalizeTurn,
-    // 目标卡死在 active(reviewer P1)。attachListener 按 session 身份判等,未换则 no-op;
-    // 只对已在管(非 dormant)的 goal 重挂,不给 dormant 会话平白加 listener。
-    if (this.unsubscribers.has(sessionId)) {
-      this.attachListener(sessionId);
-    }
-
-    this.resetTurn(sessionId);
-    const content =
-      kind === 'first'
-        ? buildFirstTurnDirective(state.objective, { maxTurns: state.maxTurns })
-        : buildContinuationDirective(state.objective, state.lastReason);
-
     this.firing.add(sessionId);
+    let releaseAgentSwitchLock = (): void => {};
     let baselineStarted = false;
     try {
+      // fireTurn 每次都可能是登记 deferred intent 后的第一条直发消息。锁必须覆盖
+      // apply、重新读取 live session 和 Session.send；否则并发 SET_MODEL 能在 fresh
+      // session 创建后、send 前再次换 route，让本轮落到 UI 未显示的来源。
+      releaseAgentSwitchLock =
+        (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
+      const session = await this.deps.ensureSession(sessionId);
+      if (!session) {
+        this.deps.logger.warn('[goal] no live session to fire (resume failed)', {
+          sessionId,
+          kind,
+        });
+        return;
+      }
+      // deferred switch 可能刚把 live session 换成目标引擎的新对象;本会话若有 goal
+      // listener,必须迁到新 session,否则这轮 turn 的 done/error 事件进不了 finalizeTurn,
+      // 目标卡死在 active(reviewer P1)。attachListener 按 session 身份判等,未换则 no-op;
+      // 只对已在管(非 dormant)的 goal 重挂,不给 dormant 会话平白加 listener。
+      if (this.unsubscribers.has(sessionId)) {
+        this.attachListener(sessionId);
+      }
+
+      this.resetTurn(sessionId);
+      const content =
+        kind === 'first'
+          ? buildFirstTurnDirective(state.objective, { maxTurns: state.maxTurns })
+          : buildContinuationDirective(state.objective, state.lastReason);
+
       // 目标文案的落库只发生在 setGoal 创建 / 编辑时(各一次),不挂在这里 —— Fix A 后 kind
       // 由 turnsUsed 派生,'first' 可能被 busy 重试 / 暂停后重发,放这里会重复落库。
       // 这里只负责把完整 directive(含裁决约定)发给模型。
@@ -1054,6 +1070,7 @@ export class GoalController {
       // SESSION_RUNNING:会话已有 turn 在跑(用户抢发等);该 turn 的 done 会再触发裁决。
       this.deps.logger.warn('[goal] fireTurn send failed', { sessionId, kind, error: String(e) });
     } finally {
+      releaseAgentSwitchLock();
       this.firing.delete(sessionId);
     }
   }

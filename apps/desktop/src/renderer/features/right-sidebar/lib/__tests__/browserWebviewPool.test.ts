@@ -43,6 +43,36 @@ describe('browserWebviewPool', () => {
     expect(a2.webview).toBe(a1.webview);
   });
 
+  it('notifies only when a new entry is created', () => {
+    const onEntryCreated = vi.fn();
+    const unsub = browserWebviewPool.onEntryCreated(onEntryCreated);
+
+    browserWebviewPool.acquire('tab-a');
+    browserWebviewPool.acquire('tab-a');
+
+    expect(onEntryCreated).toHaveBeenCalledOnce();
+    expect(onEntryCreated).toHaveBeenCalledWith('tab-a');
+    unsub();
+  });
+
+  it('captures guest failure before hook listeners bind and clears it on recovery', () => {
+    const entry = browserWebviewPool.acquire('tab-a');
+    const gone = new Event('render-process-gone');
+    Object.defineProperty(gone, 'details', { value: { reason: 'crashed' } });
+
+    entry.webview.dispatchEvent(gone);
+    expect(entry.guestFailure).toEqual({ kind: 'render-process-gone', reason: 'crashed' });
+
+    entry.webview.dispatchEvent(new Event('did-start-loading'));
+    expect(entry.guestFailure).toBeNull();
+
+    entry.webview.dispatchEvent(new Event('unresponsive'));
+    expect(entry.guestFailure).toEqual({ kind: 'unresponsive', reason: 'unresponsive' });
+
+    entry.webview.dispatchEvent(new Event('responsive'));
+    expect(entry.guestFailure).toBeNull();
+  });
+
   it('creates webviews with allowpopups so main can route popups into tabs', () => {
     const entry = browserWebviewPool.acquire('tab-a');
     expect(entry.webview.getAttribute('allowpopups')).toBe('true');
@@ -196,8 +226,11 @@ describe('browserWebviewPool', () => {
     browserWebviewPool.onPinChange(() => {
       throw new Error('pin listener exploded');
     });
-    browserWebviewPool.acquire('tab-a');
+    browserWebviewPool.onEntryCreated(() => {
+      throw new Error('entry-created listener exploded');
+    });
 
+    expect(() => browserWebviewPool.acquire('tab-a')).not.toThrow();
     expect(() => browserWebviewPool.pinForAutomation('tab-a')).not.toThrow();
     expect(() => browserWebviewPool.release('tab-a')).not.toThrow();
     expect(browserWebviewPool.peek('tab-a')).toBeNull();
@@ -205,12 +238,16 @@ describe('browserWebviewPool', () => {
 
   it('unsubscribe removes the listener', () => {
     const onRelease = vi.fn();
-    const unsub = browserWebviewPool.onRelease(onRelease);
-    unsub();
+    const onEntryCreated = vi.fn();
+    const unsubRelease = browserWebviewPool.onRelease(onRelease);
+    const unsubEntryCreated = browserWebviewPool.onEntryCreated(onEntryCreated);
+    unsubRelease();
+    unsubEntryCreated();
 
     browserWebviewPool.acquire('tab-a');
     browserWebviewPool.release('tab-a');
 
     expect(onRelease).not.toHaveBeenCalled();
+    expect(onEntryCreated).not.toHaveBeenCalled();
   });
 });

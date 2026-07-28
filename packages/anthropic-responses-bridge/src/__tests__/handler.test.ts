@@ -115,6 +115,34 @@ describe('createResponsesHandler', () => {
     expect(seen[0].body.model).toBe('grok-4.3');
   });
 
+  it('provider.serverSideTools 按去前缀 model 决定,并随请求下发给上游', async () => {
+    const seen: Array<{ body: Record<string, unknown> }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push({ body: JSON.parse(String(init.body)) });
+      return new Response(sse(OK_SSE), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }));
+    const askedModels: string[] = [];
+    const handler = createResponsesHandler({
+      providers: [providerConfig({
+        prefix: 'xai/',
+        serverSideTools: (model) => {
+          askedModels.push(model);
+          return model.startsWith('grok-code') ? [] : [{ type: 'x_search' }];
+        },
+      })],
+    });
+
+    await invoke(handler, { model: 'xai/grok-4.5', messages: [] });
+    expect(seen[0].body.tools).toEqual([{ type: 'x_search' }]);
+    // 门控拿到的是剥掉前缀与 [1m] 后缀的真实 model id。
+    expect(askedModels).toEqual(['grok-4.5']);
+
+    // 编码模型:门控返回空 → 完全不发 tools。
+    seen.length = 0;
+    await invoke(handler, { model: 'xai/grok-code-fast', messages: [] });
+    expect(seen[0].body.tools).toBeUndefined();
+  });
+
   it('count_tokens 本地估算;无匹配 provider → 400;buildHeaders 抛错 → 502', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('should not fetch'); }));
     const handler = createResponsesHandler({ providers: [providerConfig()] });

@@ -31,17 +31,40 @@ function keyOf(agent: AgentKind, providerId: string, modelId: string): string {
 /**
  * 接收 renderer 推来的整张 override map(MODEL_VISIBILITY_SYNC handler 调用)。
  * 整表替换语义(renderer 每次推完整快照),只保留 value 为 boolean 的条目(防脏数据)。
+ * 返回净化后的镜像是否实际变化，调用方据此避免重复广播目录失效事件。
  */
-export function setModelVisibilityMirror(raw: unknown): void {
-  if (!raw || typeof raw !== 'object') {
-    mirror = {};
-    return;
-  }
+export function setModelVisibilityMirror(raw: unknown): boolean {
   const next: VisibilityMap = {};
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (k && typeof v === 'boolean') next[k] = v;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (k && typeof v === 'boolean') next[k] = v;
+    }
   }
+
+  const currentKeys = Object.keys(mirror);
+  const nextKeys = Object.keys(next);
+  if (
+    currentKeys.length === nextKeys.length
+    && currentKeys.every((key) => mirror[key] === next[key])
+  ) {
+    return false;
+  }
+
   mirror = next;
+  return true;
+}
+
+/**
+ * 应用 renderer 的整表快照，并只在规范化值实变时通知目录消费者失效。
+ * 抽成可直接行为测试的边界，避免 IPC 接线只能靠源码字符串断言。
+ */
+export function syncModelVisibilityMirror(
+  raw: unknown,
+  onChanged: () => void,
+): boolean {
+  if (!setModelVisibilityMirror(raw)) return false;
+  onChanged();
+  return true;
 }
 
 /**

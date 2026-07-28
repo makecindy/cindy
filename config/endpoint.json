@@ -1,7 +1,6 @@
 {
   "schemaVersion": 1,
   "authApiBaseUrl": "https://auth.cindy.com.cn",
-  "authDesktopCallbackUrl": "",
   "deviceLinkApiBaseUrl": "https://device-link.cindy.com.cn",
   "oauthBrokerApiBaseUrl": "https://oauth-broker.cindy.com.cn",
   "ossApiBaseUrl": "https://oss.cindy.com.cn",

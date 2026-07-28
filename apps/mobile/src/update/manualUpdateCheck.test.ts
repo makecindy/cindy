@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import {
+  manualUpdateCheckMessage,
   runManualUpdateCheck,
   type BundleUpdateCheckOutcome,
   type ManualUpdateCheckDeps,
@@ -66,7 +67,7 @@ describe('runManualUpdateCheck', () => {
     const input = deps({ checkBundleUpdate: bundleCheck('error') });
     await expect(runManualUpdateCheck(input)).resolves.toEqual({
       kind: 'error',
-      message: '无法检查整包更新，请稍后重试',
+      reason: 'bundle-check',
     });
     expect(input.checkOtaUpdate).not.toHaveBeenCalled();
   });
@@ -84,5 +85,33 @@ describe('runManualUpdateCheck', () => {
     });
     await expect(runManualUpdateCheck(input)).resolves.toEqual({ kind: 'ota-unavailable' });
     expect(input.checkOtaUpdate).not.toHaveBeenCalled();
+  });
+
+  it('keeps OTA failure details unlocalized until the settings page renders them', async () => {
+    const input = deps({
+      checkOtaUpdate: vi.fn(async () => {
+        throw new Error('offline');
+      }),
+    });
+
+    await expect(runManualUpdateCheck(input)).resolves.toEqual({
+      kind: 'error',
+      reason: 'ota-check',
+      detail: 'offline',
+    });
+  });
+});
+
+describe('manualUpdateCheckMessage', () => {
+  it('uses the current language for an already completed TestFlight check', async () => {
+    const outcome = { kind: 'up-to-date' } as const;
+
+    await i18n.changeLanguage('zh-CN');
+    expect(manualUpdateCheckMessage(outcome, { isTestFlightBuild: true, t: i18n.t }))
+      .toBe('当前没有可用的内容更新。新测试版本请在 TestFlight 中查看。');
+
+    await i18n.changeLanguage('en');
+    expect(manualUpdateCheckMessage(outcome, { isTestFlightBuild: true, t: i18n.t }))
+      .toBe('No content updates are available. Check TestFlight for new test builds.');
   });
 });

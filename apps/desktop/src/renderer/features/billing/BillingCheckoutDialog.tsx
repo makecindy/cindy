@@ -30,6 +30,19 @@ export function BillingCheckoutDialog({
   const action = actionOf(state);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
+  const openedRedirectKeyRef = useRef<string | null>(null);
+  const redirectUrl = action?.type === 'REDIRECT' ? action.url : null;
+  const redirectKey =
+    action?.type === 'REDIRECT'
+      ? [
+          state.kind,
+          state.order?.orderId ??
+            state.subscription?.purchaseAttemptId ??
+            state.subscription?.subscriptionId,
+          action.url,
+          action.expiresAt,
+        ].join(':')
+      : null;
 
   useEffect(() => {
     let active = true;
@@ -78,6 +91,16 @@ export function BillingCheckoutDialog({
   const openRedirect = () => {
     if (action?.type === 'REDIRECT') void billingApi.openPaymentRedirect(action.url);
   };
+
+  useEffect(() => {
+    if (!state.open || state.phase !== 'AWAITING_PAYMENT') {
+      openedRedirectKeyRef.current = null;
+      return;
+    }
+    if (!redirectKey || !redirectUrl || openedRedirectKeyRef.current === redirectKey) return;
+    openedRedirectKeyRef.current = redirectKey;
+    void billingApi.openPaymentRedirect(redirectUrl);
+  }, [redirectKey, redirectUrl, state.open, state.phase]);
 
   // 过期判定以服务端为权威：服务端只下发仍有效的动作，动作过期后轮询响应里
   // 会把它置空。因此“曾经有动作、现在没有了”才代表过期，本地时钟偏移不会
