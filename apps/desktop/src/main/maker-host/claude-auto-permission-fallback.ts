@@ -139,6 +139,10 @@ export function isClaudeAutoClassifierRequest(requestBody: Buffer): boolean {
  *
  * - EPISODE_MS:SDK 对 429/5xx 有自动重试,一次用户动作会在数秒内产生多个失败
  *   响应;30s 内的失败归并为一段,避免把一次动作的 retry storm 数成 N 次。
+ *   段以**段起点**为锚(固定桶),刻意不用「距最近一次失败的间隔」做锚:gap 锚定下
+ *   「失败每隔几秒持续到达」的确定性故障会被永远归并进同一段、永不达阈,重新退化成
+ *   #758 的无限 fail-closed。固定桶的代价是单次动作的 retry 链若拖过 30s 会跨段,
+ *   但 SDK 重试退避总时长远短于 30s,而真正连续失败 60s+ 的本就该判为持续故障。
  * - WINDOW_MS:只统计最近 10 分钟——上午两次抖动 + 晚上一次不构成「持续」。
  * - 阈值 3 段 ≈ 持续失败约 1 分钟,或用户间隔性重试 3 次;任一成功立即清零。
  */
@@ -175,8 +179,20 @@ export function createClaudeAutoClassifierFailureObserver(
       // 分类器恢复 → 清零该会话的瞬时故障记账。仅在有记账时才 parse body。
       if (transientEpisodes.size === 0) return undefined;
       const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
-      if (!sdkSessionId || !transientEpisodes.has(sdkSessionId)) return undefined;
-      if (isClaudeAutoClassifierRequest(ctx.requestBody)) {
+      if (!sdkSessionId) return undefined;
+      const episodes = transientEpisodes.get(sdkSessionId);
+      if (!episodes) return undefined;
+      // 过期即弃:记账已整体滑出窗口 → 直接删,该会话的后续成功响应回到零开销
+      // 短路 —— 不为一条陈年记账无限期 parse 每个成功请求的 body。
+      const ts = now();
+      if (episodes.length === 0 || ts - episodes[episodes.length - 1] > TRANSIENT_WINDOW_MS) {
+        transientEpisodes.delete(sdkSessionId);
+        return undefined;
+      }
+      // 恢复判据只认 2xx:3xx 重定向不代表分类器真正给出 verdict,不得清账 ——
+      // 否则「上游持续用 3xx 响应分类器」的故障形态会每轮清零、永不升级,
+      // 会话被留在无限 fail-closed。
+      if (ctx.status >= 200 && ctx.status < 300 && isClaudeAutoClassifierRequest(ctx.requestBody)) {
         transientEpisodes.delete(sdkSessionId);
       }
       return undefined;

@@ -120,12 +120,15 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
   // 这样 AgentRuntimeConfig 接口(endpoint?: string)在结构类型上仍然成立 ——
   // 每次访问 runtimeConfig.endpoint 都会执行 endpointFn, 拿到当时最新的兼容模式状态。
   const config: AgentRuntimeConfig = {
-    // behaviorFlags 用 getter 而非静态值:env-builder 在每次 spawn 时读它,getter 让
-    // attribution 归因块跟随**当时**的 Claude.ai 订阅连接态(oauth-spawn 判据与 proxy
-    // 同源)。会话中途连/断订阅只影响新 spawn —— 与 cc 子进程凭证冻结语义一致。
-    get behaviorFlags() {
-      return claudeBehaviorFlagsForSpawn(hasClaudeAiOAuth());
-    },
+    // behaviorFlags 用函数形态:env-builder 在每次 spawn 时以该 spawn 的 credentialMode
+    // 调用 —— gateway-key spawn(显式 XD source / SSH remote)保持禁归因且不读钥匙串,
+    // 其余形态按**当时**的 Claude.ai 订阅连接态决定(判据与 proxy 同源)。会话中途
+    // 连/断订阅只影响新 spawn —— 与 cc 子进程凭证冻结语义一致。
+    behaviorFlags: (ctx) =>
+      claudeBehaviorFlagsForSpawn({
+        credentialMode: ctx.credentialMode,
+        oauthConnected: hasClaudeAiOAuth,
+      }),
     // xdt-maker 产品级 system prompt 注入：host 共用段 (host-system-prompt.md)
     // + Claude 专属段 (claude-system-prompt.md)，按顺序拼接后给 maker-core append。
     systemPrompt: composeHostPrompt(claudeSystemPrompt),

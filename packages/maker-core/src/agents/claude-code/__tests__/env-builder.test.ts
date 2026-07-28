@@ -69,6 +69,19 @@ describe('buildClaudeEnv', () => {
     expect(env.ANTHROPIC_API_KEY).toBe('key');
   });
 
+  it('evaluates function-form behaviorFlags with the spawn credentialMode', async () => {
+    const behaviorFlags = vi.fn(() => ({ CLAUDE_CODE_ATTRIBUTION_HEADER: '0' }));
+
+    const env = await buildClaudeEnv(
+      createAuthAdapter(),
+      { behaviorFlags },
+      { credentialMode: 'gateway-key' },
+    );
+
+    expect(behaviorFlags).toHaveBeenCalledWith({ credentialMode: 'gateway-key' });
+    expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
+  });
+
   it('injects the configured Claude subagent model', async () => {
     delete process.env.CLAUDE_CODE_SUBAGENT_MODEL;
 

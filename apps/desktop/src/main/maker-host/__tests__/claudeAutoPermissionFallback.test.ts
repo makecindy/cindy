@@ -193,6 +193,24 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it('does not treat 3xx classifier responses as recovery', () => {
+    // 3xx 不是分类器真正给出 verdict:若清账,「上游持续 3xx」的故障会永不升级。
+    const listener = vi.fn();
+    setClaudeAutoClassifierUnavailableListener(listener);
+    let t = 0;
+    const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
+      now: () => t,
+    });
+
+    observer(ctx({ status: 429 })); // episode 1
+    t += 31_000;
+    observer(ctx({ status: 429 })); // episode 2
+    observer(ctx({ status: 302 })); // 分类器请求被重定向 → 不得清账
+    t += 31_000;
+    observer(ctx({ status: 429 })); // episode 3 → 升级(证明前两段仍在账上)
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it('expires episodes outside the 10-minute window', () => {
     const listener = vi.fn();
     setClaudeAutoClassifierUnavailableListener(listener);
