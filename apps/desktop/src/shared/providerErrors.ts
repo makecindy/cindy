@@ -80,13 +80,24 @@ const MODEL_NOT_FOUND_RE =
 /** 上下文超长：Anthropic "prompt is too long"、OpenAI "maximum context length"、通用 token limit 措辞。 */
 const CONTEXT_TOO_LONG_RE =
   /prompt is too long|maximum context length|context.{0,20}(length|window).{0,40}(exceed|too)|too many tokens|input length.{0,20}exceed|context_length_exceeded/i;
-/** 余额 / 配额：OpenAI "insufficient_quota"、通用 balance / credit 措辞。 */
-const QUOTA_RE = /insufficient_quota|insufficient.{0,12}(balance|credit|funds)|quota.{0,20}exceed|余额不足|欠费/i;
+/** 余额 / 配额：OpenAI "insufficient_quota"、通用 balance / credit 措辞、
+ *  LiteLLM "ExceededBudget: … Budget has been exceeded"(XD 网关点数耗尽的实际形状)。 */
+const QUOTA_RE =
+  /insufficient_quota|insufficient.{0,12}(balance|credit|funds)|quota.{0,20}exceed|budget.{0,20}exceeded|ExceededBudget|余额不足|欠费/i;
 /** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。 */
 const WIRE_RE =
   /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;
 /** 鉴权失败措辞（个别网关 401 语义但回 400/403 文本）。 */
 const AUTH_RE = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|api key not valid|令牌|鉴权失败/i;
+
+/**
+ * 消息级「余额 / 配额耗尽」判定:给只有错误文本、拿不到 HTTP status 的消费方用
+ * (会话 ErrorBanner 的 turn 错误是 agent 透传的字符串)。与 classifyProviderError
+ * 的 QUOTA_EXCEEDED 共用同一 pattern,避免两处口径漂移。
+ */
+export function isQuotaExceededMessage(text: string): boolean {
+  return QUOTA_RE.test(text);
+}
 
 /**
  * 分类一次供应商上游失败。确定性纯函数：同输入必同输出。

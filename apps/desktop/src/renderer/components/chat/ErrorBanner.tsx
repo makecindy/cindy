@@ -13,13 +13,17 @@
  */
 
 import { useEffect, useState } from 'react';
-import { AlertCircle, Check, GitFork, Play, RotateCcw, RefreshCw, Timer, X } from 'lucide-react';
+import { AlertCircle, Check, CreditCard, GitFork, Play, RotateCcw, RefreshCw, Timer, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { extractIpcError } from '@/utils/ipcError';
 import { buildCodexSyncWarning } from '@/utils/codexAuthSync';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { useAuth } from '@/contexts/AuthContext';
+import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
+import { useClaudeSessionRoute } from '@/hooks/useClaudeSessionRoute';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import {
@@ -32,6 +36,7 @@ import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
 import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
 import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
+import { isQuotaExceededMessage } from '../../../shared/providerErrors';
 
 interface ErrorBannerProps {
   error: string;
@@ -64,6 +69,9 @@ interface ErrorBannerProps {
   /** XD Gateway 返回了误导性的 Claude Pro/Opus 套餐错误时，切到已连接的
    * Claude.ai 订阅来源并重试本轮。未连接 Anthropic 时不提供此操作。 */
   onSwitchToClaudeSubscription?: () => Promise<void>;
+  /** 当前 session id。cc 默认路由(无显式来源)的点数耗尽引导需要它读会话的
+   *  生效计费路由(gateway/subscription),缺省时该引导只按显式来源判定。 */
+  sessionId?: string;
   silentEncryptedRetryEnabled?: boolean;
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
@@ -89,6 +97,7 @@ export function ErrorBanner({
   modelId,
   providerId,
   onSwitchToClaudeSubscription,
+  sessionId,
   silentEncryptedRetryEnabled = false,
   onForkStripEncrypted,
   forkStripEncryptedRunning = false,
@@ -150,6 +159,39 @@ export function ErrorBanner({
   // 不能因为错误文案碰巧含 token_revoked 就引导用户去修 ChatGPT 登录态。历史无来源
   // 会话仍允许从非 provider-oauth runtime + 非 XD/xAI 前缀推断 OpenAI，守住旧数据兼容。
   const normalizedProviderId = providerId?.trim() || null;
+  // ── Cindy AI 点数耗尽 → 「购买点数」直达 ────────────────────────────────
+  // 转化闭环:被余额挡住的瞬间给出可行动入口,而不是让用户自己去设置里找计费页。
+  // 三重门,缺一不显(防止把别家供应商的余额问题错误指向 Cindy 计费):
+  //  1. 错误文本命中共享分类器的余额/配额 pattern(与 QUOTA_EXCEEDED 同口径);
+  //  2. 账号本身有计费页可去(cloud + personal,与设置页 billing tab 同一判定);
+  //  3. 该会话的花费确实走 XD 网关:显式 xd 来源 / codex 骨折模型 / env-key spawn
+  //     的 codex 默认路由 / cc 默认路由按会话观察到的计费路由为 gateway。
+  //     显式第三方来源(自定义供应商等)一律不命中——那是对方平台的余额。
+  const { mode: authMode, user: authUser } = useAuth();
+  const canAccessBilling = canAccessBillingSettings({
+    mode: authMode,
+    membershipKind: authUser?.membershipKind ?? null,
+  });
+  const isQuotaError = isQuotaExceededMessage(error);
+  const claudeSessionRoute = useClaudeSessionRoute(
+    sessionId,
+    isQuotaError &&
+      canAccessBilling &&
+      !isAnyRemoteSession &&
+      agentKind === 'cc' &&
+      normalizedProviderId === null,
+  );
+  const isGatewayBilledSource =
+    normalizedProviderId === 'xd' ||
+    !!modelId?.startsWith('codex/') ||
+    (normalizedProviderId === null &&
+      agentKind === 'codex' &&
+      codexAuthInjection === 'env-key') ||
+    (normalizedProviderId === null && agentKind === 'cc' && claudeSessionRoute === 'gateway');
+  const showGatewayQuotaRecovery =
+    isQuotaError && canAccessBilling && !isAnyRemoteSession && isGatewayBilledSource;
+  const navigate = useNavigate();
+
   const hasExplicitOpenAiProvider = normalizedProviderId === 'openai';
   const hasImplicitOpenAiProvider =
     normalizedProviderId === null &&
@@ -282,6 +324,10 @@ export function ErrorBanner({
           maxAttempts: overloadRetryProgress.maxAttempts,
         })
       : t(safeRetryText ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
+  } else if (showGatewayQuotaRecovery) {
+    // 点数耗尽:原始报错(LiteLLM budget 措辞等)对用户没有行动价值,换成
+    // 「点数不足 + 购买后重试」;Retry 保留——补点后原文重试即可继续。
+    displayError = t('chat.errorBanner.gatewayQuotaExceeded');
   } else if (isNetworkishError) {
     // 网络类错误:原始英文报错(502/ECONNREFUSED/fetch failed 等)对用户没有
     // 行动价值,换成友好文案;原始错误折叠可查(下方「查看原始错误」)。
@@ -567,6 +613,23 @@ export function ErrorBanner({
         >
           <Timer size={12} />
           {t('chat.errorBanner.continueAfterReset')}
+        </button>
+      )}
+      {showGatewayQuotaRecovery && (
+        // 直达设置页 billing tab(可见性与 SettingsView 同一判定,不会 404 回弹)。
+        // 新增控件走 --error-fg token(规则 16;本组件 red-600/400 为历史存量)。
+        <button
+          type="button"
+          onClick={() => navigate('/settings?tab=billing')}
+          className={cn(
+            'shrink-0 flex items-center gap-1 text-xs font-medium',
+            'text-[var(--error-fg)]',
+            'hover:opacity-70 transition-opacity',
+          )}
+          title={t('chat.errorBanner.openBillingTitle')}
+        >
+          <CreditCard size={12} />
+          {t('chat.errorBanner.openBilling')}
         </button>
       )}
       {safeRetryText && (

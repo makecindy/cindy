@@ -4047,6 +4047,7 @@
       "second": "s"
     },
     "openProxyUsage": "Open the full usage dashboard in your browser",
+    "openBilling": "Open usage and billing",
     "openXaiUsage": "Open your xAI account page",
     "xai": {
       "requestsLine": "Rate limit (requests): {{remaining}}/{{limit}} left",
@@ -5514,6 +5515,9 @@
       "switchingClaudeSubscription": "Switching to Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Couldn’t switch to Claude.ai or retry this session: {{msg}}",
       "budgetModelHint": "If this keeps failing, try switching to the standard GPT model.",
+      "gatewayQuotaExceeded": "You are out of Cindy AI credits, so this turn did not finish. Buy credits, then click Retry to continue.",
+      "openBilling": "Buy credits",
+      "openBillingTitle": "Open Usage and billing",
       "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "Codex credentials missing or expired (401 Unauthorized). Re-login in {{appName}} Settings → Codex (the app-server will auto-restart on login), or run `codex login` in your terminal and toggle the auth mode in Settings once to restart the app-server. Then start a new session.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",

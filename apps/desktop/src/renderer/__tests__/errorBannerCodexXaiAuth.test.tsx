@@ -22,6 +22,19 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: async () => true }),
 }));
 
+// 点数耗尽引导的新依赖:本测试聚焦 xAI 来源判定,身份固定为「无计费页」,引导分支恒不命中。
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ mode: 'cloud' as const, user: null }),
+}));
+
+vi.mock('@/hooks/useClaudeSessionRoute', () => ({
+  useClaudeSessionRoute: () => null,
+}));
+
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => vi.fn(),
+}));
+
 vi.mock('@/hooks/useCodexRuntimeRoute', () => ({
   useCodexRuntimeRoute: useCodexRuntimeRouteMock,
 }));

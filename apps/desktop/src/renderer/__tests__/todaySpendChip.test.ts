@@ -373,11 +373,22 @@ describe('TodaySpendChip dashboard routing', () => {
     // + 三元结尾落 null(见上一个用例的正则),即等价于"内部域名已从源码移除";
     // 这里不重新写出被禁的内部域名字面量,否则它又会 grep 命中公开仓。
     expect(source).not.toContain('PROXY_USAGE_DASHBOARD_URL');
-    // 网关账号无看板 → url/label 落 null,chip 不可点(点击无跳转)。
-    expect(source).toContain('const isDashboardClickable = usageDashboardUrl !== null');
-    expect(source).toContain('if (!usageDashboardUrl) return;');
-    // tooltip "打开看板" 行经 helper 统一追加,label 为 null(网关账号)时不追加。
+    // 网关账号无外部看板 → url 落 null;个人云账号点击改为站内直达「用量和计费」,
+    // 其余账号(企业/本地/未登录/device-link)不可点。
+    expect(source).toContain(
+      'const isDashboardClickable = usageDashboardUrl !== null || opensBillingSettings',
+    );
+    expect(source).toContain("navigate('/settings?tab=billing')");
+    // 站内计费入口与设置页 billing tab 共用同一可见性判定,且 device-link 远程会话不进。
+    expect(source).toContain('canAccessBillingSettings({');
+    expect(source).toMatch(/opensBillingSettings =\n\s*!isDeviceLinkRemote &&/);
+    // tooltip "打开看板" 行经 helper 统一追加,label 为 null(不可点账号)时不追加;
+    // 个人云网关账号 label 兜底为站内计费入口文案,四语言 key 齐备。
     expect(source).toContain('function pushDashboardLinkLine(lines: string[], label: string | null)');
+    expect(source).toContain("t('todaySpend.openBilling')");
+    for (const localeSource of localeSources) {
+      expect(localeSource).toContain('"openBilling"');
+    }
     // 网关账号仍展示 daily/credit/session 指标 + tooltip(仅去掉"打开看板"链接行)。
     // credit 段服务个人租户的三池账本(LiteLLM 语义的 daily/monthly 对它恒不可用)。
     expect(source).toContain("const PRIMARY_GATEWAY_METRICS: readonly MetricKey[] = ['daily', 'credit', 'session']");

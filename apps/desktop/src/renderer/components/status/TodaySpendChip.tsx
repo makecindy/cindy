@@ -5,7 +5,8 @@
  *   - 不在 desktop 重做完整看板（点击 chip 跳到对应供应商的 web 用量看板）
  *   - 仅在右下角与 Context 同行显示区域币种的今日 / 本会话金额
  *   - 点击 → 在系统默认浏览器打开对应 vendor 的用量看板
- *     (XD 网关 / 托管账号暂无看板可跳,点击无反应,详见 usageDashboardUrl)
+ *     (XD 网关 / 托管账号无外部看板;个人云账号点击改为站内直达「用量和计费」,
+ *      其余账号点击无反应,详见 usageDashboardUrl / opensBillingSettings)
  *
  * Claude / gateway 形态: 主 chip 固定显示 daily + session, monthly 进 tooltip。
  *   - daily: 今日跨客户端已用 / 软日限额 (maxBudget/30*4.5, 与 web 看板同公式)
@@ -32,6 +33,7 @@
  */
 
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
@@ -49,6 +51,8 @@ import {
 } from '@/lib/usageFormat';
 import { Tip } from '@/components/ui/tooltip';
 import { useApiKey } from '@/hooks/useApiKey';
+import { useAuth } from '@/contexts/AuthContext';
+import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
 import { useClaudeSessionRoute } from '@/hooks/useClaudeSessionRoute';
 import {
@@ -101,8 +105,9 @@ import { QuotaResetConfetti } from './QuotaResetConfetti';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
 // 登录随凭据只下发 { endpoint, apiKey }(见 main/model-access/credentialsSync.ts),不含
-// 看板地址;推理 endpoint 与看板 console 不同源、无法从中推导。故网关账号暂无看板可跳
-// (点击无反应)。
+// 看板地址;推理 endpoint 与看板 console 不同源、无法从中推导。故网关账号无外部看板,
+// 个人云账号点击改为站内直达设置页「用量和计费」(见 opensBillingSettings),其余账号
+// 点击无反应。
 // TODO(后续): 若 model-access-server 在下发凭据时附带看板地址(按个人 / 企业租户区分的
 // usageDashboardUrl / consoleUrl),据此恢复网关账号的跳转 + tooltip 链接行
 // (i18n 文案 todaySpend.openProxyUsage 已保留待复用,勿当死 key 删)。
@@ -1226,8 +1231,21 @@ export function TodaySpendChip({
         cost: formatTurnCostMoney(sessionMoney),
       })
     : null;
+  // 网关 / 托管账号没有外部看板(url 恒 null,见文件头),但个人云账号有站内
+  // 「用量和计费」页可去:chip 从不可点升级为直达计费页,和 SettingsView 的
+  // billing tab 用同一可见性判定(企业/本地/未登录账号没有计费页,保持不可点,
+  // 不假装有入口;device-link 远程会话计费在被控端,同样不进)。
+  const { mode: authMode, user: authUser } = useAuth();
+  const opensBillingSettings =
+    !isDeviceLinkRemote &&
+    canAccessBillingSettings({
+      mode: authMode,
+      membershipKind: authUser?.membershipKind ?? null,
+    });
+  const navigate = useNavigate();
   // codex-oauth / cc+chatgpt bridge → ChatGPT 用量看板; cc+xai bridge → xAI 账户页;
-  // cc Claude 订阅 → claude.ai 用量页; 其余(cc 网关 / codex-api)→ 暂无看板(null,见文件头 TODO)。
+  // cc Claude 订阅 → claude.ai 用量页; 其余(cc 网关 / codex-api)→ 无外部看板(null),
+  // 个人云账号退而指向站内计费页(见 opensBillingSettings / usageDashboardLabel 兜底)。
   // device-link 远程会话额度属于被控端账号,本机浏览器打开的看板是控制端自己的账号 → 不跳。
   const usageDashboardUrl: string | null = isDeviceLinkRemote
     ? null
@@ -1238,8 +1256,9 @@ export function TodaySpendChip({
         : isClaudeSubscription
           ? CLAUDE_USAGE_DASHBOARD_URL
           : null;
-  // 看板链接行文案:与 usageDashboardUrl 一一对应;网关账号无看板 → null
-  // (tooltip 不显示"打开看板"行,chip 也不可点)。
+  // 看板链接行文案:与 usageDashboardUrl 一一对应;网关账号无外部看板 → 个人云
+  // 账号兜底为站内「用量和计费」(opensBillingSettings),其余账号 null
+  // (tooltip 不显示链接行,chip 也不可点)。
   const usageDashboardLabel: string | null = isDeviceLinkRemote
     ? null
     : usesXaiQuotaForm
@@ -1248,7 +1267,9 @@ export function TodaySpendChip({
         ? t('todaySpend.openCodexUsage')
         : isClaudeSubscription
           ? t('todaySpend.openClaudeUsage')
-          : null;
+          : opensBillingSettings
+            ? t('todaySpend.openBilling')
+            : null;
   const [windowLabelNowMs, setWindowLabelNowMs] = React.useState(() => Date.now());
   const codexResetSummary = React.useMemo(
     () => summarizeCodexRateLimitReset(codexRateLimits, windowLabelNowMs),
@@ -1370,10 +1391,15 @@ export function TodaySpendChip({
     }
   }, [hasPendingResetWindow, isChatgptBridge, isClaudeSubscription, usesCodexQuotaForm, windowLabelNowMs]);
 
-  const isDashboardClickable = usageDashboardUrl !== null;
+  const isDashboardClickable = usageDashboardUrl !== null || opensBillingSettings;
   const handleClick = () => {
-    if (!usageDashboardUrl) return; // 网关账号暂无看板:点击无反应
-    void window.electronAPI.openExternal(usageDashboardUrl);
+    if (usageDashboardUrl) {
+      void window.electronAPI.openExternal(usageDashboardUrl);
+    } else if (opensBillingSettings) {
+      // 网关 / 托管形态:站内直达设置页 billing tab(可见性同 SettingsView,不会被重定向吞掉)。
+      navigate('/settings?tab=billing');
+    }
+    // 其余形态不可点(企业/本地账号无计费页;device-link 计费在被控端)。
   };
 
   let labelNode: React.ReactNode;
