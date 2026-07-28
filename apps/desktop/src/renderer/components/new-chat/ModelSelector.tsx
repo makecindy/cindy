@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useState,
   useMemo,
   useEffect,
@@ -1572,7 +1573,26 @@ export function ModelSelector({
 }: ModelSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const openRef = useRef(false);
   const [keepOpenForAgentConfirmation, setKeepOpenForAgentConfirmation] = useState(false);
+  const setOpenWithoutAutoRefresh = useCallback((next: boolean): void => {
+    openRef.current = next;
+    setOpen(next);
+  }, []);
+  const handleOpenChange = useCallback(
+    (next: boolean): void => {
+      const nextOpen = disabled ? false : next;
+      const wasOpen = openRef.current;
+      openRef.current = nextOpen;
+      if (nextOpen && !wasOpen && !deviceId) {
+        void window.electronAPI.maker
+          .requestProviderModelsAutoRefresh('model-selector-open')
+          .catch(() => undefined);
+      }
+      setOpen(nextOpen);
+    },
+    [deviceId, disabled],
+  );
 
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
   // 强制保留已展开的模型面板；确认结束后把底层 open 恢复为 true，避免弹窗关闭
@@ -1587,12 +1607,12 @@ export function ModelSelector({
         try {
           return await confirmBrowseSwitch();
         } finally {
-          setOpen(true);
+          setOpenWithoutAutoRefresh(true);
           setKeepOpenForAgentConfirmation(false);
         }
       },
     };
-  }, [agentSwitch]);
+  }, [agentSwitch, setOpenWithoutAutoRefresh]);
 
   const agentKind = vendorKeyToAgentKind(vendorKey);
   const cc = useAgentCapabilities('claude-code', deviceId);
@@ -1776,7 +1796,7 @@ export function ModelSelector({
     <button
       type="button"
       disabled={switching || disabled}
-      onClick={morphEnabled ? () => setOpen((prev) => (disabled ? false : !prev)) : undefined}
+      onClick={morphEnabled ? () => handleOpenChange(!openRef.current) : undefined}
       aria-expanded={open && !disabled}
       aria-haspopup="listbox"
       title={triggerTitle}
@@ -2003,7 +2023,7 @@ export function ModelSelector({
       deviceId={deviceId}
       excludeSubscriptionDirect={excludeSubscriptionDirect}
       excludeChatBridgedCodex={excludeChatBridgedCodex}
-      onDismiss={() => setOpen(false)}
+      onDismiss={() => setOpenWithoutAutoRefresh(false)}
       maxVisibleModelRows={maxVisibleModelRows}
       currentProviderId={currentProviderId}
       onProviderChange={onProviderChange}
@@ -2030,7 +2050,7 @@ export function ModelSelector({
     return (
       <MorphPopover
         open={(open || keepOpenForAgentConfirmation) && !disabled}
-        onOpenChange={(next) => setOpen(disabled ? false : next)}
+        onOpenChange={handleOpenChange}
         side={popoverSide}
         align="end"
         wrapperClassName="min-w-0 max-w-full shrink"
@@ -2046,7 +2066,7 @@ export function ModelSelector({
   return (
     <Popover
       open={(open || keepOpenForAgentConfirmation) && !disabled}
-      onOpenChange={(next) => setOpen(disabled ? false : next)}
+      onOpenChange={handleOpenChange}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent

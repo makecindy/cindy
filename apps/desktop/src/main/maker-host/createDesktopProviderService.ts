@@ -23,6 +23,7 @@ import {
   buildUserProvider,
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   loadCatalog,
+  loadCatalogWithSource,
   type Catalog,
   type CatalogIO,
   type CatalogSourceConfig,
@@ -31,7 +32,13 @@ import {
 import { createLogger } from '../logger.js';
 import { getBaseUrl, isDev } from '../manifestService.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { getActiveCatalog, setActiveCatalog, setCustomProviders, setDiscoveredCodexModels } from './active-catalog.js';
+import {
+  getActiveCatalog,
+  setActiveCatalog,
+  setCustomProviders,
+  setDiscoveredCodexModels,
+  setProviderModelsFromCatalog,
+} from './active-catalog.js';
 import {
   readCodexDiscoveredModels,
   readCodexDiscoveredModelsForAuthRefresh,
@@ -174,6 +181,7 @@ async function cleanupLegacyCatalogCache(): Promise<void> {
 
 let activeLoaded = false;
 let activeInflight: Promise<Catalog> | null = null;
+let catalogRefreshInflight: Promise<Catalog> | null = null;
 
 /**
  * 启动期（splash）await 一次：加载远端目录写入 active-catalog。幂等 + 并发去重。
@@ -236,6 +244,29 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
       });
   }
   return activeInflight;
+}
+
+/**
+ * 手动重载 xAI 模型目录。先确保启动期动态发现已完成，再复用同一 `loadCatalog`
+ * 源选择与 bundled fallback；只投影 xAI 的静态模型列表，当前 routing/auth 以及其它
+ * provider 全部保持不变，避免活跃 turn 中途被整份远端目录切换路由。
+ */
+export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
+  await ensureActiveCatalogLoaded();
+  if (catalogRefreshInflight) return catalogRefreshInflight;
+  const flight = loadCatalogWithSource(buildSource(), io)
+    .then(({ catalog, source }) => {
+      if (source === 'bundled') {
+        throw new Error('catalog refresh exhausted configured sources; keeping current snapshot');
+      }
+      setProviderModelsFromCatalog('xai', catalog);
+      return getActiveCatalog();
+    })
+    .finally(() => {
+      if (catalogRefreshInflight === flight) catalogRefreshInflight = null;
+    });
+  catalogRefreshInflight = flight;
+  return flight;
 }
 
 /**

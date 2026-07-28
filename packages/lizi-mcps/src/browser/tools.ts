@@ -444,6 +444,10 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               const spec = r?.recipe.inputs ?? {};
               return {
                 id,
+                // Surface the author's description at discovery time — it carries
+                // input constraints (e.g. "id must be passed as a string") that the
+                // bare input-name list cannot express.
+                description: r?.recipe.description,
                 inputs: Object.keys(spec),
                 required: Object.entries(spec)
                   .filter(([, v]) => v?.required)

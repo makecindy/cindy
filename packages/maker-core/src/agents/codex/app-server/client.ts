@@ -40,6 +40,17 @@ import type { Transport } from './transport.js';
  */
 const DEFAULT_MAX_LINE_BYTES = 16 * 1024 * 1024;
 const MAX_STDERR_LOG_CHARS = 2_000;
+
+export class AppServerRequestTimeoutError extends Error {
+  constructor(
+    public readonly method: string,
+    public readonly timeoutMs: number,
+  ) {
+    super(`codex app-server ${method} timed out after ${timeoutMs}ms`);
+    this.name = 'AppServerRequestTimeoutError';
+  }
+}
+
 /**
  * Keep a small bounded correlation window for writes that rejected after the
  * transport may already have handed bytes to the OS / websocket buffer.
@@ -335,7 +346,7 @@ export class AppServerClient {
         pending.timeoutId = setTimeout(() => {
           if (this.pending.get(id) !== pending) return;
           this.pending.delete(id);
-          reject(new Error(`codex app-server ${method} timed out after ${timeoutMs}ms`));
+          reject(new AppServerRequestTimeoutError(method, timeoutMs));
         }, timeoutMs);
         pending.timeoutId.unref?.();
       }

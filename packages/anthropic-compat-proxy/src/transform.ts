@@ -108,8 +108,24 @@ export const stripToolUseProviderSpecificFields: RequestTransform = (body) => {
 };
 
 /**
+ * Responses `input[]` 里的上下文压缩块 (OpenAI `/v1/responses/compact` 与 xAI 同名接口
+ * 都回这个形态)。它的 `encrypted_content` 装的是**压缩 blob 本体** —— 压缩点之前的
+ * 全部历史,不是可有可无的推理链。
+ */
+function isCompactionItem(node: Record<string, unknown>): boolean {
+  return node.type === 'compaction' || node.type === 'context_compaction';
+}
+
+/**
  * 递归删除 body 里所有 `encrypted_content` 键, 返回删掉的个数。
  * 用于 invalid_encrypted_content 报错后的透明重试 (见 stripEncryptedContentFromBody)。
+ *
+ * **压缩块整块跳过**: 剥掉压缩 blob 换不回一个可用请求 —— 上游收到没有 blob 的
+ * 压缩空壳会直接判 "Could not decode the compaction blob. Ensure it is unmodified
+ * from the compact response." (xAI 实报, 2026-07 Grok 会话卡死)。压缩块该怎么处置
+ * 由上层按目标上游决定 (codex-proxy 的跨来源压缩兼容 transform 会把读不懂的加密块
+ * 换成明文占位), 而那条兼容路径正是以"encrypted_content 非空"为触发条件 —— 在这里
+ * 先剥就等于把它一并绕过。
  */
 function deepDeleteEncryptedContent(node: unknown): number {
   let removed = 0;
@@ -118,6 +134,7 @@ function deepDeleteEncryptedContent(node: unknown): number {
     return removed;
   }
   if (isPlainObject(node)) {
+    if (isCompactionItem(node)) return 0;
     if ('encrypted_content' in node) {
       delete node.encrypted_content;
       removed += 1;
@@ -136,40 +153,55 @@ function isReasoningItemWithoutEncryptedContent(item: unknown): boolean {
 }
 
 /**
- * 从 Responses-style `input[]` 丢掉"无 encrypted_content 的 reasoning"空壳。
- * 只删 encrypted_content 键时,xAI 会把残留 reasoning item 判成 ModelInput 反序列化失败 (422)。
+ * 缺 blob 的 `compaction` 空壳 —— 上游无法解码, 留着必 400, 只能丢。
+ *
+ * **只认 `compaction`, 不认 `context_compaction`**: codex wire 上 `Compaction.encrypted_content`
+ * 必填、`ContextCompaction.encrypted_content` 可选 —— 后者不带密文是合法的可读压缩变体
+ * (codex-proxy 的跨来源压缩兼容 transform 同样只处理带密文的项, 明文变体原样透传)。
+ * 把它当空壳删掉会静默丢掉真实的压缩上下文。
  */
-function deepDropEmptyReasoningInputItems(node: unknown): number {
+function isCompactionShellWithoutBlob(item: unknown): boolean {
+  if (!isPlainObject(item) || item.type !== 'compaction') return false;
+  return typeof item.encrypted_content !== 'string' || item.encrypted_content.length === 0;
+}
+
+/**
+ * 丢掉 Responses 请求体**协议层** `input[]` 里解不开也修不好的空壳 item:
+ *   - 缺 blob 的 `compaction` (**恒丢**): 本模块不再制造这种空壳
+ *     (见 deepDeleteEncryptedContent), 但请求体可能已经带着它进来, 兜底丢掉,
+ *     别让它打到上游换一个 400;
+ *   - 无 encrypted_content 的 reasoning (**仅 dropReasoningShells**): 只删
+ *     encrypted_content 键时,xAI 会把残留 reasoning item 判成 ModelInput 反序列化失败
+ *     (422)。这一条只在本轮确实剥掉过密文时才做 —— 没剥过的请求里,"reasoning 只带
+ *     summary" 是合法形态, 不该顺手删掉。
+ *
+ * **只看顶层 `input`, 不递归**: Responses 请求体的协议历史只有顶层这一个 `input[]`;
+ * 嵌套结构里同名的 `input` 数组(工具参数、业务对象等)不是协议历史, 按 `type` 形状
+ * 猜着删会静默改坏别人的数据。删密文键可以全树递归(定向删键, 只会少发不会发错),
+ * 判定"整项该不该留"必须锚在协议层。
+ */
+function dropEncryptedShellInputItems(body: unknown, dropReasoningShells: boolean): number {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return 0;
+
   let removed = 0;
-  if (Array.isArray(node)) {
-    for (const item of node) removed += deepDropEmptyReasoningInputItems(item);
-    return removed;
-  }
-  if (!isPlainObject(node)) return 0;
-
-  if (Array.isArray(node.input)) {
-    const kept: unknown[] = [];
-    for (const item of node.input) {
-      if (isReasoningItemWithoutEncryptedContent(item)) {
-        removed += 1;
-        continue;
-      }
-      removed += deepDropEmptyReasoningInputItems(item);
-      kept.push(item);
+  const kept: unknown[] = [];
+  for (const item of body.input) {
+    if (
+      isCompactionShellWithoutBlob(item) ||
+      (dropReasoningShells && isReasoningItemWithoutEncryptedContent(item))
+    ) {
+      removed += 1;
+      continue;
     }
-    node.input = kept;
+    kept.push(item);
   }
-
-  for (const key of Object.keys(node)) {
-    if (key === 'input') continue;
-    removed += deepDropEmptyReasoningInputItems(node[key]);
-  }
+  if (removed > 0) body.input = kept;
   return removed;
 }
 
 /**
- * 把请求体里所有 `encrypted_content` 键递归删掉, 并丢掉因此变成空壳的 reasoning input item,
- * 返回新的 Buffer。
+ * 把请求体里所有 `encrypted_content` 键递归删掉 (压缩块除外), 并丢掉解不开也修不好的
+ * 空壳 input item, 返回新的 Buffer。
  *
  * 背景: gpt-5.5 等模型经 litellm/Azure 走 OpenAI Responses API (/v1/responses) 时,
  * 请求体的 reasoning item 带 `encrypted_content` (gAAA... 加密推理)。多部署负载均衡把
@@ -178,9 +210,12 @@ function deepDropEmptyReasoningInputItems(node: unknown): number {
  * 删掉 encrypted_content 再重发即可恢复 (代价: 模型丢失上一轮的加密推理链, 可见对话保留)。
  * 若只删键、保留 type=reasoning 空壳,xAI 会再报 ModelInput 422 —— 所以空壳一并丢掉。
  *
+ * **上下文压缩块除外**: 它的 encrypted_content 是压缩 blob 本体, 剥掉只会把请求变成
+ * 上游无法解码的空壳 (详见 deepDeleteEncryptedContent)。
+ *
  * 仅在 server.ts 收到该 400/422 后的"透明重试"路径调用, 正常请求不经过此函数。
  *
- * @returns 删掉了至少一个键或空壳 → 新 Buffer; body 非 JSON / 没有该键 → null (调用方据此决定不重试)
+ * @returns 删掉了至少一个键或空壳 → 新 Buffer; body 非 JSON / 无可剥内容 → null (调用方据此决定不重试)
  */
 export function stripEncryptedContentFromBody(rawBody: Buffer): Buffer | null {
   let parsed: unknown;
@@ -190,8 +225,11 @@ export function stripEncryptedContentFromBody(rawBody: Buffer): Buffer | null {
     return null;
   }
   const removedKeys = deepDeleteEncryptedContent(parsed);
-  if (removedKeys === 0) return null;
-  deepDropEmptyReasoningInputItems(parsed);
+  // 空壳清理独立计数: 请求体里可能只带着一个缺 blob 的 compaction 空壳 (没有任何
+  // encrypted_content 键可删), 那一样是必须处理的坏 payload, 不能因 removedKeys=0 放行。
+  // 这一步只扫顶层 input[] (单次线性扫描), 不是第二遍深度遍历。
+  const removedShells = dropEncryptedShellInputItems(parsed, removedKeys > 0);
+  if (removedKeys === 0 && removedShells === 0) return null;
   try {
     return Buffer.from(JSON.stringify(parsed), 'utf8');
   } catch {
@@ -402,6 +440,86 @@ export function stripEmptyTextFromBody(rawBody: Buffer): Buffer | null {
   }
 }
 
+/**
+ * 丢弃请求历史里的空 assistant 消息(含剥掉空 thinking 块后变空壳的),返回新 Buffer;
+ * 没改动 / 非 JSON / 无 messages → null。
+ *
+ * 背景: moonshot/kimi-k3 经 LiteLLM 原生转发(/anthropic/v1/messages passthrough)时,
+ * 其 Anthropic 兼容流首包是空 thinking 占位 {type:"thinking",thinking:"",signature:""}
+ * (kimi 官方确认 by design);流被 429/中断切断后,客户端把未完成的占位 block 当成完整
+ * assistant 持久化,回放时 moonshot 400:
+ *   "Invalid request: the message at position 693 with role 'assistant' must not be empty"
+ * (2026-07-28 线上实测,两个独立会话 position 693 / 275,重试 35+ 次全部失败,
+ * 会话级永久卡死——每轮请求历史都带污染消息)。
+ *
+ * 处理(与 kimi code 官方客户端的兜底策略同构——发送出去的请求不允许带空 assistant):
+ *   1. assistant 消息 content 为 string 且为空白 → 整条丢弃;
+ *   2. assistant 消息 content 为数组:先剥空 thinking 块与空 text 块(判别式与
+ *      stripEmptyThinkingFromBody / stripEmptyTextFromBody 一致,有内容/签名空的块
+ *      保留),剥完为空(含原生 content:[])→ 整条丢弃;剥完仍有 text/tool_use →
+ *      保留净化后的消息。空 text 块一并剥的原因:moonshot 的 must-not-be-empty 校验
+ *      对 bridge 清理路径产出的 text-only 空块消息同样命中(PR #821 review 实测反馈),
+ *      只剥 thinking 会让该形态 strip 不出东西、重试被跳过,会话继续卡死。
+ *   user 消息一律不动(线上命中的只有 assistant;user 空消息无实测证据,不扩散)。
+ *
+ * 安全性: 空消息不含任何对话信息,丢弃不改变语义;含 tool_use 的轮次剥完非空,
+ * tool_use/tool_result 配对不会被打破。
+ *
+ * @returns 丢弃/净化至少一条 → 新 Buffer; 无改动 → null (cache 安全契约:字节透传)。
+ */
+export function stripEmptyAssistantMessagesFromBody(rawBody: Buffer): Buffer | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) return null;
+  const messages = parsed.messages;
+  if (!Array.isArray(messages)) return null;
+
+  let changed = false;
+  const keptMessages: unknown[] = [];
+  for (const msg of messages) {
+    if (!isPlainObject(msg) || msg.role !== 'assistant') {
+      keptMessages.push(msg);
+      continue;
+    }
+    const content = msg.content;
+    if (typeof content === 'string') {
+      if (content.trim().length === 0) {
+        changed = true; // 空 string content → 整条丢弃
+        continue;
+      }
+      keptMessages.push(msg);
+      continue;
+    }
+    if (!Array.isArray(content)) {
+      keptMessages.push(msg); // 异常形态不猜,原样保留
+      continue;
+    }
+    const keptContent = content.filter((block) => !isEmptyThinkingBlock(block) && !isEmptyTextBlock(block));
+    if (keptContent.length === 0) {
+      changed = true; // 空壳(content:[] 或剥空 thinking/空 text 后为空)→ 整条丢弃
+      continue;
+    }
+    if (keptContent.length !== content.length) {
+      changed = true;
+      keptMessages.push({ ...msg, content: keptContent });
+      continue;
+    }
+    keptMessages.push(msg);
+  }
+
+  if (!changed) return null; // ← cache 安全契约:无改动 → null → 字节透传
+  parsed.messages = keptMessages;
+  try {
+    return Buffer.from(JSON.stringify(parsed), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Per-model handlers ——
 // 每个 model 一个独立函数,内部自由实现 strip / 翻译 / 改值。
@@ -524,6 +642,11 @@ const EMPTY_THINKING_RE = /each thinking block must contain thinking/i;
 // 同样只匹配核心短语,不锚定下标前缀。
 const EMPTY_TEXT_RE = /text content blocks must (?:be non-empty|contain non-whitespace text)/i;
 
+// moonshot 400 (经 LiteLLM /anthropic/v1/messages passthrough,2026-07-28 实测):
+// "Invalid request: the message at position 693 with role 'assistant' must not be empty"
+// 只匹配不变的 role + 校验短语,不锚定会变的 position 数字。
+const EMPTY_ASSISTANT_MESSAGE_RE = /with role 'assistant' must not be empty/i;
+
 // Azure/LiteLLM 400: "Image generation items without `id` are not supported for this request."
 const IMAGE_GENERATION_WITHOUT_ID_RE =
   /image generation items without [`']?id[`']? are not supported/i;
@@ -622,6 +745,27 @@ export function createEmptyTextRecoveryRule(opts: {
     enabled: opts.enabled ?? (() => true),
     matches: (text) => EMPTY_TEXT_RE.test(text),
     strip: stripEmptyTextFromBody,
+    onRetry: opts.onRetry,
+    threadIdHeaders: opts.threadIdHeaders,
+  };
+}
+
+/**
+ * 空 assistant 消息恢复规则: moonshot/kimi 系(Anthropic 兼容流空 thinking 占位被
+ * 客户端中断持久化后)回放 400 → 丢掉空 assistant 消息重发。
+ * 默认 always-on(空消息不含对话信息,丢弃零代价)。背景详见
+ * stripEmptyAssistantMessagesFromBody 头注。
+ */
+export function createEmptyAssistantMessageRecoveryRule(opts: {
+  enabled?: () => boolean;
+  onRetry?: (threadId: string, model: string) => void;
+  threadIdHeaders?: readonly string[];
+} = {}): RecoveryRule {
+  return {
+    id: 'empty_assistant_message',
+    enabled: opts.enabled ?? (() => true),
+    matches: (text) => EMPTY_ASSISTANT_MESSAGE_RE.test(text),
+    strip: stripEmptyAssistantMessagesFromBody,
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
   };

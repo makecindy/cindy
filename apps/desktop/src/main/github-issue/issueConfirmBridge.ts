@@ -21,6 +21,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
+import { normalizeIssuePublicName } from '../../shared/issuePublicName.js';
 import { MAKER_PUSH } from '../maker-ipc/channels';
 
 export interface IssueDraft {
@@ -53,6 +54,8 @@ export type IssueConfirmDecision =
       title: string;
       body: string;
       type: 'bug' | 'feature';
+      /** 平台代发时由用户确认的公开署名；GitHub 用户直发时不存在。 */
+      publicName?: string;
       /** renderer 当前界面语言(i18n.language);main 侧 OS locale 仅作 fallback。 */
       uiLanguage?: string;
     }
@@ -72,6 +75,7 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 interface PendingConfirmEntry {
   sessionId: string;
+  requiresPublicName: boolean;
   resolve: (decision: IssueConfirmDecision) => void;
   timeoutId: ReturnType<typeof setTimeout>;
 }
@@ -87,6 +91,7 @@ export class IssueConfirmBridge {
     draft: IssueDraft,
     env: IssueEnvInfo,
     submissionIdentity: IssueSubmissionIdentity,
+    suggestedPublicName?: string,
   ): Promise<IssueConfirmDecision> {
     const requestId = randomUUID();
     return new Promise<IssueConfirmDecision>((resolve) => {
@@ -94,10 +99,22 @@ export class IssueConfirmBridge {
       const timeoutId = setTimeout(() => {
         this.settle(requestId, { confirmed: false, reason: 'timeout' }, 'timeout');
       }, timeoutMs);
-      this.pending.set(requestId, { sessionId, resolve, timeoutId });
+      this.pending.set(requestId, {
+        sessionId,
+        requiresPublicName: submissionIdentity.kind === 'platform',
+        resolve,
+        timeoutId,
+      });
       this.deps.broadcast(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId,
-        request: { kind: 'issue_confirm', requestId, draft, env, submissionIdentity },
+        request: {
+          kind: 'issue_confirm',
+          requestId,
+          draft,
+          env,
+          submissionIdentity,
+          suggestedPublicName,
+        },
       });
     });
   }
@@ -109,7 +126,7 @@ export class IssueConfirmBridge {
   resolve(requestId: string, rawDecision: unknown): boolean {
     const entry = this.pending.get(requestId);
     if (!entry) return false;
-    let decision = parseDecision(rawDecision);
+    let decision = parseDecision(rawDecision, entry.requiresPublicName);
     if (!decision) {
       // shape 非法按取消兜底,避免 tool handler 永久挂起。
       this.deps.logger?.warn('issue-confirm: invalid decision shape, fallback to cancelled', {
@@ -169,7 +186,7 @@ export class IssueConfirmBridge {
   }
 }
 
-function parseDecision(raw: unknown): IssueConfirmDecision | null {
+function parseDecision(raw: unknown, requiresPublicName: boolean): IssueConfirmDecision | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
   if (obj.confirmed === false) {
@@ -183,11 +200,14 @@ function parseDecision(raw: unknown): IssueConfirmDecision | null {
     obj.body.trim().length > 0 &&
     (obj.type === 'bug' || obj.type === 'feature')
   ) {
+    const publicName = requiresPublicName ? normalizeIssuePublicName(obj.publicName) : undefined;
+    if (requiresPublicName && !publicName) return null;
     return {
       confirmed: true,
       title: obj.title.trim(),
       body: obj.body.trim(),
       type: obj.type,
+      ...(publicName ? { publicName } : {}),
       uiLanguage: typeof obj.uiLanguage === 'string' ? obj.uiLanguage : undefined,
     };
   }

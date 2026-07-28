@@ -1,4 +1,5 @@
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import { normalizeIssuePublicName } from '../../shared/issuePublicName';
 
 /**
  * issue_confirm IPC 里的构建区域。非法或缺失一律返回 undefined —— 确认卡片宁可
@@ -29,4 +30,9 @@ export function parseIssueSubmissionIdentity(raw: unknown): IssueSubmissionIdent
     return null;
   }
   return { kind: obj.kind, login: obj.login.trim() };
+}
+
+/** Main 提供的平台代发建议署名；非法值按缺失处理，由卡片回退为“匿名”。 */
+export function parseIssueSuggestedPublicName(raw: unknown): string | undefined {
+  return normalizeIssuePublicName(raw) ?? undefined;
 }

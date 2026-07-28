@@ -1,0 +1,16 @@
+{
+  "id": "x-tweet",
+  "match": ["api.fxtwitter.com", "x.com", "twitter.com"],
+  "description": "免登录读取单条 X(Twitter)公开推文:正文/作者/互动数/媒体/引用。走 FxTwitter 公开 API(无需登录、无需 API key),id 传推文数字 id(URL 里 /status/ 后面那串),**必须作为字符串传入**——19 位雪花 id 超出 JSON number 安全整数范围,传数字会丢精度。私密与已删推文取不到;时间线/搜索见 x.com 的 siteguide(需登录)。",
+  "inputs": { "id": { "required": true } },
+  "steps": [
+    { "action": "navigate", "url": "https://api.fxtwitter.com/status/{{id|url}}" },
+    { "action": "wait", "loadState": "load" },
+    {
+      "action": "evaluate",
+      "as": "tweet",
+      "fn": "() => { let d; try { d = JSON.parse(document.body.innerText); } catch (e) { throw new Error('fxtwitter 返回非 JSON(可能被网络设备拦截或服务异常),页面开头:' + document.body.innerText.slice(0, 200)); } if (!d.tweet) throw new Error('未找到推文(code ' + d.code + ' ' + d.message + '):id 是否正确?私密/已删推文取不到;注意 id 必须以字符串传入,JSON number 会对 19 位雪花 id 丢精度'); const t = d.tweet; if (String(t.id) !== '{{id|js}}') throw new Error('返回的推文 id(' + t.id + ')与请求 id({{id|js}})不一致——id 很可能因以 JSON number 传入而丢精度,请改为字符串重试'); const a = t.author || {}; const m = t.media || {}; const media = (m.photos || []).map(p => ({ type: 'photo', url: p.url })).concat((m.videos || []).map(v => ({ type: v.type || 'video', url: v.url, thumbnail: v.thumbnail_url }))); return { url: t.url, id: t.id, text: t.text, lang: t.lang, created_at: t.created_at, author: { name: a.name, screen_name: a.screen_name, followers: a.followers }, replies: t.replies, retweets: t.retweets, likes: t.likes, quotes: t.quotes, bookmarks: t.bookmarks, views: t.views, replying_to: t.replying_to, media, quote: t.quote ? { text: t.quote.text, author: t.quote.author && t.quote.author.screen_name, url: t.quote.url } : null }; }"
+    }
+  ],
+  "output": "{{tweet}}"
+}

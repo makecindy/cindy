@@ -16,7 +16,7 @@
     "currentLabel": "当前版本",
     "bundleVersion": "整包版本 {{version}}",
     "otaVersion": "热更版本 {{version}}",
-    "desktopVersion": "桌面版 {{version}}",
+    "pairedDesktopVersion": "配套桌面版本 {{version}}",
     "devNoOta": "开发版，热更不可用",
     "checkAction": "检查更新",
     "testFlightCheckAction": "检查内容更新",

@@ -26,6 +26,16 @@ import {
 
 import type { LocalCliDetection } from '../../shared/localCliDetect.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
+import {
+  BUILTIN_REFRESHABLE_PROVIDER_IDS,
+  isBuiltinRefreshableProviderId,
+  isProviderModelAutoRefreshRendererTrigger,
+  PROVIDER_MODEL_AUTO_REFRESH_RENDERER_TRIGGERS,
+  type BuiltinRefreshableProviderId,
+  type ProviderModelAutoRefreshRendererTrigger,
+  type ProviderModelAutoRefreshResult,
+  type ProviderModelRefreshResult,
+} from '../../shared/providerModelRefresh.js';
 
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -183,6 +193,12 @@ export interface ProviderHandlerDeps {
   testConnection(input: ProviderTestInput): Promise<ProviderTestResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
+  /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
+  refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
+  /** Renderer 自动刷新提示；Main 侧负责静默失败、冷却和跨窗口去重。 */
+  requestModelsAutoRefresh(
+    trigger: ProviderModelAutoRefreshRendererTrigger,
+  ): Promise<void>;
   /**
    * 重新发现某供应商的动态清单（生产 = anthropic 的 refreshAnthropicModelsFromHttp）。
    * 返回本次结束后的失败归因，成功为 null。不认识的 providerId 直接返回 null（没有
@@ -562,6 +578,45 @@ export function registerProviderHandlers(
       const allowSideEffects = deps.isTrustedSender?.(event) === true;
       const providers = await deps.listProviders({ allowSideEffects });
       return { providers, modelVisibilityOverrides: deps.getModelVisibilityOverrides() };
+    },
+  );
+
+  registry.handle(
+    MAKER_INVOKE.PROVIDER_MODELS_REFRESH,
+    async (event, providerId: unknown): Promise<ProviderModelRefreshResult> => {
+      assertTrustedProviderMutationSender(event);
+      if (!isBuiltinRefreshableProviderId(providerId)) {
+        throwIpcError(
+          'INVALID_PARAMS',
+          `providerId must be one of: ${BUILTIN_REFRESHABLE_PROVIDER_IDS.join(', ')}`,
+        );
+      }
+      try {
+        await deps.refreshBuiltinModels(providerId);
+      } catch (err) {
+        if (isIpcError(err)) throw err;
+        log.warn('built-in provider model refresh failed', {
+          providerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', `model list refresh failed for '${providerId}'`);
+      }
+      return { ok: true, providerId };
+    },
+  );
+
+  registry.handle(
+    MAKER_INVOKE.PROVIDER_MODELS_AUTO_REFRESH,
+    async (event, trigger: unknown): Promise<ProviderModelAutoRefreshResult> => {
+      assertTrustedProviderMutationSender(event);
+      if (!isProviderModelAutoRefreshRendererTrigger(trigger)) {
+        throwIpcError(
+          'INVALID_PARAMS',
+          `trigger must be one of: ${PROVIDER_MODEL_AUTO_REFRESH_RENDERER_TRIGGERS.join(', ')}`,
+        );
+      }
+      await deps.requestModelsAutoRefresh(trigger);
+      return { ok: true };
     },
   );
 

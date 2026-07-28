@@ -396,6 +396,11 @@ import {
   readMemorySettingsState,
 } from './maker-host/memory-settings-store.js';
 import {
+  createAppFocusAutoRefreshTracker,
+  requestProviderModelAutoRefresh,
+  resetProviderModelAutoRefreshCooldowns,
+} from './maker-host/provider-model-auto-refresh.js';
+import {
   readImDefaultSettingsState,
   resetImDefaultSettings,
   resetImDefaultSettingsChannel,
@@ -469,6 +474,7 @@ import { disposeRemoteFileBrowser } from './file-browser/remote-deps.js';
 import { registerFileBrowserDeviceOp } from './file-browser/device-op.js';
 import { registerSearchIpc } from './file-browser/search/index.js';
 import { registerVoiceInputIpc } from './voice-input/index.js';
+import { installWindowHiddenBroadcast } from './windowHiddenBroadcast.js';
 import { openSessionInNewWindow } from './secondary-windows.js';
 import {
   isGlobalVoiceInputOverlayVisible,
@@ -543,6 +549,7 @@ import {
   initModelAccess,
   noteManualXdKeySaved,
   noteManualXdKeyRemoved,
+  refreshXdGatewayModels,
 } from './model-access/index.js';
 import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
@@ -1501,6 +1508,12 @@ let mainWindowRef: BrowserWindow | null = null;
 // 而白屏,且窗口会带着烘焙端点绕过"拉不到清单不放行"的语义。
 let startupWindowCreationAllowed = false;
 let appFocusSyncTimer: ReturnType<typeof setTimeout> | null = null;
+const providerModelFocusRefreshTracker = createAppFocusAutoRefreshTracker({
+  now: Date.now,
+  onMeaningfulForeground: () => {
+    void requestProviderModelAutoRefresh('foreground');
+  },
+});
 let mainWindowBackgroundThrottlingAllowed = true;
 const isUpdateRelaunchCandidate =
   process.platform === 'darwin' && isMacOSUpdateRelaunch(process.argv);
@@ -1718,6 +1731,14 @@ function handleUpdatePresentationUnlock(): void {
   updatePresentationRecovery?.onScreenUnlock();
 }
 
+function handleProviderModelSystemResume(): void {
+  void requestProviderModelAutoRefresh('system-resume');
+}
+
+function handleProviderModelScreenUnlock(): void {
+  void requestProviderModelAutoRefresh('screen-unlock');
+}
+
 function initializeUpdatePresentationRecovery(): void {
   if (!updatePresentationRecovery || updatePresentationRecoveryInitialized) return;
   updatePresentationRecoveryInitialized = true;
@@ -1741,6 +1762,7 @@ function hasFocusedAppWindow(): boolean {
 
 function syncAppFocusState(clearAttentionWhenFocused = false): void {
   const appFocused = hasFocusedAppWindow();
+  providerModelFocusRefreshTracker.sync(appFocused);
   if (appFocused && clearAttentionWhenFocused) clearAllSessionAttention();
   getAgentIslandService()?.setAppFocused(appFocused);
 }
@@ -2100,6 +2122,10 @@ const createWindow = () => {
       // Feishu OAuth 走 will-navigate 自定义 scheme + 主窗自身 webContents,
       // 跟嵌套 webview 是两条独立路径,不受影响。
       webviewTag: true,
+      // File drops are handled by renderer attachment/global-drop handlers.
+      // Do not let Chromium navigate the main window to a local dropped path
+      // when a platform-specific drag event misses a target.
+      navigateOnDragDrop: false,
     },
   });
   markAppContentWindow(mainWindow);
@@ -2220,6 +2246,10 @@ const createWindow = () => {
       mainWindow.webContents.send('fullscreen-change', false);
     }
   });
+
+  // 装饰动画闸门的兜底信号。主窗在 running turn 期间会关掉 backgroundThrottling,
+  // 那之后 Renderer 的 visibilityState 就不再反映真实可见性,细节见模块头注释。
+  installWindowHiddenBroadcast(mainWindow);
 
   // App badge: 用户把任意 XDMaker 窗口点回前台(Dock 点击 / taskbar / alt-tab / 点窗口)即视为
   // 「已查看」,直接清空整个 dock 红点。badge 是 app 级状态,不该依赖当前停在哪个
@@ -2735,6 +2765,7 @@ const registerIpcHandlers = () => {
     // 数据,不抛 throwIpcError(符合规则 13 查询型例外:renderer 需要 reason 做不同 UI)。
     const result = await runClaudeOAuthLogin();
     if (result.ok) {
+      resetProviderModelAutoRefreshCooldowns('anthropic');
       // 登录可直接覆盖旧账号凭证,不一定先走登出。先跨授权世代清掉旧清单 / 缓存并
       // 等待旧 SDK 持久化收尾;即使后续 proxy 初始化失败也绝不保留 A 账号清单。
       await clearAnthropicDiscoveredModels();
@@ -2757,6 +2788,7 @@ const registerIpcHandlers = () => {
     // 如实抛 IPC 错误让 renderer 提示失败(规则 13)。
     try {
       disconnectClaudeAiOAuth();
+      resetProviderModelAutoRefreshCooldowns('anthropic');
     } catch (err) {
       throwIpcError(
         'INTERNAL',
@@ -2778,6 +2810,7 @@ const registerIpcHandlers = () => {
   // 上游作废 xAI 凭证、收口自动登出后,走和手动登出完全一致的 UI 收尾(广播 + 清账号级
   // 限流快照),否则用户会停在「显示已连接、请求连环 403」的假状态。
   setXaiAuthInvalidatedHandler(() => {
+    resetProviderModelAutoRefreshCooldowns('xai');
     clearXaiRateLimitSnapshot();
     broadcastXaiAuthStateChanged();
   });
@@ -2789,6 +2822,7 @@ const registerIpcHandlers = () => {
     // 登录成功即生效:订阅直连 handler 每请求经 buildHeaders 现取凭证,无需任何"就绪"步骤。
     const result = await runGrokOAuthLogin();
     if (result.ok) {
+      resetProviderModelAutoRefreshCooldowns('xai');
       // 登录成功后广播 provider 变更 —— 其它已打开的窗口(聊天/模型选择器等)跟随刷新
       // xAI 连接态,不再等 remount/手动刷新(对齐 CLAUDE_OAUTH_LOGIN 的 broadcastClaudeAuthStateChanged)。
       // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
@@ -2801,6 +2835,7 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT, async () => {
     try {
       logoutGrok();
+      resetProviderModelAutoRefreshCooldowns('xai');
     } catch (err) {
       throwIpcError(
         'INTERNAL',
@@ -3573,6 +3608,7 @@ const registerIpcHandlers = () => {
           setMainWindowBackgroundThrottlingForActiveTurn(isRunning);
           notifyUpdateAutoRelaunchBusyStateChanged();
         },
+        refreshXdGatewayModels,
       });
       registerMakerTitleIpc();
       registerMakerHelpIpc(ipcMaker);
@@ -5626,7 +5662,9 @@ app.on('ready', async () => {
   // ── System resume: refresh tokens after sleep/hibernate ──
   powerMonitor.on('resume', () => {
     authManager.handleResume();
+    handleProviderModelSystemResume();
   });
+  powerMonitor.on('unlock-screen', handleProviderModelScreenUnlock);
 
   // Memory diagnostics — dev only, log per-process memory every 30s
   if (!app.isPackaged) {

@@ -385,6 +385,72 @@ describe('isReviewModeActive(送审版本号匹配纯函数)', () => {
     expect(env.isReviewModeActive('1.4.0', '')).toBe(false);
     expect(env.isReviewModeActive('', '')).toBe(false);
   });
+
+  it('android 恒 false:清单 review 命中同版本号也不冻结安卓的更新检查', async () => {
+    const { env } = await freshModules();
+    // iOS 保持原语义(命中即进审核模式),android 在同样输入下豁免。
+    expect(env.isReviewModeActive('0.1.0', '0.1.0', false, 'ios')).toBe(true);
+    expect(env.isReviewModeActive('0.1.0', '0.1.0', false, 'android')).toBe(false);
+    // TestFlight 豁免与平台豁免互不干扰。
+    expect(env.isReviewModeActive('0.1.0', '0.1.0', true, 'android')).toBe(false);
+    // 平台未知(内联缺失且 Constants.platform 无平台段)时不弱化 iOS 送审合规。
+    expect(env.isReviewModeActive('0.1.0', '0.1.0', false, '')).toBe(true);
+  });
+
+  it('APP_PLATFORM 取 EXPO_OS 内联值;缺失时回落 Constants.platform 平台段', async () => {
+    process.env.EXPO_OS = 'android';
+    try {
+      const { env } = await freshModules();
+      expect(env.APP_PLATFORM).toBe('android');
+      // 平台默认参数走 APP_PLATFORM,安卓 bundle 下审核模式恒关。
+      expect(env.isReviewModeActive('0.1.0', '0.1.0')).toBe(false);
+    } finally {
+      delete process.env.EXPO_OS;
+      vi.resetModules();
+    }
+  });
+
+  it('EXPO_OS 内联缺失时回落 Constants.platform 平台段(安卓豁免不靠单一信号)', async () => {
+    // 这条兜底是「安卓被审核模式误冻结热更」的最后一道防线:babel 内联一旦失效
+    // (自定义 babel 配置等),没有它就会静默回归高代价故障,故单独断言。
+    delete process.env.EXPO_OS;
+    const platformCases = [
+      { manifest: { android: { versionCode: 12 } }, expected: 'android' },
+      { manifest: { ios: { buildNumber: '12' } }, expected: 'ios' },
+      // 无平台段(web / 结构变化)→ 空串,走平台未知语义。
+      { manifest: {}, expected: '' },
+    ];
+    for (const { manifest, expected } of platformCases) {
+      vi.doMock('expo-constants', () => ({
+        default: { expoConfig: null, platform: manifest },
+      }));
+      try {
+        vi.resetModules();
+        const env = await import('@/config/env');
+        expect(env.APP_PLATFORM).toBe(expected);
+        // 兜底判出 android 时同样恒豁免审核模式。
+        expect(env.isReviewModeActive('0.1.0', '0.1.0')).toBe(expected !== 'android');
+      } finally {
+        vi.doUnmock('expo-constants');
+        vi.resetModules();
+      }
+    }
+  });
+
+  it('APP_PLATFORM 只认 ios / android:其余内联值收敛为空串,不逸出取值域', async () => {
+    // web / 未来新平台 / 被改写成意外值时都按「拿不到平台」处理(此处
+    // Constants.platform 亦无平台段),而不是把原值透传给平台门控。
+    for (const value of ['web', 'ANDROID_TV', 'unknown']) {
+      process.env.EXPO_OS = value;
+      try {
+        const { env } = await freshModules();
+        expect(env.APP_PLATFORM).toBe('');
+      } finally {
+        delete process.env.EXPO_OS;
+        vi.resetModules();
+      }
+    }
+  });
 });
 
 describe('applyResolvedClientEndpoints', () => {

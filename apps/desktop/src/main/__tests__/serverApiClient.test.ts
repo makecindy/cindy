@@ -22,6 +22,9 @@ vi.mock('../authManager', () => ({
   refresh: mocks.refresh,
   invalidateSession: mocks.invalidateSession,
 }));
+vi.mock('../i18n.js', () => ({
+  getResolvedMainLocale: () => 'zh-CN',
+}));
 vi.mock('../logger', () => ({
   createLogger: () => mocks.logger,
 }));
@@ -66,7 +69,10 @@ describe('serverApiFetch', () => {
       1,
       'https://github-api.example.com/api/github/issues',
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer token-a' }),
+        headers: expect.objectContaining({
+          'Accept-Language': 'zh-CN',
+          Authorization: 'Bearer token-a',
+        }),
         body: JSON.stringify({ userName: 'Account A' }),
       }),
     );
@@ -74,7 +80,10 @@ describe('serverApiFetch', () => {
       2,
       'https://github-api.example.com/api/github/issues',
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer token-b' }),
+        headers: expect.objectContaining({
+          'Accept-Language': 'zh-CN',
+          Authorization: 'Bearer token-b',
+        }),
         body: JSON.stringify({ userName: 'Account B' }),
       }),
     );

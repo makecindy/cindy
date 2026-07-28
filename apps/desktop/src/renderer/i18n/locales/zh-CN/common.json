@@ -1345,6 +1345,9 @@
         "capabilityNote": "不支持 {{agent}}",
         "divergedChip": "已在 {{agent}} 隐藏",
         "refreshAria": "刷新模型列表(仅新增，不改动现有)",
+        "refreshBuiltinAria": "刷新模型列表",
+        "refreshingAria": "正在刷新模型列表…",
+        "refreshDone": "模型列表已刷新",
         "refreshAdded": "已发现 {{count}} 个新模型",
         "refreshNoNew": "模型列表已是最新，无新增",
         "refreshFailed": "模型列表刷新失败，请稍后再试"
@@ -4291,6 +4294,12 @@
       "editTitle": "编辑粘贴的文本",
       "cancelEdit": "取消编辑",
       "saveEdit": "保存文本"
+    },
+    "permissionPrompt": {
+      "alwaysAllowScoped": "本对话都允许 {{scope}}",
+      "alwaysAllowScopedHint": "作用于整个对话，且只限这里列出的范围。",
+      "alwaysAllowSessionHint": "作用于整个对话，不只是这一次请求。",
+      "ruleSeparator": "、"
     }
   },
   "onboarding": {
@@ -6371,13 +6380,20 @@
       "typeFeature": "功能建议",
       "titleLabel": "标题",
       "bodyLabel": "正文(Markdown)",
-      "identityGithubUser": "提交身份：GitHub 用户 @{{login}}(本人)",
-      "identityPlatform": "提交身份：Cindy 平台代提交(GitHub App {{login}})",
+      "submissionMethodLabel": "发布方式",
+      "identityGithubUser": "通过 GitHub 账号 @{{login}} 直接发布",
+      "identityGithubUserHint": "你将成为该 Issue 的 GitHub 作者，可以在 GitHub 编辑或关闭",
+      "identityPlatform": "由 Cindy 平台代发(GitHub App {{login}})",
+      "identityPlatformHint": "你不是该 Issue 的 GitHub 作者，提交后无法自行编辑或关闭",
+      "publicNameLabel": "公开署名",
+      "publicNameHint": "该署名会公开显示在 Issue 正文中",
+      "anonymous": "匿名",
+      "useAnonymous": "使用匿名署名",
       "envLine": "提交时将自动附加：客户端 {{appVersion}} · {{platform}} {{arch}} · 界面语言 {{uiLanguage}}",
       "regionLine": "版本区域：{{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
-      "submit": "提交",
+      "submit": "提交反馈",
       "cancel": "取消"
     },
     "redirect": {

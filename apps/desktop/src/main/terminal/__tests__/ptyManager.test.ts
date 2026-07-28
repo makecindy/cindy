@@ -121,7 +121,10 @@ let allSpawns: FakePty[] = [];
 let dataPayloads: Array<{ target: WebContents; payload: DataPayload }> = [];
 let exitPayloads: Array<{ target: WebContents; payload: ExitPayload }> = [];
 
-function makeManager(opts?: { resolveFallbackOwner?: (dead: WebContents) => WebContents | null }) {
+function makeManager(opts?: {
+  resolveFallbackOwner?: (dead: WebContents) => WebContents | null;
+  platform?: NodeJS.Platform;
+}) {
   return new PtyManager({
     spawn: (command, args, options) => {
       const fake = makeFakePty({
@@ -144,6 +147,7 @@ function makeManager(opts?: { resolveFallbackOwner?: (dead: WebContents) => WebC
       },
     },
     resolveFallbackOwner: opts?.resolveFallbackOwner,
+    platform: opts?.platform,
   });
 }
 
@@ -453,6 +457,118 @@ describe('PtyManager.spawn env scrubbing', () => {
     // 仍会被剥。这是有意设计:不让调用方意外引入 host 标记。
     // 这条 case 验证"剥永远生效",不是"opts.env 能塞回"。
     expect(lastSpawn!.__spawnEnv.TERM_PROGRAM).toBeUndefined();
+  });
+
+  it('macOS 继承到空/C locale 时为 PTY 补 UTF-8 字符 locale', () => {
+    const original = {
+      LANG: process.env.LANG,
+      LC_ALL: process.env.LC_ALL,
+      LC_CTYPE: process.env.LC_CTYPE,
+    };
+    try {
+      process.env.LANG = '';
+      process.env.LC_ALL = '';
+      process.env.LC_CTYPE = 'C';
+
+      const mgr = makeManager({ platform: 'darwin' });
+      const owner = makeFakeWebContents() as unknown as WebContents;
+      mgr.create({ id: 't1', cwd: '/tmp', owner });
+
+      expect(lastSpawn!.__spawnEnv.LC_CTYPE).toBe('UTF-8');
+      expect(lastSpawn!.__spawnEnv.LC_ALL).toBe('');
+
+      delete process.env.LC_CTYPE;
+      process.env.LANG = 'C';
+      mgr.create({ id: 't2', cwd: '/tmp', owner });
+      expect(lastSpawn!.__spawnEnv.LC_CTYPE).toBe('UTF-8');
+    } finally {
+      for (const [key, value] of Object.entries(original)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('调用方显式传入的 locale 在平台兜底之后生效', () => {
+    const original = {
+      LANG: process.env.LANG,
+      LC_ALL: process.env.LC_ALL,
+      LC_CTYPE: process.env.LC_CTYPE,
+    };
+    try {
+      process.env.LANG = '';
+      process.env.LC_ALL = '';
+      process.env.LC_CTYPE = 'C';
+
+      const mgr = makeManager({ platform: 'darwin' });
+      const owner = makeFakeWebContents() as unknown as WebContents;
+      mgr.create({
+        id: 't1',
+        cwd: '/tmp',
+        owner,
+        env: { LC_CTYPE: 'ja_JP.UTF-8' },
+      });
+
+      expect(lastSpawn!.__spawnEnv.LC_CTYPE).toBe('ja_JP.UTF-8');
+    } finally {
+      for (const [key, value] of Object.entries(original)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('不覆盖用户显式设置的 LC_ALL 或非 C/POSIX 字符 locale', () => {
+    const original = {
+      LANG: process.env.LANG,
+      LC_ALL: process.env.LC_ALL,
+      LC_CTYPE: process.env.LC_CTYPE,
+    };
+    try {
+      process.env.LANG = '';
+      process.env.LC_ALL = 'C';
+      process.env.LC_CTYPE = 'C';
+
+      const mgr = makeManager({ platform: 'darwin' });
+      const owner = makeFakeWebContents() as unknown as WebContents;
+      mgr.create({ id: 't1', cwd: '/tmp', owner });
+      expect(lastSpawn!.__spawnEnv.LC_ALL).toBe('C');
+      expect(lastSpawn!.__spawnEnv.LC_CTYPE).toBe('C');
+
+      process.env.LC_ALL = '';
+      process.env.LC_CTYPE = 'en_US.UTF-8';
+      mgr.create({ id: 't2', cwd: '/tmp', owner });
+      expect(lastSpawn!.__spawnEnv.LC_CTYPE).toBe('en_US.UTF-8');
+    } finally {
+      for (const [key, value] of Object.entries(original)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('Windows 不改变 C locale', () => {
+    const original = {
+      LANG: process.env.LANG,
+      LC_ALL: process.env.LC_ALL,
+      LC_CTYPE: process.env.LC_CTYPE,
+    };
+    try {
+      process.env.LANG = '';
+      process.env.LC_ALL = '';
+      process.env.LC_CTYPE = 'C';
+
+      const mgr = makeManager({ platform: 'win32' });
+      const owner = makeFakeWebContents() as unknown as WebContents;
+      mgr.create({ id: 't1', cwd: '/tmp', owner });
+
+      expect(lastSpawn!.__spawnEnv.LC_CTYPE).toBe('C');
+    } finally {
+      for (const [key, value] of Object.entries(original)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });
 

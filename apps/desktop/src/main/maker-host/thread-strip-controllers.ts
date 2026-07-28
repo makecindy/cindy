@@ -17,3 +17,7 @@ export const emptyThinkingStripController = createThreadStripController();
 // 空 text 块主动剥离 —— always-on(bridge 修复前落进历史的 `{type:'text',text:''}`
 // 空块,切回真 Anthropic 模型时 400)。必须与上面是独立实例。
 export const emptyTextStripController = createThreadStripController();
+
+// 空 assistant 消息主动剥离 —— always-on(moonshot/kimi 空 thinking 占位被中断
+// 持久化后回放 400 "with role 'assistant' must not be empty")。必须与上面是独立实例。
+export const emptyAssistantStripController = createThreadStripController();

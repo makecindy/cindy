@@ -52,6 +52,7 @@ import {
   subscribeGhostCards,
 } from '@/cindy-brain/ghostCardStore';
 import { useGhostCardThemeVars } from '@/cindy-brain/useGhostCardThemeVars';
+import { alignFrameWithGate } from '@/lib/hiddenAnimationGate';
 import {
   extractGhostCardGallerySrcs,
   ghostCardGalleryId,
@@ -128,6 +129,10 @@ function buildCardSrcDoc(sanitizedHtml: string, themeVars: string): string {
     // 减弱动效时,动画版卡片的意识自绘动画一律停播(srcdoc 内 media query
     // 正常继承系统偏好)。背景仍由意识正文自己决定:透明画布是现行卡片
     // 作者契约,宿主不能强铺 surface 改变其它 Ghost 的视觉。
+    // 窗口不可见时卡内动画的冻结不在这里做:CSS 选不出「只暂停无限循环动画」,通配
+    // 规则会把 cardSanitizer 允许的有限动画(如 animation:f 1s)一并冻在中途帧,恢复可见
+    // 时突兀。改由宿主用 Web Animations API 逐个判 iterations,见 hiddenAnimationGate 的
+    // syncFrameAnimations 与下面 onLoad 的对齐。
     '<style>html,body{margin:0;padding:0;overflow:hidden;font-family:system-ui,-apple-system,sans-serif}img{max-width:100%;-webkit-user-drag:none;-webkit-user-select:none;user-select:none}@media (prefers-reduced-motion:reduce){*{animation:none!important}}</style>',
     '</head><body>',
     sanitizedHtml,
@@ -382,6 +387,10 @@ function GhostCardCanvas({
   const attachClickBridge = useCallback(() => {
     const doc = iframeRef.current?.contentDocument;
     if (!doc) return;
+    // 与宿主的装饰动画闸门对齐一次:窗口可能在本卡挂载之前就已隐藏,那时闸门的遍历
+    // 还看不到这个 iframe。走闸门自己的入口,由它登记进共享的恢复集合 —— 自行 pause
+    // 而不登记的话,窗口切回来时统一恢复路径不会 play 它们,这张卡的动画会永久停住。
+    alignFrameWithGate(doc);
     const imgs = doc.querySelectorAll<HTMLImageElement>('img[src^="cindy-media://"]');
     let galleryImageIndex = 0;
     imgs.forEach((img) => {

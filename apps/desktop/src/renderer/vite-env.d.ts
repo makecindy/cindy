@@ -2664,6 +2664,10 @@ interface ElectronAPI {
    *  that fired before the renderer had a chance to subscribe). */
   getFullscreenState: () => Promise<boolean>;
 
+  /** 窗口是否对用户不可见(最小化 / hide)。装饰动画闸门用它兜底 ——
+   *  backgroundThrottling 关闭时 document.visibilityState 会一直停在 visible。 */
+  onWindowHiddenChange: (callback: (hidden: boolean) => void) => () => void;
+
   // ── Release notes (per-version, fetched from CDN by main) ──
   /**
    * Fetch the release notes JSON for a given version. Platform is resolved
@@ -3489,6 +3493,14 @@ interface ElectronAPI {
 
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
     listProviders: () => Promise<{ providers: import('@cindy/model-providers').ProviderView[] }>;
+    /** 复用各内置供应商既有真源刷新模型清单。 */
+    refreshBuiltinProviderModels: (
+      providerId: import('../shared/providerModelRefresh').BuiltinRefreshableProviderId,
+    ) => Promise<import('../shared/providerModelRefresh').ProviderModelRefreshResult>;
+    /** 静默请求 Main 在冷却允许时刷新已连接内置供应商。 */
+    requestProviderModelsAutoRefresh: (
+      trigger: import('../shared/providerModelRefresh').ProviderModelAutoRefreshRendererTrigger,
+    ) => Promise<import('../shared/providerModelRefresh').ProviderModelAutoRefreshResult>;
 
     // 自定义供应商配置 CRUD（配置与 runtime 密钥均由 main 原子排队）。
     createCustomProvider: (

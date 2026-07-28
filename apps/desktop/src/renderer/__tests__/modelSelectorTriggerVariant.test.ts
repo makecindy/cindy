@@ -2,7 +2,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Effort } from '@/lib/userPreferences.types';
 
@@ -355,7 +355,48 @@ import {
 } from '@/components/new-chat/ModelSelector';
 import { makerChatStore } from '@/lib/makerChatStore';
 
+const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
+
+beforeEach(() => {
+  requestProviderModelsAutoRefresh.mockClear();
+  (window as unknown as { electronAPI: unknown }).electronAPI = {
+    maker: { requestProviderModelsAutoRefresh },
+  };
+});
+
 describe('ModelSelector trigger variants', () => {
+  it('requests a silent refresh when a local selector opens, but not for a remote device', () => {
+    const local = render(
+      React.createElement(ModelSelector, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    expect(requestProviderModelsAutoRefresh).toHaveBeenCalledWith('model-selector-open');
+    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    expect(requestProviderModelsAutoRefresh).toHaveBeenCalledTimes(2);
+    local.unmount();
+
+    requestProviderModelsAutoRefresh.mockClear();
+    render(
+      React.createElement(ModelSelector, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        deviceId: 'remote-device',
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    expect(requestProviderModelsAutoRefresh).not.toHaveBeenCalled();
+  });
+
   it('keeps row-count caps finite and within the shared 300px ceiling', () => {
     expect(modelListMaxHeightForRows()).toBeUndefined();
     expect(modelListMaxHeightForRows(Number.NaN)).toBeUndefined();

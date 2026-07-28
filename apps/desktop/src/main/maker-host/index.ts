@@ -58,6 +58,7 @@ import {
 } from './session-storage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { resolveSessionCcDebugFile } from '../logger.js';
+import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
 import { getRemoteSshPool } from '../remote-ssh/index.js';
 import { openCcManagerSession } from './cc-manager-client.js';
@@ -84,9 +85,12 @@ import { notifyAutoPermissionClassifierUnavailable } from './claude-auto-permiss
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
   clearCodexProxyAuthInjection,
+  ensureCodexControlPlaneProxyReady,
   ensureCodexProxyReady,
+  getCodexControlPlaneProxyEndpoint,
   getCodexProxyAuthInjectionState,
   getCodexProxyEndpoint,
+  isCodexControlPlaneProxyHandleReady,
   isCodexProxyHandleReady,
   setCodexProxyAuthInjection,
   setCodexProxyGatewayKeyReader,
@@ -189,6 +193,7 @@ setAnthropicDiscoveryFailureListener(() => {
  * anthropic 那条链路碰巧能在清单变化时顺带广播，xAI 则完全没有出口 —— 统一在这里补。
  */
 setNativeProviderClaimListener(() => {
+  resetProviderModelAutoRefreshCooldowns();
   try {
     refreshSelectableModelsAndBroadcast({});
   } catch (error) {
@@ -524,14 +529,23 @@ export function getMaker(): Maker {
               ? 'provider-oauth'
               : 'env-key';
         const useOAuthBearer = authInjection === 'oauth-bearer';
-        setCodexProxyAuthInjection(authInjection);
-        await broadcastCodexRuntimeRoute();
+        const isControlPlane = ctx.hostPurpose === 'control-plane';
+        if (!isControlPlane) {
+          setCodexProxyAuthInjection(authInjection);
+          await broadcastCodexRuntimeRoute();
+        }
         setCodexProxyGatewayKeyReader(readClaudeApiKey);
 
         // 这个点在 CodexAgent.createHost() 内。返回的 codexProxyActive 会被冻到 AppServerHost 实例上,
         // 后续 startSession 只读 host 自己的事实,不再 live 读全局 flag。
-        await ensureCodexProxyReady();
-        const ready = isCodexProxyHandleReady();
+        if (isControlPlane) {
+          await ensureCodexControlPlaneProxyReady(authInjection);
+        } else {
+          await ensureCodexProxyReady();
+        }
+        const ready = isControlPlane
+          ? isCodexControlPlaneProxyHandleReady(authInjection)
+          : isCodexProxyHandleReady();
         if ((useOAuthBearer || authInjection === 'provider-oauth') && !ready) {
           const error = new Error(
             authInjection === 'provider-oauth'
@@ -543,7 +557,9 @@ export function getMaker(): Maker {
           throw error;
         }
         // gateway-key 模式下 proxy 挂了仍可 fallback 到 gateway base_url(codex 直连 gateway, 不裸奔)。
-        const endpoint = getCodexProxyEndpoint();
+        const endpoint = isControlPlane
+          ? getCodexControlPlaneProxyEndpoint(authInjection)
+          : getCodexProxyEndpoint();
         return {
           extraArgs: [...mcpExtraArgs, ...buildCodexProxySpawnArgs(endpoint, authInjection)],
           extraEnv: mcpExtraEnv,
@@ -632,6 +648,7 @@ export function getMaker(): Maker {
     // dispose 幂等: 没 spawn 过就 no-op。
     //
     desktopCodexAuthAdapter.setOnLogoutSuccess(async () => {
+      resetProviderModelAutoRefreshCooldowns('openai');
       await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth logout');
       clearCodexProxyAuthInjection();
       await broadcastCodexRuntimeRoute();
@@ -641,6 +658,7 @@ export function getMaker(): Maker {
     // 不重启则隐式会话继续复用旧钥匙形态,新登录不生效(codex review 2026-07-03 P2)。
     // 下次 getHost 会按新 fallback(oauth-bearer)重建并重设 proxy 注入。
     desktopCodexAuthAdapter.setOnLoginSuccess(async () => {
+      resetProviderModelAutoRefreshCooldowns('openai');
       // 必须在新 app-server 首次 model/list / Responses 请求之前清：bridge 的旧账号
       // accessToken/accountId 有 30s 内存缓存，晚清会让新 host 短暂带旧账号凭证请求。
       clearChatgptBridgeCredentialCache();
@@ -652,6 +670,7 @@ export function getMaker(): Maker {
     // UI 弹 "请重新登录" — 否则错误只会反复埋在后台日志里。payload 字段对齐
     // maker-ipc/auth.ts logout handler 的 broadcast 形态。
     desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (reason) => {
+      resetProviderModelAutoRefreshCooldowns('openai');
       // 运行中 401/token invalidation 不经过 maker:auth:logout IPC，必须在这里做同一套
       // auth-boundary catalog 收口；否则磁盘 cache 已删但内存 discovered/capabilities 仍旧。
       try {
@@ -676,6 +695,7 @@ export function getMaker(): Maker {
     // Claude 同款:订阅 refresh token 被服务端作废(invalid_grant)时,adapter.invalidate()
     // 清态后经这里广播,UI 立刻进「请重新登录」而不是连环 401 的假连接状态。
     desktopClaudeAuthAdapter.setOnInvalidatedBroadcast((reason) => {
+      resetProviderModelAutoRefreshCooldowns('anthropic');
       // 凭证已失效 = anthropic 动态清单失去可用性证明,与登出同款收口(清单+磁盘缓存)。
       void clearAnthropicDiscoveredModels().catch(() => { /* 清理失败不阻断失效广播 */ });
       const payload = {
