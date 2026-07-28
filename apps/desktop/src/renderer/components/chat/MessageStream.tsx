@@ -35,6 +35,7 @@ import { findMessageTodoInsertions, isAgentPlanToolName } from '@cindy/maker-sha
 
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
 import { Spinner } from '@/components/ui/spinner';
+import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
 import { createLogger } from '@/lib/logger';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
@@ -94,6 +95,7 @@ export const RENDER_WINDOW_INITIAL_ITEMS = 80;
 export const RENDER_WINDOW_FIRST_PAINT_ITEMS = 30;
 const RENDER_WINDOW_GROWTH_ITEMS = 80;
 const RENDER_WINDOW_BOUNDARY_LOOKBACK_ITEMS = 24;
+
 
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -254,7 +256,15 @@ interface MessageStreamProps {
 // 引用这两个成员(WorkChildItem),让「children 只含这两类」由类型系统保证,
 // 渲染处无需 as 强转;其余成员保持内联。
 type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage };
-type AgentPlanRenderItem = { type: 'agent_plan'; key: string; todos: TodoItem[] };
+type AgentPlanRenderItem = {
+  type: 'agent_plan';
+  key: string;
+  todos: TodoItem[];
+  /** 派生自哪条 TodoWrite / update_plan 调用(该调用的行被卡片取代,不再单独渲染)。
+   *  空洞判定与工作组锚定需要它:卡片是这次调用在流里的**唯一**呈现,没有时间戳的
+   *  item 会被间隔判定跳过,于是"空洞后的第一个动作恰好是计划卡"时切不开(#676 review)。 */
+  createdAt?: string;
+};
 type ToolSegmentRenderItem = {
   /** A run of consecutive tool_use messages between text segments,
    *  rendered as a single AgentActionsBlock. v2 — no isStreaming
@@ -268,6 +278,11 @@ type ToolSegmentRenderItem = {
    *  隐藏、没进 resultMap 的空结果)。行级 running/done 状态判定用 —
    *  只看 resultMap 会让 orca 通信工具永久显示 running。 */
   settledIds: Set<string>;
+  /** tool_use clientId → 对应 tool_result 的 createdAt(ms)。
+   *  段的结束时间必须算进 result:单次工具跑了半小时以上时,只看最后一个 tool_use 的
+   *  createdAt 会把段的结束时间大幅低估,让紧随其后的最终答复被空洞守卫误判(#676
+   *  review)。resultMap 只留正文,时间戳单独存这里。 */
+  resultTsMap: Map<string, number>;
 };
 type AgentTaskRenderItem = {
   type: 'agent_task';
@@ -275,6 +290,10 @@ type AgentTaskRenderItem = {
   toolCall?: ChatMessage;
   update?: AgentTaskUpdate;
   result?: string;
+  /** 对应 tool_result 的 createdAt(ms)。历史会话没有 live taskUpdates 时,item 的结束
+   *  时间只能靠它 —— 否则跑了半小时以上的 Agent/Task 会让紧随其后的最终答复被空洞守卫
+   *  误判(#676 review)。与 tool_segment 的 resultTsMap 同源。 */
+  resultTsMs?: number;
 };
 type ForkOriginRenderItem = {
   type: 'fork_origin';
@@ -343,6 +362,11 @@ export type RenderItem =
       /** 原始 tool_use 消息(头带展开区显示调用参数;审计层不因行隐身而丢)。 */
       toolCall: ChatMessage;
       settled: boolean;
+      /** 配对到的 tool_result 时间戳(ms)。与 AgentTaskRenderItem.resultTsMs 同口径:
+       *  toolCall.createdAt 只是"开始调用",一次跑很久的供卡调用(出图 / 出视频)拿它
+       *  当结束会把结束时间低估整个执行时长,紧随其后的正文被误判成历史空洞。
+       *  未配对(活卡)时缺省。 */
+      resultTsMs?: number;
       /** 回锚媒体:后续调用(如 poll_result)的 tool_result 带 xdt_anchor_card_id
        *  指回本卡时,其媒体挂在卡正下方渲染(替换"生成中"的视觉位置),而非
        *  留在轮询调用处。仅同 ghostId 的结果可锚入;无回锚时字段缺省。 */
@@ -814,12 +838,17 @@ export function buildRenderItems(
   // Plan/task rendering and regular tool result pairing both need a stable
   // lookup by vendor toolUseId. Adjacency remains a fallback in Pass 2.
   const resultByToolUseId = new Map<string, string>();
+  // toolUseId → tool_result.createdAt(ms)。段的结束时间要算进 result,见
+  // ToolSegmentRenderItem.resultTsMap 的注释。
+  const resultTsByToolUseId = new Map<string, number>();
   // 卡槽③:已被某条 tool_result 认领的卡(xdt_card_id)——活卡锚定要跳过
   // 这些,防止 settle 后同一张卡又被别的 in-flight 行启发式抢走。
   const settledCardIds = new Set<string>();
   for (const m of messages) {
     if (m.role === 'tool_result' && typeof m.toolUseId === 'string' && m.toolUseId.length > 0) {
       resultByToolUseId.set(m.toolUseId, m.content);
+      const resultMs = Date.parse(m.createdAt ?? '');
+      if (Number.isFinite(resultMs)) resultTsByToolUseId.set(m.toolUseId, resultMs);
       const cardId = extractGhostCardId(m.content);
       if (cardId) settledCardIds.add(cardId);
     }
@@ -877,6 +906,16 @@ export function buildRenderItems(
   const singleResultMap = new Map<string, string>();
   let pendingToolCalls: ChatMessage[] = [];
   let pendingResultMap = new Map<string, string>();
+  // 段内 tool_use clientId → tool_result.createdAt(ms),见 resultTsMap 注释。
+  let pendingResultTsMap = new Map<string, number>();
+  // 段内已见过的最晚**结束**时间(调用发起时刻与其 tool_result 时间取 max)。空洞判定用它,
+  // 增量维护而不是每条调用重扫一遍 pendingToolCalls —— 工具密集的长 turn 里那是 O(n²)
+  // (#676 review copilot)。flushSegment 时复位。
+  let pendingSegmentEndMs: number | null = null;
+  const notePendingSegmentEnd = (ms: number | null | undefined): void => {
+    if (ms === null || ms === undefined || !Number.isFinite(ms)) return;
+    pendingSegmentEndMs = pendingSegmentEndMs === null ? ms : Math.max(pendingSegmentEndMs, ms);
+  };
   // 状态判定专用:tool_result 已到达的 tool_use(含被 shouldHideToolResult
   // 隐藏、不进 resultMap 的空结果)。
   let pendingSettledIds = new Set<string>();
@@ -908,6 +947,7 @@ export function buildRenderItems(
       key: segmentKey,
       toolCalls: pendingToolCalls,
       resultMap: pendingResultMap,
+      resultTsMap: pendingResultTsMap,
       settledIds: pendingSettledIds,
     });
     if (pendingSegmentMedia.length > 0) {
@@ -932,6 +972,8 @@ export function buildRenderItems(
     for (const gc of pendingSegmentGhostCards) items.push(gc);
     pendingToolCalls = [];
     pendingResultMap = new Map<string, string>();
+    pendingResultTsMap = new Map<string, number>();
+    pendingSegmentEndMs = null;
     pendingSettledIds = new Set<string>();
     pendingSegmentMedia = [];
     pendingSegmentGhostCards = [];
@@ -969,7 +1011,12 @@ export function buildRenderItems(
         const sessionTodos = planInsertAt.get(i);
         if (sessionTodos) {
           flushSegment();
-          items.push({ type: 'agent_plan', key: sessionTodos.key, todos: sessionTodos.todos });
+          items.push({
+            type: 'agent_plan',
+            key: sessionTodos.key,
+            todos: sessionTodos.todos,
+            createdAt: msg.createdAt,
+          });
         }
         let j = i + 1;
         while (j < messages.length && messages[j].role === 'tool_result') j++;
@@ -983,10 +1030,19 @@ export function buildRenderItems(
           typeof msg.toolUseId === 'string' && msg.toolUseId.length > 0
             ? resultByToolUseId.get(msg.toolUseId)
             : undefined;
+        // 结束时间:主路径按 toolUseId 查,adjacency 兜底取相邻 tool_result 的最新时间。
+        let resultTsMs =
+          typeof msg.toolUseId === 'string' && msg.toolUseId.length > 0
+            ? resultTsByToolUseId.get(msg.toolUseId)
+            : undefined;
         let j = i + 1;
         while (j < messages.length && messages[j].role === 'tool_result') {
           if (result === undefined && !shouldHideToolResult(toolName, messages[j].content)) {
             result = messages[j].content;
+          }
+          const adjacentTs = Date.parse(messages[j].createdAt ?? '');
+          if (Number.isFinite(adjacentTs) && (resultTsMs === undefined || adjacentTs > resultTsMs)) {
+            resultTsMs = adjacentTs;
           }
           j++;
         }
@@ -1000,6 +1056,7 @@ export function buildRenderItems(
           toolCall: msg,
           update,
           ...(result !== undefined && !shouldHideToolResult(toolName, result) ? { result } : {}),
+          ...(resultTsMs !== undefined ? { resultTsMs } : {}),
         });
         i = j;
         continue;
@@ -1037,6 +1094,10 @@ export function buildRenderItems(
               tool: toolFromInput,
               toolCall: msg,
               settled: true,
+              resultTsMs:
+                typeof msg.toolUseId === 'string'
+                  ? resultTsByToolUseId.get(msg.toolUseId)
+                  : undefined,
             };
             pendingSegmentGhostCards.push(cardItem);
             ghostCardItemByCallId.set(cardId, cardItem);
@@ -1135,10 +1196,38 @@ export function buildRenderItems(
 
       // Regular tool_use — accumulate(配上卡的 ghost_call 不进段,行隐身)。
       if (!hideRowForCard) {
+        // 历史窗口空洞可能正好落在两次工具调用之间(缺的是 user 行):那样两个窗口的
+        // tool call 会被合进同一个 tool_segment,段首尾时间差直接成了跨空洞的假时长,
+        // 而 groupWorkRuns 的空洞守卫只看段首时间、发现不了段内部的跳变。所以在段内
+        // 也按同一阈值切开,让「已工作 Xs」的时长和分组都落在真实连续的动作上。
+        //
+        // 锚点是 pendingSegmentEndMs —— 段内所有调用结束时间的**最大值**,不能只看紧邻的
+        // 上一条:并行工具会乱序完成(A 跑 40 分钟还没回,B 紧随其后一分钟就结束,这时又发起
+        // C),只比 B 的早结束时间会把 C 误判成空洞、把一段连续工作切碎,段产物(tool_media)
+        // 也跟着挪到错误的边界上(#676 review codex P1)。groupWorkRuns 的 prevEndMs 早就是
+        // 单调取 max 的,这里补齐同一口径。
+        if (pendingToolCalls.length > 0) {
+          const currentCallMs = messageTs(msg);
+          if (
+            pendingSegmentEndMs !== null &&
+            currentCallMs !== null &&
+            currentCallMs - pendingSegmentEndMs > HISTORY_GAP_SPLIT_MS
+          ) {
+            flushSegment();
+          }
+        }
         pendingToolCalls.push(msg);
+        notePendingSegmentEnd(messageTs(msg));
         if (mainResult !== undefined) {
           // result 到了就算 settled,即便内容被隐藏不进 resultMap。
           pendingSettledIds.add(msg.clientId);
+          // 时间戳与内容是否被隐藏无关:段的结束时间靠它算(见 resultTsMap 注释)。
+          const resultTs =
+            typeof msg.toolUseId === 'string' ? resultTsByToolUseId.get(msg.toolUseId) : undefined;
+          if (resultTs !== undefined) {
+            pendingResultTsMap.set(msg.clientId, resultTs);
+            notePendingSegmentEnd(resultTs);
+          }
         }
         if (mainResult !== undefined && !shouldHideToolResult(toolName, mainResult)) {
           pendingResultMap.set(msg.clientId, mainResult);
@@ -1157,6 +1246,15 @@ export function buildRenderItems(
       while (j < messages.length && messages[j].role === 'tool_result') {
         if (!hideRowForCard) {
           pendingSettledIds.add(msg.clientId);
+          // adjacency 配对同样要留下 result 时间戳(段结束时间用)。
+          const adjacencyTs = Date.parse(messages[j].createdAt ?? '');
+          if (Number.isFinite(adjacencyTs)) {
+            notePendingSegmentEnd(adjacencyTs);
+            const known = pendingResultTsMap.get(msg.clientId);
+            if (known === undefined || adjacencyTs > known) {
+              pendingResultTsMap.set(msg.clientId, adjacencyTs);
+            }
+          }
           // 主路径没命中时才用 adjacency 覆盖(后到 last wins,保留原行为)
           const result = messages[j].content;
           if (!pendingResultMap.has(msg.clientId) && !shouldHideToolResult(toolName, result)) {
@@ -1324,13 +1422,93 @@ function renderItemStartMs(item: RenderItem): number | null {
     const ms = Date.parse(item.toolCall?.createdAt ?? item.update?.createdAt ?? '');
     return Number.isFinite(ms) ? ms : null;
   }
+  // ghost_card / agent_plan 是各自那次调用在流里的**唯一**呈现(工具行被卡片取代),
+  // 所以它们必须报出调用时间。漏掉的后果是间隔判定把它们当"无时间戳"跳过:空洞后的
+  // 第一个动作恰好是卡片时切不开,卡片还会被归到空洞前那一组里(#676 review)。
+  if (item.type === 'ghost_card') {
+    const ms = Date.parse(item.toolCall.createdAt ?? '');
+    return Number.isFinite(ms) ? ms : null;
+  }
+  if (item.type === 'agent_plan') {
+    const ms = Date.parse(item.createdAt ?? '');
+    return Number.isFinite(ms) ? ms : null;
+  }
   if (item.type === 'work_group') {
     for (const child of item.children) {
       const childMs = renderItemStartMs(child);
       if (childMs !== null) return childMs;
     }
   }
+  // 剩下两类**故意**不报时间,不是漏:
+  //  - tool_media:段产物,永远紧跟在派生它的 tool_segment 之后(见 flushSegment),
+  //    锚点留在段末正是它自己的时间区间,单独给它一个时间戳没有意义。
+  //  - fork_origin:分叉标记,不是动作,不该参与间隔判定。
   return null;
+}
+
+/**
+ * item 的结束时间戳 —— 空洞判定必须用它,不能用 start。
+ *
+ * 一个合法连续 turn 里的 tool_segment 本身可能跨半小时以上(段内每次相邻调用都在
+ * 阈值内,所以不会被切段)。若拿下一条 item 的 start 去跟这个段的 **start** 比,
+ * 差值就等于整段耗时,会把正常长任务误判成历史空洞:该切的没切,不该切的切了,
+ * 前面的 assistant 进度文字被留在工作组外,时长也退化成段兜底而非最终答复。
+ *
+ * 段的结束必须算进 tool_result:单次工具跑半小时以上时(典型:一次长构建 / CI),
+ * 段里只有一个 tool_use,它的 createdAt 是"开始执行"的时刻,拿它当段末会把结束
+ * 时间低估整个执行时长,紧随其后的最终答复照样被误判成空洞。
+ */
+function renderItemEndMs(item: RenderItem): number | null {
+  if (item.type === 'tool_segment') {
+    let latest = Number.NEGATIVE_INFINITY;
+    for (const call of item.toolCalls) {
+      const callMs = Date.parse(call.createdAt ?? '');
+      if (Number.isFinite(callMs)) latest = Math.max(latest, callMs);
+      const resultMs = item.resultTsMap.get(call.clientId);
+      if (resultMs !== undefined) latest = Math.max(latest, resultMs);
+    }
+    return Number.isFinite(latest) ? latest : renderItemStartMs(item);
+  }
+  if (item.type === 'agent_task') {
+    // fallback 顺序:updatedAt → update.createdAt → toolCall.createdAt。
+    // AgentTaskUpdate 可以只有 createdAt 而没有 updatedAt(见 normalizeAgentTaskUpdate),
+    // 那时 update.createdAt 比调用发起时刻更接近任务结束 —— 先取 toolCall.createdAt 会
+    // 低估结束时间,进而误判空洞、低报工作组时长(#676 review)。
+    const ms = Date.parse(
+      item.update?.updatedAt ?? item.update?.createdAt ?? item.toolCall?.createdAt ?? '',
+    );
+    const liveEnd = Number.isFinite(ms) ? ms : renderItemStartMs(item);
+    // 历史会话没有 live update 时,liveEnd 退化成调用的开始时间;result 时间戳才是
+    // 这张卡真正的结束(与 tool_segment 同口径)。两者取更晚的。
+    if (item.resultTsMs === undefined) return liveEnd;
+    return liveEnd === null ? item.resultTsMs : Math.max(liveEnd, item.resultTsMs);
+  }
+  if (item.type === 'ghost_card') {
+    const startMs = renderItemStartMs(item);
+    if (item.resultTsMs === undefined) return startMs;
+    return startMs === null ? item.resultTsMs : Math.max(startMs, item.resultTsMs);
+  }
+  if (item.type === 'work_group') {
+    for (let i = item.children.length - 1; i >= 0; i--) {
+      const childMs = renderItemEndMs(item.children[i]);
+      if (childMs !== null) return childMs;
+    }
+    return null;
+  }
+  // thinking 的 createdAt 是块**开始**的时刻,真正结束要加 thinkingDurationMs
+  // (与 workRunEndTs 同口径)。一个想了半小时以上的 thinking 块后面紧跟工具或正文时,
+  // 只看 createdAt 会把它误判成历史空洞、切开一个本来连续的 turn。
+  const startMs = renderItemStartMs(item);
+  if (startMs !== null && item.type === 'message' && item.message.role === 'thinking') {
+    // duration 与 mapServerCreatedAt 同口径夹断:该字段可能是负数 / 非有限值(那边就做了
+    // Math.max(0, …) 的防御)。不夹断会得出 end < start,空洞判定与工作组时长都跟着错
+    // (#676 review copilot)。
+    const durationMs = item.message.thinkingDurationMs;
+    const safeDurationMs =
+      typeof durationMs === 'number' && Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
+    return startMs + safeDurationMs;
+  }
+  return startMs;
 }
 
 export function insertForkOriginItem(
@@ -1385,31 +1563,36 @@ function workRunStartTs(it: WorkChildItem): number | null {
   return messageTs(it.message);
 }
 
-/** run 末子项的结束时间戳估算(无终结正文消息可用时的兜底):
- *  tool_segment 取最后一个 toolCall 的 createdAt(低估最后一次工具执行耗时,
- *  可接受);thinking 取 createdAt + durationMs 与 createdAt 的较大值。 */
+/**
+ * run 末子项的结束时间戳 —— 直接复用 renderItemEndMs,不再自己算一份。
+ *
+ * 原来这里另算一份:tool_segment 取**最后一次调用的发起时刻**、agent_task 取
+ * `updatedAt ?? toolCall.createdAt`,两者都不看 tool_result 时间。于是"一个跑了 40 分钟的
+ * 工具 / Task 之后紧跟一段历史空洞、后面没有 assistant 正文"时,createWorkGroup 拿不到
+ * nextItem、回落到这里,时长显示成约 0s —— 而 renderItemEndMs 明明已经算得出真正的结束
+ * 时间(#676 review codex P1)。两处口径合一,顺带修掉 agent_task 那个把
+ * `toolCall.createdAt` 排在 `update.createdAt` 前面的旧 fallback 顺序。
+ */
 function workRunEndTs(it: WorkChildItem): number | null {
-  if (it.type === 'tool_segment') {
-    return messageTs(it.toolCalls[it.toolCalls.length - 1]);
-  }
-  if (it.type === 'agent_task') {
-    const ms = Date.parse(
-      it.update?.updatedAt ?? it.toolCall?.createdAt ?? it.update?.createdAt ?? '',
-    );
-    return Number.isFinite(ms) ? ms : null;
-  }
-  const base = messageTs(it.message);
-  if (base === null) return null;
-  const dur = it.message.thinkingDurationMs ?? 0;
-  return base + dur;
+  return renderItemEndMs(it);
 }
 
+/**
+ * 没有终结正文可用时,run 的结束时间 = **所有子项结束时间的最大值**。
+ *
+ * 不能"从后往前找第一个有时间的子项就返回":并行的 Agent/Task 会乱序完成(A 跑到 40 分钟,
+ * B 紧随其后 2 分钟就结束),末尾那张卡的结束时间可能远早于整段真正的结束。被空洞收尾的组
+ * 正好走这条 fallback(没有 nextItem),于是 40 分钟的工作显示成约 2 分钟 —— 而空洞判定那边
+ * 用的已经是正确的最大值(#676 review codex P1)。
+ */
 function workRunFallbackEndTs(run: WorkChildItem[]): number | null {
-  for (let i = run.length - 1; i >= 0; i--) {
-    const ts = workRunEndTs(run[i]);
-    if (ts !== null) return ts;
+  let latest: number | null = null;
+  for (const item of run) {
+    const ts = workRunEndTs(item);
+    if (ts === null) continue;
+    latest = latest === null ? ts : Math.max(latest, ts);
   }
-  return null;
+  return latest;
 }
 
 function createWorkGroup(
@@ -1802,6 +1985,9 @@ function renderWorkGroupChild(
  * 内层组 key 不变;完成态外组另用 `work-summary-*`,避免复用展开记忆。
  * DB prepend 向前合并等场景由 recoverLostAnchorIdx 递归找回锚点。
  *
+ * 窗口空洞:除 user 行外,相邻动作间隔超过 HISTORY_GAP_SPLIT_MS 也切断工作组,
+ * 见该常量注释。
+ *
  * export 仅供单测使用。
  */
 export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean): RenderItem[] {
@@ -1824,14 +2010,38 @@ export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean):
     currentTurn = [];
   };
 
+  // 锚点用上一个 item 的**结束**时间(见 renderItemEndMs):否则一个正常的长时段
+  // tool_segment 会让紧随其后的 item 被误判成空洞。
+  // 无时间戳的 item 不重置锚点:让间隔判定跨过它,继续比对上一个有时间的动作。
+  let prevEndMs: number | null = null;
+
   for (const it of items) {
     if (it.type === 'message' && it.message.role === 'user') {
       flushTurn(false);
       out.push(it);
+      // 两件事互不相干,合并时都要保留:
+      //  - prevEndMs:空洞判定的锚点(#676);
+      //  - turnStartTs:turn 开场边界,分组算时长用(#598)。
+      prevEndMs = renderItemEndMs(it) ?? prevEndMs;
       turnStartTs = messageTs(it.message);
       continue;
     }
+    const itemStartMs = renderItemStartMs(it);
+    if (prevEndMs !== null && itemStartMs !== null && itemStartMs - prevEndMs > HISTORY_GAP_SPLIT_MS) {
+      flushTurn(false);
+      // 空洞切开的新段没有已知的 turn 开场边界:那条 user 行在空洞的**另一侧**(或压根没加载)。
+      // 继续拿它当起点会让新段的时长横跨整个空洞 —— 正是本 PR 要修的那种谎报(实测 47 小时)。
+      // 置 null 与 #598 里"窗口截断没见到用户消息"同语义:各分组路径退回段内锚点。
+      turnStartTs = null;
+    }
     currentTurn.push(it);
+    // 取本 turn 内见过的**最大**结束时间,不能无条件覆盖:并行的 Agent/Task 可能乱序完成
+    // (相邻的后一张卡先结束),无条件赋值会让锚点回退到更早的时刻,于是紧随其后的最终答复
+    // 与这个退化锚点相差超过阈值 → 连续 turn 被误切、时长被低报(#676 review)。
+    const itemEndMs = renderItemEndMs(it);
+    if (itemEndMs !== null) {
+      prevEndMs = prevEndMs === null ? itemEndMs : Math.max(prevEndMs, itemEndMs);
+    }
   }
   flushTurn(true);
   return out;
@@ -2005,6 +2215,32 @@ export function MessageStream({
     [ungroupedRenderItems, isSessionStreaming, forkOrigin],
   );
 
+  /**
+   * TODO(render-window-bidirectional): 锚定分支目前是 `slice(startIdx)` —— 从锚点切到
+   * 末尾、**没有上界**。这是 #676 review 反复指向的根因:补齐 / 跳转让 messages 变长后,
+   * 深跳会一次挂载"锚点 → 末尾"的全部 item。因为它无界,store 侧只能靠"跳转补齐预算"
+   * 间接限制挂载量,而那个预算必须逐一追平 buildRenderItems 的每种 item 展开规则
+   * (agent_task 卡、空洞切段、ghost_card、agent_plan、tool_media…),review 中已发现 5 种
+   * 被低估的路径 —— 是一条追不完的线。
+   *
+   * 决定:把锚定窗口做成双向有界 + 配套向下扩窗,作为紧随其后的独立改动(不塞进本 PR ——
+   * 它要动下面 5 处联动派生,且滚动手感必须实机验证,需要一个完整的实施与验证窗口)。
+   * 之前那套补齐预算是它落地前的过渡兜底,落地后可以大幅放宽甚至移除。
+   *
+   * 实施要点(照此改,别重新推导):
+   *   1. 新增 anchoredForwardItems state 作为锚点向后的 item 上界,锚点变化时重置;
+   *      锚定分支改为 slice(start, start + anchoredForwardItems)。
+   *   2. windowAtTop 现在是 `visible.length === all.length`,加上界后即使 start 已到 0
+   *      也恒为 false → decideUserIntentFillAction 再也走不到 load-from-db。必须改成
+   *      基于 startIdx === 0 判定,因此要把 startIdx 从这个 useMemo 里一并导出。
+   *   3. isNearBottom:窗口未覆盖末尾时 DOM 距底 <100px 会被误判成"贴底",auto-follow 与
+   *      jump-down chip 语义都会错。窗口未覆盖末尾时必须强制判为非贴底。
+   *   4. expandWindow(向上扩)必须同步把上界 +RENDER_WINDOW_GROWTH_ITEMS,否则 start 前移
+   *      而上界不动,会把用户视口下方的内容反向截掉。
+   *   5. handleScroll 已有 distanceFromBottom:距底 <threshold 且窗口未覆盖末尾时扩上界。
+   *      向下扩窗比向上简单 —— 在下方 append 不改变已有内容的滚动偏移,不需要 F-SYNC-2
+   *      那种 delta 补偿。上界扩到覆盖末尾后清除它,此后贴底语义与现状完全一致。
+   */
   const visibleRenderItems = useMemo(() => {
     if (allRenderItems.length === 0) return allRenderItems;
     if (firstVisibleItemKey === null) {

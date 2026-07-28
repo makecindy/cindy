@@ -71,8 +71,8 @@ export async function submitGithubIssueForSession(
   };
   return submitGithubIssueWithConfirm(
     {
-      confirm: (sessionId, draft, env, submissionIdentity) =>
-        bridge.request(sessionId, draft, env, submissionIdentity),
+      confirm: (sessionId, draft, env, submissionIdentity, suggestedPublicName) =>
+        bridge.request(sessionId, draft, env, submissionIdentity, suggestedPublicName),
       resolveSubmissionIdentity: (workdir) =>
         resolveGithubIssueSubmissionIdentity(githubUserSubmitterDeps, workdir),
       postIssue: (submissionIdentity, bodyFactory) => {

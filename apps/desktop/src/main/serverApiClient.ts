@@ -11,6 +11,7 @@
 
 import { net } from 'electron';
 import * as authManager from './authManager';
+import { getResolvedMainLocale } from './i18n.js';
 
 import { createLogger } from './logger';
 
@@ -69,6 +70,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
   const method = opts.method ?? 'GET';
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'Accept-Language': getResolvedMainLocale(),
     ...(opts.headers ?? {}),
   };
   const token = opts.token !== undefined ? opts.token : authManager.getAccessToken();

@@ -373,7 +373,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     }
   });
 
-  it('suspends list and CJK decorations for the full IME composition', () => {
+  it('suspends list decoration but keeps stable CJK punctuation during IME composition', () => {
     vi.useFakeTimers();
     editor = new Editor({
       element: document.createElement('div'),
@@ -392,21 +392,25 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     });
 
     expect(editor.view.dom.querySelector('.composer-list-block-indent')).not.toBeNull();
-    expect(editor.view.dom.querySelectorAll('span[style*="font-family"]').length).toBeGreaterThan(
-      0,
-    );
+    const punctuationCount =
+      editor.view.dom.querySelectorAll('span[style*="font-family"]').length;
+    expect(punctuationCount).toBeGreaterThan(0);
 
     editor.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
     expect(editor.view.composing).toBe(true);
     expect(editor.view.dom.querySelector('.composer-list-block-indent')).toBeNull();
-    expect(editor.view.dom.querySelector('span[style*="font-family"]')).toBeNull();
+    expect(editor.view.dom.querySelectorAll('span[style*="font-family"]')).toHaveLength(
+      punctuationCount,
+    );
 
     editor.view.dispatch(
       editor.state.tr.insertText('中', editor.state.doc.content.size - 1).setMeta('composition', 1),
     );
     expect(editor.getText()).toBe('1. 《旧》中');
     expect(editor.view.dom.querySelector('.composer-list-block-indent')).toBeNull();
-    expect(editor.view.dom.querySelector('span[style*="font-family"]')).toBeNull();
+    expect(editor.view.dom.querySelectorAll('span[style*="font-family"]')).toHaveLength(
+      punctuationCount,
+    );
 
     editor.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
     expect(editor.view.composing).toBe(false);
@@ -418,6 +422,43 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     expect(editor.view.dom.querySelectorAll('span[style*="font-family"]').length).toBeGreaterThan(
       0,
     );
+  });
+
+  it('keeps full-width parentheses from changing width across repeated IME composition', () => {
+    vi.useFakeTimers();
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [Document, Paragraph, Text, CjkPunctDecoration],
+      content: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: '（已有内容）' }] }],
+      },
+    });
+
+    const punctuationSelector = 'span[style*="font-family"]';
+    expect(editor.view.dom.querySelectorAll(punctuationSelector)).toHaveLength(2);
+
+    for (const [input, expected] of [
+      ['新', '（已有内容）新'],
+      ['字', '（已有内容）新字'],
+    ] as const) {
+      editor.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      expect(editor.view.composing).toBe(true);
+      expect(editor.view.dom.querySelectorAll(punctuationSelector)).toHaveLength(2);
+
+      editor.view.dispatch(
+        editor.state.tr
+          .insertText(input, editor.state.doc.content.size - 1)
+          .setMeta('composition', 1),
+      );
+      expect(editor.getText()).toBe(expected);
+      expect(editor.view.dom.querySelectorAll(punctuationSelector)).toHaveLength(2);
+
+      editor.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+      vi.runOnlyPendingTimers();
+      expect(editor.view.composing).toBe(false);
+      expect(editor.view.dom.querySelectorAll(punctuationSelector)).toHaveLength(2);
+    }
   });
 
   it('renders the indent span into the DOM for list lines', () => {

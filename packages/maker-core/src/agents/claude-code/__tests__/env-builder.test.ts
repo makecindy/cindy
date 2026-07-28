@@ -69,6 +69,33 @@ describe('buildClaudeEnv', () => {
     expect(env.ANTHROPIC_API_KEY).toBe('key');
   });
 
+  it('evaluates function-form behaviorFlags with the spawn credentialMode', async () => {
+    const behaviorFlags = vi.fn(() => ({ CLAUDE_CODE_ATTRIBUTION_HEADER: '0' }));
+
+    const env = await buildClaudeEnv(
+      createAuthAdapter(),
+      { behaviorFlags },
+      { credentialMode: 'gateway-key' },
+    );
+
+    expect(behaviorFlags).toHaveBeenCalledWith({ credentialMode: 'gateway-key' });
+    expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
+  });
+
+  it('lets behaviorFlags override an inherited CLAUDE_CODE_ATTRIBUTION_HEADER from the host env', async () => {
+    // local spawn 继承宿主 process.env:宿主 shell export 过 =0 时,flags 缺席压不住
+    // 继承值 —— 保留归因必须显式 '1'(desktop issue #758 的环境继承回归面)。
+    process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = '0';
+    try {
+      const env = await buildClaudeEnv(createAuthAdapter(), {
+        behaviorFlags: () => ({ CLAUDE_CODE_ATTRIBUTION_HEADER: '1' }),
+      });
+      expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('1');
+    } finally {
+      delete process.env.CLAUDE_CODE_ATTRIBUTION_HEADER;
+    }
+  });
+
   it('injects the configured Claude subagent model', async () => {
     delete process.env.CLAUDE_CODE_SUBAGENT_MODEL;
 

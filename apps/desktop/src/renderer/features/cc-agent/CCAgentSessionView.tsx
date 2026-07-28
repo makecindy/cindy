@@ -122,6 +122,7 @@ import {
   makerChatStore,
   type MessageDeliveryMode,
 } from '@/lib/makerChatStore';
+import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 import { useWorktreeCreation, worktreeCreationStore } from '@/lib/worktreeCreationStore';
 import { useWorktreeForSession } from '@/contexts/WorktreeContext';
@@ -149,6 +150,11 @@ import {
   getGhostMediaUriFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
+import {
+  classifyUnclassifiedDroppedItems,
+  getDroppedFileItems,
+  type DroppedFileItems,
+} from '@/lib/fileDrop';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
@@ -836,14 +842,35 @@ export function CCAgentSessionView({
     }
     let cancelled = false;
     const currentState = makerChatStore.getSnapshot(sessionId);
-    const existing = currentState.messages.find(
-      (message) => message.clientId === searchJump.messageClientId,
-    );
-    if (existing) {
+    // "目标已在 messages 里"不等于"窗口连续覆盖到它":先前一次补齐失败的跳转会把目标以
+    // 孤岛形式 merge 进窗口(它与已加载的尾部之间隔着没加载的历史)。这时若直接 focus 就
+    // 返回,store 侧的自愈补齐永远不会被触发,中间缺失一直修不回来(#676 review)。
+    // 判定逻辑抽在 canFocusWithoutJumpLoad,由 searchJumpTargeting.test.ts 直接覆盖。
+    if (canFocusWithoutJumpLoad(currentState, searchJump.messageClientId)) {
       requestFocusMessage(searchJump.messageClientId);
       clearSearchJumpState();
       return;
     }
+    // 加载失败(取不到权威行 / 请求 reject)时的收口:目标只要**此刻**还渲染在窗口里,就直接
+    // focus 它、不报错 —— 导航到一行已经在屏上的消息根本不需要网络(被控端临时离线时
+    // invokeRemote 会 reject)。孤岛标记保留,留给下一次跳转再试修复。
+    //
+    // 必须查**实时**快照,不能用进 effect 时捕获的布尔值:请求飞行期间远程权威重建可能已经把
+    // 那一行移除(并 bump 代际,正是 loadAround 返回 null 的原因之一),那时照旧 focus 一个已
+    // 不存在的 clientId 会白吞掉这次跳转 —— 既不导航也不报错,MessageStream 还会在后续每次
+    // 渲染里线性扫描这个找不到的 id(#676 review codex P1 + copilot)。
+    const targetStillInWindow = (): boolean =>
+      makerChatStore
+        .getSnapshot(sessionId)
+        .messages.some((message) => message.clientId === searchJump.messageClientId);
+    const finishWithFallback = (): void => {
+      if (targetStillInWindow()) {
+        requestFocusMessage(searchJump.messageClientId);
+      } else {
+        toast.error(t('ccAgent.search.jumpFailed'));
+      }
+      clearSearchJumpState();
+    };
     const loadAround =
       searchJump.messageIdKind === 'clientId'
         ? makerChatStore.loadAroundMessageClientId
@@ -851,17 +878,17 @@ export function CCAgentSessionView({
     void loadAround(sessionId, searchJump.messageId, { radius: 60 })
       .then((message) => {
         if (cancelled) return;
-        requestFocusMessage(message?.clientId ?? searchJump.messageClientId);
-        if (!message) {
-          toast.error(t('ccAgent.search.jumpFailed'));
+        if (message) {
+          requestFocusMessage(message.clientId);
+          clearSearchJumpState();
+          return;
         }
-        clearSearchJumpState();
+        finishWithFallback();
       })
       .catch((err) => {
         if (!cancelled) {
           log.warn('Failed to load search hit context:', err);
-          toast.error(t('ccAgent.search.jumpFailed'));
-          clearSearchJumpState();
+          finishWithFallback();
         }
       });
     return () => {
@@ -2726,30 +2753,26 @@ export function CCAgentSessionView({
             if (sessionId) void attachGhostMediaToSession(ghostMediaUri, sessionId, t);
             return;
           }
-          if (e.dataTransfer.files.length > 0) {
-            const files: File[] = [];
-            for (let i = 0; i < e.dataTransfer.items.length; i++) {
-              const item = e.dataTransfer.items[i];
-              const entry = item.webkitGetAsEntry?.();
-              const file = e.dataTransfer.files[i];
-              if (!file) continue;
-              if (entry?.isDirectory) {
-                let folderPath = '';
-                try {
-                  folderPath = window.electronAPI.getFilePath(file);
-                } catch {
-                  /* ignore */
-                }
-                if (folderPath) attachmentState.addFolderPath(folderPath);
-              } else {
-                files.push(file);
+          const attachDroppedItems = (items: Pick<DroppedFileItems, 'files' | 'directories'>) => {
+            for (const directory of items.directories) {
+              let folderPath = '';
+              try {
+                folderPath = window.electronAPI.getFilePath(directory);
+              } catch {
+                /* ignore */
               }
+              if (folderPath) attachmentState.addFolderPath(folderPath);
             }
-            if (files.length > 0) {
-              const dt = new DataTransfer();
-              for (const f of files) dt.items.add(f);
-              attachmentState.addFiles(dt.files);
-            }
+            if (items.files.length > 0) attachmentState.addFiles(items.files);
+          };
+          const droppedItems = getDroppedFileItems(e.dataTransfer);
+          attachDroppedItems(droppedItems);
+          if (droppedItems.unclassified.length > 0) {
+            void classifyUnclassifiedDroppedItems(droppedItems.unclassified, {
+              getFilePath: (file) => window.electronAPI.getFilePath(file),
+              classifyPath: (path) =>
+                window.electronAPI.localDb.sessionShare.classifyPath({ path }),
+            }).then(attachDroppedItems);
           }
         }}
       >
@@ -3094,8 +3117,10 @@ export function CCAgentSessionView({
                     onViewerStateChange={setPluginSetupViewerState}
                     onCommand={respondToPluginSetup}
                   />
-                ) : pendingIssueConfirm ? (
+                ) : pendingIssueConfirm && sessionId ? (
                   <IssueConfirmCard
+                    key={`${sessionId}:${pendingIssueConfirm.requestId}`}
+                    sessionId={sessionId}
                     pending={pendingIssueConfirm}
                     onRespond={respondToIssueConfirm}
                   />

@@ -7,6 +7,13 @@
  * - 这样 CLI host 可以一行配置切换不走 proxy；业务 flag 也能交给用户 settings 调
  */
 
+import type { AgentCredentialMode } from './auth-adapter.js';
+
+/** 函数形态 behaviorFlags 的入参:本次 spawn 的凭证形态(undefined = 未显式指定,走 adapter fallback)。 */
+export interface BehaviorFlagsContext {
+  credentialMode?: AgentCredentialMode;
+}
+
 export interface AgentRuntimeConfig {
   /**
    * 接入端点。设为 undefined 表示走 SDK 默认（如 api.anthropic.com）。
@@ -33,8 +40,13 @@ export interface AgentRuntimeConfig {
   /**
    * 业务行为 flag。Agent 内部决定哪些 key 有意义。
    * Claude 当前用到：CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS
+   *
+   * 函数形态:flag 需要按本次 spawn 的凭证形态分叉时用(env-builder 在组装 env 时
+   * 以 spawn 的 credentialMode 调用)。典型:CLAUDE_CODE_ATTRIBUTION_HEADER 只对
+   * gateway-key spawn 禁用——oauth 侧禁用会让订阅直连的 Auto 分类器子请求被上游
+   * 429(desktop issue #758)。静态对象形态语义不变。
    */
-  behaviorFlags?: Record<string, string>;
+  behaviorFlags?: Record<string, string> | ((ctx: BehaviorFlagsContext) => Record<string, string>);
 
   /**
    * Host-managed default model for native subagents.

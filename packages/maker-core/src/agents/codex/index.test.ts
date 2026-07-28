@@ -20,6 +20,8 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
     static threadSeq = 1;
     static failThreadStart = false;
     static dropThreadUnsubscribe = false;
+    static dropModelList = false;
+    static dropInitialize = false;
     static beforeThreadStartResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
     static onCreate: ((transport: MockCodexTransport) => void) | null = null;
 
@@ -49,6 +51,7 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
         return;
       }
       if (req.method === 'initialize') {
+        if (MockCodexTransport.dropInitialize) return;
         this.emitLine({
           id: req.id,
           result: {
@@ -134,6 +137,7 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
         return;
       }
       if (req.method === 'model/list') {
+        if (MockCodexTransport.dropModelList) return;
         this.emitLine({ id: req.id, result: { data: [], nextCursor: null } });
         return;
       }
@@ -228,6 +232,8 @@ beforeEach(() => {
   MockCodexTransport.threadSeq = 1;
   MockCodexTransport.failThreadStart = false;
   MockCodexTransport.dropThreadUnsubscribe = false;
+  MockCodexTransport.dropModelList = false;
+  MockCodexTransport.dropInitialize = false;
   MockCodexTransport.beforeThreadStartResponse = null;
   MockCodexTransport.onCreate = null;
 });
@@ -357,7 +363,7 @@ function installFakeHost(
     threadHandlers = handlers;
     return { release: vi.fn() };
   });
-  const unsubscribeThread = vi.fn(async (_threadId: string) => {});
+  const unsubscribeThread = vi.fn(async () => {});
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
   const getRemoteCompactionProviderId = vi.fn(() => opts.remoteCompactionProviderId ?? null);
   const host = {
@@ -404,7 +410,7 @@ describe('CodexAgent permissions', () => {
 describe('CodexAgent reference directories', () => {
   const profileName = 'cindy-readonly-references';
 
-  it('keeps reference roots read-only on thread/start and every turn', async () => {
+  it('keeps the thread-level reference profile active without repeating it on turn/start', async () => {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;
     const host = installFakeHost(
@@ -458,7 +464,7 @@ describe('CodexAgent reference directories', () => {
     );
     const [, firstTurn] = turnCalls()[0] as [string, Record<string, unknown>];
     expect(firstTurn.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-a']);
-    expect(firstTurn.permissions).toBe(profileName);
+    expect('permissions' in firstTurn).toBe(false);
     expect('sandboxPolicy' in firstTurn).toBe(false);
 
     const handlers = host.getThreadHandlers();
@@ -472,7 +478,8 @@ describe('CodexAgent reference directories', () => {
     await handle.send({ type: 'user', content: 'use the replacement reference' });
     const [, secondTurn] = turnCalls()[1] as [string, Record<string, unknown>];
     expect(secondTurn.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-b']);
-    expect(secondTurn.permissions).toBe(profileName);
+    expect('permissions' in secondTurn).toBe(false);
+    expect('sandboxPolicy' in secondTurn).toBe(false);
     handlers.turnCompleted?.({
       threadId: 'start-thread-id',
       turn: { id: 'turn-2', status: 'completed' },
@@ -499,6 +506,615 @@ describe('CodexAgent reference directories', () => {
       type: 'workspaceWrite',
       writableRoots: ['/tmp/mock-codex-home/memories'],
     });
+    await handle.close();
+  });
+
+  it('replaces an unused thread instead of resuming before its first rollout exists', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadStartSeq = 0;
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.ThreadStart) {
+          return {
+            thread: { id: `start-thread-${++threadStartSeq}` },
+            model: 'gpt-5.4',
+            modelProvider: 'openai',
+            cwd: '/repo',
+          };
+        }
+        if (method === Method.ThreadResume) {
+          throw new Error('no rollout found for thread id');
+        }
+        if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+        return undefined;
+      },
+      { codexHome: '/tmp/mock-codex-home' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-add-extra-dirs-before-first-turn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      userPrompt: 'STABLE USER PROMPT',
+    });
+
+    await handle.setExtraDirs?.(['/shared-before-first-turn']);
+    await handle.send(
+      { type: 'user', content: 'use the reference on the first turn' },
+      { throwOnStartFailure: true },
+    );
+
+    const startCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadStart,
+    );
+    expect(startCalls).toHaveLength(2);
+    const [, initialStart] = startCalls[0] as [string, Record<string, unknown>];
+    const [, replacementStart] = startCalls[1] as [string, Record<string, unknown>];
+    expect(replacementStart.runtimeWorkspaceRoots).toEqual([
+      '/repo',
+      '/shared-before-first-turn',
+    ]);
+    expect(replacementStart.permissions).toBe(profileName);
+    expect(replacementStart.config).toHaveProperty(`permissions.${profileName}`);
+    expect(replacementStart.developerInstructions).toBe(initialStart.developerInstructions);
+    expect(replacementStart.dynamicTools).toEqual(initialStart.dynamicTools);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(0);
+    expect(handle.id).toBe('start-thread-2');
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('start-thread-2', expect.any(Object));
+
+    const [, turnParams] = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    ) as [string, Record<string, unknown>];
+    expect(turnParams.threadId).toBe('start-thread-2');
+    expect('permissions' in turnParams).toBe(false);
+    expect('sandboxPolicy' in turnParams).toBe(false);
+    await handle.close();
+  });
+
+  it('preserves a Fast mode toggle made while replacing an unused thread', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadStartCount = 0;
+    const replacementGate = deferred<{
+      thread: { id: string };
+      model: string;
+      modelProvider: string;
+      cwd: string;
+      serviceTier: null;
+    }>();
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        threadStartCount += 1;
+        if (threadStartCount === 2) return replacementGate.promise;
+      }
+      if (method === Method.ThreadSettingsUpdate) return {};
+      if (method === Method.TurnStart) return { turn: { id: 'turn-fast-replacement' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-fast-during-replacement',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await handle.setExtraDirs?.(['/shared-fast-replacement']);
+    const sendPromise = handle.send({ type: 'user', content: 'use fast mode' });
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadStart,
+      )).toHaveLength(2);
+    });
+    const bindingLeases = (
+      agent as unknown as { hostSessionBindingLeases: Map<string, number> }
+    ).hostSessionBindingLeases;
+    expect(bindingLeases.get('local')).toBe(1);
+
+    await handle.setFastMode?.(true);
+    replacementGate.resolve({
+      thread: { id: 'start-thread-2' },
+      model: 'gpt-5.4',
+      modelProvider: 'openai',
+      cwd: '/repo',
+      serviceTier: null,
+    });
+    await sendPromise;
+
+    expect(handle.getFastMode?.()).toBe(true);
+    const settingsCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadSettingsUpdate,
+    );
+    expect(settingsCalls.map(([, params]) => params)).toEqual([
+      { threadId: 'start-thread-id', serviceTier: 'fast' },
+      { threadId: 'start-thread-2', serviceTier: 'fast' },
+    ]);
+    const turnCall = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    );
+    expect(turnCall?.[1]).toMatchObject({
+      threadId: 'start-thread-2',
+      serviceTier: 'fast',
+    });
+    expect(bindingLeases.has('local')).toBe(false);
+    await handle.close();
+  });
+
+  it('cancels a pending unused-thread replacement before turn/start', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadStartCount = 0;
+    const replacementGate = deferred<{
+      thread: { id: string };
+      model: string;
+      modelProvider: string;
+      cwd: string;
+    }>();
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        threadStartCount += 1;
+        if (threadStartCount === 2) return replacementGate.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-cancel-unused-replacement',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await handle.setExtraDirs?.(['/shared-cancel-replacement']);
+    const controller = new AbortController();
+    const sendPromise = handle.send(
+      { type: 'user', content: 'cancel unused replacement' },
+      { signal: controller.signal, throwOnStartFailure: true },
+    );
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadStart,
+      )).toHaveLength(2);
+    });
+    controller.abort();
+
+    await expect(sendPromise).rejects.toThrow(/send cancelled before acceptance/i);
+    replacementGate.resolve({
+      thread: { id: 'start-thread-2' },
+      model: 'gpt-5.4',
+      modelProvider: 'openai',
+      cwd: '/repo',
+    });
+    await waitForExpectation(() => {
+      expect(host.unsubscribeThread).toHaveBeenCalledWith('start-thread-2');
+    });
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    )).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('times out an unused-thread replacement before turn/start', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadStartCount = 0;
+    const replacementGate = deferred<{
+      thread: { id: string };
+      model: string;
+      modelProvider: string;
+      cwd: string;
+    }>();
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        threadStartCount += 1;
+        if (threadStartCount === 2) return replacementGate.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-timeout-unused-replacement',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.setExtraDirs?.(['/shared-timeout-replacement']);
+
+    vi.useFakeTimers();
+    try {
+      const sendPromise = handle.send(
+        { type: 'user', content: 'time out unused replacement' },
+        { throwOnStartFailure: true },
+      );
+      const failure = expect(sendPromise).rejects.toThrow(
+        /profile replacement did not acknowledge within 10000ms/i,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadStart,
+      )).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await failure;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    replacementGate.resolve({
+      thread: { id: 'start-thread-2' },
+      model: 'gpt-5.4',
+      modelProvider: 'openai',
+      cwd: '/repo',
+    });
+    await waitForExpectation(() => {
+      expect(host.unsubscribeThread).toHaveBeenCalledWith('start-thread-2');
+    });
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    )).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('discards an unused replacement when close races with subscription release', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadStartSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        return {
+          thread: { id: `start-thread-${++threadStartSeq}` },
+          model: 'gpt-5.4',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-unused-replacement-close-race',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    let resolveRelease: (() => void) | undefined;
+    const releaseGate = new Promise<void>((resolve) => {
+      resolveRelease = resolve;
+    });
+    const initialSubscription = host.subscribeThread.mock.results[0]?.value;
+    const release = initialSubscription?.release;
+    if (!release) throw new Error('expected initial subscription');
+    release.mockImplementation(() => releaseGate);
+
+    await handle.setExtraDirs?.(['/shared-before-first-turn']);
+    const sendPromise = handle.send(
+      { type: 'user', content: 'use the reference on the first turn' },
+      { throwOnStartFailure: true },
+    );
+    await waitForExpectation(() => expect(release).toHaveBeenCalledTimes(1));
+    const closePromise = handle.close();
+    await waitForExpectation(() => expect(release).toHaveBeenCalledTimes(2));
+    resolveRelease?.();
+
+    await expect(sendPromise).rejects.toThrow(
+      /closed during read-only reference profile replacement/i,
+    );
+    await closePromise;
+    expect(host.subscribeThread).toHaveBeenCalledTimes(1);
+    expect(host.unsubscribeThread).toHaveBeenCalledWith('start-thread-2');
+  });
+
+  it('restores the thread-level profile before using references added after an earlier turn', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        return undefined;
+      },
+      { codexHome: '/tmp/mock-codex-home' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-add-extra-dirs',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await handle.send({ type: 'user', content: 'start without references' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+
+    await handle.setExtraDirs?.(['/shared-added']);
+    await handle.send({ type: 'user', content: 'use the new reference' });
+
+    const resumeCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    );
+    expect(resumeCalls).toHaveLength(1);
+    const [, resumeParams] = resumeCalls[0] as [string, Record<string, unknown>];
+    expect(resumeParams.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-added']);
+    expect(resumeParams.permissions).toBe(profileName);
+    expect(resumeParams.config).toHaveProperty(`permissions.${profileName}`);
+
+    const turnCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    );
+    const [, turnParams] = turnCalls[1] as [string, Record<string, unknown>];
+    expect(turnParams.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-added']);
+    expect('permissions' in turnParams).toBe(false);
+    expect('sandboxPolicy' in turnParams).toBe(false);
+    await handle.close();
+  });
+
+  it('restores the thread-level profile after Full access before the next reference turn', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        return undefined;
+      },
+      {
+        codexHome: '/tmp/mock-codex-home',
+        remoteCompactionProviderId: 'cindy_openai',
+      },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-restore-after-bypass',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      fastMode: true,
+      workingDir: '/repo',
+      extraDirs: ['/shared-a'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.setPermissionMode?.('bypassPermissions');
+    await handle.send({ type: 'user', content: 'run with full access' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+
+    await handle.setPermissionMode?.('ask');
+    await handle.send({ type: 'user', content: 'return to read-only references' });
+
+    const resumeCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    );
+    expect(resumeCalls).toHaveLength(1);
+    const [, resumeParams] = resumeCalls[0] as [string, Record<string, unknown>];
+    expect(resumeParams.permissions).toBe(profileName);
+    expect(resumeParams.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-a']);
+    expect(resumeParams.modelProvider).toBe('cindy_openai');
+    expect(resumeParams.model).toBe('gpt-5.4');
+    expect(resumeParams.serviceTier).toBe('fast');
+
+    const turnCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    );
+    const [, askTurn] = turnCalls[1] as [string, Record<string, unknown>];
+    expect('permissions' in askTurn).toBe(false);
+    expect('sandboxPolicy' in askTurn).toBe(false);
+    await handle.close();
+  });
+
+  it('preserves a Fast mode toggle made while profile resume is pending', async () => {
+    const agent = new CodexAgent(createDeps());
+    const profileResumeGate = deferred<{
+      thread: { id: string };
+      model: string;
+      modelProvider: string;
+      cwd: string;
+      serviceTier: null;
+    }>();
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.ThreadResume) return profileResumeGate.promise;
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-fast-during-profile-resume',
+      model: 'gpt-5.4',
+      fastMode: false,
+      workingDir: '/repo',
+      extraDirs: ['/shared-profile-resume'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.setPermissionMode?.('bypassPermissions');
+    await handle.send({ type: 'user', content: 'run with full access' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+
+    await handle.setPermissionMode?.('ask');
+    const sendPromise = handle.send({ type: 'user', content: 'restore with fast mode' });
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadResume,
+      )).toHaveLength(1);
+    });
+    await handle.setFastMode?.(true);
+    profileResumeGate.resolve({
+      thread: { id: 'start-thread-id' },
+      model: 'gpt-5.4',
+      modelProvider: 'openai',
+      cwd: '/repo',
+      serviceTier: null,
+    });
+    await sendPromise;
+
+    expect(handle.getFastMode?.()).toBe(true);
+    const settingsCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadSettingsUpdate,
+    );
+    expect(settingsCalls.map(([, params]) => params)).toEqual([
+      { threadId: 'start-thread-id', serviceTier: 'fast' },
+      { threadId: 'start-thread-id', serviceTier: 'fast' },
+    ]);
+    const turnCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    );
+    expect(turnCalls[1]?.[1]).toMatchObject({
+      threadId: 'start-thread-id',
+      serviceTier: 'fast',
+    });
+    await handle.close();
+  });
+
+  it('cancels a pending profile refresh before turn/start', async () => {
+    const agent = new CodexAgent(createDeps());
+    const profileResumeGate = deferred<{
+      thread: { id: string };
+      model: string;
+      modelProvider: string;
+      cwd: string;
+    }>();
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.ThreadResume) return profileResumeGate.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-cancel-profile-resume',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      extraDirs: ['/shared-cancel-resume'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.setPermissionMode?.('bypassPermissions');
+    await handle.send({ type: 'user', content: 'run with full access' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+
+    await handle.setPermissionMode?.('ask');
+    const controller = new AbortController();
+    const sendPromise = handle.send(
+      { type: 'user', content: 'cancel profile refresh' },
+      { signal: controller.signal, throwOnStartFailure: true },
+    );
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadResume,
+      )).toHaveLength(1);
+    });
+    controller.abort();
+
+    await expect(sendPromise).rejects.toThrow(/send cancelled before acceptance/i);
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    )).toHaveLength(1);
+    profileResumeGate.resolve({
+      thread: { id: 'start-thread-id' },
+      model: 'gpt-5.4',
+      modelProvider: 'openai',
+      cwd: '/repo',
+    });
+    await handle.close();
+  });
+
+  it('times out a profile refresh before turn/start', async () => {
+    const agent = new CodexAgent(createDeps());
+    const profileResumeGate = deferred<never>();
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.ThreadResume) return profileResumeGate.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-timeout-profile-resume',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      extraDirs: ['/shared-timeout-resume'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.setPermissionMode?.('bypassPermissions');
+    await handle.send({ type: 'user', content: 'run with full access' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    await handle.setPermissionMode?.('ask');
+
+    vi.useFakeTimers();
+    try {
+      const sendPromise = handle.send(
+        { type: 'user', content: 'time out profile refresh' },
+        { throwOnStartFailure: true },
+      );
+      const failure = expect(sendPromise).rejects.toThrow(
+        /profile refresh did not acknowledge within 10000ms/i,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadResume,
+      )).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await failure;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    )).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('refreshes the profile after thread/rollback replaces the active thread', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        return undefined;
+      },
+      { codexHome: '/tmp/mock-codex-home' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-reference-dirs-rollback',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      extraDirs: ['/shared-rollback'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.send({ type: 'user', content: 'create a persisted rollout' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+    await commitRewindFiles('', '', { tailTurnsToDrop: 1 });
+
+    await handle.send({ type: 'user', content: 'continue after rollback' });
+
+    const resumeCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    );
+    expect(resumeCalls).toHaveLength(1);
+    const [, resumeParams] = resumeCalls[0] as [string, Record<string, unknown>];
+    expect(resumeParams.threadId).toBe('rollback-thread-id');
+    expect(resumeParams.permissions).toBe(profileName);
+    expect(resumeParams.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-rollback']);
+
+    const turnCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    );
+    const [, turnParams] = turnCalls[1] as [string, Record<string, unknown>];
+    expect(turnParams.threadId).toBe('rollback-thread-id');
+    expect('permissions' in turnParams).toBe(false);
     await handle.close();
   });
 
@@ -558,9 +1174,77 @@ describe('CodexAgent reference directories', () => {
     expect(turnCalls).toHaveLength(2);
     for (const [, params] of turnCalls as Array<[string, Record<string, unknown>]>) {
       expect(params.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-retry']);
-      expect(params.permissions).toBe(profileName);
+      expect('permissions' in params).toBe(false);
       expect('sandboxPolicy' in params).toBe(false);
     }
+    await handle.close();
+  });
+
+  it('retries a stale reference turn with its frozen permission profile', async () => {
+    const agent = new CodexAgent(createDeps());
+    const firstTurnGate = deferred<never>();
+    let turnStartCount = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        turnStartCount += 1;
+        if (turnStartCount === 1) return firstTurnGate.promise;
+        return { turn: { id: 'turn-frozen-reference-retry' } };
+      }
+      if (method === Method.ThreadResume) {
+        return {
+          thread: { id: 'start-thread-id' },
+          model: 'gpt-5.4',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
+      }
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-frozen-reference-retry',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      extraDirs: ['/shared-frozen-turn'],
+    });
+
+    const sendPromise = handle.send({ type: 'user', content: 'retry safely' });
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.TurnStart,
+      )).toHaveLength(1);
+    });
+    await handle.setExtraDirs?.([]);
+    await handle.setModel?.('gpt-5.5');
+    await handle.setFastMode?.(true);
+    firstTurnGate.reject(new Error('thread not found'));
+    await sendPromise;
+
+    const [, resumeParams] = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadResume,
+    ) as [string, Record<string, unknown>];
+    expect(resumeParams).toMatchObject({
+      threadId: 'start-thread-id',
+      runtimeWorkspaceRoots: ['/repo', '/shared-frozen-turn'],
+      permissions: profileName,
+      approvalPolicy: 'on-request',
+      model: 'gpt-5.5',
+      serviceTier: 'fast',
+    });
+    expect('sandbox' in resumeParams).toBe(false);
+
+    const turnCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    );
+    expect(turnCalls).toHaveLength(2);
+    for (const [, params] of turnCalls as Array<[string, Record<string, unknown>]>) {
+      expect(params.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-frozen-turn']);
+      expect('sandboxPolicy' in params).toBe(false);
+    }
+    expect(turnCalls[1]?.[1]).toMatchObject({
+      model: 'gpt-5.5',
+      serviceTier: 'fast',
+    });
     await handle.close();
   });
 
@@ -632,6 +1316,61 @@ describe('CodexAgent.listCustomizations', () => {
 });
 
 describe('CodexAgent.refreshLocalModels', () => {
+  it('uses an isolated OpenAI control-plane host without closing provider-oauth sessions', async () => {
+    const onCodexLocalModelsListed = vi.fn().mockResolvedValue(undefined);
+    const prepareCodexLocalCredentialModeSwitch = vi.fn(async () => {});
+    const prepareCodexExtraSpawnConfig = vi.fn(async (_providers, ctx) => ({
+      extraArgs: [],
+      extraEnv: {},
+      codexProxyActive: ctx.credentialMode === 'provider-oauth',
+    }));
+    const agent = new CodexAgent(createDeps({}, {
+      onCodexLocalModelsListed,
+      prepareCodexLocalCredentialModeSwitch,
+      prepareCodexExtraSpawnConfig,
+    }));
+    const xaiHandle = await agent.startSession({
+      sessionId: 'session-provider-oauth-before-openai-refresh',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+
+    await expect(
+      agent.refreshLocalModels({ credentialMode: 'oauth-bearer' }),
+    ).resolves.toBe(true);
+
+    expect(createdTransports).toHaveLength(2);
+    expect(createdTransports[0].closed).toBe(false);
+    expect(prepareCodexLocalCredentialModeSwitch).not.toHaveBeenCalled();
+    expect(createdTransports[0].lines.some((line) => (
+      (JSON.parse(line) as { method?: string }).method === Method.ModelList
+    ))).toBe(false);
+    expect(createdTransports[1].lines.some((line) => (
+      (JSON.parse(line) as { method?: string }).method === Method.ModelList
+    ))).toBe(true);
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(1, [], {
+      remoteHostId: undefined,
+      credentialMode: 'provider-oauth',
+    });
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(2, [], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+      hostPurpose: 'control-plane',
+    });
+    expect(onCodexLocalModelsListed).toHaveBeenCalledOnce();
+    expect(Array.from(
+      (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
+    )).toEqual(['local', 'local-control:oauth-bearer']);
+    await xaiHandle.close();
+    await agent.forceDisposeLocalHostForAuthChange('test account boundary');
+    expect(createdTransports.every((transport) => transport.closed)).toBe(true);
+    expect(
+      (agent as unknown as { hosts: Map<string, unknown> }).hosts.size,
+    ).toBe(0);
+    await agent.dispose();
+  });
+
   it('reads every model/list page and publishes one complete snapshot', async () => {
     const onCodexLocalModelsListed = vi.fn().mockResolvedValue(undefined);
     const agent = new CodexAgent(createDeps({}, { onCodexLocalModelsListed }));
@@ -654,8 +1393,16 @@ describe('CodexAgent.refreshLocalModels', () => {
 
     await expect(agent.refreshLocalModels()).resolves.toBe(true);
     expect(host.request.mock.calls.filter(([method]) => method === Method.ModelList)).toEqual([
-      [Method.ModelList, { cursor: null, limit: 100, includeHidden: false }],
-      [Method.ModelList, { cursor: 'page-2', limit: 100, includeHidden: false }],
+      [
+        Method.ModelList,
+        { cursor: null, limit: 100, includeHidden: false },
+        { timeoutMs: 20_000 },
+      ],
+      [
+        Method.ModelList,
+        { cursor: 'page-2', limit: 100, includeHidden: false },
+        { timeoutMs: 20_000 },
+      ],
     ]);
     expect(onCodexLocalModelsListed).toHaveBeenCalledOnce();
     expect(onCodexLocalModelsListed.mock.calls[0][0].map((model: { id: string }) => model.id))
@@ -690,6 +1437,62 @@ describe('CodexAgent.refreshLocalModels', () => {
 
     await expect(agent.refreshLocalModels()).resolves.toBe(false);
     expect(onCodexLocalModelsListed).not.toHaveBeenCalled();
+  });
+
+  it('retires a wedged control-plane host after the model/list deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      MockCodexTransport.dropModelList = true;
+      const agent = new CodexAgent(createDeps());
+      const refresh = agent.refreshLocalModels({ credentialMode: 'oauth-bearer' });
+      const refreshExpectation = expect(refresh).rejects.toThrow(
+        'codex app-server model refresh timed out after 20000ms',
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await refreshExpectation;
+      expect(createdTransports).toHaveLength(1);
+      expect(createdTransports[0].closed).toBe(true);
+      expect(Array.from(
+        (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
+      )).not.toContain('local-control:oauth-bearer');
+      await agent.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds initialize with the control-plane deadline and rebuilds on retry', async () => {
+    vi.useFakeTimers();
+    try {
+      MockCodexTransport.dropInitialize = true;
+      const agent = new CodexAgent(createDeps({}, {
+        onCodexLocalModelsListed: vi.fn().mockResolvedValue(undefined),
+      }));
+      const refresh = agent.refreshLocalModels({ credentialMode: 'oauth-bearer' });
+      const refreshExpectation = expect(refresh).rejects.toThrow(
+        'codex app-server model refresh timed out after 20000ms',
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await refreshExpectation;
+      expect(createdTransports).toHaveLength(1);
+      expect(createdTransports[0].closed).toBe(true);
+      expect(Array.from(
+        (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
+      )).not.toContain('local-control:oauth-bearer');
+
+      MockCodexTransport.dropInitialize = false;
+      await expect(
+        agent.refreshLocalModels({ credentialMode: 'oauth-bearer' }),
+      ).resolves.toBe(true);
+      expect(createdTransports).toHaveLength(2);
+      await agent.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -7044,39 +7847,59 @@ describe('CodexAgent plan mode', () => {
     await handle.close();
   });
 
-  it('emits a terminal event and ends the plan cycle when the revision turn cannot start', async () => {
+  it('emits a terminal event and ends the plan cycle when revision profile restoration fails', async () => {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;
+    let resumeSeq = 0;
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) {
         turnSeq += 1;
-        if (turnSeq === 2) {
-          throw new Error('Codex send cannot be accepted: stale host before turn/start');
-        }
         return { turn: { id: `turn-${turnSeq}` } };
+      }
+      if (method === Method.ThreadResume) {
+        resumeSeq += 1;
+        if (resumeSeq === 1) throw new Error('profile refresh failed');
+        return {
+          thread: { id: 'start-thread-id' },
+          model: 'gpt-5.4',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
       }
       return undefined;
     });
-    const handle = await startPlanSession(agent, host, 'session-plan-revision-start-fails');
+    const handle = await agent.startSession({
+      sessionId: 'session-plan-revision-profile-refresh-fails',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      extraDirs: ['/shared-plan-refresh'],
+      planMode: true,
+    });
     const iterator = handle.events()[Symbol.asyncIterator]();
-    handle.setInteractionResolver(async () => ({
-      kind: 'plan_review',
-      behavior: 'deny',
-      reason: '先补测试',
-    }));
+    handle.setInteractionResolver(async () => {
+      await handle.setPermissionMode?.('ask');
+      return {
+        kind: 'plan_review',
+        behavior: 'deny',
+        reason: '先补测试',
+      };
+    });
 
+    await handle.setPermissionMode?.('bypassPermissions');
     await handle.send({ type: 'user', content: 'make a plan' });
     runPlanTurn(host, 'turn-1', '1. do X');
 
     await vi.waitFor(() => {
-      expect(turnStartCalls(host)).toHaveLength(2);
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadResume,
+      )).toHaveLength(1);
     });
     let sawTerminalError = false;
     for (let i = 0; i < 30 && !sawTerminalError; i++) {
       const ev = await nextEvent(iterator);
       if (ev.type === 'error') {
         expect(ev.data).toMatchObject({
-          message: expect.stringContaining('plan revision turn failed to start'),
+          message: expect.stringContaining('Failed to restore Codex read-only reference permissions'),
           isTerminal: true,
         });
         sawTerminalError = true;
@@ -7089,7 +7912,7 @@ describe('CodexAgent plan mode', () => {
     });
 
     await handle.send({ type: 'user', content: 'continue normally' });
-    const [, nextParams] = turnStartCalls(host)[2] as [string, Record<string, unknown>];
+    const [, nextParams] = turnStartCalls(host)[1] as [string, Record<string, unknown>];
     expect((nextParams.collaborationMode as { mode?: string } | undefined)?.mode).not.toBe('plan');
     await handle.close();
   });

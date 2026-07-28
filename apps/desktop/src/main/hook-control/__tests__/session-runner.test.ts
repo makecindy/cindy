@@ -168,6 +168,7 @@ vi.mock('../defaults.js', async (importOriginal) => {
 function makeFakeSession(id: string) {
   return {
     id,
+    workDir: 'D:/repo',
     onEvent(cb: (ev: { type: string; data: unknown }) => void) {
       h.eventCbs.set(id, cb);
       return () => {
@@ -308,6 +309,55 @@ describe('hook session 精确接管边界', () => {
 
     await expect(runner.inspect('remote-session')).resolves.toMatchObject({ usable: false });
     await expect(runner.inspect('worker-session')).resolves.toMatchObject({ usable: false });
+  });
+});
+
+describe('真正要跑的那个 live session 的目录也要过映射', () => {
+  it('活实例仍在已撤权的目录 -> 拒绝执行, 消息不进 agent', async () => {
+    // maker.createSession 对已在 activeSessions 里的 id 直接返回既有实例, 忽略
+    // 传入的 workingDir —— 那个实例的 workDir 可能已被移出映射
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => ({
+      ...makeFakeSession(opts.id ?? 'sess-old'),
+      workDir: 'D:/unmapped-place',
+    }));
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(
+      baseReq({
+        sessionId: 'sess-old',
+        isNew: false,
+        isDirAuthorized: (dir: string) => dir === 'D:/repo',
+      }),
+    );
+
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toContain('已不在工作目录映射里的目录');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it('新建路径不走这道判定(拦下只会留空会话 + 孤儿 worktree)', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+
+    // 新会话的 id 刚生成, activeSessions 里不可能有旧实例, 错配不存在;
+    // 而此时 agent 已启动、会话行已插入、预建 worktree 还注册着
+    const outcome = await runner.run(baseReq({ isDirAuthorized: () => false }));
+
+    expect(outcome.status).toBe('ok');
+  });
+
+  it('活实例的目录仍在映射内 -> 照常执行(映射内的移动不受影响)', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(
+      baseReq({
+        sessionId: 'sess-old',
+        isNew: false,
+        isDirAuthorized: (dir: string) => dir === 'D:/repo',
+      }),
+    );
+
+    expect(outcome.status).toBe('ok');
   });
 });
 
@@ -602,6 +652,7 @@ describe('进度快照(turn.progress 链路)', () => {
   function makeManualSession(id: string) {
     return {
       id,
+      workDir: 'D:/repo',
       onEvent(cb: (ev: { type: string; data: unknown }) => void) {
         h.eventCbs.set(id, cb);
         return () => {
@@ -753,6 +804,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
   function makeInteractiveSession(id: string) {
     return {
       id,
+      workDir: 'D:/repo',
       onEvent(cb: (ev: { type: string; data: unknown }) => void) {
         h.eventCbs.set(id, cb);
         return () => {

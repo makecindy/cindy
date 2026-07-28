@@ -268,6 +268,49 @@ function createAuthClient(): CindyAuthClient {
   });
 }
 
+// ── passive 共享实例闸门 ────────────────────────────────────────────────────
+
+/**
+ * 共享 userData 的 passive dev 实例(`--preserve-running` / `--passive` 非 isolated)。
+ *
+ * 这类实例复用 primary 的登录态,但**不得销毁整机共享的 auth 持久状态**——与
+ * owner-namespace 迁移(ownerNamespaceMigration.ts)、localDb schema
+ * (localDb/index.ts)同一条契约。受约束的是「删除 / 作废 / 消费」这类破坏性动作:
+ *   1. 磁盘 refresh token 文件(整机一份,删了 primary 下次续期就被踢);
+ *   2. 服务端 refresh token(按 (user, device) 一对一存,passive 与 primary 共用
+ *      同一 deviceId,调登出会把 primary 的那份一起作废);
+ *   3. relogin marker(一次性、整机一份,被 passive 消费掉 primary 就再也看不到);
+ *   4. canary flag 与账号删除 receipt(账号派生状态,删掉会让 primary 拉错 manifest
+ *      或丢掉进行中的删除挑战)。
+ *
+ * **续期不在约束内**:passive 照常排 refresh timer,轮换后正常 writeSafe 写回新
+ * token。轮换写入的是有效凭证,primary 侧由 replacement-retry 消化;停掉续期反而
+ * 会让 passive 的 access token 过期后无自愈路径(详见 scheduleRefresh 的注释)。
+ *
+ * 2026-07-27 事故:两个 MIGRATE_FAILED 的 passive 实例在 LocalDbGate fatal 界面点
+ * 「返回登录」,logout 删掉整机 refresh token,正在使用的 primary 在下一个 refresh
+ * 周期(隔了 19 / 46 分钟)被判定 credential-lost 强制重登。同源事故 2026-07-23 已
+ * 发生过一次,当时只把静默半死改成明确弹重登(见 authSessionExpiredDetection.test.ts),
+ * 没有堵住 passive 的销毁权。
+ *
+ * packaged 恒不设置该 env(index.ts 启动时对 packaged / isolated 显式 delete 兜底,
+ * 防 ambient env 污染),线上零影响;`--isolated` 沙箱有独立 userData 与 deviceId,
+ * 本来就不共享,不受此闸门约束。
+ */
+function isPassiveSharedUserDataInstance(): boolean {
+  return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
+}
+
+/**
+ * passive 实例「本进程已登出」的墓碑(进程内,不落盘)。
+ *
+ * passive 登出保留磁盘 token(那是 primary 的),于是登出后任何 initialize() ——
+ * 副窗 mount、右侧栏子窗口、renderer reload —— 都会读到仍在的 token 把本进程
+ * 冷启动登回去,还顺手轮换一次共享 token。有了墓碑,「只登出本进程」才是稳定的:
+ * 直到用户在本进程显式登录或重启进程为止。
+ */
+let passiveLocalSignOut = false;
+
 // ── safeStorage helpers ─────────────────────────────────────────────────────
 
 const SAFE_STORAGE_DIR = () => path.join(app.getPath('userData'), 'safe-storage');
@@ -326,6 +369,72 @@ function removeSafe(key: string): void {
     fs.unlinkSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc`));
   } catch {
     // ENOENT is fine
+  }
+}
+
+/**
+ * 只在磁盘内容仍等于 `expected` 时删除(compare-and-delete)。
+ *
+ * 共享 userData 下,「判定这枚 token 已失效」与「执行删除」之间存在窗口:另一个
+ * 实例可能刚好在这中间写入了有效的替换 token。无条件删就会把别人刚写的有效凭证
+ * 删掉——正是本 PR 要防的失败模式。冷启动路径尤其危险:它带 transient 重试与
+ * replacement recheck,从判定到删除可能隔了数秒。
+ *
+ * 读不出来(加密不可用 / IO 抖动 / 解密失败)时一律不删:宁可留一枚已失效的
+ * token(下次 refresh 自然会再判一次),也不能误删有效凭证。
+ *
+ * 内容比对之外再校验一次文件身份(inode / mtime / size),把「读到的是旧值、删掉的
+ * 却是刚写入的新文件」这段 TOCTOU 收紧到两次 stat 之间。
+ *
+ * **这不是真正原子的 compare-and-delete**:POSIX 没有按路径的 CAS unlink,而本模块
+ * 的写入侧(writeSafe 直接 writeFileSync 覆盖)同样不原子。要彻底消除竞态,得把整个
+ * safeStorage 层改成「临时文件 + rename 写入 + 跨进程锁」,那是独立重构,不在本次
+ * 范围内。当前收益是把窗口从数秒级压到一次 syscall,且真正高频的那条路径
+ * (passive)已经完全不删。
+ */
+type RemoveIfUnchangedResult =
+  /** 确实删掉了(或删除时文件已不在,目标状态达成)。 */
+  | 'deleted'
+  /** 磁盘上的已经不是本次判定的那一枚,按约定不删。 */
+  | 'changed'
+  /** 删除真的失败了(权限 / IO):凭证还在盘上,调用方不得当成已清理。 */
+  | 'failed';
+
+function removeSafeIfUnchanged(key: string, expected: string): RemoveIfUnchangedResult {
+  const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
+  // 三态:拿到身份 / 文件确定不在(ENOENT) / stat 本身失败。后两者必须分开——
+  // 「已经不在」是目标状态达成,「读不到状态」是我们不敢动它。
+  type Identity = { kind: 'ok'; id: string } | { kind: 'absent' } | { kind: 'error' };
+  const identity = (): Identity => {
+    try {
+      const s = fs.statSync(filepath);
+      return { kind: 'ok', id: `${s.ino}:${s.mtimeMs}:${s.size}` };
+    } catch (err) {
+      return (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+        ? { kind: 'absent' }
+        : { kind: 'error' };
+    }
+  };
+  const before = identity();
+  if (before.kind === 'absent') return 'deleted';
+  if (before.kind === 'error') return 'failed';
+  if (readSafe(key) !== expected) return 'changed';
+  // 读内容期间文件被换掉(另一个实例写入了替换凭证)→ 那枚不在本次判定范围内。
+  const after = identity();
+  if (after.kind === 'absent') return 'deleted';
+  if (after.kind === 'error') return 'failed';
+  if (after.id !== before.id) return 'changed';
+  try {
+    // 不走 removeSafe():它吞掉所有 unlink 错误,会让调用方把「没删成」当成
+    // 「已清理」并据此打日志。这里必须如实区分。
+    fs.unlinkSync(filepath);
+    return 'deleted';
+  } catch (err) {
+    // 这一瞬别人已经删掉了 → 目标状态达成,算成功。
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return 'deleted';
+    // EPERM / EACCES / EBUSY 等:凭证仍在盘上。
+    log.warn(`failed to delete persisted secret ${key}: ${(err as Error).message}`);
+    return 'failed';
   }
 }
 
@@ -680,6 +789,13 @@ function scheduleRefresh(token: string): void {
     clearTimeout(refreshTimer);
     refreshTimer = null;
   }
+  // 续期节奏对 passive 实例不设闸门。本 PR 的契约是「passive 不写/不删共享的
+  // auth 持久状态」;「谁负责续期」是正交问题,不在这里解决。让 passive 停止续期
+  // 会让它的 access token 过期后再无替换途径(primary 的续期只更新磁盘 token,
+  // 不更新本进程内存态),而 updateServerProfile 等直接走 apiFetch 的路径没有
+  // 401 refresh/retry,会一直失败到进程重启——resume 也救不了,系统不休眠就不触发。
+  // 轮换本身不会踢人:2026-07-27 两个实例每 55 分钟互刷一次,primary 每次都靠
+  // replacement-retry 恢复,一次没掉线;把 primary 踢下线的是删除凭证。
   try {
     const payload = JSON.parse(
       Buffer.from(token.split('.')[1], 'base64').toString('utf-8'),
@@ -796,6 +912,7 @@ let coldStartAuthInFlight: Promise<AuthState> | null = null;
 function scheduleRefreshRetryAfterTransientFailure(): void {
   if (refreshTimer !== null) {
     clearTimeout(refreshTimer);
+    refreshTimer = null;
   }
   refreshTimer = setTimeout(() => void refresh(), RUNTIME_REFRESH_RETRY_MS);
 }
@@ -1085,12 +1202,27 @@ function clearAuth(
     refreshTimer = null;
   }
   if (!opts.preservePersistedRefreshToken) {
-    removeSafe(REFRESH_TOKEN_KEY);
-    removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
-    removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+    if (isPassiveSharedUserDataInstance()) {
+      // passive 共享实例无权删整机凭证:它的登出只清本进程内存态,磁盘 token 留给
+      // primary(见 isPassiveSharedUserDataInstance 的事故记录)。同时立墓碑,否则
+      // 下一次 initialize() 会拿 primary 的 token 把本进程登回去。
+      passiveLocalSignOut = true;
+      log.info(
+        'passive shared-userData instance keeps the persisted refresh token (local sign-out only)',
+      );
+    } else {
+      removeSafe(REFRESH_TOKEN_KEY);
+      removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
+      removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+    }
   }
   // 未登录时固定使用 stable；同步中的旧请求会被 authStateEpoch 守卫丢弃。
-  canaryFlagStore.clear();
+  // canary-flag.json 同样是整机一份的账号派生状态:passive 清掉它,packaged primary
+  // 下次更新轮询就会把自己当 stable 用户,拉到错误的 manifest(见 manifestService
+  // fetchManifest)。passive 只登出本进程,不改这个共享文件。
+  if (!isPassiveSharedUserDataInstance()) {
+    canaryFlagStore.clear();
+  }
   // provider key(XD / Mivo)是绑定账号的本机密钥,**不在登出时清** —— 同账号重新登录 /
   // 会话过期重登需保留,避免每次都重填(本地 only 后服务器已无副本可拉回)。换账号导致的
   // 串号边界改由 login / 冷启动时 providerSecretStore.reconcileOwner 处理:owner 变了才清。
@@ -1393,6 +1525,18 @@ export async function getAccountDeletionStatus(): Promise<AccountDeletionStatus 
   return createAuthClient().getAccountDeletionStatus(receiptToken);
 }
 
+/**
+ * 显式清除账号删除 receipt。
+ *
+ * 注意这不只是 logout 的内部步骤:它经 `auth:account-deletion:clear-receipt`
+ * (bootstrap-electron.ts)暴露给 renderer,用户在登录页处理无效/已取消的挑战、
+ * 或 dismiss 已完成的删除状态时会直接调到。这类显式清理在 passive 实例上必须
+ * 照常生效 —— 否则 receipt 永远留在盘上,`snapshotAuthState()` 每次启动又把它
+ * 报出来,dismiss 不掉。
+ *
+ * 需要保护的只有「passive 登出顺带清掉 primary 的 receipt」那条隐式路径,闸门
+ * 因此加在 logout() 的调用点上,不在这里。
+ */
 export function clearAccountDeletionReceipt(): void {
   removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
 }
@@ -1522,13 +1666,39 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
     return snapshotAuthState();
   }
 
+  // passive 实例在本进程登出过:磁盘上的 token 是 primary 的,不能拿它把自己登回去
+  // （副窗 mount / renderer reload 都会走到这里）。直到显式登录或进程重启为止。
+  if (passiveLocalSignOut) {
+    log.info('passive shared-userData instance stays signed out locally (tombstone)');
+    commitActiveAppSession('signed-out');
+    return snapshotLoggedOutAuthState();
+  }
+
   // release-relogin-on-update: if the auto-updater dropped a relogin marker
   // for *this* version, wipe persisted auth and force the user back to the
   // OAuth flow. The flag is one-shot: once consumed, subsequent launches
   // see no marker and no refresh_token, so the user stays logged out
   // naturally until they sign in (rather than getting kicked every launch).
+  //
+  // marker 是一次性的、整机一份:passive 若消费它,primary 就再也看不到这次
+  // requireRelogin 更新的标记,而 passive 顺带删掉的又正是 primary 的 token ——
+  // 本 PR 要防的失败被原样重现。
+  //
+  // 但「不消费」不等于「可以无视」:marker 命中说明这个版本要求重新登录,passive
+  // 跑的是同一个版本,拿旧 token 冷启动登录正是 marker 想避免的事。所以 passive
+  // 照样保持登出(复用 passiveLocalSignOut 墓碑,避免副窗 initialize() 又绕回来),
+  // 只是不动磁盘 token、不消费 marker —— 那两件事留给 primary。
   const reloginFlag = readReloginFlag();
   if (reloginFlag && reloginFlag.version === app.getVersion()) {
+    if (isPassiveSharedUserDataInstance()) {
+      log.info(
+        'relogin marker hit for v%s — passive shared-userData instance stays signed out, leaving the marker and token to the primary',
+        reloginFlag.version,
+      );
+      passiveLocalSignOut = true;
+      commitActiveAppSession('signed-out');
+      return snapshotLoggedOutAuthState();
+    }
     log.info(
       'relogin marker hit for v%s — clearing persisted auth',
       reloginFlag.version,
@@ -1544,9 +1714,16 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   }
 
   // Old Feishu-auth refresh tokens are intentionally not portable to auth-server.
-  removeSafe(LEGACY_REFRESH_TOKEN_KEY);
   // 早期测试版曾持久化 account refresh token；该会话现已收窄为登录期内存态。
-  removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
+  //
+  // 这两个 legacy 文件同样是整机一份,而 dev + packaged 共库双开是受支持的场景
+  // (--preserve-running):老构建的 primary 可能还在消费它们,passive 只是启动一下
+  // 就把它们删掉,等于删了对方的活凭证。清理属于「搬家式迁移」,留给独占启动的
+  // 非 passive 实例做。
+  if (!isPassiveSharedUserDataInstance()) {
+    removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+    removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
+  }
   const storedToken = readSafe(REFRESH_TOKEN_KEY);
   if (!storedToken) {
     commitActiveAppSession('signed-out');
@@ -1631,11 +1808,36 @@ async function runColdStartRefreshFlow(storedToken: string): Promise<AuthState> 
       // 与运行时 refresh() 的清除条件保持一致(共用 authRefreshFailure)。
       const action: RefreshFailureAction = failureAction ?? { kind: 'transient-failure' };
       if (action.kind === 'definitive-failure') {
-        log.warn(
-          'cold-start refresh: definitive credential failure — clearing persisted refresh token',
-        );
         lastAcceptedRefreshToken = null;
-        removeSafe(REFRESH_TOKEN_KEY);
+        if (isPassiveSharedUserDataInstance()) {
+          // passive 只对本进程判定失效:磁盘 token 是整机共用的,而 passive 冷启动拿到
+          // INVALID_REFRESH_TOKEN 最常见的原因恰恰是 primary 刚轮换过它。删掉就是把
+          // primary 踢下线。
+          log.warn(
+            'cold-start refresh: definitive credential failure — passive shared-userData instance starts logged out and keeps the persisted refresh token',
+          );
+        } else {
+          switch (removeSafeIfUnchanged(REFRESH_TOKEN_KEY, storedToken)) {
+            case 'deleted':
+              log.warn(
+                'cold-start refresh: definitive credential failure — cleared persisted refresh token',
+              );
+              break;
+            case 'changed':
+              // 判定失败后磁盘 token 已被换掉(另一个实例写入了替换凭证):那枚不在
+              // 本次判定范围内,不能删。
+              log.warn(
+                'cold-start refresh: definitive credential failure, but the persisted refresh token changed meanwhile — keeping the replacement',
+              );
+              break;
+            case 'failed':
+              // 删除真的失败了:凭证仍在盘上,下次启动会再判一次。不能报成已清理。
+              log.error(
+                'cold-start refresh: definitive credential failure, but deleting the persisted refresh token failed — it is still on disk',
+              );
+              break;
+          }
+        }
       } else if (action.kind === 'replacement-retry') {
         log.warn(
           `cold-start refresh failed for a stale token after ${attempts} attempt(s) — keeping latest refresh token, starting logged out`,
@@ -1816,6 +2018,8 @@ async function completeLogin(
     removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
     accountDeletionRestoredNoticePending = deletionWasRestored;
     clearReloginFlag();
+    // 显式登录解除 passive 本地登出墓碑(见 passiveLocalSignOut)。
+    passiveLocalSignOut = false;
     currentUser = nextUser;
     commitActiveAppSession('cloud', currentUser.id);
   } finally {
@@ -2352,10 +2556,22 @@ export async function logout(): Promise<void> {
   }
   // Ordinary logout abandons an unconfirmed challenge. Confirmed deletion uses
   // clearLocalSessionAfterAccountDeletion() and intentionally preserves receipt.
-  clearAccountDeletionReceipt();
+  //
+  // receipt 也是整机一份:primary 发起账号删除挑战后,passive 一次本地登出就会删掉
+  // 它,primary 随后 confirmAccountDeletion() 直接 ACCOUNT_DELETION_RECEIPT_MISSING。
+  // 闸门只加在这条隐式路径上——renderer 主动调的显式清理仍照常生效(见
+  // clearAccountDeletionReceipt 的注释)。
+  if (isPassiveSharedUserDataInstance()) {
+    log.info('passive shared-userData instance keeps the account-deletion receipt on logout');
+  } else {
+    clearAccountDeletionReceipt();
+  }
   clearAuth();
 
-  if (currentAccessToken) {
+  // passive 共享实例跳过服务端登出:refresh token 按 (user, device) 一对一存,而它与
+  // primary 共用同一 deviceId——调这一发会把 primary 的那份一起作废,即使本地文件留着,
+  // primary 下次续期照样拿到确定性失败被踢。
+  if (currentAccessToken && !isPassiveSharedUserDataInstance()) {
     apiFetch('/api/auth/logout', {
       method: 'POST',
       body: { deviceId },

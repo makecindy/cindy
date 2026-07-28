@@ -1343,9 +1343,12 @@
         "capabilityNote": "Not available in {{agent}}",
         "divergedChip": "Hidden in {{agent}}",
         "refreshAria": "Refresh model list (additions only)",
+        "refreshBuiltinAria": "Refresh Model List",
+        "refreshingAria": "Refreshing model list…",
+        "refreshDone": "Model list refreshed",
         "refreshAdded": "Found {{count}} new models",
         "refreshNoNew": "Model list is up to date — nothing new",
-        "refreshFailed": "Failed to refresh the model list. Please try again later"
+        "refreshFailed": "Model list couldn’t be refreshed — try again later"
       },
       "genericOAuth": {
         "subtitle": "Subscription sign-in (OAuth)",
@@ -4289,6 +4292,12 @@
       "editTitle": "Edit Pasted Text",
       "cancelEdit": "Cancel Editing",
       "saveEdit": "Save Text"
+    },
+    "permissionPrompt": {
+      "alwaysAllowScoped": "Always Allow {{scope}} in This Session",
+      "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
+      "alwaysAllowSessionHint": "Applies to the whole session, not just this one request.",
+      "ruleSeparator": ", "
     }
   },
   "onboarding": {
@@ -6378,13 +6387,20 @@
       "typeFeature": "Feature",
       "titleLabel": "Title",
       "bodyLabel": "Body (Markdown)",
-      "identityGithubUser": "Submitting identity: GitHub user @{{login}} (you)",
-      "identityPlatform": "Submitting identity: Cindy platform (GitHub App {{login}})",
+      "submissionMethodLabel": "Publishing Method",
+      "identityGithubUser": "Publish directly through GitHub account @{{login}}",
+      "identityGithubUserHint": "You will be the GitHub author and can edit or close this Issue on GitHub",
+      "identityPlatform": "Publish through Cindy (GitHub App {{login}})",
+      "identityPlatformHint": "You will not be the GitHub author and cannot edit or close this Issue yourself",
+      "publicNameLabel": "Public Attribution",
+      "publicNameHint": "This attribution will appear publicly in the Issue body",
+      "anonymous": "Anonymous",
+      "useAnonymous": "Use Anonymous Attribution",
       "envLine": "Attached automatically on submit: client {{appVersion}} · {{platform}} {{arch}} · UI language {{uiLanguage}}",
       "regionLine": "Build region: {{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
-      "submit": "Submit",
+      "submit": "Submit Feedback",
       "cancel": "Cancel"
     },
     "redirect": {

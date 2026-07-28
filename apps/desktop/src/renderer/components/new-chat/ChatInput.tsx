@@ -67,6 +67,11 @@ import {
   type BrowserCommentDraftItem,
 } from '@/lib/browserComments';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
+import {
+  classifyUnclassifiedDroppedItems,
+  getDroppedFileItems,
+  type DroppedFileItems,
+} from '@/lib/fileDrop';
 import { shouldOpenTextLightbox } from '@/lib/filePreview';
 import {
   getDraft as getComposerDraft,
@@ -430,7 +435,7 @@ interface ChatInputProps {
   attachmentState: {
     attachments: AttachedFile[];
     hasAttachments: boolean;
-    addFiles: (fileList: FileList) => Promise<void>;
+    addFiles: (fileList: FileList | readonly File[]) => Promise<void>;
     addClipboardImage: (blob: Blob) => Promise<void>;
     rejections: { id: string; message: string }[];
     dismissRejection: (id: string) => void;
@@ -1478,11 +1483,7 @@ export function ChatInput({
               handledAny = true;
             }
           }
-          if (filesWithPath.length > 0) {
-            const dt = new DataTransfer();
-            for (const f of filesWithPath) dt.items.add(f);
-            addFilesRef.current(dt.files);
-          }
+          if (filesWithPath.length > 0) addFilesRef.current(filesWithPath);
           if (handledAny) {
             // Prevent default so the file/image doesn't insert as inline
             // content — we handle it as an attachment instead. Text content
@@ -4958,32 +4959,28 @@ export function ChatInput({
                 if (storageKey) void attachGhostMediaToSession(ghostMediaUri, storageKey, t);
                 return;
               }
-              if (e.dataTransfer.files.length > 0) {
-                // Separate files from folders using webkitGetAsEntry()
-                const files: File[] = [];
-                for (let i = 0; i < e.dataTransfer.items.length; i++) {
-                  const item = e.dataTransfer.items[i];
-                  const entry = item.webkitGetAsEntry?.();
-                  const file = e.dataTransfer.files[i];
-                  if (!file) continue;
-                  if (entry?.isDirectory) {
-                    let folderPath = '';
-                    try {
-                      folderPath = window.electronAPI.getFilePath(file);
-                    } catch {
-                      /* ignore */
-                    }
-                    if (folderPath) addFolderPath(folderPath);
-                  } else {
-                    files.push(file);
+              const attachDroppedItems = (
+                items: Pick<DroppedFileItems, 'files' | 'directories'>,
+              ) => {
+                for (const directory of items.directories) {
+                  let folderPath = '';
+                  try {
+                    folderPath = window.electronAPI.getFilePath(directory);
+                  } catch {
+                    /* ignore */
                   }
+                  if (folderPath) addFolderPath(folderPath);
                 }
-                if (files.length > 0) {
-                  // Build a synthetic FileList-compatible object
-                  const dt = new DataTransfer();
-                  for (const f of files) dt.items.add(f);
-                  addFiles(dt.files);
-                }
+                if (items.files.length > 0) addFiles(items.files);
+              };
+              const droppedItems = getDroppedFileItems(e.dataTransfer);
+              attachDroppedItems(droppedItems);
+              if (droppedItems.unclassified.length > 0) {
+                void classifyUnclassifiedDroppedItems(droppedItems.unclassified, {
+                  getFilePath: (file) => window.electronAPI.getFilePath(file),
+                  classifyPath: (path) =>
+                    window.electronAPI.localDb.sessionShare.classifyPath({ path }),
+                }).then(attachDroppedItems);
               }
             }}
           >

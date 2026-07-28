@@ -1342,9 +1342,12 @@
         "capabilityNote": "{{agent}}에서는 사용 불가",
         "divergedChip": "{{agent}}에서 숨김",
         "refreshAria": "모델 목록 새로고침(추가만)",
+        "refreshBuiltinAria": "모델 목록 새로고침",
+        "refreshingAria": "모델 목록 새로고침 중…",
+        "refreshDone": "모델 목록을 새로고침했습니다",
         "refreshAdded": "새 모델 {{count}}개를 발견했습니다",
         "refreshNoNew": "모델 목록이 최신 상태입니다. 새 항목이 없습니다",
-        "refreshFailed": "모델 목록 새로고침에 실패했습니다. 잠시 후 다시 시도해 주세요"
+        "refreshFailed": "모델 목록을 새로고침하지 못했습니다. 잠시 후 다시 시도해 주세요"
       },
       "genericOAuth": {
         "subtitle": "구독 인증 로그인 (OAuth)",
@@ -4288,6 +4291,12 @@
       "editTitle": "붙여넣은 텍스트 편집",
       "cancelEdit": "편집 취소",
       "saveEdit": "텍스트 저장"
+    },
+    "permissionPrompt": {
+      "alwaysAllowScoped": "이 세션에서 {{scope}} 항상 허용",
+      "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
+      "alwaysAllowSessionHint": "이번 요청 한 번이 아니라 이 세션 전체에 적용됩니다.",
+      "ruleSeparator": ", "
     }
   },
   "onboarding": {
@@ -6368,13 +6377,20 @@
       "typeFeature": "기능 제안",
       "titleLabel": "제목",
       "bodyLabel": "본문(Markdown)",
-      "identityGithubUser": "제출 계정: GitHub 사용자 @{{login}}(본인)",
-      "identityPlatform": "제출 계정: Cindy 플랫폼 대리 제출(GitHub App {{login}})",
+      "submissionMethodLabel": "게시 방식",
+      "identityGithubUser": "GitHub 계정 @{{login}}에서 직접 게시",
+      "identityGithubUserHint": "GitHub의 Issue 작성자가 되며 직접 수정하거나 닫을 수 있습니다",
+      "identityPlatform": "Cindy에서 대신 게시(GitHub App {{login}})",
+      "identityPlatformHint": "GitHub의 Issue 작성자가 아니므로 직접 수정하거나 닫을 수 없습니다",
+      "publicNameLabel": "공개 서명",
+      "publicNameHint": "이 서명은 Issue 본문에 공개적으로 표시됩니다",
+      "anonymous": "익명",
+      "useAnonymous": "익명 서명 사용",
       "envLine": "제출 시 자동으로 첨부됩니다: 클라이언트 {{appVersion}} · {{platform}} {{arch}} · 표시 언어 {{uiLanguage}}",
       "regionLine": "지역: {{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
-      "submit": "제출",
+      "submit": "피드백 제출",
       "cancel": "취소"
     },
     "redirect": {

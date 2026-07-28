@@ -82,7 +82,7 @@ const explicitFastModeModelIds = new Set<string>();
 const explicitWindows = new Map<string, number>();
 /** 授权边界(登出 / 换号)自增:在途发现若世代已变,结果作废不写回。 */
 let authGeneration = 0;
-let httpRefreshInflight: Promise<void> | null = null;
+let httpRefreshInflight: Promise<boolean> | null = null;
 /** 在途拉取所属的世代;世代已变时新调用不复用旧 promise(换号补拉不被吞)。 */
 let httpRefreshInflightGen = -1;
 /**
@@ -468,8 +468,8 @@ async function applyModels(
   generation = authGeneration,
   nextExplicitEffortIds: ReadonlySet<string> = explicitEffortModelIds,
   nextExplicitFastModeIds: ReadonlySet<string> = explicitFastModeModelIds,
-): Promise<void> {
-  if (!generationCanApply(generation, models)) return;
+): Promise<boolean> {
+  if (!generationCanApply(generation, models)) return false;
   const modelIds = new Set(models.map((model) => model.id));
   const normalizedExplicitEffortIds = new Set(
     [...nextExplicitEffortIds].filter((id) => modelIds.has(id)),
@@ -483,7 +483,9 @@ async function applyModels(
     [...normalizedExplicitEffortIds].some((id) => !explicitEffortModelIds.has(id)) ||
     normalizedExplicitFastModeIds.size !== explicitFastModeModelIds.size ||
     [...normalizedExplicitFastModeIds].some((id) => !explicitFastModeModelIds.has(id));
-  if (!modelsChanged && !capabilityProvenanceChanged) return;
+  if (!modelsChanged && !capabilityProvenanceChanged) {
+    return generationCanApply(generation, models);
+  }
   lastApplied = models;
   explicitEffortModelIds.clear();
   for (const id of normalizedExplicitEffortIds) explicitEffortModelIds.add(id);
@@ -526,6 +528,7 @@ async function applyModels(
       }
     });
   }
+  return generationCanApply(generation, models);
 }
 
 /**
@@ -914,7 +917,7 @@ export function refreshAnthropicModelsFromHttp(options?: {
   fromRetry?: boolean;
   /** 内部用:本次已经是「401 → 强制换 token」后的那一次,不再递归换第二次。 */
   afterForcedRefresh?: boolean;
-}): Promise<void> {
+}): Promise<boolean> {
   if (!options?.fromRetry) cancelHttpRetry();
   // 只复用**同世代**的在途拉取:登出后世代已变,旧 promise 的结果注定作废,
   // 复用会吞掉换号后新账号的补拉。
@@ -922,8 +925,8 @@ export function refreshAnthropicModelsFromHttp(options?: {
   const gen = authGeneration;
   const flight = (async () => {
     const oauth = await getValidClaudeAiOAuth();
-    if (!oauth?.accessToken) return;
-    if (gen !== authGeneration || !hasClaudeAiOAuth()) return;
+    if (!oauth?.accessToken) return false;
+    if (gen !== authGeneration || !hasClaudeAiOAuth()) return false;
     const provider = getActiveCatalog().providers.find((p) => p.id === 'anthropic');
     const upstream = provider?.routing['claude-code']?.upstream ?? 'https://api.anthropic.com';
     const entries: unknown[] = [];
@@ -1011,11 +1014,10 @@ export function refreshAnthropicModelsFromHttp(options?: {
         ) {
           httpRefreshInflight = null;
           log.info('anthropic /v1/models got 401; retrying once with a force-refreshed token');
-          await refreshAnthropicModelsFromHttp({
+          return refreshAnthropicModelsFromHttp({
             fromRetry: options?.fromRetry ?? false,
             afterForcedRefresh: true,
           });
-          return;
         }
         // 走到这里 = 没换到新 token,但原因有两种,归因不同:
         //
@@ -1039,17 +1041,17 @@ export function refreshAnthropicModelsFromHttp(options?: {
                 refreshError instanceof Error ? `: ${refreshError.message}` : ' (transient)'
               }`,
             );
-            return;
+            return false;
           }
         }
       }
       noteDiscoveryFailure(gen, kind, detail);
-      return;
+      return false;
     }
     // 在途期间登出 / 换号:结果作废,不写回、不重建缓存(review P1 竞态豁口)。
     if (gen !== authGeneration || !hasClaudeAiOAuth()) {
       log.info('anthropic /v1/models result discarded: auth changed mid-flight');
-      return;
+      return false;
     }
     const mapped = mapAnthropicHttpModels(entries);
     if (mapped.length === 0) {
@@ -1065,10 +1067,10 @@ export function refreshAnthropicModelsFromHttp(options?: {
           'upstream',
           `payload listed ${entries.length} entries but none mapped to a usable model`,
         );
-        return;
+        return false;
       }
       noteDiscoveryFailure(gen, 'empty');
-      return;
+      return false;
     }
     // 退化判定必须先于任何状态写入:被拒快照连 explicitWindows 也不许污染,
     // 否则后续 SDK 捕获会把退化响应带来的窗口值用作精确记账(review P2)。
@@ -1081,7 +1083,7 @@ export function refreshAnthropicModelsFromHttp(options?: {
       // 若还挂着上一次的 network / timeout 理由,UI 就会对着一个有模型可选的供应商说「连不上」;
       // 而这条早退路径既不记新失败也不排重试,那个过期理由会一直挂到下次成功发现(PR #548 review)。
       clearDiscoveryFailure();
-      return;
+      return false;
     }
     for (const { model, explicitContextWindow } of mapped) {
       if (explicitContextWindow != null) explicitWindows.set(model.id, explicitContextWindow);
@@ -1093,7 +1095,7 @@ export function refreshAnthropicModelsFromHttp(options?: {
     // 拿到有效清单 = 发现已恢复,清掉失败态与待执行的重试(放在 apply 之前:apply 只负责
     // 生效,它因世代变化被 gate 掉时新世代会带着自己的触发重来)。
     clearDiscoveryFailure();
-    await applyModels(models, true, gen, explicitEffortIds, explicitFastModeIds);
+    return applyModels(models, true, gen, explicitEffortIds, explicitFastModeIds);
   })().finally(() => {
     // 只清自己的登记:世代变化后可能已有新 flight 顶替,不能误清。
     if (httpRefreshInflight === flight) httpRefreshInflight = null;

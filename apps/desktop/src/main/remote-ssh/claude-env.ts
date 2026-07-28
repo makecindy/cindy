@@ -38,7 +38,8 @@ import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
  *
  * Keys mirror `buildClaudeEnv` for parity with local Claude behaviour, minus
  * local-only bits (loopback URL, MANAGED_BY_HOST). Bump alongside any new
- * behaviour flag added in `runtime-configs.ts`.
+ * behaviour flag added in `claude-behavior-flags.ts` (runtime-configs 的
+ * behaviorFlags 来源)。
  *
  * Claude 'oauth' (subscription) mode is intentionally NOT honored on remote:
  * the per-model OAuth↔gateway split lives in the LOCAL loopback proxy, which a
@@ -69,6 +70,9 @@ export function getRemoteClaudeEnv(): Record<string, string> | null {
     // tool defs on every request to non-first-party hosts (big bandwidth hit).
     CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS: '1',
     CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '75',
+    // 远端恒为 gateway-spawn(订阅 token 不上远端,见上方 doc),归因块只降网关缓存
+    // 命中率,保持禁用 —— 本地按 spawn 形态条件化的逻辑(claude-behavior-flags.ts,
+    // issue #758)不适用于这里。
     CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
     ENABLE_TOOL_SEARCH: 'auto',
     // Telemetry off — endpoints would 401 against the company proxy

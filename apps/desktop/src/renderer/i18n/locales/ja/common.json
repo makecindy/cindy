@@ -1342,9 +1342,12 @@
         "capabilityNote": "{{agent}} では利用不可",
         "divergedChip": "{{agent}} で非表示",
         "refreshAria": "モデル一覧を更新(追加のみ)",
+        "refreshBuiltinAria": "モデル一覧を更新",
+        "refreshingAria": "モデル一覧を更新中…",
+        "refreshDone": "モデル一覧を再読み込みしました",
         "refreshAdded": "新しいモデルを {{count}} 件検出しました",
         "refreshNoNew": "モデル一覧は最新です。新規はありません",
-        "refreshFailed": "モデル一覧の更新に失敗しました。しばらくしてからもう一度お試しください"
+        "refreshFailed": "モデル一覧を更新できませんでした。しばらくしてから再試行してください"
       },
       "genericOAuth": {
         "subtitle": "サブスクリプション認証（OAuth）",
@@ -4288,6 +4291,12 @@
       "editTitle": "貼り付けたテキストを編集",
       "cancelEdit": "編集をキャンセル",
       "saveEdit": "テキストを保存"
+    },
+    "permissionPrompt": {
+      "alwaysAllowScoped": "このセッションでは {{scope}} を常に許可",
+      "alwaysAllowScopedHint": "このセッション全体に適用され、ここに挙げた範囲にのみ及びます。",
+      "alwaysAllowSessionHint": "この 1 回のリクエストだけでなく、このセッション全体に適用されます。",
+      "ruleSeparator": "、"
     }
   },
   "onboarding": {
@@ -6368,13 +6377,20 @@
       "typeFeature": "機能要望",
       "titleLabel": "タイトル",
       "bodyLabel": "本文(Markdown)",
-      "identityGithubUser": "送信者:GitHub ユーザー @{{login}}(本人)",
-      "identityPlatform": "送信者:Cindy プラットフォームによる代理送信(GitHub App {{login}})",
+      "submissionMethodLabel": "公開方法",
+      "identityGithubUser": "GitHub アカウント @{{login}} から直接公開",
+      "identityGithubUserHint": "GitHub 上の Issue 作成者となり、自分で編集またはクローズできます",
+      "identityPlatform": "Cindy が代理で公開(GitHub App {{login}})",
+      "identityPlatformHint": "GitHub 上の Issue 作成者にはならず、自分で編集またはクローズできません",
+      "publicNameLabel": "公開署名",
+      "publicNameHint": "この署名は Issue 本文に公開表示されます",
+      "anonymous": "匿名",
+      "useAnonymous": "匿名の署名を使用",
       "envLine": "送信時に自動で付加されます:クライアント {{appVersion}} · {{platform}} {{arch}} · 表示言語 {{uiLanguage}}",
       "regionLine": "リージョン:{{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
-      "submit": "送信",
+      "submit": "フィードバックを送信",
       "cancel": "キャンセル"
     },
     "redirect": {

@@ -149,7 +149,11 @@ async function resolveNewSessionConfig(
 
   // 目录级来源偏好(纯本地, 用户在工作目录映射行显式选的来源)优先于草稿默认来源。
   const channel =
-    sourceIm === 'telegram' ? ('telegram' as const) : sourceIm === 'slack' ? ('slack' as const) : null;
+    sourceIm === 'telegram'
+      ? ('telegram' as const)
+      : sourceIm === 'slack'
+        ? ('slack' as const)
+        : null;
   const workdirProviderId =
     channel !== null && workspaceCtx?.alias
       ? getWorkspaceProviderSource(channel, workspaceCtx.teamId, workspaceCtx.alias)
@@ -404,6 +408,17 @@ export function createMakerHookSessionRunner(deps: {
         durationMs: Date.now() - startedAt,
       });
 
+      /**
+       * 授权判定刻意**只在 dispatcher 侧**做(定位时 + 执行前按当前映射重查),
+       * runner 不再参与。曾经尝试过把判定贯穿到这里 —— 比对 meta.workDir、比对
+       * live session 的 workDir 并重建、在 send 前回调实时授权 —— 结果是每加一层
+       * 都要重新接入锁、代际、会话生命周期、附件与 worktree 清理这些横切关注点,
+       * 接不全就是新一轮缺陷(打断桌面会话、清掉在用的临时附件、listener 泄漏)。
+       * 那些缺陷比它要防的窗口更严重: 窗口内最多是一条在途消息在"校验它时还合法"
+       * 的目录里多跑一轮, 而 agent 的文件边界本就是 allowedFileRoots: [workingDir],
+       * 不会越到别处。这个取舍写在 PR #733 的风险段里。
+       */
+
       // resolved 路径必有 model; 复用路径 meta 缺失时兜底草稿默认
       const effectiveModel = model?.trim()
         ? model
@@ -422,39 +437,40 @@ export function createMakerHookSessionRunner(deps: {
       const providerId = req.isNew ? (resolved?.providerId ?? null) : rowProviderId;
 
       let session: Awaited<ReturnType<ReturnType<typeof getMaker>['createSession']>>;
+      const createOpts: Parameters<ReturnType<typeof getMaker>['createSession']>[0] = {
+        id: req.sessionId,
+        agentKind: effectiveAgentKind,
+        workingDir,
+        model: effectiveModel,
+        ...(providerId !== null ? { providerId } : {}),
+        ...(effort !== undefined ? { effort } : {}),
+        permissionMode,
+        // chat 伪目录新会话: 标记 dialogue, 落侧边栏「对话」分组而非按
+        // dialogues/<日期>/<id> 目录名聚成项目节点
+        ...(req.isNew && req.workspaceKind !== undefined
+          ? { workspaceKind: req.workspaceKind }
+          : {}),
+        title: req.isNew ? (req.title ?? undefined) : undefined,
+        // 渠道标记(仅 hook 亲生新会话): cindy_feishu_bot 据此在构建期给
+        // 工具描述注入渠道路由提示。两个刻意限定:
+        //   - 不用 'slack'(那是已退役的 organic SlackIM relay 渠道的历史
+        //     标记,留给存量会话的侧边栏显示,新会话不再产生);
+        //   - 复用/接管路径(isNew=false,可能是桌面端创建的会话)不传,
+        //     否则冷 resume 时会把桌面会话打上 Slack 渠道描述并存续整个
+        //     进程生命周期(对齐 im/turnRunner「attached 不传 vendorOptions」
+        //     的裁决)。hook turn 本身的渠道说明由逐 turn 的
+        //     provider-aware hook prompt note 全覆盖,不依赖这里。
+        ...(req.isNew
+          ? {
+              vendorOptions: {
+                source: req.source?.im === 'telegram' ? 'telegram' : 'slack-hook',
+              },
+            }
+          : {}),
+        resumeSessionId,
+      };
       try {
-        session = await maker.createSession({
-          id: req.sessionId,
-          agentKind: effectiveAgentKind,
-          workingDir,
-          model: effectiveModel,
-          ...(providerId !== null ? { providerId } : {}),
-          ...(effort !== undefined ? { effort } : {}),
-          permissionMode,
-          // chat 伪目录新会话: 标记 dialogue, 落侧边栏「对话」分组而非按
-          // dialogues/<日期>/<id> 目录名聚成项目节点
-          ...(req.isNew && req.workspaceKind !== undefined
-            ? { workspaceKind: req.workspaceKind }
-            : {}),
-          title: req.isNew ? (req.title ?? undefined) : undefined,
-          // 渠道标记(仅 hook 亲生新会话): cindy_feishu_bot 据此在构建期给
-          // 工具描述注入渠道路由提示。两个刻意限定:
-          //   - 不用 'slack'(那是已退役的 organic SlackIM relay 渠道的历史
-          //     标记,留给存量会话的侧边栏显示,新会话不再产生);
-          //   - 复用/接管路径(isNew=false,可能是桌面端创建的会话)不传,
-          //     否则冷 resume 时会把桌面会话打上 Slack 渠道描述并存续整个
-          //     进程生命周期(对齐 im/turnRunner「attached 不传 vendorOptions」
-          //     的裁决)。hook turn 本身的渠道说明由逐 turn 的
-          //     provider-aware hook prompt note 全覆盖,不依赖这里。
-          ...(req.isNew
-            ? {
-                vendorOptions: {
-                  source: req.source?.im === 'telegram' ? 'telegram' : 'slack-hook',
-                },
-              }
-            : {}),
-          resumeSessionId,
-        });
+        session = await maker.createSession(createOpts);
       } catch (err) {
         // session 未建成: 若有预建 worktree 则回收(同 maker-ipc/register.ts
         // 的 shouldRecycleHandoffWorktreeOnFailure 判据), 防孤儿泄漏
@@ -462,6 +478,39 @@ export function createMakerHookSessionRunner(deps: {
           void WorktreeManager.removeWorktreeForSession(req.sessionId).catch(() => undefined);
         }
         return fail(err instanceof Error ? err.message : String(err));
+      }
+
+      /**
+       * 拿到的可能是**进程里早就活着的那个实例**: maker.createSession 对已在
+       * activeSessions 里的 id 直接返回它, 忽略上面传的 workingDir。侧边栏
+       * "移动到项目"只改库里的行, 那个实例的 workDir 仍是它创建时的目录 ——
+       * 于是 dispatcher 按库里的新目录过了映射校验, 真正执行却在旧目录。
+       *
+       * 这不是"校验到执行之间的窗口"(那条已在 PR #733 的风险段里声明接受),
+       * 而是**持久错配**: 实例不换, 每次重试都一样, 直到会话自然关闭。所以这里
+       * 必须拦 —— 判据是"真正要跑的这个目录此刻还在映射内吗", 由 dispatcher 注入
+       * (它才查得到映射)。
+       *
+       * 刻意只判、不重建: 关掉再建会打断可能正用着它的桌面会话、触发 onClose 的
+       * 附件与 worktree 清理, 前几轮实测这些后果比问题本身更重(PR #733 review)。
+       * 目录仍在映射内的合法移动(A→B 都在映射里)不受影响: 那时判定通过, 这一轮
+       * 继续在 A 跑, 与本 PR 之前的行为一致。
+       *
+       * **只对复用/接管路径生效**: 新会话的 id 是刚生成的, activeSessions 里不
+       * 可能有, createSession 一定按传入的 workingDir 新建 —— 错配根本不存在。
+       * 反倒是在这里拦下新会话会留垃圾: 那时 agent 已启动、session 行已插入、
+       * 预建的 worktree 还注册着(回收只在 createSession 抛错时跑), 于是留下一个
+       * 空会话 + 孤儿 worktree, 而渠道那边显示"没有执行"(同一轮 review 指出)。
+       * 新建路径那一小段(execute 的映射收口 -> createSession)属于已声明接受的
+       * 窗口, 见 PR #733 的风险段。
+       */
+      if (!req.isNew && req.isDirAuthorized && !req.isDirAuthorized(session.workDir)) {
+        log.warn(
+          `hook run aborted: live session ${req.sessionId} runs in a directory that is no longer in the workspace map`,
+        );
+        return fail(
+          '这个对话正在一个已不在工作目录映射里的目录中运行，本条消息没有执行。把该目录加进 设置 → 远程连接 → 工作目录映射，或在桌面端关掉这个对话后重发。',
+        );
       }
 
       // 运行时来源注入(路由层经 session-provider-store 决定上游与钥匙):

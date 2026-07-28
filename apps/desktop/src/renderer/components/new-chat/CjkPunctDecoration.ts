@@ -21,10 +21,11 @@
  *
  * 边界处理
  * --------
- * - IME 组合期 (用户打 pinyin 还没选字): compositionstart 前临时移除
- *   decoration,compositionend 后再按当前 doc 补算,避免改写输入法维护的 DOM。
- * - 性能: chat input 文本量很小,doc 变化、slash roster 或 voice replacement
- *   range 变化时采用全量重扫;不使用 DecorationSet.map 增量映射,以保持边界逻辑简单。
+ * - IME 组合期 (用户打 pinyin 还没选字): 保留组合开始前已有的 decoration,
+ *   只随 transaction 映射其位置,compositionend 后再按当前 doc 补算。这样既不
+ *   重建输入法维护的 DOM,也不会让已有标点在每次组字时切回另一套字形。
+ * - 性能: chat input 文本量很小,正常 doc 变化、slash roster 或 voice replacement
+ *   range 变化时采用全量重扫;只有组合期为保持已有 DOM 稳定才映射旧 decoration。
  * - 不污染源数据: decoration 只是渲染层,doc JSON 里没有 span,copy/paste/save
  *   拿到的都是纯文本
  *
@@ -260,7 +261,7 @@ export const CjkPunctDecoration = Extension.create({
             const compositionMeta = tr.getMeta(PLUGIN_KEY) as CompositionMeta | undefined;
             if (compositionMeta === 'suspend') {
               return {
-                decorations: DecorationSet.empty,
+                decorations: old.decorations,
                 suspendedForComposition: true,
               };
             }
@@ -268,7 +269,12 @@ export const CjkPunctDecoration = Extension.create({
             const rosterUpdate = getSlashCommandRosterUpdate(tr);
             const voiceReplacement = resolveVoiceInputReplacementRange(tr, oldState);
             if (old.suspendedForComposition && compositionMeta !== 'resume') {
-              return old;
+              return {
+                decorations: tr.docChanged
+                  ? old.decorations.map(tr.mapping, tr.doc)
+                  : old.decorations,
+                suspendedForComposition: true,
+              };
             }
             // doc、命令 roster 和 voice replacement 都没变 → decoration 位置不变,
             // 直接复用;任一输入变化都需要重新扫描。

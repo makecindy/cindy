@@ -32,7 +32,8 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { DL_SESSION_REFERENCE_CAPABILITY_CHANNEL } from '@cindy/device-link';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron';
+import { getActiveAppSession } from '../appSessionState.js';
 import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
@@ -387,6 +388,7 @@ import {
 } from '../mcp-integrations/custom-mcp-registry.js';
 import {
   getDesktopProviderService,
+  refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
 } from '../maker-host/createDesktopProviderService.js';
 import { connectedProvidersForAgent, effectiveSourceIdForModel } from '@cindy/model-providers';
@@ -403,6 +405,12 @@ import {
   getAnthropicModelDiscoveryFailure,
   refreshAnthropicModelsFromHttp,
 } from '../maker-host/model-discovery/anthropic.js';
+import { refreshBuiltinProviderModels } from '../maker-host/provider-model-refresh.js';
+import {
+  configureProviderModelAutoRefresh,
+  refreshProviderModelsManually,
+  requestProviderModelAutoRefresh,
+} from '../maker-host/provider-model-auto-refresh.js';
 import { setProviderUpstreamErrorBroadcaster } from '../maker-host/provider-upstream-error-observer.js';
 import {
   createClaudeAutoPermissionFallbackCoordinator,
@@ -3186,9 +3194,11 @@ export const wireSessionToIpcExternal = wireSessionToIpc;
 
 export interface RegisterMakerIpcOptions {
   onAnySessionTurnKeepaliveChange?: (isRunning: boolean) => void;
+  /** 由 bootstrap 注入，避免 maker-ipc → model-access → maker-host 的循环依赖。 */
+  refreshXdGatewayModels(): Promise<void>;
 }
 
-export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions = {}): void {
+export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
   log.info('registering maker:* IPC handlers');
   getAgentIslandService()?.setPermissionResolver(resolvePendingPermissionFromAgentIsland);
   sessionTurnActivityTracker.setTurnKeepaliveChangeListener(options.onAnySessionTurnKeepaliveChange ?? null);
@@ -3472,6 +3482,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   // 模型供应商目录（只读）+ 自定义供应商 CRUD —— handler body 注入 listProviders / 副作用，
   // 便于脱 Electron + 内存 db 单测。CRUD 成功后刷新 active-catalog 并广播 PROVIDER_CHANGED，
   // 让设置页列表 + 对话模型选择器（各 useProviders 实例）live 刷新。
+  configureProviderModelAutoRefresh({
+    listProviders: (opts) => getDesktopProviderService().listProviders(opts),
+    getScopeKey: () => getActiveAppSession().generation,
+    refreshProvider: (providerId) =>
+      refreshBuiltinProviderModels(providerId, {
+        refreshXd: options.refreshXdGatewayModels,
+        refreshAnthropic: refreshAnthropicModelsFromHttp,
+        refreshOpenAi: () => maker.refreshAgentLocalModels(
+          'codex',
+          { credentialMode: 'oauth-bearer' },
+        ),
+        refreshXaiCatalog: async () => {
+          await refreshActiveCatalogFromSource();
+        },
+      }),
+  });
+
   registerProviderHandlers(createElectronIpcHandlerRegistry(), {
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     getModelVisibilityOverrides: () => getModelVisibilityMirrorSnapshot(),
@@ -3495,6 +3522,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       await refreshAnthropicModelsFromHttp();
       return getAnthropicModelDiscoveryFailure();
     },
+    refreshBuiltinModels: refreshProviderModelsManually,
+    requestModelsAutoRefresh: requestProviderModelAutoRefresh,
     scanLocalCli: () => scanLocalCliAuth(createLocalCliScanDeps()),
     // 通用 OAuth（目录 auth.oauth 描述符驱动）：login 成功后 best-effort 拉动态模型发现
     // (additions-only merge 进 active-catalog) 并广播 PROVIDER_CHANGED 让 UI 刷新连接态。

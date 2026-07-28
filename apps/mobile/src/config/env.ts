@@ -222,25 +222,64 @@ export let VOICE_API_BASE_URL = normalizeBaseUrlWithDefault(
 export const APP_BINARY_VERSION =
   (Constants.nativeAppVersion ?? Constants.expoConfig?.version ?? '').trim();
 
+// 运行平台标识:只会是 'ios' / 'android' / ''(拿不到)。审核模式的平台门控要在 env.ts
+// 顶层就能判定,而这里不能引 react-native 的 Platform:env.ts 被 node 环境单测直接
+// 导入,react-native 真模块会把 Flow 语法拖进依赖链(同 vitest.config.ts 对
+// expo-localization 的处理)。改用两路互不依赖的 RN-free 信号:
+// 1. `process.env.EXPO_OS` —— babel-preset-expo 打包期按目标平台内联(仓内无
+//    babel.config.js,@expo/metro-config 回落 expo/internal/babel-preset,该内联恒生效);
+//    JS 常量,不进 @expo/fingerprint,不改 runtimeVersion。
+// 2. `Constants.platform` 的平台段兜底 —— 万一内联缺失(自定义 babel 配置等)仍能判出
+//    Android,避免「安卓被审核模式误冻结热更」这个高代价失效模式静默复发。
+// 取值收敛为白名单:两路信号都只认 'ios' / 'android',其余(web、未来新平台、
+// 被改写成意外值)一律当作「拿不到」→ 空串,由消费方按平台未知的语义处理,
+// 不让未预期的值逸出取值域后再去参与平台门控。
+const NATIVE_PLATFORMS = ['ios', 'android'] as const;
+
+export type AppPlatform = (typeof NATIVE_PLATFORMS)[number] | '';
+
+function resolveAppPlatform(): AppPlatform {
+  const inlined = (process.env.EXPO_OS ?? '').trim().toLowerCase();
+  const matched = NATIVE_PLATFORMS.find((platform) => platform === inlined);
+  if (matched) return matched;
+  const platformManifest = Constants.platform;
+  if (platformManifest?.android) return 'android';
+  if (platformManifest?.ios) return 'ios';
+  return '';
+}
+
+export const APP_PLATFORM: AppPlatform = resolveAppPlatform();
+
 /**
  * 纯函数:清单 review(送审版本号)与二进制版本号严格相等、且当前安装不是
  * TestFlight 时才进入审核模式;
  * 任一侧为空恒 false(清单没填 = 关闭;拿不到版本号 = 宁可不进审核模式,
  * 也不能让线上用户误失去更新通道)。
+ * Android 恒 false:审核模式只为 iOS 商店送审存在(见下方 REVIEW_MODE 注释),
+ * 而清单 review 是 region 级单值、不分平台,iOS 送审期间填的版本号会连带命中同版本号的
+ * 安卓自建装机,把它们的热更与整包检查一起冻结(2026-07 实踩:review="0.1.0" 冻结全部
+ * 0.1.0 安卓装机)。安卓自建线不过商店审核,没有需要关闭更新检查的场景,故在此豁免。
+ * 只豁免 android:iOS(含平台未知)一律保持原语义,不弱化送审合规。
+ * platform 形参收敛为 AppPlatform 而非 string:拼写 / 大小写错误('Android')会静默
+ * 走回 iOS 语义、丢掉安卓豁免,这类误用要在类型层就挡住,不留给运行期。
  */
 export function isReviewModeActive(
   reviewVersion: string | null | undefined,
   appBinaryVersion: string,
   isTestFlight = false,
+  platform: AppPlatform = APP_PLATFORM,
 ): boolean {
+  if (platform === 'android') return false;
   const review = reviewVersion?.trim();
   const binary = appBinaryVersion.trim();
   return !isTestFlight && Boolean(review) && review === binary;
 }
 
 // 手机版审核模式(清单可选字段 review = 送审版本号,缺失/空串 = 关闭):App 审核
-// 期间线上清单填送审构建的二进制版本号,仅版本命中且 StoreKit 未识别为 TestFlight
-// 的构建关闭全部 JS 显式更新检查。TestFlight 不进入审核模式,但由整包更新策略单独
+// 期间线上清单填送审构建的二进制版本号,仅 **iOS** 上版本命中且 StoreKit 未识别为
+// TestFlight 的构建关闭全部 JS 显式更新检查;android 恒不进审核模式(清单 review 是
+// region 级单值不分平台,安卓自建线不过商店审核,理由见 isReviewModeActive)。
+// TestFlight 不进入审核模式,但由整包更新策略单独
 // 禁用会外跳安装的整包检查,只保留 JS OTA。设置页在审核模式隐藏统一「检查更新」入口;
 // 存量其它版本用户不受影响。覆盖边界与运维义务(原生层后台检查管不到、
 // 过审发布后须清空字段)见 maker-shared clientEndpoints 的 CLIENT_ENDPOINT_REVIEW_KEY

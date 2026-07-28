@@ -50,6 +50,10 @@ vi.mock('@/lib/composerDraftStore', () => ({
 import { makerChatStore } from '@/lib/makerChatStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import * as messageService from '@/lib/messageService';
+import {
+  getIssueConfirmDraft,
+  saveIssueConfirmDraft,
+} from '@/lib/issueConfirmDraftStore';
 
 type RemotePush = { deviceId: string; channel: string; payload: unknown };
 type ResolveCall = { requestId: string; decision: Record<string, unknown> };
@@ -297,6 +301,74 @@ describe('device-link 远程交互往返 — plan_review', () => {
       requestId: 'plan-2',
       decision: { kind: 'plan_review', behavior: 'deny', reason: '再想想边界条件' },
     });
+  });
+});
+
+describe('device-link 远程交互往返 — issue_confirm draft', () => {
+  const issueRequest = {
+    kind: 'issue_confirm',
+    requestId: 'issue-draft-1',
+    draft: { title: '原始标题', body: '原始正文', type: 'bug' },
+    env: {
+      appVersion: '0.1.18',
+      platform: 'darwin',
+      arch: 'arm64',
+      osVersion: '15.0',
+    },
+    submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
+    suggestedPublicName: '当前昵称',
+  };
+
+  it('逐键保存不通知 makerChatStore 全局订阅,响应后清除草稿', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, issueRequest);
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe('issue-draft-1');
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toMatchObject({
+      submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
+      suggestedPublicName: '当前昵称',
+    });
+
+    const globalListener = vi.fn();
+    const unsubscribe = makerChatStore.subscribeAll(globalListener);
+    saveIssueConfirmDraft(s, 'issue-draft-1', {
+      title: '编辑后的标题',
+      body: '编辑后的正文',
+      type: 'feature',
+      publicName: '匿名',
+    });
+
+    expect(getIssueConfirmDraft(s, 'issue-draft-1')).toMatchObject({
+      title: '编辑后的标题',
+      body: '编辑后的正文',
+      type: 'feature',
+      publicName: '匿名',
+    });
+    expect(globalListener).not.toHaveBeenCalled();
+
+    makerChatStore.respondToIssueConfirm(s, { confirmed: false });
+    await flush();
+    expect(getIssueConfirmDraft(s, 'issue-draft-1')).toBeUndefined();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toBeNull();
+    unsubscribe();
+    makerChatStore.purgeSession(s);
+  });
+
+  it('interaction dismissed 时清除对应草稿', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, issueRequest);
+    await flush();
+    saveIssueConfirmDraft(s, 'issue-draft-1', {
+      title: '未提交标题',
+      body: '未提交正文',
+      type: 'bug',
+    });
+
+    host.hostDismiss(s, 'issue-draft-1', 'timeout');
+    await flush();
+    expect(getIssueConfirmDraft(s, 'issue-draft-1')).toBeUndefined();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toBeNull();
+    makerChatStore.purgeSession(s);
   });
 });
 

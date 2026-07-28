@@ -48,8 +48,14 @@ export {
   resolveFallbackCatalogUrl,
   mergeWithBundled,
   loadCatalog,
+  loadCatalogWithSource,
 } from './source.js';
-export type { CatalogSourceConfig, CatalogIO } from './source.js';
+export type {
+  CatalogSourceConfig,
+  CatalogIO,
+  CatalogLoadResult,
+  CatalogLoadSource,
+} from './source.js';
 
 export {
   buildRegistry,
