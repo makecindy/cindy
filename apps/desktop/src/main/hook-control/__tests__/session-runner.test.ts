@@ -53,7 +53,15 @@ const h = vi.hoisted(() => {
     readImDefaultSettings: vi.fn(),
     useActualDefaults: false,
     /** 每个 fake session 的事件监听回调(emit done 用)。 */
-    eventCbs: new Map<string, (ev: { type: string; data: unknown }) => void>(),
+    eventCbs: new Map<
+      string,
+      (ev: {
+        type: string;
+        data: unknown;
+        source?: string;
+        agentMeta?: Record<string, unknown>;
+      }) => void
+    >(),
     /** 每个 fake session 被装上的 interaction listener(交互测试驱动用)。 */
     interactionListeners: new Map<string, (req: unknown) => Promise<unknown>>(),
     headlessDuringSend: [] as boolean[],
@@ -653,7 +661,14 @@ describe('进度快照(turn.progress 链路)', () => {
     return {
       id,
       workDir: 'D:/repo',
-      onEvent(cb: (ev: { type: string; data: unknown }) => void) {
+      onEvent(
+        cb: (ev: {
+          type: string;
+          data: unknown;
+          source?: string;
+          agentMeta?: Record<string, unknown>;
+        }) => void,
+      ) {
         h.eventCbs.set(id, cb);
         return () => {
           h.eventCbs.delete(id);
@@ -726,6 +741,70 @@ describe('进度快照(turn.progress 链路)', () => {
       expect(outcome.finalText).toContain('最终答案是 42。');
       expect(outcome.finalText).toContain('旁白说明。');
       expect(outcome.finalText).not.toContain('4\n\n2');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('claude 同一条消息的相邻文本块按原文连拼, 不同消息之间空行分隔', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({}));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      // 消息 m1 含两个相邻文本块(translator 逐块发 isFinal, 同 uuid)。
+      cb({
+        type: 'text',
+        data: { text: '前半', isFinal: true },
+        source: 'claude-code',
+        agentMeta: { uuid: 'm1' },
+      });
+      cb({
+        type: 'text',
+        data: { text: '后半。', isFinal: true },
+        source: 'claude-code',
+        agentMeta: { uuid: 'm1' },
+      });
+      // 消息 m2 是另一条 assistant 消息。
+      cb({
+        type: 'text',
+        data: { text: '第二条。', isFinal: true },
+        source: 'claude-code',
+        agentMeta: { uuid: 'm2' },
+      });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.finalText).toBe('前半后半。\n\n第二条。');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('claude 续尾与已流增量重复前缀时不误判为全文(ha→haha 不丢后半段)', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({}));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      // 流式增量 "ha" 后流被截断, result 兜底补的尾段恰好也是 "ha"
+      // (全文 "haha")。fallbackTail 契约: 不带 agentMeta。
+      cb({ type: 'text', data: { text: 'ha', isFinal: false }, source: 'claude-code' });
+      cb({ type: 'text', data: { text: 'ha', isFinal: true }, source: 'claude-code' });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.finalText).toBe('haha');
     } finally {
       vi.useRealTimers();
     }
@@ -929,7 +1008,14 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     return {
       id,
       workDir: 'D:/repo',
-      onEvent(cb: (ev: { type: string; data: unknown }) => void) {
+      onEvent(
+        cb: (ev: {
+          type: string;
+          data: unknown;
+          source?: string;
+          agentMeta?: Record<string, unknown>;
+        }) => void,
+      ) {
         h.eventCbs.set(id, cb);
         return () => {
           h.eventCbs.delete(id);

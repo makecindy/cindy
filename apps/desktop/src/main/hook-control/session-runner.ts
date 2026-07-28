@@ -634,6 +634,8 @@ export function createMakerHookSessionRunner(deps: {
       let finalizedText = '';
       let streamTail = '';
       let assistantText = '';
+      /** 最近一次定稿段所属的 claude 消息 uuid(同消息相邻块连拼用)。 */
+      let lastFinalUuid: string | undefined;
       const recomputeAssistantText = (): void => {
         // trim 只用于判空(纯空白尾巴不该拼出悬空分隔), 拼接用原文 ——
         // 首行缩进/换行是内容(markdown 代码块等), 不得被裁掉。
@@ -707,17 +709,34 @@ export function createMakerHookSessionRunner(deps: {
             const data = ev.data as { text?: string; isFinal?: boolean } | null;
             if (data && typeof data.text === 'string') {
               if (data.isFinal) {
-                // isFinal 有两种形态(见 translator): ①整条全文 —— 块终稿/
-                // codex item.completed, 全文以已流增量为前缀, 丢增量取全文;
-                // ②续尾补推 —— claude result 兜底 fallbackTail 只含 UI 缺的
-                // 尾段(uiEmittedText 前缀比对), 必须与已流增量原样接上,
-                // 不能丢前缀、也不能在正文中间插段落分隔。
-                const segment = data.text.startsWith(streamTail)
-                  ? data.text
-                  : streamTail + data.text;
+                // isFinal 形态按 translator 契约区分, 不做内容猜测(前缀
+                // 启发式在"尾段恰好以已流增量开头"时会误判丢正文):
+                // ① claude 块终稿(带 agentMeta): data.text 是该块全文, 覆盖
+                //   已流增量; 同一条消息(同 uuid)的相邻文本块按原文连拼
+                //   (renderer 同款 raw concat), 不同消息之间空行分隔。
+                // ② claude result 兜底 fallbackTail(刻意不带 agentMeta):
+                //   只含 UI 缺的尾段, 与已流增量原样接上。
+                // ③ codex item.completed: 该条全文, 覆盖已流增量。
+                // ④ 未知 source: 保守用前缀启发式。
+                const src = (ev as { source?: string }).source;
+                const meta = (ev as { agentMeta?: { uuid?: unknown } }).agentMeta;
+                const claudeTail = src === 'claude-code' && meta === undefined;
+                const segment = claudeTail
+                  ? streamTail + data.text
+                  : src === 'claude-code' || src === 'codex'
+                    ? data.text
+                    : data.text.startsWith(streamTail)
+                      ? data.text
+                      : streamTail + data.text;
+                const uuid =
+                  src === 'claude-code' && typeof meta?.uuid === 'string'
+                    ? meta.uuid
+                    : undefined;
+                const sameMessage = uuid !== undefined && uuid === lastFinalUuid;
                 finalizedText = finalizedText
-                  ? `${finalizedText}\n\n${segment}`
+                  ? `${finalizedText}${sameMessage ? '' : '\n\n'}${segment}`
                   : segment;
+                lastFinalUuid = uuid;
                 streamTail = '';
               } else {
                 streamTail += data.text;
