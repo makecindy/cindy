@@ -242,6 +242,7 @@ import { getDrizzleDir } from './localDb/migrate';
 import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
 import { startEmbeddingHost, stopEmbeddingHost, isEmbeddingHostStarted } from './embedding-host';
 import { readClaudeApiKey } from './maker-host/auth-adapters';
+import { outboundFetch } from './maker-host/outbound-fetch';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import { onQuit, installQuitHandler } from './lifecycle';
 import { initStartupDiagnostics } from './startup-diagnostics';
@@ -407,6 +408,7 @@ import {
   logoutGrok,
   hasGrokOAuthLogin,
 } from './maker-host/grok-oauth-login.js';
+import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation-host.js';
 import {
   readSilentEncryptedRetrySettingsState,
   resetSilentEncryptedRetrySettings,
@@ -760,6 +762,9 @@ function attemptStartEmbeddingHost(): void {
       getApiKey: () => readClaudeApiKey(),
       // 函数形态:model-access 下发切换 endpoint 后,常驻的 embedding host 无需重启。
       gatewayBaseUrl: () => effectiveXdGatewayBaseUrl(),
+      // /v1/embeddings 也要吃系统代理:裸全局 fetch 在「系统代理」模式下裸直连出网
+      // (见 maker-host/outbound-fetch.ts)。
+      fetchImpl: outboundFetch,
       log: createSchedulerLogger('embeddingHost'),
     });
     // chat-history-embedder consumer 注册 + setEnabled(true) 触发 cutoff 落盘。
@@ -993,7 +998,7 @@ installWebviewHardener();
 // 调用时机远晚于此处构造),状态机本体见 right-sidebar-window/controller.ts。
 const rsbWindowController = new RsbWindowController({
   settings: { read: readRsbWindowSettings, writePatch: writeRsbWindowSettingsPatch },
-  createWindow: () => createRightSidebarWindow(),
+  createWindow: (opts) => createRightSidebarWindow(opts),
   getMainWindow: () => mainWindowRef,
   broadcastState: (state) => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -2757,6 +2762,13 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_CANCEL, async () => {
     cancelClaudeOAuthLogin();
     return { authorized: hasClaudeAiOAuth() };
+  });
+
+  // 上游作废 xAI 凭证、收口自动登出后,走和手动登出完全一致的 UI 收尾(广播 + 清账号级
+  // 限流快照),否则用户会停在「显示已连接、请求连环 403」的假状态。
+  setXaiAuthInvalidatedHandler(() => {
+    clearXaiRateLimitSnapshot();
+    broadcastXaiAuthStateChanged();
   });
 
   // xAI(SuperGrok 订阅)OAuth —— 与 claude-oauth 同形态。登录成功后 bridge 的 xai provider 立即可用

@@ -62,6 +62,10 @@
 
 - `link-open`(控制端→被控端):建立「正在被控」链路 → 被控端 arm push 转发 + 弹「正在被控」可见性。`link-accept` 回带 `allowlistHash`(探测两端版本差异)。
 - **`invoke` 不依赖 link-open**(只读 listing 可不开链路、不触发被控横幅);进入某会话实时操作时才 `link-open` 升级到「streaming tier」。
+- 控制端的 append-only `capabilities` 除可随 `link-open` 协商，也可随
+  `device-link:subscribe` 的首参或 listing invoke（当前为 `maker:provider:list`）的首参携带；
+  因此 listing-only 控制端无需先打开控制链路，也能安全接收能力门控的新 wire 字段。被控端
+  必须把缺失、非数组、超长或非字符串能力值按“不支持”处理。
 - `link-close`:任一端解链(`reason: user|toggle-off|shutdown`)。
 
 ## 错误模型

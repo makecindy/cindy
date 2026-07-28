@@ -119,7 +119,7 @@ async function resolveNewSessionConfig(
 ): Promise<ResolvedHookSessionConfig> {
   let providers: ProviderView[] | null = null;
   try {
-    providers = await getDesktopProviderService().listProviders();
+    providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
   } catch (err) {
     log.warn(
       `hook provider catalog unavailable; falling back to maker capabilities: ${err instanceof Error ? err.message : String(err)}`,

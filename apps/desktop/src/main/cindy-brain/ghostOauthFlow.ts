@@ -120,6 +120,7 @@ export type GhostOauthFlowError =
   | 'CANCELLED'
   | 'CALLBACK_INVALID'
   | 'EXCHANGE_FAILED'
+  | 'SERVICE_UNAVAILABLE'
   | 'NETWORK';
 
 export type GhostOauthFlowResult =
@@ -132,12 +133,12 @@ export type GhostOauthRefreshResult =
    * invalidGrant = 服务商明确拒绝 refresh token(吊销 / 过期 / 用户改密),
    * 调用方应作废存量并引导重新授权;其余失败是瞬时性的,可原 token 重试。
    */
-  | { ok: false; error: 'EXCHANGE_FAILED' | 'NETWORK'; invalidGrant: boolean; detail?: string };
+  | { ok: false; error: 'EXCHANGE_FAILED' | 'SERVICE_UNAVAILABLE' | 'NETWORK'; invalidGrant: boolean; detail?: string };
 
 /** broker 一次交换 / 刷新的结果(形态对齐 GhostOauthRefreshResult,便于两条链路共用消费端)。 */
 export type GhostOauthBrokerResult =
   | { ok: true; bundle: GhostOauthTokenBundle }
-  | { ok: false; error: 'EXCHANGE_FAILED' | 'NETWORK'; invalidGrant: boolean; detail?: string };
+  | { ok: false; error: 'EXCHANGE_FAILED' | 'SERVICE_UNAVAILABLE' | 'NETWORK'; invalidGrant: boolean; detail?: string };
 
 /**
  * XDT server token broker 调用器(tokenBroker 声明的执行通道)。实现方负责

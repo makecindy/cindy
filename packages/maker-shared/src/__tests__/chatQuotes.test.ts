@@ -104,6 +104,16 @@ describe('parseChatQuoteSegments', () => {
     ]);
   });
 
+  it('parses explicitly marked quotes nested under list indentation', () => {
+    const content = '- before\n  > <!-- cindy-composer-quote -->\n  > quoted\n  after';
+    expect(parseChatQuoteSegments(content)).toEqual([
+      { kind: 'text', text: '- before' },
+      { kind: 'quote', quote: { text: 'quoted' } },
+      { kind: 'text', text: '  after' },
+    ]);
+    expect(stripChatQuoteMarkerLines(content)).toBe('- before\n  > quoted\n  after');
+  });
+
   it('keeps internal quote and prose blank lines', () => {
     const content = `before\n\n${formatQuoteForSend({ text: 'a\n\nb' })}\n\nafter\n\nstill after`;
     expect(parseChatQuoteSegments(content)).toEqual([

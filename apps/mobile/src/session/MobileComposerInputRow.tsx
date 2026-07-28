@@ -332,13 +332,15 @@ export function ComposerToolbarSpacer() {
 }
 
 /**
- * card 工具排中语音按钮的等宽占位。真实语音按钮由 MobileComposerInputRow
- * 以 absolute 锚点渲染（保证两态同一实例、位置平滑过渡），工具排用本占位
- * 在 flex 流里为它留出位置。
+ * 工具排 / 输入行 flex 流中语音按钮的等宽占位。真实语音按钮由
+ * MobileComposerInputRow 以 absolute 锚点渲染（保证两态同一实例、位置平滑
+ * 过渡），流内用本占位为它留出位置。录音中胶囊(红点+计时)比常态宽,由
+ * `width` 传入当前胶囊宽度(useMobileVoiceRecordingTimer.pillWidth),占位随
+ * 之变宽把左邻按钮推开——胶囊只向左生长,右缘(与发送键的邻接关系)不动。
  */
-export function ComposerToolbarVoiceSlot() {
+export function ComposerToolbarVoiceSlot({ width }: { width?: number }) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
-  return <View style={styles.toolbarVoiceSlot} />;
+  return <View style={[styles.toolbarVoiceSlot, width != null && { width }]} />;
 }
 
 export interface ComposerResizeGrabberProps {

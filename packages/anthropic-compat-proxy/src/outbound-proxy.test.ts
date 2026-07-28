@@ -11,14 +11,17 @@ import {
   formatHostHeader,
   hasProxyEnvConfig,
   isLoopbackHostname,
+  outboundProxyAgentKey,
   parseOutboundProxyUrl,
   redactProxyUrlForLog,
   TunnelingHttpsAgent,
+  type OutboundProxyTarget,
 } from './outbound-proxy.js';
 
 describe('parseOutboundProxyUrl', () => {
   it('parses plain http proxy urls', () => {
     expect(parseOutboundProxyUrl('http://127.0.0.1:7890')).toEqual({
+      kind: 'http',
       url: 'http://127.0.0.1:7890',
       hostname: '127.0.0.1',
       port: 7890,
@@ -37,8 +40,10 @@ describe('parseOutboundProxyUrl', () => {
   });
 
   it('rejects unsupported schemes and garbage', () => {
+    // https: = TLS-to-proxy, socks4/4a = 无认证无 IPv6 的老协议,都不支持。
     expect(parseOutboundProxyUrl('https://127.0.0.1:7890')).toBeNull();
-    expect(parseOutboundProxyUrl('socks5://127.0.0.1:7891')).toBeNull();
+    expect(parseOutboundProxyUrl('socks4://127.0.0.1:1080')).toBeNull();
+    expect(parseOutboundProxyUrl('socks4a://127.0.0.1:1080')).toBeNull();
     expect(parseOutboundProxyUrl('not a url')).toBeNull();
     expect(parseOutboundProxyUrl('')).toBeNull();
     expect(parseOutboundProxyUrl(undefined)).toBeNull();
@@ -49,6 +54,7 @@ describe('parseOutboundProxyUrl', () => {
     // 带括号的 hostname 直接交给 net.connect 会解析失败)。
     const parsed = parseOutboundProxyUrl('http://[::1]:7890');
     expect(parsed).toEqual({
+      kind: 'http',
       url: 'http://[::1]:7890',
       hostname: '::1',
       port: 7890,
@@ -56,11 +62,73 @@ describe('parseOutboundProxyUrl', () => {
     });
   });
 
+  it('parses socks5 urls, including the socks5h / socks aliases and the default port', () => {
+    expect(parseOutboundProxyUrl('socks5://127.0.0.1:1080')).toEqual({
+      kind: 'socks5',
+      url: 'socks5://127.0.0.1:1080',
+      hostname: '127.0.0.1',
+      port: 1080,
+      username: undefined,
+      password: undefined,
+    });
+    // socks5h 的「域名交给代理解析」就是本实现的固定语义,别名归一成 socks5://。
+    expect(parseOutboundProxyUrl('socks5h://127.0.0.1:1080')?.url).toBe('socks5://127.0.0.1:1080');
+    expect(parseOutboundProxyUrl('socks://127.0.0.1:1080')?.kind).toBe('socks5');
+    // 省略端口 → SOCKS 默认 1080,url 补齐端口便于读日志。
+    expect(parseOutboundProxyUrl('socks5://proxy.corp')).toMatchObject({
+      url: 'socks5://proxy.corp:1080',
+      hostname: 'proxy.corp',
+      port: 1080,
+    });
+    expect(parseOutboundProxyUrl('socks5://[::1]:1080')).toMatchObject({
+      url: 'socks5://[::1]:1080',
+      hostname: '::1',
+    });
+  });
+
+  it('keeps socks5 credentials as raw username/password (RFC 1929), not a Basic header', () => {
+    const parsed = parseOutboundProxyUrl('socks5://user:p%40ss@127.0.0.1:1080');
+    expect(parsed).toMatchObject({ kind: 'socks5', username: 'user', password: 'p@ss' });
+    expect(parsed?.url).toBe('socks5://127.0.0.1:1080');
+    expect(parsed?.authHeader).toBeUndefined();
+  });
+
+  it('drops socks5 credentials that exceed the RFC 1929 single-byte length prefix', () => {
+    // 超长凭证无法表达;静默截断会把错的凭证发出去,按「没有凭证」处理更好排查。
+    const parsed = parseOutboundProxyUrl(`socks5://${'u'.repeat(256)}:pass@127.0.0.1:1080`);
+    expect(parsed).toMatchObject({ kind: 'socks5', username: undefined, password: undefined });
+  });
+
   it('never throws on malformed percent-encoding in userinfo (regression: URIError escaped fail-open)', () => {
     const parsed = parseOutboundProxyUrl('http://user%GG:pa%ZZss@127.0.0.1:8080');
     expect(parsed?.hostname).toBe('127.0.0.1');
     // 解不开的按原文进 Basic,不抛 URIError。
     expect(parsed?.authHeader).toBe(`Basic ${Buffer.from('user%GG:pa%ZZss').toString('base64')}`);
+  });
+});
+
+describe('outboundProxyAgentKey', () => {
+  const socks = (username: string, password: string): OutboundProxyTarget => ({
+    kind: 'socks5', url: 'socks5://127.0.0.1:1080', hostname: '127.0.0.1', port: 1080, username, password,
+  });
+
+  it('never collides across credentials that contain the separator', () => {
+    // 回归:拼接式 key 下 `a:b`+`c` 与 `a`+`b:c` 都产生 "a:b:c",第二次查询会复用
+    // 按第一组凭证建的 agent,用错身份去认证。
+    expect(outboundProxyAgentKey(socks('a:b', 'c'), 'https:'))
+      .not.toBe(outboundProxyAgentKey(socks('a', 'b:c'), 'https:'));
+    expect(outboundProxyAgentKey(socks('u', 'p'), 'https:'))
+      .toBe(outboundProxyAgentKey(socks('u', 'p'), 'https:'));
+  });
+
+  it('separates upstream protocols and proxy kinds', () => {
+    expect(outboundProxyAgentKey(socks('u', 'p'), 'http:'))
+      .not.toBe(outboundProxyAgentKey(socks('u', 'p'), 'https:'));
+    const http: OutboundProxyTarget = {
+      kind: 'http', url: 'http://127.0.0.1:1080', hostname: '127.0.0.1', port: 1080,
+    };
+    expect(outboundProxyAgentKey(http, 'https:'))
+      .not.toBe(outboundProxyAgentKey({ ...socks('', ''), username: undefined, password: undefined }, 'https:'));
   });
 });
 
@@ -243,6 +311,7 @@ describe('TunnelingHttpsAgent', () => {
     const tlsPort = await startTlsUpstream();
     const { port: proxyPort, connects, authHeaders } = await startConnectProxy(tlsPort);
     const agent = new TunnelingHttpsAgent({
+      kind: 'http',
       url: `http://127.0.0.1:${proxyPort}`,
       hostname: '127.0.0.1',
       port: proxyPort,
@@ -266,6 +335,7 @@ describe('TunnelingHttpsAgent', () => {
     const proxyPort = await listenOnAvailableLoopbackPort(proxy);
     cleanups.push(() => new Promise<void>((r) => proxy.close(() => r())));
     const agent = new TunnelingHttpsAgent({
+      kind: 'http',
       url: `http://127.0.0.1:${proxyPort}`,
       hostname: '127.0.0.1',
       port: proxyPort,
@@ -278,6 +348,7 @@ describe('TunnelingHttpsAgent', () => {
   it('surfaces unreachable proxy as a request error', async () => {
     // 端口 1 基本必然拒绝连接;错误信息应指向代理不可达而非上游。
     const agent = new TunnelingHttpsAgent({
+      kind: 'http',
       url: 'http://127.0.0.1:1',
       hostname: '127.0.0.1',
       port: 1,

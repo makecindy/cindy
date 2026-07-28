@@ -14,6 +14,11 @@ import type {
 export interface DetachedSidebarRouteOptions {
   /** false 时只向已打开的 detached 窗口发命令，不因命令重新打开窗口。 */
   allowOpen?: boolean;
+  /**
+   * false = 程序自发的命令(插件 preview / agent 自动化):子窗口照常收内容,
+   * 但 main 不得 show/focus 抢走用户前台。缺省 true(用户手势)。
+   */
+  userInitiated?: boolean;
 }
 
 export async function routeSidebarCommand(
@@ -23,5 +28,9 @@ export async function routeSidebarCommand(
   if (typeof window === 'undefined' || isSecondaryWindow() || isSidebarWindow()) return 'attached';
   const api = window.electronAPI?.rightSidebarWindow;
   if (!api) return 'attached';
-  return api.sendCommand({ command, allowOpen: opts.allowOpen !== false });
+  return api.sendCommand({
+    command,
+    allowOpen: opts.allowOpen !== false,
+    userInitiated: opts.userInitiated !== false,
+  });
 }

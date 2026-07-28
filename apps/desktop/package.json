@@ -2,7 +2,7 @@
   "name": "desktop",
   "productName": "Cindy",
   "version": "0.0.0",
-  "description": "Cindy desktop client (真实版本号在 release 时由脚本通过 APP_VERSION 注入,见 forge.config.ts)",
+  "description": "Cindy desktop client",
   "main": ".vite/build/index.js",
   "private": true,
   "scripts": {
@@ -40,7 +40,7 @@
     "export:login-callback-template": "tsx scripts/export-login-callback-template.ts"
   },
   "author": {
-    "name": "X.D. Network Inc.",
+    "name": "XD Inc.",
     "email": "feedback@cindy.app"
   },
   "license": "Apache-2.0",

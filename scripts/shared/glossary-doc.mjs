@@ -40,6 +40,23 @@ function forbiddenLabel(entry) {
   return `${entry.text}（仅当英文含 ${entry.whenEn}）`;
 }
 
+/**
+ * 归一化行尾,供「已落盘的 GLOSSARY.md」与「渲染结果」比较时使用。
+ *
+ * renderGlossaryDoc 恒以 LF 收尾(见函数末尾的 join('\n')),但 .gitattributes
+ * 未给 *.md 固定 eol——`core.autocrlf=true` 的 Windows checkout(Git for Windows
+ * 安装时的默认选项)会把 GLOSSARY.md 转成 CRLF。此时逐字符比较会假报「文档过期」,
+ * 而且无法自愈:重新生成写出的是 LF,下次 checkout 又被转回 CRLF,门禁永远红。
+ *
+ * 与 apps/desktop/scripts/help-kb-guard.mjs 的 norm() 同款处理。放在共享模块里
+ * 是为了让三处比较点(本文件的消费方 generate-glossary-doc.mjs --check、
+ * check-i18n-glossary.mjs、glossary-rules.test.mjs)用同一份逻辑,不会出现某处
+ * 漏加归一化又把 Windows 拦回去。
+ */
+export function normalizeDocEol(text) {
+  return text.replace(/\r\n/g, '\n');
+}
+
 export function renderGlossaryDoc(glossary) {
   const terms = sortTerms(glossary.terms);
   const decided = terms.filter((t) => t.status === 'decided');

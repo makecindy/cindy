@@ -1350,6 +1350,9 @@ interface ElectronAPI {
       | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode }
     >;
     deleteDictionaryEntries: (entryIds: string[]) => Promise<VoiceInputSettingsData>;
+    addDictionaryEntry: (text: string) => Promise<VoiceInputSettingsData>;
+    importDictionaryEntries: (texts: string[]) => Promise<VoiceInputSettingsData>;
+    renameDictionaryEntry: (entryId: string, text: string) => Promise<VoiceInputSettingsData>;
     recordDictionaryLearningActions: (actions: VoiceInputDictionaryLearningAction[]) => Promise<{
       settings: VoiceInputSettingsData;
       newAutomaticEntries: Array<{ id: string; text: string }>;
@@ -1407,8 +1410,11 @@ interface ElectronAPI {
   // 「侧边栏在新窗口中显示」偏好 + 子窗口生命周期(main: right-sidebar-window/)。
   rightSidebarWindow: {
     getState: () => Promise<{ detached: boolean; lastOpen: boolean; open: boolean }>;
-    /** 幂等:已开则 show + focus。 */
-    open: () => Promise<void>;
+    /**
+     * 幂等开窗。缺省(用户手势)已开则 show + focus;
+     * userInitiated:false(启动恢复 / 插件 / agent 自发)已开则完全不动窗口。
+     */
+    open: (options?: { userInitiated?: boolean }) => Promise<void>;
     close: () => Promise<void>;
     /** 写偏好;true 附带开窗,false 附带关窗。返回新 state。 */
     setDetached: (
@@ -3467,12 +3473,14 @@ interface ElectronAPI {
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
     listProviders: () => Promise<{ providers: import('@cindy/model-providers').ProviderView[] }>;
 
-    // 自定义供应商配置 CRUD（密钥另走通用 safeStorage IPC，不经这里）。
+    // 自定义供应商配置 CRUD（配置与 runtime 密钥均由 main 原子排队）。
     createCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
+      keys: Partial<Record<'claude-code' | 'codex', string>>,
     ) => Promise<{ ok: true }>;
     updateCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
+      keys: Partial<Record<'claude-code' | 'codex', string>>,
     ) => Promise<{ ok: true }>;
     deleteCustomProvider: (providerId: string) => Promise<{ ok: true }>;
     /** 自定义供应商创建模板（目录 presets 段，纯 UI 模板数据）。 */
@@ -3487,6 +3495,7 @@ interface ElectronAPI {
               agent: 'claude-code' | 'codex';
               baseUrl: string;
               modelId: string;
+              authMethod: 'apiKey' | 'oauth' | 'none';
               wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
               requestPath?: string;
               apiKey?: string | null;
@@ -3504,6 +3513,7 @@ interface ElectronAPI {
     fetchProviderModels: (input: {
       agent: 'claude-code' | 'codex';
       baseUrl: string;
+      authMethod: 'apiKey' | 'oauth' | 'none';
       modelsUrl?: string | null;
       apiKey?: string | null;
       headers?: Record<string, string>;
@@ -3520,6 +3530,15 @@ interface ElectronAPI {
      */
     scanLocalCli: () => Promise<{
       detections: import('../shared/localCliDetect').LocalCliDetection[];
+    }>;
+    /**
+     * 立即重新发现动态清单（当前只有 anthropic 订阅）。host 只对暂时性失败做有限次退避
+     * 重试、确定性拒绝不重试，所以这是用户在失败态下「立刻再试一次」的入口（同时重开
+     * 一轮退避）；失败归因随结果回传，供 UI 渲染分类文案。
+     */
+    rediscoverModels: (providerId: string) => Promise<{
+      ok: boolean;
+      failure?: import('@cindy/model-providers').ProviderModelDiscoveryFailureView;
     }>;
     /** 自定义供应商变更广播订阅（返回 off）。 */
     onProvidersChanged: (cb: () => void) => () => void;
@@ -3540,9 +3559,15 @@ interface ElectronAPI {
     /** 自定义 MCP 变更广播订阅（返回 off）。 */
     onMcpChanged: (cb: () => void) => () => void;
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */
-    providerOAuthLogin: (providerId: string) => Promise<{ ok: boolean; reason?: string }>;
+    providerOAuthLogin: (
+      providerId: string,
+      options?: { ownerId?: string },
+    ) => Promise<{ ok: boolean; reason?: string }>;
     providerOAuthLogout: (providerId: string) => Promise<{ ok: true }>;
-    providerOAuthCancel: (providerId: string) => Promise<{ ok: true }>;
+    providerOAuthCancel: (
+      providerId: string,
+      options?: { releaseOwner?: boolean; ownerId?: string },
+    ) => Promise<{ ok: true }>;
     onProviderOAuthProgress: (
       cb: (progress: {
         providerId: string;
@@ -4216,14 +4241,27 @@ interface ElectronAPI {
     /* ── Agent 鉴权 (取代老 codex.auth.*) ── */
     auth: {
       getState: (agentKind: 'claude-code' | 'codex') => Promise<CodexAuthState>;
-      triggerLogin: (agentKind: 'claude-code' | 'codex') => Promise<CodexAuthState>;
-      cancelLogin: (agentKind: 'claude-code' | 'codex') => Promise<void>;
+      triggerLogin: (
+        agentKind: 'claude-code' | 'codex',
+        options?: { mode?: 'browser' | 'device-code'; ownerId?: string },
+      ) => Promise<CodexAuthState>;
+      cancelLogin: (
+        agentKind: 'claude-code' | 'codex',
+        options?: { releaseOwner?: boolean; ownerId?: string },
+      ) => Promise<void>;
       logout: (agentKind: 'claude-code' | 'codex') => Promise<void>;
       onStateChanged: (
         cb: (s: { agentKind: 'claude-code' | 'codex' } & CodexAuthState) => void,
       ) => () => void;
       onLoginProgress: (
-        cb: (p: { agentKind: 'claude-code' | 'codex'; phase: string; detail?: string }) => void,
+        cb: (p: {
+          agentKind: 'claude-code' | 'codex';
+          phase: string;
+          mode?: 'browser' | 'device-code';
+          detail?: string;
+          verificationUrl?: string;
+          userCode?: string;
+        }) => void,
       ) => () => void;
     };
 
@@ -4492,12 +4530,28 @@ interface RawReleaseNotesSection {
   items: RawReleaseNotesItem[];
 }
 
+/** Topic-format (v2) block: one user-facing theme with a short narrative. */
+interface RawReleaseNotesTopic {
+  emoji?: string;
+  title: string;
+  text: string;
+  contributors?: string[];
+}
+
 interface RawReleaseNotesPayload {
   version: string;
   date: string;
-  /** Flat contributor list — collective hall-of-fame on top of per-item `by`. */
-  contributors: string[];
-  sections: RawReleaseNotesSection[];
+  /**
+   * Flat contributor list — collective hall-of-fame on top of per-item `by`.
+   * Optional: older notice files predate the field (renderer defaults to []).
+   */
+  contributors?: string[];
+  /** Legacy author-grouped sections. Absent on topic-format payloads. */
+  sections?: RawReleaseNotesSection[];
+  /** Topic-format blocks. Non-empty ⇒ renderer uses the topic layout. */
+  topics?: RawReleaseNotesTopic[];
+  /** Optional one-line lead above the topics (e.g. PR/commit counts). */
+  intro?: string;
 }
 
 /* ── SkillHub Registry types (v0.6) ──

@@ -19,7 +19,7 @@ import { createLogger } from '../logger.js';
 import { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
 import { loadUserBrowserRecipes, type UserRecipesResult } from '../browser-recipes/loader.js';
 import { writeUserRecipe, type WriteUserRecipeResult } from '../browser-recipes/writer.js';
-import { stopRuntimeForQuit } from './browser-dispose.js';
+import { stopRuntimeForQuitIfUsed, trackBrowserRuntimeUsage } from './browser-dispose.js';
 import {
   BackendRouter,
   ExternalChromeBackend,
@@ -159,21 +159,26 @@ healLegacyManagedProfileDir();
 // Single shared runtime for the desktop process. Boots with the managed profile
 // (electron-free, safe at module-eval); logs route into the unified logger.
 //
-// `vendoredRuntime` is the raw upstream object. We never hand it out directly —
-// it sits behind the `ExternalChromeBackend` wrapper, which itself sits behind
-// the `BackendRouter`. The router is what callers (@cindy/mcps via
-// `getBrowserMcpDeps`, host helpers below) receive, so swapping the active
-// backend in Phase 5 is a single `router.setBackend()` call away.
-const vendoredRuntime: BrowserControlRuntime = createBrowserControlRuntime({
-  config: buildManagedConfig(),
-  logSink: (level, scope, args) => {
-    // Bind to `logger`: the unified logger's methods rely on `this`, and calling
-    // a detached `logger[level]` reference would lose it (undefined in strict
-    // mode) and silently break the browser runtime's log channel.
-    const fn = (logger[level] ?? logger.info).bind(logger);
-    fn(`[${scope}]`, ...args);
-  },
-});
+// `vendoredRuntime` is the raw upstream object behind a thin usage-tracking
+// wrapper (see `trackBrowserRuntimeUsage`): every consumer in this module —
+// the `ExternalChromeBackend` (behind the `BackendRouter`, which is what
+// @cindy/mcps via `getBrowserMcpDeps` and host helpers below receive), the
+// availability probe and the login helper — calls through the wrapper, so
+// `disposeBrowserRuntime` can tell whether the runtime saw ANY traffic this
+// session. We never hand the raw object out; swapping the active backend in
+// Phase 5 is a single `router.setBackend()` call away.
+const vendoredRuntime = trackBrowserRuntimeUsage(
+  createBrowserControlRuntime({
+    config: buildManagedConfig(),
+    logSink: (level, scope, args) => {
+      // Bind to `logger`: the unified logger's methods rely on `this`, and calling
+      // a detached `logger[level]` reference would lose it (undefined in strict
+      // mode) and silently break the browser runtime's log channel.
+      const fn = (logger[level] ?? logger.info).bind(logger);
+      fn(`[${scope}]`, ...args);
+    },
+  }),
+);
 
 const externalBackend = new ExternalChromeBackend(vendoredRuntime, logger);
 
@@ -452,8 +457,7 @@ export async function openBrowserForLogin(): Promise<void> {
  * spawned process owned by the vendored runtime; nothing else sends `stop`, so
  * without this the headed Chrome + its locked user-data-dir survive app
  * quit / crash / dev-reload, and the next launch has to recover a stale
- * SingletonLock. Delegates to the active backend's `dispose` via the router —
- * for the external backend that is the electron-free `stopRuntimeForQuit`
+ * SingletonLock. Goes through the electron-free `stopRuntimeForQuitIfUsed`
  * (which swallows errors — see browser-dispose.ts).
  *
  * NOTE (Windows): the vendored stop sends SIGTERM→SIGKILL to the launched Chrome
@@ -473,8 +477,11 @@ export function disposeBrowserRuntime(): Promise<void> {
   // doesn't know about the swap and Phase 5 swap-time dispose already ran;
   // a stale-lock recovery on next launch is the symptom).
   //
-  // `stopRuntimeForQuit` is idempotent — if Chrome never started this turn
-  // it's a no-op; if it's running it stops cleanly. Safe to call regardless
-  // of which backend is currently active.
-  return stopRuntimeForQuit(vendoredRuntime, logger);
+  // Short-circuit via the usage tracker: the vendored dispatch bridge boots
+  // the browser control service (dynamic playwright import included) before
+  // routing ANY action, `stop` included — so on a session that never touched
+  // the browser runtime, an unconditional stop would START services during
+  // quit, which is an exit-hang amplifier. If the runtime WAS used, `stop` is
+  // idempotent and safe regardless of which backend is currently active.
+  return stopRuntimeForQuitIfUsed(vendoredRuntime, logger);
 }

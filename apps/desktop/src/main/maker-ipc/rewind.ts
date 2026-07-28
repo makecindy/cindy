@@ -18,6 +18,7 @@ import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 
 import { MAKER_INVOKE } from './channels.js';
 import { withSessionInputStoppedForRewind } from './register.js';
+import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 
 const log = createLogger('maker-ipc/rewind');
 const STOPPED_REWIND_RETRY_MS = 100;
@@ -92,6 +93,10 @@ export function registerMakerRewindIpc(): void {
           ? await withSessionInputStoppedForRewind(sid, () =>
               commitAfterStopping(sid, cid, { requireLatestUser }))
           : await commitRewindAtMessage(sid, cid, { requireLatestUser });
+        // 回滚后缓存的待注入交接 / fork 来源标记都是按截断前的历史算出来的,丢弃它,
+        // 让下次 send 按回滚后的现状重新判定——被回滚掉的正是当初携带来源标记的那一轮时,
+        // DB 侧判定会自动重新 arm(它按 rewind_at 过滤)。
+        agentHandoffPending.clear(sid);
         // 回滚后会话历史被截断,active 目标若继续就会对着变化后的上下文跑 —— 暂停它
         // (保留计数,用户 review 后可 resume)。fire-and-forget,失败不阻塞 rewind。
         void getGoalController()?.pauseGoal(sid, 'paused: conversation rewound').catch(() => {});

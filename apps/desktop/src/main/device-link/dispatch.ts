@@ -31,6 +31,8 @@ import {
   DL_VOICE_TRANSCRIBE_CHANNEL,
   DL_VOICE_CREDENTIAL_SYNC_CHANNEL,
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  DL_VOICE_DICTIONARY_GET_CHANNEL,
   DeviceLinkError,
   parseFsWatchTopic,
   type Envelope,
@@ -45,17 +47,20 @@ import {
 } from '@cindy/maker-shared/device-link-contract';
 import {
   resolveProviderLogoKind,
+  type ProviderLogoKind,
   type ProviderLogoRouting,
 } from '@cindy/model-providers/branding';
 import { app } from 'electron';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { createLogger } from '../logger';
+import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import { readDeviceLinkSettings } from './settings-store';
 import { dispatchLocalInvoke } from './invoke-registry';
 import { runDeviceLinkInvokeContext } from './invoke-context';
 import { fetchLocalMediaToOss } from './mediaFetch';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
+import { readDictionaryProjectionForMobile } from '../voice-input/dictionarySyncDriver.js';
 import { setBroadcastTapListener } from './broadcast-tap';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
@@ -68,8 +73,28 @@ import {
 
 const log = createLogger('device-link-dispatch');
 
+/**
+ * 老版本 mobile 只认识 #527 之前已发布的 logo kind。新 mark 可由同版本客户端按
+ * provider id 自行解析，但不能作为新 wire enum 发给独立更新的旧控制端。
+ */
+const LEGACY_DEVICE_LINK_LOGO_KINDS: ReadonlySet<ProviderLogoKind> = new Set([
+  'anthropic',
+  'openai',
+  'xd',
+  'xai',
+  'openrouter',
+  'deepseek',
+  'zhipu',
+  'zai',
+  'moonshot',
+  'minimax',
+  'alibaba',
+]);
+
 /** 控制端名展示上限,挡掉远端塞超长字符串撑爆被控端状态条 */
 const MAX_CONTROLLER_NAME_LEN = 64;
+const MAX_CONTROLLER_CAPABILITIES = 32;
+const MAX_CONTROLLER_CAPABILITY_LEN = 80;
 const REMOTE_MESSAGE_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:messages:list',
   'local-db:messages:around',
@@ -89,6 +114,41 @@ const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Se
   'local-db:sessions:list',
 ]);
 const textEncoder = new TextEncoder();
+
+/** wire 输入 fail-closed：未知形状视为空能力集，并限制数量/长度避免撑大常驻 registry。 */
+function sanitizeControllerCapabilities(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (
+      typeof item !== 'string'
+      || item.length === 0
+      || item.length > MAX_CONTROLLER_CAPABILITY_LEN
+      || seen.has(item)
+    ) continue;
+    seen.add(item);
+    out.push(item);
+    if (out.length >= MAX_CONTROLLER_CAPABILITIES) break;
+  }
+  return out;
+}
+
+function invokeControllerCapabilities(payload: InvokePayload): string[] {
+  const metadata = payload.args?.[0];
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return [];
+  return sanitizeControllerCapabilities(
+    (metadata as { capabilities?: unknown }).capabilities,
+  );
+}
+
+function optionalControllerCapabilities(
+  value: { capabilities?: unknown },
+): string[] | undefined {
+  return Object.prototype.hasOwnProperty.call(value, 'capabilities')
+    ? sanitizeControllerCapabilities(value.capabilities)
+    : undefined;
+}
 
 /** 远控 push 的紧凑重试预算:只在首发超 2MB 后使用,避免大 tool 输出反复打爆 relay 帧。 */
 const REMOTE_PUSH_TEXT_BUDGET_CHARS = 160_000;
@@ -186,7 +246,7 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
   if (channel === 'maker:set-model') {
     const patch: Record<string, unknown> = { model: args[1] };
     if (args.length > 2) {
-      patch.providerId = typeof args[2] === 'string' && args[2].trim() ? args[2] : null;
+      patch.providerId = normalizeSessionProviderId(typeof args[2] === 'string' ? args[2] : null);
     }
     await settingsPersist(sessionId, patch);
     return;
@@ -198,25 +258,29 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
 
 /**
  * routing 投影:剥掉每个 agent 路由的执行细节(upstream / authStrategy / headerDelete /
- * headerOverride / modelIdRewrite / adapter,含自定义供应商 endpoint),只保留可选
- * `wireProtocol:'openai-chat'` 展示标记，让手机区分 Cindy 桥接来源。
+ * headerOverride / modelIdRewrite / adapter,含自定义供应商 endpoint),只保留非敏感的
+ * `wireProtocol:'openai-chat'` 展示标记与 `disabled:true` 可用性门控。后者必须跨端保留，
+ * 否则控制端用共享 registry 重算来源时会把被控端禁用的 runtime 重新当成可选。
  *
  * 历史上这里曾保留 `routing.supportsFastMode` 给控制端做 Fast 显隐;现 Fast 能力已收归
  * per-(provider, agent) 的 `models[agent].supportsFastMode`(唯一真相),控制端直接从隧道带来的
- * `models` 现查(见 ModelSelector），不再读 routing,故 routing 不需保留任何字段。
+ * `models` 现查(见 ModelSelector），不再读 routing；routing 只承载上述两项跨端展示/可用性字段。
  */
 function projectRoutingForDisplay(
   routing: unknown,
-): Record<string, { wireProtocol?: 'openai-chat' }> | undefined {
+): Record<string, { wireProtocol?: 'openai-chat'; disabled?: true }> | undefined {
   if (!routing || typeof routing !== 'object' || Array.isArray(routing)) return undefined;
-  const out: Record<string, { wireProtocol?: 'openai-chat' }> = {};
+  const out: Record<string, { wireProtocol?: 'openai-chat'; disabled?: true }> = {};
   for (const [agent, value] of Object.entries(routing as Record<string, unknown>)) {
     const route = value && typeof value === 'object' && !Array.isArray(value)
       ? value as Record<string, unknown>
       : null;
-    // 只暴露控制端需要展示的「Cindy 桥接」标记。原生协议缺省不回传；endpoint、鉴权、
-    // headers、adapter 等执行字段仍全部留在被控端。
-    out[agent] = route?.wireProtocol === 'openai-chat' ? { wireProtocol: 'openai-chat' } : {};
+    // 只暴露控制端需要的「Cindy 桥接」标记与禁用门控。原生协议/启用态缺省不回传；
+    // endpoint、鉴权、headers、adapter 等执行字段仍全部留在被控端。
+    out[agent] = {
+      ...(route?.wireProtocol === 'openai-chat' ? { wireProtocol: 'openai-chat' as const } : {}),
+      ...(route?.disabled === true ? { disabled: true as const } : {}),
+    };
   }
   return out;
 }
@@ -226,12 +290,17 @@ function projectRoutingForDisplay(
  * 解析非敏感 `logoKind`,再剥掉每个 provider 的 `routing` 执行字段(upstream /
  * authStrategy / 密钥策略 / 自定义供应商 endpoint 等)。执行细节(路由 / 密钥)不出被控端
  * (控制端只渲染、不执行,见设计文档 D3),但用户重命名 preset 后手机仍能按 logoKind 展示
- * 正确品牌。Fast 显隐由控制端从隧道带来的 `models[agent].supportsFastMode` 现查。
+ * 正确品牌。Fast 显隐由控制端从隧道带来的 `models[agent].supportsFastMode` 现查；
+ * 模型显示 override 快照同样属于非敏感展示状态，需随目录投影给控制端。
  * 其它通道原样返回。
  */
-function projectInvokeResultForTunnel(channel: string, result: unknown): unknown {
+function projectInvokeResultForTunnel(
+  channel: string,
+  result: unknown,
+  supportsFullLogoKinds = false,
+): unknown {
   if (channel !== 'maker:provider:list') return result;
-  const r = result as { providers?: unknown };
+  const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown };
   if (!Array.isArray(r.providers)) return result;
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
@@ -240,11 +309,27 @@ function projectInvokeResultForTunnel(channel: string, result: unknown): unknown
       : null;
     // Never trust/pass through an arbitrary pre-existing value: only shared resolver output crosses.
     delete rest.logoKind;
-    if (logoKind) rest.logoKind = logoKind;
+    if (
+      logoKind
+      && (supportsFullLogoKinds || LEGACY_DEVICE_LINK_LOGO_KINDS.has(logoKind))
+    ) {
+      rest.logoKind = logoKind;
+    }
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });
-  return { providers };
+  const modelVisibilityOverrides = r.modelVisibilityOverrides
+    && typeof r.modelVisibilityOverrides === 'object'
+    && !Array.isArray(r.modelVisibilityOverrides)
+    ? Object.fromEntries(
+        Object.entries(r.modelVisibilityOverrides)
+          .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
+      )
+    : undefined;
+  return {
+    providers,
+    ...(modelVisibilityOverrides !== undefined ? { modelVisibilityOverrides } : {}),
+  };
 }
 
 /** 持有 client 的引用(转发 push 用);wireInboundDispatch 接入时设置。 */
@@ -592,10 +677,11 @@ function handleLinkOpen(
       : src.slice(0, 8);
   // 老控制端无 subscribe 能力:link-open 视作订阅 legacy '*'(全量转发 + 横幅),向后兼容。
   // 已在当前 link 上证明支持 topic 的客户端可能重复 open;不能重新装回兼容 wildcard。
+  const capabilities = sanitizeControllerCapabilities(payload?.capabilities);
   if (topicSubscriptionControllers.has(src)) {
-    subscriptions.updateControllerName(src, name);
+    subscriptions.updateControllerMetadata(src, name, capabilities);
   } else {
-    subscriptions.subscribe(src, [LEGACY_TOPIC], name);
+    subscriptions.subscribe(src, [LEGACY_TOPIC], name, capabilities);
   }
   syncForwarding();
   client.sendLinkAccept(src, requestId, {
@@ -927,7 +1013,7 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
   const arg = (payload.args ?? [])[0];
   const o =
     arg && typeof arg === 'object'
-      ? (arg as { topics?: unknown; controllerName?: unknown })
+      ? (arg as { topics?: unknown; controllerName?: unknown; capabilities?: unknown })
       : {};
   const topics = Array.isArray(o.topics)
     ? o.topics.filter(isRemoteSubscriptionTopic)
@@ -943,11 +1029,13 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     // link-open provisionally installs legacy '*' for old clients. A non-empty modern subscribe
     // proves topic support, so replace that compatibility firehose and remember the capability
     // until disconnect. Empty/fully-filtered frames leave legacy compatibility intact.
+    // Add the modern topics first so replacing the last legacy topic does not discard the
+    // controller metadata (including negotiated capabilities) with the registry entry.
+    subscriptions.subscribe(src, topics, name, optionalControllerCapabilities(o));
     if (topics.length > 0) {
       topicSubscriptionControllers.add(src);
       subscriptions.unsubscribe(src, [LEGACY_TOPIC]);
     }
-    subscriptions.subscribe(src, topics, name);
   } else {
     subscriptions.unsubscribe(src, topics);
   }
@@ -1025,6 +1113,19 @@ export async function runInvoke(
     };
   }
 
+  // device-link:voice:dictionary:get 是手机拉取本机词典的只读快照。手机在后台不维持
+  // WebSocket,拿不到桌面之间对等同步的 push 帧,所以改为需要时主动拉一份;它只读、
+  // 不参与合并,避免移动端维护一份会分叉的词典。
+  if (payload.channel === DL_VOICE_DICTIONARY_GET_CHANNEL) {
+    try {
+      return { ok: true, result: { ok: true, ...readDictionaryProjectionForMobile() } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`voice:dictionary:get failed from ${shortId(src)}: ${message}`);
+      return { ok: false, error: { code: 'VOICE_DICTIONARY_GET_FAILED', message } };
+    }
+  }
+
   // device-link:voice:dictionary-learning 是手机端 voice refine 后的术语学习 evidence 回写:
   // 手机只负责检测用户编辑,真正 advisor + 词典写入仍在被控桌面执行,避免移动端词典分叉。
   if (payload.channel === DL_VOICE_DICTIONARY_LEARNING_CHANNEL) {
@@ -1069,14 +1170,33 @@ export async function runInvoke(
   }
 
   try {
+    const args = payload.args ?? [];
+    const listingCapabilities = payload.channel === 'maker:provider:list'
+      ? invokeControllerCapabilities(payload)
+      : [];
     const result = await runDeviceLinkInvokeContext(
       { controllerDeviceId: src, channel: payload.channel },
-      () => dispatchLocalInvoke(payload.channel, payload.args ?? []),
+      // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
+      () => dispatchLocalInvoke(
+        payload.channel,
+        payload.channel === 'maker:provider:list' ? [] : args,
+      ),
     );
     // 远程 set-* 回流:被控端 set-* runtime-only,补一次 DB 持久化 + 广播 patched,让控制端
     // 镜像收敛到被控端真相(取代控制端乐观覆盖)。本机会话不走这条(走 renderer update)。
     await persistRemoteSetting(payload.channel, payload.args ?? [], result);
-    return { ok: true, result: projectInvokeResultForTunnel(payload.channel, result) };
+    return {
+      ok: true,
+      result: projectInvokeResultForTunnel(
+        payload.channel,
+        result,
+        subscriptions.controllerSupports(
+          src,
+          CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+        )
+        || listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2),
+      ),
+    };
   } catch (err) {
     // 被控端 handler 的 throwIpcError `[CODE] message` 原样透传,
     // 控制端 renderer 继续用 extractIpcError 解码
@@ -1161,6 +1281,8 @@ export const __testing = {
   getActiveControllers,
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
+  controllerSupports: subscriptions.controllerSupports,
+  optionalControllerCapabilities,
   sendInvokeResultSafe,
   projectInvokeResultForTunnel,
   forwardPush,

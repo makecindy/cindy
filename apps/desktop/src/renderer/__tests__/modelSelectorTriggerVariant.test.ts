@@ -218,7 +218,7 @@ const providersRef = vi.hoisted(() => {
       source: 'builtin',
       agents: ['claude-code'],
       auth: { method: 'oauth' },
-      routing: {},
+      routing: { 'claude-code': {} },
       connected: true,
       models: {
         'claude-code': [

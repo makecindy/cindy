@@ -72,8 +72,34 @@ describe('validateCustomProviderConfig auth 段', () => {
     expect(validateCustomProviderConfig({ ...BASE, auth: { method: 'apiKey' } }).ok).toBe(true);
   });
 
-  it('none method 明确允许无密钥代理，但不允许夹带 OAuth 描述符', () => {
-    expect(validateCustomProviderConfig({ ...BASE, auth: { method: 'none' } }).ok).toBe(true);
+  it('none method 只允许无密钥回环代理，且不允许夹带 OAuth 描述符', () => {
+    expect(
+      validateCustomProviderConfig({
+        ...BASE,
+        auth: { method: 'none' },
+        runtimes: {
+          codex: {
+            baseUrl: 'http://127.0.0.1:4000/v1',
+            modelsUrl: 'http://localhost:4000/v1/models',
+            models: [],
+          },
+        },
+      }).ok,
+    ).toBe(true);
+    expect(validateCustomProviderConfig({ ...BASE, auth: { method: 'none' } }).ok).toBe(false);
+    expect(
+      validateCustomProviderConfig({
+        ...BASE,
+        auth: { method: 'none' },
+        runtimes: {
+          codex: {
+            baseUrl: 'http://127.0.0.1:4000/v1',
+            modelsUrl: 'https://models.example/v1/models',
+            models: [],
+          },
+        },
+      }).ok,
+    ).toBe(false);
     expect(
       validateCustomProviderConfig({
         ...BASE,

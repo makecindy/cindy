@@ -13,7 +13,7 @@
       'Inter Variable', Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
       'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC',
       'Source Han Sans SC', 'Segoe UI', Roboto, sans-serif;
-    /* 默认代码字体走 Codex / 系统等宽风格(mac 上 SF Mono 不对网页暴露字体名,
+    /* 默认代码字体使用系统等宽字体(mac 上 SF Mono 不对网页暴露字体名,
        实际命中 Menlo;Win 命中 Consolas)。JetBrains Mono 已降级为可选预设、不再是
        默认。CJK 显式回退 PingFang/雅黑,保证代码块中英混排统一等宽。 */
     --app-font-code-default:
@@ -113,8 +113,8 @@
 
   /* F3: Global disable focus outline — Chromium default :focus-visible draws
      a yellow/orange ring on buttons, options and menu items after Esc/click
-     transitions focus. Claude Desktop has no such ring; suppress it on every
-     non-input element. Inputs keep their focus hint via --*-border-focus. */
+     transitions focus. Suppress it on non-input elements while inputs keep
+     their focus hint via --*-border-focus. */
   *:focus,
   *:focus-visible {
     outline: none !important;
@@ -326,14 +326,14 @@ html:lang(ko) {
    (command-palette F2.5). The Placeholder extension injects
    `p.is-editor-empty::before` with the placeholder text in a `data-*`
    attribute; we style it to match the old textarea placeholder. */
-.ProseMirror p.is-editor-empty:first-child::before {
+.ProseMirror > p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   color: var(--chat-input-placeholder-subtle);
   float: left;
   height: 0;
   pointer-events: none;
 }
-[data-voice-draft-active='true'] .ProseMirror p.is-editor-empty:first-child::before {
+[data-voice-draft-active='true'] .ProseMirror > p.is-editor-empty:first-child::before {
   content: none;
 }
 .ProseMirror {
@@ -346,6 +346,58 @@ html:lang(ko) {
 .cm-editor .cm-dropCursor {
   border-left-color: var(--caret-accent) !important;
 }
+/* Structured composer lists keep markers and body text in the same layout
+   tree. Continuation lines therefore follow the list item content edge
+   without decoration-owned width measurements. */
+[data-chat-input-root] .ProseMirror :is(ul, ol) {
+  margin: 0;
+  --composer-list-padding: 1.5em;
+  padding-inline-start: var(--composer-list-padding, 1.5em);
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='2'] {
+  --composer-list-padding: 2.2em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='3'] {
+  --composer-list-padding: 2.8em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='4'] {
+  --composer-list-padding: 3.4em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='5'] {
+  --composer-list-padding: 4em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='6'] {
+  --composer-list-padding: 4.6em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='7'] {
+  --composer-list-padding: 5.2em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='8'] {
+  --composer-list-padding: 5.8em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='9'] {
+  --composer-list-padding: 6.4em;
+}
+[data-chat-input-root] .ProseMirror ul {
+  list-style-type: disc;
+}
+[data-chat-input-root] .ProseMirror ol {
+  list-style-type: decimal;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker=')'] > li::marker {
+  content: counter(list-item) ') ';
+}
+[data-chat-input-root] .ProseMirror ol[data-marker='、'] > li::marker {
+  content: counter(list-item) '、';
+}
+[data-chat-input-root] .ProseMirror li {
+  padding-inline-start: 0.15em;
+  overflow-wrap: anywhere;
+}
+[data-chat-input-root] .ProseMirror li > p {
+  margin: 0;
+}
+
 /* composer 列表行缩进(ComposerListIndentDecoration):单行列表使用段落级
    decoration,多行列表的无特殊标点行使用 inline-block 换行容器。padding-left
    留出"基础缩进 + 前缀宽度",首行再用负 text-indent 把列表标记悬挂回基础

@@ -66,6 +66,7 @@
       "awaitingQuestion": "等待你的回复",
       "awaitingPlan": "等待计划审阅",
       "permissionPromptTitle": "需要确认权限",
+      "permissionPromptTitleWithTool": "允许 {{toolName}}？",
       "allowOnce": "允许一次",
       "alwaysAllowForSession": "本对话总是允许",
       "deny": "拒绝"
@@ -307,9 +308,9 @@
         "confirmTitle": "推送 Codex 凭证到远端？",
         "confirmPush": "推送",
         "confirmOverwrite": "覆盖",
-        "descFirstPush": "这会把本机的 Codex 凭证装到 {{hostId}} 的 ~/.codex/auth.json。",
-        "descOverwrite": "这会覆盖 {{hostId}} 上已有的 Codex 登录态。",
-        "descOverwriteWithAge": "这会覆盖 {{hostId}} 上已有的 Codex 登录态(上次更新于 {{when}})。",
+        "descFirstPush": "这会把本机的 Codex 凭证装到 {{hostId}} 的 Cindy Codex home（~/.xdt-server/v1/codex-home/auth.json）。",
+        "descOverwrite": "这会覆盖 {{hostId}} 的 Cindy Codex home 中已有的 Codex 登录态。",
+        "descOverwriteWithAge": "这会覆盖 {{hostId}} 的 Cindy Codex home 中已有的 Codex 登录态(上次更新于 {{when}})。",
         "warnOverwrite": "远端原有的登录会被替换。如果当下有人正在那台机器上用 Codex，他们会被踢下线。",
         "warnShared": "任何能 SSH 进 {{hostId}} 的人都可以读这个文件，用你的 OpenAI 账号。",
         "daysAgo": "{{n}} 天前",
@@ -893,6 +894,11 @@
             "externalAppMacOnly": "外部 App 粘贴后的自动学习目前仅支持 macOS；App 内语音输入不受影响。",
             "ariaLabel": "切换词典自动学习"
           },
+          "deviceSync": {
+            "label": "在我的设备之间同步",
+            "hint": "词典会在同时在线的电脑之间自动合并，内容端到端传输，不经服务器保存。",
+            "ariaLabel": "切换词典跨设备同步"
+          },
           "add": "新词",
           "save": "保存",
           "cancel": "取消",
@@ -1137,7 +1143,9 @@
         "logout": "登出",
         "connect": "连接",
         "disconnect": "断开",
-        "cancel": "取消"
+        "cancel": "取消",
+        "retry": "重新获取模型列表",
+        "retrying": "正在重新获取…"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -1205,6 +1213,8 @@
           "wireProtocol": "上游协议",
           "baseUrl": "基础 URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
+          "requestPath": "精确请求路径（可选）",
+          "requestPathHelp": "留空会使用所选协议的标准路径。只有供应商使用非标准推理接口时，才填写以 / 开头的路径。",
           "apiKey": "API 密钥",
           "apiKeyPlaceholder": "API 密钥",
           "apiKeyEditPlaceholder": "保持不变(已保存)",
@@ -1236,8 +1246,9 @@
           "nameRequired": "请填写显示名称",
           "runtimeRequired": "请至少配置一个 Runtime（填写它的基础 URL 和模型）",
           "baseUrlInvalid": "基础 URL 必须是合法的 http(s) 地址",
+          "requestPathInvalid": "精确请求路径需以单个 / 开头，不含片段标识或 .、.. 路径段；空格和不安全字符请使用百分号编码",
           "modelRequired": "请至少添加一个模型",
-          "oauthInvalid": "OAuth 配置不完整：四个字段均必填，且两个端点必须是 https 地址"
+          "oauthInvalid": "OAuth 配置不完整：所有字段均必填，且两个端点必须是安全的 https 地址"
         },
         "toast": {
           "created": "已添加供应商",
@@ -1279,9 +1290,17 @@
           "label": "鉴权方式",
           "apiKey": "API 密钥",
           "oauth": "OAuth 订阅授权",
-          "oauthHelp": "适用于提供 OAuth 登录的订阅制供应商。保存后在供应商列表点「授权」完成浏览器登录，凭证仅加密存储在本机。",
+          "none": "无需鉴权",
+          "noneHelp": "适用于本机或受信任的自托管 Proxy。Cindy 会移除 CLI 自带的订阅凭证和账号头，再把请求发往该端点。",
+          "oauthHelp": "适用于提供 OAuth 登录的供应商。可选择浏览器回调或设备码流程，保存后从供应商列表发起授权。凭证仅加密存储在本机。",
+          "flowLabel": "OAuth 流程",
+          "flow": {
+            "authorization-code": "浏览器回调（PKCE）",
+            "device-code": "设备码"
+          },
           "fields": {
             "authorizeUrl": "授权端点 (Authorize URL)",
+            "deviceAuthorizationUrl": "设备授权端点 (Device Authorization URL)",
             "tokenUrl": "令牌端点 (Token URL)",
             "clientId": "Client ID",
             "scopes": "Scopes（空格分隔）"
@@ -1331,7 +1350,27 @@
         "singleAgentNote": "仅支持 {{agent}}",
         "emptyModels": "授权后自动发现可用模型",
         "emptyList": "点击左下角「添加供应商」接入你的第一个模型来源",
-        "emptyModelsConnected": "已连接，正在自动发现可用模型；若持续为空，请稍后重试。"
+        "emptyModelsConnected": "已连接，正在自动发现可用模型；若持续为空，请稍后重试。",
+        "discoveryFailed": {
+          "network": "无法连接到该供应商，因此拿不到模型列表。请检查网络或 Proxy 设置后重试。",
+          "timeout": "连接该供应商超时，因此拿不到模型列表。请检查网络后重试。",
+          "upstream": "该供应商暂时无法返回模型列表。请稍后重试。",
+          "regionBlocked": "该供应商未在你当前所在地区提供服务，因此拿不到模型列表。你可以改用其它供应商。",
+          "unauthorized": "该供应商拒绝了当前授权，因此拿不到模型列表。请断开后重新连接。",
+          "forbidden": "该供应商拒绝了这次请求，因此拿不到模型列表。若你正在使用 Proxy 或 VPN，请更换出口后重试。",
+          "rejected": "该供应商拒绝了这次请求，因此拿不到模型列表。请稍后重试或改用其它供应商。",
+          "empty": "该供应商没有返回任何可用模型。请确认账号权限后重试。"
+        },
+        "discoveryFailedStale": {
+          "network": "无法连接到该供应商，下面是上次获取的模型列表。请检查网络或 Proxy 设置后重试。",
+          "timeout": "连接该供应商超时，下面是上次获取的模型列表。请检查网络后重试。",
+          "upstream": "该供应商暂时无法返回模型列表，下面是上次获取的结果。请稍后重试。",
+          "regionBlocked": "该供应商未在你当前所在地区提供服务，下面是上次获取的模型列表。你可以改用其它供应商。",
+          "unauthorized": "该供应商拒绝了当前授权，下面是上次获取的模型列表。请断开后重新连接。",
+          "forbidden": "该供应商拒绝了这次请求，下面是上次获取的模型列表。若你正在使用 Proxy 或 VPN，请更换出口后重试。",
+          "rejected": "该供应商拒绝了这次请求，下面是上次获取的模型列表。请稍后重试或改用其它供应商。",
+          "empty": "该供应商这次没有返回任何可用模型，下面是上次获取的列表。请确认账号权限后重试。"
+        }
       },
       "detect": {
         "groupLabel": "检测到本机 CLI",
@@ -1348,14 +1387,17 @@
         "stepModels": "选择模型",
         "searchPlaceholder": "搜索供应商…",
         "groupSubscription": "订阅授权 · 推荐",
-        "groupApiKey": "API Key 供应商 · 预设随目录更新",
+        "groupApiKey": "API 与自托管 Proxy · 预设随目录更新",
         "groupCustom": "自定义",
         "metaOAuth": "订阅授权",
         "metaApiKey": "API Key",
+        "metaNoAuth": "本机 / 自托管 · 无需鉴权",
         "customTitle": "自定义端点",
         "customMeta": "接入任意 OpenAI / Anthropic 兼容的模型来源",
         "pickHint": "鉴权方式由供应商定义决定；OAuth 端点与基础 URL 由预设携带，无需手填。",
         "oauthDesc": "通过浏览器完成订阅授权，无需 API Key",
+        "deviceOAuthDesc": "使用一次性设备码，在供应商验证页面完成授权",
+        "authorizeInBrowser": "在浏览器中授权",
         "authorizeWithDeviceCode": "使用设备码",
         "preparingDeviceCode": "正在生成设备码…",
         "deviceCodePrompt": "请在验证页面输入以下一次性设备码：",
@@ -1369,10 +1411,16 @@
         "authorizeFailed": "「{{name}}」授权失败，请重试",
         "nameLabel": "显示名称",
         "onlyAgentNote": "此供应商仅支持 {{agent}}",
+        "endpointLabel": "{{agent}} 基础 URL",
+        "noAuthNote": "此 Proxy 无需客户端密钥；Cindy 会在转发前移除 CLI 的订阅凭证。",
         "bridgedNote": "Cindy 桥接（Chat Completions）",
         "docsLink": "查看接入文档",
         "fetching": "正在验证连接并获取模型列表…",
         "fetchFailed": "模型列表获取失败——可先按预设推荐模型完成添加，稍后在详情里刷新",
+        "manualModelHint": "未发现可用模型，请填写此 Proxy 实际提供的模型 ID。",
+        "manualModelLabel": "{{agent}} 模型 ID",
+        "manualModelPlaceholder": "例如 local-model",
+        "addManualModel": "添加模型",
         "recommended": "推荐",
         "modelsHint": "勾选的模型将出现在对话的模型选择器中，对可用的 CLI 同时生效；之后可在供应商详情里随时调整。",
         "noModelSelected": "请至少勾选一个模型",
@@ -2993,7 +3041,10 @@
       "errorBody": "请回到 {{appName}} 重新登录。",
       "returnButton": "回到 {{appName}}"
     },
-    "globalRegion": "Global",
+    "regionPill": {
+      "cn": "CN",
+      "dev": "Dev"
+    },
     "errors": {
       "fallback": "登录失败，请稍后重试",
       "AUTH_SERVICE_UNAVAILABLE": "登录服务暂不可用",
@@ -3657,7 +3708,7 @@
       "title": "更新公告",
       "newFeatures": "新功能",
       "bugFixes": "问题修复",
-      "craftedBy": "出品",
+      "thanksTo": "感谢",
       "gotIt": "我知道了",
       "ariaDescription": "版本 {{version}} 的更新说明",
       "ariaDescriptionSpan": "自 v{{from}} 起累计 {{count}} 个版本的更新说明",
@@ -3811,6 +3862,8 @@
         "ACTION_STALE": "设置已更新，请重新选择配置操作。",
         "AUTH_CANCELLED": "授权已取消，您可以重新授权。",
         "AUTH_FAILED": "未能完成授权，请重试。",
+        "AUTH_NETWORK": "无法连接授权服务，请检查网络后重试。",
+        "AUTH_SERVICE_UNAVAILABLE": "授权服务暂不可用，请稍后重试。",
         "INLINE_INVALID": "配置内容无效，请检查后重试。",
         "INLINE_UNAVAILABLE": "当前版本无法在对话中保存此配置，请更新 Cindy 后重试。",
         "SAVE_FAILED": "未能保存配置，请重试。",
@@ -4253,6 +4306,7 @@
       "refining": "正在润色",
       "result": "语音输入",
       "inputFailed": "输入失败",
+      "transcriptKept": "已保留识别出的文字",
       "permissionRequired": "需要授权",
       "error": "语音输入失败"
     },
@@ -4290,7 +4344,11 @@
     "apiKeyRequired": "需要先配置 API Key，才能使用语音输入。",
     "cindyServiceUnavailable": "Cindy 官方语音服务暂不可用，请检查网络或切换服务来源。",
     "asrServiceUnavailable": "语音识别服务连接失败，请检查网络或稍后重试。",
-    "emptyTranscript": "检测到了语音，但没有识别出文字，请重试。"
+    "emptyTranscript": "检测到了语音，但没有识别出文字，请重试。",
+    "connectionInterrupted": "语音连接中断了，请检查网络后重试。",
+    "recognitionStalled": "语音识别没有继续返回结果，请重试。",
+    "transcriptKept": "{{message}}（识别出的文字已经保留，可以直接编辑）",
+    "transcriptKeptOverlay": "{{message}}（识别出的文字已经保留，可以复制后继续用）"
   },
   "chat": {
     "askUserQuestion": {
@@ -4389,7 +4447,7 @@
       "credentialSwitchBusy": "其他 Codex 任务正在运行，暂时无法按本对话选择的模型来源切换（需要重启共享的 Codex 后台进程）。等其他任务结束后点「重试」即可。",
       "codexThreadStale": "Codex 鉴权模式已切换，当前对话无法继续 —— 请新建对话后生效。",
       "budgetModelHint": "如果反复失败，可以切换到普通版 GPT 再试试。",
-      "codexAuthMissing": "远端 codex 还没同步登录态（401 Unauthorized）。点击右侧「同步登录态」把本地 ~/.codex/auth.json 推到远端，然后重试发送。",
+      "codexAuthMissing": "远端 Codex 还没同步登录态（401 Unauthorized）。点击右侧「同步登录态」把本机 Codex 凭证推到远端 Cindy Codex home，然后重试发送。",
       "codexAuthMissingLocal": "Codex 凭证缺失或失效（401 Unauthorized）。请在 {{appName}} Settings → Codex 重新登录（登录后会自动重启 Codex app-server），或在终端跑 `codex login` + 在 Settings 切换一次鉴权模式来重启 app-server，然后新建对话再发。",
       "codexSessionExpired": "OpenAI 连接需要更新。重新连接 ChatGPT 后即可继续；{{appName}} 不会退出系统 Codex CLI，也不会要求你重新连接其他模型来源。",
       "codexSessionExpiredDialog": {
@@ -4401,7 +4459,7 @@
       "codexAuthSynced": "登录态已同步，请点击「重试」重新发送。",
       "syncAuth": "同步登录态",
       "syncAuthSyncing": "同步中…",
-      "syncAuthTitle": "把本地 ~/.codex/auth.json 同步到远端 codex-home",
+      "syncAuthTitle": "把本机 Codex 凭证同步到远端 Cindy Codex home",
       "syncAuthSuccess": "已同步，请点击「重试」重新发送",
       "syncAuthFailed": "同步失败：{{msg}}",
       "syncAuthDaemonRestartFailed": "凭证已推送到远端，但旧 daemon 没重启 — 请重连远端后再点重试",
@@ -4730,7 +4788,7 @@
       "agentSwitch": {
         "label": "已从 {{from}} 切换到 {{to}}",
         "toggleHint": "查看交接内容",
-        "handoffTitle": "交接内容——切换时发送给新引擎的上下文摘要(不会出现在你的消息里)",
+        "handoffTitle": "交接内容——切换时发送给新引擎的上下文摘要，原文为英文(不计入对话记录，仅在此展示)",
         "resumedBadge": "已续接原对话"
       }
     },
@@ -4931,6 +4989,21 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "正在思考…",
+      "generating": "正在生成…",
+      "editingFiles": "正在编辑文件…",
+      "searchingWeb": "正在搜索网页…",
+      "generatingImage": "正在生成图片…",
+      "compacting": "正在压缩上下文…",
+      "done": "已完成",
+      "waiting": "请稍候…",
+      "working": "正在工作…",
+      "running": "运行中…",
+      "turnStart": "正在处理，{{name}}",
+      "issueTip": "{{name}}，试试用 /issue 给我们提反馈或建议",
+      "runningTool": "{{tool}} 运行中…"
+    },
     "remoteSession": {
       "reconnecting": "与被控设备的连接中断，正在重连…",
       "hostOffline": "被控设备已离线，暂时无法同步",
@@ -7360,7 +7433,7 @@
     },
     "providers": {
       "alipay": "支付宝",
-      "stripe": "银行卡"
+      "stripe": "Stripe"
     },
     "currentSubscription": {
       "title": "当前订阅",

@@ -97,6 +97,9 @@
     "incomplete": "语音输入未完成，请重试。",
     "missingRefinerTargetProvider": "手机版语音润色需要 {{appName}} 语音会话(缺少 refinerTargetProvider)。",
     "emptyTranscript": "检测到语音但未识别出文本，请重试。",
+    "connectionInterrupted": "语音连接中断了，请检查网络后重试。",
+    "recognitionStalled": "语音识别没有继续返回结果，请重试。",
+    "transcriptKept": "{{message}}（识别出的文字已经保留，可以直接编辑）",
     "micPermission": "麦克风权限未开启，请在系统设置里允许 {{appName}} 使用麦克风。",
     "realtimeAudioUnavailable": "当前安装包不支持实时语音输入，请安装包含原生录音模块的测试版。"
   }

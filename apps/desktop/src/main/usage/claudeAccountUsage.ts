@@ -44,6 +44,7 @@ import { BrowserWindow } from 'electron';
 
 import { createLogger } from '../logger';
 import { readClaudeApiKey } from '../maker-host/auth-adapters';
+import { outboundFetch } from '../maker-host/outbound-fetch';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs';
 
 const log = createLogger('claudeAccountUsage');
@@ -116,7 +117,7 @@ async function fetchUserInfo(
   signal: AbortSignal,
 ): Promise<{ spend: number; maxBudget: number; budgetResetAt: string | null } | null> {
   try {
-    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/v2/user/info`, {
+    const res = await outboundFetch(`${baseUrl.replace(/\/+$/, '')}/v2/user/info`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal,
     });
@@ -148,7 +149,7 @@ async function fetchTodayActivity(
 ): Promise<LiteLlmDailyActivity | null> {
   const today = utcTodayKey();
   try {
-    const res = await fetch(
+    const res = await outboundFetch(
       `${baseUrl.replace(/\/+$/, '')}/user/daily/activity?start_date=${today}&end_date=${today}`,
       { headers: { Authorization: `Bearer ${apiKey}` }, signal },
     );

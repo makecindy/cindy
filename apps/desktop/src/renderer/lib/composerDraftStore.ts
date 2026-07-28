@@ -40,6 +40,7 @@ import {
 } from '@/lib/composerQuoteDocument';
 import type { JSONContent } from '@tiptap/core';
 import { createLogger } from '@/lib/logger';
+import { plainTextToComposerDocument } from './composerListDocument';
 
 const log = createLogger('ComposerDraftStore');
 
@@ -140,6 +141,7 @@ function tiptapDocHasContent(node: JSONContent | null | undefined): boolean {
     node.type === 'pastedTextChip' ||
     node.type === COMPOSER_QUOTE_NODE_TYPE
   ) return true;
+  if (node.type === 'bulletList' || node.type === 'orderedList') return true;
   if (typeof node.text === 'string' && node.text.trim().length > 0) return true;
   if (Array.isArray(node.content)) {
     return node.content.some(tiptapDocHasContent);
@@ -241,14 +243,15 @@ export function saveDraft(
   opts?: { silent?: boolean },
 ): void {
   const key = draftKey(sessionId);
-  const normalized = draft.quotes && draft.quotes.length > 0
-    ? {
-        ...draft,
-        text: prependLegacyQuotesToComposerDocument(draft.text, draft.quotes),
-        quotes: [],
-      }
-    : draft;
-  drafts.set(key, normalized);
+  const withQuotes =
+    draft.quotes && draft.quotes.length > 0
+      ? {
+          ...draft,
+          text: prependLegacyQuotesToComposerDocument(draft.text, draft.quotes),
+          quotes: [],
+        }
+      : draft;
+  drafts.set(key, withQuotes);
   if (!opts?.silent) {
     const set = listeners.get(key);
     if (set) for (const fn of set) {
@@ -395,17 +398,7 @@ export function appendBrowserCommentToDraft(
  * (e.g. `@some/path`), which is acceptable for an undo affordance.
  */
 export function plainTextToTiptapDoc(text: string): JSONContent {
-  if (!text) {
-    return { type: 'doc', content: [{ type: 'paragraph' }] };
-  }
-  return {
-    type: 'doc',
-    content: text.split('\n').map((line) =>
-      line.length === 0
-        ? { type: 'paragraph' }
-        : { type: 'paragraph', content: [{ type: 'text', text: line }] },
-    ),
-  };
+  return plainTextToComposerDocument(text);
 }
 
 /**

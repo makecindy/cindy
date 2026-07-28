@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { appendProviderRequestPath, isProviderRequestPath } from '../provider-url.js';
+import {
+  appendProviderRequestPath,
+  isLoopbackProviderUrl,
+  isProviderRequestPath,
+} from '../provider-url.js';
 
 describe('isProviderRequestPath', () => {
   it('accepts an encoded same-origin path with query parameters', () => {
@@ -22,6 +26,15 @@ describe('isProviderRequestPath', () => {
     '/infer\u007fmode',
     '/infer\u0085mode',
     '/café',
+    '/a"b',
+    "/a'b",
+    '/a<b',
+    '/a>b',
+    '/a^b',
+    '/a`b',
+    '/a{b',
+    '/a}b',
+    '/a|b',
     '/foo%2',
     '/%ZZ',
     '/./infer',
@@ -30,6 +43,10 @@ describe('isProviderRequestPath', () => {
     '/%2E%2e/infer',
     '/.%2e/infer',
     '/%2e./infer',
+    '/%2e%2e%2fadmin',
+    '/%2E%2E%5Cadmin',
+    '/safe%2Fpart',
+    '/safe%5cpart',
     '/模型',
     '/v1\\messages',
     'responses',
@@ -40,6 +57,43 @@ describe('isProviderRequestPath', () => {
   it('does not treat dot-like query values as path segments', () => {
     expect(isProviderRequestPath('/infer?next=../other')).toBe(true);
     expect(isProviderRequestPath('/infer?next=%2e%2e')).toBe(true);
+    expect(isProviderRequestPath('/infer?next=%2fadmin')).toBe(true);
+  });
+});
+
+describe('isLoopbackProviderUrl', () => {
+  it.each([
+    'http://localhost:4000/v1',
+    'https://127.0.0.1/v1',
+    'http://127.42.0.7:4000/v1',
+    'http://[::1]:4000/v1',
+  ])('accepts a loopback provider URL: %s', (url) => {
+    expect(isLoopbackProviderUrl(url)).toBe(true);
+  });
+
+  it('accepts runtimes that serialize the IPv6 loopback hostname without brackets', () => {
+    const NativeUrl = URL;
+    vi.stubGlobal('URL', class extends NativeUrl {
+      override get hostname(): string {
+        const hostname = super.hostname;
+        return hostname === '[::1]' ? '::1' : hostname;
+      }
+    });
+    try {
+      expect(isLoopbackProviderUrl('http://[::1]:4000/v1')).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([
+    'https://litellm.example/v1',
+    'http://localhost.evil.example/v1',
+    'http://128.0.0.1/v1',
+    'http://user:pass@localhost:4000/v1',
+    'ftp://127.0.0.1/v1',
+  ])('rejects a non-loopback or unsafe provider URL: %s', (url) => {
+    expect(isLoopbackProviderUrl(url)).toBe(false);
   });
 });
 

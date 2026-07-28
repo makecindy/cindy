@@ -23,7 +23,24 @@ export function docContainsAtomChip(doc: ProseMirrorNode): boolean {
   return found;
 }
 
+/** Structured list nodes carry a visible marker even when their paragraph is empty. */
+export function docContainsStructuredList(doc: ProseMirrorNode): boolean {
+  let found = false;
+  doc.descendants((node) => {
+    if (node.type.name === 'bulletList' || node.type.name === 'orderedList') {
+      found = true;
+      return false;
+    }
+    return !found;
+  });
+  return found;
+}
+
 /** 输入框文档是否"真空"(无文本且无 chip)——textContent 判空的 chip-aware 版。 */
 export function composerDocIsEmpty(doc: ProseMirrorNode): boolean {
-  return !docContainsAtomChip(doc) && doc.textContent.trim().length === 0;
+  return (
+    !docContainsAtomChip(doc) &&
+    !docContainsStructuredList(doc) &&
+    doc.textContent.trim().length === 0
+  );
 }

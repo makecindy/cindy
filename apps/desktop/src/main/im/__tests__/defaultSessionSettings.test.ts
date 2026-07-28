@@ -81,7 +81,10 @@ const providers = [
       'claude-code': claudeModels,
       codex: codexModels,
     },
-    routing: {},
+    routing: {
+      'claude-code': { upstream: 'https://xd.example', authStrategy: 'gateway-key' },
+      codex: { upstream: 'https://xd.example', authStrategy: 'gateway-key' },
+    },
   },
   {
     id: 'openai',
@@ -93,7 +96,9 @@ const providers = [
       'claude-code': [],
       codex: openAiCodexModels,
     },
-    routing: {},
+    routing: {
+      codex: { upstream: 'https://api.openai.com', authStrategy: 'oauth-passthrough' },
+    },
   },
 ];
 

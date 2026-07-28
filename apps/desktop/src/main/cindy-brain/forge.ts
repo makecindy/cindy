@@ -1602,7 +1602,9 @@ const connectInit = { method:'POST' };
 // 典型用法是先读 /app-context,由意识按 region 选择公开 App ID。
 if (selectedClientId) connectInit.body = JSON.stringify({ clientId: selectedClientId });
 const r = await (await fetch('/oauth/acct/connect', connectInit)).json();
-// → { ok:true, account } 或 { ok:false, error: 'NO_CLIENT_CONFIG'|'TIMEOUT'|'CANCELLED'|'CALLBACK_INVALID'|'EXCHANGE_FAILED'|'NETWORK'|'ACCOUNT_LIMIT', detail? }
+// → { ok:true, account } 或 { ok:false, error: 'NO_CLIENT_CONFIG'|'ACCOUNT_LIMIT'|'VAULT_WRITE_FAILED'|'INVALID_CONFIG'|'LISTEN_FAILED'|'TIMEOUT'|'CANCELLED'|'CALLBACK_INVALID'|'EXCHANGE_FAILED'|'SERVICE_UNAVAILABLE'|'NETWORK', detail? }
+// NETWORK = 客户端无法连接授权服务,提示用户检查网络后重试;
+// SERVICE_UNAVAILABLE = broker 路由缺失或服务端 5xx,提示用户稍后重试。
 // 授权成功时主机会自动弹「授权成功,已连接 xxx」的系统提示(带你的身份头,
 // 无需声明 notify 槽);设置页只管刷新自己的账号列表。
 // 断开账号 / 设默认账号:

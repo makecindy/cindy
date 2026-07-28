@@ -3,6 +3,8 @@
   "resync": "다시 동기화",
   "resyncing": "다시 동기화하는 중",
   "syncShort": "동기화",
+  "deviceUnresponsiveTitle": "컴퓨터가 응답하지 않습니다",
+  "deviceUnresponsiveHint": "컴퓨터가 일시적으로 응답하지 않습니다. 자동으로 다시 시도하고 있습니다.",
   "connectStep1": "컴퓨터에 {{appName}}을(를) 설치하고 실행하세요",
   "connectStep2": "휴대폰과 동일한 계정으로 로그인하세요",
   "connectStep3": "'설정 → 원격 연결'에서 '동일 계정 기기의 이 컴퓨터 제어 허용'을 켜세요",

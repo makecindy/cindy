@@ -453,6 +453,100 @@ describe('被控端控制链路生命周期', () => {
     expect(getActiveControllers()).toHaveLength(0);
   });
 
+  it('link-open capability controls whether provider projection includes new logo kinds', async () => {
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    registry.register('maker:provider:list', () => ({
+      providers: [{
+        id: 'renamed-vercel',
+        name: 'Team gateway',
+        routing: { codex: { upstream: 'https://ai-gateway.vercel.sh/v1' } },
+      }],
+    }));
+
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'r-cap',
+      src: 'ctrl-cap',
+      payload: {
+        controllerName: 'Current mobile',
+        protocolVersion: 1,
+        appVersion: '2.0.0',
+        capabilities: ['provider-logo-kinds-v2'],
+      },
+    });
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'r-legacy',
+      src: 'ctrl-legacy',
+      payload: {
+        controllerName: 'Legacy mobile',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+
+    const current = await runInvoke('ctrl-cap', { channel: 'maker:provider:list', args: [] });
+    const legacy = await runInvoke('ctrl-legacy', { channel: 'maker:provider:list', args: [] });
+    expect(current).toMatchObject({
+      ok: true,
+      result: { providers: [{ logoKind: 'vercel', routing: { codex: {} } }] },
+    });
+    expect(legacy).toMatchObject({
+      ok: true,
+      result: { providers: [{ routing: { codex: {} } }] },
+    });
+    expect((legacy as { result: { providers: Record<string, unknown>[] } }).result.providers[0])
+      .not.toHaveProperty('logoKind');
+  });
+
+  it('listing-only invoke can negotiate new logo kinds without link-open', async () => {
+    registry.register('maker:provider:list', () => ({
+      providers: [{
+        id: 'renamed-vercel',
+        name: 'Team gateway',
+        routing: { codex: { upstream: 'https://ai-gateway.vercel.sh/v1' } },
+      }],
+    }));
+
+    const current = await runInvoke('ctrl-list-only', {
+      channel: 'maker:provider:list',
+      args: [{ capabilities: ['provider-logo-kinds-v2'] }],
+    });
+    expect(current).toMatchObject({
+      ok: true,
+      result: { providers: [{ logoKind: 'vercel', routing: { codex: {} } }] },
+    });
+  });
+
+  it('malformed link-open capabilities fail closed without blocking link acceptance', async () => {
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'r-malformed-cap',
+      src: 'ctrl-malformed-cap',
+      payload: {
+        controllerName: 'Mixed client',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+        capabilities: { invalid: true } as never,
+      },
+    });
+
+    expect(calls.linkAccept).toContainEqual({
+      dst: 'ctrl-malformed-cap',
+      requestId: 'r-malformed-cap',
+    });
+    expect(dispatchTesting.controllerSupports(
+      'ctrl-malformed-cap',
+      'provider-logo-kinds-v2',
+    )).toBe(false);
+  });
+
   it('link-close → 移除控制端,最后一个关闭后停 broadcast-tap', () => {
     remoteControlEnabled = true;
     const { client, feed } = makeFakeClient();
@@ -622,17 +716,53 @@ const SUB = 'device-link:subscribe';
 const UNSUB = 'device-link:unsubscribe';
 
 /** feed 一个 subscribe/unsubscribe 控制帧(走 invoke 帧承载)。 */
-function subFrame(src: string, channel: string, topics: string[], controllerName?: string): Envelope {
+function subFrame(
+  src: string,
+  channel: string,
+  topics: string[],
+  controllerName?: string,
+  capabilities?: unknown,
+): Envelope {
   return {
     v: 1,
     kind: 'invoke',
     id: `q-${src}-${topics.join(',')}`,
     src,
-    payload: { channel, args: [{ topics, ...(controllerName ? { controllerName } : {}) }] },
+    payload: {
+      channel,
+      args: [{
+        topics,
+        ...(controllerName ? { controllerName } : {}),
+        ...(capabilities !== undefined ? { capabilities } : {}),
+      }],
+    },
   };
 }
 
 describe('被控端订阅 registry + topic 转发', () => {
+  it('subscribe frame negotiates bounded capabilities and rejects malformed shapes', () => {
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed(subFrame(
+      'ctrl-current',
+      SUB,
+      ['sessions'],
+      'Current',
+      ['provider-logo-kinds-v2'],
+    ));
+    expect(dispatchTesting.controllerSupports(
+      'ctrl-current',
+      'provider-logo-kinds-v2',
+    )).toBe(true);
+
+    feed(subFrame('ctrl-malformed', SUB, ['sessions'], 'Malformed', { invalid: true }));
+    expect(dispatchTesting.controllerSupports(
+      'ctrl-malformed',
+      'provider-logo-kinds-v2',
+    )).toBe(false);
+  });
+
   it('subscribe 帧 → 回 invoke-result;sessions topic 只发列表订阅者,不发未订阅的 heavy 事件', () => {
     remoteControlEnabled = true;
     const { client, calls, feed } = makeFakeClient();
@@ -732,6 +862,7 @@ describe('被控端订阅 registry + topic 转发', () => {
         controllerName: 'Modern',
         protocolVersion: 1,
         appVersion: '1.0.0',
+        capabilities: ['provider-logo-kinds-v2'],
       },
     });
     expect(getUpdateRelaunchControllers()).toEqual([
@@ -747,6 +878,10 @@ describe('被控端订阅 registry + topic 转发', () => {
 
     expect(dispatchTesting.getActiveControllers()).toEqual([]);
     expect(dispatchTesting.getUpdateRelaunchControllers()).toEqual([]);
+    expect(dispatchTesting.controllerSupports(
+      'ctrl-modern',
+      'provider-logo-kinds-v2',
+    )).toBe(true);
 
     feed({
       v: 1,
@@ -757,10 +892,15 @@ describe('被控端订阅 registry + topic 转发', () => {
         controllerName: 'Modern renamed',
         protocolVersion: 1,
         appVersion: '1.0.0',
+        capabilities: ['provider-logo-kinds-v2'],
       },
     });
     expect(dispatchTesting.getActiveControllers()).toEqual([]);
     expect(dispatchTesting.getUpdateRelaunchControllers()).toEqual([]);
+    expect(dispatchTesting.controllerSupports(
+      'ctrl-modern',
+      'provider-logo-kinds-v2',
+    )).toBe(true);
 
     tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
     tapWindowBroadcast('maker:event', { sessionId: 's1', event: {} });
@@ -977,6 +1117,23 @@ describe('远程 set-* 持久化回流', () => {
     const r = await runInvoke('ctrl-a', { channel: 'maker:set-model', args: ['sess-1', 'claude-x'] });
     expect(r).toMatchObject({ ok: true });
     expect(persist).toHaveBeenCalledWith('sess-1', { model: 'claude-x' });
+  });
+
+  it('set-model 持久化 trim 后的 providerId', async () => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    registry.register('maker:set-model', () => undefined);
+
+    const r = await runInvoke('ctrl-a', {
+      channel: 'maker:set-model',
+      args: ['sess-1', 'claude-x', '  anthropic  '],
+    });
+
+    expect(r).toMatchObject({ ok: true });
+    expect(persist).toHaveBeenCalledWith('sess-1', {
+      model: 'claude-x',
+      providerId: 'anthropic',
+    });
   });
 
   it('set-fast-mode → {fastMode}', async () => {

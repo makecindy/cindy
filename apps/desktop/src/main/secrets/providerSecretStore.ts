@@ -51,8 +51,8 @@ const OWNER_STORAGE_KEY = 'provider_secret_owner';
  *
  * 注意:本 store 的 set / remove **不触发** 任何副作用(例如 api_key 变更后重建
  * Codex —— 那是 safe-storage IPC 层 onApiKeyChangedMaybeRestartCodex 的职责)。
- * 当前没有"main 端写供应商 key"的路径(写入都走 renderer → IPC),set / remove
- * 仅为 API 对称而提供;未来若有 main 端写 api_key 的需求,需自行补副作用。
+ * main 端写路径仅限自定义供应商 CRUD 的 per-provider mutation queue；若扩展到
+ * 需要重建运行时的内置 provider key，必须同步补对应副作用。
  */
 
 /** 低层加密 KV(按 safeStorage 存储键名读写),抽出以便注入测试。 */
@@ -378,6 +378,78 @@ export function readCustomProviderKey(providerId: string, agent: string): string
 }
 
 /**
+ * 配置 CRUD 回滚前的严格 API key 快照读取。
+ * 仅 ENOENT 表示“没有旧 key”；owner / 加密不可用、文件读取或解密失败都必须抛错，
+ * 防止调用方把暂时不可读的现有凭证误判为空并永久删除。
+ */
+export function readCustomProviderKeyForMutation(
+  providerId: string,
+  agent: string,
+): string | null {
+  const logicalKey = customProviderSecretStorageKey(providerId, agent);
+  const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
+  if (!scopedKey) throw new Error('provider secret owner is unavailable');
+  let encoded: string;
+  try {
+    encoded = fs.readFileSync(path.join(secretDir(), `${scopedKey}.enc`), 'utf-8');
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'read custom provider key snapshot failed',
+    );
+    throw new Error('existing provider credential is unreadable');
+  }
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('provider credential encryption is unavailable');
+  }
+  try {
+    return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+  } catch (err) {
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'decrypt custom provider key snapshot failed',
+    );
+    throw new Error('existing provider credential is unreadable');
+  }
+}
+
+/** 写入某自定义供应商 runtime 的 API key；供 main 侧原子配置更新使用。 */
+export function storeCustomProviderKey(
+  providerId: string,
+  agent: string,
+  value: string,
+): boolean {
+  try {
+    return electronSecretIo.write(customProviderSecretStorageKey(providerId, agent), value);
+  } catch (err) {
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'write custom provider key failed',
+    );
+    return false;
+  }
+}
+
+/** 删除某自定义供应商 runtime 的 API key；不存在视为成功。 */
+export function removeCustomProviderKey(
+  providerId: string,
+  agent: string,
+): { success: boolean; error?: string } {
+  try {
+    return electronSecretIo.remove(customProviderSecretStorageKey(providerId, agent));
+  } catch (err) {
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'remove custom provider key failed',
+    );
+    return { success: false, error: 'remove_failed' };
+  }
+}
+
+/**
  * 读取某自定义 MCP 服务器的 bearer token(**main 侧 CustomMcpProvider resolve 专用**)。
  * 不存在 / safeStorage 不可用 / 读失败均返回 null。与 renderer 经通用 safe-storage IPC
  * 写入的 .enc 文件字节级互通。
@@ -552,6 +624,36 @@ export const genericOAuthSecretIo = {
       return null;
     }
   },
+  readStrict(providerId: string): string | null {
+    const logicalKey = providerOAuthStorageKey(providerId);
+    const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
+    if (!scopedKey) throw new Error('provider secret owner is unavailable');
+    let encoded: string;
+    try {
+      encoded = fs.readFileSync(path.join(secretDir(), `${scopedKey}.enc`), 'utf-8');
+    } catch (err) {
+      if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      log.warn(
+        { providerId, err: err instanceof Error ? err.message : String(err) },
+        'read generic oauth blob snapshot failed',
+      );
+      throw new Error('existing OAuth credential is unreadable');
+    }
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('provider credential encryption is unavailable');
+    }
+    try {
+      return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+    } catch (err) {
+      log.warn(
+        { providerId, err: err instanceof Error ? err.message : String(err) },
+        'decrypt generic oauth blob snapshot failed',
+      );
+      throw new Error('existing OAuth credential is unreadable');
+    }
+  },
   write(providerId: string, value: string): boolean {
     try {
       return electronSecretIo.write(providerOAuthStorageKey(providerId), value);
@@ -563,15 +665,23 @@ export const genericOAuthSecretIo = {
       return false;
     }
   },
-  remove(providerId: string): void {
+  remove(providerId: string): boolean {
     try {
-      electronSecretIo.remove(providerOAuthStorageKey(providerId));
+      const result = electronSecretIo.remove(providerOAuthStorageKey(providerId));
+      if (!result.success) {
+        log.warn(
+          { providerId, error: result.error ?? 'remove_failed' },
+          'remove generic oauth blob failed',
+        );
+      }
+      return result.success;
     } catch (err) {
-      // 键名校验抛错（非法 id）或底层删除异常:降级记日志,与 read/write 的容错口径一致。
+      // 键名校验抛错（非法 id）或底层删除异常：保留现有登录态并把失败交给调用方。
       log.warn(
         { providerId, err: err instanceof Error ? err.message : String(err) },
         'remove generic oauth blob failed',
       );
+      return false;
     }
   },
 };

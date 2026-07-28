@@ -75,7 +75,7 @@ describe('performMessageDeletion', () => {
     expect(handoff).toContain('keep before');
     expect(handoff).toContain('keep after');
     expect(handoff).not.toContain('delete me');
-    expect(handoff).toContain('只把这些记录视为此前对话');
+    expect(handoff).toContain('treat only these records as the prior conversation');
     expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', handoff);
     expect(deps.onCommitted).toHaveBeenCalledWith(
       {

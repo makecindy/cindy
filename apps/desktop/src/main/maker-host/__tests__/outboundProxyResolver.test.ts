@@ -85,11 +85,33 @@ describe('parseChromiumProxyResult', () => {
     expect(parseChromiumProxyResult('DIRECT')).toBe(null);
   });
 
-  it('skips unsupported SOCKS/HTTPS entries and picks the next supported one', () => {
+  it('uses SOCKS5 when it is the only usable candidate', () => {
+    expect(parseChromiumProxyResult('SOCKS5 127.0.0.1:7891')).toBe('socks5://127.0.0.1:7891');
+    // 「代理软件只开 SOCKS 出口」的典型形态 —— 此时直连会因本机解不出上游而 ENOTFOUND。
+    expect(parseChromiumProxyResult('SOCKS5 127.0.0.1:7891; DIRECT')).toBe('socks5://127.0.0.1:7891');
+    expect(parseChromiumProxyResult('HTTPS secure.proxy:443; SOCKS5 127.0.0.1:7891'))
+      .toBe('socks5://127.0.0.1:7891');
+  });
+
+  it('prefers PROXY over SOCKS5 in a mixed chain (resolver cannot express PAC fallback)', () => {
+    // 回归防护:resolver 只能给一个结果,选中的条目连不上就是失败、不会退到下一个。
+    // 支持 SOCKS5 之前这两串都选 PROXY(SOCKS5 条目被跳过);若改成选 SOCKS5,
+    // 该端点一挂就成 502,凭空多出一种原来不存在的失败模式。
     expect(parseChromiumProxyResult('SOCKS5 127.0.0.1:7891; PROXY 127.0.0.1:7890; DIRECT'))
       .toBe('http://127.0.0.1:7890');
+    expect(parseChromiumProxyResult('PROXY 127.0.0.1:7890; SOCKS5 127.0.0.1:7891'))
+      .toBe('http://127.0.0.1:7890');
+  });
+
+  it('stops at DIRECT and skips unsupported HTTPS/SOCKS(v4) entries', () => {
     expect(parseChromiumProxyResult('HTTPS secure.proxy:443; DIRECT')).toBe(null);
+    // DIRECT 之后的条目不再考虑:PAC 里 DIRECT 意味着「到此为止,直连即可」。
+    expect(parseChromiumProxyResult('DIRECT; PROXY 127.0.0.1:7890')).toBe(null);
+    expect(parseChromiumProxyResult('DIRECT; SOCKS5 127.0.0.1:7891')).toBe(null);
+    // Chromium 里裸 SOCKS 前缀就是 v4,不支持。
     expect(parseChromiumProxyResult('SOCKS 127.0.0.1:1080')).toBe(null);
+    expect(parseChromiumProxyResult('SOCKS 127.0.0.1:1080; PROXY 127.0.0.1:7890'))
+      .toBe('http://127.0.0.1:7890');
   });
 
   it('tolerates malformed input', () => {

@@ -29,7 +29,7 @@ import {
 import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
 import type { Capabilities, EffortDescriptor, ModelDescriptor } from '../types/capabilities.js';
 import { NotSupportedError } from '../types/capabilities.js';
-import type { AgentCredentialMode } from '../interfaces/auth-adapter.js';
+import type { AgentCredentialMode, AuthLoginOptions } from '../interfaces/auth-adapter.js';
 import type {
   MemoryStatus,
   MemorySetResult,
@@ -994,7 +994,7 @@ export abstract class BaseAgent {
     return this.deps.auth.getState();
   }
 
-  triggerLogin(opts?: { onProgress?: (msg: string) => void }) {
+  triggerLogin(opts?: AuthLoginOptions) {
     return this.deps.auth.triggerLogin(opts);
   }
 

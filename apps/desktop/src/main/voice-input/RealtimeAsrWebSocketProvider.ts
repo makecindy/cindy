@@ -3,6 +3,7 @@ import type { ClientRequest, IncomingMessage } from 'node:http';
 import type { AsrEvent, AsrProvider, AudioTrace } from '@cindy/voice-input-core';
 import type { VoiceInputRealtimeProtocolProfile } from '../../shared/voiceInputAsrProfiles.js';
 import { createLogger } from '../logger.js';
+import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.js';
 import { openAiLanguageCode } from './language.js';
 import { describeAsrHandshakeTraceId, describeAsrWebSocketTarget } from './voiceInputAsrConfig.js';
 import {
@@ -336,9 +337,16 @@ function createWarmRealtimeSession(
     if (!accessToken) return;
     if (generation !== warmRealtimeSessionGeneration) return;
 
+    // `ws` 不吃系统代理;直连时 agent 为 undefined,行为与不传一致。
+    const wsAgent = await createOutboundHttpAgent(connection.realtimeUrl);
+    // 代理解析是一次异步往返,期间预热世代可能已经翻篇(用户开录 / 换配置),
+    // 那就别再建这条预热连接 —— 它不会被任何人回收。
+    if (generation !== warmRealtimeSessionGeneration) return;
+
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(connection.realtimeUrl, {
         headers: realtimeHeaders(accessToken, connection.extraHeaders),
+        agent: wsAgent,
       });
       let settled = false;
       let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
@@ -754,8 +762,12 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
       return;
     }
 
+    const wsAgent = await createOutboundHttpAgent(realtimeUrl);
+    // 代理解析期间可能已停录:复查后再建连,不留没人回收的 socket。
+    if (this.stopRequested) throw new Error('Realtime ASR connection stopped.');
     const socket = new WebSocket(realtimeUrl, {
       headers: realtimeHeaders(accessToken, this.extraHeaders),
+      agent: wsAgent,
     });
     this.socket = socket;
     this.attachSocketHandlers(socket);

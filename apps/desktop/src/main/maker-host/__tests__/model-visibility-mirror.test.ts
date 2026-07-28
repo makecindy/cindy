@@ -3,12 +3,13 @@
  * 覆盖:整表替换、脏数据过滤、key 维度命中、未设 ⇒ undefined(回落目录默认)、重置。
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __resetModelVisibilityMirrorForTest,
   getModelVisibilityOverride,
   setModelVisibilityMirror,
+  syncModelVisibilityMirror,
 } from '../model-visibility-mirror.js';
 
 afterEach(() => {
@@ -37,6 +38,35 @@ describe('model-visibility-mirror', () => {
     setModelVisibilityMirror({ 'claude-code:xd:b': true });
     expect(getModelVisibilityOverride('claude-code', 'xd', 'a')).toBeUndefined();
     expect(getModelVisibilityOverride('claude-code', 'xd', 'b')).toBe(true);
+  });
+
+  it('仅在净化后的整表实际变化时返回 true，供调用方广播目录失效事件', () => {
+    expect(setModelVisibilityMirror({
+      'claude-code:xd:a': false,
+      dirty: 'ignored',
+    })).toBe(true);
+    expect(setModelVisibilityMirror({
+      dirty: 1,
+      'claude-code:xd:a': false,
+    })).toBe(false);
+    expect(setModelVisibilityMirror({
+      'claude-code:xd:a': true,
+    })).toBe(true);
+    expect(setModelVisibilityMirror(null)).toBe(true);
+    expect(setModelVisibilityMirror([])).toBe(false);
+  });
+
+  it('只在镜像实变时调用目录失效回调', () => {
+    const invalidate = vi.fn();
+
+    expect(syncModelVisibilityMirror({ 'codex:openai:gpt-5': false }, invalidate)).toBe(true);
+    expect(syncModelVisibilityMirror(
+      { dirty: 'ignored', 'codex:openai:gpt-5': false },
+      invalidate,
+    )).toBe(false);
+    expect(syncModelVisibilityMirror({ 'codex:openai:gpt-5': true }, invalidate)).toBe(true);
+
+    expect(invalidate).toHaveBeenCalledTimes(2);
   });
 
   it('过滤非 boolean 脏值;非对象入参清空镜像', () => {

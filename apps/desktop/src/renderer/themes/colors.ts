@@ -473,13 +473,13 @@ registerColor('login-panel-border', {
   light: '#D4D4D4',
   dark: '#434343',
 }, 'Login — 面板 1px inside 描边(亮色 #D4D4D4 / 暗色 #434343;DESIGN.md §16.1)');
-// 品牌红 accent 族:wave4 改判后 #DF0C27 语义限定为 accent(Global pill/字标
+// 品牌红 accent 族:wave4 改判后 #DF0C27 语义限定为 accent(区域徽标/字标
 // 红元素等品牌点缀),禁止表达页面/画板背景——命名刻意不含 bg/background
 // (token-decision-table.md 原案名 login-brand-bg 已随改判弃用)。
 registerColor('login-brand-accent', {
   light: '#DF0C27',
   dark: '#DF0C27',
-}, 'Login — 品牌红 accent(Global pill/字标红元素;禁止用作页面背景,wave4 改判)');
+}, 'Login — 品牌红 accent(区域徽标/字标红元素;禁止用作页面背景,wave4 改判)');
 registerColor('login-brand-accent-pressed', {
   light: '#A61629',
   dark: '#A61629',
@@ -546,7 +546,7 @@ registerColor('login-action-control-bg', {
 registerColor('login-back-border', {
   light: '#FFFFFF',
   dark: '#434343',
-}, 'Login — 返回钮描边(亮色白 / 暗色 #434343;figma 549:897。Global pill 白字仍走 login-inverted-button-border)');
+}, 'Login — 返回钮描边(亮色白 / 暗色 #434343;figma 549:897。区域徽标白字仍走 login-inverted-button-border)');
 registerColor('login-control-border', {
   light: '#D4D4D4',
   dark: '#434343',
@@ -602,7 +602,7 @@ registerColor('login-disabled-button-text', {
 registerColor('login-inverted-button-border', {
   light: '#FFFFFF',
   dark: '#FFFFFF',
-}, 'Login — 浅底钮白描边/Global pill 白字(两模式同值 #FFFFFF;推导,待 Figma 精确)');
+}, 'Login — 浅底钮白描边/区域徽标白字(两模式同值 #FFFFFF;推导,待 Figma 精确)');
 registerColor('login-link-text', {
   light: '#2A2828',
   dark: '#EEEEEE',
