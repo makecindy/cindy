@@ -90,7 +90,7 @@ describe('composer atomic chip presentation', () => {
 
   it('keeps the caret and prose 4px away from every composer pill', () => {
     const gapRule = globalsSource.match(
-      /\.ProseMirror :is\(\s*\[data-mention-chip\],\s*\[data-pasted-text-chip\],\s*\[data-composer-quote\],\s*\.ghost-cmd-pill,\s*\.slash-cmd-pill\s*\) \{([\s\S]*?)\n\}/,
+      /\.ProseMirror :is\(\s*\[data-mention-chip\],\s*\[data-pasted-text-chip\],\s*\[data-composer-quote\],\s*\.ghost-cmd-pill,\s*\.slash-cmd-pill,\s*\.quick-start-pill\s*\) \{([\s\S]*?)\n\}/,
     )?.[1];
 
     expect(gapRule).toContain('margin-inline: 4px');
