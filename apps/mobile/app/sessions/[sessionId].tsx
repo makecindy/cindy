@@ -1887,7 +1887,7 @@ export default function SessionScreen() {
       >
         {voiceDraftShowsListeningPrompt ? (
           <View style={styles.voiceDraftListeningPrompt}>
-            <VoiceMicWaveCaret color={colors.statusReady} testID="session.voiceMicCaret" />
+            <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
             <Text style={styles.voiceDraftListeningText}>{composerLayout.input.placeholder}</Text>
           </View>
         ) : (
@@ -1908,7 +1908,7 @@ export default function SessionScreen() {
                 },
               ]}
             >
-              <VoiceMicWaveCaret color={colors.statusReady} testID="session.voiceMicCaret" />
+              <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
             </View>
           </View>
         )}
@@ -1986,18 +1986,19 @@ export default function SessionScreen() {
     applyComposerDraft(value, queueEditingRef.current ? { persist: false } : undefined);
   }, [applyComposerDraft]);
 
-  const moveComposerCaretToEnd = useCallback(() => {
-    composerInputRef.current?.setSelectionToEnd();
-  }, []);
-
+  // 听写期间只滚动覆盖层跟随最新文字,**不碰隐藏编辑器的 caret**(2026-07-28):
+  // 旧实现每段转写都把选区挪到末尾,而富文本编辑器的选区操作底层是 WebView
+  // 程序化 focus,配合 keyboardDisplayRequiresUserAction={false} 会在点语音的
+  // 同时弹出软键盘。#551 之前这个 focus 表现为「听写刚开始就被掐断」(focus 即
+  // 停听写),#551 修掉掐断后它幸存为弹键盘。听写中输入框本就隐藏(覆盖层渲染
+  // 草稿),caret 无意义;落焦统一放在听写结束点(finishVoiceRecording)。
   useEffect(() => {
     if (!voiceIsListening) return undefined;
     const frame = requestAnimationFrame(() => {
-      moveComposerCaretToEnd();
       voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
     });
     return () => cancelAnimationFrame(frame);
-  }, [composerInputContentHeight, composerInputVisibleHeight, draft, moveComposerCaretToEnd, voiceIsListening]);
+  }, [composerInputContentHeight, composerInputVisibleHeight, draft, voiceIsListening]);
 
   useEffect(() => {
     if (voiceIsListening && draft.length > 0) return;
@@ -3714,8 +3715,11 @@ export default function SessionScreen() {
       const latestDraft = await controller.stop();
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
       setVoiceState('done');
+      // 听写结束落焦(既有行为,显式 focus 承担弹键盘语义):focus 的 web 侧
+      // 实现即 placeCaretAtEnd,caret 落在转写文字末尾。听写**进行中**禁止任何
+      // 程序化 focus(见 voiceIsListening 滚动效应的注释)。
       requestAnimationFrame(() => {
-        moveComposerCaretToEnd();
+        composerInputRef.current?.focus();
       });
       // chat-text-quote:纯引用(无转写文字、无附件)也要发出去——发送按钮在
       // quote-only 时可见,漏了引用会变成「点发送只停了录音、消息没发」。
@@ -3736,7 +3740,7 @@ export default function SessionScreen() {
     } finally {
       voiceStopInFlightRef.current = false;
     }
-  }, [attachments.length, moveComposerCaretToEnd, t, voiceState]);
+  }, [attachments.length, t, voiceState]);
 
   const openVoiceSettings = useCallback(() => {
     void Linking.openSettings().catch((err) => {

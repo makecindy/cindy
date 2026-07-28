@@ -318,7 +318,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(sharedSource).toContain('ref={inputRef as never}');
     expect(source).toContain('ref={voiceDraftScrollRef}');
     expect(source).toContain('contentContainerStyle={styles.voiceDraftOverlayContent}');
-    expect(source).toContain('composerInputRef.current?.setSelectionToEnd();');
+    // 听写期间禁止碰隐藏编辑器的 caret(2026-07-28):setSelectionToEnd 底层是
+    // focusEditor,WebView 程序化 focus + keyboardDisplayRequiresUserAction=false
+    // 会在点语音的同时弹出软键盘。听写文字由覆盖层渲染,caret 只在用户点输入框
+    // (停止听写并有意打字)时由 WebKit 按触点放置。
+    expect(source).not.toContain('setSelectionToEnd');
     expect(source).toContain('voiceDraftScrollRef.current?.scrollToEnd({ animated: false });');
     expect(source).toContain('caretHidden={voiceIsListening}');
     expect(source).toContain('const handleComposerInputPressIn = useCallback(() => {');

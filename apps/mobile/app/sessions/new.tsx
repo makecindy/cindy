@@ -1855,7 +1855,7 @@ export default function NewRemoteSessionScreen() {
     >
       {voiceDraftShowsListeningPrompt ? (
         <View style={styles.voiceDraftListeningPrompt}>
-          <VoiceMicWaveCaret color={colors.statusReady} testID="newSession.voiceMicCaret" />
+          <VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />
           <Text style={styles.voiceDraftListeningText}>{composerListeningPlaceholder}</Text>
         </View>
       ) : (
@@ -1876,7 +1876,7 @@ export default function NewRemoteSessionScreen() {
               },
             ]}
           >
-            <VoiceMicWaveCaret color={colors.statusReady} testID="newSession.voiceMicCaret" />
+            <VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />
           </View>
         </View>
       )}
