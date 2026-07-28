@@ -204,6 +204,14 @@ function terminalErrorEvent(message: string, reason?: string): AgentEvent {
   };
 }
 
+function recoverableErrorEvent(message: string): AgentEvent {
+  return {
+    type: 'error',
+    source: 'codex',
+    data: { message, isTerminal: false, willRetry: true },
+  };
+}
+
 function authenticationErrorEvent(message = 'authentication failed'): AgentEvent {
   return {
     type: 'error',
@@ -941,6 +949,57 @@ describe('AgentIslandService native publishing', () => {
       permissionAction: null,
     });
     expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.pendingInteractionCount).toBe(0);
+  });
+
+  it('keeps permission routing through recoverable errors and clears it on terminal errors', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const resolver = vi.fn(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+
+    syncEnabledForTest(service, publish);
+    service.setPermissionResolver(resolver);
+    handleInteractionRequestForTest(service,
+      { sessionId: 's1', agentKind: 'codex' },
+      {
+        kind: 'permission',
+        requestId: 'req-reconnecting',
+        toolName: 'Bash',
+        input: { command: 'pnpm test' },
+      },
+    );
+
+    service.handleAgentEvent(
+      { sessionId: 's1', agentKind: 'codex' },
+      recoverableErrorEvent('Reconnecting... 1/5'),
+    );
+    service.handlePermissionAction({ requestId: 'req-reconnecting', action: 'allow' });
+
+    expect(resolver).toHaveBeenCalledWith('req-reconnecting', {
+      kind: 'permission',
+      behavior: 'allow',
+      permissionUpdates: undefined,
+    });
+
+    handleInteractionRequestForTest(service,
+      { sessionId: 's1', agentKind: 'codex' },
+      {
+        kind: 'permission',
+        requestId: 'req-terminal',
+        toolName: 'Bash',
+        input: { command: 'pnpm test' },
+      },
+    );
+    service.handleAgentEvent(
+      { sessionId: 's1', agentKind: 'codex' },
+      terminalErrorEvent('retry exhausted'),
+    );
+    service.handlePermissionAction({ requestId: 'req-terminal', action: 'allow' });
+
+    expect(resolver).toHaveBeenCalledTimes(1);
   });
 
   it('clears an island permission prompt by request id after app-side approval', async () => {

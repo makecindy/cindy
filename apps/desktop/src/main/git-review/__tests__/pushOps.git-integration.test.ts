@@ -2,16 +2,27 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 // Windows 上 git 子进程明显更慢(每次 spawn 数百毫秒),多步 git 编排用例会超默认 5s。
 vi.setConfig({ testTimeout: process.platform === 'win32' ? 60_000 : 30_000 });
 
+import { TestDirectoryTemplate } from '../../../test/vitest/testDirectoryTemplate';
 import { runGit } from '../gitRunner';
 import { GitReviewPushError, pushBranch } from '../pushOps';
 import { readStatus } from '../statusReader';
 import type { ReviewScope, ReviewStatus } from '../types';
 
 const roots: string[] = [];
+
+const repoTemplate = new TestDirectoryTemplate('xdt-git-review-push-', async (dir) => {
+  await runGit(['init', '-b', 'main'], { cwd: dir });
+  await runGit(['config', 'user.email', 'test@xdt.local'], { cwd: dir });
+  await runGit(['config', 'user.name', 'XDT Test'], { cwd: dir });
+  await runGit(['config', 'commit.gpgsign', 'false'], { cwd: dir });
+  await fs.writeFile(path.join(dir, 'file.txt'), 'one\n');
+  await runGit(['add', 'file.txt'], { cwd: dir });
+  await runGit(['commit', '--no-gpg-sign', '-m', 'seed'], { cwd: dir });
+});
 
 async function mkTemp(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -26,15 +37,8 @@ async function initBareRemote(): Promise<string> {
 }
 
 async function initRepo(): Promise<string> {
-  const dir = await mkTemp('xdt-git-review-push-');
-  await runGit(['init'], { cwd: dir });
-  await runGit(['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: dir });
-  await runGit(['config', 'user.email', 'test@xdt.local'], { cwd: dir });
-  await runGit(['config', 'user.name', 'XDT Test'], { cwd: dir });
-  await runGit(['config', 'commit.gpgsign', 'false'], { cwd: dir });
-  await fs.writeFile(path.join(dir, 'file.txt'), 'one\n');
-  await runGit(['add', 'file.txt'], { cwd: dir });
-  await runGit(['commit', '--no-gpg-sign', '-m', 'seed'], { cwd: dir });
+  const dir = await repoTemplate.createCopy();
+  roots.push(dir);
   return dir;
 }
 
@@ -100,6 +104,10 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) =>
     fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }),
   ));
+});
+
+afterAll(async () => {
+  await repoTemplate.dispose();
 });
 
 describe('git-review pushOps', () => {

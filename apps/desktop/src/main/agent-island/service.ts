@@ -2,7 +2,12 @@ import { dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOp
 import path from 'node:path';
 import { release as getOsRelease } from 'node:os';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
-import type { AgentEvent, InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import {
+  isTerminalAgentErrorEvent,
+  type AgentEvent,
+  type InteractionDecision,
+  type InteractionRequest,
+} from '@cindy/maker-core';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import type { ApplicationMenuCommand } from '../../shared/applicationMenuCommands.js';
@@ -950,7 +955,7 @@ export class AgentIslandService {
   }
 
   private prunePermissionRequestsForAgentEvent(sessionId: string, event: AgentEvent): void {
-    if (event.type === 'done' || event.type === 'error') {
+    if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
       this.deletePermissionRequestsForSession(sessionId);
       return;
     }
@@ -2012,6 +2017,7 @@ function buildAgentIslandStrings(): AgentIslandStrings {
     input: t('agentIsland.native.input'),
     done: t('agentIsland.native.done'),
     running: t('agentIsland.native.running'),
+    networkReconnecting: t('agentIsland.native.networkReconnecting'),
     updatingTasks: t('agentIsland.native.updatingTasks'),
     awaitingPermission: t('agentIsland.native.awaitingPermission'),
     awaitingQuestion: t('agentIsland.native.awaitingQuestion'),

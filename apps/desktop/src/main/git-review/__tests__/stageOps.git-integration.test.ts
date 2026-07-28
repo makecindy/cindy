@@ -2,10 +2,11 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.setConfig({ testTimeout: process.platform === 'win32' ? 60_000 : 30_000 });
 
+import { TestDirectoryTemplate } from '../../../test/vitest/testDirectoryTemplate';
 import { readDiffs, readFileDiff } from '../diffReader';
 import { runGit } from '../gitRunner';
 import { applyFileBatch, applyHunkSelection, GitReviewStageError } from '../stageOps';
@@ -14,8 +15,7 @@ import type { DiffSelection, FileDiff, ReviewDiffReadOptions, ReviewFileTarget, 
 
 let repoPath: string;
 
-async function initRepo(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-git-review-stage-'));
+const repoTemplate = new TestDirectoryTemplate('xdt-git-review-stage-', async (dir) => {
   await runGit(['init'], { cwd: dir });
   await runGit(['config', 'user.email', 'test@xdt.local'], { cwd: dir });
   await runGit(['config', 'user.name', 'XDT Test'], { cwd: dir });
@@ -25,8 +25,7 @@ async function initRepo(): Promise<string> {
   await fs.writeFile(path.join(dir, 'file.txt'), 'one\ntwo\nthree\n');
   await runGit(['add', 'file.txt'], { cwd: dir });
   await runGit(['commit', '--no-gpg-sign', '-m', 'seed'], { cwd: dir });
-  return dir;
-}
+});
 
 function scope(): ReviewScope {
   return {
@@ -116,11 +115,15 @@ async function tryCreateDirSymlink(target: string, linkPath: string): Promise<bo
 }
 
 beforeEach(async () => {
-  repoPath = await initRepo();
+  repoPath = await repoTemplate.createCopy();
 });
 
 afterEach(async () => {
   await fs.rm(repoPath, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+});
+
+afterAll(async () => {
+  await repoTemplate.dispose();
 });
 
 describe('git-review stageOps', () => {
@@ -152,12 +155,12 @@ describe('git-review stageOps', () => {
     expect((await runGit(['diff', '--', 'file.txt'], { cwd: repoPath })).stdout).toContain('+ONE');
   });
 
-  it('applies hidden-whitespace hunk operations without dropping whitespace-only edits', async () => {
+  it('stages substantive hunks without dropping hidden whitespace-only edits', async () => {
     await seedWhitespaceFixture();
     await writeSubstantiveAndWhitespaceChanges();
 
-    let current = await status();
-    let unstaged = (await diffs({ ignoreWhitespace: true })).unstaged[0];
+    const current = await status();
+    const unstaged = (await diffs({ ignoreWhitespace: true })).unstaged[0];
     expect(unstaged.hunks).toHaveLength(1);
     await applyHunkSelection(scope(), current, 'stage', unstaged, selectHunk(unstaged), { ignoreWhitespace: true });
 
@@ -165,33 +168,39 @@ describe('git-review stageOps', () => {
     const afterStageWorktree = (await runGit(['diff', '--', 'file.txt'], { cwd: repoPath })).stdout;
     expect(afterStageWorktree).not.toContain('+keep = 2;');
     expect(afterStageWorktree).toContain('+  beta');
+  });
 
-    current = await status();
-    let staged = (await diffs({ ignoreWhitespace: true })).staged[0];
+  it('unstages substantive hunks without dropping hidden whitespace-only edits', async () => {
+    await seedWhitespaceFixture();
+    await writeSubstantiveAndWhitespaceChanges();
+    await runGit(['add', 'file.txt'], { cwd: repoPath });
+
+    const current = await status();
+    const staged = (await diffs({ ignoreWhitespace: true })).staged[0];
     await applyHunkSelection(scope(), current, 'unstage', staged, selectHunk(staged), { ignoreWhitespace: true });
-    expect((await runGit(['diff', '--cached', '--', 'file.txt'], { cwd: repoPath })).stdout).toBe('');
-    expect((await runGit(['diff', '--', 'file.txt'], { cwd: repoPath })).stdout).toContain('+keep = 2;');
-    expect((await runGit(['diff', '--', 'file.txt'], { cwd: repoPath })).stdout).toContain('+  beta');
 
-    current = await status();
-    unstaged = (await diffs({ ignoreWhitespace: true })).unstaged[0];
+    const cachedWhitespaceOnly = (await runGit(['diff', '--cached', '--', 'file.txt'], { cwd: repoPath })).stdout;
+    expect(cachedWhitespaceOnly).not.toContain('+keep = 2;');
+    expect(cachedWhitespaceOnly).toContain('+  beta');
+    const worktree = (await runGit(['diff', '--', 'file.txt'], { cwd: repoPath })).stdout;
+    expect(worktree).toContain('+keep = 2;');
+    expect(worktree).not.toContain('+  beta');
+  });
+
+  it('discards substantive hunks without dropping hidden whitespace-only edits', async () => {
+    await seedWhitespaceFixture();
+    await writeSubstantiveAndWhitespaceChanges();
+
+    const current = await status();
+    const unstaged = (await diffs({ ignoreWhitespace: true })).unstaged[0];
     await applyHunkSelection(scope(), current, 'discard', unstaged, selectHunk(unstaged), { ignoreWhitespace: true });
+
     const afterDiscard = await fs.readFile(path.join(repoPath, 'file.txt'), 'utf8');
     expect(afterDiscard).toContain('keep = 1;');
     expect(afterDiscard).toContain('  beta');
     const remainingDiff = (await runGit(['diff', '--', 'file.txt'], { cwd: repoPath })).stdout;
     expect(remainingDiff).not.toContain('+keep = 2;');
     expect(remainingDiff).toContain('+  beta');
-
-    await runGit(['reset', '--hard', 'HEAD'], { cwd: repoPath });
-    await writeSubstantiveAndWhitespaceChanges();
-    await runGit(['add', 'file.txt'], { cwd: repoPath });
-    current = await status();
-    staged = (await diffs({ ignoreWhitespace: true })).staged[0];
-    await applyHunkSelection(scope(), current, 'unstage', staged, selectHunk(staged), { ignoreWhitespace: true });
-    const cachedWhitespaceOnly = (await runGit(['diff', '--cached', '--', 'file.txt'], { cwd: repoPath })).stdout;
-    expect(cachedWhitespaceOnly).not.toContain('+keep = 2;');
-    expect(cachedWhitespaceOnly).toContain('+  beta');
   });
 
   it('supports partial staging and partial/full unstaging of new files', async () => {

@@ -87,6 +87,7 @@ import {
   clearDraftAndNotify as clearComposerDraftAndNotify,
   getDraft as getComposerDraft,
   plainTextToTiptapDoc,
+  quickStartTextToTiptapDoc,
   saveDraft as saveComposerDraft,
 } from '@/lib/composerDraftStore';
 import type { JSONContent } from '@tiptap/core';
@@ -1659,6 +1660,8 @@ export function NewMakerDraftRoute() {
             // 里, route change 在那次 commit 同时发生,旧的 draft route 直接被 unmount,
             // 不会暴露 cleared 后的视觉状态。clearFiles 仍然在 React 提交 unmount cleanup
             // 之前同步执行,所以 useAttachments 的 cleanup 不会把刚送出去的附件回写到 store。
+            // 保存原始 doc JSON(含 quickStartPill 等 mark),供 worktree 失败恢复时原样还原。
+            const preNavDraftDoc = getComposerDraft(NEW_MAKER_DRAFT_KEY)?.text ?? null;
             navigate(`/cc-agent/${newSession.id}`, { replace: true });
             // clearDraftAndNotify (not bare clear): onSend returned false above
             // so ChatInput never cleared its editor — without notifying it, the
@@ -1676,7 +1679,7 @@ export function NewMakerDraftRoute() {
               let rehomedFiles = files;
               const restoreFirstMessageDraft = () => {
                 saveComposerDraft(newSession.id, {
-                  text: plainTextToTiptapDoc(message),
+                  text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
                   attachments: rehomedFiles ?? [],
                 });
               };
@@ -2202,7 +2205,7 @@ export function NewMakerDraftRoute() {
       const text = t(labelKey);
       const currentDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
       saveComposerDraft(NEW_MAKER_DRAFT_KEY, {
-        text: plainTextToTiptapDoc(text),
+        text: quickStartTextToTiptapDoc(text),
         attachments: currentDraft?.attachments ?? attachmentState.attachments,
         quotes: currentDraft?.quotes,
         browserComments: currentDraft?.browserComments,

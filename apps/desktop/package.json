@@ -31,6 +31,7 @@
     "ensure-deps": "node ../../scripts/ensure-deps.mjs",
     "ensure-dev-runtime-assets": "node ../../scripts/ensure-dev-runtime-assets.mjs",
     "test": "vitest run",
+    "test:git-integration": "pnpm --dir ../.. test:runner && node ../../scripts/test-workspaces.mjs --tier git-integration",
     "test:db": "pnpm --dir ../.. test:runner && node ../../scripts/test-workspaces.mjs --tier db",
     "test:db-proxy-perf": "cross-env XDT_DB_PROXY_PERF_STRICT=1 vitest run src/main/localDb/__tests__/drizzle-proxy-perf.test.ts",
     "test:migration": "pnpm --dir ../.. test:runner && node ../../scripts/test-workspaces.mjs --tier migration",

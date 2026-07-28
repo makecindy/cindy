@@ -1,8 +1,26 @@
 import { defineConfig } from 'vitest/config';
 import path from 'node:path';
 import { desktopClientBuildEnv } from '../../scripts/shared/client-endpoint-build-env.mjs';
+import { parseVitestCliExclude } from './src/test/vitest/cliExclude';
 
 const clientBuildEnv = desktopClientBuildEnv({ allowEnvOverride: false });
+const cliTestExclude = parseVitestCliExclude(process.argv.slice(2));
+const desktopTestInclude = [
+  'src/main/__tests__/**/*.test.ts',
+  'src/main/**/__tests__/**/*.test.ts',
+  'src/renderer/__tests__/**/*.test.ts',
+  'src/renderer/**/__tests__/**/*.test.ts',
+  // renderer 组件测试(React,tsx):按文件头 `// @vitest-environment jsdom`
+  // 切 DOM 环境;此前 include 只收 .test.ts,tsx 用例根本不会被跑。
+  'src/renderer/**/__tests__/**/*.test.tsx',
+  'src/preload/__tests__/**/*.test.ts',
+  // shared 是 main/renderer 共用的纯函数层;此前漏配导致 src/shared/__tests__
+  // 下的测试(如 workingDir.test.ts)从未跑过。
+  'src/shared/__tests__/**/*.test.ts',
+];
+const gitIntegrationTestInclude = [
+  'src/main/**/*.git-integration.test.ts',
+];
 
 export default defineConfig({
   define: {
@@ -65,18 +83,27 @@ export default defineConfig({
     // Main-process code is pure Node — no DOM needed. Renderer tests (if/when
     // added) should switch to 'jsdom' via per-file `// @vitest-environment`.
     environment: 'node',
-    include: [
-      'src/main/__tests__/**/*.test.ts',
-      'src/main/**/__tests__/**/*.test.ts',
-      'src/renderer/__tests__/**/*.test.ts',
-      'src/renderer/**/__tests__/**/*.test.ts',
-      // renderer 组件测试(React,tsx):按文件头 `// @vitest-environment jsdom`
-      // 切 DOM 环境;此前 include 只收 .test.ts,tsx 用例根本不会被跑。
-      'src/renderer/**/__tests__/**/*.test.tsx',
-      'src/preload/__tests__/**/*.test.ts',
-      // shared 是 main/renderer 共用的纯函数层;此前漏配导致 src/shared/__tests__
-      // 下的测试(如 workingDir.test.ts)从未跑过。
-      'src/shared/__tests__/**/*.test.ts',
+    // Keep include arrays project-local: Vitest merges array options inherited
+    // through extends:true, so a root include would make the resource project
+    // collect standard tests too. The two projects remain mutually exclusive.
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'standard',
+          include: desktopTestInclude,
+          exclude: [...gitIntegrationTestInclude, ...cliTestExclude],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'git-integration',
+          include: gitIntegrationTestInclude,
+          exclude: cliTestExclude,
+          globalSetup: ['src/test/vitest/desktopTestResourceLock.ts'],
+        },
+      },
     ],
   },
 });

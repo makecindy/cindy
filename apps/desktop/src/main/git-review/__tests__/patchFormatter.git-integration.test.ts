@@ -1,17 +1,26 @@
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.setConfig({ testTimeout: process.platform === 'win32' ? 60_000 : 30_000 });
 
+import { TestDirectoryTemplate } from '../../../test/vitest/testDirectoryTemplate';
 import { parseGitDiff } from '../diffParser';
 import { formatPatchForSelection, PatchFormatError } from '../patchFormatter';
 import { runGit } from '../gitRunner';
 import type { DiffSelection, FileDiff } from '../types';
 
 const repos: string[] = [];
+
+const repoTemplate = new TestDirectoryTemplate('xdt-git-review-patch-', async (dir) => {
+  await runGit(['init', '-b', 'main'], { cwd: dir });
+  await runGit(['config', 'user.email', 'test@xdt.local'], { cwd: dir });
+  await runGit(['config', 'user.name', 'XDT Test'], { cwd: dir });
+  await runGit(['config', 'commit.gpgsign', 'false'], { cwd: dir });
+  // 测试内容显式用 LF 断言;屏蔽全局 autocrlf=true(Windows 默认)对 checkout/apply 的换行改写。
+  await runGit(['config', 'core.autocrlf', 'false'], { cwd: dir });
+});
 
 function parse(raw: string, path = 'file.txt'): FileDiff {
   return parseGitDiff(raw, { source: 'unstaged', pathHint: path, kind: 'text' });
@@ -22,14 +31,8 @@ function select(hunkIndex: number, lineIndices: number[]): DiffSelection {
 }
 
 async function initRepo(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-git-review-patch-'));
+  const dir = await repoTemplate.createCopy();
   repos.push(dir);
-  await runGit(['init', '-b', 'main'], { cwd: dir });
-  await runGit(['config', 'user.email', 'test@xdt.local'], { cwd: dir });
-  await runGit(['config', 'user.name', 'XDT Test'], { cwd: dir });
-  await runGit(['config', 'commit.gpgsign', 'false'], { cwd: dir });
-  // 测试内容显式用 LF 断言;屏蔽全局 autocrlf=true(Windows 默认)对 checkout/apply 的换行改写。
-  await runGit(['config', 'core.autocrlf', 'false'], { cwd: dir });
   return dir;
 }
 
@@ -56,6 +59,10 @@ afterEach(async () => {
   await Promise.all(repos.splice(0).map((repoPath) =>
     fs.rm(repoPath, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }),
   ));
+});
+
+afterAll(async () => {
+  await repoTemplate.dispose();
 });
 
 describe('git-review patchFormatter', () => {

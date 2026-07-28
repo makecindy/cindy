@@ -1008,6 +1008,16 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(secondComplete).not.toHaveBeenCalled();
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
 
+    h.emit({
+      type: 'error',
+      data: { message: 'Reconnecting... 1/5', isTerminal: false, willRetry: true },
+    });
+    await flushMicrotasks();
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(firstComplete).not.toHaveBeenCalled();
+    expect(secondComplete).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+
     h.emit({ type: 'text', data: { text: 'first final', isFinal: true } });
     h.emit({ type: 'done', data: {} });
     await waitForAssertion(() => {
@@ -1042,6 +1052,14 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(h.send).not.toHaveBeenCalled();
     expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
     expect(mocks.feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+    expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+
+    h.emit({
+      type: 'error',
+      data: { message: 'Reconnecting... 1/5', isTerminal: false, willRetry: true },
+    });
+    await flushMicrotasks();
+    expect(h.send).not.toHaveBeenCalled();
     expect(mocks.persistUserMessage).not.toHaveBeenCalled();
 
     h.isTurnRunning.mockReturnValue(false);

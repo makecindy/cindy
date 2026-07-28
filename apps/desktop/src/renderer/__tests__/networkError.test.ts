@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { isNetworkishErrorMessage } from '@/utils/networkError';
+import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
 
 describe('isNetworkishErrorMessage', () => {
   it.each([
@@ -21,6 +21,8 @@ describe('isNetworkishErrorMessage', () => {
     'connect ECONNREFUSED 127.0.0.1:3333',
     'fetch failed',
     'socket hang up',
+    'Reconnecting... 2/5',
+    'Reconnecting… 3/5 (stream disconnected before completion)',
   ])('matches networkish message: %s', (msg) => {
     expect(isNetworkishErrorMessage(msg)).toBe(true);
   });
@@ -34,4 +36,20 @@ describe('isNetworkishErrorMessage', () => {
   ])('does not match non-network message: %s', (msg) => {
     expect(isNetworkishErrorMessage(msg)).toBe(false);
   });
+});
+
+describe('parseReconnectAttemptMessage', () => {
+  it('extracts valid Codex reconnect progress', () => {
+    expect(parseReconnectAttemptMessage('Reconnecting... 3/5')).toEqual({
+      attempt: 3,
+      maxAttempts: 5,
+    });
+  });
+
+  it.each(['Reconnecting...', 'Reconnecting... 0/5', 'Reconnecting... 6/5'])(
+    'rejects malformed progress: %s',
+    (msg) => {
+      expect(parseReconnectAttemptMessage(msg)).toBeNull();
+    },
+  );
 });

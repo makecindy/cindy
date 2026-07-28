@@ -648,7 +648,8 @@ html:lang(ko) {
   [data-pasted-text-chip],
   [data-composer-quote],
   .ghost-cmd-pill,
-  .slash-cmd-pill
+  .slash-cmd-pill,
+  .quick-start-pill
 ) {
   margin-inline: 4px;
 }
@@ -670,6 +671,23 @@ html:lang(ko) {
   border-radius: 9999px;
   padding: 2px 8px 3px;
   color: var(--chat-input-text);
+  font: inherit;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* 快速开始预填胶囊 — QuickStartPillMark。点击 New Maker 快速开始卡片后
+   预填文本以此 mark 包裹,渲染为与 ModelPromotionBadge 同色系的圆角
+   标签,区分「卡片预填」与「手动输入」。doc 里仍是普通 text + mark,
+   发送序列化只取 textContent,mark 不产生额外输出。
+   注意:快速开始文本是完整句子(用户需阅读/编辑),不能用 micro-label 字号
+   (DESIGN.md §3 限定 10-13px 仅用于辅助标签);此处 font: inherit 继承
+   composer 正文字号,仅用 background/color/radius 做视觉区分。 */
+.ProseMirror .quick-start-pill {
+  background: var(--accent-cta-bg);
+  border-radius: 9999px;
+  padding: 2px 8px 3px;
+  color: var(--accent-pure-cta-fg);
   font: inherit;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;

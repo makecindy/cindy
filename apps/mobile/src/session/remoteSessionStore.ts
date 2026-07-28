@@ -46,10 +46,16 @@ export const sessionMetaWriteQueue = createSessionWriteQueue();
 
 export interface RemoteSessionRunStatus {
   isRunning: boolean;
+  reconnectAttempt: RemoteSessionReconnectAttempt | null;
   sideTaskRunning: boolean;
   startedAt: number | null;
   status: string;
   tokenUsage: number;
+}
+
+export interface RemoteSessionReconnectAttempt {
+  attempt: number;
+  maxAttempts: number;
 }
 
 interface SessionMessageSyncMarker {
@@ -65,6 +71,7 @@ interface LivePlanSnapshot {
 
 const EMPTY_SESSION_RUN_STATUS: RemoteSessionRunStatus = Object.freeze({
   isRunning: false,
+  reconnectAttempt: null,
   sideTaskRunning: false,
   startedAt: null,
   status: '',
@@ -181,6 +188,11 @@ const inputProjections = new Map<string, InputProjection>();
 const sessionLiveActivity = new Map<string, RemoteSessionLiveActivity>();
 const sessionRunning = new Map<string, boolean>();
 const sessionRunStatus = new Map<string, RemoteSessionRunStatus>();
+// `maker:list-active` snapshots race live maker pushes during reconnect hydration. A snapshot
+// may clear an older transient reconnect attempt, but must not erase a newer retry event that
+// arrived after the request started.
+const sessionMakerActivityEpochs = new Map<string, number>();
+let makerActivityEpoch = 0;
 const sessionMessageSyncMarkers = new Map<string, SessionMessageSyncMarker>();
 // Per-session live sub-agent task state, decoded from `agent_task_update` events (live-only,
 // never persisted — see @cindy/maker-shared/agent-task). Keyed taskId/parentToolUseId → update.
@@ -1449,13 +1461,22 @@ export const remoteSessionStore = {
     const next: RemoteSessionRunStatus = {
       ...current,
       isRunning: running,
+      reconnectAttempt: running ? current.reconnectAttempt : null,
       sideTaskRunning: running ? current.sideTaskRunning : false,
       startedAt: running ? (current.startedAt ?? Date.now()) : null,
     };
     if (writeSessionRunStatus(sessionId, next) || turnBoundaryChanged || streamingChanged) emit();
   },
 
-  setActiveSessionSnapshots(deviceId: string, list: readonly unknown[]): void {
+  captureActiveSessionSnapshotEpoch(): number {
+    return makerActivityEpoch;
+  },
+
+  setActiveSessionSnapshots(
+    deviceId: string,
+    list: readonly unknown[],
+    activityEpochAtFetchStart = makerActivityEpoch,
+  ): void {
     // `maker:list-active` returns only currently active sessions. Absence is not
     // an idle assertion: the request can have started before a turn and complete
     // after a live delta, or a stale reconnect response can race a newer push.
@@ -1478,9 +1499,12 @@ export const remoteSessionStore = {
         changed = writeMakerTurnRunning(sessionId, false) || changed;
       }
       const current = readSessionRunStatus(sessionId);
+      const hasNewerMakerActivity = (sessionMakerActivityEpochs.get(sessionId) ?? 0)
+        > activityEpochAtFetchStart;
       const next: RemoteSessionRunStatus = {
         ...current,
         isRunning: running,
+        reconnectAttempt: running && hasNewerMakerActivity ? current.reconnectAttempt : null,
         sideTaskRunning: running ? current.sideTaskRunning : false,
         startedAt: running ? (current.startedAt ?? Date.now()) : null,
       };
@@ -1494,6 +1518,7 @@ export const remoteSessionStore = {
     // 本端已对某 revision 做过决定时,更旧的快照也不得把它带回来(见 interactionRevisionFloors)。
     if (isInteractionResolveSuppressed(sessionId, item)) return;
     const streamingChanged = flushAndFinalizeRemoteStreamingMessages(sessionId);
+    const reconnectCleared = clearSessionReconnectAttempt(sessionId);
     const existing = pendingInteractions.get(sessionId) ?? [];
     // 早发晚到的旧 push 不得把手上更新的那份换回旧版本。
     const requestId = item.request.requestId;
@@ -1505,7 +1530,7 @@ export const remoteSessionStore = {
     );
     const next = dedupeInteractions([...existing, fresher]);
     if (deepValueEqual(existing, next)) {
-      if (streamingChanged) emit();
+      if (streamingChanged || reconnectCleared) emit();
       return;
     }
     pendingInteractions.set(sessionId, next);
@@ -1819,6 +1844,7 @@ export const remoteSessionStore = {
       changed = writeSessionRunStatus(sessionId, {
         ...current,
         isRunning: false,
+        reconnectAttempt: null,
         sideTaskRunning: false,
         startedAt: null,
       }) || changed;
@@ -1827,14 +1853,19 @@ export const remoteSessionStore = {
   },
 
   applyMakerEvent(sessionId: string, event: Record<string, unknown>, persistId?: string): void {
+    markSessionMakerActivity(sessionId);
     const type = readString(event, 'type');
+    const reconnectCleared = type !== null && type !== 'error' && type !== 'done'
+      ? clearSessionReconnectAttempt(sessionId)
+      : false;
     if (type === 'text') {
       if (isRemoteTextDeltaEvent(event)) {
-        if (enqueueRemoteTextDelta(sessionId, event, persistId)) emit();
+        if (enqueueRemoteTextDelta(sessionId, event, persistId) || reconnectCleared) emit();
         return;
       }
       let changed = flushPendingTextDelta(sessionId);
       changed = applyRemoteTextEvent(sessionId, event, persistId) || changed;
+      changed = reconnectCleared || changed;
       if (changed) emit();
       return;
     }
@@ -1890,6 +1921,21 @@ export const remoteSessionStore = {
     }
 
     const textFlushed = flushPendingTextDelta(sessionId);
+    if (type === 'error') {
+      const data = isRecord(event.data) ? event.data : null;
+      const reconnectAttempt = data?.willRetry === true
+        ? parseReconnectAttemptMessage(readString(data, 'message') ?? '')
+        : null;
+      const current = readSessionRunStatus(sessionId);
+      const changed = writeSessionRunStatus(sessionId, {
+        ...current,
+        isRunning: true,
+        reconnectAttempt,
+        startedAt: current.startedAt ?? Date.now(),
+      });
+      if (changed || textFlushed) emit();
+      return;
+    }
     if (type === 'tool_use') {
       // Finalize before applying update_plan so its row update and the streaming
       // row transition are published in one snapshot notification.
@@ -1899,10 +1945,10 @@ export const remoteSessionStore = {
       );
       const livePlan = applyLivePlanToolUseMessage(sessionId, event, persistId);
       if (livePlan.handled) {
-        if (textFlushed || streamingChanged || livePlan.changed) emit();
+        if (textFlushed || streamingChanged || livePlan.changed || reconnectCleared) emit();
         return;
       }
-      if (textFlushed || streamingChanged) emit();
+      if (textFlushed || streamingChanged || reconnectCleared) emit();
       return;
     }
     if (type === 'agent_task_update') {
@@ -1917,7 +1963,7 @@ export const remoteSessionStore = {
       if (next) {
         sessionTaskUpdates.set(sessionId, next);
         emit();
-      } else if (textFlushed) {
+      } else if (textFlushed || reconnectCleared) {
         emit();
       }
       return;
@@ -1934,7 +1980,7 @@ export const remoteSessionStore = {
       // Transcript replay and the live stream may forward the same provider boundary.
       // De-duplicate before finalizing, otherwise a replay could end post-compact work.
       if (existing.some((message) => messageKey(message) === clientId)) {
-        if (textFlushed) emit();
+        if (textFlushed || reconnectCleared) emit();
         return;
       }
       // The compact boundary itself preserves the historical `streaming: false` marker
@@ -1995,6 +2041,7 @@ export const remoteSessionStore = {
       }
       const next: RemoteSessionRunStatus = {
         isRunning,
+        reconnectAttempt: null,
         sideTaskRunning: isRunning ? data?.skipTurnReset === true : false,
         startedAt: isRunning ? (current.startedAt ?? Date.now()) : null,
         status: rawStatus ?? current.status,
@@ -2006,10 +2053,11 @@ export const remoteSessionStore = {
         || turnBoundaryChanged
         || textFlushed
         || streamingChanged
+        || reconnectCleared
       ) emit();
       return;
     }
-    if (textFlushed) emit();
+    if (textFlushed || reconnectCleared) emit();
   },
 
   removeDevice(deviceId: string): void {
@@ -2027,6 +2075,7 @@ export const remoteSessionStore = {
         sessionLiveActivity.delete(sessionId);
         sessionRunning.delete(sessionId);
         sessionRunStatus.delete(sessionId);
+        sessionMakerActivityEpochs.delete(sessionId);
         sessionMessageSyncMarkers.delete(sessionId);
         sessionTaskUpdates.delete(sessionId);
         streamingAssistantClientIds.delete(sessionId);
@@ -2061,6 +2110,8 @@ export const remoteSessionStore = {
     sessionLiveActivity.clear();
     sessionRunning.clear();
     sessionRunStatus.clear();
+    sessionMakerActivityEpochs.clear();
+    makerActivityEpoch = 0;
     sessionMessageSyncMarkers.clear();
     sessionTaskUpdates.clear();
     streamingAssistantClientIds.clear();
@@ -2211,6 +2262,33 @@ function deviceListsEqual(
 
 function readSessionRunStatus(sessionId: string): RemoteSessionRunStatus {
   return sessionRunStatus.get(sessionId) ?? EMPTY_SESSION_RUN_STATUS;
+}
+
+function clearSessionReconnectAttempt(sessionId: string): boolean {
+  const current = readSessionRunStatus(sessionId);
+  if (!current.reconnectAttempt) return false;
+  return writeSessionRunStatus(sessionId, { ...current, reconnectAttempt: null });
+}
+
+function markSessionMakerActivity(sessionId: string): void {
+  makerActivityEpoch += 1;
+  sessionMakerActivityEpochs.set(sessionId, makerActivityEpoch);
+}
+
+function parseReconnectAttemptMessage(message: string): RemoteSessionReconnectAttempt | null {
+  const match = /\bReconnecting(?:\.{3}|…)\s*(\d+)\s*\/\s*(\d+)\b/i.exec(message);
+  if (!match) return null;
+  const attempt = Number(match[1]);
+  const maxAttempts = Number(match[2]);
+  if (
+    !Number.isSafeInteger(attempt)
+    || !Number.isSafeInteger(maxAttempts)
+    || attempt < 1
+    || maxAttempts < attempt
+  ) {
+    return null;
+  }
+  return { attempt, maxAttempts };
 }
 
 // 写 maker turn 边界,返回是否实际变化——变化必须参与调用方的 emit 判定(宽 run status

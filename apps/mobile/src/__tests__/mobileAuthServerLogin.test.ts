@@ -117,11 +117,11 @@ describe('mobile auth-server login', () => {
     const authSource = readFileSync(
       resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const envSource = readFileSync(
       resolve(process.cwd(), 'src/config/env.ts'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
 
     expect(authSource).toContain("kind: 'sso'");
     expect(authSource).toMatch(
@@ -149,7 +149,7 @@ describe('mobile auth-server login', () => {
     const authSource = readFileSync(
       resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     expect(authSource).toContain("action.type === 'discover' ||");
     expect(authSource).toContain("action.type === 'request-code' ||");
     expect(authSource).toContain("action.type === 'verify-code' ||");

@@ -1,9 +1,9 @@
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { TestDirectoryTemplate } from '../../test/vitest/testDirectoryTemplate';
 import {
   compensateCodexFileRewindExecution,
   executeCodexFileRewindPlan,
@@ -17,14 +17,20 @@ import { gitExec, GitExecError } from '../worktree/gitExec';
 const REAL_GIT_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 20_000;
 
 let repoPath: string;
-async function initRepo() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-codex-rewind-'));
+
+const repoTemplate = new TestDirectoryTemplate('xdt-codex-rewind-', async (dir) => {
   await gitExec(['init'], dir);
+  for (const args of [['config', 'user.email', 'test@xdt.local'], ['config', 'user.name', 'XDT Test'], ['config', 'commit.gpgsign', 'false'], ['config', 'core.autocrlf', 'false']]) await gitExec(args, dir);
+});
+
+async function initRepo() {
+  const dir = await repoTemplate.createCopy();
   // 仓库级覆写 core.excludesFile:宿主机全局 gitignore(常见如 *.tmp)会吞掉
-  // 未跟踪文件,让 status 断言在部分开发机上失真。
+  // 未跟踪文件,让 status 断言在部分开发机上失真。复制后再写绝对路径，
+  // 避免模板仓库路径泄漏进副本配置。
   const excludesOverride = path.join(dir, '.git', 'xdt-test-empty-excludes');
   await fs.writeFile(excludesOverride, '', 'utf8');
-  for (const args of [['config', 'core.excludesFile', excludesOverride], ['config', 'user.email', 'test@xdt.local'], ['config', 'user.name', 'XDT Test'], ['config', 'commit.gpgsign', 'false'], ['config', 'core.autocrlf', 'false']]) await gitExec(args, dir);
+  await gitExec(['config', 'core.excludesFile', excludesOverride], dir);
   return dir;
 }
 
@@ -90,6 +96,7 @@ async function editedSavepoint(content = 'edited\n') { await commitFile('app.txt
 
 beforeEach(async () => { repoPath = await initRepo(); });
 afterEach(async () => { await fs.rm(repoPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+afterAll(async () => { await repoTemplate.dispose(); });
 
 describe('executeCodexFileRewindPlan', () => {
   it('restores files, records rollback, and can compensate it', async () => {

@@ -7,6 +7,18 @@ const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
 
 describe('mobile session composer desktop-first surface', () => {
+  it('fences every active-session snapshot request against newer retry progress', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+
+    expect(source).toContain('const fetchActiveSessionSnapshot = async () => {');
+    expect(source).toContain(
+      'const activityEpochAtFetchStart = remoteSessionStore.captureActiveSessionSnapshotEpoch();',
+    );
+    expect((source.match(/fetchActiveSessionSnapshot\(\),/g) ?? []).length).toBe(2);
+    expect((source.match(/activeSessionSnapshot\.activityEpochAtFetchStart/g) ?? []).length).toBe(2);
+    expect((source.match(/maker\.listActiveSessions\(\)/g) ?? []).length).toBe(1);
+  });
+
   it('uses icon controls for attachment quick actions near the composer', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
     const voiceStart = source.indexOf('const startVoiceRecording = useCallback(async () => {');
@@ -124,11 +136,14 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('testID="session.attachmentPathPanel"');
     expect(source).not.toContain('被控电脑上的文件路径');
     expect(source).toContain('testID="session.composerActivityStatus"');
-    expect(source).toContain('Thinking...');
+    expect(source).toContain("t('session.screen.thinking')");
+    expect(source).toContain("t('session.screen.networkReconnecting')");
+    expect(source).toContain('{reconnectAttempt.attempt}/{reconnectAttempt.maxAttempts}');
     expect(source).toContain('ArrowDown');
     expect(source).toContain('useSessionRunStatus');
     expect(source).toContain('remoteSessionRunStatus.tokenUsage');
     expect(source).toContain('remoteSessionRunStatus.startedAt ?? composerActivityStartedAt');
+    expect(source).toContain('reconnectAttempt={remoteSessionRunStatus.reconnectAttempt}');
     expect(source).toContain('sideTaskRunning={remoteSessionRunStatus.sideTaskRunning}');
     expect(source).toContain('startedAt={composerActivityStartedAtMs}');
     expect(source).toContain('tokenUsage={composerActivityTokenUsage}');
@@ -142,6 +157,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('marginTop: spacing.lg');
     expect(source).toContain('height: 25');
     expect(source).toContain('composerActivityStatusText');
+    expect(source).toContain('composerActivityProgressText');
     expect(composerStatusCallIndex).toBeGreaterThan(-1);
     expect(composerStatusCallIndex).toBeLessThan(composerViewStart);
     expect(composerViewSource).not.toContain('<ComposerActivityStatus');
