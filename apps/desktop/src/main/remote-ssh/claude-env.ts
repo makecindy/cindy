@@ -38,7 +38,8 @@ import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
  *
  * Keys mirror `buildClaudeEnv` for parity with local Claude behaviour, minus
  * local-only bits (loopback URL, MANAGED_BY_HOST). Bump alongside any new
- * behaviour flag added in `runtime-configs.ts`.
+ * behaviour flag added in `claude-behavior-flags.ts` (runtime-configs 的
+ * behaviorFlags 来源)。
  *
  * Claude 'oauth' (subscription) mode is intentionally NOT honored on remote:
  * the per-model OAuth↔gateway split lives in the LOCAL loopback proxy, which a

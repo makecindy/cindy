@@ -128,22 +128,96 @@ export function isClaudeAutoClassifierRequest(requestBody: Buffer): boolean {
 }
 
 /**
- * 创建只读响应观察器。非错误响应(status < 400，含 2xx 成功与 3xx 重定向)均为 O(1) 短路，
- * 不 parse body、不返回 sink，因此不会 tee SSE 热路径。
+ * 瞬时故障(408/429/5xx)的升级阈值 —— #596 与 #758 的平衡点:
+ *
+ * #596 的诉求成立:一次偶发限流不该永久改写用户的 Auto 偏好。但把瞬时状态码
+ * **一律**静默吞掉,会让「确定性地返回 429」的故障(如 #758 归因块 429)把用户
+ * 留在无限硬失败 + 零提示的死锁里 —— 降级兜底恰恰是那种场景唯一的自救通道。
+ *
+ * 折中:瞬时失败按「故障段(episode)」记账,连续 EPISODE_THRESHOLD 段且中间
+ * 没有任何一次分类器成功 → 视为持续故障,交给降级协调器(降 ask + 广播 toast)。
+ *
+ * - EPISODE_MS:SDK 对 429/5xx 有自动重试,一次用户动作会在数秒内产生多个失败
+ *   响应;30s 内的失败归并为一段,避免把一次动作的 retry storm 数成 N 次。
+ * - WINDOW_MS:只统计最近 10 分钟——上午两次抖动 + 晚上一次不构成「持续」。
+ * - 阈值 3 段 ≈ 持续失败约 1 分钟,或用户间隔性重试 3 次;任一成功立即清零。
+ */
+const TRANSIENT_EPISODE_MS = 30_000;
+const TRANSIENT_WINDOW_MS = 10 * 60_000;
+const TRANSIENT_EPISODE_THRESHOLD = 3;
+/** 记账表大小上限(防长生命周期 proxy 泄漏);超限时先剔窗口过期项,再剔最老会话。 */
+const TRANSIENT_TRACKER_MAX_SESSIONS = 256;
+
+function isTransientClassifierStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/**
+ * 创建只读响应观察器。成功路径(status < 400,含 2xx/3xx)几乎恒为 O(1) 短路——
+ * 仅当**该会话已有瞬时故障记账**时才 parse body 确认「分类器已恢复」并清零计数;
+ * 无记账时不 parse、不返回 sink,不碰 SSE 热路径。
+ *
+ * 降级信号分两类:
+ * - 非瞬时 4xx(400/401/403/404/422 等确定性错误)→ 立即通知协调器(与 #596 前一致);
+ * - 瞬时 408/429/5xx → 按上方 episode 阈值记账,持续故障才通知。
  */
 export function createClaudeAutoClassifierFailureObserver(
   resolveSessionId: (sdkSessionId: string) => string | null,
+  opts: { now?: () => number } = {},
 ): ResponseObserver {
+  const now = opts.now ?? Date.now;
+  // key = sdkSessionId(cc 侧会话 id,请求头自带,成功路径无需反解);
+  // value = 各 episode 的起始时间戳,升序。
+  const transientEpisodes = new Map<string, number[]>();
+
   return (ctx: ResponseObserverCtx) => {
-    // 分类器错误本身仍由 Claude Code fail-closed 为人工审批。这里只决定是否触发降级协调器：
-    // 限流/过载/上游故障等瞬时错误直接短路，不切 runtime、不持久化 ask、也不广播降级。
-    if (ctx.status < 400 || ctx.status === 408 || ctx.status === 429 || ctx.status >= 500) {
+    if (ctx.status < 400) {
+      // 分类器恢复 → 清零该会话的瞬时故障记账。仅在有记账时才 parse body。
+      if (transientEpisodes.size === 0) return undefined;
+      const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
+      if (!sdkSessionId || !transientEpisodes.has(sdkSessionId)) return undefined;
+      if (isClaudeAutoClassifierRequest(ctx.requestBody)) {
+        transientEpisodes.delete(sdkSessionId);
+      }
       return undefined;
     }
     const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
     if (!sdkSessionId) return undefined;
     const sessionId = resolveSessionId(sdkSessionId);
     if (!sessionId || !isClaudeAutoClassifierRequest(ctx.requestBody)) return undefined;
+
+    if (isTransientClassifierStatus(ctx.status)) {
+      const ts = now();
+      let episodes = transientEpisodes.get(sdkSessionId);
+      if (!episodes) {
+        if (transientEpisodes.size >= TRANSIENT_TRACKER_MAX_SESSIONS) {
+          for (const [key, starts] of transientEpisodes) {
+            if (starts.length === 0 || ts - starts[starts.length - 1] > TRANSIENT_WINDOW_MS) {
+              transientEpisodes.delete(key);
+            }
+          }
+          if (transientEpisodes.size >= TRANSIENT_TRACKER_MAX_SESSIONS) {
+            // 仍满(极端:256 个会话同时持续故障)→ 剔最早插入的一个,保住新会话的记账。
+            const oldest = transientEpisodes.keys().next().value;
+            if (oldest !== undefined) transientEpisodes.delete(oldest);
+          }
+        }
+        episodes = [];
+        transientEpisodes.set(sdkSessionId, episodes);
+      }
+      while (episodes.length > 0 && ts - episodes[0] > TRANSIENT_WINDOW_MS) {
+        episodes.shift();
+      }
+      if (episodes.length === 0 || ts - episodes[episodes.length - 1] >= TRANSIENT_EPISODE_MS) {
+        episodes.push(ts);
+      }
+      if (episodes.length < TRANSIENT_EPISODE_THRESHOLD) return undefined;
+    }
+
+    // 任何一次通知(瞬时升级或确定性 4xx 立即降级)都清零该会话的瞬时记账:降级后
+    // 用户重开 Auto 时从零累计,不因残账被单次偶发失败提前推过阈值。协调器自身有
+    // in-flight 去重 + 持久态 CAS,重复信号安全。
+    transientEpisodes.delete(sdkSessionId);
 
     try {
       notifyAutoPermissionClassifierUnavailable({
