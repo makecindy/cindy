@@ -18,7 +18,9 @@ describe('claudeBehaviorFlagsForSpawn', () => {
     // 回落)可能直连 api.anthropic.com,归因块必须保留,否则分类器子请求被上游 429。
     for (const credentialMode of ['oauth-bearer', 'provider-oauth', undefined]) {
       const flags = claudeBehaviorFlagsForSpawn({ credentialMode, oauthConnected: () => true });
-      expect(flags).not.toHaveProperty('CLAUDE_CODE_ATTRIBUTION_HEADER');
+      // 显式 '1' 而非缺席:local spawn 继承宿主 process.env,宿主 shell export 过
+      // CLAUDE_CODE_ATTRIBUTION_HEADER=0 时,缺席的 key 压不住继承值(#758 复现)。
+      expect(flags.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('1');
       // 其余行为开关不随 spawn 形态变化。
       expect(flags.CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS).toBe('1');
       expect(flags.ENABLE_TOOL_SEARCH).toBe('auto');

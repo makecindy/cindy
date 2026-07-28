@@ -40,7 +40,11 @@ export interface ClaudeSpawnFlagsContext {
 
 export function claudeBehaviorFlagsForSpawn(ctx: ClaudeSpawnFlagsContext): Record<string, string> {
   const keepAttribution = ctx.credentialMode !== 'gateway-key' && ctx.oauthConnected();
+  // 保留归因也要**显式**写 '1',不能只是不设置:local spawn 继承宿主 process.env
+  // (env-builder cleanProcessEnv),用户 shell 若 export 过 CLAUDE_CODE_ATTRIBUTION_HEADER=0,
+  // 缺席的 key 压不住继承值,#758 会原样复现。CLI 判定(cli.js c5):仅
+  // '0'/'false'/'no'/'off' 视为禁用,'1' = 保留归因,与未设置同义。
   return keepAttribution
-    ? { ...STATIC_CLAUDE_BEHAVIOR_FLAGS }
+    ? { ...STATIC_CLAUDE_BEHAVIOR_FLAGS, CLAUDE_CODE_ATTRIBUTION_HEADER: '1' }
     : { ...STATIC_CLAUDE_BEHAVIOR_FLAGS, CLAUDE_CODE_ATTRIBUTION_HEADER: '0' };
 }
