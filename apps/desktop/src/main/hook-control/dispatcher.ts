@@ -69,6 +69,12 @@ export interface HookSessionRunner {
 
 export interface HookRunRequest {
   sessionId: string;
+  /**
+   * IM lane 形态(externalKey 派生): 'group' = 群/topic, 'dm' = 私聊。
+   * runner 据此决定进度快照是否携带过程时间线(群内可编辑消息适合过程卡,
+   * DM 的 Rich draft 动画不适合反复重排)。缺省按 'dm' 保守处理。
+   */
+  laneKind?: 'dm' | 'group';
   /** true = 新建 session(workingDir/title 生效); false = 复用/接管已有。 */
   isNew: boolean;
   workingDir: string;
@@ -674,6 +680,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     /** 旧绑定作废、本次不得不新建会话时, 随 turn.end 回给渠道的说明。 */
     let recreatedNotice: string | null = null;
 
+    const laneKind: 'dm' | 'group' =
+      /^telegram:(group|topic):/.test(payload.externalKey) ? 'group' : 'dm';
     // 接管路径: server 显式指定已有 session(对话会话同样可接管)
     if (payload.sessionId !== null) {
       const info = await runner.inspect(payload.sessionId);
@@ -689,6 +697,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         run: {
           sessionId: payload.sessionId,
           isNew: false,
+          laneKind,
           workingDir: info.workingDir as string,
           agentKind,
           model,
@@ -768,6 +777,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             sessionId: bound,
             isNew: false,
+            laneKind,
             // 尚未落库, 没有 meta 可查 —— 用建它时那个刚重新过完映射校验的目录
             workingDir: pendingDir!,
             agentKind,
@@ -807,6 +817,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             sessionId: bound,
             isNew: false,
+            laneKind,
             workingDir,
             agentKind,
             model,
@@ -888,6 +899,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       run: {
         sessionId,
         isNew: true,
+        laneKind,
         workingDir: runDir,
         agentKind,
         model,

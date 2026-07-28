@@ -623,10 +623,26 @@ export function createMakerHookSessionRunner(deps: {
         }
       }
 
-      // turn 收口监听 —— 语义与 scheduler runner 第 5 步同源:
-      // text isFinal 替换 / delta 追加; done 时若有在途后台任务则延迟定格,
-      // 事件静默超时兜底; terminal error 即失败。
+      // turn 收口监听 —— done 时若有在途后台任务则延迟定格, 事件静默超时
+      // 兜底; terminal error 即失败。
+      //
+      // 文本累积语义(2026-07-28 修订): translator 的 isFinal 是**逐条**
+      // agent_message 的完成信号(每条完成都携带该条全文), 不是整个 turn 的
+      // 终稿 —— 用它整体替换累积文本, 会让"先回一句 → 思考 → 终答"的多消息
+      // turn 只剩最后被替换的那条(实踩: Telegram 群里最终答案丢失)。
+      // 正确姿势: isFinal 把该条追加进已定稿段, 流式增量走尾部缓冲。
+      let finalizedText = '';
+      let streamTail = '';
       let assistantText = '';
+      const recomputeAssistantText = (): void => {
+        const tail = streamTail.trim();
+        assistantText =
+          tail.length > 0
+            ? finalizedText
+              ? `${finalizedText}\n\n${tail}`
+              : tail
+            : finalizedText;
+      };
       // tool_result 旁路收集的出站图片 absPath(收口时随 turn.end 附件外发)
       const extraImageAbsPaths: string[] = [];
       // 进度快照(turn.progress 链路): 过程区时间线与 IM 流式卡同一套纯逻辑
@@ -634,14 +650,14 @@ export function createMakerHookSessionRunner(deps: {
       // 上正文在下, done/error 后 stop, 不再发射。
       const activity = createTurnActivity(Date.now());
       const isTelegram = req.source?.im === 'telegram';
+      // Telegram DM 的 Rich draft 是"部分终稿"动画, 过程时间线反复重排会导致
+      // 整段清空重播 —— DM 保持只流正文。群/topic 的进度载体是可编辑消息
+      // (无 draft 动画), 与 Slack 过程卡同款: 时间线在上正文在下, 让群成员
+      // 看到"正在干什么"而不是盯着一句旧话干等(2026-07-28 实踩)。
+      const answerOnlyProgress = isTelegram && req.laneKind !== 'group';
       const progress = req.onProgress
         ? createProgressEmitter(req.onProgress, () => {
-            // Telegram Rich Message drafts are the partial final answer, not
-            // an editable process card. turnActivity can reorder/fold as
-            // thinking and tool events arrive, which makes Telegram animate
-            // repeated full clears. Keep Slack's established process card,
-            // while Telegram streams only the monotonically growing answer.
-            if (isTelegram) return assistantText;
+            if (answerOnlyProgress) return assistantText;
             const act = renderActivity(activity, Date.now());
             if (!act) return assistantText;
             return assistantText ? `${act}\n\n${assistantText}` : act;
@@ -689,8 +705,15 @@ export function createMakerHookSessionRunner(deps: {
           if (ev.type === 'text') {
             const data = ev.data as { text?: string; isFinal?: boolean } | null;
             if (data && typeof data.text === 'string') {
-              if (data.isFinal) assistantText = data.text;
-              else assistantText += data.text;
+              if (data.isFinal) {
+                finalizedText = finalizedText
+                  ? `${finalizedText}\n\n${data.text}`
+                  : data.text;
+                streamTail = '';
+              } else {
+                streamTail += data.text;
+              }
+              recomputeAssistantText();
               markActivityWriting(activity);
               progress?.schedule();
             }

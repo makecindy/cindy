@@ -670,6 +670,38 @@ describe('进度快照(turn.progress 链路)', () => {
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
 
+  it('多消息 turn: isFinal 逐条追加不整体替换, 先答一句再思考再终答两段都保留', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({}));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      // 消息 1 流式 + 完成(codex translator: 每条 agent_message completed
+      // 都发 isFinal=true 携带该条全文)
+      cb({ type: 'text', data: { text: '我正在追溯, 稍等。', isFinal: false } });
+      cb({ type: 'text', data: { text: '我正在追溯, 稍等。', isFinal: true } });
+      // 思考 + 工具
+      cb({ type: 'thinking', data: { stage: 'final', blockId: 't1', text: '检查提交记录' } });
+      // 消息 2(最终答案)流式 + 完成
+      cb({ type: 'text', data: { text: '查到了: 是 PR #527 引入的。', isFinal: false } });
+      cb({ type: 'text', data: { text: '查到了: 是 PR #527 引入的。', isFinal: true } });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.status).toBe('ok');
+      // 两段都在, 且以定稿顺序拼接 —— 整体替换语义会丢掉其中一段。
+      expect(outcome.finalText).toContain('我正在追溯');
+      expect(outcome.finalText).toContain('PR #527');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('thinking/tool_use/text 驱动友好快照,过程文字持续保留;done 后停止', async () => {
     vi.useFakeTimers();
     try {
