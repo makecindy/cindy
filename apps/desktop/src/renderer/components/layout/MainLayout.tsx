@@ -1190,6 +1190,7 @@ export function MainLayout() {
                 <ContentHeaderSlot
                   sidebarVisible={!isSettingsRoute && !isSidebarCollapsed && !isRailMode}
                   showCollapsedActions={!isSettingsRoute && (isSidebarCollapsed || isRailMode)}
+                  isSidebarRail={!isSettingsRoute && isRailMode && !isSidebarCollapsed}
                   // M2(2026-07-09 口径修订):mac 右上浮层随面板在场常驻(折叠
                   // toggle 永远钉窗口右上角),ContentHeader 右端占位不再分侧别。
                   rightSidebarAvailable={rightSidebarAvailable}
