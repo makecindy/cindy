@@ -42,7 +42,7 @@ describe('SessionImportSection initial scan', () => {
 
   it('places project selection before the expand control and indents project child rows', () => {
     expect(source).toContain('grid min-h-14 grid-cols-[16px_20px_minmax(0,1fr)_auto] items-center gap-x-2 px-4 py-2');
-    expect(source).toContain('className="flex h-6 w-5 items-center justify-center rounded-md');
+    expect(source).toContain('className="flex h-6 w-5 items-center justify-center rounded-full');
     expect(source).toMatch(
       /checked=\{selectedCount === group\.items\.length\}[\s\S]*onClick=\{\(\) => toggleGroup\(group\.key\)\}/,
     );

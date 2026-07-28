@@ -727,7 +727,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     <>
       <div>
         <div className="flex items-start justify-between gap-6">
-          <h2 className="text-20 font-medium tracking-[-0.01em] text-[var(--settings-section-title)]">
+          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
             {t('billing.settings.title')}
           </h2>
           <button

@@ -1359,14 +1359,14 @@ export function ProvidersSection() {
 
   return (
     <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-1">
         <h2
-          className="text-18 font-semibold leading-[1.2]"
+          className="text-16 font-medium leading-[1.2]"
           style={{ color: 'var(--settings-section-title)' }}
         >
           {t('settings.providers.title')}
         </h2>
-        <p className="text-13 leading-snug" style={{ color: 'var(--settings-section-desc)' }}>
+        <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
           {t('settings.providers.subtitle')}
         </p>
       </div>
