@@ -39,6 +39,7 @@ import { cn } from '@/lib/utils';
 import { Switch } from '@/components/ui/switch';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { findSplitChildByPanelKind } from '../../../shared/layoutTree';
+import { resolveSystemLocale } from '../../../shared/locale';
 import {
   diffGhostPermissionItems,
   ghostPanelKind,
@@ -107,7 +108,7 @@ const PRESENTATION_FILTERS: readonly PluginPresentationFilter[] = [
  */
 export function GhostPluginPage() {
   const { i18n, t } = useTranslation();
-  const marketLocale = i18n.resolvedLanguage ?? i18n.language;
+  const marketLocale = resolveSystemLocale(i18n.resolvedLanguage ?? i18n.language);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { confirm, confirmWithCheckbox } = useConfirmDialog();
@@ -695,6 +696,9 @@ export function GhostPluginPage() {
   }, []);
   usePluginMarketLocaleRefresh(
     marketLocale,
+    async () => {
+      await window.electronAPI.setApplicationMenuLocale(marketLocale);
+    },
     () => refreshMarket(true),
     marketDetail?.pluginId ? () => refreshVisibleMarketDetail(marketDetail.pluginId) : undefined,
   );

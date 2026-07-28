@@ -1,36 +1,49 @@
 import { useEffect, useRef } from 'react';
 
 type Refresh = () => void | Promise<void>;
+type SyncLocale = (locale: string) => void | Promise<void>;
 
 /**
- * Re-fetches locale-sensitive market data after the host language changes.
+ * Re-fetches locale-sensitive market data after main confirms the host locale.
  *
- * The initial render already has its normal market load. Keeping the previous
- * locale in a ref avoids a duplicate request on mount while still refreshing
- * both the catalog and an open detail view after a language switch.
+ * Main initially falls back to the OS locale until Renderer synchronizes the
+ * stored preference. The mount-time refresh is therefore intentional: it
+ * corrects any catalog request that raced ahead of that first synchronization.
  */
 export function usePluginMarketLocaleRefresh(
   locale: string | undefined,
+  syncLocale: SyncLocale,
   refreshMarket: Refresh,
   refreshDetail?: Refresh,
 ): void {
-  const previousLocaleRef = useRef(locale);
+  const syncLocaleRef = useRef(syncLocale);
   const refreshMarketRef = useRef(refreshMarket);
   const refreshDetailRef = useRef(refreshDetail);
+  syncLocaleRef.current = syncLocale;
   refreshMarketRef.current = refreshMarket;
   refreshDetailRef.current = refreshDetail;
 
   useEffect(() => {
-    if (previousLocaleRef.current === locale) return;
-    previousLocaleRef.current = locale;
+    if (!locale) return;
+    let cancelled = false;
 
     void Promise.resolve()
-      .then(() => refreshMarketRef.current())
+      .then(() => syncLocaleRef.current(locale))
+      .then(() => {
+        if (cancelled) return;
+        const refreshes: Promise<void>[] = [
+          Promise.resolve().then(() => refreshMarketRef.current()),
+        ];
+        const refreshDetail = refreshDetailRef.current;
+        if (refreshDetail) {
+          refreshes.push(Promise.resolve().then(() => refreshDetail()));
+        }
+        return Promise.allSettled(refreshes);
+      })
       .catch(() => undefined);
-    if (refreshDetailRef.current) {
-      void Promise.resolve()
-        .then(() => refreshDetailRef.current?.())
-        .catch(() => undefined);
-    }
+
+    return () => {
+      cancelled = true;
+    };
   }, [locale]);
 }
