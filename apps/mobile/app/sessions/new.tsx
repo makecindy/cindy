@@ -757,13 +757,20 @@ export default function NewRemoteSessionScreen() {
     [draft, draftContent],
   );
   const composerHasMessage = draft.firstMessage.trim().length > 0;
+  // 「按下即录」的乐观反馈(与会话页/桌面同款,详见 [sessionId].tsx 同名状态注释)。
+  // 声明在 composerShowCreateButton 之前:pending 期就要占住创建槽。
+  const [voiceStartPending, setVoiceStartPending] = useState(false);
+  const voiceStartPendingSeqRef = useRef(0);
+  const voiceStartedOnPressInRef = useRef(false);
   // 语音生命周期内创建按钮常驻(与会话页发送槽同理,对齐桌面):录音中点创建
   // = 结束录音并用转写创建(create() 已有 listening 分支);否则首段转写落地的
-  // 瞬间按钮冒出来,右对齐工具排会把语音胶囊整格推左。voiceIsBusy 在下方声明,
-  // 这里直接展开同一表达式,避免声明顺序对调。
+  // 瞬间按钮冒出来,右对齐工具排会把语音胶囊整格推左。乐观 pending 期同理占位,
+  // 避免胶囊先在 12pt 档展开、listening 一到又跳 52pt 档。voiceIsBusy 在下方
+  // 声明,这里直接展开同一表达式,避免声明顺序对调。
   const composerShowCreateButton = composerHasMessage
     || attachments.length > 0
     || pendingUploads.length > 0
+    || voiceStartPending
     || voiceState === 'listening'
     || voiceState === 'submitting'
     || voiceState === 'refining';
@@ -775,13 +782,17 @@ export default function NewRemoteSessionScreen() {
   const deviceSelectorDisabled = creating || voiceIsProcessing || !deviceHasChoices;
   // 上传中不再挡创建:附件走乐观管线(pendingUploads),create() 内部会 await 全部
   // 在途上传落定后再组首条消息,抢点创建不会丢图(#589 的 attachmentBusy 门由此取代)。
-  const canCreate = !createValidation && !creating && !voiceIsProcessing;
+  // listening 时豁免「缺正文/附件」校验:此刻点创建 = 结束录音并用转写创建
+  // (create() 的 listening 分支),最终转写在 create() 内部重新校验;不豁免的话
+  // 空草稿录音期间创建按钮永远按不动,「点创建停录并创建」形同虚设(review P1)。
+  const canCreate = (!createValidation || voiceIsListening) && !creating && !voiceIsProcessing;
   const voiceIsBusy = voiceIsListening || voiceIsProcessing;
-  // 「按下即录」的乐观反馈(与会话页/桌面同款,详见 [sessionId].tsx 同名状态注释)。
-  const [voiceStartPending, setVoiceStartPending] = useState(false);
-  const voiceStartedOnPressInRef = useRef(false);
   // 录音计时(红点+m:ss 胶囊,与会话页/桌面同形态);pillWidth 同步驱动工具排占位。
-  const voiceRecordingTimer = useMobileVoiceRecordingTimer(voiceIsListening || voiceStartPending);
+  // counting 只认真实采集,启动链路(权限弹窗等)不计入时长,pending 期显示 0:00。
+  const voiceRecordingTimer = useMobileVoiceRecordingTimer({
+    expanded: voiceIsListening || voiceStartPending,
+    counting: voiceIsListening,
+  });
   // 手机语音只保留官方托管路径,错误引导仅剩系统麦克风权限一条。
   const canOpenVoiceSettings = isMobileVoiceMicPermissionError(voiceError);
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
@@ -1692,10 +1703,14 @@ export default function NewRemoteSessionScreen() {
     // 启动已在途/停止在途时不重复发起,也不把这次按下标成「已起录」。
     if (voiceStartupInFlightRef.current || voiceStopInFlightRef.current) return;
     voiceStartedOnPressInRef.current = true;
+    const pendingSeq = ++voiceStartPendingSeqRef.current;
     setVoiceStartPending(true);
     void startVoiceRecording()
       .catch(() => undefined)
-      .finally(() => setVoiceStartPending(false));
+      .finally(() => {
+        // 只收自己世代的 pending(与会话页同款守卫)。
+        if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);
+      });
   }, [creating, selectedDeviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
   useEffect(() => {
@@ -1899,6 +1914,13 @@ export default function NewRemoteSessionScreen() {
         toggleVoiceRecording();
       }}
       onPressIn={handleVoiceButtonPressIn}
+      onTouchCancel={() => {
+        // 手势被系统/滚动打断:撤销这次按下误触发的录音(与会话页同语义,
+        // 正常松手不触发;cancelVoiceForDeviceSwitch 会作废在途启动并释放音频)。
+        if (!voiceStartedOnPressInRef.current) return;
+        voiceStartedOnPressInRef.current = false;
+        cancelVoiceForDeviceSwitch();
+      }}
       style={({ pressed }) => [
         styles.composerIconButton,
         buttonStyle,

@@ -1606,6 +1606,17 @@ export default function SessionScreen() {
     voiceState,
   ]);
   const compactComposer = composerLayout.density === 'compact';
+  // 「按下即录」的乐观反馈(对齐桌面 activeRecording = listening || longPressActive):
+  // pressIn 发起启动的同时置 pending,胶囊立刻展开计时,不等 ASR/权限链路把 state
+  // 翻到 listening——否则启动慢时按钮有一段「按了没反应」。启动完成(成功进
+  // listening / 失败报错)后由 finally 收回;成功路径收回时 listening 已为 true,
+  // 计时输入保持连续,不会闪断重置。声明在槽位 flags 之前:pending 期就要占住发送槽。
+  const [voiceStartPending, setVoiceStartPending] = useState(false);
+  // pending 的世代号:本组件会随 sessionId 复用,上一个会话的启动收尾不能把
+  // 当前会话刚展开的乐观胶囊收掉——finally 只在世代未前进时清 pending。
+  const voiceStartPendingSeqRef = useRef(0);
+  // pressIn 已起录的标记:同一次手势的松手(onPress)不能再被当作「再点一下停止」。
+  const voiceStartedOnPressInRef = useRef(false);
   // 发送槽双语义(对齐桌面 ChatInput 的主槽判定,voice busy = listening|submitting|refining):
   // 任务执行中且发送不可用、又没有语音在进行时,停止任务顶替发送位;语音一旦开始,
   // 发送键回到发送位(录音期=「结束并发送」,润色期=禁用态占位),停止任务退到
@@ -1615,7 +1626,8 @@ export default function SessionScreen() {
   const composerSendSlotIsStop = composerLayout.stop.visible
     && composerLayout.send.disabled
     && !sending
-    && !voiceIsBusy;
+    && !voiceIsBusy
+    && !voiceStartPending;
   // 降级 composer(未同步/离线):输入框可编辑并持续保存草稿,但发送禁用,
   // 直到 currentSession 和远端连接恢复后自动恢复可发送。
   const composerSendDisabled = composerLayout.send.disabled;
@@ -1623,24 +1635,23 @@ export default function SessionScreen() {
   const composerHasPayload = composerHasText || attachments.length > 0 || pendingUploads.length > 0 || composerQuoteCount > 0;
   // send.visible 在语音生命周期内恒 true(sessionOperation.ts),这里不再按
   // voiceIsListening 二次过滤——那正是「首段转写落地瞬间发送键冒出来」的跳变源。
-  const composerShowSendButton = composerLayout.send.visible;
+  // 乐观 pending 期(state 还是 idle)同样要占住发送槽:否则空草稿按下语音时
+  // 胶囊先在 12pt 档展开,listening 一到发送键出现又整体跳到 52pt 档。
+  const composerShowSendButton = composerLayout.send.visible || voiceStartPending;
   const composerVoicePlacement = voiceUiAvailable
     ? resolveMobileComposerVoiceButtonPlacement({
       // 行尾有发送或占发送位的停止按钮时让位;附件-only(无文字)同样命中。
       hasTrailingAction: composerSendSlotIsStop || composerShowSendButton,
     })
     : undefined;
-  // 「按下即录」的乐观反馈(对齐桌面 activeRecording = listening || longPressActive):
-  // pressIn 发起启动的同时置 pending,胶囊立刻展开计时,不等 ASR/权限链路把 state
-  // 翻到 listening——否则启动慢时按钮有一段「按了没反应」。启动完成(成功进
-  // listening / 失败报错)后由 finally 收回;成功路径收回时 listening 已为 true,
-  // 计时输入保持连续,不会闪断重置。
-  const [voiceStartPending, setVoiceStartPending] = useState(false);
-  // pressIn 已起录的标记:同一次手势的松手(onPress)不能再被当作「再点一下停止」。
-  const voiceStartedOnPressInRef = useRef(false);
   // 录音计时(红点+m:ss 胶囊);pillWidth 同时驱动语音按钮与工具排占位 slot,
-  // 胶囊展开时把左邻的停止任务按钮推开,而不是盖住它。
-  const voiceRecordingTimer = useMobileVoiceRecordingTimer(voiceIsListening || voiceStartPending);
+  // 胶囊展开时把左邻的停止任务按钮推开,而不是盖住它。expanded 含乐观 pending
+  // (按下即展开),counting 只认真实采集(listening)——启动链路(权限弹窗等)
+  // 不计入录音时长,pending 期显示静止的 0:00。
+  const voiceRecordingTimer = useMobileVoiceRecordingTimer({
+    expanded: voiceIsListening || voiceStartPending,
+    counting: voiceIsListening,
+  });
   const composerEffectiveContentHeight = composerInputContentHeight;
   const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
@@ -3787,10 +3798,14 @@ export default function SessionScreen() {
     // 否则松手的 onPress 会被吞掉,用户失去 toggle 能力。
     if (voiceStartupInFlightRef.current || voiceStopInFlightRef.current) return;
     voiceStartedOnPressInRef.current = true;
+    const pendingSeq = ++voiceStartPendingSeqRef.current;
     setVoiceStartPending(true);
     void startVoiceRecording()
       .catch(() => undefined)
-      .finally(() => setVoiceStartPending(false));
+      .finally(() => {
+        // 只收自己世代的 pending:切会话后旧启动的收尾不能塌掉新录音的胶囊。
+        if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);
+      });
   }, [deviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
   const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
@@ -3826,6 +3841,9 @@ export default function SessionScreen() {
       }}
       onPressOut={(event) => {
         if (!voiceLongPressActiveRef.current) return;
+        // 长按路径在此收尾,本次按下的生命周期结束;标记同步清掉,
+        // 手势取消(onTouchCancel)不再重复处理。
+        voiceStartedOnPressInRef.current = false;
         const shouldSend = updateVoiceReleaseToSendTarget(event);
         voiceLongPressActiveRef.current = false;
         voiceSuppressNextPressRef.current = true;
@@ -3837,6 +3855,14 @@ export default function SessionScreen() {
         void finishVoiceRecording({ sendAfterTranscribe: shouldSend });
       }}
       onResponderMove={updateVoiceReleaseToSendTarget}
+      onTouchCancel={() => {
+        // 手势被系统/滚动打断(responder termination):撤销这次按下误触发的
+        // 录音——用户本意是滚动列表,不能留下一个还在采集的麦克风(review P1)。
+        // 正常松手(含拖出按钮后松开)不走这里,对齐桌面「pointercancel 才撤销」。
+        if (!voiceStartedOnPressInRef.current) return;
+        voiceStartedOnPressInRef.current = false;
+        cancelVoiceForAppBackground();
+      }}
       style={[
         styles.composerInlineToolButton,
         buttonStyle,
@@ -7731,6 +7757,8 @@ interface RouteActionButtonProps {
   onPressIn?: PressableProps['onPressIn'];
   onPressOut?: PressableProps['onPressOut'];
   onResponderMove?: PressableProps['onResponderMove'];
+  /** responder 被系统/滚动终止时的回调(正常松手不触发);语音按钮用它撤销按下即录。 */
+  onTouchCancel?: PressableProps['onTouchCancel'];
   pressedStyle?: StyleProp<ViewStyle>;
   style?: StyleProp<ViewStyle>;
   testID?: string;
@@ -7752,6 +7780,7 @@ const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function Rout
   onPressIn,
   onPressOut,
   onResponderMove,
+  onTouchCancel,
   pressedStyle,
   style,
   testID,
@@ -7780,6 +7809,7 @@ const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function Rout
       onPressIn={interactionDisabled ? undefined : onPressIn}
       onPressOut={interactionDisabled ? undefined : onPressOut}
       onResponderMove={interactionDisabled ? undefined : onResponderMove}
+      onTouchCancel={interactionDisabled ? undefined : onTouchCancel}
       style={({ pressed }) => [
         style,
         pressed && resolvedPressedStyle,

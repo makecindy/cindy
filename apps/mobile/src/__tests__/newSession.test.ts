@@ -862,9 +862,10 @@ describe('new session composer surface', () => {
     expect(newSource).not.toContain('testID="newSession.modelPickerPanel"');
     // 语音生命周期内创建按钮常驻(2026-07-25 对齐桌面):录音中点创建=结束录音并
     // 用转写创建;否则首段转写落地瞬间按钮冒出来会把语音胶囊整格推左。
-    expect(newSource).toContain("|| voiceState === 'listening'\n    || voiceState === 'submitting'\n    || voiceState === 'refining';");
+    expect(newSource).toContain("|| voiceStartPending\n    || voiceState === 'listening'\n    || voiceState === 'submitting'\n    || voiceState === 'refining';");
+    // listening 时豁免缺正文校验:点创建 = 停录并用最终转写创建(review P1)。
+    expect(newSource).toContain('const canCreate = (!createValidation || voiceIsListening) && !creating && !voiceIsProcessing;');
     expect(newSource).toContain('const composerShowCreateButton = composerHasMessage');
-    expect(newSource).toContain('const canCreate = !createValidation && !creating && !voiceIsProcessing;');
     expect(newSource).toContain('const deviceSelectorDisabled = creating || voiceIsProcessing || !deviceHasChoices;');
     // 按下即录(pressIn 起录):同一手势的松手由 voiceStartedOnPressInRef 吞掉,
     // 不再直接把 onPress 绑到 toggle。

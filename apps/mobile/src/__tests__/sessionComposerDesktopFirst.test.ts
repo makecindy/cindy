@@ -286,7 +286,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerHasText = draft.trim().length > 0;');
     expect(source).toContain('const composerQuoteCount = composerDocumentQuotes(composerDocument).length;');
     expect(source).toContain('const composerHasPayload = composerHasText || attachments.length > 0 || pendingUploads.length > 0 || composerQuoteCount > 0;');
-    expect(source).toContain('const composerShowSendButton = composerLayout.send.visible;');
+    expect(source).toContain('const composerShowSendButton = composerLayout.send.visible || voiceStartPending;');
     expect(source).not.toContain('composerLayout.send.visible && (!voiceIsListening || composerHasPayload)');
     expect(source).toContain('const latestDocument = latestDraft.trim()');
     expect(source).toContain('reconcileComposerProjectedText(documentBeforeStop, latestDraft)');
@@ -613,8 +613,15 @@ describe('mobile session composer desktop-first surface', () => {
     // 计时/宽度状态集中在 useMobileVoiceRecordingTimer,页面不得再自造 duration 状态。
     expect(source).toContain("import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';");
     // 计时输入含 pressIn 乐观 pending(按下即录的即时反馈,对齐桌面 activeRecording)。
-    expect(source).toContain('const voiceRecordingTimer = useMobileVoiceRecordingTimer(voiceIsListening || voiceStartPending);');
+    // expanded 含乐观 pending(按下即展开),counting 只认真实采集——启动链路
+    // (权限弹窗等)不计入录音时长(review P1)。
+    expect(source).toContain('expanded: voiceIsListening || voiceStartPending,');
+    expect(source).toContain('counting: voiceIsListening,');
     expect(source).toContain('const voiceStartedOnPressInRef = useRef(false);');
+    // pending 世代守卫:切会话后旧启动收尾不得塌掉新录音的乐观胶囊(review P1)。
+    expect(source).toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
+    // 手势被系统/滚动打断时撤销按下即录(review P1)。
+    expect(source).toContain('cancelVoiceForAppBackground();');
     expect(source).toContain('testID="session.voiceRecordingPill"');
     expect(source).toContain('{ width: voiceRecordingTimer.pillWidth }');
     expect(source).not.toContain('voiceDuration');
