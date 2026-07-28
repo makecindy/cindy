@@ -724,6 +724,28 @@
       "checkCase": false,
       "forbidden": {},
       "note": "Directory 用「目录」（现状 96:4），Folder 用「文件夹」（37:20），两个英文词在中文里也分开。**本条刻意不设 forbidden**：英文侧自己就在一句话里混用二者（\"not a folder. Choose a project directory.\"、\"re-select the working directory and wait for the folder badge\"），而条件禁用是句子级匹配，区分不了句内哪个中文词对应哪个英文词——实测 4 处命中全是假阳性，那 4 条中文其实译得完全正确。要真正管住这对词，得先清理英文侧的 path / folder / directory 混用。此条目保留为文档指引，供人查阅。"
+    },
+    {
+      "id": "mascot-black-cat",
+      "status": "proposed",
+      "en": "Black Cat",
+      "translations": {
+        "zh-CN": "黑猫",
+        "ja": "黒猫",
+        "ko": "검은 고양이"
+      },
+      "note": "灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色本体是黑猫形象,四语先采用直译并登记为待讨论,避免后续界面出现「ブラックキャット / 블랙캣」等音译与直译混用。"
+    },
+    {
+      "id": "mascot-erika",
+      "status": "proposed",
+      "en": "Erika",
+      "translations": {
+        "zh-CN": "Erika",
+        "ja": "Erika",
+        "ko": "Erika"
+      },
+      "note": "灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。"
     }
   ]
 }
