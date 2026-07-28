@@ -702,6 +702,98 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
+  it('续尾补推(claude result 兜底): isFinal 只含缺失尾段时与已流增量原样接上', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({}));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      // 消息 1 正常定稿。
+      cb({ type: 'text', data: { text: '旁白说明。', isFinal: true } });
+      // 消息 2 流到一半被截断, translator 用 result 兜底只补 UI 缺的尾段
+      // (fallbackTail): 该 isFinal 不含已流出的前缀。
+      cb({ type: 'text', data: { text: '最终答案是 4', isFinal: false } });
+      cb({ type: 'text', data: { text: '2。', isFinal: true } });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      // 前缀不丢、正文中间不插段落分隔。
+      expect(outcome.finalText).toContain('最终答案是 42。');
+      expect(outcome.finalText).toContain('旁白说明。');
+      expect(outcome.finalText).not.toContain('4\n\n2');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('未定稿流式尾巴保留首行缩进与换行(markdown 代码块不被 trim 破坏)', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({}));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({ type: 'text', data: { text: '    indented code\nline2', isFinal: false } });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.finalText).toContain('    indented code\nline2');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('Telegram 群 lane: 进度带过程时间线(时间线在上正文在下), 无正文时也有时间线', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(
+        baseReq({
+          source: { im: 'telegram', userText: 'hi' },
+          laneKind: 'group',
+          onProgress: (text: string) => emitted.push(text),
+        }),
+      );
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      // 与 DM(answer-only)不同: 群 lane 只有工具活动、还没有正文时,
+      // 也要发时间线, 群成员能看到"正在干什么"。
+      cb({
+        type: 'tool_use',
+        data: { toolUseId: 'read-1', toolName: 'Read', input: { file_path: '/repo/a.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(emitted.length).toBeGreaterThan(0);
+      expect(emitted.at(-1)).toContain('▸');
+
+      cb({ type: 'text', data: { text: '结论是 42。', isFinal: false } });
+      await vi.advanceTimersByTimeAsync(1_500);
+      const last = emitted.at(-1)!;
+      expect(last).toContain('结论是 42。');
+      // 合成规则与 Slack 过程卡同款: 时间线在上, 正文在下。
+      expect(last.indexOf('▸')).toBeLessThan(last.indexOf('结论是 42。'));
+
+      cb({ type: 'done', data: null });
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('thinking/tool_use/text 驱动友好快照,过程文字持续保留;done 后停止', async () => {
     vi.useFakeTimers();
     try {

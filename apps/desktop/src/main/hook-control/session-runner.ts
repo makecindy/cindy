@@ -635,13 +635,14 @@ export function createMakerHookSessionRunner(deps: {
       let streamTail = '';
       let assistantText = '';
       const recomputeAssistantText = (): void => {
-        const tail = streamTail.trim();
-        assistantText =
-          tail.length > 0
-            ? finalizedText
-              ? `${finalizedText}\n\n${tail}`
-              : tail
-            : finalizedText;
+        // trim 只用于判空(纯空白尾巴不该拼出悬空分隔), 拼接用原文 ——
+        // 首行缩进/换行是内容(markdown 代码块等), 不得被裁掉。
+        const hasTail = streamTail.trim().length > 0;
+        assistantText = hasTail
+          ? finalizedText
+            ? `${finalizedText}\n\n${streamTail}`
+            : streamTail
+          : finalizedText;
       };
       // tool_result 旁路收集的出站图片 absPath(收口时随 turn.end 附件外发)
       const extraImageAbsPaths: string[] = [];
@@ -706,9 +707,17 @@ export function createMakerHookSessionRunner(deps: {
             const data = ev.data as { text?: string; isFinal?: boolean } | null;
             if (data && typeof data.text === 'string') {
               if (data.isFinal) {
+                // isFinal 有两种形态(见 translator): ①整条全文 —— 块终稿/
+                // codex item.completed, 全文以已流增量为前缀, 丢增量取全文;
+                // ②续尾补推 —— claude result 兜底 fallbackTail 只含 UI 缺的
+                // 尾段(uiEmittedText 前缀比对), 必须与已流增量原样接上,
+                // 不能丢前缀、也不能在正文中间插段落分隔。
+                const segment = data.text.startsWith(streamTail)
+                  ? data.text
+                  : streamTail + data.text;
                 finalizedText = finalizedText
-                  ? `${finalizedText}\n\n${data.text}`
-                  : data.text;
+                  ? `${finalizedText}\n\n${segment}`
+                  : segment;
                 streamTail = '';
               } else {
                 streamTail += data.text;
