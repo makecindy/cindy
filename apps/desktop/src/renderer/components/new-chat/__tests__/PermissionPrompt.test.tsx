@@ -20,9 +20,15 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-// Tip 是 Radix 浮层,这里只关心它包裹的按钮,直接透传 children。
+// Tip 是 Radix 浮层,这里不测浮层行为,但 text 必须落到 DOM 里 ——
+// tooltip 正文也是授权文案,漏测就等于放过「说了没依据的话」这类问题。
 vi.mock('@/components/ui/tooltip', () => ({
-  Tip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tip: ({ children, text }: { children: React.ReactNode; text?: string }) => (
+    <>
+      {children}
+      <span data-testid="tip-text">{text}</span>
+    </>
+  ),
 }));
 
 import { PermissionPrompt } from '../PermissionPrompt';
@@ -59,7 +65,31 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
     render(<PermissionPrompt permission={permission([unknownShape])} onRespond={vi.fn()} />);
 
     expect(screen.getByText('agentIsland.native.alwaysAllowForSession')).toBeTruthy();
-    expect(screen.queryByText(/alwaysAllowScoped/)).toBeNull();
+    expect(screen.queryByText(/alwaysAllowScoped:/)).toBeNull();
+  });
+
+  // Codex 的会话级放行只给一个不带规则的标记(范围由 app-server 定),这条分支必然走到。
+  // 此时 tooltip 不许说「只限这里列出的范围」—— 一条都没列出,那句话是虚假安心。
+  it('列不出范围时提示只讲时效,不声称范围', () => {
+    render(
+      <PermissionPrompt
+        permission={permission([{ type: 'codexSessionApproval', destination: 'session' }])}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('tip-text').textContent).toBe(
+      'newChat.permissionPrompt.alwaysAllowSessionHint',
+    );
+  });
+
+  // 有范围时反过来:完整规则原文进 tooltip(按钮里长命令会被 truncate)。
+  it('有范围时提示带上完整规则与范围限定', () => {
+    render(<PermissionPrompt permission={permission([bashRule])} onRespond={vi.fn()} />);
+
+    expect(screen.getByTestId('tip-text').textContent).toBe(
+      'Bash(curl:*)\nnewChat.permissionPrompt.alwaysAllowScopedHint',
+    );
   });
 
   // 点击会把 suggestions 里每一项都转发出去。混进一项没写进文案的授权(这里是 setMode)
@@ -76,7 +106,11 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
     );
 
     expect(screen.getByText('agentIsland.native.alwaysAllowForSession')).toBeTruthy();
-    expect(screen.queryByText(/alwaysAllowScoped/)).toBeNull();
+    expect(screen.queryByText(/alwaysAllowScoped:/)).toBeNull();
+    // tooltip 也不许替按钮把范围声明补回来。
+    expect(screen.getByTestId('tip-text').textContent).toBe(
+      'newChat.permissionPrompt.alwaysAllowSessionHint',
+    );
   });
 
   // 分隔符按语言取(中日顿号 / 英韩逗号),不能把顿号漏进英文句子。
@@ -100,10 +134,8 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
 
     // i18n mock 下 ruleSeparator 返回 key 本身,断言两条规则都在、且中间是分隔符 key。
     expect(
-      screen.getByText(
-        /Bash\(curl:\*\)newChat\.permissionPrompt\.ruleSeparatorBash\(git:\*\)/,
-      ),
-    ).toBeTruthy();
+      screen.getByRole('button', { name: /alwaysAllowScoped:/ }).textContent,
+    ).toContain('Bash(curl:*)newChat.permissionPrompt.ruleSeparatorBash(git:*)');
   });
 
   it('没有会话级建议时整个按钮不出现', () => {

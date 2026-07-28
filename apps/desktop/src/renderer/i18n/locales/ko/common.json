@@ -4276,6 +4276,7 @@
     "permissionPrompt": {
       "alwaysAllowScoped": "이 세션에서 {{scope}} 항상 허용",
       "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
+      "alwaysAllowSessionHint": "이번 요청 한 번이 아니라 이 세션 전체에 적용됩니다.",
       "ruleSeparator": ", "
     }
   },

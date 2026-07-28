@@ -198,11 +198,13 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
           // 有具体规则就把范围写进按钮(`本对话都允许 Bash(curl:*)`),没有则退回原文案。
           // tooltip 补两件按钮里放不下的事:完整规则(长命令会被 truncate)、以及
           // 「作用于整个对话」——用户容易把「本对话」读成「这一次来回」。
+          // 列不出范围时(Codex 的会话级放行只给一个不带规则的标记,范围由 app-server 定)
+          // 换成只讲时效的说法:一条都没列出还说「只限这里列出的范围」就是虚假安心。
           <Tip
             text={
               allowScope
                 ? `${allowScope}\n${t('newChat.permissionPrompt.alwaysAllowScopedHint')}`
-                : t('newChat.permissionPrompt.alwaysAllowScopedHint')
+                : t('newChat.permissionPrompt.alwaysAllowSessionHint')
             }
             side="top"
             contentClassName="max-w-[320px] whitespace-pre-line break-all text-left"
