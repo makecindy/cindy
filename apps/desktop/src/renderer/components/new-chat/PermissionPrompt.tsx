@@ -30,7 +30,7 @@
  * control right next to Allow/Deny, so the copy must not imply "settings only".
  */
 
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -41,6 +41,11 @@ import type { PermissionMode } from '@/lib/userPreferences.types';
 import type { PermissionModeDescriptor } from '@/hooks/useAgentCapabilities';
 import { matchesKeyboardEvent } from '../../../shared/appShortcuts';
 import { PermissionSelector } from './PermissionSelector';
+import {
+  acquirePermissionShortcutOwnership,
+  getPermissionShortcutOwner,
+  subscribePermissionShortcutOwner,
+} from './permissionShortcutOwner';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -117,6 +122,22 @@ const SHORTCUT_OPT_OUT_SELECTOR = [
   '[aria-haspopup]',
 ].join(', ');
 
+/**
+ * 焦点落在普通可交互控件上时,卡片的全局快捷键一律让位给原生键盘语义。
+ *
+ * 键盘用户 Tab 到 Deny / Always allow / Allow once 之后:Shift+Tab 是"回上一个控件",
+ * Enter 是"按下当前这颗按钮" —— 都不该被 window handler 抢走。抢走的后果是用户
+ * 想 Deny 却触发了 Allow once、想挪焦点却切了档(并连带结掉请求)。
+ *
+ * 焦点在 body / 卡片容器上(用户没在做焦点导航)时才是快捷键的主场。
+ */
+function isInteractiveTarget(target: HTMLElement | null): boolean {
+  if (!target) return false;
+  return !!target.closest?.(
+    'button, a[href], input, select, textarea, [role="button"], [role="link"], [tabindex]:not([tabindex="-1"])',
+  );
+}
+
 function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
   if (!Array.isArray(suggestions)) return [];
   return suggestions.filter((suggestion) =>
@@ -144,6 +165,22 @@ export function PermissionPrompt({
   // 走 ref 取最新值,避免 window listener 每帧摘挂(同 ChatInput 的 ref 桥接约定)。
   const modeSwitchRef = useRef(modeSwitch);
   modeSwitchRef.current = modeSwitch;
+
+  // 键盘所有权:同时可见的多张卡片(Orca 的 lead + worker)里只能有一张吃快捷键,
+  // 否则一次按键会把两个会话的 pending 一起结掉。见 permissionShortcutOwner 顶注。
+  const ownerTokenRef = useRef<symbol | null>(null);
+  ownerTokenRef.current ??= Symbol('permission-prompt-shortcuts');
+  const ownerToken = ownerTokenRef.current;
+  useEffect(() => {
+    if (!shortcutsActive) return;
+    return acquirePermissionShortcutOwnership(ownerToken);
+  }, [ownerToken, shortcutsActive]);
+  const currentOwner = useSyncExternalStore(
+    subscribePermissionShortcutOwner,
+    getPermissionShortcutOwner,
+    getPermissionShortcutOwner,
+  );
+  const ownsShortcuts = shortcutsActive && currentOwner === ownerToken;
 
   const displayTitle = displayName
     ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
@@ -183,8 +220,8 @@ export function PermissionPrompt({
   // ── Keyboard shortcuts ──
 
   useEffect(() => {
-    // 看不见的实例一律不参与键盘 —— 见 shortcutsActive 顶注。
-    if (!shortcutsActive) return;
+    // 看不见的、以及同屏多卡时没拿到所有权的实例,一律不参与键盘。
+    if (!ownsShortcuts) return;
     const handler = (e: KeyboardEvent) => {
       // IME 组合期间的 Enter(确认候选词)不算快捷键;焦点在可编辑元素上时
       // (侧栏重命名/查找栏等)也不劫持按键,避免把输入操作误判成授权决定。
@@ -197,6 +234,8 @@ export function PermissionPrompt({
       // 不在上面的排除列表里,且都不 stopPropagation。
       // closest 走可选调用:事件直接派发到 window / document 时 target 不是 Element。
       if (target?.closest?.(SHORTCUT_OPT_OUT_SELECTOR)) return;
+      // 焦点在普通按钮/链接上 = 用户正在用键盘导航,全局快捷键让位给原生语义。
+      if (isInteractiveTarget(target)) return;
       // cycle-permission-mode (registry 默认 Shift+Tab, 用户可改绑) —— 补齐卡片期间
       // 失效的键盘路径: ChatInput 不挂载时它的 TipTap handler 一起没了。
       // 轮切与点 chip 走同一条切档路径, 因此同样会由 maker-core 结掉当前 pending
@@ -232,7 +271,7 @@ export function PermissionPrompt({
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [handleAllowOnce, handleAlwaysAllow, handleDeny, shortcutsActive]);
+  }, [handleAllowOnce, handleAlwaysAllow, handleDeny, ownsShortcuts]);
 
   // ── Render ──
 

@@ -252,6 +252,55 @@ describe('PermissionPrompt modeSwitch', () => {
     expect(hiddenRespond).not.toHaveBeenCalled();
   });
 
+  // Orca 协同 tab 打开时 lead 与 focused worker 的 viewVisible 都是 true,只靠"可见"
+  // 过滤仍会两张卡都注册 handler,一次按键结掉两个会话的请求。所有权走 LIFO 栈:
+  // 最近出现的那张卡吃键盘,它退场后交还给上一张。
+  it('两张都可见时只有最后出现的那张吃快捷键', () => {
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const { unmount: unmountSecond } = (() => {
+      render(<PermissionPrompt permission={PERMISSION} onRespond={firstRespond} />);
+      return render(<PermissionPrompt permission={PERMISSION} onRespond={secondRespond} />);
+    })();
+
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' });
+    expect(secondRespond).toHaveBeenCalledWith({ behavior: 'allow' });
+    expect(firstRespond).not.toHaveBeenCalled();
+
+    // 后来的那张退场 → 所有权交还给先前那张。
+    secondRespond.mockClear();
+    unmountSecond();
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' });
+    expect(firstRespond).toHaveBeenCalledWith({ behavior: 'allow' });
+    expect(secondRespond).not.toHaveBeenCalled();
+  });
+
+  // 键盘用户 Tab 到卡片按钮后:Shift+Tab 是"回上一个控件"、Enter 是"按下这颗按钮",
+  // 都不该被 window handler 抢走(抢走会变成想 Deny 却 Allow、想挪焦点却切了档)。
+  it('焦点在卡片按钮上时快捷键让位给原生键盘语义', () => {
+    const onRespond = vi.fn();
+    const onPermissionModeChange = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={PERMISSION}
+        onRespond={onRespond}
+        modeSwitch={{
+          permissionMode: 'ask',
+          onPermissionModeChange,
+          vendorKey: 'cc',
+          cycleOptions: CYCLE_OPTIONS,
+        }}
+      />,
+    );
+
+    const denyButton = screen.getByText('agentIsland.native.deny').closest('button')!;
+    fireEvent.keyDown(denyButton, { key: 'Enter', code: 'Enter', bubbles: true });
+    fireEvent.keyDown(denyButton, { key: 'Tab', code: 'Tab', shiftKey: true, bubbles: true });
+
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(onPermissionModeChange).not.toHaveBeenCalled();
+  });
+
   it('没有 modeSwitch 时 Shift+Tab 不做任何事', () => {
     const onRespond = vi.fn();
     render(<PermissionPrompt permission={PERMISSION} onRespond={onRespond} />);
