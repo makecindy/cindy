@@ -57,6 +57,19 @@ const child = spawn(binary, [], {
     XDT_AGENT_ISLAND_ASSET_DIR: ASSET_DIR,
   },
 });
+child.on('error', (error) => {
+  console.error(`[island-preview] 无法启动预览进程: ${error.message}`);
+  process.exit(1);
+});
+
+// Ctrl-C / kill 时把信号转发给预览窗口，否则子进程会留在后台。
+const FORWARDED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+for (const signal of FORWARDED_SIGNALS) {
+  process.on(signal, () => {
+    if (!child.killed) child.kill(signal);
+  });
+}
+
 child.on('exit', (code, signal) => {
   process.exit(signal ? 1 : (code ?? 0));
 });

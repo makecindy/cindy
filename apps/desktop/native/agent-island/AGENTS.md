@@ -14,9 +14,10 @@ pnpm --filter desktop preview:island-mascots
 独立预览窗口：**行 = 角色，列 = 动画状态**，可切 Dark / Light / 两种模式同屏、切换真实
 渲染尺寸档位、放大倍数、暂停动画、从头播放。关窗即退出进程。
 
-尺寸档位给的是产品里的**真实值**：16pt(收起 pill，`:2662`)、18pt(紧凑行，`:2797`/`:3804`)、
-20pt(展开态，`:3804`)、40pt(设置页「图标皮肤」列表的角色本体，renderer 侧 `h-10 w-10`，见
-`AgentIslandSection.tsx`；那套 UI 是 React/CSS 重画的，档位只作同尺寸参照)。
+尺寸档位给的是产品里的**真实值**，取自 helper 内 `AgentIslandMascotView` / `RunningMascotIcon`
+的各个调用点（grep `AgentIslandMascotView(` 可一次看全）：16pt（收起 pill）、18pt（紧凑行与
+`RunningMascotIcon`）、20pt（展开态）、40pt（设置页「图标皮肤」列表的角色本体，renderer 侧
+`h-10 w-10`，见 `AgentIslandSection.tsx`；那套 UI 是 React/CSS 重画的，档位只作同尺寸参照）。
 默认 20pt 且 1:1 显示 —— 角色在灵动岛里本来就只有 20pt 上下，
 放大档位只做 `scaleEffect` 视觉缩放、不改渲染尺寸，所以放大后看到的几何比例仍是真实的。
 调角色参数时**不要**靠放大后的观感下结论，最终一定要回到 1× 看。
