@@ -32,6 +32,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
+import { resolvePnpmInvocation, usablePnpmExecPath } from './shared/pnpm-invocation.mjs';
+
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const ENTRY_FILE = fileURLToPath(import.meta.url);
 const log = (msg) => console.log(`\x1b[36m[ensure-deps]\x1b[0m ${msg}`);
@@ -297,6 +299,7 @@ function runInstall(args = ['install']) {
     cwd: ROOT,
     stdio: 'inherit',
     env: createElectronInstallEnv(),
+    shell: invocation.shell,
   });
   if (result.error || result.status !== 0) {
     if (result.error) err(result.error.message);
@@ -321,17 +324,14 @@ function createElectronInstallEnv() {
   };
 }
 
-function resolvePnpmInstallInvocation(args) {
-  const baseDisplay = `pnpm ${args.join(' ')}`;
-  const npmExecPath = process.env.npm_execpath;
-  if (npmExecPath && /pnpm/i.test(path.basename(npmExecPath)) && fs.existsSync(npmExecPath)) {
-    return {
-      command: process.execPath,
-      args: [npmExecPath, ...args],
-      displayCommand: baseDisplay,
-    };
-  }
-  return { command: 'pnpm', args, displayCommand: baseDisplay };
+export function resolvePnpmInstallInvocation(args, env = process.env, exists = fs.existsSync) {
+  // npm_execpath 只保证是路径：JS 入口能交给 node，原生二进制发行版必须直接执行，
+  // Windows 的命令包装还得过 shell——判定统一收敛在 resolvePnpmInvocation。
+  const invocation = resolvePnpmInvocation(args, {
+    ...env,
+    npm_execpath: usablePnpmExecPath(env.npm_execpath, exists),
+  });
+  return { ...invocation, displayCommand: `pnpm ${args.join(' ')}` };
 }
 
 function runElectronInstallJs(root = ROOT) {

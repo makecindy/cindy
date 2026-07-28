@@ -28,7 +28,6 @@ import {
 	parseWorkspaceSelectorValue,
 	planRuns,
 	printSummary,
-	resolvePnpmInvocation,
 	resolveOutputStream,
 	runCommand,
 	runPlannedTests,
@@ -37,6 +36,10 @@ import {
 	validateManifest,
 	validateManifestCoverage,
 } from "../test-workspaces.mjs";
+import {
+	resolvePnpmInvocation,
+	usablePnpmExecPath,
+} from "../shared/pnpm-invocation.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
@@ -770,6 +773,20 @@ test("resolvePnpmInvocation falls back to PATH for Windows command wrappers", ()
 			{ command: "pnpm", args: ["--version"], shell: true },
 		);
 	}
+});
+
+test("usablePnpmExecPath rejects paths that are not a present pnpm entry", () => {
+	const present = () => true;
+	assert.equal(usablePnpmExecPath(undefined, present), undefined);
+	assert.equal(usablePnpmExecPath("", present), undefined);
+	// 名字不是 pnpm：npm_execpath 可能残留自 npm／yarn 的生命周期脚本。
+	assert.equal(usablePnpmExecPath("/usr/local/bin/npm-cli.js", present), undefined);
+	// 路径不存在：Windows 的 restart 管线新开 cmd.exe 时见过残留的旧路径。
+	assert.equal(usablePnpmExecPath("/gone/pnpm.cjs", () => false), undefined);
+	assert.equal(
+		usablePnpmExecPath("/home/dev/.local/share/pnpm/pnpm", present),
+		"/home/dev/.local/share/pnpm/pnpm",
+	);
 });
 
 test("resolvePnpmInvocation fallback shell behavior is explicit per platform", () => {
