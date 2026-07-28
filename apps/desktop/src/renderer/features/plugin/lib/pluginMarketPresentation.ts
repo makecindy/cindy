@@ -27,16 +27,17 @@ export function pluginPresentationOrigin(
 }
 
 /**
- * Same-version presentation refreshes are not package updates. Only a market
- * item with a different installed version may surface the update affordance.
+ * Main's install state is authoritative for the update affordance.
+ *
+ * A same-version `update-available` item can be a legacy-adopted install whose
+ * bytes have not been verified against the market release. Version equality
+ * alone cannot suppress that replacement path; same-release metadata refreshes
+ * are already reported as `installed` by Main.
  */
 export function pluginUpdateForInstalledVersion(
   item: PluginMarketItem | null | undefined,
-  installedVersion: string,
 ): PluginMarketItem | null {
-  return item?.installState === 'update-available' && item.version !== installedVersion
-    ? item
-    : null;
+  return item?.installState === 'update-available' ? item : null;
 }
 
 /**

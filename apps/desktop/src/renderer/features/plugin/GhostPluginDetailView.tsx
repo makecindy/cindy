@@ -232,7 +232,9 @@ export function GhostPluginDetailView({
                     'disabled:cursor-wait disabled:opacity-40 disabled:active:scale-100',
                   )}
                 >
-                  {t('settings.ghosts.market.updateTo', { version: updateVersion })}
+                  {updateVersion === detail.version
+                    ? t('settings.ghosts.market.update')
+                    : t('settings.ghosts.market.updateTo', { version: updateVersion })}
                 </button>
               ) : null}
               <button

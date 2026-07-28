@@ -52,16 +52,22 @@ describe('pluginUpdateForInstalledVersion', () => {
     const update = marketItem('plugin-update', 'example', 'update-available');
     update.version = '2.0.0';
 
-    expect(pluginUpdateForInstalledVersion(update, '1.0.0')).toBe(update);
+    expect(pluginUpdateForInstalledVersion(update)).toBe(update);
   });
 
   it.each([
-    ['same-version metadata refresh', marketItem('plugin-same', 'same', 'update-available')],
+    ['same-version metadata refresh', marketItem('plugin-same', 'same', 'installed')],
     ['already installed', marketItem('plugin-installed', 'installed', 'installed')],
     ['conflict', marketItem('plugin-conflict', 'conflict', 'conflict')],
     ['missing market record', null],
   ] as const)('does not surface %s as a package update', (_label, item) => {
-    expect(pluginUpdateForInstalledVersion(item, '1.0.0')).toBeNull();
+    expect(pluginUpdateForInstalledVersion(item)).toBeNull();
+  });
+
+  it('keeps a same-version legacy-adopted install updateable', () => {
+    const legacy = marketItem('plugin-legacy', 'legacy', 'update-available');
+
+    expect(pluginUpdateForInstalledVersion(legacy)).toBe(legacy);
   });
 });
 

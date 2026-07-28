@@ -309,9 +309,9 @@ export function GhostPluginPage() {
           return {
             ...toGhostPluginListItem(ghost, presentation),
             origin: pluginPresentationOrigin(marketItem),
-            // 迁移账本(legacy-unresolved)会让 main 把同版本 release 也判成
-            // update-available;列表入口只对版本号确实变化的更新亮牌。
-            marketUpdate: pluginUpdateForInstalledVersion(marketItem, ghost.manifest.version),
+            // 同版本展示刷新由 main 标成 installed;legacy-unresolved 仍保留
+            // update-available,以便用户用市场包替换未验证的本地字节。
+            marketUpdate: pluginUpdateForInstalledVersion(marketItem),
           };
         }),
     [ghosts, marketByGhostId],
@@ -401,7 +401,7 @@ export function GhostPluginPage() {
     ? (marketByGhostId.get(selectedDetail.id) ?? null)
     : null;
   const selectedMarketUpdate = selectedDetail
-    ? pluginUpdateForInstalledVersion(selectedMarketInstall, selectedDetail.version)
+    ? pluginUpdateForInstalledVersion(selectedMarketInstall)
     : null;
 
   const panelStatus = useMemo(() => {
@@ -853,9 +853,7 @@ export function GhostPluginPage() {
             : undefined
         }
         updateVersion={
-          selectedMarketUpdate && selectedMarketUpdate.version !== selectedDetail.version
-            ? selectedMarketUpdate.version
-            : undefined
+          selectedMarketUpdate?.version
         }
         updateBusy={selectedMarketUpdate !== null && marketBusyId !== null}
         onUninstall={() => void handleUninstall()}

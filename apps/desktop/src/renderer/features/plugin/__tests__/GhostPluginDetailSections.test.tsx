@@ -196,6 +196,40 @@ describe('Ghost plugin detail sections', () => {
     expect(onIconLoadError).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the market replacement action for a same-version legacy install', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const onUpdate = vi.fn();
+    render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={detail}
+        panelStatus="Docked"
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={onUpdate}
+        updateVersion={detail.version}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    const updateButton = screen.getByRole('button', {
+      name: 'settings.ghosts.market.update',
+    });
+    fireEvent.click(updateButton);
+
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.market.updateTo' })).toBeNull();
+  });
+
   it('disables every market update entry while an update is busy', async () => {
     vi.stubGlobal(
       'ResizeObserver',
