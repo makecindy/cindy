@@ -711,10 +711,14 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
  * /goal 提示分隔条(目前:usageLimited 到点自动续跑的"用量已恢复,继续目标")。
  * 同 GoalCompleteCard 复用 CompactBoundaryCard 的分隔条语言。
  */
-function GoalResumedCard() {
+function GoalResumedCard({ data }: { data?: { kind?: string } }) {
   const { t } = useTranslation();
-  // 目前只有 'usage-resumed' 一种 notice;未来多 kind 再分支。
-  const label = t('goal.usageResumeNotice');
+  // 两种续跑原因共用同一张分隔条,但说法必须分开:上游没容量时账号从没被限流,
+  // 报「额度已重置」是假信息(review #844)。
+  const label =
+    data?.kind === 'capacity-resumed'
+      ? t('goal.capacityResumeNotice')
+      : t('goal.usageResumeNotice');
   return (
     <div className="flex w-full items-center gap-3 py-2 select-none" role="separator" aria-label={label}>
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
@@ -866,7 +870,7 @@ export function SystemCard({ cardType, data, sessionId }: SystemCardProps) {
     case 'goal-complete':
       return <GoalCompleteCard data={data} />;
     case 'goal-resumed':
-      return <GoalResumedCard />;
+      return <GoalResumedCard data={data as { kind?: string } | undefined} />;
     case 'auto-resume':
       return <AutoResumeCard />;
     case 'agent-switch':

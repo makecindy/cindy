@@ -1239,14 +1239,15 @@ describe('GoalController', () => {
       // 每轮：过载 → usageLimited（排自动续跑）→ 手动走一次自动续跑路径 → 再过载。
       // resumeGoal({auto:true}) 是 autoResumeFromUsageLimit 实际走的调用，它**不得**
       // 清零计数，否则闸门永远不会触发。
-      for (let i = 0; i < MAX_CONSECUTIVE_OVERLOAD_TURNS; i += 1) {
+      // 上限含义是「最多这么多个连续过载轮」：前 MAX-1 轮可恢复，第 MAX 轮就停。
+      for (let i = 0; i < MAX_CONSECUTIVE_OVERLOAD_TURNS - 1; i += 1) {
         noLimits.session.emitErrorTurn(overload);
         await tick();
         expect((await noLimits.storage.get('s1'))?.status).toBe('usageLimited');
         await noLimits.controller.resumeGoal('s1', { auto: true });
         await tick();
       }
-      // 第 MAX+1 次连续过载：不再当可恢复态，转 blocked 停止自动续跑。
+      // 第 MAX 次连续过载：不再当可恢复态，转 blocked 停止自动续跑。
       noLimits.session.emitErrorTurn(overload);
       await tick();
       const st = await noLimits.storage.get('s1');
@@ -1279,6 +1280,26 @@ describe('GoalController', () => {
     h.session.emitErrorTurn(overload);
     await tick();
     expect((await h.storage.get('s1'))?.status).toBe('usageLimited');
+  });
+
+  it('announces capacity recovery, not a quota reset, after an overload backoff', async () => {
+    // 过载与账号限流共用 usageLimited 状态和同一个自动续跑 timer。账号从没被限流
+    // 时报「额度已重置」是假信息（review #844 codex P1）。
+    // 直接驱动 autoResumeFromUsageLimit：它是 timer 回调本体，而过载的等待窗口是
+    // 固定 60s、无法像限额那样用 resetAtMs 压到 0 来触发。
+    h.setAccountLimit({ limited: false, resetAtMs: null });
+    await startGoal(h);
+    h.session.emitErrorTurn({ message: 'Selected model is at capacity.' });
+    await tick();
+    expect((await h.storage.get('s1'))?.status).toBe('usageLimited');
+
+    await (
+      h.controller as unknown as { autoResumeFromUsageLimit(id: string): Promise<void> }
+    ).autoResumeFromUsageLimit('s1');
+    await tick();
+
+    expect(h.notices).toEqual([{ sessionId: 's1', kind: 'capacity-resumed' }]);
+    expect((await h.storage.get('s1'))?.status).toBe('active');
   });
 
   it('setGoal gives a replacement objective its own overload budget', async () => {

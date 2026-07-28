@@ -4402,6 +4402,17 @@ export class CodexAgent extends BaseAgent {
     ): { attempt: number; maxAttempts: number } | null => {
       const state = overloadRetry;
       if (!state || closed) return null;
+      // 上一次重投的 turn/start 还在飞 → 绝不能再排一个。cancelOverloadRetry 只能
+      // 清计时器、取消不了在途 RPC，两个请求都可能被 server 接受，同一条用户输入
+      // 的工具副作用就会执行两遍（review #844 codex P1）。在途那次自己会走完
+      // 成功/失败路径，届时若仍缺容量会重新进入本函数。
+      if (state.inFlight) {
+        log.warn('codex overload retry already in flight — not scheduling another', {
+          attempt: state.attempt,
+          threadId,
+        });
+        return null;
+      }
       // 本 turn 已产出内容 → 重放会让模型重做已完成的工作（甚至重复副作用），
       // 交回用户决定是否继续，不自动重投。
       if (currentTurnProducedOutput) {
@@ -4645,10 +4656,14 @@ export class CodexAgent extends BaseAgent {
         // retry 升级计数同样按 turn 隔离 — 新 turn 从零计。
         turnRetryTracker.reset();
         // 新 turn 从"零产出"起算,决定后续过载错误能否安全重投。
+        // **只在真的换了 turn 时重置**:本 handler 明确支持同一 turn 的重复 /
+        // 迟到 started(典型:buffered item 事件重放后补发),那时 item / reasoning
+        // 可能已经把标记置成 true。无条件清零会让随后的容量错误被误判成零产出,
+        // 重放整条消息 → 重复已经执行过的命令与文件改动(review #844 codex P1)。
         // **不在这里重置 overloadRetry.attempt**:过载重投本身会开出新 turn,
         // 在这里清预算等于每次重投都续满次数 → 容量故障期无限重试烧额度。
         // 预算只在 send() 收到用户新消息时重置。
-        currentTurnProducedOutput = false;
+        if (!wasSameTurn) currentTurnProducedOutput = false;
         log.debug('SDK ▶ turn start', {
           turnId: params.turn.id,
           model: mutableModel,
@@ -4934,9 +4949,11 @@ export class CodexAgent extends BaseAgent {
           // error + done，把 UI 与 goal turn 直接收口，我们刚透出的非终止重试状态
           // 白费。重投会开出新的 turn id，不受这块墓碑影响。
           if (terminalTurnId) terminalErroredTurnIds.add(terminalTurnId);
-          // 状态文字切成重试中，避免停留在上一条 item 的 'Generating...'；
-          // 不推 Done —— 会话还在跑。
-          pushStatus('Retrying...');
+          // **刻意不推任何 status**：renderer 的 handleStreamEvent 会在每个非 error
+          // 事件上清掉 recoverableError，紧跟其后的 status 会立刻把刚透出的本地化
+          // 「模型服务繁忙，正在自动重试（N/M）」横幅冲掉（review #844 codex P1）。
+          // 会话状态本来就还是 running（没推 Done），退避期间的用户可见提示由那条
+          // 非终止 error 横幅承担。
           return;
         }
         if (terminalTurnId) {
@@ -5288,7 +5305,12 @@ export class CodexAgent extends BaseAgent {
             // 这段窗口若报 idle，并发 send 会把原消息挤掉。
             state.inFlight = true;
             try {
-              const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams);
+              // 必须带超时：AppServerHost.request 默认不超时，daemon / 远端传输
+              // 卡住时这个 RPC 会永久在飞，而 inFlight 被算作忙 → 会话永久卡死
+              // 且无人可解（review #844 codex P1）。与正常 turn/start 同款边界。
+              const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
+                timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+              });
               // **发出后再复检**：RPC 在途期间 Stop / close / 撤单都拦不住它——
               // 计时器早已清空，cancelOverloadRetry 无从取消；abort() 又因为
               // currentTurnId 仍是 null 而直接返回。此时若照常激活，一个已被用户
@@ -5743,7 +5765,12 @@ export class CodexAgent extends BaseAgent {
           // 不构成中断理由。
           if (currentTurnId !== null) {
             await interruptTurnForPermissionTighten(currentTurnId);
-          } else if (isTurnStartPending) {
+          } else if (isTurnStartPending || overloadRetry?.timer != null || overloadRetry?.inFlight === true) {
+            // 过载退避等待中 / 重投 RPC 在途时，既没有 currentTurnId 也不一定有
+            // isTurnStartPending，但重投持着的 turnParams 是**收紧之前**冻结的旧
+            // 宽松策略。不置这个标记，重投出来的 turn 会在权限已被撤销后继续执行
+            // 工具（review #844 codex P1）。与 turn/start 在飞的处理同构：标记由
+            // handleTurnStartResp 在拿到 turn id 的瞬间消费并补中断。
             pendingTightenInterrupt = true;
           }
         }

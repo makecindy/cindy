@@ -4566,6 +4566,217 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('never schedules a second retry while one turn/start is still in flight', async () => {
+      // cancelOverloadRetry 只能清计时器、取消不了在途 RPC。若在途时又排一个，
+      // 两个 turn/start 都可能被 server 接受，同一条用户输入的工具副作用执行两遍
+      // （review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<unknown>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            return turnStarts === 1 ? { turn: { id: 'turn-1' } } : retryStart.promise;
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-no-double-start',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        const capacityError = {
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        };
+        handlers.error(capacityError);
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2); // 首次投递 + 第一次重投（RPC 挂住）
+
+        // 在途期间再来一条容量错误：不得排第二个重投。
+        handlers.error({ ...capacityError, turnId: '' });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(2);
+
+        retryStart.resolve({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('bounds the retry turn/start RPC with the critical thread timeout', async () => {
+      // 无超时的话 daemon 卡住时 RPC 永久在飞，而 inFlight 被算作忙 → 会话永久
+      // 卡死且无人可解（review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-rpc-timeout',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+
+        const retryCall = host.request.mock.calls
+          .filter(([method]) => method === Method.TurnStart)
+          .at(-1);
+        expect(retryCall?.[2]).toMatchObject({ timeoutMs: expect.any(Number) });
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps the partial-output guard across a duplicate turnStarted for the same turn', async () => {
+      // 同一 turn 的重复 / 迟到 started（buffered item 重放后补发）不得把产出标记
+      // 清零，否则随后的容量错误会被误判零产出并重放整条消息，重复已执行的命令与
+      // 文件改动（review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-duplicate-started',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted) throw new Error('expected handlers');
+        // 模型已产出，然后同一 turn 的 started 又到一次。
+        handlers.reasoningTextDelta?.({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          delta: 'thinking...',
+        } as never);
+        handlers.turnStarted({ turn: { id: 'turn-1' } } as never);
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        // 仍算「已有产出」→ 不重投。
+        expect(turnStartCount(host)).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('interrupts the retried turn when permissions were tightened during the backoff', async () => {
+      // 退避窗口里既没有 currentTurnId 也不一定有 isTurnStartPending，但重投持着
+      // 收紧之前冻结的宽松 turnParams。不补中断，权限撤销后仍会执行工具
+      // （review #844 codex P1，安全边界）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-tighten',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+          permissionMode: 'bypassPermissions',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 退避等待中收紧到 Ask。
+        await handle.setPermissionMode?.('ask');
+        await vi.advanceTimersByTimeAsync(3_000);
+
+        // 重投照常发出，但拿到 turn id 的瞬间必须被中断。
+        expect(turnStartCount(host)).toBe(2);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(
+          host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not emit a status event that would wipe the overload banner', async () => {
+      // renderer 在每个非 error 事件上清 recoverableError，紧跟其后的 status 会把
+      // 刚透出的本地化过载横幅冲掉（review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-no-status',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        // 先把 send() 的 turn-start status 等既有事件消费掉，只观察容量错误之后。
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 接管后只该有那条非终止 error，后面不跟任何 status。
+        const after = events.slice(before);
+        expect(after.filter((e) => e.type === 'error')).toHaveLength(1);
+        expect(after.filter((e) => e.type === 'status')).toHaveLength(0);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not surface a failure when the retry RPC rejects after cancellation', async () => {
       // 取消之后 RPC 才 reject 时，reject 会绕过成功路径的取消复检直接落到 catch。
       // 那里若无条件收口，用户主动 Stop 会被误报成「重投失败」并二次收口

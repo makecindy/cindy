@@ -7345,6 +7345,7 @@
     },
     "usageLimitedUntil": "{{time}} 재개",
     "usageResumeNotice": "사용량이 회복되어 목표를 재개합니다",
+    "capacityResumeNotice": "모델 서비스가 회복되어 목표를 재개합니다",
     "complete": {
       "record": "목표 달성 · {{turns}}턴 · {{duration}}"
     },

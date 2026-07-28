@@ -71,3 +71,13 @@ export const OVERLOAD_RESUME_DELAY_MS = 60_000;
  * 区域性容量故障(2026-06-16 那次持续数十分钟)本就不该靠客户端硬扛。
  */
 export const MAX_CONSECUTIVE_OVERLOAD_TURNS = 3;
+
+/**
+ * 过载置 usageLimited 时写入的 lastReason。
+ *
+ * 到点自动续跑要靠它区分「上游没容量」与「账号真限流」——两者共用同一个
+ * usageLimited 状态与同一个 timer，但给用户的说法必须不同：账号从没被限流时
+ * 报「额度已重置」是假信息。内存里的连续过载计数在进程重启后会丢，存档里的
+ * lastReason 不会，所以判据以它为准。
+ */
+export const OVERLOAD_LAST_REASON = 'model service at capacity';

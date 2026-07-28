@@ -22,6 +22,7 @@ import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton';
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff';
 import {
   MAX_CONSECUTIVE_OVERLOAD_TURNS,
+  OVERLOAD_LAST_REASON,
   OVERLOAD_RESUME_DELAY_MS,
   classifyTurnOverload,
   classifyTurnUsageLimit,
@@ -204,7 +205,7 @@ export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): G
       return {
         status: 'usageLimited',
         lastReason:
-          outcome.errorKind === 'overload' ? 'model service at capacity' : 'usage limit reached',
+          outcome.errorKind === 'overload' ? OVERLOAD_LAST_REASON : 'usage limit reached',
         turnsUsed,
         tokensUsed,
         noProgressStreak: prev.noProgressStreak,
@@ -845,7 +846,10 @@ export class GoalController {
       ? (this.consecutiveOverloadTurns.get(sessionId) ?? 0) + 1
       : 0;
     if (isOverloadTurn) this.consecutiveOverloadTurns.set(sessionId, overloadStreak);
-    const overloadBudgetExhausted = overloadStreak > MAX_CONSECUTIVE_OVERLOAD_TURNS;
+    // `>=`：streak 达到上限的那一轮就停。用 `>` 会让 1/2/3 各续一轮、直到第 4 轮
+    // 才判死，实际变成 4 轮 ≈ 20 次上游请求，与承诺的 3 轮 15 次不符
+    // （review #844 codex P1）。
+    const overloadBudgetExhausted = overloadStreak >= MAX_CONSECUTIVE_OVERLOAD_TURNS;
     if (overloadBudgetExhausted) {
       this.deps.logger.warn('[goal] consecutive overload turns exhausted — stopping auto-resume', {
         sessionId,
@@ -1026,8 +1030,14 @@ export class GoalController {
     const state = await this.deps.storage.get(sessionId).catch(() => null);
     if (!state || state.status !== 'usageLimited') return; // 用户可能已 clear / 手动 resume
     if (this.deps.persistGoalNotice) {
+      // 过载与账号限流共用 usageLimited 状态和这同一个 timer，但说法必须分开：
+      // 账号从没被限流时报「额度已重置」是假信息（review #844 codex P1）。
+      // 判据用存档的 lastReason 而不是内存计数——后者在进程重启后会丢，而
+      // usageLimited 目标恰好会在重启后按存档的 usageResetAt 重排 timer。
+      const noticeKind =
+        state.lastReason === OVERLOAD_LAST_REASON ? 'capacity-resumed' : 'usage-resumed';
       try {
-        await this.deps.persistGoalNotice(sessionId, 'usage-resumed');
+        await this.deps.persistGoalNotice(sessionId, noticeKind);
       } catch (e) {
         this.deps.logger.warn('[goal] persistGoalNotice failed', { sessionId, error: String(e) });
       }
