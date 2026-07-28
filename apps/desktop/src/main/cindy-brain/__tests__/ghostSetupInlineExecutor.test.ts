@@ -101,6 +101,30 @@ describe('executeGhostSetupInlineSubmission', () => {
     expect(emitChange).toHaveBeenCalledWith('demo', 'api_key');
   });
 
+  it('clears the rejection ledger before emitting the change event', () => {
+    // bus notify 先调 keyed 的 setup coordinator(同步重估),wildcard 的
+    // 兜底清账在它之后——清账必须先于 emit,否则 coordinator 拿到带
+    // expired 的过期评估,配置卡永远停在被拒态完不成。
+    const order: string[] = [];
+    const result = executeGhostSetupInlineSubmission(
+      {
+        getAssessment: () => assessment(),
+        getManifest: () => manifest(),
+        storeSecret: vi.fn(() => true),
+        clearRejection: () => {
+          order.push('clear');
+        },
+        emitChange: () => {
+          order.push('emit');
+        },
+      },
+      { ghostId: 'demo', action, value: 'actual-value' },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(order).toEqual(['clear', 'emit']);
+  });
+
   it('stores an assessment-bound node Secret through the same Host vault path', () => {
     const storeSecret = vi.fn(() => true);
     const emitChange = vi.fn();

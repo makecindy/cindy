@@ -2315,6 +2315,12 @@ export async function executeGhostSetupInlineAction(args: {
         return ghost ? withRuntimeFiloGoogleClient(ghost.manifest) : null;
       },
       storeSecret: storeGhostSecret,
+      // 先清账再唤醒:bus notify 先调 keyed 的 setup coordinator(同步
+      // 重估),wildcard 的清账在它之后——若先 emit,coordinator 拿到的
+      // 还是带 expired 的过期评估,配置卡永远停在被拒态完不成(与
+      // /secrets 端点 store 路径同一时序约定)。
+      clearRejection: (ghostId, secretKey) =>
+        ghostCredentialRejections().clearSecret(ghostId, secretKey),
       emitChange: (ghostId, secretKey) => {
         getGhostSetupChangeBus().emit(ghostId, {
           source: 'secret',
@@ -3446,7 +3452,10 @@ export function registerGhostIpc(): void {
   // engineering-conventions 的错误编码规则)——renderer 据 code 给专用
   // 恢复文案;裸异常穿透 invoke 会让 renderer 认不出失败类型,跌回通用
   // 错误。INVALID_PARAMS / NOT_FOUND 等已编码错误原样透传。
-  ipcMain.handle('ghosts:setup-status', (_event, id: unknown) => {
+  ipcMain.handle('ghosts:setup-status', (event, id: unknown) => {
+    // 本 PR 把该查询面扩进了凭证被拒状态与 Host 模型配置就绪等敏感事实,
+    // 与其它特权 handler 同口径校验调用方是受信应用 renderer。
+    assertTrustedAppRendererEvent(event);
     try {
       return handleGhostSetupStatusRequest({
       id,

@@ -11,6 +11,13 @@ export interface GhostSetupInlineExecutorDeps {
   getAssessment: (ghostId: string) => GhostSetupAssessment;
   getManifest: (ghostId: string) => GhostManifest | null;
   storeSecret: (ghostId: string, secretKey: string, value: string) => boolean;
+  /**
+   * 重存成功后、emitChange 之前清被拒台账:bus notify 先调 keyed 的
+   * setup coordinator(同步重估),wildcard 的兜底清账在它之后——若不在
+   * 此清账,coordinator 拿到的还是带 expired 的过期评估,配置卡永远停在
+   * 被拒态完不成(与 /secrets 端点 store 路径同一时序约定)。
+   */
+  clearRejection?: (ghostId: string, secretKey: string) => void;
   emitChange: (ghostId: string, secretKey: string) => void;
   onSaved?: (ghostId: string, label: string) => void;
   logger?: {
@@ -88,6 +95,7 @@ export function executeGhostSetupInlineSubmission(
   if (!deps.storeSecret(args.ghostId, secretKey, trimmed)) {
     return { ok: false, errorCode: 'SAVE_FAILED', message: t('newChat.pluginSetup.inlineSecretStoreFailed') };
   }
+  deps.clearRejection?.(args.ghostId, secretKey);
   deps.emitChange(args.ghostId, secretKey);
   try {
     deps.onSaved?.(args.ghostId, decl.label);
