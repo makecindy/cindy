@@ -130,6 +130,10 @@ describe('TodaySpendChip dashboard routing', () => {
     );
     // 直接复用 Mobile 的汇总与本地时间格式,tooltip 只追加重置卡相关行。
     expect(source).toContain('summarizeCodexRateLimitReset');
+    // 复用 chip 现有 tick 时间基准,跨日时本地时间文案会重新格式化。
+    expect(source).toContain(
+      'summarizeCodexRateLimitReset(codexRateLimits, windowLabelNowMs)',
+    );
     expect(source).toContain('resetSummary?.resetRows');
   });
 

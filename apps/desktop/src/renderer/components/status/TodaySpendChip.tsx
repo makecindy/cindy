@@ -1076,10 +1076,6 @@ export function TodaySpendChip({
     modelId,
   );
   const codexRateLimits = useCodexRateLimits(isCodexOauth && !isAnyRemoteSession);
-  const codexResetSummary = React.useMemo(
-    () => summarizeCodexRateLimitReset(codexRateLimits, Date.now()),
-    [codexRateLimits],
-  );
   // xAI 限流快照同为本机 main 抓的 —— 远程会话(SSH / device-link)同样抑制,回落价值估算。
   const xaiRateLimit = useXaiRateLimit(usesXaiQuotaForm && !isAnyRemoteSession);
   // cc 与 codex-api 共用同一把 XD gateway key 的 LiteLLM quota; codex-oauth 不订阅。
@@ -1119,6 +1115,10 @@ export function TodaySpendChip({
           ? t('todaySpend.openClaudeUsage')
           : null;
   const [windowLabelNowMs, setWindowLabelNowMs] = React.useState(() => Date.now());
+  const codexResetSummary = React.useMemo(
+    () => summarizeCodexRateLimitReset(codexRateLimits, windowLabelNowMs),
+    [codexRateLimits, windowLabelNowMs],
+  );
 
   // 当前形态下 chip 展示的限额窗口段 (Codex 订阅 / Claude 订阅共用结构);
   // 其它形态为空数组, 两个 rollup slot 空转。
