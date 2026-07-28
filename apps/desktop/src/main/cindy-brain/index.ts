@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, type WebContents } from 'electron';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -598,6 +599,10 @@ export function suspendAllGhosts(): void {
   runtimeSingleton?.destroyAll();
   brainRootCache = null;
   resetGhostCredentialRejectionsStore();
+  // networkSlot 闭包按 owner 捕获了记账回调与凭证读取面;owner 切换后
+  // 必须重建(下一单懒取新 owner),否则旧闭包的在途响应会带着旧 owner
+  // 身份撞到新边界(配合 noteGhostCredentialRejected 的 owner 校验双保险)。
+  networkSlotSingleton = null;
 }
 let ipcRegistered = false;
 
@@ -2051,8 +2056,25 @@ function ghostCredentialRejections() {
   return ghostCredentialRejectionsSingleton;
 }
 
-/** networkSlot 在 401/403 重试耗尽后记账;有实际变化时推 setup change。 */
-export function noteGhostCredentialRejected(ghostId: string, secretKey: string): void {
+/**
+ * networkSlot 在 401/403 重试耗尽后记账;有实际变化时推 setup change。
+ * owner 边界保护:networkSlot 闭包在账号/data-owner 切换后仍可能持有在途
+ * 请求(suspendAllGhosts 只重置台账单例,不中断 slot 的 AbortController),
+ * 迟到的 401/403 必须按请求发起时的 owner 判定——owner 已变就丢弃,不
+ * 把 owner A 的响应记到 owner B 名下同名插件的台账上。
+ */
+export function noteGhostCredentialRejected(
+  ghostId: string,
+  secretKey: string,
+  requestOwner?: ActiveAppSession,
+): void {
+  if (requestOwner && !isSameAppSession(requestOwner, getActiveAppSession())) {
+    log.info('ghost credential rejection dropped across owner boundary', {
+      ghostId,
+      secretKey,
+    });
+    return;
+  }
   if (ghostCredentialRejections().markRejected(ghostId, secretKey)) {
     getGhostSetupChangeBus().emit(ghostId, { source: 'runtime_probe', ref: secretKey });
   }
@@ -2317,13 +2339,17 @@ export async function executeGhostSetupInlineAction(args: {
  */
 export function getGhostNetworkSlot(): GhostNetworkSlot {
   if (!networkSlotSingleton) {
+    // 闭包生成时绑定当前 owner:迟到的 401/403 记账前与当时 owner 比对,
+    // 跨 owner 边界的迟到响应不落新 owner 的台账(见 noteGhostCredentialRejected)。
+    const requestOwner = getActiveAppSession();
     networkSlotSingleton = new GhostNetworkSlot({
       getGhost: (id) => {
         const ghost = findAvailableGhost(id);
         return ghost ? { ...ghost, manifest: withRuntimeFiloGoogleClient(ghost.manifest) } : null;
       },
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
-      noteCredentialRejected: noteGhostCredentialRejected,
+      noteCredentialRejected: (ghostId, secretKey) =>
+        noteGhostCredentialRejected(ghostId, secretKey, requestOwner),
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
       getLoginEmail: () => getAuthState().user?.email ?? null,
       // 用 Node 侧 undici fetch 而非 Electron net.fetch:redirect:'manual' 在 undici
@@ -2413,6 +2439,7 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
                 header: decl.inject.header,
                 format: decl.inject.format,
                 credentialRef: `connection:${decl.key}:${connection.id}`,
+                version: createHash('sha256').update(connection.value).digest('hex').slice(0, 16),
               };
             }
           }

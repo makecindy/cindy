@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
 import {
@@ -2190,6 +2191,47 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
       'web-search',
       'connection:gitlab:gitlab.example.com',
     );
+  });
+
+  it('在途旧连接 token 的 401 不误记已更新的新 token(版本指纹比对)', async () => {
+    // 竞态:请求带旧 token 在途,用户已更新该连接的 token(更新先清账),
+    // 旧请求迟到的 401 若按稳定 ref 记账,会把新 token 翻成 needs_reauth。
+    const noteCredentialRejected = vi.fn();
+    let currentToken = 'glpat-old';
+    let resolveFetch!: (r: Response) => void;
+    const fetchImpl = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: CONN_ONLY_NETWORK }),
+      fetchImpl: fetchImpl as never,
+      connections: {
+        hostsFor: () => ['gitlab.example.com'],
+        tokenFor: (_ghostId: string, hostname: string) =>
+          hostname === 'gitlab.example.com'
+            ? {
+                value: currentToken,
+                header: 'Private-Token',
+                format: '{value}',
+                credentialRef: 'connection:gitlab:gitlab.example.com',
+                version: createHash('sha256').update(currentToken).digest('hex').slice(0, 16),
+              }
+            : null,
+      },
+      noteCredentialRejected,
+    });
+    const pending = slot.handleFetchRequest('web-search', {
+      url: 'https://gitlab.example.com/api/v4/user',
+    });
+    // 等注入完成后模拟用户更新 token,再放行 401。
+    await new Promise((r) => setImmediate(r));
+    currentToken = 'glpat-new';
+    resolveFetch(fakeResponse({ status: 401 }));
+    await pending;
+    expect(noteCredentialRejected).not.toHaveBeenCalled();
   });
 
   it('deps.connections 未注入时连接声明 fail-closed:动态地址不放行', async () => {

@@ -166,13 +166,22 @@ export interface NetworkSlotDeps {
    *   形态(同一 hostname 命中多个 decl 时取第一个);查无地址或 token 读
    *   不到返回 null(调用方按"凭证未配置"快速失败)。
    * 未注入时连接声明形同虚设(动态地址不放行),fail-closed。
+   * tokenFor 可附带 version(token 值指纹):401 记账前与现值比对,
+   * 在途旧请求的迟到 401 不误记已更新的连接 token(与直连 key 同口径)。
    */
   connections?: {
     hostsFor(ghostId: string): string[];
     tokenFor(
       ghostId: string,
       hostname: string,
-    ): { value: string; header: string; format: string; credentialRef?: string } | null;
+    ): {
+      value: string;
+      header: string;
+      format: string;
+      credentialRef?: string;
+      /** token 值指纹(sha256 前 16 hex):401 记账前与现值比对,在途旧请求的迟到 401 不误记已更新的连接 token。 */
+      version?: string;
+    } | null;
   };
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -812,6 +821,37 @@ export class GhostNetworkSlot {
   }
 
   /**
+   * 连接 token 的版本校验记账(与直连 key 同口径):注入时捕获的 token
+   * 指纹与当前 tokenFor 现值指纹不一致(token 已在飞行中被更新)或读不到
+   * 现值(连接已删)都跳过——在途旧请求的迟到 401 不误记新 token。
+   * 指纹缺失(生产闭包未带 version)按现状记账,不削弱既有覆盖。
+   */
+  private noteConnectionRejectionsIfCurrent(
+    ghostId: string,
+    callId: string,
+    refs: ReadonlySet<string>,
+    fingerprints: ReadonlyMap<string, { version: string; host: string }>,
+  ): void {
+    for (const ref of refs) {
+      const captured = fingerprints.get(ref);
+      if (captured !== undefined) {
+        // 按注入时的 host 反查现值:连接清单纯内存读 + token 保险库读,
+        // 毫秒级同步,与归因点其它存储访问同量级。
+        const current = this.deps.connections?.tokenFor(ghostId, captured.host);
+        if (current?.version !== captured.version) {
+          this.deps.log?.info('ghost connection rejection skipped: token version changed in flight', {
+            ghostId,
+            callId,
+            credentialRef: ref,
+          });
+          continue;
+        }
+      }
+      this.noteCredentialRejected(ghostId, ref);
+    }
+  }
+
+  /**
    * 处理一条 fetch-request(ghost-pipe:send 的 invoke 返回值即本结果)。
    * 永不 reject——一切失败折叠成 { ok:false, message }。
    */
@@ -1128,6 +1168,7 @@ export class GhostNetworkSlot {
     // 同理,最终跳的直连 key 指纹也逐跳覆盖(401 记账前与保险库现值比对,
     // 在途旧请求的迟到 401 不误记已重存的新凭证)。
     let responseKeyFingerprints = new Map(inject0.directKeyFingerprints);
+    let responseConnectionFingerprints = new Map(inject0.connectionFingerprints);
 
     // ── 在途并发闸(常量硬顶,防死循环刷单;不是配额)──────────────────
     const inflight = this.inflight.get(ghostId) ?? 0;
@@ -1196,6 +1237,7 @@ export class GhostNetworkSlot {
           responseConnectionRefs = new Set(reInject.connectionRefs);
           responseOauthKeys = new Set(reInject.oauthInjected.keys());
           responseKeyFingerprints = new Map(reInject.directKeyFingerprints);
+          responseConnectionFingerprints = new Map(reInject.connectionFingerprints);
           this.deps.log?.info('ghost fetch-request 401 → re-auth retry', {
             ghostId, callId, host: url.hostname,
           });
@@ -1220,6 +1262,7 @@ export class GhostNetworkSlot {
             responseConnectionRefs = new Set(hopInject.connectionRefs);
             responseOauthKeys = new Set(hopInject.oauthInjected.keys());
             responseKeyFingerprints = new Map(hopInject.directKeyFingerprints);
+            responseConnectionFingerprints = new Map(hopInject.connectionFingerprints);
           }
           response = await this.deps.fetchImpl(currentUrl.toString(), {
             method: currentMethod,
@@ -1334,9 +1377,7 @@ export class GhostNetworkSlot {
       } else if (response.status === 401) {
         // 401 = 服务端明确不认这份凭证,直接记账。
         this.noteRejectionsIfCurrent(ghostId, callId, trackableKeys, responseKeyFingerprints);
-        for (const ref of responseConnectionRefs) {
-          this.noteCredentialRejected(ghostId, ref);
-        }
+        this.noteConnectionRejectionsIfCurrent(ghostId, callId, responseConnectionRefs, responseConnectionFingerprints);
       } else if (response.status === 403) {
         // 403 语义宽(限流/越权/封禁都可能):仅当 body 出现凭证失效类信号
         // 才按被拒记账,避免把限流页误标 needs_reauth 钉死好插件。
@@ -1345,9 +1386,7 @@ export class GhostNetworkSlot {
           (await probeCredentialRejectionBody(response))
         ) {
           this.noteRejectionsIfCurrent(ghostId, callId, trackableKeys, responseKeyFingerprints);
-          for (const ref of responseConnectionRefs) {
-            this.noteCredentialRejected(ghostId, ref);
-          }
+          this.noteConnectionRejectionsIfCurrent(ghostId, callId, responseConnectionRefs, responseConnectionFingerprints);
         }
       }
 
@@ -1586,6 +1625,8 @@ export class GhostNetworkSlot {
      * 不误记用户已重存的新凭证。
      */
     directKeyFingerprints: Map<string, string>;
+    /** 最终注入的连接 credentialRef → { version: token 指纹, host: 注入时地址 }(连接 token 的迟到 401 保护)。 */
+    connectionFingerprints: Map<string, { version: string; host: string }>;
   }> {
     // 声明的凭证头一律主机独占:先把意识自带(或上一跳残留)的任何大小写
     // 变体删干净,再按本 host 注入——不管这条凭证这一跳注不注入都要删,
@@ -1601,12 +1642,13 @@ export class GhostNetworkSlot {
     let usedExchange = false;
     const oauthInjected = new Map<string, string>();
     const directKeyFingerprints = new Map<string, string>();
+    const connectionFingerprints = new Map<string, { version: string; host: string }>();
     for (const secret of secrets) {
       const scope = secret.inject.hosts ?? allHosts;
       if (!scope.some((pattern) => ghostNetworkHostMatches(pattern, hostname))) continue;
       const resolved = await this.resolveSecretValue(ghostId, secret, authAccount);
       if ('error' in resolved) {
-        return { error: resolved.error, usedExchange, oauthInjected, connectionRefs: [], directKeyFingerprints };
+        return { error: resolved.error, usedExchange, oauthInjected, connectionRefs: [], directKeyFingerprints, connectionFingerprints };
       }
       if (secret.exchange !== undefined) usedExchange = true;
       if (resolved.oauthAccountId !== undefined) oauthInjected.set(secret.key, resolved.oauthAccountId);
@@ -1634,20 +1676,25 @@ export class GhostNetworkSlot {
             oauthInjected,
             connectionRefs: [],
             directKeyFingerprints,
+            connectionFingerprints,
           };
         }
         deleteHeaderVariants(headers, tok.header);
         headers[tok.header] = tok.format.replace('{value}', () => tok.value);
+        if (tok.credentialRef && tok.version) {
+          connectionFingerprints.set(tok.credentialRef, { version: tok.version, host: hostname });
+        }
         return {
           error: null,
           usedExchange,
           oauthInjected,
           connectionRefs: tok.credentialRef ? [tok.credentialRef] : [],
           directKeyFingerprints,
+          connectionFingerprints,
         };
       }
     }
-    return { error: null, usedExchange, oauthInjected, connectionRefs: [], directKeyFingerprints };
+    return { error: null, usedExchange, oauthInjected, connectionRefs: [], directKeyFingerprints, connectionFingerprints };
   }
 
   /**
