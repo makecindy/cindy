@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const rendererRoot = join(import.meta.dirname, '..');
+const rendererRoot = join(__dirname, '..');
 const read = (relativePath: string) =>
   readFileSync(join(rendererRoot, 'components/new-chat', relativePath), 'utf8');
 

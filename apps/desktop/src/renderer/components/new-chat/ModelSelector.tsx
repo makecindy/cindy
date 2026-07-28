@@ -1769,6 +1769,9 @@ export function ModelSelector({
             effort: effortLabel,
           })
         : t('newChat.modelSelector.trigger.aria', { model: displayLabel });
+  // compact 会隐藏断连状态文字；原生 title 仍需保留同一状态，避免鼠标用户悬停
+  // 错误图标时只看到模型名、无法判断发送为何被阻断。
+  const triggerTitle = showSourceDisconnected ? baseAriaLabel : displayLabel;
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
   const ariaLabel = ariaContext ? `${ariaContext}:${baseAriaLabel}` : baseAriaLabel;
   const isBudget = modelId.startsWith('codex/');
@@ -1797,7 +1800,7 @@ export function ModelSelector({
       onClick={morphEnabled ? () => setOpen((prev) => (disabled ? false : !prev)) : undefined}
       aria-expanded={open && !disabled}
       aria-haspopup="listbox"
-      title={displayLabel}
+      title={triggerTitle}
       className={cn(
         'flex min-w-0 max-w-full items-center gap-1 transition-colors',
         isFieldTrigger
