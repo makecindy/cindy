@@ -641,6 +641,12 @@ const STEER_ACK_TIMEOUT_MS = 10_000;
 // 免审 turn 将无声继续跑 (review #969 第六轮 Greptile P1)。取值与 steer 同款 10s。
 const TIGHTEN_INTERRUPT_ACK_TIMEOUT_MS = 10_000;
 
+// Permission profile refresh / replacement runs before turn/start and therefore
+// sits on the message acceptance path. Keep its app-server acknowledgement
+// bounded so a live-but-unresponsive daemon cannot freeze the queued message or
+// ignore Stop.
+const PROFILE_LIFECYCLE_ACK_TIMEOUT_MS = 10_000;
+
 // 计划批准后自动发起实施 turn 的固定输入 — 与官方 TUI 逐字一致
 // (codex-rs/tui/src/chatwidget/plan_implementation.rs 的
 // PLAN_IMPLEMENTATION_CODING_MESSAGE), 模型对这句有训练分布上的既有理解。
@@ -2011,6 +2017,15 @@ export class CodexAgent extends BaseAgent {
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode = opts.permissionMode ?? 'ask';
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
+    // Named profiles defined through thread/start.config are thread-local. Codex
+    // 0.145.0 cannot resolve that thread-local definition when the selector is
+    // repeated on turn/start, so remember whether the thread is already using it.
+    let readonlyReferencesProfileActive = false;
+    // A fresh thread/start has no rollout yet, so thread/resume fails until a
+    // turn/start may have crossed the server acceptance boundary. Once a turn
+    // was attempted, prefer resume before replacing the thread; "no rollout"
+    // is the only safe proof that the thread is still unused.
+    let threadMayHaveRollout = false;
     // 计划模式(与 permissionMode 正交, **一次性选择**): mutablePlanMode 是 UI 勾选的
     // "武装"态 —— send 消耗它并立即 emit plan_mode_changed(false) 让勾选熄灭;
     // 本轮「计划 → 审阅 → 修订/批准」循环由 planCycleActive 承载:
@@ -2025,11 +2040,22 @@ export class CodexAgent extends BaseAgent {
     let planModeDefaultMarkerNeeded = false;
     // 当前 plan turn 流出的 proposed plan 文本 (plan item / <proposed_plan> 块)。
     let proposedPlanText: string | null = null;
+    const endPlanCycleAfterPreStartFailure = (reason: string): void => {
+      if (!planCycleActive) return;
+      planCycleActive = false;
+      proposedPlanText = null;
+      currentTurnPlanModeActive = false;
+      pendingTurnStartPlanMode = null;
+      log.debug(`${reason} during plan cycle — plan cycle ends`);
+    };
     // plan_review requestId 去重序号 (同一 turn 理论上只有一个 plan item, 防御性加序号)。
     let planReviewSeq = 0;
     // Undefined = 不覆盖 app-server/config 默认; null = explicit standard; 'fast' = Fast mode.
     let mutableServiceTier: ServiceTier | null | undefined =
       opts.fastMode === undefined ? undefined : opts.fastMode ? 'fast' : null;
+    // Older async thread start/resume responses must not overwrite a newer
+    // Fast mode choice made while the request was in flight.
+    let serviceTierMutationGeneration = 0;
     const vo: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
     const credentialMode = opts.remoteHostId
       ? undefined
@@ -2216,6 +2242,14 @@ export class CodexAgent extends BaseAgent {
       return mapPermissionToCodex(mutablePermissionMode, approvalsReviewerSupported);
     }
 
+    function shouldUseReadonlyReferencesProfile(): boolean {
+      return (
+        readonlyReferenceDirsSupported &&
+        mutableExtraDirs.length > 0 &&
+        mutablePermissionMode !== 'bypassPermissions'
+      );
+    }
+
     function currentThreadWorkspaceConfig(): Pick<
       ThreadStartParams,
       | 'approvalPolicy'
@@ -2236,11 +2270,7 @@ export class CodexAgent extends BaseAgent {
             }
           : {}),
       };
-      if (
-        readonlyReferenceDirsSupported &&
-        mutableExtraDirs.length > 0 &&
-        mutablePermissionMode !== 'bypassPermissions'
-      ) {
+      if (shouldUseReadonlyReferencesProfile()) {
         return {
           ...shared,
           permissions: READONLY_REFERENCES_PERMISSION_PROFILE,
@@ -2254,7 +2284,6 @@ export class CodexAgent extends BaseAgent {
       | 'approvalPolicy'
       | 'approvalsReviewer'
       | 'sandboxPolicy'
-      | 'permissions'
       | 'runtimeWorkspaceRoots'
     > {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
@@ -2265,15 +2294,17 @@ export class CodexAgent extends BaseAgent {
           ? { runtimeWorkspaceRoots: runtimeWorkspaceRoots() }
           : {}),
       };
-      if (
-        readonlyReferenceDirsSupported &&
-        mutableExtraDirs.length > 0 &&
-        mutablePermissionMode !== 'bypassPermissions'
-      ) {
-        return {
-          ...shared,
-          permissions: READONLY_REFERENCES_PERMISSION_PROFILE,
-        };
+      if (shouldUseReadonlyReferencesProfile()) {
+        // The profile was selected on thread/start or thread/resume. Repeating
+        // the selector here makes Codex 0.145.0 reload its base config (which
+        // does not contain our per-thread definition) and reject turn/start
+        // with "default_permissions requires a `[permissions]` table".
+        if (!readonlyReferencesProfileActive) {
+          throw new Error(
+            'Codex read-only reference profile is not active for this thread; restore it with thread/resume before turn/start',
+          );
+        }
+        return shared;
       }
       return {
         ...shared,
@@ -2389,6 +2420,13 @@ export class CodexAgent extends BaseAgent {
         resumeSessionId: opts.resumeSessionId,
       });
     }
+    const developerInstructions = buildCodexDeveloperInstructions({
+      makerMemoryRules,
+      runtimeSystemPrompt: this.deps.runtimeConfig.systemPrompt,
+      makerMemoryIndex,
+      userPrompt: opts.userPrompt,
+    });
+    const useProxyChannel = isCodexProxyChannelReady();
     let threadId: string;
     let codexProductPromptDelivery: AgentSessionHandle['codexProductPromptDelivery'];
 
@@ -2444,13 +2482,6 @@ export class CodexAgent extends BaseAgent {
           });
         }
       }
-      const developerInstructions = buildCodexDeveloperInstructions({
-        makerMemoryRules,
-        runtimeSystemPrompt: this.deps.runtimeConfig.systemPrompt,
-        makerMemoryIndex,
-        userPrompt: opts.userPrompt,
-      });
-      const useProxyChannel = isCodexProxyChannelReady();
       const params: ThreadResumeParams = {
         threadId: opts.resumeSessionId,
         ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
@@ -2482,6 +2513,8 @@ export class CodexAgent extends BaseAgent {
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
         }
         sdkSessionId = threadId;
+        readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
+        threadMayHaveRollout = true;
         // Resumed app-server threads may have sticky collaborationMode='plan' from
         // a previous handle whose plan cycle ended without a follow-up turn. Since
         // that sticky state lives server-side, conservatively send mode:'default'
@@ -2515,13 +2548,6 @@ export class CodexAgent extends BaseAgent {
       //                                          每次 startSession 透传, 优先级最高)
       // 跟 claude-code 六段语义对齐。空段被 .filter 跳过,
       // 内容为空时不发送 developerInstructions 字段。
-      const developerInstructions = buildCodexDeveloperInstructions({
-        makerMemoryRules,
-        runtimeSystemPrompt: this.deps.runtimeConfig.systemPrompt,
-        makerMemoryIndex,
-        userPrompt: opts.userPrompt,
-      });
-      const useProxyChannel = isCodexProxyChannelReady();
       const params: ThreadStartParams = {
         cwd: opts.workingDir,
         ...currentThreadWorkspaceConfig(),
@@ -2547,6 +2573,8 @@ export class CodexAgent extends BaseAgent {
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
         }
         sdkSessionId = threadId;
+        readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
+        threadMayHaveRollout = false;
         log.info('thread/start ok', { threadId, model: resp.model, serviceTier: mutableServiceTier ?? null });
       } catch (e) {
         releaseHostBindingLeaseIfNeeded();
@@ -2561,6 +2589,241 @@ export class CodexAgent extends BaseAgent {
         throw new Error(message);
       }
     }
+
+    const requestProfileLifecycle = <Response>({
+      action,
+      signal,
+      request,
+      onLateResolve,
+    }: {
+      action: 'refresh' | 'replacement';
+      signal?: AbortSignal;
+      request: () => Promise<Response>;
+      onLateResolve?: (response: Response) => Promise<void> | void;
+    }): Promise<Response> =>
+      new Promise<Response>((resolve, reject) => {
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const cleanup = () => {
+          if (timer) clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+        };
+        const resolveOnce = (value: Response) => {
+          if (settled) {
+            if (onLateResolve) {
+              void Promise.resolve(onLateResolve(value)).catch((error) => {
+                log.warn(`late read-only reference profile ${action} cleanup threw`, {
+                  error: String(error),
+                  threadId,
+                });
+              });
+            }
+            return;
+          }
+          settled = true;
+          cleanup();
+          resolve(value);
+        };
+        const rejectOnce = (error: Error) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(error);
+        };
+        const onAbort = () => {
+          rejectOnce(new Error('Codex send cancelled before acceptance'));
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        timer = setTimeout(() => {
+          rejectOnce(
+            new Error(
+              `Codex read-only reference profile ${action} did not acknowledge within ${PROFILE_LIFECYCLE_ACK_TIMEOUT_MS}ms`,
+            ),
+          );
+        }, PROFILE_LIFECYCLE_ACK_TIMEOUT_MS);
+        timer.unref?.();
+        try {
+          request().then(
+            resolveOnce,
+            (error) => rejectOnce(
+              error instanceof Error ? error : new Error(String(error)),
+            ),
+          );
+        } catch (error) {
+          rejectOnce(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+
+    /**
+     * A thread that has not accepted a turn has no rollout and cannot be
+     * resumed. Recreate that unused thread with the current profile instead,
+     * then move the live subscription and thread-scoped registrations.
+     */
+    const replaceUnusedThreadWithCurrentProfile = async (
+      signal?: AbortSignal,
+    ): Promise<void> => {
+      const previousThreadId = threadId;
+      const replacementServiceTierGeneration = serviceTierMutationGeneration;
+      const inheritedHostBindingLease = releaseHostBindingLease !== null;
+      acquireHostBindingLeaseIfNeeded();
+      try {
+        assertCurrentHost('read-only reference profile replacement');
+        const resp = await requestProfileLifecycle<ThreadStartResponse>({
+          action: 'replacement',
+          signal,
+          request: () => host.request<ThreadStartResponse>(Method.ThreadStart, {
+            cwd: opts.workingDir,
+            ...currentThreadWorkspaceConfig(),
+            ...(shouldRegisterAskUserDynamicTool(opts) ? { dynamicTools: [ASK_USER_DYNAMIC_TOOL] } : {}),
+            ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
+            ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
+            ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+            ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
+          }),
+          onLateResolve: async (lateResp) => {
+            const lateThreadId = lateResp.thread.id;
+            if (lateThreadId === previousThreadId) return;
+            await host.unsubscribeThread(lateThreadId);
+            log.debug('discarded late unused profile replacement', {
+              previousThreadId,
+              threadId: lateThreadId,
+            });
+          },
+        });
+        assertCurrentHost('read-only reference profile replacement');
+        const nextThreadId = resp.thread.id;
+        if (closed) {
+          try {
+            await host.unsubscribeThread(nextThreadId);
+          } catch (e) {
+            log.warn('unused profile replacement cleanup threw after close', {
+              error: String(e),
+              threadId: nextThreadId,
+            });
+          }
+          throw new Error('Codex session closed during read-only reference profile replacement');
+        }
+        if (
+          Object.hasOwn(resp, 'serviceTier') &&
+          replacementServiceTierGeneration === serviceTierMutationGeneration
+        ) {
+          mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+        }
+        if (nextThreadId !== previousThreadId) {
+          try {
+            await subscription?.release();
+          } catch (e) {
+            log.warn('unused profile replacement release threw', {
+              error: String(e),
+              threadId: previousThreadId,
+            });
+          }
+          unregisterCodexMcpContext(previousThreadId);
+          if (closed) {
+            try {
+              await host.unsubscribeThread(nextThreadId);
+            } catch (e) {
+              log.warn('unused profile replacement cleanup threw after concurrent close', {
+                error: String(e),
+                threadId: nextThreadId,
+              });
+            }
+            throw new Error('Codex session closed during read-only reference profile replacement');
+          }
+          threadId = nextThreadId;
+          sdkSessionId = nextThreadId;
+          subscription = host.subscribeThread(threadId, handlers);
+          registerCodexMcpContext(threadId);
+          eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
+          if (replacementServiceTierGeneration !== serviceTierMutationGeneration) {
+            // setFastMode() updated the old thread while thread/start was
+            // pending. turn/start still carries the current value; reapply the
+            // sticky thread setting without blocking dispatch.
+            void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
+          }
+        }
+        if (useProxyChannel) {
+          registerCodexDeveloperInstructions(threadId, developerInstructions);
+          codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
+        } else {
+          codexProductPromptDelivery = developerInstructions
+            ? { threadId, historyHasProductPrompt: true }
+            : undefined;
+        }
+        readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
+        threadMayHaveRollout = false;
+        log.debug('unused thread replaced with read-only reference profile', {
+          previousThreadId,
+          threadId,
+          referenceRoots: mutableExtraDirs.length,
+        });
+      } finally {
+        if (!inheritedHostBindingLease) releaseHostBindingLeaseIfNeeded();
+      }
+    };
+
+    /**
+     * turn/start cannot select a profile that only exists in this thread's
+     * per-request config. Most turns simply inherit the profile selected by
+     * thread/start. A live thread only needs a refresh after it previously used
+     * a sandboxPolicy (for example Full access), or when references are added
+     * to a thread that started without them.
+     */
+    const ensureReadonlyReferencesProfileForNextTurn = (
+      signal?: AbortSignal,
+    ): Promise<void> | null => {
+      if (!shouldUseReadonlyReferencesProfile() || readonlyReferencesProfileActive) return null;
+      return (async () => {
+        if (!threadMayHaveRollout) {
+          await replaceUnusedThreadWithCurrentProfile(signal);
+          return;
+        }
+        const resumeThreadWorkspaceConfig = currentThreadWorkspaceConfig();
+        const resumeServiceTierGeneration = serviceTierMutationGeneration;
+        assertCurrentHost('read-only reference profile refresh');
+        let resp: ThreadResumeResponse;
+        try {
+          resp = await requestProfileLifecycle<ThreadResumeResponse>({
+            action: 'refresh',
+            signal,
+            request: () => host.request<ThreadResumeResponse>(Method.ThreadResume, {
+              threadId,
+              ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
+              cwd: opts.workingDir,
+              ...resumeThreadWorkspaceConfig,
+              ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
+              ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
+              ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+            }),
+          });
+        } catch (e) {
+          if (!/no rollout found/i.test(String(e))) throw e;
+          if (signal?.aborted) throw new Error('Codex send cancelled before acceptance');
+          threadMayHaveRollout = false;
+          await replaceUnusedThreadWithCurrentProfile(signal);
+          return;
+        }
+        assertCurrentHost('read-only reference profile refresh');
+        if (
+          Object.hasOwn(resp, 'serviceTier') &&
+          resumeServiceTierGeneration === serviceTierMutationGeneration
+        ) {
+          mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+        } else if (resumeServiceTierGeneration !== serviceTierMutationGeneration) {
+          void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
+        }
+        readonlyReferencesProfileActive = 'permissions' in resumeThreadWorkspaceConfig;
+        threadMayHaveRollout = true;
+        log.debug('read-only reference profile restored before turn/start', {
+          threadId,
+          referenceRoots: mutableExtraDirs.length,
+        });
+      })();
+    };
 
     // ── dispatchInteraction + pendingApprovals (Claude 同款 dismissAllPending 模式) ──
     //
@@ -3751,6 +4014,7 @@ export class CodexAgent extends BaseAgent {
         if (shouldIgnoreStaleTurnEvent(params.turn.id)) return;
         // 终态已先到的 turn (墓碑) 不得被乱序晚到的 started 重新置活。
         if (turnsCompletedBeforeStartResp.has(params.turn.id)) return;
+        threadMayHaveRollout = true;
         const wasSameTurn = currentTurnId === params.turn.id;
         currentTurnId = params.turn.id;
         isTurnInFlight = true;
@@ -4025,16 +4289,48 @@ export class CodexAgent extends BaseAgent {
         });
 
         // Phase 3: 把 mutable 配置每 turn 透传 — server 接受 per-turn 覆盖。
-        // **关键**: 无引用目录时用 sandboxPolicy: SandboxPolicy；有引用目录时改用
-        // named permissions profile，两者不能同时发送。turn/start 的 legacy 字段也不是
-        // thread/start 的 sandbox: SandboxMode，写错 server 会直接忽略。
+        // **关键**: 无引用目录时用 sandboxPolicy: SandboxPolicy；有引用目录时继承
+        // thread/start / thread/resume 已激活的 named permissions profile。profile
+        // selector 不能在 turn/start 重复发送，见 ensureReadonlyReferencesProfileForNextTurn。
         // effort 同理: 协议层只能在 turn/start 透传 (v2.rs:5800), thread/start 不接;
         // 用户在 session 创建时选的 effort 也是靠 first turn/start 这里传过去才生效。
-        const turnWorkspaceConfig = currentTurnWorkspaceConfig();
+        let turnWorkspaceConfig: ReturnType<typeof currentTurnWorkspaceConfig>;
+        let turnThreadWorkspaceConfig: ReturnType<typeof currentThreadWorkspaceConfig>;
+        try {
+          const profileRefresh = ensureReadonlyReferencesProfileForNextTurn(sendOpts?.signal);
+          if (profileRefresh) await profileRefresh;
+          turnWorkspaceConfig = currentTurnWorkspaceConfig();
+          // A stale-daemon retry must hydrate the exact thread-level profile
+          // that matches this turn, not mutable settings changed while the
+          // original turn/start RPC was pending.
+          turnThreadWorkspaceConfig = currentThreadWorkspaceConfig();
+        } catch (e) {
+          isTurnStartPending = false;
+          endPlanCycleAfterPreStartFailure('read-only reference profile refresh failed');
+          flushDeferredTerminalTurnCompletionsIfIdle();
+          rejectIfCancelled(sendOpts, 'send');
+          const message = `Failed to restore Codex read-only reference permissions: ${String(e)}`;
+          log.error('read-only reference profile refresh failed', { error: String(e), threadId });
+          eventQueue.push({
+            type: 'error',
+            data: { message, isTerminal: true },
+            source: 'codex',
+          });
+          eventQueue.push({
+            type: 'status',
+            data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+            source: 'codex',
+          });
+          if (sendOpts?.throwOnStartFailure) throw new Error(message);
+          return;
+        }
         const { approvalPolicy } = turnWorkspaceConfig;
         // 记录本 turn 是否由无人值守策略发射。Auto 即使因路由能力降级为
         // untrusted,切回 Ask 时也必须中断当前 turn,避免旧策略继续执行 trusted 操作。
         turnLaunchedUnattended = mutablePermissionMode === 'auto' || approvalPolicy === 'never';
+        if (!turnLaunchedUnattended) {
+          pendingTightenInterrupt = false;
+        }
         let turnInput: TurnStartParams['input'];
         try {
           turnInput = await toTurnInput(message.content);
@@ -4080,7 +4376,8 @@ export class CodexAgent extends BaseAgent {
           ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
           ...(collaborationMode ? { collaborationMode } : {}),
         };
-        const markCollaborationModeAccepted = (): void => {
+        const markTurnConfigAccepted = (): void => {
+          threadMayHaveRollout = true;
           if (turnParams.collaborationMode?.mode === 'plan') {
             threadTouchedPlanMode = true;
             planModeDefaultMarkerNeeded = true;
@@ -4093,6 +4390,15 @@ export class CodexAgent extends BaseAgent {
             }
           }
         };
+        // A sandboxPolicy overrides the thread-local profile. Invalidate before
+        // the request crosses the acceptance boundary: the peer can accept the
+        // turn even if the local transport loses the response.
+        if ('sandboxPolicy' in turnWorkspaceConfig) {
+          readonlyReferencesProfileActive = false;
+        }
+        // After turn/start is attempted, resume before ever replacing this
+        // thread. Only an explicit "no rollout found" proves it stayed unused.
+        threadMayHaveRollout = true;
         pendingTurnStartPlanMode = turnStartsInPlanMode;
         // turn/start 失败若是 "thread not found" — 通常 daemon 重启 (sync auth /
         // OOM / 服务器 reboot / 我们主动 pkill) 导致 in-memory thread state 丢失,
@@ -4135,7 +4441,7 @@ export class CodexAgent extends BaseAgent {
         let finalErr: unknown = null;
         try {
           const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams);
-          markCollaborationModeAccepted();
+          markTurnConfigAccepted();
           if (rejectClosedOrCancelledSend(sendOpts, 'after turn/start')) {
             return;
           }
@@ -4160,24 +4466,47 @@ export class CodexAgent extends BaseAgent {
               // 无需在这里管理新返回的 subscription 句柄。
               assertCurrentHost('thread/resume retry subscribe');
               host.subscribeThread(threadId, handlers);
+              const resumeModel = mutableModel;
+              const resumeServiceTierGeneration = serviceTierMutationGeneration;
               const resumeParams: ThreadResumeParams = {
                 threadId,
                 ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
                 cwd: opts.workingDir,
-                ...currentThreadWorkspaceConfig(),
-                ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
+                ...turnThreadWorkspaceConfig,
+                ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
+                ...(resumeModel && resumeModel !== 'gpt-5' ? { model: resumeModel } : {}),
                 ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
               };
               const resumeResp = await host.request<ThreadResumeResponse>(Method.ThreadResume, resumeParams);
-              if (mutableModel === 'gpt-5' && resumeResp.model) {
+              if (mutableModel === resumeModel && resumeModel === 'gpt-5' && resumeResp.model) {
                 mutableModel = resumeResp.model;
-                turnParams.effort = clampEffortForCodex(mutableModel, mutableEffort);
-                if (turnParams.collaborationMode) {
-                  turnParams.collaborationMode.settings.model = mutableModel;
-                  turnParams.collaborationMode.settings.reasoning_effort =
-                    clampEffortForCodex(mutableModel, mutableEffort);
-                }
               }
+              if (
+                Object.hasOwn(resumeResp, 'serviceTier') &&
+                resumeServiceTierGeneration === serviceTierMutationGeneration
+              ) {
+                mutableServiceTier = normalizeServiceTier(resumeResp.serviceTier) ?? null;
+              } else if (resumeServiceTierGeneration !== serviceTierMutationGeneration) {
+                void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
+              }
+              turnParams.effort = clampEffortForCodex(mutableModel, mutableEffort);
+              if (mutableModel && mutableModel !== 'gpt-5') {
+                turnParams.model = mutableModel;
+              } else {
+                delete turnParams.model;
+              }
+              if (mutableServiceTier !== undefined) {
+                turnParams.serviceTier = mutableServiceTier ?? null;
+              } else {
+                delete turnParams.serviceTier;
+              }
+              if (turnParams.collaborationMode) {
+                turnParams.collaborationMode.settings.model = mutableModel;
+                turnParams.collaborationMode.settings.reasoning_effort =
+                  clampEffortForCodex(mutableModel, mutableEffort);
+              }
+              readonlyReferencesProfileActive = 'permissions' in turnThreadWorkspaceConfig;
+              threadMayHaveRollout = true;
               if (collaborationMode?.mode === 'default') {
                 planModeDefaultMarkerNeeded = true;
                 if (turnParams.collaborationMode?.mode === 'default') {
@@ -4186,7 +4515,7 @@ export class CodexAgent extends BaseAgent {
               }
               log.info('thread/resume after stale daemon ok, retrying turn/start', { threadId });
               const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams);
-              markCollaborationModeAccepted();
+              markTurnConfigAccepted();
               if (rejectClosedOrCancelledSend(sendOpts, 'after turn/start retry')) {
                 return;
               }
@@ -4211,12 +4540,7 @@ export class CodexAgent extends BaseAgent {
           // 计划模式: turn 从未启动就终失败 → 结束半开循环(与 turnCompleted 的
           // failed 分支同语义), 否则 planCycleActive 泄漏, 下一条常规消息仍会
           // 携带 collaborationMode plan(勾选与 chip 早已熄灭, 行为与 UI 脱节)。
-          if (planCycleActive) {
-            planCycleActive = false;
-            proposedPlanText = null;
-            currentTurnPlanModeActive = false;
-            log.debug('turn/start failed during plan cycle — plan cycle ends');
-          }
+          endPlanCycleAfterPreStartFailure('turn/start failed');
           log.error('turn/start failed', { error: String(finalErr) });
           eventQueue.push({
             type: 'error',
@@ -4450,7 +4774,7 @@ export class CodexAgent extends BaseAgent {
           (newMode === 'ask' && wasOpen) ||
           (newMode === 'auto' && wasBypass);
         mutablePermissionMode = newMode;
-        // 下一 turn 通过 approvalPolicy + permissions profile / sandboxPolicy 透传。
+        // 下一 turn 通过 approvalPolicy + 已激活的 profile / sandboxPolicy 透传。
         //
         // 收紧兜底 (auto/bypass → ask): 见 interruptTurnForPermissionTighten 顶注。
         // turn id 已知 → 立即中断; turn/start 在飞 (id 未回) → 置标记, 由
@@ -4497,6 +4821,7 @@ export class CodexAgent extends BaseAgent {
         if (isFastServiceTier(mutableServiceTier) === enabled) return;
         const next: ServiceTier | null = enabled ? 'fast' : null;
         log.debug('setFastMode', { from: mutableServiceTier ?? null, to: next });
+        serviceTierMutationGeneration += 1;
         mutableServiceTier = next;
         // thread 已启动 → 立即经 thread/settings/update 生效 (serviceTier 双 Option:
         // 'fast'=开 / null=清空 standard); 未启动则由首个 thread/start 携带。server 端
@@ -4573,12 +4898,15 @@ export class CodexAgent extends BaseAgent {
           }
           threadId = nextThreadId;
           sdkSessionId = nextThreadId;
+          readonlyReferencesProfileActive = false;
+          threadMayHaveRollout = true;
           subscription = host.subscribeThread(threadId, handlers);
           registerCodexMcpContext(threadId);
           registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
         } else {
           sdkSessionId = threadId;
+          threadMayHaveRollout = true;
         }
         currentTurnId = null;
         isTurnInFlight = false;
