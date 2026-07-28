@@ -20,7 +20,12 @@ import type { AgentEvent } from '@cindy/maker-core';
 import { buildContinuationDirective, buildFirstTurnDirective } from './directive';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton';
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff';
-import { classifyTurnUsageLimit } from './usageLimit';
+import {
+  MAX_CONSECUTIVE_OVERLOAD_TURNS,
+  OVERLOAD_RESUME_DELAY_MS,
+  classifyTurnOverload,
+  classifyTurnUsageLimit,
+} from './usageLimit';
 import { parseVerdict, type GoalVerdict } from './verdict';
 import {
   TERMINAL_GOAL_STATUSES,
@@ -131,8 +136,12 @@ export interface TurnOutcome {
   /** 本轮是否以终止型 error 收尾。 */
   errored: boolean;
   errorMessage?: string;
-  /** 错误归类:'usage_limit' = 账号限流(→ usageLimited);否则按 abort/真错处理。 */
-  errorKind?: 'usage_limit';
+  /**
+   * 错误归类:'usage_limit' = 账号限流,'overload' = 上游模型没容量。两者都置
+   * usageLimited(可恢复、到点自动续),区别只在等多久——限额等账号周期重置,
+   * 过载等一分钟(见 usageLimit.ts)。其它错误按 abort/真错处理。
+   */
+  errorKind?: 'usage_limit' | 'overload';
 }
 
 export interface GoalDecision {
@@ -189,11 +198,13 @@ export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): G
   //  - 其它错误 → blocked(止损,避免反复撞错空转),用户处理后可重起。
   if (outcome.errored) {
     const msg = outcome.errorMessage ?? 'unknown error';
-    // 账号限流 → usageLimited(可恢复、到点自动续;resetAt 由 finalizeTurn 读快照补)。
-    if (outcome.errorKind === 'usage_limit') {
+    // 账号限流 / 上游过载 → usageLimited(可恢复、到点自动续;resetAt 由 finalizeTurn
+    // 按 errorKind 分别补:限额读账号快照,过载用固定短窗口)。
+    if (outcome.errorKind === 'usage_limit' || outcome.errorKind === 'overload') {
       return {
         status: 'usageLimited',
-        lastReason: 'usage limit reached',
+        lastReason:
+          outcome.errorKind === 'overload' ? 'model service at capacity' : 'usage limit reached',
         turnsUsed,
         tokensUsed,
         noProgressStreak: prev.noProgressStreak,
@@ -315,6 +326,16 @@ export class GoalController {
   /** usageLimited 到点自动续跑 timer,按 sessionId。**stopSession 不清它**(它要熬到限额重置),
    *  只在 clearGoal / resumeGoal / dispose 取消。 */
   private readonly usageResumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * 连续以"上游没容量"收尾的轮数,按 sessionId。
+   *
+   * 存在理由:三道预算护栏(budgetTokens / maxTurns / noProgressLimit)**都只在用户
+   * 设了对应上限时生效**,而过载轮既不产出 token 也不动 noProgressStreak。没有这个
+   * 计数器时,一个没设任何上限的目标遇上持续容量故障就会每分钟自动续一轮、永不停止。
+   * 只在内存里记:进程重启本身就打断了循环,重启后重新计数最多多跑几轮,不值得为它
+   * 动 schema。有产出的一轮(或手动 resume)即清零。
+   */
+  private readonly consecutiveOverloadTurns = new Map<string, number>();
   private readonly now: () => number;
   private readonly debounceMs: number;
 
@@ -332,6 +353,10 @@ export class GoalController {
     if (!objective) throw new GoalControllerInputError('objective must not be empty');
     // 新建 / 编辑目标 → 重置"已澄清"闸门(新目标允许重新澄清改写一次)。
     this.clarificationApplied.delete(sessionId);
+    // 连续过载计数是 per-goal 状态：换目标(含替换既有目标的编辑路径)必须清零，
+    // 否则上一个目标撞过载上限变 blocked 后，新目标会继承耗尽的计数，第一次容量
+    // 错误就直接 blocked、拿不到自己的重试预算。
+    this.consecutiveOverloadTurns.delete(sessionId);
     const existing = await this.deps.storage.get(sessionId);
     const ts = this.now();
 
@@ -499,6 +524,7 @@ export class GoalController {
   /** 清除目标(用户主动)。删行 + 停止一切续跑 + 取消 usage 自动续 + 通知 renderer 隐藏指示器。 */
   async clearGoal(sessionId: string): Promise<void> {
     this.clarificationApplied.delete(sessionId);
+    this.consecutiveOverloadTurns.delete(sessionId);
     this.cancelUsageResume(sessionId);
     this.stopSession(sessionId);
     await this.deps.storage.clear(sessionId);
@@ -528,7 +554,7 @@ export class GoalController {
    * (与 setGoal 全清零相反),重挂 listener,空闲则立即续一轮。终态(complete/budgetLimited)
    * /已 active 不处理。
    */
-  async resumeGoal(sessionId: string): Promise<void> {
+  async resumeGoal(sessionId: string, opts?: { auto?: boolean }): Promise<void> {
     const state = await this.deps.storage.get(sessionId);
     if (
       !state ||
@@ -537,6 +563,11 @@ export class GoalController {
       return;
     }
     this.cancelUsageResume(sessionId); // 早恢复 / 手动恢复 → 取消挂着的自动续 timer
+    // 用户显式恢复 = 给一次干净的重来机会,连续过载计数清零(否则上次被过载掐停
+    // 的目标一恢复就立刻又撞上限)。
+    // **自动续跑(opts.auto)绝不清零**:到点自动续跑正是过载循环的一环,在这里清
+    // 等于让计数永远回到 0,止损闸门形同不存在。
+    if (!opts?.auto) this.consecutiveOverloadTurns.delete(sessionId);
     const updated = await this.deps.storage.update(sessionId, {
       status: 'active',
       noProgressStreak: 0, // 给一次干净续跑机会(原暂停可能正是空轮触顶)
@@ -668,6 +699,7 @@ export class GoalController {
     for (const sessionId of [...this.usageResumeTimers.keys()]) {
       this.cancelUsageResume(sessionId);
     }
+    this.consecutiveOverloadTurns.clear();
   }
 
   // ── 内部 ───────────────────────────────────────────────────────────────────
@@ -802,6 +834,25 @@ export class GoalController {
 
     const origin: 'goal' | 'other' = event.turnOrigin?.kind === 'goal' ? 'goal' : 'other';
     const errorMessage = errored ? extractErrorMessage(event.data) : undefined;
+    // 连续过载计数:自动续跑的止损闸门。三道预算护栏都可能没设,过载轮又不产出
+    // token、不推进 noProgressStreak,所以必须有一个不依赖用户配置的上限。
+    // 本轮不是过载(成功、真错、或用户 Stop)→ 立刻清零,只掐"连续"过载。
+    const isOverloadTurn = errored && classifyTurnOverload(event.data);
+    if (!isOverloadTurn) {
+      this.consecutiveOverloadTurns.delete(sessionId);
+    }
+    const overloadStreak = isOverloadTurn
+      ? (this.consecutiveOverloadTurns.get(sessionId) ?? 0) + 1
+      : 0;
+    if (isOverloadTurn) this.consecutiveOverloadTurns.set(sessionId, overloadStreak);
+    const overloadBudgetExhausted = overloadStreak > MAX_CONSECUTIVE_OVERLOAD_TURNS;
+    if (overloadBudgetExhausted) {
+      this.deps.logger.warn('[goal] consecutive overload turns exhausted — stopping auto-resume', {
+        sessionId,
+        overloadStreak,
+        max: MAX_CONSECUTIVE_OVERLOAD_TURNS,
+      });
+    }
     const outcome: TurnOutcome = {
       origin,
       sawToolUse: turn?.sawToolUse ?? false,
@@ -809,8 +860,20 @@ export class GoalController {
       verdict: origin === 'goal' ? parseVerdict(turn?.text ?? '') : null,
       errored,
       errorMessage,
-      // 被动检测:本轮以"账号限流"型 error 收尾 → 标记,decideNextGoalState 据此置 usageLimited。
-      ...(errored && classifyTurnUsageLimit(event.data) ? { errorKind: 'usage_limit' as const } : {}),
+      // 被动检测:本轮以"账号限流"或"上游没容量"型 error 收尾 → 标记,
+      // decideNextGoalState 据此置 usageLimited(非终态、到点自动续)。
+      // **过载优先判**:529 同时命中两条判定,但只有过载分支能拿到可用的 resetAt
+      // ——走限额分支会因 getAccountLimit 不报 limited 而停在原地等人手动 resume。
+      // 连续过载超上限后不再当可恢复态:命中过载但预算已耗尽时留空 errorKind,
+      // 落回真错分支(blocked)。注意这只收紧过载——真账号限流不受本计数影响,
+      // 它有自己的 resetAt 恢复路径。
+      ...(errored && isOverloadTurn
+        ? overloadBudgetExhausted
+          ? {}
+          : { errorKind: 'overload' as const }
+        : errored && classifyTurnUsageLimit(event.data)
+          ? { errorKind: 'usage_limit' as const }
+          : {}),
     };
     if (origin === 'goal') this.goalTurnsInFlight.delete(sessionId);
 
@@ -858,7 +921,13 @@ export class GoalController {
     let lastReason = decision.lastReason;
     let shouldFire = decision.shouldFire;
     let usageResetAt: number | null = null;
-    if (status === 'usageLimited' || shouldFire) {
+    // 过载改判:上游没容量与账号限流是两种恢复时机。这里用固定短窗口,不去查
+    // getAccountLimit——账号并没有被限流,那个接口不会给出可用的 resetAt,查了只会
+    // 让目标停在 usageLimited 等人手动 resume。
+    if (status === 'usageLimited' && outcome.errorKind === 'overload') {
+      usageResetAt = this.now() + OVERLOAD_RESUME_DELAY_MS;
+      shouldFire = false;
+    } else if (status === 'usageLimited' || shouldFire) {
       const limit = this.deps.getAccountLimit
         ? await this.deps.getAccountLimit(state.agentKind).catch(() => null)
         : null;
@@ -963,7 +1032,8 @@ export class GoalController {
         this.deps.logger.warn('[goal] persistGoalNotice failed', { sessionId, error: String(e) });
       }
     }
-    await this.resumeGoal(sessionId);
+    // auto:true —— 这是到点自动续跑，不是用户显式恢复，不得清零连续过载计数。
+    await this.resumeGoal(sessionId, { auto: true });
   }
 
   private async fireTurn(sessionId: string): Promise<void> {

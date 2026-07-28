@@ -4,6 +4,7 @@ import type { AgentEvent, SessionSendResult } from '@cindy/maker-core';
 
 import { GoalController, decideNextGoalState, deriveObjectiveFromAnswers, questionsLookLikeGoalClarification, type TurnOutcome, type GoalCounters } from '../controller';
 import { buildContinuationDirective, buildFirstTurnDirective } from '../directive';
+import { MAX_CONSECUTIVE_OVERLOAD_TURNS } from '../usageLimit';
 import type {
   AccountLimitInfo,
   GoalCompletionSummary,
@@ -1179,6 +1180,142 @@ describe('GoalController', () => {
     expect(st?.status).toBe('active');
     expect(st?.usageResetAt).toBeNull();
     expect(h.session.sends.length).toBe(before + 1);
+  });
+
+  // ── 上游模型没容量(与账号限流分开)──
+  //
+  // 自动续跑的 timer 路径本身已由上面的 usageLimited 用例覆盖(同一条路径),
+  // 这里只锁"过载能拿到可用的 resetAt"——它才是此前 529 停在原地等人手动 resume
+  // 的根因。
+  it('reactive: an upstream-capacity turn error → usageLimited with a short resume window', async () => {
+    // 账号**没有**被限流：过载分支必须自己给出 resetAt，不能依赖账号快照。
+    h.setAccountLimit({ limited: false, resetAtMs: null });
+    await startGoal(h);
+    h.session.emitErrorTurn({
+      message: 'Selected model is at capacity. Please try a different model.',
+    });
+    await tick();
+    const st = await h.storage.get('s1');
+    // 关键：不是 blocked（Codex 的 at capacity 此前会被判真错）、也不是 resetAt=null。
+    expect(st?.status).toBe('usageLimited');
+    expect(st?.usageResetAt).toBe(1000 + 60_000); // now() + OVERLOAD_RESUME_DELAY_MS
+    expect(st?.lastReason).toBe('model service at capacity');
+    expect(h.session.sends).toHaveLength(1); // 不立即续轮
+  });
+
+  it('prefers the overload window over the account snapshot for a 529 turn error', async () => {
+    // 529 同时命中限流判定。若先走限流分支，就会采用账号快照的 resetAt（这里是
+    // 远未来），目标要等一小时才自动续——实际只需等一分钟。
+    h.setAccountLimit({ limited: true, resetAtMs: 3_601_000 });
+    await startGoal(h);
+    h.session.emitErrorTurn({ message: 'Authorization: [REDACTED]', errorStatus: 529 });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('usageLimited');
+    expect(st?.usageResetAt).toBe(1000 + 60_000);
+    expect(st?.usageResetAt).not.toBe(3_601_000);
+  });
+
+  it('stops auto-resuming after consecutive overload turns, even with no budget limits set', async () => {
+    // 生产默认就是 maxTurns=null / budgetTokens=null（见 goal-settings-store），而
+    // 过载轮既不产出 token 也不推进 noProgressStreak——三道预算护栏一道都拦不住。
+    // 没有专用计数器时，这里会每分钟自动续一轮直到天荒地老。
+    const noLimits = makeController({
+      getDefaults: () => ({ maxTurns: null, budgetTokens: null, noProgressLimit: null }),
+    });
+    try {
+      noLimits.setAccountLimit({ limited: false, resetAtMs: null });
+      await noLimits.controller.setGoal({
+        sessionId: 's1',
+        objective: 'keep going',
+        agentKind: 'claude-code',
+      });
+      const st0 = await noLimits.storage.get('s1');
+      expect(st0?.maxTurns).toBeNull();
+      expect(st0?.budgetTokens).toBeNull();
+      expect(st0?.noProgressLimit).toBeNull();
+
+      const overload = { message: 'Selected model is at capacity. Please try a different model.' };
+      // 每轮：过载 → usageLimited（排自动续跑）→ 手动走一次自动续跑路径 → 再过载。
+      // resumeGoal({auto:true}) 是 autoResumeFromUsageLimit 实际走的调用，它**不得**
+      // 清零计数，否则闸门永远不会触发。
+      for (let i = 0; i < MAX_CONSECUTIVE_OVERLOAD_TURNS; i += 1) {
+        noLimits.session.emitErrorTurn(overload);
+        await tick();
+        expect((await noLimits.storage.get('s1'))?.status).toBe('usageLimited');
+        await noLimits.controller.resumeGoal('s1', { auto: true });
+        await tick();
+      }
+      // 第 MAX+1 次连续过载：不再当可恢复态，转 blocked 停止自动续跑。
+      noLimits.session.emitErrorTurn(overload);
+      await tick();
+      const st = await noLimits.storage.get('s1');
+      expect(st?.status).toBe('blocked');
+      expect(st?.usageResetAt).toBeNull();
+    } finally {
+      noLimits.controller.dispose();
+    }
+  });
+
+  it('a manual resume clears the consecutive overload streak', async () => {
+    // 用户显式恢复 = 给一次干净的重来机会；否则被掐停的目标一恢复就立刻又撞上限。
+    h.setAccountLimit({ limited: false, resetAtMs: null });
+    await startGoal(h);
+    const overload = { message: 'Selected model is at capacity.' };
+
+    for (let i = 0; i < MAX_CONSECUTIVE_OVERLOAD_TURNS; i += 1) {
+      h.session.emitErrorTurn(overload);
+      await tick();
+      await h.controller.resumeGoal('s1', { auto: true });
+      await tick();
+    }
+    // 手动恢复（无 auto）→ 计数清零，下一次过载重新被当作可恢复态。
+    h.session.emitErrorTurn(overload);
+    await tick();
+    expect((await h.storage.get('s1'))?.status).toBe('blocked');
+    await h.controller.resumeGoal('s1');
+    await tick();
+
+    h.session.emitErrorTurn(overload);
+    await tick();
+    expect((await h.storage.get('s1'))?.status).toBe('usageLimited');
+  });
+
+  it('setGoal gives a replacement objective its own overload budget', async () => {
+    // 连续过载计数是 per-goal 状态。换目标不清零的话，上一个目标撞上限变 blocked
+    // 后，新目标第一次容量错误就直接 blocked、拿不到自己的重试预算（review #844 P1）。
+    h.setAccountLimit({ limited: false, resetAtMs: null });
+    await startGoal(h);
+    const overload = { message: 'Selected model is at capacity.' };
+
+    for (let i = 0; i < MAX_CONSECUTIVE_OVERLOAD_TURNS; i += 1) {
+      h.session.emitErrorTurn(overload);
+      await tick();
+      await h.controller.resumeGoal('s1', { auto: true });
+      await tick();
+    }
+    h.session.emitErrorTurn(overload);
+    await tick();
+    expect((await h.storage.get('s1'))?.status).toBe('blocked');
+
+    // 换一个新目标（setGoal 的替换既有目标路径）。
+    await h.controller.setGoal({ sessionId: 's1', objective: 'a fresh goal', agentKind: 'claude-code' });
+    await tick();
+    h.session.emitErrorTurn(overload);
+    await tick();
+    // 新目标应拿到完整预算 → 仍是可恢复的 usageLimited，不是 blocked。
+    expect((await h.storage.get('s1'))?.status).toBe('usageLimited');
+  });
+
+  it('still treats a real account rate limit as a usage limit', async () => {
+    // 回归防线：过载判定不得把真限额抢走，否则限额会被缩成一分钟反复重撞。
+    h.setAccountLimit({ limited: true, resetAtMs: 3_601_000 });
+    await startGoal(h);
+    h.session.emitErrorTurn({ sdkError: 'rate_limit', message: 'rate limit reached' });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.usageResetAt).toBe(3_601_000);
+    expect(st?.lastReason).toBe('usage limit reached');
   });
 
 });

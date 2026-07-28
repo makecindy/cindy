@@ -427,6 +427,9 @@ describe('Claude Code translator is_error result guard', () => {
 
     const events = await drain(queue);
     const errors = events.filter((e) => e.type === 'error');
+    // 只有一条终态：这是 connection error（非过载），重试进行中**不**透出进度。
+    // 透出的 message 是内部英文 SDK 字符串，只有过载与网络形态会被 ErrorBanner
+    // 本地化替换；把其它类别也透出来会让各语言用户看到裸英文（review #844 P1）。
     expect(errors).toHaveLength(1);
     expect(errors[0]?.data).toMatchObject({
       message: 'SDK API request failed: unknown (connection error, retry 3/3)',
@@ -438,6 +441,96 @@ describe('Claude Code translator is_error result guard', () => {
     });
     expect(errors[0]?.agentMeta, 'api_retry has no assistant transcript anchor').toBeUndefined();
     expect(events.some((e) => e.type === 'done'), 'done tail remains available for usage accounting').toBe(true);
+  });
+
+  // SDK 自带退避重试（529 overloaded / 429 / 连接错误都走它）。这组用例锁住
+  // "透出进度但绝不自己重投"：客户端再叠一层重试会把一次上游过载放大成指数级
+  // 请求，而失败请求照扣额度。
+  it('does not surface the first api_retry (single blip would only flicker)', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 1,
+        max_retries: 10,
+        retry_delay_ms: 1_000,
+        error_status: 529,
+        error: 'overloaded_error',
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+  });
+
+  it.each([
+    { label: '429 rate limit', error_status: 429, error: 'rate_limit_error' },
+    { label: '500 server error', error_status: 500, error: 'api_error' },
+    { label: 'connection error', error_status: null, error: 'unknown' },
+  ])('does not surface non-overload retry progress ($label)', async ({ error_status, error }) => {
+    // 这些类别的 message 不会被 ErrorBanner 本地化，透出等于给所有语言的用户
+    // 一段裸英文；改动前它们是静默的，必须保持静默（review #844 P1）。
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 3,
+        max_retries: 10,
+        retry_delay_ms: 2_000,
+        error_status,
+        error,
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+  });
+
+  it('surfaces 529 overload retries as non-terminal progress carrying errorStatus', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 2,
+        max_retries: 10,
+        retry_delay_ms: 2_000,
+        error_status: 529,
+        error: 'overloaded_error',
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    const errors = events.filter((e) => e.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.data).toMatchObject({
+      // errorStatus 必须透出：renderer 靠它把 529 判成过载而不是普通网络错误。
+      errorStatus: 529,
+      isTerminal: false,
+      willRetry: true,
+    });
+    // 进度后缀与 Codex 侧同一套跨 agent 协议，renderer 只需一份解析。
+    expect((errors[0]?.data as { message: string }).message).toContain('(auto-retry 2/10)');
+    expect((errors[0]?.data as { message: string }).message).toContain('HTTP 529');
+    // 非终止 → 不得让上层收口本轮。
+    expect(events.some((e) => e.type === 'done')).toBe(false);
   });
 
   it('does NOT emit a fallback error for an interrupted turn (user stop / watchdog)', async () => {

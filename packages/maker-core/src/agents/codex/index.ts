@@ -76,6 +76,7 @@ import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
+import { OVERLOAD_RETRY_MAX_ATTEMPTS, overloadRetryDelayMs } from '../shared/overload-error.js';
 import { buildCodexEnv } from './env-builder.js';
 import { scanCodexCustomizations } from './customization-scanner.js';
 import { commandExecutionDisplayInput } from './command-display.js';
@@ -2136,6 +2137,25 @@ export class CodexAgent extends BaseAgent {
     // 缓存供 turn end 日志读取 (协议本身不在 turn/completed 里带 usage)。
     let lastTurnTokenUsage: TokenUsageBreakdown | null = null;
     let lastModelContextWindow: number | null = null;
+    /**
+     * 本 turn 是否已产出任何模型内容（item 或 reasoning 增量）。
+     *
+     * 只用于判断服务过载错误能否安全重投：容量拒绝发生在 admission 阶段时模型
+     * 一个字都没写过，重投同一份 turnParams 不会重复任何副作用；一旦已经产出过
+     * 内容（写过文件、跑过命令），重放就会让模型重做已完成的工作，那种情况必须
+     * 交回用户决定。
+     */
+    let currentTurnProducedOutput = false;
+    /**
+     * 服务过载退避重投状态。`retry` 由 send() 每轮登记，闭包持有该 turn 的
+     * turnParams 与响应处理逻辑，因此重投投递的是同一条用户消息、同一套策略，
+     * 不会因为期间 mutable 配置变化而偷偷换参数。
+     */
+    let overloadRetry: {
+      retry: () => Promise<void>;
+      attempt: number;
+      timer: ReturnType<typeof setTimeout> | null;
+    } | null = null;
     let closed = false;
     let subscriptionInvalidatedByTransport = false;
     let subscription: ThreadSubscription | null = null;
@@ -4343,6 +4363,93 @@ export class CodexAgent extends BaseAgent {
       flushDeferredTerminalTurnCompletionsIfIdle();
     }
 
+    /** 取消挂起的过载重投（会话关闭 / 用户打断 / 新 turn 覆盖时调用）。 */
+    const cancelOverloadRetry = (reason: string): void => {
+      const state = overloadRetry;
+      if (!state?.timer) return;
+      clearTimeout(state.timer);
+      state.timer = null;
+      log.info('codex overload retry cancelled', { reason, threadId });
+    };
+
+    /**
+     * 服务过载退避重投调度。
+     *
+     * 返回进度表示已接管本次错误，**调用方必须跳过终态收口**（不推 terminal
+     * error、不推 Done status）——否则 UI 会先收口成失败再重投，用户看到一次假
+     * 失败闪烁，非交互入口更会直接把这一轮判死。返回 null 表示不接管，按原
+     * 终止路径报错。
+     *
+     * 为什么必须由我们重投：`Selected model is at capacity` 是模型服务槽位不足，
+     * OpenAI 侧不做任何重试就把 turn 判死（openai/codex#22390 请求 backoff 重试
+     * 至今 open），用户只能手动再发一次。这类抖动通常几秒内自愈，正是客户端该
+     * 兜住的部分。
+     *
+     * 为什么不自动换模型：容量故障往往横扫同一模型的所有 effort 档
+     * （2026-06-16 那次 medium/high/xhigh 全线不可用），换档无效；而换模型会
+     * 悄悄改变输出的判断风格，属于隐蔽的质量变更。降级留给用户显式选择。
+     */
+    const scheduleOverloadRetry = (
+      deadTurnId: string | null,
+    ): { attempt: number; maxAttempts: number } | null => {
+      const state = overloadRetry;
+      if (!state || closed) return null;
+      // 本 turn 已产出内容 → 重放会让模型重做已完成的工作（甚至重复副作用），
+      // 交回用户决定是否继续，不自动重投。
+      if (currentTurnProducedOutput) {
+        log.info('codex overload error after partial output — not auto-retrying', { threadId });
+        return null;
+      }
+      if (state.attempt >= OVERLOAD_RETRY_MAX_ATTEMPTS) {
+        log.warn('codex overload retry budget exhausted — surfacing terminal error', {
+          attempts: state.attempt,
+          threadId,
+        });
+        return null;
+      }
+      // 同一轮 send 只能有一个在飞的重投计时器。
+      cancelOverloadRetry('superseded');
+      const attempt = state.attempt + 1;
+      state.attempt = attempt;
+      const delayMs = overloadRetryDelayMs(attempt);
+      // 该 turn 在 app-server 侧确实已经死了：它挂起的审批 / user-input 必须清掉，
+      // 否则重投出来的新 turn 会与旧 turn 的悬空交互混在一起。
+      if (deadTurnId) {
+        dismissPendingUserInputForTurn(deadTurnId, 'turn_failed');
+        clearActiveToolContextsForTurn(deadTurnId);
+      }
+      stopActiveRolloutPlanFallback();
+      isTurnInFlight = false;
+      currentTurnId = null;
+      log.info('codex model at capacity — scheduling turn/start retry', {
+        attempt,
+        maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS,
+        delayMs,
+        threadId,
+        deadTurnId,
+      });
+      state.timer = setTimeout(() => {
+        state.timer = null;
+        if (closed || overloadRetry !== state) return;
+        void state.retry().catch((error) => {
+          // 重投本身失败（含容量再次不足）：转终止错误交回用户，不在这里递归重排——
+          // 递归会绕过预算上限，容量故障期把额度烧光。
+          log.error('codex overload retry failed', { attempt, error: String(error), threadId });
+          eventQueue.push({
+            type: 'error',
+            data: { message: `turn/start retry failed: ${String(error)}`, isTerminal: true },
+            source: 'codex',
+          });
+          eventQueue.push({
+            type: 'status',
+            data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+            source: 'codex',
+          });
+        });
+      }, delayMs);
+      return { attempt, maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS };
+    };
+
     const GUARDIAN_REVIEW_FAILURE_PREFIX = 'Automatic approval review failed:';
 
     const emitGuardianUnavailable = (params: ItemGuardianApprovalReviewCompletedNotification): void => {
@@ -4515,6 +4622,11 @@ export class CodexAgent extends BaseAgent {
         translatorRt.networkRetryNotice = null;
         // retry 升级计数同样按 turn 隔离 — 新 turn 从零计。
         turnRetryTracker.reset();
+        // 新 turn 从"零产出"起算,决定后续过载错误能否安全重投。
+        // **不在这里重置 overloadRetry.attempt**:过载重投本身会开出新 turn,
+        // 在这里清预算等于每次重投都续满次数 → 容量故障期无限重试烧额度。
+        // 预算只在 send() 收到用户新消息时重置。
+        currentTurnProducedOutput = false;
         log.debug('SDK ▶ turn start', {
           turnId: params.turn.id,
           model: mutableModel,
@@ -4570,6 +4682,8 @@ export class CodexAgent extends BaseAgent {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemStarted?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
+        // 模型已开始产出 → 本 turn 不再适合被过载重投整体重放。
+        currentTurnProducedOutput = true;
         noteActiveToolContext(params.item, params.turnId);
         pushItemStatus(params.item);
         translateItemNotification('started', params, eventQueue, {
@@ -4584,6 +4698,7 @@ export class CodexAgent extends BaseAgent {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
+        currentTurnProducedOutput = true;
         noteActiveToolContext(params.item, params.turnId);
         translateItemNotification('updated', params, eventQueue, {
           rt: translatorRt,
@@ -4597,6 +4712,7 @@ export class CodexAgent extends BaseAgent {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
+        currentTurnProducedOutput = true;
         noteActiveToolContext(params.item, params.turnId);
         translateItemNotification('completed', params, eventQueue, {
           rt: translatorRt,
@@ -4618,16 +4734,20 @@ export class CodexAgent extends BaseAgent {
       reasoningSummaryTextDelta: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryTextDelta?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        // thinking 流也算产出：模型已经在这一轮里工作了，整体重放不再等价。
+        currentTurnProducedOutput = true;
         translateReasoningSummaryTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
       reasoningSummaryPartAdded: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryPartAdded?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        currentTurnProducedOutput = true;
         translateReasoningSummaryPartAdded(params, eventQueue, { rt: translatorRt, log });
       },
       reasoningTextDelta: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningTextDelta?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        currentTurnProducedOutput = true;
         translateReasoningTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
       accountRateLimitsUpdated: (params) =>
@@ -4767,10 +4887,36 @@ export class CodexAgent extends BaseAgent {
           }
         }
         const wasTurnRunning = isTurnInFlight || targetsPendingTurn;
-        translateErrorNotification(effectiveParams, eventQueue, { rt: translatorRt, log });
+        // 服务过载(模型容量不足)时接管重投：translator 命中 capacity 才回调，
+        // 拿到进度就把错误透成非终止状态，本函数随后跳过 Done 收口。
+        let overloadRetryScheduled = false;
+        translateErrorNotification(effectiveParams, eventQueue, {
+          rt: translatorRt,
+          log,
+          tryTakeOverOverload: () => {
+            // 只接管 app-server 本来就不重试的容量拒绝(原始 willRetry !== true)。
+            // TurnRetryTracker 把持续 retry 升级成终态的那条路径不接管：那说明
+            // daemon 已经重试很久仍不行，我们再叠一层退避重投属于双层重试。
+            if (params.willRetry === true) return null;
+            const progress = scheduleOverloadRetry(effectiveParams.turnId || currentTurnId);
+            if (progress) overloadRetryScheduled = true;
+            return progress;
+          },
+        });
         // 与 translator 的 terminal 判定保持一致：willRetry=false 或缺省都视为终态。
         if (!isTerminalError) return;
         const terminalTurnId = effectiveParams.turnId || currentTurnId;
+        if (overloadRetryScheduled) {
+          // 死掉的 turn **必须**落墓碑：app-server 随后还会为它发正常的
+          // turn/completed(failed)，没有墓碑 handleTurnCompleted 就会 emit terminal
+          // error + done，把 UI 与 goal turn 直接收口，我们刚透出的非终止重试状态
+          // 白费。重投会开出新的 turn id，不受这块墓碑影响。
+          if (terminalTurnId) terminalErroredTurnIds.add(terminalTurnId);
+          // 状态文字切成重试中，避免停留在上一条 item 的 'Generating...'；
+          // 不推 Done —— 会话还在跑。
+          pushStatus('Retrying...');
+          return;
+        }
         if (terminalTurnId) {
           terminalErroredTurnIds.add(terminalTurnId);
           dismissPendingUserInputForTurn(terminalTurnId, 'turn_failed');
@@ -4841,6 +4987,10 @@ export class CodexAgent extends BaseAgent {
         pendingTightenInterrupt = false;
         // 上一 send 周期的墓碑一并清空 (仅用于拦本周期内抢跑的终态)。
         turnsCompletedBeforeStartResp.clear();
+        // 用户发新消息 = 上一轮的过载重投彻底作废(它要重投的是旧消息)。
+        // 这里也是**唯一**重置重投预算的地方，见 turnStarted 的说明。
+        cancelOverloadRetry('new send');
+        overloadRetry = null;
         isTurnStartPending = true;
         usageTracker.beginTurn();
         log.debug('send ▶ user message', {
@@ -5088,6 +5238,69 @@ export class CodexAgent extends BaseAgent {
               note: 'serviceTier returned by app-server turn/start response',
             });
           }
+        };
+        // 登记本轮的过载重投器。闭包持有 turnParams 与本轮的响应处理逻辑，因此
+        // 重投投递的是同一条用户消息、同一套策略，不受期间 mutable 配置变化影响。
+        //
+        // 刻意**不**复用 happy path 的整段 send 逻辑：`usageTracker.beginTurn()`、
+        // turn-start status 抽样、planMode 武装态消耗都是"用户发了一条消息"的
+        // 一次性副作用，重投是同一条消息的再次投递，重跑那些会让用量统计与
+        // 计划模式状态错乱。
+        overloadRetry = {
+          attempt: 0,
+          timer: null,
+          retry: async () => {
+            const state = overloadRetry;
+            // 发出前复检：本轮 send 的取消信号在退避等待期间才 abort（coordinator
+            // 撤单、上层超时）时不走 handle.abort()，计时器到点仍会把一条已被取消
+            // 的消息重新投出去。
+            if (closed || sendOpts?.signal?.aborted || !state) {
+              log.info('codex overload retry skipped (send already cancelled)', { threadId });
+              return;
+            }
+            assertCurrentHost('turn/start overload retry');
+            resubscribeAfterTransportErrorIfNeeded();
+            isTurnStartPending = true;
+            try {
+              const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams);
+              // **发出后再复检**：RPC 在途期间 Stop / close / 撤单都拦不住它——
+              // 计时器早已清空，cancelOverloadRetry 无从取消；abort() 又因为
+              // currentTurnId 仍是 null 而直接返回。此时若照常激活，一个已被用户
+              // 撤销的 turn 会真的跑起来并执行命令、改文件。
+              // server 侧 turn 已经启动，所以不能只是丢掉响应：落墓碑挡住它的后续
+              // 事件，并 best-effort interrupt 把它停掉（与上方孤儿 turn 同款处理）。
+              const cancelledMidFlight =
+                closed || sendOpts?.signal?.aborted || overloadRetry !== state;
+              if (cancelledMidFlight) {
+                const staleTurnId = resp.turn?.id;
+                log.warn('codex overload retry cancelled while turn/start was in flight', {
+                  threadId,
+                  turnId: staleTurnId ?? null,
+                  closed,
+                  aborted: sendOpts?.signal?.aborted ?? false,
+                });
+                if (staleTurnId) {
+                  terminalErroredTurnIds.add(staleTurnId);
+                  if (threadId) {
+                    host
+                      .request(Method.TurnInterrupt, { threadId, turnId: staleTurnId })
+                      .catch((e: unknown) => {
+                        log.warn('cancelled overload retry interrupt failed (best-effort)', {
+                          turnId: staleTurnId,
+                          error: e instanceof Error ? e.message : String(e),
+                        });
+                      });
+                  }
+                }
+                return;
+              }
+              markTurnConfigAccepted();
+              handleTurnStartResp(resp);
+            } finally {
+              isTurnStartPending = false;
+              flushDeferredTerminalTurnCompletionsIfIdle();
+            }
+          },
         };
         let finalErr: unknown = null;
         try {
@@ -5402,6 +5615,11 @@ export class CodexAgent extends BaseAgent {
       },
 
       async abort() {
+        // 用户点 Stop = 明确不想继续这一轮，挂起的过载重投必须一起撤掉。
+        // 放在 currentTurnId 判空之前：重投等待期间 turn 已死、currentTurnId 为
+        // null，此时正是最需要响应 Stop 的时刻（否则计时器到点又发一个新 turn）。
+        cancelOverloadRetry('aborted');
+        overloadRetry = null;
         if (closed || !currentTurnId) return;
         if (skipIfStaleHost('turn/interrupt')) return;
         dismissPendingUserInputForTurn(currentTurnId, 'turn_interrupted');
@@ -5429,6 +5647,10 @@ export class CodexAgent extends BaseAgent {
         try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
         try { dismissAllPendingUserInput('session_closed'); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
         try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
+        // 挂起的过载重投计时器必须清掉：否则会话已关，计时器到点仍会对已释放的
+        // thread 发 turn/start（assertCurrentHost 会抛，但那是在无人接收的
+        // setTimeout 回调里，白留一次失败与一条误导日志）。
+        try { cancelOverloadRetry('session_closed'); } catch (e) { log.warn('cancel overload retry threw', { error: String(e) }); }
         try { await subscription?.release(); } catch (e) { log.warn('release threw', { error: String(e) }); }
         try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
       },
@@ -5625,7 +5847,12 @@ export class CodexAgent extends BaseAgent {
       },
 
       isTurnRunning() {
-        return isTurnInFlight;
+        // 过载退避等待期间 app-server 侧确实没有活着的 turn（isTurnInFlight 为
+        // false），但**逻辑上这一轮还没结束**：重投计时器仍持着原消息。
+        // Session.send() 用本方法做并发守卫，只看 isTurnInFlight 会让退避窗口里
+        // 到达的新 send 被接受，而 send() 开头的 cancelOverloadRetry 会把原消息
+        // 静默丢掉。把待重投也算作忙，让新消息走正常排队路径。
+        return isTurnInFlight || overloadRetry?.timer != null;
       },
     };
 
