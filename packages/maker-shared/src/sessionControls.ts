@@ -144,6 +144,8 @@ export function summarizeAccountRateLimits(value: unknown, nowMs: number): {
 /** Mobile presentation model for banked Codex reset credits and their bound account. */
 export interface CodexRateLimitResetSummary {
   rows: Array<{ label: string; value: string }>;
+  /** Reset-credit-only rows, shared by Mobile and compact Desktop surfaces. */
+  resetRows: Array<{ label: string; value: string }>;
   availableCount: number;
   canReset: boolean;
   shouldPrompt: boolean;
@@ -159,19 +161,21 @@ export function summarizeCodexRateLimitReset(
 ): CodexRateLimitResetSummary | null {
   if (!value) return null;
   const rows: Array<{ label: string; value: string }> = [];
+  const resetRows: Array<{ label: string; value: string }> = [];
   if (value.account.email) rows.push({ label: '账号', value: value.account.email });
   if (value.account.accountId) rows.push({ label: 'Workspace', value: value.account.accountId });
 
   const availableCount = Math.max(0, Math.floor(value.rateLimitResetCredits?.availableCount ?? 0));
   if (value.rateLimitResetCredits) {
-    rows.push({ label: '可用重置', value: `${availableCount} 次` });
+    resetRows.push({ label: '可用重置', value: `${availableCount} 次` });
   }
 
   const earliestExpiry = value.resetOffer?.expiresAt ?? earliestCreditExpiry(
     value.rateLimitResetCredits?.credits ?? null,
   );
   const expiryText = formatRateLimitResetAt(earliestExpiry, nowMs);
-  if (expiryText) rows.push({ label: '最早过期', value: expiryText });
+  if (expiryText) resetRows.push({ label: '最早过期', value: expiryText });
+  rows.push(...resetRows);
 
   const snapshots = [
     value.rateLimits,
@@ -190,6 +194,7 @@ export function summarizeCodexRateLimitReset(
 
   return {
     rows,
+    resetRows,
     availableCount,
     shouldPrompt,
     canReset: shouldPrompt

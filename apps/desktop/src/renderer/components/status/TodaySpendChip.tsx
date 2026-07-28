@@ -34,6 +34,10 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
+import {
+  summarizeCodexRateLimitReset,
+  type CodexRateLimitResetSummary,
+} from '@cindy/maker-shared/session-controls';
 
 import { cn } from '@/lib/utils';
 import {
@@ -72,6 +76,7 @@ import {
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
+import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useXaiRateLimit, type XaiRateLimitSnapshot } from '@/hooks/useXaiRateLimit';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
@@ -452,6 +457,7 @@ function buildCodexTooltipNode(
   snapshot: RateLimitSnapshot | null,
   sessionTokens: number | null,
   sessionValueMoney: RegionalMoney | null,
+  resetSummary: CodexRateLimitResetSummary | null,
   t: TFunction,
   usageDashboardLabel: string | null,
   nowMs: number,
@@ -460,6 +466,7 @@ function buildCodexTooltipNode(
   const lines: string[] = [];
   if (!snapshot) {
     lines.push(t('todaySpend.codex.waitingDetail'));
+    pushCodexResetCreditLines(lines, resetSummary);
     appendLatestTurnUsageLines(lines, latestTurnUsage, t);
     pushDashboardLinkLine(lines, usageDashboardLabel);
     return buildTooltipNode(lines);
@@ -490,6 +497,7 @@ function buildCodexTooltipNode(
     lines.push(t('todaySpend.codex.balanceAvailable'));
   }
   pushSessionValueLines(lines, sessionValueMoney, sessionTokens, t);
+  pushCodexResetCreditLines(lines, resetSummary);
 
   for (const window of getCodexWindowUsages(snapshot, t, nowMs)) {
     const base = t('todaySpend.codex.windowLine', {
@@ -856,6 +864,16 @@ function pushSessionValueLines(
   }
 }
 
+/** 与 Mobile 共用同一组 label/value 与本地时间格式；账号行不进入紧凑 tooltip。 */
+function pushCodexResetCreditLines(
+  lines: string[],
+  resetSummary: CodexRateLimitResetSummary | null,
+): void {
+  for (const row of resetSummary?.resetRows ?? []) {
+    lines.push(`${row.label}：${row.value}`);
+  }
+}
+
 /**
  * xAI(SuperGrok bridge)tooltip —— 尽力档:有限流快照(bridge 抓到 x-ratelimit-* 头)就
  * 显示剩余请求/tokens,拿不到诚实标注「无订阅额度明细」,只显示价值估算 + token 累计。
@@ -1056,6 +1074,11 @@ export function TodaySpendChip({
     // app-server 形态下据当前模型匹配限额桶(账号可能同时有主配额桶与模型专属
     // 促销桶, 见 useAccountUsage.matchCodexBucketForModel)。
     modelId,
+  );
+  const codexRateLimits = useCodexRateLimits(isCodexOauth && !isAnyRemoteSession);
+  const codexResetSummary = React.useMemo(
+    () => summarizeCodexRateLimitReset(codexRateLimits, Date.now()),
+    [codexRateLimits],
   );
   // xAI 限流快照同为本机 main 抓的 —— 远程会话(SSH / device-link)同样抑制,回落价值估算。
   const xaiRateLimit = useXaiRateLimit(usesXaiQuotaForm && !isAnyRemoteSession);
@@ -1263,6 +1286,7 @@ export function TodaySpendChip({
       accountUsage,
       sessionTokens,
       sessionEstimatedValueMoney,
+      codexResetSummary,
       t,
       usageDashboardLabel,
       windowLabelNowMs,

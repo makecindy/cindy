@@ -82,6 +82,10 @@ describe('summarizeCodexRateLimitReset', () => {
     ]);
     expect(summary?.rows[3]).toMatchObject({ label: '最早过期' });
     expect(summary?.rows[3].value).toMatch(/^\d{2}:\d{2}$/);
+    expect(summary?.resetRows).toEqual([
+      { label: '可用重置', value: '2 次' },
+      { label: '最早过期', value: summary?.rows[3].value },
+    ]);
   });
 
   it('does not offer reset before exhaustion and leaves offer expiry to desktop', () => {

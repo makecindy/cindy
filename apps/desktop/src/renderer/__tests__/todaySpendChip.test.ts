@@ -10,8 +10,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const sourcePath = resolve(__dirname, '..', 'components', 'status', 'TodaySpendChip.tsx');
+const preloadPath = resolve(__dirname, '..', '..', 'preload', 'preload.ts');
+const rendererTypesPath = resolve(__dirname, '..', 'vite-env.d.ts');
 // Windows CRLF 检出下 \n 字面量断言会失配,统一归一化成 LF 再断言。
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
+const preloadSource = readFileSync(preloadPath, 'utf8').replace(/\r\n/g, '\n');
+const rendererTypesSource = readFileSync(rendererTypesPath, 'utf8').replace(/\r\n/g, '\n');
 
 describe('TodaySpendChip dashboard routing', () => {
   it('separates the latest user-round total from final-segment token details', () => {
@@ -107,6 +111,26 @@ describe('TodaySpendChip dashboard routing', () => {
     // 不跨槽回退(账号多限额桶互相污染, 2026-07-24 实报 bug)
     expect(source).toContain("shouldReadLocalCodexAccountUsage ? 'codex' : undefined,");
     expect(source).toContain("isChatgptBridge ? 'openai-web' : 'app-server',");
+  });
+
+  it('shows the shared mobile Codex reset-credit summary for local Desktop sessions', () => {
+    // 主进程已有 authoritative read;Desktop renderer 需补齐 preload + 类型链路。
+    expect(preloadSource).toContain(
+      'getCodexRateLimits: (): Promise<MobileCodexRateLimitsResult>',
+    );
+    expect(preloadSource).toContain(
+      "ipcRenderer.invoke('maker:usage:codex-rate-limits')",
+    );
+    expect(rendererTypesSource).toContain(
+      'getCodexRateLimits: () => Promise<',
+    );
+    // 仅本机 Codex OAuth 会话读取本机账号数据;远程 / bridge 不张冠李戴。
+    expect(source).toContain(
+      'useCodexRateLimits(isCodexOauth && !isAnyRemoteSession)',
+    );
+    // 直接复用 Mobile 的汇总与本地时间格式,tooltip 只追加重置卡相关行。
+    expect(source).toContain('summarizeCodexRateLimitReset');
+    expect(source).toContain('resetSummary?.resetRows');
   });
 
   it('keeps Codex OAuth subscription details in the chip and tooltip', () => {

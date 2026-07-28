@@ -4324,6 +4324,10 @@ interface ElectronAPI {
         cachedTokens?: number;
       }>;
       getAccount: (agentKind: 'claude-code' | 'codex') => Promise<unknown | null>;
+      /** Codex app-server authoritative windows and banked reset-credit metadata. */
+      getCodexRateLimits: () => Promise<
+        import('@cindy/maker-shared/device-link-contract').MobileCodexRateLimitsResult
+      >;
       /** provider-scoped 模型单价表；XD 价格与 model-access /models 同快照更新。 */
       getModelPricing: () => Promise<
         import('../shared/regionalMoney').ModelPricingCatalog | null
