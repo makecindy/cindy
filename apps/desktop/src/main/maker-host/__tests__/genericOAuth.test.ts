@@ -22,6 +22,7 @@ import {
   deriveModelsDiscoveryUrl,
   hasGenericOAuthLogin,
   logoutGenericOAuth,
+  removeGenericOAuthCredentialsReversibly,
   readCachedGenericOAuthAccessToken,
   refreshGenericOAuthIfNeeded,
   discoverGenericOAuthModels,
@@ -64,12 +65,14 @@ function memStorage(): GenericOAuthStorage & { map: Map<string, string> } {
   return {
     map,
     read: (id) => map.get(id) ?? null,
+    readStrict: (id) => map.get(id) ?? null,
     write: (id, v) => {
       map.set(id, v);
       return true;
     },
     remove: (id) => {
       map.delete(id);
+      return true;
     },
   };
 }
@@ -131,6 +134,55 @@ describe('blob 读写 / has / logout', () => {
     storage.map.set('acme', 'not-json');
     resetGenericOAuthMemoryCache();
     expect(hasGenericOAuthLogin('acme')).toBe(false);
+  });
+
+  it('可回滚删除会在配置写失败后恢复原 OAuth blob', () => {
+    seedBlob('acme', { access_token: 'at-1', refresh_token: 'rt-1' });
+
+    const restore = removeGenericOAuthCredentialsReversibly('acme');
+    expect(restore).not.toBeNull();
+    expect(storage.map.has('acme')).toBe(false);
+    expect(restore?.()).toBe(true);
+
+    resetGenericOAuthMemoryCache();
+    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('at-1');
+  });
+
+  it('冷缓存严格快照不可读时在删除前中止，不把现有凭证误判成缺失', () => {
+    storage.map.set('acme', JSON.stringify({ access_token: 'at-1' }));
+    const remove = storage.remove;
+    storage.remove = () => {
+      throw new Error('must not remove');
+    };
+    storage.readStrict = () => {
+      throw new Error('safeStorage unavailable');
+    };
+    resetGenericOAuthMemoryCache();
+
+    expect(removeGenericOAuthCredentialsReversibly('acme')).toBeNull();
+    expect(storage.map.get('acme')).toContain('at-1');
+
+    storage.remove = remove;
+  });
+
+  it('回滚按原始字符串恢复持久 blob，同时恢复删除前的热缓存', () => {
+    const raw = '{ "access_token": "durable", "refresh_token": "rt" }';
+    storage.map.set('acme', raw);
+    resetGenericOAuthMemoryCache();
+    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('durable');
+
+    const restore = removeGenericOAuthCredentialsReversibly('acme');
+    expect(restore?.()).toBe(true);
+    expect(storage.map.get('acme')).toBe(raw);
+    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('durable');
+  });
+
+  it('凭证删除失败时保留当前登录态并返回失败', () => {
+    seedBlob('acme', { access_token: 'at-1' });
+    storage.remove = () => false;
+
+    expect(logoutGenericOAuth('acme')).toBe(false);
+    expect(hasGenericOAuthLogin('acme')).toBe(true);
   });
 });
 
@@ -194,6 +246,61 @@ describe('登录流与凭证落盘失败', () => {
     const res = await runGenericOAuthLogin({ id: 'acme', name: 'Acme' }, OAUTH);
     expect(res.ok).toBe(true);
     expect(hasGenericOAuthLogin('acme')).toBe(true);
+    expect(JSON.parse(storage.map.get('acme')!).access_token).toBe('at-new');
+  });
+
+  it('迟到取消只回滚本次登录写入的凭证，不误删更新的 blob', async () => {
+    autoAuthorize();
+    fetchResponder = () =>
+      new Response(JSON.stringify({ access_token: 'at-new', expires_in: 3600 }), { status: 200 });
+    let rollback: (() => boolean) | undefined;
+
+    const res = await runGenericOAuthLogin(
+      { id: 'acme', name: 'Acme' },
+      OAUTH,
+      { onCredentialPersisted: (fn) => { rollback = fn; } },
+    );
+    expect(res.ok).toBe(true);
+    expect(rollback).toBeTypeOf('function');
+
+    storage.map.set('acme', JSON.stringify({ access_token: 'newer-login' }));
+    expect(rollback?.()).toBe(true);
+    expect(JSON.parse(storage.map.get('acme')!).access_token).toBe('newer-login');
+  });
+
+  it('取消回滚用严格持久读取核对本次 token，不受热路径 fail-soft 读取影响', async () => {
+    autoAuthorize();
+    fetchResponder = () =>
+      new Response(JSON.stringify({ access_token: 'at-new', expires_in: 3600 }), { status: 200 });
+    let rollback: (() => boolean) | undefined;
+
+    await runGenericOAuthLogin(
+      { id: 'acme', name: 'Acme' },
+      OAUTH,
+      { onCredentialPersisted: (fn) => { rollback = fn; } },
+    );
+    storage.read = () => null;
+
+    expect(rollback?.()).toBe(true);
+    expect(storage.map.has('acme')).toBe(false);
+  });
+
+  it('取消回滚无法严格核对持久 token 时报告失败并保留凭证', async () => {
+    autoAuthorize();
+    fetchResponder = () =>
+      new Response(JSON.stringify({ access_token: 'at-new', expires_in: 3600 }), { status: 200 });
+    let rollback: (() => boolean) | undefined;
+
+    await runGenericOAuthLogin(
+      { id: 'acme', name: 'Acme' },
+      OAUTH,
+      { onCredentialPersisted: (fn) => { rollback = fn; } },
+    );
+    storage.readStrict = () => {
+      throw new Error('safeStorage unavailable');
+    };
+
+    expect(rollback?.()).toBe(false);
     expect(JSON.parse(storage.map.get('acme')!).access_token).toBe('at-new');
   });
 
@@ -463,6 +570,15 @@ describe('deriveModelsDiscoveryUrl', () => {
       'https://api.acme.example/anthropic/v1/models',
     );
     expect(deriveModelsDiscoveryUrl('https://api.acme.example/')).toBe('https://api.acme.example/v1/models');
+  });
+
+  it('基于 pathname 追加模型端点，保留 query 并丢弃 fragment', () => {
+    expect(deriveModelsDiscoveryUrl('https://api.acme.example/v1?tenant=a#ignored')).toBe(
+      'https://api.acme.example/v1/models?tenant=a',
+    );
+    expect(deriveModelsDiscoveryUrl('https://api.acme.example/root/?tenant=a')).toBe(
+      'https://api.acme.example/root/v1/models?tenant=a',
+    );
   });
 });
 

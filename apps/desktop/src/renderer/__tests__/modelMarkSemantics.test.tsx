@@ -37,6 +37,18 @@ describe('model mark semantics', () => {
     expect(firstPath(<ProviderMark providerId="xai" />)).toBe(
       firstPath(<ProviderLogoMark providerId="xai" />),
     );
+    expect(
+      firstPath(<ProviderMark providerId="renamed-kimi" name="My Kimi" logoKind="moonshot" />),
+    ).toBe(firstPath(<ProviderLogoMark providerId="renamed-kimi" logoKind="moonshot" />));
+    const unknownLogo = render(
+      <ProviderMark
+        providerId="future-provider"
+        name="My Provider"
+        logoKind={'future-brand' as never}
+      />,
+    );
+    expect(unknownLogo.container.querySelector('svg')).toBeNull();
+    expect(unknownLogo.container.textContent).toBe('M');
     expect(firstPath(<ModelIconMark icon="claude" providerId="xd" />)).toBe(anthropicPath);
     expect(firstPath(<ModelIconMark icon="openai" providerId="xd" />)).toBe(openaiPath);
 

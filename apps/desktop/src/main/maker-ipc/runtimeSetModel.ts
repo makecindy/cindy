@@ -1,6 +1,10 @@
 import type { AgentKind } from '@cindy/maker-core';
 
-import { getSessionProvider, setSessionProvider } from '../maker-host/session-provider-store.js';
+import {
+  getSessionProvider,
+  normalizeSessionProviderId,
+  setSessionProvider,
+} from '../maker-host/session-provider-store.js';
 // type-only import:编译期擦除,不会把 codex-proxy-host 的运行时依赖拖进本模块/单测。
 import type { CodexProxyAuthInjection } from '../maker-host/codex-proxy-host.js';
 import {
@@ -108,16 +112,19 @@ export async function applyRuntimeSetModelChange(
   input: ApplyRuntimeSetModelChangeInput,
 ): Promise<ApplyRuntimeSetModelChangeResult> {
   const { maker, sessionId, model, providerId, isSessionInTurn, logger } = input;
+  const normalizedProviderId = normalizeSessionProviderId(providerId);
   const sess = maker.getSession(sessionId);
   const currentProviderId = getSessionProvider(sessionId);
   // model-only 调用以 pending 的 providerId 为「当前来源意图」:用户先 deferred 选了
   // 新来源、再换模型时,决策与登记都要沿用那个来源,不能回落到 store 里的旧值
   // (否则会把 pending 的来源覆盖丢)。
   const pendingTarget =
-    providerId === undefined ? input.getPendingCredentialSwitch?.(sessionId) : undefined;
+    normalizedProviderId === undefined
+      ? input.getPendingCredentialSwitch?.(sessionId)
+      : undefined;
   const nextProviderId =
-    providerId !== undefined
-      ? typeof providerId === 'string' ? providerId : null
+    normalizedProviderId !== undefined
+      ? normalizedProviderId
       : pendingTarget !== undefined
         ? pendingTarget.providerId
         : currentProviderId;

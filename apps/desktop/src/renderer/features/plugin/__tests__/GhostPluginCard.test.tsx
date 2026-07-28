@@ -127,6 +127,37 @@ describe('GhostPluginCard', () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
+  it('routes projected icon failures from installed cards and shortcuts to market recovery', () => {
+    const onIconLoadError = vi.fn();
+    const projected = {
+      ...installedPlugin,
+      iconDataUrl: 'https://plugins.example.invalid/icon.png?signature=current',
+    };
+    const { container, rerender } = render(
+      <GhostPluginCard
+        item={projected}
+        onSelect={vi.fn()}
+        onAction={vi.fn()}
+        onIconLoadError={onIconLoadError}
+      />,
+    );
+
+    fireEvent.error(container.querySelector('img') as HTMLImageElement);
+    expect(onIconLoadError).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <InstalledGhostQueue
+        items={[projected]}
+        expanded={false}
+        onExpandedChange={vi.fn()}
+        onSelect={vi.fn()}
+        onIconLoadError={onIconLoadError}
+      />,
+    );
+    fireEvent.error(container.querySelector('img') as HTMLImageElement);
+    expect(onIconLoadError).toHaveBeenCalledTimes(2);
+  });
+
   it('surfaces the market update state with a badge and a direct update action', () => {
     const onAction = vi.fn();
     const onUpdate = vi.fn();

@@ -151,6 +151,11 @@ export interface RoutingDescriptor {
   requestPath?: string;
   /** 鉴权策略（见 AuthStrategy）。 */
   authStrategy: AuthStrategy;
+  /**
+   * 配置保留用于展示/修复，但运行时不得向该上游路由。用于把升级前不再满足安全边界的
+   * 历史配置留在设置页，同时让所有路由解析 fail closed。
+   */
+  disabled?: boolean;
   /** 转发上游前还原 model id（如剥掉 `codex/` 前缀）。缺省 = 原样。 */
   modelIdRewrite?: { stripPrefix: string };
   /** 转发上游前需删除的请求头（如 gateway 路由删 `anthropic-beta`）。 */

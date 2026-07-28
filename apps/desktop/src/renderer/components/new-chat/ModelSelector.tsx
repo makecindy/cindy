@@ -27,13 +27,13 @@ import { useModelPricing } from '@/hooks/useModelPricing';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
-  formatModelPricePair,
   modelPriceDiscountLabelValues,
   modelPriceDetailRows,
   modelPricePresentation,
 } from '@/lib/modelPriceFormat';
 import {
   filterChatBridgedCodexProviders,
+  isDeviceModelVisible,
   providerMonogram,
   resolveVisibleModelAgentKind,
   selectVisibleModels,
@@ -53,6 +53,7 @@ import {
   visibleModelUnion,
   type ProviderView,
 } from '@cindy/model-providers';
+import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
@@ -90,8 +91,8 @@ const PROVIDER_TITLE_KEY: Record<string, string> = {
 // 配置面板锚在主菜单内缩 8px 的模型行上；补偿这段内缩，让两块面板贴边但不重叠。
 const MODEL_OPTIONS_SIDE_OFFSET = 8;
 const MODEL_LIST_DEFAULT_MAX_HEIGHT_PX = 300;
-// 折扣模型的价格会叠成两行：27.5px 价格栈 + 16px 纵向 padding，向上取整为 44px。
-const MODEL_LIST_CONSTRAINED_ROW_HEIGHT_PX = 44;
+// 一级菜单只保留单行模型信息与必要标签：20px 内容 + 16px 纵向 padding。
+const MODEL_LIST_ROW_HEIGHT_PX = 36;
 const MODEL_LIST_ROW_GAP_PX = 2;
 
 export function modelListMaxHeightForRows(maxVisibleRows?: number): number | undefined {
@@ -99,7 +100,7 @@ export function modelListMaxHeightForRows(maxVisibleRows?: number): number | und
   const rows = Math.max(1, Math.floor(maxVisibleRows));
   return Math.min(
     MODEL_LIST_DEFAULT_MAX_HEIGHT_PX,
-    rows * MODEL_LIST_CONSTRAINED_ROW_HEIGHT_PX + Math.max(0, rows - 1) * MODEL_LIST_ROW_GAP_PX,
+    rows * MODEL_LIST_ROW_HEIGHT_PX + Math.max(0, rows - 1) * MODEL_LIST_ROW_GAP_PX,
   );
 }
 
@@ -114,6 +115,7 @@ export function ProviderMark({
   providerId,
   name,
   routing,
+  logoKind,
   colorClass = 'text-[var(--model-trigger-text)]',
   withMargin = true,
   dense = false,
@@ -121,6 +123,7 @@ export function ProviderMark({
   providerId: string;
   name?: string;
   routing?: ProviderView['routing'];
+  logoKind?: ProviderView['logoKind'];
   colorClass?: string;
   withMargin?: boolean;
   /** 列表行前缀用 dense:比 trigger 小一档(约 -10%)。两套静态尺寸,JIT 友好。 */
@@ -128,11 +131,12 @@ export function ProviderMark({
 }) {
   const common = cn(withMargin && 'mr-1.5', 'shrink-0', colorClass);
   const markSize = dense ? 12.3 : 13;
-  if (hasProviderLogo(providerId, routing)) {
+  if (isProviderLogoKind(logoKind) || hasProviderLogo(providerId, routing)) {
     return (
       <ProviderLogoMark
         providerId={providerId}
         routing={routing}
+        logoKind={logoKind}
         size={markSize}
         className={
           providerId === 'xd'
@@ -169,6 +173,7 @@ export function ModelIconMark({
   providerId,
   name,
   routing,
+  logoKind,
   colorClass = 'text-[var(--model-trigger-text)]',
   withMargin = true,
   dense = false,
@@ -179,6 +184,7 @@ export function ModelIconMark({
   providerId: string;
   name?: string;
   routing?: ProviderView['routing'];
+  logoKind?: ProviderView['logoKind'];
   colorClass?: string;
   withMargin?: boolean;
   dense?: boolean;
@@ -201,6 +207,7 @@ export function ModelIconMark({
       providerId={providerId}
       name={name}
       routing={routing}
+      logoKind={logoKind}
       colorClass={colorClass}
       withMargin={withMargin}
       dense={dense}
@@ -315,9 +322,9 @@ interface ModelSelectorProps {
   disabled?: boolean;
   /** 窄容器下把 trigger 字号/高度各压一档,默认 false。 */
   dense?: boolean;
-  /** 窄态工具栏的简略触发器:隐藏 effort / Fast 次要信息并限制模型名宽度。 */
+  /** 窄 composer 的简略触发器:隐藏 effort / Fast 次要信息并限制模型名宽度。 */
   compactToolbar?: boolean;
-  /** 极窄工具栏进一步隐藏模型文字，只保留模型图标和下拉箭头。 */
+  /** 极窄 composer 进一步隐藏模型文字，只保留模型图标和下拉箭头。 */
   ultraCompactToolbar?: boolean;
   /** Trigger presentation: toolbar keeps the compact chat pill; field renders a settings input-like control. */
   triggerVariant?: 'toolbar' | 'field';
@@ -755,12 +762,19 @@ function ModelSelectorContentView({
       agent: currentAgentKind,
       selectedModelId: modelId,
       selectedProviderId: activeSourceId,
-      // device-link 远程会话:被控端目录「是啥就是啥」,绝不套控制端本机的可见性 override
-      // —— modelVisibilityPrefs 是控制端本机 UI 偏好(设置→供应商的隐藏开关),与被控端无关,
-      // 套上去会让远程列表变成「被控端目录 ∩ 控制端隐藏开关」,跟被控端实际清单对不上。
-      // 本机会话仍按用户本机开关过滤(行为不变)。
+      // device-link 远程会话使用被控端随 provider:list 返回的 override 快照，绝不套
+      // 控制端本机 modelVisibilityPrefs。旧被控端不回传快照时 fail-open，保持兼容。
       isVisible: deviceId
-        ? () => true
+        ? (pid, mid) => {
+            const p = connected.find((x) => x.id === pid);
+            const cat = p ? getModel(p, mid, currentAgentKind) : undefined;
+            return isDeviceModelVisible(
+              remoteProviders.modelVisibilityOverrides,
+              currentAgentKind,
+              pid,
+              { id: mid, defaultEnabled: cat?.defaultEnabled },
+            );
+          }
         : (pid, mid) => {
             const p = connected.find((x) => x.id === pid);
             const cat = p ? getModel(p, mid, currentAgentKind) : undefined;
@@ -781,6 +795,7 @@ function ModelSelectorContentView({
     query,
     visibilityVersion,
     deviceId,
+    remoteProviders.modelVisibilityOverrides,
   ]);
 
   const flatModels = useMemo(() => {
@@ -796,9 +811,22 @@ function ModelSelectorContentView({
     // 本地 flat 入口（子代理模型、Worker 等）没有 provider sections 帮忙过滤，必须显式复用
     // 会话选择器 / IM `/model` 的同一套「已连接来源 × 用户可见模型」规则。否则设置页里
     // 已忽略或仅由断开来源提供的目录项仍会被列出来，选中后没有可用路由。
-    // device-link 的目录来自被控端，不能叠加控制端本机的可见性偏好，保持原样。
+    // device-link 使用被控端 override；旧被控端没有快照时保持历史 fail-open。
     const selectableIds = deviceId
-      ? null
+      ? remoteProviders.modelVisibilityOverrides === undefined
+        ? null
+        : new Set(
+            (agentKind ? [agentKind] : (['claude-code', 'codex'] as const)).flatMap((agent) =>
+              visibleModelUnion(providers, agent, (providerId, model) =>
+                isDeviceModelVisible(
+                  remoteProviders.modelVisibilityOverrides,
+                  agent,
+                  providerId,
+                  model,
+                ),
+              ).map((model) => model.id),
+            ),
+          )
       : new Set(
           (agentKind ? [agentKind] : (['claude-code', 'codex'] as const)).flatMap((agent) =>
             visibleModelUnion(providers, agent, (providerId, model) =>
@@ -811,7 +839,17 @@ function ModelSelectorContentView({
     return selectable.filter(
       (m) => m.displayName.toLowerCase().includes(q) || m.id.toLowerCase().includes(q),
     );
-  }, [sections, visibleModels, query, browsing, agentKind, providers, deviceId, visibilityVersion]);
+  }, [
+    sections,
+    visibleModels,
+    query,
+    browsing,
+    agentKind,
+    providers,
+    deviceId,
+    visibilityVersion,
+    remoteProviders.modelVisibilityOverrides,
+  ]);
 
   // 选中判定:flat 模式只比模型 id;分段模式还要比供应商(同模型多供应商下只高亮当前来源那行)。
   // 浏览目标引擎态恒 false:当前会话模型属于旧引擎,目标列表里同 id 行(如 gpt-5.5
@@ -1092,9 +1130,7 @@ function ModelSelectorContentView({
                         {t(`newChat.modelSelector.pricing.${row.kind}`)}
                       </span>
                       <span className="flex items-center justify-end gap-1.5 tabular-nums">
-                        <span className="text-[var(--model-item-text)]">
-                          {row.value}
-                        </span>
+                        <span className="text-[var(--model-item-text)]">{row.value}</span>
                         {row.originalValue && (
                           <span className="text-[var(--text-tertiary)] line-through">
                             {row.originalValue}
@@ -1235,7 +1271,7 @@ function ModelSelectorContentView({
             }}
             className={cn(
               'flex w-full cursor-pointer items-center justify-between rounded-[8px] px-3 py-2',
-              constrainedListMaxHeight !== undefined && 'min-h-11',
+              constrainedListMaxHeight !== undefined && 'min-h-9',
               'transition-colors duration-100 hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
               isSelected && 'bg-[var(--model-item-hover)]',
               isEditingThis &&
@@ -1250,6 +1286,7 @@ function ModelSelectorContentView({
                   providerId={provider.id}
                   name={provider.name}
                   routing={provider.routing}
+                  logoKind={provider.logoKind}
                   colorClass="text-[var(--text-secondary)]"
                   withMargin={false}
                   dense
@@ -1257,7 +1294,7 @@ function ModelSelectorContentView({
               )}
               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                 <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <span className="truncate text-14 font-medium text-[var(--model-item-text)]">
+                  <span className="truncate text-14 font-medium leading-5 text-[var(--model-item-text)]">
                     {model.displayName}
                   </span>
                   {rowEffort && (
@@ -1292,29 +1329,9 @@ function ModelSelectorContentView({
                 )}
               </span>
             </span>
-            {(rowPrice?.kind === 'priced' || isSelected) && (
-              <span className="ml-2 flex shrink-0 items-center gap-1.5">
-                {rowPrice?.kind === 'priced' && (
-                  <span
-                    data-model-price-stack={rowPrice.original ? 'true' : undefined}
-                    className={cn(
-                      'flex tabular-nums text-11 font-normal leading-[1.25]',
-                      rowPrice.original ? 'flex-col items-end' : 'items-center',
-                    )}
-                  >
-                    <span className="text-[var(--text-secondary)]">
-                      {formatModelPricePair(rowPrice.current)}
-                    </span>
-                    {rowPrice.original && (
-                      <span className="text-[var(--text-tertiary)] line-through">
-                        {formatModelPricePair(rowPrice.original)}
-                      </span>
-                    )}
-                  </span>
-                )}
-                {isSelected && (
-                  <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
-                )}
+            {isSelected && (
+              <span className="ml-2 flex shrink-0 items-center">
+                <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
               </span>
             )}
           </div>
@@ -1614,8 +1631,7 @@ export function ModelSelector({
   // 用户既看不到自己存的是什么,也看不到实际会跑什么。unknownModelLabel 让这类调用方
   // 给出诊断性文案(通常是裸 id),行为与本组件接管前一致。
   // unknown label 空串/全空白按缺省处理(否则 ?? 不回落,trigger 渲染成空白)。
-  const unknownLabel =
-    modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
+  const unknownLabel = modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
   const displayLabel = fallbackOption?.active
     ? fallbackOption.label
     : (currentModel?.displayName ??
@@ -1732,12 +1748,17 @@ export function ModelSelector({
             effort: effortLabel,
           })
         : t('newChat.modelSelector.trigger.aria', { model: displayLabel });
+  // compact 会隐藏断连状态文字；原生 title 仍需保留同一状态，避免鼠标用户悬停
+  // 错误图标时只看到模型名、无法判断发送为何被阻断。
+  const triggerTitle = showSourceDisconnected ? baseAriaLabel : displayLabel;
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
   const ariaLabel = ariaContext ? `${ariaContext}:${baseAriaLabel}` : baseAriaLabel;
   const isBudget = modelId.startsWith('codex/');
   const isFieldTrigger = triggerVariant === 'field';
   const isCreateAgentVariant = visualVariant === 'create-agent';
-  const isCompactToolbar = compactToolbar && isCreateAgentVariant;
+  // compact 是 composer 容器宽度状态，不是 create-agent 的视觉私有状态。
+  // 正常会话在侧栏 + 浏览器 split-pane 下也必须让长模型名承担收缩。
+  const isCompactToolbar = compactToolbar && !isFieldTrigger;
   const isUltraCompactToolbar = ultraCompactToolbar && isCompactToolbar;
   // 保留 useMorphPopover 作用域开关(仅 composer 工具条 opt-in;settings/CreateWorker 用 Radix 回退),
   // 但去掉 !isCreateAgentVariant —— 新建对话框工具条也走脱身上浮 morph,与会话内统一(2026-07-22)。
@@ -1758,7 +1779,7 @@ export function ModelSelector({
       onClick={morphEnabled ? () => setOpen((prev) => (disabled ? false : !prev)) : undefined}
       aria-expanded={open && !disabled}
       aria-haspopup="listbox"
-      title={displayLabel}
+      title={triggerTitle}
       className={cn(
         'flex min-w-0 max-w-full items-center gap-1 transition-colors',
         isFieldTrigger
@@ -1772,9 +1793,13 @@ export function ModelSelector({
               'rounded-full',
               // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
               // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
-              'h-[30px] min-w-[72px] max-w-full shrink overflow-hidden px-2.5',
-              // 窄态工具条(#562):新建对话框空间不足时钳制触发器宽度,防与语音/发送重叠。
-              isUltraCompactToolbar ? 'w-[64px]' : isCompactToolbar ? 'w-[148px]' : undefined,
+              'h-[30px] max-w-full shrink overflow-hidden px-2.5',
+              // 窄态工具条:钳制唯一可收缩的模型入口，给语音 / 发送固定动作留足空间。
+              isUltraCompactToolbar
+                ? 'w-[64px] min-w-[64px]'
+                : isCompactToolbar
+                  ? 'w-[148px] min-w-[72px]'
+                  : 'min-w-[72px]',
               'border border-transparent bg-transparent',
               'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
             ),
@@ -1800,13 +1825,13 @@ export function ModelSelector({
               isCreateAgentVariant
                 ? 'text-[var(--create-agent-control-text)]'
                 : 'text-[var(--text-primary)]',
-              isCreateAgentVariant
-                ? isUltraCompactToolbar
-                  ? 'hidden'
-                  : isCompactToolbar
-                    ? 'max-w-[108px] truncate'
-                    : 'truncate'
-                : cn('truncate', isFieldTrigger ? 'max-w-[260px]' : ''),
+              isUltraCompactToolbar
+                ? 'hidden'
+                : isCompactToolbar
+                  ? 'max-w-[108px] truncate'
+                  : isCreateAgentVariant
+                    ? 'truncate'
+                    : cn('truncate', isFieldTrigger ? 'max-w-[260px]' : ''),
               isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
             )}
           >
@@ -1823,20 +1848,21 @@ export function ModelSelector({
             providerId={currentProviderId}
             name={disconnectedProvider?.name}
             routing={disconnectedProvider?.routing}
+            logoKind={disconnectedProvider?.logoKind}
             colorClass="text-[var(--error-fg)]"
           />
           <span
             className={cn(
               'min-w-0 font-normal text-[var(--text-primary)]',
-              isCreateAgentVariant
-                ? isUltraCompactToolbar
-                  ? 'hidden'
-                  : isCompactToolbar
-                    ? 'max-w-[108px] truncate'
-                    : 'truncate'
-                : isFieldTrigger
-                  ? 'max-w-[260px] truncate'
-                  : 'truncate',
+              isUltraCompactToolbar
+                ? 'hidden'
+                : isCompactToolbar
+                  ? 'max-w-[108px] truncate'
+                  : isCreateAgentVariant
+                    ? 'truncate'
+                    : isFieldTrigger
+                      ? 'max-w-[260px] truncate'
+                      : 'truncate',
               isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
             )}
           >
@@ -1849,14 +1875,16 @@ export function ModelSelector({
             className="ml-0.5 shrink-0 text-[var(--error-fg)]"
             aria-hidden
           />
-          <span
-            className={cn(
-              'shrink-0 font-medium text-[var(--error-fg)]',
-              dense ? 'text-[11.5px]' : 'text-[12px]',
-            )}
-          >
-            {t('newChat.modelSelector.source.disconnected')}
-          </span>
+          {!isCompactToolbar && (
+            <span
+              className={cn(
+                'shrink-0 font-medium text-[var(--error-fg)]',
+                dense ? 'text-[11.5px]' : 'text-[12px]',
+              )}
+            >
+              {t('newChat.modelSelector.source.disconnected')}
+            </span>
+          )}
         </>
       ) : (
         <>
@@ -1868,6 +1896,7 @@ export function ModelSelector({
               providerId={activeSourceId}
               name={triggerActiveProvider?.name}
               routing={triggerActiveProvider?.routing}
+              logoKind={triggerActiveProvider?.logoKind}
               colorClass={
                 isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : undefined
               }
@@ -1876,15 +1905,15 @@ export function ModelSelector({
           <span
             className={cn(
               'min-w-0 font-normal',
-              isCreateAgentVariant
-                ? isUltraCompactToolbar
-                  ? 'hidden'
-                  : isCompactToolbar
-                    ? 'max-w-[108px] truncate'
-                    : 'truncate'
-                : isFieldTrigger
-                  ? 'max-w-[260px] truncate'
-                  : 'truncate',
+              isUltraCompactToolbar
+                ? 'hidden'
+                : isCompactToolbar
+                  ? 'max-w-[108px] truncate'
+                  : isCreateAgentVariant
+                    ? 'truncate'
+                    : isFieldTrigger
+                      ? 'max-w-[260px] truncate'
+                      : 'truncate',
               !isBudget &&
                 (isCreateAgentVariant
                   ? 'text-[var(--create-agent-control-text)]'

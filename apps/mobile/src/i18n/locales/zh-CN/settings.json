@@ -111,6 +111,22 @@
     "done": "已复制",
     "accessibility": "复制{{label}}"
   },
+  "voiceDictionary": {
+    "sectionTitle": "语音词典",
+    "label": "查看词典",
+    "hint": "词典保存在电脑上，并在你的电脑之间自动同步；手机只能查看，添加和删除请回电脑操作。",
+    "openAccessibility": "查看语音词典",
+    "screenTitle": "语音词典",
+    "entryCount": "{{count}} 个词条",
+    "aliasSeparator": "、",
+    "aliases": "常被听成：{{aliases}}",
+    "refresh": "刷新",
+    "refreshing": "刷新中…",
+    "refreshAccessibility": "刷新词典",
+    "readOnlyHint": "手机只能查看，添加和删除请回电脑操作。",
+    "offlineHint": "电脑当前都不在线，显示的是上次同步到手机的内容。",
+    "noDesktops": "还没有可同步的电脑。在电脑上登录同一账号后，词典会自动出现在这里。"
+  },
   "deviceNameEditor": {
     "screenTitle": "设备名称",
     "placeholder": "本机名称",

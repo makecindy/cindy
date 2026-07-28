@@ -749,6 +749,23 @@ function AutoResumeCard() {
 }
 
 /**
+ * 交接正文是否为英文格式。
+ *
+ * `content.handoff` 是持久化数据:英文化之前落库的行仍是中文正文,升级后展开老卡片
+ * 看到的就是中文。标题里"原文为英文"那句只能对新格式说,否则会自相矛盾。判据取英文
+ * 结束标记的公共尾巴——三种英文标记(handoff / rebuild / fork)都含它,旧中文标记不含。
+ * main 侧对应常量见 maker-ipc/agentHandoff.ts 的 *_TERMINATOR。
+ */
+const ENGLISH_HANDOFF_TERMINATOR_TAIL = "; the user's new message follows ==";
+
+function isEnglishSourceHandoff(handoff: string): boolean {
+  // 锚在**尾部**而不是 includes:交接正文里嵌着用户与助手的历史原文,里面完全可能
+  // 出现这段尾串(比如聊过这段代码),那样旧中文交接会被误判成英文。结束标记只可能
+  // 在整段的最末尾。
+  return handoff.trimEnd().endsWith(ENGLISH_HANDOFF_TERMINATOR_TAIL);
+}
+
+/**
  * session-agent-switch 边界分隔条:复用 CompactBoundaryCard 的"分隔线 + 居中
  * chip"语言标记"此处引擎从 X 切换到 Y"。chip 可点展开交接内容面板(发给新引擎
  * 的上下文摘要全文)——默认不打扰,想看时可核查我们替用户做了什么交接。
@@ -814,7 +831,11 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
             )}
           >
             <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
-              {t('chat.systemCard.agentSwitch.handoffTitle')}
+              {t(
+                isEnglishSourceHandoff(handoff)
+                  ? 'chat.systemCard.agentSwitch.handoffTitleEnglishSource'
+                  : 'chat.systemCard.agentSwitch.handoffTitle',
+              )}
             </div>
             <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.55] text-[var(--msg-tool-text)]">
               {handoff}

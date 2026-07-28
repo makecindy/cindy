@@ -24,7 +24,6 @@ export interface ComposerRichInputHandle {
   blur(): void;
   focus(): void;
   insertNode(node: ComposerNode): void;
-  setSelectionToEnd(): void;
 }
 
 export interface ComposerRichInputProps {
@@ -176,7 +175,11 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
           }
           inject(`window.cindyComposer.insertNode(${JSON.stringify(node)});`);
         },
-        setSelectionToEnd: focusEditor,
+        // 注意:曾有过 setSelectionToEnd: focusEditor 的别名——web 侧 placeCaretAtEnd
+        // 必须 root.focus(),而 keyboardDisplayRequiresUserAction={false} 让任何程序化
+        // focus 都会弹软键盘。「只挪选区不聚焦」在这个 WebView 编辑器上不成立,需要
+        // caret 在末尾的调用方请显式用 focus / applyDocumentAndSetSelectionToEnd,
+        // 并自行承担弹键盘的语义。
       };
       if (typeof forwardedRef === 'function') forwardedRef(handle);
       else forwardedRef.current = handle;

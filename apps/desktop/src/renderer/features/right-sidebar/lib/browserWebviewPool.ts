@@ -32,6 +32,10 @@ import type { WebviewTag } from 'electron';
 
 import { BROWSER_PARTITION } from './browserPartition';
 
+export type BrowserWebviewGuestFailure =
+  | { kind: 'render-process-gone'; reason: string }
+  | { kind: 'unresponsive'; reason: 'unresponsive' };
+
 interface PoolEntry {
   tabId: string;
   /** webview 的外层 wrapper 容器,LRU 在它身上(caller 把它 appendChild 到自己
@@ -42,6 +46,8 @@ interface PoolEntry {
   /** 单调递增计数,LRU 用 —— 越大越新,淘汰挑最小那个。比 Date.now() 不依赖
    *  系统时钟,且能区分同帧多次访问。 */
   lastAccess: number;
+  /** Pool 创建 webview 后立即记录 guest 故障，避免 React hook 尚未绑定时丢事件。 */
+  guestFailure: BrowserWebviewGuestFailure | null;
 }
 
 const POOL_CAPACITY = 5;
@@ -126,15 +132,18 @@ class BrowserWebviewPoolImpl {
     // webview 元素自身透明 —— 灰底兜底交给 wrapper 处理(见上方注释)。
     webview.setAttribute('style', 'flex:1;width:100%;height:100%;');
     wrapper.appendChild(webview);
-    container.appendChild(wrapper);
 
     const entry: PoolEntry = {
       tabId,
       wrapper,
       webview,
       lastAccess: ++this.accessCounter,
+      guestFailure: null,
     };
+    this.observeGuestLifecycle(entry);
+    container.appendChild(wrapper);
     this.entries.set(tabId, entry);
+    this.fireEntryCreated(tabId);
     return entry;
   }
 
@@ -216,6 +225,47 @@ class BrowserWebviewPoolImpl {
   }
 
   /**
+   * 订阅新 entry 创建。Shell 中已挂载但隐藏的 hook 用它观察 Agent 显式创建的
+   * webview；命中已有 entry 的 acquire 不触发。
+   */
+  onEntryCreated(listener: (tabId: string) => void): () => void {
+    this.entryCreatedListeners.add(listener);
+    return () => {
+      this.entryCreatedListeners.delete(listener);
+    };
+  }
+
+  /**
+   * guest 生命周期监听必须在 wrapper 接入 document 前安装。Agent 可以在隐藏 tab
+   * 上显式创建并立即驱动 webview；React hook 收到 entry-created 后才会重新绑定，
+   * 这段间隙内的崩溃 / 卡死状态由 entry 暂存。
+   */
+  private observeGuestLifecycle(entry: PoolEntry): void {
+    const onRenderProcessGone = (event: Electron.RenderProcessGoneEvent) => {
+      entry.guestFailure = {
+        kind: 'render-process-gone',
+        reason: event.details.reason,
+      };
+    };
+    const onUnresponsive = () => {
+      entry.guestFailure = { kind: 'unresponsive', reason: 'unresponsive' };
+    };
+    const onResponsive = () => {
+      if (entry.guestFailure?.kind === 'unresponsive') {
+        entry.guestFailure = null;
+      }
+    };
+    const onStartLoading = () => {
+      entry.guestFailure = null;
+    };
+
+    entry.webview.addEventListener('render-process-gone', onRenderProcessGone);
+    entry.webview.addEventListener('unresponsive', onUnresponsive);
+    entry.webview.addEventListener('responsive', onResponsive);
+    entry.webview.addEventListener('did-start-loading', onStartLoading);
+  }
+
+  /**
    * LRU 淘汰 —— 内部用。优先挑最旧的**未 pinned** entry。如果所有 entry 都
    * pinned,fallback 到挑最旧的(capacity 限制比 pin 更高优先级);理论上不会
    * 发生(pin 数远小于 POOL_CAPACITY),fallback 是防御式兜底,触发时:
@@ -239,6 +289,7 @@ class BrowserWebviewPoolImpl {
 
   private pinListeners = new Set<(tabId: string, pinned: boolean) => void>();
   private releaseListeners = new Set<(tabId: string) => void>();
+  private entryCreatedListeners = new Set<(tabId: string) => void>();
 
   private firePinChange(tabId: string, pinned: boolean): void {
     for (const l of this.pinListeners) {
@@ -256,6 +307,16 @@ class BrowserWebviewPoolImpl {
         l(tabId);
       } catch {
         // listener throw must not stop the pool from advancing
+      }
+    }
+  }
+
+  private fireEntryCreated(tabId: string): void {
+    for (const l of this.entryCreatedListeners) {
+      try {
+        l(tabId);
+      } catch {
+        // listener throw must not break entry creation
       }
     }
   }

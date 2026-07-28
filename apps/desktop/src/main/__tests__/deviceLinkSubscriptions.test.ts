@@ -12,7 +12,6 @@ describe('subscriptions registry', () => {
   it('ignores empty subscriptions so they cannot become phantom remote viewers', () => {
     subs.subscribe('empty', [], 'Nobody');
     expect(subs.getControllerIds()).toEqual([]);
-    expect(subs.getSubscribedControllers()).toEqual([]);
   });
 
   it('subscribe 累加 topic;getControllersForTopic 命中订阅者', () => {
@@ -30,21 +29,34 @@ describe('subscriptions registry', () => {
     expect(subs.getControllersForTopic('session:zzz')).toContain('legacy');
   });
 
-  it('横幅控制端 = 持 session:<id> 或 "*";纯 sessions 订阅者不算', () => {
+  it('横幅只认 session / "*";更新 busy 额外保护 fs-watch', () => {
     subs.subscribe('observer', ['sessions'], 'Obs');
     expect(subs.getControlControllers()).toEqual([]); // 只看列表 → 不亮横幅
-    expect(subs.getSubscribedControllers()).toEqual([{ deviceId: 'observer', name: 'Obs' }]);
 
     subs.subscribe('controller', ['session:s1'], 'Ctrl');
     expect(subs.getControlControllers()).toEqual([{ deviceId: 'controller', name: 'Ctrl' }]);
 
+    subs.subscribe('file-browser', ['fs-watch:/repo'], 'Files');
+    expect(subs.getControlControllers()).not.toContainEqual({
+      deviceId: 'file-browser',
+      name: 'Files',
+    });
+    expect(subs.getUpdateRelaunchControllers()).toContainEqual({
+      deviceId: 'file-browser',
+      name: 'Files',
+    });
+
     subs.subscribe('legacy', ['*'], 'Old');
-    expect(subs.getControlControllers().map((c) => c.deviceId).sort()).toEqual(['controller', 'legacy']);
-    expect(subs.getSubscribedControllers().map((c) => c.deviceId).sort()).toEqual([
+    expect(subs.getControlControllers().map((c) => c.deviceId).sort()).toEqual([
       'controller',
       'legacy',
-      'observer',
     ]);
+    expect(subs.getUpdateRelaunchControllers().map((c) => c.deviceId).sort()).toEqual([
+      'controller',
+      'file-browser',
+      'legacy',
+    ]);
+    expect(subs.getControllerIds().sort()).toEqual(['controller', 'file-browser', 'legacy', 'observer']);
   });
 
   it('unsubscribe 移除指定 topic;清空后整条移除', () => {

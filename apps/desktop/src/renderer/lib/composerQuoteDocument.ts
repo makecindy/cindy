@@ -11,6 +11,7 @@ import type { JSONContent } from '@tiptap/core';
 import type { AgentInputReference } from '../../shared/agentInputQueue';
 import { parseChatQuoteSegments, type ChatQuote, type ChatQuoteSegment } from '@/lib/chatQuotes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
+import { normalizeComposerDocumentJSON } from './composerListDocument';
 
 export const COMPOSER_QUOTE_NODE_TYPE = 'composerQuote';
 
@@ -79,6 +80,8 @@ function isPureLineBreakText(text: string): boolean {
   }
   return true;
 }
+
+const LIST_ROW_MARKER_RE = /^(?:[-+*•][ \t]+|[1-9]\d{0,8}[.)][ \t]+|[1-9]\d{0,8}、[ \t]*)/;
 
 function normalizeTopLevelQuoteNodes(document: JSONContent | null | undefined): JSONContent[] {
   const source =
@@ -154,6 +157,7 @@ export function quoteSegmentsToComposerDocument(
   const content: JSONContent[] = [];
   let inlineContent: JSONContent[] = [];
   let hasContent = false;
+  let quoteJustEnded = false;
 
   const finishParagraph = () => {
     content.push(paragraph(inlineContent));
@@ -164,6 +168,7 @@ export function quoteSegmentsToComposerDocument(
     if (segment.kind === 'quote') {
       inlineContent.push(quoteNode(segment.quote));
       hasContent = true;
+      quoteJustEnded = true;
       continue;
     }
     if (!segment.text) continue;
@@ -179,8 +184,12 @@ export function quoteSegmentsToComposerDocument(
     }
     const lines = segment.text.split('\n');
     lines.forEach((line, index) => {
+      if (quoteJustEnded && line && LIST_ROW_MARKER_RE.test(line) && inlineContent.length > 0) {
+        finishParagraph();
+      }
       if (line) inlineContent.push({ type: 'text', text: line });
       if (index < lines.length - 1) finishParagraph();
+      if (line) quoteJustEnded = false;
     });
   }
   if (!hasContent) return null;
@@ -192,12 +201,12 @@ export function quoteSegmentsToComposerDocument(
 export function composerHistoryEntryToDocument(entry: ComposerHistoryEntry): JSONContent {
   if (entry.quotesEncoded === true) {
     const quotedDocument = quoteSegmentsToComposerDocument(parseChatQuoteSegments(entry.content));
-    if (quotedDocument) return quotedDocument;
+    if (quotedDocument) return normalizeComposerDocumentJSON(quotedDocument);
   }
-  return {
+  return normalizeComposerDocumentJSON({
     type: 'doc',
     content: [paragraph(entry.content ? [{ type: 'text', text: entry.content }] : [])],
-  };
+  });
 }
 
 /**
@@ -212,6 +221,7 @@ export function serializeComposerContentBlocks(blocks: readonly ComposerSerializ
 /** Serialize blocks and project block-relative presentation ranges into wire offsets. */
 export function serializeComposerContentBlocksWithRanges(
   blocks: readonly ComposerSerializedBlock[],
+  options: { preserveTrailingWhitespace?: boolean } = {},
 ): {
   text: string;
   agentReferences: AgentInputReference[];
@@ -274,7 +284,7 @@ export function serializeComposerContentBlocksWithRanges(
   });
 
   const leadingTrim = serialized.length - serialized.trimStart().length;
-  const text = serialized.trim();
+  const text = options.preserveTrailingWhitespace ? serialized.trimStart() : serialized.trim();
   return {
     text,
     agentReferences: agentReferences

@@ -26,6 +26,7 @@ const provider = (
     name: id,
     connected,
     agents: [agent],
+    routing: { [agent]: {} },
     models: {
       [agent]: models.map((entry) => ({ ...entry, name: entry.displayName })),
     },

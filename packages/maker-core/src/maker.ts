@@ -35,6 +35,7 @@ import type { MemoryStatus, MemorySetResult, MemoryResetResult } from './types/m
 import type { ConsumeAccountRateLimitResetCreditParams } from './types/account-rate-limits.js';
 import type { SessionStorage, SessionMeta } from './interfaces/session-storage.js';
 import type { Logger } from './interfaces/logger.js';
+import type { AuthLoginOptions } from './interfaces/auth-adapter.js';
 import type { MakerMemoryManager } from './memory/manager.js';
 
 /**
@@ -110,9 +111,16 @@ export interface CreateSessionOptions extends StartSessionOptions {
   id?: string;
 }
 
+export type MakerSessionCloseReason = 'requested' | 'agent-switch' | 'unexpected';
+
 export type MakerEvent =
   | { type: 'session:created'; session: Session }
-  | { type: 'session:closed'; sessionId: string };
+  | {
+      type: 'session:closed';
+      sessionId: string;
+      session: Session;
+      reason: MakerSessionCloseReason;
+    };
 
 export type MakerEventListener = (event: MakerEvent) => void;
 
@@ -155,6 +163,8 @@ export class Maker {
   private readonly sdkSessionPersistenceTails = new Map<string, Promise<void>>();
   /** 已确认失效的 vendor id；用于丢弃 CAS 之后才到达的旧 query session_id 事件。 */
   private readonly invalidSdkSessionIds = new Map<string, Set<string>>();
+  /** Explicit close cause keyed by the exact Session instance that will emit closed. */
+  private readonly closeReasons = new WeakMap<Session, MakerSessionCloseReason>();
   /** Maker Memory 顶层单例 (可选). undefined 时 maker memory 功能整体禁用. */
   public readonly makerMemory: MakerMemoryManager | undefined;
 
@@ -361,7 +371,12 @@ export class Maker {
       if (status === 'closed') {
         // 不再持久化运行态: 'closed' 是 SDK 子进程的瞬态, 重启即灭, 无意义存盘。
         this.activeSessions.delete(meta.id);
-        this.emit({ type: 'session:closed', sessionId: meta.id });
+        this.emit({
+          type: 'session:closed',
+          sessionId: meta.id,
+          session,
+          reason: this.closeReasons.get(session) ?? 'unexpected',
+        });
         // 注入的副作用钩子 (worktree / temp 文件 / image cache 清理等)。
         // fire-and-forget, 异常只记日志, 不影响其他清理。在 storage update / activeSessions
         // delete / emit 之后调 —— 钩子里的逻辑可能对外发 IPC 或读 maker state, 让 Maker
@@ -475,9 +490,15 @@ export class Maker {
   }
 
   /** 关闭并移除一个 session */
-  async closeSession(id: string): Promise<void> {
+  async closeSession(
+    id: string,
+    reason: Exclude<MakerSessionCloseReason, 'unexpected'> = 'requested',
+  ): Promise<void> {
     const sess = this.activeSessions.get(id);
     if (sess) {
+      // First closer owns the cause. A later concurrent close must not relabel
+      // a user-requested close as an internal replacement (or vice versa).
+      if (!this.closeReasons.has(sess)) this.closeReasons.set(sess, reason);
       await sess.close();
       // status listener 会自动清理 activeSessions 并 emit
     }
@@ -657,7 +678,7 @@ export class Maker {
     return this.requireAgent(agentKind).getAuthState();
   }
 
-  async triggerAgentLogin(agentKind: AgentKind, opts?: { onProgress?: (msg: string) => void }) {
+  async triggerAgentLogin(agentKind: AgentKind, opts?: AuthLoginOptions) {
     return this.requireAgent(agentKind).triggerLogin(opts);
   }
 

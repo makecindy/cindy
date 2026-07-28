@@ -106,7 +106,10 @@ export class SseTranslator {
     this.signaturePrefix = slash > 0 ? model.slice(0, slash + 1) : '';
   }
 
-  /** deferred 事件队列(见 DEFERRABLE_TYPES 注释):仅在 tool_use 块打开期间入队。 */
+  /**
+   * deferred 事件队列(见 DEFERRABLE_TYPES 注释):**任一不可打断块**(tool_use / thinking)
+   * 打开期间,其它 item 的 DEFERRABLE_TYPES 事件都会入队 —— 不只是 tool_use。
+   */
   private deferred: unknown[] = [];
 
   /** 当前打开的块是否不可打断(tool_use / thinking,见 DEFERRABLE_TYPES 注释)。 */

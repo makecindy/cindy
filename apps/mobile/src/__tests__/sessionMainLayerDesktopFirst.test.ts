@@ -42,10 +42,10 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const syncEnd = source.indexOf('function MessageHistoryToggle', syncStart);
     const syncSource = source.slice(syncStart, syncEnd);
 
-    // banner 渲染条件(useShowConnectionBanner):请求级 error / 可分类连接问题
-    // 立即显示;普通弱网断线经防闪窗口后也显示,不再彻底静默。
+    // banner 渲染条件(useShowConnectionBanner):请求级 error / 可分类连接问题 /
+    // 目标设备熔断 open(电脑端未响应)立即显示;普通弱网断线经防闪窗口后也显示,不再彻底静默。
     expect(routeSource).toContain('{showConnectionBanner ? (');
-    expect(source).toContain('useShowConnectionBanner(status, connectionError, connectionIssue)');
+    expect(source).toContain('useShowConnectionBanner(status, connectionError, connectionIssue, isDeviceUnresponsive)');
     expect(routeSource).not.toContain('connectionError || (loading && !currentSession)');
     expect(syncSource).toContain("t('session.screen.awaitingSync')");
     expect(syncSource).toContain("t('session.screen.resync')");

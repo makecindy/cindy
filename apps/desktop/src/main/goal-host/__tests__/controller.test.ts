@@ -406,13 +406,15 @@ describe('GoalController', () => {
     const oldSession = new FakeSession('s1', 'claude-code');
     const switchedSession = new FakeSession('s1', 'codex');
     let live = oldSession;
-    const applyPendingAgentSwitch = vi.fn(async () => {
+    const releaseAgentSwitchLock = vi.fn();
+    const acquirePendingAgentSwitch = vi.fn(async () => {
       live = switchedSession;
+      return releaseAgentSwitchLock;
     });
     const local = makeController({
       getSession: () => live,
       ensureSession: async () => live,
-      applyPendingAgentSwitch,
+      acquirePendingAgentSwitch,
     });
 
     await local.controller.setGoal({
@@ -421,10 +423,11 @@ describe('GoalController', () => {
       agentKind: 'claude-code',
     });
 
-    expect(applyPendingAgentSwitch).toHaveBeenCalledWith('s1');
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('s1');
     expect(oldSession.sends).toHaveLength(0);
     expect(switchedSession.sends).toHaveLength(1);
     expect(switchedSession.sends[0].originKind).toBe('goal');
+    expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(1);
   });
 
   it('migrates the Goal listener to the switched session so the new engine turn can finalize (reviewer P1)', async () => {
@@ -432,13 +435,14 @@ describe('GoalController', () => {
     const switchedSession = new FakeSession('s1', 'codex');
     let live: FakeSession = oldSession;
     // deferred switch commit:关旧 live session + spawn 目标引擎 → maker.getSession 换新对象。
-    const applyPendingAgentSwitch = vi.fn(async () => {
+    const acquirePendingAgentSwitch = vi.fn(async () => {
       live = switchedSession;
+      return () => {};
     });
     const local = makeController({
       getSession: () => live,
       ensureSession: async () => live,
-      applyPendingAgentSwitch,
+      acquirePendingAgentSwitch,
     });
 
     // setGoal 先在 oldSession 上挂 listener,首轮 fireTurn 落实切换 → listener 必须迁到 switchedSession。
@@ -846,6 +850,45 @@ describe('GoalController', () => {
     await h.controller.resumeOnOpen('s1');
     expect(h.session.sends.length).toBeGreaterThanOrEqual(1); // 已活化并续了一轮
     expect(h.session.sends.at(-1)?.content).toContain('keep going');
+  });
+
+  it('resumeOnOpen 在释放 route 锁前挂 listener，并在会话随即关闭后迁移到重建会话', async () => {
+    const firstSession = new FakeSession('s1', 'claude-code');
+    const recreatedSession = new FakeSession('s1', 'claude-code');
+    let live: FakeSession | undefined = firstSession;
+    let acquireCount = 0;
+    const acquirePendingAgentSwitch = vi.fn(async () => {
+      acquireCount += 1;
+      if (acquireCount === 1) {
+        return () => {
+          // 模拟 resumeOnOpen 释放锁后，queued SET_MODEL 立即关闭刚确保的 session。
+          live = undefined;
+        };
+      }
+      return () => {};
+    });
+    const local = makeController({
+      getSession: () => live,
+      ensureSession: async () => {
+        if (!live) live = recreatedSession;
+        return live;
+      },
+      acquirePendingAgentSwitch,
+    });
+    await local.storage.set(seededGoal({ status: 'active', objective: 'survive rewire' }));
+
+    await local.controller.resumeOnOpen('s1');
+    expect(recreatedSession.sends).toHaveLength(1);
+
+    recreatedSession.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"complete","reason":"rewired"}\n```',
+      tokens: 5,
+    });
+    await tick();
+
+    expect(local.completions).toHaveLength(1);
+    expect(local.completions[0].summary.reason).toBe('rewired');
   });
 
   it('resumeOnOpen is a no-op for non-active goals and for goals already being managed', async () => {

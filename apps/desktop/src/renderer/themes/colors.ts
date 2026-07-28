@@ -66,6 +66,41 @@ registerColor('md-table-bg', {
   light: 'rgba(236, 236, 234, 0.55)',
   dark: 'rgba(44, 44, 42, 0.55)',
 }, 'Markdown 编辑器表格行 / 表头半透明背景');
+// ── Markdown 正文语义色(标题 h1-h6 + 加粗)──
+// 默认值刻意是 `inherit` 而不是 var(--text-primary):这些元素在引入 token 之前
+// 的颜色就是从容器继承来的(baseComponents 只给字号字重,不给 color)。若默认改成
+// 具体色槽,blockquote / tool card / secondary 文字区里的 Markdown 标题与加粗会
+// 由弱化色变回主色 —— 那才是真的改动现有观感。`inherit` 让默认主题渲染结果逐
+// 像素不变,同时给外部主题导入(VSCode markup.heading / Obsidian --hN-color)留出
+// 可覆盖的槽位。详见 docs/design-rules/DESIGN.md §10「外部主题导入」。
+registerColor('md-h1-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H1 文字色(默认继承容器文字色)');
+registerColor('md-h2-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H2 文字色(默认继承容器文字色)');
+registerColor('md-h3-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H3 文字色(默认继承容器文字色)');
+registerColor('md-h4-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H4 文字色(默认继承容器文字色)');
+registerColor('md-h5-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H5 文字色(默认继承容器文字色)');
+registerColor('md-h6-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H6 文字色(默认继承容器文字色)');
+registerColor('md-strong-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown 加粗文字色(默认继承容器文字色)');
 registerColor('border-default', {
   light: '#d7d7d4',
   dark: '#3c3c3a',
@@ -473,13 +508,13 @@ registerColor('login-panel-border', {
   light: '#D4D4D4',
   dark: '#434343',
 }, 'Login — 面板 1px inside 描边(亮色 #D4D4D4 / 暗色 #434343;DESIGN.md §16.1)');
-// 品牌红 accent 族:wave4 改判后 #DF0C27 语义限定为 accent(Global pill/字标
+// 品牌红 accent 族:wave4 改判后 #DF0C27 语义限定为 accent(区域徽标/字标
 // 红元素等品牌点缀),禁止表达页面/画板背景——命名刻意不含 bg/background
 // (token-decision-table.md 原案名 login-brand-bg 已随改判弃用)。
 registerColor('login-brand-accent', {
   light: '#DF0C27',
   dark: '#DF0C27',
-}, 'Login — 品牌红 accent(Global pill/字标红元素;禁止用作页面背景,wave4 改判)');
+}, 'Login — 品牌红 accent(区域徽标/字标红元素;禁止用作页面背景,wave4 改判)');
 registerColor('login-brand-accent-pressed', {
   light: '#A61629',
   dark: '#A61629',
@@ -546,7 +581,7 @@ registerColor('login-action-control-bg', {
 registerColor('login-back-border', {
   light: '#FFFFFF',
   dark: '#434343',
-}, 'Login — 返回钮描边(亮色白 / 暗色 #434343;figma 549:897。Global pill 白字仍走 login-inverted-button-border)');
+}, 'Login — 返回钮描边(亮色白 / 暗色 #434343;figma 549:897。区域徽标白字仍走 login-inverted-button-border)');
 registerColor('login-control-border', {
   light: '#D4D4D4',
   dark: '#434343',
@@ -602,7 +637,7 @@ registerColor('login-disabled-button-text', {
 registerColor('login-inverted-button-border', {
   light: '#FFFFFF',
   dark: '#FFFFFF',
-}, 'Login — 浅底钮白描边/Global pill 白字(两模式同值 #FFFFFF;推导,待 Figma 精确)');
+}, 'Login — 浅底钮白描边/区域徽标白字(两模式同值 #FFFFFF;推导,待 Figma 精确)');
 registerColor('login-link-text', {
   light: '#2A2828',
   dark: '#EEEEEE',
@@ -798,6 +833,33 @@ registerColor('file-remove-bg', {
   light: '#525252',
   dark: '#737373',
 }, 'Mid Gray');
+// 附件卡自绘文件图标的类型角标(§10 theme-invariant 例外族):颜色跟「这份文件是
+// 什么」绑定,不随明暗翻转,两模式同值。取值都按白字 ≥4.5:1 选过(pdf 5.96 /
+// doc 6.56 / sheet 5.05 / slide 5.24 / code 7.09),角标文字恒用 file-badge-fg。
+registerColor('file-badge-pdf', {
+  light: '#B23A26',
+  dark: '#B23A26',
+}, '文件类型角标 — PDF(theme-invariant;× file-badge-fg = 5.96:1)');
+registerColor('file-badge-doc', {
+  light: '#2C5CA8',
+  dark: '#2C5CA8',
+}, '文件类型角标 — 文档(theme-invariant;× file-badge-fg = 6.56:1)');
+registerColor('file-badge-sheet', {
+  light: '#2E7D4F',
+  dark: '#2E7D4F',
+}, '文件类型角标 — 表格(theme-invariant;× file-badge-fg = 5.05:1)');
+registerColor('file-badge-slide', {
+  light: '#A25A12',
+  dark: '#A25A12',
+}, '文件类型角标 — 幻灯片(theme-invariant;× file-badge-fg = 5.24:1)');
+registerColor('file-badge-code', {
+  light: '#5B49A8',
+  dark: '#5B49A8',
+}, '文件类型角标 — 代码(theme-invariant;× file-badge-fg = 7.09:1)');
+registerColor('file-badge-fg', {
+  light: '#FFFFFF',
+  dark: '#FFFFFF',
+}, '文件类型角标前景 — 恒白(不能借 accent-pure-cta-fg:那个会在 Dark 翻成黑)');
 registerColor('chat-input-chip-bg', {
   light: 'var(--surface-chip)',
   dark: 'var(--surface-chip)',

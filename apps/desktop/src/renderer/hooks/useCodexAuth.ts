@@ -10,13 +10,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
-import { triggerCodexLoginOnce, type CodexLoginResult } from './codexAuthLogin';
+import {
+  acquireCodexLogin,
+  invalidatePendingCodexLogin,
+  type CodexLoginLease,
+  type CodexLoginResult,
+} from './codexAuthLogin';
 import { isCodexOAuthReconnectRequired } from './codexAuthRecovery';
 
 export type CodexUiState =
   | { kind: 'loading' }
   | { kind: 'unauthenticated' }
-  | { kind: 'login-pending' }
+  | {
+      kind: 'login-pending';
+      mode: 'browser' | 'device-code';
+      deviceCode?: { verificationUrl: string; userCode: string };
+    }
   | {
       kind: 'authenticated';
       identity?: string;
@@ -44,7 +53,11 @@ type CodexAuthMachineEvent =
   | { type: 'initial-state-failed'; requestedAt: InitialSnapshotRevision }
   | { type: 'observer-disabled' }
   | { type: 'state-changed'; result: CodexLoginResult }
-  | { type: 'login-pending' }
+  | {
+      type: 'login-pending';
+      mode: 'browser' | 'device-code';
+      deviceCode?: { verificationUrl: string; userCode: string };
+    }
   | { type: 'login-progress-error'; message: string }
   | { type: 'login-result'; result: CodexLoginResult }
   | { type: 'login-threw'; message: string }
@@ -176,8 +189,14 @@ function reduceCodexAuthMachine(
       if (next.kind === 'error') return restoreReconnectOr(machine, next);
       return replaceUi(machine, next, 'auth');
     }
-    case 'login-pending':
-      return replaceUi(machine, { kind: 'login-pending' }, 'event');
+    case 'login-pending': {
+      const deviceCode =
+        event.deviceCode ??
+        (machine.ui.kind === 'login-pending' && machine.ui.mode === event.mode
+          ? machine.ui.deviceCode
+          : undefined);
+      return replaceUi(machine, { kind: 'login-pending', mode: event.mode, deviceCode }, 'event');
+    }
     case 'login-progress-error': {
       const next = toCodexUiState({ authenticated: false, errorReason: event.message }, true);
       if (next.kind === 'reconnect-required') return replaceUi(machine, next, 'event');
@@ -221,11 +240,63 @@ export function isChatGptConnectionConnected(
   return state.kind === 'authenticated' && state.authSource === 'oauth';
 }
 
+/**
+ * 将共享 Codex 登录绑定到真实发起它的 React owner。
+ *
+ * 观察型 useCodexAuth 实例不会获得 lease，因此卸载时不会取消别的窗口发起的登录。
+ */
+export function useOwnedCodexLogin(): (
+  mode?: 'browser' | 'device-code',
+) => Promise<CodexLoginResult> {
+  const leasesRef = useRef(new Set<CodexLoginLease>());
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      for (const lease of leasesRef.current) {
+        lease.release({ cancelIfLastOwner: true });
+      }
+      leasesRef.current.clear();
+    };
+  }, []);
+
+  return useCallback((mode: 'browser' | 'device-code' = 'browser') => {
+    if (!mountedRef.current) {
+      return Promise.resolve({
+        authenticated: false,
+        errorReason: 'login_cancelled',
+      });
+    }
+    const lease = acquireCodexLogin(mode);
+    leasesRef.current.add(lease);
+    return lease.promise
+      .then(
+        (result) =>
+          mountedRef.current
+            ? result
+            : { authenticated: false, errorReason: 'login_cancelled' },
+        (error) => {
+          if (!mountedRef.current) {
+            return { authenticated: false, errorReason: 'login_cancelled' };
+          }
+          throw error;
+        },
+      )
+      .finally(() => {
+        if (!leasesRef.current.delete(lease)) return;
+        lease.release();
+      });
+  }, []);
+}
+
 export function useCodexAuth(options?: { enabled?: boolean }) {
   const enabled = options?.enabled ?? true;
   const { t } = useTranslation();
   const [machine, setMachine] = useState<CodexAuthMachineState>(createInitialMachineState);
   const machineRef = useRef(machine);
+  const triggerOwnedLogin = useOwnedCodexLogin();
 
   const transition = useCallback((event: CodexAuthMachineEvent) => {
     const current = machineRef.current;
@@ -253,8 +324,24 @@ export function useCodexAuth(options?: { enabled?: boolean }) {
     if (!enabled) return undefined;
     const off = window.electronAPI.maker.auth.onLoginProgress((progress) => {
       if (progress.agentKind !== AGENT_KIND) return;
-      if (progress.phase === 'login-pending') {
-        transition({ type: 'login-pending' });
+      if (
+        progress.phase === 'device-code' &&
+        progress.verificationUrl &&
+        progress.userCode
+      ) {
+        transition({
+          type: 'login-pending',
+          mode: 'device-code',
+          deviceCode: {
+            verificationUrl: progress.verificationUrl,
+            userCode: progress.userCode,
+          },
+        });
+      } else if (progress.phase === 'login-pending') {
+        transition({
+          type: 'login-pending',
+          mode: progress.mode === 'device-code' ? 'device-code' : 'browser',
+        });
       } else if (progress.phase === 'login-error') {
         transition({ type: 'login-progress-error', message: progress.detail ?? 'unknown' });
       }
@@ -284,10 +371,12 @@ export function useCodexAuth(options?: { enabled?: boolean }) {
     };
   }, [enabled, transition]);
 
-  const triggerLogin = useCallback(async (): Promise<CodexLoginOutcome> => {
-    transition({ type: 'login-pending' });
+  const triggerLogin = useCallback(async (
+    mode: 'browser' | 'device-code' = 'browser',
+  ): Promise<CodexLoginOutcome> => {
+    transition({ type: 'login-pending', mode });
     try {
-      const result = await triggerCodexLoginOnce();
+      const result = await triggerOwnedLogin(mode);
       transition({ type: 'login-result', result });
       if (result.authenticated) {
         toast.success(t('logic.toasts.codexConnected'));
@@ -299,14 +388,29 @@ export function useCodexAuth(options?: { enabled?: boolean }) {
       transition({ type: 'login-threw', message });
       return message.includes('login_cancelled') ? 'cancelled' : 'failed';
     }
-  }, [t, transition]);
+  }, [t, transition, triggerOwnedLogin]);
 
   const cancelLogin = useCallback(async () => {
-    await window.electronAPI.maker.auth.cancelLogin(AGENT_KIND).catch(() => undefined);
-    transition({ type: 'cancelled' });
+    invalidatePendingCodexLogin();
+    try {
+      await window.electronAPI.maker.auth.cancelLogin(AGENT_KIND);
+      transition({ type: 'cancelled' });
+    } catch (error) {
+      // Cancel may race with a just-persisted OAuth token. If durable cleanup failed,
+      // keep the UI aligned with Main's authoritative state instead of claiming that
+      // the account disconnected.
+      try {
+        const raw = await window.electronAPI.maker.auth.getState(AGENT_KIND);
+        transition({ type: 'refreshed-state', result: raw as CodexLoginResult });
+      } catch {
+        const message = error instanceof Error ? error.message : 'cancel_login_failed';
+        transition({ type: 'login-threw', message });
+      }
+    }
   }, [transition]);
 
   const logout = useCallback(async () => {
+    invalidatePendingCodexLogin();
     try {
       await window.electronAPI.maker.auth.logout(AGENT_KIND);
       transition({ type: 'logout-success' });

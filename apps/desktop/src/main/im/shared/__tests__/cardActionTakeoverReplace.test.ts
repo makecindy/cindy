@@ -32,9 +32,13 @@ const mocks = vi.hoisted(() => ({
   readPermissionMode: vi.fn(async () => 'auto'),
   updatePermissionMode: vi.fn(async () => {}),
   updateModelEffort: vi.fn(async () => {}),
-  getSessionProvider: vi.fn(() => null),
+  getSessionProvider: vi.fn<() => string | null>(() => null),
   setSessionProvider: vi.fn(),
   isSessionInTurn: vi.fn(() => false),
+  cancelPendingAgentSwitchForSession: vi.fn(),
+  withSendToSessionLock: vi.fn(
+    async (_sessionId: string, task: () => Promise<unknown>) => task(),
+  ),
   // 禁止回落 cwd:TEMP 是 Windows 独有变量,macOS 上回落 cwd 会让传递 import 的
   // 写盘副作用落进仓库工作区(见 authAdaptersImportPurity.test.ts 记录的事故)。
   userDataDir: process.env.TMPDIR ?? process.env.TEMP ?? '/tmp',
@@ -79,17 +83,21 @@ vi.mock('../sessionRepo', () => ({
 }));
 vi.mock('../../../maker-host/session-provider-store', () => ({
   getSessionProvider: mocks.getSessionProvider,
+  normalizeSessionProviderId: (providerId: string | null | undefined) =>
+    providerId === undefined ? undefined : providerId?.trim() || null,
   setSessionProvider: mocks.setSessionProvider,
 }));
 vi.mock('../../../maker-ipc/runtimeSetModel', () => ({
   applyRuntimeSetModelChange: mocks.applyRuntimeSetModelChange,
 }));
 vi.mock('../../../maker-ipc/register', () => ({
+  cancelPendingAgentSwitchForSession: mocks.cancelPendingAgentSwitchForSession,
   isSessionInTurn: mocks.isSessionInTurn,
   registerPendingCredentialSwitchForSession: mocks.registerPendingCredentialSwitchForSession,
   clearPendingCredentialSwitchForSession: mocks.clearPendingCredentialSwitchForSession,
   wakeSessionInputAfterCredentialSwitch: mocks.wakeSessionInputAfterCredentialSwitch,
   getPendingCredentialSwitchTarget: mocks.getPendingCredentialSwitchTarget,
+  withSendToSessionLock: mocks.withSendToSessionLock,
 }));
 vi.mock('../pendingInteractions', () => ({
   resolvePending: vi.fn(() => false),
@@ -560,7 +568,7 @@ describe('/permission Full access 确认', () => {
 });
 
 describe('model:pick 持久化失败', () => {
-  async function pressModelPick(im: ChannelIM): Promise<void> {
+  async function pressModelPick(im: ChannelIM, providerId = 'anthropic'): Promise<void> {
     const attach = createCardActionHandler(adapter, cards, turnRunner);
     let handler: ((e: IMCardActionEvent) => Promise<void>) | null = null;
     (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
@@ -577,10 +585,52 @@ describe('model:pick 持久化失败', () => {
         modelId: 'claude-opus-4-7',
         modelLabel: 'Opus 4.7',
         effort: 'high',
-        providerId: 'anthropic',
+        providerId,
       },
     } as unknown as IMCardActionEvent);
   }
+
+  it('在共享 session 锁内提交 DB 与运行态选择', async () => {
+    const lockGate = deferred();
+    mocks.withSendToSessionLock.mockImplementationOnce(async (_sessionId, task) => {
+      await lockGate.promise;
+      return task();
+    });
+    const im = makeIm();
+
+    const pickPromise = pressModelPick(im);
+    await vi.waitFor(() => {
+      expect(mocks.withSendToSessionLock).toHaveBeenCalledWith(
+        'sess-target',
+        expect.any(Function),
+      );
+    });
+    expect(mocks.updateModelEffort).not.toHaveBeenCalled();
+    expect(mocks.applyRuntimeSetModelChange).not.toHaveBeenCalled();
+
+    lockGate.resolve();
+    await pickPromise;
+
+    expect(mocks.updateModelEffort).toHaveBeenCalled();
+    expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalled();
+    expect(mocks.cancelPendingAgentSwitchForSession).toHaveBeenCalledWith('sess-target');
+  });
+
+  it('在持久化和运行态切换前统一归一化 providerId', async () => {
+    const im = makeIm();
+
+    await pressModelPick(im, '  anthropic  ');
+
+    expect(mocks.updateModelEffort).toHaveBeenCalledWith(
+      'sess-target',
+      'claude-opus-4-7',
+      'high',
+      'anthropic',
+    );
+    expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'anthropic' }),
+    );
+  });
 
   it('busy provider 切换注入 pending hooks，并在 deferred 时不 mid-turn 改 effort', async () => {
     const live = {
@@ -653,6 +703,7 @@ describe('model:pick 持久化失败', () => {
       'anthropic',
     );
     expect(mocks.applyRuntimeSetModelChange).not.toHaveBeenCalled();
+    expect(mocks.cancelPendingAgentSwitchForSession).not.toHaveBeenCalled();
     expect(mocks.setSessionProvider).not.toHaveBeenCalled();
     expect(live.setModel).not.toHaveBeenCalled();
     expect(live.setEffort).not.toHaveBeenCalled();
@@ -691,6 +742,7 @@ describe('model:pick 持久化失败', () => {
       'model-card',
       expect.objectContaining({ body: slackUi.cards.model.failed('runtime rejected') }),
     );
+    expect(mocks.cancelPendingAgentSwitchForSession).not.toHaveBeenCalled();
   });
 
   it('live setEffort 失败时恢复 route store 和 live model', async () => {
@@ -736,6 +788,39 @@ describe('model:pick 持久化失败', () => {
       'model-card',
       expect.objectContaining({ body: slackUi.cards.model.failed('effort rejected') }),
     );
+    expect(mocks.cancelPendingAgentSwitchForSession).not.toHaveBeenCalled();
+  });
+
+  it('回滚时保留 DB 快照中明确清空的 provider', async () => {
+    const live = {
+      agentKind: 'claude-code',
+      remoteHostId: null,
+      model: 'claude-sonnet-4-6',
+      setModel: vi.fn(async () => {}),
+      setEffort: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('effort rejected'))
+        .mockResolvedValue(undefined),
+    };
+    (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue(live);
+    mocks.readModelRouteSnapshot.mockResolvedValueOnce({
+      model: 'claude-sonnet-4-6',
+      effort: 'medium',
+      providerId: null,
+    });
+    mocks.getSessionProvider.mockReturnValueOnce('stale-provider');
+    const im = makeIm();
+
+    await pressModelPick(im);
+
+    expect(mocks.updateModelEffort).toHaveBeenNthCalledWith(
+      2,
+      'sess-target',
+      'claude-sonnet-4-6',
+      'medium',
+      null,
+    );
+    expect(mocks.setSessionProvider).toHaveBeenCalledWith('sess-target', null);
   });
 });
 

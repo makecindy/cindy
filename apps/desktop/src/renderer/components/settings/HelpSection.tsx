@@ -21,13 +21,14 @@ export function HelpSection({ onAskHelp }: HelpSectionProps) {
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.help.title')}
-      </h2>
-
-      <p className="text-13 leading-[1.6] text-[var(--settings-section-desc)]">
-        {t('settings.help.description')}
-      </p>
+      <div className="flex flex-col gap-1">
+        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+          {t('settings.help.title')}
+        </h2>
+        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
+          {t('settings.help.description')}
+        </p>
+      </div>
 
       <div className={cardClass}>
         <div className="flex items-start gap-3">

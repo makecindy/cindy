@@ -45,7 +45,11 @@ export type {
   CustomHeaderInvalidReason,
   CustomHeaderValidation,
 } from './header-validation.js';
-export { appendProviderRequestPath, isProviderRequestPath } from './provider-url.js';
+export {
+  appendProviderRequestPath,
+  isLoopbackProviderUrl,
+  isProviderRequestPath,
+} from './provider-url.js';
 export { findReservedOAuthExtraParam } from './provider-oauth.js';
 
 export {
@@ -72,7 +76,14 @@ export {
   modelSupportsFastMode,
   sessionModelSupportsFastMode,
 } from './registry.js';
-export type { ConnectionState, ProviderView, ResolvedRoute } from './registry.js';
+export type {
+  ConnectionState,
+  ModelDiscoveryFailureState,
+  ProviderModelDiscoveryFailure,
+  ProviderModelDiscoveryFailureView,
+  ProviderView,
+  ResolvedRoute,
+} from './registry.js';
 
 export { isModelVisible, buildProviderSections, visibleModelUnion, resolveModelIconKind } from './sections.js';
 export type { SectionModel, ProviderSection, ModelIconKind } from './sections.js';

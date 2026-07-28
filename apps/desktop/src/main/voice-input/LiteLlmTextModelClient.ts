@@ -7,7 +7,7 @@ import type { TextModelClient } from '@cindy/voice-input-core';
 
 import { createLogger } from '../logger.js';
 import { describeErrorWithCause, markRefinerModelOutputError } from './refinerErrorKind.js';
-import { createRefinerHttpDispatcher } from './refinerHttpDispatcher.js';
+import { createRefinerHttpDispatcher, resolveRefinerDispatcher } from './refinerHttpDispatcher.js';
 import { extractJsonStringFieldSnapshot } from './streamingJson.js';
 
 const log = createLogger('voice-input:refine-model:litellm');
@@ -42,7 +42,8 @@ export async function prewarmLiteLlmRefinerEndpoint(baseUrl: string): Promise<vo
     const response = await undiciFetch(target, {
       method: 'HEAD',
       signal: controller.signal,
-      dispatcher: refinerDispatcher,
+      // 预热必须与真实请求同一个池(代理生效时是代理池),否则握手白做。
+      dispatcher: await resolveRefinerDispatcher(target, refinerDispatcher),
     });
     log.debug('litellm refiner endpoint prewarmed', { status: response.status });
     await response.arrayBuffer().catch(() => undefined);
@@ -164,11 +165,14 @@ export class LiteLlmTextModelClient implements TextModelClient {
               url: joinProxyPath(this.baseUrl!, '/v1/chat/completions'),
               authorization: `Bearer ${this.proxyApiKey!}`,
             };
+        // 代理解析放在看门狗起表之前:它是本机一次解析(带 30s 缓存),不该占用
+        // response-headers 的等待预算。
+        const dispatcher = await resolveRefinerDispatcher(target.url, refinerDispatcher);
         armIdleTimeout('response headers');
         return undiciFetch(target.url, {
           method: 'POST',
           signal: controller.signal,
-          dispatcher: refinerDispatcher,
+          dispatcher,
           headers: {
             Authorization: target.authorization,
             'Content-Type': 'application/json',

@@ -41,6 +41,7 @@ export type BrowserActKind =
   | 'resize'
   | 'wait'
   | 'evaluate'
+  | 'saveResource'
   | 'close';
 
 export type BrowserControlTarget = 'sandbox' | 'host' | 'node';
@@ -49,10 +50,27 @@ export type BrowserSnapshotMode = 'efficient';
 export type BrowserSnapshotRefs = 'role' | 'aria';
 export type BrowserImageType = 'png' | 'jpeg';
 
+/**
+ * Backend-neutral element lookup. A query may combine multiple semantic
+ * fields; every populated field must match the same element.
+ */
+export interface BrowserElementQuery {
+  css?: string;
+  role?: string;
+  name?: string;
+  text?: string;
+  label?: string;
+  placeholder?: string;
+  testId?: string;
+  exact?: boolean;
+  index?: number;
+}
+
 export interface BrowserActRequest {
   kind: BrowserActKind;
   targetId?: string;
   ref?: string;
+  query?: BrowserElementQuery;
   doubleClick?: boolean;
   button?: string;
   modifiers?: string[];
@@ -106,6 +124,7 @@ export interface BrowserControlRequest {
   level?: string;
   paths?: string[];
   inputRef?: string;
+  query?: BrowserElementQuery;
   timeoutMs?: number;
   dialogId?: string;
   accept?: boolean;

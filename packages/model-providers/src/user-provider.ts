@@ -20,6 +20,7 @@ import type {
   ProviderRuntimeModelConfig,
   RoutingDescriptor,
 } from './types.js';
+import { isLoopbackProviderUrl } from './provider-url.js';
 
 /** 自定义模型缺省上下文窗口（用户不填元数据时的保守默认，仅用于展示）。 */
 export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
@@ -79,6 +80,11 @@ function toRouting(
   const r: RoutingDescriptor = {
     upstream: baseUrl,
     authStrategy: strategy,
+    ...(strategy === 'none'
+      && (!isLoopbackProviderUrl(baseUrl)
+        || (modelsUrl !== undefined && !isLoopbackProviderUrl(modelsUrl)))
+      ? { disabled: true }
+      : {}),
     ...(requestPath ? { requestPath } : {}),
     ...(wireProtocol && wireProtocol !== defaultWireProtocol(agent) ? { wireProtocol } : {}),
   };

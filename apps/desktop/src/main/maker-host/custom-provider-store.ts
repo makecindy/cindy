@@ -12,7 +12,7 @@
  * （测试用 `setCurrentDbClient` 注入内存 db，见 __tests__）。
  */
 
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 
 import type {
   AgentKind,
@@ -22,6 +22,7 @@ import type {
 } from '@cindy/model-providers';
 import {
   findReservedOAuthExtraParam,
+  isLoopbackProviderUrl,
   isProviderRequestPath,
 } from '@cindy/model-providers';
 
@@ -43,6 +44,23 @@ export type ValidationResult =
 
 function invalid(message: string): ValidationResult {
   return { ok: false, code: 'INVALID_PARAMS', message };
+}
+
+function validateNoAuthLoopbackBoundary(
+  auth: CustomProviderConfig['auth'],
+  runtimes: Partial<Record<AgentKind, CustomProviderRuntimeConfig>>,
+): ValidationResult {
+  if (auth?.method !== 'none') return { ok: true };
+  for (const [agent, runtime] of Object.entries(runtimes)) {
+    if (!runtime) continue;
+    if (!isLoopbackProviderUrl(runtime.baseUrl)) {
+      return invalid(`runtime '${agent}' baseUrl must be loopback when auth method is none`);
+    }
+    if (runtime.modelsUrl !== undefined && !isLoopbackProviderUrl(runtime.modelsUrl)) {
+      return invalid(`runtime '${agent}' modelsUrl must be loopback when auth method is none`);
+    }
+  }
+  return { ok: true };
 }
 
 function validateRuntime(agent: string, rt: unknown): ValidationResult {
@@ -144,6 +162,30 @@ function validateAuthSection(auth: unknown): ValidationResult {
   if (flow !== 'authorization-code' && flow !== 'device-code') {
     return invalid("auth.oauth.flow must be 'authorization-code' | 'device-code'");
   }
+  const allowedFields = new Set(
+    flow === 'device-code'
+      ? [
+          'flow',
+          'tokenUrl',
+          'clientId',
+          'scopes',
+          'modelsDiscoveryUrl',
+          'deviceAuthorizationUrl',
+          'extraDeviceParams',
+        ]
+      : [
+          'flow',
+          'tokenUrl',
+          'clientId',
+          'scopes',
+          'modelsDiscoveryUrl',
+          'authorizeUrl',
+          'redirectPort',
+          'extraAuthParams',
+        ],
+  );
+  const unknownField = Object.keys(o).find((field) => !allowedFields.has(field));
+  if (unknownField) return invalid(`auth.oauth.${unknownField} is not allowed`);
   if (
     flow === 'authorization-code'
     && (o.deviceAuthorizationUrl !== undefined || o.extraDeviceParams !== undefined)
@@ -262,7 +304,10 @@ export function validateCustomProviderConfig(config: unknown): ValidationResult 
     const r = validateRuntime(k, rts[k]);
     if (!r.ok) return r;
   }
-  return { ok: true };
+  return validateNoAuthLoopbackBoundary(
+    c.auth as CustomProviderConfig['auth'],
+    rts as Partial<Record<AgentKind, CustomProviderRuntimeConfig>>,
+  );
 }
 
 /** 规整单个 runtime（trim baseUrl、去重 models、裁 headers）。 */
@@ -429,7 +474,16 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
 
 function rowToConfig(row: typeof customProviders.$inferSelect): CustomProviderConfig {
   const auth = parseAuth(row.auth);
-  return { id: row.id, name: row.name, ...(auth ? { auth } : {}), runtimes: parseRuntimes(row.runtimes) };
+  const runtimes = parseRuntimes(row.runtimes);
+  // #527 之前保存的远程 auth:none 记录保留原始表单数据，供设置页展示和修复。
+  // buildUserProvider 会把不满足当前 loopback 边界的 runtime 标成 disabled；路由解析
+  // 一律拒绝 disabled 描述符，因此不会把历史远程 endpoint 重新解释成 API-key 路由。
+  return {
+    id: row.id,
+    name: row.name,
+    ...(auth ? { auth } : {}),
+    runtimes,
+  };
 }
 
 /** 列出当前账号的全部自定义供应商（按 sortOrder 升序，再按 createdAt）。 */
@@ -497,10 +551,47 @@ export async function updateCustomProvider(
       name: c.name,
       runtimes: JSON.stringify(c.runtimes),
       auth: c.auth ? JSON.stringify(c.auth) : null,
-      updatedAt: now,
+      updatedAt: Math.max(now, existing.updatedAt + 1),
     })
     .where(eq(customProviders.id, id));
   return c;
+}
+
+/**
+ * 仅当配置仍与调用方读取的快照一致时更新。供 OAuth 登录后的异步模型发现使用：
+ * 用户若在网络请求期间编辑了供应商，旧结果不能覆盖新配置。
+ */
+export async function updateCustomProviderIfUnchanged(
+  id: string,
+  expected: CustomProviderConfig,
+  config: CustomProviderConfig,
+  now: number = Date.now(),
+): Promise<boolean> {
+  const expectedConfig = normalizeConfig({ ...expected, id });
+  const nextConfig = normalizeConfig({ ...config, id });
+  const db = getDbClient().drizzle;
+  const existing = await db.select().from(customProviders).where(eq(customProviders.id, id)).get();
+  if (!existing) return false;
+  const expectedRuntimes = JSON.stringify(expectedConfig.runtimes);
+  const expectedAuth = expectedConfig.auth ? JSON.stringify(expectedConfig.auth) : null;
+  if (
+    existing.name !== expectedConfig.name
+    || existing.runtimes !== expectedRuntimes
+    || existing.auth !== expectedAuth
+  ) return false;
+  const result = await db
+    .update(customProviders)
+    .set({
+      name: nextConfig.name,
+      runtimes: JSON.stringify(nextConfig.runtimes),
+      auth: nextConfig.auth ? JSON.stringify(nextConfig.auth) : null,
+      updatedAt: Math.max(now, existing.updatedAt + 1),
+    })
+    .where(and(
+      eq(customProviders.id, id),
+      eq(customProviders.updatedAt, existing.updatedAt),
+    ));
+  return result.changes === 1;
 }
 
 /** 删除（幂等：不存在也不报错）。 */

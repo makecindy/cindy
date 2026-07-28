@@ -24,6 +24,8 @@ interface ControllerEntry {
   /** 友好名(横幅展示用),来自 link-open / subscribe 的 controllerName。 */
   name: string;
   topics: Set<StoredTopic>;
+  /** link-open 声明的 append-only 控制端能力；旧控制端缺省为空集。 */
+  capabilities: Set<string>;
 }
 
 /** 控制本机的控制端信息(被控端可见性状态条用)。 */
@@ -82,7 +84,11 @@ function topicStillHeld(topic: StoredTopic): boolean {
 function getOrCreate(deviceId: string, name?: string): ControllerEntry {
   let e = registry.get(deviceId);
   if (!e) {
-    e = { name: name ?? deviceId.slice(0, 8), topics: new Set() };
+    e = {
+      name: name ?? deviceId.slice(0, 8),
+      topics: new Set(),
+      capabilities: new Set(),
+    };
     registry.set(deviceId, e);
   } else if (name) {
     e.name = name;
@@ -91,14 +97,35 @@ function getOrCreate(deviceId: string, name?: string): ControllerEntry {
 }
 
 /** 订阅:把 topics 并入该控制端(name 可选,subscribe/link-open 携带时更新)。 */
-export function subscribe(deviceId: string, topics: readonly string[], name?: string): void {
-  // Empty/fully-filtered subscribe frames must not create a registry entry:
-  // getSubscribedControllers() treats every entry as update-relaunch busy.
+export function subscribe(
+  deviceId: string,
+  topics: readonly string[],
+  name?: string,
+  capabilities?: readonly string[],
+): void {
+  // Empty/fully-filtered subscribe frames must not create a phantom remote viewer.
   if (topics.length === 0) return;
   const e = getOrCreate(deviceId, name);
+  if (capabilities) {
+    e.capabilities = new Set(capabilities.filter((value) => typeof value === 'string'));
+  }
   for (const t of topics) e.topics.add(t as StoredTopic);
   // 幂等重放也通知(控制端断链重连后 replay subscribe → 消费方按幂等语义恢复 watch)。
   notifySubscribed(topics);
+}
+
+/** 更新已有控制端元数据；不为尚无 topic 的连接创建 phantom registry entry。 */
+export function updateControllerMetadata(
+  deviceId: string,
+  name: string,
+  capabilities?: readonly string[],
+): void {
+  const e = registry.get(deviceId);
+  if (!e) return;
+  e.name = name;
+  if (capabilities) {
+    e.capabilities = new Set(capabilities.filter((value) => typeof value === 'string'));
+  }
 }
 
 /** 取消订阅指定 topics;该控制端 topic 清空后整条移除。空 topics 为 no-op。 */
@@ -138,14 +165,6 @@ export function getControllerIds(): string[] {
   return [...registry.keys()];
 }
 
-/** All subscribed controllers, including lightweight `sessions` viewers. */
-export function getSubscribedControllers(): ActiveController[] {
-  return [...registry].map(([deviceId, entry]) => ({
-    deviceId,
-    name: entry.name,
-  }));
-}
-
 /** 持有该 topic(或 legacy `'*'`)的控制端 deviceId 列表 —— topic-scoped fan-out 依据。 */
 export function getControllersForTopic(topic: Topic): string[] {
   const out: string[] = [];
@@ -155,25 +174,39 @@ export function getControllersForTopic(topic: Topic): string[] {
   return out;
 }
 
+/** 查询 link-open 协商出的控制端能力；未知/已断链控制端一律 false。 */
+export function controllerSupports(deviceId: string, capability: string): boolean {
+  return registry.get(deviceId)?.capabilities.has(capability) === true;
+}
+
 function isControlTopic(t: StoredTopic): boolean {
   return t === LEGACY_TOPIC || t.startsWith('session:');
 }
 
-/**
- * 持有任意 `session:<id>` 或 legacy `'*'` 的控制端 —— 被控横幅展示这些(=活跃控制)。
- * 纯 `sessions`(只看列表)订阅者**不**触发横幅。
- */
-export function getControlControllers(): ActiveController[] {
+function collectControllers(matches: (topic: StoredTopic) => boolean): ActiveController[] {
   const out: ActiveController[] = [];
   for (const [id, e] of registry) {
     for (const t of e.topics) {
-      if (isControlTopic(t)) {
+      if (matches(t)) {
         out.push({ deviceId: id, name: e.name });
         break;
       }
     }
   }
   return out;
+}
+
+/** 持有具体 session 或 legacy `'*'` 的控制端；只用于被控横幅与 `controlledBy`。 */
+export function getControlControllers(): ActiveController[] {
+  return collectControllers(isControlTopic);
+}
+
+/**
+ * 会阻止无人值守更新重启的远程活动。
+ * `fs-watch` 虽不触发被控横幅，但代表有人正在实时浏览文件树，重启仍应延后。
+ */
+export function getUpdateRelaunchControllers(): ActiveController[] {
+  return collectControllers((topic) => isControlTopic(topic) || topic.startsWith('fs-watch:'));
 }
 
 export const __testing = {

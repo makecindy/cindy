@@ -13,6 +13,7 @@
  */
 import { useEffect, useState } from 'react';
 
+import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 
 import { createLogger } from '@/lib/logger';
@@ -33,12 +34,19 @@ function getDeviceLink(): DeviceLinkShape | null {
 }
 
 // 缓存按被控设备隔离;代际同 useAgentCapabilities(evict 时自增,作废在途 fetch 的回写)。
-const cache = new Map<string, ProviderView[]>();
-const inflight = new Map<string, Promise<ProviderView[]>>();
+export interface DeviceProvidersPayload {
+  providers: ProviderView[];
+  /** 被控端「模型显示/隐藏」override 快照；undefined = 旧被控端，不过滤。 */
+  modelVisibilityOverrides?: Record<string, boolean>;
+}
+
+const EMPTY_PAYLOAD: DeviceProvidersPayload = { providers: [] };
+const cache = new Map<string, DeviceProvidersPayload>();
+const inflight = new Map<string, Promise<DeviceProvidersPayload>>();
 const deviceGen = new Map<string, number>();
 export type DeviceProvidersEvent =
   | { status: 'loading' }
-  | { status: 'ready'; providers: ProviderView[] }
+  | ({ status: 'ready' } & DeviceProvidersPayload)
   | { status: 'error'; error: string };
 const listeners = new Map<string, Set<(event: DeviceProvidersEvent) => void>>();
 
@@ -60,7 +68,7 @@ export function subscribeDeviceProviders(
   };
 }
 
-async function fetchDeviceProviders(deviceId: string): Promise<ProviderView[]> {
+async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPayload> {
   const cached = cache.get(deviceId);
   if (cached) return cached;
   const ip = inflight.get(deviceId);
@@ -73,16 +81,23 @@ async function fetchDeviceProviders(deviceId: string): Promise<ProviderView[]> {
   const dl = getDeviceLink();
   if (!dl) throw new Error('device-link IPC not available');
   const p = (
-    dl.invoke(deviceId, 'maker:provider:list', []) as Promise<{ providers: ProviderView[] }>
+    dl.invoke(deviceId, 'maker:provider:list', [{
+      capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+    }]) as Promise<DeviceProvidersPayload>
   )
     .then((res) => {
-      const providers = res?.providers ?? [];
+      const payload: DeviceProvidersPayload = {
+        providers: res?.providers ?? [],
+        ...(res?.modelVisibilityOverrides !== undefined
+          ? { modelVisibilityOverrides: res.modelVisibilityOverrides }
+          : {}),
+      };
       if (isCurrent()) {
-        cache.set(deviceId, providers);
+        cache.set(deviceId, payload);
         inflight.delete(deviceId);
-        notifyDeviceProviders(deviceId, { status: 'ready', providers });
+        notifyDeviceProviders(deviceId, { status: 'ready', ...payload });
       }
-      return providers;
+      return payload;
     })
     .catch((e) => {
       if (isCurrent()) {
@@ -100,21 +115,23 @@ async function fetchDeviceProviders(deviceId: string): Promise<ProviderView[]> {
 
 export interface UseDeviceProvidersResult {
   providers: ProviderView[];
+  /** 被控端「模型显示/隐藏」override 快照；undefined = 旧被控端，不过滤。 */
+  modelVisibilityOverrides?: Record<string, boolean>;
   loading: boolean;
   /** 非 null = 拉取失败(典型:旧版被控端不识别通道);调用方据此回退扁平列表。 */
   error: string | null;
 }
 
 export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult {
-  const [providers, setProviders] = useState<ProviderView[]>(
-    deviceId ? (cache.get(deviceId) ?? []) : [],
+  const [payload, setPayload] = useState<DeviceProvidersPayload>(
+    deviceId ? (cache.get(deviceId) ?? EMPTY_PAYLOAD) : EMPTY_PAYLOAD,
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!deviceId) {
-      setProviders([]);
+      setPayload(EMPTY_PAYLOAD);
       setError(null);
       return;
     }
@@ -132,19 +149,24 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
         setError(event.error);
         return;
       }
-      setProviders(event.providers);
+      setPayload({
+        providers: event.providers,
+        ...(event.modelVisibilityOverrides !== undefined
+          ? { modelVisibilityOverrides: event.modelVisibilityOverrides }
+          : {}),
+      });
       setError(null);
       setLoading(false);
     });
     const cached = cache.get(deviceId);
     if (cached) {
-      setProviders(cached);
+      setPayload(cached);
       setError(null);
       setLoading(false);
       return unsubscribe;
     }
     // cache miss:先清空,避免 fetch 解析前(失败则永远)残留上一设备的供应商。
-    setProviders([]);
+    setPayload(EMPTY_PAYLOAD);
     setLoading(true);
     setError(null);
     const remoteGeneration = deviceGen.get(deviceId) ?? 0;
@@ -164,7 +186,14 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
     };
   }, [deviceId]);
 
-  return { providers, loading, error };
+  return {
+    providers: payload.providers,
+    ...(payload.modelVisibilityOverrides !== undefined
+      ? { modelVisibilityOverrides: payload.modelVisibilityOverrides }
+      : {}),
+    loading,
+    error,
+  };
 }
 
 /** device-link:订阅某被控设备时预取其供应商目录(与 prefetchDeviceCapabilities 并列调用)。 */
@@ -181,7 +210,7 @@ export async function prefetchDeviceProviders(deviceId: string): Promise<void> {
 }
 
 /** device-link:被控设备下线 / 断链时驱逐其供应商缓存(只清该设备的 key + 代际自增)。 */
-export function getCachedDeviceProviders(deviceId: string): ProviderView[] | null {
+export function getCachedDeviceProviders(deviceId: string): DeviceProvidersPayload | null {
   return cache.get(deviceId) ?? null;
 }
 

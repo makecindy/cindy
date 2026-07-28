@@ -3,7 +3,13 @@
 //  - tabs reads from TabRegistry + safeTabMeta on each WebContents
 //  - open / focus / close round-trip through dispatchTabOp (renderer bridge)
 //  - navigate / screenshot / pdf go straight to the guest WebContents
-//  - unsupported actions yield a structured error (no throw)
+//  - snapshot / non-evaluate act actions use the bounded CDP automation helper
+//  - advanced unsupported actions yield a structured error (no throw)
+
+import fs from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WebContents } from 'electron';
@@ -396,13 +402,35 @@ describe('RsbWebviewBackend — direct WebContents actions', () => {
 
 describe('RsbWebviewBackend — act:evaluate', () => {
   function buildEvalEnv(initialReturn: unknown) {
+    let attached = false;
+    const sendCommand = vi.fn(async (
+      method: string,
+      params?: Record<string, unknown>,
+    ): Promise<unknown> => {
+      void params;
+      if (method === 'Runtime.evaluate' || method === 'Runtime.callFunctionOn') {
+        return { result: { value: initialReturn } };
+      }
+      return {};
+    });
     const wc = {
       getURL: () => '',
       getTitle: () => '',
       isDestroyed: () => false,
       executeJavaScript: vi.fn(async () => initialReturn),
+      debugger: {
+        isAttached: vi.fn(() => attached),
+        attach: vi.fn(() => {
+          attached = true;
+        }),
+        detach: vi.fn(() => {
+          attached = false;
+        }),
+        sendCommand,
+      },
     } as unknown as Electron.WebContents & {
       executeJavaScript: ReturnType<typeof vi.fn>;
+      debugger: { sendCommand: ReturnType<typeof vi.fn> };
     };
     const registry = fakeRegistry(
       [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
@@ -414,11 +442,11 @@ describe('RsbWebviewBackend — act:evaluate', () => {
       bridge: { getHostWebContents: () => null, logger: logger() },
       logger: logger(),
     });
-    return { backend, wc };
+    return { backend, wc, sendCommand };
   }
 
   it('runs the fn in the guest and returns its result + as variable name', async () => {
-    const { backend, wc } = buildEvalEnv({ posts: [1, 2, 3] });
+    const { backend, sendCommand } = buildEvalEnv({ posts: [1, 2, 3] });
     const res = await backend.call({
       action: 'act',
       targetId: 't1',
@@ -431,11 +459,11 @@ describe('RsbWebviewBackend — act:evaluate', () => {
     // The wrapper mirrors the vendored runtime's evaluator: eval("(" + JSON.stringified-fn + ")")
     // → call it → wrap in Promise.resolve. The injected fn text is a JS string
     // LITERAL, so multi-statement payloads can't escape the IIFE.
-    expect(wc.executeJavaScript).toHaveBeenCalledTimes(1);
-    const callArg = (wc.executeJavaScript as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(sendCommand).toHaveBeenCalledWith('Runtime.evaluate', expect.anything());
+    const callArg = sendCommand.mock.calls.find(([method]) => method === 'Runtime.evaluate')?.[1]
+      ?.expression as string;
     expect(callArg).toContain('eval("(" + "() => ({ posts: [1, 2, 3] })" + ")")');
-    expect(callArg).toContain('did not produce a function');
-    expect((wc.executeJavaScript as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBe(false);
+    expect(callArg).toContain('evaluate source did not produce a function');
     expect(res.ok).toBe(true);
     expect(res.data).toMatchObject({
       tabId: 't1',
@@ -446,7 +474,7 @@ describe('RsbWebviewBackend — act:evaluate', () => {
   });
 
   it('escapes embedded quotes/backslashes in fn so multi-stmt payload cannot escape IIFE', async () => {
-    const { backend, wc } = buildEvalEnv(null);
+    const { backend, sendCommand } = buildEvalEnv(null);
     // Adversarial payload: try to close the string + run a second statement.
     const adversarial = '() => {}; window.__pwned = 1; (() => null';
     await backend.call({
@@ -454,7 +482,8 @@ describe('RsbWebviewBackend — act:evaluate', () => {
       targetId: 't1',
       request: { kind: 'evaluate', fn: adversarial },
     } as never);
-    const callArg = (wc.executeJavaScript as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    const callArg = sendCommand.mock.calls.find(([method]) => method === 'Runtime.evaluate')?.[1]
+      ?.expression as string;
     // The whole payload is a JSON.stringified literal — `"` inside got escaped,
     // and the literal sits inside `eval("(" + LITERAL + ")")` so any "statement
     // separator" the attacker tries (a quote + `;`) stays inside the literal.
@@ -464,22 +493,43 @@ describe('RsbWebviewBackend — act:evaluate', () => {
     expect(callArg.indexOf('window.__pwned')).toBeGreaterThan(callArg.indexOf(JSON.stringify(adversarial).slice(0, 10)));
   });
 
-  it('non-evaluate act kinds are rejected with a Phase 4 message', async () => {
-    const { backend } = buildEvalEnv(null);
+  it('non-evaluate act kinds route to the CDP automation helper', async () => {
+    const { backend, wc } = buildEvalEnv(null);
+    wc.executeJavaScript.mockResolvedValue({ ok: true });
+    const sendCommand = vi.fn(async () => {
+      return {};
+    });
+    Object.assign(wc, {
+      debugger: {
+        isAttached: vi.fn(() => true),
+        attach: vi.fn(),
+        detach: vi.fn(),
+        sendCommand,
+        on: vi.fn(),
+        removeListener: vi.fn(),
+      },
+    });
     const res = await backend.call({
       action: 'act',
       targetId: 't1',
-      request: { kind: 'click', ref: 'r-1' },
+      request: { kind: 'clickCoords', x: 10, y: 20 },
     } as never);
-    expect(res.ok).toBe(false);
-    expect(res.message).toMatch(/click not yet supported/);
+    expect(res.ok).toBe(true);
+    expect(sendCommand).not.toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.anything(),
+    );
+    expect(wc.executeJavaScript).toHaveBeenCalledTimes(2);
+    expect(wc.executeJavaScript.mock.calls[0][0]).toContain(
+      '"method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":10,"y":20',
+    );
   });
 
   it('executeJavaScript throw propagates as actionFailed', async () => {
-    const { backend, wc } = buildEvalEnv(null);
-    (wc.executeJavaScript as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error('SyntaxError'),
-    );
+    const { backend, sendCommand } = buildEvalEnv(null);
+    sendCommand.mockResolvedValueOnce({
+      exceptionDetails: { exception: { description: 'SyntaxError' } },
+    } as never);
     const res = await backend.call({
       action: 'act',
       targetId: 't1',
@@ -487,6 +537,70 @@ describe('RsbWebviewBackend — act:evaluate', () => {
     } as never);
     expect(res.ok).toBe(false);
     expect(res.message).toBe('SyntaxError');
+  });
+});
+
+describe('RsbWebviewBackend — snapshot automation', () => {
+  it('returns refs from the active tab and pins for the complete CDP action', async () => {
+    const wc = fakeWc();
+    let attached = false;
+    Object.assign(wc, {
+      debugger: {
+        isAttached: vi.fn(() => attached),
+        attach: vi.fn(() => {
+          attached = true;
+        }),
+        detach: vi.fn(() => {
+          attached = false;
+        }),
+        sendCommand: vi.fn(async (method: string) => {
+          if (method === 'Accessibility.enable') return {};
+          if (method === 'Accessibility.getFullAXTree') {
+            return {
+              nodes: [
+                {
+                  nodeId: 'button',
+                  role: { value: 'button' },
+                  name: { value: 'Continue' },
+                  backendDOMNodeId: 7,
+                  childIds: [],
+                },
+              ],
+            };
+          }
+          throw new Error(`unexpected command: ${method}`);
+        }),
+      },
+    });
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+    });
+
+    const res = await backend.call({
+      action: 'snapshot',
+      targetId: 't1',
+      interactive: true,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.data).toMatchObject({
+      targetId: 't1',
+      snapshot: '- button "Continue" [ref=e1]',
+      refs: {
+        e1: { role: 'button', name: 'Continue', backendDOMNodeId: 7 },
+      },
+    });
+    expect(registry.pinHistory).toEqual([
+      { op: 'pin', tabId: 't1' },
+      { op: 'unpin', tabId: 't1' },
+    ]);
   });
 });
 
@@ -625,6 +739,51 @@ describe('RsbWebviewBackend — per-action automation pin', () => {
     ]);
   });
 
+  it.each([
+    { label: 'request timeout', timeoutMs: 25, elapsedMs: 25 },
+    { label: 'bounded default', timeoutMs: undefined, elapsedMs: 60_000 },
+  ])(
+    'navigate uses the $label, stops a stalled load, and lets dispose finish',
+    async ({ timeoutMs, elapsedMs }) => {
+      vi.useFakeTimers();
+      let finishLoad = () => {};
+      const wc = fakeWc();
+      wc.loadURLMock.mockImplementationOnce(
+        () => new Promise<void>((resolve) => {
+          finishLoad = resolve;
+        }),
+      );
+      const stop = vi.fn();
+      Object.assign(wc, { stop });
+      const { backend, registry } = buildBackend(wc);
+
+      try {
+        const navigating = backend.call({
+          action: 'navigate',
+          targetId: 't1',
+          url: 'https://stalled.test',
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        } as never);
+        const disposing = backend.dispose();
+
+        await vi.advanceTimersByTimeAsync(elapsedMs);
+        const result = await navigating;
+        await disposing;
+
+        expect(result.ok).toBe(false);
+        expect(result.message).toBe(`navigation timed out after ${elapsedMs}ms`);
+        expect(stop).toHaveBeenCalledTimes(1);
+        expect(registry.pinHistory).toEqual([
+          { op: 'pin', tabId: 't1' },
+          { op: 'unpin', tabId: 't1' },
+        ]);
+      } finally {
+        finishLoad();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it('unpins even when wc operation throws (action failure path)', async () => {
     const wc = {
       getURL: () => '',
@@ -669,6 +828,27 @@ describe('RsbWebviewBackend — per-action automation pin', () => {
       expect(registry.pinHistory[i]).toEqual({ op: 'pin', tabId: 't1' });
       expect(registry.pinHistory[i + 1]).toEqual({ op: 'unpin', tabId: 't1' });
     }
+  });
+
+  it('rejects conflicting top-level and nested act targets', async () => {
+    const wc = fakeWc();
+    const { backend, registry } = buildBackend(wc);
+
+    const result = await backend.call({
+      action: 'act',
+      targetId: 't1',
+      request: {
+        kind: 'click',
+        targetId: 't2',
+        selector: '#submit',
+      },
+    } as never);
+
+    expect(result).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('targetId mismatch'),
+    });
+    expect(registry.pinHistory).toEqual([]);
   });
 
   it('non-tab-scoped actions (tabs / status / profiles / doctor) do not touch pin', async () => {
@@ -790,6 +970,37 @@ describe('RsbWebviewBackend — MCP session id injection', () => {
     });
   });
 
+  it('targetless direct actions select a tab from the MCP-injected session', async () => {
+    const agentWc = fakeWc();
+    const uiWc = fakeWc();
+    const registry = fakeRegistry(
+      [
+        { sessionId: 'agent-A', tabId: 'agent-tab', webContentsId: 101 },
+        { sessionId: 'ui-focus-B', tabId: 'ui-tab', webContentsId: 102 },
+      ],
+      new Map([
+        ['agent-tab', agentWc],
+        ['ui-tab', uiWc],
+      ]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 'ui-focus-B',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+    });
+
+    const res = await backend.call({
+      action: 'navigate',
+      url: 'https://agent.example',
+      __mcpSessionId: 'agent-A',
+    } as never);
+
+    expect(res.ok).toBe(true);
+    expect(agentWc.loadURLMock).toHaveBeenCalledWith('https://agent.example');
+    expect(uiWc.loadURLMock).not.toHaveBeenCalled();
+  });
+
   it('empty / non-string __mcpSessionId falls back to getActiveSessionId', async () => {
     const wc = fakeWc();
     const registry = fakeRegistry(
@@ -823,15 +1034,720 @@ describe('RsbWebviewBackend — MCP session id injection', () => {
   });
 });
 
+describe('RsbWebviewBackend — uploads and page dialogs', () => {
+  function buildPageEnv(options?: {
+    uploadRoot?: string;
+    resourceUrl?: string;
+    humanVerification?: boolean;
+    onDialogHandled?: () => void;
+    pageEnableError?: Error;
+  }) {
+    let attached = false;
+    const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    const sessionListeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    const sendCommand = vi.fn(async (method: string) => {
+      if (method === 'Network.enable') return {};
+      if (method === 'Page.enable') {
+        if (options?.pageEnableError) throw options.pageEnableError;
+        return {};
+      }
+      if (method === 'Accessibility.enable') return {};
+      if (method === 'Accessibility.getFullAXTree') return { nodes: [] };
+      if (method === 'Runtime.evaluate') {
+        if (options?.humanVerification) {
+          return {
+            result: {
+              value: {
+                resources: [],
+                barrier: {
+                  kind: 'human-verification',
+                  evidence: ['page contains a verification control'],
+                },
+              },
+            },
+          };
+        }
+        return options?.resourceUrl
+          ? {
+              result: {
+                value: {
+                  resources: [{ kind: 'download', url: options.resourceUrl }],
+                },
+              },
+            }
+          : { result: { objectId: 'file-input' } };
+      }
+      if (method === 'DOM.describeNode') return { node: { backendNodeId: 11 } };
+      if (method === 'Runtime.callFunctionOn') {
+        return { result: { value: { ok: true, multiple: true } } };
+      }
+      if (method === 'DOM.setFileInputFiles') return {};
+      if (method === 'Page.handleJavaScriptDialog') {
+        options?.onDialogHandled?.();
+        return {};
+      }
+      throw new Error(`unexpected command: ${method}`);
+    });
+    const wc = fakeWc();
+    const session = {
+      on: (event: string, listener: (...args: unknown[]) => void) => {
+        const group = sessionListeners.get(event) ?? new Set();
+        group.add(listener);
+        sessionListeners.set(event, group);
+      },
+      removeListener: (event: string, listener: (...args: unknown[]) => void) => {
+        sessionListeners.get(event)?.delete(listener);
+      },
+    };
+    const downloadURL = vi.fn((url: string) => {
+      let doneListener: ((...args: unknown[]) => void) | undefined;
+      const item = {
+        getFilename: () => 'page-resource.bin',
+        getURL: () => url,
+        getMimeType: () => 'application/octet-stream',
+        getTotalBytes: () => 4,
+        getReceivedBytes: () => 4,
+        setSavePath: (filePath: string) => writeFileSync(filePath, 'data'),
+        cancel: vi.fn(),
+        on: vi.fn(),
+        once: (event: string, listener: (...args: unknown[]) => void) => {
+          if (event === 'done') doneListener = listener;
+        },
+      };
+      for (const listener of sessionListeners.get('will-download') ?? []) {
+        listener({}, item, wc);
+      }
+      setTimeout(() => doneListener?.({}, 'completed'), 0);
+    });
+    Object.assign(wc, {
+      once: vi.fn(),
+      session,
+      downloadURL,
+      debugger: {
+        isAttached: () => attached,
+        attach: vi.fn(() => {
+          attached = true;
+        }),
+        detach: vi.fn(() => {
+          attached = false;
+        }),
+        sendCommand,
+        on: (event: string, listener: (...args: unknown[]) => void) => {
+          const group = listeners.get(event) ?? new Set();
+          group.add(listener);
+          listeners.set(event, group);
+        },
+        removeListener: (event: string, listener: (...args: unknown[]) => void) => {
+          listeners.get(event)?.delete(listener);
+        },
+      },
+    });
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backendLogger = logger();
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      artifactRoot: options?.uploadRoot ? () => options.uploadRoot! : undefined,
+      resolveUploadRoots: options?.uploadRoot
+        ? async () => [options.uploadRoot!]
+        : undefined,
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: backendLogger,
+    });
+    const emit = (method: string, params: Record<string, unknown>) => {
+      for (const listener of listeners.get('message') ?? []) {
+        listener({}, method, params);
+      }
+    };
+    return { backend, emit, sendCommand, downloadURL, wc, backendLogger, registry };
+  }
+
+  it('validates upload paths before assigning files to the page input', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-browser-backend-upload-'));
+    try {
+      const file = path.join(root, 'notes.txt');
+      await fs.writeFile(file, 'notes');
+      const env = buildPageEnv({ uploadRoot: root });
+
+      const res = await env.backend.call({
+        action: 'upload',
+        targetId: 't1',
+        paths: [file],
+        query: { label: 'Attachments' },
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.data).toMatchObject({ tabId: 't1', uploadedFiles: 1 });
+      expect(env.sendCommand).toHaveBeenCalledWith('DOM.setFileInputFiles', {
+        files: [await fs.realpath(file)],
+        objectId: 'file-input',
+      });
+      await env.backend.dispose();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a dialog barrier from snapshot and handles the exact pending dialog', async () => {
+    const env = buildPageEnv();
+    await env.backend.call({ action: 'snapshot', targetId: 't1' });
+    env.emit('Page.javascriptDialogOpening', {
+      type: 'confirm',
+      message: 'Delete this item?',
+    });
+
+    const snapshot = await env.backend.call({ action: 'snapshot', targetId: 't1' });
+    expect(snapshot.ok).toBe(true);
+    expect(snapshot.data).toMatchObject({
+      targetId: 't1',
+      barrier: {
+        kind: 'page-dialog',
+        dialog: { type: 'confirm', message: 'Delete this item?' },
+      },
+    });
+    const dialogId = (snapshot.data as {
+      barrier: { dialog: { id: string } };
+    }).barrier.dialog.id;
+
+    const handled = await env.backend.call({
+      action: 'dialog',
+      targetId: 't1',
+      dialogId,
+      accept: false,
+    });
+    expect(handled.ok).toBe(true);
+    expect(env.sendCommand).toHaveBeenCalledWith(
+      'Page.handleJavaScriptDialog',
+      { accept: false },
+    );
+    await env.backend.dispose();
+  });
+
+  it('returns a dialog barrier when a page action is blocked by the dialog', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-browser-dialog-action-'));
+    let finishAction = () => {};
+    const env = buildPageEnv({
+      uploadRoot: root,
+      onDialogHandled: () => finishAction(),
+    });
+    const automation = (env.backend as unknown as {
+      automation: {
+        act: (
+          tabId: string,
+          wc: WebContents,
+          request: Record<string, unknown>,
+        ) => Promise<Record<string, unknown>>;
+      };
+    }).automation;
+    const actionFinished = vi.fn();
+    const actSpy = vi.spyOn(automation, 'act').mockImplementation(
+      () => new Promise((resolve) => {
+        finishAction = () => {
+          actionFinished();
+          resolve({ tabId: 't1', kind: 'click' });
+        };
+      }),
+    );
+
+    try {
+      const action = env.backend.call({
+        action: 'act',
+        targetId: 't1',
+        request: { kind: 'click', targetId: 't1', ref: 'button-1' },
+      });
+      await vi.waitFor(() => expect(actSpy).toHaveBeenCalledTimes(1));
+      env.emit('Page.javascriptDialogOpening', {
+        type: 'confirm',
+        message: 'Continue?',
+      });
+
+      const blocked = await action;
+      expect(blocked.ok).toBe(true);
+      expect(blocked.data).toMatchObject({
+        tabId: 't1',
+        kind: 'click',
+        barrier: {
+          kind: 'page-dialog',
+          dialog: { type: 'confirm', message: 'Continue?' },
+        },
+      });
+      const dialogId = (blocked.data as {
+        barrier: { dialog: { id: string } };
+      }).barrier.dialog.id;
+
+      const handled = await env.backend.call({
+        action: 'dialog',
+        targetId: 't1',
+        dialogId,
+        accept: true,
+      });
+      expect(handled.ok).toBe(true);
+      await vi.waitFor(() => expect(actionFinished).toHaveBeenCalledTimes(1));
+    } finally {
+      await env.backend.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks direct actions after a human-verification snapshot barrier', async () => {
+    const env = buildPageEnv({ humanVerification: true });
+    const snapshot = await env.backend.call({ action: 'snapshot', targetId: 't1' });
+    expect(snapshot.data).toMatchObject({
+      barrier: { kind: 'human-verification' },
+    });
+
+    const action = await env.backend.call({
+      action: 'act',
+      targetId: 't1',
+      request: { kind: 'clickCoords', x: 10, y: 10 },
+    });
+    expect(action.data).toMatchObject({
+      barrier: { kind: 'human-verification' },
+    });
+    expect(env.sendCommand).not.toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.anything(),
+    );
+    await env.backend.dispose();
+  });
+
+  it('continues a page action when dialog observation is unavailable', async () => {
+    const env = buildPageEnv({
+      pageEnableError: new Error('another debugger client owns the page'),
+    });
+    const automation = (env.backend as unknown as {
+      automation: {
+        act: (
+          tabId: string,
+          wc: WebContents,
+          request: Record<string, unknown>,
+        ) => Promise<Record<string, unknown>>;
+      };
+    }).automation;
+    vi.spyOn(automation, 'act').mockResolvedValue({
+      tabId: 't1',
+      kind: 'click',
+    });
+
+    try {
+      const result = await env.backend.call({
+        action: 'act',
+        targetId: 't1',
+        request: { kind: 'click', targetId: 't1', ref: 'button-1' },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.data).toMatchObject({ tabId: 't1', kind: 'click' });
+      expect(env.backendLogger.warn).toHaveBeenCalledWith(
+        'RSB page dialog observation unavailable',
+        expect.objectContaining({ tabId: 't1' }),
+      );
+    } finally {
+      await env.backend.dispose();
+    }
+  });
+
+  it('keeps the host interactive after an auto-closed dialog and arms a retry', async () => {
+    const env = buildPageEnv();
+    const automation = (env.backend as unknown as {
+      automation: {
+        act: (
+          tabId: string,
+          wc: WebContents,
+          request: Record<string, unknown>,
+        ) => Promise<Record<string, unknown>>;
+      };
+    }).automation;
+    let releaseAction = () => {};
+    const actSpy = vi.spyOn(automation, 'act').mockImplementation(
+      () => {
+        env.emit('Page.javascriptDialogOpening', {
+          type: 'confirm',
+          message: 'Continue?',
+        });
+        env.emit('Page.javascriptDialogClosed', {
+          result: false,
+          userInput: '',
+        });
+        return new Promise((resolve) => {
+          releaseAction = () => resolve({ tabId: 't1', kind: 'click' });
+        });
+      },
+    );
+
+    try {
+      const action = env.backend.call({
+        action: 'act',
+        targetId: 't1',
+        request: { kind: 'click', targetId: 't1', ref: 'button-1' },
+      });
+      await vi.waitFor(() => expect(actSpy).toHaveBeenCalledTimes(1));
+      const blocked = await action;
+      expect(blocked.data).toMatchObject({
+        barrier: {
+          kind: 'page-dialog',
+          dialog: { type: 'confirm', message: 'Continue?' },
+        },
+      });
+      expect(env.registry.pinHistory).toEqual([{ op: 'pin', tabId: 't1' }]);
+      const dialogId = (blocked.data as {
+        barrier: { dialog: { id: string } };
+      }).barrier.dialog.id;
+
+      const armed = await env.backend.call({
+        action: 'dialog',
+        targetId: 't1',
+        dialogId,
+        accept: true,
+      });
+      expect(armed.data).toMatchObject({
+        tabId: 't1',
+        armed: true,
+        retryRequired: true,
+      });
+      releaseAction();
+      await vi.waitFor(() => {
+        expect(env.registry.pinHistory).toEqual([
+          { op: 'pin', tabId: 't1' },
+          { op: 'pin', tabId: 't1' },
+          { op: 'unpin', tabId: 't1' },
+          { op: 'unpin', tabId: 't1' },
+        ]);
+      });
+    } finally {
+      releaseAction();
+      await env.backend.dispose();
+    }
+  });
+
+  it('prepares the next confirmation when no previous dialog record remains', async () => {
+    const env = buildPageEnv();
+    await env.backend.call({ action: 'snapshot', targetId: 't1' });
+
+    const dialogs = (env.backend as unknown as {
+      dialogs: {
+        respond: (...args: unknown[]) => Promise<never>;
+      };
+    }).dialogs;
+    vi.spyOn(dialogs, 'respond').mockRejectedValueOnce(
+      new Error('no page dialog is pending'),
+    );
+
+    try {
+      const armed = await env.backend.call({
+        action: 'dialog',
+        targetId: 't1',
+        accept: true,
+      });
+      expect(armed.ok).toBe(true);
+      expect(armed.data).toMatchObject({
+        tabId: 't1',
+        armed: true,
+        retryRequired: true,
+      });
+
+      env.emit('Page.javascriptDialogOpening', {
+        type: 'confirm',
+        message: 'Continue?',
+      });
+      await vi.waitFor(() => {
+        expect(env.sendCommand).toHaveBeenCalledWith(
+          'Page.handleJavaScriptDialog',
+          { accept: true },
+        );
+      });
+    } finally {
+      await env.backend.dispose();
+    }
+  });
+
+  it.each([
+    {
+      dialogType: 'alert',
+      expected: {
+        dialogs: [{
+          type: 'alert',
+          message: 'Notice',
+          closedBy: 'auto',
+          handled: true,
+        }],
+      },
+    },
+    {
+      dialogType: 'confirm',
+      expected: {
+        barrier: {
+          kind: 'page-dialog',
+          dialog: {
+            type: 'confirm',
+            message: 'Notice',
+            closedBy: 'auto',
+          },
+        },
+      },
+    },
+  ])(
+    'classifies an auto-closed $dialogType even when the action finishes immediately',
+    async ({ dialogType, expected }) => {
+      const env = buildPageEnv();
+      const automation = (env.backend as unknown as {
+        automation: {
+          act: (
+            tabId: string,
+            wc: WebContents,
+            request: Record<string, unknown>,
+          ) => Promise<Record<string, unknown>>;
+        };
+      }).automation;
+      vi.spyOn(automation, 'act').mockImplementation(async () => {
+        env.emit('Page.javascriptDialogOpening', {
+          type: dialogType,
+          message: 'Notice',
+        });
+        env.emit('Page.javascriptDialogClosed', {
+          result: false,
+          userInput: '',
+        });
+        return { tabId: 't1', kind: 'click' };
+      });
+
+      try {
+        const result = await env.backend.call({
+          action: 'act',
+          targetId: 't1',
+          request: { kind: 'click', targetId: 't1', ref: 'button-1' },
+        });
+        expect(result.ok).toBe(true);
+        expect(result.data).toMatchObject(expected);
+      } finally {
+        await env.backend.dispose();
+      }
+    },
+  );
+
+  it('saves only a resource listed by the latest page snapshot', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-browser-resource-'));
+    try {
+      const resourceUrl = 'https://cdn.example.test/archive.bin';
+      const env = buildPageEnv({ uploadRoot: root, resourceUrl });
+      const snapshot = await env.backend.call({
+        action: 'snapshot',
+        targetId: 't1',
+        urls: true,
+      });
+      expect(snapshot.data).toMatchObject({
+        resources: [{ kind: 'download', url: resourceUrl }],
+      });
+
+      const saved = await env.backend.call({
+        action: 'act',
+        targetId: 't1',
+        request: { kind: 'saveResource', url: resourceUrl, timeoutMs: 1000 },
+      });
+
+      expect(saved.ok).toBe(true);
+      expect(saved.data).toMatchObject({
+        kind: 'saveResource',
+        downloads: [
+          {
+            fileName: 'page-resource.bin',
+            state: 'completed',
+          },
+        ],
+      });
+      expect(env.downloadURL).toHaveBeenCalledWith(resourceUrl);
+      const artifactPath = (saved.data as {
+        downloads: Array<{ path: string }>;
+      }).downloads[0].path;
+      await expect(fs.readFile(artifactPath, 'utf8')).resolves.toBe('data');
+      await env.backend.dispose();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('captures downloads triggered by submit-enabled typing', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-browser-submit-download-'));
+    try {
+      const env = buildPageEnv({ uploadRoot: root });
+      const automation = (env.backend as unknown as {
+        automation: {
+          act: (
+            tabId: string,
+            wc: WebContents,
+            request: Record<string, unknown>,
+          ) => Promise<Record<string, unknown>>;
+        };
+      }).automation;
+      vi.spyOn(automation, 'act').mockImplementation(async () => {
+        env.downloadURL('https://example.test/submit-download');
+        return { tabId: 't1', kind: 'type', textLength: 1 };
+      });
+
+      const result = await env.backend.call({
+        action: 'act',
+        targetId: 't1',
+        request: {
+          kind: 'type',
+          targetId: 't1',
+          ref: 'input-1',
+          text: 'x',
+          submit: true,
+        },
+      } as never);
+
+      expect(result.ok).toBe(true);
+      expect(result.data).toMatchObject({
+        kind: 'type',
+        downloads: [{ state: 'completed' }],
+      });
+      await env.backend.dispose();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('RsbWebviewBackend — network actions', () => {
+  function buildNetworkEnv() {
+    let attached = false;
+    const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    const sendCommand = vi.fn(async (method: string) => {
+      if (method === 'Network.enable') return {};
+      if (method === 'Network.getResponseBody') {
+        return { body: '{"items":[1,2,3]}', base64Encoded: false };
+      }
+      throw new Error(`unexpected command: ${method}`);
+    });
+    const wc = fakeWc();
+    Object.assign(wc, {
+      once: vi.fn(),
+      debugger: {
+        isAttached: () => attached,
+        attach: vi.fn(() => {
+          attached = true;
+        }),
+        detach: vi.fn(() => {
+          attached = false;
+        }),
+        sendCommand,
+        on: (event: string, listener: (...args: unknown[]) => void) => {
+          const group = listeners.get(event) ?? new Set();
+          group.add(listener);
+          listeners.set(event, group);
+        },
+        removeListener: (event: string, listener: (...args: unknown[]) => void) => {
+          listeners.get(event)?.delete(listener);
+        },
+      },
+    });
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+    });
+    const emitNetwork = (method: string, params: Record<string, unknown>) => {
+      for (const listener of listeners.get('message') ?? []) {
+        listener({}, method, params);
+      }
+    };
+    return { backend, emitNetwork, sendCommand };
+  }
+
+  it('dispatches request history through the selected tab', async () => {
+    const env = buildNetworkEnv();
+    await env.backend.call({ action: 'requests', targetId: 't1' } as never);
+    env.emitNetwork('Network.requestWillBeSent', {
+      requestId: 'r1',
+      type: 'Fetch',
+      request: { method: 'GET', url: 'https://example.test/api/items' },
+    });
+    env.emitNetwork('Network.responseReceived', {
+      requestId: 'r1',
+      response: { url: 'https://example.test/api/items', status: 200 },
+    });
+    env.emitNetwork('Network.loadingFinished', { requestId: 'r1' });
+
+    const res = await env.backend.call({
+      action: 'requests',
+      targetId: 't1',
+      filter: '/api/',
+    } as never);
+
+    expect(res.ok).toBe(true);
+    expect(res.data).toMatchObject({
+      tabId: 't1',
+      requests: [
+        {
+          id: 'r1',
+          method: 'GET',
+          url: 'https://example.test/api/items',
+          status: 200,
+          ok: true,
+        },
+      ],
+    });
+  });
+
+  it('returns the body of the next completed matching response', async () => {
+    const env = buildNetworkEnv();
+    await env.backend.call({ action: 'requests', targetId: 't1' } as never);
+    const pending = env.backend.call({
+      action: 'responseBody',
+      targetId: 't1',
+      url: '/api/items',
+      maxChars: 8,
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    env.emitNetwork('Network.requestWillBeSent', {
+      requestId: 'r2',
+      type: 'XHR',
+      request: { method: 'GET', url: 'https://example.test/api/items' },
+    });
+    env.emitNetwork('Network.responseReceived', {
+      requestId: 'r2',
+      response: {
+        url: 'https://example.test/api/items',
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      },
+    });
+    env.emitNetwork('Network.loadingFinished', { requestId: 'r2' });
+
+    const res = await pending;
+
+    expect(res.ok).toBe(true);
+    expect(res.data).toMatchObject({
+      tabId: 't1',
+      response: {
+        url: 'https://example.test/api/items',
+        body: '{"items"',
+        truncated: true,
+      },
+    });
+    expect(env.sendCommand).toHaveBeenCalledWith('Network.getResponseBody', {
+      requestId: 'r2',
+    });
+  });
+});
+
 describe('RsbWebviewBackend — unsupported actions', () => {
-  it('snapshot returns BROWSER_RUNTIME_ACTION_FAILED with explanation', async () => {
+  it('unknown actions return BROWSER_RUNTIME_ACTION_FAILED with explanation', async () => {
     const backend = new RsbWebviewBackend({
       registry: fakeRegistry([], new Map()),
       getActiveSessionId: () => 's1',
       bridge: { getHostWebContents: () => null, logger: logger() },
       logger: logger(),
     });
-    const res = await backend.call({ action: 'snapshot' } as never);
+    const res = await backend.call({ action: 'trace' } as never);
     expect(res.ok).toBe(false);
     expect(res.errorCode).toBe('BROWSER_RUNTIME_ACTION_FAILED');
     expect(res.message).toMatch(/not yet supported/);

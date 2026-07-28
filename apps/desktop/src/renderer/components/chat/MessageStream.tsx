@@ -158,6 +158,10 @@ import {
   subscribeGhostCards,
   type GhostCardSnapshot,
 } from '@/cindy-brain/ghostCardStore';
+import {
+  collectGhostCardGalleryImages,
+  createGhostCardSpawnIndex,
+} from '@/cindy-brain/ghostCardGallery';
 import { ChatImageView } from './ChatImageView';
 import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
 import { GhostFulfillmentContext } from './GhostSummonCard';
@@ -296,7 +300,9 @@ interface WorkGroupRenderItem {
   durationMs?: number;
   /** 当前是否是仍在执行的尾部动作段。完成态时间线始终 false。 */
   isStreaming: boolean;
-  /** 工作段首个真实活动的 epoch ms,供 live elapsed ticker 使用。 */
+  /** 工作段起点 epoch ms,供 live elapsed ticker 使用。优先是上一个边界
+   *  (用户消息/上一句正文,可能早于段内首个活动),边界缺失时退回首个活动
+   *  时间戳 —— 与 durationMs 的段起点同源(见 createWorkGroup)。 */
   startedAtMs?: number;
 }
 
@@ -664,9 +670,10 @@ export function findRestorableViewportItemIdx(items: RenderItem[], viewportTopKe
 
 /**
  * 从全量 render items 里按渲染顺序抽出会话内所有图片的 src,作为 lightbox 翻图
- * 的数据源(全量,不受渲染窗口裁剪影响)。只收**结构化、确定会渲染成图**的两类:
+ * 的数据源(全量,不受渲染窗口裁剪影响)。只收**结构化、确定会渲染成图**的三类:
  *   - tool-output 图(art 出图 / 飞书拉图等)→ tool_media item 的 image 项
  *   - 用户上传图 → user message 的 images(url 或 data:base64,与 UserMessage 同款拼法)
+ *   - 插件生成图 → ghost card 及其衍生卡中会打开 ImageLightbox 的图片
  *
  * 不收正文 Markdown 内嵌图:用正则扫文本会误抓代码块里当作文本展示的 ![]() 语法,
  * 虚增计数 / 让翻页跳到无效图(codex review);要准确得复刻 MarkdownRenderer 的
@@ -676,18 +683,36 @@ export function findRestorableViewportItemIdx(items: RenderItem[], viewportTopKe
 export function collectSessionImageSrcs(
   items: RenderItem[],
   mediaOrigin?: RemoteMediaOrigin,
+  ghostCards?: GhostCardSnapshot,
+  isSessionStreaming = false,
 ): GalleryImage[] {
   // 远程会话:画廊 src 必须与渲染出的 <img data-gallery-src> 同样改写到 cindy-remote-media://,
   // 否则 ImageLightbox 的画廊 src 匹配对不上、退化成仅当前窗口翻图 + 计数错。
   const push = (url: string, meta?: Omit<GalleryImage, 'src'>): void =>
     void out.push({ src: rewriteToRemoteMediaOrigin(url, mediaOrigin), ...meta });
   const out: GalleryImage[] = [];
+  const ghostCardSpawnIndex = ghostCards ? createGhostCardSpawnIndex(ghostCards) : undefined;
   for (const item of items) {
     if (item.type === 'fork_origin') {
       continue;
     } else if (item.type === 'tool_media') {
       for (const m of item.items) {
         if (m.kind === 'image' && m.url) push(m.url);
+      }
+    } else if (item.type === 'ghost_card') {
+      if (ghostCards) {
+        for (const image of collectGhostCardGalleryImages(
+          item.callId,
+          ghostCards,
+          !item.settled && isSessionStreaming,
+          ghostCardSpawnIndex!,
+        )) {
+          push(image.src, { galleryId: image.galleryId });
+        }
+      }
+      // 回锚媒体渲染在卡片及其衍生卡之后，画廊顺序必须与 DOM 一致。
+      for (const media of item.media ?? []) {
+        if (media.kind === 'image' && media.url) push(media.url);
       }
     } else if (item.type === 'message') {
       const msg = item.message;
@@ -708,6 +733,16 @@ export function collectSessionImageSrcs(
           } else {
             push(`data:${img.mimeType};base64,${img.base64}`);
           }
+        }
+      } else if (msg.role === 'assistant' && ghostCards) {
+        // will-assistant-message 出口钩子的自绘卡以消息 clientId 为根 callId。
+        for (const image of collectGhostCardGalleryImages(
+          msg.clientId,
+          ghostCards,
+          false,
+          ghostCardSpawnIndex!,
+        )) {
+          push(image.src, { galleryId: image.galleryId });
         }
       }
     }
@@ -1337,6 +1372,12 @@ function messageTs(msg: ChatMessage): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
+/** 边界项(用户消息 / assistant 正文)的时间戳;非 message 项(卡片等)返回 null,
+ *  让下一段退回段内锚点,避免把已折叠段的时长重复计入。 */
+function boundaryTs(item: RenderItem | undefined): number | null {
+  return item && item.type === 'message' ? messageTs(item.message) : null;
+}
+
 /** run 首子项的起始时间戳。 */
 function workRunStartTs(it: WorkChildItem): number | null {
   if (it.type === 'tool_segment') return messageTs(it.toolCalls[0]);
@@ -1375,9 +1416,18 @@ function createWorkGroup(
   run: WorkChildItem[],
   nextItem: RenderItem | undefined,
   isStreaming = false,
+  prevBoundaryTs: number | null = null,
 ): Extract<RenderItem, { type: 'work_group' }> {
   const firstActivity = run.find((it) => it.type !== 'message' || it.message.role === 'thinking');
-  const startTs = workRunStartTs(firstActivity ?? run[0]);
+  const anchorTs = workRunStartTs(firstActivity ?? run[0]);
+  // 段起点优先锚上一个边界(用户消息 / 上一句正文),与「正在工作…」活表的墙钟
+  // 口径一致:一次性到达的 thinking 块 createdAt≈结束时刻,只用段内锚点会把
+  // 模型思考整段丢掉(实际 6s 显示 1s,内层相加也对不上外层总表)。边界缺失
+  // (窗口截断)或时序异常(rewind 改序)时退回段内锚点。
+  const startTs =
+    prevBoundaryTs !== null && (anchorTs === null || prevBoundaryTs <= anchorTs)
+      ? prevBoundaryTs
+      : anchorTs;
   const endTs =
     nextItem && nextItem.type === 'message'
       ? messageTs(nextItem.message)
@@ -1400,17 +1450,19 @@ function createWorkGroup(
 function createCompletedWorkGroup(
   run: WorkChildItem[],
   nextItem: RenderItem | undefined,
+  prevBoundaryTs: number | null = null,
 ): WorkGroupRenderItem {
   const hasAssistantText = run.some(
     (item) => item.type === 'message' && item.message.role === 'assistant',
   );
-  if (!hasAssistantText) return createWorkGroup(run, nextItem);
+  if (!hasAssistantText) return createWorkGroup(run, nextItem, false, prevBoundaryTs);
 
   const children: WorkGroupChildItem[] = [];
   let activityRun: WorkChildItem[] = [];
+  let innerPrevBoundaryTs = prevBoundaryTs;
   const flushActivityRun = (activityNextItem: RenderItem | undefined) => {
     if (activityRun.length === 0) return;
-    children.push(createWorkGroup(activityRun, activityNextItem));
+    children.push(createWorkGroup(activityRun, activityNextItem, false, innerPrevBoundaryTs));
     activityRun = [];
   };
 
@@ -1421,10 +1473,11 @@ function createCompletedWorkGroup(
     }
     flushActivityRun(item);
     children.push(item);
+    innerPrevBoundaryTs = boundaryTs(item);
   }
   flushActivityRun(nextItem);
 
-  const outer = createWorkGroup(run, nextItem);
+  const outer = createWorkGroup(run, nextItem, false, prevBoundaryTs);
   return {
     ...outer,
     key: `work-summary-${workGroupClientId(run)}`,
@@ -1433,13 +1486,14 @@ function createCompletedWorkGroup(
   };
 }
 
-function groupLegacyWorkRuns(items: RenderItem[]): RenderItem[] {
+function groupLegacyWorkRuns(items: RenderItem[], turnStartTs: number | null = null): RenderItem[] {
   const out: RenderItem[] = [];
   let run: WorkChildItem[] = [];
+  let prevBoundaryTs = turnStartTs;
 
   const flushRun = (nextItem: RenderItem | undefined) => {
     if (run.length === 0) return;
-    out.push(createWorkGroup(run, nextItem));
+    out.push(createWorkGroup(run, nextItem, false, prevBoundaryTs));
     run = [];
   };
 
@@ -1452,6 +1506,7 @@ function groupLegacyWorkRuns(items: RenderItem[]): RenderItem[] {
     } else {
       flushRun(it);
       out.push(it);
+      prevBoundaryTs = boundaryTs(it);
     }
   }
   flushRun(undefined);
@@ -1465,7 +1520,7 @@ function groupLegacyWorkRuns(items: RenderItem[]): RenderItem[] {
  *  - 最后一段之后还没有新的边界时,该段才标成 streaming,
  *    默认显示 latest-five preview。
  */
-function groupActiveWorkRuns(items: RenderItem[]): RenderItem[] {
+function groupActiveWorkRuns(items: RenderItem[], turnStartTs: number | null = null): RenderItem[] {
   let lastCompletedRunBoundaryIdx = -1;
   for (let i = 0; i < items.length; i++) {
     if (isAssistantAnswerCandidate(items[i]) || isCompactBoundaryItem(items[i])) {
@@ -1476,9 +1531,12 @@ function groupActiveWorkRuns(items: RenderItem[]): RenderItem[] {
   const out: RenderItem[] = [];
   let run: WorkChildItem[] = [];
   let runLastIdx = -1;
+  let prevBoundaryTs = turnStartTs;
   const flushRun = (nextItem: RenderItem | undefined) => {
     if (run.length === 0) return;
-    out.push(createWorkGroup(run, nextItem, runLastIdx > lastCompletedRunBoundaryIdx));
+    out.push(
+      createWorkGroup(run, nextItem, runLastIdx > lastCompletedRunBoundaryIdx, prevBoundaryTs),
+    );
     run = [];
   };
 
@@ -1490,6 +1548,7 @@ function groupActiveWorkRuns(items: RenderItem[]): RenderItem[] {
     } else {
       flushRun(it);
       out.push(it);
+      prevBoundaryTs = boundaryTs(it);
     }
   }
   flushRun(undefined);
@@ -1507,7 +1566,10 @@ function groupActiveWorkRuns(items: RenderItem[]): RenderItem[] {
  * handled:false,交回 groupLegacyWorkRuns 按连续动作折叠。tool_media /
  * agent_plan /运行中子 Agent 等非可归档项保持可见,并作为顺序锚点切开工作组。
  */
-function groupAnsweredTurnItems(turnItems: RenderItem[]): {
+function groupAnsweredTurnItems(
+  turnItems: RenderItem[],
+  turnStartTs: number | null = null,
+): {
   items: RenderItem[];
   handled: boolean;
 } {
@@ -1583,9 +1645,10 @@ function groupAnsweredTurnItems(turnItems: RenderItem[]): {
 
   const out: RenderItem[] = [];
   let run: WorkChildItem[] = [];
+  let prevBoundaryTs = turnStartTs;
   const flushRun = (nextItem: RenderItem | undefined) => {
     if (run.length === 0) return;
-    out.push(createCompletedWorkGroup(run, nextItem));
+    out.push(createCompletedWorkGroup(run, nextItem, prevBoundaryTs));
     run = [];
   };
 
@@ -1596,6 +1659,7 @@ function groupAnsweredTurnItems(turnItems: RenderItem[]): {
     } else {
       flushRun(it);
       out.push(it);
+      prevBoundaryTs = boundaryTs(it);
     }
   }
   flushRun(undefined);
@@ -1743,17 +1807,20 @@ function renderWorkGroupChild(
 export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean): RenderItem[] {
   const out: RenderItem[] = [];
   let currentTurn: RenderItem[] = [];
+  // turn 开场边界(用户消息)的时间戳;窗口截断没见到用户消息时为 null,
+  // 各分组路径退回段内锚点。
+  let turnStartTs: number | null = null;
 
   const flushTurn = (isActiveTail: boolean) => {
     if (currentTurn.length === 0) return;
     const activeStreaming = isActiveTail && isSessionStreaming;
     if (activeStreaming) {
-      out.push(...groupActiveWorkRuns(currentTurn));
+      out.push(...groupActiveWorkRuns(currentTurn, turnStartTs));
       currentTurn = [];
       return;
     }
-    const grouped = groupAnsweredTurnItems(currentTurn);
-    out.push(...(grouped.handled ? grouped.items : groupLegacyWorkRuns(currentTurn)));
+    const grouped = groupAnsweredTurnItems(currentTurn, turnStartTs);
+    out.push(...(grouped.handled ? grouped.items : groupLegacyWorkRuns(currentTurn, turnStartTs)));
     currentTurn = [];
   };
 
@@ -1761,6 +1828,7 @@ export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean):
     if (it.type === 'message' && it.message.role === 'user') {
       flushTurn(false);
       out.push(it);
+      turnStartTs = messageTs(it.message);
       continue;
     }
     currentTurn.push(it);
@@ -2082,8 +2150,14 @@ export function MessageStream({
     [sessionFileValue],
   );
   const sessionImageSrcs = useMemo(
-    () => collectSessionImageSrcs(allRenderItems, galleryMediaOrigin),
-    [allRenderItems, galleryMediaOrigin],
+    () =>
+      collectSessionImageSrcs(
+        allRenderItems,
+        galleryMediaOrigin,
+        ghostCardSnapshot,
+        isSessionStreaming,
+      ),
+    [allRenderItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
   );
 
   // 把可见窗口往前(更早)推 RENDER_WINDOW_GROWTH_ITEMS 个 item,用于滚到顶时的客户端扩窗。
