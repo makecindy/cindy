@@ -6,6 +6,7 @@ import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 
 import { parseProjectDeepLinkHref, PROJECT_DEEP_LINK_RE_SOURCE } from '@/lib/deepLink';
+import remarkTruncateCjkUrls from './remarkTruncateCjkUrls';
 
 /**
  * 放宽 AI 常见的中文加粗写法。
@@ -41,7 +42,8 @@ const PROTECTED_NODE_TYPES = new Set<Nodes['type']>([
 const markdownParser = unified()
   .use(remarkParse)
   .use(remarkGfm, { singleTilde: false })
-  .use(remarkMath);
+  .use(remarkMath)
+  .use(remarkTruncateCjkUrls);
 
 interface OffsetRange {
   start: number;
@@ -79,11 +81,27 @@ function nodeRange(node: Nodes): OffsetRange | null {
   return start == null || end == null ? null : { start, end };
 }
 
+function recoveredAutolinkTailRange(
+  node: Nodes,
+  range: OffsetRange,
+  markdown: string,
+): OffsetRange | null {
+  if (node.type !== 'link' || markdown[range.start] === '[' || markdown[range.start] === '<') {
+    return null;
+  }
+  const onlyChild = node.children.length === 1 ? node.children[0] : null;
+  if (onlyChild?.type !== 'text') return null;
+
+  const tailStart = range.start + onlyChild.value.length;
+  return tailStart < range.end ? { start: tailStart, end: range.end } : null;
+}
+
 function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: string): void {
   if (node.type === 'link' || node.type === 'linkReference') {
     const range = nodeRange(node);
     if (range && markdown[range.start] !== '[') {
-      ranges.push(range);
+      const recoveredTail = recoveredAutolinkTailRange(node, range, markdown);
+      ranges.push(recoveredTail ? { start: range.start, end: recoveredTail.start } : range);
       return;
     }
     const childRanges = node.children
@@ -154,6 +172,17 @@ function collectProseRanges(
   });
 
   return proseRanges;
+}
+
+function collectRecoveredAutolinkTailRanges(tree: Root, markdown: string): OffsetRange[] {
+  const ranges: OffsetRange[] = [];
+  visit(tree, 'link', (node) => {
+    const range = nodeRange(node);
+    if (!range) return;
+    const recoveredTail = recoveredAutolinkTailRange(node, range, markdown);
+    if (recoveredTail) ranges.push(recoveredTail);
+  });
+  return ranges;
 }
 
 function collectBoundaryInsertions(
@@ -228,10 +257,20 @@ export function normalizeStrongDelimiterBoundaries(markdown: string): string {
   if (!markdown.includes('**') || !POTENTIAL_BOUNDARY_RE.test(markdown)) return markdown;
 
   const tree = markdownParser.runSync(markdownParser.parse(markdown), markdown) as Root;
-  const insertions = collectProseRanges(tree, markdown).flatMap(({ range, protectedRanges }) =>
+  const boundaryInsertions = collectProseRanges(tree, markdown).flatMap(({ range, protectedRanges }) =>
     collectBoundaryInsertions(markdown, range, protectedRanges),
   );
-  if (insertions.length === 0) return markdown;
+  if (boundaryInsertions.length === 0) return markdown;
+
+  // 后续 remark 插件会把裸链接误吞的中文尾段切回 text 节点，但此时 Markdown
+  // 已经解析完成，尾段里的星号不会再次解析。在需要修复的尾段起点再插入同一个
+  // 隐藏分隔符，让首次解析时链接先结束，尾段即可按正文解析。
+  const recoveredTailStarts = collectRecoveredAutolinkTailRanges(tree, markdown)
+    .filter((range) =>
+      boundaryInsertions.some((insertion) => insertion >= range.start && insertion < range.end),
+    )
+    .map((range) => range.start);
+  const insertions = [...new Set([...boundaryInsertions, ...recoveredTailStarts])];
 
   let output = markdown;
   for (const offset of insertions.sort((left, right) => right - left)) {

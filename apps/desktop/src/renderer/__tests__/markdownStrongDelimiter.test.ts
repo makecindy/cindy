@@ -8,12 +8,13 @@ import { describe, expect, it } from 'vitest';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import { normalizeStrongDelimiterBoundaries } from '@/components/chat/normalizeStrongDelimiterBoundaries';
 import remarkStrictInlineMath from '@/components/chat/remarkStrictInlineMath';
+import remarkTruncateCjkUrls from '@/components/chat/remarkTruncateCjkUrls';
 
 function renderMarkdown(source: string): string {
   return renderToStaticMarkup(
     createElement(
       ReactMarkdown,
-      { remarkPlugins: [remarkGfm], skipHtml: true },
+      { remarkPlugins: [remarkGfm, remarkTruncateCjkUrls], skipHtml: true },
       normalizeStrongDelimiterBoundaries(source),
     ),
   );
@@ -144,6 +145,17 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
     expect(renderMarkdown(referenceLink)).toContain(
       '<a href="https://example.test"><strong>重点。</strong>正文</a>',
+    );
+  });
+
+  it('repairs strong delimiters in CJK prose recovered from a bare URL', () => {
+    const source = 'https://example.com/foo（**重点。**正文';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      'https://example.com/foo<!--cindy-strong-boundary-->（**重点。**<!--cindy-strong-boundary-->正文',
+    );
+    expect(renderMarkdown(source)).toContain(
+      '<a href="https://example.com/foo">https://example.com/foo</a>（<strong>重点。</strong>正文',
     );
   });
 
