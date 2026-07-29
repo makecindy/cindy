@@ -5884,6 +5884,569 @@ describe('CodexAgent MCP thread context hooks', () => {
   });
 });
 
+describe('CodexAgent abort', () => {
+  it('does not add a terminal lookup when turn/interrupt is acknowledged', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-acknowledged',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-acknowledged' },
+    });
+    await expect(handle.abort()).resolves.toBeUndefined();
+
+    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+      threadId: 'start-thread-id',
+      turnId: 'turn-acknowledged',
+    });
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadTurnsList,
+    )).toHaveLength(0);
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    )).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('waits for the authoritative resume boundary before reconciling content, usage, cache, and plans', async () => {
+    let turnStartCount = 0;
+    const resumeBoundary = deferred<Record<string, unknown>>();
+    const plan = [
+      { step: 'Inspect', status: 'completed' as const },
+      { step: 'Patch', status: 'in_progress' as const },
+    ];
+    const logger = createNoopLogger();
+    const debugLog = vi.spyOn(logger, 'debug');
+    const agent = new CodexAgent(createDeps({}, { logger }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadResume) return resumeBoundary.promise;
+      if (method === Method.ThreadTurnsList) {
+        return {
+          data: [{ id: 'turn-stale-local', status: 'completed' }],
+          nextCursor: null,
+          backwardsCursor: null,
+        };
+      }
+      if (method === Method.TurnStart) {
+        turnStartCount += 1;
+        return {
+          turn: {
+            id: turnStartCount === 1 ? 'turn-stale-local' : 'turn-after-stale-interrupt',
+          },
+        };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-server-no-active-turn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      planMode: true,
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const interactions: InteractionRequest[] = [];
+    handle.setInteractionResolver(async (request) => {
+      interactions.push(request);
+      return { kind: 'plan_review', behavior: 'deny' };
+    });
+    const emitLateTurnPayload = () => {
+      handlers.tokenUsageUpdated?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-stale-local',
+        tokenUsage: {
+          total: {
+            totalTokens: 108,
+            inputTokens: 100,
+            cachedInputTokens: 40,
+            outputTokens: 5,
+            reasoningOutputTokens: 3,
+          },
+          last: {
+            totalTokens: 108,
+            inputTokens: 100,
+            cachedInputTokens: 40,
+            outputTokens: 5,
+            reasoningOutputTokens: 3,
+          },
+          modelContextWindow: 272000,
+        },
+      });
+      handlers.turnPlanUpdated?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-stale-local',
+        plan,
+      });
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-stale-local',
+        item: {
+          type: 'agentMessage',
+          id: 'turn-stale-local-message',
+          text: 'late final content',
+        },
+      });
+      handlers.reasoningSummaryTextDelta?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-stale-local',
+        itemId: 'turn-stale-local-reasoning',
+        delta: 'late reasoning',
+        summaryIndex: 0,
+      });
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-stale-local',
+        item: {
+          type: 'plan',
+          id: 'turn-stale-local-plan',
+          text: '1. inspect\n2. patch',
+        },
+      } as never);
+    };
+
+    await handle.send({ type: 'user', content: 'make a plan' });
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-stale-local' },
+    });
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    const abortPromise = handle.abort();
+    await waitForExpectation(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.ThreadResume,
+        { threadId: 'start-thread-id', excludeTurns: true },
+        { timeoutMs: 3_000 },
+      );
+    });
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadTurnsList,
+    )).toHaveLength(0);
+
+    // The listener-serialized resume response is the boundary: payloads can arrive
+    // arbitrarily late before it, without relying on a quiet-period timer.
+    emitLateTurnPayload();
+    resumeBoundary.resolve({});
+    await expect(abortPromise).resolves.toBeUndefined();
+
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+    expect(host.request).toHaveBeenCalledWith(
+      Method.ThreadTurnsList,
+      {
+        threadId: 'start-thread-id',
+        limit: 20,
+        sortDirection: 'desc',
+        itemsView: 'notLoaded',
+      },
+      { timeoutMs: 3_000 },
+    );
+
+    const reconciledEvents: AgentEvent[] = [];
+    let done: AgentEvent | null = null;
+    for (let i = 0; i < 30 && !done; i += 1) {
+      const event = await nextEvent(iterator);
+      reconciledEvents.push(event);
+      if (event.type === 'done') done = event;
+    }
+    expect(reconciledEvents).toContainEqual(expect.objectContaining({
+      type: 'text',
+      data: expect.objectContaining({
+        text: 'late final content',
+      }),
+    }));
+    expect(reconciledEvents).toContainEqual(expect.objectContaining({
+      type: 'thinking',
+      data: expect.objectContaining({
+        stage: 'delta',
+        text: 'late reasoning',
+      }),
+    }));
+    expect(done).toMatchObject({
+      type: 'done',
+      data: {
+        type: 'codex/event/task_complete',
+        usage: {
+          promptTokens: 60,
+          completionTokens: 8,
+          reasoningTokens: 0,
+          cachedTokens: 40,
+        },
+        raw: expect.objectContaining({
+          id: 'turn-stale-local',
+          status: 'completed',
+        }),
+        plan,
+      },
+    });
+    expect(debugLog).toHaveBeenCalledWith(
+      'SDK ◀ turn end',
+      expect.objectContaining({
+        cacheStats: {
+          turn: {
+            hitRate: '40.0%',
+            read: 40,
+            create: 0,
+            uncached: 60,
+            apiCalls: 1,
+          },
+          session: expect.any(Object),
+        },
+      }),
+    );
+    await waitForExpectation(() => {
+      expect(interactions).toContainEqual(expect.objectContaining({
+        kind: 'plan_review',
+        plan: '1. inspect\n2. patch',
+      }));
+    });
+
+    await handle.send({ type: 'user', content: 'continue after recovery' });
+    expect(handle.getCurrentTurnId?.()).toBe('turn-after-stale-interrupt');
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    // The real completion may already be in flight. The synthetic tombstone must
+    // keep that late event from clearing the newer turn.
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-stale-local', status: 'completed' },
+    });
+    expect(handle.getCurrentTurnId?.()).toBe('turn-after-stale-interrupt');
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    await handle.close();
+  });
+
+  it('lets the real turn completion win before the resume boundary', async () => {
+    const resumeBoundary = deferred<Record<string, unknown>>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadResume) return resumeBoundary.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-real-completion-before-boundary',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-completes-before-boundary' },
+    });
+    const abortPromise = handle.abort();
+    await waitForExpectation(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.ThreadResume,
+        { threadId: 'start-thread-id', excludeTurns: true },
+        { timeoutMs: 3_000 },
+      );
+    });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-completes-before-boundary', status: 'failed' },
+    });
+    resumeBoundary.resolve({});
+    await expect(abortPromise).resolves.toBeUndefined();
+
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadTurnsList,
+    )).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('does not treat resume as a terminal boundary before turn/started was observed', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: 'turn-start-response-only' } };
+      }
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadResume) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-before-turn-started',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    // The turn/start response establishes the local id, but no turn/started
+    // notification has crossed the server listener yet.
+    await handle.send({ type: 'user', content: 'fast turn' });
+    expect(handle.getCurrentTurnId?.()).toBe('turn-start-response-only');
+
+    await expect(handle.abort()).resolves.toBeUndefined();
+
+    expect(handle.getCurrentTurnId?.()).toBe('turn-start-response-only');
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadTurnsList,
+    )).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('stops no-active reconciliation when the session closes during the resume boundary', async () => {
+    const resumeBoundary = deferred<Record<string, unknown>>();
+    const interactions: InteractionRequest[] = [];
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadResume) return resumeBoundary.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-close-during-resume-boundary',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      planMode: true,
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handle.setInteractionResolver(async (request) => {
+      interactions.push(request);
+      return { kind: 'plan_review', behavior: 'deny' };
+    });
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-closes-during-resume-boundary' },
+    });
+
+    const abortPromise = handle.abort();
+    await waitForExpectation(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.ThreadResume,
+        { threadId: 'start-thread-id', excludeTurns: true },
+        { timeoutMs: 3_000 },
+      );
+    });
+    await handle.close();
+    resumeBoundary.resolve({});
+    await expect(abortPromise).resolves.toBeUndefined();
+
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadTurnsList,
+    )).toHaveLength(0);
+    expect(interactions).toHaveLength(0);
+  });
+
+  it('stops no-active reconciliation when the session closes during terminal lookup', async () => {
+    const terminalLookup = deferred<{
+      data: Array<{ id: string; status: string }>;
+      nextCursor: null;
+      backwardsCursor: null;
+    }>();
+    const interactions: InteractionRequest[] = [];
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadResume) return {};
+      if (method === Method.ThreadTurnsList) return terminalLookup.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-close-during-terminal-lookup',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      planMode: true,
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handle.setInteractionResolver(async (request) => {
+      interactions.push(request);
+      return { kind: 'plan_review', behavior: 'deny' };
+    });
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-closes-during-terminal-lookup' },
+    });
+
+    const abortPromise = handle.abort();
+    await waitForExpectation(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.ThreadTurnsList,
+        expect.anything(),
+        { timeoutMs: 3_000 },
+      );
+    });
+    await handle.close();
+    terminalLookup.resolve({
+      data: [{ id: 'turn-closes-during-terminal-lookup', status: 'completed' }],
+      nextCursor: null,
+      backwardsCursor: null,
+    });
+    await expect(abortPromise).resolves.toBeUndefined();
+
+    expect(interactions).toHaveLength(0);
+  });
+
+  it('does not reconcile a message-only no-active error with another RPC code', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('no active turn to interrupt'),
+          { code: -32000 },
+        );
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-non-invalid-request',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-still-running' },
+    });
+
+    await expect(handle.abort()).resolves.toBeUndefined();
+
+    expect(handle.getCurrentTurnId?.()).toBe('turn-still-running');
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(host.request).not.toHaveBeenCalledWith(
+      Method.ThreadTurnsList,
+      expect.anything(),
+      expect.anything(),
+    );
+    await handle.close();
+  });
+
+  it('preserves local state when the authoritative terminal lookup fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadTurnsList) {
+        throw new Error('thread turn lookup unavailable');
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-terminal-lookup-failed',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-preserved' },
+    });
+
+    await expect(handle.abort()).resolves.toBeUndefined();
+
+    expect(handle.getCurrentTurnId?.()).toBe('turn-preserved');
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await handle.close();
+  });
+
+  it('does not clear a newer turn when a no-active interrupt rejection arrives late', async () => {
+    const interruptGate = deferred<Record<string, unknown>>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnInterrupt) return interruptGate.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-abort-late-server-no-active-turn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-being-interrupted' },
+    });
+    const abortPromise = handle.abort();
+    await waitForExpectation(() => {
+      expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+        threadId: 'start-thread-id',
+        turnId: 'turn-being-interrupted',
+      });
+    });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-being-interrupted', status: 'interrupted' },
+    });
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-newer' },
+    });
+    interruptGate.reject(
+      Object.assign(
+        new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+        { code: -32600 },
+      ),
+    );
+    await abortPromise;
+
+    expect(handle.getCurrentTurnId?.()).toBe('turn-newer');
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(host.request).not.toHaveBeenCalledWith(
+      Method.ThreadTurnsList,
+      expect.anything(),
+      expect.anything(),
+    );
+    await handle.close();
+  });
+});
+
 describe('CodexAgent steer', () => {
   it('rejects when the session is already closed before steering', async () => {
     const agent = new CodexAgent(createDeps());
@@ -6808,7 +7371,7 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
-  it('activates a buffered turnStarted when the turn/start response returns the same id (codex R9 P2)', async () => {
+  it('activates and records a buffered turnStarted when the turn/start response accepts it', async () => {
     // 同款 pending 窗口, 但到达的 started 就是在飞 RPC 自己的 (合法
     // started-before-resp 与孤儿守卫共存): 缓冲期间不激活; 响应 id 一致 →
     // 正常激活, 不发 interrupt。
@@ -6821,6 +7384,20 @@ describe('CodexAgent turn lifecycle', () => {
         attempt += 1;
         if (attempt === 1) return firstStart.promise;
         return secondStart.promise;
+      }
+      if (method === Method.TurnInterrupt) {
+        throw Object.assign(
+          new Error('codex app-server turn/interrupt error -32600: no active turn to interrupt'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadResume) return {};
+      if (method === Method.ThreadTurnsList) {
+        return {
+          data: [{ id: 'early-turn', status: 'completed' }],
+          nextCursor: null,
+          backwardsCursor: null,
+        };
       }
       return undefined;
     });
@@ -6858,6 +7435,22 @@ describe('CodexAgent turn lifecycle', () => {
     expect(
       host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt),
     ).toBe(false);
+
+    // 该合法 started 虽曾被缓冲,仍必须记为 observed:服务端若已完成,
+    // no-active Stop 应穿过 listener 屏障查询真实终态并解除本地 running。
+    await expect(handle.abort()).resolves.toBeUndefined();
+    expect(host.request).toHaveBeenCalledWith(
+      Method.ThreadTurnsList,
+      {
+        threadId: 'start-thread-id',
+        limit: 20,
+        sortDirection: 'desc',
+        itemsView: 'notLoaded',
+      },
+      { timeoutMs: 3_000 },
+    );
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
     await handle.close();
   });
 

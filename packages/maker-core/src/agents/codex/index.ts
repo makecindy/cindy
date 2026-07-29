@@ -147,6 +147,7 @@ import {
   type ThreadSettingsUpdateResponse,
   type ThreadStartParams,
   type ThreadStartResponse,
+  type ThreadTurnsListResponse,
   type ToolRequestUserInputParams,
   type ToolRequestUserInputQuestion,
   type ToolRequestUserInputResponse,
@@ -660,6 +661,15 @@ function isExpectedTurnIdMismatchError(error: unknown): boolean {
   return code === -32600 && /expected active turn id\b[\s\S]*\bbut found\b/i.test(message);
 }
 
+function isNoActiveTurnInterruptError(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  return code === -32600 && /\bno active(?: codex)? turn to interrupt\b/i.test(message);
+}
+
 // 插话 (steer) 时 turn/steer RPC 的 ack 有界等待上限。AppServerClient.request
 // 本身没有超时, app-server 卡死时裸 await 会永久挂起 → coordinator steering marker
 // 永久残留 → 后续插话点击被静默吞掉。正常情况下 ack 是毫秒级, 10s 足够宽裕。
@@ -683,6 +693,12 @@ const PROFILE_LIFECYCLE_ACK_TIMEOUT_MS = 10_000;
 // (terminal error + Done status)。注意: 超时只代表**我们不再等**, server 侧
 // 可能实际已建 thread/turn — 迟到事件按 stale turn 丢弃, 不影响 UI 复位。
 const CRITICAL_THREAD_RPC_TIMEOUT_MS = 60_000;
+
+// turn/interrupt 返回 no-active 只能证明 server 已空闲,不能证明真实终态是
+// completed / failed / interrupted。只在该异常路径穿过 thread listener 的
+// resume 屏障,再读取最近一小页 metadata;两次 RPC 均有界,正常 stop 零开销。
+const NO_ACTIVE_TURN_RECONCILE_TIMEOUT_MS = 3_000;
+const NO_ACTIVE_TURN_RECONCILE_TURN_LIMIT = 20;
 
 // 计划批准后自动发起实施 turn 的固定输入 — 与官方 TUI 逐字一致
 // (codex-rs/tui/src/chatwidget/plan_implementation.rs 的
@@ -2127,6 +2143,12 @@ export class CodexAgent extends BaseAgent {
     // turn id 在同一 thread 内唯一;墓碑随 session handle 释放,不跨 session 泄漏。
     const completedTurnIds = new Set<string>();
     const terminalErroredTurnIds = new Set<string>();
+    // 只有已收到 turn/started 的 turn 才能把 no-active + listener resume 当作
+    // 权威终态屏障：此时 server listener 必然先建立过 active snapshot，而
+    // no-active 又证明它已消费 terminal event。若本地只有 turn/start response
+    // 尚未见 started，server 可能只是 core 已 idle、terminal 仍排在 listener
+    // 队列中；该启动竞态下不得根据 metadata 提前立 tombstone。
+    const observedTurnStartedIds = new Set<string>();
     // daemon 后端 retry-loop 的终局升级 (issue #677): 远端摸不到 Codex 后端时
     // daemon 无限 willRetry, turn 永不收口。同 turn 重试超阈值 → 合成终态错误,
     // 走与终态 error 完全相同的收口路径 (terminalErroredTurnIds + Done status)。
@@ -4488,6 +4510,7 @@ export class CodexAgent extends BaseAgent {
         if (shouldIgnoreStaleTurnEvent(params.turn.id)) return;
         // 终态已先到的 turn (墓碑) 不得被乱序晚到的 started 重新置活。
         if (turnsCompletedBeforeStartResp.has(params.turn.id)) return;
+        observedTurnStartedIds.add(params.turn.id);
         threadMayHaveRollout = true;
         const wasSameTurn = currentTurnId === params.turn.id;
         currentTurnId = params.turn.id;
@@ -5026,7 +5049,10 @@ export class CodexAgent extends BaseAgent {
               bufferedOrphanTurnIds.clear();
               if (wasBuffered) {
                 // 合法 started 曾被缓冲: 补做 turnStarted 正常路径被跳过的
-                // per-turn 状态重置 (与 turnStarted handler 同款)。
+                // 观察标记与 per-turn 状态重置 (与 turnStarted handler 同款)。
+                // 该标记也是 no-active 恢复使用 listener 终态屏障的前提；
+                // 遗漏会让已确认合法的 buffered turn 永久停在假忙状态。
+                observedTurnStartedIds.add(resp.turn.id);
                 proposedPlanText = null;
                 translatorRt.lastAuthErrorKey = null;
                 translatorRt.networkRetryNotice = null;
@@ -5404,10 +5430,104 @@ export class CodexAgent extends BaseAgent {
       async abort() {
         if (closed || !currentTurnId) return;
         if (skipIfStaleHost('turn/interrupt')) return;
-        dismissPendingUserInputForTurn(currentTurnId, 'turn_interrupted');
+        const interruptedTurnId = currentTurnId;
+        dismissPendingUserInputForTurn(interruptedTurnId, 'turn_interrupted');
         try {
-          await host.request(Method.TurnInterrupt, { threadId, turnId: currentTurnId });
+          await host.request(Method.TurnInterrupt, { threadId, turnId: interruptedTurnId });
         } catch (e) {
+          if (isNoActiveTurnInterruptError(e)) {
+            // no-active 只证明 server 已空闲,不能据此伪造 interrupted:真实 turn
+            // 可能已 completed/failed,伪造会丢 usage、structured plan 与 plan_review。
+            // 先守 captured id。对已观察到 turn/started 的 turn,再用
+            // metadata-only resume 穿过 app-server 的 thread listener:
+            // running-thread resume response 与 turn notifications 在服务端同一
+            // 队列串行,因此 response 是权威 stream boundary,不是基于静默时长
+            // 的推测。屏障后仍未收到 turn/completed 才查持久化终态。
+            if (!isTurnInFlight || currentTurnId !== interruptedTurnId) {
+              log.debug('turn/interrupt no-active rejection arrived after local turn advanced', {
+                interruptedTurnId,
+                currentTurnId,
+                isTurnInFlight,
+              });
+              return;
+            }
+            const hadObservedTurnStart = observedTurnStartedIds.has(interruptedTurnId);
+            try {
+              await host.request<ThreadResumeResponse>(
+                Method.ThreadResume,
+                { threadId, excludeTurns: true },
+                { timeoutMs: NO_ACTIVE_TURN_RECONCILE_TIMEOUT_MS },
+              );
+              // 屏障前的真实 notification 已按序送达;若它已自然收口就不再查询、
+              // 不再合成 tombstone。
+              if (closed || !isTurnInFlight || currentTurnId !== interruptedTurnId) {
+                log.debug('turn reconciliation no longer applicable after authoritative resume boundary', {
+                  interruptedTurnId,
+                  currentTurnId,
+                  isTurnInFlight,
+                  closed,
+                });
+                return;
+              }
+              if (!hadObservedTurnStart) {
+                // turn/start response 可以早于 turn/started。若 core 又极快结束，
+                // interrupt 会因 !is_running 返回 no-active，但 terminal event
+                // 可能仍未进入 listener；resume command 的 biased queue 此时不能
+                // 证明它在 terminal 之后。保留状态等待真实通知，避免吞内容/用量。
+                log.warn('turn/interrupt no-active arrived before turn/started was observed; preserving local state', {
+                  turnId: interruptedTurnId,
+                });
+                return;
+              }
+              const response = await host.request<ThreadTurnsListResponse>(
+                Method.ThreadTurnsList,
+                {
+                  threadId,
+                  limit: NO_ACTIVE_TURN_RECONCILE_TURN_LIMIT,
+                  sortDirection: 'desc',
+                  itemsView: 'notLoaded',
+                },
+                { timeoutMs: NO_ACTIVE_TURN_RECONCILE_TIMEOUT_MS },
+              );
+              // 查询期间真实 notification 仍可能收口,或用户已发起新 turn。
+              if (closed || !isTurnInFlight || currentTurnId !== interruptedTurnId) {
+                log.debug('turn reconciliation no longer applicable after terminal lookup', {
+                  interruptedTurnId,
+                  currentTurnId,
+                  isTurnInFlight,
+                  closed,
+                });
+                return;
+              }
+              const terminalTurn = response.data.find(
+                (turn) =>
+                  turn.id === interruptedTurnId
+                  && (turn.status === 'completed'
+                    || turn.status === 'failed'
+                    || turn.status === 'interrupted'),
+              );
+              if (terminalTurn) {
+                if (closed || !isTurnInFlight || currentTurnId !== interruptedTurnId) return;
+                log.info('turn/interrupt found server already idle; reconciling authoritative terminal state', {
+                  turnId: interruptedTurnId,
+                  status: terminalTurn.status,
+                });
+                handleTurnCompleted({ threadId, turn: terminalTurn });
+              } else {
+                // 无权威终态时保留本地状态:宁可继续显示 running 等后续通知,
+                // 也不伪造 terminal event 而破坏内容、计划或计费准确性。
+                log.warn('turn/interrupt found server idle but authoritative terminal state was unavailable', {
+                  turnId: interruptedTurnId,
+                });
+              }
+            } catch (lookupError) {
+              log.warn('turn/interrupt terminal-state reconciliation failed', {
+                turnId: interruptedTurnId,
+                error: String(lookupError),
+              });
+            }
+            return;
+          }
           log.warn('turn/interrupt threw', { error: String(e) });
         }
       },
