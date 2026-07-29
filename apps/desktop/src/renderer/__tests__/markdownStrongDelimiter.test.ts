@@ -305,6 +305,23 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(html).not.toContain('cindy-strong-boundary');
   });
 
+  it('protects nested Markdown syntax when loose inline math is downgraded to visible text', () => {
+    const codeOnly = '$foo `**重点。**正文` bar$';
+    expect(normalizeStrongDelimiterBoundaries(codeOnly)).toBe(codeOnly);
+    expect(renderMarkdownWithStrictMath(codeOnly)).not.toContain('cindy-strong-boundary');
+
+    const source =
+      '$foo `**代码。**正文` [链接](https://a.test/**path.**next) <span title="**attr.**next">标签</span> **重点。**正文 bar$';
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      '\\$foo `**代码。**正文` [链接](https://a.test/**path.**next) <span title="**attr.**next">标签</span> **重点。**<!--cindy-strong-boundary-->正文 bar\\$',
+    );
+    const html = renderMarkdownWithStrictMath(source);
+    expect(html).toContain(
+      '$foo <code>**代码。**正文</code> <a href="https://a.test/**path.**next">链接</a> 标签 <strong>重点。</strong>正文 bar$',
+    );
+    expect(html).not.toContain('cindy-strong-boundary');
+  });
+
   it('handles many protected spans and ordinary backslashes in source-line mode', () => {
     const protectedSpans = Array.from({ length: 2_000 }, (_, index) => `\`code-${index}\``).join(
       ' ',

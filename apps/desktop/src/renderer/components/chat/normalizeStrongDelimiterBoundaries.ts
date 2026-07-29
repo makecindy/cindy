@@ -41,6 +41,10 @@ const markdownParser = unified()
   .use(remarkGfm, { singleTilde: false })
   .use(remarkMath)
   .use(remarkTruncateCjkUrls);
+const proseMarkdownParser = unified()
+  .use(remarkParse)
+  .use(remarkGfm, { singleTilde: false })
+  .use(remarkTruncateCjkUrls);
 const characterReferenceParser = unified().use(remarkParse);
 
 interface OffsetRange {
@@ -226,7 +230,23 @@ function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: st
 
   if (node.type === 'inlineMath') {
     const range = nodeRange(node);
-    if (range && !isLooseInlineMath(node, markdown)) ranges.push(range);
+    if (range && !isLooseInlineMath(node, markdown)) {
+      ranges.push(range);
+    } else if (range) {
+      // 宽松公式会在修复命中时转回普通文字。remark-math 把公式正文折叠成
+      // opaque 节点，必须按普通 Markdown 再解析一次，才能继续保护其中的
+      // 代码、链接和 HTML，避免隐藏分隔符进入用户可见内容。
+      const raw = markdown.slice(range.start, range.end);
+      const proseTree = proseMarkdownParser.runSync(proseMarkdownParser.parse(raw), raw) as Root;
+      const nestedRanges: OffsetRange[] = [];
+      collectProtectedRanges(proseTree, nestedRanges, raw);
+      ranges.push(
+        ...nestedRanges.map((nestedRange) => ({
+          start: range.start + nestedRange.start,
+          end: range.start + nestedRange.end,
+        })),
+      );
+    }
     return;
   }
 
