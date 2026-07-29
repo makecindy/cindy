@@ -181,6 +181,13 @@ describe('ErrorBanner billing CTA', () => {
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
   });
 
+  it('uses the no-retry copy when there is no safe retry target (scheduler/goal turns)', () => {
+    renderBanner({ retryText: null });
+    expect(screen.getByText('chat.errorBanner.gatewayQuotaExceededNoRetry')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.retry')).toBeNull();
+  });
+
   it('hides CTA for non-quota errors', () => {
     renderBanner({ error: 'fetch failed: ECONNREFUSED' });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();

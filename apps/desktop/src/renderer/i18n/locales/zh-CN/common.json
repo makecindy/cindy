@@ -5514,6 +5514,7 @@
       "claudeSubscriptionSwitchFailed": "无法切换到 Claude.ai 或重试当前任务：{{msg}}",
       "budgetModelHint": "如果反复失败，可以切换到普通版 GPT 再试试。",
       "gatewayQuotaExceeded": "Cindy AI 点数不足，本轮请求未完成。购买点数后点击「重试」即可继续。",
+      "gatewayQuotaExceededNoRetry": "Cindy AI 点数不足，本轮请求未完成。购买点数后重新发起任务即可继续。",
       "openBilling": "购买点数",
       "openBillingTitle": "打开「用量和计费」",
       "codexAuthMissing": "远端 Codex 还没同步登录态（401 Unauthorized）。点击右侧「同步登录态」把本机 Codex 凭证推到远端 Cindy Codex home，然后重试发送。",

@@ -5514,6 +5514,7 @@
       "claudeSubscriptionSwitchFailed": "Claude.ai로 전환하거나 이 세션을 다시 시도할 수 없습니다: {{msg}}",
       "budgetModelHint": "계속 실패하면 일반 GPT 모델로 전환해 보세요.",
       "gatewayQuotaExceeded": "Cindy AI 크레딧이 부족하여 이번 턴을 완료하지 못했습니다. 크레딧을 구매한 뒤 ‘다시 시도’를 클릭하면 계속할 수 있습니다.",
+      "gatewayQuotaExceededNoRetry": "Cindy AI 크레딧이 부족하여 이번 턴을 완료하지 못했습니다. 크레딧을 구매한 뒤 작업을 다시 시작하면 계속할 수 있습니다.",
       "openBilling": "크레딧 구매",
       "openBillingTitle": "'사용량 및 결제' 열기",
       "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",

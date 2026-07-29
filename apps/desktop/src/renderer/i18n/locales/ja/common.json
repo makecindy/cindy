@@ -5514,6 +5514,7 @@
       "claudeSubscriptionSwitchFailed": "Claude.ai への切り替えまたはこのセッションの再試行に失敗しました：{{msg}}",
       "budgetModelHint": "繰り返し失敗する場合は、通常版 GPT モデルに切り替えてお試しください。",
       "gatewayQuotaExceeded": "Cindy AI のクレジットが不足しているため、このターンは完了しませんでした。クレジットを購入してから「再試行」をクリックすると続行できます。",
+      "gatewayQuotaExceededNoRetry": "Cindy AI のクレジットが不足しているため、このターンは完了しませんでした。クレジットを購入してから、タスクを再度開始してください。",
       "openBilling": "クレジットを購入",
       "openBillingTitle": "「使用量と請求」を開く",
       "codexAuthMissing": "リモートの Codex がまだサインインしていません（401 Unauthorized）。「認証情報を同期」をクリックしてローカルの Codex 認証情報をリモートの Cindy Codex home にプッシュし、再試行してください。",

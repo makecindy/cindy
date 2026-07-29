@@ -365,8 +365,13 @@ export function ErrorBanner({
       : t(safeRetryText ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
   } else if (showGatewayQuotaRecovery) {
     // 点数耗尽:原始报错(LiteLLM budget 措辞等)对用户没有行动价值,换成
-    // 「点数不足 + 购买后重试」;Retry 保留——补点后原文重试即可继续。
-    displayError = t('chat.errorBanner.gatewayQuotaExceeded');
+    // 「点数不足 + 购买后重试」。外部发起的 turn(scheduler/goal)没有安全
+    // retry 目标 → Retry 按钮不显示,文案也不能让用户点一个不存在的按钮。
+    displayError = t(
+      safeRetryText
+        ? 'chat.errorBanner.gatewayQuotaExceeded'
+        : 'chat.errorBanner.gatewayQuotaExceededNoRetry',
+    );
   } else if (isNetworkishError) {
     // 网络类错误:原始英文报错(502/ECONNREFUSED/fetch failed 等)对用户没有
     // 行动价值,换成友好文案;原始错误折叠可查(下方「查看原始错误」)。
