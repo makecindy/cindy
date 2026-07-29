@@ -1,0 +1,49 @@
+name: pr-code-review
+
+# Claude Code 自动 code review。审阅逻辑、prompt 与工具白名单都在被调用的
+# krosdai/.github 复用 workflow 里，本文件只负责传 PR 上下文与凭证。
+#
+# 定位：**建议性**检查，不替代人工 review，也不替代 client-ci 的机器门禁。
+# 仓库侧的审阅口径写在根目录 REVIEW.md（复用 workflow 的 prompt 会主动读取）。
+#
+# 前置配置（缺任一项本 workflow 会失败，代码里无法兜底）：
+#   - repository secret `ANTHROPIC_API_KEY`（复用 workflow 声明为 required）
+#   - 可选 repository variable `ANTHROPIC_BASE_URL`,不设则走 api.anthropic.com
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened, synchronize]
+
+# 被调用 workflow 自己声明了 actions:read / contents:read / id-token:write /
+# pull-requests:write。调用方授予的权限必须 >= 这四项,否则整个 run 直接报错;
+# 这里按最小集给齐,不多给 issues:write 之类用不到的权限。
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+  pull-requests: write
+
+# 刻意不在调用方设 concurrency:被调用 workflow 已按 repo + PR number 分组并
+# cancel-in-progress,再套一层只会让取消粒度重复。
+
+jobs:
+  code-review:
+    # 与被调用 workflow 内部的 if 重复是有意的——在调用方就短路,fork PR 与 draft
+    # 连 job 都不启动。fork PR 一律不 review:一是 fork 触发的 pull_request 事件
+    # 取不到 secrets,二是外部分支内容进 prompt 有注入面。外部贡献者的 PR 因此
+    # 只有 client-ci 与人工 review 把关,这是有意的取舍。
+    if: >-
+      github.event.pull_request &&
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    # 跨 org 复用 workflow,按本仓惯例钉死 commit SHA 而不是 @v1 浮动 tag:
+    # tag 可被上游重新指向,而这份 workflow 持有 pull-requests:write 并决定
+    # 喂给模型的 prompt。dependabot(github-actions 生态,见 .github/dependabot.yml)
+    # 会照常提交升级 PR。
+    uses: krosdai/.github/.github/workflows/code-review.yml@0838103fffe7d4c38247050098defc8ae47b8355 # v1
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      is_draft: ${{ github.event.pull_request.draft }}
+      head_repo_full_name: ${{ github.event.pull_request.head.repo.full_name }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
