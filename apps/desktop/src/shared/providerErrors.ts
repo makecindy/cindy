@@ -89,7 +89,7 @@ const QUOTA_RE =
  *  **不是**余额/预算耗尽——不得判成不可重试的 QUOTA_EXCEEDED,更不得触发购买点数
  *  引导(review P1)。 */
 const RATE_QUOTA_RE =
-  /per\s+(second|minute|hour|day)|per-(second|minute|hour|day)|[rt]pm|quota metric|rate.{0,8}limit/i;
+  /per\s+(second|minute|hour|day)|per-(second|minute|hour|day)|\b[rt]pm\b|quota metric|rate.{0,8}limit/i;
 /** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。 */
 const WIRE_RE =
   /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;

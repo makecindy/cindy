@@ -75,6 +75,9 @@ describe('isQuotaExceededMessage — message-level matcher (ErrorBanner 消费)'
     // 不得触发点数耗尽文案与购买引导(review P1)。
     "Quota exceeded for quota metric 'requests per minute' and limit 'RPM'",
     'Token quota exceeded: 30000 tokens per minute',
+    // 仅缩写措辞(无 per minute 全称)同样是速率配额(review P1:\b 边界回归)。
+    'Quota exceeded: limit 20,000 TPM',
+    'quota exceeded, current RPM limit reached',
   ])('does not match non-quota errors: %s', (text) => {
     expect(isQuotaExceededMessage(text)).toBe(false);
   });
