@@ -15,6 +15,8 @@ export {
   type ChatBridgeProviderConfig,
   type ChatBridgeUpstreamErrorInfo,
   type ChatCompletionsRequest,
+  type ChatAudioInput,
+  type ChatFileInput,
   type ChatImageInput,
   type ChatImageUrlContentPart,
   type ChatTextContentPart,

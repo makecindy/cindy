@@ -274,6 +274,15 @@ describe('decideCodexRoute', () => {
 });
 
 describe('chatBridgeCapabilitiesForRoute', () => {
+  it('does not forward multiple-choice n into the single-choice translator', async () => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    const capabilities = chatBridgeCapabilitiesForRoute(
+      'https://api.deepseek.com/v1',
+      'deepseek-chat',
+    );
+    expect(capabilities.passthroughFields).not.toContain('n');
+  });
+
   it.each([
     'https://api.moonshot.cn/v1',
     'https://api.moonshot.ai/v1/',

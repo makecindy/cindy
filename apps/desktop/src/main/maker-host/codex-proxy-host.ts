@@ -218,7 +218,6 @@ const CHAT_BRIDGE_DEFAULT_CAPABILITIES: ChatBridgeCapabilities = {
     'logit_bias',
     'logprobs',
     'top_logprobs',
-    'n',
   ],
   toolCallReasoningPlaceholder: true,
   forceAutoToolChoice: true,

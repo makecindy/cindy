@@ -275,7 +275,14 @@ describe('ChatSseTranslator', () => {
       input: [],
       tools: [
         { type: 'custom', name: 'apply_patch' },
-        { type: 'namespace', name: 'mcp', tools: [{ type: 'function', name: 'query' }] },
+        {
+          type: 'namespace',
+          name: 'mcp',
+          tools: [
+            { type: 'function', name: 'query' },
+            { type: 'custom', name: 'exec' },
+          ],
+        },
         { type: 'tool_search' },
       ],
     });
@@ -304,6 +311,10 @@ describe('ChatSseTranslator', () => {
               index: 2,
               id: 'c3',
               function: { name: 'tool_search', arguments: '{"query":"browser"}' },
+            }, {
+              index: 3,
+              id: 'c4',
+              function: { name: 'mcp__exec', arguments: '{"input":"code"}' },
             }],
           },
           finish_reason: 'tool_calls',
@@ -318,10 +329,17 @@ describe('ChatSseTranslator', () => {
       'custom_tool_call',
       'function_call',
       'tool_search_call',
+      'custom_tool_call',
     ]);
     expect(items[0]).toMatchObject({ call_id: 'c1', name: 'apply_patch', input: 'diff' });
     expect(items[1]).toMatchObject({ call_id: 'c2', name: 'query', namespace: 'mcp' });
     expect(items[2]).toMatchObject({ call_id: 'c3', arguments: { query: 'browser' } });
+    expect(items[3]).toMatchObject({
+      call_id: 'c4',
+      name: 'exec',
+      namespace: 'mcp',
+      input: 'code',
+    });
   });
 
   it('extracts reasoning_details and inline think blocks without leaking tags', () => {

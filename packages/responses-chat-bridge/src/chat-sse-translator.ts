@@ -523,6 +523,7 @@ export class ChatSseTranslator {
         status,
         call_id: state.callId,
         name: spec.name,
+        ...(spec.namespace ? { namespace: spec.namespace } : {}),
         input: status === 'in_progress' ? '' : customInput(state.arguments),
       };
     }

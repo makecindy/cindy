@@ -246,7 +246,6 @@ export interface ChatCompletionsRequest {
   logit_bias?: Record<string, number>;
   logprobs?: boolean;
   top_logprobs?: number;
-  n?: number;
   stream: boolean;
   stream_options?: { include_usage: true };
 }
@@ -254,6 +253,8 @@ export interface ChatCompletionsRequest {
 export type ChatDeveloperRole = 'developer' | 'system';
 export type ChatMaxTokensField = 'max_tokens' | 'max_completion_tokens' | 'omit';
 export type ChatImageInput = 'image_url';
+export type ChatFileInput = 'file';
+export type ChatAudioInput = 'input_audio';
 export type ChatReasoningField =
   | 'reasoning_effort'
   | 'reasoning.effort'
@@ -274,8 +275,7 @@ export type ChatPassthroughField =
   | 'response_format'
   | 'logit_bias'
   | 'logprobs'
-  | 'top_logprobs'
-  | 'n';
+  | 'top_logprobs';
 
 /** 同协议族内的上游差异，全部由数据表达（对齐 cc-switch / opencodex 的 per-provider 处理）。 */
 export interface ChatBridgeCapabilities {
@@ -288,6 +288,10 @@ export interface ChatBridgeCapabilities {
    * 已确认支持视觉输入的运行时（当前为 upstream 白名单）开启。
    */
   imageInput?: ChatImageInput;
+  /** Responses `input_file` 的上游等价形态；默认未声明 = fail closed。 */
+  fileInput?: ChatFileInput;
+  /** Responses `input_audio` 的上游等价形态；默认未声明 = fail closed。 */
+  audioInput?: ChatAudioInput;
   /** 仅对明确采用 `<think>...</think>` 内联推理方言的上游启用标签解析。 */
   inlineReasoning?: boolean;
   /** 将 Responses reasoning.effort 映射成供应商接受的枚举值。未声明时原样使用。 */

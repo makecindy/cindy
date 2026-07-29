@@ -674,6 +674,30 @@ describe('translateResponsesRequest', () => {
     ]);
   });
 
+  it('normalizes synthesized orphan tool calls for reasoning and Gemini providers', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call_output', call_id: 'orphan_1', output: 'ok' },
+      ],
+    }), {
+      capabilities: {
+        toolCallReasoningPlaceholder: true,
+        googleThoughtSignaturePlaceholder: true,
+      },
+    });
+    expect(out.messages[0]).toMatchObject({
+      role: 'assistant',
+      content: null,
+      reasoning_content: 'tool call',
+      tool_calls: [{
+        id: 'orphan_1',
+        extra_content: {
+          google: { thought_signature: 'skip_thought_signature_validator' },
+        },
+      }],
+    });
+  });
+
   it('converts file/audio input and moves tool-result media into a user multimodal message', () => {
     const out = translateResponsesRequest(base({
       input: [
@@ -692,7 +716,13 @@ describe('translateResponsesRequest', () => {
           output: [{ type: 'input_text', text: 'see' }, { type: 'input_image', image_url: 'data:image/png;base64,x' }],
         },
       ],
-    }), { capabilities: { imageInput: 'image_url' } });
+    }), {
+      capabilities: {
+        imageInput: 'image_url',
+        fileInput: 'file',
+        audioInput: 'input_audio',
+      },
+    });
     expect(out.messages).toContainEqual({
       role: 'tool',
       tool_call_id: 'c1',
@@ -721,7 +751,24 @@ describe('translateResponsesRequest', () => {
         role: 'user',
         content: [{ type: 'input_file', file_id: 'file_1', filename: 'notes.txt' }],
       }],
-    }))).toThrow('input_file.file_id');
+    }), { capabilities: { fileInput: 'file' } })).toThrow('input_file.file_id');
+  });
+
+  it('fails closed for file and audio inputs unless each capability is enabled', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_file', file_data: 'BASE64', filename: 'notes.txt' }],
+      }],
+    }))).toThrow("input content part 'input_file'");
+    expect(() => translateResponsesRequest(base({
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_audio', input_audio: { data: 'BASE64', format: 'wav' } }],
+      }],
+    }))).toThrow("input content part 'input_audio'");
   });
 
   it('rejects file-backed images in tool results instead of silently dropping the file id', () => {

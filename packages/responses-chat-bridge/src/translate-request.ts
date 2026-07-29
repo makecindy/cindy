@@ -1,9 +1,11 @@
 import {
   UnsupportedResponsesFeatureError,
   type ChatAssistantMessage,
+  type ChatAudioInput,
   type ChatBridgeCapabilities,
   type ChatCompletionsRequest,
   type ChatDeveloperRole,
+  type ChatFileInput,
   type ChatImageInput,
   type ChatMessage,
   type ChatPassthroughField,
@@ -17,6 +19,12 @@ import { ChatBridgeToolContext } from './tool-context.js';
 const TOOL_CALL_REASONING_PLACEHOLDER = 'tool call';
 const GOOGLE_THOUGHT_SIGNATURE_PLACEHOLDER = 'skip_thought_signature_validator';
 const TOOL_RESULT_MEDIA_MOVED_MARKER = '[media moved to the following user message]';
+
+interface ChatMediaCapabilities {
+  imageInput?: ChatImageInput;
+  fileInput?: ChatFileInput;
+  audioInput?: ChatAudioInput;
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -78,14 +86,18 @@ function audioPart(part: Record<string, unknown>): ChatUserContentPart | undefin
 
 function mediaPart(
   part: Record<string, unknown>,
-  imageInput: ChatImageInput | undefined,
+  capabilities: ChatMediaCapabilities,
 ): ChatUserContentPart | undefined {
   if (part.type === 'input_image' || part.type === 'image_url' || part.type === 'image') {
-    if (imageInput !== 'image_url') return undefined;
+    if (capabilities.imageInput !== 'image_url') return undefined;
     return imagePart(part);
   }
-  if (part.type === 'input_file' || part.type === 'file') return filePart(part);
-  if (part.type === 'input_audio') return audioPart(part);
+  if (part.type === 'input_file' || part.type === 'file') {
+    return capabilities.fileInput === 'file' ? filePart(part) : undefined;
+  }
+  if (part.type === 'input_audio') {
+    return capabilities.audioInput === 'input_audio' ? audioPart(part) : undefined;
+  }
   return undefined;
 }
 
@@ -93,7 +105,7 @@ function messageContent(
   item: Extract<ResponsesInputItem, { role: string }>,
   itemIndex: number,
   developerRole: ChatDeveloperRole,
-  imageInput: ChatImageInput | undefined,
+  mediaCapabilities: ChatMediaCapabilities,
 ): string | ChatUserContentPart[] {
   if (typeof item.content === 'string') return item.content;
   if (!Array.isArray(item.content)) {
@@ -123,7 +135,7 @@ function messageContent(
       content.push({ type: 'text', text: rawPart.refusal });
       continue;
     }
-    const translatedMedia = mediaPart(rawPart, imageInput);
+    const translatedMedia = mediaPart(rawPart, mediaCapabilities);
     if (normalizedRole !== 'user' || !translatedMedia) {
       throw new UnsupportedResponsesFeatureError(`input content part '${rawPart.type}'`);
     }
@@ -157,26 +169,30 @@ function stringifyToolOutput(output: unknown): string {
 function replaceToolMedia(
   value: unknown,
   media: ChatUserContentPart[],
-  imageInput: ChatImageInput | undefined,
+  mediaCapabilities: ChatMediaCapabilities,
 ): unknown {
-  if (Array.isArray(value)) return value.map((part) => replaceToolMedia(part, media, imageInput));
+  if (Array.isArray(value)) {
+    return value.map((part) => replaceToolMedia(part, media, mediaCapabilities));
+  }
   if (!isPlainObject(value)) return value;
-  const translated = mediaPart(value, imageInput);
+  const translated = mediaPart(value, mediaCapabilities);
   if (translated) {
     media.push(translated);
     return { type: 'text', text: TOOL_RESULT_MEDIA_MOVED_MARKER };
   }
   return Object.fromEntries(
-    Object.entries(value).map(([key, child]) => [key, replaceToolMedia(child, media, imageInput)]),
+    Object.entries(value).map(
+      ([key, child]) => [key, replaceToolMedia(child, media, mediaCapabilities)],
+    ),
   );
 }
 
 function splitToolOutput(
   output: unknown,
-  imageInput: ChatImageInput | undefined,
+  mediaCapabilities: ChatMediaCapabilities,
 ): { content: string; media: ChatUserContentPart[] } {
   const media: ChatUserContentPart[] = [];
-  const replaced = replaceToolMedia(output, media, imageInput);
+  const replaced = replaceToolMedia(output, media, mediaCapabilities);
   return {
     content: stringifyToolOutput(media.length > 0 ? replaced : output),
     media,
@@ -225,7 +241,7 @@ function reasoningText(value: unknown): string {
 
 interface TranslateInputOptions {
   developerRole: ChatDeveloperRole;
-  imageInput?: ChatImageInput;
+  mediaCapabilities: ChatMediaCapabilities;
   toolCallReasoningPlaceholder: boolean;
   googleThoughtSignaturePlaceholder: boolean;
   toolContext: ChatBridgeToolContext;
@@ -374,7 +390,7 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
       closeUnresolvedToolRound();
       if (!callId) callId = mintCallId('orphan');
       const fallbackName = typeof item.name === 'string' && item.name ? item.name : 'unknown_tool';
-      messages.push({
+      const synthesizedAssistant: ChatAssistantMessage = {
         role: 'assistant',
         content: null,
         tool_calls: [{
@@ -382,11 +398,13 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
           type: 'function',
           function: { name: fallbackName, arguments: '{}' },
         }],
-      });
+      };
+      ensureToolCallCompatibility(synthesizedAssistant, opts);
+      messages.push(synthesizedAssistant);
       pendingToolCalls = [{ id: callId, name: fallbackName }];
       matchIndex = 0;
     }
-    const transformed = splitToolOutput(output, opts.imageInput);
+    const transformed = splitToolOutput(output, opts.mediaCapabilities);
     messages.push({ role: 'tool', tool_call_id: callId, content: transformed.content });
     pendingMedia.push(...transformed.media);
     pendingToolCalls.splice(matchIndex, 1);
@@ -404,7 +422,7 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
         item as Extract<ResponsesInputItem, { role: string }>,
         index,
         opts.developerRole,
-        opts.imageInput,
+        opts.mediaCapabilities,
       );
       if (item.role === 'assistant') {
         if (typeof content !== 'string') {
@@ -634,7 +652,7 @@ export function translateResponsesRequestWithContext(
   reportDroppedTools(input.tools, opts.onDroppedTool);
   const messages = translateInput(input.input, {
     developerRole,
-    imageInput: capabilities.imageInput,
+    mediaCapabilities: capabilities,
     toolCallReasoningPlaceholder: capabilities.toolCallReasoningPlaceholder === true,
     googleThoughtSignaturePlaceholder: capabilities.googleThoughtSignaturePlaceholder === true,
     toolContext,
