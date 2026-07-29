@@ -113,14 +113,26 @@ const prefersReducedMotion = (): boolean =>
  *
  *   running(旋转) → closing(仍在旋转中,两道弧缺口收拢至满圆,600ms
  *   一次性 stroke-dasharray 过渡,globals.css .summon-seal-arc) →
- *   settling(光晕从法阵荡开一圈 + ✓ 在头像角弹出;满圆旋转不可见,此刻
- *   摘除旋转动画零跳变) → done(静态)。
+ *   settling(fulfilled 时光晕从法阵荡开一圈 + ✓ 在头像角弹出;满圆旋转
+ *   不可见,此刻摘除旋转动画零跳变) → done(静态)。
  *
- * 语义自洽:缺口 = 进行中,满圆 = 完成。历史消息挂载时已非 running,直接
- * 渲 done 静态帧、零动画(规则 7);motion-reduce 下旋转/过渡/光晕全部
- * 禁用(globals.css 白名单),直接落终态帧。
+ * 语义自洽:缺口 = 进行中,满圆 = turn 结束。✓ 与光晕只在 fulfilled(本轮
+ * 真发生过 ghost_call)时出现——$指令 被取消 / AI 最终没调插件的,环中性
+ * 闭合、不放成功徽标,与状态文字「已完成」一致(不伪造成功,review 反馈)。
+ * 历史消息挂载时已非 running,直接渲 done 静态帧、零动画(规则 7);
+ * motion-reduce 下旋转/过渡/光晕全部禁用(globals.css 白名单)且 JS 状态机
+ * 直落终态帧。
  */
-function SummonSeal({ iconDataUrl, running }: { iconDataUrl: string | null; running?: boolean }) {
+function SummonSeal({
+  iconDataUrl,
+  running,
+  fulfilled,
+}: {
+  iconDataUrl: string | null;
+  running?: boolean;
+  /** 本轮是否真调过该插件:成功徽标(✓/光晕)的唯一开关,中性终态只闭环。 */
+  fulfilled?: boolean;
+}) {
   const [phase, setPhase] = useState<SealPhase>(running ? 'running' : 'done');
   // 本次挂载期间是否亲历过 running:只有亲历者播终态编舞,历史消息静态落帧。
   const livedRunningRef = useRef(Boolean(running));
@@ -146,7 +158,7 @@ function SummonSeal({ iconDataUrl, running }: { iconDataUrl: string | null; runn
 
   const spinning = phase === 'running' || phase === 'closing';
   const closed = phase !== 'running';
-  const showTick = phase === 'settling' || phase === 'done';
+  const showTick = Boolean(fulfilled) && (phase === 'settling' || phase === 'done');
 
   return (
     <span className="relative flex h-[26px] w-[26px] shrink-0 items-center justify-center">
@@ -188,7 +200,7 @@ function SummonSeal({ iconDataUrl, running }: { iconDataUrl: string | null; runn
           />
         </svg>
       </span>
-      {phase === 'settling' && (
+      {fulfilled && phase === 'settling' && (
         <span
           aria-hidden="true"
           className="summon-seal-halo pointer-events-none absolute inset-0 rounded-full border"
@@ -220,7 +232,7 @@ function SummonSeal({ iconDataUrl, running }: { iconDataUrl: string | null; runn
           <Check
             size={7}
             strokeWidth={3}
-            className="text-[var(--surface-on-card)]"
+            className="text-[var(--completion-badge-fg)]"
             aria-hidden="true"
           />
         </span>
@@ -385,7 +397,11 @@ export function GhostSummonCard({
           'focus-visible:ring-[var(--focus-ring-soft)]',
         )}
       >
-        <SummonSeal iconDataUrl={installedGhost?.iconDataUrl ?? null} running={running} />
+        <SummonSeal
+          iconDataUrl={installedGhost?.iconDataUrl ?? null}
+          running={running}
+          fulfilled={anyFulfilled}
+        />
         <span
           className="min-w-0 truncate text-xs font-medium transition-colors group-hover:text-[var(--text-primary)]"
           style={{ color: 'var(--text-secondary)' }}

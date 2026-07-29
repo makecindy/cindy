@@ -90,28 +90,54 @@ describe('GhostSummonCard(chip 形态)', () => {
 
   it('mounts historic messages directly on the closed static frame', () => {
     const { container } = render(
-      <GhostSummonCard directive={commandDirective} messageClientId="m1" />,
+      <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['xd-feishu'])}>
+        <GhostSummonCard directive={commandDirective} messageClientId="m1" />
+      </GhostFulfillmentContext.Provider>,
     );
     const arcs = container.querySelectorAll('circle.summon-seal-arc');
     expect(arcs.length).toBe(2);
     for (const arc of arcs) {
       expect(arc.getAttribute('stroke-dasharray')).toBe('100 0');
     }
-    // 静态终态:✓ 直显但不挂弹出动画(历史消息零动画)。
-    const tick = container.querySelector('.summon-seal-tick-pop');
-    expect(tick).toBeNull();
+    // 静态终态:✓ 直显(fulfilled)但不挂弹出动画(历史消息零动画)。
+    expect(container.querySelector('svg.lucide-check')).toBeTruthy();
+    expect(container.querySelector('.summon-seal-tick-pop')).toBeNull();
+  });
+
+  it('closes neutrally without tick or halo when the plugin was never actually called', () => {
+    vi.useFakeTimers();
+    const { container, rerender } = render(
+      <GhostSummonCard directive={commandDirective} messageClientId="m2" running />,
+    );
+    rerender(<GhostSummonCard directive={commandDirective} messageClientId="m2" running={false} />);
+    act(() => {
+      vi.advanceTimersByTime(1500);
+    });
+    // 环中性闭合 = turn 结束;不放 ✓/光晕伪造成功,状态文字为「已完成」。
+    for (const arc of container.querySelectorAll('circle.summon-seal-arc')) {
+      expect(arc.getAttribute('stroke-dasharray')).toBe('100 0');
+    }
+    expect(container.querySelector('svg.lucide-check')).toBeNull();
+    expect(container.querySelector('.summon-seal-halo')).toBeNull();
+    expect(screen.getByText('已完成')).toBeTruthy();
   });
 
   it('plays the closing choreography when running flips false', () => {
     vi.useFakeTimers();
     const { container, rerender } = render(
-      <GhostSummonCard directive={commandDirective} messageClientId="m1" running />,
+      <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['xd-feishu'])}>
+        <GhostSummonCard directive={commandDirective} messageClientId="m1" running />
+      </GhostFulfillmentContext.Provider>,
     );
     let arcs = container.querySelectorAll('circle.summon-seal-arc');
     expect(arcs[0]?.getAttribute('stroke-dasharray')).toBe('83 17');
     expect(arcs[1]?.getAttribute('stroke-dasharray')).toBe('39 61');
 
-    rerender(<GhostSummonCard directive={commandDirective} messageClientId="m1" running={false} />);
+    rerender(
+      <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['xd-feishu'])}>
+        <GhostSummonCard directive={commandDirective} messageClientId="m1" running={false} />
+      </GhostFulfillmentContext.Provider>,
+    );
     // closing:缺口已收拢,旋转仍挂着(满圆前不摘)。
     arcs = container.querySelectorAll('circle.summon-seal-arc');
     for (const arc of arcs) {
@@ -139,9 +165,15 @@ describe('GhostSummonCard(chip 形态)', () => {
     stubMatchMedia(true);
     vi.useFakeTimers();
     const { container, rerender } = render(
-      <GhostSummonCard directive={commandDirective} messageClientId="m1" running />,
+      <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['xd-feishu'])}>
+        <GhostSummonCard directive={commandDirective} messageClientId="m1" running />
+      </GhostFulfillmentContext.Provider>,
     );
-    rerender(<GhostSummonCard directive={commandDirective} messageClientId="m1" running={false} />);
+    rerender(
+      <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['xd-feishu'])}>
+        <GhostSummonCard directive={commandDirective} messageClientId="m1" running={false} />
+      </GhostFulfillmentContext.Provider>,
+    );
     // 不走 closing/settling 计时:立即闭合 + ✓ 直显 + 无旋转、无光晕。
     const arcs = container.querySelectorAll('circle.summon-seal-arc');
     for (const arc of arcs) {
