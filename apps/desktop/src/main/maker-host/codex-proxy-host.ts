@@ -186,6 +186,35 @@ function createCodexTransform(): RequestTransform {
   return createInstructionsInjectionTransform({ registry, logger: log });
 }
 
+/**
+ * Codex Code Mode 对部分 GPT-5.6 网关模型不会发出 Responses 原生搜索声明：
+ * 目录里的 `supports_search_tool` / `webSearch` 能力虽为 true，但 Gateway 只看最终
+ * 请求的 `tools`。插件搜索是增强项，不能作为该基础能力的前置条件，因此在明确走
+ * Cindy Gateway 的 GPT-5.6 请求中补回标准 `web_search` 工具；已有声明保持原样。
+ */
+function createGatewayNativeWebSearchTransform(): RequestTransform {
+  return (body, ctx) => {
+    if (!isPlainObject(body) || typeof body.model !== 'string') return null;
+    const path = ctx.url.split('?', 1)[0] ?? ctx.url;
+    if (ctx.method !== 'POST' || (!path.endsWith('/responses') && path !== '/responses')) return null;
+
+    const model = body.model;
+    const gatewayModel = model.replace(/^codex\//, '');
+    if (!/^gpt-5\.6(?:$|[-.])/.test(gatewayModel)) return null;
+
+    const sessionId = sessionIdFromTransformCtx(ctx);
+    const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
+    const isGatewaySession = explicitProviderId
+      ? explicitProviderId === 'xd'
+      : model.startsWith('codex/') || getCodexProxyAuthInjection() === 'env-key';
+    if (!isGatewaySession) return null;
+
+    const existingTools = Array.isArray(body.tools) ? body.tools : [];
+    if (existingTools.some((tool) => isPlainObject(tool) && tool.type === 'web_search')) return null;
+    return { ...body, tools: [...existingTools, { type: 'web_search' }] };
+  };
+}
+
 function sessionIdFromTransformCtx(ctx: RequestTransformCtx): string | undefined {
   const threadId = selectedThreadIdFromHeaders(ctx.headers);
   return threadId ? threadToSession.get(threadId) : undefined;
@@ -1462,6 +1491,7 @@ function createTransformRequestChain(): RequestTransform[] {
       strip: stripImageGenerationItemsWithoutIdFromBody,
     }),
     createCodexTransform(),
+    createGatewayNativeWebSearchTransform(),
     // 必须先于 xAI/MiniMax 兼容改写:加密压缩块换成明文占位 message 后,后续
     // 针对具体供应商的 input 归一化才能按标准 message 处理它。
     createCrossProviderCompactionCompatTransform(),

@@ -566,8 +566,8 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, instructions 注入, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
+        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
@@ -600,6 +600,86 @@ describe('codex proxy host', () => {
 
     host.unregister('session-1');
     expect(mockState.capturedRegistry?.get('thread-1')).toBeUndefined();
+  });
+
+  it('restores native web_search for Gateway GPT-5.6 when Codex omitted the declaration', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-gateway-search', 'thread-gateway-search', 'PRODUCT_PROMPT');
+    setSessionProvider('session-gateway-search', 'xd');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'gpt-5.6-sol',
+      tools: [{ type: 'function', name: 'read_file' }],
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-gateway-search' } };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'gpt-5.6-sol',
+      tools: [
+        { type: 'function', name: 'read_file' },
+        { type: 'web_search' },
+      ],
+    });
+
+    // 未显式选择来源的 codex/ 模型仍由默认路由送往 Gateway。
+    clearSessionProvider('session-gateway-search');
+    current = { model: 'codex/gpt-5.6-sol' };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+    expect(current).toEqual({
+      model: 'codex/gpt-5.6-sol',
+      tools: [{ type: 'web_search' }],
+    });
+
+    current = {
+      model: 'codex/gpt-5.6-sol',
+      tools: [{ type: 'web_search', external_web_access: false }],
+    };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+    expect(current).toEqual({
+      model: 'codex/gpt-5.6-sol',
+      tools: [{ type: 'web_search', external_web_access: false }],
+    });
+  });
+
+  it('does not add Gateway native search to non-Gateway GPT-5.6 sessions', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-subscription-search', 'thread-subscription-search', 'PRODUCT_PROMPT');
+    setSessionProvider('session-subscription-search', 'openai');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    const original = { model: 'gpt-5.6-sol' };
+    let current: unknown = original;
+    const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-subscription-search' } };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual(original);
+    clearSessionProvider('session-subscription-search');
   });
 
   it('normalizes xAI Codex Responses body before forwarding requests', async () => {
@@ -1590,7 +1670,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(11); // encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(12); // encrypted activeStrip, image generation activeStrip, instructions 注入, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',
