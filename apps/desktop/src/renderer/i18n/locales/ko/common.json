@@ -376,7 +376,7 @@
         "customSkin": "사용자 지정 스킨",
         "switchFailed": "외관 스타일을 전환할 수 없습니다. 잠시 후 다시 시도해 주세요.",
         "deleteTitle": "‘{{name}}’을(를) 삭제할까요?",
-        "deleteDescription": "이 스킨 프리셋과 연결된 미디어 참조를 삭제합니다. 사용 중이면 Cindy가 이전에 선택한 테마로 돌아갑니다.",
+        "deleteDescription": "이 스킨 프리셋과 연결된 미디어 참조를 삭제합니다. 사용 중이면 다른 외관 스타일로 전환할 때까지 현재 외관이 유지됩니다.",
         "deleteConfirm": "삭제",
         "deleteAria": "스킨 ‘{{name}}’ 삭제",
         "deleted": "스킨 ‘{{name}}’을(를) 삭제했습니다",

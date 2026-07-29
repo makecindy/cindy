@@ -376,7 +376,7 @@
         "customSkin": "Custom skin",
         "switchFailed": "Could not switch appearance style. Try again.",
         "deleteTitle": "Delete “{{name}}”?",
-        "deleteDescription": "This removes the skin preset and its retained media references. If it is active, Cindy returns to your previously selected theme.",
+        "deleteDescription": "This removes the skin preset and its retained media references. If it is active, the current appearance remains until you choose another appearance style.",
         "deleteConfirm": "Delete",
         "deleteAria": "Delete skin {{name}}",
         "deleted": "Deleted skin {{name}}",

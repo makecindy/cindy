@@ -376,7 +376,7 @@
         "customSkin": "自定义皮肤",
         "switchFailed": "无法切换外观风格，请稍后重试",
         "deleteTitle": "删除「{{name}}」？",
-        "deleteDescription": "将删除这套皮肤预设及其持有的媒体引用。如果它正在使用，Cindy 会切回你上次选择的主题。",
+        "deleteDescription": "将删除这套皮肤预设及其持有的媒体引用。如果它正在使用，当前外观会继续保留，直到你切换到其他外观样式。",
         "deleteConfirm": "删除",
         "deleteAria": "删除皮肤「{{name}}」",
         "deleted": "已删除皮肤「{{name}}」",
