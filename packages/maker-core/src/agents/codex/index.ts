@@ -4555,10 +4555,12 @@ export class CodexAgent extends BaseAgent {
           && pendingUserInputByTurn.get(turnId) === pendingForTurn
           && hasSubmittedUserInput(answersByPosition)
         ) {
-          const nextSubmittedForTurn = submittedForTurn
+          const nextSubmittedForTurn = submittedUserInputByTurn.get(turnId)
             ?? new Map<string, UserInputAnswersByPosition>();
           nextSubmittedForTurn.set(fingerprint, answersByPosition);
-          if (!submittedForTurn) submittedUserInputByTurn.set(turnId, nextSubmittedForTurn);
+          if (!submittedUserInputByTurn.has(turnId)) {
+            submittedUserInputByTurn.set(turnId, nextSubmittedForTurn);
+          }
         }
         return responseFromUserInputAnswersByPosition(questions, answersByPosition);
       } finally {

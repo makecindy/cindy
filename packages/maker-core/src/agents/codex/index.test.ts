@@ -9983,6 +9983,75 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('preserves submitted answers from different concurrent user input prompts', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-concurrent-user-input',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall handler');
+
+    const firstDecision = deferred<InteractionDecision>();
+    const secondDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async (req) => {
+      if (req.kind !== 'ask_user_question') throw new Error('expected ask_user_question');
+      requestCount += 1;
+      if (req.requestId === 'req-first') return firstDecision.promise;
+      if (req.requestId === 'req-second') return secondDecision.promise;
+      return {
+        kind: 'ask_user_question',
+        answers: { [req.questions[0]?.question ?? '']: 'Unexpected repeat' },
+      };
+    });
+
+    const callQuestion = (
+      requestId: string,
+      callId: string,
+      questionId: string,
+      question: string,
+    ) => handlers.dynamicToolCall?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId,
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{ id: questionId, header: 'Direction', question }],
+      },
+    }, { requestId });
+
+    const firstResultPromise = callQuestion('req-first', 'call-first', 'first', 'First question?');
+    const secondResultPromise = callQuestion('req-second', 'call-second', 'second', 'Second question?');
+    if (!firstResultPromise || !secondResultPromise) throw new Error('expected dynamic tool results');
+    expect(requestCount).toBe(2);
+
+    secondDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Second question?': 'Second answer' },
+    });
+    await secondResultPromise;
+    firstDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'First question?': 'First answer' },
+    });
+    await firstResultPromise;
+
+    const firstReplay = await callQuestion('req-first-replay', 'call-first-replay', 'first', 'First question?');
+    const secondReplay = await callQuestion('req-second-replay', 'call-second-replay', 'second', 'Second question?');
+    expect(firstReplay?.contentItems).toEqual([
+      { type: 'inputText', text: JSON.stringify({ first: { answers: ['First answer'] } }) },
+    ]);
+    expect(secondReplay?.contentItems).toEqual([
+      { type: 'inputText', text: JSON.stringify({ second: { answers: ['Second answer'] } }) },
+    ]);
+    expect(requestCount).toBe(2);
+    await handle.close();
+  });
+
   it('cancels pending user input when serverRequest/resolved arrives', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
