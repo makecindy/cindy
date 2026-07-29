@@ -19,13 +19,17 @@ import path from 'node:path';
 
 import JSZip from 'jszip';
 
-import { isValidGhostId, type InstalledGhost } from '../../shared/ghost';
+import { isValidGhostId, type InstalledGhost } from '../../shared/ghost.js';
 
-/** 与 forge.ts shouldSkip 同口径:点开头条目与开发残留不属于插件本体。 */
-function shouldSkipExportEntry(name: string): boolean {
-  if (name.startsWith('.')) return true; // .disabled / .cindy-trust.json / .DS_Store 等
-  if (name === 'node_modules') return true;
-  return false;
+/**
+ * 导出过滤口径(评审 P1):只跳过 zip 根部两个主机保留文件与纯系统残渣。
+ * 嵌套点文件、node_modules 都可能是包内容——签名包的 statement 覆盖全部
+ * 原始条目,多跳一个都会让导出包装回时完整性校验失败。
+ */
+const EXPORT_SKIP_ROOT_FILES = new Set(['.disabled', '.cindy-trust.json', '.DS_Store']);
+function shouldSkipExportEntry(name: string, relBase: string): boolean {
+  if (relBase === '') return EXPORT_SKIP_ROOT_FILES.has(name);
+  return name === '.DS_Store';
 }
 
 export type ExportGhostPackageResult =
@@ -93,15 +97,15 @@ export async function snapshotGhostPackage(
     return { ok: false, result: { status: 'error', code: 'read_failed' } };
   }
 
-  // 收集文件并立即读入内存:递归、跳过点开头条目(主机保留文件、
-  // .DS_Store 等)与 node_modules(运行残留,打包契约本来就不含)。
+  // 收集文件并立即读入内存:递归,只跳过根部主机保留文件与 .DS_Store
+  // (口径见 shouldSkipExportEntry 头注释)。
   // 安装目录内容来自装入侧已校验的 zip,此处只做如实归档,不设内容上限
   // (装入侧已卡过解压总量)。
   const files: Array<{ rel: string; data: Buffer }> = [];
   const walk = async (cur: string, relBase: string): Promise<void> => {
     const entries = await fs.promises.readdir(cur, { withFileTypes: true });
     for (const entry of entries) {
-      if (shouldSkipExportEntry(entry.name)) continue;
+      if (shouldSkipExportEntry(entry.name, relBase)) continue;
       const abs = path.join(cur, entry.name);
       const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
@@ -164,12 +168,22 @@ export async function writeGhostPackageSnapshot(
   }
   if (picked.canceled || !picked.filePath) return { status: 'canceled' };
 
+  // 原子落盘(评审 P1):先写目标目录里的临时文件,成功后 rename 替换。
+  // 直接 writeFile 会先截断旧文件——中途失败(磁盘满/断连/退出)会毁掉
+  // 用户原有的包。rename 同目录原子,失败时目标原样保留。
+  const targetPath = picked.filePath;
+  const tempPath = path.join(
+    path.dirname(targetPath),
+    `.cindy-export-${process.pid}-${Date.now()}.tmp`,
+  );
   try {
-    await deps.writeFile(picked.filePath, snapshot.buf);
+    await deps.writeFile(tempPath, snapshot.buf);
+    await fs.promises.rename(tempPath, targetPath);
   } catch {
+    await fs.promises.rm(tempPath, { force: true }).catch(() => {});
     return { status: 'error', code: 'write_failed' };
   }
-  return { status: 'saved', savedPath: picked.filePath };
+  return { status: 'saved', savedPath: targetPath };
 }
 
 /**

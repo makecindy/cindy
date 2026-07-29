@@ -80,9 +80,33 @@ describe('exportGhostPackage', () => {
       .filter((entry) => !entry.dir)
       .map((entry) => entry.name)
       .sort();
+    // 根部主机保留文件(.disabled/.cindy-trust.json)与 .DS_Store 被跳过;
+    // 包本体内容原样保留。
     expect(names).toEqual(['ghost.json', 'locales/en.json', 'main.js']);
     const manifest = JSON.parse(await zip.files['ghost.json'].async('string')) as { id: string };
     expect(manifest.id).toBe('hello');
+  });
+
+  it('嵌套点文件与 node_modules 属于包内容,导出必须保留(签名完整性)', async () => {
+    await fs.promises.mkdir(path.join(ghostDir, 'node_modules', 'dep'), { recursive: true });
+    await fs.promises.writeFile(path.join(ghostDir, 'node_modules', 'dep', 'index.js'), 'x');
+    await fs.promises.mkdir(path.join(ghostDir, 'data'), { recursive: true });
+    await fs.promises.writeFile(path.join(ghostDir, 'data', '.keep'), '');
+    await fs.promises.writeFile(path.join(ghostDir, 'cindy-signatures.json'), '{}');
+
+    const result = await exportGhostPackage('hello', makeDeps());
+    expect(result.status).toBe('saved');
+    if (result.status !== 'saved') return;
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(result.savedPath));
+    const names = Object.values(zip.files)
+      .filter((entry) => !entry.dir)
+      .map((entry) => entry.name)
+      .sort();
+    expect(names).toContain('node_modules/dep/index.js');
+    expect(names).toContain('data/.keep');
+    expect(names).toContain('cindy-signatures.json');
+    expect(names).not.toContain('.disabled');
+    expect(names).not.toContain('.cindy-trust.json');
   });
 
   it('默认文件名携带插件名与版本号,落在下载目录', async () => {
@@ -164,6 +188,22 @@ describe('exportGhostPackage', () => {
       writeFile: () => Promise.reject(new Error('disk full')),
     }));
     expect(result).toEqual({ status: 'error', code: 'write_failed' });
+  });
+
+  it('落盘先写临时文件再 rename,写失败不动既有目标文件', async () => {
+    const target = path.join(workDir, 'existing.cindy');
+    await fs.promises.writeFile(target, 'old-bytes');
+    const result = await exportGhostPackage('hello', makeDeps({
+      showSaveDialog: vi.fn(async () => ({ canceled: false, filePath: target })),
+      writeFile: () => Promise.reject(new Error('disk full')),
+    }));
+    expect(result).toEqual({ status: 'error', code: 'write_failed' });
+    // 旧文件原样保留,临时文件已清理。
+    await expect(fs.promises.readFile(target, 'utf8')).resolves.toBe('old-bytes');
+    const leftovers = (await fs.promises.readdir(workDir)).filter((name) =>
+      name.startsWith('.cindy-export-'),
+    );
+    expect(leftovers).toEqual([]);
   });
 
   it('安装目录不可读返回 read_failed', async () => {
