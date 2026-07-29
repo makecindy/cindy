@@ -112,6 +112,16 @@ describe('categorize', () => {
     expect(categorize('gemini-3.1-flash-image')).toBe('image');
     expect(categorize('gpt-image-1.5')).toBe('image');
   });
+
+  it('id 里不含类型关键词的知名非聊天模型家族(dall-e / sora / veo)也不误判为可聊天(2026-07 review:走 {id,name} 极简发现的自定义 OAuth 供应商没有 mode/group 兜底,全靠这份正则)', () => {
+    expect(categorize('dall-e-3')).toBe('image');
+    expect(categorize('dall-e-2')).toBe('image');
+    expect(categorize('sora-2')).toBe('video');
+    expect(categorize('veo-3')).toBe('video');
+    expect(isChatEligible({ id: 'dall-e-3' })).toBe(false);
+    expect(isChatEligible({ id: 'sora-2' })).toBe(false);
+    expect(isChatEligible({ id: 'veo-3' })).toBe(false);
+  });
 });
 
 describe('groupOf — 数据优先,前缀兜底', () => {

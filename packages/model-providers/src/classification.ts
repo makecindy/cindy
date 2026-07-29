@@ -120,8 +120,11 @@ export function categorize(id: string): ModelCategory {
   // 否则 gpt-image-2 / gemini-3-pro-image / gpt-4o-transcribe 会被误归到 gpt / google。
   // 这些是网关多返回的、不能当 agent 用的模型,默认关、仅按类型归类展示。
   if (/embedding/.test(id) || id.startsWith('voyage/')) return 'embedding';
-  if (/image/.test(id)) return 'image';
-  if (/seedance|happyhorse|video|-t2v|-i2v|-r2v/.test(id)) return 'video';
+  // dall-e(OpenAI 图像)id 里没有 "image" 字样,靠关键词兜底会漏网(2026-07 review:
+  // 走 {id,name} 极简发现的自定义 OAuth 供应商没有 mode/group,只能靠这份正则)。
+  if (/image/.test(id) || id.startsWith('dall-e')) return 'image';
+  // sora(OpenAI 视频)/ veo(Google 视频)同理,id 里没有 "video" 字样。
+  if (/seedance|happyhorse|video|-t2v|-i2v|-r2v/.test(id) || /^sora|^veo-/.test(id)) return 'video';
   if (id === 'ai-gateway-doc') return 'compression';
   // STT/ASR 必须在 realtime 判定之前:qwen3-asr-flash-realtime / fun-asr-realtime-* /
   // gpt-realtime-whisper 的 id 里都含 "realtime",但语义是语音转写,不是实时多模态。
