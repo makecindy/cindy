@@ -1545,6 +1545,43 @@ describe('repairToolExchangeAdjacencyFromBody', () => {
     expect(repairToolExchangeAdjacencyFromBody(body)).toBeNull();
   });
 
+  it('same-message parallel same-id calls pair a stray result in call order', () => {
+    // 同一条 assistant 消息内的 parallel 同 id calls 同批发出,其中一个
+    // result 丢失时归属在原理上不可判定 —— 按 CC 落库惯例(result 顺序与
+    // call 顺序一致)区间内顺序配对:错位的 r 配给 call#1,call#2 合成。
+    // (归属区间按 exchange 粒度计算,同消息 calls 共享区间。)
+    const body = buf({
+      messages: [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'X', name: 'Edit', input: { a: 1 } },
+            { type: 'tool_use', id: 'X', name: 'Edit', input: { a: 2 } },
+          ],
+        },
+        { role: 'user', content: [{ type: 'text', text: '之间' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'X', content: 'stray' }] },
+        { role: 'user', content: '继续' },
+      ],
+    });
+    const out = repairToolExchangeAdjacencyFromBody(body);
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages.map((m: { role: string }) => m.role)).toEqual([
+      'user', 'assistant', 'user', 'user',
+    ]);
+    // stray 前移到紧邻 user(之间)前导区间(配 call#1),call#2 合成紧随其后。
+    expect(parsed.messages[2].content).toEqual([
+      { type: 'tool_result', tool_use_id: 'X', content: 'stray' },
+      {
+        type: 'tool_result',
+        tool_use_id: 'X',
+        content: 'Tool result is not available in the current context. Do not assume the tool completed successfully.',
+      },
+      { type: 'text', text: '之间' },
+    ]);
+  });
+
   it('returns null for non-JSON body / missing messages', () => {
     expect(repairToolExchangeAdjacencyFromBody(Buffer.from('not json', 'utf8'))).toBeNull();
     expect(repairToolExchangeAdjacencyFromBody(buf({ model: 'x' }))).toBeNull();

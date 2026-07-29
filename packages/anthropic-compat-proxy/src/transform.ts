@@ -708,11 +708,13 @@ const SYNTHETIC_TOOL_RESULT_TEXT =
  *      做完位置配对后才进入接力 —— 否则较早的同 id 缺口 call 会抢走较晚
  *      call 紧邻位置的真实 result,造成张冠李戴。
  *   2. 接力补缺 + 错位重排: 位置配对失败的 call 从结果池取**归属区间**(本
- *      call 到下一个同 id call 之间 —— agentic loop 串行,出现在下一个同 id
- *      call 之后的 result 只属于后面的 call,较早缺口 call 不得越区抢走)内
- *      的第一个未消费块;不在合法位置(跨消息,或同消息内落在 text 之后)的
- *      前移至紧邻消息的前导 tool_result 区间,原位置移除。Anthropic 要求
- *      result 紧跟 call 所在 assistant 且居于 text 前,留在错误位置仍是 400。
+ *      assistant 消息到下一条含同 id call 的 assistant 消息之间 —— agentic
+ *      loop 串行,出现在下一个同 id exchange 之后的 result 只属于后面的
+ *      exchange,较早缺口不得越界抢走;同消息 parallel calls 同批发出,归属
+ *      不可判定时按"result 顺序与 call 顺序一致"惯例顺序配对)内的第一个
+ *      未消费块;不在合法位置(跨消息,或同消息内落在 text 之后)的前移至
+ *      紧邻消息的前导 tool_result 区间,原位置移除。Anthropic 要求 result
+ *      紧跟 call 所在 assistant 且居于 text 前,留在错误位置仍是 400。
  *   3. 缺失合成: 非 trailing 的 call 无候选 → 紧邻位置合成占位(kimi 同文案
  *      同语义;不设 is_error —— "结果不可用"≠"执行失败")。插入规则与重排
  *      相同;string content 转等价数组,空白 string 不附加 text 块。
@@ -833,11 +835,16 @@ function repairToolExchangeAdjacencyInMessages(messages: unknown[]): unknown[] |
   // pass B2: 接力 —— 位置配对失败的 call,从结果池取**归属区间**内的第一个
   // 未消费块前移(错位重排);无候选 → 非 trailing 合成占位。
   //
-  // 归属区间 = (本 call 下标, 下一个同 id call 下标)。依据 agentic loop 串行:
-  // 下一个同 id call 发出时,本 call 的 result 必已回来(或丢失)——出现在下一个
-  // 同 id call 之后的 result 只属于后面的 call。较早缺口 call 不得越区抢走较
-  // 晚 call 的错位真实结果(Greptile 第二轮反例: 两个同 id call 都无紧邻
-  // result、r2 错位在 call#2 之后 → r2 归 call#2,call#1 合成)。
+  // 归属区间 = (本 assistant 消息下标, 下一条含同 id call 的 assistant 消息
+  // 下标) —— 即"同 id exchange"边界。依据 agentic loop 串行:下一个 exchange
+  // 的同 id call 发出时,本 exchange 的同 id result 必已回来(或丢失),出现在
+  // 下一个 exchange 之后的 result 只属于后面的 exchange;较早缺口 exchange
+  // 不得越界抢较晚 exchange 的错位真实结果(Greptile 第二轮反例)。
+  //
+  // 边界粒度刻意是 exchange(消息)而非单个 call:同一条 assistant 消息内的
+  // parallel 同 id calls 同批发出、result 同批回来,其中一个丢失时归属在
+  // 原理上不可判定 —— 此时按 CC 落库惯例(result 顺序与 call 顺序一致)在
+  // 区间内涵 call 顺序先到先得,与无歧义场景的配对规则保持同一条惯例。
   //
   // trailing missing call 同样消费区间内的块,但**只消费不修复**(不移、不
   // 合成)——保护 trailing 交换的合法尾部 result(如 parallel trailing calls
