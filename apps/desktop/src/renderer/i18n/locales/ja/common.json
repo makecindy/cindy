@@ -4083,19 +4083,43 @@
     "createAgent": {
       "quickStart": "クイックスタート",
       "quickStarts": {
-        "explore": "コードを探索して理解",
-        "build": "新機能、アプリ、ツールを構築",
-        "review": "コードをレビューして修正を提案",
-        "fix": "問題や失敗を修正"
-      },
-      "sidebar": {
-        "new": "新規",
-        "automation": "自動化",
-        "skills": "スキル",
-        "search": "検索",
-        "local": "ローカル",
-        "projects": "プロジェクト",
-        "conversations": "会話"
+        "starting": "開始しています…",
+        "dialogue": {
+          "appsAndTools": {
+            "label": "ツール／アプリを作る",
+            "kickoff": "Hi Cindy! ツールやアプリを作ってみたいんです。まずは何が必要か、質問しながら一緒に整理してください。"
+          },
+          "docsAndData": {
+            "label": "文書作成／データ分析",
+            "kickoff": "Hi Cindy! 文書を書くか、データを分析したいと思っています。まず、どんな成果物が必要か、手元にどんな資料があるか聞いてください。"
+          },
+          "designAndImages": {
+            "label": "デザイン／画像編集",
+            "kickoff": "Hi Cindy! デザインの作成か画像の編集をお願いしたいです。まず、用途や手元の素材、仕上がりのイメージを聞いてください。"
+          },
+          "webSearch": {
+            "label": "ウェブを検索",
+            "kickoff": "Hi Cindy! ウェブでちょっと調べものをしたいんです。まず、何を探しているのか、どんな結果がほしいのか聞いてください。"
+          }
+        },
+        "project": {
+          "explore": {
+            "label": "プロジェクトを理解する",
+            "kickoff": "Hi Cindy! まずこのプロジェクトをひと通り見て、どんなプロジェクトなのか教えてください。"
+          },
+          "build": {
+            "label": "新機能を構築する",
+            "kickoff": "Hi Cindy! このプロジェクトに新機能を追加したいんです。まず要件と受け入れ基準を一緒に固めてください。"
+          },
+          "review": {
+            "label": "コードをレビューする",
+            "kickoff": "Hi Cindy! このプロジェクトのコードをレビューしてほしいです。まず、見てほしい範囲と重点を聞いてください。"
+          },
+          "fix": {
+            "label": "問題を調査・修正する",
+            "kickoff": "Hi Cindy! このプロジェクトで気になる問題があるので、調べて直したいです。まず、症状や再現手順、エラーの内容を聞いてください。"
+          }
+        }
       }
     },
     "addRemoteProject": {
@@ -5253,7 +5277,7 @@
       }
     },
     "layout": {
-      "new": "新規",
+      "new": "新規タスク",
       "automations": "自動化",
       "markAllAsRead": "すべて既読にする",
       "markedAsRead_one": "{{count}} 件の実行を既読にしました",
@@ -5268,6 +5292,8 @@
       "chatPlaceholder": "続けてやり取りしましょう…",
       "chatDropAreaAria": "チャットのファイルドロップ領域",
       "openWorkingDirAria": "作業ディレクトリをシステムのファイルマネージャーで開く",
+      "taskWorkspaceLabel": "独立タスクスペース",
+      "openTaskWorkspaceAria": "タスクフォルダをシステムのファイルマネージャーで開く",
       "projectContextLoaded": "プロジェクトナレッジベースを読み込みました",
       "contextRing": {
         "compactHint": "クリックでコンテキストを圧縮",
@@ -5277,7 +5303,6 @@
         "confirmAction": "圧縮",
         "confirmCancel": "キャンセル"
       },
-      "dialogueLabel": "対話",
       "backToAutomations": "Automations に戻る",
       "waitForReply": "ドキュメント領域での返信を待っています…",
       "modelSwitchedFastModeOff": "モデルを切り替えました。Fast Mode は無効になりました"

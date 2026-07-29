@@ -4084,19 +4084,43 @@
     "createAgent": {
       "quickStart": "Quick start",
       "quickStarts": {
-        "explore": "Explore and understand code",
-        "build": "Build a feature, app, or tool",
-        "review": "Review code and suggest changes",
-        "fix": "Fix issues and failures"
-      },
-      "sidebar": {
-        "new": "New",
-        "automation": "Automation",
-        "skills": "Skills",
-        "search": "Search",
-        "local": "Local",
-        "projects": "Projects",
-        "conversations": "Conversations"
+        "starting": "Starting…",
+        "dialogue": {
+          "appsAndTools": {
+            "label": "Build a Tool / App",
+            "kickoff": "Hi Cindy! I'd like to build a tool or an app — help me figure out what I really need first."
+          },
+          "docsAndData": {
+            "label": "Write Docs / Analyze Data",
+            "kickoff": "Hi Cindy! I've got a document to write or some data to dig into — start by asking me what I need to deliver and what materials I have."
+          },
+          "designAndImages": {
+            "label": "Design / Edit Images",
+            "kickoff": "Hi Cindy! I'd like to design something or touch up an image — start by asking me about the use case, the assets I have, and how the result should look."
+          },
+          "webSearch": {
+            "label": "Search the Web",
+            "kickoff": "Hi Cindy! I'd like to look something up on the web — start by asking me what I'm after and what kind of results would help."
+          }
+        },
+        "project": {
+          "explore": {
+            "label": "Explore Project",
+            "kickoff": "Hi Cindy! Take a look around this project and help me get familiar with it first."
+          },
+          "build": {
+            "label": "Build a New Feature",
+            "kickoff": "Hi Cindy! I'd like to add a new feature to this project — help me pin down the requirements and acceptance criteria first."
+          },
+          "review": {
+            "label": "Review Code",
+            "kickoff": "Hi Cindy! I'd like you to review this project’s code — start by asking me about the scope and what to focus on."
+          },
+          "fix": {
+            "label": "Diagnose and Fix Issues",
+            "kickoff": "Hi Cindy! Something in this project needs fixing — start by asking me about the symptoms, how to reproduce it, and any error messages."
+          }
+        }
       }
     },
     "addRemoteProject": {
@@ -5263,7 +5287,7 @@
       }
     },
     "layout": {
-      "new": "New",
+      "new": "New Task",
       "automations": "Automations",
       "markAllAsRead": "Mark all as read",
       "markedAsRead_one": "Marked {{count}} run as read",
@@ -5278,6 +5302,8 @@
       "chatPlaceholder": "Let's keep chatting…",
       "chatDropAreaAria": "Chat file drop area",
       "openWorkingDirAria": "Open working directory in the system file manager",
+      "taskWorkspaceLabel": "Independent Task Space",
+      "openTaskWorkspaceAria": "Open task folder in the system file manager",
       "projectContextLoaded": "Project Knowledge Base loaded",
       "contextRing": {
         "compactHint": "Click to compact context",
@@ -5287,7 +5313,6 @@
         "confirmAction": "Compact",
         "confirmCancel": "Cancel"
       },
-      "dialogueLabel": "Dialogue",
       "backToAutomations": "Back to Automations",
       "waitForReply": "Waiting for your reply in the document area…",
       "modelSwitchedFastModeOff": "Model switched, Fast Mode disabled"

@@ -92,11 +92,11 @@ describe('composer atomic chip presentation', () => {
 
   it('keeps the caret and prose 4px away from every composer pill', () => {
     // 按「规则体设了 margin-inline」定位这条共用外间距规则，而不是把整份选择器
-    // 列表写死：这条 :is() 是所有 composer 胶囊共用的，新增胶囊时会往列表里加成员
-    // （如 #599 的 .quick-start-pill）。写死完整列表会让那类改动把断言变成
+    // 列表写死：这条 :is() 是所有 composer 胶囊共用的，新增胶囊时会往列表里加成员。
+    // 写死完整列表会让那类改动把断言变成
     // gapRule === undefined，报出与本意无关的 "undefined and string" 断言错误。
     const gapRuleMatch = [
-      ...globalsSource.matchAll(/\.ProseMirror :is\(([^)]*)\)\s*\{([^}]*)\}/g),
+      ...globalsSource.matchAll(/\.ProseMirror\s+:is\(([^)]*)\)\s*\{([^}]*)\}/g),
     ].find(([, , body]) => body.includes('margin-inline'));
     const [, gapSelectors, gapRule] = gapRuleMatch ?? [];
 
@@ -109,7 +109,6 @@ describe('composer atomic chip presentation', () => {
       '[data-composer-quote]',
       '.ghost-cmd-pill',
       '.slash-cmd-pill',
-      '.quick-start-pill',
     ]) {
       expect(gapSelectors).toContain(pill);
     }

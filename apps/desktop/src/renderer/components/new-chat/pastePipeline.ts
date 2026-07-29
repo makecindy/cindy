@@ -51,7 +51,7 @@ export function isLongPasteText(text: string): boolean {
 
 /**
  * 剪贴板 HTML 是否带本编辑器自家的 chip 标记(mentionChip / pastedTextChip /
- * composerQuote / quickStartPill)
+ * composerQuote)
  * 的 toDOM 输出)。命中时 handlePaste 应把整个粘贴交回 ProseMirror 默认
  * HTML 解析(parseHTML 原样还原 chip 与周围文本),跳过全部文本变换管线:
  * atom chip 在 text/plain 里没有文本投影,任何「取 text/plain 处理」的分支
@@ -60,7 +60,7 @@ export function isLongPasteText(text: string): boolean {
  * 的 data-pasted-text 里)。标记是本产品 toDOM 专属,外部网页不会携带。
  */
 export function htmlCarriesOwnChipMarkup(html: string): boolean {
-  return /data-(?:mention-chip|pasted-text-chip|composer-quote|quick-start-pill)/.test(html);
+  return /data-(?:mention-chip|pasted-text-chip|composer-quote)/.test(html);
 }
 
 /** 粘贴文本的行数(chip 文案用)。 */
@@ -174,7 +174,10 @@ export function segmentPastedContent(
   const winLike = workingDir ? /^[A-Za-z]:[\\/]/.test(workingDir) : false;
   const containsWorkdir = workingDir
     ? (winLike ? text.toLowerCase().replace(/\\/g, '/') : text).includes(
-        (winLike ? workingDir.toLowerCase().replace(/\\/g, '/') : workingDir).replace(/[\\/]+$/, ''),
+        (winLike ? workingDir.toLowerCase().replace(/\\/g, '/') : workingDir).replace(
+          /[\\/]+$/,
+          '',
+        ),
       )
     : false;
   if (workingDir && containsWorkdir) {
@@ -266,10 +269,7 @@ function segmentDeepLinks(text: string): PastedContentSegment[] | null {
 }
 
 /** 在一个 text 段里切出 workdir 内的绝对路径候选;无命中 → null。 */
-function segmentPathCandidates(
-  text: string,
-  workingDir: string,
-): PastedContentSegment[] | null {
+function segmentPathCandidates(text: string, workingDir: string): PastedContentSegment[] | null {
   PATH_CANDIDATE_RE.lastIndex = 0;
   const segments: PastedContentSegment[] = [];
   let cursor = 0;

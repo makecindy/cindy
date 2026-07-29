@@ -144,6 +144,10 @@
 
 OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。
 
+### Independent Task Space
+
+Dialogue 模式下由 Cindy 管理的本地 working directory 的用户可见名称，用于保存文件型交付物和中间产物；它不是项目，也不是对话消息的唯一存储。先登记为 proposed，避免任务文件夹／工作空间／临时目录等多套称呼。
+
 ### Black Cat
 
 灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色本体是黑猫形象,四语先采用直译并登记为待讨论,避免后续界面出现「ブラックキャット / 블랙캣」等音译与直译混用。
@@ -151,6 +155,10 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 ### Erika
 
 灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。
+
+### New Task
+
+Desktop 全局创建入口的产品名称。它表达开始一项新的工作，但不新增独立 Task 数据实体；创建后仍由既有对话承载。先登记为 proposed，避免与 New／New Session／Automation Task 混称。
 
 ### OpenClaw
 

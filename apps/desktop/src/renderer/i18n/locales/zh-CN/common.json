@@ -4083,19 +4083,43 @@
     "createAgent": {
       "quickStart": "快速开始",
       "quickStarts": {
-        "explore": "探索并理解代码",
-        "build": "构建新功能、应用或工具",
-        "review": "审查代码并提出修改建议",
-        "fix": "修复问题和失败"
-      },
-      "sidebar": {
-        "new": "新建",
-        "automation": "自动化",
-        "skills": "技能",
-        "search": "搜索",
-        "local": "本机",
-        "projects": "项目",
-        "conversations": "对话"
+        "starting": "正在开始…",
+        "dialogue": {
+          "appsAndTools": {
+            "label": "制作工具／应用",
+            "kickoff": "Hi Cindy! 我想做一个工具或应用，先陪我把需求聊清楚吧。"
+          },
+          "docsAndData": {
+            "label": "写文档／分析数据",
+            "kickoff": "Hi Cindy! 我想写份文档或者分析些数据，先问问我要交付什么、手上有哪些材料吧。"
+          },
+          "designAndImages": {
+            "label": "设计／编辑图片",
+            "kickoff": "Hi Cindy! 我想做点设计或者修修图，先问问我的使用场景、手头的素材和想要的效果吧。"
+          },
+          "webSearch": {
+            "label": "搜索互联网",
+            "kickoff": "Hi Cindy! 我想上网查点东西，先问问我要找什么、想要什么样的结果吧。"
+          }
+        },
+        "project": {
+          "explore": {
+            "label": "了解项目",
+            "kickoff": "Hi Cindy! 先带我熟悉一下这个项目吧。"
+          },
+          "build": {
+            "label": "构建新功能",
+            "kickoff": "Hi Cindy! 我想给这个项目加个新功能，先陪我把需求和验收标准理清楚吧。"
+          },
+          "review": {
+            "label": "审查代码",
+            "kickoff": "Hi Cindy! 我想审查一下这个项目的代码，先问问我要看的范围和重点吧。"
+          },
+          "fix": {
+            "label": "排查并修复问题",
+            "kickoff": "Hi Cindy! 这个项目有个问题想排查修复，先问问我具体现象、怎么复现、有什么报错吧。"
+          }
+        }
       }
     },
     "addRemoteProject": {
@@ -5253,7 +5277,7 @@
       }
     },
     "layout": {
-      "new": "新建",
+      "new": "新任务",
       "automations": "自动化",
       "markAllAsRead": "全部标记为已读",
       "markedAsRead_one": "已标记 {{count}} 条运行为已读",
@@ -5268,6 +5292,8 @@
       "chatPlaceholder": "继续聊一聊…",
       "chatDropAreaAria": "对话区文件拖放区域",
       "openWorkingDirAria": "在系统文件管理器中打开工作目录",
+      "taskWorkspaceLabel": "独立任务空间",
+      "openTaskWorkspaceAria": "在系统文件管理器中打开任务文件夹",
       "projectContextLoaded": "项目知识库已加载",
       "contextRing": {
         "compactHint": "点击压缩上下文",
@@ -5277,7 +5303,6 @@
         "confirmAction": "压缩",
         "confirmCancel": "取消"
       },
-      "dialogueLabel": "对话",
       "backToAutomations": "返回 Automations",
       "waitForReply": "等待你在文档区回复…",
       "modelSwitchedFastModeOff": "已切换模型，Fast Mode 已关闭"

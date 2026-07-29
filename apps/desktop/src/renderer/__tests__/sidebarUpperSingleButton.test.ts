@@ -15,6 +15,10 @@ const sidebarSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSidebarUpper.tsx'),
   'utf8',
 );
+const sidebarTopNavSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'sidebar', 'SidebarTopNav.tsx'),
+  'utf8',
+);
 
 describe('sidebar 顶部 + New 单按钮(delayed-create)', () => {
   it('顶部 + 不再暴露 vendor 下拉选项', () => {
@@ -24,18 +28,24 @@ describe('sidebar 顶部 + New 单按钮(delayed-create)', () => {
     expect(sidebarSource).not.toMatch(/New Codex Session/);
   });
 
-  it("源码不再 import VendorReadinessBadge / useVendorReadiness", () => {
+  it('源码不再 import VendorReadinessBadge / useVendorReadiness', () => {
     expect(sidebarSource).not.toMatch(/VendorReadinessBadge/);
     expect(sidebarSource).not.toMatch(/useVendorReadiness/);
   });
 
-  it("通用新建进入 /cc-agent/new,并带 generic workspace 提示", () => {
+  it('全局新任务先准备 fresh Dialogue 或恢复草稿，再进入 /cc-agent/new', () => {
     // sidebar 重构后 expanded 态的“+ New”上移到 shell 的 SidebarTopNav;
     // CCAgentSidebarUpper 内只剩 CollapsedView(rail 态)自带的 handleNewCCS 一处。
-    const matches = sidebarSource.match(/navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('generic'\)\s*\}\)/g);
+    const matches = sidebarSource.match(
+      /navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('generic'\)\s*\}\)/g,
+    );
     expect(matches).not.toBeNull();
     expect(matches!.length).toBeGreaterThanOrEqual(1);
-    expect(sidebarSource).toContain("function makeNewMakerRouteState(workspacePrompt: 'generic' | 'dialogue')");
+    expect(sidebarSource).toContain(
+      "function makeNewMakerRouteState(workspacePrompt: 'generic' | 'dialogue')",
+    );
+    expect(sidebarSource).toContain('prepareGlobalNewTask();');
+    expect(sidebarTopNavSource).toContain('prepareGlobalNewTask();');
     expect(sidebarSource).not.toContain('requestId: Date.now()');
   });
 
@@ -97,13 +107,17 @@ describe('Project 行内 + 也对标统一 New(delayed-create)', () => {
     // 断言关键字段而非整块字面量(对格式 / 字段增减鲁棒)。
     expect(sidebarSource).toContain('workingDir: project.workingDir');
     expect(sidebarSource).toContain('deviceLinkDeviceId: project.deviceLinkDeviceId');
-    expect(sidebarSource).toMatch(/navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('dialogue'\)\s*\}\)/);
+    expect(sidebarSource).toMatch(
+      /navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('dialogue'\)\s*\}\)/,
+    );
   });
 
   it('Projects 段头新建项目先选择目录，再预填 workingDir 进入 /cc-agent/new', () => {
     expect(sidebarSource).toContain('const handleCreateProject = useCallback(async () =>');
     expect(sidebarSource).toContain('window.electronAPI.showOpenDirectoryDialog()');
-    expect(sidebarSource).toContain('patchNewMakerDraft({ workingDir: result.path, remoteHostId: null })');
+    expect(sidebarSource).toContain(
+      'patchNewMakerDraft({ workingDir: result.path, remoteHostId: null })',
+    );
     expect(sidebarSource).toContain('onCreateProject={handleCreateProject}');
   });
 });
