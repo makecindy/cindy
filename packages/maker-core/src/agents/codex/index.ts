@@ -685,6 +685,27 @@ const PROFILE_LIFECYCLE_ACK_TIMEOUT_MS = 10_000;
 // 可能实际已建 thread/turn — 迟到事件按 stale turn 丢弃, 不影响 UI 复位。
 const CRITICAL_THREAD_RPC_TIMEOUT_MS = 60_000;
 
+/**
+ * Codex 权限档的严格度序（数值越大越严）。Codex 只支持 ask / auto /
+ * bypassPermissions 三档，其余取值走 clamp 后不会到这里；未知值按最严处理，
+ * 让比较偏向「需要中断」而不是放行。
+ *
+ * 用途：判断过载重投持的**冻结**策略是否比当前选择的档更宽。只比较最近一次
+ * 模式转换会漏掉 Full access → Ask → Auto 这类中间态。
+ */
+function codexPermissionStrictnessRank(mode: PermissionMode): number {
+  switch (mode) {
+    case 'bypassPermissions':
+      return 0;
+    case 'auto':
+      return 1;
+    case 'ask':
+      return 2;
+    default:
+      return 2;
+  }
+}
+
 // 计划批准后自动发起实施 turn 的固定输入 — 与官方 TUI 逐字一致
 // (codex-rs/tui/src/chatwidget/plan_implementation.rs 的
 // PLAN_IMPLEMENTATION_CODING_MESSAGE), 模型对这句有训练分布上的既有理解。
@@ -2163,6 +2184,17 @@ export class CodexAgent extends BaseAgent {
        * 看到 idle 才能收口，否则 send 挂死），不能一起收紧。
        */
       inFlight: boolean;
+      /**
+       * 本轮 send 的取消信号是否已 abort。由 send() 闭包提供 —— `sendOpts` 只在
+       * 那个作用域里可见，而重投的失败收口判断发生在本文件的调度器作用域。
+       */
+      isCancelled: () => boolean;
+      /**
+       * 冻结 turnParams 时生效的权限档。判断「重投持的策略是否比当前更宽」要靠它：
+       * 只看最近一次模式转换会漏掉 Full access → Ask → Auto 这类中间态（Ask→Auto
+       * 不算收紧，会把延迟中断标记清掉，而冻结的 Full access 仍然更宽）。
+       */
+      launchedPermissionMode: PermissionMode;
     } | null = null;
     let closed = false;
     let subscriptionInvalidatedByTransport = false;
@@ -4407,11 +4439,15 @@ export class CodexAgent extends BaseAgent {
       // 的工具副作用就会执行两遍（review #844 codex P1）。在途那次自己会走完
       // 成功/失败路径，届时若仍缺容量会重新进入本函数。
       if (state.inFlight) {
-        log.warn('codex overload retry already in flight — not scheduling another', {
+        // 关键：**不能返回 null**。null 会让 translator 把这条错误报成终态，把逻辑
+        // turn 判死（review #844 codex P1），而在途那次 RPC 随后还可能成功并激活
+        // turn —— UI 已收口。这里返回当前进度：错误照样透成非终止状态（UI 继续显示
+        // 「正在重试」），但不递增预算、不排新计时器，等在途那次 settle 后自行决定。
+        log.info('codex overload retry already in flight — deferring to it', {
           attempt: state.attempt,
           threadId,
         });
-        return null;
+        return { attempt: state.attempt, maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS };
       }
       // 本 turn 已产出内容 → 重放会让模型重做已完成的工作（甚至重复副作用），
       // 交回用户决定是否继续，不自动重投。
@@ -4457,7 +4493,7 @@ export class CodexAgent extends BaseAgent {
           // 误报成「重投失败」。只留日志。
           // 成功路径的同款复检在 retry() 内部（cancelledMidFlight）；reject 会绕过
           // 那一段直接落到这里，两条路都要判。
-          if (closed || overloadRetry !== state) {
+          if (closed || overloadRetry !== state || state.isCancelled()) {
             log.info('codex overload retry rejected after cancellation — not surfacing', {
               attempt,
               error: String(error),
@@ -5289,12 +5325,14 @@ export class CodexAgent extends BaseAgent {
           attempt: 0,
           timer: null,
           inFlight: false,
+          isCancelled: () => sendOpts?.signal?.aborted === true,
+          launchedPermissionMode: mutablePermissionMode,
           retry: async () => {
             const state = overloadRetry;
             // 发出前复检：本轮 send 的取消信号在退避等待期间才 abort（coordinator
             // 撤单、上层超时）时不走 handle.abort()，计时器到点仍会把一条已被取消
             // 的消息重新投出去。
-            if (closed || sendOpts?.signal?.aborted || !state) {
+            if (closed || !state || state.isCancelled()) {
               log.info('codex overload retry skipped (send already cancelled)', { threadId });
               return;
             }
@@ -5318,7 +5356,7 @@ export class CodexAgent extends BaseAgent {
               // server 侧 turn 已经启动，所以不能只是丢掉响应：落墓碑挡住它的后续
               // 事件，并 best-effort interrupt 把它停掉（与上方孤儿 turn 同款处理）。
               const cancelledMidFlight =
-                closed || sendOpts?.signal?.aborted || overloadRetry !== state;
+                closed || state.isCancelled() || overloadRetry !== state;
               if (cancelledMidFlight) {
                 const staleTurnId = resp.turn?.id;
                 log.warn('codex overload retry cancelled while turn/start was in flight', {
@@ -5460,6 +5498,12 @@ export class CodexAgent extends BaseAgent {
           flushDeferredTerminalTurnCompletionsIfIdle();
         }
         if (finalErr) {
+          // 容量通知可能先于本次 turn/start 响应到达(协议允许的乱序), 那时重投
+          // 计时器已经排上。原始请求随后终失败 → 下面会推 terminal error + Done,
+          // UI 与调用方都已按失败处理; 若不把重投一起废掉, 计时器到点会重投一条
+          // 已判失败的消息, 副作用在用户看不到的地方执行(review #844 codex P1)。
+          cancelOverloadRetry('original turn/start failed');
+          overloadRetry = null;
           // 计划模式: turn 从未启动就终失败 → 结束半开循环(与 turnCompleted 的
           // failed 分支同语义), 否则 planCycleActive 泄漏, 下一条常规消息仍会
           // 携带 collaborationMode plan(勾选与 chip 早已熄灭, 行为与 UI 脱节)。
@@ -5667,9 +5711,35 @@ export class CodexAgent extends BaseAgent {
         // 用户点 Stop = 明确不想继续这一轮，挂起的过载重投必须一起撤掉。
         // 放在 currentTurnId 判空之前：重投等待期间 turn 已死、currentTurnId 为
         // null，此时正是最需要响应 Stop 的时刻（否则计时器到点又发一个新 turn）。
+        const hadPendingOverloadRetry =
+          overloadRetry?.timer != null || overloadRetry?.inFlight === true;
         cancelOverloadRetry('aborted');
         overloadRetry = null;
-        if (closed || !currentTurnId) return;
+        if (closed) return;
+        if (!currentTurnId) {
+          // 退避窗口里的 Stop：server 侧没有 turn 可 interrupt，但**必须**显式收口
+          // 逻辑 turn —— desktop 的 SessionTurnActivityTracker 只在收到终态事件后
+          // 才释放派发闩，Codex coordinator 也刻意等这个事件而不自己解锁，hook
+          // runner 同样等到一小时硬超时才罢休。不发的话会话永久忙、后续消息无法
+          // 派发（review #844 codex P1）。
+          if (hadPendingOverloadRetry) {
+            eventQueue.push({
+              type: 'error',
+              data: {
+                message: 'Codex turn stopped while waiting to retry a model-capacity failure',
+                isTerminal: true,
+                reason: 'codex-overload-retry-aborted',
+              },
+              source: 'codex',
+            });
+            eventQueue.push({
+              type: 'status',
+              data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+              source: 'codex',
+            });
+          }
+          return;
+        }
         if (skipIfStaleHost('turn/interrupt')) return;
         dismissPendingUserInputForTurn(currentTurnId, 'turn_interrupted');
         try {
@@ -5757,12 +5827,23 @@ export class CodexAgent extends BaseAgent {
         // turn id 已知 → 立即中断; turn/start 在飞 (id 未回) → 置标记, 由
         // handleTurnStartResp / turnStarted 在拿到 id 的瞬间补中断。放宽则清标记
         // (收紧后又切回宽松档, 在飞的 turn 无需再中断)。
-        if (!tightensCurrentTurn) {
+        // 过载重投持的是**冻结**策略。只看最近一次转换会漏掉 Full access → Ask →
+        // Auto 这类中间态：Ask→Auto 不算收紧会把标记清掉，而冻结的 Full access 仍然
+        // 比 Auto 宽，重投出来的 turn 就能以 Full access 执行（review #844 codex P1）。
+        // 按严格度排序直接比冻结档与当前档。
+        const retryPolicyLooserThanNow =
+          (overloadRetry?.timer != null || overloadRetry?.inFlight === true) &&
+          codexPermissionStrictnessRank(overloadRetry.launchedPermissionMode) <
+            codexPermissionStrictnessRank(newMode);
+        if (!tightensCurrentTurn && !retryPolicyLooserThanNow) {
           pendingTightenInterrupt = false;
-        } else if (!closed && turnLaunchedUnattended) {
+        } else if (!closed && (turnLaunchedUnattended || retryPolicyLooserThanNow)) {
           // 只中断 auto_review / never / Auto policy turn;普通 user reviewer 发射的
           // turn 审批请求照常流经本地、收紧即时生效,期间 UI 短暂切过宽松档
           // 不构成中断理由。
+          // retryPolicyLooserThanNow 是过载重投的补充判据: 挂起的重投冻结的是发射时
+          // 那档策略, 只看"最近一次转换算不算收紧"会漏掉 Full access → Ask → Auto
+          // 这类中间态(review #844 codex P1)。
           if (currentTurnId !== null) {
             await interruptTurnForPermissionTighten(currentTurnId);
           } else if (isTurnStartPending || overloadRetry?.timer != null || overloadRetry?.inFlight === true) {

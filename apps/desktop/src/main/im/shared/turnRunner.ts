@@ -2236,6 +2236,10 @@ export function createTurnRunner(
       turn.terminalErrorCode = 'agent_turn_error';
     }
     if (turn) completeTurnCallback(turn);
+    // 清掉"正在自动重试"这类瞬态说明：重试耗尽后走到这里时它还挂在 activity 上，
+    // 而下面 composeStreamingView 会把它一起写进 finalize 的正文——最终卡片会在
+    // 失败说明的正上方永久显示"仍在重试"（review #844 codex P1）。
+    if (turn) setActivityNotice(turn.activity, null);
     if (turn?.streamingHandle) {
       try {
         const view = composeStreamingView(turn);

@@ -197,6 +197,22 @@ describe('activity notice — 自动重试期间的单行状态', () => {
     expect(setActivityNotice(activity, '   ')).toBe(false);
   });
 
+  it('清掉状态行后渲染里不再残留它(终态收口依赖这条)', () => {
+    // handleTurnErrorAsync 在 finalize 前会 setActivityNotice(null)：重试耗尽走到
+    // 终态时，notice 还挂着「正在自动重试」，而 finalize 的正文由 composeStreamingView
+    // 拼出——不清就会在失败说明的正上方永久显示"仍在重试"（review #844 codex P1）。
+    const activity = createTurnActivity(0);
+    pushToolStep(activity, 'Read', { file_path: '/x/relay.ts' }, 'read-1');
+    setActivityNotice(activity, '模型服务繁忙，正在自动重试（4/4）…');
+    expect(renderActivity(activity, 5_000)).toContain('正在自动重试');
+
+    setActivityNotice(activity, null);
+    const finalView = renderActivity(activity, 5_000);
+    expect(finalView).not.toContain('正在自动重试');
+    // 已完成的工作项照常保留，只有瞬态状态行消失。
+    expect(finalView).toContain('读取 relay.ts');
+  });
+
   it('任何真实进展都清掉过期状态行', () => {
     const withTool = createTurnActivity(0);
     setActivityNotice(withTool, '模型服务繁忙，正在自动重试（1/4）…');
