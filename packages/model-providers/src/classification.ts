@@ -173,12 +173,11 @@ export function categorize(rawId: string): ModelCategory {
   // 可聊天)。只匹配这批已停售且无歧义的固定 id/前缀——不用 `-instruct$` 这种宽泛后缀,
   // 因为 mistral/qwen/llama 的 "-instruct" 结尾模型是正常聊天模型,不能误杀。
   if (/rerank/.test(id)) return 'other';
-  if (
-    /^(babbage-002|davinci-002|gpt-3\.5-turbo-instruct|text-davinci-\d{3}|text-curie-001|text-babbage-001|text-ada-001|code-davinci-002)$/.test(
-      id,
-    )
-  )
-    return 'other';
+  const LEGACY_COMPLETION_RE =
+    /^(babbage-002|davinci-002|gpt-3\.5-turbo-instruct|text-davinci-\d{3}|text-curie-001|text-babbage-001|text-ada-001|code-davinci-002)$/;
+  // 精确匹配前后都锚定,带供应商命名空间前缀(如 openai/babbage-002)会漏网,同
+  // dall-e/sora/veo- 的命名空间兜底同理(2026-07 review 第 21 轮)。
+  if (LEGACY_COMPLETION_RE.test(id) || LEGACY_COMPLETION_RE.test(stripNamespace(id))) return 'other';
   // STT/ASR 必须在 realtime 判定之前:qwen3-asr-flash-realtime / fun-asr-realtime-* /
   // gpt-realtime-whisper 的 id 里都含 "realtime",但语义是语音转写,不是实时多模态。
   // 不能只认 elevenlabs 前缀——否则 gpt-4o-mini-tts / qwen-tts 这类其它厂商的语音模型
@@ -193,7 +192,16 @@ export function categorize(rawId: string): ModelCategory {
   // gpt-realtime-2 / gpt-realtime-mini / gpt-realtime-translate / gpt-4o-realtime-* /
   // gemini-omni-* —— 真正的实时多模态,已排除上面的 STT 特例。gpt-4o-realtime 前缀是
   // 旧一代命名,新一代改成了 gpt-realtime-*,兜底要同时认两种(2026-07 review)。
-  if (/^gpt-realtime|^gpt-4o-realtime|gemini-omni/.test(id)) return 'realtime';
+  // gpt-realtime-/gpt-4o-realtime- 锚定 id 开头,带命名空间前缀(如
+  // openai/gpt-realtime-preview)会漏网落进聊天兜底组,同 dall-e/sora/veo- 的
+  // 命名空间兜底同理(2026-07 review 第 21 轮);gemini-omni 是子串匹配,已天然
+  // 兼容命名空间,不需要额外处理。
+  if (
+    /^gpt-realtime|^gpt-4o-realtime/.test(id) ||
+    /^gpt-realtime|^gpt-4o-realtime/.test(stripNamespace(id)) ||
+    /gemini-omni/.test(id)
+  )
+    return 'realtime';
   // 订阅直连 GPT(chatgpt/ 前缀,经 responses-bridge)与网关 gpt- 同归 GPT 组;前缀常量与
   // 路由 / 记账 gate 同源(本文件顶部),防漂移。两个常量本身已是小写字面量,小写化后
   // 直接比较无需再转换。

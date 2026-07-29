@@ -147,6 +147,14 @@ describe('categorize', () => {
     expect(isChatEligible({ id: 'google/veo-3' })).toBe(false);
   });
 
+  it('realtime 与遗留 Completions 家族同样要兼容命名空间前缀(如 openai/gpt-realtime-preview、openai/babbage-002,2026-07 review 第 21 轮)', () => {
+    expect(categorize('openai/gpt-realtime-preview')).toBe('realtime');
+    expect(categorize('openai/gpt-4o-realtime-preview')).toBe('realtime');
+    expect(categorize('openai/babbage-002')).toBe('other');
+    expect(isChatEligible({ id: 'openai/gpt-realtime-preview' })).toBe(false);
+    expect(isChatEligible({ id: 'openai/babbage-002' })).toBe(false);
+  });
+
   it('moderation 模型不落进厂商兜底组、不被判定为可聊天(2026-07 review:fresh evidence,不是issue 列出的语义类型之一,落 other 保留)', () => {
     expect(categorize('omni-moderation-latest')).toBe('other');
     expect(categorize('text-moderation-latest')).toBe('other');
