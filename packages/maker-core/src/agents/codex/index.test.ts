@@ -4840,6 +4840,71 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('interrupts an already-started retry turn when only the send signal aborts', async () => {
+      // 重投的 turnStarted 可能先于它的响应到达, 那时 currentTurnId 指着一个真实在跑的
+      // server turn。只推终态事件、不动它, 那个 turn 会在调用方已按"已取消"处理之后
+      // 继续执行工具(review #844 codex P1)。与 handle.abort() 同款处理。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-signal-abort-active-turn',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        await handle.send({ type: 'user', content: 'hello' }, { signal: controller.signal });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.turnStarted) throw new Error('expected turnStarted handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        // 重投的 started 先于响应到达 → 有一个真实在跑的 turn。
+        handlers.turnStarted({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        // 只 abort signal（coordinator 撤单），不走 handle.abort()。
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 活跃 turn 必须被收掉并 interrupt，不能留着继续跑工具。
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-2',
+          ),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('quarantines a turn the server may have accepted when the retry RPC rejects', async () => {
       // 重投 RPC 失败不代表 server 没建 turn。不做孤儿隔离时: 先于 reject 到达的
       // turnStarted 会让 isTurnRunning() 在 UI 收口后永真(下一条 send 被并发守卫挡死),

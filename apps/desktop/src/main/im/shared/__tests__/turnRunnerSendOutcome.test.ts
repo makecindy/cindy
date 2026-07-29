@@ -1307,6 +1307,68 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(unsub).toHaveBeenCalledTimes(1);
   });
 
+  it('waits for the pending retry card before finalizing a terminal overload error', async () => {
+    // 过载重试提示会**惰性建卡**, 而终态错误可能恰好在 startStreamingText 回来之前
+    // 到达。不同步的话: 终态看到 streamingHandle 还是 null → 另发一条错误消息并把
+    // turn 出队, 随后建卡 promise resolve, 又去 replace 一张没人收口的孤儿卡, 渠道
+    // 里出现重复/残留输出(review #844 codex P1)。
+    let releaseCard: (h: unknown) => void = () => {};
+    const handle = {
+      messageId: 'stream-retry-race',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockReturnValue(
+      new Promise((resolve) => {
+        releaseCard = resolve;
+      }),
+    );
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+
+    // 非终止过载 error → 开始建卡(请求挂住)。
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model. (auto-retry 1/4)',
+        isTerminal: false,
+        willRetry: true,
+      },
+    });
+    await flushMicrotasks();
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    expect(handle.replace).not.toHaveBeenCalled(); // 卡还没建好
+
+    // 建卡还在飞时重试耗尽 → 终态。
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        isTerminal: true,
+      },
+    });
+    await flushMicrotasks();
+    // 卡还没回来, 收口正文不能先落地(不然就是"另发一条 + 留下孤儿卡")。
+    expect(handle.finalize).not.toHaveBeenCalled();
+
+    releaseCard(handle);
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      // 失败说明落在**同一张**卡上, 而不是另发一条 + 留下孤儿卡。
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    const finalView = String(handle.finalize.mock.calls[0][0]);
+    expect(finalView).toContain('模型服务繁忙');
+    expect(finalView).not.toContain('正在自动重试');
+    // 没有另发一条错误消息(那正是重复输出的来源)。
+    expect(
+      mocks.feishuIm.sendText.mock.calls.some(([, text]) => String(text).includes('错误')),
+    ).toBe(false);
+  });
+
   it('holds the turn open on a non-terminal error and surfaces the auto-retry notice', async () => {
     const handle = {
       messageId: 'stream-retry',

@@ -4525,6 +4525,38 @@ export class CodexAgent extends BaseAgent {
         < codexPermissionStrictnessRank(mode);
 
     /**
+     * 取消一轮过载重投时, 把它**已经激活**的 turn 一起收掉。
+     *
+     * 重投的 turnStarted 可能先于它的 turn/start 响应到达(协议允许的乱序), 那时
+     * currentTurnId 已经指向这个真实存在的 server turn。只推终态事件、不动它, 那个
+     * turn 会在调用方已按"已取消"处理之后继续执行工具(review #844 codex P1)。
+     *
+     * 自己落墓碑是关键: 之后到达的 turn/completed 会被压掉, 所以收口恰好一次 ——
+     * 无论重投响应最终是 resolve(它自己也会落墓碑)还是 reject。
+     * handle.abort() 与 sendOpts.signal 两条取消路径共用本函数。
+     */
+    const teardownActiveTurnForCancellation = (reason: string): void => {
+      const turnId = currentTurnId;
+      if (!turnId) return;
+      terminalErroredTurnIds.add(turnId);
+      dismissPendingUserInputForTurn(turnId, 'turn_interrupted');
+      clearActiveToolContextsForTurn(turnId);
+      if (threadId && !skipIfStaleHost('turn/interrupt')) {
+        host.request(Method.TurnInterrupt, { threadId, turnId }).catch((e: unknown) => {
+          log.warn('cancelled overload retry turn interrupt failed (best-effort)', {
+            reason,
+            turnId,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        });
+      }
+      stopActiveRolloutPlanFallback();
+      currentTurnId = null;
+      isTurnInFlight = false;
+      currentTurnPlanModeActive = false;
+    };
+
+    /**
      * 退避等待 / 重投 RPC 在途期间发现本轮 send 已被取消时, 收口逻辑 turn。
      *
      * 只有"coordinator 只 abort 了 sendOpts.signal、没走 handle.abort()"那条路需要
@@ -4544,6 +4576,9 @@ export class CodexAgent extends BaseAgent {
     ): void => {
       if (closed || overloadRetry !== state) return;
       discardOverloadRetry(`settle:${reason}`);
+      // 重投的 turnStarted 已先于响应到达时, currentTurnId 指着一个真实在跑的
+      // server turn —— 必须一起收掉, 否则它会在调用方按"已取消"处理后继续执行工具。
+      teardownActiveTurnForCancellation(reason);
       log.info('codex overload retry cancelled via send signal — settling logical turn', {
         reason,
         threadId,
@@ -6067,26 +6102,7 @@ export class CodexAgent extends BaseAgent {
         //    那条完成事件压掉, 派发闩永远不释放（review #844 codex P1）。这里自己
         //    落墓碑 + interrupt + 推终态, 保证恰好一次收口。
         if (hadPendingOverloadRetry) {
-          const abortedTurnId = currentTurnId;
-          if (abortedTurnId) {
-            terminalErroredTurnIds.add(abortedTurnId);
-            dismissPendingUserInputForTurn(abortedTurnId, 'turn_interrupted');
-            clearActiveToolContextsForTurn(abortedTurnId);
-            if (threadId && !skipIfStaleHost('turn/interrupt')) {
-              host
-                .request(Method.TurnInterrupt, { threadId, turnId: abortedTurnId })
-                .catch((e: unknown) => {
-                  log.warn('overload retry abort interrupt failed (best-effort)', {
-                    turnId: abortedTurnId,
-                    error: e instanceof Error ? e.message : String(e),
-                  });
-                });
-            }
-            stopActiveRolloutPlanFallback();
-            currentTurnId = null;
-            isTurnInFlight = false;
-            currentTurnPlanModeActive = false;
-          }
+          teardownActiveTurnForCancellation('stopped while an overload retry was pending');
           eventQueue.push({
             type: 'error',
             data: {

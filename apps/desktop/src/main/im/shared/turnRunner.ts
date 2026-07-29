@@ -2246,6 +2246,19 @@ export function createTurnRunner(
     // 而下面 composeStreamingView 会把它一起写进 finalize 的正文——最终卡片会在
     // 失败说明的正上方永久显示"仍在重试"（review #844 codex P1）。
     if (turn) setActivityNotice(turn.activity, null);
+    // 建卡请求可能还在飞: 过载重试提示会惰性建一张进度卡(handleRetryNoticeEvent),
+    // 而终态错误可能恰好在 startStreamingText 回来之前到达。此时 streamingHandle
+    // 还是 null → 走下面"另发一条错误消息"的分支并把 turn 出队, 随后那个 promise
+    // resolve, 又去 replace 一张已经没人收口的孤儿卡, 渠道里就出现重复/残留输出
+    // (review #844 codex P1)。done 路径早就在这里 await 了同一个 promise, 错误路径
+    // 照抄同款同步。
+    if (turn && !turn.streamingHandle && turn.streamingHandlePromise) {
+      try {
+        await turn.streamingHandlePromise;
+      } catch {
+        // 建卡失败 → 下面按"没有输出面"处理(另发一条消息)。
+      }
+    }
     if (turn?.streamingHandle) {
       try {
         const view = composeStreamingView(turn);
