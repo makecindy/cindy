@@ -47,7 +47,11 @@ import {
   type VoiceInputCaretState,
 } from './VoiceInputDraftDecoration';
 import { MentionDragCaretDecoration, setMentionDragCaret } from './MentionDragCaretDecoration';
-import { GhostCommandDecoration, setGhostCommandRoster } from './GhostCommandDecoration';
+import {
+  applyGhostCommandBackspace,
+  GhostCommandDecoration,
+  setGhostCommandRoster,
+} from './GhostCommandDecoration';
 import {
   replaceSlashCommandRunWithText,
   setSlashCommandRoster,
@@ -1805,6 +1809,8 @@ export function ChatInput({
         // Backspace — structured list items exit through the schema command;
         // legacy plain Markdown rows keep the prefix-deletion fallback so
         // pasted and restored text remains editable without a migration pass.
+        // 意识指令胶囊排最后:只在胶囊亮起且光标停在胶囊外(尾随空格之后)才
+        // 接管,胶囊内一律原样落回原生逐字删。
         if (
           event.key === 'Backspace' &&
           !event.metaKey &&
@@ -1812,7 +1818,9 @@ export function ChatInput({
           !event.altKey &&
           !event.shiftKey &&
           !event.isComposing &&
-          (handleStructuredListBackspace(view) || applyListBackspace(view))
+          (handleStructuredListBackspace(view) ||
+            applyListBackspace(view) ||
+            applyGhostCommandBackspace(view))
         ) {
           event.preventDefault();
           return true;
