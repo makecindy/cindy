@@ -337,6 +337,26 @@ describe('classifyShellCommand — procfs / 短选项绕过 / 反斜杠 / git RC
   });
 });
 
+// 第六轮护栏:数字结尾词后的重定向、rg --hostname-bin、curl 多 URL 目标、Windows 大小写不敏感凭证。
+describe('classifyShellCommand — 第六轮 bot 护栏', () => {
+  it('数字结尾词后的重定向 payload2>file → prompt(fd 复制 2>&1 仍放行)', () => {
+    expect(classifyShellCommand('echo payload2>/tmp/x', roots)).toBe('prompt');
+    expect(classifyShellCommand('echo payload2>~/.bash_profile', roots)).toBe('prompt');
+    expect(classifyShellCommand('ls -la 2>&1', roots)).toBe('auto-approve');
+  });
+  it('rg --hostname-bin 跑外部程序 → prompt', () => {
+    expect(classifyShellCommand("rg --hostname-bin=./payload --hyperlink-format='file://{host}{path}' pattern f", roots)).toBe('prompt');
+  });
+  it('curl 多 URL:任一为内网/metadata → prompt;全公网仍放行', () => {
+    expect(classifyShellCommand('curl https://example.com http://169.254.169.254/latest/meta-data', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl https://a.example https://b.example', roots)).toBe('auto-approve');
+  });
+  it('Windows 大小写不敏感凭证目录(.AWS = .aws)→ prompt-each-time', () => {
+    expect(reviewAction({ kind: 'read', path: 'C:\\Users\\me\\.AWS\\credentials' }, roots)).toBe('prompt-each-time');
+    expect(reviewAction({ kind: 'read', path: 'C:\\Users\\me\\.SSH\\id_rsa' }, roots)).toBe('prompt-each-time');
+  });
+});
+
 describe('classifyShellCommand — 内网/云 metadata 抓取升级(SSRF 面)', () => {
   it('云 metadata / localhost / 私网 IP → prompt', () => {
     for (const c of [

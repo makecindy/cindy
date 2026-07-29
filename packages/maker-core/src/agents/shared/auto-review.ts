@@ -101,15 +101,16 @@ const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
  * 凭证 / 密钥的**路径**特征。命令里出现即"触碰凭证",内置 Read 工具的 path 命中同样必问。
  * 不锚 ~/:绝对路径(/Users/x/.aws/…)、相对、~/ 三种形态都命中。
  */
-// 前缀类含反斜杠 `\\`:Windows 路径(C:\Users\me\.ssh\id_rsa)的分隔符是 `\`,不带它会漏掉 Windows 凭证。
+// 前缀类含反斜杠 `\\`:Windows 路径(C:\Users\me\.ssh\id_rsa)的分隔符是 `\`。全部大小写不敏感(`i`):
+// Windows FS 大小写不敏感,`.AWS` 等同 `.aws`;Linux 上少量混合大小写误升级也是 fail-closed 方向。
 const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
-  /(?:^|[\\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker|claude|codex)\b/, // 凭证/密钥 + agent 配置目录(含 OAuth 凭证)
-  /(?:^|[\\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc)\b/,    // 含 token 的凭证配置文件
-  /\bapplication_default_credentials\b/,                  // gcloud 默认凭证文件
-  /\bcredentials\.json\b/,                                // Claude 等的 OAuth 凭证文件(.credentials.json)
-  /[\\/](?:codex|claude|gcloud)[\\/]auth\.json\b/,        // agent 认证文件(~/.config/codex/auth.json 等)
-  /\/proc\/[^/\s]*\/environ\b/,                           // procfs 环境变量(读 /proc/self/environ 即 dump 含凭证的环境)
-  /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/, // 私钥文件
+  /(?:^|[\\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker|claude|codex)\b/i, // 凭证/密钥 + agent 配置目录(含 OAuth 凭证)
+  /(?:^|[\\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc)\b/i,   // 含 token 的凭证配置文件
+  /\bapplication_default_credentials\b/i,                 // gcloud 默认凭证文件
+  /\bcredentials\.json\b/i,                               // Claude 等的 OAuth 凭证文件(.credentials.json)
+  /[\\/](?:codex|claude|gcloud)[\\/]auth\.json\b/i,       // agent 认证文件(~/.config/codex/auth.json 等)
+  /\/proc\/[^/\s]*\/environ\b/i,                          // procfs 环境变量(读 /proc/self/environ 即 dump 含凭证的环境)
+  /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/i, // 私钥文件
 ];
 
 /** 路径是否触碰已知凭证/密钥位置(shell 命令与内置 Read 工具共用同一判定)。 */
@@ -147,15 +148,12 @@ const DANGEROUS_PATTERNS: readonly RegExp[] = [
 const COMMAND_SUBSTITUTION = /\$\(|`|<\(/;
 
 /**
- * 文件输出重定向 `>` / `>>`。区分"写文件"与"fd 复制":目标是文件 → 命中;目标是另一个 fd(`2>&1` /
- * `>&2`,`>` 后是 `&`)→ 不命中。两支:
- *   - 贴合/空白形态 `(?<![-\d&])>>?(?!&)`:`>file` / `cat > b` / `echo x>~/.bashrc`(贴合前一词也命中,
- *     修 codex 报的 attached 重定向);`a->b` 这类箭头(`-` 在前)排除。
- *   - fd 前缀形态 `\d+>>?`:`1>file` / `2>>log`,但 `1>&2`/`2>&1`(`>` 后 `&`)排除。
- *   - 组合形态 `&>` / `&>>`(bash 把 stdout+stderr 一起写文件):`echo x &>out`。
+ * 文件输出重定向 `>` / `>>`。凡 `>`/`>>` 且其后不是 `&` → 写文件(命中);`>` 后是 `&`(`2>&1`/`>&2` fd
+ * 复制)→ 不命中。唯一前置排除是 `-`(避免 `a->b` 箭头误判)—— 数字/字母/`&` 在前都算写:`1>file`、
+ * `payload2>~/.bashrc`(codex 报的数字结尾词)、`&>out`(stdout+stderr 合并写)全命中。
  * 调用方在**去掉引号内容**的串上匹配(引号内的 `>` 是数据不是重定向,见 classifyShellSegment)。
  */
-const OUTPUT_REDIRECTION = /(?<![-\d&])>>?(?!&)|(?:^|\s)\d+>>?(?!&)|(?:^|\s)&>>?/;
+const OUTPUT_REDIRECTION = /(?<!-)>>?(?!&)/;
 
 /**
  * curl/wget 视为"只读取回"(命令行浏览器)的排除项。命中任一就不是安全 GET,交通用判定升级:
@@ -247,8 +245,9 @@ function isSafeReadonlyBin(bin: string, segment: string, tokens: string[]): bool
   if (bin === 'find' && /-(?:exec(?:dir)?|ok(?:dir)?|delete)\b|-f(?:print[f0]?|ls)\b/.test(segment)) return false;
   // sort:-o/--output 写文件;--compress-program 会运行任意外部程序(RCE)。
   if (bin === 'sort' && /(?:^|\s)(?:-o\b|-o\S|--output\b|--compress-program\b)/.test(segment)) return false;
-  // ripgrep --pre=CMD 对每个文件跑预处理程序(任意程序执行,RCE);--pre-glob 无害不拦。
-  if (bin === 'rg' && /--pre(?:=|\s|$)/.test(segment)) return false;
+  // ripgrep 跑外部程序的 flag:--pre=CMD(预处理器)、--hostname-bin=CMD(取 hostname 供超链接)= RCE。
+  // --pre-glob 无害不拦。
+  if (bin === 'rg' && (/--pre(?:=|\s|$)/.test(segment) || /--hostname-bin\b/.test(segment))) return false;
   // jq/yq:-i/--in-place 就地改文件;env/$ENV/strenv 读取注入的凭证环境变量(与 shell $VAR 同等泄漏面)。
   if (bin === 'yq' || bin === 'jq') {
     if (/(?:^|\s)-i\b|(?:^|\s)--in-?place\b/.test(segment)) return false;
@@ -318,9 +317,11 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   if (CURL_SENSITIVE_FLAGS.test(segment)) return false;   // 凭证/隐藏参数/SSRF 改路由 flag → 升级
   const positional = tokens.slice(1).filter((t) => !t.startsWith('-'));
   if (positional.some((t) => t.includes('?'))) return false; // 查询串外发面(含无 scheme 的 host?query)
-  const target = positional.find(isFetchTargetToken);
-  if (!target) return false;                     // 认不出 URL 目标 → fail-closed 升级
-  if (isInternalFetchTarget(target)) return false; // 云 metadata / localhost / 内网 → 升级
+  // curl 可接多个 URL 并逐个抓取 → 必须校验**每一个** URL 目标,不能只看第一个
+  // (`curl https://public http://169.254.169.254/...` 会把 metadata 也抓回来)。
+  const targets = positional.filter(isFetchTargetToken);
+  if (targets.length === 0) return false;               // 认不出 URL 目标 → fail-closed 升级
+  if (targets.some(isInternalFetchTarget)) return false; // 任一目标是云 metadata / localhost / 内网 → 升级
   return true;
 }
 
