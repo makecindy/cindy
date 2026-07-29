@@ -23,7 +23,6 @@ import type {
   MobileGoalStatus,
   MobileGoalStatusPayload,
 } from '@cindy/maker-shared/device-link-contract';
-import { i18n } from '@/i18n';
 import { GOAL_STATUS_LABEL, goalReasonText, goalStatusLabel } from '@/session/goalStatusLabel';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
