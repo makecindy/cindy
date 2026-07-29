@@ -159,6 +159,25 @@ function recoveredAutolinkTailRange(
   return tailStart < range.end ? { start: tailStart, end: range.end } : null;
 }
 
+function codeSpanEnd(markdown: string, start: number, end: number): number | null {
+  let openerEnd = start + 1;
+  while (openerEnd < end && markdown[openerEnd] === '`') openerEnd += 1;
+  const delimiterLength = openerEnd - start;
+  let scan = openerEnd;
+
+  // 行内代码只由等长的反引号序列闭合；较短或较长的序列属于代码内容。
+  while (scan < end) {
+    const closerStart = markdown.indexOf('`', scan);
+    if (closerStart === -1 || closerStart >= end) return null;
+    let closerEnd = closerStart + 1;
+    while (closerEnd < end && markdown[closerEnd] === '`') closerEnd += 1;
+    if (closerEnd - closerStart === delimiterLength) return closerEnd;
+    scan = closerEnd;
+  }
+
+  return null;
+}
+
 function imageDescriptionRange(node: Nodes, markdown: string): OffsetRange | null {
   if (node.type !== 'image' && node.type !== 'imageReference') return null;
   const range = nodeRange(node);
@@ -167,6 +186,11 @@ function imageDescriptionRange(node: Nodes, markdown: string): OffsetRange | nul
   let nestedBrackets = 0;
   for (let cursor = range.start + 2; cursor < range.end; cursor += 1) {
     if (isEscaped(markdown, cursor)) continue;
+    if (markdown[cursor] === '`') {
+      const end = codeSpanEnd(markdown, cursor, range.end);
+      if (end != null) cursor = end - 1;
+      continue;
+    }
     if (markdown[cursor] === '[') {
       nestedBrackets += 1;
       continue;

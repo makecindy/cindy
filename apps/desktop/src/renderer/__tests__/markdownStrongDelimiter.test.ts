@@ -191,6 +191,15 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(renderMarkdown(inlineCode)).toContain('src="missing.png" alt="**终点。**正文"');
   });
 
+  it('ignores closing brackets inside image-description code spans', () => {
+    const source = '![`a]b` **重点。**正文](missing.png)';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      '![`a]b` 重点。正文](missing.png)',
+    );
+    expect(renderMarkdown(source)).toContain('src="missing.png" alt="a]b 重点。正文"');
+  });
+
   it('repairs strong delimiters in CJK prose recovered from a bare URL', () => {
     const source = 'https://example.com/foo（**重点。**正文';
 
