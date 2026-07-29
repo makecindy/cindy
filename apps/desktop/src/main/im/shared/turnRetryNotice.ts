@@ -87,7 +87,13 @@ export function terminalErrorText(data: unknown): string {
     data && typeof data === 'object'
       ? (data as { message?: unknown; errorStatus?: unknown })
       : null;
-  const message = record && 'message' in record ? String(record.message) : String(data);
+  // 判**值**而不是判 key 是否存在: 上游 payload 带一个 message: undefined 时, 'in' 判定
+  // 会成立并 String(undefined) 出字面量 "undefined" 给用户看, 同时让过载文案映射取决于这个
+  // 意外字符串而不是真实内容(copilot 低置信提示)。null / undefined 一律退回 String(data)。
+  const message =
+    record?.message !== undefined && record.message !== null
+      ? String(record.message)
+      : String(data);
   const errorStatus = typeof record?.errorStatus === 'number' ? record.errorStatus : undefined;
   return overloadFailureNotice(message, errorStatus) ?? message;
 }

@@ -5741,6 +5741,79 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('does not settle twice when the cancelled send pending start finally rejects', async () => {
+      // 上一条只覆盖了"在飞 RPC 最终 resolve"那条尾巴。**reject** 那条尾巴还需要一份收口记账:
+      // 取消分支已经把这条错误以终态形式发出去了, 若不同时记 terminalSettled, finalErr 分支
+      // 看到 initialStartSettledByCancel 为 false 会再推一组 terminal error + Done —— 同一轮
+      // 收口两次, 而事件不带 send 世代, 期间若已有新一轮 send, 这份过期收口会落到它头上
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-cancelled-reject-tail',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        const send = handle.send(
+          { type: 'user', content: 'hello' },
+          { signal: controller.signal },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+        // 空 id 容量拒绝 → 已取消, 不接管 → 这条错误自己以终态发出(恰好一条)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        const afterCapacity = events.slice(before).filter(
+          (e) => e.type === 'error' && e.data?.isTerminal === true,
+        );
+        expect(afterCapacity).toHaveLength(1);
+
+        // 在飞的 RPC 最终 reject: 不得再推第二组终态。
+        firstStart.reject(new Error('turn/start timed out'));
+        await send.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        const terminals = events.slice(before).filter(
+          (e) => e.type === 'error' && e.data?.isTerminal === true,
+        );
+        expect(terminals).toHaveLength(1);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('settles a deferred capacity failure when the signal aborted before it was recorded', async () => {
       // signal 在"初始 turn/start 还在飞、容量通知尚未到达"时 abort: 那个 {once} 监听器因为
       // 当时无事可做而被消费掉。随后到达的空 id 容量拒绝若照样建出 deferredCapacityFailure,

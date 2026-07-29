@@ -4907,6 +4907,12 @@ export class CodexAgent extends BaseAgent {
         // 激活并执行工具(review #844 codex P1)。取消语义是"这一轮什么都别再跑", 所以隔离全部
         // 在飞 start(与 settleCancelledOverloadRetry 一致); 隔离后响应回来时
         // adoptUnidentifiedDeadTurn 会落墓碑 + 补 interrupt。
+        // 还要记"已由取消收口过": 这条错误马上就以终态形式发出去了(translator 那边),
+        // 而在飞那次 RPC 若最终 **reject**, finalErr 分支看到 initialStartSettledByCancel
+        // 为 false 会再推一组 terminal error + Done —— 同一轮收口两次, 而事件不带 send 世代,
+        // 期间若已有新一轮 send, 这份过期收口会落到它头上(review #844 codex P1)。
+        // 两件事一起做才与 settleCancelledOverloadRetry 同构(它也是 mark + quarantine)。
+        markInFlightStartsTerminallySettled();
         quarantineAllInFlightStarts();
         log.info('codex not taking over a capacity failure for an already-cancelled send', {
           quarantinedStarts: inFlightStarts.size,

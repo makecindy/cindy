@@ -115,4 +115,14 @@ describe('terminalErrorText', () => {
     expect(terminalErrorText(null)).toBe('null');
     expect(terminalErrorText({})).toBe('[object Object]');
   });
+
+  it('message 为 undefined / null 时不得把字面量 "undefined" 给用户看', () => {
+    // 判 key 是否存在('message' in record)会让 message: undefined 也走进去, String() 出
+    // 字面量 "undefined"; 过载文案映射也会跟着取决于这个意外字符串(copilot 低置信提示)。
+    expect(terminalErrorText({ message: undefined })).toBe('[object Object]');
+    expect(terminalErrorText({ message: null })).toBe('[object Object]');
+    // 值存在就照常取值(含非字符串)。
+    expect(terminalErrorText({ message: 0 })).toBe('0');
+    expect(terminalErrorText({ message: 'boom' })).toBe('boom');
+  });
 });
