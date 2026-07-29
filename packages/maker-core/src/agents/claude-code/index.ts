@@ -785,14 +785,34 @@ export class ClaudeCodeAgent extends BaseAgent {
     // (用户单独装过 Claude Code 时存在),用上别人的 OAuth 通道 → 既泄漏隔离,也
     // 让用户莫名其妙"用上了不属于本 app 的 key"。
     // renderer 接到 AgentNotAuthenticatedError 后据 reason 引导用户补齐当前来源的鉴权。
-    // 凭证形态本地/远程统一由会话来源推导(退役「远端恒用网关」写死):远端会话经
-    // resolveRemoteClaudeRoute 把该形态对应的真实上游 + 鉴权烤进远端 env,详见下方
-    // remoteEnv 组装与 base-agent.ts AgentDeps.resolveRemoteClaudeRoute。
-    const credentialMode = resolveAgentCredentialMode({
-      agentKind: 'claude-code',
-      providerId: opts.providerId,
-      model: opts.model,
-    });
+    // 远端路由 materialization(必须先于凭证形态推导):本地按模型分流的逻辑活在 loopback
+    // proxy,远端够不到,由 host 在 spawn 前把「该会话真实上游 + 鉴权 + 定制头」解析成 cc
+    // env(见 base-agent.ts AgentDeps.resolveRemoteClaudeRoute)。
+    //   - 返回 route:native OAuth 订阅 / 自定义 Claude Code 供应商 —— 下方覆盖 endpoint + 鉴权;
+    //   - 返回 null / resolver 未注入(旧 host):有效路由是 XD 网关 —— credentialMode 必须
+    //     回落 'gateway-key'(与升级前「远端恒用网关」逐字节一致)。不回落的话,getAuthEnv
+    //     会按本地 fallback 注入订阅 token / provider 占位 key,与 buildClaudeEnv 写入的网关
+    //     endpoint 并存:订阅 token 被发往网关(凭证泄漏)或网关收到占位 key(401)。
+    //   - throw:显式选定的供应商在远端无法表达(自定义 requestPath / modelIdRewrite 等),
+    //     透传报错,不静默错路由。
+    const remoteRoute =
+      opts.remoteHostId && this.deps.resolveRemoteClaudeRoute
+        ? await this.deps.resolveRemoteClaudeRoute({
+            providerId: opts.providerId,
+            model: opts.model,
+          })
+        : null;
+    // 凭证形态:本地按会话来源推导;远端仅在 materialize 出 route 时用来源形态(route.env
+    // 是远端鉴权的唯一事实源,来源形态只影响 auth gate 与 behaviorFlags),网关路径(route
+    // 为 null / 旧 host)维持「远端恒用网关 key」。
+    const credentialMode =
+      opts.remoteHostId && !remoteRoute
+        ? 'gateway-key'
+        : resolveAgentCredentialMode({
+            agentKind: 'claude-code',
+            providerId: opts.providerId,
+            model: opts.model,
+          });
     const authOptions = credentialMode ? { credentialMode } : undefined;
     const authState = await this.deps.auth.getState(authOptions);
     if (!authState.authenticated) {
@@ -891,34 +911,23 @@ export class ClaudeCodeAgent extends BaseAgent {
           subagentModel: subagentDefault.envSubagentModel ?? null,
         })
       : null;
-    // 远端路由 materialization:本地按模型分流的逻辑活在 loopback proxy,远端够不到,
-    // 必须把「该会话真实上游 + 鉴权 + 定制头」在 spawn 前解析好覆盖进 remoteEnv。
-    //   - 返回 route:native OAuth 订阅 / 自定义 Claude Code 供应商 —— 覆盖 endpoint + 鉴权;
-    //   - 返回 null:有效路由是 XD 网关(或默认回落网关)—— 维持 buildClaudeEnv 已写入的
-    //     网关 endpoint(remoteEndpoint)+ 网关 key,与升级前字节级一致;
-    //   - throw:供应商在远端无法表达(自定义 requestPath / modelIdRewrite 等),透传报错。
+    // 远端 route 覆盖(route 解析见上方 credentialMode 前的 remoteRoute):
+    // 先剥掉 buildClaudeEnv 经 getAuthEnv/endpoint 写入的鉴权/上游字段(订阅 token /
+    // provider-oauth 占位 key / 网关 endpoint),再让 route.env 成为唯一事实源,避免两套
+    // 鉴权字段并存。route 为 null 时 credentialMode 已回落 'gateway-key',remoteEnv 保持
+    // buildClaudeEnv 写入的网关 key + 网关 endpoint(remoteEndpoint),不进本块。
     // remoteRouteApplied 供后方 remoteCcQueryFactory 的 endpoint guard 分流(网关 vs 路由)。
     let remoteRouteApplied = false;
-    if (remoteEnv && opts.remoteHostId && this.deps.resolveRemoteClaudeRoute) {
-      const route = await this.deps.resolveRemoteClaudeRoute({
-        providerId: opts.providerId,
-        model: opts.model,
-        credentialMode,
-      });
-      if (route) {
-        // 先剥掉 buildClaudeEnv 经 getAuthEnv/endpoint 写入的鉴权/上游字段(可能是网关 key、
-        // 订阅 token 或 provider-oauth 占位 key),再让 route.env 成为唯一事实源,避免两套
-        // 鉴权字段并存。
-        for (const key of REMOTE_ROUTE_OVERRIDE_KEYS) delete remoteEnv[key];
-        Object.assign(remoteEnv, route.env);
-        remoteEnv.ANTHROPIC_BASE_URL = route.endpoint;
-        // 订阅 token 续命回调的 entrypoint 闸门(见 env-builder oauth-spawn 分支):route 之后
-        // 才注入 CLAUDE_CODE_OAUTH_TOKEN 时补上,避免 gateway→native 覆盖后 entrypoint 丢失。
-        if (remoteEnv.CLAUDE_CODE_OAUTH_TOKEN && !remoteEnv.CLAUDE_CODE_ENTRYPOINT) {
-          remoteEnv.CLAUDE_CODE_ENTRYPOINT = 'claude-vscode';
-        }
-        remoteRouteApplied = true;
+    if (remoteEnv && remoteRoute) {
+      for (const key of REMOTE_ROUTE_OVERRIDE_KEYS) delete remoteEnv[key];
+      Object.assign(remoteEnv, remoteRoute.env);
+      remoteEnv.ANTHROPIC_BASE_URL = remoteRoute.endpoint;
+      // 订阅 token 续命回调的 entrypoint 闸门(见 env-builder oauth-spawn 分支):route 之后
+      // 才注入 CLAUDE_CODE_OAUTH_TOKEN 时补上,避免 gateway→native 覆盖后 entrypoint 丢失。
+      if (remoteEnv.CLAUDE_CODE_OAUTH_TOKEN && !remoteEnv.CLAUDE_CODE_ENTRYPOINT) {
+        remoteEnv.CLAUDE_CODE_ENTRYPOINT = 'claude-vscode';
       }
+      remoteRouteApplied = true;
     }
     const hostSystemPrompt = this.deps.runtimeConfig.systemPrompt;
 

@@ -248,7 +248,6 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(resolveRemoteClaudeRoute).toHaveBeenCalledWith({
       providerId: 'custom-provider',
       model: 'custom-model',
-      credentialMode: 'provider-oauth',
     });
     expect(starts).toHaveLength(1);
     const env = starts[0]?.env as Record<string, string> | undefined;
@@ -256,6 +255,76 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(env?.ANTHROPIC_API_KEY).toBe('k-route');
     expect(env?.ANTHROPIC_CUSTOM_HEADERS).toBe('authorization: Bearer k-route\nx-tenant: acme');
     expect(env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    await handle.close();
+  });
+
+  // 凭证形态回落不变量: 远端 route 为 null(网关路径)时必须按 gateway-key 构建 env,
+  // 不能让 getAuthEnv 的本地 fallback(订阅 token)与网关 endpoint 并存 —— 否则订阅
+  // token 会被发往网关(泄漏)。resolver 未注入(旧 host)同理。
+  function createGatewayAwareAuth(): AuthAdapter {
+    return {
+      async getState() {
+        return { authenticated: true };
+      },
+      async triggerLogin() {
+        return { authenticated: true };
+      },
+      async logout() {},
+      async getAuthEnv(options) {
+        return options?.credentialMode === 'gateway-key'
+          ? { ANTHROPIC_API_KEY: 'gw-key' }
+          : { CLAUDE_CODE_OAUTH_TOKEN: 'tok-sub' }; // 本地 fallback: 订阅已连
+      },
+    };
+  }
+
+  async function startRemoteGatewaySession(depOverrides: Partial<AgentDeps>) {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const starts: Array<Record<string, unknown>> = [];
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async (args) => {
+      starts.push(args.startParams);
+      return fakeQuery as never;
+    };
+    const agent = new ClaudeCodeAgent(createDeps({
+      auth: createGatewayAwareAuth(),
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      ...depOverrides,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-gateway-fallback',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+    return { starts, handle };
+  }
+
+  it('keeps the remote gateway credential shape when the resolved route is null', async () => {
+    const resolveRemoteClaudeRoute = vi.fn(async () => null);
+    const { starts, handle } = await startRemoteGatewaySession({ resolveRemoteClaudeRoute });
+
+    expect(resolveRemoteClaudeRoute).toHaveBeenCalledOnce();
+    expect(starts).toHaveLength(1);
+    const env = starts[0]?.env as Record<string, string> | undefined;
+    expect(env?.ANTHROPIC_BASE_URL).toBe('https://gw.example/claude');
+    expect(env?.ANTHROPIC_API_KEY).toBe('gw-key');
+    expect(env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    await handle.close();
+  });
+
+  it('keeps the remote gateway credential shape when no route resolver is injected (old host)', async () => {
+    const { starts, handle } = await startRemoteGatewaySession({});
+
+    expect(starts).toHaveLength(1);
+    const env = starts[0]?.env as Record<string, string> | undefined;
+    expect(env?.ANTHROPIC_BASE_URL).toBe('https://gw.example/claude');
+    expect(env?.ANTHROPIC_API_KEY).toBe('gw-key');
+    expect(env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     await handle.close();
   });
 

@@ -447,17 +447,19 @@ export interface AgentDeps {
    * 返回值:
    *   - 非 null:用 `endpoint` 作 ANTHROPIC_BASE_URL,`env` 覆盖鉴权 / 定制头字段
    *     (native OAuth 订阅、自定义 Claude Code 供应商都走这条)。
-   *   - null:该会话的有效路由就是 XD 网关(或默认回落网关)——维持既有网关远端行为
-   *     (endpoint 由 runtimeConfig.remoteEndpoint 提供,与升级前字节级一致)。
+   *   - null:该会话的有效路由就是 XD 网关(或默认回落网关)—— ClaudeCodeAgent 把远端
+   *     credentialMode 回落 'gateway-key',env 走网关 key + remoteEndpoint,与升级前
+   *     「远端恒用网关」字节级一致。**不回落会出现凭证形态漂移**:getAuthEnv 按本地
+   *     fallback 注入订阅 token / 占位 key,却打网关 endpoint(泄漏或 401)。
    *   - throw:显式选定的供应商在远端无法表达(如声明了自定义 requestPath / modelIdRewrite,
    *     cc env 无对应旋钮),host 抛出明确错误,由 startSession 透传给 renderer,不静默错路由。
    *
-   * 缺省 / undefined(旧 host)→ ClaudeCodeAgent 保持既有「远端恒用网关」行为。
+   * 缺省 / undefined(旧 host)→ ClaudeCodeAgent 同样回落 'gateway-key',保持既有
+   * 「远端恒用网关」行为。
    */
   resolveRemoteClaudeRoute?: (opts: {
     providerId?: string | null;
     model: string;
-    credentialMode?: AgentCredentialMode;
   }) => Promise<RemoteClaudeRoute | null>;
 }
 

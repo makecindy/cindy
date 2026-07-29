@@ -9,7 +9,8 @@
  *
  * 注入进 maker-core 的 AgentDeps.resolveRemoteClaudeRoute。返回语义见该字段文档:
  *   - RemoteClaudeRoute:native OAuth 订阅 / 自定义 Claude Code 供应商 —— 覆盖 endpoint + 鉴权;
- *   - null:有效路由是 XD 网关(或默认回落网关)—— maker-core 维持既有网关远端行为;
+ *   - null:有效路由是 XD 网关(或默认回落网关)—— maker-core 将远端凭证形态回落
+ *     'gateway-key'(网关 key + 网关 endpoint),与升级前远端行为一致;
  *   - throw:供应商在远端无法用 cc env 表达(自定义 requestPath / modelIdRewrite / oauth-passthrough),
  *     明确报错,不静默错路由。
  *
@@ -32,6 +33,7 @@ import {
   isAnthropicWireModel,
 } from './claude-gateway-config.js';
 import {
+  gatewayDefaultRouteDecision,
   resolveProviderRouteDecision,
   type ResolvedProviderRouteDecision,
 } from './provider-route.js';
@@ -63,14 +65,18 @@ export async function resolveRemoteClaudeRoute(opts: {
   // 显式 XD 网关 → 走既有网关远端路径(maker-core 侧 null 回落)。
   if (providerId === 'xd') return null;
 
-  // 未显式选供应商(默认):镜像本地 proxy 的 spawn 默认路由 —— 连了订阅 + Anthropic 原生
-  // 模型 → 订阅直连;否则 → 网关(null 回落,与升级前默认远端行为一致)。
-  if (
-    hasClaudeAiOAuth() &&
-    isAnthropicWireModel(opts.model, anthropicCatalogModelIds(getActiveCatalog()))
-  ) {
+  // 未显式选供应商(默认):镜像本地 proxy 的默认路由(anthropic-compat-proxy-host ②段)。
+  // 没连订阅 = gateway-spawn,本地 passthrough 网关 → 远端网关(null)。
+  if (!hasClaudeAiOAuth()) return null;
+  // oauth-spawn + 有网关 key(且网关可用):本地「全量换网关 key」防订阅 token 泄漏到网关,
+  // 远端同样走网关(null)——计费归属与实际上游必须与本地一致,不能因为是远端就升级成直连。
+  if (gatewayDefaultRouteDecision(REMOTE_AGENT, readClaudeApiKey())) return null;
+  // oauth-spawn、没网关 key:Anthropic 模型唯一出路是订阅直连(与本地一致)。
+  if (isAnthropicWireModel(opts.model, anthropicCatalogModelIds(getActiveCatalog()))) {
     return nativeAnthropicRoute();
   }
+  // 没网关 key 的非 Anthropic 模型:本地 passthrough 必 401;远端回网关路径,由 maker-core
+  // 的 remoteEndpoint guard / gateway-key auth gate 报「缺网关凭据」的真实原因。
   return null;
 }
 
@@ -127,7 +133,14 @@ function materializeRoutedProvider(routed: ResolvedProviderRouteDecision): Remot
       `[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" (oauth-passthrough) isn't supported on remote Claude Code sessions`,
     );
   }
-  const endpoint = (decision?.upstreamOverride ?? routing.upstream)?.trim();
+  // buildRouteDecision 返回 null(非 xd 的 gateway-key 路由缺网关 key / 未知 authStrategy):
+  // 不能拿占位鉴权打真上游(运行期 401,归因困难),前置报错。
+  if (!decision) {
+    throw new Error(
+      `[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" route did not resolve to remote-usable credentials`,
+    );
+  }
+  const endpoint = (decision.upstreamOverride ?? routing.upstream)?.trim();
   if (!endpoint) {
     throw new Error(`[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" has no upstream endpoint`);
   }
@@ -138,9 +151,11 @@ function materializeRoutedProvider(routed: ResolvedProviderRouteDecision): Remot
  * RoutingDecision.headerOverride → cc env(R2:单鉴权门 + 其余头进 ANTHROPIC_CUSTOM_HEADERS)。
  * buildRouteDecision 用小写 'x-api-key' / 'authorization';这里大小写不敏感地识别。
  */
-function routeDecisionToCcEnv(decision: ResolvedProviderRouteDecision['decision']): Record<string, string> {
+function routeDecisionToCcEnv(
+  decision: NonNullable<ResolvedProviderRouteDecision['decision']>,
+): Record<string, string> {
   const env: Record<string, string> = {};
-  const headers: Record<string, string> = { ...(decision?.headerOverride ?? {}) };
+  const headers: Record<string, string> = { ...(decision.headerOverride ?? {}) };
   const findHeaderKey = (name: string): string | undefined =>
     Object.keys(headers).find((k) => k.toLowerCase() === name);
 
