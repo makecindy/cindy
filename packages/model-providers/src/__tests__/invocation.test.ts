@@ -333,6 +333,24 @@ describe('resolveModelInvocation — 六元组回落链', () => {
     expect(r.fallbacksApplied).toContain('provider:visible-fallback');
   });
 
+  it('providerId: 点名来源这份具体条目是非聊天 mode → 不算「真实提供」,收敛到聊天可用的替代源(issue #882 第 3 点,2026-07 review 第 18 轮)', () => {
+    // anthropic 的 claude-opus-5 被网关标成非聊天(如 embedding);xd 上同 id 仍是正常
+    // 聊天模型 —— 只看 id 存在(旧 providerOffersModel)会误留在 anthropic 上,必须
+    // 收敛到 xd。故意不传 ctx.isVisible,复现修复前「无可见性回调时直接放行」的路径。
+    const withNonChatCopy: ProviderView[] = providers().map((p) =>
+      p.id === 'anthropic'
+        ? { ...p, models: { 'claude-code': [model('claude-opus-5', { mode: 'embedding' })] } }
+        : p,
+    ) as ProviderView[];
+    const r = resolveModelInvocation(
+      { model: 'claude-opus-5', providerId: 'anthropic' },
+      SCENARIO,
+      ctx({ providers: withNonChatCopy }),
+    );
+    expect(r.providerId).toBe('xd');
+    expect(r.fallbacksApplied).toContain('provider:visible-fallback');
+  });
+
   it('providerId: 目录不可用 → 透传原值(路由层兜底,与 IM/hook 历史降级一致)', () => {
     const r = resolveModelInvocation(
       { providerId: 'anthropic' },

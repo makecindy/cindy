@@ -22,10 +22,10 @@
  */
 
 import type { AgentKind, CatalogModel } from './types.js';
+import { isChatEligible } from './classification.js';
 import {
   connectedProvidersForAgent,
   nativeDefaultSourceId,
-  providerOffersModel,
   type ProviderView,
 } from './registry.js';
 import { reconcileInvocationEffort } from './effortResolution.js';
@@ -279,11 +279,19 @@ export function resolveModelInvocation(
     // 显式点名 A 不能只靠「已连接 + 目录含该模型」就放行 —— 那会绕过 isVisible 的
     // 来源级契约,路由到用户明确排除的来源(codex review)。
     const rail = connectedProvidersForAgent([...ctx.providers], agentKind);
-    const visiblyOffers = (p: (typeof rail)[number]): boolean => {
-      if (!providerOffersModel(p, model, agentKind)) return false;
-      if (!ctx.isVisible) return true;
+    // 「真实提供」还必须含 mode 准入(issue #882 第 3 点,2026-07 review 第 18 轮):
+    // providerOffersModel 只看 id 是否存在,不看 mode——同一 id 在这个来源下若是
+    // 非聊天类型的具体条目,无人值守派发会把请求发进 image/audio/embedding 端点。
+    // 取出该来源自己的这份条目校验 isChatEligible,是下面 visiblyOffers 的基础。
+    const chatModelOn = (p: (typeof rail)[number]): CatalogModel | undefined => {
       const cm = p.models[agentKind]?.find((m) => m.id === model);
-      return cm !== undefined && ctx.isVisible(p.id, cm);
+      return cm !== undefined && isChatEligible(cm) ? cm : undefined;
+    };
+    const visiblyOffers = (p: (typeof rail)[number]): boolean => {
+      const cm = chatModelOn(p);
+      if (cm === undefined) return false;
+      if (!ctx.isVisible) return true;
+      return ctx.isVisible(p.id, cm);
     };
     const named = requestedProvider ? rail.find((p) => p.id === requestedProvider) : undefined;
     if (requestedProvider && named !== undefined && visiblyOffers(named)) {
@@ -307,7 +315,7 @@ export function resolveModelInvocation(
       // null 会路由进被隐藏的源 —— 仅在这种「下游默认落点不可见」的情况下显式收敛到
       // 可见源;默认落点本就可见(绝大多数)时维持 null,不改「null=默认路由」契约
       // (codex review 三轮补全)。
-      const offering = rail.filter((p) => providerOffersModel(p, model, agentKind));
+      const offering = rail.filter((p) => chatModelOn(p) !== undefined);
       const downstream = offering.find((p) => p.id === nativeDefaultSourceId(offering, agentKind));
       if (downstream !== undefined && !visiblyOffers(downstream)) {
         const alternatives = rail.filter(visiblyOffers);
