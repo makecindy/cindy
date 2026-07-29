@@ -59,8 +59,7 @@ export interface ThemePalette {
   accentDeep: Rgb;
   /** light 主题可选：CREATE AGENT 卡片 / 输入框底色压暗一档（如 Solarized base2）。
    *  不传时与 surface 同值（chat-input-bg / quick-card / control / segment 底）；
-   *  icon 圆底恒为 chip、control pressed 恒为 pick(chip, hover)，均不随 inputBg
-   *  变化，模板输出仍与手写主题逐字一致。 */
+   *  icon 圆底、hover、pressed 的取值见下方收敛规则，均不随 inputBg 变化。 */
   inputBg?: Rgb;
 }
 
@@ -253,6 +252,14 @@ export function buildThemeColorsFromPalette(
   const mutedIcon = pick(textDisabled, textTertiary);
   /** CREATE AGENT / 输入框底色：light 可用 inputBg 压暗一档（Solarized 惯例）。 */
   const inputBg = toHex(palette.inputBg ?? palette.surface);
+  /** CREATE AGENT hover / icon 圆底 / pressed 收敛规则：
+   *  仅当 light 传了与 surface 不同的 inputBg（如 Solarized base2 卡片）时，hover
+   *  与 icon 圆底提亮到 surface（与卡片底拉开一档）；否则 hover=通用 hover、
+   *  icon 圆底=chip。pressed 恒 pick(chip, hover)。pick(dark, light)。 */
+  const liftsOffSurface = palette.inputBg !== undefined
+    && toHex(palette.inputBg).toLowerCase() !== toHex(palette.surface).toLowerCase();
+  const quickHover = toHex(liftsOffSurface ? palette.surface : palette.hover);
+  const quickIconBg = toHex(liftsOffSurface ? palette.surface : palette.chip);
 
   const colors: Record<string, string> = {
     // ── Tier1 语义 slot ──
@@ -314,16 +321,16 @@ export function buildThemeColorsFromPalette(
     'confirm-btn-secondary-text': textPrimary,
     'confirm-title': textPrimary,
     'create-agent-control-bg': inputBg,
-    'create-agent-control-bg-hover': hover,
+    'create-agent-control-bg-hover': quickHover,
     'create-agent-control-bg-pressed': pick(chip, hover),
     'create-agent-control-border': border,
     'create-agent-control-icon': textPrimary,
     'create-agent-control-text': textPrimary,
     'create-agent-quick-card-bg': inputBg,
-    'create-agent-quick-card-bg-hover': hover,
+    'create-agent-quick-card-bg-hover': quickHover,
     'create-agent-quick-card-border': border,
     'create-agent-quick-card-icon': textPrimary,
-    'create-agent-quick-card-icon-bg': chip,
+    'create-agent-quick-card-icon-bg': quickIconBg,
     'create-agent-quick-card-text': textPrimary,
     'create-agent-segment-inactive-text': pick(textTertiary, textSecondary),
     'create-agent-segment-track-bg': inputBg,
