@@ -3876,6 +3876,7 @@
       "ariaDescription": "版本 {{version}} 的更新说明",
       "ariaDescriptionSpan": "自 v{{from}} 起累计 {{count}} 个版本的更新说明",
       "versionsSpan": "{{count}} 个版本",
+      "versionJumpAria": "跳转到版本，共 {{count}} 个版本，当前 v{{version}}",
       "loading": "加载中",
       "loadFailed": "加载失败",
       "retry": "重试"

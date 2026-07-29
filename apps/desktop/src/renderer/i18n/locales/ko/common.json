@@ -3876,6 +3876,7 @@
       "ariaDescription": "버전 {{version}} 릴리스 노트",
       "ariaDescriptionSpan": "v{{from}} 이후 {{count}}개 버전의 릴리스 노트",
       "versionsSpan": "{{count}}개 버전",
+      "versionJumpAria": "버전으로 이동 — 전체 {{count}}개 버전, 현재 v{{version}}",
       "loading": "불러오는 중",
       "loadFailed": "불러오기 실패",
       "retry": "다시 시도"

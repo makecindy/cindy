@@ -127,10 +127,21 @@ function groupItemsByAuthor(
  */
 function SectionList({ sections }: { sections: ReleaseNoteSection[] }) {
   const { t } = useTranslation();
-  const labelFor = (title: string) =>
-    title === 'Bug Fixes'
-      ? { text: t('update.notice.bugFixes'), Icon: SECTION_ICONS.wrench }
-      : { text: t('update.notice.newFeatures'), Icon: SECTION_ICONS.zap };
+  // Only the two canonical titles get translated. The legacy schema allows an
+  // arbitrary section title, and headings are now per-section rather than
+  // per-column, so mapping "anything that isn't Bug Fixes" to "New Features"
+  // would mislabel unknown sections and print the same heading twice when a
+  // payload carries several non-bugfix sections. Unknown titles pass through
+  // verbatim.
+  const labelFor = (title: string) => {
+    if (title === 'Bug Fixes') {
+      return { text: t('update.notice.bugFixes'), Icon: SECTION_ICONS.wrench };
+    }
+    if (title === 'New Features') {
+      return { text: t('update.notice.newFeatures'), Icon: SECTION_ICONS.zap };
+    }
+    return { text: title, Icon: SECTION_ICONS.zap };
+  };
   const filled = sections.filter((s) => s.items.length > 0);
   return (
     <>
@@ -376,6 +387,13 @@ interface VersionDropdownProps {
   onSelect: (version: string) => void;
   triggerLabel: string;
   /**
+   * Accessible name for the trigger. Must be given separately from
+   * `triggerLabel`: the visible chip only shows a version *count*, so reusing
+   * it as the accessible name would leave screen-reader users with no way to
+   * tell which version they are currently on without opening the menu.
+   */
+  triggerAriaLabel: string;
+  /**
    * Bubble open state up so the parent AlertDialog can guard its overlay
    * onClick — Radix outside-click closes the dropdown but the click continues
    * to propagate; without the guard it would land on `AlertDialog.Overlay`
@@ -389,6 +407,7 @@ function VersionDropdown({
   currentVersion,
   onSelect,
   triggerLabel,
+  triggerAriaLabel,
   onOpenChange,
 }: VersionDropdownProps) {
   return (
@@ -397,7 +416,7 @@ function VersionDropdown({
         <button
           type="button"
           className="inline-flex outline-none"
-          aria-label={triggerLabel}
+          aria-label={triggerAriaLabel}
         >
           {/* The trigger now reads "N versions", not a version number, so the
               flame glyph would be misleading — hence icon={false}. */}
@@ -832,6 +851,10 @@ export function UpdateNoticeDialog({
                   versions={allVersions}
                   currentVersion={stickyVersion || newest.version}
                   triggerLabel={versionCountLabel}
+                  triggerAriaLabel={t('update.notice.versionJumpAria', {
+                    count: allVersions.length,
+                    version: stickyVersion || newest.version,
+                  })}
                   onSelect={(v) => jumpRef.current?.(v)}
                   onOpenChange={(dropOpen) => {
                     dropdownOpenRef.current = dropOpen;

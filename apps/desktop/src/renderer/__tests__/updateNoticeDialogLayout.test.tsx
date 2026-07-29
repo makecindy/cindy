@@ -84,11 +84,20 @@ describe('UpdateNoticeDialog 单栏版式', () => {
     const lines = screen.getAllByText(thanksLabel);
     expect(lines).toHaveLength(2);
 
-    // 每条感谢行所在的块里,能同时找到该版本号与该版本的名单。
+    // 每条感谢行所在的块里,必须同时能找到该版本号与该版本的名单,
+    // 且不含另一个版本的任何一项——这样才能证明名单没有跨版本漂移。
     const blockOf = (el: HTMLElement) => el.closest('div.flex.flex-col') as HTMLElement;
     const first = blockOf(lines[0].parentElement as HTMLElement);
+    expect(within(first).getByText('v0.1.21')).toBeTruthy();
     expect(within(first).getByText('Kafeifei · yan')).toBeTruthy();
+    expect(within(first).queryByText('v0.1.17')).toBeNull();
     expect(within(first).queryByText('Silas · Kmny')).toBeNull();
+
+    const second = blockOf(lines[1].parentElement as HTMLElement);
+    expect(within(second).getByText('v0.1.17')).toBeTruthy();
+    expect(within(second).getByText('Silas · Kmny')).toBeTruthy();
+    expect(within(second).queryByText('v0.1.21')).toBeNull();
+    expect(within(second).queryByText('Kafeifei · yan')).toBeNull();
   });
 
   it('旧格式(作者分组)也走单栏:两个小节标题都在,无左右分栏', () => {
@@ -110,6 +119,22 @@ describe('UpdateNoticeDialog 单栏版式', () => {
     renderDialog([notes]);
     expect(screen.queryByText(i18n.t('update.notice.newFeatures'))).toBeNull();
     expect(screen.getByText(i18n.t('update.notice.bugFixes'))).toBeTruthy();
+  });
+
+  it('未知小节标题原样透出,不被误标成「新功能」', () => {
+    const notes: ReleaseNotes = {
+      ...legacyNotes('0.1.15', ['Silas']),
+      sections: [
+        { title: 'New Features', items: [{ text: 'A', by: 'Silas' }] },
+        { title: 'Performance', items: [{ text: 'B', by: 'Silas' }] },
+        { title: 'Docs', items: [{ text: 'C', by: 'Silas' }] },
+      ],
+    };
+    renderDialog([notes]);
+    expect(screen.getByText('Performance')).toBeTruthy();
+    expect(screen.getByText('Docs')).toBeTruthy();
+    // 「新功能」只出现一次(仅 New Features 那一节),不会因多个非修复小节重复。
+    expect(screen.getAllByText(i18n.t('update.notice.newFeatures'))).toHaveLength(1);
   });
 
   it('单版本 auto 模式的版本号与日期在版本块里,不在标题栏', () => {

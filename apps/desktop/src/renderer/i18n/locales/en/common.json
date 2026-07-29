@@ -3877,6 +3877,7 @@
       "ariaDescription": "Release notes for version {{version}}",
       "ariaDescriptionSpan": "Release notes for {{count}} versions since v{{from}}",
       "versionsSpan": "{{count}} versions",
+      "versionJumpAria": "Jump to a version — {{count}} versions, currently on v{{version}}",
       "loading": "Loading",
       "loadFailed": "Load failed",
       "retry": "Retry"
