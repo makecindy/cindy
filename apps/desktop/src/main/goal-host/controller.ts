@@ -1034,7 +1034,13 @@ export class GoalController {
     this.usageResumeTimers.delete(sessionId);
     const state = await this.deps.storage.get(sessionId).catch(() => null);
     if (!state || state.status !== 'usageLimited') return; // 用户可能已 clear / 手动 resume
-    if (this.deps.persistGoalNotice) {
+    // 预算已经用尽时一条都不该说：下面的 resumeGoal → fireTurn 有 preflight 预算守卫，
+    // 会立刻把目标转成 budgetLimited、一轮都不发，而这张卡片已经落库，会在会话里永久
+    // 留下一句「正在重试目标 / 用量已恢复」——那次重试根本没发生（review #844 codex P1）。
+    // 判据与 fireTurn 用的是同一个 exceedsGoalBudget，结论必然一致；仍照常走 resumeGoal，
+    // 由它把状态转成 budgetLimited。
+    const budgetAlreadyExhausted = exceedsGoalBudget(state);
+    if (this.deps.persistGoalNotice && !budgetAlreadyExhausted) {
       // 过载与账号限流共用 usageLimited 状态和这同一个 timer，但说法必须分开：
       // 账号从没被限流时报「额度已重置」是假信息（review #844 codex P1）。
       // 判据用存档的 lastReason 而不是内存计数——后者在进程重启后会丢，而
@@ -1046,6 +1052,10 @@ export class GoalController {
       } catch (e) {
         this.deps.logger.warn('[goal] persistGoalNotice failed', { sessionId, error: String(e) });
       }
+    } else if (budgetAlreadyExhausted) {
+      this.deps.logger.info('[goal] skipped resume notice — budget already exhausted', {
+        sessionId,
+      });
     }
     // auto:true —— 这是到点自动续跑，不是用户显式恢复，不得清零连续过载计数。
     await this.resumeGoal(sessionId, { auto: true });

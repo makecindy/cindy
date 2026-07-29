@@ -1302,6 +1302,34 @@ describe('GoalController', () => {
     expect((await h.storage.get('s1'))?.status).toBe('active');
   });
 
+  it('skips the resume notice when the goal budget is already exhausted', async () => {
+    // resumeGoal → fireTurn 的 preflight 预算守卫会立刻把目标转成 budgetLimited、
+    // 一轮都不发。先落卡片的话, 会话里永久留下一句根本没发生过的重试
+    // (review #844 codex P1)。
+    h.setAccountLimit({ limited: false, resetAtMs: null });
+    await h.controller.setGoal({
+      sessionId: 's1',
+      objective: 'make tests pass',
+      agentKind: 'claude-code',
+      limits: { maxTurns: 1, budgetTokens: null, noProgressLimit: 3 },
+    });
+    h.session.emitErrorTurn({ message: 'Selected model is at capacity.' });
+    await tick();
+    expect((await h.storage.get('s1'))?.status).toBe('usageLimited');
+    // 这一轮已经把 maxTurns 用满。
+    expect((await h.storage.get('s1'))?.turnsUsed).toBe(1);
+    h.notices.length = 0;
+
+    await (
+      h.controller as unknown as { autoResumeFromUsageLimit(id: string): Promise<void> }
+    ).autoResumeFromUsageLimit('s1');
+    await tick();
+
+    // 一条提示都不该落库, 状态直接转成 budgetLimited。
+    expect(h.notices).toEqual([]);
+    expect((await h.storage.get('s1'))?.status).toBe('budgetLimited');
+  });
+
   it('setGoal gives a replacement objective its own overload budget', async () => {
     // 连续过载计数是 per-goal 状态。换目标不清零的话，上一个目标撞上限变 blocked
     // 后，新目标第一次容量错误就直接 blocked、拿不到自己的重试预算（review #844 P1）。
