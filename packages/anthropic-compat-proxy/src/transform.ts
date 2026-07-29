@@ -710,11 +710,12 @@ const SYNTHETIC_TOOL_RESULT_TEXT =
  *   2. 接力补缺 + 错位重排: 位置配对失败的 call 从结果池取**归属区间**(本
  *      assistant 消息到下一条含同 id call 的 assistant 消息之间 —— agentic
  *      loop 串行,出现在下一个同 id exchange 之后的 result 只属于后面的
- *      exchange,较早缺口不得越界抢走;同消息 parallel calls 同批发出,归属
- *      不可判定时按"result 顺序与 call 顺序一致"惯例顺序配对)内的第一个
- *      未消费块;不在合法位置(跨消息,或同消息内落在 text 之后)的前移至
- *      紧邻消息的前导 tool_result 区间,原位置移除。Anthropic 要求 result
- *      紧跟 call 所在 assistant 且居于 text 前,留在错误位置仍是 400。
+ *      exchange,较早缺口不得越界抢走;同消息 parallel calls 的归属不可判定
+ *      时按稳定 tie-breaker 沿 call 块顺序配序,该约定受典型 client
+ *      serializer 支持但非 wire 可证明)内的第一个未消费块;不在合法位置
+ *      (跨消息,或同消息内落在 text 之后)的前移至紧邻消息的前导
+ *      tool_result 区间,原位置移除。Anthropic 要求 result 紧跟 call 所在
+ *      assistant 且居于 text 前,留在错误位置仍是 400。
  *   3. 缺失合成: 非 trailing 的 call 无候选 → 紧邻位置合成占位(kimi 同文案
  *      同语义;不设 is_error —— "结果不可用"≠"执行失败")。插入规则与重排
  *      相同;string content 转等价数组,空白 string 不附加 text 块。
@@ -843,8 +844,13 @@ function repairToolExchangeAdjacencyInMessages(messages: unknown[]): unknown[] |
   //
   // 边界粒度刻意是 exchange(消息)而非单个 call:同一条 assistant 消息内的
   // parallel 同 id calls 同批发出、result 同批回来,其中一个丢失时归属在
-  // 原理上不可判定 —— 此时按 CC 落库惯例(result 顺序与 call 顺序一致)在
-  // 区间内涵 call 顺序先到先得,与无歧义场景的配对规则保持同一条惯例。
+  // 原理上不可判定(信息论:两种归属的世界序列化后字节完全相同,缺失不留
+  // 位置痕迹)—— 此时采用**稳定 tie-breaker**:区间内涵 call 块顺序配序。
+  // 该约定受典型 client serializer 支持(CC SDK 的 Tool Runner 以
+  // Promise.all 并发执行、但结果数组保持输入 tool_use 顺序),可复现且最大
+  // 保留信息;但只是默认约定,不是 wire 可证明的归属 —— 真正消除歧义只能
+  // 在丢失前由 source adapter 持久化 occurrence/call index(provenance),
+  // 本层对已有 body 无法补造这个 bit。
   //
   // trailing missing call 同样消费区间内的块,但**只消费不修复**(不移、不
   // 合成)——保护 trailing 交换的合法尾部 result(如 parallel trailing calls

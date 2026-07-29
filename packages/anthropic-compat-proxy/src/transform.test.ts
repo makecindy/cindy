@@ -1547,8 +1547,10 @@ describe('repairToolExchangeAdjacencyFromBody', () => {
 
   it('same-message parallel same-id calls pair a stray result in call order', () => {
     // 同一条 assistant 消息内的 parallel 同 id calls 同批发出,其中一个
-    // result 丢失时归属在原理上不可判定 —— 按 CC 落库惯例(result 顺序与
-    // call 顺序一致)区间内顺序配对:错位的 r 配给 call#1,call#2 合成。
+    // result 丢失时归属在原理上不可判定(两种归属的世界序列化后字节相同)。
+    // 这里锁定的是**稳定 tie-breaker 契约**:区间内涵 call 块顺序配序
+    // (受典型 client serializer 支持:SDK Tool Runner Promise.all 的结果数组
+    // 保持输入序)—— 是可复现的默认约定,不是"证明 stray 属于 call#1"。
     // (归属区间按 exchange 粒度计算,同消息 calls 共享区间。)
     const body = buf({
       messages: [
@@ -1578,6 +1580,38 @@ describe('repairToolExchangeAdjacencyFromBody', () => {
         tool_use_id: 'X',
         content: 'Tool result is not available in the current context. Do not assume the tool completed successfully.',
       },
+      { type: 'text', text: '之间' },
+    ]);
+  });
+
+  it('two displaced same-id results keep pool order onto call order (stable serializer contract)', () => {
+    // 契约测试: 同消息 parallel 同 id calls 均无紧邻 result,池中两个错位
+    // result 按位置顺序 zip 到 call 顺序(r1→call#1、r2→call#2)—— 锁定
+    // stable tie-breaker 在多元件下的可复现性。
+    const body = buf({
+      messages: [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'X', name: 'Edit', input: { a: 1 } },
+            { type: 'tool_use', id: 'X', name: 'Edit', input: { a: 2 } },
+          ],
+        },
+        { role: 'user', content: [{ type: 'text', text: '之间' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'X', content: 'r1' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'X', content: 'r2' }] },
+        { role: 'user', content: '继续' },
+      ],
+    });
+    const out = repairToolExchangeAdjacencyFromBody(body);
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages.map((m: { role: string }) => m.role)).toEqual([
+      'user', 'assistant', 'user', 'user',
+    ]);
+    expect(parsed.messages[2].content).toEqual([
+      { type: 'tool_result', tool_use_id: 'X', content: 'r1' },
+      { type: 'tool_result', tool_use_id: 'X', content: 'r2' },
       { type: 'text', text: '之间' },
     ]);
   });
@@ -1637,6 +1671,40 @@ describe('duplicate tool_use id / tool exchange adjacency recovery rules', () =>
 });
 
 describe('repair → dedupe 链式顺序(host 主动链同序)', () => {
+  it('同消息 parallel 同 id + 一个错位 result:真实 R→X、合成→X_2(端到端契约)', () => {
+    // 端到端契约: repair 先把 stray 配给 call#1(稳定 tie-breaker)、call#2
+    // 合成,dedupe 再把 call#2 改名 X_2、第 2 个 result(合成块)同步改名。
+    const body = {
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'X', name: 'Edit', input: { a: 1 } },
+            { type: 'tool_use', id: 'X', name: 'Edit', input: { a: 2 } },
+          ],
+        },
+        { role: 'user', content: [{ type: 'text', text: '之间' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'X', content: 'stray' }] },
+        { role: 'user', content: '继续' },
+      ],
+    };
+    const afterRepair = repairToolExchangeAdjacency(body, ctx) as typeof body | null;
+    expect(afterRepair).not.toBeNull();
+    const afterBoth = dedupeDuplicateToolUseIds(afterRepair!, ctx) as typeof body | null;
+    expect(afterBoth).not.toBeNull();
+    const messages = afterBoth!.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'user']);
+    const calls = messages[1].content;
+    expect(calls[0].id).toBe('X');
+    expect(calls[1].id).toBe('X_2');
+    // 真实 stray 配 call#1(保持 X);合成块配 call#2(同步改名 X_2)。
+    expect(messages[2].content[0]).toMatchObject({ tool_use_id: 'X', content: 'stray' });
+    expect(messages[2].content[1]).toMatchObject({ tool_use_id: 'X_2' });
+    expect(String(messages[2].content[1].content)).toContain('Tool result is not available');
+  });
+
   it('前置 same-id result 不污染 dedupe 的配对序号(复审反例)', () => {
     // 复审反例: dedupe 先跑时,'early' 白占 result 序号 1,本属 call#1 的 r1
     // 被改名给 call#2,repair 按改名后 id 配对 → 张冠李戴。repair 先跑则
@@ -1665,8 +1733,7 @@ describe('repair → dedupe 链式顺序(host 主动链同序)', () => {
     expect(messages[3].content[0]).toMatchObject({ tool_use_id: 'X_2', content: 'r2' });
   });
 
-  it('组合 strip(recovery 共用)同序修复且不改写干净 body', () => {
-    // 同一 body 经组合函数: 前置丢弃 + 合成/重排 + 唯一化一次完成。
+  it('组合 strip(recovery 共用)同序修复且不改写干净 body', () => {    // 同一 body 经组合函数: 前置丢弃 + 合成/重排 + 唯一化一次完成。
     const polluted = buf({
       messages: [
         { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'X', content: 'early' }] },
