@@ -46,7 +46,7 @@ import {
   MAX_NODE_UNCOMPRESSED_BYTES,
   MAX_NODE_ZIP_ENTRIES,
 } from './GhostManager.js';
-import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
+import { GHOST_SIGNATURE_FILE, MAX_SIGNATURE_FILE_BYTES } from './ghostSignature.js';
 
 export type ExportGhostPackageResult =
   | { status: 'saved'; savedPath: string }
@@ -144,7 +144,8 @@ interface SignedDoc {
 
 /**
  * 读取并解析签名文件。返回 null 表示插件未签名(文件不存在);文件存在
- * 但结构非法时抛错——静默降级成未签名导出会让重装后信任等级失真,
+ * 但超上限或结构非法时抛错——装入侧只认 64KB 内的签名文件,超限签名
+ * 反正过不了装入;静默降级成未签名导出会让重装后信任等级失真,
  * 不如如实报错。
  */
 async function readSignedDoc(dir: string): Promise<SignedDoc | null> {
@@ -154,6 +155,9 @@ async function readSignedDoc(dir: string): Promise<SignedDoc | null> {
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
     throw err;
+  }
+  if (raw.byteLength > MAX_SIGNATURE_FILE_BYTES) {
+    throw new Error('signature file too large');
   }
   const doc = JSON.parse(raw.toString('utf8')) as {
     statement?: { files?: Array<{ path?: unknown; sha256?: unknown; bytes?: unknown }> };
@@ -403,21 +407,20 @@ async function snapshotPackage(
         if (declaredBytes > limits.maxUncompressed || doc.files.length + 1 > limits.maxEntries) {
           return 'too_large';
         }
+        // 目录结构信封(评审 P1):空目录不在 statement 哈希覆盖内,
+        // 运行期 mkdir/rmdir 也不改签名文件字节——唯一可靠的锚是
+        // 「窗口内稳定」:文件哈希校验前后各收集一遍,不一致即重试。
+        const covered = new Set(doc.files.map((file) => file.path));
+        const keep = (rel: string) => covered.has(rel);
+        const dirsBefore = await collectEmptyDirs(dir, keep, limits.maxEntries);
         const entries = await readSignedEntries(dir, doc);
-        if (entries) {
-          const covered = new Set(doc.files.map((file) => file.path));
-          const emptyDirs = await collectEmptyDirs(
-            dir,
-            (rel) => covered.has(rel),
-            limits.maxEntries,
-          );
-          // 目录结构信封(评审 P1):空目录收集发生在文件哈希校验之后,
-          // 期间目录被换掉会把新版空目录与旧版文件混装——重读签名文件
-          // 比对字节,变了说明整个读窗口跨了版本,整体重试。
-          const sigAgain = await fs.promises.readFile(path.join(dir, GHOST_SIGNATURE_FILE));
-          if (!sigAgain.equals(doc.raw)) continue;
-          return { entries, emptyDirs };
-        }
+        if (!entries) continue;
+        const dirsAfter = await collectEmptyDirs(dir, keep, limits.maxEntries);
+        const dirsStable =
+          dirsBefore.length === dirsAfter.length &&
+          [...dirsBefore].sort().every((rel, i) => rel === [...dirsAfter].sort()[i]);
+        if (!dirsStable) continue;
+        return { entries, emptyDirs: dirsAfter };
       } else {
         const budget = {
           entriesLeft: limits.maxEntries,
