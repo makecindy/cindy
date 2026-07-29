@@ -44,6 +44,8 @@ import {
   deleteGhostAppearancePreset,
   listGhostAppearancePresets,
   readGhostAppearance,
+  recoverGhostAppearanceTransaction,
+  removeGhostAppearanceData,
   resetGhostAppearance,
   saveGhostAppearance,
   saveGhostAppearancePreset,
@@ -281,6 +283,49 @@ describe('appearance preset store', () => {
       'Mine',
       'Other',
     ]);
+  });
+
+  it('卸载只清理所属插件的活动皮肤、预设与媒体引用', async () => {
+    await saveGhostAppearance(appearance('Mine'), { background: HASH_A }, 'skin');
+    await saveGhostAppearancePreset(appearance('Mine'), { background: HASH_A }, 'skin');
+    await saveGhostAppearancePreset(
+      { ...appearance('Other', HASH_B), sourceGhostId: 'other' },
+      { background: HASH_B },
+      'other',
+    );
+    const [mine] = await listGhostAppearancePresets('skin');
+    const [other] = await listGhostAppearancePresets('other');
+
+    await expect(removeGhostAppearanceData('skin')).resolves.toEqual({
+      activeRemoved: true,
+      presetsRemoved: 1,
+    });
+
+    expect(await readGhostAppearance()).toBeNull();
+    expect(await listGhostAppearancePresets()).toEqual([
+      expect.objectContaining({ id: other.id, sourceGhostId: 'other' }),
+    ]);
+    expect(mocks.refs.has('skin-background:active')).toBe(false);
+    expect(mocks.refs.has(`skin-preset:${mine.id}:background`)).toBe(false);
+    expect(mocks.refs.get(`skin-preset:${other.id}:background`)?.has(HASH_B)).toBe(true);
+  });
+
+  it('卸载引用清理失败时隐藏旧归属，并在安装前恢复清理事务', async () => {
+    await saveGhostAppearance(appearance('Mine'), { background: HASH_A }, 'skin');
+    await saveGhostAppearancePreset(appearance('Mine'), { background: HASH_A }, 'skin');
+    const [mine] = await listGhostAppearancePresets('skin');
+    vi.mocked(removeRefs).mockRejectedValueOnce(new Error('ledger unavailable'));
+
+    await expect(removeGhostAppearanceData('skin')).rejects.toThrow('ledger unavailable');
+
+    expect(await readGhostAppearance()).toBeNull();
+    expect(await listGhostAppearancePresets('skin')).toEqual([]);
+    expect(fs.existsSync(path.join(mocks.root, 'appearance-transaction.v1.json'))).toBe(true);
+
+    await expect(recoverGhostAppearanceTransaction()).resolves.toBeUndefined();
+    expect(mocks.refs.has('skin-background:active')).toBe(false);
+    expect(mocks.refs.has(`skin-preset:${mine.id}:background`)).toBe(false);
+    expect(fs.existsSync(path.join(mocks.root, 'appearance-transaction.v1.json'))).toBe(false);
   });
 
   it('每插件预设数量独立计数，不能占满其他插件的额度', async () => {

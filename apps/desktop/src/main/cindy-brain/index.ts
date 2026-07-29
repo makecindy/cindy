@@ -145,6 +145,8 @@ import {
   deleteGhostAppearancePreset,
   listGhostAppearancePresets,
   readGhostAppearance,
+  recoverGhostAppearanceTransaction,
+  removeGhostAppearanceData,
   resetGhostAppearance,
   saveGhostAppearance,
   saveGhostAppearancePreset,
@@ -2477,6 +2479,9 @@ export async function installAndDock(
   lizFilePath: string,
   opts?: { enable?: boolean; expectedPackageSha256?: string },
 ): Promise<InstalledGhost> {
+  // 上次卸载若在删媒体引用时中断，必须先收敛持久化清理事务；否则复用同一
+  // 插件 ID 的新包可能在 manager 广播安装完成后继承旧皮肤资源访问权。
+  await recoverGhostAppearanceTransaction();
   // 默认沉睡(2026-07-09 Lizi 定案):装入 ≠ 授权运行,用户在确认框显式勾选
   // "立即开启"才带电;沉睡态面板不渲染、总机不列、沙箱不拉起。
   const result = await manager.install(lizFilePath, {
@@ -2625,6 +2630,18 @@ export async function uninstallGhostAndCleanup(
     getGhostSubscriptionGateway().dropGhost(id);
     const result = await manager.uninstall(id, { notify: false });
     if ('rejection' in result) throwUninstallError(result.rejection);
+    try {
+      const appearanceCleanup = await removeGhostAppearanceData(id);
+      if (appearanceCleanup.activeRemoved) broadcastGhostAppearance(null);
+    } catch (error) {
+      // 清理事务已经持久化，读取侧会立即隐藏旧归属；下次外观 mutation 或
+      // 新包安装会在插件获得运行机会前重试，不让同 ID 新包继承旧媒体权限。
+      log.warn('ghost appearance cleanup deferred', {
+        id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      broadcastGhostAppearance(await readGhostAppearance());
+    }
     removeGhostSecrets(id);
     removeGhostKvBestEffort(
       createGhostKvStore({

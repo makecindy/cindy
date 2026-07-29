@@ -113,4 +113,30 @@ describe('market Ghost session boundary', () => {
       expect(handler).toContain('withGhostAppearanceMutation(async () =>');
     }
   });
+
+  it('revokes plugin-owned appearance data after uninstall and recovers before install', () => {
+    const installStart = source.indexOf('export async function installAndDock(');
+    const installEnd = source.indexOf(
+      '\n}\n\n/**\n * Plugin 市场专用装入入口',
+      installStart,
+    );
+    const installBody = source.slice(installStart, installEnd);
+    expect(installBody).toContain('await recoverGhostAppearanceTransaction();');
+    expect(installBody.indexOf('await recoverGhostAppearanceTransaction();')).toBeLessThan(
+      installBody.indexOf('await manager.install('),
+    );
+
+    const uninstallStart = source.indexOf(
+      'export async function uninstallGhostAndCleanup(',
+    );
+    const uninstallEnd = source.indexOf(
+      '\n}\n\n/** 市场默认安装',
+      uninstallStart,
+    );
+    const uninstallBody = source.slice(uninstallStart, uninstallEnd);
+    expect(uninstallBody).toContain('await removeGhostAppearanceData(id)');
+    expect(uninstallBody.indexOf('await removeGhostAppearanceData(id)')).toBeGreaterThan(
+      uninstallBody.indexOf('await manager.uninstall('),
+    );
+  });
 });

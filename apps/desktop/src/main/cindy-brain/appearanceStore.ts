@@ -79,6 +79,7 @@ interface PersistedAppearanceTransaction {
   version: 1;
   previousAppearance: PersistedAppearance | null;
   previousPresets: PersistedAppearancePresetLibrary;
+  removeGhostId?: string;
 }
 
 function isSnapshot(value: unknown): value is PersistedAppearance {
@@ -192,6 +193,8 @@ async function readAppearanceTransaction(): Promise<PersistedAppearanceTransacti
     if (
       transaction.version !== 1 ||
       (transaction.previousAppearance !== null && !isSnapshot(transaction.previousAppearance)) ||
+      (transaction.removeGhostId !== undefined &&
+        typeof transaction.removeGhostId !== 'string') ||
       !transaction.previousPresets ||
       typeof transaction.previousPresets !== 'object'
     ) {
@@ -213,7 +216,15 @@ async function readAppearanceTransaction(): Promise<PersistedAppearanceTransacti
 
 async function readPresetLibrary(): Promise<PersistedAppearancePresetLibrary> {
   const transaction = await readAppearanceTransaction();
-  return transaction?.previousPresets ?? readPresetLibraryRaw();
+  if (!transaction) return readPresetLibraryRaw();
+  return transaction.removeGhostId
+    ? {
+        version: 1,
+        presets: transaction.previousPresets.presets.filter(
+          (preset) => preset.sourceGhostId !== transaction.removeGhostId,
+        ),
+      }
+    : transaction.previousPresets;
 }
 
 function hydrateAppearance(
@@ -240,9 +251,11 @@ async function readGhostAppearanceRaw(): Promise<GhostAppearanceSnapshot | null>
 
 export async function readGhostAppearance(): Promise<GhostAppearanceSnapshot | null> {
   const transaction = await readAppearanceTransaction();
-  return transaction
-    ? hydrateAppearance(transaction.previousAppearance)
-    : readGhostAppearanceRaw();
+  if (!transaction) return readGhostAppearanceRaw();
+  if (transaction.previousAppearance?.sourceGhostId === transaction.removeGhostId) {
+    return null;
+  }
+  return hydrateAppearance(transaction.previousAppearance);
 }
 
 async function atomicWriteJson(file: string, value: unknown): Promise<void> {
@@ -545,6 +558,11 @@ async function recoverIncompleteAppearanceTransaction(): Promise<void> {
   const transaction = await readAppearanceTransaction();
   if (!transaction) return;
 
+  if (transaction.removeGhostId) {
+    await removeGhostAppearanceDataUnsafe(transaction);
+    return;
+  }
+
   if (transaction.previousAppearance) {
     await saveGhostAppearanceUnsafe(
       hydrateAppearance(transaction.previousAppearance)!,
@@ -562,6 +580,68 @@ async function recoverIncompleteAppearanceTransaction(): Promise<void> {
   }
   await restorePresetState(transaction.previousPresets);
   await fs.rm(transactionFilePath(), { force: true });
+}
+
+async function removeGhostAppearanceDataUnsafe(
+  transaction: PersistedAppearanceTransaction,
+): Promise<{ activeRemoved: boolean; presetsRemoved: number }> {
+  const ghostId = transaction.removeGhostId;
+  if (!ghostId) return { activeRemoved: false, presetsRemoved: 0 };
+
+  const ownedPresets = transaction.previousPresets.presets.filter(
+    (preset) => preset.sourceGhostId === ghostId,
+  );
+  const nextLibrary: PersistedAppearancePresetLibrary = {
+    version: 1,
+    presets: transaction.previousPresets.presets.filter(
+      (preset) => preset.sourceGhostId !== ghostId,
+    ),
+  };
+  const activeRemoved = transaction.previousAppearance?.sourceGhostId === ghostId;
+
+  await atomicWriteJson(presetsFilePath(), nextLibrary);
+  if (activeRemoved) await fs.rm(filePath(), { force: true });
+  await Promise.all([
+    ...ownedPresets.flatMap((preset) =>
+      (['background', 'brandIcon', 'brandLogo'] as const).map((asset) =>
+        removeRefs({ refKind: 'skin-preset', refId: presetRefId(preset.id, asset) }),
+      ),
+    ),
+    ...(activeRemoved
+      ? (['skin-background', 'skin-brand-icon', 'skin-brand-logo'] as const).map((refKind) =>
+          removeRefs({ refKind, refId: REF_ID }),
+        )
+      : []),
+  ]);
+  await fs.rm(transactionFilePath());
+  return { activeRemoved, presetsRemoved: ownedPresets.length };
+}
+
+/**
+ * 卸载插件时撤销其外观归属。事务一旦落盘，读取侧立即隐藏该插件的活动皮肤
+ * 与预设；若物理删引用失败，后续 mutation 或新插件安装会先重试，避免复用
+ * 同一插件 ID 的新包继承旧媒体访问权。
+ */
+export function removeGhostAppearanceData(
+  ghostId: string,
+): Promise<{ activeRemoved: boolean; presetsRemoved: number }> {
+  return serializeMutation(async () => {
+    const previousAppearance = await readGhostAppearanceRaw();
+    const previousPresets = await readPresetLibraryRaw();
+    const transaction = {
+      version: 1,
+      previousAppearance,
+      previousPresets,
+      removeGhostId: ghostId,
+    } satisfies PersistedAppearanceTransaction;
+    await atomicWriteJson(transactionFilePath(), transaction);
+    return removeGhostAppearanceDataUnsafe(transaction);
+  });
+}
+
+/** 新插件包进入运行时前必须收敛可能由上次卸载留下的外观清理事务。 */
+export function recoverGhostAppearanceTransaction(): Promise<void> {
+  return serializeMutation(async () => {});
 }
 
 export function saveGhostAppearancePreset(
