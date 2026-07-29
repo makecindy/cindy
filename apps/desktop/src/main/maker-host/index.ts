@@ -701,7 +701,7 @@ export function getMaker(): Maker {
       // RemoteQuery 实现 SDK Query interface 的子集 (ClaudeCodeAgent 实际只调
       // for-await / interrupt / setModel / setPermissionMode / applyFlagSettings),
       // factory 返回时直接 `as unknown as Query` cast 即可。
-      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest, makerMemoryEnabled }) => {
+      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest, onOAuthRefresh, makerMemoryEnabled }) => {
         const host = getRemoteSshPool().get(remoteHostId);
         if (host?.getStatus() !== 'ready') {
           throw new Error(`remote ssh host not ready: ${remoteHostId}`);
@@ -820,6 +820,7 @@ export function getMaker(): Maker {
               startParams: startParamsWithProxy as unknown as Parameters<typeof openCcManagerSession>[0]['startParams'],
               claudeBinaryPath,
               onApprovalRequest: onApprovalRequest as Parameters<typeof openCcManagerSession>[0]['onApprovalRequest'],
+              onOAuthRefresh: onOAuthRefresh as Parameters<typeof openCcManagerSession>[0]['onOAuthRefresh'],
               forceFreshQuery,
             });
           } catch (err) {

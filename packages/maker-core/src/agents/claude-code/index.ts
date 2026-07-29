@@ -2116,6 +2116,30 @@ export class ClaudeCodeAgent extends BaseAgent {
               reason: decision.reason,
             };
           },
+          // 订阅 token 到期续命(远端版,对齐本地 SDK options 的 getOAuthToken 回调,
+          // 见 buildQuery 本地分支):远端 cc 中途 401 → daemon 发 oauth/refresh 反向
+          // RPC → 这里向 host 要新 token。接线条件与本地同款:env 实际带订阅 token 且
+          // host 实现了强刷 —— 网关 key / 自定义供应商会话绝不接,避免 API-key 401 被
+          // 误引导去刷订阅 token。remoteEnv 里的 token 是失败基线 + 单一事实源:拿到
+          // 新 token 后原地写回,重连 fresh-start 重发 env 时直接以最新 token 起跑。
+          ...(remoteEnv?.CLAUDE_CODE_OAUTH_TOKEN && this.deps.auth.getFreshSubscriptionToken
+            ? {
+                onOAuthRefresh: async (): Promise<unknown> => {
+                  try {
+                    const fresh = await this.deps.auth.getFreshSubscriptionToken!(
+                      remoteEnv.CLAUDE_CODE_OAUTH_TOKEN,
+                    );
+                    if (fresh) remoteEnv.CLAUDE_CODE_OAUTH_TOKEN = fresh;
+                    return { token: fresh ?? null };
+                  } catch (e) {
+                    log.warn('remote oauth refresh failed; returning null (cc will surface auth error)', {
+                      error: e instanceof Error ? e.message : String(e),
+                    });
+                    return { token: null };
+                  }
+                },
+              }
+            : {}),
         });
         // factory 可能注入 host 侧 http server (远端 cc 协同恢复通道的
         // cindy_orca / orca_worker_bridge, 见 maker-host remoteCcQueryFactory),

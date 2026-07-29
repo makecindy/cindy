@@ -328,6 +328,95 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  // 远端订阅 token 续命:route env 带 CLAUDE_CODE_OAUTH_TOKEN 且 host 实现强刷时,
+  // remoteCcQueryFactory 必须拿到 onOAuthRefresh;回调返回新 token 并把 remoteEnv
+  // 原地写新(单一事实源,重连 fresh-start 直接用新 token 起跑)。网关路径绝不接线。
+  it('wires onOAuthRefresh for native-OAuth remote routes and refreshes the env in place', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const factoryArgs: Array<{
+      startParams: Record<string, unknown>;
+      onOAuthRefresh?: (params: unknown) => Promise<unknown>;
+    }> = [];
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async (args) => {
+      factoryArgs.push(args);
+      return fakeQuery as never;
+    };
+    const getFreshSubscriptionToken = vi.fn(async () => 'tok-new');
+    const auth: AuthAdapter = {
+      async getState() {
+        return { authenticated: true };
+      },
+      async triggerLogin() {
+        return { authenticated: true };
+      },
+      async logout() {},
+      async getAuthEnv() {
+        return {};
+      },
+      getFreshSubscriptionToken,
+    };
+    const agent = new ClaudeCodeAgent(createDeps({
+      auth,
+      runtimeConfig: { remoteEndpoint: '' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute: async () => ({
+        endpoint: 'https://api.anthropic.com',
+        env: { CLAUDE_CODE_OAUTH_TOKEN: 'tok-old' },
+      }),
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-oauth-refresh',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    expect(factoryArgs).toHaveLength(1);
+    expect(factoryArgs[0]?.onOAuthRefresh).toBeDefined();
+    await expect(factoryArgs[0]!.onOAuthRefresh!({ sessionId: 'x' })).resolves.toEqual({
+      token: 'tok-new',
+    });
+    expect(getFreshSubscriptionToken).toHaveBeenCalledWith('tok-old');
+    const env = factoryArgs[0]?.startParams.env as Record<string, string>;
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('tok-new');
+    await handle.close();
+  });
+
+  it('does not wire onOAuthRefresh for gateway-path remote sessions', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const factoryArgs: Array<{ onOAuthRefresh?: (params: unknown) => Promise<unknown> }> = [];
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async (args) => {
+      factoryArgs.push(args);
+      return fakeQuery as never;
+    };
+    const auth = createGatewayAwareAuth();
+    auth.getFreshSubscriptionToken = vi.fn(async () => 'tok-new');
+    const agent = new ClaudeCodeAgent(createDeps({
+      auth,
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute: async () => null,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-gateway-no-refresh',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    expect(factoryArgs).toHaveLength(1);
+    expect(factoryArgs[0]?.onOAuthRefresh).toBeUndefined();
+    await handle.close();
+  });
+
   it('setPlanMode toggles the SDK between plan and the underlying mode', async () => {
     const { handle, fakeQuery } = await startPlanSession(false);
 

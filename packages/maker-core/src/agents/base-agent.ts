@@ -431,6 +431,17 @@ export interface AgentDeps {
      * 调不存在的工具。缺省视为 false。
      */
     makerMemoryEnabled?: boolean;
+    /**
+     * Callback for daemon-side subscription OAuth refresh (remote cc hit 401
+     * mid-turn). ClaudeCodeAgent wires it to auth.getFreshSubscriptionToken —
+     * only when the remote env actually carries CLAUDE_CODE_OAUTH_TOKEN
+     * (native OAuth route), never for gateway-key sessions.
+     *
+     * Params/Result follow `@cindy/maker-cc-manager` OAuthRefreshParams/Result
+     * ({ sessionId, staleToken? } → { token: string | null }), typed as unknown
+     * to avoid cross-package dependency.
+     */
+    onOAuthRefresh?: (params: unknown) => Promise<unknown>;
   }) => Promise<Query>;
 
   /**
