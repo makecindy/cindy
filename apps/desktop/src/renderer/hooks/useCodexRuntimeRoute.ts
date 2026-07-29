@@ -31,6 +31,14 @@ export function useCodexRuntimeRoute(options?: { enabled?: boolean; refreshKey?:
   // 最新(期间没有更新的读取发起、也没有 push 落地)才允许提交——同 key 的两个
   // 在途读取(常规 + auth 触发)之间旧结果迟到也不得覆盖新真值(PR review P1)。
   const ticketRef = useRef(0);
+  // 禁用即失效(渲染期,setState-in-render 惯用法):disabled → re-enabled(同
+  // refreshKey)期间路由可能已变(本地/远端、agent 形态切换),旧真值不得在重新
+  // 启用的头几帧冒充已解析——resolution 在禁用渲染里就地清空,重新启用后必须等
+  // 新一轮 GET / push 落地才算解析(PR review P1)。在途异步不用作废:各 effect
+  // 的 cleanup 在禁用时已 cancelled/退订。
+  if (!enabled && resolution !== null) {
+    setResolution(null);
+  }
   const resolved = enabled && resolution !== null && Object.is(resolution.key, refreshKey);
 
   useEffect(() => {

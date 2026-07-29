@@ -17,16 +17,18 @@
  *     providerId 直接驱动 chip 形态, 不需要用这份 session 记录)。
  *   - reqId → 路由同时覆盖内置 XD / Anthropic 的显式请求,因为错误归因必须知道
  *     产生响应的那一笔请求究竟去了哪里。
- *   - session 记录的是**最近一个请求**的生效路由;凭证中途变化后, 下一个请求会在
+ *   - session route 记录的是**最近一个默认路由请求**的生效路由;凭证中途变化后, 下一个请求会在
  *     transform 里按新状态重判并自动纠正记录。
- *   - 订阅直连 bridge 请求(chatgpt/ / xai/ 前缀, 含子代理按请求覆写)也记
- *     'subscription':它们花个人订阅额度, 不记录的话会话此前的 gateway 观察值
- *     会残留, 把 bridge 配额错误贴成 Cindy 点数耗尽(PR review P1)。
+ *   - 订阅直连 bridge 请求(chatgpt/ / xai/ 前缀, 含子代理按请求覆写)记进
+ *     **独立的 `lastRequestBridge` 槽**, 不覆盖 route:bridge 花个人订阅额度,
+ *     错误横幅需要知道「最近一笔请求是 bridge」以免把 bridge 配额错误贴成
+ *     Cindy 点数耗尽;但会话主计费形态(chip)仍由默认路由驱动。后续任一默认
+ *     路由请求落地即清除该标志。
  *   - 会话尚未发过请求(新会话 / app 重启后未活动)→ 无记录, 消费方回落
  *     活性启发式 —— 此时下一次 spawn 恰按当前凭证决定, 启发式就是正确预测。
  *
- * 热路径纪律(规则 10):record 每请求调用, 只做 Map 读写 + 同值短路;
- * listener 仅在路由值变化时触发(每会话生命周期通常一次)。
+ * 热路径纪律(规则 10):record 每请求调用, 只做 Map/Set 读写 + 同值短路;
+ * listener 仅在状态实际变化时触发(每会话生命周期通常少数几次)。
  * 会话路由随 app 生命周期常驻;请求路由会在响应观察时消费,并有容量上限兜住
  * 连接失败等永远收不到响应的请求。
  */
@@ -38,9 +40,17 @@ export interface ClaudeRequestRoute {
   route: ClaudeSessionBillingRoute;
 }
 
-type RouteChangeListener = (sessionId: string, route: ClaudeSessionBillingRoute) => void;
+export interface ClaudeSessionRouteState {
+  /** 最近一个 ② 段默认路由请求的生效路由;未观察到 → null。 */
+  route: ClaudeSessionBillingRoute | null;
+  /** 最近一笔默认路由域请求是否订阅直连 bridge(chatgpt/ / xai/ 覆写)。 */
+  lastRequestBridge: boolean;
+}
+
+type RouteChangeListener = (sessionId: string, state: ClaudeSessionRouteState) => void;
 
 const routes = new Map<string, ClaudeSessionBillingRoute>();
+const bridgeLatest = new Set<string>();
 const listeners = new Set<RouteChangeListener>();
 const requestRoutes = new Map<number, ClaudeRequestRoute>();
 const latestRequestIds = new Map<string, number>();
@@ -81,28 +91,49 @@ export function readLatestClaudeSessionRequestId(sessionId: string): number | nu
   return latestRequestIds.get(sessionId) ?? null;
 }
 
-/** proxy transform 决策点旁路调用;同值幂等(不重复通知)。 */
-export function recordClaudeSessionRoute(
-  sessionId: string,
-  route: ClaudeSessionBillingRoute,
-): void {
-  if (routes.get(sessionId) === route) return;
-  routes.set(sessionId, route);
+function notify(sessionId: string): void {
+  const state = readClaudeSessionRouteState(sessionId);
   for (const listener of listeners) {
     try {
-      listener(sessionId, route);
+      listener(sessionId, state);
     } catch {
       /* listener 异常不影响路由热路径与其它订阅者 */
     }
   }
 }
 
-/** IPC GET 用:该会话最近一个默认路由请求的生效路由;未观察到 → null。 */
+/** proxy transform ② 段决策点旁路调用;同状态幂等(不重复通知),并清 bridge 标志。 */
+export function recordClaudeSessionRoute(
+  sessionId: string,
+  route: ClaudeSessionBillingRoute,
+): void {
+  const bridgeCleared = bridgeLatest.delete(sessionId);
+  if (!bridgeCleared && routes.get(sessionId) === route) return;
+  routes.set(sessionId, route);
+  notify(sessionId);
+}
+
+/** proxy transform ⓪ 段(bridge 分流)旁路调用;只置标志, 不动 route;同值幂等。 */
+export function recordClaudeSessionBridgeRequest(sessionId: string): void {
+  if (bridgeLatest.has(sessionId)) return;
+  bridgeLatest.add(sessionId);
+  notify(sessionId);
+}
+
+/** 该会话最近一个 ② 段默认路由请求的生效路由;未观察到 → null。 */
 export function readClaudeSessionRoute(sessionId: string): ClaudeSessionBillingRoute | null {
   return routes.get(sessionId) ?? null;
 }
 
-/** 路由值变化订阅(bootstrap 接 renderer 广播)。返回取消函数。 */
+/** IPC GET 用:route + bridge 标志的完整观察状态。 */
+export function readClaudeSessionRouteState(sessionId: string): ClaudeSessionRouteState {
+  return {
+    route: routes.get(sessionId) ?? null,
+    lastRequestBridge: bridgeLatest.has(sessionId),
+  };
+}
+
+/** 观察状态变化订阅(bootstrap 接 renderer 广播)。返回取消函数。 */
 export function onClaudeSessionRouteChange(listener: RouteChangeListener): () => void {
   listeners.add(listener);
   return () => {
@@ -113,6 +144,7 @@ export function onClaudeSessionRouteChange(listener: RouteChangeListener): () =>
 /** 测试隔离用。 */
 export function resetClaudeSessionRouteRegistryForTest(): void {
   routes.clear();
+  bridgeLatest.clear();
   listeners.clear();
   requestRoutes.clear();
   latestRequestIds.clear();

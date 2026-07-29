@@ -5038,8 +5038,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // cc 默认路由会话的生效计费路由(proxy 按请求观察): 'gateway' | 'subscription' |
     // null(会话尚未发过请求)。用量 chip 优先用它显示订阅/网关形态。
-    claudeSessionRouteGet: (sessionId: string): Promise<'gateway' | 'subscription' | null> =>
-      ipcRenderer.invoke('maker:claude-session-route:get', sessionId),
+    claudeSessionRouteGet: (
+      sessionId: string,
+    ): Promise<{
+      route: 'gateway' | 'subscription' | null;
+      lastRequestBridge: boolean;
+    } | null> => ipcRenderer.invoke('maker:claude-session-route:get', sessionId),
     onClaudeSessionRouteChanged: fanOutMakerClaudeSessionRouteChanged,
 
     // Claude.ai 订阅 OAuth 登录(浏览器流程,凭证落系统 ~/.claude,与本地 claude 共用)。

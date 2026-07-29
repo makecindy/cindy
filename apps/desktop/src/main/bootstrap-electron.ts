@@ -382,7 +382,7 @@ import {
 } from './maker-host/anthropic-compat-proxy-host.js';
 import {
   onClaudeSessionRouteChange,
-  readClaudeSessionRoute,
+  readClaudeSessionRouteState,
 } from './maker-host/claude-session-route-registry.js';
 import {
   disposeCodexProxy,
@@ -2998,13 +2998,13 @@ const registerIpcHandlers = () => {
   // GET 读最近观察值; 变化时(每会话生命周期通常一次)广播给所有窗口。
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_SESSION_ROUTE_GET, async (_event, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || sessionId.length === 0) return null;
-    return readClaudeSessionRoute(sessionId);
+    return readClaudeSessionRouteState(sessionId);
   });
-  onClaudeSessionRouteChange((sessionId, route) => {
+  onClaudeSessionRouteChange((sessionId, state) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (win.isDestroyed()) continue;
       try {
-        win.webContents.send(MAKER_PUSH.CLAUDE_SESSION_ROUTE_CHANGED, { sessionId, route });
+        win.webContents.send(MAKER_PUSH.CLAUDE_SESSION_ROUTE_CHANGED, { sessionId, ...state });
       } catch {
         /* no-op */
       }

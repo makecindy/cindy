@@ -53,13 +53,13 @@ import {
   setClaudeProxyGatewayKeyReader,
   setClaudeProxySessionIdResolver,
 } from '../anthropic-compat-proxy-host';
-import { setSessionProvider, clearSessionProvider } from '../session-provider-store';
+import { clearSessionProvider, setSessionProvider } from '../session-provider-store';
 import {
   readClaudeSessionRoute,
+  readClaudeSessionRouteState,
   takeClaudeRequestRoute,
   resetClaudeSessionRouteRegistryForTest,
 } from '../claude-session-route-registry';
-import { setSessionProvider } from '../session-provider-store';
 
 const SESSION_HEADER = { 'x-claude-code-session-id': 'sdk-abc' };
 
@@ -189,23 +189,38 @@ describe('claude session route observation (routing transform ② 段)', () => {
     expect(readClaudeSessionRoute('sess-1')).toBe('gateway');
   });
 
-  it('records subscription for bridge (chatgpt/) requests, overriding a prior gateway observation', () => {
-    // 子代理按请求覆写 bridge 模型时会话顶层模型不变:主会话 gateway 请求先落
-    // 观察值, 随后的 bridge 请求必须把它覆盖成 subscription —— 否则该 bridge
-    // 请求的配额失败会被贴成 Cindy 点数耗尽(PR review P1)。
+  it('flags bridge (chatgpt/) requests in the separate slot without clobbering the session route', () => {
+    // 子代理按请求覆写 bridge 模型时会话顶层模型不变:错误横幅需要「最近一笔是
+    // bridge」的标志识别订阅配额失败(PR review P1),但会话主路由(chip 计费
+    // 形态)不得被 bridge 覆写改判成订阅(PR review P1)。
     gatewayKey = 'sk-live';
     const transform = createModelRoutingTransform();
     transform(
       { model: 'claude-opus-4-8[1m]' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
-    expect(readClaudeSessionRoute('sess-1')).toBe('gateway');
+    expect(readClaudeSessionRouteState('sess-1')).toEqual({
+      route: 'gateway',
+      lastRequestBridge: false,
+    });
     const decision = transform(
       { model: 'chatgpt/gpt-5.5' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
     expect(decision).toHaveProperty('localHandler');
-    expect(readClaudeSessionRoute('sess-1')).toBe('subscription');
+    expect(readClaudeSessionRouteState('sess-1')).toEqual({
+      route: 'gateway',
+      lastRequestBridge: true,
+    });
+    // 主会话下一笔默认路由请求落地 → 标志清除, 主路由维持不变。
+    transform(
+      { model: 'claude-opus-4-8[1m]' },
+      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+    );
+    expect(readClaudeSessionRouteState('sess-1')).toEqual({
+      route: 'gateway',
+      lastRequestBridge: false,
+    });
   });
 
   it('does not record bridge requests for sessions with an explicit provider', () => {
@@ -219,7 +234,10 @@ describe('claude session route observation (routing transform ② 段)', () => {
         ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
       );
       expect(decision).toHaveProperty('localHandler');
-      expect(readClaudeSessionRoute('sess-1')).toBeNull();
+      expect(readClaudeSessionRouteState('sess-1')).toEqual({
+        route: null,
+        lastRequestBridge: false,
+      });
     } finally {
       setSessionProvider('sess-1', null);
     }

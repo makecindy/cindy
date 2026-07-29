@@ -186,7 +186,7 @@ export function ErrorBanner({
   // 订阅直连 bridge 模型(chatgpt/ / xai/)不参与:请求在 proxy 提前分流,花的是
   // 个人订阅额度——ChatGPT/xAI 的配额错误绝不能被贴成 Cindy 点数耗尽(PR review
   // P1)。这里按会话顶层模型兜底;子代理按请求覆写 bridge 模型时顶层模型不变,
-  // 靠 proxy 在 bridge 分流点旁路记录 'subscription' 观察值覆盖(PR review P1)。
+  // 由观察状态的 lastRequestBridge 标志兜住(见下方 cc 子句;PR review P1 ×2)。
   const isSubscriptionBridgeModel = !!modelId && isSubscriptionDirectModel(modelId);
   const wantCcRouteForBilling =
     isQuotaError &&
@@ -195,7 +195,8 @@ export function ErrorBanner({
     agentKind === 'cc' &&
     !isSubscriptionBridgeModel &&
     normalizedProviderId === null;
-  const claudeSessionRoute = useClaudeSessionRoute(sessionId, wantCcRouteForBilling);
+  const { route: claudeSessionRoute, lastRequestBridge: ccLastRequestBridge } =
+    useClaudeSessionRoute(sessionId, wantCcRouteForBilling);
   // 观察值缺失时的活性凭证启发式(与 TodaySpendChip 同口径)只对 live 错误启用:
   // live 错误刚由当前凭证形态的请求产生,启发式就是正确预测——有网关 key 判
   // gateway;无 key 且连了 Claude OAuth 判 subscription;reconcile 未完成 / 状态
@@ -235,9 +236,14 @@ export function ErrorBanner({
       !isSubscriptionBridgeModel &&
       codexRouteResolved &&
       codexAuthInjection === 'env-key') ||
+    // lastRequestBridge:最近一笔默认路由域请求是子代理覆写的 bridge 模型
+    // (chatgpt/ / xai/,花个人订阅额度)——它不覆盖会话主路由(chip 形态不变),
+    // 但本次失败大概率就是那笔 bridge 请求,不得按残留的 gateway 观察值引导
+    // 购买点数(PR review P1)。
     (normalizedProviderId === null &&
       agentKind === 'cc' &&
       !isSubscriptionBridgeModel &&
+      !ccLastRequestBridge &&
       ccEffectiveBillingRoute === 'gateway');
   const showGatewayQuotaRecovery =
     isQuotaError && canAccessBilling && !isAnyRemoteSession && isGatewayBilledSource;

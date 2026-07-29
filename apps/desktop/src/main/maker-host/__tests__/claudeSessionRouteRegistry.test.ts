@@ -12,6 +12,8 @@ import {
   readLatestClaudeSessionRequestId,
   readClaudeSessionRoute,
   recordClaudeRequestRoute,
+  readClaudeSessionRouteState,
+  recordClaudeSessionBridgeRequest,
   recordClaudeSessionRoute,
   resetClaudeSessionRouteRegistryForTest,
   takeClaudeRequestRoute,
@@ -40,11 +42,48 @@ describe('claude-session-route-registry', () => {
     recordClaudeSessionRoute('s1', 'gateway');  // 同值: 每请求都会调, 不得重复广播
     recordClaudeSessionRoute('s1', 'gateway');
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith('s1', 'gateway');
+    expect(listener).toHaveBeenCalledWith('s1', { route: 'gateway', lastRequestBridge: false });
 
     recordClaudeSessionRoute('s1', 'subscription');
     expect(listener).toHaveBeenCalledTimes(2);
-    expect(listener).toHaveBeenLastCalledWith('s1', 'subscription');
+    expect(listener).toHaveBeenLastCalledWith('s1', {
+      route: 'subscription',
+      lastRequestBridge: false,
+    });
+  });
+
+  it('tracks bridge requests in a separate slot without clobbering the session route', () => {
+    // 网关会话跑 bridge 子代理:主路由(chip 形态)不得被改判成订阅,
+    // 但错误横幅要能看到「最近一笔是 bridge」(PR review P1 ×2)。
+    recordClaudeSessionRoute('s1', 'gateway');
+    recordClaudeSessionBridgeRequest('s1');
+    expect(readClaudeSessionRoute('s1')).toBe('gateway');
+    expect(readClaudeSessionRouteState('s1')).toEqual({
+      route: 'gateway',
+      lastRequestBridge: true,
+    });
+    // 后续 ② 段默认路由请求落地 → bridge 标志清除。
+    recordClaudeSessionRoute('s1', 'gateway');
+    expect(readClaudeSessionRouteState('s1')).toEqual({
+      route: 'gateway',
+      lastRequestBridge: false,
+    });
+  });
+
+  it('notifies on bridge flag transitions (set once, cleared by the next default-route request)', () => {
+    const listener = vi.fn();
+    recordClaudeSessionRoute('s1', 'gateway');
+    onClaudeSessionRouteChange(listener);
+
+    recordClaudeSessionBridgeRequest('s1');
+    recordClaudeSessionBridgeRequest('s1');  // 同值: 不重复广播
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith('s1', { route: 'gateway', lastRequestBridge: true });
+
+    // 同路由值但 bridge 标志翻转 → 仍要广播(消费方需要看到标志清除)。
+    recordClaudeSessionRoute('s1', 'gateway');
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith('s1', { route: 'gateway', lastRequestBridge: false });
   });
 
   it('isolates listener exceptions from the routing hot path and other listeners', () => {
@@ -54,7 +93,7 @@ describe('claude-session-route-registry', () => {
     onClaudeSessionRouteChange(good);
 
     expect(() => recordClaudeSessionRoute('s1', 'gateway')).not.toThrow();
-    expect(good).toHaveBeenCalledWith('s1', 'gateway');
+    expect(good).toHaveBeenCalledWith('s1', { route: 'gateway', lastRequestBridge: false });
   });
 
   it('unsubscribes via the returned disposer', () => {

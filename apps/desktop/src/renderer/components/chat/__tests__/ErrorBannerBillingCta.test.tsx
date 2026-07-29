@@ -18,7 +18,12 @@ const mocks = vi.hoisted(() => ({
     mode: 'cloud' as 'cloud' | 'local' | 'signed-out',
     user: { membershipKind: 'personal' } as { membershipKind: 'personal' | 'org' } | null,
   })),
-  claudeRoute: vi.fn((): 'gateway' | 'subscription' | null => null),
+  claudeRoute: vi.fn(
+    (): { route: 'gateway' | 'subscription' | null; lastRequestBridge: boolean } => ({
+      route: null,
+      lastRequestBridge: false,
+    }),
+  ),
   runtimeRoute: vi.fn(() => ({ authInjection: 'env-key' as const, resolved: true })),
   apiKey: vi.fn(() => ({ hasSavedKey: false, isReconciling: false })),
   claudeOAuthConnected: vi.fn((): boolean | null => null),
@@ -87,7 +92,7 @@ describe('ErrorBanner billing CTA', () => {
   beforeEach(() => {
     mocks.navigate.mockClear();
     mocks.auth.mockReturnValue({ mode: 'cloud', user: { membershipKind: 'personal' } });
-    mocks.claudeRoute.mockReturnValue(null);
+    mocks.claudeRoute.mockReturnValue({ route: null, lastRequestBridge: false });
     mocks.apiKey.mockReturnValue({ hasSavedKey: false, isReconciling: false });
     mocks.claudeOAuthConnected.mockReturnValue(null);
     mocks.runtimeRoute.mockReturnValue({ authInjection: 'env-key', resolved: true });
@@ -135,13 +140,13 @@ describe('ErrorBanner billing CTA', () => {
   });
 
   it('shows CTA for cc default-route sessions only when the observed billing route is gateway', () => {
-    mocks.claudeRoute.mockReturnValue('gateway');
+    mocks.claudeRoute.mockReturnValue({ route: 'gateway', lastRequestBridge: false });
     renderBanner({ providerId: null });
     expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
   });
 
   it('hides CTA for cc default-route sessions on the subscription route', () => {
-    mocks.claudeRoute.mockReturnValue('subscription');
+    mocks.claudeRoute.mockReturnValue({ route: 'subscription', lastRequestBridge: false });
     renderBanner({ providerId: null });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
   });
@@ -156,8 +161,18 @@ describe('ErrorBanner billing CTA', () => {
   it('never relabels subscription-bridge (chatgpt/) quota errors even with a stale gateway route', () => {
     // bridge 请求在 proxy 提前分流、不更新会话路由观察值:残留的 gateway 观察值
     // 不得把 ChatGPT 的配额错误贴成 Cindy 点数耗尽。
-    mocks.claudeRoute.mockReturnValue('gateway');
+    mocks.claudeRoute.mockReturnValue({ route: 'gateway', lastRequestBridge: false });
     renderBanner({ providerId: null, modelId: 'chatgpt/gpt-5.5' });
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
+    expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
+  });
+
+  it('hides the CTA when the last default-route request was a sub-agent bridge override', () => {
+    // 子代理按请求覆写 chatgpt/ 模型:会话顶层模型与主路由都还是 gateway,
+    // 但最近一笔(大概率就是失败那笔)是 bridge 花个人订阅额度——不得引导
+    // 购买 Cindy 点数(PR review P1)。
+    mocks.claudeRoute.mockReturnValue({ route: 'gateway', lastRequestBridge: true });
+    renderBanner({ providerId: null });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
   });
@@ -165,7 +180,7 @@ describe('ErrorBanner billing CTA', () => {
   it('falls back to the gateway-key heuristic for live errors without a route observation', () => {
     // live 错误刚由当前凭证形态的请求产生:观察值缺失时按活性凭证回落,存有
     // 网关 key 判 gateway,引导保留。
-    mocks.claudeRoute.mockReturnValue(null);
+    mocks.claudeRoute.mockReturnValue({ route: null, lastRequestBridge: false });
     mocks.apiKey.mockReturnValue({ hasSavedKey: true, isReconciling: false });
     renderBanner({ providerId: null });
     expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
@@ -175,7 +190,7 @@ describe('ErrorBanner billing CTA', () => {
     // 重启后观察值丢失、且失败那一轮之后凭证可能已变:订阅失败后配上网关 key,
     // 按当前 key 回落判 gateway 会把订阅错误贴成 Cindy 点数耗尽——持久化错误
     // 不回落启发式。
-    mocks.claudeRoute.mockReturnValue(null);
+    mocks.claudeRoute.mockReturnValue({ route: null, lastRequestBridge: false });
     mocks.apiKey.mockReturnValue({ hasSavedKey: true, isReconciling: false });
     renderBanner({ providerId: null, persistedError: true });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
@@ -184,13 +199,13 @@ describe('ErrorBanner billing CTA', () => {
 
   it('keeps the CTA for persisted cc failures when the session observation itself says gateway', () => {
     // 同 run 的错误尾部:会话观察值仍在内存且绑定该会话失败流量,可信。
-    mocks.claudeRoute.mockReturnValue('gateway');
+    mocks.claudeRoute.mockReturnValue({ route: 'gateway', lastRequestBridge: false });
     renderBanner({ providerId: null, persistedError: true });
     expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
   });
 
   it('stays silent while the gateway key is still reconciling (form undecided)', () => {
-    mocks.claudeRoute.mockReturnValue(null);
+    mocks.claudeRoute.mockReturnValue({ route: null, lastRequestBridge: false });
     mocks.apiKey.mockReturnValue({ hasSavedKey: false, isReconciling: true });
     renderBanner({ providerId: null });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();

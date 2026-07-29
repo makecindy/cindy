@@ -1076,7 +1076,9 @@ export function TodaySpendChip({
     vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && providerId == null;
   const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey();
   const claudeOAuthConnected = useClaudeOAuthConnected(isDefaultRouteClaudeSession);
-  const observedClaudeRoute = useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession);
+  // 只消费 route(会话主计费形态):bridge 子代理覆写不改会话形态,
+  // lastRequestBridge 是错误横幅专用信号,chip 不读。
+  const { route: observedClaudeRoute } = useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession);
   const ccBillingFormPending = isDefaultRouteClaudeSession && observedClaudeRoute == null
     && (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));
   const isClaudeSubscription = !isDeviceLinkRemote && (

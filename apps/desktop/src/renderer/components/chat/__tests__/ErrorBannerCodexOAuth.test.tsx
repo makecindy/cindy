@@ -64,7 +64,7 @@ vi.mock('@/contexts/AuthContext', () => ({
 }));
 
 vi.mock('@/hooks/useClaudeSessionRoute', () => ({
-  useClaudeSessionRoute: () => null,
+  useClaudeSessionRoute: () => ({ route: null, lastRequestBridge: false }),
 }));
 
 vi.mock('@/hooks/useApiKey', () => ({

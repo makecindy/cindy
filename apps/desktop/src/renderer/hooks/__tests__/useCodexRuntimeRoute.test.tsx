@@ -174,4 +174,30 @@ describe('useCodexRuntimeRoute resolved flag', () => {
     rerender({ enabled: false });
     expect(result.current.resolved).toBe(false);
   });
+
+  it('stays unresolved after re-enabling with the same refreshKey until a fresh fetch settles', async () => {
+    // disabled → re-enabled 期间路由可能已变(本地/远端、agent 形态切换):
+    // 同 refreshKey 的旧真值不得在重新启用的头几帧冒充已解析(PR review P1)。
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useCodexRuntimeRoute({ enabled, refreshKey: 's1' }),
+      { initialProps: { enabled: true } },
+    );
+    await act(async () => {
+      pending[0].resolve({ authInjection: 'oauth-bearer' });
+      await pending[0].promise;
+    });
+    await waitFor(() => expect(result.current.resolved).toBe(true));
+
+    rerender({ enabled: false });
+    rerender({ enabled: true });
+    // 旧 resolution 已在禁用渲染里清空:重新启用后必须等新一轮读取。
+    expect(result.current.resolved).toBe(false);
+
+    await act(async () => {
+      pending[1].resolve({ authInjection: 'env-key' });
+      await pending[1].promise;
+    });
+    await waitFor(() => expect(result.current.resolved).toBe(true));
+    expect(result.current.authInjection).toBe('env-key');
+  });
 });
