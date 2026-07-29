@@ -198,6 +198,38 @@ describe('ChatSseTranslator', () => {
     }));
   });
 
+  it('continues accumulating a tool name after its output item has been added', () => {
+    const translator = new ChatSseTranslator('m');
+    const out = [
+      ...translator.push({
+        id: 'chatcmpl_name_fragments',
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'call_name_fragments',
+              function: { name: 'foo', arguments: '{}' },
+            }],
+          },
+        }],
+      }),
+      ...translator.push({
+        choices: [{
+          delta: { tool_calls: [{ index: 0, function: { name: 'bar' } }] },
+          finish_reason: 'tool_calls',
+        }],
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+
+    const completed = out.at(-1) as { response: { output: Array<Record<string, unknown>> } };
+    expect(completed.response.output).toContainEqual(expect.objectContaining({
+      type: 'function_call',
+      name: 'foobar',
+      arguments: '{}',
+    }));
+  });
+
   it('force-adds name-only zero-argument tool calls when the stream closes without a finish reason', () => {
     const translator = new ChatSseTranslator('m');
     const beforeFinish = translator.push({
@@ -488,5 +520,20 @@ describe('ChatSseTranslator', () => {
         end_index: 0,
       },
     ]);
+  });
+
+  it('preserves the provider service tier in the terminal Responses object', () => {
+    const translator = new ChatSseTranslator('m');
+    const out = [
+      ...translator.push({
+        id: 'service-tier',
+        service_tier: 'flex',
+        choices: [{ delta: { content: 'answer' }, finish_reason: 'stop' }],
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+
+    const completed = out.at(-1) as { response: { service_tier?: string } };
+    expect(completed.response.service_tier).toBe('flex');
   });
 });

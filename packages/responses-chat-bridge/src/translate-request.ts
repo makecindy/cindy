@@ -397,7 +397,11 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
     if (assistant.content == null && !hasToolCalls && assistant.reasoning_content) assistant.content = '';
     ensureToolCallCompatibility(assistant, opts);
     messages.push(assistant);
-    if (hasToolCalls) resolvedToolCallIds.clear();
+    // Preserve completed IDs from older rounds so late duplicates remain detectable, but retire
+    // an ID when the new assistant round explicitly reuses it.
+    if (hasToolCalls) {
+      for (const call of assistant.tool_calls ?? []) resolvedToolCallIds.delete(call.id);
+    }
     pendingToolCalls = (assistant.tool_calls ?? []).map((call) => ({
       id: call.id,
       name: call.function.name,

@@ -158,6 +158,7 @@ export class ChatSseTranslator {
   private readonly tools = new Map<number, ToolState>();
   private readonly annotations: ResponseAnnotation[] = [];
   private usage: UsageShape | undefined;
+  private serviceTier = '';
   private inlineThinkMode: 'undecided' | 'reasoning' | 'text' = 'undecided';
   private inlineThinkBuffer = '';
   private readonly toolContext?: ChatBridgeToolContext;
@@ -180,6 +181,8 @@ export class ChatSseTranslator {
     if (rawModel) this.model = rawModel;
     const rawCreated = numberField(raw.created);
     if (rawCreated) this.created = rawCreated;
+    const rawServiceTier = stringField(raw.service_tier);
+    if (rawServiceTier) this.serviceTier = rawServiceTier;
     this.ensureStarted(out);
 
     if (isPlainObject(raw.error)) {
@@ -487,7 +490,7 @@ export class ChatSseTranslator {
     if (callId && !state.added) state.callId = callId;
     const functionPart = isPlainObject(raw.function) ? raw.function : {};
     const name = stringField(functionPart.name);
-    if (name && !state.added) state.name += name;
+    if (name) state.name += name;
     const args = stringField(functionPart.arguments);
     if (args) state.arguments += args;
     this.addToolWhenReady(state, out);
@@ -760,6 +763,7 @@ export class ChatSseTranslator {
       status,
       model: this.model,
       output,
+      ...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
       ...(usage ? { usage } : {}),
       ...extra,
     };

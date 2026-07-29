@@ -841,6 +841,33 @@ describe('translateResponsesRequest', () => {
     ]));
   });
 
+  it('ignores a late duplicate from an older round while a deferred barrier opens a new round', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'old_1', name: 'Bash', arguments: '{"round":1}' },
+        { type: 'function_call', call_id: 'old_2', name: 'Bash', arguments: '{"round":1,"part":2}' },
+        { type: 'function_call_output', call_id: 'old_1', output: 'first result' },
+        { type: 'message', role: 'user', content: 'continue' },
+        { type: 'function_call', call_id: 'new_1', name: 'Bash', arguments: '{"round":2}' },
+        { type: 'function_call_output', call_id: 'old_1', output: 'late duplicate' },
+        { type: 'function_call_output', call_id: 'new_1', output: 'second result' },
+      ],
+    }));
+
+    expect(out.messages.filter((message) => message.role === 'tool')).toEqual([
+      { role: 'tool', tool_call_id: 'old_1', content: 'first result' },
+      {
+        role: 'tool',
+        tool_call_id: 'old_2',
+        content: expect.stringContaining('execution status is unknown'),
+      },
+      { role: 'tool', tool_call_id: 'new_1', content: 'second result' },
+    ]);
+    expect(out.messages).not.toEqual(expect.arrayContaining([
+      { role: 'tool', tool_call_id: 'old_1', content: 'late duplicate' },
+    ]));
+  });
+
   it('normalizes synthesized orphan tool calls for reasoning and Gemini providers', () => {
     const out = translateResponsesRequest(base({
       input: [
