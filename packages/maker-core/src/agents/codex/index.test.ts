@@ -4971,6 +4971,125 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('takes over an id-less capacity failure that lands while the initial turn/start is pending', async () => {
+      // 初始投递的 turn/start 在飞时 overloadRetry.inFlight 永远是 false(那个标记只由
+      // 重投路径设置), 所以判据必须用 isTurnStartPending。否则这个窗口里的空 id 容量
+      // 拒绝会被 stale 判定丢掉, 响应随后激活一个已被拒的 turn, 整轮自动重投预算白给
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-idless-initial-start',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        // 初始 turn/start 挂住 → send 不 resolve, 制造 "pending start" 窗口。
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(1);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 必须接管: 透成非终止 + 进度, 不判死。
+        const surfaced = events.filter((e) => e.type === 'error');
+        expect(surfaced).toHaveLength(1);
+        expect(surfaced[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+
+        // 响应回来: 这个 turn 已被认领成死 turn, 不得激活。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sending;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        // 重投照常发生（原消息只投第二次，不是"一边跑一边重投"）。
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(turnStarts).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('settles immediately when the send signal aborts, without waiting out the backoff', async () => {
+      // isCancelled() 是轮询式的, 只在 retry() 里被读到。只 abort signal(不走
+      // handle.abort())时, 若不订阅 abort 事件, 会话会在剩余退避里继续 busy ——
+      // 最多 30s 内后续排队消息全被挡住(review #844 greptile P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-signal-immediate-settle',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        await handle.send({ type: 'user', content: 'hello' }, { signal: controller.signal });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.isTurnRunning?.()).toBe(true); // 退避等待中
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 只 abort signal，然后**不推进计时器**：收口必须已经发生。
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const after = events.slice(before);
+        expect(after.filter((e) => e.type === 'error' && e.data?.isTerminal === true)).toHaveLength(1);
+        expect(after.some((e) => e.type === 'status' && e.data?.isRunning === false)).toBe(true);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        // 后续也不得再重投。
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStartCount(host)).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('takes over an id-less capacity failure that lands while the retry RPC is pending', async () => {
       // 空 turnId 的容量拒绝在"重投 RPC 在飞 + turnStarted 未到"的窗口里, 既不匹配
       // currentTurnId(null) 也不匹配 isTurnInFlight(false) —— 会被 stale 判定整条丢掉,
