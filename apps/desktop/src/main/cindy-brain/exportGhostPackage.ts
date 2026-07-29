@@ -59,18 +59,27 @@ export function sanitizeExportFileNamePart(name: string): string {
   return cleaned;
 }
 
-export async function exportGhostPackage(
+export type GhostPackageSnapshot =
+  | { ok: true; buf: Buffer; defaultFileName: string }
+  | { ok: false; result: ExportGhostPackageResult };
+
+/**
+ * 第一阶段(调用方在变更租约内调用):枚举安装目录、逐文件读入内存并压缩
+ * 成 zip buffer。返回后安装目录再被更新/卸载/对账替换都不影响已抓内容
+ * ——第二阶段的对话框等待与落盘不再需要任何目录一致性。
+ */
+export async function snapshotGhostPackage(
   id: unknown,
-  deps: ExportGhostPackageDeps,
-): Promise<ExportGhostPackageResult> {
+  deps: Pick<ExportGhostPackageDeps, 'listInstalled' | 'getDownloadsDir'>,
+): Promise<GhostPackageSnapshot> {
   if (typeof id !== 'string' || !isValidGhostId(id)) {
-    return { status: 'invalid_id' };
+    return { ok: false, result: { status: 'invalid_id' } };
   }
   // 先快照字节再弹保存对话框(评审 P1):更新会整体换目录、卸载会删目录,
   // 若在用户挑选位置期间发生,旧文件清单会配新字节,产出混合版本的坏包。
   // 快照在内存中完成,对话框等待期间插件怎么变都不影响已抓到的内容。
   const ghost = deps.listInstalled().find((candidate) => candidate.manifest.id === id);
-  if (!ghost) return { status: 'not_installed' };
+  if (!ghost) return { ok: false, result: { status: 'not_installed' } };
 
   // 双保险:dir 来自 GhostManager 扫描,这里再确认它是真实目录,避免把
   // 被外部篡改的注册项当成打包源。
@@ -78,9 +87,11 @@ export async function exportGhostPackage(
   try {
     dirStat = await fs.promises.stat(ghost.dir);
   } catch {
-    return { status: 'error', code: 'read_failed' };
+    return { ok: false, result: { status: 'error', code: 'read_failed' } };
   }
-  if (!dirStat.isDirectory()) return { status: 'error', code: 'read_failed' };
+  if (!dirStat.isDirectory()) {
+    return { ok: false, result: { status: 'error', code: 'read_failed' } };
+  }
 
   // 收集文件并立即读入内存:递归、跳过点开头条目(主机保留文件、
   // .DS_Store 等)与 node_modules(运行残留,打包契约本来就不含)。
@@ -103,7 +114,7 @@ export async function exportGhostPackage(
   try {
     await walk(ghost.dir, '');
   } catch {
-    return { status: 'error', code: 'read_failed' };
+    return { ok: false, result: { status: 'error', code: 'read_failed' } };
   }
 
   const zip = new JSZip();
@@ -112,14 +123,14 @@ export async function exportGhostPackage(
       zip.file(file.rel, file.data);
     }
   } catch {
-    return { status: 'error', code: 'read_failed' };
+    return { ok: false, result: { status: 'error', code: 'read_failed' } };
   }
   let buf: Buffer;
   try {
     buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
   } catch {
     // 压缩失败(zlib 等)如实落到结构化结果,不冒成未捕获的 IPC 异常。
-    return { status: 'error', code: 'compress_failed' };
+    return { ok: false, result: { status: 'error', code: 'compress_failed' } };
   }
 
   const baseName =
@@ -127,10 +138,21 @@ export async function exportGhostPackage(
   // 版本同样来自作者清单,可能与名字一样含路径分隔符/控制字符,
   // 必须走同一道清洗再拼进默认文件名(评审 P1)。
   const versionPart = sanitizeExportFileNamePart(ghost.manifest.version);
-  const defaultPath = path.join(
-    deps.getDownloadsDir(),
-    versionPart ? `${baseName}-${versionPart}.cindy` : `${baseName}.cindy`,
-  );
+  const defaultFileName = versionPart
+    ? `${baseName}-${versionPart}.cindy`
+    : `${baseName}.cindy`;
+  return { ok: true, buf, defaultFileName };
+}
+
+/**
+ * 第二阶段(调用方在变更租约外调用):弹系统保存对话框并落盘。入参快照
+ * 与安装目录已无关联,此阶段任意时长都不影响插件目录一致性。
+ */
+export async function writeGhostPackageSnapshot(
+  snapshot: Extract<GhostPackageSnapshot, { ok: true }>,
+  deps: Pick<ExportGhostPackageDeps, 'showSaveDialog' | 'getDownloadsDir' | 'writeFile'>,
+): Promise<ExportGhostPackageResult> {
+  const defaultPath = path.join(deps.getDownloadsDir(), snapshot.defaultFileName);
   let picked: { canceled: boolean; filePath?: string };
   try {
     picked = await deps.showSaveDialog({
@@ -143,9 +165,22 @@ export async function exportGhostPackage(
   if (picked.canceled || !picked.filePath) return { status: 'canceled' };
 
   try {
-    await deps.writeFile(picked.filePath, buf);
+    await deps.writeFile(picked.filePath, snapshot.buf);
   } catch {
     return { status: 'error', code: 'write_failed' };
   }
   return { status: 'saved', savedPath: picked.filePath };
+}
+
+/**
+ * 一步式组合入口(快照 + 对话框 + 落盘)。需要把快照段纳入变更租约的
+ * 调用方应拆用 snapshotGhostPackage / writeGhostPackageSnapshot。
+ */
+export async function exportGhostPackage(
+  id: unknown,
+  deps: ExportGhostPackageDeps,
+): Promise<ExportGhostPackageResult> {
+  const snapshot = await snapshotGhostPackage(id, deps);
+  if (!snapshot.ok) return snapshot.result;
+  return writeGhostPackageSnapshot(snapshot, deps);
 }
