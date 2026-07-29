@@ -5237,6 +5237,135 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('keeps the next send buffered turn alive when the stopped start finally rejects', async () => {
+      // Stop 会武装孤儿守卫, 于是下一轮 send 的 turnStarted 也先进**会话级共享**的缓冲集
+      // 等对账。被 Stop 的旧 turn/start 随后失败时, 隔离流程曾无条件把整个缓冲集坐实成
+      // 孤儿(墓碑 + interrupt + 清空) —— 连新一轮那条合法的 started 一起清掉, 它的
+      // turn/start 响应因此拒绝激活, 那一轮既没有活跃 turn 也没有终态, 永久卡 generating。
+      // ownsSession 守卫拦不住这条: 它只护 currentTurnId(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const secondStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            if (turnStarts === 2) return secondStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-keep-buffered-turn',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted) throw new Error('expected handlers');
+        // 第一轮: 空 id 容量拒绝 → 挂起重投; Stop → 武装孤儿守卫(旧 RPC 仍在飞)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 第二轮放行, 它的 turnStarted 先于自己的响应到达 → 归属不明 → 进缓冲。
+        const secondSend = handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        handlers.turnStarted({ turn: { id: 'turn-second' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.() ?? null).toBeNull(); // 仍在缓冲, 尚未激活
+
+        // 旧 RPC 现在才失败: 它的隔离不得动新一轮那条缓冲中的 started。
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 新一轮的响应回来 → 对账放行 → 正常激活。
+        secondStart.resolve({ turn: { id: 'turn-second' } });
+        await secondSend;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-second');
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('revokes a pending retry when a late turn/completed settles the send terminally', async () => {
+      // 不变量: 逻辑 send 一旦被终态收口(terminal error + Done 都出了 UI), 挂起 / 延后的
+      // 重投资格就随之作废。否则计时器到点会在用户已经看到失败之后重投原消息, 服务端
+      // 已发生但未上报的工具 / 文件操作跟着跑第二遍(review #844 greptile P1)。
+      //
+      // 如实标注可达性: Greptile 描述的上游序列(旧 turn/start 的 finally 补排)我**没能**
+      // 构造出无争议的可达路径 —— 孤儿守卫武装期间任何带 turnId 的事件都会先进缓冲, 恰好
+      // 盖住了那个窗口。这条用例锁的是收口侧的不变量本身(去掉修复即失败: 收口后仍会重投),
+      // 不依赖"缓冲刚好盖住每个窗口"这类覆盖性论证 —— 本轮另一条 P1 正是这种论证失效的
+      // 例子。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-revoke-on-settle',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+        expect(turnStartCount(host)).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 容量拒绝 → 排上退避计时器(还没到点)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStartCount(host)).toBe(1);
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        // 退避途中, 一个我们从未见过 id 的 turn 报出失败终态 → 走 UI 收口(推 error + done)。
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-unknown', status: 'failed', error: { message: 'boom' } },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(events.filter((e) => e.type === 'done')).toHaveLength(1);
+
+        // 收口之后计时器不得再重投原消息。
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStartCount(host)).toBe(1);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('keeps the stopped start quarantined and lets the new turn live when an id-less failure is unattributable', async () => {
       // Stop 之后旧 RPC 仍在飞, 新 send 又被放行, 此时又来一条**空 id** 容量拒绝 ——
       // 它既不带 turnId 也不带请求关联, 无法归属。两条不变量:

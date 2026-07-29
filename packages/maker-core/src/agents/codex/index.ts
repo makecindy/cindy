@@ -4425,6 +4425,9 @@ export class CodexAgent extends BaseAgent {
         flushDeferredTerminalTurnCompletionsIfIdle();
         return;
       }
+      // 到这里 = 这个 turn 的终态**要出 UI**, 逻辑 send 就此收口。墓碑压掉的那条路在上面
+      // 已经 return, 所以退避中的正常重投(死 turn 恒有墓碑)不会被误撤。
+      revokeOverloadRetryOnTerminalSettle(`turn_${turn.status}`);
 
       if (turn.status === 'failed' || turn.status === 'interrupted') {
         // 失败 / 中断的 plan turn 不发审批 — 半截计划没有审批意义, 循环就此结束。
@@ -4648,6 +4651,25 @@ export class CodexAgent extends BaseAgent {
     ): state is NonNullable<typeof overloadRetry> =>
       state != null
       && (state.timer != null || state.inFlight || state.deferredCapacityFailure !== null);
+
+    /**
+     * 逻辑 send 被终态收口(terminal error + Done 都已推出)时, 撤销挂起 / 延后的重投。
+     *
+     * 不撤销的话重投会在 UI 已经报失败之后照常发生: 最典型的是延后标记 ——
+     * `turn/completed(failed)` 抢在我们落墓碑之前到达(空 id 容量拒绝那条路要等
+     * turn/start 响应才知道 turn 身份, 这个窗口是真实存在的), 于是 handleTurnCompleted
+     * 正常收口成失败; 标记却还挂着, 等在飞的 turn/start settle 时它的 finally 照常补排
+     * 一次 —— 用户看到的是失败, 原消息却在他看不到的地方重投, 服务端已发生但未上报的
+     * 工具 / 文件操作跟着跑第二遍(review #844 greptile P1)。
+     *
+     * 语义上这就是"重投资格随收口一起作废": 代价只是这一轮要用户自己再发一次(与本功能
+     * 上线前的行为一致), 而另一侧是重复副作用。
+     */
+    const revokeOverloadRetryOnTerminalSettle = (reason: string): void => {
+      if (!overloadRetryPending()) return;
+      log.info('codex overload retry revoked — send already settled terminally', { reason, threadId });
+      discardOverloadRetry(`terminal-settle:${reason}`);
+    };
 
     const overloadRetryPolicyLooserThan = (mode: PermissionMode): boolean => {
       const state = overloadRetry;
@@ -4956,21 +4978,40 @@ export class CodexAgent extends BaseAgent {
         isTurnInFlight = false;
         currentTurnPlanModeActive = false;
       }
-      for (const bufferedId of bufferedOrphanTurnIds) {
-        terminalErroredTurnIds.add(bufferedId);
-        settleBufferedTurnReconcile(bufferedId, false);
-        if (threadId) {
-          host.request(Method.TurnInterrupt, { threadId, turnId: bufferedId }).catch((e2: unknown) => {
-            log.warn('buffered orphan turn interrupt failed (best-effort)', {
-              reason,
-              turnId: bufferedId,
-              error: e2 instanceof Error ? e2.message : String(e2),
+      // 缓冲集是**会话级共享**的, 只有"没有别的 start 在飞"时才能把里面的 id 整体坐实成
+      // 孤儿。还有 start 在飞时集子里可能躺着**它**的合法 started: Stop 会武装孤儿守卫,
+      // 于是下一轮 send 的 turnStarted 同样先进缓冲等对账。无条件清理会给它落墓碑 +
+      // interrupt, 它的 turn/start 响应随后拒绝激活 —— 那一轮既没有活跃 turn 也没有终态
+      // 事件, 永久卡 generating。ownsSession 挡不住这条: 那个守卫只护 currentTurnId
+      // (review #844 codex P1)。
+      //
+      // 留着不动是正确的收口: 在飞那次的响应本身就是权威对账者(id 不一致的坐实成孤儿并
+      // interrupt, 自己的正常激活); 它若也失败, 轮到它调用本函数时 inFlightStarts 已空,
+      // 集子在那时才被清。本函数的两个调用点都在各自请求 endTurnStart 之后, 所以这里的
+      // size>0 只可能是**别的**请求。
+      if (inFlightStarts.size === 0) {
+        for (const bufferedId of bufferedOrphanTurnIds) {
+          terminalErroredTurnIds.add(bufferedId);
+          settleBufferedTurnReconcile(bufferedId, false);
+          if (threadId) {
+            host.request(Method.TurnInterrupt, { threadId, turnId: bufferedId }).catch((e2: unknown) => {
+              log.warn('buffered orphan turn interrupt failed (best-effort)', {
+                reason,
+                turnId: bufferedId,
+                error: e2 instanceof Error ? e2.message : String(e2),
+              });
             });
-          });
+          }
         }
+        bufferedOrphanTurnIds.clear();
+        bufferedTurnEventQueues.clear();
+      } else {
+        log.debug('leaving buffered turns to the surviving turn/start response', {
+          reason,
+          bufferedTurnIds: [...bufferedOrphanTurnIds],
+          inFlightStarts: inFlightStarts.size,
+        });
       }
-      bufferedOrphanTurnIds.clear();
-      bufferedTurnEventQueues.clear();
     };
 
     /**
@@ -5546,6 +5587,9 @@ export class CodexAgent extends BaseAgent {
         isTurnInFlight = false;
         currentTurnId = null;
         if (!wasTurnRunning) return;
+        // 没接管(预算耗尽 / 已有产出 / 非容量错误)且这一轮确实在跑 → 下面推 Done 收口。
+        // 同上: 收口即撤销重投资格, 否则延后标记会在别的 start settle 时补排。
+        revokeOverloadRetryOnTerminalSettle('terminal error notification');
         eventQueue.push({
           type: 'status',
           data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
