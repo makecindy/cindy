@@ -118,6 +118,13 @@ interface AdoptionMarker {
    */
   importedOwnerKey?: string;
   importedAt?: string;
+  /**
+   * 导入那一刻源库的内容指纹。续跑只有在指纹**没变**时才静默进行:不完整导入会
+   * 把 local 库留在活路径上(它是兜底),用户完全可以回到 local 模式继续加会话或改
+   * 配置——那些新行不属于用户当初批准的那一批,静默吞掉就等于绕过归属确认
+   * (codex review)。指纹不一致时重新弹窗,让用户对新的那批再确认一次。
+   */
+  importedSourceFingerprint?: string;
   /** 拒绝过认领的账号 ownerKey 列表;这些账号不再询问,数据保持可认领。 */
   declinedOwnerKeys?: string[];
 }
@@ -144,11 +151,15 @@ export interface LocalOwnerAdoptionDeps {
   dbFilePrefix: string;
   fs: LocalAdoptionFsDeps;
   /**
-   * 统计 local 库里未删除会话数(认领触发门槛);打开失败/表缺失时 throw
-   * (调用方按不可读跳过)。默认实现顺带完成 wal checkpoint(open+close),
+   * 探测 local 库:未删除会话数(认领触发门槛)+ 源批次指纹。打开失败/表缺失时
+   * throw(调用方按不可读跳过)。默认实现顺带完成 wal checkpoint(open+close),
    * 让 sidecar 检查有意义。
+   *
+   * 指纹用来判断「这还是当初那批数据吗」。它必须覆盖会话与配置两类写入,又不能
+   * 被我们自己的 checkpoint 扰动——所以取的是**库内容**(各表行数与会话最大
+   * updated_at)而不是文件 mtime/size(每次探测的 open+close 都会改 mtime)。
    */
-  countLocalSessions(dbPath: string): Promise<number>;
+  probeLocalDb(dbPath: string): Promise<{ sessionCount: number; fingerprint: string }>;
   /**
    * 行级导入(提交点):把 local 库的业务行并入**当前已 ready 的账号库**,单事务
    * 全成或全不成。抛错即未发生任何写入。
@@ -274,6 +285,14 @@ async function finishAdoption(
   // 消失(Greptile review)。因此收尾整段都要能被并发实例打断:进场先复查一次,
   // 递归搬移期间按 500ms 节流继续复查,发现即中断。中断视为收尾未完成,
   // importedOwnerKey 留着,下次独占启动时续跑(每一步都幂等)。
+  // passive 共享 userData 的实例一律不得做破坏性的共享布局搬移。外层探测在
+  // no-DB 续跑那条早返回路径**之前**就被跳过了(那条分支直接进收尾),所以这里必须
+  // 自己再把门守一次——否则一个单独运行的 passive 实例能把剩下的 owner 文件与
+  // 凭证改名(codex review)。
+  if (deps.passiveSharedUserData()) {
+    deps.log.info('local owner adoption: tail deferred, passive shared-userData instance');
+    return false;
+  }
   if (deps.hasConcurrentLiveInstances()) {
     deps.log.info('local owner adoption: tail deferred, another live instance appeared');
     return false;
@@ -292,18 +311,52 @@ async function finishAdoption(
   //    没导入的行在账号侧和 local 模式两边都消失的原因(Greptile review)。
   //    留在原地 = 用户回到 local 模式仍能看到全部原始数据,代价是已导入的那部分
   //    在两边并存;「不丢」优先于「不重复」。
-  if (keepLocalDb) {
-    // 导入没能把数据全带过来 → local 模式必须是**完整**的兜底恢复路径:不只是
-    // 不归档库,owner 命名空间与凭证也一并不动。只留个空壳库、配置和凭证却已经
-    // 搬走的话,「回 local 模式还能看到原来的数据」就是句空话(Copilot review)。
-    //
-    // 返回 false(收尾未完成)让 marker 停在 importedOwnerKey:claimed 不再作为
-    // 跳过依据,写了它下次登录会拿同一个 local 库**再弹一次窗**;停在 imported
-    // 则后续登录静默重跑导入(幂等),哪天两库 schema 对上了就自然收尾归档,
-    // 期间一次都不打扰用户(Copilot review)。
-    deps.log.warn(
-      'local owner adoption: cleanup skipped entirely (local db, owner files and credentials all left in place) because some rows could not be imported; local mode stays a complete fallback and later logins retry silently',
-    );
+  // 收尾**开始前**就要判定「这一趟能不能干净地做完」。凡是判定为不能的,一步都
+  // 不做:库、owner 命名空间、凭证全部留在原地,local 模式才是真正完整的兜底。
+  //  - keepLocalDb:导入没能把数据全带过来(丢行 / 整表没导入 / 无法核验)。
+  //  - 凭证撞名:账号侧已有同名 `.enc`。这项原先放在收尾**最后**才检测,那时库
+  //    已归档、owner 文件已搬走,`complete = false` 给不出承诺的完整兜底,重试还会
+  //    一直卡在同一个撞名凭证上(codex review)。所以提到最前面做预检。
+  const secretsDir = path.join(deps.userDataDir, SAFE_STORAGE_DIR_NAME);
+  const secretPrefixPairs: ReadonlyArray<{ from: string; to: string }> = [
+    { from: ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID), to: ownerSecretStoragePrefix(userId) },
+    { from: ownerScopedImSecretPrefix(LOCAL_DATA_OWNER_ID), to: ownerScopedImSecretPrefix(userId) },
+  ];
+  const secretMoves: Array<{ from: string; to: string }> = [];
+  let secretCollisions = 0;
+  if (await deps.fs.pathExists(secretsDir)) {
+    try {
+      for (const name of await deps.fs.readdir(secretsDir)) {
+        if (!name.endsWith('.enc')) continue;
+        const pair = secretPrefixPairs.find((candidate) => name.startsWith(candidate.from));
+        if (!pair) continue;
+        const target = `${pair.to}${name.slice(pair.from.length)}`;
+        if (await deps.fs.pathExists(path.join(secretsDir, target))) {
+          secretCollisions += 1;
+          continue;
+        }
+        secretMoves.push({ from: name, to: target });
+      }
+    } catch (err) {
+      warn('owner secrets preflight', err);
+      return false;
+    }
+  }
+  if (keepLocalDb || secretCollisions > 0) {
+    if (secretCollisions > 0) {
+      deps.log.warn(
+        'local owner adoption: %d owner secret(s) already exist under the account namespace; cleanup skipped entirely so local mode stays a complete fallback (the imported configs would otherwise be missing their credentials)',
+        secretCollisions,
+      );
+    } else {
+      // 返回 false(收尾未完成)让 marker 停在 importedOwnerKey:claimed 不再作为
+      // 跳过依据,写了它下次登录会拿同一个 local 库**再弹一次窗**;停在 imported
+      // 则后续登录静默重跑导入(幂等),哪天两库 schema 对上了就自然收尾归档,
+      // 期间一次都不打扰用户(Copilot review)。
+      deps.log.warn(
+        'local owner adoption: cleanup skipped entirely (local db, owner files and credentials all left in place) because some rows could not be imported; local mode stays a complete fallback and later logins retry silently',
+      );
+    }
     return false;
   }
   if (await deps.fs.pathExists(localDbPath)) {
@@ -373,42 +426,31 @@ async function finishAdoption(
     }
   }
 
-  // ③ 加密凭证按 owner 前缀改名(不在 owners/ 树内)。目标已存在跳过不覆盖。
-  const secretsDir = path.join(deps.userDataDir, SAFE_STORAGE_DIR_NAME);
-  const secretPrefixPairs: ReadonlyArray<{ from: string; to: string }> = [
-    { from: ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID), to: ownerSecretStoragePrefix(userId) },
-    { from: ownerScopedImSecretPrefix(LOCAL_DATA_OWNER_ID), to: ownerScopedImSecretPrefix(userId) },
-  ];
-  if (await deps.fs.pathExists(secretsDir)) {
+  // ③ 加密凭证按 owner 前缀改名(不在 owners/ 树内)。撞名的已在预检里拦下并让
+  //    整趟收尾放弃,所以这里的目标一定不存在;仍走 moveWithoutOverwrite,让
+  //    「预检到搬移之间有人抢先建了同名文件」这种竞态落到 conflicts 上而非覆盖。
+  if (secretMoves.length > 0) {
     let moved = 0;
-    let conflicts = 0;
+    let raced = 0;
     try {
-      for (const name of await deps.fs.readdir(secretsDir)) {
-        if (!name.endsWith('.enc')) continue;
-        const pair = secretPrefixPairs.find((candidate) => name.startsWith(candidate.from));
-        if (!pair) continue;
+      for (const move of secretMoves) {
         await abortCheck();
-        const target = `${pair.to}${name.slice(pair.from.length)}`;
         const result = await moveWithoutOverwrite(
           deps.fs,
-          path.join(secretsDir, name),
-          path.join(secretsDir, target),
+          path.join(secretsDir, move.from),
+          path.join(secretsDir, move.to),
         );
         moved += result.moved;
-        conflicts += result.conflicts;
+        raced += result.conflicts;
       }
       if (moved > 0) {
         deps.log.info('local owner adoption: %d owner secrets renamed', moved);
       }
-      if (conflicts > 0) {
-        // 账号侧已经有同名凭证文件:绝不覆盖(那会毁掉账号自己的凭证),但也绝不
-        // 静默——撞名意味着「本机那份凭证没能跟着配置过来」,对应的自定义供应商 /
-        // MCP / IM 在账号下可能拿着账号侧的旧凭证跑,是用户该知道的事
-        // (codex review)。按收尾未完成处理:local 侧的凭证与库都留在原地。
+      if (raced > 0) {
         complete = false;
         deps.log.warn(
-          'local owner adoption: %d owner secret(s) already exist under the account namespace and were left in place; the imported configs may be missing their credentials',
-          conflicts,
+          'local owner adoption: %d owner secret(s) appeared under the account namespace between preflight and move; left in place',
+          raced,
         );
       }
     } catch (err) {
@@ -435,7 +477,7 @@ export async function runLocalOwnerDataAdoption(
     const ownerKey = dataOwnerStorageKey(userId);
     const marker = await readAdoptionMarker(deps, markerPath);
     // 上次导入已提交、收尾没走完:静默续跑,不再问用户(会话已经在账号下了)。
-    const resuming = marker?.importedOwnerKey === ownerKey;
+    let resuming = marker?.importedOwnerKey === ownerKey;
     // 别的账号导入完但收尾没走完时,这批数据已经归它了:静默让路,等它回来续跑。
     // 否则本账号会把同一批会话再导入一遍、把凭证搬到自己名下,连它的续跑凭据都
     // 会被覆盖掉(codex / Copilot review)。
@@ -479,17 +521,28 @@ export async function runLocalOwnerDataAdoption(
     //    **续跑路径也必须走这一步**:sidecar 检查的前提就是紧跟在一次干净的
     //    open+close(checkpoint 会删掉 -wal/-shm)之后,跳过它会让残留 sidecar
     //    把续跑永久卡在 local-db-busy(Copilot review)。续跑时只是不再拿会话数
-    //    当门槛——导入早已提交,0 条会话也要把收尾做完。
+    //    当门槛——导入早已提交,0 条会话也要把收尾做完;顺带取源批次指纹。
     deps.closeLocalDbIfOpen();
-    let sessionCount: number;
+    let probe: { sessionCount: number; fingerprint: string };
     try {
-      sessionCount = await deps.countLocalSessions(localDbPath);
+      probe = await deps.probeLocalDb(localDbPath);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       deps.log.warn('local owner adoption: local db unreadable, skipped: %s', message);
       return { status: 'local-db-unreadable', error: message };
     }
-    if (!resuming && sessionCount <= 0) return { status: 'no-local-sessions' };
+    if (!resuming && probe.sessionCount <= 0) return { status: 'no-local-sessions' };
+    // 续跑的前提是「源还是当初那批」。不完整导入会把 local 库留在活路径当兜底,
+    // 用户能继续在 local 模式里加会话/改配置;那些新行没经过归属确认,不能借
+    // importedOwnerKey 静默并进来(codex review)。指纹变了就退回正常询问流程。
+    if (resuming && marker?.importedSourceFingerprint != null) {
+      if (marker.importedSourceFingerprint !== probe.fingerprint) {
+        deps.log.info(
+          'local owner adoption: local db changed since the reserved import; asking again instead of resuming silently',
+        );
+        resuming = false;
+      }
+    }
     // checkpoint 之后仍有 sidecar = 库确实被别的进程持有,推迟。
     if (await dbSidecarsPresent(deps, localDbPath)) {
       deps.log.info('local owner adoption deferred: local db sidecars still present');
@@ -613,6 +666,7 @@ export async function runLocalOwnerDataAdoption(
         resuming,
         localDbPath,
         incomplete,
+        probe.fingerprint,
       );
     } catch (err) {
       // 导入阶段失败:未写任何 marker,local 数据完好,下次登录重新询问。
@@ -664,6 +718,7 @@ async function commitAdoptionTail(
   resumed: boolean,
   localDbPath?: string,
   keepLocalDb = false,
+  sourceFingerprint?: string,
 ): Promise<LocalOwnerAdoptionResult> {
   const ownerKey = dataOwnerStorageKey(userId);
   const declined = marker?.declinedOwnerKeys?.length
@@ -675,6 +730,7 @@ async function commitAdoptionTail(
         version: 1,
         importedOwnerKey: ownerKey,
         importedAt: deps.now().toISOString(),
+        ...(sourceFingerprint != null ? { importedSourceFingerprint: sourceFingerprint } : {}),
         ...declined,
       });
     } catch (err) {
@@ -784,18 +840,42 @@ const realFsDeps: LocalAdoptionFsDeps = {
 };
 
 /**
- * 统计已关闭库文件的未删除会话数。这里直连 better-sqlite3 而非 DbClient:探测
+ * 探测已关闭的 local 库:未删除会话数 + 内容指纹。直连 better-sqlite3 而非 DbClient:探测
  * 对象是**已关闭的 local 库文件**,而 DbClient 只面向当前 owner 的库——这是迁移
  * 工具语境(与 mToc/ownerNamespaceMigration 同层),不是运行期业务查询。
  * open+close 顺带完成 wal checkpoint,使 sidecar 检查成立。
  */
-async function countSessionsInClosedDb(dbPath: string): Promise<number> {
+async function probeClosedLocalDb(
+  dbPath: string,
+): Promise<{ sessionCount: number; fingerprint: string }> {
   const db = new Database(dbPath, { fileMustExist: true });
   try {
     const row = db
       .prepare("SELECT COUNT(*) AS c FROM sessions WHERE status != 'deleted'")
       .get() as { c?: number | bigint } | undefined;
-    return Number(row?.c ?? 0);
+    const sessionCount = Number(row?.c ?? 0);
+    // 指纹取库**内容**:会话总数(含软删除,删一条也算变化)与最大 updated_at,
+    // 外加几张配置表的行数——覆盖 codex 说的 "adds sessions or configurations"。
+    // 不用文件 mtime/size:每次探测的 open+close 会 checkpoint、必然改动它们,
+    // 那样指纹永远对不上、每次登录都要重新弹窗。表缺失(旧 schema)记 `-`。
+    const scalar = (sql: string): string => {
+      try {
+        const value = (db.prepare(sql).get() as { v?: unknown } | undefined)?.v;
+        return value == null ? '0' : String(value);
+      } catch {
+        return '-';
+      }
+    };
+    const fingerprint = [
+      `s=${scalar('SELECT COUNT(*) AS v FROM sessions')}`,
+      `su=${scalar('SELECT MAX(updated_at) AS v FROM sessions')}`,
+      `m=${scalar('SELECT COUNT(*) AS v FROM messages')}`,
+      `p=${scalar('SELECT COUNT(*) AS v FROM custom_providers')}`,
+      `mcp=${scalar('SELECT COUNT(*) AS v FROM custom_mcp_servers')}`,
+      `sch=${scalar('SELECT COUNT(*) AS v FROM schedules')}`,
+      `im=${scalar('SELECT COUNT(*) AS v FROM im_bindings')}`,
+    ].join(':');
+    return { sessionCount, fingerprint };
   } finally {
     db.close();
   }
@@ -892,7 +972,7 @@ export async function runLocalOwnerDataAdoptionForUser(
     userDataDir: app.getPath('userData'),
     dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
     fs: realFsDeps,
-    countLocalSessions: countSessionsInClosedDb,
+    probeLocalDb: probeClosedLocalDb,
     importLocalData: (localDbPath, options) =>
       getDbClient().tx('localOwner.importData', {
         localDbPath,
@@ -916,4 +996,4 @@ export async function runLocalOwnerDataAdoptionForUser(
   }
 }
 
-export const __testing = { countSessionsInClosedDb };
+export const __testing = { probeClosedLocalDb };

@@ -151,6 +151,8 @@ interface HarnessOverrides {
   decision?: LocalAdoptionDecision | (() => Promise<LocalAdoptionDecision>);
   /** local 库未删除会话数(默认 3)。 */
   sessionCount?: number;
+  /** 源批次指纹(默认固定值;改它模拟「回到 local 模式又动过数据」)。 */
+  fingerprint?: string;
   countThrows?: boolean;
   passive?: boolean;
   concurrent?: () => boolean;
@@ -175,9 +177,12 @@ function createHarness(overrides: HarnessOverrides = {}) {
     userDataDir: USER_DATA,
     dbFilePrefix: PREFIX,
     fs: { ...mem.fsDeps, ...overrides.fsOverrides },
-    countLocalSessions: vi.fn(async () => {
+    probeLocalDb: vi.fn(async () => {
       if (overrides.countThrows) throw new Error('SQLITE_CORRUPT: malformed');
-      return overrides.sessionCount ?? 3;
+      return {
+        sessionCount: overrides.sessionCount ?? 3,
+        fingerprint: overrides.fingerprint ?? 'fp-original',
+      };
     }),
     importLocalData,
     passiveSharedUserData: () => overrides.passive ?? false,
@@ -559,6 +564,75 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
     ).toBe(true);
   });
 
+  it('续跑时源库指纹没变 → 静默续跑,不再弹窗', async () => {
+    const { mem, deps, phases, importLocalData } = createHarness({ fingerprint: 'fp-original' });
+    mem.addFile(LOCAL_DB);
+    mem.addFile(
+      MARKER,
+      JSON.stringify({
+        version: 1,
+        importedOwnerKey: USER_KEY,
+        importedSourceFingerprint: 'fp-original',
+      }),
+    );
+
+    await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(phases).toEqual(['running', 'done']);
+    expect(importLocalData).toHaveBeenCalledWith(path.normalize(LOCAL_DB), { resuming: true });
+  });
+
+  it('续跑时源库指纹变了(用户回 local 模式又加了东西)→ 重新弹窗确认归属', async () => {
+    const { mem, deps, phases, importLocalData } = createHarness({ fingerprint: 'fp-changed' });
+    mem.addFile(LOCAL_DB);
+    mem.addFile(
+      MARKER,
+      JSON.stringify({
+        version: 1,
+        importedOwnerKey: USER_KEY,
+        importedSourceFingerprint: 'fp-original',
+      }),
+    );
+
+    await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    // 新增的那批没经过归属确认,不能借 importedOwnerKey 静默并进来。
+    expect(phases).toEqual(['confirm', 'running', 'done']);
+    expect(importLocalData).toHaveBeenCalledWith(path.normalize(LOCAL_DB), { resuming: false });
+  });
+
+  it('指纹变化后用户选「保留在本机模式」时照常记录拒绝,不导入', async () => {
+    const { mem, deps, importLocalData } = createHarness({
+      fingerprint: 'fp-changed',
+      decision: 'keep',
+    });
+    mem.addFile(LOCAL_DB);
+    mem.addFile(
+      MARKER,
+      JSON.stringify({
+        version: 1,
+        importedOwnerKey: USER_KEY,
+        importedSourceFingerprint: 'fp-original',
+      }),
+    );
+
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({ status: 'declined' });
+    expect(importLocalData).not.toHaveBeenCalled();
+  });
+
+  it('首次导入把源批次指纹写进 marker(后续续跑的比对基准)', async () => {
+    const { mem, deps } = createHarness({
+      fingerprint: 'fp-abc',
+      // 让收尾停在 importedOwnerKey,好观察指纹字段。
+      importResult: { inserted: 2, droppedRows: { messages: 1 } },
+    });
+    mem.addFile(LOCAL_DB);
+
+    await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(readMarker(mem).importedSourceFingerprint).toBe('fp-abc');
+  });
+
   it('续跑时本账号的旧拒绝记录不再拦路(导入已提交,认领事实成立)', async () => {
     const { mem, deps } = createHarness();
     mem.addFile(LOCAL_DB);
@@ -567,6 +641,56 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
       JSON.stringify({ version: 1, importedOwnerKey: USER_KEY, declinedOwnerKeys: [USER_KEY] }),
     );
     expect((await runLocalOwnerDataAdoption(USER_ID, deps)).status).toBe('adopted');
+  });
+
+  it('passive 实例不得在 no-DB 续跑路径上搬 owner 文件与凭证', async () => {
+    // 这条早返回分支在外层 passive 门之前,收尾必须自己再守一次(codex review)。
+    const { mem, deps } = createHarness({ passive: true });
+    mem.addFile(MARKER, JSON.stringify({ version: 1, importedOwnerKey: USER_KEY }));
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'), 'learn');
+    mem.addFile(
+      path.join(SECRETS_DIR, `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}k.enc`),
+      'k',
+    );
+
+    await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'))).toBe(true);
+    expect(mem.exists(path.join(ACCOUNT_OWNER_DIR, 'learn'))).toBe(false);
+    expect(
+      mem.exists(path.join(SECRETS_DIR, `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}k.enc`)),
+    ).toBe(true);
+    // 收尾没做完 → 不落终态。
+    expect(readMarker(mem).claimedOwnerKey).toBeUndefined();
+  });
+
+  it('凭证撞名时在收尾开始前就放弃:库不归档、owner 文件不搬(预检)', async () => {
+    const { mem, deps } = createHarness();
+    const localSecret = path.join(
+      SECRETS_DIR,
+      `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}provider_key_p1_claude.enc`,
+    );
+    mem.addFile(LOCAL_DB);
+    mem.addFile(localSecret, 'local-key');
+    mem.addFile(
+      path.join(SECRETS_DIR, `${ownerSecretStoragePrefix(USER_ID)}provider_key_p1_claude.enc`),
+      'account-key',
+    );
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'), 'learn');
+
+    expect((await runLocalOwnerDataAdoption(USER_ID, deps)).status).toBe('adopted');
+
+    // 撞名在收尾**开始前**就被发现 → 库还在活路径、owner 文件没搬、凭证没动,
+    // local 模式是完整兜底(而不是「库已归档但说着兜底」)。
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+    expect(archivedDbNames(mem)).toHaveLength(0);
+    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'))).toBe(true);
+    expect(mem.exists(path.join(ACCOUNT_OWNER_DIR, 'learn'))).toBe(false);
+    expect(mem.files.get(path.normalize(localSecret))).toBe('local-key');
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('cleanup skipped entirely so local mode stays a complete fallback'),
+      1,
+    );
   });
 
   it('续跑时 local 库已不在(归档其实成功过)→ 补写终态,不再每次登录白跑', async () => {
@@ -609,7 +733,7 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
 
     await runLocalOwnerDataAdoption(USER_ID, deps);
 
-    expect(deps.countLocalSessions).toHaveBeenCalledWith(path.normalize(LOCAL_DB));
+    expect(deps.probeLocalDb).toHaveBeenCalledWith(path.normalize(LOCAL_DB));
   });
 
   it('续跑时 local 库 0 条会话不再当门槛(导入早已提交,收尾照做)', async () => {
