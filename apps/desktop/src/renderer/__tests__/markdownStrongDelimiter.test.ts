@@ -2,16 +2,31 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import { describe, expect, it } from 'vitest';
 
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import { normalizeStrongDelimiterBoundaries } from '@/components/chat/normalizeStrongDelimiterBoundaries';
+import remarkStrictInlineMath from '@/components/chat/remarkStrictInlineMath';
 
 function renderMarkdown(source: string): string {
   return renderToStaticMarkup(
     createElement(
       ReactMarkdown,
       { remarkPlugins: [remarkGfm], skipHtml: true },
+      normalizeStrongDelimiterBoundaries(source),
+    ),
+  );
+}
+
+function renderMarkdownWithStrictMath(source: string): string {
+  return renderToStaticMarkup(
+    createElement(
+      ReactMarkdown,
+      {
+        remarkPlugins: [remarkGfm, remarkMath, remarkStrictInlineMath],
+        skipHtml: true,
+      },
       normalizeStrongDelimiterBoundaries(source),
     ),
   );
@@ -108,6 +123,30 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
   });
 
+  it('repairs strong delimiters in visible link labels without rewriting destinations', () => {
+    const inlineLink = '[**重点。**正文](https://example.test/**path.**next)';
+    const referenceLink = ['[**重点。**正文][target]', '', '[target]: https://example.test'].join(
+      '\n',
+    );
+
+    expect(normalizeStrongDelimiterBoundaries(inlineLink)).toBe(
+      '[**重点。**<!--cindy-strong-boundary-->正文](https://example.test/**path.**next)',
+    );
+    expect(normalizeStrongDelimiterBoundaries(referenceLink)).toBe(
+      [
+        '[**重点。**<!--cindy-strong-boundary-->正文][target]',
+        '',
+        '[target]: https://example.test',
+      ].join('\n'),
+    );
+    expect(renderMarkdown(inlineLink)).toContain(
+      '<a href="https://example.test/**path.**next"><strong>重点。</strong>正文</a>',
+    );
+    expect(renderMarkdown(referenceLink)).toContain(
+      '<a href="https://example.test"><strong>重点。</strong>正文</a>',
+    );
+  });
+
   it('preserves an open strong span across single-star content', () => {
     expect(renderMarkdown('**This is *very* important.**Next')).toContain(
       '<strong>This is <em>very</em> important.</strong>Next',
@@ -131,6 +170,19 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(normalizeStrongDelimiterBoundaries('$2**3.**x$ **重点。**正文')).toBe(
       '$2**3.**x$ **重点。**<!--cindy-strong-boundary-->正文',
     );
+  });
+
+  it('preserves loose inline math before the strict math plugin downgrades it to text', () => {
+    const source = '$2**3.**x $';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(source);
+    expect(renderMarkdownWithStrictMath(source)).not.toContain('cindy-strong-boundary');
+  });
+
+  it('leaves historical bare project deep links unchanged', () => {
+    const source = '打开 cindy://project/%2Ftmp%2Ffoo**bar.**baz 查看';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(source);
   });
 
   it('treats unmatched backticks as prose instead of suppressing later repairs', () => {

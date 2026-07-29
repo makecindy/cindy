@@ -5,7 +5,7 @@ import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 
-import remarkStrictInlineMath from './remarkStrictInlineMath';
+import { parseProjectDeepLinkHref, PROJECT_DEEP_LINK_RE_SOURCE } from '@/lib/deepLink';
 
 /**
  * 放宽 AI 常见的中文加粗写法。
@@ -16,8 +16,8 @@ import remarkStrictInlineMath from './remarkStrictInlineMath';
  *
  * 这里不改用户看到的文字，只在这类已经存在未闭合加粗起点的收尾后插入
  * 一个会被 MarkdownRenderer 的 `skipHtml` 丢弃的 HTML 注释。解析树用于
- * 限定正文段落并排除代码、公式、链接和原始 HTML，避免字符扫描改写这些
- * 语法区域。
+ * 限定正文段落并排除代码、公式、链接地址和原始 HTML，避免字符扫描改写
+ * 这些语法区域。
  */
 
 const HIDDEN_SEPARATOR = '<!--cindy-strong-boundary-->';
@@ -36,15 +36,12 @@ const PROTECTED_NODE_TYPES = new Set<Nodes['type']>([
   'imageReference',
   'inlineCode',
   'inlineMath',
-  'link',
-  'linkReference',
   'math',
 ]);
 const markdownParser = unified()
   .use(remarkParse)
   .use(remarkGfm, { singleTilde: false })
-  .use(remarkMath)
-  .use(remarkStrictInlineMath);
+  .use(remarkMath);
 
 interface OffsetRange {
   start: number;
@@ -82,7 +79,29 @@ function nodeRange(node: Nodes): OffsetRange | null {
   return start == null || end == null ? null : { start, end };
 }
 
-function collectProtectedRanges(node: Nodes, ranges: OffsetRange[]): void {
+function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: string): void {
+  if (node.type === 'link' || node.type === 'linkReference') {
+    const range = nodeRange(node);
+    if (range && markdown[range.start] !== '[') {
+      ranges.push(range);
+      return;
+    }
+    const childRanges = node.children
+      .map((child) => nodeRange(child))
+      .filter((childRange): childRange is OffsetRange => childRange !== null);
+    if (!range || childRanges.length === 0) {
+      if (range) ranges.push(range);
+      return;
+    }
+
+    // 链接文字是可见正文，需要继续扫描；只保护两侧的 Markdown 链接语法
+    // 和地址，避免在目标地址内插入隐藏分隔符。
+    ranges.push({ start: range.start, end: childRanges[0].start });
+    ranges.push({ start: childRanges[childRanges.length - 1].end, end: range.end });
+    for (const child of node.children) collectProtectedRanges(child, ranges, markdown);
+    return;
+  }
+
   if (PROTECTED_NODE_TYPES.has(node.type)) {
     const range = nodeRange(node);
     if (range) ranges.push(range);
@@ -90,10 +109,29 @@ function collectProtectedRanges(node: Nodes, ranges: OffsetRange[]): void {
   }
 
   if (!('children' in node)) return;
-  for (const child of node.children as Nodes[]) collectProtectedRanges(child, ranges);
+  for (const child of node.children as Nodes[]) collectProtectedRanges(child, ranges, markdown);
 }
 
-function collectProseRanges(tree: Root): Array<{
+function collectProjectDeepLinkRanges(markdown: string, range: OffsetRange): OffsetRange[] {
+  const ranges: OffsetRange[] = [];
+  const source = markdown.slice(range.start, range.end);
+  const projectLinkPattern = new RegExp(PROJECT_DEEP_LINK_RE_SOURCE, 'g');
+  let match: RegExpExecArray | null;
+
+  while ((match = projectLinkPattern.exec(source)) !== null) {
+    const value = match[0].replace(/[.,;:!?]+$/, '');
+    if (!parseProjectDeepLinkHref(value)) continue;
+    const start = range.start + match.index;
+    ranges.push({ start, end: start + value.length });
+  }
+
+  return ranges;
+}
+
+function collectProseRanges(
+  tree: Root,
+  markdown: string,
+): Array<{
   range: OffsetRange;
   protectedRanges: OffsetRange[];
 }> {
@@ -109,7 +147,8 @@ function collectProseRanges(tree: Root): Array<{
     const range = nodeRange(node);
     if (!range) return;
     const protectedRanges: OffsetRange[] = [];
-    collectProtectedRanges(node, protectedRanges);
+    collectProtectedRanges(node, protectedRanges, markdown);
+    protectedRanges.push(...collectProjectDeepLinkRanges(markdown, range));
     protectedRanges.sort((left, right) => left.start - right.start);
     proseRanges.push({ range, protectedRanges });
   });
@@ -188,8 +227,8 @@ function collectBoundaryInsertions(
 export function normalizeStrongDelimiterBoundaries(markdown: string): string {
   if (!markdown.includes('**') || !POTENTIAL_BOUNDARY_RE.test(markdown)) return markdown;
 
-  const tree = markdownParser.runSync(markdownParser.parse(markdown), markdown);
-  const insertions = collectProseRanges(tree).flatMap(({ range, protectedRanges }) =>
+  const tree = markdownParser.runSync(markdownParser.parse(markdown), markdown) as Root;
+  const insertions = collectProseRanges(tree, markdown).flatMap(({ range, protectedRanges }) =>
     collectBoundaryInsertions(markdown, range, protectedRanges),
   );
   if (insertions.length === 0) return markdown;
