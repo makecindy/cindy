@@ -10133,6 +10133,112 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('reassigns a joined duplicate when the interaction owner is cancelled', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-user-input-owner-cancelled',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.requestUserInput || !handlers.dynamicToolCall || !handlers.serverRequestResolved) {
+      throw new Error('expected handlers');
+    }
+    const ownerDecision = deferred<InteractionDecision>();
+    const joinedDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async (req) => {
+      requestCount += 1;
+      return req.requestId === 'req-owner'
+        ? ownerDecision.promise
+        : joinedDecision.promise;
+    });
+
+    const ownerResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-owner',
+      questions: [{
+        id: 'native-q1',
+        header: 'Question',
+        question: 'Pick one',
+        isOther: false,
+        isSecret: false,
+        options: null,
+      }],
+    }, { requestId: 'req-owner' });
+    const joinedResponsePromise = handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-joined',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{
+          id: 'dynamic-q1',
+          header: 'Question',
+          question: 'Pick one',
+          isOther: false,
+          options: null,
+        }],
+      },
+    }, { requestId: 'req-joined' });
+    expect(requestCount).toBe(1);
+
+    handlers.serverRequestResolved({ threadId: 'start-thread-id', requestId: 'req-owner' });
+
+    await expect(ownerResponsePromise).resolves.toEqual({ answers: {} });
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: 'interaction_dismissed',
+      data: {
+        requestId: 'req-owner',
+        reason: 'server_request_resolved',
+        resolvedAs: 'deny',
+      },
+    });
+    await waitForExpectation(() => {
+      expect(requestCount).toBe(2);
+    });
+
+    joinedDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'fresh' },
+    });
+    await expect(joinedResponsePromise).resolves.toEqual({
+      success: true,
+      contentItems: [{
+        type: 'inputText',
+        text: JSON.stringify({ 'dynamic-q1': { answers: ['fresh'] } }),
+      }],
+    });
+
+    ownerDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'late' },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-replay',
+      questions: [{
+        id: 'replay-q1',
+        header: 'Question',
+        question: 'Pick one',
+        isOther: false,
+        isSecret: false,
+        options: null,
+      }],
+    }, { requestId: 'req-replay' })).resolves.toEqual({
+      answers: { 'replay-q1': { answers: ['fresh'] } },
+    });
+    expect(requestCount).toBe(2);
+    await handle.close();
+  });
+
   it('updates the registered vendorOptions object by reference on setVendorOptions', async () => {
     const registerCodexMcpThreadContext = vi.fn();
     const agent = new CodexAgent(createDeps({}, {

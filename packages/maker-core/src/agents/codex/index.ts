@@ -659,6 +659,12 @@ function userInputQuestionsFingerprint(
 
 type UserInputAnswersByPosition = string[][];
 
+interface PendingUserInputInteraction {
+  interactionPromise: Promise<UserInputAnswersByPosition>;
+  cancelledPromise: Promise<void>;
+  cancel: () => void;
+}
+
 function userInputAnswersByPosition(
   questions: readonly ToolRequestUserInputQuestion[],
   response: ToolRequestUserInputResponse,
@@ -3542,13 +3548,13 @@ export class CodexAgent extends BaseAgent {
     >();
     const pendingUserInputByTurn = new Map<
       string,
-      Map<string, Promise<UserInputAnswersByPosition>>
+      Map<string, PendingUserInputInteraction>
     >();
     const pendingUserInputOwnerByRequestId = new Map<string, {
       turnId: string;
       fingerprint: string;
-      pendingForTurn: Map<string, Promise<UserInputAnswersByPosition>>;
-      interactionPromise: Promise<UserInputAnswersByPosition>;
+      pendingForTurn: Map<string, PendingUserInputInteraction>;
+      pendingInteraction: PendingUserInputInteraction;
     }>();
     registerCodexMcpContext(threadId);
     let mcpElicitationSeq = 0;
@@ -4488,7 +4494,8 @@ export class CodexAgent extends BaseAgent {
       const pending = pendingUserInputOwnerByRequestId.get(requestId);
       if (!pending) return;
       pendingUserInputOwnerByRequestId.delete(requestId);
-      if (pending.pendingForTurn.get(pending.fingerprint) !== pending.interactionPromise) return;
+      pending.pendingInteraction.cancel();
+      if (pending.pendingForTurn.get(pending.fingerprint) !== pending.pendingInteraction) return;
       pending.pendingForTurn.delete(pending.fingerprint);
       if (
         pending.pendingForTurn.size === 0
@@ -4514,6 +4521,7 @@ export class CodexAgent extends BaseAgent {
       requestId: string,
       questions: ToolRequestUserInputQuestion[],
       turnId?: string | null,
+      isRequestPending: () => boolean = () => true,
     ): Promise<ToolRequestUserInputResponse> {
       if (questions.some((q) => q.isSecret)) {
         log.warn('requestUserInput secret question refused', {
@@ -4542,8 +4550,19 @@ export class CodexAgent extends BaseAgent {
           turnId,
           questionCount: questions.length,
         });
-        const answersByPosition = await pendingReplay;
-        return responseFromUserInputAnswersByPosition(questions, answersByPosition);
+        const joined = await Promise.race([
+          pendingReplay.interactionPromise.then((answersByPosition) => ({
+            kind: 'answered' as const,
+            answersByPosition,
+          })),
+          pendingReplay.cancelledPromise.then(() => ({ kind: 'cancelled' as const })),
+        ]);
+        if (joined.kind === 'cancelled') {
+          return isRequestPending()
+            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending)
+            : emptyUserInputResponse(questions);
+        }
+        return responseFromUserInputAnswersByPosition(questions, joined.answersByPosition);
       }
 
       const interactionPromise = (async (): Promise<UserInputAnswersByPosition> => {
@@ -4562,9 +4581,19 @@ export class CodexAgent extends BaseAgent {
         );
       })();
 
+      let cancelPendingInteraction!: () => void;
+      const cancelledPromise = new Promise<void>((resolve) => {
+        cancelPendingInteraction = resolve;
+      });
+      const pendingInteraction: PendingUserInputInteraction = {
+        interactionPromise,
+        cancelledPromise,
+        cancel: cancelPendingInteraction,
+      };
+
       if (turnId && fingerprint) {
-        pendingForTurn ??= new Map<string, Promise<UserInputAnswersByPosition>>();
-        pendingForTurn.set(fingerprint, interactionPromise);
+        pendingForTurn ??= new Map<string, PendingUserInputInteraction>();
+        pendingForTurn.set(fingerprint, pendingInteraction);
         if (!pendingUserInputByTurn.has(turnId)) {
           pendingUserInputByTurn.set(turnId, pendingForTurn);
         }
@@ -4572,7 +4601,7 @@ export class CodexAgent extends BaseAgent {
           turnId,
           fingerprint,
           pendingForTurn,
-          interactionPromise,
+          pendingInteraction,
         });
       }
 
@@ -4582,7 +4611,7 @@ export class CodexAgent extends BaseAgent {
           turnId
           && fingerprint
           && pendingUserInputByTurn.get(turnId) === pendingForTurn
-          && pendingForTurn?.get(fingerprint) === interactionPromise
+          && pendingForTurn?.get(fingerprint) === pendingInteraction
           && hasSubmittedUserInput(answersByPosition)
         ) {
           const nextSubmittedForTurn = submittedUserInputByTurn.get(turnId)
@@ -4595,10 +4624,10 @@ export class CodexAgent extends BaseAgent {
         return responseFromUserInputAnswersByPosition(questions, answersByPosition);
       } finally {
         const ownedPending = pendingUserInputOwnerByRequestId.get(requestId);
-        if (ownedPending?.interactionPromise === interactionPromise) {
+        if (ownedPending?.pendingInteraction === pendingInteraction) {
           pendingUserInputOwnerByRequestId.delete(requestId);
         }
-        if (turnId && fingerprint && pendingForTurn?.get(fingerprint) === interactionPromise) {
+        if (turnId && fingerprint && pendingForTurn?.get(fingerprint) === pendingInteraction) {
           pendingForTurn.delete(fingerprint);
           if (
             pendingForTurn.size === 0
@@ -4686,7 +4715,12 @@ export class CodexAgent extends BaseAgent {
         async (settle) => {
           const response = kind === 'permission'
             ? await requestUserInputAsPermission(requestId, params, questions)
-            : await askUserViaInteraction(requestId, questions, params.turnId);
+            : await askUserViaInteraction(
+                requestId,
+                questions,
+                params.turnId,
+                () => userInputBroker.has({ connectionId, requestId: meta.requestId }),
+              );
           settle(response);
         },
       );
@@ -4746,7 +4780,12 @@ export class CodexAgent extends BaseAgent {
           itemId: params.callId,
         },
         async (settle) => {
-          const response = await askUserViaInteraction(requestId, questions, params.turnId);
+          const response = await askUserViaInteraction(
+            requestId,
+            questions,
+            params.turnId,
+            () => dynamicToolBroker.has({ connectionId, requestId: meta.requestId }),
+          );
           settle(dynamicToolResponseFromUserInput(response));
         },
       );
