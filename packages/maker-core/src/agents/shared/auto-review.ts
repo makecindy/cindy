@@ -108,6 +108,7 @@ const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
   /\bapplication_default_credentials\b/,                  // gcloud 默认凭证文件
   /\bcredentials\.json\b/,                                // Claude 等的 OAuth 凭证文件(.credentials.json)
   /[\\/](?:codex|claude|gcloud)[\\/]auth\.json\b/,        // agent 认证文件(~/.config/codex/auth.json 等)
+  /\/proc\/[^/\s]*\/environ\b/,                           // procfs 环境变量(读 /proc/self/environ 即 dump 含凭证的环境)
   /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/, // 私钥文件
 ];
 
@@ -164,7 +165,9 @@ const OUTPUT_REDIRECTION = /(?<![-\d&])>>?(?!&)|(?:^|\s)\d+>>?(?!&)|(?:^|\s)&>>?
  */
 // curl 上传 / 非 GET 方法。含贴合式短选项(`-dDATA` / `-Ffield` / `-Tfile`)——`-[dFT]` 不带 \b,
 // 贴合的 value 照样命中。大小写敏感(不加 /i):`-d/-F/-T` 是上传,`-D`(dump-header,只读)不能误伤。
-const CURL_UPLOAD_FLAGS = /(?:^|\s)-[dFT]|(?:^|\s)--(?:data|form|upload-file|json)[\w-]*|(?:^|\s)(?:-X|--request)\s*(?:POST|PUT|DELETE|PATCH)/;
+// `-[a-zA-Z]*[dFT]`:短选项簇里含值取向的 -d/-F/-T(curl 无布尔短选项用 d/F/T),捕获贴合 `-dDATA`、
+// 捆绑 `-sdsecret`、独立 `-d`;curl 大小写敏感,不误伤只读的 -D。
+const CURL_UPLOAD_FLAGS = /(?:^|\s)-[a-zA-Z]*[dFT]|(?:^|\s)--(?:data|form|upload-file|json)[\w-]*|(?:^|\s)(?:-X|--request)\s*(?:POST|PUT|DELETE|PATCH)/;
 // 落盘到文件/目录(curl -o/-O/--output;wget -o 日志 /-O 文档 /-P 目录前缀)。含贴合短选项 `-ofile`;写任意路径。
 // (wget 现整体升级、不再走安全 fetch,见 isSafeFetch;此常量仍供 curl 的 -o/-O 判定。)
 const FETCH_OUTPUT_FLAGS = /(?:^|\s)-[oOP]|(?:^|\s)--(?:output(?:-dir|-document)?|remote-name|directory-prefix)\b/;
@@ -174,7 +177,9 @@ const CURL_REDIRECT_FLAGS = /(?:^|\s)(?:-L|--location(?:-trusted)?)\b/;
 //  - 凭证:-u/--user(basic auth)、--netrc*、-b/--cookie*(会话 cookie)、-H/--header 里的鉴权头。
 //  - 隐藏参数:-K/--config(配置文件可藏 -d 上传)。
 //  - SSRF 改路由:--resolve/--connect-to/--unix-socket(把看似公网的 URL 定向到内网/metadata)、-x/--proxy*、--interface。
-const CURL_SENSITIVE_FLAGS = /(?:^|\s)(?:-u\b|--user\b|--netrc\S*|-K\b|--config\b|-b\b|--cookie\S*|--resolve\b|--connect-to\b|--unix-socket\b|-x\b|--proxy\S*|--interface\b)|(?:-H|--header)\s*['"]?\s*(?:[Aa]uthorization|[Cc]ookie|[Xx]-[Aa]pi-[Kk]ey|[Xx]-[Aa]uth|[Pp]roxy-[Aa]uthorization)/;
+// 短选项 -u/-b/-x/-K 同样用簇匹配(`-[a-zA-Z]*[ubxK]`)捕获贴合 `-uuser:pass` / 捆绑 `-su user`;
+// curl 无布尔短选项用 u/b/x/K,不误伤(-k insecure 是小写 k,不在内)。长选项与鉴权头单列。
+const CURL_SENSITIVE_FLAGS = /(?:^|\s)-[a-zA-Z]*[ubxK]|(?:^|\s)--(?:user|netrc\S*|config|cookie\S*|resolve|connect-to|unix-socket|proxy\S*|interface)\b|(?:-H|--header)\s*['"]?\s*(?:[Aa]uthorization|[Cc]ookie|[Xx]-[Aa]pi-[Kk]ey|[Xx]-[Aa]uth|[Pp]roxy-[Aa]uthorization)/;
 
 /** git 只读子命令 → 放行。 */
 const SAFE_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
@@ -275,6 +280,11 @@ function isFetchTargetToken(t: string): boolean {
 /**
  * 内网 / 环回 / 链路本地(含云 metadata 169.254.169.254)/ *.internal —— 抓取即敏感,一律升级:
  * SSRF 打云 metadata 会把实例凭证读进模型上下文,localhost/内网服务数据同理。公网 host 才当"命令行浏览器"放行。
+ *
+ * **已知限制(静态不可闭合):只按 URL 里的字面 host/IP 判定,不做 DNS 解析。** 攻击者控制的域名或
+ * DNS 重绑定(public.example → 169.254.169.254)静态无法识别 —— 解析要真发 DNS(非确定、侧信道、
+ * 且这正是 fetch 本身要做的事)。这类残口(与符号链接、-L 重定向同源)应由网络出口过滤(禁 link-local /
+ * RFC1918 出站)在网络层堵,不在命令字符串审查层。前提也需模型去抓一个攻击者控制的域名。
  */
 function isInternalFetchTarget(t: string): boolean {
   const host = t
@@ -316,10 +326,14 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
 
 function classifyGit(tokens: string[], segment: string): ReviewVerdict {
   // 危险 git(强推/硬重置/clean -f)已在 DANGEROUS_PATTERNS 命中,这里分只读 vs 写。
-  // git 的 -o/--output(diff/format-patch/show 等)会写文件,没有 shell `>` 供重定向检查捕获 → 升级,
-  // 即便子命令本身"只读"。
-  if (/(?:^|\s)(?:-o\b|-o\S|--output\b)/.test(segment)) return 'prompt';
+  // -o/--output(diff/format-patch/show 写文件,无 shell `>` 可捕获)、--ext-diff(跑外部 diff 驱动=RCE)
+  // → 升级,即便子命令"只读"。
+  if (/(?:^|\s)(?:-o\b|-o\S|--output\b|--ext-diff\b)/.test(segment)) return 'prompt';
   const rest = tokens.slice(1); // 'git' 之后
+  // 子命令**之前**的内联 config(git -c core.pager=… / -c diff.external=… / --config-env)可执行任意程序(RCE)→ 升级。
+  const subIdx = rest.findIndex((t) => !t.startsWith('-'));
+  const preSub = subIdx >= 0 ? rest.slice(0, subIdx) : rest;
+  if (preSub.some((t) => t === '-c' || t === '--config-env')) return 'prompt';
   const sub = rest.find((t) => !t.startsWith('-'));
   if (!sub || !SAFE_GIT_SUBCOMMANDS.has(sub)) {
     // `git config --get/--list` 只读;其它 git(commit/checkout/merge/fetch/config 写…)升级。
@@ -349,8 +363,9 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   // 剥壳后为空段:裸 `env`/`printenv`(dump 环境变量,含凭证)、或纯包裹器无内层命令 —— fail-closed 升级。
   if (tokens.length === 0) return 'prompt';
   const bin = baseName(tokens[0]);
-  // 去引号标记:防 -ex'ec' / -'o' 这类把 flag/命令拆开的引号拼接绕过(flag/命令检测在此串上跑)。
-  const deQuoted = segment.replace(/['"]/g, '');
+  // 去引号标记 + 去反斜杠转义:防 -ex'ec' / -ex\ec / -'o' 这类把 flag/命令拆开的拼接绕过(bash 会把它们
+  // 还原成 -exec 等;flag/命令检测在此串上跑)。
+  const deQuoted = segment.replace(/['"\\]/g, '');
   // 去引号内容:判重定向时引号内的 `>` 是数据不是重定向(如 git log --format='%h>%s')。
   const redirectScan = segment.replace(/'[^']*'|"[^"]*"/g, '');
   // 输出重定向(写文件)/ 命令替换(执行任意内容):任何命令带它都不能算只读放行,统一升级。
@@ -370,8 +385,8 @@ function classifyShellSegment(segment: string): ReviewVerdict {
  */
 export function classifyShellCommand(command: string, _workspaceRoots: string[]): ReviewVerdict {
   if (typeof command !== 'string' || command.trim().length === 0) return 'prompt';
-  // 去引号标记后再匹配危险模式:防 su'do' / rm -r'f' / cat ~/.ss'h'/id_rsa 这类引号拼接绕过关键词。
-  const deQuotedCommand = command.replace(/['"]/g, '');
+  // 去引号标记 + 去反斜杠转义后再匹配危险模式:防 su'do' / su\do / rm -r'f' / cat ~/.ss\h/id_rsa 绕过关键词。
+  const deQuotedCommand = command.replace(/['"\\]/g, '');
   for (const re of DANGEROUS_PATTERNS) {
     if (re.test(deQuotedCommand)) return 'prompt-each-time';
   }
