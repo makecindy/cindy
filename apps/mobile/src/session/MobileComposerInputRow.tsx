@@ -294,7 +294,7 @@ export function MobileComposerInputRow({
             styles.inputFrame,
             // 收起态左侧的 34pt + 按钮会把主行撑高到控件高度；
             // 单行输入自身只有 28pt，需在主行内居中，避免 placeholder / 文本贴到顶部。
-            !cardLayout && !multilineShape && styles.inputFrameSingleLine,
+            !cardLayout && !multilineShape && inputFrameMinHeight == null && styles.inputFrameSingleLine,
             inputFrameMinHeight != null && { minHeight: inputFrameMinHeight },
             resolvedInputFrameHeight != null && { height: resolvedInputFrameHeight },
           ]}
