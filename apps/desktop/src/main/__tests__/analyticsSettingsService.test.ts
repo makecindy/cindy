@@ -13,10 +13,23 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+/** 广播到 renderer 的 payload 序列 —— 本地模式的 opt-out 必须真的被重播出去。 */
+const broadcasts: Array<Record<string, unknown>> = [];
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/analytics-service-test' },
   ipcMain: { handle: vi.fn() },
-  BrowserWindow: { getAllWindows: () => [] },
+  BrowserWindow: {
+    getAllWindows: () => [
+      {
+        isDestroyed: () => false,
+        webContents: {
+          send: (_channel: string, payload: Record<string, unknown>) => {
+            broadcasts.push(payload);
+          },
+        },
+      },
+    ],
+  },
 }));
 vi.mock('../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} }),
@@ -27,10 +40,22 @@ vi.mock('../security/trustedAppRenderer.js', () => ({
 }));
 
 const isLocalMode = vi.fn(() => false);
+/**
+ * 「本机确定没有持久登录凭证」。默认 true(= 干净新装/已清凭证),需要模拟
+ * 「有账号但本次冷启动瞬态失败仍保留 token」的机器时置 false。
+ */
+const hasNoPersistedAuthCredentials = vi.fn(() => true);
+let authStateListener: (() => void) | null = null;
 vi.mock('../authManager', () => ({
   isLocalMode: () => isLocalMode(),
+  hasNoPersistedAuthCredentials: () => hasNoPersistedAuthCredentials(),
   getAuthState: () => ({ isAuthenticated: false }),
-  onAuthStateChange: () => () => {},
+  onAuthStateChange: (listener: () => void) => {
+    authStateListener = listener;
+    return () => {
+      authStateListener = null;
+    };
+  },
 }));
 
 /**
@@ -54,18 +79,21 @@ function migrateIntoFakeSettings(signedIn: boolean): boolean {
   return true;
 }
 const migrateExistingLoginAsConsented = vi.fn(migrateIntoFakeSettings);
-const closeLegacyConsentMigration = vi.fn(() => {
+function closeIntoFakeSettings(): boolean {
   if (fakeSettings.legacyConsentMigrationClosed) return false;
   fakeSettings.legacyConsentMigrationClosed = true;
   return true;
-});
+}
+const closeLegacyConsentMigration = vi.fn(closeIntoFakeSettings);
 vi.mock('../analytics-settings-store', () => ({
   migrateExistingLoginAsConsented: (signedIn: boolean) => migrateExistingLoginAsConsented(signedIn),
   closeLegacyConsentMigration: () => closeLegacyConsentMigration(),
   acceptPrivacyConsent: vi.fn(),
   setAnalyticsEnabled: vi.fn(),
   clearAnalyticsEnabledOverride: vi.fn(),
-  isAnalyticsAllowed: () => false,
+  // store 侧的真实语义(构建闸在真实实现里另算,这里按已同意 && 开关开启放行),
+  // 这样「本地模式闸」是否生效可以被独立断言。
+  isAnalyticsAllowed: () => fakeSettings.privacyConsentAccepted && fakeSettings.analyticsEnabled,
   isAnalyticsEnabledCustomized: () => false,
   readAnalyticsSettings: () => ({ ...fakeSettings }),
 }));
@@ -77,12 +105,18 @@ async function importService() {
 
 beforeEach(() => {
   isLocalMode.mockReturnValue(false);
+  hasNoPersistedAuthCredentials.mockReturnValue(true);
+  authStateListener = null;
   fakeSettings.privacyConsentAccepted = false;
   fakeSettings.analyticsEnabled = true;
   fakeSettings.legacyConsentMigrationClosed = false;
   migrateExistingLoginAsConsented.mockClear();
+  // mockClear 只清调用记录、**不还原 implementation**:用例里注入的 throw 替身若不在
+  // 这里恢复,会泄漏到后续用例,把「不该关窗 / 不该迁移」的断言变成假绿(异常被吞掉,
+  // 看着像没执行)。两个替身都必须显式复位。
   migrateExistingLoginAsConsented.mockImplementation(migrateIntoFakeSettings);
   closeLegacyConsentMigration.mockClear();
+  closeLegacyConsentMigration.mockImplementation(closeIntoFakeSettings);
 });
 
 afterEach(() => {
@@ -192,6 +226,37 @@ describe('cold-start consent migration', () => {
     expect(() => service.noteAuthColdStartState({ isAuthenticated: false }, null)).not.toThrow();
   });
 
+  // 2026-07-28 review 追加(P2):`initialize()` 在对端区域清单不可用 / cold-start
+  // refresh 瞬态失败时会**保留 refresh token** 并以未登录放行 UI(pendingCompletion
+  // === null)。那种机器下一次冷启动就是真实的存量账号,绝不能因为这一次的「未登录」
+  // 被永久关窗 —— 否则存量用户永远拿不到本该有的同意迁移。
+  it('keeps the window open when a signed-out cold start still holds persisted credentials', async () => {
+    hasNoPersistedAuthCredentials.mockReturnValue(false);
+    const transient = await importService();
+
+    transient.noteAuthColdStartState({ isAuthenticated: false }, null);
+
+    expect(closeLegacyConsentMigration).not.toHaveBeenCalled();
+    expect(fakeSettings.legacyConsentMigrationClosed).toBe(false);
+
+    // 下一次冷启动 refresh 成功,恢复出真实的存量账号:迁移照常发生。
+    const recovered = await importService();
+    recovered.noteAuthColdStartState({ isAuthenticated: true }, null);
+    expect(fakeSettings.privacyConsentAccepted).toBe(true);
+  });
+
+  it('keeps the window open when the pending cold start settles signed-out with credentials intact', async () => {
+    hasNoPersistedAuthCredentials.mockReturnValue(false);
+    const service = await importService();
+
+    const pending = Promise.resolve({ isAuthenticated: false });
+    service.noteAuthColdStartState({ isAuthenticated: false }, pending);
+    await pending;
+    await Promise.resolve();
+
+    expect(fakeSettings.legacyConsentMigrationClosed).toBe(false);
+  });
+
   it('does not migrate a signed-out cold start', async () => {
     const service = await importService();
 
@@ -265,5 +330,106 @@ describe('cold-start consent migration', () => {
 
     service.noteAuthColdStartState({ isAuthenticated: true }, null);
     expect(migrateExistingLoginAsConsented).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 本地模式(跳过登录)期间的上报闸 —— 2026-07-28 review P1。
+ *
+ * 同意事实是本机级的:此前登录过(或被存量迁移过)的用户盘上已有
+ * privacyConsentAccepted: true。他点「跳过登录」进入本地模式后,若 allowed 仍为真,
+ * TapDB 会继续发设备级事件(authManager 只清 accountId,不 opt-out),违反
+ * 2026-07-27「跳过登录 = 不上报数据」的拍板。闸是运行时的:不写盘、不改用户真相。
+ */
+describe('local-mode reporting gate', () => {
+  it('refuses to report while in local mode even when consent is on disk', async () => {
+    fakeSettings.privacyConsentAccepted = true;
+    fakeSettings.analyticsEnabled = true;
+    const service = await importService();
+
+    expect(service.analyticsSettingsPayload().allowed).toBe(true);
+
+    isLocalMode.mockReturnValue(true);
+    const inLocalMode = service.analyticsSettingsPayload();
+    expect(inLocalMode.allowed).toBe(false);
+    // 闸不得篡改用户的持久真相(退出本地模式后要原样恢复)。
+    expect(inLocalMode.privacyConsentAccepted).toBe(true);
+    expect(inLocalMode.analyticsEnabled).toBe(true);
+    expect(fakeSettings.privacyConsentAccepted).toBe(true);
+    expect(fakeSettings.analyticsEnabled).toBe(true);
+  });
+
+  it('lets reporting resume once local mode is left', async () => {
+    fakeSettings.privacyConsentAccepted = true;
+    isLocalMode.mockReturnValue(true);
+    const service = await importService();
+    expect(service.analyticsSettingsPayload().allowed).toBe(false);
+
+    isLocalMode.mockReturnValue(false);
+    expect(service.analyticsSettingsPayload().allowed).toBe(true);
+  });
+
+  // gate 只有一半:renderer 的 TapDB 已 init 时不会自己 opt-out,必须收到重播。
+  it('rebroadcasts the verdict on auth state change so an initialized SDK opts out', async () => {
+    fakeSettings.privacyConsentAccepted = true;
+    const service = await importService();
+    service.initAnalyticsSettingsService();
+    broadcasts.length = 0;
+
+    isLocalMode.mockReturnValue(true);
+    authStateListener?.();
+
+    expect(broadcasts.at(-1)).toMatchObject({ allowed: false, privacyConsentAccepted: true });
+  });
+
+  it('unsubscribes from auth state on quit teardown', async () => {
+    const service = await importService();
+    service.initAnalyticsSettingsService();
+    expect(authStateListener).not.toBeNull();
+
+    service.__testing.resetForTests();
+    expect(authStateListener).toBeNull();
+  });
+
+  // 2026-07-28 review 追加:用户主动点「跳过登录」是无歧义事件,封窗不得依赖凭证探测。
+  // 密钥链恰好不可用时探测会返回「可能还有凭证」,若那时不封窗,之后的免协议 SSO 就会
+  // 被静默迁移成已同意 —— 正是本轮要堵的洞。
+  it('seals the migration window on entering local mode even when the credential probe is inconclusive', async () => {
+    hasNoPersistedAuthCredentials.mockReturnValue(false);
+    const service = await importService();
+    service.initAnalyticsSettingsService();
+
+    isLocalMode.mockReturnValue(true);
+    authStateListener?.();
+
+    expect(fakeSettings.legacyConsentMigrationClosed).toBe(true);
+
+    // 之后从本地模式走免协议 SSO,下一次冷启动恢复出真实账号:不得写入同意。
+    isLocalMode.mockReturnValue(false);
+    const restarted = await importService();
+    restarted.noteAuthColdStartState({ isAuthenticated: true }, null);
+    expect(fakeSettings.privacyConsentAccepted).toBe(false);
+  });
+
+  it('does not seal the window on ordinary sign-in state changes', async () => {
+    const service = await importService();
+    service.initAnalyticsSettingsService();
+
+    isLocalMode.mockReturnValue(false);
+    authStateListener?.();
+
+    expect(closeLegacyConsentMigration).not.toHaveBeenCalled();
+    expect(fakeSettings.legacyConsentMigrationClosed).toBe(false);
+  });
+
+  it('never lets a failing seal break the auth state change path', async () => {
+    closeLegacyConsentMigration.mockImplementation(() => {
+      throw new Error('EROFS: read-only file system');
+    });
+    const service = await importService();
+    service.initAnalyticsSettingsService();
+
+    isLocalMode.mockReturnValue(true);
+    expect(() => authStateListener?.()).not.toThrow();
   });
 });

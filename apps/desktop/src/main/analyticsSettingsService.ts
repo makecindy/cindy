@@ -39,6 +39,8 @@ const log = createLogger('analytics-settings');
 let ipcRegistered = false;
 /** 存量迁移只评估一次;评估过就不再看任何后续登录。 */
 let migrationEvaluated = false;
+/** auth 状态订阅的退订句柄(进出本地模式要重播上报结论,见 initAnalyticsSettingsService)。 */
+let unsubscribeAuthState: (() => void) | null = null;
 
 /**
  * 落盘失败翻译成统一 IPC 错误协议。
@@ -60,13 +62,32 @@ function writeOrThrowIpcError(write: () => void, context: string): void {
   }
 }
 
+/**
+ * 本地模式(跳过登录)期间一律不放行上报 —— 运行时闸,和构建闸(isReportingBuild)同款:
+ * **不写盘、不碰 privacyConsentAccepted / analyticsEnabled 这两个用户持久真相**。
+ *
+ * 为什么需要(2026-07-28 review P1):「跳过登录」= 不创建账号、不上报数据(2026-07-27
+ * 拍板),但同意事实是**本机级**的 —— 一个此前登录过(或被存量迁移过)的用户,盘上已经
+ * 有 privacyConsentAccepted: true;他退出登录后点「跳过登录」进入本地模式时,
+ * `isAnalyticsAllowed()` 仍然恒真,TapDB 会继续发设备级事件(authManager 只在身份变化时
+ * 清 accountId,不 opt-out)。那正是本条产品拍板明确不要的行为。
+ *
+ * 放在这里而不是 store:store 是纯持久层(不依赖 authManager),而 `allowed` 是给
+ * renderer 的**运行时结论**;renderer 的 tapdbClient 完全由这个字段驱动
+ * (allowed=false → optOutTracking),所以在 payload 处加闸即可全链路生效。
+ * 退出本地模式后闸自动松开,用户原有的同意与开关一字未动。
+ */
+function isReportingAllowedNow(): boolean {
+  return isAnalyticsAllowed() && !authManager.isLocalMode();
+}
+
 export function analyticsSettingsPayload(): AnalyticsSettingsPayload {
   const value = readAnalyticsSettings();
   return {
     privacyConsentAccepted: value.privacyConsentAccepted,
     analyticsEnabled: value.analyticsEnabled,
     analyticsEnabledCustomized: isAnalyticsEnabledCustomized(),
-    allowed: isAnalyticsAllowed(),
+    allowed: isReportingAllowedNow(),
   };
 }
 
@@ -130,15 +151,43 @@ function migrateOrLog(): void {
  * 零记录」,与真正的存量账号无法区分,被静默迁移成已同意 —— 未经同意打开采集。纯 SSO
  * 新装用户同理。落盘之后,本机就再也不满足「改版前存量账号」的定义。
  *
- * 只在结论**明确**时调用:冷启动结果未决 / 异常时不写,免得把真存量用户的窗口误关
- * (弱网存量用户凭空少统计)。同样是 best-effort,写不进去绝不能把登录拖下水。
+ * 全程 best-effort:写不进去绝不能把登录拖下水(下次冷启动 / 下次进本地模式还有机会)。
  */
-function closeMigrationWindowOrLog(): void {
+function sealMigrationWindowOrLog(): void {
   try {
     closeLegacyConsentMigration();
   } catch (err) {
     log.warn('closing legacy consent migration window failed (non-fatal)', err);
   }
+}
+
+/**
+ * 冷启动判出「未登录」时的关窗 —— 必须先过一道**凭证闸**(2026-07-28 review 追加)。
+ *
+ * 「冷启动未登录」是有歧义的:`authManager.initialize()` 在对端区域清单不可用、或
+ * cold-start refresh 瞬态失败时会**保留 refresh token** 并以未登录放行 UI
+ * (`pendingCompletion === null`)。那种机器下一次冷启动就会恢复成真实的存量账号,
+ * 若在这里关了窗,它永远拿不到本该有的同意迁移。所以只有
+ * `hasNoPersistedAuthCredentials()` 为真(只认 ENOENT 为真缺席,密钥链抖动 / EPERM
+ * 一律按「可能还有凭证」)才落盘。
+ *
+ * 注意这道闸**只用于冷启动这条歧义路径**:用户主动点「跳过登录」时没有任何歧义,
+ * 走的是 `sealMigrationWindowOrLog()`(见 initAnalyticsSettingsService 的 auth 订阅)。
+ * 否则密钥链恰好不可用的那一刻,跳过登录用户会因为「探不出凭证已删」而不关窗,给
+ * 之后的免协议 SSO 留下被静默迁移的缺口 —— 那正是本轮要堵的洞。
+ */
+function closeMigrationWindowOrLog(): void {
+  try {
+    if (!authManager.hasNoPersistedAuthCredentials()) {
+      log.info('legacy consent migration window kept open — persisted credentials still present');
+      return;
+    }
+  } catch (err) {
+    // 探测本身失败 = 结论不明确,保守保留窗口(不误伤存量用户)。
+    log.warn('persisted credential probe failed; keeping migration window open', err);
+    return;
+  }
+  sealMigrationWindowOrLog();
 }
 
 export function noteAuthColdStartState(
@@ -191,6 +240,20 @@ export function initAnalyticsSettingsService(): void {
   }
   ipcRegistered = true;
 
+  // 进出本地模式要**即时**改变上报结论(见 isReportingAllowedNow):renderer 的
+  // tapdbClient 只在收到广播或首次读取时更新,已经 init 过的 SDK 不会自己 opt-out。
+  // 订阅顺带覆盖登录 / 登出(同意事实不变,结论也不变,applyReportingAllowed 自带
+  // 同值早返回,不会造成无用功);notifyAuthListeners 只在登录 / 登出 / 身份或 realm
+  // 切换时触发,周期性 refresh 不触发,无广播风暴。
+  unsubscribeAuthState = authManager.onAuthStateChange(() => {
+    // 进入本地模式 = 用户主动点了「跳过登录」,这一刻**毫无歧义**:本机不是「改版前
+    // 就已登录的存量账号」。所以在这里直接封窗,不走冷启动那条路径的凭证探测闸——
+    // 那道闸在密钥链暂不可用时会保守地拒绝关窗,而此处的确定性不依赖任何探测。
+    // 幂等(closeLegacyConsentMigration 自带 no-op 早返回),不写用户偏好。
+    if (authManager.isLocalMode()) sealMigrationWindowOrLog();
+    broadcastSettingsChange();
+  });
+
   ipcMain.handle('analytics:settings-get', (event) => {
     assertTrustedAppRendererEvent(event);
     return analyticsSettingsPayload();
@@ -226,6 +289,8 @@ export function initAnalyticsSettingsService(): void {
 
   onQuit('analytics-settings', () => {
     ipcRegistered = false;
+    unsubscribeAuthState?.();
+    unsubscribeAuthState = null;
   });
 }
 
@@ -233,6 +298,8 @@ export const __testing = {
   resetForTests(): void {
     ipcRegistered = false;
     migrationEvaluated = false;
+    unsubscribeAuthState?.();
+    unsubscribeAuthState = null;
   },
   broadcastSettingsChange,
 };

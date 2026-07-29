@@ -1448,6 +1448,29 @@ export function isLocalMode(): boolean {
   return getActiveAppSession().mode === 'local';
 }
 
+/**
+ * 本机是否**确定**没有任何可用于恢复登录的持久凭证(只读判定:不解密、不轮换、不写盘)。
+ *
+ * 唯一消费者是 analytics 的存量同意迁移关窗判定(见
+ * analyticsSettingsService.noteAuthColdStartState)。它必须区分两种「冷启动未登录」:
+ *   - 真的没有账号(新装 / 跳过登录已清凭证)→ 本机不是存量账号,可以永久关窗;
+ *   - 有账号但本次 initialize() **刻意保留了 token**:对端区域清单暂不可用、或
+ *     cold-start refresh 瞬态失败(见本文件那两处 `keeping ... token, starting
+ *     logged out`)。这类用户下一次冷启动就会恢复成真实的存量账号,一旦被关窗就
+ *     永远拿不到本该有的同意迁移。
+ *
+ * 判定复用 `isPersistedSecretAbsent`(只认 ENOENT 为真缺席,密钥链不可用 / EPERM /
+ * 解密失败一律按瞬时故障),所以任何不确定都会让本函数返回 false = 「可能还有凭证」
+ * → 调用方不关窗。取舍方向是刻意的:宁可让一台机器多留一次迁移机会,也不要把真存量
+ * 用户永久误判(未同意侧另有 probe / override / 协议门三道闸兜底)。
+ */
+export function hasNoPersistedAuthCredentials(): boolean {
+  return (
+    isPersistedSecretAbsent(AUTH_SESSION_KEY) &&
+    isPersistedSecretAbsent(LEGACY_RESOURCE_REFRESH_TOKEN_KEY)
+  );
+}
+
 /** Enter the account-free local session after the host has torn down old runtime state. */
 export function enterLocalMode(): AuthState {
   browserAuthorizationSlot.cancelActive();
