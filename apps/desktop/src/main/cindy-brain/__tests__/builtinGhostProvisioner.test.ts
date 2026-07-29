@@ -14,6 +14,23 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+async function writeBasicGhost(dir: string, id: string): Promise<void> {
+  await fs.promises.mkdir(dir, { recursive: true });
+  await fs.promises.writeFile(path.join(dir, 'main.js'), '// brain');
+  await fs.promises.writeFile(
+    path.join(dir, 'ghost.json'),
+    JSON.stringify({
+      schemaVersion: 2,
+      id,
+      name: id,
+      version: '1.0.0',
+      entry: 'main.js',
+      slots: ['tool'],
+      tools: [{ name: 'run', description: 'Run' }],
+    }),
+  );
+}
+
 afterEach(async () => {
   await Promise.all(
     tempDirs.splice(0).map((dir) => fs.promises.rm(dir, { recursive: true, force: true })),
@@ -63,5 +80,34 @@ describe('builtinGhostProvisioner locale validation', () => {
       'builtin seed skipped: invalid locale resources',
       expect.objectContaining({ reason: expect.stringContaining('locale.tools 含未知工具') }),
     );
+  });
+});
+
+describe('builtinGhostProvisioner removal boundary', () => {
+  it('把孤儿 seed 包删除委托给宿主提供的事务边界', async () => {
+    const root = await makeTempDir();
+    const seedRoot = path.join(root, 'seeds');
+    const repoRoot = path.join(root, 'installed');
+    await writeBasicGhost(path.join(seedRoot, 'kept-seed'), 'kept-seed');
+    await writeBasicGhost(path.join(repoRoot, 'removed-seed'), 'removed-seed');
+    await fs.promises.writeFile(
+      path.join(repoRoot, '.builtin-provisioning.json'),
+      JSON.stringify({ removed: [], seeded: ['removed-seed'] }),
+    );
+    const removeInstalled = vi.fn(async (_id: string, removePackage: () => Promise<void>) => {
+      await removePackage();
+    });
+
+    const outcome = await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      removeInstalled,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(removeInstalled).toHaveBeenCalledOnce();
+    expect(removeInstalled).toHaveBeenCalledWith('removed-seed', expect.any(Function));
+    expect(outcome.removed).toContain('removed-seed');
+    expect(fs.existsSync(path.join(repoRoot, 'removed-seed'))).toBe(false);
   });
 });

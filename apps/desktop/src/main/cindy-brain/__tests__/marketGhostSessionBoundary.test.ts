@@ -145,4 +145,19 @@ describe('market Ghost session boundary', () => {
       uninstallBody.indexOf('await manager.uninstall('),
     );
   });
+
+  it('routes seeded plugin removal through the durable appearance cleanup boundary', () => {
+    const reconcileStart = source.indexOf('async function reconcileBuiltinGhosts(');
+    const reconcileEnd = source.indexOf(
+      '\n}\n\n/** Cindy Brain 启动',
+      reconcileStart,
+    );
+    const reconcileBody = source.slice(reconcileStart, reconcileEnd);
+    expect(reconcileBody).toContain('removeInstalled: (id, removePackage)');
+    expect(reconcileBody).toContain('withGhostAppearanceMutation(async () =>');
+    expect(reconcileBody).toContain('await prepareGhostAppearanceRemoval(id)');
+    expect(reconcileBody).toContain('await removePackage()');
+    expect(reconcileBody).toContain('await cancelGhostAppearanceRemoval(id)');
+    expect(reconcileBody).toContain('await recoverGhostAppearanceTransaction()');
+  });
 });

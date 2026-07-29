@@ -731,12 +731,31 @@ async function reconcileBuiltinGhosts(reason: string): Promise<void> {
       seedRootDirs: builtinSeedRootDirs(),
       repoRootDir: brainRootDir(),
       identity: currentProvisionIdentity(),
-      // 回收先熄灯沙箱再删目录(Windows 文件锁:运行中的电子脑可能占着句柄)。
-      beforeRemove: (id) => {
-        getGhostRuntime().stop(id);
-        getGhostNodeRuntimeBroker().stop(id);
-        getGhostAgentSlot().clearGhost(id);
-      },
+      // 回收先熄灯，再在跨入口 appearance 队列内持久化清理意图并删包。
+      // 包删除失败则撤销 marker；删除成功后的物理引用清理失败保留 marker，
+      // 后续 mutation / 安装继续恢复，不能让同 id 新包继承旧媒体权限。
+      removeInstalled: (id, removePackage) =>
+        withGhostAppearanceMutation(async () => {
+          getGhostRuntime().stop(id);
+          getGhostNodeRuntimeBroker().stop(id);
+          getGhostAgentSlot().clearGhost(id);
+          const prepared = await prepareGhostAppearanceRemoval(id);
+          try {
+            await removePackage();
+          } catch (error) {
+            await cancelGhostAppearanceRemoval(id);
+            throw error;
+          }
+          try {
+            await recoverGhostAppearanceTransaction();
+          } catch (error) {
+            log.warn('seeded ghost appearance cleanup deferred', {
+              id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          if (prepared.activeRemoved) broadcastGhostAppearance(null);
+        }),
       onApplyStart: () => {
         tipShown = true;
         broadcastGhostProvisioning(true);
