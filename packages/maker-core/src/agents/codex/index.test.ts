@@ -4840,6 +4840,102 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('does not count the SDK userMessage echo as produced output', async () => {
+      // app-server 会在 turn 开头把用户输入 echo 成一个 userMessage item(translator 明确
+      // 不消费它)。把它算进产出, 产出守卫会在**正常事件序**下立刻生效 —— 自动重投整体
+      // 失效(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-usermessage-echo',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.itemCompleted) throw new Error('expected itemCompleted handler');
+        // 只有用户输入的回声, 模型一个字都没出。
+        handlers.itemCompleted({
+          turnId: 'turn-1',
+          item: { id: 'item-echo', type: 'userMessage', text: 'hello' },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+
+        // 重投必须照常发生。
+        expect(turnStartCount(host)).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('waits for the initial turn/start to settle before firing the retry', async () => {
+      // 首档退避只有 1.5-2.5s。初始 RPC 慢一点, 计时器就会在它还在飞时抢跑出第二个
+      // turn/start —— 两个 start 同时在飞时谁的响应先到就会被认领成那条空 id 失败的
+      // turn, 把合法的那个落墓碑, 真正已死的那个随后被激活(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-serialize-initial-start',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+
+        // 远超首档退避也不得抢跑: 初始 RPC 还在飞。
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(1);
+
+        // 初始响应回来后才补排。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sending;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(turnStarts).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not replay a retried turn that already produced output before its response settled', async () => {
       // 重投出来的 turn 完全可能在自己的 turn/start 响应 settle 之前就发出 item ——
       // 那时 state.inFlight 仍为 true, 若延后分支先于产出守卫执行, 这个已有产出的

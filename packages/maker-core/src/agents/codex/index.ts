@@ -2216,6 +2216,16 @@ export class CodexAgent extends BaseAgent {
       /** 摘掉本轮 send 信号的 abort 监听（状态被替换 / 收口时必须调）。 */
       disposeSignalWatch: (() => void) | null;
     } | null = null;
+    /**
+     * 本轮 send 的**初始** turn/start RPC 是否在途。
+     *
+     * 过载重投的调度必须与它串行: 空 id 的容量拒绝可能落在初始 RPC 还没回包的窗口
+     * (见 targetsIdLessPendingStart), 而首档退避只有 1.5-2.5s —— 初始 RPC 慢一点,
+     * 计时器就会在它还在飞时抢跑出第二个 turn/start。两个 start 同时在飞时谁的响应先
+     * 到就会被 adoptUnidentifiedDeadTurn 错认成那条空 id 失败的 turn, 把合法的那个落
+     * 墓碑, 而真正已死的那个随后被正常激活(review #844 codex P1)。
+     */
+    let initialTurnStartInFlight = false;
     let closed = false;
     let subscriptionInvalidatedByTransport = false;
     let subscription: ThreadSubscription | null = null;
@@ -4423,6 +4433,29 @@ export class CodexAgent extends BaseAgent {
       flushDeferredTerminalTurnCompletionsIfIdle();
     }
 
+    /**
+     * 该 item 是否代表"模型真的干了活"(有输出或有工具副作用)。
+     *
+     * app-server 会在 turn 开头把用户输入原样 echo 成一个 userMessage item ——
+     * translator 明确不消费它(见 translateItemNotification 里"故意不消费"那份清单)。
+     * 把这种 echo 算进产出, 过载重投的产出守卫会在**正常事件序**下就立刻生效, 自动
+     * 重投等于整体失效(review #844 codex P1)。hookPrompt 与 review 模式开关同理: 既
+     * 不是模型输出也没有工具副作用。
+     *
+     * 未知 / 缺失 type 一律按"有产出"处理: 宁可少重投一次, 不可把可能有副作用的
+     * turn 整体重放。
+     */
+    const ITEM_TYPES_WITHOUT_MODEL_WORK = new Set([
+      'userMessage',
+      'hookPrompt',
+      'enteredReviewMode',
+      'exitedReviewMode',
+    ]);
+    const itemRepresentsModelWork = (item: { type?: unknown } | null | undefined): boolean => {
+      const type = typeof item?.type === 'string' ? item.type : null;
+      return type === null || !ITEM_TYPES_WITHOUT_MODEL_WORK.has(type);
+    };
+
     /** 取消挂起的过载重投（会话关闭 / 用户打断 / 新 turn 覆盖时调用）。 */
     const cancelOverloadRetry = (reason: string): void => {
       const state = overloadRetry;
@@ -4573,7 +4606,7 @@ export class CodexAgent extends BaseAgent {
       // 清计时器、取消不了在途 RPC，两个请求都可能被 server 接受，同一条用户输入
       // 的工具副作用就会执行两遍（review #844 codex P1）。在途那次自己会走完
       // 成功/失败路径，届时若仍缺容量会重新进入本函数。
-      if (state.inFlight) {
+      if (state.inFlight || initialTurnStartInFlight) {
         // 关键：**不能返回 null**。null 会让 translator 把这条错误报成终态，把逻辑
         // turn 判死（review #844 codex P1），而在途那次 RPC 随后还可能成功并激活
         // turn —— UI 已收口。这里返回当前进度：错误照样透成非终止状态（UI 继续显示
@@ -4601,7 +4634,12 @@ export class CodexAgent extends BaseAgent {
           threadId,
           deadTurnId,
         });
-        return { attempt: state.attempt, maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS };
+        // 初始 RPC 在飞时 attempt 仍是 0（一次重投都还没发生），报 0/4 既难看也不实。
+        // 延后的这条失败补排时会消耗第 1 档，所以下限取 1。
+        return {
+          attempt: Math.max(1, state.attempt),
+          maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS,
+        };
       }
       if (state.attempt >= OVERLOAD_RETRY_MAX_ATTEMPTS) {
         log.warn('codex overload retry budget exhausted — surfacing terminal error', {
@@ -4670,6 +4708,46 @@ export class CodexAgent extends BaseAgent {
         });
       }, delayMs);
       return { attempt, maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS };
+    };
+
+    /**
+     * 在途的 turn/start settle 后, 补排那条被延后的容量失败。
+     *
+     * 两条 start 路径共用: 重投自己的 RPC, 以及初始投递的 RPC(空 id 容量拒绝会落在它
+     * 还在飞的窗口里)。只有新 turn 确实没能激活时才补排（它被落了墓碑、响应因此拒绝
+     * 激活）; turn 活了就说明那条错误针对的是别的 turn, 不该重排。预算耗尽时必须自己
+     * 推终态, 否则逻辑 send 永久悬空。
+     *
+     * rpcSettledOk=false（RPC reject / 本地取消边界）时不补排: 那条路各自有终态收口,
+     * 在这里再排一个计时器会与它并存 —— UI 已收口, 原消息却仍被静默重投。
+     */
+    const rescheduleDeferredCapacityFailure = (
+      state: NonNullable<typeof overloadRetry>,
+      rpcSettledOk: boolean,
+    ): void => {
+      const deferred = state.deferredCapacityFailure;
+      state.deferredCapacityFailure = null;
+      if (!deferred || !rpcSettledOk) return;
+      if (closed || state.isCancelled() || overloadRetry !== state) return;
+      if (currentTurnId !== null || isTurnInFlight) return;
+      if (scheduleOverloadRetry(deferred.deadTurnId)) return;
+      log.warn('codex deferred capacity failure exhausted the retry budget', {
+        attempt: state.attempt,
+        threadId,
+      });
+      eventQueue.push({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity. Please try a different model.',
+          isTerminal: true,
+        },
+        source: 'codex',
+      });
+      eventQueue.push({
+        type: 'status',
+        data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+        source: 'codex',
+      });
     };
 
     const GUARDIAN_REVIEW_FAILURE_PREFIX = 'Automatic approval review failed:';
@@ -4915,8 +4993,9 @@ export class CodexAgent extends BaseAgent {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemStarted?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
-        // 模型已开始产出 → 本 turn 不再适合被过载重投整体重放。
-        currentTurnProducedOutput = true;
+        // 模型已开始产出 → 本 turn 不再适合被过载重投整体重放。SDK echo 类 item
+        // (userMessage 等)不算产出, 见 itemRepresentsModelWork。
+        if (itemRepresentsModelWork(params.item)) currentTurnProducedOutput = true;
         noteActiveToolContext(params.item, params.turnId);
         pushItemStatus(params.item);
         translateItemNotification('started', params, eventQueue, {
@@ -4931,7 +5010,7 @@ export class CodexAgent extends BaseAgent {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
-        currentTurnProducedOutput = true;
+        if (itemRepresentsModelWork(params.item)) currentTurnProducedOutput = true;
         noteActiveToolContext(params.item, params.turnId);
         translateItemNotification('updated', params, eventQueue, {
           rt: translatorRt,
@@ -4945,7 +5024,7 @@ export class CodexAgent extends BaseAgent {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
-        currentTurnProducedOutput = true;
+        if (itemRepresentsModelWork(params.item)) currentTurnProducedOutput = true;
         noteActiveToolContext(params.item, params.turnId);
         translateItemNotification('completed', params, eventQueue, {
           rt: translatorRt,
@@ -5592,37 +5671,7 @@ export class CodexAgent extends BaseAgent {
               // 没能激活时才补排（它被落了墓碑、响应因此拒绝激活）；turn 活了就说明
               // 那条错误针对的是别的 turn，不该重排。预算耗尽时必须自己推终态，
               // 否则逻辑 send 永久悬空。
-              const deferred = state.deferredCapacityFailure;
-              state.deferredCapacityFailure = null;
-              if (
-                deferred &&
-                rpcSettledOk &&
-                !closed &&
-                !state.isCancelled() &&
-                overloadRetry === state &&
-                currentTurnId === null &&
-                !isTurnInFlight
-              ) {
-                if (!scheduleOverloadRetry(deferred.deadTurnId)) {
-                  log.warn('codex deferred capacity failure exhausted the retry budget', {
-                    attempt: state.attempt,
-                    threadId,
-                  });
-                  eventQueue.push({
-                    type: 'error',
-                    data: {
-                      message: 'Selected model is at capacity. Please try a different model.',
-                      isTerminal: true,
-                    },
-                    source: 'codex',
-                  });
-                  eventQueue.push({
-                    type: 'status',
-                    data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
-                    source: 'codex',
-                  });
-                }
-              }
+              rescheduleDeferredCapacityFailure(state, rpcSettledOk);
             }
           },
         };
@@ -5647,6 +5696,10 @@ export class CodexAgent extends BaseAgent {
           };
         }
         let finalErr: unknown = null;
+        // 初始 RPC 在飞期间到达的空 id 容量拒绝只会被"延后"(不排计时器), 由下面的
+        // finally 在响应处理完之后补排 —— 保证任一时刻只有一个 turn/start 在飞。
+        initialTurnStartInFlight = true;
+        let initialStartSettledOk = false;
         try {
           const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
             timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
@@ -5660,6 +5713,7 @@ export class CodexAgent extends BaseAgent {
             return;
           }
           handleTurnStartResp(resp);
+          initialStartSettledOk = true;
         } catch (e) {
           if (isLocalAcceptBoundaryError(e)) {
             throw e;
@@ -5740,6 +5794,7 @@ export class CodexAgent extends BaseAgent {
                 return;
               }
               handleTurnStartResp(resp);
+              initialStartSettledOk = true;
             } catch (retryErr) {
               if (isLocalAcceptBoundaryError(retryErr)) throw retryErr;
               log.error('thread/resume + retry turn/start failed', {
@@ -5755,6 +5810,12 @@ export class CodexAgent extends BaseAgent {
           isTurnStartPending = false;
           pendingTurnStartPlanMode = null;
           flushDeferredTerminalTurnCompletionsIfIdle();
+          // 初始 RPC 已 settle → 现在才允许重投计时器排上（顺序见
+          // initialTurnStartInFlight 的注释）。终失败路径 settledOk 为 false，
+          // 不补排；那条由下面的 discardOverloadRetry + terminal error 收口。
+          initialTurnStartInFlight = false;
+          const armedState = overloadRetry;
+          if (armedState) rescheduleDeferredCapacityFailure(armedState, initialStartSettledOk);
         }
         if (finalErr) {
           // 容量通知可能先于本次 turn/start 响应到达(协议允许的乱序), 那时重投
