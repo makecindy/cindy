@@ -157,7 +157,8 @@ describe('appearance preset store', () => {
     let renameCount = 0;
     vi.spyOn(fs.promises, 'rename').mockImplementation(async (...args) => {
       renameCount += 1;
-      if (renameCount === 2) throw new Error('disk full');
+      // 事务标记和预设已写入后，让活动文件提交失败；物理回滚可完成。
+      if (renameCount === 3) throw new Error('disk full');
       return rename(...args);
     });
 
@@ -183,10 +184,10 @@ describe('appearance preset store', () => {
     await saveGhostAppearancePreset(appearance('Before'), { background: HASH_A }, 'skin');
     const rename = fs.promises.rename.bind(fs.promises);
     let renameCount = 0;
-    vi.spyOn(fs.promises, 'rename').mockImplementation(async (...args) => {
+    const renameSpy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (...args) => {
       renameCount += 1;
-      // 新预设已提交后，让活动文件写入和预设库回滚写入持续失败。
-      if (renameCount === 2 || renameCount === 4) throw new Error('disk full');
+      // 事务标记和新预设已提交后，让活动文件写入及预设库物理回滚失败。
+      if (renameCount === 3 || renameCount === 5) throw new Error('disk full');
       return rename(...args);
     });
 
@@ -199,11 +200,19 @@ describe('appearance preset store', () => {
       ),
     ).rejects.toThrow('自动恢复未完成；预设可能已保存');
 
-    const afterPreset = (await listGhostAppearancePresets()).find(
-      (preset) => preset.name === 'After',
-    );
-    expect(afterPreset).toBeDefined();
-    expect(mocks.refs.get(`skin-preset:${afterPreset!.id}:background`)?.has(HASH_B)).toBe(true);
+    // 事务文件仍在时，读取侧只暴露保存前的逻辑快照。
+    expect((await listGhostAppearancePresets()).map((preset) => preset.name)).toEqual(['Before']);
+    expect((await readGhostAppearance())?.name).toBe('Before');
+    expect(fs.existsSync(path.join(mocks.root, 'appearance-transaction.v1.json'))).toBe(true);
+
+    // 磁盘恢复后，下一次 mutation 先收敛未完成事务，再执行新操作。
+    renameSpy.mockRestore();
+    await saveGhostAppearancePreset(appearance('Later'), { background: HASH_A }, 'skin');
+    expect((await listGhostAppearancePresets()).map((preset) => preset.name).sort()).toEqual([
+      'Before',
+      'Later',
+    ]);
+    expect(fs.existsSync(path.join(mocks.root, 'appearance-transaction.v1.json'))).toBe(false);
   });
 
   it('单条损坏的预设只被剔除,不清空整库', async () => {

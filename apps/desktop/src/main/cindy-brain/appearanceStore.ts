@@ -23,6 +23,7 @@ import {
 } from '../cindy-media/ledger.js';
 
 const FILE_NAME = 'appearance-skin.v1.json';
+const TRANSACTION_FILE_NAME = 'appearance-transaction.v1.json';
 /** 与 appearanceSlot 入口校验同限:isSnapshot 按它拒读,写入侧必须同规。 */
 const NAME_MAX_CHARS = 48;
 // eslint-disable-next-line no-control-regex -- 控制字符是显式拒绝目标
@@ -45,7 +46,10 @@ export class GhostAppearanceRecoveryError extends Error {
 }
 
 function serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
-  const run = mutationTail.then(operation);
+  const run = mutationTail.then(async () => {
+    await recoverIncompleteAppearanceTransaction();
+    return operation();
+  });
   mutationTail = run.then(
     () => undefined,
     () => undefined,
@@ -69,6 +73,12 @@ interface PersistedAppearancePreset {
 interface PersistedAppearancePresetLibrary {
   version: 1;
   presets: PersistedAppearancePreset[];
+}
+
+interface PersistedAppearanceTransaction {
+  version: 1;
+  previousAppearance: PersistedAppearance | null;
+  previousPresets: PersistedAppearancePresetLibrary;
 }
 
 function isSnapshot(value: unknown): value is PersistedAppearance {
@@ -120,6 +130,10 @@ function presetsFilePath(): string {
   return ownerScopedUserDataPath(PRESETS_FILE_NAME);
 }
 
+function transactionFilePath(): string {
+  return ownerScopedUserDataPath(TRANSACTION_FILE_NAME);
+}
+
 function normalizePresetName(name: string): string {
   return name.normalize('NFKC').trim().toLowerCase();
 }
@@ -151,7 +165,7 @@ function isPreset(value: unknown): value is PersistedAppearancePreset {
   );
 }
 
-async function readPresetLibrary(): Promise<PersistedAppearancePresetLibrary> {
+async function readPresetLibraryRaw(): Promise<PersistedAppearancePresetLibrary> {
   try {
     const parsed: unknown = JSON.parse(await fs.readFile(presetsFilePath(), 'utf8'));
     if (!parsed || typeof parsed !== 'object') return { version: 1, presets: [] };
@@ -170,19 +184,65 @@ async function readPresetLibrary(): Promise<PersistedAppearancePresetLibrary> {
   }
 }
 
-export async function readGhostAppearance(): Promise<GhostAppearanceSnapshot | null> {
+async function readAppearanceTransaction(): Promise<PersistedAppearanceTransaction | null> {
   try {
-    const parsed: unknown = JSON.parse(await fs.readFile(filePath(), 'utf8'));
-    return isSnapshot(parsed)
-      ? {
-          ...parsed,
-          dim: parsed.dim ?? GHOST_APPEARANCE_DEFAULT_DIM,
-          surfaceOpacity: parsed.surfaceOpacity ?? GHOST_APPEARANCE_DEFAULT_SURFACE_OPACITY,
-        }
-      : null;
+    const parsed: unknown = JSON.parse(await fs.readFile(transactionFilePath(), 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return null;
+    const transaction = parsed as Record<string, unknown>;
+    if (
+      transaction.version !== 1 ||
+      (transaction.previousAppearance !== null && !isSnapshot(transaction.previousAppearance)) ||
+      !transaction.previousPresets ||
+      typeof transaction.previousPresets !== 'object'
+    ) {
+      return null;
+    }
+    const previousPresets = transaction.previousPresets as Record<string, unknown>;
+    if (
+      previousPresets.version !== 1 ||
+      !Array.isArray(previousPresets.presets) ||
+      !previousPresets.presets.every(isPreset)
+    ) {
+      return null;
+    }
+    return transaction as unknown as PersistedAppearanceTransaction;
   } catch {
     return null;
   }
+}
+
+async function readPresetLibrary(): Promise<PersistedAppearancePresetLibrary> {
+  const transaction = await readAppearanceTransaction();
+  return transaction?.previousPresets ?? readPresetLibraryRaw();
+}
+
+function hydrateAppearance(
+  appearance: PersistedAppearance | null,
+): GhostAppearanceSnapshot | null {
+  return appearance
+    ? {
+        ...appearance,
+        dim: appearance.dim ?? GHOST_APPEARANCE_DEFAULT_DIM,
+        surfaceOpacity:
+          appearance.surfaceOpacity ?? GHOST_APPEARANCE_DEFAULT_SURFACE_OPACITY,
+      }
+    : null;
+}
+
+async function readGhostAppearanceRaw(): Promise<GhostAppearanceSnapshot | null> {
+  try {
+    const parsed: unknown = JSON.parse(await fs.readFile(filePath(), 'utf8'));
+    return isSnapshot(parsed) ? hydrateAppearance(parsed) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function readGhostAppearance(): Promise<GhostAppearanceSnapshot | null> {
+  const transaction = await readAppearanceTransaction();
+  return transaction
+    ? hydrateAppearance(transaction.previousAppearance)
+    : readGhostAppearanceRaw();
 }
 
 async function atomicWriteJson(file: string, value: unknown): Promise<void> {
@@ -287,6 +347,7 @@ async function saveGhostAppearanceUnsafe(
     dim: true,
     surfaceOpacity: true,
   },
+  deferCleanup = false,
 ): Promise<void> {
   if (ghostId && snapshot.sourceGhostId && snapshot.sourceGhostId !== ghostId) {
     throw new Error('皮肤来源与当前插件不一致');
@@ -326,7 +387,9 @@ async function saveGhostAppearanceUnsafe(
     await reconcileActiveMedia(previousHashes, previousAppearance?.sourceGhostId).catch(() => {});
     throw error;
   }
-  await reconcileActiveMedia(mediaHashes, ghostId);
+  if (!deferCleanup) {
+    await reconcileActiveMedia(mediaHashes, ghostId);
+  }
 }
 
 async function reconcileActiveMedia(
@@ -382,6 +445,7 @@ async function saveGhostAppearancePresetUnsafe(
   snapshot: GhostAppearanceSnapshot,
   mediaHashes: AppearanceMediaHashes = hashesFromSnapshot(snapshot),
   ghostId?: string,
+  deferCleanup = false,
 ): Promise<GhostAppearancePresetSummary> {
   if (ghostId && snapshot.sourceGhostId && snapshot.sourceGhostId !== ghostId) {
     throw new Error('皮肤来源与当前插件不一致');
@@ -441,12 +505,14 @@ async function saveGhostAppearancePresetUnsafe(
     ).catch(() => {});
     throw error;
   }
-  await releaseReplacedPresetMedia(preset.id, mediaHashes);
+  if (!deferCleanup) {
+    await releaseReplacedPresetMedia(preset.id, mediaHashes);
+  }
   return presetSummary(preset);
 }
 
 async function restorePresetState(before: PersistedAppearancePresetLibrary): Promise<void> {
-  const after = await readPresetLibrary();
+  const after = await readPresetLibraryRaw();
   // 先建立旧库需要的全部引用，再提交旧文件。若回滚写盘仍失败，磁盘上的
   // 新库及其引用保持可用，最多暂留一组旧引用；不能先删新引用后留下缺图预设。
   for (const previous of before.presets) {
@@ -475,6 +541,29 @@ async function restorePresetState(before: PersistedAppearancePresetLibrary): Pro
   }
 }
 
+async function recoverIncompleteAppearanceTransaction(): Promise<void> {
+  const transaction = await readAppearanceTransaction();
+  if (!transaction) return;
+
+  if (transaction.previousAppearance) {
+    await saveGhostAppearanceUnsafe(
+      hydrateAppearance(transaction.previousAppearance)!,
+      hashesFromSnapshot(transaction.previousAppearance),
+      transaction.previousAppearance.sourceGhostId,
+      { dim: true, surfaceOpacity: true },
+    );
+  } else {
+    await fs.rm(filePath(), { force: true });
+    await Promise.all(
+      (['skin-background', 'skin-brand-icon', 'skin-brand-logo'] as const).map((refKind) =>
+        removeRefs({ refKind, refId: REF_ID }),
+      ),
+    );
+  }
+  await restorePresetState(transaction.previousPresets);
+  await fs.rm(transactionFilePath(), { force: true });
+}
+
 export function saveGhostAppearancePreset(
   snapshot: GhostAppearanceSnapshot,
   mediaHashes: AppearanceMediaHashes = hashesFromSnapshot(snapshot),
@@ -492,9 +581,32 @@ export function saveGhostAppearanceWithPreset(
   return serializeMutation(async () => {
     const previousAppearance = await readGhostAppearance();
     const previousPresets = await readPresetLibrary();
+    await atomicWriteJson(transactionFilePath(), {
+      version: 1,
+      previousAppearance,
+      previousPresets,
+    } satisfies PersistedAppearanceTransaction);
     try {
-      const preset = await saveGhostAppearancePresetUnsafe(snapshot, mediaHashes, ghostId);
-      await saveGhostAppearanceUnsafe(snapshot, mediaHashes, ghostId, customized);
+      const preset = await saveGhostAppearancePresetUnsafe(
+        snapshot,
+        mediaHashes,
+        ghostId,
+        true,
+      );
+      await saveGhostAppearanceUnsafe(
+        snapshot,
+        mediaHashes,
+        ghostId,
+        customized,
+        true,
+      );
+      // 删除事务文件是逻辑提交点；在此之前读取侧始终返回事务前快照。
+      await fs.rm(transactionFilePath());
+      // 提交后的引用清理失败只会暂留额外引用，不得反向撤销已提交状态。
+      await Promise.all([
+        releaseReplacedPresetMedia(preset.id, mediaHashes),
+        reconcileActiveMedia(mediaHashes, ghostId),
+      ]).catch(() => {});
       return preset;
     } catch (error) {
       try {
@@ -514,10 +626,10 @@ export function saveGhostAppearanceWithPreset(
           );
         }
         await restorePresetState(previousPresets);
+        await fs.rm(transactionFilePath(), { force: true });
       } catch {
-        // 两个独立文件无法在持续磁盘错误下保证物理原子回滚。此时不得吞掉
-        // 恢复错误并让调用方误以为整次保存均未发生；媒体引用保持安全，
-        // 调用方收到明确提示后刷新，以磁盘上仍可读取的状态为准。
+        // 保留事务文件：读取侧继续返回事务前快照，下一次 mutation 会先重试
+        // 物理恢复。媒体引用在提交点前保留新旧并集，避免回收窗口。
         throw new GhostAppearanceRecoveryError();
       }
       throw error;
