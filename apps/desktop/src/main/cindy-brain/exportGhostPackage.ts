@@ -16,9 +16,10 @@
  *    如实报错。一致性、签名口径、竞争防护在这一步坍缩为同一件事。
  *
  * 2) 未签名包 —— 没有 statement 可锚定,退回目录归档:跳过根部主机
- *    保留文件与根部 .DS_Store(装入后残渣),symlink 不跟随;一致性用
- *    纯元数据第二遍校验(读窗口内任何增删改都被尺寸/mtime 捕获),
- *    不一致整体重读。
+ *    保留文件与根部 .DS_Store(装入后残渣),symlink 不跟随,逐文件
+ *    读字节并自算 sha256;校验遍重读重哈希逐位比对——内容级一致性,
+ *    与路径/尺寸/mtime 等元数据碰撞彻底无关。任何文件在读窗口内被
+ *    增删改都会哈希不符或条目错位,整体重读。
  *
  * 两路共用:包先在内存里打完再弹保存对话框——用户挑选位置期间插件被
  * 更新/卸载都不影响已抓内容。Electron 对话框、安装目录解析与落盘全部
@@ -165,17 +166,21 @@ function shouldSkipExportEntry(name: string, relBase: string): boolean {
 }
 
 interface TreeFile extends PackageEntry {
-  size: number;
-  mtimeMs: number;
+  sha256: string;
 }
 
 type TreeMeta = Omit<TreeFile, 'data'>;
 
+function sha256hex(data: Buffer): string {
+  return crypto.createHash('sha256').update(data).digest('hex');
+}
+
 /**
- * 递归枚举安装目录。withData=true 时先 stat 再读字节(顺序不能反:先读
- * 后 stat 会在文件两步间被改写时产出「旧字节+新元数据」,校验遍误判
- * 一致);否则只取元数据(校验遍,不重复读内容)。symlink/junction 不
- * 跟随:只归档安装目录自身的真实内容。结果按 rel 排序供逐位比对。
+ * 递归枚举安装目录,逐文件读字节并算 sha256。withData=true 时保留字节
+ * (第一遍);否则只留哈希(校验遍)。两遍都读内容而不是 stat——一致性
+ * 判定锚定在字节上,路径/尺寸/mtime 相同的并发替换也会哈希不符被捕获。
+ * symlink/junction 不跟随:只归档安装目录自身的真实内容。结果按 rel
+ * 排序供逐位比对。
  */
 async function walkTree(dir: string, withData: true): Promise<TreeFile[]>;
 async function walkTree(dir: string, withData: false): Promise<TreeMeta[]>;
@@ -191,13 +196,11 @@ async function walkTree(dir: string, withData: boolean): Promise<Array<TreeFile 
       if (entry.isDirectory()) {
         await walk(abs, rel);
       } else if (entry.isFile()) {
+        const data = await fs.promises.readFile(abs);
         if (withData) {
-          const stat = await fs.promises.stat(abs);
-          const data = await fs.promises.readFile(abs);
-          out.push({ rel, data, size: stat.size, mtimeMs: stat.mtimeMs });
+          out.push({ rel, data, sha256: sha256hex(data) });
         } else {
-          const stat = await fs.promises.stat(abs);
-          out.push({ rel, size: stat.size, mtimeMs: stat.mtimeMs });
+          out.push({ rel, sha256: sha256hex(data) });
         }
       }
     }
@@ -209,21 +212,16 @@ async function walkTree(dir: string, withData: boolean): Promise<Array<TreeFile 
 
 /**
  * 未签名包的一致性快照:更新会整体换目录、卸载会删目录,单遍逐文件读
- * 可能跨越两个文件系统状态。读完后用纯元数据第二遍校验,任何文件在读
- * 窗口内被增删改都会被尺寸/mtime 比对捕获,不一致整体重读;通过校验
- * 的包对应校验遍时刻的单一目录状态。
+ * 可能跨越两个文件系统状态。读完后第二遍重读重哈希——任何文件在读窗口
+ * 内被增删改都会哈希不符或条目错位;通过校验的包逐字节等于校验遍时刻
+ * 的单一目录状态。
  */
 async function snapshotUnsignedTree(dir: string): Promise<TreeFile[] | null> {
   const first = await walkTree(dir, true);
   const verify = await walkTree(dir, false);
   const consistent =
     first.length === verify.length &&
-    first.every(
-      (file, i) =>
-        file.rel === verify[i]!.rel &&
-        file.size === verify[i]!.size &&
-        file.mtimeMs === verify[i]!.mtimeMs,
-    );
+    first.every((file, i) => file.rel === verify[i]!.rel && file.sha256 === verify[i]!.sha256);
   return consistent ? first : null;
 }
 
@@ -233,20 +231,25 @@ async function snapshotUnsignedTree(dir: string): Promise<TreeFile[] | null> {
 
 /**
  * 快照入口:签名包走 statement 闭包,未签名包走目录归档。任一路在并发
- * 变更下拿不到一致结果就整体重试,上限 SNAPSHOT_MAX_ATTEMPTS 次;持续
- * 冲突(反复更新/卸载中)返回 null,由调用方如实报错请用户重试。
+ * 变更下拿不到一致结果(含更新/卸载途中的瞬时 IO 失败)就整体重试,
+ * 上限 SNAPSHOT_MAX_ATTEMPTS 次;持续冲突返回 null,由调用方如实报错
+ * 请用户重试。
  */
 const SNAPSHOT_MAX_ATTEMPTS = 3;
 
 async function snapshotPackage(dir: string): Promise<PackageEntry[] | null> {
   for (let attempt = 0; attempt < SNAPSHOT_MAX_ATTEMPTS; attempt++) {
-    const doc = await readSignedDoc(dir);
-    if (doc) {
-      const entries = await readSignedEntries(dir, doc);
-      if (entries) return entries;
-    } else {
-      const tree = await snapshotUnsignedTree(dir);
-      if (tree) return tree.map(({ rel, data }) => ({ rel, data }));
+    try {
+      const doc = await readSignedDoc(dir);
+      if (doc) {
+        const entries = await readSignedEntries(dir, doc);
+        if (entries) return entries;
+      } else {
+        const tree = await snapshotUnsignedTree(dir);
+        if (tree) return tree.map(({ rel, data }) => ({ rel, data }));
+      }
+    } catch {
+      // 并发更新/卸载途中的瞬时失败(目录短暂缺失、半写文件等):重试。
     }
   }
   return null;
@@ -273,12 +276,8 @@ export async function exportGhostPackage(
 
   // 一致性快照(口径见文件头):安装目录内容来自装入侧已校验的 zip,
   // 此处只做如实归档,不设内容上限(装入侧已卡过解压总量)。
-  let files: PackageEntry[] | null;
-  try {
-    files = await snapshotPackage(ghost.dir);
-  } catch {
-    return { status: 'error', code: 'read_failed' };
-  }
+  // snapshotPackage 内部已把瞬时失败纳入重试,返回 null = 持续冲突。
+  const files = await snapshotPackage(ghost.dir);
   if (!files) return { status: 'error', code: 'read_failed' };
 
   const zip = new JSZip();

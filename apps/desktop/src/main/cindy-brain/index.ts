@@ -3527,8 +3527,9 @@ export function registerGhostIpc(): void {
   // 详情页「导出 .cindy」:把已装插件的安装目录重新打成 zip 包,经系统
   // 保存对话框写到用户选定的位置。取消选择返回 { status: 'canceled' },
   // 不算错误;导出失败抛 IPC 错误(renderer 映射 toast)。
-  // 快照是一致性快照(读完后用纯元数据第二遍校验,不一致整体重读),
-  // 导出与更新/卸载并发也不会产出混合版本的坏包。
+  // 快照是一致性快照(签名包逐文件 sha256 比对 statement;未签名包
+  // 第二遍重读重哈希比对),导出与更新/卸载并发也不会产出混合版本
+  // 的坏包。
   ipcMain.handle('ghosts:export', async (event, id: unknown) => {
     assertTrustedAppRendererEvent(event);
     const win = BrowserWindow.fromWebContents(event.sender);
