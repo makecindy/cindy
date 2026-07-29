@@ -428,6 +428,8 @@ export async function ensureCodexMcpBridgeStartedForRemote(): Promise<{
           // 恢复路径同闸门 (codex-connector R21 P1):collab 全局禁用时
           // ensure 走清理而非重注入。
           isCollabEnabled: () => getPluginRegistry().isEnabled('collab'),
+          // Maker Memory 同源闸门:开着时补刀不得把 cindy_memory 剥掉。
+          isMakerMemoryEnabled: () => _maker?.makerMemory?.isEnabled() ?? false,
           detachRemoteCodexSessionsOnHost: (hostId) =>
             detachActiveRemoteCodexSessions(hostId, 'bridge-recreate-rebootstrap'),
           log: desktopMakerLogger,
@@ -691,7 +693,7 @@ export function getMaker(): Maker {
       // RemoteQuery 实现 SDK Query interface 的子集 (ClaudeCodeAgent 实际只调
       // for-await / interrupt / setModel / setPermissionMode / applyFlagSettings),
       // factory 返回时直接 `as unknown as Query` cast 即可。
-      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest }) => {
+      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest, makerMemoryEnabled }) => {
         const host = getRemoteSshPool().get(remoteHostId);
         if (host?.getStatus() !== 'ready') {
           throw new Error(`remote ssh host not ready: ${remoteHostId}`);
@@ -722,6 +724,8 @@ export function getMaker(): Maker {
               sessionId,
               workingDir: typeof startParams.cwd === 'string' ? startParams.cwd : '',
               vendorOptions,
+              // per-session Maker Memory 开关 (maker-core 归一后透传)。
+              makerMemoryEnabled,
             },
             {
               ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
@@ -974,7 +978,7 @@ export function getMaker(): Maker {
             : {}),
         };
       },
-      registerCodexMcpThreadContext: ({ threadId, sessionId, workingDir, vendorOptions }) => {
+      registerCodexMcpThreadContext: ({ threadId, sessionId, workingDir, remoteHostId, vendorOptions }) => {
         // Codex shares one app-server across sessions. Freeze the effective
         // ordinary-tool policy at thread creation so later Settings changes do
         // not mutate a runtime that is already running.
@@ -983,6 +987,8 @@ export function getMaker(): Maker {
           agentKind: 'codex',
           sessionId,
           workingDir,
+          // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
+          ...(remoteHostId ? { remoteHostId } : {}),
           vendorOptions: {
             ...vendorOptions,
             [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,

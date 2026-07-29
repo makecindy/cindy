@@ -4240,6 +4240,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       threadId: 'start-thread-id',
       sessionId: 'session-remote-codex-mcp-context',
       workingDir: '/repo',
+      // remote thread 的 ctx 带 hostId — cindy_memory 据此把远端路径隔离到
+      // ssh:<hostId>:<path> 的独立 store。
+      remoteHostId: 'remote-host-1',
       vendorOptions: {},
     });
     await handle.close();

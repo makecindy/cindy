@@ -77,7 +77,11 @@ describe('codexHttpBridge', () => {
 
   it('accepts an additional bearer token (remote daemon) and rejects unknown tokens', async () => {
     bridge = await startCodexHttpBridge({
-      serverFactories: { cindy_orca: createTestServer, cindy_test: createTestServer },
+      serverFactories: {
+        cindy_orca: createTestServer,
+        cindy_test: createTestServer,
+        cindy_memory: createTestServer,
+      },
       additionalBearerTokens: () => ['remote-persistent-token'],
       logger: noopLogger(),
     });
@@ -117,6 +121,11 @@ describe('codexHttpBridge', () => {
     const remoteResp = await postInit('cindy_orca', 'remote-persistent-token');
     expect(remoteResp.status).toBe(200);
     await remoteResp.text();
+    // cindy_memory 属远端白名单 (Maker Memory 经 bridge 回本机 store) — scoped
+    // token 放行;其余 in-process server (cindy_test 代表) 仍 403。
+    const remoteMemory = await postInit('cindy_memory', 'remote-persistent-token');
+    expect(remoteMemory.status).toBe(200);
+    await remoteMemory.text();
     const remoteNonCollab = await postInit('cindy_test', 'remote-persistent-token');
     expect(remoteNonCollab.status).toBe(403);
     await remoteNonCollab.text();

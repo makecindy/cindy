@@ -198,6 +198,10 @@ export class MakerMemoryManager {
    *  - 调 store.init() (创建 FTS 表 + sanity check)
    *
    * 同 workdir 复用同一 store + db 实例。失败 (db open 失败 / mkdir 失败) 抛错。
+   *
+   * key 语义: 本地会话传 workdir 绝对路径; SSH remote 会话传
+   * buildMemoryScopeKey 产出的 `ssh:<hostId>:<path>` 复合键 (调用方负责,
+   * manager 不自己判远端) — 见 storage.ts buildMemoryScopeKey。
    */
   async getStore(absWorkdir: string): Promise<MakerMemoryStore> {
     if (!absWorkdir || absWorkdir.length === 0) {

@@ -32,6 +32,7 @@ function makeDeps(overrides?: Partial<Parameters<typeof refreshRemoteCodexMcpAft
     ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_orca'], bridgeInstanceId: 'bridge-2' }),
     getLiveTurnChecker: () => checker,
     isCollabEnabled: () => true,
+    isMakerMemoryEnabled: () => false,
     detachRemoteCodexSessionsOnHost: vi.fn(),
     log: { warn },
     ...overrides,
@@ -55,6 +56,8 @@ describe('refreshRemoteCodexMcpAfterBridgeRecreate', () => {
       expect(callDeps.hasLiveTurnOnHost).toBe(checker);
       // R21 P1: 恢复路径必须透传 Collab 闸门 — 禁用时 ensure 走清理而非重注入。
       expect(callDeps.isCollabEnabled).toBe(deps.isCollabEnabled);
+      // Maker Memory 同源闸门:缺省 false 会让补刀把已注入的 cindy_memory 剥掉。
+      expect(callDeps.isMakerMemoryEnabled).toBe(deps.isMakerMemoryEnabled);
     }
   });
 

@@ -72,6 +72,11 @@ export interface CodexMcpThreadContextArgs {
   threadId: string;
   sessionId: string;
   workingDir: string;
+  /**
+   * SSH remote 会话的 host id。cindy_memory 的 store 定位键要靠它区分
+   * 「远端路径」与「本地同名路径」(buildMemoryScopeKey), 缺省 = 本地会话。
+   */
+  remoteHostId?: string;
   vendorOptions: Record<string, unknown>;
 }
 
@@ -418,6 +423,14 @@ export interface AgentDeps {
      * but typed as unknown here to avoid cross-package dependency.
      */
     onApprovalRequest?: (params: unknown) => Promise<unknown>;
+    /**
+     * 本 session 的 Maker Memory 注入开关 (startSession 时已按 per-session flag
+     * + manager 就绪归一)。host 据此决定是否把 cindy_memory 以 http 形态经
+     * bridge 注进远端 startParams.mcpServers — prompt 段 (rules + MEMORY.md
+     * index) 由 maker-core 自己拼, 两侧必须同源同值, 否则模型被 rules 引导去
+     * 调不存在的工具。缺省视为 false。
+     */
+    makerMemoryEnabled?: boolean;
   }) => Promise<Query>;
 }
 

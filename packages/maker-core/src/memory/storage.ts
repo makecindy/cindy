@@ -58,6 +58,18 @@ export function sanitizeWorkdir(absPath: string): string {
     .replace(/^-+/, ''); // 去除最前面的 leading '-' (Unix 路径 / 开头转完是 '-Users-...')
 }
 
+/**
+ * Maker Memory 的 store 定位键(scope key)。本地会话直接用 workdir 绝对路径
+ * (保持既有存储目录不迁移);SSH remote 会话用 `ssh:<hostId>:<workdir>` 复合键 —
+ * 远端路径是远端机器上的字符串,直接当 key 会跟本地同名路径共用一个 store
+ * (两台机器各有 /home/me/proj 时记忆互串)。数据仍存控制端本机,目录名 =
+ * sanitizeWorkdir(scope key)。所有 getStore 调用方 (agent 启动注入 / MCP
+ * withStore) 必须统一经本函数取键,不得各自拼接。
+ */
+export function buildMemoryScopeKey(workingDir: string, remoteHostId?: string | null): string {
+  return remoteHostId ? `ssh:${remoteHostId}:${workingDir}` : workingDir;
+}
+
 /** filename = `<type>_<slug>.md` */
 export function buildFilename(type: MemoryType, slug: string): string {
   return `${type}_${slug}${SHARD_EXT}`;
