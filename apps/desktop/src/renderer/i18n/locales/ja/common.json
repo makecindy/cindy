@@ -4999,7 +4999,6 @@
       "openInSidebarFailed": "サイドバーのブラウザで開けませんでした"
     },
     "ghostSummon": {
-      "overline": "プラグイン呼び出し · GHOST",
       "directiveLabel": "モデルに追加された指示",
       "legend": "ハイライト = プラグインのマニフェスト由来の注入値 · それ以外はシステム固定テンプレート",
       "expandAria": "モデルに追加された指示を表示",
@@ -5009,7 +5008,12 @@
       "mentionDirectiveLabel": "モデルに追加されたヒント",
       "semanticExpandAria": "この呼び出しの説明を表示",
       "semanticNote": "AI がメッセージの意味に基づいてこのプラグインを自律的に呼び出しました。このメッセージに機械指示は追加されていません。",
-      "listSeparator": "、"
+      "listSeparator": "、",
+      "status": {
+        "running": "呼び出し中…",
+        "called": "呼び出し済み",
+        "done": "完了"
+      }
     },
     "userMessage": {
       "attachmentPrefix": "添付：",

@@ -4999,7 +4999,6 @@
       "openInSidebarFailed": "在侧边栏浏览器中打开失败"
     },
     "ghostSummon": {
-      "overline": "调用插件 · GHOST",
       "directiveLabel": "追加给模型的指令",
       "legend": "高亮 = 插件注入(来自身份卡)· 其余为系统固定模板",
       "expandAria": "展开查看追加给模型的指令",
@@ -5009,7 +5008,12 @@
       "mentionDirectiveLabel": "追加给模型的提示",
       "semanticExpandAria": "查看本次调用说明",
       "semanticNote": "AI 根据消息语义自主调用了这个插件；本条消息未追加任何机器指令。",
-      "listSeparator": "、"
+      "listSeparator": "、",
+      "status": {
+        "running": "调用中…",
+        "called": "已调用",
+        "done": "已完成"
+      }
     },
     "userMessage": {
       "attachmentPrefix": "附件：",

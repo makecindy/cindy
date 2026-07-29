@@ -5000,7 +5000,6 @@
       "openInSidebarFailed": "Failed to open in sidebar browser"
     },
     "ghostSummon": {
-      "overline": "PLUGIN USE · GHOST",
       "directiveLabel": "Directive appended for the model",
       "legend": "Highlighted = injected from the plugin's manifest · the rest is the fixed system template",
       "expandAria": "Show the directive appended for the model",
@@ -5010,7 +5009,12 @@
       "mentionDirectiveLabel": "Hint appended for the model",
       "semanticExpandAria": "Show how this plugin was used",
       "semanticNote": "The AI used this plugin on its own based on the meaning of your message; no machine directive was appended to it.",
-      "listSeparator": ", "
+      "listSeparator": ", ",
+      "status": {
+        "running": "Calling…",
+        "called": "Called",
+        "done": "Finished"
+      }
     },
     "userMessage": {
       "attachmentPrefix": "Attachments: ",
