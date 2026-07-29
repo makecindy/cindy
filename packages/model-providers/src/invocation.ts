@@ -118,6 +118,12 @@ function availableModelsFor(
     for (const provider of connectedProvidersForAgent([...ctx.providers], agent)) {
       for (const m of provider.models[agent] ?? []) {
         if (seen.has(m.id)) continue;
+        // 候选清单本身必须先过 chat 准入(issue #882 第 3 点,2026-07 review 第 20
+        // 轮):这里是 model 字段(显式偏好校验 / 场景默认 / 首个可用兜底)唯一的
+        // 数据源,不过滤的话非聊天模型会被 has()/fromNative/available[0] 选中当成
+        // model,而后面的 providerId 步骤只能校验"选中的来源",无法撤销已经选错
+        // 的模型 —— 那时再挡为时已晚。
+        if (!isChatEligible(m)) continue;
         if (ctx.isVisible && !ctx.isVisible(provider.id, m)) continue;
         seen.add(m.id);
         out.push({ id: m.id, efforts: m.efforts, defaultEffort: m.defaultEffort });
@@ -218,12 +224,18 @@ export function resolveModelInvocation(
         const nativeId = nativeDefaultSourceId(rail, agentKind);
         const native = rail.find((p) => p.id === nativeId);
         const availableIds = new Set(available.map((m) => m.id));
-        // 可见性按 **native 源上的那一行**判,不能只看联合清单:某 id 在 native 源被隐藏、
-        // 他源可见时,选它会让 provider 步骤路由去他源 —— 跳过了 native 源后面还有的
-        // 可见模型,订阅/计费路由被悄悄换掉(codex review 五轮)。
+        // 可见性 / chat 准入都按 **native 源上的那一行**判,不能只看联合清单:某 id
+        // 在 native 源被隐藏或是非聊天类型的具体条目、他源可见且聊天可用时,选它会让
+        // provider 步骤路由去他源(或选中一个实际不能聊天的 id)—— 跳过了 native 源
+        // 后面还有的可见/聊天模型,订阅/计费路由被悄悄换掉(codex review 五轮;mode
+        // 校验补于 issue #882 第 3 点,2026-07 review 第 20 轮:availableIds 只证明该
+        // id 在**某个**来源聊天可用,不能代表 native 这一份具体条目也是)。
         fromNative =
           native?.models[agentKind]?.find(
-            (m) => availableIds.has(m.id) && (!ctx.isVisible || ctx.isVisible(native.id, m)),
+            (m) =>
+              availableIds.has(m.id) &&
+              isChatEligible(m) &&
+              (!ctx.isVisible || ctx.isVisible(native.id, m)),
           )?.id ?? null;
       }
       model = fromNative ?? available[0].id;

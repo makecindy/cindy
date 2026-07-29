@@ -115,6 +115,14 @@ describe('categorize', () => {
     expect(isChatEligible({ id: 'embed-multilingual-v3.0' })).toBe(false);
   });
 
+  it('大小写混用的 id(自定义 OAuth 极简发现常见,如 Qwen/Qwen3-Embedding-8B)兜底判定不区分大小写(2026-07 review 第 20 轮)', () => {
+    expect(categorize('Qwen/Qwen3-Embedding-8B')).toBe('embedding');
+    expect(categorize('Qwen/Qwen3-Reranker-8B')).toBe('other');
+    expect(categorize('DALL-E-3')).toBe('image');
+    expect(isChatEligible({ id: 'Qwen/Qwen3-Embedding-8B' })).toBe(false);
+    expect(isChatEligible({ id: 'Qwen/Qwen3-Reranker-8B' })).toBe(false);
+  });
+
   it('图像生成类归 image(issue #882)', () => {
     expect(categorize('gemini-3.1-flash-image')).toBe('image');
     expect(categorize('gpt-image-1.5')).toBe('image');

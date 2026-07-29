@@ -135,7 +135,12 @@ function stripNamespace(id: string): string {
 // gemini-* → Google, 其余 (moonshotai/qwen/glm/...) 一律落到 China。新增国产模型不需要改这里。
 // 这是**没有 mode 时**的兜底(旧缓存 / mode 尚未覆盖到的来源);mode 存在时一律用
 // classifyModel,不再猜 id。
-export function categorize(id: string): ModelCategory {
+export function categorize(rawId: string): ModelCategory {
+  // 走 {id,name} 极简发现的自定义 OAuth 供应商常保留原始大小写(如
+  // Qwen/Qwen3-Embedding-8B、Qwen/Qwen3-Reranker-8B),下面全部关键词/前缀判定
+  // 统一按小写比较,不逐个正则补 i 标记漏改(2026-07 review 第 20 轮)。categorize
+  // 只返回分类标签,不回传 id,小写化不影响展示 / 请求用的原始 id。
+  const id = rawId.toLowerCase();
   if (id.startsWith('claude-')) return 'anthropic';
   // 非对话类型(向量/图像/语音/视频/压缩)必须在通用 gpt- / gemini- 厂商规则**之前**判定,
   // 否则 gpt-image-2 / gemini-3-pro-image / gpt-4o-transcribe 会被误归到 gpt / google。
@@ -190,7 +195,8 @@ export function categorize(id: string): ModelCategory {
   // 旧一代命名,新一代改成了 gpt-realtime-*,兜底要同时认两种(2026-07 review)。
   if (/^gpt-realtime|^gpt-4o-realtime|gemini-omni/.test(id)) return 'realtime';
   // 订阅直连 GPT(chatgpt/ 前缀,经 responses-bridge)与网关 gpt- 同归 GPT 组;前缀常量与
-  // 路由 / 记账 gate 同源(本文件顶部),防漂移。
+  // 路由 / 记账 gate 同源(本文件顶部),防漂移。两个常量本身已是小写字面量,小写化后
+  // 直接比较无需再转换。
   if (id.startsWith('gpt-') || id.startsWith(CHATGPT_MODEL_PREFIX)) return 'gpt';
   if (id.startsWith('codex/')) return 'gpt-budget';
   // x-ai/ 只是网关侧 grok 的命名空间前缀(展示分组用),与 XAI_MODEL_PREFIX
