@@ -4793,6 +4793,79 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('takes over an id-less capacity failure that lands while the retry RPC is pending', async () => {
+      // 空 turnId 的容量拒绝在"重投 RPC 在飞 + turnStarted 未到"的窗口里, 既不匹配
+      // currentTurnId(null) 也不匹配 isTurnInFlight(false) —— 会被 stale 判定整条丢掉,
+      // 于是没有墓碑也没有记账, 响应把这个已死的 turn 激活成活跃 turn, 剩余重投预算
+      // 被绕过(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-idless-capacity',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 空 turnId + RPC 在飞 + 还没 turnStarted：必须被认作"针对这一轮"。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 透成非终止（延后给在途那次），不得判死。
+        const surfaced = events.slice(before).filter((e) => e.type === 'error');
+        expect(surfaced).toHaveLength(1);
+        expect(surfaced[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+
+        // 响应回来：这个 turn 已被认领成死 turn，不得激活。
+        retryStart.resolve({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        // 剩余预算照常用上：补排发出第三次 turn/start。
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(turnStarts).toBe(3);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not arm a new retry when the in-flight retry RPC rejects', async () => {
       // finally 先于外层 state.retry().catch 执行。若延后的容量失败在 RPC 已经 reject
       // 的情况下还照样补排，紧随其后的 catch 会推终态 error + Done 把 UI 收口，而那个

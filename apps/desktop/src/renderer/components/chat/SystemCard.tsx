@@ -713,11 +713,15 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
  */
 function GoalResumedCard({ data }: { data?: { kind?: string } }) {
   const { t } = useTranslation();
-  // 两种续跑原因共用同一张分隔条,但说法必须分开:上游没容量时账号从没被限流,
-  // 报「额度已重置」是假信息(review #844)。
+  // 两种续跑原因共用同一张分隔条,但说法必须分开:
+  //   - 账号限流续跑:重置时刻来自账号额度信息, 说「用量已恢复」有依据;
+  //   - 上游过载续跑:只是干等了 60s, **没有**任何容量探测。因此文案只能说
+  //     「正在重试目标」—— 说「模型服务已恢复」在持续故障期会在每次重试前插一条
+  //     假恢复通知, 紧接着又是一次容量失败(review #844 codex P1)。
+  // 存档里的 kind 仍是 'capacity-resumed'(已落库的卡片按这个值渲染), 只有文案改。
   const label =
     data?.kind === 'capacity-resumed'
-      ? t('goal.capacityResumeNotice')
+      ? t('goal.capacityRetryNotice')
       : t('goal.usageResumeNotice');
   return (
     <div className="flex w-full items-center gap-3 py-2 select-none" role="separator" aria-label={label}>

@@ -7356,7 +7356,7 @@
     },
     "usageLimitedUntil": "resumes {{time}}",
     "usageResumeNotice": "Usage limit reset — resuming the goal",
-    "capacityResumeNotice": "Model service recovered — resuming the goal",
+    "capacityRetryNotice": "Model service was busy — retrying the goal",
     "complete": {
       "record": "Goal achieved · {{turns}} turns · {{duration}}"
     },

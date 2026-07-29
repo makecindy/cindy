@@ -7345,7 +7345,7 @@
     },
     "usageLimitedUntil": "{{time}} に再開",
     "usageResumeNotice": "利用枠が回復しました。目標を再開します",
-    "capacityResumeNotice": "モデルサービスが回復しました。目標を再開します",
+    "capacityRetryNotice": "モデルサービスが混雑していました。目標を再試行します",
     "complete": {
       "record": "目標達成 · {{turns}} ターン · {{duration}}"
     },

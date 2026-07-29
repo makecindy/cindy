@@ -1024,7 +1024,12 @@ export class GoalController {
     }
   }
 
-  /** 限额重置时刻到了:若仍 usageLimited,落一条"用量已恢复"提示后 resume 续跑。 */
+  /**
+   * 退避窗口到点了:若仍 usageLimited,落一条提示后 resume 续跑。
+   *
+   * 注意这里**没有任何探测**:账号限流用的是账号额度给的重置时刻,过载用的是固定
+   * 60s 干等。所以过载那条提示只能说"正在重试",不能说"已恢复"(见 noticeKind)。
+   */
   private async autoResumeFromUsageLimit(sessionId: string): Promise<void> {
     this.usageResumeTimers.delete(sessionId);
     const state = await this.deps.storage.get(sessionId).catch(() => null);

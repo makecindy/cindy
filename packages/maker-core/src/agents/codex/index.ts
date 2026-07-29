@@ -76,7 +76,11 @@ import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
-import { OVERLOAD_RETRY_MAX_ATTEMPTS, overloadRetryDelayMs } from '../shared/overload-error.js';
+import {
+  OVERLOAD_RETRY_MAX_ATTEMPTS,
+  overloadRetryDelayMs,
+  parseOverloadError,
+} from '../shared/overload-error.js';
 import { buildCodexEnv } from './env-builder.js';
 import { scanCodexCustomizations } from './customization-scanner.js';
 import { commandExecutionDisplayInput } from './command-display.js';
@@ -4914,8 +4918,26 @@ export class CodexAgent extends BaseAgent {
           activeToolContexts.clear();
         }
         const targetsPendingTurn = isTurnStartPending && currentTurnId === null && Boolean(params.turnId);
+        // 空 turnId 的容量拒绝: 过载重投的 RPC 还在飞、而它的 turnStarted 尚未到达时,
+        // currentTurnId 是 null 且 isTurnInFlight 是 false —— 上面两条既有判据都不成立,
+        // 这条错误会被当 stale 整条丢掉。后果是既不落墓碑也不记账, 随后到达的
+        // turn/start 响应把这个已经报过容量失败的 turn 激活成活跃 turn, 剩余重投预算
+        // 被绕过, 只能等它自己的 turn/completed 收口成硬失败(review #844 codex P1)。
+        // 只对**过载类**放行: 其它空 id 终态错误(含 transport)保持既有行为, 免得把
+        // 与本轮无关的错误误认成"针对当前 turn"。
+        const targetsInFlightOverloadRetry =
+          params.turnId === ''
+          && isTerminalError
+          && overloadRetry?.inFlight === true
+          && parseOverloadError(
+            params.error?.message ?? '',
+            extractNonSecretErrorSignals(params.error?.message ?? '').errorStatus,
+          ) !== null;
         const targetsCurrentTurn =
-          params.turnId === currentTurnId || (params.turnId === '' && isTurnInFlight) || targetsPendingTurn;
+          params.turnId === currentTurnId
+          || (params.turnId === '' && isTurnInFlight)
+          || targetsPendingTurn
+          || targetsInFlightOverloadRetry;
         if (isTerminalError && isTransportError && !targetsCurrentTurn) {
           translateErrorNotification(effectiveParams, eventQueue, { rt: translatorRt, log });
           return;
@@ -5413,6 +5435,21 @@ export class CodexAgent extends BaseAgent {
                 return;
               }
               markTurnConfigAccepted();
+              // 延后的那条容量失败没带 turnId(空 id 形状)时, 到这里才知道它说的是哪个
+              // turn: 认领响应返回的 id 并落墓碑, 否则 handleTurnStartResp 会把这个
+              // 已经报过容量失败的 turn 激活, 补排条件(currentTurnId === null)随之
+              // 不成立(review #844 codex P1)。
+              const unidentifiedDeferral =
+                state.deferredCapacityFailure !== null
+                && state.deferredCapacityFailure.deadTurnId === null;
+              if (unidentifiedDeferral && resp.turn?.id) {
+                terminalErroredTurnIds.add(resp.turn.id);
+                state.deferredCapacityFailure = { deadTurnId: resp.turn.id };
+                log.info('codex adopted turn/start response id for an id-less capacity failure', {
+                  turnId: resp.turn.id,
+                  threadId,
+                });
+              }
               handleTurnStartResp(resp);
               rpcSettledOk = true;
             } finally {

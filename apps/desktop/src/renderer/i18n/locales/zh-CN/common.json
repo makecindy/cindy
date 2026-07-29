@@ -7345,7 +7345,7 @@
     },
     "usageLimitedUntil": "{{time}} 恢复",
     "usageResumeNotice": "用量已恢复，继续目标",
-    "capacityResumeNotice": "模型服务已恢复，继续目标",
+    "capacityRetryNotice": "模型服务繁忙，正在重试目标",
     "complete": {
       "record": "目标已达成 · {{turns}} 轮 · 耗时 {{duration}}"
     },
