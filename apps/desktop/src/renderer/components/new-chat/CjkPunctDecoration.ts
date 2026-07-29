@@ -65,10 +65,65 @@ const PLUGIN_KEY = new PluginKey<CjkDecorationPluginState>('cjkPunctDecoration')
  * CJK 标点字符集合。覆盖最常用的几个区段,够 chat input 场景用:
  *   U+3000-303F: CJK Symbols and Punctuation (含 《》「」『』【】 等)
  *   U+FF00-FFEF: Halfwidth and Fullwidth Forms (含全角 (), !? 等)
- *
- * 不包括 ASCII 标点,因为它们 script 已经是 Latin,不会触发 itemization 错乱。
+ * 中文输入法也可能在中文语境下产出 ASCII 标点(例如 `()` / `,`)。这类字符
+ * 本身是 Latin script,但在中文文本旁边仍会被 Chromium 按 composition 中的
+ * 相邻 Latin 预览重新 itemize,所以下面会按 CJK 上下文一并稳定它们的字体。
  */
-const CJK_PUNCT_REGEX = /[\u3000-\u303f\uff00-\uffef]/g;
+const CJK_PUNCT_CHAR_REGEX = /[\u3000-\u303f\uff00-\uffef]/;
+const CJK_SCRIPT_CHAR_REGEX = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+const ASCII_CJK_PUNCTUATION = new Set([
+  '!',
+  '"',
+  "'",
+  '(',
+  ')',
+  ',',
+  '.',
+  ':',
+  ';',
+  '?',
+  '[',
+  ']',
+  '{',
+  '}',
+]);
+
+function isCjkChar(char: string | undefined): boolean {
+  return (
+    char !== undefined &&
+    (CJK_SCRIPT_CHAR_REGEX.test(char) || CJK_PUNCT_CHAR_REGEX.test(char))
+  );
+}
+
+/**
+ * ASCII punctuation only needs the CJK font when it belongs to a CJK run.
+ * Ignore whitespace and adjacent ASCII punctuation while looking either way so
+ * `"中文 ()"` is covered as a group but punctuation inside an ordinary Latin
+ * URL/code run is left untouched.
+ */
+function isCjkContextPunctuation(text: string, index: number): boolean {
+  const char = text[index];
+  if (char === undefined) return false;
+  if (CJK_PUNCT_CHAR_REGEX.test(char)) return true;
+  if (!ASCII_CJK_PUNCTUATION.has(char)) return false;
+
+  const isContextSeparator = (value: string | undefined) =>
+    value !== undefined && (/\s/.test(value) || ASCII_CJK_PUNCTUATION.has(value));
+  let before = index - 1;
+  while (before >= 0 && isContextSeparator(text[before])) before -= 1;
+  if (before >= 0 && isCjkChar(text[before])) return true;
+
+  let after = index + 1;
+  while (after < text.length && isContextSeparator(text[after])) after += 1;
+  return after < text.length && isCjkChar(text[after]);
+}
+
+function hasCjkContextPunctuation(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    if (isCjkContextPunctuation(text, index)) return true;
+  }
+  return false;
+}
 
 const LONG_ALPHANUMERIC_BODY_RE = /^\s*[A-Za-z0-9]{12,}\s*$/;
 
@@ -140,8 +195,7 @@ function listLineRanges(
         voiceReplacementRange !== null &&
         voiceReplacementRange.from < contentBase + line.end &&
         voiceReplacementRange.to > contentBase + line.start;
-      const hasCjkPunctuation = CJK_PUNCT_REGEX.test(line.text);
-      CJK_PUNCT_REGEX.lastIndex = 0;
+      const hasCjkPunctuation = hasCjkContextPunctuation(line.text);
       return (
         line.hasInlineAtom ||
         overlapsSlashCommandPill ||
@@ -201,7 +255,7 @@ const CJK_FONT_STACK =
 
 /**
  * 扫描整个 doc, 给所有 CJK 标点位置生成 inline decoration。
- * 用 descendants 遍历所有 text node, 对每个 text node 内的字符做正则匹配。
+ * 用 descendants 遍历所有 text node, 对每个 text node 内的字符做上下文匹配。
  * 注意 from/to 是 doc-level position, 不是 text-node-local offset。
  */
 function buildDecorations(
@@ -215,11 +269,10 @@ function buildDecorations(
   doc.descendants((node, pos) => {
     if (!node.isText || !node.text) return;
     const text = node.text;
-    CJK_PUNCT_REGEX.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = CJK_PUNCT_REGEX.exec(text)) !== null) {
-      const from = pos + m.index;
-      const to = from + m[0].length;
+    for (let index = 0; index < text.length; index += 1) {
+      if (!isCjkContextPunctuation(text, index)) continue;
+      const from = pos + index;
+      const to = from + 1;
       if (listRanges.some((range) => from >= range.from && to <= range.to)) {
         // ComposerListIndentDecoration owns the wrapping container for these
         // ranges. An overlapping inline font decoration would split fixed-width

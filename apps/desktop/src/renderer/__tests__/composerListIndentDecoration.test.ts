@@ -461,6 +461,58 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     }
   });
 
+  it('keeps ASCII punctuation in a CJK sentence stable during IME preview', () => {
+    vi.useFakeTimers();
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [Document, Paragraph, Text, CjkPunctDecoration],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: '现代都市开放世界共创游戏。 () 在上面这个句语基础上,',
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const punctuationSelector = 'span[style*="font-family"]';
+    const currentEditor = editor;
+    if (!currentEditor) throw new Error('editor failed to initialize');
+    const decoratedPunctuation = () =>
+      Array.from(currentEditor.view.dom.querySelectorAll(punctuationSelector), (node) => node.textContent);
+    expect(decoratedPunctuation()).toEqual(['。', '(', ')', ',']);
+
+    editor.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    editor.view.dispatch(
+      editor.state.tr
+        .insertText('w', editor.state.doc.content.size - 1)
+        .setMeta('composition', 1),
+    );
+    expect(editor.getText()).toBe('现代都市开放世界共创游戏。 () 在上面这个句语基础上,w');
+    expect(decoratedPunctuation()).toEqual(['。', '(', ')', ',']);
+
+    editor.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    vi.runOnlyPendingTimers();
+    expect(decoratedPunctuation()).toEqual(['。', '(', ')', ',']);
+  });
+
+  it('does not apply the CJK punctuation font to an isolated Latin punctuation run', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [Document, Paragraph, Text, CjkPunctDecoration],
+      content: 'hello (), world',
+    });
+
+    expect(editor.view.dom.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
+  });
+
   it('renders the indent span into the DOM for list lines', () => {
     const ed = makeEditor(['1. hello']);
     expect(ed.view.dom.querySelector('p.composer-list-block-indent')?.textContent).toBe('1. hello');
