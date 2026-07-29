@@ -12,7 +12,6 @@ import {
   getModel,
   isChatEligible,
   nativeDefaultSourceId,
-  providerOffersModel,
   sourcesForModel,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -230,7 +229,13 @@ function resolveProviderId(
   const provider = connectedProvidersForAgent(providers, agentKind).find(
     (p) => p.id === providerId,
   );
-  if (!provider || !providerOffersModel(provider, modelId, agentKind)) {
+  // hasModel() 只证明"这个 id 在某个来源上是聊天模型"(any-source),不代表**这个**被
+  // 保存的 providerId 本身也是——同一 id 若在不同来源上 mode 不一致(如 A 是
+  // image_generation、B 是 chat),model 存在性校验会因 B 通过,但这里若只查
+  // providerOffersModel(仅看 id 是否存在,不看 mode),仍会把会话钉死在 A 上
+  // (2026-07 review:fresh evidence,与 hasModel 校验的是两件不同的事)。
+  const model = provider ? getModel(provider, modelId, agentKind) : undefined;
+  if (!provider || !model || !isChatEligible(model)) {
     log.warn('im default provider unavailable; falling back to default routing', {
       agentKind,
       modelId,

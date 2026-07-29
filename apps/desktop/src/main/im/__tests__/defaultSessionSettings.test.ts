@@ -399,4 +399,50 @@ describe('resolveImSessionDefaults', () => {
       model: 'codex/gpt-5.5', // the image model sorts first but must be skipped
     });
   });
+
+  it('does not pin the session to a saved provider whose copy of the model is non-chat, even when another provider offers the same id as chat (2026-07 review: fresh evidence)', async () => {
+    // Same model id 'shared-id' exists on both providers with DIFFERENT modes:
+    // 'xd' (the saved providerId) marks it non-chat; 'openai' marks it chat.
+    // hasModel() passes because *some* source is eligible, but resolveProviderId
+    // must independently reject binding the session to the specific non-chat source.
+    mocks.listProviders.mockResolvedValue([
+      {
+        ...providers[0],
+        models: {
+          ...providers[0].models,
+          'claude-code': [
+            ...claudeModels,
+            { id: 'shared-id', displayName: 'Shared', contextWindow: 0, efforts: [], defaultEffort: null, mode: 'image_generation' },
+          ],
+        },
+      },
+      {
+        ...providers[1],
+        agents: ['claude-code'],
+        routing: {
+          ...providers[1].routing,
+          'claude-code': { upstream: 'https://api.openai.com', authStrategy: 'oauth-passthrough' },
+        },
+        models: {
+          ...providers[1].models,
+          'claude-code': [
+            { id: 'shared-id', displayName: 'Shared', contextWindow: 200_000, efforts: [], defaultEffort: null, mode: 'chat' },
+          ],
+        },
+      },
+    ]);
+    mocks.readImDefaultSettings.mockReturnValue({
+      agentKind: 'claude-code',
+      agents: {
+        'claude-code': { providerId: 'xd', model: 'shared-id', effort: 'high' },
+        codex: { providerId: null, model: 'codex/gpt-5.5', effort: 'high' },
+      },
+    });
+
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'claude-code',
+      model: 'shared-id',
+      providerId: null, // must not stay pinned to 'xd' — its copy of this id is not chat-eligible
+    });
+  });
 });
