@@ -10,8 +10,8 @@
  *  - 'append'       : 追加到 body 末尾 (不存在抛 NOT_FOUND)
  *
  * 返 WriteResult 含可选 warning ('shard-size-exceeded' / 'index-size-exceeded')
- * 与 warningDetail (sizeBytes/softLimitBytes/hardLimitBytes), LLM 按超限幅度
- * 决定不动 / 微剪 / memory_consolidate 瘦身。
+ * 与 warningDetail (sizeBytes/softLimitBytes;hardLimitBytes 仅分片警告带,
+ * 索引警告无硬上限), LLM 按超限幅度决定不动 / 微剪 / memory_consolidate 瘦身。
  */
 
 import { z } from 'zod';
@@ -31,7 +31,8 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
       'description 一行 hook (用作 MEMORY.md 索引行, 无换行, ≤ 200 字符); body 主体内容。' +
       'mode 默认 create (撞名拒绝), 可选 update/append。' +
       ' 写入后 MEMORY.md 自动重建; 软超 size 上限返 warning + warningDetail' +
-      ' (sizeBytes/softLimitBytes/hardLimitBytes), 按超限幅度决定不动 / 微剪 / memory_consolidate。',
+      ' (sizeBytes/softLimitBytes, 分片警告另带 hardLimitBytes; 索引警告无硬上限),' +
+      ' 按超限幅度决定不动 / 微剪 / memory_consolidate。',
     inputShape: {
       type: z.enum(['user', 'feedback', 'project', 'reference']),
       name: z
