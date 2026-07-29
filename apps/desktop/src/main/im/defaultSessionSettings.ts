@@ -10,6 +10,7 @@ import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
 import {
   connectedProvidersForAgent,
   getModel,
+  isChatEligible,
   nativeDefaultSourceId,
   providerOffersModel,
   sourcesForModel,
@@ -166,7 +167,14 @@ function hasModel(
   providers: ProviderView[] | null,
 ): boolean {
   if (providers) {
-    return sourcesForModel(providers, modelId, agentKind).length > 0;
+    // sourcesForModel 只判"谁提供这个 id",不知道能力类型(其文档要求调用方自证
+    // "对该 agent 有效");这里必须自己叠加 isChatEligible,否则一个已下架/从未
+    // 是聊天模型的 id(image/embedding/...)会被判定为可用默认值(2026-07 review)。
+    const sources = sourcesForModel(providers, modelId, agentKind);
+    return sources.some((p) => {
+      const model = getModel(p, modelId, agentKind);
+      return model !== undefined && isChatEligible(model);
+    });
   }
   return getMaker()
     .getCapabilities(agentKind)
@@ -178,9 +186,12 @@ function firstModel(agentKind: AgentKind, providers: ProviderView[] | null): str
     const connected = connectedProvidersForAgent(providers, agentKind);
     const nativeId = nativeDefaultSourceId(connected, agentKind);
     const native = nativeId ? connected.find((p) => p.id === nativeId) : undefined;
-    const nativeModel = native?.models[agentKind]?.[0]?.id;
+    // 非聊天模型不能当 IM 新会话的兜底默认值(issue #882 第 3 点,2026-07 review):
+    // 原生来源与跨供应商 flatMap 兜底都要挡掉图像/视频/TTS/STT/实时/Embedding/压缩模型,
+    // 否则排序靠前的这类模型会被选成默认模型,发消息必失败。
+    const nativeModel = native?.models[agentKind]?.find(isChatEligible)?.id;
     if (nativeModel) return nativeModel;
-    return connected.flatMap((p) => p.models[agentKind] ?? [])[0]?.id ?? null;
+    return connected.flatMap((p) => p.models[agentKind] ?? []).find(isChatEligible)?.id ?? null;
   }
   return getMaker().getCapabilities(agentKind).availableModels[0]?.id ?? null;
 }

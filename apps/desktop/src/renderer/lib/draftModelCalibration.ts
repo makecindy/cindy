@@ -13,6 +13,7 @@
 
 import {
   connectedProvidersForAgent,
+  isChatEligible,
   type AgentKind,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -20,8 +21,13 @@ import {
 /**
  * 在该 agent 的已连接来源里挑一个模型 id：
  *   1. 首选 `preferredModelId`（默认值本身可用就不要动它，避免首屏莫名换模型）；
- *   2. 否则取已连接来源提供的第一个模型（provider 顺序 = 目录顺序，确定性）；
+ *   2. 否则取已连接来源提供的第一个**聊天**模型（provider 顺序 = 目录顺序，确定性）；
  *   3. 一个已连接来源都没有 → null，交给既有的「零来源」空态引导去连接供应商。
+ *
+ * `isChatEligible` 过滤是本函数自己的第二道防线(issue #882 第 3 点,2026-07 review):
+ * 唯一调用方(NewMakerDraftRoute)已经在构造 `providers` 候选时预先剔除非聊天模型,
+ * 但本函数是导出的公共工具,不能假设未来调用方也记得这么做——挑到的模型直接被当成
+ * 会话默认模型使用,不是展示,漏一次就是"草稿默认模型选中一个不能聊天的模型"。
  */
 export function pickConnectedModelForAgent(
   providers: readonly ProviderView[],
@@ -31,12 +37,11 @@ export function pickConnectedModelForAgent(
   const connected = connectedProvidersForAgent([...providers], agent);
   if (connected.length === 0) return null;
   for (const provider of connected) {
-    if ((provider.models[agent] ?? []).some((m) => m.id === preferredModelId)) {
-      return preferredModelId;
-    }
+    const preferred = (provider.models[agent] ?? []).find((m) => m.id === preferredModelId);
+    if (preferred && isChatEligible(preferred)) return preferredModelId;
   }
   for (const provider of connected) {
-    const first = (provider.models[agent] ?? [])[0];
+    const first = (provider.models[agent] ?? []).find(isChatEligible);
     if (first) return first.id;
   }
   return null;

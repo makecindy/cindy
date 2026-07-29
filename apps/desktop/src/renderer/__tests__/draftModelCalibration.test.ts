@@ -98,6 +98,23 @@ describe('pickConnectedModelForAgent', () => {
       pickConnectedModelForAgent([disconnectedAnthropic], 'claude-code', 'claude-opus-4-8'),
     ).toBeNull();
   });
+
+  it('跳过非聊天模型(issue #882 第 3 点,2026-07 review):唯一调用方已预先过滤,但本函数是导出的公共工具,自己也要防', () => {
+    const withNonChat = provider('xd', true, {
+      'claude-code': [
+        { ...model('gpt-image-2'), mode: 'image_generation' },
+        model('claude-sonnet-5'),
+      ],
+    });
+    // preferredModelId 本身就是非聊天模型 → 不接受,落到第一个聊天模型
+    expect(pickConnectedModelForAgent([withNonChat], 'claude-code', 'gpt-image-2')).toBe(
+      'claude-sonnet-5',
+    );
+    // 首个可用模型兜底同样跳过非聊天模型
+    expect(pickConnectedModelForAgent([withNonChat], 'claude-code', 'claude-opus-4-8')).toBe(
+      'claude-sonnet-5',
+    );
+  });
 });
 
 describe('calibrateDraftModel', () => {

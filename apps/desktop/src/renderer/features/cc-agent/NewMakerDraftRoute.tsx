@@ -156,7 +156,7 @@ import {
   deriveModelsFromProviders,
   filterChatBridgedCodexProviders,
 } from '@/lib/providerModels';
-import { effectiveSourceIdForModel, getModel, providerOffersModel, sessionModelSupportsFastMode, connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, getModel, isChatEligible, providerOffersModel, sessionModelSupportsFastMode, connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
 import {
   resolveDeviceLinkDraftDefaults,
@@ -570,6 +570,7 @@ export function NewMakerDraftRoute() {
         const models = p.models[capabilityAgentKind] ?? [];
         const kept = models.filter(
           (m) =>
+            isChatEligible(m) &&
             isModelEnabled(capabilityAgentKind, p.id, m) &&
             !(effectiveRemoteHostId && isSubscriptionDirectModel(m.id)),
         );
