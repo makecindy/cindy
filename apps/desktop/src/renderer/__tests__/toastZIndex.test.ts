@@ -42,7 +42,7 @@ describe('Toast z-index — sits above all overlays (symptom #1)', () => {
     // The lightbox sits at 9999; the toast sits at 10000. The strict ordering
     // is what guarantees the Toast wins even when the Lightbox Portal mounts
     // later in document.body.
-    expect(textLightboxSource).toMatch(/zIndex:\s*9999/);
+    expect(textLightboxSource).toMatch(/TEXT_LIGHTBOX_OVERLAY_Z_INDEX\s*=\s*9999/);
   });
 
   it('ImageLightbox overlay still uses zIndex 9999 (below toast layer)', () => {
