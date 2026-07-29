@@ -125,11 +125,15 @@ export function categorize(id: string): ModelCategory {
   if (id === 'ai-gateway-doc') return 'compression';
   // STT/ASR 必须在 realtime 判定之前:qwen3-asr-flash-realtime / fun-asr-realtime-* /
   // gpt-realtime-whisper 的 id 里都含 "realtime",但语义是语音转写,不是实时多模态。
-  // 关键词覆盖面对齐原先合并的 audio 桶(transcribe/audio/speech/tts/whisper/asr),
   // 不能只认 elevenlabs 前缀——否则 gpt-4o-mini-tts / qwen-tts 这类其它厂商的语音模型
   // 会漏网落进 gpt/china,被 isChatEligible 误判为可聊天(2026-07 review)。
   if (id.startsWith('elevenlabs/scribe') || /transcribe|whisper|asr/.test(id)) return 'stt';
-  if (id.startsWith('elevenlabs/eleven') || /speech|tts|audio/.test(id)) return 'tts';
+  // 故意不认通用的 "audio" 关键词:isChatEligible 现在直接吃 categorize 的分类结果,
+  // 落进 tts 就等于判定"不能聊天"——而 gpt-4o-audio-preview 这类模型 id 里带
+  // "audio" 却是走 Chat Completions 的正常聊天模型(带音频输入/输出),不是纯语音
+  // 合成端点。只认 speech/tts 这两个真正专指语音合成的关键词(2026-07 review:
+  // 拆分前 audio 只影响展示分组,拆分后同一份 regex 还要决定聊天准入,精度要求变了)。
+  if (id.startsWith('elevenlabs/eleven') || /speech|tts/.test(id)) return 'tts';
   // gpt-realtime-2 / gpt-realtime-mini / gpt-realtime-translate / gpt-4o-realtime-* /
   // gemini-omni-* —— 真正的实时多模态,已排除上面的 STT 特例。gpt-4o-realtime 前缀是
   // 旧一代命名,新一代改成了 gpt-realtime-*,兜底要同时认两种(2026-07 review)。

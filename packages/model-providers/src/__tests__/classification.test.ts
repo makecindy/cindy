@@ -87,6 +87,11 @@ describe('categorize', () => {
     expect(categorize('some-vendor-speech-model')).toBe('tts');
   });
 
+  it('带音频输入/输出但走 Chat Completions 的聊天模型不误判为 tts(2026-07 review:通用 "audio" 关键词太宽,会误伤真聊天模型)', () => {
+    expect(categorize('gpt-4o-audio-preview')).toBe('gpt');
+    expect(isChatEligible({ id: 'gpt-4o-audio-preview' })).toBe(true);
+  });
+
   it('视频生成/编辑类归 video(issue #882)', () => {
     expect(categorize('doubao-seedance-2-0-fast-260128')).toBe('video');
     expect(categorize('happyhorse-1.1-i2v')).toBe('video');
