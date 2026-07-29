@@ -227,6 +227,11 @@ export function ErrorBanner({
     // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
     // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。
     // 放在网络类之前:两者都可能重试自愈,但只有这里该建议"换模型"。
+    // 终态文案刻意**不**声称"多次重试仍未成功": 走到终态的原因不止"预算耗尽",
+    // 还包括"本 turn 已有产出所以不重投"以及接管条件不满足(如 daemon 自己已经
+    // retry 很久后升级成终态)。那些情况下一次自动重试都没发生过, 说"重试多次"
+    // 是假信息(review #844 codex P1)。真的重试过时用户也已经在退避窗口里逐帧看过
+    // 「正在自动重试（N/M）」, 信息不丢。两个分支只按"有没有重试按钮"给不同下一步。
     displayError = overloadRetryProgress
       ? t('chat.errorBanner.overloadRetrying', {
           attempt: overloadRetryProgress.attempt,
@@ -234,8 +239,8 @@ export function ErrorBanner({
         })
       : t(
           safeRetryText
-            ? 'chat.errorBanner.overloadExhausted'
-            : 'chat.errorBanner.overloadExhaustedNoRetry',
+            ? 'chat.errorBanner.overloadBusy'
+            : 'chat.errorBanner.overloadBusyNoRetry',
         );
   } else if (isNetworkishError) {
     // 网络类错误:原始英文报错(502/ECONNREFUSED/fetch failed 等)对用户没有

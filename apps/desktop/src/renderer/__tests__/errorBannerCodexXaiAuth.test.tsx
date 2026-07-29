@@ -123,14 +123,16 @@ describe('ErrorBanner overload guidance', () => {
     expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
   });
 
-  it('switches to switch-model guidance once the retry budget is exhausted', () => {
+  it('switches to switch-model guidance for a terminal capacity error', () => {
+    // 文案刻意不声称"重试多次": 终态也可能来自"本 turn 已有产出所以不重投"或
+    // 接管条件不满足, 那时一次自动重试都没发生(review #844 codex P1)。
     render(createElement(ErrorBanner, {
       error: CAPACITY,
       retryText: 'retry-token',
       onRetry: vi.fn(),
     }));
 
-    expect(screen.getByText('chat.errorBanner.overloadExhausted')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.overloadBusy')).toBeTruthy();
     expect(screen.getByTitle('chat.errorBanner.retryTitle')).toBeTruthy();
   });
 
@@ -141,7 +143,7 @@ describe('ErrorBanner overload guidance', () => {
       onRetry: vi.fn(),
     }));
 
-    expect(screen.getByText('chat.errorBanner.overloadExhaustedNoRetry')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.overloadBusyNoRetry')).toBeTruthy();
     expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
   });
 

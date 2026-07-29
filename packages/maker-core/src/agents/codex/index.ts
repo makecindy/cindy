@@ -4424,6 +4424,46 @@ export class CodexAgent extends BaseAgent {
     };
 
     /**
+     * 退避等待 / 重投 RPC 在途期间发现本轮 send 已被取消时, 收口逻辑 turn。
+     *
+     * 只有"coordinator 只 abort 了 sendOpts.signal、没走 handle.abort()"那条路需要
+     * 它: abort() 自己已经推过终态并把 overloadRetry 置 null, 所以那条路走到这里时
+     * overloadRetry !== state, 不会二次收口。
+     *
+     * 为什么非推不可: signal 在本文件里原本只是**受理前**的取消边界
+     * (rejectIfCancelled 抛 "cancelled before acceptance"), 受理后没人再读它 —— 是
+     * 过载重投第一次在受理后去读 signal.aborted。若读到 aborted 就静默 return, 上层
+     * 永远等不到终态: desktop 的 SessionTurnActivityTracker 只在终态事件后释放派发
+     * 闩, Codex coordinator 刻意等这个事件而不自解锁, hook runner 要等一小时硬超时
+     * (review #844 greptile P1)。
+     */
+    const settleCancelledOverloadRetry = (
+      state: NonNullable<typeof overloadRetry>,
+      reason: string,
+    ): void => {
+      if (closed || overloadRetry !== state) return;
+      overloadRetry = null;
+      log.info('codex overload retry cancelled via send signal — settling logical turn', {
+        reason,
+        threadId,
+      });
+      eventQueue.push({
+        type: 'error',
+        data: {
+          message: 'Codex turn cancelled while waiting to retry a model-capacity failure',
+          isTerminal: true,
+          reason: 'codex-overload-retry-cancelled',
+        },
+        source: 'codex',
+      });
+      eventQueue.push({
+        type: 'status',
+        data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+        source: 'codex',
+      });
+    };
+
+    /**
      * 服务过载退避重投调度。
      *
      * 返回进度表示已接管本次错误，**调用方必须跳过终态收口**（不推 terminal
@@ -4445,6 +4485,22 @@ export class CodexAgent extends BaseAgent {
     ): { attempt: number; maxAttempts: number } | null => {
       const state = overloadRetry;
       if (!state || closed) return null;
+      // 本 turn 已产出内容 → 重放会让模型重做已完成的工作（甚至重复副作用），
+      // 交回用户决定是否继续，不自动重投。
+      //
+      // **必须先于下面的 inFlight 延后分支**：重投出来的 turn 完全可能在自己的
+      // turn/start 响应 settle 之前就已经发出 item / tool / reasoning，那时
+      // state.inFlight 仍为 true，先走延后分支就会把这个已有产出的 turn 落墓碑、
+      // 随后重放原消息 —— 已经执行过的命令与文件改动跑第二遍
+      // (review #844 codex P1)。这里返回 null 是安全的：有产出意味着该 turn 早已
+      // 被 turnStarted 激活，不存在"UI 收口后在途 RPC 又把 turn 激活"的悬空风险。
+      if (currentTurnProducedOutput) {
+        log.info('codex overload error after partial output — not auto-retrying', {
+          threadId,
+          inFlight: state.inFlight,
+        });
+        return null;
+      }
       // 上一次重投的 turn/start 还在飞 → 绝不能再排一个。cancelOverloadRetry 只能
       // 清计时器、取消不了在途 RPC，两个请求都可能被 server 接受，同一条用户输入
       // 的工具副作用就会执行两遍（review #844 codex P1）。在途那次自己会走完
@@ -4477,12 +4533,6 @@ export class CodexAgent extends BaseAgent {
           deadTurnId,
         });
         return { attempt: state.attempt, maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS };
-      }
-      // 本 turn 已产出内容 → 重放会让模型重做已完成的工作（甚至重复副作用），
-      // 交回用户决定是否继续，不自动重投。
-      if (currentTurnProducedOutput) {
-        log.info('codex overload error after partial output — not auto-retrying', { threadId });
-        return null;
       }
       if (state.attempt >= OVERLOAD_RETRY_MAX_ATTEMPTS) {
         log.warn('codex overload retry budget exhausted — surfacing terminal error', {
@@ -5113,6 +5163,12 @@ export class CodexAgent extends BaseAgent {
         // 这里也是**唯一**重置重投预算的地方，见 turnStarted 的说明。
         cancelOverloadRetry('new send');
         overloadRetry = null;
+        // 产出标记同样按 send 归零。只靠 turnStarted 重置不够: 新 turn 的
+        // turn/start 响应与容量错误都可能先于它的 turnStarted 通知到达(本文件多处
+        // 支持这种乱序), 那时读到的是**上一个 turn** 的产出状态, 会把一次本来安全
+        // 的自动重投判成"有产出, 不重投"(review #844 codex P1)。同 turn 重复
+        // turnStarted 的幂等保护仍在 turnStarted 里(只在真的换 turn 时清)。
+        currentTurnProducedOutput = false;
         isTurnStartPending = true;
         usageTracker.beginTurn();
         log.debug('send ▶ user message', {
@@ -5382,6 +5438,7 @@ export class CodexAgent extends BaseAgent {
             // 的消息重新投出去。
             if (closed || !state || state.isCancelled()) {
               log.info('codex overload retry skipped (send already cancelled)', { threadId });
+              if (state) settleCancelledOverloadRetry(state, 'cancelled before retry send');
               return;
             }
             assertCurrentHost('turn/start overload retry');
@@ -5432,6 +5489,8 @@ export class CodexAgent extends BaseAgent {
                       });
                   }
                 }
+                // server 侧 turn 已挡掉, 但逻辑 turn 还得有人收口(同上)。
+                settleCancelledOverloadRetry(state, 'cancelled while turn/start was in flight');
                 return;
               }
               markTurnConfigAccepted();
