@@ -5613,6 +5613,83 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('interrupts an idle orphan turn even when an item arrives before its late turnStarted', async () => {
+      // 取消隔离了挂起重投 → 它的 RPC 随后失败 → server 其实已经建了 turn。此时若 item/started
+      // 之类的事件**先于**迟到的 turnStarted 到达: stale 闸的 idle 孤儿路径只落墓碑, 而
+      // turnStarted 的孤儿分支显式跳过已落墓碑的 id —— 两边各自以为对方会发 interrupt, 谁都
+      // 没发, 被 server 接受的那个 turn 在 Stop 已终态收口 UI 之后继续执行工具
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const interrupted: string[] = [];
+        const host = installFakeHost(agent, (method, params) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) {
+            interrupted.push((params as { turnId?: string })?.turnId ?? '');
+            return {};
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-idle-orphan-interrupt',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+        expect(turnStarts).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.itemStarted || !handlers.turnStarted) {
+          throw new Error('expected handlers');
+        }
+        // 容量拒绝 → 退避到点 → 重投 RPC 在飞。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(2);
+
+        // Stop: 隔离在飞的重投 start 并推终态。
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+        // 重投 RPC 随后失败 —— 但 server 其实已经建了 turn-retry。
+        retryStart.reject(new Error('turn/start timed out'));
+        await vi.advanceTimersByTimeAsync(0);
+        interrupted.length = 0;
+
+        // 它的 item 先到(turnStarted 还在路上)。
+        handlers.itemStarted({
+          turnId: 'turn-retry',
+          item: { id: 'item-1', type: 'commandExecution', command: 'rm -rf build' },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+        // 必须当场 interrupt, 不能等 turnStarted(它会因为已落墓碑而跳过)。
+        expect(interrupted).toContain('turn-retry');
+
+        // 迟到的 turnStarted 不得把它激活, 也不重复发 interrupt。
+        const afterEvent = interrupted.length;
+        handlers.turnStarted({ turn: { id: 'turn-retry' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.() ?? null).toBeNull();
+        expect(interrupted).toHaveLength(afterEvent);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('keeps the foreign-terminal guard when the retry already activated its turn', async () => {
       // 上一条守的是"退避中(无活跃 turn)"那个时序。归属校验若还要求 currentTurnId === null,
       // 则"重投 RPC 在飞 + 它的 turnStarted 已先到"这种状态(活跃 turn 存在、重投仍挂着)整段

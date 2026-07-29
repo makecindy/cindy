@@ -230,6 +230,9 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
   const statusLabel = isCapacityBackoff
     ? t('goal.status.capacityLimited')
     : t(`goal.status.${goal.status}`);
+  // 只算一次: formatResetTime 内部会取 new Date()(判"是否今天"), 条件与插值各算一次不仅
+  // 多余, 跨午夜那一刻两次结果还可能不一致(copilot 低置信提示; 双取是既有写法)。
+  const resetTimeText = formatResetTime(goal.usageResetAt);
   const elapsedMs = active ? Math.max(0, nowMs - goal.startedAt) : 0;
 
   return (
@@ -256,10 +259,10 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
         {statusLabel}
       </span>
       {/* usageLimited:显示恢复 / 重试时刻(知道才显示)。过载那条是重试时刻, 不是额度重置。 */}
-      {goal.status === 'usageLimited' && formatResetTime(goal.usageResetAt) && (
+      {goal.status === 'usageLimited' && resetTimeText && (
         <span className="shrink-0" style={{ color: 'var(--error-fg)' }}>
           {t(isCapacityBackoff ? 'goal.capacityRetryAt' : 'goal.usageLimitedUntil', {
-            time: formatResetTime(goal.usageResetAt),
+            time: resetTimeText,
           })}
         </span>
       )}

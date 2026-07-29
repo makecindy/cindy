@@ -4126,6 +4126,32 @@ export class CodexAgent extends BaseAgent {
       && !completedTurnIds.has(turnId as string)
       && !terminalErroredTurnIds.has(turnId as string);
 
+    /**
+     * idle 孤儿落墓碑 —— **同时**补 best-effort interrupt。
+     *
+     * 为什么必须在这里 interrupt: turnStarted 的孤儿分支显式跳过已落墓碑的 id(它假设"已墓碑
+     * = interrupt 已经发过"), 而本函数此前只落墓碑、把 interrupt 留给那个分支。于是
+     * item/started 之类的事件**先于**迟到的 turnStarted 到达时, 两边各自以为对方会发 ——
+     * 谁都没发, 被 server 接受的那个 turn 在 Stop 已经终态收口 UI 之后继续执行工具
+     * (review #844 codex P1)。
+     *
+     * 恰好一次: isIdleOrphanTurnId 要求 id **不在** terminalErroredTurnIds 里, 而本函数第一件
+     * 事就是把它加进去, 所以同一个 turn 只会进来一次。
+     *
+     * turnCompleted 的 idle 孤儿分支**不用**它: 那个 turn 已经结束, interrupt 是纯浪费的 RPC。
+     */
+    const tombstoneIdleOrphanTurn = (turnId: string, reason: string): void => {
+      terminalErroredTurnIds.add(turnId);
+      if (!threadId) return;
+      host.request(Method.TurnInterrupt, { threadId, turnId }).catch((e: unknown) => {
+        log.warn('idle orphan turn interrupt failed (best-effort)', {
+          reason,
+          turnId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
+    };
+
     const shouldIgnoreStaleTurnEvent =(turnId: string | null | undefined): boolean => {
       if (!turnId) return false;
       if (completedTurnIds.has(turnId)) return true;
@@ -4136,11 +4162,12 @@ export class CodexAgent extends BaseAgent {
       // 计错 turn / 孤儿 error 终结合法新 turn, greptile R10 P1)。其事件一律
       // 忽略; 若响应证明合法 (id 一致)  buffer 已清空, 后续事件正常。
       if (bufferedOrphanTurnIds.has(turnId)) return true;
-      // idle 孤儿 (codex R15 P1): 立墓碑并丢弃。补 interrupt 由 turnStarted
-      // 的孤儿分支负责 (幂等); started 不到的孤儿在 daemon 侧自然跑完,
-      // 其 completed 由 turnCompleted handler 的同款判定拦。
+      // idle 孤儿 (codex R15 P1): 立墓碑 + 补 interrupt 并丢弃。interrupt 必须在这里发,
+      // 不能像早先那样留给 turnStarted 的孤儿分支 —— 那个分支跳过已落墓碑的 id, 而墓碑正是
+      // 这里刚落的; 事件先于迟到的 started 到达时谁都不发, 被接受的 turn 在 UI 已收口之后
+      // 继续跑工具 (review #844 codex P1)。
       if (isIdleOrphanTurnId(turnId)) {
-        terminalErroredTurnIds.add(turnId);
+        tombstoneIdleOrphanTurn(turnId, 'idle orphan event');
         return true;
       }
       return currentTurnId !== null && turnId !== currentTurnId;
@@ -4243,7 +4270,9 @@ export class CodexAgent extends BaseAgent {
       // turn, interrupt 输掉竞态时操作会真实执行)。与 notification 的
       // idle 孤儿闸同款判定, 立墓碑让后续事件一并拦。
       if (isIdleOrphanTurnId(turnId)) {
-        terminalErroredTurnIds.add(turnId);
+        // 同上: 落墓碑的同时补 interrupt。只拒掉审批/输入请求不够 —— 那个 turn 还在 server
+        // 上跑, 而 turnStarted 的孤儿分支不会为已落墓碑的 id 补发 (review #844 codex P1)。
+        tombstoneIdleOrphanTurn(turnId, 'idle orphan server request');
         return false;
       }
       // 孤儿守卫 + 已有活跃 turn: id ≠ currentTurnId 的请求来自失败 RPC 的
@@ -5388,7 +5417,9 @@ export class CodexAgent extends BaseAgent {
         // 直接丢弃会把尸体 turn 激活成 in-flight, send 永久卡 generating。
         if (enqueueIfBufferedTurn(params.turn.id, () => handlers.turnCompleted?.(params))) return;
         // 只拦 idle 孤儿 (codex R15 P1): 无 pending 时它的 completed 会走
-        // currentTurnId===null 的收口分支 emit 假 done。terminal/completed
+        // currentTurnId===null 的收口分支 emit 假 done。这里**只**落墓碑, 不补 interrupt ——
+        // 这个 turn 已经结束了, interrupt 是纯浪费的 RPC(与 tombstoneIdleOrphanTurn 的分工)。
+        // terminal/completed
         // 墓碑 turn 的迟到 completed 仍走 handleTurnCompleted 的正常
         // bookkeeping (suppressTerminalUi 分支, 不重复出 UI 事件) — 不能上
         // 整个 stale 闸。
