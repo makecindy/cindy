@@ -59,7 +59,12 @@ function normalizeAgentProxy(raw: unknown): SshHostAgentProxyPref | undefined {
   const v = raw as Record<string, unknown>;
   if (v.mode === 'env') {
     const proxyUrl = normalizeAgentProxyUrl(v.proxyUrl);
-    if (!proxyUrl) return undefined;
+    if (!proxyUrl) {
+      log.warn('invalid agentProxy.proxyUrl in prefs — dropping (was it hand-edited?)', {
+        proxyUrl: typeof v.proxyUrl === 'string' ? v.proxyUrl.slice(0, 80) : v.proxyUrl,
+      });
+      return undefined;
+    }
     return { enabled: v.enabled === true, mode: 'env', proxyUrl };
   }
   // mode='tunnel' 或缺省 (旧数据迁移路径)。
@@ -69,9 +74,17 @@ function normalizeAgentProxy(raw: unknown): SshHostAgentProxyPref | undefined {
   // review: PR #715 copilot R8): 手编 prefs 的脏值不应在启动时被恢复成
   // 可用 pref, 然后晚到 net.connect 才以难懂的方式失败。
   if (!localHost || /\s/.test(localHost) || localHost.includes("'") || localHost.includes('"')) {
+    log.warn('invalid agentProxy.localHost in prefs — dropping (was it hand-edited?)', {
+      localHost: typeof v.localHost === 'string' ? v.localHost.slice(0, 80) : v.localHost,
+    });
     return undefined;
   }
-  if (!isValidPort(localPort)) return undefined;
+  if (!isValidPort(localPort)) {
+    log.warn('invalid agentProxy.localPort in prefs — dropping (was it hand-edited?)', {
+      localPort: v.localPort,
+    });
+    return undefined;
+  }
   const remotePort = isValidPort(v.remotePort) ? v.remotePort : LEGACY_AGENT_PROXY_REMOTE_PORT;
   return { enabled: v.enabled === true, mode: 'tunnel', localHost, localPort, remotePort };
 }

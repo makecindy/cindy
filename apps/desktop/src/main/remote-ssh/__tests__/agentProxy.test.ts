@@ -725,4 +725,26 @@ describe('ssh-host-prefs-store legacy migration', () => {
     });
     expect(fresh.getSshHostAutoConnect('legacy-host')).toBe(true);
   });
+
+  it('rejects hand-edited invalid agentProxy values instead of silently resurrecting them', async () => {
+    // 用户手编 prefs 写了非法值 (端口 0 / 带引号 host): 迁移时被丢弃为
+    // 「未配置」而不是恢复成可用 pref (review: 迁移边界 — 否则功能看似
+    // 开着实际已静默失效, 连警告都没有)。
+    prefsFileContent = JSON.stringify({
+      'bad-port-host': {
+        autoConnect: true,
+        agentProxy: { enabled: true, localHost: '127.0.0.1', localPort: 0 },
+      },
+      'bad-quote-host': {
+        autoConnect: false,
+        agentProxy: { enabled: true, localHost: `12'7.0.0.1`, localPort: 7890 },
+      },
+    });
+    vi.resetModules();
+    const fresh = await import('../ssh-host-prefs-store');
+    expect(fresh.getSshHostAgentProxy('bad-port-host')).toBeNull();
+    expect(fresh.getSshHostAgentProxy('bad-quote-host')).toBeNull();
+    // autoConnect 等兄弟字段不受 agentProxy 非法影响。
+    expect(fresh.getSshHostAutoConnect('bad-port-host')).toBe(true);
+  });
 });
