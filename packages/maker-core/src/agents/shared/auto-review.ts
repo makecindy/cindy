@@ -1,0 +1,358 @@
+/**
+ * Cindy Auto-Review Core —— harness 无关的确定性审查层。
+ *
+ * ## 为什么在这里(而非某个 agent 内)
+ *
+ * "Auto-review"(权限档 `auto`)要在**不依赖任何 CLI 原生 reviewer** 的前提下,自己判定
+ * 一个动作该放行、升级还是必问。各 harness(Claude Code / Codex / 未来 pi …)的原生 auto
+ * reviewer 只对自家模型校准,经 Cindy 网关接第三方模型时要么橡皮图章(#129)、要么撞不兼容
+ * 路由(codex-auto-review 隐藏模型 #751/#772)。**统一到这一套 core、各 harness 只写薄
+ * adapter 把自己的工具调用/审批请求翻译成归一化 `ReviewableAction`**,兼容特判就不必散落在
+ * 每个 harness 里 —— harness 负责跑,review 归 Cindy。
+ *
+ * 与原生的分工(Chris 2026-07-29 定:原生优先、Cindy 兜底):harness 原生 reviewer 在已验证
+ * 可用的路由上照用(如 Codex 在 OpenAI OAuth 直连的 auto_review);路由不支持/不可靠时落到
+ * 本 core。Claude Code 的原生 auto 分类器对第三方模型不可靠,实际总走本 core。
+ *
+ * ## 判定档(借鉴 Hermes 的 green/red light + openclaw 的确定性规则,零 LLM 裁判)
+ *
+ *   - **绿灯 → `auto-approve`**:只读、会话内状态、工作区内文件写、明确只读的 shell。静默放行。
+ *   - **红灯 → `prompt`**:写工作区外、外发网络、无法判定的 shell。升级用户确认(可"本会话记住")。
+ *   - **危险 → `prompt-each-time`**:destructive / 不可逆 / 触碰凭证 / 远程代码执行。必问、不可记住。
+ *
+ * **不确定一律 fail-closed 升级**(返回 `prompt`),绝不因"没识别出危险"而放行(与 openclaw
+ * 默认 fail-open 相反 —— auto-review 要 safe-by-default)。shell 越界只能靠命令字符串启发式
+ * (shell 不可静态求解):明确只读放行、明确危险必问、其余(含一切写)一律升级;结构化 path
+ * 参数的动作(file-write)才做精确的工作区边界判定。
+ */
+
+export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
+
+/**
+ * 归一化动作 —— 各 harness 的 adapter 把自己的工具调用/审批请求翻译成它,交 reviewAction 裁决。
+ *   read          纯读、无副作用(内省工具)
+ *   session-state 会话内状态/控制,无本地写/外发(todo、后台 shell 读写、subagent 派生)
+ *   file-write    带结构化路径的文件写(path 缺失=无法确认在区内→升级)
+ *   exec          shell 命令(交给命令分类器)
+ *   network       外发网络(URL/搜索词出境,exfil 面)
+ *   other         未知/其它 → fail-closed
+ */
+export type ReviewableAction =
+  | { kind: 'read' }
+  | { kind: 'session-state' }
+  | { kind: 'file-write'; path: string | undefined }
+  | { kind: 'exec'; command: string }
+  | { kind: 'network' }
+  | { kind: 'other' };
+
+/**
+ * 核心裁决。纯函数、确定性、无副作用(不触文件系统 —— 探文件存在性会变侧信道,且对远端
+ * 路径不可行;workspaceRoots 只做字符串前缀判定)。workspaceRoots = cwd + 额外可写目录,绝对路径。
+ */
+export function reviewAction(action: ReviewableAction, workspaceRoots: string[]): ReviewVerdict {
+  switch (action.kind) {
+    case 'read':
+    case 'session-state':
+      return 'auto-approve';
+    case 'file-write':
+      if (!action.path) return 'prompt';
+      return isInsideWorkspace(normalizeTarget(action.path, workspaceRoots), workspaceRoots)
+        ? 'auto-approve'
+        : 'prompt';
+    case 'exec':
+      return classifyShellCommand(action.command, workspaceRoots);
+    case 'network':
+      return 'prompt';
+    case 'other':
+    default:
+      return 'prompt';
+  }
+}
+
+// ─────────────────────────── shell 命令分类 ───────────────────────────
+
+/**
+ * 明确只读的 shell 命令(basename)。放行前提:命令本身不写文件/不改状态,且 argv 无输出
+ * 重定向、命令替换、危险 flag。
+ */
+// 注意:`env`/`printenv` 不在此列 —— 裸调用会把整个进程环境(含注入子进程的 provider
+// API key,见 env-builder)dump 给模型,是凭证外泄面,不能静默放行。`env VAR=x cmd` 作为
+// 包裹器仍会剥壳按内层命令判定(见 COMMAND_WRAPPERS);裸 `env` 剥壳后为空段→fail-closed 升级。
+// `cat`/`grep`/`base64` 等能读文件的仍在列,但读**凭证文件**由 DANGEROUS_PATTERNS 先行拦成
+// prompt-each-time(在 classifyShellCommand 里先于分段判定),读普通文件才放行。
+const SAFE_READONLY_BINS: ReadonlySet<string> = new Set([
+  'ls', 'pwd', 'echo', 'cat', 'head', 'tail', 'wc', 'stat', 'file', 'which',
+  'type', 'date', 'whoami', 'hostname', 'uname', 'basename', 'dirname',
+  'realpath', 'readlink', 'true', 'false', 'test', 'id', 'tty',
+  'grep', 'egrep', 'fgrep', 'rg', 'ag', 'find', 'tree', 'du', 'df', 'ps',
+  'diff', 'cmp', 'sort', 'uniq', 'cut', 'tr', 'column', 'nl', 'tac',
+  'jq', 'yq', 'base64', 'md5', 'md5sum', 'sha256sum', 'cksum',
+]);
+
+/** 命令包裹器:剥掉后信任绑定到内层真实命令。`sudo`/`doas` 不在此列(提权本身危险)。 */
+const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
+  'env', 'nohup', 'nice', 'ionice', 'stdbuf', 'timeout', 'time', 'command',
+  'setsid', 'chrt',
+]);
+
+/**
+ * 危险命令模式(整段原文匹配,更抗变形)。命中即 `prompt-each-time`:必问、不可"总是允许"。
+ * 覆盖:提权 / 递归删除 / 远程代码执行 / 凭证访问 / 磁盘设备 / 系统控制 / 破坏性 git / fork bomb /
+ * 权限放宽。
+ */
+const DANGEROUS_PATTERNS: readonly RegExp[] = [
+  /\b(?:sudo|doas)\b/,                                   // 提权
+  /\brm\b[^|;&]*(?:\s-\w*[rRfF]|\s--(?:recursive|force|dir))/, // rm 递归/强制删除(含 -R / 长 flag)
+  /\b(?:mkfs|fdisk|dd)\b/,                               // 磁盘/文件系统操作
+  /\bfind\b[^|;&]*\s-delete\b/,                          // find -delete 批量删除(不可逆)
+  /(?:^|\s)>\s*\/dev\/[sh]d/,                            // 写块设备
+  /\b(?:shutdown|reboot|halt|poweroff)\b/,               // 系统电源
+  /:\s*\(\s*\)\s*\{.*\|.*&.*\}/,                          // fork bomb :(){ :|:& };:
+  /\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:ba|z|)sh\b/, // 下载 | sh(远程代码执行)
+  /\|\s*(?:sudo\s+)?(?:ba|z)?sh\b/,                       // 任意 | sh / | bash
+  /\beval\b/,                                            // eval 动态执行
+  /\bchmod\b[^|;&]*\s(?:-R\s+)?[0-7]*7{2,3}\b/,           // chmod 777 之类数字放宽权限
+  /\bchmod\b[^|;&]*\s[ugoa]*[oa][ugoa]*[-+=][^\s]*w/,     // chmod 符号型对 other/all 开放写(a+w / o+w / a+rwx)
+  /(?:^|[\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker)\b/,     // 凭证/密钥目录(~ 与绝对路径均命中,不再只锚 ~/)
+  /(?:^|[\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc)\b/,     // 含 token 的凭证配置文件
+  /\bapplication_default_credentials\b/,                  // gcloud 默认凭证文件
+  /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/, // 私钥文件
+  /\bsecurity\s+(?:find|dump|export|add)-/,               // macOS keychain
+  /\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|--force-with-lease\b|\s-f\b|\+)/, // 强推
+  /\bgit\b[^|;&]*\breset\b[^|;&]*--hard/,                 // git reset --hard
+  /\bgit\b[^|;&]*\bclean\b[^|;&]*\s-\w*f/,                // git clean -f
+];
+
+/** 命令替换 / 进程替换:参数里塞 `$(...)` / 反引号 / `<(...)`,可绕过静态判定 → 一律升级。 */
+const COMMAND_SUBSTITUTION = /\$\(|`|<\(/;
+
+/** 文件输出重定向 `>` / `>>`(排除 `2>&1` 这类 fd 复制:`>` 前是数字的不算文件写)。 */
+const OUTPUT_REDIRECTION = /(?:^|[^0-9])>>?/;
+
+/**
+ * curl/wget 视为"只读取回"(命令行浏览器)的排除项。命中任一就不是安全 GET,交通用判定升级:
+ *   - **上传数据 / 非 GET 方法**:外发内容(exfil 面)。
+ *   - **落盘到文件**(`-o`/`-O`/`--output`):把远端内容写进任意路径(可覆盖 `~/.ssh/authorized_keys`
+ *     等敏感文件)—— 与 shell 重定向同样是"写任意路径",必须升级。`curl URL`(默认 stdout)才放行。
+ */
+const NETWORK_UPLOAD_FLAGS = /(?:^|\s)(?:-d\b|--data\S*|-F\b|--form\b|-T\b|--upload-file\b|-X\s*(?:POST|PUT|DELETE|PATCH))/i;
+const FETCH_OUTPUT_FLAGS = /(?:^|\s)(?:-o|-O|--output|--output-dir|--remote-name)\b/;
+
+/** git 只读子命令 → 放行。 */
+const SAFE_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  'status', 'log', 'diff', 'show', 'branch', 'remote', 'rev-parse', 'describe',
+  'blame', 'shortlog', 'tag', 'ls-files', 'ls-remote', 'cat-file', 'reflog',
+  'whatchanged', 'grep',
+]);
+
+/** 顶层 shell 分隔符:`&&` `||` `;` `|` 换行,以及作为后台操作符的独立 `&`。 */
+function splitTopLevelSegments(command: string): string[] {
+  // 保守拆分:引号内的分隔符会被误切,但只导致"多切几段、每段各自判定"——对不确定 fail-closed,
+  // 过度拆分不放宽任何东西。独立 `&`(后台)才拆;`2>&1`/`>&`/`&>` 里的 `&` 是 fd 复制、不是
+  // 分隔符,用前后不邻接 `>`/`&` 的条件把它们排除,避免把 `ls 2>&1` 这类常见命令误切成碎段。
+  return command
+    .split(/&&|\|\||[;\n|]|(?<![>&])&(?![>&])/g)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/** 极简 tokenizer:按空白切,去掉包裹引号。够用于取首个命令 + flag 形状判定。 */
+function tokenize(segment: string): string[] {
+  const tokens: string[] = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(segment)) !== null) {
+    tokens.push(m[1] ?? m[2] ?? m[3] ?? '');
+  }
+  return tokens;
+}
+
+/** 剥掉包裹器(env/timeout/…)及其自身参数,返回内层命令 token 数组。 */
+function unwrapWrappers(tokens: string[]): string[] {
+  let toks = tokens;
+  for (let depth = 0; depth < 5 && toks.length > 0; depth++) {
+    const head = baseName(toks[0]);
+    if (!COMMAND_WRAPPERS.has(head)) break;
+    if (head === 'env') {
+      // env [-i] [NAME=val...] cmd args —— 跳过 env 及其后所有 `NAME=val` / `-*`。
+      let i = 1;
+      while (i < toks.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(toks[i]) || toks[i].startsWith('-'))) i++;
+      toks = toks.slice(i);
+    } else if (head === 'timeout' || head === 'time' || head === 'nice' || head === 'ionice' || head === 'chrt' || head === 'stdbuf') {
+      // 带自身参数(timeout 5 / nice -n 10 / stdbuf -oL):跳过前导 `-*` 与紧随的数值/时长参数。
+      let i = 1;
+      while (i < toks.length && (toks[i].startsWith('-') || /^[0-9]+[smhd]?$/.test(toks[i]))) i++;
+      toks = toks.slice(i);
+    } else {
+      // nohup / setsid / command / setarch:直接跳过包裹器本身。
+      toks = toks.slice(1);
+    }
+  }
+  return toks;
+}
+
+function baseName(p: string): string {
+  const cleaned = p.replace(/\/+$/, '');
+  const idx = cleaned.lastIndexOf('/');
+  return idx >= 0 ? cleaned.slice(idx + 1) : cleaned;
+}
+
+function isSafeReadonlyBin(bin: string, segment: string): boolean {
+  if (!SAFE_READONLY_BINS.has(bin)) return false;
+  // find 的命令搬运/删除/写文件 flag(输出重定向/命令替换已在 classifyShellSegment 统一挡掉)。
+  // `-fprintf`/`-fprint`/`-fprint0`/`-fls` 把匹配结果写进任意文件(与 -exec/-delete 同类,只是枚举);
+  // `-print`/`-printf`/`-ls`(无 f 前缀,写 stdout)仍算只读、不拦。
+  if (bin === 'find' && /-(?:exec(?:dir)?|ok(?:dir)?|delete)\b|-f(?:print[f0]?|ls)\b/.test(segment)) return false;
+  return true;
+}
+
+/**
+ * curl/wget 的只读 GET:无上传、无落盘到文件、URL 无查询串 → 放行(命令行浏览器场景;stdout 默认)。
+ * 带查询串(`?…=…`)的 GET 可能把数据编码进 URL 外发(GET 型 exfil,不需要 -d/-F);
+ * 无法低成本区分"正常分页参数"与"外发载荷",按 fail-closed 升级为 prompt(可本会话记住)。
+ * 纯读页面(bare / path-only URL)才当"命令行浏览器"静默放行。命令替换 `$(...)` 另有 COMMAND_SUBSTITUTION 拦截。
+ */
+function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
+  if (bin !== 'curl' && bin !== 'wget') return false;
+  if (NETWORK_UPLOAD_FLAGS.test(segment)) return false;
+  if (FETCH_OUTPUT_FLAGS.test(segment)) return false;
+  const url = tokens.find((t) => /^https?:\/\//i.test(t) || t.includes('://'));
+  if (url && url.includes('?')) return false;
+  return true;
+}
+
+function classifyGit(tokens: string[], segment: string): ReviewVerdict {
+  // 危险 git(强推/硬重置/clean -f)已在 DANGEROUS_PATTERNS 命中,这里分只读 vs 写。
+  const rest = tokens.slice(1); // 'git' 之后
+  const sub = rest.find((t) => !t.startsWith('-'));
+  if (!sub || !SAFE_GIT_SUBCOMMANDS.has(sub)) {
+    // `git config --get/--list` 只读;其它 git(commit/checkout/merge/fetch/config 写…)升级。
+    if (sub === 'config' && /--(?:get|list|get-all)\b/.test(segment)) return 'auto-approve';
+    return 'prompt';
+  }
+  // branch/tag/remote 的子命令名相同但有写变体:只放行读形态,写变体升级。
+  if (sub === 'branch' || sub === 'tag') {
+    // 删除/改名/复制/强制 flag,或子命令后带位置参数(= 新建分支/标签)→ 写。
+    if (/\s-(?:d|D|m|M|c|C)\b|\s--(?:delete|move|copy|force)\b/.test(segment)) return 'prompt';
+    const after = rest.slice(rest.indexOf(sub) + 1).filter((t) => !t.startsWith('-'));
+    if (after.length > 0) return 'prompt';
+    return 'auto-approve';
+  }
+  if (sub === 'remote') {
+    const next = rest.slice(rest.indexOf(sub) + 1).find((t) => !t.startsWith('-'));
+    if (next && /^(?:add|remove|rm|rename|set-url|set-head|set-branches|prune|update)$/.test(next)) {
+      return 'prompt';
+    }
+    return 'auto-approve'; // bare / -v / show / get-url 等只读形态
+  }
+  return 'auto-approve';
+}
+
+function classifyShellSegment(segment: string): ReviewVerdict {
+  const tokens = unwrapWrappers(tokenize(segment));
+  // 剥壳后为空段:裸 `env`/`printenv`(dump 环境变量,含凭证)、或纯包裹器无内层命令 —— fail-closed 升级。
+  if (tokens.length === 0) return 'prompt';
+  const bin = baseName(tokens[0]);
+  // 输出重定向(写文件)/ 命令替换(执行任意内容):任何命令带它都不能算只读放行,统一升级。
+  // 必须挡在 git/fetch/readonly 判定之前 —— 否则 `curl x > ~/.bashrc`、`cat f > /etc/y` 会被误放行。
+  if (OUTPUT_REDIRECTION.test(segment) || COMMAND_SUBSTITUTION.test(segment)) return 'prompt';
+  if (bin === 'git') return classifyGit(tokens, segment);
+  if (isSafeFetch(bin, segment, tokens)) return 'auto-approve';
+  if (isSafeReadonlyBin(bin, segment)) return 'auto-approve';
+  // 其余(含所有写操作、未知命令)fail-closed 升级 —— 交给用户确认(可本会话记住)。
+  return 'prompt';
+}
+
+/**
+ * shell 命令整体判定:危险模式先在整条命令上查(跨段管道如 `curl … | sh` 拆段后就查不到了),
+ * 再拆顶层段,每段都要过 —— 任一段危险→整体 prompt-each-time;任一段需升级→整体 prompt;
+ * 全部只读→auto-approve。空/畸形命令 → prompt(fail-closed)。
+ */
+export function classifyShellCommand(command: string, _workspaceRoots: string[]): ReviewVerdict {
+  if (typeof command !== 'string' || command.trim().length === 0) return 'prompt';
+  for (const re of DANGEROUS_PATTERNS) {
+    if (re.test(command)) return 'prompt-each-time';
+  }
+  const segments = splitTopLevelSegments(command);
+  if (segments.length === 0) return 'prompt';
+  let needsPrompt = false;
+  for (const seg of segments) {
+    const v = classifyShellSegment(seg);
+    if (v === 'prompt-each-time') return 'prompt-each-time';
+    if (v === 'prompt') needsPrompt = true;
+  }
+  return needsPrompt ? 'prompt' : 'auto-approve';
+}
+
+// ─────────────────────────── 路径边界 ───────────────────────────
+
+/**
+ * 反斜杠转正斜杠(Windows / 混合分隔符),统一按 `/` 分量判定。POSIX 下含字面反斜杠的文件名
+ * 极罕见,归一化成分隔符只会让边界判定更保守(fail-closed 方向),不会放宽越界。
+ */
+function toForwardSlashes(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
+/** 绝对路径判定(平台无关):POSIX `/…` 或 Windows 盘符 `C:/…`。入参须已 toForwardSlashes。 */
+function isAbsolutePath(p: string): boolean {
+  return p.startsWith('/') || /^[A-Za-z]:\//.test(p);
+}
+
+/** 归一化路径:去包裹引号、统一分隔符,相对路径挂到第一个 workspace root(cwd)。 */
+function normalizeTarget(target: string, workspaceRoots: string[]): string {
+  let p = toForwardSlashes(target.replace(/^['"]|['"]$/g, ''));
+  if (!isAbsolutePath(p)) {
+    const cwd = workspaceRoots[0];
+    if (cwd) p = `${toForwardSlashes(cwd).replace(/\/+$/, '')}/${p.replace(/^\/+/, '')}`;
+  }
+  return normalizeSlashes(p);
+}
+
+/**
+ * 折叠 `.`/`..`/重复分隔符,得到规范绝对路径的字符串形态(不触文件系统)。兼容 Windows 盘符前缀
+ * `C:`(大小写归一到大写,避免 `C:` vs `c:` 误判;盘符后路径体在 Windows 上大小写不敏感,此处保留
+ * 原样只会导致 body 大小写不一致时**过度升级**,是 fail-closed 方向,不会放宽越界)。
+ */
+function normalizeSlashes(p: string): string {
+  const fwd = toForwardSlashes(p);
+  const drive = (/^([A-Za-z]:)\//.exec(fwd)?.[1] ?? '').toUpperCase(); // Windows 盘符,如 C:
+  const isAbs = fwd.startsWith('/') || drive !== '';
+  const parts = (drive ? fwd.slice(drive.length) : fwd).split('/');
+  const out: string[] = [];
+  for (const part of parts) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      if (out.length > 0 && out[out.length - 1] !== '..') out.pop();
+      else if (!isAbs) out.push('..');
+      // 绝对路径(或盘符根)下越过根的 `..` 丢弃。
+    } else {
+      out.push(part);
+    }
+  }
+  const prefix = drive ? `${drive}/` : isAbs ? '/' : '';
+  return prefix + out.join('/');
+}
+
+/**
+ * 抹平 macOS firmlink:`/private/{var,tmp,etc}` 与 `/{var,tmp,etc}` 是同一物理位置。工具解析出的
+ * 绝对路径常带 `/private` 前缀,而 cwd 可能不带 —— 不抹平会把区内写误判成越界。纯字符串,不碰
+ * 文件系统(远端路径无 macOS firmlink,原样通过)。
+ */
+function canonicalPath(p: string): string {
+  const n = normalizeSlashes(p);
+  const m = /^\/private(\/(?:var|tmp|etc)(?:\/|$))/.exec(n);
+  return m ? n.slice('/private'.length) : n;
+}
+
+/** 目标是否落在任一 workspace root 内(含根本身),按路径分量边界判,避免 /foo 命中 /foobar。 */
+function isInsideWorkspace(target: string, workspaceRoots: string[]): boolean {
+  const t = canonicalPath(target);
+  for (const root of workspaceRoots) {
+    if (!root) continue;
+    const r = canonicalPath(root);
+    if (t === r) return true;
+    if (t.startsWith(r.endsWith('/') ? r : `${r}/`)) return true;
+  }
+  return false;
+}

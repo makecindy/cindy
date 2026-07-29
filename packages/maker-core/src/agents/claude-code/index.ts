@@ -83,6 +83,7 @@ import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phr
 import { ToolLoopGuard } from '../shared/loop-guard.js';
 import { applySubagentModelEnv, buildClaudeEnv } from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
+import { classifyBuiltinToolForAutoReview } from './auto-review-policy.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { repairForkedClaudeSessionJsonl, type RepairForkedClaudeJsonlResult } from './fork-jsonl-repair.js';
 import { ensureClaudeTranscriptInWorkingDir } from './transcript-relocation.js';
@@ -495,7 +496,7 @@ function notifySupportedModels(q: Query): void {
 const CLAUDE_PERMISSION_MODES: PermissionModeDescriptor[] = [
   { id: 'ask',               displayName: 'Ask permissions',     description: 'Always ask before making changes' },
   { id: 'acceptEdits',       displayName: 'Auto accept edits',   description: 'Automatically accept all file edits' },
-  { id: 'auto',              displayName: 'Auto',                description: 'Let a model classifier approve or deny prompts' },
+  { id: 'auto',              displayName: 'Auto',                description: 'Auto-approve safe in-workspace actions; ask before out-of-workspace or risky ones' },
   { id: 'bypassPermissions', displayName: 'Bypass permissions',  description: 'Accepts all permissions' },
 ];
 
@@ -1311,11 +1312,25 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 3a. MCP 工具过 host 审批策略(本地与远端会话共用 classifyMcpApprovalPolicy)。
       const turnPolicyForcePrompt = forceTurnConfirmation(toolName, input);
       const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
-      if (mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt) {
+      // Auto-review(权限档 auto):**内置工具**(非 MCP)的放行/拦截由 Cindy 自己的确定性
+      // 策略决定,而不是交给 CC 内置分类器 —— 区内/只读放行、越界/外发升级、危险必问。
+      // 这补上了 MCP 策略没覆盖的 Bash/Write/Edit 面,模型无关。MCP 工具仍走 host 策略
+      // (auto 不改变其行为)。其它权限档(ask/acceptEdits/bypass)不受影响。见 auto-review-policy.ts。
+      const effectivePolicy: 'auto-approve' | 'prompt' | 'prompt-each-time' =
+        mutablePermissionMode === 'auto' && !toolName.startsWith('mcp__')
+          ? classifyBuiltinToolForAutoReview({
+              toolName,
+              input,
+              workspaceRoots: [opts.workingDir, ...mutableExtraDirs].filter(
+                (d): d is string => typeof d === 'string' && d.length > 0,
+              ),
+            })
+          : mcpApprovalPolicy;
+      if (effectivePolicy === 'auto-approve' && !turnPolicyForcePrompt) {
         return { behavior: 'allow', updatedInput: input };
       }
       const forcePrompt =
-        turnPolicyForcePrompt || mcpApprovalPolicy === 'prompt-each-time';
+        turnPolicyForcePrompt || effectivePolicy === 'prompt-each-time';
       const decision = await dispatchInteraction({
         kind: 'permission',
         requestId: options.toolUseID,
@@ -1426,8 +1441,14 @@ export class ClaudeCodeAgent extends BaseAgent {
     let sdkInPlanMode = false;
     // SDK PermissionMode union 没有 'ask' (我们对 ChatInput 暴露的统一名字), SDK 侧当 default。
     type SdkPermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
+    // `auto`(Auto-review)也映射到 SDK `default` —— **不**把 `auto` 透传给 CC 二进制。
+    // 实机探针证实:SDK permissionMode='auto' 时 canUseTool 完全不触发,放行/拦截全由 CC
+    // 内置分类器决定(对第三方模型没校准 → 橡皮图章 / haiku fail-closed,见 #129)。映射到
+    // `default` 后 canUseTool 对每个工具触发,Auto-review 的判定改由 Cindy 自己的确定性策略
+    // 承担(见 canUseTool dispatcher 里 mutablePermissionMode==='auto' 分支 + auto-review-policy.ts)。
+    // canUseTool 靠 mutablePermissionMode(Cindy 档,仍是 'auto')区分 auto 与 ask,不受本映射影响。
     const toSdkPermissionMode = (mode: PermissionMode): SdkPermissionMode =>
-      (mode === 'ask' ? 'default' : mode) as SdkPermissionMode;
+      (mode === 'ask' || mode === 'auto' ? 'default' : mode) as SdkPermissionMode;
     /**
      * SDK 实际起 turn 时应用的权限档: 计划模式武装中(下一 turn arm)或本轮 plan turn
      * 进行中都恒为 plan, 否则跟随底层权限档。**含 arm 态**, 用于 buildQuery 起 turn。
@@ -2003,19 +2024,31 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
             // 远端会话走同一份 host MCP 策略 —— 否则 SSH 会话里可信 server 又要逐次
             // 弹窗, prompt-each-time 的"禁止持久化授权"保护也整套缺失。
+            const remoteToolName = params.toolName ?? '';
             const remoteTurnPolicyForcePrompt = forceTurnConfirmation(
-              params.toolName ?? 'unknown',
+              remoteToolName || 'unknown',
               params.input ?? {},
             );
-            const remoteMcpPolicy = classifyMcpApprovalPolicy(
-              params.toolName ?? '',
-              params.input ?? {},
-            );
-            if (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt) {
+            const remoteMcpPolicy = classifyMcpApprovalPolicy(remoteToolName, params.input ?? {});
+            // Auto-review 与本地 canUseTool 对齐:远端 auto 会话的内置工具(非 MCP)同样由
+            // Cindy 策略审查(远端权限档也映射到 SDK default,故 CC 会回调审批)。远端 workspaceRoots
+            // 只取远端 cwd —— 本地 mutableExtraDirs 是本地会话加的目录,对远端路径无意义,混进来只会
+            // 让某个本地路径字符串意外成为远端的"合法根"(纯字符串前缀判定),故不透传。
+            const remoteEffectivePolicy: 'auto-approve' | 'prompt' | 'prompt-each-time' =
+              mutablePermissionMode === 'auto' && remoteToolName && !remoteToolName.startsWith('mcp__')
+                ? classifyBuiltinToolForAutoReview({
+                    toolName: remoteToolName,
+                    input: params.input ?? {},
+                    workspaceRoots: [opts.workingDir].filter(
+                      (d): d is string => typeof d === 'string' && d.length > 0,
+                    ),
+                  })
+                : remoteMcpPolicy;
+            if (remoteEffectivePolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt) {
               return { kind: 'permission', behavior: 'allow' };
             }
             const remoteForcePrompt =
-              remoteTurnPolicyForcePrompt || remoteMcpPolicy === 'prompt-each-time';
+              remoteTurnPolicyForcePrompt || remoteEffectivePolicy === 'prompt-each-time';
             const decision = await dispatchWithTimeout({
               kind: 'permission',
               requestId: params.requestId,
@@ -3848,7 +3881,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         // 老 agentManager.ts:1850-1893 的"切到更宽松 mode 时挂着的 ask 自动 allow,
         // 切到更严 mode 时 deny" 行为, 复用 dismissAllPending 钩子。
-        const moreOpen = newMode === 'auto' || newMode === 'bypassPermissions';
+        // **auto 不再算"更宽松"**:Auto-review 语义已从"全放行"变成"区内放行、越界升级",
+        // 挂起的授权请求本就是被升级的越界/风险动作,切到 auto 时应 fail-closed(deny),
+        // 否则等于把待确认的越界动作橡皮图章掉。只有 bypassPermissions(Full access)才是
+        // 真"全开"。与 Codex 侧 #767"切档时挂起请求统一拒绝"对称。
+        const moreOpen = newMode === 'bypassPermissions';
         dismissAllPending(`permission_mode_changed_to_${newMode}`, moreOpen ? 'allow' : 'deny');
         // SDK PermissionMode union 没有 'ask' (我们对 ChatInput 暴露的统一名字),
         // SDK 侧把 ask 当 default —— 与 startSession 的处理一致。
@@ -3873,9 +3910,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           return;
         }
         // 进计划模式 = 收紧(deny 挂起授权); 退出按底层档宽松度决定 —— 与
-        // setPermissionMode 的 moreOpen 语义一致。(idle 时通常无挂起交互,保留兜底。)
-        const moreOpen = !enabled &&
-          (mutablePermissionMode === 'auto' || mutablePermissionMode === 'bypassPermissions');
+        // setPermissionMode 的 moreOpen 语义一致(auto 不再算"更宽松",挂起的越界请求
+        // 退出 plan 回到 auto 时仍 fail-closed;只有 bypassPermissions 是真"全开")。
+        const moreOpen = !enabled && mutablePermissionMode === 'bypassPermissions';
         dismissAllPending(`plan_mode_${enabled ? 'enabled' : 'disabled'}`, moreOpen ? 'allow' : 'deny');
         const sdkMode = effectiveSdkPermissionMode();
         log.debug('setPlanMode', { enabled, sdk: sdkMode, underlying: mutablePermissionMode, controlRequestsBlocked: controlRequestsBlocked() });

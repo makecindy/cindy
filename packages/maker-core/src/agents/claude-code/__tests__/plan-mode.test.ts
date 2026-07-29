@@ -233,8 +233,9 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
 
     await handle.setPlanMode?.(false);
-    // 退出计划模式落到最新的底层档。
-    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('auto');
+    // 退出计划模式落到最新的底层档。Cindy 档 'auto'(Auto-review)映射到 SDK 'default'
+    // —— 不再透传 'auto' 给 CC(canUseTool 才会触发,由 Cindy 策略审查),见 toSdkPermissionMode。
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
     await handle.close();
   });
 

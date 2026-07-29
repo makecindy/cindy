@@ -73,6 +73,7 @@ import type {
   ConsumeAccountRateLimitResetCreditResponse,
 } from '../../types/account-rate-limits.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
+import { reviewAction, type ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
@@ -3181,9 +3182,9 @@ export class CodexAgent extends BaseAgent {
       requestId: string,
       kind: 'commandExecution' | 'fileChange' | 'mcpServerElicitation',
       req: InteractionRequest,
-      opts?: { forcePrompt?: boolean },
+      opts?: { forcePrompt?: boolean; autoReviewAction?: ReviewableAction },
     ): Promise<ApprovalDecision> {
-      const forcePrompt =
+      let forcePrompt =
         opts?.forcePrompt === true ||
         (req.kind === 'permission' &&
           forceTurnConfirmation(req.toolName, req.input));
@@ -3198,15 +3199,46 @@ export class CodexAgent extends BaseAgent {
       ) {
         return Promise.resolve('accept');
       }
-      // Policy turns deliberately route otherwise-unattended Auto actions back
-      // through the host. Preserve Auto semantics by accepting non-forced
-      // callbacks without opening Desktop UI.
+      // Policy turns (unattended: feishu bot / 定时任务) 以 untrusted + read-only 发射,把命令/文件
+      // 升级请求发回 host 后自动接受非强制回调 —— 保留该无人值守语义,但**仍对危险桶 fail-closed**:
+      // 无人值守时没有人能批准一个 destructive / 凭证 / 远程执行动作,应拒绝,而不是让它逃出 read-only
+      // 沙箱静默执行(与交互式 Auto 共用同一张 Cindy core 安全网)。安全 / 仅需升级的动作照常自动
+      // 接受,不影响正常无人值守自动化(真需要跑危险命令的自动化应走 bypassPermissions,不受此影响)。
       if (
         !forcePrompt &&
         activeTurnPermissionPolicy &&
         mutablePermissionMode === 'auto'
       ) {
+        if (opts?.autoReviewAction) {
+          const verdict = reviewAction(
+            opts.autoReviewAction,
+            runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
+          );
+          if (verdict === 'prompt-each-time') return Promise.resolve('decline');
+        }
         return Promise.resolve('accept');
+      }
+      // Auto-review 兜底路径:非 OAuth 路由下 approvalsReviewer='user',app-server 把越界/网络
+      // 等审批请求发回 host(OAuth 原生 auto_review 则由 server 内部裁决、根本不到这里 —— 天然
+      // "原生优先、Cindy 兜底")。这些请求不再一律转发用户,先过 harness 无关的 Cindy core:
+      // 安全的(如 curl 抓取)静默放行、危险的必问、其余升级。与 Claude 侧同一套 core,模型无关。
+      // **仅在有 interactionResolver 时生效**:没有 resolver = 没有能撤销误判的人在场,与 Claude
+      // canUseTool 的 no-resolver 分支一致 fail-closed(下面 dispatchInteraction 无 resolver 直接
+      // deny),不做任何自动放行。
+      if (
+        interactionResolver &&
+        !forcePrompt &&
+        mutablePermissionMode === 'auto' &&
+        opts?.autoReviewAction
+      ) {
+        const verdict = reviewAction(
+          opts.autoReviewAction,
+          runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
+        );
+        if (verdict === 'auto-approve') return Promise.resolve('accept');
+        // prompt-each-time:高风险,强制逐次弹窗且剥离会话级 suggestion(不许"总是允许")。
+        if (verdict === 'prompt-each-time') forcePrompt = true;
+        // 'prompt':落到下面的 dispatchInteraction,照常升级用户(可"本会话记住")。
       }
       const routedRequest =
         forcePrompt && req.kind === 'permission'
@@ -3401,7 +3433,7 @@ export class CodexAgent extends BaseAgent {
         description: params.reason ?? undefined,
         suggestions: commandSupportsAcceptForSession(params) ? codexSessionApprovalSuggestions() : undefined,
         metadata: params.reason ? { reason: params.reason } : undefined,
-      });
+      }, { autoReviewAction: { kind: 'exec', command: params.command ?? '' } });
       return { decision };
     };
 
@@ -3422,7 +3454,7 @@ export class CodexAgent extends BaseAgent {
         description: params.reason ?? undefined,
         suggestions: codexSessionApprovalSuggestions(),
         metadata: params.reason ? { reason: params.reason } : undefined,
-      });
+      }, { autoReviewAction: { kind: 'file-write', path: params.grantRoot ?? undefined } });
       return { decision };
     };
 
