@@ -372,6 +372,25 @@ export const GHOST_MODEL_VIDEO_ACTIONS = ['generate', 'edit'] as const;
 export type GhostModelVideoAction = (typeof GHOST_MODEL_VIDEO_ACTIONS)[number];
 
 /**
+ * cindy 槽·媒体类可申请的动作(2026-07-29 开闸,makecindy/cindy#784)。
+ *
+ * `deposit` = 寄存:把意识**手里已有**的媒体字节(用户在面板里粘贴/拖入的图、
+ * 面板存量素材)存入媒体总仓、记到本意识名下,换回指纹——从此这些媒体与
+ * 「意识自己生成的图」同权,可以直接当 edit_image / edit_video 的源图。
+ *
+ * 为什么单独成一档能力(而非跟着 image.edit 白送):它是本槽唯一**不经模型、
+ * 不花钱**的入仓通道。声明了 network 槽的意识本就能从白名单域拉字节入仓
+ * (as:'media'),寄存把同样的"写你的媒体库"能力给了没有 network 槽的意识,
+ * 因此必须在装入确认框里单独露出、由用户单独点头。
+ *
+ * 同一能力键同时授权 `release_media`(撤回自己寄存的那条引用):配额有上限,
+ * 没有撤回口的配额等于"用满即永久坏掉",不成立。撤回只删本意识的寄存引用,
+ * 不删字节(字节归回收器按引用归零处理),因此不是额外的信任面。
+ */
+export const GHOST_CINDY_MEDIA_ACTIONS = ['deposit'] as const;
+export type GhostCindyMediaAction = (typeof GHOST_CINDY_MEDIA_ACTIONS)[number];
+
+/**
  * cindy 槽能力详单(卡槽⑤配套,原名模型槽,2026-07-11 设计定案):声明"这个意识被允许
  * 向主机点哪几类代办"——只有类目与动作,**不含任何具体模型/供应商信息**
  * (选型权在主机的解析表:调用时显式点名 > 意识专属覆盖 > 用户能力偏好 >
@@ -382,6 +401,8 @@ export interface GhostCindyNeeds {
   image?: GhostModelImageAction[];
   /** 视频类:generate=文生视频,edit=参考图生视频(源图仅限本意识名下媒体,1–2 张首/尾帧)。 */
   video?: GhostModelVideoAction[];
+  /** 媒体类:deposit=寄存自己手里的媒体字节入总仓(换指纹,兼授权 release_media)。 */
+  media?: GhostCindyMediaAction[];
 }
 
 /**
@@ -1370,6 +1391,12 @@ export interface GhostPermissionItem {
   detail?: string;
   /** 主机固定说明的 i18n key 后缀(拼法同 labelKey)。 */
   detailKey?: string;
+  /**
+   * detailKey 的 i18n 插值参数(与 labelArgs 分开:说明行里的插值是**主机
+   * 政策数字**,如寄存字节上限,由常量单源注入,不让四份 locale 各写死一个
+   * 数字。没有 detailArgs 的条目行为与从前逐字节相同)。
+   */
+  detailArgs?: Record<string, string>;
 }
 
 /** cindy 详单能力键 → 权限项 labelKey(新增类目/动作在此登记)。 */
@@ -1378,7 +1405,29 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
   'image.edit': 'cindyImageEdit',
   'video.generate': 'cindyVideoGenerate',
   'video.edit': 'cindyVideoEdit',
+  'media.deposit': 'cindyMediaDeposit',
 };
+
+/**
+ * cindy 详单能力键 → 主机固定补充说明的 labelKey(可选;没有条目就不带 detail)。
+ * 寄存是唯一"写你的媒体库"的能力,上限必须在确认框里如实写出来(媒体规则:
+ * 装入确认要展示持久媒体占用上限)。
+ */
+const GHOST_CINDY_PERM_DETAIL: Record<string, string> = {
+  'media.deposit': 'cindyMediaDepositDetail',
+};
+
+/**
+ * 字节 → 确认框里给用户看的容量(含单位)。整数向下取整,不给"511.99"这种数;
+ * 整 GB 用 GB 表述(1GB 显示成"1024 MB"读起来像凑数)。单位跟着数字一起从
+ * 常量算出来,locale 里只留 {{quota}} 占位 —— 否则上限改成 GB 量级时,四份
+ * locale 里写死的 "MB" 就成了错的。
+ */
+function formatGhostQuotaSize(bytes: number): string {
+  const mb = Math.floor(bytes / (1024 * 1024));
+  if (mb >= 1024 && mb % 1024 === 0) return `${mb / 1024} GB`;
+  return `${mb} MB`;
+}
 
 /**
  * 从身份卡静态推导逐项权限清单(装入前无需运行任何意识代码)。
@@ -1391,8 +1440,21 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     for (const action of actions ?? []) {
       const cap = `${category}.${action}`;
       const labelKey = GHOST_CINDY_PERM_LABEL[cap];
+      const detailKey = GHOST_CINDY_PERM_DETAIL[cap];
       // 未登记的能力键不该出现(validateGhostManifest 已拦),防御性跳过。
-      if (labelKey) items.push({ key: `cindy:${cap}`, kind: 'cindy', labelKey });
+      if (labelKey) {
+        items.push({
+          key: `cindy:${cap}`,
+          kind: 'cindy',
+          labelKey,
+          ...(detailKey ? { detailKey } : {}),
+          // 寄存上限由常量单源插值进确认框说明(媒体规则要求装入确认展示
+          // 持久媒体占用上限);改常量四份 locale 自动跟随。
+          ...(cap === 'media.deposit'
+            ? { detailArgs: { quota: formatGhostQuotaSize(GHOST_CINDY_DEPOSIT_QUOTA_BYTES) } }
+            : {}),
+        });
+      }
     }
   }
   // network 槽:域名逐条列(用户要逐个看到"将访问谁"),凭证逐条列
@@ -2662,11 +2724,13 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       return { ok: false, reason: '声明了 cindy 能力详单但 slots 未包含 "cindy"' };
     }
     cindy = {};
-    // 类目 → 合法动作表(当前包含 image / video 两类;动作集恰好同名,但按
-    // 类目查表,未来某类目动作分叉时这里天然承接)。
+    // 类目 → 合法动作表(image / video / media;image 与 video 的动作集恰好
+    // 同名,但按类目查表,未来某类目动作分叉时这里天然承接)。新增类目必须
+    // 同时在下面的落位分支登记 —— 漏登记会让动作静默落进别的类目。
     const actionTable: Record<string, readonly string[]> = {
       image: GHOST_MODEL_IMAGE_ACTIONS,
       video: GHOST_MODEL_VIDEO_ACTIONS,
+      media: GHOST_CINDY_MEDIA_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       const allowed = actionTable[category];
@@ -2692,10 +2756,14 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         }
         actions.push(a);
       }
+      // 逐类目显式落位:不要写成 `else cindy.video = …` 的兜底分支——新增
+      // 类目时漏改这里会把新动作静默塞进 video(actionTable 已放行,校验不报错)。
       if (category === 'image') cindy.image = actions as GhostModelImageAction[];
-      else cindy.video = actions as GhostModelVideoAction[];
+      else if (category === 'video') cindy.video = actions as GhostModelVideoAction[];
+      else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
+      else return { ok: false, reason: `cindy 能力类目 ${JSON.stringify(category)} 尚未接线(主机缺陷)` };
     }
-    if (cindy.image === undefined && cindy.video === undefined) {
+    if (cindy.image === undefined && cindy.video === undefined && cindy.media === undefined) {
       return { ok: false, reason: 'cindy 能力详单不能是空对象' };
     }
   }
@@ -4716,6 +4784,49 @@ export const GHOST_CINDY_JOB_TTL_MS = 30 * 60_000;
 export const GHOST_CINDY_MAX_ASYNC_JOBS = 2;
 
 /**
+ * ── deposit_media 政策参数(makecindy/cindy#784)─────────────────────────
+ *
+ * 寄存是插件写持久媒体的第三条路,而且是唯一**两道闸都没有**的一条:模型
+ * 代办要花钱(成本即天然限流),network `as:'media'` 限 manifest 白名单域名,
+ * 寄存收的是本地字节 —— 不花钱、不出网、可程序化循环调用。因此这条通道
+ * 自带三重硬闸:单次上限、每意识累计配额、令牌桶频控。
+ */
+
+/**
+ * 单次寄存上限(解码后字节;超限整单拒)。
+ *
+ * 2026-07-29 由 16MB(fs 槽单次写量级)上调至 50MB:实拍照片与短视频素材
+ * 常态超过 16MB,压到 16MB 以下要插件自己转码,与"画布上的图直接能改"的
+ * 目标冲突。下游没有新的天花板 —— network `as:'media'` 的入仓硬顶本就是
+ * GHOST_FETCH_MEDIA_MAX_BYTES(256MB),blobStore 不设上限。
+ *
+ * 代价说明白:寄存的字节以 base64 走一次 ghost-pipe IPC(50MB → 约 67MB
+ * 字符串的瞬时分配),这是本通道与 network 通道的结构性差别 —— 后者字节
+ * 全程在主机手里、不过 IPC。因此这个数不宜再往上抬;真需要更大的素材,
+ * 正确解法是插件侧压缩或分片,不是继续抬上限。
+ */
+export const GHOST_CINDY_DEPOSIT_MAX_BYTES = 50 * 1024 * 1024;
+
+/**
+ * 每意识寄存累计配额(字节)。只统计**寄存**引用(refKind 'ghost-deposit'),
+ * 不含模型产物与 network 下载 —— 否则一个出图很多的意识会连一张参考图都
+ * 存不进来。内容寻址天然去重:同一张图反复寄存不重复占额。
+ * 用满的释放口是 release_media(面板删素材时撤回),不做静默 LRU 淘汰
+ * ——"昨天能改今天改不了"正是 #784 要消灭的体验。
+ *
+ * 2026-07-29 由 512MB 上调至 1GB:单次上限同步抬到 50MB 后,原配额只够存
+ * 十来件大素材,重度使用的无限画布会频繁撞顶。
+ */
+export const GHOST_CINDY_DEPOSIT_QUOTA_BYTES = 1024 * 1024 * 1024;
+
+/**
+ * 频控令牌桶:容量 = 允许的突发张数(用户一次粘一批图要立刻可用),
+ * 之后按 refill 间隔匀速回补。防的是程序化死循环刷仓,不是拦正常批量粘贴。
+ */
+export const GHOST_CINDY_DEPOSIT_BURST = 8;
+export const GHOST_CINDY_DEPOSIT_REFILL_MS = 1000;
+
+/**
  * 上行:cindy 槽代办请求(请 Cindy 本体出图 / 改图)。协议 type 为
  * 'cindy-request'(2026-07-11 由 'model-request' 更名,主机对旧名保持
  * 静默兼容)。选型双轨:
@@ -4797,6 +4908,47 @@ export type GhostPipeCindyRequest =
       kind: 'query_job';
       /** mode:'submit' 受理时返回的任务号(仅本意识自己的任务可查)。 */
       jobId: string;
+    }
+  | {
+      /**
+       * 寄存:把意识手里已有的媒体字节存入总仓、记到本意识名下,换回指纹
+       * (makecindy/cindy#784)。典型来源是面板里用户粘贴/拖入的图与面板存量
+       * 素材——它们的字节只在面板侧(IndexedDB / 面板内存),不在总仓,因此
+       * 在寄存之前不能当 edit_image / edit_video 的源图。
+       *
+       * 不经模型、不花钱、不产出新内容:这条通道只是"字节换指纹"。因此它
+       * **不进 ghost_call 产物账**(不会被当成生成物自动送进聊天/IM——用户
+       * 自己粘的参考图被回推到 IM 会是隐私事故),也不进画廊(粘贴的参考图
+       * 不是这个意识的"作品")。
+       *
+       * 须声明 'cindy' 卡槽 + `cindy.media: ["deposit"]`。
+       */
+      type: 'cindy-request';
+      kind: 'deposit_media';
+      /**
+       * 媒体字节的 base64(不含 data: 前缀;解码后 ≤
+       * GHOST_CINDY_DEPOSIT_MAX_BYTES = 50MB)。真实类型由主机按字节魔数
+       * 判定,识别不出受支持媒体一律拒收——自报的 mime / 扩展名不作为依据。
+       */
+      data: string;
+      /** 可选备注(入账 label;仅供主机侧账目与排查,不进聊天)。 */
+      label?: string;
+      /** 归因号(仅日志归因;寄存不计入产物账,见上)。 */
+      callId?: string;
+    }
+  | {
+      /**
+       * 撤回寄存:删掉本意识对该指纹的寄存引用(配额随之释放)。面板上那件
+       * 素材被用户删掉时调用,是 deposit 配额的正常释放口。
+       *
+       * 只删**本意识自己的寄存引用**:别人的引用、画廊引用、聊天消息引用都
+       * 不受影响;字节本身交回收器按"引用归零"统一处理,本请求删不掉字节。
+       * 与 deposit 共用 `cindy.media: ["deposit"]` 授权。
+       */
+      type: 'cindy-request';
+      kind: 'release_media';
+      /** 要撤回的寄存指纹(sha256)。 */
+      hash: string;
     };
 
 /** cindy 槽代办的返回(cindy.send 的 resolve 值)。 */
@@ -4844,6 +4996,32 @@ export type GhostPipeModelResult =
       ext: string;
       model: string;
       modelLabel: string;
+    }
+  | {
+      /**
+       * deposit_media 成功(独立成员:有 `bytes`、无 `model`/`status`,
+       * 可与生成分支可靠判别)。指纹拿到手即可直接当 edit_image /
+       * edit_video 的源图,也可经 cindy-ghost://<id>/media/<指纹><后缀>
+       * 在面板里取件。
+       */
+      ok: true;
+      url: string;
+      hash: string;
+      ext: string;
+      /** 落仓字节数(去重命中时为既有内容的字节数)。 */
+      bytes: number;
+      /** 该字节此前已在总仓(全局内容去重命中)。 */
+      deduplicated: boolean;
+      /** 寄存配额:本意识已用 / 上限(字节)。作者据此提前提示用户。 */
+      quotaUsedBytes: number;
+      quotaLimitBytes: number;
+    }
+  | {
+      /** release_media 成功。released=false 表示本就没有这条寄存引用(幂等)。 */
+      ok: true;
+      released: boolean;
+      quotaUsedBytes: number;
+      quotaLimitBytes: number;
     }
   | { ok: false; message: string };
 

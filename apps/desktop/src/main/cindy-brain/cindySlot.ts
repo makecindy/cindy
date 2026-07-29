@@ -20,12 +20,28 @@
  * ghost-gallery ref(出生=该意识)——面板供图的归属校验(ghostCanRead)
  * 与"产物不被回收"同时成立;配额上限由权限策略负责。
  *
+ * 另有两个**不经模型**的媒体代办(makecindy/cindy#784),走本模块只因为它们
+ * 共用同一套资格审与归属账本:
+ *
+ *   deposit_media:意识手里已有的媒体字节(面板里用户粘贴/拖入的图)
+ *     → 魔数验型(不信自报 mime)→ 单次上限 / 令牌桶频控 / 每意识累计配额
+ *     → 落仓 + ghost-deposit 记账 → 回指纹。从此这些媒体与生成图同权,
+ *       可直接当 edit_image / edit_video 的源图("画布上的图 = AI 能改的图")。
+ *   release_media:撤回自己的寄存引用(面板删素材时释放配额)。
+ *
+ * 寄存刻意**不进** ghost_call 产物账(recordGhostCallMedia):它不是产物,
+ * 而是用户自己的输入图——被当产物自动送进聊天/IM 会是隐私事故。
+ *
  * 依赖注入(规则 14):生成/落盘/记账/归属解析全部经 deps,单测直测。
  */
 
 import { randomUUID } from 'node:crypto';
 
 import {
+  GHOST_CINDY_DEPOSIT_BURST,
+  GHOST_CINDY_DEPOSIT_MAX_BYTES,
+  GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+  GHOST_CINDY_DEPOSIT_REFILL_MS,
   GHOST_CINDY_JOB_TTL_MS,
   GHOST_CINDY_MAX_ASYNC_JOBS,
   GHOST_IMAGE_ASPECT_RATIOS,
@@ -110,6 +126,26 @@ export interface CindySlotDeps {
     callId?: string;
   }): Promise<{ url: string; hash: string; ext: string }>;
   /**
+   * ── deposit_media 三件套(可选依赖:不注入 = 寄存能力在运行期不可用,
+   *    资格审通过也会回结构化拒绝。未接线的宿主/测试环境天然 fail closed)──
+   */
+  /**
+   * 字节 → 受支持媒体的真实 mime(魔数识别,与 network `as:'media'` 同一实现)。
+   * 识别不出受支持媒体返回 null —— 调用方自报的 mime / 扩展名一律不作为依据。
+   */
+  sniffDepositMime?(buffer: Uint8Array): string | null;
+  /** 寄存落仓 + ghost-deposit 记账(出生=用户,引用方=该意识)。 */
+  depositMedia?(params: {
+    ghostId: string;
+    buffer: Uint8Array;
+    mimeType: string;
+    label?: string;
+  }): Promise<{ url: string; hash: string; ext: string; bytes: number; deduplicated: boolean }>;
+  /** 该意识寄存物的账面字节占用(配额判定;每单现读)。 */
+  depositUsageBytes?(ghostId: string): Promise<number>;
+  /** 撤回该意识对某指纹的寄存引用;返回是否真的删掉了行(false = 本就没有)。 */
+  releaseDeposit?(params: { ghostId: string; hash: string }): Promise<boolean>;
+  /**
    * 管子续命挂钩(pipeDispatcher.holdCall/releaseCall 接线):tool-call
    * 触发的同步视频代办开始时 hold(budgetMs = 这单的轮询预算),结束时
    * release——署名单在途期间管子不再按 330s 掐掉。ghostId = 主机反查的
@@ -146,6 +182,19 @@ const DEFAULT_VIDEO_EXPECTED_SECONDS = 120;
 
 /** 异步任务号长度上限(主机铸 UUID 量级;超长视为沙箱乱填)。 */
 const MAX_JOB_ID_LEN = 64;
+
+/** 寄存备注长度上限(与生成产物的 label 切长同量级)。 */
+const MAX_DEPOSIT_LABEL_LEN = 200;
+
+/**
+ * base64 载荷的字符长度上限:先按字符数早拒,再解码——不先拦就得为一条
+ * 恶意超长字符串分配整个解码缓冲。4/3 是 base64 膨胀率,+8 容纳 padding 与
+ * 换行(判据与 fsSlot 的 base64 写入一致)。
+ */
+const MAX_DEPOSIT_B64_CHARS = (GHOST_CINDY_DEPOSIT_MAX_BYTES * 4) / 3 + 8;
+
+/** 不含 data: 前缀的 base64 字符集(允许换行,与 fsSlot 同口径)。 */
+const BASE64_RE = /^[A-Za-z0-9+/=\r\n]*$/;
 
 /**
  * 每意识完成态(done/failed)任务记录保留上限:TTL 之外的第二道闸——
@@ -215,6 +264,11 @@ export class GhostCindySlot {
   private readonly inflight = new Map<string, number>();
   /** 异步代办任务表(jobId → 记录;惰性 sweep,过期即清)。 */
   private readonly jobs = new Map<string, CindyAsyncJob>();
+  /**
+   * 寄存频控令牌桶(ghostId → 余量与结算时刻)。进程内状态:主进程重启即满,
+   * 与配额(落在账本里的硬上限)是两道独立的闸,重启只放松频控不放松配额。
+   */
+  private readonly depositBuckets = new Map<string, { tokens: number; at: number }>();
 
   constructor(private readonly deps: CindySlotDeps) {}
 
@@ -235,15 +289,39 @@ export class GhostCindySlot {
       callId?: unknown;
       mode?: unknown;
       jobId?: unknown;
+      data?: unknown;
+      label?: unknown;
+      hash?: unknown;
     };
     if (p?.kind === 'query_job') {
       return this.handleQueryJob(ghostId, p);
+    }
+    // 不经模型的媒体代办(#784):早于 KIND_INFO 分流——它们没有 prompt、
+    // 没有选型、不占在途名额,与生成链一条都不共用。这条分支自带兜底 catch:
+    // 生成链的兜底在下面那个大 try 里,这里已经 return 出去了,不共用它,
+    // 而"永不 reject"是本类对沙箱的硬承诺(注入的嗅探/账本抛错也不许穿透)。
+    if (p?.kind === 'deposit_media' || p?.kind === 'release_media') {
+      const verb = p.kind === 'deposit_media' ? '寄存' : '撤回寄存';
+      try {
+        return p.kind === 'deposit_media'
+          ? await this.handleDepositMedia(ghostId, p)
+          : await this.handleReleaseMedia(ghostId, p);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.deps.log?.warn(`ghost cindy-request ${p.kind} unexpected failure`, {
+          ghostId,
+          error: message,
+        });
+        return { ok: false, message: `${verb}失败:${message}` };
+      }
     }
     const info = typeof p?.kind === 'string' ? KIND_INFO[p.kind] : undefined;
     if (!info) {
       return {
         ok: false,
-        message: `未知的代办类型(当前支持 ${Object.keys(KIND_INFO).join(' / ')} / query_job)`,
+        message:
+          `未知的代办类型(当前支持 ${Object.keys(KIND_INFO).join(' / ')} / ` +
+          'deposit_media / release_media / query_job)',
       };
     }
     const kind = p.kind as string;
@@ -548,6 +626,238 @@ export class GhostCindySlot {
     const excess = settled.length - (MAX_SETTLED_JOBS_PER_GHOST - running - 1);
     for (let i = 0; i < excess; i++) {
       this.jobs.delete(settled[i][0]);
+    }
+  }
+
+  /**
+   * 媒体类代办(deposit/release)的共用资格审:卡槽 + 详单动作粒度,话术与
+   * 模型类代办同款。通过返回 null。deposit 与 release 共用同一能力键——
+   * 「能存」必然「能撤回自己存的」,撤回不构成额外信任面。
+   */
+  private gateMediaCapability(ghostId: string): GhostPipeModelResult | null {
+    const ghost = this.deps.getGhost(ghostId);
+    if (!ghost || !ghost.enabled) {
+      return { ok: false, message: '意识不在可用状态' };
+    }
+    if (!ghost.manifest.slots?.includes('cindy')) {
+      return { ok: false, message: '本意识未声明 cindy 卡槽,无权请 Cindy 代办' };
+    }
+    const declared: readonly string[] = ghost.manifest.cindy?.media ?? [];
+    if (!declared.includes('deposit')) {
+      return {
+        ok: false,
+        message:
+          '本意识未声明媒体「寄存」能力(身份卡 cindy.media 缺 "deposit"),请意识作者更新声明',
+      };
+    }
+    return null;
+  }
+
+  /**
+   * 寄存频控令牌桶:取一枚令牌,取不到返回 false。
+   * 桶满时把结算时刻推到当下(不积累无限额度);未满时只推进已兑现的整数
+   * 份额,余数留给下一次(避免高频调用把不足一份的等待时间反复清零)。
+   */
+  private takeDepositToken(ghostId: string): boolean {
+    const now = Date.now();
+    const bucket = this.depositBuckets.get(ghostId);
+    if (!bucket) {
+      this.depositBuckets.set(ghostId, { tokens: GHOST_CINDY_DEPOSIT_BURST - 1, at: now });
+      return true;
+    }
+    const refilled = Math.floor((now - bucket.at) / GHOST_CINDY_DEPOSIT_REFILL_MS);
+    if (refilled > 0) {
+      const next = bucket.tokens + refilled;
+      if (next >= GHOST_CINDY_DEPOSIT_BURST) {
+        bucket.tokens = GHOST_CINDY_DEPOSIT_BURST;
+        bucket.at = now;
+      } else {
+        bucket.tokens = next;
+        bucket.at += refilled * GHOST_CINDY_DEPOSIT_REFILL_MS;
+      }
+    }
+    if (bucket.tokens <= 0) return false;
+    bucket.tokens -= 1;
+    return true;
+  }
+
+  /**
+   * deposit_media:意识手里已有的媒体字节 → 总仓,换回指纹(#784)。
+   *
+   * 守门顺序即成本递增顺序,任何一道不过都不做下一道:
+   *   资格审 → 能力接线 → 载荷形状 → 字符数早拒 → base64 字符集 → 解码
+   *   → 解码后字节上限 → 魔数验型 → 频控令牌 → 账本配额 → 落仓记账。
+   *
+   * 三条刻意的"不":不信自报 mime(魔数说了算)、不进 ghost_call 产物账
+   * (用户自己的输入图不该被当产物推去 IM)、不进画廊(参考图不是作品)。
+   */
+  private async handleDepositMedia(
+    ghostId: string,
+    p: { data?: unknown; label?: unknown; callId?: unknown },
+  ): Promise<GhostPipeModelResult> {
+    const denied = this.gateMediaCapability(ghostId);
+    if (denied) return denied;
+
+    const sniff = this.deps.sniffDepositMime;
+    const deposit = this.deps.depositMedia;
+    const readUsage = this.deps.depositUsageBytes;
+    if (!sniff || !deposit || !readUsage) {
+      return { ok: false, message: '主机当前不支持媒体寄存(能力未接线)' };
+    }
+
+    if (
+      p.label !== undefined &&
+      (typeof p.label !== 'string' || p.label.length > MAX_DEPOSIT_LABEL_LEN)
+    ) {
+      return { ok: false, message: `label 不合法(≤${MAX_DEPOSIT_LABEL_LEN} 字符的字符串,或不传)` };
+    }
+    if (
+      p.callId !== undefined &&
+      (typeof p.callId !== 'string' || p.callId.length === 0 || p.callId.length > MAX_CALL_ID_LEN)
+    ) {
+      return { ok: false, message: 'callId 不合法(1–128 字符的字符串,或不传)' };
+    }
+    const label = p.label as string | undefined;
+    const callId = (p.callId as string | undefined) ?? 'unattributed';
+
+    if (typeof p.data !== 'string' || p.data.length === 0) {
+      return { ok: false, message: 'data 必须是媒体字节的 base64 字符串(不含 data: 前缀)' };
+    }
+    const overLimit = `媒体过大(单次寄存上限 ${GHOST_CINDY_DEPOSIT_MAX_BYTES} 字节)`;
+    // 先按字符数拦:不先拦就得为一条恶意超长字符串分配整个解码缓冲。
+    if (p.data.length > MAX_DEPOSIT_B64_CHARS) return { ok: false, message: overLimit };
+    if (!BASE64_RE.test(p.data)) {
+      // Buffer.from 会静默丢弃非法字符,不先校字符集就等于接受任意脏串。
+      return { ok: false, message: 'data 不是合法 base64(不要带 data: 前缀)' };
+    }
+    const buffer = new Uint8Array(Buffer.from(p.data, 'base64'));
+    if (buffer.byteLength === 0) return { ok: false, message: 'data 解码后为空' };
+    if (buffer.byteLength > GHOST_CINDY_DEPOSIT_MAX_BYTES) return { ok: false, message: overLimit };
+
+    const mimeType = sniff(buffer);
+    if (!mimeType) {
+      return {
+        ok: false,
+        message:
+          '不是受支持的媒体类型(按字节识别,不看自报类型):只收图片 / 视频 / 音频 / glb,识别不出一律不入媒体库',
+      };
+    }
+
+    if (!this.takeDepositToken(ghostId)) {
+      return {
+        ok: false,
+        message:
+          `寄存过于频繁(允许 ${GHOST_CINDY_DEPOSIT_BURST} 张突发,之后约每 ` +
+          `${Math.round(GHOST_CINDY_DEPOSIT_REFILL_MS / 1000)} 秒 1 张),请稍后重试`,
+      };
+    }
+
+    // 配额:保守预判(已用 + 本次最坏情况)。内容去重命中时本次其实不占额,
+    // 但入库前算不出是否命中——因此临界处可能误拒一次"其实免费"的重复寄存,
+    // 代价是配额永远是硬上限、绝不超发。释放口是 release_media。
+    let used: number;
+    try {
+      used = await readUsage(ghostId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.deps.log?.warn('ghost cindy-request deposit_media quota read failed', {
+        ghostId,
+        callId,
+        error: message,
+      });
+      return { ok: false, message: `寄存失败:配额查询出错(${message})` };
+    }
+    if (used + buffer.byteLength > GHOST_CINDY_DEPOSIT_QUOTA_BYTES) {
+      return {
+        ok: false,
+        message:
+          `寄存配额已满(本插件上限 ${GHOST_CINDY_DEPOSIT_QUOTA_BYTES} 字节,已用 ${used})。` +
+          '请对不再需要的寄存物调用 release_media 释放后重试,并如实告知用户。',
+      };
+    }
+
+    let saved: { url: string; hash: string; ext: string; bytes: number; deduplicated: boolean };
+    try {
+      saved = await deposit({ ghostId, buffer, mimeType, ...(label ? { label } : {}) });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.deps.log?.warn('ghost cindy-request deposit_media failed', {
+        ghostId,
+        callId,
+        error: message,
+      });
+      return { ok: false, message: `寄存失败:${message}` };
+    }
+
+    // 落仓后重读一次真实占用:deduplicated 只说明"字节此前已在总仓",不代表
+    // 本意识此前已有这条寄存引用(可能是别的意识存过),不能据它推算。
+    let usedAfter = used + saved.bytes;
+    try {
+      usedAfter = await readUsage(ghostId);
+    } catch {
+      // 回读失败不影响本次成功;返回的是估算值,仅供作者提示用户。
+    }
+    this.deps.log?.info('ghost cindy-request deposit_media done', {
+      ghostId,
+      callId,
+      hash: saved.hash,
+      mime: mimeType,
+      bytes: saved.bytes,
+      ...(saved.deduplicated ? { deduplicated: true } : {}),
+    });
+    return {
+      ok: true,
+      url: saved.url,
+      hash: saved.hash,
+      ext: saved.ext,
+      bytes: saved.bytes,
+      deduplicated: saved.deduplicated,
+      quotaUsedBytes: usedAfter,
+      quotaLimitBytes: GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+    };
+  }
+
+  /**
+   * release_media:撤回本意识对某指纹的寄存引用(配额释放口)。
+   * 归属天然收敛——账本删除条件写死 refKind='ghost-deposit' + refId=本意识,
+   * 别人的引用、画廊、聊天消息引用都碰不到,字节交回收器按引用归零处理。
+   * 幂等:本就没有这条引用时回 released:false,不报错。
+   */
+  private async handleReleaseMedia(
+    ghostId: string,
+    p: { hash?: unknown },
+  ): Promise<GhostPipeModelResult> {
+    const denied = this.gateMediaCapability(ghostId);
+    if (denied) return denied;
+
+    const release = this.deps.releaseDeposit;
+    const readUsage = this.deps.depositUsageBytes;
+    if (!release || !readUsage) {
+      return { ok: false, message: '主机当前不支持媒体寄存(能力未接线)' };
+    }
+    if (typeof p.hash !== 'string' || !HASH_RE.test(p.hash)) {
+      return { ok: false, message: '指纹格式不合法' };
+    }
+    try {
+      const released = await release({ ghostId, hash: p.hash });
+      const usedAfter = await readUsage(ghostId);
+      if (released) {
+        this.deps.log?.info('ghost cindy-request release_media done', { ghostId, hash: p.hash });
+      }
+      return {
+        ok: true,
+        released,
+        quotaUsedBytes: usedAfter,
+        quotaLimitBytes: GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.deps.log?.warn('ghost cindy-request release_media failed', {
+        ghostId,
+        hash: p.hash,
+        error: message,
+      });
+      return { ok: false, message: `撤回寄存失败:${message}` };
     }
   }
 

@@ -34,6 +34,7 @@ import { computePriceQuoteTurnMoney } from './turnCostCalculator';
 import {
   getModelPriceQuote,
 } from '../../shared/modelPriceQuote.js';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   addCompatibleRegionalMoney,
   DEFAULT_USAGE_CURRENCY,
@@ -58,8 +59,8 @@ const ANOMALY_MIN_ACTIVE_DAYS = 3;
 const MODEL_WINDOW_DAYS = 30;
 /** 等价格表的最长预算 (ms) — 缓存命中时是同步快返, 只有冷启动网络 fetch 会触及。 */
 const PRICING_WAIT_BUDGET_MS = 200;
-// v3: 币种语义改为跟随来源(默认 USD),旧缓存里 CN 构建的金额带错标 CNY,整体作废。
-const DISK_CACHE_VERSION = 3;
+// v4:恢复 CN usage 的 CNY 账本口径，并让订阅 USD 估值按 6.7 投影到 CNY。
+const DISK_CACHE_VERSION = 4;
 const DISK_CACHE_FILE = 'usage-history.json';
 /** 后台刷新完成后, renderer 的短轮询能拿到 fresh payload, 避免 stale 状态自循环。 */
 const MEMORY_FRESH_MS = 10_000;
@@ -486,18 +487,9 @@ export async function readUsageHistoryWith(
   const windowDays = Math.min(366, Math.max(1, Math.floor(opts?.days ?? 140)));
   const todayKey = deps.todayKey();
 
-  const allDays = await deps.getAllSpendDays();
-  // 阈值启发式(异常检测)使用的日金额表必须与账本币种同单位:币种切换过渡
-  // 期的异币种历史日不进表(按 0 计),避免拿一种币种的阈值去比另一种的数值。
-  const ledgerCurrency =
-    allDays.find((row) => row.day === todayKey)?.money.currency ??
-    allDays[allDays.length - 1]?.money.currency ??
-    DEFAULT_USAGE_CURRENCY;
-  const spendByDay = new Map(
-    allDays
-      .filter((row) => row.money.currency === ledgerCurrency)
-      .map((row) => [row.day, row.money.amount]),
-  );
+  // 历史聚合只有一个金额口径:兼容当前账本币种的金额保留,无法确定换算语义的
+  // 异币种金额在入口丢弃为 0。token 等非金额统计仍保留。
+  const ledgerCurrency = DEFAULT_USAGE_CURRENCY;
   // 零值也用账本币种:无消费日的 today/空聚合不能把展示单位翻回默认币种。
   const zeroActual = (): RegionalMoney => ({
     amount: 0,
@@ -512,21 +504,33 @@ export async function readUsageHistoryWith(
     kind: 'value-estimate',
     estimateReasons: ['subscription-value'],
   });
-  // 聚合偏好账本币种(今天/最新行的币种):默认 USD 偏好会在币种切换过渡期
-  // 把当前币种的日金额整段挤掉(窗口里残留任意旧 USD 行即触发)。
+  const keepCompatibleMoney = (money: RegionalMoney): RegionalMoney =>
+    money.currency === ledgerCurrency ? money : zeroActual();
+  const allDays = (await deps.getAllSpendDays()).map((row) => ({
+    ...row,
+    money: keepCompatibleMoney(row.money),
+  }));
+  const spendByDay = new Map(
+    allDays.map((row) => [row.day, row.money.amount]),
+  );
   const addOrZero = (
     values: RegionalMoney[],
     kind: 'actual-cost' | 'value-estimate' = 'actual-cost',
   ): RegionalMoney =>
-    addCompatibleRegionalMoney(values, ledgerCurrency) ??
-    (kind === 'actual-cost' ? zeroActual() : zeroEstimate());
+    addCompatibleRegionalMoney(
+      values.filter((value) => value.currency === ledgerCurrency),
+      ledgerCurrency,
+    ) ?? (kind === 'actual-cost' ? zeroActual() : zeroEstimate());
 
   const heatmapCutoff = shiftDayKey(todayKey, -(windowDays - 1));
   const modelCutoff = shiftDayKey(todayKey, -(MODEL_WINDOW_DAYS - 1));
   // 一次查询同时服务两个窗口: 热力图 tooltip 的每日 token (heatmap 窗口) 与
   // 模型拆分聚合 (30 天窗口)。取更早的 cutoff (ISO day key 字符串可直接比较)。
   const usageRowsSince = heatmapCutoff < modelCutoff ? heatmapCutoff : modelCutoff;
-  const allModelRows = await deps.getModelUsageSince(usageRowsSince);
+  const allModelRows = (await deps.getModelUsageSince(usageRowsSince)).map((row) => ({
+    ...row,
+    money: keepCompatibleMoney(row.money),
+  }));
   const modelRows = allModelRows.filter((r) => r.day >= modelCutoff);
 
   // 每日 token 合计 → days 的 tooltip 数据。codex-only 日 daily_spend 无行 ($ 只有
@@ -614,6 +618,7 @@ export async function readUsageHistoryWith(
       m.estimatedMoney = computePriceQuoteTurnMoney(
         m,
         getSubscriptionValuePriceFor(m.agentKind, m.model, pricing),
+        CURRENT_CINDY_REGION,
       );
     }
   }
@@ -630,6 +635,7 @@ export async function readUsageHistoryWith(
         ? (computePriceQuoteTurnMoney(
             row,
             getSubscriptionValuePriceFor(agentKind, model, pricing),
+            CURRENT_CINDY_REGION,
           ) ?? zeroEstimate())
         : zeroEstimate();
     const money =
@@ -711,7 +717,8 @@ export async function readUsageHistoryWith(
       row.money.approximate,
   );
   const today =
-    allDays.find((row) => row.day === todayKey)?.money ?? zeroActual();
+    allDays.find((row) => row.day === todayKey && row.money.currency === ledgerCurrency)?.money ??
+    zeroActual();
 
   return {
     generatedAt: Date.now(),

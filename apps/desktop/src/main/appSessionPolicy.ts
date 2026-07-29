@@ -24,7 +24,9 @@ export function isLocalDbOwnerCurrent(
 }
 
 /**
- * Return the verified cloud owner eligible for XDMaker migration.
+ * Return the verified cloud owner eligible for the legacy XDMaker userData
+ * migration. ("XDMaker" here is the pre-rebrand product whose userData we
+ * migrate FROM — not the current app; do not rename it to Cindy.)
  * Local and signed-out modes deterministically return null and therefore must
  * never probe the legacy userData directory.
  */

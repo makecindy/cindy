@@ -710,7 +710,8 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 
 意识是 Cindy 的第三方能力包,文件形态是 \`.cindy\`(zip 包)。装入后可给
 主机叠加:AI 可调用的工具、常驻界面面板、模型代办能力。本手册教你(agent)替用户
-写一个意识。**流程:读完本手册 → 在工作目录写源码文件 → ghost_forge_pack 打包 →
+写一个意识。**流程:先取手册目录,按需用 section 读透相关章(动手前至少读完
+"沙箱红线"与"打包与测试"两章) → 在工作目录写源码文件 → ghost_forge_pack 打包 →
 用户在弹窗上确认装入。**
 
 从零开始时优先调用 \`ghost_forge_scaffold\` 生成一份不会覆盖现有文件的骨架，再在
@@ -761,6 +762,9 @@ my-ghost/
   "command": "画图",            // 可选:用户 $画图 显式点名(与已装意识查重,冲突拒装)
   "tools": [ /* 见 §3 */ ],
   "cindy": { "image": ["generate", "edit"] },   // 声明了 cindy 槽时必写:能力详单,见下
+  // 三个类目:image / video 的动作是 "generate" | "edit";media 的动作只有
+  // "deposit"(把你手里的媒体字节寄存进总仓换指纹,见 §4.0.1)。按需申请,
+  // 每条都会在装入确认框里单独列给用户看。
   "panel": { "title": "面板标题", "html": "panel.html", "position": "left",
              "minWidth": 240, "defaultFraction": 0.24,
              "systemButtons": { "maximize": false } },
@@ -1169,6 +1173,55 @@ const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '
 //   这是主机侧临时状态,不代表本意识缺这项能力——**不要频繁重试**,
 //   如实告诉用户"当前模型不可用,稍后再试或重启应用",然后结束本次操作。
 \`\`\`
+
+### 4.0.1 寄存:让"用户自己的图"也能被 AI 改(deposit_media)
+
+改图/图生视频的 \`hashes\` **只认本意识名下的媒体**。主机生成的图天然在册,
+但用户在你面板里**粘贴、拖入**的图,以及面板里早就存着的存量素材,字节只在
+面板侧(IndexedDB / 你自己的存档),总仓里没有账——所以在寄存之前,它们不能
+当源图。这就是"同一块画布上有的图能改、有的不能"的由来。
+
+寄存把这些字节存进总仓、记到你名下,换回指纹;从此它与你生成的图**同权**。
+
+\`\`\`js
+// 需声明:"slots": [..., "cindy"], "cindy": { "media": ["deposit"] }
+const r = await cindy.send({
+  type: 'cindy-request',
+  kind: 'deposit_media',
+  data: base64,                  // 媒体字节的 base64,不含 data: 前缀
+  label: '用户拖入的参考图',      // 可选,仅供主机侧账目与排查
+  callId: msg.callId,            // 可选,仅日志归因
+});
+// r = { ok:true, url:'cindy-media://blobs/<指纹><后缀>', hash, ext, bytes,
+//       deduplicated, quotaUsedBytes, quotaLimitBytes }
+// 拿到 hash 就能直接当源图:
+await cindy.send({ type:'cindy-request', kind:'edit_image', prompt:'背景换成雪山', hashes:[r.hash] });
+
+// 面板上那件素材被用户删掉时撤回,释放配额(同一能力键,不用另外声明):
+await cindy.send({ type: 'cindy-request', kind: 'release_media', hash: r.hash });
+// → { ok:true, released, quotaUsedBytes, quotaLimitBytes }
+//   released:false = 本就没有这条寄存引用(幂等,不是错误)。
+\`\`\`
+
+规矩(都会被主机强制,不是建议):
+
+- **类型按字节判**:主机读魔数,只收图片 / 视频 / 音频 / glb。你自报的 mime 或
+  文件名一概不参考,识别不出直接拒——别拿 svg、zip、json 来试;
+- **单次 ≤50MB**(解码后字节)。字节要以 base64 走一次 IPC,再大请自己在面板侧
+  压缩或分片,别指望上限继续抬;
+- **每意识配额 1GB**,只算寄存物(你生成的图不占这个额)。同一张图反复寄存
+  不重复占额(内容寻址天然去重)。**满了就拒**——不会静默淘汰旧的,因为
+  "昨天能改今天改不了"是比"存不进去"更糟的体验。用 \`release_media\` 释放;
+  返回里的 \`quotaUsedBytes\` / \`quotaLimitBytes\` 可用来提前提示用户;
+- **频控**:允许 8 张突发,之后约每秒 1 张。批量粘贴不受影响,死循环会被拦;
+- **寄存物不是产物**:它不会被当成生成结果自动送进聊天或 IM(用户自己粘的
+  参考图被回推出去会是隐私事故),也不进 \`/gallery\` 作品清单。要给用户看,
+  自己在面板里用 \`cindy-ghost://<id>/media/<指纹><后缀>\` 渲染,或做成卡片;
+- **生命周期**:寄存物跨会话持久(删会话不陪葬),用户卸载你的插件时一并清理。
+
+用户装你的插件时,确认框会单独出现一行「可将它手中的图片、视频或音频存入你的
+媒体库」并写明上限——这是唯一一条"不花钱就能写用户媒体库"的能力,所以要用户
+单独点头。别为了省事把它当默认能力申请:不做面板素材加工的插件不要声明。
 
 ## 4.1 宿主公开上下文(request,无需卡槽)
 
@@ -2567,7 +2620,9 @@ Logo 生成提示必须要求“纯白 #FFFFFF 实心背景、深色或主题色
   你的页面,经 /secrets 交给主机即焚,之后同样拿不到;状态回查最多附尾 4 位
   指纹,重建不出值);
 - 只经手字符串(指纹/地址),拿不到任何磁盘路径;
-- 改图只能改本意识自己生成的媒体(主机查账,越权统一 404/拒绝);
+- 改图只能改**本意识名下**的媒体:自己生成的、用户过户给你的
+  (\`args.attachments\`)、以及你寄存进来的(§4.0.1 \`deposit_media\`)。
+  别人名下的一律不认(主机查账,越权统一 404/拒绝);
 - 崩溃只影响自己的面板(错误接管态),反复崩会被熔断。
 
 ## 7. 打包与测试

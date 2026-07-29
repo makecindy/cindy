@@ -463,9 +463,10 @@ html:lang(ko) {
 /* The fallback unindented row must remain one inline-block; character-scoped
    ProseMirror decorations would split it into several full-width fragments.
    The local face covers the same ranges as CjkPunctDecoration, while the
-   bundled faces cover the punctuation glyphs HarmonyOS actually ships. Latin
-   text and digits continue through the configured UI font. Keep the asset
-   names aligned with the exact-pinned font package. */
+   bundled faces cover the punctuation glyphs HarmonyOS actually ships. The
+   ASCII range is punctuation-only, so Latin letters and digits continue
+   through the configured UI font. Keep the asset names aligned with the
+   exact-pinned font package. */
 @font-face {
   font-family: 'Cindy CJK Punctuation Local';
   src:
@@ -478,7 +479,9 @@ html:lang(ko) {
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  unicode-range: U+3000-303F, U+FF00-FFEF;
+  unicode-range:
+    U+0021-0022, U+0027-0029, U+002C, U+002E, U+003A-003B, U+003F, U+005B, U+005D, U+007B, U+007D,
+    U+3000-303F, U+FF00-FFEF;
 }
 @font-face {
   font-family: 'Cindy CJK Punctuation Bundled';
@@ -517,7 +520,9 @@ html:lang(ko) {
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  unicode-range: U+FF04, U+FF0B, U+FF1C-FF1E, U+FF3E, U+FF40, U+FF5C, U+FF5E, U+FFE0-FFE5;
+  unicode-range:
+    U+0021-0022, U+0027-0029, U+002C, U+002E, U+003A-003B, U+003F, U+005B, U+005D, U+007B, U+007D,
+    U+FF04, U+FF0B, U+FF1C-FF1E, U+FF3E, U+FF40, U+FF5C, U+FF5E, U+FFE0-FFE5;
 }
 .ProseMirror .composer-list-cjk-punctuation-font {
   font-family:

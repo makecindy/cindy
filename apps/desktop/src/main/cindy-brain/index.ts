@@ -179,6 +179,7 @@ import {
   storeGhostSecret,
 } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-access-policy.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
@@ -204,6 +205,7 @@ import type { GatewayImageModel } from '../cindy-proxy-media/types.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
+import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { recordGhostCallMedia } from './ghostMediaLedger.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { ghostSetupNavigationForAction } from './ghostSetupNavigation.js';
@@ -1784,8 +1786,12 @@ function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig
     // 停用过滤:用户在 设置 → 模型供应商 停用的媒体模型 / 供应商不进候选清单
     // (与对话模型的准入口径同源,见 model-disable-store)。
     const access = readModelDisableOverrides();
+    const catalog = projectProviderCatalogForBuildRegion(
+      getActiveCatalog(),
+      CURRENT_CINDY_REGION,
+    );
     return deriveCindyMediaConfig(
-      getActiveCatalog().providers,
+      catalog.providers,
       kind,
       (providerId, modelId) =>
         isProviderDisabled(access, providerId) ||
@@ -2002,6 +2008,39 @@ export function getGhostCindySlot(): GhostCindySlot {
         recordGhostCallMedia(ghostId, callId, written.url);
         return { url: written.url, hash: written.hash, ext: written.ext };
       },
+      // ── deposit_media 接线(#784)────────────────────────────────────────
+      // 真实类型只认字节:与 network as:'media' 同一魔数实现,再过一道 blobStore
+      // 白名单(识别范围与白名单可能不同步时以白名单为准)。
+      sniffDepositMime: (buffer) => {
+        const sniffed = sniffMediaMime(buffer);
+        return sniffed && supportedMime(sniffed) ? sniffed : null;
+      },
+      // 寄存落仓:走统一入库助手(规则 25),挂 ghost-deposit 引用。
+      // originKind 记 'user' 而非 'ghost'——字节是用户的(粘贴/拖入),意识只是
+      // 管道;记成 'ghost' 会让 ghostCanRead 的 origin 分支把它当作该意识的
+      // 出生物,与"作品"混为一谈。引用方(refId)才是意识,归属由此成立。
+      depositMedia: async ({ ghostId, buffer, mimeType, label }) => {
+        const r = await ingestMedia({
+          buffer,
+          mimeType,
+          isCache: false,
+          refs: [{
+            refKind: 'ghost-deposit',
+            refId: ghostId,
+            originKind: 'user',
+            ...(label ? { label } : {}),
+          }],
+        });
+        return {
+          url: r.url,
+          hash: r.hash,
+          ext: r.ext,
+          bytes: r.bytes,
+          deduplicated: r.deduplicated,
+        };
+      },
+      depositUsageBytes: (ghostId) => ledger.ghostDepositUsageBytes(ghostId),
+      releaseDeposit: ({ ghostId, hash }) => ledger.removeGhostDepositRef({ hash, ghostId }),
       log,
     });
   }
@@ -2675,6 +2714,21 @@ export async function uninstallGhostAndCleanup(
           error: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+    // 寄存物(#784)随意识回收:删掉本意识的 ghost-deposit 引用行,字节由
+    // recycler 按"引用归零"统一处理(用户已发进聊天的那几张有 message ref
+    // 兜着,不会被连带清掉)。只清寄存这一类——画廊/引渡的留存语义是既有
+    // 产品行为,不在本改动的范围内改。
+    // 卸载是用户明确动作,失败只记日志:包已经收走了,不能因为清账失败把
+    // 卸载报成失败(与上面 ghost-fs / kv 清理同纪律)。
+    try {
+      const removed = await ledger.removeRefs({ refKind: 'ghost-deposit', refId: id });
+      if (removed > 0) log.info('ghost deposit media refs removed', { id, removed });
+    } catch (err) {
+      log.warn('ghost deposit media refs 清理失败', {
+        id,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
     if (listBuiltinSeedIds(builtinSeedRootDirs()).includes(id)) {
       recordBuiltinTombstone(brainRootDir(), id, log);

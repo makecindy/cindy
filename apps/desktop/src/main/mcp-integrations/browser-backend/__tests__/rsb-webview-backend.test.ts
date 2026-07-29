@@ -1151,6 +1151,7 @@ describe('RsbWebviewBackend — uploads and page dialogs', () => {
       registry,
       getActiveSessionId: () => 's1',
       artifactRoot: options?.uploadRoot ? () => options.uploadRoot! : undefined,
+      artifactDownloadGraceMs: 0,
       resolveUploadRoots: options?.uploadRoot
         ? async () => [options.uploadRoot!]
         : undefined,

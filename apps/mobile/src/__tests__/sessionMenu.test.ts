@@ -41,14 +41,20 @@ function session(patch: Partial<RemoteSession> = {}): RemoteSession {
 describe('sessionMenu header', () => {
   it('builds title, meta line and usage summary for a plain session', () => {
     const header = buildSessionMenuHeader(session({
-      totalCostUsd: 2.312,
+      totalMoney: {
+        amount: 2.312,
+        currency: 'CNY',
+        approximate: false,
+        kind: 'actual-cost',
+      },
+      totalCostUsd: 99,
       contextTokens: 90000,
       contextWindow: 200000,
     }), {});
     expect(header.title).toBe('修复语音输入丢字');
     expect(header.chips).toEqual([]);
     expect(header.metaLine).toBe('Claude · xdt-maker');
-    expect(header.usageSummary).toBe('$2.31 · 上下文 45%');
+    expect(header.usageSummary).toBe('¥2.31 · 上下文 45%');
   });
 
   it('falls back to workspace name when the session has no title', () => {

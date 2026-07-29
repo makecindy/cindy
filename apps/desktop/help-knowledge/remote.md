@@ -27,5 +27,5 @@ Settings > **Remote & device control** has two parts: **SSH remote workspaces** 
 
 **Notes:**
 
-- Remote sessions can't be the lead in a collaboration workflow yet (see the Collaboration topic).
+- Remote project sessions **can** be the lead in a collaboration workflow — workers then run on the same remote host (see the Collaboration topic).
 - Device control works only between devices on the **same account**; the relay just routes between them — your session data isn't stored on it.

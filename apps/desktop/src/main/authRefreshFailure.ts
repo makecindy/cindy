@@ -58,9 +58,28 @@ export function getRefreshTokenReplacementCandidate(
   requestedToken: string,
   latestStoredToken: string | null,
 ): string | null {
-  if (!latestStoredToken) return null;
-  if (latestStoredToken === requestedToken) return null;
-  return latestStoredToken;
+  return pickRefreshTokenReplacementCandidate(requestedToken, [latestStoredToken]);
+}
+
+/**
+ * 从多个磁盘凭证来源里挑出可用于追赶的替换 token —— 按传入顺序取第一枚
+ * 「非空且不等于本次请求所用」的 token。
+ *
+ * 为什么需要多来源:凭证文件正在做 legacy → v1 的格式迁移(见 authManager 的
+ * `AUTH_SESSION_KEY` / `LEGACY_RESOURCE_REFRESH_TOKEN_KEY`)。共享 userData 的
+ * 双开窗口里,两个实例可能一个写 v1、一个写 legacy;只认单一来源的一方永远追不上
+ * 另一方轮换出的新 token,会把本可自愈的竞态判成确定性失效并强制重登。
+ */
+export function pickRefreshTokenReplacementCandidate(
+  requestedToken: string,
+  candidates: readonly (string | null | undefined)[],
+): string | null {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (candidate === requestedToken) continue;
+    return candidate;
+  }
+  return null;
 }
 
 /**
@@ -248,7 +267,15 @@ export async function runRefreshWithReplacementRetry<T>(
   initialRefreshToken: string,
   opts: {
     doRefresh: (refreshToken: string) => Promise<RefreshFetchResult<T>>;
-    readLatestStoredToken: () => string | null;
+    /**
+     * 读磁盘上所有凭证来源的当前值(如 v1 记录与 legacy 裸 token),按优先级排列。
+     *
+     * 必须交出**全部**来源、由本函数统一筛选,不能由调用方先折叠成单个候选:
+     * 排除「本轮已被拒过的 token」这一步只有拿到完整候选集才做得对。调用方先按
+     * 优先级折叠的话,首选来源里那枚已失效的 token 会把后面来源里真正有效的那枚
+     * 挤掉,最终以确定性失效收场并连带删掉有效凭证。
+     */
+    readLatestStoredTokens: () => readonly (string | null | undefined)[];
     /** 不传则单次请求;传入则每一枚 token 内部按 transient 规则重试。 */
     transientRetry?: {
       retryDelaysMs?: readonly number[];
@@ -276,6 +303,14 @@ export async function runRefreshWithReplacementRetry<T>(
   replacementRetries: number;
   replacementRetryExhausted: boolean;
   failureAction?: RefreshFailureAction;
+  /**
+   * 本轮被服务端拒过的**所有** token,按首次尝试顺序。
+   *
+   * 调用方清理磁盘凭证时必须逐一比对这份清单,而不是只认最初那一枚:一旦本轮从另一个
+   * 来源追赶过(replacement-retry),磁盘上现存的那枚就是清单里较晚的那一个,只拿最初
+   * 的 token 做 compare-and-delete 会一律 `changed`,把已确认失效的凭证留在盘上。
+   */
+  rejectedTokens: readonly string[];
 }> {
   let requestedToken = initialRefreshToken;
   let attempts = 0;
@@ -284,6 +319,29 @@ export async function runRefreshWithReplacementRetry<T>(
   const replacementRecheckDelaysMs = opts.replacementRecheck?.delaysMs ?? [];
   const replacementRecheckSleep =
     opts.replacementRecheck?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  /**
+   * 本轮已经被服务端拒过的 token。
+   *
+   * 多来源候选(v1 / legacy)可能互为「对方眼里的替换 token」:磁盘上两个文件分叉时,
+   * 只排除**紧邻的上一枚**会让两枚 token 来回被选中,耗尽 maxReplacementRetries 后
+   * 以 `replacement-retry` 收尾——runtime 于是每 60s 重试一枚已知无效的凭证而永不
+   * 过期,冷启动则保留不可用凭证并以未登录启动(既不自愈也不明确告知用户)。
+   * 已经拒过的 token 不再算替换候选,两枚都试过就如实落到 definitive-failure。
+   */
+  const rejectedTokens = new Set<string>();
+
+  /**
+   * 读全部来源 → **先剔掉本轮已被拒过的** → 再按优先级挑替换候选。
+   *
+   * 顺序是要点:先折叠后过滤会漏掉有效凭证——v1 存着已拒的 A、legacy 存着有效的 C 时,
+   * 折叠只交出 A(v1 优先),随后 A 被判已拒,于是整轮以确定性失效收场,C 从未被试过,
+   * 还会连同 C 一起被清掉。
+   */
+  const nextReplacementCandidate = (requestedToken: string): string | null =>
+    pickRefreshTokenReplacementCandidate(
+      requestedToken,
+      opts.readLatestStoredTokens().filter((token) => !token || !rejectedTokens.has(token)),
+    );
 
   while (true) {
     const run = opts.transientRetry
@@ -301,13 +359,16 @@ export async function runRefreshWithReplacementRetry<T>(
         requestedToken,
         replacementRetries,
         replacementRetryExhausted: false,
+        rejectedTokens: [...rejectedTokens],
       };
     }
+
+    rejectedTokens.add(requestedToken);
 
     let action = resolveRefreshFailureAction(
       run.result,
       requestedToken,
-      opts.readLatestStoredToken(),
+      nextReplacementCandidate(requestedToken),
     );
 
     if (action.kind === 'definitive-failure' && isReplacementRetryEligibleFailure(run.result)) {
@@ -322,7 +383,7 @@ export async function runRefreshWithReplacementRetry<T>(
         action = resolveRefreshFailureAction(
           run.result,
           requestedToken,
-          opts.readLatestStoredToken(),
+          nextReplacementCandidate(requestedToken),
         );
         if (action.kind !== 'definitive-failure') break;
       }
@@ -336,6 +397,7 @@ export async function runRefreshWithReplacementRetry<T>(
         replacementRetries,
         replacementRetryExhausted: false,
         failureAction: action,
+        rejectedTokens: [...rejectedTokens],
       };
     }
 
@@ -347,6 +409,7 @@ export async function runRefreshWithReplacementRetry<T>(
         replacementRetries,
         replacementRetryExhausted: true,
         failureAction: action,
+        rejectedTokens: [...rejectedTokens],
       };
     }
 

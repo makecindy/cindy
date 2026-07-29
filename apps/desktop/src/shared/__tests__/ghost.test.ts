@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   GHOST_CARD_ACTION_ID_RE,
+  GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostContentKeys,
@@ -1186,12 +1187,34 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
       {},
       { image: ['generate', 'generate'] },
       'image',
+      { media: ['upload'] }, // media 类目只有 deposit
+      { media: [] },
     ]) {
       const v = validateGhostManifest(chipWithModel(bad));
       expect(v.ok, JSON.stringify(bad)).toBe(false);
     }
   });
 
+  // #784:media 类目落位必须独立成键——曾经的 `else cindy.video = …` 兜底
+  // 分支会把新类目的动作静默塞进 video,校验层还照样放行。
+  it('media 类目落进 cindy.media,不串到 video', () => {
+    const v = validateGhostManifest(chipWithModel({ media: ['deposit'] }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    expect(v.ok && v.manifest.cindy).toEqual({ media: ['deposit'] });
+    expect(v.ok && v.manifest.cindy?.video).toBeUndefined();
+  });
+
+  it('三类目可同时声明', () => {
+    const v = validateGhostManifest(
+      chipWithModel({ image: ['generate', 'edit'], video: ['edit'], media: ['deposit'] }),
+    );
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    expect(v.ok && v.manifest.cindy).toEqual({
+      image: ['generate', 'edit'],
+      video: ['edit'],
+      media: ['deposit'],
+    });
+  });
 });
 
 describe('ghost · model → cindy 旧名兼容(2026-07-11 更名)', () => {
@@ -1396,10 +1419,34 @@ describe('ghost · cindy 详单 video 类目', () => {
     expect(validateGhostManifest(withCindy({ video: ['generate', 'generate'] })).ok).toBe(false);
   });
 
-  it('未知类目报错列出全部支持类目(image / video)', () => {
+  it('未知类目报错列出全部支持类目(image / video / media)', () => {
     const bad = validateGhostManifest(withCindy({ audio: ['generate'] }));
     expect(bad.ok).toBe(false);
     expect(!bad.ok && bad.reason).toContain('video');
+    expect(!bad.ok && bad.reason).toContain('media');
+  });
+
+  // #784:寄存是唯一"不花钱就写用户媒体库"的能力,确认框必须单独列一行,
+  // 并带上主机固定说明(内含字节上限,由常量插值,不在 locale 里写死数字)。
+  it('权限清单推导:media.deposit 单独成行且带上限说明', () => {
+    const v = validateGhostManifest(withCindy({ media: ['deposit'] }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    const items = ghostPermissionItems(v.manifest).filter((i) => i.kind === 'cindy');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      key: 'cindy:media.deposit',
+      labelKey: 'cindyMediaDeposit',
+      detailKey: 'cindyMediaDepositDetail',
+    });
+    // 数字与单位都从常量算出来(locale 里只有 {{quota}} 占位):反解回字节
+    // 必须等于常量本身 —— 上限调成 GB 量级时,写死 "MB" 的文案就是错的。
+    const quota = items[0].detailArgs?.quota ?? '';
+    expect(quota).toMatch(/^\d+ (MB|GB)$/);
+    const [amount, unit] = quota.split(' ');
+    expect(Number(amount) * 1024 * 1024 * (unit === 'GB' ? 1024 : 1)).toBe(
+      GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+    );
   });
 
   it('权限清单推导:video 详单产出对应权限项(确认框自动吃到)', () => {

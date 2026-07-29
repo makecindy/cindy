@@ -55,6 +55,12 @@ const log = createLogger('maker-host:title-one-shot');
 const TITLE_TIMEOUT_MS = 12_000;
 /** 标题 ≤ 20 字,32 token 足够;codex Responses 协议层不暴露 max_tokens,仅对 messages/chat 生效。 */
 const TITLE_MAX_TOKENS = 32;
+/**
+ * Codex Responses 要求 instructions 字段，但语言和长度必须由调用方 prompt 决定。
+ * 这里仅约束输出形状，避免覆盖 locale-aware 标题指令。
+ */
+const CODEX_TITLE_INSTRUCTIONS =
+  'Output only the short conversation title requested by the user message, without quotation marks or ending punctuation.';
 
 type FetchImpl = typeof undiciFetch;
 
@@ -207,7 +213,7 @@ async function fetchCodexTitle(
 ): Promise<string> {
   const body: Record<string, unknown> = {
     model: modelId,
-    instructions: 'You output only a short conversation title (<= 10 Chinese chars), no punctuation, no quotes.',
+    instructions: CODEX_TITLE_INSTRUCTIONS,
     input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] }],
     tools: [],
     tool_choice: 'auto',

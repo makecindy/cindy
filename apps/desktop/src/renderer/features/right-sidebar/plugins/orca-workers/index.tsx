@@ -139,6 +139,9 @@ function OrcaWorkersTabBody({
     <OrcaWorkerPanel
       leadSessionId={ctx.sessionId}
       deviceId={leadSession?.deviceLinkDeviceId}
+      // SSH 远程 Lead:worker 创建面板按 SSH 口径过滤模型清单(与 main 侧
+      // remote-worker guard 同规则,codex review R28)。
+      sshRemote={!!leadSession?.remoteHostId}
       viewVisible={viewVisible}
       chatRealtime={chatRealtime}
       focusWorkerSessionId={state.focusWorkerSessionId}

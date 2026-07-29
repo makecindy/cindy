@@ -41,13 +41,18 @@ import {
   promoteTrailingPlainListParagraph,
 } from './ComposerListNodes';
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
+import { EmptyDocSelectionGuard } from './EmptyDocSelectionGuard';
 import {
   setVoiceInputDraftDecoration,
   VoiceInputDraftDecoration,
   type VoiceInputCaretState,
 } from './VoiceInputDraftDecoration';
 import { MentionDragCaretDecoration, setMentionDragCaret } from './MentionDragCaretDecoration';
-import { GhostCommandDecoration, setGhostCommandRoster } from './GhostCommandDecoration';
+import {
+  applyGhostCommandBackspace,
+  GhostCommandDecoration,
+  setGhostCommandRoster,
+} from './GhostCommandDecoration';
 import {
   replaceSlashCommandRunWithText,
   setSlashCommandRoster,
@@ -1385,6 +1390,9 @@ export function ChatInput({
       WindowsSelectionReplacement.configure({
         enabled: window.electronAPI.platform === 'win32',
       }),
+      // 空输入框全选 / 全选后删空都会在行首留一块幽灵高亮(空 paragraph 被整体框进
+      // AllSelection,删空后 Chromium 的 DOM selection 也不跟着折叠)。见模块头注释。
+      EmptyDocSelectionGuard,
       CjkPunctDecoration,
       ComposerListIndentDecoration,
       VoiceInputDraftDecoration,
@@ -1805,6 +1813,8 @@ export function ChatInput({
         // Backspace — structured list items exit through the schema command;
         // legacy plain Markdown rows keep the prefix-deletion fallback so
         // pasted and restored text remains editable without a migration pass.
+        // 意识指令胶囊排最后:只在胶囊亮起且光标停在胶囊外(尾随空格之后)才
+        // 接管,胶囊内一律原样落回原生逐字删。
         if (
           event.key === 'Backspace' &&
           !event.metaKey &&
@@ -1812,7 +1822,9 @@ export function ChatInput({
           !event.altKey &&
           !event.shiftKey &&
           !event.isComposing &&
-          (handleStructuredListBackspace(view) || applyListBackspace(view))
+          (handleStructuredListBackspace(view) ||
+            applyListBackspace(view) ||
+            applyGhostCommandBackspace(view))
         ) {
           event.preventDefault();
           return true;

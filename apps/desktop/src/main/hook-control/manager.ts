@@ -17,6 +17,7 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  HOOK_FEATURE_GROUP_RELAY,
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -64,6 +65,7 @@ import type {
 import type { ProviderBindingCacheEntry, SlackHookStore } from './store.js';
 import type { HookDispatcher } from './dispatcher.js';
 import { buildQueryResponse, type AgentModelSource } from './queryResponder.js';
+import { recordGroupMessage, sweepGroupWindowExpired } from './groupWindow.js';
 import { parseTelegramConnectUrl } from './telegramDeepLink.js';
 import type { HookTransport, HookTransportOpts, HookTransportStatus } from './transport.js';
 
@@ -150,6 +152,8 @@ export interface HookControlManagerDeps {
   notifyProviderPrefs?: (view: ProviderPrefsView) => void;
   /** prefs 读写往返超时(默认 10s; 测试注短)。 */
   prefsTimeoutMs?: number;
+  /** multi-team 自动首绑延迟窗；仅测试注短，生产默认 300ms。 */
+  autoBindDeferMs?: number;
   /** Slack 网关工具往返超时(默认 60s —— 搜索/长查询比 prefs 慢得多; 测试注短)。 */
   toolTimeoutMs?: number;
   /**
@@ -499,6 +503,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     onSlackToolProviderEnabledChanged,
     notifyPrefs,
     prefsTimeoutMs,
+    autoBindDeferMs = AUTO_BIND_DEFER_MS,
     toolTimeoutMs,
     bindPendingTimeoutMs,
     installWaitTimeoutMs,
@@ -551,6 +556,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       HOOK_FEATURE_PROVIDER_BIND,
       HOOK_FEATURE_PROVIDER_PREFS,
       HOOK_FEATURE_SESSION_PICKER,
+      HOOK_FEATURE_GROUP_RELAY,
     ],
     isEnabled: () => store.get().telegramEnabled,
     setEnabled: (enabled) => {
@@ -721,6 +727,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function activateCurrentAccount(): void {
     if (accountActive || disposed) return;
     accountActive = true;
+    // 群窗口 TTL 兜底清扫: 流量路径的清扫只在有群消息/派发时触发, 这里保证
+    // 群不再活跃(或通道停用)后过期行也在每次账号激活时清掉。纳入
+    // pendingAccountOps: 登出/切号等待清扫落库完成再销毁 DB client。
+    trackAccountOp(sweepGroupWindowExpired());
     dispatcher?.activateAccount();
     multiBindings = store.get().bindingsCache.map((entry) => ({ ...entry, displaced: false }));
     for (const lane of lanes) lane.binding = lane.config.restoreCachedBinding();
@@ -1736,7 +1746,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
             if (!autoBindIntent || !store.get().enabled) return;
             if (pendingBind !== null) return; // 回放先到, 已交给 pending 路径
             if (initiateMultiBind(null)) autoBindIntent = false;
-          }, AUTO_BIND_DEFER_MS);
+          }, autoBindDeferMs);
           autoBindDefer.unref?.();
         }
       }
@@ -2041,6 +2051,25 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           sessionId: null,
           queuePosition: null,
         }),
+      );
+      return;
+    }
+    if (msg.type === 'group.message') {
+      // 群消息实时中继入本地窗口(group-relay-v1)。只接受来自对应 provider
+      // transport 的帧(错误路由的连接不得写窗口); fire-and-forget:
+      // 失败只记日志, 窗口是上下文增强, 不影响任务链路。内容不写日志。
+      if (msg.payload.provider !== expectedProvider) {
+        log.warn(
+          `group.message ignored: provider=${msg.payload.provider} on ${expectedProvider} transport`,
+        );
+        return;
+      }
+      // 账号边界: 写入纳入 pendingAccountOps, 登出/切号等待落库完成后再
+      // 销毁 DB client, 不留 use-after-dispose。
+      trackAccountOp(
+        recordGroupMessage(msg.payload).catch((err) =>
+          log.warn(`group window record failed: ${String(err)}`),
+        ),
       );
       return;
     }

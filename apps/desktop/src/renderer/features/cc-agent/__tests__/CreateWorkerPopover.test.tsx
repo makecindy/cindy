@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
     name: string;
     connected: boolean;
     agents: string[];
+    routing?: Record<string, { wireProtocol?: string }>;
     models: Record<
       string,
       Array<{
@@ -93,7 +94,7 @@ vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({
     providers: mocks.localProviders.map((provider) => ({
       ...provider,
-      routing: Object.fromEntries(provider.agents.map((agent) => [agent, {}])),
+      routing: provider.routing ?? Object.fromEntries(provider.agents.map((agent) => [agent, {}])),
     })),
     loading: mocks.providersLoading,
   }),
@@ -495,6 +496,39 @@ describe('CreateWorkerPopover', () => {
     const onCreate = vi.fn();
 
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe(''),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ providerId: null })),
+    );
+  });
+
+  it('clears a restored chat-bridged Codex provider for SSH worker creation', async () => {
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'chat-bridge' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'chat-bridge',
+        name: 'Chat Bridge',
+        connected: true,
+        agents: ['codex'],
+        routing: { codex: { wireProtocol: 'openai-chat' } },
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [model('gpt-5.5')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open sshRemote onClose={vi.fn()} onCreate={onCreate} />);
     await waitFor(() =>
       expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe(''),
     );

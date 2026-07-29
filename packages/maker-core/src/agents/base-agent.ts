@@ -402,6 +402,14 @@ export interface AgentDeps {
      */
     startParams: Record<string, unknown>;
     /**
+     * session 自己的 vendorOptions (startSession 入参透传)。远端 cc 的协同
+     * MCP ctx 必须以它为准:worker 首次创建时 DB 的 orca 标记/markOrcaRole
+     * 发生在 bootstrap 之后, host 侧现场查 DB 会拿到空角色 (fail-closed
+     * "not an orca worker session");opts 里的 vendorOptions 才是创建方
+     * 显式声明的身份。host 实现可在缺失时回退 DB 合成。
+     */
+    vendorOptions?: Record<string, unknown>;
+    /**
      * Callback for daemon-side approval requests (canUseTool / AskUserQuestion /
      * ExitPlanMode). Host layer registers this on the RPC client; maker-core wires
      * it to the session's interactionResolver.

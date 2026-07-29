@@ -4,11 +4,19 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  classifySubagentEntry,
   SubagentScanBudgetError,
   discoverSubagentDefinitions,
 } from '../subagent-definitions.js';
 
 let root: string;
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
+
+const symbolicLinkDirent = {
+  isDirectory: () => false,
+  isFile: () => false,
+  isSymbolicLink: () => true,
+};
 
 // cc 的加载条件是 name + description 都必须是非空字符串(见 subagent-definitions.ts 里
 // readSubagentFile 的反编译依据)。固件默认补上 description,让它们代表「cc 真的会加载」的
@@ -218,6 +226,19 @@ describe('discoverSubagentDefinitions', () => {
   // 回归:本仓建 worktree 时刻意保留 .claude/agents 里的软链(WorktreeManager 用
   // dereference: false)。软链的 Dirent 既非 file 也非 dir,漏掉它 = 误判「没人声明 model」。
   it('跟随软链的 agent 定义文件', async () => {
+    if (process.platform === 'win32') {
+      const link = path.join(root, 'repo', '.claude', 'agents', 'reviewer.md');
+      const visited: string[] = [];
+      const kind = await classifySubagentEntry(symbolicLinkDirent, link, async (entryPath) => {
+        visited.push(entryPath);
+        return { isDirectory: () => false, isFile: () => true };
+      });
+
+      expect(visited).toEqual([link]);
+      expect(kind).toBe('file');
+      return;
+    }
+
     const real = path.join(root, 'shared');
     await writeAgent(real, 'reviewer.md', 'name: reviewer\nmodel: xai/grok-4.5');
     const agents = path.join(root, 'repo', '.claude', 'agents');
@@ -238,7 +259,7 @@ describe('discoverSubagentDefinitions', () => {
     await writeAgent(real, 'a.md', 'name: linked-dir-agent\nmodel: opus');
     const agents = path.join(root, 'repo', '.claude', 'agents');
     await fs.mkdir(agents, { recursive: true });
-    await fs.symlink(real, path.join(agents, 'shared'), 'dir');
+    await fs.symlink(real, path.join(agents, 'shared'), directoryLinkType);
 
     const found = await discoverSubagentDefinitions({
       workingDir: path.join(root, 'repo'),
@@ -251,7 +272,27 @@ describe('discoverSubagentDefinitions', () => {
   it('悬空软链跳过,不影响同目录其它定义', async () => {
     const agents = path.join(root, 'repo', '.claude', 'agents');
     await writeAgent(agents, 'ok.md', 'name: ok\nmodel: opus');
-    await fs.symlink(path.join(root, 'gone', 'nothing.md'), path.join(agents, 'dead.md'));
+    if (process.platform === 'win32') {
+      // 未开启 Developer Mode 时不能可靠创建文件软链，而 junction 对悬空目标的要求也因
+      // Windows / Node 版本而异。直接覆盖生产代码使用的 follow-stat 失败分支。
+      const link = path.join(agents, 'dead.md');
+      const kind = await classifySubagentEntry(symbolicLinkDirent, link, async () => {
+        throw Object.assign(new Error('missing target'), { code: 'ENOENT' });
+      });
+      expect(kind).toBeUndefined();
+
+      const found = await discoverSubagentDefinitions({
+        workingDir: path.join(root, 'repo'),
+        env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
+      });
+      expect(found.map((f) => f.name)).toEqual(['ok']);
+      return;
+    }
+
+    await fs.symlink(
+      path.join(root, 'gone', 'nothing.md'),
+      path.join(agents, 'dead.md'),
+    );
 
     const found = await discoverSubagentDefinitions({
       workingDir: path.join(root, 'repo'),
@@ -265,7 +306,7 @@ describe('discoverSubagentDefinitions', () => {
     const agents = path.join(root, 'repo', '.claude', 'agents');
     await writeAgent(agents, 'a.md', 'name: a\nmodel: opus');
     // agents/loop -> agents 自己
-    await fs.symlink(agents, path.join(agents, 'loop'), 'dir');
+    await fs.symlink(agents, path.join(agents, 'loop'), directoryLinkType);
 
     const found = await discoverSubagentDefinitions({
       workingDir: path.join(root, 'repo'),
@@ -352,7 +393,7 @@ describe('discoverSubagentDefinitions', () => {
     const linkParent = path.join(root, 'elsewhere');
     await fs.mkdir(linkParent, { recursive: true });
     const link = path.join(linkParent, 'app-link');
-    await fs.symlink(workSub, link, 'dir');
+    await fs.symlink(workSub, link, directoryLinkType);
 
     const found = await discoverSubagentDefinitions({
       workingDir: link,

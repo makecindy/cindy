@@ -105,6 +105,9 @@ describe('desktop MCP approval policy', () => {
       'cindy_memory',
       'cindy_helper',
       'cindy_orca',
+      // worker → lead 回报通道:执行边界在工具内部 fail-closed, 逐次弹窗
+      // 会让远端 daemon 等审批超时断链。
+      'orca_worker_bridge',
       'cindy_lsp',
     ]) {
       expect(getDesktopMcpToolApprovalPolicy({ serverName })).toBe('auto-approve');

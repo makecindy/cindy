@@ -467,7 +467,8 @@ describe('prompt-each-time never turns into a persisted grant', () => {
     // 让 canUseTool 跑到 dispatchInteraction 并登记 pending。
     await new Promise((resolve) => setImmediate(resolve));
 
-    await handle.setPermissionMode('bypassPermissions');
+    // CC agent 实现了 setPermissionMode (接口上可选是因为其他 agent 可缺省)。
+    await handle.setPermissionMode!('bypassPermissions');
 
     // 切到 Full access 也不能替用户批准这一次高风险调用。
     expect((await pending).behavior).toBe('deny');
@@ -484,7 +485,7 @@ describe('prompt-each-time never turns into a persisted grant', () => {
     });
     await new Promise((resolve) => setImmediate(resolve));
 
-    await handle.setPermissionMode('bypassPermissions');
+    await handle.setPermissionMode!('bypassPermissions');
 
     expect((await pending).behavior).toBe('allow');
     await handle.close();
@@ -630,6 +631,59 @@ describe('remote sessions share the same permission semantics', () => {
 
     expect(result.behavior).toBe('allow');
     expect(seen).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('attributes factory-injected http MCP servers to the MCP policy (collab bridge)', async () => {
+    // cc-2a 回归:maker-host remoteCcQueryFactory 会把 cindy_orca /
+    // orca_worker_bridge 追加进 startParams.mcpServers (远端协同恢复通道)。
+    // 审批归属快照必须在 factory 调用之后按最终清单定稿,否则注入 server 的
+    // 工具调用 resolveMcpToolTarget 返回 null、绕过 MCP 策略走原权限链弹窗。
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+
+    const seenContexts: McpToolApprovalContext[] = [];
+    const deps = createDeps((context) => {
+      seenContexts.push(context);
+      return 'auto-approve';
+    });
+    deps.mcpProviders = [];
+    let onApprovalRequest: ((raw: unknown) => Promise<{ behavior?: string }>) | undefined;
+    deps.remoteCcQueryFactory = (async (args: {
+      startParams: Record<string, unknown>;
+      onApprovalRequest: (raw: unknown) => Promise<{ behavior?: string }>;
+    }) => {
+      const params = args.startParams as { mcpServers?: Record<string, unknown> };
+      params.mcpServers = {
+        ...(params.mcpServers ?? {}),
+        cindy_orca: { type: 'http', url: 'http://127.0.0.1:47921/mcp/cindy_orca?session=s1' },
+      };
+      onApprovalRequest = args.onApprovalRequest;
+      return createFakeQuery() as never;
+    }) as NonNullable<AgentDeps['remoteCcQueryFactory']>;
+
+    const agent = new ClaudeCodeAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-injected-mcp',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'default',
+    });
+    handle.setInteractionResolver(() => Promise.resolve({ kind: 'permission', behavior: 'allow' }));
+    if (!onApprovalRequest) throw new Error('expected remote onApprovalRequest');
+
+    const result = await onApprovalRequest({
+      requestId: 'r-injected',
+      kind: 'permission',
+      toolName: 'mcp__cindy_orca__list_workers',
+      input: {},
+    });
+
+    expect(result.behavior).toBe('allow');
+    // 关键:MCP 策略确实按 cindy_orca 归属被调用,而不是归属 miss 走原权限链。
+    expect(seenContexts.some((c) => c.serverName === 'cindy_orca')).toBe(true);
     await handle.close();
   });
 

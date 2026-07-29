@@ -5,6 +5,7 @@ import type { Logger, McpProvider } from '@cindy/maker-core';
 import {
   getCodexExtraSpawnConfig,
   registerCodexMcpThreadContext,
+  setCodexEnvironmentShutdownHook,
   shutdownCodexEnvironment,
   unregisterCodexMcpThreadContext,
 } from '../codexEnvironment.js';
@@ -78,6 +79,7 @@ function extractUrl(args: string[]): URL {
 
 describe('codexEnvironment', () => {
   afterEach(async () => {
+    setCodexEnvironmentShutdownHook(null);
     await shutdownCodexEnvironment();
   });
 
@@ -186,5 +188,21 @@ describe('codexEnvironment', () => {
     // 同批次的正常 provider 不受影响，原型也没有被污染。
     expect(cfg.extraArgs).toContain('mcp_servers.themis.url="https://themis.example/mcp"');
     expect(Object.getPrototypeOf({} as Record<string, unknown>)).toBe(Object.prototype);
+  });
+
+  it('invokes the shutdown hook after the bridge stops, on every shutdown path (R22 P1)', async () => {
+    // 远端失效钩子折进 shutdownCodexEnvironment 内部:任何调用点 (插件开关 /
+    // custom MCP CRUD / contacts / 账号切换) 都自动覆盖, 不靠逐点挂接。
+    const hook = vi.fn();
+    setCodexEnvironmentShutdownHook(hook);
+    await getCodexExtraSpawnConfig({ mcpProviders: [testProvider()], logger: noopLogger() });
+    expect(hook).not.toHaveBeenCalled(); // 未 shutdown 不调
+
+    await shutdownCodexEnvironment();
+    expect(hook).toHaveBeenCalledTimes(1);
+
+    // 未启动过时 (cached 为空) shutdown 是 no-op, 不调 hook。
+    await shutdownCodexEnvironment();
+    expect(hook).toHaveBeenCalledTimes(1);
   });
 });

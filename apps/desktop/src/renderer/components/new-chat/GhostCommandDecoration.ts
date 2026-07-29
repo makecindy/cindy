@@ -21,7 +21,7 @@
  */
 import { Extension, type Editor } from '@tiptap/core';
 import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
-import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 import type { Node as PMNode } from '@tiptap/pm/model';
 
 import {
@@ -151,6 +151,43 @@ function buildDecorations(doc: PMNode, ghosts: InstalledGhost[]): DecorationSet 
     Decoration.inline(match.from, match.from + 1, { class: 'ghost-cmd-sigil' }),
     Decoration.inline(match.from + 1, match.to, ghostPillAttrs(match.ghost)),
   ]);
+}
+
+/** 词尾后面紧跟的分隔空白(不含换行——换行在 doc 里是 hardBreak,不是文本)。 */
+const TRAILING_SPACE_RE = /^[^\S\r\n]/;
+
+/**
+ * Backspace 整体删除:光标停在胶囊**外面**——也就是指令词后那个分隔空格之后
+ * ——时,一次删掉 `$指令` 连同那个空格,而不是逐字符啃到胶囊碎掉。
+ *
+ * **胶囊内不接管,包括贴着词尾的位置**(`$画图| 一只猫`)。那里 caret 视觉上落在
+ * 胶囊的右内边距里,是编辑位:用户是想改错字,不是想扔掉整条引用。同理光标落在
+ * 词中间(`$画|图`)也不接管——改词的能力是当初不把指令做成 atom chip 的核心
+ * 诉求,不能被这条捷径吃掉。没有尾随空格时(`$画图` 后直接是段落尾 / hardBreak)
+ * 光标只可能停在胶囊内,因此一律走原生逐字删。
+ *
+ * 判定与胶囊严格同源——同一个 findGhostCommandMatch、同一份 plugin roster,
+ * **胶囊亮才整体删**;没亮(未装/沉睡/拼错/位置不对)返回 false,原生逐字删的
+ * 行为一字不变。
+ *
+ * 纯编辑侧行为:doc 里仍是纯文本,序列化与 expandGhostCommand 发送链路零改动。
+ */
+export function applyGhostCommandBackspace(view: EditorView): boolean {
+  const { state } = view;
+  if (!state.selection.empty) return false;
+  const ghosts = PLUGIN_KEY.getState(state)?.ghosts;
+  if (!ghosts || ghosts.length === 0) return false;
+  const match = findGhostCommandMatch(state.doc, ghosts);
+  if (!match) return false;
+
+  // 面板选中时 ChatInput.insertSlashCommand 会补一个空格(`$cmd `):它既是
+  // 「胶囊外」的唯一落脚点,也随引用一起收走,免得正文前留一个孤立空格。
+  const after = state.doc.resolve(match.to).nodeAfter;
+  if (!after?.isText || !TRAILING_SPACE_RE.test(after.text ?? '')) return false;
+  if (state.selection.from !== match.to + 1) return false;
+
+  view.dispatch(state.tr.delete(match.from, match.to + 1).scrollIntoView());
+  return true;
 }
 
 /**

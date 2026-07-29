@@ -9,6 +9,10 @@ import type {
   CindyGhostSetupPlan,
   CindyGhostsMcpDeps,
 } from "../types.js";
+import {
+  buildForgeGuideToc,
+  extractForgeGuideSection,
+} from "./forgeGuideSections.js";
 
 /**
  * ghost 总机(docs/dev-rules/plugin-security-and-authoring.md 的网关模式):
@@ -57,9 +61,10 @@ const D_GHOST_CALL = [
 const D_GHOST_FORGE_GUIDE = [
   "获取《插件(Ghost)编写手册》——为用户制作/修改插件(.cindy 能力包)前必读。",
   "手册随主机版本走,包含:ghost.json 身份卡全字段、十个卡槽、管子 API(cindy.send)、",
-  '面板与主题、沙箱红线、打包与测试流程。用户说"帮我做一个 XX 插件 / 改一下某插件"时,',
-  "先调本工具拿手册,新插件可用 ghost_forge_scaffold 生成骨架,修改完成后再用",
-  "ghost_forge_pack 打包装入。",
+  "面板与主题、沙箱红线、打包与测试流程。整本超出单次工具结果上限,分章取用:",
+  '不传参数返回目录,传 section(章号如 "4.7" 或章标题关键词如 "network")返回单章正文。',
+  '用户说"帮我做一个 XX 插件 / 改一下某插件"时,先取目录、按需读相关章,',
+  "新插件可用 ghost_forge_scaffold 生成骨架,修改完成后再用 ghost_forge_pack 打包装入。",
 ].join("\n");
 
 const D_GHOST_FORGE_SCAFFOLD = [
@@ -612,10 +617,29 @@ export async function handleGhostCall(
 /** ghost_forge_guide 的 handler 主体(导出供单测)。 */
 export async function handleForgeGuide(
   deps: CindyGhostsMcpDeps,
+  input?: { section?: string },
 ): Promise<McpTextResult> {
   try {
     const guide = await deps.forgeGuide();
-    return { content: [{ type: "text", text: guide }] };
+    // 空串/纯空白与未传等价:与工具描述"不传返回目录"一致
+    const section = input?.section?.trim();
+    if (!section) {
+      return { content: [{ type: "text", text: buildForgeGuideToc(guide) }] };
+    }
+    const hit = extractForgeGuideSection(guide, section);
+    if (hit.ok) {
+      return { content: [{ type: "text", text: hit.text }] };
+    }
+    return textResult(
+      {
+        ok: false,
+        errorCode: "SECTION_NOT_FOUND",
+        message: hit.ambiguous
+          ? `section "${section}" 命中多章,换更精确的章号:\n${hit.candidates.join("\n")}`
+          : `section "${section}" 未命中任何章节,可用章节:\n${hit.candidates.join("\n")}`,
+      },
+      true,
+    );
   } catch (err) {
     return textResult(
       {
@@ -752,8 +776,16 @@ export function createCindyGhostsMcpServer(
       handleGhostCall(deps, input, extractAgentToolUseId(extra)),
   );
 
-  server.tool("ghost_forge_guide", D_GHOST_FORGE_GUIDE, {}, async () =>
-    handleForgeGuide(deps),
+  server.tool(
+    "ghost_forge_guide",
+    D_GHOST_FORGE_GUIDE,
+    {
+      section: z
+        .string()
+        .optional()
+        .describe('章号(如 "4.7")或章标题关键词(如 "network");不传返回目录'),
+    },
+    async (input) => handleForgeGuide(deps, input),
   );
 
   server.tool(
