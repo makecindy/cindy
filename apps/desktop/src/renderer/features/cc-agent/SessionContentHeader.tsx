@@ -383,20 +383,24 @@ export function SessionContentHeader({
       toast.warning(t('ccAgent.sidebar.archiveBlocked.running'));
       return;
     }
-    // 两个预检互不依赖 → 并行发,别串行叠加两次 IPC 往返。worktree 预检走 resolve:
-    // 菜单打开时已经 prefetch 过,dirty 会命中缓存。resolveSession 失败降级
-    // 为「未接管」,不阻断归档(与 sidebar 的 handleActionClick 同口径)。
-    const [attached, preflight] = await Promise.all([
-      window.electronAPI.binding
-        .resolveSession(session.id)
-        .then((binding) => binding.attached)
-        .catch(() => false),
-      resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId),
-    ]);
-    if (attached) {
+    // 接管查询先发不 await,让它与菜单打开时那次 prefetch 在链路上重叠;
+    // resolveSession 失败降级为「未接管」,不阻断归档(与 sidebar 同口径)。
+    const attachedPromise = window.electronAPI.binding
+      .resolveSession(session.id)
+      .then((binding) => binding.attached)
+      .catch(() => false);
+    if (await attachedPromise) {
       toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
       return;
     }
+    // **worktree 预检必须是最后一个前置条件**(codex review):原来这里用 Promise.all
+    // 一起等,dirty 先返回 clean、接管查询还在飞的那段时间就是 clean 结论的失效窗口。
+    // 改成接管结算之后再 resolve —— clean 一律重查(见 worktreeRemovalWarning),
+    // 拿到的是此刻的结论;菜单打开时的 prefetch 仍然热了 git cache。
+    const preflight = await resolveWorktreeRemovalPreflight(
+      session.id,
+      session.deviceLinkDeviceId,
+    );
     // 归档不弹确认框 —— 可逆操作(菜单里就有「恢复」),与 sidebar 同口径。
     // 免确认的判据是「**确认**干净」:worktree 脏、或预检失败拿不到结论('unknown')
     // 都要确认 —— 归档会顺带回收 worktree,不能静默带走改动(greptile review)。

@@ -1830,12 +1830,23 @@ function ExpandedView({
       // 唯一例外是 worktree 有未提交改动:归档会顺带回收 worktree,这时升级到
       // 确认弹窗展示 dirty warning,不让改动被静默带走。
       if (isArchiveLike) {
+        // 接管拦截先结算:被接管时不该弹任何归档确认。
+        if (await blockedByAttachment()) return;
+        // **worktree 预检必须是最后一个前置条件**(codex review):它之后再 await
+        // 任何东西(比如原来排在后面的接管查询),都会给「clean 结论」留一段失效
+        // 窗口 —— 编辑器或收尾中的 agent 在那段时间写脏工作区,归档就不带警告地
+        // 过去了。并行没有丢:菜单打开 / 亮出 Confirm 胶囊时的 prefetch 已经把查询
+        // 发出去并热了 git cache,而这里 resolve 对 clean 一律重查(见
+        // worktreeRemovalWarning 的非对称复用),拿到的是此刻的结论。
+        //
+        // 窗口不可能压到零 —— 从这次查询返回到 main 侧真正 `git worktree remove`
+        // 之间还有写库和回收链;那一段由 main 在删除前重新检测 + auto-stash 兜住
+        // (WorktreeManager.removeWorktreeForSession),renderer 这层负责的是「别拿
+        // 明显过期的结论免掉确认」。
         const preflight = await resolveWorktreeRemovalPreflight(
           sessionId,
           session?.deviceLinkDeviceId,
         );
-        // 接管拦截优先于 dirty 弹窗:被接管时不该弹任何归档确认。
-        if (await blockedByAttachment()) return;
         // 免确认的判据是「**确认**干净」,不是「不是脏的」:'unknown'(预检失败)
         // 同样要弹确认框,否则归档会静默回收可能带着未提交改动的 worktree
         // (greptile review)。'unknown' 时不摆 dirty 警告文案 —— 那会谎称有改动,

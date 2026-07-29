@@ -126,6 +126,18 @@ describe('archive dirty-worktree warning', () => {
     );
   });
 
+  it('resolves the worktree preflight last, after the attachment gate', () => {
+    // 预检之后再 await 任何东西都会给 clean 结论留失效窗口(codex review):
+    // 接管查询必须先结算,worktree 预检是最后一个前置条件。
+    const archiveBranch = sidebarSource.match(
+      /if \(isArchiveLike\) \{[\s\S]*?await runSessionAction\(sessionId, 'archive'/,
+    )?.[0];
+    expect(archiveBranch).toBeTruthy();
+    expect(archiveBranch!.indexOf('blockedByAttachment()')).toBeLessThan(
+      archiveBranch!.indexOf('resolveWorktreeRemovalPreflight('),
+    );
+  });
+
   it('keeps the delete confirm dialog — deletion is irreversible', () => {
     expect(sidebarSource).toMatch(
       /if \(action === 'delete'\) \{[\s\S]*?resolveWorktreeRemovalPreflight\([\s\S]*?setConfirm\(\{ open: true, sessionId, action, dirtyWorktree \}\);/,
