@@ -31,6 +31,12 @@ import {
   forkSession as sdkForkSession,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { Query, CanUseTool, McpServerConfig, PermissionUpdate, Settings } from '@anthropic-ai/claude-agent-sdk';
+import { discoverSubagentDefinitions } from './subagent-definitions.js';
+import {
+  reportSubagentModelDiagnostics,
+  resolveSubagentModelDefault,
+  type ResolveSubagentModelDefaultResult,
+} from './subagent-model-default.js';
 import Anthropic, { APIError } from '@anthropic-ai/sdk';
 
 import { BaseAgent, OneShotError, AgentNotAuthenticatedError, type AgentSessionHandle, type AgentDeps, type StartSessionOptions, type OneShotOptions, type SendOptions } from '../base-agent.js';
@@ -64,7 +70,7 @@ import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import { ToolLoopGuard } from '../shared/loop-guard.js';
-import { buildClaudeEnv } from './env-builder.js';
+import { applySubagentModelEnv, buildClaudeEnv } from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { repairForkedClaudeSessionJsonl, type RepairForkedClaudeJsonlResult } from './fork-jsonl-repair.js';
@@ -772,7 +778,62 @@ export class ClaudeCodeAgent extends BaseAgent {
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
       credentialMode,
       modelContextWindows: providerRoutedModels,
+      // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
+      // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
+      subagentModel: null,
     });
+
+    // 「Subagent 模型」设置的默认值语义(见 subagent-model-default.ts):
+    // 平台的 CLAUDE_CODE_SUBAGENT_MODEL 是最高优先级**强制覆盖**,会静默盖掉用户手写
+    // agent 的 `model:`。这里先扫一遍用户手写定义再决定:没人声明 model → 照旧设 env
+    // (内置 agent 也吃到默认值);有人声明 → 不设 env,让那些声明生效。
+    //
+    // 必须放在 buildClaudeEnv **之后**:dev 多实例把 cc 的配置目录重定向到
+    // `<userData>/claude-home`,而那个 CLAUDE_CONFIG_DIR 只存在于**子进程 env**里
+    // (boot 期已从 process.env 剥离)。拿 process.env 去扫会扫到 `~/.claude/agents`,
+    // 和 cc 实际读的目录不是同一个 → 判定失真,声明照旧被覆盖。
+    //
+    // 只在会话启动时解析一次 —— env 要在 spawn 前定好,会话中途变动 tools/system 会破坏
+    // prompt 缓存(见 docs/dev-rules/maker-core-and-agent-behavior.md §3.1)。
+    // 诊断只落日志与 host 回调,**不进模型上下文**(理由见 subagent-model-default.ts 模块头)。
+    // 扫描失败(含触发 IO 预算)一律降级成「照旧设 env」= 本改动前的行为,绝不阻断会话启动。
+    let subagentDefault: ResolveSubagentModelDefaultResult = {
+      envSubagentModel: this.deps.runtimeConfig.subagentModel?.trim() || undefined,
+      diagnostics: [],
+    };
+    // 远端(SSH)会话**不做**本地扫描:opts.workingDir 是远端机器上的路径(本地不存在),
+    // `~/.claude/agents` 也是本地用户的而非远端的 —— 拿本地结果去决定远端行为会误判
+    // 「有没有人声明 model」。远端因此沿用既有 env 语义(设置值照旧强制覆盖),
+    // 即上面 subagentDefault 的初值。
+    if (!opts.remoteHostId) {
+      try {
+        const discovered = await discoverSubagentDefinitions({
+          workingDir: opts.workingDir,
+          // 子进程真正会用的那份 env —— CLAUDE_CONFIG_DIR 在里面。
+          env,
+        });
+        subagentDefault = resolveSubagentModelDefault({
+          configuredDefault: this.deps.runtimeConfig.subagentModel,
+          discovered,
+          // 校验 agent 声明的 model 是否真的可用 —— 清单就是 host 从目录派生的那份。
+          availableModelIds: this.capabilities.availableModels.map((m) => m.id),
+        });
+        for (const d of subagentDefault.diagnostics) {
+          log.warn('subagent model diagnostic', { ...d });
+        }
+        // 同步 throw 与 async reject 都在里面接住(host 可能传 async 回调)。
+        reportSubagentModelDiagnostics(
+          this.deps.runtimeConfig.onSubagentModelDiagnostics,
+          subagentDefault.diagnostics,
+        );
+      } catch (e) {
+        log.warn('discover subagent definitions failed; falling back to env override', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+    // 判定落到 env(唯一写入点,见 env-builder.applySubagentModelEnv)。
+    applySubagentModelEnv(env, subagentDefault.envSubagentModel ?? null);
     // 远端单独一份 env:用 'remote' 模式从空字典起(不继承 desktop OS env),否则
     // Windows HOME=C:\Users\Lizi 之类污染远端 cc CLI 的 ~ 展开(session/memory
     // 落怪路径)。详见 env-builder.ts buildClaudeEnv 文档。
@@ -781,6 +842,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           credentialMode,
           mode: 'remote',
           modelContextWindows: providerRoutedModels,
+          // 远端不做本地扫描(见上),这里的值就是设置原值 —— 保持改动前的 env 强制覆盖语义。
+          subagentModel: subagentDefault.envSubagentModel ?? null,
         })
       : null;
     const hostSystemPrompt = this.deps.runtimeConfig.systemPrompt;

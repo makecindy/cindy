@@ -28,7 +28,7 @@ import {
 } from '@/hooks/useCodexSessionExpiredPrompt';
 import { cn } from '@/lib/utils';
 import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
-import { isNetworkishErrorMessage } from '@/utils/networkError';
+import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
 
 interface ErrorBannerProps {
   error: string;
@@ -177,7 +177,9 @@ export function ErrorBanner({
     isOpenAiConnectionExpired && isChatGptConnectionConnected(openAiAuthState, false);
   const openAiReconnectRequired = isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError;
   // 网络类错误(502/连接失败/fetch failed 等):友好文案 + 原始错误折叠可查。
-  const isNetworkishError = isNetworkishErrorMessage(error);
+  // Codex `Reconnecting... N/M` 额外解析次数，让 recoverable 状态持续更新而非裸英文。
+  const reconnectAttempt = parseReconnectAttemptMessage(error);
+  const isNetworkishError = reconnectAttempt !== null || isNetworkishErrorMessage(error);
   // Retry 的显示条件与网络错误文案必须共用同一个判定。外部发起的 turn（例如
   // scheduler / goal）失败时没有安全的 recovery target，errorRetryText 会是 null；
   // 此时不能一边隐藏按钮，一边仍提示用户“点击重试”。
@@ -222,7 +224,12 @@ export function ErrorBanner({
     // 非终止(isRecoverable,daemon 自动重试中)与终止(可点重试)文案区分。
     // 放在所有专属指引分支之后:401 等更具体的分支优先。
     displayError = isRecoverable
-      ? t('chat.errorBanner.networkAutoRetrying')
+      ? reconnectAttempt
+        ? t('chat.errorBanner.networkReconnecting', {
+            attempt: reconnectAttempt.attempt,
+            maxAttempts: reconnectAttempt.maxAttempts,
+          })
+        : t('chat.errorBanner.networkAutoRetrying')
       : t(
           safeRetryText
             ? 'chat.errorBanner.networkUnreachable'

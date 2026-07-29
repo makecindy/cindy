@@ -1306,8 +1306,9 @@ export function createTurnRunner(
         if (state.attached && event.turnOrigin?.kind === 'scheduler') {
           transpondScheduledEvent(state, event);
         }
-        // done/error 同时是"session 空闲了"的信号 — 触发排队消息派发(原有语义)。
-        if (event.type === 'done' || event.type === 'error') {
+        // done / 终止型 error 同时是"session 空闲了"的信号 — 触发排队消息派发。
+        // 非终止 error 表示底层仍在自动恢复，不能抢跑下一条消息。
+        if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
           maybeDispatchNextQueued(state, userId);
           return;
         }
@@ -1339,6 +1340,9 @@ export function createTurnRunner(
           }
           return handleTurnDoneAsync(state, userId);
         case 'error':
+          // 可重试错误只是进行中状态；保持当前 turn、卡片和排队消息不动，
+          // 等后续 text / done 或终止型 error 正常收口。
+          if (!isTerminalAgentErrorEvent(event)) return;
           return handleTurnErrorAsync(state, userId, event.data);
         case 'session_id':
           return persistSdkSessionId(localSessionId, event.data);
