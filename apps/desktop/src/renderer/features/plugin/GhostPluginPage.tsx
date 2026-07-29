@@ -604,6 +604,19 @@ export function GhostPluginPage() {
     if (selectedGhost) void handleUseGhost(selectedGhost.manifest.id);
   }, [handleUseGhost, selectedGhost]);
 
+  // 导出当前插件的 .cindy 包:main 侧打包安装目录 → 系统保存对话框落盘。
+  // 取消选择静默返回;成功/失败都如实 toast。
+  const handleExport = useCallback(async () => {
+    if (!selectedDetail) return;
+    try {
+      const result = await window.electronAPI.ghosts.export(selectedDetail.id);
+      if (result.status === 'canceled') return;
+      toast.success(t('settings.ghosts.toast.exported', { name: selectedDetail.name }));
+    } catch {
+      toast.error(t('settings.ghosts.toast.exportFailed', { name: selectedDetail.name }));
+    }
+  }, [selectedDetail, t]);
+
   const handleUninstall = useCallback(async () => {
     if (!selectedDetail) return;
     const ok = await confirm({
@@ -773,6 +786,7 @@ export function GhostPluginPage() {
         }
         updateBusy={selectedMarketUpdate !== null && marketBusyId !== null}
         onUninstall={() => void handleUninstall()}
+        onExport={selectedGhost ? () => void handleExport() : undefined}
         toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
       />
     );

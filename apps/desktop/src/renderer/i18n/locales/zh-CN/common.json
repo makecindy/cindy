@@ -2355,6 +2355,8 @@
         "uninstalled": "已卸载「{{name}}」",
         "installedAsleep": "已安装「{{name}}」(未生效，可在此开启)",
         "updated": "「{{name}}」已更新到 v{{version}}",
+        "exported": "已导出「{{name}}」的 .cindy 文件",
+        "exportFailed": "导出「{{name}}」失败，请重试",
         "projectDisabled": "已在此项目停用「{{name}}」(新对话生效)",
         "projectEnabled": "「{{name}}」在此项目恢复跟随全局"
       },
@@ -2519,6 +2521,7 @@
         "useDisabled": "请先开启插件",
         "moreActions": "更多插件操作",
         "updateFromFile": "从 .cindy 文件更新…",
+        "exportPackage": "导出 .cindy 文件…",
         "settingsTitle": "{{name}} 设置",
         "settingsUnavailableUntilRestore": "恢复插件后可继续使用这项配置。",
         "configurationTitle": "配置",

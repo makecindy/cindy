@@ -2356,6 +2356,8 @@
         "uninstalled": "Uninstalled \"{{name}}\"",
         "installedAsleep": "Installed \"{{name}}\" (disabled — enable it here anytime)",
         "updated": "\"{{name}}\" updated to v{{version}}",
+        "exported": "Exported the .cindy file for \"{{name}}\"",
+        "exportFailed": "Couldn't export \"{{name}}\" — try again",
         "projectDisabled": "Turned off \"{{name}}\" for this project (applies to new sessions)",
         "projectEnabled": "\"{{name}}\" now follows the global setting in this project"
       },
@@ -2520,6 +2522,7 @@
         "useDisabled": "Enable this Plugin before using it",
         "moreActions": "More Plugin Actions",
         "updateFromFile": "Update from .cindy File…",
+        "exportPackage": "Export .cindy File…",
         "settingsTitle": "{{name}} Settings",
         "settingsUnavailableUntilRestore": "Restore the plugin to use this configuration again.",
         "configurationTitle": "Configuration",
