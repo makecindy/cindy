@@ -154,6 +154,13 @@ export interface ModelGroupPricing {
 export interface ModelAccessGatewayModel extends ModelGroupPricing {
   id: string;
   /**
+   * Gateway 原生 mode(issue #882:权威分类字段,字段值不改名)。服务端只对
+   * 已经通过其 chat 过滤的条目透传,尚未全面覆盖时可能缺省;客户端把 mode
+   * 当权威信号使用,缺省时回退 classification.ts 的 id 正则兜底,见
+   * @cindy/model-providers classifyModel / isChatEligible。
+   */
+  mode?: string;
+  /**
    * 本条目价格字段的计费币种声明(透传 Gateway)。缺省表示 Gateway 原生口径
    * USD;客户端不得按构建区域改标或折算——单位永远跟随下发数据。
    * 注意:本地记账账本是单币种的,只有**每个会产生报价**的条目都显式声明同一

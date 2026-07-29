@@ -128,6 +128,29 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     });
   });
 
+  it('非聊天模型(issue #882 第 3 点)不进任一 agent 的 availableModels,但仍留在完整 catalog 里', () => {
+    const cat = injectedCatalog();
+    const xd = cat.providers.find((provider) => provider.id === 'xd')!;
+    xd.models['claude-code'] = [
+      ...(xd.models['claude-code'] ?? []),
+      model('gpt-image-2', { name: 'GPT Image 2', mode: 'image_generation', group: undefined }),
+      model('text-embedding-3-large', { name: 'Embedding 3 Large' }), // 无 mode,靠 id 正则兜底判定为 embedding
+    ];
+    xd.models.codex = [
+      ...(xd.models.codex ?? []),
+      model('gpt-image-2', { name: 'GPT Image 2', mode: 'image_generation' }),
+    ];
+
+    const cc = deriveAvailableModels(cat, 'claude-code');
+    const codex = deriveAvailableModels(cat, 'codex');
+    expect(cc.some((m) => m.id === 'gpt-image-2')).toBe(false);
+    expect(cc.some((m) => m.id === 'text-embedding-3-large')).toBe(false);
+    expect(codex.some((m) => m.id === 'gpt-image-2')).toBe(false);
+    // 完整 catalog(设置页消费的那份)不受 availableModels 派生过滤影响,模型仍在。
+    expect(xd.models['claude-code']!.some((m) => m.id === 'gpt-image-2')).toBe(true);
+    expect(xd.models['claude-code']!.some((m) => m.id === 'text-embedding-3-large')).toBe(true);
+  });
+
   it('runtime refresh replaces both agent model lists in place so existing sessions keep the live reference', () => {
     const claudeModels: ModelDescriptor[] = [{ id: 'stale-claude', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
     const codexModels: ModelDescriptor[] = [{ id: 'stale-codex', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];

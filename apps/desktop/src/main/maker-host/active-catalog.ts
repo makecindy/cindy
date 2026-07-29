@@ -61,6 +61,8 @@ export interface XdGatewayAgentOverride {
 /** 服务端下发的 XD 网关聊天模型条目(shared/modelAccess ModelAccessGatewayModel 的子集)。 */
 export interface XdGatewayModelInfo {
   id: string;
+  /** Gateway 原生 mode(issue #882,权威分类字段;缺省时下游按 id 正则兜底)。 */
+  mode?: string;
   /** AIGateway 折扣比例(0..1),折后价 = 原价 × (1 - costDiscount)。 */
   costDiscount?: number;
   /** AIGateway 标准 token 单价(per token)。 */
@@ -533,6 +535,7 @@ function computeMerged(): Catalog {
           efforts,
           defaultEffort,
           supportsFastMode: ov.supportsFastMode ?? gm.supportsFastMode ?? false,
+          ...(gm.mode !== undefined ? { mode: gm.mode } : {}),
           ...(gm.description !== undefined ? { description: gm.description } : {}),
           ...(gm.sortOrder !== undefined ? { sortOrder: gm.sortOrder } : {}),
           ...(defaultEnabled !== undefined ? { defaultEnabled } : {}),

@@ -7,7 +7,9 @@
  * BUNDLED_CATALOG 派生每个 agent 的模型列表，经 capabilityAdditions 注入。
  *
  * union 规则：跳过 `routing[agent].disabled` 的 runtime，再按 `catalog.providers` 数组序
- * flatMap 各 provider 的 `models[agent]`，按 id **首见胜出**去重（provider 序即
+ * flatMap 各 provider 的 `models[agent]`，跳过非聊天模型(isChatEligible,issue #882 第 3 点:
+ * 网关多返回的图像/视频/TTS/STT/实时/Embedding/压缩模型不进 Agent availableModels,但仍在
+ * 模型管理设置页可见——那边走完整 catalog,不走这个函数),按 id **首见胜出**去重（provider 序即
  * anthropic → openai → xd）。禁用来源不占 seen，同 id 仍可由后续可用来源补上。
  *
  * 顺序契约（no-break）：派生结果必须逐字逐序复现迁移前的有效列表
@@ -15,7 +17,7 @@
  * 由 maker-host 的 catalogDerivedModels.test.ts 守。
  */
 
-import type { Catalog, CatalogModel, AgentKind } from '@cindy/model-providers';
+import { isChatEligible, type Catalog, type CatalogModel, type AgentKind } from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
 
 /** Maker 能力读取面的最小形状；保留数组引用以让已创建 Session 同步看到新目录。 */
@@ -48,6 +50,7 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
     if (provider.routing[agent]?.disabled === true) continue;
     for (const m of provider.models[agent] ?? []) {
       if (seen.has(m.id)) continue;
+      if (!isChatEligible(m)) continue; // 非聊天模型不占 seen,同 id 若被其它来源标为 chat 仍可补上
       seen.add(m.id);
       out.push(toDescriptor(m));
     }
