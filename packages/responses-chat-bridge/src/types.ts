@@ -262,6 +262,7 @@ export type ChatReasoningField =
   | 'enable_thinking'
   | 'reasoning_split'
   | 'none';
+export type ChatReasoningHistoryField = 'reasoning_content';
 export type ChatPassthroughField =
   | 'temperature'
   | 'top_p'
@@ -283,6 +284,11 @@ export interface ChatBridgeCapabilities {
   parallelToolCalls?: boolean;
   maxTokensField?: ChatMaxTokensField;
   reasoningField?: ChatReasoningField;
+  /**
+   * Responses reasoning history 的 Chat 消息字段。默认未声明 = 省略历史 reasoning；
+   * 只有明确接受厂商扩展 `reasoning_content` 的上游才应开启。
+   */
+  reasoningHistoryField?: ChatReasoningHistoryField;
   /**
    * Responses `input_image` 的上游等价形态。默认未声明 = fail closed；只由
    * 已确认支持视觉输入的运行时（当前为 upstream 白名单）开启。

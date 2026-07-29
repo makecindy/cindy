@@ -715,8 +715,8 @@ describe('translateResponsesRequest', () => {
     });
   });
 
-  it('keeps reasoning history attached to the following assistant/tool turn', () => {
-    const out = translateResponsesRequest(base({
+  it('gates replayed reasoning history by provider capability', () => {
+    const source = base({
       input: [
         { type: 'reasoning', summary: [{ type: 'summary_text', text: 'plan ' }] },
         { type: 'function_call', call_id: 'c1', name: 'Bash', arguments: '{}' },
@@ -724,7 +724,24 @@ describe('translateResponsesRequest', () => {
         { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'finish' }] },
         { type: 'message', role: 'assistant', content: 'done' },
       ],
-    }));
+    });
+    expect(translateResponsesRequest(source).messages).toEqual([
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'c1',
+          type: 'function',
+          function: { name: 'Bash', arguments: '{}' },
+        }],
+      },
+      { role: 'tool', tool_call_id: 'c1', content: 'ok' },
+      { role: 'assistant', content: 'done' },
+    ]);
+
+    const out = translateResponsesRequest(source, {
+      capabilities: { reasoningHistoryField: 'reasoning_content' },
+    });
     expect(out.messages).toEqual([
       {
         role: 'assistant',

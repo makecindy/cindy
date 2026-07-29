@@ -9,6 +9,7 @@ import {
   type ChatImageInput,
   type ChatMessage,
   type ChatPassthroughField,
+  type ChatReasoningHistoryField,
   type ChatToolCallExtraContent,
   type ChatUserContentPart,
   type ResponsesInputItem,
@@ -279,6 +280,7 @@ function reasoningText(value: unknown): string {
 interface TranslateInputOptions {
   developerRole: ChatDeveloperRole;
   mediaCapabilities: ChatMediaCapabilities;
+  reasoningHistoryField?: ChatReasoningHistoryField;
   toolCallReasoningPlaceholder: boolean;
   googleThoughtSignaturePlaceholder: boolean;
   toolContext: ChatBridgeToolContext;
@@ -468,12 +470,14 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
         if (!assistant && pendingToolCalls.length > 0) closeUnresolvedToolRound();
         assistant ??= { role: 'assistant', content: null };
         assistant.content = `${assistant.content ?? ''}${content}`;
-        const embeddedReasoning = reasoningText({
-          reasoning_content: record.reasoning_content,
-          reasoning: record.reasoning,
-        });
-        if (embeddedReasoning) {
-          assistant.reasoning_content = `${assistant.reasoning_content ?? ''}${embeddedReasoning}`;
+        if (opts.reasoningHistoryField === 'reasoning_content') {
+          const embeddedReasoning = reasoningText({
+            reasoning_content: record.reasoning_content,
+            reasoning: record.reasoning,
+          });
+          if (embeddedReasoning) {
+            assistant.reasoning_content = `${assistant.reasoning_content ?? ''}${embeddedReasoning}`;
+          }
         }
       } else {
         const role = normalizeRole(item.role, opts.developerRole);
@@ -496,7 +500,9 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
     }
 
     if (item.type === 'reasoning') {
-      pendingReasoning += reasoningText(item);
+      if (opts.reasoningHistoryField === 'reasoning_content') {
+        pendingReasoning += reasoningText(item);
+      }
       continue;
     }
 
@@ -695,6 +701,7 @@ export function translateResponsesRequestWithContext(
   const messages = translateInput(input.input, {
     developerRole,
     mediaCapabilities: capabilities,
+    reasoningHistoryField: capabilities.reasoningHistoryField,
     toolCallReasoningPlaceholder: capabilities.toolCallReasoningPlaceholder === true,
     googleThoughtSignaturePlaceholder: capabilities.googleThoughtSignaturePlaceholder === true,
     toolContext,

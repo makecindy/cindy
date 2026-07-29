@@ -19,6 +19,7 @@ export {
   type ChatFileInput,
   type ChatImageInput,
   type ChatImageUrlContentPart,
+  type ChatReasoningHistoryField,
   type ChatTextContentPart,
   type ChatUserContentPart,
   type ChatUserMessage,
