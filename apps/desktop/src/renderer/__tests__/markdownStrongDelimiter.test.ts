@@ -209,6 +209,17 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(renderMarkdown(source)).toContain('src="missing.png" alt="a]b 重点。正文"');
   });
 
+  it('ignores closing brackets inside image-description inline HTML', () => {
+    const source = '![<span title="]">x</span> **重点。**正文](missing.png)';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      '![<span title="]">x</span> 重点。正文](missing.png)',
+    );
+    expect(renderMarkdown(source)).toContain(
+      'src="missing.png" alt="&lt;span title=&quot;]&quot;&gt;x&lt;/span&gt; 重点。正文"',
+    );
+  });
+
   it('repairs strong delimiters in CJK prose recovered from a bare URL', () => {
     const source = 'https://example.com/foo（**重点。**正文';
 
@@ -269,6 +280,20 @@ describe('normalizeStrongDelimiterBoundaries', () => {
 
     expect(normalizeStrongDelimiterBoundaries(source)).toBe(
       ['https://example.com/foo（$x$', '', '**重点。**<!--cindy-strong-boundary-->正文'].join('\n'),
+    );
+  });
+
+  it('bounds recovered-tail reparsing to each bare URL', () => {
+    const source = [
+      ...Array.from(
+        { length: 1_000 },
+        (_, index) => `https://example-${index}.com/foo（说明 `,
+      ),
+      '**重点。**正文',
+    ].join('');
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      source.replace('**正文', '**<!--cindy-strong-boundary-->正文'),
     );
   });
 
@@ -406,6 +431,28 @@ describe('normalizeStrongDelimiterBoundaries', () => {
       ...Array.from({ length: 2_000 }, (_, index) => `$value_${index} $`),
       ...Array.from({ length: 2_000 }, (_, index) => `段落 ${index}：**重点。**正文`),
     ].join('\n\n');
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      source.replaceAll('**正文', '**<!--cindy-strong-boundary-->正文'),
+    );
+  });
+
+  it('handles many image descriptions and unrelated repairs without cross-product scans', () => {
+    const source = [
+      ...Array.from({ length: 2_000 }, (_, index) => `![图片 ${index}](missing-${index}.png)`),
+      ...Array.from({ length: 2_000 }, (_, index) => `段落 ${index}：**重点。**正文`),
+    ].join('\n\n');
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      source.replaceAll('**正文', '**<!--cindy-strong-boundary-->正文'),
+    );
+  });
+
+  it('applies many boundary repairs without repeatedly rebuilding the document', () => {
+    const source = Array.from(
+      { length: 5_000 },
+      (_, index) => `段落 ${index}：**重点。**正文`,
+    ).join('\n\n');
 
     expect(normalizeStrongDelimiterBoundaries(source)).toBe(
       source.replaceAll('**正文', '**<!--cindy-strong-boundary-->正文'),

@@ -61,6 +61,12 @@ interface BoundaryRepair {
   separatorOffset: number;
 }
 
+interface MarkdownEdit {
+  offset: number;
+  deleteCount: number;
+  value: string;
+}
+
 interface NormalizeStrongDelimiterBoundariesOptions {
   /**
    * 保护因行号对齐而保留源码形态的 `\[...\]` 与跨行 `\(...\)`。
@@ -178,6 +184,40 @@ function codeSpanEnd(markdown: string, start: number, end: number): number | nul
   return null;
 }
 
+function inlineHtmlEnd(markdown: string, start: number, end: number): number | null {
+  const source = markdown.slice(start, end);
+  let closer = '>';
+  if (source.startsWith('<!--')) closer = '-->';
+  else if (source.startsWith('<?')) closer = '?>';
+  else if (source.startsWith('<![CDATA[')) closer = ']]>';
+  else if (
+    !/^<\/?[A-Za-z][A-Za-z\d-]*(?:[\t\n\f\r />]|$)/u.test(source) &&
+    !/^<![A-Z]/u.test(source)
+  ) {
+    return null;
+  }
+
+  if (closer !== '>') {
+    const closerStart = markdown.indexOf(closer, start + 2);
+    return closerStart === -1 || closerStart >= end ? null : closerStart + closer.length;
+  }
+
+  let quote: '"' | "'" | null = null;
+  for (let cursor = start + 1; cursor < end; cursor += 1) {
+    const character = markdown[cursor];
+    if (quote) {
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === '>') return cursor + 1;
+  }
+  return null;
+}
+
 function imageDescriptionRange(node: Nodes, markdown: string): OffsetRange | null {
   if (node.type !== 'image' && node.type !== 'imageReference') return null;
   const range = nodeRange(node);
@@ -188,6 +228,11 @@ function imageDescriptionRange(node: Nodes, markdown: string): OffsetRange | nul
     if (isEscaped(markdown, cursor)) continue;
     if (markdown[cursor] === '`') {
       const end = codeSpanEnd(markdown, cursor, range.end);
+      if (end != null) cursor = end - 1;
+      continue;
+    }
+    if (markdown[cursor] === '<') {
+      const end = inlineHtmlEnd(markdown, cursor, range.end);
       if (end != null) cursor = end - 1;
       continue;
     }
@@ -357,6 +402,10 @@ function expandedRecoveredTailRange(
 
   for (let index = childIndex + 1; index < siblings.length; index += 1) {
     const sibling = siblings[index];
+    // 普通 text 可能是当前裸链接被空格截断后的剩余源码；下一个带位置的 link
+    // 已属于另一段裸链接，不能让每个尾段都重复解析后续所有链接。
+    if (sibling.type === 'link' && nodeRange(sibling)) break;
+
     let value: string | null = null;
     if (sibling.type === 'text') {
       value = sibling.value;
@@ -462,6 +511,31 @@ function firstRangeEndingAfter(ranges: OffsetRange[], offset: number): number {
     else high = middle;
   }
   return low;
+}
+
+function firstOffsetAtOrAfter(offsets: number[], offset: number): number {
+  let low = 0;
+  let high = offsets.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (offsets[middle] < offset) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function rangeContainsSpan(
+  ranges: OffsetRange[],
+  start: number,
+  end: number,
+): boolean {
+  const range = ranges[firstRangeEndingAfter(ranges, start)];
+  return range != null && range.start <= start && end <= range.end;
+}
+
+function rangeContainsAnyOffset(range: OffsetRange, sortedOffsets: number[]): boolean {
+  const offsetIndex = firstOffsetAtOrAfter(sortedOffsets, range.start);
+  return offsetIndex < sortedOffsets.length && sortedOffsets[offsetIndex] < range.end;
 }
 
 function findUnprotectedDelimiter(
@@ -629,7 +703,7 @@ function collectImageDescriptionRanges(tree: Root, markdown: string): OffsetRang
     const range = imageDescriptionRange(node, markdown);
     if (range) ranges.push(range);
   });
-  return ranges;
+  return ranges.sort((left, right) => left.start - right.start);
 }
 
 function collectLooseMathDelimiterOffsets(
@@ -650,14 +724,8 @@ function collectLooseMathDelimiterOffsets(
     .map((repair) => repair.separatorOffset)
     .sort((left, right) => left - right);
   for (const range of looseMathRanges) {
-    let low = 0;
-    let high = repairOffsets.length;
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      if (repairOffsets[middle] <= range.start) low = middle + 1;
-      else high = middle;
-    }
-    if (low >= repairOffsets.length || repairOffsets[low] >= range.end) continue;
+    const repairIndex = firstOffsetAtOrAfter(repairOffsets, range.start + 1);
+    if (repairIndex >= repairOffsets.length || repairOffsets[repairIndex] >= range.end) continue;
 
     for (let cursor = range.start; cursor < range.end && markdown[cursor] === '$'; cursor += 1) {
       offsets.push(cursor);
@@ -756,6 +824,20 @@ function collectBoundaryRepairs(
   return repairs;
 }
 
+function applyMarkdownEdits(markdown: string, edits: MarkdownEdit[]): string {
+  if (edits.length === 0) return markdown;
+
+  const chunks: string[] = [];
+  let cursor = markdown.length;
+  const sortedEdits = [...edits].sort((left, right) => right.offset - left.offset);
+  for (const edit of sortedEdits) {
+    chunks.push(markdown.slice(edit.offset + edit.deleteCount, cursor), edit.value);
+    cursor = edit.offset;
+  }
+  chunks.push(markdown.slice(0, cursor));
+  return chunks.reverse().join('');
+}
+
 /**
  * 让“以标点结束、后面紧接正文”的加粗片段能被解析，同时不改变可见
  * 消息、链接、公式、原始 HTML 和代码示例。
@@ -792,10 +874,9 @@ export function normalizeStrongDelimiterBoundaries(
   // 后续 remark 插件会把裸链接误吞的中文尾段切回 text 节点，但此时 Markdown
   // 已经解析完成，尾段里的星号不会再次解析。在需要修复的尾段起点再插入同一个
   // 隐藏分隔符，让首次解析时链接先结束，尾段即可按正文解析。
+  const sortedBoundaryInsertions = [...boundaryInsertions].sort((left, right) => left - right);
   const recoveredTailStarts = collectRecoveredAutolinkTailRanges(tree, markdown)
-    .filter((range) =>
-      boundaryInsertions.some((insertion) => insertion >= range.start && insertion < range.end),
-    )
+    .filter((range) => rangeContainsAnyOffset(range, sortedBoundaryInsertions))
     .map((range) => range.start);
   const insertions = [
     ...new Set([...boundaryInsertions, ...recoveredTailStarts, ...recoveredMathTailStarts]),
@@ -807,15 +888,15 @@ export function normalizeStrongDelimiterBoundaries(
     recoveredLooseMathRanges,
   );
   const imageRepairs = boundaryRepairs.filter((repair) =>
-    imageDescriptionRanges.some(
-      (range) =>
-        repair.openerStart >= range.start && repair.separatorOffset <= range.end,
+    rangeContainsSpan(
+      imageDescriptionRanges,
+      repair.openerStart,
+      repair.separatorOffset,
     ),
   );
   const imageRepairOffsets = new Set(imageRepairs.map((repair) => repair.separatorOffset));
 
-  let output = markdown;
-  const edits = [
+  const edits: MarkdownEdit[] = [
     ...insertions
       .filter((offset) => !imageRepairOffsets.has(offset))
       .map((offset) => ({ offset, deleteCount: 0, value: HIDDEN_SEPARATOR })),
@@ -825,10 +906,5 @@ export function normalizeStrongDelimiterBoundaries(
       { offset: repair.closerStart, deleteCount: 2, value: '' },
     ]),
   ];
-  for (const edit of edits.sort((left, right) => right.offset - left.offset)) {
-    output = `${output.slice(0, edit.offset)}${edit.value}${output.slice(
-      edit.offset + edit.deleteCount,
-    )}`;
-  }
-  return output;
+  return applyMarkdownEdits(markdown, edits);
 }
