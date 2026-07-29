@@ -83,13 +83,33 @@ const FIGMA_LOGIN_Y = { short: 622, long: 827 };
  * 稿内两个明确意图(figma-component-spec §12 表 wave6):主容器 680x882
  * (字标 180 + Log_in 620 @y200 + 服务条款 40 @y842) → 短屏 @(35,422) 底 1304 底距 30、
  * Log_in y=622;长屏 @(35,627) 底 1509 底距 115、Log_in y=827。
- * 手机端剥离跳过登录栏后组高 620→560,内容底 = loginY + 622(协议行溢出 62)。
+ * 手机端剥离跳过登录栏后组高 620→560,内容底 = loginY + contentBelowLoginY()
+ * (即协议行底,当前 622 = 560 组高 + 62 协议行溢出;该值由常量推导,见下)。
  * 两种吸收方式:
  *  B = 面板留稿位(顶部同稿,多出的 60 全给底部留白);
  *  A = 品牌簇整体下移 60(字标↔面板 + 底距 双双同稿,顶部留白多 60-避脸上移量)。
  */
 const FIG_BOTTOM_GAP = { short: 30, long: 115 };
-const CONTENT_BELOW_LOGIN_Y = 622;
+
+/**
+ * loginY 之下的内容总高 = 最末元素(协议行)底 —— 由常量推导,不写死。
+ *
+ * 两条独立路径都能算出它,这里同时算并交叉断言:面板几何将来若变(组高改、协议行
+ * 位移或溢出量改),两条路径会先分叉、本函数直接抛错,而不是继续输出一份看着正常
+ * 却错了底距的 demo(规则 12:失败要可见)。
+ */
+function contentBelowLoginY(mod) {
+  const byConsentBottom = mod.LOGIN_CONSENT_ROW.y + mod.LOGIN_CONSENT_ROW.height;
+  const byGroupOverflow = mod.LOGIN_GROUP.height + mod.LOGIN_CONSENT_ROW.bottomOverflow;
+  if (byConsentBottom !== byGroupOverflow) {
+    throw new Error(
+      `面板几何自相矛盾:协议行底 ${byConsentBottom} ≠ 组高+溢出 ${byGroupOverflow};` +
+        '请先核对 LOGIN_GROUP.height / LOGIN_CONSENT_ROW 后再生成 demo。',
+    );
+  }
+  return byConsentBottom;
+}
+const CONTENT_BELOW_LOGIN_Y = contentBelowLoginY(cur);
 function planA(mod) {
   const r = {};
   for (const [k, stage] of [['short', mod.LOGIN_STAGE_SHORT], ['long', mod.LOGIN_STAGE_LONG]]) {

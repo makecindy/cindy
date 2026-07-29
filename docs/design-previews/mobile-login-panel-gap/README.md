@@ -45,6 +45,10 @@
 - **面板内几何**（标题 / 副标题 / 输入框 / 主按钮 / 圆钮行 / 协议行）：取同文件的
   `LOGIN_GROUP` / `LOGIN_TITLE` / `LOGIN_SUBTITLE` / `LOGIN_CONTROL` / `LOGIN_SOCIAL` /
   `LOGIN_CONSENT_ROW`，两列同源（手机端面板几何本 PR 未动）
+- **底距用的「`loginY` 之下内容总高」也是推导值**，不写死：`contentBelowLoginY()` 取协议行底
+  （`LOGIN_CONSENT_ROW.y + .height`），并与另一条独立路径（`LOGIN_GROUP.height +
+  .bottomOverflow`）交叉断言；面板几何将来若变而两条路径分叉，提取直接抛错，
+  而不是继续输出一份底距算错却看着正常的 demo
 
 ## 复现 / 更新
 
