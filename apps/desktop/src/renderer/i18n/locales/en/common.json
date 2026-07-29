@@ -1286,6 +1286,8 @@
           "models": "Models",
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "Display name",
+          "modelContextWindowPlaceholder": "Context (tokens)",
+          "modelContextWindowTitle": "Context window in tokens. Leave empty for the conservative 200K default; affects the window display and compaction threshold.",
           "addModel": "Add model",
           "headers": "Headers (optional)",
           "headerNamePlaceholder": "Header-Name",

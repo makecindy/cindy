@@ -1286,6 +1286,8 @@
           "models": "モデル",
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "表示名",
+          "modelContextWindowPlaceholder": "コンテキスト(tokens)",
+          "modelContextWindowTitle": "コンテキストウィンドウ(トークン数)。空欄の場合は保守的な既定値 200K。ウィンドウ表示と圧縮しきい値に影響します。",
           "addModel": "モデルを追加",
           "headers": "リクエストヘッダー(任意)",
           "headerNamePlaceholder": "Header-Name",

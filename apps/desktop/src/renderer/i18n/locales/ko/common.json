@@ -1286,6 +1286,8 @@
           "models": "모델",
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "표시 이름",
+          "modelContextWindowPlaceholder": "컨텍스트(tokens)",
+          "modelContextWindowTitle": "컨텍스트 윈도우(토큰 수). 비워 두면 보수적 기본값 200K가 적용되며, 윈도우 표시와 압축 임계값에 영향을 줍니다.",
           "addModel": "모델 추가",
           "headers": "요청 헤더(선택)",
           "headerNamePlaceholder": "Header-Name",

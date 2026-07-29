@@ -81,17 +81,26 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
   };
 }
 
-/** 刷新时只追加接口新发现的模型，并让新增模型默认隐藏。 */
+/** 刷新时只追加接口新发现的模型，并让新增模型默认隐藏。端点声明的 contextWindow 随发现带入(#386)。 */
 export function appendDiscoveredCustomProviderModels(
   existing: readonly ProviderRuntimeModelConfig[],
-  discovered: readonly Pick<ProviderRuntimeModelConfig, 'id' | 'name'>[],
+  discovered: readonly Pick<ProviderRuntimeModelConfig, 'id' | 'name' | 'contextWindow'>[],
 ): { models: ProviderRuntimeModelConfig[]; addedIds: string[] } {
   const known = new Set(existing.map((m) => m.id));
   const models = [...existing];
   const addedIds: string[] = [];
   for (const model of discovered) {
     if (!model.id || !model.name || known.has(model.id)) continue;
-    models.push({ id: model.id, name: model.name, defaultEnabled: false });
+    models.push({
+      id: model.id,
+      name: model.name,
+      ...(typeof model.contextWindow === 'number' &&
+      Number.isFinite(model.contextWindow) &&
+      model.contextWindow > 0
+        ? { contextWindow: Math.floor(model.contextWindow) }
+        : {}),
+      defaultEnabled: false,
+    });
     known.add(model.id);
     addedIds.push(model.id);
   }

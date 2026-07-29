@@ -1222,6 +1222,33 @@ export function CustomProviderDialog({
                           placeholder={t('settings.providers.custom.fields.modelNamePlaceholder')}
                         />
                       </div>
+                      <div
+                        className="w-28 shrink-0"
+                        title={t('settings.providers.custom.fields.modelContextWindowTitle')}
+                      >
+                        {/* 上下文窗口(tokens):留空 = 保守默认 200K(#386)。只收数字;
+                            非法输入不落盘,交给 buildUserProvider 回落默认。 */}
+                        <TextInput
+                          value={m.contextWindow != null ? String(m.contextWindow) : ''}
+                          onChange={(v) =>
+                            patch(activeTab, (x) => ({
+                              ...x,
+                              models: x.models.map((y, j) => {
+                                if (j !== i) return y;
+                                const digits = v.replace(/[^0-9]/g, '');
+                                const parsed = digits ? Number.parseInt(digits, 10) : NaN;
+                                const { contextWindow: _drop, ...rest } = y;
+                                return Number.isFinite(parsed) && parsed > 0
+                                  ? { ...rest, contextWindow: parsed }
+                                  : rest;
+                              }),
+                            }))
+                          }
+                          placeholder={t(
+                            'settings.providers.custom.fields.modelContextWindowPlaceholder',
+                          )}
+                        />
+                      </div>
                       <button
                         type="button"
                         onClick={() =>

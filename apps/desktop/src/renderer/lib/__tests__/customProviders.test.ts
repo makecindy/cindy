@@ -139,6 +139,23 @@ describe('appendDiscoveredCustomProviderModels', () => {
       addedIds: ['new'],
     });
   });
+
+  it('carries the endpoint-declared contextWindow into appended models (#386)', () => {
+    const result = appendDiscoveredCustomProviderModels(
+      [],
+      [
+        { id: 'big', name: 'Big', contextWindow: 1_000_000 },
+        { id: 'plain', name: 'Plain' },
+        { id: 'bogus', name: 'Bogus', contextWindow: -1 },
+      ],
+    );
+    expect(result.models).toEqual([
+      { id: 'big', name: 'Big', contextWindow: 1_000_000, defaultEnabled: false },
+      { id: 'plain', name: 'Plain', defaultEnabled: false },
+      // 非法值不落盘,回落保守默认
+      { id: 'bogus', name: 'Bogus', defaultEnabled: false },
+    ]);
+  });
 });
 
 describe('custom provider credential lifecycle', () => {
