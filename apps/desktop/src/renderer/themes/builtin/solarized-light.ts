@@ -101,6 +101,10 @@ const singletonOverrides = {
   'create-agent-quick-card-text': TEXT_PRIMARY,
   'create-agent-segment-inactive-text': TEXT_SECONDARY,
   'create-agent-segment-track-bg': CHIP_BG,
+  // send 底走 tier1 accent(green),icon 必须显式白:registry 默认 send-btn-icon 是
+  // var(--surface-on-card),在本主题解析为 base2,对 green 底对比度不足(codex P1)。
+  'send-btn-bg': 'var(--accent-cta-bg)',
+  'send-btn-icon': 'var(--accent-pure-cta-fg)',
   'chat-input-chip-border': BORDER_BG,
   'chat-input-text': TEXT_PRIMARY,
   'color-primary': TEXT_PRIMARY,

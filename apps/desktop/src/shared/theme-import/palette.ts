@@ -5,8 +5,8 @@
  *
  * `renderer/themes/builtin/` 下 7 个社区主题(one-dark-pro / github-dark /
  * eclipse / material-ocean-hc / monokai-pro / atom-one-light / solarized-light)
- * 都是人工从 VSCode 主题移植的,它们 `colors` 的 key 集合**逐字相同**(109 个
- * token = 35 个 Tier1 slot + 72 个 alias / singleton),值全部由同一组 13 个色板
+ * 都是人工从 VSCode 主题移植的,它们 `colors` 的 key 集合**逐字相同**(108 个
+ * token = 35 个 Tier1 slot + 73 个 alias / singleton),值全部由同一组 13 个色板
  * 常量派生。本文件就是那套派生规则的代码化:
  *
  *   - 5 个 dark 主题逐 key 一致(唯一例外:github-dark 把 4 个 on-accent 前景
@@ -16,7 +16,7 @@
  *
  * ## 为什么用 allow-list
  *
- * 模板产出这 107 个基础 key（源主题提供 Markdown 色时额外追加 `md-h1-fg`…
+ * 模板产出这 108 个基础 key（源主题提供 Markdown 色时额外追加 `md-h1-fg`…
  * `md-h6-fg` / `md-strong-fg`）。这 7 个主题都没有 override `--login-*`、品牌红、
  * `--destructive`、`--warning-accent`、`--status-bar-accent`、`--focus-ring`、
  * `--diff-*`(DESIGN.md §10 / §16 的语义豁免族),照抄它们的 key 列表就自动守住了
@@ -58,8 +58,9 @@ export interface ThemePalette {
   /** accent 压暗档（pressed；light 主题的链接色也走这档的 primary/deep 组合）。 */
   accentDeep: Rgb;
   /** light 主题可选：CREATE AGENT 卡片 / 输入框底色压暗一档（如 Solarized base2）。
-   *  不传时与 surface 同值——chat-input-bg / quick-card / control 底收敛到 surface，
-   *  icon 圆底与 pressed 收敛到 hover，模板输出仍与手写主题逐字一致。 */
+   *  不传时与 surface 同值（chat-input-bg / quick-card / control / segment 底）；
+   *  icon 圆底恒为 chip、control pressed 恒为 pick(chip, hover)，均不随 inputBg
+   *  变化，模板输出仍与手写主题逐字一致。 */
   inputBg?: Rgb;
 }
 
@@ -80,7 +81,7 @@ const MARKDOWN_HEADING_TOKENS = [
 ] as const;
 
 /**
- * 模板产出的 91 个 token id。导出供测试断言"与 builtin 主题 key 集合一致"，
+ * 模板产出的 108 个 token id。导出供测试断言"与 builtin 主题 key 集合一致"，
  * 以及供 importer 统计命中数量。
  */
 export const TEMPLATE_TOKEN_IDS: readonly string[] = [
