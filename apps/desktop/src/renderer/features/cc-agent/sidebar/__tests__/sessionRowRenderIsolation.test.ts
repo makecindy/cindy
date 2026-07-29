@@ -33,6 +33,10 @@ import { SessionAttentionUrgencyProvider } from '../../contexts/SessionAttention
 // ── mocks:剥离与"渲染隔离"无关的重依赖,只留计数探针 ──────────────────────────
 
 const renderCounts = new Map<string, number>();
+const sessionStatusIconSource = readFileSync(
+  resolve(__dirname, '..', 'SessionStatusIcon.tsx'),
+  'utf8',
+);
 
 vi.mock('../SessionStatusIcon', () => ({
   SessionStatusIcon: ({ session }: { session: { id: string } }) => {
@@ -88,7 +92,7 @@ import { SessionItem } from '../SessionItem';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
-function makeSession(id: string, status: Session['status'] = 'active'): Session {
+function makeSession(id: string, status: Session['status'] = 'idle'): Session {
   return {
     id,
     title: `Session ${id}`,
@@ -108,11 +112,7 @@ function makeSession(id: string, status: Session['status'] = 'active'): Session 
 
 const noop = () => {};
 
-function rowsElement(
-  sessions: readonly Session[],
-  urgentSessionIds: ReadonlySet<string>,
-  selectedSessionIds: ReadonlySet<string> = new Set(),
-) {
+function rowsElement(sessions: readonly Session[], urgentSessionIds: ReadonlySet<string>) {
   return createElement(SessionAttentionUrgencyProvider, {
     urgentSessionIds,
     children: createElement(
@@ -125,7 +125,6 @@ function rowsElement(
           isActive: false,
           isRunning: false,
           hasAttentionNotification: false,
-          isSelected: selectedSessionIds.has(s.id),
           onClick: noop,
           onAction: noop,
           onRename: noop,
@@ -170,29 +169,25 @@ describe('SessionItem — memo 包裹', () => {
 });
 
 describe('SessionItem — 归档视觉', () => {
-  it('用侧栏 muted token 降级归档行，同时保留选中态的前景色', () => {
+  it('标题保留正文色，并用侧栏 muted Archive 图标区分归档行', () => {
     const regularSession = makeSession('regular-session');
     const archivedSession = makeSession('archived-session', 'archived');
-    const selectedArchivedSession = makeSession('selected-archived-session', 'archived');
-    const { container } = render(
-      rowsElement(
-        [regularSession, archivedSession, selectedArchivedSession],
-        new Set(),
-        new Set([selectedArchivedSession.id]),
-      ),
-    );
+    const { container } = render(rowsElement([regularSession, archivedSession], new Set()));
 
     const regularRow = container.querySelector('[data-session-id="regular-session"]');
     const archivedRow = container.querySelector('[data-session-id="archived-session"]');
-    const selectedArchivedRow = container.querySelector(
-      '[data-session-id="selected-archived-session"]',
-    );
 
     expect(regularRow?.className).toContain('text-foreground');
-    expect(archivedRow?.className).toContain('text-[var(--sidebar-list-muted)]');
-    expect(archivedRow?.className).not.toContain('text-foreground');
-    expect(selectedArchivedRow?.className).toContain('text-foreground');
-    expect(selectedArchivedRow?.className).not.toContain('text-[var(--sidebar-list-muted)]');
+    expect(archivedRow?.className).toContain('text-foreground');
+    expect(archivedRow?.className).not.toContain('text-[var(--sidebar-list-muted)]');
+
+    const archivedIconBranch = sessionStatusIconSource.slice(
+      sessionStatusIconSource.indexOf('{isArchived ? ('),
+      sessionStatusIconSource.indexOf(') : isOrcaLead ? ('),
+    );
+    expect(archivedIconBranch).toContain('<Archive');
+    expect(archivedIconBranch).toContain('text-[var(--sidebar-item-active-foreground)]');
+    expect(archivedIconBranch).toContain('text-[var(--sidebar-list-muted)]');
   });
 });
 
