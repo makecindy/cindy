@@ -5,8 +5,8 @@
  *
  * `renderer/themes/builtin/` 下 7 个社区主题(one-dark-pro / github-dark /
  * eclipse / material-ocean-hc / monokai-pro / atom-one-light / solarized-light)
- * 都是人工从 VSCode 主题移植的,它们 `colors` 的 key 集合**逐字相同**(91 个
- * token = 35 个 Tier1 slot + 56 个 alias / singleton),值全部由同一组 13 个色板
+ * 都是人工从 VSCode 主题移植的,它们 `colors` 的 key 集合**逐字相同**(109 个
+ * token = 35 个 Tier1 slot + 72 个 alias / singleton),值全部由同一组 13 个色板
  * 常量派生。本文件就是那套派生规则的代码化:
  *
  *   - 5 个 dark 主题逐 key 一致(唯一例外:github-dark 把 4 个 on-accent 前景
@@ -16,7 +16,7 @@
  *
  * ## 为什么用 allow-list
  *
- * 模板产出这 91 个基础 key（源主题提供 Markdown 色时额外追加 `md-h1-fg`…
+ * 模板产出这 107 个基础 key（源主题提供 Markdown 色时额外追加 `md-h1-fg`…
  * `md-h6-fg` / `md-strong-fg`）。这 7 个主题都没有 override `--login-*`、品牌红、
  * `--destructive`、`--warning-accent`、`--status-bar-accent`、`--focus-ring`、
  * `--diff-*`(DESIGN.md §10 / §16 的语义豁免族),照抄它们的 key 列表就自动守住了
@@ -57,6 +57,10 @@ export interface ThemePalette {
   accentSoft: Rgb;
   /** accent 压暗档（pressed；light 主题的链接色也走这档的 primary/deep 组合）。 */
   accentDeep: Rgb;
+  /** light 主题可选：CREATE AGENT 卡片 / 输入框底色压暗一档（如 Solarized base2）。
+   *  不传时与 surface 同值——chat-input-bg / quick-card / control 底收敛到 surface，
+   *  icon 圆底与 pressed 收敛到 hover，模板输出仍与手写主题逐字一致。 */
+  inputBg?: Rgb;
 }
 
 /** Markdown 标题 / 加粗色——源主题提供时才产出对应 token（Obsidian `--hN-color`）。 */
@@ -133,6 +137,20 @@ export const TEMPLATE_TOKEN_IDS: readonly string[] = [
   'confirm-btn-secondary-hover',
   'confirm-btn-secondary-text',
   'confirm-title',
+  'create-agent-control-bg',
+  'create-agent-control-bg-hover',
+  'create-agent-control-bg-pressed',
+  'create-agent-control-border',
+  'create-agent-control-icon',
+  'create-agent-control-text',
+  'create-agent-quick-card-bg',
+  'create-agent-quick-card-bg-hover',
+  'create-agent-quick-card-border',
+  'create-agent-quick-card-icon',
+  'create-agent-quick-card-icon-bg',
+  'create-agent-quick-card-text',
+  'create-agent-segment-inactive-text',
+  'create-agent-segment-track-bg',
   'drop-overlay-bg',
   'file-chip-bg',
   'file-remove-bg',
@@ -154,6 +172,8 @@ export const TEMPLATE_TOKEN_IDS: readonly string[] = [
   'primary-foreground',
   'search-match-fg',
   'secondary',
+  'send-btn-bg',
+  'send-btn-icon',
   'settings-btn-primary-text',
   'settings-btn-secondary-hover-bg',
   'text-placeholder',
@@ -230,6 +250,8 @@ export function buildThemeColorsFromPalette(
   const linkColor = pick(accentSoft, accentPrimary);
   /** 弱化前景:dark 用 disabled 档,light 用 tertiary(浅底上 disabled 太淡)。 */
   const mutedIcon = pick(textDisabled, textTertiary);
+  /** CREATE AGENT / 输入框底色：light 可用 inputBg 压暗一档（Solarized 惯例）。 */
+  const inputBg = toHex(palette.inputBg ?? palette.surface);
 
   const colors: Record<string, string> = {
     // ── Tier1 语义 slot ──
@@ -290,6 +312,20 @@ export function buildThemeColorsFromPalette(
     ),
     'confirm-btn-secondary-text': textPrimary,
     'confirm-title': textPrimary,
+    'create-agent-control-bg': inputBg,
+    'create-agent-control-bg-hover': hover,
+    'create-agent-control-bg-pressed': pick(chip, hover),
+    'create-agent-control-border': border,
+    'create-agent-control-icon': textPrimary,
+    'create-agent-control-text': textPrimary,
+    'create-agent-quick-card-bg': inputBg,
+    'create-agent-quick-card-bg-hover': hover,
+    'create-agent-quick-card-border': border,
+    'create-agent-quick-card-icon': textPrimary,
+    'create-agent-quick-card-icon-bg': chip,
+    'create-agent-quick-card-text': textPrimary,
+    'create-agent-segment-inactive-text': pick(textTertiary, textSecondary),
+    'create-agent-segment-track-bg': inputBg,
     'drop-overlay-bg': toRgbaString(palette.accentPrimary, 0.1),
     'file-chip-bg': pick(border, chip),
     'file-remove-bg': mutedIcon,
@@ -311,6 +347,8 @@ export function buildThemeColorsFromPalette(
     'primary-foreground': pick(surfaceHsl, '0 0% 100%'),
     'search-match-fg': textPrimaryHsl,
     secondary: pick(elevatedHsl, chipHsl),
+    'send-btn-bg': 'var(--accent-cta-bg)',
+    'send-btn-icon': 'var(--accent-pure-cta-fg)',
     'settings-btn-primary-text': onAccent,
     'settings-btn-secondary-hover-bg': hover,
     // placeholder 必须"读着像空",两个模式都取比 tertiary 更淡的 disabled 档。
