@@ -7,9 +7,20 @@ export interface ClaudeSessionRouteState {
   route: ClaudeSessionBillingRoute | null;
   /** 最近一笔**失败**请求是否订阅直连 bridge(chatgpt/ / xai/ 覆写;响应侧落账)。 */
   lastFailedRequestBridge: boolean;
+  /**
+   * 本轮启用期内 GET / push 是否已落地。false 时 route / lastFailedRequestBridge
+   * 只是占位默认,**不是权威的「无观察 / 非 bridge」**——计费引导等消费方必须
+   * 等 resolved 才据此行动,否则清空后的首帧会把「未知」当「确认非 bridge」
+   * 短暂放行错误引导(PR review P1)。
+   */
+  resolved: boolean;
 }
 
-const EMPTY_STATE: ClaudeSessionRouteState = { route: null, lastFailedRequestBridge: false };
+const EMPTY_STATE: ClaudeSessionRouteState = {
+  route: null,
+  lastFailedRequestBridge: false,
+  resolved: false,
+};
 
 /**
  * useClaudeSessionRoute — cc 默认路由会话的「生效计费路由」观察状态(proxy 按请求
@@ -35,9 +46,11 @@ export function useClaudeSessionRoute(
   sessionId: string | undefined,
   enabled: boolean,
 ): ClaudeSessionRouteState {
-  const [observation, setObservation] = useState<
-    (ClaudeSessionRouteState & { sessionId: string }) | null
-  >(null);
+  const [observation, setObservation] = useState<{
+    sessionId: string;
+    route: ClaudeSessionBillingRoute | null;
+    lastFailedRequestBridge: boolean;
+  } | null>(null);
   // 禁用即失效(渲染期,setState-in-render 惯用法):enabled 随错误形态翻转
   // (如 ErrorBanner 的 wantCcRouteState),false → true(同 sessionId)期间
   // registry 状态可能已变——旧观察值不得在重新启用的头几帧冒充新真值,必须等
@@ -73,6 +86,10 @@ export function useClaudeSessionRoute(
   }, [sessionId, enabled]);
 
   return enabled && sessionId && observation?.sessionId === sessionId
-    ? { route: observation.route, lastFailedRequestBridge: observation.lastFailedRequestBridge }
+    ? {
+        route: observation.route,
+        lastFailedRequestBridge: observation.lastFailedRequestBridge,
+        resolved: true,
+      }
     : EMPTY_STATE;
 }

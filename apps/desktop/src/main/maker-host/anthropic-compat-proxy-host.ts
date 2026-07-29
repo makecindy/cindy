@@ -371,19 +371,23 @@ export function createModelRoutingTransform(): RoutingTransform {
  * lastFailedRequestBridge 覆写为 false —— 非 bridge 请求的失败。与 bridge
  * localHandler 内的 true 侧配对(localHandler 响应不经本观察器,不会双记)。
  * 成功路径零开销;GET / 控制面请求不参与(横幅只关心推理请求的失败)。
- * Auto 权限分类器的内部辅助请求不参与:它的失败走 auto→ask 协调器,不进会话
- * 错误横幅——若与 bridge 配额失败并发、后落地,会把 bridge 归因误覆写回
- * false(PR review P1);复用 isClaudeAutoClassifierRequest 判据,仅错误路径
- * parse 一次 body。
+ * 已知辅助请求不参与——它们的失败不进会话错误横幅,若与 bridge 配额失败并发、
+ * 后落地,会把 bridge 归因误覆写回 false(PR review P1 ×2):
+ *   - Auto 权限分类器(走 auto→ask 协调器):复用 isClaudeAutoClassifierRequest
+ *     判据,仅错误路径 parse 一次 body;
+ *   - count_tokens 探测(404 时本地估算兜底,见 provider-upstream-error-observer):
+ *     按 URL 路径排除。
  */
 export function createClaudeSessionFailedRequestObserver() {
   return (ctx: {
     method: string;
+    url: string;
     status: number;
     requestHeaders: Readonly<Record<string, string>>;
     requestBody: Buffer;
   }): void => {
     if (ctx.method !== 'POST' || ctx.status < 400) return;
+    if (ctx.url.includes('/count_tokens')) return;
     const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
     const sessionId = sdkSessionId && _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null;
     if (!sessionId || isClaudeAutoClassifierRequest(ctx.requestBody)) return;

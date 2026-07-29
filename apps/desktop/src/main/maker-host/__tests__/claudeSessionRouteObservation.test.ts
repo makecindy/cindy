@@ -299,14 +299,25 @@ describe('claude session route observation (routing transform ② 段)', () => {
       );
       observer({
         method: 'POST',
+        url: '/v1/messages?beta=true',
         status: 429,
         requestHeaders: SESSION_HEADER,
         requestBody: classifierBody,
       });
       expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
+      // count_tokens 探测失败同为辅助请求(404 本地估算兜底),不参与归因(PR review P1)。
+      observer({
+        method: 'POST',
+        url: '/v1/messages/count_tokens',
+        status: 404,
+        requestHeaders: SESSION_HEADER,
+        requestBody: Buffer.from('{"model":"claude-opus-4-8"}'),
+      });
+      expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
       // ……随后 forward 路径主推理 POST 失败落地 → 覆写为非 bridge。
       observer({
         method: 'POST',
+        url: '/v1/messages?beta=true',
         status: 429,
         requestHeaders: SESSION_HEADER,
         requestBody: Buffer.from('{"model":"claude-opus-4-8","max_tokens":32000}'),
@@ -315,12 +326,14 @@ describe('claude session route observation (routing transform ② 段)', () => {
       // 成功响应 / GET 不参与归因。
       observer({
         method: 'POST',
+        url: '/v1/messages?beta=true',
         status: 200,
         requestHeaders: SESSION_HEADER,
         requestBody: Buffer.from('{}'),
       });
       observer({
         method: 'GET',
+        url: '/v1/models',
         status: 404,
         requestHeaders: SESSION_HEADER,
         requestBody: Buffer.from(''),

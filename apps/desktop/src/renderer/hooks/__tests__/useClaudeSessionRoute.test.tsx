@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useClaudeSessionRoute } from '../useClaudeSessionRoute';
 
 type RouteState = { route: 'gateway' | 'subscription' | null; lastFailedRequestBridge: boolean };
+// GET/push payload 不含 resolved(它是 hook 对「本轮启用期已落地」的本地判定)。
 type Deferred = { promise: Promise<RouteState | null>; resolve: (v: RouteState | null) => void };
 
 function deferred(): Deferred {
@@ -54,7 +55,7 @@ describe('useClaudeSessionRoute session binding', () => {
       ({ id }: { id: string }) => useClaudeSessionRoute(id, true),
       { initialProps: { id: 's1' } },
     );
-    expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false });
+    expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false, resolved: false });
     await act(async () => {
       pending[0].resolve({ route: 'gateway', lastFailedRequestBridge: false });
       await pending[0].promise;
@@ -63,7 +64,7 @@ describe('useClaudeSessionRoute session binding', () => {
 
     // 切会话:同一帧即为空状态,不得沿用 s1 的 gateway 观察值。
     rerender({ id: 's2' });
-    expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false });
+    expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false, resolved: false });
 
     await act(async () => {
       pending[1].resolve({ route: 'subscription', lastFailedRequestBridge: false });
@@ -84,7 +85,7 @@ describe('useClaudeSessionRoute session binding', () => {
     await waitFor(() => expect(result.current.route).toBe('gateway'));
 
     rerender({ enabled: false });
-    expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false });
+    expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false, resolved: false });
   });
 
   it('invalidates the stored observation while disabled (no stale frame on re-enable)', async () => {
@@ -104,7 +105,7 @@ describe('useClaudeSessionRoute session binding', () => {
     rerender({ enabled: false });
     rerender({ enabled: true });
     // 旧观察值已在禁用渲染里清空:重新启用后为空状态,等新 GET。
-    expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false });
+    expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false, resolved: false });
 
     await act(async () => {
       pending[1].resolve({ route: 'gateway', lastFailedRequestBridge: false });
@@ -126,11 +127,11 @@ describe('useClaudeSessionRoute session binding', () => {
     act(() => {
       pushListener?.({ sessionId: 's1', route: 'gateway', lastFailedRequestBridge: true });
     });
-    expect(result.current).toEqual({ route: 'gateway', lastFailedRequestBridge: true });
+    expect(result.current).toEqual({ route: 'gateway', lastFailedRequestBridge: true, resolved: true });
 
     act(() => {
       pushListener?.({ sessionId: 's1', route: 'gateway', lastFailedRequestBridge: false });
     });
-    expect(result.current).toEqual({ route: 'gateway', lastFailedRequestBridge: false });
+    expect(result.current).toEqual({ route: 'gateway', lastFailedRequestBridge: false, resolved: true });
   });
 });

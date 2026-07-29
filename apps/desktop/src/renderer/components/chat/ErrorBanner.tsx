@@ -183,11 +183,28 @@ export function ErrorBanner({
     membershipKind: authUser?.membershipKind ?? null,
   });
   const isQuotaError = isQuotaExceededMessage(error);
+  // ── 计费引导的来源归因快照(错误实例级)────────────────────────────────
+  // providerId / modelId 是会话的**可变**当前值:错误还挂着时用户切换来源
+  // (ChatInput.performProviderChange 不清错误尾部),自定义供应商的余额错误会
+  // 被换上的 xd 重新贴成 Cindy 点数耗尽(PR review P1)。快照按错误文本实例
+  // 冻结首帧的来源归因,只服务下方计费引导;其它恢复分支维持既有行为。
+  // 持久化历史错误连首帧快照都不可信(重开时来源可能早已换过),由下方
+  // !persistedError 门控整体抑制显式来源子句。
+  const [billingAttribution, setBillingAttribution] = useState<{
+    err: string;
+    providerId: string | null;
+    modelId: string | undefined;
+  }>(() => ({ err: error, providerId: normalizedProviderId, modelId }));
+  if (billingAttribution.err !== error) {
+    setBillingAttribution({ err: error, providerId: normalizedProviderId, modelId });
+  }
+  const billingProviderId = billingAttribution.providerId;
+  const billingModelId = billingAttribution.modelId;
   // 订阅直连 bridge 模型(chatgpt/ / xai/)不参与:请求在 proxy 提前分流,花的是
   // 个人订阅额度——ChatGPT/xAI 的配额错误绝不能被贴成 Cindy 点数耗尽(PR review
   // P1)。这里按会话顶层模型兜底;子代理按请求覆写 bridge 模型时顶层模型不变,
   // 由观察状态的 lastFailedRequestBridge 失败归因兜住(PR review P1 ×3)。
-  const isSubscriptionBridgeModel = !!modelId && isSubscriptionDirectModel(modelId);
+  const isSubscriptionBridgeModel = !!billingModelId && isSubscriptionDirectModel(billingModelId);
   // 观察状态对默认路由 cc 会话与显式 XD cc 会话都要读:子代理 bridge 覆写按请求
   // 绕过会话来源,显式 XD 会话同样会出现 bridge 配额失败(PR review P1)。
   const wantCcRouteState =
@@ -196,11 +213,19 @@ export function ErrorBanner({
     !isAnyRemoteSession &&
     agentKind === 'cc' &&
     !isSubscriptionBridgeModel &&
-    (normalizedProviderId === null || normalizedProviderId === 'xd');
+    (billingProviderId === null || billingProviderId === 'xd');
   // 生效路由 + 活性启发式只服务默认路由会话(显式 XD 由 providerId 直接驱动)。
-  const wantCcRouteForBilling = wantCcRouteState && normalizedProviderId === null;
-  const { route: claudeSessionRoute, lastFailedRequestBridge: ccLastFailedRequestBridge } =
-    useClaudeSessionRoute(sessionId, wantCcRouteState);
+  const wantCcRouteForBilling = wantCcRouteState && billingProviderId === null;
+  const {
+    route: claudeSessionRoute,
+    lastFailedRequestBridge: ccLastFailedRequestBridge,
+    resolved: ccRouteStateResolved,
+  } = useClaudeSessionRoute(sessionId, wantCcRouteState);
+  // resolved 门控:观察状态清空/首查在途时的占位 false **不是**权威的「非
+  // bridge」——显式 XD 的 bridge 配额失败若在 GET 落地前放行,会闪现一帧错误
+  // 的购买引导再消失(PR review P1)。cc 的引导子句一律等 resolved;codex
+  // 会话不读本观察(hook 未启用),不受此门控。
+  const ccRouteStateReady = agentKind !== 'cc' || ccRouteStateResolved;
   // 观察值缺失时的活性凭证启发式(与 TodaySpendChip 同口径)只对 live 错误启用:
   // live 错误刚由当前凭证形态的请求产生,启发式就是正确预测——有网关 key 判
   // gateway;无 key 且连了 Claude OAuth 判 subscription;reconcile 未完成 / 状态
@@ -209,11 +234,11 @@ export function ErrorBanner({
   // 会张冠李戴(PR review P1);同 run 的错误尾部仍可命中会话观察值,不受影响。
   const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey();
   const claudeOAuthConnected = useClaudeOAuthConnected(
-    wantCcRouteForBilling && !persistedError && claudeSessionRoute == null,
+    wantCcRouteForBilling && !persistedError && ccRouteStateResolved && claudeSessionRoute == null,
   );
   const ccEffectiveBillingRoute =
     claudeSessionRoute ??
-    (!wantCcRouteForBilling || persistedError || gatewayKeyReconciling
+    (!wantCcRouteForBilling || persistedError || !ccRouteStateResolved || gatewayKeyReconciling
       ? null
       : hasGatewayKey
         ? 'gateway'
@@ -231,24 +256,32 @@ export function ErrorBanner({
   // 发起序)——顶层模型与会话来源都看不出它,默认路由与显式 XD 的 cc 会话
   // 都必须据此闭嘴,不把 bridge 配额错误引导去购买点数(PR review P1 ×2)。
   const ccBridgeFailureVeto = agentKind === 'cc' && ccLastFailedRequestBridge;
+  // 显式来源子句统一要求 !persistedError:历史错误的来源归因不可回溯(快照
+  // 也只是重开时的当前值),按现值分类必然张冠李戴;持久化错误仅剩 cc 会话
+  // 观察值路径(绑定该会话实际流量,同 run 可信)可放行引导(PR review P1)。
   const isGatewayBilledSource =
-    (normalizedProviderId === 'xd' && !isSubscriptionBridgeModel && !ccBridgeFailureVeto) ||
+    (!persistedError &&
+      billingProviderId === 'xd' &&
+      !isSubscriptionBridgeModel &&
+      ccRouteStateReady &&
+      !ccBridgeFailureVeto) ||
     // codex/ 骨折模型子句同样吃 bridge 失败否决:cc 会话顶层是 codex/ 模型时,
     // 子代理照样可以覆写 bridge 请求,失败归因优先于顶层模型判断(PR review P1)。
-    ((normalizedProviderId === null || normalizedProviderId === 'xd') &&
-      !!modelId?.startsWith('codex/') &&
-      !ccBridgeFailureVeto) ||
+    (!persistedError &&
+      (billingProviderId === null || billingProviderId === 'xd') &&
+      !!billingModelId?.startsWith('codex/') &&
+      (agentKind !== 'cc' || (ccRouteStateResolved && !ccBridgeFailureVeto))) ||
     // codex 隐式来源必须等 runtime route 真值:占位 env-key 会把 OAuth 订阅
     // 会话的配额错误误判成网关计费(与 TodaySpendChip 同口径)。持久化历史
     // 错误不启用:共享 app-server 的当前路由 ≠ 产生该失败那一轮的路由,
     // codex 没有 per-session 路由记录可回溯(PR review P1)。
     (!persistedError &&
-      normalizedProviderId === null &&
+      billingProviderId === null &&
       agentKind === 'codex' &&
       !isSubscriptionBridgeModel &&
       codexRouteResolved &&
       codexAuthInjection === 'env-key') ||
-    (normalizedProviderId === null &&
+    (billingProviderId === null &&
       agentKind === 'cc' &&
       !isSubscriptionBridgeModel &&
       !ccBridgeFailureVeto &&
