@@ -121,6 +121,29 @@ describe('exportGhostPackage', () => {
     expect(Object.keys(unsignedZip.files)).not.toContain('.DS_Store');
   });
 
+  it('签名包嵌套 .DS_Store 未被 statement 覆盖时丢弃(Finder 残渣)', async () => {
+    // 用户用 Finder 浏览过子目录:嵌套 .DS_Store 是装入后生成的,
+    // statement 不覆盖它,导出保留会让重装校验多出 statement 外文件。
+    await fs.promises.writeFile(path.join(ghostDir, 'locales', '.DS_Store'), '');
+    await fs.promises.writeFile(
+      path.join(ghostDir, 'cindy-signatures.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        statement: {
+          schemaVersion: 1,
+          ghostId: 'hello',
+          ghostVersion: '1.2.0',
+          files: [{ path: 'ghost.json', sha256: 'y', bytes: 1 }],
+        },
+      }),
+    );
+    const result = await exportGhostPackage('hello', makeDeps());
+    expect(result.status).toBe('saved');
+    if (result.status !== 'saved') return;
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(result.savedPath));
+    expect(Object.keys(zip.files)).not.toContain('locales/.DS_Store');
+  });
+
   it('遍历期间目录被改写时整体重读,导出与最终状态一致的包', async () => {
     // 第二遍(校验遍)枚举根部前改写 main.js:第一遍的字节与第二遍的
     // 元数据对不上,必须重读;最终包内容应是改写后的版本。
