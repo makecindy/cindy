@@ -24,23 +24,37 @@ export async function fetchDirtyWorktreeForRemoval(
 }
 
 /**
- * 预取窗口内的预检结果缓存。
+ * 预取窗口内的预检结果缓存 —— **只复用 dirty=true,clean 一律重新查**。
  *
- * 这次查询是「点了归档、行还没消失」里剩下的最大一块等待:有 worktree 的会话
- * 要在 main 侧跑一次 git status。但每个归档入口在真正执行前都有一段人类操作
- * 空窗 —— 列表行内是两步确认(点归档图标 → 点 Confirm 胶囊),菜单入口是先
- * 打开菜单再点条目 —— 空窗至少一次反应时间(数百毫秒),足够预检跑完。于是在
- * 进入空窗时就 prefetch,真正执行时 resolve 命中缓存,await 只花一个 microtask。
+ * 每个归档入口在真正执行前都有一段人类操作空窗:列表行内是两步确认(点归档
+ * 图标 → 点 Confirm 胶囊),菜单入口是先打开菜单再点条目。在那一刻 prefetch,
+ * 可以把 main 侧那次 git status 挪出用户等待。
  *
- * TTL 取 8s:略长于行内 Confirm 胶囊 4s 自动撤回的窗口,又短到不会把「用户刚
- * 提交/stash 完改动」的旧结论留太久。这个结论只决定确认文案里是否追加一行未
- * 提交改动警告,过期读到旧值的代价很低。
+ * 但复用**必须是非对称的**(greptile / codex 都按 P1 指出过):
+ *   - cached dirty=true → 安全。这个结论只会让确认弹窗多出现一次;就算 worktree
+ *     期间被清干净了,用户看到警告仍可取消或继续,保护不会失效。
+ *   - cached clean → **不安全,不能复用**。归档会顺带回收 worktree,如果预取之后
+ *     外部编辑器或收尾中的 agent 写脏了工作区,复用 clean 就会整个跳过 dirty 确认,
+ *     用户拿不到承诺的「先提交或取消」机会(main 侧回收前会 auto-stash 兜住数据,
+ *     所以不至于丢改动,但用户不会知道改动已被 stash 带走)。
+ *
+ * 因此 clean 结论从不被复用,连仍在飞的预取也不复用其 clean 结果。这几乎不损失
+ * 收益:实测本仓 `git status --porcelain` 只要 20~40ms,加 IPC 往返远低于感知阈值;
+ * 预取真正的价值变成「去重 + 提前把 git 的索引/文件系统 cache 热起来 + dirty 会话
+ * 零等待」。TTL 8s 略长于行内 Confirm 胶囊 4s 自动撤回窗口,只对 dirty 生效。
  */
 const DIRTY_PREFLIGHT_TTL_MS = 8_000;
 
-const dirtyPreflightCache = new Map<string, { at: number; promise: Promise<boolean> }>();
+interface DirtyPreflightEntry {
+  at: number;
+  promise: Promise<boolean>;
+  /** promise 已 settle 时的结论；undefined = 仍在飞。只有 true 允许被复用。 */
+  dirty?: boolean;
+}
 
-/** 预热某个会话的 dirty 预检；重复调用在 TTL 内只发一次查询。 */
+const dirtyPreflightCache = new Map<string, DirtyPreflightEntry>();
+
+/** 预热某个会话的 dirty 预检。 */
 export function prefetchDirtyWorktreeForRemoval(
   sessionId: string,
   deviceLinkDeviceId?: string | null,
@@ -49,8 +63,9 @@ export function prefetchDirtyWorktreeForRemoval(
 }
 
 /**
- * 取 dirty 预检结论：命中未过期的预取则直接复用，否则即时查询。
- * 归档/删除的执行路径都应该走这个而不是 fetch，才能吃到预取的收益。
+ * 取 dirty 预检结论：只有未过期且为 dirty 的预取结果会被复用，其余情况(无缓存 /
+ * 已过期 / 结论是 clean / 仍在飞)一律重新查询，理由见上方注释。
+ * 归档/删除的执行路径都应该走这个而不是直调 fetch。
  */
 export function resolveDirtyWorktreeForRemoval(
   sessionId: string,
@@ -58,13 +73,21 @@ export function resolveDirtyWorktreeForRemoval(
 ): Promise<boolean> {
   const now = Date.now();
   const cached = dirtyPreflightCache.get(sessionId);
-  if (cached && now - cached.at < DIRTY_PREFLIGHT_TTL_MS) return cached.promise;
+  if (cached && cached.dirty === true && now - cached.at < DIRTY_PREFLIGHT_TTL_MS) {
+    return cached.promise;
+  }
   const promise = fetchDirtyWorktreeForRemoval(sessionId, deviceLinkDeviceId);
-  dirtyPreflightCache.set(sessionId, { at: now, promise });
+  const entry: DirtyPreflightEntry = { at: now, promise };
+  dirtyPreflightCache.set(sessionId, entry);
+  // 回填结论:只有 dirty 会被后续 resolve 复用。用 entry 身份守卫,避免旧查询
+  // 覆盖同一会话更新的那次(fetch 内部已 swallow 异常,不会 reject)。
+  void promise.then((dirty) => {
+    if (dirtyPreflightCache.get(sessionId) === entry) entry.dirty = dirty;
+  });
   // 过期条目没有别的清理时机(会话可能已经被归档/删除),顺手扫一遍,
   // 别让 Map 随会话数无限长大。
-  for (const [id, entry] of dirtyPreflightCache) {
-    if (now - entry.at >= DIRTY_PREFLIGHT_TTL_MS) dirtyPreflightCache.delete(id);
+  for (const [id, item] of dirtyPreflightCache) {
+    if (now - item.at >= DIRTY_PREFLIGHT_TTL_MS) dirtyPreflightCache.delete(id);
   }
   return promise;
 }

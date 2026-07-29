@@ -41,24 +41,52 @@ afterEach(() => {
 });
 
 describe('dirty worktree preflight prefetch', () => {
-  it('serves the prefetched result without querying main again', async () => {
+  // prefetch 是 fire-and-forget，测试里用同一入口 await 一次代表「预取已落地」
+  // （结论回填发生在内部 then 里，先于测试的 await 执行）。
+  const settledPrefetch = (sessionId: string) => resolveDirtyWorktreeForRemoval(sessionId);
+
+  it('serves a prefetched dirty result without querying main again', async () => {
+    // dirty 复用是安全侧的:最坏只是确认弹窗多出现一次。
     mocks.worktreeRemovalPreview.mockResolvedValue({ hasWorktree: true, dirty: true });
 
-    prefetchDirtyWorktreeForRemoval('session-1');
-    await expect(resolveDirtyWorktreeForRemoval('session-1')).resolves.toBe(true);
+    await settledPrefetch('session-1');
+    expect(mocks.worktreeRemovalPreview).toHaveBeenCalledTimes(1);
 
+    await expect(resolveDirtyWorktreeForRemoval('session-1')).resolves.toBe(true);
     expect(mocks.worktreeRemovalPreview).toHaveBeenCalledTimes(1);
   });
 
-  it('dedupes repeated prefetches for the same session', async () => {
-    mocks.worktreeRemovalPreview.mockResolvedValue({ hasWorktree: false, dirty: false });
-
-    prefetchDirtyWorktreeForRemoval('session-1');
-    prefetchDirtyWorktreeForRemoval('session-1');
-    prefetchDirtyWorktreeForRemoval('session-1');
-    await resolveDirtyWorktreeForRemoval('session-1');
-
+  it('never reuses a clean prefetch — revalidates at execution time', async () => {
+    // 归档会顺带回收 worktree。预取到 clean 之后工作区被写脏时,复用旧结论会整个
+    // 跳过 dirty 确认,用户拿不到「先提交或取消」的机会(greptile / codex 的 P1)。
+    mocks.worktreeRemovalPreview.mockResolvedValue({ hasWorktree: true, dirty: false });
+    await settledPrefetch('session-1');
     expect(mocks.worktreeRemovalPreview).toHaveBeenCalledTimes(1);
+
+    // 预取之后工作区变脏 —— 执行时必须重新查到这个新结论。
+    mocks.worktreeRemovalPreview.mockResolvedValue({ hasWorktree: true, dirty: true });
+    await expect(resolveDirtyWorktreeForRemoval('session-1')).resolves.toBe(true);
+
+    expect(mocks.worktreeRemovalPreview).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse a clean result even while the prefetch is still in flight', async () => {
+    let resolveFirst: ((value: { hasWorktree: boolean; dirty: boolean }) => void) | undefined;
+    mocks.worktreeRemovalPreview.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    mocks.worktreeRemovalPreview.mockResolvedValue({ hasWorktree: true, dirty: true });
+
+    prefetchDirtyWorktreeForRemoval('session-1');
+    // 预取还没回来就点了归档:in-flight 的结论同样可能是 clean，不能拿来放行。
+    const resolved = resolveDirtyWorktreeForRemoval('session-1');
+    resolveFirst?.({ hasWorktree: true, dirty: false });
+
+    await expect(resolved).resolves.toBe(true);
+    expect(mocks.worktreeRemovalPreview).toHaveBeenCalledTimes(2);
   });
 
   it('keeps buckets per session rather than sharing one result', async () => {
@@ -66,22 +94,22 @@ describe('dirty worktree preflight prefetch', () => {
       Promise.resolve({ hasWorktree: true, dirty: sessionId === 'dirty-one' }),
     );
 
-    prefetchDirtyWorktreeForRemoval('dirty-one');
-    prefetchDirtyWorktreeForRemoval('clean-one');
+    await settledPrefetch('dirty-one');
+    await settledPrefetch('clean-one');
 
     await expect(resolveDirtyWorktreeForRemoval('dirty-one')).resolves.toBe(true);
     await expect(resolveDirtyWorktreeForRemoval('clean-one')).resolves.toBe(false);
   });
 
-  it('re-queries once the prefetch has gone stale', async () => {
+  it('re-queries once the prefetched dirty result has gone stale', async () => {
     mocks.worktreeRemovalPreview.mockResolvedValue({ hasWorktree: true, dirty: true });
 
-    prefetchDirtyWorktreeForRemoval('session-1');
+    await settledPrefetch('session-1');
     await resolveDirtyWorktreeForRemoval('session-1');
     expect(mocks.worktreeRemovalPreview).toHaveBeenCalledTimes(1);
 
-    // TTL 是 8s：略长于行内 Confirm 胶囊 4s 的自动撤回窗口，又不会把
-    // 「用户刚提交完改动」的旧结论留太久。
+    // TTL 是 8s：略长于行内 Confirm 胶囊 4s 的自动撤回窗口。只对 dirty 结论生效 ——
+    // clean 从不复用，所以不存在「过期的 clean 被用来放行归档」。
     vi.advanceTimersByTime(8_001);
     mocks.worktreeRemovalPreview.mockResolvedValue({ hasWorktree: true, dirty: false });
     await expect(resolveDirtyWorktreeForRemoval('session-1')).resolves.toBe(false);
