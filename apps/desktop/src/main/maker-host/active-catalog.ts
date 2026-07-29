@@ -58,7 +58,12 @@ export interface XdGatewayAgentOverride {
   defaultEnabled?: boolean;
 }
 
-/** 服务端下发的 XD 网关聊天模型条目(shared/modelAccess ModelAccessGatewayModel 的子集)。 */
+/**
+ * 服务端下发的 XD 网关模型条目(shared/modelAccess ModelAccessGatewayModel 的子集)。
+ * 命名沿用历史("聊天"),但条目本身不保证是聊天模型——是否聊天模型看 mode,
+ * 服务端目前只透传已经过它自己 chat 过滤的条目,过滤范围以后可能放开(issue #882);
+ * 客户端一律用 isChatEligible 判定,不依赖本类型名字或服务端过滤范围。
+ */
 export interface XdGatewayModelInfo {
   id: string;
   /** Gateway 原生 mode(issue #882,权威分类字段;缺省时下游按 id 正则兜底)。 */

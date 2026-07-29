@@ -125,12 +125,11 @@ export function categorize(id: string): ModelCategory {
   if (id === 'ai-gateway-doc') return 'compression';
   // STT/ASR 必须在 realtime 判定之前:qwen3-asr-flash-realtime / fun-asr-realtime-* /
   // gpt-realtime-whisper 的 id 里都含 "realtime",但语义是语音转写,不是实时多模态。
-  if (
-    id.startsWith('elevenlabs/scribe') ||
-    /transcribe|whisper|asr/.test(id)
-  )
-    return 'stt';
-  if (id.startsWith('elevenlabs/eleven')) return 'tts';
+  // 关键词覆盖面对齐原先合并的 audio 桶(transcribe/audio/speech/tts/whisper/asr),
+  // 不能只认 elevenlabs 前缀——否则 gpt-4o-mini-tts / qwen-tts 这类其它厂商的语音模型
+  // 会漏网落进 gpt/china,被 isChatEligible 误判为可聊天(2026-07 review)。
+  if (id.startsWith('elevenlabs/scribe') || /transcribe|whisper|asr/.test(id)) return 'stt';
+  if (id.startsWith('elevenlabs/eleven') || /speech|tts|audio/.test(id)) return 'tts';
   // gpt-realtime-2 / gpt-realtime-mini / gpt-realtime-translate / gemini-omni-* ——
   // 真正的实时多模态,已排除上面的 STT 特例。
   if (/^gpt-realtime|gemini-omni/.test(id)) return 'realtime';

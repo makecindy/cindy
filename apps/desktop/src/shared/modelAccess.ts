@@ -154,9 +154,10 @@ export interface ModelGroupPricing {
 export interface ModelAccessGatewayModel extends ModelGroupPricing {
   id: string;
   /**
-   * Gateway 原生 mode(issue #882:权威分类字段,字段值不改名)。服务端只对
-   * 已经通过其 chat 过滤的条目透传,尚未全面覆盖时可能缺省;客户端把 mode
-   * 当权威信号使用,缺省时回退 classification.ts 的 id 正则兜底,见
+   * Gateway 原生 mode(issue #882:权威分类字段,字段值不改名)。原样透传,可能
+   * 缺省(旧缓存 / 服务端尚未覆盖到的模型)——**不代表**本条目已被服务端判定
+   * 为聊天模型,是否可进 Agent availableModels 仍由客户端 isChatEligible 判定
+   * (mode==='chat' 才算;缺省时回退 classification.ts 的 id 正则兜底),见
    * @cindy/model-providers classifyModel / isChatEligible。
    */
   mode?: string;

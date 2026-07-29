@@ -12,6 +12,7 @@
 
 import type { AgentKind, CatalogModel, Effort } from './types.js';
 import type { ProviderView } from './registry.js';
+import { isChatEligible } from './classification.js';
 import { deriveModelList, deriveModelSections } from './modelList.js';
 
 /**
@@ -136,10 +137,14 @@ export function buildProviderSections(args: {
   //   - 选中豁免仅在 selectedProviderId **非空**时生效(旧实现 provider.id === null
   //     恒 false,即 flat 语义的「null = 匹配任意行」在这里不适用);
   //   - 字段拷贝保持条件性(undefined 字段不写 key),对象形状逐字节一致。
+  // excludeModel:本函数目前的三个调用方(desktop ModelSelector 分段视图 / IM /model
+  // 卡片 / mobile 模型选择)都是"挑一个能聊天的模型",不是设置页的完整模型管理——
+  // 非聊天模型(issue #882 第 3 点)统一在这里挡掉,调用方不用各自记得过滤(2026-07 review)。
   const sections = deriveModelSections({
     providers: args.providers,
     agent: args.agent,
     providerScope: 'as-given',
+    excludeModel: (model) => !isChatEligible(model),
     isVisible: (providerId, model) => args.isVisible(providerId, model.id),
     ...(args.selectedModelId !== undefined &&
     args.selectedProviderId !== undefined &&

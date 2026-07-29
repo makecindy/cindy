@@ -12,6 +12,7 @@
  */
 
 import {
+  isChatEligible,
   isModelVisible,
   providerOffersModel,
   providersForAgent,
@@ -141,6 +142,9 @@ export function deriveModelsFromProviders(
     if (opts?.excludeProvider?.(provider)) continue;
     for (const m of provider.models[agent] ?? []) {
       if (seen.has(m.id)) continue;
+      // 非聊天模型不进 picker(issue #882 第 3 点),与 main 侧 catalog-to-descriptors.ts
+      // deriveAvailableModels 保持逐字节一致——这里是它的 renderer live 版(见文件头注)。
+      if (!isChatEligible(m)) continue;
       seen.add(m.id);
       out.push(toDescriptor(m));
     }

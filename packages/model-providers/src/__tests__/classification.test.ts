@@ -76,6 +76,12 @@ describe('categorize', () => {
     expect(categorize('elevenlabs/eleven_multilingual_v2')).toBe('tts');
   });
 
+  it('非 elevenlabs 前缀的通用语音合成关键词也归 tts(2026-07 review 回归:不能只认 elevenlabs)', () => {
+    expect(categorize('gpt-4o-mini-tts')).toBe('tts');
+    expect(categorize('qwen-tts')).toBe('tts');
+    expect(categorize('some-vendor-speech-model')).toBe('tts');
+  });
+
   it('视频生成/编辑类归 video(issue #882)', () => {
     expect(categorize('doubao-seedance-2-0-fast-260128')).toBe('video');
     expect(categorize('happyhorse-1.1-i2v')).toBe('video');
