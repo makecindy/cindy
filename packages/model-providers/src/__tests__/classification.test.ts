@@ -129,6 +129,26 @@ describe('categorize', () => {
     expect(isChatEligible({ id: 'omni-moderation-latest' })).toBe(false);
     expect(isChatEligible({ id: 'text-moderation-latest' })).toBe(false);
   });
+
+  it('遗留 Completions 端点与 Rerank 端点不落进厂商兜底组、不被判定为可聊天(2026-07 review 第 15 轮)', () => {
+    expect(categorize('babbage-002')).toBe('other');
+    expect(categorize('davinci-002')).toBe('other');
+    expect(categorize('gpt-3.5-turbo-instruct')).toBe('other');
+    expect(categorize('text-davinci-003')).toBe('other');
+    expect(categorize('code-davinci-002')).toBe('other');
+    expect(categorize('rerank-v3.5')).toBe('other');
+    expect(categorize('rerank-english-v3.0')).toBe('other');
+    expect(isChatEligible({ id: 'babbage-002' })).toBe(false);
+    expect(isChatEligible({ id: 'davinci-002' })).toBe(false);
+    expect(isChatEligible({ id: 'rerank-v3.5' })).toBe(false);
+  });
+
+  it('"-instruct" 结尾的正常聊天模型不受遗留 Completions 排除规则误杀(2026-07 review 第 15 轮:避免宽泛后缀误伤开源 instruct 模型)', () => {
+    expect(categorize('qwen2.5-72b-instruct')).not.toBe('other');
+    expect(categorize('llama-3-70b-instruct')).not.toBe('other');
+    expect(isChatEligible({ id: 'qwen2.5-72b-instruct' })).toBe(true);
+    expect(isChatEligible({ id: 'llama-3-70b-instruct' })).toBe(true);
+  });
 });
 
 describe('groupOf — 数据优先,前缀兜底', () => {

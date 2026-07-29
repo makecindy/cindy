@@ -131,6 +131,19 @@ export function categorize(id: string): ModelCategory {
   // 发现的自定义 OAuth 供应商没有 mode,不挡的话会被 isChatEligible 误判为可聊天——
   // moderation 端点不接受聊天请求)。
   if (/moderation/.test(id)) return 'other';
+  // 遗留 Completions 端点(davinci-002/babbage-002/text-davinci-*等,OpenAI 已停售但
+  // 部分网关仍会同步)与 Rerank 端点(cohere/voyage 的 rerank-*)不接受 Chat Completions
+  // 请求,未列入 issue #882 语义类型,落 other 保留原始 id(2026-07 review:走 {id,name}
+  // 极简发现的自定义 OAuth 供应商没有 mode,靠正则兜底,否则会被 isChatEligible 误判为
+  // 可聊天)。只匹配这批已停售且无歧义的固定 id/前缀——不用 `-instruct$` 这种宽泛后缀,
+  // 因为 mistral/qwen/llama 的 "-instruct" 结尾模型是正常聊天模型,不能误杀。
+  if (/rerank/.test(id)) return 'other';
+  if (
+    /^(babbage-002|davinci-002|gpt-3\.5-turbo-instruct|text-davinci-\d{3}|text-curie-001|text-babbage-001|text-ada-001|code-davinci-002)$/.test(
+      id,
+    )
+  )
+    return 'other';
   // STT/ASR 必须在 realtime 判定之前:qwen3-asr-flash-realtime / fun-asr-realtime-* /
   // gpt-realtime-whisper 的 id 里都含 "realtime",但语义是语音转写,不是实时多模态。
   // 不能只认 elevenlabs 前缀——否则 gpt-4o-mini-tts / qwen-tts 这类其它厂商的语音模型
