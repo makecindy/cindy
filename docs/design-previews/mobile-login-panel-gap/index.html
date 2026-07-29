@@ -10,8 +10,6 @@
   .col{flex:0 0 auto}
   .cap{font-size:12.5px;margin-bottom:7px;display:flex;align-items:center;gap:8px;color:#B9B9B9}
   .cap.bad{color:#FF6F60;font-weight:700}
-  .cap.ok{color:#8BC98B}
-  .cap.ref{color:#7FB0E8}
   .cap.pick{color:#F3C969;font-weight:700}
   .metrics{display:flex;gap:5px;margin-bottom:7px;flex-wrap:wrap}
   .m{font-family:ui-monospace,Menlo,monospace;font-size:10px;padding:1px 5px;border-radius:3px;background:#242424;color:#B5B5B5}
@@ -37,8 +35,8 @@
   .gapzone{display:flex;align-items:center;justify-content:center;font-family:ui-monospace,Menlo,monospace;font-size:11px}
   .gapzone.bad{background:repeating-linear-gradient(45deg,rgba(255,80,60,.30),rgba(255,80,60,.30) 7px,rgba(255,80,60,.13) 7px,rgba(255,80,60,.13) 14px);border-top:1px dashed #FF6F60;border-bottom:1px dashed #FF6F60}
   .gapzone.bad span{color:#FFD9D2;background:rgba(120,25,15,.85);padding:1px 7px;border-radius:4px}
-  .gapzone.ok,.gapzone.ref{background:rgba(255,255,255,.10);border-top:1px dashed rgba(255,255,255,.35);border-bottom:1px dashed rgba(255,255,255,.35)}
-  .gapzone.ok span,.gapzone.ref span{color:#E6E6E6;background:rgba(0,0,0,.55);padding:0 5px;border-radius:3px;font-size:9.5px}
+  .gapzone.pick{background:rgba(120,220,140,.16);border-top:1px dashed rgba(150,230,170,.55);border-bottom:1px dashed rgba(150,230,170,.55)}
+  .gapzone.pick span{color:#DFF5E4;background:rgba(20,70,35,.85);padding:1px 7px;border-radius:4px;font-size:10px}
 </style></head><body>
 <h1>手机登录页：字标底 → 登录面板顶 的间距（主干现状 vs 本 PR 修复）</h1>
 <div class="lead">两列几何都从 <code>apps/mobile/src/auth/loginSkinLayout.ts</code> 真值渲染：① 取 <code>git show origin/main</code> 的同一文件，② 取本分支工作树。资产为仓库真图、<code>contain</code> 适配同 <code>MobileLoginHandoffStage</code> 的 <code>resizeMode</code>。<b>红斜纹 = 多出来的空白</b>；✓稿 = 与 figma 新稿标注一致。
