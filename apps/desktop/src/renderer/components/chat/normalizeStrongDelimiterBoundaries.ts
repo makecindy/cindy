@@ -240,14 +240,38 @@ function collectProjectDeepLinkRanges(markdown: string, range: OffsetRange): Off
   return ranges;
 }
 
-function collectPreservedTexDelimiterRanges(markdown: string): OffsetRange[] {
+function findUnprotectedDelimiter(
+  markdown: string,
+  delimiter: string,
+  start: number,
+  protectedRanges: OffsetRange[],
+): number {
+  let scan = start;
+
+  while (scan < markdown.length) {
+    const offset = markdown.indexOf(delimiter, scan);
+    if (offset === -1) return -1;
+    const protectedRange = protectedRanges.find(
+      (range) => offset >= range.start && offset < range.end,
+    );
+    if (!protectedRange) return offset;
+    scan = protectedRange.end;
+  }
+
+  return -1;
+}
+
+function collectPreservedTexDelimiterRanges(
+  markdown: string,
+  protectedRanges: OffsetRange[],
+): OffsetRange[] {
   const ranges: OffsetRange[] = [];
   let scan = 0;
   let noParenCloser = false;
   let noBracketCloser = false;
 
   while (scan < markdown.length) {
-    const open = markdown.indexOf('\\', scan);
+    const open = findUnprotectedDelimiter(markdown, '\\', scan, protectedRanges);
     if (open === -1 || open + 1 >= markdown.length) break;
     const kind = markdown[open + 1];
     if (kind !== '(' && kind !== '[') {
@@ -261,7 +285,7 @@ function collectPreservedTexDelimiterRanges(markdown: string): OffsetRange[] {
       continue;
     }
     const closer = kind === '[' ? '\\]' : '\\)';
-    const close = markdown.indexOf(closer, open + 2);
+    const close = findUnprotectedDelimiter(markdown, closer, open + 2, protectedRanges);
     if (close === -1) {
       if (isDisplay) noBracketCloser = true;
       else noParenCloser = true;
@@ -407,9 +431,15 @@ export function normalizeStrongDelimiterBoundaries(
   if (!markdown.includes('**') || !POTENTIAL_BOUNDARY_RE.test(markdown)) return markdown;
 
   const tree = markdownParser.runSync(markdownParser.parse(markdown), markdown) as Root;
-  const preservedTexDelimiterRanges = options.preserveTexDelimiters
-    ? collectPreservedTexDelimiterRanges(markdown)
-    : [];
+  const preservedTexDelimiterRanges: OffsetRange[] = [];
+  if (options.preserveTexDelimiters) {
+    const protectedSyntaxRanges: OffsetRange[] = [];
+    collectProtectedRanges(tree, protectedSyntaxRanges, markdown);
+    protectedSyntaxRanges.sort((left, right) => left.start - right.start);
+    preservedTexDelimiterRanges.push(
+      ...collectPreservedTexDelimiterRanges(markdown, protectedSyntaxRanges),
+    );
+  }
   const proseRanges = collectProseRanges(tree, markdown, preservedTexDelimiterRanges);
   const boundaryInsertions = proseRanges.flatMap(({ range, protectedRanges }) =>
     collectBoundaryInsertions(markdown, range, protectedRanges),

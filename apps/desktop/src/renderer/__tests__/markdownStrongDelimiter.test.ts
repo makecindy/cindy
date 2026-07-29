@@ -230,6 +230,21 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
   });
 
+  it('ignores preserved TeX delimiters inside protected Markdown syntax', () => {
+    const cases = [
+      '[x](https://a.test/\\(foo) **重点。**正文 \\)',
+      '![x](https://a.test/\\[foo) **重点。**正文 \\]',
+      '`\\(foo` **重点。**正文 \\)',
+    ];
+
+    for (const source of cases) {
+      expect(
+        normalizeStrongDelimiterBoundaries(source, { preserveTexDelimiters: true }),
+        source,
+      ).toBe(source.replace('**正文', '**<!--cindy-strong-boundary-->正文'));
+    }
+  });
+
   it('preserves loose inline math before the strict math plugin downgrades it to text', () => {
     const source = '$2**3.**x $';
 
