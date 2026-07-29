@@ -53,7 +53,7 @@ import {
   saveGhostAppearancePreset,
   saveGhostAppearanceWithPreset,
 } from '../appearanceStore';
-import { removeRefs } from '../../cindy-media/ledger';
+import { hasRef, removeRefs } from '../../cindy-media/ledger';
 
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
@@ -166,6 +166,26 @@ describe('appearance preset store', () => {
       name: 'Before',
     });
     expect([...mocks.refs.get(`skin-preset:${preset.id}:background`)!]).toEqual([HASH_A]);
+  });
+
+  it('预设写盘失败且旧引用确认失败时保留现有引用并报告恢复失败', async () => {
+    await saveGhostAppearancePreset(appearance('Before'), { background: HASH_A }, 'skin');
+    const preset = (await listGhostAppearancePresets())[0];
+    vi.mocked(hasRef)
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new Error('ledger unavailable'));
+    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(new Error('disk full'));
+
+    await expect(
+      saveGhostAppearancePreset(appearance('Before', HASH_B), { background: HASH_B }, 'skin'),
+    ).rejects.toThrow('自动恢复未完成');
+
+    expect((await listGhostAppearancePresets())[0]).toMatchObject({
+      id: preset.id,
+      name: 'Before',
+    });
+    expect(mocks.refs.get(`skin-preset:${preset.id}:background`)?.has(HASH_A)).toBe(true);
+    expect(mocks.refs.get(`skin-preset:${preset.id}:background`)?.has(HASH_B)).toBe(true);
   });
 
   it('保存命名皮肤的活动文件失败时恢复旧皮肤归属', async () => {

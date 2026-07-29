@@ -514,12 +514,16 @@ async function saveGhostAppearancePresetUnsafe(
     await atomicWriteJson(presetsFilePath(), library);
   } catch (error) {
     const previousHashes = existing ? hashesFromSnapshot(existing.snapshot) : {};
+    try {
+      // 旧库仍在磁盘上：先确认其媒体引用全部存在，再清理本次尝试新增的
+      // 引用。若账本此时不可用，保留新旧引用并显式进入恢复失败状态，
+      // 绝不能先删后吞错，让旧预设指向可能被回收的零引用 blob。
+      await retainPresetMedia(preset.id, previousHashes, existing?.sourceGhostId);
+    } catch {
+      throw new GhostAppearanceRecoveryError();
+    }
+    // 此时旧引用已确认可用；清理失败只会暂留本次新增引用，不会丢图。
     await releaseReplacedPresetMedia(preset.id, previousHashes).catch(() => {});
-    await retainPresetMedia(
-      preset.id,
-      previousHashes,
-      existing?.sourceGhostId,
-    ).catch(() => {});
     throw error;
   }
   if (!deferCleanup) {
