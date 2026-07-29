@@ -202,6 +202,24 @@ const CHAT_BRIDGE_DEFAULT_CAPABILITIES: ChatBridgeCapabilities = {
   maxTokensField: 'max_tokens',
   reasoningField: 'none',
   streamUsage: true,
+  // Responses fields with direct Chat equivalents. Provider-specific unsupported fields can
+  // be removed later when the model capability catalog becomes more granular.
+  passthroughFields: [
+    'temperature',
+    'top_p',
+    'frequency_penalty',
+    'presence_penalty',
+    'stop',
+    'seed',
+    'user',
+    'metadata',
+    'service_tier',
+    'response_format',
+    'logit_bias',
+    'logprobs',
+    'top_logprobs',
+    'n',
+  ],
   toolCallReasoningPlaceholder: true,
   forceAutoToolChoice: true,
 };
@@ -239,7 +257,8 @@ function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined):
 }
 
 /**
- * 图片桥接必须按已验证的上游能力显式开启。这里认官方 DNS 边界 + 上游 model
+ * 在模型级多模态能力元数据接入路由前,图片桥接先按已验证的上游能力显式开启。
+ * 这里认官方 DNS 边界 + 上游 model
  * (Moonshot 的 Kimi K3、火山方舟的豆包 Seed 系列),不认 provider id(预设创建后
  * 会生成用户自定义 id),也不对所有 openai-chat 供应商放开。未命中继续沿用
  * fail-closed 默认——无图片能力的上游(如 DeepSeek)保持发送前显式报错,不静默吞图。
@@ -300,7 +319,7 @@ function createChatBridgeDecision(
         toolCallReasoningPlaceholder: false,
         forceAutoToolChoice: false,
         googleThoughtSignaturePlaceholder: true,
-      }
+    }
     : CHAT_BRIDGE_DEFAULT_CAPABILITIES;
   const capabilities = chatBridgeCapabilitiesForRoute(
     route.routing.upstream,
@@ -720,7 +739,35 @@ function ensureXaiServerSideTools(body: Record<string, unknown>): Record<string,
  * is rejected as an unknown field.
  */
 function isByteDanceSeedModel(model: unknown): boolean {
-  return typeof model === 'string' && model.startsWith('bytedance-seed/');
+  return typeof model === 'string' && (
+    model.startsWith('bytedance-seed/') ||
+    model.startsWith('doubao-seed-')
+  );
+}
+
+function isVolcengineArkResponsesRouting(ctx: RequestTransformCtx, model: unknown): boolean {
+  if (typeof model !== 'string' || model.length === 0) return false;
+  const sessionId = sessionIdFromTransformCtx(ctx);
+  if (!sessionId) return false;
+  const routing = getSessionRoutingDescriptor(sessionId, 'codex', model);
+  if (!routing || (routing.wireProtocol ?? 'openai-responses') !== 'openai-responses') return false;
+
+  try {
+    const hostname = new URL(routing.upstream).hostname.toLowerCase();
+    return hostname === 'volces.com' || hostname.endsWith('.volces.com');
+  } catch {
+    return false;
+  }
+}
+
+function isByteDanceSeedRequest(
+  body: Record<string, unknown>,
+  ctx: RequestTransformCtx,
+): boolean {
+  // The catalog model uses a provider namespace, while Volcengine's native
+  // model IDs use doubao-seed-* and user-defined aliases may use neither.
+  // The selected official Ark Responses route is the authoritative fallback.
+  return isByteDanceSeedModel(body.model) || isVolcengineArkResponsesRouting(ctx, body.model);
 }
 
 function seedToolChoiceReferencesRemovedTool(
@@ -737,7 +784,7 @@ function seedToolChoiceReferencesRemovedTool(
 }
 
 function sanitizeByteDanceSeedTools(body: Record<string, unknown>): Record<string, unknown> | null {
-  if (!isByteDanceSeedModel(body.model) || !Array.isArray(body.tools)) return null;
+  if (!Array.isArray(body.tools)) return null;
 
   let changed = false;
   const tools: Record<string, unknown>[] = [];
@@ -810,7 +857,7 @@ function stripEmptyResponseMessage(item: unknown): { item: unknown; changed: boo
 
 /** Volcengine requires replayed assistant messages to carry their output status and non-empty text. */
 function normalizeByteDanceSeedInput(body: Record<string, unknown>): Record<string, unknown> | null {
-  if (!isByteDanceSeedModel(body.model) || !Array.isArray(body.input)) return null;
+  if (!Array.isArray(body.input)) return null;
 
   let changed = false;
   const input: unknown[] = [];
@@ -939,7 +986,7 @@ function createStrictGatewayHistoryCompatTransform(): RequestTransform {
 
 /** Seed accepts the reasoning effort, but rejects Responses' summary selector. */
 function sanitizeByteDanceSeedReasoning(body: Record<string, unknown>): Record<string, unknown> | null {
-  if (!isByteDanceSeedModel(body.model) || !isPlainObject(body.reasoning) || !('summary' in body.reasoning)) {
+  if (!isPlainObject(body.reasoning) || !('summary' in body.reasoning)) {
     return null;
   }
 
@@ -953,8 +1000,9 @@ function sanitizeByteDanceSeedReasoning(body: Record<string, unknown>): Record<s
 }
 
 function createByteDanceSeedResponsesCompatTransform(): RequestTransform {
-  return (body) => {
+  return (body, ctx) => {
     if (!isPlainObject(body)) return null;
+    if (!isByteDanceSeedRequest(body, ctx)) return null;
     let changed = false;
     let current = body;
     const withSanitizedTools = sanitizeByteDanceSeedTools(current);

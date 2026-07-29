@@ -240,6 +240,15 @@ describe('translateResponsesRequest', () => {
         }],
       },
       { role: 'tool', tool_call_id: 'custom_1', content: 'done\nok' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'function_1',
+          type: 'function',
+          function: { name: 'unknown_tool', arguments: '{}' },
+        }],
+      },
       { role: 'tool', tool_call_id: 'function_1', content: '{"ok":true}' },
     ]);
   });
@@ -299,8 +308,7 @@ describe('translateResponsesRequest', () => {
     }))).toThrowError(UnsupportedResponsesFeatureError);
   });
 
-  it('drops replayed Codex tool_search items without breaking tool-call merging', () => {
-    const dropped: Array<[string, number]> = [];
+  it('round-trips replayed Codex tool_search items without breaking tool-call merging', () => {
     const out = translateResponsesRequest(base({
       input: [
         { type: 'message', role: 'user', content: 'hi' },
@@ -315,7 +323,7 @@ describe('translateResponsesRequest', () => {
         { type: 'tool_search_call_output', call_id: 'ts_1', output: {} },
         { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
       ],
-    }), { onDroppedInputItem: (type, index) => dropped.push([type, index]) });
+    }));
 
     expect(out.messages).toEqual([
       { role: 'user', content: 'hi' },
@@ -323,20 +331,16 @@ describe('translateResponsesRequest', () => {
         role: 'assistant',
         content: null,
         tool_calls: [
+          { id: 'ts_1', type: 'function', function: { name: 'tool_search', arguments: '{}' } },
           { id: 'call_1', type: 'function', function: { name: 'shell', arguments: '{"cmd":"ls"}' } },
         ],
       },
+      { role: 'tool', tool_call_id: 'ts_1', content: '{}' },
       { role: 'tool', tool_call_id: 'call_1', content: 'ok' },
-    ]);
-    expect(dropped).toEqual([
-      ['tool_search_call', 1],
-      ['tool_search_output', 3],
-      ['tool_search_call_output', 4],
     ]);
   });
 
-  it('does not let dropped tool_search items split assistant merging', () => {
-    const dropped: string[] = [];
+  it('does not let replayed tool_search items split assistant merging', () => {
     const out = translateResponsesRequest(base({
       input: [
         {
@@ -362,12 +366,20 @@ describe('translateResponsesRequest', () => {
         { type: 'function_call_output', call_id: 'call_1', output: 'a' },
         { type: 'function_call_output', call_id: 'call_2', output: 'b' },
       ],
-    }), { onDroppedInputItem: (type) => dropped.push(type) });
+    }));
 
     expect(out.messages).toEqual([
       {
         role: 'assistant',
         content: 'planning',
+        tool_calls: [
+          { id: 'ts_1', type: 'function', function: { name: 'tool_search', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'ts_1', content: '{}' },
+      {
+        role: 'assistant',
+        content: null,
         tool_calls: [
           { id: 'call_1', type: 'function', function: { name: 'shell', arguments: '{"cmd":"ls"}' } },
           { id: 'call_2', type: 'function', function: { name: 'shell', arguments: '{"cmd":"pwd"}' } },
@@ -376,10 +388,9 @@ describe('translateResponsesRequest', () => {
       { role: 'tool', tool_call_id: 'call_1', content: 'a' },
       { role: 'tool', tool_call_id: 'call_2', content: 'b' },
     ]);
-    expect(dropped).toEqual(['tool_search_call', 'tool_search_output', 'tool_search_call_output']);
   });
 
-  it('translates capability-gated Kimi user images and preserves replayed history order', () => {
+  it('translates user images when the upstream capability is enabled and preserves replayed history order', () => {
     const imageUrl = 'data:image/png;base64,aW1hZ2U=';
     const out = translateResponsesRequest(base({
       input: [
@@ -458,29 +469,28 @@ describe('translateResponsesRequest', () => {
           { type: 'input_text', text: ' world' },
         ],
       }],
-    }), { capabilities: { imageInput: 'image_url' } });
+    }));
 
     expect(out.messages).toEqual([{ role: 'user', content: 'hello world' }]);
   });
 
-  it('keeps invalid or non-user image inputs fail-closed even with image capability', () => {
-    const capabilities = { imageInput: 'image_url' as const };
+  it('keeps invalid or non-user image inputs fail-closed', () => {
     expect(() => translateResponsesRequest(base({
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_image', file_id: 'file_1' }] }],
-    }), { capabilities })).toThrow("input content part 'input_image'");
+    }))).toThrow("input content part 'input_image'");
     expect(() => translateResponsesRequest(base({
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_image' }] }],
-    }), { capabilities })).toThrow("input content part 'input_image'");
+    }))).toThrow("input content part 'input_image'");
     expect(() => translateResponsesRequest(base({
       input: [{
         type: 'message',
         role: 'assistant',
         content: [{ type: 'input_image', image_url: 'data:image/png;base64,eA==' }],
       }],
-    }), { capabilities })).toThrow("input content part 'input_image'");
+    }))).toThrow("input content part 'input_image'");
     expect(() => translateResponsesRequest(base({
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_audio', audio_url: 'x' }] }],
-    }), { capabilities })).toThrow("input content part 'input_audio'");
+    }))).toThrow("input content part 'input_audio'");
   });
 
   it('allows normalized user-like roles such as latest_reminder to carry images', () => {
@@ -499,7 +509,7 @@ describe('translateResponsesRequest', () => {
     }]);
   });
 
-  it('drops Codex built-in tools (namespace/web_search) but keeps standard function tools', () => {
+  it('flattens namespace tools, drops unsupported built-ins, and keeps standard functions', () => {
     const dropped: Array<[string, number]> = [];
     const out = translateResponsesRequest(base({
       tools: [
@@ -508,11 +518,18 @@ describe('translateResponsesRequest', () => {
         { type: 'web_search' },
       ],
     }), { onDroppedTool: (type, index) => dropped.push([type, index]) });
-    // 只保留标准 function 工具;Codex 内建工具剥掉(降级),不再让整条请求 fail。
+    // namespace 子工具展平为 Chat function；真正没有 Chat 等价物的内建工具仍降级丢弃。
     expect(out.tools).toEqual([
       { type: 'function', function: { name: 'Bash', parameters: { type: 'object' } } },
+      {
+        type: 'function',
+        function: {
+          name: 'multi_agent_v1__close_agent',
+          parameters: { type: 'object', properties: {} },
+        },
+      },
     ]);
-    expect(dropped).toEqual([['namespace', 1], ['web_search', 2]]);
+    expect(dropped).toEqual([['web_search', 2]]);
   });
 
   it('omits the tools field entirely when every tool is a dropped built-in', () => {
@@ -520,9 +537,165 @@ describe('translateResponsesRequest', () => {
     expect(out.tools).toBeUndefined();
   });
 
-  it('still fail-closes on unsupported input content (context must not be silently dropped)', () => {
-    expect(() => translateResponsesRequest(base({
-      input: [{ type: 'message', role: 'user', content: [{ type: 'input_image', image_url: 'x' }] }],
-    }))).toThrow("input content part 'input_image'");
+  it('preserves image detail from Responses content parts', () => {
+    const out = translateResponsesRequest(base({
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [{
+          type: 'input_image',
+          image_url: { url: 'https://example.com/image.png', detail: 'high' },
+        }],
+      }],
+    }), { capabilities: { imageInput: 'image_url' } });
+
+    expect(out.messages).toEqual([{
+      role: 'user',
+      content: [{
+        type: 'image_url',
+        image_url: { url: 'https://example.com/image.png', detail: 'high' },
+      }],
+    }]);
+  });
+
+  it('maps custom, namespace, and tool-search declarations into reversible Chat tools', () => {
+    const out = translateResponsesRequest(base({
+      tools: [
+        { type: 'custom', name: 'apply_patch', description: 'edit files' },
+        {
+          type: 'namespace',
+          name: 'mcp',
+          tools: [{ type: 'function', name: 'query', parameters: { type: 'object' } }],
+        },
+        { type: 'tool_search' },
+      ],
+      tool_choice: { type: 'custom', name: 'apply_patch' },
+    }));
+    expect(out.tools?.map((tool) => tool.function.name)).toEqual([
+      'apply_patch',
+      'mcp__query',
+      'tool_search',
+    ]);
+    expect(out.tools?.[0].function.parameters).toEqual({
+      type: 'object',
+      properties: { input: { type: 'string', description: expect.any(String) } },
+      required: ['input'],
+    });
+    expect(out.tool_choice).toEqual({
+      type: 'function',
+      function: { name: 'apply_patch' },
+    });
+  });
+
+  it('keeps reasoning history attached to the following assistant/tool turn', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'reasoning', summary: [{ type: 'summary_text', text: 'plan ' }] },
+        { type: 'function_call', call_id: 'c1', name: 'Bash', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'c1', output: 'ok' },
+        { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'finish' }] },
+        { type: 'message', role: 'assistant', content: 'done' },
+      ],
+    }));
+    expect(out.messages).toEqual([
+      {
+        role: 'assistant',
+        content: null,
+        reasoning_content: 'plan ',
+        tool_calls: [{
+          id: 'c1',
+          type: 'function',
+          function: { name: 'Bash', arguments: '{}' },
+        }],
+      },
+      { role: 'tool', tool_call_id: 'c1', content: 'ok' },
+      { role: 'assistant', content: 'done', reasoning_content: 'finish' },
+    ]);
+  });
+
+  it('repairs a dangling tool round without moving the following user barrier ahead of results', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'c1', name: 'Bash', arguments: '{}' },
+        { type: 'message', role: 'user', content: 'continue' },
+      ],
+    }));
+    expect(out.messages).toEqual([
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'c1',
+          type: 'function',
+          function: { name: 'Bash', arguments: '{}' },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'c1',
+        content: expect.stringContaining('execution status is unknown'),
+      },
+      { role: 'user', content: 'continue' },
+    ]);
+  });
+
+  it('converts file/audio input and moves tool-result media into a user multimodal message', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_file', file_id: 'file_1', filename: 'notes.txt' },
+            { type: 'input_audio', input_audio: { data: 'BASE64', format: 'wav' } },
+          ],
+        },
+        { type: 'function_call', call_id: 'c1', name: 'inspect', arguments: '{}' },
+        {
+          type: 'function_call_output',
+          call_id: 'c1',
+          output: [{ type: 'input_text', text: 'see' }, { type: 'input_image', image_url: 'data:image/png;base64,x' }],
+        },
+      ],
+    }), { capabilities: { imageInput: 'image_url' } });
+    expect(out.messages).toContainEqual({
+      role: 'tool',
+      tool_call_id: 'c1',
+      content: 'see\n[media moved to the following user message]',
+    });
+    expect(out.messages).toContainEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Media returned by the preceding tool result:' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,x' } },
+      ],
+    });
+    expect(out.messages[0]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'file', file: { file_id: 'file_1', filename: 'notes.txt' } },
+        { type: 'input_audio', input_audio: { data: 'BASE64', format: 'wav' } },
+      ],
+    });
+  });
+
+  it('forwards only capability-approved Chat tuning fields and maps reasoning dialects', () => {
+    const out = translateResponsesRequest(base({
+      temperature: 0.2,
+      top_p: 0.8,
+      response_format: { type: 'json_object' },
+      reasoning: { effort: 'high' },
+    }), {
+      capabilities: {
+        passthroughFields: ['temperature', 'top_p', 'response_format'],
+        reasoningField: 'enable_thinking',
+        reasoningEffortMap: { high: true },
+      },
+    });
+    expect(out.temperature).toBe(0.2);
+    expect(out.top_p).toBe(0.8);
+    expect(out.response_format).toEqual({ type: 'json_object' });
+    expect(out.enable_thinking).toBe(true);
+    expect(out).not.toHaveProperty('frequency_penalty');
   });
 });

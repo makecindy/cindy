@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ChatSseTranslator } from '../chat-sse-translator.js';
+import { ChatBridgeToolContext } from '../tool-context.js';
 
 describe('ChatSseTranslator', () => {
   it('streams text with a valid Responses lifecycle and keeps usage until finish', () => {
@@ -213,5 +214,120 @@ describe('ChatSseTranslator', () => {
     expect(failed.response.error.message).toBe('model overloaded');
     // fail() 后 translator 已终结,后续 finish() 不再产出。
     expect(out.filter((e) => e.type === 'response.completed')).toEqual([]);
+  });
+
+  it('restores custom, namespace, and tool-search calls from Chat function deltas', () => {
+    const toolContext = ChatBridgeToolContext.fromRequest({
+      model: 'm',
+      input: [],
+      tools: [
+        { type: 'custom', name: 'apply_patch' },
+        { type: 'namespace', name: 'mcp', tools: [{ type: 'function', name: 'query' }] },
+        { type: 'tool_search' },
+      ],
+    });
+    const translator = new ChatSseTranslator('m', { toolContext });
+    const out = [
+      ...translator.push({
+        id: 'custom',
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'c1',
+              function: { name: 'apply_patch', arguments: '{"input":"diff"}' },
+            }],
+          },
+        }],
+      }),
+      ...translator.push({
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 1,
+              id: 'c2',
+              function: { name: 'mcp__query', arguments: '{"q":"x"}' },
+            }, {
+              index: 2,
+              id: 'c3',
+              function: { name: 'tool_search', arguments: '{"query":"browser"}' },
+            }],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+    const items = out
+      .filter((event) => event.type === 'response.output_item.done')
+      .map((event) => (event as { item: Record<string, unknown> }).item);
+    expect(items.map((item) => item.type)).toEqual([
+      'custom_tool_call',
+      'function_call',
+      'tool_search_call',
+    ]);
+    expect(items[0]).toMatchObject({ call_id: 'c1', name: 'apply_patch', input: 'diff' });
+    expect(items[1]).toMatchObject({ call_id: 'c2', name: 'query', namespace: 'mcp' });
+    expect(items[2]).toMatchObject({ call_id: 'c3', arguments: { query: 'browser' } });
+  });
+
+  it('extracts reasoning_details and inline think blocks without leaking tags', () => {
+    const translator = new ChatSseTranslator('m');
+    const out = [
+      ...translator.push({
+        id: 'think',
+        choices: [{ delta: { reasoning_details: [{ text: 'structured ' }] } }],
+      }),
+      ...translator.push({
+        choices: [{ delta: { content: '<think>inline</think>answer' }, finish_reason: 'stop' }],
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+    const response = (out.at(-1) as { response: { output: Array<Record<string, unknown>> } }).response;
+    const reasoning = response.output.filter((item) => item.type === 'reasoning');
+    const message = response.output.find((item) => item.type === 'message') as {
+      content: Array<{ text: string }>;
+    };
+    expect(reasoning.map((item) => item.summary)).toEqual([
+      [{ type: 'summary_text', text: 'structured inline' }],
+    ]);
+    expect(message.content[0].text).toBe('answer');
+  });
+
+  it('normalizes citations and emits complete zero usage when the provider omits usage', () => {
+    const translator = new ChatSseTranslator('m');
+    const out = [
+      ...translator.push({
+        id: 'cite',
+        choices: [{
+          delta: {
+            content: 'answer',
+            annotations: [{ type: 'url_citation', url: 'https://example.com', title: 'Source' }],
+          },
+          finish_reason: 'stop',
+        }],
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+    const response = (out.at(-1) as { response: {
+      usage: Record<string, unknown>;
+      output: Array<{ type: string; content?: Array<{ annotations?: unknown[] }> }>;
+    } }).response;
+    expect(response.usage).toEqual({
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    });
+    expect(response.output.find((item) => item.type === 'message')?.content?.[0]?.annotations).toEqual([
+      {
+        type: 'url_citation',
+        url: 'https://example.com',
+        title: 'Source',
+        start_index: 0,
+        end_index: 0,
+      },
+    ]);
   });
 });
