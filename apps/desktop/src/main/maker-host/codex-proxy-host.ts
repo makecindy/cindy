@@ -203,9 +203,11 @@ function createGatewayNativeWebSearchTransform(): RequestTransform {
     if (!/^gpt-5\.6(?:$|[-.])/.test(gatewayModel)) return null;
 
     const sessionId = sessionIdFromTransformCtx(ctx);
-    const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
-    const isGatewaySession = explicitProviderId
-      ? explicitProviderId === 'xd'
+    const explicitRouting = sessionId
+      ? getSessionRoutingDescriptor(sessionId, 'codex', model)
+      : null;
+    const isGatewaySession = explicitRouting
+      ? explicitRouting.authStrategy === 'gateway-key'
       : model.startsWith('codex/') || getCodexProxyAuthInjection() === 'env-key';
     if (!isGatewaySession) return null;
 
