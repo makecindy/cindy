@@ -487,10 +487,7 @@ export class ChatSseTranslator {
     if (callId && !state.added) state.callId = callId;
     const functionPart = isPlainObject(raw.function) ? raw.function : {};
     const name = stringField(functionPart.name);
-    if (name && !state.added) {
-      if (!state.name) state.name = name;
-      else if (name !== state.name && !state.name.endsWith(name)) state.name += name;
-    }
+    if (name && !state.added) state.name += name;
     const args = stringField(functionPart.arguments);
     if (args) state.arguments += args;
     this.addToolWhenReady(state, out);
@@ -548,8 +545,12 @@ export class ChatSseTranslator {
     };
   }
 
-  private addToolWhenReady(state: ToolState, out: unknown[]): void {
-    if (state.added || !state.name || (!state.arguments && !this.pendingFinishReason)) return;
+  private addToolWhenReady(state: ToolState, out: unknown[], force = false): void {
+    if (
+      state.added
+      || !state.name
+      || (!force && !state.arguments && !this.pendingFinishReason)
+    ) return;
     const kind = this.toolContext?.lookupChatName(state.name)?.kind;
     state.itemId = deterministicId(
       kind === 'custom' ? 'ctc' : kind === 'tool_search' ? 'tsc' : 'fc',
@@ -635,7 +636,7 @@ export class ChatSseTranslator {
   private closeTools(out: unknown[]): void {
     for (const state of [...this.tools.values()].sort((a, b) => a.outputIndex - b.outputIndex)) {
       if (state.done) continue;
-      this.addToolWhenReady(state, out);
+      this.addToolWhenReady(state, out, true);
       state.done = true;
       const item = this.toolItem(state, 'completed');
       const kind = this.toolContext?.lookupChatName(state.name)?.kind;

@@ -174,6 +174,52 @@ describe('ChatSseTranslator', () => {
     expect(added.item.name).toBe('Bash');
     expect(deltas.map((event) => event.delta).join('')).toBe('{"x":1}');
   });
+
+  it('preserves repeated suffixes split across streamed tool-name fragments', () => {
+    const translator = new ChatSseTranslator('m');
+    translator.push({
+      id: 'chatcmpl_repeated_name',
+      choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_repeated', function: { name: 'foo' } }] } }],
+    });
+    const out = [
+      ...translator.push({
+        choices: [{
+          delta: { tool_calls: [{ index: 0, function: { name: 'foo', arguments: '{}' } }] },
+          finish_reason: 'tool_calls',
+        }],
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+    const completed = out.at(-1) as { response: { output: Array<Record<string, unknown>> } };
+    expect(completed.response.output).toContainEqual(expect.objectContaining({
+      type: 'function_call',
+      name: 'foofoo',
+      arguments: '{}',
+    }));
+  });
+
+  it('force-adds name-only zero-argument tool calls when the stream closes without a finish reason', () => {
+    const translator = new ChatSseTranslator('m');
+    const beforeFinish = translator.push({
+      id: 'chatcmpl_name_only',
+      choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_name_only', function: { name: 'Bash' } }] } }],
+    }) as Array<Record<string, unknown>>;
+    expect(beforeFinish.some((event) => event.type === 'response.output_item.added')).toBe(false);
+
+    const afterFinish = translator.finish() as Array<Record<string, unknown>>;
+    const addedIndex = afterFinish.findIndex((event) => event.type === 'response.output_item.added');
+    const doneIndex = afterFinish.findIndex((event) => event.type === 'response.output_item.done');
+    expect(addedIndex).toBeGreaterThanOrEqual(0);
+    expect(doneIndex).toBeGreaterThan(addedIndex);
+    const completed = afterFinish.at(-1) as { response: { output: Array<Record<string, unknown>> } };
+    expect(completed.response.output).toContainEqual(expect.objectContaining({
+      type: 'function_call',
+      call_id: 'call_name_only',
+      name: 'Bash',
+      arguments: '',
+    }));
+  });
+
   it('creates deterministic ids when the provider omits tool call ids', () => {
     const make = (): unknown[] => {
       const translator = new ChatSseTranslator('m');
