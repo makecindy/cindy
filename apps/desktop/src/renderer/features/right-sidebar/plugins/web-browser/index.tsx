@@ -17,6 +17,7 @@
 
 import { Globe, Volume2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
+import { useState } from 'react';
 
 import { cn } from '@/lib/utils';
 
@@ -67,17 +68,11 @@ function WebBrowserTabPillTitle({
  * tab pill 行为一致 —— 用户能从图标一眼看出哪个 tab 在发声)。
  * favicon onError(404 / 取不到)→ 也走 fallback,不让破图占位。
  */
-function WebBrowserTabPillIcon({ state }: { state: WebBrowserState }) {
+export function WebBrowserTabPillIcon({ state }: { state: WebBrowserState }) {
   const base = state.favicon ? (
-    <img
+    <FaviconImage
+      key={state.favicon}
       src={state.favicon}
-      alt=""
-      width={13}
-      height={13}
-      onError={(e) => {
-        (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
-      }}
-      style={{ objectFit: 'contain' }}
     />
   ) : (
     <Globe size={13} />
@@ -95,6 +90,27 @@ function WebBrowserTabPillIcon({ state }: { state: WebBrowserState }) {
         aria-label="audible"
       />
     </span>
+  );
+}
+
+/**
+ * favicon URL 可能来自独立 webview partition、临时 blob 或需要登录态的资源。
+ * host renderer 加载失败时保留稳定的 Globe fallback；src 变化通过 key 重建本组件，
+ * 让新站点图标拥有独立的错误状态。
+ */
+function FaviconImage({ src }: { src: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <Globe size={13} />;
+  return (
+    <img
+      src={src}
+      alt=""
+      width={13}
+      height={13}
+      draggable={false}
+      onError={() => setFailed(true)}
+      style={{ objectFit: 'contain' }}
+    />
   );
 }
 
