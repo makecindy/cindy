@@ -601,10 +601,13 @@ export function CustomProviderDialog({
             .map((m) => ({ ...m, name: m.name || m.id })),
           ...result.models.map((m) => {
             const cur = currentById.get(m.id);
+            // contextWindow:用户已填的优先;新模型带上端点声明的发现值(review P1:
+            // 只从 cur 拷会把发现值丢掉,保存后又回落 200K)。
+            const contextWindow = cur?.contextWindow ?? m.contextWindow;
             return {
               id: m.id,
               name: cur?.name || m.name,
-              ...(cur?.contextWindow !== undefined ? { contextWindow: cur.contextWindow } : {}),
+              ...(contextWindow !== undefined ? { contextWindow } : {}),
               ...(cur?.defaultEnabled === false ? { defaultEnabled: false } : {}),
             };
           }),
@@ -1226,8 +1229,10 @@ export function CustomProviderDialog({
                         className="w-28 shrink-0"
                         title={t('settings.providers.custom.fields.modelContextWindowTitle')}
                       >
-                        {/* 上下文窗口(tokens):留空 = 保守默认 200K(#386)。只收数字;
-                            非法输入不落盘,交给 buildUserProvider 回落默认。 */}
+                        {/* 上下文窗口(tokens):留空 = 保守默认 200K(#386)。整体校验:
+                            只接受正整数(允许逗号/下划线/空格做分隔),其它字符直接
+                            拒绝本次变更(保持原值)——绝不剥字符再拼数字,-5 / 1e6 /
+                            262144.9 这类输入不得被静默纠正成另一个合法值(review P1)。 */}
                         <TextInput
                           value={m.contextWindow != null ? String(m.contextWindow) : ''}
                           onChange={(v) =>
@@ -1235,12 +1240,15 @@ export function CustomProviderDialog({
                               ...x,
                               models: x.models.map((y, j) => {
                                 if (j !== i) return y;
-                                const digits = v.replace(/[^0-9]/g, '');
-                                const parsed = digits ? Number.parseInt(digits, 10) : NaN;
-                                const { contextWindow: _drop, ...rest } = y;
-                                return Number.isFinite(parsed) && parsed > 0
-                                  ? { ...rest, contextWindow: parsed }
-                                  : rest;
+                                const trimmed = v.trim();
+                                if (trimmed === '') {
+                                  const { contextWindow: _drop, ...rest } = y;
+                                  return rest;
+                                }
+                                if (!/^[0-9][0-9,_ ]*$/.test(trimmed)) return y;
+                                const parsed = Number.parseInt(trimmed.replace(/[,_ ]/g, ''), 10);
+                                if (!Number.isFinite(parsed) || parsed <= 0) return y;
+                                return { ...y, contextWindow: parsed };
                               }),
                             }))
                           }

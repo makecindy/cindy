@@ -803,7 +803,7 @@ export async function discoverGenericOAuthModels(
   oauth: OAuthProviderDescriptor,
   discoveryUrl?: string,
   agent?: AgentKind,
-): Promise<{ id: string; name: string }[] | null> {
+): Promise<{ id: string; name: string; contextWindow?: number }[] | null> {
   const url = discoveryUrl ?? oauth.modelsDiscoveryUrl;
   if (!url) return null;
   const token = readCachedGenericOAuthAccessToken(providerId, oauth);
