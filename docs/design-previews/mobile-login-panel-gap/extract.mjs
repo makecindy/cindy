@@ -5,6 +5,12 @@
  *  - 当前 PR 值 = 直接 import apps/mobile/src/auth/loginSkinLayout.ts(纯数据零 RN);
  *  - main 值 = git show origin/main 同文件后 import,同一把尺子量两次。
  * 资产 = apps/mobile/assets/login/ 真图(demo 内 assets/ 为其 @2x 副本),不用占位图。
+ *
+ * 输出三块:
+ *  - current / main / planA:两档基准屏(1334 / 1624)的品牌簇 + 落位 + 间距;
+ *  - surfaces:12 种真机形态经 resolveLoginSurface() 实算的 mode / 落位 / 间距(两版对比);
+ *  - narrowBranch:dh∈[600,1334) 采样,三种落位公式(main 的 dh-640、被否的 dh-712、
+ *    采纳的钳制式)与被 v 压缩后的字标底 —— 用于画出"为什么不能用 dh-712"。
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
@@ -102,6 +108,53 @@ function planA(mod) {
   return { label: '方案A 品牌簇整体下移', ...r };
 }
 
+/** 覆盖真机常见形态 + 断点边界(名称/尺寸即 PR 描述里的覆盖表)。 */
+const SURFACE_CASES = [
+  ['iPhone SE', 375, 667], ['iPhone 15', 393, 852], ['iPhone Pro Max', 430, 932],
+  ['Split 窄窗', 320, 680], ['iPad 分屏窄', 507, 1133],
+  ['折叠内屏', 673, 841], ['Android 分屏', 393, 450],
+  ['iPad mini 竖', 744, 1133], ['iPad Pro 竖', 1024, 1366],
+  ['iPad 横', 1180, 820], ['iPad Pro 横', 1366, 1024],
+  ['iPhone 手机横屏', 852, 393],
+];
+function measureSurface(mod, w, h) {
+  const s = mod.resolveLoginSurface(w, h);
+  const wordBottom = s.word.y + s.word.h;
+  return {
+    mode: s.mode,
+    loginY: Number(s.loginY.toFixed(2)),
+    wordBottom: Number(wordBottom.toFixed(2)),
+    gap: Number((s.loginY - wordBottom).toFixed(2)),
+  };
+}
+const surfaces = SURFACE_CASES.map(([name, w, h]) => {
+  const a = measureSurface(cur, w, h);
+  const b = measureSurface(base, w, h);
+  return { name, w, h, mode: a.mode, current: a, main: b, changed: a.gap !== b.gap };
+});
+
+/**
+ * 窄屏分支(dh<1334)的三种落位公式对比。
+ * v 与字标底完全照 resolveLoginStage 的实现:v=max(0.25,(dh-600)/734),
+ * 视觉区以 (375,0) 为锚等比压缩 → 字标底 = 未压缩底 × v。
+ * main 与本 PR 的 SHORT.word 相同(品牌簇早已换新稿),故字标底只有一条曲线。
+ */
+const NARROW_SAMPLES = [];
+{
+  const wbFull = cur.LOGIN_STAGE_SHORT.word.y + cur.LOGIN_STAGE_SHORT.word.h;
+  const clampTo = cur.LOGIN_STAGE_SHORT.loginY;
+  for (let dh = 600; dh <= 1334; dh += 2) {
+    const v = Math.max(0.25, (dh - 600) / 734);
+    NARROW_SAMPLES.push({
+      dh,
+      wordBottom: Number((wbFull * v).toFixed(2)),
+      main640: Math.max(0, dh - 640),
+      rejected712: Math.max(0, dh - 712),
+      adopted: Math.min(clampTo, Math.max(0, dh - 640)),
+    });
+  }
+}
+
 const out = {
   generatedFrom: { src: SRC, mainRef: 'origin/main' },
   current: variant(cur, '本 PR 修复后'),
@@ -113,6 +166,8 @@ const out = {
   },
   panel,
   planA: planA(cur),
+  surfaces,
+  narrowBranch: { samples: NARROW_SAMPLES, clampTo: cur.LOGIN_STAGE_SHORT.loginY },
   contentBelowLoginY: CONTENT_BELOW_LOGIN_Y,
   figBottomGap: FIG_BOTTOM_GAP,
 };
