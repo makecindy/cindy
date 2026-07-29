@@ -5087,6 +5087,156 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('ignores an unattributable id-less capacity error instead of settling the new send', async () => {
+      // 无法归属时"不接管"还不够: 若让它照常走终态, 就是拿别人的错误把当前这一轮判死, 而
+      // 那一轮的响应随后照样被激活 —— UI 已收口、工具还在跑(review #844 codex P1)。
+      // 安全做法是当 stale 丢掉: 真属于某个 turn 的话, server 会为那个 turn 发权威的
+      // turn/completed(failed)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const secondStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            if (turnStarts === 2) return secondStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-ignore-unattributable',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 第一轮: 空 id 容量拒绝(此时只有它在飞, 归属唯一)+ Stop。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const secondSend = handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 两个 start 在飞时再来一条空 id 容量拒绝 → 无法归属 → 必须整条忽略。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(events.slice(before).filter((e) => e.type === 'error')).toHaveLength(0);
+
+        // 新一轮照常活下来。
+        secondStart.resolve({ turn: { id: 'turn-second' } });
+        await secondSend;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-second');
+
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-second');
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not drop the next send deferred failure when the stopped send settles', async () => {
+      // 被取消的旧 send 的 finally 会把**当前**(属于新 send 的)重投状态传给补排函数。
+      // 补排此前一进函数就清掉延后标记, 任一 early return 都会把新 send 的延后失败丢掉
+      // (review #844 greptile P1)。
+      //
+      // 如实标注: 这条用例在修复前后**都通过** —— 可达的那条路(还有 start 在飞)在上一轮
+      // 已经加了"把标记放回去"的补救, 所以它拦不住本轮这个更根本的形状问题。留着是当不变量
+      // 锁("新一轮的重投必须照常发生"), 不作为本轮修复的证据。本轮的修法是把"没真正接手
+      // 就不清标记"变成结构性保证, 而不是逐个 early return 打补丁。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-keep-next-deferred',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 新一轮接管并激活自己的 turn, 然后它自己的 turn 被容量拒绝 → 因旧 RPC 仍在飞
+        // 而只被记账(延后)。
+        await handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-2',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 旧 RPC 现在才失败: 它的 finally 不得把新一轮的延后失败丢掉。
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        // 新一轮的重投照常发生。
+        expect(turnStarts).toBe(3);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('keeps the stopped start quarantined and lets the new turn live when an id-less failure is unattributable', async () => {
       // Stop 之后旧 RPC 仍在飞, 新 send 又被放行, 此时又来一条**空 id** 容量拒绝 ——
       // 它既不带 turnId 也不带请求关联, 无法归属。两条不变量:

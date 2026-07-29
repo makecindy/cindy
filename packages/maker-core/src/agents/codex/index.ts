@@ -4989,16 +4989,21 @@ export class CodexAgent extends BaseAgent {
       rpcSettledOk: boolean,
     ): void => {
       const deferred = state.deferredCapacityFailure;
-      state.deferredCapacityFailure = null;
-      if (!deferred || !rpcSettledOk) return;
+      if (!deferred) return;
+      // **只有真正接手时才清掉标记**。此前是一进函数就清: 被取消的旧 send 的 finally 把
+      // 当前(属于新 send 的)状态传进来, 随后任一 early return 都会把新 send 的延后失败
+      // 丢掉 —— 那一轮既不重投也不收口, 逻辑 turn 永久悬空(review #844 greptile P1)。
+      if (!rpcSettledOk) {
+        // 只有"标记归属本轮、而本轮 RPC 失败"时才会到这里(见调用点), 那条失败已由终态收口。
+        state.deferredCapacityFailure = null;
+        return;
+      }
       if (closed || state.isCancelled() || overloadRetry !== state) return;
       if (currentTurnId !== null || isTurnInFlight) return;
       // 还有别的 start 在飞 → 这条失败交给那一次的 settle 去补排, 本次不排:
       // 否则又回到"两个 start 并存"的形状(review #844 codex P1)。
-      if (inFlightStarts.size > 0) {
-        state.deferredCapacityFailure = deferred;
-        return;
-      }
+      if (inFlightStarts.size > 0) return;
+      state.deferredCapacityFailure = null;
       if (scheduleOverloadRetry(deferred.deadTurnId)) return;
       log.warn('codex deferred capacity failure exhausted the retry budget', {
         attempt: state.attempt,
@@ -5408,11 +5413,20 @@ export class CodexAgent extends BaseAgent {
         // 设置, 初始投递的 turn/start 在飞时永远为 false —— 那个窗口里的空 id 容量拒绝
         // 一样会被丢掉, 响应随后激活一个已被拒的 turn, 自动重投预算整轮白给
         // (review #844 codex P1)。
+        // 归属唯一时(只有一个 start 在飞)才认它。两个及以上在飞时这条通知无法归属:
+        // 既不能接管重投(猜错就重放已跑过工具的 turn), 也**不能**让它走终态 —— 后者会
+        // 拿别人的错误把当前这一轮判死, 而那一轮的响应随后照样会被激活, 于是"UI 已收口、
+        // 工具还在跑"(review #844 codex P1)。
+        // 不认 → 落到既有的 `stale codex terminal error ignored` 分支被丢掉, 这是安全的:
+        // 真属于某个 turn 的话, server 随后会为那个 turn 发权威的 turn/completed(failed),
+        // 收口由它完成。
+        const idLessAttributable = inFlightStarts.size === 1;
         const targetsIdLessPendingStart =
           params.turnId === ''
           && isTerminalError
           && isTurnStartPending
           && currentTurnId === null
+          && idLessAttributable
           && parseOverloadError(
             params.error?.message ?? '',
             extractNonSecretErrorSignals(params.error?.message ?? '').errorStatus,
