@@ -238,6 +238,24 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
   });
 
+  it('ignores closing brackets inside image-description URI autolinks', () => {
+    const source = '![<https://example.test/a]b> **重点。**正文](missing.png)';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      '![<https://example.test/a]b> 重点。正文](missing.png)',
+    );
+    expect(renderMarkdown(source)).not.toContain('**');
+  });
+
+  it('ignores closing brackets inside image-description link destinations', () => {
+    const source = '![[x](https://example.test/a]b) **重点。**正文](missing.png)';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      '![[x](https://example.test/a]b) 重点。正文](missing.png)',
+    );
+    expect(renderMarkdown(source)).not.toContain('**');
+  });
+
   it('repairs strong delimiters in CJK prose recovered from a bare URL', () => {
     const source = 'https://example.com/foo（**重点。**正文';
 
@@ -449,6 +467,14 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
     const ordinaryBackslashes = '\\x '.repeat(2_000);
     const source = `${protectedSpans} ${ordinaryBackslashes}**重点。**正文`;
+
+    expect(normalizeStrongDelimiterBoundaries(source, { preserveTexDelimiters: true })).toBe(
+      source.replace('**正文', '**<!--cindy-strong-boundary-->正文'),
+    );
+  });
+
+  it('handles a long escaped-backslash run in source-line mode', () => {
+    const source = `${'\\'.repeat(20_000)}x **重点。**正文`;
 
     expect(normalizeStrongDelimiterBoundaries(source, { preserveTexDelimiters: true })).toBe(
       source.replace('**正文', '**<!--cindy-strong-boundary-->正文'),

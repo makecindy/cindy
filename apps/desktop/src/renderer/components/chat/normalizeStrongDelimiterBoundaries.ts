@@ -218,12 +218,99 @@ function inlineHtmlEnd(markdown: string, start: number, end: number): number | n
   return null;
 }
 
+function uriAutolinkEnd(markdown: string, start: number, end: number): number | null {
+  const closer = markdown.indexOf('>', start + 1);
+  if (closer === -1 || closer >= end) return null;
+  const destination = markdown.slice(start + 1, closer);
+  if (!/^[A-Za-z][A-Za-z\d+.-]{1,31}:/u.test(destination)) return null;
+  const hasForbiddenCharacter = Array.from(destination).some(
+    (character) => character === '<' || character === '>' || character.charCodeAt(0) <= 0x20,
+  );
+  return hasForbiddenCharacter ? null : closer + 1;
+}
+
+function inlineLinkTailEnd(markdown: string, start: number, end: number): number | null {
+  if (markdown[start] !== '(') return null;
+
+  let cursor = start + 1;
+  while (cursor < end && /[ \t\n\r]/u.test(markdown[cursor])) cursor += 1;
+
+  if (markdown[cursor] === '<') {
+    cursor += 1;
+    while (cursor < end) {
+      if (markdown[cursor] === '\n' || markdown[cursor] === '<') return null;
+      if (markdown[cursor] === '\\' && cursor + 1 < end) {
+        cursor += 2;
+        continue;
+      }
+      if (markdown[cursor] === '>') {
+        cursor += 1;
+        break;
+      }
+      cursor += 1;
+    }
+    if (markdown[cursor - 1] !== '>') return null;
+  } else {
+    let nestedParentheses = 0;
+    while (cursor < end) {
+      const character = markdown[cursor];
+      if (character === '\\' && cursor + 1 < end) {
+        cursor += 2;
+        continue;
+      }
+      if (character === '<' || character === '\n' || character === '\r') return null;
+      if (character === '(') {
+        nestedParentheses += 1;
+        cursor += 1;
+        continue;
+      }
+      if (character === ')') {
+        if (nestedParentheses === 0) return cursor + 1;
+        nestedParentheses -= 1;
+        cursor += 1;
+        continue;
+      }
+      if (character === ' ' || character === '\t') {
+        if (nestedParentheses > 0) return null;
+        break;
+      }
+      cursor += 1;
+    }
+  }
+
+  const whitespaceStart = cursor;
+  while (cursor < end && /[ \t\n\r]/u.test(markdown[cursor])) cursor += 1;
+  if (markdown[cursor] === ')') return cursor + 1;
+  if (cursor === whitespaceStart) return null;
+
+  const titleOpener = markdown[cursor];
+  const titleCloser = titleOpener === '(' ? ')' : titleOpener;
+  if (titleOpener !== '"' && titleOpener !== "'" && titleOpener !== '(') return null;
+  cursor += 1;
+  while (cursor < end) {
+    if (markdown[cursor] === '\\' && cursor + 1 < end) {
+      cursor += 2;
+      continue;
+    }
+    if (markdown[cursor] === titleCloser) {
+      cursor += 1;
+      break;
+    }
+    if (markdown[cursor] === '\n' || markdown[cursor] === '\r') return null;
+    cursor += 1;
+  }
+  if (markdown[cursor - 1] !== titleCloser) return null;
+
+  while (cursor < end && /[ \t\n\r]/u.test(markdown[cursor])) cursor += 1;
+  return markdown[cursor] === ')' ? cursor + 1 : null;
+}
+
 function imageDescriptionRange(node: Nodes, markdown: string): OffsetRange | null {
   if (node.type !== 'image' && node.type !== 'imageReference') return null;
   const range = nodeRange(node);
   if (!range || markdown.slice(range.start, range.start + 2) !== '![') return null;
 
-  let nestedBrackets = 0;
+  const nestedBracketStarts: number[] = [];
   for (let cursor = range.start + 2; cursor < range.end; cursor += 1) {
     if (isEscaped(markdown, cursor)) continue;
     if (markdown[cursor] === '`') {
@@ -232,17 +319,23 @@ function imageDescriptionRange(node: Nodes, markdown: string): OffsetRange | nul
       continue;
     }
     if (markdown[cursor] === '<') {
-      const end = inlineHtmlEnd(markdown, cursor, range.end);
+      const end =
+        uriAutolinkEnd(markdown, cursor, range.end) ??
+        inlineHtmlEnd(markdown, cursor, range.end);
       if (end != null) cursor = end - 1;
       continue;
     }
     if (markdown[cursor] === '[') {
-      nestedBrackets += 1;
+      nestedBracketStarts.push(cursor);
       continue;
     }
     if (markdown[cursor] !== ']') continue;
-    if (nestedBrackets > 0) {
-      nestedBrackets -= 1;
+    if (nestedBracketStarts.length > 0) {
+      nestedBracketStarts.pop();
+      if (nestedBracketStarts.length === 0) {
+        const linkEnd = inlineLinkTailEnd(markdown, cursor + 1, range.end);
+        if (linkEnd != null) cursor = linkEnd - 1;
+      }
       continue;
     }
     return { start: range.start + 2, end: cursor };
@@ -552,81 +645,63 @@ function rangeContainsAnyOffset(range: OffsetRange, sortedOffsets: number[]): bo
   return offsetIndex < sortedOffsets.length && sortedOffsets[offsetIndex] < range.end;
 }
 
-function findUnprotectedDelimiter(
-  markdown: string,
-  delimiter: string,
-  start: number,
-  protectedRanges: OffsetRange[],
-): number {
-  let scan = start;
-
-  while (scan < markdown.length) {
-    const offset = markdown.indexOf(delimiter, scan);
-    if (offset === -1) return -1;
-    const rangeIndex = firstRangeEndingAfter(protectedRanges, offset);
-    const protectedRange = protectedRanges[rangeIndex];
-    if (!protectedRange || offset < protectedRange.start) return offset;
-    scan = protectedRange.end;
-  }
-
-  return -1;
-}
-
-function findUnescapedUnprotectedDelimiter(
-  markdown: string,
-  delimiter: string,
-  start: number,
-  protectedRanges: OffsetRange[],
-): number {
-  let scan = start;
-
-  while (scan < markdown.length) {
-    const offset = findUnprotectedDelimiter(markdown, delimiter, scan, protectedRanges);
-    if (offset === -1 || !isEscaped(markdown, offset)) return offset;
-    scan = offset + 1;
-  }
-
-  return -1;
-}
-
 function collectPreservedTexDelimiterRanges(
   markdown: string,
   protectedRanges: OffsetRange[],
 ): OffsetRange[] {
   const ranges: OffsetRange[] = [];
+  const openers: Array<{ offset: number; kind: '(' | '[' }> = [];
+  const parenClosers: number[] = [];
+  const bracketClosers: number[] = [];
   let scan = 0;
   let noParenCloser = false;
   let noBracketCloser = false;
 
+  // 每段连续反斜杠只检查最后一个字符一次。奇数长度时最后一个反斜杠
+  // 未被转义，偶数长度时被转义，避免对同一长序列反复向前计数。
   while (scan < markdown.length) {
-    const open = findUnescapedUnprotectedDelimiter(markdown, '\\', scan, protectedRanges);
-    if (open === -1 || open + 1 >= markdown.length) break;
-    const kind = markdown[open + 1];
-    if (kind !== '(' && kind !== '[') {
-      scan = open + 1;
+    if (markdown[scan] !== '\\') {
+      scan += 1;
       continue;
     }
 
-    const isDisplay = kind === '[';
-    if (isDisplay ? noBracketCloser : noParenCloser) {
-      scan = open + 2;
+    const runStart = scan;
+    while (scan < markdown.length && markdown[scan] === '\\') scan += 1;
+    if ((scan - runStart) % 2 === 0 || scan >= markdown.length) continue;
+
+    const delimiterOffset = scan - 1;
+    const protectedRange =
+      protectedRanges[firstRangeEndingAfter(protectedRanges, delimiterOffset)];
+    if (
+      protectedRange &&
+      protectedRange.start <= delimiterOffset &&
+      delimiterOffset < protectedRange.end
+    ) {
       continue;
     }
-    const closer = kind === '[' ? '\\]' : '\\)';
-    const close = findUnescapedUnprotectedDelimiter(
-      markdown,
-      closer,
-      open + 2,
-      protectedRanges,
-    );
+
+    const kind = markdown[scan];
+    if (kind === '(' || kind === '[') openers.push({ offset: delimiterOffset, kind });
+    else if (kind === ')') parenClosers.push(delimiterOffset);
+    else if (kind === ']') bracketClosers.push(delimiterOffset);
+  }
+
+  scan = 0;
+  for (const opener of openers) {
+    if (opener.offset < scan) continue;
+    const isDisplay = opener.kind === '[';
+    if (isDisplay ? noBracketCloser : noParenCloser) continue;
+
+    const closers = isDisplay ? bracketClosers : parenClosers;
+    const closerIndex = firstOffsetAtOrAfter(closers, opener.offset + 2);
+    const close = closers[closerIndex] ?? -1;
     if (close === -1) {
       if (isDisplay) noBracketCloser = true;
       else noParenCloser = true;
-      scan = open + 2;
       continue;
     }
 
-    ranges.push({ start: open, end: close + 2 });
+    ranges.push({ start: opener.offset, end: close + 2 });
     scan = close + 2;
   }
 
