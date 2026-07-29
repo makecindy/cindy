@@ -103,9 +103,11 @@ const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
  */
 // 前缀类含反斜杠 `\\`:Windows 路径(C:\Users\me\.ssh\id_rsa)的分隔符是 `\`,不带它会漏掉 Windows 凭证。
 const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
-  /(?:^|[\\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker)\b/,    // 凭证/密钥目录
+  /(?:^|[\\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker|claude|codex)\b/, // 凭证/密钥 + agent 配置目录(含 OAuth 凭证)
   /(?:^|[\\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc)\b/,    // 含 token 的凭证配置文件
   /\bapplication_default_credentials\b/,                  // gcloud 默认凭证文件
+  /\bcredentials\.json\b/,                                // Claude 等的 OAuth 凭证文件(.credentials.json)
+  /[\\/](?:codex|claude|gcloud)[\\/]auth\.json\b/,        // agent 认证文件(~/.config/codex/auth.json 等)
   /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/, // 私钥文件
 ];
 
@@ -163,15 +165,16 @@ const OUTPUT_REDIRECTION = /(?<![-\d&])>>?(?!&)|(?:^|\s)\d+>>?(?!&)|(?:^|\s)&>>?
 // curl 上传 / 非 GET 方法。含贴合式短选项(`-dDATA` / `-Ffield` / `-Tfile`)——`-[dFT]` 不带 \b,
 // 贴合的 value 照样命中。大小写敏感(不加 /i):`-d/-F/-T` 是上传,`-D`(dump-header,只读)不能误伤。
 const CURL_UPLOAD_FLAGS = /(?:^|\s)-[dFT]|(?:^|\s)--(?:data|form|upload-file|json)[\w-]*|(?:^|\s)(?:-X|--request)\s*(?:POST|PUT|DELETE|PATCH)/;
-// wget 上传 / 非默认方法(curl 的 --data 等对 wget 无意义,wget 用 --post-*/--body-*/--method)。
-const WGET_UPLOAD_FLAGS = /(?:^|\s)--(?:post-data|post-file|body-data|body-file|method)\b/i;
 // 落盘到文件/目录(curl -o/-O/--output;wget -o 日志 /-O 文档 /-P 目录前缀)。含贴合短选项 `-ofile`;写任意路径。
+// (wget 现整体升级、不再走安全 fetch,见 isSafeFetch;此常量仍供 curl 的 -o/-O 判定。)
 const FETCH_OUTPUT_FLAGS = /(?:^|\s)-[oOP]|(?:^|\s)--(?:output(?:-dir|-document)?|remote-name|directory-prefix)\b/;
 // curl 跟随重定向(-L/--location*):最终 host 静态不可判(可 302 跳到云 metadata/内网)→ 升级。
 const CURL_REDIRECT_FLAGS = /(?:^|\s)(?:-L|--location(?:-trusted)?)\b/;
-// curl 带凭证 / 隐藏参数的 flag:-u/--user(basic auth)、--netrc*(用存储凭证)、-K/--config(配置文件可藏 -d 上传)、
-// -b/--cookie*(发送/落盘会话 cookie)、-H/--header 里的鉴权头(Authorization/Cookie/X-Api-Key…)。短选项大小写敏感。
-const CURL_SENSITIVE_FLAGS = /(?:^|\s)(?:-u\b|--user\b|--netrc\S*|-K\b|--config\b|-b\b|--cookie\S*)|(?:-H|--header)\s*['"]?\s*(?:[Aa]uthorization|[Cc]ookie|[Xx]-[Aa]pi-[Kk]ey|[Xx]-[Aa]uth|[Pp]roxy-[Aa]uthorization)/;
+// curl 带凭证 / 隐藏参数 / SSRF 改路由的 flag → 升级。短选项大小写敏感。
+//  - 凭证:-u/--user(basic auth)、--netrc*、-b/--cookie*(会话 cookie)、-H/--header 里的鉴权头。
+//  - 隐藏参数:-K/--config(配置文件可藏 -d 上传)。
+//  - SSRF 改路由:--resolve/--connect-to/--unix-socket(把看似公网的 URL 定向到内网/metadata)、-x/--proxy*、--interface。
+const CURL_SENSITIVE_FLAGS = /(?:^|\s)(?:-u\b|--user\b|--netrc\S*|-K\b|--config\b|-b\b|--cookie\S*|--resolve\b|--connect-to\b|--unix-socket\b|-x\b|--proxy\S*|--interface\b)|(?:-H|--header)\s*['"]?\s*(?:[Aa]uthorization|[Cc]ookie|[Xx]-[Aa]pi-[Kk]ey|[Xx]-[Aa]uth|[Pp]roxy-[Aa]uthorization)/;
 
 /** git 只读子命令 → 放行。 */
 const SAFE_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
@@ -296,18 +299,13 @@ function isInternalFetchTarget(t: string): boolean {
 }
 
 function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
-  if (bin !== 'curl' && bin !== 'wget') return false;
-  if (FETCH_OUTPUT_FLAGS.test(segment)) return false;
-  if (bin === 'wget') {
-    if (WGET_UPLOAD_FLAGS.test(segment)) return false;
-    // wget 默认跟随重定向,最终 host 静态不可判(可跳到云 metadata/内网)→ 升级,除非显式关闭跟随。
-    if (!/--max-redirect[=\s]*0\b/.test(segment)) return false;
-  }
-  if (bin === 'curl') {
-    if (CURL_UPLOAD_FLAGS.test(segment)) return false;
-    if (CURL_REDIRECT_FLAGS.test(segment)) return false;   // -L 跟随重定向 → 目标不可判 → 升级
-    if (CURL_SENSITIVE_FLAGS.test(segment)) return false;   // 带凭证/隐藏参数的 flag → 升级
-  }
+  // 只有 curl 可能是"只读浏览器"(默认写 stdout、默认不跟随重定向)。wget 默认把内容写进本地文件
+  // 且默认跟随重定向(最终 host 不可判)→ 一律升级,不当安全 fetch。
+  if (bin !== 'curl') return false;
+  if (FETCH_OUTPUT_FLAGS.test(segment)) return false;     // -o/-O 落盘
+  if (CURL_UPLOAD_FLAGS.test(segment)) return false;      // -d/-F/--json 等上传
+  if (CURL_REDIRECT_FLAGS.test(segment)) return false;    // -L 跟随重定向 → 目标不可判 → 升级
+  if (CURL_SENSITIVE_FLAGS.test(segment)) return false;   // 凭证/隐藏参数/SSRF 改路由 flag → 升级
   const positional = tokens.slice(1).filter((t) => !t.startsWith('-'));
   if (positional.some((t) => t.includes('?'))) return false; // 查询串外发面(含无 scheme 的 host?query)
   const target = positional.find(isFetchTargetToken);
@@ -318,6 +316,9 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
 
 function classifyGit(tokens: string[], segment: string): ReviewVerdict {
   // 危险 git(强推/硬重置/clean -f)已在 DANGEROUS_PATTERNS 命中,这里分只读 vs 写。
+  // git 的 -o/--output(diff/format-patch/show 等)会写文件,没有 shell `>` 供重定向检查捕获 → 升级,
+  // 即便子命令本身"只读"。
+  if (/(?:^|\s)(?:-o\b|-o\S|--output\b)/.test(segment)) return 'prompt';
   const rest = tokens.slice(1); // 'git' 之后
   const sub = rest.find((t) => !t.startsWith('-'));
   if (!sub || !SAFE_GIT_SUBCOMMANDS.has(sub)) {

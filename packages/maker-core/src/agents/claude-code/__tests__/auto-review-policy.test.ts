@@ -118,10 +118,10 @@ describe('classifyBuiltinToolForAutoReview — Bash 只读命令放行', () => {
       expect(verdict('Bash', { command: c })).toBe('auto-approve');
     }
   });
-  it('curl/wget 只读 GET(命令行浏览器,默认 stdout)auto-approve', () => {
+  it('curl 只读 GET(命令行浏览器,默认 stdout)auto-approve;wget 一律升级', () => {
     expect(verdict('Bash', { command: 'curl -sS https://example.com/' })).toBe('auto-approve');
-    // wget 默认跟随重定向(可 302 跳内网/metadata)→ 升级,除非显式 --max-redirect=0。
-    expect(verdict('Bash', { command: 'wget --max-redirect=0 https://example.com' })).toBe('auto-approve');
+    // wget 默认写文件 + 跟随重定向 → 一律升级(不是只读浏览器)。
+    expect(verdict('Bash', { command: 'wget --max-redirect=0 https://example.com' })).toBe('prompt');
     expect(verdict('Bash', { command: 'wget https://example.com' })).toBe('prompt');
     // 落盘到文件(-o/-O file)不算只读 → 升级(防写任意路径,见 core 回归护栏)。
     expect(verdict('Bash', { command: 'curl https://example.com -o out.html' })).toBe('prompt');

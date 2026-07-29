@@ -3214,12 +3214,12 @@ export class CodexAgent extends BaseAgent {
             opts.autoReviewAction,
             runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
           );
-          if (verdict === 'prompt-each-time') return Promise.resolve('decline');
-          return Promise.resolve('accept');
+          // 无人值守:只接受 core 判为 auto-approve 的安全动作。prompt / prompt-each-time 都意味着
+          // "需人确认"而此路径无人在场 → 一律 fail-closed decline(AGENTS.md 无人值守安全底线)。
+          return verdict === 'auto-approve' ? Promise.resolve('accept') : Promise.resolve('decline');
         }
-        // 命令/文件类审批却没有可分类的 action(如 permissions 能力升级)——无人值守下无法审查的
-        // 高权限动作 → fail-closed 拒绝,而非静默放行。mcpServerElicitation(交互输入)有自己的
-        // forceConfirmToolCall 门,保留既有无人值守 auto-accept。
+        // 命令/文件类审批却没有可分类的 action(如 permissions 能力升级)——无法审查的高权限动作 →
+        // 同样 fail-closed 拒绝。mcpServerElicitation(交互输入)有自己的 forceConfirmToolCall 门,保留 auto-accept。
         if (kind === 'commandExecution' || kind === 'fileChange') {
           return Promise.resolve('decline');
         }
