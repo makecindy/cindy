@@ -460,6 +460,49 @@ describe('ChatSseTranslator', () => {
     }));
   });
 
+  it('waits when an exact function name is also a prefix of a longer custom name', () => {
+    const toolContext = ChatBridgeToolContext.fromRequest({
+      model: 'm',
+      input: [],
+      tools: [
+        { type: 'function', name: 'apply' },
+        { type: 'custom', name: 'apply_patch' },
+      ],
+    });
+    const translator = new ChatSseTranslator('m', { toolContext });
+
+    const first = translator.push({
+      id: 'ambiguous-tool-name',
+      choices: [{
+        delta: {
+          tool_calls: [{
+            index: 0,
+            id: 'call_ambiguous',
+            function: { name: 'apply', arguments: '{"input":"diff"}' },
+          }],
+        },
+      }],
+    }) as Array<Record<string, unknown>>;
+    expect(first.filter((event) => event.type === 'response.output_item.added')).toEqual([]);
+
+    const out = [
+      ...first,
+      ...translator.push({
+        choices: [{
+          delta: { tool_calls: [{ index: 0, function: { name: '_patch' } }] },
+          finish_reason: 'tool_calls',
+        }],
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+    const completed = out.at(-1) as { response: { output: Array<Record<string, unknown>> } };
+    expect(completed.response.output).toContainEqual(expect.objectContaining({
+      type: 'custom_tool_call',
+      name: 'apply_patch',
+      input: 'diff',
+    }));
+  });
+
   it('extracts reasoning_details and inline think blocks without leaking tags', () => {
     const translator = new ChatSseTranslator('m', { inlineReasoning: true });
     const out = [

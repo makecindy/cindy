@@ -274,13 +274,15 @@ describe('decideCodexRoute', () => {
 });
 
 describe('chatBridgeCapabilitiesForRoute', () => {
-  it('does not forward multiple-choice n into the single-choice translator', async () => {
+  it('does not forward unsupported passthrough fields into the translator', async () => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
     const capabilities = chatBridgeCapabilitiesForRoute(
       'https://api.deepseek.com/v1',
       'deepseek-chat',
     );
     expect(capabilities.passthroughFields).not.toContain('n');
+    expect(capabilities.passthroughFields).not.toContain('logprobs');
+    expect(capabilities.passthroughFields).not.toContain('top_logprobs');
   });
 
   it.each([

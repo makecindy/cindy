@@ -216,8 +216,8 @@ const CHAT_BRIDGE_DEFAULT_CAPABILITIES: ChatBridgeCapabilities = {
     'service_tier',
     'response_format',
     'logit_bias',
-    'logprobs',
-    'top_logprobs',
+    // Token log probabilities are not restored by ChatSseTranslator yet; do not advertise
+    // request passthrough until the Responses response shape is implemented.
   ],
   toolCallReasoningPlaceholder: true,
   forceAutoToolChoice: true,
