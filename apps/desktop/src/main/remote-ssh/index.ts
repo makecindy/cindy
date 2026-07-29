@@ -76,6 +76,7 @@ import {
   initAgentProxy,
   killRemoteCodexDaemon,
   reconcileCodexAgentProxyEnv,
+  teardownAgentProxyOnUserDisconnect,
   type AgentProxyTunnelState,
 } from './agent-proxy.js';
 import {
@@ -782,6 +783,14 @@ export function registerRemoteSshIpc(): void {
   ipcMain.handle(REMOTE_SSH_INVOKE.DISCONNECT, async (_event, args: unknown) => {
     const obj = requireObject(args);
     const id = requireString(obj.id, 'id');
+    // 显式断开 = 切断这台机器的全部 SSH 连通 — 独立隧道连接一并拆
+    // (与断线/重连的 pause 语义区分, review: PR #992 codex-connector P1)。
+    await teardownAgentProxyOnUserDisconnect(id).catch((err) => {
+      log.warn('agent-proxy tunnel teardown on user disconnect failed', {
+        hostId: id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     await getPool().disconnect(id);
     return { host: getPool().get(id)?.snapshot() ?? null };
   });

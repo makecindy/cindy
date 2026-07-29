@@ -78,6 +78,16 @@ export function handleAgentProxyMainHostDown(hostId: string): void {
   pauseTunnelForHost(hostId);
 }
 
+/**
+ * 用户**显式**断开 (Settings → Disconnect) 时拆除隧道: 该动作的语义是
+ * 「切断这台机器的全部 SSH 连通」, 独立隧道连接也算 (review: PR #992
+ * codex-connector P1)。与断线/重连的 pause 路径区分 — 那种是网络抖动,
+ * 存活隧道值得保留; 用户点断开则是明确授权终结。
+ */
+export async function teardownAgentProxyOnUserDisconnect(hostId: string): Promise<void> {
+  await stopTunnelForHost(hostId);
+}
+
 // broadcast 由 index.ts 注入 (避免循环依赖): 状态变化后推一版 status
 // snapshot 给 renderer, HostSnapshotWithPrefs 会带上最新 tunnel state。
 let broadcaster: ((hostId: string) => void) | null = null;

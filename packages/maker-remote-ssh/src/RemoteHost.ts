@@ -684,7 +684,10 @@ export class RemoteHost {
     this.attachForwardListener(client);
 
     const base = record.spec.preferredRemotePort ?? DEFAULT_REMOTE_FORWARD_PORT_BASE;
-    const candidates = [record.remotePort];
+    // exact 模式恒试 preferred 而非 record.remotePort (review: PR #992
+    // copilot): 同 key 的 record 可能是在非 exact 阶段顺延漂到别的端口的,
+    // 以漂移值为种子会把「固定端口」语义吃回去。
+    const candidates = record.spec.exactRemotePort ? [base] : [record.remotePort];
     if (!record.spec.exactRemotePort) {
       for (let i = 0; i < REMOTE_FORWARD_PORT_SCAN_SPAN; i++) {
         if (!candidates.includes(base + i)) candidates.push(base + i);
