@@ -688,6 +688,44 @@ describe('codex proxy host', () => {
     clearSessionProvider('session-subscription-search');
   });
 
+  it('does not add native search when an OAuth Gateway session resolves to passthrough', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-gateway-passthrough', 'thread-gateway-passthrough', 'PRODUCT_PROMPT');
+    setSessionProvider('session-gateway-passthrough', 'xd');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.setCodexProxyGatewayKeyReader(() => null);
+
+    const proxyOptions = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+    const transforms = proxyOptions?.transformRequest ?? [];
+    const routingTransform = proxyOptions?.routingTransform;
+    const original = { model: 'gpt-5.6-sol' };
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-gateway-passthrough' },
+    };
+    let transformed: unknown = original;
+    for (const transform of transforms) {
+      const next = transform(transformed, ctx);
+      if (next !== null && next !== undefined) transformed = next;
+    }
+
+    expect(transformed).toEqual(original);
+    expect(routingTransform(original, ctx)).toEqual({
+      upstreamOverride: 'https://chatgpt.com/backend-api/codex',
+    });
+
+    host.clearCodexProxyAuthInjection();
+    host.setCodexProxyGatewayKeyReader(() => null);
+    clearSessionProvider('session-gateway-passthrough');
+  });
+
   it('normalizes xAI Codex Responses body before forwarding requests', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');

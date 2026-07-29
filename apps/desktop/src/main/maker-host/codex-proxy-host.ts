@@ -212,13 +212,22 @@ function createGatewayNativeWebSearchTransform(): RequestTransform {
     const explicitRouting = canUseExplicitSessionRoute && sessionId
       ? getSessionRoutingDescriptor(sessionId, 'codex', model)
       : null;
+    const resolvedExplicitRoute = explicitRouting
+      && sessionId
+      && (authInjection === 'oauth-bearer' || authInjection === 'provider-oauth')
+      ? resolveSessionRouteDecision(sessionId, 'codex', _readGatewayKey(), model)
+      : null;
+    const providerOAuthGatewayFallback = authInjection === 'provider-oauth'
+      ? gatewayDefaultRouteDecision('codex', _readGatewayKey())
+      : null;
     const isGatewaySession = explicitRouting
-      ? explicitRouting.authStrategy === 'gateway-key'
+      ? explicitRouting.authStrategy === 'gateway-key' &&
+        (authInjection === 'env-key' || resolvedExplicitRoute !== null)
       // provider-oauth 的显式来源越界后，实际路由会回落默认 Gateway；没有 descriptor
       // 时也必须与 createModelRoutingTransform 保持同源。
       : model.startsWith('codex/') ||
         authInjection === 'env-key' ||
-        authInjection === 'provider-oauth';
+        providerOAuthGatewayFallback !== null;
     if (!isGatewaySession) return null;
 
     const existingTools = Array.isArray(body.tools) ? body.tools : [];
