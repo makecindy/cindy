@@ -702,6 +702,55 @@ describe('codex proxy host', () => {
     )).toBeNull();
   });
 
+  it('keeps Gateway provider search tools out of Guardian review requests', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.setCodexProxyGatewayKeyReader(() => 'gw-key');
+    host.registerReviewerRouteContext(
+      'session-gateway-review',
+      'thread-gateway-parent',
+      'gpt-5.6-sol',
+    );
+    setSessionProvider('session-gateway-review', 'xd');
+
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'guardian-child-gateway',
+        'x-openai-subagent': 'guardian',
+        'x-codex-parent-thread-id': 'thread-gateway-parent',
+      },
+    };
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'codex-auto-review',
+      tools: [
+        { type: 'function', name: 'shell' },
+        { type: 'web_search' },
+      ],
+      input: [{ role: 'user', content: 'review this action' }],
+    };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toMatchObject({
+      model: 'gpt-5.6-sol',
+      tools: [{ type: 'function', name: 'shell' }],
+    });
+
+    host.setCodexProxyGatewayKeyReader(() => null);
+    clearSessionProvider('session-gateway-review');
+  });
+
   it('applies provider compatibility and routing to a Guardian child via its parent thread', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
@@ -733,6 +782,8 @@ describe('codex proxy host', () => {
       tools: [
         { type: 'function', name: 'shell' },
         { type: 'namespace', name: 'multi_agent_v1', tools: [] },
+        { type: 'web_search' },
+        { type: 'x_search' },
       ],
       input: [{ role: 'user', content: 'review this action' }],
     };
@@ -743,8 +794,8 @@ describe('codex proxy host', () => {
     }
 
     expect(current).toMatchObject({ model: 'grok-4.5' });
-    expect((current as { tools?: Array<{ type?: string }> }).tools)
-      .not.toContainEqual(expect.objectContaining({ type: 'namespace' }));
+    expect((current as { tools?: Array<{ type?: string; name?: string }> }).tools)
+      .toEqual([{ type: 'function', name: 'shell' }]);
 
     const routingTransform = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.routingTransform;
     if (!routingTransform) throw new Error('expected routing transform');
@@ -790,6 +841,11 @@ describe('codex proxy host', () => {
 
     const rawGuardianBody = {
       model: 'codex-auto-review',
+      tools: [
+        { type: 'function', name: 'shell' },
+        { type: 'web_search' },
+        { type: 'x_search' },
+      ],
       input: [{ role: 'user', content: 'review this action' }],
     };
     const ctx = {
@@ -819,7 +875,11 @@ describe('codex proxy host', () => {
       | { handle: ReturnType<typeof vi.fn> }
       | undefined;
     expect(bridge?.handle).toHaveBeenCalledWith({
-      parsedBody: { ...rawGuardianBody, model: 'deepseek-v4' },
+      parsedBody: {
+        ...rawGuardianBody,
+        model: 'deepseek-v4',
+        tools: [{ type: 'function', name: 'shell' }],
+      },
       res,
     });
 

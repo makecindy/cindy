@@ -248,6 +248,31 @@ function providerAwareGuardianReviewerModel(
     : mainModel;
 }
 
+const GUARDIAN_PROVIDER_SEARCH_TOOL_TYPES = new Set(['web_search', 'x_search']);
+
+/**
+ * Guardian decides whether another action may run. Provider-hosted search
+ * tools must not let that reviewer initiate an unrelated upstream network
+ * action with the approval context.
+ */
+function stripGuardianProviderSearchTools(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Array.isArray(body.tools)) return body;
+  const tools = body.tools.filter(
+    (tool) =>
+      !isPlainObject(tool) ||
+      typeof tool.type !== 'string' ||
+      !GUARDIAN_PROVIDER_SEARCH_TOOL_TYPES.has(tool.type),
+  );
+  if (tools.length === body.tools.length) return body;
+
+  const next = { ...body };
+  if (tools.length > 0) next.tools = tools;
+  else delete next.tools;
+  return next;
+}
+
 function createProviderAwareGuardianReviewerTransform(
   frozenAuthInjection?: CodexProxyAuthInjection,
 ): RequestTransform {
@@ -269,7 +294,7 @@ function createProviderAwareGuardianReviewerTransform(
       toModel: mainModel,
       providerId: getSessionProvider(sessionId),
     });
-    return { ...body, model: mainModel };
+    return stripGuardianProviderSearchTools({ ...body, model: mainModel });
   };
 }
 
@@ -282,6 +307,7 @@ function createProviderAwareGuardianReviewerTransform(
 function createGatewayNativeWebSearchTransform(): RequestTransform {
   return (body, ctx) => {
     if (!isPlainObject(body) || typeof body.model !== 'string') return null;
+    if (guardianParentThreadIdFromHeaders(ctx.headers)) return null;
     const path = ctx.url.split('?', 1)[0] ?? ctx.url;
     if (ctx.method !== 'POST' || (!path.endsWith('/responses') && path !== '/responses')) return null;
 
@@ -471,7 +497,10 @@ function createChatBridgeDecision(
         }
       }
       if (requestModelOverride && isPlainObject(body)) {
-        body = { ...body, model: requestModelOverride };
+        body = stripGuardianProviderSearchTools({
+          ...body,
+          model: requestModelOverride,
+        });
       }
       if (instructions && isPlainObject(body)) {
         const existing = typeof body.instructions === 'string' ? body.instructions : '';
@@ -1142,10 +1171,14 @@ function createXaiResponsesCompatTransform(): RequestTransform {
 
     // 补服务端工具排在 sanitize 之后:先按 xAI schema 清掉 Codex 专属工具,再追加 x_search,
     // 保证注入项不会被同一轮的裁剪逻辑改形或丢掉。
-    const withServerSideTools = ensureXaiServerSideTools(current);
-    if (withServerSideTools) {
-      current = withServerSideTools;
-      changed = true;
+    // Guardian must retain xAI's schema/input compatibility, but it must not
+    // gain provider-hosted search tools while reviewing another action.
+    if (!guardianParentThreadIdFromHeaders(ctx.headers)) {
+      const withServerSideTools = ensureXaiServerSideTools(current);
+      if (withServerSideTools) {
+        current = withServerSideTools;
+        changed = true;
+      }
     }
 
     const withoutUnsupportedReasoning = stripUnsupportedXaiReasoning(current);
