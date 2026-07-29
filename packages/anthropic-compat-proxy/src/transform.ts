@@ -702,21 +702,21 @@ const SYNTHETIC_TOOL_RESULT_TEXT =
  * tool_use/tool_result 配对断裂修复(检测即修),返回新 messages;无断裂 → null。
  *
  * 与 kimi code projector 的 repairToolExchangeAdjacency + dropOrphanResults
- * 同构(consumed-scan 接力配对),移植到 Anthropic 格式:
- *   1. 接力配对: 按出现顺序,每个 call 消费同 id 结果池中第一个位于其后的
- *      result 块 —— 与 kimi 从 call 往后扫描 consumed 的语义一致;自然处理
- *      重复 id(第 N 个 call 消费第 N 个未消费 result)。
- *   2. 错位重排: 消费到的 result 不在 call 紧邻的下一条消息(中间隔了 text /
- *      别的交换)→ 块前移到紧邻位置(并入/新建规则与合成相同),原位置移除。
- *      Anthropic 要求 result 紧跟 call 所在 assistant,留在远处仍是 400。
- *   3. 缺失合成: 非 trailing 的 call 消费不到 result → 紧邻位置合成占位
- *      (kimi 同文案同语义;不设 is_error —— "结果不可用"≠"执行失败")。
- *      插入规则: 下一条是 user 消息则并入其 content 的前导 tool_result
- *      区间末尾(result 在 text 前、与 call 顺序一致);string content 转等价
- *      数组,空白 string 不附加 text 块;否则新建 user 消息插入。
- *   4. 丢弃: 孤儿 result(全历史无匹配 call)、池中接力后剩余(前置 result —
- *      引用未来 call 本身非法;同 id 超编残留 —— 一个 call 恰应有一个应答)
- *      全部移除;user 消息 content 因此清空 → 整条丢弃。
+ * 同构(consumed-scan),移植到 Anthropic 格式:
+ *   1. 位置配对优先: 每个 call 先消费紧邻下一条消息里同 id 的未消费 result
+ *      块(CC 投影的正常形态,位置证据最强的配对);全部 call(含 trailing)
+ *      做完位置配对后才进入接力 —— 否则较早的同 id 缺口 call 会抢走较晚
+ *      call 紧邻位置的真实 result,造成张冠李戴。
+ *   2. 接力补缺 + 错位重排: 位置配对失败的 call 从结果池取第一个位于其后
+ *      的未消费块;不在合法位置(跨消息,或同消息内落在 text 之后)的前移至
+ *      紧邻消息的前导 tool_result 区间,原位置移除。Anthropic 要求 result
+ *      紧跟 call 所在 assistant 且居于 text 前,留在错误位置仍是 400。
+ *   3. 缺失合成: 非 trailing 的 call 无候选 → 紧邻位置合成占位(kimi 同文案
+ *      同语义;不设 is_error —— "结果不可用"≠"执行失败")。插入规则与重排
+ *      相同;string content 转等价数组,空白 string 不附加 text 块。
+ *   4. 丢弃: 孤儿 result(全历史无匹配 call)、池中剩余(前置 result —— 引用
+ *      未来 call 本身非法;同 id 超编残留 —— 一个 call 恰应有一个应答)全部
+ *      移除;user 消息 content 因此清空 → 整条丢弃。
  *   5. trailing 豁免: 最后一个「对话推进点」处的 assistant(末尾交换)只消费
  *      不修复 —— 缺失 result 可能真在飞,不合成、不重排;其后的纯 result
  *      消息视为交换一部分,不会误判为残留丢弃。
@@ -775,61 +775,107 @@ function repairToolExchangeAdjacencyInMessages(messages: unknown[]): unknown[] |
     }
   }
 
-  // pass B: 接力配对,产出行动计划(移动源标记 + 各 assistant 的紧邻插入列表)。
-  // clean 历史(绝大多数请求)计划为空直接返回,不进入组装、零修复数组分配。
+  // pass B1: 位置配对 —— 每个 call 优先消费紧邻下一条消息里同 id 的未消费
+  // result 块(CC 投影的正常形态,位置证据最强的配对)。**全部 call(含
+  // trailing)先做完位置配对再做接力**:否则较早的同 id 缺口 call 会在接力时
+  // 抢走较晚 call 紧邻位置的真实 result(张冠李戴,Greptile P1 实测反例:
+  // call#1 缺 result、call#2 有真实 result → call#1 越权消费、call#2 反得
+  // 合成占位)。trailing call 参与位置配对(消费合法尾部 result)但不做修复。
   const lastConversationIndex = findLastConversationIndex(messages);
-  const poolCursor = new Map<string, number>();
-  const insertBlocksAfter = new Map<number, unknown[]>();
+  const consumed = new Set<string>(); // `${msgIdx}:${blockIdx}`
+  // assistant 下标 → (call 块下标 → 要插入的 result 块),按 call 顺序组装。
+  const insertPlans = new Map<number, Map<number, unknown>>();
+  const recordInsert = (assistantIdx: number, callBlockIdx: number, block: unknown) => {
+    const plan = insertPlans.get(assistantIdx) ?? new Map<number, unknown>();
+    plan.set(callBlockIdx, block);
+    insertPlans.set(assistantIdx, plan);
+  };
+  const missingCalls: Array<{ i: number; id: string; trailing: boolean; callBlockIdx: number }> = [];
   for (let i = 0; i <= lastConversationIndex; i++) {
     const msg = messages[i];
     if (!isPlainObject(msg) || msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
     const trailing = i >= lastConversationIndex;
-    const inserts: unknown[] = [];
-    for (const block of msg.content) {
+    const nextMsg = messages[i + 1];
+    const nextContent =
+      isPlainObject(nextMsg) && nextMsg.role === 'user' && Array.isArray(nextMsg.content)
+        ? nextMsg.content
+        : null;
+    for (let cb = 0; cb < msg.content.length; cb++) {
+      const block = msg.content[cb];
       if (!isToolUseBlock(block)) continue;
       const id = block.id;
-      const pool = resultPool.get(id);
-      let cursor = poolCursor.get(id) ?? 0;
-      // 跳过位置不在 call 之后的池块(前置 result = 引用未来 call,本身非法;
-      // kimi 从 call 往后扫描的语义同样不会消费它)—— 进丢弃清单,不占用配对。
-      while (pool !== undefined && cursor < pool.length && pool[cursor]!.msgIdx <= i) {
-        drops.push(pool[cursor]!);
-        cursor += 1;
-      }
-      const hit = pool !== undefined && cursor < pool.length ? pool[cursor] : undefined;
-      poolCursor.set(id, cursor);
-      if (hit !== undefined) {
-        poolCursor.set(id, cursor + 1);
-        // trailing 只消费不修复。mid-history 的「已邻接」判定到块级:result 在
-        // call 紧邻的下一条消息 **且** 位于其 content 的前导 tool_result 区间
-        // (块下标 < 前导区间长度);落在 text 之后 = 块级错位,同样前移重排。
-        if (!trailing) {
-          let adjacent = hit.msgIdx === i + 1;
-          if (adjacent) {
-            const nextMsg = messages[hit.msgIdx] as Record<string, unknown>;
-            const nextContent = nextMsg.content as unknown[];
-            adjacent = hit.blockIdx < leadingToolResultCount(nextContent);
-          }
-          if (!adjacent) {
-            drops.push({ msgIdx: hit.msgIdx, blockIdx: hit.blockIdx });
-            const srcMsg = messages[hit.msgIdx] as Record<string, unknown>;
-            inserts.push((srcMsg.content as unknown[])[hit.blockIdx]);
+      let hit: { msgIdx: number; blockIdx: number } | undefined;
+      if (nextContent !== null) {
+        for (let b = 0; b < nextContent.length; b++) {
+          const cand = nextContent[b];
+          if (isToolResultBlock(cand) && cand.tool_use_id === id && !consumed.has(`${i + 1}:${b}`)) {
+            hit = { msgIdx: i + 1, blockIdx: b };
+            break;
           }
         }
-      } else if (!trailing) {
-        inserts.push({
-          type: 'tool_result',
-          tool_use_id: id,
-          content: SYNTHETIC_TOOL_RESULT_TEXT,
-        });
+      }
+      if (hit !== undefined) {
+        consumed.add(`${hit.msgIdx}:${hit.blockIdx}`);
+        // 已邻接判定到块级: 位于前导 tool_result 区间则不动;落在 text 之后
+        // = 块级错位 → 前移进前导区间( trailing 只消费不修复)。
+        if (!trailing && hit.blockIdx >= leadingToolResultCount(nextContent!)) {
+          drops.push(hit);
+          recordInsert(i, cb, nextContent![hit.blockIdx]);
+        }
+      } else {
+        missingCalls.push({ i, id, trailing, callBlockIdx: cb });
       }
     }
-    if (inserts.length > 0) insertBlocksAfter.set(i, inserts);
   }
-  // 池中接力后剩余: 前置 / 超编残留 / 永不配对 → 全部丢弃。
-  for (const [id, pool] of resultPool) {
-    const cursor = poolCursor.get(id) ?? 0;
-    for (let k = cursor; k < pool.length; k++) drops.push(pool[k]!);
+
+  // pass B2: 接力 —— 位置配对失败的 call,从结果池中取第一个「位于其后且未
+  // 被位置配对消费」的同 id 块前移(错位重排);无候选 → 非 trailing 合成占位。
+  // 位置 ≤ call 的池块(前置 result,引用未来 call 本身非法)顺带标记丢弃。
+  for (const mc of missingCalls) {
+    if (mc.trailing) continue;
+    const pool = resultPool.get(mc.id) ?? [];
+    let hit: { msgIdx: number; blockIdx: number } | undefined;
+    for (const cand of pool) {
+      const key = `${cand.msgIdx}:${cand.blockIdx}`;
+      if (consumed.has(key)) continue;
+      if (cand.msgIdx <= mc.i) {
+        drops.push(cand);
+        consumed.add(key);
+        continue;
+      }
+      hit = cand;
+      break;
+    }
+    if (hit !== undefined) {
+      consumed.add(`${hit.msgIdx}:${hit.blockIdx}`);
+      drops.push(hit);
+      const srcMsg = messages[hit.msgIdx] as Record<string, unknown>;
+      recordInsert(mc.i, mc.callBlockIdx, (srcMsg.content as unknown[])[hit.blockIdx]);
+    } else {
+      recordInsert(mc.i, mc.callBlockIdx, {
+        type: 'tool_result',
+        tool_use_id: mc.id,
+        content: SYNTHETIC_TOOL_RESULT_TEXT,
+      });
+    }
+  }
+  // 池中剩余(前置 / 超编 / 永不配对)→ 全部丢弃。
+  for (const pool of resultPool.values()) {
+    for (const cand of pool) {
+      const key = `${cand.msgIdx}:${cand.blockIdx}`;
+      if (consumed.has(key)) continue;
+      drops.push(cand);
+      consumed.add(key);
+    }
+  }
+  // 每个 assistant 的插入块按 call 块顺序拼装(位置配对与接力分两遍收集,
+  // 顺序不一定与 call 顺序一致)。
+  const insertBlocksAfter = new Map<number, unknown[]>();
+  for (const [assistantIdx, plan] of insertPlans) {
+    insertBlocksAfter.set(
+      assistantIdx,
+      [...plan.entries()].sort((a, b) => a[0] - b[0]).map(([, block]) => block),
+    );
   }
 
   if (drops.length === 0 && insertBlocksAfter.size === 0) return null; // cache 安全契约

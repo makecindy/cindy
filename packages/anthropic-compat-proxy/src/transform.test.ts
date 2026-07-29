@@ -1452,6 +1452,51 @@ describe('repairToolExchangeAdjacencyFromBody', () => {
     ]);
   });
 
+  it('does not steal a later call\'s real result for an earlier same-id gap (Greptile P1)', () => {
+    // Greptile P1 反例: 较早的同 id call 缺 result、较晚 call 有真实结果。
+    // 位置配对必须优先 —— r2 只能配给 call#2;call#1 合成占位,不得张冠李戴。
+    const body = buf({
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'X', name: 'Edit', input: { a: 1 } }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'X', name: 'Edit', input: { a: 2 } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'X', content: 'r2-real' }] },
+        { role: 'user', content: '继续' },
+      ],
+    });
+    const out = repairToolExchangeAdjacencyFromBody(body);
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages.map((m: { role: string }) => m.role)).toEqual([
+      'assistant', 'user', 'assistant', 'user', 'user',
+    ]);
+    // call#1 得到合成占位;call#2 保留真实结果 r2。
+    expect(parsed.messages[1].content[0]).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'X',
+      content: 'Tool result is not available in the current context. Do not assume the tool completed successfully.',
+    });
+    expect(parsed.messages[3].content[0]).toMatchObject({ tool_use_id: 'X', content: 'r2-real' });
+  });
+
+  it('positional pairing wins over relay even when the later call is trailing', () => {
+    // 变体: 较晚 call 是 trailing(末尾交换)。它紧邻位置的真实 result 仍归它
+    // (trailing 参与位置配对),较早缺口 call 合成,池不被越权消费。
+    const body = buf({
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'X', name: 'Edit', input: { a: 1 } }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'X', name: 'Edit', input: { a: 2 } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'X', content: 'r2-real' }] },
+      ],
+    });
+    const out = repairToolExchangeAdjacencyFromBody(body);
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages.map((m: { role: string }) => m.role)).toEqual([
+      'user', 'assistant', 'user', 'assistant', 'user',
+    ]);
+    expect(parsed.messages[2].content[0].content).toContain('Tool result is not available');
+    expect(parsed.messages[4].content[0]).toMatchObject({ tool_use_id: 'X', content: 'r2-real' });
+  });
+
   it('returns null for non-JSON body / missing messages', () => {
     expect(repairToolExchangeAdjacencyFromBody(Buffer.from('not json', 'utf8'))).toBeNull();
     expect(repairToolExchangeAdjacencyFromBody(buf({ model: 'x' }))).toBeNull();
