@@ -1060,6 +1060,17 @@
         "ko": "압축"
       },
       "note": "issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。"
+    },
+    {
+      "id": "context-window",
+      "status": "proposed",
+      "en": "Context window",
+      "translations": {
+        "zh-CN": "上下文窗口",
+        "ja": "コンテキストウィンドウ",
+        "ko": "컨텍스트 윈도우"
+      },
+      "note": "模型一次请求可容纳的 token 上限。自定义 Provider 的窗口编辑字段(#386)与用量/压缩相关文案使用;空间紧的 placeholder 可缩写为「上下文 / Context / コンテキスト / 컨텍스트」+ (tokens)。"
     }
   ]
 }

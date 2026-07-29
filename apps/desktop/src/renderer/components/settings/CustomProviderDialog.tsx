@@ -1249,11 +1249,15 @@ export function CustomProviderDialog({
                                 // 分隔符只允许单个、且夹在数字组之间:`1,,2` / `1_ 2` /
                                 // 尾随分隔符等无效位置不得被剥掉后当 `12` 保存(review P1)。
                                 if (!/^[0-9]+(?:[,_ ][0-9]+)*$/.test(trimmed)) return y;
-                                const parsed = Number.parseInt(trimmed.replace(/[,_ ]/g, ''), 10);
-                                // isSafeInteger:超出安全整数会被 parseInt 静默舍入,
-                                // 落盘值与用户输入不一致(review P1)。
-                                if (!Number.isSafeInteger(parsed) || parsed <= 0) return y;
-                                return { ...y, contextWindow: parsed };
+                                // BigInt 精确校验上界:parseInt 会把超安全整数先舍入
+                                // (9007199254740993 → …992)再通过 isSafeInteger,落盘值
+                                // 与用户输入不一致(review P1);正则已保证纯数字,BigInt
+                                // 不会抛。
+                                const parsed = BigInt(trimmed.replace(/[,_ ]/g, ''));
+                                if (parsed <= 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+                                  return y;
+                                }
+                                return { ...y, contextWindow: Number(parsed) };
                               }),
                             }))
                           }
