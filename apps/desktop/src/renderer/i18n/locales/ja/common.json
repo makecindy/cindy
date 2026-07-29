@@ -268,13 +268,22 @@
           "keyHint": "秘密鍵ファイルを直接読み込みます。パスフレーズは保存しないため、暗号化された鍵には非対応 — ssh-agent が使えない場合のみご使用ください。"
         },
         "identityFile": "秘密鍵ファイルのパス",
-        "agentProxy": "Agent トラフィックをローカルプロキシ経由にする",
-        "agentProxyTip": "リモートに 127.0.0.1 ポートを開き、SSH トンネルでこのマシンのプロキシに中継します。リモートの codex / Claude Code の通信がそこから出ます",
-        "agentProxyAddr": "ローカルプロキシのアドレス",
-        "agentProxyHint": "リモートの 127.0.0.1 にポートを開き、SSH トンネルでローカルプロキシ（例: Clash の 7890）に中継します。{{appName}} はプロキシを提供せず、トンネルのみを張ります。リモート Agent の HTTPS_PROXY がトンネル口を指し、ドメインはお使いのプロキシ側で解決されます。切り替え後、リモートの codex daemon が一度再起動します。",
-        "agentProxyAddrInvalid": "host:port 形式で入力してください（例: 127.0.0.1:7890）",
         "cancel": "キャンセル",
-        "submit": "マシンを追加"
+        "submit": "マシンを追加",
+        "agentProxy": "Agent トラフィックをプロキシ経由にする",
+        "agentProxyTip": "リモートの codex / Claude Code のモデル通信をプロキシ経由にします。Cindy が管理する SSH トンネルでローカルプロキシへ戻すか、リモートから到達可能なプロキシ URL を指定します",
+        "agentProxyModeTunnel": "Cindy 管理トンネル",
+        "agentProxyModeTunnelDesc": "専用 SSH トンネルでローカルプロキシへ中継。リモートポート固定、切断時は自動再接続",
+        "agentProxyModeEnv": "自前プロキシ（環境変数の注入のみ）",
+        "agentProxyModeEnvDesc": "リモートから到達可能なプロキシ URL を指定。トンネルや到達性はご自身で管理",
+        "agentProxyAddr": "ローカルプロキシのアドレス",
+        "agentProxyHint": "リモート 127.0.0.1 の固定ポートを、Cindy が管理する専用 SSH 接続でローカルプロキシ（例: Clash の 7890）へ中継します。{{appName}} はプロキシを提供せず、トンネルのみを張ります。リモート Agent の HTTPS_PROXY は固定ポートに固定され、再接続でずれません。設定変更後、リモートの codex daemon が一度再起動します。",
+        "agentProxyAddrInvalid": "host:port 形式で入力してください（例: 127.0.0.1:7890）",
+        "agentProxyRemotePort": "リモート固定ポート",
+        "agentProxyRemotePortInvalid": "ポートは 1〜65535 の整数で入力してください",
+        "agentProxyUrl": "リモートから到達可能なプロキシ URL",
+        "agentProxyUrlHint": "リモート側で解決されます。リモート上のプロキシ（例: autossh -R で自作したトンネル口）や LAN 内プロキシなど。http / https / socks5 に対応。",
+        "agentProxyUrlInvalid": "http(s):// または socks5:// で始まる URL を、空白や引用符なしで入力してください"
       },
       "detail": {
         "agentSetupTitle": "エージェント設定",
@@ -288,11 +297,6 @@
         "statusInstalled": "インストール済み",
         "statusNotInstalled": "未インストール",
         "claudeCodeName": "Claude Code",
-        "agentProxyTitle": "Agent プロキシトンネル",
-        "agentProxyActive": "リモート 127.0.0.1:{{port}} → ローカル {{target}} · 確立済み",
-        "agentProxyPending": "トンネル確立中 → ローカル {{target}}",
-        "agentProxyWaiting": "ホスト未接続 — 再接続後に自動確立 → ローカル {{target}}",
-        "agentProxyError": "トンネルの確立に失敗: {{message}}",
         "button": {
           "install": "インストール",
           "reinstall": "再インストール",
@@ -301,7 +305,15 @@
           "run": "実行",
           "syncAuth": "認証情報を同期",
           "syncAuthTip": "ローカルの Codex 認証情報をこのリモートにコピーして、再ログインを省きます"
-        }
+        },
+        "agentProxyTitle": "Agent プロキシ",
+        "agentProxyActive": "リモート 127.0.0.1:{{port}} → ローカル {{target}} · 確立済み",
+        "agentProxyPending": "トンネル確立中 → ローカル {{target}}",
+        "agentProxyWaiting": "ホスト未接続 — 再接続後に自動復旧 → ローカル {{target}}",
+        "agentProxyError": "プロキシ設定に失敗: {{message}}",
+        "agentProxyPortBusy": "リモートポート {{port}} が使用中です。解放を待って自動再試行します…（長く続く場合は設定でポートを変更してください）",
+        "agentProxyEnvInfo": "環境変数を注入済み → {{url}}（経路はご自身で管理）",
+        "agentProxyEnvPending": "環境変数の適用待ち → {{url}}（ホスト接続後に自動で反映）"
       },
       "startSession": {
         "title": "このリモートで Codex セッションを開始",

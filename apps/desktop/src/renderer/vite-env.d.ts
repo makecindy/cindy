@@ -12,6 +12,8 @@ interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
 
+type AgentProxyPrefPayload = import('../shared/agentProxyConfig').SshHostAgentProxyPref;
+type AgentProxyTunnelStatePayload = import('../shared/agentProxyConfig').AgentProxyTunnelState;
 type ModelAccessStatusPayload = import('../shared/modelAccess').ModelAccessStatus;
 type AnalyticsSettingsPayload = import('../shared/analyticsSettings').AnalyticsSettingsPayload;
 type RsbWindowCommand = import('../shared/rightSidebarWindow').RsbWindowCommand;
@@ -51,9 +53,9 @@ interface EnvCheckResult {
 type RemoteHostSnapshot = import('@cindy/maker-remote-ssh').HostSnapshot & {
   autoConnect: boolean;
   /** Agent 流量经 SSH 隧道走本地 Proxy 的 per-host 配置; 未开启 → null。 */
-  agentProxy: { enabled: boolean; localHost: string; localPort: number } | null;
+  agentProxy: AgentProxyPrefPayload | null;
   /** 隧道实时状态 (main 进程内存态); 无记录 → null。 */
-  agentProxyTunnel: { active: boolean; remotePort?: number; lastError?: string } | null;
+  agentProxyTunnel: AgentProxyTunnelStatePayload | null;
 };
 /** 设备互联:REST 设备视图(同 shared/deviceLinkIpc.ts DeviceLinkDeviceView) */
 interface DeviceLinkDeviceInfo {
@@ -2818,7 +2820,7 @@ interface ElectronAPI {
       authMethod?: 'agent' | 'key';
       identityFile?: string;
       /** 「Agent 流量走本地 Proxy」pref; null = 关闭, 缺省 = 不动。 */
-      agentProxy?: { enabled: boolean; localHost: string; localPort: number } | null;
+      agentProxy?: AgentProxyPrefPayload | null;
     }) => Promise<{ host: RemoteHostSnapshot }>;
     update: (host: {
       id: string;
@@ -2827,7 +2829,7 @@ interface ElectronAPI {
       user: string;
       authMethod?: 'agent' | 'key';
       identityFile?: string;
-      agentProxy?: { enabled: boolean; localHost: string; localPort: number } | null;
+      agentProxy?: AgentProxyPrefPayload | null;
     }) => Promise<{ host: RemoteHostSnapshot }>;
     remove: (id: string) => Promise<{ ok: true }>;
     connect: (id: string) => Promise<{ host: RemoteHostSnapshot | null }>;

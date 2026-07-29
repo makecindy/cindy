@@ -26,15 +26,21 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('ssh-host-prefs-store');
 
-/**
- * Agent 流量经 SSH 隧道走本地 Proxy 的 per-host 配置。
- * Cindy 不提供 Proxy, 只建隧道: 远端 127.0.0.1:<forwardPort> → 本地
- * localHost:localPort (用户自己的 Proxy, 如 Clash 的 7890 混合端口)。
- */
-export interface SshHostAgentProxyPref {
-  enabled: boolean;
-  localHost: string;
-  localPort: number;
+// pref 联合类型 / URL 校验 / 迁移缺省端口的真源在 shared (preload 与
+// renderer 表单共用同一份, 消除手写镜像的结构漂移) — 这里 re-export 保持
+// main 侧既有引用点不变。旧数据 ({enabled, localHost, localPort} 无 mode,
+// PR #715 动态端口方案) 迁移为 mode='tunnel' + LEGACY_AGENT_PROXY_REMOTE_PORT。
+import {
+  LEGACY_AGENT_PROXY_REMOTE_PORT,
+  normalizeAgentProxyUrl,
+  type SshHostAgentProxyPref,
+} from '../../shared/agentProxyConfig.js';
+
+export { LEGACY_AGENT_PROXY_REMOTE_PORT, normalizeAgentProxyUrl };
+export type { SshHostAgentProxyPref };
+
+function isValidPort(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 65535;
 }
 
 export interface SshHostPref {
@@ -51,6 +57,12 @@ function settingsFilePath(): string {
 function normalizeAgentProxy(raw: unknown): SshHostAgentProxyPref | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const v = raw as Record<string, unknown>;
+  if (v.mode === 'env') {
+    const proxyUrl = normalizeAgentProxyUrl(v.proxyUrl);
+    if (!proxyUrl) return undefined;
+    return { enabled: v.enabled === true, mode: 'env', proxyUrl };
+  }
+  // mode='tunnel' 或缺省 (旧数据迁移路径)。
   const localHost = typeof v.localHost === 'string' ? v.localHost.trim() : '';
   const localPort = typeof v.localPort === 'number' ? v.localPort : NaN;
   // 引号与空白同样拒 (与 IPC normalizeAgentProxyInput / renderer 校验对齐,
@@ -59,8 +71,9 @@ function normalizeAgentProxy(raw: unknown): SshHostAgentProxyPref | undefined {
   if (!localHost || /\s/.test(localHost) || localHost.includes("'") || localHost.includes('"')) {
     return undefined;
   }
-  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) return undefined;
-  return { enabled: v.enabled === true, localHost, localPort };
+  if (!isValidPort(localPort)) return undefined;
+  const remotePort = isValidPort(v.remotePort) ? v.remotePort : LEGACY_AGENT_PROXY_REMOTE_PORT;
+  return { enabled: v.enabled === true, mode: 'tunnel', localHost, localPort, remotePort };
 }
 
 function normalize(raw: unknown): SshHostPrefs {
@@ -128,10 +141,16 @@ export function setSshHostAgentProxy(hostId: string, agentProxy: SshHostAgentPro
   }
   current[hostId] = next;
   writePrefs(current);
+  const ap = next.agentProxy;
   log.info('ssh host agentProxy written', {
     hostId,
-    enabled: next.agentProxy?.enabled === true,
-    localTarget: next.agentProxy ? `${next.agentProxy.localHost}:${next.agentProxy.localPort}` : null,
+    enabled: ap?.enabled === true,
+    mode: ap?.mode ?? null,
+    target: ap
+      ? ap.mode === 'tunnel'
+        ? `remote:${ap.remotePort} -> ${ap.localHost}:${ap.localPort}`
+        : ap.proxyUrl
+      : null,
   });
 }
 

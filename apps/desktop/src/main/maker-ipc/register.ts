@@ -258,7 +258,11 @@ import {
 } from '../messagePersistBroadcaster.js';
 import { ensureCcManagerInstalledOrInstall } from '../remote-ssh/cc-manager-install.js';
 import { ensureRemoteCodexMcpBridge, hasPendingRemoteMcpDrift } from '../remote-ssh/codex-remote-mcp.js';
-import { reconcileCodexAgentProxyEnv } from '../remote-ssh/agent-proxy.js';
+import {
+  hasPendingAgentProxyReconcile,
+  reconcileCodexAgentProxyEnv,
+  setAgentProxyLiveTurnChecker,
+} from '../remote-ssh/agent-proxy.js';
 import { ensureRemoteAgentInstalledOrInstall, ensureRemoteHostReady, getRemoteSshPool, isCcMgrUpgradeInFlight } from '../remote-ssh/index.js';
 import {
   recordSessionContextSnapshot,
@@ -4506,6 +4510,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     );
   }
   setRemoteCodexLiveTurnChecker(codexRemoteHasLiveTurn);
+  // agent-proxy 的漂移应用 (重启 daemon / 迁移拆除隧道) 会打断该 host 上
+  // **任一** agent 的在途流量 — 隧道是 codex 与 CC 共用的网络通路, gate
+  // 必须两个通道都看 (R3 review P1), 不能沿用 MCP ensure 的 codex-only
+  // 判定 (那边 daemon 重启只影响 codex, 语义不同)。
+  function remoteAgentHasLiveTurn(hostId: string): boolean {
+    return maker.listActiveSessions().some(
+      (s) =>
+        s.remoteHostId === hostId &&
+        (s.agentKind === 'codex' || s.agentKind === 'claude-code') &&
+        (agentInputCoordinatorHolder?.hasActiveTurnForRewind(s.id) ?? false),
+    );
+  }
+  setAgentProxyLiveTurnChecker(remoteAgentHasLiveTurn);
 
   async function detachIdleRemoteCodexSessionsOnHost(hostId: string, reason: string): Promise<void> {
     const detachTasks: Array<Promise<void>> = [];
@@ -4536,22 +4553,43 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const session = maker.getSession(sessionId);
     const remoteHostId = session?.remoteHostId;
     if (!remoteHostId) return;
+    const host = getRemoteSshPool().get(remoteHostId);
+    const hostReady = host?.getStatus() === 'ready';
+    // agent-proxy 的 live-turn defer 在这里补刀 — codex 与 CC 的 turn 收口
+    // 都算 (隧道是两个 agent 共用的通路, gate 也共用, R3 review P1)。只有
+    // 确有 pending (defer / 失败) 时才跑, 稳态下不为每次 turn 结束白付一次
+    // 远端 cat RTT。失败不阻断后续 (自身已重新记 pending)。
+    const reconcileIfPending =
+      hostReady && host && hasPendingAgentProxyReconcile(remoteHostId)
+        ? reconcileCodexAgentProxyEnv(host).catch((err) => {
+            log.warn('agent-proxy reconcile on turn settled failed', {
+              sessionId,
+              hostId: remoteHostId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          })
+        : Promise.resolve();
     if (session.agentKind === 'codex') {
-      const host = getRemoteSshPool().get(remoteHostId);
-      if (host?.getStatus() !== 'ready') return;
-      void ensureRemoteCodexMcpBridge(host, {
-        ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
-        hasLiveTurnOnHost: codexRemoteHasLiveTurn,
-        isCollabEnabled: () => getPluginRegistry().isEnabled('collab'),
-        isMakerMemoryEnabled: () => maker.makerMemory?.isEnabled() ?? false,
-      }).then(async (result) => {
-        if (result.ok && result.daemonRebootstrapped && !codexRemoteHasLiveTurn(remoteHostId)) {
-          await detachIdleRemoteCodexSessionsOnHost(remoteHostId, 'codex-mcp-turn-settled-rebootstrap');
-        }
-      });
+      if (!hostReady || !host) return;
+      // 与 session-start 路径同序: 先 reconcile 再 MCP ensure (codex R20 P1)。
+      void reconcileIfPending
+        .then(() =>
+          ensureRemoteCodexMcpBridge(host, {
+            ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
+            hasLiveTurnOnHost: codexRemoteHasLiveTurn,
+            isCollabEnabled: () => getPluginRegistry().isEnabled('collab'),
+            isMakerMemoryEnabled: () => maker.makerMemory?.isEnabled() ?? false,
+          }),
+        )
+        .then(async (result) => {
+          if (result?.ok && result.daemonRebootstrapped && !codexRemoteHasLiveTurn(remoteHostId)) {
+            await detachIdleRemoteCodexSessionsOnHost(remoteHostId, 'codex-mcp-turn-settled-rebootstrap');
+          }
+        });
       return;
     }
     if (session.agentKind === 'claude-code') {
+      void reconcileIfPending;
       getRemoteCcTurnSettledHandler()?.(sessionId);
     }
   };

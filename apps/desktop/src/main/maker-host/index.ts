@@ -1038,6 +1038,9 @@ export function getMaker(): Maker {
             // 继续 probe 会 attach 到 stale daemon, UI 报 tunnel active 而
             // codex 流量走旧路由 (codex R10 P1): 按 bootstrap 失败抛出, 让
             // session start 显式报错, 而不是静默复用。
+            // deferredForLiveTurn (host 上有别的 turn 在跑) 则放行 attach:
+            // 这正是「不 mid-turn 杀 daemon」的代价 — 新 session 暂用旧
+            // env, turn-done 挂钩补刀后自愈。
             const reconciled = await reconcileCodexAgentProxyEnv(remoteHost);
             if (reconciled.markerChanged && !reconciled.daemonRestarted) {
               throw new Error(

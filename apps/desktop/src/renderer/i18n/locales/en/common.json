@@ -268,13 +268,22 @@
           "keyHint": "Read a private key file directly. We don't store passphrases, so encrypted keys aren't supported — use this only when ssh-agent isn't available."
         },
         "identityFile": "Identity file path",
-        "agentProxy": "Route agent traffic via local proxy",
-        "agentProxyTip": "Open a 127.0.0.1 port on the remote that tunnels back over SSH to a proxy on this machine; remote codex / Claude Code traffic flows out through it",
-        "agentProxyAddr": "Local proxy address",
-        "agentProxyHint": "Opens a 127.0.0.1 port on the remote, tunneled over SSH back to your local proxy (e.g. Clash on 7890). {{appName}} does not provide a proxy — only the tunnel; the remote agent's HTTPS_PROXY points at the tunnel and domains are resolved by your proxy. Toggling restarts the remote codex daemon once to take effect.",
-        "agentProxyAddrInvalid": "Expected host:port, e.g. 127.0.0.1:7890",
         "cancel": "Cancel",
-        "submit": "Add machine"
+        "submit": "Add machine",
+        "agentProxy": "Route agent traffic via proxy",
+        "agentProxyTip": "Send remote codex / Claude Code model traffic through a proxy: either a Cindy-managed SSH tunnel back to your local proxy, or a remote-reachable proxy URL you provide",
+        "agentProxyModeTunnel": "Cindy-managed tunnel",
+        "agentProxyModeTunnelDesc": "Dedicated SSH tunnel back to your local proxy, fixed remote port, auto-reconnects",
+        "agentProxyModeEnv": "Bring your own proxy (env vars only)",
+        "agentProxyModeEnvDesc": "Provide a proxy URL reachable from the remote; you maintain the tunnel/reachability",
+        "agentProxyAddr": "Local proxy address",
+        "agentProxyHint": "A fixed port on the remote 127.0.0.1 is tunneled over a dedicated, Cindy-managed SSH connection back to your local proxy (e.g. Clash on 7890). {{appName}} does not provide a proxy — only the tunnel; the remote agent's HTTPS_PROXY is pinned to the fixed port and never drifts on reconnect. Changing this restarts the remote codex daemon once.",
+        "agentProxyAddrInvalid": "Expected host:port, e.g. 127.0.0.1:7890",
+        "agentProxyRemotePort": "Fixed remote port",
+        "agentProxyRemotePortInvalid": "Port must be an integer between 1 and 65535",
+        "agentProxyUrl": "Remote-reachable proxy URL",
+        "agentProxyUrlHint": "Resolved on the remote host: a proxy on the remote itself (e.g. your own autossh -R tunnel), a LAN proxy, etc. Supports http / https / socks5.",
+        "agentProxyUrlInvalid": "Must be an http(s):// or socks5:// URL without spaces or quotes"
       },
       "detail": {
         "agentSetupTitle": "Agent setup",
@@ -288,11 +297,6 @@
         "statusInstalled": "Installed",
         "statusNotInstalled": "Not installed",
         "claudeCodeName": "Claude Code",
-        "agentProxyTitle": "Agent proxy tunnel",
-        "agentProxyActive": "Remote 127.0.0.1:{{port}} → local {{target}} · established",
-        "agentProxyPending": "Establishing tunnel → local {{target}}",
-        "agentProxyWaiting": "Host not connected; tunnel will be established on reconnect → local {{target}}",
-        "agentProxyError": "Tunnel failed: {{message}}",
         "button": {
           "install": "Install",
           "reinstall": "Reinstall",
@@ -301,7 +305,15 @@
           "run": "Run",
           "syncAuth": "Sync auth",
           "syncAuthTip": "Copy your local Codex credentials to this remote so you don't need to log in again there"
-        }
+        },
+        "agentProxyTitle": "Agent proxy",
+        "agentProxyActive": "Remote 127.0.0.1:{{port}} → local {{target}} · established",
+        "agentProxyPending": "Establishing tunnel → local {{target}}",
+        "agentProxyWaiting": "Host not connected; resumes automatically on reconnect → local {{target}}",
+        "agentProxyError": "Proxy setup failed: {{message}}",
+        "agentProxyPortBusy": "Remote port {{port}} is busy; waiting for release and retrying… (change the port in settings if it stays busy)",
+        "agentProxyEnvInfo": "Env vars injected → {{url}} (you maintain the route)",
+        "agentProxyEnvPending": "Waiting to apply env vars → {{url}} (takes effect automatically once the host connects)"
       },
       "startSession": {
         "title": "Start a remote Codex session",

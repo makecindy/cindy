@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseProxyAddrInput } from '../RemoteSection';
+import { parseProxyAddrInput, parseProxyUrlInput, parseRemotePortInput } from '../RemoteSection';
 
 describe('parseProxyAddrInput', () => {
   it('parses host:port', () => {
@@ -37,5 +37,40 @@ describe('parseProxyAddrInput', () => {
     expect(parseProxyAddrInput('ho"st:7890')).toBeNull();
     expect(parseProxyAddrInput("[::1']:7890")).toBeNull();
     expect(parseProxyAddrInput('host:7890 ')).toEqual({ localHost: 'host', localPort: 7890 }); // 整串 trim 后合法
+  });
+});
+
+describe('parseRemotePortInput', () => {
+  it('accepts strict integer ports in range', () => {
+    expect(parseRemotePortInput('17893')).toBe(17893);
+    expect(parseRemotePortInput(' 45000 ')).toBe(45000);
+  });
+
+  it('rejects non-integers, out-of-range and suffixed values', () => {
+    expect(parseRemotePortInput('')).toBeNull();
+    expect(parseRemotePortInput('0')).toBeNull();
+    expect(parseRemotePortInput('65536')).toBeNull();
+    expect(parseRemotePortInput('7890abc')).toBeNull();
+    expect(parseRemotePortInput('-1')).toBeNull();
+    expect(parseRemotePortInput('78.9')).toBeNull();
+  });
+});
+
+describe('parseProxyUrlInput', () => {
+  it('accepts http/https/socks5 URLs (与 main 侧 normalizeAgentProxyUrl 同口径)', () => {
+    expect(parseProxyUrlInput('http://127.0.0.1:7890')).toBe('http://127.0.0.1:7890');
+    expect(parseProxyUrlInput(' https://proxy.lan:3128 ')).toBe('https://proxy.lan:3128');
+    expect(parseProxyUrlInput('socks5://10.0.0.5:1080')).toBe('socks5://10.0.0.5:1080');
+    expect(parseProxyUrlInput('socks5h://10.0.0.5:1080')).toBe('socks5h://10.0.0.5:1080');
+  });
+
+  it('rejects unsupported schemes, whitespace, quotes and non-URLs', () => {
+    expect(parseProxyUrlInput('')).toBeNull();
+    expect(parseProxyUrlInput('127.0.0.1:7890')).toBeNull(); // 缺 scheme
+    expect(parseProxyUrlInput('ftp://127.0.0.1:21')).toBeNull();
+    expect(parseProxyUrlInput('http://a b:1')).toBeNull();
+    expect(parseProxyUrlInput("http://x'y:1")).toBeNull();
+    expect(parseProxyUrlInput('http://x"y:1')).toBeNull();
+    expect(parseProxyUrlInput('http://')).toBeNull();
   });
 });

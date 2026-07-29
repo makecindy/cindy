@@ -268,13 +268,22 @@
           "keyHint": "直接读私钥文件。为了不存密码，不支持加密的密钥 —— 仅在 ssh-agent 不可用时使用。"
         },
         "identityFile": "私钥文件路径",
-        "agentProxy": "Agent 流量走本地 Proxy",
-        "agentProxyTip": "在远端开一个 127.0.0.1 端口，经 SSH 隧道转回本机 Proxy，远端 codex / Claude Code 的流量由此流出",
-        "agentProxyAddr": "本地 Proxy 地址",
-        "agentProxyHint": "在远端 127.0.0.1 开端口，经 SSH 隧道转回本机 Proxy（如 Clash 的 7890）。{{appName}} 不提供 Proxy，只建隧道；远端 agent 的 HTTPS_PROXY 会指向隧道口，域名由你的 Proxy 解析。切换后远端 codex daemon 会重启一次以生效。",
-        "agentProxyAddrInvalid": "格式应为 host:port，例如 127.0.0.1:7890",
         "cancel": "取消",
-        "submit": "添加机器"
+        "submit": "添加机器",
+        "agentProxy": "Agent 流量走 Proxy",
+        "agentProxyTip": "让远端 codex / Claude Code 的模型流量经 Proxy 流出：由 Cindy 代建 SSH 隧道回本机 Proxy，或直接注入你自备的远端可达 Proxy 地址",
+        "agentProxyModeTunnel": "Cindy 代建隧道",
+        "agentProxyModeTunnelDesc": "独立 SSH 隧道转回本机 Proxy，固定远端端口，断线自动重连保活",
+        "agentProxyModeEnv": "自备 Proxy（仅注入环境变量）",
+        "agentProxyModeEnvDesc": "填一个在远端可达的 Proxy 地址，隧道与可达性由你自行维护",
+        "agentProxyAddr": "本地 Proxy 地址",
+        "agentProxyHint": "远端 127.0.0.1 的固定端口经 Cindy 维护的独立 SSH 隧道转回本机 Proxy（如 Clash 的 7890）。{{appName}} 不提供 Proxy，只建隧道；远端 agent 的 HTTPS_PROXY 写死这个固定端口，重连不漂移。修改配置后远端 codex daemon 会重启一次以生效。",
+        "agentProxyAddrInvalid": "格式应为 host:port，例如 127.0.0.1:7890",
+        "agentProxyRemotePort": "远端固定端口",
+        "agentProxyRemotePortInvalid": "端口应为 1-65535 的整数",
+        "agentProxyUrl": "远端可达的 Proxy 地址",
+        "agentProxyUrlHint": "该地址在远端解析：可以是远端本机 Proxy（如你用 autossh -R 自建的隧道口）、局域网 Proxy 等。支持 http / https / socks5。",
+        "agentProxyUrlInvalid": "应为 http:// 、https:// 或 socks5:// 开头的 URL，不含空格与引号"
       },
       "detail": {
         "agentSetupTitle": "Agent 设置",
@@ -288,11 +297,6 @@
         "statusInstalled": "已安装",
         "statusNotInstalled": "未安装",
         "claudeCodeName": "Claude Code",
-        "agentProxyTitle": "Agent Proxy 隧道",
-        "agentProxyActive": "远端 127.0.0.1 端口 {{port}} → 本机 {{target}} · 已建立",
-        "agentProxyPending": "隧道建立中 → 本机 {{target}}",
-        "agentProxyWaiting": "主机未连接，重连后自动建立 → 本机 {{target}}",
-        "agentProxyError": "隧道建立失败：{{message}}",
         "button": {
           "install": "安装",
           "reinstall": "重新安装",
@@ -301,7 +305,15 @@
           "run": "运行",
           "syncAuth": "同步登录态",
           "syncAuthTip": "把本机的 Codex 凭证复制到这台远端，免去在远端重新登录"
-        }
+        },
+        "agentProxyTitle": "Agent Proxy",
+        "agentProxyActive": "远端 127.0.0.1 端口 {{port}} → 本机 {{target}} · 已建立",
+        "agentProxyPending": "隧道建立中 → 本机 {{target}}",
+        "agentProxyWaiting": "主机未连接，重连后自动恢复 → 本机 {{target}}",
+        "agentProxyError": "Proxy 配置失败：{{message}}",
+        "agentProxyPortBusy": "远端端口 {{port}} 被占用，正在等待释放并自动重试…（长时间占用可在设置中更换端口）",
+        "agentProxyEnvInfo": "已注入环境变量 → {{url}}（通路由你自行维护）",
+        "agentProxyEnvPending": "等待应用环境变量 → {{url}}（主机连接后自动生效）"
       },
       "startSession": {
         "title": "在这台远端开新 Codex 对话",

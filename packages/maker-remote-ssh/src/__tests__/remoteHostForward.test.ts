@@ -464,3 +464,43 @@ describe('RemoteHost remote forwarding', () => {
     expect(client.forwardInCalls).toHaveLength(1);
   });
 });
+
+describe('RemoteHost remote forwarding — exactRemotePort (固定端口)', () => {
+  it('binds only the fixed port and succeeds when it is free', async () => {
+    const client = new FakeClient();
+    const host = makeReadyHost(client);
+    const fwd = await host.ensureRemoteForward({
+      localHost: '127.0.0.1',
+      localPort: 7890,
+      preferredRemotePort: 45000,
+      exactRemotePort: true,
+    });
+    expect(fwd.remotePort).toBe(45000);
+    expect(client.forwardInCalls).toEqual([{ addr: '127.0.0.1', port: 45000 }]);
+  });
+
+  it('fails without falling back to other candidates when the fixed port is busy', async () => {
+    // 固定端口语义: 远端 env 写死该端口, 顺延 = env 失效 + 必须重启 daemon,
+    // 宁可失败让调用方 (agent-proxy 保活器) 重试/清理残留监听。
+    const client = new FakeClient((port) => port !== 45000);
+    const host = makeReadyHost(client);
+    await expect(
+      host.ensureRemoteForward({
+        localHost: '127.0.0.1',
+        localPort: 7890,
+        preferredRemotePort: 45000,
+        exactRemotePort: true,
+      }),
+    ).rejects.toThrow(/remote port forwarding failed/);
+    expect(client.forwardInCalls).toEqual([{ addr: '127.0.0.1', port: 45000 }]);
+  });
+
+  it('rejects exactRemotePort without preferredRemotePort at the entrance', async () => {
+    const client = new FakeClient();
+    const host = makeReadyHost(client);
+    await expect(
+      host.ensureRemoteForward({ localHost: '127.0.0.1', localPort: 7890, exactRemotePort: true }),
+    ).rejects.toThrow(/exactRemotePort requires preferredRemotePort/);
+    expect(client.forwardInCalls).toHaveLength(0);
+  });
+});

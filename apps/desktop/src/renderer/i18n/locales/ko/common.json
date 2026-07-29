@@ -268,13 +268,22 @@
           "keyHint": "개인 키 파일을 직접 읽습니다. 암호를 저장하지 않으므로 암호화된 키는 지원되지 않습니다 — ssh-agent 를 사용할 수 없을 때만 사용하세요."
         },
         "identityFile": "개인 키 파일 경로",
-        "agentProxy": "Agent 트래픽을 로컬 프록시로 우회",
-        "agentProxyTip": "원격에 127.0.0.1 포트를 열고 SSH 터널로 이 컴퓨터의 프록시로 중계합니다. 원격 codex / Claude Code 트래픽이 그 경로로 나갑니다",
-        "agentProxyAddr": "로컬 프록시 주소",
-        "agentProxyHint": "원격 127.0.0.1에 포트를 열고 SSH 터널로 로컬 프록시(예: Clash 7890)로 중계합니다. {{appName}}은(는) 프록시를 제공하지 않고 터널만 만듭니다. 원격 Agent의 HTTPS_PROXY가 터널 포트를 가리키고, 도메인은 프록시에서 해석됩니다. 전환 후 원격 codex daemon이 한 번 재시작됩니다.",
-        "agentProxyAddrInvalid": "host:port 형식이어야 합니다(예: 127.0.0.1:7890)",
         "cancel": "취소",
-        "submit": "머신 추가"
+        "submit": "머신 추가",
+        "agentProxy": "Agent 트래픽을 프록시로 우회",
+        "agentProxyTip": "원격 codex / Claude Code 모델 트래픽을 프록시로 내보냅니다. Cindy가 관리하는 SSH 터널로 로컬 프록시에 연결하거나, 원격에서 접근 가능한 프록시 URL을 직접 지정합니다",
+        "agentProxyModeTunnel": "Cindy 관리 터널",
+        "agentProxyModeTunnelDesc": "전용 SSH 터널로 로컬 프록시에 중계. 원격 포트 고정, 끊기면 자동 재연결",
+        "agentProxyModeEnv": "직접 준비한 프록시(환경 변수만 주입)",
+        "agentProxyModeEnvDesc": "원격에서 접근 가능한 프록시 주소를 입력하세요. 터널/도달성은 직접 관리합니다",
+        "agentProxyAddr": "로컬 프록시 주소",
+        "agentProxyHint": "원격 127.0.0.1의 고정 포트를 Cindy가 관리하는 전용 SSH 연결로 로컬 프록시(예: Clash 7890)에 중계합니다. {{appName}}은(는) 프록시를 제공하지 않고 터널만 만듭니다. 원격 Agent의 HTTPS_PROXY는 고정 포트로 고정되어 재연결 시 변하지 않습니다. 설정을 바꾸면 원격 codex daemon이 한 번 재시작됩니다.",
+        "agentProxyAddrInvalid": "host:port 형식이어야 합니다(예: 127.0.0.1:7890)",
+        "agentProxyRemotePort": "원격 고정 포트",
+        "agentProxyRemotePortInvalid": "포트는 1~65535 사이의 정수여야 합니다",
+        "agentProxyUrl": "원격에서 접근 가능한 프록시 주소",
+        "agentProxyUrlHint": "원격 호스트에서 해석됩니다. 원격 자체의 프록시(예: autossh -R로 직접 만든 터널 포트), LAN 프록시 등. http / https / socks5 지원.",
+        "agentProxyUrlInvalid": "공백/따옴표 없이 http(s):// 또는 socks5:// URL이어야 합니다"
       },
       "detail": {
         "agentSetupTitle": "에이전트 설정",
@@ -288,11 +297,6 @@
         "statusInstalled": "설치됨",
         "statusNotInstalled": "설치되지 않음",
         "claudeCodeName": "Claude Code",
-        "agentProxyTitle": "Agent 프록시 터널",
-        "agentProxyActive": "원격 127.0.0.1:{{port}} → 로컬 {{target}} · 설정됨",
-        "agentProxyPending": "터널 설정 중 → 로컬 {{target}}",
-        "agentProxyWaiting": "호스트 미연결 — 재연결 후 자동 설정 → 로컬 {{target}}",
-        "agentProxyError": "터널 설정 실패: {{message}}",
         "button": {
           "install": "설치",
           "reinstall": "재설치",
@@ -301,7 +305,15 @@
           "run": "실행",
           "syncAuth": "인증 동기화",
           "syncAuthTip": "로컬 Codex 자격 증명을 이 원격에 복사해서 다시 로그인하지 않도록 합니다"
-        }
+        },
+        "agentProxyTitle": "Agent 프록시",
+        "agentProxyActive": "원격 127.0.0.1:{{port}} → 로컬 {{target}} · 설정됨",
+        "agentProxyPending": "터널 설정 중 → 로컬 {{target}}",
+        "agentProxyWaiting": "호스트 미연결 — 재연결 후 자동 복구 → 로컬 {{target}}",
+        "agentProxyError": "프록시 설정 실패: {{message}}",
+        "agentProxyPortBusy": "원격 포트 {{port}}이(가) 사용 중입니다. 해제를 기다려 자동 재시도합니다… (계속 사용 중이면 설정에서 포트를 변경하세요)",
+        "agentProxyEnvInfo": "환경 변수 주입됨 → {{url}} (경로는 직접 관리)",
+        "agentProxyEnvPending": "환경 변수 적용 대기 중 → {{url}} (호스트 연결 후 자동 적용)"
       },
       "startSession": {
         "title": "이 원격에서 Codex 세션 시작",
