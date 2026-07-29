@@ -334,7 +334,17 @@ export function AddProviderWizard({
    * 每个 runtime(双 runtime 预设两端模型集可以不同,cc-only 模型不能写进 codex,反之亦然)。
    */
   const [picks, setPicks] = useState<
-    Map<string, { name: string; checked: boolean; recommended: boolean; agents: AgentKind[] }>
+    Map<
+      string,
+      {
+        name: string;
+        checked: boolean;
+        recommended: boolean;
+        agents: AgentKind[];
+        /** 列模型端点上报的上下文窗口(拉取新增/回填);完成创建时预设值优先、本值兜底。 */
+        contextWindow?: number;
+      }
+    >
   >(new Map());
 
   useEffect(() => {
@@ -554,7 +564,13 @@ export function AddProviderWizard({
     // 预设推荐模型先入清单(预勾);归属 = 预设里列出该模型的全部 runtime。
     const initial = new Map<
       string,
-      { name: string; checked: boolean; recommended: boolean; agents: AgentKind[] }
+      {
+        name: string;
+        checked: boolean;
+        recommended: boolean;
+        agents: AgentKind[];
+        contextWindow?: number;
+      }
     >();
     for (const agent of Object.keys(preset.runtimes) as AgentKind[]) {
       for (const m of preset.runtimes[agent]?.models ?? []) {
@@ -601,7 +617,13 @@ export function AddProviderWizard({
     const results = await Promise.all(
       agents.map(async (agent) => {
         const rt = preset.runtimes[agent];
-        if (!rt) return { agent, ok: false, models: [] as { id: string; name: string }[] };
+        if (!rt) {
+          return {
+            agent,
+            ok: false,
+            models: [] as { id: string; name: string; contextWindow?: number }[],
+          };
+        }
         try {
           const r = await window.electronAPI.maker.fetchProviderModels({
             agent,
@@ -614,7 +636,11 @@ export function AddProviderWizard({
           });
           return { agent, ok: !!(r.ok && r.models), models: r.models ?? [] };
         } catch {
-          return { agent, ok: false, models: [] as { id: string; name: string }[] };
+          return {
+            agent,
+            ok: false,
+            models: [] as { id: string; name: string; contextWindow?: number }[],
+          };
         }
       }),
     );
@@ -628,11 +654,29 @@ export function AddProviderWizard({
         for (const m of models) {
           const existing = next.get(m.id);
           if (existing) {
-            if (!preservePresetOwnership && !existing.agents.includes(agent)) {
-              next.set(m.id, { ...existing, agents: [...existing.agents, agent] });
+            const mergedAgents =
+              !preservePresetOwnership && !existing.agents.includes(agent)
+                ? [...existing.agents, agent]
+                : existing.agents;
+            // 端点上报的窗口只补空,不覆盖已有值(预设推荐模型的窗口在完成创建时
+            // 以预设为准,这里补的是「预设没写窗口」的兜底)。
+            const backfillWindow =
+              existing.contextWindow === undefined && m.contextWindow !== undefined;
+            if (mergedAgents !== existing.agents || backfillWindow) {
+              next.set(m.id, {
+                ...existing,
+                agents: mergedAgents,
+                ...(backfillWindow ? { contextWindow: m.contextWindow } : {}),
+              });
             }
           } else if (!preservePresetOwnership) {
-            next.set(m.id, { name: m.name, checked: false, recommended: false, agents: [agent] });
+            next.set(m.id, {
+              name: m.name,
+              checked: false,
+              recommended: false,
+              agents: [agent],
+              ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+            });
           }
         }
       }
@@ -718,7 +762,7 @@ export function AddProviderWizard({
     const preset = sel.preset;
     const selected = [...picks.entries()]
       .filter(([, v]) => v.checked)
-      .map(([id, v]) => ({ id, name: v.name, agents: v.agents }));
+      .map(([id, v]) => ({ id, name: v.name, agents: v.agents, contextWindow: v.contextWindow }));
     if (selected.length === 0) {
       toast.error(t('settings.providers.wizard.noModelSelected'));
       return;
@@ -741,12 +785,13 @@ export function AddProviderWizard({
           .filter((m) => m.agents.includes(agent))
           .map((m) => {
             const presetModel = rt.models.find((candidate) => candidate.id === m.id);
+            // 预设策展值优先;拉取新增模型没有预设条目,落端点上报的发现值,
+            // 不再无窗口入库退回 200K 默认。
+            const contextWindow = presetModel?.contextWindow ?? m.contextWindow;
             return {
               id: m.id,
               name: m.name,
-              ...(presetModel?.contextWindow !== undefined
-                ? { contextWindow: presetModel.contextWindow }
-                : {}),
+              ...(contextWindow !== undefined ? { contextWindow } : {}),
             };
           });
         if (agentModels.length === 0) continue;

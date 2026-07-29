@@ -374,6 +374,31 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(config.runtimes.codex?.models.map((model) => model.id)).toEqual(['glm-5.2']);
   });
 
+  it('拉取新增模型带端点上报的 contextWindow 入库(Codex P1 回归)', async () => {
+    // 预设未收录的发现模型没有预设窗口可回填:丢弃端点上报值会让它落 200K
+    // 默认,显示与压缩阈值双错——完成创建必须把发现值写进配置。
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({
+      ok: true,
+      models: [{ id: 'deepseek-v4', name: 'DeepSeek V4', contextWindow: 262_144 }],
+    });
+    renderWizard('deepseek');
+
+    await waitFor(() =>
+      expect(screen.getByText('settings.providers.wizard.nameLabel')).not.toBeNull(),
+    );
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    // 拉取新增模型默认不勾选,点选后完成。
+    fireEvent.click(await screen.findByText('DeepSeek V4'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+    expect(config.runtimes['claude-code']?.models).toEqual([
+      expect.objectContaining({ id: 'deepseek-v4', contextWindow: 262_144 }),
+    ]);
+  });
+
   it('LiteLLM:清空可编辑端点后不回退预设地址，也不能继续', async () => {
     renderWizard('litellm');
 
