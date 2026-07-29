@@ -184,6 +184,15 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
   });
 
+  it('isolates image descriptions from unmatched strong delimiters in surrounding prose', () => {
+    const source = '**outer ![text.**Next](missing.png)';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(source);
+    const html = renderMarkdown(source);
+    expect(html).toContain('alt="text.**Next"');
+    expect(html).not.toContain('cindy-strong-boundary');
+  });
+
   it('preserves protected Markdown syntax inside image descriptions', () => {
     const inlineCode = '![`**终点。**正文`](missing.png)';
 
@@ -239,6 +248,19 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
     const html = renderMarkdownWithStrictMath(source);
     expect(html).toContain('<code class="language-math math-inline">2**3.**x</code>');
+    expect(html).not.toContain('cindy-strong-boundary');
+  });
+
+  it('escapes loose math delimiters recovered from CJK-truncated bare URL tails', () => {
+    const source = 'https://example.com/foo（$5 **重点。**正文 $10';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      'https://example.com/foo<!--cindy-strong-boundary-->（\\$5 **重点。**<!--cindy-strong-boundary-->正文 \\$10',
+    );
+    const html = renderMarkdownWithStrictMath(source);
+    expect(html).toContain(
+      '<a href="https://example.com/foo">https://example.com/foo</a>（$5 <strong>重点。</strong>正文 $10',
+    );
     expect(html).not.toContain('cindy-strong-boundary');
   });
 
@@ -375,6 +397,17 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     ).join('\n\n');
 
     expect(normalizeStrongDelimiterBoundaries(source, { preserveTexDelimiters: true })).toBe(
+      source.replaceAll('**正文', '**<!--cindy-strong-boundary-->正文'),
+    );
+  });
+
+  it('handles many loose math spans and strong-boundary repairs without cross-product scans', () => {
+    const source = [
+      ...Array.from({ length: 2_000 }, (_, index) => `$value_${index} $`),
+      ...Array.from({ length: 2_000 }, (_, index) => `段落 ${index}：**重点。**正文`),
+    ].join('\n\n');
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
       source.replaceAll('**正文', '**<!--cindy-strong-boundary-->正文'),
     );
   });

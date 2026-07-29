@@ -347,17 +347,48 @@ function collectRecoveredTailLinkRanges(node: Nodes, ranges: OffsetRange[], mark
   }
 }
 
+function expandedRecoveredTailRange(
+  siblings: Nodes[],
+  childIndex: number,
+  recoveredTail: OffsetRange,
+  markdown: string,
+): OffsetRange {
+  let cursor = recoveredTail.start;
+
+  for (let index = childIndex + 1; index < siblings.length; index += 1) {
+    const sibling = siblings[index];
+    let value: string | null = null;
+    if (sibling.type === 'text') {
+      value = sibling.value;
+    } else if (sibling.type === 'link') {
+      const onlyChild = sibling.children.length === 1 ? sibling.children[0] : null;
+      if (onlyChild?.type === 'text' && onlyChild.value === sibling.url) value = onlyChild.value;
+    }
+
+    if (value === null || !markdown.startsWith(value, cursor)) break;
+    cursor += value.length;
+  }
+
+  return { start: recoveredTail.start, end: Math.max(recoveredTail.end, cursor) };
+}
+
 function collectRecoveredTailSyntaxRanges(
   node: Nodes,
   ranges: OffsetRange[],
   mathTailStarts: number[],
+  looseMathRanges: OffsetRange[],
   markdown: string,
 ): void {
   if (!('children' in node)) return;
 
-  for (const child of node.children as Nodes[]) {
+  const children = node.children as Nodes[];
+  for (let childIndex = 0; childIndex < children.length; childIndex += 1) {
+    const child = children[childIndex];
     const range = nodeRange(child);
-    const recoveredTail = range ? recoveredAutolinkTailRange(child, range, markdown) : null;
+    const initialRecoveredTail = range ? recoveredAutolinkTailRange(child, range, markdown) : null;
+    const recoveredTail = initialRecoveredTail
+      ? expandedRecoveredTailRange(children, childIndex, initialRecoveredTail, markdown)
+      : null;
 
     if (recoveredTail) {
       const tail = markdown.slice(recoveredTail.start, recoveredTail.end);
@@ -367,12 +398,15 @@ function collectRecoveredTailSyntaxRanges(
       visit(tailTree, (tailNode) => {
         if (tailNode.type !== 'inlineMath' && tailNode.type !== 'math') return;
         const tailNodeRange = nodeRange(tailNode);
-        if (
-          tailNodeRange &&
-          POTENTIAL_BOUNDARY_RE.test(tail.slice(tailNodeRange.start, tailNodeRange.end))
-        ) {
-          mathTailStarts.push(recoveredTail.start);
+        if (!tailNodeRange) return;
+        if (tailNode.type === 'inlineMath' && isLooseInlineMath(tailNode, tail)) {
+          looseMathRanges.push({
+            start: recoveredTail.start + tailNodeRange.start,
+            end: recoveredTail.start + tailNodeRange.end,
+          });
         }
+        if (!POTENTIAL_BOUNDARY_RE.test(tail.slice(tailNodeRange.start, tailNodeRange.end))) return;
+        mathTailStarts.push(recoveredTail.start);
       });
       ranges.push(
         ...tailRanges.map((tailRange) => ({
@@ -382,7 +416,7 @@ function collectRecoveredTailSyntaxRanges(
       );
     }
 
-    collectRecoveredTailSyntaxRanges(child, ranges, mathTailStarts, markdown);
+    collectRecoveredTailSyntaxRanges(child, ranges, mathTailStarts, looseMathRanges, markdown);
   }
 }
 
@@ -519,11 +553,13 @@ function collectProseRanges(
   range: OffsetRange;
   protectedRanges: OffsetRange[];
   recoveredMathTailStarts: number[];
+  recoveredLooseMathRanges: OffsetRange[];
 }> {
   const proseRanges: Array<{
     range: OffsetRange;
     protectedRanges: OffsetRange[];
     recoveredMathTailStarts: number[];
+    recoveredLooseMathRanges: OffsetRange[];
   }> = [];
 
   visit(tree, (node, _index, parent) => {
@@ -537,11 +573,18 @@ function collectProseRanges(
     if (!range) return;
     const protectedRanges: OffsetRange[] = [];
     const recoveredMathTailStarts: number[] = [];
+    const recoveredLooseMathRanges: OffsetRange[] = [];
     collectProtectedRanges(node, protectedRanges, markdown);
     // remarkTruncateCjkUrls 会把被首个裸链接误吞的尾段重新拆成文本和链接，
     // 尾段的 Markdown 语法没有原始解析节点，需要重新解析后补回保护范围；
     // 插件新生成的链接没有源码位置，再按实际字符位置补回其范围。
-    collectRecoveredTailSyntaxRanges(node, protectedRanges, recoveredMathTailStarts, markdown);
+    collectRecoveredTailSyntaxRanges(
+      node,
+      protectedRanges,
+      recoveredMathTailStarts,
+      recoveredLooseMathRanges,
+      markdown,
+    );
     collectRecoveredTailLinkRanges(node, protectedRanges, markdown);
     protectedRanges.push(...collectProjectDeepLinkRanges(markdown, range));
     // 保留的 TeX 区间按源码顺序收集。先定位首个可能重叠的区间，再只遍历
@@ -562,6 +605,7 @@ function collectProseRanges(
       range,
       protectedRanges: mergeOffsetRanges(protectedRanges),
       recoveredMathTailStarts,
+      recoveredLooseMathRanges,
     });
   });
 
@@ -592,28 +636,40 @@ function collectLooseMathDelimiterOffsets(
   tree: Root,
   markdown: string,
   boundaryRepairs: BoundaryRepair[],
+  recoveredLooseMathRanges: OffsetRange[],
 ): number[] {
   const offsets: number[] = [];
+  const looseMathRanges = [...recoveredLooseMathRanges];
   visit(tree, 'inlineMath', (node) => {
     if (!isLooseInlineMath(node, markdown)) return;
     const range = nodeRange(node);
-    if (
-      !range ||
-      !boundaryRepairs.some(
-        (repair) =>
-          repair.separatorOffset > range.start && repair.separatorOffset < range.end,
-      )
-    ) {
-      return;
+    if (range) looseMathRanges.push(range);
+  });
+
+  const repairOffsets = boundaryRepairs
+    .map((repair) => repair.separatorOffset)
+    .sort((left, right) => left - right);
+  for (const range of looseMathRanges) {
+    let low = 0;
+    let high = repairOffsets.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (repairOffsets[middle] <= range.start) low = middle + 1;
+      else high = middle;
     }
+    if (low >= repairOffsets.length || repairOffsets[low] >= range.end) continue;
 
     for (let cursor = range.start; cursor < range.end && markdown[cursor] === '$'; cursor += 1) {
       offsets.push(cursor);
     }
-    for (let cursor = range.end - 1; cursor >= range.start && markdown[cursor] === '$'; cursor -= 1) {
+    for (
+      let cursor = range.end - 1;
+      cursor >= range.start && markdown[cursor] === '$';
+      cursor -= 1
+    ) {
       offsets.push(cursor);
     }
-  });
+  }
   return offsets;
 }
 
@@ -621,13 +677,26 @@ function collectBoundaryRepairs(
   markdown: string,
   range: OffsetRange,
   protectedRanges: OffsetRange[],
+  isolatedRanges: OffsetRange[],
 ): BoundaryRepair[] {
   const repairs: BoundaryRepair[] = [];
   let cursor = range.start;
   const openStrongStarts: number[] = [];
   let protectedIndex = 0;
+  let isolatedIndex = firstRangeEndingAfter(isolatedRanges, range.start);
 
   while (cursor < range.end) {
+    const isolatedRange = isolatedRanges[isolatedIndex];
+    if (isolatedRange && cursor >= isolatedRange.end) {
+      openStrongStarts.length = 0;
+      isolatedIndex += 1;
+      continue;
+    }
+    if (isolatedRange && cursor === isolatedRange.start) {
+      // 图片说明的加粗标记只在说明内部配对，不能继承外层正文的未闭合状态。
+      openStrongStarts.length = 0;
+    }
+
     const protectedRange = protectedRanges[protectedIndex];
     if (protectedRange && cursor >= protectedRange.end) {
       protectedIndex += 1;
@@ -707,12 +776,16 @@ export function normalizeStrongDelimiterBoundaries(
     );
   }
   const proseRanges = collectProseRanges(tree, markdown, preservedTexDelimiterRanges);
+  const imageDescriptionRanges = collectImageDescriptionRanges(tree, markdown);
   const boundaryRepairs = proseRanges.flatMap(({ range, protectedRanges }) =>
-    collectBoundaryRepairs(markdown, range, protectedRanges),
+    collectBoundaryRepairs(markdown, range, protectedRanges, imageDescriptionRanges),
   );
   const boundaryInsertions = boundaryRepairs.map((repair) => repair.separatorOffset);
   const recoveredMathTailStarts = proseRanges.flatMap(
     ({ recoveredMathTailStarts: starts }) => starts,
+  );
+  const recoveredLooseMathRanges = proseRanges.flatMap(
+    ({ recoveredLooseMathRanges: ranges }) => ranges,
   );
   if (boundaryInsertions.length === 0 && recoveredMathTailStarts.length === 0) return markdown;
 
@@ -731,8 +804,8 @@ export function normalizeStrongDelimiterBoundaries(
     tree,
     markdown,
     boundaryRepairs,
+    recoveredLooseMathRanges,
   );
-  const imageDescriptionRanges = collectImageDescriptionRanges(tree, markdown);
   const imageRepairs = boundaryRepairs.filter((repair) =>
     imageDescriptionRanges.some(
       (range) =>
