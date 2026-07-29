@@ -57,7 +57,12 @@ import {
   saveGhostAppearancePreset,
   saveGhostAppearanceWithPreset,
 } from '../appearanceStore';
-import { hasRef, removeGhostOwnedRefs, removeRefs } from '../../cindy-media/ledger';
+import {
+  hasRef,
+  removeGhostOwnedRefs,
+  removeRefs,
+  removeRefsExceptHash,
+} from '../../cindy-media/ledger';
 
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
@@ -163,7 +168,14 @@ describe('appearance preset store', () => {
 
   it('活动皮肤文件提交失败时恢复旧媒体引用', async () => {
     await saveGhostAppearance(appearance('Before'), { background: HASH_A }, 'skin');
-    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(new Error('disk full'));
+    const rename = fs.promises.rename.bind(fs.promises);
+    let renameCount = 0;
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (...args) => {
+      renameCount += 1;
+      // marker 已落盘、媒体引用已建立后，让活动外观文件提交失败。
+      if (renameCount === 2) throw new Error('disk full');
+      return rename(...args);
+    });
 
     await expect(
       saveGhostAppearance(appearance('After', HASH_B), { background: HASH_B }, 'skin'),
@@ -171,6 +183,32 @@ describe('appearance preset store', () => {
 
     expect((await readGhostAppearance())?.name).toBe('Before');
     expect([...mocks.refs.get('skin-background:active')!]).toEqual([HASH_A]);
+  });
+
+  it('活动皮肤写盘与即时补偿都失败时保留事务供后续恢复', async () => {
+    await saveGhostAppearance(appearance('Before'), { background: HASH_A }, 'skin');
+    const rename = fs.promises.rename.bind(fs.promises);
+    let renameCount = 0;
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (...args) => {
+      renameCount += 1;
+      if (renameCount === 2) throw new Error('disk full');
+      return rename(...args);
+    });
+    vi.mocked(removeRefsExceptHash)
+      .mockRejectedValueOnce(new Error('ledger unavailable'))
+      .mockRejectedValueOnce(new Error('ledger unavailable'));
+
+    await expect(
+      saveGhostAppearance(appearance('After', HASH_B), { background: HASH_B }, 'skin'),
+    ).rejects.toThrow('自动恢复未完成');
+
+    expect((await readGhostAppearance())?.name).toBe('Before');
+    expect(mocks.refs.get('skin-background:active')).toEqual(new Set([HASH_A, HASH_B]));
+    expect(fs.existsSync(path.join(mocks.root, 'appearance-transaction.v1.json'))).toBe(true);
+
+    await expect(recoverGhostAppearanceTransaction()).resolves.toBeUndefined();
+    expect([...mocks.refs.get('skin-background:active')!]).toEqual([HASH_A]);
+    expect(fs.existsSync(path.join(mocks.root, 'appearance-transaction.v1.json'))).toBe(false);
   });
 
   it('预设库文件提交失败时恢复旧媒体引用', async () => {

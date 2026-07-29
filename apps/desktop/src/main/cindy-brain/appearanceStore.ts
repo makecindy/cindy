@@ -47,6 +47,17 @@ export class GhostAppearanceRecoveryError extends Error {
   }
 }
 
+class GhostAppearanceCompensationError extends Error {
+  constructor(readonly originalError: unknown) {
+    super('皮肤写入失败且媒体引用补偿失败');
+    this.name = 'GhostAppearanceCompensationError';
+  }
+}
+
+function unwrapCompensationError(error: unknown): unknown {
+  return error instanceof GhostAppearanceCompensationError ? error.originalError : error;
+}
+
 function serializeMutationWithoutRecovery<T>(operation: () => Promise<T>): Promise<T> {
   const run = mutationTail.then(operation);
   mutationTail = run.then(
@@ -407,7 +418,11 @@ async function saveGhostAppearanceUnsafe(
   } catch (error) {
     // 引用必须先于文件提交建立，防止回收器窗口；反向失败路径则把引用精确恢复到
     // 旧快照，避免磁盘满/权限错误重复累积不可达 blob。
-    await reconcileActiveMedia(previousHashes, previousAppearance?.sourceGhostId).catch(() => {});
+    try {
+      await reconcileActiveMedia(previousHashes, previousAppearance?.sourceGhostId);
+    } catch {
+      throw new GhostAppearanceCompensationError(error);
+    }
     throw error;
   }
   if (!deferCleanup) {
@@ -445,6 +460,36 @@ async function reconcileActiveMedia(
   }
 }
 
+async function saveGhostAppearanceTransactionallyUnsafe(
+  snapshot: GhostAppearanceSnapshot,
+  mediaHashes: AppearanceMediaHashes,
+  ghostId: string | undefined,
+  customized: { dim: boolean; surfaceOpacity: boolean },
+): Promise<void> {
+  const [previousAppearance, previousPresets] = await Promise.all([
+    readGhostAppearanceRaw(),
+    readPresetLibraryRaw(),
+  ]);
+  await atomicWriteJson(transactionFilePath(), {
+    version: 1,
+    previousAppearance,
+    previousPresets,
+  } satisfies PersistedAppearanceTransaction);
+  try {
+    await saveGhostAppearanceUnsafe(snapshot, mediaHashes, ghostId, customized);
+    // marker 删除是逻辑提交点；此前读取侧继续暴露旧快照。
+    await fs.rm(transactionFilePath());
+  } catch (error) {
+    try {
+      await recoverIncompleteAppearanceTransaction();
+    } catch {
+      // 保留 marker，让下一次 appearance mutation 继续回滚旧外观与引用。
+      throw new GhostAppearanceRecoveryError();
+    }
+    throw unwrapCompensationError(error);
+  }
+}
+
 export function saveGhostAppearance(
   snapshot: GhostAppearanceSnapshot,
   mediaHashes: AppearanceMediaHashes = {},
@@ -452,7 +497,7 @@ export function saveGhostAppearance(
   customized: { dim: boolean; surfaceOpacity: boolean } = { dim: true, surfaceOpacity: true },
 ): Promise<void> {
   return serializeMutation(() =>
-    saveGhostAppearanceUnsafe(snapshot, mediaHashes, ghostId, customized),
+    saveGhostAppearanceTransactionallyUnsafe(snapshot, mediaHashes, ghostId, customized),
   );
 }
 
@@ -806,7 +851,7 @@ export function saveGhostAppearanceWithPreset(
         // 物理恢复。媒体引用在提交点前保留新旧并集，避免回收窗口。
         throw new GhostAppearanceRecoveryError();
       }
-      throw error;
+      throw unwrapCompensationError(error);
     }
   });
 }
@@ -840,7 +885,7 @@ export async function activateGhostAppearancePreset(
       surfaceOpacity: preset.snapshot.surfaceOpacity ?? GHOST_APPEARANCE_DEFAULT_SURFACE_OPACITY,
       updatedAt: Date.now(),
     };
-    await saveGhostAppearanceUnsafe(
+    await saveGhostAppearanceTransactionallyUnsafe(
       appearance,
       hashesFromSnapshot(appearance),
       preset.sourceGhostId,
