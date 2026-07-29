@@ -13,7 +13,7 @@
  *    live ErrorBanner**(review P2)—— 它已内置 codex thread not found / 401
  *    auth-missing / invalid-encrypted-content 等不可重试错误的 Retry 门控与
  *    恢复路径(同步登录态 / fork 剥离),此处只包一层:主按钮语义换成隐藏续跑
- *    指令、关闭换成 dismissed 持久化,并补 banner 展示即清红点的逻辑。
+ *    指令、关闭换成 dismissed 持久化。
  *
  * 主按钮都发送隐藏英文续跑指令([UI_ACTION_TRIGGER] 前缀,聊天不显示气泡)——
  * SDK transcript 里已有原任务与(可能的)部分进展,模型自查进度从中断/失败处
@@ -21,55 +21,36 @@
  * content(messages:dismiss-error,main 侧 merge 不丢字段),跨重启不再提示,
  * 该行退回消息流作静态历史记录。
  *
- * 红点:banner 真实展示即视为用户已看到提示,mount / attention 变化时 explicit
- * 清除该会话的 'error' attention(打点可能晚于 mount —— interrupted-pending
- * 首拉带退避;订阅 attention 让迟到的打点也被压掉,review P2)。仅宿主视图真实
- * 可见时生效(折叠 rail / 隐藏 pane 不算"已看到",review P2)。
+ * 红点:**展示不清点**(2026-07 统一)。此前 mount 即以 explicit 清掉该会话的
+ * 'error' attention,于是红点灭了而横幅还在 —— 用户反馈的割裂点。现在红点是未处理
+ * 告警的派生投影(usePendingAlertAttention 按 main 侧 pending-alerts 查询收敛),
+ * 只有用户点「继续任务」/「忽略」把处置结果落库后才消失。
  *
  * 颜色走主题 token(规则 16):error 语义豁免色 --error-bg / --error-border /
  * --error-fg / --error-fg-strong(与 ErrorMessageCard 同组),不硬编码 Tailwind red。
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { CirclePause, Play, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
-import { clearSessionAttention, useSessionAttentionKind } from '../../lib/sessionAttentionStore';
 import { ErrorBanner } from './ErrorBanner';
 
-/** banner 真实展示 = 已读:explicit 清 sidebar 'error' 红点(passive 清除对
- *  error 免疫)。订阅 attention 使迟到的打点(首拉退避晚于 mount)也被压掉。
- *  source: 'display' —— 证据是 banner 在视图内展示,复访远程会话时 banner 可能来自
- *  缓存旧内容,远程回执腿需等本次访问对账完成(explicit-display 门槛)再清被控端未读。 */
-function useAckErrorAttention(sessionId: string, viewVisible: boolean): void {
-  const attentionKind = useSessionAttentionKind(sessionId);
-  useEffect(() => {
-    if (!viewVisible) return;
-    clearSessionAttention(sessionId, { intent: 'explicit', source: 'display' });
-  }, [sessionId, viewVisible, attentionKind]);
-}
-
 export function InterruptedTurnBanner({
-  sessionId,
   onContinue,
   onDismiss,
-  viewVisible = true,
   className,
   style,
 }: {
-  sessionId: string;
   /** 「继续任务」——上层负责发送隐藏续跑指令并隐藏本条。 */
   onContinue: () => Promise<void> | void;
   /** 「忽略」——上层负责持久化 dismissed 并隐藏本条。 */
   onDismiss: () => void;
-  /** 宿主视图是否真实可见(折叠 rail / 隐藏 Orca pane 传 false)。 */
-  viewVisible?: boolean;
   className?: string;
   style?: React.CSSProperties;
 }) {
   const { t } = useTranslation();
   const [sending, setSending] = useState(false);
-  useAckErrorAttention(sessionId, viewVisible);
 
   const handleContinue = async () => {
     if (sending) return;
@@ -127,11 +108,9 @@ export function InterruptedTurnBanner({
 const ERROR_TAIL_RETRY_TOKEN = '__xdt_error_tail_continue__';
 
 export function ErrorTailErrorBanner({
-  sessionId,
   errorText,
   onContinue,
   onDismiss,
-  viewVisible = true,
   agentKind,
   remoteHostId,
   deviceLinkDeviceId,
@@ -145,13 +124,11 @@ export function ErrorTailErrorBanner({
   className,
   style,
 }: {
-  sessionId: string;
   /** 持久化 error 行的 **raw** 文案(只解码 bracket code,不 i18n 化)——
    *  ErrorBanner 的不可重试门控靠对原文的正则命中。 */
   errorText: string;
   onContinue: () => Promise<void> | void;
   onDismiss: () => void;
-  viewVisible?: boolean;
   agentKind?: 'cc' | 'codex';
   remoteHostId?: string;
   deviceLinkDeviceId?: string | null;
@@ -165,7 +142,6 @@ export function ErrorTailErrorBanner({
   className?: string;
   style?: React.CSSProperties;
 }) {
-  useAckErrorAttention(sessionId, viewVisible);
   return (
     <ErrorBanner
       error={errorText}

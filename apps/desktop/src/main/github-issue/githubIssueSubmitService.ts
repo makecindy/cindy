@@ -10,6 +10,10 @@
  * 模块保持 electron-free,全部依赖注入(规则 14),单测直接调 submitGithubIssueWithConfirm。
  */
 
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+
+import { ISSUE_REGION_CODE } from '../../shared/issueRegionCode.js';
+import { normalizeIssuePublicName } from '../../shared/issuePublicName.js';
 import type {
   IssueConfirmDecision,
   IssueDraft,
@@ -65,6 +69,7 @@ export interface GithubIssueSubmitServiceDeps {
     draft: IssueDraft,
     env: IssueEnvInfo,
     submissionIdentity: IssueSubmissionIdentity,
+    suggestedPublicName?: string,
   ) => Promise<IssueConfirmDecision>;
   /** 每次发起确认前现查；已绑定但凭证失效时应抛 AUTH_NOT_READY，不能冒充未绑定。 */
   resolveSubmissionIdentity: (workingDir: string) => Promise<IssueSubmissionIdentity>;
@@ -75,6 +80,8 @@ export interface GithubIssueSubmitServiceDeps {
   ) => Promise<GithubIssuePostResponse>;
   getAppVersion: () => string;
   getOsInfo: () => { platform: string; arch: string; osVersion: string };
+  /** 本构建的区域身份(构建期烘焙);同版本号的 cn / global 是两个不同的包。 */
+  getRegion: () => CindyRegion;
   /** main 侧 OS locale,仅当 renderer 未回传 uiLanguage 时兜底。 */
   getFallbackLocale: () => string;
   /** 当前 Cindy membership 的展示名,仅用于 issue 正文标记提交人。 */
@@ -92,6 +99,7 @@ export async function submitGithubIssueWithConfirm(
   const env: IssueEnvInfo = {
     appVersion: deps.getAppVersion(),
     ...deps.getOsInfo(),
+    region: deps.getRegion(),
   };
 
   let submissionIdentity: IssueSubmissionIdentity;
@@ -101,11 +109,16 @@ export async function submitGithubIssueWithConfirm(
     return mapSubmitError(err);
   }
 
+  const suggestedPublicName =
+    submissionIdentity.kind === 'platform'
+      ? (normalizeIssuePublicName(deps.getSubmitterName()) ?? undefined)
+      : undefined;
   const decision = await deps.confirm(
     req.sessionId,
     { title: req.title, body: req.body, type: req.type },
     env,
     submissionIdentity,
+    suggestedPublicName,
   );
 
   if (!decision.confirmed) {
@@ -123,6 +136,16 @@ export async function submitGithubIssueWithConfirm(
     };
   }
 
+  const confirmedPublicName =
+    submissionIdentity.kind === 'platform' ? normalizeIssuePublicName(decision.publicName) : null;
+  if (submissionIdentity.kind === 'platform' && !confirmedPublicName) {
+    return {
+      ok: false,
+      errorCode: 'USER_CANCELLED',
+      message: '公开署名未确认，本次 issue 未提交。请重新发起并确认署名。',
+    };
+  }
+
   // 用户确认版优先 —— agent 传入值在这里被丢弃,代码层保证。
   const finalTitle = decision.title.slice(0, SERVER_TITLE_MAX);
   const editedByUser =
@@ -131,9 +154,12 @@ export async function submitGithubIssueWithConfirm(
     decision.type !== req.type;
 
   const uiLanguage = decision.uiLanguage ?? deps.getFallbackLocale();
+  const regionCode = ISSUE_REGION_CODE[env.region];
   const envBlock = [
     '',
     '---',
+    // global 不写这一行 —— 缺失即默认区域,理由见 ISSUE_REGION_CODE(与确认卡片同源)。
+    ...(regionCode ? [`**版本区域**: ${regionCode}`] : []),
     `**OS**: ${env.platform} ${env.arch} (${env.osVersion})`,
     `**界面语言**: ${uiLanguage}`,
   ].join('\n');
@@ -142,16 +168,13 @@ export async function submitGithubIssueWithConfirm(
   const description = decision.body.slice(0, Math.max(0, bodyBudget)) + envBlock;
 
   try {
-    const result = await deps.postIssue(submissionIdentity, () => {
-      const submitterName = deps.getSubmitterName()?.trim();
-      return {
-        title: finalTitle,
-        description,
-        type: decision.type,
-        appVersion: env.appVersion,
-        ...(submitterName ? { userName: submitterName } : {}),
-      };
-    });
+    const result = await deps.postIssue(submissionIdentity, () => ({
+      title: finalTitle,
+      description,
+      type: decision.type,
+      appVersion: env.appVersion,
+      ...(confirmedPublicName ? { userName: confirmedPublicName } : {}),
+    }));
     return {
       ok: true,
       issueNumber: result.githubIssue.number,

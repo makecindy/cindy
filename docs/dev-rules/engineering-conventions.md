@@ -64,6 +64,31 @@ UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 V
 - 新增 handler 至少覆盖主路径与关键错误路径；修改已有 handler 时补上能复现本次风险的
   回归用例。
 
+### 3.1 测试资源与分层
+
+默认 `test:unit` 必须适合多个 worktree 同时运行。新增、生成或改写测试时遵守：
+
+- 默认单测优先使用进程内依赖注入、内存 fake 和表驱动用例；同一模块的重复初始化应合并到
+  文件级 fixture，不要为每个断言重复启动子进程、仓库、数据库或监听服务。
+- 默认单测不得访问业务外网、真实云服务或开发者账号。需要验证 HTTP／WebSocket 协议时，
+  优先直接调用 handler；确需真实 socket 时只绑定 loopback，使用 `listen(0)` 的系统分配
+  端口，并在 `afterAll`／`finally` 中关闭。禁止固定端口。
+- 临时文件必须放在 `os.tmpdir()` 下由 `mkdtemp` 创建的唯一目录并可靠清理；禁止复用仓库外
+  的固定目录、用户配置目录或跨 worktree 共享文件。测试不得修改全局 Git 配置、系统代理或
+  其它机器级状态。
+- 默认单测中真实 Git 只保留一条代表性 smoke；覆盖 index、patch、hook、ref、worktree 等
+  组合语义的完整用例命名为 `*.git-integration.test.ts`，由
+  `pnpm test:git-integration` 显式执行。不得因 review 或补回归把完整真实 Git 链路重新放回
+  默认层。
+- SQLite migration、runtime asset、严格性能计时等已有专用 tier 的资源测试继续进入对应
+  tier。新增资源类型若无法进程内隔离，必须先在 `scripts/test-workspaces.config.mjs` 声明
+  专用 tier，并按实际共享资源增加跨 worktree 协调；不要在测试文件里自行发明全局锁。
+- “合并测试”只合并重复 fixture 和等价输入矩阵，不合并语义不同的失败路径，也不以删除断言
+  换速度。若单文件仍有大量真实 I/O，迁移 tier，而不是继续扩大 timeout。
+
+`scripts/__tests__/test-workspaces.test.mjs` 是 tier 边界的可执行契约；调整测试命名、include
+或 exclude 时必须同步更新并运行 `pnpm test:runner`。
+
 ## 4. 跨平台双端兼容（macOS / Windows）
 
 任何功能都必须同时考虑 macOS / Windows，并在两端做到最优性能。
@@ -215,12 +240,14 @@ UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 V
    正则解码？`{success}` 风格是否只用在确实需要 fallback data 的查询型 handler？
 3. main 侧新／改业务逻辑是否带了主路径 + 关键错误路径的测试？handler 业务体是否可注入
    依赖、便于免 Electron 测试？
-4. 路径、子进程、FS、性能、快捷键是否在 macOS / Windows 两端都成立？未实测平台是否
+4. 新增测试是否避免外网、固定端口、共享临时路径和重复真实子进程？资源测试是否进入正确
+   tier，并保留了低成本默认 smoke？
+5. 路径、子进程、FS、性能、快捷键是否在 macOS / Windows 两端都成立？未实测平台是否
    标注？
-5. UI 文案是否全部走 `t()`、4 种语言齐全且翻译准确、无孤儿 key？术语是否照 `i18n/GLOSSARY.md`
+6. UI 文案是否全部走 `t()`、4 种语言齐全且翻译准确、无孤儿 key？术语是否照 `i18n/GLOSSARY.md`
    写、没有自造译法？是否跑过 `pnpm check:i18n` 与 `pnpm check:i18n-glossary`？
-6. 新增类／核心逻辑是否有职责注释？
-7. 新增常驻动画是否 compositor-only（HTML 元素 + `transform`/`opacity` + wrapper）、
+7. 新增类／核心逻辑是否有职责注释？
+8. 新增常驻动画是否 compositor-only（HTML 元素 + `transform`/`opacity` + wrapper）、
    响应 `prefers-reduced-motion`？界面切换是否无跳变／空白帧、未引入不必要的 loading 态？
 
 验证按 [`desktop-development.md`](desktop-development.md) 的分层选择：改 TypeScript 至少跑相关

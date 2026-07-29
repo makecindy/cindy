@@ -434,8 +434,33 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
 
 /** One policy-controlled tools/call that must not reach its MCP transport. */
 interface BlockedToolCall {
-  reason: 'disabled' | 'missing_thread_context';
+  reason: 'disabled' | 'missing_thread_context' | 'ambiguous_thread_context';
   context?: LiziMcpSessionContext;
+}
+
+/**
+ * `tools/call`s from two different Codex threads coalesced into one JSON-RPC
+ * batch. There is no single session context the request could run under, and
+ * `extractCodexThreadId` correctly refuses to pick one — but "no context" means
+ * the transport would run both calls with an EMPTY AsyncLocalStorage context,
+ * and every provider that reads it (cindy_browser's `__mcpSessionId`, …) would
+ * fall back to host-side UI-focus inference. That is the exact cross-session
+ * mis-routing this boundary exists to prevent, so refusing to pick has to mean
+ * refusing to run — fail closed, not fail open to whatever the user is looking
+ * at. (Both threads being registered and enabled means the per-call checks
+ * below cannot catch this shape.)
+ */
+function hasAmbiguousThreadContext(messages: unknown[]): boolean {
+  let seen: string | undefined;
+  for (const message of messages) {
+    if (!isToolCallMessage(message)) continue;
+    const threadId = extractCodexThreadIdFromMessage(message);
+    // Undefined is `missing_thread_context`'s job, not ambiguity's.
+    if (!threadId) continue;
+    if (seen && seen !== threadId) return true;
+    seen = threadId;
+  }
+  return false;
 }
 
 function findBlockedToolCall(
@@ -444,14 +469,11 @@ function findBlockedToolCall(
   pluginId: string,
 ): BlockedToolCall | undefined {
   const messages = Array.isArray(body) ? body : [body];
+  if (hasAmbiguousThreadContext(messages)) {
+    return { reason: 'ambiguous_thread_context' };
+  }
   for (const message of messages) {
-    if (
-      message === null ||
-      typeof message !== 'object' ||
-      (message as { method?: unknown }).method !== 'tools/call'
-    ) {
-      continue;
-    }
+    if (!isToolCallMessage(message)) continue;
     // Resolve each tools/call independently. Batch siblings such as MCP
     // notifications may legitimately omit threadId and must not make a
     // disabled call fail open.
@@ -480,7 +502,9 @@ function writeBlockedToolCallResponse(
 ): void {
   const message = reason === 'disabled'
     ? `Built-in tool "${pluginId}" is disabled for this session. Enable it in Settings and start a new session to apply the change.`
-    : `Built-in tool "${pluginId}" could not verify this session's tool policy. Start a new session and try again.`;
+    : reason === 'ambiguous_thread_context'
+      ? `Built-in tool "${pluginId}" received calls from more than one session in a single batch and cannot tell them apart. Retry the calls one session at a time.`
+      : `Built-in tool "${pluginId}" could not verify this session's tool policy. Start a new session and try again.`;
   const disabledResult = (id: unknown) => ({
     jsonrpc: '2.0',
     id: id ?? null,
@@ -526,16 +550,74 @@ async function readJsonBody(
   return JSON.parse(text);
 }
 
+/**
+ * Resolve the single thread context this whole HTTP request should run under
+ * (used to wrap the transport in `runWithLiziMcpSessionContext`).
+ *
+ * Batch siblings such as MCP notifications legitimately omit
+ * `params._meta.threadId` — `findBlockedToolCall` already says so, and resolves
+ * each `tools/call` independently for exactly that reason. If such a sibling
+ * were allowed to collapse the whole batch to `undefined`, a perfectly
+ * well-attributed `tools/call` would run with NO AsyncLocalStorage context, and
+ * every built-in provider that reads it (cindy_browser's `__mcpSessionId`,
+ * cindy_android, …) would silently fall back to host-side UI-focus inference —
+ * i.e. the cross-session routing bug, just reachable only via batches. So
+ * threadId-less non-tool messages are skipped here.
+ *
+ * Still conservative where attribution actually matters:
+ *   - a `tools/call` WITHOUT a threadId → `undefined`; never run an
+ *     unattributed tool call under a sibling's session. (`findBlockedToolCall`
+ *     fail-closes this shape too, but only for servers that carry a pluginId,
+ *     so the guard has to live here as well.)
+ *   - `tools/call`s naming two different threads → `undefined`; genuinely
+ *     ambiguous, there is no single correct context to pick. For
+ *     policy-controlled servers `findBlockedToolCall` turns that into an
+ *     outright rejection (`ambiguous_thread_context`), because running such a
+ *     batch contextless is what mis-routes it to the focused UI session.
+ *
+ * A `tools/call`'s own attribution ALWAYS wins over its siblings', including
+ * when the siblings disagree among themselves: nothing a non-tool message
+ * carries may degrade a well-attributed call to "no context", because
+ * `hasAmbiguousThreadContext` only inspects `tools/call`s and would not reject
+ * the request either — it would just run contextless, back to UI focus. Sibling
+ * ids therefore matter only when the request carries no tool call at all.
+ *
+ * Note this does change behaviour for tool-free requests: a threadId-less
+ * sibling no longer suppresses a sibling that does carry an id (previously ANY
+ * id-less message collapsed the result to `undefined`). Conflicting sibling ids
+ * still yield `undefined`. Tool-free requests invoke no tool, so nothing reads
+ * the context they run under; resolving it is simply closer to what the client
+ * actually declared.
+ */
 function extractCodexThreadId(body: unknown): string | undefined {
   const messages = Array.isArray(body) ? body : [body];
-  let out: string | undefined;
+  let fromToolCall: string | undefined;
+  let fromSibling: string | undefined;
+  let siblingsDisagree = false;
   for (const message of messages) {
     const threadId = extractCodexThreadIdFromMessage(message);
-    if (!threadId) return undefined;
-    if (out && out !== threadId) return undefined;
-    out = threadId;
+    if (isToolCallMessage(message)) {
+      if (!threadId) return undefined;
+      if (fromToolCall && fromToolCall !== threadId) return undefined;
+      fromToolCall = threadId;
+      continue;
+    }
+    if (!threadId) continue;
+    // Recorded, not returned: a sibling disagreement must not short-circuit the
+    // scan before a tools/call later in the batch gets to claim the request.
+    if (fromSibling && fromSibling !== threadId) siblingsDisagree = true;
+    fromSibling = threadId;
   }
-  return out;
+  if (fromToolCall) return fromToolCall;
+  return siblingsDisagree ? undefined : fromSibling;
+}
+
+function isToolCallMessage(message: unknown): boolean {
+  return (
+    message !== null &&
+    typeof message === 'object' &&
+    (message as { method?: unknown }).method === 'tools/call'
+  );
 }
 
 function extractCodexThreadIdFromMessage(message: unknown): string | undefined {

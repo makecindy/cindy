@@ -473,6 +473,8 @@ struct PululuMascotView: View {
       let squashY: CGFloat = dy > 0.25 ? 0.98 : 1.0
 
       drawShadow(c, v: v, width: 8.1 - abs(dy) * 0.32, opacity: 0.30)
+      // 键盘先画：角色要挡在键盘前面，而不是被键盘条横切。
+      drawKeyboard(c, v: v, phase: keyPhase, dy: -0.05)
       drawPululu(
         c,
         v: v,
@@ -485,7 +487,6 @@ struct PululuMascotView: View {
         eyesBright: true,
         headAngle: headTurn
       )
-      drawKeyboard(c, v: v, phase: keyPhase, dy: -0.05)
     }
   }
 
@@ -741,6 +742,111 @@ struct SpriteMascotConfig {
     eyeRyOpen: 0.98,
     eyeRyClosedAdd: 0.08
   )
+
+  // 以下三个角色的参数来源(2026-07-27)：眼睛几何由「带眼睛版」与「无眼睛版」素材做像素
+  // diff 得到 bbox 再换算到 16 单位坐标；眼睛/感叹号/完成徽章的颜色直接取自设计给的色板。
+  // 眼睛形状(Rx/Ry/闭眼增量)按设计要求复用 tarara，只有位置和颜色按各自素材实测。
+
+  /// 眼睛：深棕 #6B3D32，形状复用 tarara。
+  static let cindy = SpriteMascotConfig(
+    image: AgentIslandAssets.cindyMascotImage.map { Image(nsImage: $0) },
+    fallbackColor: Color(red: 0.251, green: 0.255, blue: 0.322),
+    alertColor: Color(red: 0.875, green: 0.180, blue: 0.153),
+    completionBadgeColor: Color(red: 0.404, green: 0.463, blue: 0.941),
+    eyeColor: Color(red: 0.420, green: 0.239, blue: 0.196),
+    approvalGlowColor: Color(red: 0.875, green: 0.180, blue: 0.153),
+    keyboardBaseColor: Color(red: 0.149, green: 0.169, blue: 0.271),
+    keyboardKeyColor: Color(red: 0.404, green: 0.463, blue: 0.941),
+    bodyScale: 1.0,
+    eyeLeftX: 6.71,
+    eyeRightX: 9.30,
+    eyeY: 9.50,
+    eyeRxBase: 0.585,
+    eyeRxClosedAdd: 0.55,
+    eyeRyMin: 0.40,
+    eyeRyOpen: 0.98,
+    eyeRyClosedAdd: 0.08
+  )
+
+  /// 眼睛：黄色 #FDCF45，形状复用 tarara(与 chaku 同一套)。
+  /// 位置不用带眼版素材的实测值(6.25/9.75/9.50)：那版素材的眼睛只有 0.76 宽，换成 tarara
+  /// 的 1.17 宽眼型后同样间距会显挤、重心偏低，所以外移到间距 4.10 并上提到 9.05。
+  static let blackcat = SpriteMascotConfig(
+    image: AgentIslandAssets.blackcatMascotImage.map { Image(nsImage: $0) },
+    fallbackColor: Color(red: 0.169, green: 0.196, blue: 0.220),
+    alertColor: Color(red: 0.875, green: 0.180, blue: 0.153),
+    completionBadgeColor: Color(red: 0.404, green: 0.463, blue: 0.941),
+    eyeColor: Color(red: 0.992, green: 0.812, blue: 0.271),
+    approvalGlowColor: Color(red: 0.875, green: 0.180, blue: 0.153),
+    keyboardBaseColor: Color(red: 0.122, green: 0.141, blue: 0.161),
+    keyboardKeyColor: Color(red: 0.404, green: 0.463, blue: 0.941),
+    bodyScale: 1.0,
+    eyeLeftX: 5.95,
+    eyeRightX: 10.05,
+    eyeY: 9.05,
+    eyeRxBase: 0.585,
+    eyeRxClosedAdd: 0.55,
+    eyeRyMin: 0.40,
+    eyeRyOpen: 0.98,
+    eyeRyClosedAdd: 0.08
+  )
+
+  /// 眼睛：棕 #875D42，形状复用 tarara；眼位比 cindy 更低。
+  static let erika = SpriteMascotConfig(
+    image: AgentIslandAssets.erikaMascotImage.map { Image(nsImage: $0) },
+    fallbackColor: Color(red: 0.329, green: 0.302, blue: 0.337),
+    alertColor: Color(red: 0.953, green: 0.796, blue: 0.314),
+    completionBadgeColor: Color(red: 0.353, green: 0.612, blue: 0.667),
+    eyeColor: Color(red: 0.529, green: 0.365, blue: 0.259),
+    approvalGlowColor: Color(red: 0.953, green: 0.796, blue: 0.314),
+    keyboardBaseColor: Color(red: 0.200, green: 0.278, blue: 0.302),
+    keyboardKeyColor: Color(red: 0.353, green: 0.612, blue: 0.667),
+    bodyScale: 1.0,
+    eyeLeftX: 6.84,
+    eyeRightX: 9.16,
+    eyeY: 10.75,
+    eyeRxBase: 0.585,
+    eyeRxClosedAdd: 0.55,
+    eyeRyMin: 0.40,
+    eyeRyOpen: 0.98,
+    eyeRyClosedAdd: 0.08
+  )
+}
+
+/// 灵动岛角色清单与查表：新增角色时只改这里(加 `skins` 条目 + `spriteConfig` 分支)，
+/// 运行时渲染和 `preview:island-mascots` 预览网格都会自动覆盖新角色。
+/// `skins` 必须与 `src/shared/agentIsland.ts` 的 `AGENT_ISLAND_MASCOT_SKINS` 保持一致。
+enum AgentIslandMascotCatalog {
+  /// 顺序与 `src/shared/agentIsland.ts` 的 `AGENT_ISLAND_MASCOT_SKINS` 一致
+  /// (也就是设置页列表的展示顺序)，预览网格同样按这个顺序铺。
+  static let skins: [String] = [
+    "cindy",
+    "blackcat",
+    "pululu",
+    "tarara",
+    "boli",
+    "whitesnow",
+    "annie",
+    "chaku",
+    "muffin",
+    "erika",
+  ]
+
+  /// PNG 贴图角色的渲染参数；返回 nil 表示该皮肤走矢量绘制(pululu)。
+  static func spriteConfig(for skin: String) -> SpriteMascotConfig? {
+    switch skin {
+    case "tarara": return .tarara
+    case "boli": return .boli
+    case "whitesnow": return .whitesnow
+    case "annie": return .annie
+    case "chaku": return .chaku
+    case "muffin": return .muffin
+    case "cindy": return .cindy
+    case "blackcat": return .blackcat
+    case "erika": return .erika
+    default: return nil
+    }
+  }
 }
 
 /// Runtime mascot renderer for PNG-backed skins with shared animation timing.
@@ -1052,6 +1158,8 @@ struct SpriteMascotView: View {
       let v = V(sz)
       let dy = bounce - 0.25
       drawShadow(c, v: v, width: 8.4 - abs(dy) * 0.32, opacity: 0.30)
+      // 键盘先画：角色要挡在键盘前面，而不是被键盘条横切。
+      drawKeyboard(c, v: v, phase: keyPhase, dy: -0.05)
       drawSprite(
         c,
         v: v,
@@ -1064,7 +1172,6 @@ struct SpriteMascotView: View {
         eyeYOffset: 0.05,
         angle: headTurn
       )
-      drawKeyboard(c, v: v, phase: keyPhase, dy: -0.05)
     }
   }
 
@@ -1480,12 +1587,10 @@ struct AgentIslandDisplayState: Codable {
   }
 
   var displayMascotSkin: String {
-    switch mascotSkin {
-    case "tarara", "boli", "whitesnow", "annie", "chaku", "muffin":
-      return mascotSkin ?? defaultAgentIslandMascotSkin
-    default:
+    guard let skin = mascotSkin, AgentIslandMascotCatalog.skins.contains(skin) else {
       return defaultAgentIslandMascotSkin
     }
+    return skin
   }
 }
 
@@ -1552,6 +1657,12 @@ private let expandedIslandCenterSnapDistance: CGFloat = 30
 private let expandedIslandLayoutEmitInterval: TimeInterval = 0.033
 private let hardwareNotchTextRevealStartSideWidth: CGFloat = 44
 private let hardwareNotchTextRevealDistance: CGFloat = 38
+// Upper bound of `hardwareNotchSideInset`, i.e. the trailing gap the notch layout keeps
+// beside the count badge. Reserving this much guarantees the badge is never clipped at
+// the default compact width.
+private let hardwareNotchBadgeReservedInset: CGFloat = 9
+// How close a compact width must be to a snap point to count as sitting on it.
+private let compactWidthSnapTolerance: CGFloat = 1.5
 private let agentIslandTopDragHitSlop: CGFloat = 2
 private let agentIslandClickDragTolerance: CGFloat = 4
 private let hardwareNotchCenterTolerance: CGFloat = 2
@@ -1574,6 +1685,9 @@ private let whitesnowMascotFileName = "whitesnow.png"
 private let annieMascotFileName = "annie.png"
 private let chakuMascotFileName = "chaku.png"
 private let muffinMascotFileName = "muffin.png"
+private let cindyMascotFileName = "cindy.png"
+private let blackcatMascotFileName = "blackcat.png"
+private let erikaMascotFileName = "erika.png"
 private let defaultAgentIslandMascotSkin = "pululu"
 // Keep these mono Agent identity marks aligned with renderer ClaudeMark/CodexMark.
 // The native copies remain template images so Agent Island can apply status colors.
@@ -1661,6 +1775,18 @@ private enum AgentIslandAssets {
 
   static let muffinMascotImage: NSImage? = {
     mascotImage(fileName: muffinMascotFileName, size: NSSize(width: 128, height: 128))
+  }()
+
+  static let cindyMascotImage: NSImage? = {
+    mascotImage(fileName: cindyMascotFileName, size: NSSize(width: 128, height: 128))
+  }()
+
+  static let blackcatMascotImage: NSImage? = {
+    mascotImage(fileName: blackcatMascotFileName, size: NSSize(width: 128, height: 128))
+  }()
+
+  static let erikaMascotImage: NSImage? = {
+    mascotImage(fileName: erikaMascotFileName, size: NSSize(width: 128, height: 128))
   }()
 
   private static func runningAgentGifCandidateURLs() -> [URL] {
@@ -1951,12 +2077,18 @@ struct AgentIslandLayout: Equatable {
     let layoutScreenMetrics = hardwareNotchLayoutEnabled
       ? screenMetrics
       : screenMetrics.disablingHardwareNotchLayout()
+    // Only the compact hardware-notch layout reserves room for the badge; every other
+    // layout tick skips the reservation entirely and passes 0.
+    let compactBadgeWidth = !expanded && layoutScreenMetrics.hasNotch && hasSession
+      ? PillBadge.intrinsicWidth(pillSnapshot: state.pillSnapshot, compact: true)
+      : 0
     let width = computeWidth(
       expanded: expanded,
       hasSession: hasSession,
       availableFrameWidth: availableFrameWidth,
       screenMetrics: layoutScreenMetrics,
-      preferredContentWidth: preferredContentWidth
+      preferredContentWidth: preferredContentWidth,
+      compactBadgeWidth: compactBadgeWidth
     )
     let height = computeHeight(state: state, expanded: expanded, notchBaselineHeight: notchBaselineHeight)
     let shape = shapeForStatus(notchStatus)
@@ -1983,7 +2115,8 @@ struct AgentIslandLayout: Equatable {
     hasSession: Bool,
     availableFrameWidth: CGFloat,
     screenMetrics: AgentIslandScreenMetrics,
-    preferredContentWidth: CGFloat?
+    preferredContentWidth: CGFloat?,
+    compactBadgeWidth: CGFloat
   ) -> CGFloat {
     let idleExpandedWidth: CGFloat = 340
     let carrierInset = expanded ? expandedIslandCarrierExpandedInset : compactIslandCarrierInset
@@ -2003,10 +2136,15 @@ struct AgentIslandLayout: Equatable {
         clampedWidth: clampedWidth,
         maxWidth: maxWidth,
         hasSession: hasSession,
-        screenMetrics: screenMetrics
+        screenMetrics: screenMetrics,
+        compactBadgeWidth: compactBadgeWidth
       )
     }
-    let defaultWidth = defaultCompactWidth(hasSession: hasSession, screenMetrics: screenMetrics)
+    let defaultWidth = defaultCompactWidth(
+      hasSession: hasSession,
+      screenMetrics: screenMetrics,
+      compactBadgeWidth: compactBadgeWidth
+    )
     return min(preferred ?? defaultWidth, availableWidth)
   }
 
@@ -2028,12 +2166,29 @@ struct AgentIslandLayout: Equatable {
     return compactIslandMinContentWidth
   }
 
-  static func defaultCompactWidth(hasSession: Bool, screenMetrics: AgentIslandScreenMetrics) -> CGFloat {
+  /// Side width the trailing notch content needs so `compactBadgeWidth` survives
+  /// `hardwareNotchTrailingContent`'s `.clipped()` frame. Mirrors the largest inset
+  /// `hardwareNotchSideInset` can return, so a two-digit count stays readable.
+  static func hardwareNotchBadgeSideWidth(compactBadgeWidth: CGFloat) -> CGFloat {
+    compactBadgeWidth + hardwareNotchBadgeReservedInset
+  }
+
+  static func defaultCompactWidth(
+    hasSession: Bool,
+    screenMetrics: AgentIslandScreenMetrics,
+    compactBadgeWidth: CGFloat = 0
+  ) -> CGFloat {
     let notchWidth = CGFloat(screenMetrics.notchWidth)
     if screenMetrics.hasNotch {
-      let extra = hasSession
+      let baseExtra = hasSession
         ? AgentIslandScreenMetricsConfig.compactHardwareActiveExtraWidth
         : AgentIslandScreenMetricsConfig.compactHardwareIdleExtraWidth
+      // A wide badge (multi-digit counts) must widen the island rather than get
+      // clipped: both notch sides are symmetric, hence the doubling.
+      let badgeExtra = hasSession
+        ? hardwareNotchBadgeSideWidth(compactBadgeWidth: compactBadgeWidth) * 2
+        : 0
+      let extra = max(baseExtra, badgeExtra)
       return max(compactIslandBaseWidth, notchWidth + extra)
     }
     let extra = hasSession ? AgentIslandScreenMetricsConfig.compactSimulatedActiveExtraWidth : 0
@@ -2045,28 +2200,47 @@ struct AgentIslandLayout: Equatable {
     clampedWidth: CGFloat,
     maxWidth: CGFloat,
     hasSession: Bool,
-    screenMetrics: AgentIslandScreenMetrics
+    screenMetrics: AgentIslandScreenMetrics,
+    compactBadgeWidth: CGFloat = 0
   ) -> CGFloat {
     guard screenMetrics.hasNotch else {
       return clampedWidth
     }
     let hiddenWidth = min(maxWidth, max(1, CGFloat(screenMetrics.notchWidth)))
-    let basicWidth = min(
+    // The hidden/basic classification stays anchored to the badge-independent basic
+    // width. Otherwise a persisted basic width silently falls below the hidden
+    // threshold once a wider badge enlarges `basicWidth`, collapsing the whole island.
+    let baseBasicWidth = min(
       maxWidth,
       max(hiddenWidth, defaultCompactWidth(hasSession: hasSession, screenMetrics: screenMetrics))
     )
-    let gap = basicWidth - hiddenWidth
+    let basicWidth = min(
+      maxWidth,
+      max(
+        hiddenWidth,
+        defaultCompactWidth(
+          hasSession: hasSession,
+          screenMetrics: screenMetrics,
+          compactBadgeWidth: compactBadgeWidth
+        )
+      )
+    )
+    let gap = baseBasicWidth - hiddenWidth
     guard gap > 8 else {
       return hiddenWidth
     }
-    let hiddenThreshold = basicWidth - min(
+    let hiddenThreshold = baseBasicWidth - min(
       AgentIslandScreenMetricsConfig.compactHardwareHiddenPullDistance,
       max(24, gap * 0.5)
     )
     if desiredWidth <= hiddenThreshold {
       return hiddenWidth
     }
-    if desiredWidth <= basicWidth {
+    // Only widths at or below the badge-independent basic snap upgrade to the current
+    // (possibly wider) basic. Comparing against `basicWidth` would swallow free widths
+    // sitting between the two snap points, and `persistedCompactContentWidth` would then
+    // canonicalize them away — permanently overwriting the user's preference.
+    if desiredWidth <= baseBasicWidth {
       return basicWidth
     }
     return clampedWidth
@@ -2416,11 +2590,13 @@ struct CompactSessionView: View {
         )
           .lineLimit(1)
           .truncationMode(.tail)
-          .fixedSize(horizontal: true, vertical: false)
+          // No fixedSize here: the subtitle must yield width (and truncate) so the
+          // count badge keeps its full intrinsic width instead of being clipped.
           .opacity(textOpacity)
       }
 
       PillBadge(pillSnapshot: pillSnapshot, compact: true)
+        .layoutPriority(1)
     }
     .padding(.trailing, hardwareNotchSideInset(sideWidth: sideWidth, compactWidth: 22))
     .frame(width: sideWidth, alignment: .trailing)
@@ -2864,6 +3040,60 @@ struct PillBadge: View {
   let pillSnapshot: AgentIslandPillSnapshot
   var compact: Bool = false
 
+  /// Text runs and minimum capsule width for the badge variant a snapshot renders.
+  /// Shared by `body` and `intrinsicWidth` so reserved layout width can never
+  /// drift away from what actually gets drawn.
+  struct Metrics {
+    /// One entry per rendered `Text`; each is laid out (and rounded) separately.
+    let segments: [String]
+    let minWidth: CGFloat
+    let fontSize: CGFloat
+  }
+
+  static func metrics(pillSnapshot: AgentIslandPillSnapshot, compact: Bool) -> Metrics {
+    let fontSize: CGFloat = compact ? 10 : 11
+    if pillSnapshot.activeSessionCount > 0 && pillSnapshot.sessionCount > 1 {
+      return Metrics(
+        segments: ["\(pillSnapshot.activeSessionCount)", "/", "\(pillSnapshot.sessionCount)"],
+        minWidth: compact ? 30 : 34,
+        fontSize: fontSize
+      )
+    }
+    return Metrics(
+      segments: ["\(max(1, pillSnapshot.sessionCount))"],
+      minWidth: compact ? 22 : 24,
+      fontSize: fontSize
+    )
+  }
+
+  /// Width the hardware-notch layout reserves for the capsule so a multi-digit count is
+  /// never clipped.
+  ///
+  /// This is deliberately a *nominal* width computed from digit counts, not an `NSFont`
+  /// measurement: main computes the carrier width from the very same formula in
+  /// `getAgentIslandCompactBadgeWidth` (`shared/agentIsland.ts`), and the two must agree
+  /// exactly. A measured value here would sit a few points below the TS estimate, and
+  /// every snap comparison against the delivered width would silently miss.
+  /// `nominalCharWidth` is an upper bound on the real advance, so the reserved width is
+  /// always at least what SwiftUI draws — `badge-probe` harness asserts that.
+  static func intrinsicWidth(pillSnapshot: AgentIslandPillSnapshot, compact: Bool) -> CGFloat {
+    let metrics = metrics(pillSnapshot: pillSnapshot, compact: compact)
+    let segmentsWidth = metrics.segments.reduce(CGFloat(0)) { total, segment in
+      total + CGFloat(segment.count) * nominalCharWidth + segmentRoundingSlack
+    }
+    let spacing = activeTotalSpacing * CGFloat(max(0, metrics.segments.count - 1))
+    return max(metrics.minWidth, segmentsWidth + spacing + contentInset * 2)
+  }
+
+  private static let activeTotalSpacing: CGFloat = 1
+  private static let contentInset: CGFloat = 2
+  /// Upper bound for one monospaced 10pt digit (real advance is ~6pt). Mirrors
+  /// `AGENT_ISLAND_COMPACT_BADGE_CHAR_WIDTH_BOUND` on the TS side.
+  private static let nominalCharWidth: CGFloat = 7
+  /// Per-segment rounding slack; SwiftUI lays out and rounds every `Text` run
+  /// separately. Mirrors `AGENT_ISLAND_COMPACT_BADGE_SEGMENT_ROUNDING_SLACK`.
+  private static let segmentRoundingSlack: CGFloat = 1
+
   var body: some View {
     if pillSnapshot.activeSessionCount > 0 && pillSnapshot.sessionCount > 1 {
       activeTotalBadge(
@@ -2878,15 +3108,19 @@ struct PillBadge: View {
 
   private func badge(_ text: String, emphasized: Bool) -> some View {
     Text(text)
-      .font(.system(size: compact ? 10 : 11, weight: .semibold, design: .monospaced))
+      .font(badgeFont)
       .foregroundColor(Color.white.opacity(0.92))
-      .frame(minWidth: compact ? 22 : 24, minHeight: compact ? 18 : 20)
+      // Multi-digit counts must widen the capsule instead of wrapping into two lines.
+      .lineLimit(1)
+      .fixedSize(horizontal: true, vertical: false)
+      .padding(.horizontal, Self.contentInset)
+      .frame(minWidth: metrics.minWidth, minHeight: compact ? 18 : 20)
       .background(Color.white.opacity(emphasized ? 0.11 : 0.065))
       .clipShape(Capsule())
   }
 
   private func activeTotalBadge(active: Int, total: Int, emphasized: Bool) -> some View {
-    HStack(spacing: 1) {
+    HStack(spacing: Self.activeTotalSpacing) {
       Text("\(active)")
         .foregroundColor(emphasized ? agentIslandBlue : agentIslandOrange)
       Text("/")
@@ -2894,10 +3128,22 @@ struct PillBadge: View {
       Text("\(total)")
         .foregroundColor(Color.white.opacity(0.92))
     }
-    .font(.system(size: compact ? 10 : 11, weight: .semibold, design: .monospaced))
-    .frame(minWidth: compact ? 30 : 34, minHeight: compact ? 18 : 20)
+    .font(badgeFont)
+    // Multi-digit counts must widen the capsule instead of wrapping into two lines.
+    .lineLimit(1)
+    .fixedSize(horizontal: true, vertical: false)
+    .padding(.horizontal, Self.contentInset)
+    .frame(minWidth: metrics.minWidth, minHeight: compact ? 18 : 20)
     .background(Color.white.opacity(emphasized ? 0.11 : 0.065))
     .clipShape(Capsule())
+  }
+
+  private var metrics: Metrics {
+    Self.metrics(pillSnapshot: pillSnapshot, compact: compact)
+  }
+
+  private var badgeFont: Font {
+    .system(size: metrics.fontSize, weight: .semibold, design: .monospaced)
   }
 
   private var isEmphasized: Bool {
@@ -3913,20 +4159,9 @@ struct AgentIslandMascotView: View {
   let size: CGFloat
 
   var body: some View {
-    switch skin {
-    case "tarara":
-      SpriteMascotView(size: size, state: state, config: .tarara)
-    case "boli":
-      SpriteMascotView(size: size, state: state, config: .boli)
-    case "whitesnow":
-      SpriteMascotView(size: size, state: state, config: .whitesnow)
-    case "annie":
-      SpriteMascotView(size: size, state: state, config: .annie)
-    case "chaku":
-      SpriteMascotView(size: size, state: state, config: .chaku)
-    case "muffin":
-      SpriteMascotView(size: size, state: state, config: .muffin)
-    default:
+    if let config = AgentIslandMascotCatalog.spriteConfig(for: skin) {
+      SpriteMascotView(size: size, state: state, config: config)
+    } else {
       PululuMascotView(size: size, state: state)
     }
   }
@@ -5342,18 +5577,18 @@ final class AgentIslandController {
         hiddenWidth,
         AgentIslandLayout.defaultCompactWidth(
           hasSession: model.state.totalCount > 0,
-          screenMetrics: model.screenMetrics
+          screenMetrics: model.screenMetrics,
+          compactBadgeWidth: compactBadgeWidth
         )
       )
     )
     guard basicWidth - hiddenWidth > 8 else {
       return .hidden
     }
-    let tolerance: CGFloat = 1.5
-    if abs(contentWidth - hiddenWidth) <= tolerance {
+    if abs(contentWidth - hiddenWidth) <= compactWidthSnapTolerance {
       return .hidden
     }
-    if abs(contentWidth - basicWidth) <= tolerance {
+    if abs(contentWidth - basicWidth) <= compactWidthSnapTolerance {
       return .basic
     }
     return .free
@@ -5423,6 +5658,50 @@ final class AgentIslandController {
       clampedWidth: clampedWidth,
       maxWidth: maxWidth,
       hasSession: model.state.totalCount > 0,
+      screenMetrics: model.screenMetrics,
+      compactBadgeWidth: compactBadgeWidth
+    )
+  }
+
+  /// Width reserved for the compact count badge in the current snapshot, used to keep
+  /// drag snapping aligned with the reserved default width. Only the centered hardware
+  /// notch layout reserves room for the badge.
+  private var compactBadgeWidth: CGFloat {
+    guard model.hardwareNotchLayoutEnabled,
+      model.screenMetrics.hasNotch,
+      model.state.totalCount > 0
+    else {
+      return 0
+    }
+    return PillBadge.intrinsicWidth(pillSnapshot: model.state.pillSnapshot, compact: true)
+  }
+
+  /// Width persisted as the user's compact preference. At the badge-aware basic snap we
+  /// store the badge-independent basic width instead: the stored scalar must not encode
+  /// the current count, otherwise the island keeps a wide preference after the count
+  /// drops (and the snap can no longer contract).
+  ///
+  /// Gated on `hardwareNotchLayoutEnabled` as well as `hasNotch`: once the island is
+  /// moved off the notch, the emitted frame uses the plain compact layout and its width
+  /// must be persisted verbatim — rewriting it there would shrink the island mid-move.
+  private func persistedCompactContentWidth(_ contentWidth: CGFloat) -> CGFloat {
+    guard !lastLayout.expanded,
+      model.hardwareNotchLayoutEnabled,
+      model.screenMetrics.hasNotch
+    else {
+      return contentWidth
+    }
+    let hasSession = model.state.totalCount > 0
+    let badgeAwareBasicWidth = AgentIslandLayout.defaultCompactWidth(
+      hasSession: hasSession,
+      screenMetrics: model.screenMetrics,
+      compactBadgeWidth: compactBadgeWidth
+    )
+    guard abs(contentWidth - badgeAwareBasicWidth) <= compactWidthSnapTolerance else {
+      return contentWidth
+    }
+    return AgentIslandLayout.defaultCompactWidth(
+      hasSession: hasSession,
       screenMetrics: model.screenMetrics
     )
   }
@@ -5480,7 +5759,9 @@ final class AgentIslandController {
       "type": "layout",
       "displayId": AgentIslandScreenMetricsProvider.displayId(for: screen),
       "centerXRatio": Double(min(1, max(0, ratio))),
-      "contentWidth": Double(constrainedContentWidth(contentWidth, expanded: lastLayout.expanded)),
+      "contentWidth": Double(persistedCompactContentWidth(
+        constrainedContentWidth(contentWidth, expanded: lastLayout.expanded)
+      )),
       "expanded": lastLayout.expanded,
     ])
   }
@@ -6043,11 +6324,324 @@ enum AgentIslandDebugHarness {
   }
 }
 
+// MARK: - 角色预览网格(开发调试用，不参与产品运行路径)
+
+private let agentIslandMascotPreviewStates: [(state: AgentIslandMascotAnimationState, label: String)] = [
+  (.idle, "idle"),
+  (.working, "working"),
+  (.waitingApproval, "waitingApproval"),
+  (.completed, "completed"),
+]
+
+private enum AgentIslandMascotPreviewAppearance: String, CaseIterable, Identifiable {
+  case dark
+  case light
+  case both
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .dark: return "Dark"
+    case .light: return "Light"
+    case .both: return "两种模式"
+    }
+  }
+}
+
+/// 预览窗口的启动开关(命令行参数,不走环境变量:见 AgentIslandMascotPreview 的说明)。
+private let agentIslandMascotPreviewFlag = "--mascot-preview"
+
+private let agentIslandMascotPreviewZooms: [Double] = [1, 2, 3, 4, 6, 8]
+
+/// 角色在产品里的真实渲染尺寸：
+/// 16pt 收起 pill、18pt 紧凑行、20pt 展开态（灵动岛原生，本文件的调用点）；
+/// 40pt 是设置页「图标皮肤」列表里的角色本体尺寸（renderer 的 `h-10 w-10`，
+/// 见 AgentIslandSection.tsx `MascotPreviewImage` / `SpriteMascotPreview`）。
+/// 设置页那套是 React/CSS 重画的，这里只作同尺寸参照，用来核对放大后的形态。
+private let agentIslandMascotRealSizes: [(size: Double, label: String)] = [
+  (16, "16 收起"),
+  (18, "18 紧凑"),
+  (20, "20 展开"),
+  (40, "40 设置页"),
+]
+
+/// 单个「角色 × 状态」格子。底板只是预览用的对比背景，不代表产品视觉规范。
+/// `size` 始终是产品真实渲染尺寸，`zoom` 只做视觉放大(几何比例不变)，便于肉眼看清细节。
+private struct AgentIslandMascotPreviewCell: View {
+  let skin: String
+  let state: AgentIslandMascotAnimationState
+  let label: String
+  let size: CGFloat
+  let zoom: CGFloat
+  let isDark: Bool
+
+  private var boxSide: CGFloat { size * zoom + 24 }
+
+  var body: some View {
+    VStack(spacing: 6) {
+      ZStack {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .fill(isDark ? Color(white: 0.06) : Color(white: 0.97))
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .strokeBorder(isDark ? Color(white: 1.0, opacity: 0.10) : Color(white: 0.0, opacity: 0.10))
+        AgentIslandMascotView(skin: skin, state: state, size: size)
+          .scaleEffect(zoom)
+      }
+      .frame(width: boxSide, height: boxSide)
+      Text(label)
+        .font(.system(size: 10, weight: .medium, design: .monospaced))
+        .foregroundStyle(.secondary)
+    }
+  }
+}
+
+/// 一整块网格：行 = 角色(取自 `AgentIslandMascotCatalog.skins`)，列 = 动画状态。
+private struct AgentIslandMascotPreviewGrid: View {
+  let size: CGFloat
+  let zoom: CGFloat
+  let isDark: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 18) {
+      ForEach(AgentIslandMascotCatalog.skins, id: \.self) { skin in
+        HStack(alignment: .top, spacing: 16) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text(skin)
+              .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            Text(AgentIslandMascotCatalog.spriteConfig(for: skin) == nil ? "vector" : "sprite")
+              .font(.system(size: 9))
+              .foregroundStyle(.tertiary)
+          }
+          .frame(width: 96, alignment: .leading)
+          .padding(.top, max(0, size * zoom / 2 - 8))
+
+          ForEach(agentIslandMascotPreviewStates, id: \.label) { entry in
+            AgentIslandMascotPreviewCell(
+              skin: skin,
+              state: entry.state,
+              label: entry.label,
+              size: size,
+              zoom: zoom,
+              isDark: isDark
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+/// 预览控件状态。本文件是顶层脚本(main.swift)模式，`@State` 的内联默认值在这里不可靠
+/// (会退化成零值)，所以初值统一放到这个 model 的 init 里显式赋。
+/// 另外这里的控件一律用 `Picker` 而不是 `Slider`：`Slider` 在本文件里出现过首帧把绑定值
+/// 写回下界(初值丢失)，宽度受限时尤其容易触发。
+private final class AgentIslandMascotPreviewModel: ObservableObject {
+  @Published var appearance: AgentIslandMascotPreviewAppearance
+  @Published var mascotSize: Double
+  @Published var zoom: Double
+  @Published var animationsActive: Bool
+  @Published var animationEpoch: Int
+
+  init() {
+    appearance = .dark
+    // 默认 = 灵动岛展开态真实尺寸 1:1，看细节再点放大档位，避免预览失真。
+    mascotSize = 20
+    zoom = 1
+    animationsActive = true
+    animationEpoch = 0
+  }
+
+  /// 首帧过后重新压一遍默认值。init 里的初值会被首帧布局改写(本文件的老毛病，
+  /// 现有视图同样靠 onAppear 重置来兜)，这里补一刀保证工具条选中态与实际一致。
+  func applyDefaults() {
+    appearance = .dark
+    mascotSize = 20
+    zoom = 1
+    animationsActive = true
+  }
+}
+
+/// 自绘档位选择器。系统 `Picker` / `Slider` / `Toggle` 在本文件里会把绑定值改写成首项或
+/// 下界(初值丢失)，这里改成 Button + 自管高亮，显示与 model 必然一致。
+private struct AgentIslandPreviewChoice<Value: Equatable>: View {
+  let options: [(value: Value, label: String)]
+  @Binding var selection: Value
+
+  var body: some View {
+    HStack(spacing: 4) {
+      ForEach(Array(options.indices), id: \.self) { index in
+        let option = options[index]
+        let isActive = option.value == selection
+        Button {
+          selection = option.value
+        } label: {
+          Text(option.label)
+            .font(.system(size: 11, weight: isActive ? .semibold : .regular))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+              RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isActive ? Color.accentColor.opacity(0.24) : Color.primary.opacity(0.06))
+            )
+        }
+        .buttonStyle(.plain)
+      }
+    }
+  }
+}
+
+private struct AgentIslandMascotPreviewView: View {
+  @ObservedObject var model: AgentIslandMascotPreviewModel
+
+  private var appearance: AgentIslandMascotPreviewAppearance { model.appearance }
+  private var mascotSize: CGFloat { CGFloat(model.mascotSize) }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      toolbar
+      Divider()
+      ScrollView([.vertical, .horizontal]) {
+        VStack(alignment: .leading, spacing: 28) {
+          switch appearance {
+          case .dark:
+            grid(isDark: true)
+          case .light:
+            grid(isDark: false)
+          case .both:
+            labeledGrid(title: "Dark", isDark: true)
+            labeledGrid(title: "Light", isDark: false)
+          }
+        }
+        .padding(24)
+      }
+    }
+    .frame(minWidth: 720, minHeight: 480)
+    .onAppear {
+      model.applyDefaults()
+    }
+  }
+
+  private var toolbar: some View {
+    HStack(spacing: 14) {
+      AgentIslandPreviewChoice(
+        options: AgentIslandMascotPreviewAppearance.allCases.map { ($0, $0.title) },
+        selection: $model.appearance
+      )
+
+      HStack(spacing: 6) {
+        Text("真实尺寸")
+          .font(.system(size: 11))
+          .foregroundStyle(.secondary)
+        AgentIslandPreviewChoice(
+          options: agentIslandMascotRealSizes.map { ($0.size, $0.label) },
+          selection: $model.mascotSize
+        )
+      }
+
+      HStack(spacing: 6) {
+        Text("放大")
+          .font(.system(size: 11))
+          .foregroundStyle(.secondary)
+        AgentIslandPreviewChoice(
+          options: agentIslandMascotPreviewZooms.map { ($0, "\(Int($0))×") },
+          selection: $model.zoom
+        )
+      }
+
+      AgentIslandPreviewChoice(
+        options: [(true, "播放"), (false, "暂停")],
+        selection: $model.animationsActive
+      )
+
+      Button("从头播放") {
+        model.animationEpoch += 1
+      }
+      .font(.system(size: 11))
+
+      Spacer()
+
+      Text(
+        "\(AgentIslandMascotCatalog.skins.count) 角色 × \(agentIslandMascotPreviewStates.count) 状态 · 渲染 \(Int(model.mascotSize))pt"
+      )
+      .font(.system(size: 11, design: .monospaced))
+      .foregroundStyle(.secondary)
+    }
+    .padding(.horizontal, 20)
+    .padding(.vertical, 12)
+  }
+
+  private func grid(isDark: Bool) -> some View {
+    AgentIslandMascotPreviewGrid(size: mascotSize, zoom: CGFloat(model.zoom), isDark: isDark)
+      .agentIslandMascotAnimationsActive(model.animationsActive)
+      .agentIslandMascotAnimationEpoch(model.animationEpoch)
+  }
+
+  private func labeledGrid(title: String, isDark: Bool) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text(title)
+        .font(.system(size: 12, weight: .bold, design: .monospaced))
+        .foregroundStyle(.secondary)
+      grid(isDark: isDark)
+    }
+  }
+}
+
+/// 由命令行参数 `--mascot-preview` 触发的独立预览窗口。
+/// 刻意**不用环境变量**做开关：主进程 spawn helper 时会继承 `process.env`
+/// (见 MacAgentIslandNativeHost.ts)，用户环境里若意外设置了该变量，产品 helper 会进
+/// 预览分支、不 emit ready，被主进程判定超时反复重启。而 spawn 传的 argv 是空数组，
+/// 命令行参数不存在这条泄漏路径。
+/// 走这条分支时 helper 不读 stdin、不创建刘海面板，只当一个纯本地预览器。
+private enum AgentIslandMascotPreview {
+  static var isEnabled: Bool {
+    CommandLine.arguments.dropFirst().contains(agentIslandMascotPreviewFlag)
+  }
+
+  private static var window: NSWindow?
+  private static var closeObserver: NSObjectProtocol?
+  private static var model: AgentIslandMascotPreviewModel?
+
+  static func present() {
+    let previewModel = AgentIslandMascotPreviewModel()
+    model = previewModel
+    let panel = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 1120, height: 780),
+      styleMask: [.titled, .closable, .miniaturizable, .resizable],
+      backing: .buffered,
+      defer: false
+    )
+    panel.title = "Agent Island — 角色动画预览"
+    panel.contentView = NSHostingView(rootView: AgentIslandMascotPreviewView(model: previewModel))
+    panel.center()
+    panel.isReleasedWhenClosed = false
+    // 预览时常要跟设计稿、素材目录来回对照，置顶省得反复找窗口。
+    panel.level = .floating
+    window = panel
+    closeObserver = NotificationCenter.default.addObserver(
+      forName: NSWindow.willCloseNotification,
+      object: panel,
+      queue: .main
+    ) { _ in
+      NSApp.terminate(nil)
+    }
+    NSApp.setActivationPolicy(.regular)
+    panel.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+  }
+}
+
 final class AgentIslandAppDelegate: NSObject, NSApplicationDelegate {
   private let controllerManager = AgentIslandDisplayControllerManager()
   private let decoder = JSONDecoder()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    if AgentIslandMascotPreview.isEnabled {
+      AgentIslandMascotPreview.present()
+      return
+    }
     controllerManager.publishScreenMetrics()
     emitJson(["type": "ready"])
     if let update = AgentIslandDebugHarness.makeUpdate() {

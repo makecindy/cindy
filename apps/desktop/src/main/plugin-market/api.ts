@@ -18,7 +18,7 @@ type Fetcher = <T>(
 const defaultFetcher: Fetcher = (apiPath, options) =>
   serverApiFetch(apiPath, {
     ...options,
-    baseUrl: getClientEndpoint('pluginApiBaseUrl'),
+    baseUrl: () => getClientEndpoint('pluginApiBaseUrl'),
   });
 
 /** plugin-server 普通客户端 API；每个响应都经过共享 v2 parser fail-closed。 */

@@ -467,7 +467,9 @@ export function presetDisplayName(
 
 /** 预设的厂商分组键：id 去掉区域后缀（`zhipu-glm-cn`/`zhipu-glm-global` → `zhipu-glm`）。 */
 function presetVendorKey(p: ProviderPreset): string {
-  return p.id.replace(/-(cn|global)$/, '');
+  const key = p.id.replace(/-(cn|global)$/, '');
+  // 智谱国内品牌沿用 zhipu，海外品牌使用 zai，但仍是同一厂商的区域渠道。
+  return key === 'zai-coding-plan' ? 'zhipu-coding-plan' : key;
 }
 
 /**

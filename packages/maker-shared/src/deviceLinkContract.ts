@@ -2,10 +2,14 @@ import { BRAND_NAME } from './branding.js';
 
 export const DEVICE_LINK_SUBSCRIBE_CHANNEL = 'device-link:subscribe';
 export const DEVICE_LINK_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
+/** Marker passed as sessions:get arg[1] only by background list reconciliation probes. */
+export const DEVICE_LINK_RECONCILIATION_PROBE_MARKER =
+  'device-link:sessions-reconciliation-probe';
 export const DEVICE_LINK_MEDIA_FETCH_CHANNEL = 'device-link:media:fetch';
 export const DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL = 'device-link:voice:transcribe';
 export const DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL = 'device-link:voice:credential-sync';
 export const DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL = 'device-link:voice:dictionary-learning';
+export const DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL = 'device-link:voice:dictionary:get';
 
 export type MobileVoiceCredentialSyncAsr = {
   provider: string;
@@ -64,6 +68,31 @@ export type MobileVoiceCredentialSyncResult = {
   refinerProviderChain?: MobileVoiceCredentialSyncRefiner[];
   settings?: MobileVoiceCredentialSyncSettings;
 };
+
+/**
+ * 手机拉取被控桌面词典的只读快照。
+ *
+ * 手机不参与 CRDT 合并 —— 它在后台不维持 WebSocket,拿不到对等同步的 push 帧,
+ * 也不该持有一份会分叉的可写词典。这里只投影 refine 真正用得上的字段。
+ */
+export type MobileVoiceDictionarySnapshotResult =
+  | {
+      ok: true;
+      entries: MobileVoiceCredentialSyncDictionaryEntry[];
+      /**
+       * 该桌面同步状态的版本向量:`{ nodeId: 该节点的最大 HLC }`。
+       *
+       * 手机同时拉多台电脑时用它判断哪一份**包含**了另一份。不能用响应到达时间
+       * (并发请求里慢的那个反而显得"更新"),也不能只比最大 HLC —— 两台电脑各自
+       * 新增了不同的词、还没来得及互相同步时,最大 HLC 大的那份并不包含另一份,
+       * 拿它当完整答案会漏词。老版本被控端不带这个字段,手机退回按到达时间比较。
+       */
+      stateVector?: Record<string, string>;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
 
 export type MobileVoiceDictionaryLearningRequest = {
   source: 'mobile';
@@ -265,6 +294,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   DEVICE_LINK_MEDIA_FETCH_CHANNEL,
   DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL,
   DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL,
+  DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL,
   'maker:get-pending-interactions',
   'maker:resolve-interaction',
   'maker:get-context-usage',
@@ -329,6 +359,11 @@ export type DeviceLinkRelayStatus = 'online' | 'connecting' | 'stopped';
 const PERMANENT_REMOTE_ERROR_MARKERS = [
   'REMOTE_DISABLED',
   'CHANNEL_NOT_ALLOWED',
+  // 控制端「目标设备无响应」熔断器的快速失败(见 apps/mobile 的
+  // unresponsiveDevicesStore):被控端连续 INVOKE_TIMEOUT 后熔断 open,新请求
+  // 本地直拒。必须归为 permanent——否则 withTransientRemoteRetry 会把熔断
+  // 快速失败再原地重试 6 次,熔断等于白做。
+  'DEVICE_UNRESPONSIVE',
 ] as const;
 
 const TRANSIENT_REMOTE_ERROR_MARKERS = [
@@ -463,6 +498,7 @@ export function describeRemoteError(error: string | null): string | null {
   if (error.includes('REMOTE_DISABLED')) return '被控电脑已关闭允许远程控制。';
   if (error.includes('CHANNEL_NOT_ALLOWED')) return '当前电脑端版本不支持这个远程能力。';
   if (error.includes('ACCESS_REVOKED')) return '这台电脑已撤销手机访问权限。';
+  if (error.includes('DEVICE_UNRESPONSIVE')) return '电脑端未响应，正在自动重试，请稍后再试。';
   if (error.includes('VERSION_MISMATCH')) return '与服务端协议版本不一致，请升级 App 后重试。';
   if (error.includes('PAYLOAD_TOO_LARGE')) return '这次传输的内容过大，请拆分后重试。';
   if (error.includes('MEDIA_FETCH_FAILED')) return '获取电脑端文件失败，可以稍后重试。';
@@ -506,6 +542,14 @@ export function isAccessRevokedRemoteError(error: unknown): boolean {
   if (code === 'ACCESS_REVOKED') return true;
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   return message.includes('ACCESS_REVOKED') || message.includes('DEVICE_LINK_ACCESS_REVOKED');
+}
+
+/** 控制端熔断器快速失败(目标设备无响应)的识别;code 与 message 两种形态都认。 */
+export function isDeviceUnresponsiveRemoteError(error: unknown): boolean {
+  const code = readStringField(error, 'code');
+  if (code === 'DEVICE_UNRESPONSIVE') return true;
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return message.includes('DEVICE_UNRESPONSIVE');
 }
 
 export function isPreconditionFailedRemoteError(error: unknown): boolean {

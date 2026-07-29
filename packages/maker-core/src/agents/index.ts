@@ -21,6 +21,10 @@ export {
   type ImageResizerConfig,
   type ImageResizerLogger,
 } from './shared/image-resizer.js';
+export {
+  parseReconnectAttemptMessage,
+  type ReconnectAttempt,
+} from './shared/network-error.js';
 // host 侧会话移动(workingDir 变更)时迁移 CLI 转录,防 resume 报
 // "No conversation found"(详见 claude-code/transcript-relocation.ts 注释)
 export {

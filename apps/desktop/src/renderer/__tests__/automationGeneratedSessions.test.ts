@@ -109,6 +109,7 @@ describe('automation-generated sessions', () => {
       'slack',
       'telegram',
       'discord',
+      'wechat',
       'scheduler',
       'learn',
       'shared',
@@ -968,7 +969,9 @@ describe('automation-generated sessions', () => {
     expect(zh.scheduler.runs.sessionValue).toBe('对话价值 {{value}}');
     expect(zh.scheduler.runs.runCost).toBe('本次开销 {{cost}}');
     expect(zh.scheduler.runs.legacyCostUnavailable).toBe('历史费用无法拆分');
-    expect(zh.scheduler.runs.persistentSessionGroup).toBe('持续对话 {{session}} · {{count}} 次运行');
+    expect(zh.scheduler.runs.persistentSessionGroup).toBe(
+      '持续对话 {{session}} · {{count}} 次运行',
+    );
     expect(zh.scheduler.runs.expandRemainingRuns).toBe('展开另外 {{count}} 次');
   });
 

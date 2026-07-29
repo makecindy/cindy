@@ -1,41 +1,55 @@
 /**
- * 出站(上游方向)HTTP 代理支持 ——
+ * 出站(上游方向)代理支持 ——
  *
  * 背景:proxy 转发上游用的是 node:http/https 直连,而 Node 的 http 栈不读系统代理、
  * 也不读代理环境变量。用户的代理软件跑在「系统代理」模式(非 TUN)时,浏览器 / Codex CLI
  * (reqwest 自动吃 env)都正常,唯独本代理的上游连接裸直连 → 高墙网络下 AggregateError
  * → 客户端收 502 "upstream unreachable"。本模块提供:
  *
- *   - parseOutboundProxyUrl:解析 `http://[user:pass@]host:port` 形式的代理地址
- *     (当前只支持 HTTP 代理;https/socks 代理返回 null,由调用方回落直连并告警)
+ *   - parseOutboundProxyUrl:解析 `http://[user:pass@]host:port` 与
+ *     `socks5://[user:pass@]host:port` 形式的代理地址(其余 scheme 返回 null,
+ *     由调用方回落直连并告警;SOCKS4/4a 与 TLS-to-proxy 的 https: 不支持)
  *   - createEnvOutboundProxyResolver:按惯例读 HTTPS_PROXY / HTTP_PROXY / ALL_PROXY /
  *     NO_PROXY(大小写两种拼写),给非 Electron 宿主(CLI / 远端 cc-manager)直接用
  *   - TunnelingHttpsAgent:经代理 CONNECT 隧道连 https 上游的 keep-alive Agent
  *     (TLS 端到端,由 https.Agent 原生逻辑完成,代理只见密文)
- *   - OutboundProxyAgentPool:按代理地址缓存 agent,复用连接池,随 proxy dispose 销毁
+ *   - OutboundProxyAgentPool:按 key 缓存 agent,复用连接池,随 proxy dispose 销毁
  *
- * 边界:代理鉴权只支持 URL userinfo → Proxy-Authorization: Basic;系统代理的
- * 解析(Electron session.resolveProxy)由宿主注入 resolver,本包不依赖 Electron。
+ * SOCKS5 的握手与两个 agent 在 socks5.ts(单向依赖本模块的 primitive,不反向引用)。
+ *
+ * 边界:HTTP 代理鉴权只支持 URL userinfo → Proxy-Authorization: Basic,SOCKS5 走
+ * RFC 1929 用户名/密码;系统代理的解析(Electron session.resolveProxy)由宿主注入
+ * resolver,本包不依赖 Electron。
  */
 
-import { request as httpRequest, type ClientRequestArgs, type RequestOptions } from 'node:http';
+import { type Agent as HttpAgent, request as httpRequest, type ClientRequestArgs, type RequestOptions } from 'node:http';
 import { Agent as HttpsAgent, type AgentOptions } from 'node:https';
 import type { TcpSocketConnectOpts } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { URL } from 'node:url';
 
-/** 解析后的出站代理目标。authHeader 是现成的 Proxy-Authorization 值(含 "Basic " 前缀)。 */
+/**
+ * 解析后的出站代理目标。
+ * kind='http' 用 authHeader(现成的 Proxy-Authorization 值,含 "Basic " 前缀);
+ * kind='socks5' 用 username / password(RFC 1929 走原始字节,不是 Basic 形态)。
+ */
 export interface OutboundProxyTarget {
+  kind: 'http' | 'socks5';
   /** 规范化代理地址(不含 userinfo,可安全进日志),例 "http://127.0.0.1:7890"。 */
   url: string;
   hostname: string;
   port: number;
   authHeader?: string;
+  username?: string;
+  password?: string;
 }
+
+/** 出站代理 agent 的公共类型;https.Agent 继承自 http.Agent,http 侧类型即可涵盖两者。 */
+export type OutboundProxyAgent = HttpAgent;
 
 /**
  * 出站代理解析器 —— per-request 以最终上游 origin(`https://host:port`)现取代理地址。
- * 返回 http:// 代理 URL = 该请求经代理转发;null/undefined = 直连。
+ * 返回 http:// 或 socks5:// 代理 URL = 该请求经代理转发;null/undefined = 直连。
  * 抛错按直连处理(fail-open,代理解析故障不断链路)。loopback 上游不会被调用。
  */
 export type OutboundProxyResolver = (
@@ -46,8 +60,10 @@ export type OutboundProxyResolver = (
  * 去掉 IPv6 字面量的方括号。WHATWG URL 的 `hostname` 对 IPv6 返回**带方括号**的
  * 形式(`new URL('https://[::1]').hostname === '[::1]'`),而比较 / 重组 authority
  * 都需要裸地址;所有消费 hostname 的入口先过这里归一化。
+ * 带括号的形态会一路传到 agent 的 `options.host`(实测 Node 不会自己剥),
+ * socks5.ts 编码目标地址前也要用它。
  */
-function stripIpv6Brackets(hostname: string): string {
+export function stripIpv6Brackets(hostname: string): string {
   return hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
 }
 
@@ -93,9 +109,22 @@ function safeDecodeUserinfo(value: string): string {
   }
 }
 
+// SOCKS5 的三种写法:socks5h 的「域名交给代理解析」正是本实现的固定语义,socks 按
+// 惯例视为 v5。SOCKS4/4a(socks4: / socks4a:)不支持 —— 无认证、无 IPv6,且 Chromium
+// PAC 里裸 `SOCKS` 前缀就是 v4。
+const SOCKS5_PROTOCOLS = new Set(['socks5:', 'socks5h:', 'socks:']);
+const DEFAULT_SOCKS_PORT = 1080;
+
 /**
- * 解析代理地址。只接受 http: 协议(CONNECT 隧道 / 绝对形式都建立在明文 HTTP 代理上);
- * https:(TLS-to-proxy)与 socks: 暂不支持,返回 null 由调用方回落直连。
+ * RFC 1929 的 UNAME / PASSWD 都是单字节长度前缀。解析这一侧把超长凭证降级成「没有
+ * 凭证」(静默截断会把错误的凭证发给代理,更难排查),代理若要求认证会给出明确的握手
+ * 错误;socks5.ts 的握手侧另有一道 fail-fast,兜住绕过本函数直接构造 target 的调用方。
+ */
+export const SOCKS5_CREDENTIAL_MAX_BYTES = 255;
+
+/**
+ * 解析代理地址。接受明文 HTTP 代理(CONNECT 隧道 / 绝对形式都建立在它上面)与 SOCKS5;
+ * 其余 scheme(https: 的 TLS-to-proxy、socks4:)不支持,返回 null 由调用方回落直连。
  * 任何输入都不抛错:解析失败一律返回 null。
  */
 export function parseOutboundProxyUrl(raw: string | null | undefined): OutboundProxyTarget | null {
@@ -107,20 +136,38 @@ export function parseOutboundProxyUrl(raw: string | null | undefined): OutboundP
   } catch {
     return null;
   }
-  if (u.protocol !== 'http:') return null;
+  const isSocks5 = SOCKS5_PROTOCOLS.has(u.protocol);
+  if (u.protocol !== 'http:' && !isSocks5) return null;
   if (!u.hostname) return null;
-  const port = u.port ? Number(u.port) : 80;
+  const port = u.port ? Number(u.port) : (isSocks5 ? DEFAULT_SOCKS_PORT : 80);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) return null;
-  let authHeader: string | undefined;
-  if (u.username) {
-    // URL 里的 userinfo 是百分号编码的,先解码再进 Basic。
-    const user = safeDecodeUserinfo(u.username);
-    const pass = u.password ? safeDecodeUserinfo(u.password) : '';
-    authHeader = `Basic ${Buffer.from(`${user}:${pass}`, 'utf8').toString('base64')}`;
-  }
+  // URL 里的 userinfo 是百分号编码的,先解码再用。
+  const user = u.username ? safeDecodeUserinfo(u.username) : '';
+  const pass = u.password ? safeDecodeUserinfo(u.password) : '';
   // hostname 去掉 IPv6 方括号:它会被直接用作 TCP connect host(net/tls 只认裸地址);
   // url 保留带括号的 u.host 形态(仅用于日志与 pool key)。
-  return { url: `http://${u.host}`, hostname: stripIpv6Brackets(u.hostname), port, authHeader };
+  const hostname = stripIpv6Brackets(u.hostname);
+
+  if (isSocks5) {
+    const withinLimit = Buffer.byteLength(user, 'utf8') <= SOCKS5_CREDENTIAL_MAX_BYTES
+      && Buffer.byteLength(pass, 'utf8') <= SOCKS5_CREDENTIAL_MAX_BYTES;
+    const useCredentials = user !== '' && withinLimit;
+    return {
+      kind: 'socks5',
+      url: `socks5://${u.host}${u.port ? '' : `:${port}`}`,
+      hostname,
+      port,
+      username: useCredentials ? user : undefined,
+      password: useCredentials ? pass : undefined,
+    };
+  }
+  return {
+    kind: 'http',
+    url: `http://${u.host}`,
+    hostname,
+    port,
+    authHeader: user ? `Basic ${Buffer.from(`${user}:${pass}`, 'utf8').toString('base64')}` : undefined,
+  };
 }
 
 /** 把可能带凭证的代理地址脱敏成可进日志的形式(只留 scheme://host:port)。 */
@@ -316,15 +363,34 @@ export class TunnelingHttpsAgent extends HttpsAgent {
 const AGENT_POOL_MAX_ENTRIES = 8;
 
 /**
- * 按代理地址缓存 TunnelingHttpsAgent,复用其 keep-alive 连接池。
+ * agent 缓存 key。凭证参与 key:同地址不同凭证不能共享连接池。上游协议也参与:
+ * https 与 http 上游用的是不同基类的 agent(TLS 包装 vs 裸隧道),不能混用同一个。
+ * key 只在进程内做缓存标识,不进日志。
+ *
+ * 用 JSON 数组而不是拼接:字段本身可能含分隔符,拼接会撞车 —— 用户名/密码
+ * `a:b` + `c` 与 `a` + `b:c` 拼出来是同一个 key,第二次查询会复用按第一组凭证建的
+ * agent,用错身份去认证。JSON 编码逐字段带引号与转义,不存在这种歧义。
+ */
+export function outboundProxyAgentKey(proxy: OutboundProxyTarget, upstreamProtocol: 'http:' | 'https:'): string {
+  return JSON.stringify([
+    proxy.kind,
+    proxy.url,
+    proxy.authHeader ?? '',
+    proxy.username ?? '',
+    proxy.password ?? '',
+    upstreamProtocol,
+  ]);
+}
+
+/**
+ * 按 key 缓存出站代理 agent,复用其 keep-alive 连接池。构造交给调用方的 `create`
+ * (HTTP 隧道与 SOCKS5 的 agent 分别定义在本模块与 socks5.ts,本模块不反向依赖它)。
  * 生命周期随 proxy server:dispose 时销毁全部 agent(断开空闲隧道)。
  */
 export class OutboundProxyAgentPool {
-  private readonly agents = new Map<string, TunnelingHttpsAgent>();
+  private readonly agents = new Map<string, OutboundProxyAgent>();
 
-  get(proxy: OutboundProxyTarget): TunnelingHttpsAgent {
-    // authHeader 参与 key:同地址不同凭证不能共享隧道池。
-    const key = `${proxy.url} ${proxy.authHeader ?? ''}`;
+  get(key: string, create: () => OutboundProxyAgent): OutboundProxyAgent {
     const existing = this.agents.get(key);
     if (existing) return existing;
     if (this.agents.size >= AGENT_POOL_MAX_ENTRIES) {
@@ -334,7 +400,7 @@ export class OutboundProxyAgentPool {
         this.agents.delete(oldest);
       }
     }
-    const agent = new TunnelingHttpsAgent(proxy);
+    const agent = create();
     this.agents.set(key, agent);
     return agent;
   }

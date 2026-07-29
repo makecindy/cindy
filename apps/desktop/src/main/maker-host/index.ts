@@ -58,8 +58,13 @@ import {
 } from './session-storage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { resolveSessionCcDebugFile } from '../logger.js';
+import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
 import { getRemoteSshPool } from '../remote-ssh/index.js';
+import {
+  getRemoteAgentProxyEnv,
+  reconcileCodexAgentProxyEnv,
+} from '../remote-ssh/agent-proxy.js';
 import { openCcManagerSession } from './cc-manager-client.js';
 import { getRemoteClaudeBinaryPath } from '../remote-ssh/cc-manager-install.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
@@ -67,9 +72,14 @@ import { deriveAvailableModels, refreshCatalogDerivedModels } from './catalog-to
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
+  reloadActiveCatalogForEndpointChange,
   refreshDiscoveredCodexModels,
+  setNativeProviderClaimListener,
 } from './createDesktopProviderService.js';
-import { clearAnthropicDiscoveredModels } from './model-discovery/anthropic.js';
+import {
+  clearAnthropicDiscoveredModels,
+  setAnthropicDiscoveryFailureListener,
+} from './model-discovery/anthropic.js';
 import {
   buildDesktopClaudeRuntimeConfig,
   desktopCodexRuntimeConfig,
@@ -80,9 +90,12 @@ import { notifyAutoPermissionClassifierUnavailable } from './claude-auto-permiss
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
   clearCodexProxyAuthInjection,
+  ensureCodexControlPlaneProxyReady,
   ensureCodexProxyReady,
+  getCodexControlPlaneProxyEndpoint,
   getCodexProxyAuthInjectionState,
   getCodexProxyEndpoint,
+  isCodexControlPlaneProxyHandleReady,
   isCodexProxyHandleReady,
   setCodexProxyAuthInjection,
   setCodexProxyGatewayKeyReader,
@@ -158,8 +171,55 @@ setActiveCatalogChangedListener((revision) => {
   }
 });
 
+/**
+ * anthropic 清单发现的失败态变化 → 广播 PROVIDER_CHANGED。
+ *
+ * 归因不进 active catalog(清单没变,没有 revision 可言),但 renderer 往往在拉取失败
+ * **之前**就取走了 provider 快照(15s 超时那条路径尤其明显)。不主动通知,设置页会一直
+ * 停在「正在发现」而不是讲明失败理由(PR #548 review)。
+ */
+setAnthropicDiscoveryFailureListener(() => {
+  try {
+    // 复用既有的「刷 capabilities + 广播」收口:清单确实没变,这一步只是把 provider
+    // 快照重新推给 renderer,让它重取带上失败归因的 listProviders。
+    refreshSelectableModelsAndBroadcast({});
+  } catch (error) {
+    desktopMakerLogger.warn('anthropic discovery failure broadcast failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
+/**
+ * 本机凭证绑定自愈成功 → 广播 PROVIDER_CHANGED。
+ *
+ * 连接态刚从 false 翻成 true，但只有触发那次读取的调用方拿到了新快照。其它窗口留在
+ * 「未连接」，配对的手机 / 控制端更是只认这条推送来失效缓存（PR #548 review）。
+ * anthropic 那条链路碰巧能在清单变化时顺带广播，xAI 则完全没有出口 —— 统一在这里补。
+ */
+setNativeProviderClaimListener(() => {
+  resetProviderModelAutoRefreshCooldowns();
+  try {
+    refreshSelectableModelsAndBroadcast({});
+  } catch (error) {
+    desktopMakerLogger.warn('native provider claim broadcast failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
 /** Re-project provider/model availability after the Cindy auth session changes. */
 export function refreshProviderAccessAfterAuthChange(): void {
+  resetProviderModelAutoRefreshCooldowns();
+  void reloadActiveCatalogForEndpointChange()
+    .then(() => {
+      refreshSelectableModelsAndBroadcast({});
+    })
+    .catch((error) => {
+      desktopMakerLogger.warn('provider catalog reload after auth realm change failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   try {
     refreshSelectableModelsAndBroadcast({});
   } catch (error) {
@@ -384,6 +444,20 @@ export function getMaker(): Maker {
         if (host?.getStatus() !== 'ready') {
           throw new Error(`remote ssh host not ready: ${remoteHostId}`);
         }
+        // 「Agent 流量走本地 Proxy」: pref 开启时确保 SSH 反向隧道就绪, 把代理
+        // env 合入 startParams.env — cc-mgr daemon 按 session spawn SDK, 每次
+        // 会话都吃到当前配置, 无需像 codex daemon 那样重启。隧道 arm 失败
+        // (sshd 拒 remote forwarding 等) 直接抛错, 不静默回落直连。
+        const proxyEnv = await getRemoteAgentProxyEnv(host);
+        const startParamsWithProxy = proxyEnv
+          ? {
+              ...(startParams as Record<string, unknown>),
+              env: {
+                ...((startParams as { env?: Record<string, string> }).env ?? {}),
+                ...proxyEnv,
+              },
+            }
+          : startParams;
         // SDK can't self-locate its native CLI binary on remote (bundled-into-cc-mgr
         // optional-dep resolver is frozen to desktop build platform). Probe + cache
         // the path here and pass it down; cc-manager-client merges it into the SDK
@@ -392,7 +466,7 @@ export function getMaker(): Maker {
         const { remoteQuery, dispose, detach } = await openCcManagerSession({
           host,
           sessionId,
-          startParams: startParams as unknown as Parameters<typeof openCcManagerSession>[0]['startParams'],
+          startParams: startParamsWithProxy as unknown as Parameters<typeof openCcManagerSession>[0]['startParams'],
           claudeBinaryPath,
           onApprovalRequest: onApprovalRequest as Parameters<typeof openCcManagerSession>[0]['onApprovalRequest'],
         });
@@ -484,14 +558,23 @@ export function getMaker(): Maker {
               ? 'provider-oauth'
               : 'env-key';
         const useOAuthBearer = authInjection === 'oauth-bearer';
-        setCodexProxyAuthInjection(authInjection);
-        await broadcastCodexRuntimeRoute();
+        const isControlPlane = ctx.hostPurpose === 'control-plane';
+        if (!isControlPlane) {
+          setCodexProxyAuthInjection(authInjection);
+          await broadcastCodexRuntimeRoute();
+        }
         setCodexProxyGatewayKeyReader(readClaudeApiKey);
 
         // 这个点在 CodexAgent.createHost() 内。返回的 codexProxyActive 会被冻到 AppServerHost 实例上,
         // 后续 startSession 只读 host 自己的事实,不再 live 读全局 flag。
-        await ensureCodexProxyReady();
-        const ready = isCodexProxyHandleReady();
+        if (isControlPlane) {
+          await ensureCodexControlPlaneProxyReady(authInjection);
+        } else {
+          await ensureCodexProxyReady();
+        }
+        const ready = isControlPlane
+          ? isCodexControlPlaneProxyHandleReady(authInjection)
+          : isCodexProxyHandleReady();
         if ((useOAuthBearer || authInjection === 'provider-oauth') && !ready) {
           const error = new Error(
             authInjection === 'provider-oauth'
@@ -503,7 +586,9 @@ export function getMaker(): Maker {
           throw error;
         }
         // gateway-key 模式下 proxy 挂了仍可 fallback 到 gateway base_url(codex 直连 gateway, 不裸奔)。
-        const endpoint = getCodexProxyEndpoint();
+        const endpoint = isControlPlane
+          ? getCodexControlPlaneProxyEndpoint(authInjection)
+          : getCodexProxyEndpoint();
         return {
           extraArgs: [...mcpExtraArgs, ...buildCodexProxySpawnArgs(endpoint, authInjection)],
           extraEnv: mcpExtraEnv,
@@ -562,6 +647,21 @@ export function getMaker(): Maker {
         return createSshDaemonTransport({
           remoteHost,
           logger: desktopMakerLogger,
+          // 「Agent 流量走本地 Proxy」: pref 开启时先建 SSH 反向隧道 + 对账
+          // codex daemon 的 env marker (漂移 → 重写 + 重启 daemon), 然后才让
+          // transport 探活/拉起 daemon。pref 关闭时 reconcile 是幂等 no-op。
+          beforeDaemonProbe: async () => {
+            // markerChanged && !daemonRestarted = 旧 daemon 活着跑旧 env —
+            // 继续 probe 会 attach 到 stale daemon, UI 报 tunnel active 而
+            // codex 流量走旧路由 (codex R10 P1): 按 bootstrap 失败抛出, 让
+            // session start 显式报错, 而不是静默复用。
+            const reconciled = await reconcileCodexAgentProxyEnv(remoteHost);
+            if (reconciled.markerChanged && !reconciled.daemonRestarted) {
+              throw new Error(
+                'codex daemon survived pkill after agent-proxy env change; refusing to attach the stale daemon (retry or restart the host)',
+              );
+            }
+          },
         });
       },
     });
@@ -592,6 +692,7 @@ export function getMaker(): Maker {
     // dispose 幂等: 没 spawn 过就 no-op。
     //
     desktopCodexAuthAdapter.setOnLogoutSuccess(async () => {
+      resetProviderModelAutoRefreshCooldowns('openai');
       await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth logout');
       clearCodexProxyAuthInjection();
       await broadcastCodexRuntimeRoute();
@@ -601,6 +702,7 @@ export function getMaker(): Maker {
     // 不重启则隐式会话继续复用旧钥匙形态,新登录不生效(codex review 2026-07-03 P2)。
     // 下次 getHost 会按新 fallback(oauth-bearer)重建并重设 proxy 注入。
     desktopCodexAuthAdapter.setOnLoginSuccess(async () => {
+      resetProviderModelAutoRefreshCooldowns('openai');
       // 必须在新 app-server 首次 model/list / Responses 请求之前清：bridge 的旧账号
       // accessToken/accountId 有 30s 内存缓存，晚清会让新 host 短暂带旧账号凭证请求。
       clearChatgptBridgeCredentialCache();
@@ -612,6 +714,7 @@ export function getMaker(): Maker {
     // UI 弹 "请重新登录" — 否则错误只会反复埋在后台日志里。payload 字段对齐
     // maker-ipc/auth.ts logout handler 的 broadcast 形态。
     desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (reason) => {
+      resetProviderModelAutoRefreshCooldowns('openai');
       // 运行中 401/token invalidation 不经过 maker:auth:logout IPC，必须在这里做同一套
       // auth-boundary catalog 收口；否则磁盘 cache 已删但内存 discovered/capabilities 仍旧。
       try {
@@ -636,6 +739,7 @@ export function getMaker(): Maker {
     // Claude 同款:订阅 refresh token 被服务端作废(invalid_grant)时,adapter.invalidate()
     // 清态后经这里广播,UI 立刻进「请重新登录」而不是连环 401 的假连接状态。
     desktopClaudeAuthAdapter.setOnInvalidatedBroadcast((reason) => {
+      resetProviderModelAutoRefreshCooldowns('anthropic');
       // 凭证已失效 = anthropic 动态清单失去可用性证明,与登出同款收口(清单+磁盘缓存)。
       void clearAnthropicDiscoveredModels().catch(() => { /* 清理失败不阻断失效广播 */ });
       const payload = {

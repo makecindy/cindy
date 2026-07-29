@@ -51,7 +51,20 @@ describe('desktop auth IPC validation', () => {
         org: `${'a'.repeat(64)}.example.com`,
         extra: 'x',
       }),
-    ).toEqual({ type: 'discover-sso-org', org: `${'a'.repeat(64)}.example.com` });
+    ).toEqual({
+      type: 'discover-sso-org',
+      org: `${'a'.repeat(64)}.example.com`,
+    });
+    expect(parseDesktopLoginAction({ type: 'discover-sso-org', org: 'corp' })).toEqual({
+      type: 'discover-sso-org',
+      org: 'corp',
+    });
+    expect(parseDesktopLoginAction({ type: 'confirm-sso-realm' })).toEqual({
+      type: 'confirm-sso-realm',
+    });
+    expect(parseDesktopLoginAction({ type: 'cancel-sso-realm' })).toEqual({
+      type: 'cancel-sso-realm',
+    });
     expect(
       parseDesktopLoginAction({
         type: 'request-code',

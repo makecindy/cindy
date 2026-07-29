@@ -168,10 +168,11 @@ export function CreateWorkerPopover({
   const currentModel = activeModels.find((m) => m.id === model);
   const modelCatalogLoading = activeCapabilitiesState.loading || providersLoading;
 
-  // 显式来源仅在「已连接、确实提供该模型、且该 (来源, 模型) 未被可见性开关隐藏」时
-  // 有效;其余(断开/下架/被隐藏/换了模型)收窄为 null 交回默认路由解析。可见性判据
-  // 与 activeModels 的 isVisible 同源(codex review:同模型多来源时,用户隐藏了记忆
-  // 来源的那份条目后,面板已不显示该行,不能仍显式路由过去)。device-link 恒 null。
+  // 显式来源仅在「已连接、确实提供该模型、且该 (来源, 模型) 未被**停用**」时有效;
+  // 其余(断开/下架/停用/换了模型)收窄为 null 交回默认路由解析。停用判据 =
+  // buildRegistry 烘焙的 model.disabled(供应商级 suspended 已被
+  // connectedProvidersForAgent 剔除)。「隐藏」不再收窄 —— 隐藏只是陈列过滤,
+  // 记忆来源被隐藏仍然合法可路由(2026-07 启用/显示双轴拆分)。device-link 恒 null。
   const narrowProviderSource = useCallback(
     (candidate: string | null, modelId: string): string | null => {
       if (!candidate || deviceId) return null;
@@ -180,7 +181,7 @@ export function CreateWorkerPopover({
       );
       if (!provider || !providerOffersModel(provider, modelId, agent)) return null;
       const catalogModel = getModel(provider, modelId, agent);
-      return catalogModel && isModelEnabled(agent, candidate, catalogModel) ? candidate : null;
+      return catalogModel && catalogModel.disabled !== true ? candidate : null;
     },
     [agent, deviceId, providers],
   );

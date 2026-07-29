@@ -283,11 +283,29 @@ describe('chatBridgeCapabilitiesForRoute', () => {
   });
 
   it.each([
+    ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-2-1-pro-260628'],
+    ['https://ark.ap-southeast-1.volces.com/api/v3/', 'doubao-seed-1-6-vision-260615'],
+  ])('enables image_url for Doubao Seed on official Volcengine Ark host: %s (#771)', async (upstream, model) => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBe('image_url');
+  });
+
+  it.each([
     ['https://api.moonshot.cn/v1', 'kimi-k2.6'],
     ['https://api.deepseek.com/v1', 'kimi-k3'],
     ['https://api.moonshot.cn.evil.example/v1', 'kimi-k3'],
     ['http://api.moonshot.cn/v1', 'kimi-k3'],
     ['not-a-url', 'kimi-k3'],
+    ['https://api.deepseek.com/v1', 'deepseek-v4-pro'],
+    ['https://ark.cn-beijing.volces.com/api/v3', 'deepseek-v4-pro'],
+    ['https://api.deepseek.com/v1', 'doubao-seed-2-1-pro-260628'],
+    ['https://ark.cn-beijing.volces.com.evil.example/api/v3', 'doubao-seed-2-1-pro-260628'],
+    ['http://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-2-1-pro-260628'],
+    // Seed 1.6 之前的版本号不放行(1.6 起才是原生多模态品牌线),锁死版本契约。
+    ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-1-5-pro-260101'],
+    ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-1-0'],
+    ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-pro'],
+    ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-1-5-vision-pro'],
   ])('keeps image input disabled for non-matching route %s / %s', async (upstream, model) => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
     expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBeUndefined();
@@ -365,6 +383,20 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
     // GET /models: body=undefined, headers 无 thread-id → 解析不出 session。
     expect(transform(undefined, { reqId: 1, method: 'GET', url: '/models?client_version=0.135.0', headers: {} }))
       .toEqual({ upstreamOverride: CHATGPT });
+  });
+
+  it('冻结 control-plane auth 形态后不受 session host 的全局模式改写', async () => {
+    const host = await import('../codex-proxy-host.js');
+    host.setCodexProxyAuthInjection('provider-oauth');
+    const transform = host.createModelRoutingTransform('oauth-bearer');
+
+    host.setCodexProxyAuthInjection('provider-oauth');
+    expect(transform(undefined, {
+      reqId: 1,
+      method: 'GET',
+      url: '/models',
+      headers: {},
+    })).toEqual({ upstreamOverride: CHATGPT });
   });
 
   it('env-key + 无 session + 无 model(GET /models)→ null(留默认网关, sk- key 本就有效)', async () => {
@@ -656,6 +688,8 @@ describe('codex proxy host', () => {
       tools: [
         { type: 'function', name: 'read_file' },
         { type: 'web_search', filters: { allowed_domains: ['docs.x.ai'] }, enable_image_search: true },
+        // Codex 不知道 xAI 还有 x_search;由 host 恒定补在末尾,Grok 才有 X 的实时视野。
+        { type: 'x_search' },
       ],
       input: [
         { type: 'message', role: 'system', content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
@@ -693,6 +727,108 @@ describe('codex proxy host', () => {
       ],
     });
     clearSessionProvider('session-xai');
+  });
+
+  describe('xAI 服务端搜索工具(x_search)注入', () => {
+    async function runXaiTransforms(sessionSuffix: string, body: Record<string, unknown>): Promise<unknown> {
+      const host = await freshCodexProxyHost();
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      const sessionId = `session-xsearch-${sessionSuffix}`;
+      const threadId = `thread-xsearch-${sessionSuffix}`;
+      host.registerComposed(sessionId, threadId, 'PRODUCT_PROMPT');
+      setSessionProvider(sessionId, 'xai');
+
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': threadId } };
+      let current: unknown = body;
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      clearSessionProvider(sessionId);
+      return current;
+    }
+
+    it('请求原本没有 tools 时也补上 x_search(Grok 默认就该能搜 X)', async () => {
+      const out = (await runXaiTransforms('no-tools', {
+        model: 'xai/grok-4.5',
+        input: [{ role: 'user', content: 'X 上今天 AI 圈在聊什么' }],
+      })) as Record<string, unknown>;
+
+      expect(out.tools).toEqual([{ type: 'x_search' }]);
+    });
+
+    it('上游已声明 x_search 时不重复注入,也不覆盖其参数', async () => {
+      const out = (await runXaiTransforms('already-declared', {
+        model: 'xai/grok-4.5',
+        tools: [{ type: 'x_search', from_date: '2026-07-01', to_date: '2026-07-28' }],
+        input: [{ role: 'user', content: 'hi' }],
+      })) as Record<string, unknown>;
+
+      expect(out.tools).toEqual([{ type: 'x_search', from_date: '2026-07-01', to_date: '2026-07-28' }]);
+    });
+
+    it('tool_choice:required + 唯一 function tool → 收窄成指名该 function,x_search 仍照常声明', async () => {
+      // required 作用于整个 tools 数组,附加 x_search 后模型可能用搜索顶替被强制的 function
+      // call。与 bridge 侧同口径:收窄 tool_choice,不摘工具声明(摘了会让前缀中途变动)。
+      const out = (await runXaiTransforms('forced-single', {
+        model: 'xai/grok-4.5',
+        tools: [{ type: 'function', name: 'read_file' }],
+        tool_choice: 'required',
+        input: [{ role: 'user', content: 'hi' }],
+      })) as Record<string, unknown>;
+
+      expect(out.tool_choice).toEqual({ type: 'function', name: 'read_file' });
+      expect(out.tools).toEqual([{ type: 'function', name: 'read_file' }, { type: 'x_search' }]);
+    });
+
+    it('tool_choice:required + 多个 function tool → 保留 required(Responses 无法表达子集限定)', async () => {
+      const out = (await runXaiTransforms('forced-multi', {
+        model: 'xai/grok-4.5',
+        tools: [
+          { type: 'function', name: 'read_file' },
+          { type: 'function', name: 'write_file' },
+        ],
+        tool_choice: 'required',
+        input: [{ role: 'user', content: 'hi' }],
+      })) as Record<string, unknown>;
+
+      expect(out.tool_choice).toBe('required');
+      expect(out.tools).toEqual([
+        { type: 'function', name: 'read_file' },
+        { type: 'function', name: 'write_file' },
+        { type: 'x_search' },
+      ]);
+    });
+
+    it('tool_choice:auto 不被改写', async () => {
+      const out = (await runXaiTransforms('auto-choice', {
+        model: 'xai/grok-4.5',
+        tools: [{ type: 'function', name: 'read_file' }],
+        tool_choice: 'auto',
+        input: [{ role: 'user', content: 'hi' }],
+      })) as Record<string, unknown>;
+
+      expect(out.tool_choice).toBe('auto');
+    });
+
+    it.each(['xai/grok-code-fast', 'xai/grok-build-preview'])(
+      '编码模型 %s 不注入(该系列没有 agentic 搜索工具面,带上会被上游拒)',
+      async (model) => {
+        const out = (await runXaiTransforms(`coding-${model}`, {
+          model,
+          tools: [{ type: 'function', name: 'read_file' }],
+          input: [{ role: 'user', content: 'hi' }],
+        })) as Record<string, unknown>;
+
+        expect(out.tools).toEqual([{ type: 'function', name: 'read_file' }]);
+      },
+    );
   });
 
   it('leaves custom_tool_call history untouched for non-xAI requests', async () => {
@@ -1344,6 +1480,10 @@ describe('codex proxy host', () => {
 
     expect(current).toEqual({
       model: 'grok-future',
+      // reasoning 对未知模型保守剥掉(目录查不到能力),但 x_search 反过来按黑名单放行:
+      // 只排除 grok-code / grok-build,未知的新 Grok 通用模型默认当作能搜 X —— 否则每出一个
+      // 新模型都要等目录更新才恢复搜 X,而搜 X 正是选 Grok 的主要理由。
+      tools: [{ type: 'x_search' }],
       input: [
         { type: 'message', role: 'system', content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
         { type: 'message', role: 'user', content: 'hello' },

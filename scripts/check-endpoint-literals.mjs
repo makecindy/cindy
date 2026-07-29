@@ -13,8 +13,9 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EAS_ENDPOINT_ENV_KEYS = Object.freeze([
   'EXPO_PUBLIC_FEISHU_APP_ID',
-  // 现役:端点清单自举基址(唯一烘焙远程 URL,由发版脚本临时注入)。
+  // 现役:本区与对端的两份清单自举基址,由发版脚本临时注入。
   'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL',
+  'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL',
   // 以下为已退役键(2026-07 端点清单重构后不再注入)——保留在名单里防复活。
   'EXPO_PUBLIC_CINDY_AUTH_BASE_URL',
   'EXPO_PUBLIC_XDT_API_BASE_URL',

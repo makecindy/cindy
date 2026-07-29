@@ -93,6 +93,7 @@ function scaffoldManifest(input: ForgeScaffoldInput): Record<string, unknown> {
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
+    icon: 'assets/icon.png',
   };
   if (input.template === 'agent-action') {
     return {
@@ -361,10 +362,18 @@ readline.createInterface({ input: process.stdin }).on('line', function (line) {
 `;
 }
 
+/**
+ * 占位图标(128×128 纯色 PNG,离线生成后内嵌)。让「有图标」成为骨架默认:
+ * 不配 icon 的插件在面板和身份头里只有默认拼图占位符,作者往往到发布才发现。
+ * 官方插件仓惯例图标放 assets/icon.png(见 FORGE_GUIDE §8.1),骨架直接对齐。
+ */
+const SCAFFOLD_ICON_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAABEElEQVR42u3SMREAIAwAsfpFAAsKOETgtCyYgGZ4A3+J1leqbmECAEYAIABuY259HAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJgEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAmASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQADodQCqFQAAmACAynYAQtWXyojiIUQAAAAASUVORK5CYII=';
+
 /** 按模板产出相对路径到源码内容的完整映射。 */
-function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string> {
+function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string | Buffer> {
   const manifest = scaffoldManifest(input);
-  const files: Record<string, string> = {
+  const files: Record<string, string | Buffer> = {
     [GHOST_MANIFEST_FILE]: `${JSON.stringify(manifest, null, 2)}\n`,
     'main.js':
       input.template === 'agent-action'
@@ -374,6 +383,7 @@ function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string> {
           : input.template === 'node-mcp'
             ? nodeMcpMainSource()
             : plainMainSource(),
+    'assets/icon.png': Buffer.from(SCAFFOLD_ICON_PNG_BASE64, 'base64'),
   };
   if (input.template === 'node-json-rpc') files['node/worker.cjs'] = nodeJsonRpcWorkerSource();
   if (input.template === 'node-mcp') files['node/worker.cjs'] = nodeMcpWorkerSource();
@@ -444,7 +454,13 @@ export async function scaffoldGhostDir(
     return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
   }
   const files = scaffoldFiles(input);
-  const validation = validateGhostManifest(JSON.parse(files[GHOST_MANIFEST_FILE]));
+  // 显式收窄而非 as 断言:manifest 恒为 JSON 字符串,二进制项(占位图标)另存;
+  // 未来若误把 manifest 写成 Buffer,这里在编译/测试期就报,而不是运行期 parse 炸。
+  const manifestRaw = files[GHOST_MANIFEST_FILE];
+  if (typeof manifestRaw !== 'string') {
+    return { ok: false, errorCode: 'INTERNAL', message: 'scaffold manifest 必须是 JSON 字符串' };
+  }
+  const validation = validateGhostManifest(JSON.parse(manifestRaw));
   if (!validation.ok) {
     return {
       ok: false,
@@ -707,6 +723,8 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 my-ghost/
 ├── ghost.json    ← 身份卡(必须,zip 根部)
 ├── main.js       ← 电子脑:后台逻辑入口(声明了 tools/cindy 时必须)
+├── assets/
+│   └── icon.png  ← 建议:插件图标(声明 icon 字段时必须存在;scaffold 会生成占位图,请替换成自己的)
 ├── locales/      ← 可选:宿主驱动的清单文案翻译(声明 locales 时英文必须存在)
 │   ├── en.json
 │   ├── zh-CN.json
@@ -729,6 +747,7 @@ my-ghost/
   "name": "我的意识",           // 展示名
   "description": "一句话说清这段意识是干嘛的(给人看:装入确认框/详情页)",  // 1–300 字
   "whenToUse": "需要生成图片、插画、配图、修图、P 图、改图时找我",  // 1–300 字,给模型看:进 agent 会话的意识花名册,是"用户不点名时 AI 能不能想起你"的关键。写成场景枚举,可反复调优;缺省时花名册回落用 description
+  "icon": "assets/icon.png",   // 建议:插件图标(包内相对路径;扩展名限 png/jpg/jpeg/webp/gif,不收 svg——svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面)。不配则面板与消息身份头显示默认拼图占位符;官方插件仓惯例放 assets/icon.png
   "locales": {                 // 可选:插件只跟随宿主语言;不支持/缺失语言固定回退 en
     "en": "locales/en.json",
     "zh-CN": "locales/zh-CN.json",
@@ -820,6 +839,10 @@ key、未知字段、原清单没有的条目、类型或长度不合格、文�
 不一致、无效 JSON 或单文件超过 64KB 都会在 Forge 打包期、内置播种期与安装期拒绝。
 清单列表、详情页、Panel 标题、安装/配置提示和 Agent 工具目录都消费同一份本地化结果。
 
+所有会作为对象索引的稳定标识——tool name、network secrets / connections key、
+node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`constructor\` 或
+\`prototype\`；这些名称是宿主保留键，打包时会直接拒绝。
+
 十五个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图)、\`agent\`(让
 当前 Agent 开始一个普通用户回合,见 §4.11)、\`panel\`(常驻
 面板)、\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
@@ -849,7 +872,7 @@ Claude Code 与 Codex 都能发现,见 §4.16)、\`workspace\`(请主机为项�
   "entries": ["node/build.cjs"],       // 可选 ≤4 条:额外工作进程入口(每入口一个独立进程,调用时用 entry 指名,见 §4.12.1;不能与 entry / 浏览器沙箱 entry / 彼此重复)
   "childSpawn": true,                  // 可选:worker 可请宿主代启申报入口的原样 stdio 子进程(见 §4.12.4;装入确认框单列一行)
   "secretBindings": [{                 // 可选 1–4 条:safeStorage 持久化凭证按方法临时注入 Worker
-    "key": "mail_code",                // 插件内唯一,小写字母开头,1–32 位小写/数字/下划线
+    "key": "mail_code",                // 插件内唯一,小写字母开头,1–32 位小写/数字/下划线;禁用宿主保留键(见 §2.1)
     "label": "邮箱授权码",             // 安装确认与设置页展示名
     "methods": ["mail/action"],         // 只在这些 JSON-RPC 方法中注入,每条 1–128 位
     "entry": "node/worker.cjs",         // 可选:逐字命中 node.entry/entries;缺省仅主入口
@@ -898,7 +921,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 "network": {
   "hosts": ["api.example.com", "*.weather.com"],   // 1–8 条;小写域名至少两段;通配只允许最左 "*.";装入确认框逐条展示给用户
   "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
-    "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32
+    "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键(见 §2.1)
     "label": "Example API Token",                   // 给用户看的名称(设置页/确认框)
     "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段)
     "hint": "在控制台生成后粘贴",                     // 可选提示(主机 Setup 卡与 settingsHtml 都会用到)
@@ -917,7 +940,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
     },
     "oauth": {                                      // source:"oauth" 时必填(其它来源禁写):主机托管 OAuth 授权详单(见 §4.7)
       "authorizeUrl": "https://accounts.example.com/authorize",  // 授权页(https;域名必须命中 hosts 白名单)
-      "tokenUrl": "https://accounts.example.com/token",          // code/refresh 交换端点(https;域名必须命中 hosts)
+      "tokenUrl": "https://accounts.example.com/token",          // code/refresh 交换端点(https;域名必须命中 hosts)。注:个别服务商(如 xAI)的新版 consent 页不再 302 回 loopback,而是页面 JS 跨源投递授权 code——主机允许的投递来源 = authorizeUrl/tokenUrl 的 origin + hosts 白名单命中的 https 域;consent 页与授权端点不同域时,把 consent 域(如 accounts.x.ai)也声明进 hosts 即可
       "clientId": "xxx.apps.example.com",           // 可选:内置 OAuth 客户端 ID(用户零配置开箱即用;用户在设置页自填的覆盖内置,清除自填即回落)
       "clientIdAlternatives": ["xxx-global.apps.example.com"],  // 可选 ≤8 条:仅 tokenBroker 模式;意识按 app-context 选 App 时,connect 只接受默认值或这里声明的公开 ID
       "clientSecret": "xxx",                        // 可选(须与 clientId 成对):内置 client 的 secret;桌面应用的 client 凭证本非机密,纯 PKCE 服务商可省略
@@ -932,7 +955,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
     }
   }],
   "connections": [{                                 // 可选 0–2 条:多连接声明——"地址 + 凭证成对多条"(自建实例场景如 GitLab,详见 §4.7「多连接」)。声明了 connections 时 hosts 可缺省/为空(静态域名与动态连接至少有其一);声明 connections 必须同时声明 settingsHtml
-    "key": "gitlab",                                // 小写字母开头,小写/数字/下划线,1–32;与 secrets[].key 共用命名空间,撞名拒装
+    "key": "gitlab",                                // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键;与 secrets[].key 共用命名空间,撞名拒装
     "label": "GitLab 实例",                          // 给用户看的连接类型名(1–64 字;确认框与设置页展示)
     "hint": "填实例域名与 Personal Access Token",     // 可选 ≤200 字提示(建议写进你的 settingsHtml 文案)
     "inject": { "header": "Private-Token", "format": "{value}" },  // 凭证注入形态(规则同 secrets 的 inject);**不允许**声明 inject.hosts——凭证恒只注入对应连接自身的地址,写了拒装
@@ -959,7 +982,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 - 条目三种引用:\`secret:<key>\`(\`network.secrets\` 或 \`node.secretBindings\` 声明的
   凭证:Node 绑定与 user 源查已保存、oauth 源查已连接账号;账号全过期时主机弹「重新连接」
   话术)、\`connection:<key>\`(该连接声明下至少添加一条)、
-  \`{ "kv": "<键名>", "label": "..." }\`(你 /kv 参数里的顶层键非空;键名主机无先验,
+  \`{ "kv": "<键名>", "label": "..." }\`(你 /kv 参数里的顶层键非空且不能是宿主保留键;键名主机无先验,
   label 必填)。Node 凭证同样可参与 setup.requires。
 - 引用必须逐字指向已声明的 key,悬空引用**打包期就拒**;\`login-email\` 源凭证恒就绪,
   引用它同样拒(没有配置动作可引导)。kv 引用要求已声明 settingsHtml(没有设置页没人填)。
@@ -974,7 +997,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 
 \`\`\`json
 "tools": [{
-  "name": "gen_image",
+  "name": "gen_image", // 小写字母开头,1–64 位小写/数字/下划线/连字符;禁用宿主保留键(见 §2.1)
   "description": "根据文字描述生成一张图片,并把它挂进画廊面板。返回可在聊天中渲染的图片地址。",
   "parameters": {
     "type": "object",
@@ -1602,7 +1625,9 @@ const connectInit = { method:'POST' };
 // 典型用法是先读 /app-context,由意识按 region 选择公开 App ID。
 if (selectedClientId) connectInit.body = JSON.stringify({ clientId: selectedClientId });
 const r = await (await fetch('/oauth/acct/connect', connectInit)).json();
-// → { ok:true, account } 或 { ok:false, error: 'NO_CLIENT_CONFIG'|'TIMEOUT'|'CANCELLED'|'CALLBACK_INVALID'|'EXCHANGE_FAILED'|'NETWORK'|'ACCOUNT_LIMIT', detail? }
+// → { ok:true, account } 或 { ok:false, error: 'NO_CLIENT_CONFIG'|'ACCOUNT_LIMIT'|'VAULT_WRITE_FAILED'|'INVALID_CONFIG'|'LISTEN_FAILED'|'TIMEOUT'|'CANCELLED'|'CALLBACK_INVALID'|'EXCHANGE_FAILED'|'SERVICE_UNAVAILABLE'|'NETWORK', detail? }
+// NETWORK = 客户端无法连接授权服务,提示用户检查网络后重试;
+// SERVICE_UNAVAILABLE = broker 路由缺失或服务端 5xx,提示用户稍后重试。
 // 授权成功时主机会自动弹「授权成功,已连接 xxx」的系统提示(带你的身份头,
 // 无需声明 notify 槽);设置页只管刷新自己的账号列表。
 // 断开账号 / 设默认账号:
@@ -2488,6 +2513,20 @@ const ensured = await cindy.workspace({
 
 界面最终会区分:Cindy 随包官方、此版本已审核、发布者已验证、未验证/无签名。正式
 签名和审核应由商店/发布流水线完成；本地 Forge 不替用户生成或保存正式密钥。
+
+### 8.1 发布到官方插件仓的额外门禁
+
+要提交到官方插件仓 \`makecindy/cindy-official-plugins\` 的插件,除本手册的打包/装入
+校验外还有仓级 CI 硬门禁,过不了整次发布被拦:
+
+- **四语言 locale 缺一不可**:\`locales\` 必须**恰好**包含 \`zh-CN\` / \`en\` / \`ja\` /
+  \`ko\` 四份,且每份都完整覆盖 \`name\` / \`description\` / \`whenToUse\` 与**全部**
+  \`tools[].description\`(工具键集合与清单逐一对齐)。注意这比 §2.1 的本地门槛
+  (「声明 locales 时英文必须存在、翻译可部分提供」)严格得多;
+- **图标**:惯例统一放 \`assets/icon.png\` 并在清单声明 \`icon\` 字段,不要散落在
+  包根;
+- 其余要求(目录命名、审核流程等)以该仓根部的 \`CONTRIBUTING.md\` 为准,提交前
+  在仓内跑一遍 \`node --test .tests/\` 自查。
 
 ## 9. 常见拒装原因速查
 

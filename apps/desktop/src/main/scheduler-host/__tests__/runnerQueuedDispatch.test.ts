@@ -68,7 +68,11 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner, type SchedulerQueueDeps } from '../runner';
+import {
+  MakerScheduleRunner,
+  type MakerScheduleRunnerDeps,
+  type SchedulerQueueDeps,
+} from '../runner';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
@@ -245,6 +249,8 @@ function createRunnerHarness(
     availableModels?: Array<{ id: string; efforts?: readonly string[]; defaultEffort?: string | null }>;
     /** 绑定会话 meta 里的 effort(= 排队路径的 baseline.effort);默认 undefined。 */
     metaEffort?: string;
+    /** 停用轴裁决桩(缺省 = 不裁决,与生产未接线时一致)。 */
+    checkModelRoute?: MakerScheduleRunnerDeps['checkModelRoute'];
   } = {},
 ) {
   const logger = createLogger();
@@ -273,6 +279,7 @@ function createRunnerHarness(
     notifier,
     logger,
     schedulerQueue,
+    checkModelRoute: opts.checkModelRoute,
   });
   return { runner, logger, notifier, maker };
 }
@@ -622,6 +629,40 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
 
     harness.emit({ type: 'done', data: {}, source: 'claude-code' });
     await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
+  });
+
+  it('停用轴终检:setModel 失败回退 live.model 且它已被停用 → 派发前失败收口(PR #744 R22)', async () => {
+    // 上方裁决对象是 targetModel(启用),但 setModel 被拒后 turn 实际跑在 live.model
+    // (claude-opus-4-6,期间被停用)。缺终检时该 turn 照发 = 继续经停用路由扣费。
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    harness.setModel.mockRejectedValue(new Error('switchModel rejected'));
+    const queue = createQueueHarness({ busy: true });
+    const checkModelRoute = vi.fn(
+      async (_agent: string, model: string, _providerId: string | null) =>
+        model === 'claude-opus-4-6'
+          ? ({ kind: 'reject', reason: 'model-disabled' } as const)
+          : ({ kind: 'pass' } as const),
+    );
+    const { runner } = createRunnerHarness(harness.session, queue.deps, {
+      availableModels: [
+        { id: 'claude-opus-4-6', efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+        { id: 'claude-opus-4-8', efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+      ],
+      checkModelRoute,
+    });
+
+    const firePromise = runner.fire(
+      heartbeatSchedule({ model: 'claude-opus-4-8' }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+
+    expect(harness.setModel).toHaveBeenCalledWith('claude-opus-4-8'); // 尝试切(被拒)
+    // 终检按实际运行路由 (live.model, 落地来源) 裁决 → reject → run 失败收口,turn 被中断。
+    await expect(firePromise).rejects.toThrow(/disabled in settings/);
+    expect(checkModelRoute).toHaveBeenCalledWith('claude-code', 'claude-opus-4-6', null);
+    expect(harness.setEffort).not.toHaveBeenCalled(); // 终检在 effort 下发之前拦截
   });
 
   it('clamps follow-session queued effort to the drifted live model, not the stale baseline (PR #479 review)', async () => {

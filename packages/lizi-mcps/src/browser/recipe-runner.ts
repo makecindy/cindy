@@ -264,18 +264,37 @@ export async function runRecipe(
 ): Promise<RecipeRunResult> {
   const vars: Record<string, unknown> = { ...(inputs ?? {}) };
   for (const [name, spec] of Object.entries(recipe.inputs ?? {})) {
-    const value = vars[name];
-    if (spec.required && (value === undefined || value === null)) {
+    if (spec.required && (vars[name] === undefined || vars[name] === null)) {
       return { ok: false, recipe: recipe.id, steps: [], message: `missing required input: ${name}` };
     }
-    // Declared inputs are interpolated into URLs / selectors / JS strings. Scalar
-    // number/boolean/bigint values coerce cleanly (`String(50)` → "50") and are
-    // exactly what built-in recipes advertise via siteguide (e.g. numeric `limit`),
-    // so normalize them to their string form here. Objects/arrays would corrupt
-    // into "[object Object]" / surprising JSON, so reject those loudly instead
-    // (rule 9: code-enforced).
+  }
+  // Normalize EVERY caller-supplied value — not just declared inputs. vars is
+  // seeded with all caller entries and RecipeSchema allows `inputs` to be
+  // omitted, so an L2 recipe can interpolate an undeclared variable; the
+  // guards below must not be bypassable by leaving a name undeclared.
+  // Interpolated values land in URLs / selectors / JS strings. Scalar
+  // number/boolean/bigint values coerce cleanly (`String(50)` → "50") and are
+  // exactly what built-in recipes advertise via siteguide (e.g. numeric `limit`),
+  // so normalize them to their string form here. Objects/arrays would corrupt
+  // into "[object Object]" / surprising JSON, so reject those loudly instead
+  // (rule 9: code-enforced).
+  for (const [name, value] of Object.entries(vars)) {
     if (value !== undefined && value !== null && typeof value !== 'string') {
       if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+        // A number beyond the safe-integer range was ALREADY rounded by
+        // JSON.parse before we ever saw it (e.g. a 19-digit X snowflake id),
+        // so String(value) would bake the corrupted value into a URL/JS step.
+        // Fail loudly BEFORE any step runs instead of navigating with it.
+        if (typeof value === 'number' && Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+          return {
+            ok: false,
+            recipe: recipe.id,
+            steps: [],
+            message:
+              `recipe input "${name}" exceeds the JSON safe-integer range and has lost precision — ` +
+              'pass it as a string (e.g. a 19-digit tweet id must be quoted)',
+          };
+        }
         vars[name] = String(value);
       } else {
         return {

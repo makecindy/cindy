@@ -42,20 +42,26 @@ import type {
 } from '@cindy/maker-core';
 import {
   effectiveSourceIdForModel,
-  isModelVisible,
   type ProviderView,
   visibleModelUnion,
 } from '@cindy/model-providers';
 
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { getMaker } from '../maker-host/index.js';
+import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
+import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
 import {
   wireSessionToIpc,
   isSessionInTurn,
-  installDesktopInteractionListener,
   noteSilentStopUserSend,
   onSilentStopSettled,
 } from '../maker-ipc/register.js';
+import {
+  beginInteractionRoute,
+  type InteractionHandler,
+  type InteractionRouteLease,
+  type TurnOrigin as RoutedTurnOrigin,
+} from '../maker-ipc/interactionRouter.js';
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
 import { toDesktopSessionDispatchOutcome } from '../maker-host/send-outcome.js';
@@ -79,7 +85,6 @@ import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
 import { getWorkspaceProviderSource } from './workspaceProviderSourceStore.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { getModelVisibilityOverride } from '../maker-host/model-visibility-mirror.js';
 import {
   createTurnActivity,
   markActivityWriting,
@@ -119,7 +124,7 @@ async function resolveNewSessionConfig(
 ): Promise<ResolvedHookSessionConfig> {
   let providers: ProviderView[] | null = null;
   try {
-    providers = await getDesktopProviderService().listProviders();
+    providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
   } catch (err) {
     log.warn(
       `hook provider catalog unavailable; falling back to maker capabilities: ${err instanceof Error ? err.message : String(err)}`,
@@ -129,14 +134,13 @@ async function resolveNewSessionConfig(
   const resolved = resolveHookSessionConfig(
     {
       readDefaults: () => readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined),
+      // 可执行清单按**启用**口径,不叠加「显示 / 隐藏」偏好:隐藏只是陈列过滤
+      // (选择器不列),被 IM 显式点名或兜底选中仍然合法;停用的模型与供应商已由
+      // visibleModelUnion 内建的准入过滤(model.disabled / suspended)剔除,点名
+      // 会走 defaults.ts 的降级 + warn 路径(2026-07 启用/显示双轴拆分)。
       getModels: (agentKind) =>
         providers
-          ? visibleModelUnion(providers, agentKind, (providerId, model) =>
-              isModelVisible(
-                getModelVisibilityOverride(agentKind, providerId, model.id),
-                model.defaultEnabled,
-              ),
-            )
+          ? visibleModelUnion(providers, agentKind, () => true)
           : getMaker().getCapabilities(agentKind).availableModels,
       getPermissionModes: (agentKind) =>
         getMaker()
@@ -149,7 +153,11 @@ async function resolveNewSessionConfig(
 
   // 目录级来源偏好(纯本地, 用户在工作目录映射行显式选的来源)优先于草稿默认来源。
   const channel =
-    sourceIm === 'telegram' ? ('telegram' as const) : sourceIm === 'slack' ? ('slack' as const) : null;
+    sourceIm === 'telegram'
+      ? ('telegram' as const)
+      : sourceIm === 'slack'
+        ? ('slack' as const)
+        : null;
   const workdirProviderId =
     channel !== null && workspaceCtx?.alias
       ? getWorkspaceProviderSource(channel, workspaceCtx.teamId, workspaceCtx.alias)
@@ -163,7 +171,26 @@ async function resolveNewSessionConfig(
   const providerId = providers
     ? effectiveSourceIdForModel(providers, preferredProviderId, resolved.model, resolved.agentKind)
     : resolved.providerId;
-  return { ...resolved, providerId };
+  // 停用收口(PR #744 review 第十、十四轮):两条路径都必须经宽松降级裁决 ——
+  //   · 目录读取失败:冻结的 availableModels 不带停用标志、saved provider 未经校验,
+  //     live 壳的目录故障分支 = override-only 保守裁决(只凭本地 override 文件判);
+  //   · 目录读取成功但该 agent 的启用模型集为空:上方 getModels 过滤后
+  //     resolveHookSessionConfig 会回退到 raw saved desktop model(未准入),
+  //     effectiveSourceIdForModel 解析为 null 后若直接返回,后续 createSession 仍以
+  //     停用模型 + 隐式来源直建付费会话。
+  // 命中即逐级丢弃;模型判死抛错交给 hook 既有失败路径。
+  const lenient = providers
+    ? resolveLenientRoute(providers, resolved.agentKind, resolved.model, providerId ?? null)
+    : await resolveLenientSessionRoute(resolved.agentKind, resolved.model, providerId ?? null);
+  if (!lenient.model) {
+    throw new Error('hook session route unavailable: model disabled in settings');
+  }
+  if (lenient.degraded) {
+    log.warn(
+      `hook saved route degraded (disabled in settings): model=${resolved.model} providerId=${providerId ?? 'null'} catalog=${providers ? 'ok' : 'outage'}`,
+    );
+  }
+  return { ...resolved, model: lenient.model, providerId: lenient.providerId };
 }
 
 /** 后台 subagent 事件静默兜底(同 scheduler BG_TASK_IDLE_FALLBACK_MS 语义)。 */
@@ -404,6 +431,17 @@ export function createMakerHookSessionRunner(deps: {
         durationMs: Date.now() - startedAt,
       });
 
+      /**
+       * 授权判定刻意**只在 dispatcher 侧**做(定位时 + 执行前按当前映射重查),
+       * runner 不再参与。曾经尝试过把判定贯穿到这里 —— 比对 meta.workDir、比对
+       * live session 的 workDir 并重建、在 send 前回调实时授权 —— 结果是每加一层
+       * 都要重新接入锁、代际、会话生命周期、附件与 worktree 清理这些横切关注点,
+       * 接不全就是新一轮缺陷(打断桌面会话、清掉在用的临时附件、listener 泄漏)。
+       * 那些缺陷比它要防的窗口更严重: 窗口内最多是一条在途消息在"校验它时还合法"
+       * 的目录里多跑一轮, 而 agent 的文件边界本就是 allowedFileRoots: [workingDir],
+       * 不会越到别处。这个取舍写在 PR #733 的风险段里。
+       */
+
       // resolved 路径必有 model; 复用路径 meta 缺失时兜底草稿默认
       const effectiveModel = model?.trim()
         ? model
@@ -422,39 +460,40 @@ export function createMakerHookSessionRunner(deps: {
       const providerId = req.isNew ? (resolved?.providerId ?? null) : rowProviderId;
 
       let session: Awaited<ReturnType<ReturnType<typeof getMaker>['createSession']>>;
+      const createOpts: Parameters<ReturnType<typeof getMaker>['createSession']>[0] = {
+        id: req.sessionId,
+        agentKind: effectiveAgentKind,
+        workingDir,
+        model: effectiveModel,
+        ...(providerId !== null ? { providerId } : {}),
+        ...(effort !== undefined ? { effort } : {}),
+        permissionMode,
+        // chat 伪目录新会话: 标记 dialogue, 落侧边栏「对话」分组而非按
+        // dialogues/<日期>/<id> 目录名聚成项目节点
+        ...(req.isNew && req.workspaceKind !== undefined
+          ? { workspaceKind: req.workspaceKind }
+          : {}),
+        title: req.isNew ? (req.title ?? undefined) : undefined,
+        // 渠道标记(仅 hook 亲生新会话): cindy_feishu_bot 据此在构建期给
+        // 工具描述注入渠道路由提示。两个刻意限定:
+        //   - 不用 'slack'(那是已退役的 organic SlackIM relay 渠道的历史
+        //     标记,留给存量会话的侧边栏显示,新会话不再产生);
+        //   - 复用/接管路径(isNew=false,可能是桌面端创建的会话)不传,
+        //     否则冷 resume 时会把桌面会话打上 Slack 渠道描述并存续整个
+        //     进程生命周期(对齐 im/turnRunner「attached 不传 vendorOptions」
+        //     的裁决)。hook turn 本身的渠道说明由逐 turn 的
+        //     provider-aware hook prompt note 全覆盖,不依赖这里。
+        ...(req.isNew
+          ? {
+              vendorOptions: {
+                source: req.source?.im === 'telegram' ? 'telegram' : 'slack-hook',
+              },
+            }
+          : {}),
+        resumeSessionId,
+      };
       try {
-        session = await maker.createSession({
-          id: req.sessionId,
-          agentKind: effectiveAgentKind,
-          workingDir,
-          model: effectiveModel,
-          ...(providerId !== null ? { providerId } : {}),
-          ...(effort !== undefined ? { effort } : {}),
-          permissionMode,
-          // chat 伪目录新会话: 标记 dialogue, 落侧边栏「对话」分组而非按
-          // dialogues/<日期>/<id> 目录名聚成项目节点
-          ...(req.isNew && req.workspaceKind !== undefined
-            ? { workspaceKind: req.workspaceKind }
-            : {}),
-          title: req.isNew ? (req.title ?? undefined) : undefined,
-          // 渠道标记(仅 hook 亲生新会话): cindy_feishu_bot 据此在构建期给
-          // 工具描述注入渠道路由提示。两个刻意限定:
-          //   - 不用 'slack'(那是已退役的 organic SlackIM relay 渠道的历史
-          //     标记,留给存量会话的侧边栏显示,新会话不再产生);
-          //   - 复用/接管路径(isNew=false,可能是桌面端创建的会话)不传,
-          //     否则冷 resume 时会把桌面会话打上 Slack 渠道描述并存续整个
-          //     进程生命周期(对齐 im/turnRunner「attached 不传 vendorOptions」
-          //     的裁决)。hook turn 本身的渠道说明由逐 turn 的
-          //     provider-aware hook prompt note 全覆盖,不依赖这里。
-          ...(req.isNew
-            ? {
-                vendorOptions: {
-                  source: req.source?.im === 'telegram' ? 'telegram' : 'slack-hook',
-                },
-              }
-            : {}),
-          resumeSessionId,
-        });
+        session = await maker.createSession(createOpts);
       } catch (err) {
         // session 未建成: 若有预建 worktree 则回收(同 maker-ipc/register.ts
         // 的 shouldRecycleHandoffWorktreeOnFailure 判据), 防孤儿泄漏
@@ -462,6 +501,39 @@ export function createMakerHookSessionRunner(deps: {
           void WorktreeManager.removeWorktreeForSession(req.sessionId).catch(() => undefined);
         }
         return fail(err instanceof Error ? err.message : String(err));
+      }
+
+      /**
+       * 拿到的可能是**进程里早就活着的那个实例**: maker.createSession 对已在
+       * activeSessions 里的 id 直接返回它, 忽略上面传的 workingDir。侧边栏
+       * "移动到项目"只改库里的行, 那个实例的 workDir 仍是它创建时的目录 ——
+       * 于是 dispatcher 按库里的新目录过了映射校验, 真正执行却在旧目录。
+       *
+       * 这不是"校验到执行之间的窗口"(那条已在 PR #733 的风险段里声明接受),
+       * 而是**持久错配**: 实例不换, 每次重试都一样, 直到会话自然关闭。所以这里
+       * 必须拦 —— 判据是"真正要跑的这个目录此刻还在映射内吗", 由 dispatcher 注入
+       * (它才查得到映射)。
+       *
+       * 刻意只判、不重建: 关掉再建会打断可能正用着它的桌面会话、触发 onClose 的
+       * 附件与 worktree 清理, 前几轮实测这些后果比问题本身更重(PR #733 review)。
+       * 目录仍在映射内的合法移动(A→B 都在映射里)不受影响: 那时判定通过, 这一轮
+       * 继续在 A 跑, 与本 PR 之前的行为一致。
+       *
+       * **只对复用/接管路径生效**: 新会话的 id 是刚生成的, activeSessions 里不
+       * 可能有, createSession 一定按传入的 workingDir 新建 —— 错配根本不存在。
+       * 反倒是在这里拦下新会话会留垃圾: 那时 agent 已启动、session 行已插入、
+       * 预建的 worktree 还注册着(回收只在 createSession 抛错时跑), 于是留下一个
+       * 空会话 + 孤儿 worktree, 而渠道那边显示"没有执行"(同一轮 review 指出)。
+       * 新建路径那一小段(execute 的映射收口 -> createSession)属于已声明接受的
+       * 窗口, 见 PR #733 的风险段。
+       */
+      if (!req.isNew && req.isDirAuthorized && !req.isDirAuthorized(session.workDir)) {
+        log.warn(
+          `hook run aborted: live session ${req.sessionId} runs in a directory that is no longer in the workspace map`,
+        );
+        return fail(
+          '这个对话正在一个已不在工作目录映射里的目录中运行，本条消息没有执行。把该目录加进 设置 → 远程连接 → 工作目录映射，或在桌面端关掉这个对话后重发。',
+        );
       }
 
       // 运行时来源注入(路由层经 session-provider-store 决定上游与钥匙):
@@ -476,13 +548,11 @@ export function createMakerHookSessionRunner(deps: {
       // renderer 可见性: 不 wire 则消息不落库、UI 空白(scheduler Phase 6 老坑)
       wireSessionToIpc(session);
 
-      // 交互卡链路: 覆盖 wireSessionToIpc 装上的桌面版 interaction listener。
-      // hook 是无人值守 turn, 交互必须走来源渠道卡片 + 有界超时 —— 旧行为里
-      // 模型调 AskUserQuestion 会把请求发给桌面 renderer 无限死等, 直到
-      // 60min 整 turn 硬超时才以 error 收口。turn 结束后归还桌面版 listener
-      // (用户在桌面端继续用该会话时交互仍走桌面弹窗)。
+      // hook 是无人值守 turn,交互必须走来源渠道卡片 + 有界超时。Session
+      // listener 由中央 InteractionRouter 持有;这里只准备本 turn 的 handler,
+      // 真正的 route 在 beforeProviderStart 屏障内登记。
       const ownInteractionIds = new Set<string>();
-      const hookInteractionsInstalled = req.onInteraction !== undefined;
+      let interactionRouteLease: InteractionRouteLease | null = null;
       const headlessTurn = {
         closed: false,
         release: null as (() => void) | null,
@@ -493,10 +563,10 @@ export function createMakerHookSessionRunner(deps: {
         if (headlessTurn.closed || headlessTurn.release) return;
         headlessTurn.release = beginHeadlessGhostSetupTurn(session.id);
       };
-      if (req.onInteraction) {
-        const sendCard = req.onInteraction;
-        const sendCancel = req.onInteractionCancel;
-        session.setInteractionListener(async (ireq) => {
+      const handleHookInteraction: InteractionHandler = async (ireq) => {
+        if (req.onInteraction) {
+          const sendCard = req.onInteraction;
+          const sendCancel = req.onInteractionCancel;
           // permission 与问答/计划卡同走 compose -> Slack 卡 -> 决策回流:
           // 非 bypass 会话(用户在 Slack 显式选了收紧档)的权限请求出三按钮卡,
           // 超时/收口安全默认拒绝(compose 的 defaultDecision)
@@ -527,19 +597,35 @@ export function createMakerHookSessionRunner(deps: {
           });
           ownInteractionIds.delete(ireq.requestId);
           return decision;
-        });
-      }
-      /** turn 收口清扫: 未决交互按默认自决 + 归还桌面版 listener。幂等。 */
+        }
+        if (ireq.kind === 'ask_user_question') {
+          return { kind: 'ask_user_question', answers: {} };
+        }
+        if (ireq.kind === 'plan_review') {
+          return {
+            kind: 'plan_review',
+            behavior: 'deny',
+            reason: 'headless_interaction_unavailable',
+            dismissed: true,
+          };
+        }
+        return {
+          kind: 'permission',
+          behavior: 'deny',
+          reason: 'headless_interaction_unavailable',
+        };
+      };
+      /** turn 收口清扫: 未决交互按默认自决 + 释放中央 route。幂等。 */
       const finalizeInteractions = (): void => {
         headlessTurn.closed = true;
         headlessTurn.release?.();
         headlessTurn.release = null;
-        if (!hookInteractionsInstalled) return;
+        interactionRouteLease?.release('hook_turn_terminal');
+        interactionRouteLease = null;
         for (const iid of [...ownInteractionIds]) {
           cancelHookInteraction(iid, '任务已结束, 此交互已失效');
         }
         ownInteractionIds.clear();
-        installDesktopInteractionListener(session);
       };
       // 新建会话广播 -> 侧边栏实时出现(复用/接管的会话本来就在列表里, 不用发)
       if (req.isNew) {
@@ -890,6 +976,25 @@ export function createMakerHookSessionRunner(deps: {
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,
+          beforeProviderStart: () => {
+            const routeOrigin: RoutedTurnOrigin =
+              req.source?.im === 'slack'
+                ? { kind: 'im', channel: 'slack' }
+                : { kind: 'hook', source: req.source?.im ?? 'unknown' };
+            interactionRouteLease = beginInteractionRoute(session, {
+              route: {
+                sessionId: session.id,
+                turnId: randomUUID(),
+                origin: routeOrigin,
+                interactionSurface: req.onInteraction ? 'channel-card' : 'headless',
+              },
+              handle: handleHookInteraction,
+              onCancel: (requestId) => {
+                ownInteractionIds.delete(requestId);
+                return cancelHookInteraction(requestId, '任务已结束, 此交互已失效');
+              },
+            });
+          },
           onAccepted: async () => {
             // Admission may wait behind a user-driven Desktop turn. Only this
             // accepted hook turn is headless; preparation and queue wait are
@@ -950,7 +1055,7 @@ export function createMakerHookSessionRunner(deps: {
         return fail(err instanceof Error ? err.message : String(err));
       } finally {
         if (hardTimer) clearTimeout(hardTimer);
-        // 无论正常收口还是超时/错误, 未决交互都按默认收口并归还桌面 listener
+        // 无论正常收口还是超时/错误,未决交互都按默认收口并释放中央 route
         finalizeInteractions();
       }
 

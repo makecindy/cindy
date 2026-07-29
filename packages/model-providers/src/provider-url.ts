@@ -9,6 +9,7 @@ export function isProviderRequestPath(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   const queryIndex = value.indexOf('?');
   const path = queryIndex === -1 ? value : value.slice(0, queryIndex);
+  const hasEncodedPathSeparator = /%(?:2f|5c)/i.test(path);
   const hasDotSegment = path
     .split('/')
     .some((segment) => {
@@ -23,9 +24,41 @@ export function isProviderRequestPath(value: unknown): value is string {
     && !value.includes('#')
     && !value.includes('\\')
     && !/[^\u0021-\u007e]/.test(value)
+    // Keep byte-for-byte parity between WHATWG URL setters and transparent http.request paths.
+    // Characters outside RFC 3986 path/query delimiters must be percent-encoded by the caller.
+    && /^\/[A-Za-z0-9\-._~%!$&()*+,;=:@/?]*$/.test(value)
     && !/%(?![0-9A-Fa-f]{2})/.test(value)
+    && !hasEncodedPathSeparator
     && !hasDotSegment
   );
+}
+
+/**
+ * 无鉴权本机代理的 URL 边界。只接受真正的 loopback 主机，避免把 `auth:none`
+ * 配置改成远端地址后让应用静默向第三方发送提示词。
+ */
+export function isLoopbackProviderUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  try {
+    const url = new URL(value);
+    if (
+      (url.protocol !== 'http:' && url.protocol !== 'https:')
+      || url.username
+      || url.password
+    ) {
+      return false;
+    }
+    const hostname = url.hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname === '[::1]' || hostname === '::1') return true;
+    const octets = hostname.split('.');
+    return (
+      octets.length === 4
+      && octets[0] === '127'
+      && octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**

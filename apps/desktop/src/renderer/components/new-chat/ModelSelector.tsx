@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useState,
   useMemo,
   useEffect,
@@ -27,13 +28,13 @@ import { useModelPricing } from '@/hooks/useModelPricing';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
-  formatModelPricePair,
   modelPriceDiscountLabelValues,
   modelPriceDetailRows,
   modelPricePresentation,
 } from '@/lib/modelPriceFormat';
 import {
   filterChatBridgedCodexProviders,
+  isDeviceModelVisible,
   providerMonogram,
   resolveVisibleModelAgentKind,
   selectVisibleModels,
@@ -44,6 +45,7 @@ import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { useDeviceLinkModelMirrorVersion } from '@/state/deviceLinkModelMirror';
 import {
   connectedProvidersForAgent,
+  actualSourceIdForModel,
   effectiveSourceIdForModel,
   getModel,
   modelSupportsFastMode,
@@ -53,6 +55,7 @@ import {
   visibleModelUnion,
   type ProviderView,
 } from '@cindy/model-providers';
+import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
@@ -89,6 +92,19 @@ const PROVIDER_TITLE_KEY: Record<string, string> = {
 
 // 配置面板锚在主菜单内缩 8px 的模型行上；补偿这段内缩，让两块面板贴边但不重叠。
 const MODEL_OPTIONS_SIDE_OFFSET = 8;
+const MODEL_LIST_DEFAULT_MAX_HEIGHT_PX = 300;
+// 一级菜单只保留单行模型信息与必要标签：20px 内容 + 16px 纵向 padding。
+const MODEL_LIST_ROW_HEIGHT_PX = 36;
+const MODEL_LIST_ROW_GAP_PX = 2;
+
+export function modelListMaxHeightForRows(maxVisibleRows?: number): number | undefined {
+  if (maxVisibleRows === undefined || !Number.isFinite(maxVisibleRows)) return undefined;
+  const rows = Math.max(1, Math.floor(maxVisibleRows));
+  return Math.min(
+    MODEL_LIST_DEFAULT_MAX_HEIGHT_PX,
+    rows * MODEL_LIST_ROW_HEIGHT_PX + Math.max(0, rows - 1) * MODEL_LIST_ROW_GAP_PX,
+  );
+}
 
 function providerDisplayName(p: ProviderView, t: (key: string) => string): string {
   const key = PROVIDER_TITLE_KEY[p.id];
@@ -101,6 +117,7 @@ export function ProviderMark({
   providerId,
   name,
   routing,
+  logoKind,
   colorClass = 'text-[var(--model-trigger-text)]',
   withMargin = true,
   dense = false,
@@ -108,6 +125,7 @@ export function ProviderMark({
   providerId: string;
   name?: string;
   routing?: ProviderView['routing'];
+  logoKind?: ProviderView['logoKind'];
   colorClass?: string;
   withMargin?: boolean;
   /** 列表行前缀用 dense:比 trigger 小一档(约 -10%)。两套静态尺寸,JIT 友好。 */
@@ -115,11 +133,12 @@ export function ProviderMark({
 }) {
   const common = cn(withMargin && 'mr-1.5', 'shrink-0', colorClass);
   const markSize = dense ? 12.3 : 13;
-  if (hasProviderLogo(providerId, routing)) {
+  if (isProviderLogoKind(logoKind) || hasProviderLogo(providerId, routing)) {
     return (
       <ProviderLogoMark
         providerId={providerId}
         routing={routing}
+        logoKind={logoKind}
         size={markSize}
         className={
           providerId === 'xd'
@@ -156,6 +175,7 @@ export function ModelIconMark({
   providerId,
   name,
   routing,
+  logoKind,
   colorClass = 'text-[var(--model-trigger-text)]',
   withMargin = true,
   dense = false,
@@ -166,6 +186,7 @@ export function ModelIconMark({
   providerId: string;
   name?: string;
   routing?: ProviderView['routing'];
+  logoKind?: ProviderView['logoKind'];
   colorClass?: string;
   withMargin?: boolean;
   dense?: boolean;
@@ -188,6 +209,7 @@ export function ModelIconMark({
       providerId={providerId}
       name={name}
       routing={routing}
+      logoKind={logoKind}
       colorClass={colorClass}
       withMargin={withMargin}
       dense={dense}
@@ -246,6 +268,32 @@ function ModelPromotionBadge({ children }: { children: ReactNode }) {
   );
 }
 
+export interface ModelSelectorAgentIdentity {
+  vendorKey: 'cc' | 'codex';
+  /**
+   * current = 已由会话/runtime 元数据确认的当前 Agent；
+   * pending = 已登记、将在下一条消息应用的切换目标。
+   */
+  state: 'current' | 'pending';
+}
+
+export function resolveModelSelectorAgentIdentity(
+  runtimeAgentKind: AgentKind | null | undefined,
+  pendingTarget: AgentKind | null | undefined,
+): ModelSelectorAgentIdentity | undefined {
+  if (pendingTarget) {
+    return {
+      vendorKey: pendingTarget === 'codex' ? 'codex' : 'cc',
+      state: 'pending',
+    };
+  }
+  if (!runtimeAgentKind) return undefined;
+  return {
+    vendorKey: runtimeAgentKind === 'codex' ? 'codex' : 'cc',
+    state: 'current',
+  };
+}
+
 interface ModelSelectorProps {
   modelId: string;
   effort: Effort;
@@ -272,6 +320,8 @@ interface ModelSelectorProps {
    * 其他消费方(ScheduleChips / ImDefaultSettingsSection / CreateWorkerPopover 等)不传 = 行为不变。
    */
   sourceDisconnected?: boolean;
+  /** 语义同 ModelSelectorContentProps.actualRoute(仅已建会话传 true)。 */
+  actualRoute?: boolean;
   /** Fast Mode 状态 + 回调(从工具栏搬进 Edit 配置列)。不传 → 配置列不显示 Fast 开关。 */
   fastMode?: boolean;
   onFastModeChange?: (enabled: boolean) => void | Promise<void>;
@@ -279,6 +329,12 @@ interface ModelSelectorProps {
   modelMemory?: ModelMemoryAccessors;
   /** When provided, only models with this vendorKey are shown in the dropdown. */
   vendorKey?: 'cc' | 'codex';
+  /**
+   * 已创建会话的 trigger 同时展示 Agent 与模型，避免 Claude Code 使用 OpenAI 模型时
+   * 只看来源图标而误判成 Codex。必须由权威 session/runtime 身份或明确切换 intent 提供，
+   * 不得从用于模型列表过滤的 vendorKey 推断。紧凑布局仅视觉收起，aria/title 保留完整语义。
+   */
+  agentIdentity?: ModelSelectorAgentIdentity;
   /** device-link 远程会话所属被控端 id;非空 = 列被控端的模型 + 退化为纯列表(不分供应商段)。 */
   deviceId?: string;
   /**
@@ -302,9 +358,9 @@ interface ModelSelectorProps {
   disabled?: boolean;
   /** 窄容器下把 trigger 字号/高度各压一档,默认 false。 */
   dense?: boolean;
-  /** 窄态工具栏的简略触发器:隐藏 effort / Fast 次要信息并限制模型名宽度。 */
+  /** 窄 composer 的简略触发器:隐藏 effort / Fast 次要信息并限制模型名宽度。 */
   compactToolbar?: boolean;
-  /** 极窄工具栏进一步隐藏模型文字，只保留模型图标和下拉箭头。 */
+  /** 极窄 composer 进一步隐藏模型文字，只保留模型图标和下拉箭头。 */
   ultraCompactToolbar?: boolean;
   /** Trigger presentation: toolbar keeps the compact chat pill; field renders a settings input-like control. */
   triggerVariant?: 'toolbar' | 'field';
@@ -314,6 +370,11 @@ interface ModelSelectorProps {
   useMorphPopover?: boolean;
   /** Popover 弹出方向,默认 "top"（底部工具栏向上弹），dialog 内嵌场景传 "bottom"。 */
   popoverSide?: 'top' | 'bottom';
+  /**
+   * 模型列表最多露出的标准行数；超出后列表自身滚动。
+   * 不传时沿用通用面板的 300px 上限，供 Settings 等紧凑场景按行数收窄。
+   */
+  maxVisibleModelRows?: number;
   /** 关闭模型的 effort / Fast 编辑入口；只选择模型 id 的设置项使用。 */
   configurationEnabled?: boolean;
   /** 可选的列表首行兜底值，例如“不指定（使用原逻辑）”。 */
@@ -371,6 +432,17 @@ interface ModelSelectorContentProps {
   excludeChatBridgedCodex?: boolean;
   /** 选中后是否自动关闭。Popover 场景传入,内嵌场景不传。 */
   onDismiss?: () => void;
+  /**
+   * 当前来源解析口径。true = 实际路由口径(actualSourceIdForModel,不剔除停用拷贝)
+   * —— 仅**已建会话**的选择器传(ChatInput sessionId 在时):运行中会话的图标/价格/
+   * Fast/选中行豁免必须跟真实扣费路由。缺省 false = 准入口径
+   * (effectiveSourceIdForModel):草稿 / worker / IM 默认 / hook 配置等**新路由
+   * 选择**场景,高亮与元数据必须指向真正会被路由到的启用来源
+   * (PR #744 review 第十轮)。
+   */
+  actualRoute?: boolean;
+  /** 语义同 ModelSelectorProps.maxVisibleModelRows。 */
+  maxVisibleModelRows?: number;
   /** 模型信息 / 选项浮层的额外样式。供嵌套在高层级 overlay 中的调用方覆盖默认 z-index。 */
   overlayContentClassName?: string;
   currentProviderId?: string | null;
@@ -432,6 +504,8 @@ function ModelSelectorContentView({
   excludeSubscriptionDirect,
   excludeChatBridgedCodex,
   onDismiss,
+  actualRoute = false,
+  maxVisibleModelRows,
   overlayContentClassName,
   currentProviderId,
   onProviderChange,
@@ -444,7 +518,10 @@ function ModelSelectorContentView({
   agentSwitch,
   pricing,
 }: ModelSelectorContentProps & { pricing: ModelPricingCatalog | null }) {
+  // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
+  const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t } = useTranslation();
+  const constrainedListMaxHeight = modelListMaxHeightForRows(maxVisibleModelRows);
   // session-agent-switch:两步式引擎切换的浏览态。browseVendor 初始 = 会话当前引擎;
   // 切到另一家 tab 只是「浏览目标引擎的模型」,选中模型行才真正触发切换事务。
   const [browseVendor, setBrowseVendor] = useState<'cc' | 'codex'>(
@@ -653,22 +730,27 @@ function ModelSelectorContentView({
   }, [sourcesEnabled, providers, currentAgentKind, excludeChatBridgedCodex]);
   // 生效来源必须按当前模型收窄。只按 agent 从 connected 里兜底，会在 XD key 缺失但
   // OpenAI 已连接时拼出「OpenAI 图标 + Opus」这种不存在的路由。
+  // 用「实际路由口径」(actualSourceIdForModel,不剔除停用拷贝):这里描述的是**当前
+  // 会话正在用的来源**——运行中的会话不因停用打断,实际请求仍走原来源;若按准入过滤
+  // 后解析,图标/价格/Fast/选中行豁免会显示成替代来源,与真实扣费路由不符
+  // (PR #744 review 第五轮)。新路由选择(行点击/浏览)另走 connected 分段,不受影响。
   const activeSourceId = useMemo(
     () =>
       currentAgentKind
-        ? effectiveSourceIdForModel(providers, currentProviderId, modelId, currentAgentKind)
+        ? resolveCurrentSourceId(providers, currentProviderId, modelId, currentAgentKind)
         : null,
-    [providers, currentProviderId, modelId, currentAgentKind],
+    [providers, currentProviderId, modelId, currentAgentKind, resolveCurrentSourceId],
   );
 
   // 行级 Fast 可编辑性 = agent 能力 × 该(供应商, 模型)条目的 supportsFastMode。
   // Fast 能力是 per-(provider, agent) 的(见 CatalogModel)：按该行供应商现查它自己的模型条目,
   // 同一 model id 在不同供应商下可不同(如某网关剥掉 fast 字段 ⇒ 那家配 false)。providerId 为 null
   // (flat / device-link 退化)回退 activeSourceId;取不到供应商 / 该来源不提供此模型 ⇒ false。
-  // cc / codex 同一套门控,仅各供应商的配置数据不同。
+  // cc / codex 同一套门控,仅各供应商的配置数据不同。查找用全量 providers:activeSourceId
+  // 可能指向 suspended 来源(实际路由口径),connected 里查不到会误判 Fast 不可用。
   const fastEditable = (providerId: string | null, m: RowModel): boolean => {
     if (!onFastModeChange || !hasFastModeCap || !currentAgentKind) return false;
-    const provider = connected.find((p) => p.id === (providerId ?? activeSourceId));
+    const provider = providers.find((p) => p.id === (providerId ?? activeSourceId));
     return modelSupportsFastMode(provider, m.id, currentAgentKind);
   };
 
@@ -683,7 +765,7 @@ function ModelSelectorContentView({
     const effectiveProviderId =
       providerId ??
       (currentAgentKind
-        ? effectiveSourceIdForModel(providers, currentProviderId, id, currentAgentKind)
+        ? resolveCurrentSourceId(providers, currentProviderId, id, currentAgentKind)
         : null);
     const quote = getModelPriceQuote(pricing, effectiveProviderId, id);
     if (effectiveProviderId === 'xd' && (!quote || quote.source === 'gateway')) {
@@ -711,36 +793,70 @@ function ModelSelectorContentView({
       providers,
     });
     if (!rowAgentKind) return true;
+    // 逐模型停用与供应商级 suspended 同为准入硬门:被控端某来源整体启用但该模型被
+    // 点名停用(CatalogModel.disabled,由被控端把 override 烘进 provider 视图)时,
+    // 该拷贝不算可路由 —— 只数「来源连接且启用 + 模型条目未停用」的拷贝,否则远程
+    // flat picker(如 CreateWorkerPopover)选中后到 Main 准入才失败
+    // (PR #744 review 第二十二轮)。
     return !providers.some(
       (provider) =>
         provider.connected &&
+        !provider.suspended &&
         provider.agents.includes(rowAgentKind) &&
-        providerOffersModel(provider, id, rowAgentKind),
+        providerOffersModel(provider, id, rowAgentKind) &&
+        getModel(provider, id, rowAgentKind)?.disabled !== true,
     );
   };
 
   // ── 供应商分段 / flat 列表 ────────────────────────────────────────────────
   // sections 非空 = 按供应商分段(每行 = (供应商, 模型));null = flat(无供应商概念)。
+  // 当前会话的实际来源(activeSourceId)被供应商级停用时,connected(经
+  // connectedProvidersForAgent,剔除 suspended)不含它 —— 选中行会整个消失,
+  // keepSelected 豁免无从生效。把这个仍然连接着的 suspended 来源补进分段输入,
+  // 但只保留选中行(isVisible 收口):它的其它模型不可作为新路由选择
+  // (PR #744 review 第七轮)。
+  const sectionProviders = useMemo(() => {
+    if (!currentAgentKind || !activeSourceId) return connected;
+    if (connected.some((p) => p.id === activeSourceId)) return connected;
+    const actual = providers.find((p) => p.id === activeSourceId);
+    // 只补「已连接但 suspended」的当前来源;未连接来源仍走既有空态/断链路径。
+    if (!actual?.connected || !actual.agents.includes(currentAgentKind)) return connected;
+    return [...connected, actual];
+  }, [connected, providers, activeSourceId, currentAgentKind]);
+  const suspendedActiveSourceId =
+    sectionProviders === connected ? null : activeSourceId;
   // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityVersion 是外部可见性偏好的刷新信号,需要强制重算分段列表。
   const sections = useMemo(() => {
     if (!sourcesEnabled || !currentAgentKind) return null;
     // 0 个可连来源 → 返回 null 退化到 flat 列表(而非空 sections 触发「无结果」)。覆盖:
     //  · device-link 老被控端不认 maker:provider:list(invoke reject)→ device providers 为空 → flat 兜底;
     //  · providers 拉取中的瞬态窗口;· 本机 0 来源已由上方 emptyState 引导卡先行接管。
-    if (connected.length === 0) return null;
+    if (sectionProviders.length === 0) return null;
+    // 被停用的当前来源只保留选中行(keepSelected 豁免语义)。
+    const restrictSuspended = (pid: string, mid: string): boolean =>
+      !(suspendedActiveSourceId && pid === suspendedActiveSourceId && mid !== modelId);
     return buildProviderSections({
-      providers: connected,
+      providers: sectionProviders,
       agent: currentAgentKind,
       selectedModelId: modelId,
       selectedProviderId: activeSourceId,
-      // device-link 远程会话:被控端目录「是啥就是啥」,绝不套控制端本机的可见性 override
-      // —— modelVisibilityPrefs 是控制端本机 UI 偏好(设置→供应商的隐藏开关),与被控端无关,
-      // 套上去会让远程列表变成「被控端目录 ∩ 控制端隐藏开关」,跟被控端实际清单对不上。
-      // 本机会话仍按用户本机开关过滤(行为不变)。
+      // device-link 远程会话使用被控端随 provider:list 返回的 override 快照，绝不套
+      // 控制端本机 modelVisibilityPrefs。旧被控端不回传快照时 fail-open，保持兼容。
       isVisible: deviceId
-        ? () => true
+        ? (pid, mid) => {
+            if (!restrictSuspended(pid, mid)) return false;
+            const p = sectionProviders.find((x) => x.id === pid);
+            const cat = p ? getModel(p, mid, currentAgentKind) : undefined;
+            return isDeviceModelVisible(
+              remoteProviders.modelVisibilityOverrides,
+              currentAgentKind,
+              pid,
+              { id: mid, defaultEnabled: cat?.defaultEnabled },
+            );
+          }
         : (pid, mid) => {
-            const p = connected.find((x) => x.id === pid);
+            if (!restrictSuspended(pid, mid)) return false;
+            const p = sectionProviders.find((x) => x.id === pid);
             const cat = p ? getModel(p, mid, currentAgentKind) : undefined;
             return isModelEnabled(currentAgentKind, pid, {
               id: mid,
@@ -752,13 +868,15 @@ function ModelSelectorContentView({
     // visibilityVersion 仅作刷新触发器(设置页改显示开关后强制重算);deviceId 切换需重算分段。
   }, [
     sourcesEnabled,
-    connected,
+    sectionProviders,
+    suspendedActiveSourceId,
     currentAgentKind,
     modelId,
     activeSourceId,
     query,
     visibilityVersion,
     deviceId,
+    remoteProviders.modelVisibilityOverrides,
   ]);
 
   const flatModels = useMemo(() => {
@@ -774,9 +892,22 @@ function ModelSelectorContentView({
     // 本地 flat 入口（子代理模型、Worker 等）没有 provider sections 帮忙过滤，必须显式复用
     // 会话选择器 / IM `/model` 的同一套「已连接来源 × 用户可见模型」规则。否则设置页里
     // 已忽略或仅由断开来源提供的目录项仍会被列出来，选中后没有可用路由。
-    // device-link 的目录来自被控端，不能叠加控制端本机的可见性偏好，保持原样。
+    // device-link 使用被控端 override；旧被控端没有快照时保持历史 fail-open。
     const selectableIds = deviceId
-      ? null
+      ? remoteProviders.modelVisibilityOverrides === undefined
+        ? null
+        : new Set(
+            (agentKind ? [agentKind] : (['claude-code', 'codex'] as const)).flatMap((agent) =>
+              visibleModelUnion(providers, agent, (providerId, model) =>
+                isDeviceModelVisible(
+                  remoteProviders.modelVisibilityOverrides,
+                  agent,
+                  providerId,
+                  model,
+                ),
+              ).map((model) => model.id),
+            ),
+          )
       : new Set(
           (agentKind ? [agentKind] : (['claude-code', 'codex'] as const)).flatMap((agent) =>
             visibleModelUnion(providers, agent, (providerId, model) =>
@@ -789,7 +920,17 @@ function ModelSelectorContentView({
     return selectable.filter(
       (m) => m.displayName.toLowerCase().includes(q) || m.id.toLowerCase().includes(q),
     );
-  }, [sections, visibleModels, query, browsing, agentKind, providers, deviceId, visibilityVersion]);
+  }, [
+    sections,
+    visibleModels,
+    query,
+    browsing,
+    agentKind,
+    providers,
+    deviceId,
+    visibilityVersion,
+    remoteProviders.modelVisibilityOverrides,
+  ]);
 
   // 选中判定:flat 模式只比模型 id;分段模式还要比供应商(同模型多供应商下只高亮当前来源那行)。
   // 浏览目标引擎态恒 false:当前会话模型属于旧引擎,目标列表里同 id 行(如 gpt-5.5
@@ -943,9 +1084,9 @@ function ModelSelectorContentView({
     if (!editingModel || !currentAgentKind) return undefined;
     const providerId =
       editingProviderId ??
-      effectiveSourceIdForModel(providers, currentProviderId, editingModel.id, currentAgentKind);
+      resolveCurrentSourceId(providers, currentProviderId, editingModel.id, currentAgentKind);
     return providerId ? providers.find((provider) => provider.id === providerId) : undefined;
-  }, [editingModel, currentAgentKind, editingProviderId, providers, currentProviderId]);
+  }, [editingModel, currentAgentKind, editingProviderId, providers, currentProviderId, resolveCurrentSourceId]);
   const editingPricePresentation = editingModel
     ? pricePresentationOf(editingProvider?.id ?? editingProviderId, editingModel.id)
     : null;
@@ -1070,9 +1211,7 @@ function ModelSelectorContentView({
                         {t(`newChat.modelSelector.pricing.${row.kind}`)}
                       </span>
                       <span className="flex items-center justify-end gap-1.5 tabular-nums">
-                        <span className="text-[var(--model-item-text)]">
-                          {row.value}
-                        </span>
+                        <span className="text-[var(--model-item-text)]">{row.value}</span>
                         {row.originalValue && (
                           <span className="text-[var(--text-tertiary)] line-through">
                             {row.originalValue}
@@ -1213,6 +1352,7 @@ function ModelSelectorContentView({
             }}
             className={cn(
               'flex w-full cursor-pointer items-center justify-between rounded-[8px] px-3 py-2',
+              constrainedListMaxHeight !== undefined && 'min-h-9',
               'transition-colors duration-100 hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
               isSelected && 'bg-[var(--model-item-hover)]',
               isEditingThis &&
@@ -1227,6 +1367,7 @@ function ModelSelectorContentView({
                   providerId={provider.id}
                   name={provider.name}
                   routing={provider.routing}
+                  logoKind={provider.logoKind}
                   colorClass="text-[var(--text-secondary)]"
                   withMargin={false}
                   dense
@@ -1234,7 +1375,7 @@ function ModelSelectorContentView({
               )}
               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                 <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <span className="truncate text-14 font-medium text-[var(--model-item-text)]">
+                  <span className="truncate text-14 font-medium leading-5 text-[var(--model-item-text)]">
                     {model.displayName}
                   </span>
                   {rowEffort && (
@@ -1269,29 +1410,9 @@ function ModelSelectorContentView({
                 )}
               </span>
             </span>
-            {(rowPrice?.kind === 'priced' || isSelected) && (
-              <span className="ml-2 flex shrink-0 items-center gap-1.5">
-                {rowPrice?.kind === 'priced' && (
-                  <span
-                    data-model-price-stack={rowPrice.original ? 'true' : undefined}
-                    className={cn(
-                      'flex tabular-nums text-11 font-normal leading-[1.25]',
-                      rowPrice.original ? 'flex-col items-end' : 'items-center',
-                    )}
-                  >
-                    <span className="text-[var(--text-secondary)]">
-                      {formatModelPricePair(rowPrice.current)}
-                    </span>
-                    {rowPrice.original && (
-                      <span className="text-[var(--text-tertiary)] line-through">
-                        {formatModelPricePair(rowPrice.original)}
-                      </span>
-                    )}
-                  </span>
-                )}
-                {isSelected && (
-                  <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
-                )}
+            {isSelected && (
+              <span className="ml-2 flex shrink-0 items-center">
+                <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
               </span>
             )}
           </div>
@@ -1444,6 +1565,11 @@ function ModelSelectorContentView({
         // -mr-2 把滚动条挪进面板右侧 8px 留白;scrollbar-gutter:stable 让无滚动时
         // 行宽与有滚动时一致(否则行会比搜索框宽 8px);细滚动条见 globals.css
         className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+        style={
+          constrainedListMaxHeight === undefined
+            ? undefined
+            : { maxHeight: `${constrainedListMaxHeight}px` }
+        }
         role="listbox"
         aria-label="Model list"
         onScroll={() => {
@@ -1501,6 +1627,7 @@ export function ModelSelector({
   onFastModeChange,
   modelMemory,
   vendorKey,
+  agentIdentity,
   deviceId,
   excludeSubscriptionDirect,
   excludeChatBridgedCodex,
@@ -1513,6 +1640,7 @@ export function ModelSelector({
   visualVariant = 'default',
   useMorphPopover = false,
   popoverSide = 'top',
+  maxVisibleModelRows,
   configurationEnabled = true,
   fallbackOption,
   reselectEmitsChange = false,
@@ -1520,13 +1648,33 @@ export function ModelSelector({
   ariaContext,
   currentProviderId,
   sourceDisconnected = false,
+  actualRoute = false,
   onProviderChange,
   onNavigateToProviders,
   agentSwitch,
 }: ModelSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const openRef = useRef(false);
   const [keepOpenForAgentConfirmation, setKeepOpenForAgentConfirmation] = useState(false);
+  const setOpenWithoutAutoRefresh = useCallback((next: boolean): void => {
+    openRef.current = next;
+    setOpen(next);
+  }, []);
+  const handleOpenChange = useCallback(
+    (next: boolean): void => {
+      const nextOpen = disabled ? false : next;
+      const wasOpen = openRef.current;
+      openRef.current = nextOpen;
+      if (nextOpen && !wasOpen && !deviceId) {
+        void window.electronAPI.maker
+          .requestProviderModelsAutoRefresh('model-selector-open')
+          .catch(() => undefined);
+      }
+      setOpen(nextOpen);
+    },
+    [deviceId, disabled],
+  );
 
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
   // 强制保留已展开的模型面板；确认结束后把底层 open 恢复为 true，避免弹窗关闭
@@ -1541,12 +1689,12 @@ export function ModelSelector({
         try {
           return await confirmBrowseSwitch();
         } finally {
-          setOpen(true);
+          setOpenWithoutAutoRefresh(true);
           setKeepOpenForAgentConfirmation(false);
         }
       },
     };
-  }, [agentSwitch]);
+  }, [agentSwitch, setOpenWithoutAutoRefresh]);
 
   const agentKind = vendorKeyToAgentKind(vendorKey);
   const cc = useAgentCapabilities('claude-code', deviceId);
@@ -1585,13 +1733,25 @@ export function ModelSelector({
   // 用户既看不到自己存的是什么,也看不到实际会跑什么。unknownModelLabel 让这类调用方
   // 给出诊断性文案(通常是裸 id),行为与本组件接管前一致。
   // unknown label 空串/全空白按缺省处理(否则 ?? 不回落,trigger 渲染成空白)。
-  const unknownLabel =
-    modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
+  const unknownLabel = modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
   const displayLabel = fallbackOption?.active
     ? fallbackOption.label
     : (currentModel?.displayName ??
       (unknownLabel !== '' ? unknownLabel : null) ??
       t('newChat.modelSelector.trigger.placeholder'));
+  const agentName =
+    agentIdentity && !fallbackOption?.active
+      ? agentIdentity.vendorKey === 'cc'
+        ? t('newChat.modelSelector.trigger.agent.claudeCode')
+        : t('newChat.modelSelector.trigger.agent.codex')
+      : null;
+  const agentIdentityLabel =
+    agentName && agentIdentity?.state === 'pending'
+      ? t('newChat.modelSelector.trigger.agent.pending', { agent: agentName })
+      : agentName;
+  const displayIdentityLabel = agentIdentityLabel
+    ? `${agentIdentityLabel} · ${displayLabel}`
+    : displayLabel;
   const efforts = currentModel?.efforts ?? [];
 
   const currentAgentKind: AgentKind | null = useMemo(() => {
@@ -1628,9 +1788,9 @@ export function ModelSelector({
   const activeSourceId = useMemo<string | null>(
     () =>
       currentAgentKind
-        ? effectiveSourceIdForModel(providers, currentProviderId, modelId, currentAgentKind)
+        ? (actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel)(providers, currentProviderId, modelId, currentAgentKind)
         : null,
-    [providers, currentAgentKind, currentProviderId, modelId],
+    [providers, currentAgentKind, currentProviderId, modelId, actualRoute],
   );
   // 空態:当前模型一个已连接来源都没有 → trigger 改「连接来源」CTA。
   // device-link 远程会话不走此 CTA(控制端无法替被控端连来源;hasConnectedSource 是本机口径)。
@@ -1696,20 +1856,58 @@ export function ModelSelector({
   const baseAriaLabel = noSource
     ? t('newChat.modelSelector.source.connect')
     : showSourceDisconnected
-      ? `${t('newChat.modelSelector.source.disconnected')}: ${displayLabel}`
-      : effortLabel
-        ? t('newChat.modelSelector.trigger.ariaWithEffort', {
-            model: displayLabel,
-            effort: effortLabel,
-          })
-        : t('newChat.modelSelector.trigger.aria', { model: displayLabel });
+      ? `${t('newChat.modelSelector.source.disconnected')}: ${displayIdentityLabel}`
+      : agentIdentity?.state === 'pending' && agentName
+        ? effortLabel
+          ? t('newChat.modelSelector.trigger.pendingAriaWithEffort', {
+              agent: agentName,
+              model: displayLabel,
+              effort: effortLabel,
+            })
+          : t('newChat.modelSelector.trigger.pendingAria', {
+              agent: agentName,
+              model: displayLabel,
+            })
+        : effortLabel
+          ? t('newChat.modelSelector.trigger.ariaWithEffort', {
+              model: displayIdentityLabel,
+              effort: effortLabel,
+            })
+          : t('newChat.modelSelector.trigger.aria', { model: displayIdentityLabel });
+  // compact 会隐藏断连状态文字；原生 title 仍需保留同一状态，避免鼠标用户悬停
+  // 错误图标时只看到模型名、无法判断发送为何被阻断。
+  const triggerTitle = showSourceDisconnected ? baseAriaLabel : displayIdentityLabel;
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
   const ariaLabel = ariaContext ? `${ariaContext}:${baseAriaLabel}` : baseAriaLabel;
   const isBudget = modelId.startsWith('codex/');
   const isFieldTrigger = triggerVariant === 'field';
   const isCreateAgentVariant = visualVariant === 'create-agent';
-  const isCompactToolbar = compactToolbar && isCreateAgentVariant;
+  // compact 是 composer 容器宽度状态，不是 create-agent 的视觉私有状态。
+  // 正常会话在侧栏 + 浏览器 split-pane 下也必须让长模型名承担收缩。
+  const isCompactToolbar = compactToolbar && !isFieldTrigger;
   const isUltraCompactToolbar = ultraCompactToolbar && isCompactToolbar;
+  const agentIdentityPrefix =
+    agentIdentityLabel && !isCompactToolbar ? (
+      <>
+        <span
+          className={cn(
+            'shrink-0 font-normal text-[var(--model-trigger-meta)]',
+            isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+          )}
+        >
+          {agentIdentityLabel}
+        </span>
+        <span
+          className={cn(
+            'shrink-0 font-normal text-[var(--model-trigger-meta)]',
+            isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+          )}
+          aria-hidden="true"
+        >
+          ·
+        </span>
+      </>
+    ) : null;
   // 保留 useMorphPopover 作用域开关(仅 composer 工具条 opt-in;settings/CreateWorker 用 Radix 回退),
   // 但去掉 !isCreateAgentVariant —— 新建对话框工具条也走脱身上浮 morph,与会话内统一(2026-07-22)。
   const morphEnabled = useMorphPopover && !isFieldTrigger;
@@ -1726,10 +1924,10 @@ export function ModelSelector({
     <button
       type="button"
       disabled={switching || disabled}
-      onClick={morphEnabled ? () => setOpen((prev) => (disabled ? false : !prev)) : undefined}
+      onClick={morphEnabled ? () => handleOpenChange(!openRef.current) : undefined}
       aria-expanded={open && !disabled}
       aria-haspopup="listbox"
-      title={displayLabel}
+      title={triggerTitle}
       className={cn(
         'flex min-w-0 max-w-full items-center gap-1 transition-colors',
         isFieldTrigger
@@ -1743,9 +1941,13 @@ export function ModelSelector({
               'rounded-full',
               // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
               // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
-              'h-[30px] min-w-[72px] max-w-full shrink overflow-hidden px-2.5',
-              // 窄态工具条(#562):新建对话框空间不足时钳制触发器宽度,防与语音/发送重叠。
-              isUltraCompactToolbar ? 'w-[64px]' : isCompactToolbar ? 'w-[148px]' : undefined,
+              'h-[30px] max-w-full shrink overflow-hidden px-2.5',
+              // 窄态工具条:钳制唯一可收缩的模型入口，给语音 / 发送固定动作留足空间。
+              isUltraCompactToolbar
+                ? 'w-[64px] min-w-[64px]'
+                : isCompactToolbar
+                  ? 'w-[148px] min-w-[72px]'
+                  : 'min-w-[72px]',
               'border border-transparent bg-transparent',
               'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
             ),
@@ -1771,13 +1973,13 @@ export function ModelSelector({
               isCreateAgentVariant
                 ? 'text-[var(--create-agent-control-text)]'
                 : 'text-[var(--text-primary)]',
-              isCreateAgentVariant
-                ? isUltraCompactToolbar
-                  ? 'hidden'
-                  : isCompactToolbar
-                    ? 'max-w-[108px] truncate'
-                    : 'truncate'
-                : cn('truncate', isFieldTrigger ? 'max-w-[260px]' : ''),
+              isUltraCompactToolbar
+                ? 'hidden'
+                : isCompactToolbar
+                  ? 'max-w-[108px] truncate'
+                  : isCreateAgentVariant
+                    ? 'truncate'
+                    : cn('truncate', isFieldTrigger ? 'max-w-[260px]' : ''),
               isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
             )}
           >
@@ -1794,20 +1996,22 @@ export function ModelSelector({
             providerId={currentProviderId}
             name={disconnectedProvider?.name}
             routing={disconnectedProvider?.routing}
+            logoKind={disconnectedProvider?.logoKind}
             colorClass="text-[var(--error-fg)]"
           />
+          {agentIdentityPrefix}
           <span
             className={cn(
               'min-w-0 font-normal text-[var(--text-primary)]',
-              isCreateAgentVariant
-                ? isUltraCompactToolbar
-                  ? 'hidden'
-                  : isCompactToolbar
-                    ? 'max-w-[108px] truncate'
-                    : 'truncate'
-                : isFieldTrigger
-                  ? 'max-w-[260px] truncate'
-                  : 'truncate',
+              isUltraCompactToolbar
+                ? 'hidden'
+                : isCompactToolbar
+                  ? 'max-w-[108px] truncate'
+                  : isCreateAgentVariant
+                    ? 'truncate'
+                    : isFieldTrigger
+                      ? 'max-w-[260px] truncate'
+                      : 'truncate',
               isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
             )}
           >
@@ -1820,14 +2024,16 @@ export function ModelSelector({
             className="ml-0.5 shrink-0 text-[var(--error-fg)]"
             aria-hidden
           />
-          <span
-            className={cn(
-              'shrink-0 font-medium text-[var(--error-fg)]',
-              dense ? 'text-[11.5px]' : 'text-[12px]',
-            )}
-          >
-            {t('newChat.modelSelector.source.disconnected')}
-          </span>
+          {!isCompactToolbar && (
+            <span
+              className={cn(
+                'shrink-0 font-medium text-[var(--error-fg)]',
+                dense ? 'text-[11.5px]' : 'text-[12px]',
+              )}
+            >
+              {t('newChat.modelSelector.source.disconnected')}
+            </span>
+          )}
         </>
       ) : (
         <>
@@ -1839,23 +2045,25 @@ export function ModelSelector({
               providerId={activeSourceId}
               name={triggerActiveProvider?.name}
               routing={triggerActiveProvider?.routing}
+              logoKind={triggerActiveProvider?.logoKind}
               colorClass={
                 isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : undefined
               }
             />
           )}
+          {agentIdentityPrefix}
           <span
             className={cn(
               'min-w-0 font-normal',
-              isCreateAgentVariant
-                ? isUltraCompactToolbar
-                  ? 'hidden'
-                  : isCompactToolbar
-                    ? 'max-w-[108px] truncate'
-                    : 'truncate'
-                : isFieldTrigger
-                  ? 'max-w-[260px] truncate'
-                  : 'truncate',
+              isUltraCompactToolbar
+                ? 'hidden'
+                : isCompactToolbar
+                  ? 'max-w-[108px] truncate'
+                  : isCreateAgentVariant
+                    ? 'truncate'
+                    : isFieldTrigger
+                      ? 'max-w-[260px] truncate'
+                      : 'truncate',
               !isBudget &&
                 (isCreateAgentVariant
                   ? 'text-[var(--create-agent-control-text)]'
@@ -1945,7 +2153,9 @@ export function ModelSelector({
       deviceId={deviceId}
       excludeSubscriptionDirect={excludeSubscriptionDirect}
       excludeChatBridgedCodex={excludeChatBridgedCodex}
-      onDismiss={() => setOpen(false)}
+      onDismiss={() => setOpenWithoutAutoRefresh(false)}
+      actualRoute={actualRoute}
+      maxVisibleModelRows={maxVisibleModelRows}
       currentProviderId={currentProviderId}
       onProviderChange={onProviderChange}
       onNavigateToProviders={onNavigateToProviders}
@@ -1971,7 +2181,7 @@ export function ModelSelector({
     return (
       <MorphPopover
         open={(open || keepOpenForAgentConfirmation) && !disabled}
-        onOpenChange={(next) => setOpen(disabled ? false : next)}
+        onOpenChange={handleOpenChange}
         side={popoverSide}
         align="end"
         wrapperClassName="min-w-0 max-w-full shrink"
@@ -1987,7 +2197,7 @@ export function ModelSelector({
   return (
     <Popover
       open={(open || keepOpenForAgentConfirmation) && !disabled}
-      onOpenChange={(next) => setOpen(disabled ? false : next)}
+      onOpenChange={handleOpenChange}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent

@@ -5,12 +5,16 @@ import { evictDeviceModelMeta } from '@/device-link/deviceModelMetaCache';
 import { evictAgentCapabilitiesForDevice } from '@/session/agentCapabilitiesCache';
 import { evictComposerPaletteCacheForDevice } from '@/session/composerPaletteCache';
 import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
+import { clearDeviceResponsivenessTrackingFor } from '@/device-link/unresponsiveDevicesStore';
 import {
   isAccessRevokedRemoteError,
 } from '@cindy/maker-shared/device-link-contract';
 
 export function markDeviceAccessRevoked(deviceId: string): void {
   revokedDevicesStore.markRevoked(deviceId);
+  // 撤权优先于熔断(review P1):清掉该设备的 unresponsive 状态,撤权走自己的
+  // 专属 UI;后续在途请求的超时也由 settleDeviceSend 按已撤权降级为不定论。
+  clearDeviceResponsivenessTrackingFor(deviceId);
   remoteSessionStore.removeDevice(deviceId);
   evictDeviceProviders(deviceId);
   evictDeviceModelMeta(deviceId);

@@ -2,7 +2,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Effort } from '@/lib/userPreferences.types';
 
@@ -18,6 +18,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         source?: string;
         value?: string;
         model?: string;
+        agent?: string;
         effort?: string;
         price?: string;
         percent?: string;
@@ -28,7 +29,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'effortLevels.xhigh': '超高',
         'settings.providers.anthropic.title': 'Anthropic',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
+        'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
+        'newChat.modelSelector.trigger.agent.codex': 'Codex',
         'newChat.modelSelector.pricing.free': '限时免费',
+        'newChat.modelSelector.source.disconnected': '已断开',
       };
       if (key === 'newChat.modelSelector.priceTip') {
         return `Input ${options?.input} · Output ${options?.output} per 1M tokens`;
@@ -44,6 +48,15 @@ vi.mock('react-i18next', async (importOriginal) => ({
       }
       if (key === 'newChat.modelSelector.trigger.ariaWithEffort') {
         return `Select model. Current: ${options?.model}, effort: ${options?.effort}`;
+      }
+      if (key === 'newChat.modelSelector.trigger.agent.pending') {
+        return `Next: ${options?.agent}`;
+      }
+      if (key === 'newChat.modelSelector.trigger.pendingAria') {
+        return `Select model. Next message: ${options?.agent} · ${options?.model}`;
+      }
+      if (key === 'newChat.modelSelector.trigger.pendingAriaWithEffort') {
+        return `Select model. Next message: ${options?.agent} · ${options?.model}, effort: ${options?.effort}`;
       }
       if (key === 'newChat.modelSelector.pricing.discount') {
         return `立省 ${options?.percent}%`;
@@ -218,7 +231,7 @@ const providersRef = vi.hoisted(() => {
       source: 'builtin',
       agents: ['claude-code'],
       auth: { method: 'oauth' },
-      routing: {},
+      routing: { 'claude-code': {} },
       connected: true,
       models: {
         'claude-code': [
@@ -350,10 +363,207 @@ import {
   ModelSelector,
   ModelSelectorContent,
   modelEffortLabel,
+  modelListMaxHeightForRows,
+  resolveModelSelectorAgentIdentity,
 } from '@/components/new-chat/ModelSelector';
 import { makerChatStore } from '@/lib/makerChatStore';
 
+const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
+
+beforeEach(() => {
+  requestProviderModelsAutoRefresh.mockClear();
+  (window as unknown as { electronAPI: unknown }).electronAPI = {
+    maker: { requestProviderModelsAutoRefresh },
+  };
+});
+
 describe('ModelSelector trigger variants', () => {
+  it('requests a silent refresh when a local selector opens, but not for a remote device', () => {
+    const local = render(
+      React.createElement(ModelSelector, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    expect(requestProviderModelsAutoRefresh).toHaveBeenCalledWith('model-selector-open');
+    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    expect(requestProviderModelsAutoRefresh).toHaveBeenCalledTimes(2);
+    local.unmount();
+
+    requestProviderModelsAutoRefresh.mockClear();
+    render(
+      React.createElement(ModelSelector, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        deviceId: 'remote-device',
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    expect(requestProviderModelsAutoRefresh).not.toHaveBeenCalled();
+  });
+
+  it('keeps row-count caps finite and within the shared 300px ceiling', () => {
+    expect(modelListMaxHeightForRows()).toBeUndefined();
+    expect(modelListMaxHeightForRows(Number.NaN)).toBeUndefined();
+    expect(modelListMaxHeightForRows(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(modelListMaxHeightForRows(0)).toBe(36);
+    expect(modelListMaxHeightForRows(6)).toBe(226);
+    expect(modelListMaxHeightForRows(7)).toBe(264);
+    expect(modelListMaxHeightForRows(8)).toBe(300);
+    expect(modelListMaxHeightForRows(100)).toBe(300);
+  });
+
+  it('bounds the default-session trigger in narrow and ultra-narrow composers', () => {
+    const props = {
+      modelId: 'claude-opus-4-8',
+      effort: 'xhigh' as Effort,
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc' as const,
+      compactToolbar: true,
+    };
+    const view = render(React.createElement(ModelSelector, props));
+
+    let trigger = screen.getByRole('button', {
+      name: /Current: Opus 4\.8, effort: 超高/,
+    });
+    expect(trigger.className).toContain('w-[148px]');
+    expect(trigger.className).toContain('min-w-[72px]');
+    expect(within(trigger).getByText('Opus 4.8').className).toContain('truncate');
+    expect(trigger.textContent).not.toContain('超高');
+
+    view.rerender(
+      React.createElement(ModelSelector, {
+        ...props,
+        ultraCompactToolbar: true,
+      }),
+    );
+    trigger = screen.getByRole('button', {
+      name: /Current: Opus 4\.8, effort: 超高/,
+    });
+    expect(trigger.className).toContain('w-[64px]');
+    expect(trigger.className).toContain('min-w-[64px]');
+    expect(within(trigger).getByText('Opus 4.8').className).toContain('hidden');
+    // 可及名仍保留完整模型 + effort，视觉仅收起文字，不丢选择能力。
+    expect(trigger.getAttribute('aria-label')).toContain('Opus 4.8');
+    expect(trigger.getAttribute('aria-label')).toContain('超高');
+  });
+
+  it('keeps the session Agent explicit when Claude Code uses an OpenAI-branded model', () => {
+    const model = {
+      id: 'chatgpt/gpt-5.6-terra',
+      displayName: 'GPT-5.6-Terra',
+      contextWindow: 400000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium',
+    };
+    visibleModelsRef.models = [model];
+    providersRef.providers = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: { 'claude-code': {} },
+        connected: true,
+        models: {
+          'claude-code': [
+            {
+              id: model.id,
+              name: model.displayName,
+              contextWindow: model.contextWindow,
+              efforts: model.efforts,
+              defaultEffort: model.defaultEffort,
+            },
+          ],
+        },
+      },
+    ];
+
+    try {
+      const props = {
+        modelId: model.id,
+        effort: 'medium' as Effort,
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc' as const,
+        currentProviderId: 'openai',
+        agentIdentity: { vendorKey: 'cc' as const, state: 'current' as const },
+      };
+      const view = render(React.createElement(ModelSelector, props));
+
+      let trigger = screen.getByRole('button', {
+        name: /Current: Claude Code · GPT-5\.6-Terra, effort: medium/,
+      });
+      expect(trigger.textContent).toContain('Claude Code');
+      expect(trigger.textContent).toContain('GPT-5.6-Terra');
+      expect(trigger.getAttribute('title')).toBe('Claude Code · GPT-5.6-Terra');
+
+      view.rerender(
+        React.createElement(ModelSelector, {
+          ...props,
+          compactToolbar: true,
+        }),
+      );
+      trigger = screen.getByRole('button', {
+        name: /Current: Claude Code · GPT-5\.6-Terra, effort: medium/,
+      });
+      expect(trigger.textContent).not.toContain('Claude Code');
+      expect(trigger.getAttribute('aria-label')).toContain('Claude Code');
+    } finally {
+      visibleModelsRef.models = null;
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
+  it('does not infer a current Agent from the fallback vendor before session identity loads', () => {
+    render(
+      React.createElement(ModelSelector, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high' as Effort,
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        agentIdentity: resolveModelSelectorAgentIdentity(null, null),
+      }),
+    );
+
+    const trigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
+    expect(trigger.textContent).not.toContain('Claude Code');
+    expect(trigger.getAttribute('aria-label')).not.toContain('Claude Code');
+  });
+
+  it('keeps the disconnected status in the compact trigger title', () => {
+    render(
+      React.createElement(ModelSelector, {
+        modelId: 'claude-opus-4-8',
+        effort: 'xhigh' as Effort,
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        compactToolbar: true,
+        currentProviderId: 'anthropic',
+        sourceDisconnected: true,
+      }),
+    );
+
+    const trigger = screen.getByRole('button', {
+      name: /已断开: Opus 4\.8/,
+    });
+    expect(trigger.getAttribute('title')).toBe('已断开: Opus 4.8');
+    // compact 隐藏冗余状态文案，但 Unplug 错误图标与悬停 title 仍保留。
+    expect(trigger.textContent).not.toContain('已断开');
+  });
+
   it('shows the intent model and its default source after registering an agent switch', () => {
     const sessionId = 'model-selector-agent-switch-intent';
     providersRef.providers = [
@@ -411,6 +621,8 @@ describe('ModelSelector trigger variants', () => {
         onModelChange: vi.fn(),
         onEffortChange: vi.fn(),
         vendorKey: displayAgent === 'codex' ? 'codex' : 'cc',
+        // 稳态来自已加载的真实 runtime；intent 是下一条消息的明确目标，不能写成 Current。
+        agentIdentity: resolveModelSelectorAgentIdentity('claude-code', intent?.target),
         currentProviderId: intent?.providerId ?? null,
         onProviderChange: vi.fn(),
         onNavigateToProviders: vi.fn(),
@@ -419,6 +631,11 @@ describe('ModelSelector trigger variants', () => {
 
     const view = render(React.createElement(IntentTrigger, { refresh: 0 }));
     try {
+      let trigger = screen.getByRole('button', {
+        name: /Current: Claude Code · Opus 4\.8/,
+      });
+      expect(trigger.textContent).toContain('Claude Code');
+
       act(() => {
         makerChatStore.noteAgentSwitchIntent(sessionId, 'codex', {
           model: 'gpt-5.5',
@@ -428,8 +645,19 @@ describe('ModelSelector trigger variants', () => {
       });
       view.rerender(React.createElement(IntentTrigger, { refresh: 1 }));
 
-      const trigger = screen.getByRole('button', { name: /Current: GPT-5\.5/ });
+      trigger = screen.getByRole('button', {
+        name: /Next message: Codex · GPT-5\.5, effort: medium/,
+      });
       expect(trigger.textContent).toContain('GPT-5.5');
+      expect(trigger.textContent).toContain('Next: Codex');
+      expect(trigger.getAttribute('aria-label')).not.toContain('Current');
+      // 切换失败时 intent 会保留供重试；重复渲染仍明确标成“下条消息”，不会隐藏身份。
+      view.rerender(React.createElement(IntentTrigger, { refresh: 2 }));
+      expect(
+        screen.getByRole('button', {
+          name: /Next message: Codex · GPT-5\.5, effort: medium/,
+        }),
+      ).toBeTruthy();
       // providerId=null 仍应按目标模型的默认可连来源解析 icon。
       expect(trigger.textContent).toContain('Z');
       expect(trigger.textContent).not.toContain('newChat.modelSelector.source.connect');
@@ -980,7 +1208,7 @@ describe('ModelSelector trigger variants', () => {
     expect(screen.getByTestId('model-options-popover').className).toContain('z-[10020]');
   });
 
-  it('keeps non-Gateway prices in their source currency without an approximate marker', () => {
+  it('keeps non-Gateway prices in model details without repeating them in the primary row', () => {
     vi.useFakeTimers();
     render(
       React.createElement(ModelSelectorContent, {
@@ -1005,7 +1233,7 @@ describe('ModelSelector trigger variants', () => {
     expect(within(options).getByText('Source: Anthropic')).toBeTruthy();
     expect(within(options).getByText('200K context')).toBeTruthy();
     const priceTitle = within(options).getByText('newChat.modelSelector.pricing.title');
-    expect(row.textContent).toContain('$3 / $15');
+    expect(row.textContent).not.toContain('$3 / $15');
     expect(row.textContent).not.toContain('¥');
     expect(row.textContent).not.toContain('≈');
     expect(within(options).getByText('$3')).toBeTruthy();
@@ -1040,7 +1268,41 @@ describe('ModelSelector trigger variants', () => {
     vi.useRealTimers();
   });
 
-  it('keeps discounted Gateway prices aligned between the row and model details', () => {
+  it('keeps non-price access labels in the primary model row', () => {
+    providersRef.providers = [
+      {
+        ...(providersRef.DEFAULT_PROVIDERS[0] as Record<string, unknown>),
+        access: { kind: 'subscription', product: 'Claude Pro' },
+      },
+    ];
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+        }),
+      );
+
+      const row = screen.getByRole('option', { name: /Opus 4\.8/ });
+      const tags = row.querySelector('[data-model-tags]');
+      expect(tags).not.toBeNull();
+      expect(
+        within(tags as HTMLElement).getByText('settings.providers.models.subscription'),
+      ).toBeTruthy();
+      expect(row.textContent).not.toContain('$3 / $15');
+      expect(row.querySelector('[data-model-promotion-badge]')).toBeNull();
+    } finally {
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
+  it('keeps discounted Gateway prices in details while retaining the primary-row label', () => {
     providersRef.providers = [
       {
         id: 'xd',
@@ -1088,22 +1350,21 @@ describe('ModelSelector trigger variants', () => {
           vendorKey: 'cc',
           currentProviderId: 'xd',
           onProviderChange: vi.fn(),
+          maxVisibleModelRows: 6,
         }),
       );
 
-      // 行内折后价在上、标准价划线在下,折价徽标挂在模型名一侧的 tags 区。
+      // 一级菜单保持单行并保留折价标签；折后价和标准价只在完整详情展示。
       const row = screen.getByRole('option', { name: /Qwen 3\.7/ });
-      expect(row.textContent).toContain('¥6 / ¥18');
-      expect(row.textContent).toContain('¥12 / ¥36');
+      expect(row.className).toContain('min-h-9');
+      expect(within(row).getByText('Qwen 3.7').className).toContain('leading-5');
+      expect(screen.getByRole('listbox', { name: 'Model list' }).style.maxHeight).toBe('226px');
+      expect(row.textContent).not.toContain('¥6 / ¥18');
+      expect(row.textContent).not.toContain('¥12 / ¥36');
       const rowBadge = within(row).getByText('立省 50%');
       expect(rowBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
       expect(rowBadge.parentElement?.hasAttribute('data-model-tags')).toBe(true);
-      const priceStack = within(row).getByText('¥6 / ¥18').parentElement;
-      expect(priceStack?.getAttribute('data-model-price-stack')).toBe('true');
-      expect(priceStack).not.toBe(rowBadge.parentElement);
-      expect(rowBadge.compareDocumentPosition(priceStack as Node)).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING,
-      );
+      expect(row.querySelector('[data-model-price-stack]')).toBeNull();
 
       fireEvent.pointerEnter(row);
       const details = screen.getByRole('group', { name: /Qwen 3\.7/ });
@@ -1125,7 +1386,7 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
-  it('shows explicit double-zero Gateway models as free in the row and model details', () => {
+  it('keeps explicit free labels in the row while leaving full information in details', () => {
     providersRef.providers = [
       {
         id: 'xd',

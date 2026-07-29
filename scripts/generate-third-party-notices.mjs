@@ -581,6 +581,30 @@ function bundledComponent(component) {
   return { ecosystem: "bundled", ...component };
 }
 
+function buildProviderBrandingEntries() {
+  const entries = [
+    bundledComponent({
+      name: "Lobe Icons SVG paths (vendored)",
+      version: "5.14.0",
+      license: "MIT",
+      url: "https://github.com/lobehub/lobe-icons/tree/v5.14.0",
+      licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2023 LobeHub"),
+    }),
+    bundledComponent({
+      name: "LiteLLM mascot SVG path (adapted)",
+      version: "adapted",
+      license: "MIT",
+      url: "https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg",
+      licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2026 Berri AI"),
+    }),
+  ];
+  return entries.sort(
+    (a, b) =>
+      (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) ||
+      (a.url < b.url ? -1 : a.url > b.url ? 1 : 0),
+  );
+}
+
 function readBundledLicense(relativePath) {
   return normalizeNoticeText(
     fs.readFileSync(path.join(REPO_ROOT, relativePath), "utf8"),
@@ -769,16 +793,22 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
     }),
   );
 
-  // ProviderLogoMark 中随桌面包分发的 xAI / 智谱 SVG 路径。
+  // Tencent's public iLink client is the pinned protocol reference for the
+  // Cindy-owned, host-agnostic implementation under packages/wechat-ilink.
   entries.push(
     bundledComponent({
-      name: "Lobe Icons SVG paths (vendored)",
-      version: "5.14.0",
+      name: "Tencent openclaw-weixin protocol sources (adapted)",
+      version: "2.4.6",
       license: "MIT",
-      url: "https://github.com/lobehub/lobe-icons/tree/v5.14.0",
-      licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2023 LobeHub"),
+      url: "https://github.com/Tencent/openclaw-weixin/tree/v2.4.6",
+      licenseText: readBundledLicense(
+        "packages/wechat-ilink/LICENSE.tencent-openclaw-weixin",
+      ),
     }),
   );
+
+  // ProviderLogoMark / MobileProviderMark 共享的上游 SVG path，桌面与移动端均随包分发。
+  entries.push(...buildProviderBrandingEntries());
 
   return entries;
 }
@@ -813,6 +843,7 @@ function buildWindowsEntries() {
 
 function buildMobileEntries(apacheText, platform) {
   const entries = [
+    ...buildProviderBrandingEntries(),
     bundledComponent({
       name: "JetBrains Mono fonts",
       version: "bundled",
@@ -893,9 +924,13 @@ function buildOutput({
   push("SECTION 1: Bundled components (non-npm)");
   push("=".repeat(78));
   for (const e of manualEntries) {
+    const versionSuffix = `(${e.version})`;
+    const heading = e.name.endsWith(versionSuffix)
+      ? e.name
+      : `${e.name} ${e.version}`;
     push();
     push("-".repeat(78));
-    push(`${e.name} ${e.version}`);
+    push(heading);
     push(`License: ${e.license}`);
     if (e.url) push(`Source: ${e.url}`);
     push("-".repeat(78));

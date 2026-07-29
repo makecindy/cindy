@@ -6,6 +6,11 @@ import Paragraph from '@tiptap/extension-paragraph';
 import Text from '@tiptap/extension-text';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  ComposerBulletList,
+  ComposerListItem,
+  ComposerOrderedList,
+} from '@/components/new-chat/ComposerListNodes';
 import { placeGhostAtComposerStart } from '@/components/new-chat/ghostComposerPlacement';
 import { MentionChipNode } from '@/components/new-chat/MentionChipNode';
 import type { InstalledGhost } from '../../shared/ghost';
@@ -79,5 +84,150 @@ describe('placeGhostAtComposerStart', () => {
     placeGhostAtComposerStart(editor, selected, [disabledCurrent, selected]);
 
     expect(editor.getText()).toBe('$feishu 帮我整理这段内容');
+  });
+
+  it('adds a command paragraph before a leading structured list', () => {
+    const editor = new Editor({
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        ComposerListItem,
+        ComposerBulletList,
+        ComposerOrderedList,
+        MentionChipNode,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'bulletList',
+            content: [
+              {
+                type: 'listItem',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'first' }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    editors.push(editor);
+    const selected = ghost('mivo');
+
+    expect(placeGhostAtComposerStart(editor, selected, [selected])).toBe(true);
+    expect(editor.getJSON().content).toEqual([
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: '$mivo ' }],
+      },
+      {
+        type: 'bulletList',
+        attrs: { marker: '-', separator: ' ' },
+        content: [
+          {
+            type: 'listItem',
+            content: [
+              {
+                type: 'paragraph',
+                content: [{ type: 'text', text: 'first' }],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('does not replace a command that appears after leading list content', () => {
+    const editor = new Editor({
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        ComposerListItem,
+        ComposerBulletList,
+        ComposerOrderedList,
+        MentionChipNode,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'bulletList',
+            content: [
+              {
+                type: 'listItem',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'first' }],
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: '$old later text' }],
+          },
+        ],
+      },
+    });
+    editors.push(editor);
+
+    expect(placeGhostAtComposerStart(editor, ghost('mivo'), [ghost('mivo'), ghost('old')])).toBe(
+      true,
+    );
+    expect(editor.getJSON().content?.[0]).toEqual({
+      type: 'paragraph',
+      content: [{ type: 'text', text: '$mivo ' }],
+    });
+    expect(editor.getJSON().content?.[2]).toEqual({
+      type: 'paragraph',
+      content: [{ type: 'text', text: '$old later text' }],
+    });
+  });
+
+  it('does not replace a command that appears after an empty structured list', () => {
+    const editor = new Editor({
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        ComposerListItem,
+        ComposerBulletList,
+        ComposerOrderedList,
+        MentionChipNode,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'bulletList',
+            content: [{ type: 'listItem', content: [{ type: 'paragraph' }] }],
+          },
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: '$old later text' }],
+          },
+        ],
+      },
+    });
+    editors.push(editor);
+
+    expect(placeGhostAtComposerStart(editor, ghost('mivo'), [ghost('mivo'), ghost('old')])).toBe(
+      true,
+    );
+    expect(editor.getJSON().content?.[0]).toEqual({
+      type: 'paragraph',
+      content: [{ type: 'text', text: '$mivo ' }],
+    });
+    expect(editor.getJSON().content?.[1]?.type).toBe('bulletList');
   });
 });

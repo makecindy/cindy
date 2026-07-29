@@ -73,6 +73,7 @@ interface GhostPluginDetailViewProps {
   updateBusy?: boolean;
   onUninstall: () => void;
   toggleDisabled: boolean;
+  onIconLoadError?: () => void;
 }
 
 const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
@@ -132,6 +133,7 @@ export function GhostPluginDetailView({
   updateBusy = false,
   onUninstall,
   toggleDisabled,
+  onIconLoadError,
 }: GhostPluginDetailViewProps) {
   const { t } = useTranslation();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
@@ -205,6 +207,7 @@ export function GhostPluginDetailView({
               iconId={detail.id}
               iconName={detail.name}
               size="detail"
+              onIconLoadError={onIconLoadError}
             />
             <div className="min-w-0">
               <h1 className="truncate text-28 font-medium leading-[34px] text-[var(--text-primary)]">
@@ -229,7 +232,9 @@ export function GhostPluginDetailView({
                     'disabled:cursor-wait disabled:opacity-40 disabled:active:scale-100',
                   )}
                 >
-                  {t('settings.ghosts.market.updateTo', { version: updateVersion })}
+                  {updateVersion === detail.version
+                    ? t('settings.ghosts.market.update')
+                    : t('settings.ghosts.market.updateTo', { version: updateVersion })}
                 </button>
               ) : null}
               <button
@@ -629,6 +634,7 @@ export function DetailsSection({
     value: string;
     monospace?: boolean;
     action?: ReactNode;
+    fullWidth?: boolean;
   }> = [
     {
       key: 'version',
@@ -682,6 +688,7 @@ export function DetailsSection({
             key: 'location',
             label: t('settings.ghosts.detail.infoLocation'),
             value: detail.installDir,
+            fullWidth: true,
             action: (
               <div className="flex shrink-0 items-center gap-0.5">
                 <button
@@ -727,7 +734,7 @@ export function DetailsSection({
       <DetailSectionHeader id="ghost-details-title" title={t('settings.ghosts.detail.infoTitle')} />
       <div className={cn(DETAIL_SECTION_CONTENT_CLASS, 'grid grid-cols-3 gap-x-10 gap-y-7')}>
         {facts.map((fact) => (
-          <div key={fact.key} className="min-w-0">
+          <div key={fact.key} className={cn('min-w-0', fact.fullWidth && 'col-span-full')}>
             <p className="truncate text-13 leading-5 text-[var(--text-secondary)]">{fact.label}</p>
             <ExpandableDetailValue
               label={fact.label}

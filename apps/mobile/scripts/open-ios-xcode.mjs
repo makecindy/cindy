@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mobileClientBuildEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
+import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
 import { podInstallBounded } from './sim-pod-install.mjs';
 import { cwdOfPid, isInside, listenerPid, portInUse } from './sim-metro.mjs';
 import { withLocalMobileRegionConfig } from './lib/mobile-dev-region.mjs';
@@ -45,7 +45,7 @@ async function main() {
   }
 
   const buildEnv = withLocalMobileRegionConfig(
-    mobileClientBuildEnv({ authRegion: args.region }),
+    mobileClientBundleEnv({ authRegion: args.region }),
   );
   const env = { ...process.env, ...buildEnv };
   const previousEnv = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';

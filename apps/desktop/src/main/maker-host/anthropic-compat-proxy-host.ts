@@ -19,10 +19,12 @@
 import {
   createAnthropicCompatProxy,
   createActiveStripTransform,
+  createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  stripEmptyAssistantMessagesFromBody,
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
   stripEncryptedContentFromBody,
@@ -51,6 +53,7 @@ import {
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
 import { createClaudeAutoClassifierFailureObserver } from './claude-auto-permission-fallback.js';
 import {
+  emptyAssistantStripController,
   emptyTextStripController,
   emptyThinkingStripController,
   encryptedStripController,
@@ -251,8 +254,10 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       //   - fast mode 链路核验:tee SSE 抽上游 usage.speed(debug-gated);
       //   - 订阅余量旁路:读 anthropic-ratelimit-unified-* headers(仅订阅直连响应,
       //     同步读 header、零 body 开销),交 usageBroadcaster 落库 + 广播;
-      //   - Auto 权限分类器错误检测(status≥400,含 4xx/5xx):只在错误路径解析 request
-      //     body,通知 session coordinator 降级到 ask;不 tee/改写响应;
+      //   - Auto 权限分类器错误检测:确定性 4xx 立即通知 coordinator 降级到 ask;
+      //     瞬时 408/429/5xx 按 episode 阈值记账、持续故障才降级(见
+      //     claude-auto-permission-fallback.ts);只在错误路径与「该会话有瞬时记账」的
+      //     成功路径解析 request body;不 tee/改写响应;
       //   - 自定义供应商上游错误分类广播(status≥400 且会话路由到 user 供应商时才 tee,
       //     成功路径零开销;30s 节流,见 provider-upstream-error-observer)。
       responseObserver: composeResponseObservers(
@@ -300,6 +305,14 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
           enabled: () => true,
           strip: stripEmptyTextFromBody,
         }),
+        // 空 assistant 消息主动剥离 —— always-on,独立 controller(moonshot/kimi 空
+        // thinking 占位被中断持久化后回放 400 "with role 'assistant' must not be empty";
+        // 与 kimi code 官方客户端的发送前兜底同构)。
+        createActiveStripTransform({
+          controller: emptyAssistantStripController,
+          enabled: () => true,
+          strip: stripEmptyAssistantMessagesFromBody,
+        }),
         // LiteLLM/provider adapter 可能把 provider_specific_fields(null) 挂到 tool_use 上，
         // 严格 Anthropic 入站 schema 不接受该扩展字段。
         stripToolUseProviderSpecificFields,
@@ -319,6 +332,12 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         createEmptyTextRecoveryRule({
           enabled: () => true,
           onRetry: (threadId, model) => emptyTextStripController.markActive(threadId, model),
+        }),
+        // 空 assistant 消息 400 → 丢空消息重发,always-on(moonshot/kimi 空 thinking
+        // 占位污染的会话;恢复一次后该 thread 发送前主动预剥,不再每轮撞 400)。
+        createEmptyAssistantMessageRecoveryRule({
+          enabled: () => true,
+          onRetry: (threadId, model) => emptyAssistantStripController.markActive(threadId, model),
         }),
         createToolUseProviderSpecificFieldsRecoveryRule(),
       ],

@@ -15,6 +15,7 @@ import {
   getCustomProvider,
   listCustomProviders,
   updateCustomProvider,
+  updateCustomProviderIfUnchanged,
   validateCustomProviderConfig,
 } from '../custom-provider-store.js';
 import type { CustomProviderConfig } from '@cindy/model-providers';
@@ -182,6 +183,43 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect(await getCustomProvider('openrouter')).toBeNull();
   });
 
+  it('applies discovered models only while the saved provider still matches its snapshot', async () => {
+    mountDb();
+    await createCustomProvider(valid, 1_000);
+    const snapshot = await getCustomProvider('openrouter');
+    expect(snapshot).not.toBeNull();
+    const discovered = {
+      ...snapshot!,
+      runtimes: {
+        ...snapshot!.runtimes,
+        codex: {
+          ...snapshot!.runtimes.codex!,
+          models: [
+            ...snapshot!.runtimes.codex!.models,
+            { id: 'new-model', name: 'New model' },
+          ],
+        },
+      },
+    };
+
+    expect(
+      await updateCustomProviderIfUnchanged('openrouter', snapshot!, discovered, 1_000),
+    ).toBe(true);
+    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.models).toHaveLength(2);
+
+    await updateCustomProvider('openrouter', {
+      ...valid,
+      name: 'Edited in another window',
+    }, 1_000);
+    expect(
+      await updateCustomProviderIfUnchanged('openrouter', discovered, {
+        ...discovered,
+        name: 'Stale discovery write',
+      }, 1_000),
+    ).toBe(false);
+    expect((await getCustomProvider('openrouter'))?.name).toBe('Edited in another window');
+  });
+
   it('round-trips headers + dedupes models on normalize', async () => {
     mountDb();
     await createCustomProvider({
@@ -218,6 +256,53 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       },
     });
     expect((await getCustomProvider('openrouter'))?.runtimes.codex?.wireProtocol).toBe('openai-chat');
+  });
+
+  it('preserves legacy remote auth:none records for repair without deleting them', async () => {
+    mountDb();
+    raw!.prepare(
+      `INSERT INTO custom_providers
+        (id, name, runtimes, auth, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 0, 1, 1)`,
+    ).run(
+      'legacy-no-auth',
+      'Legacy no auth',
+      JSON.stringify({
+        codex: {
+          baseUrl: 'https://remote.example/v1',
+          models: [{ id: 'm', name: 'M' }],
+        },
+      }),
+      JSON.stringify({ method: 'none' }),
+    );
+
+    const [loaded] = await listCustomProviders();
+    expect(loaded.id).toBe('legacy-no-auth');
+    expect(loaded.auth).toEqual({ method: 'none' });
+    expect(loaded.runtimes.codex?.baseUrl).toBe('https://remote.example/v1');
+    expect(raw!.prepare('SELECT auth FROM custom_providers WHERE id = ?').get('legacy-no-auth'))
+      .toEqual({ auth: JSON.stringify({ method: 'none' }) });
+  });
+
+  it('keeps legacy loopback auth:none records enabled when loading', async () => {
+    mountDb();
+    raw!.prepare(
+      `INSERT INTO custom_providers
+        (id, name, runtimes, auth, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 0, 1, 1)`,
+    ).run(
+      'legacy-loopback',
+      'Legacy loopback',
+      JSON.stringify({
+        codex: {
+          baseUrl: 'http://127.0.0.1:4000/v1',
+          models: [{ id: 'm', name: 'M' }],
+        },
+      }),
+      JSON.stringify({ method: 'none' }),
+    );
+
+    expect((await getCustomProvider('legacy-loopback'))?.auth).toEqual({ method: 'none' });
   });
 
   it('round-trips a validated exact inference request path', async () => {

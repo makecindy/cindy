@@ -27,12 +27,19 @@ import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-m
 
 import { createLogger } from '../../logger';
 import { getMaker } from '../../maker-host';
-import { getSessionProvider, setSessionProvider } from '../../maker-host/session-provider-store';
+import { resolveLenientSessionRoute } from '../../maker-host/model-route-guard-live';
 import {
+  getSessionProvider,
+  normalizeSessionProviderId,
+  setSessionProvider,
+} from '../../maker-host/session-provider-store';
+import {
+  cancelPendingAgentSwitchForSession,
   clearPendingCredentialSwitchForSession,
   getPendingCredentialSwitchTarget,
   isSessionInTurn,
   registerPendingCredentialSwitchForSession,
+  withSendToSessionLock,
   wakeSessionInputAfterCredentialSwitch,
 } from '../../maker-ipc/register';
 import { applyRuntimeSetModelChange } from '../../maker-ipc/runtimeSetModel';
@@ -239,8 +246,9 @@ export function createCardActionHandler(
     const effort = (event.payload.effort ?? null) as Effort | null;
     // providerId:新卡片携带(供应商/模型名 picker);老卡片(升级前发出的)没有 → undefined,
     // 此时保持旧行为(只切 model/effort,不动会话的供应商选择)。
-    const providerId =
-      typeof event.payload.providerId === 'string' ? event.payload.providerId : undefined;
+    const providerId = normalizeSessionProviderId(
+      typeof event.payload.providerId === 'string' ? event.payload.providerId : undefined,
+    );
 
     if (!sessionId || !modelId) {
       log.warn('model:pick missing sessionId/modelId — ignoring');
@@ -259,94 +267,104 @@ export function createCardActionHandler(
       }
     };
 
-    let previousRoute: Awaited<ReturnType<typeof readModelRouteSnapshot>> = null;
-    try {
-      previousRoute = await readModelRouteSnapshot(sessionId);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`model:pick route snapshot failed (non-fatal): ${msg}`);
-    }
-    const previousProviderId = previousRoute?.providerId ?? getSessionProvider(sessionId);
-    const restorePersistentRoute = async (reason: string): Promise<void> => {
-      if (!previousRoute) return;
+    const failureReason = await withSendToSessionLock(sessionId, async () => {
+      let previousRoute: Awaited<ReturnType<typeof readModelRouteSnapshot>> = null;
       try {
-        await updateModelEffort(
-          sessionId,
-          previousRoute.model,
-          previousRoute.effort,
-          providerId !== undefined ? previousRoute.providerId : undefined,
-        );
-      } catch (restoreErr) {
-        const restoreMsg = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
-        log.warn(`model:pick DB rollback after ${reason} failed (non-fatal): ${restoreMsg}`);
+        previousRoute = await readModelRouteSnapshot(sessionId);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`model:pick route snapshot failed (non-fatal): ${msg}`);
       }
-    };
-    const rollbackRuntimeChange = async (reason: string): Promise<void> => {
-      if (providerId !== undefined) {
-        setSessionProvider(sessionId, previousProviderId);
-      }
-      const liveForRollback = turnRunner.getMakerSessionById(sessionId);
-      if (!liveForRollback || !previousRoute) return;
-      try {
-        await liveForRollback.setModel(previousRoute.model);
-        if (effort) {
-          await liveForRollback.setEffort(previousRoute.effort);
+      const previousProviderId = previousRoute
+        ? previousRoute.providerId
+        : getSessionProvider(sessionId);
+      const restorePersistentRoute = async (reason: string): Promise<void> => {
+        if (!previousRoute) return;
+        try {
+          await updateModelEffort(
+            sessionId,
+            previousRoute.model,
+            previousRoute.effort,
+            providerId !== undefined ? previousRoute.providerId : undefined,
+          );
+        } catch (restoreErr) {
+          const restoreMsg = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
+          log.warn(`model:pick DB rollback after ${reason} failed (non-fatal): ${restoreMsg}`);
         }
-      } catch (rollbackErr) {
-        const rollbackMsg =
-          rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
-        log.warn(`model:pick live rollback after ${reason} failed (non-fatal): ${rollbackMsg}`);
+      };
+      const rollbackRuntimeChange = async (reason: string): Promise<void> => {
+        if (providerId !== undefined) {
+          setSessionProvider(sessionId, previousProviderId);
+        }
+        const liveForRollback = turnRunner.getMakerSessionById(sessionId);
+        if (!liveForRollback || !previousRoute) return;
+        try {
+          await liveForRollback.setModel(previousRoute.model);
+          if (effort) {
+            await liveForRollback.setEffort(previousRoute.effort);
+          }
+        } catch (rollbackErr) {
+          const rollbackMsg =
+            rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+          log.warn(`model:pick live rollback after ${reason} failed (non-fatal): ${rollbackMsg}`);
+        }
+      };
+
+      // 持久化与运行态切换必须和 send / agent switch 共用 session 锁，保证后选覆盖先选。
+      try {
+        await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(`model:pick DB update failed: ${msg}`);
+        return msg;
       }
-    };
 
-    // 先持久化,再做可能关闭 live session 的运行态切换;避免失败卡已经返回但 live session 被关掉。
-    try {
-      await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error(`model:pick DB update failed: ${msg}`);
-      await patchModelPickFailed(msg);
-      return;
-    }
+      try {
+        const runtimeChange = await applyRuntimeSetModelChange({
+          maker: getMaker(),
+          sessionId,
+          model: modelId,
+          providerId,
+          isSessionInTurn,
+          registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
+          clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
+          wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
+          getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
+          logger: log,
+        });
 
-    try {
-      const runtimeChange = await applyRuntimeSetModelChange({
-        maker: getMaker(),
-        sessionId,
-        model: modelId,
-        providerId,
-        isSessionInTurn,
-        registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
-        clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
-        wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
-        getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
-        logger: log,
-      });
+        const liveAfterModel = turnRunner.getMakerSessionById(sessionId);
+        if (runtimeChange.status !== 'deferred' && liveAfterModel && effort) {
+          try {
+            await liveAfterModel.setEffort(effort);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.warn(`model:pick live setEffort failed: ${msg}`);
+            await restorePersistentRoute('setEffort');
+            await rollbackRuntimeChange('setEffort');
+            return msg;
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`model:pick runtime setModel failed: ${msg}`);
+        await restorePersistentRoute('runtime setModel');
+        return msg;
+      }
 
       const liveAfterModel = turnRunner.getMakerSessionById(sessionId);
-      if (runtimeChange.status !== 'deferred' && liveAfterModel && effort) {
-        try {
-          await liveAfterModel.setEffort(effort);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`model:pick live setEffort failed: ${msg}`);
-          await restorePersistentRoute('setEffort');
-          await rollbackRuntimeChange('setEffort');
-          await patchModelPickFailed(msg);
-          return;
-        }
+      if (!liveAfterModel) {
+        log.info(`model:pick: no live session for ${sessionId.slice(-8)} — DB updated only`);
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`model:pick runtime setModel failed: ${msg}`);
-      await restorePersistentRoute('runtime setModel');
-      await patchModelPickFailed(msg);
-      return;
-    }
+      // 这次 IM 选择晚于 renderer 登记的跨引擎 intent；只有整条 route 更新成功后
+      // 才取消旧 intent，失败回滚时仍保留它供下一次发送重试。
+      cancelPendingAgentSwitchForSession(sessionId);
+      return null;
+    });
 
-    const liveAfterModel = turnRunner.getMakerSessionById(sessionId);
-    if (!liveAfterModel) {
-      log.info(`model:pick: no live session for ${sessionId.slice(-8)} — DB updated only`);
+    if (failureReason !== null) {
+      await patchModelPickFailed(failureReason);
+      return;
     }
 
     try {
@@ -799,6 +817,45 @@ export function createCardActionHandler(
     );
 
     const desktopPrefs = getDesktopCcPrefs() ?? DESKTOP_CC_DEFAULTS;
+    // 停用轴准入(PR #744 review 第五轮):IM 新建会话是新的付费路由,desktop 偏好里
+    // 保存的 model/provider 可能已被用户停用 —— 宽松降级:被停用的显式来源/模型逐级
+    // 丢弃(退回 agent 默认路由),隐式默认被停用时显式落替代来源;不因停用让 IM
+    // 新建流程整体失败。
+    const route = await resolveLenientSessionRoute(
+      'claude-code',
+      desktopPrefs.model,
+      desktopPrefs.providerId ?? null,
+      // 入口默认模型同走裁决阶梯:它自己也可能被停用,不能作为未经裁决的兜底
+      // (PR #744 review 第六轮);desiredEffort 让换模型时的 effort 按解析出的
+      // 模型条目 reconcile(第十一轮)。
+      {
+        fallbackModel: DESKTOP_CC_DEFAULTS.model,
+        desiredEffort: desktopPrefs.effort,
+        desiredFastMode: desktopPrefs.fastMode === true,
+      },
+    );
+    // 换了模型时 effort 用 reconcile 结果(保存档可能超出兜底模型的支持集,原样透传
+    // 会被上游拒);模型未换则保持用户保存档。route.effort 缺席 = 条目无 effort 概念,
+    // 不携带交给 agent 默认。
+    // Fast 同理:路由被改动时按落地拷贝 reconcile(不支持 ⇒ false),原样保持保存值。
+    const routeFastMode = route.fastMode ?? desktopPrefs.fastMode;
+    const routeEffort: Effort | undefined =
+      route.model === desktopPrefs.model
+        ? (desktopPrefs.effort as Effort)
+        : (route.effort as Effort | undefined);
+    if (route.degraded) {
+      log.warn(
+        `control:new saved route degraded (disabled in settings): model=${desktopPrefs.model} providerId=${desktopPrefs.providerId ?? 'null'}`,
+      );
+    }
+    // route.model 缺席 = 目录里一个启用的对话模型都没有:失败收口,绝不拿未经
+    // 裁决的模型直建付费会话。
+    const requireRouteModel = (): string => {
+      if (!route.model) {
+        throw new Error('control:new has no enabled chat model (all models disabled in settings)');
+      }
+      return route.model;
+    };
     const closeCreatedSessionAfterSetupFailure = async (sessionId: string): Promise<void> => {
       try {
         await getMaker().closeSession(sessionId);
@@ -807,15 +864,17 @@ export function createCardActionHandler(
         log.warn(`control:new cleanup created session failed: ${msg}`);
       }
     };
-    const persistCreatedSessionProvider = async (sessionId: string): Promise<void> => {
-      const providerId = desktopPrefs.providerId ?? null;
+    const persistCreatedSessionProvider = async (session: {
+      id: string;
+      model: string;
+    }): Promise<void> => {
       await updateModelEffort(
-        sessionId,
-        desktopPrefs.model,
-        desktopPrefs.effort as Effort,
-        providerId,
+        session.id,
+        route.model ?? session.model,
+        routeEffort ?? ('medium' as Effort),
+        route.providerId,
       );
-      setSessionProvider(sessionId, providerId);
+      setSessionProvider(session.id, route.providerId);
     };
 
     // ── threadScoped: 新建 + 接管 → 顶层 root 卡 + thread ────────────────────
@@ -826,15 +885,15 @@ export function createCardActionHandler(
         const newSession = await getMaker().createSession({
           agentKind: 'claude-code',
           workingDir,
-          model: desktopPrefs.model,
-          providerId: desktopPrefs.providerId ?? undefined,
-          effort: desktopPrefs.effort as Effort,
+          model: requireRouteModel(),
+          providerId: route.providerId ?? undefined,
+          ...(routeEffort ? { effort: routeEffort } : {}),
           permissionMode: desktopPrefs.permissionMode as PermissionMode,
-          fastMode: desktopPrefs.fastMode,
+          fastMode: routeFastMode,
           title: FBOT_DRAFT_TITLE,
         });
         created = newSession.id;
-        await persistCreatedSessionProvider(newSession.id);
+        await persistCreatedSessionProvider(newSession);
         await touchUserSent(newSession.id);
         broadcastSessionCreated(newSession.id);
       } catch (err) {
@@ -908,15 +967,15 @@ export function createCardActionHandler(
       const newSession = await getMaker().createSession({
         agentKind: 'claude-code',
         workingDir,
-        model: desktopPrefs.model,
-        providerId: desktopPrefs.providerId ?? undefined,
-        effort: desktopPrefs.effort as Effort,
+        model: requireRouteModel(),
+        providerId: route.providerId ?? undefined,
+        ...(routeEffort ? { effort: routeEffort } : {}),
         permissionMode: desktopPrefs.permissionMode as PermissionMode,
-        fastMode: desktopPrefs.fastMode,
+        fastMode: routeFastMode,
         title: FBOT_DRAFT_TITLE,
       });
       newSessionId = newSession.id;
-      await persistCreatedSessionProvider(newSession.id);
+      await persistCreatedSessionProvider(newSession);
       // bump userSendAt = now, 让 sidebar 直接把这条 session 落到 workingDir
       // 对应的 Project group 下, 而不是判定成"草稿"挂在 Projects 这一级根。
       // 草稿规则 (projectGrouping.ts): workingDir 缺失 OR (userSendAt == null

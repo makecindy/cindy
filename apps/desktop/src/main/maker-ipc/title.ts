@@ -87,7 +87,7 @@ async function readSessionProviderIdFromDb(sessionId: string): Promise<string | 
 /** 某 agent 下已连接的供应商视图列表(实时连接态)。失败 → []。 */
 async function listConnectedProvidersForAgent(agentKind: AgentKind): Promise<ProviderView[]> {
   try {
-    const all = await getDesktopProviderService().listProviders();
+    const all = await getDesktopProviderService().listProviders({ allowSideEffects: true });
     return connectedProvidersForAgent(all, agentKind);
   } catch {
     return [];
@@ -235,21 +235,27 @@ function parseAutoTitleRequest(raw: unknown): SessionAutoTitleRequest {
 }
 
 export function registerMakerTitleIpc(): void {
+  // 这两条通道读供应商快照时会放行本机绑定自愈(写绑定文件、并为 Anthropic 起一次带凭证的
+  // 清单发现),与下面的 AUTO_TITLE 同属特权入口,守卫口径也应当一致 —— 原先只有 AUTO_TITLE
+  // 做了 sender 断言(PR #548 review)。两者都不在 device-link allowlist 里,可以直接用会抛的
+  // 守卫。
   ipcMain.handle(
     MAKER_INVOKE.GENERATE_TITLE,
     async (
-      _event: Electron.IpcMainInvokeEvent,
+      event: Electron.IpcMainInvokeEvent,
       { message, agentKind, sessionId }: { message: string; agentKind: AgentKind; sessionId?: string },
     ): Promise<{ title: string | null }> => {
+      assertTrustedAppRendererEvent(event);
       return { title: await generateMakerSessionTitle(message, agentKind, sessionId) };
     },
   );
   ipcMain.handle(
     MAKER_INVOKE.REGENERATE_TITLE,
     async (
-      _event: Electron.IpcMainInvokeEvent,
+      event: Electron.IpcMainInvokeEvent,
       { sessionId }: { sessionId: string },
     ): Promise<{ title: string | null }> => {
+      assertTrustedAppRendererEvent(event);
       return { title: await regenerateMakerSessionTitle(sessionId) };
     },
   );

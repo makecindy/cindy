@@ -39,8 +39,11 @@ export interface RsbWindowControllerDeps {
     read(): RsbWindowSettings;
     writePatch(patch: Partial<RsbWindowSettings>): void;
   };
-  /** 创建子窗口(不负责挂 closed 钩子,controller 自己挂)。 */
-  createWindow: () => BrowserWindow;
+  /**
+   * 创建子窗口(不负责挂 closed 钩子,controller 自己挂)。
+   * userInitiated=false 时实现方须用不抢焦点的方式显示(showInactive)。
+   */
+  createWindow: (opts: { userInitiated: boolean }) => BrowserWindow;
   getMainWindow: () => BrowserWindow | null;
   /** 状态变化广播(所有窗口)。bootstrap 注入 getAllWindows 遍历实现。 */
   broadcastState: (state: { detached: boolean; open: boolean }) => void;
@@ -79,16 +82,28 @@ export class RsbWindowController {
     return { detached: s.detached, lastOpen: s.lastOpen, open: this.isOpen() };
   }
 
-  /** 幂等打开:已开则 show + focus;未开则建窗 + lastOpen=true + 广播。 */
-  open(): void {
+  /**
+   * 幂等打开:已开则 show + focus;未开则建窗 + lastOpen=true + 广播。
+   *
+   * userInitiated(缺省 true)= 这次开窗是用户当次手势要求的,保持既有
+   * 「带出并聚焦子窗口」行为。程序自发的开窗(插件 preview 槽、agent
+   * 浏览器自动化)必须传 false:
+   *  - 窗口已经开着 → **什么都不做**。内容经命令通道照常送达,用户看得见;
+   *    这里再 show/focus 只会把用户正在用的别的应用顶掉(Windows 上
+   *    focus() 即抢前台),属于纯粹的干扰。
+   *  - 窗口还没开 → 照常建窗,但由 createWindow 走 showInactive 不抢焦点。
+   */
+  open(opts: { userInitiated?: boolean } = {}): void {
+    const userInitiated = opts.userInitiated !== false;
     if (this.winRef && !this.winRef.isDestroyed()) {
       if (this.closing) return;
+      if (!userInitiated) return;
       if (this.winRef.isMinimized()) this.winRef.restore();
       this.winRef.show();
       this.winRef.focus();
       return;
     }
-    const win = this.deps.createWindow();
+    const win = this.deps.createWindow({ userInitiated });
     this.winRef = win;
     this.closing = false;
     this.ready = false;
@@ -115,7 +130,8 @@ export class RsbWindowController {
   setDetached(next: boolean): RsbWindowState {
     this.deps.settings.writePatch({ detached: next });
     if (next) {
-      this.open();
+      // 唯一入口是用户点「在新窗口中打开」按钮 —— 明确的用户手势,该带出并聚焦。
+      this.open({ userInitiated: true });
     } else {
       // queued 调用方早已返回；attach 时必须把 ownership 显式交回主 renderer。
       this.flushDeferredCommandsToAttachedHost();
@@ -143,10 +159,12 @@ export class RsbWindowController {
    * 保证 dispatchTabOp 时子窗口 renderer 的 RSB store / webview 池已可用。
    * 非 detached 时 no-op(host 是主窗,常驻)。
    */
-  ensureOpenForAutomation(): Promise<void> {
+  ensureOpenForAutomation(opts: { userInitiated?: boolean } = {}): Promise<void> {
     if (!this.deps.settings.read().detached) return Promise.resolve();
     if (this.ready && this.winRef && !this.winRef.isDestroyed()) return Promise.resolve();
-    this.open();
+    // 缺省 false:本入口的名字就是 "for automation" —— 调用方没表态时按
+    // 「程序自发」处理,不抢用户焦点。用户手势路径显式传 true。
+    this.open({ userInitiated: opts.userInitiated === true });
     if (this.ready) return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -192,6 +210,9 @@ export class RsbWindowController {
     request: RsbWindowCommandRouteRequest,
   ): Promise<RsbWindowCommandRouteResult> {
     const { command, allowOpen } = request;
+    // 缺省 true:既有调用点绝大多数是用户手势(点链接 / 菜单 / 快捷键),行为不变。
+    // 插件 preview 槽与 agent 自动化显式传 false,只送内容不抢焦点。
+    const userInitiated = request.userInitiated !== false;
     if (!this.deps.settings.read().detached) return 'attached';
     if (!this.canDispatchCommand(command)) return 'stale-context';
 
@@ -210,7 +231,7 @@ export class RsbWindowController {
 
     if (allowOpen && (!this.isOpen() || !this.ready)) {
       try {
-        await this.ensureOpenForAutomation();
+        await this.ensureOpenForAutomation({ userInitiated });
       } catch (err) {
         if (!this.deps.settings.read().detached) return 'attached';
         if (!this.canDispatchCommand(command)) return 'stale-context';

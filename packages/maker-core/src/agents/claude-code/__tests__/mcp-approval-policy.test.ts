@@ -18,7 +18,13 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps, McpToolApprovalContext, McpToolApprovalPolicy } from '../../base-agent.js';
+import type {
+  AgentDeps,
+  McpToolApprovalContext,
+  McpToolApprovalPolicy,
+  TurnPermissionPolicy,
+} from '../../base-agent.js';
+import type { PermissionMode } from '../../../types/common.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { InteractionDecision, InteractionRequest } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -139,6 +145,7 @@ async function startSession(
     decide?: (req: InteractionRequest) => InteractionDecision | undefined;
     /** true 时不注入 resolver，用于验证 fail-closed 分支。 */
     bare?: boolean;
+    permissionMode?: PermissionMode;
   },
 ) {
   const configDir = await makeTempDir();
@@ -153,7 +160,7 @@ async function startSession(
     sessionId: 'session-mcp-policy',
     model: 'claude-opus-4-6',
     workingDir,
-    permissionMode: 'default',
+    permissionMode: options?.permissionMode ?? 'default',
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
     | { canUseTool?: CanUseToolFn }
@@ -194,6 +201,63 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () => {
+  it('runs the per-turn policy before MCP auto-approval and drops session grants', async () => {
+    const { handle, canUseTool, seen } = await startSession(
+      () => 'auto-approve',
+      {
+        decide: () => ({
+          kind: 'permission',
+          behavior: 'allow',
+          permissionUpdates: SESSION_SUGGESTION,
+        }),
+      },
+    );
+    const turnPermissionPolicy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'wechat', taskId: 'task-claude' },
+      confirmationSurface: 'desktop',
+      forceConfirmToolCall: (toolName) => toolName.includes('contacts'),
+    };
+    await handle.send(
+      { type: 'user', content: 'delete the duplicate contact' },
+      { turnPermissionPolicy },
+    );
+
+    const result = await canUseTool(
+      'mcp__cindy_contacts__call_tool',
+      { name: 'contacts_delete' },
+      { toolUseID: 't-policy', suggestions: SESSION_SUGGESTION },
+    );
+
+    expect(permissionRequests(seen)).toHaveLength(1);
+    expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
+    expect(result.behavior).toBe('allow');
+    expect(result.updatedPermissions).toBeUndefined();
+    await handle.close();
+  });
+
+  it('rejects a per-turn policy in permission modes that can skip canUseTool', async () => {
+    const { handle } = await startSession(undefined, {
+      permissionMode: 'bypassPermissions',
+    });
+    const policy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'wechat', taskId: 'task-full' },
+      confirmationSurface: 'desktop',
+      forceConfirmToolCall: () => true,
+    };
+
+    await expect(
+      handle.send(
+        { type: 'user', content: 'remove it' },
+        { turnPermissionPolicy: policy },
+      ),
+    ).rejects.toMatchObject({
+      name: 'TurnPermissionPolicyUnsupportedError',
+      code: 'TURN_PERMISSION_POLICY_UNSUPPORTED',
+      permissionMode: 'bypassPermissions',
+    });
+    await handle.close();
+  });
+
   it('auto-approves trusted MCP tools without prompting the user', async () => {
     const { handle, canUseTool, seen } = await startSession(() => 'auto-approve');
 

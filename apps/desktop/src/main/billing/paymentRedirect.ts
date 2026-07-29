@@ -2,7 +2,10 @@ const MAX_BILLING_REDIRECT_URL_LENGTH = 2_048;
 
 // Public provider-owned checkout hosts only. Merchant and Cindy-owned hosts do
 // not belong here; adding a host changes the desktop trust boundary.
-const ALLOWED_BILLING_REDIRECT_HOSTS = new Set(['checkout.stripe.com']);
+const ALLOWED_BILLING_REDIRECT_HOSTS = new Set([
+  'checkout.stripe.com',
+  'invoice.stripe.com',
+]);
 
 export function isAllowedBillingRedirectUrl(value: unknown): value is string {
   if (

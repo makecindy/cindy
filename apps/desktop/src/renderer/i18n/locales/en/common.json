@@ -61,13 +61,15 @@
       "input": "Input",
       "done": "Done",
       "running": "Running",
+      "networkReconnecting": "({{attempt}}/{{maxAttempts}}) Connection interrupted — reconnecting…",
       "updatingTasks": "Updating tasks",
       "awaitingPermission": "Awaiting permission",
       "awaitingQuestion": "Awaiting your reply",
       "awaitingPlan": "Awaiting plan review",
       "permissionPromptTitle": "Confirm permission",
+      "permissionPromptTitleWithTool": "Allow {{toolName}}?",
       "allowOnce": "Allow once",
-      "alwaysAllowForSession": "Always allow",
+      "alwaysAllowForSession": "Always allow for this session",
       "deny": "Deny"
     }
   },
@@ -266,6 +268,11 @@
           "keyHint": "Read a private key file directly. We don't store passphrases, so encrypted keys aren't supported — use this only when ssh-agent isn't available."
         },
         "identityFile": "Identity file path",
+        "agentProxy": "Route agent traffic via local proxy",
+        "agentProxyTip": "Open a 127.0.0.1 port on the remote that tunnels back over SSH to a proxy on this machine; remote codex / Claude Code traffic flows out through it",
+        "agentProxyAddr": "Local proxy address",
+        "agentProxyHint": "Opens a 127.0.0.1 port on the remote, tunneled over SSH back to your local proxy (e.g. Clash on 7890). {{appName}} does not provide a proxy — only the tunnel; the remote agent's HTTPS_PROXY points at the tunnel and domains are resolved by your proxy. Toggling restarts the remote codex daemon once to take effect.",
+        "agentProxyAddrInvalid": "Expected host:port, e.g. 127.0.0.1:7890",
         "cancel": "Cancel",
         "submit": "Add machine"
       },
@@ -281,6 +288,11 @@
         "statusInstalled": "Installed",
         "statusNotInstalled": "Not installed",
         "claudeCodeName": "Claude Code",
+        "agentProxyTitle": "Agent proxy tunnel",
+        "agentProxyActive": "Remote 127.0.0.1:{{port}} → local {{target}} · established",
+        "agentProxyPending": "Establishing tunnel → local {{target}}",
+        "agentProxyWaiting": "Host not connected; tunnel will be established on reconnect → local {{target}}",
+        "agentProxyError": "Tunnel failed: {{message}}",
         "button": {
           "install": "Install",
           "reinstall": "Reinstall",
@@ -307,9 +319,9 @@
         "confirmTitle": "Push Codex credentials to remote?",
         "confirmPush": "Push",
         "confirmOverwrite": "Overwrite",
-        "descFirstPush": "This will install your local Codex credentials at ~/.codex/auth.json on {{hostId}}.",
-        "descOverwrite": "This will overwrite the existing Codex login on {{hostId}}.",
-        "descOverwriteWithAge": "This will overwrite the existing Codex login on {{hostId}} (last updated {{when}}).",
+        "descFirstPush": "This will install your local Codex credentials in Cindy Codex home on {{hostId}} (~/.xdt-server/v1/codex-home/auth.json).",
+        "descOverwrite": "This will overwrite the existing Codex login in Cindy Codex home on {{hostId}}.",
+        "descOverwriteWithAge": "This will overwrite the existing Codex login in Cindy Codex home on {{hostId}} (last updated {{when}}).",
         "warnOverwrite": "The current remote login will be lost. If someone is using Codex on that machine right now, they will be logged out.",
         "warnShared": "Anyone who can SSH into {{hostId}} will be able to read this file and use your OpenAI account.",
         "daysAgo": "{{n}} day(s) ago",
@@ -355,10 +367,20 @@
       "localThemes": {
         "title": "Local themes",
         "export": "Create local copy",
+        "import": "Import VSCode / Obsidian theme",
         "openDir": "Open themes folder",
         "refresh": "Refresh",
         "exportSuccess": "Created {{file}}. Replace the example image paths, save, then click \"Refresh\".",
         "exportFailed": "Export failed: {{error}}",
+        "importSuccess": "Imported {{name}} ({{themeCount}} variant(s)). Pick it in the theme list above.",
+        "importPartial": "Imported {{name}} ({{themeCount}} variant(s)). {{skipped}} semantic colors stay unchanged per spec, {{unresolved}} values could not be read, and {{derived}} roles were approximated from nearby colors.",
+        "importFailed": "Import failed: {{error}}",
+        "importUnsupported": "This file is not a recognizable VSCode or Obsidian theme.",
+        "importUsesInclude": "This VSCode theme inherits colors via \"include\" and cannot be imported standalone.",
+        "importNotAFile": "Select a file, not a folder.",
+        "importTooLarge": "File is too large to import as a theme.",
+        "importWriteError": "Could not save the theme. Check disk space and permissions.",
+        "importInternalError": "The file could not be read or processed. Try selecting it again.",
         "openDirFailed": "Failed to open folder: {{error}}",
         "refreshed": "Local themes refreshed"
       },
@@ -481,6 +503,14 @@
       "soundPreviewAria": "Preview {{event}} sound",
       "skinAnimationAria": "Switch {{skin}} animation preview",
       "skins": {
+        "cindy": {
+          "name": "Cindy",
+          "description": "Cindy herself, keeping an eye on every run."
+        },
+        "blackcat": {
+          "name": "Black Cat",
+          "description": "A composed black cat whose yellow eyes stay sharp against the dark notch."
+        },
         "pululu": {
           "name": "Pululu",
           "description": "TapFamily's calm little guardian: round-headed, sincere, and ready to steady messy tasks."
@@ -508,6 +538,10 @@
         "muffin": {
           "name": "Muffin",
           "description": "A soft blue-gray companion that keeps running tasks feeling light and playful."
+        },
+        "erika": {
+          "name": "Erika",
+          "description": "Erika with her crescent hairpin — warm brown eyes, quietly focused on long runs."
         }
       },
       "soundEvents": {
@@ -653,6 +687,12 @@
       "analyticsSaveFailed": "Failed to save usage statistics settings",
       "debugLogLabel": "Debug logs",
       "debugLogDescription": "When enabled, emits verbose debug logs: main/maker logger raised to debug level; new Claude Code sessions also log API request URL/status/latency, Node-level DNS/TCP/TLS handshake timing, and SDK internals. Output is large — turn off after troubleshooting. Always on in dev mode.",
+      "legal": {
+        "termsOfServiceLabel": "Terms of Service",
+        "privacyPolicyLabel": "Privacy Policy",
+        "viewDocument": "View {{document}}",
+        "openFailed": "Unable to open the document. Check your system browser settings."
+      },
       "social": {
         "title": "Connect with Cindy",
         "discordLabel": "Discord",
@@ -893,6 +933,11 @@
             "externalAppMacOnly": "Auto-learning after pasting into external apps is currently macOS-only. In-app voice input is unaffected.",
             "ariaLabel": "Toggle dictionary auto-learning"
           },
+          "deviceSync": {
+            "label": "Sync across my devices",
+            "hint": "Your dictionary merges automatically between computers that are online at the same time. Entries are sent device to device and never stored on a server.",
+            "ariaLabel": "Toggle dictionary sync across devices"
+          },
           "add": "New term",
           "save": "Save",
           "cancel": "Cancel",
@@ -1130,14 +1175,18 @@
       "title": "Providers",
       "subtitle": "The source used when picking a model. Each source offers its own models and billing, switchable per conversation.",
       "pill": {
-        "connected": "Connected"
+        "connected": "Connected",
+        "suspended": "Disabled"
       },
       "button": {
         "authorize": "Authorize",
         "logout": "Sign out",
         "connect": "Connect",
         "disconnect": "Disconnect",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "retry": "Retry model discovery",
+        "retrying": "Retrying discovery…",
+        "enableProvider": "Enable Provider"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -1205,6 +1254,8 @@
           "wireProtocol": "Upstream protocol",
           "baseUrl": "Base URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
+          "requestPath": "Exact request path (optional)",
+          "requestPathHelp": "Leave empty to use the standard path for the selected protocol. Enter a path beginning with / only when the provider uses a non-standard inference endpoint.",
           "apiKey": "API key",
           "apiKeyPlaceholder": "API key",
           "apiKeyEditPlaceholder": "Unchanged (saved)",
@@ -1236,8 +1287,9 @@
           "nameRequired": "Display name is required",
           "runtimeRequired": "Configure at least one runtime (its base URL and models)",
           "baseUrlInvalid": "Base URL must be a valid http(s) address",
+          "requestPathInvalid": "Begin the exact request path with a single /. Do not use fragments or . and .. path segments; percent-encode spaces and unsafe characters.",
           "modelRequired": "Add at least one model",
-          "oauthInvalid": "Incomplete OAuth config: all four fields are required and both endpoints must be https URLs"
+          "oauthInvalid": "Incomplete OAuth config: all fields are required and both endpoints must be secure https URLs"
         },
         "toast": {
           "created": "Provider added",
@@ -1279,9 +1331,17 @@
           "label": "Authentication",
           "apiKey": "API key",
           "oauth": "OAuth subscription",
-          "oauthHelp": "For subscription providers offering OAuth sign-in. After saving, click \"Authorize\" in the provider list to sign in via browser. Credentials are stored encrypted on this device only.",
+          "none": "No authentication",
+          "noneHelp": "For local or trusted self-hosted proxies. Cindy removes the CLI's subscription credentials and account headers before forwarding requests.",
+          "oauthHelp": "For providers offering OAuth sign-in. Choose a browser callback or device code flow, then authorize from the provider list. Credentials are stored encrypted on this device only.",
+          "flowLabel": "OAuth flow",
+          "flow": {
+            "authorization-code": "Browser callback (PKCE)",
+            "device-code": "Device code"
+          },
           "fields": {
             "authorizeUrl": "Authorize URL",
+            "deviceAuthorizationUrl": "Device authorization URL",
             "tokenUrl": "Token URL",
             "clientId": "Client ID",
             "scopes": "Scopes (space-separated)"
@@ -1297,7 +1357,6 @@
         "available": "Shown in Model Picker",
         "modelCount_one": "{{count}} model",
         "modelCount_other": "{{count}} models",
-        "agentEnabledCount": "{{agent}} {{on}}/{{total}}",
         "enableAll": "Show All",
         "disableAll": "Hide All",
         "subscription": "Subscription",
@@ -1308,9 +1367,18 @@
         "capabilityNote": "Not available in {{agent}}",
         "divergedChip": "Hidden in {{agent}}",
         "refreshAria": "Refresh model list (additions only)",
+        "refreshBuiltinAria": "Refresh Model List",
+        "refreshingAria": "Refreshing model list…",
+        "refreshDone": "Model list refreshed",
         "refreshAdded": "Found {{count}} new models",
         "refreshNoNew": "Model list is up to date — nothing new",
-        "refreshFailed": "Failed to refresh the model list. Please try again later"
+        "refreshFailed": "Model list couldn’t be refreshed — try again later",
+        "disableModel": "Disable This Model",
+        "enableModel": "Enable This Model",
+        "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
+        "accessWriteFailed": "Couldn't save the change. Please try again.",
+        "disabledGroup": "Disabled",
+        "enableAllModels": "Enable All"
       },
       "genericOAuth": {
         "subtitle": "Subscription sign-in (OAuth)",
@@ -1332,7 +1400,29 @@
         "singleAgentNote": "{{agent}} only",
         "emptyModels": "Models are discovered automatically after you authorize",
         "emptyList": "Click \"Add provider\" below to connect your first model source",
-        "emptyModelsConnected": "Connected — discovering available models. If it stays empty, try again shortly."
+        "emptyModelsConnected": "Connected — discovering available models. If it stays empty, try again shortly.",
+        "discoveryFailed": {
+          "network": "Can't reach this provider, so its model list is unavailable. Check your network or proxy settings, then retry.",
+          "timeout": "Connection to this provider timed out, so its model list is unavailable. Check your network, then retry.",
+          "upstream": "This provider can't return its model list right now. Try again later.",
+          "regionBlocked": "This provider doesn't offer service in your current region, so its model list is unavailable. You can use a different provider instead.",
+          "unauthorized": "This provider rejected the current authorization, so its model list is unavailable. Disconnect and connect again.",
+          "forbidden": "This provider refused the request, so its model list is unavailable. If you're on a proxy or VPN, switch exits and retry.",
+          "rejected": "This provider refused the request, so its model list is unavailable. Try again later, or use a different provider.",
+          "empty": "This provider returned no usable models. Check your account's access, then retry."
+        },
+        "discoveryFailedStale": {
+          "network": "Can't reach this provider. The list below is from the last successful refresh. Check your network or proxy settings, then retry.",
+          "timeout": "Connection to this provider timed out. The list below is from the last successful refresh. Check your network, then retry.",
+          "upstream": "This provider can't return its model list right now. The list below is from the last successful refresh. Try again later.",
+          "regionBlocked": "This provider doesn't offer service in your current region. The list below is from the last successful refresh. You can use a different provider instead.",
+          "unauthorized": "This provider rejected the current authorization. The list below is from the last successful refresh. Disconnect and connect again.",
+          "forbidden": "This provider refused the request. The list below is from the last successful refresh. If you're on a proxy or VPN, switch exits and retry.",
+          "rejected": "This provider refused the request. The list below is from the last successful refresh. Try again later, or use a different provider.",
+          "empty": "This provider returned no usable models this time. The list below is from the last successful refresh. Check your account's access, then retry."
+        },
+        "suspendedBanner": "This provider is disabled. Credentials are kept; enable it to use its models again.",
+        "moreActionsAria": "More Actions"
       },
       "detect": {
         "groupLabel": "Detected on this device",
@@ -1349,14 +1439,17 @@
         "stepModels": "Choose models",
         "searchPlaceholder": "Search providers…",
         "groupSubscription": "Subscription sign-in · recommended",
-        "groupApiKey": "API key providers · presets update with the catalog",
+        "groupApiKey": "API and self-hosted proxies · presets update with the catalog",
         "groupCustom": "Custom",
         "metaOAuth": "Subscription (OAuth)",
         "metaApiKey": "API key",
+        "metaNoAuth": "Local / self-hosted · no authentication",
         "customTitle": "Custom endpoint",
         "customMeta": "Connect any OpenAI / Anthropic compatible source",
         "pickHint": "The sign-in method is defined by each provider; OAuth endpoints and base URLs come from presets — nothing to fill in by hand.",
         "oauthDesc": "Authorize your subscription in the browser — no API key needed",
+        "deviceOAuthDesc": "Authorize on the provider's verification page with a one-time device code",
+        "authorizeInBrowser": "Authorize in browser",
         "authorizeWithDeviceCode": "Use device code",
         "preparingDeviceCode": "Preparing a device code…",
         "deviceCodePrompt": "Enter this one-time device code on the verification page:",
@@ -1370,10 +1463,16 @@
         "authorizeFailed": "Failed to authorize {{name}}. Please try again",
         "nameLabel": "Display name",
         "onlyAgentNote": "This provider only supports {{agent}}",
+        "endpointLabel": "{{agent}} base URL",
+        "noAuthNote": "This proxy needs no client key; Cindy removes CLI subscription credentials before forwarding.",
         "bridgedNote": "Cindy bridge (Chat Completions)",
         "docsLink": "View setup docs",
         "fetching": "Verifying connection and fetching models…",
         "fetchFailed": "Couldn't fetch the model list — you can finish with the preset's recommended models and refresh later in details",
+        "manualModelHint": "No models were discovered. Enter the exact model ID exposed by this proxy.",
+        "manualModelLabel": "{{agent}} model ID",
+        "manualModelPlaceholder": "e.g. local-model",
+        "addManualModel": "Add model",
         "recommended": "Recommended",
         "modelsHint": "Checked models appear in the chat model picker and apply to every CLI where they're available; adjust anytime in provider details.",
         "noModelSelected": "Select at least one model",
@@ -1390,6 +1489,10 @@
         "badge": "Recommended",
         "desc": "Sign in to Cindy to enable the official Cindy AI service — all models work out of the box, no keys to manage.",
         "cta": "Sign in to Cindy"
+      },
+      "menu": {
+        "disableProvider": "Disable This Provider",
+        "enableProvider": "Enable This Provider"
       }
     },
     "experimental": {
@@ -1466,6 +1569,90 @@
         "hint": "Send a notification message to the Bot on connect/disconnect"
       },
       "bind": "Bind"
+    },
+    "wechatBot": {
+      "title": "Personal WeChat",
+      "description": "Scan to connect personal WeChat and work with {{appName}} from a private chat.",
+      "statusAria": "Personal WeChat status: {{status}}",
+      "status": {
+        "disconnected": "Not connected",
+        "authorizing": "Preparing authorization…",
+        "waitingConfirmation": "Waiting for WeChat…",
+        "connected": "Connected",
+        "reconnecting": "Reconnecting…",
+        "needsReauth": "Authorization required",
+        "disabled": "Unavailable",
+        "error": "Connection failed"
+      },
+      "intro": "After connecting, private messages sent to this WeChat connection enter Cindy on this computer. Tencent provides the authorization page, which may display OpenClaw.",
+      "errorNote": "The connection was not completed. Check your network and scan again. Cindy never stores plaintext credentials after a failed connection.",
+      "disabledNote": "Personal WeChat is paused in this version by the compatibility policy. Saved conversations and settings are not removed.",
+      "permission": {
+        "label": "Permission mode",
+        "hint": "Applies to new context after /new. Risky actions still require confirmation in Cindy Desktop.",
+        "fullAccessDisabled": "Personal WeChat does not support Full Access yet because actions that cannot be confirmed in WeChat must not run directly.",
+        "permissionModeDisabled": "Personal WeChat always uses Cindy Desktop's confirmation policy, so this permission mode is unavailable."
+      },
+      "authorization": {
+        "title": "Authorize WeChat",
+        "rebindTitle": "Connect a new Cindy to WeChat",
+        "description": "Tencent's webpage will open for authorization. After scanning, you can talk to Cindy from WeChat.",
+        "rebindDescription": "This WeChat account already has a connection. Continuing may replace its existing Cindy or OpenClaw connection.",
+        "confirm": "Authorize",
+        "cancel": "Cancel",
+        "steps": {
+          "1": "Select Authorize to open the WeChat binding page in your system browser.",
+          "2": "Scan with the WeChat app and confirm the connection in WeChat.",
+          "3": "Return to Cindy after binding; the connection status updates automatically.",
+          "4": "Tencent provides the authorization page, which may display OpenClaw."
+        }
+      },
+      "waiting": {
+        "heading": "Waiting for confirmation in WeChat",
+        "note": "Finish scanning and confirmation in your system browser. Cindy updates automatically when it succeeds, or you can cancel this attempt.",
+        "cancel": "Cancel authorization"
+      },
+      "bound": {
+        "heading": "Personal WeChat connected",
+        "attentionHeading": "Personal WeChat needs attention",
+        "notes": {
+          "disconnected": "The connection is saved but is not currently running.",
+          "authorizing": "Preparing a new WeChat authorization.",
+          "waiting_confirmation": "Waiting for scan confirmation in WeChat.",
+          "connected": "WeChat private messages go directly to Cindy on this computer and are not relayed through Cindy servers.",
+          "reconnecting": "This computer is restoring the WeChat connection. No new scan is needed.",
+          "needs_reauth": "The WeChat authorization expired or was replaced by another connection. Scan again.",
+          "disabled_by_policy": "The connection is paused by this version's compatibility policy; credentials and conversations remain saved.",
+          "error": "The connection is temporarily unavailable. Scan again or unbind and retry later."
+        }
+      },
+      "actions": {
+        "connect": "Connect WeChat",
+        "rebind": "Reconnect",
+        "unbind": "Unbind"
+      },
+      "workingDir": {
+        "title": "Working directory for new conversations",
+        "hint": "Used for the first WeChat conversation and after /new. Changing it does not move the current context.",
+        "managed": "Use a Cindy-managed directory",
+        "reset": "Restore default",
+        "unavailable": "The selected directory is unavailable. New conversations temporarily use a Cindy-managed directory."
+      },
+      "unbind": {
+        "title": "Unbind personal WeChat?",
+        "description": "Unbinding stops messaging, removes local WeChat credentials, and clears unfinished tasks. Existing Cindy conversations, history, and saved attachments remain.",
+        "confirm": "Unbind",
+        "cancel": "Cancel"
+      },
+      "toasts": {
+        "authorizeFailed": "Could not start WeChat authorization. Try again later.",
+        "cancelFailed": "Could not cancel WeChat authorization",
+        "unbound": "Personal WeChat unbound",
+        "unbindFailed": "Unbind failed. Try again later.",
+        "workingDirSaved": "Working directory for new WeChat conversations updated",
+        "workingDirReset": "New WeChat conversations now use the default directory",
+        "workingDirFailed": "Could not update the working directory. Select it again."
+      }
     },
     "discordBot": {
       "title": "Discord Bot",
@@ -2188,15 +2375,16 @@
       },
       "tips": {
         "cindy": "Cindy is the official shared bot — no credentials needed. Connect Slack and just @Cindy to hand off tasks.",
-        "personal": "Personal bots connect to Feishu / Discord with your own credentials — the bot is fully yours, but you create the app and fill in its config yourself.",
-        "personalFeishuOnly": "Personal bots connect to Feishu with your own credentials — the bot is fully yours, but you create the app and fill in its config yourself."
+        "personal": "Personal connections include WeChat scan authorization and your own Feishu / Discord credentials. Each channel keeps independent new-conversation settings.",
+        "personalFeishuOnly": "Personal connections include WeChat scan authorization and your own Feishu credentials. Each channel keeps independent new-conversation settings."
       },
       "defaults": {
         "title": "New Conversation Configuration",
         "channelDescriptions": {
           "feishu": "New Feishu conversations use this Agent and model. Send /new in an existing DM to apply it.",
           "slack": "New Slack threads use this Agent and model.",
-          "discord": "New Discord conversations use this Agent and model. Send /new in an existing DM to apply it."
+          "discord": "New Discord conversations use this Agent and model. Send /new in an existing DM to apply it.",
+          "wechat": "New WeChat conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them."
         },
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",
@@ -2948,7 +3136,6 @@
     "ssoEntry": "Sign in with enterprise SSO",
     "localModeEntry": "Skip Sign-In",
     "localModeOpening": "Opening local mode…",
-    "returnToLocalMode": "Return to local mode",
     "localModeDescription": "No Cindy account required. Data stays on this device; cloud models, cross-device access, and marketplace services are unavailable.",
     "consentStatement": "I have read and agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
     "consentDialog": {
@@ -2962,6 +3149,13 @@
     "ssoOrgPlaceholder": "Company ID, slug, or domain",
     "ssoOrgHint": "Don't know your enterprise sign-in identifier? Ask your admin",
     "ssoOrgDetected": "Choose a single sign-on connection for \"{{org}}\"",
+    "realmConsent": {
+      "title": "Connect to your enterprise region",
+      "bodyCn": "Your enterprise is in Mainland China.\nContinue to connect Cindy to this region.",
+      "bodyGlobal": "Your enterprise is in the Global region.\nContinue to connect Cindy to this region.",
+      "agree": "Continue sign-in",
+      "disagree": "Cancel"
+    },
     "ssoVerificationTitle": "Verify Your Work Identity",
     "ssoVerificationSubtitle": "First-time sign-in requires verification of the contact returned by your identity provider: {{target}}",
     "enterCode": "Enter verification code",
@@ -2994,7 +3188,10 @@
       "errorBody": "Please return to {{appName}} and sign in again.",
       "returnButton": "Return to {{appName}}"
     },
-    "globalRegion": "Global",
+    "regionPill": {
+      "cn": "CN",
+      "dev": "Dev"
+    },
     "errors": {
       "fallback": "Sign-in failed. Please try again.",
       "AUTH_SERVICE_UNAVAILABLE": "The sign-in service is temporarily unavailable.",
@@ -3007,6 +3204,8 @@
       "RATE_LIMITED": "Too many attempts. Please wait and try again.",
       "SSO_LOGIN_REQUIRED": "This organization requires SSO sign-in.",
       "ORG_SSO_NOT_FOUND": "Company not found, or it has no SSO connection enabled",
+      "ORG_REALM_AMBIGUOUS": "This enterprise identifier exists in both regions. Contact your administrator.",
+      "ORG_REALM_UNAVAILABLE": "Cindy cannot verify the enterprise region right now. Check your connection and retry.",
       "SSO_EMAIL_REQUIRED": "Your work identity did not provide a valid email. Ask your admin to check the IdP configuration.",
       "INVALID_SSO_VERIFICATION_TICKET": "Work identity verification expired. Start SSO sign-in again.",
       "SOCIAL_TOKEN_INVALID": "The provider authorization expired. Please try again.",
@@ -3104,6 +3303,8 @@
       "balanceAvailable": "Balance available",
       "balanceDepleted": "Balance depleted",
       "balanceUnlimited": "Balance Unlimited",
+      "resetCreditsAvailableLine": "Available resets: {{count}}",
+      "resetCreditEarliestExpiryLine": "Earliest expiry: {{at}}",
       "windowLine": "{{label}} {{remaining}} left ({{used}} used)",
       "windowSegment": "{{label}} {{remaining}} left",
       "resetAt": "resets {{at}}",
@@ -3118,7 +3319,6 @@
       "modelWeeklyLabel": "{{model}} weekly",
       "windowSegment": "{{label}} {{remaining}} left",
       "resetAt": "resets {{at}}",
-      "resetInAt": "resets in {{countdown}} ({{at}})",
       "windowLine": "{{label}} {{remaining}} left ({{used}} used)",
       "sessionValueLabel": "Session value {{cost}}",
       "planLine": "Plan {{plan}}",
@@ -3254,6 +3454,7 @@
         "browser": "Browser",
         "terminal": "Terminal",
         "review": "Review",
+        "backgroundTasks": "Background tasks",
         "collaboration": "Team",
         "unknown": "Unknown tab",
         "ghostPanel": "Plugin panel"
@@ -3277,6 +3478,8 @@
         "fileSub": "Files",
         "openReview": "Open review",
         "reviewSub": "Review",
+        "openBackgroundTasks": "Open background tasks",
+        "backgroundTasksSub": "Background tasks",
         "openBrowser": "Open browser",
         "browserSub": "Browser",
         "openTerminal": "Open terminal",
@@ -3638,6 +3841,16 @@
       "touchCountAria_other": "Edited {{count}} times",
       "expandAllAria": "Expand all files",
       "collapseAllAria": "Collapse all files"
+    },
+    "backgroundTasks": {
+      "running": "Running",
+      "completed": "Completed",
+      "empty": "No background tasks in this session yet",
+      "stop": "Stop",
+      "back": "Back",
+      "progressSummary": "{{done}}/{{total}} agents",
+      "tokens": "{{value}} tokens",
+      "noProgress": "No progress details yet"
     }
   },
   "update": {
@@ -3668,7 +3881,7 @@
       "title": "What's New",
       "newFeatures": "New Features",
       "bugFixes": "Bug Fixes",
-      "craftedBy": "Crafted by",
+      "thanksTo": "Thanks to",
       "gotIt": "Got it",
       "ariaDescription": "Release notes for version {{version}}",
       "ariaDescriptionSpan": "Release notes for {{count}} versions since v{{from}}",
@@ -3822,6 +4035,8 @@
         "ACTION_STALE": "This setup changed. Choose the setup action again.",
         "AUTH_CANCELLED": "Authorization was cancelled. Authorize the account again when ready.",
         "AUTH_FAILED": "Couldn't authorize the account. Try again.",
+        "AUTH_NETWORK": "Couldn't reach the authorization service. Check your network and try again.",
+        "AUTH_SERVICE_UNAVAILABLE": "The authorization service is temporarily unavailable. Try again later.",
         "INLINE_INVALID": "This configuration is invalid. Check it and try again.",
         "INLINE_UNAVAILABLE": "This Cindy version can't save this configuration in chat. Update Cindy and try again.",
         "SAVE_FAILED": "Couldn't save this configuration. Try again.",
@@ -3946,7 +4161,14 @@
       "trigger": {
         "placeholder": "Select model",
         "aria": "Select model. Current: {{model}}",
-        "ariaWithEffort": "Select model. Current: {{model}}, effort: {{effort}}"
+        "ariaWithEffort": "Select model. Current: {{model}}, effort: {{effort}}",
+        "pendingAria": "Select model. Next message: {{agent}} · {{model}}",
+        "pendingAriaWithEffort": "Select model. Next message: {{agent}} · {{model}}, effort: {{effort}}",
+        "agent": {
+          "claudeCode": "Claude Code",
+          "codex": "Codex",
+          "pending": "Next: {{agent}}"
+        }
       },
       "category": {
         "anthropic": "Anthropic",
@@ -4230,6 +4452,12 @@
       "editTitle": "Edit Pasted Text",
       "cancelEdit": "Cancel Editing",
       "saveEdit": "Save Text"
+    },
+    "permissionPrompt": {
+      "alwaysAllowScoped": "Always Allow {{scope}} in This Session",
+      "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
+      "alwaysAllowSessionHint": "Applies to the whole session, not just this one request.",
+      "ruleSeparator": ", "
     }
   },
   "onboarding": {
@@ -4264,6 +4492,7 @@
       "refining": "Refining",
       "result": "Voice input",
       "inputFailed": "Input failed",
+      "transcriptKept": "Recognized text kept",
       "permissionRequired": "Permission required",
       "error": "Voice input failed"
     },
@@ -4301,7 +4530,11 @@
     "apiKeyRequired": "Configure an API Key before using voice input.",
     "cindyServiceUnavailable": "The Cindy voice service is unavailable. Check your network or switch service source.",
     "asrServiceUnavailable": "Voice recognition service failed to connect. Check your network and try again.",
-    "emptyTranscript": "Speech was detected, but no text was recognized. Please try again."
+    "emptyTranscript": "Speech was detected, but no text was recognized. Please try again.",
+    "connectionInterrupted": "The voice connection was interrupted. Check your network and try again.",
+    "recognitionStalled": "Voice recognition stopped returning results. Try again.",
+    "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",
+    "transcriptKeptOverlay": "{{message}} The text recognized so far was kept — copy it to continue."
   },
   "chat": {
     "askUserQuestion": {
@@ -4349,6 +4582,9 @@
         "stopped": "Stopped"
       },
       "stop": "Stop this task",
+      "openInPanel": "Open in the background tasks panel",
+      "workflowProgressLine": "{{phase}} · {{done}}/{{total}} agents",
+      "workflowProgressCount": "{{done}}/{{total}} agents",
       "tokens": "{{count}} tokens",
       "toolUses_one": "{{count}} tool use",
       "toolUses_other": "{{count}} tool uses",
@@ -4396,11 +4632,10 @@
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",
       "retry": "Retry",
-      "cancel": "Dismiss",
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
       "budgetModelHint": "If this keeps failing, try switching to the standard GPT model.",
-      "codexAuthMissing": "Remote codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local ~/.codex/auth.json to the remote, then retry.",
+      "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "Codex credentials missing or expired (401 Unauthorized). Re-login in {{appName}} Settings → Codex (the app-server will auto-restart on login), or run `codex login` in your terminal and toggle the auth mode in Settings once to restart the app-server. Then start a new session.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",
       "codexSessionExpiredDialog": {
@@ -4412,7 +4647,7 @@
       "codexAuthSynced": "Auth synced. Click \"Retry\" to resend.",
       "syncAuth": "Sync auth",
       "syncAuthSyncing": "Syncing…",
-      "syncAuthTitle": "Push local ~/.codex/auth.json to remote codex-home",
+      "syncAuthTitle": "Push local Codex credentials to remote Cindy Codex home",
       "syncAuthSuccess": "Synced — click \"Retry\" to resend",
       "syncAuthFailed": "Sync failed: {{msg}}",
       "syncAuthDaemonRestartFailed": "Credentials pushed, but the old daemon did not restart — reconnect to the remote before retrying",
@@ -4425,6 +4660,7 @@
       "networkUnreachable": "Network error: the service is temporarily unreachable. Click \"Retry\" to try again.",
       "networkUnreachableNoRetry": "Network error: the service is temporarily unreachable.",
       "networkAutoRetrying": "Network error — retrying automatically…",
+      "networkReconnecting": "Connection interrupted — reconnecting ({{attempt}}/{{maxAttempts}})…",
       "networkShowRaw": "Show raw error",
       "networkHideRaw": "Hide raw error",
       "silentStopContinue": "Continue",
@@ -4741,7 +4977,8 @@
       "agentSwitch": {
         "label": "Switched from {{from}} to {{to}}",
         "toggleHint": "View handoff context",
-        "handoffTitle": "Handoff — the context summary sent to the new engine at switch time (never shown in your messages)",
+        "handoffTitle": "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)",
+        "handoffTitleEnglishSource": "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)",
         "resumedBadge": "session resumed"
       }
     },
@@ -4903,13 +5140,19 @@
     "workflowTree": {
       "agentsCount": "{{count}} agents",
       "attempt": "attempt {{count}}",
+      "endedEarly": "Ended before completion",
       "state": {
         "queued": "Queued",
+        "pending": "Pending",
+        "start": "Starting",
         "running": "Running",
+        "progress": "Running",
         "done": "Done",
         "completed": "Completed",
         "failed": "Failed",
-        "stopped": "Stopped"
+        "error": "Failed",
+        "stopped": "Stopped",
+        "killed": "Killed"
       }
     },
     "credentialSwitchWait": {
@@ -4951,6 +5194,21 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "Thinking…",
+      "generating": "Generating…",
+      "editingFiles": "Editing files…",
+      "searchingWeb": "Searching the web…",
+      "generatingImage": "Generating an image…",
+      "compacting": "Compacting context…",
+      "done": "Done",
+      "waiting": "Just wait…",
+      "working": "Working…",
+      "running": "Running…",
+      "turnStart": "{{status}}",
+      "issueTip": "{{name}}, try /issue to send us feedback or suggestions",
+      "runningTool": "{{tool}} running…"
+    },
     "remoteSession": {
       "reconnecting": "Connection to the controlled device was lost — reconnecting…",
       "hostOffline": "The controlled device is offline; can't sync right now",
@@ -6298,10 +6556,20 @@
       "typeFeature": "Feature",
       "titleLabel": "Title",
       "bodyLabel": "Body (Markdown)",
-      "identityGithubUser": "Submitting identity: GitHub user @{{login}} (you)",
-      "identityPlatform": "Submitting identity: Cindy platform (GitHub App {{login}})",
+      "submissionMethodLabel": "Publishing Method",
+      "identityGithubUser": "Publish directly through GitHub account @{{login}}",
+      "identityGithubUserHint": "You will be the GitHub author and can edit or close this Issue on GitHub",
+      "identityPlatform": "Publish through Cindy (GitHub App {{login}})",
+      "identityPlatformHint": "You will not be the GitHub author and cannot edit or close this Issue yourself",
+      "publicNameLabel": "Public Attribution",
+      "publicNameHint": "This attribution will appear publicly in the Issue body",
+      "anonymous": "Anonymous",
+      "useAnonymous": "Use Anonymous Attribution",
       "envLine": "Attached automatically on submit: client {{appVersion}} · {{platform}} {{arch}} · UI language {{uiLanguage}}",
-      "submit": "Submit",
+      "regionLine": "Build region: {{region}}",
+      "regionCodeCn": "CN",
+      "regionCodeDev": "Dev",
+      "submit": "Submit Feedback",
       "cancel": "Cancel"
     },
     "redirect": {
@@ -7170,11 +7438,6 @@
       "learnButton": "Learn this skill"
     }
   },
-  "workflows": {
-    "toast": {
-      "none": "No workflow is running in this session"
-    }
-  },
   "planMode": {
     "menuItem": "Plan mode",
     "indicator": {
@@ -7380,7 +7643,7 @@
     },
     "providers": {
       "alipay": "Alipay",
-      "stripe": "Card"
+      "stripe": "Stripe"
     },
     "currentSubscription": {
       "title": "Current subscription",

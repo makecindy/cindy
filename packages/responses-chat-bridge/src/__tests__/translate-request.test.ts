@@ -299,6 +299,86 @@ describe('translateResponsesRequest', () => {
     }))).toThrowError(UnsupportedResponsesFeatureError);
   });
 
+  it('drops replayed Codex tool_search items without breaking tool-call merging', () => {
+    const dropped: Array<[string, number]> = [];
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: 'hi' },
+        { type: 'tool_search_call', id: 'ts_1' },
+        {
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'shell',
+          arguments: '{"cmd":"ls"}',
+        },
+        { type: 'tool_search_output', id: 'ts_1', output: {} },
+        { type: 'tool_search_call_output', call_id: 'ts_1', output: {} },
+        { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
+      ],
+    }), { onDroppedInputItem: (type, index) => dropped.push([type, index]) });
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: 'call_1', type: 'function', function: { name: 'shell', arguments: '{"cmd":"ls"}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: 'ok' },
+    ]);
+    expect(dropped).toEqual([
+      ['tool_search_call', 1],
+      ['tool_search_output', 3],
+      ['tool_search_call_output', 4],
+    ]);
+  });
+
+  it('does not let dropped tool_search items split assistant merging', () => {
+    const dropped: string[] = [];
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: 'planning',
+        },
+        { type: 'tool_search_call', id: 'ts_1' },
+        { type: 'tool_search_output', id: 'ts_1', output: {} },
+        {
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'shell',
+          arguments: '{"cmd":"ls"}',
+        },
+        { type: 'tool_search_call_output', call_id: 'ts_1', output: {} },
+        {
+          type: 'function_call',
+          call_id: 'call_2',
+          name: 'shell',
+          arguments: '{"cmd":"pwd"}',
+        },
+        { type: 'function_call_output', call_id: 'call_1', output: 'a' },
+        { type: 'function_call_output', call_id: 'call_2', output: 'b' },
+      ],
+    }), { onDroppedInputItem: (type) => dropped.push(type) });
+
+    expect(out.messages).toEqual([
+      {
+        role: 'assistant',
+        content: 'planning',
+        tool_calls: [
+          { id: 'call_1', type: 'function', function: { name: 'shell', arguments: '{"cmd":"ls"}' } },
+          { id: 'call_2', type: 'function', function: { name: 'shell', arguments: '{"cmd":"pwd"}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: 'a' },
+      { role: 'tool', tool_call_id: 'call_2', content: 'b' },
+    ]);
+    expect(dropped).toEqual(['tool_search_call', 'tool_search_output', 'tool_search_call_output']);
+  });
+
   it('translates capability-gated Kimi user images and preserves replayed history order', () => {
     const imageUrl = 'data:image/png;base64,aW1hZ2U=';
     const out = translateResponsesRequest(base({
@@ -329,6 +409,43 @@ describe('translateResponsesRequest', () => {
       { role: 'assistant', content: 'seen' },
       { role: 'user', content: 'continue' },
     ]);
+  });
+
+  it('drops empty user messages produced by auto-compact collapsing image-only turns', () => {
+    // Codex auto-compact 的 replacement_history 把「无文字纯图片」用户消息折叠成单个
+    // 空 input_text；桥接层若原样透传，Moonshot/Kimi 会以
+    // "the message at position N with role 'user' must not be empty" 拒绝整次请求。
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '第一条' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '   ' }] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '继续' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: '第一条' },
+      { role: 'assistant', content: '继续' },
+      { role: 'user', content: '继续' },
+    ]);
+  });
+
+  it('keeps image-only user messages (no text) as valid multimodal content', () => {
+    const imageUrl = 'data:image/png;base64,aW1hZ2U=';
+    const out = translateResponsesRequest(base({
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_image', image_url: imageUrl }],
+      }],
+    }), { capabilities: { imageInput: 'image_url' } });
+
+    expect(out.messages).toEqual([{
+      role: 'user',
+      content: [{ type: 'image_url', image_url: { url: imageUrl } }],
+    }]);
   });
 
   it('keeps pure-text JSON shape unchanged when image capability is enabled', () => {

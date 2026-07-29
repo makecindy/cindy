@@ -85,6 +85,7 @@ import { handleGhostSecretsRequest } from './runtime/ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
 import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoint.js';
 import { GhostOauthAccountManager, type GhostOauthDecl } from './ghostOauthAccounts.js';
+import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
@@ -161,6 +162,9 @@ import {
   storeGhostSecret,
 } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
+import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import {
   CINDY_CAPABILITY_KEYS,
   readGhostCindyOverrides,
@@ -1668,7 +1672,16 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
  */
 function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig {
   try {
-    return deriveCindyMediaConfig(getActiveCatalog().providers, kind);
+    // 停用过滤:用户在 设置 → 模型供应商 停用的媒体模型 / 供应商不进候选清单
+    // (与对话模型的准入口径同源,见 model-disable-store)。
+    const access = readModelDisableOverrides();
+    return deriveCindyMediaConfig(
+      getActiveCatalog().providers,
+      kind,
+      (providerId, modelId) =>
+        isProviderDisabled(access, providerId) ||
+        isModelDisabled(access, providerId, modelId),
+    );
   } catch (err) {
     // 目录读取异常 = 拿不到可用性证明,同「空清单」处理(不静默顶一份旧名单)。
     log.warn(`read catalog ${kind} config failed, treating capability as unavailable`, {
@@ -1680,6 +1693,22 @@ function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig
 
 const getCatalogImageConfig = (): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('image');
 const getCatalogVideoConfig = (): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('video');
+
+/**
+ * 派发前重查(PR #744 review 第二十轮):cindySlot 从白名单校验到实际下单之间隔着
+ * 归属查账、参考图准备等长 await,期间该媒体模型 / 供应商可能被用户停用 —— 在
+ * generateImage / editImage / 视频提交边界按**当前** override 重算启用候选再验一次,
+ * 不在册即拒,这次付费请求不发出(与 scheduler 派发前重裁决同语义)。
+ */
+function assertMediaModelStillEnabled(kind: 'image' | 'video', model: string): void {
+  if (!getCatalogMediaConfig(kind).models.some((m) => m.id === model)) {
+    throw new Error(
+      kind === 'image'
+        ? '图像模型已在设置中停用,本次生成已取消'
+        : '视频模型已在设置中停用,本次生成已取消',
+    );
+  }
+}
 
 /**
  * 把图片通道的底层报错翻译成用户可行动的话术(意识交卷失败时 AI 会原样
@@ -1725,6 +1754,8 @@ async function runGhostVideo(params: {
   if (!registry || !registry.hasAny()) {
     throw new Error('视频能力不可用:主机未配置视频通道');
   }
+  // 提交紧前重查(第二十一轮):参考图 data URI 准备是 await,窗口内被停用即拒。
+  assertMediaModelStillEnabled('video', params.alias);
   const r = await submitAndAwaitVideo(registry, params);
   return { buffer: r.buffer, mimeType: r.mimeType };
 }
@@ -1763,6 +1794,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 这里收窄类型是安全的。
       generateImage: async ({ prompt, model, aspectRatio }) => {
         try {
+          assertMediaModelStillEnabled('image', model);
           return decodeImageResponse(
             await getCindyProxyMediaService().backend.generateImage({
               model: model as GatewayImageModel,
@@ -1777,6 +1809,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       editImage: async ({ prompt, model, imagePaths }) => {
         try {
+          assertMediaModelStillEnabled('image', model);
           return decodeImageResponse(
             await getCindyProxyMediaService().backend.editImage({ model: model as GatewayImageModel, prompt, imagePaths }),
           );
@@ -1786,6 +1819,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       generateVideo: async ({ prompt, model }) => {
         try {
+          assertMediaModelStillEnabled('video', model);
           return await runGhostVideo({ alias: model, prompt });
         } catch (err) {
           humanizeImageChannelError(err);
@@ -1793,6 +1827,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       editVideo: async ({ prompt, model, imagePaths }) => {
         try {
+          assertMediaModelStillEnabled('video', model);
           const imageDataUris = await Promise.all(imagePaths.map(readImageFileAsDataUri));
           return await runGhostVideo({ alias: model, prompt, imageDataUris });
         } catch (err) {
@@ -1880,8 +1915,10 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
         store: (ghostId, storageKey, value) => storeGhostSecret(ghostId, storageKey, value),
         remove: (ghostId, storageKey) => removeGhostSecret(ghostId, storageKey),
       },
-      // 与 networkSlot 同选型:Node 侧全局 fetch(undici),不吃系统代理。
-      fetchImpl: (url, init) => fetch(url, init as RequestInit),
+      // 与 networkSlot 同选型:Node 侧 undici fetch(Chromium 栈的 manual redirect 给
+      // opaqueredirect,守不住逐跳白名单),但经 outboundFetch 拿到系统代理 ——
+      // 意识 OAuth 的 token 端点(Google / Atlassian 等)多在境外。
+      fetchImpl: (url, init) => outboundFetch(url, init as RequestInit),
       openExternal: (url) => shell.openExternal(url),
       // tokenBroker 声明的意识(仅第一方,门控在装入闸与连接闸)经独立
       // oauth-broker 服务换/刷 token:serverApiFetch 自带登录 JWT 注入与
@@ -1898,7 +1935,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
           return serverApiFetch(path, {
             method: 'POST',
             body,
-            baseUrl: getClientEndpoint('oauthBrokerApiBaseUrl'),
+            baseUrl: () => getClientEndpoint('oauthBrokerApiBaseUrl'),
           });
         },
         hasLoginToken: () => getAccessToken() !== null,
@@ -2053,16 +2090,18 @@ export async function executeGhostSetupAction(args: {
       args.ghostId,
       secretKey,
       decl,
+      runtimeManifest.network?.hosts?.length
+        ? { deliveryHosts: runtimeManifest.network.hosts }
+        : undefined,
     );
     return connected.ok
       ? { ok: true }
       : {
           ok: false,
-          errorCode: connected.error === 'CANCELLED' ? 'AUTH_CANCELLED' : 'AUTH_FAILED',
-          message:
-            connected.error === 'CANCELLED'
-              ? t('newChat.pluginSetup.oauthCancelled')
-              : connected.detail ?? t('newChat.pluginSetup.oauthFailed').replace('{{detail}}', connected.error),
+          errorCode: mapGhostOauthConnectError(connected.error),
+          // interaction snapshot 只传稳定 errorCode；detail 可能含服务路径或
+          // 上游诊断，留在 Main，不下放 Renderer。
+          message: connected.detail ?? connected.error,
         };
   }
 
@@ -2139,13 +2178,13 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
       getLoginEmail: () => getAuthState().user?.email ?? null,
-      // 用 Node 侧全局 fetch(undici)而非 Electron net.fetch:redirect:'manual'
-      // 在 undici 下如实返回 3xx + Location,本槽据此逐跳校验白名单;Chromium
-      // 栈的 manual 会给 opaqueredirect(读不到 Location),无法逐跳守门。
-      // 代价是不吃系统代理设置,意识自带服务场景可接受,有诉求再评估。
+      // 用 Node 侧 undici fetch 而非 Electron net.fetch:redirect:'manual' 在 undici
+      // 下如实返回 3xx + Location,本槽据此逐跳校验白名单;Chromium 栈的 manual 会给
+      // opaqueredirect(读不到 Location),无法逐跳守门。系统代理由 outboundFetch 补上
+      // (意识声明的域名大量在境外,裸 undici 直连在「系统代理」模式下出不去)。
       // init 收窄:body 的 Uint8Array 在 lib.dom 的 BodyInit 泛型下对不齐,
       // 运行时 undici 原生支持,按 RequestInit 交给 fetch。
-      fetchImpl: (url, init) => fetch(url, init as RequestInit),
+      fetchImpl: (url, init) => outboundFetch(url, init as RequestInit),
       // 媒体模式(as:'media'):字节直落总仓 + ghost-gallery 记账(出生=该
       // 意识,与 cindy 槽产物同一记账口径),走统一入库助手 ingestMedia
       // (规则 25)。mime 白名单同一来源(blobStore),槽内归一化后再判。
@@ -2690,6 +2729,7 @@ export function registerGhostIpc(): void {
       pathname,
       readBodyText,
       oauthSecrets,
+      networkHosts: runtimeManifest.network?.hosts,
       manager: getGhostOauthAccountManager(),
       ghostId,
       onChanged: (secretKey) => {

@@ -182,9 +182,9 @@
   "pluginSetup": {
     "completeOnDesktop": "操作対象のデスクトップで設定を完了してください。このカードは自動的に更新されます。",
     "chooseOne": "設定方法を1つ選択してください",
-    "stepsHeading": "設定手順",
     "progress": "{{satisfied}}/{{total}} 完了",
     "desktopActionHint": "パソコンで{{action}}",
+    "a11ySeparator": "、",
     "phase": {
       "pending": "設定待ち",
       "action_running": "処理中…",
@@ -199,6 +199,8 @@
       "ACTION_STALE": "設定内容が更新されました。設定操作を選び直してください。",
       "AUTH_CANCELLED": "認証がキャンセルされました。必要に応じてもう一度認証してください。",
       "AUTH_FAILED": "認証を完了できませんでした。もう一度お試しください。",
+      "AUTH_NETWORK": "認証サービスに接続できませんでした。ネットワーク接続を確認して、もう一度お試しください。",
+      "AUTH_SERVICE_UNAVAILABLE": "認証サービスは一時的に利用できません。しばらくしてからもう一度お試しください。",
       "INLINE_INVALID": "設定内容が無効です。内容を確認してもう一度お試しください。",
       "INLINE_UNAVAILABLE": "このバージョンの Cindy ではチャット内でこの設定を保存できません。Cindy を更新してもう一度お試しください。",
       "SAVE_FAILED": "設定を保存できませんでした。もう一度お試しください。",

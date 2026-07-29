@@ -34,8 +34,11 @@ export interface HookBindingCacheEntry {
   slackUserName: string | null;
 }
 
-/** Telegram confirmed binding 的无凭证本地影子，用于关闭 provider 后稳定展示。 */
-export interface TelegramBindingCacheEntry {
+/**
+ * Provider-neutral confirmed binding 的无凭证本地影子，用于关闭 provider 后
+ * 稳定展示(字段与 provider.bind.* 协议词汇对齐; 当前仅 Telegram 存储槽使用)。
+ */
+export interface ProviderBindingCacheEntry {
   bindingId: string;
   principalId: string;
   principalName: string | null;
@@ -55,7 +58,7 @@ export interface SlackHookConfigState {
   workspaces: Record<string, string>;
   /** (multi-team)本地绑定缓存; 老 server / 从未多绑定时恒空数组。 */
   bindingsCache: HookBindingCacheEntry[];
-  telegramBindingCache: TelegramBindingCacheEntry | null;
+  telegramBindingCache: ProviderBindingCacheEntry | null;
 }
 
 export interface SlackHookStoreDeps {
@@ -148,7 +151,7 @@ export interface SlackHookStore {
   setWorkspaces(workspaces: Record<string, string>): SlackHookConfigState;
   /** (multi-team)覆写本地绑定缓存(bind.state / 绑定行变化后由 manager 调用)。 */
   setBindingsCache(entries: HookBindingCacheEntry[]): SlackHookConfigState;
-  setTelegramBindingCache(entry: TelegramBindingCacheEntry | null): SlackHookConfigState;
+  setTelegramBindingCache(entry: ProviderBindingCacheEntry | null): SlackHookConfigState;
 }
 
 export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
@@ -156,7 +159,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
 
   interface AccountState {
     slack: { enabled: boolean; bindingsCache: HookBindingCacheEntry[] };
-    telegram: { enabled: boolean; bindingCache: TelegramBindingCacheEntry | null };
+    telegram: { enabled: boolean; bindingCache: ProviderBindingCacheEntry | null };
   }
 
   interface StoredDocument {
@@ -244,7 +247,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     return entries;
   }
 
-  function parseTelegramBindingCache(raw: unknown): TelegramBindingCacheEntry | null {
+  function parseTelegramBindingCache(raw: unknown): ProviderBindingCacheEntry | null {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const row = raw as Record<string, unknown>;
     if (

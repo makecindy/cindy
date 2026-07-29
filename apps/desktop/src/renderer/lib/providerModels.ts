@@ -12,6 +12,8 @@
  */
 
 import {
+  isAgentSelectableModel,
+  isModelVisible,
   providerOffersModel,
   providersForAgent,
   sessionModelSupportsFastMode,
@@ -91,6 +93,23 @@ export function providerMonogram(name: string): string {
   return ch.toUpperCase();
 }
 
+/**
+ * 被控端模型可见性判定。override 缺失表示旧被控端，保持历史 fail-open；
+ * 现代被控端则复用共享的「显式 override 优先，否则目录默认值」口径。
+ */
+export function isDeviceModelVisible(
+  overrides: Record<string, boolean> | undefined,
+  agent: AgentKind,
+  providerId: string,
+  model: Pick<CatalogModel, 'id' | 'defaultEnabled'>,
+): boolean {
+  if (overrides === undefined) return true;
+  return isModelVisible(
+    overrides[`${agent}:${providerId}:${model.id}`],
+    model.defaultEnabled,
+  );
+}
+
 /** Whether a provider relies on the local Responses-to-Chat handler for Codex. */
 export function isChatBridgedCodexProvider(provider: ProviderView): boolean {
   return provider.routing?.codex?.wireProtocol === 'openai-chat';
@@ -111,17 +130,34 @@ export function filterChatBridgedCodexProviders(
  *
  * `excludeProvider` 命中的供应商整条跳过（其模型不加入、也不占 seen），这样若同一
  * model id 另有可路由的供应商提供，仍能由后者补上——用于 SSH 远程排除仅本地可桥接的来源。
+ *
+ * `admissionFiltered` = 剔除停用轴不可路由的条目(suspended 供应商 / model.disabled /
+ * 非 agent 分组的能力模型)。**只给「用户从零挑一个模型」的清单**用(IM 默认设置下拉、
+ * SSH 候选,PR #744 review);按 id 找**当前会话已选模型**的元数据查询(ChatInput 的
+ * effort 表、selectVisibleModels 的 currentModel)不要开 —— 运行中的会话可以正用着
+ * 停用模型,过滤会把它的档位/显示信息一并弄丢。
  */
 export function deriveModelsFromProviders(
   providers: ProviderView[],
   agent: AgentKind,
-  opts?: { excludeProvider?: (provider: ProviderView) => boolean },
+  opts?: {
+    excludeProvider?: (provider: ProviderView) => boolean;
+    admissionFiltered?: boolean;
+  },
 ): ModelDescriptor[] {
   const seen = new Set<string>();
   const out: ModelDescriptor[] = [];
   for (const provider of providersForAgent(providers, agent)) {
     if (opts?.excludeProvider?.(provider)) continue;
+    if (opts?.admissionFiltered && provider.suspended) continue;
     for (const m of provider.models[agent] ?? []) {
+      if (
+        opts?.admissionFiltered &&
+        (m.disabled === true ||
+          !isAgentSelectableModel(m, { userProvider: provider.source === 'user' }))
+      ) {
+        continue;
+      }
       if (seen.has(m.id)) continue;
       seen.add(m.id);
       out.push(toDescriptor(m));

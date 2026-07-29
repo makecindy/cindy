@@ -65,6 +65,7 @@ describe('applyWebviewHardening', () => {
     expect(webPreferences.allowRunningInsecureContent).toBe(false);
     expect(webPreferences.webviewTag).toBe(false);
     expect(webPreferences.plugins).toBe(false);
+    expect(webPreferences.disableDialogs).toBe(false);
     expect(webPreferences.disablePopups).toBe(false);
     // 比 tY 多一步 preload 删除(未传 commentPreloadPath 的回落分支)
     expect('preload' in webPreferences).toBe(false);

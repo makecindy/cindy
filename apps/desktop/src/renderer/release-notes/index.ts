@@ -9,11 +9,21 @@
  * Successful results are memoised per version so that dismissing and
  * re-opening the dialog from the sidebar does not trigger another fetch.
  *
- * Schema: each section's `items` is an array of author groups
+ * Two payload generations coexist on the CDN:
+ *
+ * Legacy (author-grouped): each section's `items` is an array of author groups
  *   { "name": "Lizi", "list": ["...", "..."] }
  * The dialog flattens these into one bullet per `list` entry under the
  * matching author sub-head.
+ *
+ * Topic format (v2): the payload carries `topics` instead of `sections` —
+ * user-facing theme blocks, each a short narrative paragraph:
+ *   { "emoji": "🎙️", "title": "语音输入更稳", "text": "…", "contributors": ["Lizi"] }
+ * plus an optional top-level `intro` one-liner. Presence of a non-empty
+ * `topics` array is the discriminator; old payloads never have it.
  */
+
+import { isRenderableTopic } from '../../shared/releaseNotesContent';
 
 /** Per-item shape after flattening: one bullet with its author tag. */
 export interface ReleaseNoteItem {
@@ -33,12 +43,28 @@ export interface ReleaseNoteSection {
   items: ReleaseNoteItem[];
 }
 
+/** Topic-format (v2) block: one user-facing theme with a short narrative. */
+export interface ReleaseNoteTopic {
+  /** Leading emoji for the topic title. Optional — renderer tolerates absence. */
+  emoji?: string;
+  title: string;
+  /** 1–2 sentence user-facing narrative for this topic. */
+  text: string;
+  /** Contributors credited on this topic (small text next to the title). */
+  contributors: string[];
+}
+
 export interface ReleaseNotes {
   version: string;
   date: string;
-  /** Flat contributor list — rendered as a single "Contributors" line. */
+  /** Flat contributor list — rendered as a single thanks line. */
   contributors: string[];
+  /** Legacy author-grouped sections. Empty when the payload is topic-format. */
   sections: ReleaseNoteSection[];
+  /** Topic-format blocks. Non-empty ⇒ dialog renders the topic layout. */
+  topics: ReleaseNoteTopic[];
+  /** Optional one-line lead above the topics (e.g. PR/commit counts). */
+  intro?: string;
 }
 
 /** Fan out one author group into N flat items, one per `list` entry. */
@@ -75,8 +101,9 @@ export async function fetchReleaseNotesIndex(): Promise<string[] | null> {
  * Returns null when the CDN has no entry for this version on the current
  * platform, or when the network/parse fails.
  *
- * The CDN payload uses the same shape as `ReleaseNotes`, so no normalisation
- * is needed — we just memoise and return.
+ * The CDN payload is normalised defensively before caching: missing
+ * `contributors` / `sections` / `topics` become empty arrays, malformed topic
+ * entries are dropped, and legacy author-grouped items are flattened.
  */
 export async function fetchReleaseNotes(
   version: string,
@@ -87,17 +114,49 @@ export async function fetchReleaseNotes(
   const raw = await window.electronAPI.fetchReleaseNotes(version);
   if (!raw) return null;
 
-  // Defensive default: tolerate older payloads missing `contributors`, and
-  // normalise legacy string items into the object form.
+  // Defensive defaults: tolerate older payloads missing `contributors`,
+  // topic-format payloads missing `sections`, and legacy payloads missing
+  // `topics`. Malformed entries (topics, sections, author groups, bullets)
+  // are dropped rather than crashing the dialog on a bad CDN document.
+  const rawTopics = Array.isArray(raw.topics) ? raw.topics : [];
+  const rawSections = Array.isArray(raw.sections) ? raw.sections : [];
   const notes: ReleaseNotes = {
     version: raw.version,
     date: raw.date,
-    contributors: raw.contributors ?? [],
-    sections: raw.sections.map((s) => ({
-      title: s.title,
-      items: (s.items as RawReleaseNoteItem[]).flatMap(expandRawItem),
-    })),
+    contributors: Array.isArray(raw.contributors)
+      ? raw.contributors.filter((c): c is string => typeof c === 'string')
+      : [],
+    sections: rawSections
+      .filter((s) => typeof s?.title === 'string' && Array.isArray(s?.items))
+      .map((s) => ({
+        title: s.title,
+        items: (s.items as RawReleaseNoteItem[])
+          .filter((g) => typeof g?.name === 'string' && Array.isArray(g?.list))
+          .flatMap((g) => expandRawItem({
+            name: g.name,
+            list: g.list.filter((text): text is string => typeof text === 'string'),
+          })),
+      })),
+    topics: rawTopics
+      .filter((t) => isRenderableTopic(t))
+      .map((t) => ({
+        emoji: typeof t.emoji === 'string' ? t.emoji : undefined,
+        title: t.title,
+        text: t.text,
+        contributors: Array.isArray(t.contributors)
+          ? t.contributors.filter((c): c is string => typeof c === 'string')
+          : [],
+      })),
+    intro: typeof raw.intro === 'string' ? raw.intro : undefined,
   };
+  // A notice with no renderable content (e.g. a payload whose topics or
+  // section bullets were all malformed and dropped) must count as a failed
+  // fetch: caching it would open an empty dialog and, worse, advance
+  // lastReadVersion on dismiss so a corrected CDN payload would never be
+  // shown again. Bullet-level truth, mirroring shared hasRenderableContent.
+  const hasContent =
+    notes.topics.length > 0 || notes.sections.some((s) => s.items.length > 0);
+  if (!hasContent) return null;
   cache.set(version, notes);
   return notes;
 }

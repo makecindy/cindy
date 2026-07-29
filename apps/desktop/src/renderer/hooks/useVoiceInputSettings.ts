@@ -162,8 +162,12 @@ export function useVoiceInputSettings(): {
   setRefinementEnabled: (enabled: boolean) => void;
   setRefinementInstructions: (instructions: string) => void;
   setAutoDictionaryEnabled: (enabled: boolean) => void;
-  setDictionaryEntries: (entries: VoiceInputDictionaryEntry[]) => void;
-  deleteDictionaryEntry: (entryId: string) => void;
+  setDictionarySyncEnabled: (enabled: boolean) => void;
+  /** 这几个返回持久化结果:成功才收口 UI(关对话框、清草稿、提示成功)。 */
+  addDictionaryEntry: (text: string) => Promise<boolean>;
+  importDictionaryEntries: (texts: string[]) => Promise<boolean>;
+  renameDictionaryEntry: (entryId: string, text: string) => Promise<boolean>;
+  deleteDictionaryEntry: (entryId: string) => Promise<boolean>;
   recordDictionaryLearningActions: (actions: DictationDictionaryLearningAction[]) => void;
   setShortcut: (shortcut: VoiceInputShortcut | null) => Promise<VoiceInputShortcutUpdateResult>;
 } {
@@ -226,20 +230,55 @@ export function useVoiceInputSettings(): {
     [updateSettings],
   );
 
-  const setDictionaryEntries = useCallback(
-    (dictionaryEntries: VoiceInputDictionaryEntry[]) => updateSettings({ dictionaryEntries }),
+  const setDictionarySyncEnabled = useCallback(
+    (dictionarySyncEnabled: boolean) => updateSettings({ dictionarySyncEnabled }),
     [updateSettings],
   );
 
-  const deleteDictionaryEntry = useCallback((entryId: string) => {
-    void window.electronAPI.voiceInput
-      .deleteDictionaryEntries([entryId])
-      .then(setSettings)
-      .catch((error) => {
-        log.warn('voice input dictionary delete failed:', error instanceof Error ? error.message : String(error));
-        toast.error(formatVoiceInputPersistenceError(t, error));
-      });
-  }, [t]);
+  // 词典的增改删都是语义化操作:主进程按「用户做了什么」更新同步状态,再把物化
+  // 结果回投影成 settings。整份覆盖词条数组表达不了用户意图,也会被下一次物化冲掉。
+  /**
+   * 返回 Promise 而不是 fire-and-forget:调用方要等持久化真的成功再关对话框、清
+   * 草稿、弹成功提示。主进程会在投影文件写不下去、或同步状态来自更新客户端时
+   * 拒绝写入 —— 那时 UI 却已经宣告成功,用户以为加上了,重启后发现没有。
+   */
+  const runDictionaryMutation = useCallback(
+    (mutate: () => Promise<unknown>): Promise<boolean> =>
+      mutate()
+        .then((next) => {
+          setSettings(next as VoiceInputSettings);
+          return true;
+        })
+        .catch((error) => {
+          log.warn('voice input dictionary update failed:', error instanceof Error ? error.message : String(error));
+          toast.error(formatVoiceInputPersistenceError(t, error));
+          return false;
+        }),
+    [t],
+  );
+
+  const addDictionaryEntry = useCallback(
+    (text: string) => runDictionaryMutation(() => window.electronAPI.voiceInput.addDictionaryEntry(text)),
+    [runDictionaryMutation],
+  );
+
+  const importDictionaryEntries = useCallback(
+    (texts: string[]) =>
+      runDictionaryMutation(() => window.electronAPI.voiceInput.importDictionaryEntries(texts)),
+    [runDictionaryMutation],
+  );
+
+  const renameDictionaryEntry = useCallback(
+    (entryId: string, text: string) =>
+      runDictionaryMutation(() => window.electronAPI.voiceInput.renameDictionaryEntry(entryId, text)),
+    [runDictionaryMutation],
+  );
+
+  const deleteDictionaryEntry = useCallback(
+    (entryId: string) =>
+      runDictionaryMutation(() => window.electronAPI.voiceInput.deleteDictionaryEntries([entryId])),
+    [runDictionaryMutation],
+  );
 
   const recordDictionaryLearningActions = useCallback((actions: DictationDictionaryLearningAction[]) => {
     void recordVoiceInputDictionaryLearningActions(actions);
@@ -276,7 +315,10 @@ export function useVoiceInputSettings(): {
     setRefinementEnabled,
     setRefinementInstructions,
     setAutoDictionaryEnabled,
-    setDictionaryEntries,
+    setDictionarySyncEnabled,
+    addDictionaryEntry,
+    importDictionaryEntries,
+    renameDictionaryEntry,
     deleteDictionaryEntry,
     recordDictionaryLearningActions,
     setShortcut,

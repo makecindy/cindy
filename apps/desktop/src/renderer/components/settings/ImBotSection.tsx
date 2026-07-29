@@ -28,6 +28,7 @@ import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { DiscordBotSection } from './DiscordBotSection';
 import { FeishuBotSection } from './FeishuBotSection';
 import { HookConnectionsSection } from './HookConnectionsSection';
+import { WechatBotSection } from './WechatBotSection';
 import { showCindyGroup, showDiscordBot, type ImBotIdentity } from './imBotVisibility';
 
 /** 「IM 机器人」页内分栏 id(tab 与 ?imGroup= 参数共用)。 */
@@ -55,14 +56,17 @@ export function isImBotSettingsGroup(value: string | null): value is ImBotSettin
 
 /** 个人栏内容 —— 用户自配凭证的机器人(国区个人账号无 Discord)。 */
 function PersonalGroupContent({ showDiscord }: { showDiscord: boolean }) {
-  const [expandedChannel, setExpandedChannel] = useState<'feishu' | 'discord' | null>(null);
+  const [expandedChannel, setExpandedChannel] = useState<'wechat' | 'feishu' | 'discord' | null>(
+    null,
+  );
 
-  const toggle = (channel: 'feishu' | 'discord') => {
+  const toggle = (channel: 'wechat' | 'feishu' | 'discord') => {
     setExpandedChannel((current) => (current === channel ? null : channel));
   };
 
   return (
     <div className="flex flex-col gap-3">
+      <WechatBotSection expanded={expandedChannel === 'wechat'} onToggle={() => toggle('wechat')} />
       <FeishuBotSection expanded={expandedChannel === 'feishu'} onToggle={() => toggle('feishu')} />
       {showDiscord && (
         <DiscordBotSection
@@ -96,9 +100,9 @@ export function ImBotSection({
   const effectiveGroup = cindyGroupAvailable ? group : 'personal';
 
   return (
-    <div className="flex flex-col gap-2 px-1">
+    <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <h2 className="text-15 font-medium text-[var(--text-primary)]">
+        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
           {t('settings.sections.imBot')}
         </h2>
         <span className="rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">

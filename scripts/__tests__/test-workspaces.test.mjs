@@ -28,6 +28,7 @@ import {
 	parseWorkspaceSelectorValue,
 	planRuns,
 	printSummary,
+	readAllFiles,
 	resolvePnpmInvocation,
 	resolveOutputStream,
 	runCommand,
@@ -79,10 +80,27 @@ test("root unit and all scripts run runner self-tests before workspace sweep", (
 test("root db and guard delegate to the workspace runner", () => {
 	const scripts = readRootScripts();
 	assert.equal(
+		scripts["test:git-integration"],
+		"pnpm test:runner && node scripts/test-workspaces.mjs --tier git-integration",
+	);
+	assert.equal(
 		scripts["test:db"],
 		"pnpm test:runner && node scripts/test-workspaces.mjs --tier db",
 	);
 	assert.equal(scripts["test:guard"], "node scripts/test-workspaces.mjs --tier guard");
+});
+
+test("client CI owns the complete Desktop Git integration tier", () => {
+	const workflow = fs.readFileSync(
+		path.join(ROOT, ".github", "workflows", "ci.yml"),
+		"utf8",
+	).replace(/\r\n/g, "\n");
+	const job = workflow.match(/\n  git-integration:\n([\s\S]*)$/);
+	assert.ok(job, "client CI must define an independent git-integration job");
+	assert.match(
+		job[1],
+		/^\s{6}- name: Run Desktop Git integration tests\n\s{8}run: pnpm test:git-integration$/m,
+	);
 });
 
 test("help groups copyable desktop, binary, and Mobile workflows", async () => {
@@ -289,6 +307,7 @@ test("desktop unit excludes migration, direct db-tier, and source-contract guard
 	const tier = {
 		status: "required",
 		exclude: [
+			"**/*.git-integration.test.ts",
 			"src/main/localDb/**",
 			"src/main/__tests__/*Migration.test.ts",
 			"src/main/__tests__/schemaDriftRepair.test.ts",
@@ -304,6 +323,7 @@ test("desktop unit excludes migration, direct db-tier, and source-contract guard
 	};
 	assert.deepEqual(
 		selectFilesForTier(workspace, tier, [
+			"apps/desktop/src/main/git-review/__tests__/stageOps.git-integration.test.ts",
 			"apps/desktop/src/main/localDb/ipc/messages.test.ts",
 			"apps/desktop/src/main/__tests__/sessionWorkspaceKindMigration.test.ts",
 			"apps/desktop/src/main/__tests__/codexProjectlessMigration.test.ts",
@@ -324,6 +344,71 @@ test("desktop unit excludes migration, direct db-tier, and source-contract guard
 			"apps/desktop/src/main/__tests__/lifecycle.test.ts",
 		],
 	);
+});
+
+test("desktop real-Git coverage is an explicit coordinated tier outside default unit", () => {
+	const desktopPackage = readWorkspacePackageJson("apps/desktop");
+	const desktop = manifest.workspaces.find(
+		(workspace) => workspace.cwd === "apps/desktop",
+	);
+	const tier = desktop.tiers["git-integration"];
+
+	assert.equal(tier.status, "manual");
+	assert.equal(tier.execution, "exclusive");
+	assert.equal(tier.coverage, "allowlist");
+	assert.deepEqual(tier.include, ["src/main/**/*.git-integration.test.ts"]);
+	assert.deepEqual(tier.command, {
+		type: "packageBin",
+		bin: "vitest",
+		args: ["run", `--maxWorkers=${desktopUnitWorkerCount()}`],
+	});
+	assert.match(
+		desktopPackage.scripts["test:git-integration"],
+		/test-workspaces\.mjs --tier git-integration/,
+	);
+
+	const files = [
+		"apps/desktop/src/main/git-review/__tests__/stageOps.git-integration.test.ts",
+		"apps/desktop/src/main/__tests__/gitSnapshotService.git-integration.test.ts",
+		"apps/desktop/src/main/git-review/__tests__/gitReviewSmoke.test.ts",
+	];
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.unit, files), [
+		"apps/desktop/src/main/git-review/__tests__/gitReviewSmoke.test.ts",
+	]);
+	assert.deepEqual(selectFilesForTier(desktop, tier, files), files.slice(0, 2));
+});
+
+test("default desktop unit keeps real Git subprocess coverage to one smoke", () => {
+	const files = discoverTestFiles(readAllFiles(ROOT))
+		.filter((file) =>
+			file.startsWith("apps/desktop/src/main/") &&
+			file.endsWith(".test.ts") &&
+			!file.endsWith(".git-integration.test.ts"),
+		)
+		.filter((file) => /\b(?:runGit|gitExec)\(/.test(
+			fs.readFileSync(path.join(ROOT, file), "utf8"),
+		));
+
+	assert.deepEqual(files, [
+		"apps/desktop/src/main/git-review/__tests__/gitReviewSmoke.test.ts",
+		// This file mocks child_process.spawn and tests the adapter itself.
+		"apps/desktop/src/main/git-review/__tests__/gitRunner.test.ts",
+	]);
+});
+
+test("tests never bind a fixed numeric port", () => {
+	const violations = [];
+	for (const file of discoverTestFiles(readAllFiles(ROOT))) {
+		const source = fs.readFileSync(path.join(ROOT, file), "utf8");
+		const directPort = /\.listen\s*\(\s*(\d+)/g;
+		const objectPort = /\.listen\s*\(\s*\{[\s\S]{0,300}?\bport\s*:\s*(\d+)/g;
+		for (const pattern of [directPort, objectPort]) {
+			for (const match of source.matchAll(pattern)) {
+				if (Number(match[1]) !== 0) violations.push(`${file}:${match[1]}`);
+			}
+		}
+	}
+	assert.deepEqual(violations, []);
 });
 
 test("desktop guard selects source-contract tests only", () => {

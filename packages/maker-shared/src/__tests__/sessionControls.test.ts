@@ -82,6 +82,10 @@ describe('summarizeCodexRateLimitReset', () => {
     ]);
     expect(summary?.rows[3]).toMatchObject({ label: '最早过期' });
     expect(summary?.rows[3].value).toMatch(/^\d{2}:\d{2}$/);
+    expect(summary).toMatchObject({
+      hasResetCreditCount: true,
+      earliestExpiryAt: base.resetOffer.expiresAt,
+    });
   });
 
   it('does not offer reset before exhaustion and leaves offer expiry to desktop', () => {
@@ -117,7 +121,13 @@ describe('summarizeCodexRateLimitReset', () => {
       resetOffer: null,
     }, NOW_MS);
 
-    expect(summary).toMatchObject({ availableCount: 0, shouldPrompt: true, canReset: false });
+    expect(summary).toMatchObject({
+      availableCount: 0,
+      hasResetCreditCount: false,
+      earliestExpiryAt: null,
+      shouldPrompt: true,
+      canReset: false,
+    });
     expect(summary?.rows).not.toContainEqual(expect.objectContaining({ label: '可用重置' }));
   });
 });

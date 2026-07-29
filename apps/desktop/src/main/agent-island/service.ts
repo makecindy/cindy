@@ -2,7 +2,12 @@ import { dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOp
 import path from 'node:path';
 import { release as getOsRelease } from 'node:os';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
-import type { AgentEvent, InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import {
+  isTerminalAgentErrorEvent,
+  type AgentEvent,
+  type InteractionDecision,
+  type InteractionRequest,
+} from '@cindy/maker-core';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import type { ApplicationMenuCommand } from '../../shared/applicationMenuCommands.js';
@@ -40,6 +45,7 @@ import {
   AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL,
   type AgentIslandDisplayOption,
   type AgentIslandDisplayState,
+  type AgentIslandPillSnapshot,
   type AgentIslandSessionActivity,
   type AgentIslandDisplayTarget,
   type AgentIslandMascotSkin,
@@ -103,10 +109,13 @@ import {
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import {
+  beginProtectedFolderCheck,
   detectProtectedFolderEperm,
+  endProtectedFolderCheck,
+  markEpermGuidanceShown,
   openFolderPrivacySettings,
+  probeProtectedFolderAccess,
   releaseEpermGuidance,
-  shouldShowEpermGuidance,
   type ProtectedFolderKind,
 } from '../file-access/permissions.js';
 import { SessionActivityRelay } from './sessionActivityRelay.js';
@@ -680,10 +689,9 @@ export class AgentIslandService {
       const folderKind = data?.isError !== false && data?.fullText
         ? detectProtectedFolderEperm(data.fullText)
         : null;
-      if (folderKind && shouldShowEpermGuidance(folderKind)) {
-        void this.showFolderEpermGuidance(folderKind).catch((error: unknown) => {
-          releaseEpermGuidance(folderKind);
-          log.warn('failed to show folder access guidance', { kind: folderKind, error });
+      if (folderKind) {
+        void this.resolveProtectedFolderDenial(folderKind).catch((error: unknown) => {
+          log.warn('protected folder guidance flow failed', { kind: folderKind, error });
         });
       }
     }
@@ -947,7 +955,7 @@ export class AgentIslandService {
   }
 
   private prunePermissionRequestsForAgentEvent(sessionId: string, event: AgentEvent): void {
-    if (event.type === 'done' || event.type === 'error') {
+    if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
       this.deletePermissionRequestsForSession(sessionId);
       return;
     }
@@ -1035,13 +1043,13 @@ export class AgentIslandService {
   /**
    * badge 桥接来的会话已读信号(renderer → appBadgeService → 这里)。
    * source 默认 'passive'(fail-safe):renderer 未声明意图的清除一律当被动信号,
-   * 未读 error 条目免疫;只有真实展示路径(useErrorReadAck / 全部标为已读等)
-   * 显式带 'explicit' 才能清掉未读的报错。
+   * 未读 error 条目免疫;只有处置路径(用户操作报错横幅 / 全部标为已读 /
+   * pending-alerts 派生收敛)显式带 'explicit' 才能清掉未处理的报错。
    */
   handleSessionAttentionCleared(sessionId: string, source: 'explicit' | 'passive' = 'passive'): void {
     const ack = acknowledgeAgentIslandSessionRead(this.state, sessionId, Date.now(), { source });
     // 未读 error 对 passive 免疫:state 未动,也**不能**给远端发收尾包 —— 否则手机
-    // 列表行的 error 红点会被导航级被动信号清掉,破坏「已读以真实展示为准」。
+    // 列表行的 error 红点会被导航级被动信号清掉,破坏「未处置就不消失」。
     if (ack === 'error-immune') return;
     if (ack === 'not-found') {
       // not-found(典型:重启后 state / relay 条目丢失,远端仍挂着旧未读)只对
@@ -1120,6 +1128,35 @@ export class AgentIslandService {
       workingDir: cached?.workingDir ?? meta.workingDir,
       workspaceKind: cached?.workspaceKind ?? meta.workspaceKind,
     };
+  }
+
+  /**
+   * agent 输出里的关键词只是粗筛,真相由 Main 亲自向系统核实一次:
+   *
+   * - 读得动 → 那条 EPERM 与 TCC 无关(agent 常常只是读到了**写着这个词的文件内容**),
+   *   什么都不做,也不消耗该目录的提醒名额。
+   * - 读不动 → 确认被拒,才提示用户。这次探测同时把 TCC 归因落到 Cindy.app 上,系统
+   *   自己的授权弹窗有机会出现;用户在系统弹窗里点了允许,readdir 随即成功,这里就不再
+   *   叠一个自制弹窗。只有系统确实不肯再问(此前被拒过)才走到引导去系统设置这一步。
+   */
+  private async resolveProtectedFolderDenial(kind: ProtectedFolderKind): Promise<void> {
+    if (!beginProtectedFolderCheck(kind)) return;
+    try {
+      const access = await probeProtectedFolderAccess(kind);
+      if (access !== 'denied') {
+        log.debug(`protected folder guidance skipped: kind=${kind} access=${access}`);
+        return;
+      }
+      markEpermGuidanceShown(kind);
+      try {
+        await this.showFolderEpermGuidance(kind);
+      } catch (error) {
+        releaseEpermGuidance(kind);
+        log.warn('failed to show folder access guidance', { kind, error });
+      }
+    } finally {
+      endProtectedFolderCheck(kind);
+    }
   }
 
   private async showFolderEpermGuidance(kind: ProtectedFolderKind): Promise<void> {
@@ -1606,6 +1643,9 @@ export class AgentIslandService {
       hasSession,
       displayWidth: display.bounds.width,
       screenMetrics,
+      // Keep the carrier wide enough for the native count badge; without this the
+      // native side's own reservation gets clamped away and the badge is clipped.
+      pillSnapshot: displayState.pillSnapshot,
     });
     const minimumContentWidth = getAgentIslandMinimumContentWidth({
       expanded,
@@ -1619,6 +1659,7 @@ export class AgentIslandService {
         display,
         screenMetrics,
         minimumContentWidth,
+        pillSnapshot: displayState.pillSnapshot,
       })
       : null;
     const contentWidth = preferredContentWidth !== null
@@ -1751,6 +1792,7 @@ export class AgentIslandService {
     display: Display;
     screenMetrics: AgentIslandScreenLayoutMetrics | null;
     minimumContentWidth: number;
+    pillSnapshot?: AgentIslandPillSnapshot | null;
   }): number {
     if (input.expanded) {
       return input.desiredWidth;
@@ -1767,6 +1809,7 @@ export class AgentIslandService {
       maxWidth,
       hasSession: input.hasSession,
       screenMetrics: input.screenMetrics,
+      pillSnapshot: input.pillSnapshot,
     });
   }
 
@@ -1974,6 +2017,7 @@ function buildAgentIslandStrings(): AgentIslandStrings {
     input: t('agentIsland.native.input'),
     done: t('agentIsland.native.done'),
     running: t('agentIsland.native.running'),
+    networkReconnecting: t('agentIsland.native.networkReconnecting'),
     updatingTasks: t('agentIsland.native.updatingTasks'),
     awaitingPermission: t('agentIsland.native.awaitingPermission'),
     awaitingQuestion: t('agentIsland.native.awaitingQuestion'),

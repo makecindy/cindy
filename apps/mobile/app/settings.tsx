@@ -5,6 +5,7 @@ import { useUpdates } from 'expo-updates';
 import { useRouter } from 'expo-router';
 import { Children, Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
+  FlatList,
   Image,
   Linking,
   Platform,
@@ -58,14 +59,31 @@ import {
 } from '@/settings/mobileSettings';
 import {
   isPushSupported,
-  markPendingUnregister,
   readPushEnabled,
   syncPushRegistration,
   writePushEnabled,
 } from '@/notifications/pushNotifications';
+import {
+  hydrateMobileVoiceDictionary,
+  readCachedMobileVoiceDictionarySnapshot,
+  refreshMobileVoiceDictionary,
+} from '@/session/mobileVoiceDictionaryCache';
+import {
+  buildMobileVoiceDictionaryEntryViews,
+  collectMobileVoiceDictionaryHosts,
+  patchMobileVoiceDictionaryHosts,
+  type MobileVoiceDictionaryEntryView,
+  type MobileVoiceDictionaryHost,
+} from '@/session/mobileVoiceDictionaryView';
+import { DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL } from '@cindy/maker-shared/device-link-contract';
+import type { MobileVoiceDictionarySnapshotResult } from '@cindy/maker-shared/device-link-contract';
 import { buildMobileUpdateInfoRows, currentMobileOtaVersion } from '@/settings/updateInfo';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
-import { runManualUpdateCheck } from '@/update/manualUpdateCheck';
+import {
+  manualUpdateCheckMessage,
+  runManualUpdateCheck,
+  type ManualUpdateCheckOutcome,
+} from '@/update/manualUpdateCheck';
 import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
 import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -87,14 +105,15 @@ export default function SettingsScreen() {
   const auth = useAuth();
   const { t } = useTranslation();
   const { locale, setLocale } = useLocale();
-  const { status } = useDeviceLink();
+  const deviceLink = useDeviceLink();
+  const { lastPresenceSnapshot, status } = deviceLink;
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const [accountDeletionAvailable, setAccountDeletionAvailable] =
     useState(false);
   const [debugExpanded, setDebugExpanded] = useState(false);
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
-  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [updateOutcome, setUpdateOutcome] = useState<ManualUpdateCheckOutcome | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
@@ -107,6 +126,12 @@ export default function SettingsScreen() {
   const [analyticsReady, setAnalyticsReady] = useState(false);
   const [analyticsMessage, setAnalyticsMessage] = useState<string | null>(null);
   const updateCheckInFlightRef = useRef(false);
+  // 语音词典:手机只读展示被控桌面的词典快照(正本在桌面,手机不参与合并)。
+  const [dictionaryScreenOpen, setDictionaryScreenOpen] = useState(false);
+  const [desktopDevices, setDesktopDevices] = useState<readonly MobileVoiceDictionaryHost[]>([]);
+  const [dictionaryRefreshing, setDictionaryRefreshing] = useState(false);
+  /** 缓存在模块里,组件用这个计数强制重渲染(每次刷新完成 +1)。 */
+  const [dictionaryRevision, setDictionaryRevision] = useState(0);
   const [selfDeviceName, setSelfDeviceName] = useState<string | null>(null);
   const [selfDeviceNameDraft, setSelfDeviceNameDraft] = useState('');
   const [selfDeviceNameEditing, setSelfDeviceNameEditing] = useState(false);
@@ -159,6 +184,14 @@ export default function SettingsScreen() {
     isTestFlightBuild: IS_TESTFLIGHT_BUILD,
   });
   const updateCheckEnabled = bundleCheckEnabled || updatesEnabled;
+  // 保存未翻译的结果，语言切换触发重渲染时用当前 t() 重新生成提示。
+  const updateMessage = useMemo(
+    () => updateOutcome && manualUpdateCheckMessage(updateOutcome, {
+      isTestFlightBuild: IS_TESTFLIGHT_BUILD,
+      t,
+    }),
+    [t, updateOutcome],
+  );
 
   const aboutSection = overview.sections.find((section) => section.id === 'about');
   const debugSection = overview.sections.find((section) => section.id === 'debug');
@@ -166,6 +199,8 @@ export default function SettingsScreen() {
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.deviceId) {
       setSelfDeviceName(null);
+      // 登出/未登录才清空电脑列表 —— 拉取失败不清(见下面 catch 的说明)。
+      setDesktopDevices([]);
       return;
     }
 
@@ -178,9 +213,15 @@ export default function SettingsScreen() {
         if (cancelled) return;
         const self = res.devices.find((device) => device.deviceId === auth.deviceId);
         setSelfDeviceName(self?.name?.trim() || null);
+        // 同一份设备清单顺带筛出电脑:词典正本在电脑上,手机按电脑分别展示。
+        setDesktopDevices(collectMobileVoiceDictionaryHosts(res.devices));
       })
       .catch(() => {
-        if (!cancelled) setSelfDeviceName(null);
+        if (cancelled) return;
+        setSelfDeviceName(null);
+        // 电脑列表刻意不清空:这只是一次拉取失败(断网、超时),不代表用户没有电脑。
+        // 清掉的话词典页会显示成「还没有电脑」,连带 hydrate/refresh 也没有 host 可
+        // 跑 —— 明明本地还有一份可用的离线缓存。真正该清空的时机是登出。
       });
 
     return () => {
@@ -228,7 +269,7 @@ export default function SettingsScreen() {
     // 审核模式:入口按钮已隐藏,这里再挡一层(状态由代码保证,不依赖 UI 层记得隐藏)。
     if (REVIEW_MODE || !updateCheckEnabled || updateCheckInFlightRef.current) return;
     updateCheckInFlightRef.current = true;
-    setUpdateMessage(null);
+    setUpdateOutcome(null);
     try {
       const outcome = await runManualUpdateCheck({
         checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,
@@ -238,31 +279,19 @@ export default function SettingsScreen() {
         reload: () => Updates.reloadAsync(),
         onPhase: (phase) => setUpdatePhase(phase),
       });
+      setUpdateOutcome(outcome);
       if (outcome.kind === 'bundle-update-available') {
         setUpdatePhase('idle');
-        setUpdateMessage(t('settings.version.bundleUpdateFound'));
       } else if (outcome.kind === 'up-to-date') {
         setUpdatePhase('uptodate');
-        setUpdateMessage(t(
-          IS_TESTFLIGHT_BUILD
-            ? 'settings.version.testFlightNoContentUpdate'
-            : 'settings.version.upToDate',
-        ));
       } else if (outcome.kind === 'ota-unavailable') {
         setUpdatePhase('uptodate');
-        setUpdateMessage(t(
-          IS_TESTFLIGHT_BUILD
-            ? 'settings.version.testFlightContentUpdateUnavailable'
-            : 'settings.version.bundleUpToDateNoOta',
-        ));
       } else if (outcome.kind === 'reloading') {
         setUpdatePhase('downloading');
-        setUpdateMessage(t('settings.version.downloadedRestarting'));
       } else if (outcome.kind === 'busy') {
         setUpdatePhase('idle');
       } else {
         setUpdatePhase('error');
-        setUpdateMessage(outcome.message);
       }
     } finally {
       updateCheckInFlightRef.current = false;
@@ -498,7 +527,6 @@ export default function SettingsScreen() {
         try {
           await syncPushRegistration({ enabled: false, apiFetch: auth.apiFetch });
         } catch {
-          await markPendingUnregister().catch(() => undefined);
           setPushMessage(t('settings.notifications.unregisterQueued'));
         }
         return;
@@ -578,6 +606,66 @@ export default function SettingsScreen() {
     }
   }, [analyticsBusy, resumeAnalyticsReporting, t]);
 
+  // REST 设备清单是「打开设置页那一刻」的快照,之后电脑上线/下线不会反映进来。
+  // 设置页可能开着很久,不跟 presence 的话:某台电脑上线了,这里仍认为全部离线,
+  // 刷新按钮直接 return,用户只能退出重进才能拉词典。
+  useEffect(() => {
+    if (!lastPresenceSnapshot) return;
+    setDesktopDevices((current) => patchMobileVoiceDictionaryHosts(current, lastPresenceSnapshot));
+  }, [lastPresenceSnapshot]);
+
+  /**
+   * 向所有在线电脑各拉一次词典快照。
+   *
+   * 它们本来就该收敛到同一份内容,拉多台只是为了容错(某台是旧版本、某台正好断线)。
+   * 失败一律静默:电脑离线、没开「允许被控」、老版本不认识这个 channel 都是常态,
+   * 页面继续显示上次缓存,不弹错。
+   */
+  const refreshVoiceDictionary = useCallback(() => {
+    const online = desktopDevices.filter((host) => host.online);
+    if (online.length === 0) return;
+    setDictionaryRefreshing(true);
+    void Promise.all(
+      online.map((host) => refreshMobileVoiceDictionary(
+        host.deviceId,
+        () => deviceLink.invoke<MobileVoiceDictionarySnapshotResult>(
+          host.deviceId,
+          DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL,
+          [],
+        ),
+        { force: true },
+      )),
+    ).finally(() => {
+      setDictionaryRefreshing(false);
+      // 缓存写在模块里,组件靠这个计数触发重渲染。
+      setDictionaryRevision((value) => value + 1);
+    });
+  }, [desktopDevices, deviceLink]);
+
+  const openVoiceDictionary = useCallback(() => {
+    setDictionaryScreenOpen(true);
+    // 进页面先把盘上缓存读进内存(离线也有内容可看),再拉一次最新的。
+    void Promise.all(desktopDevices.map((host) => hydrateMobileVoiceDictionary(host.deviceId)))
+      .then(() => setDictionaryRevision((value) => value + 1))
+      .catch(() => undefined);
+    refreshVoiceDictionary();
+  }, [desktopDevices, refreshVoiceDictionary]);
+
+  // dictionaryRevision 只作为依赖存在:缓存是模块级的,刷新完成后靠它触发重算。
+  const dictionaryEntries = useMemo(
+    () =>
+      buildMobileVoiceDictionaryEntryViews(
+        desktopDevices.map((host) => readCachedMobileVoiceDictionarySnapshot(host.deviceId)),
+      ),
+    [desktopDevices, dictionaryRevision],
+  );
+
+  const dictionaryStatus = desktopDevices.length === 0
+    ? 'no-desktops'
+    : desktopDevices.some((host) => host.online)
+      ? 'ready'
+      : 'all-offline';
+
   const avatarLabel = (overview.header.name.trim()[0] ?? '?').toUpperCase();
   const updateBusy = updatePhase === 'checking' || updatePhase === 'downloading';
   const updateButtonLabel = updatePhase === 'checking' ? t('settings.version.checking')
@@ -587,6 +675,18 @@ export default function SettingsScreen() {
         ? 'settings.version.testFlightCheckAction'
         : 'settings.version.checkAction',
     );
+
+  if (dictionaryScreenOpen) {
+    return (
+      <VoiceDictionaryScreen
+        entries={dictionaryEntries}
+        onBack={() => setDictionaryScreenOpen(false)}
+        onRefresh={refreshVoiceDictionary}
+        refreshing={dictionaryRefreshing}
+        status={dictionaryStatus}
+      />
+    );
+  }
 
   if (selfDeviceNameEditing) {
     return (
@@ -641,9 +741,9 @@ export default function SettingsScreen() {
                 <Text style={styles.rowLabel}>{t('settings.version.currentLabel')}</Text>
                 <Text style={styles.versionValue} numberOfLines={1}>{t('settings.version.bundleVersion', { version: appVersion })}</Text>
                 <Text style={styles.rowDetail} numberOfLines={1} testID="settings.otaVersion">{t('settings.version.otaVersion', { version: otaVersion })}</Text>
-                {/* 二级版本号:自建线打包所配对的桌面产品线版本(0.0.x);仅自建线且已注入时显示 */}
+                {/* 二级版本号:自建线打包所配对的桌面产品线版本(0.0.x),不是在线电脑的实时版本;仅自建线且已注入时显示 */}
                 {IS_OTA_SELFHOST && DESKTOP_PACKAGE_VERSION ? (
-                  <Text style={styles.rowDetail} numberOfLines={1} testID="settings.desktopVersion">{t('settings.version.desktopVersion', { version: DESKTOP_PACKAGE_VERSION })}</Text>
+                  <Text style={styles.rowDetail} numberOfLines={1} testID="settings.desktopVersion">{t('settings.version.pairedDesktopVersion', { version: DESKTOP_PACKAGE_VERSION })}</Text>
                 ) : null}
                 {IS_TESTFLIGHT_BUILD ? (
                   <Text style={styles.rowDetail} numberOfLines={2} testID="settings.testFlightUpdateHint">
@@ -718,6 +818,23 @@ export default function SettingsScreen() {
             ]}
           </SettingsGroup>
         ) : null}
+
+        {/* 语音词典:只读查看电脑上的词典(正本在电脑,增删改回电脑做) */}
+        <SettingsGroup
+          footer={t('settings.voiceDictionary.hint')}
+          title={t('settings.voiceDictionary.sectionTitle')}
+        >
+          {[
+            <ActionInfoRow
+              accessibilityLabel={t('settings.voiceDictionary.openAccessibility')}
+              key="voice-dictionary"
+              label={t('settings.voiceDictionary.label')}
+              onPress={openVoiceDictionary}
+              testID="settings.voiceDictionary.row"
+              value={t('settings.voiceDictionary.entryCount', { count: dictionaryEntries.length })}
+            />,
+          ]}
+        </SettingsGroup>
 
         {/* 显示语言:默认跟随系统,手动选择即持久化 override(恢复跟随系统 = 清除 override) */}
         <SettingsGroup
@@ -1038,6 +1155,110 @@ function ActionInfoRow({
   );
 }
 
+/**
+ * 语音词典查看页(只读)。
+ *
+ * 词典对用户是**一份**:同账号下所有开启同步的电脑收敛到同一份内容,「这条词来自
+ * 哪台电脑」是实现细节,不该出现在界面上 —— 同一台机器换名或重装就会多出一个分组,
+ * 列表立刻没法看。所以这里把所有电脑的快照合并成单一列表。
+ *
+ * 正本在电脑上,手机只拉快照用于润色,因此没有任何编辑入口:增删改一律回电脑做,
+ * 避免手机维护一份会分叉的副本。
+ */
+function VoiceDictionaryScreen({
+  entries,
+  onBack,
+  onRefresh,
+  refreshing,
+  status,
+}: {
+  entries: readonly MobileVoiceDictionaryEntryView[];
+  onBack(): void;
+  onRefresh(): void;
+  refreshing: boolean;
+  status: 'ready' | 'no-desktops' | 'all-offline';
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
+
+  const footer = status === 'no-desktops'
+    ? t('settings.voiceDictionary.noDesktops')
+    : status === 'all-offline'
+      ? t('settings.voiceDictionary.offlineHint')
+      : t('settings.voiceDictionary.readOnlyHint');
+
+  return (
+    <SafeAreaView style={styles.safeArea} testID="settings.voiceDictionary.screen">
+      <ScreenHeader
+        backTestID="settings.voiceDictionary.backButton"
+        onBack={onBack}
+        title={t('settings.voiceDictionary.screenTitle')}
+      />
+      {/*
+        词典上限是 1000 条,用 ScrollView 会把每一行都实例化出来 —— 低端机上首屏卡顿
+        且常驻内存。这里换成虚拟化列表,只挂载可见行;卡片视觉靠 header/item/footer
+        三段样式拼出来(FlatList 没法在外面包一层带圆角的 View 还保持自身滚动)。
+      */}
+      <FlatList
+        ListFooterComponent={
+          <>
+            <View style={styles.listCardBottom} />
+            <Text style={styles.groupFooter}>{footer}</Text>
+          </>
+        }
+        ListHeaderComponent={
+          <>
+            <View style={styles.groupTitleRow}>
+              <Text style={styles.groupTitle}>{t('settings.voiceDictionary.sectionTitle')}</Text>
+            </View>
+            <View style={styles.listCardTop}>
+              <Pressable
+                accessibilityLabel={t('settings.voiceDictionary.refreshAccessibility')}
+                accessibilityRole="button"
+                onPress={onRefresh}
+                style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+                testID="settings.voiceDictionary.refresh"
+              >
+                <View style={styles.rowLine}>
+                  <Text style={styles.rowLabel}>
+                    {t('settings.voiceDictionary.entryCount', { count: entries.length })}
+                  </Text>
+                  <Text style={styles.rowValue} numberOfLines={1}>
+                    {refreshing
+                      ? t('settings.voiceDictionary.refreshing')
+                      : t('settings.voiceDictionary.refresh')}
+                  </Text>
+                </View>
+              </Pressable>
+            </View>
+          </>
+        }
+        contentContainerStyle={styles.listContent}
+        data={entries}
+        keyExtractor={(entry) => entry.key}
+        renderItem={({ item }) => (
+          <View style={styles.listCardMiddle}>
+            <View style={styles.divider} />
+            <View style={styles.row} testID={`settings.voiceDictionary.entry.${item.key}`}>
+              <View style={styles.rowLine}>
+                <Text style={styles.rowLabel} numberOfLines={2}>{item.text}</Text>
+              </View>
+              {item.aliases.length > 0 ? (
+                <Text style={styles.rowDetail} numberOfLines={2}>
+                  {t('settings.voiceDictionary.aliases', {
+                    aliases: item.aliases.join(t('settings.voiceDictionary.aliasSeparator')),
+                  })}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        )}
+        testID="settings.voiceDictionary.scroll"
+      />
+    </SafeAreaView>
+  );
+}
+
 function RenameSelfDeviceScreen({
   draft,
   message,
@@ -1189,6 +1410,34 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     overflow: 'hidden',
   },
   divider: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth, marginLeft: spacing.lg },
+  // —— 虚拟化列表拼出的卡片三段 ——
+  listContent: { paddingBottom: spacing.xxl, paddingHorizontal: spacing.lg, paddingTop: spacing.lg },
+  listCardTop: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderTopLeftRadius: radius.container,
+    borderTopRightRadius: radius.container,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginTop: spacing.sm,
+    overflow: 'hidden',
+  },
+  listCardMiddle: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
+  },
+  listCardBottom: {
+    backgroundColor: colors.surfaceElevated,
+    borderBottomLeftRadius: radius.container,
+    borderBottomRightRadius: radius.container,
+    borderColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    height: radius.container,
+    marginBottom: spacing.sm,
+  },
   // —— 行 ——
   row: { gap: 3, justifyContent: 'center', minHeight: 52, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   rowLine: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },

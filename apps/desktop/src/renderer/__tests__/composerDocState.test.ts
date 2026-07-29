@@ -9,7 +9,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   composerDocIsEmpty,
   docContainsAtomChip,
+  docContainsStructuredList,
 } from '@/components/new-chat/composerDocState';
+import { ComposerBulletList, ComposerListItem } from '@/components/new-chat/ComposerListNodes';
 import { ComposerQuoteNode } from '@/components/new-chat/ComposerQuoteNode';
 import { MentionChipNode } from '@/components/new-chat/MentionChipNode';
 import { PastedTextChipNode } from '@/components/new-chat/PastedTextChipNode';
@@ -23,7 +25,16 @@ afterEach(() => {
 
 function makeEditor(): Editor {
   const editor = new Editor({
-    extensions: [Document, Paragraph, Text, MentionChipNode, PastedTextChipNode, ComposerQuoteNode],
+    extensions: [
+      Document,
+      Paragraph,
+      Text,
+      ComposerListItem,
+      ComposerBulletList,
+      MentionChipNode,
+      PastedTextChipNode,
+      ComposerQuoteNode,
+    ],
     content: { type: 'doc', content: [{ type: 'paragraph', content: [] }] },
   });
   editors.push(editor);
@@ -42,6 +53,21 @@ describe('composerDocState', () => {
   it('treats a doc with text as non-empty', () => {
     const editor = makeEditor();
     editor.commands.insertContent('draft');
+    expect(composerDocIsEmpty(editor.state.doc)).toBe(false);
+  });
+
+  it('treats an empty structured list item as non-empty content', () => {
+    const editor = makeEditor();
+    editor.commands.setContent({
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: [{ type: 'listItem', content: [{ type: 'paragraph' }] }],
+        },
+      ],
+    });
+    expect(docContainsStructuredList(editor.state.doc)).toBe(true);
     expect(composerDocIsEmpty(editor.state.doc)).toBe(false);
   });
 

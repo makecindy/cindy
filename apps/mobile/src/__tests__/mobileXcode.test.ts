@@ -68,18 +68,23 @@ describe('mobile:xcode env 切换', () => {
       'EXPO_PUBLIC_CINDY_AUTH_REGION=cn',
       'EXPO_PUBLIC_CINDY_AUTH_REGION=stale',
       'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL=https://cn.example',
+      'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL=https://global.example',
       'EXPO_PUBLIC_CINDY_GOOGLE_WEB_CLIENT_ID=keep-me',
       '',
     ].join('\n');
     const next = updateMobileXcodeEnvContent(source, {
       EXPO_PUBLIC_CINDY_AUTH_REGION: 'global',
       EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL: 'https://global.example',
+      EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL: 'https://cn.example',
       CINDY_USE_LOCAL_REGION_CONFIG: '1',
     });
 
     expect(next.match(/EXPO_PUBLIC_CINDY_AUTH_REGION=/g)).toHaveLength(1);
     expect(next).toContain('EXPO_PUBLIC_CINDY_AUTH_REGION=global');
     expect(next).toContain('EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL=https://global.example');
+    expect(next).toContain(
+      'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL=https://cn.example',
+    );
     expect(next).toContain('CINDY_USE_LOCAL_REGION_CONFIG=1');
     expect(next).toContain('EXPO_PUBLIC_CINDY_GOOGLE_WEB_CLIENT_ID=keep-me');
   });

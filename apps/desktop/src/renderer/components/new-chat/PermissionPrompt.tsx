@@ -14,9 +14,12 @@
  */
 
 import { useCallback, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { Tip } from '@/components/ui/tooltip';
 import type { PendingPermission } from '@/lib/makerChatStore';
+import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -65,12 +68,24 @@ function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
 // ---------------------------------------------------------------------------
 
 export function PermissionPrompt({ permission, onRespond }: PermissionPromptProps) {
-  const { toolName, input, title, description, suggestions } = permission;
+  const { t } = useTranslation();
+  const { toolName, input, title, displayName, description, suggestions } = permission;
 
-  const displayTitle = title || `Allow Claude to use ${toolName}?`;
+  const displayTitle = displayName
+    ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
+    : title || t('agentIsland.native.permissionPromptTitleWithTool', { toolName });
   const codeContent = formatToolInput(toolName, input);
   const sessionSuggestions = useMemo(() => filterSessionScopedSuggestions(suggestions), [suggestions]);
   const canAlwaysAllowForSession = sessionSuggestions.length > 0;
+  // 这个按钮加的是 agent 给的一条具体规则(Bash 多为 `curl:*` 这类前缀模式),
+  // 范围远小于「总是允许」的字面。把范围写到按钮上,别让用户猜。
+  // 描述不全时返回 null(见该函数顶注:点击会转发**全部** suggestions,文案漏项就是说谎),
+  // 此时退回不声称范围的原文案。分隔符按当前语言取 —— 顿号不能漏进英文句子。
+  const scopeLabels = useMemo(
+    () => describeSessionPermissionScope(sessionSuggestions),
+    [sessionSuggestions],
+  );
+  const allowScope = scopeLabels?.join(t('newChat.permissionPrompt.ruleSeparator')) ?? null;
 
   // ── Action handlers ──
 
@@ -158,8 +173,10 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
         <pre className="whitespace-pre-wrap break-all">{codeContent}</pre>
       </div>
 
-      {/* Action buttons — inline text + kbd badges, right-aligned */}
-      <div className="mt-4 flex items-center justify-end gap-2">
+      {/* Action buttons — inline text + kbd badges, right-aligned.
+          flex-wrap:带范围的「本对话都允许 …」按钮会比原来长,窄宽(doc rail portal)
+          下允许整行折行,而不是把 Deny / Allow once 挤出容器。 */}
+      <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
         {/* Deny */}
         <button
           type="button"
@@ -171,31 +188,51 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
             'transition-colors hover:bg-[var(--perm-code-bg)]',
           )}
         >
-          <span>Deny</span>
+          <span>{t('agentIsland.native.deny')}</span>
           <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
             Esc
           </kbd>
         </button>
 
         {canAlwaysAllowForSession && (
-          <button
-            type="button"
-            onClick={handleAlwaysAllow}
-            className={cn(
-              'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-              'border-[var(--chat-input-border)] bg-transparent',
-              'text-13 font-medium text-[var(--chat-input-text)]',
-              'transition-colors hover:bg-[var(--perm-code-bg)]',
-            )}
+          // 有具体规则就把范围写进按钮(`本对话都允许 Bash(curl:*)`),没有则退回原文案。
+          // tooltip 补两件按钮里放不下的事:完整规则(长命令会被 truncate)、以及
+          // 「作用于整个对话」——用户容易把「本对话」读成「这一次来回」。
+          // 列不出范围时(Codex 的会话级放行只给一个不带规则的标记,范围由 app-server 定)
+          // 换成只讲时效的说法:一条都没列出还说「只限这里列出的范围」就是虚假安心。
+          <Tip
+            text={
+              allowScope
+                ? `${allowScope}\n${t('newChat.permissionPrompt.alwaysAllowScopedHint')}`
+                : t('newChat.permissionPrompt.alwaysAllowSessionHint')
+            }
+            side="top"
+            contentClassName="max-w-[320px] whitespace-pre-line break-all text-left"
           >
-            <span>Always allow for session</span>
-            <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
-              Ctrl
-            </kbd>
-            <kbd className="-ml-1 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
-              Enter
-            </kbd>
-          </button>
+            <button
+              type="button"
+              onClick={handleAlwaysAllow}
+              className={cn(
+                // max-w:规则可能很长(完整命令串),截断后完整内容看 tooltip。
+                'flex min-w-0 max-w-[460px] items-center gap-2 rounded-[8px] border px-3 py-[7px]',
+                'border-[var(--chat-input-border)] bg-transparent',
+                'text-13 font-medium text-[var(--chat-input-text)]',
+                'transition-colors hover:bg-[var(--perm-code-bg)]',
+              )}
+            >
+              <span className="min-w-0 truncate">
+                {allowScope
+                  ? t('newChat.permissionPrompt.alwaysAllowScoped', { scope: allowScope })
+                  : t('agentIsland.native.alwaysAllowForSession')}
+              </span>
+              <kbd className="shrink-0 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
+                Ctrl
+              </kbd>
+              <kbd className="-ml-1 shrink-0 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
+                Enter
+              </kbd>
+            </button>
+          </Tip>
         )}
 
         {/* Allow once (primary) */}
@@ -210,7 +247,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
             'transition-colors hover:opacity-90',
           )}
         >
-          <span>Allow once</span>
+          <span>{t('agentIsland.native.allowOnce')}</span>
           <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             Enter
           </kbd>

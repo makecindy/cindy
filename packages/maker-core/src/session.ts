@@ -141,6 +141,15 @@ function redactNestedStrings(value: unknown, onChange: () => void): unknown {
 
 export interface SessionSendOptions extends SendOptions {
   /**
+   * Provider 启动前的安全屏障。
+   *
+   * Session 在 active/running 守卫通过、turn reservation 建立后调用；只有该
+   * hook 成功完成，才会继续执行产品层 onAccepted 与 vendor handle.send。
+   * 适合 durable queue 用 CAS 把任务从 dispatching 标成 accepted_running：
+   * hook 失败时 provider/model/tool 均不会启动。
+   */
+  beforeProviderStart?: () => void | Promise<void>;
+  /**
    * 产品层 accepted hook。
    * Session 在 active/running 守卫通过、turn reservation 建立后调用；
    * hook 完成后才启动 vendor handle。
@@ -228,7 +237,7 @@ export class Session {
     const msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }
       : message;
-    const { onAccepted, onDispatching, ...handleOpts } = opts ?? {};
+    const { beforeProviderStart, onAccepted, onDispatching, ...handleOpts } = opts ?? {};
     this.logger.debug('send', summarizeUserMessage(msg));
     this.ensureActive();
     if (this.isTurnRunning()) {
@@ -247,6 +256,8 @@ export class Session {
     let turnDispatched = false;
     let previousTurnOrigin: SendOrigin | null = null;
     try {
+      this.handle.validateSendOptions?.(handleOpts);
+      if (beforeProviderStart) await beforeProviderStart();
       await onAccepted?.();
       this.ensureActive();
       if (reservation.cancelled || this.sendReservation !== reservation) {

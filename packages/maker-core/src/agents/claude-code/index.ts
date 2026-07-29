@@ -31,9 +31,26 @@ import {
   forkSession as sdkForkSession,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { Query, CanUseTool, McpServerConfig, PermissionUpdate, Settings } from '@anthropic-ai/claude-agent-sdk';
+import { discoverSubagentDefinitions } from './subagent-definitions.js';
+import {
+  reportSubagentModelDiagnostics,
+  resolveSubagentModelDefault,
+  type ResolveSubagentModelDefaultResult,
+} from './subagent-model-default.js';
 import Anthropic, { APIError } from '@anthropic-ai/sdk';
 
-import { BaseAgent, OneShotError, AgentNotAuthenticatedError, type AgentSessionHandle, type AgentDeps, type StartSessionOptions, type OneShotOptions, type SendOptions } from '../base-agent.js';
+import {
+  BaseAgent,
+  OneShotError,
+  AgentNotAuthenticatedError,
+  TurnPermissionPolicyUnsupportedError,
+  type AgentSessionHandle,
+  type AgentDeps,
+  type StartSessionOptions,
+  type OneShotOptions,
+  type SendOptions,
+  type TurnPermissionPolicy,
+} from '../base-agent.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
@@ -64,7 +81,7 @@ import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import { ToolLoopGuard } from '../shared/loop-guard.js';
-import { buildClaudeEnv } from './env-builder.js';
+import { applySubagentModelEnv, buildClaudeEnv } from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { repairForkedClaudeSessionJsonl, type RepairForkedClaudeJsonlResult } from './fork-jsonl-repair.js';
@@ -495,6 +512,12 @@ const CAPABILITIES: Capabilities = {
   reasoningDisplay: ['off', 'summarized', 'full'],
   permissionModes: CLAUDE_PERMISSION_MODES,
   setPermissionModeMidSession: { supported: true },
+  turnPermissionPolicy: {
+    supported: { supported: true },
+    // Both modes can execute mutations without invoking canUseTool. Reject the
+    // combination instead of presenting a false forced-confirmation promise.
+    unsupportedPermissionModes: ['acceptEdits', 'bypassPermissions'],
+  },
   // 计划模式一级开关: SDK plan mode + ExitPlanMode → plan_review 审批, 批准后自动退出
   planMode: { supported: true },
   multimodal: {
@@ -772,7 +795,71 @@ export class ClaudeCodeAgent extends BaseAgent {
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
       credentialMode,
       modelContextWindows: providerRoutedModels,
+      // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
+      // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
+      subagentModel: null,
     });
+
+    // 「Subagent 模型」设置的默认值语义(见 subagent-model-default.ts):
+    // 平台的 CLAUDE_CODE_SUBAGENT_MODEL 是最高优先级**强制覆盖**,会静默盖掉用户手写
+    // agent 的 `model:`。这里先扫一遍用户手写定义再决定:没人声明 model → 照旧设 env
+    // (内置 agent 也吃到默认值);有人声明 → 不设 env,让那些声明生效。
+    //
+    // 必须放在 buildClaudeEnv **之后**:dev 多实例把 cc 的配置目录重定向到
+    // `<userData>/claude-home`,而那个 CLAUDE_CONFIG_DIR 只存在于**子进程 env**里
+    // (boot 期已从 process.env 剥离)。拿 process.env 去扫会扫到 `~/.claude/agents`,
+    // 和 cc 实际读的目录不是同一个 → 判定失真,声明照旧被覆盖。
+    //
+    // 只在会话启动时解析一次 —— env 要在 spawn 前定好,会话中途变动 tools/system 会破坏
+    // prompt 缓存(见 docs/dev-rules/maker-core-and-agent-behavior.md §3.1)。
+    // 诊断只落日志与 host 回调,**不进模型上下文**(理由见 subagent-model-default.ts 模块头)。
+    // 扫描失败(含触发 IO 预算)一律降级成「照旧设 env」= 本改动前的行为,绝不阻断会话启动。
+    //
+    // 候选默认值从路由感知入口取:子代理请求跑在父会话来源上,覆写在**该来源**下不可
+    // 路由(被停用)时 host 返回 undefined = 不注入(PR #744 review 第十九/二十轮)。
+    // 缺席 subagentModelForRoute 时退回静态 subagentModel(旧 host / CLI 行为不变)。
+    const configuredSubagentDefault =
+      (this.deps.runtimeConfig.subagentModelForRoute
+        ? this.deps.runtimeConfig.subagentModelForRoute(opts.providerId ?? null, credentialMode)
+        : this.deps.runtimeConfig.subagentModel
+      )?.trim() || undefined;
+    let subagentDefault: ResolveSubagentModelDefaultResult = {
+      envSubagentModel: configuredSubagentDefault,
+      diagnostics: [],
+    };
+    // 远端(SSH)会话**不做**本地扫描:opts.workingDir 是远端机器上的路径(本地不存在),
+    // `~/.claude/agents` 也是本地用户的而非远端的 —— 拿本地结果去决定远端行为会误判
+    // 「有没有人声明 model」。远端因此沿用既有 env 语义(设置值照旧强制覆盖),
+    // 即上面 subagentDefault 的初值。
+    if (!opts.remoteHostId) {
+      try {
+        const discovered = await discoverSubagentDefinitions({
+          workingDir: opts.workingDir,
+          // 子进程真正会用的那份 env —— CLAUDE_CONFIG_DIR 在里面。
+          env,
+        });
+        subagentDefault = resolveSubagentModelDefault({
+          configuredDefault: configuredSubagentDefault,
+          discovered,
+          // 校验 agent 声明的 model 是否真的可用 —— 清单就是 host 从目录派生的那份。
+          availableModelIds: this.capabilities.availableModels.map((m) => m.id),
+        });
+        for (const d of subagentDefault.diagnostics) {
+          log.warn('subagent model diagnostic', { ...d });
+        }
+        // 同步 throw 与 async reject 都在里面接住(host 可能传 async 回调)。
+        reportSubagentModelDiagnostics(
+          this.deps.runtimeConfig.onSubagentModelDiagnostics,
+          subagentDefault.diagnostics,
+        );
+      } catch (e) {
+        log.warn('discover subagent definitions failed; falling back to env override', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+    // 判定落到 env(唯一写入点,见 env-builder.applySubagentModelEnv)。
+    applySubagentModelEnv(env, subagentDefault.envSubagentModel ?? null);
     // 远端单独一份 env:用 'remote' 模式从空字典起(不继承 desktop OS env),否则
     // Windows HOME=C:\Users\Lizi 之类污染远端 cc CLI 的 ~ 展开(session/memory
     // 落怪路径)。详见 env-builder.ts buildClaudeEnv 文档。
@@ -781,6 +868,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           credentialMode,
           mode: 'remote',
           modelContextWindows: providerRoutedModels,
+          // 远端不做本地扫描(见上),这里的值就是路由感知后的设置值 —— 保持 env 强制覆盖语义。
+          subagentModel: subagentDefault.envSubagentModel ?? null,
         })
       : null;
     const hostSystemPrompt = this.deps.runtimeConfig.systemPrompt;
@@ -936,6 +1025,24 @@ export class ClaudeCodeAgent extends BaseAgent {
     let inputQueue = createAsyncQueue<SdkUserInput>();
     let abortController = new AbortController();
     let interactionResolver: InteractionResolver | null = null;
+    // Keep the policy across Claude task_notification auto-continue turns,
+    // which do not call handle.send again. The next explicit send replaces it.
+    let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
+    const forceTurnConfirmation = (toolName: string, input: unknown): boolean => {
+      const policy = activeTurnPermissionPolicy;
+      if (!policy) return false;
+      try {
+        return policy.forceConfirmToolCall(toolName, input) === true;
+      } catch (error) {
+        // A safety classifier failure cannot become an approval bypass.
+        log.error('turn permission policy threw -> force confirmation', {
+          toolName,
+          origin: policy.origin,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return true;
+      }
+    };
     // 事件队列预先声明 —— canUseTool 路径要 push interaction_dismissed 事件
     const eventQueue = createAsyncQueue<AgentEvent>();
 
@@ -1202,11 +1309,13 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
 
       // 3a. MCP 工具过 host 审批策略(本地与远端会话共用 classifyMcpApprovalPolicy)。
+      const turnPolicyForcePrompt = forceTurnConfirmation(toolName, input);
       const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
-      if (mcpApprovalPolicy === 'auto-approve') {
+      if (mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt) {
         return { behavior: 'allow', updatedInput: input };
       }
-      const forcePrompt = mcpApprovalPolicy === 'prompt-each-time';
+      const forcePrompt =
+        turnPolicyForcePrompt || mcpApprovalPolicy === 'prompt-each-time';
       const decision = await dispatchInteraction({
         kind: 'permission',
         requestId: options.toolUseID,
@@ -1891,14 +2000,19 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
             // 远端会话走同一份 host MCP 策略 —— 否则 SSH 会话里可信 server 又要逐次
             // 弹窗, prompt-each-time 的"禁止持久化授权"保护也整套缺失。
+            const remoteTurnPolicyForcePrompt = forceTurnConfirmation(
+              params.toolName ?? 'unknown',
+              params.input ?? {},
+            );
             const remoteMcpPolicy = classifyMcpApprovalPolicy(
               params.toolName ?? '',
               params.input ?? {},
             );
-            if (remoteMcpPolicy === 'auto-approve') {
+            if (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt) {
               return { kind: 'permission', behavior: 'allow' };
             }
-            const remoteForcePrompt = remoteMcpPolicy === 'prompt-each-time';
+            const remoteForcePrompt =
+              remoteTurnPolicyForcePrompt || remoteMcpPolicy === 'prompt-each-time';
             const decision = await dispatchWithTimeout({
               kind: 'permission',
               requestId: params.requestId,
@@ -3048,6 +3162,19 @@ export class ClaudeCodeAgent extends BaseAgent {
       agentKind: 'claude-code',
       get model() { return mutableModel; },
 
+      validateSendOptions(sendOpts: SendOptions) {
+        if (
+          sendOpts.turnPermissionPolicy &&
+          (mutablePermissionMode === 'acceptEdits' ||
+            mutablePermissionMode === 'bypassPermissions')
+        ) {
+          throw new TurnPermissionPolicyUnsupportedError(
+            'claude-code',
+            mutablePermissionMode,
+          );
+        }
+      },
+
       async send(message: UserMessage, sendOpts?: SendOptions) {
         // idle resume fallback 正在重建(亚秒窗):等它完成再走正常受理。重建成功时
         // 消息透明跑在新会话上;重建失败/close 竞态时 push 撞上已 end 的队列,由下方
@@ -3058,6 +3185,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (sendOpts?.signal?.aborted) {
           throw new Error('Claude send cancelled before acceptance');
         }
+        if (sendOpts) handle.validateSendOptions?.(sendOpts);
+        activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
         // 仅用于诊断日志: 调用方每次 send 都可以带 logTitle (取自 storage 的最新值);
         // 缺省时保留上一次的值 (没传不等于"清空")。
         if (sendOpts?.logTitle !== undefined) lastSendTitle = sendOpts.logTitle;

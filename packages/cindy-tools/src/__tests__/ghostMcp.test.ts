@@ -903,10 +903,97 @@ describe("ghost_call · setup_plan MCP 边界", () => {
 });
 
 describe("cindy_ghosts · ghost_forge(锻造)", () => {
-  it("forge_guide 原文返回手册(不 JSON 包裹,agent 直接读 markdown)", async () => {
+  it("forge_guide 无 ## 标题的短手册整本原样返回(退化路径,不 JSON 包裹)", async () => {
     const result = await handleForgeGuide(fakeDeps());
     expect(result.content[0].text).toBe("# 手册");
     expect(result.isError).toBeUndefined();
+  });
+
+  it("forge_guide 退化手册 + 传 section 仍整本原样返回,不报未命中", async () => {
+    const result = await handleForgeGuide(fakeDeps(), { section: "4.7" });
+    expect(result.content[0].text).toBe("# 手册");
+    expect(result.isError).toBeUndefined();
+  });
+
+  it("forge_guide 空串/纯空白 section 视为未传,返回目录而非报错", async () => {
+    const blank = await handleForgeGuide(sectionedDeps(), { section: "   " });
+    expect(blank.isError).toBeUndefined();
+    expect(blank.content[0].text).toContain("## 目录");
+    expect(blank.content[0].text).not.toContain("net-body");
+  });
+
+  // 分章手册:开场白 + 4 章,其中 4.6.1 也是 ## 级(与真实手册一致)
+  const SECTIONED_GUIDE = [
+    "# 手册",
+    "开场白一句。",
+    "## 1. 起步",
+    "one-body",
+    "## 4.6 订阅(subscribe 槽)",
+    "sub-body",
+    "## 4.6.1 出口钩子",
+    "hook-body",
+    "## 4.7 网络代发(network 槽)",
+    "net-body",
+  ].join("\n");
+  const sectionedDeps = () =>
+    fakeDeps({ forgeGuide: async () => SECTIONED_GUIDE });
+
+  it("forge_guide 无参返回目录:含开场白与全部章节标题,不含章节正文", async () => {
+    const result = await handleForgeGuide(sectionedDeps());
+    const text = result.content[0].text;
+    expect(result.isError).toBeUndefined();
+    expect(text).toContain("开场白一句。");
+    expect(text).toContain("## 目录");
+    expect(text).toContain("- 4.7 网络代发(network 槽)");
+    expect(text).toContain("- 4.6.1 出口钩子");
+    expect(text).not.toContain("net-body");
+    expect(text).not.toContain("one-body");
+  });
+
+  it("forge_guide 按章号取正文:含本章标题与正文,止于下一个 ## 标题", async () => {
+    const result = await handleForgeGuide(sectionedDeps(), { section: "4.6" });
+    const text = result.content[0].text;
+    expect(result.isError).toBeUndefined();
+    expect(text).toContain("## 4.6 订阅(subscribe 槽)");
+    expect(text).toContain("sub-body");
+    expect(text).not.toContain("hook-body");
+  });
+
+  it("forge_guide 按标题关键词取正文(大小写不敏感,唯一命中)", async () => {
+    const result = await handleForgeGuide(sectionedDeps(), {
+      section: "NETWORK",
+    });
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("net-body");
+  });
+
+  it("forge_guide 关键词命中多章标 isError 并列出歧义候选", async () => {
+    const result = await handleForgeGuide(sectionedDeps(), { section: "4.6" });
+    expect(result.isError).toBeUndefined(); // 章号精确匹配优先,不歧义
+    const ambiguous = await handleForgeGuide(sectionedDeps(), {
+      section: "钩子",
+    });
+    expect(ambiguous.isError).toBeUndefined(); // 唯一命中
+    const multi = await handleForgeGuide(sectionedDeps(), { section: "槽" });
+    expect(multi.isError).toBe(true);
+    expect(parsePayload(multi)).toMatchObject({
+      ok: false,
+      errorCode: "SECTION_NOT_FOUND",
+    });
+    expect((parsePayload(multi) as { message: string }).message).toContain(
+      "4.6 订阅(subscribe 槽)",
+    );
+  });
+
+  it("forge_guide 零命中标 isError 并列出全部可用章节", async () => {
+    const result = await handleForgeGuide(sectionedDeps(), {
+      section: "不存在的章",
+    });
+    expect(result.isError).toBe(true);
+    const payload = parsePayload(result) as { message: string };
+    expect(payload).toMatchObject({ ok: false, errorCode: "SECTION_NOT_FOUND" });
+    expect(payload.message).toContain("1. 起步");
+    expect(payload.message).toContain("4.7 网络代发(network 槽)");
   });
 
   it("forge_scaffold 透传模板和创建文件；目标存在时标 isError", async () => {

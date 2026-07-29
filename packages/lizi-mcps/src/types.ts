@@ -125,6 +125,33 @@ export interface FeishuBotMcpHostDeps {
   logger?: LiziMcpLogger;
 }
 
+export interface WechatBotSendMessageResult {
+  ok: boolean;
+  messageId?: string;
+  reason?: string;
+}
+
+export interface WechatBotSendFileResult {
+  ok: boolean;
+  messageId?: string;
+  reason?: string;
+}
+
+/** Host bridge for the personal WeChat proactive-message MCP. */
+export interface WechatBotMcpHostDeps {
+  getActivePeerIdForSession(
+    sessionId: string | undefined,
+  ): Promise<string | null> | string | null;
+  getMostRecentPeerId(): Promise<string | null> | string | null;
+  sendMessage(peerId: string, text: string): Promise<WechatBotSendMessageResult>;
+  sendFile(
+    peerId: string,
+    absPath: string,
+    displayName?: string,
+  ): Promise<WechatBotSendFileResult>;
+  logger?: LiziMcpLogger;
+}
+
 // ── cindy_slack(Slack 网关工具, 2026-07 并轨 hook 通道) ──────────────────────
 
 /** Slack 网关工具的结构化错误(hook-control manager 定义的同构形状)。 */
@@ -418,6 +445,7 @@ export type LiziMcpId =
   | 'browser'
   | 'computer'
   | 'cindy_feishu_bot'
+  | 'cindy_wechat'
   | 'cindy_slack'
   | 'cindy_scheduler'
   | 'cindy_ssh'
@@ -465,6 +493,10 @@ export type ControlWorkerAgent = 'claude-code' | 'codex';
 /** Browser automation MCP host deps. Core browser execution is injected by host. */
 export interface BrowserMcpDeps {
   getRuntime(): BrowserControlRuntime;
+  /** Whether the active backend accepts managed resource downloads. */
+  supportsResourceDownloads?(): boolean;
+  /** Whether the active backend accepts semantic element queries. */
+  supportsSemanticQueries?(): boolean;
   logger?: LiziMcpLogger;
   /**
    * Optional L2 (user-local) recipe layer. The host scans userData, parses with

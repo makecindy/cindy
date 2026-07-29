@@ -39,7 +39,11 @@ describe('routeSidebarCommand', () => {
       const command = { type: 'open-terminal' as const, sessionId: 's1' };
 
       await expect(routeSidebarCommand(command)).resolves.toBe(result);
-      expect(mocks.sendCommand).toHaveBeenCalledWith({ command, allowOpen: true });
+      expect(mocks.sendCommand).toHaveBeenCalledWith({
+        command,
+        allowOpen: true,
+        userInitiated: true,
+      });
     },
   );
 
@@ -47,7 +51,11 @@ describe('routeSidebarCommand', () => {
     const command = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
     await routeSidebarCommand(command, { allowOpen: false });
 
-    expect(mocks.sendCommand).toHaveBeenCalledWith({ command, allowOpen: false });
+    expect(mocks.sendCommand).toHaveBeenCalledWith({
+      command,
+      allowOpen: false,
+      userInitiated: true,
+    });
   });
 
   it.each([

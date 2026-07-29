@@ -9,10 +9,13 @@ import {
   draftHasContent,
   getDraft,
   getDraftPresence,
+  plainTextToTiptapDoc,
+  quickStartTextToTiptapDoc,
   saveDraft,
   setComposerDraftOwner,
   subscribeDraft,
   subscribeDraftPresence,
+  tiptapDocHasContent,
   type ComposerDraft,
 } from '@/lib/composerDraftStore';
 
@@ -82,6 +85,24 @@ describe('draftHasContent', () => {
               {
                 type: 'paragraph',
                 content: [{ type: 'composerQuote', attrs: { text: 'quoted' } }],
+              },
+            ],
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('counts an empty structured list item as content', () => {
+    expect(
+      draftHasContent(
+        draft({
+          text: {
+            type: 'doc',
+            content: [
+              {
+                type: 'bulletList',
+                content: [{ type: 'listItem', content: [{ type: 'paragraph' }] }],
               },
             ],
           },
@@ -253,5 +274,80 @@ describe('draft presence subscription', () => {
 
     unsubPresence();
     unsubContent();
+  });
+
+  // ChatInput 的外部草稿订阅用这个判空把「空文档 JSON」折叠成 null,再与
+  // 「编辑器为空」比较。两侧口径不一致时,每次外部草稿通知都会拿一份空文档整段
+  // setContent,把按位置存活的编辑器状态(语音草稿锚点)连带重建 —— 语音录音时
+  // 首行多出一个空行就是这么来的。
+  it('treats an empty / whitespace-only document as having no content', () => {
+    expect(tiptapDocHasContent(emptyDoc)).toBe(false);
+    expect(tiptapDocHasContent(whitespaceDoc)).toBe(false);
+    expect(tiptapDocHasContent(null)).toBe(false);
+    expect(tiptapDocHasContent(textDoc)).toBe(true);
+    expect(tiptapDocHasContent(mentionDoc)).toBe(true);
+  });
+});
+
+describe('quickStartTextToTiptapDoc', () => {
+  it('returns empty doc for empty string', () => {
+    expect(quickStartTextToTiptapDoc('')).toEqual(emptyDoc);
+  });
+
+  it('wraps single-line text with quickStartPill mark', () => {
+    const doc = quickStartTextToTiptapDoc('探索并理解代码');
+    expect(doc.type).toBe('doc');
+    expect(doc.content).toHaveLength(1);
+    const para = doc.content![0];
+    expect(para.type).toBe('paragraph');
+    expect(para.content).toHaveLength(1);
+    const textNode = para.content![0];
+    expect(textNode.type).toBe('text');
+    expect(textNode.text).toBe('探索并理解代码');
+    expect(textNode.marks).toEqual([{ type: 'quickStartPill' }]);
+  });
+
+  it('applies mark to each line in multi-line text', () => {
+    const doc = quickStartTextToTiptapDoc('line1\nline2');
+    expect(doc.content).toHaveLength(2);
+    for (const para of doc.content!) {
+      if (para.content) {
+        for (const node of para.content) {
+          expect(node.marks).toEqual([{ type: 'quickStartPill' }]);
+        }
+      }
+    }
+  });
+
+  it('preserves empty lines as empty paragraphs (no mark)', () => {
+    const doc = quickStartTextToTiptapDoc('a\n\nb');
+    expect(doc.content).toHaveLength(3);
+    expect(doc.content![1].content).toBeUndefined();
+  });
+
+  it('differs from plainTextToTiptapDoc by having marks', () => {
+    const plain = plainTextToTiptapDoc('hello');
+    const marked = quickStartTextToTiptapDoc('hello');
+    const plainText = plain.content![0].content![0];
+    const markedText = marked.content![0].content![0];
+    expect(plainText.marks).toBeUndefined();
+    expect(markedText.marks).toEqual([{ type: 'quickStartPill' }]);
+  });
+
+  it('goes through plainText normalization (lists become bulletList nodes) and marks leaf text', () => {
+    const doc = quickStartTextToTiptapDoc('- item1\n- item2');
+    // Walk tree to find every text node; they must all carry quickStartPill mark.
+    const textNodes: { text?: string; marks?: unknown[] }[] = [];
+    const walk = (n: JSONContent) => {
+      if (n.type === 'text') textNodes.push({ text: n.text, marks: n.marks });
+      (n.content ?? []).forEach(walk);
+    };
+    walk(doc);
+    expect(textNodes.length).toBeGreaterThanOrEqual(2);
+    for (const tn of textNodes) {
+      expect(tn.marks).toEqual(
+        expect.arrayContaining([{ type: 'quickStartPill' }]),
+      );
+    }
   });
 });

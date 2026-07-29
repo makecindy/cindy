@@ -13,17 +13,32 @@
  *   Esc            → 取消
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import {
+  getIssueConfirmDraft,
+  saveIssueConfirmDraft,
+  type IssueConfirmDraft,
+} from '@/lib/issueConfirmDraftStore';
 import { cn } from '@/lib/utils';
 import type { PendingIssueConfirm } from '@/lib/makerChatStore';
+import { shouldLabelIssueRegion } from '../../../shared/issueRegionCode';
+import { ISSUE_PUBLIC_NAME_MAX, normalizeIssuePublicName } from '../../../shared/issuePublicName';
 
 interface IssueConfirmCardProps {
+  sessionId: string;
   pending: PendingIssueConfirm;
   onRespond: (
     result:
-      | { confirmed: true; title: string; body: string; type: 'bug' | 'feature'; uiLanguage: string }
+      | {
+          confirmed: true;
+          title: string;
+          body: string;
+          type: 'bug' | 'feature';
+          publicName?: string;
+          uiLanguage: string;
+        }
       | { confirmed: false },
   ) => void;
 }
@@ -34,20 +49,63 @@ const TITLE_MAX = 200;
 // githubIssueSubmitService clamp 到 server 上限 SERVER_DESC_MAX(5000)。
 const BODY_MAX = 4500;
 
-export function IssueConfirmCard({ pending, onRespond }: IssueConfirmCardProps) {
+export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirmCardProps) {
   const { t, i18n } = useTranslation();
-  const [title, setTitle] = useState(pending.draft.title);
-  const [body, setBody] = useState(pending.draft.body);
-  const [type, setType] = useState<'bug' | 'feature'>(pending.draft.type);
+  const titleInputId = useId();
+  const bodyInputId = useId();
+  const publicNameInputId = useId();
+  const [draft, setDraft] = useState<IssueConfirmDraft>(
+    () =>
+      getIssueConfirmDraft(sessionId, pending.requestId) ?? {
+        ...pending.draft,
+        ...(pending.submissionIdentity.kind === 'platform'
+          ? {
+              publicName: pending.suggestedPublicName ?? t('issueAgent.confirm.anonymous'),
+            }
+          : {}),
+      },
+  );
+  const { title, body, type, publicName = '' } = draft;
 
-  // 同一会话内连续两次提交(新 requestId)时重置编辑态。
-  useEffect(() => {
-    setTitle(pending.draft.title);
-    setBody(pending.draft.body);
-    setType(pending.draft.type);
-  }, [pending.requestId, pending.draft.title, pending.draft.body, pending.draft.type]);
+  const confirmedPublicName =
+    pending.submissionIdentity.kind === 'platform' ? normalizeIssuePublicName(publicName) : null;
+  const canSubmit =
+    title.trim().length > 0 &&
+    body.trim().length > 0 &&
+    (pending.submissionIdentity.kind !== 'platform' || confirmedPublicName !== null);
 
-  const canSubmit = title.trim().length > 0 && body.trim().length > 0;
+  const updateDraft = useCallback(
+    (patch: Partial<IssueConfirmDraft>) => {
+      const next = { ...draft, ...patch };
+      if (
+        next.title === draft.title &&
+        next.body === draft.body &&
+        next.type === draft.type &&
+        next.publicName === draft.publicName
+      ) {
+        return;
+      }
+      // Save synchronously with the input event so an immediate session switch
+      // cannot unmount the card before its latest edit reaches the draft slot.
+      saveIssueConfirmDraft(sessionId, pending.requestId, next);
+      setDraft(next);
+    },
+    [draft, pending.requestId, sessionId],
+  );
+
+  // 构建区域代号,与登录页区域徽标同一套不对称命名(DESIGN.md §16.3):cn → CN、
+  // dev → Dev、global 不标。「哪些区域要标」只有 ISSUE_REGION_CODE 一个事实源 ——
+  // main 侧 issue 正文用的是同一个常量,卡片承诺展示的就是最终写进 issue 的内容,
+  // 两侧各写一份判断迟早漂移。region 缺失(IPC payload 异常)时按不标处理,不猜。
+  // 展示文案仍走 i18n(同 login.regionPill.*,便于日后改判为可译文案),所以这里是
+  // 「常量决定标不标 + i18n 提供文案」;两者逐区域逐语言的一致性由
+  // __tests__/issueRegionCode.consistency.test.ts 断言。key 写成字面量分支而非
+  // 动态拼接,保证 pnpm check:i18n 的静态提取能看到全部 key。
+  const regionCode = !shouldLabelIssueRegion(pending.env.region)
+    ? null
+    : pending.env.region === 'cn'
+      ? t('issueAgent.confirm.regionCodeCn')
+      : t('issueAgent.confirm.regionCodeDev');
 
   const handleSubmit = useCallback(() => {
     if (!canSubmit) return;
@@ -56,9 +114,10 @@ export function IssueConfirmCard({ pending, onRespond }: IssueConfirmCardProps) 
       title: title.trim(),
       body: body.trim(),
       type,
+      ...(confirmedPublicName ? { publicName: confirmedPublicName } : {}),
       uiLanguage: i18n.language,
     });
-  }, [canSubmit, onRespond, title, body, type, i18n.language]);
+  }, [canSubmit, confirmedPublicName, onRespond, title, body, type, i18n.language]);
 
   const handleCancel = useCallback(() => {
     onRespond({ confirmed: false });
@@ -82,7 +141,8 @@ export function IssueConfirmCard({ pending, onRespond }: IssueConfirmCardProps) 
   const typeButton = (value: 'bug' | 'feature', label: string) => (
     <button
       type="button"
-      onClick={() => setType(value)}
+      aria-pressed={type === value}
+      onClick={() => updateDraft({ type: value })}
       className={cn(
         'rounded-[6px] border px-2.5 py-[3px] text-12 font-medium transition-colors',
         type === value
@@ -113,14 +173,18 @@ export function IssueConfirmCard({ pending, onRespond }: IssueConfirmCardProps) 
       </div>
 
       {/* Issue title input */}
-      <label className="mt-3 block text-12 font-medium text-[var(--status-bar-meta)]">
+      <label
+        htmlFor={titleInputId}
+        className="mt-3 block text-12 font-medium text-[var(--status-bar-meta)]"
+      >
         {t('issueAgent.confirm.titleLabel')}
       </label>
       <input
+        id={titleInputId}
         type="text"
         value={title}
         maxLength={TITLE_MAX}
-        onChange={(e) => setTitle(e.target.value)}
+        onChange={(e) => updateDraft({ title: e.target.value })}
         className={cn(
           'mt-1 w-full rounded-[8px] border px-3 py-2',
           'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
@@ -130,13 +194,17 @@ export function IssueConfirmCard({ pending, onRespond }: IssueConfirmCardProps) 
       />
 
       {/* Issue body textarea */}
-      <label className="mt-3 block text-12 font-medium text-[var(--status-bar-meta)]">
+      <label
+        htmlFor={bodyInputId}
+        className="mt-3 block text-12 font-medium text-[var(--status-bar-meta)]"
+      >
         {t('issueAgent.confirm.bodyLabel')}
       </label>
       <textarea
+        id={bodyInputId}
         value={body}
         maxLength={BODY_MAX}
-        onChange={(e) => setBody(e.target.value)}
+        onChange={(e) => updateDraft({ body: e.target.value })}
         rows={8}
         className={cn(
           'mt-1 w-full resize-y rounded-[8px] border px-3 py-2',
@@ -146,16 +214,79 @@ export function IssueConfirmCard({ pending, onRespond }: IssueConfirmCardProps) 
         )}
       />
 
+      {/* 发布方式由 Main 预先选定；确认阶段只展示实际通道，不提供不可用切换。 */}
+      <div
+        className={cn(
+          'mt-3 rounded-[8px] border p-3',
+          'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
+        )}
+      >
+        <p className="select-none text-12 font-medium text-[var(--status-bar-meta)]">
+          {t('issueAgent.confirm.submissionMethodLabel')}
+        </p>
+        <p className="mt-1 text-13 leading-snug text-[var(--chat-input-text)]">
+          {pending.submissionIdentity.kind === 'github-user'
+            ? t('issueAgent.confirm.identityGithubUser', {
+                login: pending.submissionIdentity.login,
+              })
+            : t('issueAgent.confirm.identityPlatform', {
+                login: pending.submissionIdentity.login,
+              })}
+        </p>
+        <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
+          {pending.submissionIdentity.kind === 'github-user'
+            ? t('issueAgent.confirm.identityGithubUserHint')
+            : t('issueAgent.confirm.identityPlatformHint')}
+        </p>
+
+        {pending.submissionIdentity.kind === 'platform' && (
+          <>
+            <label
+              htmlFor={publicNameInputId}
+              className="mt-3 block select-none text-12 font-medium text-[var(--status-bar-meta)]"
+            >
+              {t('issueAgent.confirm.publicNameLabel')}
+            </label>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <input
+                id={publicNameInputId}
+                type="text"
+                value={publicName}
+                maxLength={ISSUE_PUBLIC_NAME_MAX}
+                onChange={(event) => updateDraft({ publicName: event.target.value })}
+                className={cn(
+                  'min-w-0 flex-[1_1_220px] rounded-full border px-3 py-2',
+                  'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
+                  'text-13 leading-tight text-[var(--chat-input-text)]',
+                  'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
+                )}
+              />
+              <button
+                type="button"
+                onClick={() => updateDraft({ publicName: t('issueAgent.confirm.anonymous') })}
+                className={cn(
+                  'shrink-0 rounded-full border px-3 py-2',
+                  'border-[var(--chat-input-border)] bg-transparent',
+                  'select-none text-13 font-medium text-[var(--chat-input-text)]',
+                  'transition-colors hover:bg-[var(--chat-input-bg)]',
+                )}
+              >
+                {t('issueAgent.confirm.useAnonymous')}
+              </button>
+            </div>
+            <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
+              {t('issueAgent.confirm.publicNameHint')}
+            </p>
+          </>
+        )}
+      </div>
+
       {/* 只读环境信息(main 侧自动附进 issue body) */}
-      <p className="mt-2 text-12 leading-tight text-[var(--status-bar-meta)]">
-        {pending.submissionIdentity.kind === 'github-user'
-          ? t('issueAgent.confirm.identityGithubUser', {
-              login: pending.submissionIdentity.login,
-            })
-          : t('issueAgent.confirm.identityPlatform', {
-              login: pending.submissionIdentity.login,
-            })}
-      </p>
+      {regionCode && (
+        <p className="mt-1 text-12 leading-tight text-[var(--status-bar-meta)]">
+          {t('issueAgent.confirm.regionLine', { region: regionCode })}
+        </p>
+      )}
       <p className="mt-1 text-12 leading-tight text-[var(--status-bar-meta)]">
         {t('issueAgent.confirm.envLine', {
           appVersion: pending.env.appVersion,

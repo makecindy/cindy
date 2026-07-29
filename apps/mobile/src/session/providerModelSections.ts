@@ -13,6 +13,7 @@
  * 故 0 供应商 / 旧被控端时调用方应回退到 capabilities 扁平列表。
  */
 import {
+  actualSourceIdForModel,
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
@@ -67,16 +68,29 @@ export function buildMobileModelSections(args: {
   query?: string;
   /** 被控端「模型显示/隐藏」override 快照;undefined/null = 旧被控端,不过滤。 */
   visibilityOverrides?: Record<string, boolean> | null;
+  /**
+   * true = 已建会话的选择器:当前来源按**实际路由口径**解析(不剔除停用拷贝,
+   * 运行中会话跟真实扣费路由),并给被停用的当前来源保留选中行。缺省 false =
+   * 新建草稿等**新路由选择**:按准入口径(effectiveSourceIdForModel)解析,停用
+   * 拷贝不高亮也不可选(PR #744 review 第十二轮)。
+   */
+  existingSessionRoute?: boolean;
 }): MobileModelSections {
   const connected = connectedProvidersForAgent([...args.providers], args.agentKind);
 
-  // 生效来源必须按当前模型收窄(共享 effectiveSourceIdForModel,与桌面 0f75dd560 修复同口径):
-  // 显式选中的来源要「已连接且**确实提供当前模型**」才用它;否则在提供该模型的已连接来源里取
-  // 原生默认;一个都没有 → null(绝不拼出「来源 A 图标 + 只有来源 B 提供的模型」的不存在路由,
-  // 也不再让断开/不提供该模型的显式来源粘在药丸上)。未传 selectedModelId(无从收窄)时保持
-  // 旧口径:显式已连接来源 → agent 原生默认。
+  // 生效来源必须按当前模型收窄(与桌面 0f75dd560 修复同口径):显式选中的来源要
+  // 「已连接且**确实提供当前模型**」才用它;否则在提供该模型的已连接来源里取原生默认;
+  // 一个都没有 → null(绝不拼出「来源 A 图标 + 只有来源 B 提供的模型」的不存在路由,
+  // 也不再让断开/不提供该模型的显式来源粘在药丸上)。未传 selectedModelId(无从收窄)
+  // 时保持旧口径:显式已连接来源 → agent 原生默认。
+  // 口径 = **实际路由**(actualSourceIdForModel,不剔除停用拷贝,桌面同款):本函数
+  // 服务的是已建会话的选择器,运行中会话继续走它真正在用的来源,高亮/药丸必须跟
+  // 真实扣费路由,不能显示成准入过滤后的替代来源(PR #744 review 第十轮)。
+  const resolveSourceId = args.existingSessionRoute
+    ? actualSourceIdForModel
+    : effectiveSourceIdForModel;
   const activeSourceId = args.selectedModelId
-    ? effectiveSourceIdForModel(
+    ? resolveSourceId(
         [...args.providers],
         args.selectedProviderId ?? null,
         args.selectedModelId,
@@ -86,9 +100,22 @@ export function buildMobileModelSections(args: {
       ? args.selectedProviderId
       : nativeDefaultSourceId(connected, args.agentKind);
 
+  // 当前来源被供应商级停用(仍连接着,但 connected 剔除了它)时补进分段输入,
+  // 并只保留选中行 —— 选中行豁免生效,其它模型不可作为新路由选择(桌面同款)。
+  const suspendedActive =
+    args.existingSessionRoute && activeSourceId && !connected.some((p) => p.id === activeSourceId)
+      ? args.providers.find(
+          (p) =>
+            p.id === activeSourceId && p.connected && p.agents.includes(args.agentKind),
+        )
+      : undefined;
+  const sectionProviders = suspendedActive ? [...connected, suspendedActive] : connected;
+  const restrictSuspended = (pid: string, mid: string): boolean =>
+    !(suspendedActive && pid === suspendedActive.id && mid !== args.selectedModelId);
+
   const overrides = args.visibilityOverrides;
   const sections = buildProviderSections({
-    providers: connected,
+    providers: sectionProviders,
     agent: args.agentKind,
     selectedModelId: args.selectedModelId,
     // 「选中行即使被隐藏也保留」的豁免必须指向真正会打 ✓ 的那行 —— 用解析后的
@@ -98,11 +125,12 @@ export function buildMobileModelSections(args: {
     // main model-visibility-mirror.keyOf 一致(三处需保持同步)。
     isVisible: overrides
       ? (pid, mid) => {
-          const p = connected.find((x) => x.id === pid);
+          if (!restrictSuspended(pid, mid)) return false;
+          const p = sectionProviders.find((x) => x.id === pid);
           const cat = p ? getModel(p, mid, args.agentKind) : undefined;
           return isModelVisible(overrides[`${args.agentKind}:${pid}:${mid}`], cat?.defaultEnabled);
         }
-      : () => true,
+      : (pid, mid) => restrictSuspended(pid, mid),
     query: args.query,
   });
 
@@ -135,11 +163,11 @@ export function isSelectedSourceDisconnected(args: {
   error: string | null;
 }): boolean {
   if (!args.providerId || args.loading || args.error !== null) return false;
-  return !sourcesForModel(
-    [...args.providers],
-    args.modelId,
-    args.agentKind,
-  ).some((provider) => provider.id === args.providerId);
+  // 实际路由口径(includeDisabled):本判定只回答「选中来源还连着吗」,停用是准入轴,
+  // 不打断已建会话 —— 按准入 rail 判会把停用当断开误报错误态(桌面同款)。
+  return !sourcesForModel([...args.providers], args.modelId, args.agentKind, {
+    includeDisabled: true,
+  }).some((provider) => provider.id === args.providerId);
 }
 
 /**

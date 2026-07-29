@@ -85,12 +85,14 @@ export async function fetchWithSafeRedirect(
   url: string,
   init: RequestInit,
   maxRedirects = MAX_REDIRECTS,
+  /** 出网通道。宿主可注入(如 desktop 的代理感知 fetch);缺省 = 全局 fetch。 */
+  fetchImpl: typeof fetch = fetch,
 ): Promise<Response> {
   const { origin, host, protocol } = new URL(url);
   let current = url;
   let lastStatus = 0;
   for (let hop = 0; hop <= maxRedirects; hop++) {
-    const res = await fetch(current, { ...init, redirect: 'manual' });
+    const res = await fetchImpl(current, { ...init, redirect: 'manual' });
     // 只有 3xx 才走重定向分支;其余(含 2xx / 4xx / 5xx)交回调用方原有逻辑处理。
     if (res.status < 300 || res.status >= 400) return res;
     lastStatus = res.status;

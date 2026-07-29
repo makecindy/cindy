@@ -2,6 +2,7 @@ import { app } from 'electron';
 
 import * as authManager from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { ServerApiError, serverApiFetch } from '../serverApiClient.js';
 import { getAppCapabilities, requireAppCapability } from '../appCapabilities.js';
 
@@ -135,7 +136,7 @@ export class CindyVoiceRunContext {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), VOICE_REFINE_WARMUP_TIMEOUT_MS);
     try {
-      const response = await fetch(
+      const response = await outboundFetch(
         `${baseUrl}/api/voice/sessions/${encodeURIComponent(sessionId)}/refine-warmup`,
         {
           method: 'POST',
@@ -175,10 +176,11 @@ async function createCindyVoiceSession(input: {
   sourceLanguage?: string;
 }): Promise<CindyVoiceAsrSession> {
   requireAppCapability('canUseCindyAccountServices', 'Cindy voice requires a Cindy account.');
-  const baseUrl = getClientEndpoint('voiceApiBaseUrl');
-  if (!baseUrl) throw new Error('Cindy voice service is unavailable in this region.');
+  if (!getClientEndpoint('voiceApiBaseUrl')) {
+    throw new Error('Cindy voice service is unavailable in this region.');
+  }
   const request = {
-    baseUrl,
+    baseUrl: () => getClientEndpoint('voiceApiBaseUrl'),
     method: 'POST',
     body: {
       mode: 'dictation',

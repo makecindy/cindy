@@ -61,11 +61,13 @@
       "input": "입력",
       "done": "완료",
       "running": "실행 중",
+      "networkReconnecting": "({{attempt}}/{{maxAttempts}}) 연결이 끊어졌습니다. 다시 연결하는 중…",
       "updatingTasks": "작업 업데이트 중",
       "awaitingPermission": "승인 대기 중",
       "awaitingQuestion": "답장 대기 중",
       "awaitingPlan": "계획 검토 대기 중",
       "permissionPromptTitle": "권한 확인 필요",
+      "permissionPromptTitleWithTool": "{{toolName}} 사용을 허용할까요?",
       "allowOnce": "한 번 허용",
       "alwaysAllowForSession": "이 세션에서 항상 허용",
       "deny": "거부"
@@ -266,6 +268,11 @@
           "keyHint": "개인 키 파일을 직접 읽습니다. 암호를 저장하지 않으므로 암호화된 키는 지원되지 않습니다 — ssh-agent 를 사용할 수 없을 때만 사용하세요."
         },
         "identityFile": "개인 키 파일 경로",
+        "agentProxy": "Agent 트래픽을 로컬 프록시로 우회",
+        "agentProxyTip": "원격에 127.0.0.1 포트를 열고 SSH 터널로 이 컴퓨터의 프록시로 중계합니다. 원격 codex / Claude Code 트래픽이 그 경로로 나갑니다",
+        "agentProxyAddr": "로컬 프록시 주소",
+        "agentProxyHint": "원격 127.0.0.1에 포트를 열고 SSH 터널로 로컬 프록시(예: Clash 7890)로 중계합니다. {{appName}}은(는) 프록시를 제공하지 않고 터널만 만듭니다. 원격 Agent의 HTTPS_PROXY가 터널 포트를 가리키고, 도메인은 프록시에서 해석됩니다. 전환 후 원격 codex daemon이 한 번 재시작됩니다.",
+        "agentProxyAddrInvalid": "host:port 형식이어야 합니다(예: 127.0.0.1:7890)",
         "cancel": "취소",
         "submit": "머신 추가"
       },
@@ -281,6 +288,11 @@
         "statusInstalled": "설치됨",
         "statusNotInstalled": "설치되지 않음",
         "claudeCodeName": "Claude Code",
+        "agentProxyTitle": "Agent 프록시 터널",
+        "agentProxyActive": "원격 127.0.0.1:{{port}} → 로컬 {{target}} · 설정됨",
+        "agentProxyPending": "터널 설정 중 → 로컬 {{target}}",
+        "agentProxyWaiting": "호스트 미연결 — 재연결 후 자동 설정 → 로컬 {{target}}",
+        "agentProxyError": "터널 설정 실패: {{message}}",
         "button": {
           "install": "설치",
           "reinstall": "재설치",
@@ -307,9 +319,9 @@
         "confirmTitle": "Codex 자격 증명을 원격에 푸시하시겠습니까?",
         "confirmPush": "푸시",
         "confirmOverwrite": "덮어쓰기",
-        "descFirstPush": "로컬의 Codex 자격 증명을 {{hostId}} 의 ~/.codex/auth.json 에 설치합니다.",
-        "descOverwrite": "{{hostId}} 의 기존 Codex 로그인을 덮어씁니다.",
-        "descOverwriteWithAge": "{{hostId}} 의 기존 Codex 로그인을 덮어씁니다(마지막 업데이트: {{when}}).",
+        "descFirstPush": "로컬 Codex 자격 증명을 {{hostId}}의 Cindy Codex home(~/.xdt-server/v1/codex-home/auth.json)에 설치합니다.",
+        "descOverwrite": "{{hostId}}의 Cindy Codex home에 있는 기존 Codex 로그인을 덮어씁니다.",
+        "descOverwriteWithAge": "{{hostId}}의 Cindy Codex home에 있는 기존 Codex 로그인을 덮어씁니다(마지막 업데이트: {{when}}).",
         "warnOverwrite": "원격의 기존 로그인은 사라집니다. 누군가 지금 Codex 를 사용 중이면 로그아웃됩니다.",
         "warnShared": "{{hostId}} 에 SSH 로 들어올 수 있는 사람은 이 파일을 읽고 당신의 OpenAI 계정을 사용할 수 있습니다.",
         "daysAgo": "{{n}} 일 전",
@@ -355,10 +367,20 @@
       "localThemes": {
         "title": "로컬 테마",
         "export": "로컬 복사본 만들기",
+        "import": "VSCode / Obsidian 테마 가져오기",
         "openDir": "테마 폴더 열기",
         "refresh": "새로고침",
         "exportSuccess": "{{file}} 파일을 만들었습니다. 예시 이미지 경로를 바꾸고 저장한 뒤 \"새로고침\"을 누르세요.",
         "exportFailed": "내보내기에 실패했습니다: {{error}}",
+        "importSuccess": "{{name}}({{themeCount}}개 구성)을 가져왔습니다. 위 테마 목록에서 선택하세요.",
+        "importPartial": "{{name}}({{themeCount}}개 구성)을 가져왔습니다. 의미가 정해진 색 {{skipped}}개는 규칙대로 그대로 두었고, {{unresolved}}개는 값을 읽을 수 없어 건너뛰었고, {{derived}}개는 인접색에서 추정했습니다.",
+        "importFailed": "가져오기에 실패했습니다: {{error}}",
+        "importUnsupported": "이 파일은 VSCode 또는 Obsidian 테마로 인식할 수 없습니다.",
+        "importUsesInclude": "이 VSCode 테마는 include를 통해 색상을 상속하므로 단독으로 가져올 수 없습니다.",
+        "importNotAFile": "폴더가 아닌 파일을 선택해 주세요.",
+        "importTooLarge": "파일이 너무 커서 테마로 가져올 수 없습니다.",
+        "importWriteError": "테마를 저장할 수 없습니다. 디스크 공간과 권한을 확인하세요.",
+        "importInternalError": "파일을 읽거나 처리할 수 없습니다. 다시 선택해 보세요.",
         "openDirFailed": "폴더를 열지 못했습니다: {{error}}",
         "refreshed": "로컬 테마를 새로고쳤습니다"
       },
@@ -481,6 +503,14 @@
       "soundPreviewAria": "{{event}} 사운드 미리 듣기",
       "skinAnimationAria": "{{skin}} 미리보기 애니메이션 전환",
       "skins": {
+        "cindy": {
+          "name": "Cindy",
+          "description": "Cindy 본인. 실행 중인 작업을 지켜봅니다."
+        },
+        "blackcat": {
+          "name": "검은 고양이",
+          "description": "차분한 검은 고양이. 어두운 노치 속에서도 노란 눈이 또렷합니다."
+        },
         "pululu": {
           "name": "Pululu",
           "description": "TapFamily의 차분한 수호 담당. 동그란 머리와 진심 어린 태도로 어수선한 작업도 지켜줍니다."
@@ -508,6 +538,10 @@
         "muffin": {
           "name": "Muffin",
           "description": "부드러운 블루 그레이 분위기의 동료. 실행 중인 작업을 더 가볍고 친근하게 보여줍니다."
+        },
+        "erika": {
+          "name": "Erika",
+          "description": "초승달 머리 장식을 한 Erika. 따뜻한 갈색 눈으로 긴 작업을 조용히 함께합니다."
         }
       },
       "soundEvents": {
@@ -653,6 +687,12 @@
       "analyticsSaveFailed": "사용 통계 설정을 저장하지 못했습니다",
       "debugLogLabel": "디버그 로그",
       "debugLogDescription": "활성화하면 전체 디버그 로그를 출력합니다: main/maker logger가 debug 레벨로 올라가며, 새 Claude Code 세션은 API 요청 URL/상태/지연 시간, Node 레벨 DNS/TCP/TLS 핸드셰이크 타이밍 및 SDK 내부 정보도 출력합니다. 로그 양이 많으므로 문제 해결 후에는 꺼주세요. dev 모드에서는 항상 켜져 있습니다.",
+      "legal": {
+        "termsOfServiceLabel": "서비스 이용약관",
+        "privacyPolicyLabel": "개인정보 처리방침",
+        "viewDocument": "{{document}} 보기",
+        "openFailed": "문서를 열 수 없습니다. 시스템 브라우저 설정을 확인해 주세요"
+      },
       "social": {
         "title": "Cindy와 연결하기",
         "discordLabel": "Discord",
@@ -893,6 +933,11 @@
             "externalAppMacOnly": "외부 앱에 붙여넣은 뒤의 자동 학습은 현재 macOS에서만 지원됩니다. 앱 내부 음성 입력에는 영향이 없습니다.",
             "ariaLabel": "사전 자동 학습 전환"
           },
+          "deviceSync": {
+            "label": "내 기기 간 동기화",
+            "hint": "동시에 온라인 상태인 컴퓨터끼리 사전을 자동으로 병합합니다. 내용은 기기 간에 직접 전송되며 서버에 저장되지 않습니다.",
+            "ariaLabel": "사전 기기 간 동기화 전환"
+          },
           "add": "새 단어",
           "save": "저장",
           "cancel": "취소",
@@ -1130,14 +1175,18 @@
       "title": "모델 제공자",
       "subtitle": "모델을 선택할 때의 소스입니다. 각 소스는 지원하는 모델과 과금 방식을 제공하며, 대화별로 전환할 수 있습니다.",
       "pill": {
-        "connected": "연결됨"
+        "connected": "연결됨",
+        "suspended": "비활성화됨"
       },
       "button": {
         "authorize": "인증",
         "logout": "로그아웃",
         "connect": "연결",
         "disconnect": "연결 해제",
-        "cancel": "취소"
+        "cancel": "취소",
+        "retry": "모델 목록 다시 가져오기",
+        "retrying": "다시 가져오는 중…",
+        "enableProvider": "제공자 활성화"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -1205,6 +1254,8 @@
           "wireProtocol": "업스트림 프로토콜",
           "baseUrl": "기본 URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
+          "requestPath": "정확한 요청 경로(선택 사항)",
+          "requestPathHelp": "비워 두면 선택한 프로토콜의 표준 경로를 사용합니다. 제공자가 비표준 추론 엔드포인트를 사용할 때만 /로 시작하는 경로를 입력하세요.",
           "apiKey": "API 키",
           "apiKeyPlaceholder": "API 키",
           "apiKeyEditPlaceholder": "변경 안 함(저장됨)",
@@ -1236,8 +1287,9 @@
           "nameRequired": "표시 이름을 입력하세요",
           "runtimeRequired": "Runtime을 하나 이상 구성하세요(기본 URL과 모델)",
           "baseUrlInvalid": "기본 URL은 유효한 http(s) 주소여야 합니다",
+          "requestPathInvalid": "정확한 요청 경로는 단일 /로 시작해야 하며 프래그먼트나 . 또는 .. 경로 세그먼트를 포함하면 안 됩니다. 공백과 안전하지 않은 문자는 퍼센트 인코딩하세요.",
           "modelRequired": "모델을 하나 이상 추가하세요",
-          "oauthInvalid": "OAuth 설정이 불완전합니다: 네 항목 모두 필수이며 두 엔드포인트는 https 주소여야 합니다"
+          "oauthInvalid": "OAuth 설정이 불완전합니다. 모든 필드는 필수이며 두 엔드포인트는 안전한 https URL이어야 합니다"
         },
         "toast": {
           "created": "제공자를 추가했습니다",
@@ -1279,9 +1331,17 @@
           "label": "인증 방식",
           "apiKey": "API 키",
           "oauth": "OAuth 구독 인증",
-          "oauthHelp": "OAuth 로그인을 제공하는 구독형 제공자용입니다. 저장 후 제공자 목록에서 \"인증\"을 눌러 브라우저로 로그인하세요. 자격 증명은 이 기기에만 암호화되어 저장됩니다.",
+          "none": "인증 없음",
+          "noneHelp": "로컬 또는 신뢰할 수 있는 자체 호스팅 프록시용입니다. Cindy는 전달 전에 CLI의 구독 자격 증명과 계정 헤더를 제거합니다.",
+          "oauthHelp": "OAuth 로그인을 제공하는 제공자용입니다. 브라우저 콜백 또는 기기 코드 방식을 선택하고 저장한 뒤 제공자 목록에서 인증하세요. 인증 정보는 이 기기에만 암호화되어 저장됩니다.",
+          "flowLabel": "OAuth 흐름",
+          "flow": {
+            "authorization-code": "브라우저 콜백 (PKCE)",
+            "device-code": "기기 코드"
+          },
           "fields": {
             "authorizeUrl": "인증 엔드포인트 (Authorize URL)",
+            "deviceAuthorizationUrl": "기기 인증 엔드포인트 (Device Authorization URL)",
             "tokenUrl": "토큰 엔드포인트 (Token URL)",
             "clientId": "Client ID",
             "scopes": "Scopes(공백 구분)"
@@ -1294,9 +1354,8 @@
       },
       "models": {
         "search": "모델 검색",
-        "available": "모델 선택기에 표시",
+        "available": "모델 선택에 표시",
         "modelCount_other": "모델 {{count}}개",
-        "agentEnabledCount": "{{agent}} {{on}}/{{total}}",
         "enableAll": "모두 표시",
         "disableAll": "모두 숨기기",
         "subscription": "구독",
@@ -1307,9 +1366,18 @@
         "capabilityNote": "{{agent}}에서는 사용 불가",
         "divergedChip": "{{agent}}에서 숨김",
         "refreshAria": "모델 목록 새로고침(추가만)",
+        "refreshBuiltinAria": "모델 목록 새로고침",
+        "refreshingAria": "모델 목록 새로고침 중…",
+        "refreshDone": "모델 목록을 새로고침했습니다",
         "refreshAdded": "새 모델 {{count}}개를 발견했습니다",
         "refreshNoNew": "모델 목록이 최신 상태입니다. 새 항목이 없습니다",
-        "refreshFailed": "모델 목록 새로고침에 실패했습니다. 잠시 후 다시 시도해 주세요"
+        "refreshFailed": "모델 목록을 새로고침하지 못했습니다. 잠시 후 다시 시도해 주세요",
+        "disableModel": "이 모델 비활성화",
+        "enableModel": "이 모델 활성화",
+        "capabilityGroupHint": "대화 모델 선택에는 표시되지 않으며, 이미지 생성 등 기능에서만 사용됩니다.",
+        "accessWriteFailed": "변경 사항을 저장하지 못했습니다. 다시 시도해 주세요.",
+        "disabledGroup": "비활성화됨",
+        "enableAllModels": "모두 활성화"
       },
       "genericOAuth": {
         "subtitle": "구독 인증 로그인 (OAuth)",
@@ -1331,7 +1399,29 @@
         "singleAgentNote": "{{agent}} 전용",
         "emptyModels": "인증하면 사용 가능한 모델이 자동으로 검색됩니다",
         "emptyList": "왼쪽 아래 '제공자 추가'에서 첫 모델 소스를 연결하세요",
-        "emptyModelsConnected": "연결됨 — 사용 가능한 모델을 검색하는 중입니다. 계속 비어 있으면 잠시 후 다시 시도해 주세요."
+        "emptyModelsConnected": "연결됨 — 사용 가능한 모델을 검색하는 중입니다. 계속 비어 있으면 잠시 후 다시 시도해 주세요.",
+        "discoveryFailed": {
+          "network": "이 제공자에 연결할 수 없어 모델 목록을 가져오지 못했습니다. 네트워크 또는 프록시 설정을 확인한 후 다시 시도하세요.",
+          "timeout": "이 제공자 연결이 시간 초과되어 모델 목록을 가져오지 못했습니다. 네트워크를 확인한 후 다시 시도하세요.",
+          "upstream": "이 제공자가 지금은 모델 목록을 반환할 수 없습니다. 잠시 후 다시 시도하세요.",
+          "regionBlocked": "이 제공자는 현재 지역에서 서비스를 제공하지 않아 모델 목록을 가져오지 못했습니다. 다른 제공자를 사용하세요.",
+          "unauthorized": "이 제공자가 현재 인증을 거부하여 모델 목록을 가져오지 못했습니다. 연결을 해제한 후 다시 연결하세요.",
+          "forbidden": "이 제공자가 요청을 거부하여 모델 목록을 가져오지 못했습니다. 프록시나 VPN을 사용 중이라면 출구를 바꾼 후 다시 시도하세요.",
+          "rejected": "이 제공자가 요청을 거부하여 모델 목록을 가져오지 못했습니다. 잠시 후 다시 시도하거나 다른 제공자를 사용하세요.",
+          "empty": "이 제공자가 사용 가능한 모델을 반환하지 않았습니다. 계정 권한을 확인한 후 다시 시도하세요."
+        },
+        "discoveryFailedStale": {
+          "network": "이 제공자에 연결할 수 없습니다. 아래는 마지막으로 가져온 모델 목록입니다. 네트워크 또는 프록시 설정을 확인한 후 다시 시도하세요.",
+          "timeout": "이 제공자 연결이 시간 초과되었습니다. 아래는 마지막으로 가져온 모델 목록입니다. 네트워크를 확인한 후 다시 시도하세요.",
+          "upstream": "이 제공자가 지금은 모델 목록을 반환할 수 없습니다. 아래는 마지막으로 가져온 목록입니다. 잠시 후 다시 시도하세요.",
+          "regionBlocked": "이 제공자는 현재 지역에서 서비스를 제공하지 않습니다. 아래는 마지막으로 가져온 모델 목록입니다. 다른 제공자를 사용하세요.",
+          "unauthorized": "이 제공자가 현재 인증을 거부했습니다. 아래는 마지막으로 가져온 모델 목록입니다. 연결을 해제한 후 다시 연결하세요.",
+          "forbidden": "이 제공자가 요청을 거부했습니다. 아래는 마지막으로 가져온 모델 목록입니다. 프록시나 VPN을 사용 중이라면 출구를 바꾼 후 다시 시도하세요.",
+          "rejected": "이 제공자가 요청을 거부했습니다. 아래는 마지막으로 가져온 목록입니다. 잠시 후 다시 시도하거나 다른 제공자를 사용하세요.",
+          "empty": "이번에는 이 제공자가 사용 가능한 모델을 반환하지 않았습니다. 아래는 마지막으로 가져온 목록입니다. 계정 권한을 확인한 후 다시 시도하세요."
+        },
+        "suspendedBanner": "이 제공자는 비활성화되어 있습니다. 자격 증명은 유지되며, 활성화하면 모델을 다시 사용할 수 있습니다.",
+        "moreActionsAria": "추가 작업"
       },
       "detect": {
         "groupLabel": "이 기기에서 감지됨",
@@ -1348,14 +1438,17 @@
         "stepModels": "모델 선택",
         "searchPlaceholder": "제공자 검색…",
         "groupSubscription": "구독 인증 · 추천",
-        "groupApiKey": "API 키 제공자 · 프리셋은 카탈로그와 함께 업데이트",
+        "groupApiKey": "API 및 자체 호스팅 프록시 · 프리셋은 카탈로그와 함께 업데이트",
         "groupCustom": "사용자 지정",
         "metaOAuth": "구독 인증",
         "metaApiKey": "API 키",
+        "metaNoAuth": "로컬 / 자체 호스팅 · 인증 없음",
         "customTitle": "사용자 지정 엔드포인트",
         "customMeta": "OpenAI / Anthropic 호환 모델 소스를 연결",
         "pickHint": "인증 방식은 제공자 정의에 따라 결정됩니다. OAuth 엔드포인트와 기본 URL은 프리셋에 포함되어 직접 입력할 필요가 없습니다.",
         "oauthDesc": "브라우저에서 구독 인증을 완료합니다. API 키가 필요 없습니다",
+        "deviceOAuthDesc": "일회용 기기 코드를 사용해 제공자 인증 페이지에서 인증하세요",
+        "authorizeInBrowser": "브라우저에서 인증",
         "authorizeWithDeviceCode": "기기 코드 사용",
         "preparingDeviceCode": "기기 코드를 준비하는 중…",
         "deviceCodePrompt": "인증 페이지에 다음 일회용 기기 코드를 입력하세요:",
@@ -1369,10 +1462,16 @@
         "authorizeFailed": "{{name}} 인증에 실패했습니다. 다시 시도해 주세요",
         "nameLabel": "표시 이름",
         "onlyAgentNote": "이 제공자는 {{agent}}만 지원합니다",
+        "endpointLabel": "{{agent}} 기본 URL",
+        "noAuthNote": "이 프록시는 클라이언트 키가 필요하지 않습니다. Cindy는 전달 전에 CLI 구독 자격 증명을 제거합니다.",
         "bridgedNote": "Cindy 브리지 (Chat Completions)",
         "docsLink": "연동 문서 보기",
         "fetching": "연결을 확인하고 모델 목록을 가져오는 중…",
         "fetchFailed": "모델 목록을 가져오지 못했습니다. 프리셋 추천 모델로 추가를 완료한 뒤 나중에 상세에서 새로고침할 수 있습니다",
+        "manualModelHint": "검색된 모델이 없습니다. 이 프록시가 제공하는 정확한 모델 ID를 입력하세요.",
+        "manualModelLabel": "{{agent}} 모델 ID",
+        "manualModelPlaceholder": "예: local-model",
+        "addManualModel": "모델 추가",
         "recommended": "추천",
         "modelsHint": "선택한 모델은 대화 모델 선택기에 표시되며 사용 가능한 모든 CLI에 동시에 적용됩니다. 제공자 상세에서 언제든지 조정할 수 있습니다.",
         "noModelSelected": "모델을 하나 이상 선택해 주세요",
@@ -1389,6 +1488,10 @@
         "badge": "추천",
         "desc": "Cindy에 로그인하면 공식 Cindy AI 서비스가 활성화됩니다. 모든 모델을 바로 사용할 수 있으며 키 관리가 필요 없습니다.",
         "cta": "Cindy 로그인"
+      },
+      "menu": {
+        "disableProvider": "이 제공자 비활성화",
+        "enableProvider": "이 제공자 활성화"
       }
     },
     "experimental": {
@@ -1465,6 +1568,90 @@
         "hint": "연결/해제 시 Bot에 알림 메시지를 전송합니다"
       },
       "bind": "연동"
+    },
+    "wechatBot": {
+      "title": "개인 WeChat",
+      "description": "QR 코드로 개인 WeChat을 연결하고 개인 채팅에서 {{appName}}로 작업하세요.",
+      "statusAria": "개인 WeChat 상태: {{status}}",
+      "status": {
+        "disconnected": "연결 안 됨",
+        "authorizing": "인증 준비 중…",
+        "waitingConfirmation": "WeChat 확인 대기 중…",
+        "connected": "연결됨",
+        "reconnecting": "재연결 중…",
+        "needsReauth": "재인증 필요",
+        "disabled": "사용할 수 없음",
+        "error": "연결 실패"
+      },
+      "intro": "연결하면 이 WeChat 연결로 보낸 개인 메시지가 이 컴퓨터의 Cindy로 전달됩니다. 인증 페이지는 Tencent가 제공하며 OpenClaw로 표시될 수 있습니다.",
+      "errorNote": "연결이 완료되지 않았습니다. 네트워크를 확인하고 다시 스캔하세요. 연결 실패 시 Cindy는 인증 정보를 평문으로 저장하지 않습니다.",
+      "disabledNote": "호환성 정책에 따라 이 버전에서는 개인 WeChat 연결이 일시 중지되었습니다. 저장된 대화와 설정은 삭제되지 않습니다.",
+      "permission": {
+        "label": "권한 모드",
+        "hint": "/new 이후의 새 컨텍스트에 적용됩니다. 위험한 작업은 계속 Cindy Desktop에서 확인해야 합니다.",
+        "fullAccessDisabled": "WeChat에서 확인할 수 없는 작업이 바로 실행되지 않도록 개인 WeChat에서는 아직 Full Access를 지원하지 않습니다.",
+        "permissionModeDisabled": "개인 WeChat은 항상 Cindy Desktop의 확인 정책을 사용하므로 이 권한 모드는 사용할 수 없습니다."
+      },
+      "authorization": {
+        "title": "WeChat 인증",
+        "rebindTitle": "새 Cindy를 WeChat에 연결",
+        "description": "Tencent 인증 페이지가 시스템 브라우저에서 열립니다. 스캔 후 WeChat에서 Cindy와 대화할 수 있습니다.",
+        "rebindDescription": "이 WeChat에는 이미 연결이 있습니다. 계속하면 기존 Cindy 또는 OpenClaw 연결이 대체될 수 있습니다.",
+        "confirm": "인증하기",
+        "cancel": "취소",
+        "steps": {
+          "1": "「인증하기」를 선택해 시스템 브라우저에서 WeChat 연결 페이지를 엽니다.",
+          "2": "WeChat 앱으로 스캔하고 WeChat 화면에서 연결을 확인합니다.",
+          "3": "연결 후 Cindy로 돌아오면 상태가 자동으로 업데이트됩니다.",
+          "4": "인증 페이지는 Tencent가 제공하며 OpenClaw로 표시될 수 있습니다."
+        }
+      },
+      "waiting": {
+        "heading": "WeChat 확인 대기 중",
+        "note": "시스템 브라우저에서 스캔과 확인을 완료하세요. 성공하면 자동으로 업데이트됩니다. 계속하지 않으려면 취소할 수 있습니다.",
+        "cancel": "인증 취소"
+      },
+      "bound": {
+        "heading": "개인 WeChat 연결됨",
+        "attentionHeading": "개인 WeChat 확인 필요",
+        "notes": {
+          "disconnected": "연결은 저장되어 있지만 현재 실행 중이 아닙니다.",
+          "authorizing": "새 WeChat 인증을 준비하고 있습니다.",
+          "waiting_confirmation": "WeChat 스캔 확인을 기다리고 있습니다.",
+          "connected": "WeChat 개인 메시지는 이 컴퓨터의 Cindy로 직접 전달되며 Cindy 서버를 경유하지 않습니다.",
+          "reconnecting": "WeChat 연결을 복구하고 있습니다. 다시 스캔할 필요가 없습니다.",
+          "needs_reauth": "WeChat 인증이 만료되었거나 다른 연결로 교체되었습니다. 다시 스캔하세요.",
+          "disabled_by_policy": "호환성 정책으로 연결이 일시 중지되었습니다. 인증 정보와 대화는 유지됩니다.",
+          "error": "연결을 일시적으로 사용할 수 없습니다. 다시 스캔하거나 연동 해제 후 나중에 다시 시도하세요."
+        }
+      },
+      "actions": {
+        "connect": "WeChat 연결",
+        "rebind": "다시 연결",
+        "unbind": "연동 해제"
+      },
+      "workingDir": {
+        "title": "새 대화 작업 디렉터리",
+        "hint": "WeChat 첫 대화와 /new 이후에 사용합니다. 변경해도 현재 컨텍스트는 이동하지 않습니다.",
+        "managed": "Cindy 관리 전용 디렉터리 사용",
+        "reset": "기본값 복원",
+        "unavailable": "선택한 디렉터리에 접근할 수 없습니다. 새 대화는 임시로 Cindy 관리 디렉터리를 사용합니다."
+      },
+      "unbind": {
+        "title": "개인 WeChat 연동을 해제하시겠습니까?",
+        "description": "연동을 해제하면 메시지 송수신을 중지하고 로컬 WeChat 인증 정보와 미완료 작업을 삭제합니다. 기존 Cindy 대화, 기록, 저장된 첨부 파일은 유지됩니다.",
+        "confirm": "연동 해제",
+        "cancel": "취소"
+      },
+      "toasts": {
+        "authorizeFailed": "WeChat 인증을 시작할 수 없습니다. 잠시 후 다시 시도하세요.",
+        "cancelFailed": "WeChat 인증을 취소하지 못했습니다",
+        "unbound": "개인 WeChat 연동이 해제되었습니다",
+        "unbindFailed": "연동 해제에 실패했습니다. 잠시 후 다시 시도하세요.",
+        "workingDirSaved": "WeChat 새 대화 작업 디렉터리가 업데이트되었습니다",
+        "workingDirReset": "WeChat 새 대화가 기본 디렉터리를 사용합니다",
+        "workingDirFailed": "작업 디렉터리를 업데이트하지 못했습니다. 다시 선택하세요."
+      }
     },
     "discordBot": {
       "title": "Discord 봇",
@@ -2187,15 +2374,16 @@
       },
       "tips": {
         "cindy": "Cindy는 공식 제공 공유 봇입니다. 자격 증명을 신청할 필요 없이 Slack을 연결하고 @Cindy를 멘션하면 바로 작업을 맡길 수 있습니다.",
-        "personal": "개인 봇은 직접 발급한 자격 증명으로 Feishu / Discord에 연결합니다. 봇은 온전히 내 전용이지만, 앱 생성과 설정 입력은 직접 해야 합니다.",
-        "personalFeishuOnly": "개인 봇은 직접 발급한 자격 증명으로 Feishu에 연결합니다. 봇은 온전히 내 전용이지만, 앱 생성과 설정 입력은 직접 해야 합니다."
+        "personal": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 Feishu / Discord 인증 정보 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다.",
+        "personalFeishuOnly": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 Feishu 인증 정보 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다."
       },
       "defaults": {
         "title": "새 대화 설정",
         "channelDescriptions": {
           "feishu": "새 Feishu 대화는 이 Agent와 모델을 사용합니다. 기존 DM에는 /new를 보내 적용하세요.",
           "slack": "새 Slack 스레드는 이 Agent와 모델을 사용합니다.",
-          "discord": "새 Discord 대화는 이 Agent와 모델을 사용합니다. 기존 DM에는 /new를 보내 적용하세요."
+          "discord": "새 Discord 대화는 이 Agent와 모델을 사용합니다. 기존 DM에는 /new를 보내 적용하세요.",
+          "wechat": "새 WeChat 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요."
         },
         "agentLabel": "Agent",
         "modelLabel": "모델 설정",
@@ -2947,7 +3135,6 @@
     "ssoEntry": "기업 SSO로 로그인",
     "localModeEntry": "로그인 건너뛰기",
     "localModeOpening": "로컬 모드를 여는 중…",
-    "returnToLocalMode": "로컬 모드로 돌아가기",
     "localModeDescription": "Cindy 계정이 필요하지 않습니다. 데이터는 이 기기에 저장되며 클라우드 모델, 기기 간 연결 및 마켓 서비스는 사용할 수 없습니다.",
     "consentStatement": "<terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>을 읽고 동의합니다",
     "consentDialog": {
@@ -2961,6 +3148,13 @@
     "ssoOrgPlaceholder": "회사 ID, slug 또는 도메인",
     "ssoOrgHint": "기업 로그인 식별자를 모르시나요? 관리자에게 문의하세요",
     "ssoOrgDetected": "\"{{org}}\"의 통합 로그인 방식을 선택하세요",
+    "realmConsent": {
+      "title": "기업 지역에 연결",
+      "bodyCn": "이 기업은 중국 본토 지역에 있습니다.\n계속하면 Cindy가 해당 지역에 연결됩니다.",
+      "bodyGlobal": "이 기업은 글로벌 지역에 있습니다.\n계속하면 Cindy가 해당 지역에 연결됩니다.",
+      "agree": "로그인 계속",
+      "disagree": "취소"
+    },
     "ssoVerificationTitle": "기업 신원 확인",
     "ssoVerificationSubtitle": "최초 로그인 시 ID 공급자가 반환한 연락처 {{target}} 확인이 필요합니다",
     "enterCode": "인증 코드 입력",
@@ -2993,7 +3187,10 @@
       "errorBody": "{{appName}}(으)로 돌아가 다시 로그인해 주세요.",
       "returnButton": "{{appName}}(으)로 돌아가기"
     },
-    "globalRegion": "Global",
+    "regionPill": {
+      "cn": "CN",
+      "dev": "Dev"
+    },
     "errors": {
       "fallback": "로그인에 실패했습니다. 다시 시도하세요.",
       "AUTH_SERVICE_UNAVAILABLE": "로그인 서비스를 일시적으로 사용할 수 없습니다.",
@@ -3006,6 +3203,8 @@
       "RATE_LIMITED": "시도가 너무 많습니다. 잠시 후 다시 시도하세요.",
       "SSO_LOGIN_REQUIRED": "이 조직은 SSO 로그인이 필요합니다.",
       "ORG_SSO_NOT_FOUND": "해당 기업을 찾을 수 없거나 SSO 로그인이 활성화되어 있지 않습니다",
+      "ORG_REALM_AMBIGUOUS": "이 기업 식별자가 두 지역에 모두 존재합니다. 관리자에게 문의하세요.",
+      "ORG_REALM_UNAVAILABLE": "현재 기업 지역을 확인할 수 없습니다. 네트워크를 확인한 후 다시 시도하세요.",
       "SSO_EMAIL_REQUIRED": "기업 신원에서 유효한 이메일을 받지 못했습니다. 관리자에게 IdP 설정을 확인해 달라고 요청하세요.",
       "INVALID_SSO_VERIFICATION_TICKET": "기업 신원 확인이 만료되었습니다. SSO 로그인을 다시 시작하세요.",
       "SOCIAL_TOKEN_INVALID": "제공자 인증이 만료되었습니다.",
@@ -3103,6 +3302,8 @@
       "balanceAvailable": "잔액 사용 가능",
       "balanceDepleted": "잔액 소진",
       "balanceUnlimited": "잔액 무제한",
+      "resetCreditsAvailableLine": "사용 가능한 재설정: {{count}}회",
+      "resetCreditEarliestExpiryLine": "가장 빠른 만료: {{at}}",
       "windowLine": "{{label}} 남음 {{remaining}} (사용 {{used}})",
       "windowSegment": "{{label}} {{remaining}} 남음",
       "resetAt": "{{at}} 재설정",
@@ -3117,7 +3318,6 @@
       "modelWeeklyLabel": "{{model}} 주간",
       "windowSegment": "{{label}} {{remaining}} 남음",
       "resetAt": "{{at}} 재설정",
-      "resetInAt": "{{countdown}} 후 재설정 ({{at}})",
       "windowLine": "{{label}} 남음 {{remaining}} (사용 {{used}})",
       "sessionValueLabel": "세션 가치 {{cost}}",
       "planLine": "플랜 {{plan}}",
@@ -3253,6 +3453,7 @@
         "browser": "브라우저",
         "terminal": "터미널",
         "review": "리뷰",
+        "backgroundTasks": "백그라운드 작업",
         "collaboration": "협업",
         "unknown": "알 수 없는 탭",
         "ghostPanel": "플러그인 패널"
@@ -3276,6 +3477,8 @@
         "fileSub": "Files",
         "openReview": "리뷰 열기",
         "reviewSub": "Review",
+        "openBackgroundTasks": "백그라운드 작업 열기",
+        "backgroundTasksSub": "Background tasks",
         "openBrowser": "브라우저 열기",
         "browserSub": "Browser",
         "openTerminal": "터미널 열기",
@@ -3637,6 +3840,16 @@
       "touchCountAria_other": "{{count}}회 편집됨",
       "expandAllAria": "모든 파일 펼치기",
       "collapseAllAria": "모든 파일 접기"
+    },
+    "backgroundTasks": {
+      "running": "실행 중",
+      "completed": "완료",
+      "empty": "이 세션에는 아직 백그라운드 작업이 없습니다",
+      "stop": "중지",
+      "back": "뒤로",
+      "progressSummary": "{{done}}/{{total}} Agent",
+      "tokens": "{{value}} tokens",
+      "noProgress": "진행 상황 정보가 아직 없습니다"
     }
   },
   "update": {
@@ -3667,7 +3880,7 @@
       "title": "업데이트 소식",
       "newFeatures": "새로운 기능",
       "bugFixes": "버그 수정",
-      "craftedBy": "제작",
+      "thanksTo": "감사",
       "gotIt": "확인",
       "ariaDescription": "버전 {{version}} 릴리스 노트",
       "ariaDescriptionSpan": "v{{from}} 이후 {{count}}개 버전의 릴리스 노트",
@@ -3821,6 +4034,8 @@
         "ACTION_STALE": "설정 내용이 변경되었습니다. 설정 작업을 다시 선택하세요.",
         "AUTH_CANCELLED": "인증이 취소되었습니다. 필요한 경우 다시 인증하세요.",
         "AUTH_FAILED": "인증을 완료할 수 없습니다. 다시 시도하세요.",
+        "AUTH_NETWORK": "인증 서비스에 연결할 수 없습니다. 네트워크 연결을 확인한 후 다시 시도하세요.",
+        "AUTH_SERVICE_UNAVAILABLE": "인증 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도하세요.",
         "INLINE_INVALID": "설정 내용이 올바르지 않습니다. 확인한 후 다시 시도하세요.",
         "INLINE_UNAVAILABLE": "이 Cindy 버전에서는 채팅에서 이 설정을 저장할 수 없습니다. Cindy를 업데이트한 후 다시 시도하세요.",
         "SAVE_FAILED": "설정을 저장할 수 없습니다. 다시 시도하세요.",
@@ -3945,7 +4160,14 @@
       "trigger": {
         "placeholder": "모델 선택",
         "aria": "모델 선택. 현재: {{model}}",
-        "ariaWithEffort": "모델 선택. 현재: {{model}}, 추론 강도: {{effort}}"
+        "ariaWithEffort": "모델 선택. 현재: {{model}}, 추론 강도: {{effort}}",
+        "pendingAria": "모델 선택. 다음 메시지: {{agent}} · {{model}}",
+        "pendingAriaWithEffort": "모델 선택. 다음 메시지: {{agent}} · {{model}}, 추론 강도: {{effort}}",
+        "agent": {
+          "claudeCode": "Claude Code",
+          "codex": "Codex",
+          "pending": "다음: {{agent}}"
+        }
       },
       "category": {
         "anthropic": "Anthropic",
@@ -4229,6 +4451,12 @@
       "editTitle": "붙여넣은 텍스트 편집",
       "cancelEdit": "편집 취소",
       "saveEdit": "텍스트 저장"
+    },
+    "permissionPrompt": {
+      "alwaysAllowScoped": "이 세션에서 {{scope}} 항상 허용",
+      "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
+      "alwaysAllowSessionHint": "이번 요청 한 번이 아니라 이 세션 전체에 적용됩니다.",
+      "ruleSeparator": ", "
     }
   },
   "onboarding": {
@@ -4263,6 +4491,7 @@
       "refining": "다듬는 중",
       "result": "음성 입력",
       "inputFailed": "입력 실패",
+      "transcriptKept": "인식된 텍스트는 유지됨",
       "permissionRequired": "권한 필요",
       "error": "음성 입력 실패"
     },
@@ -4300,7 +4529,11 @@
     "apiKeyRequired": "음성 입력을 사용하려면 먼저 API Key를 설정하세요.",
     "cindyServiceUnavailable": "Cindy 음성 서비스를 사용할 수 없습니다. 네트워크를 확인하거나 서비스 소스를 전환하세요.",
     "asrServiceUnavailable": "음성 인식 서비스에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
-    "emptyTranscript": "음성이 감지되었지만 텍스트를 인식하지 못했습니다. 다시 시도하세요."
+    "emptyTranscript": "음성이 감지되었지만 텍스트를 인식하지 못했습니다. 다시 시도하세요.",
+    "connectionInterrupted": "음성 연결이 중단되었습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
+    "recognitionStalled": "음성 인식 결과가 더 이상 오지 않습니다. 다시 시도하세요.",
+    "transcriptKept": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 바로 이어서 편집할 수 있습니다.",
+    "transcriptKeptOverlay": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 복사해서 이어가세요."
   },
   "chat": {
     "askUserQuestion": {
@@ -4348,6 +4581,9 @@
         "stopped": "중지됨"
       },
       "stop": "이 작업 중지",
+      "openInPanel": "백그라운드 작업 패널에서 열기",
+      "workflowProgressLine": "{{phase}} · {{done}}/{{total}} Agent",
+      "workflowProgressCount": "{{done}}/{{total}} Agent",
       "tokens": "{{count}} tokens",
       "toolUses_one": "도구 호출 {{count}}회",
       "toolUses_other": "도구 호출 {{count}}회",
@@ -4395,11 +4631,10 @@
       "retryTitle": "마지막 메시지 다시 보내기",
       "cancelTitle": "오류 알림 닫기",
       "retry": "다시 시도",
-      "cancel": "닫기",
       "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 대화에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
       "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 대화는 계속할 수 없습니다. 새 대화를 시작하세요.",
       "budgetModelHint": "계속 실패하면 일반 GPT 모델로 전환해 보세요.",
-      "codexAuthMissing": "원격 codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 ~/.codex/auth.json을 원격으로 푸시한 후 다시 시도하세요.",
+      "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",
       "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} Settings → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 Settings에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 대화를 시작하세요.",
       "codexSessionExpired": "OpenAI 연결을 업데이트해야 합니다. ChatGPT를 다시 연결하면 계속할 수 있습니다. {{appName}}에서 시스템 Codex CLI를 로그아웃하거나 다른 모델 소스의 재연결을 요구하지 않습니다.",
       "codexSessionExpiredDialog": {
@@ -4411,7 +4646,7 @@
       "codexAuthSynced": "인증이 동기화되었습니다. 「다시 시도」를 클릭하여 다시 보내세요.",
       "syncAuth": "인증 동기화",
       "syncAuthSyncing": "동기화 중…",
-      "syncAuthTitle": "로컬 ~/.codex/auth.json을 원격 codex-home에 푸시",
+      "syncAuthTitle": "로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시",
       "syncAuthSuccess": "동기화되었습니다 — 「다시 시도」를 클릭하여 다시 보내세요",
       "syncAuthFailed": "동기화 실패: {{msg}}",
       "syncAuthDaemonRestartFailed": "자격 증명이 원격에 푸시되었지만 이전 daemon이 재시작되지 않았습니다 — 원격에 다시 연결한 후 재시도하세요",
@@ -4424,6 +4659,7 @@
       "networkUnreachable": "네트워크 오류: 서비스에 일시적으로 연결할 수 없습니다. ‘다시 시도’를 눌러 주세요.",
       "networkUnreachableNoRetry": "네트워크 오류: 서비스에 일시적으로 연결할 수 없습니다.",
       "networkAutoRetrying": "네트워크 오류: 자동으로 다시 시도하는 중…",
+      "networkReconnecting": "연결이 끊어졌습니다. 다시 연결하는 중({{attempt}}/{{maxAttempts}})…",
       "networkShowRaw": "원본 오류 보기",
       "networkHideRaw": "원본 오류 숨기기",
       "silentStopContinue": "계속",
@@ -4740,7 +4976,8 @@
       "agentSwitch": {
         "label": "{{from}}에서 {{to}}(으)로 전환됨",
         "toggleHint": "인계 내용 보기",
-        "handoffTitle": "인계 내용——전환 시 새 엔진에 전송된 컨텍스트 요약(메시지에는 표시되지 않음)",
+        "handoffTitle": "인계 내용——전환 시 새 엔진에 전송된 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
+        "handoffTitleEnglishSource": "인계 내용——전환 시 새 엔진에 전송된 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)",
         "resumedBadge": "세션 재개됨"
       }
     },
@@ -4893,13 +5130,19 @@
     "workflowTree": {
       "agentsCount": "에이전트 {{count}}개",
       "attempt": "{{count}}번째 시도",
+      "endedEarly": "완료 전에 종료됨",
       "state": {
         "queued": "대기 중",
+        "pending": "대기 중",
+        "start": "시작 중",
         "running": "실행 중",
+        "progress": "실행 중",
         "done": "완료",
         "completed": "완료",
         "failed": "실패",
-        "stopped": "중지됨"
+        "error": "실패",
+        "stopped": "중지됨",
+        "killed": "강제 종료됨"
       }
     },
     "credentialSwitchWait": {
@@ -4941,6 +5184,21 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "생각 중…",
+      "generating": "생성 중…",
+      "editingFiles": "파일 수정 중…",
+      "searchingWeb": "웹 검색 중…",
+      "generatingImage": "이미지 생성 중…",
+      "compacting": "컨텍스트 압축 중…",
+      "done": "완료",
+      "waiting": "잠시만 기다려 주세요…",
+      "working": "작업 중…",
+      "running": "실행 중…",
+      "turnStart": "{{name}}님, 처리 중이에요…",
+      "issueTip": "{{name}}님, /issue로 피드백이나 제안을 보내 주세요",
+      "runningTool": "{{tool}} 실행 중…"
+    },
     "remoteSession": {
       "reconnecting": "제어 대상 기기와 연결이 끊겼습니다. 다시 연결 중…",
       "hostOffline": "제어 대상 기기가 오프라인이라 지금은 동기화할 수 없습니다",
@@ -6288,10 +6546,20 @@
       "typeFeature": "기능 제안",
       "titleLabel": "제목",
       "bodyLabel": "본문(Markdown)",
-      "identityGithubUser": "제출 계정: GitHub 사용자 @{{login}}(본인)",
-      "identityPlatform": "제출 계정: Cindy 플랫폼 대리 제출(GitHub App {{login}})",
+      "submissionMethodLabel": "게시 방식",
+      "identityGithubUser": "GitHub 계정 @{{login}}에서 직접 게시",
+      "identityGithubUserHint": "GitHub의 Issue 작성자가 되며 직접 수정하거나 닫을 수 있습니다",
+      "identityPlatform": "Cindy에서 대신 게시(GitHub App {{login}})",
+      "identityPlatformHint": "GitHub의 Issue 작성자가 아니므로 직접 수정하거나 닫을 수 없습니다",
+      "publicNameLabel": "공개 서명",
+      "publicNameHint": "이 서명은 Issue 본문에 공개적으로 표시됩니다",
+      "anonymous": "익명",
+      "useAnonymous": "익명 서명 사용",
       "envLine": "제출 시 자동으로 첨부됩니다: 클라이언트 {{appVersion}} · {{platform}} {{arch}} · 표시 언어 {{uiLanguage}}",
-      "submit": "제출",
+      "regionLine": "지역: {{region}}",
+      "regionCodeCn": "CN",
+      "regionCodeDev": "Dev",
+      "submit": "피드백 제출",
       "cancel": "취소"
     },
     "redirect": {
@@ -7159,11 +7427,6 @@
       "learnButton": "이 스킬 학습하기"
     }
   },
-  "workflows": {
-    "toast": {
-      "none": "이 세션에서 실행 중인 워크플로우가 없습니다"
-    }
-  },
   "planMode": {
     "menuItem": "계획 모드",
     "indicator": {
@@ -7369,7 +7632,7 @@
     },
     "providers": {
       "alipay": "Alipay",
-      "stripe": "카드"
+      "stripe": "Stripe"
     },
     "currentSubscription": {
       "title": "현재 구독",

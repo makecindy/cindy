@@ -10,7 +10,10 @@ const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, options?: { attempt?: number; maxAttempts?: number }) =>
+      options?.attempt && options.maxAttempts
+        ? `${key}:${options.attempt}/${options.maxAttempts}`
+        : key,
   }),
 }));
 
@@ -71,6 +74,17 @@ describe('ErrorBanner Codex xAI auth classification', () => {
 });
 
 describe('ErrorBanner network retry guidance', () => {
+  it('shows Codex reconnect progress while the turn keeps running', () => {
+    render(createElement(ErrorBanner, {
+      error: 'Reconnecting... 3/5',
+      onRetry: vi.fn(),
+      isRecoverable: true,
+    }));
+
+    expect(screen.getByText('chat.errorBanner.networkReconnecting:3/5')).toBeTruthy();
+    expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+  });
+
   it('does not tell the user to click Retry when no safe retry target exists', () => {
     render(createElement(ErrorBanner, {
       error: 'Request timed out.',

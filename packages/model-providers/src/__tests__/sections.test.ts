@@ -32,7 +32,12 @@ function provider(id: string, name: string, ccModels: CatalogModel[]): ProviderV
     source: id === 'xd' || id === 'anthropic' || id === 'openai' ? 'builtin' : 'user',
     agents: ['claude-code'],
     auth: { method: 'managed' },
-    routing: {},
+    routing: {
+      'claude-code': {
+        upstream: 'https://example.test',
+        authStrategy: 'gateway-key',
+      },
+    },
     models: { 'claude-code': ccModels },
     connected: true,
   };

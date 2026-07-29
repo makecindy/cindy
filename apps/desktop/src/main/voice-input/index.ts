@@ -19,6 +19,10 @@ import {
   type VoiceTimelineEvent,
 } from '@cindy/voice-input-core';
 import { createLogger } from '../logger.js';
+import {
+  isProviderModelRouteDisabled,
+  isUtilityRouteDisabled,
+} from '../utility-model/oneShotCandidates.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -80,6 +84,7 @@ import {
   refreshVoiceInputInputMonitoringPermissionSnapshot,
   registerActiveInlineVoiceInputWebContents,
   showVoiceInputDictionaryToast,
+  takeOverlayDictionaryToastAnchor,
   unregisterActiveInlineVoiceInputWebContents,
 } from './global.js';
 import {
@@ -306,13 +311,30 @@ const DICTIONARY_LEARNING_TEXT_DEBUG = !app.isPackaged;
 
 export async function adviseAndRecordVoiceInputDictionaryLearning(
   payload: DictationDictionaryAdviceInput | undefined,
-  options: { senderId?: number | string; sourceLabel?: string } = {},
+  options: {
+    senderId?: number | string;
+    sourceLabel?: string;
+    /**
+     * 该请求是否真的来自全局浮窗的 renderer。只有 main 依据 `event.sender` 反查得出
+     * 的结论才算，不能用 payload.source —— 那是 renderer 自报的，别的 renderer 拿
+     * 共享的 adviseDictionaryLearning 桥填个 'external_overlay' 就能消费掉浮窗锚点，
+     * 让真正的浮窗请求失去锚点、自己拿到浮窗的位置。
+     */
+    fromOverlaySender?: boolean;
+  } = {},
 ): Promise<DictionaryAdviceIpcResult> {
   if (!payload?.beforeText || !payload.afterText) {
     return { ok: true, actions: [], elapsedMs: 0 };
   }
 
   const sourceLabel = options.sourceLabel ?? payload.source ?? 'in_app';
+  // 锚点资格只认 main 侧由 event.sender 反查出的 fromOverlaySender，不认 payload.source
+  // 这个 renderer 自报字段。锚点必须在任何 await 之前取：此刻的呈现代次才代表这次请求
+  // 的来源会话，绑定后无论 advisor 何时返回都只认自己那份；等 advisor 返回后再取，
+  // 并发请求会互相抢。跳过分支同样取走，让过期锚点尽早出队。
+  const toastAnchor = options.fromOverlaySender === true
+    ? takeOverlayDictionaryToastAnchor()
+    : null;
   const skipReason = getDictationDictionaryAdviceSkipReason(payload);
   if (skipReason) {
     log.debug('dictionary learning advice skipped', {
@@ -380,6 +402,10 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
           entryId: entry.id,
           term: entry.text,
         })),
+        // 锚点在本函数入口、任何 await 之前就绑定好了（见 toastAnchor），这里只是
+        // 把它交给 toast：并发的 advisor 请求各认自己那次会话的现场，先返回的不会
+        // 消费掉别人的。应用内听写不带锚点，走默认位置。
+        { anchor: toastAnchor },
       );
     }
     log.debug('dictionary learning advice', {
@@ -752,6 +778,16 @@ async function resolveVoiceInputRefinerChainForRuntime(
     const profile = profilesByProvider.get(provider);
     const readiness = readinessByProvider.get(provider);
     if (!profile || !readiness) continue;
+    // 停用轴:BYOK 精修是直连的真实付费调用(CodexResponses / LiteLLM 客户端),
+    // 与 utility 档位共享真实路由供应商 —— 被停用的档位从链中剔除,交给下一个
+    // 候选(managed 模式在上方早返,由 voice-server 端裁决;PR #744 review 第十五轮)。
+    if (isUtilityRouteDisabled(profile)) {
+      log.info('refiner profile skipped: disabled in settings', {
+        profileId: profile.id,
+        model: profile.model,
+      });
+      continue;
+    }
     refinerChainProfiles.push(profile);
     refinerReadinessList.push(readiness);
   }
@@ -836,6 +872,25 @@ async function getVoiceInputRefinerReadiness(
     auth: 'api-key',
     settingsTab: profile.settingsTab,
     error: ok ? undefined : profile.missingCredentialMessage,
+  };
+}
+
+/**
+ * TextModelClient 的停用轴 live 包装(BYOK):每次 requestJson(= 一次精修付费请求)
+ * 前按当前 override 重查该档的真实路由,停用即抛错 —— FallbackTextModelClient 将其
+ * 视为该档失败,自然落到下一档(PR #744 review 第二十一轮)。
+ */
+function guardRefinerClientAgainstDisable(
+  profile: VoiceInputRefinerProfile,
+  client: TextModelClient,
+): TextModelClient {
+  return {
+    requestJson: (input) => {
+      if (isUtilityRouteDisabled(profile)) {
+        return Promise.reject(new Error('voice refiner route disabled in settings'));
+      }
+      return client.requestJson(input);
+    },
   };
 }
 
@@ -1286,6 +1341,27 @@ async function getVoiceInputReadiness(): Promise<VoiceInputReadiness> {
 // The startable chain for one dictation session: credential-ready candidates
 // in cooldown-aware priority order. FallbackAsrProvider walks this list at
 // connect time.
+/**
+ * ASR 档位 → 真实路由供应商:litellm-* 走 XD 网关,openai-* / codex 凭证走 OpenAI;
+ * ElevenLabs / 自定义端点不在供应商目录,不受停用轴约束(独立凭证独立计费)。
+ */
+function asrProfileRouteProviderId(profile: VoiceInputAsrProfile): string | null {
+  if (profile.id.startsWith('litellm-')) return 'xd';
+  if (profile.auth === 'codex' || profile.id.startsWith('openai-')) return 'openai';
+  return null;
+}
+
+/**
+ * ASR 档位在停用轴下是否不可发:按 (真实路由供应商, 档位模型) 双查 —— 供应商级
+ * 停用或该音频模型条目被点名停用(如 XD 启用但停了 elevenlabs/scribe_v2)任一命中
+ * 即真(PR #744 review 第二十五轮)。不在供应商目录的档位(ElevenLabs 直连 /
+ * 自定义端点,routeProviderId=null)不受约束。
+ */
+function isAsrProfileRouteDisabled(profile: VoiceInputAsrProfile): boolean {
+  const routeProviderId = asrProfileRouteProviderId(profile);
+  return !!routeProviderId && isProviderModelRouteDisabled(routeProviderId, profile.model);
+}
+
 async function resolveStartableAsrChain(): Promise<VoiceInputProviderKind[]> {
   const byokMode = isVoiceInputByokMode();
   const startable: VoiceInputProviderKind[] = [];
@@ -1294,6 +1370,10 @@ async function resolveStartableAsrChain(): Promise<VoiceInputProviderKind[]> {
     // Managed mode only dials voice-server-eligible profiles; explicit BYOK
     // mode may start any credential-ready profile from the configured chain.
     if (!byokMode && !isManagedVoiceAsrProfile(profile)) continue;
+    // 停用轴(BYOK,PR #744 review 第十六/二十五轮):转写与精修同为独立付费路由 ——
+    // 供应商级停用或该音频模型被点名停用的 ASR 档位不再进入可启动链。managed 模式
+    // 路由与计费都在 voice-server,不查本机供应商停用。
+    if (byokMode && isAsrProfileRouteDisabled(profile)) continue;
     const credential = await getAsrProfileCredentialReadiness(profile);
     if (credential.ok) startable.push(kind);
   }
@@ -1678,6 +1758,12 @@ export async function transcribeVoiceInputAudioFile(
 ): Promise<VoiceInputAudioFileTranscriptionResult> {
   const provider: VoiceInputProviderKind = 'litellm-batch';
   const profile = getVoiceInputAsrProfile(provider);
+  // 停用轴(PR #744 review 第二十二/二十五轮):device-link 批量转写与内联 ASR 链
+  // 同为经 XD 网关凭证的新付费调用 —— 本路径恒用 litellm proxy key 直连计费,不经
+  // voice-server,提交前按 (来源, 模型) 双查,供应商级或该音频模型被点名停用即拒绝。
+  if (isAsrProfileRouteDisabled(profile)) {
+    throw new Error('voice transcription route disabled in settings');
+  }
   const { proxyApiKey, proxyBaseUrl } = readLiteLlmProxyConfig();
   if (!proxyApiKey || !proxyBaseUrl) throw new Error(profile.missingCredentialMessage);
   const text = await transcribeLiteLlmAudioFile({
@@ -1884,7 +1970,12 @@ export function registerVoiceInputIpc(): void {
   ipcMain.handle(
     'voice-input:dictionary-learning:advise',
     async (event, payload: DictationDictionaryAdviceInput | undefined): Promise<DictionaryAdviceIpcResult> => {
-      return adviseAndRecordVoiceInputDictionaryLearning(payload, { senderId: event.sender.id });
+      return adviseAndRecordVoiceInputDictionaryLearning(payload, {
+        senderId: event.sender.id,
+        // 这个桥是所有 renderer 共享的：浮窗 toast 锚点的资格由真实 sender 决定，
+        // 不看 payload 里自报的 source。
+        fromOverlaySender: isGlobalVoiceInputOverlaySender(event.sender),
+      });
     },
   );
 
@@ -2009,7 +2100,16 @@ export function registerVoiceInputIpc(): void {
     try {
       provider = new FallbackAsrProvider(startableAsrChain.map((kind) => ({
         kind,
-        create: () => createVoiceInputProvider(kind, asrLanguageHint, voiceContext),
+        create: () => {
+          // BYOK live 谓词(PR #744 review 第二十一/二十五轮):后备转写档在前一档
+          // 失败后才被 connect,可能距会话开始数分钟 —— create 时刻按当前 override
+          // 以 (来源, 模型) 双查,停用即抛错让 fallback 落到下一家。managed 模式
+          // 路由在 voice-server,不查。
+          if (!voiceContext && isAsrProfileRouteDisabled(getVoiceInputAsrProfile(kind))) {
+            throw new Error('voice ASR provider disabled in settings');
+          }
+          return createVoiceInputProvider(kind, asrLanguageHint, voiceContext);
+        },
       })));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2067,13 +2167,19 @@ export function registerVoiceInputIpc(): void {
           const refinerAttempts: FallbackTextModelAttempt[] = readyRefinerProfiles.map((profile) => ({
             profileId: profile.id as VoiceInputRefinerProviderKind,
             model: profile.model,
-            client: createVoiceInputTextModelClient(profile, {
-              timeoutMs: VOICE_INPUT_REFINER_IDLE_TIMEOUT_MS,
-              onUsage: (usage) => {
-                if (!runId) return;
-                emit({ type: 'usage', runId, refinement: { ...usage, refinerProvider: profile.id } });
-              },
-            }),
+            // live 谓词包装(PR #744 review 第二十一轮):精修请求在用户停止说话时才
+            // 发出,可能距控制器构造数分钟 —— 每次请求前按当前 override 重查,停用
+            // 即抛错让 fallback 落到下一档。
+            client: guardRefinerClientAgainstDisable(
+              profile,
+              createVoiceInputTextModelClient(profile, {
+                timeoutMs: VOICE_INPUT_REFINER_IDLE_TIMEOUT_MS,
+                onUsage: (usage) => {
+                  if (!runId) return;
+                  emit({ type: 'usage', runId, refinement: { ...usage, refinerProvider: profile.id } });
+                },
+              }),
+            ),
             // A caller-supplied cache scope flows through unchanged for every
             // attempt; the default per-profile scope keeps cache keys separate
             // across providers.
@@ -2139,8 +2245,8 @@ export function registerVoiceInputIpc(): void {
           });
           return true;
         },
-        onError: (message, code) => {
-          if (runId) emit({ type: 'error', runId, message, code });
+        onError: (message, code, details) => {
+          if (runId) emit({ type: 'error', runId, message, code, transcriptKept: details?.transcriptKept });
         },
       },
     });

@@ -81,7 +81,10 @@ const providers = [
       'claude-code': claudeModels,
       codex: codexModels,
     },
-    routing: {},
+    routing: {
+      'claude-code': { upstream: 'https://xd.example', authStrategy: 'gateway-key' },
+      codex: { upstream: 'https://xd.example', authStrategy: 'gateway-key' },
+    },
   },
   {
     id: 'openai',
@@ -93,7 +96,9 @@ const providers = [
       'claude-code': [],
       codex: openAiCodexModels,
     },
-    routing: {},
+    routing: {
+      codex: { upstream: 'https://api.openai.com', authStrategy: 'oauth-passthrough' },
+    },
   },
 ];
 
@@ -189,7 +194,7 @@ describe('resolveImSessionDefaults', () => {
     });
   });
 
-  it('drops a stale provider override instead of routing a new IM session to it', async () => {
+  it('reroutes a stale provider override to an enabled source instead of routing to it', async () => {
     mocks.readImDefaultSettings.mockReturnValue({
       agentKind: 'codex',
       agents: {
@@ -206,11 +211,116 @@ describe('resolveImSessionDefaults', () => {
       },
     });
 
+    // 失效的显式来源(xd 不提供 gpt-5.5)不再仅回落 null 走隐式默认,而是经启用
+    // rail 显式解析替代来源(openai)—— turnRunner 直建会话不过路由守卫,隐式
+    // 默认落点可能是被停用的拷贝(PR #744 review 第十轮)。
     await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
       agentKind: 'codex',
       model: 'gpt-5.5',
       effort: 'high',
-      providerId: null,
+      providerId: 'openai',
+    });
+  });
+
+  it('reroutes an implicit default whose native-default copy is disabled', async () => {
+    // providerId 留空(隐式路由):原生默认落点(codex → openai)的拷贝被停用而 xd
+    // 有启用拷贝时必须显式改道 —— turnRunner 直建不过路由守卫(第十六轮)。
+    mocks.listProviders.mockResolvedValue([
+      {
+        ...providers[0],
+        models: {
+          'claude-code': claudeModels,
+          codex: [{ ...openAiCodexModels[0] }],
+        },
+      },
+      {
+        ...providers[1],
+        models: {
+          'claude-code': [],
+          codex: [{ ...openAiCodexModels[0], disabled: true }],
+        },
+      },
+    ]);
+    mocks.readImDefaultSettings.mockReturnValue({
+      agentKind: 'codex',
+      agents: {
+        'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'xhigh' },
+        codex: { providerId: null, model: 'gpt-5.5', effort: 'high' },
+      },
+    });
+
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+    });
+  });
+
+  it('drops a saved provider whose model copy is disabled and reroutes to the enabled copy', async () => {
+    mocks.listProviders.mockResolvedValue([
+      {
+        ...providers[0],
+        models: {
+          'claude-code': claudeModels,
+          // xd 家的 gpt-5.5 拷贝被停用(buildRegistry 烘焙形态);openai 家启用。
+          codex: [{ ...openAiCodexModels[0], disabled: true }],
+        },
+      },
+      providers[1],
+    ]);
+    mocks.readImDefaultSettings.mockReturnValue({
+      agentKind: 'codex',
+      agents: {
+        'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'xhigh' },
+        codex: { providerId: 'xd', model: 'gpt-5.5', effort: 'high' },
+      },
+    });
+
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+    });
+  });
+
+  it('R25:改道后 effort 按落地来源的拷贝 reconcile,不沿用停用拷贝的档位', async () => {
+    // 保存来源 xd 的拷贝(支持 high,已停用)→ 改道 openai 拷贝(只到 medium):
+    // effort 必须按落地拷贝重算(high → medium),否则直建会话被上游拒。
+    mocks.listProviders.mockResolvedValue([
+      {
+        ...providers[0],
+        models: {
+          'claude-code': claudeModels,
+          codex: [{ ...openAiCodexModels[0], disabled: true }],
+        },
+      },
+      {
+        ...providers[1],
+        models: {
+          'claude-code': [],
+          codex: [
+            {
+              ...openAiCodexModels[0],
+              efforts: ['minimal', 'low', 'medium'],
+              defaultEffort: 'medium',
+            },
+          ],
+        },
+      },
+    ]);
+    mocks.readImDefaultSettings.mockReturnValue({
+      agentKind: 'codex',
+      agents: {
+        'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'xhigh' },
+        codex: { providerId: 'xd', model: 'gpt-5.5', effort: 'high' },
+      },
+    });
+
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      effort: 'medium',
     });
   });
 

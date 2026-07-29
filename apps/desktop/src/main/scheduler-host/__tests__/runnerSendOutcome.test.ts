@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   getSessionRowSnapshot: vi.fn(),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
+  isSessionInTurn: vi.fn(() => false),
   resolveWorkingDir: vi.fn(),
   backfillSessionMeta: vi.fn(),
 }));
@@ -38,7 +39,7 @@ vi.mock('../../localDb/dialogueWorkspace', () => ({
 
 vi.mock('../../maker-ipc/register.js', () => ({
   wireSessionToIpc: mocks.wireSessionToIpc,
-  isSessionInTurn: () => false,
+  isSessionInTurn: mocks.isSessionInTurn,
   noteSilentStopUserSend: vi.fn(),
   onSilentStopSettled: vi.fn(() => () => {}),
 }));
@@ -238,6 +239,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     mocks.createMessage.mockResolvedValue(undefined);
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: 'F:\\XDMaker' });
+    mocks.isSessionInTurn.mockReturnValue(false);
     mocks.getSessionRowSnapshot.mockResolvedValue({
       status: 'active',
     });
@@ -298,15 +300,22 @@ describe('MakerScheduleRunner send outcome policy', () => {
   });
 
   it('applies a deferred switch before heartbeat meta lookup and creates the target engine session', async () => {
-    const h = createSessionHarness(async () => ({
-      accepted: false,
-      reason: 'cancelled-before-dispatch',
-    }));
     const order: string[] = [];
-    const applyPendingAgentSwitch = vi.fn(async () => {
-      order.push('apply');
+    const h = createSessionHarness(async () => {
+      order.push('send');
+      return {
+        accepted: false,
+        reason: 'cancelled-before-dispatch',
+      };
     });
-    const { runner, maker } = createRunnerHarness(h.session, { applyPendingAgentSwitch });
+    const releaseAgentSwitchLock = vi.fn(() => {
+      order.push('release');
+    });
+    const acquirePendingAgentSwitch = vi.fn(async () => {
+      order.push('apply');
+      return releaseAgentSwitchLock;
+    });
+    const { runner, maker } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
     vi.mocked(maker.getSessionMeta).mockImplementation(async () => {
       order.push('meta');
       return {
@@ -338,7 +347,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     ).rejects.toThrow(/cancelled-before-dispatch/);
 
     expect(order.slice(0, 2)).toEqual(['apply', 'meta']);
-    expect(applyPendingAgentSwitch).toHaveBeenCalledWith('scheduler-session', ctx.signal);
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('scheduler-session', ctx.signal);
     expect(maker.createSession).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'scheduler-session',
@@ -347,6 +356,74 @@ describe('MakerScheduleRunner send outcome policy', () => {
       }),
     );
     expect(h.send).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['apply', 'meta', 'send', 'release']);
+  });
+
+  it('releases the heartbeat route lock before deferring to recent user activity', async () => {
+    const order: string[] = [];
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const releaseAgentSwitchLock = vi.fn(() => {
+      order.push('release');
+    });
+    const acquirePendingAgentSwitch = vi.fn(async () => releaseAgentSwitchLock);
+    const { runner, maker } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
+    vi.mocked(maker.getSessionMeta).mockResolvedValue({
+      id: 'scheduler-session',
+      agentKind: 'codex',
+      workDir: 'F:\\XDMaker',
+      model: 'gpt-5.5-codex',
+      effort: 'high',
+      permissionMode: 'bypassPermissions',
+      fastMode: false,
+    } as never);
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      userSendAt: Date.now(),
+      providerId: null,
+    });
+    mocks.isSessionInTurn.mockReturnValue(true);
+
+    const result = await runner.fire(
+      baseSchedule({ targetSessionId: 'scheduler-session' }),
+      createFireContext(),
+    );
+
+    expect(result).toMatchObject({
+      sessionId: 'scheduler-session',
+      deferred: true,
+    });
+    expect(order).toEqual(['release']);
+    expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(1);
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it('releases the heartbeat route lock before reporting an archived target', async () => {
+    const order: string[] = [];
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const releaseAgentSwitchLock = vi.fn(() => {
+      order.push('release');
+    });
+    const acquirePendingAgentSwitch = vi.fn(async () => releaseAgentSwitchLock);
+    const { runner, notifier } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
+    notifier.notify.mockImplementation(async () => {
+      order.push('notify');
+    });
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'archived',
+      userSendAt: null,
+      providerId: null,
+    });
+
+    await expect(
+      runner.fire(
+        baseSchedule({ targetSessionId: 'scheduler-session' }),
+        createFireContext(),
+      ),
+    ).rejects.toThrow(/target session not available/);
+
+    expect(order).toEqual(['release', 'notify']);
+    expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(1);
+    expect(h.send).not.toHaveBeenCalled();
   });
 
   it('captures the scheduler git baseline after the user row exists and aborts it when send is rejected', async () => {

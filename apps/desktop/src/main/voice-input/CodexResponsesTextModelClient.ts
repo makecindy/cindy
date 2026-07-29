@@ -6,7 +6,7 @@ import type { TextModelClient } from '@cindy/voice-input-core';
 
 import { createLogger } from '../logger.js';
 import { describeErrorWithCause, markRefinerModelOutputError } from './refinerErrorKind.js';
-import { createRefinerHttpDispatcher } from './refinerHttpDispatcher.js';
+import { createRefinerHttpDispatcher, resolveRefinerDispatcher } from './refinerHttpDispatcher.js';
 import { extractJsonStringFieldSnapshot } from './streamingJson.js';
 
 const log = createLogger('voice-input:refine-model');
@@ -57,7 +57,8 @@ export async function prewarmCodexResponsesEndpoint(): Promise<void> {
     const response = await undiciFetch(DEFAULT_PREWARM_URL, {
       method: 'HEAD',
       signal: controller.signal,
-      dispatcher: codexResponsesDispatcher,
+      // 预热必须与真实请求同一个池,否则握手白做(代理生效时是代理池)。
+      dispatcher: await resolveRefinerDispatcher(DEFAULT_PREWARM_URL, codexResponsesDispatcher),
     });
     log.debug('codex responses endpoint prewarmed', { status: response.status });
     await response.arrayBuffer().catch(() => undefined);
@@ -208,6 +209,9 @@ export class CodexResponsesTextModelClient implements TextModelClient {
       if (timeout) clearTimeout(timeout);
       timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     };
+    // 代理解析放在看门狗与 timing 起表之前:它是本机一次解析(带 30s 缓存),
+    // 不该算进 response-headers 预算,也不该污染 send 耗时。
+    const dispatcher = await resolveRefinerDispatcher(this.baseUrl, codexResponsesDispatcher);
     armIdleTimeout('response headers');
     const sendStart = performance.now();
     let firstByteAt: number | null = null;
@@ -216,7 +220,7 @@ export class CodexResponsesTextModelClient implements TextModelClient {
       const response = await undiciFetch(this.baseUrl, {
         method: 'POST',
         signal: controller.signal,
-        dispatcher: codexResponsesDispatcher,
+        dispatcher,
         headers,
         body: JSON.stringify(body),
       });

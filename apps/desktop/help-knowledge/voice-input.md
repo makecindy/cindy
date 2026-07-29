@@ -35,3 +35,4 @@ Voice input lets you dictate instead of typing. Hold a shortcut, talk, release â
 
 - Push-and-hold is the primary activation mode; **Fast activation** changes the warm-up behavior, not the trigger itself.
 - If the global shortcut fails to register (e.g. it's already taken by another app like an IME), you'll see a warning in the page; pick a different shortcut.
+- If the connection drops mid-dictation, the text recognized up to that point is kept â€” it lands in the composer (or stays in the overlay with a copy button) alongside the error, instead of being discarded. That salvaged text is raw ASR output: refinement needs the connection that just failed, so it is skipped.

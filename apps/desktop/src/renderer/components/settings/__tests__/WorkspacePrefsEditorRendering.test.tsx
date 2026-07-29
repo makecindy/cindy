@@ -44,6 +44,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     effort: string;
     vendorKey: string;
     triggerVariant?: string;
+    maxVisibleModelRows?: number;
     disabled?: boolean;
     onProviderChange?: (providerId: string | null, modelId?: string) => void;
     onModelChange: (modelId: string) => void;
@@ -57,6 +58,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       data-effort={props.effort}
       data-vendor={props.vendorKey}
       data-trigger-variant={props.triggerVariant}
+      data-max-visible-model-rows={props.maxVisibleModelRows}
       data-disabled={String(props.disabled)}
       data-aria-context={props.ariaContext ?? ''}
       // onProviderChange 是「供应商分段模式」的开关(ModelSelector 内部
@@ -126,7 +128,7 @@ afterEach(() => {
 
 describe('WorkspacePrefsEditor 复用标准选择器', () => {
   it('三个字段分别落在标准组件上,且都用 field 形态', () => {
-    render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} />);
+    render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} maxVisibleModelRows={6} />);
 
     // agent: VendorSegmentedSwitcher 的品牌分段(真实渲染),不再是露原始 id 的下拉
     const tablist = screen.getByRole('tablist', { name: 'settings.tina.prefs.agentLabel · cindy' });
@@ -138,6 +140,7 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     expect(model.getAttribute('data-model')).toBe('claude-opus-4-8');
     expect(model.getAttribute('data-vendor')).toBe('cc');
     expect(model.getAttribute('data-trigger-variant')).toBe('field');
+    expect(model.getAttribute('data-max-visible-model-rows')).toBe('6');
 
     const permission = screen.getByTestId('permission-selector');
     expect(permission.getAttribute('data-mode')).toBe('bypassPermissions');

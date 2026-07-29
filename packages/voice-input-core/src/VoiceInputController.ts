@@ -90,6 +90,15 @@ export class VoiceInputController {
   private startedAt = 0;
   private latestPartial = '';
   private latestStable = '';
+  // The most recent transcript regardless of lane, plus which lane produced it.
+  // Salvage cannot prefer `latestStable`: every provider emits both lanes as the
+  // full aggregate transcript, so a partial arriving after a stable (the next
+  // utterance already in progress) is strictly more complete. Preferring the
+  // stable lane would drop that tail — exactly the loss this salvage exists to
+  // prevent. stop() keeps its own stable-first ordering: there the flush is what
+  // produces the authoritative final stable.
+  private latestTranscript = '';
+  private latestTranscriptSource: 'partial' | 'stable' = 'partial';
   private firstPartialSeen = false;
   private firstAudioChunkSeen = false;
   // Run-level speech activity separates an intentional silent stop from an
@@ -120,6 +129,15 @@ export class VoiceInputController {
   // event so the next reproduction immediately tells us "session never produced
   // anything" vs "stopped after producing some text".
   private everSawAsrSignal = false;
+  // Whether this run already handed text to the host via onSubmitted. Guards the
+  // failure-path salvage against double insertion: a recovery that rejects after
+  // stop() already submitted would otherwise insert the same transcript twice.
+  private transcriptEmitted = false;
+  // Set when onSubmitted threw. A callback that throws part-way has already run
+  // an unknown share of its side effects (mobile publishes the draft, then calls
+  // an injected history recorder that can throw), so retrying it through salvage
+  // would run those effects a second time. One attempt per run is the contract.
+  private submitCallbackThrew = false;
 
   constructor(options: VoiceInputControllerOptions) {
     this.asr = options.asr;
@@ -146,6 +164,8 @@ export class VoiceInputController {
     this.startedAt = performance.now();
     this.latestPartial = '';
     this.latestStable = '';
+    this.latestTranscript = '';
+    this.latestTranscriptSource = 'partial';
     this.firstPartialSeen = false;
     this.firstAudioChunkSeen = false;
     this.speechActivitySeen = false;
@@ -157,6 +177,8 @@ export class VoiceInputController {
     this.networkRecoveryAttempts = 0;
     this.networkRecoveryInFlight = false;
     this.everSawAsrSignal = false;
+    this.transcriptEmitted = false;
+    this.submitCallbackThrew = false;
     this.startStallWatchdog();
     this.setState('listening');
     this.logger.record({ type: 'start_clicked', runId: this.runId, at: Date.now() });
@@ -214,6 +236,23 @@ export class VoiceInputController {
 
     await this.asr.stop();
 
+    // Deliberately placed after the LAST provider await in this method, so it
+    // covers a failure landing during any of them. Providers hide such failures
+    // from this path: both flushAudio() and stop() await an in-flight recover()
+    // but swallow its rejection, so those awaits resolve normally on a run that
+    // fail() has already finished (salvaging the transcript and setting the
+    // terminal state). Continuing would submit the same transcript twice and
+    // overwrite 'error' with 'refining'/'done', hiding the failure entirely.
+    // transcriptEmitted is checked too: it is the direct invariant ("this run has
+    // already given the host its text"), so it holds even if a future failure
+    // path leaves the state alone.
+    if (this.leftSubmittingState() || this.transcriptEmitted) {
+      // cancel() also lands here (it moves the run to 'done'); logging that as
+      // a failure would misread the timeline for an intentional abort.
+      this.discardRefinement(runId, optimisticRefinement, this.currentRunCancelled ? 'cancelled' : 'run_failed');
+      return;
+    }
+
     if (!text) {
       this.discardRefinement(runId, optimisticRefinement, 'no_submitted_text');
       if (this.speechActivitySeen) {
@@ -231,7 +270,26 @@ export class VoiceInputController {
       text,
       updatedAt: Date.now(),
     };
-    const range = this.callbacks.onSubmitted(text, segment);
+    let range: EditableRange | undefined;
+    try {
+      range = this.callbacks.onSubmitted(text, segment);
+    } catch (error) {
+      // salvageTranscript() already treats a throwing host as a real scenario
+      // (destroyed window, torn-down editor); this path has to survive it too.
+      // Letting the exception escape would reject stop() before any terminal
+      // state is set, stranding the run in 'submitting' — after which start()
+      // refuses to begin a new one and dictation is dead until reload.
+      this.submitCallbackThrew = true;
+      this.discardRefinement(runId, optimisticRefinement, 'run_failed');
+      this.fail(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    // Same acceptance convention as salvageTranscript(): the returned range is
+    // the host's "I took the text" signal, and a host may refuse (mobile stops
+    // writing into the voice insertion once the user has edited it). Marking it
+    // emitted regardless would let a later failure claim transcriptKept for
+    // text that never landed.
+    this.transcriptEmitted = Boolean(range);
     this.logger.record({ type: 'submitted', runId, at: Date.now(), text, source });
 
     if (this.refiner && range) {
@@ -248,6 +306,16 @@ export class VoiceInputController {
       this.discardRefinement(runId, optimisticRefinement, 'no_editable_range');
       this.setState('done');
     }
+  }
+
+  /**
+   * True when something moved this run out of the state stop() set on entry —
+   * fail() from a rejected recovery, or cancel(). Deliberately a method: inside
+   * stop(), the `state !== 'listening'` guard narrows this.state for the whole
+   * body, so an inline comparison against 'submitting' is a type error.
+   */
+  private leftSubmittingState(): boolean {
+    return this.state !== 'submitting';
   }
 
   async cancel(): Promise<void> {
@@ -280,6 +348,8 @@ export class VoiceInputController {
       case 'partial':
         if (this.state !== 'listening' && this.state !== 'submitting') return;
         this.latestPartial = event.text;
+        this.latestTranscript = event.text;
+        this.latestTranscriptSource = 'partial';
         this.resetStallCounters();
         if (this.state !== 'listening') return;
         if (!this.firstPartialSeen) {
@@ -297,6 +367,8 @@ export class VoiceInputController {
       case 'stable':
         if (this.state !== 'listening' && this.state !== 'submitting') return;
         this.latestStable = event.text;
+        this.latestTranscript = event.text;
+        this.latestTranscriptSource = 'stable';
         this.resetStallCounters();
         this.logger.record({
           type: 'stable_received',
@@ -338,7 +410,10 @@ export class VoiceInputController {
         // was supposed to prevent.
         if (this.state === 'listening' && this.tryRecover('disconnected')) break;
         if (this.state === 'listening') {
-          this.fail('Voice input connection was interrupted. Please try again.');
+          this.fail(
+            'Voice input connection was interrupted. Please try again.',
+            'connection_interrupted',
+          );
         }
         break;
     }
@@ -452,6 +527,15 @@ export class VoiceInputController {
       this.discardRefinement(runId, request, 'cancelled');
       return;
     }
+    // A failure can land while refinement is in flight (a recovery rejecting
+    // after stop() already submitted). Every exit below writes a terminal state,
+    // so continuing would overwrite 'error' with 'done' and erase the failure
+    // the user was just told about — along with applying refined text to a run
+    // whose host already reported it as failed.
+    if (this.state === 'error') {
+      this.discardRefinement(runId, request, 'run_failed');
+      return;
+    }
 
     if (error) {
       this.logger.record({
@@ -516,7 +600,10 @@ export class VoiceInputController {
     const emitPreview = (text: string): void => {
       const normalized = text.replace(/\r\n?/g, '\n').trim();
       if (!normalized || normalized === request.text) return;
-      if (runId !== this.runId || this.currentRunCancelled) return;
+      // Same reason as finishRefinement's check: once the run has failed, its
+      // host is showing an error — streaming refinement previews into it would
+      // rewrite text the user was just told the session stopped producing.
+      if (runId !== this.runId || this.currentRunCancelled || this.state === 'error') return;
       if (this.callbacks.isRangeUserTouched?.(range) ?? range.userTouched) return;
       this.callbacks.onRefinementPreview?.(normalized, {
         ...segment,
@@ -533,7 +620,7 @@ export class VoiceInputController {
   private discardRefinement(
     runId: string,
     request: PendingRefinement | undefined,
-    reason: 'final_text_changed' | 'stale_run' | 'cancelled' | 'no_submitted_text' | 'no_editable_range',
+    reason: 'final_text_changed' | 'stale_run' | 'cancelled' | 'no_submitted_text' | 'no_editable_range' | 'run_failed',
   ): void {
     if (!request) return;
     this.logger.record({
@@ -563,8 +650,61 @@ export class VoiceInputController {
     }
     this.stopStallWatchdog();
     this.pendingStableResolvers.splice(0).forEach((resolve) => resolve(undefined));
+    // Salvage before the terminal state: hosts tear the draft down when they see
+    // 'error', so the submitted text has to reach them first.
+    this.salvageTranscript();
     this.setState('error', 'failed');
-    this.callbacks.onError?.(message, code);
+    // Retention travels as a detail, never as the code: `message` may be the
+    // only thing telling the user their credential expired or their quota ran
+    // out. transcriptEmitted covers both salvage and a stop() that submitted
+    // before the failure landed (a recovery rejecting during refinement).
+    this.callbacks.onError?.(message, code, { transcriptKept: this.transcriptEmitted });
+  }
+
+  /**
+   * Hand already-recognized text to the host before entering the error state.
+   *
+   * A socket that dies mid-dictation used to discard everything the user had
+   * said so far: partials only ever existed as a host-side draft, and fail()
+   * never offered them to onSubmitted. The transcript is worth more than the
+   * dead session, so commit it raw — refinement needs the same network that
+   * just failed — and let the host report the failure with transcriptKept set.
+   *
+   * The host's returned range is the acceptance signal. A host can legitimately
+   * refuse: mobile stops writing into the voice insertion once the user has
+   * edited it, so the text never lands. Claiming retention there would tell the
+   * user their words were kept when the tail was actually dropped.
+   */
+  private salvageTranscript(): boolean {
+    if (this.transcriptEmitted || this.submitCallbackThrew) return false;
+    const text = normalizeSubmittedText(this.latestTranscript);
+    if (!text) return false;
+    const segment: SpeechSegment = {
+      id: createVoiceInputId(),
+      source: 'mic',
+      status: 'submitted',
+      text,
+      updatedAt: Date.now(),
+    };
+    let accepted = false;
+    try {
+      accepted = Boolean(this.callbacks.onSubmitted(text, segment));
+    } catch {
+      // A host that cannot take the text (destroyed window, torn-down editor)
+      // must not also swallow the error report the user is waiting for.
+      accepted = false;
+    }
+    this.logger.record({
+      type: 'transcript_salvaged',
+      runId: this.runId,
+      at: Date.now(),
+      text,
+      source: this.latestTranscriptSource,
+      accepted,
+    });
+    if (!accepted) return false;
+    this.transcriptEmitted = true;
+    return true;
   }
 
   private resetStallCounters(): void {
@@ -664,7 +804,7 @@ export class VoiceInputController {
           reason,
         });
         this.stopStallWatchdog();
-        this.fail('Voice input stopped receiving recognition. Please try again.');
+        this.fail('Voice input stopped receiving recognition. Please try again.', 'recognition_stalled');
       })
       .finally(() => {
         if (runId !== this.runId) return;

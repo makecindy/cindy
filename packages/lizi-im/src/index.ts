@@ -11,7 +11,13 @@ export const VERSION = '0.0.0';
 export { BaseIM } from './BaseIM.js';
 export { createIM } from './createIM.js';
 export type { IM } from './createIM.js';
-export type { ChannelIM } from './channelIM.js';
+export type {
+  ChannelIM,
+  TextChannelIM,
+  RichChannelIM,
+  ImFinalOutput,
+  ImOutputDriver,
+} from './channelIM.js';
 
 export type { Logger } from './logger.js';
 

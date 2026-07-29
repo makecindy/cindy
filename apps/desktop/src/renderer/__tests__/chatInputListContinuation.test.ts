@@ -9,31 +9,33 @@ const chatInputSource = readFileSync(
 
 /**
  * ChatInput 列表接续接线契约:
- * - Shift/Alt+Enter 换行前先尝试列表接续;
+ * - Shift/Alt+Enter 优先处理结构化列表，再兼容旧纯文本列表;
  * - 普通 Enter 一律保持"发送"语义,绝不被列表接续拦截(2026-07 产品定案:
- *   Enter=发送的肌肉记忆优先,不做 Claude 式"列表内 Enter 继续列表");
+ *   Enter=发送的肌肉记忆优先);
  * - 守住 IME composition 边界。
- * 接续行为本身的用例见 lib/__tests__/composerListContinuation*.test.ts
- * (纯前缀匹配 + 真实编辑器)。
+ * 结构化与旧纯文本接续行为由各自的编辑器测试覆盖。
  */
 describe('ChatInput list continuation wiring contract', () => {
-  it('imports the shared helper from lib/composerListContinuation', () => {
-    expect(chatInputSource).toContain(
-      "import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';",
-    );
+  it('imports both structured-list commands and the legacy plain-text fallback', () => {
+    expect(chatInputSource).toContain('handleStructuredListBackspace');
+    expect(chatInputSource).toContain('handleStructuredListBreak');
+    expect(chatInputSource).toContain('applyListBackspace');
+    expect(chatInputSource).toContain('applyListContinuation');
   });
 
-  it('tries list continuation on Shift/Alt+Enter before the default hard break', () => {
+  it('tries structured and legacy continuation on Shift/Alt+Enter', () => {
     const block = extractBetween(
       chatInputSource,
-      '// Shift/Alt+Enter — markdown 列表接续',
+      '// Shift/Alt+Enter — split or exit a structured item.',
       '// Plain Enter keeps the existing queue semantics.',
     );
     expect(block).toContain('(event.shiftKey || event.altKey) &&');
     expect(block).toContain('!event.metaKey');
     expect(block).toContain('!event.ctrlKey');
     expect(block).toContain('!event.isComposing');
-    expect(block).toContain('if (applyListContinuation(view)) {');
+    expect(block).toContain(
+      'if (handleStructuredListBreak(view) || applyListContinuation(view)) {',
+    );
     // 非列表行必须放行给 ComposerHardBreak 默认换行
     expect(block).toContain('return false;');
   });
@@ -41,8 +43,8 @@ describe('ChatInput list continuation wiring contract', () => {
   it('intercepts bare Backspace for empty-item deletion, leaving modified backspace alone', () => {
     const block = extractBetween(
       chatInputSource,
-      '// Backspace — 空列表项整体回删',
-      '// Shift/Alt+Enter — markdown 列表接续',
+      '// Backspace — structured list items exit through the schema command;',
+      '// Shift/Alt+Enter — split or exit a structured item.',
     );
     expect(block).toContain("event.key === 'Backspace'");
     expect(block).toContain('!event.metaKey');
@@ -50,7 +52,7 @@ describe('ChatInput list continuation wiring contract', () => {
     expect(block).toContain('!event.altKey');
     expect(block).toContain('!event.shiftKey');
     expect(block).toContain('!event.isComposing');
-    expect(block).toContain('applyListBackspace(view)');
+    expect(block).toContain('(handleStructuredListBackspace(view) || applyListBackspace(view))');
   });
 
   it('never intercepts plain Enter — send semantics stay untouched', () => {
@@ -59,6 +61,7 @@ describe('ChatInput list continuation wiring contract', () => {
       '// Plain Enter keeps the existing queue semantics.',
       "void dispatchSendRef.current(wantsSteer ? 'steer' : 'queue');",
     );
+    expect(plainEnterBlock).not.toContain('handleStructuredListBreak');
     expect(plainEnterBlock).not.toContain('applyListContinuation');
   });
 

@@ -167,22 +167,22 @@ export function SessionImportSection() {
   }, [runScan, selectedItems, t]);
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex min-w-0 flex-col gap-1">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-4">
+      <header className="flex shrink-0 flex-col items-stretch justify-between gap-3 xl:flex-row xl:items-end xl:gap-6">
+        <div className="flex min-w-0 max-w-[620px] flex-col gap-1">
           <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
             {t('settings.sessionImport.title')}
           </h2>
-          <p className="max-w-[720px] text-13 leading-[1.5] text-[var(--settings-section-desc)]">
+          <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
             {t('settings.sessionImport.description')}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center justify-end gap-2 select-none">
           <button
             type="button"
             onClick={() => setShareWizardOpen(true)}
             className={cn(
-              'inline-flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-13 font-medium',
+              'inline-flex h-10 shrink-0 items-center gap-2 rounded-full px-4 text-13 font-medium active:scale-[0.98]',
               'border border-[var(--settings-btn-secondary-border)]',
               'bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
               'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
@@ -196,17 +196,17 @@ export function SessionImportSection() {
             onClick={() => runScan({ force: true })}
             disabled={scanning}
             className={cn(
-              'inline-flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-13 font-medium',
-              'border border-[var(--settings-btn-secondary-border)]',
-              'bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
-              'transition-colors hover:bg-[var(--settings-menu-bg-hover)] disabled:cursor-not-allowed disabled:opacity-60',
+              'inline-flex h-10 shrink-0 items-center gap-2 rounded-full px-5 text-13 font-medium active:scale-[0.98]',
+              'border border-[var(--settings-btn-primary-border)]',
+              'bg-[var(--settings-btn-primary-bg)] text-[var(--settings-btn-primary-text)]',
+              'transition-colors hover:bg-[var(--settings-btn-primary-hover-bg)] disabled:cursor-not-allowed disabled:opacity-60',
             )}
           >
             <Spinner icon={RefreshCw} size={15} spinning={scanning} />
             {scanning ? t('settings.sessionImport.scanning') : t('settings.sessionImport.scan')}
           </button>
         </div>
-      </div>
+      </header>
 
       {shareWizardOpen && (
         <SessionShareImportWizard open={shareWizardOpen} onOpenChange={setShareWizardOpen} />
@@ -214,12 +214,12 @@ export function SessionImportSection() {
 
       <div
         className={cn(
-          'rounded-xl border border-[var(--settings-theme-card-border)]',
-          'bg-[var(--settings-theme-card-bg)] p-5',
+          'flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl',
+          'border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
         )}
       >
         {!scan ? (
-          <div className="flex min-h-[220px] flex-col items-center justify-center gap-3 text-center">
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
             <Download size={24} className="text-[var(--settings-section-title)] opacity-70" />
             <div className="flex max-w-[420px] flex-col gap-1">
               <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
@@ -231,18 +231,20 @@ export function SessionImportSection() {
             </div>
           </div>
         ) : (
-          <div className="flex flex-col gap-4">
-            <ScanSummary scan={scan} />
-            <FilterBar
-              sourceValue={sourceFilter}
-              placementValue={placementFilter}
-              onSourceChange={setSourceFilter}
-              onPlacementChange={setPlacementFilter}
-            />
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex shrink-0 flex-col gap-3 border-b border-[var(--settings-input-border)] p-4">
+              <ScanSummary scan={scan} />
+              <FilterBar
+                sourceValue={sourceFilter}
+                placementValue={placementFilter}
+                onSourceChange={setSourceFilter}
+                onPlacementChange={setPlacementFilter}
+              />
+            </div>
 
-            <div className="flex flex-col rounded-lg border border-[var(--settings-input-border)]">
+            <div className="flex min-h-0 flex-1 flex-col">
               {listItems.length > 0 && (
-                <label className="flex cursor-pointer items-center gap-2 border-b border-[var(--settings-input-border)] px-4 py-2.5 hover:bg-[var(--settings-menu-bg-hover)]">
+                <label className="flex shrink-0 cursor-pointer items-center gap-2 border-b border-[var(--settings-input-border)] px-4 py-2.5 hover:bg-[var(--settings-menu-bg-hover)] select-none">
                   <input
                     type="checkbox"
                     checked={visibleCandidates.length > 0 && visibleSelectedCount === visibleCandidates.length}
@@ -260,9 +262,9 @@ export function SessionImportSection() {
                   </span>
                 </label>
               )}
-              <div className="flex max-h-[520px] flex-col overflow-y-auto">
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]">
                 {listItems.length === 0 ? (
-                  <div className="px-4 py-10 text-center text-12 text-[var(--settings-section-desc)]">
+                  <div className="flex min-h-[160px] flex-1 items-center justify-center px-4 py-10 text-center text-12 text-[var(--settings-section-desc)]">
                     {t('settings.sessionImport.noCandidates')}
                   </div>
                 ) : (
@@ -303,7 +305,7 @@ export function SessionImportSection() {
                           <button
                             type="button"
                             onClick={() => toggleGroup(group.key)}
-                            className="flex h-6 w-5 items-center justify-center rounded-md text-[var(--settings-section-sublabel)] hover:bg-[var(--settings-menu-bg-hover)]"
+                            className="flex h-6 w-5 items-center justify-center rounded-full text-[var(--settings-section-sublabel)] hover:bg-[var(--settings-menu-bg-hover)] active:scale-[0.98]"
                             aria-label={isOpen ? t('settings.sessionImport.collapse') : t('settings.sessionImport.expand')}
                           >
                             {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
@@ -354,7 +356,7 @@ export function SessionImportSection() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-3">
+            <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--settings-input-border)] px-4 py-3 select-none">
               <p className="text-12 text-[var(--settings-section-desc)]">
                 {t('settings.sessionImport.selected', { count: selectedItems.length })}
                 {hiddenSelectedCount > 0 && (
@@ -366,7 +368,7 @@ export function SessionImportSection() {
                 onClick={importSelected}
                 disabled={selectedItems.length === 0 || importing}
                 className={cn(
-                  'inline-flex h-9 items-center gap-2 rounded-md px-3 text-13 font-medium',
+                  'inline-flex h-10 items-center gap-2 rounded-full px-5 text-13 font-medium active:scale-[0.98]',
                   'border border-[var(--settings-btn-primary-border)]',
                   'bg-[var(--settings-btn-primary-bg)] text-[var(--settings-btn-primary-text)]',
                   'transition-colors hover:bg-[var(--settings-btn-primary-hover-bg)] disabled:cursor-not-allowed disabled:opacity-60',
@@ -375,7 +377,7 @@ export function SessionImportSection() {
                 <Check size={15} />
                 {importing ? t('settings.sessionImport.importing') : t('settings.sessionImport.importSelected')}
               </button>
-            </div>
+            </footer>
           </div>
         )}
       </div>
@@ -449,12 +451,14 @@ function ScanSummary({ scan }: { scan: ScanResult }) {
 
 function SummaryCell({ label, value, hint }: { label: string; value: number; hint: string }) {
   return (
-    <div className="rounded-lg border border-[var(--settings-input-border)] px-3 py-2">
-      <p className="text-11 text-[var(--settings-section-desc)]">{label}</p>
-      <p className="mt-1 text-18 font-medium text-[var(--settings-section-title)]">{value}</p>
-      <p className="mt-1 min-h-[28px] text-11 leading-[1.25] text-[var(--settings-section-desc)]">
-        {hint}
-      </p>
+    <div className="min-w-0 rounded-xl border border-[var(--settings-input-border)] px-3 py-2">
+      <div className="flex min-w-0 items-baseline gap-2">
+        <p className="shrink-0 text-18 font-medium tabular-nums text-[var(--settings-section-title)]">
+          {value}
+        </p>
+        <p className="truncate text-11 text-[var(--settings-section-desc)]">{label}</p>
+      </div>
+      <p className="mt-1 text-11 leading-[1.4] text-[var(--settings-section-desc)]">{hint}</p>
     </div>
   );
 }
@@ -474,7 +478,7 @@ function FilterBar({
   const sourceFilters: SourceFilter[] = ['all', 'codex', 'claude'];
   const placementFilters: PlacementFilter[] = ['all', 'project', 'dialogue'];
   return (
-    <div className="flex flex-col gap-2">
+    <div className="grid gap-2 xl:grid-cols-2">
       <SegmentedFilter
         label={t('settings.sessionImport.filters.source')}
         values={sourceFilters}
@@ -507,8 +511,8 @@ function SegmentedFilter<T extends string>({
   onChange: (value: T) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="w-[72px] text-11 font-medium text-[var(--settings-section-desc)]">
+    <div className="flex min-w-0 flex-wrap items-center gap-2 select-none">
+      <span className="w-[56px] text-11 font-medium text-[var(--settings-section-desc)]">
         {label}
       </span>
       {values.map((filter) => (
@@ -517,7 +521,7 @@ function SegmentedFilter<T extends string>({
           type="button"
           onClick={() => onChange(filter)}
           className={cn(
-            'h-8 rounded-md border px-3 text-12 font-medium transition-colors',
+            'h-8 rounded-full border px-3 text-12 font-medium transition-colors active:scale-[0.98]',
             value === filter
               ? 'border-[var(--settings-menu-border-selected)] bg-[var(--settings-menu-bg-selected)] text-[var(--settings-menu-text-selected)]'
               : 'border-[var(--settings-input-border)] text-[var(--settings-section-sublabel)] hover:bg-[var(--settings-menu-bg-hover)]',
@@ -545,7 +549,7 @@ function SessionImportRow({
   return (
     <label
       className={cn(
-        'flex cursor-pointer items-start gap-3 py-3 hover:bg-[var(--settings-menu-bg-hover)]',
+        'flex min-w-0 cursor-pointer items-start gap-3 py-3 hover:bg-[var(--settings-menu-bg-hover)]',
         isProjectChild ? 'pl-[40px] pr-4' : 'px-4',
       )}
     >
@@ -553,26 +557,26 @@ function SessionImportRow({
         type="checkbox"
         checked={checked}
         onChange={onToggle}
-        className="mt-1 h-4 w-4 accent-[var(--settings-menu-text-selected)]"
+        className="mt-1 h-4 w-4 shrink-0 accent-[var(--settings-menu-text-selected)]"
       />
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="rounded border border-[var(--settings-input-border)] px-1.5 py-0.5 text-10 uppercase text-[var(--settings-section-desc)]">
+        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+          <span className="shrink-0 whitespace-nowrap rounded-full border border-[var(--settings-input-border)] px-1.5 py-0.5 text-10 uppercase text-[var(--settings-section-desc)]">
             {item.source === 'codex' ? 'Codex' : 'Claude'}
           </span>
           {item.archived && (
-            <span className="rounded border border-[var(--settings-input-border)] px-1.5 py-0.5 text-10 text-[var(--settings-section-desc)]">
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-[var(--settings-input-border)] px-1.5 py-0.5 text-10 text-[var(--settings-section-desc)]">
               {t('settings.sessionImport.archived')}
             </span>
           )}
           {item.workspaceKind === 'dialogue' && (
-            <span className="rounded border border-[var(--settings-input-border)] px-1.5 py-0.5 text-10 text-[var(--settings-section-desc)]">
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-[var(--settings-input-border)] px-1.5 py-0.5 text-10 text-[var(--settings-section-desc)]">
               {t('settings.sessionImport.filters.dialogue')}
             </span>
           )}
           <p
             title={item.title || undefined}
-            className="truncate text-13 font-medium text-[var(--settings-section-sublabel)]"
+            className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-sublabel)]"
           >
             {item.title || t('settings.sessionImport.untitled')}
           </p>

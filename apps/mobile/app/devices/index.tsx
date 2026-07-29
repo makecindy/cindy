@@ -78,6 +78,7 @@ import {
 } from '@/device-link/remoteStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
+import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
 import {
   buildMobileHomePresentation,
@@ -237,7 +238,16 @@ export default function HomeScreen() {
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
   // 已展开的自动化组 key(页面级 state:SectionList 虚拟化回收行组件时展开态不丢)。
   const [expandedAutomationGroups, setExpandedAutomationGroups] = useState<string[]>([]);
-  const [deviceConnectionStates, setDeviceConnectionStates] = useState<Record<string, HomeDeviceConnectionState>>({});
+  const [rawDeviceConnectionStates, setDeviceConnectionStates] = useState<Record<string, HomeDeviceConnectionState>>({});
+  // 熔断 open(电脑端未响应)的设备复用既有 failed 渲染路径(红圈),不新增视觉:
+  // 内部态映射覆盖在 hydrate 状态之上,熔断关闭后自动回落到原状态。
+  const unresponsiveDevices = useUnresponsiveDevices();
+  const deviceConnectionStates = useMemo<Record<string, HomeDeviceConnectionState>>(() => {
+    if (unresponsiveDevices.size === 0) return rawDeviceConnectionStates;
+    const merged: Record<string, HomeDeviceConnectionState> = { ...rawDeviceConnectionStates };
+    for (const deviceId of unresponsiveDevices) merged[deviceId] = 'failed';
+    return merged;
+  }, [rawDeviceConnectionStates, unresponsiveDevices]);
   const [scheduleIndex, setScheduleIndex] = useState<Map<string, RemoteSessionScheduleInfo>>(() => new Map());
 
   const updateDeviceConnectionState = useCallback((deviceId: string, state: HomeDeviceConnectionState) => {
@@ -289,9 +299,13 @@ export default function HomeScreen() {
   const hydrateDeviceSessions = useCallback(async (device: DeviceView): Promise<HydrateDeviceSessionsResult> => {
     updateDeviceConnectionState(device.deviceId, 'syncing');
     try {
-      const [list, activeSessions] = await withTransientRemoteRetry(async () => {
+      const [list, activeSessions, activeSessionSnapshotEpoch] = await withTransientRemoteRetry(async () => {
         await subscribe('device-list', device.deviceId, ['sessions']);
-        return Promise.all([
+        // Capture inside the retry callback so every maker:list-active attempt gets its own
+        // fence. A newer retry push received while this request is in flight must survive
+        // the older snapshot, while progress predating this attempt can be cleared.
+        const activeSessionSnapshotEpoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+        const [list, activeSessions] = await Promise.all([
           invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
             LIST_LIMIT,
             remoteListStatusFilter(statusFilter),
@@ -305,6 +319,7 @@ export default function HomeScreen() {
             throw err;
           }),
         ]);
+        return [list, activeSessions, activeSessionSnapshotEpoch] as const;
       });
       const nextSessions = Array.isArray(list) ? list : [];
       remoteSessionStore.setDeviceSessions(
@@ -313,7 +328,11 @@ export default function HomeScreen() {
         nextSessions,
       );
       if (Array.isArray(activeSessions)) {
-        remoteSessionStore.setActiveSessionSnapshots(device.deviceId, activeSessions);
+        remoteSessionStore.setActiveSessionSnapshots(
+          device.deviceId,
+          activeSessions,
+          activeSessionSnapshotEpoch,
+        );
       }
       // schedule-index(1+N 个 listRuns)是次要徽标数据,延后发,避开"开 app→立刻点会话"时和会话关键读
       // 抢同一条 WS 管道(见 scheduleIndexDefer / issue #324)。home 自动化分组与名称已由 fallbackScheduleInfo

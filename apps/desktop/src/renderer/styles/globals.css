@@ -13,7 +13,7 @@
       'Inter Variable', Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
       'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC',
       'Source Han Sans SC', 'Segoe UI', Roboto, sans-serif;
-    /* 默认代码字体走 Codex / 系统等宽风格(mac 上 SF Mono 不对网页暴露字体名,
+    /* 默认代码字体使用系统等宽字体(mac 上 SF Mono 不对网页暴露字体名,
        实际命中 Menlo;Win 命中 Consolas)。JetBrains Mono 已降级为可选预设、不再是
        默认。CJK 显式回退 PingFang/雅黑,保证代码块中英混排统一等宽。 */
     --app-font-code-default:
@@ -113,8 +113,8 @@
 
   /* F3: Global disable focus outline — Chromium default :focus-visible draws
      a yellow/orange ring on buttons, options and menu items after Esc/click
-     transitions focus. Claude Desktop has no such ring; suppress it on every
-     non-input element. Inputs keep their focus hint via --*-border-focus. */
+     transitions focus. Suppress it on non-input elements while inputs keep
+     their focus hint via --*-border-focus. */
   *:focus,
   *:focus-visible {
     outline: none !important;
@@ -326,14 +326,14 @@ html:lang(ko) {
    (command-palette F2.5). The Placeholder extension injects
    `p.is-editor-empty::before` with the placeholder text in a `data-*`
    attribute; we style it to match the old textarea placeholder. */
-.ProseMirror p.is-editor-empty:first-child::before {
+.ProseMirror > p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   color: var(--chat-input-placeholder-subtle);
   float: left;
   height: 0;
   pointer-events: none;
 }
-[data-voice-draft-active='true'] .ProseMirror p.is-editor-empty:first-child::before {
+[data-voice-draft-active='true'] .ProseMirror > p.is-editor-empty:first-child::before {
   content: none;
 }
 .ProseMirror {
@@ -346,6 +346,58 @@ html:lang(ko) {
 .cm-editor .cm-dropCursor {
   border-left-color: var(--caret-accent) !important;
 }
+/* Structured composer lists keep markers and body text in the same layout
+   tree. Continuation lines therefore follow the list item content edge
+   without decoration-owned width measurements. */
+[data-chat-input-root] .ProseMirror :is(ul, ol) {
+  margin: 0;
+  --composer-list-padding: 1.5em;
+  padding-inline-start: var(--composer-list-padding, 1.5em);
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='2'] {
+  --composer-list-padding: 2.2em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='3'] {
+  --composer-list-padding: 2.8em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='4'] {
+  --composer-list-padding: 3.4em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='5'] {
+  --composer-list-padding: 4em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='6'] {
+  --composer-list-padding: 4.6em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='7'] {
+  --composer-list-padding: 5.2em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='8'] {
+  --composer-list-padding: 5.8em;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker-digits='9'] {
+  --composer-list-padding: 6.4em;
+}
+[data-chat-input-root] .ProseMirror ul {
+  list-style-type: disc;
+}
+[data-chat-input-root] .ProseMirror ol {
+  list-style-type: decimal;
+}
+[data-chat-input-root] .ProseMirror ol[data-marker=')'] > li::marker {
+  content: counter(list-item) ') ';
+}
+[data-chat-input-root] .ProseMirror ol[data-marker='、'] > li::marker {
+  content: counter(list-item) '、';
+}
+[data-chat-input-root] .ProseMirror li {
+  padding-inline-start: 0.15em;
+  overflow-wrap: anywhere;
+}
+[data-chat-input-root] .ProseMirror li > p {
+  margin: 0;
+}
+
 /* composer 列表行缩进(ComposerListIndentDecoration):单行列表使用段落级
    decoration,多行列表的无特殊标点行使用 inline-block 换行容器。padding-left
    留出"基础缩进 + 前缀宽度",首行再用负 text-indent 把列表标记悬挂回基础
@@ -371,10 +423,14 @@ html:lang(ko) {
 .ProseMirror .composer-list-fallback-prefix {
   display: inline-block;
   box-sizing: border-box;
-  width: calc(1em + var(--composer-list-fallback-indent, 1.25em));
-  margin-left: calc(-1em - var(--composer-list-fallback-indent, 1.25em));
-  white-space: nowrap;
+  width: var(--composer-list-fallback-indent, 1.25em);
+  margin-left: calc(0px - var(--composer-list-fallback-indent, 1.25em));
+  white-space: pre;
   vertical-align: top;
+}
+.ProseMirror .composer-list-fallback-long-run-body {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 .ProseMirror .composer-list-fallback-unindented {
   display: inline-block;
@@ -399,9 +455,79 @@ html:lang(ko) {
   overflow-wrap: anywhere;
 }
 .ProseMirror .composer-list-tab-indent {
-  /* Keep the fallback and the browser's tab advance deterministic until the
-     plugin view replaces the CSS variables with a measured Range width. */
-  tab-size: 8;
+  /* Keep the browser's tab advance aligned with the deterministic prefix-width
+     estimate. Do not measure and rewrite decoration DOM from a plugin view:
+     ProseMirror's DOMObserver may restore that style and enter an update loop. */
+  tab-size: 8ch;
+}
+/* The fallback unindented row must remain one inline-block; character-scoped
+   ProseMirror decorations would split it into several full-width fragments.
+   The local face covers the same ranges as CjkPunctDecoration, while the
+   bundled faces cover the punctuation glyphs HarmonyOS actually ships. The
+   ASCII range is punctuation-only, so Latin letters and digits continue
+   through the configured UI font. Keep the asset names aligned with the
+   exact-pinned font package. */
+@font-face {
+  font-family: 'Cindy CJK Punctuation Local';
+  src:
+    local('PingFang SC'),
+    local('Hiragino Sans GB'),
+    local('Microsoft YaHei UI'),
+    local('Microsoft YaHei'),
+    local('Noto Sans CJK SC'),
+    local('Source Han Sans SC');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range:
+    U+0021-0022, U+0027-0029, U+002C, U+002E, U+003A-003B, U+003F, U+005B, U+005D, U+007B, U+007D,
+    U+3000-303F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: 'Cindy CJK Punctuation Bundled';
+  src: url('../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular_256855.woff2')
+    format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+3001-3002, U+3008-3011, U+3014-3017;
+}
+@font-face {
+  font-family: 'Cindy CJK Punctuation Bundled';
+  src: url('../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular_312071.woff2')
+    format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range:
+    U+3000, U+3003, U+3005-3007, U+3012-3013, U+3018-301B, U+301D-301E, U+3021-3029, U+303E;
+}
+@font-face {
+  font-family: 'Cindy CJK Punctuation Bundled';
+  src: url('../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular_ac4458.woff2')
+    format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range:
+    U+FF01-FF03, U+FF05-FF0A, U+FF0C-FF1B, U+FF1F-FF3D, U+FF3F, U+FF41-FF5B, U+FF5D, U+FF5F-FF60,
+    U+FFE6;
+}
+@font-face {
+  font-family: 'Cindy CJK Punctuation Bundled';
+  src: url('../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular_ea8896.woff2')
+    format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range:
+    U+0021-0022, U+0027-0029, U+002C, U+002E, U+003A-003B, U+003F, U+005B, U+005D, U+007B, U+007D,
+    U+FF04, U+FF0B, U+FF1C-FF1E, U+FF3E, U+FF40, U+FF5C, U+FF5E, U+FFE0-FFE5;
+}
+.ProseMirror .composer-list-cjk-punctuation-font {
+  font-family:
+    'Cindy CJK Punctuation Local', 'Cindy CJK Punctuation Bundled',
+    var(--app-font-ui, var(--app-font-ui-default));
 }
 .ProseMirror .composer-list-cjk-font {
   font-family:
@@ -527,7 +653,8 @@ html:lang(ko) {
   [data-pasted-text-chip],
   [data-composer-quote],
   .ghost-cmd-pill,
-  .slash-cmd-pill
+  .slash-cmd-pill,
+  .quick-start-pill
 ) {
   margin-inline: 4px;
 }
@@ -549,6 +676,23 @@ html:lang(ko) {
   border-radius: 9999px;
   padding: 2px 8px 3px;
   color: var(--chat-input-text);
+  font: inherit;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* 快速开始预填胶囊 — QuickStartPillMark。点击 New Maker 快速开始卡片后
+   预填文本以此 mark 包裹,渲染为与 ModelPromotionBadge 同色系的圆角
+   标签,区分「卡片预填」与「手动输入」。doc 里仍是普通 text + mark,
+   发送序列化只取 textContent,mark 不产生额外输出。
+   注意:快速开始文本是完整句子(用户需阅读/编辑),不能用 micro-label 字号
+   (DESIGN.md §3 限定 10-13px 仅用于辅助标签);此处 font: inherit 继承
+   composer 正文字号,仅用 background/color/radius 做视觉区分。 */
+.ProseMirror .quick-start-pill {
+  background: var(--accent-cta-bg);
+  border-radius: 9999px;
+  padding: 2px 8px 3px;
+  color: var(--accent-pure-cta-fg);
   font: inherit;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
@@ -758,6 +902,59 @@ body.resizing-pane [data-ghost-webview] {
     animation: none !important;
     will-change: auto;
   }
+}
+
+/* 页面不可见时冻结常驻装饰动画(闸门见 lib/hiddenAnimationGate.ts)。
+   主窗 backgroundThrottling 在有 running turn 时被主动关闭以保住流式输出,
+   于是隐藏窗口里的 infinite 动画会继续推进并持续触发样式重算;实测 10 个动画
+   令样式重算 29.8/s,冻结后 5.7/s(-81%),renderer CPU 12.4% → 6.0%。
+
+   ⚠️ 新增任何 `animation: ... infinite` 时必须同步把它的元素加进本清单。
+   `hiddenAnimationGate.test.ts` 会扫描本文件所有 infinite 规则并逐条核对,漏了会直接
+   测试失败——不要改测试绕过,补选择器即可。清单按「真正挂动画的那个元素」(选择器的
+   最后一段)收敛,所以祖先条件不同、落点相同的规则只需一条。
+
+   只列 infinite 装饰动画。一次性动画(.status-bar-done / .session-card--settle /
+   .card-col-fade / ghost-bubble 进出场 / ghost-panel 展开收起)刻意不纳入:它们总时长
+   有限、省不到东西,却会在隐藏期被冻在中途帧,恢复可见时反而突兀。这也是这里用
+   allowlist 而不是「全局暂停 + 一次性例外」的原因——漏掉 infinite 只是少省一点 CPU,
+   漏掉一次性动画却会造成可见的视觉异常。
+
+   用 animation-play-state 而非 animation: none —— 后者会让元素跳回静止态
+   (opacity 回到 1),恢复可见的瞬间比冻结更显眼。冻结点落在动画自身的取值区间内,
+   恢复后接着播,用户不可察觉。
+
+   Tailwind 的 animate-spin / animate-pulse 用 [class*=] 匹配,以覆盖
+   motion-safe:animate-pulse 这类变体编译出的转义类名。任意值工具类
+   (animate-[spin_2.4s_linear_infinite] 之类,见 GhostSummonCard)不含 animate-spin
+   子串,靠 [class*='infinite'] 兜住:Tailwind 把 keyframes 简写原样编进类名,
+   循环动画必然带 infinite 字面量,而一次性的 animate-[xxx_200ms_ease-out] 不会。 */
+[data-app-hidden='true'] [data-voice-spinner-arc],
+[data-app-hidden='true'] [data-voice-mic-bar],
+[data-app-hidden='true'] .status-bar-shimmer,
+[data-app-hidden='true'] .session-status-breathing,
+[data-app-hidden='true'] .session-card-bar::before,
+[data-app-hidden='true'] .session-card-dot,
+[data-app-hidden='true'] .session-running-dot,
+[data-app-hidden='true'] .thinking-dot,
+[data-app-hidden='true'] .ghost-card-sweep,
+[data-app-hidden='true'] .ghost-bubble-face,
+[data-app-hidden='true'] .agent-island-mascot-character,
+[data-app-hidden='true'] .agent-island-mascot-keyboard,
+[data-app-hidden='true'] .agent-island-mascot-key,
+[data-app-hidden='true'] .agent-island-mascot-eyes,
+[data-app-hidden='true'] .agent-island-mascot-sparkle,
+[data-app-hidden='true'] [class*='animate-spin'],
+[data-app-hidden='true'] [class*='animate-pulse'],
+[data-app-hidden='true'] [class*='infinite'],
+/* drawio viewer(vendor/drawio/viewer-static.min.js)把循环动画以 inline style 直接写到
+   SVG 元素上(flowAnimation 的流动虚线、加载 spinner),类名既不含 animate-* 也不含
+   infinite,前面几条都够不着;它又是压缩过的第三方脚本,不归 globals.css / tsx 扫描管。
+   按容器整棵子树冻结 —— 容器形态是 <div class="mxgraph" data-mxgraph="{json}">,
+   见 DrawioPreview.tsx。 */
+[data-app-hidden='true'] [data-mxgraph],
+[data-app-hidden='true'] [data-mxgraph] * {
+  animation-play-state: paused !important;
 }
 
 /* Running indicator — three horizontal dots, scale-up wave from left to right.

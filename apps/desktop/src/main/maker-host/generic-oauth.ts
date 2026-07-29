@@ -31,6 +31,7 @@ import {
   type OAuthResultPageLang,
 } from '../oauthResultPage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { outboundFetch } from './outbound-fetch.js';
 
 const log = desktopMakerLogger.child('generic-oauth');
 
@@ -47,8 +48,13 @@ const DEFAULT_TOKEN_TTL_MS = 60 * 60 * 1000;
 // ── 注入点（默认 no-op，host 启动期接线；测试注入内存实现）──────────────────────
 export interface GenericOAuthStorage {
   read(providerId: string): string | null;
+  /**
+   * 配置 mutation 前的严格快照读取：不存在返回 null；读取/解密失败必须抛错，
+   * 不能像热路径 read 一样折叠成“无凭证”。
+   */
+  readStrict(providerId: string): string | null;
   write(providerId: string, value: string): boolean;
-  remove(providerId: string): void;
+  remove(providerId: string): boolean;
 }
 
 interface GenericOAuthIo {
@@ -76,8 +82,14 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 let io: GenericOAuthIo = {
-  storage: { read: () => null, write: () => false, remove: () => {} },
-  fetchImpl: fetch,
+  storage: {
+    read: () => null,
+    readStrict: () => null,
+    write: () => false,
+    remove: () => true,
+  },
+  // 第三方 provider 的 token / device / refresh 端点多在境外,默认走吃系统代理的通道。
+  fetchImpl: outboundFetch,
   openExternal: async () => {
     throw new Error('generic-oauth openExternal not configured');
   },
@@ -131,19 +143,21 @@ function blobFromTokenResponse(t: TokenResponse, prev?: OAuthTokenBlob | null): 
 // undefined = 尚未从磁盘读过；null = 确认无凭证。凭证只经本模块读写，失效点精确。
 const blobCache = new Map<string, OAuthTokenBlob | null>();
 
+function parseBlob(raw: string | null): OAuthTokenBlob | null {
+  if (!raw) return null;
+  try {
+    const blob = JSON.parse(raw) as OAuthTokenBlob;
+    return typeof blob.access_token === 'string' && blob.access_token.length > 0 ? blob : null;
+  } catch {
+    return null;
+  }
+}
+
 function readBlob(providerId: string): OAuthTokenBlob | null {
   const cached = blobCache.get(providerId);
   if (cached !== undefined) return cached;
   const raw = io.storage.read(providerId);
-  let blob: OAuthTokenBlob | null = null;
-  if (raw) {
-    try {
-      const b = JSON.parse(raw) as OAuthTokenBlob;
-      blob = typeof b.access_token === 'string' && b.access_token.length > 0 ? b : null;
-    } catch {
-      blob = null;
-    }
-  }
+  const blob = parseBlob(raw);
   blobCache.set(providerId, blob);
   return blob;
 }
@@ -165,12 +179,45 @@ export function hasGenericOAuthLogin(providerId: string): boolean {
   return readBlob(providerId) !== null;
 }
 
-/** 登出：清凭证 + 缓存（含 per-provider 刷新链条目，防长期运行下 Map 积累）。 */
-export function logoutGenericOAuth(providerId: string): void {
-  io.storage.remove(providerId);
+/** 登出：持久凭证删除成功后才清缓存，失败时保持登录态并通知调用方。 */
+export function logoutGenericOAuth(providerId: string): boolean {
+  if (!io.storage.remove(providerId)) return false;
   blobCache.set(providerId, null);
   // 链上若有 in-flight 刷新也安全:doRefresh 落盘前会复核 blob 已清则不回写。
   refreshChains.delete(providerId);
+  return true;
+}
+
+/**
+ * 可回滚地删除凭证。配置写入与 safeStorage 无法组成同一个数据库事务，因此调用方在
+ * 配置提交失败时必须用返回的闭包恢复旧 blob；成功提交后直接丢弃闭包即可。
+ */
+export function removeGenericOAuthCredentialsReversibly(
+  providerId: string,
+): (() => boolean) | null {
+  let previousRaw: string | null;
+  try {
+    previousRaw = io.storage.readStrict(providerId);
+  } catch (err) {
+    log.warn('generic oauth 凭证严格快照失败，拒绝删除', {
+      providerId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+  const durableBlob = parseBlob(previousRaw);
+  // 已有文件却无法解析也不是“无凭证”。保留原始文件并中止 mutation，避免配置失败回滚时
+  // 把坏/新版 blob 静默删掉；未来格式迁移仍有恢复机会。
+  if (previousRaw !== null && !durableBlob) return null;
+  const cachedBeforeDelete = blobCache.get(providerId);
+  const cacheToRestore = cachedBeforeDelete ?? durableBlob;
+  if (!logoutGenericOAuth(providerId)) return null;
+  return () => {
+    if (previousRaw !== null && !io.storage.write(providerId, previousRaw)) return false;
+    if (cacheToRestore !== undefined) blobCache.set(providerId, cacheToRestore);
+    else blobCache.delete(providerId);
+    return true;
+  };
 }
 
 /**
@@ -454,6 +501,11 @@ export interface GenericOAuthDeviceCodeProgress {
 
 export interface GenericOAuthLoginOptions {
   onProgress?: (progress: GenericOAuthDeviceCodeProgress) => void;
+  /**
+   * 凭证成功落盘后交出一次竞态安全的回滚闭包。只有当前凭证仍是本次登录写入的 blob
+   * 时才删除；若后续登录/刷新已换新则 no-op，避免迟到取消误删新凭证。
+   */
+  onCredentialPersisted?: (rollback: () => boolean) => void;
 }
 
 // 同一时刻每个 provider 只允许一个登录流。
@@ -684,12 +736,28 @@ export async function runGenericOAuthLogin(
 
     // 落盘前最后检查：已取消的登录绝不写凭证（同 grok）。
     if (abort.signal.aborted) throw new Error('login_cancelled');
-    if (!writeBlob(provider.id, blobFromTokenResponse(tok))) {
+    const persistedBlob = blobFromTokenResponse(tok);
+    if (!writeBlob(provider.id, persistedBlob)) {
       // 落盘失败必须硬失败并回滚内存态:否则 UI 显示已连接、路由能用,重启/刷新后
       // 授权静默消失(safeStorage 不可用或 .enc 写不进磁盘的机器上尤其致命)。
       blobCache.set(provider.id, null);
       throw new Error('凭证写入本机安全存储失败,请检查系统钥匙串/加密服务后重试');
     }
+    const persistedRaw = JSON.stringify(persistedBlob);
+    options?.onCredentialPersisted?.(() => {
+      let currentRaw: string | null;
+      try {
+        currentRaw = io.storage.readStrict(provider.id);
+      } catch (err) {
+        log.warn('generic oauth 取消回滚无法严格核对持久凭证', {
+          providerId: provider.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        return false;
+      }
+      if (currentRaw !== persistedRaw) return true;
+      return logoutGenericOAuth(provider.id);
+    });
     listener?.succeed(provider.name);
     log.info('generic oauth login success', { providerId: provider.id, scope: tok.scope });
     return { ok: true };
@@ -712,8 +780,14 @@ export async function runGenericOAuthLogin(
  * 此时只追加 `/models`。自定义 OAuth 供应商靠这条推导免去用户手填发现端点。
  */
 export function deriveModelsDiscoveryUrl(baseUrl: string): string {
-  const u = baseUrl.replace(/\/+$/, '');
-  return /\/v\d+$/i.test(u) ? `${u}/models` : `${u}/v1/models`;
+  const url = new URL(baseUrl);
+  url.hash = '';
+  let pathname = url.pathname;
+  while (pathname.length > 1 && pathname.endsWith('/')) pathname = pathname.slice(0, -1);
+  url.pathname = /\/v\d+$/i.test(pathname)
+    ? `${pathname}/models`
+    : `${pathname === '/' ? '' : pathname}/v1/models`;
+  return url.toString();
 }
 
 /**

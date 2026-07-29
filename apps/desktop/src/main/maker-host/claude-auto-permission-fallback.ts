@@ -70,14 +70,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function firstSystemText(system: unknown): string | null {
+/**
+ * oauth-spawn 的 CC 默认开归因(claude-behavior-flags.ts,issue #758),会把
+ * `x-anthropic-billing-header: cc_version=...` 作为 system 数组**第一个** text block
+ * 注入 —— 分类器身份前缀被顶到其后。匹配前必须跳过归因块,否则 oauth-spawn 下
+ * 分类器故障全部漏检、auto→ask 降级失灵。
+ */
+const ATTRIBUTION_SYSTEM_BLOCK_PREFIX = 'x-anthropic-billing-header:';
+
+function classifierIdentityText(system: unknown): string | null {
   if (typeof system === 'string') return system;
-  if (!Array.isArray(system) || system.length === 0) return null;
-  const first = system[0];
-  if (!isRecord(first) || first.type !== 'text' || typeof first.text !== 'string') {
-    return null;
+  if (!Array.isArray(system)) return null;
+  for (const block of system) {
+    if (!isRecord(block) || block.type !== 'text' || typeof block.text !== 'string') {
+      return null;
+    }
+    if (block.text.startsWith(ATTRIBUTION_SYSTEM_BLOCK_PREFIX)) continue;
+    return block.text;
   }
-  return first.text;
+  return null;
 }
 
 /**
@@ -92,8 +103,8 @@ const CLASSIFIER_MAX_TOKENS_CEILING = 16384;
  * 精确识别 Claude Code 内部 Auto 安全分类器请求。双判据都满足才算命中:
  *
  * 主判据 —— 分类器独有的 system 前缀:分类器请求带 `skipSystemPromptPrefix`,其 system 段
- * 恒以 CLASSIFIER_SYSTEM_PREFIX 开头;普通主 turn 的 system 是 Claude Code 常规 prompt,
- * 二者完全区分。前缀是分类器身份,本身已足够;
+ * (跳过可能存在的归因块后)恒以 CLASSIFIER_SYSTEM_PREFIX 开头;普通主 turn 的 system 是
+ * Claude Code 常规 prompt,二者完全区分。前缀是分类器身份,本身已足够;
  *
  * 副判据 —— max_tokens 上界(防御性,收窄理论碰撞面):不用固定值(分类器三种形态 max_tokens
  * 各不相同,早期实现取定值 64 只覆盖一条、漏检 fast/thinking,漏检时降级不触发、会话继续
@@ -113,28 +124,116 @@ export function isClaudeAutoClassifierRequest(requestBody: Buffer): boolean {
   if (typeof parsed.max_tokens !== 'number' || parsed.max_tokens > CLASSIFIER_MAX_TOKENS_CEILING) {
     return false;
   }
-  return firstSystemText(parsed.system)?.startsWith(CLASSIFIER_SYSTEM_PREFIX) === true;
+  return classifierIdentityText(parsed.system)?.startsWith(CLASSIFIER_SYSTEM_PREFIX) === true;
 }
 
 /**
- * 创建只读响应观察器。非错误响应(status < 400，含 2xx 成功与 3xx 重定向)均为 O(1) 短路，
- * 不 parse body、不返回 sink，因此不会 tee SSE 热路径。
+ * 瞬时故障(408/429/5xx)的升级阈值 —— #596 与 #758 的平衡点:
+ *
+ * #596 的诉求成立:一次偶发限流不该永久改写用户的 Auto 偏好。但把瞬时状态码
+ * **一律**静默吞掉,会让「确定性地返回 429」的故障(如 #758 归因块 429)把用户
+ * 留在无限硬失败 + 零提示的死锁里 —— 降级兜底恰恰是那种场景唯一的自救通道。
+ *
+ * 折中:瞬时失败按「故障段(episode)」记账,连续 EPISODE_THRESHOLD 段且中间
+ * 没有任何一次分类器成功 → 视为持续故障,交给降级协调器(降 ask + 广播 toast)。
+ *
+ * - EPISODE_MS:SDK 对 429/5xx 有自动重试,一次用户动作会在数秒内产生多个失败
+ *   响应;30s 内的失败归并为一段,避免把一次动作的 retry storm 数成 N 次。
+ *   段以**段起点**为锚(固定桶),刻意不用「距最近一次失败的间隔」做锚:gap 锚定下
+ *   「失败每隔几秒持续到达」的确定性故障会被永远归并进同一段、永不达阈,重新退化成
+ *   #758 的无限 fail-closed。固定桶的代价是单次动作的 retry 链若拖过 30s 会跨段,
+ *   但 SDK 重试退避总时长远短于 30s,而真正连续失败 60s+ 的本就该判为持续故障。
+ * - WINDOW_MS:只统计最近 10 分钟——上午两次抖动 + 晚上一次不构成「持续」。
+ * - 阈值 3 段 ≈ 持续失败约 1 分钟,或用户间隔性重试 3 次;任一成功立即清零。
+ */
+const TRANSIENT_EPISODE_MS = 30_000;
+const TRANSIENT_WINDOW_MS = 10 * 60_000;
+const TRANSIENT_EPISODE_THRESHOLD = 3;
+/** 记账表大小上限(防长生命周期 proxy 泄漏);超限时先剔窗口过期项,再剔最老会话。 */
+const TRANSIENT_TRACKER_MAX_SESSIONS = 256;
+
+function isTransientClassifierStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/**
+ * 创建只读响应观察器。成功路径(status < 400,含 2xx/3xx)几乎恒为 O(1) 短路——
+ * 仅当**该会话已有瞬时故障记账**时才 parse body 确认「分类器已恢复」并清零计数;
+ * 无记账时不 parse、不返回 sink,不碰 SSE 热路径。
+ *
+ * 降级信号分两类:
+ * - 非瞬时 4xx(400/401/403/404/422 等确定性错误)→ 立即通知协调器(与 #596 前一致);
+ * - 瞬时 408/429/5xx → 按上方 episode 阈值记账,持续故障才通知。
  */
 export function createClaudeAutoClassifierFailureObserver(
   resolveSessionId: (sdkSessionId: string) => string | null,
+  opts: { now?: () => number } = {},
 ): ResponseObserver {
+  const now = opts.now ?? Date.now;
+  // key = sdkSessionId(cc 侧会话 id,请求头自带,成功路径无需反解);
+  // value = 各 episode 的起始时间戳,升序。
+  const transientEpisodes = new Map<string, number[]>();
+
   return (ctx: ResponseObserverCtx) => {
-    // 分类器请求的任何错误响应都意味着这一轮没拿到 verdict、CLI 会 fail-closed 把工具拦下,
-    // 一律当作「分类器不可用」触发降级——不再限于 429/5xx:
-    //   - 429 限流 / 5xx 服务故障(过载、宕机);
-    //   - 4xx 模型/参数层不可用(404 模型不存在、400 参数被拒、401/403 鉴权失效)。
-    // 降级到 ask 是安全方向(把 auto 收紧成人工授权,绝不放宽),瞬时 4xx 造成的单向降级
-    // 用户随时可手动切回 auto;coordinator 侧仍会复核持久态为 auto 并按 session 去重。
-    if (ctx.status < 400) return undefined;
+    if (ctx.status < 400) {
+      // 分类器恢复 → 清零该会话的瞬时故障记账。仅在有记账时才 parse body。
+      if (transientEpisodes.size === 0) return undefined;
+      const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
+      if (!sdkSessionId) return undefined;
+      const episodes = transientEpisodes.get(sdkSessionId);
+      if (!episodes) return undefined;
+      // 过期即弃:记账已整体滑出窗口 → 直接删,该会话的后续成功响应回到零开销
+      // 短路 —— 不为一条陈年记账无限期 parse 每个成功请求的 body。
+      const ts = now();
+      if (episodes.length === 0 || ts - episodes[episodes.length - 1] > TRANSIENT_WINDOW_MS) {
+        transientEpisodes.delete(sdkSessionId);
+        return undefined;
+      }
+      // 恢复判据只认 2xx:3xx 重定向不代表分类器真正给出 verdict,不得清账 ——
+      // 否则「上游持续用 3xx 响应分类器」的故障形态会每轮清零、永不升级,
+      // 会话被留在无限 fail-closed。
+      if (ctx.status >= 200 && ctx.status < 300 && isClaudeAutoClassifierRequest(ctx.requestBody)) {
+        transientEpisodes.delete(sdkSessionId);
+      }
+      return undefined;
+    }
     const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
     if (!sdkSessionId) return undefined;
     const sessionId = resolveSessionId(sdkSessionId);
     if (!sessionId || !isClaudeAutoClassifierRequest(ctx.requestBody)) return undefined;
+
+    if (isTransientClassifierStatus(ctx.status)) {
+      const ts = now();
+      let episodes = transientEpisodes.get(sdkSessionId);
+      if (!episodes) {
+        if (transientEpisodes.size >= TRANSIENT_TRACKER_MAX_SESSIONS) {
+          for (const [key, starts] of transientEpisodes) {
+            if (starts.length === 0 || ts - starts[starts.length - 1] > TRANSIENT_WINDOW_MS) {
+              transientEpisodes.delete(key);
+            }
+          }
+          if (transientEpisodes.size >= TRANSIENT_TRACKER_MAX_SESSIONS) {
+            // 仍满(极端:256 个会话同时持续故障)→ 剔最早插入的一个,保住新会话的记账。
+            const oldest = transientEpisodes.keys().next().value;
+            if (oldest !== undefined) transientEpisodes.delete(oldest);
+          }
+        }
+        episodes = [];
+        transientEpisodes.set(sdkSessionId, episodes);
+      }
+      while (episodes.length > 0 && ts - episodes[0] > TRANSIENT_WINDOW_MS) {
+        episodes.shift();
+      }
+      if (episodes.length === 0 || ts - episodes[episodes.length - 1] >= TRANSIENT_EPISODE_MS) {
+        episodes.push(ts);
+      }
+      if (episodes.length < TRANSIENT_EPISODE_THRESHOLD) return undefined;
+    }
+
+    // 任何一次通知(瞬时升级或确定性 4xx 立即降级)都清零该会话的瞬时记账:降级后
+    // 用户重开 Auto 时从零累计,不因残账被单次偶发失败提前推过阈值。协调器自身有
+    // in-flight 去重 + 持久态 CAS,重复信号安全。
+    transientEpisodes.delete(sdkSessionId);
 
     try {
       notifyAutoPermissionClassifierUnavailable({

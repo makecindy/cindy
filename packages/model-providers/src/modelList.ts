@@ -23,6 +23,21 @@ import {
   providersForAgent,
   type ProviderView,
 } from './registry.js';
+import { isAgentSelectableModel } from './classification.js';
+
+/**
+ * 标准派生的**内建准入过滤**(两条,先于 isVisible 判定):
+ *   1. 非 agent 分组(image / audio / video / embedding / other)—— 网关多返回的能力
+ *      模型,不能当 agent 用,**无条件**不进对话清单,keepSelected 豁免也不放行:
+ *      豁免是给「运行中的会话别丢选中行」用的,而能力模型作为选中项只可能来自
+ *      历史坑(旧 UI 把图像模型漏进了选择器)遗留的草稿/记忆,正是本过滤要修的
+ *      对象,豁免它等于把坑重新打开(PR #744 review)。
+ *   2. `m.disabled` —— 用户停用的模型(buildRegistry 按停用 override(disableOverrides)
+ *      烘焙的视图层标志)。停用 = 不可被任何新路由选中,与「隐藏」(isVisible,仅陈列)
+ *      不同;keepSelected 豁免**保留**(正在用它的会话不打断、选中行不消失)。
+ * 本模块所有消费方(选择器 / IM / worker / hook 兜底)都是「可路由对话模型」语境,
+ * 故直接内建,不做 opt-out。
+ */
 
 /**
  * 清单条目的来源溯源 —— flat(拍平去重)清单里「订阅」「立省85%」等来源徽章的**真实依据**。
@@ -140,6 +155,8 @@ export function deriveModelList(opts: DeriveModelListOptions): ModelListEntry[] 
         if (provider.access !== undefined) entry.sourceAccess = provider.access;
         return entry;
       };
+      if (!isAgentSelectableModel(m, { userProvider: provider.source === 'user' })) continue;
+      if (!selected && m.disabled === true) continue;
       if (dedupe === 'first-wins' && seenIndex.has(m.id)) {
         // 首见行已占坑。keepSelected 点名 provider 且选中行排在后面时,首见行必须让位——
         // 否则选中 (provider, model) 被去重丢弃,flat 列表带着错误来源/徽章(codex review):
@@ -194,6 +211,8 @@ export function deriveModelSections(
     for (const m of provider.models[agent] ?? []) {
       if (excludeModel?.(m, provider)) continue;
       const selected = matchesSelected(keepSelected, provider.id, m.id);
+      if (!isAgentSelectableModel(m, { userProvider: provider.source === 'user' })) continue;
+      if (!selected && m.disabled === true) continue;
       if (!selected && isVisible && !isVisible(provider.id, m)) continue;
       if (q && !m.name.toLowerCase().includes(q) && !m.id.toLowerCase().includes(q)) continue;
       const entry: ModelListEntry = {

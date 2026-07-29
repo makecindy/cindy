@@ -213,3 +213,56 @@ describe('send_to_session tool', () => {
     expect(parse(res)).toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
   });
 });
+
+describe('send_to_session · working_dir (#811)', () => {
+  it('create + working_dir → host 收到 workingDir 覆盖', async () => {
+    const { registry, sendToSession } = setup();
+    const res = await registry.call('send_to_session', {
+      message: '请接手项目 B 的任务',
+      title: '项目 B · 任务交接',
+      working_dir: '/abs/path/project-b',
+    });
+    expect(sendToSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workingDir: '/abs/path/project-b',
+        targetSessionId: undefined,
+      }),
+    );
+    expect(parse(res)).toMatchObject({ ok: true, wake_kind: 'created' });
+  });
+
+  it('working_dir 与 use_worktree 可组合透传', async () => {
+    const { registry, sendToSession } = setup();
+    await registry.call('send_to_session', {
+      message: 'x',
+      working_dir: '/abs/path/project-b',
+      use_worktree: true,
+    });
+    expect(sendToSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: '/abs/path/project-b', useWorktree: true }),
+    );
+  });
+
+  it('省略 working_dir → host 收到 undefined(继承 dispatcher 目录的既有行为不变)', async () => {
+    const { registry, sendToSession } = setup();
+    await registry.call('send_to_session', { message: 'x' });
+    expect(sendToSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: undefined }),
+    );
+  });
+
+  it('host 返 INVALID_ARGS(路径校验失败)→ 错误码透传', async () => {
+    const { registry } = setup({
+      result: {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message: 'working_dir 不存在或不可访问:/nope',
+      },
+    });
+    const res = await registry.call('send_to_session', {
+      message: 'x',
+      working_dir: '/nope',
+    });
+    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  });
+});

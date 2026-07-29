@@ -211,15 +211,24 @@ describe('mobile settings overview', () => {
     expect(source).toContain('isTestFlightBuild: IS_TESTFLIGHT_BUILD');
     expect(source).toContain('const updateCheckEnabled = bundleCheckEnabled || updatesEnabled');
     expect(source).toContain('checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined');
+    expect(source).toContain('const [updateOutcome, setUpdateOutcome] = useState<ManualUpdateCheckOutcome | null>(null);');
+    expect(source).toContain('manualUpdateCheckMessage(updateOutcome, {');
+    expect(source).toContain('setUpdateOutcome(outcome);');
+    expect(source).not.toContain('const [updateMessage, setUpdateMessage]');
+    expect(source).not.toContain('setUpdateMessage(');
     expect(source).toContain("'settings.version.testFlightCheckAction'");
     expect(source).toContain("'settings.version.testFlightCheckingAccessibility'");
-    expect(source).toContain("'settings.version.testFlightNoContentUpdate'");
-    expect(source).toContain("'settings.version.testFlightContentUpdateUnavailable'");
     expect(source).toContain("testID=\"settings.testFlightUpdateHint\"");
     expect(source).toContain("{t('settings.version.testFlightUpdateManaged')}");
     expect(source).toContain("{t('settings.version.bundleVersion', { version: appVersion })}");
     expect(source).toContain(
       "testID=\"settings.otaVersion\">{t('settings.version.otaVersion', { version: otaVersion })}",
     );
+    expect(source).toContain(
+      "testID=\"settings.desktopVersion\">{t('settings.version.pairedDesktopVersion', { version: DESKTOP_PACKAGE_VERSION })}",
+    );
+    expect(source).not.toContain("'settings.version.desktopVersion'");
+    expect(i18n.t('settings.version.pairedDesktopVersion', { version: '0.1.18' }))
+      .toBe('配套桌面版本 0.1.18');
   });
 });

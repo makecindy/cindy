@@ -25,6 +25,7 @@ import { BrowserWindow } from 'electron';
 import { and, count, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 
 import { getMaker } from './maker-host/index.js';
+import { isAgentOneShotRouteDisabled } from './maker-host/model-route-guard-live.js';
 import { requestUtilityText } from './utility-model/oneShotCandidates.js';
 import { getDbClient } from './localDb/client/current.js';
 import { latestMessageText } from './localDb/latestMessageText.js';
@@ -152,9 +153,13 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
       maxTokens: 120,
       timeoutMs: 30_000,
     });
+    // 停用轴:agent one-shot 兜底是新的付费调用,该 agent 的默认路由被停用时不派发
+    // (摘要 best-effort,直接放弃本轮,PR #744 review)。
     const text = utility.ok
       ? utility.text
-      : await getMaker().oneShot(agentKind, prompt, { maxTokens: 120 });
+      : (await isAgentOneShotRouteDisabled(agentKind))
+        ? ''
+        : await getMaker().oneShot(agentKind, prompt, { maxTokens: 120 });
     const summary = sanitize(text, maxCharsForTier(tier));
     if (!summary) return;
 

@@ -1,6 +1,10 @@
 import type { AgentKind } from '@cindy/maker-core';
 
-import { getSessionProvider, setSessionProvider } from '../maker-host/session-provider-store.js';
+import {
+  getSessionProvider,
+  normalizeSessionProviderId,
+  setSessionProvider,
+} from '../maker-host/session-provider-store.js';
 // type-only import:编译期擦除,不会把 codex-proxy-host 的运行时依赖拖进本模块/单测。
 import type { CodexProxyAuthInjection } from '../maker-host/codex-proxy-host.js';
 import {
@@ -50,7 +54,7 @@ export interface ApplyRuntimeSetModelChangeInput {
   registerPendingCredentialSwitch?: (
     sessionId: string,
     target: { model: string; providerId: string | null },
-  ) => void;
+  ) => void | Promise<void>;
   /**
    * 「无需切换」分支清掉旧 pending(后选覆盖先选)。典型场景:deferred 登记后
    * renderer 持久化失败发起回滚 set-model、用户改选回与当前进程同族的来源、或
@@ -108,16 +112,19 @@ export async function applyRuntimeSetModelChange(
   input: ApplyRuntimeSetModelChangeInput,
 ): Promise<ApplyRuntimeSetModelChangeResult> {
   const { maker, sessionId, model, providerId, isSessionInTurn, logger } = input;
+  const normalizedProviderId = normalizeSessionProviderId(providerId);
   const sess = maker.getSession(sessionId);
   const currentProviderId = getSessionProvider(sessionId);
   // model-only 调用以 pending 的 providerId 为「当前来源意图」:用户先 deferred 选了
   // 新来源、再换模型时,决策与登记都要沿用那个来源,不能回落到 store 里的旧值
   // (否则会把 pending 的来源覆盖丢)。
   const pendingTarget =
-    providerId === undefined ? input.getPendingCredentialSwitch?.(sessionId) : undefined;
+    normalizedProviderId === undefined
+      ? input.getPendingCredentialSwitch?.(sessionId)
+      : undefined;
   const nextProviderId =
-    providerId !== undefined
-      ? typeof providerId === 'string' ? providerId : null
+    normalizedProviderId !== undefined
+      ? normalizedProviderId
       : pendingTarget !== undefined
         ? pendingTarget.providerId
         : currentProviderId;
@@ -158,7 +165,7 @@ export async function applyRuntimeSetModelChange(
     // 把 route/model 的生效边界固定在 turn 结束；pending 收口只关闭本 Session，
     // shared host 保留，不重新 spawn app-server。
     if (input.registerPendingCredentialSwitch) {
-      input.registerPendingCredentialSwitch(sessionId, {
+      await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
       });
@@ -179,7 +186,7 @@ export async function applyRuntimeSetModelChange(
 
   if (sess && shouldCloseSession) {
     if (isSelfBusy() && input.registerPendingCredentialSwitch) {
-      input.registerPendingCredentialSwitch(sessionId, {
+      await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
       });

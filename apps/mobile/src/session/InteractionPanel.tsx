@@ -8,7 +8,6 @@ import {
   Minus,
   Pencil,
   Plus,
-  Square,
 } from 'lucide-react-native';
 import {
   Image,
@@ -407,7 +406,6 @@ function InteractionItem({
   if (!requestId) {
     return (
       <UnsupportedCard
-        kind={kind}
         message={t('interaction.panel.missingRequestId')}
         request={item.request}
         touchLayout={touchLayout}
@@ -450,7 +448,6 @@ function InteractionItem({
   if (kind === 'issue_confirm') {
     return (
       <UnsupportedCard
-        kind={kind}
         message={t('interaction.panel.issueConfirmUnsupported')}
         request={item.request}
         touchLayout={touchLayout}
@@ -488,7 +485,6 @@ function InteractionItem({
   }
   return (
     <UnsupportedCard
-      kind={kind}
       message={t('interaction.panel.unsupportedType')}
       request={item.request}
       touchLayout={touchLayout}
@@ -861,23 +857,25 @@ function AskUserQuestionCard({
                 ]}
                 testID={`interaction.ask.option.${index + 1}`}
               >
-                {isMulti ? (
-                  <View style={styles.optionCheckbox} testID={selected ? 'interaction.ask.checkbox.checked' : 'interaction.ask.checkbox'}>
-                    <Square
-                      color={selected ? colors.textPrimary : colors.borderStrong}
-                      size={iconSize.xl}
-                      strokeWidth={iconStroke.regular}
+                {/* 单选也要有指示器:选中反色实底 + 对勾(对齐桌面 ask-checkbox 与登录
+                    radio 的反色勾体系)。此前单选行只靠 surfaceChip 底色,dark 下与卡底
+                    几乎同色,选中态不可见。 */}
+                <View
+                  style={[
+                    styles.optionIndicator,
+                    isMulti ? styles.optionIndicatorSquare : styles.optionIndicatorRound,
+                    selected && styles.optionIndicatorSelected,
+                  ]}
+                  testID={`interaction.ask.${isMulti ? 'checkbox' : 'radio'}${selected ? '.checked' : ''}`}
+                >
+                  {selected ? (
+                    <Check
+                      color={colors.ctaText}
+                      size={iconSize.sm}
+                      strokeWidth={iconStroke.bold}
                     />
-                    {selected ? (
-                      <Check
-                        color={colors.textPrimary}
-                        size={iconSize.sm}
-                        strokeWidth={iconStroke.bold}
-                        style={styles.optionCheckboxMark}
-                      />
-                    ) : null}
-                  </View>
-                ) : null}
+                  ) : null}
+                </View>
                 <View style={styles.optionCopy}>
                   <Text style={styles.optionTitle}>{option.label}</Text>
                   {option.description ? <Text style={styles.optionDescription}>{option.description}</Text> : null}
@@ -1417,7 +1415,7 @@ function PluginSetupCard({
             onPress={cancel.onPress}
             requestId={requestId}
             touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary')}
-            testID="interaction.unsupported.cancelButton"
+            testID="interaction.pluginSetup.cancelButton"
             variant="secondary"
           />
         </View>
@@ -1458,10 +1456,11 @@ function PluginSetupStepRow({ step }: { step: RemotePluginSetupStep }) {
   return (
     <View
       // 聚合成一个读屏单元:标题 / 状态 / 待办 / 错误分开念会把一步拆成四条碎片。
+      // 分隔符走文案目录:硬编码「，」会让 en / ja / ko 的读屏念出中文标点。
       accessible
       accessibilityLabel={[step.title, phaseText, step.description, visibleActionHint, errorText]
         .filter((part): part is string => !!part)
-        .join('，')}
+        .join(t('interaction.pluginSetup.a11ySeparator'))}
       style={styles.pluginSetupStep}
       testID="interaction.pluginSetup.step"
     >
@@ -1486,60 +1485,31 @@ function PluginSetupStepRow({ step }: { step: RemotePluginSetupStep }) {
   );
 }
 
+/**
+ * 本端既处理不了、也没有可用出口的卡:缺 requestId 的残卡、issue_confirm,以及
+ * 任何未知 kind。纯展示——`plugin_setup` 自 PluginSetupCard 起不再走这里,当时
+ * 为它加的 cancel / busy / kindLabel / summaryLines 形参已随之失去调用方,一并
+ * 移除,避免留下没人走的分支。
+ */
 function UnsupportedCard({
-  busy = false,
-  cancel = null,
-  kind,
-  kindLabel,
   message,
   request,
-  requestId = null,
-  summaryLines,
   touchLayout,
 }: {
-  busy?: boolean;
-  /** 本端唯一能做的动作(目前只有 plugin_setup 的取消);null = 纯展示卡。 */
-  cancel?: { accessibilityLabel: string; label: string; onPress(): void } | null;
-  kind: string;
-  /** eyebrow 覆写;缺省是「暂不支持」。 */
-  kindLabel?: string;
   message: string;
   request: PendingInteraction['request'];
-  requestId?: string | null;
-  /**
-   * 可读摘要。**未提供**时才回退成 request 预览(未知类型只能这样交底);提供了
-   * 空数组表示「这类卡本来就该只显示标题」,不能再掉回 raw JSON —— 那正是本次要
-   * 消灭的展示(#530 review)。
-   */
-  summaryLines?: string[];
   touchLayout: InteractionTouchLayout;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
-  // 合并成一段带换行的文本再限行:每行各自 numberOfLines={6} 会把总可见行数放大成
-  // 6 × 行数,步骤多时把卡撑得很高(#530 review)。
-  const summaryText = (summaryLines ?? [contentToPreview(request)])
-    .filter((line) => line.length > 0)
-    .join('\n');
+  // 未知类型只能靠 request 预览交底;整段一次限行,不按行各自限行(每行各自
+  // numberOfLines={6} 会把总可见行数放大成 6 × 行数,#530 review)。
+  const summaryText = contentToPreview(request);
   return (
     <View style={cardStyle(styles, touchLayout)} testID="interaction.unsupported.card">
-      <Text style={styles.kind}>{kindLabel ?? t('interaction.panel.unsupportedKind')}</Text>
+      <Text style={styles.kind}>{t('interaction.panel.unsupportedKind')}</Text>
       <Text style={styles.cardTitle}>{message}</Text>
       {summaryText ? <Text style={styles.body} numberOfLines={6}>{summaryText}</Text> : null}
-      {cancel ? (
-        <View style={actionsStyle(styles, touchLayout)}>
-          <ResolveButton
-            accessibilityLabel={cancel.accessibilityLabel}
-            busy={busy}
-            label={cancel.label}
-            onPress={cancel.onPress}
-            requestId={requestId}
-            touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary')}
-            testID="interaction.unsupported.cancelButton"
-            variant="secondary"
-          />
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -1992,14 +1962,24 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   optionRowSelected: {
     backgroundColor: colors.surfaceChip,
   },
-  optionCheckbox: {
+  optionIndicator: {
     alignItems: 'center',
-    height: 24,
+    borderColor: colors.borderStrong,
+    borderWidth: 2,
+    height: iconSize.xl,
     justifyContent: 'center',
-    width: 24,
+    width: iconSize.xl,
   },
-  optionCheckboxMark: {
-    position: 'absolute',
+  // 单选圆形(radio 语义)、多选圆角方形(checkbox 语义),选中都用反色实底 + 勾。
+  optionIndicatorRound: {
+    borderRadius: radius.pill,
+  },
+  optionIndicatorSquare: {
+    borderRadius: radius.micro,
+  },
+  optionIndicatorSelected: {
+    backgroundColor: colors.cta,
+    borderColor: colors.cta,
   },
   optionCopy: { flex: 1, minWidth: 0 },
   optionTitle: {

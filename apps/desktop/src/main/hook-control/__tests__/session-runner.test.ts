@@ -168,15 +168,26 @@ vi.mock('../defaults.js', async (importOriginal) => {
 function makeFakeSession(id: string) {
   return {
     id,
+    workDir: 'D:/repo',
     onEvent(cb: (ev: { type: string; data: unknown }) => void) {
       h.eventCbs.set(id, cb);
       return () => {
         h.eventCbs.delete(id);
       };
     },
+    setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
+      h.interactionListeners.set(id, listener);
+    },
     send: vi.fn(
-      async (_msg: unknown, opts: { onAccepted?: () => Promise<void> }): Promise<unknown> => {
+      async (
+        _msg: unknown,
+        opts: {
+          beforeProviderStart?: () => Promise<void> | void;
+          onAccepted?: () => Promise<void>;
+        },
+      ): Promise<unknown> => {
         h.headlessDuringSend.push(isHeadlessGhostSetupTurn(id));
+        await opts.beforeProviderStart?.();
         await opts.onAccepted?.();
         h.headlessAfterAccepted.push(isHeadlessGhostSetupTurn(id));
         // 收口: 模拟 agent 立刻完成本 turn
@@ -234,7 +245,9 @@ function connectedProvider(
     source: 'builtin',
     agents: [agentKind],
     auth: { method: 'managed' },
-    routing: {},
+    routing: {
+      [agentKind]: { upstream: 'https://example.test', authStrategy: 'gateway-key' },
+    },
     models: { [agentKind]: models },
     connected: true,
   };
@@ -306,6 +319,55 @@ describe('hook session 精确接管边界', () => {
 
     await expect(runner.inspect('remote-session')).resolves.toMatchObject({ usable: false });
     await expect(runner.inspect('worker-session')).resolves.toMatchObject({ usable: false });
+  });
+});
+
+describe('真正要跑的那个 live session 的目录也要过映射', () => {
+  it('活实例仍在已撤权的目录 -> 拒绝执行, 消息不进 agent', async () => {
+    // maker.createSession 对已在 activeSessions 里的 id 直接返回既有实例, 忽略
+    // 传入的 workingDir —— 那个实例的 workDir 可能已被移出映射
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => ({
+      ...makeFakeSession(opts.id ?? 'sess-old'),
+      workDir: 'D:/unmapped-place',
+    }));
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(
+      baseReq({
+        sessionId: 'sess-old',
+        isNew: false,
+        isDirAuthorized: (dir: string) => dir === 'D:/repo',
+      }),
+    );
+
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toContain('已不在工作目录映射里的目录');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it('新建路径不走这道判定(拦下只会留空会话 + 孤儿 worktree)', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+
+    // 新会话的 id 刚生成, activeSessions 里不可能有旧实例, 错配不存在;
+    // 而此时 agent 已启动、会话行已插入、预建 worktree 还注册着
+    const outcome = await runner.run(baseReq({ isDirAuthorized: () => false }));
+
+    expect(outcome.status).toBe('ok');
+  });
+
+  it('活实例的目录仍在映射内 -> 照常执行(映射内的移动不受影响)', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(
+      baseReq({
+        sessionId: 'sess-old',
+        isNew: false,
+        isDirAuthorized: (dir: string) => dir === 'D:/repo',
+      }),
+    );
+
+    expect(outcome.status).toBe('ok');
   });
 });
 
@@ -600,13 +662,24 @@ describe('进度快照(turn.progress 链路)', () => {
   function makeManualSession(id: string) {
     return {
       id,
+      workDir: 'D:/repo',
       onEvent(cb: (ev: { type: string; data: unknown }) => void) {
         h.eventCbs.set(id, cb);
         return () => {
           h.eventCbs.delete(id);
         };
       },
-      send: vi.fn(async (_msg: unknown, opts: { onAccepted?: () => Promise<void> }) => {
+      setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
+        h.interactionListeners.set(id, listener);
+      },
+      send: vi.fn(async (
+        _msg: unknown,
+        opts: {
+          beforeProviderStart?: () => Promise<void> | void;
+          onAccepted?: () => Promise<void>;
+        },
+      ) => {
+        await opts.beforeProviderStart?.();
         await opts.onAccepted?.();
         return {};
       }),
@@ -751,6 +824,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
   function makeInteractiveSession(id: string) {
     return {
       id,
+      workDir: 'D:/repo',
       onEvent(cb: (ev: { type: string; data: unknown }) => void) {
         h.eventCbs.set(id, cb);
         return () => {
@@ -760,14 +834,21 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
         h.interactionListeners.set(id, listener);
       },
-      send: vi.fn(async (_msg: unknown, opts: { onAccepted?: () => Promise<void> }) => {
+      send: vi.fn(async (
+        _msg: unknown,
+        opts: {
+          beforeProviderStart?: () => Promise<void> | void;
+          onAccepted?: () => Promise<void>;
+        },
+      ) => {
+        await opts.beforeProviderStart?.();
         await opts.onAccepted?.();
         return {};
       }),
     };
   }
 
-  it('ask 请求 -> 发卡回调 -> 按钮决策回流 resolve; 收口后归还桌面 listener', async () => {
+  it('ask 请求 -> 中央 Router 发卡 -> 按钮决策回流 resolve; 收口后释放 route', async () => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeInteractiveSession(opts.id ?? 'sess-x'),
     );
@@ -788,7 +869,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     );
     await new Promise((r) => setTimeout(r, 0));
 
-    // hook listener 已覆盖桌面版
+    // Session listener 始终由中央 Router 持有。
     const listener = h.interactionListeners.get('sess-new')!;
     expect(listener).toBeTypeOf('function');
 
@@ -811,12 +892,12 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       answers: { '继续重构吗?': '先停' },
     });
 
-    // 正常收口: 无未决交互, 不发 cancel, 桌面 listener 归还
+    // 正常收口: 无未决交互, 不发 cancel；无需覆盖/归还 listener。
     h.eventCbs.get('sess-new')!({ type: 'done', data: null });
     const outcome = await p;
     expect(outcome.status).toBe('ok');
     expect(cancels).toHaveLength(0);
-    expect(h.installDesktopInteractionListener).toHaveBeenCalledTimes(1);
+    expect(h.installDesktopInteractionListener).not.toHaveBeenCalled();
   });
 
   it('permission 请求出三按钮卡, 按钮回流 resolve(允许一次)', async () => {

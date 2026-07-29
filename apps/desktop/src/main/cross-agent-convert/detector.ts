@@ -12,6 +12,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import yaml from 'js-yaml';
 
 import type {
   AgentKind,
@@ -66,6 +67,27 @@ async function listFilesByExt(p: string, ext: string): Promise<string[]> {
     return ents.filter((e) => e.isFile() && e.name.toLowerCase().endsWith(ext)).map((e) => e.name);
   } catch {
     return [];
+  }
+}
+
+/**
+ * 检测阶段要求 Claude agent 文件包含可解析 YAML 中的非空字符串 `name`，
+ * 避免把普通 Markdown 误报为可迁移代理。转换器对缺少或假值 `name` 的源文件
+ * 会跳过，但不在这里重复执行转换。
+ */
+async function isConvertibleClaudeAgentFile(p: string): Promise<boolean> {
+  try {
+    const raw = await fs.readFile(p, 'utf8');
+    const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+    if (!match) return false;
+    const parsed = yaml.load(match[1]);
+    const name =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as { name?: unknown }).name
+        : undefined;
+    return typeof name === 'string' && name.trim().length > 0;
+  } catch {
+    return false;
   }
 }
 
@@ -150,8 +172,17 @@ async function detectAgents(wd: string, direction: MigrationDirection, items: Mi
     if (!(await isDir(claudeAgents))) return;
     const sourceFiles = await listFilesByExt(claudeAgents, '.md');
     if (sourceFiles.length === 0) return;
-    const targetExisting = new Set((await listFilesByExt(codexAgents, '.toml')).map((n) => n.replace(/\.toml$/i, '')));
-    const baseNames = sourceFiles.map((f) => f.replace(/\.md$/i, ''));
+    const convertibleSourceFiles: string[] = [];
+    for (const file of sourceFiles) {
+      if (await isConvertibleClaudeAgentFile(path.join(claudeAgents, file))) {
+        convertibleSourceFiles.push(file);
+      }
+    }
+    if (convertibleSourceFiles.length === 0) return;
+    const targetExisting = new Set(
+      (await listFilesByExt(codexAgents, '.toml')).map((n) => n.replace(/\.toml$/i, '')),
+    );
+    const baseNames = convertibleSourceFiles.map((f) => f.replace(/\.md$/i, ''));
     const missing = baseNames.filter((n) => !targetExisting.has(n));
     if (missing.length === 0) return;
     items.push({

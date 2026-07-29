@@ -22,10 +22,14 @@ import type { Maker } from '@cindy/maker-core';
 import type { FeishuIM } from '@cindy/im';
 
 import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace';
+import {
+  resolveRouteCopyCapabilities,
+  verdictForModelRoute,
+} from '../maker-host/model-route-guard-live.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import {
-  applyPendingAgentSwitchForDirectSend,
+  acquirePendingAgentSwitchForDirectSend,
   broadcastSessionCreated,
   enqueueSchedulerPrompt,
   hasQueuedSchedulerPrompt,
@@ -74,8 +78,12 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     logger: deps.logger,
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
-    applyPendingAgentSwitch: applyPendingAgentSwitchForDirectSend,
+    acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
     onSessionCreated: broadcastSessionCreated,
+    // 停用轴裁决:每次 fire 前判保存路由是否已被用户停用(见 runner deps 注释)。
+    checkModelRoute: verdictForModelRoute,
+    // 隐式改道后按落地拷贝 reconcile effort/Fast(见 runner deps 注释,R27)。
+    resolveRouteCopyCapabilities,
     // 心跳撞忙排队桥:实现挂在 maker-ipc/register.ts 的 coordinator 装配处
     // (holder 未就绪时 isSessionBusy 返回 false → runner 走原直发路径)。
     schedulerQueue: {

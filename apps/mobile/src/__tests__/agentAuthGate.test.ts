@@ -13,7 +13,12 @@ function provider(patch: Partial<ProviderView> & Pick<ProviderView, 'id' | 'agen
     name: patch.id,
     source: 'builtin',
     auth: { method: 'api-key' },
-    routing: {},
+    routing: Object.fromEntries(
+      patch.agents.map((agent) => [
+        agent,
+        { upstream: 'https://example.test', authStrategy: 'api-key-header' },
+      ]),
+    ),
     models: {},
     ...patch,
   } as ProviderView;

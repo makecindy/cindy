@@ -107,6 +107,10 @@ export function applyWebviewHardening(
   webPreferences.allowRunningInsecureContent = false;
   webPreferences.webviewTag = false;
   webPreferences.plugins = false;
+  // Keep Chromium dialogs enabled so Page.javascriptDialogOpening reaches the
+  // controlled debugger observer. The backend turns them into structured
+  // barriers instead of letting them silently bypass the automation contract.
+  webPreferences.disableDialogs = false;
   // Codex 自定义字段(Electron 标准 WebPreferences 不认这个 key,Electron 会
   // 忽略;但 Codex 在 IPC 层 / fork 的 Electron 可能消费它)。我们一并设上保持
   // 字面 1:1,即便 Electron 标准侧 no-op 也无害。

@@ -163,6 +163,73 @@ describe('Ghost plugin detail sections', () => {
     expect(detailActions?.className).toContain('flex-nowrap');
   });
 
+  it('routes a projected detail icon failure to market recovery', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const onIconLoadError = vi.fn();
+    const { container } = render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={{
+          ...detail,
+          iconDataUrl: 'https://plugins.example.invalid/icon.png?signature=current',
+        }}
+        panelStatus="Docked"
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+        onIconLoadError={onIconLoadError}
+      />,
+    );
+
+    fireEvent.error(container.querySelector('img') as HTMLImageElement);
+
+    expect(onIconLoadError).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the market replacement action for a same-version legacy install', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const onUpdate = vi.fn();
+    render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={detail}
+        panelStatus="Docked"
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={onUpdate}
+        updateVersion={detail.version}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    const updateButton = screen.getByRole('button', {
+      name: 'settings.ghosts.market.update',
+    });
+    fireEvent.click(updateButton);
+
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.market.updateTo' })).toBeNull();
+  });
+
   it('disables every market update entry while an update is busy', async () => {
     vi.stubGlobal(
       'ResizeObserver',
@@ -386,7 +453,7 @@ describe('Ghost plugin detail sections', () => {
     );
   });
 
-  it('renders every detail fact in a three-column flat grid and copies the install location', async () => {
+  it('lets the install location use the full details row and preserves its actions', async () => {
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(100);
     vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(300);
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -409,6 +476,7 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.getByText('Panel')).toBeTruthy();
     expect(screen.getByText('Install Location')).toBeTruthy();
     const installLocation = screen.getByText('/tmp/cindy-brain/builtin.example');
+    expect(installLocation.closest('.col-span-full')).toBeTruthy();
     expect(installLocation.className).toContain('truncate');
     expect(installLocation.className).toContain('whitespace-nowrap');
     expect(screen.queryByRole('button', { name: 'See All' })).toBeNull();

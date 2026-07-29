@@ -237,18 +237,29 @@ export function SettingsView() {
         </aside>
 
         {/* Content column — capped and centered in the remaining space.
+            Most tabs scroll as a page; Session Import uses a fixed-height workspace
+            so only its candidate list scrolls and the import action stays visible.
             right padding mirrors sidebar's 24px left inset.
             pt-[56px] pushes content top to align with the first nav tab (General),
             skipping the "Settings" header height (h1 24/1.1 + pb-18 + gap-2 ≈ 52px).
-            scrollbar-gutter:stable —— 全局滚动条占位 12px,长短页(有/无滚动条)
-            切换时预留 gutter,避免居中内容左右跳变。 */}
+            scrollbar-gutter:stable —— 所有分区都预留同一滚动条槽位；即使
+            Session Import 自身不滚动，也要保持与普通滚动页相同的内容宽度。 */}
         <div
           ref={contentScrollRef}
-          className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-y-auto pl-4 pr-6 pt-[56px] [scrollbar-gutter:stable]"
+          className={cn(
+            'flex h-full min-h-0 min-w-0 flex-1 flex-col pl-4 pr-6 pt-[56px] [scrollbar-gutter:stable]',
+            activeTab === 'import' ? 'overflow-hidden' : 'overflow-y-auto',
+          )}
         >
           {/* key={activeTab}:切分区时 wrapper 重挂跑 150ms 淡入(面板内容本就
               按 activeTab 条件卸载重挂,key 不额外丢状态;滚动容器在外层不重挂)。 */}
-          <div key={activeTab} className="mx-auto w-full max-w-[920px] pb-32 animate-fade-in">
+          <div
+            key={activeTab}
+            className={cn(
+              'mx-auto w-full min-w-0 max-w-[920px] px-1 animate-fade-in',
+              activeTab === 'import' ? 'h-full min-h-0' : 'pb-32',
+            )}
+          >
             {activeTab === 'general' && (
               <div
                 role="tabpanel"
@@ -467,8 +478,13 @@ export function SettingsView() {
             )}
 
             {activeTab === 'import' && (
-              <div role="tabpanel" id="settings-panel-import" aria-labelledby="settings-tab-import">
-                <section aria-label={t('settings.sections.import')}>
+              <div
+                role="tabpanel"
+                id="settings-panel-import"
+                aria-labelledby="settings-tab-import"
+                className="h-full min-h-0"
+              >
+                <section className="h-full min-h-0" aria-label={t('settings.sections.import')}>
                   <SessionImportSection />
                 </section>
               </div>

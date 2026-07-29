@@ -1,0 +1,10 @@
+{
+  "site": "mp.weixin.qq.com",
+  "auth": "无需登录:公众号文章分享链接是公开页面,持久浏览器直接打开即可(真浏览器执行 JS 后正文可见,不需要伪装微信 UA)",
+  "entry": {
+    "article": "https://mp.weixin.qq.com/s/<key>",
+    "articleLegacy": "https://mp.weixin.qq.com/s?__biz=<biz>&mid=<mid>&idx=<idx>&sn=<sn>"
+  },
+  "recipes": ["wechat-article"],
+  "notes": "关键选择器:标题 #activity-name、公众号名 #js_name、作者 #js_author_name(部分文章没有)、发布时间 #publish_time(由页面内联 JS 填充,load 后可读)、正文容器 #js_content。正文图片是懒加载:真实地址在 img[data-src] 而非 src;图片域名 mmbiz.qpic.cn 有防盗链,浏览器外直接下载需带 Referer: https://mp.weixin.qq.com/。wechat-article 配方返回全文文本(超 4 万字符截断并标 truncated)与图片地址列表。能力边界:mp.weixin.qq.com 没有免登录的搜索/列表接口,「列出某公众号历史文章」做不到,文章 URL 需由用户提供(聊天分享/收藏)。失败模式:#js_content 缺失 = 链接过期(带 chksm 的临时链接有时效)、文章被删除/违规屏蔽、或频繁访问触发环境验证页——遇验证页应停下告知用户,不要反复重试。"
+}

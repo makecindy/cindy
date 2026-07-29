@@ -105,7 +105,7 @@ function providerStub(id: string): ProviderView {
 // ── Provider 解析(WYSIWYG)─────────────────────────────────────────────────
 
 describe('generateTitleViaProvider — provider 解析', () => {
-  it('DB 有显式来源 → 走该来源(忽略已连接列表)', async () => {
+  it('DB 有显式来源且在可路由 rail 内 → 走该来源(不落默认解析)', async () => {
     const fetchImpl = fakeFetch(() => ({
       json: { content: [{ type: 'text', text: '标题' }] },
     }));
@@ -114,12 +114,31 @@ describe('generateTitleViaProvider — provider 解析', () => {
       {
         fetchImpl,
         readSessionProviderId: async () => 'anthropic',
-        listConnectedProviders: async () => [],
+        // rail 同时含默认来源 xd:显式选择必须压过 nativeDefault。
+        listConnectedProviders: async () => [providerStub('xd'), providerStub('anthropic')],
         readAnthropicOAuth: () => ({ accessToken: 'tok' }),
       },
     );
     expect(title).toBe('标题');
     expect(String(vi.mocked(fetchImpl).mock.calls[0][0])).toContain('anthropic.com');
+  });
+
+  it('显式来源不在可路由 rail(停用/断开)→ 跳过,不发请求(PR #744 停用轴)', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '不应出现' }] },
+    }));
+    const title = await generateTitleViaProvider(
+      { sessionId: 's1', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        // rail 只有 xd:显式来源 anthropic 已停用/断开 → 跳过,不回落默认来源。
+        listConnectedProviders: async () => [providerStub('xd')],
+        readAnthropicOAuth: () => ({ accessToken: 'tok' }),
+      },
+    );
+    expect(title).toBeNull();
+    expect(vi.mocked(fetchImpl).mock.calls).toHaveLength(0);
   });
 
   it('DB 无显式 + xd 已连接 → 走 xd(cc 默认)', async () => {
@@ -253,7 +272,7 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
       {
         fetchImpl,
         readSessionProviderId: async () => 'anthropic',
-        listConnectedProviders: async () => [],
+        listConnectedProviders: async () => [providerStub('anthropic')],
         readAnthropicOAuth: () => ({ accessToken: 'atok' }),
       },
     );
@@ -275,7 +294,7 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
       {
         fetchImpl,
         readSessionProviderId: async () => 'anthropic',
-        listConnectedProviders: async () => [],
+        listConnectedProviders: async () => [providerStub('anthropic')],
         readAnthropicOAuth: () => null,
       },
     );
@@ -289,7 +308,7 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
       {
         fetchImpl,
         readSessionProviderId: async () => 'anthropic',
-        listConnectedProviders: async () => [],
+        listConnectedProviders: async () => [providerStub('anthropic')],
         readAnthropicOAuth: () => ({ accessToken: 'atok' }),
       },
     );
@@ -315,7 +334,7 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
         {
           fetchImpl,
           readSessionProviderId: async () => 'openai',
-          listConnectedProviders: async () => [],
+          listConnectedProviders: async () => [providerStub('openai')],
           readCodexCreds: () => ({ accessToken: 'ctok', accountId: 'acc-1' }),
         },
       ),
@@ -339,7 +358,7 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
       {
         fetchImpl,
         readSessionProviderId: async () => 'openai',
-        listConnectedProviders: async () => [],
+        listConnectedProviders: async () => [providerStub('openai')],
         readCodexCreds: () => null,
       },
     );
@@ -358,7 +377,7 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
       {
         fetchImpl,
         readSessionProviderId: async () => 'xd',
-        listConnectedProviders: async () => [],
+        listConnectedProviders: async () => [providerStub('xd')],
         readGatewayKey: () => 'gk-1',
       },
     );
@@ -375,7 +394,7 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
       {
         fetchImpl,
         readSessionProviderId: async () => 'xd',
-        listConnectedProviders: async () => [],
+        listConnectedProviders: async () => [providerStub('xd')],
         readGatewayKey: () => null,
       },
     );

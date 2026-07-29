@@ -26,6 +26,7 @@ const SESSION_SOURCES = [
   'slack',
   'telegram',
   'discord',
+  'wechat',
   'scheduler',
   'learn',
   'shared',
@@ -509,6 +510,148 @@ export const imBindings = sqliteTable(
   (t) => ({
     pk: primaryKey({ columns: [t.channel, t.botContextId, t.userId, t.scopeKey] }),
     idxTarget: index('idx_im_bindings_target').on(t.targetSessionId),
+  }),
+);
+
+/**
+ * Personal WeChat reliable-ingress state.
+ *
+ * Credentials never enter SQLite. The binding epoch is an opaque generation id
+ * that lets late poll/pump callbacks fail closed after reconnect or unbind.
+ */
+export const wechatSyncState = sqliteTable(
+  'wechat_sync_state',
+  {
+    bindingEpoch: text('binding_epoch').primaryKey(),
+    isActive: integer('is_active', { mode: 'boolean' }).notNull().default(false),
+    syncCursor: text('sync_cursor').notNull().default(''),
+    lastPollAt: integer('last_poll_at'),
+    lastErrorCode: text('last_error_code'),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    oneActiveEpoch: uniqueIndex('uniq_wechat_sync_active')
+      .on(t.isActive)
+      .where(sql`${t.isActive} = 1`),
+  }),
+);
+
+export const wechatInbox = sqliteTable(
+  'wechat_inbox',
+  {
+    id: text('id').primaryKey(),
+    bindingEpoch: text('binding_epoch')
+      .notNull()
+      .references(() => wechatSyncState.bindingEpoch, { onDelete: 'cascade' }),
+    platformMessageId: text('platform_message_id').notNull(),
+    platformSeq: integer('platform_seq').notNull(),
+    peerId: text('peer_id').notNull(),
+    receivedAt: integer('received_at').notNull(),
+    platformCreatedAt: integer('platform_created_at').notNull(),
+    expiresAt: integer('expires_at').notNull(),
+    status: text('status', {
+      enum: [
+        'pending',
+        'dispatching',
+        'accepted_running',
+        'waiting_desktop',
+        'delivery_pending',
+        'completed',
+        'interrupted',
+        'cancelled',
+        'expired',
+        'failed_terminal',
+        'rejected_overload',
+      ],
+    })
+      .notNull()
+      .default('pending'),
+    leaseUntil: integer('lease_until'),
+    sessionId: text('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    conversationEpoch: integer('conversation_epoch').notNull().default(0),
+    payloadJson: text('payload_json').notNull(),
+    /** AES-256-GCM fields. The data key is owner-scoped and kept in safeStorage. */
+    contextNonce: text('context_nonce').notNull(),
+    contextCiphertext: text('context_ciphertext').notNull(),
+    contextTag: text('context_tag').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    lastErrorCode: text('last_error_code'),
+  },
+  (t) => ({
+    platformMessage: uniqueIndex('uniq_wechat_inbox_platform_message').on(
+      t.bindingEpoch,
+      t.platformMessageId,
+    ),
+    byQueue: index('idx_wechat_inbox_queue').on(t.bindingEpoch, t.status, t.receivedAt),
+    byLease: index('idx_wechat_inbox_lease').on(t.bindingEpoch, t.leaseUntil),
+    byConversation: index('idx_wechat_inbox_conversation').on(
+      t.bindingEpoch,
+      t.peerId,
+      t.conversationEpoch,
+    ),
+    oneRunningPerSession: uniqueIndex('uniq_wechat_inbox_running_session')
+      .on(t.bindingEpoch, t.sessionId)
+      .where(
+        sql`${t.sessionId} IS NOT NULL AND ${t.status} IN ('dispatching', 'accepted_running', 'waiting_desktop', 'delivery_pending')`,
+      ),
+  }),
+);
+
+export const wechatOutbox = sqliteTable(
+  'wechat_outbox',
+  {
+    id: text('id').primaryKey(),
+    bindingEpoch: text('binding_epoch')
+      .notNull()
+      .references(() => wechatSyncState.bindingEpoch, { onDelete: 'cascade' }),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => wechatInbox.id, { onDelete: 'cascade' }),
+    clientId: text('client_id').notNull(),
+    kind: text('kind', { enum: ['final', 'error', 'interrupted', 'overload'] }).notNull(),
+    chunkIndex: integer('chunk_index').notNull(),
+    text: text('text').notNull(),
+    mediaJson: text('media_json').notNull().default('[]'),
+    status: text('status', {
+      enum: ['pending', 'sending', 'delivered', 'failed_terminal'],
+    })
+      .notNull()
+      .default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    nextRetryAt: integer('next_retry_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+    deliveredAt: integer('delivered_at'),
+  },
+  (t) => ({
+    clientId: uniqueIndex('uniq_wechat_outbox_client_id').on(t.bindingEpoch, t.clientId),
+    byDelivery: index('idx_wechat_outbox_delivery').on(t.bindingEpoch, t.status, t.nextRetryAt),
+    byTask: index('idx_wechat_outbox_task').on(t.bindingEpoch, t.taskId, t.chunkIndex),
+  }),
+);
+
+export const wechatFileAttachments = sqliteTable(
+  'wechat_file_attachments',
+  {
+    id: text('id').primaryKey(),
+    bindingEpoch: text('binding_epoch')
+      .notNull()
+      .references(() => wechatSyncState.bindingEpoch, { onDelete: 'cascade' }),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => wechatInbox.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    absPath: text('abs_path').notNull(),
+    originalName: text('original_name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    bytes: integer('bytes').notNull(),
+    status: text('status', { enum: ['staged', 'promoted', 'released'] })
+      .notNull()
+      .default('staged'),
+    promotedAt: integer('promoted_at'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    byTask: index('idx_wechat_file_attachments_task').on(t.bindingEpoch, t.taskId),
   }),
 );
 

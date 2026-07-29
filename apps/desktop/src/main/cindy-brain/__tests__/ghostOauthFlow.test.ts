@@ -172,17 +172,37 @@ describe('startGhostOauthFlow', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('state 不匹配 → CALLBACK_INVALID,不碰 token 端点', async () => {
-    const fetchImpl = vi.fn();
+  it('state 不匹配 → 400 拒绝但不结算登录:陈旧/伪造回调后,正确回调仍能完成授权', async () => {
+    // 与第一方 grok 监听器同口径(#841 review):跨源投递时代表旧登录尝试的
+    // consent 页可能带旧 state 持续重试,不能让它杀死新发起的登录。伪造 state
+    // 的 code 也绝不能进 token 交换。
+    const fetchImpl = vi.fn(async () => jsonResponse({ access_token: 'at-stale' }));
+    let forgedStatus = 0;
     const result = await startGhostOauthFlow({
       config: BASE_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
       openExternal: (url) => {
-        browserRedirect(url, () => ({ code: 'c4', state: 'forged-state' }));
+        const u = new URL(url);
+        const cb = new URL(u.searchParams.get('redirect_uri') ?? '');
+        const state = u.searchParams.get('state') ?? '';
+        setImmediate(() => {
+          void (async () => {
+            const forged = new URL(cb.toString());
+            forged.searchParams.set('code', 'c4');
+            forged.searchParams.set('state', 'forged-state');
+            forgedStatus = (await fetch(forged.toString())).status;
+            const good = new URL(cb.toString());
+            good.searchParams.set('code', 'c-good');
+            good.searchParams.set('state', state);
+            await fetch(good.toString());
+          })().catch(() => undefined);
+        });
       },
     });
-    expect(result).toMatchObject({ ok: false, error: 'CALLBACK_INVALID' });
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true });
+    expect(forgedStatus).toBe(400);
+    // token 交换只发生一次(用正确回调的 code),伪造 code 不进交换。
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('授权服务器回 error 参数 → CALLBACK_INVALID', async () => {
@@ -190,7 +210,11 @@ describe('startGhostOauthFlow', () => {
       config: BASE_CONFIG,
       fetchImpl: vi.fn() as unknown as typeof fetch,
       openExternal: (url) => {
-        browserRedirect(url, () => ({ error: 'access_denied' }));
+        // state 先行校验后,error 参数只在 state 匹配时才结算(与 grok 同口径)。
+        browserRedirect(url, (au) => ({
+          error: 'access_denied',
+          state: au.searchParams.get('state') ?? '',
+        }));
       },
     });
     expect(result).toMatchObject({ ok: false, error: 'CALLBACK_INVALID' });
@@ -205,6 +229,7 @@ describe('startGhostOauthFlow', () => {
         const u = new URL(url);
         const cb = new URL(u.searchParams.get('redirect_uri') ?? '');
         cb.searchParams.set('error', "$'<b>x</b>$&");
+        cb.searchParams.set('state', u.searchParams.get('state') ?? '');
         setImmediate(() => {
           void fetch(cb.toString(), { headers: { 'accept-language': 'zh-CN,zh;q=0.9' } })
             .then(async (r) => {
@@ -473,6 +498,30 @@ describe('startGhostOauthFlow', () => {
     expect(broker.exchange).toHaveBeenCalledTimes(1);
   });
 
+  it('tokenBroker 服务不可用时保留 SERVICE_UNAVAILABLE 分类', async () => {
+    const broker: GhostOauthBrokerClient = {
+      exchange: vi.fn(async () => ({
+        ok: false as const,
+        error: 'SERVICE_UNAVAILABLE' as const,
+        invalidGrant: false,
+      })),
+      refresh: vi.fn(),
+    };
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, tokenBroker: 'feishu' },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      broker,
+      openExternal: (url) => {
+        browserRedirect(url, (authorizeUrl) => ({
+          code: 'c-unavailable',
+          state: authorizeUrl.searchParams.get('state') ?? '',
+        }));
+      },
+    });
+
+    expect(result).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE', detail: undefined });
+  });
+
   it('tokenBroker + pkce:false(jira/slack 形态):授权页无 challenge,broker 不收 verifier', async () => {
     const broker: GhostOauthBrokerClient = {
       exchange: vi.fn(
@@ -573,6 +622,124 @@ describe('startGhostOauthFlow', () => {
     });
     expect(result).toMatchObject({ ok: true });
     expect(defaultPathStatus).toBe(404);
+  });
+
+  it('跨源 code 投递(#810):声明域的 OPTIONS 预检拿到 CORS/PNA 头,GET 投递带头成功;非法来源拿不到头;无 Origin 的 302 回调不变', async () => {
+    const fixedPort = await probeFreePort();
+    let browserWork: Promise<{
+      preflightAllowed: Response;
+      preflightEvil: Response;
+      delivery: Response;
+    }> | null = null;
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
+      fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-cors' })) as unknown as typeof fetch,
+      openExternal: (url) => {
+        const state = new URL(url).searchParams.get('state') ?? '';
+        const cb = `http://127.0.0.1:${fixedPort}/callback`;
+        browserWork = (async () => {
+          // 声明域(authorizeUrl 的 origin)发预检:必须拿到 CORS + PNA 头。
+          const preflightAllowed = await fetch(cb, {
+            method: 'OPTIONS',
+            headers: { origin: 'https://auth.example.com' },
+          });
+          // 任意其它网站发预检:204 但不带 CORS 头(浏览器会拦下后续请求)。
+          const preflightEvil = await fetch(cb, {
+            method: 'OPTIONS',
+            headers: { origin: 'https://evil.example' },
+          });
+          // 声明域的页面 JS 跨源 GET 投递 code(xAI 新版流程形态)。
+          const delivery = await fetch(`${cb}?code=c-cors&state=${state}`, {
+            headers: { origin: 'https://auth.example.com' },
+          });
+          return { preflightAllowed, preflightEvil, delivery };
+        })();
+      },
+    });
+    expect(result).toMatchObject({ ok: true });
+    const { preflightAllowed, preflightEvil, delivery } = await browserWork!;
+
+    expect(preflightAllowed!.status).toBe(204);
+    expect(preflightAllowed!.headers.get('access-control-allow-origin')).toBe(
+      'https://auth.example.com',
+    );
+    expect(preflightAllowed!.headers.get('access-control-allow-private-network')).toBe('true');
+    expect(preflightAllowed!.headers.get('access-control-allow-methods')).toContain('OPTIONS');
+
+    expect(preflightEvil!.status).toBe(204);
+    expect(preflightEvil!.headers.get('access-control-allow-origin')).toBeNull();
+    expect(preflightEvil!.headers.get('access-control-allow-private-network')).toBeNull();
+
+    expect(delivery!.status).toBe(200);
+    expect(delivery!.headers.get('access-control-allow-origin')).toBe('https://auth.example.com');
+  });
+
+  it('consent 页与授权端点不同域:hosts 白名单命中的 https origin 也允许投递(#841 review)', async () => {
+    const fixedPort = await probeFreePort();
+    let preflightConsent: Response | null = null;
+    let preflightOther: Response | null = null;
+    const result = await startGhostOauthFlow({
+      config: {
+        ...BASE_CONFIG,
+        pkce: false,
+        redirectPort: fixedPort,
+        // xAI 形态:authorizeUrl 在 auth 域,实际投递来自 hosts 白名单里的 accounts 域。
+        corsDeliveryHosts: ['accounts.example.org', '*.wild.example.org'],
+      },
+      fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-hosts' })) as unknown as typeof fetch,
+      openExternal: (url) => {
+        const state = new URL(url).searchParams.get('state') ?? '';
+        const cb = `http://127.0.0.1:${fixedPort}/callback`;
+        setImmediate(() => {
+          void (async () => {
+            preflightConsent = await fetch(cb, {
+              method: 'OPTIONS',
+              headers: { origin: 'https://accounts.example.org' },
+            });
+            // hosts 白名单没有的域拿不到 CORS 头;http 形态的白名单域同样不放行。
+            preflightOther = await fetch(cb, {
+              method: 'OPTIONS',
+              headers: { origin: 'http://accounts.example.org' },
+            });
+            await fetch(`${cb}?code=c-hosts&state=${state}`, {
+              headers: { origin: 'https://sub.wild.example.org' },
+            });
+          })().catch(() => undefined);
+        });
+      },
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(preflightConsent!.headers.get('access-control-allow-origin')).toBe(
+      'https://accounts.example.org',
+    );
+    expect(preflightConsent!.headers.get('access-control-allow-private-network')).toBe('true');
+    expect(preflightOther!.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('跨源投递的 state 校验不放松:声明域带错 state 投递 → 400 带 CORS 头且不结算,正确投递仍成功', async () => {
+    const fixedPort = await probeFreePort();
+    let badDelivery: Response | null = null;
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
+      fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'x' })) as unknown as typeof fetch,
+      openExternal: (url) => {
+        const state = new URL(url).searchParams.get('state') ?? '';
+        const cb = `http://127.0.0.1:${fixedPort}/callback`;
+        setImmediate(() => {
+          void (async () => {
+            badDelivery = await fetch(`${cb}?code=c-bad&state=WRONG`, {
+              headers: { origin: 'https://auth.example.com' },
+            });
+            await fetch(`${cb}?code=c-ok&state=${state}`, {
+              headers: { origin: 'https://auth.example.com' },
+            });
+          })().catch(() => undefined);
+        });
+      },
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(badDelivery!.status).toBe(400);
+    expect(badDelivery!.headers.get('access-control-allow-origin')).toBe('https://auth.example.com');
   });
 
   it('publicRedirectUri 为 http → INVALID_CONFIG,不拉浏览器', async () => {

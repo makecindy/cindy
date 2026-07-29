@@ -418,6 +418,51 @@ describe('makerChatStore text delta batching', () => {
     expect(messages[0]?.clientId).toBe('assistant-1');
   });
 
+  it('updates a repeated web_search tool_use row in place', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'search-1',
+          toolName: 'web_search',
+          input: { query: 'early query' },
+        },
+      },
+      persistId: 'search-message-1',
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'search-1',
+          toolName: 'web_search',
+          input: {
+            query: 'https://example.com/final',
+            action: { type: 'openPage', url: 'https://example.com/final' },
+          },
+        },
+      },
+      persistId: 'search-message-1',
+    });
+
+    const messages = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      clientId: 'search-message-1',
+      role: 'tool_use',
+      toolUseId: 'search-1',
+      toolName: 'web_search',
+      toolInput: {
+        query: 'https://example.com/final',
+        action: { type: 'openPage', url: 'https://example.com/final' },
+      },
+    });
+  });
+
   it('flushes pending text before a permission interaction request on the separate IPC channel', () => {
     const snapshots: Array<{ roles: string[]; pendingPermission: string | null }> = [];
     const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
@@ -1255,7 +1300,7 @@ describe('makerChatStore text delta batching', () => {
     );
   });
 
-  it('persists the original remote auth error when retry enqueue rejects asynchronously', async () => {
+  it('does not run the legacy remote auth retry path for Codex auth errors', async () => {
     vi.mocked(sessionService.get).mockResolvedValue({
       agentKind: 'codex',
       remoteHostId: 'remote-host',
@@ -1268,7 +1313,55 @@ describe('makerChatStore text delta batching', () => {
       model: MODEL,
       effort: EFFORT,
       permissionMode: PERMISSION_MODE,
-    } as Awaited<ReturnType<typeof sessionService.get>>);
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    emitDbMessageCreated({
+      id: 'user-row',
+      clientId: 'user-client',
+      role: 'user',
+      content: 'show sync auth',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'codex',
+        data: { errorStatus: 401, message: 'Authorization: [REDACTED]' },
+        // 真实 Codex 事件没有 agentMeta（SDK 无 uuid 概念）——不注入合成值，
+        // 正好覆盖双写修复：renderer 不再 deferred 补落，main 热路径唯一落库。
+        agentMeta: null,
+      },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.safeStorageRead).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.closeSession).not.toHaveBeenCalled();
+    expect(input.enqueue).not.toHaveBeenCalled();
+    // main 侧 isRemoteAuthRetryErrorEvent 对 codex 返回 false，error 行走正常
+    // onTurnErrorEvent 落库；renderer 再 deferred 会双写（dedup key 对不上）。
+    expect(input.persistTurnErrorDeferred).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(
+      'Authorization: [REDACTED] (HTTP 401)',
+    );
+  });
+
+  it('persists the original remote auth error when retry enqueue rejects asynchronously', async () => {
+    vi.mocked(sessionService.get).mockResolvedValue({
+      agentKind: 'cc',
+      remoteHostId: 'remote-host',
+      sdkSessionId: null,
+      fastMode: false,
+      contextTokens: 0,
+      contextWindow: 0,
+      totalCostUsd: 0,
+      workingDir: WORKING_DIR,
+      model: MODEL,
+      effort: EFFORT,
+      permissionMode: PERMISSION_MODE,
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
     makerChatStore.ensureInitialMessages(SESSION_ID);
     await flushPromises();
     emitDbMessageCreated({
@@ -1284,7 +1377,7 @@ describe('makerChatStore text delta batching', () => {
       sessionId: SESSION_ID,
       event: {
         type: 'error',
-        source: 'codex',
+        source: 'claude-code',
         data: { errorStatus: 401, message: 'Authorization: [REDACTED]' },
         agentMeta: { sdkSessionId: 'sdk-1' },
       },
@@ -1302,7 +1395,7 @@ describe('makerChatStore text delta batching', () => {
 
   it('persists the original remote auth error when an accepted retry returns a projection error', async () => {
     vi.mocked(sessionService.get).mockResolvedValue({
-      agentKind: 'codex',
+      agentKind: 'cc',
       remoteHostId: 'remote-host',
       sdkSessionId: null,
       fastMode: false,
@@ -1313,7 +1406,7 @@ describe('makerChatStore text delta batching', () => {
       model: MODEL,
       effort: EFFORT,
       permissionMode: PERMISSION_MODE,
-    } as Awaited<ReturnType<typeof sessionService.get>>);
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
     makerChatStore.ensureInitialMessages(SESSION_ID);
     await flushPromises();
     emitDbMessageCreated({
@@ -1335,7 +1428,7 @@ describe('makerChatStore text delta batching', () => {
       sessionId: SESSION_ID,
       event: {
         type: 'error',
-        source: 'codex',
+        source: 'claude-code',
         data: { sdkError: 'authentication_failed', message: '401 expired' },
         agentMeta: { sdkSessionId: 'sdk-1' },
       },
@@ -1362,7 +1455,7 @@ describe('makerChatStore text delta batching', () => {
       },
     ];
     vi.mocked(sessionService.get).mockResolvedValue({
-      agentKind: 'codex',
+      agentKind: 'cc',
       remoteHostId: 'remote-host',
       sdkSessionId: null,
       fastMode: false,
@@ -1373,7 +1466,7 @@ describe('makerChatStore text delta batching', () => {
       model: MODEL,
       effort: EFFORT,
       permissionMode: PERMISSION_MODE,
-    } as Awaited<ReturnType<typeof sessionService.get>>);
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
     makerChatStore.ensureInitialMessages(SESSION_ID);
     await flushPromises();
     input.enqueue.mockImplementationOnce(async (sessionId: string) => projection(sessionId));
@@ -1398,7 +1491,7 @@ describe('makerChatStore text delta batching', () => {
       sessionId: SESSION_ID,
       event: {
         type: 'error',
-        source: 'codex',
+        source: 'claude-code',
         data: { sdkError: 'authentication_failed', message: '401 expired' },
       },
     });
@@ -2448,7 +2541,7 @@ describe('makerChatStore text delta batching', () => {
       model: MODEL,
       effort: EFFORT,
       permissionMode: PERMISSION_MODE,
-    } as Awaited<ReturnType<typeof sessionService.get>>);
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
     input.enqueue.mockImplementationOnce(async (sessionId: string) => projection(sessionId));
     emitDbMessageCreated({
       clientId: 'persisted-error-tail',
@@ -2560,7 +2653,7 @@ describe('makerChatStore text delta batching', () => {
       model: MODEL,
       effort: EFFORT,
       permissionMode: PERMISSION_MODE,
-    } as Awaited<ReturnType<typeof sessionService.get>>);
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
     input.enqueue.mockImplementationOnce(async (sessionId: string) => projection(sessionId));
 
     await makerChatStore.sendUiTrigger(SESSION_ID, '[UI_ACTION_TRIGGER] retry');

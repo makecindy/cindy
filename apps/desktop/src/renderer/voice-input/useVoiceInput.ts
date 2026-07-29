@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/core';
+import type { Node as PMNode } from '@tiptap/pm/model';
 import type { Transaction } from '@tiptap/pm/state';
 import { useTranslation } from 'react-i18next';
 import type {
@@ -59,7 +60,13 @@ import { resolveVoiceInputStartGuards } from './startGuards';
 import { getVoiceInputWorkletUrl } from './workletUrl';
 import { buildRefinementPreviewText } from './refinementPreviewText';
 import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
-import { isVoiceInputServiceConnectionError } from './overlayErrors';
+import {
+  clampEditorTextRangeToDoc,
+  mapEditorTextRange,
+  resolveInsertedTextRange,
+  type EditorTextRange,
+} from './editorRangeMapping';
+import { isVoiceInputServiceConnectionError, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
 import {
   VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS,
 } from '../../shared/voiceInputDictionaryLearning';
@@ -85,10 +92,7 @@ type SubmittedTextRange = {
   historyEntryId: string | null;
 };
 
-export type EditorTextRange = {
-  from: number;
-  to: number;
-};
+export type { EditorTextRange } from './editorRangeMapping';
 
 type DictionaryLearningWatch = {
   segmentId: string;
@@ -189,6 +193,12 @@ export function useVoiceInput(
   const startAttemptIdRef = useRef(0);
   const startReadyRef = useRef<StartReadyState | null>(null);
   const ownedRunIdRef = useRef<string | null>(null);
+  // Whether this run's transcript actually reached the editor. The main-process
+  // onSubmitted bridge is fire-and-forget — it emits the event and synthesizes a
+  // range, so the controller's transcriptKept flag only means "the bridge took
+  // it", not "the composer has it". If the editor was gone (route/session
+  // change), insertSubmittedText() returns null and only this side knows.
+  const transcriptLandedRef = useRef(false);
   const stopInFlightRef = useRef(false);
   const stopInFlightPromiseRef = useRef<Promise<void> | null>(null);
   const inlineErrorDismissTimerRef = useRef<number | null>(null);
@@ -368,16 +378,30 @@ export function useVoiceInput(
     }, INLINE_ERROR_AUTO_DISMISS_MS);
   }, [clearInlineErrorDismissTimer]);
 
-  const formatVoiceInputError = useCallback((message: string, code?: VoiceInputErrorCode): string => {
-    if (code === 'empty_transcript') return t('voiceInputOverlay.emptyTranscript');
-    return message;
-  }, [t]);
-
   const formatVoiceInputStartError = useCallback((message: string): string => {
     return isVoiceInputServiceConnectionError(message)
       ? t('voiceInputOverlay.asrServiceUnavailable')
       : message;
   }, [t]);
+
+  const formatVoiceInputError = useCallback((
+    message: string,
+    code?: VoiceInputErrorCode,
+    transcriptKept?: boolean,
+  ): string => {
+    // Coded failures are the controller's own; their `message` is an English
+    // debug string, so the localized sentence has to come from the code.
+    // Uncoded ones come from a provider — run them through the same connection
+    // mapping the start path uses, so one transport failure reads the same on
+    // both paths and raw ECONNRESET/"fetch failed" strings stay out of the UI.
+    // Anything that is not a transport string (auth, quota, protocol) survives
+    // verbatim, since that message is its only description.
+    const cause = code ? t(VOICE_INPUT_ERROR_CODE_KEYS[code]) : formatVoiceInputStartError(message);
+    // Retention is appended to the cause, never substituted for it: the user
+    // still needs to know whether this was a dropped socket or an expired
+    // credential, and they also need to know their words are in the composer.
+    return transcriptKept ? t('voiceInputOverlay.transcriptKept', { message: cause }) : cause;
+  }, [formatVoiceInputStartError, t]);
 
   const appendAudioChunk = useCallback((chunk: PcmChunk) => {
     sentAudioMsRef.current += chunk.trace.durationMs;
@@ -512,11 +536,12 @@ export function useVoiceInput(
     };
   }, []);
 
-  const clampEditorTextRange = useCallback((range: EditorTextRange, docSize: number): EditorTextRange => {
-    const from = Math.max(0, Math.min(Math.min(range.from, range.to), docSize));
-    const to = Math.max(0, Math.min(Math.max(range.from, range.to), docSize));
-    return { from, to };
-  }, []);
+  // 钳制到「能承载 inline 内容」的位置,而不是只钳到 doc.content.size:后者本身就是
+  // 一个 block 边界,在那里 insertText 会另起一个段落,上屏文字前凭空多一个空行。
+  const clampEditorTextRange = useCallback(
+    (range: EditorTextRange, doc: PMNode): EditorTextRange => clampEditorTextRangeToDoc(range, doc),
+    [],
+  );
 
   const clearDictionaryLearningWatchTimer = useCallback((watch: DictionaryLearningWatch | undefined) => {
     if (watch?.pendingAdviceTimer !== undefined) {
@@ -593,7 +618,7 @@ export function useVoiceInput(
       const { doc } = current.state;
       const range = clampEditorTextRange(
         { from: currentWatch.start, to: currentWatch.end },
-        doc.content.size,
+        doc,
       );
       const afterText = doc.textBetween(range.from, range.to, '\n', '\n');
       if (!afterText || afterText === currentWatch.baselineText) {
@@ -659,7 +684,7 @@ export function useVoiceInput(
       .flatMap((watch) => {
         const start = transaction.mapping.map(watch.start, -1);
         const end = transaction.mapping.map(watch.end, -1);
-        const range = clampEditorTextRange({ from: start, to: end }, transaction.doc.content.size);
+        const range = clampEditorTextRange({ from: start, to: end }, transaction.doc);
         const currentText = transaction.doc.textBetween(range.from, range.to, '\n', '\n');
         if (!currentText) {
           finalizeDictionaryLearningWatch(watch.segmentId, 'clear_input_box');
@@ -744,7 +769,7 @@ export function useVoiceInput(
     const { doc, selection } = current.state;
     const range = clampEditorTextRange(
       insertionRangeRef.current ?? { from: selection.from, to: selection.to },
-      doc.content.size,
+      doc,
     );
     return {
       ...baseContext,
@@ -790,20 +815,22 @@ export function useVoiceInput(
     current.commands.focus();
     const { state, dispatch } = current.view;
     const range = insertionRangeRef.current
-      ? clampEditorTextRange(insertionRangeRef.current, state.doc.content.size)
+      ? clampEditorTextRange(insertionRangeRef.current, state.doc)
       : { from: state.selection.from, to: state.selection.to };
     insertionRangeRef.current = null;
-    const start = range.from;
     applyingVoiceTextRef.current = true;
     try {
-      dispatch(state.tr.insertText(text, range.from, range.to));
+      const transaction = state.tr.insertText(text, range.from, range.to);
+      // 上屏范围必须从事务推导,不能用插入前的 from:替换区间可以合法地从 block
+      // 边界开始(全选后听写就是 0..content.size),ProseMirror 会把 inline 文本
+      // fit 进段落,字形实际落在边界之后。用旧 from 记录会让润色回填、润色预览与
+      // 词典学习 watch 整体错位(润色会因读到截断文本而被丢弃)。
+      const inserted = resolveInsertedTextRange(transaction, range.from, text.length);
+      dispatch(transaction);
+      return inserted;
     } finally {
       applyingVoiceTextRef.current = false;
     }
-    return {
-      start,
-      end: start + text.length,
-    };
   }, [clampEditorTextRange]);
 
   const applyRefinedText = useCallback((event: Extract<VoiceInputRendererEvent, { type: 'refined' }>): boolean => {
@@ -933,6 +960,7 @@ export function useVoiceInput(
         case 'submitted':
           {
             const range = insertSubmittedText(event.text);
+            transcriptLandedRef.current = Boolean(range);
             if (range) {
               const historyEntryId = recordVoiceInputHistory(event.text);
               submittedRangesRef.current.set(event.segment.id, {
@@ -976,10 +1004,13 @@ export function useVoiceInput(
             const range = segmentId ? submittedRangesRef.current.get(segmentId) : undefined;
             const current = editorRef.current;
             if (range && current && !current.isDestroyed) {
-              const docSize = current.state.doc.content.size;
-              if (range.start <= docSize) {
+              const currentDoc = current.state.doc;
+              if (range.start <= currentDoc.content.size) {
                 const baseText = event.segment.basedOnText ?? range.submittedText;
-                draftDisplayRangeRef.current = clampEditorTextRange({ from: range.start, to: range.end }, docSize);
+                draftDisplayRangeRef.current = clampEditorTextRange(
+                  { from: range.start, to: range.end },
+                  currentDoc,
+                );
                 setDraftText(buildRefinementPreviewText(baseText, event.text));
                 setDraftSource('refinement');
               }
@@ -1002,7 +1033,12 @@ export function useVoiceInput(
         case 'error': {
           log.warn('voice input error:', event.message);
           terminalOutcomeRef.current = 'failed';
-          const formattedMessage = formatVoiceInputError(event.message, event.code);
+          // Only this side knows whether the text really made it into the
+          // editor: the main-process bridge answers onSubmitted synchronously
+          // with a synthesized range, so transcriptKept alone would promise
+          // retention even when insertSubmittedText() found no live editor.
+          const transcriptKept = event.transcriptKept === true && transcriptLandedRef.current;
+          const formattedMessage = formatVoiceInputError(event.message, event.code, transcriptKept);
           promptCodexSessionExpired(formattedMessage);
           commitUsageStats();
           void (async () => {
@@ -1059,6 +1095,15 @@ export function useVoiceInput(
     if (!editor) return;
     const handleTransaction = ({ transaction }: { transaction: Transaction }) => {
       inspectDictionaryLearningTransaction(transaction);
+      // The insertion point is captured from the selection when dictation
+      // starts, and the composer is read-only while it runs — but programmatic
+      // writes (draft restore, quote insertion, …) bypass that and shift every
+      // offset after them. A stale offset is worst exactly where it is used
+      // last: the salvage path replaces that range after a failure, which would
+      // eat whatever text now occupies it. Ride along on ProseMirror's mapping.
+      if (!transaction.docChanged || applyingVoiceTextRef.current) return;
+      insertionRangeRef.current = mapEditorTextRange(insertionRangeRef.current, transaction);
+      draftDisplayRangeRef.current = mapEditorTextRange(draftDisplayRangeRef.current, transaction);
     };
     editor.on('transaction', handleTransaction);
     return () => {
@@ -1339,6 +1384,7 @@ export function useVoiceInput(
 
     runIdRef.current = result.runId;
     ownedRunIdRef.current = result.runId;
+    transcriptLandedRef.current = false;
     if (!isActiveStartAttempt(attemptId)) {
       resolveStartReadyState(attemptId, { ok: false, error: 'Voice input start was cancelled.' });
       await stopEngine();

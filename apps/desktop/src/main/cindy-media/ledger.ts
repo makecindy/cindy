@@ -47,6 +47,7 @@ function defaultDb(): LedgerDb {
 export type MediaRefKind =
   | 'message'
   | 'session-attachment'
+  | 'im-inbox'
   | 'ghost-gallery'
   | 'ghost-grant'
   | 'import'

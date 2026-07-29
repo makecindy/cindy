@@ -64,6 +64,32 @@ describe('Claude Auto classifier request detection', () => {
     ).toBe(true);
   });
 
+  it('skips the leading attribution block injected by oauth-spawn CC (issue #758)', () => {
+    // oauth-spawn 归因默认开:system[0] 是 `x-anthropic-billing-header: ...`,
+    // 分类器身份前缀在其后 —— 检测必须跳过归因块,否则降级失灵。
+    const attribution = {
+      type: 'text',
+      text: 'x-anthropic-billing-header: cc_version=2.1.112.system; cc_entrypoint=cli; cch=00000;',
+    };
+    expect(
+      isClaudeAutoClassifierRequest(
+        requestBody({
+          system: [attribution, { type: 'text', text: `${CLASSIFIER_PREFIX}\nRules` }],
+        }),
+      ),
+    ).toBe(true);
+    // 归因块后面跟的是普通主 turn prompt → 仍不得命中。
+    expect(
+      isClaudeAutoClassifierRequest(
+        requestBody({
+          system: [attribution, { type: 'text', text: 'You are Claude Code, Anthropic official CLI' }],
+        }),
+      ),
+    ).toBe(false);
+    // 只有归因块、没有任何身份前缀 → 不命中。
+    expect(isClaudeAutoClassifierRequest(requestBody({ system: [attribution] }))).toBe(false);
+  });
+
   it('detects every classifier max_tokens shape (fast 256 / stage1 64 / thinking 8192)', () => {
     // 不再依赖固定 max_tokens——三条分类器路径(含 +k 变体)都必须命中,
     // 否则 fast / thinking 路径的 429 会漏检、不触发降级。
@@ -97,33 +123,179 @@ describe('Claude Auto classifier request detection', () => {
 });
 
 describe('createClaudeAutoClassifierFailureObserver', () => {
-  it('reports classifier failures across 4xx and 5xx with the resolved business session id', () => {
-    // 任何错误响应都意味着分类器没给 verdict、CLI 会 fail-closed——4xx(模型/参数/鉴权
-    // 不可用)与 5xx(限流/服务故障)都必须触发降级,不再限于 429/5xx。
+  it('keeps Auto for a single transient failure burst (one episode)', () => {
+    // 一次动作的 SDK retry storm:多个瞬时失败在数秒内到达 → 归并为一个 episode,
+    // 不触发降级(#596 保护的场景)。
+    const listener = vi.fn();
+    setClaudeAutoClassifierUnavailableListener(listener);
+    let t = 0;
+    const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
+      now: () => t,
+    });
+
+    for (const status of [408, 429, 503, 529, 429, 429]) {
+      t += 1000; // 6 次失败散布在 6 秒内
+      expect(observer(ctx({ status }))).toBeUndefined();
+    }
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('escalates persistent transient failures after 3 episodes without a success (#758)', () => {
+    const signals: unknown[] = [];
+    setClaudeAutoClassifierUnavailableListener((signal) => signals.push(signal));
+    let t = 0;
+    const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
+      now: () => t,
+    });
+
+    observer(ctx({ status: 429 })); // episode 1
+    t += 31_000;
+    observer(ctx({ status: 429 })); // episode 2
+    expect(signals).toEqual([]);
+    t += 31_000;
+    observer(ctx({ status: 429 })); // episode 3 → 升级
+    expect(signals).toEqual([
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 429 },
+    ]);
+
+    // 升级后记账清零:紧接着的失败重新从 episode 1 数起,不会连环降级。
+    t += 31_000;
+    observer(ctx({ status: 429 }));
+    expect(signals).toHaveLength(1);
+  });
+
+  it('resets the episode counter when a classifier request succeeds in between', () => {
+    const listener = vi.fn();
+    setClaudeAutoClassifierUnavailableListener(listener);
+    let t = 0;
+    const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
+      now: () => t,
+    });
+
+    observer(ctx({ status: 429 })); // episode 1
+    t += 31_000;
+    observer(ctx({ status: 503 })); // episode 2
+    observer(ctx({ status: 200 })); // 分类器恢复 → 清零
+    t += 31_000;
+    observer(ctx({ status: 429 })); // 重新从 episode 1 数起
+    t += 31_000;
+    observer(ctx({ status: 429 })); // episode 2
+
+    expect(listener).not.toHaveBeenCalled();
+
+    // 恢复清零只认分类器请求本身:普通主 turn 的成功响应不得清零其它会话记账。
+    t += 31_000;
+    observer(ctx({ status: 200, requestBody: requestBody({ system: 'ordinary assistant' }) }));
+    observer(ctx({ status: 200, requestBody: Buffer.from('{bad json') })); // 有记账时坏 body 也不得抛
+    t += 31_000;
+    observer(ctx({ status: 429 })); // episode 3 → 升级(前两段仍在账上)
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat 3xx classifier responses as recovery', () => {
+    // 3xx 不是分类器真正给出 verdict:若清账,「上游持续 3xx」的故障会永不升级。
+    const listener = vi.fn();
+    setClaudeAutoClassifierUnavailableListener(listener);
+    let t = 0;
+    const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
+      now: () => t,
+    });
+
+    observer(ctx({ status: 429 })); // episode 1
+    t += 31_000;
+    observer(ctx({ status: 429 })); // episode 2
+    observer(ctx({ status: 302 })); // 分类器请求被重定向 → 不得清账
+    t += 31_000;
+    observer(ctx({ status: 429 })); // episode 3 → 升级(证明前两段仍在账上)
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('expires episodes outside the 10-minute window', () => {
+    const listener = vi.fn();
+    setClaudeAutoClassifierUnavailableListener(listener);
+    let t = 0;
+    const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
+      now: () => t,
+    });
+
+    observer(ctx({ status: 429 })); // episode 1
+    t += 31_000;
+    observer(ctx({ status: 429 })); // episode 2
+    t += 11 * 60_000; // 11 分钟后:前两段过期
+    observer(ctx({ status: 429 })); // 只剩这一段
+    t += 31_000;
+    observer(ctx({ status: 429 })); // 第二段
+    expect(listener).not.toHaveBeenCalled();
+    t += 31_000;
+    observer(ctx({ status: 429 })); // 第三段 → 升级
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears pending transient episodes when a deterministic failure downgrades immediately', () => {
+    const signals: unknown[] = [];
+    setClaudeAutoClassifierUnavailableListener((signal) => signals.push(signal));
+    let t = 0;
+    const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
+      now: () => t,
+    });
+
+    observer(ctx({ status: 429 })); // episode 1
+    t += 31_000;
+    observer(ctx({ status: 429 })); // episode 2
+    observer(ctx({ status: 401 })); // 确定性错误 → 立即降级,同时清零瞬时记账
+    expect(signals).toEqual([
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 401 },
+    ]);
+
+    // 用户重开 Auto 后:残账已清,单次偶发失败不得被推过阈值,要重新数满 3 段。
+    t += 31_000;
+    observer(ctx({ status: 429 }));
+    t += 31_000;
+    observer(ctx({ status: 429 }));
+    expect(signals).toHaveLength(1);
+    t += 31_000;
+    observer(ctx({ status: 429 }));
+    expect(signals).toHaveLength(2);
+  });
+
+  it('tracks transient episodes per session independently', () => {
+    const listener = vi.fn();
+    setClaudeAutoClassifierUnavailableListener(listener);
+    let t = 0;
+    const observer = createClaudeAutoClassifierFailureObserver(
+      (sdkId) => (sdkId === 'sdk-1' ? 'session-1' : 'session-2'),
+      { now: () => t },
+    );
+
+    // 两个会话各自累计 2 段,交错到达 —— 谁都不该被对方推过阈值。
+    for (let i = 0; i < 2; i += 1) {
+      observer(ctx({ status: 429 }));
+      observer(ctx({ status: 429, requestHeaders: { 'x-claude-code-session-id': 'sdk-2' } }));
+      t += 31_000;
+    }
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('reports non-transient classifier failures with the resolved business session id', () => {
     const signals: unknown[] = [];
     setClaudeAutoClassifierUnavailableListener((signal) => signals.push(signal));
     const observer = createClaudeAutoClassifierFailureObserver((sdkId) =>
       sdkId === 'sdk-1' ? 'session-1' : null,
     );
 
-    expect(observer(ctx({ status: 429 }))).toBeUndefined();
     expect(observer(ctx({ status: 400 }))).toBeUndefined();
     expect(observer(ctx({ status: 401 }))).toBeUndefined();
+    expect(observer(ctx({ status: 403 }))).toBeUndefined();
     expect(observer(ctx({ status: 404 }))).toBeUndefined();
-    expect(
-      observer(
-        ctx({
-          status: 503,
-          requestBody: requestBody({ system: `${CLASSIFIER_PREFIX}\nRules` }),
-        }),
-      ),
-    ).toBeUndefined();
+    expect(observer(ctx({ status: 422 }))).toBeUndefined();
+
     expect(signals).toEqual([
-      { sessionId: 'session-1', agentKind: 'claude-code', status: 429 },
       { sessionId: 'session-1', agentKind: 'claude-code', status: 400 },
       { sessionId: 'session-1', agentKind: 'claude-code', status: 401 },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 403 },
       { sessionId: 'session-1', agentKind: 'claude-code', status: 404 },
-      { sessionId: 'session-1', agentKind: 'claude-code', status: 503 },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 422 },
     ]);
   });
 

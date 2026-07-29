@@ -47,6 +47,13 @@ export interface MakerMemoryManagerDeps {
   agents: Partial<Record<AgentKind, BaseAgent>>;
   /** 跑 memory_review 时用哪个 agent 的 oneShot. 默认 'claude-code' (haiku 最便宜) */
   reviewAgent?: AgentKind;
+  /**
+   * review 派发前的停用轴守卫(host 注入,desktop = isAgentOneShotRouteDisabled)。
+   * memory_review 的 oneShot 是一次新的付费调用:该 agent 的默认 one-shot 路由被
+   * 用户停用时不派发,抛错让 MCP 工具面把原因回给调用方(PR #744 review 第十六轮)。
+   * 缺席 = 不裁决(未接入停用设置的宿主)。
+   */
+  isOneShotRouteDisabled?: (agent: AgentKind) => Promise<boolean>;
   logger: Logger;
   /** 配置覆盖 */
   config?: Partial<MemoryConfig>;
@@ -287,6 +294,11 @@ export class MakerMemoryManager {
     const agent = this.deps.agents[reviewAgentKind];
     if (!agent) {
       throw new Error(`runReview: review agent '${reviewAgentKind}' not registered`);
+    }
+    if (await this.deps.isOneShotRouteDisabled?.(reviewAgentKind)) {
+      throw new Error(
+        `runReview: one-shot route for '${reviewAgentKind}' is disabled in settings`,
+      );
     }
 
     const summary = records
