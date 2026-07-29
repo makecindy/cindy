@@ -312,10 +312,21 @@ function imageDescriptionRange(node: Nodes, markdown: string): OffsetRange | nul
 
   const nestedBracketStarts: number[] = [];
   for (let cursor = range.start + 2; cursor < range.end; cursor += 1) {
-    if (isEscaped(markdown, cursor)) continue;
+    if (markdown[cursor] === '\\') {
+      const runStart = cursor;
+      while (cursor + 1 < range.end && markdown[cursor + 1] === '\\') cursor += 1;
+      // 奇数个反斜杠会转义紧随其后的字符；偶数个反斜杠则让下一字符
+      // 保持语法含义。整段一次消费，避免逐字符反向重复计数。
+      if ((cursor - runStart + 1) % 2 === 1 && cursor + 1 < range.end) cursor += 1;
+      continue;
+    }
     if (markdown[cursor] === '`') {
+      let openerEnd = cursor + 1;
+      while (openerEnd < range.end && markdown[openerEnd] === '`') openerEnd += 1;
       const end = codeSpanEnd(markdown, cursor, range.end);
-      if (end != null) cursor = end - 1;
+      // 未闭合时也一次跳过整个起始序列，避免从序列中的每个反引号
+      // 重新扫描剩余说明。
+      cursor = (end ?? openerEnd) - 1;
       continue;
     }
     if (markdown[cursor] === '<') {
@@ -354,7 +365,12 @@ function isLooseInlineMath(node: Nodes, markdown: string): boolean {
   return /^\s|\s$/u.test(inner) || inner.includes('`') || /^\d/u.test(nextCharacter);
 }
 
-function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: string): void {
+function collectProtectedRanges(
+  node: Nodes,
+  ranges: OffsetRange[],
+  markdown: string,
+  downgradedMathImageDescriptionRanges?: OffsetRange[],
+): void {
   if (node.type === 'link' || node.type === 'linkReference') {
     const range = nodeRange(node);
     if (range && markdown[range.start] !== '[') {
@@ -374,7 +390,14 @@ function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: st
     // 和地址，避免在目标地址内插入隐藏分隔符。
     ranges.push({ start: range.start, end: childRanges[0].start });
     ranges.push({ start: childRanges[childRanges.length - 1].end, end: range.end });
-    for (const child of node.children) collectProtectedRanges(child, ranges, markdown);
+    for (const child of node.children) {
+      collectProtectedRanges(
+        child,
+        ranges,
+        markdown,
+        downgradedMathImageDescriptionRanges,
+      );
+    }
     return;
   }
 
@@ -396,9 +419,21 @@ function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: st
       description,
     ) as Root;
     const nestedRanges: OffsetRange[] = [];
-    collectProtectedRanges(descriptionTree, nestedRanges, description);
+    const nestedImageDescriptionRanges: OffsetRange[] = [];
+    collectProtectedRanges(
+      descriptionTree,
+      nestedRanges,
+      description,
+      nestedImageDescriptionRanges,
+    );
     ranges.push(
       ...nestedRanges.map((nestedRange) => ({
+        start: descriptionRange.start + nestedRange.start,
+        end: descriptionRange.start + nestedRange.end,
+      })),
+    );
+    downgradedMathImageDescriptionRanges?.push(
+      ...nestedImageDescriptionRanges.map((nestedRange) => ({
         start: descriptionRange.start + nestedRange.start,
         end: descriptionRange.start + nestedRange.end,
       })),
@@ -424,6 +459,12 @@ function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: st
           end: range.start + nestedRange.end,
         })),
       );
+      downgradedMathImageDescriptionRanges?.push(
+        ...collectImageDescriptionRanges(proseTree, raw).map((descriptionRange) => ({
+          start: range.start + descriptionRange.start,
+          end: range.start + descriptionRange.end,
+        })),
+      );
     }
     return;
   }
@@ -435,7 +476,14 @@ function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: st
   }
 
   if (!('children' in node)) return;
-  for (const child of node.children as Nodes[]) collectProtectedRanges(child, ranges, markdown);
+  for (const child of node.children as Nodes[]) {
+    collectProtectedRanges(
+      child,
+      ranges,
+      markdown,
+      downgradedMathImageDescriptionRanges,
+    );
+  }
 }
 
 function collectRecoveredTailLinkRanges(node: Nodes, ranges: OffsetRange[], markdown: string): void {
@@ -537,9 +585,18 @@ function collectRecoveredTailSyntaxRanges(
       const tail = markdown.slice(recoveredTail.start, recoveredTail.end);
       const tailTree = markdownParser.runSync(markdownParser.parse(tail), tail) as Root;
       const tailRanges: OffsetRange[] = [];
-      collectProtectedRanges(tailTree, tailRanges, tail);
+      const downgradedMathImageDescriptionRanges: OffsetRange[] = [];
+      collectProtectedRanges(
+        tailTree,
+        tailRanges,
+        tail,
+        downgradedMathImageDescriptionRanges,
+      );
       imageDescriptionRanges.push(
-        ...collectImageDescriptionRanges(tailTree, tail).map((descriptionRange) => ({
+        ...[
+          ...collectImageDescriptionRanges(tailTree, tail),
+          ...downgradedMathImageDescriptionRanges,
+        ].map((descriptionRange) => ({
           start: recoveredTail.start + descriptionRange.start,
           end: recoveredTail.start + descriptionRange.end,
         })),
@@ -740,7 +797,12 @@ function collectProseRanges(
     const recoveredMathTailStarts: number[] = [];
     const recoveredLooseMathRanges: OffsetRange[] = [];
     const recoveredImageDescriptionRanges: OffsetRange[] = [];
-    collectProtectedRanges(node, protectedRanges, markdown);
+    collectProtectedRanges(
+      node,
+      protectedRanges,
+      markdown,
+      recoveredImageDescriptionRanges,
+    );
     // remarkTruncateCjkUrls 会把被首个裸链接误吞的尾段重新拆成文本和链接，
     // 尾段的 Markdown 语法没有原始解析节点，需要重新解析后补回保护范围；
     // 插件新生成的链接没有源码位置，再按实际字符位置补回其范围。
@@ -858,7 +920,11 @@ function collectBoundaryRepairs(
       isolatedIndex += 1;
       isolatedRange = isolatedRanges[isolatedIndex];
     }
-    if (isolatedRange && cursor === isolatedRange.start) {
+    if (
+      isolatedRange &&
+      savedOuterStrongStarts === null &&
+      cursor >= isolatedRange.start
+    ) {
       // 图片说明的加粗标记只在说明内部配对，不能继承外层正文的未闭合状态。
       savedOuterStrongStarts = [...openStrongStarts];
       openStrongStarts.length = 0;

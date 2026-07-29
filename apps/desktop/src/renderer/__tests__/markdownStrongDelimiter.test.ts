@@ -193,6 +193,15 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(html).not.toContain('cindy-strong-boundary');
   });
 
+  it('enters image isolation when protected syntax crosses the description start', () => {
+    const source = '**outer ![`code` text.**Next](missing.png)';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(source);
+    const html = renderMarkdown(source);
+    expect(html).toContain('alt="code text.**Next"');
+    expect(html).not.toContain('cindy-strong-boundary');
+  });
+
   it('restores an outer strong span after scanning an image description', () => {
     const source = '**See ![alt](missing.png).**Next';
 
@@ -225,6 +234,28 @@ describe('normalizeStrongDelimiterBoundaries', () => {
       '![`a]b` 重点。正文](missing.png)',
     );
     expect(renderMarkdown(source)).toContain('src="missing.png" alt="a]b 重点。正文"');
+  });
+
+  it('scans a long unmatched image-description backtick run once', () => {
+    const backticks = '`'.repeat(100_000);
+    const source = `**outer ![\`code\`${backticks} text.**Next](missing.png)`;
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(source);
+    const html = renderMarkdown(source);
+    expect(html).toContain('src="missing.png"');
+    expect(html).not.toContain('cindy-strong-boundary');
+  });
+
+  it('scans escaped runs linearly in image descriptions', () => {
+    const backslashes = '\\'.repeat(100_001);
+    const source = `![${backslashes}x **重点。**正文](missing.png)`;
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      `![${backslashes}x 重点。正文](missing.png)`,
+    );
+    const html = renderMarkdown(source);
+    expect(html).toContain('src="missing.png"');
+    expect(html).not.toContain('cindy-strong-boundary');
   });
 
   it('ignores closing brackets inside image-description inline HTML', () => {
@@ -458,6 +489,17 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(html).toContain(
       '$foo <code>**代码。**正文</code> <a href="https://a.test/**path.**next">链接</a> 标签 <strong>重点。</strong>正文 bar$',
     );
+    expect(html).not.toContain('cindy-strong-boundary');
+  });
+
+  it('classifies image descriptions inside loose math downgraded to visible text', () => {
+    const source = '$foo ![**重点。**正文](missing.png) bar $';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      '\\$foo ![重点。正文](missing.png) bar \\$',
+    );
+    const html = renderMarkdownWithStrictMath(source);
+    expect(html).toContain('$foo <img src="missing.png" alt="重点。正文"/> bar $');
     expect(html).not.toContain('cindy-strong-boundary');
   });
 
