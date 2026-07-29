@@ -19,11 +19,17 @@
  * (ANTHROPIC_API_KEY + ANTHROPIC_AUTH_TOKEN)在 cc>=2.1.198 上可能触发 shouldDisableAuth;
  * 把另一个鉴权头塞进 ANTHROPIC_CUSTOM_HEADERS 既避开该冲突,出站 header 集合又与本地 proxy
  * 逐字节一致(已用 header-echo 探测 cc 的透传行为确认)。
+ *
+ * 已知缺口(既有行为,非本模块回归):本模块只镜像本地 proxy 的 ②段默认路由;⓪段的
+ * `chatgpt/` / `xai/` 订阅前缀模型(本地走 responses bridge 订阅直连)远端不可表达,
+ * 会话会落到网关路径 —— 与升级前「远端恒网关」一致。
  */
 
 import type { RemoteClaudeRoute } from '@cindy/maker-core';
+import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
 import { readClaudeApiKey } from './auth-adapters.js';
+import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
 import { getClaudeAiOAuthForSpawn } from './claude-oauth-refresh.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import { getActiveCatalog } from './active-catalog.js';
@@ -92,16 +98,7 @@ function nativeAnthropicRoute(): RemoteClaudeRoute {
     REMOTE_AGENT
   ];
   const endpoint = descriptor?.upstream?.trim() || ANTHROPIC_DIRECT_UPSTREAM;
-  const env: Record<string, string> = { CLAUDE_CODE_OAUTH_TOKEN: oauth.accessToken };
-  if (Array.isArray(oauth.scopes) && oauth.scopes.length > 0) {
-    env.CLAUDE_CODE_OAUTH_SCOPES = oauth.scopes.join(' ');
-  }
-  if (typeof oauth.subscriptionType === 'string' && oauth.subscriptionType) {
-    env.CLAUDE_CODE_SUBSCRIPTION_TYPE = oauth.subscriptionType;
-  }
-  if (typeof oauth.rateLimitTier === 'string' && oauth.rateLimitTier) {
-    env.CLAUDE_CODE_RATE_LIMIT_TIER = oauth.rateLimitTier;
-  }
+  const env = claudeOAuthSpawnEnv(oauth);
   const customHeaders = descriptor?.headerOverride;
   if (customHeaders && Object.keys(customHeaders).length > 0) {
     env.ANTHROPIC_CUSTOM_HEADERS = serializeCustomHeaders(customHeaders);
@@ -151,9 +148,7 @@ function materializeRoutedProvider(routed: ResolvedProviderRouteDecision): Remot
  * RoutingDecision.headerOverride → cc env(R2:单鉴权门 + 其余头进 ANTHROPIC_CUSTOM_HEADERS)。
  * buildRouteDecision 用小写 'x-api-key' / 'authorization';这里大小写不敏感地识别。
  */
-function routeDecisionToCcEnv(
-  decision: NonNullable<ResolvedProviderRouteDecision['decision']>,
-): Record<string, string> {
+function routeDecisionToCcEnv(decision: RoutingDecision): Record<string, string> {
   const env: Record<string, string> = {};
   const headers: Record<string, string> = { ...(decision.headerOverride ?? {}) };
   const findHeaderKey = (name: string): string | undefined =>

@@ -327,13 +327,13 @@ export interface ApprovalRequestParams {
  * token revoked) — the SDK then surfaces the auth error to the session.
  */
 export interface OAuthRefreshParams {
-  sessionId: string;
   /**
-   * The (likely stale) token the daemon-side session currently holds, as a
-   * hint / failure baseline. Desktop's own credential store stays the source
-   * of truth — it may already hold a newer token than this one.
+   * Session asking for the refresh. Deliberately the only field: desktop's own
+   * env/credential store is the source of truth for the stale-token baseline,
+   * and echoing the daemon-side token back over the wire would widen the
+   * token's exposure surface for no consumer.
    */
-  staleToken?: string;
+  sessionId: string;
 }
 
 export interface OAuthRefreshResult {

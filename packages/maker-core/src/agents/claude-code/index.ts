@@ -82,7 +82,12 @@ import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import { ToolLoopGuard } from '../shared/loop-guard.js';
-import { applySubagentModelEnv, buildClaudeEnv } from './env-builder.js';
+import {
+  applyOAuthSpawnEntrypointGate,
+  applySubagentModelEnv,
+  buildClaudeEnv,
+  REMOTE_ROUTE_OVERRIDE_ENV_KEYS,
+} from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { repairForkedClaudeSessionJsonl, type RepairForkedClaudeJsonlResult } from './fork-jsonl-repair.js';
@@ -185,23 +190,6 @@ function isDeepSeekModel(model: string): boolean {
 function isProviderRoutedModel(model: string): boolean {
   return !model.startsWith('claude-');
 }
-
-/**
- * 远端路由 materialization 时,先从 remoteEnv 剥掉的鉴权 / 上游 / 定制头字段 —— 让
- * resolveRemoteClaudeRoute 返回的 env 成为远端唯一事实源,避免 buildClaudeEnv 经
- * getAuthEnv/endpoint 写入的旧字段(网关 key / 订阅 token / provider-oauth 占位 key /
- * 网关 endpoint)与 route 结论并存。见 startSession 远端分支。
- */
-const REMOTE_ROUTE_OVERRIDE_KEYS = [
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_AUTH_TOKEN',
-  'CLAUDE_CODE_OAUTH_TOKEN',
-  'CLAUDE_CODE_OAUTH_SCOPES',
-  'CLAUDE_CODE_SUBSCRIPTION_TYPE',
-  'CLAUDE_CODE_RATE_LIMIT_TIER',
-  'ANTHROPIC_CUSTOM_HEADERS',
-  'ANTHROPIC_BASE_URL',
-] as const;
 
 /**
  * 已知的 Claude 内置只读工具白名单(纯读、无本地写 / 无命令执行 / 无外部发送副作用)。
@@ -608,6 +596,30 @@ export class ClaudeCodeAgent extends BaseAgent {
   }
 
   /**
+   * 订阅 token 401 强刷 —— 本地 SDK getOAuthToken 回调与远端 onOAuthRefresh 共用。
+   *
+   * env.CLAUDE_CODE_OAUTH_TOKEN 是该会话持有 token 的**单一事实源**:作为失败基线传给
+   * host(库已被后台预续期换代时直接返回库值,不再消耗一次轮换);拿到新 token 后原地
+   * 写回 env —— rewind/fork/重连重建复用同一 env 引用,新子进程直接以最新 token spawn,
+   * 不会拿旧 token 起跑立即 401 再白白强刷一枚好 token。失败返回 null(cc 侧 surface
+   * 鉴权错误),绝不上抛。
+   */
+  private async refreshSubscriptionTokenInPlace(env: Record<string, string>): Promise<string | null> {
+    try {
+      const fresh = await this.deps.auth.getFreshSubscriptionToken!(env.CLAUDE_CODE_OAUTH_TOKEN);
+      if (fresh) env.CLAUDE_CODE_OAUTH_TOKEN = fresh;
+      return fresh ?? null;
+    } catch (e) {
+      this.deps.logger
+        .child('claude-code/oauth-refresh')
+        .warn('subscription token refresh failed; returning null (cc will surface auth error)', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      return null;
+    }
+  }
+
+  /**
    * Agent 内置 command —— ChatInput palette 'agent-builtin' 类目数据源。
    * 是硬编码白名单(见 ./commands.ts), 不从 SDK 自动派生。
    * 当前 live: /compact。
@@ -916,18 +928,14 @@ export class ClaudeCodeAgent extends BaseAgent {
     // provider-oauth 占位 key / 网关 endpoint),再让 route.env 成为唯一事实源,避免两套
     // 鉴权字段并存。route 为 null 时 credentialMode 已回落 'gateway-key',remoteEnv 保持
     // buildClaudeEnv 写入的网关 key + 网关 endpoint(remoteEndpoint),不进本块。
-    // remoteRouteApplied 供后方 remoteCcQueryFactory 的 endpoint guard 分流(网关 vs 路由)。
-    let remoteRouteApplied = false;
     if (remoteEnv && remoteRoute) {
-      for (const key of REMOTE_ROUTE_OVERRIDE_KEYS) delete remoteEnv[key];
+      for (const key of REMOTE_ROUTE_OVERRIDE_ENV_KEYS) delete remoteEnv[key];
       Object.assign(remoteEnv, remoteRoute.env);
       remoteEnv.ANTHROPIC_BASE_URL = remoteRoute.endpoint;
-      // 订阅 token 续命回调的 entrypoint 闸门(见 env-builder oauth-spawn 分支):route 之后
-      // 才注入 CLAUDE_CODE_OAUTH_TOKEN 时补上,避免 gateway→native 覆盖后 entrypoint 丢失。
-      if (remoteEnv.CLAUDE_CODE_OAUTH_TOKEN && !remoteEnv.CLAUDE_CODE_ENTRYPOINT) {
-        remoteEnv.CLAUDE_CODE_ENTRYPOINT = 'claude-vscode';
-      }
-      remoteRouteApplied = true;
+      // 订阅 token 续命回调的 entrypoint 闸门:route 覆盖后才出现 CLAUDE_CODE_OAUTH_TOKEN
+      // 的场景(如显式 anthropic 的 oauth-bearer 形态,buildClaudeEnv 期不注入 token)
+      // 需要在这里补跑一次;规则单源在 env-builder。
+      applyOAuthSpawnEntrypointGate(remoteEnv);
     }
     const hostSystemPrompt = this.deps.runtimeConfig.systemPrompt;
 
@@ -1853,7 +1861,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           remoteHostId: opts.remoteHostId,
           sessionId: opts.sessionId,
         });
-        // 网关路径(remoteRouteApplied=false,即会话有效路由是 XD 网关)才依赖
+        // 网关路径(remoteRoute 为 null,即会话有效路由是 XD 网关)才依赖
         // runtimeConfig.remoteEndpoint:host 定义了该字段但值为空 = 网关凭据尚未就绪 /
         // 已失效,env-builder 会回落到本地 endpoint(下面 loopback guard 虽能拦,但错误
         // 归因成「内部错误」误导排查),这里先按真实原因拒绝。(`!== undefined` 区分未注入
@@ -1861,7 +1869,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // route 路径(native OAuth / 自定义供应商)的 endpoint 已由 resolveRemoteClaudeRoute
         // 覆盖成供应商真上游,与网关 endpoint 就绪与否无关,跳过本判。
         if (
-          !remoteRouteApplied &&
+          !remoteRoute &&
           this.deps.runtimeConfig.remoteEndpoint !== undefined &&
           !this.deps.runtimeConfig.remoteEndpoint.trim()
         ) {
@@ -2120,24 +2128,13 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 见 buildQuery 本地分支):远端 cc 中途 401 → daemon 发 oauth/refresh 反向
           // RPC → 这里向 host 要新 token。接线条件与本地同款:env 实际带订阅 token 且
           // host 实现了强刷 —— 网关 key / 自定义供应商会话绝不接,避免 API-key 401 被
-          // 误引导去刷订阅 token。remoteEnv 里的 token 是失败基线 + 单一事实源:拿到
-          // 新 token 后原地写回,重连 fresh-start 重发 env 时直接以最新 token 起跑。
+          // 误引导去刷订阅 token。刷新语义(失败基线 / 原地写回单一事实源)与本地共用
+          // refreshSubscriptionTokenInPlace。
           ...(remoteEnv?.CLAUDE_CODE_OAUTH_TOKEN && this.deps.auth.getFreshSubscriptionToken
             ? {
-                onOAuthRefresh: async (): Promise<unknown> => {
-                  try {
-                    const fresh = await this.deps.auth.getFreshSubscriptionToken!(
-                      remoteEnv.CLAUDE_CODE_OAUTH_TOKEN,
-                    );
-                    if (fresh) remoteEnv.CLAUDE_CODE_OAUTH_TOKEN = fresh;
-                    return { token: fresh ?? null };
-                  } catch (e) {
-                    log.warn('remote oauth refresh failed; returning null (cc will surface auth error)', {
-                      error: e instanceof Error ? e.message : String(e),
-                    });
-                    return { token: null };
-                  }
-                },
+                onOAuthRefresh: async (): Promise<unknown> => ({
+                  token: await this.refreshSubscriptionTokenInPlace(remoteEnv),
+                }),
               }
             : {}),
         });
@@ -2297,25 +2294,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 所以即使回调超时返回 null, 第二条路仍能捡到新 token, 排障时两条都要看。
           ...(env.CLAUDE_CODE_OAUTH_TOKEN && this.deps.auth.getFreshSubscriptionToken
             ? {
-                getOAuthToken: async (): Promise<string | null> => {
-                  try {
-                    // env.CLAUDE_CODE_OAUTH_TOKEN = 本会话持有 token 的**单一事实源**:
-                    // 作为失败基线传给 host(库已被后台预续期换代时直接返回库值,不再
-                    // 消耗一次轮换);拿到新 token 后原地写回 env —— rewind/fork 重建
-                    // buildQuery 复用同一 env 引用,新子进程直接以最新 token spawn,
-                    // 不会拿旧 token 起跑立即 401 再白白强刷一枚好 token。
-                    const fresh = await this.deps.auth.getFreshSubscriptionToken!(
-                      env.CLAUDE_CODE_OAUTH_TOKEN,
-                    );
-                    if (fresh) env.CLAUDE_CODE_OAUTH_TOKEN = fresh;
-                    return fresh ?? null;
-                  } catch (e) {
-                    log.warn('getOAuthToken callback failed; returning null (cc will surface auth error)', {
-                      error: e instanceof Error ? e.message : String(e),
-                    });
-                    return null;
-                  }
-                },
+                getOAuthToken: (): Promise<string | null> =>
+                  this.refreshSubscriptionTokenInPlace(env),
               }
             : {}),
           // 第一方只读工具由 host 精确列名, 直接走 SDK public allowlist, 避免

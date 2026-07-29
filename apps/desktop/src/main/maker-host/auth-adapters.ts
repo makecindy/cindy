@@ -35,6 +35,7 @@ import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
 import { relinkSharedCodexAuth } from './codex-auth-link.js';
+import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
 import {
   CODEX_USER_DISCONNECT_REASON,
   clearInvalidatedSystemCodexAuthMarker,
@@ -459,16 +460,7 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
       // (getState 已 gate:无凭证 / proxy 没起来时不授权,不会裸奔到这里 spawn。)
       const oauth = getClaudeAiOAuthForSpawn();
       if (oauth?.accessToken) {
-        env.CLAUDE_CODE_OAUTH_TOKEN = oauth.accessToken;
-        if (Array.isArray(oauth.scopes) && oauth.scopes.length > 0) {
-          env.CLAUDE_CODE_OAUTH_SCOPES = oauth.scopes.join(' ');
-        }
-        if (typeof oauth.subscriptionType === 'string' && oauth.subscriptionType) {
-          env.CLAUDE_CODE_SUBSCRIPTION_TYPE = oauth.subscriptionType;
-        }
-        if (typeof oauth.rateLimitTier === 'string' && oauth.rateLimitTier) {
-          env.CLAUDE_CODE_RATE_LIMIT_TIER = oauth.rateLimitTier;
-        }
+        Object.assign(env, claudeOAuthSpawnEnv(oauth));
       }
     } else if (options?.credentialMode === 'oauth-bearer') {
       // 显式订阅模式没有 OAuth 时,getState 已 fail-closed;这里保持不注入 key。

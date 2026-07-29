@@ -392,7 +392,6 @@ export class SessionRegistry {
             try {
               const result = await this.onOAuthRefresh!(opts.sessionId, {
                 sessionId: opts.sessionId,
-                staleToken: opts.env.CLAUDE_CODE_OAUTH_TOKEN,
               });
               // 不回写 opts.env:远端 daemon 不会用旧 env 重建 Query(rewind/fork 不支持),
               // 重连 fresh-start 的 env 由 desktop 重新下发(desktop 侧才是 token 事实源)。

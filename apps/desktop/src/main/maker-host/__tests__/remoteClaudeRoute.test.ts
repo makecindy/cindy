@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// remote-claude-route 只做纯路由 → cc env 翻译,依赖全部 mock(其中 auth-adapters 触
-// electron,必须 mock 掉)。claude-gateway-config 是纯函数,保留真实实现。
-vi.mock('@cindy/maker-core', () => ({}));
-
+// remote-claude-route 只做纯路由 → cc env 翻译,带副作用的依赖全部 mock(其中
+// auth-adapters 触 electron,必须 mock 掉)。claude-gateway-config 与
+// claude-oauth-spawn-env 是纯函数,保留真实实现。
 const readClaudeApiKey = vi.fn<() => string | null>(() => null);
 const getClaudeAiOAuthForSpawn = vi.fn<() => unknown>(() => null);
 const hasClaudeAiOAuth = vi.fn<() => boolean>(() => false);
@@ -106,7 +105,6 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
   it('显式 anthropic → native OAuth 订阅直连(不走 oauth-passthrough route)', async () => {
     resolveProviderRouteDecision.mockResolvedValue({
       providerId: 'anthropic',
-      providerSource: 'builtin',
       routing: { upstream: 'https://api.anthropic.com', authStrategy: 'oauth-passthrough' },
       decision: { upstreamOverride: 'https://api.anthropic.com' },
     });
@@ -121,7 +119,6 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
   it('自定义 api-key-header 供应商 → x-api-key 当门,Authorization 走 custom headers(R2)', async () => {
     resolveProviderRouteDecision.mockResolvedValue({
       providerId: 'my-anthropic',
-      providerSource: 'user',
       routing: { upstream: 'https://api.myprovider.com/v1', authStrategy: 'api-key-header' },
       decision: {
         upstreamOverride: 'https://api.myprovider.com/v1',
@@ -145,7 +142,6 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
   it('通用 oauth-token 供应商 → ANTHROPIC_AUTH_TOKEN 当门', async () => {
     resolveProviderRouteDecision.mockResolvedValue({
       providerId: 'generic-oauth',
-      providerSource: 'user',
       routing: { upstream: 'https://api.g.com/anthropic', authStrategy: 'oauth-token' },
       decision: {
         upstreamOverride: 'https://api.g.com/anthropic',
@@ -161,7 +157,6 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
   it('无鉴权(none)自托管 → 占位 key 过 cc auth gate', async () => {
     resolveProviderRouteDecision.mockResolvedValue({
       providerId: 'selfhost',
-      providerSource: 'user',
       routing: { upstream: 'https://internal.local/anthropic', authStrategy: 'none' },
       decision: { upstreamOverride: 'https://internal.local/anthropic', headerOverride: {} },
     });
@@ -173,7 +168,6 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
 describe('resolveRemoteClaudeRoute — 远端无法表达的能力 → 明确报错', () => {
   const base = {
     providerId: 'p',
-    providerSource: 'user' as const,
     decision: { headerOverride: { 'x-api-key': 'k' } },
   };
 
@@ -204,7 +198,6 @@ describe('resolveRemoteClaudeRoute — 远端无法表达的能力 → 明确报
   it('oauth-passthrough(依赖子进程自带 bearer)→ REMOTE_PROVIDER_UNSUPPORTED', async () => {
     resolveProviderRouteDecision.mockResolvedValue({
       providerId: 'xai',
-      providerSource: 'builtin',
       routing: { upstream: 'https://api.x.ai/v1', authStrategy: 'oauth-passthrough' },
       decision: { upstreamOverride: 'https://api.x.ai/v1' },
     });
@@ -216,7 +209,6 @@ describe('resolveRemoteClaudeRoute — 远端无法表达的能力 → 明确报
   it('decision 解析为 null(如非 xd 的 gateway-key 路由缺网关 key)→ 前置报错,不拿占位鉴权打真上游', async () => {
     resolveProviderRouteDecision.mockResolvedValue({
       providerId: 'partner-gw',
-      providerSource: 'user',
       routing: { upstream: 'https://partner.example/v1', authStrategy: 'gateway-key' },
       decision: null,
     });

@@ -438,7 +438,7 @@ export interface AgentDeps {
      * (native OAuth route), never for gateway-key sessions.
      *
      * Params/Result follow `@cindy/maker-cc-manager` OAuthRefreshParams/Result
-     * ({ sessionId, staleToken? } → { token: string | null }), typed as unknown
+     * ({ sessionId } → { token: string | null }), typed as unknown
      * to avoid cross-package dependency.
      */
     onOAuthRefresh?: (params: unknown) => Promise<unknown>;

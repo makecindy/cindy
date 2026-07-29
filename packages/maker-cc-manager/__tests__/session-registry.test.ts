@@ -246,7 +246,7 @@ describe('SessionRegistry getOAuthToken (subscription token refresh)', () => {
 
   const OAUTH_ENV = { CLAUDE_CODE_OAUTH_TOKEN: 'tok-stale' };
 
-  it('env 带订阅 token + onOAuthRefresh → SDK options 拿到 getOAuthToken,转发含 sessionId/staleToken', async () => {
+  it('env 带订阅 token + onOAuthRefresh → SDK options 拿到 getOAuthToken,转发含 sessionId', async () => {
     const { factory, captured } = captureFactory();
     const forwarder = vi.fn(async () => ({ token: 'tok-fresh' }));
     const registry = new SessionRegistry({ sdkQueryFactory: factory, onOAuthRefresh: forwarder });
@@ -255,7 +255,7 @@ describe('SessionRegistry getOAuthToken (subscription token refresh)', () => {
 
     expect(captured[0]?.getOAuthToken).toBeDefined();
     await expect(captured[0]!.getOAuthToken!()).resolves.toBe('tok-fresh');
-    expect(forwarder).toHaveBeenCalledWith('s1', { sessionId: 's1', staleToken: 'tok-stale' });
+    expect(forwarder).toHaveBeenCalledWith('s1', { sessionId: 's1' });
   });
 
   it('无 attached client → 不转发,直接 null', async () => {
