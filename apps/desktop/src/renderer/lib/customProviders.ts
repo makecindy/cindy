@@ -37,15 +37,17 @@ export function replaceCustomProviderModelId(
 
 /**
  * 运行期 CatalogModel 已把缺省 contextWindow 物化为通用默认值；转回用户配置时不能把该
- * 默认快照写成 override，否则未来默认升级后老配置无法跟随。厂商明确的非默认值则保留。
+ * 默认快照写成 override，否则未来默认升级后老配置无法跟随。判据以 contextWindowExplicit
+ * 标记为准——用户显式填的值哪怕恰好等于当前默认（如 200K）也必须原样保留，不能靠等值
+ * 推断（PR review P1）；无标记的旧视图快照回退等值判断,行为不变。
  */
 export function customProviderModelConfigFromCatalogModel(
-  model: Pick<CatalogModel, 'id' | 'name' | 'contextWindow' | 'defaultEnabled'>,
+  model: Pick<CatalogModel, 'id' | 'name' | 'contextWindow' | 'contextWindowExplicit' | 'defaultEnabled'>,
 ): ProviderRuntimeModelConfig {
   return {
     id: model.id,
     name: model.name,
-    ...(model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
+    ...(model.contextWindowExplicit === true || model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
       ? { contextWindow: model.contextWindow }
       : {}),
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),

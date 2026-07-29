@@ -260,6 +260,16 @@ export interface CatalogModel {
    * (providerId, modelId) 解析。
    */
   contextWindowVerified?: boolean;
+  /**
+   * 该窗口值是否来自用户/预设**显式配置**（仅 buildUserProvider 生成；内置目录不设）。
+   * 编辑表单回转配置时据此区分「显式填了 200K」与「缺省物化成的 200K」——不能靠与
+   * 当前默认值等值判断：显式覆盖必须在未来默认升级后原样保留（PR review P1）。
+   * 故意不纳入 modelSignature 一致性校验（固定 key 序里没有它）。与
+   * `contextWindowVerified` 是两份独立的 provenance:后者只活在 host 目录里、供
+   * `resolveVerifiedContextWindow` 收敛运行期窗口用,不进跨端 `ModelDescriptor`；
+   * 这个字段专供 desktop 自定义 Provider 编辑表单的回转判定用。
+   */
+  contextWindowExplicit?: boolean;
   maxOutput?: number;
   /** 支持的 effort 档；空数组 = 不支持切换（如 Haiku / 部分 provider-managed 模型）。 */
   efforts: Effort[];

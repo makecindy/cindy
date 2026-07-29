@@ -59,6 +59,21 @@ describe('customProviderModelConfigFromCatalogModel', () => {
     });
   });
 
+  it('preserves an explicit override equal to the current default (explicit flag wins)', () => {
+    // 用户显式填了 200000:值恰好等于当前默认,但显式覆盖必须在未来默认升级后
+    // 原样保留——不能靠等值推断丢掉字段(PR review P1)。
+    expect(customProviderModelConfigFromCatalogModel({
+      id: 'pinned-default',
+      name: 'Pinned',
+      contextWindow: 200_000,
+      contextWindowExplicit: true,
+    })).toEqual({
+      id: 'pinned-default',
+      name: 'Pinned',
+      contextWindow: 200_000,
+    });
+  });
+
   it('preserves hidden defaults while round-tripping catalog models', () => {
     expect(customProviderModelConfigFromCatalogModel({
       id: 'discovered',
