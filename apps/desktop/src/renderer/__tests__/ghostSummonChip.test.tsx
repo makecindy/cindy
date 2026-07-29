@@ -35,7 +35,22 @@ const commandDirective: GhostDirectiveDisplay = {
 const mentionDirective: GhostDirectiveDisplay = {
   kind: 'mention',
   ghosts: [{ name: 'XD Feishu', ghostId: 'xd-feishu' }],
+  raw: '[插件提示] 消息提及了插件 XD Feishu(id: xd-feishu)',
 };
+
+/** 模拟 prefers-reduced-motion 匹配结果(jsdom 默认无 matchMedia)。 */
+function stubMatchMedia(matches: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia;
+}
 
 function fulfillmentOf(clientId: string, ghostIds: string[]) {
   return new Map<string, ReadonlySet<string>>([[clientId, new Set(ghostIds)]]);
@@ -48,6 +63,8 @@ beforeEach(async () => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  // biome-ignore lint/performance/noDelete: 还原 jsdom 默认(无 matchMedia)。
+  delete (window as { matchMedia?: unknown }).matchMedia;
 });
 
 describe('GhostSummonCard(chip 形态)', () => {
@@ -116,6 +133,23 @@ describe('GhostSummonCard(chip 形态)', () => {
     });
     expect(container.querySelector('.summon-seal-halo')).toBeNull();
     expect(container.querySelector('.summon-seal-tick-pop')).toBeTruthy();
+  });
+
+  it('skips the choreography under prefers-reduced-motion and lands on the terminal frame', () => {
+    stubMatchMedia(true);
+    vi.useFakeTimers();
+    const { container, rerender } = render(
+      <GhostSummonCard directive={commandDirective} messageClientId="m1" running />,
+    );
+    rerender(<GhostSummonCard directive={commandDirective} messageClientId="m1" running={false} />);
+    // 不走 closing/settling 计时:立即闭合 + ✓ 直显 + 无旋转、无光晕。
+    const arcs = container.querySelectorAll('circle.summon-seal-arc');
+    for (const arc of arcs) {
+      expect(arc.getAttribute('stroke-dasharray')).toBe('100 0');
+    }
+    expect(container.querySelector('.animate-\\[spin_2\\.4s_linear_infinite\\]')).toBeNull();
+    expect(container.querySelector('.summon-seal-halo')).toBeNull();
+    expect(container.querySelector('svg.lucide-check')).toBeTruthy();
   });
 
   it('keeps transparency: expanding reveals the $command badge and directive text', () => {

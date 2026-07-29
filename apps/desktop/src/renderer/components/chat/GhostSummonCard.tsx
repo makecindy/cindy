@@ -94,6 +94,16 @@ const SEAL_SETTLE_MS = 900;
 type SealPhase = 'running' | 'closing' | 'settling' | 'done';
 
 /**
+ * motion-reduce 下终态编舞整段跳过(不只是 CSS 层禁动画):JS 状态机也不走
+ * closing/settling 计时,直接落 done 帧——否则 ✓ 要等 600ms 计时器才出现,
+ * 与「直接落终态帧」的承诺不符(review 反馈)。jsdom 等无 matchMedia 环境
+ * 视为不减动效。
+ */
+const prefersReducedMotion = (): boolean =>
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/**
  * 幽灵印记(召唤法阵):两道反向圆弧环,环心是意识头像(声明了 icon 时),
  * 否则回退通用幽灵图标;圆弧走 currentColor 随主题文本色。
  *
@@ -121,6 +131,10 @@ function SummonSeal({ iconDataUrl, running }: { iconDataUrl: string | null; runn
       return;
     }
     if (!livedRunningRef.current) return undefined;
+    if (prefersReducedMotion()) {
+      setPhase('done');
+      return undefined;
+    }
     setPhase('closing');
     const settleTimer = window.setTimeout(() => setPhase('settling'), SEAL_CLOSE_MS);
     const doneTimer = window.setTimeout(() => setPhase('done'), SEAL_CLOSE_MS + SEAL_SETTLE_MS);
@@ -203,7 +217,12 @@ function SummonSeal({ iconDataUrl, running }: { iconDataUrl: string | null; runn
           )}
           style={{ backgroundColor: 'var(--card-status-done)' }}
         >
-          <Check size={7} strokeWidth={3} className="text-white" aria-hidden="true" />
+          <Check
+            size={7}
+            strokeWidth={3}
+            className="text-[var(--surface-on-card)]"
+            aria-hidden="true"
+          />
         </span>
       )}
     </span>
@@ -384,7 +403,7 @@ export function GhostSummonCard({
       </button>
       <Collapse open={expanded}>
         <div
-          className="mt-2 rounded-[10px] border px-3 py-2.5"
+          className="mt-2 rounded-[12px] border px-3 py-2.5"
           style={{ borderColor: 'var(--border-default)' }}
         >
           {(badgeCommand || versionLabel) && (
