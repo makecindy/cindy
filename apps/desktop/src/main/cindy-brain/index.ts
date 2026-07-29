@@ -34,7 +34,7 @@ import {
 } from '../appSessionState.js';
 import { getLayoutStore } from '../layout/index.js';
 import { GhostManager, type InstallRejection, type UninstallRejection } from './GhostManager.js';
-import { snapshotGhostPackage, writeGhostPackageSnapshot } from './exportGhostPackage.js';
+import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
 import {
   clearBuiltinTombstone,
@@ -3468,53 +3468,18 @@ export function registerGhostIpc(): void {
   // 详情页「导出 .cindy」:把已装插件的安装目录重新打成 zip 包,经系统
   // 保存对话框写到用户选定的位置。取消选择返回 { status: 'canceled' },
   // 不算错误;导出失败抛 IPC 错误(renderer 映射 toast)。
-  // 快照(枚举+逐文件读入内存+压缩)持有既有的变更租约,与市场安装/更新/
-  // 卸载同一 drain 口径:持约期间这些路径若启动会被账号切换链路正常排空,
-  // 用户挑保存位置与写盘在约外,不阻塞任何变更。账号切换边界期间
-  // fail-closed 拒绝(边界在等 drain,放行会绕过排空,等待则互锁)。
+  // 包先在内存里打完再弹对话框,用户挑位置期间插件怎么变都不影响已抓
+  // 内容;除此之外不做并发防护——导出与安装/切号同刻的极端时序下可能
+  // 得到略旧内容,用户重导即可,属可接受取舍。
   ipcMain.handle('ghosts:export', async (event, id: unknown) => {
     assertTrustedAppRendererEvent(event);
-    if (isAppSessionBoundaryPending()) {
-      throwIpcError('PRECONDITION_FAILED', '账号切换中，请稍后重试导出');
-    }
-    // 快照前捕获 owner:持约期间若开始切号,租约释放后切换可能已完成,
-    // 快照字节属于旧账号——落盘前按 owner 复查,变即拒(Greptile P1)。
-    const exportOwner = getActiveAppSession();
     const win = BrowserWindow.fromWebContents(event.sender);
-    // 租约只覆盖快照(读目录);对话框等待与落盘在约外,不阻塞变更。
-    const releaseMutation = ghostMutationCoordinator.acquire();
-    let snapshot: Awaited<ReturnType<typeof snapshotGhostPackage>>;
-    try {
-      snapshot = await snapshotGhostPackage(id, {
-        listInstalled: () => manager.list(),
-        getDownloadsDir: () => app.getPath('downloads'),
-      });
-    } finally {
-      releaseMutation();
-    }
-    if (!snapshot.ok) {
-      switch (snapshot.result.status) {
-        case 'invalid_id':
-          return throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
-        case 'not_installed':
-          return throwIpcError('NOT_FOUND', `意识 ${String(id)} 未安装`);
-        case 'error':
-          return throwIpcError('INTERNAL', `导出插件失败(${snapshot.result.code})`);
-      }
-      return throwIpcError('INTERNAL', '导出插件失败(unknown)');
-    }
-    if (
-      isAppSessionBoundaryPending() ||
-      !isSameAppSession(exportOwner, getActiveAppSession())
-    ) {
-      return throwIpcError('PRECONDITION_FAILED', '账号已切换，请重新导出');
-    }
-    const result = await writeGhostPackageSnapshot(snapshot, {
+    const result = await exportGhostPackage(id, {
+      listInstalled: () => manager.list(),
       showSaveDialog: (opts) =>
         win ? dialog.showSaveDialog(win, opts) : dialog.showSaveDialog(opts),
       getDownloadsDir: () => app.getPath('downloads'),
-      // 'wx' 独占创建临时文件:不跟随既有路径/symlink(防同目录预置劫持)。
-      writeFile: (filePath, data) => fs.promises.writeFile(filePath, data, { flag: 'wx' }),
+      writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
     });
     switch (result.status) {
       case 'saved':
@@ -3522,6 +3487,10 @@ export function registerGhostIpc(): void {
         return { status: 'saved' as const, savedPath: result.savedPath };
       case 'canceled':
         return { status: 'canceled' as const };
+      case 'invalid_id':
+        return throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
+      case 'not_installed':
+        return throwIpcError('NOT_FOUND', `意识 ${String(id)} 未安装`);
       case 'error':
         return throwIpcError('INTERNAL', `导出插件失败(${result.code})`);
     }

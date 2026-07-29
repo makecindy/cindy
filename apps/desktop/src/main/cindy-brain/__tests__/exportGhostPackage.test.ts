@@ -190,23 +190,7 @@ describe('exportGhostPackage', () => {
     expect(result).toEqual({ status: 'error', code: 'write_failed' });
   });
 
-  it('落盘先写临时文件再 rename,写失败不动既有目标文件', async () => {
-    const target = path.join(workDir, 'existing.cindy');
-    await fs.promises.writeFile(target, 'old-bytes');
-    const result = await exportGhostPackage('hello', makeDeps({
-      showSaveDialog: vi.fn(async () => ({ canceled: false, filePath: target })),
-      writeFile: () => Promise.reject(new Error('disk full')),
-    }));
-    expect(result).toEqual({ status: 'error', code: 'write_failed' });
-    // 旧文件原样保留,临时文件已清理。
-    await expect(fs.promises.readFile(target, 'utf8')).resolves.toBe('old-bytes');
-    const leftovers = (await fs.promises.readdir(workDir)).filter((name) =>
-      name.startsWith('.cindy-export-'),
-    );
-    expect(leftovers).toEqual([]);
-  });
-
-  it('用户选择覆盖既有文件时,完整新包原子替换旧内容', async () => {
+  it('用户选择覆盖既有文件时,写出完整新包内容', async () => {
     const target = path.join(workDir, 'existing.cindy');
     await fs.promises.writeFile(target, 'old-bytes');
     const result = await exportGhostPackage('hello', makeDeps({
