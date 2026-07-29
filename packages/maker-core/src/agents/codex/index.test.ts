@@ -5176,6 +5176,77 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('interrupts the retry when a Guardian failure downgrades Auto to Ask mid-backoff', async () => {
+      // Guardian 不可用时的内部降级(switchAutoRuntimeToAskImmediately)绕开了公开的
+      // setPermissionMode, 原本只判 currentTurnId / isTurnStartPending —— 退避计时器
+      // 正在等的窗口两者都不成立, 重投一到点就会以已被撤销的 Auto 档执行工具
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-guardian-downgrade',
+          model: 'gpt-5.5',
+          providerId: 'openai',
+          workingDir: '/repo',
+          permissionMode: 'auto',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.autoApprovalReviewCompleted) {
+          throw new Error('expected autoApprovalReviewCompleted');
+        }
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        // 退避等待中: 没有活跃 turn, 也没有在飞的 turn/start。
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(turnStartCount(host)).toBe(1);
+
+        // Guardian 超时 → 运行期降到 Ask（不经过 setPermissionMode）。
+        handlers.autoApprovalReviewCompleted({
+          threadId: 'start-thread-id',
+          turnId: 'turn-guardian',
+          startedAtMs: 1,
+          completedAtMs: 2,
+          reviewId: 'review-overload-downgrade',
+          targetItemId: 'item-x',
+          decisionSource: 'agent',
+          review: { status: 'timedOut', riskLevel: null, userAuthorization: null, rationale: null },
+          action: {
+            type: 'networkAccess',
+            target: 'https://example.com',
+            host: 'example.com',
+            protocol: 'https',
+            port: 443,
+          },
+        } as never);
+        await vi.advanceTimersByTimeAsync(3_000);
+
+        // 重投照常发出（它带的是冻结的 Auto 策略），但必须紧跟一个 interrupt——
+        // 冻结档比当前的 Ask 宽，不能让它以被撤销的权限继续跑工具。
+        expect(turnStartCount(host)).toBe(2);
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-2',
+          ),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('interrupts the retry when an intermediate mode change leaves the frozen policy looser', async () => {
       // Full access → Ask（arm 标记）→ Auto（Ask→Auto 不算收紧，会清标记），而重投
       // 持的仍是 Full access 的冻结策略（review #844 codex P1）。

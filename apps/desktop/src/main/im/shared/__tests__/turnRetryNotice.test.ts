@@ -63,6 +63,18 @@ describe('overloadFailureNotice', () => {
     expect(notice).toContain('不会回到这条消息里');
   });
 
+  it('不声称重试过: 终态也可能来自"已有产出所以不重投"', () => {
+    // maker-core 的产出守卫会在 turn 已有 text / reasoning / tool 产出时**拒绝**自动
+    // 重投并立刻透终态, 那时一次重试都没发生过; 接管条件不满足时同理
+    // (review #844 codex P1)。渠道文案不得替它编造"重试多次"。
+    const notice = overloadFailureNotice(
+      'Selected model is at capacity. Please try a different model.',
+    );
+    expect(notice).not.toMatch(/重试多次|多次重试|重试.*仍未成功/);
+    // 仍然要说清"现在是什么状况", 否则用户只看到一句无信息的失败。
+    expect(notice).toContain('上游暂时没有可用容量');
+  });
+
   it('非过载错误沿用原文(返回 null 让调用方不改写)', () => {
     expect(overloadFailureNotice('process exited with code 1')).toBeNull();
     expect(overloadFailureNotice('Request timed out', 504)).toBeNull();

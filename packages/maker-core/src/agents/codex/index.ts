@@ -4424,6 +4424,24 @@ export class CodexAgent extends BaseAgent {
     };
 
     /**
+     * 挂起的过载重投, 冻结的策略是否比 `mode` 更宽。
+     *
+     * 重投持的是发射那一刻冻结的 turnParams, 期间任何收紧都不会自动作用到它。判据
+     * 必须按严格度直接比"冻结档 vs 目标档", 不能只看"最近一次转换算不算收紧" ——
+     * Full access → Ask → Auto 这类中间态下最近一次是放宽, 而冻结的 Full access 仍然
+     * 比 Auto 宽(review #844 codex P1)。
+     *
+     * 公开的 setPermissionMode 与 Guardian 失败时的内部降级
+     * (switchAutoRuntimeToAskImmediately) 共用它: 后者绕开了公开路径, 只判
+     * currentTurnId / isTurnStartPending, 会漏掉"退避计时器正在等"这个窗口 ——
+     * 那时重投一到点就会以已被撤销的宽松档执行工具(review #844 codex P1)。
+     */
+    const overloadRetryPolicyLooserThan = (mode: PermissionMode): boolean =>
+      (overloadRetry?.timer != null || overloadRetry?.inFlight === true)
+      && codexPermissionStrictnessRank(overloadRetry.launchedPermissionMode)
+        < codexPermissionStrictnessRank(mode);
+
+    /**
      * 退避等待 / 重投 RPC 在途期间发现本轮 send 已被取消时, 收口逻辑 turn。
      *
      * 只有"coordinator 只 abort 了 sendOpts.signal、没走 handle.abort()"那条路需要
@@ -4629,10 +4647,17 @@ export class CodexAgent extends BaseAgent {
       if (mutablePermissionMode !== 'auto') return false;
       dismissAllPending('permission_mode_changed_to_ask', 'deny');
       mutablePermissionMode = 'ask';
-      if (!closed && turnLaunchedUnattended) {
+      // 挂起的过载重投也要一起收紧: 它冻结的是 Auto / Full access, 而 Guardian 已经
+      // 不可用、运行期刚降到 Ask。这条路**绕开**了公开的 setPermissionMode, 原本只判
+      // currentTurnId / isTurnStartPending —— 退避计时器正在等的那个窗口两者都不成立,
+      // 重投一到点就会以已被撤销的宽松档执行工具(review #844 codex P1)。
+      const retryPolicyLooserThanAsk = overloadRetryPolicyLooserThan('ask');
+      if (!closed && (turnLaunchedUnattended || retryPolicyLooserThanAsk)) {
         if (currentTurnId !== null) {
           void interruptTurnForPermissionTighten(currentTurnId);
-        } else if (isTurnStartPending) {
+        } else if (isTurnStartPending || retryPolicyLooserThanAsk) {
+          // 与 turn/start 在飞同构: 标记由 handleTurnStartResp / turnStarted 在拿到
+          // turn id 的瞬间消费并补中断。
           pendingTightenInterrupt = true;
         }
       }
@@ -5995,10 +6020,7 @@ export class CodexAgent extends BaseAgent {
         // Auto 这类中间态：Ask→Auto 不算收紧会把标记清掉，而冻结的 Full access 仍然
         // 比 Auto 宽，重投出来的 turn 就能以 Full access 执行（review #844 codex P1）。
         // 按严格度排序直接比冻结档与当前档。
-        const retryPolicyLooserThanNow =
-          (overloadRetry?.timer != null || overloadRetry?.inFlight === true) &&
-          codexPermissionStrictnessRank(overloadRetry.launchedPermissionMode) <
-            codexPermissionStrictnessRank(newMode);
+        const retryPolicyLooserThanNow = overloadRetryPolicyLooserThan(newMode);
         if (!tightensCurrentTurn && !retryPolicyLooserThanNow) {
           pendingTightenInterrupt = false;
         } else if (!closed && (turnLaunchedUnattended || retryPolicyLooserThanNow)) {

@@ -60,8 +60,13 @@ export function overloadRetryNotice(data: unknown): string | null {
  */
 export function overloadFailureNotice(message: string, errorStatus?: number): string | null {
   if (parseOverloadError(message, errorStatus) === null) return null;
+  // 刻意**不**声称"自动重试多次后仍未成功": 走到终态的原因不止预算耗尽, 还包括
+  // "本 turn 已有产出所以不重投"(maker-core 的 currentTurnProducedOutput 守卫)与接管
+  // 条件不满足, 那些情况下一次自动重试都没发生过(review #844 codex P1)。真重试过时
+  // 用户已经在退避窗口里看过「正在自动重试（N/M）」那一行, 终态只需要给下一步。
+  // 与桌面端 ErrorBanner 的 overloadBusy 文案同口径。
   return (
-    '⚠️ 模型服务繁忙（上游暂时没有可用容量），自动重试多次后仍未成功。' +
+    '⚠️ 模型服务繁忙：上游暂时没有可用容量。' +
     '请直接在这里重发这条消息重试，或在 Cindy 里换一个模型。' +
     '（在桌面端点「重试」也能继续任务，但结果不会回到这条消息里。）'
   );
