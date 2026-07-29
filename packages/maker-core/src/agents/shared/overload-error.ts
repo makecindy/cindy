@@ -92,7 +92,11 @@ export function overloadRetryDelayMs(attempt: number, random: () => number = Mat
   );
   // random() ∈ [0,1) → 系数 ∈ [0.75, 1.25)
   const factor = 1 + (random() * 2 - 1) * OVERLOAD_RETRY_JITTER_RATIO;
-  return Math.round(base * factor);
+  // 封顶要在 jitter **之后**再做一次: 只封 base 的话, 触顶那几档乘上 1.25 会回到约 37.5s,
+  // 与 OVERLOAD_RETRY_MAX_DELAY_MS 声明的"单次退避上限"自相矛盾(copilot 低置信提示)。
+  // 触顶后 jitter 只能往下拉, 分布变成单边 —— 但打散惊群的作用仍在(区间还有 22.5s~30s),
+  // 而"绝不让用户等过 30s"是这个常量要保证的硬边界, 优先。
+  return Math.min(Math.round(base * factor), OVERLOAD_RETRY_MAX_DELAY_MS);
 }
 
 /**

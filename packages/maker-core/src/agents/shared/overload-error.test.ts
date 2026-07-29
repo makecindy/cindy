@@ -88,6 +88,14 @@ describe('overloadRetryDelayMs', () => {
     expect(overloadRetryDelayMs(50, mid)).toBe(30_000);
   });
 
+  it('jitter 之后也不越过 30s 上限', () => {
+    // 只封 base 的话触顶那几档乘上 1.25 会回到约 37.5s, 与常量声明的"单次上限"矛盾。
+    expect(overloadRetryDelayMs(5, () => 0.999999)).toBe(30_000);
+    expect(overloadRetryDelayMs(50, () => 0.999999)).toBe(30_000);
+    // 下边界照常受 jitter 影响(触顶后只能往下拉, 打散作用仍在)。
+    expect(overloadRetryDelayMs(5, () => 0)).toBe(22_500);
+  });
+
   it('jitter 幅度为 ±25%', () => {
     expect(overloadRetryDelayMs(1, () => 0)).toBe(1_500);
     expect(overloadRetryDelayMs(1, () => 0.999999)).toBe(2_500);

@@ -4901,7 +4901,17 @@ export class CodexAgent extends BaseAgent {
       // deferredCapacityFailure, 而补排会在 isCancelled() 上退出 —— 标记留着,
       // overloadRetryPending() 因此恒真, isTurnRunning() 永远为真(review #844 codex P1)。
       if (state.isCancelled()) {
-        log.info('codex not taking over a capacity failure for an already-cancelled send', { threadId });
+        // 不接管**不等于**什么都不用做: 在飞的 start 必须一起隔离。这条错误随后走终态路径,
+        // 而在飞那次 RPC 若 resolve, 取消边界会在 quarantineTurnsAfterStartFailure 之前就把
+        // 异常抛出去 —— 于是迟到的 turnStarted 既没有隔离也没有墓碑, 会把这个已被取消的 turn
+        // 激活并执行工具(review #844 codex P1)。取消语义是"这一轮什么都别再跑", 所以隔离全部
+        // 在飞 start(与 settleCancelledOverloadRetry 一致); 隔离后响应回来时
+        // adoptUnidentifiedDeadTurn 会落墓碑 + 补 interrupt。
+        quarantineAllInFlightStarts();
+        log.info('codex not taking over a capacity failure for an already-cancelled send', {
+          quarantinedStarts: inFlightStarts.size,
+          threadId,
+        });
         return null;
       }
       // 空 id 的容量拒绝**无法归属**到具体请求(协议里它既不带 turnId 也不带请求关联)。

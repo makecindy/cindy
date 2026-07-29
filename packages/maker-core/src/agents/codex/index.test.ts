@@ -5672,6 +5672,75 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('quarantines the pending start when declining a capacity failure for a cancelled send', async () => {
+      // "已取消 → 不接管"不等于什么都不用做: 在飞的 start 必须一起隔离。这条错误随后走终态
+      // 路径, 而在飞那次 RPC 若 resolve, 取消边界会在 quarantineTurnsAfterStartFailure 之前
+      // 就把异常抛出去 —— 迟到的 turnStarted 于是既没有隔离也没有墓碑, 会把这个已被取消的
+      // turn 激活并执行工具(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const interrupted: string[] = [];
+        const host = installFakeHost(agent, (method, params) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) {
+            interrupted.push((params as { turnId?: string })?.turnId ?? '');
+            return {};
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-cancelled-quarantine',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        const send = handle.send(
+          { type: 'user', content: 'hello' },
+          { signal: controller.signal },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted) throw new Error('expected handlers');
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 空 id 容量拒绝 → 因已取消而不接管, 但必须顺手隔离在飞的 start。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 响应回来: 隔离生效 → 落墓碑 + 补 interrupt, 不得激活。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await send.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(interrupted).toContain('turn-1');
+        expect(handle.getCurrentTurnId?.() ?? null).toBeNull();
+
+        // 迟到的 turnStarted 同样不得把它激活。
+        handlers.turnStarted({ turn: { id: 'turn-1' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.() ?? null).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('settles a deferred capacity failure when the signal aborted before it was recorded', async () => {
       // signal 在"初始 turn/start 还在飞、容量通知尚未到达"时 abort: 那个 {once} 监听器因为
       // 当时无事可做而被消费掉。随后到达的空 id 容量拒绝若照样建出 deferredCapacityFailure,
