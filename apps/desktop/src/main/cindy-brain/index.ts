@@ -3532,6 +3532,9 @@ export function registerGhostIpc(): void {
   // 的坏包。
   ipcMain.handle('ghosts:export', async (event, id: unknown) => {
     assertTrustedAppRendererEvent(event);
+    // 官方保留前缀在本地装入链路被拒,导出产物装不回——renderer 菜单
+    // 只是隐藏,handler 才是真正的强制边界(评审 P1)。
+    if (typeof id === 'string') rejectReservedGhostId(id);
     const win = BrowserWindow.fromWebContents(event.sender);
     const result = await exportGhostPackage(id, {
       listInstalled: () => manager.list(),
@@ -3540,11 +3543,20 @@ export function registerGhostIpc(): void {
       getDownloadsDir: () => app.getPath('downloads'),
       fileTypeLabel: t('settings.ghosts.detail.exportFileType'),
       writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
-      // 装入校验本尊:产物写盘后过 manager.inspect(带真实 trust
-      // registry),不过闸不向上报成功。
+      // 装入校验本尊 + 装入侧不变量:manager.inspect 带真实 trust
+      // registry;指令查重只存在于 install/update(与当前已装撞名即拒,
+      // 排除自身),inspect 不覆盖,这里补齐(评审 P1)。
       inspectPackage: async (filePath) => {
         const probe = await manager.inspect(filePath);
-        return !('rejection' in probe);
+        if ('rejection' in probe) return false;
+        const commandFold = probe.manifest.command?.toLowerCase();
+        if (commandFold === undefined) return true;
+        return !manager.list().some(
+          (g) =>
+            g.manifest.id !== probe.manifest.id &&
+            g.manifest.command !== undefined &&
+            g.manifest.command.toLowerCase() === commandFold,
+        );
       },
     });
     switch (result.status) {

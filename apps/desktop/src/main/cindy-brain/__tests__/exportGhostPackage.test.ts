@@ -161,17 +161,33 @@ describe('exportGhostPackage', () => {
     expect(result).toEqual({ status: 'error', code: 'read_failed' });
   });
 
-  it('产物未过装入校验:如实 verify_failed 并删除已写文件', async () => {
+  it('产物未过装入校验:如实 verify_failed,不碰用户既有目标文件', async () => {
     // 装入目录被改坏(如 statement/review 签名失效、manifest 不合法)
-    // 的情形由装入校验本尊拦下——导出不能报成功,产物必须清掉。
+    // 的情形由装入校验本尊拦下——导出不能报成功;用户选择覆盖旧备份
+    // 时,既有文件必须原样保留,只清理临时文件。
+    const target = path.join(workDir, 'old-backup.cindy');
+    await fs.promises.writeFile(target, 'old-bytes');
     const result = await exportGhostPackage('hello', makeDeps({
+      showSaveDialog: vi.fn(async () => ({ canceled: false, filePath: target })),
       inspectPackage: async () => false,
     }));
     expect(result).toEqual({ status: 'error', code: 'verify_failed' });
+    await expect(fs.promises.readFile(target, 'utf8')).resolves.toBe('old-bytes');
     const leftovers = (await fs.promises.readdir(workDir)).filter((name) =>
-      name.endsWith('.cindy'),
+      name.startsWith('.cindy-export-'),
     );
     expect(leftovers).toEqual([]);
+  });
+
+  it('用户选择覆盖既有文件且校验通过:目标被完整新包替换', async () => {
+    const target = path.join(workDir, 'existing.cindy');
+    await fs.promises.writeFile(target, 'old-bytes');
+    const result = await exportGhostPackage('hello', makeDeps({
+      showSaveDialog: vi.fn(async () => ({ canceled: false, filePath: target })),
+    }));
+    expect(result).toEqual({ status: 'saved', savedPath: target });
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(target));
+    expect(Object.keys(zip.files)).toContain('ghost.json');
   });
 
   it('目录内容超过装入侧条目上限:如实 too_large', async () => {

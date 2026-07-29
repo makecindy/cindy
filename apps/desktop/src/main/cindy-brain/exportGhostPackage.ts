@@ -77,10 +77,10 @@ export interface ExportGhostPackageDeps {
   fileTypeLabel: string;
   writeFile(filePath: string, data: Buffer): Promise<void>;
   /**
-   * 装入校验本尊(GhostManager.inspect):产物写盘后、上报成功前调用,
-   * 返回是否通过。签名/未签名都过这道闸——statement 被篡改成自洽、
-   * review 签名损坏、manifest/node.entry 被改坏等「导出成功却装不回」
-   * 的情形都由它拦下。
+   * 装入校验本尊(GhostManager.inspect + 装入侧不变量):临时产物写盘后、
+   * 发布到目标前调用,返回是否通过。签名/未签名都过这道闸——statement
+   * 被篡改成自洽、review 签名损坏、manifest/node.entry 被改坏、指令与
+   * 其他已装插件撞名等「导出成功却装不回」的情形都由它拦下。
    */
   inspectPackage(filePath: string): Promise<boolean>;
 }
@@ -149,13 +149,18 @@ interface SignedDoc {
  * 不如如实报错。
  */
 async function readSignedDoc(dir: string): Promise<SignedDoc | null> {
-  let raw: Buffer;
+  const sigPath = path.join(dir, GHOST_SIGNATURE_FILE);
+  // 先 stat 再读(评审 P1):超上限的签名文件反正过不了装入,不把它
+  // 完整读进内存;读后再查一次字节数,挡住 stat 后被改大的窗口。
+  let stat: fs.Stats;
   try {
-    raw = await fs.promises.readFile(path.join(dir, GHOST_SIGNATURE_FILE));
+    stat = await fs.promises.stat(sigPath);
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
     throw err;
   }
+  if (stat.size > MAX_SIGNATURE_FILE_BYTES) throw new Error('signature file too large');
+  const raw = await fs.promises.readFile(sigPath);
   if (raw.byteLength > MAX_SIGNATURE_FILE_BYTES) {
     throw new Error('signature file too large');
   }
@@ -193,8 +198,12 @@ async function readSignedEntries(dir: string, doc: SignedDoc): Promise<PackageEn
   const out: PackageEntry[] = [{ rel: GHOST_SIGNATURE_FILE, data: doc.raw }];
   for (const item of doc.files) {
     if (!isSafeStatementPath(item.path)) return null;
+    // 先 stat 对尺寸:与 statement 不符必然哈希也不符,不必把可能超限
+    // 的文件读进内存(评审 P1:巨型缓存文件要先挡在分配之前)。
     let data: Buffer;
     try {
+      const stat = await fs.promises.stat(path.join(dir, ...item.path.split('/')));
+      if (stat.size !== item.bytes) return null;
       data = await fs.promises.readFile(path.join(dir, ...item.path.split('/')));
     } catch {
       return null;
@@ -276,15 +285,20 @@ async function walkTree(
         if (!subHas) emptyDirs.push(rel);
         hasContent = hasContent || subHas;
       } else if (entry.isFile()) {
-        const data = await fs.promises.readFile(abs);
         if (withData) {
+          // 先 stat 预扣额度:超过剩余字节的文件直接中止,不读进内存
+          // (评审 P1:巨型单文件要挡在分配之前);读后按实际字节结算。
+          const stat = await fs.promises.stat(abs);
+          if (stat.size > budget!.bytesLeft) throw new ExportTooLargeError();
+          const data = await fs.promises.readFile(abs);
           budget!.entriesLeft -= 1;
-          budget!.bytesLeft -= data.byteLength;
+          budget!.bytesLeft -= Math.max(stat.size, data.byteLength);
           if (budget!.entriesLeft < 0 || budget!.bytesLeft < 0) {
             throw new ExportTooLargeError();
           }
           items.push({ rel, data, sha256: sha256hex(data) });
         } else {
+          const data = await fs.promises.readFile(abs);
           items.push({ rel, sha256: sha256hex(data) });
         }
         hasContent = true;
@@ -361,12 +375,13 @@ interface PackageSnapshot {
 /**
  * 递归收集空目录(子树内没有计入包内容的文件)。keep 判定文件是否计入
  * 包内容:签名包为 statement 成员。symlink 不跟随,与 walkTree 同口径。
- * 数量超 maxEntries 抛 ExportTooLargeError(海量空目录同样进预算)。
+ * 遍历到的每个条目(含未被 statement 覆盖的文件)都扣额度(评审 P1:
+ * 海量非覆盖文件不能只靠 empty 计数兜底),超限抛 ExportTooLargeError。
  */
 async function collectEmptyDirs(
   dir: string,
   keep: (rel: string) => boolean,
-  maxEntries: number,
+  budget: { entriesLeft: number },
 ): Promise<string[]> {
   const empty: string[] = [];
   const walk = async (cur: string, relBase: string): Promise<boolean> => {
@@ -375,14 +390,13 @@ async function collectEmptyDirs(
     for (const entry of entries) {
       if (shouldSkipExportEntry(entry.name, relBase)) continue;
       if (entry.isSymbolicLink()) continue;
+      budget.entriesLeft -= 1;
+      if (budget.entriesLeft < 0) throw new ExportTooLargeError();
       const abs = path.join(cur, entry.name);
       const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         const subHas = await walk(abs, rel);
-        if (!subHas) {
-          empty.push(rel);
-          if (empty.length > maxEntries) throw new ExportTooLargeError();
-        }
+        if (!subHas) empty.push(rel);
         hasContent = hasContent || subHas;
       } else if (entry.isFile()) {
         if (keep(rel)) hasContent = true;
@@ -412,10 +426,10 @@ async function snapshotPackage(
         // 「窗口内稳定」:文件哈希校验前后各收集一遍,不一致即重试。
         const covered = new Set(doc.files.map((file) => file.path));
         const keep = (rel: string) => covered.has(rel);
-        const dirsBefore = await collectEmptyDirs(dir, keep, limits.maxEntries);
+        const dirsBefore = await collectEmptyDirs(dir, keep, { entriesLeft: limits.maxEntries });
         const entries = await readSignedEntries(dir, doc);
         if (!entries) continue;
-        const dirsAfter = await collectEmptyDirs(dir, keep, limits.maxEntries);
+        const dirsAfter = await collectEmptyDirs(dir, keep, { entriesLeft: limits.maxEntries });
         const dirsStable =
           dirsBefore.length === dirsAfter.length &&
           [...dirsBefore].sort().every((rel, i) => rel === [...dirsAfter].sort()[i]);
@@ -515,25 +529,58 @@ export async function exportGhostPackage(
   }
   if (picked.canceled || !picked.filePath) return { status: 'canceled' };
 
+  // 先写临时文件 → inspect 校验 → 过闸才发布到目标(评审 P1):
+  // 不过闸只清临时文件——直接写目标再删会在「用户选择覆盖旧备份且
+  // 校验失败」时毁掉用户原有文件;先写目标也会在写一半崩溃时留下
+  // 坏包。临时名带随机段,发布优先 rename(POSIX 原子覆盖);Windows
+  // 不覆盖已存在目标,仅在 EPERM/EEXIST/EACCES 且目标确实存在时退化
+  // unlink+rename(该路径只在用户显式选择覆盖时到达)。
+  const targetPath = picked.filePath;
+  const tempPath = path.join(
+    path.dirname(targetPath),
+    `.cindy-export-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`,
+  );
   try {
-    await deps.writeFile(picked.filePath, buf);
+    await deps.writeFile(tempPath, buf);
   } catch {
+    await fs.promises.rm(tempPath, { force: true }).catch(() => {});
     return { status: 'error', code: 'write_failed' };
   }
 
   // 装入校验终闸(评审 P1):产物必须能原样过 GhostManager.inspect——
   // 它带真实 trust registry 与全部装入校验(review 签名、manifest、
-  // node.entry、条目/体积),statement 篡改成自洽、目录被改坏等情形
-  // 都拦在这里;不过闸就删掉已写文件,不产出「成功却装不回」的包。
+  // node.entry、指令查重、条目/体积),statement 篡改成自洽、目录被
+  // 改坏等情形都拦在这里,不产出「成功却装不回」的包。
   let installable = false;
   try {
-    installable = await deps.inspectPackage(picked.filePath);
+    installable = await deps.inspectPackage(tempPath);
   } catch {
     installable = false;
   }
   if (!installable) {
-    await fs.promises.rm(picked.filePath, { force: true }).catch(() => {});
+    await fs.promises.rm(tempPath, { force: true }).catch(() => {});
     return { status: 'error', code: 'verify_failed' };
   }
-  return { status: 'saved', savedPath: picked.filePath };
+
+  try {
+    await fs.promises.rename(tempPath, targetPath);
+  } catch (renameErr) {
+    const code = (renameErr as NodeJS.ErrnoException)?.code;
+    const targetExists =
+      code === 'EPERM' || code === 'EEXIST' || code === 'EACCES'
+        ? await fs.promises.access(targetPath).then(() => true, () => false)
+        : false;
+    if (!targetExists) {
+      await fs.promises.rm(tempPath, { force: true }).catch(() => {});
+      return { status: 'error', code: 'write_failed' };
+    }
+    try {
+      await fs.promises.rm(targetPath, { force: true });
+      await fs.promises.rename(tempPath, targetPath);
+    } catch {
+      await fs.promises.rm(tempPath, { force: true }).catch(() => {});
+      return { status: 'error', code: 'write_failed' };
+    }
+  }
+  return { status: 'saved', savedPath: targetPath };
 }
