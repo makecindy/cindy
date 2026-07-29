@@ -664,6 +664,13 @@ async function removeGhostAppearanceDataUnsafe(
       refKinds: ['skin-background', 'skin-brand-icon', 'skin-brand-logo'],
       refId: REF_ID,
     }),
+    // 预设库只能枚举成功提交的记录；保存回滚后的 best-effort 清理若也失败，
+    // 账本可能仍有库外孤儿引用。卸载必须按 origin 全量撤销，避免未来复用
+    // 同一插件 ID 的包继承旧媒体读取权。
+    removeGhostOwnedRefs({
+      ghostId,
+      refKinds: ['skin-preset'],
+    }),
   ]);
   await fs.rm(transactionFilePath());
   return { activeRemoved, presetsRemoved: ownedPresets.length };

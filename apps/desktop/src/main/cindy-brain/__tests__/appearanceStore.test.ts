@@ -57,7 +57,7 @@ import {
   saveGhostAppearancePreset,
   saveGhostAppearanceWithPreset,
 } from '../appearanceStore';
-import { hasRef, removeRefs } from '../../cindy-media/ledger';
+import { hasRef, removeGhostOwnedRefs, removeRefs } from '../../cindy-media/ledger';
 
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
@@ -80,6 +80,7 @@ function appearance(name: string, hash = HASH_A) {
 
 describe('appearance preset store', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     mocks.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-appearance-store-'));
     mocks.refs.clear();
   });
@@ -350,6 +351,15 @@ describe('appearance preset store', () => {
     expect(mocks.refs.has('skin-background:active')).toBe(false);
     expect(mocks.refs.has(`skin-preset:${mine.id}:background`)).toBe(false);
     expect(mocks.refs.get(`skin-preset:${other.id}:background`)?.has(HASH_B)).toBe(true);
+  });
+
+  it('卸载按插件归属扫除预设库外的孤儿媒体引用', async () => {
+    await removeGhostAppearanceData('skin');
+
+    expect(removeGhostOwnedRefs).toHaveBeenCalledWith({
+      ghostId: 'skin',
+      refKinds: ['skin-preset'],
+    });
   });
 
   it('卸载引用清理失败时隐藏旧归属，并在安装前恢复清理事务', async () => {
