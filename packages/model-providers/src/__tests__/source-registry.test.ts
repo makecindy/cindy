@@ -411,6 +411,41 @@ describe('registry visibility & sources(运行时注入 fixture)', () => {
       effectiveSourceIdForModel(all, 'openai', 'claude-opus-4-8', 'claude-code'),
     ).toBe('xd');
   });
+
+  it('effectiveSourceIdForModel 不把请求路由到非聊天来源(issue #882 第 3 点,2026-07 review):同一 id 在不同来源上 mode 不一致时,只信聊天来源', () => {
+    const mixedModeCatalog: Catalog = {
+      version: 'test',
+      providers: [
+        {
+          id: 'xd',
+          name: 'XD',
+          source: 'builtin',
+          agents: ['claude-code'],
+          auth: { method: 'managed' },
+          routing: { 'claude-code': { upstream: 'https://xd.test', authStrategy: 'gateway-key' } },
+          models: {
+            'claude-code': [model('shared-id', { mode: 'image_generation' })],
+          },
+        },
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          source: 'builtin',
+          agents: ['claude-code'],
+          auth: { method: 'oauth' },
+          routing: { 'claude-code': { upstream: 'https://api.openai.com', authStrategy: 'oauth-passthrough' } },
+          models: {
+            'claude-code': [model('shared-id', { mode: 'chat' })],
+          },
+        },
+      ],
+    };
+    const views = buildRegistry(mixedModeCatalog, { xd: true, openai: true });
+    // 显式指定的 providerId 恰好是非聊天来源(xd)时,不接受它——落到真正聊天的来源(openai)。
+    expect(effectiveSourceIdForModel(views, 'xd', 'shared-id', 'claude-code')).toBe('openai');
+    // 未显式指定 providerId 时,默认来源同样只能是聊天来源。
+    expect(effectiveSourceIdForModel(views, null, 'shared-id', 'claude-code')).toBe('openai');
+  });
 });
 
 describe('resolveRoute(运行时注入 fixture)', () => {

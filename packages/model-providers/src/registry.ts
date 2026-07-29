@@ -13,6 +13,7 @@
  */
 
 import type { Catalog, Provider, CatalogModel, AgentKind, RoutingDescriptor } from './types.js';
+import { isChatEligible } from './classification.js';
 import type { ProviderLogoKind } from './providerBranding.js';
 
 /** 各供应商是否已连接，由 host 注入。 */
@@ -201,7 +202,14 @@ export function effectiveSourceIdForModel(
   modelId: string,
   agent: AgentKind,
 ): string | null {
-  const sources = sourcesForModel(views, modelId, agent);
+  // sourcesForModel 只看 id 是否存在,不看 mode——同一 model id 若在不同来源上 mode
+  // 不一致(如 A 标 image_generation、B 标 chat),不过滤的话 providerId 命中 A 时会
+  // 直接返回 A,把请求路由到一个不能聊天的端点(2026-07 review,与 hook-control /
+  // IM 默认值同一类问题:「id 存在」不等于「这个具体来源上是聊天模型」)。
+  const sources = sourcesForModel(views, modelId, agent).filter((provider) => {
+    const model = getModel(provider, modelId, agent);
+    return model !== undefined && isChatEligible(model);
+  });
   if (providerId && sources.some((provider) => provider.id === providerId)) return providerId;
   return nativeDefaultSourceId(sources, agent);
 }
