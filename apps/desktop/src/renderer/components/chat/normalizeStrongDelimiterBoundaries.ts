@@ -298,8 +298,8 @@ function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: st
     ranges.push({ start: range.start, end: descriptionRange.start });
     ranges.push({ start: descriptionRange.end, end: range.end });
     const description = markdown.slice(descriptionRange.start, descriptionRange.end);
-    const descriptionTree = proseMarkdownParser.runSync(
-      proseMarkdownParser.parse(description),
+    const descriptionTree = markdownParser.runSync(
+      markdownParser.parse(description),
       description,
     ) as Root;
     const nestedRanges: OffsetRange[] = [];

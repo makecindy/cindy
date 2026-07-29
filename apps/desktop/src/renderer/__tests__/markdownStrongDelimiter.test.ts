@@ -200,6 +200,13 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(renderMarkdown(inlineCode)).toContain('src="missing.png" alt="**终点。**正文"');
   });
 
+  it('preserves math syntax inside image descriptions', () => {
+    const source = '![$2**3.**x$](missing.png)';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(source);
+    expect(renderMarkdown(source)).toContain('src="missing.png" alt="$2**3.**x$"');
+  });
+
   it('ignores closing brackets inside image-description code spans', () => {
     const source = '![`a]b` **重点。**正文](missing.png)';
 
@@ -248,6 +255,15 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(normalizeStrongDelimiterBoundaries(source)).toBe(source);
     expect(renderMarkdown(source)).toContain(
       '<a href="https://b.test/**foo.**bar">https://b.test/**foo.**bar</a>',
+    );
+  });
+
+  it('protects nested bare URLs regenerated inside recovered CJK tails', () => {
+    const source = 'https://a.test/x（https://b.test/y（https://c.test/**path.**more）';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(source);
+    expect(renderMarkdown(source)).toContain(
+      '<a href="https://c.test/**path.**more">https://c.test/**path.**more</a>）',
     );
   });
 
