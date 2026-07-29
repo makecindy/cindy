@@ -340,6 +340,34 @@ describe('translateResponsesRequest', () => {
     ]);
   });
 
+  it('serializes tools from tool_search outputs when output is absent', () => {
+    const tools = [{
+      type: 'function',
+      name: 'search_result',
+      parameters: { type: 'object' },
+    }];
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'tool_search_call', id: 'ts_1' },
+        { type: 'tool_search_output', id: 'ts_1', tools },
+      ],
+    }));
+    expect(out.messages).toEqual([
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: 'ts_1', type: 'function', function: { name: 'tool_search', arguments: '{}' } },
+        ],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'ts_1',
+        content: JSON.stringify(tools),
+      },
+    ]);
+  });
+
   it('does not let replayed tool_search items split assistant merging', () => {
     const out = translateResponsesRequest(base({
       input: [
@@ -653,7 +681,7 @@ describe('translateResponsesRequest', () => {
           type: 'message',
           role: 'user',
           content: [
-            { type: 'input_file', file_id: 'file_1', filename: 'notes.txt' },
+            { type: 'input_file', file_data: 'BASE64_FILE', filename: 'notes.txt' },
             { type: 'input_audio', input_audio: { data: 'BASE64', format: 'wav' } },
           ],
         },
@@ -680,10 +708,20 @@ describe('translateResponsesRequest', () => {
     expect(out.messages[0]).toEqual({
       role: 'user',
       content: [
-        { type: 'file', file: { file_id: 'file_1', filename: 'notes.txt' } },
+        { type: 'file', file: { file_data: 'BASE64_FILE', filename: 'notes.txt' } },
         { type: 'input_audio', input_audio: { data: 'BASE64', format: 'wav' } },
       ],
     });
+  });
+
+  it('rejects provider-scoped input_file ids instead of forwarding them cross-provider', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_file', file_id: 'file_1', filename: 'notes.txt' }],
+      }],
+    }))).toThrow('input_file.file_id');
   });
 
   it('rejects file-backed images in tool results instead of silently dropping the file id', () => {

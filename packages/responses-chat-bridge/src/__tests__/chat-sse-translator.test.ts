@@ -128,6 +128,31 @@ describe('ChatSseTranslator', () => {
     }));
   });
 
+  it('preserves non-streaming Chat refusal messages as Responses refusal content', () => {
+    const translator = new ChatSseTranslator('m');
+    const out = [
+      ...translator.push({
+        id: 'chat_json_refusal',
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            refusal: 'I cannot help with that.',
+          },
+          finish_reason: 'stop',
+        }],
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+    expect(out.map((event) => event.type)).toContain('response.refusal.delta');
+    expect(out.map((event) => event.type)).toContain('response.refusal.done');
+    const completed = out.at(-1) as { response: { output: Array<Record<string, unknown>> } };
+    expect(completed.response.output).toContainEqual(expect.objectContaining({
+      type: 'message',
+      content: [{ type: 'refusal', refusal: 'I cannot help with that.' }],
+    }));
+  });
+
   it('waits for a streamed tool name before emitting the call item', () => {
     const translator = new ChatSseTranslator('m');
     const beforeName = translator.push({

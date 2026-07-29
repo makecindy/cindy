@@ -145,7 +145,13 @@ export class ChatSseTranslator {
   private messageItemId = '';
   private messageStarted = false;
   private messageDone = false;
+  private textStarted = false;
+  private textContentIndex: number | null = null;
   private text = '';
+  private refusalStarted = false;
+  private refusalContentIndex: number | null = null;
+  private refusal = '';
+  private nextMessageContentIndex = 0;
   private pendingFinishReason: string | null = null;
   private sawTerminalMarker = false;
   private readonly reasoningItems: ReasoningState[] = [];
@@ -202,6 +208,8 @@ export class ChatSseTranslator {
           ? delta.content.map((part) => isPlainObject(part) ? stringField(part.text) : '').join('')
           : '';
       if (content) this.consumeContent(content, out);
+      const refusal = stringField(delta.refusal);
+      if (refusal) this.pushRefusal(refusal, out);
       this.annotations.push(
         ...annotationsFrom(delta.annotations),
         ...inlineCitationAnnotations(delta.citations),
@@ -391,14 +399,14 @@ export class ChatSseTranslator {
 
   private pushText(content: string, out: unknown[]): void {
     this.closeActiveReasoning(out);
-    this.ensureMessage(out);
+    this.ensureText(out);
     this.text += content;
     out.push({
       type: 'response.output_text.delta',
       item_id: this.messageItemId,
       response_id: this.responseId,
       output_index: this.messageOutputIndex,
-      content_index: 0,
+      content_index: this.textContentIndex,
       delta: content,
     });
   }
@@ -414,13 +422,46 @@ export class ChatSseTranslator {
       output_index: this.messageOutputIndex,
       item: { id: this.messageItemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] },
     });
+  }
+
+  private ensureText(out: unknown[]): void {
+    this.ensureMessage(out);
+    if (this.textStarted) return;
+    this.textStarted = true;
+    this.textContentIndex = this.nextMessageContentIndex++;
     out.push({
       type: 'response.content_part.added',
       response_id: this.responseId,
       item_id: this.messageItemId,
       output_index: this.messageOutputIndex,
-      content_index: 0,
+      content_index: this.textContentIndex,
       part: { type: 'output_text', text: '', annotations: [] },
+    });
+  }
+
+  private pushRefusal(refusal: string, out: unknown[]): void {
+    this.closeActiveReasoning(out);
+    this.ensureMessage(out);
+    if (!this.refusalStarted) {
+      this.refusalStarted = true;
+      this.refusalContentIndex = this.nextMessageContentIndex++;
+      out.push({
+        type: 'response.content_part.added',
+        response_id: this.responseId,
+        item_id: this.messageItemId,
+        output_index: this.messageOutputIndex,
+        content_index: this.refusalContentIndex,
+        part: { type: 'refusal', refusal: '' },
+      });
+    }
+    this.refusal += refusal;
+    out.push({
+      type: 'response.refusal.delta',
+      response_id: this.responseId,
+      item_id: this.messageItemId,
+      output_index: this.messageOutputIndex,
+      content_index: this.refusalContentIndex,
+      delta: refusal,
     });
   }
 
@@ -526,29 +567,68 @@ export class ChatSseTranslator {
   private closeMessage(out: unknown[]): void {
     if (!this.messageStarted || this.messageDone || this.messageOutputIndex === null) return;
     this.messageDone = true;
-    const content = [{ type: 'output_text', text: this.text, annotations: this.uniqueAnnotations() }];
-    out.push({
-      type: 'response.output_text.done',
-      response_id: this.responseId,
-      item_id: this.messageItemId,
-      output_index: this.messageOutputIndex,
-      content_index: 0,
-      text: this.text,
-    });
-    out.push({
-      type: 'response.content_part.done',
-      response_id: this.responseId,
-      item_id: this.messageItemId,
-      output_index: this.messageOutputIndex,
-      content_index: 0,
-      part: content[0],
-    });
+    const content = this.messageContent();
+    if (this.textStarted && this.textContentIndex !== null) {
+      const part = content[this.textContentIndex];
+      out.push({
+        type: 'response.output_text.done',
+        response_id: this.responseId,
+        item_id: this.messageItemId,
+        output_index: this.messageOutputIndex,
+        content_index: this.textContentIndex,
+        text: this.text,
+      });
+      out.push({
+        type: 'response.content_part.done',
+        response_id: this.responseId,
+        item_id: this.messageItemId,
+        output_index: this.messageOutputIndex,
+        content_index: this.textContentIndex,
+        part,
+      });
+    }
+    if (this.refusalStarted && this.refusalContentIndex !== null) {
+      const part = content[this.refusalContentIndex];
+      out.push({
+        type: 'response.refusal.done',
+        response_id: this.responseId,
+        item_id: this.messageItemId,
+        output_index: this.messageOutputIndex,
+        content_index: this.refusalContentIndex,
+        refusal: this.refusal,
+      });
+      out.push({
+        type: 'response.content_part.done',
+        response_id: this.responseId,
+        item_id: this.messageItemId,
+        output_index: this.messageOutputIndex,
+        content_index: this.refusalContentIndex,
+        part,
+      });
+    }
     out.push({
       type: 'response.output_item.done',
       response_id: this.responseId,
       output_index: this.messageOutputIndex,
       item: { id: this.messageItemId, type: 'message', status: 'completed', role: 'assistant', content },
     });
+  }
+
+  private messageContent(): Array<Record<string, unknown>> {
+    const content: Array<{ contentIndex: number; part: Record<string, unknown> }> = [];
+    if (this.textStarted && this.textContentIndex !== null) {
+      content.push({
+        contentIndex: this.textContentIndex,
+        part: { type: 'output_text', text: this.text, annotations: this.uniqueAnnotations() },
+      });
+    }
+    if (this.refusalStarted && this.refusalContentIndex !== null) {
+      content.push({
+        contentIndex: this.refusalContentIndex,
+        part: { type: 'refusal', refusal: this.refusal },
+      });
+    }
+    return content.sort((a, b) => a.contentIndex - b.contentIndex).map((entry) => entry.part);
   }
 
   private closeTools(out: unknown[]): void {
@@ -642,7 +722,7 @@ export class ChatSseTranslator {
           type: 'message',
           status: 'completed',
           role: 'assistant',
-          content: [{ type: 'output_text', text: this.text, annotations: this.uniqueAnnotations() }],
+          content: this.messageContent(),
         },
       });
     }

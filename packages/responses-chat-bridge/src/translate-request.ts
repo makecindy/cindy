@@ -59,8 +59,10 @@ function imagePart(part: Record<string, unknown>): ChatUserContentPart | undefin
 
 function filePart(part: Record<string, unknown>): ChatUserContentPart | undefined {
   const source = isPlainObject(part.file) ? part.file : part;
+  if (source.file_id !== undefined) {
+    throw new UnsupportedResponsesFeatureError('input_file.file_id');
+  }
   const file = {
-    ...(typeof source.file_id === 'string' ? { file_id: source.file_id } : {}),
     ...(typeof source.file_data === 'string' ? { file_data: source.file_data } : {}),
     ...(typeof source.file_url === 'string' ? { file_url: source.file_url } : {}),
     ...(typeof source.filename === 'string' ? { filename: source.filename } : {}),
@@ -145,7 +147,8 @@ function stringifyToolOutput(output: unknown): string {
     if (textParts.every((part): part is string => part !== null)) return textParts.join('\n');
   }
   try {
-    return JSON.stringify(output);
+    const serialized = JSON.stringify(output);
+    return typeof serialized === 'string' ? serialized : String(output ?? '');
   } catch {
     return String(output);
   }
@@ -487,7 +490,12 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
       || item.type === 'tool_search_output'
       || item.type === 'tool_search_call_output'
     ) {
-      pushToolOutput(record, record.output);
+      const output = record.output !== undefined
+        ? record.output
+        : item.type === 'tool_search_output' || item.type === 'tool_search_call_output'
+          ? record.tools
+          : undefined;
+      pushToolOutput(record, output);
       continue;
     }
 
