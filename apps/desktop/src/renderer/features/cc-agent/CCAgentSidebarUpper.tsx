@@ -27,7 +27,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useCCSessions } from '@/hooks/useCCSessions';
-import { useInterruptedSessionsAttention } from '@/hooks/useInterruptedSessionsAttention';
+import { refreshPendingAlerts, usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { useSidebarCollapsedState } from '../feature-context';
 import { stripTrailingPathSeparators } from '../../../shared/pathText';
 import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
@@ -235,8 +235,9 @@ function cutoffForLastActivity(
 export function CCAgentSidebarUpper() {
   const { t } = useTranslation();
   const isCollapsed = useSidebarCollapsedState();
-  // interrupted-turn-resume:启动时拉取「尾部停在中断标记行」的会话,补 'error' 红点。
-  useInterruptedSessionsAttention();
+  // 错误红点的派生真源:拉取存在未处理告警(中断 ∪ 未 dismissed 错误尾行)的会话
+  // 并在收敛触发点重算 —— 横幅不被处置,红点就不消失。
+  usePendingAlertAttention();
   // F-PJ-10：filter.status 决定后端 fetch 时是否带 ?status=archived|all
   const filter = useSidebarFilter();
   const includeArchived = filter.status;
@@ -290,8 +291,28 @@ export function CCAgentSidebarUpper() {
   }, []);
   const handleMarkAllAutomationsRead = useCallback(async () => {
     setAutomationsMenuPos(null);
-    // 用户显式「全部标为已读」:explicit,允许连未读 error 一起清。
-    clearSessionAttentionMany(automationAttentionSessionIds, { intent: 'explicit' });
+    // 先清 done / awaiting(passive,store 对 error 免疫):这部分是纯未读标记,
+    // 展示过就算已读,不需要落库处置。
+    clearSessionAttentionMany(automationAttentionSessionIds);
+    // error 红点是未处理告警的派生投影,**必须先落库处置再清点**:此前是乐观先清、
+    // 失败只记日志,一旦 dismissPendingAlerts 拒绝或只处理了部分会话,横幅仍在库里
+    // 而红点已经消失(还连带发了 explicit 桥接 / 远程回执),正是本 PR 要消灭的割裂。
+    // 现在成功才 explicit 清,失败则重算把仍存在的告警点恢复回来。
+    try {
+      const { processed, failed } = await window.electronAPI.localDb.sessions.dismissPendingAlerts(
+        automationAttentionSessionIds,
+      );
+      // 只清 main 侧**确切回报处置成功**的会话。不能用「不在 failed 里」推断成功:
+      // 请求集合里可能有本 IPC 根本不处理的告警来源(如 WorktreeRestoreBanner 打的
+      // 红点),那些会话既不成功也不失败,误清后重算也恢复不了(worktree 告警不进
+      // 那条查询)。
+      clearSessionAttentionMany(processed, { intent: 'explicit' });
+      if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
+    } catch (e) {
+      log.warn('dismiss pending alerts failed', e);
+    }
+    // 成功与失败都重算一次:成功路径收敛掉残留,失败路径把红点恢复成库里的真实告警。
+    void refreshPendingAlerts();
     try {
       const updated = await markAllScheduleRunsReadAndSync();
       if (updated > 0) {

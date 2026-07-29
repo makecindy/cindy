@@ -1043,13 +1043,13 @@ export class AgentIslandService {
   /**
    * badge 桥接来的会话已读信号(renderer → appBadgeService → 这里)。
    * source 默认 'passive'(fail-safe):renderer 未声明意图的清除一律当被动信号,
-   * 未读 error 条目免疫;只有真实展示路径(useErrorReadAck / 全部标为已读等)
-   * 显式带 'explicit' 才能清掉未读的报错。
+   * 未读 error 条目免疫;只有处置路径(用户操作报错横幅 / 全部标为已读 /
+   * pending-alerts 派生收敛)显式带 'explicit' 才能清掉未处理的报错。
    */
   handleSessionAttentionCleared(sessionId: string, source: 'explicit' | 'passive' = 'passive'): void {
     const ack = acknowledgeAgentIslandSessionRead(this.state, sessionId, Date.now(), { source });
     // 未读 error 对 passive 免疫:state 未动,也**不能**给远端发收尾包 —— 否则手机
-    // 列表行的 error 红点会被导航级被动信号清掉,破坏「已读以真实展示为准」。
+    // 列表行的 error 红点会被导航级被动信号清掉,破坏「未处置就不消失」。
     if (ack === 'error-immune') return;
     if (ack === 'not-found') {
       // not-found(典型:重启后 state / relay 条目丢失,远端仍挂着旧未读)只对

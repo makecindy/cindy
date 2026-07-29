@@ -131,8 +131,12 @@ export function RunHistoryPane({
       .map((r) => r.sessionId)
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
     if (sessionIds.length === 0) return;
-    // 运行历史面板把每条 run 的成败状态直接展示给用户,算真实已读(explicit 可清 error)。
-    clearSessionAttentionMany(sessionIds, { intent: 'explicit' });
+    // 面板把每条 run 的成败状态展示给用户,done / awaiting 算已读。
+    // 但**不清 error**(passive,store 对 error 免疫):看到"这次 run 失败了"不等于
+    // 处置了会话里那条报错横幅 —— 红点跟随告警是否被处理,不跟随是否被看到
+    // (2026-07 统一)。run 自身的未读由 read_at 落库单独收敛,不受影响;要批量
+    // 消掉会话告警走自动化分组的「全部标为已读」(它会真正 dismiss 横幅)。
+    clearSessionAttentionMany(sessionIds);
   }, [isCurrent, runs]);
 
   // 删单条 run：二次确认 → IPC → 'changed' 事件触发 useRuns refresh，UI 自动同步。

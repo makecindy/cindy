@@ -451,19 +451,18 @@ export function ErrorBanner({
             : t('chat.errorBanner.forkStripEncrypted')}
         </button>
       )}
+      {/* 关闭:纯 X 图标,与 InterruptedTurnBanner / WorktreeRestoreBanner / UpgradeBanner
+          的关闭按钮统一(2026-07 统一:输入框上方所有提示条的关闭一律是一个 X,不带
+          文字标签)。配色走 --error-fg token,不用本文件存量的硬编码 red(规则 16,
+          见上方 349 行注释)。语义由 title 承载,供 hover 与读屏。 */}
       {onCancel && (
         <button
           type="button"
           onClick={onCancel}
-          className={cn(
-            'shrink-0 flex items-center gap-1 text-xs font-medium',
-            'text-red-600 dark:text-red-400',
-            'hover:opacity-70 transition-opacity',
-          )}
+          className="shrink-0 text-[var(--error-fg)] opacity-60 hover:opacity-100 transition-opacity"
           title={t('chat.errorBanner.cancelTitle')}
         >
-          <X size={12} />
-          {t('chat.errorBanner.cancel')}
+          <X size={14} />
         </button>
       )}
     </div>

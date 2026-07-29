@@ -33,6 +33,10 @@ import { SessionAttentionUrgencyProvider } from '../../contexts/SessionAttention
 // ── mocks:剥离与"渲染隔离"无关的重依赖,只留计数探针 ──────────────────────────
 
 const renderCounts = new Map<string, number>();
+const sessionStatusIconSource = readFileSync(
+  resolve(__dirname, '..', 'SessionStatusIcon.tsx'),
+  'utf8',
+);
 
 vi.mock('../SessionStatusIcon', () => ({
   SessionStatusIcon: ({ session }: { session: { id: string } }) => {
@@ -88,11 +92,11 @@ import { SessionItem } from '../SessionItem';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
-function makeSession(id: string): Session {
+function makeSession(id: string, status: Session['status'] | 'idle' = 'idle'): Session {
   return {
     id,
     title: `Session ${id}`,
-    status: 'idle',
+    status,
     createdAt: '2026-07-01T00:00:00.000Z',
     updatedAt: '2026-07-01T00:00:00.000Z',
     userSendAt: '2026-07-01T00:00:00.000Z',
@@ -108,10 +112,7 @@ function makeSession(id: string): Session {
 
 const noop = () => {};
 
-function rowsElement(
-  sessions: readonly Session[],
-  urgentSessionIds: ReadonlySet<string>,
-) {
+function rowsElement(sessions: readonly Session[], urgentSessionIds: ReadonlySet<string>) {
   return createElement(SessionAttentionUrgencyProvider, {
     urgentSessionIds,
     children: createElement(
@@ -164,6 +165,30 @@ describe('SessionItem — memo 包裹', () => {
     expect(source).not.toMatch(/useSessionAttentionSnapshot\s*\(/);
     expect(source).not.toMatch(/useSessionAttentionUrgencySet\s*\(/);
     expect(source).toMatch(/useSessionAttentionKind\s*\(\s*session\.id\s*\)/);
+  });
+});
+
+describe('SessionItem — 归档视觉', () => {
+  it('标题保留正文色，并用主题感知的 Archive 图标区分归档行', () => {
+    const regularSession = makeSession('regular-session');
+    const archivedSession = makeSession('archived-session', 'archived');
+    const { container } = render(rowsElement([regularSession, archivedSession], new Set()));
+
+    const regularRow = container.querySelector('[data-session-id="regular-session"]');
+    const archivedRow = container.querySelector('[data-session-id="archived-session"]');
+
+    expect(regularRow?.className).toContain('text-foreground');
+    expect(archivedRow?.className).toContain('text-foreground');
+    expect(archivedRow?.className).not.toContain('text-[var(--sidebar-list-muted)]');
+
+    const archivedIconBranch = sessionStatusIconSource.slice(
+      sessionStatusIconSource.indexOf('{isArchived ? ('),
+      sessionStatusIconSource.indexOf(') : isOrcaLead ? ('),
+    );
+    expect(archivedIconBranch).toContain('<Archive');
+    expect(archivedIconBranch).toContain('text-[var(--sidebar-item-active-foreground)]');
+    expect(archivedIconBranch).toContain('strokeWidth={1.75}');
+    expect(archivedIconBranch).toContain('text-[var(--cmd-palette-item-meta)]');
   });
 });
 

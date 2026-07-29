@@ -39,10 +39,15 @@ import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
 import { noteSessionClearBoundary } from '../../messagePersistBroadcaster';
 import {
   ackSessionTurnEndedDurable,
+  ackSessionTurnEndedIfUnchanged,
+  listErrorTailPendingRows,
+  listErrorTailPendingSessionIds,
+  listInterruptedPendingRows,
   listInterruptedPendingSessionIds,
   setOnSessionTurnEndedPersisted,
 } from '../sessionActiveTurn';
-import { rebroadcastAgentSwitchBoundary } from './messages';
+import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages';
+import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 
 const log = createLogger('sessions');
 const DEFAULT_DRAFT_SESSION_TITLE = 'New Maker';
@@ -741,10 +746,89 @@ export function registerSessionIpc(): void {
     return sessionToCamel({ ...row, messageCount: 0 });
   });
 
-  // interrupted-turn-resume:启动红点数据源 —— 「疑似中断」(startedAt > endedAt)
-  // 的 active 会话 id 列表,纯读查询。renderer 启动时拉取一次,补 'error' 红点。
+  // interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。
+  // ⚠️ 只在**启动首拉**时消费:该判定对正在跑的 turn 天然成立,只有启动时刻才能
+  // 断定飞行中的 turn 来自上一个进程。周期性重跑会把运行中的会话误判为中断。
   ipcMain.handle('local-db:sessions:interrupted-pending', async () => {
     return listInterruptedPendingSessionIds();
+  });
+
+  // 「尾部停在未 dismissed 错误行」的 active 会话 id —— 红点派生的周期性重算源。
+  // 与中断腿不同,这条判定与 turn 是否在跑无关(turn 一跑起来就会插入新的 user 行,
+  // error 行不再是尾行,自然不命中),因此可以在每个收敛触发点安全重跑。
+  // 故意**不**进 device-link allowlist:renderer 只查本机(远程会话的告警由被控端
+  // 自己的派生收敛负责,控制端的处置动作经既有 ack-interrupted / dismiss-error 窄写
+  // 落被控端 DB 后触发)。没有跨端调用方就不扩协议面。
+  // sender guard:新增 handler 一律验证来源(electron-security-and-process-boundaries.md
+  // §5 —— 存量未迁完不构成新 handler 省略校验的理由)。这两个 channel 都**不在**
+  // device-link allowlist 里,只由本机顶层 renderer 调用,所以 guard 不会挡掉隧道
+  // dispatch;将来若要放行跨端,必须连这道 guard 一起重新设计。
+  ipcMain.handle('local-db:sessions:error-tail-pending', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return listErrorTailPendingSessionIds();
+  });
+
+  // 批量处置未处理告警(自动化分组右键「全部标为已读」)。红点是告警的派生投影,
+  // 光清角标会被下一次重算打回来 —— 所以这个入口必须做真正的处置,与用户在横幅上
+  // 点「忽略」等价:错误尾行 merge dismissed:true(复用 dismissErrorMessage,带 peer
+  // 广播),中断态写 last_turn_ended_at 消化掉。
+  // 只处置**当前真的命中告警**的会话:一次全量查询后按传入集合取交集,避免对
+  // 无告警会话空写 lastTurnEndedAt 造成无意义的 patch 广播。
+  // 输入有界(review 反馈):不接受无上限数组,也不静默吞掉畸形元素 —— 越界或元素
+  // 不合法直接 INVALID_PARAMS 拒绝,避免异常调用方让 main 侧分配任意大的集合并跑
+  // 一轮数据库写。上限取 sidebar 可能的自动化会话量级的宽松倍数。
+  const MAX_DISMISS_SESSION_IDS = 500;
+  // 单个 id 也要有界:session id 是 UUID / cuid(≤ 36 字符),128 是宽松上限。
+  // 只限数组长度不够 —— 500 个超长字符串同样能让 main 侧白留一大块内存并做无谓比较。
+  const MAX_SESSION_ID_LENGTH = 128;
+  ipcMain.handle('local-db:sessions:dismiss-pending-alerts', async (event, ids: unknown) => {
+    // 认证来源再做任何写:payload 有界 ≠ 来源可信(见上方 guard 说明)。
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(ids)) throwIpcError('INVALID_PARAMS', 'sessionIds 必须是数组');
+    if (ids.length > MAX_DISMISS_SESSION_IDS) {
+      throwIpcError('INVALID_PARAMS', `sessionIds 超过上限 ${MAX_DISMISS_SESSION_IDS}`);
+    }
+    for (const id of ids) {
+      const sid = requireString(id, 'sessionId');
+      if (sid.length > MAX_SESSION_ID_LENGTH) {
+        throwIpcError('INVALID_PARAMS', `sessionId 超过长度上限 ${MAX_SESSION_ID_LENGTH}`);
+      }
+    }
+    const wanted = new Set(ids as string[]);
+    if (wanted.size === 0) return { dismissed: 0, processed: [], failed: [] };
+    const [tailRows, interruptedRows] = await Promise.all([
+      listErrorTailPendingRows(),
+      listInterruptedPendingRows(),
+    ]);
+    // 回报**确切处置成功的 id**(processed),不让调用方用「不在 failed 里」推断成功:
+    // 请求集合里可能有本 handler 根本不处理的告警来源(典型是 WorktreeRestoreBanner
+    // 打的红点 —— 它不进错误尾行/中断查询),那些会话既不成功也不失败。按「非 failed
+    // 即成功」清点会抹掉它们的红点,而 worktree 告警又不在重算范围内、恢复不了
+    // (PR #879 review P1)。
+    const processed = new Set<string>();
+    const failed = new Set<string>();
+    for (const row of tailRows) {
+      if (!wanted.has(row.sessionId)) continue;
+      try {
+        const updated = await dismissErrorMessage(row.sessionId, row.clientId);
+        if (updated) processed.add(row.sessionId);
+        else failed.add(row.sessionId);
+      } catch {
+        failed.add(row.sessionId);
+      }
+    }
+    for (const row of interruptedRows) {
+      if (!wanted.has(row.sessionId)) continue;
+      // CAS 写:带上快照里的 startedAt。快照之后若该会话已启动新 turn,条件不匹配、
+      // 不写入 —— 否则会把刚启动的活跃 turn 记成已收尾,它真被中断时下次启动检测不到
+      // (PR #879 review P1)。返回值已含读回校验。
+      const landed = await ackSessionTurnEndedIfUnchanged(row.sessionId, row.startedAt);
+      if (landed) processed.add(row.sessionId);
+      else failed.add(row.sessionId);
+    }
+    // 同一会话两条腿都命中时,任一失败即整体算失败(它仍有未处置的告警)。
+    for (const id of failed) processed.delete(id);
+    return { dismissed: processed.size, processed: [...processed], failed: [...failed] };
   });
 
   // interrupted-turn-resume:用户对「疑似中断」提示点「忽略」/「继续」——写一次

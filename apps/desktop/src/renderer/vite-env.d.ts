@@ -3224,8 +3224,14 @@ interface ElectronAPI {
        * fire-and-forget；renderer 应在 emitPatch userSendAt 之后调用，作为持久化兜底。
        */
       touchUserSend: (id: string, atMs?: number) => Promise<void>;
-      /** interrupted-turn-resume:尾部停在未忽略中断标记行的 active 会话 id(启动红点)。 */
+      /** interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。 */
       interruptedPending: () => Promise<string[]>;
+      /** 红点派生的周期性重算源:尾部停在未 dismissed 错误行的 active 会话 id。 */
+      errorTailPending: () => Promise<string[]>;
+      /** 批量处置未处理告警(「全部标为已读」)。failed = 未处置成功的会话 id。 */
+      dismissPendingAlerts: (
+        sessionIds: string[],
+      ) => Promise<{ dismissed: number; processed: string[]; failed: string[] }>;
       ackInterrupted: (id: string) => Promise<void>;
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     };

@@ -3413,9 +3413,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:sessions:update', id, patch),
       touchUserSend: (id: string, atMs?: number): Promise<void> =>
         ipcRenderer.invoke('local-db:sessions:touchUserSend', id, atMs),
-      /** interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id(启动红点)。 */
+      /** interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。 */
       interruptedPending: (): Promise<string[]> =>
         ipcRenderer.invoke('local-db:sessions:interrupted-pending'),
+      /** 红点派生的周期性重算源:尾部停在未 dismissed 错误行的 active 会话 id。
+       *  与 interruptedPending 分开消费——后者只在启动首拉一次(它对正在跑的 turn
+       *  天然成立,周期性重跑会把运行中的会话误判为中断)。 */
+      errorTailPending: (): Promise<string[]> =>
+        ipcRenderer.invoke('local-db:sessions:error-tail-pending'),
+      /** 批量处置未处理告警(「全部标为已读」):等价于逐个在横幅上点「忽略」。
+       *  failed 是**未处置成功**的会话 id —— 调用方只对成功的清红点。 */
+      dismissPendingAlerts: (
+        sessionIds: string[],
+      ): Promise<{ dismissed: number; processed: string[]; failed: string[] }> =>
+        ipcRenderer.invoke('local-db:sessions:dismiss-pending-alerts', sessionIds),
       /** interrupted-turn-resume:用户对中断提示点「忽略」,写一次正常收尾时刻。 */
       ackInterrupted: (id: string): Promise<void> =>
         ipcRenderer.invoke('local-db:sessions:ack-interrupted', id),

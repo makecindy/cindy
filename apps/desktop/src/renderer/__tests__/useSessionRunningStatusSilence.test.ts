@@ -343,9 +343,9 @@ describe('useSessionRunningStatus silenced completion handling', () => {
   });
 
   it('clears an orphaned error badge when a new turn starts and the terminal error is gone', async () => {
-    // 回归(#592 review):失焦时报错挂了 error 角标 → useErrorReadAck 未 ack →
-    // scheduler 起新 turn 把 store 的终止错误顶掉。running 上升沿必须把 orphan
-    // 角标 explicit 清掉,否则活跃会话的 done 分支不覆写,红点永久残留。
+    // 回归(#592 review):失焦时报错挂了 error 角标、用户从未处置 → scheduler 起新
+    // turn 把 store 的终止错误顶掉。running 上升沿必须把 orphan 角标 explicit 清掉,
+    // 否则活跃会话的 done 分支不覆写,红点永久残留。
     renderHook(() => useSessionRunningStatus(undefined));
 
     vi.mocked(getSessionAttentionKind).mockReturnValue('error');
