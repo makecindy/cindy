@@ -90,6 +90,59 @@ describe('legacy → v1 refresh token migration window', () => {
     );
   });
 
+  it('写侧:镜像写入失败必须如实记录,不静默当成已同步', () => {
+    const body = sliceBody(
+      'function mirrorLegacyResourceRefreshToken(refreshToken: string, realm: AuthRegion): void {',
+      '\n}\n',
+    );
+
+    // 密钥链暂时不可用 / 权限 / 磁盘满:v1 已是最新,但只读 legacy 的旧版实例这轮追不上。
+    // 忽略返回值会让「镜像已生效」成为无根据的假设。
+    expect(body).toContain('if (!writeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, refreshToken)) {');
+    const failureIdx = body.indexOf('if (!writeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY');
+    expect(body.indexOf('log.warn(', failureIdx)).toBeGreaterThan(failureIdx);
+  });
+
+  it('写侧:镜像期间 v1 被清掉 → 按 CAS 撤回刚写的从属副本', () => {
+    const body = sliceBody(
+      'function mirrorLegacyResourceRefreshToken(refreshToken: string, realm: AuthRegion): void {',
+      '\n}\n',
+    );
+
+    // 「检查存在 → 写入」不原子:另一个共享 userData 的实例可能刚好在这中间登出并删掉
+    // legacy,本次写入会把它复活。写完再看权威记录,v1 也没了就撤回——从属副本不能比
+    // 权威记录活得更久。
+    expect(body).toContain('if (isPersistedSecretAbsent(AUTH_SESSION_KEY)) {');
+    const rollbackIdx = body.indexOf('if (isPersistedSecretAbsent(AUTH_SESSION_KEY)) {');
+    // 必须 compare-and-delete:内容已变说明又有别人写过,不在本次撤回范围内。
+    expect(
+      body.indexOf('removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, refreshToken)'),
+    ).toBeGreaterThan(rollbackIdx);
+    expect(body).not.toContain('removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);');
+    // 撤回必须发生在写入之后,否则守的不是这枚刚镜像的 token。
+    expect(body.indexOf('writeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, refreshToken)')).toBeLessThan(
+      rollbackIdx,
+    );
+  });
+
+  it('读侧:本轮已被拒过的 token 不再算替换候选(防两个来源来回重试)', () => {
+    const refreshSource = readFileSync(
+      resolve(process.cwd(), 'src/main/authRefreshFailure.ts'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+
+    // v1 与 legacy 分叉时互为「对方眼里的替换 token」。只排除紧邻的上一枚会让两枚来回
+    // 被选中,耗尽 maxReplacementRetries 后以 replacement-retry 收尾 —— runtime 每 60s
+    // 重试一枚已知无效的凭证而永不过期,冷启动保留不可用凭证并以未登录启动。
+    expect(refreshSource).toContain('const rejectedTokens = new Set<string>();');
+    expect(refreshSource).toContain('rejectedTokens.has(action.refreshToken)');
+    expect(refreshSource).toContain('rejectedTokens.add(requestedToken);');
+    expect(refreshSource).toContain('const withoutRejectedCandidate = (');
+    // 主判定与 recheck 循环两处都必须过这道闸,漏一处就仍会来回重试。
+    const guardCalls = refreshSource.match(/withoutRejectedCandidate\(\n/g) ?? [];
+    expect(guardCalls.length).toBe(2);
+  });
+
   it('读侧:replacement 候选同时看 v1 与 legacy,v1 优先', () => {
     const body = sliceBody('function readLatestReplacementRefreshToken(', '\n}\n');
 

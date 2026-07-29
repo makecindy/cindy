@@ -429,13 +429,34 @@ function writePersistedAuthSession(refreshToken: string, realm = activeAuthRealm
  * 只镜像 realm === AUTH_REGION 的 session:legacy 格式是裸 token、不带 realm,旧版
  * 按自己的构建区解释。把对端区域的 token 写进去,旧版会拿它去请求本区 auth-server,
  * 比不镜像更糟。
+ *
+ * 「检查存在 → 写入」不是原子的(与 writeSafe / removeSafeIfUnchanged 同一限制,见
+ * removeSafeIfUnchanged 的注释):另一个共享 userData 的实例可能刚好在这中间登出并
+ * 删掉 legacy 文件,于是本次写入把它复活。写完再看一眼权威记录——v1 也被清掉了就说明
+ * 那是一次真正的登出,把刚镜像的从属副本按 compare-and-delete 撤回。从属副本不能比
+ * 权威记录活得更久。
  */
 function mirrorLegacyResourceRefreshToken(refreshToken: string, realm: AuthRegion): void {
   if (realm !== AUTH_REGION) return;
   if (isPersistedSecretAbsent(LEGACY_RESOURCE_REFRESH_TOKEN_KEY)) return;
   // 已经是同一枚就不写:省一次落盘,也不因无意义的 mtime 变化干扰 CAS 删除的身份校验。
   if (readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY) === refreshToken) return;
-  writeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, refreshToken);
+  if (!writeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, refreshToken)) {
+    // 密钥链暂时不可用 / 权限 / 磁盘:v1 已经是最新的,但只读 legacy 的旧版实例这轮
+    // 追不上,下次轮换会再镜像一次。如实记录,不要让它变成静默的半可用状态。
+    log.warn(
+      'failed to mirror the rotated refresh token into the legacy credential file; older shared-userData instances may not catch up until the next rotation',
+    );
+    return;
+  }
+  if (isPersistedSecretAbsent(AUTH_SESSION_KEY)) {
+    // 镜像期间权威记录被另一个实例清掉(登出 / 凭证清理)。只删自己刚写的那一枚:
+    // 内容已变说明又有别人写过,不属于本次撤回范围。
+    const rolledBack = removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, refreshToken);
+    log.warn(
+      `persisted auth session disappeared while mirroring the legacy refresh token — rolled back the mirror (${rolledBack})`,
+    );
+  }
 }
 
 /**

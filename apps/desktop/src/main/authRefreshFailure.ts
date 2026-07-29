@@ -307,6 +307,22 @@ export async function runRefreshWithReplacementRetry<T>(
   const replacementRecheckDelaysMs = opts.replacementRecheck?.delaysMs ?? [];
   const replacementRecheckSleep =
     opts.replacementRecheck?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  /**
+   * 本轮已经被服务端拒过的 token。
+   *
+   * 多来源候选(v1 / legacy)可能互为「对方眼里的替换 token」:磁盘上两个文件分叉时,
+   * 只排除**紧邻的上一枚**会让两枚 token 来回被选中,耗尽 maxReplacementRetries 后
+   * 以 `replacement-retry` 收尾——runtime 于是每 60s 重试一枚已知无效的凭证而永不
+   * 过期,冷启动则保留不可用凭证并以未登录启动(既不自愈也不明确告知用户)。
+   * 已经拒过的 token 不再算替换候选,两枚都试过就如实落到 definitive-failure。
+   */
+  const rejectedTokens = new Set<string>();
+
+  /** 候选已在本轮被拒过 → 不是有效的追赶目标,按确定性失效收尾。 */
+  const withoutRejectedCandidate = (action: RefreshFailureAction): RefreshFailureAction =>
+    action.kind === 'replacement-retry' && rejectedTokens.has(action.refreshToken)
+      ? { kind: 'definitive-failure' }
+      : action;
 
   while (true) {
     const run = opts.transientRetry
@@ -327,10 +343,14 @@ export async function runRefreshWithReplacementRetry<T>(
       };
     }
 
-    let action = resolveRefreshFailureAction(
-      run.result,
-      requestedToken,
-      opts.readLatestStoredToken(requestedToken),
+    rejectedTokens.add(requestedToken);
+
+    let action = withoutRejectedCandidate(
+      resolveRefreshFailureAction(
+        run.result,
+        requestedToken,
+        opts.readLatestStoredToken(requestedToken),
+      ),
     );
 
     if (action.kind === 'definitive-failure' && isReplacementRetryEligibleFailure(run.result)) {
@@ -342,10 +362,12 @@ export async function runRefreshWithReplacementRetry<T>(
           delayMs,
         });
         if (delayMs > 0) await replacementRecheckSleep(delayMs);
-        action = resolveRefreshFailureAction(
-          run.result,
-          requestedToken,
-          opts.readLatestStoredToken(requestedToken),
+        action = withoutRejectedCandidate(
+          resolveRefreshFailureAction(
+            run.result,
+            requestedToken,
+            opts.readLatestStoredToken(requestedToken),
+          ),
         );
         if (action.kind !== 'definitive-failure') break;
       }

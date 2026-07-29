@@ -309,6 +309,55 @@ describe('refresh token replacement detection', () => {
     expect(doRefresh).toHaveBeenNthCalledWith(1, 'rt-old');
     expect(doRefresh).toHaveBeenNthCalledWith(2, 'rt-new-1');
   });
+
+  it('两个凭证来源互指时不来回重试:已拒过的 token 不再算候选,落到确定性失效', async () => {
+    // v1 与 legacy 分叉:各自都是「对方眼里的替换 token」。只排除紧邻的上一枚会让两枚
+    // 来回被选中、耗尽重试后以 replacement-retry 收尾——runtime 于是每 60s 重试一枚
+    // 已知无效的凭证而永不过期,冷启动则保留不可用凭证并以未登录启动。
+    const doRefresh = vi.fn(async () => invalidToken);
+    const disk = { v1: 'rt-v1', legacy: 'rt-legacy' };
+
+    const result = await runRefreshWithReplacementRetry('rt-v1', {
+      doRefresh,
+      readLatestStoredToken: (requestedToken) =>
+        pickRefreshTokenReplacementCandidate(requestedToken, [disk.v1, disk.legacy]),
+      maxReplacementRetries: 5,
+    });
+
+    // 两枚都试过一次就收手,不吃满 maxReplacementRetries。
+    expect(result).toMatchObject({
+      failureAction: { kind: 'definitive-failure' },
+      replacementRetries: 1,
+      replacementRetryExhausted: false,
+    });
+    expect(doRefresh).toHaveBeenCalledTimes(2);
+    expect(doRefresh).toHaveBeenNthCalledWith(1, 'rt-v1');
+    expect(doRefresh).toHaveBeenNthCalledWith(2, 'rt-legacy');
+  });
+
+  it('replacement recheck 期间读回一枚早前已拒过的 token → 同样落到确定性失效', async () => {
+    const doRefresh = vi.fn(async () => invalidToken);
+    // 磁盘读取序列:①第一轮读到 rt-2 → 追上去重试;②第二轮读不到替换 → 进 recheck;
+    // ③recheck 期间又读回最初那枚 rt-1(例如镜像把它写进了另一个来源)。
+    const diskReads: (string | null)[] = ['rt-2', null, 'rt-1', null];
+    const sleepCalls: number[] = [];
+
+    const result = await runRefreshWithReplacementRetry('rt-1', {
+      doRefresh,
+      readLatestStoredToken: () => (diskReads.length ? (diskReads.shift() ?? null) : null),
+      maxReplacementRetries: 5,
+      replacementRecheck: {
+        delaysMs: [10, 20],
+        sleep: (ms) => (sleepCalls.push(ms), Promise.resolve()),
+      },
+    });
+
+    // recheck 读回的 rt-1 在第一轮就被拒过,不得据此再发第三次请求。
+    expect(result.failureAction).toEqual({ kind: 'definitive-failure' });
+    expect(doRefresh).toHaveBeenCalledTimes(2);
+    expect(doRefresh).toHaveBeenNthCalledWith(1, 'rt-1');
+    expect(doRefresh).toHaveBeenNthCalledWith(2, 'rt-2');
+  });
 });
 
 describe('runRefreshWithTransientRetry', () => {
