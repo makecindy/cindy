@@ -1232,12 +1232,26 @@ export function TodaySpendChip({
       })
     : null;
   // 网关 / 托管账号没有外部看板(url 恒 null,见文件头),但个人云账号有站内
-  // 「用量和计费」页可去:chip 从不可点升级为直达计费页,和 SettingsView 的
-  // billing tab 用同一可见性判定(企业/本地/未登录账号没有计费页,保持不可点,
-  // 不假装有入口;device-link 远程会话计费在被控端,同样不进)。
+  // 「用量和计费」页可去:chip 从不可点升级为直达计费页。两重门,缺一保持不可点:
+  //  1. 账号可进计费页(与 SettingsView 的 billing tab 同一判定;企业/本地/未登录
+  //     账号没有计费页,不假装有入口);
+  //  2. 本会话的花费确实由 XD 网关计费:显式 xd 来源 / codex 骨折模型 / 默认路由
+  //     的网关形态(复用上方 form 判定)。显式第三方来源(自定义供应商)展示的是
+  //     对方平台的花费,不得指向 Cindy 计费页;远程会话(SSH / device-link)计费
+  //     事实在远端账号,同样不进(PR review P1 ×2)。
   const { mode: authMode, user: authUser } = useAuth();
+  const isGatewayBilledSource =
+    providerId === 'xd' ||
+    isCodexBudgetModel ||
+    (providerId == null && vendorKey === 'codex' && !isCodexSubscription) ||
+    (providerId == null &&
+      vendorKey === 'cc' &&
+      !isSubscriptionBridge &&
+      !isClaudeSubscription &&
+      !ccBillingFormPending);
   const opensBillingSettings =
-    !isDeviceLinkRemote &&
+    !isAnyRemoteSession &&
+    isGatewayBilledSource &&
     canAccessBillingSettings({
       mode: authMode,
       membershipKind: authUser?.membershipKind ?? null,

@@ -158,6 +158,7 @@ export function ErrorTailErrorBanner({
       modelId={modelId}
       providerId={providerId}
       onSwitchToClaudeSubscription={onSwitchToClaudeSubscription}
+      sessionId={sessionId}
       silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
       onForkStripEncrypted={onForkStripEncrypted}
       forkStripEncryptedRunning={forkStripEncryptedRunning}

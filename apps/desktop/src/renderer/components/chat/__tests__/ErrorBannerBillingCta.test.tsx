@@ -115,6 +115,15 @@ describe('ErrorBanner billing CTA', () => {
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
   });
 
+  it('never relabels subscription-bridge (chatgpt/) quota errors even with a stale gateway route', () => {
+    // bridge 请求在 proxy 提前分流、不更新会话路由观察值:残留的 gateway 观察值
+    // 不得把 ChatGPT 的配额错误贴成 Cindy 点数耗尽。
+    mocks.claudeRoute.mockReturnValue('gateway');
+    renderBanner({ providerId: null, modelId: 'chatgpt/gpt-5.5' });
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
+    expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
+  });
+
   it('hides CTA for non-quota errors', () => {
     renderBanner({ error: 'fetch failed: ECONNREFUSED' });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();

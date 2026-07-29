@@ -37,6 +37,7 @@ import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/over
 import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
 import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
 import { isQuotaExceededMessage } from '../../../shared/providerErrors';
+import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
 
 interface ErrorBannerProps {
   error: string;
@@ -173,12 +174,17 @@ export function ErrorBanner({
     membershipKind: authUser?.membershipKind ?? null,
   });
   const isQuotaError = isQuotaExceededMessage(error);
+  // 订阅直连 bridge 模型(chatgpt/ / xai/)不参与:它们的请求在 proxy 提前分流、
+  // 不更新会话路由观察值,旧的 gateway 观察值可能残留——ChatGPT/xAI 的配额错误
+  // 绝不能被贴成 Cindy 点数耗尽(PR review P1)。
+  const isSubscriptionBridgeModel = !!modelId && isSubscriptionDirectModel(modelId);
   const claudeSessionRoute = useClaudeSessionRoute(
     sessionId,
     isQuotaError &&
       canAccessBilling &&
       !isAnyRemoteSession &&
       agentKind === 'cc' &&
+      !isSubscriptionBridgeModel &&
       normalizedProviderId === null,
   );
   const isGatewayBilledSource =
@@ -186,8 +192,12 @@ export function ErrorBanner({
     !!modelId?.startsWith('codex/') ||
     (normalizedProviderId === null &&
       agentKind === 'codex' &&
+      !isSubscriptionBridgeModel &&
       codexAuthInjection === 'env-key') ||
-    (normalizedProviderId === null && agentKind === 'cc' && claudeSessionRoute === 'gateway');
+    (normalizedProviderId === null &&
+      agentKind === 'cc' &&
+      !isSubscriptionBridgeModel &&
+      claudeSessionRoute === 'gateway');
   const showGatewayQuotaRecovery =
     isQuotaError && canAccessBilling && !isAnyRemoteSession && isGatewayBilledSource;
   const navigate = useNavigate();
