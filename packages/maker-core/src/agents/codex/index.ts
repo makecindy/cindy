@@ -2802,6 +2802,9 @@ export class CodexAgent extends BaseAgent {
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
         }
+        if (mutableModel === 'gpt-5' && resp.model) {
+          mutableModel = resp.model;
+        }
         threadId = resp.thread.id;
         registerCodexReviewerRouteContext(threadId);
         if (useProxyChannel) {
@@ -4691,8 +4694,12 @@ export class CodexAgent extends BaseAgent {
         // 某个 turn 的响应推断。通知恒带完整 ThreadSettings, 故 serviceTier 总是 present。
         const s = params.threadSettings;
         const before = mutableServiceTier ?? null;
+        const beforeModel = mutableModel;
         mutableServiceTier = normalizeServiceTier(s.serviceTier) ?? null;
         if (typeof s.model === 'string' && s.model) mutableModel = s.model;
+        if (mutableModel !== beforeModel) {
+          registerCodexReviewerRouteContext(params.threadId);
+        }
         // ReasoningEffort 的 'none' 不属于 Effort; 排除后其余值都是合法 Effort, 无需 cast。
         if (s.effort && s.effort !== 'none') mutableEffort = s.effort;
         if (before !== (mutableServiceTier ?? null)) {

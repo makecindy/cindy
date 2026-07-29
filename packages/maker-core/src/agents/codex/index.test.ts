@@ -4694,11 +4694,58 @@ describe('CodexAgent MCP thread context hooks', () => {
     };
     expect(firstTurnParams.approvalsReviewer).toBe('auto_review');
 
+    if (!handle.setModel) throw new Error('expected setModel');
     await handle.setModel('qwen/qwen3-coder');
     expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
       sessionId: 'session-provider-aware-reviewer',
       threadId: 'start-thread-id',
       model: 'qwen/qwen3-coder',
+    });
+    host.getThreadHandlers()?.threadSettingsUpdated?.({
+      threadId: 'start-thread-id',
+      threadSettings: {
+        serviceTier: null,
+        model: 'qwen/qwen3-coder-202607',
+        effort: 'high',
+      },
+    });
+    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
+      sessionId: 'session-provider-aware-reviewer',
+      threadId: 'start-thread-id',
+      model: 'qwen/qwen3-coder-202607',
+    });
+    await handle.close();
+  });
+
+  it('registers the model resolved by thread/start when the request uses the default sentinel', async () => {
+    const registerCodexReviewerRouteContext = vi.fn(() => true);
+    const agent = new CodexAgent(createDeps({}, {
+      registerCodexReviewerRouteContext,
+    }));
+    installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        return {
+          thread: { id: 'start-thread-id' },
+          model: 'deepseek/deepseek-v4',
+          modelProvider: 'xd',
+          cwd: '/repo',
+        };
+      }
+      return undefined;
+    }, { codexProxyActive: true });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-reviewer-default-model',
+      model: 'gpt-5',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+
+    expect(registerCodexReviewerRouteContext).toHaveBeenCalledWith({
+      sessionId: 'session-provider-reviewer-default-model',
+      threadId: 'start-thread-id',
+      model: 'deepseek/deepseek-v4',
     });
     await handle.close();
   });

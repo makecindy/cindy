@@ -670,6 +670,38 @@ describe('codex proxy host', () => {
     clearSessionProvider('session-openai-review');
   });
 
+  it('keeps Guardian transforms aligned with a control-plane proxy frozen auth mode', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    host.setCodexProxyAuthInjection('env-key');
+    host.registerReviewerRouteContext(
+      'session-frozen-review',
+      'thread-frozen-parent',
+      'unscoped-provider-model',
+    );
+
+    await host.ensureCodexControlPlaneProxyReady('oauth-bearer');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    const reviewerTransform = transforms[3];
+    if (!reviewerTransform) throw new Error('expected Guardian reviewer transform');
+    expect(reviewerTransform(
+      { model: 'codex-auto-review', input: [] },
+      {
+        method: 'POST',
+        url: '/responses',
+        headers: {
+          'thread-id': 'guardian-child-frozen',
+          'x-openai-subagent': 'guardian',
+          'x-codex-parent-thread-id': 'thread-frozen-parent',
+        },
+      },
+    )).toBeNull();
+  });
+
   it('applies provider compatibility and routing to a Guardian child via its parent thread', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');

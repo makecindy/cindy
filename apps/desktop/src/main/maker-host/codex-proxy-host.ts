@@ -248,7 +248,9 @@ function providerAwareGuardianReviewerModel(
     : mainModel;
 }
 
-function createProviderAwareGuardianReviewerTransform(): RequestTransform {
+function createProviderAwareGuardianReviewerTransform(
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): RequestTransform {
   return (body, ctx) => {
     if (ctx.method !== 'POST' || !isPlainObject(body)) return null;
     const parentThreadId = guardianParentThreadIdFromHeaders(ctx.headers);
@@ -256,7 +258,7 @@ function createProviderAwareGuardianReviewerTransform(): RequestTransform {
     const mainModel = providerAwareGuardianReviewerModel(
       body,
       ctx.headers,
-      getCodexProxyAuthInjection(),
+      frozenAuthInjection ?? getCodexProxyAuthInjection(),
     );
     if (!parentThreadId || !sessionId || !mainModel) return null;
 
@@ -1541,7 +1543,9 @@ export function createModelRoutingTransform(
   };
 }
 
-function createTransformRequestChain(): RequestTransform[] {
+function createTransformRequestChain(
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): RequestTransform[] {
   const transforms: RequestTransform[] = [
     createActiveStripTransform({
       controller: encryptedStripController,
@@ -1557,7 +1561,7 @@ function createTransformRequestChain(): RequestTransform[] {
     // Guardian uses an isolated child thread. Resolve its parent business
     // session and select that session's real provider model before provider
     // compatibility transforms inspect the request.
-    createProviderAwareGuardianReviewerTransform(),
+    createProviderAwareGuardianReviewerTransform(frozenAuthInjection),
     // 必须先于 xAI/MiniMax 兼容改写:加密压缩块换成明文占位 message 后,后续
     // 针对具体供应商的 input 归一化才能按标准 message 处理它。
     createCrossProviderCompactionCompatTransform(),
@@ -1580,7 +1584,7 @@ function createCodexProxyHandle(
   return createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
-    transformRequest: createTransformRequestChain(),
+    transformRequest: createTransformRequestChain(frozenAuthInjection),
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
     // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
     routingTransform: createModelRoutingTransform(frozenAuthInjection),
