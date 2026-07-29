@@ -25,7 +25,7 @@
 import * as path from 'node:path';
 import type Database from 'better-sqlite3';
 
-import { MakerMemoryStore, sanitizeWorkdir } from './store.js';
+import { MakerMemoryStore, memoryScopeDirName } from './store.js';
 import {
   type MemoryConfig,
   type WriteOptions,
@@ -210,7 +210,9 @@ export class MakerMemoryManager {
     const cached = this.stores.get(absWorkdir);
     if (cached) return cached.store;
 
-    const sanitized = sanitizeWorkdir(absWorkdir);
+    // 目录名派生见 memoryScopeDirName:本地键 = sanitizeWorkdir 原规则 (不迁移),
+    // 远端 ssh: 键 = 碰撞安全的 hash 形态 (review R4 P2)。
+    const sanitized = memoryScopeDirName(absWorkdir);
     const storageDir = path.join(this.deps.basePath, MEMORY_SUBDIR, sanitized);
     const dbPath = path.join(storageDir, FTS_DB_FILENAME);
 

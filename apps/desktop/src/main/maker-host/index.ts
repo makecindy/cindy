@@ -606,13 +606,16 @@ export function getMaker(): Maker {
       // MCP 注入) — 与 IPC create/send 路径同一 preflight。holder 在 IPC
       // 注册时填入 (晚于本 deps 构造, 早于任何 bridge 回调)。
       ensureRemoteSessionStart: async (params) => {
-        await getRemoteSessionStartEnsure()?.({
-          createOpts: {
-            id: params.sessionId,
-            agentKind: params.agentKind,
-            remoteHostId: params.remoteHostId,
-          },
-        });
+        // ensure 会在 createOpts 上就地归一化 makerMemoryEnabled (全局设置
+        // backfill + stale-bridge 钳制) — 这里是临时对象, 必须把结果读回
+        // 交给 bridge 的真实 createSession (review R6 P2)。
+        const createOpts: { id: string; agentKind: typeof params.agentKind; remoteHostId: string; makerMemoryEnabled?: boolean } = {
+          id: params.sessionId,
+          agentKind: params.agentKind,
+          remoteHostId: params.remoteHostId,
+        };
+        await getRemoteSessionStartEnsure()?.({ createOpts });
+        return { makerMemoryEnabled: createOpts.makerMemoryEnabled === true };
       },
       orcaTeamStore: orcaTeamStoreAdapter,
       dispatchInterAgentMessage,

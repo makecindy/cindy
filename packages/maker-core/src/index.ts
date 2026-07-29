@@ -39,6 +39,7 @@ export {
   MemoryStorage,
   sanitizeWorkdir,
   buildMemoryScopeKey,
+  memoryScopeDirName,
   buildFilename,
   parseFilename,
   validateSlug,

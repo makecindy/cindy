@@ -182,6 +182,10 @@ async function doStart(
       return {
         agentKind: active.agentKind,
         workingDir: active.workingDir,
+        // SSH remote 会话的 ctx 字段必须透传 — cindy_memory 用它算 scope key
+        // (buildMemoryScopeKey);丢掉的话远端工具会落到本地路径 key 的 store,
+        // 与 agent prompt 注入读的 ssh:<hostId>:<path> store 分家 (review R4 P1)。
+        ...(active.remoteHostId ? { remoteHostId: active.remoteHostId } : {}),
         vendorOptions: active.vendorOptions,
         sessionId: active.sessionId,
         getSessionContext: ctx.getSessionContext,
