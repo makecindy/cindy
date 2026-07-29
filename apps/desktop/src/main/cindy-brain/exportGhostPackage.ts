@@ -259,8 +259,43 @@ const SNAPSHOT_MAX_ATTEMPTS = 3;
 
 interface PackageSnapshot {
   entries: PackageEntry[];
+  /**
+   * 递归后不含任何包内文件的目录(显式空目录)。安装会保留包里的目录
+   * 条目,导出丢掉会让重装后插件找不到随包的空输出/缓存/模板目录;
+   * dir 条目不参与 statement 哈希,补回不影响验签。
+   */
+  emptyDirs: string[];
   /** 是否走了签名闭包路径(决定产物是否要做装入级验签)。 */
   signed: boolean;
+}
+
+/**
+ * 递归收集空目录(子树内没有计入包内容的文件)。keep 判定文件是否计入
+ * 包内容:未签名包为全部保留文件(跳过口径已在遍历内应用),签名包为
+ * statement 成员。symlink 不跟随,与 walkTree 同口径。
+ */
+async function collectEmptyDirs(dir: string, keep: (rel: string) => boolean): Promise<string[]> {
+  const empty: string[] = [];
+  const walk = async (cur: string, relBase: string): Promise<boolean> => {
+    const entries = await fs.promises.readdir(cur, { withFileTypes: true });
+    let hasContent = false;
+    for (const entry of entries) {
+      if (shouldSkipExportEntry(entry.name, relBase)) continue;
+      if (entry.isSymbolicLink()) continue;
+      const abs = path.join(cur, entry.name);
+      const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        const subHas = await walk(abs, rel);
+        if (!subHas) empty.push(rel);
+        hasContent = hasContent || subHas;
+      } else if (entry.isFile()) {
+        if (keep(rel)) hasContent = true;
+      }
+    }
+    return hasContent;
+  };
+  await walk(dir, '');
+  return empty;
 }
 
 async function snapshotPackage(dir: string): Promise<PackageSnapshot | null> {
@@ -269,11 +304,20 @@ async function snapshotPackage(dir: string): Promise<PackageSnapshot | null> {
       const doc = await readSignedDoc(dir);
       if (doc) {
         const entries = await readSignedEntries(dir, doc);
-        if (entries) return { entries, signed: true };
+        if (entries) {
+          const covered = new Set(doc.files.map((file) => file.path));
+          const emptyDirs = await collectEmptyDirs(dir, (rel) => covered.has(rel));
+          return { entries, emptyDirs, signed: true };
+        }
       } else {
         const tree = await snapshotUnsignedTree(dir);
         if (tree) {
-          return { entries: tree.map(({ rel, data }) => ({ rel, data })), signed: false };
+          const emptyDirs = await collectEmptyDirs(dir, () => true);
+          return {
+            entries: tree.map(({ rel, data }) => ({ rel, data })),
+            emptyDirs,
+            signed: false,
+          };
         }
       }
     } catch {
@@ -318,6 +362,9 @@ export async function exportGhostPackage(
   if (totalBytes > maxUncompressed) return { status: 'error', code: 'too_large' };
 
   const zip = new JSZip();
+  for (const rel of snapshot.emptyDirs) {
+    zip.folder(rel);
+  }
   for (const file of snapshot.entries) {
     zip.file(file.rel, file.data);
   }

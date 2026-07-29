@@ -263,6 +263,25 @@ describe('exportGhostPackage', () => {
     expect(names).not.toContain('.cindy-trust.json');
   });
 
+  it('空目录作为显式条目保留(随包模板/输出目录,两条路径)', async () => {
+    await fs.promises.mkdir(path.join(ghostDir, 'templates', 'empty'), { recursive: true });
+
+    // 未签名:walk 收集空目录。
+    const unsigned = await exportGhostPackage('hello', makeDeps());
+    expect(unsigned.status).toBe('saved');
+    if (unsigned.status !== 'saved') return;
+    const unsignedZip = await JSZip.loadAsync(await fs.promises.readFile(unsigned.savedPath));
+    expect(unsignedZip.files['templates/empty/']?.dir).toBe(true);
+
+    // 签名:dir 条目不参与 statement 哈希,补回不影响验签。
+    await writeStatement(['ghost.json', 'locales/en.json', 'main.js']);
+    const signed = await exportGhostPackage('hello', makeDeps());
+    expect(signed.status).toBe('saved');
+    if (signed.status !== 'saved') return;
+    const signedZip = await JSZip.loadAsync(await fs.promises.readFile(signed.savedPath));
+    expect(signedZip.files['templates/empty/']?.dir).toBe(true);
+  });
+
   it('symlink 条目不跟随,不打进导出包', async () => {
     const outside = path.join(workDir, 'outside-secret');
     await fs.promises.mkdir(outside);
