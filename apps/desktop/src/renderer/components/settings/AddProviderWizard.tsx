@@ -341,8 +341,9 @@ export function AddProviderWizard({
         checked: boolean;
         recommended: boolean;
         agents: AgentKind[];
-        /** 列模型端点上报的上下文窗口(拉取新增/回填);完成创建时预设值优先、本值兜底。 */
-        contextWindow?: number;
+        /** 列模型端点上报的上下文窗口,**按 agent 分槽**(同一 id 双端可不同,如
+         *  cc=1M / codex=272K);完成创建时按所属 runtime 取值,预设值优先、本值兜底。 */
+        contextWindows?: Partial<Record<AgentKind, number>>;
       }
     >
   >(new Map());
@@ -569,7 +570,7 @@ export function AddProviderWizard({
         checked: boolean;
         recommended: boolean;
         agents: AgentKind[];
-        contextWindow?: number;
+        contextWindows?: Partial<Record<AgentKind, number>>;
       }
     >();
     for (const agent of Object.keys(preset.runtimes) as AgentKind[]) {
@@ -658,15 +659,18 @@ export function AddProviderWizard({
               !preservePresetOwnership && !existing.agents.includes(agent)
                 ? [...existing.agents, agent]
                 : existing.agents;
-            // 端点上报的窗口只补空,不覆盖已有值(预设推荐模型的窗口在完成创建时
-            // 以预设为准,这里补的是「预设没写窗口」的兜底)。
+            // 端点上报的窗口按 agent 分槽、只补该槽的空(同一 id 双端窗口可以不同,
+            // 不能共享一个值;预设推荐模型的窗口在完成创建时以预设为准,这里补的是
+            // 「预设没写窗口」的兜底)。
             const backfillWindow =
-              existing.contextWindow === undefined && m.contextWindow !== undefined;
+              existing.contextWindows?.[agent] === undefined && m.contextWindow !== undefined;
             if (mergedAgents !== existing.agents || backfillWindow) {
               next.set(m.id, {
                 ...existing,
                 agents: mergedAgents,
-                ...(backfillWindow ? { contextWindow: m.contextWindow } : {}),
+                ...(backfillWindow
+                  ? { contextWindows: { ...existing.contextWindows, [agent]: m.contextWindow } }
+                  : {}),
               });
             }
           } else if (!preservePresetOwnership) {
@@ -675,7 +679,9 @@ export function AddProviderWizard({
               checked: false,
               recommended: false,
               agents: [agent],
-              ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+              ...(m.contextWindow !== undefined
+                ? { contextWindows: { [agent]: m.contextWindow } }
+                : {}),
             });
           }
         }
@@ -762,7 +768,7 @@ export function AddProviderWizard({
     const preset = sel.preset;
     const selected = [...picks.entries()]
       .filter(([, v]) => v.checked)
-      .map(([id, v]) => ({ id, name: v.name, agents: v.agents, contextWindow: v.contextWindow }));
+      .map(([id, v]) => ({ id, name: v.name, agents: v.agents, contextWindows: v.contextWindows }));
     if (selected.length === 0) {
       toast.error(t('settings.providers.wizard.noModelSelected'));
       return;
@@ -785,9 +791,9 @@ export function AddProviderWizard({
           .filter((m) => m.agents.includes(agent))
           .map((m) => {
             const presetModel = rt.models.find((candidate) => candidate.id === m.id);
-            // 预设策展值优先;拉取新增模型没有预设条目,落端点上报的发现值,
-            // 不再无窗口入库退回 200K 默认。
-            const contextWindow = presetModel?.contextWindow ?? m.contextWindow;
+            // 预设策展值优先;拉取新增模型没有预设条目,落**该 runtime 端点**上报的
+            // 发现值(按 agent 分槽,双端窗口可不同),不再无窗口入库退回 200K 默认。
+            const contextWindow = presetModel?.contextWindow ?? m.contextWindows?.[agent];
             return {
               id: m.id,
               name: m.name,

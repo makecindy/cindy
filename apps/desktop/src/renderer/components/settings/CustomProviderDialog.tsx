@@ -1246,7 +1246,9 @@ export function CustomProviderDialog({
                                   const { contextWindow: _drop, ...rest } = y;
                                   return rest;
                                 }
-                                if (!/^[0-9][0-9,_ ]*$/.test(trimmed)) return y;
+                                // 分隔符只允许单个、且夹在数字组之间:`1,,2` / `1_ 2` /
+                                // 尾随分隔符等无效位置不得被剥掉后当 `12` 保存(review P1)。
+                                if (!/^[0-9]+(?:[,_ ][0-9]+)*$/.test(trimmed)) return y;
                                 const parsed = Number.parseInt(trimmed.replace(/[,_ ]/g, ''), 10);
                                 // isSafeInteger:超出安全整数会被 parseInt 静默舍入,
                                 // 落盘值与用户输入不一致(review P1)。
