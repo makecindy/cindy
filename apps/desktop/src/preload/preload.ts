@@ -3807,10 +3807,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:mcp:custom:list'),
     createCustomMcpServer: (
       config: import('../shared/customMcp').CustomMcpConfig,
-    ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:create', config),
+      env?: Record<string, string>,
+    ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:create', config, env),
     updateCustomMcpServer: (
       config: import('../shared/customMcp').CustomMcpConfig,
-    ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:update', config),
+      env?: Record<string, string>,
+    ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:update', config, env),
     deleteCustomMcpServer: (mcpId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:mcp:custom:delete', mcpId),
     /** token-only 后置刷新：safeStorage write/remove 完成后调用，消除竞态窗口。 */

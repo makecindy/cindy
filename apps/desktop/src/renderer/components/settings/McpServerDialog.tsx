@@ -21,9 +21,11 @@ import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import {
   createCustomMcpServer,
+  readCustomMcpEnv,
   readCustomMcpToken,
   updateCustomMcpServer,
 } from '@/lib/customMcpServers';
+import { parseStdioArgsInput, selectStdioEnvMutation } from '@/lib/customMcpForm';
 
 import { MCP_TRANSPORTS, type CustomMcpConfig, type McpTransport } from '@/../shared/customMcp';
 
@@ -40,6 +42,9 @@ interface HeaderRow {
   value: string;
   _key: number;
 }
+interface EnvRow extends HeaderRow {}
+
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
  * 自定义 MCP id 统一前缀。内置 lizi MCP 命名为 `lizi_*` 与裸 `slack`;自定义 id 一律带
@@ -111,18 +116,28 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
 
   const [name, setName] = useState(initial?.name ?? '');
   const [transport, setTransport] = useState<McpTransport>(initial?.transport ?? 'http');
-  const [url, setUrl] = useState(initial?.url ?? '');
+  const [url, setUrl] = useState(initial?.transport === 'stdio' ? '' : (initial?.url ?? ''));
+  const [command, setCommand] = useState(initial?.transport === 'stdio' ? initial.command : '');
+  const [args, setArgs] = useState(
+    initial?.transport === 'stdio' ? JSON.stringify(initial.args, null, 2) : '[]',
+  );
+  const [cwd, setCwd] = useState(initial?.transport === 'stdio' ? initial.cwd : '');
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [hasToken, setHasToken] = useState(false);
   const headerKeyRef = useRef(0);
   const [headers, setHeaders] = useState<HeaderRow[]>(() => {
-    const initRows =
-      initial && Object.keys(initial.headers).length > 0
-        ? Object.entries(initial.headers).map(([n, v]) => ({ name: n, value: v }))
+    const initialHeaders = initial?.transport === 'stdio' ? undefined : initial?.headers;
+    const initRows: Omit<HeaderRow, '_key'>[] =
+      initialHeaders && Object.keys(initialHeaders).length > 0
+        ? Object.entries(initialHeaders).map(([name, value]) => ({ name, value }))
         : [{ name: '', value: '' }];
     return initRows.map((r) => ({ ...r, _key: headerKeyRef.current++ }));
   });
+  const envKeyRef = useRef(1);
+  const [env, setEnv] = useState<EnvRow[]>([{ name: '', value: '', _key: 0 }]);
+  const [envLoaded, setEnvLoaded] = useState(!editing || initial?.transport !== 'stdio');
+  const [envDirty, setEnvDirty] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // 编辑态:回填已存 token(让 token 框「能看」/可核对,据此点亮「已保存」徽标)。
@@ -141,6 +156,24 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
       cancelled = true;
     };
   }, [editing, initial]);
+  useEffect(() => {
+    if (!editing || !initial || initial.transport !== 'stdio') return;
+    let cancelled = false;
+    void readCustomMcpEnv(initial.id).then((values) => {
+      if (cancelled) return;
+      if (values === null) return;
+      const rows = Object.entries(values).map(([name, value]) => ({
+        name,
+        value,
+        _key: envKeyRef.current++,
+      }));
+      setEnv(rows.length ? rows : [{ name: '', value: '', _key: envKeyRef.current++ }]);
+      setEnvLoaded(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [editing, initial]);
 
   const handleSave = useCallback(async () => {
     const trimmedName = name.trim();
@@ -148,15 +181,26 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
       toast.error(t('settings.mcp.errors.nameRequired'));
       return;
     }
+    const isStdio = transport === 'stdio';
     const trimmedUrl = url.trim();
-    try {
-      const u = new URL(trimmedUrl);
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    if (!isStdio)
+      try {
+        const u = new URL(trimmedUrl);
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+          toast.error(t('settings.mcp.errors.urlInvalid'));
+          return;
+        }
+      } catch {
         toast.error(t('settings.mcp.errors.urlInvalid'));
         return;
       }
-    } catch {
-      toast.error(t('settings.mcp.errors.urlInvalid'));
+    if (isStdio && !command.trim()) {
+      toast.error(t('settings.mcp.errors.commandRequired'));
+      return;
+    }
+    const parsedArgs = isStdio ? parseStdioArgsInput(args) : null;
+    if (isStdio && (!parsedArgs || !parsedArgs.ok)) {
+      toast.error(t('settings.mcp.errors.argsInvalid'));
       return;
     }
     const headerMap: Record<string, string> = {};
@@ -165,23 +209,42 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
       if (n) headerMap[n] = h.value.trim();
     }
     const id = editing && initial ? initial.id : uniqueId(trimmedName, new Set(existingIds ?? []));
-    const config: CustomMcpConfig = {
-      id,
-      name: trimmedName,
-      transport,
-      url: trimmedUrl,
-      headers: headerMap,
-    };
+    const config: CustomMcpConfig = isStdio
+      ? {
+          id,
+          name: trimmedName,
+          transport: 'stdio',
+          command: command.trim(),
+          args: parsedArgs && parsedArgs.ok ? parsedArgs.args : [],
+          cwd: cwd.trim(),
+        }
+      : { id, name: trimmedName, transport, url: trimmedUrl, headers: headerMap };
+    const envMap = Object.fromEntries(
+      env.map((entry) => [entry.name.trim(), entry.value]).filter(([key]) => key),
+    );
+    if (isStdio && Object.keys(envMap).some((key) => !ENV_NAME_RE.test(key))) {
+      toast.error(t('settings.mcp.errors.envNameInvalid'));
+      return;
+    }
+    const envMutation = isStdio
+      ? selectStdioEnvMutation({
+          editing,
+          initialTransport: initial?.transport,
+          envLoaded,
+          envDirty,
+          env: envMap,
+        })
+      : undefined;
     setSaving(true);
     try {
       if (editing) {
         // clearToken=true：只有在 token 已加载（hasToken=true）且字段被清空时才撤销鉴权；
         // 若 token 字段为空但 hasToken=false（async 回填尚未完成），则保留已存 token。
         const clearToken = hasToken && !token.trim();
-        await updateCustomMcpServer(config, token, clearToken);
+        await updateCustomMcpServer(config, token, clearToken, envMutation);
         toast.success(t('settings.mcp.toast.updated'));
       } else {
-        await createCustomMcpServer(config, token);
+        await createCustomMcpServer(config, token, envMap);
         toast.success(t('settings.mcp.toast.created'));
       }
       onSaved();
@@ -190,7 +253,25 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
       toast.error(ipc?.message ?? t('settings.mcp.toast.saveFailed'));
       setSaving(false);
     }
-  }, [name, url, transport, token, hasToken, headers, editing, initial, existingIds, onSaved, t]);
+  }, [
+    name,
+    url,
+    transport,
+    command,
+    args,
+    cwd,
+    token,
+    hasToken,
+    headers,
+    env,
+    envLoaded,
+    envDirty,
+    editing,
+    initial,
+    existingIds,
+    onSaved,
+    t,
+  ]);
 
   const tokenPlaceholder = hasToken
     ? t('settings.mcp.fields.tokenEditPlaceholder')
@@ -277,104 +358,207 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
             </div>
           </div>
 
-          <div
-            className="flex flex-col gap-4 rounded-[12px] p-4"
-            style={{
-              backgroundColor: 'var(--surface)',
-              border: '1px solid var(--settings-theme-card-border)',
-            }}
-          >
-            {/* 端点 URL */}
-            <div className="flex flex-col gap-[7px]">
-              <FieldLabel>{t('settings.mcp.fields.url')}</FieldLabel>
-              <TextInput
-                value={url}
-                onChange={setUrl}
-                placeholder={t('settings.mcp.fields.urlPlaceholder')}
-              />
-            </div>
-
-            {/* bearer token（可选） */}
-            <div className="flex flex-col gap-[7px]">
-              <div className="flex items-center gap-2">
-                <FieldLabel>{t('settings.mcp.fields.token')}</FieldLabel>
-                {hasToken && (
-                  <span
-                    className="flex items-center gap-1 rounded-full px-2 py-0.5 text-11 font-medium"
-                    style={{
-                      backgroundColor: 'var(--settings-btn-secondary-bg)',
-                      color: 'var(--settings-section-desc)',
-                    }}
-                  >
-                    <Check size={11} strokeWidth={2.5} />
-                    {t('settings.mcp.fields.tokenSaved')}
-                  </span>
-                )}
+          {transport === 'stdio' ? (
+            <div
+              className="flex flex-col gap-4 rounded-[12px] p-4"
+              style={{
+                backgroundColor: 'var(--surface)',
+                border: '1px solid var(--settings-theme-card-border)',
+              }}
+            >
+              <div className="flex flex-col gap-[7px]">
+                <FieldLabel>{t('settings.mcp.fields.command')}</FieldLabel>
+                <TextInput
+                  value={command}
+                  onChange={setCommand}
+                  placeholder={t('settings.mcp.fields.commandPlaceholder')}
+                />
               </div>
-              <TextInput
-                value={token}
-                onChange={setToken}
-                placeholder={tokenPlaceholder}
-                type={showToken ? 'text' : 'password'}
-                trailing={
-                  <button
-                    type="button"
-                    onClick={() => setShowToken((v) => !v)}
-                    className="absolute right-[12px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
-                    aria-label={showToken ? t('settings.apiKey.hideKey') : t('settings.apiKey.showKey')}
-                  >
-                    {showToken ? <Eye size={16} /> : <EyeOff size={16} />}
-                  </button>
-                }
-              />
-              <span className="text-12 text-[var(--text-tertiary)]">
-                {t('settings.mcp.fields.tokenHelp')}
-              </span>
+              <div className="flex flex-col gap-[7px]">
+                <FieldLabel>{t('settings.mcp.fields.args')}</FieldLabel>
+                <textarea
+                  value={args}
+                  onChange={(event) => setArgs(event.target.value)}
+                  placeholder={t('settings.mcp.fields.argsPlaceholder')}
+                  className="min-h-20 rounded-[10px] border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-3 text-14 text-[var(--settings-input-text)] outline-none focus:border-[var(--settings-input-border-focus)]"
+                />
+              </div>
+              <div className="flex flex-col gap-[7px]">
+                <FieldLabel>{t('settings.mcp.fields.cwd')}</FieldLabel>
+                <TextInput
+                  value={cwd}
+                  onChange={setCwd}
+                  placeholder={t('settings.mcp.fields.cwdPlaceholder')}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <FieldLabel>{t('settings.mcp.fields.env')}</FieldLabel>
+                {env.map((entry, i) => (
+                  <div key={entry._key} className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <TextInput
+                        value={entry.name}
+                        onChange={(value) => {
+                          setEnvDirty(true);
+                          setEnv((rows) =>
+                            rows.map((row, index) => (index === i ? { ...row, name: value } : row)),
+                          );
+                        }}
+                        placeholder={t('settings.mcp.fields.envNamePlaceholder')}
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <TextInput
+                        value={entry.value}
+                        onChange={(value) => {
+                          setEnvDirty(true);
+                          setEnv((rows) =>
+                            rows.map((row, index) => (index === i ? { ...row, value } : row)),
+                          );
+                        }}
+                        placeholder={t('settings.mcp.fields.envValuePlaceholder')}
+                        type="password"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEnvDirty(true);
+                        setEnv((rows) => rows.filter((_, index) => index !== i));
+                      }}
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
+                      aria-label={t('settings.mcp.fields.removeRow')}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEnvDirty(true);
+                    setEnv((rows) => [...rows, { name: '', value: '', _key: envKeyRef.current++ }]);
+                  }}
+                  className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
+                >
+                  <Plus size={14} className="text-[var(--settings-section-desc)]" />
+                  {t('settings.mcp.fields.addEnv')}
+                </button>
+                <span className="text-12 text-[var(--text-tertiary)]">
+                  {t('settings.mcp.fields.envHelp')}
+                </span>
+              </div>
             </div>
+          ) : (
+            <div
+              className="flex flex-col gap-4 rounded-[12px] p-4"
+              style={{
+                backgroundColor: 'var(--surface)',
+                border: '1px solid var(--settings-theme-card-border)',
+              }}
+            >
+              <div className="flex flex-col gap-[7px]">
+                <FieldLabel>{t('settings.mcp.fields.url')}</FieldLabel>
+                <TextInput
+                  value={url}
+                  onChange={setUrl}
+                  placeholder={t('settings.mcp.fields.urlPlaceholder')}
+                />
+              </div>
 
-            {/* 请求头（可选） */}
-            <div className="flex flex-col gap-2">
-              <FieldLabel>{t('settings.mcp.fields.headers')}</FieldLabel>
-              {headers.map((h, i) => (
-                <div key={h._key} className="flex items-center gap-2">
-                  <div className="flex-1">
-                    <TextInput
-                      value={h.name}
-                      onChange={(v) =>
-                        setHeaders((prev) => prev.map((y, j) => (j === i ? { ...y, name: v } : y)))
-                      }
-                      placeholder={t('settings.mcp.fields.headerNamePlaceholder')}
-                    />
-                  </div>
-                  <div className="flex-1">
-                    <TextInput
-                      value={h.value}
-                      onChange={(v) =>
-                        setHeaders((prev) => prev.map((y, j) => (j === i ? { ...y, value: v } : y)))
-                      }
-                      placeholder={t('settings.mcp.fields.headerValuePlaceholder')}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setHeaders((prev) => prev.filter((_, j) => j !== i))}
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
-                    aria-label={t('settings.mcp.fields.removeRow')}
-                  >
-                    <Trash2 size={16} />
-                  </button>
+              {/* bearer token（可选） */}
+              <div className="flex flex-col gap-[7px]">
+                <div className="flex items-center gap-2">
+                  <FieldLabel>{t('settings.mcp.fields.token')}</FieldLabel>
+                  {hasToken && (
+                    <span
+                      className="flex items-center gap-1 rounded-full px-2 py-0.5 text-11 font-medium"
+                      style={{
+                        backgroundColor: 'var(--settings-btn-secondary-bg)',
+                        color: 'var(--settings-section-desc)',
+                      }}
+                    >
+                      <Check size={11} strokeWidth={2.5} />
+                      {t('settings.mcp.fields.tokenSaved')}
+                    </span>
+                  )}
                 </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => setHeaders((prev) => [...prev, { name: '', value: '', _key: headerKeyRef.current++ }])}
-                className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
-              >
-                <Plus size={14} className="text-[var(--settings-section-desc)]" />
-                {t('settings.mcp.fields.addHeader')}
-              </button>
+                <TextInput
+                  value={token}
+                  onChange={setToken}
+                  placeholder={tokenPlaceholder}
+                  type={showToken ? 'text' : 'password'}
+                  trailing={
+                    <button
+                      type="button"
+                      onClick={() => setShowToken((v) => !v)}
+                      className="absolute right-[12px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
+                      aria-label={
+                        showToken ? t('settings.apiKey.hideKey') : t('settings.apiKey.showKey')
+                      }
+                    >
+                      {showToken ? <Eye size={16} /> : <EyeOff size={16} />}
+                    </button>
+                  }
+                />
+                <span className="text-12 text-[var(--text-tertiary)]">
+                  {t('settings.mcp.fields.tokenHelp')}
+                </span>
+              </div>
+
+              {/* 请求头（可选） */}
+              <div className="flex flex-col gap-2">
+                <FieldLabel>{t('settings.mcp.fields.headers')}</FieldLabel>
+                {headers.map((h, i) => (
+                  <div key={h._key} className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <TextInput
+                        value={h.name}
+                        onChange={(v) =>
+                          setHeaders((prev) =>
+                            prev.map((y, j) => (j === i ? { ...y, name: v } : y)),
+                          )
+                        }
+                        placeholder={t('settings.mcp.fields.headerNamePlaceholder')}
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <TextInput
+                        value={h.value}
+                        onChange={(v) =>
+                          setHeaders((prev) =>
+                            prev.map((y, j) => (j === i ? { ...y, value: v } : y)),
+                          )
+                        }
+                        placeholder={t('settings.mcp.fields.headerValuePlaceholder')}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setHeaders((prev) => prev.filter((_, j) => j !== i))}
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
+                      aria-label={t('settings.mcp.fields.removeRow')}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setHeaders((prev) => [
+                      ...prev,
+                      { name: '', value: '', _key: headerKeyRef.current++ },
+                    ])
+                  }
+                  className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
+                >
+                  <Plus size={14} className="text-[var(--settings-section-desc)]" />
+                  {t('settings.mcp.fields.addHeader')}
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Footer */}

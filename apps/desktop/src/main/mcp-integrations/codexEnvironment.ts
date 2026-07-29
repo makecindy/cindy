@@ -12,10 +12,7 @@ import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcp
 import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plugins.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from './codexBuiltinToolPolicy.js';
 
-import {
-  startCodexHttpBridge,
-  type CodexHttpBridge,
-} from './codexHttpBridge.js';
+import { startCodexHttpBridge, type CodexHttpBridge } from './codexHttpBridge.js';
 import { getRemoteMcpBridgeToken } from './remoteMcpBridgeToken.js';
 
 const TOKEN_ENV = 'LIZI_MCP_TOKEN';
@@ -31,6 +28,29 @@ const MCP_TIMEOUT_SEC = 10 * 60;
 function tomlDottedKeySegment(key: string): string {
   if (/^[A-Za-z0-9_-]+$/.test(key)) return key;
   return `"${key.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/** JSON string syntax is a compatible TOML basic string subset for command, args, paths, and env names in -c. */
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function canonicalEnvName(name: string): string {
+  return process.platform === 'win32' ? name.toUpperCase() : name;
+}
+
+function findEnvConflict(
+  existing: Record<string, string>,
+  candidate: Record<string, string>,
+): string | undefined {
+  const values = new Map<string, string>();
+  for (const [key, value] of Object.entries(existing)) {
+    values.set(canonicalEnvName(key), value);
+  }
+  return Object.entries(candidate).find(([key, value]) => {
+    const canonical = canonicalEnvName(key);
+    return values.has(canonical) && values.get(canonical) !== value;
+  })?.[0];
 }
 
 export interface CodexExtraSpawnConfig {
@@ -120,10 +140,7 @@ export async function shutdownCodexEnvironment(): Promise<void> {
   }
 }
 
-export function registerCodexMcpThreadContext(
-  threadId: string,
-  ctx: LiziMcpSessionContext,
-): void {
+export function registerCodexMcpThreadContext(threadId: string, ctx: LiziMcpSessionContext): void {
   const requestedPolicy = ctx.vendorOptions?.[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY];
   if (!disabledPluginIdsByThread.has(threadId)) {
     disabledPluginIdsByThread.set(threadId, requestedPolicy);
@@ -142,9 +159,7 @@ export function unregisterCodexMcpThreadContext(threadId: string): void {
   activeBridge?.unregisterThreadContext(threadId);
 }
 
-async function doStart(
-  opts: GetCodexExtraSpawnConfigOptions,
-): Promise<CodexExtraSpawnConfig> {
+async function doStart(opts: GetCodexExtraSpawnConfigOptions): Promise<CodexExtraSpawnConfig> {
   const log = opts.logger.child('codex-environment');
 
   // 从 providers 提取 McpServer factory。每个 provider 的 toClaudeSdkConfig
@@ -183,12 +198,41 @@ async function doStart(
     string,
     { url: string; bearerTokenEnvVar?: string; envHttpHeaders?: Record<string, string> }
   > = Object.create(null);
+  const stdioServers: Record<
+    string,
+    { command: string; args: string[]; envVars: string[]; cwd?: string }
+  > = Object.create(null);
   const extraEnv: Record<string, string> = {};
+  const stdioEnvByServer: Record<string, Record<string, string>> = Object.create(null);
+  let stdioEnvValues: Record<string, string> = Object.create(null);
+
+  const rebuildStdioEnvValues = (): void => {
+    stdioEnvValues = Object.assign(Object.create(null), ...Object.values(stdioEnvByServer));
+  };
+
   for (const provider of opts.mcpProviders) {
     if (provider.isEnabled && !provider.isEnabled(ctx)) continue;
 
     const providerEnv = await provider.getExtraEnv?.(ctx);
-    if (providerEnv) Object.assign(extraEnv, providerEnv);
+    if (providerEnv) {
+      // Codex launches every stdio MCP below as children of one app-server process, so they
+      // share a process environment. A later provider's env must not silently replace a
+      // previously selected stdio server's value: skip the affected stdio server instead.
+      const conflictingStdioServers = Object.entries(stdioEnvByServer)
+        .filter(([, env]) => findEnvConflict(env, providerEnv) !== undefined)
+        .map(([serverName]) => serverName);
+      for (const serverName of conflictingStdioServers) {
+        const envName = findEnvConflict(stdioEnvByServer[serverName], providerEnv);
+        delete stdioServers[serverName];
+        delete stdioEnvByServer[serverName];
+        log.warn('skipping stdio MCP provider due to conflicting environment variable', {
+          providerName: serverName,
+          envName,
+        });
+      }
+      if (conflictingStdioServers.length > 0) rebuildStdioEnvValues();
+      Object.assign(extraEnv, providerEnv);
+    }
 
     const codexConfig = provider.toCodexMcpConfig?.(ctx);
     if (codexConfig?.type === 'http') {
@@ -200,7 +244,9 @@ async function doStart(
       } else {
         remoteHttpServers[provider.name] = {
           url: codexConfig.url,
-          ...(codexConfig.bearerTokenEnvVar ? { bearerTokenEnvVar: codexConfig.bearerTokenEnvVar } : {}),
+          ...(codexConfig.bearerTokenEnvVar
+            ? { bearerTokenEnvVar: codexConfig.bearerTokenEnvVar }
+            : {}),
           ...(codexConfig.envHttpHeaders && Object.keys(codexConfig.envHttpHeaders).length > 0
             ? { envHttpHeaders: codexConfig.envHttpHeaders }
             : {}),
@@ -208,18 +254,39 @@ async function doStart(
       }
       continue;
     }
+    if (codexConfig?.type === 'stdio') {
+      const env = codexConfig.env ?? {};
+      const conflictingEnvName =
+        findEnvConflict(stdioEnvValues, env) ?? findEnvConflict(extraEnv, env);
+      if (conflictingEnvName) {
+        log.warn('skipping stdio MCP provider due to conflicting environment variable', {
+          providerName: provider.name,
+          envName: conflictingEnvName,
+        });
+        continue;
+      }
+      stdioEnvByServer[provider.name] = env;
+      rebuildStdioEnvValues();
+      stdioServers[provider.name] = {
+        command: codexConfig.command,
+        args: codexConfig.args ?? [],
+        envVars: Object.keys(env),
+        ...(codexConfig.cwd ? { cwd: codexConfig.cwd } : {}),
+      };
+      continue;
+    }
 
     const toClaudeSdkConfig = provider.toClaudeSdkConfig;
     if (!toClaudeSdkConfig) continue;
 
     const createServer = (): McpServer => {
-      const cfg = toClaudeSdkConfig(ctx) as
-        | { type?: string; name?: string; instance?: unknown }
-        | null;
+      const cfg = toClaudeSdkConfig(ctx) as {
+        type?: string;
+        name?: string;
+        instance?: unknown;
+      } | null;
       if (cfg?.type !== 'sdk' || !cfg.instance) {
-        throw new Error(
-          `provider ${provider.name} did not return an SDK McpServer instance`,
-        );
+        throw new Error(`provider ${provider.name} did not return an SDK McpServer instance`);
       }
       return cfg.instance as McpServer;
     };
@@ -247,26 +314,31 @@ async function doStart(
     if (pluginId) pluginIdByServerName[provider.name] = pluginId;
   }
 
-  if (Object.keys(serverFactories).length === 0 && Object.keys(remoteHttpServers).length === 0) {
+  if (
+    Object.keys(serverFactories).length === 0 &&
+    Object.keys(remoteHttpServers).length === 0 &&
+    Object.keys(stdioServers).length === 0
+  ) {
     throw new Error('codexEnvironment: no MCP server instances available from providers');
   }
 
   // 只有存在 in-process SDK server 时才起 HTTP bridge；纯远程 MCP (如 Slack 官方)
   // 不需要 bridge，bridge 保持 null。
-  const bridge = Object.keys(serverFactories).length > 0
-    ? await startCodexHttpBridge({
-        serverFactories,
-        pluginIdByServerName,
-        // 远端常驻 daemon 经 SSH remote-forward 直连本 bridge:接受 persistent
-        // token (safeStorage, 跨 app 重启稳定)。函数形式读取,token 首用时惰性
-        // 生成也能被后续请求命中。safeStorage 不可用时返回 [],不影响本地。
-        additionalBearerTokens: () => {
-          const t = getRemoteMcpBridgeToken();
-          return t ? [t] : [];
-        },
-        logger: opts.logger,
-      })
-    : null;
+  const bridge =
+    Object.keys(serverFactories).length > 0
+      ? await startCodexHttpBridge({
+          serverFactories,
+          pluginIdByServerName,
+          // 远端常驻 daemon 经 SSH remote-forward 直连本 bridge:接受 persistent
+          // token (safeStorage, 跨 app 重启稳定)。函数形式读取,token 首用时惰性
+          // 生成也能被后续请求命中。safeStorage 不可用时返回 [],不影响本地。
+          additionalBearerTokens: () => {
+            const t = getRemoteMcpBridgeToken();
+            return t ? [t] : [];
+          },
+          logger: opts.logger,
+        })
+      : null;
   activeBridge = bridge;
 
   const extraArgs: string[] = [];
@@ -287,6 +359,20 @@ async function doStart(
     extraArgs.push('-c', `mcp_servers.${name}.startup_timeout_sec=${MCP_TIMEOUT_SEC}`);
     extraArgs.push('-c', `mcp_servers.${name}.tool_timeout_sec=${MCP_TIMEOUT_SEC}`);
   }
+  for (const [name, cfg] of Object.entries(stdioServers)) {
+    extraArgs.push('-c', `mcp_servers.${name}.command=${tomlString(cfg.command)}`);
+    if (cfg.args.length > 0)
+      extraArgs.push('-c', `mcp_servers.${name}.args=[${cfg.args.map(tomlString).join(',')}]`);
+    if (cfg.cwd) extraArgs.push('-c', `mcp_servers.${name}.cwd=${tomlString(cfg.cwd)}`);
+    if (cfg.envVars.length > 0) {
+      extraArgs.push(
+        '-c',
+        `mcp_servers.${name}.env_vars=[${cfg.envVars.map(tomlString).join(',')}]`,
+      );
+    }
+    extraArgs.push('-c', `mcp_servers.${name}.startup_timeout_sec=${MCP_TIMEOUT_SEC}`);
+    extraArgs.push('-c', `mcp_servers.${name}.tool_timeout_sec=${MCP_TIMEOUT_SEC}`);
+  }
   for (const name of Object.keys(serverFactories)) {
     const url = bridge!.url(name);
     // TOML 字符串值必须带双引号 (codex `-c` 解析时按 TOML literal)；
@@ -299,7 +385,11 @@ async function doStart(
 
   log.info('codex MCP bridge wired', {
     port: bridge?.port ?? null,
-    servers: [...Object.keys(serverFactories), ...Object.keys(remoteHttpServers)],
+    servers: [
+      ...Object.keys(serverFactories),
+      ...Object.keys(remoteHttpServers),
+      ...Object.keys(stdioServers),
+    ],
     remoteHttpServers: Object.keys(remoteHttpServers),
     extraArgsCount: extraArgs.length,
   });
@@ -308,6 +398,7 @@ async function doStart(
     extraArgs,
     extraEnv: {
       ...extraEnv,
+      ...stdioEnvValues,
       ...(bridge ? { [TOKEN_ENV]: bridge.token } : {}),
     },
     bridge,

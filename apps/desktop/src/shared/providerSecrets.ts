@@ -109,6 +109,7 @@ export function customProviderSecretStorageKey(providerId: string, agent: string
  * 同机不同账号若生成了同名 id 会共用同一 token 文件。故换账号时须连同清掉,避免串号。
  */
 export const CUSTOM_MCP_SECRET_PREFIX = 'mcp_token_';
+export const CUSTOM_MCP_ENV_PREFIX = 'mcp_env_';
 
 /**
  * 用户自定义 MCP 服务器的 bearer token safeStorage 存储键名（`mcp_token_<id>`）。
@@ -119,6 +120,12 @@ export const CUSTOM_MCP_SECRET_PREFIX = 'mcp_token_';
  */
 export function customMcpSecretStorageKey(mcpId: string): string {
   return `${CUSTOM_MCP_SECRET_PREFIX}${mcpId}`;
+}
+
+/** stdio MCP 环境变量 JSON 的加密存储键。 */
+export function customMcpEnvStorageKey(mcpId: string): string {
+  assertSafeKeyPart(mcpId, 'mcpId');
+  return `${CUSTOM_MCP_ENV_PREFIX}${mcpId}`;
 }
 
 /**

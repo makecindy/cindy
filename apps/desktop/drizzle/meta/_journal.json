@@ -589,6 +589,13 @@
       "when": 1785287922480,
       "tag": "0083_gray_katie_power",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "6",
+      "when": 1785329459609,
+      "tag": "0084_lazy_silverclaw",
+      "breakpoints": true
     }
   ]
 }

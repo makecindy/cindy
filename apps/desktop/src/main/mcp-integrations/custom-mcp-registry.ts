@@ -17,7 +17,7 @@ import { createLogger } from '../logger.js';
 import type { McpProvider } from '@cindy/maker-core';
 
 import { isUnsafeMcpServerId, listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
-import { readCustomMcpToken } from '../secrets/providerSecretStore.js';
+import { readCustomMcpEnv, readCustomMcpToken } from '../secrets/providerSecretStore.js';
 import { CustomMcpProvider } from './custom-mcp-provider.js';
 
 const log = createLogger('custom-mcp-registry');
@@ -68,7 +68,7 @@ export async function refreshCustomMcpProviders(): Promise<void> {
   let providers: CustomMcpProvider[] = [];
   try {
     const configs = await listCustomMcpServers();
-    providers = configs.map((c) => new CustomMcpProvider(c, readCustomMcpToken));
+    providers = configs.map((c) => new CustomMcpProvider(c, readCustomMcpToken, readCustomMcpEnv));
   } catch (err) {
     log.warn('list custom mcp servers failed; leaving providers unchanged', {
       error: err instanceof Error ? err.message : String(err),
@@ -95,9 +95,12 @@ export async function refreshCustomMcpProviders(): Promise<void> {
       // 不受新校验影响）。
       if (isUnsafeMcpServerId(provider.name)) {
         if (!skippedNames.has(provider.name)) {
-          log.warn('skipping custom MCP whose id is unsafe as an object key; delete and recreate it', {
-            serverName: provider.name,
-          });
+          log.warn(
+            'skipping custom MCP whose id is unsafe as an object key; delete and recreate it',
+            {
+              serverName: provider.name,
+            },
+          );
         }
         skippedNames.add(provider.name);
         continue;

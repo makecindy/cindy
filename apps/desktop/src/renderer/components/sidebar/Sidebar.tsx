@@ -19,9 +19,11 @@ import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import sidebarBrandFigure from '@/assets/login/hero.png';
 
 import type { SidebarPeekDrawerProps, SidebarPeekState } from '@/hooks/useSidebarPeek';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
+import { useSidebarBrandFigurePreference } from '@/hooks/useSidebarBrandFigurePreference';
 import { useFeatureSidebarUpper } from '@/features/feature-context';
 import { ConversationSearchProvider } from '@/features/cc-agent/sidebar/conversationSearchContext';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
@@ -74,6 +76,7 @@ export function Sidebar({
 }: SidebarProps) {
   const upperContent = useFeatureSidebarUpper();
   const { t } = useTranslation();
+  const { visible: isBrandFigureVisible } = useSidebarBrandFigurePreference();
   // 顶部 chrome 行的 no-drag 洞要对齐 ChromeActions 浮层按钮簇的落点：
   // 按钮簇钉死左上角(mac 非全屏 78 让位红绿灯,其余 8),不随侧栏状态移动,
   // 洞跟随同一坐标(见 ChromeActions 的 x 计算)。
@@ -154,11 +157,25 @@ export function Sidebar({
       )}
       style={{ width: visualWidth }}
     >
+      {isBrandFigureVisible && !isCollapsed && !isRail && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-0 h-[330px] overflow-hidden select-none"
+        >
+          <img
+            src={sidebarBrandFigure}
+            alt=""
+            draggable={false}
+            className="absolute -bottom-[72px] -right-[34px] w-[330px] max-w-none opacity-[0.16] saturate-[0.8] contrast-[0.9]"
+          />
+        </div>
+      )}
+
       {/* 定宽内容层(见 contentWidth 注释):收起/展开动画期间内容不随 aside 宽度
           reflow,只被右侧裁切 + 整层渐隐/渐显。 */}
       <div
         className={cn(
-          'flex min-h-0 flex-1 flex-col',
+          'relative z-[1] flex min-h-0 flex-1 flex-col',
           // visibility 参与过渡:渐隐播完后才真正隐藏(阻止 Tab 焦点进入收起的
           // 侧栏),展开瞬间恢复 —— 与 SectionCollapse 同口径。
           'transition-[opacity,visibility] duration-[200ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',

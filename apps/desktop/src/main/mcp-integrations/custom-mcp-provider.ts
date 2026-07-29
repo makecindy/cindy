@@ -2,7 +2,7 @@
  * custom-mcp-provider —— 把一条用户自定义 MCP 配置(custom-mcp-store 的 CustomMcpConfig)
  * 适配成 maker-core 的 `McpProvider`,让同一份配置同时被 Claude Code 与 Codex 调用。
  *
- * 仅支持远程 transport(http/sse):
+ * 支持远程 transport(http/sse) 与本机 stdio:
  *   - Claude:`toClaudeSdkConfig` 返回原生 { type:'http'|'sse', url, headers }
  *     (本地 cc 直用;纯 JSON 也能存活 remote cc 的可序列化过滤)。
  *   - Codex:`toCodexMcpConfig` 返回 { type:'http', url, bearerTokenEnvVar? }
@@ -21,6 +21,7 @@
 
 import type {
   CodexHttpMcpServerConfig,
+  CodexStdioMcpServerConfig,
   McpProvider,
   McpProviderContext,
 } from '@cindy/maker-core';
@@ -80,15 +81,24 @@ export class CustomMcpProvider implements McpProvider {
   readonly name: string;
   private readonly config: CustomMcpConfig;
   private readonly tokenReader: (id: string) => string | null;
+  private readonly stdioEnv: Record<string, string>;
 
-  constructor(config: CustomMcpConfig, tokenReader: (id: string) => string | null) {
+  constructor(
+    config: CustomMcpConfig,
+    tokenReader: (id: string) => string | null,
+    envReader: (id: string) => Record<string, string> = () => ({}),
+  ) {
     this.config = config;
     this.name = config.id;
     this.tokenReader = tokenReader;
+    // Snapshot with the config during registry refresh. An in-flight older provider must not see
+    // a newly staged secret before the matching database config has committed.
+    this.stdioEnv = config.transport === 'stdio' ? { ...envReader(config.id) } : {};
   }
 
   /** 合成 Claude 端使用的 headers(用户 headers + 可选 Bearer)。 */
   private buildHeaders(): Record<string, string> | undefined {
+    if (this.config.transport === 'stdio') return undefined;
     const headers: Record<string, string> = { ...this.config.headers };
     const token = this.tokenReader(this.config.id);
     if (token && !headers.Authorization && !headers.authorization) {
@@ -98,6 +108,16 @@ export class CustomMcpProvider implements McpProvider {
   }
 
   toClaudeSdkConfig(_context: McpProviderContext): unknown {
+    if (this.config.transport === 'stdio') {
+      const env = this.stdioEnv;
+      return {
+        type: 'stdio',
+        command: this.config.command,
+        args: this.config.args,
+        ...(Object.keys(env).length > 0 ? { env } : {}),
+        ...(this.config.cwd ? { cwd: this.config.cwd } : {}),
+      };
+    }
     const headers = this.buildHeaders();
     return {
       type: this.config.transport, // 'http' | 'sse'
@@ -106,7 +126,19 @@ export class CustomMcpProvider implements McpProvider {
     };
   }
 
-  toCodexMcpConfig(_context: McpProviderContext): CodexHttpMcpServerConfig | null {
+  toCodexMcpConfig(
+    _context: McpProviderContext,
+  ): CodexHttpMcpServerConfig | CodexStdioMcpServerConfig | null {
+    if (this.config.transport === 'stdio') {
+      const env = this.stdioEnv;
+      return {
+        type: 'stdio',
+        command: this.config.command,
+        args: this.config.args,
+        ...(Object.keys(env).length > 0 ? { env } : {}),
+        ...(this.config.cwd ? { cwd: this.config.cwd } : {}),
+      };
+    }
     // Codex 只支持 Streamable HTTP transport；SSE 协议不兼容，跳过（null = 不注入 Codex）。
     // Claude 侧走 toClaudeSdkConfig，支持 sse，不受此限制。
     if (this.config.transport === 'sse') return null;
@@ -133,6 +165,7 @@ export class CustomMcpProvider implements McpProvider {
   }
 
   getExtraEnv(_context: McpProviderContext): Record<string, string> | null {
+    if (this.config.transport === 'stdio') return null;
     // SSE MCPs are not registered in Codex (toCodexMcpConfig returns null), so
     // neither their token nor their custom headers should be injected into the
     // Codex app-server environment.

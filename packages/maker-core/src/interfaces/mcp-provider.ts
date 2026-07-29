@@ -48,6 +48,14 @@ export interface CodexHttpMcpServerConfig {
   envHttpHeaders?: Record<string, string>;
 }
 
+export interface CodexStdioMcpServerConfig {
+  type: 'stdio';
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+}
+
 export interface McpProvider {
   /** MCP server 唯一名（host 自定义） */
   name: string;
@@ -59,8 +67,8 @@ export interface McpProvider {
    * ClaudeCodeAgent 在使用点按 SDK 类型收窄。
    */
   toClaudeSdkConfig?(context: McpProviderContext): unknown | null;
-  /** 返回 Codex app-server 可直接消费的远程 MCP 配置；in-process SDK server 仍走 host HTTP bridge。 */
-  toCodexMcpConfig?(context: McpProviderContext): CodexHttpMcpServerConfig | null;
+  /** 返回 Codex app-server 可直接消费的 MCP 配置；in-process SDK server 仍走 host HTTP bridge。 */
+  toCodexMcpConfig?(context: McpProviderContext): CodexHttpMcpServerConfig | CodexStdioMcpServerConfig | null;
   /** Provider 需要额外注入给 agent 子进程的 env，例如远程 MCP bearer token。 */
   getExtraEnv?(context: McpProviderContext): Promise<Record<string, string> | null> | Record<string, string> | null;
 }

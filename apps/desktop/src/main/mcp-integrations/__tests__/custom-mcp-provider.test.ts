@@ -6,13 +6,16 @@
 import { describe, expect, it } from 'vitest';
 
 import type { McpProviderContext } from '@cindy/maker-core';
-import type { CustomMcpConfig } from '../../../shared/customMcp.js';
+import type { CustomMcpConfig, RemoteCustomMcpConfig } from '../../../shared/customMcp.js';
 import { CustomMcpProvider } from '../custom-mcp-provider.js';
 
 const ctx: McpProviderContext = { agentKind: 'claude-code', workingDir: '/tmp' };
 
-function make(config: Partial<CustomMcpConfig>, token: string | null = null): CustomMcpProvider {
-  const full: CustomMcpConfig = {
+function make(
+  config: Partial<RemoteCustomMcpConfig>,
+  token: string | null = null,
+): CustomMcpProvider {
+  const full: RemoteCustomMcpConfig = {
     id: 'mytools',
     name: 'My Tools',
     transport: 'http',
@@ -35,10 +38,58 @@ describe('CustomMcpProvider', () => {
     });
   });
 
+  it('passes stdio command, args, encrypted env reader output, and cwd to both agents', () => {
+    const config: CustomMcpConfig = {
+      id: 'stdio',
+      name: 'stdio',
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', 'server'],
+      cwd: 'C:\\work',
+    };
+    const provider = new CustomMcpProvider(
+      config,
+      () => null,
+      () => ({ API_KEY: 'secret' }),
+    );
+    expect(provider.toClaudeSdkConfig(ctx)).toEqual({
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', 'server'],
+      env: { API_KEY: 'secret' },
+      cwd: 'C:\\work',
+    });
+    expect(provider.toCodexMcpConfig(ctx)).toEqual({
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', 'server'],
+      env: { API_KEY: 'secret' },
+      cwd: 'C:\\work',
+    });
+  });
+
+  it('keeps stdio env paired with the config snapshot until providers refresh', () => {
+    const config: CustomMcpConfig = {
+      id: 'stdio',
+      name: 'stdio',
+      transport: 'stdio',
+      command: 'node',
+      args: [],
+      cwd: '',
+    };
+    let env = { API_KEY: 'old' };
+    const provider = new CustomMcpProvider(
+      config,
+      () => null,
+      () => env,
+    );
+    env = { API_KEY: 'new' };
+
+    expect(provider.toCodexMcpConfig(ctx)).toMatchObject({ env: { API_KEY: 'old' } });
+  });
+
   it('toClaudeSdkConfig returns sse config with user headers', () => {
-    expect(
-      make({ transport: 'sse', headers: { 'X-Foo': 'bar' } }).toClaudeSdkConfig(ctx),
-    ).toEqual({
+    expect(make({ transport: 'sse', headers: { 'X-Foo': 'bar' } }).toClaudeSdkConfig(ctx)).toEqual({
       type: 'sse',
       url: 'https://example.com/mcp',
       headers: { 'X-Foo': 'bar' },
@@ -76,7 +127,8 @@ describe('CustomMcpProvider', () => {
     // URL.href preserves backslashes in query strings; TOML treats them as escape chars
     // inside quoted strings, producing malformed config or a different URL in Codex.
     const p = make({ url: 'https://example.com/mcp?x=\\&y=1' });
-    const config = p.toCodexMcpConfig(ctx)!;
+    const config = p.toCodexMcpConfig(ctx);
+    if (!config || config.type !== 'http') throw new Error('expected HTTP config');
     expect(config.url).not.toContain('\\');
     expect(config.url).toContain('%5C');
   });
@@ -147,7 +199,8 @@ describe('CustomMcpProvider', () => {
 
   it('a user-provided Authorization header suppresses the bearer token (mirrors Claude)', () => {
     const p = make({ headers: { authorization: 'Bearer mine' } }, 'secret');
-    const codex = p.toCodexMcpConfig(ctx)!;
+    const codex = p.toCodexMcpConfig(ctx);
+    if (!codex || codex.type !== 'http') throw new Error('expected HTTP config');
     // 不叠加 bearer_token_env_var,Authorization 走 env_http_headers。
     expect(codex.bearerTokenEnvVar).toBeUndefined();
     expect(codex.envHttpHeaders).toEqual({

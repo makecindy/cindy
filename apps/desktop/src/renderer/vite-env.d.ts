@@ -3647,9 +3647,11 @@ interface ElectronAPI {
     }>;
     createCustomMcpServer: (
       config: import('../shared/customMcp').CustomMcpConfig,
+      env?: Record<string, string>,
     ) => Promise<{ ok: true }>;
     updateCustomMcpServer: (
       config: import('../shared/customMcp').CustomMcpConfig,
+      env?: Record<string, string>,
     ) => Promise<{ ok: true }>;
     deleteCustomMcpServer: (mcpId: string) => Promise<{ ok: true }>;
     /** token-only 后置刷新：safeStorage write/remove 完成后调用，消除竞态窗口。 */

@@ -8,6 +8,8 @@ import {
   customProviderSecretStorageKey,
   customMcpSecretStorageKey,
   CUSTOM_MCP_SECRET_PREFIX,
+  CUSTOM_MCP_ENV_PREFIX,
+  customMcpEnvStorageKey,
   providerOAuthStorageKey,
   ghostSecretStorageKey,
   ghostSecretHintStorageKey,
@@ -74,11 +76,31 @@ function secretDir(): string {
 
 const DYNAMIC_SECRET_PREFIXES = [
   CUSTOM_MCP_SECRET_PREFIX,
+  CUSTOM_MCP_ENV_PREFIX,
   'provider_key_',
   'provider_oauth_',
   GHOST_SECRET_PREFIX,
   GHOST_SECRET_HINT_PREFIX,
 ] as const;
+
+const MCP_ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MAX_MCP_ENV_NAME_LENGTH = 256;
+const MAX_MCP_ENV_VALUE_LENGTH = 32 * 1024;
+
+/** Keep only values that Node can safely pass through to a spawned stdio MCP. */
+export function filterCustomMcpEnv(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, string] =>
+        MCP_ENV_NAME_RE.test(entry[0]) &&
+        entry[0].length <= MAX_MCP_ENV_NAME_LENGTH &&
+        typeof entry[1] === 'string' &&
+        entry[1].length <= MAX_MCP_ENV_VALUE_LENGTH &&
+        !entry[1].includes('\0'),
+    ),
+  );
+}
 
 function isManagedSecretStorageKey(key: string): boolean {
   return (
@@ -401,10 +423,7 @@ export function readCustomProviderKey(providerId: string, agent: string): string
  * 仅 ENOENT 表示“没有旧 key”；owner / 加密不可用、文件读取或解密失败都必须抛错，
  * 防止调用方把暂时不可读的现有凭证误判为空并永久删除。
  */
-export function readCustomProviderKeyForMutation(
-  providerId: string,
-  agent: string,
-): string | null {
+export function readCustomProviderKeyForMutation(providerId: string, agent: string): string | null {
   const logicalKey = customProviderSecretStorageKey(providerId, agent);
   const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
   if (!scopedKey) throw new Error('provider secret owner is unavailable');
@@ -436,11 +455,7 @@ export function readCustomProviderKeyForMutation(
 }
 
 /** 写入某自定义供应商 runtime 的 API key；供 main 侧原子配置更新使用。 */
-export function storeCustomProviderKey(
-  providerId: string,
-  agent: string,
-  value: string,
-): boolean {
+export function storeCustomProviderKey(providerId: string, agent: string, value: string): boolean {
   try {
     return electronSecretIo.write(customProviderSecretStorageKey(providerId, agent), value);
   } catch (err) {
@@ -513,6 +528,82 @@ export function readCustomMcpToken(mcpId: string): string | null {
       'read custom mcp token failed',
     );
     return null;
+  }
+}
+
+/** Read encrypted stdio environment JSON; malformed values fail closed. */
+export function readCustomMcpEnv(mcpId: string): Record<string, string> {
+  try {
+    const raw = electronSecretIo.read(customMcpEnvStorageKey(mcpId));
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    return filterCustomMcpEnv(parsed);
+  } catch (err) {
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'read custom mcp env failed',
+    );
+    return {};
+  }
+}
+
+/**
+ * Strict snapshot used by the MCP config mutation transaction.
+ * Only a missing file maps to null; unavailable encryption and unreadable data abort the mutation
+ * so a failed read can never be mistaken for an empty environment and overwrite existing secrets.
+ */
+export function readCustomMcpEnvForMutation(mcpId: string): string | null {
+  const logicalKey = customMcpEnvStorageKey(mcpId);
+  const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
+  if (!scopedKey) throw new Error('custom MCP secret owner is unavailable');
+  let encoded: string;
+  try {
+    encoded = fs.readFileSync(path.join(secretDir(), `${scopedKey}.enc`), 'utf-8');
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'read custom mcp env snapshot failed',
+    );
+    throw new Error('existing custom MCP environment is unreadable');
+  }
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('custom MCP environment encryption is unavailable');
+  }
+  try {
+    return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+  } catch (err) {
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'decrypt custom mcp env snapshot failed',
+    );
+    throw new Error('existing custom MCP environment is unreadable');
+  }
+}
+
+/** Main-side write used by the serialized MCP config + environment mutation. */
+export function writeCustomMcpEnvForMutation(mcpId: string, value: string): boolean {
+  try {
+    return electronSecretIo.write(customMcpEnvStorageKey(mcpId), value);
+  } catch (err) {
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'write custom mcp env failed',
+    );
+    return false;
+  }
+}
+
+/** Main-side removal used by the serialized MCP config + environment mutation. */
+export function removeCustomMcpEnvForMutation(mcpId: string): { success: boolean; error?: string } {
+  try {
+    return electronSecretIo.remove(customMcpEnvStorageKey(mcpId));
+  } catch (err) {
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'remove custom mcp env failed',
+    );
+    return { success: false, error: 'remove_failed' };
   }
 }
 
