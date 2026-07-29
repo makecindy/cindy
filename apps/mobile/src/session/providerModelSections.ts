@@ -13,12 +13,12 @@
  * 故 0 供应商 / 旧被控端时调用方应回退到 capabilities 扁平列表。
  */
 import {
+  chatEligibleSourcesForModel,
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
   modelSupportsFastMode,
   nativeDefaultSourceId,
-  sourcesForModel,
   type ProviderView,
 } from '@cindy/model-providers/registry';
 import {
@@ -135,7 +135,10 @@ export function isSelectedSourceDisconnected(args: {
   error: string | null;
 }): boolean {
   if (!args.providerId || args.loading || args.error !== null) return false;
-  return !sourcesForModel(
+  // chatEligibleSourcesForModel(issue #882 第 3 点,2026-07 review):与桌面
+  // sourceSwitch.ts 的 isSelectedSourceDisconnected 同一份口径——选中来源若还在但
+  // 这个 id 在它上面已经不是聊天模型了,也要判"断连",不能只看 id 是否存在。
+  return !chatEligibleSourcesForModel(
     [...args.providers],
     args.modelId,
     args.agentKind,

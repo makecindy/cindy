@@ -591,4 +591,24 @@ describe('isSelectedSourceDisconnected — 会话显式来源断连判定', () =
       }),
     ).toBe(false);
   });
+
+  it('选中来源仍连着,但这个模型在它上面已经不是聊天模型 → true(issue #882 第 3 点,2026-07 review)', () => {
+    const nonChatView = {
+      id: 'xd',
+      name: 'xd',
+      connected: true,
+      agents: [AGENT],
+      routing: { [AGENT]: {} },
+      models: { [AGENT]: [{ id: MODEL_ID, mode: 'image_generation' }] },
+    } as unknown as ProviderView;
+    expect(
+      isSelectedSourceDisconnected({
+        providers: [nonChatView],
+        agent: AGENT,
+        modelId: MODEL_ID,
+        selectedProviderId: 'xd',
+        providersLoading: false,
+      }),
+    ).toBe(true);
+  });
 });

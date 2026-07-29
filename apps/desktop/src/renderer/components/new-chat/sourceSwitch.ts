@@ -14,13 +14,13 @@ import {
   CATEGORY_ORDER,
   CHAT_VENDOR_CATEGORY_ORDER,
   categorize,
+  chatEligibleSourcesForModel,
   classifyModel,
   connectedProvidersForAgent,
   groupModelsForDisplay,
   groupOf,
   isChatEligible,
   providerOffersModel,
-  sourcesForModel,
   type AgentKind,
   type DisplayModel,
   type ModelCategory,
@@ -161,7 +161,11 @@ export function isSelectedSourceDisconnected(args: {
 }): boolean {
   const { providers, agent, modelId, selectedProviderId, providersLoading } = args;
   if (providersLoading || !agent || !selectedProviderId) return false;
-  const sources = sourcesForModel(providers, modelId, agent);
+  // chatEligibleSourcesForModel(不是裸 sourcesForModel):选中来源若还在但这个 id 在
+  // 它上面已经不是聊天模型了(mode 变化),也要判"断连"——否则这里说"没断连"、
+  // effectiveSourceIdForModel 却解析不出可用来源,界面显示能发、实际发不出去
+  // (2026-07 review:UI 可用性判断与路由解析必须同一份口径)。
+  const sources = chatEligibleSourcesForModel(providers, modelId, agent);
   return !sources.some((p) => p.id === selectedProviderId);
 }
 

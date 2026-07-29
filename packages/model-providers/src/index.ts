@@ -60,6 +60,7 @@ export {
   providerOffersModel,
   getModel,
   sourcesForModel,
+  chatEligibleSourcesForModel,
   resolveRoute,
   modelSupportsFastMode,
   sessionModelSupportsFastMode,

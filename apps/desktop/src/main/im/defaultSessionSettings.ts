@@ -8,11 +8,11 @@
 
 import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
 import {
+  chatEligibleSourcesForModel,
   connectedProvidersForAgent,
   getModel,
   isChatEligible,
   nativeDefaultSourceId,
-  sourcesForModel,
   type ProviderView,
 } from '@cindy/model-providers';
 
@@ -166,14 +166,10 @@ function hasModel(
   providers: ProviderView[] | null,
 ): boolean {
   if (providers) {
-    // sourcesForModel 只判"谁提供这个 id",不知道能力类型(其文档要求调用方自证
-    // "对该 agent 有效");这里必须自己叠加 isChatEligible,否则一个已下架/从未
-    // 是聊天模型的 id(image/embedding/...)会被判定为可用默认值(2026-07 review)。
-    const sources = sourcesForModel(providers, modelId, agentKind);
-    return sources.some((p) => {
-      const model = getModel(p, modelId, agentKind);
-      return model !== undefined && isChatEligible(model);
-    });
+    // chatEligibleSourcesForModel(不是裸 sourcesForModel):否则一个已下架/从未是
+    // 聊天模型的 id(image/embedding/...)会被判定为可用默认值(issue #882 第 3 点,
+    // 2026-07 review)。
+    return chatEligibleSourcesForModel(providers, modelId, agentKind).length > 0;
   }
   return getMaker()
     .getCapabilities(agentKind)

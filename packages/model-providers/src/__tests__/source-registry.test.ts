@@ -24,6 +24,7 @@ import {
   providerOffersModel,
   getModel,
   sourcesForModel,
+  chatEligibleSourcesForModel,
   effectiveSourceIdForModel,
   resolveRoute,
 } from '../registry.js';
@@ -445,6 +446,13 @@ describe('registry visibility & sources(运行时注入 fixture)', () => {
     expect(effectiveSourceIdForModel(views, 'xd', 'shared-id', 'claude-code')).toBe('openai');
     // 未显式指定 providerId 时,默认来源同样只能是聊天来源。
     expect(effectiveSourceIdForModel(views, null, 'shared-id', 'claude-code')).toBe('openai');
+
+    // chatEligibleSourcesForModel 是这份过滤的共享底层——直接断言它自己的输出,
+    // 保证 UI 侧的"有没有可发送来源"判断(ChatInput/useConnectedSource/
+    // isSelectedSourceDisconnected)与路由解析用的是同一份口径,不会互相打架。
+    expect(chatEligibleSourcesForModel(views, 'shared-id', 'claude-code').map((p) => p.id)).toEqual([
+      'openai',
+    ]);
   });
 });
 

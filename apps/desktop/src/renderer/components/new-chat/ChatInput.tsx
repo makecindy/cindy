@@ -173,7 +173,7 @@ import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabiliti
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
-import { effectiveSourceIdForModel, sourcesForModel } from '@cindy/model-providers';
+import { chatEligibleSourcesForModel, effectiveSourceIdForModel } from '@cindy/model-providers';
 import { deriveModelsFromProviders, filterChatBridgedCodexProviders, resolveFastSupported } from '@/lib/providerModels';
 import {
   getProviderModelEffort,
@@ -1244,8 +1244,11 @@ export function ChatInput({
     currentModelAgentKind,
     activeModel,
   );
+  // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型即便"存在于某个
+  // 已连接来源"也不算有可发送来源(issue #882 第 3 点,2026-07 review)——否则 Send
+  // 会对着一个 image/embedding 端点放行,而不是显示这里的"去连接"空态。
   const hasConnectedSendSource = currentModelAgentKind
-    ? sourcesForModel(sendProviders, activeModel, currentModelAgentKind, { onlyConnected: true }).length > 0
+    ? chatEligibleSourcesForModel(sendProviders, activeModel, currentModelAgentKind, { onlyConnected: true }).length > 0
     : false;
   const noConnectedSource = !!currentModelAgentKind && !providersLoading && !hasConnectedSendSource;
 
@@ -3336,12 +3339,14 @@ export function ChatInput({
       // 预检(通用、provider-aware): 当前模型在当前 agent 下「一个已连接来源都没有」
       // 时,不把请求扔给 SDK 等 401,改弹确认框引导用户去「设置 → 模型供应商」连接。
       // 取代过去仅 cc + 仅 api_key 的写法 —— 现在 OAuth / XD 网关 / 未来自定义供应商
-      // 都按 ProviderView.connected 统一计入(sourcesForModel onlyConnected),未来加新
-      // 供应商无需改这里。判定数据来自本地 IPC(useProviders),无网络往返、~ms 级。
-      // 只有「确实零已连接来源」才拦截;≥1 个直接放行(无弹窗)。currentModelAgentKind
-      // 解析不出(罕见:capabilities 未就绪)时不拦,交给下游处理,不误伤。
+      // 都按 ProviderView.connected 统一计入(chatEligibleSourcesForModel onlyConnected),
+      // 未来加新供应商无需改这里。判定数据来自本地 IPC(useProviders),无网络往返、
+      // ~ms 级。只有「确实零已连接来源」才拦截;≥1 个直接放行(无弹窗)。
+      // currentModelAgentKind 解析不出(罕见:capabilities 未就绪)时不拦,交给下游
+      // 处理,不误伤。用 chatEligibleSourcesForModel 而非裸 sourcesForModel:
+      // 非聊天来源不该被当成"可以发"放行(issue #882 第 3 点,2026-07 review)。
       if (currentModelAgentKind) {
-        const connectedSources = sourcesForModel(providers, activeModel, currentModelAgentKind, {
+        const connectedSources = chatEligibleSourcesForModel(providers, activeModel, currentModelAgentKind, {
           onlyConnected: true,
         });
         if (connectedSources.length === 0) {
