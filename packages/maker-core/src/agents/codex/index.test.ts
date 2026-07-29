@@ -4840,6 +4840,62 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('drops the pending-start quarantine when that turn/start fails', async () => {
+      // 隔离标记是针对**某一次在途 turn/start 响应**的。那次请求失败后标记若留着, 下一条
+      // 用户消息的成功响应会被它当成"该落墓碑的 turn"消费掉: 既不激活也不收口, 新消息
+      // 直接悬空(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-quarantine-cleared-on-failure',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 空 id 容量拒绝（初始 RPC 仍在飞）→ 武装隔离标记。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 这次 RPC 自己失败：不会再有响应走到认领逻辑，标记必须一起解除。
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        // 下一条消息必须正常激活，不能被上一轮的隔离标记吞掉。
+        await handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('quarantines the pending initial turn when Stop lands during a deferred failure', async () => {
       // Stop 会 discardOverloadRetry 把重投状态整个置空。隔离标记若挂在那个状态里就会
       // 跟着消失, 于是随后回来的 turn/start 响应不再被认领成死 turn, handleTurnStartResp

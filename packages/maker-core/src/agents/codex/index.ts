@@ -4834,6 +4834,11 @@ export class CodexAgent extends BaseAgent {
      */
     const quarantineTurnsAfterStartFailure = (reason: string): void => {
       turnStartFailedWithoutTurnId = true;
+      // 隔离标记是**针对某一次在途 turn/start 响应**的。这次请求已经失败, 不会再有响应
+      // 走到 adoptUnidentifiedDeadTurn —— 标记若留着, 下一条用户消息的成功响应会被它
+      // 当成"那个该落墓碑的 turn"消费掉: 既不激活也不收口, 新消息直接悬空
+      // (review #844 codex P1)。
+      quarantinePendingStartTurn = false;
       if (currentTurnId) {
         const orphanTurnId = currentTurnId;
         terminalErroredTurnIds.add(orphanTurnId);
@@ -5490,6 +5495,9 @@ export class CodexAgent extends BaseAgent {
         // 的自动重投判成"有产出, 不重投"(review #844 codex P1)。同 turn 重复
         // turnStarted 的幂等保护仍在 turnStarted 里(只在真的换 turn 时清)。
         currentTurnProducedOutput = false;
+        // 上一轮若留下过隔离标记(异常路径), 不清会把本轮的成功响应误当成待落墓碑的
+        // turn。这里是"用户发了新消息"的唯一重置点, 与重投预算 / 产出标记同处。
+        quarantinePendingStartTurn = false;
         isTurnStartPending = true;
         usageTracker.beginTurn();
         log.debug('send ▶ user message', {
