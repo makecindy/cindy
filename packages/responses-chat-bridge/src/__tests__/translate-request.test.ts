@@ -4,6 +4,7 @@ import {
   translateResponsesRequest,
   translateResponsesRequestWithContext,
 } from '../translate-request.js';
+import { ChatBridgeToolContext } from '../tool-context.js';
 import { UnsupportedResponsesFeatureError, type ResponsesRequest } from '../types.js';
 
 function base(overrides: Partial<ResponsesRequest> = {}): ResponsesRequest {
@@ -72,6 +73,43 @@ describe('translateResponsesRequest', () => {
     const keep = translateResponsesRequest(source, { capabilities: { developerRole: 'developer' } });
     expect(keep.messages[0]).toEqual({ role: 'developer', content: 'top-level dev prompt' });
     expect(keep.messages[1]).toEqual({ role: 'developer', content: 'mid-conversation dev note' });
+  });
+
+  it.each([
+    { type: 'input_image', image_url: 'https://example.com/image.png' },
+    { type: 'input_file', file_data: 'data:text/plain;base64,eA==' },
+    { type: 'input_audio', input_audio: { data: 'YQ==', format: 'wav' } },
+    { type: 'input_text' },
+    { type: 'unknown_part' },
+  ])('rejects unsupported or malformed instruction parts: $type', (part) => {
+    expect(() => translateResponsesRequest(base({ instructions: [part] }))).toThrow(
+      /instructions\[0\]/,
+    );
+  });
+
+  it('keeps probing when a collision occupies the first custom fallback name', () => {
+    const fallback = ChatBridgeToolContext.fromRequest({
+      model: 'm',
+      input: [],
+      tools: [
+        { type: 'function', name: 'foo' },
+        { type: 'custom', name: 'foo' },
+      ],
+    }).chatNameForResponse('foo', undefined, 'custom');
+    const context = ChatBridgeToolContext.fromRequest({
+      model: 'm',
+      input: [],
+      tools: [
+        { type: 'function', name: 'foo' },
+        { type: 'function', name: fallback },
+        { type: 'custom', name: 'foo' },
+      ],
+    });
+
+    const customName = context.chatNameForResponse('foo', undefined, 'custom');
+    expect(customName).not.toBe(fallback);
+    expect(context.lookupChatName(customName)).toEqual(expect.objectContaining({ kind: 'custom' }));
+    expect(context.chatTools).toHaveLength(3);
   });
 
   it('converts assistant calls and tool outputs while keeping call ids', () => {

@@ -107,8 +107,12 @@ export class ChatBridgeToolContext {
     const existing = this.specsByChatName.get(clamped);
     if (!existing) return clamped;
     if (specIdentity(existing) === identity) return clamped;
-    const suffix = `__${shortHash(identity)}`;
-    return `${clamped.slice(0, CHAT_TOOL_NAME_MAX_LENGTH - suffix.length)}${suffix}`;
+    for (let attempt = 0; ; attempt += 1) {
+      const suffix = `__${shortHash(attempt === 0 ? identity : `${identity}\0${attempt}`)}`;
+      const candidate = `${clamped.slice(0, CHAT_TOOL_NAME_MAX_LENGTH - suffix.length)}${suffix}`;
+      const occupant = this.specsByChatName.get(candidate);
+      if (!occupant || specIdentity(occupant) === identity) return candidate;
+    }
   }
 
   private addFunction(tool: ResponsesFunctionTool, namespace?: string): void {

@@ -709,11 +709,20 @@ export function translateResponsesRequestWithContext(
   if (input.instructions) {
     const instructions = typeof input.instructions === 'string'
       ? input.instructions
-      : input.instructions.map((part) => {
-        if (!isPlainObject(part)) return '';
-        if (typeof part.text === 'string') return part.text;
-        if (typeof part.refusal === 'string') return part.refusal;
-        return '';
+      : input.instructions.map((part, index) => {
+        if (!isPlainObject(part) || typeof part.type !== 'string') {
+          throw new UnsupportedResponsesFeatureError(`instructions[${index}]`);
+        }
+        if (
+          (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text')
+          && typeof part.text === 'string'
+        ) {
+          return part.text;
+        }
+        if (part.type === 'refusal' && typeof part.refusal === 'string') {
+          return part.refusal;
+        }
+        throw new UnsupportedResponsesFeatureError(`instructions[${index}].${part.type}`);
       }).join('');
     if (instructions) messages.unshift({ role: developerRole, content: instructions });
   }
