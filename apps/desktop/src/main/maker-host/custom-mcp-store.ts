@@ -6,7 +6,7 @@
  * （与 `custom_providers` / `sessions` 一致）。bearer token 不在此——单独走 safeStorage
  * （`mcp_token_<id>`，见 shared/providerSecrets 的 customMcpSecretStorageKey）。
  *
- * 仅支持远程 transport（http/sse），一条记录 = 一个可被 Claude / Codex 共同调用的远程 MCP。
+ * 支持远程 transport（http/sse）与本机 stdio；stdio 的环境变量仍单独走 safeStorage。
  *
  * 验证（`validateCustomMcpConfig`）是纯函数，便于单测；CRUD 经 `getDbClient().drizzle`
  * （测试用 `setCurrentDbClient` 注入内存 db，见 __tests__）。
@@ -16,11 +16,9 @@ import { asc, eq, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current.js';
 import { customMcpServers } from '../localDb/schema.js';
-import {
-  MCP_TRANSPORTS,
-  type CustomMcpConfig,
-  type McpTransport,
-} from '../../shared/customMcp.js';
+import path from 'node:path';
+
+import { MCP_TRANSPORTS, type CustomMcpConfig, type McpTransport } from '../../shared/customMcp.js';
 
 export { MCP_TRANSPORTS };
 export type { CustomMcpConfig, McpTransport };
@@ -46,11 +44,14 @@ export function isUnsafeMcpServerId(id: string): boolean {
 }
 const MAX_ID_LEN = 40;
 const MAX_NAME_LEN = 60;
+const MAX_COMMAND_LEN = 1024;
+const MAX_ARG_COUNT = 64;
+const MAX_ARG_LEN = 4096;
+const MAX_CWD_LEN = 4096;
 
 /** 验证结果：ok 或带 code + message（供 handler 映射成 throwIpcError）。 */
 export type ValidationResult =
-  | { ok: true }
-  | { ok: false; code: 'INVALID_PARAMS'; message: string };
+  { ok: true } | { ok: false; code: 'INVALID_PARAMS'; message: string };
 
 function invalid(message: string): ValidationResult {
   return { ok: false, code: 'INVALID_PARAMS', message };
@@ -87,17 +88,33 @@ export function validateCustomMcpConfig(
     return invalid(`transport must be one of ${MCP_TRANSPORTS.join('|')}`);
   }
 
-  if (typeof c.url !== 'string' || c.url.trim().length === 0) return invalid('url required');
-  try {
-    const u = new URL(c.url);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-      return invalid('url must be http(s)');
+  if (c.transport === 'stdio') {
+    if (typeof c.command !== 'string' || c.command.trim().length === 0)
+      return invalid('command required');
+    if (c.command.length > MAX_COMMAND_LEN || /[\u0000\r\n]/.test(c.command))
+      return invalid('invalid command');
+    if (
+      !Array.isArray(c.args) ||
+      c.args.length > MAX_ARG_COUNT ||
+      c.args.some(
+        (arg) => typeof arg !== 'string' || arg.length > MAX_ARG_LEN || /\u0000/.test(arg),
+      )
+    )
+      return invalid('invalid args');
+    if (c.cwd !== undefined) {
+      if (typeof c.cwd !== 'string' || c.cwd.length > MAX_CWD_LEN || /\u0000/.test(c.cwd))
+        return invalid('invalid cwd');
+      if (c.cwd.trim().length > 0 && !path.isAbsolute(c.cwd.trim()))
+        return invalid('cwd must be absolute');
     }
-  } catch {
-    return invalid('url is not a valid URL');
-  }
-
-  if (c.headers !== undefined) {
+  } else {
+    if (typeof c.url !== 'string' || c.url.trim().length === 0) return invalid('url required');
+    try {
+      const u = new URL(c.url);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return invalid('url must be http(s)');
+    } catch {
+      return invalid('url is not a valid URL');
+    }
     if (!c.headers || typeof c.headers !== 'object' || Array.isArray(c.headers)) {
       return invalid('headers must be an object');
     }
@@ -112,6 +129,14 @@ export function validateCustomMcpConfig(
 
 /** 规整配置（trim、裁剪 headers）。 */
 function normalizeConfig(config: CustomMcpConfig): CustomMcpConfig {
+  if (config.transport === 'stdio') {
+    return {
+      ...config,
+      command: config.command.trim(),
+      args: [...config.args],
+      cwd: config.cwd?.trim() ?? '',
+    };
+  }
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(config.headers ?? {})) {
     const key = k.trim();
@@ -142,13 +167,30 @@ function parseHeaders(raw: string): Record<string, string> {
   return out;
 }
 
+function parseArgs(raw: string): string[] {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return Array.isArray(value) && value.every((arg) => typeof arg === 'string') ? value : [];
+  } catch {
+    return [];
+  }
+}
+
 function rowToConfig(row: typeof customMcpServers.$inferSelect): CustomMcpConfig {
+  if (row.transport === 'stdio') {
+    return {
+      id: row.id,
+      name: row.name,
+      transport: 'stdio',
+      command: row.command,
+      args: parseArgs(row.args),
+      cwd: row.cwd,
+    };
+  }
   return {
     id: row.id,
     name: row.name,
-    transport: (MCP_TRANSPORTS.includes(row.transport as McpTransport)
-      ? row.transport
-      : 'http') as McpTransport,
+    transport: row.transport === 'sse' ? 'sse' : 'http',
     url: row.url,
     headers: parseHeaders(row.headers),
   };
@@ -195,8 +237,11 @@ export async function createCustomMcpServer(
     id: c.id,
     name: c.name,
     transport: c.transport,
-    url: c.url,
-    headers: JSON.stringify(c.headers),
+    url: c.transport === 'stdio' ? '' : c.url,
+    headers: JSON.stringify(c.transport === 'stdio' ? {} : c.headers),
+    command: c.transport === 'stdio' ? c.command : '',
+    args: c.transport === 'stdio' ? JSON.stringify(c.args) : '[]',
+    cwd: c.transport === 'stdio' ? c.cwd : '',
     sortOrder: nextOrder,
     createdAt: now,
     updatedAt: now,
@@ -226,8 +271,11 @@ export async function updateCustomMcpServer(
     .set({
       name: c.name,
       transport: c.transport,
-      url: c.url,
-      headers: JSON.stringify(c.headers),
+      url: c.transport === 'stdio' ? '' : c.url,
+      headers: c.transport === 'stdio' ? '{}' : JSON.stringify(c.headers),
+      command: c.transport === 'stdio' ? c.command : '',
+      args: c.transport === 'stdio' ? JSON.stringify(c.args) : '[]',
+      cwd: c.transport === 'stdio' ? c.cwd : '',
       updatedAt: now,
     })
     .where(eq(customMcpServers.id, id));

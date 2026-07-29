@@ -4,8 +4,8 @@
  *   - MCP_CUSTOM_LIST（只读：列出当前账号的自定义 MCP）。
  *   - MCP_CUSTOM_CREATE / UPDATE / DELETE（CRUD）。
  *
- * bearer token **不经这些 handler**：renderer 用通用 safe-storage IPC 写 `mcp_token_<id>`，
- * delete 时同样由 renderer 经通用 safe-storage-remove 清 token。
+ * bearer token 与 stdio 环境变量**不经这些 handler**：renderer 用通用 safe-storage IPC
+ * 写 `mcp_token_<id>` / `mcp_env_<id>`，删除时同样经 safe-storage-remove 清理。
  *
  * 副作用（CRUD 成功后刷新两个 agent 的 mcpProviders 数组 + 广播 MCP_CHANGED）经 deps 注入，
  * handler body 可脱 Electron 用 IpcHarness + 内存 db 直接 invoke 单测（规则 14）。
@@ -25,6 +25,8 @@ import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
 export interface McpHandlerDeps {
+  /** stdio config can start an arbitrary executable; only the trusted top-level app Renderer may mutate it. */
+  assertTrustedSender?(event: unknown): void;
   /** CRUD 成功后刷新 agent mcpProviders 数组（生产 = refreshCustomMcpProviders）。 */
   refreshProviders(): Promise<void>;
   /** CRUD 成功后广播变更（生产 = 向所有窗口 send MCP_CHANGED）。 */
@@ -65,8 +67,14 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
       /* best-effort:Codex 失效失败不影响 CRUD 已落库的结果 */
     }
   }
+  function assertTrustedMutationSender(event: unknown): void {
+    if (!deps.assertTrustedSender)
+      throwIpcError('PERMISSION_DENIED', 'sender trust guard unavailable');
+    deps.assertTrustedSender(event);
+  }
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (event, input: unknown) => {
+    assertTrustedMutationSender(event);
     const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
     const config = input as CustomMcpConfig;
@@ -78,7 +86,8 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     return { ok: true };
   });
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (event, input: unknown) => {
+    assertTrustedMutationSender(event);
     const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
     const config = input as CustomMcpConfig;
@@ -88,7 +97,8 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     return { ok: true };
   });
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_DELETE, async (_event, mcpId: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_DELETE, async (event, mcpId: unknown) => {
+    assertTrustedMutationSender(event);
     if (typeof mcpId !== 'string' || mcpId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'mcpId required');
     }
@@ -99,7 +109,8 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
 
   // token-only 后置刷新：renderer 在 safeStorage write/remove 完成后调用，消除竞态窗口。
   // 无 DB 改动；仅重跑 afterChange()（refreshProviders + broadcastChanged + invalidateCodex）。
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_REFRESH, async () => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_REFRESH, async (event) => {
+    assertTrustedMutationSender(event);
     await afterChange();
     return { ok: true };
   });

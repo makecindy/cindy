@@ -22,6 +22,7 @@ vi.mock('../../maker-host/custom-mcp-store.js', () => ({
 
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomMcpToken: () => null,
+  readCustomMcpEnv: () => ({}),
 }));
 
 import {
@@ -64,10 +65,7 @@ describe('refreshCustomMcpProviders', () => {
   it('skips a custom MCP whose id collides with a builtin server name', async () => {
     const arr: McpProvider[] = [builtin('cindy_browser'), builtin('cindy_helper')];
     registerCustomMcpArrays(arr);
-    storeMock.listCustomMcpServers.mockResolvedValue([
-      config('cindy_browser'),
-      config('safe_one'),
-    ]);
+    storeMock.listCustomMcpServers.mockResolvedValue([config('cindy_browser'), config('safe_one')]);
 
     await refreshCustomMcpProviders();
 

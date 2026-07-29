@@ -26,6 +26,7 @@ const CREATE_SQL = `
     transport TEXT NOT NULL,
     url TEXT NOT NULL,
     headers TEXT NOT NULL DEFAULT '{}',
+    command TEXT NOT NULL DEFAULT '', args TEXT NOT NULL DEFAULT '[]', cwd TEXT NOT NULL DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -82,6 +83,42 @@ describe('validateCustomMcpConfig', () => {
     ).toEqual({ ok: true });
   });
 
+  it('accepts a stdio command with args and an optional absolute cwd', () => {
+    expect(
+      validateCustomMcpConfig({
+        id: 'stdio',
+        name: 'stdio',
+        transport: 'stdio',
+        command: 'npx',
+        args: ['-y', 'server'],
+        cwd: '',
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it('rejects stdio without a command or with a relative working directory', () => {
+    expect(
+      validateCustomMcpConfig({
+        id: 'stdio',
+        name: 'stdio',
+        transport: 'stdio',
+        command: '',
+        args: [],
+        cwd: '',
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCustomMcpConfig({
+        id: 'stdio',
+        name: 'stdio',
+        transport: 'stdio',
+        command: 'npx',
+        args: [],
+        cwd: 'relative',
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
   it('rejects bad id slug', () => {
     expect(validateCustomMcpConfig({ ...valid, id: 'Bad Id' }).ok).toBe(false);
   });
@@ -91,7 +128,7 @@ describe('validateCustomMcpConfig', () => {
   });
 
   it('rejects invalid transport', () => {
-    expect(validateCustomMcpConfig({ ...valid, transport: 'stdio' }).ok).toBe(false);
+    expect(validateCustomMcpConfig({ ...valid, transport: 'invalid' }).ok).toBe(false);
   });
 
   it('rejects non-http(s) / malformed url', () => {
@@ -115,9 +152,11 @@ describe('validateCustomMcpConfig', () => {
   });
 
   it('keeps accepting ids that only resemble a builtin name', () => {
-    expect(validateCustomMcpConfig({ ...valid, id: 'cindy_browser_x' }, ['cindy_browser'])).toEqual({
-      ok: true,
-    });
+    expect(validateCustomMcpConfig({ ...valid, id: 'cindy_browser_x' }, ['cindy_browser'])).toEqual(
+      {
+        ok: true,
+      },
+    );
   });
 
   it('skips the reserved-id check when no reserved list is supplied', () => {
@@ -140,7 +179,7 @@ describe('custom-mcp-store CRUD', () => {
     await createCustomMcpServer(valid);
     const list = await listCustomMcpServers();
     expect(list).toHaveLength(1);
-    expect(list[0].url).toBe('https://example.com/mcp');
+    expect(list[0]).toMatchObject({ transport: 'http', url: 'https://example.com/mcp' });
 
     const got = await getCustomMcpServer('mytools');
     expect(got?.name).toBe('My Tools');
@@ -155,7 +194,7 @@ describe('custom-mcp-store CRUD', () => {
     expect(updated?.name).toBe('My Tools v2');
     const after = await getCustomMcpServer('mytools');
     expect(after?.transport).toBe('sse');
-    expect(after?.headers).toEqual({ 'X-Org': 'acme' });
+    expect(after).toMatchObject({ transport: 'sse', headers: { 'X-Org': 'acme' } });
 
     await deleteCustomMcpServer('mytools');
     expect(await listCustomMcpServers()).toEqual([]);
@@ -165,6 +204,26 @@ describe('custom-mcp-store CRUD', () => {
   it('update returns null when row absent', async () => {
     mountDb();
     expect(await updateCustomMcpServer('ghost', valid)).toBeNull();
+  });
+
+  it('persists stdio command data without putting environment values in localDb', async () => {
+    mountDb();
+    await createCustomMcpServer({
+      id: 'stdio',
+      name: 'stdio',
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', 'server'],
+      cwd: '',
+    });
+    expect(await getCustomMcpServer('stdio')).toEqual({
+      id: 'stdio',
+      name: 'stdio',
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', 'server'],
+      cwd: '',
+    });
   });
 
   it('isolates data per db file (account switch = new db)', async () => {

@@ -1243,7 +1243,7 @@ export const customProviders = sqliteTable(
  * `customMcpSecretStorageKey`），由 CustomMcpProvider 在 resolve 时注入，绝不入库/回传明文。
  *
  * 「配了就生效」：列表里存在即注入 agent，删除即停用，不做 per-server toggle。
- * 仅支持远程 transport（http/sse）——stdio 在 Codex 侧当前无法表达，不在范围内。
+ * stdio 的环境变量另存 safeStorage，避免可能的凭证进入 localDb。
  */
 export const customMcpServers = sqliteTable(
   'custom_mcp_servers',
@@ -1258,6 +1258,12 @@ export const customMcpServers = sqliteTable(
     url: text('url').notNull(),
     /** 额外请求头 JSON：'{"X-Foo":"bar"}'。不含鉴权 token（走 safeStorage）。反序列化失败兜底 {}。 */
     headers: text('headers').notNull().default('{}'),
+    /** stdio 命令；远程 transport 保持空串以兼容既有 url 非空列。 */
+    command: text('command').notNull().default(''),
+    /** stdio 参数 JSON。 */
+    args: text('args').notNull().default('[]'),
+    /** stdio cwd；空串表示继承 agent 工作目录。 */
+    cwd: text('cwd').notNull().default(''),
     /** 列表展示排序（升序）。 */
     sortOrder: integer('sort_order').notNull().default(0),
     createdAt: integer('created_at').notNull(),

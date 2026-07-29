@@ -34,6 +34,7 @@ vi.mock('../../appSessionState', () => ({
 
 import {
   createProviderSecretStore,
+  filterCustomMcpEnv,
   readCustomProviderKeyForMutation,
   readGhostSecretTailFromIo,
   setProviderSecretsClearedListener,
@@ -42,6 +43,7 @@ import {
 import {
   providerSecretStorageKey,
   customMcpSecretStorageKey,
+  customMcpEnvStorageKey,
   customProviderSecretStorageKey,
   providerOAuthStorageKey,
   ghostSecretStorageKey,
@@ -72,6 +74,18 @@ function createMemoryIo(): SecretStorageIo & { store: Map<string, string> } {
 }
 
 describe('providerSecrets registry', () => {
+  it('only accepts environment entries that are safe for a stdio child process', () => {
+    expect(
+      filterCustomMcpEnv({
+        API_KEY: 'secret',
+        PATH_2: 'ok',
+        'bad-name': 'no',
+        EMPTY: 1,
+        NULL: 'a\0b',
+      }),
+    ).toEqual({ API_KEY: 'secret', PATH_2: 'ok' });
+  });
+
   it('maps known providers to their stable storage keys', () => {
     expect(providerSecretStorageKey('xd')).toBe('api_key');
     expect(providerSecretStorageKey('mivo')).toBe('mivo_api_key');
@@ -95,14 +109,20 @@ describe('providerSecrets registry', () => {
 
   it('动态键名构造前校验片段字符集,路径逃逸类 id 直接抛错', () => {
     expect(providerOAuthStorageKey('acme-1')).toBe('provider_oauth_acme-1');
-    expect(customProviderSecretStorageKey('my_or', 'claude-code')).toBe('provider_key_my_or_claude-code');
+    expect(customProviderSecretStorageKey('my_or', 'claude-code')).toBe(
+      'provider_key_my_or_claude-code',
+    );
     expect(() => providerOAuthStorageKey('x/../../oauth')).toThrow(/illegal characters/);
     expect(() => providerOAuthStorageKey('a.b')).toThrow(/illegal characters/);
-    expect(() => customProviderSecretStorageKey('ok', 'claude/../code')).toThrow(/illegal characters/);
+    expect(() => customProviderSecretStorageKey('ok', 'claude/../code')).toThrow(
+      /illegal characters/,
+    );
   });
 
   it('意识凭证键名构造(ghost_secret_<ghostId>_<key>),非法片段抛错', () => {
-    expect(ghostSecretStorageKey('my-ghost', 'brave_api_key')).toBe('ghost_secret_my-ghost_brave_api_key');
+    expect(ghostSecretStorageKey('my-ghost', 'brave_api_key')).toBe(
+      'ghost_secret_my-ghost_brave_api_key',
+    );
     expect(() => ghostSecretStorageKey('x/../evil', 'k')).toThrow(/illegal characters/);
     expect(() => ghostSecretStorageKey('ok', 'k.ey')).toThrow(/illegal characters/);
   });
@@ -110,24 +130,36 @@ describe('providerSecrets registry', () => {
   it('官方别名:cindy-web-search 的凭证映射到历史 brave/tavily 存储键(老用户零迁移)', () => {
     // 与「工具密钥」时代同一 .enc 文件:老用户已填 key 对意识立即生效,
     // lizi_web_search MCP 也照读同一份。
-    expect(ghostSecretStorageKey('cindy-web-search', 'brave_api_key')).toBe(providerSecretStorageKey('brave'));
-    expect(ghostSecretStorageKey('cindy-web-search', 'tavily_api_key')).toBe(providerSecretStorageKey('tavily'));
+    expect(ghostSecretStorageKey('cindy-web-search', 'brave_api_key')).toBe(
+      providerSecretStorageKey('brave'),
+    );
+    expect(ghostSecretStorageKey('cindy-web-search', 'tavily_api_key')).toBe(
+      providerSecretStorageKey('tavily'),
+    );
     // 别名只对登记过的 (ghostId, key) 生效:同 id 其它 key、其它意识同名 key 都走缺省命名空间。
-    expect(ghostSecretStorageKey('cindy-web-search', 'other_key')).toBe('ghost_secret_cindy-web-search_other_key');
-    expect(ghostSecretStorageKey('third-party', 'brave_api_key')).toBe('ghost_secret_third-party_brave_api_key');
+    expect(ghostSecretStorageKey('cindy-web-search', 'other_key')).toBe(
+      'ghost_secret_cindy-web-search_other_key',
+    );
+    expect(ghostSecretStorageKey('third-party', 'brave_api_key')).toBe(
+      'ghost_secret_third-party_brave_api_key',
+    );
   });
 
   it('官方别名:xd-mivo 的 mivo_api_key 映射到历史 mivo 存储键(老用户零迁移)', () => {
     expect(ghostSecretStorageKey('xd-mivo', 'mivo_api_key')).toBe(providerSecretStorageKey('mivo'));
     expect(ghostSecretStorageKey('xd-mivo', 'other_key')).toBe('ghost_secret_xd-mivo_other_key');
-    expect(ghostSecretStorageKey('third-party', 'mivo_api_key')).toBe('ghost_secret_third-party_mivo_api_key');
+    expect(ghostSecretStorageKey('third-party', 'mivo_api_key')).toBe(
+      'ghost_secret_third-party_mivo_api_key',
+    );
   });
 
   it('意识凭证尾指纹:键名独立前缀(ghost_hint_)+ 短值不产指纹', () => {
     expect(ghostSecretHintStorageKey('my-ghost', 'api_key')).toBe('ghost_hint_my-ghost_api_key');
     expect(() => ghostSecretHintStorageKey('x/../evil', 'k')).toThrow(/illegal characters/);
     // 指纹永远走 ghost_hint_ 命名空间,官方别名(密文键)不牵连它。
-    expect(ghostSecretHintStorageKey('xd-mivo', 'mivo_api_key')).toBe('ghost_hint_xd-mivo_mivo_api_key');
+    expect(ghostSecretHintStorageKey('xd-mivo', 'mivo_api_key')).toBe(
+      'ghost_hint_xd-mivo_mivo_api_key',
+    );
 
     expect(deriveGhostSecretTail('mivo_abcdefgh1234')).toBe('1234');
     expect(deriveGhostSecretTail('x'.repeat(GHOST_SECRET_TAIL_MIN_VALUE_CHARS))).toBe('xxxx');
@@ -299,16 +331,18 @@ describe('providerSecretStore account boundary (clearAll + reconcileOwner)', () 
     expect(io.store.get('unrelated_key')).toBe('keep-me'); // 前缀外的键不受影响
   });
 
-  it('clearAll also sweeps dynamic custom MCP bearer tokens (mcp_token_*)', () => {
+  it('clearAll also sweeps dynamic custom MCP secrets', () => {
     const store = createProviderSecretStore(io);
     store.set('xd', 'sk-x');
     // 自定义 MCP token 键是动态的,不走 provider 枚举,直接写进底层 IO 模拟 safeStorage 落盘。
     io.store.set(customMcpSecretStorageKey('dida365'), 'mcp-secret-1');
     io.store.set(customMcpSecretStorageKey('slack'), 'mcp-secret-2');
+    io.store.set(customMcpEnvStorageKey('stdio'), '{"API_KEY":"secret"}');
     store.clearAll();
     expect(store.get('xd')).toBeNull();
     expect(io.store.has(customMcpSecretStorageKey('dida365'))).toBe(false);
     expect(io.store.has(customMcpSecretStorageKey('slack'))).toBe(false);
+    expect(io.store.has(customMcpEnvStorageKey('stdio'))).toBe(false);
   });
 
   it('clearAll 连带清扫意识 network 槽凭证(ghost_secret_*)与尾指纹(ghost_hint_*)', () => {
@@ -328,9 +362,11 @@ describe('providerSecretStore account boundary (clearAll + reconcileOwner)', () 
     const store = createProviderSecretStore(io);
     store.reconcileOwner('user-A');
     io.store.set(customMcpSecretStorageKey('dida365'), 'A-token');
+    io.store.set(customMcpEnvStorageKey('stdio'), '{"API_KEY":"A-secret"}');
     const res = store.reconcileOwner('user-B');
     expect(res).toEqual({ cleared: true });
     expect(io.store.has(customMcpSecretStorageKey('dida365'))).toBe(false);
+    expect(io.store.has(customMcpEnvStorageKey('stdio'))).toBe(false);
   });
 
   it('reconcileOwner on first login (no prior owner) keeps keys and records owner', () => {

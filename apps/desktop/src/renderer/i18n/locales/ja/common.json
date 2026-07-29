@@ -440,6 +440,11 @@
         "label": "サイドバーカードモード",
         "hint": "ピン留めセッションをタスク状況の要約付きカードで表示します。カードの高さは要約の長さで変わり、サイドバーを広げると 2〜3 列に自動配置されます。",
         "aria": "サイドバーカードモードを切り替える"
+      },
+      "sidebarBrandFigure": {
+        "label": "サイドバーにキャラクターイラストを表示",
+        "hint": "左サイドバー下部の背景に Cindy のキャラクターを表示します。",
+        "aria": "サイドバーのキャラクターイラスト表示を切り替える"
       }
     },
     "notifications": {
@@ -2817,19 +2822,19 @@
     },
     "mcp": {
       "title": "外部ツール",
-      "subtitle": "独自のリモート MCP サーバーを接続します。HTTP / Streamable HTTP サーバーは Claude と Codex の両方で利用可能；SSE は Claude 専用です。",
+      "subtitle": "独自の MCP サーバーを接続します。HTTP は Claude と Codex の両方で利用可能、SSE は Claude 専用、stdio は Agent ホストでコマンドを実行します。",
       "cancel": "キャンセル",
       "save": "保存",
       "editAria": "編集",
       "deleteAria": "削除",
       "addCustom": {
         "title": "MCP サーバーを追加",
-        "subtitle": "リモート MCP エンドポイント(http/sse)を入力"
+        "subtitle": "リモートエンドポイントまたは stdio コマンドを入力"
       },
       "dialog": {
         "createTitle": "MCP サーバーを追加",
         "editTitle": "MCP サーバーを編集",
-        "desc": "リモート http / sse 型の MCP のみ対応。保存後、新しいセッションから呼び出せます。実行中のセッションには影響しません。"
+        "desc": "保存後、新しいセッションから呼び出せます。実行中のセッションには影響しません。stdio は入力したコマンドを Agent ホストで起動します。"
       },
       "fields": {
         "name": "表示名",
@@ -2837,6 +2842,17 @@
         "transport": "トランスポート",
         "url": "エンドポイント URL",
         "urlPlaceholder": "https://example.com/mcp",
+        "command": "コマンド",
+        "commandPlaceholder": "例: npx",
+        "args": "引数（1 行に 1 つ）",
+        "argsPlaceholder": "-y\n@modelcontextprotocol/server-filesystem\n.",
+        "cwd": "作業ディレクトリ（任意）",
+        "cwdPlaceholder": "空欄で Agent の作業ディレクトリを使用",
+        "env": "環境変数（任意）",
+        "envNamePlaceholder": "変数名",
+        "envValuePlaceholder": "値",
+        "addEnv": "変数を追加",
+        "envHelp": "デバイス暗号化でローカル保存されます。信頼できるコマンドと変数のみを設定してください。",
         "token": "Bearer トークン(任意)",
         "tokenPlaceholder": "認証トークンを入力",
         "tokenEditPlaceholder": "空欄で保存済みトークンを削除",
@@ -2850,7 +2866,9 @@
       },
       "errors": {
         "nameRequired": "表示名を入力してください",
-        "urlInvalid": "有効な http(s) URL を入力してください"
+        "urlInvalid": "有効な http(s) URL を入力してください",
+        "commandRequired": "stdio にはコマンドが必要です",
+        "envNameInvalid": "環境変数名には英字、数字、アンダースコアのみ使用できます"
       },
       "toast": {
         "created": "MCP サーバーを追加しました",

@@ -1,8 +1,8 @@
 /**
  * customMcpServers —— 自定义 MCP「配置 + 可选 bearer token」的 renderer 侧写入编排。
  *
- * 配置走 maker IPC（入 localDb）；token 走通用 safeStorage IPC（`mcp_token_<id>`，本地加密；
- * main 的 CustomMcpProvider resolve 时读出，Claude 合成 Authorization 头 / Codex 注入 env）。
+ * 配置走 maker IPC（入 localDb）；token 与 stdio 环境变量走通用 safeStorage IPC
+ * （`mcp_token_<id>` / `mcp_env_<id>`，本地加密；main 的 CustomMcpProvider resolve 时读出）。
  *
  * 顺序约定：
  *   - create：先写配置（IPC 在重名 / 非法时 reject，避免误覆盖既有同 id 的 token），成功后存 token。
@@ -12,7 +12,7 @@
  *   - delete：先删配置，再清 token（幂等）。
  */
 
-import { customMcpSecretStorageKey } from '@/../shared/providerSecrets';
+import { customMcpEnvStorageKey, customMcpSecretStorageKey } from '@/../shared/providerSecrets';
 
 import type { CustomMcpConfig } from '@/../shared/customMcp';
 
@@ -26,6 +26,30 @@ export async function readCustomMcpToken(mcpId: string): Promise<string | null> 
   }
 }
 
+/** stdio env is encrypted as one JSON document, so values never enter localDb. */
+export async function readCustomMcpEnv(mcpId: string): Promise<Record<string, string>> {
+  try {
+    const raw = await window.electronAPI.safeStorageRead(customMcpEnvStorageKey(mcpId));
+    const value: unknown = raw ? JSON.parse(raw) : {};
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value).filter(
+            (entry): entry is [string, string] => typeof entry[1] === 'string',
+          ),
+        )
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function storeCustomMcpEnv(mcpId: string, env: Record<string, string>): Promise<void> {
+  const key = customMcpEnvStorageKey(mcpId);
+  if (Object.keys(env).length === 0) await window.electronAPI.safeStorageRemove(key);
+  else if (!(await window.electronAPI.safeStorageStore(key, JSON.stringify(env))))
+    throw new Error('safeStorage unavailable');
+}
+
 /** 列出全部自定义 MCP。 */
 export async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
   const res = await window.electronAPI.maker.listCustomMcpServers();
@@ -36,6 +60,7 @@ export async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
 export async function createCustomMcpServer(
   config: CustomMcpConfig,
   token: string,
+  env: Record<string, string> = {},
 ): Promise<void> {
   await window.electronAPI.maker.createCustomMcpServer(config);
   const t = token.trim();
@@ -44,7 +69,10 @@ export async function createCustomMcpServer(
     // safeStorageStore 在 safeStorage 不可用时返回 false 而不是 throw，需单独检查。
     try {
       const ok = await window.electronAPI.safeStorageStore(customMcpSecretStorageKey(config.id), t);
-      if (!ok) console.warn('[customMcpServers] safeStorageStore returned false (safeStorage unavailable) — token not saved');
+      if (!ok)
+        console.warn(
+          '[customMcpServers] safeStorageStore returned false (safeStorage unavailable) — token not saved',
+        );
     } catch (err) {
       console.warn('[customMcpServers] safeStorageStore failed for new MCP token (non-fatal)', err);
     }
@@ -55,9 +83,16 @@ export async function createCustomMcpServer(
       /* 无旧 token 时 remove 无害 */
     }
   }
-  // 第二次 invalidateCodex：消除「配置 IPC 完成→token 落盘」之间的竞态窗口——
-  // 若 Codex 在该窗口内重建环境，会读到写入前的旧/空 token；token 落盘后再失效一次，
-  // 确保下个 Codex 会话读到正确 token。best-effort，失败不阻断。
+  if (config.transport === 'stdio') {
+    await storeCustomMcpEnv(config.id, env);
+  } else {
+    try {
+      await window.electronAPI.safeStorageRemove(customMcpEnvStorageKey(config.id));
+    } catch {
+      /* 远程 MCP 不会读取该 key；遗留值不影响配置。 */
+    }
+  }
+  // 第二次刷新消除「配置 IPC 完成→凭证或 stdio env 落盘」之间的竞态窗口。
   try {
     await window.electronAPI.maker.refreshCustomMcpCodex();
   } catch {
@@ -75,30 +110,50 @@ export async function updateCustomMcpServer(
   config: CustomMcpConfig,
   token: string,
   clearToken: boolean,
+  env: Record<string, string> = {},
 ): Promise<void> {
   await window.electronAPI.maker.updateCustomMcpServer(config);
   const t = token.trim();
-  let tokenChanged = false;
-  if (t) {
+  let secretChanged = false;
+  if (config.transport === 'stdio') {
+    try {
+      await window.electronAPI.safeStorageRemove(customMcpSecretStorageKey(config.id));
+      secretChanged = true;
+    } catch {
+      /* stdio 不读取 bearer token；清理失败不影响配置更新。 */
+    }
+    await storeCustomMcpEnv(config.id, env);
+    secretChanged = true;
+  } else if (t) {
     // token 是可选字段：存储失败不阻断 update 事务（配置已入库），与 create 路径保持一致。
     // safeStorageStore 在 safeStorage 不可用时返回 false 而不是 throw，需单独检查。
     try {
       const ok = await window.electronAPI.safeStorageStore(customMcpSecretStorageKey(config.id), t);
-      if (!ok) console.warn('[customMcpServers] safeStorageStore returned false (safeStorage unavailable) — token not saved');
-      else tokenChanged = true;
+      if (!ok)
+        console.warn(
+          '[customMcpServers] safeStorageStore returned false (safeStorage unavailable) — token not saved',
+        );
+      else secretChanged = true;
     } catch (err) {
       console.warn('[customMcpServers] safeStorageStore failed on update (non-fatal)', err);
     }
   } else if (clearToken) {
     try {
       await window.electronAPI.safeStorageRemove(customMcpSecretStorageKey(config.id));
-      tokenChanged = true;
+      secretChanged = true;
     } catch {
       /* 清理失败不影响配置更新 */
     }
   }
-  // 仅 token 实际发生变化时才触发第二次 invalidateCodex，消除竞态窗口（同 create 路径）。
-  if (tokenChanged) {
+  if (config.transport !== 'stdio') {
+    try {
+      await window.electronAPI.safeStorageRemove(customMcpEnvStorageKey(config.id));
+    } catch {
+      /* 远程 MCP 不读取该 key；遗留值不影响配置。 */
+    }
+  }
+  // stdio env 与 token 一样在配置写入后落盘，二者变更都需要第二次刷新。
+  if (secretChanged) {
     try {
       await window.electronAPI.maker.refreshCustomMcpCodex();
     } catch {
@@ -114,5 +169,10 @@ export async function deleteCustomMcpServer(mcpId: string): Promise<void> {
     await window.electronAPI.safeStorageRemove(customMcpSecretStorageKey(mcpId));
   } catch {
     /* token 清理失败无害：孤儿 .enc 不会被任何 provider 引用。 */
+  }
+  try {
+    await window.electronAPI.safeStorageRemove(customMcpEnvStorageKey(mcpId));
+  } catch {
+    /* best-effort */
   }
 }

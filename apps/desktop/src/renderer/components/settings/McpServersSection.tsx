@@ -82,12 +82,20 @@ function McpRow({
           className="truncate text-13 leading-tight"
           style={{ color: 'var(--settings-integration-subtitle)' }}
         >
-          {config.url}
+          {config.transport === 'stdio' ? config.command : config.url}
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <RowIconButton icon={<Pencil size={16} />} label={t('settings.mcp.editAria')} onClick={onEdit} />
-        <RowIconButton icon={<Trash2 size={16} />} label={t('settings.mcp.deleteAria')} onClick={onDelete} />
+        <RowIconButton
+          icon={<Pencil size={16} />}
+          label={t('settings.mcp.editAria')}
+          onClick={onEdit}
+        />
+        <RowIconButton
+          icon={<Trash2 size={16} />}
+          label={t('settings.mcp.deleteAria')}
+          onClick={onDelete}
+        />
       </div>
     </div>
   );
@@ -112,7 +120,10 @@ function AddRow({ onClick }: { onClick: () => void }) {
         <Plus size={18} />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-14 font-medium leading-tight" style={{ color: 'var(--settings-section-title)' }}>
+        <span
+          className="text-14 font-medium leading-tight"
+          style={{ color: 'var(--settings-section-title)' }}
+        >
           {t('settings.mcp.addCustom.title')}
         </span>
         <span

@@ -440,6 +440,11 @@
         "label": "Sidebar card mode",
         "hint": "Pinned sessions are shown as cards with task-status summaries; card heights vary with summary length, and the cards flow into 2–3 columns when the sidebar is widened.",
         "aria": "Toggle sidebar card mode"
+      },
+      "sidebarBrandFigure": {
+        "label": "Show sidebar character artwork",
+        "hint": "Show the Cindy character in the background at the bottom of the left sidebar.",
+        "aria": "Toggle sidebar character artwork"
       }
     },
     "notifications": {
@@ -2818,19 +2823,19 @@
     },
     "mcp": {
       "title": "External tools",
-      "subtitle": "Connect your own remote MCP servers. HTTP/Streamable HTTP servers work with both Claude and Codex; SSE is Claude-only.",
+      "subtitle": "Connect your own MCP servers. HTTP works with both Claude and Codex; SSE is Claude-only; stdio runs a command on the agent host.",
       "cancel": "Cancel",
       "save": "Save",
       "editAria": "Edit",
       "deleteAria": "Delete",
       "addCustom": {
         "title": "Add MCP server",
-        "subtitle": "Enter a remote MCP endpoint (http/sse)"
+        "subtitle": "Enter a remote endpoint or local stdio command"
       },
       "dialog": {
         "createTitle": "Add MCP server",
         "editTitle": "Edit MCP server",
-        "desc": "Remote http / sse MCP only. New sessions can call it after saving; in-flight sessions are unaffected."
+        "desc": "New sessions can call it after saving; in-flight sessions are unaffected. Stdio starts the command you enter on the agent host."
       },
       "fields": {
         "name": "Display name",
@@ -2838,6 +2843,17 @@
         "transport": "Transport",
         "url": "Endpoint URL",
         "urlPlaceholder": "https://example.com/mcp",
+        "command": "Command",
+        "commandPlaceholder": "e.g. npx",
+        "args": "Arguments (one per line)",
+        "argsPlaceholder": "-y\n@modelcontextprotocol/server-filesystem\n.",
+        "cwd": "Working directory (optional)",
+        "cwdPlaceholder": "Leave blank to use the agent working directory",
+        "env": "Environment variables (optional)",
+        "envNamePlaceholder": "Variable name",
+        "envValuePlaceholder": "Value",
+        "addEnv": "Add variable",
+        "envHelp": "Stored locally with device encryption. Treat commands and variables as trusted configuration.",
         "token": "Bearer token (optional)",
         "tokenPlaceholder": "Enter auth token",
         "tokenEditPlaceholder": "Leave blank to remove the saved token",
@@ -2851,7 +2867,9 @@
       },
       "errors": {
         "nameRequired": "Display name is required",
-        "urlInvalid": "Enter a valid http(s) URL"
+        "urlInvalid": "Enter a valid http(s) URL",
+        "commandRequired": "Command is required for stdio",
+        "envNameInvalid": "Use letters, numbers, and underscores in environment variable names"
       },
       "toast": {
         "created": "MCP server added",

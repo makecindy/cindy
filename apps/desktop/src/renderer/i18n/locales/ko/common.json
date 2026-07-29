@@ -440,6 +440,11 @@
         "label": "사이드바 카드 모드",
         "hint": "고정된 세션을 작업 현황 요약이 담긴 카드로 표시합니다. 카드 높이는 요약 길이에 따라 달라지며, 사이드바를 넓히면 2~3열로 자동 배치됩니다.",
         "aria": "사이드바 카드 모드 전환"
+      },
+      "sidebarBrandFigure": {
+        "label": "사이드바 캐릭터 일러스트 표시",
+        "hint": "왼쪽 사이드바 하단 배경에 Cindy 캐릭터를 표시합니다.",
+        "aria": "사이드바 캐릭터 일러스트 표시 전환"
       }
     },
     "notifications": {
@@ -2817,19 +2822,19 @@
     },
     "mcp": {
       "title": "외부 도구",
-      "subtitle": "직접 만든 원격 MCP 서버를 연결합니다. HTTP / Streamable HTTP 서버는 Claude와 Codex 모두에서 사용 가능하며, SSE는 Claude 전용입니다.",
+      "subtitle": "직접 만든 MCP 서버를 연결합니다. HTTP는 Claude와 Codex 모두에서 사용할 수 있고, SSE는 Claude 전용이며 stdio는 Agent 호스트에서 명령을 실행합니다.",
       "cancel": "취소",
       "save": "저장",
       "editAria": "편집",
       "deleteAria": "삭제",
       "addCustom": {
         "title": "MCP 서버 추가",
-        "subtitle": "원격 MCP 엔드포인트(http/sse)를 입력하세요"
+        "subtitle": "원격 엔드포인트 또는 stdio 명령을 입력하세요"
       },
       "dialog": {
         "createTitle": "MCP 서버 추가",
         "editTitle": "MCP 서버 편집",
-        "desc": "원격 http / sse 형식의 MCP만 지원합니다. 저장 후 새 세션에서 호출할 수 있으며 진행 중인 세션에는 영향을 주지 않습니다."
+        "desc": "저장 후 새 세션에서 호출할 수 있으며 진행 중인 세션에는 영향을 주지 않습니다. stdio는 입력한 명령을 Agent 호스트에서 시작합니다."
       },
       "fields": {
         "name": "표시 이름",
@@ -2837,6 +2842,17 @@
         "transport": "전송 방식",
         "url": "엔드포인트 URL",
         "urlPlaceholder": "https://example.com/mcp",
+        "command": "명령",
+        "commandPlaceholder": "예: npx",
+        "args": "인수(한 줄에 하나)",
+        "argsPlaceholder": "-y\n@modelcontextprotocol/server-filesystem\n.",
+        "cwd": "작업 디렉터리(선택)",
+        "cwdPlaceholder": "비워 두면 Agent 작업 디렉터리를 사용",
+        "env": "환경 변수(선택)",
+        "envNamePlaceholder": "변수 이름",
+        "envValuePlaceholder": "값",
+        "addEnv": "변수 추가",
+        "envHelp": "기기 암호화로 로컬에 저장됩니다. 신뢰할 수 있는 명령과 변수만 설정하세요.",
         "token": "Bearer 토큰(선택)",
         "tokenPlaceholder": "인증 토큰 입력",
         "tokenEditPlaceholder": "비우면 저장된 토큰이 삭제됩니다",
@@ -2850,7 +2866,9 @@
       },
       "errors": {
         "nameRequired": "표시 이름을 입력하세요",
-        "urlInvalid": "유효한 http(s) URL을 입력하세요"
+        "urlInvalid": "유효한 http(s) URL을 입력하세요",
+        "commandRequired": "stdio에는 명령이 필요합니다",
+        "envNameInvalid": "환경 변수 이름에는 영문자, 숫자, 밑줄만 사용할 수 있습니다"
       },
       "toast": {
         "created": "MCP 서버가 추가되었습니다",

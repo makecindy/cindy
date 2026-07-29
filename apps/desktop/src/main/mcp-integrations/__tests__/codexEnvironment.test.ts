@@ -69,6 +69,19 @@ function remoteHttpProvider(): McpProvider {
   };
 }
 
+function stdioProvider(): McpProvider {
+  return {
+    name: 'local_tools',
+    toCodexMcpConfig: () => ({
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', '@example/mcp'],
+      env: { API_KEY: 'secret' },
+      cwd: 'C:\\work',
+    }),
+  };
+}
+
 function extractUrl(args: string[]): URL {
   const value = args.find((arg) => arg.startsWith('mcp_servers.cindy_test.url='));
   if (!value) throw new Error('missing cindy_test URL arg');
@@ -140,18 +153,24 @@ describe('codexEnvironment', () => {
     const logger = noopLogger();
 
     const beforeBind = await getCodexExtraSpawnConfig({ mcpProviders: providers, logger });
-    expect(beforeBind.extraArgs.some((arg) => arg.startsWith('mcp_servers.cindy_slack.'))).toBe(false);
+    expect(beforeBind.extraArgs.some((arg) => arg.startsWith('mcp_servers.cindy_slack.'))).toBe(
+      false,
+    );
 
     // Codex 的 provider 集合冻结在首个 cached spawn config；仅改变绑定态还不会出现。
     bound = true;
     const stillFrozen = await getCodexExtraSpawnConfig({ mcpProviders: providers, logger });
     expect(stillFrozen).toBe(beforeBind);
-    expect(stillFrozen.extraArgs.some((arg) => arg.startsWith('mcp_servers.cindy_slack.'))).toBe(false);
+    expect(stillFrozen.extraArgs.some((arg) => arg.startsWith('mcp_servers.cindy_slack.'))).toBe(
+      false,
+    );
 
     // hook-control 收到 bound gate 翻转后会走同一失效出口，再次构建即可看到工具。
     await shutdownCodexEnvironment();
     const afterBind = await getCodexExtraSpawnConfig({ mcpProviders: providers, logger });
-    expect(afterBind.extraArgs.some((arg) => arg.startsWith('mcp_servers.cindy_slack.'))).toBe(true);
+    expect(afterBind.extraArgs.some((arg) => arg.startsWith('mcp_servers.cindy_slack.'))).toBe(
+      true,
+    );
   });
 
   it('serializes remote HTTP custom headers as env_http_headers -c overrides (no bridge)', async () => {
@@ -171,6 +190,60 @@ describe('codexEnvironment', () => {
     });
     // 密钥明文绝不出现在 spawn 参数里。
     expect(cfg.extraArgs.some((a) => a.includes('sk-123'))).toBe(false);
+  });
+
+  it('serializes a stdio MCP command and environment references without exposing values in args', async () => {
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [stdioProvider()],
+      logger: noopLogger(),
+    });
+
+    expect(cfg.bridge).toBeNull();
+    expect(cfg.extraArgs).toEqual(
+      expect.arrayContaining([
+        'mcp_servers.local_tools.command="npx"',
+        'mcp_servers.local_tools.args=["-y","@example/mcp"]',
+        'mcp_servers.local_tools.cwd="C:\\\\work"',
+        'mcp_servers.local_tools.env_vars=["API_KEY"]',
+      ]),
+    );
+    expect(cfg.extraEnv).toMatchObject({ API_KEY: 'secret' });
+    expect(cfg.extraArgs.some((arg) => arg.includes('secret'))).toBe(false);
+  });
+
+  it('skips a stdio MCP when its environment conflicts with another server', async () => {
+    const second: McpProvider = {
+      name: 'other_tools',
+      toCodexMcpConfig: () => ({
+        type: 'stdio',
+        command: 'node',
+        env: { API_KEY: 'different-secret' },
+      }),
+    };
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [stdioProvider(), second],
+      logger: noopLogger(),
+    });
+
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.local_tools.'))).toBe(true);
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.other_tools.'))).toBe(false);
+    expect(cfg.extraEnv).toMatchObject({ API_KEY: 'secret' });
+  });
+
+  it('skips a stdio MCP when another provider needs the same environment name', async () => {
+    const remoteWithEnv: McpProvider = {
+      name: 'remote_tools',
+      getExtraEnv: () => ({ API_KEY: 'remote-secret' }),
+      toCodexMcpConfig: () => ({ type: 'http', url: 'https://example.com/mcp' }),
+    };
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [stdioProvider(), remoteWithEnv],
+      logger: noopLogger(),
+    });
+
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.local_tools.'))).toBe(false);
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.remote_tools.'))).toBe(true);
+    expect(cfg.extraEnv).toMatchObject({ API_KEY: 'remote-secret' });
   });
 
   // server 名可能来自用户可控来源（自定义 MCP id、插件身份卡）。普通 `{}` 上

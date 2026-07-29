@@ -18,7 +18,7 @@ import { IpcHarness } from './helpers/ipcHarness.js';
 const CREATE_SQL = `
   CREATE TABLE custom_mcp_servers (
     id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, transport TEXT NOT NULL, url TEXT NOT NULL,
-    headers TEXT NOT NULL DEFAULT '{}', sort_order INTEGER NOT NULL DEFAULT 0,
+    headers TEXT NOT NULL DEFAULT '{}', command TEXT NOT NULL DEFAULT '', args TEXT NOT NULL DEFAULT '[]', cwd TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
   );
   CREATE INDEX idx_custom_mcp_servers_sort_order ON custom_mcp_servers (sort_order);
@@ -58,6 +58,7 @@ function makeDeps(over: Partial<McpHandlerDeps> = {}): McpHandlerDeps {
     refreshProviders: vi.fn(async () => {}),
     broadcastChanged: vi.fn(() => {}),
     invalidateCodex: vi.fn(async () => {}),
+    assertTrustedSender: vi.fn(() => {}),
     ...over,
   };
 }
@@ -91,6 +92,22 @@ describe('mcp:custom:* CRUD handlers', () => {
     expect(deps.broadcastChanged).toHaveBeenCalledOnce();
     // Codex 侧失效:让新 codex 会话按新 MCP 配置重 spawn。
     expect(deps.invalidateCodex).toHaveBeenCalledOnce();
+  });
+
+  it('requires a trusted renderer before mutating MCP configuration', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      assertTrustedSender: vi.fn(() => {
+        throw new Error('untrusted sender');
+      }),
+    });
+    registerMcpHandlers(harness, deps);
+
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig)).rejects.toThrow(
+      'untrusted sender',
+    );
+    expect(await listCustomMcpServers()).toEqual([]);
   });
 
   it('a failing invalidateCodex does not fail the CRUD (best-effort)', async () => {
@@ -128,9 +145,9 @@ describe('mcp:custom:* CRUD handlers', () => {
     const harness = new IpcHarness();
     registerMcpHandlers(harness, makeDeps());
     await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig);
-    await expect(
-      harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig),
-    ).rejects.toThrow(/ALREADY_EXISTS/);
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig)).rejects.toThrow(
+      /ALREADY_EXISTS/,
+    );
   });
 
   it('update on missing row rejects NOT_FOUND', async () => {

@@ -440,6 +440,11 @@
         "label": "侧边栏卡片模式",
         "hint": "置顶对话以卡片形式展示，含任务现状摘要，卡片高度随摘要长短错落；侧栏拉宽时自动分 2~3 列。",
         "aria": "切换侧边栏卡片模式"
+      },
+      "sidebarBrandFigure": {
+        "label": "显示侧栏人物立绘",
+        "hint": "在左侧菜单栏底部显示 Cindy 人物背景。",
+        "aria": "切换侧栏人物立绘显示"
       }
     },
     "notifications": {
@@ -2817,19 +2822,19 @@
     },
     "mcp": {
       "title": "外部工具",
-      "subtitle": "接入你自己的远程 MCP 服务器。HTTP / Streamable HTTP 服务器 Claude 和 Codex 均可调用；SSE 仅支持 Claude。",
+      "subtitle": "接入你自己的 MCP 服务器。HTTP 可供 Claude 和 Codex 调用；SSE 仅支持 Claude；stdio 会在 Agent 所在主机运行命令。",
       "cancel": "取消",
       "save": "保存",
       "editAria": "编辑",
       "deleteAria": "删除",
       "addCustom": {
         "title": "添加 MCP 服务器",
-        "subtitle": "填写远程 MCP 端点(http/sse)"
+        "subtitle": "填写远程端点或本地 stdio 命令"
       },
       "dialog": {
         "createTitle": "添加 MCP 服务器",
         "editTitle": "编辑 MCP 服务器",
-        "desc": "仅支持远程 http / sse 型 MCP。保存后新建的对话即可调用，已在进行中的对话不受影响。"
+        "desc": "保存后新建的对话即可调用，已在进行中的对话不受影响。stdio 会在 Agent 所在主机启动你填写的命令。"
       },
       "fields": {
         "name": "显示名称",
@@ -2837,6 +2842,17 @@
         "transport": "传输类型",
         "url": "端点 URL",
         "urlPlaceholder": "https://example.com/mcp",
+        "command": "命令",
+        "commandPlaceholder": "例如 npx",
+        "args": "参数（每行一个）",
+        "argsPlaceholder": "-y\n@modelcontextprotocol/server-filesystem\n.",
+        "cwd": "工作目录（可选）",
+        "cwdPlaceholder": "留空则使用 Agent 的工作目录",
+        "env": "环境变量（可选）",
+        "envNamePlaceholder": "变量名",
+        "envValuePlaceholder": "值",
+        "addEnv": "添加变量",
+        "envHelp": "会使用设备加密仅在本机保存。请只配置你信任的命令和变量。",
         "token": "Bearer Token(可选)",
         "tokenPlaceholder": "填入鉴权 token",
         "tokenEditPlaceholder": "留空将删除已存 token",
@@ -2850,7 +2866,9 @@
       },
       "errors": {
         "nameRequired": "请填写显示名称",
-        "urlInvalid": "请填写合法的 http(s) URL"
+        "urlInvalid": "请填写合法的 http(s) URL",
+        "commandRequired": "stdio 必须填写命令",
+        "envNameInvalid": "环境变量名只能使用字母、数字和下划线"
       },
       "toast": {
         "created": "MCP 服务器已添加",
