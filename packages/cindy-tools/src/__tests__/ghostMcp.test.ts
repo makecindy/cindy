@@ -938,6 +938,19 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
   const sectionedDeps = () =>
     fakeDeps({ forgeGuide: async () => SECTIONED_GUIDE });
 
+  it("forge_guide 手册以 ## 直接开头(无 H1 开场白)时目录不吞第一章正文", async () => {
+    const noPreamble = ["## 1. 起步", "one-body", "## 2. 进阶", "two-body"].join("\n");
+    const result = await handleForgeGuide(
+      fakeDeps({ forgeGuide: async () => noPreamble }),
+    );
+    const text = result.content[0].text;
+    expect(result.isError).toBeUndefined();
+    expect(text).toContain("- 1. 起步");
+    expect(text).toContain("- 2. 进阶");
+    expect(text).not.toContain("one-body");
+    expect(text).not.toContain("two-body");
+  });
+
   it("forge_guide 无参返回目录:含开场白与全部章节标题,不含章节正文", async () => {
     const result = await handleForgeGuide(sectionedDeps());
     const text = result.content[0].text;

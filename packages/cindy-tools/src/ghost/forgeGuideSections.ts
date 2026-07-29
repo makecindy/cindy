@@ -45,8 +45,11 @@ function headerTitle(header: string): string {
 export function buildForgeGuideToc(guide: string): string {
   const headers = headerLines(guide);
   if (headers.length === 0) return guide;
-  const firstHeaderAt = guide.indexOf(`\n${HEADER_PREFIX}`);
-  const preamble = firstHeaderAt >= 0 ? guide.slice(0, firstHeaderAt).trimEnd() : "";
+  // 开场白边界与章节识别走同一通道(逐行 startsWith),避免手册以 ## 开头时
+  // indexOf("\n## ") 命中第二章、把第一章整段吞进目录
+  const lines = guide.split("\n");
+  const firstHeaderLine = lines.findIndex((l) => l.startsWith(HEADER_PREFIX));
+  const preamble = lines.slice(0, firstHeaderLine).join("\n").trimEnd();
   return [
     ...(preamble ? [preamble, ""] : []),
     "## 目录",
