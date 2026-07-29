@@ -202,9 +202,12 @@ function buildDecorations(
   doc: PMNode,
   slashCommandMatches: ReadonlyArray<Pick<SlashCommandMatch, 'from' | 'to'>> = [],
   voiceReplacementRange: VoiceInputReplacementRange | null = null,
+  ignoreListRanges = false,
 ): DecorationSet {
   const decorations: Decoration[] = [];
-  const listRanges = listLineRanges(doc, slashCommandMatches, voiceReplacementRange);
+  const listRanges = ignoreListRanges
+    ? []
+    : listLineRanges(doc, slashCommandMatches, voiceReplacementRange);
 
   doc.descendants((node, pos) => {
     if (!node.isText || !node.text) return;
@@ -253,8 +256,20 @@ export const CjkPunctDecoration = Extension.create({
           apply(tr: Transaction, old: CjkDecorationPluginState, oldState: EditorState) {
             const compositionMeta = tr.getMeta(PLUGIN_KEY) as CompositionMeta | undefined;
             if (compositionMeta === 'suspend') {
+              // ComposerListIndentDecoration removes its wrappers during IME
+              // composition so ProseMirror does not let native composition DOM
+              // get split by stale layout decorations. Rebuild CJK spans
+              // without the list-owned exclusions for that same window; this
+              // keeps marker dots and fallback sibling ASCII punctuation in the
+              // explicit CJK font stack while the list wrappers are absent.
+              const roster = getSlashCommandRoster(oldState);
               return {
-                decorations: old.decorations,
+                decorations: buildDecorations(
+                  tr.doc,
+                  findSlashCommandMatches(tr.doc, roster),
+                  resolveVoiceInputReplacementRange(tr, oldState).range,
+                  true,
+                ),
                 suspendedForComposition: true,
               };
             }

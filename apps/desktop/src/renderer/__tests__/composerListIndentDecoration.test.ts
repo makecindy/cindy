@@ -674,6 +674,57 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     expect(editor.view.dom.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
   });
 
+  it('keeps fallback-owned ASCII punctuation stable while list wrappers are suspended for IME', () => {
+    vi.useFakeTimers();
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '1. 中文正文' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '中文,内容' },
+            ],
+          },
+        ],
+      },
+    });
+
+    const punctuation = () =>
+      Array.from(editor?.view.dom.querySelectorAll('span[style*="font-family"]') ?? [], (node) =>
+        node.textContent,
+      );
+    expect(punctuation()).toEqual([]);
+    expect(editor.view.dom.querySelector('.composer-list-fallback-container')).not.toBeNull();
+
+    editor.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    expect(editor.view.composing).toBe(true);
+    expect(editor.view.dom.querySelector('.composer-list-fallback-container')).toBeNull();
+    expect(punctuation()).toEqual(['.', ',']);
+
+    editor.view.dispatch(
+      editor.state.tr.insertText('中', editor.state.doc.content.size - 1).setMeta('composition', 1),
+    );
+    expect(punctuation()).toEqual(['.', ',']);
+
+    editor.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    vi.runOnlyPendingTimers();
+    expect(editor.view.composing).toBe(false);
+    expect(punctuation()).toEqual([]);
+    expect(editor.view.dom.querySelector('.composer-list-fallback-container')).not.toBeNull();
+  });
+
   it('keeps slash-command pills inline inside the paragraph fallback flow', () => {
     editor = new Editor({
       element: document.createElement('div'),
