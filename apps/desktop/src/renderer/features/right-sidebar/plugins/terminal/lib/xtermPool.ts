@@ -24,6 +24,10 @@ import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('terminal');
+
 export interface XtermEntry {
   terminal: Terminal;
   fitAddon: FitAddon;
@@ -94,7 +98,17 @@ export function getOrCreateXterm(tabId: string): XtermEntry {
  * arbitrary terminal output directly.
  */
 export function openTerminalExternalLink(_event: MouseEvent, uri: string): void {
-  void window.electronAPI.openExternal(uri).catch(() => undefined);
+  void window.electronAPI
+    .openExternal(uri)
+    .then((result) => {
+      if (!result.success) {
+        // Do not log the URL: terminal output may contain sensitive query parameters.
+        log.warn('terminal link open rejected or failed');
+      }
+    })
+    .catch(() => {
+      log.warn('terminal link open IPC failed');
+    });
 }
 
 /**
