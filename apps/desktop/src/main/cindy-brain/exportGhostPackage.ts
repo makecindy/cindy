@@ -24,14 +24,13 @@ import JSZip from 'jszip';
 import { isValidGhostId, type InstalledGhost } from '../../shared/ghost.js';
 
 /**
- * 导出过滤口径:只跳过 zip 根部两个主机保留文件与纯系统残渣。
- * 嵌套点文件、node_modules 都可能是包内容——签名包的 statement 覆盖全部
- * 原始条目,多跳一个都会让导出包装回时完整性校验失败。
+ * 导出过滤口径:只跳过 zip 根部的主机保留文件与根部系统残渣。
+ * 嵌套条目(含嵌套 .DS_Store)一律保留——签名包的 statement 覆盖全部
+ * 原始条目,跳任何一个都会让导出包装回时完整性校验失败。
  */
 const EXPORT_SKIP_ROOT_FILES = new Set(['.disabled', '.cindy-trust.json', '.DS_Store']);
 function shouldSkipExportEntry(name: string, relBase: string): boolean {
-  if (relBase === '') return EXPORT_SKIP_ROOT_FILES.has(name);
-  return name === '.DS_Store';
+  return relBase === '' && EXPORT_SKIP_ROOT_FILES.has(name);
 }
 
 export type ExportGhostPackageResult =
@@ -53,15 +52,22 @@ export interface ExportGhostPackageDeps {
   writeFile(filePath: string, data: Buffer): Promise<void>;
 }
 
+/** Windows 保留设备名(不分大小写),直接作文件名会被系统拒绝。 */
+const WINDOWS_RESERVED_BASENAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
 /** 插件名清洗成文件名片段:空白折叠、剥掉文件系统非法字符,截断防爆长度。 */
 export function sanitizeExportFileNamePart(name: string): string {
-  const cleaned = name
+  let cleaned = name
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^\.+/, '')
     .slice(0, 80)
-    .trim();
+    .trim()
+    // Windows 禁止尾随点/空格(截断后可能新产生,最后再剥一次)。
+    .replace(/[. ]+$/, '');
+  // Windows 保留设备名:加前缀避让,不作为非法名交给保存对话框。
+  if (WINDOWS_RESERVED_BASENAME.test(cleaned)) cleaned = `_${cleaned}`;
   return cleaned;
 }
 
@@ -75,10 +81,11 @@ export async function exportGhostPackage(
   const ghost = deps.listInstalled().find((candidate) => candidate.manifest.id === id);
   if (!ghost) return { status: 'not_installed' };
 
-  // 双保险:dir 来自 GhostManager 扫描,这里再确认它是真实目录,避免把
-  // 被外部篡改的注册项当成打包源。
+  // 双保险:dir 来自 GhostManager 扫描,这里再确认它是真实目录(lstat
+  // 不跟随链接),避免把被替换成 symlink/junction 的注册项当成打包源,
+  // 将链接目标的内容打进导出包。
   try {
-    const dirStat = await fs.promises.stat(ghost.dir);
+    const dirStat = await fs.promises.lstat(ghost.dir);
     if (!dirStat.isDirectory()) throw new Error('not a directory');
   } catch {
     return { status: 'error', code: 'read_failed' };
@@ -92,6 +99,9 @@ export async function exportGhostPackage(
     const entries = await fs.promises.readdir(cur, { withFileTypes: true });
     for (const entry of entries) {
       if (shouldSkipExportEntry(entry.name, relBase)) continue;
+      // symlink/junction 不跟随:只归档安装目录自身的真实内容,
+      // 防止借链接把目录外文件打进导出包。
+      if (entry.isSymbolicLink()) continue;
       const abs = path.join(cur, entry.name);
       const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {

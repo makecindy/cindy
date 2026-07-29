@@ -44,6 +44,7 @@ import {
   diffGhostPermissionItems,
   ghostPanelKind,
   ghostPermissionItems,
+  isOfficialGhostId,
   type GhostSetupStatus,
 } from '../../../shared/ghost';
 import type {
@@ -881,7 +882,13 @@ export function GhostPluginPage() {
         }
         updateBusy={selectedMarketUpdate !== null && marketBusyId !== null}
         onUninstall={() => void handleUninstall()}
-        onExport={selectedGhost ? () => void handleExport() : undefined}
+        // 官方保留前缀(cindy-/filo-/xd-)的插件走本地装入会被拒,
+        // 导出产物无法重装,不提供导出项。
+        onExport={
+          selectedGhost && !isOfficialGhostId(selectedDetail.id)
+            ? () => void handleExport()
+            : undefined
+        }
         toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
         onIconLoadError={handleMarketIconLoadError}
       />

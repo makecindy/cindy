@@ -92,6 +92,9 @@ describe('exportGhostPackage', () => {
     await fs.promises.writeFile(path.join(ghostDir, 'node_modules', 'dep', 'index.js'), 'x');
     await fs.promises.mkdir(path.join(ghostDir, 'data'), { recursive: true });
     await fs.promises.writeFile(path.join(ghostDir, 'data', '.keep'), '');
+    // 嵌套 .DS_Store 可能是签名 statement 覆盖的原始条目,必须保留;
+    // 只有根部主机残渣才跳过。
+    await fs.promises.writeFile(path.join(ghostDir, 'data', '.DS_Store'), '');
     await fs.promises.writeFile(path.join(ghostDir, 'cindy-signatures.json'), '{}');
 
     const result = await exportGhostPackage('hello', makeDeps());
@@ -104,9 +107,31 @@ describe('exportGhostPackage', () => {
       .sort();
     expect(names).toContain('node_modules/dep/index.js');
     expect(names).toContain('data/.keep');
+    expect(names).toContain('data/.DS_Store');
     expect(names).toContain('cindy-signatures.json');
     expect(names).not.toContain('.disabled');
     expect(names).not.toContain('.cindy-trust.json');
+  });
+
+  it('symlink 条目不跟随,不打进导出包', async () => {
+    const outside = path.join(workDir, 'outside-secret');
+    await fs.promises.mkdir(outside);
+    await fs.promises.writeFile(path.join(outside, 'secret.txt'), 'secret');
+    await fs.promises.symlink(outside, path.join(ghostDir, 'linked-dir'));
+    await fs.promises.symlink(
+      path.join(outside, 'secret.txt'),
+      path.join(ghostDir, 'linked-file.js'),
+    );
+
+    const result = await exportGhostPackage('hello', makeDeps());
+    expect(result.status).toBe('saved');
+    if (result.status !== 'saved') return;
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(result.savedPath));
+    const names = Object.values(zip.files)
+      .filter((entry) => !entry.dir)
+      .map((entry) => entry.name);
+    expect(names).not.toContain('linked-dir/secret.txt');
+    expect(names).not.toContain('linked-file.js');
   });
 
   it('默认文件名携带插件名与版本号,落在下载目录', async () => {
@@ -224,5 +249,17 @@ describe('sanitizeExportFileNamePart', () => {
 
   it('全非法字符时回落为空(调用方用 id 兜底)', () => {
     expect(sanitizeExportFileNamePart('<>:"/\\|?*')).toBe('');
+  });
+
+  it('剥掉 Windows 禁止的尾随点/空格', () => {
+    expect(sanitizeExportFileNamePart('plugin. ')).toBe('plugin');
+    expect(sanitizeExportFileNamePart('v1.0.')).toBe('v1.0');
+  });
+
+  it('Windows 保留设备名加前缀避让', () => {
+    expect(sanitizeExportFileNamePart('aux')).toBe('_aux');
+    expect(sanitizeExportFileNamePart('CON')).toBe('_CON');
+    expect(sanitizeExportFileNamePart('com1')).toBe('_com1');
+    expect(sanitizeExportFileNamePart('auxiliary')).toBe('auxiliary');
   });
 });
