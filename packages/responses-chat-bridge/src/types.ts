@@ -288,6 +288,8 @@ export interface ChatBridgeCapabilities {
    * 已确认支持视觉输入的运行时（当前为 upstream 白名单）开启。
    */
   imageInput?: ChatImageInput;
+  /** 仅对明确采用 `<think>...</think>` 内联推理方言的上游启用标签解析。 */
+  inlineReasoning?: boolean;
   /** 将 Responses reasoning.effort 映射成供应商接受的枚举值。未声明时原样使用。 */
   reasoningEffortMap?: Readonly<Record<string, string | boolean>>;
   /** 只有显式列入的 Chat 可选字段才会转发，避免严格兼容端点因未知字段返回 400。 */

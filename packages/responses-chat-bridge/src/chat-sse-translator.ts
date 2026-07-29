@@ -44,6 +44,7 @@ interface ResponseAnnotation {
 export interface ChatSseTranslatorOptions {
   toolContext?: ChatBridgeToolContext;
   zeroUsageOnMissing?: boolean;
+  inlineReasoning?: boolean;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -155,11 +156,13 @@ export class ChatSseTranslator {
   private inlineThinkBuffer = '';
   private readonly toolContext?: ChatBridgeToolContext;
   private readonly zeroUsageOnMissing: boolean;
+  private readonly inlineReasoning: boolean;
 
   constructor(model: string, options: ChatSseTranslatorOptions = {}) {
     this.model = model;
     this.toolContext = options.toolContext;
     this.zeroUsageOnMissing = options.zeroUsageOnMissing !== false;
+    this.inlineReasoning = options.inlineReasoning === true;
   }
 
   push(raw: unknown): unknown[] {
@@ -206,7 +209,12 @@ export class ChatSseTranslator {
       );
       if (Array.isArray(delta.tool_calls)) {
         this.flushInlineThinkAtBoundary(out);
-        for (const toolCall of delta.tool_calls) this.consumeToolDelta(toolCall, out);
+        for (const [toolIndex, toolCall] of delta.tool_calls.entries()) {
+          const normalizedToolCall = isPlainObject(toolCall) && typeof toolCall.index !== 'number'
+            ? { ...toolCall, index: toolIndex }
+            : toolCall;
+          this.consumeToolDelta(normalizedToolCall, out);
+        }
       }
       const finishReason = typeof choiceValue.finish_reason === 'string' ? choiceValue.finish_reason : null;
       if (finishReason) {
@@ -326,6 +334,10 @@ export class ChatSseTranslator {
   }
 
   private consumeContent(content: string, out: unknown[]): void {
+    if (!this.inlineReasoning) {
+      this.pushText(content, out);
+      return;
+    }
     if (this.inlineThinkMode === 'text') {
       this.pushText(content, out);
       return;
@@ -367,6 +379,7 @@ export class ChatSseTranslator {
   }
 
   private flushInlineThinkAtBoundary(out: unknown[]): void {
+    if (!this.inlineReasoning) return;
     if (this.inlineThinkMode === 'undecided') {
       if (this.inlineThinkBuffer) this.pushText(this.inlineThinkBuffer, out);
     } else if (this.inlineThinkMode === 'reasoning') {
@@ -469,7 +482,7 @@ export class ChatSseTranslator {
         status,
         call_id: state.callId,
         name: spec.name,
-        input: customInput(state.arguments),
+        input: status === 'in_progress' ? '' : customInput(state.arguments),
       };
     }
     if (spec?.kind === 'tool_search') {
@@ -479,7 +492,7 @@ export class ChatSseTranslator {
         status,
         call_id: state.callId,
         execution: 'client',
-        arguments: toolSearchArguments(state.arguments),
+        arguments: status === 'in_progress' ? {} : toolSearchArguments(state.arguments),
       };
     }
     return {
@@ -489,7 +502,7 @@ export class ChatSseTranslator {
       call_id: state.callId,
       name: spec?.name ?? state.name,
       ...(spec?.namespace ? { namespace: spec.namespace } : {}),
-      arguments: state.arguments,
+      arguments: status === 'in_progress' ? '' : state.arguments,
     };
   }
 

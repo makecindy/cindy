@@ -100,6 +100,34 @@ describe('ChatSseTranslator', () => {
     expect(out.at(-1)?.type).toBe('response.completed');
   });
 
+  it('translates non-streaming message.tool_calls without streaming indexes', () => {
+    const translator = new ChatSseTranslator('m');
+    const out = [
+      ...translator.push({
+        id: 'chat_json_tools',
+        choices: [{
+          message: {
+            role: 'assistant',
+            tool_calls: [{
+              id: 'call_json',
+              type: 'function',
+              function: { name: 'Bash', arguments: '{"cmd":"pwd"}' },
+            }],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+    const completed = out.at(-1) as { response: { output: Array<Record<string, unknown>> } };
+    expect(completed.response.output).toContainEqual(expect.objectContaining({
+      type: 'function_call',
+      call_id: 'call_json',
+      name: 'Bash',
+      arguments: '{"cmd":"pwd"}',
+    }));
+  });
+
   it('waits for a streamed tool name before emitting the call item', () => {
     const translator = new ChatSseTranslator('m');
     const beforeName = translator.push({
@@ -272,7 +300,7 @@ describe('ChatSseTranslator', () => {
   });
 
   it('extracts reasoning_details and inline think blocks without leaking tags', () => {
-    const translator = new ChatSseTranslator('m');
+    const translator = new ChatSseTranslator('m', { inlineReasoning: true });
     const out = [
       ...translator.push({
         id: 'think',
@@ -292,6 +320,48 @@ describe('ChatSseTranslator', () => {
       [{ type: 'summary_text', text: 'structured inline' }],
     ]);
     expect(message.content[0].text).toBe('answer');
+  });
+
+  it('preserves literal think tags unless the inline reasoning dialect is enabled', () => {
+    const translator = new ChatSseTranslator('m');
+    const out = [
+      ...translator.push({
+        id: 'literal-think',
+        choices: [{ delta: { content: '<think>literal</think> answer' }, finish_reason: 'stop' }],
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+    const response = (out.at(-1) as { response: { output: Array<Record<string, unknown>> } }).response;
+    expect(response.output.filter((item) => item.type === 'reasoning')).toEqual([]);
+    expect(response.output.find((item) => item.type === 'message')).toMatchObject({
+      content: [{ text: '<think>literal</think> answer' }],
+    });
+  });
+
+  it('starts streamed tool items with empty arguments and emits the bytes as deltas', () => {
+    const translator = new ChatSseTranslator('m');
+    const out = [
+      ...translator.push({
+        id: 'tool-prefix',
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'call_prefix',
+              function: { name: 'Bash', arguments: '{"cmd":' },
+            }],
+          },
+        }],
+      }),
+      ...translator.push({
+        choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"pwd"}' } }] }, finish_reason: 'tool_calls' }],
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+    const added = out.find((event) => event.type === 'response.output_item.added') as { item: { arguments: string } };
+    const deltas = out.filter((event) => event.type === 'response.function_call_arguments.delta') as Array<{ delta: string }>;
+    expect(added.item.arguments).toBe('');
+    expect(deltas.map((event) => event.delta).join('')).toBe('{"cmd":"pwd"}');
   });
 
   it('normalizes citations and emits complete zero usage when the provider omits usage', () => {

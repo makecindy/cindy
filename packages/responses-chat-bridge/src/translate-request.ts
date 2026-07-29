@@ -37,6 +37,9 @@ function normalizeRole(role: string, developerRole: ChatDeveloperRole): 'system'
 }
 
 function imagePart(part: Record<string, unknown>): ChatUserContentPart | undefined {
+  if (part.file_id !== undefined) {
+    throw new UnsupportedResponsesFeatureError('input_image.file_id');
+  }
   const imageUrl = typeof part.image_url === 'string'
     ? part.image_url
     : isPlainObject(part.image_url) && typeof part.image_url.url === 'string'
@@ -549,15 +552,16 @@ function applyReasoning(
   const field = capabilities.reasoningField ?? 'none';
   if (typeof effort !== 'string' || field === 'none') return;
   const mapped = capabilities.reasoningEffortMap?.[effort] ?? effort;
+  const mappedString = typeof mapped === 'string' ? mapped : effort;
   switch (field) {
     case 'reasoning_effort':
-      out.reasoning_effort = String(mapped);
+      out.reasoning_effort = mappedString;
       break;
     case 'reasoning.effort':
-      out.reasoning = { effort: String(mapped) };
+      out.reasoning = { effort: mappedString };
       break;
     case 'thinking.type':
-      out.thinking = { type: String(mapped) };
+      out.thinking = { type: mappedString };
       break;
     case 'enable_thinking':
       out.enable_thinking = typeof mapped === 'boolean'
@@ -572,6 +576,14 @@ function applyReasoning(
   }
 }
 
+function chatResponseFormat(value: unknown): unknown {
+  if (!isPlainObject(value) || value.type !== 'json_schema' || value.json_schema !== undefined) {
+    return value;
+  }
+  const { type: _type, ...jsonSchema } = value;
+  return { type: 'json_schema', json_schema: jsonSchema };
+}
+
 function applyPassthrough(
   out: ChatCompletionsRequest,
   input: ResponsesRequest,
@@ -579,7 +591,7 @@ function applyPassthrough(
 ): void {
   for (const field of fields ?? []) {
     const value = field === 'response_format'
-      ? input.response_format ?? input.text?.format
+      ? chatResponseFormat(input.response_format ?? input.text?.format)
       : input[field];
     if (value !== undefined) {
       (out as unknown as Record<string, unknown>)[field] = value;

@@ -479,6 +479,13 @@ describe('translateResponsesRequest', () => {
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_image', file_id: 'file_1' }] }],
     }))).toThrow("input content part 'input_image'");
     expect(() => translateResponsesRequest(base({
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_image', file_id: 'file_1', image_url: 'https://example.com/image.png' }],
+      }],
+    }), { capabilities: { imageInput: 'image_url' } })).toThrow('input_image.file_id');
+    expect(() => translateResponsesRequest(base({
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_image' }] }],
     }))).toThrow("input content part 'input_image'");
     expect(() => translateResponsesRequest(base({
@@ -679,6 +686,19 @@ describe('translateResponsesRequest', () => {
     });
   });
 
+  it('rejects file-backed images in tool results instead of silently dropping the file id', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'c1', name: 'inspect', arguments: '{}' },
+        {
+          type: 'function_call_output',
+          call_id: 'c1',
+          output: [{ type: 'input_image', file_id: 'file_1', image_url: 'https://example.com/image.png' }],
+        },
+      ],
+    }), { capabilities: { imageInput: 'image_url' } })).toThrow('input_image.file_id');
+  });
+
   it('forwards only capability-approved Chat tuning fields and maps reasoning dialects', () => {
     const out = translateResponsesRequest(base({
       temperature: 0.2,
@@ -697,5 +717,40 @@ describe('translateResponsesRequest', () => {
     expect(out.response_format).toEqual({ type: 'json_object' });
     expect(out.enable_thinking).toBe(true);
     expect(out).not.toHaveProperty('frequency_penalty');
+  });
+
+  it('falls back to the original reasoning effort for string dialects when a boolean map is supplied', () => {
+    const out = translateResponsesRequest(base({
+      reasoning: { effort: 'high' },
+    }), {
+      capabilities: {
+        reasoningField: 'reasoning_effort',
+        reasoningEffortMap: { high: true },
+      },
+    });
+    expect(out.reasoning_effort).toBe('high');
+  });
+
+  it('converts Responses json_schema text.format to Chat response_format shape', () => {
+    const out = translateResponsesRequest(base({
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'answer',
+          description: 'structured answer',
+          schema: { type: 'object', properties: { value: { type: 'string' } } },
+          strict: true,
+        },
+      },
+    }), { capabilities: { passthroughFields: ['response_format'] } });
+    expect(out.response_format).toEqual({
+      type: 'json_schema',
+      json_schema: {
+        name: 'answer',
+        description: 'structured answer',
+        schema: { type: 'object', properties: { value: { type: 'string' } } },
+        strict: true,
+      },
+    });
   });
 });

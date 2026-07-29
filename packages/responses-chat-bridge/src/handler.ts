@@ -248,6 +248,7 @@ export function createResponsesChatHandler(
           const translator = new ChatSseTranslator(request.model, {
             toolContext,
             zeroUsageOnMissing: provider.capabilities?.zeroUsageOnMissing,
+            inlineReasoning: provider.capabilities?.inlineReasoning,
           });
           const events = [
             ...translator.push(jsonBody),
@@ -304,6 +305,7 @@ export function createResponsesChatHandler(
       const translator = new ChatSseTranslator(request.model, {
         toolContext,
         zeroUsageOnMissing: provider.capabilities?.zeroUsageOnMissing,
+        inlineReasoning: provider.capabilities?.inlineReasoning,
       });
       const reader = upstream.body.getReader();
       const decoder = new TextDecoder();
@@ -311,10 +313,23 @@ export function createResponsesChatHandler(
       let streamFailed = false;
       // 全响应连续递增的 SSE sequence_number（Responses 协议要求）。
       let seq = 0;
-      const collectedEvents: unknown[] = [];
+      let terminalEvent: Record<string, unknown> | undefined;
       const emit = (output: unknown): void => {
-        if (request.stream === false) collectedEvents.push(output);
-        else writeSse(res, output, seq++);
+        if (request.stream === false) {
+          if (
+            isPlainObject(output)
+            && (
+              output.type === 'response.completed'
+              || output.type === 'response.incomplete'
+              || output.type === 'response.failed'
+            )
+            && isPlainObject(output.response)
+          ) {
+            terminalEvent = output;
+          }
+          return;
+        }
+        writeSse(res, output, seq++);
       };
       const parseDataPayload = (payload: string): void => {
         if (!payload) return;
@@ -381,17 +396,8 @@ export function createResponsesChatHandler(
           for (const output of translator.finish(true)) emit(output);
         }
         if (request.stream === false) {
-          const terminal = [...collectedEvents].reverse().find((event) => (
-            isPlainObject(event)
-            && (
-              event.type === 'response.completed'
-              || event.type === 'response.incomplete'
-              || event.type === 'response.failed'
-            )
-            && isPlainObject(event.response)
-          )) as Record<string, unknown> | undefined;
-          writeJson(res, 200, terminal && isPlainObject(terminal.response)
-            ? terminal.response
+          writeJson(res, 200, terminalEvent && isPlainObject(terminalEvent.response)
+            ? terminalEvent.response
             : responsesError(502, 'invalid_upstream_response', 'provider response could not be translated'));
         } else {
           res.end();

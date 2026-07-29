@@ -356,6 +356,31 @@ describe('createResponsesChatHandler', () => {
     expect(response.usage.total_tokens).toBe(3);
   });
 
+  it('returns only the terminal Responses object when a non-streaming request receives SSE', async () => {
+    const fetchImpl = vi.fn(async () => streamResponse([
+      { id: 'chat_sse_json', choices: [{ delta: { content: 'hello ' } }] },
+      { id: 'chat_sse_json', choices: [{ delta: { content: 'world' } }] },
+      { id: 'chat_sse_json', choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ])) as typeof fetch;
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: { model: 'm', input: 'hi', stream: false },
+      res: res as never,
+    });
+    const response = JSON.parse(res.chunks.join('')) as {
+      status: string;
+      output: Array<{ type: string; content?: Array<{ text: string }> }>;
+    };
+    expect(res.status).toBe(200);
+    expect(response.status).toBe('completed');
+    expect(response.output.find((item) => item.type === 'message')?.content?.[0]?.text).toBe('hello world');
+    expect(res.chunks.join('')).not.toContain('response.output_text.delta');
+  });
+
   it('adapts a JSON response even when a streaming provider ignores stream=true', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       id: 'chat_json',
