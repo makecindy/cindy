@@ -263,9 +263,13 @@ function findModel(
   providers: ProviderView[] | null | undefined,
 ) {
   if (providers) {
+    // 跳过非聊天来源的同 id 条目(2026-07 review,fresh evidence):同一 id 若在
+    // 排序更靠前的来源上是非聊天(efforts 元数据可能完全不同),这里不挡的话
+    // resolveEffort 会拿着错的 efforts/defaultEffort 去校验,即便 resolveProviderId
+    // 已经把会话正确路由到了后面那个聊天来源。
     for (const provider of connectedProvidersForAgent(providers, agentKind)) {
       const model = getModel(provider, modelId, agentKind);
-      if (model) return model;
+      if (model && isChatEligible(model)) return model;
     }
   }
   return getMaker()

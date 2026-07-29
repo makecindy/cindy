@@ -445,4 +445,49 @@ describe('resolveImSessionDefaults', () => {
       providerId: null, // must not stay pinned to 'xd' — its copy of this id is not chat-eligible
     });
   });
+
+  it('resolves effort from the chat-eligible copy of the model, not an earlier non-chat copy with different effort metadata (2026-07 review: fresh evidence)', async () => {
+    // 'xd' (checked first) has a non-chat copy with empty efforts; 'openai' (checked
+    // second) has the real chat copy with efforts=[low,medium,high]. A requested effort
+    // that only the chat copy can validate ('xhigh', unsupported) must be clamped using
+    // the chat copy's metadata, not silently accepted via the non-chat copy's empty efforts.
+    mocks.listProviders.mockResolvedValue([
+      {
+        ...providers[0],
+        models: {
+          ...providers[0].models,
+          'claude-code': [
+            { id: 'shared-id', displayName: 'Shared', contextWindow: 0, efforts: [], defaultEffort: null, mode: 'image_generation' },
+          ],
+        },
+      },
+      {
+        ...providers[1],
+        agents: ['claude-code'],
+        routing: {
+          ...providers[1].routing,
+          'claude-code': { upstream: 'https://api.openai.com', authStrategy: 'oauth-passthrough' },
+        },
+        models: {
+          ...providers[1].models,
+          'claude-code': [
+            { id: 'shared-id', displayName: 'Shared', contextWindow: 200_000, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium', mode: 'chat' },
+          ],
+        },
+      },
+    ]);
+    mocks.readImDefaultSettings.mockReturnValue({
+      agentKind: 'claude-code',
+      agents: {
+        'claude-code': { providerId: null, model: 'shared-id', effort: 'xhigh' }, // unsupported by the chat copy
+        codex: { providerId: null, model: 'codex/gpt-5.5', effort: 'high' },
+      },
+    });
+
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'claude-code',
+      model: 'shared-id',
+      effort: 'medium', // clamped using the chat copy's defaultEffort, not silently passed through
+    });
+  });
 });
