@@ -22,10 +22,12 @@
  *    增删改都会哈希不符或条目错位,整体重读。
  *
  * 两路共用:包先在内存里打完再弹保存对话框——用户挑选位置期间插件被
- * 更新/卸载都不影响已抓内容。产物落盘前再过两道装入同口径的闸:
- * 体积(条目数/解压总量/包体大小,与 GhostManager 同一组常量,Node
- * 插件运行期可能把目录写大)与装入级验签(签名包的 statement/发布者
- * 签名在装入后可能被篡改,哈希自洽证明不了 statement 本身可信)。
+ * 更新/卸载都不影响已抓内容。产物落盘前后过装入同口径的闸:体积在
+ * 快照阶段增量限流(与 GhostManager 同一组常量,Node 插件运行期可能
+ * 把目录写大;签名包先用 statement 声明口径短路);写盘后、上报成功
+ * 前过装入校验本尊 GhostManager.inspect(带真实 trust registry,
+ * statement/review 签名被篡改、manifest/node.entry 被改坏等「成功却
+ * 装不回」的情形都拦在这里,不过闸删掉已写文件如实报错)。
  * Electron 对话框、安装目录解析与落盘全部注入,便于内存 harness 测试。
  */
 
@@ -44,7 +46,7 @@ import {
   MAX_NODE_UNCOMPRESSED_BYTES,
   MAX_NODE_ZIP_ENTRIES,
 } from './GhostManager.js';
-import { GHOST_SIGNATURE_FILE, verifyGhostZipSignatures } from './ghostSignature.js';
+import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
 
 export type ExportGhostPackageResult =
   | { status: 'saved'; savedPath: string }
@@ -74,6 +76,13 @@ export interface ExportGhostPackageDeps {
   /** 保存对话框文件类型标签(调用方按当前 locale 本地化)。 */
   fileTypeLabel: string;
   writeFile(filePath: string, data: Buffer): Promise<void>;
+  /**
+   * 装入校验本尊(GhostManager.inspect):产物写盘后、上报成功前调用,
+   * 返回是否通过。签名/未签名都过这道闸——statement 被篡改成自洽、
+   * review 签名损坏、manifest/node.entry 被改坏等「导出成功却装不回」
+   * 的情形都由它拦下。
+   */
+  inspectPackage(filePath: string): Promise<boolean>;
 }
 
 /** 插件名清洗成文件名片段:空白折叠、剥掉文件系统非法字符,截断防爆长度。 */
@@ -201,10 +210,20 @@ function sha256hex(data: Buffer): string {
  * 判定锚定在字节上,路径/尺寸/mtime 相同的并发替换也会哈希不符被捕获。
  * symlink/junction 不跟随:只归档安装目录自身的真实内容。结果按 rel
  * 排序供逐位比对。
+ * budget(仅第一遍):边遍历边扣条目/字节额度,超限抛 ExportTooLargeError
+ * 立刻中止——不把超限目录完整读进内存。
  */
-async function walkTree(dir: string, withData: true): Promise<TreeFile[]>;
+async function walkTree(
+  dir: string,
+  withData: true,
+  budget: { entriesLeft: number; bytesLeft: number },
+): Promise<TreeFile[]>;
 async function walkTree(dir: string, withData: false): Promise<TreeMeta[]>;
-async function walkTree(dir: string, withData: boolean): Promise<Array<TreeFile | TreeMeta>> {
+async function walkTree(
+  dir: string,
+  withData: boolean,
+  budget?: { entriesLeft: number; bytesLeft: number },
+): Promise<Array<TreeFile | TreeMeta>> {
   const out: Array<TreeFile | TreeMeta> = [];
   const walk = async (cur: string, relBase: string): Promise<void> => {
     const entries = await fs.promises.readdir(cur, { withFileTypes: true });
@@ -218,6 +237,11 @@ async function walkTree(dir: string, withData: boolean): Promise<Array<TreeFile 
       } else if (entry.isFile()) {
         const data = await fs.promises.readFile(abs);
         if (withData) {
+          budget!.entriesLeft -= 1;
+          budget!.bytesLeft -= data.byteLength;
+          if (budget!.entriesLeft < 0 || budget!.bytesLeft < 0) {
+            throw new ExportTooLargeError();
+          }
           out.push({ rel, data, sha256: sha256hex(data) });
         } else {
           out.push({ rel, sha256: sha256hex(data) });
@@ -236,8 +260,11 @@ async function walkTree(dir: string, withData: boolean): Promise<Array<TreeFile 
  * 内被增删改都会哈希不符或条目错位;通过校验的包逐字节等于校验遍时刻
  * 的单一目录状态。
  */
-async function snapshotUnsignedTree(dir: string): Promise<TreeFile[] | null> {
-  const first = await walkTree(dir, true);
+async function snapshotUnsignedTree(
+  dir: string,
+  budget: { entriesLeft: number; bytesLeft: number },
+): Promise<TreeFile[] | null> {
+  const first = await walkTree(dir, true, budget);
   const verify = await walkTree(dir, false);
   const consistent =
     first.length === verify.length &&
@@ -246,7 +273,7 @@ async function snapshotUnsignedTree(dir: string): Promise<TreeFile[] | null> {
 }
 
 // ---------------------------------------------------------------------------
-// 共用:带重试的快照 + 打包 + 对话框落盘
+// 共用:带重试的快照(增量限流) + 打包 + 对话框落盘
 // ---------------------------------------------------------------------------
 
 /**
@@ -254,8 +281,20 @@ async function snapshotUnsignedTree(dir: string): Promise<TreeFile[] | null> {
  * 变更下拿不到一致结果(含更新/卸载途中的瞬时 IO 失败)就整体重试,
  * 上限 SNAPSHOT_MAX_ATTEMPTS 次;持续冲突返回 null,由调用方如实报错
  * 请用户重试。
+ *
+ * 体积上限在读快照阶段增量执行(评审 P1):不等全部读进内存再判定——
+ * 签名包先用 statement 声明的条目数/字节数短路,未签名包边遍历边累计,
+ * 超限立刻中止返回 'too_large',不把超限内容读进内存。
  */
 const SNAPSHOT_MAX_ATTEMPTS = 3;
+
+/** 快照超限:与瞬时 IO 失败区分,不进重试。 */
+class ExportTooLargeError extends Error {}
+
+interface SnapshotLimits {
+  maxEntries: number;
+  maxUncompressed: number;
+}
 
 interface PackageSnapshot {
   entries: PackageEntry[];
@@ -265,8 +304,6 @@ interface PackageSnapshot {
    * dir 条目不参与 statement 哈希,补回不影响验签。
    */
   emptyDirs: string[];
-  /** 是否走了签名闭包路径(决定产物是否要做装入级验签)。 */
-  signed: boolean;
 }
 
 /**
@@ -298,30 +335,43 @@ async function collectEmptyDirs(dir: string, keep: (rel: string) => boolean): Pr
   return empty;
 }
 
-async function snapshotPackage(dir: string): Promise<PackageSnapshot | null> {
+async function snapshotPackage(
+  dir: string,
+  limits: SnapshotLimits,
+): Promise<PackageSnapshot | 'too_large' | null> {
   for (let attempt = 0; attempt < SNAPSHOT_MAX_ATTEMPTS; attempt++) {
     try {
       const doc = await readSignedDoc(dir);
       if (doc) {
+        // 先用 statement 声明的口径短路,避免读取超限内容。
+        const declaredBytes = doc.files.reduce((sum, file) => sum + file.bytes, 0);
+        if (declaredBytes > limits.maxUncompressed || doc.files.length + 1 > limits.maxEntries) {
+          return 'too_large';
+        }
         const entries = await readSignedEntries(dir, doc);
         if (entries) {
           const covered = new Set(doc.files.map((file) => file.path));
           const emptyDirs = await collectEmptyDirs(dir, (rel) => covered.has(rel));
-          return { entries, emptyDirs, signed: true };
+          return { entries, emptyDirs };
         }
       } else {
-        const tree = await snapshotUnsignedTree(dir);
+        const budget = {
+          entriesLeft: limits.maxEntries,
+          bytesLeft: limits.maxUncompressed,
+        };
+        const tree = await snapshotUnsignedTree(dir, budget);
         if (tree) {
           const emptyDirs = await collectEmptyDirs(dir, () => true);
           return {
             entries: tree.map(({ rel, data }) => ({ rel, data })),
             emptyDirs,
-            signed: false,
           };
         }
       }
-    } catch {
-      // 并发更新/卸载途中的瞬时失败(目录短暂缺失、半写文件等):重试。
+    } catch (err) {
+      // 超限是确定性结果,不重试;其余(并发更新/卸载途中的目录短暂
+      // 缺失、半写文件等瞬时失败)整体重读。
+      if (err instanceof ExportTooLargeError) return 'too_large';
     }
   }
   return null;
@@ -346,20 +396,17 @@ export async function exportGhostPackage(
     return { status: 'error', code: 'read_failed' };
   }
 
-  // 一致性快照(口径见文件头):snapshotPackage 内部已把瞬时失败纳入
-  // 重试,返回 null = 持续冲突。
-  const snapshot = await snapshotPackage(ghost.dir);
-  if (!snapshot) return { status: 'error', code: 'read_failed' };
-
-  // 装入侧体积口径(评审 P1):Node 插件运行期可向安装目录写缓存/产物,
-  // 目录可能已长大到超过装入上限——导出成功却装不回是最差结局,这里
-  // 与装入侧同一组常量,超限如实报错。
+  // 一致性快照(口径见文件头),体积上限在快照阶段增量执行——
+  // snapshotPackage 返回 null = 持续并发冲突,'too_large' = 超装入上限。
   const isNode = Boolean(ghost.manifest.node);
-  const maxUncompressed = isNode ? MAX_NODE_UNCOMPRESSED_BYTES : MAX_BASIC_UNCOMPRESSED_BYTES;
-  const maxEntries = isNode ? MAX_NODE_ZIP_ENTRIES : MAX_BASIC_ZIP_ENTRIES;
+  const limits: SnapshotLimits = {
+    maxEntries: isNode ? MAX_NODE_ZIP_ENTRIES : MAX_BASIC_ZIP_ENTRIES,
+    maxUncompressed: isNode ? MAX_NODE_UNCOMPRESSED_BYTES : MAX_BASIC_UNCOMPRESSED_BYTES,
+  };
   const maxArchive = isNode ? MAX_NODE_CINDY_FILE_BYTES : MAX_BASIC_CINDY_FILE_BYTES;
-  const totalBytes = snapshot.entries.reduce((sum, file) => sum + file.data.byteLength, 0);
-  if (totalBytes > maxUncompressed) return { status: 'error', code: 'too_large' };
+  const snapshot = await snapshotPackage(ghost.dir, limits);
+  if (snapshot === 'too_large') return { status: 'error', code: 'too_large' };
+  if (!snapshot) return { status: 'error', code: 'read_failed' };
 
   const zip = new JSZip();
   for (const rel of snapshot.emptyDirs) {
@@ -368,7 +415,7 @@ export async function exportGhostPackage(
   for (const file of snapshot.entries) {
     zip.file(file.rel, file.data);
   }
-  if (Object.keys(zip.files).length > maxEntries) {
+  if (Object.keys(zip.files).length > limits.maxEntries) {
     return { status: 'error', code: 'too_large' };
   }
   let buf: Buffer;
@@ -379,14 +426,6 @@ export async function exportGhostPackage(
     return { status: 'error', code: 'compress_failed' };
   }
   if (buf.byteLength > maxArchive) return { status: 'error', code: 'too_large' };
-
-  // 装入级验签(评审 P1):签名包的 statement/发布者签名在装入后可能被
-  // 篡改——哈希比对只能证明内容与 statement 自洽,证明不了 statement
-  // 本身可信。产物写盘前走与装入相同的验签,确保导出包可原样装回。
-  if (snapshot.signed) {
-    const verification = await verifyGhostZipSignatures(zip, '', ghost.manifest, {});
-    if (!verification.ok) return { status: 'error', code: 'verify_failed' };
-  }
 
   const baseName = sanitizeExportFileNamePart(ghost.manifest.name) || ghost.manifest.id;
   // 版本同样来自作者清单,可能与名字一样含路径分隔符/控制字符,
@@ -411,6 +450,21 @@ export async function exportGhostPackage(
     await deps.writeFile(picked.filePath, buf);
   } catch {
     return { status: 'error', code: 'write_failed' };
+  }
+
+  // 装入校验终闸(评审 P1):产物必须能原样过 GhostManager.inspect——
+  // 它带真实 trust registry 与全部装入校验(review 签名、manifest、
+  // node.entry、条目/体积),statement 篡改成自洽、目录被改坏等情形
+  // 都拦在这里;不过闸就删掉已写文件,不产出「成功却装不回」的包。
+  let installable = false;
+  try {
+    installable = await deps.inspectPackage(picked.filePath);
+  } catch {
+    installable = false;
+  }
+  if (!installable) {
+    await fs.promises.rm(picked.filePath, { force: true }).catch(() => {});
+    return { status: 'error', code: 'verify_failed' };
   }
   return { status: 'saved', savedPath: picked.filePath };
 }

@@ -3540,6 +3540,12 @@ export function registerGhostIpc(): void {
       getDownloadsDir: () => app.getPath('downloads'),
       fileTypeLabel: t('settings.ghosts.detail.exportFileType'),
       writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
+      // 装入校验本尊:产物写盘后过 manager.inspect(带真实 trust
+      // registry),不过闸不向上报成功。
+      inspectPackage: async (filePath) => {
+        const probe = await manager.inspect(filePath);
+        return !('rejection' in probe);
+      },
     });
     switch (result.status) {
       case 'saved':

@@ -90,6 +90,7 @@ function makeDeps(overrides: Partial<Parameters<typeof exportGhostPackage>[1]> =
     getDownloadsDir: () => workDir,
     fileTypeLabel: 'Cindy Plugin',
     writeFile: (filePath: string, data: Buffer) => fs.promises.writeFile(filePath, data),
+    inspectPackage: async () => true,
     ...overrides,
   };
 }
@@ -160,18 +161,17 @@ describe('exportGhostPackage', () => {
     expect(result).toEqual({ status: 'error', code: 'read_failed' });
   });
 
-  it('签名文件本身被篡改(发布者签名失效):如实 verify_failed', async () => {
-    await writeStatement(['ghost.json', 'locales/en.json', 'main.js']);
-    // 文件与 statement 自洽(哈希全对),但发布者签名被换掉——
-    // 装入级验签必须拦下,不能产出装不回的"成功"导出。
-    const sigPath = path.join(ghostDir, 'cindy-signatures.json');
-    const doc = JSON.parse(await fs.promises.readFile(sigPath, 'utf8')) as {
-      publisher: { signature: string };
-    };
-    doc.publisher.signature = Buffer.from('forged-signature-bytes').toString('base64');
-    await fs.promises.writeFile(sigPath, JSON.stringify(doc));
-    const result = await exportGhostPackage('hello', makeDeps());
+  it('产物未过装入校验:如实 verify_failed 并删除已写文件', async () => {
+    // 装入目录被改坏(如 statement/review 签名失效、manifest 不合法)
+    // 的情形由装入校验本尊拦下——导出不能报成功,产物必须清掉。
+    const result = await exportGhostPackage('hello', makeDeps({
+      inspectPackage: async () => false,
+    }));
     expect(result).toEqual({ status: 'error', code: 'verify_failed' });
+    const leftovers = (await fs.promises.readdir(workDir)).filter((name) =>
+      name.endsWith('.cindy'),
+    );
+    expect(leftovers).toEqual([]);
   });
 
   it('目录内容超过装入侧条目上限:如实 too_large', async () => {
