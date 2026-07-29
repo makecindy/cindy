@@ -17,8 +17,12 @@
  * 两层互相需要：只折叠 DOM 而把 `AllSelection` 留在状态层，PM 下一次 `selectionToDOM`
  * 会把它重新写回 DOM，高亮复现。
  *
- * 只认「单个空 paragraph」这一种真空形态，其余一律不介入：多个空段落（Shift+Enter 敲出的
- * 空行）、只含 atom chip 的草稿、结构化列表都带着真实内容，选中它们是合理的。
+ * 只认「单个空 paragraph」这一种真空形态，其余一律不介入：多个空段落、只含 atom chip 的
+ * 草稿、结构化列表都带着真实内容，选中它们是合理的。
+ *
+ * 多段落文档在本 composer 里来自程序化构造（引用回填、历史草稿等，见
+ * `lib/composerQuoteDocument.ts`）与多段粘贴，**不是**敲键敲出来的：Shift / Alt / Mod+Enter
+ * 都是 hardBreak（`<br>` 留在同一个 paragraph 内），plain Enter 是发送。
  */
 import { Extension } from '@tiptap/core';
 import { Plugin, TextSelection } from '@tiptap/pm/state';

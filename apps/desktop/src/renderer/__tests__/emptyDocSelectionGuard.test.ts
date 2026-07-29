@@ -54,7 +54,9 @@ describe('isBlankParagraphDoc', () => {
     expect(isBlankParagraphDoc(editor.state.doc)).toBe(false);
   });
 
-  it('多个空段落不是真空(Shift+Enter 敲出的空行是真实内容)', () => {
+  // 多段落来自引用回填 / 历史草稿等程序化构造与多段粘贴;Shift/Alt/Mod+Enter 是
+  // hardBreak(留在同一 paragraph 内),plain Enter 是发送,都不产生新段落。
+  it('多个空段落不是真空(多段结构本身是真实内容)', () => {
     const editor = makeEditor();
     editor.commands.setContent({
       type: 'doc',
