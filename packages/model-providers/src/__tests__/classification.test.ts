@@ -155,6 +155,11 @@ describe('categorize', () => {
     expect(isChatEligible({ id: 'openai/babbage-002' })).toBe(false);
   });
 
+  it('embed- 前缀家族同样要兼容命名空间前缀(如 cohere/embed-english-v3.0,2026-07 review 第 22 轮)', () => {
+    expect(categorize('cohere/embed-english-v3.0')).toBe('embedding');
+    expect(isChatEligible({ id: 'cohere/embed-english-v3.0' })).toBe(false);
+  });
+
   it('moderation 模型不落进厂商兜底组、不被判定为可聊天(2026-07 review:fresh evidence,不是issue 列出的语义类型之一,落 other 保留)', () => {
     expect(categorize('omni-moderation-latest')).toBe('other');
     expect(categorize('text-moderation-latest')).toBe('other');
