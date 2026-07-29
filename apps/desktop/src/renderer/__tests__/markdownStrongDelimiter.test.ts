@@ -47,18 +47,28 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(html).not.toContain('**');
   });
 
-  it('distinguishes non-ASCII symbols from CommonMark punctuation', () => {
+  it('treats Unicode symbols as CommonMark punctuation', () => {
     const emojiAfterBoundary = '**结论。**✅继续';
     const asciiSymbolBeforeBoundary = '**总计 $**Next';
+    const unicodeSymbolBeforeBoundary = '**总计 €**Next';
+    const emojiBeforeBoundary = '**完成 ✅**继续';
 
-    expect(normalizeStrongDelimiterBoundaries(emojiAfterBoundary)).toBe(
-      '**结论。**<!--cindy-strong-boundary-->✅继续',
-    );
+    expect(normalizeStrongDelimiterBoundaries(emojiAfterBoundary)).toBe(emojiAfterBoundary);
     expect(normalizeStrongDelimiterBoundaries(asciiSymbolBeforeBoundary)).toBe(
       '**总计 $**<!--cindy-strong-boundary-->Next',
     );
+    expect(normalizeStrongDelimiterBoundaries(unicodeSymbolBeforeBoundary)).toBe(
+      '**总计 €**<!--cindy-strong-boundary-->Next',
+    );
+    expect(normalizeStrongDelimiterBoundaries(emojiBeforeBoundary)).toBe(
+      '**完成 ✅**<!--cindy-strong-boundary-->继续',
+    );
     expect(renderMarkdown(emojiAfterBoundary)).toContain('<strong>结论。</strong>✅继续');
     expect(renderMarkdown(asciiSymbolBeforeBoundary)).toContain('<strong>总计 $</strong>Next');
+    expect(renderMarkdown(unicodeSymbolBeforeBoundary)).toContain(
+      '<strong>总计 €</strong>Next',
+    );
+    expect(renderMarkdown(emojiBeforeBoundary)).toContain('<strong>完成 ✅</strong>继续');
   });
 
   it('does not rewrite boundaries that CommonMark already closes', () => {
@@ -174,6 +184,13 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
   });
 
+  it('preserves protected Markdown syntax inside image descriptions', () => {
+    const inlineCode = '![`**终点。**正文`](missing.png)';
+
+    expect(normalizeStrongDelimiterBoundaries(inlineCode)).toBe(inlineCode);
+    expect(renderMarkdown(inlineCode)).toContain('src="missing.png" alt="**终点。**正文"');
+  });
+
   it('repairs strong delimiters in CJK prose recovered from a bare URL', () => {
     const source = 'https://example.com/foo（**重点。**正文';
 
@@ -265,6 +282,14 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(normalizeStrongDelimiterBoundaries(prose, { preserveTexDelimiters: true })).toBe(
       '**重点。**<!--cindy-strong-boundary-->正文',
     );
+  });
+
+  it('ignores escaped backslashes when pairing preserved TeX delimiters', () => {
+    const escapedDisplay = '\\\\[ **重点。**正文 \\\\]';
+
+    expect(
+      normalizeStrongDelimiterBoundaries(escapedDisplay, { preserveTexDelimiters: true }),
+    ).toBe('\\\\[ **重点。**<!--cindy-strong-boundary-->正文 \\\\]');
   });
 
   it('ignores preserved TeX delimiters inside protected Markdown syntax', () => {

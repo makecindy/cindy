@@ -24,11 +24,14 @@ import remarkTruncateCjkUrls from './remarkTruncateCjkUrls';
 const HIDDEN_SEPARATOR = '<!--cindy-strong-boundary-->';
 const ASCII_PUNCTUATION = '\\u0021-\\u002F\\u003A-\\u0040\\u005B-\\u0060\\u007B-\\u007E';
 const POTENTIAL_BOUNDARY_RE = new RegExp(
-  `[\\p{P}${ASCII_PUNCTUATION}]\\*\\*[^\\s\\p{P}${ASCII_PUNCTUATION}]`,
+  `[\\p{P}\\p{S}${ASCII_PUNCTUATION}]\\*\\*[^\\s\\p{P}\\p{S}${ASCII_PUNCTUATION}]`,
   'u',
 );
 const UNICODE_WHITESPACE_RE = /^\s$/u;
-const UNICODE_PUNCTUATION_RE = new RegExp(`^[\\p{P}${ASCII_PUNCTUATION}]$`, 'u');
+const UNICODE_PUNCTUATION_RE = new RegExp(
+  `^[\\p{P}\\p{S}${ASCII_PUNCTUATION}]$`,
+  'u',
+);
 const PROTECTED_NODE_TYPES = new Set<Nodes['type']>([
   'code',
   'definition',
@@ -225,6 +228,19 @@ function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: st
     // 目标地址与引用标签等外围语法。
     ranges.push({ start: range.start, end: descriptionRange.start });
     ranges.push({ start: descriptionRange.end, end: range.end });
+    const description = markdown.slice(descriptionRange.start, descriptionRange.end);
+    const descriptionTree = proseMarkdownParser.runSync(
+      proseMarkdownParser.parse(description),
+      description,
+    ) as Root;
+    const nestedRanges: OffsetRange[] = [];
+    collectProtectedRanges(descriptionTree, nestedRanges, description);
+    ranges.push(
+      ...nestedRanges.map((nestedRange) => ({
+        start: descriptionRange.start + nestedRange.start,
+        end: descriptionRange.start + nestedRange.end,
+      })),
+    );
     return;
   }
 
@@ -410,6 +426,23 @@ function findUnprotectedDelimiter(
   return -1;
 }
 
+function findUnescapedUnprotectedDelimiter(
+  markdown: string,
+  delimiter: string,
+  start: number,
+  protectedRanges: OffsetRange[],
+): number {
+  let scan = start;
+
+  while (scan < markdown.length) {
+    const offset = findUnprotectedDelimiter(markdown, delimiter, scan, protectedRanges);
+    if (offset === -1 || !isEscaped(markdown, offset)) return offset;
+    scan = offset + 1;
+  }
+
+  return -1;
+}
+
 function collectPreservedTexDelimiterRanges(
   markdown: string,
   protectedRanges: OffsetRange[],
@@ -420,7 +453,7 @@ function collectPreservedTexDelimiterRanges(
   let noBracketCloser = false;
 
   while (scan < markdown.length) {
-    const open = findUnprotectedDelimiter(markdown, '\\', scan, protectedRanges);
+    const open = findUnescapedUnprotectedDelimiter(markdown, '\\', scan, protectedRanges);
     if (open === -1 || open + 1 >= markdown.length) break;
     const kind = markdown[open + 1];
     if (kind !== '(' && kind !== '[') {
@@ -434,7 +467,12 @@ function collectPreservedTexDelimiterRanges(
       continue;
     }
     const closer = kind === '[' ? '\\]' : '\\)';
-    const close = findUnprotectedDelimiter(markdown, closer, open + 2, protectedRanges);
+    const close = findUnescapedUnprotectedDelimiter(
+      markdown,
+      closer,
+      open + 2,
+      protectedRanges,
+    );
     if (close === -1) {
       if (isDisplay) noBracketCloser = true;
       else noParenCloser = true;
