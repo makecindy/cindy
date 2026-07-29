@@ -142,11 +142,12 @@ import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlo
 import { GhostAppearanceSlot } from './appearanceSlot.js';
 import {
   activateGhostAppearancePreset,
+  cancelGhostAppearanceRemoval,
   deleteGhostAppearancePreset,
   listGhostAppearancePresets,
+  prepareGhostAppearanceRemoval,
   readGhostAppearance,
   recoverGhostAppearanceTransaction,
-  removeGhostAppearanceData,
   resetGhostAppearance,
   saveGhostAppearance,
   saveGhostAppearancePreset,
@@ -2628,25 +2629,31 @@ export async function uninstallGhostAndCleanup(
     getGhostNodeRuntimeBroker().stop(id);
     getGhostAgentSlot().clearGhost(id);
     getGhostSubscriptionGateway().dropGhost(id);
-    const result = await manager.uninstall(id, { notify: false });
-    if ('rejection' in result) throwUninstallError(result.rejection);
-    try {
-      // 与插件 appearance-request / 可信 Renderer mutation 共用同一队列：
-      // 已通过初始归属检查的在途请求可能还在验图，必须等它落盘后再做最终
-      // 清扫，避免卸载完成后又留下同 ghost id 的新引用。
-      const appearanceCleanup = await withGhostAppearanceMutation(() =>
-        removeGhostAppearanceData(id),
-      );
-      if (appearanceCleanup.activeRemoved) broadcastGhostAppearance(null);
-    } catch (error) {
-      // 清理事务已经持久化，读取侧会立即隐藏旧归属；下次外观 mutation 或
-      // 新包安装会在插件获得运行机会前重试，不让同 ID 新包继承旧媒体权限。
-      log.warn('ghost appearance cleanup deferred', {
-        id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      broadcastGhostAppearance(await readGhostAppearance());
-    }
+    let activeAppearanceRemoved = false;
+    await withGhostAppearanceMutation(async () => {
+      // 与插件 appearance-request / 可信 Renderer mutation 共用同一队列。
+      // 先等在途请求落盘并持久化删除 marker，marker 写不成就不允许卸载包；
+      // 由此保证 manager.uninstall 一旦成功，总有可恢复的清理凭据。
+      const prepared = await prepareGhostAppearanceRemoval(id);
+      const result = await manager.uninstall(id, { notify: false });
+      if ('rejection' in result) {
+        // manager 未提交删除；原文件也尚未改动，移除 marker 即恢复可见状态。
+        await cancelGhostAppearanceRemoval(id);
+        throwUninstallError(result.rejection);
+      }
+      activeAppearanceRemoved = prepared.activeRemoved;
+      try {
+        await recoverGhostAppearanceTransaction();
+      } catch (error) {
+        // 删除 marker 已在卸载前落盘；物理清理失败时保留它，下一次外观
+        // mutation 或新包安装会在插件获得运行机会前重试。
+        log.warn('ghost appearance cleanup deferred', {
+          id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+    if (activeAppearanceRemoved) broadcastGhostAppearance(null);
     removeGhostSecrets(id);
     removeGhostKvBestEffort(
       createGhostKvStore({

@@ -32,12 +32,26 @@ const PUBLIC_SAVE_ERROR_MESSAGES = new Set([
 ]);
 const RECOVERY_ERROR_MESSAGE =
   '皮肤保存失败且自动恢复未完成；预设可能已保存，请刷新外观列表确认';
+const PUBLIC_IMAGE_ERROR_MESSAGES = new Set([
+  '图片处理组件暂时不可用，请重启 Cindy 后重试',
+  '图片过大，请使用 8 MB 以内的静态图片',
+  '图片尺寸过大，请使用 800 万像素以内的静态图片',
+  '只支持静态图片',
+  'Logo 去白底后没有可见内容，请使用深色文字与纯白背景',
+  'Logo 去白底后的 PNG 超过 8 MB，请缩小图片尺寸后重试',
+]);
 
 /** 只允许稳定的领域错误跨越插件沙箱边界，绝不转发文件系统或数据库原始消息。 */
 function publicSaveErrorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback;
   if (error.name === 'GhostAppearanceRecoveryError') return RECOVERY_ERROR_MESSAGE;
   return PUBLIC_SAVE_ERROR_MESSAGES.has(error.message) ? error.message : fallback;
+}
+
+function publicImageErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && PUBLIC_IMAGE_ERROR_MESSAGES.has(error.message)
+    ? error.message
+    : fallback;
 }
 
 /** 皮肤名统一校验:所有会被持久化的名字(apply / patch / save-current)必须走这里。 */
@@ -359,9 +373,14 @@ export class GhostAppearanceSlot {
       try {
         await this.deps.validateImage(hash);
       } catch (error) {
+        this.deps.log?.warn('ghost appearance image validation failed', {
+          ghostId,
+          label,
+          error: error instanceof Error ? error.message : String(error),
+        });
         return {
           ok: false,
-          message: error instanceof Error && error.message ? error.message : `${label}图片无效`,
+          message: publicImageErrorMessage(error, `${label}图片无效，请重新选择`),
         };
       }
       return { hash, url: image.url };
@@ -463,10 +482,10 @@ export class GhostAppearanceSlot {
                 });
                 return {
                   ok: false,
-                  message:
-                    error instanceof Error && error.message
-                      ? error.message
-                      : 'Logo 去背景失败，请换用纯白底文字图片',
+                  message: publicImageErrorMessage(
+                    error,
+                    'Logo 去背景失败，请换用纯白底文字图片',
+                  ),
                 };
               }
             }

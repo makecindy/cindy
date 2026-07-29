@@ -435,6 +435,41 @@ describe('GhostAppearanceSlot', () => {
     ).resolves.toEqual({ ok: false, message: '每个插件最多保存 50 套皮肤' });
   });
 
+  it('图片校验与去背景失败时不向插件泄露本机路径', async () => {
+    const validation = harness({
+      validateImage: async () => {
+        throw new Error('ENOENT: /Users/private/cindy-media/blob.png');
+      },
+    });
+    await expect(
+      validation.slot.handleRequest('skin', {
+        type: 'appearance-request',
+        operation: 'apply',
+        palette: 'rose',
+        background: { hash: HASH },
+      }),
+    ).resolves.toEqual({ ok: false, message: '背景图片无效，请重新选择' });
+
+    const logo = harness({
+      removeWhiteLogoBackground: async () => {
+        throw new Error('EACCES: /Users/private/cindy-media/logo.png');
+      },
+    });
+    await expect(
+      logo.slot.handleRequest('skin', {
+        type: 'appearance-request',
+        operation: 'apply',
+        palette: 'rose',
+        brand: {
+          logo: { hash: HASH, removeWhiteBackground: true },
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      message: 'Logo 去背景失败，请换用纯白底文字图片',
+    });
+  });
+
   it('不能读取、微调或另存其他插件的活动皮肤', async () => {
     const current = {
       palette: 'ocean' as const,

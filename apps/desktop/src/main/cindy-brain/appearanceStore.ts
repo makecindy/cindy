@@ -45,16 +45,20 @@ export class GhostAppearanceRecoveryError extends Error {
   }
 }
 
-function serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
-  const run = mutationTail.then(async () => {
-    await recoverIncompleteAppearanceTransaction();
-    return operation();
-  });
+function serializeMutationWithoutRecovery<T>(operation: () => Promise<T>): Promise<T> {
+  const run = mutationTail.then(operation);
   mutationTail = run.then(
     () => undefined,
     () => undefined,
   );
   return run;
+}
+
+function serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
+  return serializeMutationWithoutRecovery(async () => {
+    await recoverIncompleteAppearanceTransaction();
+    return operation();
+  });
 }
 
 type PersistedAppearance = Omit<GhostAppearanceSnapshot, 'dim' | 'surfaceOpacity'> & {
@@ -636,6 +640,41 @@ export function removeGhostAppearanceData(
     } satisfies PersistedAppearanceTransaction;
     await atomicWriteJson(transactionFilePath(), transaction);
     return removeGhostAppearanceDataUnsafe(transaction);
+  });
+}
+
+/**
+ * 在插件包卸载提交前先落下清理意图。只有 marker 持久化成功后才允许移除包，
+ * 从而保证卸载后即使文件系统立刻失效，仍有可供后续安装恢复的清理凭据。
+ */
+export function prepareGhostAppearanceRemoval(
+  ghostId: string,
+): Promise<{ activeRemoved: boolean; presetsRemoved: number }> {
+  return serializeMutation(async () => {
+    const previousAppearance = await readGhostAppearanceRaw();
+    const previousPresets = await readPresetLibraryRaw();
+    await atomicWriteJson(transactionFilePath(), {
+      version: 1,
+      previousAppearance,
+      previousPresets,
+      removeGhostId: ghostId,
+    } satisfies PersistedAppearanceTransaction);
+    return {
+      activeRemoved: previousAppearance?.sourceGhostId === ghostId,
+      presetsRemoved: previousPresets.presets.filter(
+        (preset) => preset.sourceGhostId === ghostId,
+      ).length,
+    };
+  });
+}
+
+/** manager 明确拒绝卸载时撤销尚未执行的清理意图，原外观文件保持不变。 */
+export function cancelGhostAppearanceRemoval(ghostId: string): Promise<void> {
+  return serializeMutationWithoutRecovery(async () => {
+    const transaction = await readAppearanceTransaction();
+    if (transaction?.removeGhostId === ghostId) {
+      await fs.rm(transactionFilePath(), { force: true });
+    }
   });
 }
 

@@ -41,8 +41,10 @@ vi.mock('../../cindy-media/ledger.js', () => {
 
 import {
   activateGhostAppearancePreset,
+  cancelGhostAppearanceRemoval,
   deleteGhostAppearancePreset,
   listGhostAppearancePresets,
+  prepareGhostAppearanceRemoval,
   readGhostAppearance,
   recoverGhostAppearanceTransaction,
   removeGhostAppearanceData,
@@ -326,6 +328,23 @@ describe('appearance preset store', () => {
     expect(mocks.refs.has('skin-background:active')).toBe(false);
     expect(mocks.refs.has(`skin-preset:${mine.id}:background`)).toBe(false);
     expect(fs.existsSync(path.join(mocks.root, 'appearance-transaction.v1.json'))).toBe(false);
+  });
+
+  it('卸载提交前持久化清理意图，manager 拒绝时可撤销且不改原数据', async () => {
+    await saveGhostAppearance(appearance('Mine'), { background: HASH_A }, 'skin');
+    await saveGhostAppearancePreset(appearance('Mine'), { background: HASH_A }, 'skin');
+
+    await expect(prepareGhostAppearanceRemoval('skin')).resolves.toEqual({
+      activeRemoved: true,
+      presetsRemoved: 1,
+    });
+    expect(await readGhostAppearance()).toBeNull();
+    expect(await listGhostAppearancePresets('skin')).toEqual([]);
+
+    await cancelGhostAppearanceRemoval('skin');
+    expect(await readGhostAppearance()).toMatchObject({ name: 'Mine', sourceGhostId: 'skin' });
+    expect(await listGhostAppearancePresets('skin')).toHaveLength(1);
+    expect(mocks.refs.get('skin-background:active')?.has(HASH_A)).toBe(true);
   });
 
   it('每插件预设数量独立计数，不能占满其他插件的额度', async () => {
