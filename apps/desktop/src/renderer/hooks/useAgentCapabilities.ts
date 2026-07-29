@@ -26,6 +26,12 @@ export interface ModelDescriptor {
   displayName: string;
   /** 目录分组 id(如 'gpt-budget'): 折扣版与官方版 displayName 同名, 靠它区分。 */
   group?: string;
+  /**
+   * Gateway 原生 mode(issue #882)。availableModels 派生时已经过 isChatEligible
+   * 过滤,这里透传只是让下游按 model 二次分类的逻辑(如 resolveSourceSwitch 的
+   * classifyModel)拿到 mode,不必回读目录(2026-07 review)。
+   */
+  mode?: string;
   description?: string;
   contextWindow: number;
   efforts: readonly Effort[];

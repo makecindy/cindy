@@ -148,6 +148,14 @@ export interface ModelDescriptor {
    * 展示排序权重（纯展示元数据，源自目录）。渲染层据此排序;缺省排末尾。maker-core 运行时不读它。
    */
   sortOrder?: number;
+  /**
+   * Gateway 原生 mode（issue #882，纯展示/判定元数据，源自目录 CatalogModel.mode）。
+   * availableModels 派生时已经过 isChatEligible 过滤，这里透传只是为了让下游（如
+   * resolveSourceSwitch 之类按 model 二次判定分组的逻辑）拿到 mode 而不必回读目录——
+   * 2026-07 review：ModelDescriptor 曾经丢弃 mode，下游对象只能靠 id/group 猜，
+   * 与本条目"已经聊天可用"的事实脱节。maker-core 运行时不读它。
+   */
+  mode?: string;
 }
 
 /**

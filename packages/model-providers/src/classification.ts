@@ -174,14 +174,18 @@ export function classifyModel(model: { id: string; group?: string; mode?: string
 
 /**
  * 该模型能不能进 Agent `availableModels` / 新对话模型选择器(issue #882 第 3 点)。
- * `mode` 存在时只信 mode==='chat';缺省时看 classifyModel 落进哪个分组——
- * 落进厂商聊天组(anthropic/gpt/gpt-budget/grok/google/china)才算,这保证了
- * "mode 还没覆盖到、但已经在正常工作的网关聊天模型"不会因为这次改动突然从
+ * `mode` 存在时只信 mode==='chat';缺省时按 **id 正则**(categorize)判定,
+ * 故意不走 groupOf ——`group` 是展示分组/品牌,不是能力类型(issue #882 明确
+ * 要求两者独立),网关的展示元数据完全可能把 `gpt-image-2` 这类图像模型的
+ * `group` 标成 'gpt'(品牌上归类到 GPT 家族,方便浏览),这里若信了 group 会把
+ * 非聊天模型误判为可用(2026-07 review)。是否落进厂商聊天组
+ * (anthropic/gpt/gpt-budget/grok/google/china)只用于兜底判断,保证"mode 还
+ * 没覆盖到、但已经在正常工作的网关聊天模型"不会因为这次改动突然从
  * availableModels 消失(见 classification.test.ts 的回归锁)。
  */
 export function isChatEligible(model: { id: string; group?: string; mode?: string }): boolean {
   if (model.mode !== undefined) return model.mode === 'chat';
-  return CHAT_VENDOR_CATEGORIES.has(groupOf(model));
+  return CHAT_VENDOR_CATEGORIES.has(categorize(model.id));
 }
 
 /** groupModelsForDisplay 的最小模型形状(id + 可选 group / mode / sortOrder)。 */

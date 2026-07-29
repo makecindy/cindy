@@ -223,6 +223,17 @@ describe('isChatEligible — 决定能否进 Agent availableModels(issue #882 �
     expect(isChatEligible({ id: 'moonshotai/kimi-k2' })).toBe(true); // china 兜底组
     expect(isChatEligible({ id: 'some-gateway-chat-model', mode: 'chat' })).toBe(true);
   });
+
+  it('mode 缺省时不采信 group 品牌标注,只按 id 能力正则判定(2026-07 review)', () => {
+    // group 是展示分组/品牌,不是能力类型(issue #882 明确要求两者独立)——网关完全可能把
+    // 图像模型的 group 品牌标成 'gpt'(归到 GPT 家族方便浏览),这不代表它能聊天。
+    // groupOf({id:'gpt-image-2', group:'gpt'}) 会信 group 返回 'gpt'(展示分组语义没错),
+    // 但 isChatEligible 必须不受骗:categorize('gpt-image-2') 正确识别为 image,判定不可用。
+    expect(isChatEligible({ id: 'gpt-image-2', group: 'gpt' })).toBe(false);
+    expect(isChatEligible({ id: 'text-embedding-3-large', group: 'china' })).toBe(false);
+    // 对照组:group 品牌标注和 id 能力判定一致时,不受影响。
+    expect(isChatEligible({ id: 'gpt-5.5', group: 'gpt' })).toBe(true);
+  });
 });
 
 describe('groupModelsForDisplay — sortOrder 升序 + group 分桶 + 桶序按最小 sortOrder', () => {
