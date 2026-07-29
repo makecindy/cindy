@@ -4840,6 +4840,123 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('stays busy and settles on cancel while a capacity failure is only deferred', async () => {
+      // "失败已延后、等在途 turn/start settle 后补排"这个状态既没有计时器也没有
+      // inFlight。两处后果: Session.send() 会把会话当 idle 接受第二条消息并丢掉第一条
+      // 的重投状态(而它的原始 RPC 还在飞); signal 取消也会被当成"没什么要收口的"直接
+      // 返回, 派发闩永久不释放(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-deferred-busy',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        const sending = handle.send({ type: 'user', content: 'hello' }, { signal: controller.signal });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 延后态也必须算忙 —— 否则并发 send 会把这一轮挤掉。
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 延后态里取消 → 必须立刻收口, 不能等谁来补排。
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+        const after = events.slice(before);
+        expect(after.filter((e) => e.type === 'error' && e.data?.isTerminal === true)).toHaveLength(1);
+        expect(after.some((e) => e.type === 'status' && e.data?.isRunning === false)).toBe(true);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        // 取消之后不得再补排。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sending.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('interrupts a turn the retry already activated when the signal aborts', async () => {
+      // 计时器已消费、inFlight 已清、重投的 turn 已激活 —— 此时 abort 若直接 return,
+      // 取消既不落墓碑也不 interrupt, 那个 turn 会继续执行命令与文件改动
+      // (review #844 greptile P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-abort-after-retry-active',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        await handle.send({ type: 'user', content: 'hello' }, { signal: controller.signal });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        // 退避到点 → 重投成功并激活 turn-2（inFlight 已清、计时器已消费）。
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStartCount(host)).toBe(2);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-2',
+          ),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('keeps a deferred retry under a tightening that lands before the initial response', async () => {
       // 失败在初始 turn/start 还在飞时被延后 → 那个状态既没计时器也没 inFlight。此时
       // 收紧权限, 延迟中断标记会先被原始 turn 的响应消费掉, 补排出去的重投带着冻结的

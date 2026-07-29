@@ -1811,9 +1811,10 @@ export function createTurnRunner(
     if (!t) return;
     state.scheduledTranspond = null; // 防重入(下一条 stray 不会再命中)
     clearTranspondTicker(t);
-    // 收口前清掉"正在自动重试"这类瞬态状态行: 它不是工作项, 而下面 composeTranspondView
-    // 会把 activity 整段写进 finalize 的正文 —— 不清就会在失败说明的正上方永久留一行
-    // "仍在重试"(与 handleTurnErrorAsync 同款处理)。
+    // 防御性复位: composeTranspondView(final=true) 本身只取 header + 正文, 不含过程区,
+    // 所以这行不是收口正确性的依赖; 留着是为了让这块转播态在收口后不残留瞬态字段
+    // (万一将来 final 视图改成包含过程区)。真正必须显式清的是 handleTurnErrorAsync ——
+    // 它不置 turn.done, composeStreamingView 会把 activity 一起写进正文。
     setActivityNotice(t.activity, null);
     // 没产出任何内容(无文本无步骤)且无错 → 不留空卡。
     if (!t.streamingHandle && t.buffer.length === 0 && t.activity.totalSteps === 0 && !errMsg) {
@@ -2163,6 +2164,11 @@ export function createTurnRunner(
     turn.done = true;
     clearActivityTicker(turn);
     completeTurnCallback(turn);
+    // 这里**不需要**清 activity.notice: turn.done 已置, composeStreamingView 对
+    // done 的 turn 直接返回正文、整段跳过过程区, 所以"正在自动重试"不可能漏进
+    // finalize 的卡片(该不变量由 turnRunnerSendOutcome 的
+    // "clears the retry notice when the retried turn succeeds with no output" 锁住)。
+    // 错误路径不同: handleTurnErrorAsync 不置 turn.done, 那里必须显式清。
     // assistant 回复落库不在这里做 — 所有 IM session(接管与渠道默认)都已
     // wireSessionToIpcExternal,由 messagePersistBroadcaster 单点落库(含
     // tool_use / tool_result / thinking 过程消息,desktop 重开历史能完整回放)。

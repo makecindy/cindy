@@ -1307,6 +1307,47 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(unsub).toHaveBeenCalledTimes(1);
   });
 
+  it('clears the retry notice when the retried turn succeeds with no output', async () => {
+    // 不变量锁定(review #844 codex P1 提出的担心, 实测不成立但值得锁住):
+    // 重投成功而那一轮零输出时, 没有任何进展 handler 会清掉"正在自动重试" —— 卡片
+    // 会不会停在"仍在重试"、并因正文非空而压掉空回复兜底? 不会: handleTurnDoneAsync
+    // 先置 turn.done, 而 composeStreamingView 对 done 的 turn 直接返回正文、整段跳过
+    // 过程区。这条用例把这个短路行为钉住, 以后改 composeStreamingView 会立刻暴露。
+    const handle = {
+      messageId: 'stream-retry-empty-done',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    await runDefaultTurn();
+
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model. (auto-retry 1/4)',
+        isTerminal: false,
+        willRetry: true,
+      },
+    });
+    await flushMicrotasks();
+    expect(handle.replace.mock.calls.map((c) => String(c[0])).join('\n')).toContain(
+      '正在自动重试',
+    );
+
+    // 重投成功, 但这一轮一个字都没输出。
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    const finalView = String(handle.finalize.mock.calls[0][0]);
+    expect(finalView).not.toContain('正在自动重试');
+    // 过程区清空后应回落到空回复兜底, 而不是把状态行当正文。
+    expect(finalView).toContain('空回复');
+  });
+
   it('waits for the pending retry card before finalizing a terminal overload error', async () => {
     // 过载重试提示会**惰性建卡**, 而终态错误可能恰好在 startStreamingText 回来之前
     // 到达。不同步的话: 终态看到 streamingHandle 还是 null → 另发一条错误消息并把

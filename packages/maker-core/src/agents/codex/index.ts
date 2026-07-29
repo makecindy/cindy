@@ -4531,15 +4531,26 @@ export class CodexAgent extends BaseAgent {
      * currentTurnId / isTurnStartPending, 会漏掉"退避计时器正在等"这个窗口 ——
      * 那时重投一到点就会以已被撤销的宽松档执行工具(review #844 codex P1)。
      */
+    /**
+     * 本轮 send 的过载重投是否"还会发生"。三种状态都算:
+     *   - `timer != null`：退避等待中，计时器持着原消息；
+     *   - `inFlight`：计时器已到点、重投 RPC 在途、新 turn 尚未激活；
+     *   - `deferredCapacityFailure !== null`：失败已记账、等在途 turn/start settle 后
+     *     补排（那一刻既没有计时器也没有 inFlight）。
+     *
+     * 抽成单一判据是因为它同时决定三件事: 会话忙不忙(isTurnRunning)、取消要不要收口
+     * (signal abort)、权限收紧要不要作用到重投。前几轮每处各写一份, 第三种状态加进来
+     * 时漏了两处(review #844 codex/greptile P1)。
+     */
+    const overloadRetryPending = (
+      state: typeof overloadRetry = overloadRetry,
+    ): state is NonNullable<typeof overloadRetry> =>
+      state != null
+      && (state.timer != null || state.inFlight || state.deferredCapacityFailure !== null);
+
     const overloadRetryPolicyLooserThan = (mode: PermissionMode): boolean => {
       const state = overloadRetry;
-      if (!state) return false;
-      // 三种"重投仍会发生"的状态都要算在内: 计时器在等、重投 RPC 在途, 以及**失败已被
-      // 延后、等在途 turn/start settle 后补排**(那时既没有计时器也没有 inFlight) ——
-      // 漏掉最后一种, 那个窗口里的收紧就不会武装延迟中断(review #844 codex P1)。
-      const retryStillPending =
-        state.timer != null || state.inFlight || state.deferredCapacityFailure !== null;
-      if (!retryStillPending) return false;
+      if (!overloadRetryPending(state)) return false;
       return (
         codexPermissionStrictnessRank(state.launchedPermissionMode)
         < codexPermissionStrictnessRank(mode)
@@ -5809,12 +5820,20 @@ export class CodexAgent extends BaseAgent {
         const sendSignal = sendOpts?.signal;
         if (armedRetryState && sendSignal) {
           const onSendAbort = (): void => {
-            // 只在真的还有挂起重投时才收口: 本轮正常跑完后状态仍留着(预算只在下次
-            // send 才重置), 那时的 abort 不该凭空造一条终态。
             if (overloadRetry !== armedRetryState) return;
-            if (armedRetryState.timer == null && !armedRetryState.inFlight) return;
+            // 两类要收口的状态:
+            //  1. 重投还会发生(退避等待 / RPC 在途 / 失败已延后等补排);
+            //  2. 重投已经把一个 turn 跑起来了(计时器已消费、inFlight 已清、
+            //     currentTurnId 已置)。这时若直接 return, 取消既不落墓碑也不
+            //     interrupt, 那个 turn 会继续执行命令与文件改动
+            //     (review #844 greptile P1)。
+            // 判据用 attempt > 0 限定在"本轮确实被重投接管过"上: 没发生过重投的
+            // 普通 send 里 signal 仍只是**受理前**的取消边界, 语义不变。
+            const retryOwnsActiveTurn =
+              armedRetryState.attempt > 0 && (currentTurnId !== null || isTurnInFlight);
+            if (!overloadRetryPending(armedRetryState) && !retryOwnsActiveTurn) return;
             cancelOverloadRetry('send signal aborted');
-            settleCancelledOverloadRetry(armedRetryState, 'send signal aborted during backoff');
+            settleCancelledOverloadRetry(armedRetryState, 'send signal aborted');
           };
           sendSignal.addEventListener('abort', onSendAbort, { once: true });
           armedRetryState.disposeSignalWatch = () => {
@@ -6123,8 +6142,7 @@ export class CodexAgent extends BaseAgent {
         // 用户点 Stop = 明确不想继续这一轮，挂起的过载重投必须一起撤掉。
         // 放在 currentTurnId 判空之前：重投等待期间 turn 已死、currentTurnId 为
         // null，此时正是最需要响应 Stop 的时刻（否则计时器到点又发一个新 turn）。
-        const hadPendingOverloadRetry =
-          overloadRetry?.timer != null || overloadRetry?.inFlight === true;
+        const hadPendingOverloadRetry = overloadRetryPending();
         discardOverloadRetry('aborted');
         if (closed) return;
         // 有挂起重投时的 Stop **必须**由这里显式收口逻辑 turn —— desktop 的
@@ -6402,15 +6420,16 @@ export class CodexAgent extends BaseAgent {
         // 的 turn」但逻辑上没结束的窗口，只看 isTurnInFlight 都会漏：并发 send
         // 被误接受后，send() 开头的 cancelOverloadRetry 会把原消息静默丢掉。
         //
-        //  - `timer != null`：退避等待中，计时器持着原消息；
-        //  - `inFlight`：计时器已到点、重投 RPC 在途、新 turn 尚未激活。
-        //
-        // 两者都在 retry() 的 finally / cancelOverloadRetry 里必定复位。
+        // 三种状态见 overloadRetryPending 的注释(退避等待 / RPC 在途 / 失败已延后
+        // 等补排)。漏掉"已延后"那种时, Session.send() 会把会话当 idle 接受第二条
+        // 消息, 把第一条的重投状态连同它仍在飞的原始 RPC 一起丢掉
+        // (review #844 codex P1)。三者都在 retry() 的 finally /
+        // rescheduleDeferredCapacityFailure / cancelOverloadRetry 里必定复位。
         // **不把 `isTurnStartPending` 一起算进来**：正常 send 路径上它必须保持
         // idle 语义——终态先于 turn/start 响应到达时（协议允许的乱序），
         // coordinator 要看到 idle 才能收口，否则 send 挂死（既有用例
         // "accepts terminal error before TurnStartResponse…" 锁的就是这条）。
-        return isTurnInFlight || overloadRetry?.timer != null || overloadRetry?.inFlight === true;
+        return isTurnInFlight || overloadRetryPending();
       },
     };
 
