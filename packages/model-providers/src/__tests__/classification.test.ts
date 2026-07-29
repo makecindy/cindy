@@ -130,6 +130,15 @@ describe('categorize', () => {
     expect(isChatEligible({ id: 'veo-3' })).toBe(false);
   });
 
+  it('同一批家族加了供应商命名空间前缀(如 openai/dall-e-3)时,锚定 id 开头的判定不漏网(2026-07 review 第 19 轮)', () => {
+    expect(categorize('openai/dall-e-3')).toBe('image');
+    expect(categorize('openai/sora-2')).toBe('video');
+    expect(categorize('google/veo-3')).toBe('video');
+    expect(isChatEligible({ id: 'openai/dall-e-3' })).toBe(false);
+    expect(isChatEligible({ id: 'openai/sora-2' })).toBe(false);
+    expect(isChatEligible({ id: 'google/veo-3' })).toBe(false);
+  });
+
   it('moderation 模型不落进厂商兜底组、不被判定为可聊天(2026-07 review:fresh evidence,不是issue 列出的语义类型之一,落 other 保留)', () => {
     expect(categorize('omni-moderation-latest')).toBe('other');
     expect(categorize('text-moderation-latest')).toBe('other');

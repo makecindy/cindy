@@ -120,6 +120,17 @@ const MODE_TO_CATEGORY: Record<string, ModelCategory> = {
  */
 const CHAT_CAPABLE_MODES = new Set(['chat', 'responses']);
 
+/**
+ * 去掉 id 的一层 `<namespace>/` 前缀,取最后一段。网关有时会给 id 加供应商命名空间
+ * (如 openai/dall-e-3、google/veo-3,catalog 本身就支持 openai/gpt-5.4 这类写法);
+ * dall-e/sora/veo- 这几个锚定 id 开头的关键字判定必须同时认「裸 id」与「去前缀后的
+ * 尾部」,否则加了命名空间就漏网(2026-07 review 第 19 轮)。
+ */
+function stripNamespace(id: string): string {
+  const idx = id.indexOf('/');
+  return idx === -1 ? id : id.slice(idx + 1);
+}
+
 // 按 model.id 前缀粗分类: claude-* → Anthropic, gpt-* → GPT, codex/* → 骨折GPT (gateway 低价路由),
 // gemini-* → Google, 其余 (moonshotai/qwen/glm/...) 一律落到 China。新增国产模型不需要改这里。
 // 这是**没有 mode 时**的兜底(旧缓存 / mode 尚未覆盖到的来源);mode 存在时一律用
@@ -135,9 +146,15 @@ export function categorize(id: string): ModelCategory {
   if (/embedding/.test(id) || id.startsWith('voyage/') || id.startsWith('embed-')) return 'embedding';
   // dall-e(OpenAI 图像)id 里没有 "image" 字样,靠关键词兜底会漏网(2026-07 review:
   // 走 {id,name} 极简发现的自定义 OAuth 供应商没有 mode/group,只能靠这份正则)。
-  if (/image/.test(id) || id.startsWith('dall-e')) return 'image';
+  if (/image/.test(id) || id.startsWith('dall-e') || stripNamespace(id).startsWith('dall-e'))
+    return 'image';
   // sora(OpenAI 视频)/ veo(Google 视频)同理,id 里没有 "video" 字样。
-  if (/seedance|happyhorse|video|-t2v|-i2v|-r2v/.test(id) || /^sora|^veo-/.test(id)) return 'video';
+  if (
+    /seedance|happyhorse|video|-t2v|-i2v|-r2v/.test(id) ||
+    /^sora|^veo-/.test(id) ||
+    /^sora|^veo-/.test(stripNamespace(id))
+  )
+    return 'video';
   if (id === 'ai-gateway-doc') return 'compression';
   // moderation(如 omni-moderation-latest / text-moderation-latest)不是issue #882
   // 列出的语义类型之一,落 other 保留原始 id/mode(2026-07 review:走 {id,name} 极简
