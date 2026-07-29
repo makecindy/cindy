@@ -263,8 +263,10 @@ describe('TodaySpendChip dashboard routing', () => {
     // OAuth」启发式 (新会话下一次 spawn 恰按当前凭证决定)
     expect(source).toContain('useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession)');
     expect(source).toMatch(
-      /observedClaudeRoute != null\s*\? observedClaudeRoute === 'subscription'\s*: !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true/,
+      /observedClaudeRoute != null\s*\? observedClaudeRoute === 'subscription'\s*: claudeRouteResolved && !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true/,
     );
+    // resolved 门控:首查在途的占位 null 不得触发活性启发式(形态未定一律 pending)
+    expect(source).toContain('(!claudeRouteResolved');
     expect(source).toContain('const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey()');
     expect(source).toContain('useClaudeOAuthConnected(isDefaultRouteClaudeSession)');
     // 无观察值且 key reconcile / OAuth 首查未完成时形态未定, 两侧 hook 都不启用

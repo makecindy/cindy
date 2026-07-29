@@ -1076,11 +1076,17 @@ export function TodaySpendChip({
     vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && providerId == null;
   const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey();
   const claudeOAuthConnected = useClaudeOAuthConnected(isDefaultRouteClaudeSession);
-  // 只消费 route(会话主计费形态):bridge 子代理覆写不改会话形态,
+  // 只消费 route(会话主计费形态)与 resolved:bridge 子代理覆写不改会话形态,
   // lastFailedRequestBridge 是错误横幅专用的失败归因信号,chip 不读。
-  const { route: observedClaudeRoute } = useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession);
-  const ccBillingFormPending = isDefaultRouteClaudeSession && observedClaudeRoute == null
-    && (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));
+  const { route: observedClaudeRoute, resolved: claudeRouteResolved } =
+    useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession);
+  // resolved 门控:首查在途 / 切会话清空后的 route=null 是占位、不是权威「无观察」,
+  // 此时套活性启发式会把「冻结订阅路由的旧会话 + 刚配的网关 key」短暂判成网关并
+  // 亮出计费入口,GET 落地后又跳回——形态未定一律 pending(PR review P1)。
+  const ccBillingFormPending = isDefaultRouteClaudeSession
+    && (!claudeRouteResolved
+      || (observedClaudeRoute == null
+        && (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null))));
   const isClaudeSubscription = !isDeviceLinkRemote && (
     (
       vendorKey === 'cc'
@@ -1090,7 +1096,7 @@ export function TodaySpendChip({
         || (providerId == null && (
           observedClaudeRoute != null
             ? observedClaudeRoute === 'subscription'
-            : !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true
+            : claudeRouteResolved && !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true
         ))
       )
     )
