@@ -52,7 +52,6 @@ import {
   type VoiceInputReplacementRange,
 } from './VoiceInputDraftDecoration';
 import {
-  hasCjkPunctuation as hasCjkPunctuationChar,
   hasCjkContextPunctuation,
   isCjkContextPunctuation,
 } from './CjkPunctuationUtils';
@@ -136,9 +135,7 @@ function listLineRanges(
         voiceReplacementRange !== null &&
         voiceReplacementRange.from < contentBase + line.end &&
         voiceReplacementRange.to > contentBase + line.start;
-      const hasCjkPunctuation =
-        hasCjkPunctuationChar(line.text, 0, match.prefixLength) ||
-        hasCjkContextPunctuation(line.text, match.prefixLength);
+      const hasCjkPunctuation = hasCjkContextPunctuation(line.text);
       return (
         line.hasInlineAtom ||
         overlapsSlashCommandPill ||

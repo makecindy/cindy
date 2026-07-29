@@ -40,10 +40,7 @@ import {
   resolveVoiceInputReplacementRange,
   type VoiceInputReplacementRange,
 } from './VoiceInputDraftDecoration';
-import {
-  hasCjkContextPunctuation,
-  hasCjkPunctuation as hasCjkPunctuationChar,
-} from './CjkPunctuationUtils';
+import { hasCjkContextPunctuation } from './CjkPunctuationUtils';
 
 const TAB_SIZE = 8;
 
@@ -220,9 +217,7 @@ export function buildListIndentDecorations(
         voiceReplacementRange !== null &&
         voiceReplacementRange.from < contentBase + line.end &&
         voiceReplacementRange.to > contentBase + line.start;
-      const hasCjkPunctuation =
-        hasCjkPunctuationChar(line.text, 0, match.prefixLength) ||
-        hasCjkContextPunctuation(line.text, match.prefixLength);
+      const hasCjkPunctuation = hasCjkContextPunctuation(line.text);
       return (
         line.hasInlineAtom ||
         overlapsSlashCommandPill ||

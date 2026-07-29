@@ -284,7 +284,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
       '1. 第一项\n2. ',
     );
 
-    const indentedRows = editor.view.dom.querySelectorAll('.composer-list-line-indent');
+    const indentedRows = editor.view.dom.querySelectorAll('.composer-list-fallback-prefix');
     expect(indentedRows).toHaveLength(2);
     expect(indentedRows[1]?.textContent).toBe('2. ');
 
@@ -292,7 +292,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     expect(editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n', '\n')).toBe(
       '1. 第一项\n2. 中文',
     );
-    expect(editor.view.dom.querySelectorAll('.composer-list-line-indent')).toHaveLength(2);
+    expect(editor.view.dom.querySelectorAll('.composer-list-fallback-prefix')).toHaveLength(2);
   });
 
   it('does not rewrite decoration-owned styles while laying out multiline CJK lists', () => {
@@ -660,7 +660,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
             content: [
               { type: 'text', text: 'intro' },
               { type: 'hardBreak' },
-              { type: 'text', text: '1. 中文,正文' },
+              { type: 'text', text: '1. 中文正文' },
             ],
           },
         ],
@@ -671,11 +671,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     );
     expect(prefix?.textContent).toBe('1. ');
     expect(prefix?.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
-    expect(
-      Array.from(editor.view.dom.querySelectorAll('span[style*="font-family"]')).map(
-        (node) => node.textContent,
-      ),
-    ).toContain(',');
+    expect(editor.view.dom.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
   });
 
   it('keeps slash-command pills inline inside the paragraph fallback flow', () => {
@@ -886,7 +882,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
           {
             type: 'paragraph',
             content: [
-              { type: 'text', text: '1. 有新增游戏数的用户数、占全部用户比例。' },
+              { type: 'text', text: '1. 有新增游戏数的用户数,占全部用户比例。' },
               { type: 'hardBreak' },
               { type: 'text', text: '2. 有新增游戏数的近30天、近1年活跃用户数及占比。' },
               { type: 'hardBreak' },
@@ -906,7 +902,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     const unindentedRows = container?.querySelectorAll('.composer-list-fallback-unindented');
     expect(container).not.toBeNull();
     expect(unindentedRows).toHaveLength(1);
-    expect(unindentedRows?.[0]?.textContent).toBe('有新增游戏数的用户数、占全部用户比例。');
+    expect(unindentedRows?.[0]?.textContent).toBe('有新增游戏数的用户数,占全部用户比例。');
     expect(unindentedRows?.[0]?.classList.contains('composer-list-cjk-font')).toBe(false);
     expect(
       unindentedRows?.[0]?.classList.contains('composer-list-cjk-punctuation-font'),
@@ -1077,7 +1073,8 @@ describe('wiring contract', () => {
     expect(css).toContain('.ProseMirror .composer-list-cjk-punctuation-font');
     expect(css).toContain("font-family: 'Cindy CJK Punctuation Local'");
     expect(css).toContain("font-family: 'Cindy CJK Punctuation Bundled'");
-    expect(css).toContain('unicode-range: U+3000-303F, U+FF00-FFEF;');
+    expect(css).toContain('U+3000-303F, U+FF00-FFEF;');
+    expect(css.match(/U\+0021-0022, U\+0027-0029/g)).toHaveLength(2);
     const punctuationFontCss = css.slice(
       css.indexOf("font-family: 'Cindy CJK Punctuation Local'"),
       css.indexOf('.ProseMirror .composer-list-cjk-punctuation-font'),

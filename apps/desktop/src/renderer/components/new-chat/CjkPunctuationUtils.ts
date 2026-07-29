@@ -69,10 +69,3 @@ export function hasCjkContextPunctuation(
   }
   return false;
 }
-
-export function hasCjkPunctuation(text: string, from = 0, to = text.length): boolean {
-  for (let index = from; index < to; index += 1) {
-    if (CJK_PUNCT_CHAR_REGEX.test(text[index] ?? '')) return true;
-  }
-  return false;
-}
