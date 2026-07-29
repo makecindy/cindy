@@ -43,6 +43,10 @@ vi.mock('../provider-route', () => ({
   gatewayDefaultRouteDecision: vi.fn((_agent: string, gatewayKey: string | null) =>
     gatewayKey ? { headerOverride: { 'x-api-key': gatewayKey } } : null),
 }));
+// bridge 分流用例需要 handler 存在(真模块懒装配依赖订阅凭证环境)。
+vi.mock('../anthropic-responses-bridge-host', () => ({
+  getResponsesBridgeHandler: () => ({ handle: vi.fn() }),
+}));
 
 import {
   createModelRoutingTransform,
@@ -55,6 +59,7 @@ import {
   takeClaudeRequestRoute,
   resetClaudeSessionRouteRegistryForTest,
 } from '../claude-session-route-registry';
+import { setSessionProvider } from '../session-provider-store';
 
 const SESSION_HEADER = { 'x-claude-code-session-id': 'sdk-abc' };
 
@@ -182,5 +187,41 @@ describe('claude session route observation (routing transform ② 段)', () => {
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
     expect(readClaudeSessionRoute('sess-1')).toBe('gateway');
+  });
+
+  it('records subscription for bridge (chatgpt/) requests, overriding a prior gateway observation', () => {
+    // 子代理按请求覆写 bridge 模型时会话顶层模型不变:主会话 gateway 请求先落
+    // 观察值, 随后的 bridge 请求必须把它覆盖成 subscription —— 否则该 bridge
+    // 请求的配额失败会被贴成 Cindy 点数耗尽(PR review P1)。
+    gatewayKey = 'sk-live';
+    const transform = createModelRoutingTransform();
+    transform(
+      { model: 'claude-opus-4-8[1m]' },
+      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+    );
+    expect(readClaudeSessionRoute('sess-1')).toBe('gateway');
+    const decision = transform(
+      { model: 'chatgpt/gpt-5.5' },
+      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+    );
+    expect(decision).toHaveProperty('localHandler');
+    expect(readClaudeSessionRoute('sess-1')).toBe('subscription');
+  });
+
+  it('does not record bridge requests for sessions with an explicit provider', () => {
+    // registry 语义: 只记默认路由(未显式选供应商)的会话 —— 显式来源由
+    // providerId 直接驱动消费方, 不该往表里写死记录。
+    setSessionProvider('sess-1', 'xai');
+    try {
+      const transform = createModelRoutingTransform();
+      const decision = transform(
+        { model: 'xai/grok-4.5' },
+        ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+      );
+      expect(decision).toHaveProperty('localHandler');
+      expect(readClaudeSessionRoute('sess-1')).toBeNull();
+    } finally {
+      setSessionProvider('sess-1', null);
+    }
   });
 });

@@ -162,12 +162,30 @@ describe('ErrorBanner billing CTA', () => {
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
   });
 
-  it('falls back to the gateway-key heuristic when the route observation is gone (app restart)', () => {
-    // 会话路由观察值是纯内存的:重启后持久化错误尾部拿不到,存有网关 key 时
-    // 回落判 gateway,引导保留。
+  it('falls back to the gateway-key heuristic for live errors without a route observation', () => {
+    // live 错误刚由当前凭证形态的请求产生:观察值缺失时按活性凭证回落,存有
+    // 网关 key 判 gateway,引导保留。
     mocks.claudeRoute.mockReturnValue(null);
     mocks.apiKey.mockReturnValue({ hasSavedKey: true, isReconciling: false });
     renderBanner({ providerId: null });
+    expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
+  });
+
+  it('never classifies persisted cc failures from current credentials (heuristic off)', () => {
+    // 重启后观察值丢失、且失败那一轮之后凭证可能已变:订阅失败后配上网关 key,
+    // 按当前 key 回落判 gateway 会把订阅错误贴成 Cindy 点数耗尽——持久化错误
+    // 不回落启发式。
+    mocks.claudeRoute.mockReturnValue(null);
+    mocks.apiKey.mockReturnValue({ hasSavedKey: true, isReconciling: false });
+    renderBanner({ providerId: null, persistedError: true });
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
+    expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
+  });
+
+  it('keeps the CTA for persisted cc failures when the session observation itself says gateway', () => {
+    // 同 run 的错误尾部:会话观察值仍在内存且绑定该会话失败流量,可信。
+    mocks.claudeRoute.mockReturnValue('gateway');
+    renderBanner({ providerId: null, persistedError: true });
     expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
   });
 

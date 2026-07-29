@@ -183,9 +183,10 @@ export function ErrorBanner({
     membershipKind: authUser?.membershipKind ?? null,
   });
   const isQuotaError = isQuotaExceededMessage(error);
-  // 订阅直连 bridge 模型(chatgpt/ / xai/)不参与:它们的请求在 proxy 提前分流、
-  // 不更新会话路由观察值,旧的 gateway 观察值可能残留——ChatGPT/xAI 的配额错误
-  // 绝不能被贴成 Cindy 点数耗尽(PR review P1)。
+  // 订阅直连 bridge 模型(chatgpt/ / xai/)不参与:请求在 proxy 提前分流,花的是
+  // 个人订阅额度——ChatGPT/xAI 的配额错误绝不能被贴成 Cindy 点数耗尽(PR review
+  // P1)。这里按会话顶层模型兜底;子代理按请求覆写 bridge 模型时顶层模型不变,
+  // 靠 proxy 在 bridge 分流点旁路记录 'subscription' 观察值覆盖(PR review P1)。
   const isSubscriptionBridgeModel = !!modelId && isSubscriptionDirectModel(modelId);
   const wantCcRouteForBilling =
     isQuotaError &&
@@ -195,17 +196,19 @@ export function ErrorBanner({
     !isSubscriptionBridgeModel &&
     normalizedProviderId === null;
   const claudeSessionRoute = useClaudeSessionRoute(sessionId, wantCcRouteForBilling);
-  // 会话路由观察值是纯内存的:App 重启后从持久化错误尾部渲染时恒为 null(PR
-  // review P1)。此时回落与 TodaySpendChip 同一套活性凭证启发式——有网关 key
-  // 判 gateway;无 key 且连了 Claude OAuth 判 subscription;reconcile 未完成 /
-  // 状态未知则形态未定、不显引导(宁缺勿错)。
+  // 观察值缺失时的活性凭证启发式(与 TodaySpendChip 同口径)只对 live 错误启用:
+  // live 错误刚由当前凭证形态的请求产生,启发式就是正确预测——有网关 key 判
+  // gateway;无 key 且连了 Claude OAuth 判 subscription;reconcile 未完成 / 状态
+  // 未知则形态未定、不显引导(宁缺勿错)。持久化历史错误不回落:失败那一轮之后
+  // 凭证可能已变(订阅失败后配上网关 key,或反向),按**当前**凭据分类历史错误
+  // 会张冠李戴(PR review P1);同 run 的错误尾部仍可命中会话观察值,不受影响。
   const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey();
   const claudeOAuthConnected = useClaudeOAuthConnected(
-    wantCcRouteForBilling && claudeSessionRoute == null,
+    wantCcRouteForBilling && !persistedError && claudeSessionRoute == null,
   );
   const ccEffectiveBillingRoute =
     claudeSessionRoute ??
-    (!wantCcRouteForBilling || gatewayKeyReconciling
+    (!wantCcRouteForBilling || persistedError || gatewayKeyReconciling
       ? null
       : hasGatewayKey
         ? 'gateway'

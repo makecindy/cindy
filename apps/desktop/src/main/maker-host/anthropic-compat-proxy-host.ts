@@ -223,6 +223,13 @@ export function createModelRoutingTransform(): RoutingTransform {
       }
       // 会话态(思维深度 / Fast)在决策点解析后**闭包**进 handler —— CC 不会把 bridge 模型的
       // effort / fast 放进请求体,而引擎保持零会话概念,不走任何伪 header。
+      // 计费路由旁路:bridge 请求花的是个人订阅额度(chatgpt / xai),不是网关点数。
+      // 子代理(Task)按请求覆写 bridge 模型时会话顶层模型不变,不记录的话此前的
+      // gateway 观察值会残留,把订阅配额错误贴成 Cindy 点数耗尽(PR review P1)。
+      // 与 ② 段同语义:只记默认路由(未显式选供应商)的会话。
+      if (sessionId && getSessionProvider(sessionId) == null) {
+        recordClaudeSessionRoute(sessionId, 'subscription');
+      }
       const effort = sessionId ? getSessionEffort(sessionId) : null;
       const fast = sessionId ? getSessionFastMode(sessionId) : false;
       return {
