@@ -88,11 +88,11 @@ import { SessionItem } from '../SessionItem';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
-function makeSession(id: string): Session {
+function makeSession(id: string, status: Session['status'] = 'active'): Session {
   return {
     id,
     title: `Session ${id}`,
-    status: 'idle',
+    status,
     createdAt: '2026-07-01T00:00:00.000Z',
     updatedAt: '2026-07-01T00:00:00.000Z',
     userSendAt: '2026-07-01T00:00:00.000Z',
@@ -111,6 +111,7 @@ const noop = () => {};
 function rowsElement(
   sessions: readonly Session[],
   urgentSessionIds: ReadonlySet<string>,
+  selectedSessionIds: ReadonlySet<string> = new Set(),
 ) {
   return createElement(SessionAttentionUrgencyProvider, {
     urgentSessionIds,
@@ -124,6 +125,7 @@ function rowsElement(
           isActive: false,
           isRunning: false,
           hasAttentionNotification: false,
+          isSelected: selectedSessionIds.has(s.id),
           onClick: noop,
           onAction: noop,
           onRename: noop,
@@ -164,6 +166,33 @@ describe('SessionItem — memo 包裹', () => {
     expect(source).not.toMatch(/useSessionAttentionSnapshot\s*\(/);
     expect(source).not.toMatch(/useSessionAttentionUrgencySet\s*\(/);
     expect(source).toMatch(/useSessionAttentionKind\s*\(\s*session\.id\s*\)/);
+  });
+});
+
+describe('SessionItem — 归档视觉', () => {
+  it('用侧栏 muted token 降级归档行，同时保留选中态的前景色', () => {
+    const regularSession = makeSession('regular-session');
+    const archivedSession = makeSession('archived-session', 'archived');
+    const selectedArchivedSession = makeSession('selected-archived-session', 'archived');
+    const { container } = render(
+      rowsElement(
+        [regularSession, archivedSession, selectedArchivedSession],
+        new Set(),
+        new Set([selectedArchivedSession.id]),
+      ),
+    );
+
+    const regularRow = container.querySelector('[data-session-id="regular-session"]');
+    const archivedRow = container.querySelector('[data-session-id="archived-session"]');
+    const selectedArchivedRow = container.querySelector(
+      '[data-session-id="selected-archived-session"]',
+    );
+
+    expect(regularRow?.className).toContain('text-foreground');
+    expect(archivedRow?.className).toContain('text-[var(--sidebar-list-muted)]');
+    expect(archivedRow?.className).not.toContain('text-foreground');
+    expect(selectedArchivedRow?.className).toContain('text-foreground');
+    expect(selectedArchivedRow?.className).not.toContain('text-[var(--sidebar-list-muted)]');
   });
 });
 

@@ -640,7 +640,9 @@ export const SessionItem = memo(function SessionItem({
           ? 'bg-sidebar-item-active text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
           : isSelected
             ? 'bg-[var(--chat-input-chip-bg)] text-foreground'
-            : 'text-foreground hover:bg-sidebar-item-hover',
+            : isArchived
+              ? 'text-[var(--sidebar-list-muted)] hover:bg-sidebar-item-hover'
+              : 'text-foreground hover:bg-sidebar-item-hover',
         isSelected && 'ring-1 ring-inset ring-[var(--focus-ring-soft)]',
       )}
       aria-current={isActive ? 'page' : undefined}
