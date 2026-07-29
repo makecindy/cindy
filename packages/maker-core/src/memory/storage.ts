@@ -375,7 +375,9 @@ export class MemoryStorage {
   }
 
   /**
-   * 以当前磁盘状态重算某分片的软警告 (含索引侧)。
+   * 重算某分片的软警告 (含索引侧)。分片侧读盘; 索引侧走 indexCache —
+   * 本实例的 write/delete 都会刷新缓存, 因此反映的是**本实例视角**的最新状态;
+   * 若 MEMORY.md 被其他实例/进程改写, 索引侧评估可能滞后。
    * consolidate 删源后索引已变小, 写入时点的警告可能失真 — 收尾用本方法重算。
    */
   async assessWarning(filename: string): Promise<WriteWarningDetail | undefined> {

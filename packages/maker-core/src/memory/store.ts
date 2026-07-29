@@ -58,7 +58,7 @@ export interface ConsolidateResult {
   filename: string;
   /** 实际删除的源文件 (源不存在的会被跳过) */
   deletedSources: string[];
-  /** 写入 warning (通常 consolidate 后 size 会降, 但兜底带上) */
+  /** 软警告: 删源后按最终磁盘状态重算 (可能与写入时点不同, 也可能出现/消失); 重算失败退回写入时点值 */
   warning?: WriteResult['warning'];
   /** 软警告数值明细, 与 warning 同生同灭 */
   warningDetail?: WriteResult['warningDetail'];
