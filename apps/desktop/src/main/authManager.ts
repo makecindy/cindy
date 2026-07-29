@@ -430,10 +430,15 @@ function writePersistedAuthSession(refreshToken: string, realm = activeAuthRealm
  * 比不镜像更糟。
  *
  * 「检查存在 → 写入」不是原子的(与 writeSafe / removeSafeIfUnchanged 同一限制,见
- * removeSafeIfUnchanged 的注释):另一个共享 userData 的实例可能刚好在这中间登出并
- * 删掉 legacy 文件,于是本次写入把它复活。写完再看一眼权威记录——v1 也被清掉了就说明
- * 那是一次真正的登出,把刚镜像的从属副本按 compare-and-delete 撤回。从属副本不能比
- * 权威记录活得更久。
+ * removeSafeIfUnchanged 的注释):另一个共享 userData 的实例可能刚好在这中间登出、或者
+ * 再轮换一次。写完回头核对权威记录是否仍是本次写入的那一条:
+ *   - 已被清掉(登出)→ 从属副本不能比权威记录活得更久;
+ *   - 已前进到更新的一枚 → 本次镜像的那枚此刻已经失效,留着正是这个 PR 要消灭的
+ *     「旧版只读 legacy → 拿到死 token → 被强制重登」。
+ * 两种情况都按 compare-and-delete 撤回(只删自己刚写的那一枚)。
+ *
+ * 读不出权威记录但文件还在(密钥链抖动 / 瞬时 IO)时**不撤回**:那是不确定状态,而本模块
+ * 对不确定一律不做破坏性动作(同 isPersistedSecretAbsent / removeSafeIfUnchanged)。
  */
 function mirrorLegacyResourceRefreshToken(refreshToken: string, realm: AuthRegion): void {
   if (realm !== AUTH_REGION) return;
@@ -448,37 +453,82 @@ function mirrorLegacyResourceRefreshToken(refreshToken: string, realm: AuthRegio
     );
     return;
   }
-  if (isPersistedSecretAbsent(AUTH_SESSION_KEY)) {
-    // 镜像期间权威记录被另一个实例清掉(登出 / 凭证清理)。只删自己刚写的那一枚:
-    // 内容已变说明又有别人写过,不属于本次撤回范围。
+  const rollBackMirror = (reason: string): void => {
     const rolledBack = removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, refreshToken);
     log.warn(
-      `persisted auth session disappeared while mirroring the legacy refresh token — rolled back the mirror (${rolledBack})`,
+      `${reason} while mirroring the legacy refresh token — rolled back the mirror (${rolledBack})`,
     );
+  };
+  if (isPersistedSecretAbsent(AUTH_SESSION_KEY)) {
+    rollBackMirror('persisted auth session disappeared');
+    return;
+  }
+  const latestSession = readSafe(AUTH_SESSION_KEY);
+  // 读不出来(null 但文件在)→ 不确定,保留镜像。
+  if (latestSession !== null && latestSession !== serializeAuthSessionRecord(realm, refreshToken)) {
+    rollBackMirror('persisted auth session advanced past the mirrored token');
   }
 }
 
 /**
- * 确定性失效后清掉 legacy 里的从属副本。
+ * 确定性失效后清掉磁盘上所有「已确认死掉」的 refresh token —— v1 权威记录与 legacy
+ * 从属副本各清一次。
  *
- * 权威记录(v1)被判失效删除时,镜像出去的那一份不能留在盘上:只读 legacy 的旧版实例会
- * 拿它再撞一次 INVALID_REFRESH_TOKEN 并被强制重登,本进程的读侧回退也会把它当成替换
- * 候选。compare-and-delete 只删「与本次判定的那一枚相同」的内容——不同就说明另一个
- * 实例刚写入了替换凭证,不在本次清理范围内。
+ * `deadTokens` 是本轮被服务端拒过的全部 token(按首次尝试顺序)。必须逐一比对而不是只
+ * 认最初那一枚:本轮一旦从另一个来源追赶过,磁盘上现存的就是清单里较晚的那一枚,只拿
+ * 最初的 token 做 compare-and-delete 会一律 `changed`,把已确认失效的凭证留在盘上——
+ * 只读 legacy 的旧版实例继续拿它撞 INVALID_REFRESH_TOKEN 被强制重登,本进程的读侧回退
+ * 也会把它当成替换候选。
  *
- * 运行期 `clearAuth` 已经会删这个文件(那是显式登出 / 会话过期的整体清理),所以这里只
- * 补冷启动确定性失效这一条路径;passive 实例的守卫在调用点。
+ * compare-and-delete 语义不变:内容不在清单里就说明另一个实例刚写入了替换凭证,不属于
+ * 本次清理范围,保留。
+ *
+ * 运行期 `clearAuth` 已经会删这两个文件(那是显式登出 / 会话过期的整体清理),所以这里
+ * 只补冷启动确定性失效这一条路径;passive 实例的守卫在调用点。
  */
-function clearMirroredLegacyRefreshToken(realm: AuthRegion, expectedToken: string): void {
+function clearConfirmedDeadRefreshTokens(realm: AuthRegion, deadTokens: readonly string[]): void {
+  let sessionOutcome: RemoveIfUnchangedResult = 'changed';
+  for (const token of deadTokens) {
+    sessionOutcome = removeSafeIfUnchanged(
+      AUTH_SESSION_KEY,
+      serializeAuthSessionRecord(realm, token),
+    );
+    if (sessionOutcome !== 'changed') break;
+  }
+  switch (sessionOutcome) {
+    case 'deleted':
+      log.warn(
+        'cold-start refresh: definitive credential failure — cleared persisted auth session',
+      );
+      break;
+    case 'changed':
+      // 磁盘会话不是本轮判定过的任何一枚(另一个实例写入了新 token 或 realm):不能删。
+      log.warn(
+        'cold-start refresh: definitive credential failure, but the persisted auth session changed meanwhile — keeping the replacement',
+      );
+      break;
+    case 'failed':
+      // 删除真的失败了:凭证仍在盘上,下次启动会再判一次。不能报成已清理。
+      log.error(
+        'cold-start refresh: definitive credential failure, but deleting the persisted auth session failed — it is still on disk',
+      );
+      break;
+  }
+
+  // legacy 从属副本只在与安装包区域一致时才由本进程镜像 / 解释。
   if (realm !== AUTH_REGION) return;
-  const outcome = removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, expectedToken);
-  if (outcome === 'changed') {
+  let legacyOutcome: RemoveIfUnchangedResult = 'changed';
+  for (const token of deadTokens) {
+    legacyOutcome = removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, token);
+    if (legacyOutcome !== 'changed') break;
+  }
+  if (legacyOutcome === 'changed') {
     log.warn(
-      'cold-start refresh: legacy refresh token changed meanwhile — keeping the replacement written by another app instance',
+      'cold-start refresh: legacy refresh token is none of the tokens rejected this run — keeping the replacement written by another app instance',
     );
     return;
   }
-  if (outcome === 'failed') {
+  if (legacyOutcome === 'failed') {
     log.error(
       'cold-start refresh: failed to delete the mirrored legacy refresh token — it is still on disk and older instances may keep retrying it',
     );
@@ -1095,6 +1145,7 @@ async function runAuthRefreshWithReplacementRetry(
   replacementRetries: number;
   replacementRetryExhausted: boolean;
   failureAction?: RefreshFailureAction;
+  rejectedTokens: readonly string[];
 }> {
   const run = await runRefreshWithReplacementRetry(initialRefreshToken, {
     doRefresh: (refreshToken) => requestAuthRefresh(refreshToken, opts.realm),
@@ -2024,6 +2075,7 @@ async function runColdStartRefreshFlow(
       result: refreshResult,
       attempts,
       failureAction,
+      rejectedTokens,
     } = await runAuthRefreshWithReplacementRetry(storedToken, {
       phase: 'cold-start',
       realm: storedRealm,
@@ -2062,28 +2114,12 @@ async function runColdStartRefreshFlow(
             'cold-start refresh: definitive credential failure — passive shared-userData instance starts logged out and keeps the persisted refresh token',
           );
         } else {
-          const expectedSession = serializeAuthSessionRecord(storedRealm, storedToken);
-          switch (removeSafeIfUnchanged(AUTH_SESSION_KEY, expectedSession)) {
-            case 'deleted':
-              log.warn(
-                'cold-start refresh: definitive credential failure — cleared persisted auth session',
-              );
-              break;
-            case 'changed':
-              // 判定失败后磁盘会话已被换掉(另一个实例写入了新 token 或 realm):
-              // 那枚不在本次判定范围内,不能删。
-              log.warn(
-                'cold-start refresh: definitive credential failure, but the persisted auth session changed meanwhile — keeping the replacement',
-              );
-              break;
-            case 'failed':
-              // 删除真的失败了:凭证仍在盘上,下次启动会再判一次。不能报成已清理。
-              log.error(
-                'cold-start refresh: definitive credential failure, but deleting the persisted auth session failed — it is still on disk',
-              );
-              break;
-          }
-          clearMirroredLegacyRefreshToken(storedRealm, storedToken);
+          // 必须逐一比对本轮被拒过的**每一枚** token,不能只认最初那枚:一旦本轮从另一个
+          // 来源追赶过(replacement-retry),磁盘上现存的就是清单里较晚的那一枚,只拿最初
+          // 的 token 做 compare-and-delete 会一律 changed,把已确认失效的凭证留在盘上,
+          // 只读 legacy 的旧版实例继续拿它撞 INVALID_REFRESH_TOKEN 被强制重登。
+          const confirmedDeadTokens = rejectedTokens.length > 0 ? rejectedTokens : [storedToken];
+          clearConfirmedDeadRefreshTokens(storedRealm, confirmedDeadTokens);
         }
         resetActiveAuthRealmToBuild();
       } else if (action.kind === 'replacement-retry') {

@@ -103,26 +103,29 @@ describe('legacy → v1 refresh token migration window', () => {
     expect(body.indexOf('log.warn(', failureIdx)).toBeGreaterThan(failureIdx);
   });
 
-  it('写侧:镜像期间 v1 被清掉 → 按 CAS 撤回刚写的从属副本', () => {
+  it('写侧:镜像期间 v1 被清掉**或已前进** → 都按 CAS 撤回刚写的从属副本', () => {
     const body = sliceBody(
       'function mirrorLegacyResourceRefreshToken(refreshToken: string, realm: AuthRegion): void {',
       '\n}\n',
     );
 
-    // 「检查存在 → 写入」不原子:另一个共享 userData 的实例可能刚好在这中间登出并删掉
-    // legacy,本次写入会把它复活。写完再看权威记录,v1 也没了就撤回——从属副本不能比
-    // 权威记录活得更久。
+    // 「检查存在 → 写入」不原子。写完必须核对权威记录仍是本次写入的那一条:
+    //  - 被清掉(登出)→ 从属副本不能比权威记录活得更久;
+    //  - 已前进到更新的一枚 → 本次镜像那枚此刻已失效,留着正是本 PR 要消灭的
+    //    「旧版只读 legacy → 拿到死 token → 被强制重登」(codex #878 P1)。
     expect(body).toContain('if (isPersistedSecretAbsent(AUTH_SESSION_KEY)) {');
-    const rollbackIdx = body.indexOf('if (isPersistedSecretAbsent(AUTH_SESSION_KEY)) {');
+    expect(body).toContain('latestSession !== serializeAuthSessionRecord(realm, refreshToken)');
     // 必须 compare-and-delete:内容已变说明又有别人写过,不在本次撤回范围内。
-    expect(
-      body.indexOf('removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, refreshToken)'),
-    ).toBeGreaterThan(rollbackIdx);
+    expect(body).toContain(
+      'removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, refreshToken)',
+    );
     expect(body).not.toContain('removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);');
     // 撤回必须发生在写入之后,否则守的不是这枚刚镜像的 token。
     expect(body.indexOf('writeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, refreshToken)')).toBeLessThan(
-      rollbackIdx,
+      body.indexOf('const rollBackMirror = '),
     );
+    // 读不出权威记录但文件还在(密钥链抖动)属不确定状态,不得撤回。
+    expect(body).toContain('latestSession !== null');
   });
 
   it('读侧:本轮已被拒过的 token 不再算替换候选(防两个来源来回重试)', () => {
@@ -181,21 +184,30 @@ describe('legacy → v1 refresh token migration window', () => {
     expect(body).not.toContain('readLatestStoredToken: () => readPersistedRefreshToken(');
   });
 
-  it('确定性失效后:冷启动清掉镜像出去的 legacy 从属副本', () => {
-    // 权威记录被判失效删除后,镜像那一份不能留:只读 legacy 的旧版实例会拿它再撞一次
-    // INVALID_REFRESH_TOKEN 被强制重登,本进程读侧回退也会把它当替换候选。
-    const helper = sliceBody(
-      'function clearMirroredLegacyRefreshToken(realm: AuthRegion, expectedToken: string): void {',
-      '\n}\n',
-    );
-    expect(helper).toContain('if (realm !== AUTH_REGION) return;');
-    expect(helper).toContain(
-      'removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, expectedToken)',
-    );
-    // 必须 compare-and-delete:内容已变说明另一个实例刚写入替换凭证,不在清理范围内。
+  it('确定性失效后:v1 与 legacy 都按「本轮被拒过的每一枚」CAS 清理', () => {
+    // 只认最初那一枚是错的(greptile #878 P1):本轮一旦从另一个来源追赶过,磁盘上现存的
+    // 就是清单里较晚的那一枚,拿最初的 token 做 compare-and-delete 会一律 changed,把已
+    // 确认失效的凭证留在盘上,旧版实例继续拿它撞 INVALID_REFRESH_TOKEN 被强制重登。
+    const helper = sliceBody('function clearConfirmedDeadRefreshTokens(', '\n}\n');
+    // 两个文件都要遍历整份清单,而不是只比一枚。
+    expect(helper).toContain('for (const token of deadTokens) {');
+    expect(helper.match(/for \(const token of deadTokens\) \{/g)?.length).toBe(2);
+    // 断言分段写:prettier 会按行宽把这个调用拆成多行,不能锚在单行字面量上。
+    expect(helper).toContain('removeSafeIfUnchanged(');
+    expect(helper).toContain('serializeAuthSessionRecord(realm, token)');
+    expect(helper).toContain('removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, token)');
+    // 命中(deleted / failed)即停,不继续拿别的 token 去撞。
+    expect(helper).toContain("if (sessionOutcome !== 'changed') break;");
+    expect(helper).toContain("if (legacyOutcome !== 'changed') break;");
+    // 仍是 compare-and-delete,不得退回无条件删除。
     expect(helper).not.toContain('removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);');
-    expect(helper).toContain("if (outcome === 'changed') {");
-    expect(helper).toContain("if (outcome === 'failed') {");
+    expect(helper).not.toContain('removeSafe(AUTH_SESSION_KEY);');
+    // legacy 只在与安装包区域一致时由本进程解释。
+    expect(helper).toContain('if (realm !== AUTH_REGION) return;');
+    // 三种结果各自如实记日志,failed 不得报成已清理。
+    expect(helper).toContain("case 'deleted':");
+    expect(helper).toContain("case 'changed':");
+    expect(helper).toContain("case 'failed':");
 
     // 调用点必须落在冷启动确定性失效的**非 passive** 分支里:passive 不得删整机共享凭证。
     const coldStart = sliceBody(
@@ -203,12 +215,25 @@ describe('legacy → v1 refresh token migration window', () => {
       "} else if (action.kind === 'replacement-retry') {",
     );
     const passiveIdx = coldStart.indexOf('if (isPassiveSharedUserDataInstance()) {');
-    const callIdx = coldStart.indexOf('clearMirroredLegacyRefreshToken(storedRealm, storedToken);');
+    const callIdx = coldStart.indexOf('clearConfirmedDeadRefreshTokens(storedRealm,');
     expect(passiveIdx).toBeGreaterThan(-1);
     expect(callIdx).toBeGreaterThan(passiveIdx);
-    // 与 v1 的 CAS 删除同处一个 else 分支,顺序在其后(先清权威,再清从属)。
-    expect(
-      coldStart.indexOf('removeSafeIfUnchanged(AUTH_SESSION_KEY, expectedSession)'),
-    ).toBeLessThan(callIdx);
+    // 传进去的是 runner 回传的整份清单;清单为空才退回最初那一枚。
+    expect(coldStart).toContain(
+      'const confirmedDeadTokens = rejectedTokens.length > 0 ? rejectedTokens : [storedToken];',
+    );
+  });
+
+  it('runner 回传本轮被拒过的全部 token,供调用方做清理比对', () => {
+    const refreshSource = readFileSync(
+      resolve(process.cwd(), 'src/main/authRefreshFailure.ts'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+
+    // 返回类型里必须有这份清单,且每个 return 分支都带上——漏一个分支就会让调用方在那条
+    // 路径上退回「只认最初那一枚」的错误清理。
+    expect(refreshSource).toContain('rejectedTokens: readonly string[];');
+    const returns = refreshSource.match(/rejectedTokens: \[\.\.\.rejectedTokens\],/g) ?? [];
+    expect(returns.length).toBe(3);
   });
 });

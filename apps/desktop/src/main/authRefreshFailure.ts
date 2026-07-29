@@ -303,6 +303,14 @@ export async function runRefreshWithReplacementRetry<T>(
   replacementRetries: number;
   replacementRetryExhausted: boolean;
   failureAction?: RefreshFailureAction;
+  /**
+   * 本轮被服务端拒过的**所有** token,按首次尝试顺序。
+   *
+   * 调用方清理磁盘凭证时必须逐一比对这份清单,而不是只认最初那一枚:一旦本轮从另一个
+   * 来源追赶过(replacement-retry),磁盘上现存的那枚就是清单里较晚的那一个,只拿最初
+   * 的 token 做 compare-and-delete 会一律 `changed`,把已确认失效的凭证留在盘上。
+   */
+  rejectedTokens: readonly string[];
 }> {
   let requestedToken = initialRefreshToken;
   let attempts = 0;
@@ -351,6 +359,7 @@ export async function runRefreshWithReplacementRetry<T>(
         requestedToken,
         replacementRetries,
         replacementRetryExhausted: false,
+        rejectedTokens: [...rejectedTokens],
       };
     }
 
@@ -388,6 +397,7 @@ export async function runRefreshWithReplacementRetry<T>(
         replacementRetries,
         replacementRetryExhausted: false,
         failureAction: action,
+        rejectedTokens: [...rejectedTokens],
       };
     }
 
@@ -399,6 +409,7 @@ export async function runRefreshWithReplacementRetry<T>(
         replacementRetries,
         replacementRetryExhausted: true,
         failureAction: action,
+        rejectedTokens: [...rejectedTokens],
       };
     }
 
