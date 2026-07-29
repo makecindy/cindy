@@ -32,7 +32,7 @@ import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
 import {
   prefetchDirtyWorktreeForRemoval,
-  resolveDirtyWorktreeForRemoval,
+  resolveWorktreeRemovalPreflight,
 } from '@/lib/worktreeRemovalWarning';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
@@ -383,29 +383,32 @@ export function SessionContentHeader({
       toast.warning(t('ccAgent.sidebar.archiveBlocked.running'));
       return;
     }
-    // 两个预检互不依赖 → 并行发,别串行叠加两次 IPC 往返。dirty 预检走 resolve:
-    // 菜单打开时已经 prefetch 过,这里通常直接命中缓存。resolveSession 失败降级
+    // 两个预检互不依赖 → 并行发,别串行叠加两次 IPC 往返。worktree 预检走 resolve:
+    // 菜单打开时已经 prefetch 过,dirty 会命中缓存。resolveSession 失败降级
     // 为「未接管」,不阻断归档(与 sidebar 的 handleActionClick 同口径)。
-    const [attached, dirtyWorktree] = await Promise.all([
+    const [attached, preflight] = await Promise.all([
       window.electronAPI.binding
         .resolveSession(session.id)
         .then((binding) => binding.attached)
         .catch(() => false),
-      resolveDirtyWorktreeForRemoval(session.id, session.deviceLinkDeviceId),
+      resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId),
     ]);
     if (attached) {
       toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
       return;
     }
     // 归档不弹确认框 —— 可逆操作(菜单里就有「恢复」),与 sidebar 同口径。
-    // 只有 worktree 有未提交改动才确认:归档会顺带回收 worktree,不能静默带走改动。
-    if (dirtyWorktree) {
+    // 免确认的判据是「**确认**干净」:worktree 脏、或预检失败拿不到结论('unknown')
+    // 都要确认 —— 归档会顺带回收 worktree,不能静默带走改动(greptile review)。
+    // 'unknown' 只弹普通归档确认,不摆 dirty 警告文案(那会谎称有未提交改动)。
+    if (preflight !== 'clean') {
       const ok = await confirmDialog({
         title: t('ccAgent.sidebar.confirmArchive.title'),
         description:
           t('ccAgent.sidebar.confirmArchive.description') +
-          ' ' +
-          t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning'),
+          (preflight === 'dirty'
+            ? ' ' + t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning')
+            : ''),
         confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
         cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
       });
@@ -436,11 +439,10 @@ export function SessionContentHeader({
       showRemoteWriteBlockedToast();
       return;
     }
-    // P1 预检:worktree 有未提交更改时确认文案追加警告(查询失败降级为不提示)
-    const dirtyWorktree = await resolveDirtyWorktreeForRemoval(
-      session.id,
-      session.deviceLinkDeviceId,
-    );
+    // P1 预检:worktree 有未提交更改时确认文案追加警告。删除始终弹确认框,所以
+    // 用不到三态 —— 预检失败时少一行警告文案,不会变成静默放行。
+    const dirtyWorktree =
+      (await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId)) === 'dirty';
     const ok = await confirmDialog({
       title: t('ccAgent.sidebar.confirmDelete.title'),
       description:

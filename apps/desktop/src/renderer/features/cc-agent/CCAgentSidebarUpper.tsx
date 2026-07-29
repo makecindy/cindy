@@ -47,7 +47,7 @@ import { clearDraft as clearComposerDraft } from '@/lib/composerDraftStore';
 import { cleanupSessionLayoutPrefs } from '@/lib/sessionLayoutPrefs';
 import {
   countDirtyWorktreesForRemoval,
-  resolveDirtyWorktreeForRemoval,
+  resolveWorktreeRemovalPreflight,
 } from '@/lib/worktreeRemovalWarning';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useBackgroundActivitySessionIds } from '@/lib/sessionBackgroundActivityStore';
@@ -1830,14 +1830,23 @@ function ExpandedView({
       // 唯一例外是 worktree 有未提交改动:归档会顺带回收 worktree,这时升级到
       // 确认弹窗展示 dirty warning,不让改动被静默带走。
       if (isArchiveLike) {
-        const dirtyWorktree = await resolveDirtyWorktreeForRemoval(
+        const preflight = await resolveWorktreeRemovalPreflight(
           sessionId,
           session?.deviceLinkDeviceId,
         );
         // 接管拦截优先于 dirty 弹窗:被接管时不该弹任何归档确认。
         if (await blockedByAttachment()) return;
-        if (dirtyWorktree) {
-          setConfirm({ open: true, sessionId, action: 'archive', dirtyWorktree: true });
+        // 免确认的判据是「**确认**干净」,不是「不是脏的」:'unknown'(预检失败)
+        // 同样要弹确认框,否则归档会静默回收可能带着未提交改动的 worktree
+        // (greptile review)。'unknown' 时不摆 dirty 警告文案 —— 那会谎称有改动,
+        // 走的是普通归档确认。
+        if (preflight !== 'clean') {
+          setConfirm({
+            open: true,
+            sessionId,
+            action: 'archive',
+            dirtyWorktree: preflight === 'dirty',
+          });
           return;
         }
         // 重定向判定用 viewedSessionId:files 路由下归档「正在浏览的会话」也要
@@ -1849,12 +1858,12 @@ function ExpandedView({
         return;
       }
       if (action === 'delete') {
-        // 删除不可逆,始终弹确认框。
+        // 删除不可逆,始终弹确认框 —— 所以这里用不到三态:预检失败时少一行警告文案,
+        // 不会变成静默放行。
         // P1 预检:worktree 有未提交更改时确认文案追加警告(查询失败降级为不提示)
-        const dirtyWorktree = await resolveDirtyWorktreeForRemoval(
-          sessionId,
-          session?.deviceLinkDeviceId,
-        );
+        const dirtyWorktree =
+          (await resolveWorktreeRemovalPreflight(sessionId, session?.deviceLinkDeviceId)) ===
+          'dirty';
         setConfirm({ open: true, sessionId, action, dirtyWorktree });
         return;
       }
