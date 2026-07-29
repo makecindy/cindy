@@ -333,12 +333,13 @@ export function parseProxyAddrInput(input: string): { localHost: string; localPo
   return { localHost, localPort };
 }
 
-/** 远端固定端口输入 — 严格整数 (与 parseProxyAddrInput 的端口口径一致)。 */
+/** 远端固定端口输入 — 严格整数, 且拒特权/知名服务端口 (与 main 侧
+ * isAllowedAgentProxyRemotePort 同口径, 防清理路径误杀系统 sshd)。 */
 export function parseRemotePortInput(input: string): number | null {
   const s = input.trim();
   if (!/^\d+$/.test(s)) return null;
   const port = Number(s);
-  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+  return Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : null;
 }
 
 type AgentProxyPayload =

@@ -43,6 +43,16 @@ function isValidPort(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 65535;
 }
 
+/**
+ * 固定远端端口拒收特权/知名服务端口 (<1024): 隧道保活的残留清理会定点
+ * kill 占着固定端口的 sshd 会话, 若用户把端口配成 22 (SSH 服务) 等, 清理
+ * 路径可能误杀系统 sshd 主服务 (review: PR #992 codex-connector P1)。
+ * 高端口 (>=1024) 由用户显式指定、归属自担; 低端口一刀切拒收。
+ */
+export function isAllowedAgentProxyRemotePort(v: unknown): v is number {
+  return isValidPort(v) && (v as number) >= 1024;
+}
+
 export interface SshHostPref {
   autoConnect: boolean;
   agentProxy?: SshHostAgentProxyPref;
@@ -82,6 +92,12 @@ function normalizeAgentProxy(raw: unknown): SshHostAgentProxyPref | undefined {
   if (!isValidPort(localPort)) {
     log.warn('invalid agentProxy.localPort in prefs — dropping (was it hand-edited?)', {
       localPort: v.localPort,
+    });
+    return undefined;
+  }
+  if (!isAllowedAgentProxyRemotePort(v.remotePort ?? LEGACY_AGENT_PROXY_REMOTE_PORT)) {
+    log.warn('agentProxy.remotePort in privileged/service range — dropping (must be >=1024)', {
+      remotePort: v.remotePort,
     });
     return undefined;
   }
@@ -159,12 +175,24 @@ export function setSshHostAgentProxy(hostId: string, agentProxy: SshHostAgentPro
     hostId,
     enabled: ap?.enabled === true,
     mode: ap?.mode ?? null,
+    // 脱敏: proxyUrl 即使将来校验放宽也不原样进日志 (review: PR #992
+    // copilot — URL 可能带 userinfo), 只记录 scheme://host:port。
     target: ap
       ? ap.mode === 'tunnel'
         ? `remote:${ap.remotePort} -> ${ap.localHost}:${ap.localPort}`
-        : ap.proxyUrl
+        : redactProxyUrlForLog(ap.proxyUrl)
       : null,
   });
+}
+
+/** 日志安全的 proxy URL 形态: scheme://host:port (剥 userinfo / path / query)。 */
+function redactProxyUrlForLog(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return '(unparseable)';
+  }
 }
 
 function writePrefs(prefs: SshHostPrefs): void {

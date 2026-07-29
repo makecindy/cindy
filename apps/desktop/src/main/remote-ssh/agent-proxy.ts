@@ -535,7 +535,18 @@ export async function applyAgentProxyForHost(host: RemoteHost): Promise<void> {
   const pref = getSshHostAgentProxy(host.id);
   try {
     const reconciled = await reconcileCodexAgentProxyEnv(host);
-    if (reconciled.deferredForLiveTurn) return; // turn-done 补刀
+    if (reconciled.deferredForLiveTurn) {
+      // 配置已变但因 live turn 推迟 — 旧 phase='active' 状态不得继续展示
+      // (review: PR #992 codex P2): env 模式会把新 URL 显示成已注入, disable
+      // 会连卡片都不显示, 而旧 marker/隧道其实还在服役。改落 pending 态
+      // (无 lastError, UI 显示等待), turn-done 补刀后收敛。
+      const existing = tunnelStates.get(host.id);
+      if (existing?.phase === 'active') {
+        tunnelStates.set(host.id, { phase: 'paused', remotePort: existing.remotePort });
+        emitState(host.id);
+      }
+      return;
+    }
     // 旧 daemon 没死透 = 它还跑着旧 env, 而 marker 已回滚待重试 — 不得按
     // 成功收口 (codex R9/R10 P1/P2), 让卡片显示错误。
     if (reconciled.markerChanged && !reconciled.daemonRestarted) {

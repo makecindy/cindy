@@ -58,6 +58,7 @@ import {
   getSshHostAgentProxy,
   getSshHostAutoConnect,
   hasAnyAutoConnectHost,
+  isAllowedAgentProxyRemotePort,
   LEGACY_AGENT_PROXY_REMOTE_PORT,
   normalizeAgentProxyUrl,
   readSshHostPrefs,
@@ -551,13 +552,10 @@ function normalizeAgentProxyInput(raw: unknown): SshHostAgentProxyPref | null | 
   }
   // 固定远端端口 — env 静态化的关键; 旧 renderer 不传时沿用迁移缺省。
   const remotePortRaw = obj.remotePort === undefined ? LEGACY_AGENT_PROXY_REMOTE_PORT : obj.remotePort;
-  const remotePort = typeof remotePortRaw === 'number' && Number.isInteger(remotePortRaw) && remotePortRaw > 0 && remotePortRaw < 65536
-    ? remotePortRaw
-    : NaN;
-  if (!Number.isInteger(remotePort)) {
-    throwIpcError('INVALID_PARAMS', 'agentProxy.remotePort must be an integer in 1..65535');
+  if (!isAllowedAgentProxyRemotePort(remotePortRaw)) {
+    throwIpcError('INVALID_PARAMS', 'agentProxy.remotePort must be an integer in 1024..65535 (privileged/service ports are rejected)');
   }
-  return { enabled: true, mode: 'tunnel', localHost, localPort, remotePort };
+  return { enabled: true, mode: 'tunnel', localHost, localPort, remotePort: remotePortRaw };
 }
 
 function normalizeAddInput(raw: unknown): AddHostInput & { agentProxy?: SshHostAgentProxyPref | null } {

@@ -65,6 +65,10 @@ export function normalizeAgentProxyUrl(raw: unknown): string | null {
     const url = new URL(trimmed);
     if (!PROXY_URL_SCHEMES.has(url.protocol)) return null;
     if (!url.hostname) return null;
+    // 拒 userinfo (http://user:pass@host): 该值会持久化 + 写远端 marker 文件,
+    // 内嵌凭证会被当成非机密落盘/进日志 (review: PR #992 greptile P1)。
+    // 需要认证的代理让用户改用本机代理转发, 不接受凭证内嵌。
+    if (url.username || url.password) return null;
     return trimmed;
   } catch {
     return null;

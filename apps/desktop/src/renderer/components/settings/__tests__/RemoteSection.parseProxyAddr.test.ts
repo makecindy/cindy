@@ -46,13 +46,17 @@ describe('parseRemotePortInput', () => {
     expect(parseRemotePortInput(' 45000 ')).toBe(45000);
   });
 
-  it('rejects non-integers, out-of-range and suffixed values', () => {
+  it('rejects non-integers, out-of-range, privileged and suffixed values', () => {
     expect(parseRemotePortInput('')).toBeNull();
     expect(parseRemotePortInput('0')).toBeNull();
     expect(parseRemotePortInput('65536')).toBeNull();
     expect(parseRemotePortInput('7890abc')).toBeNull();
     expect(parseRemotePortInput('-1')).toBeNull();
     expect(parseRemotePortInput('78.9')).toBeNull();
+    // 特权/知名服务端口拒收 (防残留清理误杀系统 sshd, PR #992 review)。
+    expect(parseRemotePortInput('22')).toBeNull();
+    expect(parseRemotePortInput('1023')).toBeNull();
+    expect(parseRemotePortInput('1024')).toBe(1024);
   });
 });
 
@@ -64,7 +68,7 @@ describe('parseProxyUrlInput', () => {
     expect(parseProxyUrlInput('socks5h://10.0.0.5:1080')).toBe('socks5h://10.0.0.5:1080');
   });
 
-  it('rejects unsupported schemes, whitespace, quotes and non-URLs', () => {
+  it('rejects unsupported schemes, whitespace, quotes, userinfo and non-URLs', () => {
     expect(parseProxyUrlInput('')).toBeNull();
     expect(parseProxyUrlInput('127.0.0.1:7890')).toBeNull(); // 缺 scheme
     expect(parseProxyUrlInput('ftp://127.0.0.1:21')).toBeNull();
@@ -72,5 +76,8 @@ describe('parseProxyUrlInput', () => {
     expect(parseProxyUrlInput("http://x'y:1")).toBeNull();
     expect(parseProxyUrlInput('http://x"y:1')).toBeNull();
     expect(parseProxyUrlInput('http://')).toBeNull();
+    // userinfo 内嵌凭证拒收 (会持久化 + 写远端 marker, PR #992 greptile P1)。
+    expect(parseProxyUrlInput('http://user:pass@127.0.0.1:7890')).toBeNull();
+    expect(parseProxyUrlInput('socks5://user@10.0.0.5:1080')).toBeNull();
   });
 });
