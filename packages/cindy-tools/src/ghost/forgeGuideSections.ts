@@ -61,6 +61,7 @@ export function buildForgeGuideToc(guide: string): string {
  * 取单章正文:从命中的 `## ` 标题行(含)到下一个 `## ` 标题行(不含)。
  * 匹配优先级:章号精确匹配(允许末尾多一个点) > 标题关键词包含(大小写不敏感)。
  * 关键词命中多章返回歧义候选;零命中返回全部章节标题。
+ * 没有任何 `## ` 标题的退化手册无章可取,任何 query 都整本原样返回。
  */
 export function extractForgeGuideSection(
   guide: string,
@@ -71,10 +72,13 @@ export function extractForgeGuideSection(
   lines.forEach((l, i) => {
     if (l.startsWith(HEADER_PREFIX)) headerIdx.push(i);
   });
+  if (headerIdx.length === 0) {
+    return { ok: true, text: guide };
+  }
   const allTitles = headerIdx.map((i) => headerTitle(lines[i]));
 
   const q = query.trim().replace(/\.$/, "");
-  if (!q || headerIdx.length === 0) {
+  if (!q) {
     return { ok: false, candidates: allTitles, ambiguous: false };
   }
 

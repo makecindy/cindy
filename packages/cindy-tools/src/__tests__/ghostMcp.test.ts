@@ -909,6 +909,19 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
     expect(result.isError).toBeUndefined();
   });
 
+  it("forge_guide 退化手册 + 传 section 仍整本原样返回,不报未命中", async () => {
+    const result = await handleForgeGuide(fakeDeps(), { section: "4.7" });
+    expect(result.content[0].text).toBe("# 手册");
+    expect(result.isError).toBeUndefined();
+  });
+
+  it("forge_guide 空串/纯空白 section 视为未传,返回目录而非报错", async () => {
+    const blank = await handleForgeGuide(sectionedDeps(), { section: "   " });
+    expect(blank.isError).toBeUndefined();
+    expect(blank.content[0].text).toContain("## 目录");
+    expect(blank.content[0].text).not.toContain("net-body");
+  });
+
   // 分章手册:开场白 + 4 章,其中 4.6.1 也是 ## 级(与真实手册一致)
   const SECTIONED_GUIDE = [
     "# 手册",

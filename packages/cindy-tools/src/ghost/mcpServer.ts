@@ -621,10 +621,12 @@ export async function handleForgeGuide(
 ): Promise<McpTextResult> {
   try {
     const guide = await deps.forgeGuide();
-    if (!input?.section) {
+    // 空串/纯空白与未传等价:与工具描述"不传返回目录"一致
+    const section = input?.section?.trim();
+    if (!section) {
       return { content: [{ type: "text", text: buildForgeGuideToc(guide) }] };
     }
-    const hit = extractForgeGuideSection(guide, input.section);
+    const hit = extractForgeGuideSection(guide, section);
     if (hit.ok) {
       return { content: [{ type: "text", text: hit.text }] };
     }
@@ -633,8 +635,8 @@ export async function handleForgeGuide(
         ok: false,
         errorCode: "SECTION_NOT_FOUND",
         message: hit.ambiguous
-          ? `section "${input.section}" 命中多章,换更精确的章号:\n${hit.candidates.join("\n")}`
-          : `section "${input.section}" 未命中任何章节,可用章节:\n${hit.candidates.join("\n")}`,
+          ? `section "${section}" 命中多章,换更精确的章号:\n${hit.candidates.join("\n")}`
+          : `section "${section}" 未命中任何章节,可用章节:\n${hit.candidates.join("\n")}`,
       },
       true,
     );
