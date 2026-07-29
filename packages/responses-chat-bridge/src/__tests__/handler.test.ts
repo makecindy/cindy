@@ -398,4 +398,47 @@ describe('createResponsesChatHandler', () => {
     expect(res.status).toBe(200);
     expect(res.chunks.join('')).toContain('event: response.completed');
   });
+
+  it('cancels an oversized non-SSE body after parsing the bounded JSON prefix', async () => {
+    const json = JSON.stringify({
+      id: 'chat_bounded',
+      choices: [{ message: { role: 'assistant', content: 'bounded' }, finish_reason: 'stop' }],
+    });
+    const encoder = new TextEncoder();
+    const padding = new Uint8Array(1024 * 1024).fill(0x20);
+    let paddingChunks = 0;
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(json));
+      },
+      pull(controller) {
+        paddingChunks += 1;
+        if (paddingChunks <= 17) controller.enqueue(padding);
+        else controller.close();
+      },
+      cancel,
+    });
+    const fetchImpl = vi.fn(async () => new Response(body, {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })) as typeof fetch;
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: { model: 'm', input: 'hi', stream: false },
+      res: res as never,
+    });
+
+    const response = JSON.parse(res.chunks.join('')) as {
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    expect(res.status).toBe(200);
+    expect(response.output[0].content?.[0].text).toBe('bounded');
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 });

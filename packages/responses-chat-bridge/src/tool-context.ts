@@ -228,7 +228,10 @@ export class ChatBridgeToolContext {
       if (!isPlainObject(item)) continue;
       if (item.type === 'tool_search_call') this.addToolSearch();
       if (item.type === 'custom_tool_call' && typeof item.name === 'string') {
-        this.addCustom({ type: 'custom', name: item.name });
+        this.addCustom(
+          { type: 'custom', name: item.name },
+          typeof item.namespace === 'string' ? item.namespace : undefined,
+        );
       }
       if (
         (item.type === 'tool_search_output' || item.type === 'tool_search_call_output')

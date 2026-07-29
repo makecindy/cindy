@@ -11,7 +11,7 @@ import {
 } from './types.js';
 
 const MAX_ERROR_BODY_CHARS = 16 * 1024;
-const MAX_RESPONSE_BODY_CHARS = 16 * 1024 * 1024;
+const MAX_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
 const MAX_SSE_BUFFER_CHARS = 1024 * 1024;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -103,10 +103,38 @@ async function readErrorText(upstream: Response): Promise<string> {
 }
 
 async function readResponseText(upstream: Response): Promise<string> {
+  const reader = upstream.body?.getReader();
+  if (!reader) return '';
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let bytesRead = 0;
   try {
-    return (await upstream.text()).slice(0, MAX_RESPONSE_BODY_CHARS);
+    while (bytesRead < MAX_RESPONSE_BODY_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) {
+        chunks.push(decoder.decode());
+        return chunks.join('');
+      }
+      const remaining = MAX_RESPONSE_BODY_BYTES - bytesRead;
+      const bounded = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      bytesRead += bounded.byteLength;
+      chunks.push(decoder.decode(bounded, { stream: true }));
+      if (bounded.byteLength < value.byteLength || bytesRead >= MAX_RESPONSE_BODY_BYTES) {
+        await reader.cancel();
+        return chunks.join('');
+      }
+    }
+    await reader.cancel();
+    return chunks.join('');
   } catch {
+    try {
+      await reader.cancel();
+    } catch {
+      // Ignore cancellation failures after a body read error.
+    }
     return '';
+  } finally {
+    reader.releaseLock();
   }
 }
 

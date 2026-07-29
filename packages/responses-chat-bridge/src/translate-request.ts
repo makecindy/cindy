@@ -84,12 +84,35 @@ function audioPart(part: Record<string, unknown>): ChatUserContentPart | undefin
   return { type: 'input_audio', input_audio: { data: source.data, format: source.format } };
 }
 
+function hasImageSource(part: Record<string, unknown>): boolean {
+  return part.file_id !== undefined
+    || (typeof part.image_url === 'string' && part.image_url.length > 0)
+    || (
+      isPlainObject(part.image_url)
+      && typeof part.image_url.url === 'string'
+      && part.image_url.url.length > 0
+    );
+}
+
+function hasFileSource(part: Record<string, unknown>): boolean {
+  const source = isPlainObject(part.file) ? part.file : part;
+  return source.file_id !== undefined
+    || typeof source.file_data === 'string'
+    || typeof source.file_url === 'string';
+}
+
+function hasAudioSource(part: Record<string, unknown>): boolean {
+  const source = isPlainObject(part.input_audio) ? part.input_audio : part;
+  return typeof source.data === 'string' && typeof source.format === 'string';
+}
+
 function mediaPart(
   part: Record<string, unknown>,
   capabilities: ChatMediaCapabilities,
   failClosed = false,
 ): ChatUserContentPart | undefined {
   if (part.type === 'input_image' || part.type === 'image_url' || part.type === 'image') {
+    if (!hasImageSource(part)) return undefined;
     if (capabilities.imageInput !== 'image_url') {
       if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
       return undefined;
@@ -97,6 +120,7 @@ function mediaPart(
     return imagePart(part);
   }
   if (part.type === 'input_file' || part.type === 'file') {
+    if (!hasFileSource(part)) return undefined;
     if (capabilities.fileInput !== 'file') {
       if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
       return undefined;
@@ -104,6 +128,7 @@ function mediaPart(
     return filePart(part);
   }
   if (part.type === 'input_audio') {
+    if (!hasAudioSource(part)) return undefined;
     if (capabilities.audioInput !== 'input_audio') {
       if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
       return undefined;

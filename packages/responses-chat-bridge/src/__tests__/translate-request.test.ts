@@ -694,6 +694,27 @@ describe('translateResponsesRequest', () => {
     ]);
   });
 
+  it('preserves namespaces when cataloging custom tools from replayed history', () => {
+    const { request, toolContext } = translateResponsesRequestWithContext(base({
+      input: [{
+        type: 'custom_tool_call',
+        call_id: 'c1',
+        namespace: 'mcp',
+        name: 'exec',
+        input: 'raw',
+      }],
+    }));
+    expect(request.tools?.[0].function.name).toBe('mcp__exec');
+    expect((request.messages[0] as {
+      tool_calls?: Array<{ function: { name: string } }>;
+    }).tool_calls?.[0]?.function.name).toBe('mcp__exec');
+    expect(toolContext.lookupChatName('mcp__exec')).toMatchObject({
+      kind: 'custom',
+      name: 'exec',
+      namespace: 'mcp',
+    });
+  });
+
   it('keeps reasoning history attached to the following assistant/tool turn', () => {
     const out = translateResponsesRequest(base({
       input: [
@@ -869,6 +890,21 @@ describe('translateResponsesRequest', () => {
         ],
       }))).toThrow(part.type);
     }
+  });
+
+  it('does not reject non-media metadata with a media-like type', () => {
+    const metadata = { type: 'image', description: 'output schema metadata' };
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'c1', name: 'inspect', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'c1', output: { metadata } },
+      ],
+    }));
+    expect(out.messages).toContainEqual({
+      role: 'tool',
+      tool_call_id: 'c1',
+      content: JSON.stringify({ metadata }),
+    });
   });
 
   it('forwards only capability-approved Chat tuning fields and maps reasoning dialects', () => {
