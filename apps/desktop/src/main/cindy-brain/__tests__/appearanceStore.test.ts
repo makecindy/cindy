@@ -128,6 +128,22 @@ describe('appearance preset store', () => {
     expect(mocks.refs.has(`skin-preset:${first.id}:background`)).toBe(false);
   });
 
+  it('重置引用清理失败时保留可重试事务并隐藏旧皮肤', async () => {
+    await saveGhostAppearance(appearance('Furina'), { background: HASH_A }, 'skin');
+    vi.mocked(removeRefs).mockRejectedValueOnce(new Error('ledger unavailable'));
+
+    await expect(resetGhostAppearance()).rejects.toThrow('ledger unavailable');
+
+    expect(await readGhostAppearance()).toBeNull();
+    expect(mocks.refs.get('skin-background:active')?.has(HASH_A)).toBe(true);
+    expect(fs.existsSync(path.join(mocks.root, 'appearance-transaction.v1.json'))).toBe(true);
+
+    await expect(recoverGhostAppearanceTransaction()).resolves.toBeUndefined();
+    expect(await readGhostAppearance()).toBeNull();
+    expect(mocks.refs.has('skin-background:active')).toBe(false);
+    expect(fs.existsSync(path.join(mocks.root, 'appearance-transaction.v1.json'))).toBe(false);
+  });
+
   it('预设引用清理失败时保留可重试的逻辑删除事务', async () => {
     await saveGhostAppearancePreset(appearance('Furina'), { background: HASH_A }, 'skin');
     const preset = (await listGhostAppearancePresets())[0];

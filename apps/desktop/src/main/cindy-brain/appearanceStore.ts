@@ -86,6 +86,7 @@ interface PersistedAppearanceTransaction {
   previousAppearance: PersistedAppearance | null;
   previousPresets: PersistedAppearancePresetLibrary;
   removeGhostId?: string;
+  resetAppearance?: true;
 }
 
 function isSnapshot(value: unknown): value is PersistedAppearance {
@@ -201,6 +202,8 @@ async function readAppearanceTransaction(): Promise<PersistedAppearanceTransacti
       (transaction.previousAppearance !== null && !isSnapshot(transaction.previousAppearance)) ||
       (transaction.removeGhostId !== undefined &&
         typeof transaction.removeGhostId !== 'string') ||
+      (transaction.resetAppearance !== undefined && transaction.resetAppearance !== true) ||
+      (transaction.removeGhostId !== undefined && transaction.resetAppearance === true) ||
       !transaction.previousPresets ||
       typeof transaction.previousPresets !== 'object'
     ) {
@@ -258,6 +261,7 @@ async function readGhostAppearanceRaw(): Promise<GhostAppearanceSnapshot | null>
 export async function readGhostAppearance(): Promise<GhostAppearanceSnapshot | null> {
   const transaction = await readAppearanceTransaction();
   if (!transaction) return readGhostAppearanceRaw();
+  if (transaction.resetAppearance) return null;
   if (transaction.previousAppearance?.sourceGhostId === transaction.removeGhostId) {
     return null;
   }
@@ -576,6 +580,11 @@ async function recoverIncompleteAppearanceTransaction(): Promise<void> {
     return;
   }
 
+  if (transaction.resetAppearance) {
+    await resetGhostAppearanceUnsafe();
+    return;
+  }
+
   if (transaction.previousAppearance) {
     await saveGhostAppearanceUnsafe(
       hydrateAppearance(transaction.previousAppearance)!,
@@ -871,11 +880,26 @@ export function deleteGhostAppearancePreset(
 
 export function resetGhostAppearance(): Promise<void> {
   return serializeMutation(async () => {
-    await fs.rm(filePath(), { force: true });
-    await Promise.all(
-      (['skin-background', 'skin-brand-icon', 'skin-brand-logo'] as const).map((refKind) =>
-        removeRefs({ refKind, refId: REF_ID }),
-      ),
-    );
+    const [previousAppearance, previousPresets] = await Promise.all([
+      readGhostAppearance(),
+      readPresetLibrary(),
+    ]);
+    await atomicWriteJson(transactionFilePath(), {
+      version: 1,
+      previousAppearance,
+      previousPresets,
+      resetAppearance: true,
+    } satisfies PersistedAppearanceTransaction);
+    await resetGhostAppearanceUnsafe();
   });
+}
+
+async function resetGhostAppearanceUnsafe(): Promise<void> {
+  await fs.rm(filePath(), { force: true });
+  await Promise.all(
+    (['skin-background', 'skin-brand-icon', 'skin-brand-logo'] as const).map((refKind) =>
+      removeRefs({ refKind, refId: REF_ID }),
+    ),
+  );
+  await fs.rm(transactionFilePath(), { force: true });
 }
