@@ -60,6 +60,11 @@ describe('categorize', () => {
     expect(categorize('gemini-omni-flash-preview')).toBe('realtime');
   });
 
+  it('gpt-4o-realtime-* 旧一代命名同样归 realtime(2026-07 review 回归:拆分时漏掉了这个前缀)', () => {
+    expect(categorize('gpt-4o-realtime-preview-2024-12-17')).toBe('realtime');
+    expect(categorize('gpt-4o-realtime-mini')).toBe('realtime');
+  });
+
   it('语音转写/ASR 类归 stt,即使 id 里带 "realtime" 字样也不误入 realtime(issue #882)', () => {
     expect(categorize('gpt-4o-transcribe')).toBe('stt');
     expect(categorize('gpt-4o-mini-transcribe')).toBe('stt');

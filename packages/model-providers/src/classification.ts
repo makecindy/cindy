@@ -130,9 +130,10 @@ export function categorize(id: string): ModelCategory {
   // 会漏网落进 gpt/china,被 isChatEligible 误判为可聊天(2026-07 review)。
   if (id.startsWith('elevenlabs/scribe') || /transcribe|whisper|asr/.test(id)) return 'stt';
   if (id.startsWith('elevenlabs/eleven') || /speech|tts|audio/.test(id)) return 'tts';
-  // gpt-realtime-2 / gpt-realtime-mini / gpt-realtime-translate / gemini-omni-* ——
-  // 真正的实时多模态,已排除上面的 STT 特例。
-  if (/^gpt-realtime|gemini-omni/.test(id)) return 'realtime';
+  // gpt-realtime-2 / gpt-realtime-mini / gpt-realtime-translate / gpt-4o-realtime-* /
+  // gemini-omni-* —— 真正的实时多模态,已排除上面的 STT 特例。gpt-4o-realtime 前缀是
+  // 旧一代命名,新一代改成了 gpt-realtime-*,兜底要同时认两种(2026-07 review)。
+  if (/^gpt-realtime|^gpt-4o-realtime|gemini-omni/.test(id)) return 'realtime';
   // 订阅直连 GPT(chatgpt/ 前缀,经 responses-bridge)与网关 gpt- 同归 GPT 组;前缀常量与
   // 路由 / 记账 gate 同源(本文件顶部),防漂移。
   if (id.startsWith('gpt-') || id.startsWith(CHATGPT_MODEL_PREFIX)) return 'gpt';
