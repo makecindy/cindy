@@ -5,11 +5,11 @@ export type ClaudeSessionBillingRoute = 'gateway' | 'subscription';
 export interface ClaudeSessionRouteState {
   /** 最近一个 ② 段默认路由请求的生效路由;null = 未观察到。 */
   route: ClaudeSessionBillingRoute | null;
-  /** 最近一笔默认路由域请求是否订阅直连 bridge(chatgpt/ / xai/ 覆写)。 */
-  lastRequestBridge: boolean;
+  /** 最近一笔**失败**请求是否订阅直连 bridge(chatgpt/ / xai/ 覆写;响应侧落账)。 */
+  lastFailedRequestBridge: boolean;
 }
 
-const EMPTY_STATE: ClaudeSessionRouteState = { route: null, lastRequestBridge: false };
+const EMPTY_STATE: ClaudeSessionRouteState = { route: null, lastFailedRequestBridge: false };
 
 /**
  * useClaudeSessionRoute — cc 默认路由会话的「生效计费路由」观察状态(proxy 按请求
@@ -20,9 +20,10 @@ const EMPTY_STATE: ClaudeSessionRouteState = { route: null, lastRequestBridge: f
  * 正确预测;而已发过请求的会话以观察值为准, 不受「spawn 后凭证变化」影响(child
  * 凭证在 spawn 时冻结, 全局活性状态重算会与实际路由发散)。
  *
- * lastRequestBridge 独立于 route:子代理按请求覆写 bridge 模型不改会话主路由
- * (chip 形态不受影响),但错误横幅需要它识别「最近一笔失败可能是 bridge 花的
- * 个人订阅额度」,不把 bridge 配额错误贴成 Cindy 点数耗尽(PR review P1 ×2)。
+ * lastFailedRequestBridge 独立于 route:子代理按请求覆写 bridge 模型不改会话主
+ * 路由(chip 形态不受影响),错误横幅靠它识别「最近一笔**失败**是 bridge 花的
+ * 个人订阅额度」(proxy 响应侧落账,归因到失败那笔而非请求发起序),不把
+ * bridge 配额错误贴成 Cindy 点数耗尽(PR review P1 ×3)。
  *
  * mount 时 GET 一次, 此后跟随 CLAUDE_SESSION_ROUTE_CHANGED push(按 sessionId 过滤)。
  *
@@ -54,7 +55,7 @@ export function useClaudeSessionRoute(
         setObservation({
           sessionId,
           route: payload.route,
-          lastRequestBridge: payload.lastRequestBridge,
+          lastFailedRequestBridge: payload.lastFailedRequestBridge,
         });
       }
     });
@@ -65,6 +66,6 @@ export function useClaudeSessionRoute(
   }, [sessionId, enabled]);
 
   return enabled && sessionId && observation?.sessionId === sessionId
-    ? { route: observation.route, lastRequestBridge: observation.lastRequestBridge }
+    ? { route: observation.route, lastFailedRequestBridge: observation.lastFailedRequestBridge }
     : EMPTY_STATE;
 }

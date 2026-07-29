@@ -13,7 +13,7 @@ import {
   readClaudeSessionRoute,
   recordClaudeRequestRoute,
   readClaudeSessionRouteState,
-  recordClaudeSessionBridgeRequest,
+  recordClaudeSessionFailedRequestSource,
   recordClaudeSessionRoute,
   resetClaudeSessionRouteRegistryForTest,
   takeClaudeRequestRoute,
@@ -42,48 +42,63 @@ describe('claude-session-route-registry', () => {
     recordClaudeSessionRoute('s1', 'gateway');  // 同值: 每请求都会调, 不得重复广播
     recordClaudeSessionRoute('s1', 'gateway');
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith('s1', { route: 'gateway', lastRequestBridge: false });
+    expect(listener).toHaveBeenCalledWith('s1', {
+      route: 'gateway',
+      lastFailedRequestBridge: false,
+    });
 
     recordClaudeSessionRoute('s1', 'subscription');
     expect(listener).toHaveBeenCalledTimes(2);
     expect(listener).toHaveBeenLastCalledWith('s1', {
       route: 'subscription',
-      lastRequestBridge: false,
+      lastFailedRequestBridge: false,
     });
   });
 
-  it('tracks bridge requests in a separate slot without clobbering the session route', () => {
-    // 网关会话跑 bridge 子代理:主路由(chip 形态)不得被改判成订阅,
-    // 但错误横幅要能看到「最近一笔是 bridge」(PR review P1 ×2)。
+  it('attributes failures in a separate slot without clobbering the session route', () => {
+    // 网关会话跑 bridge 子代理:主路由(chip 形态)不得被改判成订阅,但错误横幅
+    // 要能看到「最近一笔失败是 bridge」;归因在响应侧落账,不随后续请求发起而清
+    // (并发时按发起序清会误清在途 bridge 的归因,PR review P1)。
     recordClaudeSessionRoute('s1', 'gateway');
-    recordClaudeSessionBridgeRequest('s1');
+    recordClaudeSessionFailedRequestSource('s1', true);
     expect(readClaudeSessionRoute('s1')).toBe('gateway');
     expect(readClaudeSessionRouteState('s1')).toEqual({
       route: 'gateway',
-      lastRequestBridge: true,
+      lastFailedRequestBridge: true,
     });
-    // 后续 ② 段默认路由请求落地 → bridge 标志清除。
+    // ② 段路由记录不动失败归因槽(只有下一笔**失败**响应才覆写)。
     recordClaudeSessionRoute('s1', 'gateway');
     expect(readClaudeSessionRouteState('s1')).toEqual({
       route: 'gateway',
-      lastRequestBridge: false,
+      lastFailedRequestBridge: true,
+    });
+    // 非 bridge 请求失败 → 归因覆写为 false。
+    recordClaudeSessionFailedRequestSource('s1', false);
+    expect(readClaudeSessionRouteState('s1')).toEqual({
+      route: 'gateway',
+      lastFailedRequestBridge: false,
     });
   });
 
-  it('notifies on bridge flag transitions (set once, cleared by the next default-route request)', () => {
+  it('notifies on failure-attribution transitions and stays idempotent on same value', () => {
     const listener = vi.fn();
     recordClaudeSessionRoute('s1', 'gateway');
     onClaudeSessionRouteChange(listener);
 
-    recordClaudeSessionBridgeRequest('s1');
-    recordClaudeSessionBridgeRequest('s1');  // 同值: 不重复广播
+    recordClaudeSessionFailedRequestSource('s1', true);
+    recordClaudeSessionFailedRequestSource('s1', true);  // 同值: 不重复广播
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith('s1', { route: 'gateway', lastRequestBridge: true });
+    expect(listener).toHaveBeenCalledWith('s1', {
+      route: 'gateway',
+      lastFailedRequestBridge: true,
+    });
 
-    // 同路由值但 bridge 标志翻转 → 仍要广播(消费方需要看到标志清除)。
-    recordClaudeSessionRoute('s1', 'gateway');
+    recordClaudeSessionFailedRequestSource('s1', false);
     expect(listener).toHaveBeenCalledTimes(2);
-    expect(listener).toHaveBeenLastCalledWith('s1', { route: 'gateway', lastRequestBridge: false });
+    expect(listener).toHaveBeenLastCalledWith('s1', {
+      route: 'gateway',
+      lastFailedRequestBridge: false,
+    });
   });
 
   it('isolates listener exceptions from the routing hot path and other listeners', () => {
@@ -93,7 +108,7 @@ describe('claude-session-route-registry', () => {
     onClaudeSessionRouteChange(good);
 
     expect(() => recordClaudeSessionRoute('s1', 'gateway')).not.toThrow();
-    expect(good).toHaveBeenCalledWith('s1', { route: 'gateway', lastRequestBridge: false });
+    expect(good).toHaveBeenCalledWith('s1', { route: 'gateway', lastFailedRequestBridge: false });
   });
 
   it('unsubscribes via the returned disposer', () => {

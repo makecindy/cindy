@@ -51,7 +51,7 @@ import {
 import {
   noteClaudeSessionRequest,
   recordClaudeRequestRoute,
-  recordClaudeSessionBridgeRequest,
+  recordClaudeSessionFailedRequestSource,
   recordClaudeSessionRoute,
   type ClaudeSessionBillingRoute,
 } from './claude-session-route-registry.js';
@@ -224,20 +224,30 @@ export function createModelRoutingTransform(): RoutingTransform {
       }
       // 会话态(思维深度 / Fast)在决策点解析后**闭包**进 handler —— CC 不会把 bridge 模型的
       // effort / fast 放进请求体,而引擎保持零会话概念,不走任何伪 header。
-      // 计费路由旁路:bridge 请求花的是个人订阅额度(chatgpt / xai),不是网关点数。
-      // 子代理(Task)按请求覆写 bridge 模型时会话顶层模型不变,不记录的话此前的
-      // gateway 观察值会残留,把订阅配额错误贴成 Cindy 点数耗尽(PR review P1)。
-      // 记进独立的 bridge 标志槽而**不覆盖会话主路由**:网关会话跑一个 bridge
-      // 子代理不该把整个会话的 chip 计费形态改判成订阅(PR review P1)。
-      // 与 ② 段同语义:只记默认路由(未显式选供应商)的会话。
-      if (sessionId && getSessionProvider(sessionId) == null) {
-        recordClaudeSessionBridgeRequest(sessionId);
-      }
       const effort = sessionId ? getSessionEffort(sessionId) : null;
       const fast = sessionId ? getSessionFastMode(sessionId) : false;
       return {
-        localHandler: (args) =>
-          bridgeHandler.handle({ ...args, prefs: { reasoningEffort: effort ?? undefined, fast } }),
+        // 失败归因在**响应侧**落账(而非请求发起时):bridge 子代理与主会话请求可
+        // 并发,按发起序置/清标志会被后续请求误清(PR review P1)。bridge 花个人
+        // 订阅额度,失败要记 lastFailedRequestBridge=true,让错误横幅不把它的配额
+        // 错误贴成 Cindy 点数耗尽;**不限默认路由会话**——显式 XD 会话的子代理
+        // bridge 覆写同样绕过会话来源,一样要归因(PR review P1)。localHandler
+        // 响应不经 responseObserver 链,故在此按 res 终态判定。
+        localHandler: async (args) => {
+          try {
+            await bridgeHandler.handle({
+              ...args,
+              prefs: { reasoningEffort: effort ?? undefined, fast },
+            });
+            if (sessionId && args.res.statusCode >= 400) {
+              recordClaudeSessionFailedRequestSource(sessionId, true);
+            }
+          } catch (err) {
+            // handler 抛错 → runLocalHandler 会写 502,同样是该 bridge 请求的失败。
+            if (sessionId) recordClaudeSessionFailedRequestSource(sessionId, true);
+            throw err;
+          }
+        },
       };
     }
 
@@ -352,6 +362,26 @@ export function createModelRoutingTransform(): RoutingTransform {
   };
 }
 
+
+/**
+ * 失败归因观察器(forward 路径):POST 且 status≥400 的响应把该会话的
+ * lastFailedRequestBridge 覆写为 false —— 非 bridge 请求的失败。与 bridge
+ * localHandler 内的 true 侧配对(localHandler 响应不经本观察器,不会双记)。
+ * 成功路径零开销;GET / 控制面请求不参与(横幅只关心推理请求的失败)。
+ */
+export function createClaudeSessionFailedRequestObserver() {
+  return (ctx: {
+    method: string;
+    status: number;
+    requestHeaders: Readonly<Record<string, string>>;
+  }): void => {
+    if (ctx.method !== 'POST' || ctx.status < 400) return;
+    const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
+    const sessionId = sdkSessionId && _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null;
+    if (sessionId) recordClaudeSessionFailedRequestSource(sessionId, false);
+  };
+}
+
 /**
  * 启动本地代理。幂等 —— 重复调用直接返回已缓存 handle。
  *
@@ -381,6 +411,10 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       //   - 自定义供应商上游错误分类广播(status≥400 且会话路由到 user 供应商时才 tee,
       //     成功路径零开销;30s 节流,见 provider-upstream-error-observer)。
       responseObserver: composeResponseObservers(
+        // 失败归因(lastFailedRequestBridge=false 侧):forward 路径的 POST 失败
+        // (默认/显式路由,非 bridge)在响应侧覆写归因槽——与 bridge localHandler
+        // 的 true 侧配对,最后落地的失败即横幅显示的错误(PR review P1)。
+        createClaudeSessionFailedRequestObserver(),
         createClaudeSubagentUsageResponseObserver(),
         createClaudeFastModeResponseObserver(log),
         createClaudeRateLimitHeadersObserver(),

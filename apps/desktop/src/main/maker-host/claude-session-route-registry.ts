@@ -17,13 +17,18 @@
  *     providerId 直接驱动 chip 形态, 不需要用这份 session 记录)。
  *   - reqId → 路由同时覆盖内置 XD / Anthropic 的显式请求,因为错误归因必须知道
  *     产生响应的那一笔请求究竟去了哪里。
- *   - session route 记录的是**最近一个默认路由请求**的生效路由;凭证中途变化后, 下一个请求会在
+ *   - session route 记录的是**最近一个默认路由请求**的生效路由;凭证中途变化后,
+ *     下一个请求会在
  *     transform 里按新状态重判并自动纠正记录。
- *   - 订阅直连 bridge 请求(chatgpt/ / xai/ 前缀, 含子代理按请求覆写)记进
- *     **独立的 `lastRequestBridge` 槽**, 不覆盖 route:bridge 花个人订阅额度,
- *     错误横幅需要知道「最近一笔请求是 bridge」以免把 bridge 配额错误贴成
- *     Cindy 点数耗尽;但会话主计费形态(chip)仍由默认路由驱动。后续任一默认
- *     路由请求落地即清除该标志。
+ *   - `lastFailedRequestBridge` 独立槽在**响应侧**落账, 归因到失败的那笔请求:
+ *     bridge(chatgpt/ / xai/ 覆写, 含子代理)响应失败 → true;forward 路径的
+ *     默认/显式路由 POST 失败 → false。请求可并发, 按请求发起序清标志会在
+ *     bridge 在途时被后续请求误清(PR review P1);响应序覆写与「横幅显示的
+ *     是最后落地的失败」一致。bridge 花个人订阅额度, 错误横幅靠本槽避免把
+ *     bridge 配额错误贴成 Cindy 点数耗尽;会话主计费形态(chip)仍由 route
+ *     驱动, 不读本槽 —— 网关会话跑 bridge 子代理不改判形态(PR review P1 ×2)。
+ *     本槽**不限默认路由会话**:显式 XD 会话的 bridge 子代理失败同样要归因
+ *     (PR review P1)。
  *   - 会话尚未发过请求(新会话 / app 重启后未活动)→ 无记录, 消费方回落
  *     活性启发式 —— 此时下一次 spawn 恰按当前凭证决定, 启发式就是正确预测。
  *
@@ -43,14 +48,14 @@ export interface ClaudeRequestRoute {
 export interface ClaudeSessionRouteState {
   /** 最近一个 ② 段默认路由请求的生效路由;未观察到 → null。 */
   route: ClaudeSessionBillingRoute | null;
-  /** 最近一笔默认路由域请求是否订阅直连 bridge(chatgpt/ / xai/ 覆写)。 */
-  lastRequestBridge: boolean;
+  /** 最近一笔**失败**请求是否订阅直连 bridge(chatgpt/ / xai/ 覆写;响应侧落账)。 */
+  lastFailedRequestBridge: boolean;
 }
 
 type RouteChangeListener = (sessionId: string, state: ClaudeSessionRouteState) => void;
 
 const routes = new Map<string, ClaudeSessionBillingRoute>();
-const bridgeLatest = new Set<string>();
+const failedBridge = new Map<string, boolean>();
 const listeners = new Set<RouteChangeListener>();
 const requestRoutes = new Map<number, ClaudeRequestRoute>();
 const latestRequestIds = new Map<string, number>();
@@ -102,21 +107,24 @@ function notify(sessionId: string): void {
   }
 }
 
-/** proxy transform ② 段决策点旁路调用;同状态幂等(不重复通知),并清 bridge 标志。 */
+/** proxy transform ② 段决策点旁路调用;同值幂等(不重复通知);不动失败归因槽。 */
 export function recordClaudeSessionRoute(
   sessionId: string,
   route: ClaudeSessionBillingRoute,
 ): void {
-  const bridgeCleared = bridgeLatest.delete(sessionId);
-  if (!bridgeCleared && routes.get(sessionId) === route) return;
+  if (routes.get(sessionId) === route) return;
   routes.set(sessionId, route);
   notify(sessionId);
 }
 
-/** proxy transform ⓪ 段(bridge 分流)旁路调用;只置标志, 不动 route;同值幂等。 */
-export function recordClaudeSessionBridgeRequest(sessionId: string): void {
-  if (bridgeLatest.has(sessionId)) return;
-  bridgeLatest.add(sessionId);
+/** 响应侧失败归因:bridge localHandler 失败记 true, forward 路径 POST 失败记 false;
+ *  同值幂等。后续失败按响应落地序覆写(最后落地的失败即横幅显示的错误)。 */
+export function recordClaudeSessionFailedRequestSource(
+  sessionId: string,
+  bridge: boolean,
+): void {
+  if (failedBridge.get(sessionId) === bridge) return;
+  failedBridge.set(sessionId, bridge);
   notify(sessionId);
 }
 
@@ -129,7 +137,7 @@ export function readClaudeSessionRoute(sessionId: string): ClaudeSessionBillingR
 export function readClaudeSessionRouteState(sessionId: string): ClaudeSessionRouteState {
   return {
     route: routes.get(sessionId) ?? null,
-    lastRequestBridge: bridgeLatest.has(sessionId),
+    lastFailedRequestBridge: failedBridge.get(sessionId) ?? false,
   };
 }
 
@@ -144,7 +152,7 @@ export function onClaudeSessionRouteChange(listener: RouteChangeListener): () =>
 /** 测试隔离用。 */
 export function resetClaudeSessionRouteRegistryForTest(): void {
   routes.clear();
-  bridgeLatest.clear();
+  failedBridge.clear();
   listeners.clear();
   requestRoutes.clear();
   latestRequestIds.clear();

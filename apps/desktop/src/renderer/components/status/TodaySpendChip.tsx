@@ -1077,7 +1077,7 @@ export function TodaySpendChip({
   const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey();
   const claudeOAuthConnected = useClaudeOAuthConnected(isDefaultRouteClaudeSession);
   // 只消费 route(会话主计费形态):bridge 子代理覆写不改会话形态,
-  // lastRequestBridge 是错误横幅专用信号,chip 不读。
+  // lastFailedRequestBridge 是错误横幅专用的失败归因信号,chip 不读。
   const { route: observedClaudeRoute } = useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession);
   const ccBillingFormPending = isDefaultRouteClaudeSession && observedClaudeRoute == null
     && (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));

@@ -186,17 +186,21 @@ export function ErrorBanner({
   // 订阅直连 bridge 模型(chatgpt/ / xai/)不参与:请求在 proxy 提前分流,花的是
   // 个人订阅额度——ChatGPT/xAI 的配额错误绝不能被贴成 Cindy 点数耗尽(PR review
   // P1)。这里按会话顶层模型兜底;子代理按请求覆写 bridge 模型时顶层模型不变,
-  // 由观察状态的 lastRequestBridge 标志兜住(见下方 cc 子句;PR review P1 ×2)。
+  // 由观察状态的 lastFailedRequestBridge 失败归因兜住(PR review P1 ×3)。
   const isSubscriptionBridgeModel = !!modelId && isSubscriptionDirectModel(modelId);
-  const wantCcRouteForBilling =
+  // 观察状态对默认路由 cc 会话与显式 XD cc 会话都要读:子代理 bridge 覆写按请求
+  // 绕过会话来源,显式 XD 会话同样会出现 bridge 配额失败(PR review P1)。
+  const wantCcRouteState =
     isQuotaError &&
     canAccessBilling &&
     !isAnyRemoteSession &&
     agentKind === 'cc' &&
     !isSubscriptionBridgeModel &&
-    normalizedProviderId === null;
-  const { route: claudeSessionRoute, lastRequestBridge: ccLastRequestBridge } =
-    useClaudeSessionRoute(sessionId, wantCcRouteForBilling);
+    (normalizedProviderId === null || normalizedProviderId === 'xd');
+  // 生效路由 + 活性启发式只服务默认路由会话(显式 XD 由 providerId 直接驱动)。
+  const wantCcRouteForBilling = wantCcRouteState && normalizedProviderId === null;
+  const { route: claudeSessionRoute, lastFailedRequestBridge: ccLastFailedRequestBridge } =
+    useClaudeSessionRoute(sessionId, wantCcRouteState);
   // 观察值缺失时的活性凭证启发式(与 TodaySpendChip 同口径)只对 live 错误启用:
   // live 错误刚由当前凭证形态的请求产生,启发式就是正确预测——有网关 key 判
   // gateway;无 key 且连了 Claude OAuth 判 subscription;reconcile 未完成 / 状态
@@ -222,8 +226,13 @@ export function ErrorBanner({
   // 发现 codex/ 开头的模型 id,且 proxy 按显式来源优先路由(PR review P1)。
   // 显式 xd 也要排除订阅桥模型:路由层的 bridge 分流优先于会话来源,xd 会话里
   // 的 chatgpt/ / xai/ 模型花的仍是个人订阅额度(PR review P1)。
+  // ccLastFailedRequestBridge:最近一笔**失败**请求是子代理覆写的 bridge 模型
+  // (chatgpt/ / xai/,花个人订阅额度;proxy 响应侧落账,归因到失败那笔而非
+  // 发起序)——顶层模型与会话来源都看不出它,默认路由与显式 XD 的 cc 会话
+  // 都必须据此闭嘴,不把 bridge 配额错误引导去购买点数(PR review P1 ×2)。
+  const ccBridgeFailureVeto = agentKind === 'cc' && ccLastFailedRequestBridge;
   const isGatewayBilledSource =
-    (normalizedProviderId === 'xd' && !isSubscriptionBridgeModel) ||
+    (normalizedProviderId === 'xd' && !isSubscriptionBridgeModel && !ccBridgeFailureVeto) ||
     ((normalizedProviderId === null || normalizedProviderId === 'xd') &&
       !!modelId?.startsWith('codex/')) ||
     // codex 隐式来源必须等 runtime route 真值:占位 env-key 会把 OAuth 订阅
@@ -236,14 +245,10 @@ export function ErrorBanner({
       !isSubscriptionBridgeModel &&
       codexRouteResolved &&
       codexAuthInjection === 'env-key') ||
-    // lastRequestBridge:最近一笔默认路由域请求是子代理覆写的 bridge 模型
-    // (chatgpt/ / xai/,花个人订阅额度)——它不覆盖会话主路由(chip 形态不变),
-    // 但本次失败大概率就是那笔 bridge 请求,不得按残留的 gateway 观察值引导
-    // 购买点数(PR review P1)。
     (normalizedProviderId === null &&
       agentKind === 'cc' &&
       !isSubscriptionBridgeModel &&
-      !ccLastRequestBridge &&
+      !ccBridgeFailureVeto &&
       ccEffectiveBillingRoute === 'gateway');
   const showGatewayQuotaRecovery =
     isQuotaError && canAccessBilling && !isAnyRemoteSession && isGatewayBilledSource;

@@ -3,8 +3,8 @@
 /**
  * useClaudeSessionRoute 的会话绑定契约:观察状态与产生它的 sessionId 绑定并在
  * 渲染期比对——组件保持挂载、仅切换 sessionId 的同一帧即返回空状态,不泄漏
- * 上一个会话的路由(PR review P1)。lastRequestBridge 与 route 同一状态载体,
- * 同样受绑定约束。
+ * 上一个会话的路由(PR review P1)。lastFailedRequestBridge(失败归因,响应侧
+ * 落账)与 route 同一状态载体,同样受绑定约束。
  */
 
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useClaudeSessionRoute } from '../useClaudeSessionRoute';
 
-type RouteState = { route: 'gateway' | 'subscription' | null; lastRequestBridge: boolean };
+type RouteState = { route: 'gateway' | 'subscription' | null; lastFailedRequestBridge: boolean };
 type Deferred = { promise: Promise<RouteState | null>; resolve: (v: RouteState | null) => void };
 
 function deferred(): Deferred {
@@ -54,19 +54,19 @@ describe('useClaudeSessionRoute session binding', () => {
       ({ id }: { id: string }) => useClaudeSessionRoute(id, true),
       { initialProps: { id: 's1' } },
     );
-    expect(result.current).toEqual({ route: null, lastRequestBridge: false });
+    expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false });
     await act(async () => {
-      pending[0].resolve({ route: 'gateway', lastRequestBridge: false });
+      pending[0].resolve({ route: 'gateway', lastFailedRequestBridge: false });
       await pending[0].promise;
     });
     await waitFor(() => expect(result.current.route).toBe('gateway'));
 
     // 切会话:同一帧即为空状态,不得沿用 s1 的 gateway 观察值。
     rerender({ id: 's2' });
-    expect(result.current).toEqual({ route: null, lastRequestBridge: false });
+    expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false });
 
     await act(async () => {
-      pending[1].resolve({ route: 'subscription', lastRequestBridge: false });
+      pending[1].resolve({ route: 'subscription', lastFailedRequestBridge: false });
       await pending[1].promise;
     });
     await waitFor(() => expect(result.current.route).toBe('subscription'));
@@ -78,32 +78,32 @@ describe('useClaudeSessionRoute session binding', () => {
       { initialProps: { enabled: true } },
     );
     await act(async () => {
-      pending[0].resolve({ route: 'gateway', lastRequestBridge: false });
+      pending[0].resolve({ route: 'gateway', lastFailedRequestBridge: false });
       await pending[0].promise;
     });
     await waitFor(() => expect(result.current.route).toBe('gateway'));
 
     rerender({ enabled: false });
-    expect(result.current).toEqual({ route: null, lastRequestBridge: false });
+    expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false });
   });
 
-  it('carries lastRequestBridge through pushes without dropping the observed route', async () => {
-    // bridge 子代理请求置标志、主路由不变;下一笔默认路由请求清标志。
+  it('carries lastFailedRequestBridge through pushes without dropping the observed route', async () => {
+    // bridge 子代理失败置归因、主路由不变;下一笔非 bridge 失败覆写归因。
     const { result } = renderHook(() => useClaudeSessionRoute('s1', true));
     await act(async () => {
-      pending[0].resolve({ route: 'gateway', lastRequestBridge: false });
+      pending[0].resolve({ route: 'gateway', lastFailedRequestBridge: false });
       await pending[0].promise;
     });
     await waitFor(() => expect(result.current.route).toBe('gateway'));
 
     act(() => {
-      pushListener?.({ sessionId: 's1', route: 'gateway', lastRequestBridge: true });
+      pushListener?.({ sessionId: 's1', route: 'gateway', lastFailedRequestBridge: true });
     });
-    expect(result.current).toEqual({ route: 'gateway', lastRequestBridge: true });
+    expect(result.current).toEqual({ route: 'gateway', lastFailedRequestBridge: true });
 
     act(() => {
-      pushListener?.({ sessionId: 's1', route: 'gateway', lastRequestBridge: false });
+      pushListener?.({ sessionId: 's1', route: 'gateway', lastFailedRequestBridge: false });
     });
-    expect(result.current).toEqual({ route: 'gateway', lastRequestBridge: false });
+    expect(result.current).toEqual({ route: 'gateway', lastFailedRequestBridge: false });
   });
 });

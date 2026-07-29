@@ -5042,7 +5042,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string,
     ): Promise<{
       route: 'gateway' | 'subscription' | null;
-      lastRequestBridge: boolean;
+      lastFailedRequestBridge: boolean;
     } | null> => ipcRenderer.invoke('maker:claude-session-route:get', sessionId),
     onClaudeSessionRouteChanged: fanOutMakerClaudeSessionRouteChanged,
 
