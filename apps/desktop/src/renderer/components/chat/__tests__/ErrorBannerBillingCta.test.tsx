@@ -98,6 +98,13 @@ describe('ErrorBanner billing CTA', () => {
     expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
   });
 
+  it('never uses the current shared codex route for persisted (error-tail) failures', () => {
+    // 共享 app-server 的当前路由 ≠ 产生该失败那一轮的路由:切换鉴权模式后
+    // 重开旧会话,持久化错误不得按当前 env-key 分类成网关计费。
+    renderBanner({ providerId: null, agentKind: 'codex', modelId: 'gpt-5.5', persistedError: true });
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
+  });
+
   it('stays silent for implicit codex sessions while the runtime route is unresolved (placeholder env-key)', () => {
     mocks.runtimeRoute.mockReturnValue({ authInjection: 'env-key', resolved: false });
     renderBanner({ providerId: null, agentKind: 'codex', modelId: 'gpt-5.5' });

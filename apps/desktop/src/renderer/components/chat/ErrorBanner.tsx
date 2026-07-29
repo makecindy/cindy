@@ -75,6 +75,11 @@ interface ErrorBannerProps {
   /** 当前 session id。cc 默认路由(无显式来源)的点数耗尽引导需要它读会话的
    *  生效计费路由(gateway/subscription),缺省时该引导只按显式来源判定。 */
   sessionId?: string;
+  /** true = 本横幅渲染的是持久化历史错误(ErrorTail),而非刚发生的 live 错误。
+   *  codex 共享 app-server 的 runtime route 是「当前」全局值,不是产生该失败的
+   *  那一轮的路由——切换鉴权模式后重开旧会话,按当前路由分类会张冠李戴,故
+   *  持久化路径不启用 codex 隐式来源的点数引导(显式 xd / codex 骨折不受影响)。 */
+  persistedError?: boolean;
   silentEncryptedRetryEnabled?: boolean;
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
@@ -101,6 +106,7 @@ export function ErrorBanner({
   providerId,
   onSwitchToClaudeSubscription,
   sessionId,
+  persistedError = false,
   silentEncryptedRetryEnabled = false,
   onForkStripEncrypted,
   forkStripEncryptedRunning = false,
@@ -217,8 +223,11 @@ export function ErrorBanner({
     ((normalizedProviderId === null || normalizedProviderId === 'xd') &&
       !!modelId?.startsWith('codex/')) ||
     // codex 隐式来源必须等 runtime route 真值:占位 env-key 会把 OAuth 订阅
-    // 会话的配额错误误判成网关计费(与 TodaySpendChip 同口径)。
-    (normalizedProviderId === null &&
+    // 会话的配额错误误判成网关计费(与 TodaySpendChip 同口径)。持久化历史
+    // 错误不启用:共享 app-server 的当前路由 ≠ 产生该失败那一轮的路由,
+    // codex 没有 per-session 路由记录可回溯(PR review P1)。
+    (!persistedError &&
+      normalizedProviderId === null &&
       agentKind === 'codex' &&
       !isSubscriptionBridgeModel &&
       codexRouteResolved &&
