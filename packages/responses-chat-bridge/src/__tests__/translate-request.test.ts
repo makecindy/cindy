@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { translateResponsesRequest } from '../translate-request.js';
+import {
+  translateResponsesRequest,
+  translateResponsesRequestWithContext,
+} from '../translate-request.js';
 import { UnsupportedResponsesFeatureError, type ResponsesRequest } from '../types.js';
 
 function base(overrides: Partial<ResponsesRequest> = {}): ResponsesRequest {
@@ -637,6 +640,58 @@ describe('translateResponsesRequest', () => {
     expect((out.messages[0] as {
       tool_calls?: Array<{ function: { name: string } }>;
     }).tool_calls?.[0]?.function.name).not.toBe('tool_search');
+  });
+
+  it('keeps function and custom tools with the same name distinct', () => {
+    const { request, toolContext } = translateResponsesRequestWithContext(base({
+      tools: [
+        { type: 'function', name: 'shared', parameters: { type: 'object' } },
+        { type: 'custom', name: 'shared' },
+      ],
+      tool_choice: { type: 'custom', name: 'shared' },
+      input: [{ type: 'custom_tool_call', call_id: 'c1', name: 'shared', input: 'raw' }],
+    }));
+    const toolNames = request.tools?.map((tool) => tool.function.name) ?? [];
+    const customName = (request.tool_choice as {
+      function: { name: string };
+    }).function.name;
+    expect(toolNames).toHaveLength(2);
+    expect(new Set(toolNames).size).toBe(2);
+    expect(toolNames).toContain('shared');
+    expect(customName).not.toBe('shared');
+    expect((request.messages[0] as {
+      tool_calls?: Array<{ function: { name: string } }>;
+    }).tool_calls?.[0]?.function.name).toBe(customName);
+    expect(toolContext.lookupChatName(customName)?.kind).toBe('custom');
+  });
+
+  it('collects declarations only from top-level tool-search outputs', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'c1', name: 'inspect', arguments: '{}' },
+        {
+          type: 'function_call_output',
+          call_id: 'c1',
+          output: {
+            nestedCall: { type: 'custom_tool_call', name: 'injected_custom' },
+            nestedSearch: {
+              type: 'tool_search_output',
+              tools: [{ type: 'function', name: 'injected_function' }],
+            },
+          },
+        },
+        { type: 'tool_search_call', id: 'ts_1' },
+        {
+          type: 'tool_search_output',
+          id: 'ts_1',
+          tools: [{ type: 'function', name: 'loaded_function' }],
+        },
+      ],
+    }));
+    expect(out.tools?.map((tool) => tool.function.name)).toEqual([
+      'tool_search',
+      'loaded_function',
+    ]);
   });
 
   it('keeps reasoning history attached to the following assistant/tool turn', () => {

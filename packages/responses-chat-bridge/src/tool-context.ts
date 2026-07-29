@@ -44,12 +44,28 @@ function stableToolDescription(tool: unknown): string {
 }
 
 export type ChatBridgeToolKind = 'function' | 'namespace' | 'custom' | 'tool_search';
+type ResponseToolIdentityKind = 'function' | 'custom' | 'tool_search';
 
 export interface ChatBridgeToolSpec {
   kind: ChatBridgeToolKind;
   chatName: string;
   name: string;
   namespace?: string;
+}
+
+function responseToolIdentity(
+  kind: ResponseToolIdentityKind,
+  name: string,
+  namespace?: string,
+): string {
+  return `${kind}\0${namespace ?? ''}\0${name}`;
+}
+
+function specIdentity(spec: ChatBridgeToolSpec): string {
+  const kind = spec.kind === 'custom' || spec.kind === 'tool_search'
+    ? spec.kind
+    : 'function';
+  return responseToolIdentity(kind, spec.name, spec.namespace);
 }
 
 /**
@@ -65,7 +81,7 @@ export class ChatBridgeToolContext {
   static fromRequest(request: ResponsesRequest): ChatBridgeToolContext {
     const context = new ChatBridgeToolContext();
     for (const tool of request.tools ?? []) context.addResponseTool(tool);
-    context.collectToolSearchTools(request.input);
+    context.collectHistoryTools(request.input);
     return context;
   }
 
@@ -77,8 +93,12 @@ export class ChatBridgeToolContext {
     return this.specsByChatName.get(chatName);
   }
 
-  chatNameForResponse(name: string, namespace?: string): string {
-    return this.chatNamesByResponseName.get(`${namespace ?? ''}\0${name}`)
+  chatNameForResponse(
+    name: string,
+    namespace?: string,
+    kind: ResponseToolIdentityKind = 'function',
+  ): string {
+    return this.chatNamesByResponseName.get(responseToolIdentity(kind, name, namespace))
       ?? clampChatToolName(namespace ? `${namespace}__${name}` : name);
   }
 
@@ -86,7 +106,7 @@ export class ChatBridgeToolContext {
     const clamped = clampChatToolName(preferred);
     const existing = this.specsByChatName.get(clamped);
     if (!existing) return clamped;
-    if (`${existing.namespace ?? ''}\0${existing.name}` === identity) return clamped;
+    if (specIdentity(existing) === identity) return clamped;
     const suffix = `__${shortHash(identity)}`;
     return `${clamped.slice(0, CHAT_TOOL_NAME_MAX_LENGTH - suffix.length)}${suffix}`;
   }
@@ -97,7 +117,7 @@ export class ChatBridgeToolContext {
       : undefined;
     const source = nested ? { ...tool, ...nested } as ResponsesFunctionTool : tool;
     if (!source.name?.trim()) return;
-    const identity = `${namespace ?? ''}\0${source.name}`;
+    const identity = responseToolIdentity('function', source.name, namespace);
     const chatName = this.reserveName(namespace ? `${namespace}__${source.name}` : source.name, identity);
     if (this.specsByChatName.has(chatName)) return;
     const spec: ChatBridgeToolSpec = {
@@ -121,7 +141,7 @@ export class ChatBridgeToolContext {
 
   private addCustom(tool: ResponsesCustomTool, namespace?: string): void {
     if (!tool.name?.trim()) return;
-    const identity = `${namespace ?? ''}\0${tool.name}`;
+    const identity = responseToolIdentity('custom', tool.name, namespace);
     const chatName = this.reserveName(namespace ? `${namespace}__${tool.name}` : tool.name, identity);
     if (this.specsByChatName.has(chatName)) return;
     const spec: ChatBridgeToolSpec = {
@@ -154,9 +174,8 @@ export class ChatBridgeToolContext {
   }
 
   private addToolSearch(): void {
-    const responseIdentity = `\0${TOOL_SEARCH_CHAT_NAME}`;
-    const reservedIdentity = `${responseIdentity}__adapter`;
-    const chatName = this.reserveName(TOOL_SEARCH_CHAT_NAME, reservedIdentity);
+    const identity = responseToolIdentity('tool_search', TOOL_SEARCH_CHAT_NAME);
+    const chatName = this.reserveName(TOOL_SEARCH_CHAT_NAME, identity);
     if (this.specsByChatName.has(chatName)) return;
     const spec: ChatBridgeToolSpec = {
       kind: 'tool_search',
@@ -164,7 +183,7 @@ export class ChatBridgeToolContext {
       name: TOOL_SEARCH_CHAT_NAME,
     };
     this.specsByChatName.set(chatName, spec);
-    this.chatNamesByResponseName.set(responseIdentity, chatName);
+    this.chatNamesByResponseName.set(identity, chatName);
     this.chatToolsValue.push({
       type: 'function',
       function: {
@@ -203,23 +222,22 @@ export class ChatBridgeToolContext {
     if (tool.type === 'namespace') this.addNamespace(tool as unknown as ResponsesNamespaceTool);
   }
 
-  private collectToolSearchTools(value: unknown): void {
-    if (Array.isArray(value)) {
-      for (const item of value) this.collectToolSearchTools(item);
-      return;
-    }
-    if (!isPlainObject(value)) return;
-    if (value.type === 'tool_search_call') this.addToolSearch();
-    if (value.type === 'custom_tool_call' && typeof value.name === 'string') {
-      this.addCustom({ type: 'custom', name: value.name });
-    }
-    if (value.type === 'tool_search_output' || value.type === 'tool_search_call_output') {
-      if (Array.isArray(value.tools)) {
-        for (const tool of value.tools) {
+  private collectHistoryTools(input: ResponsesRequest['input']): void {
+    if (!Array.isArray(input)) return;
+    for (const item of input) {
+      if (!isPlainObject(item)) continue;
+      if (item.type === 'tool_search_call') this.addToolSearch();
+      if (item.type === 'custom_tool_call' && typeof item.name === 'string') {
+        this.addCustom({ type: 'custom', name: item.name });
+      }
+      if (
+        (item.type === 'tool_search_output' || item.type === 'tool_search_call_output')
+        && Array.isArray(item.tools)
+      ) {
+        for (const tool of item.tools) {
           this.addResponseTool(tool as ResponseTool);
         }
       }
     }
-    for (const child of Object.values(value)) this.collectToolSearchTools(child);
   }
 }

@@ -485,7 +485,7 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
       let name: string;
       let args: string;
       if (item.type === 'tool_search_call') {
-        name = opts.toolContext.chatNameForResponse('tool_search');
+        name = opts.toolContext.chatNameForResponse('tool_search', undefined, 'tool_search');
         args = toolArguments(record.arguments ?? {
           ...(typeof record.query === 'string' ? { query: record.query } : {}),
           ...(typeof record.limit === 'number' ? { limit: record.limit } : {}),
@@ -497,6 +497,7 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
         name = opts.toolContext.chatNameForResponse(
           String(record.name),
           typeof record.namespace === 'string' ? record.namespace : undefined,
+          item.type === 'custom_tool_call' ? 'custom' : 'function',
         );
         args = item.type === 'custom_tool_call'
           ? customToolArguments(record.input)
@@ -571,12 +572,16 @@ function translateToolChoice(
         name: context.chatNameForResponse(
           choice.name,
           typeof choice.namespace === 'string' ? choice.namespace : undefined,
+          choice.type,
         ),
       },
     };
   }
   if (choice.type === 'tool_search') {
-    return { type: 'function', function: { name: context.chatNameForResponse('tool_search') } };
+    return {
+      type: 'function',
+      function: { name: context.chatNameForResponse('tool_search', undefined, 'tool_search') },
+    };
   }
   throw new UnsupportedResponsesFeatureError('tool_choice');
 }
