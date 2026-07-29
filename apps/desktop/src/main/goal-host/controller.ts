@@ -1050,8 +1050,14 @@ export class GoalController {
     // timer)都会再试一次;既不落假卡片,也不把目标推进一个停滞的 active。
     // 刻意不在这里重排 timer:hydrate 不出来通常不是几十秒能自愈的,循环重排只会空转。
     // ensureSession 是幂等的 ensure 语义,下面 resumeGoal 再调一次拿到的是同一个 session。
-    const liveSession = await this.deps.ensureSession(sessionId).catch(() => null);
-    if (!liveSession) {
+    // **预算已耗尽的目标不需要 live session 就能收口**: fireTurn 的预算 preflight 跑在
+    // ensureSession 之前, 会把状态转成 budgetLimited(终态)并 stopSession。把下面的
+    // hydrate 守卫排在它前面, 会让这种目标停在 usageLimited + 已过期的 usageResetAt,
+    // 直到手动 resume 或进程重启才收口(review #844 codex P1)。
+    const liveSession = budgetAlreadyExhausted
+      ? null
+      : await this.deps.ensureSession(sessionId).catch(() => null);
+    if (!budgetAlreadyExhausted && !liveSession) {
       this.deps.logger.warn('[goal] skipped auto resume — no live session; staying usageLimited', {
         sessionId,
         lastReason: state.lastReason ?? null,

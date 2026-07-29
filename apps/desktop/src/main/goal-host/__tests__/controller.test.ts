@@ -1373,6 +1373,36 @@ describe('GoalController', () => {
     expect((await h.storage.get('s1'))?.status).toBe('active');
   });
 
+  it('finalizes an exhausted budget even when the session cannot be hydrated', async () => {
+    // 预算耗尽的目标不需要 live session 就能收口: fireTurn 的预算 preflight 跑在
+    // ensureSession 之前, 会转成 budgetLimited(终态)并 stopSession。把 no-live-session
+    // 守卫排在它前面, 这种目标会停在 usageLimited + 已过期的 usageResetAt, 直到手动 resume
+    // 或进程重启才收口(review #844 codex P1)。
+    h.setAccountLimit({ limited: false, resetAtMs: null });
+    await h.controller.setGoal({
+      sessionId: 's1',
+      objective: 'make tests pass',
+      agentKind: 'claude-code',
+      limits: { maxTurns: 1, budgetTokens: null, noProgressLimit: 3 },
+    });
+    h.session.emitErrorTurn({ message: 'Selected model is at capacity.' });
+    await tick();
+    expect((await h.storage.get('s1'))?.status).toBe('usageLimited');
+    expect((await h.storage.get('s1'))?.turnsUsed).toBe(1); // 这一轮已把 maxTurns 用满
+    h.notices.length = 0;
+
+    // 到点了, 而且此刻 hydrate 不出 live session。
+    h.setHydratable(false);
+    await (
+      h.controller as unknown as { autoResumeFromUsageLimit(id: string): Promise<void> }
+    ).autoResumeFromUsageLimit('s1');
+    await tick();
+
+    // 一条卡片都不落(那次重试确实没发生), 但状态必须收口成终态。
+    expect(h.notices).toEqual([]);
+    expect((await h.storage.get('s1'))?.status).toBe('budgetLimited');
+  });
+
   it('setGoal gives a replacement objective its own overload budget', async () => {
     // 连续过载计数是 per-goal 状态。换目标不清零的话，上一个目标撞上限变 blocked
     // 后，新目标第一次容量错误就直接 blocked、拿不到自己的重试预算（review #844 P1）。

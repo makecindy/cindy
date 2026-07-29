@@ -2282,11 +2282,15 @@ export class CodexAgent extends BaseAgent {
      * 空 id 通知就可能是那一位的 —— 算在活跃 turn 头上会把一个正常在跑的 turn 落墓碑并
      * 重放它的输入(review #844 codex P1)。
      *
+     * sendGen 则回答"这个 turn 属于哪一轮 send": 退避 / 延后中的重投属于某一轮, 一个**不属于
+     * 那一轮**的 turn 的迟到终态不得替它收口, 也不得顺手撤销它的重投
+     * (review #844 greptile P1)。
+     *
      * 按 turnId 建索引而不是存一个"当前 turn 的归属方"标量: 后者要跟着 currentTurnId 的
      * 每一处清理同步, 漏一处就读到上一个 turn 的归属 —— 本 PR 已经在别的标量上踩过。
-     * 键就是 currentTurnId 本身, 旧条目不可能被当成当前 turn 的答案。
+     * 键就是 turnId 本身, 旧条目不可能被当成另一个 turn 的答案。
      */
-    const turnStartSeqByTurnId = new Map<string, number>();
+    const turnOriginByTurnId = new Map<string, { startSeq: number | null; sendGen: number }>();
 
     const hasOtherInFlightStart = (seq: number): boolean => {
       for (const other of inFlightStarts.keys()) if (other !== seq) return true;
@@ -4152,7 +4156,21 @@ export class CodexAgent extends BaseAgent {
     // 时 id 尚未入 buffer, 会穿透 stale guard 被按在飞 send 处理 — 孤儿
     // 守卫生效 + 新 RPC 在飞 + 无活跃 turn 时, 未知 id 视同 started 先进
     // buffer 再入队, 等对账。
-    const enqueueIfBufferedTurn = (turnId: string | null | undefined, replay: () => void): boolean => {
+    /**
+     * 缓冲期间**确实产出过模型 / 工具工作**的 turn。
+     *
+     * 与 bufferedTurnEventQueues 的区别: 队列里什么都有(turn/completed、userMessage echo、
+     * tokenUsage、plan 更新…), 拿"队列非空"当产出证据会把一次零产出的容量拒绝误判成
+     * "已有产出, 不重投", 结果对用户报硬失败 —— 而这一轮其实什么副作用都没发生
+     * (review #844 codex P1)。判据与非缓冲路径统一走 itemRepresentsModelWork。
+     */
+    const bufferedModelWorkTurnIds = new Set<string>();
+
+    const enqueueIfBufferedTurn = (
+      turnId: string | null | undefined,
+      replay: () => void,
+      opts?: { modelWork?: boolean },
+    ): boolean => {
       if (!turnId) return false;
       if (!bufferedOrphanTurnIds.has(turnId)) {
         if (!(turnStartFailedWithoutTurnId && isTurnStartPending && currentTurnId === null)) {
@@ -4167,6 +4185,7 @@ export class CodexAgent extends BaseAgent {
       const queue = bufferedTurnEventQueues.get(turnId) ?? [];
       queue.push(replay);
       bufferedTurnEventQueues.set(turnId, queue);
+      if (opts?.modelWork) bufferedModelWorkTurnIds.add(turnId);
       return true;
     };
 
@@ -4462,6 +4481,27 @@ export class CodexAgent extends BaseAgent {
         flushDeferredTerminalTurnCompletionsIfIdle();
         return;
       }
+      // 收口前的归属校验。currentTurnId 为 null 时本函数会把**任何** turn 的终态当成"收口
+      // 当前这一轮"(既有行为), 而挂起 / 延后的重投恰好活在这个窗口里: 被 Stop 的旧 turn 的
+      // 迟到 completed 于是既把新一轮报成失败, 又顺手撤销它的重投 —— 那一轮白白丢掉自动
+      // 重试, 要用户手动重发(review #844 greptile P1)。
+      // 只在"有重投挂着 + 这个 turn 不属于它那一轮"时按 stale 处理: 只做 bookkeeping,
+      // 不出 UI、不撤销。归属未知(拿不到 origin)同样算不属于 —— 未知的一律不许替它收口。
+      if (overloadRetryPending() && currentTurnId === null) {
+        const origin = turnOriginByTurnId.get(turn.id);
+        if (origin?.sendGen !== overloadRetry?.sendGen) {
+          log.info('ignoring a foreign turn terminal state while an overload retry is pending', {
+            turnId: turn.id,
+            status: turn.status,
+            turnSendGen: origin?.sendGen ?? null,
+            retrySendGen: overloadRetry?.sendGen ?? null,
+            threadId,
+          });
+          latestPlanByTurn.delete(turn.id);
+          flushDeferredTerminalTurnCompletionsIfIdle();
+          return;
+        }
+      }
       // 到这里 = 这个 turn 的终态**要出 UI**, 逻辑 send 就此收口。墓碑压掉的那条路在上面
       // 已经 return, 所以退避中的正常重投(死 turn 恒有墓碑)不会被误撤。
       revokeOverloadRetryOnTerminalSettle(`turn_${turn.status}`);
@@ -4614,11 +4654,14 @@ export class CodexAgent extends BaseAgent {
       if (!turnId) return;
       entry.quarantined = false;
       terminalErroredTurnIds.add(turnId);
-      // 这个 turn 的事件可能正躺在缓冲队列里(孤儿守卫武装期间 item / tool 都会被缓冲, 而
-      // 缓冲**只**表示我们还没渲染 —— daemon 那边命令早就跑了)。此时产出标记从未被置上,
-      // 于是补排会照常重放同一条输入, 副作用执行两遍。按"有缓冲事件即有产出"处理
-      // (review #844 codex P1)。
-      if ((bufferedTurnEventQueues.get(turnId)?.length ?? 0) > 0) {
+      // 这个 turn 的产出可能正躺在缓冲队列里(孤儿守卫武装期间 item / tool 都会被缓冲, 而
+      // 缓冲**只**表示我们还没渲染 —— daemon 那边命令早就跑了)。此时它自己的产出记账从未
+      // 被置上, 于是补排会照常重放同一条输入, 副作用执行两遍(review #844 codex P1)。
+      //
+      // 判据是"缓冲里有真的模型 / 工具工作", **不是**"队列非空": 队列里 turn/completed、
+      // userMessage echo、tokenUsage 都算一条, 拿长度当证据会把一次零产出的容量拒绝误判成
+      // 有产出, 对用户报硬失败 —— 而那一轮其实什么副作用都没发生(review #844 codex P1)。
+      if (bufferedModelWorkTurnIds.has(turnId)) {
         producedOutputTurnIds.add(turnId);
         log.info('codex adopted turn had buffered events — treating as produced output', {
           turnId,
@@ -5264,9 +5307,10 @@ export class CodexAgent extends BaseAgent {
         // started 先于响应到达时归属方只能推断: 只有一个 start 在飞 → 就是它; 多个 → 认不出,
         // 不登记(读取方按"归属不明"从严处理)。
         const startedOwnerSeqs = [...inFlightStarts.keys()];
-        if (startedOwnerSeqs.length === 1) {
-          turnStartSeqByTurnId.set(params.turn.id, startedOwnerSeqs[0] as number);
-        }
+        turnOriginByTurnId.set(params.turn.id, {
+          startSeq: startedOwnerSeqs.length === 1 ? (startedOwnerSeqs[0] as number) : null,
+          sendGen: sendGeneration,
+        });
         currentTurnId = params.turn.id;
         isTurnInFlight = true;
         // turn/start 在飞期间权限被收紧 (turnStarted 通知可能先于 turn/start resp
@@ -5350,7 +5394,9 @@ export class CodexAgent extends BaseAgent {
         handleTurnCompleted(params);
       },
       itemStarted: (params) => {
-        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemStarted?.(params))) return;
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemStarted?.(params), {
+          modelWork: itemRepresentsModelWork(params.item),
+        })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
         // 模型已开始产出 → 本 turn 不再适合被过载重投整体重放。SDK echo 类 item
@@ -5367,7 +5413,9 @@ export class CodexAgent extends BaseAgent {
         });
       },
       itemUpdated: (params) => {
-        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params))) return;
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params), {
+          modelWork: itemRepresentsModelWork(params.item),
+        })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
@@ -5381,7 +5429,9 @@ export class CodexAgent extends BaseAgent {
         });
       },
       itemCompleted: (params) => {
-        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params))) return;
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params), {
+          modelWork: itemRepresentsModelWork(params.item),
+        })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
@@ -5404,20 +5454,23 @@ export class CodexAgent extends BaseAgent {
         translatePlanUpdatedNotification(params, eventQueue);
       },
       reasoningSummaryTextDelta: (params) => {
-        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryTextDelta?.(params))) return;
+        // thinking 流同样算产出(与非缓冲路径一致)。
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryTextDelta?.(params), { modelWork: true })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         // thinking 流也算产出：模型已经在这一轮里工作了，整体重放不再等价。
         producedOutputTurnIds.add(params.turnId);
         translateReasoningSummaryTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
       reasoningSummaryPartAdded: (params) => {
-        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryPartAdded?.(params))) return;
+        // thinking 流同样算产出(与非缓冲路径一致)。
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryPartAdded?.(params), { modelWork: true })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         producedOutputTurnIds.add(params.turnId);
         translateReasoningSummaryPartAdded(params, eventQueue, { rt: translatorRt, log });
       },
       reasoningTextDelta: (params) => {
-        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningTextDelta?.(params))) return;
+        // thinking 流同样算产出(与非缓冲路径一致)。
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningTextDelta?.(params), { modelWork: true })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         producedOutputTurnIds.add(params.turnId);
         translateReasoningTextDelta(params, eventQueue, { rt: translatorRt, log });
@@ -5530,7 +5583,7 @@ export class CodexAgent extends BaseAgent {
           idLessCapacityError
           && isTurnInFlight
           && currentTurnId !== null
-          && hasOtherInFlightStart(turnStartSeqByTurnId.get(currentTurnId) ?? -1);
+          && hasOtherInFlightStart(turnOriginByTurnId.get(currentTurnId)?.startSeq ?? -1);
         const targetsCurrentTurn =
           params.turnId === currentTurnId
           || (params.turnId === '' && isTurnInFlight && !idLessActiveTurnAmbiguous)
@@ -5940,8 +5993,8 @@ export class CodexAgent extends BaseAgent {
             // turnCompleted(interrupted) 先回), 不得重新置活, 否则会话卡 running。
             const alreadyCompleted = turnsCompletedBeforeStartResp.has(resp.turn.id);
             if (!alreadyCompleted && !terminalErroredTurnIds.has(resp.turn.id)) {
-              // 权威归属: 这个 turn 由本次 start 生出。
-              turnStartSeqByTurnId.set(resp.turn.id, ownerSeq);
+              // 权威归属: 这个 turn 由本次 start 生出, 属于本轮 send。
+              turnOriginByTurnId.set(resp.turn.id, { startSeq: ownerSeq, sendGen: mySendGen });
               currentTurnId = resp.turn.id;
               isTurnInFlight = true;
               currentTurnPlanModeActive = turnStartsInPlanMode;

@@ -768,10 +768,16 @@ function handleSystem(
     // 第 1 次不透出：单次抖动 SDK 一次重试就过，提示只会闪一下徒增噪音（与
     // codex translator 持续重试透出的防噪口径一致）。
     //
-    // **只透出过载类（529 / overloaded_error）**：这条 message 是内部英文 SDK
-    // 字符串，renderer 的 ErrorBanner 只对过载与网络形态做本地化替换。若把 429、
-    // 500 这类也透出来，各语言用户会直接看到裸英文，而它们在本改动之前是静默的
-    // ——那是实打实的回归。其它重试类别保持原样静默，需要时另行补本地化再放开。
+    // **只透出过载类**：这条 message 是内部英文 SDK 字符串，renderer 的 ErrorBanner
+    // 只对过载与网络形态做本地化替换。若把 429、500 这类也透出来，各语言用户会直接
+    // 看到裸英文，而它们在本改动之前是静默的——那是实打实的回归。其它重试类别保持
+    // 原样静默，需要时另行补本地化再放开。
+    //
+    // 判据是 parseOverloadError 的**两种**形态都算（`overloaded`：529 /
+    // overloaded_error；`capacity`：`at capacity`），不只 529：renderer 侧的镜像
+    // (renderer/utils/overloadError.ts) 对两种形态都有本地化文案，所以放开 capacity
+    // 不会产生裸英文；反过来只认 529 会把一条措辞为 `at capacity` 的过载错误静默掉，
+    // 用户看到的是"什么都没发生"。
     const overloadRetry =
       typeof msg.attempt === 'number' &&
       typeof msg.max_retries === 'number' &&

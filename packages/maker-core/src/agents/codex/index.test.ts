@@ -5547,22 +5547,91 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
-    it('revokes a pending retry when a late turn/completed settles the send terminally', async () => {
-      // 不变量: 逻辑 send 一旦被终态收口(terminal error + Done 都出了 UI), 挂起 / 延后的
-      // 重投资格就随之作废。否则计时器到点会在用户已经看到失败之后重投原消息, 服务端
-      // 已发生但未上报的工具 / 文件操作跟着跑第二遍(review #844 greptile P1)。
+    it('does not treat buffered control events as produced output when adopting a dead turn', async () => {
+      // 认领"空 id 容量拒绝"指向的死 turn 时, 判"它有没有产出"曾用**队列非空**当证据。
+      // 但队列里 turn/completed、userMessage echo、tokenUsage 都算一条 —— 一次真正零产出的
+      // 容量拒绝于是被误判成"已有产出, 不重投", 对用户报硬失败, 而那一轮什么副作用都没发生
+      // (review #844 codex P1)。判据要与非缓冲路径一致, 走 itemRepresentsModelWork。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-buffered-control-events',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const send = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.itemStarted) throw new Error('expected handlers');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 空 id 容量拒绝落在 turn/start 还在飞的窗口里 → 记账延后 + 隔离这次 start。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(1);
+
+        // 随后到达的只是 SDK 的 userMessage echo(不是模型产出), 归属未定 → 进缓冲。
+        handlers.itemStarted({
+          turnId: 'turn-1',
+          item: { id: 'item-echo', type: 'userMessage', text: 'hello' },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 响应回来 → 认领这具尸体。缓冲里只有 echo, 不算产出 → 补排照常重投。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await send.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        expect(turnStarts).toBe(2);
+        expect(events.filter((e) => e.type === 'error' && e.data.isTerminal)).toHaveLength(0);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not let a foreign late turn/completed settle or cancel a pending retry', async () => {
+      // 两条不变量在同一个窗口里打架, 这里钉住正确的那一条。
       //
-      // 如实标注可达性: Greptile 描述的上游序列(旧 turn/start 的 finally 补排)我**没能**
-      // 构造出无争议的可达路径 —— 孤儿守卫武装期间任何带 turnId 的事件都会先进缓冲, 恰好
-      // 盖住了那个窗口。这条用例锁的是收口侧的不变量本身(去掉修复即失败: 收口后仍会重投),
-      // 不依赖"缓冲刚好盖住每个窗口"这类覆盖性论证 —— 本轮另一条 P1 正是这种论证失效的
-      // 例子。
+      // 第二十七轮先立了"收口即撤销重投资格"(否则 UI 已报失败、原消息还在背后重投 =
+      // 重复副作用)。但 handleTurnCompleted 在 currentTurnId 为 null 时会把**任何** turn 的
+      // 终态当成"收口当前这一轮"(既有行为), 而退避窗口恰好就是这个状态 —— 于是被 Stop 的
+      // 旧 turn 的迟到 completed 既把新一轮报成失败, 又顺手撤销了它的重投, 那一轮白白丢掉
+      // 自动重试(review #844 greptile P1)。
+      //
+      // 正确的处理是在**收口之前**校验归属: 不属于挂着重投的那一轮 send 的 turn, 既不许
+      // 出 UI 也不许撤销。所以本用例的断言与第二十七轮相反 —— 那时它期待"收口 + 撤销",
+      // 现在期待"两件都不做, 重投照常发生"。收口侧的撤销本身仍在(error 通知的终态分支和
+      // 归属相符的 completed 都会走), 只是不再让陌生 turn 触发它。
       vi.useFakeTimers();
       try {
         const agent = new CodexAgent(createDeps());
         const host = installCapacityHost(agent);
         const handle = await agent.startSession({
-          sessionId: 'session-overload-revoke-on-settle',
+          sessionId: 'session-overload-foreign-completed',
           model: 'gpt-5.4',
           workingDir: '/repo',
         });
@@ -5588,18 +5657,19 @@ describe('CodexAgent MCP thread context hooks', () => {
         expect(turnStartCount(host)).toBe(1);
         expect(handle.isTurnRunning?.()).toBe(true);
 
-        // 退避途中, 一个我们从未见过 id 的 turn 报出失败终态 → 走 UI 收口(推 error + done)。
+        // 退避途中, 一个不属于本轮 send 的 turn(我们从未见过它的 id)报出失败终态。
         handlers.turnCompleted({
           threadId: 'start-thread-id',
-          turn: { id: 'turn-unknown', status: 'failed', error: { message: 'boom' } },
+          turn: { id: 'turn-foreign', status: 'failed', error: { message: 'boom' } },
         } as never);
         await vi.advanceTimersByTimeAsync(0);
-        expect(events.filter((e) => e.type === 'done')).toHaveLength(1);
+        // 不得替本轮收口。
+        expect(events.filter((e) => e.type === 'done')).toHaveLength(0);
+        expect(handle.isTurnRunning?.()).toBe(true);
 
-        // 收口之后计时器不得再重投原消息。
+        // 也不得撤销本轮的重投 —— 到点照常重投。
         await vi.advanceTimersByTimeAsync(40_000);
-        expect(turnStartCount(host)).toBe(1);
-        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(turnStartCount(host)).toBe(2);
 
         await handle.close();
       } finally {
