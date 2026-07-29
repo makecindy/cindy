@@ -2,7 +2,7 @@
  * claude-credentials-store —— 读/写系统 Claude Code 的 OAuth 凭证(claudeAiOauth)。
  *
  * 设计目标:'oauth' 模式下与**本地已登录的 Claude Code 自动兼容**(像 Codex reconcile
- * ~/.codex/auth.json 那样),并让 XDMaker 的浏览器授权结果落到同一处,cc 子进程原生读取。
+ * ~/.codex/auth.json 那样),并让 Cindy 的浏览器授权结果落到同一处,cc 子进程原生读取。
  *
  * 存储位置(与 cc-code utils/secureStorage 完全一致,默认 config dir = ~/.claude):
  *   - macOS  → 系统 Keychain 的 generic-password,service = "Claude Code-credentials"

@@ -167,6 +167,25 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     ).toBe(1_000_000);
   });
 
+  it('Kimi Code(编程计划)预设的每个模型都带 contextWindow(k3 缺失曾回落 200K)', () => {
+    // k3 此前没带 contextWindow → buildUserProvider 回落 200K 保守默认:选择器
+    // 显示 200K 且压缩阈值过早触发(用户反馈「动不动就压缩」)。取 262144 与同
+    // 套餐 kimi-for-coding 口径一致(K3 开放平台规格 1M,但编程计划端点是否限窗
+    // 无公开文档,保守取值;实测放开后可上调)。
+    const presets = BUNDLED_CATALOG.presets ?? [];
+    const kimiCode = presets.find((p) => p.id === 'moonshot-kimi-code');
+    expect(kimiCode).toBeDefined();
+    for (const [agent, rt] of Object.entries(kimiCode!.runtimes)) {
+      for (const m of rt!.models) {
+        expect(
+          Number.isFinite(m.contextWindow) && (m.contextWindow ?? 0) > 0,
+          `${agent}/${m.id} 缺 contextWindow`,
+        ).toBe(true);
+      }
+      expect(rt!.models.find((m) => m.id === 'k3')?.contextWindow, `${agent}/k3`).toBe(262_144);
+    }
+  });
+
   it('ships Codex support metadata for the current XD gateway model set', () => {
     const metadata = BUNDLED_CATALOG.cindyModelMeta as {
       version?: unknown;

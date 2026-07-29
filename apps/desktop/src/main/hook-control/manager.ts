@@ -152,6 +152,8 @@ export interface HookControlManagerDeps {
   notifyProviderPrefs?: (view: ProviderPrefsView) => void;
   /** prefs 读写往返超时(默认 10s; 测试注短)。 */
   prefsTimeoutMs?: number;
+  /** multi-team 自动首绑延迟窗；仅测试注短，生产默认 300ms。 */
+  autoBindDeferMs?: number;
   /** Slack 网关工具往返超时(默认 60s —— 搜索/长查询比 prefs 慢得多; 测试注短)。 */
   toolTimeoutMs?: number;
   /**
@@ -501,6 +503,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     onSlackToolProviderEnabledChanged,
     notifyPrefs,
     prefsTimeoutMs,
+    autoBindDeferMs = AUTO_BIND_DEFER_MS,
     toolTimeoutMs,
     bindPendingTimeoutMs,
     installWaitTimeoutMs,
@@ -1743,7 +1746,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
             if (!autoBindIntent || !store.get().enabled) return;
             if (pendingBind !== null) return; // 回放先到, 已交给 pending 路径
             if (initiateMultiBind(null)) autoBindIntent = false;
-          }, AUTO_BIND_DEFER_MS);
+          }, autoBindDeferMs);
           autoBindDefer.unref?.();
         }
       }

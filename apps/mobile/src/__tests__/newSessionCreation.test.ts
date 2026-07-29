@@ -93,9 +93,10 @@ function makeParams(sessionId: string, maker: MakerMock, patch: Partial<NewSessi
 
 async function flushPipeline(): Promise<void> {
   // 管线全程无真实网络且 sleep 已注入为立即返回,靠让出事件循环多个宏任务收敛
-  //(enqueue 分辨轮询最多 4 轮 × 每轮 2 个远程查询,余量给足)。
-  for (let i = 0; i < 60; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+  //(enqueue 分辨轮询最多 4 轮 × 每轮 2 个远程查询)。setImmediate 不受
+  // Windows 约 15ms 的 setTimeout(0) 粒度影响；8 轮覆盖管线所有异步边界。
+  for (let i = 0; i < 8; i += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
 }
 

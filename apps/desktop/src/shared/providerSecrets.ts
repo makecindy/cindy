@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 供应商 API key(密钥)在本机的存储约定 —— 单一事实来源(SSoT)。
  *
- * 设计背景:XDMaker 的供应商密钥一律 **本地 only**,只存 Electron safeStorage
+ * 设计背景:Cindy 的供应商密钥一律 **本地 only**,只存 Electron safeStorage
  * (委托 OS keychain / DPAPI 加密),从不同步 / 上传到服务器。历史上各处用裸字符串
  * ("api_key" / "mivo_api_key")指代存储键名,随供应商增多容易散落、写错。本模块
  * 把「providerId → safeStorage 存储键名」收敛成唯一映射:

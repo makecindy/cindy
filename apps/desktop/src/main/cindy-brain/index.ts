@@ -162,6 +162,7 @@ import {
   storeGhostSecret,
 } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-access-policy.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
@@ -1675,8 +1676,12 @@ function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig
     // 停用过滤:用户在 设置 → 模型供应商 停用的媒体模型 / 供应商不进候选清单
     // (与对话模型的准入口径同源,见 model-disable-store)。
     const access = readModelDisableOverrides();
+    const catalog = projectProviderCatalogForBuildRegion(
+      getActiveCatalog(),
+      CURRENT_CINDY_REGION,
+    );
     return deriveCindyMediaConfig(
-      getActiveCatalog().providers,
+      catalog.providers,
       kind,
       (providerId, modelId) =>
         isProviderDisabled(access, providerId) ||

@@ -204,7 +204,7 @@ export function readCodexOneShotCreds(): { accessToken: string; accountId: strin
   }
 }
 
-/** 删除 XDMaker 自管且无法按账号归属的 Codex 模型 cache。 */
+/** 删除 Cindy 自管且无法按账号归属的 Codex 模型 cache。 */
 async function removeDesktopCodexModelsCache(codexHome: string): Promise<boolean> {
   const cachePath = path.join(codexHome, 'models_cache.json');
   try {

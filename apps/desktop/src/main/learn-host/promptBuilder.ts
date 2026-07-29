@@ -13,7 +13,7 @@
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 /**
- * XDMaker 的 skill 编写规范 —— 蒸馏产物必须符合本地加载器(Claude Code /
+ * Cindy 的 skill 编写规范 —— 蒸馏产物必须符合本地加载器(Claude Code /
  * Codex customization scanner)与 skill hub 校验(frontmatterValidation)的要求。
  * 常量单独导出供单测断言关键约束存在。
  */

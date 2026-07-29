@@ -18,7 +18,7 @@
  *
  * 冒泡层(兜底,仅"落在空白处"且 capture 未接管的 drop 会到达——内层 drop 区
  * stopPropagation、capture 接管过的 defaultPrevented 直接跳过):
- *   - directory → 以该目录为 workingDir 进入新建会话(与「通过 XDMaker 打开」
+ *   - directory → 以该目录为 workingDir 进入新建会话(与「通过 Cindy 打开」
  *     深链同链路:patchDraft 预填 + 清 extraDirs,navigate /cc-agent/new)
  *   - other     → 静默忽略,不 toast 打扰
  *

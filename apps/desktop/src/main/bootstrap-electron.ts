@@ -1891,7 +1891,7 @@ app.on('open-url', (event, url) => {
   handleIncomingDeepLink(url, 'open-url');
 });
 
-// macOS Finder "打开方式 → XDMaker" 入口:声明 CFBundleDocumentTypes 接受
+// macOS Finder "打开方式 → Cindy" 入口:声明 CFBundleDocumentTypes 接受
 // public.folder 后,Finder 把目录路径通过 open-file 事件推过来 (冷启动 / 已运行
 // 都走此路径)。事件也可能被文件触发:.cindy 意识走双击装入,其余文件
 // 静默忽略。
@@ -2009,7 +2009,7 @@ if (
   }
 }
 
-// 冷启动 argv 扫描 — Windows 上首次点链接 / 右键 "通过 XDMaker 打开" 启动 app
+// 冷启动 argv 扫描 — Windows 上首次点链接 / 右键 "通过 Cindy 打开" 启动 app
 // 时, URL 或 --open-folder 在 process.argv 末尾。macOS deep link 走 open-url
 // (已在上面 attach), 这里扫到也不会重复 dispatch; --open-folder 是 Windows-only
 // 入口 (mac 走 LSItemContentTypes / open-file 事件), 也不会在 mac argv 出现。
@@ -2257,14 +2257,14 @@ const createWindow = () => {
   // 那之后 Renderer 的 visibilityState 就不再反映真实可见性,细节见模块头注释。
   installWindowHiddenBroadcast(mainWindow);
 
-  // App badge: 用户把任意 XDMaker 窗口点回前台(Dock 点击 / taskbar / alt-tab / 点窗口)即视为
+  // App badge: 用户把任意 Cindy 窗口点回前台(Dock 点击 / taskbar / alt-tab / 点窗口)即视为
   // 「已查看」,直接清空整个 dock 红点。badge 是 app 级状态,不该依赖当前停在哪个
   // 路由 / 开没开会话 —— 之前清除逻辑寄生在 cc-agent sidebar 且只清 activeSessionId,
   // 离开会话页(设置 / skillhub)或红点属于后台会话时就清不掉。clearAllSessionAttention
   // 只清 app 级 badge,不向 Agent Island 转发逐 session 已读;in-app 的会话小圆点仍由
   // renderer 自行管理(点进会话才消),随后通过 clearSessionAttention 显式同步。
   // Agent Island smart suppression 同样按 app 级焦点判断:主窗 blur 到「在新窗口打开」
-  // 的会话副窗时,用户仍在 XDMaker 内,不能把 appFocused 置 false。
+  // 的会话副窗时,用户仍在 Cindy 内,不能把 appFocused 置 false。
 
   // Find-in-page: forward Chromium's match results back to the renderer overlay.
   // The renderer drives findInPage / stopFindInPage via IPC (see registerIpcHandlers).

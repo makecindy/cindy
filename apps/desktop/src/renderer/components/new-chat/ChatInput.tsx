@@ -41,6 +41,7 @@ import {
   promoteTrailingPlainListParagraph,
 } from './ComposerListNodes';
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
+import { EmptyDocSelectionGuard } from './EmptyDocSelectionGuard';
 import {
   setVoiceInputDraftDecoration,
   VoiceInputDraftDecoration,
@@ -1389,6 +1390,9 @@ export function ChatInput({
       WindowsSelectionReplacement.configure({
         enabled: window.electronAPI.platform === 'win32',
       }),
+      // 空输入框全选 / 全选后删空都会在行首留一块幽灵高亮(空 paragraph 被整体框进
+      // AllSelection,删空后 Chromium 的 DOM selection 也不跟着折叠)。见模块头注释。
+      EmptyDocSelectionGuard,
       CjkPunctDecoration,
       ComposerListIndentDecoration,
       VoiceInputDraftDecoration,

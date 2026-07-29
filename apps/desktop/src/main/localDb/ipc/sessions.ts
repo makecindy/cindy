@@ -66,6 +66,24 @@ export function broadcastSessionPatched(sessionId: string, patch: Record<string,
 }
 
 /**
+ * worktree 回收真正跑完后通知本机所有窗口重拉 worktree 快照。
+ *
+ * 没有这条推送,renderer 只能在归档/删除动作里"顺手"刷一次 worktree map,而回收
+ * 是下面 fire-and-forget 的异步链(动态 import → 关子进程 → git worktree remove →
+ * 文件系统清理),store 条目被移除的时刻远晚于状态 IPC 返回。renderer 那次刷新会
+ * 快照到仍然存在的旧条目,归档列表上的 worktree 徽标就一直陈旧,直到某次无关的
+ * 刷新才纠正(codex review P1)。
+ *
+ * 只广播给本机窗口、不进 device-link tap:控制端(手机/另一台桌面)的远程会话
+ * worktree 元数据走 device-link 自己的镜像链路,不经本机 WorktreeContext。
+ */
+function broadcastWorktreeChanged(sessionId: string): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('worktree:changed', { sessionId });
+  }
+}
+
+/**
  * 会话 status 显式变为 deleted / archived 后的 worktree 回收调度(P0 重构:回收
  * 唯一驱动点,从 Maker onClose 迁到这里——close 是进程生命周期事件,/clear、鉴权
  * 重连、CLI 崩溃都会触发,不能当"用户不要工作区了"的信号)。
@@ -74,6 +92,9 @@ export function broadcastSessionPatched(sessionId: string, patch: Record<string,
  * 先关子进程再回收——Windows 下 CLI 子进程 cwd 在 worktree 内会锁目录。
  * 动态 import 避免 localDb → maker-host / worktree 的静态模块环(worktreeStore
  * 反向 import 本文件的 setWorktreePathInDb)。
+ *
+ * 回收链结束后(无论成功、跳过还是失败)都广播一次 worktree:changed —— 失败/跳过
+ * 时条目仍在 store 里,重拉拿到的就是"徽标还在"这个真实状态,同样是对的。
  */
 function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
@@ -92,12 +113,16 @@ function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unkno
         .catch(() => undefined);
     });
     await recycle.recycleWorktreeForRemovedSession(sessionId);
-  })().catch((err) => {
-    log.warn('worktree recycle after session status change failed', {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
+  })()
+    .catch((err) => {
+      log.warn('worktree recycle after session status change failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    })
+    .finally(() => {
+      broadcastWorktreeChanged(sessionId);
     });
-  });
 }
 
 /**

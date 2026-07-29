@@ -1,5 +1,5 @@
 /**
- * Neutral browser-control runtime contract used by XDMaker hosts.
+ * Neutral browser-control runtime contract used by Cindy hosts.
  *
  * The concrete runtime can be backed by an upstream-synced implementation. This
  * file is the stable boundary consumed by MCP wrappers and desktop host code.

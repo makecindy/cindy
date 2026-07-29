@@ -95,7 +95,7 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
   'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR',
   // 订阅身份元数据(与 OAUTH_TOKEN 配套,cc env-token 分支消费):不剥离的话,从
-  // 带这些变量的 shell 启动 XDMaker(典型:终端里的 cc 会话内跑 dev)会把**别人的
+  // 带这些变量的 shell 启动 Cindy(典型:终端里的 cc 会话内跑 dev)会把**别人的
   // 档位/scopes**漏进子进程 —— 凭证库没提供时 getAuthEnv 不注入对应 key,继承残留
   // 会顶上,订阅会话以错误 scopes/tier 起跑。
   'CLAUDE_CODE_OAUTH_SCOPES',

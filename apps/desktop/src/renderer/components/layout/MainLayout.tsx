@@ -534,7 +534,7 @@ export function MainLayout() {
   //              unmounted 的,信号会沉淀直到下次 mount。所以这两种情况强制 navigate
   //              回 /cc-agent index, 触发 CCAgentIndexRedirect → ExpandedView mount
   //              → effect 跑 → expand + scroll。
-  // new-session: 右键 "通过 XDMaker 打开" 入口。把 workingDir 写进 newMakerDraft
+  // new-session: 右键 "通过 Cindy 打开" 入口。把 workingDir 写进 newMakerDraft
   //              (并清空 extraDirs,旧目录的附加只读引用对新目录无意义),然后
   //              navigate('/cc-agent/new')。NewMakerDraftRoute 订阅 store 自动反映。
   const handleDeepLinkPayload = useCallback(
@@ -583,7 +583,7 @@ export function MainLayout() {
   // 缓存在 main 端的 deep link / --open-folder payload, MainLayout 第一次 mount
   // 时拉一次消费。已运行场景始终返回 null,no-op。
   //
-  // 关键场景:未登录用户右键 "通过 XDMaker 打开" → 冷启动 → LoginPage 接管 →
+  // 关键场景:未登录用户右键 "通过 Cindy 打开" → 冷启动 → LoginPage 接管 →
   // 用户走完 Feishu OAuth → MainLayout (在 ProtectedRoute 之内) 第一次 mount →
   // 此 effect 跑一次 take + dispatch → 用户回到 /cc-agent/new 且 workingDir
   // 已预填,不会因为登录流程跳过而丢失意图。

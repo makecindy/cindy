@@ -295,6 +295,9 @@ const fanOutComputerPermissionGuideStatusChanged = createIpcFanOut(
   'maker:computer:permission-guide-status-changed',
 );
 const fanOutAppUpdateProgress = createIpcFanOut('app-update-progress');
+// worktree 回收(归档/删除后的异步链)真正跑完 —— renderer 据此重拉 worktree 快照,
+// 否则徽标会停在回收前的旧条目上。只在本机窗口内广播。
+const fanOutWorktreeChanged = createIpcFanOut('worktree:changed');
 const fanOutAuthStateChange = createIpcFanOut('auth:state-change');
 const fanOutAuthSessionExpired = createIpcFanOut('auth:session-expired');
 // 使用统计(TapDB)的同意状态 / 开关变化;renderer 据此即时 init 或 opt-out
@@ -2394,7 +2397,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // payload 形态在 vite-env.d.ts 上声明:
   //   - { type: 'session', id, messageClientId? } : 跳路由到指定 session(可带消息锚点)
   //   - { type: 'project', workingDir }    : 聚焦已有 project 节点
-  //   - { type: 'new-session', workingDir }: 新建对话且预填 workingDir (右键 "通过 XDMaker 打开")
+  //   - { type: 'new-session', workingDir }: 新建对话且预填 workingDir (右键 "通过 Cindy 打开")
   //   - { type: 'share-import', filePath } : 打开 .cshare/.xdtshare 会话导入向导
   onDeepLinkNavigate: (
     callback: (
@@ -3180,6 +3183,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('worktree:restore-status', sessionId),
   worktreeRestoreForSession: (sessionId: string): Promise<{ ok: boolean; snapshotApplied?: boolean; message?: string }> =>
     ipcRenderer.invoke('worktree:restore-for-session', sessionId),
+  /**
+   * 订阅「worktree 回收链已跑完」。payload: { sessionId }。
+   * 归档/删除后 main 侧的回收是 fire-and-forget 的异步链,store 条目移除远晚于状态
+   * IPC 返回;renderer 只在动作里刷一次会拿到旧快照,徽标就一直陈旧。
+   */
+  onWorktreeChanged: fanOutWorktreeChanged,
 
   // ── Slack Hook(公司中心 slack-hook-server 接入, 单内置连接) ─────────────
   // 通道名与 shared/hookControlIpc.ts 保持一致(preload 因 vite chunking 不
