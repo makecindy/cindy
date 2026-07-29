@@ -52,6 +52,19 @@ function extractCommand(input: unknown): string {
 }
 
 /**
+ * 读工具的路径字段(Read=file_path、NotebookRead=notebook_path、Grep/Glob/LS=path),交 core 判凭证。
+ * 命中凭证位置(如 ~/.ssh、/Users/x/.aws)才升级——读内容(Read/Grep)与列目录(LS/Glob)都算侦察面;
+ * 路径缺失(如 `Glob {pattern}` 无 path)返回 undefined,按普通只读放行。
+ */
+function extractReadPath(toolName: string, input: unknown): string | undefined {
+  const obj = input as Record<string, unknown> | null;
+  if (!obj) return undefined;
+  const key = toolName === 'Read' ? 'file_path' : toolName === 'NotebookRead' ? 'notebook_path' : 'path';
+  const v = obj[key];
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/**
  * Auto-review 下对一个**内置工具调用**给出审查档位。仅在权限档为 `auto` 时调用
  * (见 claude-code/index.ts 的 canUseTool dispatcher)。纯映射,判定逻辑全在 core。
  */
@@ -60,7 +73,9 @@ export function classifyBuiltinToolForAutoReview(
 ): BuiltinAutoReviewVerdict {
   const { toolName, input, workspaceRoots } = ctx;
 
-  if (READ_ONLY_TOOLS.has(toolName)) return reviewAction({ kind: 'read' }, workspaceRoots);
+  if (READ_ONLY_TOOLS.has(toolName)) {
+    return reviewAction({ kind: 'read', path: extractReadPath(toolName, input) }, workspaceRoots);
+  }
   if (SAFE_STATEFUL_TOOLS.has(toolName)) return reviewAction({ kind: 'session-state' }, workspaceRoots);
   if (FILE_WRITE_TOOLS.has(toolName)) {
     return reviewAction({ kind: 'file-write', path: extractFilePath(toolName, input) }, workspaceRoots);

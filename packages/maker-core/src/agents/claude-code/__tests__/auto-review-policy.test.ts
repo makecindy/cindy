@@ -77,6 +77,22 @@ describe('classifyBuiltinToolForAutoReview — 文件写(结构化 path 精确�
   });
 });
 
+describe('classifyBuiltinToolForAutoReview — 内置 Read/Grep/LS 读凭证升级', () => {
+  it('Read/NotebookRead/Grep/LS/Glob 指向凭证位置 → prompt-each-time', () => {
+    expect(verdict('Read', { file_path: '/Users/me/.ssh/id_rsa' })).toBe('prompt-each-time');
+    expect(verdict('Read', { file_path: '/Users/me/.aws/credentials' })).toBe('prompt-each-time');
+    expect(verdict('NotebookRead', { notebook_path: '/Users/me/.config/gcloud/application_default_credentials.json' })).toBe('prompt-each-time');
+    expect(verdict('Grep', { pattern: 'AKIA', path: '/Users/me/.aws' })).toBe('prompt-each-time');
+    expect(verdict('LS', { path: '/Users/me/.ssh' })).toBe('prompt-each-time');
+  });
+  it('读普通文件 / 无 path 的读工具 → auto-approve', () => {
+    expect(verdict('Read', { file_path: '/repo/src/a.ts' })).toBe('auto-approve');
+    expect(verdict('Grep', { pattern: 'TODO', path: '/repo/src' })).toBe('auto-approve');
+    expect(verdict('Glob', { pattern: '**/*.ts' })).toBe('auto-approve');
+    expect(verdict('LS', { path: '/repo' })).toBe('auto-approve');
+  });
+});
+
 describe('classifyBuiltinToolForAutoReview — Windows 盘符路径边界', () => {
   const win = ['C:\\Users\\me\\project'];
   it('Windows 工作区内写 → auto-approve(绝对与相对)', () => {

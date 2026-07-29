@@ -30,7 +30,7 @@ export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
 
 /**
  * 归一化动作 —— 各 harness 的 adapter 把自己的工具调用/审批请求翻译成它,交 reviewAction 裁决。
- *   read          纯读、无副作用(内省工具)
+ *   read          读文件/内省(可带 path:读凭证文件必问,其余放行)
  *   session-state 会话内状态/控制,无本地写/外发(todo、后台 shell 读写、subagent 派生)
  *   file-write    带结构化路径的文件写(path 缺失=无法确认在区内→升级)
  *   exec          shell 命令(交给命令分类器)
@@ -38,7 +38,7 @@ export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
  *   other         未知/其它 → fail-closed
  */
 export type ReviewableAction =
-  | { kind: 'read' }
+  | { kind: 'read'; path?: string }
   | { kind: 'session-state' }
   | { kind: 'file-write'; path: string | undefined }
   | { kind: 'exec'; command: string }
@@ -52,6 +52,8 @@ export type ReviewableAction =
 export function reviewAction(action: ReviewableAction, workspaceRoots: string[]): ReviewVerdict {
   switch (action.kind) {
     case 'read':
+      // 读凭证/密钥文件(内置 Read/Grep 等,path 命中)必问、不可记住;读普通文件放行。
+      return action.path && isSensitiveCredentialPath(action.path) ? 'prompt-each-time' : 'auto-approve';
     case 'session-state':
       return 'auto-approve';
     case 'file-write':
@@ -96,9 +98,25 @@ const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * 凭证 / 密钥的**路径**特征。命令里出现即"触碰凭证",内置 Read 工具的 path 命中同样必问。
+ * 不锚 ~/:绝对路径(/Users/x/.aws/…)、相对、~/ 三种形态都命中。
+ */
+const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
+  /(?:^|[\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker)\b/,     // 凭证/密钥目录
+  /(?:^|[\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc)\b/,     // 含 token 的凭证配置文件
+  /\bapplication_default_credentials\b/,                  // gcloud 默认凭证文件
+  /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/, // 私钥文件
+];
+
+/** 路径是否触碰已知凭证/密钥位置(shell 命令与内置 Read 工具共用同一判定)。 */
+export function isSensitiveCredentialPath(target: string): boolean {
+  return typeof target === 'string' && CREDENTIAL_PATH_PATTERNS.some((re) => re.test(target));
+}
+
+/**
  * 危险命令模式(整段原文匹配,更抗变形)。命中即 `prompt-each-time`:必问、不可"总是允许"。
- * 覆盖:提权 / 递归删除 / 远程代码执行 / 凭证访问 / 磁盘设备 / 系统控制 / 破坏性 git / fork bomb /
- * 权限放宽。
+ * 覆盖:提权 / 递归删除 / 远程代码执行 / 凭证访问(路径 + keychain + 敏感环境变量展开)/ 磁盘设备 /
+ * 系统控制 / 破坏性 git / fork bomb / 权限放宽。
  */
 const DANGEROUS_PATTERNS: readonly RegExp[] = [
   /\b(?:sudo|doas)\b/,                                   // 提权
@@ -113,11 +131,9 @@ const DANGEROUS_PATTERNS: readonly RegExp[] = [
   /\beval\b/,                                            // eval 动态执行
   /\bchmod\b[^|;&]*\s(?:-R\s+)?[0-7]*7{2,3}\b/,           // chmod 777 之类数字放宽权限
   /\bchmod\b[^|;&]*\s[ugoa]*[oa][ugoa]*[-+=][^\s]*w/,     // chmod 符号型对 other/all 开放写(a+w / o+w / a+rwx)
-  /(?:^|[\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker)\b/,     // 凭证/密钥目录(~ 与绝对路径均命中,不再只锚 ~/)
-  /(?:^|[\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc)\b/,     // 含 token 的凭证配置文件
-  /\bapplication_default_credentials\b/,                  // gcloud 默认凭证文件
-  /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/, // 私钥文件
+  ...CREDENTIAL_PATH_PATTERNS,                            // 凭证/密钥路径(见上)
   /\bsecurity\s+(?:find|dump|export|add)-/,               // macOS keychain
+  /\$\{?[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY|_PAT)[A-Za-z0-9_]*\}?/i, // 敏感环境变量展开(echo "$API_KEY" 等)
   /\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|--force-with-lease\b|\s-f\b|\+)/, // 强推
   /\bgit\b[^|;&]*\breset\b[^|;&]*--hard/,                 // git reset --hard
   /\bgit\b[^|;&]*\bclean\b[^|;&]*\s-\w*f/,                // git clean -f
@@ -126,8 +142,12 @@ const DANGEROUS_PATTERNS: readonly RegExp[] = [
 /** 命令替换 / 进程替换:参数里塞 `$(...)` / 反引号 / `<(...)`,可绕过静态判定 → 一律升级。 */
 const COMMAND_SUBSTITUTION = /\$\(|`|<\(/;
 
-/** 文件输出重定向 `>` / `>>`(排除 `2>&1` 这类 fd 复制:`>` 前是数字的不算文件写)。 */
-const OUTPUT_REDIRECTION = /(?:^|[^0-9])>>?/;
+/**
+ * 文件输出重定向 `>` / `>>`(含 fd 前缀 `1>`/`2>>` 与 `&>`)。区分"写文件"与"fd 复制":
+ * 目标是文件(`>file` / `1>~/.bashrc`)→ 命中;目标是另一个 fd(`2>&1` / `>&2`)→ 不命中(`>` 后是 `&`)。
+ * 要求操作符前是行首/空白/`&`/fd 数字,避免把 `a->b` 这类箭头误判成重定向。
+ */
+const OUTPUT_REDIRECTION = /(?:^|\s)&?[0-9]*>>?\s*(?![&\s])/;
 
 /**
  * curl/wget 视为"只读取回"(命令行浏览器)的排除项。命中任一就不是安全 GET,交通用判定升级:
@@ -135,8 +155,13 @@ const OUTPUT_REDIRECTION = /(?:^|[^0-9])>>?/;
  *   - **落盘到文件**(`-o`/`-O`/`--output`):把远端内容写进任意路径(可覆盖 `~/.ssh/authorized_keys`
  *     等敏感文件)—— 与 shell 重定向同样是"写任意路径",必须升级。`curl URL`(默认 stdout)才放行。
  */
-const NETWORK_UPLOAD_FLAGS = /(?:^|\s)(?:-d\b|--data\S*|-F\b|--form\b|-T\b|--upload-file\b|-X\s*(?:POST|PUT|DELETE|PATCH))/i;
-const FETCH_OUTPUT_FLAGS = /(?:^|\s)(?:-o|-O|--output|--output-dir|--remote-name)\b/;
+// curl 上传 / 非 GET 方法。含贴合式短选项(`-dDATA` / `-Ffield` / `-Tfile`)——`-[dFT]` 不带 \b,
+// 贴合的 value 照样命中。大小写敏感(不加 /i):`-d/-F/-T` 是上传,`-D`(dump-header,只读)不能误伤。
+const CURL_UPLOAD_FLAGS = /(?:^|\s)-[dFT]|(?:^|\s)--(?:data|form|upload-file)[\w-]*|(?:^|\s)(?:-X|--request)\s*(?:POST|PUT|DELETE|PATCH)/;
+// wget 上传 / 非默认方法(curl 的 --data 等对 wget 无意义,wget 用 --post-*/--body-*/--method)。
+const WGET_UPLOAD_FLAGS = /(?:^|\s)--(?:post-data|post-file|body-data|body-file|method)\b/i;
+// 落盘到文件(curl -o/-O/--output;wget -o 日志 /-O 文档)。含贴合短选项 `-ofile`;把远端内容写进任意路径。
+const FETCH_OUTPUT_FLAGS = /(?:^|\s)-[oO]|(?:^|\s)--(?:output(?:-dir|-document)?|remote-name)\b/;
 
 /** git 只读子命令 → 放行。 */
 const SAFE_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
@@ -197,28 +222,43 @@ function baseName(p: string): string {
   return idx >= 0 ? cleaned.slice(idx + 1) : cleaned;
 }
 
-function isSafeReadonlyBin(bin: string, segment: string): boolean {
+function isSafeReadonlyBin(bin: string, segment: string, tokens: string[]): boolean {
   if (!SAFE_READONLY_BINS.has(bin)) return false;
   // find 的命令搬运/删除/写文件 flag(输出重定向/命令替换已在 classifyShellSegment 统一挡掉)。
   // `-fprintf`/`-fprint`/`-fprint0`/`-fls` 把匹配结果写进任意文件(与 -exec/-delete 同类,只是枚举);
   // `-print`/`-printf`/`-ls`(无 f 前缀,写 stdout)仍算只读、不拦。
   if (bin === 'find' && /-(?:exec(?:dir)?|ok(?:dir)?|delete)\b|-f(?:print[f0]?|ls)\b/.test(segment)) return false;
+  // 少数"只读"工具其实能写文件:sort -o/--output、yq/jq -i/--inplace、uniq 的第二个位置参数(输出文件)。
+  // 管道形态(`… | sort | uniq`)无这些 flag/额外位置参数,仍走 stdout,照常放行。
+  if (bin === 'sort' && tokens.some((t) => t === '-o' || /^-o./.test(t) || /^--output(?:=|$)/.test(t))) return false;
+  if ((bin === 'yq' || bin === 'jq') && tokens.some((t) => t === '-i' || /^--in-?place$/.test(t))) return false;
+  if (bin === 'uniq' && tokens.slice(1).filter((t) => !t.startsWith('-')).length >= 2) return false;
   return true;
 }
 
 /**
- * curl/wget 的只读 GET:无上传、无落盘到文件、URL 无查询串 → 放行(命令行浏览器场景;stdout 默认)。
- * 带查询串(`?…=…`)的 GET 可能把数据编码进 URL 外发(GET 型 exfil,不需要 -d/-F);
- * 无法低成本区分"正常分页参数"与"外发载荷",按 fail-closed 升级为 prompt(可本会话记住)。
- * 纯读页面(bare / path-only URL)才当"命令行浏览器"静默放行。命令替换 `$(...)` 另有 COMMAND_SUBSTITUTION 拦截。
+ * curl/wget 的只读 GET → 放行(命令行浏览器场景;stdout 默认)。放行条件全部满足:
+ *   - 无上传 / 非 GET 方法(bin 各自的 upload flag),无落盘到文件(-o/-O/--output);
+ *   - **能认出一个 URL/host 目标**——认不出(无位置参数 / 参数不像 URL)一律 fail-closed 升级,
+ *     不因"没识别出危险"而放行(修 copilot 报的 no-scheme/no-URL 漏放);
+ *   - **目标 URL 无查询串**:`?…=…` 可能把数据编码进 URL 外发(GET 型 exfil,不需 -d/-F),含无 scheme 的
+ *     `host/path?q=` 形态。命令替换 `$(...)` 另有 COMMAND_SUBSTITUTION 拦截。
  */
 function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   if (bin !== 'curl' && bin !== 'wget') return false;
-  if (NETWORK_UPLOAD_FLAGS.test(segment)) return false;
   if (FETCH_OUTPUT_FLAGS.test(segment)) return false;
-  const url = tokens.find((t) => /^https?:\/\//i.test(t) || t.includes('://'));
-  if (url && url.includes('?')) return false;
-  return true;
+  if (bin === 'curl' && CURL_UPLOAD_FLAGS.test(segment)) return false;
+  if (bin === 'wget' && WGET_UPLOAD_FLAGS.test(segment)) return false;
+  const positional = tokens.slice(1).filter((t) => !t.startsWith('-'));
+  if (positional.some((t) => t.includes('?'))) return false; // 查询串外发面(含无 scheme 的 host?query)
+  const hasTarget = positional.some(
+    (t) =>
+      /:\/\//.test(t) ||                              // 带 scheme:https:// 等
+      /^[\w.-]+\.[a-z]{2,}(?:[:/].*)?$/i.test(t) ||   // 无 scheme 的 host[/path][:port]
+      /^localhost(?::\d+)?(?:\/.*)?$/i.test(t) ||     // localhost[:port]
+      /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:\/.*)?$/.test(t), // IPv4[:port]
+  );
+  return hasTarget;
 }
 
 function classifyGit(tokens: string[], segment: string): ReviewVerdict {
@@ -258,7 +298,7 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   if (OUTPUT_REDIRECTION.test(segment) || COMMAND_SUBSTITUTION.test(segment)) return 'prompt';
   if (bin === 'git') return classifyGit(tokens, segment);
   if (isSafeFetch(bin, segment, tokens)) return 'auto-approve';
-  if (isSafeReadonlyBin(bin, segment)) return 'auto-approve';
+  if (isSafeReadonlyBin(bin, segment, tokens)) return 'auto-approve';
   // 其余(含所有写操作、未知命令)fail-closed 升级 —— 交给用户确认(可本会话记住)。
   return 'prompt';
 }
