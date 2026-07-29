@@ -3544,11 +3544,18 @@ export function registerGhostIpc(): void {
       fileTypeLabel: t('settings.ghosts.detail.exportFileType'),
       writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
       // 装入校验本尊 + 装入侧不变量:manager.inspect 带真实 trust
-      // registry;指令查重只存在于 install/update(与当前已装撞名即拒,
-      // 排除自身),inspect 不覆盖,这里补齐(评审 P1)。
+      // registry;指令查重与 tokenBroker 门控只存在于 install/update,
+      // inspect 不覆盖,这里按同一口径补齐(评审 P1)。
       inspectPackage: async (filePath) => {
         const probe = await manager.inspect(filePath);
         if ('rejection' in probe) return false;
+        // tokenBroker 门控(同 rejectUnauthorizedTokenBroker):第三方包
+        // 声明即不可装入,官方前缀豁免。
+        const brokered = (probe.manifest.network?.secrets ?? []).some(
+          (s) => s.oauth?.tokenBroker !== undefined,
+        );
+        if (brokered && !isOfficialGhostId(probe.manifest.id)) return false;
+        // 指令查重(同 install/update):与当前已装撞名即拒,排除自身。
         const commandFold = probe.manifest.command?.toLowerCase();
         if (commandFold === undefined) return true;
         return !manager.list().some(
