@@ -126,6 +126,11 @@ export function categorize(id: string): ModelCategory {
   // sora(OpenAI 视频)/ veo(Google 视频)同理,id 里没有 "video" 字样。
   if (/seedance|happyhorse|video|-t2v|-i2v|-r2v/.test(id) || /^sora|^veo-/.test(id)) return 'video';
   if (id === 'ai-gateway-doc') return 'compression';
+  // moderation(如 omni-moderation-latest / text-moderation-latest)不是issue #882
+  // 列出的语义类型之一,落 other 保留原始 id/mode(2026-07 review:走 {id,name} 极简
+  // 发现的自定义 OAuth 供应商没有 mode,不挡的话会被 isChatEligible 误判为可聊天——
+  // moderation 端点不接受聊天请求)。
+  if (/moderation/.test(id)) return 'other';
   // STT/ASR 必须在 realtime 判定之前:qwen3-asr-flash-realtime / fun-asr-realtime-* /
   // gpt-realtime-whisper 的 id 里都含 "realtime",但语义是语音转写,不是实时多模态。
   // 不能只认 elevenlabs 前缀——否则 gpt-4o-mini-tts / qwen-tts 这类其它厂商的语音模型

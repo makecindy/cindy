@@ -122,6 +122,13 @@ describe('categorize', () => {
     expect(isChatEligible({ id: 'sora-2' })).toBe(false);
     expect(isChatEligible({ id: 'veo-3' })).toBe(false);
   });
+
+  it('moderation 模型不落进厂商兜底组、不被判定为可聊天(2026-07 review:fresh evidence,不是issue 列出的语义类型之一,落 other 保留)', () => {
+    expect(categorize('omni-moderation-latest')).toBe('other');
+    expect(categorize('text-moderation-latest')).toBe('other');
+    expect(isChatEligible({ id: 'omni-moderation-latest' })).toBe(false);
+    expect(isChatEligible({ id: 'text-moderation-latest' })).toBe(false);
+  });
 });
 
 describe('groupOf — 数据优先,前缀兜底', () => {

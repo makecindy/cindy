@@ -17,10 +17,10 @@ import {
   chatEligibleSourcesForModel,
   classifyModel,
   connectedProvidersForAgent,
+  getModel,
   groupModelsForDisplay,
   groupOf,
   isChatEligible,
-  providerOffersModel,
   type AgentKind,
   type DisplayModel,
   type ModelCategory,
@@ -95,6 +95,22 @@ export interface SwitchModel {
  * 返回的 reconciledModelId 仅在「模型确实变化」时给出(等于当前模型视为不变,返 undefined);
  * reconciledEffort 仅在能从记忆恢复时给出。两者都为空 = 调用方保持当前 model/effort。
  */
+/**
+ * 目标 provider 上**这个具体条目**是否是聊天模型(issue #882 第 3 点,2026-07
+ * review)。resolveSourceSwitch 决定的是"切到 provider 之后用哪个 model",必须验
+ * provider 自己的那份数据——`visibleModels`(跨 provider 的并集)里的同 id 条目可能
+ * 来自另一个 provider 的聊天分类,和目标 provider 自己的这份 mode 可能不一致;
+ * providerOffersModel 同理只看 id 是否存在,不看 mode。两者都不能替代这个检查。
+ */
+function isModelChatEligibleOnProvider(
+  provider: ProviderView,
+  modelId: string,
+  agent: AgentKind,
+): boolean {
+  const model = getModel(provider, modelId, agent);
+  return model !== undefined && isChatEligible(model);
+}
+
 export function resolveSourceSwitch(args: {
   provider: ProviderView;
   agent: AgentKind;
@@ -110,7 +126,7 @@ export function resolveSourceSwitch(args: {
 
   const memUsable =
     !!remembered &&
-    providerOffersModel(provider, remembered.model, agent) &&
+    isModelChatEligibleOnProvider(provider, remembered.model, agent) &&
     visibleModels.some((m) => m.id === remembered.model) &&
     isVisible(remembered.model);
 
@@ -118,7 +134,10 @@ export function resolveSourceSwitch(args: {
     targetModel = remembered.model;
     const tm = visibleModels.find((m) => m.id === remembered.model);
     if (tm && tm.efforts.includes(remembered.effort)) targetEffort = remembered.effort;
-  } else if (currentModelId && !providerOffersModel(provider, currentModelId, agent)) {
+  } else if (
+    currentModelId &&
+    !isModelChatEligibleOnProvider(provider, currentModelId, agent)
+  ) {
     // 只在聊天厂商组里找候选(issue #882):非聊天类型(image/video/tts/stt/realtime/
     // embedding/compression/other)不该被 reconcile 选中。用 classifyModel(mode 优先,
     // 无 mode 才回退 id 正则)而不是纯 id 正则的 categorize——否则 mode 标为非聊天、
@@ -127,7 +146,7 @@ export function resolveSourceSwitch(args: {
       visibleModels.filter((m) => classifyModel(m) === c),
     );
     targetModel = ordered.find(
-      (m) => providerOffersModel(provider, m.id, agent) && isVisible(m.id),
+      (m) => isModelChatEligibleOnProvider(provider, m.id, agent) && isVisible(m.id),
     )?.id;
   }
 
