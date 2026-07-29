@@ -707,10 +707,12 @@ const SYNTHETIC_TOOL_RESULT_TEXT =
  *      块(CC 投影的正常形态,位置证据最强的配对);全部 call(含 trailing)
  *      做完位置配对后才进入接力 —— 否则较早的同 id 缺口 call 会抢走较晚
  *      call 紧邻位置的真实 result,造成张冠李戴。
- *   2. 接力补缺 + 错位重排: 位置配对失败的 call 从结果池取第一个位于其后
- *      的未消费块;不在合法位置(跨消息,或同消息内落在 text 之后)的前移至
- *      紧邻消息的前导 tool_result 区间,原位置移除。Anthropic 要求 result
- *      紧跟 call 所在 assistant 且居于 text 前,留在错误位置仍是 400。
+ *   2. 接力补缺 + 错位重排: 位置配对失败的 call 从结果池取**归属区间**(本
+ *      call 到下一个同 id call 之间 —— agentic loop 串行,出现在下一个同 id
+ *      call 之后的 result 只属于后面的 call,较早缺口 call 不得越区抢走)内
+ *      的第一个未消费块;不在合法位置(跨消息,或同消息内落在 text 之后)的
+ *      前移至紧邻消息的前导 tool_result 区间,原位置移除。Anthropic 要求
+ *      result 紧跟 call 所在 assistant 且居于 text 前,留在错误位置仍是 400。
  *   3. 缺失合成: 非 trailing 的 call 无候选 → 紧邻位置合成占位(kimi 同文案
  *      同语义;不设 is_error —— "结果不可用"≠"执行失败")。插入规则与重排
  *      相同;string content 转等价数组,空白 string 不附加 text 块。
@@ -828,30 +830,56 @@ function repairToolExchangeAdjacencyInMessages(messages: unknown[]): unknown[] |
     }
   }
 
-  // pass B2: 接力 —— 位置配对失败的 call,从结果池中取第一个「位于其后且未
-  // 被位置配对消费」的同 id 块前移(错位重排);无候选 → 非 trailing 合成占位。
-  // 位置 ≤ call 的池块(前置 result,引用未来 call 本身非法)顺带标记丢弃。
+  // pass B2: 接力 —— 位置配对失败的 call,从结果池取**归属区间**内的第一个
+  // 未消费块前移(错位重排);无候选 → 非 trailing 合成占位。
+  //
+  // 归属区间 = (本 call 下标, 下一个同 id call 下标)。依据 agentic loop 串行:
+  // 下一个同 id call 发出时,本 call 的 result 必已回来(或丢失)——出现在下一个
+  // 同 id call 之后的 result 只属于后面的 call。较早缺口 call 不得越区抢走较
+  // 晚 call 的错位真实结果(Greptile 第二轮反例: 两个同 id call 都无紧邻
+  // result、r2 错位在 call#2 之后 → r2 归 call#2,call#1 合成)。
+  //
+  // trailing missing call 同样消费区间内的块,但**只消费不修复**(不移、不
+  // 合成)——保护 trailing 交换的合法尾部 result(如 parallel trailing calls
+  // 的 result 分多条消息回来)不被下方"池剩余丢弃"误杀。
+  const callIndicesById = new Map<string, number[]>();
+  for (let i = 0; i <= lastConversationIndex; i++) {
+    const msg = messages[i];
+    if (!isPlainObject(msg) || msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (!isToolUseBlock(block)) continue;
+      const list = callIndicesById.get(block.id) ?? [];
+      list.push(i);
+      callIndicesById.set(block.id, list);
+    }
+  }
   for (const mc of missingCalls) {
-    if (mc.trailing) continue;
     const pool = resultPool.get(mc.id) ?? [];
+    const indices = callIndicesById.get(mc.id) ?? [];
+    let nextIdx = Number.POSITIVE_INFINITY;
+    for (const idx of indices) {
+      if (idx > mc.i) {
+        nextIdx = idx;
+        break;
+      }
+    }
     let hit: { msgIdx: number; blockIdx: number } | undefined;
     for (const cand of pool) {
       const key = `${cand.msgIdx}:${cand.blockIdx}`;
       if (consumed.has(key)) continue;
-      if (cand.msgIdx <= mc.i) {
-        drops.push(cand);
-        consumed.add(key);
-        continue;
-      }
+      if (cand.msgIdx <= mc.i || cand.msgIdx >= nextIdx) continue; // 区间外(前置/归后面的 call)
       hit = cand;
       break;
     }
     if (hit !== undefined) {
       consumed.add(`${hit.msgIdx}:${hit.blockIdx}`);
-      drops.push(hit);
-      const srcMsg = messages[hit.msgIdx] as Record<string, unknown>;
-      recordInsert(mc.i, mc.callBlockIdx, (srcMsg.content as unknown[])[hit.blockIdx]);
-    } else {
+      if (!mc.trailing) {
+        drops.push(hit);
+        const srcMsg = messages[hit.msgIdx] as Record<string, unknown>;
+        recordInsert(mc.i, mc.callBlockIdx, (srcMsg.content as unknown[])[hit.blockIdx]);
+      }
+      // trailing: 仅 consumed 保护,不动位置。
+    } else if (!mc.trailing) {
       recordInsert(mc.i, mc.callBlockIdx, {
         type: 'tool_result',
         tool_use_id: mc.id,

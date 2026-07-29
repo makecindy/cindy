@@ -1497,6 +1497,54 @@ describe('repairToolExchangeAdjacencyFromBody', () => {
     expect(parsed.messages[4].content[0]).toMatchObject({ tool_use_id: 'X', content: 'r2-real' });
   });
 
+  it('relay stays inside the owning interval: a later call\'s displaced result is not stolen', () => {
+    // Greptile 第二轮反例: 两个同 id call 都无紧邻 result(位置配对均失败),
+    // call#2 的真实 result 错位在更后 —— 接力按归属区间(到下一个同 id call
+    // 为止)取块:r2 归 call#2 前移,call#1 合成,不再先到先得。
+    const body = buf({
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'X', name: 'Edit', input: { a: 1 } }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'X', name: 'Edit', input: { a: 2 } }] },
+        { role: 'user', content: [{ type: 'text', text: '之间' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'X', content: 'r2-real' }] },
+        { role: 'user', content: '继续' },
+      ],
+    });
+    const out = repairToolExchangeAdjacencyFromBody(body);
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages.map((m: { role: string }) => m.role)).toEqual([
+      'user', 'assistant', 'user', 'assistant', 'user', 'user',
+    ]);
+    // call#1 → 新建 user 合成占位;call#2 → r2 前移到其紧邻 user(之间)的前导区间。
+    expect(parsed.messages[2].content[0].content).toContain('Tool result is not available');
+    expect(parsed.messages[4].content).toEqual([
+      { type: 'tool_result', tool_use_id: 'X', content: 'r2-real' },
+      { type: 'text', text: '之间' },
+    ]);
+  });
+
+  it('keeps trailing parallel results arriving in separate messages (no kill)', () => {
+    // trailing parallel calls 的 result 分多条纯 result 消息回来 = 合法末尾
+    // 交换。t2 位置配对失败(i+1 里只有 t1),trailing 接力只消费保护不修复,
+    // 不得被"池剩余丢弃"误杀 → 整体 byte-clean 返回 null。
+    const body = buf({
+      messages: [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 't1', name: 'Bash', input: {} },
+            { type: 'tool_use', id: 't2', name: 'Read', input: {} },
+          ],
+        },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'r1' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', content: 'r2' }] },
+      ],
+    });
+    expect(repairToolExchangeAdjacencyFromBody(body)).toBeNull();
+  });
+
   it('returns null for non-JSON body / missing messages', () => {
     expect(repairToolExchangeAdjacencyFromBody(Buffer.from('not json', 'utf8'))).toBeNull();
     expect(repairToolExchangeAdjacencyFromBody(buf({ model: 'x' }))).toBeNull();
