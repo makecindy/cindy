@@ -5306,6 +5306,84 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('ignores a late id-less capacity error while a foreign start is still pending', async () => {
+      // Stop 留下的旧 turn/start 仍在飞, 新一轮已经激活了自己的 turn。这时旧请求那边迟到的
+      // **空 id** 容量拒绝会因为"有 turn 在跑"被认在活跃 turn 头上, scheduleOverloadRetry
+      // 于是拿 currentTurnId 当死 turn: 一个正常在跑的 turn 被落墓碑、它的输入被重放, 而
+      // server 侧那个 turn 还在跑 —— 副作用执行两遍(review #844 codex P1)。
+      // 既有的 inFlightStarts.size > 1 守卫拦不住: deadTurnId 走了 currentTurnId 兜底、非空,
+      // 且登记表里只剩那一个陌生 start。判据改成"活跃 turn 的归属方之外还有 start 在飞"。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-foreign-pending-start',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 新一轮的 start 立即回包 → 它的 turn 正常激活(登记表里此后只剩被 Stop 那个旧 start)。
+        await handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 旧请求那边迟到的空 id 容量拒绝: 无法归属 → 整条忽略, 不得动新一轮的 turn。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+        // 没有重投(不得重放新一轮的输入), 也没有把这一轮判死。
+        expect(turnStarts).toBe(2);
+        expect(events.slice(before)).toHaveLength(0);
+
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not let a stopped orphan turn buffered output block the next send retry', async () => {
       // 产出标记曾是**会话级标量**: 被 Stop 的旧 start 带着缓冲事件回包时(那要按"有产出"
       // 处理, 因为 daemon 那边命令早跑了), 标量写的是当前这一轮的账 —— 而新一轮的

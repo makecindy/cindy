@@ -2274,6 +2274,20 @@ export class CodexAgent extends BaseAgent {
      * 显式传 seq 而不是判 `inFlightStarts.size > 1`: 后者只在"调用点一定早于本请求
      * endTurnStart"时才等价, 而那正是本 PR 反复踩过的隐式耦合。
      */
+    /**
+     * turnId → 生出它的那一次 turn/start 的 seq。
+     *
+     * 用途只有一个: 判断"空 id 的容量拒绝能不能算在当前活跃 turn 头上"。活跃 turn 的
+     * 归属方若已 settle, 而登记表里还躺着**别人**的 start(典型: Stop 留下的旧 RPC), 那条
+     * 空 id 通知就可能是那一位的 —— 算在活跃 turn 头上会把一个正常在跑的 turn 落墓碑并
+     * 重放它的输入(review #844 codex P1)。
+     *
+     * 按 turnId 建索引而不是存一个"当前 turn 的归属方"标量: 后者要跟着 currentTurnId 的
+     * 每一处清理同步, 漏一处就读到上一个 turn 的归属 —— 本 PR 已经在别的标量上踩过。
+     * 键就是 currentTurnId 本身, 旧条目不可能被当成当前 turn 的答案。
+     */
+    const turnStartSeqByTurnId = new Map<string, number>();
+
     const hasOtherInFlightStart = (seq: number): boolean => {
       for (const other of inFlightStarts.keys()) if (other !== seq) return true;
       return false;
@@ -5247,6 +5261,12 @@ export class CodexAgent extends BaseAgent {
         if (turnsCompletedBeforeStartResp.has(params.turn.id)) return;
         threadMayHaveRollout = true;
         const wasSameTurn = currentTurnId === params.turn.id;
+        // started 先于响应到达时归属方只能推断: 只有一个 start 在飞 → 就是它; 多个 → 认不出,
+        // 不登记(读取方按"归属不明"从严处理)。
+        const startedOwnerSeqs = [...inFlightStarts.keys()];
+        if (startedOwnerSeqs.length === 1) {
+          turnStartSeqByTurnId.set(params.turn.id, startedOwnerSeqs[0] as number);
+        }
         currentTurnId = params.turn.id;
         isTurnInFlight = true;
         // turn/start 在飞期间权限被收紧 (turnStarted 通知可能先于 turn/start resp
@@ -5486,20 +5506,34 @@ export class CodexAgent extends BaseAgent {
         // 不认 → 落到既有的 `stale codex terminal error ignored` 分支被丢掉, 这是安全的:
         // 真属于某个 turn 的话, server 随后会为那个 turn 发权威的 turn/completed(failed),
         // 收口由它完成。
-        const idLessAttributable = inFlightStarts.size === 1;
-        const targetsIdLessPendingStart =
+        const idLessCapacityError =
           params.turnId === ''
           && isTerminalError
-          && isTurnStartPending
-          && currentTurnId === null
-          && idLessAttributable
           && parseOverloadError(
             params.error?.message ?? '',
             extractNonSecretErrorSignals(params.error?.message ?? '').errorStatus,
           ) !== null;
+        const idLessAttributable = inFlightStarts.size === 1;
+        const targetsIdLessPendingStart =
+          idLessCapacityError
+          && isTurnStartPending
+          && currentTurnId === null
+          && idLessAttributable;
+        // 活跃 turn 也可能不是这条空 id 通知的主人: 它的归属方(生出它的那次 start)早已
+        // settle, 而登记表里还躺着**别人**的 start —— Stop 留下的旧 RPC 就是。此时认在活跃
+        // turn 头上, scheduleOverloadRetry 会拿 currentTurnId 当死 turn: 一个正常在跑的
+        // turn 被落墓碑、它的输入被重放, 而 server 侧那个 turn 还在跑 —— 副作用两遍
+        // (review #844 codex P1)。既有的 inFlightStarts.size > 1 守卫拦不住: 这时 deadTurnId
+        // 非空(走了 currentTurnId 兜底), 且登记表里只有那一个陌生 start。
+        // 只收紧**容量**这一类: 其它空 id 终态错误保持既有行为, 免得顺手改了无关语义。
+        const idLessActiveTurnAmbiguous =
+          idLessCapacityError
+          && isTurnInFlight
+          && currentTurnId !== null
+          && hasOtherInFlightStart(turnStartSeqByTurnId.get(currentTurnId) ?? -1);
         const targetsCurrentTurn =
           params.turnId === currentTurnId
-          || (params.turnId === '' && isTurnInFlight)
+          || (params.turnId === '' && isTurnInFlight && !idLessActiveTurnAmbiguous)
           || targetsPendingTurn
           || targetsIdLessPendingStart;
         if (isTerminalError && isTransportError && !targetsCurrentTurn) {
@@ -5906,6 +5940,8 @@ export class CodexAgent extends BaseAgent {
             // turnCompleted(interrupted) 先回), 不得重新置活, 否则会话卡 running。
             const alreadyCompleted = turnsCompletedBeforeStartResp.has(resp.turn.id);
             if (!alreadyCompleted && !terminalErroredTurnIds.has(resp.turn.id)) {
+              // 权威归属: 这个 turn 由本次 start 生出。
+              turnStartSeqByTurnId.set(resp.turn.id, ownerSeq);
               currentTurnId = resp.turn.id;
               isTurnInFlight = true;
               currentTurnPlanModeActive = turnStartsInPlanMode;
