@@ -58,8 +58,10 @@ export interface ConsolidateResult {
   filename: string;
   /** 实际删除的源文件 (源不存在的会被跳过) */
   deletedSources: string[];
-  /** 写入 warning (通常 consolidate 后 size 会降, 但兜底带上) */
+  /** 软警告: 删源后按最终磁盘状态重算 (可能与写入时点不同, 也可能出现/消失); 重算失败退回写入时点值 */
   warning?: WriteResult['warning'];
+  /** 软警告数值明细, 与 warning 同生同灭 */
+  warningDetail?: WriteResult['warningDetail'];
 }
 
 export class MakerMemoryStore {
@@ -190,11 +192,22 @@ export class MakerMemoryStore {
       this.logger.warn('consolidate fts rebuild failed', { error: String(e) });
     }
 
+    // 删源后索引已变小, 写入时点的软警告可能失真 — 以最终磁盘状态重算;
+    // 重算失败时退回写入时点的值 (宁可保守报警, 不静默丢警告)
+    let finalDetail = writeRes.warningDetail;
+    try {
+      finalDetail = await this.storage.assessWarning(writeRes.filename);
+    } catch (e) {
+      this.logger.warn('consolidate: reassess warning failed, using write-time detail', {
+        error: String(e),
+      });
+    }
+
     return {
       ok: true,
       filename: writeRes.filename,
       deletedSources: deleted,
-      ...(writeRes.warning ? { warning: writeRes.warning } : {}),
+      ...(finalDetail ? { warning: finalDetail.kind, warningDetail: finalDetail } : {}),
     };
   }
 

@@ -54,7 +54,7 @@ export interface ApplyRuntimeSetModelChangeInput {
   registerPendingCredentialSwitch?: (
     sessionId: string,
     target: { model: string; providerId: string | null },
-  ) => void;
+  ) => void | Promise<void>;
   /**
    * 「无需切换」分支清掉旧 pending(后选覆盖先选)。典型场景:deferred 登记后
    * renderer 持久化失败发起回滚 set-model、用户改选回与当前进程同族的来源、或
@@ -165,7 +165,7 @@ export async function applyRuntimeSetModelChange(
     // 把 route/model 的生效边界固定在 turn 结束；pending 收口只关闭本 Session，
     // shared host 保留，不重新 spawn app-server。
     if (input.registerPendingCredentialSwitch) {
-      input.registerPendingCredentialSwitch(sessionId, {
+      await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
       });
@@ -186,7 +186,7 @@ export async function applyRuntimeSetModelChange(
 
   if (sess && shouldCloseSession) {
     if (isSelfBusy() && input.registerPendingCredentialSwitch) {
-      input.registerPendingCredentialSwitch(sessionId, {
+      await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
       });

@@ -24,6 +24,7 @@ import {
 import { cn } from '@/lib/utils';
 import type { PendingIssueConfirm } from '@/lib/makerChatStore';
 import { shouldLabelIssueRegion } from '../../../shared/issueRegionCode';
+import { ISSUE_PUBLIC_NAME_MAX, normalizeIssuePublicName } from '../../../shared/issuePublicName';
 
 interface IssueConfirmCardProps {
   sessionId: string;
@@ -35,6 +36,7 @@ interface IssueConfirmCardProps {
           title: string;
           body: string;
           type: 'bug' | 'feature';
+          publicName?: string;
           uiLanguage: string;
         }
       | { confirmed: false },
@@ -51,17 +53,36 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
   const { t, i18n } = useTranslation();
   const titleInputId = useId();
   const bodyInputId = useId();
+  const publicNameInputId = useId();
   const [draft, setDraft] = useState<IssueConfirmDraft>(
-    () => getIssueConfirmDraft(sessionId, pending.requestId) ?? pending.draft,
+    () =>
+      getIssueConfirmDraft(sessionId, pending.requestId) ?? {
+        ...pending.draft,
+        ...(pending.submissionIdentity.kind === 'platform'
+          ? {
+              publicName: pending.suggestedPublicName ?? t('issueAgent.confirm.anonymous'),
+            }
+          : {}),
+      },
   );
-  const { title, body, type } = draft;
+  const { title, body, type, publicName = '' } = draft;
 
-  const canSubmit = title.trim().length > 0 && body.trim().length > 0;
+  const confirmedPublicName =
+    pending.submissionIdentity.kind === 'platform' ? normalizeIssuePublicName(publicName) : null;
+  const canSubmit =
+    title.trim().length > 0 &&
+    body.trim().length > 0 &&
+    (pending.submissionIdentity.kind !== 'platform' || confirmedPublicName !== null);
 
   const updateDraft = useCallback(
     (patch: Partial<IssueConfirmDraft>) => {
       const next = { ...draft, ...patch };
-      if (next.title === draft.title && next.body === draft.body && next.type === draft.type) {
+      if (
+        next.title === draft.title &&
+        next.body === draft.body &&
+        next.type === draft.type &&
+        next.publicName === draft.publicName
+      ) {
         return;
       }
       // Save synchronously with the input event so an immediate session switch
@@ -93,9 +114,10 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
       title: title.trim(),
       body: body.trim(),
       type,
+      ...(confirmedPublicName ? { publicName: confirmedPublicName } : {}),
       uiLanguage: i18n.language,
     });
-  }, [canSubmit, onRespond, title, body, type, i18n.language]);
+  }, [canSubmit, confirmedPublicName, onRespond, title, body, type, i18n.language]);
 
   const handleCancel = useCallback(() => {
     onRespond({ confirmed: false });
@@ -192,16 +214,74 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
         )}
       />
 
+      {/* 发布方式由 Main 预先选定；确认阶段只展示实际通道，不提供不可用切换。 */}
+      <div
+        className={cn(
+          'mt-3 rounded-[8px] border p-3',
+          'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
+        )}
+      >
+        <p className="select-none text-12 font-medium text-[var(--status-bar-meta)]">
+          {t('issueAgent.confirm.submissionMethodLabel')}
+        </p>
+        <p className="mt-1 text-13 leading-snug text-[var(--chat-input-text)]">
+          {pending.submissionIdentity.kind === 'github-user'
+            ? t('issueAgent.confirm.identityGithubUser', {
+                login: pending.submissionIdentity.login,
+              })
+            : t('issueAgent.confirm.identityPlatform', {
+                login: pending.submissionIdentity.login,
+              })}
+        </p>
+        <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
+          {pending.submissionIdentity.kind === 'github-user'
+            ? t('issueAgent.confirm.identityGithubUserHint')
+            : t('issueAgent.confirm.identityPlatformHint')}
+        </p>
+
+        {pending.submissionIdentity.kind === 'platform' && (
+          <>
+            <label
+              htmlFor={publicNameInputId}
+              className="mt-3 block select-none text-12 font-medium text-[var(--status-bar-meta)]"
+            >
+              {t('issueAgent.confirm.publicNameLabel')}
+            </label>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <input
+                id={publicNameInputId}
+                type="text"
+                value={publicName}
+                maxLength={ISSUE_PUBLIC_NAME_MAX}
+                onChange={(event) => updateDraft({ publicName: event.target.value })}
+                className={cn(
+                  'min-w-0 flex-[1_1_220px] rounded-full border px-3 py-2',
+                  'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
+                  'text-13 leading-tight text-[var(--chat-input-text)]',
+                  'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
+                )}
+              />
+              <button
+                type="button"
+                onClick={() => updateDraft({ publicName: t('issueAgent.confirm.anonymous') })}
+                className={cn(
+                  'shrink-0 rounded-full border px-3 py-2',
+                  'border-[var(--chat-input-border)] bg-transparent',
+                  'select-none text-13 font-medium text-[var(--chat-input-text)]',
+                  'transition-colors hover:bg-[var(--chat-input-bg)]',
+                )}
+              >
+                {t('issueAgent.confirm.useAnonymous')}
+              </button>
+            </div>
+            <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
+              {t('issueAgent.confirm.publicNameHint')}
+            </p>
+          </>
+        )}
+      </div>
+
       {/* 只读环境信息(main 侧自动附进 issue body) */}
-      <p className="mt-2 text-12 leading-tight text-[var(--status-bar-meta)]">
-        {pending.submissionIdentity.kind === 'github-user'
-          ? t('issueAgent.confirm.identityGithubUser', {
-              login: pending.submissionIdentity.login,
-            })
-          : t('issueAgent.confirm.identityPlatform', {
-              login: pending.submissionIdentity.login,
-            })}
-      </p>
       {regionCode && (
         <p className="mt-1 text-12 leading-tight text-[var(--status-bar-meta)]">
           {t('issueAgent.confirm.regionLine', { region: regionCode })}

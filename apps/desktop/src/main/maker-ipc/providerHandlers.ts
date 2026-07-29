@@ -26,6 +26,16 @@ import {
 
 import type { LocalCliDetection } from '../../shared/localCliDetect.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
+import {
+  BUILTIN_REFRESHABLE_PROVIDER_IDS,
+  isBuiltinRefreshableProviderId,
+  isProviderModelAutoRefreshRendererTrigger,
+  PROVIDER_MODEL_AUTO_REFRESH_RENDERER_TRIGGERS,
+  type BuiltinRefreshableProviderId,
+  type ProviderModelAutoRefreshRendererTrigger,
+  type ProviderModelAutoRefreshResult,
+  type ProviderModelRefreshResult,
+} from '../../shared/providerModelRefresh.js';
 
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -183,6 +193,12 @@ export interface ProviderHandlerDeps {
   testConnection(input: ProviderTestInput): Promise<ProviderTestResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
+  /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
+  refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
+  /** Renderer 自动刷新提示；Main 侧负责静默失败、冷却和跨窗口去重。 */
+  requestModelsAutoRefresh(
+    trigger: ProviderModelAutoRefreshRendererTrigger,
+  ): Promise<void>;
   /**
    * 重新发现某供应商的动态清单（生产 = anthropic 的 refreshAnthropicModelsFromHttp）。
    * 返回本次结束后的失败归因，成功为 null。不认识的 providerId 直接返回 null（没有
@@ -236,6 +252,33 @@ export interface ProviderHandlerDeps {
    * 单测注入 stub 不碰真实 home)。只 stat 不读内容(规则 23)。
    */
   scanLocalCli(): Promise<LocalCliDetection[]>;
+  /**
+   * 「模型 / 供应商停用」override 写入(生产 = model-disable-store 的 setModelsDisabled /
+   * setProviderDisabled)。写成功后由 handler 统一广播 PROVIDER_CHANGED。
+   */
+  setModelsDisabled(providerId: string, modelIds: readonly string[], disabled: boolean): void;
+  setProviderDisabled(providerId: string, disabled: boolean): void;
+  /**
+   * 「恢复默认」= 删除该供应商的整组停用 override(供应商级 + 全部逐模型条目,含
+   * 指向已下架模型的陈旧条目)。语义遵循 docs/dev-rules/configuration-and-overrides.md
+   * §4:删 override 跟随默认,不写静态快照。生产 = clearProviderDisableOverrides。
+   */
+  clearProviderDisableOverrides?(providerId: string): void;
+  /**
+   * 自定义供应商删除事务内的停用 override 清理(供应商级 + 逐模型):同步清掉并
+   * 返回恢复函数 —— 后续删除步骤失败时把停用状态原样写回;清理自身抛错 = 事务未
+   * 产生破坏,删除整体中止。否则同 id 重建的新供应商会带着旧停用状态复活
+   * (PR #744 review 第十九、二十轮)。
+   */
+  stageClearProviderDisableOverrides?(providerId: string): () => boolean;
+  /**
+   * 当前数据归属账号 id(生产 = getCurrentDataOwnerId)。停用写入是 owner-scoped
+   * 持久化(model-disable-prefs.json 按账号分目录),而 handler 内有异步窗口(串行
+   * 队列排队 + 目录校验的 listProviders await)—— 期间切了账号,写入会落进**新**账号
+   * 的偏好文件。在入口捕获、持久化前复核,变了就拒(PR #744 review 第七轮)。
+   * 可选:未注入(单测最小桩)= 不做归属校验。
+   */
+  currentOwnerId?(): string | null;
 }
 
 /** 校验 PROVIDER_TEST_CONNECTION 入参形状（确定性代码校验，非法直接 INVALID_PARAMS）。 */
@@ -565,6 +608,45 @@ export function registerProviderHandlers(
     },
   );
 
+  registry.handle(
+    MAKER_INVOKE.PROVIDER_MODELS_REFRESH,
+    async (event, providerId: unknown): Promise<ProviderModelRefreshResult> => {
+      assertTrustedProviderMutationSender(event);
+      if (!isBuiltinRefreshableProviderId(providerId)) {
+        throwIpcError(
+          'INVALID_PARAMS',
+          `providerId must be one of: ${BUILTIN_REFRESHABLE_PROVIDER_IDS.join(', ')}`,
+        );
+      }
+      try {
+        await deps.refreshBuiltinModels(providerId);
+      } catch (err) {
+        if (isIpcError(err)) throw err;
+        log.warn('built-in provider model refresh failed', {
+          providerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', `model list refresh failed for '${providerId}'`);
+      }
+      return { ok: true, providerId };
+    },
+  );
+
+  registry.handle(
+    MAKER_INVOKE.PROVIDER_MODELS_AUTO_REFRESH,
+    async (event, trigger: unknown): Promise<ProviderModelAutoRefreshResult> => {
+      assertTrustedProviderMutationSender(event);
+      if (!isProviderModelAutoRefreshRendererTrigger(trigger)) {
+        throwIpcError(
+          'INVALID_PARAMS',
+          `trigger must be one of: ${PROVIDER_MODEL_AUTO_REFRESH_RENDERER_TRIGGERS.join(', ')}`,
+        );
+      }
+      await deps.requestModelsAutoRefresh(trigger);
+      return { ok: true };
+    },
+  );
+
   // CRUD 成功后统一收尾：刷新 active-catalog + 广播。
   async function afterChange(): Promise<void> {
     await deps.refreshCatalog();
@@ -577,6 +659,139 @@ export function registerProviderHandlers(
     }
     deps.assertTrustedSender(event);
   }
+
+  // 「模型 / 供应商停用」override 写入。设置类写操作:仅本机主页面可调(device-link
+  // 合成 event 与不受信 frame 一律拒绝 —— 远程改被控端全局设置越权);守卫缺席按拒绝
+  // 处理(assertTrustedProviderMutationSender)。写的是 main 侧持久化 override,目录
+  // 本身没变,**不**走 refreshCatalog,只广播 PROVIDER_CHANGED 让各端重拉视图。
+  // 入参尺寸上限:本通道会把内容同步序列化落盘(model-disable-prefs.json),sender 守卫
+  // 挡不住 Cindy 自身主页面被 XSS 的情形 —— 超长 id / 超大数组必须在边界拒绝,防止
+  // 拖死 main 或往磁盘灌垃圾、预埋不存在的目录 id(PR #744 review)。上限取目录现实
+  // 规模的宽裕倍数:单 id ≤256 字符(目录 id 实际 <64),一次 ≤512 个模型 id。
+  const MAX_DISABLE_ID_LENGTH = 256;
+  const MAX_DISABLE_MODEL_IDS = 512;
+  // 写入全局串行队列:成员校验里的 listProviders() 是异步的,并发放行时先到的「停用」
+  // 可能在校验等待期间被后到的「启用」(恢复 = 删条目,无目录校验、不等待)超车,
+  // 落盘顺序反转 = 用户最后一次操作被更早的请求覆盖(PR #744 review 第五轮)。
+  // 同步形状校验留在队列外(到达序执行,非法入参不占队列);写操作稀疏且轻,全局
+  // 单队列足够,不需要 per-provider 粒度。
+  let modelDisableMutationTail: Promise<unknown> = Promise.resolve();
+  // 所有 override 写入(停用/启用/删除清理/失败恢复)共用同一串行队列:删除事务的
+  // 清理若绕开队列,在途的停用写(等 listProviders 校验)可能在清理之后落盘,同 id
+  // 重建照旧复活旧停用状态(PR #744 review 第二十一轮)。
+  const enqueueDisableWrite = <T,>(run: () => T | Promise<T>): Promise<T> => {
+    const previous = modelDisableMutationTail;
+    const result = previous.catch(() => undefined).then(run);
+    modelDisableMutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+  registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    if (!input || typeof input !== 'object') throwIpcError('INVALID_PARAMS', 'invalid input');
+    const i = input as Record<string, unknown>;
+    if (
+      typeof i.providerId !== 'string' ||
+      i.providerId.length === 0 ||
+      i.providerId.length > MAX_DISABLE_ID_LENGTH
+    ) {
+      throwIpcError('INVALID_PARAMS', 'providerId required');
+    }
+    if (i.kind !== 'model' && i.kind !== 'provider' && i.kind !== 'reset') {
+      throwIpcError('INVALID_PARAMS', 'kind must be "model", "provider" or "reset"');
+    }
+    // reset = 删除整组 override(恢复默认),无 disabled 语义;其余两种必须显式带方向。
+    if (i.kind !== 'reset' && typeof i.disabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'disabled required');
+    }
+    if (
+      i.kind === 'model' &&
+      (!Array.isArray(i.modelIds) ||
+        i.modelIds.length === 0 ||
+        i.modelIds.length > MAX_DISABLE_MODEL_IDS ||
+        i.modelIds.some(
+          (id) => typeof id !== 'string' || id.length === 0 || id.length > MAX_DISABLE_ID_LENGTH,
+        ))
+    ) {
+      throwIpcError('INVALID_PARAMS', 'modelIds must be a bounded non-empty string[]');
+    }
+    // 目录成员校验(仅 disabled=true 的写入):落盘的是无界 key-value 文件,尺寸校验挡
+    // 不住「合法长度但不存在的 id」被批量预埋。停用必须指向当前目录里真实存在的
+    // provider / model(chat 各 agent 清单 ∪ imageModels ∪ videoModels);恢复启用是
+    // 删条目,故意不校验 —— 目录漂移后用户仍能清掉指向已下架 id 的陈旧 override。
+    const requireCatalogProvider = async (providerId: string): Promise<ProviderView> => {
+      const provider = (await deps.listProviders()).find((p) => p.id === providerId);
+      if (!provider) throwIpcError('INVALID_PARAMS', `unknown providerId "${providerId}"`);
+      return provider;
+    };
+    // 落盘异常统一转结构化 INTERNAL:userData 只读 / 磁盘满等原始 fs 错误可能带内部
+    // 绝对路径,不过 IPC 边界;原文只进 main 日志(PR #744 review 第五轮)。
+    const persist = (write: () => void): void => {
+      try {
+        write();
+      } catch (err) {
+        log.warn('model disable override persist failed', {
+          providerId: i.providerId,
+          kind: i.kind,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to persist model disable override');
+      }
+    };
+    // 归属捕获:store 路径按账号分目录且在 run() 执行时才解析,队列排队 + 目录校验
+    // 的 await 窗口内切账号会把 A 的点击写进 B 的偏好 —— 持久化前复核,变了就拒
+    // (PR #744 review 第七轮)。
+    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const assertSameOwner = (): void => {
+      if (deps.currentOwnerId && (deps.currentOwnerId() ?? null) !== ownerAtIngress) {
+        throwIpcError('INTERNAL', 'active account changed before persisting model disable override');
+      }
+    };
+    const run = async () => {
+      if (i.kind === 'reset') {
+        // 恢复默认 = 删除该供应商整组 override(含指向已下架模型的陈旧条目)。删除
+        // 与「恢复启用」同语义,故意不做目录成员校验 —— 目录漂移后也要能清干净
+        // (configuration-and-overrides.md §4;PR #744 review 第二十四轮)。
+        if (!deps.clearProviderDisableOverrides) {
+          throwIpcError('INTERNAL', 'disable override reset is not wired');
+        }
+        assertSameOwner();
+        persist(() => deps.clearProviderDisableOverrides?.(i.providerId as string));
+        deps.broadcastChanged();
+        return { ok: true };
+      }
+      if (i.kind === 'model') {
+        const modelIds = i.modelIds as string[];
+        if (i.disabled) {
+          const provider = await requireCatalogProvider(i.providerId as string);
+          const known = new Set<string>();
+          for (const list of Object.values(provider.models)) {
+            for (const m of list ?? []) known.add(m.id);
+          }
+          for (const m of provider.imageModels ?? []) known.add(m.id);
+          for (const m of provider.videoModels ?? []) known.add(m.id);
+          const unknown = modelIds.filter((id) => !known.has(id));
+          if (unknown.length > 0) {
+            throwIpcError(
+              'INVALID_PARAMS',
+              `unknown modelIds for provider "${i.providerId}": ${unknown.slice(0, 5).join(', ')}`,
+            );
+          }
+        }
+        assertSameOwner();
+        persist(() => deps.setModelsDisabled(i.providerId as string, modelIds, i.disabled as boolean));
+      } else {
+        if (i.disabled) await requireCatalogProvider(i.providerId as string);
+        assertSameOwner();
+        persist(() => deps.setProviderDisabled(i.providerId as string, i.disabled as boolean));
+      }
+      deps.broadcastChanged();
+      return { ok: true };
+    };
+    return enqueueDisableWrite(run);
+  });
 
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, async (event, input: unknown, keyInput?: unknown) => {
     assertTrustedProviderMutationSender(event);
@@ -696,24 +911,43 @@ export function registerProviderHandlers(
         );
         // OAuth 形态自定义供应商的凭证 blob 一并清掉（apiKey 形态无 blob，幂等无害）。
         let restoreOAuthCredentials: (() => boolean) | null = null;
-        try {
-          restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
-          if (!restoreOAuthCredentials) {
-            throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
+        let restoreDisableOverrides: (() => boolean) | null = null;
+        // 整个删除事务(清 override → 删凭证 → 删配置 → 刷目录)在 disable 写队列**内**
+        // 执行,持队列直到 afterChange 刷完 active-catalog:只把清理入队的话,清理落盘
+        // 后队列即释放,「删除完成前」的窗口里并发 MODEL_DISABLE_SET 仍能从未刷新的
+        // listProviders() 里找到该 provider、预埋新 override,同 id 重建照旧复活停用
+        // 状态。整体持锁后,并发写会排到目录刷新之后,成员校验自然拒绝
+        // (PR #744 review 第二十二轮)。队列内不得再调 enqueueDisableWrite(自等死锁),
+        // 清理与恢复都直接调用。
+        await enqueueDisableWrite(async () => {
+          try {
+            // 停用 override 清理进事务(第二十轮):放在配置删除之前,后续任一步失败
+            // 由恢复函数把停用状态原样写回;清理自身抛错时事务未产生破坏,删除中止,
+            // 不再出现「配置删了、override 残留」让同 id 重建复活旧停用状态。
+            restoreDisableOverrides =
+              deps.stageClearProviderDisableOverrides?.(providerId) ?? null;
+            restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
+            if (!restoreOAuthCredentials) {
+              throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
+            }
+            await deleteCustomProvider(providerId);
+          } catch (err) {
+            const overridesRestored = !restoreDisableOverrides || restoreDisableOverrides();
+            const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
+            const keysRestored = restoreProviderKeys(providerId, keySnapshots);
+            if (!oauthRestored || !keysRestored || !overridesRestored) {
+              throwIpcError(
+                'INTERNAL',
+                'provider deletion failed and existing credentials could not be restored',
+              );
+            }
+            throw err;
           }
-          await deleteCustomProvider(providerId);
-        } catch (err) {
-          const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
-          const keysRestored = restoreProviderKeys(providerId, keySnapshots);
-          if (!oauthRestored || !keysRestored) {
-            throwIpcError(
-              'INTERNAL',
-              'provider deletion failed and existing credentials could not be restored',
-            );
-          }
-          throw err;
-        }
-        await afterChange();
+          // 刷目录也在队列内:队列释放的那一刻 listProviders() 必须已看不到该
+          // provider。afterChange 失败时配置已删,凭证/override 不回写(与改动前
+          // 语义一致 —— 恢复只覆盖删除本身失败的场景)。
+          await afterChange();
+        });
         return { ok: true };
       } finally {
         finishOAuthMutation(providerId, generation);

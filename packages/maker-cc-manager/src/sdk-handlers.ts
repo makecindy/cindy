@@ -3,7 +3,7 @@
  *
  * Each query/* and session/* method on the wire maps 1:1 to a SessionRegistry
  * call. Errors thrown by the registry surface as RPC errors with .code field
- * (SESSION_NOT_FOUND / SESSION_ALREADY_EXISTS / SDK_ERROR / INVALID_PARAMS).
+ * (SESSION_NOT_FOUND / SESSION_ALREADY_EXISTS / SESSION_KILL_PENDING / SESSION_KILL_TIMEOUT / SDK_ERROR / INVALID_PARAMS).
  *
  * The attach lifecycle is handled here too — when a client attaches we install
  * a notify callback on the session that translates events into RpcNotification
@@ -367,6 +367,8 @@ function mapRegistryError(err: unknown): Error {
   const code =
     e.code === 'SESSION_NOT_FOUND' ||
     e.code === 'SESSION_ALREADY_EXISTS' ||
+    e.code === 'SESSION_KILL_PENDING' ||
+    e.code === 'SESSION_KILL_TIMEOUT' ||
     e.code === 'SDK_ERROR' ||
     e.code === 'INVALID_PARAMS'
       ? e.code

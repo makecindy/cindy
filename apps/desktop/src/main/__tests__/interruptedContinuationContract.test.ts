@@ -81,6 +81,11 @@ describe('interrupted continuation enqueue contract', () => {
     expect(sessionViewSource).toMatch(
       /if \(syntheticContinuationPending && sessionInterruptAcked\) \{\s*setSessionInterruptAcked\(false\);\s*\}/,
     );
+    // 恰好两处消费点(error-tail banner 与 interrupted banner 的互斥渲染条件),
+    // 多一处就要回来审视是否绕过了「抑制交给排队/在飞状态」这条契约。
+    // 注:PR #879 加的「挂起状态落回 false 的边沿 → 重算告警红点」effect 走的是
+    // 早退写法(`if (!was || syntheticContinuationPending) return;`),不消费这个
+    // 否定形式,故计数不变。
     expect(matchIndexes(sessionViewSource, /!syntheticContinuationPending/)).toHaveLength(2);
   });
 });

@@ -8,6 +8,7 @@ import {
   gatewayCurrency,
   gatewayMoney,
   legacyUsdMoney,
+  regionalizeUsd,
   usdMoney,
   type RegionalMoney,
 } from '../regionalMoney.js';
@@ -20,32 +21,25 @@ const cnyActual = (amount: number): RegionalMoney => ({
 });
 
 describe('regional money', () => {
-  it('keeps Gateway values exact in the gateway-native USD unit by default', () => {
-    expect(gatewayMoney(3)).toEqual({
-      amount: 3,
-      currency: 'USD',
-      approximate: false,
-      kind: 'actual-cost',
-    });
-    expect(DEFAULT_USAGE_CURRENCY).toBe('USD');
+  it('keeps current-client Gateway values exact in the local ledger currency', () => {
+    expect(gatewayMoney(3).currency).toBe(DEFAULT_USAGE_CURRENCY);
   });
 
-  it('honors a server-declared gateway currency instead of any build-region guess', () => {
-    expect(gatewayCurrency()).toBe('USD');
-    expect(gatewayCurrency(null)).toBe('USD');
-    expect(gatewayCurrency('CNY')).toBe('CNY');
-    expect(gatewayMoney(3, 'actual-cost', 'CNY')).toEqual({
-      amount: 3,
-      currency: 'CNY',
-      approximate: false,
-      kind: 'actual-cost',
-    });
+  it('maps an explicitly supplied region to the Gateway currency contract', () => {
+    expect(gatewayCurrency('global')).toBe('USD');
+    expect(gatewayCurrency('cn')).toBe('CNY');
   });
 
-  it('never converts USD amounts — the unit travels with the data', () => {
+  it('converts non-Gateway USD into the CN ledger at the exact fixed rate', () => {
     expect(usdMoney(3)).toEqual({
       amount: 3,
       currency: 'USD',
+      approximate: false,
+      kind: 'actual-cost',
+    });
+    expect(regionalizeUsd(3, 'cn')).toEqual({
+      amount: 20.1,
+      currency: 'CNY',
       approximate: false,
       kind: 'actual-cost',
     });
@@ -85,7 +79,7 @@ describe('regional money', () => {
 
   it('propagates approximation and reasons while adding same-currency values', () => {
     const total = addRegionalMoney([
-      gatewayMoney(3),
+      usdMoney(3),
       usdMoney(1, 'value-estimate', 'legacy-usd'),
     ]);
     expect(total).toMatchObject({
@@ -98,7 +92,7 @@ describe('regional money', () => {
   });
 
   it('rejects mixed currencies instead of silently combining them', () => {
-    expect(() => addRegionalMoney([cnyActual(1), gatewayMoney(1)])).toThrow(
+    expect(() => addRegionalMoney([cnyActual(1), usdMoney(1)])).toThrow(
       /different currencies/,
     );
   });
@@ -111,15 +105,18 @@ describe('regional money', () => {
       kind: 'value-estimate',
       estimateReasons: ['subscription-value'],
     };
-    const total = addCompatibleRegionalMoney([gatewayMoney(3), staleCnyEstimate]);
+    const total = addCompatibleRegionalMoney([usdMoney(3), staleCnyEstimate]);
 
-    expect(total).toEqual(gatewayMoney(3));
+    expect(total).toEqual(usdMoney(3));
   });
 
-  it('prefers the default usage currency for mixed historical actual costs', () => {
-    const total = addCompatibleRegionalMoney([cnyActual(3), gatewayMoney(2)]);
+  it('prefers an explicit ledger currency for mixed historical actual costs', () => {
+    const total = addCompatibleRegionalMoney(
+      [cnyActual(3), usdMoney(2)],
+      'USD',
+    );
 
-    expect(total).toEqual(gatewayMoney(2));
+    expect(total).toEqual(usdMoney(2));
   });
 
   it('falls back to the first actual currency when nothing matches the preference', () => {

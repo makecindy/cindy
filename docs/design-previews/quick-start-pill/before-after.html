@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quick Start Pill — Before / After Comparison</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+    background: #0f0f0f;
+    color: #e8e8e8;
+    padding: 48px 32px;
+    min-height: 100vh;
+  }
+
+  h1 {
+    text-align: center;
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    letter-spacing: -0.5px;
+  }
+
+  .subtitle {
+    text-align: center;
+    font-size: 14px;
+    color: #888;
+    margin-bottom: 56px;
+  }
+
+  .comparison-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  @media (max-width: 800px) {
+    .comparison-grid { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: #1a1a1a;
+    border-radius: 16px;
+    padding: 28px;
+    border: 1px solid #2a2a2a;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+
+  .panel.before::before { background: #ef4444; }
+  .panel.after::before { background: #22c55e; }
+
+  .panel-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 20px;
+    padding: 4px 10px;
+    border-radius: 6px;
+  }
+
+  .before .panel-label { background: #ef444420; color: #ef4444; }
+  .after .panel-label { background: #22c55e20; color: #22c55e; }
+
+  .panel-desc {
+    font-size: 13px;
+    color: #999;
+    margin-bottom: 20px;
+    line-height: 1.6;
+  }
+
+  /* === Simulated Cindy UI === */
+  .cindy-ui {
+    background: #f7f7f7;
+    border-radius: 12px;
+    padding: 24px;
+  }
+
+  .brand-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+
+  .brand-logo {
+    font-size: 20px;
+    font-weight: 700;
+    color: #1a1a1a;
+    letter-spacing: -0.5px;
+  }
+
+  .brand-logo span { color: #e11d48; }
+
+  /* Chat Input Box */
+  .input-box {
+    background: #fff;
+    border: 1.5px solid #e5e5e5;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+  }
+
+  .input-text {
+    font-size: 14px;
+    line-height: 1.6;
+    color: #1a1a1a;
+    min-height: 24px;
+  }
+
+  .input-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 10px;
+    padding-top: 8px;
+  }
+
+  .toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    color: #999;
+  }
+
+  .toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .vendor-switch {
+    display: flex;
+    background: #f0f0f0;
+    border-radius: 6px;
+    padding: 2px;
+    font-size: 11px;
+  }
+
+  .vendor-switch span {
+    padding: 3px 8px;
+    border-radius: 4px;
+    color: #666;
+  }
+
+  .vendor-switch span.active {
+    background: #fff;
+    color: #1a1a1a;
+    font-weight: 500;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  }
+
+  .model-label {
+    font-size: 11px;
+    color: #555;
+    font-weight: 500;
+  }
+
+  /* The "限时免费" badge — exists in both before & after */
+  .free-badge {
+    display: inline-flex;
+    align-items: center;
+    background: #1a1a1a;
+    color: #fff;
+    border-radius: 9999px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  .send-btn {
+    width: 28px;
+    height: 28px;
+    background: #1a1a1a;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .send-btn::after {
+    content: '▶';
+    color: #fff;
+    font-size: 10px;
+  }
+
+  /* Quick Start Cards */
+  .quick-start-section {
+    margin-top: 16px;
+  }
+
+  .quick-start-title {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 10px;
+    font-weight: 500;
+  }
+
+  .cards-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .qs-card {
+    background: #fff;
+    border: 1px solid #eee;
+    border-radius: 10px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 72px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+
+  .qs-card:hover { border-color: #ccc; }
+
+  .qs-card .icon {
+    font-size: 16px;
+    color: #aaa;
+    margin-bottom: 12px;
+  }
+
+  .qs-card .text {
+    font-size: 12px;
+    color: #333;
+    line-height: 1.4;
+  }
+
+  /* Highlight the active card */
+  .qs-card.active {
+    border-color: #e11d48;
+    box-shadow: 0 0 0 1px #e11d4840;
+  }
+
+  /* ===== THE KEY DIFFERENCE ===== */
+
+  /* BEFORE: plain text */
+  .before .input-text {
+    color: #1a1a1a;
+    font-size: 14px;
+    font-weight: 400;
+  }
+
+  /* AFTER: pill badge */
+  .after .quick-start-pill {
+    display: inline;
+    background: #1a1a1a;
+    color: #fff;
+    border-radius: 9999px;
+    padding: 2px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.5;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  /* Callout arrow */
+  .callout {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  .before .callout {
+    background: #ef444410;
+    border: 1px solid #ef444430;
+    color: #f87171;
+  }
+
+  .after .callout {
+    background: #22c55e10;
+    border: 1px solid #22c55e30;
+    color: #4ade80;
+  }
+
+  .callout strong { font-weight: 700; }
+
+  /* Visual diff indicator */
+  .diff-highlight {
+    position: relative;
+    display: inline-block;
+  }
+
+  .before .diff-highlight::after {
+    content: '';
+    position: absolute;
+    inset: -3px -4px;
+    border: 2px dashed #ef4444;
+    border-radius: 4px;
+    animation: pulse-red 2s ease-in-out infinite;
+  }
+
+  .after .diff-highlight::after {
+    content: '';
+    position: absolute;
+    inset: -3px -4px;
+    border: 2px dashed #22c55e;
+    border-radius: 9999px;
+    animation: pulse-green 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-red {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  @keyframes pulse-green {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* Bottom behavior table */
+  .behavior-section {
+    max-width: 1100px;
+    margin: 56px auto 0;
+  }
+
+  .behavior-section h2 {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 16px;
+  }
+
+  .behavior-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px;
+    background: #1a1a1a;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #2a2a2a;
+  }
+
+  .behavior-table th {
+    background: #222;
+    padding: 10px 16px;
+    text-align: left;
+    font-weight: 600;
+    color: #ccc;
+    border-bottom: 1px solid #333;
+  }
+
+  .behavior-table td {
+    padding: 10px 16px;
+    border-bottom: 1px solid #222;
+    color: #bbb;
+  }
+
+  .behavior-table tr:last-child td { border-bottom: none; }
+
+  .behavior-table td:first-child { font-weight: 500; color: #e8e8e8; }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .tag-green { background: #22c55e20; color: #4ade80; }
+  .tag-blue { background: #3b82f620; color: #60a5fa; }
+</style>
+</head>
+<body>
+
+<h1>Quick Start Pill 样式改动</h1>
+<p class="subtitle">feat(composer): 快速开始预填文本以黑底白字胶囊样式展示</p>
+
+<div class="comparison-grid">
+
+  <!-- ===== BEFORE ===== -->
+  <div class="panel before">
+    <div class="panel-label">✕ Before</div>
+    <p class="panel-desc">点击卡片后，预填文本以<strong style="color:#f87171">普通文字</strong>形式出现在输入框，与手动输入完全一样，无法区分来源。</p>
+
+    <div class="cindy-ui">
+      <div class="brand-row">
+        <span class="brand-logo">CINDY<span>.</span></span>
+      </div>
+
+      <div class="input-box">
+        <div class="input-text">
+          <span class="diff-highlight">探索并理解代码</span>
+        </div>
+        <div class="input-toolbar">
+          <div class="toolbar-left">
+            <span>+</span>
+            <span>✨ 自动审批</span>
+          </div>
+          <div class="toolbar-right">
+            <div class="vendor-switch"><span class="active">Claude</span><span>Codex</span></div>
+            <span class="model-label">Qwen 3.8 Max Preview</span>
+            <span class="free-badge">限时免费</span>
+            <div class="send-btn"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="quick-start-section">
+        <div class="quick-start-title">快速开始</div>
+        <div class="cards-grid">
+          <div class="qs-card active"><span class="icon">🔍</span><span class="text">探索并理解代码</span></div>
+          <div class="qs-card"><span class="icon">⟨/⟩</span><span class="text">构建新功能、应用或工具</span></div>
+          <div class="qs-card"><span class="icon">💬</span><span class="text">审查代码并提出修改建议</span></div>
+          <div class="qs-card"><span class="icon">🔧</span><span class="text">修复问题和失败</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>问题：</strong>输入框里的「探索并理解代码」看起来和用户自己打的一模一样——是预填的？还是我之前写的？分不清。
+    </div>
+  </div>
+
+  <!-- ===== AFTER ===== -->
+  <div class="panel after">
+    <div class="panel-label">✓ After</div>
+    <p class="panel-desc">点击卡片后，预填文本以<strong style="color:#4ade80">黑底白字胶囊标签</strong>展示，与「限时免费」徽章同风格，一眼可辨。</p>
+
+    <div class="cindy-ui">
+      <div class="brand-row">
+        <span class="brand-logo">CINDY<span>.</span></span>
+      </div>
+
+      <div class="input-box">
+        <div class="input-text">
+          <span class="diff-highlight"><span class="quick-start-pill">探索并理解代码</span></span>
+        </div>
+        <div class="input-toolbar">
+          <div class="toolbar-left">
+            <span>+</span>
+            <span>✨ 自动审批</span>
+          </div>
+          <div class="toolbar-right">
+            <div class="vendor-switch"><span class="active">Claude</span><span>Codex</span></div>
+            <span class="model-label">Qwen 3.8 Max Preview</span>
+            <span class="free-badge">限时免费</span>
+            <div class="send-btn"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="quick-start-section">
+        <div class="quick-start-title">快速开始</div>
+        <div class="cards-grid">
+          <div class="qs-card active"><span class="icon">🔍</span><span class="text">探索并理解代码</span></div>
+          <div class="qs-card"><span class="icon">⟨/⟩</span><span class="text">构建新功能、应用或工具</span></div>
+          <div class="qs-card"><span class="icon">💬</span><span class="text">审查代码并提出修改建议</span></div>
+          <div class="qs-card"><span class="icon">🔧</span><span class="text">修复问题和失败</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>改进：</strong>胶囊标签 = 来自卡片的预填提示。和普通文字形成明确视觉对比，不再混淆。与右下角「限时免费」徽章同设计语言。
+    </div>
+  </div>
+
+</div>
+
+<!-- Behavior Table -->
+<div class="behavior-section">
+  <h2>交互行为</h2>
+  <table class="behavior-table">
+    <thead>
+      <tr><th>用户操作</th><th>表现</th><th>技术实现</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>点击快速开始卡片</td>
+        <td>文本以 <span class="tag tag-green">黑底白字胶囊</span> 出现在输入框</td>
+        <td>quickStartPill mark 包裹 text node</td>
+      </tr>
+      <tr>
+        <td>在胶囊右侧继续输入</td>
+        <td>新文字为 <span class="tag tag-blue">普通样式</span>，胶囊范围不变</td>
+        <td>mark inclusive=false</td>
+      </tr>
+      <tr>
+        <td>Backspace 删除胶囊内文字</td>
+        <td>mark 随文字一起消失</td>
+        <td>ProseMirror 标准 mark 行为</td>
+      </tr>
+      <tr>
+        <td>按 Send 发送</td>
+        <td>agent 收到的仍是纯文本，无额外标记</td>
+        <td>serializeEditorContent 只取 textContent</td>
+      </tr>
+      <tr>
+        <td>切走标签页再切回</td>
+        <td>胶囊样式保留</td>
+        <td>mark 持久化在 Tiptap JSON draft 中</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>

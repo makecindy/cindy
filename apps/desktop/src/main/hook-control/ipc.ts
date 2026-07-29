@@ -67,6 +67,7 @@ import {
 import { createHookTransport } from './transport.js';
 import { registerSlackToolBridge, unregisterSlackToolBridge } from './slackToolBridge.js';
 import { createHookBindingStore } from './bindings.js';
+import { buildGroupContextPrefix, resetGroupContextCursors } from './groupWindow.js';
 import { createHookDispatcher } from './dispatcher.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
 import { resolveHookInteraction } from './interactions.js';
@@ -81,6 +82,7 @@ const log = createLogger('hook-control');
 let store: SlackHookStore | null = null;
 let manager: HookControlManager | null = null;
 let disposeAuthListener: (() => void) | null = null;
+let observedAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 let codexMcpRefreshPending = false;
 let codexMcpRefreshRunning = false;
 let codexMcpRefreshRetryTimer: NodeJS.Timeout | null = null;
@@ -267,6 +269,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
         log,
       }),
       runner: createMakerHookSessionRunner({ log }),
+      buildContextPrefix: buildGroupContextPrefix,
       // 新建 hook 会话默认预建独立 worktree(并发隔离); deps 组装与
       // maker-ipc/register.ts 的 use_worktree 分支同款。失败由 dispatcher
       // 回退共享目录。
@@ -772,13 +775,21 @@ export function registerHookControlIpc(): void {
   // fail-closed backstop for signed-out/local sessions; activation waits for
   // the next owner DB readiness callback (with app:ready-for-bot as a
   // compatibility retry).
+  observedAuthRealm = authManager.getActiveAuthRealm();
   disposeAuthListener = authManager.onAuthStateChange(() => {
+    const nextRealm = authManager.getActiveAuthRealm();
+    const realmChanged = observedAuthRealm !== null && observedAuthRealm !== nextRealm;
+    observedAuthRealm = nextRealm;
     if (!hookControlAvailable()) {
       void stopHookControlAccount().catch((err: unknown) => {
         log.warn(
           `hook-control account deactivation failed (${err instanceof Error ? err.name : 'unknown'})`,
         );
       });
+    } else if (realmChanged) {
+      // manager.sync() 同时 dispose 两条旧 transport，并用当前清单重读
+      // Slack / Telegram URL；authManager 已在发通知前提交新 token。
+      manager?.sync();
     }
   });
 
@@ -788,6 +799,8 @@ export function registerHookControlIpc(): void {
 /** Called after the current account DB is ready; app:ready-for-bot may retry it. */
 export function startHookControlAccount(): void {
   if (!hookControlAvailable()) return;
+  // 群窗口 TTL 兜底清扫在 manager.activateAccount 内执行(纳入账号级
+  // pendingAccountOps, 登出/切号不打断在途落库)。
   ensureInstances().manager.activateAccount();
 }
 
@@ -799,6 +812,7 @@ export async function stopHookControlAccount(): Promise<void> {
 /** Stop and discard all state tied to the current data owner; IPC stays registered. */
 export function resetHookControlOwnerBoundary(): void {
   unregisterSlackToolBridge();
+  resetGroupContextCursors();
   manager?.dispose();
   manager = null;
   store = null;
@@ -811,5 +825,6 @@ export function disposeHookControl(): void {
   }
   disposeAuthListener?.();
   disposeAuthListener = null;
+  observedAuthRealm = null;
   resetHookControlOwnerBoundary();
 }

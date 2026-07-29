@@ -262,12 +262,15 @@ describe('openSystemBrowserAuthorization 分流', () => {
     '\n',
   );
 
-  it('按端点清单字段分流,空值回落 loopback(默认关闭)', () => {
+  it('按本次登录区域的端点清单分流,空值回落 loopback(默认关闭)', () => {
     const start = source.indexOf('async function openSystemBrowserAuthorization(');
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf('\n}', start));
 
-    expect(body).toContain("getClientEndpoint('authDesktopCallbackUrl')");
+    expect(body).toContain('pendingAuthRealm ?? activeAuthRealm');
+    expect(body).toContain(
+      "getClientEndpointForRealm(loginRealm, 'authDesktopCallbackUrl')",
+    );
     // 三元方向:非空 → hosted,空 → loopback。写反即所有存量用户登录中断。
     expect(body).toContain('? openHostedBrowserAuthorization(');
     expect(body).toContain(': openLoopbackBrowserAuthorization(');

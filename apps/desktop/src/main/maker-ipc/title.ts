@@ -20,6 +20,8 @@ import { eq } from 'drizzle-orm';
 import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import type { AgentKind } from '@cindy/maker-core';
 
+import type { SupportedLocale } from '../../shared/locale.js';
+import { getResolvedMainLocale } from '../i18n.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
@@ -41,8 +43,21 @@ import {
 
 const log = createLogger('maker-ipc/title');
 
-const TITLE_PROMPT_TEMPLATE = (msg: string) =>
-  `为以下用户消息生成一个简短的对话标题（不超过20个字，不要加引号，不要加标点，直接输出标题）：\n\n${msg.slice(0, 200)}`;
+const TITLE_LANGUAGE_BY_LOCALE: Record<SupportedLocale, string> = {
+  'zh-CN': 'Simplified Chinese',
+  en: 'English',
+  ja: 'Japanese',
+  ko: 'Korean',
+};
+
+const TITLE_PROMPT_TEMPLATE = (msg: string, locale: SupportedLocale) =>
+  [
+    'Generate a concise title for the user message below.',
+    `Write the title in ${TITLE_LANGUAGE_BY_LOCALE[locale]}.`,
+    'Use at most 20 characters. Output only the title, without quotation marks or ending punctuation.',
+    '',
+    msg.slice(0, 200),
+  ].join('\n');
 
 /** regenerate 素材窗口:最近 N 条非空 user/assistant 消息(不含被过滤的工具行)。 */
 const REGENERATE_RECENT_WINDOW = 8;
@@ -55,17 +70,23 @@ const REGENERATE_ASSISTANT_SLICE = 400;
 
 /**
  * Magic 重命名的 prompt:素材是「对话开场(第一条用户消息)+ 最近几轮 transcript」,
- * 语言跟随对话内容。开场只在最近窗口没覆盖到会话开头时单独给出(短会话不重复);
+ * 标题语言跟随界面设置。开场只在最近窗口没覆盖到会话开头时单独给出(短会话不重复);
  * transcript 按时间正序,模型能自然看出最后一条是否只是"继续"式短追问,另用一句
  * 指令兜底,避免标题被短追问带偏。
  */
-const REGENERATE_TITLE_PROMPT = (opening: string | null, transcript: string) =>
+const REGENERATE_TITLE_PROMPT = (
+  opening: string | null,
+  transcript: string,
+  locale: SupportedLocale,
+) =>
   [
-    '根据以下对话内容，用与对话相同的语言生成一个简短的对话标题（不超过20个字，不要加引号，不要加标点，直接输出标题）。',
-    '标题要概括整个对话的核心主题，并兼顾最新进展；如果用户最后的消息只是「继续」「好的」这类简短确认，不要据此起题。',
+    'Generate a concise title for the conversation below.',
+    `Write the title in ${TITLE_LANGUAGE_BY_LOCALE[locale]}.`,
+    'Use at most 20 characters. Output only the title, without quotation marks or ending punctuation.',
+    'Summarize the core topic of the whole conversation while reflecting the latest progress. If the final user message is only a brief confirmation such as "continue" or "okay", do not base the title on it.',
     '',
-    ...(opening ? [`对话开场: ${opening}`, ''] : []),
-    '最近的对话:',
+    ...(opening ? [`Conversation opening: ${opening}`, ''] : []),
+    'Recent conversation:',
     transcript,
   ].join('\n');
 
@@ -111,7 +132,7 @@ export async function generateMakerSessionTitle(
     {
       sessionId: sessionId ?? '',
       agentKind,
-      prompt: TITLE_PROMPT_TEMPLATE(trimmed),
+      prompt: TITLE_PROMPT_TEMPLATE(trimmed, getResolvedMainLocale()),
     },
     {
       readSessionProviderId: readSessionProviderIdFromDb,
@@ -178,15 +199,15 @@ export async function regenerateMakerSessionTitle(
     const transcript = recent
       .map((m) =>
         m.role === 'user'
-          ? `用户: ${m.text.slice(0, REGENERATE_USER_SLICE)}`
-          : `助手: ${m.text.slice(0, REGENERATE_ASSISTANT_SLICE)}`,
+          ? `User: ${m.text.slice(0, REGENERATE_USER_SLICE)}`
+          : `Assistant: ${m.text.slice(0, REGENERATE_ASSISTANT_SLICE)}`,
       )
       .join('\n');
     const title = (
       await deps.generateTitle(
         sessionId,
         agentKind,
-        REGENERATE_TITLE_PROMPT(openingText, transcript),
+        REGENERATE_TITLE_PROMPT(openingText, transcript, getResolvedMainLocale()),
       )
     )?.trim();
     return title || null;

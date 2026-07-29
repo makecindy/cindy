@@ -248,9 +248,12 @@ function sanitize(raw: unknown): NewMakerDraft {
   const collabRaw = (r as { collab?: Partial<CollabDraft> }).collab;
   const collabWorker: CollabDraft['worker'] =
     collabRaw?.worker === 'cc' ? 'cc' : 'codex';
-  // remote 项目也禁用协同(同 patchDraft 兜底):worker 创建只带 workingDir、拿不到
-  // remoteHostId,会起一个指向远端路径的本地 worker。远程协同是独立特性,未落地前一律 OFF。
-  const collabEnabled = collabRaw?.enabled === true && workingDir != null && remoteHostId == null;
+  // remote 项目的协同 codex / cc draft 均放行:worker 创建已继承 remoteHostId
+  // (在同一台远端主机 spawn,见 OrcaLeadSessionSnapshot.remoteHostId),两端
+  // 远端 MCP 注入均已落地 (codex daemon config + cc per-query http 注入)。
+  // 本地项目(remoteHostId==null)不受影响。
+  const collabEnabled =
+    collabRaw?.enabled === true && workingDir != null;
   // workerConfig 防御性解析:model 缺失/为空则整块丢弃(不存半截配置),createSession 回退默认。
   const workerConfig: CollabWorkerConfig | undefined = (() => {
     const wc = collabRaw?.workerConfig;
@@ -407,13 +410,8 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   if (next.deviceLinkDeviceId != null && next.collab.enabled) {
     next.collab = { ...next.collab, enabled: false };
   }
-  // 互斥兜底: remote 项目 draft 不支持协同。collab worker 由 OrcaLifecycleService 用 lead 的
-  // workingDir 创建,但不会带上 remoteHostId,于是 remote 项目
-  // 会起一个指向远端路径的本地 worker(报错或误操作本机同名目录)。远程协同是独立特性,
-  // 未落地前:只要 draft 带 remoteHostId,一律强制 collab 关闭(无论从哪条路径写入)。
-  if (next.remoteHostId != null && next.collab.enabled) {
-    next.collab = { ...next.collab, enabled: false };
-  }
+  // remote 项目 draft 的协同 codex / cc 均已接通(worker 创建已继承
+  // remoteHostId,远端 MCP 注入两端落地),不再按 vendor 强制关闭。
   currentDraft = next;
   scheduleWrite(currentDraft);
   emit();

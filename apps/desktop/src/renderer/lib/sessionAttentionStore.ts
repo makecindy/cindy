@@ -17,14 +17,15 @@ import {
 export type AttentionKind = 'done' | 'awaiting' | 'error';
 
 /**
- * 清除 attention 的意图。「已读以 App 内真实展示为准」(2026-07 产品反馈):
- *   - 'passive'  导航 / 窗口聚焦 / 路由可见等被动信号 —— **不允许**清 'error' 红角标,
- *                error 必须等报错 UI 真实展示(useErrorReadAck)或用户显式操作。
- *   - 'explicit' 用户确实看到了内容:报错 banner 聚焦驻留、运行历史面板展示失败状态、
- *                「全部标为已读」等显式动作 —— 可清任何 kind。
+ * 清除 attention 的意图。'error' 红角标是**未处理告警**的派生投影(2026-07 统一,
+ * 见 hooks/usePendingAlertAttention.ts):
+ *   - 'passive'  导航 / 窗口聚焦 / 路由可见等被动信号 —— **不允许**清 'error' 红角标。
+ *                展示不构成已读:横幅还在就说明告警未处理,红点必须留着。
+ *   - 'explicit' 告警已被处置(用户操作了报错横幅)或告警本身已消失(pending-alerts
+ *                派生收敛、运行历史面板的失败已读、「全部标为已读」)—— 可清任何 kind。
  * intent 随 IPC 透传到 main(appBadgeService → 灵动岛的 explicit/passive ack),
  * main 侧对 passive 同样免疫,双层兜底(renderer 重载丢 kind 后 main 仍安全)。
- * 默认 'passive'(fail-safe):忘了声明的新调用点不会误吞未读报错。
+ * 默认 'passive'(fail-safe):忘了声明的新调用点不会误吞未处理的报错。
  */
 export type AttentionClearIntent = 'explicit' | 'passive';
 
@@ -54,9 +55,9 @@ function markSystemAttention(sessionId: string): void {
 // 发生在「展示中的消息窗口尚未包含触发事件对应内容」的时刻(加载转圈、复访残留缓存、
 // turn 刚完成但终帧还没对账回来)。此刻放行等于把用户没看到的内容标成已读。
 // 语义(咽喉级,所有调用点统一获得):远程回执**一律入队**,按 intent 分级放行:
-//   - explicit(报错 UI 真实展示 / 「全部标为已读」等显式动作):ready(视图挂载且
-//     historyLoaded)即放行——展示证据来自触发源本身,且 explicit 之后未必再有
-//     sync,若也卡新鲜度会饿死。
+//   - explicit(用户处置报错横幅 / 「全部标为已读」等显式动作):origin 可解析即发,
+//     不卡任何门槛——用户动手处置本身就是最强证据,且 explicit 之后未必再有 sync,
+//     若也卡新鲜度会饿死。
 //   - passive(导航 / 聚焦类):除 ready 外还需「新鲜」——存在一次**入队之后才启动**
 //     且已成功完成的 sync(completedGen > enqueueGen;入队时已在飞的 sync 数据可能
 //     早于触发事件,不算数);且被控端处于 error 未读时按下不发(error 免疫,见 flush)。
@@ -66,34 +67,31 @@ function markSystemAttention(sessionId: string): void {
 // 重复入队按最强 intent 合并(explicit > passive),enqueueGen 取较大值(回执覆盖到
 // 最晚一次请求的内容)。
 /**
- * 远程回执的放行等级(强 → 弱),由 intent + 来源(source)归并而来:
- *   - 'explicit-action':用户显式标已读动作(RunHistoryPane / 自动化菜单「全部标为
- *     已读」/ orphan 角标清理)。目标会话可能根本没打开,origin 可解析即发,不卡
- *     任何门槛。
- *   - 'explicit-display':视图内真实展示产生的 explicit(useErrorReadAck 报错 banner
- *     驻留)。banner 可能来自复访时的缓存旧错误,需等本次访问的对账完成
- *     (completedGen >= enqueueGen,入队时在飞的视图对账完成即算)确认展示内容
- *     不落后于被控端,才可清掉被控端的 error 未读。
+ * 远程回执的放行等级(强 → 弱):
+ *   - 'explicit-action':用户显式动作(处置报错横幅 / RunHistoryPane / 自动化菜单
+ *     「全部标为已读」/ orphan 角标清理)。目标会话可能根本没打开,origin 可解析
+ *     即发,不卡任何门槛 —— 用户都动手了,内容显然已被看到。
  *   - 'passive':导航 / 聚焦类,三道门槛(display-ready / 入队后新鲜 sync / error
  *     免疫)全部生效。
+ *
+ * 2026-07 统一后这里曾有第三档 'explicit-display'(banner 在视图内驻留即回执),
+ * 连带一套 releaseGen 对账门槛用于确认「展示的不是复访缓存的旧错误」。红点改成
+ * 未处理告警的派生投影后,展示不再产生已读,该档失去全部触发源,已删除。被控端的
+ * error 未读现在由控制端的处置动作(经 ack-interrupted / dismiss-error 窄写落被控端
+ * DB)触发它自己的派生收敛来清 —— 不需要「看到即回执」这条腿。
  */
-type RemoteReceiptClass = 'explicit-action' | 'explicit-display' | 'passive';
+type RemoteReceiptClass = 'explicit-action' | 'passive';
 
 const RECEIPT_CLASS_RANK: Record<RemoteReceiptClass, number> = {
-  'explicit-action': 2,
-  'explicit-display': 1,
+  'explicit-action': 1,
   passive: 0,
 };
 
 interface PendingRemoteReceipt {
   receiptClass: RemoteReceiptClass;
   /**
-   * 放行代:completedGen >= releaseGen 才可发(explicit-action 不看)。入队时计算:
-   *   - passive:startedGen + 1(必须有入队**之后才启动**的 sync 完成);
-   *   - explicit-display:有在飞 sync(startedGen > completedGen)→ startedGen
-   *     (本次访问的在飞对账完成即算,它拉回的就是当前展示窗口);无在飞 →
-   *     startedGen + 1(sticky origin 窗口等场景:上一次访问的旧 completedGen
-   *     不得放行,必须等 origin 回来后新一轮 sync)。
+   * 放行代:completedGen >= releaseGen 才可发(explicit-action 不看)。
+   * passive 取 startedGen + 1(必须有入队**之后才启动**的 sync 完成)。
    * 重复入队取 max(越晚的请求要求越新的数据)。
    */
   releaseGen: number;
@@ -217,20 +215,16 @@ function flushPendingRemoteReceipt(sessionId: string): void {
   // deviceId 会把回执静默丢掉。保持挂起,origin 回来后的 flush 触发点再放。
   if (getSessionDeviceId(sessionId) === undefined) return;
   const gen = syncGenOf(sessionId);
-  if (pending.receiptClass === 'explicit-display') {
-    // 视图内展示产生的 explicit:等放行代落地(语义见 releaseGen 注释),确认展示
-    // 内容不落后于被控端;对账失败由下一轮触发补齐。视图必然已挂载,ready 仅作防御。
-    if (!remoteReceiptReadySessionIds.has(sessionId)) return;
-    if (gen.completedGen < pending.releaseGen) return;
-  } else if (pending.receiptClass === 'passive') {
+  if (pending.receiptClass === 'passive') {
     // passive 三道门槛:display-ready、放行代(入队后才启动且完成的 sync)、error 免疫。
     if (!remoteReceiptReadySessionIds.has(sessionId)) return;
     if (gen.completedGen < pending.releaseGen) return;
-    // 「已读以真实展示为准」的 error 免疫,远程腿同样成立:被控端处于 error 未读时,
-    // passive 回执按下不发(被控端 badge set 无 kind 概念,passive 打过去会先清 Dock
-    // 角标)——挂起等 explicit 升级,或 error 未读态自行消退后由下一轮 sync 放行。
-    // 镜像缺条目(推送丢失 / 未达)时回落消息层终止错误探针:探到 error 同样按下
-    // 不发,等 useErrorReadAck 的 explicit-display(banner 真实展示)放行,fail-safe。
+    // error 免疫:被控端处于 error 未读时 passive 回执按下不发(被控端 badge set 无
+    // kind 概念,passive 打过去会先清 Dock 角标)——挂起等 explicit 升级,或 error
+    // 未读态自行消退后由下一轮 sync 放行。
+    // 镜像缺条目(推送丢失 / 未达)时回落消息层终止错误探针:探到 error 同样按下不发,
+    // 等用户处置横幅产生的 explicit-action 放行,fail-safe。告警一直不处置就一直挂着
+    // (对应「未处理」语义正确),开销是一个 Map 条目。
     const activity = getRemoteSessionActivity(sessionId);
     const errorUnread = activity
       ? activity.phase === 'error' && activity.attention
@@ -245,7 +239,7 @@ function flushPendingRemoteReceipt(sessionId: string): void {
 /**
  * 远程回执发送腿:与手机端回执同一套重试语义——瞬态失败(离线 / relay 超时等)经
  * withTransientRemoteRetry 原地退避重试;**耗尽后按原 intent 恢复入队**,等重连后的
- * flush 触发点(sync 完成 / 新清点)补发——尤其 explicit(useErrorReadAck 只发一次,
+ * flush 触发点(sync 完成 / 新清点)补发——尤其 explicit(用户处置横幅只发一次,
  * 丢了就没有第二次,而 error 免疫又会挡住后续 passive)绝不能被吞。永久失败
  * (老被控端 CHANNEL_NOT_ALLOWED)吞掉降级(仅本地清点)。
  */
@@ -313,14 +307,13 @@ function sendRemoteReceipt(sessionId: string, receiptClass: RemoteReceiptClass):
 export function clearSystemSessionAttention(
   sessionId: string,
   intent: AttentionClearIntent = 'passive',
-  source: 'display' | 'action' = 'action',
 ): void {
   if (typeof window === 'undefined') return;
   const clear = window.electronAPI?.notificationClearSessionAttention;
   if (clear) void clear(sessionId, intent).catch(() => undefined);
   // 「已知远程」判定放宽:origin 映射(sessionId→deviceId)在 relay 重连 / bootstrap
   // 窗口可能被暂清,而会话视图靠 sticky remoteDeviceId 仍在展示。此窗口内的回执
-  // (尤其 useErrorReadAck 的 explicit)不能当成本机会话丢弃——只要本咽喉还留有该
+  // (尤其用户处置横幅产生的 explicit)不能当成本机会话丢弃——只要本咽喉还留有该
   // 会话的远程痕迹(display-ready / 同步代),照常入队;sendRemoteReceipt 发送时
   // 重新解析 deviceId,origin 回来后由既有 flush 触发点(passive 重跑 / sync 完成)
   // 补发。纯本机会话三个信号都不会有,行为不变。
@@ -329,13 +322,8 @@ export function clearSystemSessionAttention(
     || remoteReceiptReadySessionIds.has(sessionId)
     || remoteReceiptSyncGens.has(sessionId);
   if (!knownRemote) return;
-  const receiptClass: RemoteReceiptClass =
-    intent === 'explicit' ? (source === 'display' ? 'explicit-display' : 'explicit-action') : 'passive';
-  const gen = syncGenOf(sessionId);
-  const releaseGen =
-    receiptClass === 'explicit-display' && gen.startedGen > gen.completedGen
-      ? gen.startedGen
-      : gen.startedGen + 1;
+  const receiptClass: RemoteReceiptClass = intent === 'explicit' ? 'explicit-action' : 'passive';
+  const releaseGen = syncGenOf(sessionId).startedGen + 1;
   const prev = pendingRemoteReceipts.get(sessionId);
   pendingRemoteReceipts.set(sessionId, {
     receiptClass:
@@ -352,12 +340,8 @@ export function clearSystemSessionAttention(
   flushPendingRemoteReceipt(sessionId);
 }
 
-function clearSystemAttention(
-  sessionId: string,
-  intent: AttentionClearIntent,
-  source: 'display' | 'action' = 'action',
-): void {
-  clearSystemSessionAttention(sessionId, intent, source);
+function clearSystemAttention(sessionId: string, intent: AttentionClearIntent): void {
+  clearSystemSessionAttention(sessionId, intent);
 }
 
 export function subscribeSessionAttention(listener: () => void): () => void {
@@ -442,22 +426,22 @@ export function addSessionAttention(sessionId: string, kind: AttentionKind = 'do
 /**
  * 清某会话的 attention。默认 intent='passive':'error' 红角标对被动清除免疫
  * (不删、不发 IPC),守卫内聚在 store 这一个咽喉,调用点无需各自记 kind 判断;
- * 真正看到内容的路径显式传 intent:'explicit' 才能清 error。
+ * 只有告警被**处置**(用户操作横幅)或告警本身消失(pending-alerts 派生收敛)的
+ * 路径才显式传 intent:'explicit' 清 error。展示不构成清除理由。
  */
 export function clearSessionAttention(
   sessionId: string,
-  options: { intent?: AttentionClearIntent; source?: 'display' | 'action' } = {},
+  options: { intent?: AttentionClearIntent } = {},
 ): boolean {
   const intent = options.intent ?? 'passive';
   if (intent === 'passive' && attentionMap.get(sessionId) === 'error') return false;
   const removed = attentionMap.delete(sessionId);
   if (removed) emit();
-  // explicit = 用户真实已读:即使本地没有角标条目(renderer 重载丢内存态 / 未读
-  // 来自 schedule 元数据),main 侧灵动岛可能仍挂着未读 error,桥接必须照发;
-  // passive 保持原语义(真的删了本地条目才同步 badge)。source 透传给远程回执分级
-  // (display = 视图内真实展示产生,远程腿需等本次访问对账;缺省 action)。
+  // explicit = 告警已处置 / 已消失:即使本地没有角标条目(renderer 重载丢内存态 /
+  // 未读来自 schedule 元数据),main 侧灵动岛可能仍挂着未读 error,桥接必须照发;
+  // passive 保持原语义(真的删了本地条目才同步 badge)。
   if (removed || intent === 'explicit') {
-    clearSystemAttention(sessionId, intent, options.source ?? 'action');
+    clearSystemAttention(sessionId, intent);
   }
   return removed;
 }

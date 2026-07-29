@@ -258,18 +258,57 @@ export function classifyModel(model: { id: string; group?: string; mode?: string
 /**
  * 该模型能不能进 Agent `availableModels` / 新对话模型选择器(issue #882 第 3 点)。
  * `mode` 存在时只信 CHAT_CAPABLE_MODES(chat / responses——Codex 走 Responses
- * API 的语言模型,不是非聊天端点,2026-07 review 第 16 轮);缺省时按
- * **id 正则**(categorize)判定,故意不走 groupOf ——`group` 是展示分组/品牌,
- * 不是能力类型(issue #882 明确要求两者独立),网关的展示元数据完全可能把
- * `gpt-image-2` 这类图像模型的 `group` 标成 'gpt'(品牌上归类到 GPT 家族,
- * 方便浏览),这里若信了 group 会把非聊天模型误判为可用(2026-07 review)。
- * 是否落进厂商聊天组(anthropic/gpt/gpt-budget/grok/google/china)只用于
- * 兜底判断,保证"mode 还没覆盖到、但已经在正常工作的网关聊天模型"不会因为
- * 这次改动突然从 availableModels 消失(见 classification.test.ts 的回归锁)。
+ * API 的语言模型,不是非聊天端点,2026-07 review 第 16 轮)。
+ *
+ * `mode` 缺省时,`group` 只在**声明已知的非聊天分类**(image/video/tts/stt/
+ * realtime/embedding/compression/other)时才采信、直接拒——这个方向上 group
+ * 比 id 更可信(PR #744:自定义/网关供应商显式打的能力标签,seedream-5 这类
+ * id 本身不含任何类型关键词的合成模型只能靠这个信号判定)。`group` 声明的是
+ * 聊天厂商分组(anthropic/gpt/.../china)时**不采信**,仍按 id 正则判——那只是
+ * 展示分组/品牌,网关的展示元数据完全可能把 `gpt-image-2` 这类图像模型的
+ * `group` 标成 'gpt'(品牌上归类到 GPT 家族,方便浏览),这里若信了会把非聊天
+ * 模型误判为可用(2026-07 review)。两种 group 取值的可信方向不对称,不能
+ * 一并处理。落进厂商聊天组只用于兜底判断,保证"mode 还没覆盖到、但已经在
+ * 正常工作的网关聊天模型"不会因为这次改动突然从 availableModels 消失
+ * (见 classification.test.ts 的回归锁)。
  */
 export function isChatEligible(model: { id: string; group?: string; mode?: string }): boolean {
   if (model.mode !== undefined) return CHAT_CAPABLE_MODES.has(model.mode);
+  if (
+    model.group &&
+    KNOWN_CATEGORIES.has(model.group) &&
+    !CHAT_VENDOR_CATEGORIES.has(model.group as ModelCategory)
+  ) {
+    return false;
+  }
   return CHAT_VENDOR_CATEGORIES.has(categorize(model.id));
+}
+
+/**
+ * `isChatEligible` 的别名,供「agent 对话模型能不能选」语境下的调用方使用(与 PR #744
+ * 的 `AGENT_MODEL_CATEGORIES`/`isAgentSelectableModel` 合流:同一个"能不能进对话选择面板"
+ * 判断,不再各自维护一份厂商分组常量——两份常量此前逐字相同,已收口为
+ * `CHAT_VENDOR_CATEGORIES` 单一定义)。
+ *
+ * `opts.userProvider` = 该条目来自用户自定义供应商(Provider.source === 'user',由
+ * 调用方注入 —— 本模块纯逻辑不持 provider 上下文):此时目录带的**未知 group**
+ * (buildUserProvider 的 `custom:<providerId>`)= 用户显式配置的 agent 模型,直接放行,
+ * 不让 groupOf 的未知组回退吃 id 启发式 —— 否则 `gpt-4o-audio-preview` 这类合法
+ * 自定义对话模型会被误判成能力模型而从全部对话清单消失(PR #744 review)。
+ *
+ * 例外**只限用户供应商**:网关条目缺 group 时 active-catalog 会补 `custom:xd`
+ * (active-catalog.ts),若无条件放行未知组,无分组下发的网关图像/音频/向量模型会
+ * 绕过能力分类、重新漏进对话清单 —— 正是本过滤要堵的洞(PR #744 review 第二轮)。
+ * 非用户供应商一律走 isChatEligible(mode 权威、id 正则兜底)。
+ */
+export function isAgentSelectableModel(
+  model: { id: string; group?: string; mode?: string },
+  opts?: { userProvider?: boolean },
+): boolean {
+  if (opts?.userProvider === true && model.group && !KNOWN_CATEGORIES.has(model.group)) {
+    return true;
+  }
+  return isChatEligible(model);
 }
 
 /** groupModelsForDisplay 的最小模型形状(id + 可选 group / mode / sortOrder)。 */

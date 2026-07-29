@@ -398,6 +398,7 @@ import {
   sessionMetaWriteGuard,
   sessionMetaWriteQueue,
   sessionPendingWrites,
+  type RemoteSessionRunStatus,
   useRemoteSessions,
   useSessionGoalStatus,
   useSessionInputProjection,
@@ -1461,6 +1462,8 @@ export default function SessionScreen() {
           selectedModelId: currentSession.model,
           selectedProviderId: currentSession.providerId ?? null,
           visibilityOverrides: composerDeviceProviders.modelVisibilityOverrides,
+          // 已建会话:实际路由口径(运行中会话跟真实扣费路由,含停用拷贝)。
+          existingSessionRoute: true,
         })
       : null,
     [composerDeviceProviders.providers, composerDeviceProviders.modelVisibilityOverrides, currentSession],
@@ -1479,6 +1482,8 @@ export default function SessionScreen() {
       loading: composerDeviceProviders.loading,
       error: composerDeviceProviders.error,
       agentKind: sessionAgentKind,
+      // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态)。
+      existingSessionRoute: true,
     });
     return verdict === 'unauthenticated' ? agentAuthGateHint(sessionAgentKind) : null;
   }, [
@@ -2637,23 +2642,36 @@ export default function SessionScreen() {
       // subscribe 只负责之后的实时推送,不该挡数据读;失败不影响 open,重连 rehydration 会补订阅。
       void subscribe(`session:${sessionId}`, deviceId, ['sessions']).catch(() => undefined);
     };
+    const fetchActiveSessionSnapshot = async () => {
+      // Capture immediately before every request. Because this helper is invoked inside
+      // withTransientRemoteRetry, each retry receives a fresh fence as well.
+      const activityEpochAtFetchStart = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+      const activeSessions = await maker.listActiveSessions().catch(() => []);
+      return { activeSessions, activityEpochAtFetchStart };
+    };
     setLoading(true);
     setError(null);
     try {
       if (!isReopen) {
         // 首开 / 强制替换:A1 全量并行(含整窗 listMessages),不回退。
-        const [sessionMeta, history, pendingInteractions, projection, activeSessions] = await withTransientRemoteRetry(async () => {
+        const [sessionMeta, history, pendingInteractions, projection, activeSessionSnapshot] = await withTransientRemoteRetry(async () => {
           await openAndSubscribe();
           return Promise.all([
             maker.getSession(sessionId),
             listMessagesWithPayloadRetry((limit) => maker.listMessages(sessionId, { limit })),
             maker.getPendingInteractions(sessionId),
             maker.input.getProjection(sessionId),
-            maker.listActiveSessions().catch(() => []),
+            fetchActiveSessionSnapshot(),
           ]);
         });
         remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
-        remoteSessionStore.setActiveSessionSnapshots(deviceId, Array.isArray(activeSessions) ? activeSessions : []);
+        remoteSessionStore.setActiveSessionSnapshots(
+          deviceId,
+          Array.isArray(activeSessionSnapshot.activeSessions)
+            ? activeSessionSnapshot.activeSessions
+            : [],
+          activeSessionSnapshot.activityEpochAtFetchStart,
+        );
         const historyPage: RemoteMessage[] = Array.isArray(history.messages) ? history.messages : [];
         if (options.replaceMessages) {
           remoteSessionStore.setMessages(sessionId, historyPage);
@@ -2666,13 +2684,13 @@ export default function SessionScreen() {
         remoteSessionStore.setInputProjection(sessionId, projection);
       } else {
         // 重开:便宜并行(不含整窗 listMessages)拿 meta + pending + projection + active。
-        const [sessionMeta, pendingInteractions, projection, activeSessions] = await withTransientRemoteRetry(async () => {
+        const [sessionMeta, pendingInteractions, projection, activeSessionSnapshot] = await withTransientRemoteRetry(async () => {
           await openAndSubscribe();
           return Promise.all([
             maker.getSession(sessionId),
             maker.getPendingInteractions(sessionId),
             maker.input.getProjection(sessionId),
-            maker.listActiveSessions().catch(() => []),
+            fetchActiveSessionSnapshot(),
           ]);
         });
         // 廉价对账:updatedAt 主信号(任何消息变化都会 bump),_count 仅在两侧都有时作辅助;
@@ -2686,7 +2704,13 @@ export default function SessionScreen() {
           storedSession: storedSessionAtStart,
         });
         remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
-        remoteSessionStore.setActiveSessionSnapshots(deviceId, Array.isArray(activeSessions) ? activeSessions : []);
+        remoteSessionStore.setActiveSessionSnapshots(
+          deviceId,
+          Array.isArray(activeSessionSnapshot.activeSessions)
+            ? activeSessionSnapshot.activeSessions
+            : [],
+          activeSessionSnapshot.activityEpochAtFetchStart,
+        );
         if (metaChanged) {
           const history = await withTransientRemoteRetry(() =>
             listMessagesWithPayloadRetry(
@@ -6776,6 +6800,8 @@ export default function SessionScreen() {
         {currentSession && runtimeOptions && modelSheetSelection && modelSheetRuntimeOptions ? (
           <ModelPickerSheet
             activeModelId={modelSheetSelection.model}
+            existingSessionRoute
+
             activePermissionMode={displayPermissionMode ?? currentSession.permissionMode}
             agentKind={modelSheetAgentKind}
             agentSwitch={sessionAgentSwitchSupported ? {
@@ -7119,6 +7145,7 @@ export default function SessionScreen() {
                   ]}
                 >
                   <ComposerActivityStatus
+                    reconnectAttempt={remoteSessionRunStatus.reconnectAttempt}
                     sideTaskRunning={remoteSessionRunStatus.sideTaskRunning}
                     startedAt={composerActivityStartedAtMs}
                     tokenUsage={composerActivityTokenUsage}
@@ -7904,11 +7931,13 @@ function ComposerRuntimePill({
 }
 
 function ComposerActivityStatus({
+  reconnectAttempt,
   sideTaskRunning,
   startedAt,
   tokenUsage,
   visible,
 }: {
+  reconnectAttempt: RemoteSessionRunStatus['reconnectAttempt'];
   sideTaskRunning: boolean;
   startedAt: number | null;
   tokenUsage: number;
@@ -7916,6 +7945,7 @@ function ComposerActivityStatus({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -7935,6 +7965,9 @@ function ComposerActivityStatus({
 
   const elapsedText = formatComposerActivityElapsed(elapsed);
   const tokenText = formatComposerActivityTokens(tokenUsage);
+  const activityText = reconnectAttempt
+    ? t('session.screen.networkReconnecting')
+    : t('session.screen.thinking');
 
   return (
     <View
@@ -7944,7 +7977,12 @@ function ComposerActivityStatus({
     >
       <View style={styles.composerActivityPrimary}>
         <Sparkles color={colors.statusAccent} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-        <Text style={styles.composerActivityStatusText}>Thinking...</Text>
+        <Text numberOfLines={1} style={styles.composerActivityStatusText}>{activityText}</Text>
+        {reconnectAttempt ? (
+          <Text style={[styles.composerActivityStatusText, styles.composerActivityProgressText]}>
+            {reconnectAttempt.attempt}/{reconnectAttempt.maxAttempts}
+          </Text>
+        ) : null}
       </View>
       <View style={styles.composerActivityMeta}>
         <Text style={styles.composerActivityMetaText}>{elapsedText}</Text>
@@ -8365,18 +8403,25 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   composerActivityPrimary: {
     alignItems: 'center',
+    flex: 1,
     flexDirection: 'row',
     gap: 6,
+    marginRight: spacing.sm,
     minWidth: 0,
   },
   composerActivityStatusText: {
     color: colors.statusAccent,
+    flexShrink: 1,
     fontSize: typeScale.footnote,
     fontWeight: fontWeight.medium,
     lineHeight: lineHeight.caption,
   },
+  composerActivityProgressText: {
+    flexShrink: 0,
+  },
   composerActivityMeta: {
     alignItems: 'center',
+    flexShrink: 0,
     flexDirection: 'row',
     gap: 4,
     minWidth: 0,

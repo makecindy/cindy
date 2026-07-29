@@ -32,7 +32,8 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { DL_SESSION_REFERENCE_CAPABILITY_CHANNEL } from '@cindy/device-link';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron';
+import { getActiveAppSession } from '../appSessionState.js';
 import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
@@ -80,7 +81,8 @@ import {
   getBrowserAvailability,
   openBrowserForLogin,
 } from '../mcp-integrations/browser.js';
-import { shutdownCodexEnvironment } from '../mcp-integrations/codexEnvironment.js';
+import { getActiveCodexBridgeInstanceId, shutdownCodexEnvironment } from '../mcp-integrations/codexEnvironment.js';
+import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import {
   checkComputerDriverUpdate,
   cancelComputerDriverPermissionGrant,
@@ -130,6 +132,7 @@ import {
   applyAgentSwitchResumeFallbackAtomically,
   broadcastSessionPatched,
   clearSessionContextInDb,
+  createSessionRemoteHostIdReader,
   getSessionRowSnapshot,
   persistSessionFields,
   persistSessionPermissionModeIfAuto,
@@ -164,6 +167,7 @@ import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 import { desktopClaudeAuthAdapter, desktopCodexAuthAdapter, readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skills.js';
+import { setRemoteCodexLiveTurnChecker, setRemoteSessionStartEnsure, getRemoteCcTurnSettledHandler, getRemoteCcStaleQuery } from '../maker-host/remote-session-start-ensure.js';
 import { syncExternalCodexSessionFromDesktop } from '../maker-host/codex-local-sessions.js';
 import { getCodexProxyAuthInjection, getCodexProxyAuthInjectionState } from '../maker-host/codex-proxy-host.js';
 import {
@@ -175,7 +179,9 @@ import {
 import { createGitSnapshotCoordinator } from '../maker-host/git-snapshot-host.js';
 import {
   cancelCodexAuthModeChange,
+  ensureCodexMcpBridgeStartedForRemote,
   finalizeCodexAfterAuthModeChange,
+  getMaker,
   getPluginRegistry,
   prepareCodexForAuthModeChange,
   restartCodexAfterAuthModeChange,
@@ -250,6 +256,8 @@ import {
   saveTurnStartedAtForDeferred,
 } from '../messagePersistBroadcaster.js';
 import { ensureCcManagerInstalledOrInstall } from '../remote-ssh/cc-manager-install.js';
+import { ensureRemoteCodexMcpBridge, hasPendingRemoteMcpDrift } from '../remote-ssh/codex-remote-mcp.js';
+import { reconcileCodexAgentProxyEnv } from '../remote-ssh/agent-proxy.js';
 import { ensureRemoteAgentInstalledOrInstall, ensureRemoteHostReady, getRemoteSshPool, isCcMgrUpgradeInFlight } from '../remote-ssh/index.js';
 import {
   recordSessionContextSnapshot,
@@ -264,12 +272,13 @@ import {
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
-import { getCodexBudgetEffectiveCostMultiplier, getCodexSubscriptionValuePrice, getModelPriceQuote, getModelPricing, getModelPricingForModel, getSubscriptionDirectValuePrice } from '../usage/modelPricing.js';
+import { getCodexSubscriptionValuePrice, getModelPriceQuote, getModelPricing, getModelPricingForModel, getSubscriptionDirectValuePrice } from '../usage/modelPricing.js';
 import { computeModelUsageDeltas, type ModelUsageCumulative, type ModelUsageDeltaEntry } from '../usage/modelUsageDelta.js';
 import { claudeSubscriptionUsageModelKey, codexApiUsageModelKey, codexSubscriptionUsageModelKey } from '../usage/usageHistory.js';
 import { buildClaudeTurnUsageDetails, computePriceQuoteTurnMoney, estimateClaudeSubscriptionTurnValue, isAnthropicModel, normalizeModelIdForPricing, resolveClaudeTurnCostSinks, type BillingRoute } from '../usage/turnCostCalculator.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX, isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
-import { addRegionalMoney, usdMoney, type RegionalMoney } from '../../shared/regionalMoney.js';
+import { addRegionalMoney, regionalizeUsd, type RegionalMoney } from '../../shared/regionalMoney.js';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerCodexAccountUsageRefresh } from './usage.js';
 import {
   rebroadcastCodexTodayUsage,
@@ -280,10 +289,7 @@ import {
   recordTurnSpend,
 } from '../usageBroadcaster.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import {
-  deriveWorkflowsDir,
-  readWorkflowProgressByTaskId,
-} from '../workflow-progress/reader.js';
+import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import {
   AgentInputCoordinator,
 } from './agent-input-coordinator.js';
@@ -305,6 +311,7 @@ import { refreshCodexMcpEnvironment } from './codexMcpRefresh.js';
 import { broadcastSchedulerChanged } from './schedule.js';
 import { validateExtraDirs } from './extraDirsValidator.js';
 import { prepareHandoffWorktree, shouldRecycleHandoffWorktreeOnFailure } from './handoffWorktree.js';
+import { validateHandoffWorkingDir } from './handoffWorkingDir.js';
 import { registerProjectPluginPolicyHandlers } from './projectPluginPolicyHandlers.js';
 import {
   restoreMissingManagedWorktreeForSession,
@@ -325,6 +332,7 @@ import {
   readOrcaWorkerOutputReadOnly,
 } from './orcaDiagnostics.js';
 import { createMakerSendTransaction } from './makerSendTransaction.js';
+import { installDesktopInteractionHandler } from './interactionRouter.js';
 import { registerMakerMessageDeleteHandler } from './messageDeleteHandler.js';
 import { normalizeUserMessage, materializeQueuedOssAttachments } from './normalizeAttachments.js';
 import { AGENT_ISLAND_DISPLAY_CONFIG } from '../agent-island/displayConfig.js';
@@ -387,9 +395,15 @@ import {
 } from '../mcp-integrations/custom-mcp-registry.js';
 import {
   getDesktopProviderService,
+  refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
 } from '../maker-host/createDesktopProviderService.js';
-import { connectedProvidersForAgent, effectiveSourceIdForModel, isChatEligible } from '@cindy/model-providers';
+import {
+  connectedProvidersForAgent,
+  effectiveSourceIdForModel,
+  isAgentSelectableModel,
+  type ProviderView,
+} from '@cindy/model-providers';
 import {
   getSessionProvider,
   hydrateSessionProvider,
@@ -403,6 +417,12 @@ import {
   getAnthropicModelDiscoveryFailure,
   refreshAnthropicModelsFromHttp,
 } from '../maker-host/model-discovery/anthropic.js';
+import { refreshBuiltinProviderModels } from '../maker-host/provider-model-refresh.js';
+import {
+  configureProviderModelAutoRefresh,
+  refreshProviderModelsManually,
+  requestProviderModelAutoRefresh,
+} from '../maker-host/provider-model-auto-refresh.js';
 import { setProviderUpstreamErrorBroadcaster } from '../maker-host/provider-upstream-error-observer.js';
 import {
   createClaudeAutoPermissionFallbackCoordinator,
@@ -431,6 +451,17 @@ import {
   getModelVisibilityMirrorSnapshot,
   syncModelVisibilityMirror,
 } from '../maker-host/model-visibility-mirror.js';
+import {
+  clearProviderDisableOverrides,
+  setModelsDisabled,
+  setProviderDisabled,
+  stageProviderDisableOverridesClear,
+} from '../maker-host/model-disable-store.js';
+import { getCurrentDataOwnerId } from '../authManager.js';
+import {
+  resolveLenientSessionRoute,
+  verdictForModelRoute,
+} from '../maker-host/model-route-guard-live.js';
 import { setClaudeProxySessionIdResolver } from '../maker-host/anthropic-compat-proxy-host.js';
 import {
   clearClaudeSessionBackgroundActivity,
@@ -795,6 +826,8 @@ interface OrcaCollabService {
       title?: string;
       /** create 分支可选:true = 为新 session 预建独立 git worktree 并以其为 workingDir(jump 忽略)。 */
       useWorktree?: boolean;
+      /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
+      workingDir?: string;
       /** Host-owned create defaults for non-session callers such as scheduler script tasks. */
       createDefaults?: SendToSessionCreateDefaults;
     },
@@ -1483,13 +1516,21 @@ export function takePendingInteractionsForSession(
   return taken;
 }
 
+type WiredSession = NonNullable<ReturnType<Maker['getSession']>>;
+
+interface WiredSessionRegistration {
+  session: WiredSession;
+  disposers: Array<() => void>;
+}
+
 /**
- * 标记已经 wire 过 IPC 转发的 session, 避免 lazy-create 路径或多个调用方
+ * 记录已经 wire 过 IPC 转发的 session 实例，避免 lazy-create 路径或多个调用方
  * (renderer IPC handler / scheduler runner / feishu 接管 / future MCP server) 重复挂 listener。
  *
- * 进程级单例 —— register.ts 模块只 load 一次, 此 Set 在 closeSession 时按 id 清理。
+ * deferred agent switch 会保留业务 id 但替换 Session 实例；此时必须解绑旧实例并完整
+ * wire 新实例，不能只按 id 去重。
  */
-const wiredSessionIds = new Set<string>();
+const wiredSessionsById = new Map<string, WiredSessionRegistration>();
 
 /**
  * SDK result 事件的 total_cost_usd 是 session 累计 (不是 per-turn) ——
@@ -1606,6 +1647,11 @@ const rewindInputSessions = new Set<string>();
 const SESSION_REWIND_INPUT_LOCK_ID = 'session-rewind';
 const SESSION_REWIND_STOP_TIMEOUT_MS = 15_000;
 let pendingCredentialSwitchHolder: PendingCredentialSwitchService | null = null;
+// turn 收口时对远端 codex MCP 做一次 best-effort ensure 的钩子 (live turn
+// 期间被推迟的 daemon bootstrap 在 idle 时点补刀)。真实现定义在
+// registerMakerIpcs 闭包内 (依赖 maker / ensure 函数), 模块级 turn 收口
+// 路径经 holder 调用; 未注入时 no-op。
+let refreshRemoteCodexMcpOnTurnSettledHolder: ((sessionId: string) => void) | null = null;
 let deferredCodexRestartHolder: DeferredCodexRestartService | null = null;
 let pendingAgentSwitchApplyHolder:
   ((sessionId: string, signal?: AbortSignal) => Promise<() => void>) | null = null;
@@ -1742,15 +1788,55 @@ export function cancelPendingAgentSwitchForSession(sessionId: string): void {
  * 另一端 fail-closed 的行为分叉。register 在 service 尚未初始化时必须抛错，不能
  * 假装登记成功后丢失用户选择；其余读取/清理入口保持启动期 no-op 语义。
  */
-export function registerPendingCredentialSwitchForSession(
+export async function registerPendingCredentialSwitchForSession(
   sessionId: string,
   target: { model: string; providerId: string | null },
-): void {
+): Promise<void> {
   const service = pendingCredentialSwitchHolder;
   if (!service) {
     throw new Error('Pending credential switch service is not initialized');
   }
-  service.register(sessionId, target);
+  // 捕获会话 agent:deferred 切换在收口时刻要重过停用裁决(期间目标可能被停用,
+  // PR #744 review 第七轮);读不到(会话行缺失)则登记不带 agentKind = 收口不裁决。
+  const dbAgentKind = getSessionDbAgentKind(sessionId);
+  // 捕获切换前的运行路由:model 用 live handle(热切过未落库时比 DB 权威),来源用
+  // provider store;effort / fast 无 live getter,从 DB 行读 —— renderer 在收到
+  // deferred 结果**之后**才落盘请求值,本函数在 IPC 回包之前执行,此刻行里仍是
+  // 切换前值,无竞态。目标在等待期间被全停且目录无启用兜底时,收口按整套
+  // previousRoute 回滚(model/provider/effort/fast 一致成对,第十六、十八轮)。
+  // deferred 场景会话正在跑 turn,live handle 必在;取不到就不带 = 无从回滚。
+  const live = getMaker().getSession(sessionId);
+  let prevRow: { model: string | null; effort: string | null; fastMode: boolean | null; providerId: string | null } | null = null;
+  try {
+    const [row] = await getDbClient()
+      .drizzle.select({
+        model: sessions.model,
+        effort: sessions.effort,
+        fastMode: sessions.fastMode,
+        providerId: sessions.providerId,
+      })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    prevRow = row ?? null;
+  } catch {
+    prevRow = null;
+  }
+  const prevModel = live?.model ?? prevRow?.model ?? null;
+  service.register(sessionId, {
+    ...target,
+    ...(dbAgentKind ? { agentKind: dbAgentKind === 'cc' ? 'claude-code' as const : 'codex' as const } : {}),
+    ...(prevModel
+      ? {
+          previousRoute: {
+            model: prevModel,
+            providerId: getSessionProvider(sessionId) ?? prevRow?.providerId ?? null,
+            ...(prevRow?.effort ? { effort: prevRow.effort } : {}),
+            ...(prevRow?.fastMode != null ? { fastMode: prevRow.fastMode } : {}),
+          },
+        }
+      : {}),
+  });
 }
 
 export function clearPendingCredentialSwitchForSession(
@@ -2136,22 +2222,19 @@ export function setGoalAskAnswerObserver(
 }
 
 /**
- * 把 desktop 版的 interaction listener 装到一个 session 上 — 行为: broadcast
+ * 把 Desktop fallback handler 登记到 session 级中央 InteractionRouter — 行为:broadcast
  * INTERACTION_REQUEST 给所有 window, 等 renderer 通过 RESOLVE_INTERACTION IPC
  * 回 decision。permission 10 分钟超时兜底为 deny; ask/plan 不超时，必须等
  * 用户提交、停止任务或关闭 session。
  *
- * 抽出来 export 是为了 feishu /ctr 接管流程的 detach 路径能"还原" desktop
- * listener: 接管期间 setInteractionListener 是 single-listener 语义, 被 feishu
- * 版覆盖了, detach 后必须主动调一次 install... 把 desktop 版重新挂回去,
- * 否则 desktop renderer 永远收不到 permission 弹窗。
- *
- * 幂等: setInteractionListener 是覆盖式写, 重复调安全。
+ * Router 在 Session 实例生命周期内只安装一次 listener。Feishu/Discord/Slack
+ * turn 通过 beforeProviderStart 登记临时 route，终态只释放自己的 lease，
+ * 不再覆盖或“还原” Desktop listener。重复调用只更新 Desktop fallback。
  */
 export function installDesktopInteractionListener(
   session: { id: string; setInteractionListener: (l: ((req: InteractionRequest) => Promise<InteractionDecision>) | null) => void },
 ): void {
-  session.setInteractionListener(async (req: InteractionRequest) => {
+  installDesktopInteractionHandler(session, async (req: InteractionRequest) => {
     const agentIslandInteractionEpoch = shouldNotifyAgentIslandForSession(session.id)
       ? getAgentIslandService()?.captureInteractionEpoch(session.id) ?? null
       : null;
@@ -2241,6 +2324,7 @@ function settleSilentStopDone(sessionId: string, reason: 'exhausted' | 'skip' | 
   void pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
   deferredCodexRestartHolder?.onSessionSettled();
   agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
+  refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
   fireSilentStopSettled(sessionId, reason);
 }
 
@@ -2362,8 +2446,17 @@ async function handleSilentStopTurnEnd(
 
 export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void {
   if (!session) return;
-  if (wiredSessionIds.has(session.id)) return;
-  wiredSessionIds.add(session.id);
+  const existing = wiredSessionsById.get(session.id);
+  if (existing?.session === session) {
+    installDesktopInteractionListener(session);
+    return;
+  }
+  if (existing) {
+    for (const dispose of existing.disposers) dispose();
+    existing.session.setInteractionListener(null);
+  }
+  const registration: WiredSessionRegistration = { session, disposers: [] };
+  wiredSessionsById.set(session.id, registration);
 
   // session-agent-switch:登记本会话当前引擎,broadcaster / user 行落库据此逐行
   // stamp messages.agent_kind(切换后历史行的 agent_meta 必须按写入时引擎解析)。
@@ -2372,15 +2465,15 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   // 订阅槽①旁听 tap(独立监听,叠加在主转发之外互不干扰):AgentEvent →
   // did-turn-*。资格(用户主会话)与自动化轮次过滤都在 tap 内部,这里零逻辑。
   const ghostSessionTap = createGhostSessionTap(session.id);
-  session.onEvent((event: AgentEvent) => {
+  registration.disposers.push(session.onEvent((event: AgentEvent) => {
     ghostSessionTap.handleEvent(
       event as { type: string; data?: unknown; source?: string; turnOrigin?: { kind?: string } },
     );
-  });
+  }));
 
   // 转发事件到所有 window。interaction_dismissed 单独走专用 channel,
   // 让 renderer chat store 不必扫所有 vendor-raw 找它。
-  session.onEvent((event: AgentEvent) => {
+  registration.disposers.push(session.onEvent((event: AgentEvent) => {
     const broadcastEvent = redactEventForRenderer(event);
     if (event.type === 'interaction_dismissed') {
       const data = event.data as { requestId?: unknown; reason?: unknown };
@@ -2631,6 +2724,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       void pendingCredentialSwitchHolder?.onTurnSettled(session.id);
       deferredCodexRestartHolder?.onSessionSettled();
       agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
+      refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
     } else if (shouldMarkTurnStatusIdleAfterBroadcast) {
       sessionTurnActivityTracker.scheduleIdleAfterStatusBroadcast(session.id);
       // status:isRunning=false 即逻辑 turn 结束(可重试 error 不发这个信号)。
@@ -2848,6 +2942,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             {
               providerId: sessionProviderForBilling,
               billingRoute,
+              region: CURRENT_CINDY_REGION,
             },
           );
           // 按模型记账 (首页仪表盘"按模型拆分"): 写归一化裸 id, 与 codex 行 / 价格表对齐。
@@ -2908,11 +3003,18 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             for (const m of perModel) {
               if (m.source !== 'subscription') continue;
               const quote = getSubscriptionDirectValuePrice(m.model);
-              const value = computePriceQuoteTurnMoney(m.deltas, quote ?? undefined);
+              const value = computePriceQuoteTurnMoney(
+                m.deltas,
+                quote ?? undefined,
+                CURRENT_CINDY_REGION,
+              );
               if (value?.amount) estimatedValues.push(value);
             }
             if (isClaudeSubscriptionSession) {
-              const claudeEstimated = estimateClaudeSubscriptionTurnValue(perModel);
+              const claudeEstimated = estimateClaudeSubscriptionTurnValue(
+                perModel,
+                CURRENT_CINDY_REGION,
+              );
               if (claudeEstimated?.amount) estimatedValues.push(claudeEstimated);
             }
             const turnEstimatedValue =
@@ -2960,9 +3062,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                     ? 'provider-api'
                     : 'unknown';
             if (route === 'subscription' || route === 'xd-gateway') return;
-            const money = usdMoney(
-              rawDelta * getCodexBudgetEffectiveCostMultiplier(resolvedModel),
-            );
+            const money = regionalizeUsd(rawDelta, CURRENT_CINDY_REGION);
             const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, undefined, resolvedModel);
             recordTurnSpend(money);
             recordSessionTurnSpend(session.id, money);
@@ -3080,6 +3180,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             const money = computePriceQuoteTurnMoney(
               codexUsageToTokens(u),
               price ?? undefined,
+              CURRENT_CINDY_REGION,
             );
             if (!isSubscriptionValue && money) {
               await recordModelTurnUsage({
@@ -3146,8 +3247,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         });
       }
     }
-  });
-  session.onStatusChange((status) => {
+  }));
+  registration.disposers.push(session.onStatusChange((status) => {
+    if (wiredSessionsById.get(session.id)?.session !== session) return;
     broadcastToAllWindows(MAKER_PUSH.STATUS_CHANGED, { sessionId: session.id, status });
     if (status === 'closed') {
       cleanupPendingInteractionsForSession(session.id, 'session_closed');
@@ -3156,8 +3258,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       pendingCredentialSwitchHolder?.onSessionClosed(session.id);
       deferredCodexRestartHolder?.onSessionSettled();
       agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
+      refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
       gitSnapshotCoordinator?.onSessionClosed(session.id);
-      wiredSessionIds.delete(session.id);
+      wiredSessionsById.delete(session.id);
+      for (const dispose of registration.disposers) dispose();
+      session.setInteractionListener(null);
       clearOrcaMcpHydrated(session.id);
       knownNonOrcaSessionIds.delete(session.id);
       lastReportedCostUsdBySession.delete(session.id);
@@ -3170,7 +3275,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       clearSessionPersistState(session.id);
       handleAgentIslandSessionClosedAfterCleanup(session.id);
     }
-  });
+  }));
 
   // 注入 interaction listener (permission/ask/plan 三合一,renderer 按 kind 弹不同 UI)
   installDesktopInteractionListener(session);
@@ -3186,9 +3291,11 @@ export const wireSessionToIpcExternal = wireSessionToIpc;
 
 export interface RegisterMakerIpcOptions {
   onAnySessionTurnKeepaliveChange?: (isRunning: boolean) => void;
+  /** 由 bootstrap 注入，避免 maker-ipc → model-access → maker-host 的循环依赖。 */
+  refreshXdGatewayModels(): Promise<void>;
 }
 
-export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions = {}): void {
+export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
   log.info('registering maker:* IPC handlers');
   getAgentIslandService()?.setPermissionResolver(resolvePendingPermissionFromAgentIsland);
   sessionTurnActivityTracker.setTurnKeepaliveChangeListener(options.onAnySessionTurnKeepaliveChange ?? null);
@@ -3320,17 +3427,49 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       if (typeof sessionId !== 'string' || typeof taskId !== 'string' || !taskId) return null;
       try {
         const s = maker.listActiveSessions().find((x) => x.id === sessionId);
-        if (!s) return null;
-        // 远程(device-link)会话:Claude CLI 跑在远端机器,workflow 记录写在**远端 HOME**
-        // 下的 ~/.claude/projects/...(远程 env 路径与桌面 HOME 刻意隔离)。用本地 os.homedir()
-        // 拼 workDir 会指向不存在的本地目录,永远读不到。直接返回 null → renderer 回退到
-        // workflow 级卡片(其数据走事件流、跨隧道可用)。远程逐 agent 树需经 device-link 隧道
-        // 读远端文件,列为后续增强。
-        if (s.remoteHostId) return null;
-        const { sdkSessionId, workDir } = s;
-        if (!sdkSessionId || !workDir) return null;
-        const dir = deriveWorkflowsDir(os.homedir(), workDir, sdkSessionId);
-        return await readWorkflowProgressByTaskId(dir, taskId);
+        if (s) {
+          // SSH 远程工作区会话(s.remoteHostId):Claude CLI 跑在 SSH 远端主机,workflow
+          // 记录文件写在**SSH 远端 HOME** 下 —— 用本机 os.homedir() 拼目录必落空,读远端
+          // 文件需经 remote-file-service,暂不支持 → 返回 null,renderer 回退到 workflow 级
+          // 卡片(其数据走事件流,SSH 下可用)。注意这不是 device-link:device-link 远程会话
+          // 不在本机 listActiveSessions,由控制端 renderer 的 makerTransport 隧道路由到被控端
+          // 执行本 handler(见 allowlist 的 maker:get-workflow-progress 准入)。
+          if (s.remoteHostId) return null;
+          const { sdkSessionId, workDir } = s;
+          // sdkSessionId 允许为空(/clear 后置空):reader 跳过精确目录直接跨目录扫描。
+          if (!workDir) return null;
+          // reader 内部带跨 sdkSessionId 换代兜底:resume 换代前跑的 workflow
+          // 记录在旧 session 目录,精确目录 miss 后按 taskId 扫同 project 下其它目录。
+          return await readWorkflowProgressForSession(
+            os.homedir(),
+            workDir,
+            sdkSessionId ?? null,
+            taskId,
+          );
+        }
+        // 会话不活跃(app 重启后看历史 / 会话已被关闭释放):workflow 记录文件仍在
+        // 本机磁盘,回退持久化 session 行的 working_dir + sdk_session_id 定位目录
+        // (同样带跨换代兜底)。remote_host_id 非空(SSH)与活跃分支同理返回 null。
+        const db = getDbClient().drizzle;
+        const rows = await db
+          .select({
+            workingDir: sessions.workingDir,
+            sdkSessionId: sessions.sdkSessionId,
+            remoteHostId: sessions.remoteHostId,
+          })
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .limit(1);
+        const row = rows[0];
+        // sdkSessionId 允许为空:/clear 会把它置 null,但旧 wf 记录文件仍在,
+        // reader 会跳过精确目录直接跨目录扫描(taskId 全局唯一)。
+        if (!row || row.remoteHostId || !row.workingDir) return null;
+        return await readWorkflowProgressForSession(
+          os.homedir(),
+          row.workingDir,
+          row.sdkSessionId ?? null,
+          taskId,
+        );
       } catch {
         return null;
       }
@@ -3472,6 +3611,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   // 模型供应商目录（只读）+ 自定义供应商 CRUD —— handler body 注入 listProviders / 副作用，
   // 便于脱 Electron + 内存 db 单测。CRUD 成功后刷新 active-catalog 并广播 PROVIDER_CHANGED，
   // 让设置页列表 + 对话模型选择器（各 useProviders 实例）live 刷新。
+  configureProviderModelAutoRefresh({
+    listProviders: (opts) => getDesktopProviderService().listProviders(opts),
+    getScopeKey: () => getActiveAppSession().generation,
+    refreshProvider: (providerId) =>
+      refreshBuiltinProviderModels(providerId, {
+        refreshXd: options.refreshXdGatewayModels,
+        refreshAnthropic: refreshAnthropicModelsFromHttp,
+        refreshOpenAi: () => maker.refreshAgentLocalModels(
+          'codex',
+          { credentialMode: 'oauth-bearer' },
+        ),
+        refreshXaiCatalog: async () => {
+          await refreshActiveCatalogFromSource();
+        },
+      }),
+  });
+
   registerProviderHandlers(createElectronIpcHandlerRegistry(), {
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     getModelVisibilityOverrides: () => getModelVisibilityMirrorSnapshot(),
@@ -3495,7 +3651,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       await refreshAnthropicModelsFromHttp();
       return getAnthropicModelDiscoveryFailure();
     },
+    refreshBuiltinModels: refreshProviderModelsManually,
+    requestModelsAutoRefresh: requestProviderModelAutoRefresh,
     scanLocalCli: () => scanLocalCliAuth(createLocalCliScanDeps()),
+    // 「模型 / 供应商停用」override 写入(main 侧持久化,handler 写后广播 PROVIDER_CHANGED)。
+    setModelsDisabled: (providerId, modelIds, disabled) =>
+      setModelsDisabled(providerId, modelIds, disabled),
+    setProviderDisabled: (providerId, disabled) => setProviderDisabled(providerId, disabled),
+    stageClearProviderDisableOverrides: (providerId) =>
+      stageProviderDisableOverridesClear(providerId),
+    // 「恢复默认」= 删除该供应商整组停用 override(configuration-and-overrides.md §4)。
+    clearProviderDisableOverrides: (providerId) => clearProviderDisableOverrides(providerId),
+    // 停用写入的归属校验:入口捕获 / 持久化前复核,异步窗口内切账号即拒,防 A 的
+    // 点击写进 B 的 owner-scoped 偏好文件(PR #744 review 第七轮)。
+    currentOwnerId: () => getCurrentDataOwnerId(),
     // 通用 OAuth（目录 auth.oauth 描述符驱动）：login 成功后 best-effort 拉动态模型发现
     // (additions-only merge 进 active-catalog) 并广播 PROVIDER_CHANGED 让 UI 刷新连接态。
     oauthLogin: async (providerId, isCurrent) => {
@@ -3766,7 +3935,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   });
 
   // ── Session 生命周期 ────────────────────────────────────────────────────
-  // wiredSessionIds + lastReportedCostUsdBySession + sessionTurnActivityTracker 都在模块顶层,
+  // wiredSessionsById + lastReportedCostUsdBySession + sessionTurnActivityTracker 都在模块顶层,
   // 让 scheduler runner / feishu 接管 / future MCP 等绕过 IPC 的调用方也能复用同一份 wire 逻辑。
 
   type CreateOpts = MakerSessionCreateOpts;
@@ -3954,6 +4123,33 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
    * 已踩过 commit 2e8371c7 的坑（路径 B/C 漏调 markOrcaMcpHydratedIfNeeded
    * 导致 Orca MCP 工具 rehydrate 失败），抽 helper 让"漏调"在编译期不可能发生。
    */
+  /**
+   * 停用轴的边界裁决(判定纯逻辑在 model-route-guard.ts,可单测)。
+   * 返回值 = 需要改路由到的启用来源 id(隐式默认落点被停用而有替代拷贝时),
+   * undefined = 照常;停用语义下不可路由则抛 INVALID_PARAMS。目录读取失败按
+   * 放行处理:目录不可用时历史行为就是回落 capabilities 继续跑,本守卫只执行停用
+   * 语义,不把目录故障升级成会话不可建。allowSideEffects=false —— 这条路径可能由
+   * device-link / renderer 驱动,纯读即可(自愈另有主进程业务入口负责)。
+   */
+  async function assertModelRouteUsable(
+    agent: AgentKind,
+    model: string,
+    providerId: string | null,
+  ): Promise<string | undefined> {
+    const verdict = await verdictForModelRoute(agent, model, providerId);
+    if (verdict.kind === 'reject') {
+      throwIpcError(
+        'INVALID_PARAMS',
+        verdict.reason === 'explicit-source-disabled'
+          ? `provider "${providerId}" is disabled for model "${model}" in settings`
+          : verdict.reason === 'capability-model'
+            ? `model "${model}" is not an agent chat model`
+            : `model "${model}" is disabled in settings`,
+      );
+    }
+    return verdict.kind === 'reroute' ? verdict.providerId : undefined;
+  }
+
   async function bootstrapSession(o: CreateOpts): Promise<{
     session: Awaited<ReturnType<typeof maker.createSession>>;
     didInjectOrcaInstructions: boolean;
@@ -3968,6 +4164,37 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     }
 
     await hydrateProviderIdBeforeSessionStart(o);
+    // 停用轴准入(PR #744 review):**新建**会话不得路由到用户停用的模型 / 来源。
+    // renderer 选择器已过滤,但 create-session 在 device-link allowlist 内,老控制端
+    // 可直接点名 —— main 必须自己裁决。resume 豁免(运行中的会话不打断)只给
+    // **经核实的原样续跑**:请求路由与本会话 DB 持久化路由一致才算;resumeSessionId
+    // 是调用方可控字段,携带任意非空 id 同时改点停用 model/provider 不能构成绕过
+    // (PR #744 review 第十六轮)。读不到会话行(远端新建等)按非豁免走正常裁决。
+    // 隐式来源的原生默认落点被停用而有启用替代拷贝时,把会话显式改路由过去(下方
+    // persistAndHydrateSessionProvider 会把它落库):实际路由层对隐式来源走原生
+    // 默认、不查停用标志,仅放行等于继续用停用拷贝付费。
+    if (typeof o.model === 'string' && o.model) {
+      let verifiedResume = false;
+      if (o.resumeSessionId && typeof o.id === 'string' && o.id) {
+        try {
+          const [row] = await getDbClient()
+            .drizzle.select({ model: sessions.model, providerId: sessions.providerId })
+            .from(sessions)
+            .where(eq(sessions.id, o.id))
+            .limit(1);
+          verifiedResume =
+            !!row &&
+            row.model === o.model &&
+            (row.providerId ?? null) === (o.providerId ?? null);
+        } catch {
+          verifiedResume = false;
+        }
+      }
+      if (!verifiedResume) {
+        const reroute = await assertModelRouteUsable(o.agentKind, o.model, o.providerId ?? null);
+        if (reroute && !o.providerId) o.providerId = reroute;
+      }
+    }
     const session = await maker.createSession(o);
     await markProjectContextIfNeeded(session.id, didInjectProjectContext);
     wireSessionToIpc(session);
@@ -4077,17 +4304,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       resumeSessionId: row.sdkSessionId ?? undefined,
       orcaRole: row.orcaRole as 'worker' | null,
       vendorOptions: workerVendorOptions,
+      // 远端 worker 唤醒必须带上 remoteHostId 并走 ensure (SSH 重连 / agent
+      // 安装 / codex daemon MCP 注入), 否则会以远端 workingDir 在本机 spawn,
+      // 且远端 daemon 的协同 MCP 通道不就绪。
+      remoteHostId: row.remoteHostId ?? undefined,
       ...(extraDirs.length > 0 ? { extraDirs } : {}),
     });
+    await ensureRemoteReadyForSessionStart({ createOpts: opts });
     const { session: resumedSession } = await bootstrapSession(opts);
     await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
     return true;
   }
 
+  // sessionId → remoteHostId 的进程内缓存 reader(lazy resume 路径每次 send 都
+  // 经过 ensureRemoteReadyForSessionStart;实现与缓存语义见 localDb/ipc/sessions.ts,
+  // DB 异常不缓存 null)。
+  const readSessionRemoteHostIdCached = createSessionRemoteHostIdReader();
+
   async function ensureRemoteReadyForSessionStart(params: {
     session?: { agentKind: AgentKind; remoteHostId: string | null } | null;
     createOpts?: unknown;
-  }): Promise<void> {
+  }): Promise<{ remoteCodexDaemonRebootstrapped: true } | void> {
     const { session, createOpts } = params;
     // Remote SSH auto-reconnect 前置: 拿 host 是否要联网在 maker-core 之前确定,
     // 避免 remote transport hook 同步抛 "not found in pool"。ensureRemoteHostReady
@@ -4097,7 +4334,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       createOpts && typeof createOpts === 'object'
         ? ((createOpts as { remoteHostId?: string }).remoteHostId ?? null)
         : null;
-    const remoteHostIdToEnsure = sessRemoteHostId ?? coRemoteHostId;
+    let remoteHostIdToEnsure = sessRemoteHostId ?? coRemoteHostId;
+    if (!remoteHostIdToEnsure) {
+      // DB 兜底:live session 缺失 (lazy resume) 且调用方快照未带 remoteHostId
+      // 时 (main 侧发起的 Orca worker 派活 / scheduler 等路径),从 sessions 行
+      // 对齐——否则 remote worker 会以远端 workingDir 在本机 spawn。session 的
+      // remoteHostId 创建后不变,进程内缓存安全。
+      const sessionIdForLookup =
+        (session as { id?: string } | null | undefined)?.id ??
+        (createOpts && typeof createOpts === 'object'
+          ? (createOpts as { id?: unknown }).id
+          : null);
+      if (typeof sessionIdForLookup === 'string' && sessionIdForLookup) {
+        remoteHostIdToEnsure = await readSessionRemoteHostIdCached(sessionIdForLookup);
+      }
+    }
     if (!remoteHostIdToEnsure) return;
 
     if (createOpts && typeof createOpts === 'object') {
@@ -4130,13 +4381,121 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     }
 
     await ensureRemoteAgentInstalledOrInstall(remoteHostIdToEnsure, ensureAgentKind);
+
+    // codex 远端 daemon 的 MCP 注入 (cindy_orca / orca_worker_bridge 等经 SSH
+    // remote-forward 直连本机 HTTP bridge):转发 / config.toml / daemon env
+    // 就绪必须先于 transport 创建 (daemon discover/bootstrap)。best-effort —
+    // 失败时 session 按"远端无 MCP"放行,与历史行为一致;协同类工具此时不可用。
+    if (ensureAgentKind === 'codex') {
+      const host = getRemoteSshPool().get(remoteHostIdToEnsure);
+      if (host?.getStatus() === 'ready') {
+        // proxy 对账必须先于 MCP bootstrap:marker 漂移时 reconcile 会 pkill
+        // daemon, 若 MCP 先 bootstrap (带 token) 再被 pkill, transport
+        // startDaemon 重启的 daemon 只有 proxy env 没有 LIZI_MCP_TOKEN —
+        // 且 desiredFp===appliedFp 让 driftUnapplied 漏判, 协同 401 持续到
+        // 下次 token/代际变化 (codex-connector R20 P1)。先 reconcile 让
+        // 最后一次启动恒为携带双方的 MCP bootstrap;marker 一致时仅 1 次
+        // cat RTT 零副作用。
+        await reconcileCodexAgentProxyEnv(host);
+        const result = await ensureRemoteCodexMcpBridge(host, {
+          ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
+          // config 漂移生效要重启 daemon, 重启会断同 host 的 live turn:
+          // 有 turn 在跑时 config 照写但 bootstrap 推迟 (driftUnapplied 持久,
+          // turn-done 挂钩补刀)。
+          hasLiveTurnOnHost: codexRemoteHasLiveTurn,
+          // collab 全局禁用 (Tier 4) 时按清理路径剥远端受管段 — bridge
+          // 名单不反映开关 (codex-connector R20 P2)。
+          isCollabEnabled: () => getPluginRegistry().isEnabled('collab'),
+        });
+        if (result.ok && result.daemonRebootstrapped && !codexRemoteHasLiveTurn(remoteHostIdToEnsure)) {
+          await detachIdleRemoteCodexSessionsOnHost(remoteHostIdToEnsure, 'codex-mcp-daemon-rebootstrap');
+          return { remoteCodexDaemonRebootstrapped: true };
+        }
+      }
+    }
   }
+
+  // 暴露给 maker-host 的 orca bridge deps:bridge rehydrate remote session 时
+  // 直调 core createSession 不经 IPC 层, 经 holder 回调本函数补齐 preflight
+  // (review: PR #778 codex-connector R17 P1)。
+  setRemoteSessionStartEnsure(ensureRemoteReadyForSessionStart);
+
+  // codex 远端 daemon 的 live-turn 判定 (ensure 与 turn-done 挂钩共用):
+  // bootstrap 重启会断同 host 的 live turn, defer/补刀都以此为据。
+  // function 声明 (hoisted):const 箭头形态下, 任何早于本行执行的调用路径
+  // (如注册流程中被直线调用的 resume 分支) 都会 TDZ ReferenceError — 用
+  // 声明消除整类风险 (reviewer R27 指出;当前调用点虽均在初始化后, 不
+  // 留隐患)。
+  function codexRemoteHasLiveTurn(hostId: string): boolean {
+    return maker.listActiveSessions().some(
+      (s) =>
+        s.remoteHostId === hostId &&
+        s.agentKind === 'codex' &&
+        (agentInputCoordinatorHolder?.hasActiveTurnForRewind(s.id) ?? false),
+    );
+  }
+  setRemoteCodexLiveTurnChecker(codexRemoteHasLiveTurn);
+
+  async function detachIdleRemoteCodexSessionsOnHost(hostId: string, reason: string): Promise<void> {
+    const detachTasks: Array<Promise<void>> = [];
+    for (const s of maker.listActiveSessions()) {
+      if (s.remoteHostId !== hostId || s.agentKind !== 'codex') continue;
+      if (agentInputCoordinatorHolder?.hasActiveTurnForRewind(s.id) ?? false) continue;
+      detachTasks.push(
+        s.detach().catch((err) => {
+          log.warn('remote Codex session detach after daemon rebootstrap failed', {
+            sessionId: s.id,
+            hostId,
+            reason,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }),
+      );
+    }
+    await Promise.all(detachTasks);
+  }
+
+  // turn 结束后补一次远端 MCP ensure (best-effort):live turn 期间被推迟的
+  // daemon bootstrap (driftUnapplied 持久指纹, 见 codex-remote-mcp.ts) 在
+  // idle 时点必然补刀 — 不等用户下次操作 (Greptile: defer 需要可靠自愈
+  // 路径)。ensure 幂等, 无漂移时仅一次 config 读 + daemon 探活。经模块级
+  // holder 供各 turn 收口路径调用。远端 CC 走 holder 的 detach 补偿
+  // (bridge 重建 / 端口重绑已让 fresh 失效时重建 query)。
+  refreshRemoteCodexMcpOnTurnSettledHolder = (sessionId: string): void => {
+    const session = maker.getSession(sessionId);
+    const remoteHostId = session?.remoteHostId;
+    if (!remoteHostId) return;
+    if (session.agentKind === 'codex') {
+      const host = getRemoteSshPool().get(remoteHostId);
+      if (host?.getStatus() !== 'ready') return;
+      void ensureRemoteCodexMcpBridge(host, {
+        ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
+        hasLiveTurnOnHost: codexRemoteHasLiveTurn,
+        isCollabEnabled: () => getPluginRegistry().isEnabled('collab'),
+      }).then(async (result) => {
+        if (result.ok && result.daemonRebootstrapped && !codexRemoteHasLiveTurn(remoteHostId)) {
+          await detachIdleRemoteCodexSessionsOnHost(remoteHostId, 'codex-mcp-turn-settled-rebootstrap');
+        }
+      });
+      return;
+    }
+    if (session.agentKind === 'claude-code') {
+      getRemoteCcTurnSettledHandler()?.(sessionId);
+    }
+  };
 
   const makerSessionRegistry = createElectronIpcHandlerRegistry();
   registerMakerSessionCreateHandler(
     makerSessionRegistry,
     {
-      bootstrapSession,
+      // CREATE_SESSION 同样先走 remote ensure:remote draft (尤其 collab
+      // lead) 的 SSH 重连 / agent 安装 / codex daemon MCP 注入必须先于
+      // bootstrap, 否则 lead 首个 turn 没有 cindy_orca, 与 orca 架构文档的
+      // "session start/resume 前置" 契约不符。本地会话 ensure 内部直接返回。
+      bootstrapSession: async (co) => {
+        await ensureRemoteReadyForSessionStart({ createOpts: co });
+        return bootstrapSession(co);
+      },
       markOrcaRoleIfNeeded,
       markKnownNonOrcaIfApplicable,
       allocateDialogueWorkspace: ensureDialogueWorkspaceDir,
@@ -4213,6 +4572,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   }
 
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = {
+    // 停用轴边界裁决:目标路由被停用 → 抛错;隐式默认落点被停用 → 返回启用替代来源。
+    assertModelRouteUsable: (agent, model, providerId) =>
+      assertModelRouteUsable(agent, model, providerId),
     getSessionRow: async (sessionId) => {
       const db = getDbClient().drizzle;
       const [row] = await db
@@ -4276,6 +4638,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         planMode: false,
         title: row.title ?? undefined,
         resumeSessionId: row.sdkSessionId ?? undefined,
+        // 远端会话切换引擎后仍是远端:带回 remoteHostId 并走 ensure (SSH
+        // 重连 / agent 安装 / codex daemon MCP 注入), 否则会以远端
+        // workingDir 在本机 spawn。
+        remoteHostId: row.remoteHostId ?? undefined,
       });
       if (co.extraDirs === undefined) {
         try {
@@ -4288,6 +4654,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
           });
         }
       }
+      await ensureRemoteReadyForSessionStart({ createOpts: co });
       await bootstrapSession(co);
       broadcastSessionCreated(sessionId);
     },
@@ -4431,6 +4798,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         workingDir: normalizedWorkingDir,
         workspaceKind,
         remoteHostId: lead?.remoteHostId ?? leadRow?.remoteHostId,
+        agentKind: lead?.agentKind ?? leadRow?.agentKind ?? null,
       },
       (pluginId, workingDir) => getPluginRegistry().isEnabled(pluginId, workingDir),
     );
@@ -4486,6 +4854,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       dispatcherSessionId?: string;
       title?: string;
       useWorktree?: boolean;
+      /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
+      workingDir?: string;
       onAccepted?: () => void | Promise<void>;
       onAcceptedRollback?: () => void | Promise<void>;
       origin?: AgentInputQueuedMessage['origin'];
@@ -4502,6 +4872,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       dispatcherSessionId,
       title,
       useWorktree,
+      workingDir: workingDirOverride,
       onAccepted,
       onAcceptedRollback,
       origin,
@@ -4548,6 +4919,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
               message: `dispatcher session ${dispatcherSessionId} not found`,
             };
           }
+          // working_dir 覆盖(#811):把新 session 落到指定项目目录,而不是恒继承
+          // dispatcher 的目录。先于 worktree 预建校验——use_worktree 的 base 仓库
+          // 也从覆盖后的目录(校验器规范化后的形态)解析。
+          let resolvedWorkDir = meta.workDir;
+          if (workingDirOverride !== undefined) {
+            // 远程 SSH 会话的 workDir 是远端路径,本机 stat 校验对它无意义
+            // (本机恰好同名目录会假阳性、远端合法目录会假阴性)——fail-closed
+            // 拒绝,待远程校验通道具备后再放开。
+            if (meta.remoteHostId) {
+              return {
+                ok: false,
+                errorCode: 'INVALID_ARGS',
+                message: 'working_dir 暂不支持远程会话(远端路径无法在本机校验)',
+              };
+            }
+            const checked = await validateHandoffWorkingDir(workingDirOverride);
+            if (!checked.ok) {
+              return { ok: false, errorCode: 'INVALID_ARGS', message: checked.message };
+            }
+            resolvedWorkDir = checked.dir;
+          }
           // useWorktree:为新 session 预建正规 session worktree(与 UI 新会话勾选
           // worktree 同类:worktreeStore 绑定 + 关闭时 auto-stash 清理),新 session 的
           // id 必须用预生成的那个(worktree 绑定已按它登记)。失败硬报 WORKTREE_UNAVAILABLE
@@ -4564,8 +4956,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
                 createWorktree: worktreeManager.createWorktree,
                 createId: () => randomUUID(),
               },
-              dispatcherSessionId,
-              meta.workDir,
+              // working_dir 覆盖时不带 dispatcherSessionId:resolveHandoffBaseRepo
+              // 的「dispatcher 自身 worktree」捷径按路径包含判定——覆盖目录若指向
+              // dispatcher worktree 树内的**嵌套独立仓库**,捷径会跳过 detectCwd、
+              // 误用 dispatcher 的 baseRepo。去掉捷径后 detectCwd 按目录自身探测
+              // git 根;覆盖目录落在登记过的 worktree 内时,listAll 反查分支仍生效。
+              workingDirOverride !== undefined ? undefined : dispatcherSessionId,
+              resolvedWorkDir,
             );
             if (!prep.ok) {
               return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prep.message };
@@ -4579,14 +4976,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
             .limit(1);
           inherited = {
             agentKind: meta.agentKind,
-            workingDir: meta.workDir,
+            workingDir: resolvedWorkDir,
+            // 覆盖目录必有真实项目目录 → 归 project 工作区(标题/侧栏分组按项目
+            // 语义走);未覆盖时保持缺省继承,行为不变。
+            ...(workingDirOverride !== undefined ? { workspaceKind: 'project' as const } : {}),
             model: meta.model,
             effort: (row?.effort ?? undefined) as SendToSessionCreateDefaults['effort'],
             fastMode: !!row?.fastMode,
             providerId: row?.providerId ?? undefined,
-            permissionMode: inheritSourcePermissionMode
-              ? permissionModeOrAsk(row?.permissionMode)
-              : 'bypassPermissions',
+            // working_dir 覆盖时强制继承来源会话的权限档(review 反馈):把新目录
+            // 以 Full access 打开是相对 dispatcher 的权限升级,跨项目 handoff
+            // 不应隐式发生;未覆盖时保持既有缺省(bypassPermissions)不变。
+            permissionMode:
+              inheritSourcePermissionMode || workingDirOverride !== undefined
+                ? permissionModeOrAsk(row?.permissionMode)
+                : 'bypassPermissions',
           };
         } else {
           if (useWorktree) {
@@ -4792,7 +5196,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         await runAcceptedCallback(onAccepted, targetSessionId, clientId);
       };
 
-      const live = maker.getSession(targetSessionId);
+      let live = maker.getSession(targetSessionId);
       if (live) {
         if (live.isTurnRunning?.()) {
           await enqueueSendToSessionMessage({
@@ -4817,6 +5221,72 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
               : null,
           };
         }
+        // idle-live send 前的轻量 MCP 漂移判定 (纯本地, 零远程 RTT):
+        // bridge shutdown strip / token 轮换 / bridge 重建 / 端口重绑后,
+        // live 直发路径原本不经任何 ensure, daemon 会带着死 URL / 空 env
+        // 跑到 turn-done 才恢复 (codex-connector R23 P1)。命中漂移才走完整
+        // remote ensure (含 lazy 重建 bridge), 无漂移零开销。
+        if (
+          live.remoteHostId &&
+          live.agentKind === 'codex' &&
+          hasPendingRemoteMcpDrift(live.remoteHostId, {
+            collabEnabled: getPluginRegistry().isEnabled('collab'),
+            token: getRemoteMcpBridgeToken(),
+            bridgeInstanceId: getActiveCodexBridgeInstanceId(),
+          })
+        ) {
+          const ensureResult = await ensureRemoteReadyForSessionStart({ session: live });
+          // ensure 完整生效 ⇒ daemon 已 (重) bootstrap ⇒ 长命 transport
+          // (到旧 daemon socket 的 proxy channel) 已死 — 继续用 live 直发
+          // 会把首条消息送进失效 transport, 用户先撞一次 transport error
+          // 才能靠 ensureStarted 自愈 (codex-connector R25 P1)。与 cc stale
+          // 同构:detach 落 lazy-resume 直接重建。drift 未清 = 他处有 live
+          // turn 在 defer, daemon 未重启, transport 仍活, 保持直发。
+          if (ensureResult?.remoteCodexDaemonRebootstrapped) {
+            live = undefined;
+          } else {
+            const driftCleared = !hasPendingRemoteMcpDrift(live.remoteHostId, {
+              collabEnabled: getPluginRegistry().isEnabled('collab'),
+              token: getRemoteMcpBridgeToken(),
+              bridgeInstanceId: getActiveCodexBridgeInstanceId(),
+            });
+            if (driftCleared) {
+              try {
+                await live.detach();
+              } catch (err) {
+                log.warn('sendToSession: detach after drift rebootstrap failed, falling through to lazy-resume', {
+                  targetSessionId,
+                  err: err instanceof Error ? err.message : String(err),
+                });
+              }
+              live = undefined;
+            }
+          }
+        }
+        // 远端 CC 的 invalidate 竞态 (codex-connector R23 P2):invalidate
+        // (bridge 重建 / 端口重绑 / shutdown) 的 detach 是 fire-and-forget,
+        // session 在 detach 完成前仍 active — 此时直发会进带旧 MCP URL 的
+        // query。stale 命中时先同步 detach 再落 lazy-resume (forceFresh)。
+        if (
+          live !== undefined &&
+          live.remoteHostId &&
+          live.agentKind === 'claude-code' &&
+          getRemoteCcStaleQuery()?.(live.id) === true
+        ) {
+          try {
+            await live.detach();
+          } catch (err) {
+            log.warn('sendToSession: detach stale remote CC session failed, falling through to lazy-resume', {
+              targetSessionId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
+          // detach 后不得继续 live 直发 (session 已 closed) — 置空落入
+          // 下方 lazy-resume (bootstrap 重建 → factory forceFresh)。
+          live = undefined;
+        }
+      }
+      if (live) {
         try {
           const sendResult = await sendUserMessageWithAwaitedGitBaseline(
             live,
@@ -4904,6 +5374,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
             });
           }
         }
+        // lazy-resume 也要走 remote ensure:Orca 派活 / scheduler 等 main 侧
+        // 通路不带 remoteHostId 快照, ensure 内部会从 sessions 行兜底回填并
+        // 完成 SSH 重连 / agent 安装 / codex daemon MCP 注入。
+        await ensureRemoteReadyForSessionStart({ createOpts });
         const { session } = await bootstrapSession(createOpts);
         await markOrcaRoleIfNeeded(session.id, createOpts.orcaRole);
         const sendResult = await sendUserMessageWithAwaitedGitBaseline(
@@ -5648,58 +6122,63 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         permissionMode: leadRow.permissionMode,
         fastMode: !!leadRow.fastMode,
         providerId: leadRow.providerId ?? null,
+        remoteHostId: leadRow.remoteHostId ?? null,
       };
     },
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
     getAvailableModels: (agent) => maker.getCapabilities(agent).availableModels,
     getProviderRoutingContext: async () => {
       const views = await getDesktopProviderService().listProviders({ allowSideEffects: true });
-      // 这里的 models/fastModels/effortMetaByModel 都是 orcaWorkerCreationService 唯一能看到
-      // 的 provider 快照 —— 一旦某个非聊天 mode 的模型混进这份 id 清单,service 内所有
-      // `provider.models.includes(id)` 式的 preflight 都只按 id 存在与否放行,永远不会知道
-      // 这条模型其实是图片/语音端点(mode 信息在这一步已经被拍平丢弃)。必须在这里先按
-      // isChatEligible 过滤,而不是指望下游 service 补(2026-07 review 第 16 轮:MCP
-      // create_worker / 缓存默认路由都走这条快照,不经过 renderer 侧选择器的过滤)。
+      // 准入过滤与 modelList.ts 标准派生同口径:用户停用的模型(disabled,见
+      // model-disable-store)与非聊天模型(image/video/tts/stt/realtime/
+      // embedding/compression,issue #882 第 3 点)不进路由可用集 —— MCP
+      // create_worker 点名它们会走既有的 INVALID_PARAMS / NO_PROVIDER 拒绝路径,
+      // 而不是静默路由过去。停用的供应商已在 connectedProvidersForAgent(suspended)
+      // 一层出局。isAgentSelectableModel 现在就是 isChatEligible(+ userProvider
+      // 例外),这里的 models/fastModels/effortMetaByModel 都是
+      // orcaWorkerCreationService 唯一能看到的 provider 快照 —— 一旦某个非聊天
+      // mode 的模型混进这份 id 清单,service 内所有 `provider.models.includes(id)`
+      // 式的 preflight 都只按 id 存在与否放行,永远不会知道这条模型其实是图片/
+      // 语音端点(mode 信息在这一步已经被拍平丢弃),必须在这里先过滤,不能指望
+      // 下游 service 补(2026-07 review 第 16 轮:MCP create_worker / 缓存默认
+      // 路由都走这条快照,不经过 renderer 侧选择器的过滤)。
+      const routableModels = (provider: ProviderView, agent: AgentKind) =>
+        (provider.models[agent] ?? []).filter(
+          (model) =>
+            model.disabled !== true &&
+            isAgentSelectableModel(model, { userProvider: provider.source === 'user' }),
+        );
+      const availabilityFor = (agent: AgentKind) =>
+        connectedProvidersForAgent(views, agent).map((provider) => {
+          const models = routableModels(provider, agent);
+          return {
+            id: provider.id,
+            name: provider.name,
+            models: models.map((model) => model.id),
+            // Fast 能力 per-(provider, model):显式来源的 Fast 判定按该来源自己的条目。
+            fastModels: models
+              .filter((model) => model.supportsFastMode)
+              .map((model) => model.id),
+            // effort 档位同样 per-(provider, model):供 service 按实际路由来源重归一。
+            effortMetaByModel: Object.fromEntries(
+              models.map((model) => [
+                model.id,
+                { efforts: model.efforts, defaultEffort: model.defaultEffort },
+              ]),
+            ),
+            requiresExplicitRoute: providerRouteRequiresExplicitSelection(
+              provider.routing[agent]?.authStrategy,
+            ),
+            // chat-bridged codex 供应商标记 (SSH 远端 worker 兼容闸用,
+            // 见 orcaWorkerCreationService R23 P2 校验;wireProtocol 仅
+            // codex 侧存在, 其他 agent 恒 false)。
+            chatBridgedCodex: agent === 'codex' && provider.routing[agent]?.wireProtocol === 'openai-chat',
+          };
+        });
       return {
         availability: {
-          'claude-code': connectedProvidersForAgent(views, 'claude-code').map((provider) => {
-            const chatModels = (provider.models['claude-code'] ?? []).filter(isChatEligible);
-            return {
-              id: provider.id,
-              name: provider.name,
-              models: chatModels.map((model) => model.id),
-              // Fast 能力 per-(provider, model):显式来源的 Fast 判定按该来源自己的条目。
-              fastModels: chatModels.filter((model) => model.supportsFastMode).map((model) => model.id),
-              // effort 档位同样 per-(provider, model):供 service 按实际路由来源重归一。
-              effortMetaByModel: Object.fromEntries(
-                chatModels.map((model) => [
-                  model.id,
-                  { efforts: model.efforts, defaultEffort: model.defaultEffort },
-                ]),
-              ),
-              requiresExplicitRoute: providerRouteRequiresExplicitSelection(
-                provider.routing['claude-code']?.authStrategy,
-              ),
-            };
-          }),
-          codex: connectedProvidersForAgent(views, 'codex').map((provider) => {
-            const chatModels = (provider.models.codex ?? []).filter(isChatEligible);
-            return {
-              id: provider.id,
-              name: provider.name,
-              models: chatModels.map((model) => model.id),
-              fastModels: chatModels.filter((model) => model.supportsFastMode).map((model) => model.id),
-              effortMetaByModel: Object.fromEntries(
-                chatModels.map((model) => [
-                  model.id,
-                  { efforts: model.efforts, defaultEffort: model.defaultEffort },
-                ]),
-              ),
-              requiresExplicitRoute: providerRouteRequiresExplicitSelection(
-                provider.routing.codex?.authStrategy,
-              ),
-            };
-          }),
+          'claude-code': availabilityFor('claude-code'),
+          codex: availabilityFor('codex'),
         },
         resolveDefaultProviderIdForModel: (agent, model) => (
           effectiveSourceIdForModel(views, null, model, agent)
@@ -5713,6 +6192,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     createId,
     createSessionId: createBusinessSessionId,
     buildCreateOptsWithStderr,
+    ensureRemoteReadyForSessionStart: async (params) => {
+      await ensureRemoteReadyForSessionStart({ createOpts: params.createOpts });
+    },
     bootstrapSession,
     addOrUpdateWorker: async (worker) => {
       await addOrUpdateWorker(worker);
@@ -6061,7 +6543,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     getSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId),
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId),
-    ensureRemoteReadyForSessionStart,
+    ensureRemoteReadyForSessionStart: async (params) => {
+      await ensureRemoteReadyForSessionStart(params);
+    },
     checkWorkDirExists,
     isOrcaMcpHydrated,
     buildCreateOptsWithStderr,
@@ -6558,6 +7042,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     },
     onApplied: (sessionId) => {
       inputCoordinator.wakeSession(sessionId, 'pending-credential-switch-applied');
+    },
+    // 停用轴:deferred 切换收口前重裁决(SET_MODEL 时刻裁决过,但生效可能在数分钟
+    // 后,期间目标可能被停用;PR #744 review 第七轮,第十四轮换宽松降级形态 ——
+    // 目标全停时连模型一起换到启用兜底)。
+    resolveRoute: resolveLenientSessionRoute,
+    // 裁决改道 / 清空显式来源 / 全停换模型时回写 DB + 广播 patch:renderer 在
+    // deferred 接受时已按请求值落盘,不纠正则下一次懒 resume 按停用路由重建
+    // (PR #744 review 第十、十四轮)。
+    persistRoute: async (sessionId, route) => {
+      const patch: Record<string, unknown> = { providerId: route.providerId };
+      if (route.model) patch.model = route.model;
+      if (route.effort) patch.effort = route.effort;
+      if (route.fastMode !== undefined) patch.fastMode = route.fastMode;
+      await getDbClient()
+        .drizzle.update(sessions)
+        .set(patch)
+        .where(eq(sessions.id, sessionId));
+      broadcastSessionPatched(sessionId, patch);
     },
     logger: log,
   });
@@ -7160,6 +7662,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     // 后到的 SET_MODEL 才能写 route。否则切换 DB await 恢复后会用旧 provider
     // 覆盖用户刚选的新 route，形成 DB 与进程内路由分叉。
     return withSendToSessionLock(sessionId, async () => {
+      // 停用轴准入(PR #744 review;第十二轮移入锁内):切换模型是一次新的路由选择,
+      // 不得切到用户停用的模型 / 来源(本机选择器已过滤,但本 channel 在 device-link
+      // allowlist 内,老控制端可直接点名)。裁决必须在拿到会话锁**之后**执行 ——
+      // 排队等待期间目标可能刚被停用,而同凭证族的变更即时生效、不经 deferred 收口
+      // 的重裁决,锁前裁决结果可能已过期。会话当前正用着的停用模型不受影响,这里只
+      // 拦「切过去」;隐式来源的原生默认落点被停用而有启用替代拷贝时,以显式来源
+      // 落地(与 bootstrapSession 同语义)。agentKind 读不到(会话行缺失等)时不拦。
+      // DB 存的是 'cc' | 'codex'(messages.agent_kind 口径),目录侧是 AgentKind。
+      let effectiveProviderId = providerId;
+      {
+        const dbAgentKind = getSessionDbAgentKind(sessionId);
+        if (dbAgentKind) {
+          const reroute = await assertModelRouteUsable(
+            dbAgentKind === 'cc' ? 'claude-code' : 'codex',
+            model,
+            typeof providerId === 'string' ? providerId : null,
+          );
+          if (reroute && typeof providerId !== 'string') effectiveProviderId = reroute;
+        }
+      }
       try {
         const result = await applySetModelThenCancelAgentSwitchIntent(
           agentSwitchPending,
@@ -7168,7 +7690,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
             maker,
             sessionId,
             model,
-            providerId,
+            providerId: effectiveProviderId,
             isSessionInTurn,
             registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
             clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,

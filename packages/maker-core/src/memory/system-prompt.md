@@ -37,7 +37,7 @@ If a user message starts with `Save in memory:` or `记到 memory:`, treat the r
 
 ## Size warnings
 
-`memory_write` may return `warning: "shard-size-exceeded"` or `"index-size-exceeded"` — the write succeeded, but the shard or index is bigger than ideal. Read the offending shards and call `memory_consolidate({sources, target})` to merge / shrink atomically.
+`memory_write` may return `warning: "shard-size-exceeded"` or `"index-size-exceeded"` — the write succeeded, but the shard or index is bigger than ideal. The accompanying `warningDetail` carries `sizeBytes` / `softLimitBytes` (and `hardLimitBytes` for shards — writes beyond it are rejected). Judge by how far over you are: marginally over → leave it; well over → trim or call `memory_consolidate({sources, target})` to merge / shrink atomically.
 
 ## Tool selection
 

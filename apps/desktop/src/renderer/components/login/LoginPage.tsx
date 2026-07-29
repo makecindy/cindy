@@ -26,8 +26,6 @@ import googleIcon from '@/assets/login/icons/google.svg';
 import wechatIcon from '@/assets/login/icons/wechat.svg';
 import ssoIcon from '@/assets/login/icons/sso.svg';
 import ssoIconDark from '@/assets/login/icons/sso-dark.svg';
-import guestIcon from '@/assets/login/icons/guest.svg';
-import guestIconDark from '@/assets/login/icons/guest-dark.svg';
 
 import { LoginStage } from './LoginStage';
 import {
@@ -40,6 +38,7 @@ import {
   LoginMethodRow,
   LoginPanel,
   LoginPrimaryButton,
+  LoginSkipEntry,
   LoginSocialButton,
   LoginSocialRow,
   LoginTextLink,
@@ -88,8 +87,8 @@ const REGION_PILL_KEY: Partial<Record<typeof CURRENT_CINDY_REGION, string>> = {
  * 渲染与本地格式校验。覆盖全部登录步骤:identifier 主视图 / ssoOrgMode 子视图
  * (含 sso-org-list = method-choice 的 SSO 入口来源变体)/ method-choice /
  * verification-code / account-selection / binding / preparing / error,以及
- * 协议同意链路(radio + 拦截弹窗)与游客入口。倒计时契约、Text_link 全态、
- * 错误码映射均已落地(历史施工批次见 git log,不再在注释中引用)。
+ * 协议同意链路(radio + 拦截弹窗)与面板内「跳过登录」入口。倒计时契约、
+ * Text_link 全态、错误码映射均已落地(历史施工批次见 git log,不再在注释中引用)。
  */
 export function LoginPage() {
   const {
@@ -118,6 +117,13 @@ export function LoginPage() {
   const isMac = window.electronAPI?.platform === 'darwin';
   const [localModePending, setLocalModePending] = useState(false);
 
+  /**
+   * 进入本地模式(「跳过登录」入口 + error 步逃生入口共用)。
+   *
+   * 不过协议门(产品拍板 2026-07-27,推翻同年 07-24「游客也先同意协议」):跳过登录
+   * 不创建账号、不上报任何数据,radio 未勾选也直接进主界面。因此这里也不调
+   * persistPrivacyConsent——没有明示同意就保持采集闸关闭。
+   */
   const openLocalMode = async () => {
     if (isLoading || localModePending || !window.electronAPI?.authEnterLocal) return;
     setLocalModePending(true);
@@ -134,14 +140,16 @@ export function LoginPage() {
   // 企业 SSO 入口子视图:在 identifier 步骤内输入组织标识(本地展示态,不进 main)。
   // 需先于 bottomReserve 计算声明——协议行只在 identifier 主视图渲染,sso-org 子视图隐藏。
   const [ssoOrgMode, setSsoOrgMode] = useState(false);
+  const realmConfirmation = loginState?.step === 'realm-confirmation' ? loginState : null;
 
   /* ── 协议同意链路(consent PR):radio 状态 + 未勾选拦截弹窗 + 同意后续接。
      过门点(产品拍板 2026-07-24 二次):手机号提交、邮箱提交(discover 前)、
-     method-choice 个人行发码、社交圆钮(Apple/Google/未来微信)、游客——个人
+     method-choice 个人行发码、社交圆钮(Apple/Google/未来微信)——个人**账号**
      登录一律先同意协议再发起,包括仅触发方式查询的 email discover(拍板压过
-     审查侧「discover 无副作用可放行」的建议)。豁免仅限显式企业 SSO 入口:
-     SSO 圆钮、组织标识提交、method-choice sso 行。pending 动作只存 renderer
-     本地(不进 main loginFlowState;规则 9:分支全部代码状态机化)。 ── */
+     审查侧「discover 无副作用可放行」的建议)。豁免:显式企业 SSO 入口
+     (SSO 圆钮、组织标识提交、method-choice sso 行)+ 跳过登录/本地模式
+     (2026-07-27 拍板,见 openLocalMode)。pending 动作只存 renderer 本地
+     (不进 main loginFlowState;规则 9:分支全部代码状态机化)。 ── */
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [consentDialogOpen, setConsentDialogOpen] = useState(false);
   // pending 带开门时刻快照,同意时复验防陈旧续接(codex 审查 P1;consentGate 单测)
@@ -220,8 +228,8 @@ export function LoginPage() {
     reportLoginPanelMounted();
     return () => reportLoginPanelUnmounted();
   }, [reportLoginPanelMounted, reportLoginPanelUnmounted]);
-  // 游客入口已移入第三方圆钮行(identifier 视图人形圆钮);footer 仅保留 error 步
-  // 的「跳过登录」逃生入口——登录服务不可用时用户仍能进入本地模式(既有产品保证)。
+  // 「跳过登录」常驻入口在面板内(identifier 视图 SKIP_ENTRY 文字链);footer 仅保留
+  // error 步的逃生入口——登录服务不可用时用户仍能进入本地模式(既有产品保证)。
   const showLocalModeFooter = loginState?.step === 'error';
   // 面板底部预留恒取全流程最大值(footer 124;协议行 48 被其覆盖):step 切换时
   // 面板/品牌层零跳位(规则 7,codex 审查 P1)。browser-redirect/completed 维持 0,
@@ -384,10 +392,12 @@ export function LoginPage() {
     event.preventDefault();
     const value = ssoOrg.trim();
     if (!value) return;
+    // 组织区域先静默发现；仅当结果与安装包区域不一致时，main 状态机进入
+    // realm-confirmation，由下方弹窗在继续 SSO 前向用户确认。
     void dispatch({ type: 'discover-sso-org', org: value });
   };
 
-  /* ── identifier 主视图(680×560 组:面板 + 第三方圆钮行) ── */
+  /* ── identifier 主视图(680×620 组:面板 680×500 + 第三方圆钮行) ── */
   const renderIdentifier = () => {
     if (!loginState || loginState.step !== 'identifier') return null;
     const providers = loginState.providers;
@@ -442,8 +452,19 @@ export function LoginPage() {
               </LoginErrorText>
             )}
           </form>
+          {/* 「跳过登录」= 面板内文字按钮(新稿 705:1068 容器 680×60 @y430,取代旧游客
+              圆钮;LoginSkipEntry ≠ LoginTextLink,见该组件注释):接既有 local mode
+              链路,不过协议门(2026-07-27 拍板)。槽位在 error_text(380..430)之下、
+              与其首尾相接,两者同时可见互不重叠;error 出现不推移本入口(均 absolute)。 */}
+          <LoginSkipEntry
+            testId="login-skip-entry"
+            disabled={isLoading || localModePending}
+            onClick={() => void openLocalMode()}
+          >
+            {t('login.localModeEntry')}
+          </LoginSkipEntry>
         </LoginPanel>
-        <LoginSocialRow count={providers.social.length + 2}>
+        <LoginSocialRow count={providers.social.length + 1}>
           {providers.social.map((provider) => (
             <LoginSocialButton
               key={provider}
@@ -486,21 +507,8 @@ export function LoginPage() {
           >
             <SsoGlyph />
           </LoginSocialButton>
-          {/* 游客登录 = 行内最后一颗人形圆钮(figma 379:680 mdi:user),接既有
-              local mode;属个人链路,过协议门(同意后直接进主界面,产品拍板)。 */}
-          <LoginSocialButton
-            testId="login-social-guest"
-            label={t('login.localModeEntry')}
-            isLoading={isLoading || localModePending}
-            onClick={() => {
-              if (isLoading || localModePending) return;
-              requireConsent(() => void openLocalMode());
-            }}
-          >
-            <GuestGlyph />
-          </LoginSocialButton>
         </LoginSocialRow>
-        {/* 协议同意行(figma 600:660:圆钮行下方 22 设计px,组坐标 y=582;
+        {/* 协议同意行(figma 700:807:圆钮行下方 22 设计px,组坐标 y=642;
             渲染门 = 所在 identifier 主视图分支,面板底部预留恒定已含其区间) */}
         <LoginConsentRow
           checked={consentAccepted}
@@ -513,7 +521,7 @@ export function LoginPage() {
     );
   };
 
-  /* ── 企业 SSO 入口子视图(sso-org empty/filled;680×440) ── */
+  /* ── 企业 SSO 入口子视图(sso-org empty/filled;面板 680×500,无跳过入口) ── */
   const renderSsoOrg = () => (
     <LoginPanel testId="login-panel-sso-org">
       <form onSubmit={submitSsoOrg} noValidate>
@@ -569,8 +577,8 @@ export function LoginPage() {
   const renderMethodChoice = () => {
     if (loginState?.step !== 'method-choice') return null;
     const ssoMethods = loginState.methods.filter((method) => method.type === 'sso');
-    // demo 呈现仲裁(methodChoicePanel):多 connection(≥2)时抑制个人行——
-    // 面板 440 高只容两行(158/278),第三行 y=398+100 会溢出;ssoRequired 同样抑制。
+    // demo 呈现仲裁(methodChoicePanel):多 connection(≥2)时抑制个人行——方式行
+    // 只排两行(158/278),第三行 y=398 底边会贴到面板底;ssoRequired 同样抑制。
     const emailAllowed =
       loginState.methods.some((method) => method.type === 'email_code') &&
       !ssoMethods.some((method) => method.ssoRequired) &&
@@ -959,7 +967,7 @@ export function LoginPage() {
         data-testid="login-local-mode"
         type="button"
         disabled={localModePending || isLoading}
-        onClick={() => requireConsent(() => void openLocalMode())}
+        onClick={() => void openLocalMode()}
         aria-describedby="login-local-mode-description"
         className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60"
         style={{ minHeight: 40 }}
@@ -1040,6 +1048,22 @@ export function LoginPage() {
           onDisagree={dismissConsent}
           onOpenTerms={() => openLegalLink('terms')}
           onOpenPrivacy={() => openLegalLink('privacy')}
+        />
+      )}
+      {realmConfirmation && (
+        <LoginConsentDialog
+          title={t('login.realmConsent.title')}
+          body={t(
+            realmConfirmation.targetRegion === 'cn'
+              ? 'login.realmConsent.bodyCn'
+              : 'login.realmConsent.bodyGlobal',
+          )}
+          agreeLabel={t('login.realmConsent.agree')}
+          disagreeLabel={t('login.realmConsent.disagree')}
+          onAgree={() => void dispatch({ type: 'confirm-sso-realm' })}
+          onDisagree={() => void dispatch({ type: 'cancel-sso-realm' })}
+          onOpenTerms={() => undefined}
+          onOpenPrivacy={() => undefined}
         />
       )}
     </div>
@@ -1203,21 +1227,6 @@ function SsoGlyph() {
   return (
     <img
       src={isDark ? ssoIconDark : ssoIcon}
-      alt=""
-      aria-hidden
-      draggable={false}
-      className="h-full w-full object-contain"
-    />
-  );
-}
-
-// 游客人形图标(figma 379:753 mdi:user):单色随圆钮底反相(亮色深圆浅标 #EEEEEE /
-// 暗色白圆墨标 #2A2828),与 Apple 单色图标同规则。
-function GuestGlyph() {
-  const isDark = useIsDarkMode();
-  return (
-    <img
-      src={isDark ? guestIconDark : guestIcon}
       alt=""
       aria-hidden
       draggable={false}

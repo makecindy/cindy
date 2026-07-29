@@ -28,13 +28,19 @@ export const SLOGAN = {
   height: 129.12,
 } as const;
 
-/** 登录整体组(figma §5.1:x=570;sso-org 族 y=1227,其余 1229——demo loginY())。 */
+/**
+ * 登录整体组(figma §5.1:x=570;sso-org 族 y=1227,其余 1229——demo loginY())。
+ *
+ * height = 面板 500 + gap 40 + 第三方圆钮 80 = 620(新稿 700:783;旧稿 560 = 面板 440
+ * 时代)。面板增高 60 后组内面板外元素整体下移 60(SOCIAL.y 480→540、
+ * CONSENT_ROW.y 582→642),组高随之 +60。
+ */
 export const LOGIN_GROUP = {
   x: 570,
   yDefault: 1229,
   ySsoOrg: 1227,
   width: 680,
-  height: 560,
+  height: 620,
 } as const;
 
 /**
@@ -75,8 +81,17 @@ export const LOGIN_LOCAL_MODE = {
   descriptionLineHeight: 18,
 } as const;
 
-/** 面板与面板内组件几何(figma §5.1/§4;wave4 面板描边 1px inside 368:1383)。 */
-export const PANEL = { width: 680, height: 440, radius: 36 } as const;
+/**
+ * 面板与面板内组件几何(figma §5.1/§4;wave4 面板描边 1px inside 368:1383)。
+ *
+ * height 440 → 500(新稿三端一致 680×500:桌面 700:791 / 长屏 705:886 / 短屏 705:1062):
+ * 增的 60 恰好是面板内新增的「跳过登录」容器高(SKIP_ENTRY),面板内其余元素
+ * (标题 31 / 副标题 75 / 输入框 158 / 主按钮 300 / error 380)坐标一律不动。
+ * 本常量供 LoginPage 全部步骤共用——面板高度在步骤间必须恒定,否则 identifier↔验证码
+ * 等切换会出现 30 CSS px 的高度跳变(规则 7:杜绝视觉跳变);Splash 借用面板时不跟随
+ * 500,见 SPLASH_PANEL.height。
+ */
+export const PANEL = { width: 680, height: 500, radius: 36 } as const;
 export const TITLE = { y: 31, height: 38, fontSize: 32 } as const;
 /** 副标题:540@70 ≤2 行顶对齐,槽高 = 行高 × 最大行数(DESIGN.md §16.2,2026-07-24 拍板)。 */
 export const SUBTITLE = { x: 70, y: 75, width: 540, fontSize: 20, lineHeight: 23, maxLines: 2 } as const;
@@ -105,10 +120,16 @@ export const CONTROL = {
   textPadLeft: 31, // §4.1 文本 x=31
 } as const;
 export const SPINNER = { size: 24, x: 487, y: 27 } as const; // 247:1546 @load
-export const SOCIAL = { y: 480, size: 80, gap: 70, radius: 50, iconSize: 48 } as const; // §4.5
+// §4.5;y 480 → 540(面板 440→500,圆钮行距面板底恒 40:新稿容器 y=540)
+export const SOCIAL = { y: 540, size: 80, gap: 70, radius: 50, iconSize: 48 } as const;
 export const BACK = { x: 20, y: 20, size: 60, radius: 40 } as const; // §4.6
-// 错误提示:占满主按钮底(380)→面板底(440)整段,文案垂直居中(2026-07-24 拍板;原 h50 偏上)
-export const ERROR_TEXT = { y: 380, width: 680, height: 60, fontSize: 20 } as const;
+/**
+ * 错误提示:占满主按钮底(380)→「跳过登录」容器顶(430)整段,文案垂直居中。
+ * 新稿 error_text 容器 680×50 @y380(705:1067),y 不因面板增高/新增跳过入口而移动;
+ * 高度回到 50(2026-07-24 的 h60「占满到面板底」是面板 440 时代的等价写法)。
+ * 与 SKIP_ENTRY 首尾相接、同时可见互不重叠(文案视觉间距 ≈30 设计px)。
+ */
+export const ERROR_TEXT = { y: 380, width: 680, height: 50, fontSize: 20 } as const;
 export const METHOD_ROW = {
   x: 70,
   width: 540,
@@ -122,17 +143,40 @@ export const METHOD_ROW = {
 } as const; // §4.9 + demo method-row
 export const LOADING_RING = { x: 308, yBrowser: 158, yPreparing: 193, size: 64 } as const; // §5.2
 export const TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, fontSize: 20 } as const; // §4.7
+/**
+ * 「跳过登录」文字**按钮**(新稿容器 705:1068 / 700:910:面板内 680×60 @y430;
+ * 文本 96×29 @(292,15) Regular 24 下划线,水平+垂直居中——文本中心 340 = 容器中心)。
+ * 组件 = LoginSkipEntry(**不是** LoginTextLink:文字按钮与文字链接是两种组件,
+ * 前者不做 hover/pressed 变色;用户拍板 2026-07-27)。
+ *
+ * 槽位 430..490,面板底余 10(= 500 - 490,新稿下内边距);上接 ERROR_TEXT(380..430),
+ * 两者同时可见时首尾相接不重叠。字号取稿值 24(≠ TEXT_LINK 的 20,故单列常量);
+ * 颜色走 --login-secondary-text(#6F6F6F 双模同值,与稿一致)。
+ *
+ * width 680 / height 60 是**布局容器**,容器自身不可点;hitPaddingX = 可点区在实际
+ * 文字渲染宽度基础上左右各扩的设计px(热区随语言自适应,zh 4 字与 en「Skip Sign-In」
+ * 宽度不同;用户拍板 2026-07-27)。
+ */
+export const SKIP_ENTRY = {
+  x: 0,
+  y: 430,
+  width: 680,
+  height: 60,
+  fontSize: 24,
+  hitPaddingX: 30,
+} as const;
 /** sso-org 帮助行:顶对齐 ≤2 行,y=输入框底 238+6,两行至 290 < 主按钮 300(DESIGN.md §16.2 折行分级 2)。 */
 export const SSO_ORG_HINT = { x: 70, y: 244, width: 540, fontSize: 20, lineHeight: 23, maxLines: 2 } as const;
 
 /**
  * 协议同意行(figma 600:660「服务条款」行:680×40,radio 24 @x156 + 文字 20 @x186.5)。
- * 行顶相对登录组顶 = 帧内 y1811 - 组 y1229 = 582(即组底 560 下方 22 设计px);
+ * 行顶相对登录组顶 = 642(新稿 700:807 帧内 y1871 - 组 y1229;即组底 620 下方 22 设计px,
+ * 面板 440→500 后整行随组下移 60,与圆钮行的 22 间距不变);
  * 行内容(radio + 声明文字)水平居中,radio 与文字间距 = 186.5 - (156+24) = 6.5。
  * 文字宽随语言变化,落码用 flex 居中而非固定 x(几何语义与稿等价)。
  */
 export const CONSENT_ROW = {
-  y: 582,
+  y: 642,
   width: 680,
   height: 40,
   gap: 6.5,
@@ -169,10 +213,18 @@ export const RESEND_COUNTDOWN_MS = 42_000;
 
 /**
  * Splash 统一面板(wave4 五帧 379:581/525/607/633/655 实测,figma §10.3;
- * design.md §8.1 条 5)。面板本体 = 登录同款白面板(680×440 r36 @570,1229,
- * PANEL/LOGIN_GROUP 复用);以下为面板内 Splash 专属元素几何(面板内坐标)。
+ * design.md §8.1 条 5)。面板本体 = 登录同款白面板(680×440 r36 @570,1229,复用
+ * LoginPanel 组件 + LOGIN_GROUP 落位,高度自持见下);以下为面板内 Splash 专属元素
+ * 几何(面板内坐标)。
  */
 export const SPLASH_PANEL = {
+  /**
+   * 面板高度 440:**不跟随登录面板的 500**。登录面板增的 60 只为承载面板内的
+   * 「跳过登录」入口(SKIP_ENTRY),Splash 五帧没有该入口、设计稿也未改版,跟随会
+   * 在启动态凭空多出 50 CSS px 空白。Splash 与登录面板不同 stage、不同缩放
+   * (desktopScale vs PANEL_FIXED_SCALE),尺寸本就不重合,拆开不破坏 handoff 连续性。
+   */
+  height: 440,
   /** spinner 64×64 @面板内(308,188),内弧 #6F6F6F(login-secondary-text) */
   spinner: { x: 308, y: 188, size: 64 },
   /** 更新/下载进度条 轨 501×16 r12 @(90,346)(379:580) */

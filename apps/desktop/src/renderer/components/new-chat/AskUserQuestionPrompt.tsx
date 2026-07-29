@@ -12,11 +12,53 @@
  *   - Skip: empty string ""
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+  type TextareaHTMLAttributes,
+} from 'react';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
+import { useAutoResize } from '@/hooks/useAutoResize';
 import { cn } from '@/lib/utils';
 import type { AskUserDraft, AskUserViewerState, PendingAskUser } from '@/lib/makerChatStore';
+
+const ASK_USER_ANSWER_MAX_HEIGHT_PX = 148;
+
+interface AutoGrowingAnswerTextareaProps extends Omit<
+  TextareaHTMLAttributes<HTMLTextAreaElement>,
+  'value'
+> {
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  value: string;
+}
+
+/**
+ * Keeps AskUserQuestion answers readable in place while preserving the prompt
+ * card's context. Six-ish lines stay visible; longer answers scroll internally
+ * instead of growing over the question and option list.
+ */
+function AutoGrowingAnswerTextarea({
+  textareaRef,
+  value,
+  className,
+  ...props
+}: AutoGrowingAnswerTextareaProps) {
+  useAutoResize(textareaRef, value, ASK_USER_ANSWER_MAX_HEIGHT_PX);
+
+  return (
+    <textarea
+      {...props}
+      ref={textareaRef}
+      rows={1}
+      value={value}
+      className={cn('resize-none', className)}
+    />
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -90,7 +132,7 @@ export function AskUserQuestionPrompt({
   // Custom input
   const [customInput, setCustomInput] = useState('');
   const [showCustomInput, setShowCustomInput] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // ── Animation state ──
   const [slideDirection, setSlideDirection] = useState<'left' | 'right' | null>(null);
@@ -570,11 +612,11 @@ export function AskUserQuestionPrompt({
             {/* "Type something else..." row */}
             <div className="h-px bg-[var(--ask-option-divider)]" />
             {showCustomInput ? (
-              <div className="flex items-center gap-2 px-[16px] py-[14px]">
+              <div className="flex items-start gap-2 px-[16px] py-[14px]">
                 {isMultiSelect && (
                   <div
                     className={cn(
-                      'flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[4px]',
+                      'mt-[2px] flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[4px]',
                       customInput.trim()
                         ? 'bg-[var(--ask-checkbox-checked-bg)]'
                         : 'border-[1.5px] border-[var(--ask-checkbox-border)]',
@@ -596,15 +638,15 @@ export function AskUserQuestionPrompt({
                     )}
                   </div>
                 )}
-                <input
-                  ref={inputRef}
-                  type="text"
+                <AutoGrowingAnswerTextarea
+                  textareaRef={inputRef}
                   value={customInput}
                   onChange={(e) => setCustomInput(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.nativeEvent.isComposing && !isMultiSelect) {
+                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
-                      handleCustomSubmit();
+                      if (isMultiSelect) handleNext();
+                      else handleCustomSubmit();
                     }
                     if (e.key === 'Escape') {
                       e.preventDefault();
@@ -614,7 +656,7 @@ export function AskUserQuestionPrompt({
                   }}
                   placeholder="Type your answer..."
                   className={cn(
-                    'flex-1 bg-transparent text-14 font-normal outline-none',
+                    'min-h-[22px] min-w-0 flex-1 bg-transparent text-14 font-normal leading-[22px] outline-none',
                     'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
                     'select-text',
                   )}
@@ -625,7 +667,7 @@ export function AskUserQuestionPrompt({
                     onClick={handleCustomSubmit}
                     disabled={!customInput.trim()}
                     className={cn(
-                      'shrink-0 rounded-[9999px] px-[16px] py-[6px]',
+                      'self-end shrink-0 rounded-[9999px] px-[16px] py-[6px]',
                       'text-13 font-medium',
                       customInput.trim()
                         ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
@@ -663,14 +705,13 @@ export function AskUserQuestionPrompt({
 
         {/* Free-text input when no options */}
         {options.length === 0 && (
-          <div className="flex gap-2">
-            <input
-              ref={inputRef}
-              type="text"
+          <div className="flex items-end gap-2">
+            <AutoGrowingAnswerTextarea
+              textareaRef={inputRef}
               value={customInput}
               onChange={(e) => setCustomInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   if (customInput.trim()) advance(customInput.trim());
                 }
@@ -682,7 +723,7 @@ export function AskUserQuestionPrompt({
               placeholder="Type your answer..."
               autoFocus
               className={cn(
-                'h-10 flex-1 rounded-[12px] border px-3 text-14 outline-none',
+                'min-h-10 min-w-0 flex-1 rounded-[8px] border px-3 py-[8px] text-14 leading-[22px] outline-none',
                 'border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] text-[var(--ask-input-text)]',
                 'placeholder:text-[var(--ask-input-placeholder)]',
               )}
@@ -692,7 +733,7 @@ export function AskUserQuestionPrompt({
               onClick={() => customInput.trim() && advance(customInput.trim())}
               disabled={!customInput.trim()}
               className={cn(
-                'rounded-[9999px] px-4 text-14 font-medium transition-colors',
+                'h-10 rounded-[9999px] px-4 text-14 font-medium transition-colors',
                 customInput.trim()
                   ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
                   : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',

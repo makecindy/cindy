@@ -228,6 +228,7 @@ interface UseCCAgentChatReturn {
           title: string;
           body: string;
           type: 'bug' | 'feature';
+          publicName?: string;
           uiLanguage: string;
         }
       | { confirmed: false },
@@ -550,6 +551,7 @@ export function useCCAgentChat(
             title: string;
             body: string;
             type: 'bug' | 'feature';
+            publicName?: string;
             uiLanguage: string;
           }
         | { confirmed: false },

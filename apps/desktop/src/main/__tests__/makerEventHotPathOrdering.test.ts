@@ -18,6 +18,21 @@ const hookControlSourcePath = resolve(__dirname, '..', 'hook-control', 'ipc.ts')
 const hookControlSource = readFileSync(hookControlSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
+  it('rewires a replacement Session instance that retains the same business id', () => {
+    const wireSessionSource = extractWireSessionSource();
+
+    expect(source).toContain('const wiredSessionsById = new Map<string, WiredSessionRegistration>();');
+    expect(wireSessionSource).toContain('if (existing?.session === session)');
+    expect(wireSessionSource).toContain('for (const dispose of existing.disposers) dispose();');
+    expect(wireSessionSource).toContain('existing.session.setInteractionListener(null);');
+    expect(wireSessionSource).toContain(
+      'registration.disposers.push(session.onEvent((event: AgentEvent) => {',
+    );
+    expect(wireSessionSource).toContain(
+      'registration.disposers.push(session.onStatusChange((status) => {',
+    );
+  });
+
   it('broadcasts EVENT before usage/context/island/idle side effects', () => {
     const wireSessionSource = extractWireSessionSource();
 

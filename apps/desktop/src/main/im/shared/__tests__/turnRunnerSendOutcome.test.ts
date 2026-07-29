@@ -178,7 +178,10 @@ function createSessionHarness(
   // mockRejectedValueOnce 整体替换实现, 抛错路径自然不会触发(正确)。
   const send = vi.fn<HarnessSend>(async (message, opts) => {
     const result = await sendImpl(message);
-    if (result.accepted) await opts?.onAccepted?.();
+    if (result.accepted) {
+      await opts?.beforeProviderStart?.();
+      await opts?.onAccepted?.();
+    }
     return result;
   });
   const isTurnRunning = vi.fn(() => false);
@@ -245,6 +248,7 @@ const fakeCards = {
 const fakeAdapter: ImChannelAdapter = {
   channel: 'feishu',
   im: mocks.feishuIm as unknown as ChannelIM,
+  output: { kind: 'rich-card', im: mocks.feishuIm as unknown as ChannelIM },
   config: {
     agentKind: 'claude-code',
     defaultModel: 'claude-opus-4-7',
@@ -1008,6 +1012,16 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(secondComplete).not.toHaveBeenCalled();
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
 
+    h.emit({
+      type: 'error',
+      data: { message: 'Reconnecting... 1/5', isTerminal: false, willRetry: true },
+    });
+    await flushMicrotasks();
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(firstComplete).not.toHaveBeenCalled();
+    expect(secondComplete).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+
     h.emit({ type: 'text', data: { text: 'first final', isFinal: true } });
     h.emit({ type: 'done', data: {} });
     await waitForAssertion(() => {
@@ -1042,6 +1056,14 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(h.send).not.toHaveBeenCalled();
     expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
     expect(mocks.feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+    expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+
+    h.emit({
+      type: 'error',
+      data: { message: 'Reconnecting... 1/5', isTerminal: false, willRetry: true },
+    });
+    await flushMicrotasks();
+    expect(h.send).not.toHaveBeenCalled();
     expect(mocks.persistUserMessage).not.toHaveBeenCalled();
 
     h.isTurnRunning.mockReturnValue(false);
@@ -1119,13 +1141,133 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     // desktop 聊天流才能像 Slack hook 会话一样看到完整过程。
     expect(mocks.wireSessionToIpcExternal).toHaveBeenCalledTimes(1);
     expect(mocks.persistAssistantMessage).not.toHaveBeenCalled();
-    // 顺序不变量: wire(装 desktop interaction listener)必须先于渠道版
-    // setInteractionListener 覆盖 — 颠倒会让渠道会话的 permission 卡死等 desktop。
+    // 顺序不变量:wire 先安装中央 Router 的 Desktop fallback;本 turn 只在
+    // beforeProviderStart 登记 route,不再覆盖/恢复 Session listener。
     const wireOrder = mocks.wireSessionToIpcExternal.mock.invocationCallOrder[0];
     const listenerMock = h.session.setInteractionListener as unknown as ReturnType<typeof vi.fn>;
     expect(wireOrder).toBeLessThan(listenerMock.mock.invocationCallOrder[0]);
     // 真实用户消息给 silent-stop 守卫充值(scheduler / hook runner 同款 parity)。
     expect(mocks.noteSilentStopUserSend).toHaveBeenCalledWith('feishu-session');
+  });
+
+  it('exposes accepted and terminal outcomes for an external durable queue', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const beforeProviderStart = vi.fn(async () => undefined);
+
+    const dispatch = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-external',
+      text: 'durable task',
+      attachments: [],
+      queueMode: 'external',
+      beforeProviderStart,
+    });
+
+    expect(dispatch.kind).toBe('accepted');
+    if (dispatch.kind !== 'accepted') throw new Error('expected accepted dispatch');
+    expect(dispatch.sessionId).toBe('feishu-session');
+    expect(dispatch.acceptedAt).toBeGreaterThan(0);
+    expect(beforeProviderStart).toHaveBeenCalledTimes(1);
+
+    h.emit({ type: 'text', data: { text: 'durable answer', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await expect(dispatch.terminal).resolves.toMatchObject({
+      kind: 'done',
+      text: 'durable answer',
+    });
+  });
+
+  it('reports the attached Desktop route before provider startup', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const onRouteResolved = vi.fn();
+    const beforeProviderStart = vi.fn(async () => undefined);
+
+    const dispatch = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-attached-route',
+      text: 'route this turn',
+      attachments: [],
+      queueMode: 'external',
+      onRouteResolved,
+      beforeProviderStart,
+    });
+
+    expect(dispatch.kind).toBe('accepted');
+    expect(onRouteResolved).toHaveBeenCalledWith('desktop-attached-session');
+    expect(onRouteResolved.mock.invocationCallOrder[0]).toBeLessThan(
+      beforeProviderStart.mock.invocationCallOrder[0]!,
+    );
+
+    h.emit({ type: 'done', data: {} });
+    if (dispatch.kind === 'accepted') await dispatch.terminal;
+  });
+
+  it('returns busy without copying external work into the in-memory queue', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const first = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-external-1',
+      text: 'first durable task',
+      attachments: [],
+      queueMode: 'external',
+      beforeProviderStart: async () => undefined,
+    });
+    expect(first.kind).toBe('accepted');
+
+    const second = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-external-2',
+      text: 'second durable task',
+      attachments: [],
+      queueMode: 'external',
+      beforeProviderStart: async () => undefined,
+    });
+
+    expect(second).toEqual({ kind: 'busy', reason: 'session_running' });
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(mocks.feishuIm.sendMarkdownText).not.toHaveBeenCalledWith(
+      'ou_user',
+      expect.stringContaining('排队'),
+      expect.anything(),
+    );
+
+    h.emit({ type: 'done', data: {} });
+    if (first.kind === 'accepted') await first.terminal;
+  });
+
+  it('commits one terminal payload for a chunked-text output driver', async () => {
+    const previousOutput = fakeAdapter.output;
+    const commitFinal = vi.fn(async () => undefined);
+    fakeAdapter.output = {
+      kind: 'chunked-text',
+      im: mocks.feishuIm as unknown as ChannelIM,
+      commitFinal,
+    };
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      const { turnPromise } = await startDefaultTurn();
+      await turnPromise;
+
+      h.emit({ type: 'text', data: { text: 'complete text only', isFinal: true } });
+      h.emit({ type: 'done', data: {} });
+      await flushMicrotasks();
+
+      expect(mocks.feishuIm.startStreamingText).not.toHaveBeenCalled();
+      expect(commitFinal).toHaveBeenCalledTimes(1);
+      expect(commitFinal).toHaveBeenCalledWith({
+        userId: 'ou_user',
+        text: 'complete text only',
+        terminal: 'done',
+        threadTs: undefined,
+      });
+    } finally {
+      fakeAdapter.output = previousOutput;
+    }
   });
 
   it('holds the turn open on silentStop done and finalizes only when the guard settles without resume', async () => {

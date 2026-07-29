@@ -43,6 +43,12 @@ export type RsbWindowCommand =
       focusTab?: boolean;
     }
   | { type: 'close-orca-workers-tab'; sessionId: string }
+  /** 打开/聚焦「后台任务」页签(每会话单例);focusTaskId 定位到对应 workflow 详情。 */
+  | {
+      type: 'open-background-tasks-tab';
+      sessionId: string;
+      focusTaskId?: string | null;
+    }
   | {
       type: 'open-file-browser';
       sessionId: string;

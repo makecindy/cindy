@@ -190,6 +190,10 @@ function createRunnerHarness(
     sessionAlive?: boolean;
     activeSessions?: Session[];
     availableModels?: Array<{ id: string; efforts?: readonly string[]; defaultEffort?: string | null }>;
+    checkModelRoute?: ConstructorParameters<typeof MakerScheduleRunner>[0]['checkModelRoute'];
+    resolveRouteCopyCapabilities?: ConstructorParameters<
+      typeof MakerScheduleRunner
+    >[0]['resolveRouteCopyCapabilities'];
   } = {},
 ): RunnerHarness {
   const createSession = vi.fn(async () => h.session);
@@ -212,6 +216,8 @@ function createRunnerHarness(
     getDb: () => ({}) as never,
     notifier,
     logger: createLogger(),
+    checkModelRoute: opts.checkModelRoute,
+    resolveRouteCopyCapabilities: opts.resolveRouteCopyCapabilities,
   });
   return { runner, createSession, closeSession };
 }
@@ -252,6 +258,38 @@ describe('MakerScheduleRunner model selection', () => {
         baseSchedule({ agentKind: 'codex', model: 'gpt-5.5', effort: 'max' }),
       );
       expect(opts.effort).toBe('xhigh');
+    });
+
+    it('R27:隐式改道后按落地拷贝 reconcile —— effort clamp 到拷贝档、Fast 不支持即清', async () => {
+      // merged capability 支持 max,但改道后的 anthropic 拷贝只到 high 且不支持 Fast:
+      // createSession 必须收到 (effort=high, fastMode=false, providerId=anthropic)。
+      // provider store mock 做成有状态:fire 入口改道后 4.4.2 会 setSessionProvider,
+      // 派发前重裁决读到它 ⇒ pass,不再二次改道。
+      let storedProvider: string | null = null;
+      mocks.setSessionProvider.mockImplementation((_id: string, pid: string | null) => {
+        storedProvider = pid;
+      });
+      mocks.getSessionProvider.mockImplementation(() => storedProvider);
+      const h = createSessionHarness();
+      const harness = createRunnerHarness(h, null, {
+        availableModels: [
+          { id: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
+        ],
+        checkModelRoute: vi.fn(async (_a, _m, providerId) =>
+          providerId ? { kind: 'pass' as const } : { kind: 'reroute' as const, providerId: 'anthropic' },
+        ),
+        resolveRouteCopyCapabilities: vi.fn(async () => ({
+          efforts: ['low', 'medium', 'high'],
+          defaultEffort: 'high',
+          supportsFastMode: false,
+        })),
+      });
+      const opts = await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({ agentKind: 'codex', model: 'gpt-5.5', effort: 'max', fastMode: true }),
+      );
+      expect(opts).toMatchObject({ effort: 'high', fastMode: false, providerId: 'anthropic' });
     });
 
     it('模型支持该档(gpt-5.6-sol + effort=ultra)→ 原样透传,不降级(保 #352)', async () => {

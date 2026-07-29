@@ -42,20 +42,26 @@ import type {
 } from '@cindy/maker-core';
 import {
   effectiveSourceIdForModel,
-  isModelVisible,
   type ProviderView,
   visibleModelUnion,
 } from '@cindy/model-providers';
 
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { getMaker } from '../maker-host/index.js';
+import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
+import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
 import {
   wireSessionToIpc,
   isSessionInTurn,
-  installDesktopInteractionListener,
   noteSilentStopUserSend,
   onSilentStopSettled,
 } from '../maker-ipc/register.js';
+import {
+  beginInteractionRoute,
+  type InteractionHandler,
+  type InteractionRouteLease,
+  type TurnOrigin as RoutedTurnOrigin,
+} from '../maker-ipc/interactionRouter.js';
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
 import { toDesktopSessionDispatchOutcome } from '../maker-host/send-outcome.js';
@@ -79,7 +85,6 @@ import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
 import { getWorkspaceProviderSource } from './workspaceProviderSourceStore.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { getModelVisibilityOverride } from '../maker-host/model-visibility-mirror.js';
 import {
   createTurnActivity,
   markActivityWriting,
@@ -129,14 +134,13 @@ async function resolveNewSessionConfig(
   const resolved = resolveHookSessionConfig(
     {
       readDefaults: () => readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined),
+      // 可执行清单按**启用**口径,不叠加「显示 / 隐藏」偏好:隐藏只是陈列过滤
+      // (选择器不列),被 IM 显式点名或兜底选中仍然合法;停用的模型与供应商已由
+      // visibleModelUnion 内建的准入过滤(model.disabled / suspended)剔除,点名
+      // 会走 defaults.ts 的降级 + warn 路径(2026-07 启用/显示双轴拆分)。
       getModels: (agentKind) =>
         providers
-          ? visibleModelUnion(providers, agentKind, (providerId, model) =>
-              isModelVisible(
-                getModelVisibilityOverride(agentKind, providerId, model.id),
-                model.defaultEnabled,
-              ),
-            )
+          ? visibleModelUnion(providers, agentKind, () => true)
           : getMaker().getCapabilities(agentKind).availableModels,
       getPermissionModes: (agentKind) =>
         getMaker()
@@ -167,7 +171,26 @@ async function resolveNewSessionConfig(
   const providerId = providers
     ? effectiveSourceIdForModel(providers, preferredProviderId, resolved.model, resolved.agentKind)
     : resolved.providerId;
-  return { ...resolved, providerId };
+  // 停用收口(PR #744 review 第十、十四轮):两条路径都必须经宽松降级裁决 ——
+  //   · 目录读取失败:冻结的 availableModels 不带停用标志、saved provider 未经校验,
+  //     live 壳的目录故障分支 = override-only 保守裁决(只凭本地 override 文件判);
+  //   · 目录读取成功但该 agent 的启用模型集为空:上方 getModels 过滤后
+  //     resolveHookSessionConfig 会回退到 raw saved desktop model(未准入),
+  //     effectiveSourceIdForModel 解析为 null 后若直接返回,后续 createSession 仍以
+  //     停用模型 + 隐式来源直建付费会话。
+  // 命中即逐级丢弃;模型判死抛错交给 hook 既有失败路径。
+  const lenient = providers
+    ? resolveLenientRoute(providers, resolved.agentKind, resolved.model, providerId ?? null)
+    : await resolveLenientSessionRoute(resolved.agentKind, resolved.model, providerId ?? null);
+  if (!lenient.model) {
+    throw new Error('hook session route unavailable: model disabled in settings');
+  }
+  if (lenient.degraded) {
+    log.warn(
+      `hook saved route degraded (disabled in settings): model=${resolved.model} providerId=${providerId ?? 'null'} catalog=${providers ? 'ok' : 'outage'}`,
+    );
+  }
+  return { ...resolved, model: lenient.model, providerId: lenient.providerId };
 }
 
 /** 后台 subagent 事件静默兜底(同 scheduler BG_TASK_IDLE_FALLBACK_MS 语义)。 */
@@ -525,13 +548,11 @@ export function createMakerHookSessionRunner(deps: {
       // renderer 可见性: 不 wire 则消息不落库、UI 空白(scheduler Phase 6 老坑)
       wireSessionToIpc(session);
 
-      // 交互卡链路: 覆盖 wireSessionToIpc 装上的桌面版 interaction listener。
-      // hook 是无人值守 turn, 交互必须走来源渠道卡片 + 有界超时 —— 旧行为里
-      // 模型调 AskUserQuestion 会把请求发给桌面 renderer 无限死等, 直到
-      // 60min 整 turn 硬超时才以 error 收口。turn 结束后归还桌面版 listener
-      // (用户在桌面端继续用该会话时交互仍走桌面弹窗)。
+      // hook 是无人值守 turn,交互必须走来源渠道卡片 + 有界超时。Session
+      // listener 由中央 InteractionRouter 持有;这里只准备本 turn 的 handler,
+      // 真正的 route 在 beforeProviderStart 屏障内登记。
       const ownInteractionIds = new Set<string>();
-      const hookInteractionsInstalled = req.onInteraction !== undefined;
+      let interactionRouteLease: InteractionRouteLease | null = null;
       const headlessTurn = {
         closed: false,
         release: null as (() => void) | null,
@@ -542,10 +563,10 @@ export function createMakerHookSessionRunner(deps: {
         if (headlessTurn.closed || headlessTurn.release) return;
         headlessTurn.release = beginHeadlessGhostSetupTurn(session.id);
       };
-      if (req.onInteraction) {
-        const sendCard = req.onInteraction;
-        const sendCancel = req.onInteractionCancel;
-        session.setInteractionListener(async (ireq) => {
+      const handleHookInteraction: InteractionHandler = async (ireq) => {
+        if (req.onInteraction) {
+          const sendCard = req.onInteraction;
+          const sendCancel = req.onInteractionCancel;
           // permission 与问答/计划卡同走 compose -> Slack 卡 -> 决策回流:
           // 非 bypass 会话(用户在 Slack 显式选了收紧档)的权限请求出三按钮卡,
           // 超时/收口安全默认拒绝(compose 的 defaultDecision)
@@ -576,19 +597,35 @@ export function createMakerHookSessionRunner(deps: {
           });
           ownInteractionIds.delete(ireq.requestId);
           return decision;
-        });
-      }
-      /** turn 收口清扫: 未决交互按默认自决 + 归还桌面版 listener。幂等。 */
+        }
+        if (ireq.kind === 'ask_user_question') {
+          return { kind: 'ask_user_question', answers: {} };
+        }
+        if (ireq.kind === 'plan_review') {
+          return {
+            kind: 'plan_review',
+            behavior: 'deny',
+            reason: 'headless_interaction_unavailable',
+            dismissed: true,
+          };
+        }
+        return {
+          kind: 'permission',
+          behavior: 'deny',
+          reason: 'headless_interaction_unavailable',
+        };
+      };
+      /** turn 收口清扫: 未决交互按默认自决 + 释放中央 route。幂等。 */
       const finalizeInteractions = (): void => {
         headlessTurn.closed = true;
         headlessTurn.release?.();
         headlessTurn.release = null;
-        if (!hookInteractionsInstalled) return;
+        interactionRouteLease?.release('hook_turn_terminal');
+        interactionRouteLease = null;
         for (const iid of [...ownInteractionIds]) {
           cancelHookInteraction(iid, '任务已结束, 此交互已失效');
         }
         ownInteractionIds.clear();
-        installDesktopInteractionListener(session);
       };
       // 新建会话广播 -> 侧边栏实时出现(复用/接管的会话本来就在列表里, 不用发)
       if (req.isNew) {
@@ -623,10 +660,29 @@ export function createMakerHookSessionRunner(deps: {
         }
       }
 
-      // turn 收口监听 —— 语义与 scheduler runner 第 5 步同源:
-      // text isFinal 替换 / delta 追加; done 时若有在途后台任务则延迟定格,
-      // 事件静默超时兜底; terminal error 即失败。
+      // turn 收口监听 —— done 时若有在途后台任务则延迟定格, 事件静默超时
+      // 兜底; terminal error 即失败。
+      //
+      // 文本累积语义(2026-07-28 修订): translator 的 isFinal 是**逐条**
+      // agent_message 的完成信号(每条完成都携带该条全文), 不是整个 turn 的
+      // 终稿 —— 用它整体替换累积文本, 会让"先回一句 → 思考 → 终答"的多消息
+      // turn 只剩最后被替换的那条(实踩: Telegram 群里最终答案丢失)。
+      // 正确姿势: isFinal 把该条追加进已定稿段, 流式增量走尾部缓冲。
+      let finalizedText = '';
+      let streamTail = '';
       let assistantText = '';
+      /** 最近一次定稿段所属的 claude 消息 uuid(同消息相邻块连拼用)。 */
+      let lastFinalUuid: string | undefined;
+      const recomputeAssistantText = (): void => {
+        // trim 只用于判空(纯空白尾巴不该拼出悬空分隔), 拼接用原文 ——
+        // 首行缩进/换行是内容(markdown 代码块等), 不得被裁掉。
+        const hasTail = streamTail.trim().length > 0;
+        assistantText = hasTail
+          ? finalizedText
+            ? `${finalizedText}\n\n${streamTail}`
+            : streamTail
+          : finalizedText;
+      };
       // tool_result 旁路收集的出站图片 absPath(收口时随 turn.end 附件外发)
       const extraImageAbsPaths: string[] = [];
       // 进度快照(turn.progress 链路): 过程区时间线与 IM 流式卡同一套纯逻辑
@@ -634,14 +690,14 @@ export function createMakerHookSessionRunner(deps: {
       // 上正文在下, done/error 后 stop, 不再发射。
       const activity = createTurnActivity(Date.now());
       const isTelegram = req.source?.im === 'telegram';
+      // Telegram DM 的 Rich draft 是"部分终稿"动画, 过程时间线反复重排会导致
+      // 整段清空重播 —— DM 保持只流正文。群/topic 的进度载体是可编辑消息
+      // (无 draft 动画), 与 Slack 过程卡同款: 时间线在上正文在下, 让群成员
+      // 看到"正在干什么"而不是盯着一句旧话干等(2026-07-28 实踩)。
+      const answerOnlyProgress = isTelegram && req.laneKind !== 'group';
       const progress = req.onProgress
         ? createProgressEmitter(req.onProgress, () => {
-            // Telegram Rich Message drafts are the partial final answer, not
-            // an editable process card. turnActivity can reorder/fold as
-            // thinking and tool events arrive, which makes Telegram animate
-            // repeated full clears. Keep Slack's established process card,
-            // while Telegram streams only the monotonically growing answer.
-            if (isTelegram) return assistantText;
+            if (answerOnlyProgress) return assistantText;
             const act = renderActivity(activity, Date.now());
             if (!act) return assistantText;
             return assistantText ? `${act}\n\n${assistantText}` : act;
@@ -689,8 +745,40 @@ export function createMakerHookSessionRunner(deps: {
           if (ev.type === 'text') {
             const data = ev.data as { text?: string; isFinal?: boolean } | null;
             if (data && typeof data.text === 'string') {
-              if (data.isFinal) assistantText = data.text;
-              else assistantText += data.text;
+              if (data.isFinal) {
+                // isFinal 形态按 translator 契约区分, 不做内容猜测(前缀
+                // 启发式在"尾段恰好以已流增量开头"时会误判丢正文):
+                // ① claude 块终稿(带 agentMeta): data.text 是该块全文, 覆盖
+                //   已流增量; 同一条消息(同 uuid)的相邻文本块按原文连拼
+                //   (renderer 同款 raw concat), 不同消息之间空行分隔。
+                // ② claude result 兜底 fallbackTail(刻意不带 agentMeta):
+                //   只含 UI 缺的尾段, 与已流增量原样接上。
+                // ③ codex item.completed: 该条全文, 覆盖已流增量。
+                // ④ 未知 source: 保守用前缀启发式。
+                const src = (ev as { source?: string }).source;
+                const meta = (ev as { agentMeta?: { uuid?: unknown } }).agentMeta;
+                const claudeTail = src === 'claude-code' && meta === undefined;
+                const segment = claudeTail
+                  ? streamTail + data.text
+                  : src === 'claude-code' || src === 'codex'
+                    ? data.text
+                    : data.text.startsWith(streamTail)
+                      ? data.text
+                      : streamTail + data.text;
+                const uuid =
+                  src === 'claude-code' && typeof meta?.uuid === 'string'
+                    ? meta.uuid
+                    : undefined;
+                const sameMessage = uuid !== undefined && uuid === lastFinalUuid;
+                finalizedText = finalizedText
+                  ? `${finalizedText}${sameMessage ? '' : '\n\n'}${segment}`
+                  : segment;
+                lastFinalUuid = uuid;
+                streamTail = '';
+              } else {
+                streamTail += data.text;
+              }
+              recomputeAssistantText();
               markActivityWriting(activity);
               progress?.schedule();
             }
@@ -939,6 +1027,25 @@ export function createMakerHookSessionRunner(deps: {
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,
+          beforeProviderStart: () => {
+            const routeOrigin: RoutedTurnOrigin =
+              req.source?.im === 'slack'
+                ? { kind: 'im', channel: 'slack' }
+                : { kind: 'hook', source: req.source?.im ?? 'unknown' };
+            interactionRouteLease = beginInteractionRoute(session, {
+              route: {
+                sessionId: session.id,
+                turnId: randomUUID(),
+                origin: routeOrigin,
+                interactionSurface: req.onInteraction ? 'channel-card' : 'headless',
+              },
+              handle: handleHookInteraction,
+              onCancel: (requestId) => {
+                ownInteractionIds.delete(requestId);
+                return cancelHookInteraction(requestId, '任务已结束, 此交互已失效');
+              },
+            });
+          },
           onAccepted: async () => {
             // Admission may wait behind a user-driven Desktop turn. Only this
             // accepted hook turn is headless; preparation and queue wait are
@@ -999,7 +1106,7 @@ export function createMakerHookSessionRunner(deps: {
         return fail(err instanceof Error ? err.message : String(err));
       } finally {
         if (hardTimer) clearTimeout(hardTimer);
-        // 无论正常收口还是超时/错误, 未决交互都按默认收口并归还桌面 listener
+        // 无论正常收口还是超时/错误,未决交互都按默认收口并释放中央 route
         finalizeInteractions();
       }
 

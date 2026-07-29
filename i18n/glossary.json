@@ -55,6 +55,39 @@
       "note": "远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。"
     },
     {
+      "id": "wechat",
+      "status": "proposed",
+      "en": "WeChat",
+      "translations": {
+        "zh-CN": "微信",
+        "ja": "WeChat",
+        "ko": "WeChat"
+      },
+      "note": "个人微信连接的产品名称，沿用微信官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
+    },
+    {
+      "id": "personal-wechat",
+      "status": "proposed",
+      "en": "Personal WeChat",
+      "translations": {
+        "zh-CN": "个人微信",
+        "ja": "個人 WeChat",
+        "ko": "개인 WeChat"
+      },
+      "note": "个人微信连接在设置页中的产品名称；先登记为 proposed，待产品术语评审后再决定是否固化。"
+    },
+    {
+      "id": "openclaw",
+      "status": "proposed",
+      "en": "OpenClaw",
+      "translations": {
+        "zh-CN": "OpenClaw",
+        "ja": "OpenClaw",
+        "ko": "OpenClaw"
+      },
+      "note": "腾讯授权页可能展示的外部产品名称，客户端仅按原品牌名展示；先登记为 proposed，待产品术语评审后再决定是否固化。"
+    },
+    {
       "id": "region-badge",
       "status": "proposed",
       "en": "Region badge",
@@ -64,6 +97,28 @@
         "ko": "지역 배지"
       },
       "note": "桌面登录页标题旁的品牌红胶囊（DESIGN.md §16.3），指徽标这个 UI 元素本身。徽标上的标签值另立条目（region-code-cn / region-code-dev）——本条 en 为 Region badge、各语言译文均非英文原词，caseStandardFor 天然返回 null，所以本条约束不到标签值，也无需写 checkCase。作为待产品裁决术语登记：尚未拍板是否改为可译文案（如「中国大陆版 / Mainland China」），先登记以免后续界面自造“国内版／中国版／开发版”等多套说法。"
+    },
+    {
+      "id": "auth-region-mainland-china",
+      "status": "proposed",
+      "en": "Mainland China",
+      "translations": {
+        "zh-CN": "中国大陆区",
+        "ja": "中国本土リージョン",
+        "ko": "중국 본토 지역"
+      },
+      "note": "企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到中国大陆服务区域时的确认文案；它描述连接的服务区域，不代表当前安装的是中国大陆版。先按现有四语文案登记为 proposed，避免后续出现“中国区／国内区／China region”等多套说法。"
+    },
+    {
+      "id": "auth-region-global",
+      "status": "proposed",
+      "en": "Global region",
+      "translations": {
+        "zh-CN": "国际区",
+        "ja": "グローバルリージョン",
+        "ko": "글로벌 지역"
+      },
+      "note": "企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到 Global 服务区域时的确认文案；它描述连接的服务区域，不是对当前安装版本的标签，也不同于项目配置里的 generic global scope。先按现有四语文案登记为 proposed。"
     },
     {
       "id": "region-code-cn",
@@ -76,11 +131,27 @@
       },
       "forbidden": {
         "zh-CN": [
-          { "text": "中国版", "whenEn": "CN" },
-          { "text": "国内版", "whenEn": "CN" }
+          {
+            "text": "中国版",
+            "whenEn": "CN"
+          },
+          {
+            "text": "国内版",
+            "whenEn": "CN"
+          }
         ],
-        "ja": [{ "text": "中国版", "whenEn": "CN" }],
-        "ko": [{ "text": "중국판", "whenEn": "CN" }]
+        "ja": [
+          {
+            "text": "中国版",
+            "whenEn": "CN"
+          }
+        ],
+        "ko": [
+          {
+            "text": "중국판",
+            "whenEn": "CN"
+          }
+        ]
       },
       "note": "中国大陆版登录页区域徽标上的标签值（DESIGN.md §16.3）。四语同值、**不翻译**——它是区域代号不是可译文案，所以把 en 原样写进各语言 translations（同 Agent 条目的做法），这让 caseStandardFor 生效、guard 能挡住 cn／Cn 之类的大小写漂移。forbidden 用条件形态（whenEn=CN）补另一半：大小写规则挡不住“被整体译走”，条件形态又能把拦截精确限定在英文源为 CN 的 key 上，不误伤别处正当的“国内”“中国版”表述。列的是最可能的自造说法，不求穷举。status 取 proposed 与 region-badge 一致：产品尚未拍板是否改用可译文案，改判后本条应随之作废而非沿用。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeCn`），口径与徽标完全一致：global 不标。"
     },
@@ -94,9 +165,24 @@
         "ko": "Dev"
       },
       "forbidden": {
-        "zh-CN": [{ "text": "开发版", "whenEn": "Dev" }],
-        "ja": [{ "text": "開発版", "whenEn": "Dev" }],
-        "ko": [{ "text": "개발판", "whenEn": "Dev" }]
+        "zh-CN": [
+          {
+            "text": "开发版",
+            "whenEn": "Dev"
+          }
+        ],
+        "ja": [
+          {
+            "text": "開発版",
+            "whenEn": "Dev"
+          }
+        ],
+        "ko": [
+          {
+            "text": "개발판",
+            "whenEn": "Dev"
+          }
+        ]
       },
       "exempt": [
         "desktop:settings.about.debugLogDescription",
@@ -415,6 +501,28 @@
         "desktop:scheduler.editor.script.capabilityDescs.jira_comment",
         "desktop:scheduler.editor.script.capabilityDescs.jira_read"
       ]
+    },
+    {
+      "id": "mascot-black-cat",
+      "status": "proposed",
+      "en": "Black Cat",
+      "translations": {
+        "zh-CN": "黑猫",
+        "ja": "黒猫",
+        "ko": "검은 고양이"
+      },
+      "note": "灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色本体是黑猫形象,四语先采用直译并登记为待讨论,避免后续界面出现「ブラックキャット / 블랙캣」等音译与直译混用。"
+    },
+    {
+      "id": "mascot-erika",
+      "status": "proposed",
+      "en": "Erika",
+      "translations": {
+        "zh-CN": "Erika",
+        "ja": "Erika",
+        "ko": "Erika"
+      },
+      "note": "灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。"
     },
     {
       "id": "plugin",

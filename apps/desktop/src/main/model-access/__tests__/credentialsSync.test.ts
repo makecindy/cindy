@@ -284,6 +284,34 @@ describe('credentialsSync', () => {
     expect(h.store.getServerEndpoint()).toBe('https://tenant-b.test.invalid');
   });
 
+  it('同账号跨区作废旧 realm 的在途响应,并从新 realm 重新同步', async () => {
+    const h = makeHarness();
+    const resolvers: Array<(v: CredentialsPayload) => void> = [];
+    h.fetchMock.mockImplementation(
+      () => new Promise<CredentialsPayload>((resolve) => resolvers.push(resolve)),
+    );
+
+    h.sync.handleAuthChange({ isAuthenticated: true, userId: 'user-a', realm: 'cn' });
+    await Promise.resolve();
+    expect(h.fetchMock).toHaveBeenCalledTimes(1);
+
+    h.sync.handleAuthChange({ isAuthenticated: true, userId: 'user-a', realm: 'global' });
+    await Promise.resolve();
+    expect(h.fetchMock).toHaveBeenCalledTimes(2);
+
+    resolvers[0]({ endpoint: 'https://cn.test.invalid', apiKey: 'sk-cn' });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.written).toEqual([]);
+
+    resolvers[1]({ endpoint: 'https://global.test.invalid', apiKey: 'sk-global' });
+    await vi.waitFor(() => {
+      expect(h.sync.getStatus().state).toBe('ok');
+    });
+    expect(h.written).toEqual(['sk-global']);
+    expect(h.store.getServerEndpoint()).toBe('https://global.test.invalid');
+  });
+
   it('登录触发 handleAuthChange(true) 自动同步', async () => {
     const h = makeHarness();
     h.fetchMock.mockResolvedValue({ endpoint: 'https://laxa.test.invalid', apiKey: 'sk-u1' });

@@ -45,6 +45,18 @@ export interface Capabilities {
   /** 权限模式 */
   permissionModes: PermissionModeDescriptor[];
   setPermissionModeMidSession: CapabilityStatus;
+  /**
+   * Per-turn host policy that can force selected tool calls through the
+   * interaction resolver before execution. Optional for older/custom agents.
+   *
+   * `unsupportedPermissionModes` is load-bearing: a host must reject those
+   * combinations instead of silently weakening either the selected permission
+   * mode or the per-turn safety policy.
+   */
+  turnPermissionPolicy?: {
+    supported: CapabilityStatus;
+    unsupportedPermissionModes: PermissionMode[];
+  };
 
   /**
    * 计划模式（Plan Mode）—— 与 permissionMode 正交的独立会话状态：

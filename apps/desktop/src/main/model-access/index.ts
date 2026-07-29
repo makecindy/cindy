@@ -32,7 +32,14 @@ import {
   type CredentialsPayload,
   type CredentialsSync,
 } from './credentialsSync.js';
+import {
+  buildModelsSyncRequest,
+  ensureCredentialsReadyForModelsRefresh,
+  withModelsSyncOverallDeadline,
+  waitForModelsSyncRefresh,
+} from './modelsSyncRefresh.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
+import { hasAuthSessionIdentityChanged } from './authSessionIdentity.js';
 export { isModelAccessReady } from './readiness.js';
 
 const log = createLogger('modelAccess');
@@ -54,7 +61,6 @@ const log = createLogger('modelAccess');
  */
 
 const CREDENTIALS_PATH = '/api/model-access/credentials';
-const MODELS_PATH = '/api/model-access/models';
 
 function notifyXdProviderKeyChanged(): void {
   getGhostSetupChangeBus().emitAll({
@@ -65,14 +71,14 @@ function notifyXdProviderKeyChanged(): void {
 
 function fetchCredentials(): Promise<CredentialsPayload> {
   return serverApiFetch<CredentialsPayload>(CREDENTIALS_PATH, {
-    baseUrl: getClientEndpoint('modelAccessApiBaseUrl'),
+    baseUrl: () => getClientEndpoint('modelAccessApiBaseUrl'),
   });
 }
 
 function rotateCredentials(): Promise<CredentialsPayload> {
   return serverApiFetch<CredentialsPayload>(`${CREDENTIALS_PATH}/rotate`, {
     method: 'POST',
-    baseUrl: getClientEndpoint('modelAccessApiBaseUrl'),
+    baseUrl: () => getClientEndpoint('modelAccessApiBaseUrl'),
   });
 }
 
@@ -128,17 +134,21 @@ function broadcastStatus(status: ModelAccessStatus): void {
 // setXdGatewayModels)。拉取失败保留最后一次完整成功快照；成功空列表同时清空模型和价格。
 
 let modelsSyncInflight: Promise<void> | null = null;
+/** 模型请求的单调尝试号与最近成功号，供手动刷新区分“旧成功 + 本次失败”。 */
+let modelsSyncAttempt = 0;
+let lastModelsSyncSucceededAttempt = 0;
 /** 在途目录请求所属的认证世代。 */
 let modelsSyncGen = -1;
 /** 旧世代请求在途时新账号的补发标记。 */
 let modelsSyncRerunQueued = false;
 /**
- * 认证世代:登出或 userId 变化时自增(与 credentialsSync 的 epoch 同语义)。
- * 目录请求以发起时世代为闸——A 账号的在途 /models 响应在切到 B 后一律丢弃,
- * 且 B 会补发自己的请求(PR review P1:旧账号目录不得覆盖新账号)。
+ * 认证世代:登出或 userId / realm 变化时自增(与 credentialsSync 的 epoch 同语义)。
+ * 目录请求以发起时世代为闸——旧身份的在途 /models 响应在换号或同账号跨区后
+ * 一律丢弃,且新身份会补发自己的请求。
  */
 let authGeneration = 0;
 let lastAuthUserId: string | null = null;
+let lastAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 
 function applyGatewayModels(
   models: ModelAccessGatewayModel[],
@@ -172,12 +182,19 @@ function applyGatewayModels(
 async function runModelsSync(
   myGen: number,
   authenticatedUserId: string,
+  myAttempt: number,
 ): Promise<void> {
   let payload: { models: ModelAccessGatewayModel[] };
   try {
-    payload = await serverApiFetch<{ models: ModelAccessGatewayModel[] }>(MODELS_PATH, {
-      baseUrl: getClientEndpoint('modelAccessApiBaseUrl'),
-    });
+    const request = buildModelsSyncRequest(() =>
+      getClientEndpoint('modelAccessApiBaseUrl'),
+    );
+    payload = await withModelsSyncOverallDeadline(
+      serverApiFetch<{ models: ModelAccessGatewayModel[] }>(
+        request.path,
+        request.options,
+      ),
+    );
   } catch (err) {
     log.warn('xd gateway models fetch failed (keeping last valid list)', {
       error: err instanceof Error ? err.message : String(err),
@@ -189,10 +206,12 @@ async function runModelsSync(
   if (models.length === 0) {
     log.warn('xd gateway models fetch returned empty list; clearing current list');
     applyGatewayModels([], authenticatedUserId);
+    lastModelsSyncSucceededAttempt = myAttempt;
     return;
   }
   log.info(`xd gateway models synced: ${models.length}`);
   applyGatewayModels(models, authenticatedUserId);
+  lastModelsSyncSucceededAttempt = myAttempt;
 }
 
 /** 触发一次模型目录同步(同世代 single-flight;旧世代在途时为新账号排队补发)。 */
@@ -219,7 +238,8 @@ function scheduleModelsSync(): void {
     return;
   }
   modelsSyncGen = gen;
-  modelsSyncInflight = runModelsSync(gen, authenticatedUserId)
+  const attempt = ++modelsSyncAttempt;
+  modelsSyncInflight = runModelsSync(gen, authenticatedUserId, attempt)
     .catch((err) => {
       log.warn('xd gateway models sync threw', {
         error: err instanceof Error ? err.message : String(err),
@@ -265,6 +285,45 @@ export function getModelAccessStatus(): ModelAccessStatus {
   return getSync().getStatus();
 }
 
+/**
+ * 设置页手动刷新：已有 ready 凭据时直接刷新 `/models`；只有凭据不可用时才复用
+ * retry 状态机。随后等待同源 `/models` single-flight 真正结束。凭据或模型请求
+ * 任一失败都 reject，Renderer 才不会误报“已刷新”。
+ */
+export async function refreshXdGatewayModels(): Promise<void> {
+  if (!getAppCapabilities().canUseCindyGateway) {
+    throwIpcError('PERMISSION_DENIED', 'Cindy AI requires a Cindy account.');
+  }
+  const status = await ensureCredentialsReadyForModelsRefresh(getSync());
+  if (status.state !== 'ok') {
+    throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI credentials are not ready.');
+  }
+  const gen = authGeneration;
+  // onStatusChange(ok) 已经 schedule；重复调用会复用同世代在途请求。若此时仍有
+  // 旧账号 flight，先等它作废，再显式补发当前世代并等待当前尝试号的真实结果。
+  const outcome = await waitForModelsSyncRefresh({
+    expectedGeneration: gen,
+    schedule: scheduleModelsSync,
+    snapshot: () => ({
+      flight: modelsSyncInflight,
+      generation: modelsSyncGen,
+      attempt: modelsSyncAttempt,
+    }),
+    currentGeneration: () => authGeneration,
+    lastSuccessfulAttempt: () => lastModelsSyncSucceededAttempt,
+  });
+  switch (outcome) {
+    case 'succeeded':
+      return;
+    case 'not-started':
+      throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI model list refresh did not start.');
+    case 'account-changed':
+      throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI account changed during model list refresh.');
+    case 'failed':
+      throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI model list refresh failed.');
+  }
+}
+
 /** 存量手填 key 场景的写入通知(safe-storage IPC 层保留的兼容钩子):来源标记翻 manual。 */
 export function noteManualXdKeySaved(): void {
   getSync().noteManualKeySaved();
@@ -296,24 +355,39 @@ function mapServerError(err: unknown): never {
 export function initModelAccess(): void {
   const sync = getSync();
 
-  const noteAuthState = (isAuthenticated: boolean, userId: string | null) => {
-    // 认证世代:登出或换号自增,作废旧账号在途的目录请求(runModelsSync 世代闸)。
-    if (!isAuthenticated || (userId !== null && lastAuthUserId !== null && userId !== lastAuthUserId)) {
+  const noteAuthState = (
+    isAuthenticated: boolean,
+    userId: string | null,
+    realm: ReturnType<typeof authManager.getActiveAuthRealm> | null,
+  ) => {
+    // 认证世代:登出、换号或同账号跨区均自增,作废旧身份在途的目录请求。
+    if (
+      !isAuthenticated ||
+      hasAuthSessionIdentityChanged(
+        { userId: lastAuthUserId, realm: lastAuthRealm },
+        { userId, realm },
+      )
+    ) {
       authGeneration++;
-      // 旧账号模型清单不能跨账号继续显示;新账号凭据 / 模型拉取成功后再注入。
+      // 旧身份模型清单不能跨账号/区域继续显示;新身份拉取成功后再注入。
       applyGatewayModels([]);
     }
     lastAuthUserId = isAuthenticated ? (userId ?? lastAuthUserId) : null;
-    sync.handleAuthChange({ isAuthenticated, userId });
+    lastAuthRealm = isAuthenticated ? (realm ?? lastAuthRealm) : null;
+    sync.handleAuthChange({ isAuthenticated, userId, realm });
   };
 
   authManager.onAuthStateChange((state) => {
-    noteAuthState(state.isAuthenticated, state.user?.id ?? null);
+    noteAuthState(
+      state.isAuthenticated,
+      state.user?.id ?? null,
+      state.isAuthenticated ? authManager.getActiveAuthRealm() : null,
+    );
   });
   // 订阅挂载时可能已错过冷启动的首次 notify(初始化顺序取决于 bootstrap),补一次。
   const initial = authManager.getAuthState();
   if (initial.isAuthenticated) {
-    noteAuthState(true, initial.user?.id ?? null);
+    noteAuthState(true, initial.user?.id ?? null, authManager.getActiveAuthRealm());
   }
   ipcMain.handle('model-access:get-status', () => sync.getStatus());
 
@@ -342,7 +416,10 @@ export function resetModelAccessForTest(): void {
   modelsSyncInflight = null;
   modelsSyncGen = -1;
   modelsSyncRerunQueued = false;
+  modelsSyncAttempt = 0;
+  lastModelsSyncSucceededAttempt = 0;
   authGeneration = 0;
   lastAuthUserId = null;
+  lastAuthRealm = null;
   applyGatewayModels([]);
 }

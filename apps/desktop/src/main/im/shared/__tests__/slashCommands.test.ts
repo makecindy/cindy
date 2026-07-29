@@ -102,6 +102,13 @@ function makeHarness(
       sendMarkdownText: mocks.sendMarkdownText,
       sendInteractiveCard: mocks.sendInteractiveCard,
     } as unknown as ChannelIM,
+    output: {
+      kind: 'rich-card',
+      im: {
+        sendMarkdownText: mocks.sendMarkdownText,
+        sendInteractiveCard: mocks.sendInteractiveCard,
+      } as unknown as ChannelIM,
+    },
     config: {
       agentKind: 'claude-code',
       defaultModel: 'claude-opus-4-8',

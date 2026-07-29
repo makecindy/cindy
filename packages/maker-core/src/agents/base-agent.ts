@@ -121,6 +121,15 @@ export interface CodexLocalCredentialModeSwitchContext {
   activeSubscriptions: number;
 }
 
+export interface RefreshLocalModelsOptions {
+  /**
+   * Bind model discovery to a specific local credential route.
+   * Codex serves explicit routes from an isolated control-plane host so live
+   * session hosts never need a credential-mode switch.
+   */
+  credentialMode?: AgentCredentialMode;
+}
+
 export interface ClaudeSubagentTaskRegistration {
   taskId: string;
   parentToolUseId: string;
@@ -193,6 +202,8 @@ export interface AgentDeps {
     ctx: {
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
+      /** Marks one-off app-server work (e.g. model/list) that must not alter session routing. */
+      hostPurpose?: 'control-plane';
     },
   ) => Promise<CodexExtraSpawnConfig>;
 
@@ -390,6 +401,14 @@ export interface AgentDeps {
      * (那是 host-only 包, maker-core 不该耦合)。host 层实现时 cast 进去即可。
      */
     startParams: Record<string, unknown>;
+    /**
+     * session 自己的 vendorOptions (startSession 入参透传)。远端 cc 的协同
+     * MCP ctx 必须以它为准:worker 首次创建时 DB 的 orca 标记/markOrcaRole
+     * 发生在 bootstrap 之后, host 侧现场查 DB 会拿到空角色 (fail-closed
+     * "not an orca worker session");opts 里的 vendorOptions 才是创建方
+     * 显式声明的身份。host 实现可在缺失时回退 DB 合成。
+     */
+    vendorOptions?: Record<string, unknown>;
     /**
      * Callback for daemon-side approval requests (canUseTool / AskUserQuestion /
      * ExitPlanMode). Host layer registers this on the RPC client; maker-core wires
@@ -620,6 +639,42 @@ export interface SendOptions {
    * 共享 session 下区分自动任务 turn 与用户 turn。agent 子类不消费,透传无害。
    */
   origin?: SendOrigin;
+  /**
+   * Host-owned, per-turn permission policy. This is deliberately a callback
+   * rather than prompt text: providers must enforce it at their pre-execution
+   * approval boundary, before MCP auto-approval or permission-mode bypasses.
+   */
+  turnPermissionPolicy?: TurnPermissionPolicy;
+}
+
+export type TurnPermissionOrigin =
+  | { kind: 'desktop' }
+  | { kind: 'im'; channel: 'feishu' | 'discord' | 'slack' | 'wechat'; taskId?: string }
+  | { kind: 'scheduler' }
+  | { kind: 'hook'; source: string };
+
+export interface TurnPermissionPolicy {
+  readonly origin: TurnPermissionOrigin;
+  readonly confirmationSurface: 'desktop' | 'channel';
+  readonly confirmationTimeoutMs?: number;
+  readonly onInteractionStateChange?: (
+    state: 'waiting' | 'resolved' | 'cancelled',
+  ) => void;
+  forceConfirmToolCall(toolName: string, input: unknown): boolean;
+}
+
+export class TurnPermissionPolicyUnsupportedError extends Error {
+  readonly code = 'TURN_PERMISSION_POLICY_UNSUPPORTED';
+
+  constructor(
+    readonly agentKind: AgentKind,
+    readonly permissionMode: PermissionMode,
+  ) {
+    super(
+      `Turn permission policy is not supported by ${agentKind} in permission mode ${permissionMode}`,
+    );
+    this.name = 'TurnPermissionPolicyUnsupportedError';
+  }
 }
 
 /**
@@ -658,6 +713,13 @@ export interface AgentSessionHandle {
 
   /** 推送一条用户消息（流式输入） */
   send(message: UserMessage, opts?: SendOptions): Promise<void>;
+
+  /**
+   * Synchronous provider preflight called by Session after reserving the turn
+   * but before any product `beforeProviderStart` / `onAccepted` side effect.
+   * Direct handle callers are still validated again inside send().
+   */
+  validateSendOptions?(opts: SendOptions): void;
 
   /**
    * 把用户消息追加到当前 in-flight turn。
@@ -1008,7 +1070,7 @@ export abstract class BaseAgent {
    * 默认无运行时发现能力，返回 false；Codex 覆盖后通过 app-server `model/list`
    * 拉完整分页快照。返回值表示快照是否仍属于当前 host 且已由宿主成功应用。
    */
-  async refreshLocalModels(): Promise<boolean> {
+  async refreshLocalModels(_options?: RefreshLocalModelsOptions): Promise<boolean> {
     return false;
   }
 

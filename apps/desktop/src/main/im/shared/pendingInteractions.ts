@@ -88,6 +88,23 @@ export function resolvePending(
   return { messageId: entry.messageId };
 }
 
+/** Resolve one pending card with the safe decision used when its turn ends. */
+export function cancelPending(requestId: string, reason: string): boolean {
+  const entry = pending.get(requestId);
+  if (!entry) return false;
+  pending.delete(requestId);
+  if (entry.kind === 'ask_user_question') {
+    entry.resolve({ kind: 'ask_user_question', answers: {} });
+    return true;
+  }
+  if (entry.kind === 'plan_review') {
+    entry.resolve({ kind: 'plan_review', behavior: 'deny', reason, dismissed: true });
+    return true;
+  }
+  entry.resolve({ kind: 'permission', behavior: 'deny', reason });
+  return true;
+}
+
 /** Reject all pending interactions (used on session close / error). */
 export function rejectAllPending(reason: string): void {
   for (const [, entry] of pending) {

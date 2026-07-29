@@ -17,11 +17,17 @@
  *     不存在静默回退
  */
 
-import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
-import type { ChannelIM, IMUnsupportedEntry } from '@cindy/im';
+import type {
+  AgentKind,
+  Effort,
+  InteractionDecision,
+  InteractionRequest,
+  PermissionMode,
+} from '@cindy/maker-core';
+import type { ChannelIM, ImOutputDriver, IMUnsupportedEntry } from '@cindy/im';
 
 /** 渠道名 — 同时是 sessions.source 列值与 IdentityKey.channel 的值域。 */
-export type ImChannelName = 'feishu' | 'slack' | 'discord';
+export type ImChannelName = 'feishu' | 'slack' | 'discord' | 'wechat';
 
 /**
  * IM 编排层的产品默认配置(由 main/im/index.ts 产品接线层注入)。
@@ -83,6 +89,8 @@ export interface ImChannelAdapter {
   channel: ImChannelName;
   /** 收发能力(@cindy/im ChannelIM 契约)。 */
   im: ChannelIM;
+  /** Terminal output strategy; existing channels use rich-card. */
+  output: ImOutputDriver;
   config: ImOrchestratorConfig;
   ui: ImUiTextPack;
   sessions: ImSessionNamespace;
@@ -102,6 +110,20 @@ export interface ImChannelAdapter {
    * threadScoped 渠道会收到 scopeKey(thread root ts), 供 MCP 出站定位 thread。
    */
   buildVendorOptions(userId: string, scopeKey?: string): Record<string, unknown>;
+  /**
+   * Text-only channels can still resolve agent interactions without rich cards.
+   * The callback owns channel-specific correlation and parsing.
+   */
+  handleTextInteraction?(
+    userId: string,
+    request: InteractionRequest,
+  ): Promise<InteractionDecision>;
+  /** Durable channels may promote task-scoped attachments after message persistence succeeds. */
+  onUserMessagePersisted?(args: {
+    sessionId: string;
+    userMessageId: string | null;
+    persisted: boolean;
+  }): Promise<void>;
 }
 
 // ── UI 文案包 ─────────────────────────────────────────────────────────────────

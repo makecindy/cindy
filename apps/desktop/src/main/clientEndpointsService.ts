@@ -14,8 +14,9 @@
  * 仍失败照样阻断,所以严格语义不变。
  *
  * 清单来源按运行形态三选一(resolveEndpointSource,纯函数可单测):
- *  - packaged / dev + --endpoints-cdn:从烘焙自举基址 ENDPOINT_MANIFEST_BASE_URL
- *    (region 化 hotfix 域名,客户端唯一"有感"的烘焙远程 URL)直连拉取;
+ *  - packaged / dev + --endpoints-cdn:从当前构建区域的烘焙自举基址
+ *    ENDPOINT_MANIFEST_BASE_URL 直连拉取；另一物理区域的基址也在构建期注入，
+ *    只用于组织区域发现和已绑定会话恢复；
  *  - dev 默认:读仓内 `config/endpoint.json`(XDT_ENDPOINT_MANIFEST_FILE 可
  *    指定其它文件,restart:desktop:local 用它指到 config/endpoint.local.json),
  *    同一条阻断循环,文件缺失 / 非法同样弹框——配置错要炸出来,不静默猜测;
@@ -38,14 +39,34 @@ import {
   resolveClientEndpointsStrict,
   type ClientEndpointKey,
   type ClientEndpointMap,
+  type ClientEndpointRegion,
+  type ParseClientEndpointManifestResult,
+  type RealmManifestBaseUrls,
 } from '@cindy/maker-shared/client-endpoints';
 
 import { createLogger } from './logger';
-import { ENDPOINT_MANIFEST_BASE_URL } from '../shared/endpoints';
+import {
+  ENDPOINT_MANIFEST_BASE_URL,
+  ENDPOINT_MANIFEST_PEER_BASE_URL,
+} from '../shared/endpoints';
 
 const log = createLogger('clientEndpoints');
 
 const MANIFEST_FILE_NAME = 'endpoint.json';
+const BUILD_VARIANT = import.meta.env.VITE_CINDY_AUTH_REGION;
+/** 与 authManager 的构建区域判定保持一致；dev 使用 CN auth 身份。 */
+const BUILD_AUTH_REGION: ClientEndpointRegion =
+  BUILD_VARIANT === 'global' ? 'global' : 'cn';
+const DEFAULT_REALM_MANIFEST_BASE_URLS: RealmManifestBaseUrls =
+  BUILD_AUTH_REGION === 'global'
+    ? {
+        cn: ENDPOINT_MANIFEST_PEER_BASE_URL,
+        global: ENDPOINT_MANIFEST_BASE_URL,
+      }
+    : {
+        cn: ENDPOINT_MANIFEST_BASE_URL,
+        global: ENDPOINT_MANIFEST_PEER_BASE_URL,
+      };
 /** 单次请求的网络超时——只用于触发错误框,不是静默降级。 */
 const ATTEMPT_TIMEOUT_MS = 15_000;
 
@@ -72,9 +93,7 @@ export const CLIENT_ENDPOINTS_SYNC_CHANNEL = 'client-endpoints:get-sync';
 
 // ── 清单来源解析(纯函数,规则 14:内存 harness 可测) ─────────────────────
 
-export type EndpointSource =
-  | { kind: 'cdn' }
-  | { kind: 'file'; filePath: string };
+export type EndpointSource = { kind: 'cdn' } | { kind: 'file'; filePath: string };
 
 export interface ResolveEndpointSourceInput {
   isPackaged: boolean;
@@ -110,9 +129,7 @@ export function resolveEndpointSource(input: ResolveEndpointSourceInput): Endpoi
  * error 对象整个丢掉、统一折叠成 `fetch-failed`,现场只能看到一句
  * "fetch-failed",日志里也无从区分 DNS / 代理 / TLS / 超时,排查全靠猜。
  */
-export type ManifestFetchResult =
-  | { ok: true; text: string }
-  | { ok: false; detail: string };
+export type ManifestFetchResult = { ok: true; text: string } | { ok: false; detail: string };
 
 /** 归一为单行并截断:避免多行栈把弹框 detail 与日志行撑爆。 */
 function normalizeDetail(detail: string): string {
@@ -142,15 +159,17 @@ function fetchTextViaNet(url: string, timeoutMs: number): Promise<ManifestFetchR
       const request = net.request(url);
       let body = '';
       let settled = false;
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const finish = (value: ManifestFetchResult) => {
+      const finish = (
+        value: ManifestFetchResult,
+        timeoutToClear?: ReturnType<typeof setTimeout>,
+      ) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
+        if (timeoutToClear !== undefined) clearTimeout(timeoutToClear);
         if (!value.ok) log.debug('fetch failed (%s) for %s', value.detail, url);
         resolve(value);
       };
-      timeout = setTimeout(() => {
+      const timeout = setTimeout(() => {
         request.abort();
         finish({ ok: false, detail: `timeout-${timeoutMs}ms` });
       }, timeoutMs);
@@ -158,16 +177,20 @@ function fetchTextViaNet(url: string, timeoutMs: number): Promise<ManifestFetchR
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
           response.on('data', () => {});
-          finish({ ok: false, detail: `http-${response.statusCode}` });
+          finish({ ok: false, detail: `http-${response.statusCode}` }, timeout);
           return;
         }
         response.on('data', (chunk) => {
           body += chunk.toString();
         });
-        response.on('end', () => finish({ ok: true, text: body }));
-        response.on('error', (err) => finish({ ok: false, detail: describeFetchError(err) }));
+        response.on('end', () => finish({ ok: true, text: body }, timeout));
+        response.on('error', (err) =>
+          finish({ ok: false, detail: describeFetchError(err) }, timeout),
+        );
       });
-      request.on('error', (err) => finish({ ok: false, detail: describeFetchError(err) }));
+      request.on('error', (err) =>
+        finish({ ok: false, detail: describeFetchError(err) }, timeout),
+      );
       request.end();
     } catch (err) {
       resolve({ ok: false, detail: describeFetchError(err) });
@@ -215,12 +238,18 @@ export interface BlockingResolveDeps {
   /** 仅 dev 本地文件路径为 true(localhost http);CDN 路径一律不传。 */
   allowHttp?: boolean;
   /**
+   * 清单带 region 元数据时必须与构建区域一致；缺少元数据的旧清单仍保持兼容。
+   */
+  expectedRegionWhenPresent?: ClientEndpointRegion;
+  /**
    * 弹框前的自动重试节奏,默认 AUTO_RETRY_DELAYS_MS。file 模式传 `[]` 关闭:
    * 本地文件读不到 / 内容非法都是配置事故,重读同一路径没有意义,只会白等。
    */
   autoRetryDelaysMs?: readonly number[];
   /** 仅测试注入(默认 setTimeout);让重试节奏在内存 harness 里零等待可测。 */
   sleep?(ms: number): Promise<void>;
+  /** 启动宿主保存清单元数据；纯端点调用方无需提供。 */
+  onResolved?(manifest: Extract<ParseClientEndpointManifestResult, { ok: true }>): void;
 }
 
 /**
@@ -250,7 +279,18 @@ export async function resolveClientEndpointsBlocking(
 
       if (fetched.ok) {
         const parsed = resolveClientEndpointsStrict(fetched.text, options);
-        if (parsed.ok) return parsed.endpoints;
+        if (parsed.ok) {
+          if (
+            deps.expectedRegionWhenPresent &&
+            parsed.region !== null &&
+            parsed.region !== deps.expectedRegionWhenPresent
+          ) {
+            reason = `region-mismatch:${deps.expectedRegionWhenPresent}:${parsed.region}`;
+            break;
+          }
+          deps.onResolved?.(parsed);
+          return parsed.endpoints;
+        }
         // 拿到了正文但解析/校验不过 = 配置事故:重试同一份内容没有意义,直接弹框。
         reason = parsed.reason;
         break;
@@ -305,6 +345,17 @@ function promptRetryDialog(reason: string, sourceLabel: string): 'retry' | 'exit
 // ── 模块状态与启动入口 ──────────────────────────────────────────────────────
 
 let resolvedEndpoints: ClientEndpointMap | null = null;
+let resolvedRegion: ClientEndpointRegion | null = null;
+let crossRealmOrgLoginEnabled = BUILD_VARIANT !== 'dev';
+let realmManifestBaseUrls: RealmManifestBaseUrls = DEFAULT_REALM_MANIFEST_BASE_URLS;
+let activeSessionRealm: ClientEndpointRegion | null = null;
+const realmEndpointCache = new Map<ClientEndpointRegion, ClientEndpointMap>();
+
+const BUILD_SCOPED_ENDPOINT_KEYS = new Set<ClientEndpointKey>([
+  'websiteUrl',
+  'cdnBaseUrl',
+  'mobileUpdateBaseUrl',
+]);
 
 /**
  * 启动第一步(先于一切更新检查):阻断式解析清单(packaged=CDN;dev=本地文件,
@@ -322,9 +373,13 @@ export async function initClientEndpoints(): Promise<boolean> {
     repoRoot: path.resolve(app.getAppPath(), '..', '..'),
   });
   const sourceLabel =
-    source.kind === 'cdn'
-      ? `${ENDPOINT_MANIFEST_BASE_URL}/${MANIFEST_FILE_NAME}`
-      : source.filePath;
+    source.kind === 'cdn' ? `${ENDPOINT_MANIFEST_BASE_URL}/${MANIFEST_FILE_NAME}` : source.filePath;
+  // The resolver reports the parsed manifest through a callback. Keep it in a
+  // box so TypeScript does not incorrectly conclude that the callback-owned
+  // assignment is unreachable at the reads below.
+  const resolvedManifestBox: {
+    value: Extract<ParseClientEndpointManifestResult, { ok: true }> | null;
+  } = { value: null };
   const endpoints = await resolveClientEndpointsBlocking({
     fetchManifest:
       source.kind === 'cdn'
@@ -333,11 +388,22 @@ export async function initClientEndpoints(): Promise<boolean> {
     promptRetry: (reason) => promptRetryDialog(reason, sourceLabel),
     exitApp: () => app.exit(1),
     allowHttp: source.kind === 'file',
+    expectedRegionWhenPresent: BUILD_AUTH_REGION,
     // dev 本地文件:读不到就是路径/内容配置错,不自动重试(见 BlockingResolveDeps)。
     autoRetryDelaysMs: source.kind === 'cdn' ? undefined : [],
+    onResolved: (manifest) => {
+      resolvedManifestBox.value = manifest;
+    },
   });
   if (endpoints === null) return false; // 用户选择退出,app.exit 已调用
+  const resolvedManifest = resolvedManifestBox.value;
   resolvedEndpoints = endpoints;
+  resolvedRegion = resolvedManifest?.region ?? null;
+  // 老清单没有 region 元数据，但它一定来自构建区域的自举地址。只把这份端点
+  // 缓存在构建区域，不能同时塞进两区，否则升级后留下的跨区 token 会被误发。
+  activeSessionRealm = resolvedRegion ?? BUILD_AUTH_REGION;
+  realmEndpointCache.clear();
+  realmEndpointCache.set(activeSessionRealm, endpoints);
   log.info(
     'resolved from %s (%s): auth=%s cdn=%s',
     source.kind === 'cdn' ? 'remote manifest' : 'local manifest file',
@@ -358,7 +424,92 @@ export function getClientEndpoint(key: ClientEndpointKey): string {
       `client endpoints not initialized (getClientEndpoint('${key}') called before initClientEndpoints)`,
     );
   }
+  if (BUILD_SCOPED_ENDPOINT_KEYS.has(key) || activeSessionRealm === null) {
+    return resolvedEndpoints[key];
+  }
+  const sessionEndpoints = realmEndpointCache.get(activeSessionRealm);
+  if (!sessionEndpoints) {
+    throw new Error(`client endpoints for active realm '${activeSessionRealm}' not loaded`);
+  }
+  return sessionEndpoints[key];
+}
+
+/** 安装包身份/更新链始终读取启动时清单，不随组织会话区域切换。 */
+export function getBuildClientEndpoint(key: ClientEndpointKey): string {
+  if (resolvedEndpoints === null) {
+    throw new Error('client endpoints not initialized');
+  }
   return resolvedEndpoints[key];
+}
+
+export function getClientEndpointRealmConfig(): {
+  buildRegion: ClientEndpointRegion;
+  crossRealmOrgLoginEnabled: boolean;
+  realmManifestBaseUrls: RealmManifestBaseUrls;
+} {
+  if (resolvedEndpoints === null) {
+    throw new Error('client endpoints not initialized');
+  }
+  return {
+    buildRegion: BUILD_AUTH_REGION,
+    crossRealmOrgLoginEnabled,
+    realmManifestBaseUrls,
+  };
+}
+
+/**
+ * 从构建期受信任地址加载指定区域清单。区域身份由地址表的 key 决定；清单不必
+ * 重复自报 region，但一旦携带就必须与目标区域一致。失败不会修改当前会话端点，
+ * 也不会退回构建区域发送跨区 token。
+ */
+export async function loadClientEndpointsForRealm(
+  region: ClientEndpointRegion,
+): Promise<ClientEndpointMap> {
+  const cached = realmEndpointCache.get(region);
+  if (cached) return cached;
+  const baseUrl = realmManifestBaseUrls[region];
+  if (!baseUrl) {
+    throw new Error('realm-manifest-url-unavailable');
+  }
+  const fetched = await fetchTextViaNet(
+    `${baseUrl}/${MANIFEST_FILE_NAME}?t=${Date.now()}`,
+    ATTEMPT_TIMEOUT_MS,
+  );
+  if (!fetched.ok) {
+    throw new Error(fetchFailedReason(fetched.detail));
+  }
+  const parsed = resolveClientEndpointsStrict(fetched.text);
+  if (!parsed.ok) {
+    throw new Error(parsed.reason);
+  }
+  if (parsed.region !== null && parsed.region !== region) {
+    throw new Error(`region-mismatch:${region}:${parsed.region}`);
+  }
+  realmEndpointCache.set(region, parsed.endpoints);
+  return parsed.endpoints;
+}
+
+export function getClientEndpointForRealm(
+  region: ClientEndpointRegion,
+  key: ClientEndpointKey,
+): string {
+  if (BUILD_SCOPED_ENDPOINT_KEYS.has(key)) return getBuildClientEndpoint(key);
+  const endpoints = realmEndpointCache.get(region);
+  if (!endpoints) {
+    throw new Error(`client endpoints for realm '${region}' not loaded`);
+  }
+  return endpoints[key];
+}
+
+export function activateClientEndpointRealm(region: ClientEndpointRegion): void {
+  if (!realmEndpointCache.has(region)) {
+    throw new Error(`client endpoints for realm '${region}' not loaded`);
+  }
+  activeSessionRealm = region;
+}
+
+export function resetClientEndpointRealm(): void {
+  activeSessionRealm = resolvedRegion ?? BUILD_AUTH_REGION;
 }
 
 export function getResolvedClientEndpoints(): ClientEndpointMap {
@@ -375,7 +526,39 @@ export function registerClientEndpointsIpc(): void {
   });
 }
 
+export interface ResetClientEndpointsForTestOptions {
+  /** 指定后模拟一份真实带 region 元数据的构建清单。 */
+  buildRegion?: ClientEndpointRegion;
+  /** 注入其它区域清单，供运行期 realm 切换测试使用。 */
+  realmEndpoints?: Partial<Record<ClientEndpointRegion, ClientEndpointMap>>;
+  crossRealmOrgLoginEnabled?: boolean;
+  realmManifestBaseUrls?: RealmManifestBaseUrls | null;
+}
+
 /** 仅测试:重置/注入模块状态。 */
-export function resetClientEndpointsForTest(resolved?: ClientEndpointMap): void {
+export function resetClientEndpointsForTest(
+  resolved?: ClientEndpointMap,
+  options?: ResetClientEndpointsForTestOptions,
+): void {
   resolvedEndpoints = resolved ?? null;
+  resolvedRegion = resolved ? (options?.buildRegion ?? null) : null;
+  crossRealmOrgLoginEnabled = options?.crossRealmOrgLoginEnabled ?? BUILD_VARIANT !== 'dev';
+  realmManifestBaseUrls =
+    options?.realmManifestBaseUrls ?? DEFAULT_REALM_MANIFEST_BASE_URLS;
+  activeSessionRealm = resolvedRegion;
+  realmEndpointCache.clear();
+  // 既有 desktop 单测只注入一份逻辑端点，不关心物理区域；让两种构建区域都能
+  // 使用同一 fixture，避免测试辅助接口被生产清单元数据耦合。
+  if (resolved) {
+    if (resolvedRegion) {
+      realmEndpointCache.set(resolvedRegion, resolved);
+    } else {
+      realmEndpointCache.set('cn', resolved);
+      realmEndpointCache.set('global', resolved);
+    }
+  }
+  for (const region of ['cn', 'global'] as const) {
+    const endpoints = options?.realmEndpoints?.[region];
+    if (endpoints) realmEndpointCache.set(region, endpoints);
+  }
 }

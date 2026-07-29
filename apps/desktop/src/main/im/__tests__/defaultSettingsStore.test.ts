@@ -87,7 +87,7 @@ describe('im default settings store', () => {
     });
 
     const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
-    expect(persisted.schemaVersion).toBe(2);
+    expect(persisted.schemaVersion).toBe(3);
     expect(persisted.global).toEqual({
       agents: {
         codex: {
@@ -124,7 +124,7 @@ describe('im default settings store', () => {
     });
 
     const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
-    expect(persisted.schemaVersion).toBe(2);
+    expect(persisted.schemaVersion).toBe(3);
     expect(persisted.global).toEqual({
       agents: {
         'claude-code': {
@@ -173,7 +173,7 @@ describe('im default settings store', () => {
     scopeMocks.owner = 'cloud-a';
     expect(readImDefaultSettings().agentKind).toBe('codex');
     const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
-    expect(persisted.schemaVersion).toBe(2);
+    expect(persisted.schemaVersion).toBe(3);
     expect(persisted.global).toEqual({ agentKind: 'codex' });
     expect(persisted.agentKind).toBe('codex');
   });
@@ -196,7 +196,39 @@ describe('im default settings store', () => {
     expect(migrated.channels.feishu).toEqual(migrated.global);
     expect(migrated.channels.discord).toEqual(migrated.global);
     expect(migrated.channels.slack).toEqual(migrated.global);
+    expect(migrated.channels.wechat).toEqual(migrated.global);
   });
+
+  it('migrates v2 documents to auto permission and seeds an independent WeChat route', () => {
+    const withoutPermission = {
+      agentKind: IM_DEFAULT_SETTINGS.agentKind,
+      agents: IM_DEFAULT_SETTINGS.agents,
+    };
+    const migrated = __testing.normalizeDocument({
+      schemaVersion: 2,
+      global: withoutPermission,
+      channels: {
+        feishu: withoutPermission,
+        discord: withoutPermission,
+        slack: withoutPermission,
+      },
+    });
+
+    expect(migrated.schemaVersion).toBe(3);
+    expect(migrated.global.permissionMode).toBe('auto');
+    expect(migrated.channels.wechat.permissionMode).toBe('auto');
+    expect(migrated.channels.wechat.agentKind).toBe(IM_DEFAULT_SETTINGS.agentKind);
+  });
+
+  it.each(['acceptEdits', 'bypassPermissions'] as const)(
+    'rejects %s for personal WeChat without changing saved defaults',
+    (permissionMode) => {
+      expect(() =>
+        writeImDefaultSettingsPatch({ permissionMode }, 'wechat'),
+      ).toThrow('WECHAT_PERMISSION_MODE_UNSUPPORTED');
+      expect(readImDefaultSettings('wechat').permissionMode).toBe('auto');
+    },
+  );
 
   it('detects legacy files even when v2 defaults are merged in by createOverrideSettingsFile', () => {
     // createOverrideSettingsFile calls normalize({ ...defaults(), ...overrides }).

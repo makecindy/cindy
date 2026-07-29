@@ -440,6 +440,86 @@ export function stripEmptyTextFromBody(rawBody: Buffer): Buffer | null {
   }
 }
 
+/**
+ * 丢弃请求历史里的空 assistant 消息(含剥掉空 thinking 块后变空壳的),返回新 Buffer;
+ * 没改动 / 非 JSON / 无 messages → null。
+ *
+ * 背景: moonshot/kimi-k3 经 LiteLLM 原生转发(/anthropic/v1/messages passthrough)时,
+ * 其 Anthropic 兼容流首包是空 thinking 占位 {type:"thinking",thinking:"",signature:""}
+ * (kimi 官方确认 by design);流被 429/中断切断后,客户端把未完成的占位 block 当成完整
+ * assistant 持久化,回放时 moonshot 400:
+ *   "Invalid request: the message at position 693 with role 'assistant' must not be empty"
+ * (2026-07-28 线上实测,两个独立会话 position 693 / 275,重试 35+ 次全部失败,
+ * 会话级永久卡死——每轮请求历史都带污染消息)。
+ *
+ * 处理(与 kimi code 官方客户端的兜底策略同构——发送出去的请求不允许带空 assistant):
+ *   1. assistant 消息 content 为 string 且为空白 → 整条丢弃;
+ *   2. assistant 消息 content 为数组:先剥空 thinking 块与空 text 块(判别式与
+ *      stripEmptyThinkingFromBody / stripEmptyTextFromBody 一致,有内容/签名空的块
+ *      保留),剥完为空(含原生 content:[])→ 整条丢弃;剥完仍有 text/tool_use →
+ *      保留净化后的消息。空 text 块一并剥的原因:moonshot 的 must-not-be-empty 校验
+ *      对 bridge 清理路径产出的 text-only 空块消息同样命中(PR #821 review 实测反馈),
+ *      只剥 thinking 会让该形态 strip 不出东西、重试被跳过,会话继续卡死。
+ *   user 消息一律不动(线上命中的只有 assistant;user 空消息无实测证据,不扩散)。
+ *
+ * 安全性: 空消息不含任何对话信息,丢弃不改变语义;含 tool_use 的轮次剥完非空,
+ * tool_use/tool_result 配对不会被打破。
+ *
+ * @returns 丢弃/净化至少一条 → 新 Buffer; 无改动 → null (cache 安全契约:字节透传)。
+ */
+export function stripEmptyAssistantMessagesFromBody(rawBody: Buffer): Buffer | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) return null;
+  const messages = parsed.messages;
+  if (!Array.isArray(messages)) return null;
+
+  let changed = false;
+  const keptMessages: unknown[] = [];
+  for (const msg of messages) {
+    if (!isPlainObject(msg) || msg.role !== 'assistant') {
+      keptMessages.push(msg);
+      continue;
+    }
+    const content = msg.content;
+    if (typeof content === 'string') {
+      if (content.trim().length === 0) {
+        changed = true; // 空 string content → 整条丢弃
+        continue;
+      }
+      keptMessages.push(msg);
+      continue;
+    }
+    if (!Array.isArray(content)) {
+      keptMessages.push(msg); // 异常形态不猜,原样保留
+      continue;
+    }
+    const keptContent = content.filter((block) => !isEmptyThinkingBlock(block) && !isEmptyTextBlock(block));
+    if (keptContent.length === 0) {
+      changed = true; // 空壳(content:[] 或剥空 thinking/空 text 后为空)→ 整条丢弃
+      continue;
+    }
+    if (keptContent.length !== content.length) {
+      changed = true;
+      keptMessages.push({ ...msg, content: keptContent });
+      continue;
+    }
+    keptMessages.push(msg);
+  }
+
+  if (!changed) return null; // ← cache 安全契约:无改动 → null → 字节透传
+  parsed.messages = keptMessages;
+  try {
+    return Buffer.from(JSON.stringify(parsed), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Per-model handlers ——
 // 每个 model 一个独立函数,内部自由实现 strip / 翻译 / 改值。
@@ -476,6 +556,58 @@ const stripGpt54Mini: ModelStripHandler = (body) => {
   return next;
 };
 
+/**
+ * 纯文本模型的 tool_result 图像降级(#794)。
+ *
+ * 实测(z-ai/glm-5.2,Anthropic 兼容直通):tool_result 里的 image block 原样发给
+ * 上游,上游静默丢弃且不报错——模型把工具结果当成空,反复重读或直接臆造图片内容
+ * (实测单任务空转 66 分钟并编造译文)。把 image block 替换为说明性占位文本:
+ * 明确告知有图但当前模型收不到、禁止臆测、引导贴文本或换视觉模型。
+ *
+ * 只处理 tool_result 内嵌图像;user 消息图像走各桥接的 input_image 路径,不归这里。
+ */
+const TOOL_RESULT_IMAGE_OMITTED_TEXT =
+  '[image omitted: this tool returned an image, but the current model is text-only, '
+  + 'so the image could not be delivered. Do NOT guess or fabricate what the image '
+  + 'contains. Tell the user the image could not be delivered to the current model, '
+  + 'and ask them to paste the relevant content as text or switch to a vision-capable '
+  + 'model.]';
+
+function replaceToolResultImagesWithNotice(
+  body: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const messages = body.messages;
+  if (!Array.isArray(messages)) return null;
+
+  let replaced = 0;
+  const nextMessages = messages.map((msg) => {
+    if (!isPlainObject(msg) || !Array.isArray(msg.content)) return msg;
+    let msgChanged = false;
+    const nextContent = msg.content.map((block) => {
+      if (!isPlainObject(block) || block.type !== 'tool_result' || !Array.isArray(block.content)) {
+        return block;
+      }
+      let blockChanged = false;
+      const nextInner = block.content.map((inner) => {
+        if (!isPlainObject(inner) || inner.type !== 'image') return inner;
+        replaced += 1;
+        blockChanged = true;
+        return { type: 'text', text: TOOL_RESULT_IMAGE_OMITTED_TEXT };
+      });
+      if (!blockChanged) return block;
+      msgChanged = true;
+      return { ...block, content: nextInner };
+    });
+    return msgChanged ? { ...msg, content: nextContent } : msg;
+  });
+
+  if (replaced === 0) return null; // cache 安全契约:无改动 → null → 字节透传
+  return { ...body, messages: nextMessages };
+}
+
+/** glm-5.2 (智谱,官方仅文本/代码模态) —— 直通与网关两条路由同一 model id。 */
+const stripGlm52: ModelStripHandler = (body) => replaceToolResultImagesWithNotice(body);
+
 // ───────────────────────────────────────────────────────────────────────────
 // 分发表
 // ───────────────────────────────────────────────────────────────────────────
@@ -490,6 +622,13 @@ const STRIP_HANDLERS: Readonly<Record<string, ModelStripHandler>> = {
   // 「折扣GPT」低价路由 —— 与 gpt-5.4 打同一个 Azure 后端, 同样会因 output_config 报 400,
   // 镜像 gpt-5.4 的 strip 行为 (复用同一 handler)。codex/gpt-5.5 暂不加, 与 gpt-5.5 一致。
   'codex/gpt-5.4': stripGpt54,
+  // 纯文本模型 tool_result 图像会被上游静默吞掉 (#794) —— 带/不带命名空间前缀,
+  // 以及 claude-code SDK 按目录 1M 窗口追加 [1m] 后缀 (toSdkModelString) 的形态
+  // 都登记 (直通路由 body.model 可能保留 z-ai/ 前缀与 [1m] 后缀)。
+  'glm-5.2': stripGlm52,
+  'z-ai/glm-5.2': stripGlm52,
+  'glm-5.2[1m]': stripGlm52,
+  'z-ai/glm-5.2[1m]': stripGlm52,
 };
 
 /**
@@ -561,6 +700,11 @@ const EMPTY_THINKING_RE = /each thinking block must contain thinking/i;
 // (纯空白变体: "text content blocks must contain non-whitespace text")。
 // 同样只匹配核心短语,不锚定下标前缀。
 const EMPTY_TEXT_RE = /text content blocks must (?:be non-empty|contain non-whitespace text)/i;
+
+// moonshot 400 (经 LiteLLM /anthropic/v1/messages passthrough,2026-07-28 实测):
+// "Invalid request: the message at position 693 with role 'assistant' must not be empty"
+// 只匹配不变的 role + 校验短语,不锚定会变的 position 数字。
+const EMPTY_ASSISTANT_MESSAGE_RE = /with role 'assistant' must not be empty/i;
 
 // Azure/LiteLLM 400: "Image generation items without `id` are not supported for this request."
 const IMAGE_GENERATION_WITHOUT_ID_RE =
@@ -660,6 +804,27 @@ export function createEmptyTextRecoveryRule(opts: {
     enabled: opts.enabled ?? (() => true),
     matches: (text) => EMPTY_TEXT_RE.test(text),
     strip: stripEmptyTextFromBody,
+    onRetry: opts.onRetry,
+    threadIdHeaders: opts.threadIdHeaders,
+  };
+}
+
+/**
+ * 空 assistant 消息恢复规则: moonshot/kimi 系(Anthropic 兼容流空 thinking 占位被
+ * 客户端中断持久化后)回放 400 → 丢掉空 assistant 消息重发。
+ * 默认 always-on(空消息不含对话信息,丢弃零代价)。背景详见
+ * stripEmptyAssistantMessagesFromBody 头注。
+ */
+export function createEmptyAssistantMessageRecoveryRule(opts: {
+  enabled?: () => boolean;
+  onRetry?: (threadId: string, model: string) => void;
+  threadIdHeaders?: readonly string[];
+} = {}): RecoveryRule {
+  return {
+    id: 'empty_assistant_message',
+    enabled: opts.enabled ?? (() => true),
+    matches: (text) => EMPTY_ASSISTANT_MESSAGE_RE.test(text),
+    strip: stripEmptyAssistantMessagesFromBody,
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
   };

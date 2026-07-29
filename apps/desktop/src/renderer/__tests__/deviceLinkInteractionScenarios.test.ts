@@ -315,7 +315,8 @@ describe('device-link 远程交互往返 — issue_confirm draft', () => {
       arch: 'arm64',
       osVersion: '15.0',
     },
-    submissionIdentity: { kind: 'github-user', login: 'tester' },
+    submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
+    suggestedPublicName: '当前昵称',
   };
 
   it('逐键保存不通知 makerChatStore 全局订阅,响应后清除草稿', async () => {
@@ -323,6 +324,10 @@ describe('device-link 远程交互往返 — issue_confirm draft', () => {
     host.hostInteraction(s, issueRequest);
     await flush();
     expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe('issue-draft-1');
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toMatchObject({
+      submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
+      suggestedPublicName: '当前昵称',
+    });
 
     const globalListener = vi.fn();
     const unsubscribe = makerChatStore.subscribeAll(globalListener);
@@ -330,12 +335,14 @@ describe('device-link 远程交互往返 — issue_confirm draft', () => {
       title: '编辑后的标题',
       body: '编辑后的正文',
       type: 'feature',
+      publicName: '匿名',
     });
 
     expect(getIssueConfirmDraft(s, 'issue-draft-1')).toMatchObject({
       title: '编辑后的标题',
       body: '编辑后的正文',
       type: 'feature',
+      publicName: '匿名',
     });
     expect(globalListener).not.toHaveBeenCalled();
 

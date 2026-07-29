@@ -24,6 +24,11 @@ export interface CreateGatewayImageClientOptions {
   proxy: CindyProxyMediaProxyConfig;
   fetchImplementation?: typeof fetch;
   logger?: LiziMcpLogger;
+  /**
+   * 派发前钩子(host 注入停用轴判定):payload 与凭证就绪、请求发出紧前调用,
+   * 抛错即取消本次付费提交(PR #744 review 第二十一轮)。缺席 = 不查。
+   */
+  beforeDispatch?(model: string): void;
 }
 
 function gatewayErrorCode(body: unknown): string | null {
@@ -113,6 +118,7 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
     signal?: AbortSignal,
   ): Promise<GatewayImageResponse>;
 } {
+  const beforeDispatch = opts.beforeDispatch;
   const baseUrl = normalizeBaseUrl(opts.proxy.baseUrl);
   const generateUrl = joinProxyUrl(baseUrl, opts.proxy.generatePath);
   const editUrl = joinProxyUrl(baseUrl, opts.proxy.editPath);
@@ -142,6 +148,9 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
     };
     if (params.quality) body.quality = params.quality;
 
+    // 停用轴派发前重查(PR #744 review 第二十一轮):凭证获取是 await,期间该
+    // (供应商, 模型) 可能被用户停用 —— payload 就绪、请求发出的紧前再验一次。
+    beforeDispatch?.(params.model);
     const res = await doFetch(generateUrl, {
       method: 'POST',
       headers: {
@@ -176,6 +185,8 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
       form.append('image[]', new Blob([buf], { type: mimeFromFilename(filename) }), filename);
     }
 
+    // 同上:凭证获取 + 逐张 fs.readFile 都是 await,提交紧前重查。
+    beforeDispatch?.(params.model);
     const res = await doFetch(editUrl, {
       method: 'POST',
       headers: {

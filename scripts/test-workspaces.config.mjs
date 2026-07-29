@@ -19,6 +19,9 @@ const desktopDbExclude = [
   'src/main/localDb/__tests__/migrationReplay.test.ts',
   'src/main/localDb/__tests__/drizzle-proxy-perf.test.ts',
 ];
+const desktopGitIntegrationInclude = [
+  'src/main/**/*.git-integration.test.ts',
+];
 
 export function desktopUnitWorkerCount(
   availableParallelism = os.availableParallelism(),
@@ -66,6 +69,7 @@ export default {
           // It runs exclusively so these workers never overlap outer workspaces.
           command: vitestBin('run', `--maxWorkers=${desktopUnitWorkerCount()}`),
           exclude: [
+            '**/*.git-integration.test.ts',
             'src/main/localDb/**',
             'src/main/__tests__/*Migration.test.ts',
             'src/main/__tests__/schemaDriftRepair.test.ts',
@@ -78,6 +82,14 @@ export default {
             'src/main/__tests__/makerSendToSessionOrdering.test.ts',
             '**/*.bench.ts',
           ],
+        },
+        'git-integration': {
+          status: 'manual',
+          reason: 'Full real-Git coverage is explicit because it spawns hundreds of local subprocesses and is coordinated across worktrees.',
+          execution: 'exclusive',
+          coverage: 'allowlist',
+          command: vitestBin('run', `--maxWorkers=${desktopUnitWorkerCount()}`),
+          include: desktopGitIntegrationInclude,
         },
         db: {
           status: 'manual',
@@ -161,7 +173,9 @@ export default {
     noCollectableWorkspace('project-context', 'packages/project-context'),
     requiredUnitWorkspace('@cindy/remote-file-service', 'packages/remote-file-service'),
     requiredUnitWorkspace('@cindy/voice-input-core', 'packages/voice-input-core'),
+    requiredUnitWorkspace('@cindy/wechat-ilink', 'packages/wechat-ilink'),
     noCollectableWorkspace('@cindy/device-link-protocol', 'cindy-protocol/packages/device-link-protocol'),
+    requiredUnitWorkspace('@cindy/model-access-protocol', 'cindy-protocol/packages/model-access-protocol'),
     requiredUnitWorkspace('@cindy/plugin-protocol', 'cindy-protocol/packages/plugin-protocol'),
     requiredUnitWorkspace('@cindy/skill-protocol', 'cindy-protocol/packages/skill-protocol'),
     requiredUnitWorkspace('@cindy/slack-hook-protocol', 'cindy-protocol/packages/slack-hook-protocol'),

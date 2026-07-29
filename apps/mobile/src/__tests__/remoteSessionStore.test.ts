@@ -143,7 +143,7 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('dev-1');
   });
 
-  it('mirrors session-level usage pushes into totalCostUsd / totalTokenUsage', () => {
+  it('mirrors structured session money and legacy USD usage pushes', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
 
     // 被控端裸 UPDATE 不发 sessions:patched,这两条(sessions topic)是唯一更新通道。
@@ -159,6 +159,22 @@ describe('remoteSessionStore', () => {
       id: 's1',
       totalCostUsd: 1.23,
       totalTokenUsage: 45_000,
+    });
+
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-spend-changed', {
+      sessionId: 's1',
+      totalMoney: {
+        amount: 8.24,
+        currency: 'CNY',
+        approximate: false,
+        kind: 'actual-cost',
+      },
+    });
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({
+      totalMoney: {
+        amount: 8.24,
+        currency: 'CNY',
+      },
     });
 
     // 跨设备 payload 防御:NaN / 负数不入镜像。
@@ -1289,6 +1305,37 @@ describe('remoteSessionStore', () => {
     }
   });
 
+  it('clears stale reconnect progress from an active snapshot without erasing newer retry events', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: { type: 'error', data: { message: 'Reconnecting... 1/5', willRetry: true } },
+    });
+
+    const currentSnapshotEpoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+    remoteSessionStore.setActiveSessionSnapshots(
+      'dev-1',
+      [{ sessionId: 's1', isTurnRunning: true }],
+      currentSnapshotEpoch,
+    );
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toBeNull();
+
+    const staleSnapshotEpoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: { type: 'error', data: { message: 'Reconnecting... 2/5', willRetry: true } },
+    });
+    remoteSessionStore.setActiveSessionSnapshots(
+      'dev-1',
+      [{ sessionId: 's1', isTurnRunning: true }],
+      staleSnapshotEpoch,
+    );
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toEqual({
+      attempt: 2,
+      maxAttempts: 5,
+    });
+  });
+
   it('tracks session running state from maker event push boundaries', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:10.000Z'));
@@ -1305,9 +1352,54 @@ describe('remoteSessionStore', () => {
 
     remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
       sessionId: 's1',
-      event: { type: 'error', data: { message: 'retrying', willRetry: true } },
+      event: { type: 'error', data: { message: 'Reconnecting... 1/5', willRetry: true } },
     });
     expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toEqual({
+      attempt: 1,
+      maxAttempts: 5,
+    });
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'error',
+        data: {
+          message: 'Reconnecting... 2/5 (stream disconnected before completion)',
+          isTerminal: false,
+          willRetry: true,
+        },
+      },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toEqual({
+      attempt: 2,
+      maxAttempts: 5,
+    });
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: { type: 'error', data: { message: 'Waiting before retry', willRetry: true } },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toBeNull();
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: { type: 'error', data: { message: 'Reconnecting... 3/5', willRetry: true } },
+    });
+    pushMakerText('s1', 'persist-reconnected', 'resumed', false);
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toBeNull();
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: { type: 'error', data: { message: 'Reconnecting... 4/5', willRetry: true } },
+    });
+    remoteSessionStore.applyInteractionRequest('s1', pending('permission', 'permission-1'));
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toBeNull();
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: { type: 'error', data: { message: 'Reconnecting... 5/5', willRetry: true } },
+    });
 
     vi.setSystemTime(new Date('2026-01-01T00:00:20.000Z'));
     remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
@@ -1317,6 +1409,7 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessionRunStatus('s1')).toMatchObject({
       isRunning: true,
       startedAt: Date.parse('2026-01-01T00:00:10.000Z'),
+      reconnectAttempt: null,
       status: 'Thinking',
       tokenUsage: 1200,
     });
@@ -1790,13 +1883,20 @@ describe('remoteSessionStore', () => {
     remoteSessionStore.applyRemotePush('dev-1', 'usage:message-turn-cost', {
       sessionId: 's1',
       clientId: 'm1',
-      turnCostUsd: 0.042,
-      turnCostIsEstimate: true,
+      turnMoney: {
+        amount: 0.29,
+        currency: 'CNY',
+        approximate: false,
+        kind: 'actual-cost',
+      },
     });
 
     expect(remoteSessionStore.getMessages('s1')[0].agentMeta).toMatchObject({
-      turnCostUsd: 0.042,
-      turnCostIsEstimate: true,
+      turnCost: {
+        amount: 0.29,
+        currency: 'CNY',
+      },
+      turnCostIsEstimate: false,
     });
   });
 

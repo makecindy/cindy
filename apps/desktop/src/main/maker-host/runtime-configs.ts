@@ -9,7 +9,11 @@ import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
+
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
+import { getActiveCatalog } from './active-catalog.js';
+import { readModelDisableOverrides } from './model-disable-store.js';
 import { claudeBehaviorFlagsForSpawn } from './claude-behavior-flags.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
@@ -162,11 +166,59 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
     configurable: false,
   });
   Object.defineProperty(config, 'subagentModel', {
-    get: () => readSubagentModelSettings().claudeCode ?? undefined,
+    // 无路由上下文的兜底口径(subagentModelForRoute 缺席的消费方用):目录里该模型
+    // 的所有拷贝都被停用才丢弃覆写。
+    get: () => resolveSubagentModelForRoute(undefined),
     enumerable: true,
     configurable: false,
   });
+  // 停用轴(PR #744 review 第十六、十九轮):保存的 subagent 覆写
+  // (CLAUDE_CODE_SUBAGENT_MODEL)是每次 Agent 工具调用的新付费请求路由,而子代理
+  // 跑在**父会话来源**上 —— 判定必须按该来源的那份拷贝:父会话钉 XD、XD 拷贝被停用
+  // 时,Anthropic 家有启用拷贝也不能豁免。env-builder 每次 spawn 传入会话来源。
+  // 同步热路径,只用同步源(active catalog + override store)。
+  config.subagentModelForRoute = (providerId, credentialMode) =>
+    resolveSubagentModelForRoute(providerId, credentialMode);
   return config;
+}
+
+/**
+ * providerId:string = 显式来源;null = 隐式默认 —— 按 spawn 已解析的凭证形态映射
+ * 实际落点(gateway-key = xd / oauth-bearer = Anthropic 直连;静态猜 xd 会在 XD 未
+ * 连接、走 Anthropic 订阅时判错,PR #744 review 第二十轮);undefined = 完全无路由
+ * 上下文(退回「全部拷贝停用才丢弃」的保守判)。
+ */
+function resolveSubagentModelForRoute(
+  providerId: string | null | undefined,
+  credentialMode?: string,
+): string | undefined {
+  const saved = readSubagentModelSettings().claudeCode ?? undefined;
+  if (!saved) return undefined;
+  const overrides = readModelDisableOverrides();
+  const offering = getActiveCatalog().providers.filter((p) =>
+    (p.models['claude-code'] ?? []).some((m) => m.id === saved),
+  );
+  if (offering.length === 0) return saved; // 目录不认识 → 不新增拒绝面
+  const copyDisabled = (id: string) =>
+    isProviderDisabled(overrides, id) || isModelDisabled(overrides, id, saved);
+  if (providerId !== undefined) {
+    const implicitRouteId =
+      credentialMode === 'gateway-key'
+        ? 'xd'
+        : credentialMode === 'oauth-bearer'
+          ? 'anthropic'
+          : null;
+    const routeProvider = providerId
+      ? offering.find((p) => p.id === providerId)
+      : implicitRouteId
+        ? offering.find((p) => p.id === implicitRouteId)
+        : undefined;
+    // 显式/映射来源不提供该模型(跨来源 subagent 覆写)或凭证形态未知:实际落点
+    // 不明,落到下方保守判。
+    if (routeProvider) return copyDisabled(routeProvider.id) ? undefined : saved;
+  }
+  const allDisabled = offering.every((p) => copyDisabled(p.id));
+  return allDisabled ? undefined : saved;
 }
 
 /**

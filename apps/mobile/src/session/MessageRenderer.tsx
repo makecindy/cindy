@@ -138,7 +138,7 @@ import {
   copyMessageText,
   formatMessageAbsoluteTime,
   formatMessageRelativeTime,
-  formatMessageTurnCostUsd,
+  formatMessageTurnCost,
   formatModelShortLabel,
   writeClipboardText,
   type MobileMessageControlActionId,
@@ -1544,7 +1544,7 @@ function MessageBubble({
   const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';
   const absoluteTime = formatMessageAbsoluteTime(item.message.createdAt);
   const turnCost = showCompletedActionBar && item.message.kind === 'assistant'
-    ? formatMessageTurnCostUsd(item.message.turnCostUsd ?? 0, item.message.turnCostIsEstimate)
+    ? formatMessageTurnCost(item.message.turnMoney)
     : '';
   const canFork = !!(
     showCompletedActionBar

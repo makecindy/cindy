@@ -21,6 +21,8 @@ export type SendToSessionCallback = (params: {
   title?: string;
   /** create 模式可选:true = 为新 session 预建独立 git worktree 并以其为 workingDir(jump 忽略)。 */
   useWorktree?: boolean;
+  /** create 模式可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
+  workingDir?: string;
 }) => Promise<
   ControlResult<
     {
@@ -59,9 +61,11 @@ const DESCRIPTION = [
   '',
   '把一条控制层 handoff 消息投递到一个 session。两种模式:',
   '- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。',
-  '- 不传 target_session_id → create:为业务对象新建一个专属 session(继承当前 session 的 workingDir / model / effort / fastMode),投递首条消息,wake_kind 返 created,并在返回里回传新建的 target_session_id 供调用方建立绑定。可加 use_worktree=true 让新 session 在自己的独立 git worktree 里工作(见下)。',
+  '- 不传 target_session_id → create:为业务对象新建一个专属 session(继承当前 session 的 workingDir / model / effort / fastMode),投递首条消息,wake_kind 返 created,并在返回里回传新建的 target_session_id 供调用方建立绑定。可加 working_dir 把新 session 落到另一个项目目录(见下),可加 use_worktree=true 让新 session 在自己的独立 git worktree 里工作(见下)。',
   '',
-  '【use_worktree(仅 create 模式)】use_worktree=true 时,host 会先从当前 workingDir 解析出 base git 仓库(当前 session 自己在 worktree 里跑也能正确反推主仓库),为新 session 预建一个正规 session worktree(<baseRepo>/.cindy-worktrees/<自动名> + xdt/<自动名> 分支,UI 有徽标,session 关闭时自动 stash 未提交改动后回收),新 session 的 workingDir 即该 worktree 路径,返回里带 worktree_path。适用:新 session 要改代码 / checkout 分支,不能污染当前工作树时(如 PR 修复跟进)。workingDir 不是 git 仓库 / git 未装 / worktree 创建失败 → 返 WORKTREE_UNAVAILABLE(不静默降级);调用方可视情况去掉该参数重试(新 session 将直接共享当前 workingDir)。jump 模式忽略此参数。',
+  '【working_dir(仅 create 模式)】缺省新 session 继承当前 session 的 workingDir;传 working_dir(绝对路径,目录须已存在)可把新 session 直接落到另一个项目目录——「从项目 A 的对话把任务 handoff 到项目 B 的全新对话」一次调用完成,无需先在 B 里找一个旧对话中转。与 use_worktree 组合时,worktree 的 base git 仓库从 working_dir 解析。路径不是绝对路径 / 不存在 / 不是目录 → 返 INVALID_ARGS(message 带原因)。jump 模式忽略此参数。',
+  '',
+  '【use_worktree(仅 create 模式)】use_worktree=true 时,host 会先从**新 session 的 workingDir**(即 working_dir 覆盖后的目录;未覆盖时为当前 workingDir,此时 session 自己在 worktree 里跑也能正确反推主仓库)解析出 base git 仓库,为新 session 预建一个正规 session worktree(<baseRepo>/.cindy-worktrees/<自动名> + xdt/<自动名> 分支,UI 有徽标,session 关闭时自动 stash 未提交改动后回收),新 session 的 workingDir 即该 worktree 路径,返回里带 worktree_path。适用:新 session 要改代码 / checkout 分支,不能污染当前工作树时(如 PR 修复跟进)。workingDir 不是 git 仓库 / git 未装 / worktree 创建失败 → 返 WORKTREE_UNAVAILABLE(不静默降级);调用方可视情况去掉该参数重试(新 session 将直接共享当前 workingDir)。jump 模式忽略此参数。',
   '当前 dispatcher session 不会被本工具关闭或改写,消息投递成功后立即返回。',
   '',
   '【典型场景】skill 把某个外部业务对象(issue / jira / pr / 任意自定义 key)绑定到一个 session:首次处理时不传 id 让工具新建并拿回 id 写绑定;二次处理同一对象时传 id 把新消息路由回那个 session,保留完整上下文。',
@@ -114,10 +118,16 @@ export function registerSendToSessionTool(
         .boolean()
         .optional()
         .describe(
-          '仅 create 模式可选:true = 为新 session 预建独立 git worktree(自动从当前 workingDir 解析 base 仓库)并以其为 workingDir,返回带 worktree_path;失败返 WORKTREE_UNAVAILABLE 不静默降级。新 session 要改代码 / checkout 分支时建议开。jump 模式忽略。',
+          '仅 create 模式可选:true = 为新 session 预建独立 git worktree(自动从新 session 的 workingDir 解析 base 仓库)并以其为 workingDir,返回带 worktree_path;失败返 WORKTREE_UNAVAILABLE 不静默降级。新 session 要改代码 / checkout 分支时建议开。jump 模式忽略。',
+        ),
+      working_dir: z
+        .string()
+        .optional()
+        .describe(
+          '仅 create 模式可选:新 session 的工作目录(绝对路径,目录须已存在)。缺省继承当前 session 的 workingDir;用于把任务 handoff 到另一个项目目录的全新对话。不合法返 INVALID_ARGS。jump 模式忽略。',
         ),
     },
-    handler: async ({ target_session_id, message, title, use_worktree }) => {
+    handler: async ({ target_session_id, message, title, use_worktree, working_dir }) => {
       const ctx = deps.getSessionContext();
       const result = await deps.sendToSession({
         targetSessionId: target_session_id,
@@ -125,6 +135,7 @@ export function registerSendToSessionTool(
         dispatcherSessionId: ctx.sessionId,
         title,
         useWorktree: use_worktree,
+        workingDir: working_dir,
       });
 
       if (!result.ok) {

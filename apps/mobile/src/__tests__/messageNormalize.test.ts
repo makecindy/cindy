@@ -61,6 +61,19 @@ describe('normalizeRemoteMessages', () => {
         content: 'question',
         agentMeta: { turnCostUsd: 0.07 },
       }),
+      message({
+        id: 'with-cny-cost',
+        role: 'assistant',
+        content: '人民币费用',
+        agentMeta: {
+          turnCost: {
+            amount: 0.29,
+            currency: 'CNY',
+            approximate: false,
+            kind: 'actual-cost',
+          },
+        },
+      }),
     ]);
 
     expect(items[0]).toMatchObject({
@@ -70,6 +83,15 @@ describe('normalizeRemoteMessages', () => {
     });
     expect(items[1].turnCostUsd).toBeUndefined();
     expect(items[2].turnCostUsd).toBeUndefined();
+    expect(items[3]).toMatchObject({
+      turnMoney: {
+        amount: 0.29,
+        currency: 'CNY',
+        kind: 'actual-cost',
+      },
+      turnCostIsEstimate: false,
+    });
+    expect(items[3].turnCostUsd).toBeUndefined();
   });
 
   it('preserves assistant streaming state from desktop message metadata and content', () => {

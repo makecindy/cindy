@@ -31,10 +31,16 @@ interface HarnessSession {
   isTurnRunning?: () => boolean;
 }
 
-function createHarness(sessions: HarnessSession[], opts?: { retryDelayMs?: number }) {
+function createHarness(
+  sessions: HarnessSession[],
+  opts?: { retryDelayMs?: number; resolveRoute?: PendingCredentialSwitchDeps['resolveRoute'] },
+) {
   const closeSession = vi.fn(async (_sessionId: string) => {});
   const broadcastApplied = vi.fn<NonNullable<PendingCredentialSwitchDeps['broadcastApplied']>>();
   const onApplied = vi.fn<NonNullable<PendingCredentialSwitchDeps['onApplied']>>();
+  const persistRoute = vi.fn<NonNullable<PendingCredentialSwitchDeps['persistRoute']>>(
+    async () => {},
+  );
   const service = new PendingCredentialSwitchService({
     maker: {
       listActiveSessions: () => sessions,
@@ -42,9 +48,11 @@ function createHarness(sessions: HarnessSession[], opts?: { retryDelayMs?: numbe
     },
     broadcastApplied,
     onApplied,
+    persistRoute,
+    ...(opts?.resolveRoute ? { resolveRoute: opts.resolveRoute } : {}),
     ...(opts?.retryDelayMs !== undefined ? { retryDelayMs: opts.retryDelayMs } : {}),
   });
-  return { service, closeSession, broadcastApplied, onApplied, sessions };
+  return { service, closeSession, broadcastApplied, onApplied, persistRoute, sessions };
 }
 
 describe('PendingCredentialSwitchService', () => {
@@ -251,5 +259,252 @@ describe('PendingCredentialSwitchService', () => {
     h.service.onSessionClosed('never-registered');
     expect(h.broadcastApplied).not.toHaveBeenCalled();
     expect(h.onApplied).not.toHaveBeenCalled();
+  });
+
+  describe('收口前的停用重裁决(PR #744 review 第七轮起,宽松降级形态)', () => {
+    it('显式来源在等待期间被停用 ⇒ 按裁决改道到替代来源并回写 DB', async () => {
+      const sessionId = rememberSession('pending-switch-revalidate-reroute');
+      setSessionProvider(sessionId, 'openai');
+      const resolveRoute = vi.fn(async (_a: string, model: string, _pid: string | null) => ({
+        model,
+        providerId: 'anthropic',
+        degraded: true,
+      }));
+      const h = createHarness(
+        [{ id: sessionId, agentKind: 'claude-code', remoteHostId: null, isTurnRunning: () => false }],
+        { resolveRoute },
+      );
+
+      h.service.register(sessionId, {
+        model: 'claude-opus-5',
+        providerId: 'xd',
+        agentKind: 'claude-code',
+      });
+      await h.service.onTurnSettled(sessionId);
+
+      expect(h.service.has(sessionId)).toBe(false);
+      expect(getSessionProvider(sessionId)).toBe('anthropic');
+      expect(h.persistRoute).toHaveBeenCalledWith(sessionId, {
+        providerId: 'anthropic',
+        model: 'claude-opus-5',
+      });
+      expect(h.broadcastApplied).toHaveBeenCalledWith({
+        sessionId,
+        model: 'claude-opus-5',
+        providerId: 'anthropic',
+      });
+      expect(h.onApplied).toHaveBeenCalledWith(sessionId);
+    });
+
+    it('目标模型全部拷贝被停用 ⇒ 连模型一起换到启用兜底并回写(store + DB + 广播)', async () => {
+      // renderer 已把停用模型预写进 DB:只清来源不够 —— 下一次懒 resume 会经停用的
+      // 隐式来源重建(resume 免裁决,PR #744 review 第十四轮)。
+      const sessionId = rememberSession('pending-switch-revalidate-model-swap');
+      setSessionProvider(sessionId, 'openai');
+      const resolveRoute = vi.fn(async () => ({
+        model: 'claude-haiku-4-5',
+        providerId: 'anthropic',
+        degraded: true,
+        effort: 'low',
+      }));
+      const h = createHarness(
+        [{ id: sessionId, agentKind: 'claude-code', remoteHostId: null, isTurnRunning: () => false }],
+        { resolveRoute },
+      );
+
+      h.service.register(sessionId, {
+        model: 'claude-opus-5',
+        providerId: 'xd',
+        agentKind: 'claude-code',
+      });
+      await h.service.onTurnSettled(sessionId);
+
+      expect(h.service.has(sessionId)).toBe(false);
+      expect(getSessionProvider(sessionId)).toBe('anthropic');
+      expect(h.persistRoute).toHaveBeenCalledWith(sessionId, {
+        providerId: 'anthropic',
+        model: 'claude-haiku-4-5',
+        effort: 'low',
+      });
+      expect(h.broadcastApplied).toHaveBeenCalledWith({
+        sessionId,
+        model: 'claude-haiku-4-5',
+        providerId: 'anthropic',
+      });
+      expect(h.onApplied).toHaveBeenCalledWith(sessionId);
+    });
+
+    it('目标全停且无启用兜底 ⇒ 回滚到切换前路由(register 捕获的 previousRoute)', async () => {
+      const sessionId = rememberSession('pending-switch-rollback-previous');
+      setSessionProvider(sessionId, 'openai');
+      const resolveRoute = vi.fn(async () => ({
+        model: undefined,
+        providerId: null,
+        degraded: true,
+      }));
+      const h = createHarness(
+        [{ id: sessionId, agentKind: 'claude-code', remoteHostId: null, isTurnRunning: () => false }],
+        { resolveRoute },
+      );
+
+      h.service.register(sessionId, {
+        model: 'claude-opus-5',
+        providerId: 'xd',
+        agentKind: 'claude-code',
+        // 回滚成套:renderer 已把目标 model/effort/fast 落盘,只回滚 model 会让旧
+        // 模型配上目标档位被上游拒(第十八轮)。
+        previousRoute: {
+          model: 'claude-sonnet-4-6',
+          providerId: 'openai',
+          effort: 'high',
+          fastMode: false,
+        },
+      });
+      await h.service.onTurnSettled(sessionId);
+
+      expect(getSessionProvider(sessionId)).toBe('openai');
+      expect(h.persistRoute).toHaveBeenCalledWith(sessionId, {
+        providerId: 'openai',
+        model: 'claude-sonnet-4-6',
+        effort: 'high',
+        fastMode: false,
+      });
+      expect(h.broadcastApplied).toHaveBeenCalledWith({
+        sessionId,
+        model: 'claude-sonnet-4-6',
+        providerId: 'openai',
+      });
+    });
+
+    it('回写失败 ⇒ fail-closed:保留登记(队列门不解除)、不广播、留给自愈重试', async () => {
+      const sessionId = rememberSession('pending-switch-persist-fail');
+      setSessionProvider(sessionId, 'openai');
+      const resolveRoute = vi.fn(async (_a: string, model: string) => ({
+        model,
+        providerId: 'anthropic',
+        degraded: true,
+      }));
+      const h = createHarness(
+        [{ id: sessionId, agentKind: 'claude-code', remoteHostId: null, isTurnRunning: () => false }],
+        { resolveRoute, retryDelayMs: 60_000 },
+      );
+      h.persistRoute.mockRejectedValueOnce(new Error('disk on fire'));
+
+      h.service.register(sessionId, {
+        model: 'claude-opus-5',
+        providerId: 'xd',
+        agentKind: 'claude-code',
+      });
+      await h.service.onTurnSettled(sessionId);
+
+      // DB 还躺着 renderer 预写的停用目标:此刻唤醒队列 = 排队消息按停用路由懒 resume。
+      expect(h.service.has(sessionId)).toBe(true);
+      expect(h.onApplied).not.toHaveBeenCalled();
+      expect(h.broadcastApplied).not.toHaveBeenCalled();
+    });
+
+    it('目录里一个启用对话模型都没有 ⇒ 只清显式来源(store null + DB 回写 null)', async () => {
+      const sessionId = rememberSession('pending-switch-revalidate-all-dead');
+      setSessionProvider(sessionId, 'openai');
+      const resolveRoute = vi.fn(async () => ({
+        model: undefined,
+        providerId: null,
+        degraded: true,
+      }));
+      const h = createHarness(
+        [{ id: sessionId, agentKind: 'claude-code', remoteHostId: null, isTurnRunning: () => false }],
+        { resolveRoute },
+      );
+
+      h.service.register(sessionId, {
+        model: 'claude-opus-5',
+        providerId: 'xd',
+        agentKind: 'claude-code',
+      });
+      await h.service.onTurnSettled(sessionId);
+
+      expect(getSessionProvider(sessionId)).toBeNull();
+      expect(h.persistRoute).toHaveBeenCalledWith(sessionId, {
+        providerId: null,
+        model: 'claude-opus-5',
+      });
+      expect(h.onApplied).toHaveBeenCalledWith(sessionId);
+    });
+
+    it('复核异常 ⇒ fail-closed:route 不写、保留登记(队列门不解除)、留给自愈重试', async () => {
+      // DB 里躺着 renderer 预写的目标路由(可能恰在等待期间被停用),异常时收口唤醒
+      // 会让排队消息按未经复核的路由懒 resume(PR #744 review 第二十轮)。
+      const sessionId = rememberSession('pending-switch-revalidate-throw');
+      setSessionProvider(sessionId, 'openai');
+      const resolveRoute = vi.fn(async () => {
+        throw new Error('catalog exploded');
+      });
+      const h = createHarness(
+        [{ id: sessionId, agentKind: 'claude-code', remoteHostId: null, isTurnRunning: () => false }],
+        { resolveRoute, retryDelayMs: 60_000 },
+      );
+
+      h.service.register(sessionId, {
+        model: 'claude-opus-5',
+        providerId: 'xd',
+        agentKind: 'claude-code',
+      });
+      await h.service.onTurnSettled(sessionId);
+
+      expect(h.service.has(sessionId)).toBe(true);
+      expect(getSessionProvider(sessionId)).toBe('openai');
+      expect(h.persistRoute).not.toHaveBeenCalled();
+      expect(h.onApplied).not.toHaveBeenCalled();
+      expect(h.broadcastApplied).not.toHaveBeenCalled();
+    });
+
+    it('裁决通过 ⇒ 原样应用;register 未带 agentKind ⇒ 双 agent 保守,不采纳跨 agent 结果', async () => {
+      const sessionId = rememberSession('pending-switch-revalidate-pass');
+      setSessionProvider(sessionId, 'openai');
+      const resolveRoute = vi.fn(
+        async (_a: string, model: string, providerId: string | null) => ({
+          model,
+          providerId,
+          degraded: false,
+        }),
+      );
+      const h = createHarness(
+        [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+        { resolveRoute },
+      );
+
+      h.service.register(sessionId, { model: 'gpt-5.5', providerId: 'xd', agentKind: 'codex' });
+      await h.service.onTurnSettled(sessionId);
+      expect(getSessionProvider(sessionId)).toBe('xd');
+      // R23:裁决接线存在时收口恒写幂等回正(吸收旧 finalizer 迟到写竞态),
+      // 路由未改也回写 (providerId, model) —— 对 renderer 已写值的幂等重写。
+      expect(h.persistRoute).toHaveBeenCalledWith(sessionId, {
+        providerId: 'xd',
+        model: 'gpt-5.5',
+      });
+      expect(resolveRoute).toHaveBeenCalledWith('codex', 'gpt-5.5', 'xd', {
+        desiredFastMode: false,
+      });
+
+      // agentKind 缺席:任一 agent 的裁决要求改动(此处 codex 判 reroute)即清空显式
+      // 来源,绝不把按别的 agent 解析出的来源钉给真实会话(第十二、十三轮)。
+      const sessionId2 = rememberSession('pending-switch-no-agentkind');
+      setSessionProvider(sessionId2, 'openai');
+      const resolveRoute2 = vi.fn(async (agent: string, model: string, providerId: string | null) =>
+        agent === 'codex'
+          ? { model, providerId: 'anthropic', degraded: true }
+          : { model, providerId, degraded: false },
+      );
+      const h2 = createHarness(
+        [{ id: sessionId2, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+        { resolveRoute: resolveRoute2 },
+      );
+      h2.service.register(sessionId2, { model: 'gpt-5.5', providerId: 'xd' });
+      await h2.service.onTurnSettled(sessionId2);
+      expect(h2.service.has(sessionId2)).toBe(false);
+      expect(getSessionProvider(sessionId2)).toBeNull();
+      expect(resolveRoute2).toHaveBeenCalledWith('claude-code', 'gpt-5.5', 'xd');
+      expect(resolveRoute2).toHaveBeenCalledWith('codex', 'gpt-5.5', 'xd');
+    });
   });
 });

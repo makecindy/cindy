@@ -5,7 +5,7 @@
  * runtime has no plugin system — the browser plugin is always the active
  * subject — so `normalizePluginsConfig` passes through and
  * `resolveEffectiveEnableState` honors `enabledByDefault` (default true).
- * Plugin gating in XDMaker happens one layer up in the MCP provider registry.
+ * Plugin gating in Cindy happens one layer up in the MCP provider registry.
  */
 export function normalizePluginsConfig<T>(config: T): T {
   return config;

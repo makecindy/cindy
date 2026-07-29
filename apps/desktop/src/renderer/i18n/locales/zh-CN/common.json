@@ -61,6 +61,7 @@
       "input": "输入",
       "done": "完成",
       "running": "运行中",
+      "networkReconnecting": "（{{attempt}}/{{maxAttempts}}）网络连接中断，正在重新连接…",
       "updatingTasks": "正在更新任务",
       "awaitingPermission": "等待授权",
       "awaitingQuestion": "等待你的回复",
@@ -267,6 +268,11 @@
           "keyHint": "直接读私钥文件。为了不存密码，不支持加密的密钥 —— 仅在 ssh-agent 不可用时使用。"
         },
         "identityFile": "私钥文件路径",
+        "agentProxy": "Agent 流量走本地 Proxy",
+        "agentProxyTip": "在远端开一个 127.0.0.1 端口，经 SSH 隧道转回本机 Proxy，远端 codex / Claude Code 的流量由此流出",
+        "agentProxyAddr": "本地 Proxy 地址",
+        "agentProxyHint": "在远端 127.0.0.1 开端口，经 SSH 隧道转回本机 Proxy（如 Clash 的 7890）。{{appName}} 不提供 Proxy，只建隧道；远端 agent 的 HTTPS_PROXY 会指向隧道口，域名由你的 Proxy 解析。切换后远端 codex daemon 会重启一次以生效。",
+        "agentProxyAddrInvalid": "格式应为 host:port，例如 127.0.0.1:7890",
         "cancel": "取消",
         "submit": "添加机器"
       },
@@ -282,6 +288,11 @@
         "statusInstalled": "已安装",
         "statusNotInstalled": "未安装",
         "claudeCodeName": "Claude Code",
+        "agentProxyTitle": "Agent Proxy 隧道",
+        "agentProxyActive": "远端 127.0.0.1 端口 {{port}} → 本机 {{target}} · 已建立",
+        "agentProxyPending": "隧道建立中 → 本机 {{target}}",
+        "agentProxyWaiting": "主机未连接，重连后自动建立 → 本机 {{target}}",
+        "agentProxyError": "隧道建立失败：{{message}}",
         "button": {
           "install": "安装",
           "reinstall": "重新安装",
@@ -492,6 +503,14 @@
       "soundPreviewAria": "预览{{event}}音效",
       "skinAnimationAria": "切换{{skin}}的预览动画",
       "skins": {
+        "cindy": {
+          "name": "Cindy",
+          "description": "Cindy 本人出镜，陪你盯着每一次运行。"
+        },
+        "blackcat": {
+          "name": "黑猫",
+          "description": "沉稳的黑猫，黄色眼睛在暗色刘海里格外醒目，适合长时间盯任务。"
+        },
         "pululu": {
           "name": "噗噜噜",
           "description": "TapFamily 里的理性守护担当：圆脑袋负责挡雨，也负责把跑偏的任务稳住。"
@@ -519,6 +538,10 @@
         "muffin": {
           "name": "麦芬",
           "description": "新来的麦芬角色，带着柔和的蓝灰色调，让运行中的任务更轻巧可爱。"
+        },
+        "erika": {
+          "name": "Erika",
+          "description": "戴月牙发饰的 Erika，暖棕色眼神安静又专注，适合陪长任务慢慢跑。"
         }
       },
       "soundEvents": {
@@ -1152,7 +1175,8 @@
       "title": "模型供应商",
       "subtitle": "选择模型时的来源。每个来源提供它支持的模型与计费方式，可按对话分别切换。",
       "pill": {
-        "connected": "已连接"
+        "connected": "已连接",
+        "suspended": "已停用"
       },
       "button": {
         "authorize": "授权",
@@ -1161,7 +1185,8 @@
         "disconnect": "断开",
         "cancel": "取消",
         "retry": "重新获取模型列表",
-        "retrying": "正在重新获取…"
+        "retrying": "正在重新获取…",
+        "enableProvider": "启用供应商"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -1329,9 +1354,8 @@
       },
       "models": {
         "search": "搜索模型",
-        "available": "在选择器中显示",
+        "available": "在模型选择中显示",
         "modelCount_other": "{{count}} 个模型",
-        "agentEnabledCount": "{{agent}} {{on}}/{{total}}",
         "enableAll": "全部显示",
         "disableAll": "全部隐藏",
         "subscription": "订阅",
@@ -1342,9 +1366,18 @@
         "capabilityNote": "不支持 {{agent}}",
         "divergedChip": "已在 {{agent}} 隐藏",
         "refreshAria": "刷新模型列表(仅新增，不改动现有)",
+        "refreshBuiltinAria": "刷新模型列表",
+        "refreshingAria": "正在刷新模型列表…",
+        "refreshDone": "模型列表已刷新",
         "refreshAdded": "已发现 {{count}} 个新模型",
         "refreshNoNew": "模型列表已是最新，无新增",
-        "refreshFailed": "模型列表刷新失败，请稍后再试"
+        "refreshFailed": "模型列表刷新失败，请稍后再试",
+        "disableModel": "停用此模型",
+        "enableModel": "启用此模型",
+        "capabilityGroupHint": "不会出现在对话模型选择中，仅供图像生成等功能使用",
+        "accessWriteFailed": "停用设置未能保存，请重试",
+        "disabledGroup": "已停用",
+        "enableAllModels": "全部启用"
       },
       "genericOAuth": {
         "subtitle": "订阅授权登录（OAuth）",
@@ -1386,7 +1419,9 @@
           "forbidden": "该供应商拒绝了这次请求，下面是上次获取的模型列表。若你正在使用 Proxy 或 VPN，请更换出口后重试。",
           "rejected": "该供应商拒绝了这次请求，下面是上次获取的模型列表。请稍后重试或改用其它供应商。",
           "empty": "该供应商这次没有返回任何可用模型，下面是上次获取的列表。请确认账号权限后重试。"
-        }
+        },
+        "suspendedBanner": "该供应商已停用，凭证已保留；启用后其模型才会重新可用",
+        "moreActionsAria": "更多操作"
       },
       "detect": {
         "groupLabel": "检测到本机 CLI",
@@ -1453,6 +1488,10 @@
         "badge": "推荐",
         "desc": "登录 Cindy 即可开通官方 Cindy AI 服务，全部模型开箱即用，无需管理任何 Key。",
         "cta": "登录 Cindy"
+      },
+      "menu": {
+        "disableProvider": "停用此供应商",
+        "enableProvider": "启用此供应商"
       }
     },
     "experimental": {
@@ -1529,6 +1568,90 @@
         "hint": "上下线时向 Bot 发送通知消息"
       },
       "bind": "绑定"
+    },
+    "wechatBot": {
+      "title": "个人微信",
+      "description": "扫码连接个人微信，在微信私聊中与 {{appName}} 工作。",
+      "statusAria": "个人微信状态：{{status}}",
+      "status": {
+        "disconnected": "未连接",
+        "authorizing": "准备授权…",
+        "waitingConfirmation": "等待微信确认…",
+        "connected": "已连接",
+        "reconnecting": "重新连接中…",
+        "needsReauth": "需要重新授权",
+        "disabled": "暂不可用",
+        "error": "连接失败"
+      },
+      "intro": "连接后，你发给该微信连接的私聊消息会进入本机 Cindy。授权网页由腾讯提供，页面中可能显示 OpenClaw。",
+      "errorNote": "本次连接未完成。请确认网络正常后重新扫码；Cindy 不会在连接失败时保存明文凭证。",
+      "disabledNote": "此版本的个人微信连接已因兼容性策略暂停。已保存的对话和设置不会被删除。",
+      "permission": {
+        "label": "权限模式",
+        "hint": "仅影响 /new 后的新上下文。高风险操作仍会要求你回到 Cindy 桌面端确认。",
+        "fullAccessDisabled": "个人微信首版不支持 Full Access，避免无法在微信内确认的操作被直接执行。",
+        "permissionModeDisabled": "个人微信始终使用 Cindy 桌面端的确认策略，因此该权限模式不可用。"
+      },
+      "authorization": {
+        "title": "微信授权",
+        "rebindTitle": "将新的 Cindy 连接到微信",
+        "description": "即将跳转到腾讯提供的网页完成授权。扫码绑定后，即可在微信中与 Cindy 对话。",
+        "rebindDescription": "当前微信已有连接。继续扫码可能解除该微信原有的 Cindy 或 OpenClaw 连接。",
+        "confirm": "去授权",
+        "cancel": "取消",
+        "steps": {
+          "1": "点击「去授权」，在系统浏览器打开微信绑定页。",
+          "2": "使用微信 App 扫码，并在微信页面确认连接。",
+          "3": "绑定成功后回到 Cindy，连接状态会自动更新。",
+          "4": "授权页由腾讯提供，页面中可能显示 OpenClaw。"
+        }
+      },
+      "waiting": {
+        "heading": "等待你在微信中确认",
+        "note": "请在系统浏览器完成扫码和确认。成功后无需手动刷新；如果不想继续，可以取消本次授权。",
+        "cancel": "取消授权"
+      },
+      "bound": {
+        "heading": "个人微信已连接",
+        "attentionHeading": "个人微信需要处理",
+        "notes": {
+          "disconnected": "连接已保存，当前尚未启动。",
+          "authorizing": "正在准备新的微信授权。",
+          "waiting_confirmation": "正在等待微信扫码确认。",
+          "connected": "微信私聊消息会直接进入本机 Cindy，消息不经过 Cindy 服务端转发。",
+          "reconnecting": "本机正在恢复与微信的连接，无需重新扫码。",
+          "needs_reauth": "微信授权已失效或被新的连接替换，请重新扫码。",
+          "disabled_by_policy": "连接因当前版本的兼容性策略暂停；凭证和对话仍保留。",
+          "error": "连接暂时失败。可以重新扫码，或解绑后稍后再试。"
+        }
+      },
+      "actions": {
+        "connect": "连接微信",
+        "rebind": "重新连接",
+        "unbind": "解绑"
+      },
+      "workingDir": {
+        "title": "新对话工作目录",
+        "hint": "微信首次对话或发送 /new 后使用。更改不会移动当前上下文。",
+        "managed": "使用 Cindy 管理的专用目录",
+        "reset": "恢复默认",
+        "unavailable": "已选目录当前不可访问；新对话将暂时使用 Cindy 管理的专用目录。"
+      },
+      "unbind": {
+        "title": "解绑个人微信？",
+        "description": "解绑会停止收发、删除本机微信凭证并清理未完成任务。已创建的 Cindy 对话、历史消息和已保存附件会保留。",
+        "confirm": "解绑",
+        "cancel": "取消"
+      },
+      "toasts": {
+        "authorizeFailed": "无法开始微信授权，请稍后重试",
+        "cancelFailed": "取消微信授权失败",
+        "unbound": "个人微信已解绑",
+        "unbindFailed": "解绑失败，请稍后重试",
+        "workingDirSaved": "微信新对话工作目录已更新",
+        "workingDirReset": "微信新对话已恢复使用默认目录",
+        "workingDirFailed": "更新工作目录失败，请重新选择"
+      }
     },
     "discordBot": {
       "title": "Discord 机器人",
@@ -2251,15 +2374,16 @@
       },
       "tips": {
         "cindy": "Cindy 是官方提供的共享机器人：无需申请任何凭证，连接 Slack 后 @Cindy 即可直接派活。",
-        "personal": "个人机器人用你自己申请的凭证接入飞书 / Discord：机器人完全归你，需要自行创建应用并填写配置。",
-        "personalFeishuOnly": "个人机器人用你自己申请的凭证接入飞书：机器人完全归你，需要自行创建应用并填写配置。"
+        "personal": "个人连接包括微信扫码，以及使用自有凭证接入飞书 / Discord；各渠道独立保存新对话配置。",
+        "personalFeishuOnly": "个人连接包括微信扫码，以及使用自有凭证接入飞书；各渠道独立保存新对话配置。"
       },
       "defaults": {
         "title": "新对话配置",
         "channelDescriptions": {
           "feishu": "飞书新对话会使用这组 Agent 和模型；已有私聊发送 /new 后应用。",
           "slack": "Slack 新 thread 会使用这组 Agent 和模型。",
-          "discord": "Discord 新对话会使用这组 Agent 和模型；已有私聊发送 /new 后应用。"
+          "discord": "Discord 新对话会使用这组 Agent 和模型；已有私聊发送 /new 后应用。",
+          "wechat": "微信新对话会使用这组 Agent、模型和权限模式；已有私聊发送 /new 后应用。"
         },
         "agentLabel": "Agent",
         "modelLabel": "模型配置",
@@ -2375,7 +2499,7 @@
         "addPlugin": "添加插件",
         "addPluginAria": "插件添加选项",
         "createWithCindy": "使用 Cindy 创建",
-        "createPrompt": "我要创建一个 Cindy 插件。请先调用 ghost_forge_guide 读取完整规范，不要直接开始实现。先从提问开始，每次聚焦一个关键决策，与我逐步确认插件要解决的问题、目标用户、交互流程、所需工具与连接、权限边界和验收标准。设计确认后，再按规范实现并自检；最后调用 ghost_forge_pack 打包并安装插件。",
+        "createPrompt": "我要创建一个 Cindy 插件。请先调用 ghost_forge_guide 获取手册目录，再用 section 参数读透相关章节（动手前至少读完沙箱红线与打包流程两章），不要直接开始实现。先从提问开始，每次聚焦一个关键决策，与我逐步确认插件要解决的问题、目标用户、交互流程、所需工具与连接、权限边界和验收标准。设计确认后，再按规范实现并自检；最后调用 ghost_forge_pack 打包并安装插件。",
         "installedTitle": "已安装的插件",
         "installedExpand": "展开另外 {{count}} 个已安装插件",
         "installedCollapse": "收起其他已安装插件",
@@ -2526,6 +2650,8 @@
         "cindyImageEdit": "图像编辑(请 Cindy 代办，仅限它自己生成的图)",
         "cindyVideoGenerate": "视频生成(请 Cindy 代办)",
         "cindyVideoEdit": "图生视频(请 Cindy 代办，参考图仅限它名下的图)",
+        "cindyMediaDeposit": "可将它手中的图片、视频或音频存入你的媒体库",
+        "cindyMediaDepositDetail": "用于让你在插件里粘贴或拖入的素材也能被 AI 加工。存入的内容记在这个插件名下，最多占用 {{quota}}，卸载插件时一并清理。",
         "agentUserAction": "用户点击插件卡片后，可让 Agent 开始新一轮工作",
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的对话。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
@@ -3011,7 +3137,6 @@
     "ssoEntry": "使用企业 SSO 登录",
     "localModeEntry": "跳过登录",
     "localModeOpening": "正在打开本地模式…",
-    "returnToLocalMode": "返回本地模式",
     "localModeDescription": "无需 Cindy 账号，数据保存在本机。云模型、跨设备与市场服务不可用。",
     "consentStatement": "我已阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私协议</privacy>",
     "consentDialog": {
@@ -3025,6 +3150,13 @@
     "ssoOrgPlaceholder": "请输入企业 ID、slug 或域名",
     "ssoOrgHint": "不知道企业登录标识？请联系企业管理员",
     "ssoOrgDetected": "选择企业「{{org}}」的单点登录方式",
+    "realmConsent": {
+      "title": "连接企业所在区域",
+      "bodyCn": "你的企业位于中国大陆区。\n继续后，Cindy 会连接该区域。",
+      "bodyGlobal": "你的企业位于国际区。\n继续后，Cindy 会连接该区域。",
+      "agree": "继续登录",
+      "disagree": "取消"
+    },
     "ssoVerificationTitle": "验证企业联系方式",
     "ssoVerificationSubtitle": "首次登录需要验证身份提供方返回的联系方式 {{target}}",
     "enterCode": "输入验证码",
@@ -3073,6 +3205,8 @@
       "RATE_LIMITED": "操作过于频繁，请稍后再试",
       "SSO_LOGIN_REQUIRED": "该邮箱所属企业要求通过 SSO 登录",
       "ORG_SSO_NOT_FOUND": "未找到该企业，或该企业未启用 SSO 登录",
+      "ORG_REALM_AMBIGUOUS": "该企业标识同时存在于两个区域，请联系企业管理员处理",
+      "ORG_REALM_UNAVAILABLE": "暂时无法确认企业所在区域，请检查网络后重试",
       "SSO_EMAIL_REQUIRED": "该企业身份未提供有效邮箱，请联系企业管理员检查 IdP 配置",
       "INVALID_SSO_VERIFICATION_TICKET": "企业身份验证已过期，请重新发起 SSO 登录",
       "SOCIAL_TOKEN_INVALID": "第三方授权已失效，请重试",
@@ -3161,6 +3295,8 @@
       "balanceAvailable": "余额可用",
       "balanceDepleted": "余额已耗尽",
       "balanceUnlimited": "余额不限",
+      "resetCreditsAvailableLine": "可用重置：{{count}} 次",
+      "resetCreditEarliestExpiryLine": "最早过期：{{at}}",
       "windowLine": "{{label}} 剩余 {{remaining}} (已用 {{used}})",
       "windowSegment": "{{label}} 剩余 {{remaining}}",
       "resetAt": "{{at}} 重置",
@@ -3310,6 +3446,7 @@
         "browser": "浏览器",
         "terminal": "终端",
         "review": "审查",
+        "backgroundTasks": "后台任务",
         "collaboration": "协同",
         "unknown": "未知标签页",
         "ghostPanel": "插件面板"
@@ -3333,6 +3470,8 @@
         "fileSub": "Files",
         "openReview": "打开审查",
         "reviewSub": "Review",
+        "openBackgroundTasks": "打开后台任务",
+        "backgroundTasksSub": "Background tasks",
         "openBrowser": "打开浏览器",
         "browserSub": "Browser",
         "openTerminal": "打开终端",
@@ -3694,6 +3833,16 @@
       "touchCountAria_other": "已修改 {{count}} 次",
       "expandAllAria": "展开所有文件",
       "collapseAllAria": "收起所有文件"
+    },
+    "backgroundTasks": {
+      "running": "运行中",
+      "completed": "已完成",
+      "empty": "本对话暂无后台任务",
+      "stop": "停止",
+      "back": "返回",
+      "progressSummary": "{{done}}/{{total}} Agent",
+      "tokens": "{{value}} tokens",
+      "noProgress": "暂无进度详情"
     }
   },
   "update": {
@@ -3729,6 +3878,7 @@
       "ariaDescription": "版本 {{version}} 的更新说明",
       "ariaDescriptionSpan": "自 v{{from}} 起累计 {{count}} 个版本的更新说明",
       "versionsSpan": "{{count}} 个版本",
+      "versionJumpAria": "跳转到版本，共 {{count}} 个版本，当前 v{{version}}",
       "loading": "加载中",
       "loadFailed": "加载失败",
       "retry": "重试"
@@ -4004,7 +4154,14 @@
       "trigger": {
         "placeholder": "选择模型",
         "aria": "选择模型。当前：{{model}}",
-        "ariaWithEffort": "选择模型。当前：{{model}}，推理强度：{{effort}}"
+        "ariaWithEffort": "选择模型。当前：{{model}}，推理强度：{{effort}}",
+        "pendingAria": "选择模型。下条消息：{{agent}} · {{model}}",
+        "pendingAriaWithEffort": "选择模型。下条消息：{{agent}} · {{model}}，推理强度：{{effort}}",
+        "agent": {
+          "claudeCode": "Claude Code",
+          "codex": "Codex",
+          "pending": "下条：{{agent}}"
+        }
       },
       "category": {
         "anthropic": "Anthropic",
@@ -4291,6 +4448,12 @@
       "editTitle": "编辑粘贴的文本",
       "cancelEdit": "取消编辑",
       "saveEdit": "保存文本"
+    },
+    "permissionPrompt": {
+      "alwaysAllowScoped": "本对话都允许 {{scope}}",
+      "alwaysAllowScopedHint": "作用于整个对话，且只限这里列出的范围。",
+      "alwaysAllowSessionHint": "作用于整个对话，不只是这一次请求。",
+      "ruleSeparator": "、"
     }
   },
   "onboarding": {
@@ -4415,6 +4578,9 @@
         "stopped": "已停止"
       },
       "stop": "停止该任务",
+      "openInPanel": "在后台任务面板中打开",
+      "workflowProgressLine": "{{phase}} · {{done}}/{{total}} Agent",
+      "workflowProgressCount": "{{done}}/{{total}} Agent",
       "tokens": "{{count}} tokens",
       "toolUses_one": "{{count}} 次工具调用",
       "toolUses_other": "{{count}} 次工具调用",
@@ -4462,7 +4628,6 @@
       "retryTitle": "重新发送最后一条消息",
       "cancelTitle": "关闭错误提示",
       "retry": "重试",
-      "cancel": "关闭",
       "credentialSwitchBusy": "其他 Codex 任务正在运行，暂时无法按本对话选择的模型来源切换（需要重启共享的 Codex 后台进程）。等其他任务结束后点「重试」即可。",
       "codexThreadStale": "Codex 鉴权模式已切换，当前对话无法继续 —— 请新建对话后生效。",
       "budgetModelHint": "如果反复失败，可以切换到普通版 GPT 再试试。",
@@ -4491,6 +4656,7 @@
       "networkUnreachable": "网络异常，服务暂时不可达，可点击「重试」。",
       "networkUnreachableNoRetry": "网络异常，服务暂时不可达。",
       "networkAutoRetrying": "网络异常，正在自动重试…",
+      "networkReconnecting": "网络连接中断，正在重新连接（{{attempt}}/{{maxAttempts}}）…",
       "networkShowRaw": "查看原始错误",
       "networkHideRaw": "收起原始错误",
       "silentStopContinue": "继续",
@@ -4961,13 +5127,19 @@
     "workflowTree": {
       "agentsCount": "{{count}} 个 Agent",
       "attempt": "第 {{count}} 次尝试",
+      "endedEarly": "未完成即结束",
       "state": {
         "queued": "排队中",
+        "pending": "排队中",
+        "start": "启动中",
         "running": "运行中",
+        "progress": "运行中",
         "done": "完成",
         "completed": "完成",
         "failed": "失败",
-        "stopped": "已停止"
+        "error": "失败",
+        "stopped": "已停止",
+        "killed": "已终止"
       }
     },
     "credentialSwitchWait": {
@@ -6371,13 +6543,20 @@
       "typeFeature": "功能建议",
       "titleLabel": "标题",
       "bodyLabel": "正文(Markdown)",
-      "identityGithubUser": "提交身份：GitHub 用户 @{{login}}(本人)",
-      "identityPlatform": "提交身份：Cindy 平台代提交(GitHub App {{login}})",
+      "submissionMethodLabel": "发布方式",
+      "identityGithubUser": "通过 GitHub 账号 @{{login}} 直接发布",
+      "identityGithubUserHint": "你将成为该 Issue 的 GitHub 作者，可以在 GitHub 编辑或关闭",
+      "identityPlatform": "由 Cindy 平台代发(GitHub App {{login}})",
+      "identityPlatformHint": "你不是该 Issue 的 GitHub 作者，提交后无法自行编辑或关闭",
+      "publicNameLabel": "公开署名",
+      "publicNameHint": "该署名会公开显示在 Issue 正文中",
+      "anonymous": "匿名",
+      "useAnonymous": "使用匿名署名",
       "envLine": "提交时将自动附加：客户端 {{appVersion}} · {{platform}} {{arch}} · 界面语言 {{uiLanguage}}",
       "regionLine": "版本区域：{{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
-      "submit": "提交",
+      "submit": "提交反馈",
       "cancel": "取消"
     },
     "redirect": {
@@ -7245,11 +7424,6 @@
       "learnButton": "学习此技能"
     }
   },
-  "workflows": {
-    "toast": {
-      "none": "当前对话没有正在运行的 Workflow"
-    }
-  },
   "planMode": {
     "menuItem": "计划模式",
     "indicator": {
@@ -7362,7 +7536,6 @@
         "cancelFailed": "取消订阅失败，请稍后重试。"
       },
       "topupCard": {
-
         "action": "购买点数"
       }
     },

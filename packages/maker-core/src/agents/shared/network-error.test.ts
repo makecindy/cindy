@@ -9,7 +9,10 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { isNetworkishErrorMessage } from './network-error.js';
+import {
+  isNetworkishErrorMessage,
+  parseReconnectAttemptMessage,
+} from './network-error.js';
 
 describe('isNetworkishErrorMessage', () => {
   it.each([
@@ -21,6 +24,8 @@ describe('isNetworkishErrorMessage', () => {
     'connect ECONNREFUSED 127.0.0.1:3333',
     'fetch failed',
     'socket hang up',
+    'Reconnecting... 2/5',
+    'Reconnecting… 3/5 (stream disconnected before completion)',
   ])('matches networkish message: %s', (msg) => {
     expect(isNetworkishErrorMessage(msg)).toBe(true);
   });
@@ -33,5 +38,28 @@ describe('isNetworkishErrorMessage', () => {
     'order id 15024 rejected',
   ])('does not match non-network message: %s', (msg) => {
     expect(isNetworkishErrorMessage(msg)).toBe(false);
+  });
+});
+
+describe('parseReconnectAttemptMessage', () => {
+  it('extracts Codex retry progress with or without a trailing stream error', () => {
+    expect(parseReconnectAttemptMessage('Reconnecting... 2/5')).toEqual({
+      attempt: 2,
+      maxAttempts: 5,
+    });
+    expect(
+      parseReconnectAttemptMessage(
+        'Reconnecting... 5/100 (stream disconnected before completion)',
+      ),
+    ).toEqual({ attempt: 5, maxAttempts: 100 });
+  });
+
+  it.each([
+    'Reconnecting...',
+    'Reconnecting... 0/5',
+    'Reconnecting... 6/5',
+    'Connection error.',
+  ])('rejects malformed or unrelated message: %s', (msg) => {
+    expect(parseReconnectAttemptMessage(msg)).toBeNull();
   });
 });

@@ -38,6 +38,20 @@ interface ClaudeEnvBuildOptions {
   mode?: 'local' | 'remote';
   /** 本次子进程明确要走的凭证形态。undefined 时保持 adapter 既有 fallback。 */
   credentialMode?: AgentCredentialMode;
+  /**
+   * 本次 spawn 的会话来源(显式 providerId;null/undefined = 隐式默认路由)。
+   * 供 runtimeConfig.subagentModelForRoute 按父会话来源判定 subagent 覆写是否可路由
+   * (options.subagentModel 省略、走 runtimeConfig 回落分支时消费)。
+   */
+  sessionProviderId?: string | null;
+  /**
+   * 调用方已解析好的 `CLAUDE_CODE_SUBAGENT_MODEL` 决定(见 subagent-model-default.ts)。
+   *   - 字符串 → 设该值;
+   *   - `null`  → 明确**不要设**(让用户手写 agent 的 frontmatter `model:` 生效);
+   *   - 省略    → 回落读 `runtimeConfig`(未接该解析的调用方保持旧行为;有
+   *     subagentModelForRoute 时按 sessionProviderId/credentialMode 走路由感知入口)。
+   */
+  subagentModel?: string | null;
 }
 
 function serializeModelContextWindows(
@@ -81,7 +95,7 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
   'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR',
   // 订阅身份元数据(与 OAUTH_TOKEN 配套,cc env-token 分支消费):不剥离的话,从
-  // 带这些变量的 shell 启动 XDMaker(典型:终端里的 cc 会话内跑 dev)会把**别人的
+  // 带这些变量的 shell 启动 Cindy(典型:终端里的 cc 会话内跑 dev)会把**别人的
   // 档位/scopes**漏进子进程 —— 凭证库没提供时 getAuthEnv 不注入对应 key,继承残留
   // 会顶上,订阅会话以错误 scopes/tier 起跑。
   'CLAUDE_CODE_OAUTH_SCOPES',
@@ -100,6 +114,12 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'ANTHROPIC_FOUNDRY_RESOURCE',
   // 配置目录重定向
   'CLAUDE_CONFIG_DIR',
+  // 子代理派发覆盖:这是 host 独占的键(值由「Subagent 模型」设置经
+  // subagent-model-default.ts 解析决定),继承来的残留会以最高优先级盖掉用户手写 agent 的
+  // `model:`,而且**盖得静默**。典型泄漏路径:终端里的 cc 会话跑 dev,Electron 从
+  // process.env 继承外层会话的值 —— 那时 host 判定的「不要设」在 SDK 的
+  // `{...process.env, ...userEnv}` 合并里根本不生效(我们只能覆盖,删不掉)。
+  'CLAUDE_CODE_SUBAGENT_MODEL',
 ] as const;
 
 /**
@@ -148,6 +168,34 @@ export function cleanProcessEnv(env: NodeJS.ProcessEnv = process.env): Record<st
     if (typeof v === 'string') out[k] = v;
   }
   return out;
+}
+
+/**
+ * `CLAUDE_CODE_SUBAGENT_MODEL` 的**唯一**写入点。
+ *
+ * - 非空串 → 设该值;
+ * - `null` / 空串 → **删掉这个键**;
+ * - `undefined` → 不动(调用方没有做过决定)。
+ *
+ * 为什么「不设」必须是 delete 而不是「跳过赋值」:local 模式的 env 是从 `cleanProcessEnv()`
+ * 起的,`behaviorFlags` 也可能带进来同名键。只跳过赋值的话,那个继承/外来的值会原封不动
+ * 留在字典里,继续以最高优先级盖掉 frontmatter —— 「明确不设」于是变成一句空话。
+ *
+ * (根因侧的防线是把该键放进 SENSITIVE_ANTHROPIC_ENV_KEYS:boot 期从 process.env 剥掉,
+ * 否则 SDK spawn 时的 `{...process.env, ...userEnv}` 合并我们只能覆盖、无法删除。
+ * 这里的 delete 负责字典层,两道一起才干净。)
+ *
+ * `discoverSubagentDefinitions` 需要本函数产出的 env(要读 `CLAUDE_CONFIG_DIR`),所以
+ * 「先建 env、再判定、最后回来落这个键」是合法用法,见 index.ts 的会话启动路径。
+ */
+export function applySubagentModelEnv(
+  env: Record<string, string>,
+  decision: string | null | undefined,
+): void {
+  if (decision === undefined) return;
+  const value = (decision ?? '').trim();
+  if (value) env.CLAUDE_CODE_SUBAGENT_MODEL = value;
+  else delete env.CLAUDE_CODE_SUBAGENT_MODEL;
 }
 
 /**
@@ -213,12 +261,27 @@ export async function buildClaudeEnv(
     : undefined;
   Object.assign(env, await auth.getAuthEnv(authOptions));
 
-  // Claude Code's documented child-agent model override. Blank / undefined deliberately leaves
-  // the key untouched so the host preserves the pre-existing native selection behavior.
-  const subagentModel = runtimeConfig.subagentModel?.trim();
-  if (subagentModel) {
-    env.CLAUDE_CODE_SUBAGENT_MODEL = subagentModel;
-  }
+  // Claude Code's documented child-agent model override.
+  //
+  // `options.subagentModel` 是调用方**已解析过**的决定(见 subagent-model-default.ts):
+  //   - 字符串 → 设该值;
+  //   - `null`  → 明确「不要设」—— 用户手写 agent 自己声明了 model,设了会把它静默盖掉;
+  //   - 省略    → 回落读 runtimeConfig(未接入该解析的调用方保持旧行为)。
+  // 该 env 在平台解析顺序里是最高优先级,所以「不设」是让 frontmatter 生效的唯一办法。
+  // runtimeConfig 回落分支里路由感知版优先:子代理请求跑在父会话来源上,覆写是否可注入
+  // 要按该来源判(host 的停用轴按 (来源, 模型) 记账;PR #744 review 第十九轮)。
+  applySubagentModelEnv(
+    env,
+    options.subagentModel !== undefined
+      ? options.subagentModel
+      : ((runtimeConfig.subagentModelForRoute
+          ? runtimeConfig.subagentModelForRoute(
+              options.sessionProviderId ?? null,
+              options.credentialMode,
+            )
+          : runtimeConfig.subagentModel
+        )?.trim() || undefined),
+  );
 
   // 第三道防线: 告诉 CC CLI "provider 路由由 host 接管"。
   // CC 内部 filterSettingsEnv 看到此标记后,会从所有 settings-sourced env 中剥掉

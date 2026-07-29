@@ -93,6 +93,7 @@ function scaffoldManifest(input: ForgeScaffoldInput): Record<string, unknown> {
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
+    icon: 'assets/icon.png',
   };
   if (input.template === 'agent-action') {
     return {
@@ -361,10 +362,18 @@ readline.createInterface({ input: process.stdin }).on('line', function (line) {
 `;
 }
 
+/**
+ * 占位图标(128×128 纯色 PNG,离线生成后内嵌)。让「有图标」成为骨架默认:
+ * 不配 icon 的插件在面板和身份头里只有默认拼图占位符,作者往往到发布才发现。
+ * 官方插件仓惯例图标放 assets/icon.png(见 FORGE_GUIDE §8.1),骨架直接对齐。
+ */
+const SCAFFOLD_ICON_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAABEElEQVR42u3SMREAIAwAsfpFAAsKOETgtCyYgGZ4A3+J1leqbmECAEYAIABuY259HAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJgEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAmASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQADodQCqFQAAmACAynYAQtWXyojiIUQAAAAASUVORK5CYII=';
+
 /** 按模板产出相对路径到源码内容的完整映射。 */
-function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string> {
+function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string | Buffer> {
   const manifest = scaffoldManifest(input);
-  const files: Record<string, string> = {
+  const files: Record<string, string | Buffer> = {
     [GHOST_MANIFEST_FILE]: `${JSON.stringify(manifest, null, 2)}\n`,
     'main.js':
       input.template === 'agent-action'
@@ -374,6 +383,7 @@ function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string> {
           : input.template === 'node-mcp'
             ? nodeMcpMainSource()
             : plainMainSource(),
+    'assets/icon.png': Buffer.from(SCAFFOLD_ICON_PNG_BASE64, 'base64'),
   };
   if (input.template === 'node-json-rpc') files['node/worker.cjs'] = nodeJsonRpcWorkerSource();
   if (input.template === 'node-mcp') files['node/worker.cjs'] = nodeMcpWorkerSource();
@@ -444,7 +454,13 @@ export async function scaffoldGhostDir(
     return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
   }
   const files = scaffoldFiles(input);
-  const validation = validateGhostManifest(JSON.parse(files[GHOST_MANIFEST_FILE]));
+  // 显式收窄而非 as 断言:manifest 恒为 JSON 字符串,二进制项(占位图标)另存;
+  // 未来若误把 manifest 写成 Buffer,这里在编译/测试期就报,而不是运行期 parse 炸。
+  const manifestRaw = files[GHOST_MANIFEST_FILE];
+  if (typeof manifestRaw !== 'string') {
+    return { ok: false, errorCode: 'INTERNAL', message: 'scaffold manifest 必须是 JSON 字符串' };
+  }
+  const validation = validateGhostManifest(JSON.parse(manifestRaw));
   if (!validation.ok) {
     return {
       ok: false,
@@ -694,7 +710,8 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 
 意识是 Cindy 的第三方能力包,文件形态是 \`.cindy\`(zip 包)。装入后可给
 主机叠加:AI 可调用的工具、常驻界面面板、模型代办能力。本手册教你(agent)替用户
-写一个意识。**流程:读完本手册 → 在工作目录写源码文件 → ghost_forge_pack 打包 →
+写一个意识。**流程:先取手册目录,按需用 section 读透相关章(动手前至少读完
+"沙箱红线"与"打包与测试"两章) → 在工作目录写源码文件 → ghost_forge_pack 打包 →
 用户在弹窗上确认装入。**
 
 从零开始时优先调用 \`ghost_forge_scaffold\` 生成一份不会覆盖现有文件的骨架，再在
@@ -707,6 +724,8 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 my-ghost/
 ├── ghost.json    ← 身份卡(必须,zip 根部)
 ├── main.js       ← 电子脑:后台逻辑入口(声明了 tools/cindy 时必须)
+├── assets/
+│   └── icon.png  ← 建议:插件图标(声明 icon 字段时必须存在;scaffold 会生成占位图,请替换成自己的)
 ├── locales/      ← 可选:宿主驱动的清单文案翻译(声明 locales 时英文必须存在)
 │   ├── en.json
 │   ├── zh-CN.json
@@ -729,6 +748,7 @@ my-ghost/
   "name": "我的意识",           // 展示名
   "description": "一句话说清这段意识是干嘛的(给人看:装入确认框/详情页)",  // 1–300 字
   "whenToUse": "需要生成图片、插画、配图、修图、P 图、改图时找我",  // 1–300 字,给模型看:进 agent 会话的意识花名册,是"用户不点名时 AI 能不能想起你"的关键。写成场景枚举,可反复调优;缺省时花名册回落用 description
+  "icon": "assets/icon.png",   // 建议:插件图标(包内相对路径;扩展名限 png/jpg/jpeg/webp/gif,不收 svg——svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面)。不配则面板与消息身份头显示默认拼图占位符;官方插件仓惯例放 assets/icon.png
   "locales": {                 // 可选:插件只跟随宿主语言;不支持/缺失语言固定回退 en
     "en": "locales/en.json",
     "zh-CN": "locales/zh-CN.json",
@@ -742,6 +762,9 @@ my-ghost/
   "command": "画图",            // 可选:用户 $画图 显式点名(与已装意识查重,冲突拒装)
   "tools": [ /* 见 §3 */ ],
   "cindy": { "image": ["generate", "edit"] },   // 声明了 cindy 槽时必写:能力详单,见下
+  // 三个类目:image / video 的动作是 "generate" | "edit";media 的动作只有
+  // "deposit"(把你手里的媒体字节寄存进总仓换指纹,见 §4.0.1)。按需申请,
+  // 每条都会在装入确认框里单独列给用户看。
   "panel": { "title": "面板标题", "html": "panel.html", "position": "left",
              "minWidth": 240, "defaultFraction": 0.24,
              "systemButtons": { "maximize": false } },
@@ -921,7 +944,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
     },
     "oauth": {                                      // source:"oauth" 时必填(其它来源禁写):主机托管 OAuth 授权详单(见 §4.7)
       "authorizeUrl": "https://accounts.example.com/authorize",  // 授权页(https;域名必须命中 hosts 白名单)
-      "tokenUrl": "https://accounts.example.com/token",          // code/refresh 交换端点(https;域名必须命中 hosts)
+      "tokenUrl": "https://accounts.example.com/token",          // code/refresh 交换端点(https;域名必须命中 hosts)。注:个别服务商(如 xAI)的新版 consent 页不再 302 回 loopback,而是页面 JS 跨源投递授权 code——主机允许的投递来源 = authorizeUrl/tokenUrl 的 origin + hosts 白名单命中的 https 域;consent 页与授权端点不同域时,把 consent 域(如 accounts.x.ai)也声明进 hosts 即可
       "clientId": "xxx.apps.example.com",           // 可选:内置 OAuth 客户端 ID(用户零配置开箱即用;用户在设置页自填的覆盖内置,清除自填即回落)
       "clientIdAlternatives": ["xxx-global.apps.example.com"],  // 可选 ≤8 条:仅 tokenBroker 模式;意识按 app-context 选 App 时,connect 只接受默认值或这里声明的公开 ID
       "clientSecret": "xxx",                        // 可选(须与 clientId 成对):内置 client 的 secret;桌面应用的 client 凭证本非机密,纯 PKCE 服务商可省略
@@ -1117,18 +1140,33 @@ const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '
 //     交卷 note,让用户看得见"这单是谁画的"。
 //     width/height = 图片真实像素宽高(仅图片代办;主机解析不出时缺省)——供
 //     聊天卡片时用它按比例精确声明卡高(见 §4.5),别拿去写进交卷文案。
-// 生图可选画幅 aspectRatio:'1:1' 方图 / '3:2' 横图 / '2:3' 竖图,不传 = 模型自定:
+// 图像可选画幅 aspectRatio:'1:1' 方图 / '3:2' 横图 / '2:3' 竖图,不传 = 后端自定:
 //   { kind: 'gen_image', prompt: '一只猫', aspectRatio: '3:2' }
 //   比例是意图声明(同 tier 哲学),主机翻译成该模型支持的具体尺寸,真实像素
-//   以返回的 width/height 为准。**仅生图收**——改图跟随源图画幅、视频不收比例,
-//   带上会被拒;用户没提横竖要求时别自作主张,不传让模型自定。
+//   以返回的 width/height 为准。**图像类专用**(gen_image 与 edit_image 都收;
+//   改图不传 = 跟随源图画幅);视频画幅是另一个参数 ratio,值域不同,带错会被拒。
+//   用户没提横竖要求时别自作主张,不传让后端自定。
 // 改图(需详单含 "edit";源图必须是本意识名下的,1–4 张——含用户过户给你的
 // args.attachments 指纹):
 //   { kind: 'edit_image', prompt, hashes: ['<指纹>'] }
+//   { kind: 'edit_image', prompt, hashes: ['<指纹>'], aspectRatio: '1:1' }  // 换画幅重绘
 // 视频(需详单 video 类目;分钟级长任务,返回形态同上,url 是 .mp4。同步等待
 // 期间主机自动替你的 tool-call 续命,分钟级任务放心 await):
 //   { kind: 'gen_video', prompt }                       // 文生视频
 //   { kind: 'edit_video', prompt, hashes: ['<指纹>'] }  // 参考图生视频(1–2 张)
+// 视频画面参数(四项全可选,不传 = 该型号出厂默认,这也是最省心的用法):
+//   ratio:'16:9' | '9:16' | '1:1' | '4:3' | '3:4'(视频专用,别和图像的
+//     aspectRatio 混用)
+//   resolution:'480p' | '720p' | '1080p'
+//   duration:秒(整数)。**各型号支持集不同**——传了不支持的值会被明拒,
+//     拒绝话术里带该型号的可用值,按提示改或者干脆不传。
+//   fps:帧率(整数),同样按型号校验。
+//   例:{ kind: 'gen_video', prompt: '猫在奔跑', ratio: '9:16', resolution: '1080p' }
+//   ⚠️ 高分辨率 + 长时长明显更贵也更慢:用户没提要求时不要自作主张调高,
+//      不传让型号自己定。
+//   成功返回多带一个 videoParams: { durationSeconds, resolution, ratio, fps }
+//   = 本单**实际生效**的参数(主机权威)。老宿主会静默忽略这四项,拿 videoParams
+//   跟你传的值对一下就知道兑现没有;要在交卷 note 里报参数,以它为准别报你传的。
 // 视频异步模式(可能超过 30 分钟续命天花板,或不想吊着 tool-call 等时):
 //   加 mode:'submit' → 受理后立即返回 { ok:true, jobId, status:'running',
 //   expectedSeconds }(资格审/源图归属仍同步校验,拒绝立即可见),生成在
@@ -1149,6 +1187,55 @@ const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '
 //   这是主机侧临时状态,不代表本意识缺这项能力——**不要频繁重试**,
 //   如实告诉用户"当前模型不可用,稍后再试或重启应用",然后结束本次操作。
 \`\`\`
+
+### 4.0.1 寄存:让"用户自己的图"也能被 AI 改(deposit_media)
+
+改图/图生视频的 \`hashes\` **只认本意识名下的媒体**。主机生成的图天然在册,
+但用户在你面板里**粘贴、拖入**的图,以及面板里早就存着的存量素材,字节只在
+面板侧(IndexedDB / 你自己的存档),总仓里没有账——所以在寄存之前,它们不能
+当源图。这就是"同一块画布上有的图能改、有的不能"的由来。
+
+寄存把这些字节存进总仓、记到你名下,换回指纹;从此它与你生成的图**同权**。
+
+\`\`\`js
+// 需声明:"slots": [..., "cindy"], "cindy": { "media": ["deposit"] }
+const r = await cindy.send({
+  type: 'cindy-request',
+  kind: 'deposit_media',
+  data: base64,                  // 媒体字节的 base64,不含 data: 前缀
+  label: '用户拖入的参考图',      // 可选,仅供主机侧账目与排查
+  callId: msg.callId,            // 可选,仅日志归因
+});
+// r = { ok:true, url:'cindy-media://blobs/<指纹><后缀>', hash, ext, bytes,
+//       deduplicated, quotaUsedBytes, quotaLimitBytes }
+// 拿到 hash 就能直接当源图:
+await cindy.send({ type:'cindy-request', kind:'edit_image', prompt:'背景换成雪山', hashes:[r.hash] });
+
+// 面板上那件素材被用户删掉时撤回,释放配额(同一能力键,不用另外声明):
+await cindy.send({ type: 'cindy-request', kind: 'release_media', hash: r.hash });
+// → { ok:true, released, quotaUsedBytes, quotaLimitBytes }
+//   released:false = 本就没有这条寄存引用(幂等,不是错误)。
+\`\`\`
+
+规矩(都会被主机强制,不是建议):
+
+- **类型按字节判**:主机读魔数,只收图片 / 视频 / 音频 / glb。你自报的 mime 或
+  文件名一概不参考,识别不出直接拒——别拿 svg、zip、json 来试;
+- **单次 ≤50MB**(解码后字节)。字节要以 base64 走一次 IPC,再大请自己在面板侧
+  压缩或分片,别指望上限继续抬;
+- **每意识配额 1GB**,只算寄存物(你生成的图不占这个额)。同一张图反复寄存
+  不重复占额(内容寻址天然去重)。**满了就拒**——不会静默淘汰旧的,因为
+  "昨天能改今天改不了"是比"存不进去"更糟的体验。用 \`release_media\` 释放;
+  返回里的 \`quotaUsedBytes\` / \`quotaLimitBytes\` 可用来提前提示用户;
+- **频控**:允许 8 张突发,之后约每秒 1 张。批量粘贴不受影响,死循环会被拦;
+- **寄存物不是产物**:它不会被当成生成结果自动送进聊天或 IM(用户自己粘的
+  参考图被回推出去会是隐私事故),也不进 \`/gallery\` 作品清单。要给用户看,
+  自己在面板里用 \`cindy-ghost://<id>/media/<指纹><后缀>\` 渲染,或做成卡片;
+- **生命周期**:寄存物跨会话持久(删会话不陪葬),用户卸载你的插件时一并清理。
+
+用户装你的插件时,确认框会单独出现一行「可将它手中的图片、视频或音频存入你的
+媒体库」并写明上限——这是唯一一条"不花钱就能写用户媒体库"的能力,所以要用户
+单独点头。别为了省事把它当默认能力申请:不做面板素材加工的插件不要声明。
 
 ## 4.1 宿主公开上下文(request,无需卡槽)
 
@@ -2453,7 +2540,9 @@ const ensured = await cindy.workspace({
   你的页面,经 /secrets 交给主机即焚,之后同样拿不到;状态回查最多附尾 4 位
   指纹,重建不出值);
 - 只经手字符串(指纹/地址),拿不到任何磁盘路径;
-- 改图只能改本意识自己生成的媒体(主机查账,越权统一 404/拒绝);
+- 改图只能改**本意识名下**的媒体:自己生成的、用户过户给你的
+  (\`args.attachments\`)、以及你寄存进来的(§4.0.1 \`deposit_media\`)。
+  别人名下的一律不认(主机查账,越权统一 404/拒绝);
 - 崩溃只影响自己的面板(错误接管态),反复崩会被熔断。
 
 ## 7. 打包与测试
@@ -2494,6 +2583,20 @@ const ensured = await cindy.workspace({
 
 界面最终会区分:Cindy 随包官方、此版本已审核、发布者已验证、未验证/无签名。正式
 签名和审核应由商店/发布流水线完成；本地 Forge 不替用户生成或保存正式密钥。
+
+### 8.1 发布到官方插件仓的额外门禁
+
+要提交到官方插件仓 \`makecindy/cindy-official-plugins\` 的插件,除本手册的打包/装入
+校验外还有仓级 CI 硬门禁,过不了整次发布被拦:
+
+- **四语言 locale 缺一不可**:\`locales\` 必须**恰好**包含 \`zh-CN\` / \`en\` / \`ja\` /
+  \`ko\` 四份,且每份都完整覆盖 \`name\` / \`description\` / \`whenToUse\` 与**全部**
+  \`tools[].description\`(工具键集合与清单逐一对齐)。注意这比 §2.1 的本地门槛
+  (「声明 locales 时英文必须存在、翻译可部分提供」)严格得多;
+- **图标**:惯例统一放 \`assets/icon.png\` 并在清单声明 \`icon\` 字段,不要散落在
+  包根;
+- 其余要求(目录命名、审核流程等)以该仓根部的 \`CONTRIBUTING.md\` 为准,提交前
+  在仓内跑一遍 \`node --test .tests/\` 自查。
 
 ## 9. 常见拒装原因速查
 

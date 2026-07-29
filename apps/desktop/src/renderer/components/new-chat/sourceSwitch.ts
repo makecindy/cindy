@@ -180,11 +180,16 @@ export function isSelectedSourceDisconnected(args: {
 }): boolean {
   const { providers, agent, modelId, selectedProviderId, providersLoading } = args;
   if (providersLoading || !agent || !selectedProviderId) return false;
-  // chatEligibleSourcesForModel(不是裸 sourcesForModel):选中来源若还在但这个 id 在
-  // 它上面已经不是聊天模型了(mode 变化),也要判"断连"——否则这里说"没断连"、
+  // chatEligibleSourcesForModel + includeDisabled:选中来源若还在但这个 id 在它上面
+  // 已经不是聊天模型了(mode 变化),也要判"断连"——否则这里说"没断连"、
   // effectiveSourceIdForModel 却解析不出可用来源,界面显示能发、实际发不出去
-  // (2026-07 review:UI 可用性判断与路由解析必须同一份口径)。
-  const sources = chatEligibleSourcesForModel(providers, modelId, agent);
+  // (2026-07 review:UI 可用性判断与路由解析必须同一份口径)。但停用(suspended /
+  // 该拷贝 disabled)是**另一根**准入轴,不打断运行中的会话 —— 按准入过滤后的
+  // rail 判会把停用当断开,Send 被误禁(PR #744 review 第十轮),故传
+  // includeDisabled。
+  const sources = chatEligibleSourcesForModel(providers, modelId, agent, {
+    includeDisabled: true,
+  });
   return !sources.some((p) => p.id === selectedProviderId);
 }
 

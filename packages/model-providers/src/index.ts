@@ -48,8 +48,14 @@ export {
   resolveFallbackCatalogUrl,
   mergeWithBundled,
   loadCatalog,
+  loadCatalogWithSource,
 } from './source.js';
-export type { CatalogSourceConfig, CatalogIO } from './source.js';
+export type {
+  CatalogSourceConfig,
+  CatalogIO,
+  CatalogLoadResult,
+  CatalogLoadSource,
+} from './source.js';
 
 export {
   buildRegistry,
@@ -57,6 +63,7 @@ export {
   connectedProvidersForAgent,
   nativeDefaultSourceId,
   effectiveSourceIdForModel,
+  actualSourceIdForModel,
   providerOffersModel,
   getModel,
   sourcesForModel,
@@ -73,6 +80,13 @@ export type {
   ProviderView,
   ResolvedRoute,
 } from './registry.js';
+
+export {
+  modelDisableKey,
+  isModelDisabled,
+  isProviderDisabled,
+} from './disableOverrides.js';
+export type { ModelDisableOverrides } from './disableOverrides.js';
 
 export { isModelVisible, buildProviderSections, visibleModelUnion, resolveModelIconKind } from './sections.js';
 export type { SectionModel, ProviderSection, ModelIconKind } from './sections.js';
@@ -111,6 +125,7 @@ export {
   classifyModel,
   isChatEligible,
   groupOf,
+  isAgentSelectableModel,
   groupModelsForDisplay,
   isBudgetModel,
   modelBadges,

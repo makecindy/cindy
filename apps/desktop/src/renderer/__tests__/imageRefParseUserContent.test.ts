@@ -189,6 +189,23 @@ describe('parseUserContent — array input (SDK content blocks)', () => {
     expect(parseUserContent([])).toEqual({ text: '', images: [], files: [] });
   });
 
+  it('restores persisted IM image blocks from cindy-media URLs', () => {
+    const url = `cindy-media://blobs/${ATTACHMENT_SHA256}.png`;
+    const blocks = [
+      {
+        type: 'image',
+        path: 'C:\\Users\\User\\wechat-image.png',
+        mimeType: 'image/png',
+        url,
+      },
+    ];
+    expect(parseUserContent(blocks)).toEqual({
+      text: '',
+      images: [{ url, mimeType: 'image/png', originalName: 'wechat-image.png' }],
+      files: [],
+    });
+  });
+
   it('returns empty text for array of only image blocks', () => {
     const blocks = [{ type: 'image', source: {} }];
     expect(parseUserContent(blocks)).toEqual({ text: '', images: [], files: [] });
@@ -210,9 +227,7 @@ describe('parseUserContent — array input (SDK content blocks)', () => {
     });
   });
 
-  it('SDK array content always yields empty files (no SDK file block exists)', () => {
-    // Even if a malicious / future block claims to be a file, we ignore it —
-    // file attachments only round-trip via the {text, images, files} shape.
+  it('restores legacy IM file blocks', () => {
     const blocks = [
       { type: 'text', text: 'hi' },
       { type: 'document', source: { type: 'base64', data: '...' } },
@@ -221,7 +236,7 @@ describe('parseUserContent — array input (SDK content blocks)', () => {
     expect(parseUserContent(blocks)).toEqual({
       text: 'hi',
       images: [],
-      files: [],
+      files: [{ name: 'x.txt', path: '/x' }],
     });
   });
 });

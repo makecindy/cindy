@@ -186,7 +186,46 @@ export interface MakerScheduleRunnerDeps {
   onSessionCreated?: (sessionId: string) => void;
   /** 可选:撞忙排队桥。未注入时心跳撞忙回退为顺延(deferFire)旧行为。 */
   schedulerQueue?: SchedulerQueueDeps;
+  /**
+   * 停用轴裁决(生产 = maker-host/model-route-guard-live 的 verdictForModelRoute)。
+   * scheduler 的每次 fire 都是新的付费调用,不属于「运行中的会话不打断」豁免:
+   * 保存过的路由若已被用户停用,新建会话必须拒绝、心跳的模型切换必须跳过 ——
+   * 否则停用后自动化仍夜复一夜地经停用路由扣费(PR #744 review)。
+   * 缺省 = 不裁决(测试最小 harness)。
+   */
+  checkModelRoute?: (
+    agent: AgentKind,
+    model: string,
+    providerId: string | null,
+  ) => Promise<
+    | { kind: 'pass' }
+    | { kind: 'reroute'; providerId: string }
+    | { kind: 'reject'; reason: string }
+  >;
+  /**
+   * 某 (来源, 模型, agent) 拷贝的能力(efforts / Fast)。effort 与 Fast 支持都是
+   * per-(来源, 模型) 的:停用轴把隐式默认改道到替代来源后,schedule 配置的
+   * effort/fastMode 必须按**落地拷贝**重查,merged capability(reconcileEffortForModel
+   * 的口径)分辨不出来源差异(PR #744 review 第二十七轮)。查不到 / 目录故障返回
+   * null = 不做来源级 reconcile(保持 merged 口径,不阻断 headless 运行)。
+   */
+  resolveRouteCopyCapabilities?: (
+    agent: AgentKind,
+    providerId: string,
+    modelId: string,
+  ) => Promise<{
+    efforts: readonly string[];
+    defaultEffort: string | null;
+    supportsFastMode: boolean;
+  } | null>;
 }
+
+/**
+ * 排队心跳的目标路由被停用轴拒绝(applyQueuedHeartbeatRouting 抛出)。排队派发的
+ * onAccepted 据此在 vendor dispatch 之前中断刚 accept 的 turn 并把 run 按失败收口
+ * (与 fire 主路径的准入拒绝同语义);其它路由同步失败仍按 non-fatal warn 处理。
+ */
+class QueuedRouteDisabledError extends Error {}
 
 /** createTurnCompletionWaiter 的返回:turn 终态等待 + 文本缓冲 + 幂等摘除。 */
 interface TurnCompletionWaiter {
@@ -575,25 +614,70 @@ export class MakerScheduleRunner implements ScheduleRunner {
     const permissionMode = defaultPermissionModeForSchedule();
     // fastMode 只对 codex 有意义（claude-code agent 忽略此字段）；Claude 恒不传，
     // 确保「不影响 Claude」。heartbeat 沿用 session meta 里的 fast 态，非 heartbeat 取 schedule。
-    const fastMode =
+    let fastMode =
       effectiveAgentKind === 'codex'
         ? isHeartbeat
           ? heartbeatFastMode
           : schedule.fastMode
         : undefined;
     const explicitProviderId = schedule.providerId?.trim() ? schedule.providerId.trim() : null;
-    const createProviderId = explicitProviderId ?? (isHeartbeat ? heartbeatProviderId : null);
+    let createProviderId = explicitProviderId ?? (isHeartbeat ? heartbeatProviderId : null);
+    // 停用轴准入(PR #744 review):每次 fire 都是新的付费调用,不属于「运行中的会话
+    // 不打断」豁免 —— 保存过的路由被用户停用后,本次 run 必须以明确错误失败(run 历史
+    // 可见),不能继续经停用路由扣费;隐式默认落点被停用而有启用替代拷贝时改路由过去。
+    let reroutedProviderId: string | null = null;
+    if (this.deps.checkModelRoute) {
+      const verdict = await this.deps.checkModelRoute(effectiveAgentKind, model, createProviderId);
+      if (verdict.kind === 'reject') {
+        throw new Error(
+          `schedule route unavailable: model "${model}" is disabled in settings (${verdict.reason})`,
+        );
+      }
+      if (verdict.kind === 'reroute' && !createProviderId) {
+        createProviderId = verdict.providerId;
+        reroutedProviderId = verdict.providerId;
+      }
+    }
     // issue #456:未门控入口(定时任务 fire)按所选模型自报的 supported efforts 把 effort
     // clamp 到最高兼容档,避免把模型不支持的档(如 gpt-5.5 + max/ultra)透给上游被拒。
     // 模型已声明支持的档原样保留(不降级 —— 保 #352 交互式口径);schedule 配置本身不回写,
     // 只影响本次 fire 的运行值(该模型日后支持该档时自动生效)。直发 / 排队两路径共用
     // reconcileEffortForModel(见其注释),口径一致;lookup 失败不阻断 headless 运行。
-    const reconciledEffort = this.reconcileEffortForModel(
+    let reconciledEffort = this.reconcileEffortForModel(
       effectiveAgentKind,
       model,
       schedule.effort,
       schedule.id,
     );
+    // 隐式改道后的来源级 reconcile(PR #744 review 第二十七轮):上面的 clamp 用的是
+    // merged capability,分辨不出来源差异 —— 改道后的落地拷贝 effort 支持可能更窄、
+    // 可能不支持 Fast,原样透传会被上游拒。按 (verdict.providerId, model) 的拷贝重查:
+    // 仍支持则保留,不支持取该拷贝默认档(与 model-route-guard withEffort 同口径);
+    // Fast 不支持则清掉。查不到 / 目录故障保持 merged 口径,不阻断 headless 运行。
+    if (reroutedProviderId && this.deps.resolveRouteCopyCapabilities) {
+      try {
+        const copy = await this.deps.resolveRouteCopyCapabilities(
+          effectiveAgentKind,
+          reroutedProviderId,
+          model,
+        );
+        if (copy) {
+          if (
+            copy.efforts.length > 0 &&
+            reconciledEffort &&
+            !copy.efforts.includes(reconciledEffort)
+          ) {
+            reconciledEffort =
+              copy.defaultEffort && copy.efforts.includes(copy.defaultEffort)
+                ? (copy.defaultEffort as Effort)
+                : (copy.efforts[copy.efforts.length - 1] as Effort);
+          }
+          if (fastMode === true && !copy.supportsFastMode) fastMode = false;
+        }
+      } catch (err) {
+        this.deps.logger.warn?.('[runner] rerouted copy capability lookup failed (non-fatal)', err);
+      }
+    }
     // 复用判定必须在 createSession 之前取：之后 session 必然在 activeSessions 里,
     // 区分不出"本来就活着(复用, opts 被忽略)"还是"这次 fire 才 spawn(opts 已生效)"。
     // TOCTOU 窗口(判定后、createSession 前 session 恰好关闭)只会把 fresh spawn 误判
@@ -602,7 +686,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if (reusedLiveSession) {
       const liveSession = this.deps.maker.getSession(sessionId);
       const currentProviderId = getSessionProvider(sessionId) ?? heartbeatProviderId;
-      const nextProviderId = explicitProviderId ?? currentProviderId;
+      // 隐式改道(reroutedProviderId)也是本次 fire 的落地来源:跨凭证家族的改道
+      // (如停用 XD 默认 → 改道 Anthropic)若不进本判定,会复用旧凭证 spawn 的
+      // live session,请求仍走旧轨道或直接鉴权失败(PR #744 review 第二十三轮)。
+      const nextProviderId = explicitProviderId ?? reroutedProviderId ?? currentProviderId;
       if (
         liveSession &&
         shouldCloseSessionForCredentialSwitch({
@@ -757,6 +844,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // null 的字节级不变性见 session-provider-store 契约;空值全程不进新分支(no-break)。
     if (explicitProviderId) {
       setSessionProvider(session.id, explicitProviderId);
+    } else if (reroutedProviderId) {
+      // 停用轴 reroute:隐式默认落点被停用,fire 前已裁决出启用替代 —— 复用的 live
+      // 会话 createSession 忽略 opts.providerId,只有显式写 provider store 才对本次
+      // 心跳生效,否则照旧经停用的隐式默认派发(PR #744 review 第十四轮)。fresh
+      // spawn 时与 opts.providerId 幂等。
+      setSessionProvider(session.id, reroutedProviderId);
     } else if (isHeartbeat) {
       hydrateSessionProvider(session.id, heartbeatProviderId);
     }
@@ -766,7 +859,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // assistant text / tool_use / tool_result 等落库到 messages 表。
     // 不 wire → renderer 收不到事件 → messages 永远空（修复 Phase 6 之前 bug：
     // 调度跑出来的 session 在 UI 里一片空白，msg_count=0，但 schedule_runs.status=success）。
-    // wireSessionToIpc 内部按 session.id 幂等，并发 fire 同 session 不会重复挂。
+    // wireSessionToIpc 内部按 Session 实例幂等；同 id 换实例时会先解绑旧实例。
     wireSessionToIpc(session);
 
     // 4.5.0 abort listener:scheduler 在 user delete/pause 时会 abort ctx.signal,
@@ -901,6 +994,46 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // explicit guard prevents a cancellation racing the setup above from
       // dispatching a new agent turn.
       throwIfFireAborted(ctx.signal, 'agent turn dispatch');
+      // 停用轴派发前重裁决(PR #744 review 第十六轮):fire 入口的裁决到这里隔着
+      // 凭证切换 / createSession / 模型同步 / 交接准备等多个长 await,期间路由可能
+      // 刚被停用 —— 按**实际将运行的路由**(runtimeModel + 会话此刻的来源)再判一次,
+      // reject 即失败收口,不发出这次新的付费调用。
+      if (this.deps.checkModelRoute) {
+        const dispatchProviderId = getSessionProvider(session.id);
+        const verdict = await this.deps.checkModelRoute(
+          effectiveAgentKind,
+          runtimeModel,
+          dispatchProviderId,
+        );
+        if (verdict.kind === 'reject') {
+          throw new Error(
+            `schedule route unavailable: model "${runtimeModel}" is disabled in settings (${verdict.reason}, revalidated before dispatch)`,
+          );
+        }
+        if (verdict.kind === 'reroute' && !dispatchProviderId) {
+          // 晚到的隐式改道(createSession 之后目录才变)跨凭证形态时不能只热换
+          // provider store:进程是旧凭证形态 spawn 的,热换后这次 send 仍用旧凭证
+          // 下单或直接鉴权失败。需要关会话重建的组合按明确错误失败收口 —— 下一轮
+          // fire 在入口改道(reroutedProviderId)并经凭证切换重建正确收敛;同凭证
+          // 形态的改道热换即可生效(PR #744 review 第二十七轮)。
+          if (
+            shouldCloseSessionForCredentialSwitch({
+              agentKind: session.agentKind,
+              remoteHostId: session.remoteHostId,
+              currentProviderId: dispatchProviderId,
+              nextProviderId: verdict.providerId,
+              currentModel: runtimeModel,
+              nextModel: runtimeModel,
+              currentCodexProxyActive: session.codexProxyActive,
+            })
+          ) {
+            throw new Error(
+              `schedule route rerouted across credential modes after session creation; failing this run so the next fire rebuilds the session (model "${runtimeModel}" → provider "${verdict.providerId}")`,
+            );
+          }
+          setSessionProvider(session.id, verdict.providerId);
+        }
+      }
       const sendResult = await session.send(outgoingMessage as never, {
         origin,
         planMode: false,
@@ -1226,9 +1359,23 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 的 4.4.1/4.4.2 语义,不让"任务改了模型且每轮都撞忙"的用户被静默忽略
         // (PR #972 review P2)。凭证形态需要切换的场景无法热切,跳过并留日志。
         if (live) {
-          await this.applyQueuedHeartbeatRouting(schedule, live, routingBaseline).catch((err) => {
+          try {
+            await this.applyQueuedHeartbeatRouting(schedule, live, routingBaseline);
+          } catch (err) {
+            if (err instanceof QueuedRouteDisabledError) {
+              // 停用轴准入拒绝(PR #744 review 第六轮):这次排队心跳是新的付费调用,
+              // 目标路由已被停用时不能"保持 live 路由继续派发"。此刻仍在 vendor
+              // dispatch 之前 —— 中断刚 accept 的 turn(同 late-dispatch abort 路径),
+              // run 以明确错误失败收口(不含 abort 字样 ⇒ 引擎按 failed 记录)。
+              void live.abort().catch((abortErr) => {
+                this.deps.logger.warn?.('[runner] route-disabled turn abort failed', abortErr);
+              });
+              failAfterAccept(err);
+              failDispatch(err);
+              return;
+            }
             this.deps.logger.warn?.('[runner] queued heartbeat routing sync failed (non-fatal)', err);
-          });
+          }
         }
         if (live) waiterSlot.current = this.createTurnCompletionWaiter(live);
         // 与直发路径 onAccepted 的簿记对齐(落库/基线钩子除外,见方法头注释)。
@@ -1368,7 +1515,37 @@ export class MakerScheduleRunner implements ScheduleRunner {
       explicitModel ?? (baseline.model?.trim() ? baseline.model : defaultModelFor(schedule.agentKind));
     const explicitProviderId = schedule.providerId?.trim() ? schedule.providerId.trim() : null;
     const currentProviderId = getSessionProvider(live.id) ?? baseline.providerId;
-    const nextProviderId = explicitProviderId ?? currentProviderId;
+    // 停用轴准入(PR #744 review 第五、六轮):排队分支在 fire 主路径的准入点之前
+    // 早退,必须**无条件**按「将要应用的路由」= (targetModel, explicitProviderId)
+    // 裁决 —— 不能只在改模型时查、更不能把显式来源丢成 null 去查隐式默认:schedule
+    // 保持当前模型但指定了已停用来源时会完全跳过校验。reject ⇒ 抛
+    // QueuedRouteDisabledError,由排队派发的 onAccepted 在 **vendor dispatch 之前**
+    // 中断本 turn 并把 run 按失败收口(与 fire 主路径同语义,run 历史可见)——
+    // 「保持 live 路由继续派发」不行:这次排队心跳本身就是一次新的付费调用,目标
+    // 路由(常等于 live 当前路由)已被停用时照发等于继续经停用路由扣费。
+    let applyProviderId = explicitProviderId;
+    if (this.deps.checkModelRoute) {
+      // 裁决对象 = 本轮实际将使用的来源:schedule 显式配置优先,否则会话当前存的
+      // 来源(它同样是显式路由,provider-route 不查停用标志)—— 只传
+      // explicitProviderId 会在「schedule 未指定来源 + 会话当前来源已被停用」时
+      // 误按隐式默认裁决放行,随后照旧沿停用来源派发(PR #744 review 第八轮)。
+      // 两者都缺才是真正的隐式默认(reroute 才有意义)。
+      const routeProviderId = explicitProviderId ?? currentProviderId;
+      const verdict = await this.deps.checkModelRoute(
+        live.agentKind,
+        targetModel,
+        routeProviderId,
+      );
+      if (verdict.kind === 'reject') {
+        throw new QueuedRouteDisabledError(
+          `schedule route unavailable: model "${targetModel}" is disabled in settings (${verdict.reason})`,
+        );
+      }
+      if (verdict.kind === 'reroute' && !routeProviderId) {
+        applyProviderId = verdict.providerId;
+      }
+    }
+    const nextProviderId = applyProviderId ?? currentProviderId;
     if (
       shouldCloseSessionForCredentialSwitch({
         agentKind: live.agentKind,
@@ -1380,6 +1557,21 @@ export class MakerScheduleRunner implements ScheduleRunner {
         currentCodexProxyActive: live.codexProxyActive,
       })
     ) {
+      // 早退 = 本轮沿用 live 当前路由派发:这条保留路由自己也要过停用裁决 ——
+      // 目标来源启用但需要凭证切换、而**当前**来源在排队等待期间被停用时,不裁决
+      // 就成了绕过口,照发等于继续经停用路由扣费(PR #744 review 第十轮)。
+      if (this.deps.checkModelRoute) {
+        const retained = await this.deps.checkModelRoute(
+          live.agentKind,
+          live.model,
+          currentProviderId,
+        );
+        if (retained.kind === 'reject') {
+          throw new QueuedRouteDisabledError(
+            `schedule route unavailable: current session route (model "${live.model}") is disabled in settings (${retained.reason})`,
+          );
+        }
+      }
       this.deps.logger.info?.(
         '[runner] queued heartbeat routing needs credential mode switch; keeping session routing this round',
         { scheduleId: schedule.id, sessionId: live.id, fromModel: live.model, toModel: targetModel },
@@ -1409,6 +1601,24 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 已被用户在聊天里改过,必须按它 clamp,否则用 enqueue 时的陈旧 targetModel 会张冠李戴
     // (PR #479 review:follow-session 用 live.model / setModel 失败用 live.model 两条)。
     const runtimeModel = modelChanged && modelApplied ? targetModel : live.model;
+    // 停用轴终检(PR #744 review 第二十二轮):上方裁决的对象是 targetModel,但实际
+    // 运行模型可能不是它 —— setModel 失败回退 live.model,或 follow-session(无显式
+    // model)时 live.model 在排队等待期间已被用户改过。这两种情形下实际路由从未被
+    // 裁决过,而本次派发就是一次新的付费调用:runtimeModel 偏离 targetModel 时按
+    // (runtimeModel, 落地来源) 重新裁决,reject 即中止派发(与上方同语义,由排队
+    // onAccepted 在 vendor dispatch 之前收口)。
+    if (this.deps.checkModelRoute && runtimeModel !== targetModel) {
+      const actual = await this.deps.checkModelRoute(
+        live.agentKind,
+        runtimeModel,
+        applyProviderId ?? currentProviderId,
+      );
+      if (actual.kind === 'reject') {
+        throw new QueuedRouteDisabledError(
+          `schedule route unavailable: runtime model "${runtimeModel}" is disabled in settings (${actual.reason})`,
+        );
+      }
+    }
     // 只 reconcile schedule **显式配置**的 effort。follow-effort(schedule.effort 留空)不在排队路径
     // clamp:baseline.effort 是 enqueue 时刻的快照,排队等待期间用户可能已在聊天里改过 effort,拿旧
     // 快照 clamp 后 setEffort 会覆盖用户的新选择;而运行时无 live effort getter、拿不到当前真实值 ——
@@ -1435,17 +1645,19 @@ export class MakerScheduleRunner implements ScheduleRunner {
         this.deps.logger.warn?.('[runner] queued heartbeat setEffort failed (non-fatal)', err);
       }
     }
-    if (explicitProviderId) {
-      setSessionProvider(live.id, explicitProviderId);
+    // applyProviderId = 裁决后的落地来源:显式来源(通过裁决)或隐式默认被停用时的
+    // 替代来源(reject 已在上方抛错中止,走不到这里)。
+    if (applyProviderId) {
+      setSessionProvider(live.id, applyProviderId);
     }
-    if ((modelChanged && modelApplied) || (effortChanged && effortApplied) || explicitProviderId) {
+    if ((modelChanged && modelApplied) || (effortChanged && effortApplied) || applyProviderId) {
       await backfillSessionMeta(
         this.deps.getDb(),
         live.id,
         {
           model: modelChanged && modelApplied ? targetModel : undefined,
           effort: effortChanged && effortApplied ? reconciledEffort : undefined,
-          providerId: explicitProviderId ?? undefined,
+          providerId: applyProviderId ?? undefined,
         },
         this.deps.logger,
       );
