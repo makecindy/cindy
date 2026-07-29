@@ -2195,6 +2195,13 @@ export class CodexAgent extends BaseAgent {
        * 不算收紧，会把延迟中断标记清掉，而冻结的 Full access 仍然更宽）。
        */
       launchedPermissionMode: PermissionMode;
+      /**
+       * 在途 RPC 期间又收到容量失败 → 那条错误被延后处理（既没排计时器也没收口）。
+       * RPC settle 且新 turn 没能激活时，必须凭这个标记补排一次，否则逻辑 send
+       * 永久悬空：错误已被落墓碑、响应因墓碑拒绝激活、inFlight 又被 finally 清掉，
+       * 没有任何计时器或终态事件残留（review #844 codex P1）。
+       */
+      deferredCapacityFailure: { deadTurnId: string | null } | null;
     } | null = null;
     let closed = false;
     let subscriptionInvalidatedByTransport = false;
@@ -4442,10 +4449,14 @@ export class CodexAgent extends BaseAgent {
         // 关键：**不能返回 null**。null 会让 translator 把这条错误报成终态，把逻辑
         // turn 判死（review #844 codex P1），而在途那次 RPC 随后还可能成功并激活
         // turn —— UI 已收口。这里返回当前进度：错误照样透成非终止状态（UI 继续显示
-        // 「正在重试」），但不递增预算、不排新计时器，等在途那次 settle 后自行决定。
-        log.info('codex overload retry already in flight — deferring to it', {
+        // 「正在重试」），但不递增预算、不排新计时器。
+        // 同时记账：这条失败只是被**延后**，retry() 的 finally 会在 RPC settle 后
+        // 补排一次；不记的话没有任何计时器或终态事件残留，逻辑 send 会永久悬空。
+        state.deferredCapacityFailure = { deadTurnId };
+        log.info('codex overload retry already in flight — deferring this failure to it', {
           attempt: state.attempt,
           threadId,
+          deadTurnId,
         });
         return { attempt: state.attempt, maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS };
       }
@@ -5327,6 +5338,7 @@ export class CodexAgent extends BaseAgent {
           inFlight: false,
           isCancelled: () => sendOpts?.signal?.aborted === true,
           launchedPermissionMode: mutablePermissionMode,
+          deferredCapacityFailure: null,
           retry: async () => {
             const state = overloadRetry;
             // 发出前复检：本轮 send 的取消信号在退避等待期间才 abort（coordinator
@@ -5386,6 +5398,40 @@ export class CodexAgent extends BaseAgent {
               state.inFlight = false;
               isTurnStartPending = false;
               flushDeferredTerminalTurnCompletionsIfIdle();
+              // 在途期间又撞容量、当时被延后的那条失败在这里收尾。只有新 turn 确实
+              // 没能激活时才补排（它被落了墓碑、响应因此拒绝激活）；turn 活了就说明
+              // 那条错误针对的是别的 turn，不该重排。预算耗尽时必须自己推终态，
+              // 否则逻辑 send 永久悬空。
+              const deferred = state.deferredCapacityFailure;
+              state.deferredCapacityFailure = null;
+              if (
+                deferred &&
+                !closed &&
+                !state.isCancelled() &&
+                overloadRetry === state &&
+                currentTurnId === null &&
+                !isTurnInFlight
+              ) {
+                if (!scheduleOverloadRetry(deferred.deadTurnId)) {
+                  log.warn('codex deferred capacity failure exhausted the retry budget', {
+                    attempt: state.attempt,
+                    threadId,
+                  });
+                  eventQueue.push({
+                    type: 'error',
+                    data: {
+                      message: 'Selected model is at capacity. Please try a different model.',
+                      isTerminal: true,
+                    },
+                    source: 'codex',
+                  });
+                  eventQueue.push({
+                    type: 'status',
+                    data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+                    source: 'codex',
+                  });
+                }
+              }
             }
           },
         };

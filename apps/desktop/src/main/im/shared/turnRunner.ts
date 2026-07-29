@@ -104,7 +104,7 @@ import {
   setActivityNotice,
   type TurnActivityState,
 } from './turnActivity';
-import { overloadRetryNotice } from './turnRetryNotice';
+import { overloadFailureNotice, overloadRetryNotice } from './turnRetryNotice';
 import {
   toCoreAgentKind,
   touchUserSent as repoTouchUserSent,
@@ -2224,11 +2224,24 @@ export function createTurnRunner(
     errData: unknown,
   ): Promise<void> {
     const turn = state.queue.shift();
-    const msg =
+    const rawMsg =
       errData && typeof errData === 'object' && 'message' in errData
         ? String((errData as { message: unknown }).message)
         : String(errData);
-    log.error(`turn error: ${msg}`);
+    log.error(`turn error: ${rawMsg}`);
+    // 过载类终态(Codex 重试耗尽 / Claude 529 最终失败)换成可操作的本地化说明。
+    // 不换的话渠道用户会在重试进度之后突然收到 `Selected model is at capacity...`
+    // 或内部英文 SDK 串——从本地化文案回归英文实现细节(review #844 codex P1)。
+    // 与 hook runner 共用同一个 helper，两条渠道链路口径一致；上游原文留在本地日志。
+    const rawErrorStatus =
+      errData && typeof errData === 'object' && 'errorStatus' in errData
+        ? (errData as { errorStatus?: unknown }).errorStatus
+        : undefined;
+    const msg =
+      overloadFailureNotice(
+        rawMsg,
+        typeof rawErrorStatus === 'number' ? rawErrorStatus : undefined,
+      ) ?? rawMsg;
     if (turn) clearSilentStopSettleWait(turn);
     if (turn) clearActivityTicker(turn);
     if (turn) {

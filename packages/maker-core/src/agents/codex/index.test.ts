@@ -4732,6 +4732,67 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('reschedules a capacity failure that was deferred while the RPC was in flight', async () => {
+      // 延后本身不够：那条失败的 turn 会被落墓碑，响应因此拒绝激活，finally 又清掉
+      // inFlight —— 没有计时器也没有终态事件，逻辑 send 会永久悬空
+      // （review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-deferred-reschedule',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2); // 第一次重投，RPC 挂住
+
+        // 在途期间新 turn 也撞容量 → 当时只被延后（不排计时器、不收口）。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-inflight',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+
+        // RPC 回来（该 turn 已被落墓碑，不会激活）→ finally 必须补排。
+        retryStart.resolve({ turn: { id: 'turn-inflight' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        // 补排生效：又发出一次 turn/start，逻辑 send 没有悬空。
+        expect(turnStarts).toBe(3);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('interrupts the retry when an intermediate mode change leaves the frozen policy looser', async () => {
       // Full access → Ask（arm 标记）→ Auto（Ask→Auto 不算收紧，会清标记），而重投
       // 持的仍是 Full access 的冻结策略（review #844 codex P1）。
