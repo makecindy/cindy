@@ -222,6 +222,11 @@ describe('classifyModel — mode 权威,缺省时回退 groupOf(issue #882)', ()
     expect(classifyModel({ id: 'x-ai/grok-4.5', mode: 'chat' })).toBe('grok');
     expect(classifyModel({ id: 'gpt-weird', group: 'china', mode: 'chat' })).toBe('china');
   });
+
+  it("mode='responses' 与 'chat' 同为聊天可用取值(2026-07 review 第 16 轮:Codex 走 Responses API,不是非聊天端点)", () => {
+    expect(classifyModel({ id: 'codex/gpt-5.5', mode: 'responses' })).toBe('gpt-budget');
+    expect(classifyModel({ id: 'gpt-5.5', mode: 'responses' })).toBe('gpt');
+  });
 });
 
 describe('isChatEligible — 决定能否进 Agent availableModels(issue #882 第 3 点)', () => {
@@ -269,6 +274,11 @@ describe('isChatEligible — 决定能否进 Agent availableModels(issue #882 �
     expect(isChatEligible({ id: 'x-ai/grok-4.5' })).toBe(true); // 无 mode 时按修正后的 grok 分组,可用
     expect(isChatEligible({ id: 'moonshotai/kimi-k2' })).toBe(true); // china 兜底组
     expect(isChatEligible({ id: 'some-gateway-chat-model', mode: 'chat' })).toBe(true);
+  });
+
+  it("mode='responses' 判定为可用(2026-07 review 第 16 轮:Codex 原生走 Responses API 的语言模型,不是非聊天端点)", () => {
+    expect(isChatEligible({ id: 'codex/gpt-5.5', mode: 'responses' })).toBe(true);
+    expect(isChatEligible({ id: 'gpt-5.5', mode: 'responses' })).toBe(true);
   });
 
   it('mode 缺省时不采信 group 品牌标注,只按 id 能力正则判定(2026-07 review)', () => {

@@ -110,6 +110,16 @@ const MODE_TO_CATEGORY: Record<string, ModelCategory> = {
   realtime: 'realtime',
 };
 
+/**
+ * mode 取值里同样代表"语言模型、能聊天"的字符串集合 —— 不止字面的 'chat'。
+ * `responses` 是 LiteLLM/Gateway 用来标记"该模型只走 OpenAI Responses API
+ * (而非 Chat Completions)"的取值,语义仍是可对话的语言模型,只是 wire
+ * protocol 不同;Codex 这条 runtime 本来就默认走 openai-responses(见
+ * RoutingDescriptor.wireProtocol),不能把这类模型当成非聊天模型过滤掉
+ * (2026-07 review 第 16 轮)。
+ */
+const CHAT_CAPABLE_MODES = new Set(['chat', 'responses']);
+
 // 按 model.id 前缀粗分类: claude-* → Anthropic, gpt-* → GPT, codex/* → 骨折GPT (gateway 低价路由),
 // gemini-* → Google, 其余 (moonshotai/qwen/glm/...) 一律落到 China。新增国产模型不需要改这里。
 // 这是**没有 mode 时**的兜底(旧缓存 / mode 尚未覆盖到的来源);mode 存在时一律用
@@ -184,15 +194,16 @@ export function groupOf(model: { id: string; group?: string }): ModelCategory {
 }
 
 /**
- * 分类的**权威入口**(issue #882):`mode` 存在且不是 'chat' 时直接按
- * MODE_TO_CATEGORY 权威判定,忽略 id/group——网关明确说了这不是聊天模型,
- * 不该再让 id 正则有机会猜错(如 gpt-realtime-2 猜成 gpt、x-ai/grok-4.5 猜成
- * china)。`mode` 缺省或恰好是 'chat' 时,回退 groupOf(数据 group 优先 /
- * id 正则兜底)—— "是不是聊天模型"与"聊天模型属于哪个厂商分组"是两层判断,
- * mode='chat' 只回答第一层,第二层仍需 id/group。
+ * 分类的**权威入口**(issue #882):`mode` 存在且不是聊天可用取值
+ * (CHAT_CAPABLE_MODES)时直接按 MODE_TO_CATEGORY 权威判定,忽略 id/group——
+ * 网关明确说了这不是聊天模型,不该再让 id 正则有机会猜错(如 gpt-realtime-2
+ * 猜成 gpt、x-ai/grok-4.5 猜成 china)。`mode` 缺省或落在 CHAT_CAPABLE_MODES
+ * (chat/responses)时,回退 groupOf(数据 group 优先 / id 正则兜底)——
+ * "是不是聊天模型"与"聊天模型属于哪个厂商分组"是两层判断,mode 只回答第一层,
+ * 第二层仍需 id/group。
  */
 export function classifyModel(model: { id: string; group?: string; mode?: string }): ModelCategory {
-  if (model.mode !== undefined && model.mode !== 'chat') {
+  if (model.mode !== undefined && !CHAT_CAPABLE_MODES.has(model.mode)) {
     return MODE_TO_CATEGORY[model.mode] ?? 'other';
   }
   return groupOf(model);
@@ -200,17 +211,18 @@ export function classifyModel(model: { id: string; group?: string; mode?: string
 
 /**
  * 该模型能不能进 Agent `availableModels` / 新对话模型选择器(issue #882 第 3 点)。
- * `mode` 存在时只信 mode==='chat';缺省时按 **id 正则**(categorize)判定,
- * 故意不走 groupOf ——`group` 是展示分组/品牌,不是能力类型(issue #882 明确
- * 要求两者独立),网关的展示元数据完全可能把 `gpt-image-2` 这类图像模型的
- * `group` 标成 'gpt'(品牌上归类到 GPT 家族,方便浏览),这里若信了 group 会把
- * 非聊天模型误判为可用(2026-07 review)。是否落进厂商聊天组
- * (anthropic/gpt/gpt-budget/grok/google/china)只用于兜底判断,保证"mode 还
- * 没覆盖到、但已经在正常工作的网关聊天模型"不会因为这次改动突然从
- * availableModels 消失(见 classification.test.ts 的回归锁)。
+ * `mode` 存在时只信 CHAT_CAPABLE_MODES(chat / responses——Codex 走 Responses
+ * API 的语言模型,不是非聊天端点,2026-07 review 第 16 轮);缺省时按
+ * **id 正则**(categorize)判定,故意不走 groupOf ——`group` 是展示分组/品牌,
+ * 不是能力类型(issue #882 明确要求两者独立),网关的展示元数据完全可能把
+ * `gpt-image-2` 这类图像模型的 `group` 标成 'gpt'(品牌上归类到 GPT 家族,
+ * 方便浏览),这里若信了 group 会把非聊天模型误判为可用(2026-07 review)。
+ * 是否落进厂商聊天组(anthropic/gpt/gpt-budget/grok/google/china)只用于
+ * 兜底判断,保证"mode 还没覆盖到、但已经在正常工作的网关聊天模型"不会因为
+ * 这次改动突然从 availableModels 消失(见 classification.test.ts 的回归锁)。
  */
 export function isChatEligible(model: { id: string; group?: string; mode?: string }): boolean {
-  if (model.mode !== undefined) return model.mode === 'chat';
+  if (model.mode !== undefined) return CHAT_CAPABLE_MODES.has(model.mode);
   return CHAT_VENDOR_CATEGORIES.has(categorize(model.id));
 }
 

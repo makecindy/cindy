@@ -389,7 +389,7 @@ import {
   getDesktopProviderService,
   refreshCustomProvidersIntoCatalog,
 } from '../maker-host/createDesktopProviderService.js';
-import { connectedProvidersForAgent, effectiveSourceIdForModel } from '@cindy/model-providers';
+import { connectedProvidersForAgent, effectiveSourceIdForModel, isChatEligible } from '@cindy/model-providers';
 import {
   getSessionProvider,
   hydrateSessionProvider,
@@ -5654,44 +5654,52 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     getAvailableModels: (agent) => maker.getCapabilities(agent).availableModels,
     getProviderRoutingContext: async () => {
       const views = await getDesktopProviderService().listProviders({ allowSideEffects: true });
+      // 这里的 models/fastModels/effortMetaByModel 都是 orcaWorkerCreationService 唯一能看到
+      // 的 provider 快照 —— 一旦某个非聊天 mode 的模型混进这份 id 清单,service 内所有
+      // `provider.models.includes(id)` 式的 preflight 都只按 id 存在与否放行,永远不会知道
+      // 这条模型其实是图片/语音端点(mode 信息在这一步已经被拍平丢弃)。必须在这里先按
+      // isChatEligible 过滤,而不是指望下游 service 补(2026-07 review 第 16 轮:MCP
+      // create_worker / 缓存默认路由都走这条快照,不经过 renderer 侧选择器的过滤)。
       return {
         availability: {
-          'claude-code': connectedProvidersForAgent(views, 'claude-code').map((provider) => ({
-            id: provider.id,
-            name: provider.name,
-            models: (provider.models['claude-code'] ?? []).map((model) => model.id),
-            // Fast 能力 per-(provider, model):显式来源的 Fast 判定按该来源自己的条目。
-            fastModels: (provider.models['claude-code'] ?? [])
-              .filter((model) => model.supportsFastMode)
-              .map((model) => model.id),
-            // effort 档位同样 per-(provider, model):供 service 按实际路由来源重归一。
-            effortMetaByModel: Object.fromEntries(
-              (provider.models['claude-code'] ?? []).map((model) => [
-                model.id,
-                { efforts: model.efforts, defaultEffort: model.defaultEffort },
-              ]),
-            ),
-            requiresExplicitRoute: providerRouteRequiresExplicitSelection(
-              provider.routing['claude-code']?.authStrategy,
-            ),
-          })),
-          codex: connectedProvidersForAgent(views, 'codex').map((provider) => ({
-            id: provider.id,
-            name: provider.name,
-            models: (provider.models.codex ?? []).map((model) => model.id),
-            fastModels: (provider.models.codex ?? [])
-              .filter((model) => model.supportsFastMode)
-              .map((model) => model.id),
-            effortMetaByModel: Object.fromEntries(
-              (provider.models.codex ?? []).map((model) => [
-                model.id,
-                { efforts: model.efforts, defaultEffort: model.defaultEffort },
-              ]),
-            ),
-            requiresExplicitRoute: providerRouteRequiresExplicitSelection(
-              provider.routing.codex?.authStrategy,
-            ),
-          })),
+          'claude-code': connectedProvidersForAgent(views, 'claude-code').map((provider) => {
+            const chatModels = (provider.models['claude-code'] ?? []).filter(isChatEligible);
+            return {
+              id: provider.id,
+              name: provider.name,
+              models: chatModels.map((model) => model.id),
+              // Fast 能力 per-(provider, model):显式来源的 Fast 判定按该来源自己的条目。
+              fastModels: chatModels.filter((model) => model.supportsFastMode).map((model) => model.id),
+              // effort 档位同样 per-(provider, model):供 service 按实际路由来源重归一。
+              effortMetaByModel: Object.fromEntries(
+                chatModels.map((model) => [
+                  model.id,
+                  { efforts: model.efforts, defaultEffort: model.defaultEffort },
+                ]),
+              ),
+              requiresExplicitRoute: providerRouteRequiresExplicitSelection(
+                provider.routing['claude-code']?.authStrategy,
+              ),
+            };
+          }),
+          codex: connectedProvidersForAgent(views, 'codex').map((provider) => {
+            const chatModels = (provider.models.codex ?? []).filter(isChatEligible);
+            return {
+              id: provider.id,
+              name: provider.name,
+              models: chatModels.map((model) => model.id),
+              fastModels: chatModels.filter((model) => model.supportsFastMode).map((model) => model.id),
+              effortMetaByModel: Object.fromEntries(
+                chatModels.map((model) => [
+                  model.id,
+                  { efforts: model.efforts, defaultEffort: model.defaultEffort },
+                ]),
+              ),
+              requiresExplicitRoute: providerRouteRequiresExplicitSelection(
+                provider.routing.codex?.authStrategy,
+              ),
+            };
+          }),
         },
         resolveDefaultProviderIdForModel: (agent, model) => (
           effectiveSourceIdForModel(views, null, model, agent)
