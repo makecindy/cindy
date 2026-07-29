@@ -108,7 +108,7 @@ export interface NormalizedAutomationOrigin {
 }
 
 export interface NormalizedHookSource {
-  im: 'slack' | 'telegram';
+  im: 'slack' | 'telegram' | 'x';
   channelName?: string;
   userText: string;
   threadContext?: Array<{ author: string; text: string; isBot?: boolean }>;
@@ -748,7 +748,9 @@ function readAutomationOrigin(message: RemoteMessage): Pick<NormalizedRemoteMess
 /** Fail closed on unknown providers and bound all server-controlled display fields. */
 function readHookSource(message: RemoteMessage, fallbackBody: string): NormalizedHookSource | undefined {
   const source = readRecord(message.agentMeta?.hookSource);
-  if (!source || (source.im !== 'slack' && source.im !== 'telegram')) return undefined;
+  if (!source || (source.im !== 'slack' && source.im !== 'telegram' && source.im !== 'x')) {
+    return undefined;
+  }
   const userText = (
     typeof source.userText === 'string' ? source.userText : fallbackBody
   ).slice(0, 20_000);

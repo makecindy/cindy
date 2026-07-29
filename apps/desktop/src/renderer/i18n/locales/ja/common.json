@@ -2549,7 +2549,7 @@
           "disabledHint": "スイッチをオンにして、Telegram 内の案内に従ってアカウント連携を完了してください。",
           "toggleAria": "Telegram 接続を切り替える",
           "connect": "Telegram と連携",
-          "openTelegram": "Telegram を開く",
+          "openApp": "Telegram を開く",
           "cancel": "連携をキャンセル",
           "retry": "連携を再試行",
           "openBot": "Bot を開く",
@@ -2571,6 +2571,33 @@
             "revoked": "連携を解除しました",
             "superseded": "別のデバイスに連携されています"
           }
+        },
+        "x": {
+          "description": "X (Twitter) アカウントを連携し、X で Cindy bot にメンションしてタスクを依頼できます。",
+          "disabledHint": "スイッチをオンにして、案内に従って X アカウントを認証してください。",
+          "toggleAria": "X 接続を切り替え",
+          "connect": "X を連携",
+          "openApp": "X を開いて認証",
+          "cancel": "連携をキャンセル",
+          "retry": "再連携",
+          "openBot": "X で bot を表示",
+          "unlink": "X の連携を解除",
+          "unlinkConfirmTitle": "X の連携を解除しますか?",
+          "unlinkConfirmDescription": "解除すると X からこのデバイスへタスクを送れなくなります。ローカルプロジェクトと他のチャンネルには影響しません。",
+          "status": {
+            "checking": "サーバーの対応状況を確認中…",
+            "unavailable": "このサーバーではまだ利用できません",
+            "disabled": "無効",
+            "none": "未連携",
+            "pending": "X を開いてアカウントを認証してください",
+            "awaiting_confirmation": "X で認証を確認してください",
+            "confirmed": "{{user}} が {{bot}} と連携済み",
+            "denied": "認証が拒否されました",
+            "expired": "認証リンクの有効期限切れ",
+            "failed": "連携に失敗しました",
+            "revoked": "連携が解除されました",
+            "superseded": "別のデバイスで連携済み"
+          }
         }
       },
       "summary": {
@@ -2589,7 +2616,7 @@
     "tina": {
       "chat": {
         "title": "会話",
-        "description": "リポジトリに紐づかない会話です。Slack または Telegram で「chat」を選ぶと、会話 lane ごとにセッションを利用できます。"
+        "description": "リポジトリに紐づかない会話です。Slack・Telegram・X で「chat」を選ぶと、会話 lane ごとにセッションを利用できます。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -2598,6 +2625,7 @@
         "permissionLabel": "権限モード",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
+        "providerX": "X",
         "requireConnected": "{{provider}} 接続後に編集できます（上のスイッチをオンにして接続をお待ちください）。",
         "requireBinding": "先に {{provider}} アカウントの連携を完了してください。",
         "serverUnsupported": "サーバーのバージョンが古いか応答がないため、設定を読み込めません。",

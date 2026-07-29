@@ -51,17 +51,17 @@ export const HOOK_CONTROL_INVOKE = {
   CANCEL_PENDING_BIND: 'maker:hook-control:cancel-pending-bind',
   /** 独立开关一个 Cindy IM provider；不会改动其它 provider。 */
   SET_PROVIDER_ENABLED: 'maker:hook-control:set-provider-enabled',
-  /** 发起 Telegram 一次性 deep-link 绑定。 */
+  /** 发起 provider-neutral(Telegram / X)一次性绑定。 */
   PROVIDER_BIND_START: 'maker:hook-control:provider-bind-start',
-  /** 取消当前 Telegram 绑定尝试。 */
+  /** 取消当前 provider-neutral 绑定尝试。 */
   PROVIDER_BIND_CANCEL: 'maker:hook-control:provider-bind-cancel',
-  /** 解除当前 Telegram principal 与本设备的绑定。 */
+  /** 解除当前 provider-neutral principal 与本设备的绑定。 */
   PROVIDER_BIND_REVOKE: 'maker:hook-control:provider-bind-revoke',
-  /** 在本机安全打开当前 Telegram 绑定链接 / bot / 加群链接。 */
-  TELEGRAM_OPEN_ACTION: 'maker:hook-control:telegram-open-action',
-  /** 读取 Telegram provider 独立的 workspace 偏好。 */
+  /** 在本机安全打开 provider 的绑定链接 / bot 主页 / 加群链接。 */
+  PROVIDER_OPEN_ACTION: 'maker:hook-control:provider-open-action',
+  /** 读取 provider-neutral(Telegram / X)独立的 workspace 偏好。 */
   PROVIDER_PREFS_GET: 'maker:hook-control:provider-prefs-get',
-  /** 更新 Telegram provider 独立的 workspace 偏好。 */
+  /** 更新 provider-neutral(Telegram / X)独立的 workspace 偏好。 */
   PROVIDER_PREFS_SET: 'maker:hook-control:provider-prefs-set',
   /** 读取工作目录模型来源偏好(纯本地, 不经 WS; 见 workspaceProviderSourceStore)。 */
   WORKSPACE_PROVIDER_SOURCE_GET: 'maker:hook-control:workspace-provider-source-get',
@@ -74,7 +74,7 @@ export const HOOK_CONTROL_EVENT = {
   STATUS_CHANGED: 'maker:hook-control:status-changed',
   /** 目录偏好快照推送(prefs.state; 含 Slack /model 卡改动的实时同步)。 */
   PREFS_CHANGED: 'maker:hook-control:prefs-changed',
-  /** provider-neutral 偏好快照推送（本版由 Telegram 消费）。 */
+  /** provider-neutral 偏好快照推送（Telegram / X 消费）。 */
   PROVIDER_PREFS_CHANGED: 'maker:hook-control:provider-prefs-changed',
   /** 目录模型来源偏好全量推送(本地写入后广播全窗口, 多窗口设置页同步)。 */
   WORKSPACE_PROVIDER_SOURCE_CHANGED: 'maker:hook-control:workspace-provider-source-changed',
@@ -84,8 +84,14 @@ export const HOOK_CONTROL_EVENT = {
  * renderer 用海量唯一 teamId 无限追加撑爆本地文件)。 */
 export const HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES = 256;
 
-/** Cindy relay 当前支持的客户端 provider。 */
-export type HookProvider = 'slack' | 'telegram';
+/**
+ * Cindy relay 当前支持的客户端 provider。协议包 HOOK_PROVIDERS 的手抄副本
+ * (shared 层刻意不引协议包)——协议 bump 新增 provider 时必须手动同步。
+ */
+export type HookProvider = 'slack' | 'telegram' | 'x';
+
+/** provider-neutral 状态机(非 slack legacy 线)覆盖的 provider。 */
+export type NeutralHookProvider = Exclude<HookProvider, 'slack'>;
 
 /** provider-neutral 绑定状态（与 cindy-protocol v1 严格同形）。 */
 export type ProviderBindingState =
@@ -116,10 +122,10 @@ export interface ProviderBindingView {
   actions: string[];
 }
 
-/** Telegram provider 的独立设置与绑定视图。 */
-export interface TelegramHookView {
+/** provider-neutral(Telegram / X)的独立设置与绑定视图。 */
+export interface ProviderHookView {
   enabled: boolean;
-  /** Telegram 平级 hook 服务的运行期端点；空值表示当前环境尚未部署。 */
+  /** 该 provider 平级 hook 服务的运行期端点；空值表示当前环境尚未部署。 */
   url: string;
   status: HookConnectionStatus;
   lastError: string | null;
@@ -130,7 +136,14 @@ export interface TelegramHookView {
   binding: ProviderBindingView | null;
 }
 
-export type TelegramOpenAction = 'connect' | 'provider' | 'add-to-group';
+/** @deprecated 兼容别名;新代码用 ProviderHookView。 */
+export type TelegramHookView = ProviderHookView;
+
+/** 绑定卡可打开的链接类别;'add-to-group' 仅 Telegram 使用。 */
+export type ProviderOpenAction = 'connect' | 'provider' | 'add-to-group';
+
+/** @deprecated 兼容别名;新代码用 ProviderOpenAction。 */
+export type TelegramOpenAction = ProviderOpenAction;
 
 /**
  * Slack 账号绑定状态(与 hook-protocol 的 BindUpdateState 一致, 本文件为
@@ -267,7 +280,9 @@ export interface SlackHookView {
   /** server 是否宣告 multi-team 能力(welcome.features; renderer 据此显示「添加」入口)。 */
   serverMultiTeam: boolean;
   /** 平级 Telegram hook 服务状态；Slack 旧字段保持原形。 */
-  telegram: TelegramHookView;
+  telegram: ProviderHookView;
+  /** 平级 X (Twitter) hook 服务状态。 */
+  x: ProviderHookView;
 }
 
 /** 工作区别名的合法格式(与 hook server 侧约定一致)。 */
@@ -295,8 +310,8 @@ export const HOOK_CHAT_WORKSPACE_ALIAS = 'chat';
  * model 组合后经 effectiveSourceIdForModel 收窄派发。
  */
 export interface HookWorkspaceProviderSourceEntry {
-  channel: 'slack' | 'telegram';
-  /** Slack multi-team 归属; Telegram / 单绑定为 null。 */
+  channel: 'slack' | 'telegram' | 'x';
+  /** Slack multi-team 归属; Telegram / X / 单绑定为 null。 */
   teamId: string | null;
   workspace: string;
   providerId: string;

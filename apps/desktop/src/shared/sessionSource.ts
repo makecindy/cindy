@@ -3,6 +3,7 @@ export const SESSION_SOURCES = [
   'feishu',
   'slack',
   'telegram',
+  'x',
   'discord',
   'wechat',
   'dingtalk',
@@ -17,6 +18,7 @@ export type SessionSource = (typeof SESSION_SOURCES)[number];
 // desktop sidebar 展示的会话 source 白名单。
 // slack: IM 渠道自动建的会话——用户在 Slack 发消息后 desktop 同步可见。
 // telegram: 共享 Cindy Telegram bot 派发并在本机执行的会话。
+// x: 共享 Cindy X (Twitter) bot 派发并在本机执行的会话。
 // discord: IM 渠道自动建的会话——用户在 Discord 发消息后 desktop 同步可见。
 // dingtalk: 钉钉机器人私聊与群 lane 自动建的会话。
 // feishu: IM 渠道自动建的会话——落侧边栏「对话」分组(workspaceKind='dialogue')。
@@ -31,6 +33,7 @@ export const DESKTOP_VISIBLE_SESSION_SOURCES: SessionSource[] = [
   'feishu',
   'slack',
   'telegram',
+  'x',
   'discord',
   'wechat',
   'dingtalk',
@@ -44,6 +47,7 @@ export function normalizeSessionSource(source: unknown): SessionSource {
   return source === 'feishu' ||
     source === 'slack' ||
     source === 'telegram' ||
+    source === 'x' ||
     source === 'discord' ||
     source === 'wechat' ||
     source === 'dingtalk' ||

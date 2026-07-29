@@ -2550,7 +2550,7 @@
           "disabledHint": "Turn on the switch, then follow the prompts in Telegram to link your account.",
           "toggleAria": "Toggle the Telegram connection",
           "connect": "Link Telegram",
-          "openTelegram": "Open Telegram",
+          "openApp": "Open Telegram",
           "cancel": "Cancel Linking",
           "retry": "Retry Linking",
           "openBot": "Open Bot",
@@ -2572,6 +2572,33 @@
             "revoked": "Link removed",
             "superseded": "Linked to another device"
           }
+        },
+        "x": {
+          "description": "Link your X (Twitter) account and dispatch tasks by mentioning the Cindy bot on X.",
+          "disabledHint": "Turn on the switch, then follow the prompts to authorize your X account.",
+          "toggleAria": "Toggle X connection",
+          "connect": "Link X",
+          "openApp": "Open X to authorize",
+          "cancel": "Cancel linking",
+          "retry": "Retry linking",
+          "openBot": "View bot on X",
+          "unlink": "Unlink X",
+          "unlinkConfirmTitle": "Unlink X?",
+          "unlinkConfirmDescription": "After unlinking, X can no longer dispatch tasks to this device; local projects and other channels are unaffected.",
+          "status": {
+            "checking": "Checking server support…",
+            "unavailable": "Not yet available on this server",
+            "disabled": "Disabled",
+            "none": "Not linked",
+            "pending": "Open X to authorize your account",
+            "awaiting_confirmation": "Confirm the authorization on X",
+            "confirmed": "{{user}} linked to {{bot}}",
+            "denied": "Authorization denied",
+            "expired": "Authorization link expired",
+            "failed": "Linking failed",
+            "revoked": "Unlinked",
+            "superseded": "Linked on another device"
+          }
         }
       },
       "summary": {
@@ -2590,7 +2617,7 @@
     "tina": {
       "chat": {
         "title": "Chat",
-        "description": "Plain conversations without any repository; select \"chat\" from Slack or Telegram, one session per conversation lane."
+        "description": "Plain conversations without any repository; select \"chat\" from Slack, Telegram, or X, one session per conversation lane."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -2599,6 +2626,7 @@
         "permissionLabel": "Permission mode",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
+        "providerX": "X",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
         "requireBinding": "Complete {{provider}} account linking first.",
         "serverUnsupported": "Server is too old or not responding; preferences cannot be loaded.",

@@ -1790,7 +1790,7 @@ function MessageBubble({
         <View style={styles.hookSourceHeader} testID="message.hookSource">
           <Send color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
           <Text numberOfLines={1} style={styles.hookSourceTitle}>
-            {`Cindy · ${hookSource.im === 'telegram' ? 'Telegram' : 'Slack'}`}
+            {`Cindy · ${hookSource.im === 'telegram' ? 'Telegram' : hookSource.im === 'x' ? 'X' : 'Slack'}`}
           </Text>
           {hookSource.channelName ? (
             <Text numberOfLines={1} style={styles.hookSourceChannel}>

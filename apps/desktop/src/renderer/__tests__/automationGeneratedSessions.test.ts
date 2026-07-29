@@ -108,6 +108,7 @@ describe('automation-generated sessions', () => {
       'feishu',
       'slack',
       'telegram',
+      'x',
       'discord',
       'wechat',
       'dingtalk',

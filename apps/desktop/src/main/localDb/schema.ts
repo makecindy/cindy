@@ -25,6 +25,7 @@ const SESSION_SOURCES = [
   'feishu',
   'slack',
   'telegram',
+  'x',
   'discord',
   'wechat',
   'dingtalk',

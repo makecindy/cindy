@@ -2549,7 +2549,7 @@
           "disabledHint": "스위치를 켠 뒤 Telegram의 안내에 따라 계정 연결을 완료하세요.",
           "toggleAria": "Telegram 연결 전환",
           "connect": "Telegram 연결",
-          "openTelegram": "Telegram 열기",
+          "openApp": "Telegram 열기",
           "cancel": "연결 취소",
           "retry": "연결 다시 시도",
           "openBot": "봇 열기",
@@ -2571,6 +2571,33 @@
             "revoked": "연결 해제됨",
             "superseded": "다른 기기에 연결됨"
           }
+        },
+        "x": {
+          "description": "X (Twitter) 계정을 연결하고 X에서 Cindy bot을 멘션해 작업을 요청하세요.",
+          "disabledHint": "스위치를 켠 뒤 안내에 따라 X 계정 인증을 완료하세요.",
+          "toggleAria": "X 연결 전환",
+          "connect": "X 연결",
+          "openApp": "X 열어 인증하기",
+          "cancel": "연결 취소",
+          "retry": "다시 연결",
+          "openBot": "X에서 bot 보기",
+          "unlink": "X 연결 해제",
+          "unlinkConfirmTitle": "X 연결을 해제할까요?",
+          "unlinkConfirmDescription": "해제하면 X에서 이 기기로 작업을 보낼 수 없습니다. 로컬 프로젝트와 다른 채널 연결에는 영향이 없습니다.",
+          "status": {
+            "checking": "서버 지원 확인 중…",
+            "unavailable": "이 서버에서는 아직 사용할 수 없습니다",
+            "disabled": "비활성화됨",
+            "none": "연결되지 않음",
+            "pending": "X를 열어 계정 인증을 완료하세요",
+            "awaiting_confirmation": "X에서 인증을 확인하세요",
+            "confirmed": "{{user}} 님이 {{bot}} 과 연결됨",
+            "denied": "인증이 거부되었습니다",
+            "expired": "인증 링크가 만료되었습니다",
+            "failed": "연결에 실패했습니다",
+            "revoked": "연결이 해제되었습니다",
+            "superseded": "다른 기기에서 연결됨"
+          }
         }
       },
       "summary": {
@@ -2589,7 +2616,7 @@
     "tina": {
       "chat": {
         "title": "대화",
-        "description": "저장소에 연결되지 않은 대화입니다. Slack 또는 Telegram에서 \"chat\"을 선택하면 대화 lane마다 세션을 사용할 수 있습니다."
+        "description": "저장소에 연결되지 않은 대화입니다. Slack, Telegram 또는 X에서 \"chat\"을 선택하면 대화 lane마다 세션을 사용할 수 있습니다."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -2598,6 +2625,7 @@
         "permissionLabel": "권한 모드",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
+        "providerX": "X",
         "requireConnected": "{{provider}} 연결 후 편집할 수 있습니다(위의 스위치를 켜고 연결을 기다려 주세요).",
         "requireBinding": "먼저 {{provider}} 계정 연결을 완료해 주세요.",
         "serverUnsupported": "서버 버전이 오래되었거나 응답이 없어 설정을 불러올 수 없습니다.",

@@ -22,6 +22,9 @@
  *     开关; 等待期显示引导行(安装/复制链接 + 等待提示);
  *   - Telegram 卡: 同构 —— 开关 + 状态徽章 + 关联动作(打开 bot / 加群 /
  *     解绑);
+ *   - X 卡: 与 Telegram 卡同构(provider-neutral 状态机), 绑定走 X OAuth2
+ *     授权页(open connect url / 复制链接), 无加群概念(动作按 binding.actions
+ *     数据驱动, X 的 actions 里没有 add_to_group 自然不渲染);
  *   - 工作目录映射内嵌在每张渠道卡的展开区: 目录清单**设备共享**(所有渠道
  *     同一份, 刻意设计, 任一卡里增删都作用于全部渠道), 运行偏好按渠道隔离,
  *     由所在卡决定读写哪个渠道的那份(Slack 多绑定时再叠 workspace 归属
@@ -53,13 +56,17 @@ import {
   HOOK_WORKSPACE_ALIAS_RE,
   slackHookInstallUrl,
   type HookTeamBindingView,
+  type ProviderHookView,
   type SlackHookView,
 } from '../../../shared/hookControlIpc';
+
+/** provider-neutral 渠道卡覆盖的 provider(Slack 走 legacy 专属卡)。 */
+type NeutralCardProvider = 'telegram' | 'x';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
 
 /** 「官方」栏的渠道手风琴卡(同刻最多展开一张, 交互对齐「个人」栏)。 */
-type CindyImCard = 'slack' | 'telegram';
+type CindyImCard = 'slack' | 'telegram' | 'x';
 
 /** 渠道卡状态徽章的色调档(映射到「个人」栏同款 --settings-badge-* token)。 */
 type ChannelBadgeTone = 'ok' | 'progress' | 'attention' | 'error';
@@ -430,10 +437,11 @@ export function HookConnectionsSection() {
     await saveWorkspaces(next);
   };
 
-  // 目录清单设备共享；运行偏好按 provider 隔离。两个 hook 都始终调用，避免
+  // 目录清单设备共享；运行偏好按 provider 隔离。三个 hook 都始终调用，避免
   // provider 开关切换时改变 React hook 顺序。
   const slackPrefsState = useHookWorkspacePrefs(hook, 'slack');
   const telegramPrefsState = useHookWorkspacePrefs(hook, 'telegram');
+  const xPrefsState = useHookWorkspacePrefs(hook, 'x');
 
   /** 复制授权链接(远程控制兜底: 到本机浏览器打开, 规则 26)。 */
   const handleCopyLink = async () => {
@@ -458,21 +466,24 @@ export function HookConnectionsSection() {
     }
   };
 
-  const handleTelegramToggle = (enabled: boolean) => {
-    if (enabled) setExpandedCard('telegram');
-    runHookAction(() => window.electronAPI.hookControl.setProviderEnabled('telegram', enabled));
+  const handleProviderToggle = (provider: NeutralCardProvider, enabled: boolean) => {
+    if (enabled) setExpandedCard(provider);
+    runHookAction(() => window.electronAPI.hookControl.setProviderEnabled(provider, enabled));
   };
 
-  const handleTelegramOpen = (action: 'connect' | 'provider' | 'add-to-group') => {
-    void window.electronAPI.hookControl.openTelegramAction(action).catch((err: unknown) => {
+  const handleProviderOpen = (
+    provider: NeutralCardProvider,
+    action: 'connect' | 'provider' | 'add-to-group',
+  ) => {
+    void window.electronAPI.hookControl.openProviderAction(provider, action).catch((err: unknown) => {
       toast.error(
         extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.actionFailed'),
       );
     });
   };
 
-  const handleCopyTelegramLink = async () => {
-    const url = hook?.telegram.binding?.connectUrl;
+  const handleCopyProviderLink = async (provider: NeutralCardProvider) => {
+    const url = hook?.[provider].binding?.connectUrl;
     if (!url) return;
     try {
       await navigator.clipboard.writeText(url);
@@ -482,17 +493,17 @@ export function HookConnectionsSection() {
     }
   };
 
-  const handleTelegramUnlink = async () => {
+  const handleProviderUnlink = async (provider: NeutralCardProvider) => {
     const targetBindingId =
-      hook?.telegram.binding?.state === 'confirmed' ? hook.telegram.binding.bindingId : null;
+      hook?.[provider].binding?.state === 'confirmed' ? hook[provider].binding.bindingId : null;
     if (targetBindingId === null) return;
     const ok = await confirm({
-      title: t('settings.remoteControl.hook.telegram.unlinkConfirmTitle'),
-      description: t('settings.remoteControl.hook.telegram.unlinkConfirmDescription'),
-      confirmText: t('settings.remoteControl.hook.telegram.unlink'),
+      title: t(`settings.remoteControl.hook.${provider}.unlinkConfirmTitle`),
+      description: t(`settings.remoteControl.hook.${provider}.unlinkConfirmDescription`),
+      confirmText: t(`settings.remoteControl.hook.${provider}.unlink`),
       cancelText: t('settings.remoteControl.hook.notInstalled.confirmCancel'),
     });
-    const currentBinding = hookRef.current?.telegram.binding;
+    const currentBinding = hookRef.current?.[provider].binding;
     if (
       !ok ||
       !mountedRef.current ||
@@ -501,7 +512,7 @@ export function HookConnectionsSection() {
     ) {
       return;
     }
-    runHookAction(() => window.electronAPI.hookControl.providerBindRevoke());
+    runHookAction(() => window.electronAPI.hookControl.providerBindRevoke(provider));
   };
 
   /**
@@ -615,63 +626,66 @@ export function HookConnectionsSection() {
     hook.lastError === 'not logged in'
       ? t('settings.remoteControl.hook.loginRequired')
       : hook.lastError;
-  const telegram = hook.telegram;
-  const telegramBinding = telegram.binding;
-  const telegramActions = telegramBinding?.actions ?? [];
-  const telegramState = telegramBinding?.state ?? 'none';
-  // A configured endpoint is the rollout gate. Capability negotiation starts
-  // only after the user enables Telegram, so the disabled card cannot depend
-  // on an already-received welcome to become discoverable.
-  const telegramVisible =
-    telegram.url.length > 0 || telegram.capabilityPending || telegram.available || telegram.enabled;
-  const telegramConfirmed = telegramState === 'confirmed';
-  const telegramInProgress =
-    telegram.enabled && (telegramState === 'pending' || telegramState === 'awaiting_confirmation');
-  const telegramCanStartLink =
-    telegramState === 'none' ||
-    ((telegramState === 'failed' ||
-      telegramState === 'denied' ||
-      telegramState === 'expired' ||
-      telegramState === 'revoked' ||
-      telegramState === 'superseded') &&
-      telegramActions.includes('retry'));
-  // The switch represents provider ingress, not only the final bind state. Keep
-  // it on while Telegram is waiting for /start confirmation so clicking it is
-  // an unsurprising cancel/disable action.
-  const telegramToggleChecked = telegram.enabled;
-  /** Telegram 卡的状态徽章: 只承载传输/能力状态, 绑定细节走摘要与展开区。 */
-  const telegramBadge: { tone: ChannelBadgeTone; label: string } = !telegram.enabled
-    ? { tone: 'attention', label: t('settings.remoteControl.hook.telegram.status.disabled') }
-    : telegram.status === 'error'
-      ? { tone: 'error', label: t('settings.remoteControl.hook.status.error') }
-      : telegram.capabilityPending
-        ? { tone: 'progress', label: t('settings.remoteControl.hook.telegram.status.checking') }
-        : !telegram.available
-          ? {
-              tone: 'attention',
-              label: t('settings.remoteControl.hook.telegram.status.unavailable'),
-            }
-          : {
-              tone: transportBadgeTone(telegram.status),
-              label: t(`settings.remoteControl.hook.status.${telegram.status}`),
-            };
-  /** Telegram 绑定态一行(收起行摘要与展开区共用文案)。 */
-  const telegramBindingLine =
-    telegram.enabled &&
-    telegram.available &&
-    !telegram.capabilityPending &&
-    telegram.status === 'connected'
-      ? telegramConfirmed
-        ? t('settings.remoteControl.hook.telegram.status.confirmed', {
-            user: telegramBinding?.principalName ?? telegramBinding?.principalId ?? '',
-            bot: telegramBinding?.scopeName ?? '',
-          })
-        : t(`settings.remoteControl.hook.telegram.status.${telegramState}`)
-      : null;
-  const telegramErrorText =
-    telegram.lastError === 'not logged in'
-      ? t('settings.remoteControl.hook.loginRequired')
-      : telegram.lastError;
+  /**
+   * provider-neutral 渠道卡(Telegram / X)的派生展示状态。i18n 前缀按
+   * provider 取 settings.remoteControl.hook.<provider>.*, 两块 key 结构平行。
+   */
+  const providerCardState = (provider: NeutralCardProvider, view: ProviderHookView) => {
+    const binding = view.binding;
+    const actions = binding?.actions ?? [];
+    const state = binding?.state ?? 'none';
+    // A configured endpoint is the rollout gate. Capability negotiation starts
+    // only after the user enables the provider, so the disabled card cannot
+    // depend on an already-received welcome to become discoverable.
+    const visible =
+      view.url.length > 0 || view.capabilityPending || view.available || view.enabled;
+    const confirmed = state === 'confirmed';
+    const inProgress =
+      view.enabled && (state === 'pending' || state === 'awaiting_confirmation');
+    const canStartLink =
+      state === 'none' ||
+      ((state === 'failed' ||
+        state === 'denied' ||
+        state === 'expired' ||
+        state === 'revoked' ||
+        state === 'superseded') &&
+        actions.includes('retry'));
+    // The switch represents provider ingress, not only the final bind state.
+    // Keep it on while the provider is waiting for confirmation so clicking it
+    // is an unsurprising cancel/disable action.
+    const toggleChecked = view.enabled;
+    /** 状态徽章: 只承载传输/能力状态, 绑定细节走摘要与展开区。 */
+    const badge: { tone: ChannelBadgeTone; label: string } = !view.enabled
+      ? { tone: 'attention', label: t(`settings.remoteControl.hook.${provider}.status.disabled`) }
+      : view.status === 'error'
+        ? { tone: 'error', label: t('settings.remoteControl.hook.status.error') }
+        : view.capabilityPending
+          ? { tone: 'progress', label: t(`settings.remoteControl.hook.${provider}.status.checking`) }
+          : !view.available
+            ? {
+                tone: 'attention',
+                label: t(`settings.remoteControl.hook.${provider}.status.unavailable`),
+              }
+            : {
+                tone: transportBadgeTone(view.status),
+                label: t(`settings.remoteControl.hook.status.${view.status}`),
+              };
+    /** 绑定态一行(收起行摘要与展开区共用文案)。 */
+    const bindingLine =
+      view.enabled && view.available && !view.capabilityPending && view.status === 'connected'
+        ? confirmed
+          ? t(`settings.remoteControl.hook.${provider}.status.confirmed`, {
+              user: binding?.principalName ?? binding?.principalId ?? '',
+              bot: binding?.scopeName ?? '',
+            })
+          : t(`settings.remoteControl.hook.${provider}.status.${state}`)
+        : null;
+    const errorText =
+      view.lastError === 'not logged in'
+        ? t('settings.remoteControl.hook.loginRequired')
+        : view.lastError;
+    return { binding, actions, state, visible, confirmed, inProgress, canStartLink, toggleChecked, badge, bindingLine, errorText };
+  };
   const workdirCount = Object.keys(hook.workspaces).length;
   const hasActiveSlackBinding = multiUi
     ? activeTeams.length > 0
@@ -810,6 +824,162 @@ export function HookConnectionsSection() {
       </div>
     </>
   );
+
+  /**
+   * provider-neutral 渠道卡(Telegram / X 同构)。用普通函数而非内联子组件
+   * 渲染(同 renderWorkdirSection 的理由: 内联组件类型每次渲染重建会导致
+   * 子树 remount)。动作按钮完全由 binding.actions 数据驱动 —— X 的 actions
+   * 里没有 add_to_group, 加群按钮自然不渲染。
+   */
+  const renderProviderCard = (provider: NeutralCardProvider) => {
+    const view = hook[provider] as ProviderHookView | undefined;
+    if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
+    const cs = providerCardState(provider, view);
+    if (!cs.visible) return null;
+    const prefsState = provider === 'telegram' ? telegramPrefsState : xPrefsState;
+    return (
+      <ImChannelSettingsCard
+        id={`cindy-im-${provider}`}
+        title={t(
+          provider === 'telegram'
+            ? 'settings.tina.prefs.providerTelegram'
+            : 'settings.tina.prefs.providerX',
+        )}
+        description={t(`settings.remoteControl.hook.${provider}.description`)}
+        routeSummary={cs.bindingLine}
+        status={<ChannelStatusBadge tone={cs.badge.tone} label={cs.badge.label} />}
+        headerAction={
+          <Switch
+            checked={cs.toggleChecked}
+            disabled={!view.enabled && view.url.length === 0}
+            onCheckedChange={(enabled) => handleProviderToggle(provider, enabled)}
+            aria-label={t(`settings.remoteControl.hook.${provider}.toggleAria`)}
+          />
+        }
+        expanded={expandedCard === provider}
+        onToggle={() => toggleCard(provider)}
+      >
+        <div className="flex flex-col gap-2">
+          {!view.enabled ? (
+            <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+              {t(`settings.remoteControl.hook.${provider}.disabledHint`)}
+            </span>
+          ) : null}
+
+          {/* 绑定进度/结果一行(完成关联引导、失败原因等; 已关联的摘要由
+              收起行承载, 展开区不重复) */}
+          {cs.bindingLine !== null && !cs.confirmed ? (
+            <span
+              className={`text-11 leading-relaxed ${
+                cs.state === 'failed' ||
+                cs.state === 'denied' ||
+                cs.state === 'expired' ||
+                cs.state === 'superseded'
+                  ? 'text-[var(--error-fg)]'
+                  : 'text-[var(--text-tertiary)]'
+              }`}
+            >
+              {cs.bindingLine}
+            </span>
+          ) : null}
+
+          {view.enabled &&
+          view.status === 'error' &&
+          cs.errorText &&
+          cs.errorText !== cs.badge.label ? (
+            <span className="text-11 leading-relaxed text-[var(--error-fg)]">{cs.errorText}</span>
+          ) : null}
+
+          {view.enabled && view.available ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {cs.inProgress && cs.binding?.connectUrl ? (
+                <>
+                  {cs.actions.includes('open_connect_url') ? (
+                    <button
+                      type="button"
+                      onClick={() => handleProviderOpen(provider, 'connect')}
+                      className={pillBtn}
+                    >
+                      {t(`settings.remoteControl.hook.${provider}.openApp`)}
+                    </button>
+                  ) : null}
+                  {cs.actions.includes('copy_connect_url') ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyProviderLink(provider)}
+                      className={pillBtn}
+                    >
+                      {t('settings.remoteControl.hook.binding.copyLink')}
+                    </button>
+                  ) : null}
+                </>
+              ) : null}
+              {cs.inProgress && cs.actions.includes('cancel') ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    runHookAction(() => window.electronAPI.hookControl.providerBindCancel(provider))
+                  }
+                  className={pillBtn}
+                >
+                  {t(`settings.remoteControl.hook.${provider}.cancel`)}
+                </button>
+              ) : null}
+              {cs.confirmed ? (
+                <>
+                  {cs.actions.includes('open_provider') ? (
+                    <button
+                      type="button"
+                      onClick={() => handleProviderOpen(provider, 'provider')}
+                      className={pillBtn}
+                    >
+                      {t(`settings.remoteControl.hook.${provider}.openBot`)}
+                    </button>
+                  ) : null}
+                  {cs.actions.includes('add_to_group') ? (
+                    <button
+                      type="button"
+                      onClick={() => handleProviderOpen(provider, 'add-to-group')}
+                      className={pillBtn}
+                    >
+                      {t(`settings.remoteControl.hook.${provider}.addToGroup`)}
+                    </button>
+                  ) : null}
+                  {cs.actions.includes('revoke') ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleProviderUnlink(provider)}
+                      className={pillBtn}
+                    >
+                      {t(`settings.remoteControl.hook.${provider}.unlink`)}
+                    </button>
+                  ) : null}
+                </>
+              ) : cs.canStartLink ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    runHookAction(() => window.electronAPI.hookControl.providerBindStart(provider))
+                  }
+                  className={pillBtn}
+                >
+                  {t(
+                    cs.state === 'none'
+                      ? `settings.remoteControl.hook.${provider}.connect`
+                      : `settings.remoteControl.hook.${provider}.retry`,
+                  )}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {/* 工作目录映射(清单共享, 偏好取本 provider 那份) */}
+          {view.enabled ? renderWorkdirSection(prefsState) : null}
+        </div>
+      </ImChannelSettingsCard>
+    );
+  };
+
 
   return (
     <div className="flex flex-col gap-3">
@@ -1131,146 +1301,9 @@ export function HookConnectionsSection() {
         </div>
       </ImChannelSettingsCard>
 
-      {/* ── Telegram 渠道卡 ──────────────────────────────────────────── */}
-      {telegramVisible ? (
-        <ImChannelSettingsCard
-          id="cindy-im-telegram"
-          title={t('settings.tina.prefs.providerTelegram')}
-          description={t('settings.remoteControl.hook.telegram.description')}
-          routeSummary={telegramBindingLine}
-          status={<ChannelStatusBadge tone={telegramBadge.tone} label={telegramBadge.label} />}
-          headerAction={
-            <Switch
-              checked={telegramToggleChecked}
-              disabled={!telegram.enabled && telegram.url.length === 0}
-              onCheckedChange={handleTelegramToggle}
-              aria-label={t('settings.remoteControl.hook.telegram.toggleAria')}
-            />
-          }
-          expanded={expandedCard === 'telegram'}
-          onToggle={() => toggleCard('telegram')}
-        >
-          <div className="flex flex-col gap-2">
-            {!telegram.enabled ? (
-              <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-                {t('settings.remoteControl.hook.telegram.disabledHint')}
-              </span>
-            ) : null}
-
-            {/* 绑定进度/结果一行(「点 Start 完成关联」引导、失败原因等;
-                已关联的摘要由收起行承载, 展开区不重复) */}
-            {telegramBindingLine !== null && !telegramConfirmed ? (
-              <span
-                className={`text-11 leading-relaxed ${
-                  telegramState === 'failed' ||
-                  telegramState === 'denied' ||
-                  telegramState === 'expired' ||
-                  telegramState === 'superseded'
-                    ? 'text-[var(--error-fg)]'
-                    : 'text-[var(--text-tertiary)]'
-                }`}
-              >
-                {telegramBindingLine}
-              </span>
-            ) : null}
-
-            {telegram.enabled &&
-            telegram.status === 'error' &&
-            telegramErrorText &&
-            telegramErrorText !== telegramBadge.label ? (
-              <span className="text-11 leading-relaxed text-[var(--error-fg)]">
-                {telegramErrorText}
-              </span>
-            ) : null}
-
-            {telegram.enabled && telegram.available ? (
-              <div className="flex flex-wrap items-center gap-2">
-                {telegramInProgress && telegramBinding?.connectUrl ? (
-                  <>
-                    {telegramActions.includes('open_connect_url') ? (
-                      <button
-                        type="button"
-                        onClick={() => handleTelegramOpen('connect')}
-                        className={pillBtn}
-                      >
-                        {t('settings.remoteControl.hook.telegram.openTelegram')}
-                      </button>
-                    ) : null}
-                    {telegramActions.includes('copy_connect_url') ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleCopyTelegramLink()}
-                        className={pillBtn}
-                      >
-                        {t('settings.remoteControl.hook.binding.copyLink')}
-                      </button>
-                    ) : null}
-                  </>
-                ) : null}
-                {telegramInProgress && telegramActions.includes('cancel') ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      runHookAction(() => window.electronAPI.hookControl.providerBindCancel())
-                    }
-                    className={pillBtn}
-                  >
-                    {t('settings.remoteControl.hook.telegram.cancel')}
-                  </button>
-                ) : null}
-                {telegramConfirmed ? (
-                  <>
-                    {telegramActions.includes('open_provider') ? (
-                      <button
-                        type="button"
-                        onClick={() => handleTelegramOpen('provider')}
-                        className={pillBtn}
-                      >
-                        {t('settings.remoteControl.hook.telegram.openBot')}
-                      </button>
-                    ) : null}
-                    {telegramActions.includes('add_to_group') ? (
-                      <button
-                        type="button"
-                        onClick={() => handleTelegramOpen('add-to-group')}
-                        className={pillBtn}
-                      >
-                        {t('settings.remoteControl.hook.telegram.addToGroup')}
-                      </button>
-                    ) : null}
-                    {telegramActions.includes('revoke') ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleTelegramUnlink()}
-                        className={pillBtn}
-                      >
-                        {t('settings.remoteControl.hook.telegram.unlink')}
-                      </button>
-                    ) : null}
-                  </>
-                ) : telegramCanStartLink ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      runHookAction(() => window.electronAPI.hookControl.providerBindStart())
-                    }
-                    className={pillBtn}
-                  >
-                    {t(
-                      telegramState === 'none'
-                        ? 'settings.remoteControl.hook.telegram.connect'
-                        : 'settings.remoteControl.hook.telegram.retry',
-                    )}
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-
-            {/* 工作目录映射(清单共享, 偏好取 Telegram 那份) */}
-            {telegram.enabled ? renderWorkdirSection(telegramPrefsState) : null}
-          </div>
-        </ImChannelSettingsCard>
-      ) : null}
+      {/* ── provider-neutral 渠道卡(Telegram / X, 同构渲染) ─────────── */}
+      {renderProviderCard('telegram')}
+      {renderProviderCard('x')}
     </div>
   );
 }

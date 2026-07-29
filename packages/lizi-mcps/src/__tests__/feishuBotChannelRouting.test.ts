@@ -16,6 +16,7 @@ import {
   createFeishuBotMcpServer,
   SLACK_HOOK_SESSION_CHANNEL_NOTE,
   TELEGRAM_HOOK_SESSION_CHANNEL_NOTE,
+  X_HOOK_SESSION_CHANNEL_NOTE,
   type FeishuBotMcpDeps,
 } from '../cindy_feishuBotMcpServer';
 
@@ -74,6 +75,7 @@ describe('cindy_feishu_bot channel routing note', () => {
   it.each([
     ['slack-hook', SLACK_HOOK_SESSION_CHANNEL_NOTE],
     ['telegram', TELEGRAM_HOOK_SESSION_CHANNEL_NOTE],
+    ['x', X_HOOK_SESSION_CHANNEL_NOTE],
   ] as const)(
     '%s description === base description + fixed note, for every tool',
     async (source, note) => {
@@ -103,6 +105,7 @@ describe('cindy_feishu_bot channel routing note', () => {
       for (const description of feishuDescs.values()) {
         expect(description).not.toContain(SLACK_HOOK_SESSION_CHANNEL_NOTE.trim());
         expect(description).not.toContain(TELEGRAM_HOOK_SESSION_CHANNEL_NOTE.trim());
+        expect(description).not.toContain(X_HOOK_SESSION_CHANNEL_NOTE.trim());
       }
     } finally {
       await feishu.cleanup();

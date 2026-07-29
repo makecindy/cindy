@@ -2549,7 +2549,7 @@
           "disabledHint": "打开开关后，按提示在 Telegram 里完成账号关联。",
           "toggleAria": "切换 Telegram 连接",
           "connect": "关联 Telegram",
-          "openTelegram": "打开 Telegram",
+          "openApp": "打开 Telegram",
           "cancel": "取消关联",
           "retry": "重新关联",
           "openBot": "打开 Cindy bot",
@@ -2567,6 +2567,33 @@
             "confirmed": "{{user}} 已关联 @{{bot}}",
             "denied": "已拒绝关联",
             "expired": "关联链接已过期",
+            "failed": "关联失败",
+            "revoked": "已解除关联",
+            "superseded": "已关联到另一台设备"
+          }
+        },
+        "x": {
+          "description": "关联 X (Twitter) 账号，在 X 上 @提及 Cindy bot 即可派发任务。",
+          "disabledHint": "打开开关后，按提示完成 X 账号授权。",
+          "toggleAria": "切换 X 连接",
+          "connect": "关联 X",
+          "openApp": "打开 X 完成授权",
+          "cancel": "取消关联",
+          "retry": "重新关联",
+          "openBot": "在 X 上查看 bot",
+          "unlink": "解绑 X",
+          "unlinkConfirmTitle": "解绑 X？",
+          "unlinkConfirmDescription": "解绑后 X 将不能再向这台设备派发任务；本地项目和其它渠道连接不受影响。",
+          "status": {
+            "checking": "正在检查服务器支持…",
+            "unavailable": "当前服务器尚未开放",
+            "disabled": "已停用",
+            "none": "未绑定",
+            "pending": "打开 X 完成账号授权",
+            "awaiting_confirmation": "请完成 X 授权确认",
+            "confirmed": "{{user}} 已关联 {{bot}}",
+            "denied": "已拒绝授权",
+            "expired": "授权链接已过期",
             "failed": "关联失败",
             "revoked": "已解除关联",
             "superseded": "已关联到另一台设备"
@@ -2589,7 +2616,7 @@
     "tina": {
       "chat": {
         "title": "对话",
-        "description": "不落任何仓库的纯对话；在 Slack 或 Telegram 里选择 chat 即可使用，每条对话 lane 独立复用 session。"
+        "description": "不落任何仓库的纯对话；在 Slack、Telegram 或 X 里选择 chat 即可使用，每条对话 lane 独立复用 session。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -2598,6 +2625,7 @@
         "permissionLabel": "权限模式",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
+        "providerX": "X",
         "requireConnected": "连接 {{provider}} 后可编辑（先在上方开启对应开关并等待连接成功）。",
         "requireBinding": "先完成 {{provider}} 账号关联后可编辑。",
         "serverUnsupported": "服务器版本过旧或暂时无应答，无法读取偏好。",

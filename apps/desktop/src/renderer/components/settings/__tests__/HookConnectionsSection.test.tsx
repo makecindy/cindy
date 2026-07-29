@@ -15,7 +15,7 @@ const ipc = vi.hoisted(() => ({
   providerBindRevoke: vi.fn(),
   cancelPendingBind: vi.fn(),
   revokeTeam: vi.fn(),
-  openTelegramAction: vi.fn(),
+  openProviderAction: vi.fn(),
   openExternal: vi.fn(),
 }));
 const dialog = vi.hoisted(() => ({ confirm: vi.fn() }));
@@ -108,6 +108,15 @@ const BASE_HOOK: SlackHookView = {
     capabilityPending: false,
     binding: null,
   },
+  x: {
+    enabled: false,
+    url: '',
+    status: 'disabled',
+    lastError: null,
+    available: false,
+    capabilityPending: false,
+    binding: null,
+  },
 };
 
 describe('HookConnectionsSection Telegram binding actions', () => {
@@ -118,7 +127,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     ipc.setLifecycleAnnouncement.mockResolvedValue({ hook: BASE_HOOK });
     ipc.providerBindRevoke.mockResolvedValue({ hook: BASE_HOOK });
     ipc.revokeTeam.mockResolvedValue({ hook: BASE_HOOK });
-    ipc.openTelegramAction.mockResolvedValue(undefined);
+    ipc.openProviderAction.mockResolvedValue(undefined);
     dialog.confirm.mockResolvedValue(true);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       hookControl: {
@@ -131,7 +140,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
         providerBindRevoke: ipc.providerBindRevoke,
         cancelPendingBind: ipc.cancelPendingBind,
         revokeTeam: ipc.revokeTeam,
-        openTelegramAction: ipc.openTelegramAction,
+        openProviderAction: ipc.openProviderAction,
       },
       openExternal: ipc.openExternal,
     };
@@ -302,7 +311,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     await expandChannelCard(TELEGRAM_CARD);
 
     const openButton = await screen.findByRole('button', {
-      name: 'settings.remoteControl.hook.telegram.openTelegram',
+      name: 'settings.remoteControl.hook.telegram.openApp',
     });
     expect(
       screen.getByRole('button', { name: 'settings.remoteControl.hook.binding.copyLink' }),
@@ -312,7 +321,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     ).toBeTruthy();
 
     fireEvent.click(openButton);
-    await waitFor(() => expect(ipc.openTelegramAction).toHaveBeenCalledWith('connect'));
+    await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('telegram', 'connect'));
   });
 
   it('uses the latest Slack install URL after an async confirmation', async () => {

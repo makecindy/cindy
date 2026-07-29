@@ -34,6 +34,15 @@ const BASE_HOOK: SlackHookView = {
     capabilityPending: false,
     binding: null,
   },
+  x: {
+    enabled: false,
+    url: '',
+    status: 'disabled',
+    lastError: null,
+    available: false,
+    capabilityPending: false,
+    binding: null,
+  },
 };
 
 const TELEGRAM_CONFIRMED: SlackHookView = {
