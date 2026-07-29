@@ -92,7 +92,7 @@ import { SessionItem } from '../SessionItem';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
-function makeSession(id: string, status: Session['status'] = 'idle'): Session {
+function makeSession(id: string, status: Session['status'] | 'idle' = 'idle'): Session {
   return {
     id,
     title: `Session ${id}`,
