@@ -3485,14 +3485,11 @@ export function registerGhostIpc(): void {
       case 'canceled':
         return { status: 'canceled' as const };
       case 'invalid_id':
-        throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
-        break;
+        return throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
       case 'not_installed':
-        throwIpcError('NOT_FOUND', `意识 ${String(id)} 未安装`);
-        break;
+        return throwIpcError('NOT_FOUND', `意识 ${String(id)} 未安装`);
       case 'error':
-        throwIpcError('INTERNAL', `导出插件失败(${result.code})`);
-        break;
+        return throwIpcError('INTERNAL', `导出插件失败(${result.code})`);
     }
   });
 

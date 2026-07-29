@@ -106,6 +106,49 @@ describe('exportGhostPackage', () => {
     });
   });
 
+  it('导出前先把字节快照进内存:对话框期间目录被换掉也不混版本', async () => {
+    let resolveDialog: ((value: { canceled: boolean; filePath?: string }) => void) | null = null;
+    const showSaveDialog = vi.fn(
+      () =>
+        new Promise<{ canceled: boolean; filePath?: string }>((resolve) => {
+          resolveDialog = resolve;
+        }),
+    );
+    const pending = exportGhostPackage('hello', makeDeps({ showSaveDialog }));
+    // 等快照与压缩完成、对话框弹出后再模拟"更新换目录"。
+    await vi.waitFor(() => expect(showSaveDialog).toHaveBeenCalled());
+    await fs.promises.rm(ghostDir, { recursive: true, force: true });
+    await fs.promises.mkdir(ghostDir, { recursive: true });
+    await fs.promises.writeFile(path.join(ghostDir, 'ghost.json'), '{"id":"hello","version":"9.9.9"}');
+    resolveDialog!({ canceled: false, filePath: path.join(workDir, 'out.cindy') });
+
+    const result = await pending;
+    expect(result.status).toBe('saved');
+    if (result.status !== 'saved') return;
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(result.savedPath));
+    // 内容仍是快照时的 1.2.0 完整包,不是换目录后的残缺新版。
+    const names = Object.values(zip.files)
+      .filter((entry) => !entry.dir)
+      .map((entry) => entry.name)
+      .sort();
+    expect(names).toEqual(['ghost.json', 'locales/en.json', 'main.js']);
+  });
+
+  it('版本号含路径分隔符时清洗后再拼默认文件名', async () => {
+    const ghost = makeGhost();
+    ghost.manifest = { ...ghost.manifest, version: '1/../../etc' };
+    const showSaveDialog = vi.fn(
+      async (_opts: { defaultPath: string }) => ({ canceled: true as const }),
+    );
+    await exportGhostPackage('hello', makeDeps({
+      listInstalled: () => [ghost],
+      showSaveDialog,
+    }));
+    const defaultPath = showSaveDialog.mock.calls[0]?.[0].defaultPath ?? '';
+    expect(path.dirname(defaultPath)).toBe(workDir);
+    expect(path.basename(defaultPath)).toBe('Hello 插件-1 .. .. etc.cindy');
+  });
+
   it('取消保存返回 canceled,不写盘', async () => {
     const writeFile = vi.fn();
     const result = await exportGhostPackage('hello', makeDeps({

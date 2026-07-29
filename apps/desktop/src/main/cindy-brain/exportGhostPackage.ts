@@ -21,9 +21,11 @@ import JSZip from 'jszip';
 
 import { isValidGhostId, type InstalledGhost } from '../../shared/ghost';
 
-/** 与 forge.ts shouldSkip 同口径:点开头条目不属于插件本体。 */
+/** 与 forge.ts shouldSkip 同口径:点开头条目与开发残留不属于插件本体。 */
 function shouldSkipExportEntry(name: string): boolean {
-  return name.startsWith('.');
+  if (name.startsWith('.')) return true; // .disabled / .cindy-trust.json / .DS_Store 等
+  if (name === 'node_modules') return true;
+  return false;
 }
 
 export type ExportGhostPackageResult =
@@ -31,7 +33,7 @@ export type ExportGhostPackageResult =
   | { status: 'canceled' }
   | { status: 'invalid_id' }
   | { status: 'not_installed' }
-  | { status: 'error'; code: 'read_failed' | 'dialog_failed' | 'write_failed' };
+  | { status: 'error'; code: 'read_failed' | 'compress_failed' | 'dialog_failed' | 'write_failed' };
 
 export interface ExportGhostPackageDeps {
   /** 已装插件清单(GhostManager.list 的事实源)。 */
@@ -64,6 +66,9 @@ export async function exportGhostPackage(
   if (typeof id !== 'string' || !isValidGhostId(id)) {
     return { status: 'invalid_id' };
   }
+  // 先快照字节再弹保存对话框(评审 P1):更新会整体换目录、卸载会删目录,
+  // 若在用户挑选位置期间发生,旧文件清单会配新字节,产出混合版本的坏包。
+  // 快照在内存中完成,对话框等待期间插件怎么变都不影响已抓到的内容。
   const ghost = deps.listInstalled().find((candidate) => candidate.manifest.id === id);
   if (!ghost) return { status: 'not_installed' };
 
@@ -77,10 +82,11 @@ export async function exportGhostPackage(
   }
   if (!dirStat.isDirectory()) return { status: 'error', code: 'read_failed' };
 
-  // 收集文件:递归、跳过点开头条目(主机保留文件、.DS_Store 等)。
+  // 收集文件并立即读入内存:递归、跳过点开头条目(主机保留文件、
+  // .DS_Store 等)与 node_modules(运行残留,打包契约本来就不含)。
   // 安装目录内容来自装入侧已校验的 zip,此处只做如实归档,不设内容上限
   // (装入侧已卡过解压总量)。
-  const files: Array<{ rel: string; abs: string }> = [];
+  const files: Array<{ rel: string; data: Buffer }> = [];
   const walk = async (cur: string, relBase: string): Promise<void> => {
     const entries = await fs.promises.readdir(cur, { withFileTypes: true });
     for (const entry of entries) {
@@ -90,7 +96,7 @@ export async function exportGhostPackage(
       if (entry.isDirectory()) {
         await walk(abs, rel);
       } else if (entry.isFile()) {
-        files.push({ rel, abs });
+        files.push({ rel, data: await fs.promises.readFile(abs) });
       }
     }
   };
@@ -103,18 +109,27 @@ export async function exportGhostPackage(
   const zip = new JSZip();
   try {
     for (const file of files) {
-      zip.file(file.rel, await fs.promises.readFile(file.abs));
+      zip.file(file.rel, file.data);
     }
   } catch {
     return { status: 'error', code: 'read_failed' };
   }
-  const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  let buf: Buffer;
+  try {
+    buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  } catch {
+    // 压缩失败(zlib 等)如实落到结构化结果,不冒成未捕获的 IPC 异常。
+    return { status: 'error', code: 'compress_failed' };
+  }
 
   const baseName =
     sanitizeExportFileNamePart(ghost.manifest.name) || ghost.manifest.id;
+  // 版本同样来自作者清单,可能与名字一样含路径分隔符/控制字符,
+  // 必须走同一道清洗再拼进默认文件名(评审 P1)。
+  const versionPart = sanitizeExportFileNamePart(ghost.manifest.version);
   const defaultPath = path.join(
     deps.getDownloadsDir(),
-    `${baseName}-${ghost.manifest.version}.cindy`,
+    versionPart ? `${baseName}-${versionPart}.cindy` : `${baseName}.cindy`,
   );
   let picked: { canceled: boolean; filePath?: string };
   try {
