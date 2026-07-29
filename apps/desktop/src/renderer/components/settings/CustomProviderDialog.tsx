@@ -1269,7 +1269,13 @@ export function CustomProviderDialog({
                           }
                           onBlur={() =>
                             setWindowDrafts((drafts) => {
-                              if (!(`${activeTab}:${i}` in drafts)) return drafts;
+                              const draftText = drafts[`${activeTab}:${i}`];
+                              // 只清可提交草稿(显示回落到已提交规范值);不可提交
+                              // 草稿必须保留——输入框失焦先于保存按钮 click,清掉
+                              // 会让保存守卫看不到非法文本、静默存旧值(review P1)。
+                              if (draftText === undefined || !isCommittableWindowText(draftText)) {
+                                return drafts;
+                              }
                               const { [`${activeTab}:${i}`]: _drop, ...rest } = drafts;
                               return rest;
                             })
