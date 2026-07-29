@@ -31,6 +31,15 @@ vi.mock('@/hooks/useClaudeSessionRoute', () => ({
   useClaudeSessionRoute: () => null,
 }));
 
+vi.mock('@/hooks/useApiKey', () => ({
+  // reconcile 未完成 → 计费形态未定,点数耗尽引导分支恒不命中。
+  useApiKey: () => ({ hasSavedKey: false, isReconciling: true }),
+}));
+
+vi.mock('@/hooks/useClaudeOAuthConnected', () => ({
+  useClaudeOAuthConnected: () => null,
+}));
+
 vi.mock('react-router-dom', () => ({
   useNavigate: () => vi.fn(),
 }));

@@ -23,6 +23,8 @@ import { buildCodexSyncWarning } from '@/utils/codexAuthSync';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useAuth } from '@/contexts/AuthContext';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
+import { useApiKey } from '@/hooks/useApiKey';
+import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
 import { useClaudeSessionRoute } from '@/hooks/useClaudeSessionRoute';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
@@ -178,18 +180,39 @@ export function ErrorBanner({
   // 不更新会话路由观察值,旧的 gateway 观察值可能残留——ChatGPT/xAI 的配额错误
   // 绝不能被贴成 Cindy 点数耗尽(PR review P1)。
   const isSubscriptionBridgeModel = !!modelId && isSubscriptionDirectModel(modelId);
-  const claudeSessionRoute = useClaudeSessionRoute(
-    sessionId,
+  const wantCcRouteForBilling =
     isQuotaError &&
-      canAccessBilling &&
-      !isAnyRemoteSession &&
-      agentKind === 'cc' &&
-      !isSubscriptionBridgeModel &&
-      normalizedProviderId === null,
+    canAccessBilling &&
+    !isAnyRemoteSession &&
+    agentKind === 'cc' &&
+    !isSubscriptionBridgeModel &&
+    normalizedProviderId === null;
+  const claudeSessionRoute = useClaudeSessionRoute(sessionId, wantCcRouteForBilling);
+  // 会话路由观察值是纯内存的:App 重启后从持久化错误尾部渲染时恒为 null(PR
+  // review P1)。此时回落与 TodaySpendChip 同一套活性凭证启发式——有网关 key
+  // 判 gateway;无 key 且连了 Claude OAuth 判 subscription;reconcile 未完成 /
+  // 状态未知则形态未定、不显引导(宁缺勿错)。
+  const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey();
+  const claudeOAuthConnected = useClaudeOAuthConnected(
+    wantCcRouteForBilling && claudeSessionRoute == null,
   );
+  const ccEffectiveBillingRoute =
+    claudeSessionRoute ??
+    (!wantCcRouteForBilling || gatewayKeyReconciling
+      ? null
+      : hasGatewayKey
+        ? 'gateway'
+        : claudeOAuthConnected === true
+          ? 'subscription'
+          : claudeOAuthConnected === false
+            ? 'gateway'
+            : null);
+  // codex/ 骨折前缀只在 XD / 隐式来源下代表网关计费:显式自定义供应商也可能
+  // 发现 codex/ 开头的模型 id,且 proxy 按显式来源优先路由(PR review P1)。
   const isGatewayBilledSource =
     normalizedProviderId === 'xd' ||
-    !!modelId?.startsWith('codex/') ||
+    ((normalizedProviderId === null || normalizedProviderId === 'xd') &&
+      !!modelId?.startsWith('codex/')) ||
     (normalizedProviderId === null &&
       agentKind === 'codex' &&
       !isSubscriptionBridgeModel &&
@@ -197,7 +220,7 @@ export function ErrorBanner({
     (normalizedProviderId === null &&
       agentKind === 'cc' &&
       !isSubscriptionBridgeModel &&
-      claudeSessionRoute === 'gateway');
+      ccEffectiveBillingRoute === 'gateway');
   const showGatewayQuotaRecovery =
     isQuotaError && canAccessBilling && !isAnyRemoteSession && isGatewayBilledSource;
   const navigate = useNavigate();

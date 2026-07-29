@@ -1240,9 +1240,11 @@ export function TodaySpendChip({
   //     对方平台的花费,不得指向 Cindy 计费页;远程会话(SSH / device-link)计费
   //     事实在远端账号,同样不进(PR review P1 ×2)。
   const { mode: authMode, user: authUser } = useAuth();
+  // codex/ 骨折前缀只在 XD / 隐式来源下代表网关计费:显式自定义供应商也可能
+  // 发现 codex/ 开头的模型 id,其花费属于对方平台(PR review P1)。
   const isGatewayBilledSource =
     providerId === 'xd' ||
-    isCodexBudgetModel ||
+    ((providerId == null || providerId === 'xd') && isCodexBudgetModel) ||
     (providerId == null && vendorKey === 'codex' && !isCodexSubscription) ||
     (providerId == null &&
       vendorKey === 'cc' &&

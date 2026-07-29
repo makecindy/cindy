@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   })),
   claudeRoute: vi.fn((): 'gateway' | 'subscription' | null => null),
   runtimeRoute: vi.fn(() => ({ authInjection: 'env-key' as const })),
+  apiKey: vi.fn(() => ({ hasSavedKey: false, isReconciling: false })),
+  claudeOAuthConnected: vi.fn((): boolean | null => null),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -36,6 +38,14 @@ vi.mock('@/contexts/AuthContext', () => ({
 
 vi.mock('@/hooks/useClaudeSessionRoute', () => ({
   useClaudeSessionRoute: mocks.claudeRoute,
+}));
+
+vi.mock('@/hooks/useApiKey', () => ({
+  useApiKey: mocks.apiKey,
+}));
+
+vi.mock('@/hooks/useClaudeOAuthConnected', () => ({
+  useClaudeOAuthConnected: mocks.claudeOAuthConnected,
 }));
 
 vi.mock('@/hooks/useCodexRuntimeRoute', () => ({
@@ -78,6 +88,8 @@ describe('ErrorBanner billing CTA', () => {
     mocks.navigate.mockClear();
     mocks.auth.mockReturnValue({ mode: 'cloud', user: { membershipKind: 'personal' } });
     mocks.claudeRoute.mockReturnValue(null);
+    mocks.apiKey.mockReturnValue({ hasSavedKey: false, isReconciling: false });
+    mocks.claudeOAuthConnected.mockReturnValue(null);
   });
 
   it('shows friendly copy + buy-credits button for xd-source quota errors and navigates to billing', () => {
@@ -120,6 +132,32 @@ describe('ErrorBanner billing CTA', () => {
     // 不得把 ChatGPT 的配额错误贴成 Cindy 点数耗尽。
     mocks.claudeRoute.mockReturnValue('gateway');
     renderBanner({ providerId: null, modelId: 'chatgpt/gpt-5.5' });
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
+    expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
+  });
+
+  it('falls back to the gateway-key heuristic when the route observation is gone (app restart)', () => {
+    // 会话路由观察值是纯内存的:重启后持久化错误尾部拿不到,存有网关 key 时
+    // 回落判 gateway,引导保留。
+    mocks.claudeRoute.mockReturnValue(null);
+    mocks.apiKey.mockReturnValue({ hasSavedKey: true, isReconciling: false });
+    renderBanner({ providerId: null });
+    expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
+  });
+
+  it('stays silent while the gateway key is still reconciling (form undecided)', () => {
+    mocks.claudeRoute.mockReturnValue(null);
+    mocks.apiKey.mockReturnValue({ hasSavedKey: false, isReconciling: true });
+    renderBanner({ providerId: null });
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
+  });
+
+  it('keeps budget-prefixed (codex/) models from explicit custom providers off Cindy billing', () => {
+    renderBanner({
+      providerId: 'my-custom-provider',
+      agentKind: 'codex',
+      modelId: 'codex/gpt-5.5',
+    });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
   });
