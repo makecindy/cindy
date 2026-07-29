@@ -796,6 +796,50 @@
       "exempt": [
         "desktop:sessionShare.import.useWorktreeHint"
       ]
+    },
+    {
+      "id": "model-category-tts",
+      "status": "proposed",
+      "en": "Text to Speech",
+      "translations": {
+        "zh-CN": "语音合成",
+        "ja": "音声合成",
+        "ko": "음성 합성"
+      },
+      "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_speech 的语音合成模型（如 elevenlabs/eleven_v3）。原先与语音转写、实时音频混在一个笼统的「音频语音」分类里，本次拆分为独立类型。"
+    },
+    {
+      "id": "model-category-stt",
+      "status": "proposed",
+      "en": "Speech to Text",
+      "translations": {
+        "zh-CN": "语音转写",
+        "ja": "音声認識",
+        "ko": "음성 인식"
+      },
+      "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_transcription 的语音转写/ASR 模型（如 gpt-4o-transcribe）。"
+    },
+    {
+      "id": "model-category-realtime",
+      "status": "proposed",
+      "en": "Realtime Audio",
+      "translations": {
+        "zh-CN": "实时语音",
+        "ja": "リアルタイム音声",
+        "ko": "실시간 음성"
+      },
+      "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。"
+    },
+    {
+      "id": "model-category-compression",
+      "status": "proposed",
+      "en": "Compression",
+      "translations": {
+        "zh-CN": "压缩",
+        "ja": "圧縮",
+        "ko": "압축"
+      },
+      "note": "issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。"
     }
   ]
 }

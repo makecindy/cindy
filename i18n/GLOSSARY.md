@@ -136,6 +136,22 @@
 
 OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。
 
+### Compression
+
+issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。
+
+### Realtime Audio
+
+issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。
+
+### Speech to Text
+
+issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_transcription 的语音转写/ASR 模型（如 gpt-4o-transcribe）。
+
+### Text to Speech
+
+issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_speech 的语音合成模型（如 elevenlabs/eleven_v3）。原先与语音转写、实时音频混在一个笼统的「音频语音」分类里，本次拆分为独立类型。
+
 ### Region badge
 
 桌面登录页标题旁的品牌红胶囊（DESIGN.md §16.3），指徽标这个 UI 元素本身。徽标上的标签值另立条目（region-code-cn / region-code-dev）——本条 en 为 Region badge、各语言译文均非英文原词，caseStandardFor 天然返回 null，所以本条约束不到标签值，也无需写 checkCase。作为待产品裁决术语登记：尚未拍板是否改为可译文案（如「中国大陆版 / Mainland China」），先登记以免后续界面自造“国内版／中国版／开发版”等多套说法。

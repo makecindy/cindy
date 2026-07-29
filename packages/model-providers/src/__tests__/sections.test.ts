@@ -215,4 +215,14 @@ describe('visibleModelUnion', () => {
     const out = visibleModelUnion([codexOnly], 'claude-code', () => true);
     expect(out).toEqual([]);
   });
+
+  it('非聊天模型不进并集(issue #882 第 3 点,2026-07 review):Orca sub-agent 可用性判定 /' +
+    ' Slack /model 卡片 / hook session-runner 共用这一个函数,漏过滤会让非聊天模型被当成可执行模型选中', () => {
+    const withNonChat = provider('xd', 'XD', [
+      model('gpt-5.5', 'GPT-5.5'),
+      { ...model('gpt-image-2', 'GPT Image 2'), mode: 'image_generation' },
+    ]);
+    const out = visibleModelUnion([withNonChat], 'claude-code', () => true);
+    expect(out.map((m) => m.id)).toEqual(['gpt-5.5']);
+  });
 });

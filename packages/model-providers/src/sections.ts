@@ -114,12 +114,17 @@ export function visibleModelUnion(
   //   2. 条目带 3 个额外可枚举字段(sourceProviderId / sourceConnected / 可选 sourceAccess),
   //      类型层不可见 —— **禁止把条目整对象 JSON.stringify / spread 进 IPC・协议・持久化**,
   //      过 wire 前必须显式投影字段(现存 5 个消费方已核查合规;键集有测试锁)。
+  // excludeModel: 同 buildProviderSections 的理由(issue #882 第 3 点,2026-07 review)——
+  // 现存 5 个调用方(Orca sub-agent 可用性 / 设置页 sub-agent 模型 / 新对话选择器 /
+  // Slack `/model` 卡片 / hook session-runner 实际执行)都是"挑一个能聊天/能跑的模型",
+  // 非聊天模型不该出现,更不该被 session-runner 当成可执行模型选中。
   return deriveModelList({
     providers,
     agent,
     providerScope: 'connected-for-agent',
     isVisible,
     dedupe: 'first-wins',
+    excludeModel: (model) => !isChatEligible(model),
   });
 }
 
