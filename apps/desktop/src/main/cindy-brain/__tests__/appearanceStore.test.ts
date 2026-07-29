@@ -25,11 +25,15 @@ vi.mock('../../cindy-media/ledger.js', () => {
     hasRef: vi.fn(async ({ hash, refKind, refId }) =>
       Boolean(mocks.refs.get(key(refKind, refId))?.has(hash)),
     ),
+    hasGhostOwnedRef: vi.fn(async ({ hash, refKind, refId }) =>
+      Boolean(mocks.refs.get(key(refKind, refId))?.has(hash)),
+    ),
     pinBlob: vi.fn(async () => {}),
     getBlobInfo: vi.fn(async () => ({ ext: '.png', mimeType: 'image/png', bytes: 1024 })),
     removeRefs: vi.fn(async ({ refKind, refId }) => {
       mocks.refs.delete(key(refKind, refId));
     }),
+    removeGhostOwnedRefs: vi.fn(async () => 0),
     removeRefsExceptHash: vi.fn(async ({ refKind, refId, keepHash }) => {
       const refKey = key(refKind, refId);
       const hashes = mocks.refs.get(refKey);

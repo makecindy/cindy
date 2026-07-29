@@ -16,7 +16,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, ne, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
 import { getDbClient } from '../localDb/client/current';
@@ -190,6 +190,28 @@ export async function hasRef(
   return rows.length > 0;
 }
 
+/** 同一业务 ref/hash 下确认是否存在属于指定意识的出生引用。 */
+export async function hasGhostOwnedRef(
+  params: { hash: string; refKind: MediaRefKind; refId: string; ghostId: string },
+  db: LedgerDb = defaultDb(),
+): Promise<boolean> {
+  const rows = await db
+    .select({ one: sql`1` })
+    .from(mediaRefs)
+    .where(
+      and(
+        eq(mediaRefs.hash, params.hash),
+        eq(mediaRefs.refKind, params.refKind),
+        eq(mediaRefs.refId, params.refId),
+        eq(mediaRefs.originKind, 'ghost'),
+        eq(mediaRefs.originId, params.ghostId),
+      ),
+    )
+    .limit(1)
+    .all();
+  return rows.length > 0;
+}
+
 /**
  * 删会话的引用清理(会话删除钩子唯一入口):
  *   - session-attachment / import:refId 就是会话 id,直接删;
@@ -248,6 +270,26 @@ export async function removeRefs(
   const result = await db
     .delete(mediaRefs)
     .where(and(eq(mediaRefs.refKind, params.refKind), eq(mediaRefs.refId, params.refId)))
+    .run();
+  return result.changes;
+}
+
+/** 精确撤销某意识在指定业务引用上的出生权限，不影响其他来源的同 hash 引用。 */
+export async function removeGhostOwnedRefs(
+  params: { ghostId: string; refKinds: MediaRefKind[]; refId?: string },
+  db: LedgerDb = defaultDb(),
+): Promise<number> {
+  if (params.refKinds.length === 0) return 0;
+  const result = await db
+    .delete(mediaRefs)
+    .where(
+      and(
+        eq(mediaRefs.originKind, 'ghost'),
+        eq(mediaRefs.originId, params.ghostId),
+        inArray(mediaRefs.refKind, params.refKinds),
+        ...(params.refId ? [eq(mediaRefs.refId, params.refId)] : []),
+      ),
+    )
     .run();
   return result.changes;
 }

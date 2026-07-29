@@ -15,10 +15,12 @@ import {
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import {
   addRef,
+  hasGhostOwnedRef,
   hasRef,
   pinBlob,
   getBlobInfo,
   removeRefs,
+  removeGhostOwnedRefs,
   removeRefsExceptHash,
 } from '../cindy-media/ledger.js';
 
@@ -420,7 +422,10 @@ async function reconcileActiveMedia(
   ] as const;
   for (const [refKind, hash] of refs) {
     if (hash) {
-      if (!(await hasRef({ hash, refKind, refId: REF_ID }))) {
+      const retained = ghostId
+        ? await hasGhostOwnedRef({ hash, refKind, refId: REF_ID, ghostId })
+        : await hasRef({ hash, refKind, refId: REF_ID });
+      if (!retained) {
         await addRef({
           hash,
           refKind,
@@ -609,6 +614,31 @@ async function removeGhostAppearanceDataUnsafe(
 
   await atomicWriteJson(presetsFilePath(), nextLibrary);
   if (activeRemoved) await fs.rm(filePath(), { force: true });
+  if (!activeRemoved && transaction.previousAppearance) {
+    // 同 hash 可能先由待卸载插件建立 active 引用，后来被另一插件接管。
+    // 先为当前归属补齐自己的引用，再精确撤销旧插件 origin，避免当前皮肤
+    // 掉引用，也避免将来复用旧插件 id 的包继承读取权限。
+    const activeHashes = hashesFromSnapshot(transaction.previousAppearance);
+    if (transaction.previousAppearance.sourceGhostId) {
+      await reconcileActiveMedia(
+        activeHashes,
+        transaction.previousAppearance.sourceGhostId,
+      );
+    } else {
+      // 旧版无 sourceGhostId 快照也不能依赖待卸载插件的出生引用存活；
+      // 先补宿主引用，再撤销旧 origin。重复的无来源引用只会在极少数旧版
+      // 数据卸载路径产生，安全性优先于去重。
+      for (const [refKind, hash] of [
+        ['skin-background', activeHashes.background],
+        ['skin-brand-icon', activeHashes.brandIcon],
+        ['skin-brand-logo', activeHashes.brandLogo],
+      ] as const) {
+        if (!hash) continue;
+        await addRef({ hash, refKind, refId: REF_ID });
+        await pinBlob(hash);
+      }
+    }
+  }
   await Promise.all([
     ...ownedPresets.flatMap((preset) =>
       (['background', 'brandIcon', 'brandLogo'] as const).map((asset) =>
@@ -620,6 +650,11 @@ async function removeGhostAppearanceDataUnsafe(
           removeRefs({ refKind, refId: REF_ID }),
         )
       : []),
+    removeGhostOwnedRefs({
+      ghostId,
+      refKinds: ['skin-background', 'skin-brand-icon', 'skin-brand-logo'],
+      refId: REF_ID,
+    }),
   ]);
   await fs.rm(transactionFilePath());
   return { activeRemoved, presetsRemoved: ownedPresets.length };
