@@ -197,7 +197,7 @@ describe('appearance preset store', () => {
         'skin',
         { dim: true, surfaceOpacity: true },
       ),
-    ).rejects.toThrow('disk full');
+    ).rejects.toThrow('自动恢复未完成；预设可能已保存');
 
     const afterPreset = (await listGhostAppearancePresets()).find(
       (preset) => preset.name === 'After',

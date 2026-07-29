@@ -102,6 +102,31 @@ describe('GhostAppearanceSlot', () => {
     expect(h.savePreset).toHaveBeenCalledOnce();
   });
 
+  it('持久化恢复也失败时提示刷新确认可能已保存的预设', async () => {
+    const recoveryError = new Error(
+      '皮肤保存失败且自动恢复未完成；预设可能已保存，请刷新外观列表确认',
+    );
+    recoveryError.name = 'GhostAppearanceRecoveryError';
+    const h = harness({
+      saveWithPreset: async () => {
+        throw recoveryError;
+      },
+    });
+
+    await expect(
+      h.slot.handleRequest('skin', {
+        type: 'appearance-request',
+        operation: 'apply',
+        name: 'Rain',
+        palette: 'ocean',
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      message: recoveryError.message,
+    });
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
   it('校验并应用首页头像与 Logo 图片资源', async () => {
     const removeWhiteLogoBackground = vi.fn(async () => ({
       hash: HASH,

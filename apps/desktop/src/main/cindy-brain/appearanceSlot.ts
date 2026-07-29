@@ -491,7 +491,13 @@ export class GhostAppearanceSlot {
         ghostId,
         error: error instanceof Error ? error.message : String(error),
       });
-      return { ok: false, message: '外观保存失败，请稍后重试' };
+      return {
+        ok: false,
+        message:
+          error instanceof Error && error.name === 'GhostAppearanceRecoveryError'
+            ? error.message
+            : '外观保存失败，请稍后重试',
+      };
     }
     this.deps.broadcast(appearance);
     return { ok: true, appearance };

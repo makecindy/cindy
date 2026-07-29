@@ -37,6 +37,13 @@ const IMAGE_HASH_RE = /[0-9a-f]{64}/;
 
 let mutationTail: Promise<void> = Promise.resolve();
 
+export class GhostAppearanceRecoveryError extends Error {
+  constructor() {
+    super('皮肤保存失败且自动恢复未完成；预设可能已保存，请刷新外观列表确认');
+    this.name = 'GhostAppearanceRecoveryError';
+  }
+}
+
 function serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
   const run = mutationTail.then(operation);
   mutationTail = run.then(
@@ -508,8 +515,10 @@ export function saveGhostAppearanceWithPreset(
         }
         await restorePresetState(previousPresets);
       } catch {
-        // Preserve the original failure; the recycler grace period protects any
-        // references that need a later reconciliation pass.
+        // 两个独立文件无法在持续磁盘错误下保证物理原子回滚。此时不得吞掉
+        // 恢复错误并让调用方误以为整次保存均未发生；媒体引用保持安全，
+        // 调用方收到明确提示后刷新，以磁盘上仍可读取的状态为准。
+        throw new GhostAppearanceRecoveryError();
       }
       throw error;
     }
