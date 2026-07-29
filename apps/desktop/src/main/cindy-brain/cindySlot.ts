@@ -11,6 +11,9 @@
  *     → 模型白名单校验(意识只能从主机菜单里挑,挑不了菜单外的任何路由;
  *       图像/视频各一份白名单与默认,同来自 providers.json 目录;该类目清单
  *       为空 = 能力暂不可用,直接拒单)
+ *     → 画面参数校验(图像 aspectRatio / 视频 ratio·resolution·duration·fps):
+ *       协议层值域粗筛 + 按解析出的型号二次校验;一项都不传 = 与老协议逐字节
+ *       同形,后端走该型号出厂默认
  *     → 吃源图的代办(改图/图生视频):指纹逐张查账验归属(只能用自己名下的媒体)
  *     → 主机走统一媒体通道干活(字节从头到尾在主机手里;视频为分钟级长任务)
  *     → 落 blob(SHA-256 主机算)+ 账本记账(出生=该意识)
@@ -46,9 +49,16 @@ import {
   GHOST_CINDY_MAX_ASYNC_JOBS,
   GHOST_IMAGE_ASPECT_RATIOS,
   GHOST_MODEL_TIERS,
+  GHOST_VIDEO_MAX_DURATION_SECONDS,
+  GHOST_VIDEO_MAX_FPS,
+  GHOST_VIDEO_RATIOS,
+  GHOST_VIDEO_RESOLUTIONS,
   type GhostImageAspectRatio,
   type GhostModelTier,
   type GhostPipeModelResult,
+  type GhostVideoRatio,
+  type GhostVideoResolution,
+  type GhostVideoResultParams,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { probeImageSize } from './imageProbe.js';
@@ -63,6 +73,25 @@ export interface CindyMediaConfig {
   defaults: { standard: string; draft: string; best: string } | null;
 }
 
+/**
+ * 视频画面参数(意识可选传;不传的项由 provider 层填该型号的出厂默认)。
+ * 每一项都条件展开——不传时载荷里连键都没有,与老协议逐字节同形。
+ */
+export interface CindyVideoParams {
+  ratio?: GhostVideoRatio;
+  resolution?: GhostVideoResolution;
+  duration?: number;
+  fps?: number;
+}
+
+/** 某个视频型号的实际支持集(provider capabilities 的投影,用于按型号二次校验)。 */
+export interface CindyVideoCapabilities {
+  durations: readonly number[];
+  resolutions: readonly string[];
+  ratios: readonly string[];
+  fps: readonly number[];
+}
+
 export interface CindySlotDeps {
   getGhost(id: string): InstalledGhost | null;
   /** 主机统一图片通道(art 底层客户端);返回图片字节与 mime。
@@ -72,24 +101,33 @@ export interface CindySlotDeps {
     model: string;
     aspectRatio?: GhostImageAspectRatio;
   }): Promise<{ buffer: Uint8Array; mimeType: string }>;
-  /** 主机统一图片通道·改图;源图以磁盘路径喂给网关(意识摸不到路径)。 */
+  /** 主机统一图片通道·改图;源图以磁盘路径喂给网关(意识摸不到路径)。
+   *  aspectRatio 语义同 generateImage:不传 = 跟随源图画幅(后端 auto)。 */
   editImage(params: {
     prompt: string;
     model: string;
     imagePaths: string[];
+    aspectRatio?: GhostImageAspectRatio;
   }): Promise<{ buffer: Uint8Array; mimeType: string }>;
   /**
    * 主机统一视频通道·文生视频(art 视频 provider 层复用,submit→
-   * 轮询→下载一条龙在注入实现里完成);返回视频字节与 mime。长任务:
+   * 轮询→下载一条龙在注入实现里完成);返回视频字节与 mime,外加实际
+   * 生效的画面参数回执(上游上报值优先,缺项回落提交值)。长任务:
    * 分钟级才 resolve,在途名额在整个等待期占用。
    */
-  generateVideo(params: { prompt: string; model: string }): Promise<{ buffer: Uint8Array; mimeType: string }>;
+  generateVideo(
+    params: { prompt: string; model: string } & CindyVideoParams,
+  ): Promise<{ buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams }>;
   /** 主机统一视频通道·参考图生视频(1 张=首帧,2 张=首尾帧;源图以磁盘路径注入)。 */
-  editVideo(params: {
-    prompt: string;
-    model: string;
-    imagePaths: string[];
-  }): Promise<{ buffer: Uint8Array; mimeType: string }>;
+  editVideo(
+    params: { prompt: string; model: string; imagePaths: string[] } & CindyVideoParams,
+  ): Promise<{ buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams }>;
+  /**
+   * 该视频型号的画面参数支持集(provider capabilities;registry 缺席或查无
+   * 该型号 → null)。可选依赖:不注入 = 跳过按型号校验,只做协议层粗筛
+   * (值仍会被 provider 层自己的校验拦下,只是话术不如这里友好)。
+   */
+  videoCapabilities?(model: string): CindyVideoCapabilities | null;
   /**
    * 指纹 → 磁盘路径,且仅当该媒体在此意识名下(出生或画廊,查账本);
    * 不属于它 / 查无此账 / 文件缺失一律 null(不区分,不给探测空间)。
@@ -218,6 +256,8 @@ interface CindyAsyncJob {
     ext: string;
     model: string;
     modelLabel: string;
+    /** 实际生效的画面参数(异步代办只有视频;上游没报即缺省)。 */
+    videoParams?: GhostVideoResultParams;
   };
   /** failed:人话失败原因。 */
   error?: string;
@@ -260,6 +300,35 @@ const CATEGORY_LABEL: Record<CindyKindInfo['category'], string> = { image: '图�
 /** 指纹形状(与 blobStore 同一规则;这里先粗筛,细校验在归属解析)。 */
 const HASH_RE = /^[0-9a-f]{64}$/;
 
+/** 沙箱传来的数值粗筛:正整数且不超过上限(挡负数、小数、天文数字、NaN)。 */
+function isPositiveIntWithin(value: unknown, max: number): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= max;
+}
+
+/**
+ * 按型号能力核对画面参数,返回人话的"哪项不支持 + 该型号可用值";全部
+ * 支持返回 null。一次只报第一项不支持的——意识修一项再来即可,堆一长串
+ * 反而不好读。
+ */
+function describeUnsupportedVideoParams(
+  params: CindyVideoParams,
+  caps: CindyVideoCapabilities,
+): string | null {
+  if (params.ratio !== undefined && !caps.ratios.includes(params.ratio)) {
+    return `画幅 ${params.ratio}(可用:${caps.ratios.join(' / ')})`;
+  }
+  if (params.resolution !== undefined && !caps.resolutions.includes(params.resolution)) {
+    return `分辨率 ${params.resolution}(可用:${caps.resolutions.join(' / ')})`;
+  }
+  if (params.duration !== undefined && !caps.durations.includes(params.duration)) {
+    return `时长 ${params.duration}s(可用:${caps.durations.join(' / ')} 秒)`;
+  }
+  if (params.fps !== undefined && !caps.fps.includes(params.fps)) {
+    return `帧率 ${params.fps}fps(可用:${caps.fps.join(' / ')})`;
+  }
+  return null;
+}
+
 export class GhostCindySlot {
   private readonly inflight = new Map<string, number>();
   /** 异步代办任务表(jobId → 记录;惰性 sweep,过期即清)。 */
@@ -285,6 +354,10 @@ export class GhostCindySlot {
       tier?: unknown;
       model?: unknown;
       aspectRatio?: unknown;
+      ratio?: unknown;
+      resolution?: unknown;
+      duration?: unknown;
+      fps?: unknown;
       hashes?: unknown;
       callId?: unknown;
       mode?: unknown;
@@ -349,12 +422,12 @@ export class GhostCindySlot {
     }
     const callId = (p.callId as string | undefined) ?? 'unattributed';
 
-    // 画幅意图(可选,仅生图):意识声明比例,注入实现翻译成后端具体尺寸。
-    // 改图跟随源图画幅、视频画幅由 provider 层自治——带了就是用错协议,
-    // 明拒好过静默忽略(将来放开支持是向后兼容的放宽)。
+    // 画幅意图(可选,图像类代办):意识声明比例,注入实现翻译成后端具体
+    // 尺寸。视频类另有 ratio(值域不同)——带错了就是用错协议,明拒好过
+    // 静默忽略。不传 = 后端 auto(生图由模型自定,改图跟随源图画幅)。
     if (p.aspectRatio !== undefined) {
-      if (kind !== 'gen_image') {
-        return { ok: false, message: 'aspectRatio 仅支持 gen_image(改图跟随源图画幅,视频不收比例)' };
+      if (info.category !== 'image') {
+        return { ok: false, message: 'aspectRatio 仅支持图像类代办(视频画幅请用 ratio,值域不同)' };
       }
       if (
         typeof p.aspectRatio !== 'string' ||
@@ -364,6 +437,39 @@ export class GhostCindySlot {
       }
     }
     const aspectRatio = p.aspectRatio as GhostImageAspectRatio | undefined;
+
+    // 视频画面参数(可选,仅视频类代办):协议层只做值域/形状粗筛,按型号
+    // 的可用集在选型解析之后二次校验(各型号支持的时长差异很大)。图像类
+    // 带了这几项 = 用错协议,明拒。
+    const videoParamKeys = ['ratio', 'resolution', 'duration', 'fps'] as const;
+    const presentVideoKeys = videoParamKeys.filter((k) => p[k] !== undefined);
+    if (presentVideoKeys.length > 0 && info.category !== 'video') {
+      return {
+        ok: false,
+        message: `${presentVideoKeys.join(' / ')} 仅支持视频类代办(图像画幅请用 aspectRatio)`,
+      };
+    }
+    if (p.ratio !== undefined && !(GHOST_VIDEO_RATIOS as readonly unknown[]).includes(p.ratio)) {
+      return { ok: false, message: `未知视频画幅(可用:${GHOST_VIDEO_RATIOS.join(' / ')})` };
+    }
+    if (
+      p.resolution !== undefined &&
+      !(GHOST_VIDEO_RESOLUTIONS as readonly unknown[]).includes(p.resolution)
+    ) {
+      return { ok: false, message: `未知分辨率(可用:${GHOST_VIDEO_RESOLUTIONS.join(' / ')})` };
+    }
+    if (p.duration !== undefined && !isPositiveIntWithin(p.duration, GHOST_VIDEO_MAX_DURATION_SECONDS)) {
+      return { ok: false, message: `duration 不合法(1–${GHOST_VIDEO_MAX_DURATION_SECONDS} 的整数秒)` };
+    }
+    if (p.fps !== undefined && !isPositiveIntWithin(p.fps, GHOST_VIDEO_MAX_FPS)) {
+      return { ok: false, message: `fps 不合法(1–${GHOST_VIDEO_MAX_FPS} 的整数)` };
+    }
+    const videoParams: CindyVideoParams = {
+      ...(p.ratio !== undefined ? { ratio: p.ratio as GhostVideoRatio } : {}),
+      ...(p.resolution !== undefined ? { resolution: p.resolution as GhostVideoResolution } : {}),
+      ...(p.duration !== undefined ? { duration: p.duration as number } : {}),
+      ...(p.fps !== undefined ? { fps: p.fps as number } : {}),
+    };
 
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost || !ghost.enabled) {
@@ -421,6 +527,21 @@ export class GhostCindySlot {
         return { ok: false, message: '不支持的模型(不在主机白名单内)' };
       }
       model = p.model;
+    }
+
+    // 画面参数按**解析出的型号**二次校验:协议层值域是所有 provider 的
+    // 交集,单个型号支持的时长/帧率差异很大(seedance 4/6/8/10 秒,
+    // happyhorse 只有 5 秒)。不支持即明拒并列出该型号的可用值,不做最近似
+    // 降级——静默改成别的档位会让意识以为自己的参数生效了。
+    if (info.category === 'video' && presentVideoKeys.length > 0) {
+      const caps = this.deps.videoCapabilities?.(model) ?? null;
+      if (caps) {
+        const unsupported = describeUnsupportedVideoParams(videoParams, caps);
+        if (unsupported) {
+          const label = cfg.models.find((m) => m.id === model)?.label ?? model;
+          return { ok: false, message: `模型「${label}」不支持${unsupported}` };
+        }
+      }
     }
 
     // 吃源图的代办(改图/图生视频):指纹形状先粗筛(不占在途名额),
@@ -483,21 +604,28 @@ export class GhostCindySlot {
         modelLabel: string;
         width?: number;
         height?: number;
+        videoParams?: GhostVideoResultParams;
       }> => {
-        let generated: { buffer: Uint8Array; mimeType: string };
+        // 可选参数一律条件展开:不传时载荷里连键都没有,与老协议逐字节同形
+        // (videoParams 本身就是按此规则组装的,直接摊开即可)。
+        let generated: { buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams };
         if (kind === 'edit_image') {
-          generated = await this.deps.editImage({ prompt, model, imagePaths });
+          generated = await this.deps.editImage({
+            prompt,
+            model,
+            imagePaths,
+            ...(aspectRatio !== undefined ? { aspectRatio } : {}),
+          });
         } else if (kind === 'gen_image') {
-          // 画幅意图条件展开:不传时载荷里连键都没有,与老协议逐字节同形。
           generated = await this.deps.generateImage({
             prompt,
             model,
             ...(aspectRatio !== undefined ? { aspectRatio } : {}),
           });
         } else if (kind === 'edit_video') {
-          generated = await this.deps.editVideo({ prompt, model, imagePaths });
+          generated = await this.deps.editVideo({ prompt, model, imagePaths, ...videoParams });
         } else {
-          generated = await this.deps.generateVideo({ prompt, model });
+          generated = await this.deps.generateVideo({ prompt, model, ...videoParams });
         }
 
         const saved = await this.deps.saveGhostMedia({
@@ -523,7 +651,17 @@ export class GhostCindySlot {
         // 据此精确声明卡高,首帧零跳动;解析不出就缺省,意识回退估计值。
         const dims =
           kind === 'gen_image' || kind === 'edit_image' ? probeImageSize(generated.buffer) : null;
-        return { url: saved.url, hash: saved.hash, ext: saved.ext, model, modelLabel, ...(dims ?? {}) };
+        return {
+          url: saved.url,
+          hash: saved.hash,
+          ext: saved.ext,
+          model,
+          modelLabel,
+          ...(dims ?? {}),
+          // 画面参数回执(视频代办;注入实现没给就缺省):意识据此确认
+          // 自己传的参数是否被兑现——老宿主静默忽略新参数,有回执才分得清。
+          ...(generated.videoParams !== undefined ? { videoParams: generated.videoParams } : {}),
+        };
       };
 
       const expectedSeconds =
@@ -557,6 +695,7 @@ export class GhostCindySlot {
               ext: result.ext,
               model: result.model,
               modelLabel: result.modelLabel,
+              ...(result.videoParams !== undefined ? { videoParams: result.videoParams } : {}),
             };
             job.doneAt = Date.now();
           })

@@ -4639,6 +4639,29 @@ export const GHOST_IMAGE_ASPECT_RATIOS = ['1:1', '3:2', '2:3'] as const;
 export type GhostImageAspectRatio = (typeof GHOST_IMAGE_ASPECT_RATIOS)[number];
 
 /**
+ * cindy 槽视频代办的画幅比例。与生图的 aspectRatio 分开成两套值域:视频
+ * 后端(video provider 层)的公共集是 16:9 系,与图像后端的原生尺寸枚举
+ * 没有交集,合成一套只会让两边都出现"声明了却兑现不了"的值。这里登记的
+ * 是**所有已注册 provider 都支持**的交集,单个型号的实际支持集由主机在
+ * 解析出选型后二次校验(型号不支持即明拒,不做最近似降级)。
+ */
+export const GHOST_VIDEO_RATIOS = ['16:9', '9:16', '1:1', '4:3', '3:4'] as const;
+export type GhostVideoRatio = (typeof GHOST_VIDEO_RATIOS)[number];
+
+/** cindy 槽视频代办的分辨率档(同 GHOST_VIDEO_RATIOS 的口径:公共集 + 按型号二次校验)。 */
+export const GHOST_VIDEO_RESOLUTIONS = ['480p', '720p', '1080p'] as const;
+export type GhostVideoResolution = (typeof GHOST_VIDEO_RESOLUTIONS)[number];
+
+/**
+ * 视频时长/帧率的形状上限(秒 / fps)。这两项各型号差异大(如 seedance
+ * 支持 4/6/8/10 秒,happyhorse 只有 5 秒),协议层不枚举值域,只做"正整数
+ * 且不离谱"的粗筛,真正的可用集由主机按解析出的型号校验并在拒绝话术里
+ * 列出。粗筛的意义是挡住沙箱乱填(负数、小数、天文数字)。
+ */
+export const GHOST_VIDEO_MAX_DURATION_SECONDS = 60;
+export const GHOST_VIDEO_MAX_FPS = 120;
+
+/**
  * 异步代办(mode:'submit')完成结果的保留时长(毫秒,30 分钟):完成后
  * 过期即清,query_job 查无此单。TTL 之外还有每意识完成记录条数上限
  * (cindySlot 的 settled-job eviction):快速提交循环下最旧的完成记录会
@@ -4717,8 +4740,8 @@ export type GhostPipeCindyRequest =
       /**
        * 画幅比例(可选):'1:1' 方图 / '3:2' 横图 / '2:3' 竖图;不传 =
        * 后端自定(auto)。比例是意图声明,主机映射为该后端的具体尺寸,
-       * 实际像素以返回的 width/height 为准。仅生图支持——改图跟随源图
-       * 画幅,视频画幅由 provider 层自治,带了会被明拒。
+       * 实际像素以返回的 width/height 为准。图像类代办(生图/改图)专用,
+       * 视频类请改用 ratio(值域不同),带错了会被明拒。
        */
       aspectRatio?: GhostImageAspectRatio;
       /**
@@ -4739,6 +4762,11 @@ export type GhostPipeCindyRequest =
       hashes: string[];
       tier?: GhostModelTier;
       model?: string;
+      /**
+       * 画幅比例(可选,语义同 gen_image 分支)。不传 = 跟随源图画幅
+       * (后端 auto),这也是历史行为;传了则按该比例重绘。
+       */
+      aspectRatio?: GhostImageAspectRatio;
       /** 归因号(同 gen_image 分支)。 */
       callId?: string;
     }
@@ -4748,6 +4776,17 @@ export type GhostPipeCindyRequest =
       prompt: string;
       tier?: GhostModelTier;
       model?: string;
+      /**
+       * 画面参数(全部可选):不传 = 该型号的出厂默认(与历史行为逐字节
+       * 同形)。ratio/resolution 的值域见 GHOST_VIDEO_RATIOS /
+       * GHOST_VIDEO_RESOLUTIONS;duration(秒)与 fps 各型号支持集不同,
+       * 主机按解析出的选型校验,不支持即明拒并列出可用值。实际生效的
+       * 参数随结果回传(见 GhostPipeModelResult 的 videoParams)。
+       */
+      ratio?: GhostVideoRatio;
+      resolution?: GhostVideoResolution;
+      duration?: number;
+      fps?: number;
       /** 归因号(同 gen_image 分支)。 */
       callId?: string;
       /**
@@ -4769,6 +4808,11 @@ export type GhostPipeCindyRequest =
       hashes: string[];
       tier?: GhostModelTier;
       model?: string;
+      /** 画面参数(同 gen_video 分支;参考图不改变这几项的语义)。 */
+      ratio?: GhostVideoRatio;
+      resolution?: GhostVideoResolution;
+      duration?: number;
+      fps?: number;
       /** 归因号(同 gen_image 分支)。 */
       callId?: string;
       /** 异步模式(同 gen_video 分支)。 */
@@ -4822,6 +4866,22 @@ export type GhostPipeCindyRequest =
       hash: string;
     };
 
+/**
+ * 视频代办实际生效的画面参数回执(仅视频类代办)。取值优先用上游任务
+ * 上报的真实值,上游没报的那项回落主机提交值;各字段仍可能缺省(上游
+ * 没报且主机也没显式指定时)。类型是宽松的 string/number 而非请求侧的
+ * 枚举——回执是**上游说的**,不能假设它落在主机的值域里。
+ *
+ * 用途:老宿主会静默忽略请求里的新画面参数,意识拿这份回执才分得清
+ * "宿主不支持,给了默认档"与"宿主兑现了我要的档"。
+ */
+export interface GhostVideoResultParams {
+  durationSeconds?: number;
+  resolution?: string;
+  ratio?: string;
+  fps?: number;
+}
+
 /** cindy 槽代办的返回(cindy.send 的 resolve 值)。 */
 export type GhostPipeModelResult =
   | {
@@ -4843,6 +4903,8 @@ export type GhostPipeModelResult =
        */
       width?: number;
       height?: number;
+      /** 视频代办实际生效的画面参数(仅视频类代办;图像类不带此字段)。 */
+      videoParams?: GhostVideoResultParams;
     }
   | {
       ok: true;
@@ -4867,6 +4929,8 @@ export type GhostPipeModelResult =
       ext: string;
       model: string;
       modelLabel: string;
+      /** 与同步成功分支同形(异步代办只有视频,这里通常必带)。 */
+      videoParams?: GhostVideoResultParams;
     }
   | {
       /**

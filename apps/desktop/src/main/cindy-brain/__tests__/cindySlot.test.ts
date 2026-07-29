@@ -61,6 +61,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
   getOverride: ReturnType<typeof vi.fn>;
   getImageConfig: ReturnType<typeof vi.fn>;
   getVideoConfig: ReturnType<typeof vi.fn>;
+  videoCapabilities: ReturnType<typeof vi.fn>;
   saveGhostMedia: ReturnType<typeof vi.fn>;
   sniffDepositMime: ReturnType<typeof vi.fn>;
   depositMedia: ReturnType<typeof vi.fn>;
@@ -78,11 +79,24 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
   const generateVideo = vi.fn(async () => ({
     buffer: new Uint8Array([7, 8, 9]),
     mimeType: 'video/mp4',
+    videoParams: { durationSeconds: 4, resolution: '720p', ratio: '16:9', fps: 24 },
   }));
   const editVideo = vi.fn(async () => ({
     buffer: new Uint8Array([10, 11]),
     mimeType: 'video/mp4',
+    videoParams: { durationSeconds: 4, resolution: '720p', ratio: '16:9', fps: 24 },
   }));
+  // 按型号能力校验的数据源:仿 seedance 的支持集(时长 4/6/8/10,无 5 秒)。
+  const videoCapabilities = vi.fn((model: string) =>
+    model.startsWith('seedance')
+      ? {
+          durations: [4, 6, 8, 10],
+          resolutions: ['480p', '720p', '1080p'],
+          ratios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+          fps: [24],
+        }
+      : null,
+  );
   const resolveOwnedMedia = vi.fn(async (_ghostId: string, hash: string) => `/disk/${hash}.png`);
   const getOverride = vi.fn((_ghostId: string, _capability: string) => null as string | null);
   const getImageConfig = vi.fn(() => ({
@@ -129,6 +143,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     getOverride,
     getImageConfig,
     getVideoConfig,
+    videoCapabilities,
     saveGhostMedia,
     sniffDepositMime,
     depositMedia,
@@ -146,6 +161,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     getOverride,
     getImageConfig,
     getVideoConfig,
+    videoCapabilities,
     saveGhostMedia,
     sniffDepositMime,
     depositMedia,
@@ -225,13 +241,28 @@ describe('载荷校验', () => {
     expect(generateImage).toHaveBeenCalledTimes(2);
   });
 
-  it('画幅意图仅生图收:改图/视频带 aspectRatio → 明拒且不触发生成', async () => {
-    const { slot, editImage, generateVideo } = makeSlot();
-    const editBad = await slot.handleModelRequest('art', { ...EDIT_REQ, aspectRatio: '1:1' });
-    expect(editBad).toMatchObject({ ok: false });
-    expect((editBad as { message: string }).message).toContain('gen_image');
-    expect(editImage).not.toHaveBeenCalled();
+  it('画幅意图图像类通吃:改图也收 aspectRatio;不传时载荷无该键', async () => {
+    const { slot, editImage } = makeSlot();
+    const ok = await slot.handleModelRequest('art', { ...EDIT_REQ, aspectRatio: '1:1' });
+    expect(ok).toMatchObject({ ok: true });
+    expect(editImage).toHaveBeenLastCalledWith({
+      prompt: '加顶帽子',
+      model: 'gpt-image-2',
+      imagePaths: [`/disk/${HASH_S}.png`],
+      aspectRatio: '1:1',
+    });
 
+    // 不传 = 与老协议同形(连键都没有),后端 auto = 跟随源图画幅。
+    await slot.handleModelRequest('art', EDIT_REQ);
+    expect(editImage).toHaveBeenLastCalledWith({
+      prompt: '加顶帽子',
+      model: 'gpt-image-2',
+      imagePaths: [`/disk/${HASH_S}.png`],
+    });
+  });
+
+  it('aspectRatio 不收视频:视频带图像画幅 → 明拒且不触发生成', async () => {
+    const { slot, generateVideo } = makeSlot();
     const videoBad = await slot.handleModelRequest('art', {
       type: 'cindy-request',
       kind: 'gen_video',
@@ -239,7 +270,112 @@ describe('载荷校验', () => {
       aspectRatio: '2:3',
     });
     expect(videoBad).toMatchObject({ ok: false });
+    expect((videoBad as { message: string }).message).toContain('ratio');
     expect(generateVideo).not.toHaveBeenCalled();
+  });
+});
+
+describe('视频画面参数', () => {
+  const VIDEO_REQ = { type: 'cindy-request', kind: 'gen_video', prompt: '一只猫奔跑' };
+  const EDIT_VIDEO_REQ = {
+    type: 'cindy-request',
+    kind: 'edit_video',
+    prompt: '让它动起来',
+    hashes: [HASH_S],
+  };
+
+  it('合法参数透传;不传时载荷与老协议同形;实际生效参数随结果回传', async () => {
+    const { slot, generateVideo } = makeSlot();
+    const ok = await slot.handleModelRequest('art', {
+      ...VIDEO_REQ,
+      ratio: '9:16',
+      resolution: '1080p',
+      duration: 8,
+      fps: 24,
+    });
+    expect(ok).toMatchObject({ ok: true });
+    expect(generateVideo).toHaveBeenLastCalledWith({
+      prompt: '一只猫奔跑',
+      model: 'seedance-fast',
+      ratio: '9:16',
+      resolution: '1080p',
+      duration: 8,
+      fps: 24,
+    });
+
+    // 一项都不传 = 老协议逐字节同形(连键都没有),后端走型号出厂默认。
+    const bare = await slot.handleModelRequest('art', VIDEO_REQ);
+    expect(generateVideo).toHaveBeenLastCalledWith({ prompt: '一只猫奔跑', model: 'seedance-fast' });
+    // 回执照样带回来(注入实现给了就透传),意识据此判断参数是否兑现。
+    expect(bare).toMatchObject({
+      ok: true,
+      videoParams: { durationSeconds: 4, resolution: '720p', ratio: '16:9', fps: 24 },
+    });
+  });
+
+  it('部分传参:只展开传了的键,其余不出现在载荷里', async () => {
+    const { slot, editVideo } = makeSlot();
+    const ok = await slot.handleModelRequest('art', { ...EDIT_VIDEO_REQ, resolution: '480p' });
+    expect(ok).toMatchObject({ ok: true });
+    expect(editVideo).toHaveBeenLastCalledWith({
+      prompt: '让它动起来',
+      model: 'seedance-fast',
+      imagePaths: [`/disk/${HASH_S}.png`],
+      resolution: '480p',
+    });
+  });
+
+  it('值域粗筛:未知比例/分辨率、非正整数时长与帧率一律拒且不触发生成', async () => {
+    const { slot, generateVideo } = makeSlot();
+    for (const bad of [
+      { ratio: '21:9' },
+      { resolution: '4k' },
+      { duration: 0 },
+      { duration: 4.5 },
+      { duration: -1 },
+      { duration: 999 },
+      { duration: '8' },
+      { fps: 0 },
+      { fps: 1000 },
+    ]) {
+      const r = await slot.handleModelRequest('art', { ...VIDEO_REQ, ...bad });
+      expect(r, JSON.stringify(bad)).toMatchObject({ ok: false });
+    }
+    expect(generateVideo).not.toHaveBeenCalled();
+  });
+
+  it('按型号二次校验:型号不支持的时长明拒,话术带该型号可用值', async () => {
+    const { slot, generateVideo } = makeSlot();
+    // 5 秒在协议层粗筛内,但仿 seedance 的支持集是 4/6/8/10。
+    const bad = await slot.handleModelRequest('art', { ...VIDEO_REQ, duration: 5 });
+    expect(bad).toMatchObject({ ok: false });
+    expect((bad as { message: string }).message).toContain('4 / 6 / 8 / 10');
+    expect(generateVideo).not.toHaveBeenCalled();
+  });
+
+  it('videoCapabilities 缺席(查无该型号)→ 跳过按型号校验,粗筛过了就放行', async () => {
+    const { slot, generateVideo } = makeSlot({
+      videoCapabilities: vi.fn(() => null) as unknown as CindySlotDeps['videoCapabilities'],
+    });
+    const ok = await slot.handleModelRequest('art', { ...VIDEO_REQ, duration: 5 });
+    expect(ok).toMatchObject({ ok: true });
+    expect(generateVideo).toHaveBeenLastCalledWith({
+      prompt: '一只猫奔跑',
+      model: 'seedance-fast',
+      duration: 5,
+    });
+  });
+
+  it('画面参数不收图像类:生图/改图带 resolution → 明拒且不触发生成', async () => {
+    const { slot, generateImage, editImage } = makeSlot();
+    const genBad = await slot.handleModelRequest('art', { ...REQ, resolution: '1080p' });
+    expect(genBad).toMatchObject({ ok: false });
+    expect((genBad as { message: string }).message).toContain('aspectRatio');
+    expect(generateImage).not.toHaveBeenCalled();
+
+    const editBad = await slot.handleModelRequest('art', { ...EDIT_REQ, duration: 4 });
+    expect(editBad).toMatchObject({ ok: false });
+    expect(editImage).not.toHaveBeenCalled();
   });
 });
 

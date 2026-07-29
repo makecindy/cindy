@@ -1140,18 +1140,33 @@ const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '
 //     交卷 note,让用户看得见"这单是谁画的"。
 //     width/height = 图片真实像素宽高(仅图片代办;主机解析不出时缺省)——供
 //     聊天卡片时用它按比例精确声明卡高(见 §4.5),别拿去写进交卷文案。
-// 生图可选画幅 aspectRatio:'1:1' 方图 / '3:2' 横图 / '2:3' 竖图,不传 = 模型自定:
+// 图像可选画幅 aspectRatio:'1:1' 方图 / '3:2' 横图 / '2:3' 竖图,不传 = 后端自定:
 //   { kind: 'gen_image', prompt: '一只猫', aspectRatio: '3:2' }
 //   比例是意图声明(同 tier 哲学),主机翻译成该模型支持的具体尺寸,真实像素
-//   以返回的 width/height 为准。**仅生图收**——改图跟随源图画幅、视频不收比例,
-//   带上会被拒;用户没提横竖要求时别自作主张,不传让模型自定。
+//   以返回的 width/height 为准。**图像类专用**(gen_image 与 edit_image 都收;
+//   改图不传 = 跟随源图画幅);视频画幅是另一个参数 ratio,值域不同,带错会被拒。
+//   用户没提横竖要求时别自作主张,不传让后端自定。
 // 改图(需详单含 "edit";源图必须是本意识名下的,1–4 张——含用户过户给你的
 // args.attachments 指纹):
 //   { kind: 'edit_image', prompt, hashes: ['<指纹>'] }
+//   { kind: 'edit_image', prompt, hashes: ['<指纹>'], aspectRatio: '1:1' }  // 换画幅重绘
 // 视频(需详单 video 类目;分钟级长任务,返回形态同上,url 是 .mp4。同步等待
 // 期间主机自动替你的 tool-call 续命,分钟级任务放心 await):
 //   { kind: 'gen_video', prompt }                       // 文生视频
 //   { kind: 'edit_video', prompt, hashes: ['<指纹>'] }  // 参考图生视频(1–2 张)
+// 视频画面参数(四项全可选,不传 = 该型号出厂默认,这也是最省心的用法):
+//   ratio:'16:9' | '9:16' | '1:1' | '4:3' | '3:4'(视频专用,别和图像的
+//     aspectRatio 混用)
+//   resolution:'480p' | '720p' | '1080p'
+//   duration:秒(整数)。**各型号支持集不同**——传了不支持的值会被明拒,
+//     拒绝话术里带该型号的可用值,按提示改或者干脆不传。
+//   fps:帧率(整数),同样按型号校验。
+//   例:{ kind: 'gen_video', prompt: '猫在奔跑', ratio: '9:16', resolution: '1080p' }
+//   ⚠️ 高分辨率 + 长时长明显更贵也更慢:用户没提要求时不要自作主张调高,
+//      不传让型号自己定。
+//   成功返回多带一个 videoParams: { durationSeconds, resolution, ratio, fps }
+//   = 本单**实际生效**的参数(主机权威)。老宿主会静默忽略这四项,拿 videoParams
+//   跟你传的值对一下就知道兑现没有;要在交卷 note 里报参数,以它为准别报你传的。
 // 视频异步模式(可能超过 30 分钟续命天花板,或不想吊着 tool-call 等时):
 //   加 mode:'submit' → 受理后立即返回 { ok:true, jobId, status:'running',
 //   expectedSeconds }(资格审/源图归属仍同步校验,拒绝立即可见),生成在

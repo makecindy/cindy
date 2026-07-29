@@ -23,6 +23,7 @@ import {
   type GhostManifest,
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
+  type GhostVideoResultParams,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
@@ -131,7 +132,11 @@ import { runAssistantReplyHook } from './assistantReplyHook.js';
 import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 
 import { deriveCindyMediaConfig, type CindyMediaCatalogConfig } from './cindyMediaCatalog.js';
-import { GhostCindySlot } from './cindySlot.js';
+import {
+  GhostCindySlot,
+  type CindyVideoCapabilities,
+  type CindyVideoParams,
+} from './cindySlot.js';
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
@@ -1751,11 +1756,13 @@ async function readImageFileAsDataUri(absPath: string): Promise<string> {
  * submit→轮询→下载一条龙在 @cindy/mcps submitAndAwaitVideo(原 lizi_art 工具层
  * 的执行链,工具壳已退役);分钟级长任务,期间 cindySlot 在途名额持续占用。
  */
-async function runGhostVideo(params: {
-  alias: string;
-  prompt: string;
-  imageDataUris?: string[];
-}): Promise<{ buffer: Buffer; mimeType: string }> {
+async function runGhostVideo(
+  params: {
+    alias: string;
+    prompt: string;
+    imageDataUris?: string[];
+  } & CindyVideoParams,
+): Promise<{ buffer: Buffer; mimeType: string; videoParams: GhostVideoResultParams }> {
   const registry = getCindyProxyMediaService().backend.videoRegistry;
   if (!registry || !registry.hasAny()) {
     throw new Error('视频能力不可用:主机未配置视频通道');
@@ -1763,7 +1770,37 @@ async function runGhostVideo(params: {
   // 提交紧前重查(第二十一轮):参考图 data URI 准备是 await,窗口内被停用即拒。
   assertMediaModelStillEnabled('video', params.alias);
   const r = await submitAndAwaitVideo(registry, params);
-  return { buffer: r.buffer, mimeType: r.mimeType };
+  return {
+    buffer: r.buffer,
+    mimeType: r.mimeType,
+    // 实际生效参数回执(执行器已把上游上报值与提交值合并过)。
+    videoParams: {
+      durationSeconds: r.effectiveParams.duration,
+      resolution: r.effectiveParams.resolution,
+      ratio: r.effectiveParams.ratio,
+      fps: r.effectiveParams.fps,
+    },
+  };
+}
+
+/**
+ * 某视频型号的画面参数支持集(cindySlot 按型号二次校验用)。registry 缺席
+ * 或 alias 查无 → null,cindySlot 据此跳过按型号校验(值仍会被执行器兜底拦下)。
+ */
+function getGhostVideoCapabilities(model: string): CindyVideoCapabilities | null {
+  try {
+    const registry = getCindyProxyMediaService().backend.videoRegistry;
+    if (!registry || !registry.hasAny()) return null;
+    const caps = registry.resolveByAlias(model).provider.capabilities;
+    return {
+      durations: caps.supportedDurations,
+      resolutions: caps.supportedResolutions,
+      ratios: caps.supportedRatios,
+      fps: caps.supportedFps,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1813,33 +1850,42 @@ export function getGhostCindySlot(): GhostCindySlot {
           humanizeImageChannelError(err);
         }
       },
-      editImage: async ({ prompt, model, imagePaths }) => {
+      editImage: async ({ prompt, model, imagePaths, aspectRatio }) => {
         try {
           assertMediaModelStillEnabled('image', model);
           return decodeImageResponse(
-            await getCindyProxyMediaService().backend.editImage({ model: model as GatewayImageModel, prompt, imagePaths }),
+            await getCindyProxyMediaService().backend.editImage({
+              model: model as GatewayImageModel,
+              prompt,
+              imagePaths,
+              // 同 generateImage:不带画幅意图时不传 size,网关缺省 'auto'
+              // (改图的 auto 语义 = 跟随源图画幅,与放开之前行为一致)。
+              ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+            }),
           );
         } catch (err) {
           humanizeImageChannelError(err);
         }
       },
-      generateVideo: async ({ prompt, model }) => {
+      generateVideo: async ({ prompt, model, ...videoParams }) => {
         try {
           assertMediaModelStillEnabled('video', model);
-          return await runGhostVideo({ alias: model, prompt });
+          return await runGhostVideo({ alias: model, prompt, ...videoParams });
         } catch (err) {
           humanizeImageChannelError(err);
         }
       },
-      editVideo: async ({ prompt, model, imagePaths }) => {
+      editVideo: async ({ prompt, model, imagePaths, ...videoParams }) => {
         try {
           assertMediaModelStillEnabled('video', model);
           const imageDataUris = await Promise.all(imagePaths.map(readImageFileAsDataUri));
-          return await runGhostVideo({ alias: model, prompt, imageDataUris });
+          return await runGhostVideo({ alias: model, prompt, imageDataUris, ...videoParams });
         } catch (err) {
           humanizeImageChannelError(err);
         }
       },
+      // 画面参数按型号二次校验的数据源(registry capabilities)。
+      videoCapabilities: getGhostVideoCapabilities,
       getOverride: (ghostId, capability) => {
         return readGhostCindyOverrides(ghostId)[capability as CindyCapabilityKey] ?? null;
       },

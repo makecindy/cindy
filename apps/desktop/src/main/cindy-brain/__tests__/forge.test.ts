@@ -540,6 +540,12 @@ describe('FORGE_GUIDE', () => {
       '"cindy": { "media": ["deposit"] }',
       '每意识配额 1GB',
       '寄存物不是产物',
+      // 2026-07-29 媒体代办画面参数:edit_image 放开 aspectRatio,视频四参数
+      // (ratio/resolution/duration/fps)+ 实际生效参数回执 videoParams。
+      '图像可选画幅 aspectRatio',
+      '视频画面参数(四项全可选',
+      'videoParams',
+      '各型号支持集不同',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }
