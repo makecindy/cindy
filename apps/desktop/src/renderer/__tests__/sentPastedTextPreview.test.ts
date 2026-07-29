@@ -146,6 +146,18 @@ describe('UserMessage pasted-text chip wiring', () => {
     expect(source.match(/handlePastedTextChipClick,/g)?.length).toBe(3);
   });
 
+  it('S1b 三个调用点都拿到同一份 sessionReferences(不再有 undefined 占位)', () => {
+    // 召唤卡 prompt 曾经漏传 sessionReferences(实参列表止于 slashCommandRanges),
+    // prompt 里的会话深链 chip 因此少了 referenceMetadata 的 tooltip 明细行,与气泡
+    // 正文渲染不一致(PR #966 review)。sessionReferences 按 sessionId /
+    // messageClientId 匹配、不依赖文本偏移,三处理应拿同一份。
+    // 三个调用点的末两个实参恒为 `sessionReferences, handlePastedTextChipClick`,
+    // 一并锁住"都可点"与"都有引用元数据"。
+    expect(
+      source.match(/sessionReferences,\s*\n\s*handlePastedTextChipClick,/g)?.length,
+    ).toBe(3);
+  });
+
   it('S2 ToolPayloadLightbox 以只读 text 模式挂载', () => {
     const lightboxStart = source.indexOf('{pastedTextPreview !== null && (');
     expect(lightboxStart).toBeGreaterThan(-1);

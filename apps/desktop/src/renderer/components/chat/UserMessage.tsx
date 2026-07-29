@@ -1492,7 +1492,13 @@ export function UserMessage({
                                   ghostCardPromptSourceStart,
                                   ghostCardPromptBody.length,
                                 ),
-                            undefined,
+                            // 召唤卡 prompt 与气泡正文用同一份 sessionReferences:它按
+                            // sessionId / messageClientId 匹配,不依赖文本偏移,不需要像
+                            // pastedTextRanges / slashCommandRanges 那样投影到 prompt 局部
+                            // 坐标。此前这里漏传(实参列表止于 slashCommandRanges),导致
+                            // prompt 里的会话深链 chip 少了 referenceMetadata 的 tooltip
+                            // 明细行,与正文渲染不一致(PR #966 review)。
+                            sessionReferences,
                             handlePastedTextChipClick,
                           )
                         : undefined
