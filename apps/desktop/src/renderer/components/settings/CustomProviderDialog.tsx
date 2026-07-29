@@ -601,9 +601,10 @@ export function CustomProviderDialog({
             .map((m) => ({ ...m, name: m.name || m.id })),
           ...result.models.map((m) => {
             const cur = currentById.get(m.id);
-            // contextWindow:用户已填的优先;新模型带上端点声明的发现值(review P1:
-            // 只从 cur 拷会把发现值丢掉,保存后又回落 200K)。
-            const contextWindow = cur?.contextWindow ?? m.contextWindow;
+            // contextWindow:表单已有的行以用户当前值为准——包括「显式清空」
+            // (cur 存在但无值时不得被发现值回填,review P1);只有表单没见过的
+            // 新模型才带上端点声明的发现值(否则保存后回落 200K,review P1)。
+            const contextWindow = cur ? cur.contextWindow : m.contextWindow;
             return {
               id: m.id,
               name: cur?.name || m.name,
@@ -1247,7 +1248,9 @@ export function CustomProviderDialog({
                                 }
                                 if (!/^[0-9][0-9,_ ]*$/.test(trimmed)) return y;
                                 const parsed = Number.parseInt(trimmed.replace(/[,_ ]/g, ''), 10);
-                                if (!Number.isFinite(parsed) || parsed <= 0) return y;
+                                // isSafeInteger:超出安全整数会被 parseInt 静默舍入,
+                                // 落盘值与用户输入不一致(review P1)。
+                                if (!Number.isSafeInteger(parsed) || parsed <= 0) return y;
                                 return { ...y, contextWindow: parsed };
                               }),
                             }))
