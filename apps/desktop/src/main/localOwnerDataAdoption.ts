@@ -252,6 +252,57 @@ async function dbSidecarsPresent(
 }
 
 /**
+ * 把 local 库(连同可能残留的 -wal/-shm)改名归档。
+ * sidecar 先、db 最后:前置检查已确认此刻没有 sidecar(probeLocalDb 的 open+close
+ * 会 checkpoint),这里是防御——万一残留却只搬走主库,原路径会留下与新建 local 库
+ * 失配的 WAL,回放起来可能串台(Copilot review)。db 最后搬,它成功才算归档完成。
+ */
+async function archiveLocalDb(deps: LocalOwnerAdoptionDeps, localDbPath: string): Promise<void> {
+  const stamp = deps.now().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const archivePath = `${localDbPath}${ADOPTED_DB_SUFFIX}${stamp}-${archiveSeq++}`;
+  for (const suffix of DB_SIDECAR_SUFFIXES) {
+    const sidecar = `${localDbPath}${suffix}`;
+    if (!(await deps.fs.pathExists(sidecar))) continue;
+    const movedSidecar = await moveWithoutOverwrite(deps.fs, sidecar, `${archivePath}${suffix}`);
+    if (movedSidecar.moved === 0) {
+      throw new Error(`archive target already exists: ${archivePath}${suffix}`);
+    }
+  }
+  const archived = await moveWithoutOverwrite(deps.fs, localDbPath, archivePath);
+  if (archived.moved === 0) throw new Error(`archive target already exists: ${archivePath}`);
+  deps.log.info('local owner adoption: local db archived as %s', path.basename(archivePath));
+}
+
+/**
+ * 只归档 local 库、不碰任何共享面(owner 文件与凭证)。用于 marker 落盘失败:那时
+ * 没有任何持久化渠道记录所有权,把源从活路径移走是唯一能阻止共用机器上另一个账号
+ * 重复认领同一批数据的手段(Greptile review)。导入已经提交成功,数据确实在本账号
+ * 下,所以移走源不损失任何东西;rename 不分配新数据块,marker 写失败的典型原因
+ * (磁盘满)下通常仍能成功。passive / 有并发实例时不做——那两种情况下动共享文件
+ * 本身就是禁区,宁可留着让下次登录重来。best-effort,失败只 warn。
+ */
+async function archiveLocalDbOnly(
+  deps: LocalOwnerAdoptionDeps,
+  localDbPath: string,
+): Promise<void> {
+  try {
+    if (!(await deps.fs.pathExists(localDbPath))) return;
+    if (deps.passiveSharedUserData() || deps.hasConcurrentLiveInstances()) {
+      deps.log.info(
+        'local owner adoption: local db archive skipped (passive or concurrent instance); another account could still re-claim it until the marker lands',
+      );
+      return;
+    }
+    await archiveLocalDb(deps, localDbPath);
+  } catch (err) {
+    deps.log.warn(
+      'local owner adoption: local db archive after marker failure did not complete: %s',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+/**
  * 导入提交后的收尾:归档 local 库 → 搬 owners 非 dialogues 项 → 搬凭证前缀。
  * 全部是「已提交之后」的整理动作,任一步失败都不影响会话可见性,因此只 warn 并
  * 让调用方保留 importedOwnerKey 续跑凭据(下次登录静默重来,各步都幂等)。
@@ -364,26 +415,7 @@ async function finishAdoption(
       // 归档是这一步里唯一「抽走别人正在用的库」的动作:入口复查之后到这里仍有
       // 一小段时间,再强制探一次(不走 500ms 节流,Greptile review)。
       if (deps.hasConcurrentLiveInstances()) throw new AdoptionInterruptedError();
-      const stamp = deps.now().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-      const archivePath = `${localDbPath}${ADOPTED_DB_SUFFIX}${stamp}-${archiveSeq++}`;
-      // sidecar 先、db 最后:前置检查已确认此刻没有 -wal/-shm(checkpoint 过),
-      // 这里是防御——万一残留却只搬走主库,原路径会留下与新建 local 库失配的
-      // WAL,回放起来可能串台(Copilot review)。db 最后搬,它成功才算归档完成。
-      for (const suffix of DB_SIDECAR_SUFFIXES) {
-        const sidecar = `${localDbPath}${suffix}`;
-        if (!(await deps.fs.pathExists(sidecar))) continue;
-        const movedSidecar = await moveWithoutOverwrite(
-          deps.fs,
-          sidecar,
-          `${archivePath}${suffix}`,
-        );
-        if (movedSidecar.moved === 0) {
-          throw new Error(`archive target already exists: ${archivePath}${suffix}`);
-        }
-      }
-      const archived = await moveWithoutOverwrite(deps.fs, localDbPath, archivePath);
-      if (archived.moved === 0) throw new Error(`archive target already exists: ${archivePath}`);
-      deps.log.info('local owner adoption: local db archived as %s', path.basename(archivePath));
+      await archiveLocalDb(deps, localDbPath);
     } catch (err) {
       warn('local db archive', err);
     }
@@ -741,8 +773,18 @@ async function commitAdoptionTail(
       // 收尾一步都不做,直接按「未完成」返回:local 侧完整留在原地,下次登录重来
       // (导入幂等,不会产生重复会话)。
       deps.log.warn(
-        'local owner adoption: imported marker write failed; skipping cleanup so the batch keeps a single owner (will retry next login): %s',
+        'local owner adoption: imported marker write failed; skipping shared-file cleanup so the batch keeps a single owner (will retry next login): %s',
         err instanceof Error ? err.message : String(err),
+      );
+      // marker 写不进去就没有任何持久化渠道记录「这批已归本账号」,共用机器上另一个
+      // 账号下次登录会看到活着的 local 库、把同一批会话再认领一遍(Greptile review)。
+      // 能做的收口是**只归档 local 库**:导入已提交成功(数据确实在本账号下了),
+      // 把源移出活路径就没人会再认领它。owner 文件与凭证**依然不动**——它们是共享
+      // 面,搬走才会造成「一半在这边一半在那边」的所有权劈裂。
+      await archiveLocalDbOnly(
+        deps,
+        localDbPath ??
+          path.join(deps.userDataDir, `${deps.dbFilePrefix}-${LOCAL_DATA_OWNER_ID}.db`),
       );
       deps.ui.publish('done');
       return { status: 'adopted', imported, resumed };

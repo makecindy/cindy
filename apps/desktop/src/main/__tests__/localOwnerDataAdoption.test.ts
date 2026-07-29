@@ -553,15 +553,37 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
 
     expect(result.status).toBe('adopted');
     expect(phases).toEqual(['confirm', 'running', 'done']);
-    // 少了这条凭据,共用机器上另一个账号可能把同一批数据再认领一遍——所以库、
-    // owner 文件、凭证一个都不能动。
-    expect(mem.exists(LOCAL_DB)).toBe(true);
-    expect(archivedDbNames(mem)).toHaveLength(0);
+    // 共享面(owner 文件、凭证)一个都不能动:搬走才会造成所有权劈裂。
     expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'))).toBe(true);
     expect(mem.exists(path.join(ACCOUNT_OWNER_DIR, 'learn'))).toBe(false);
     expect(
       mem.exists(path.join(SECRETS_DIR, `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}k.enc`)),
     ).toBe(true);
+    // 但 local 库要归档:没有 marker 记所有权时,把源移出活路径是唯一能阻止
+    // 另一个账号重复认领同一批数据的手段(Greptile review)。
+    expect(mem.exists(LOCAL_DB)).toBe(false);
+    expect(archivedDbNames(mem)).toHaveLength(1);
+  });
+
+  it('marker 写失败且实例非独占时连归档都不做(passive/并发下动共享文件是禁区)', async () => {
+    const { mem, deps } = createHarness({
+      concurrent: () => false,
+      passive: false,
+      fsOverrides: {
+        writeFile: async () => {
+          throw errnoError('ENOSPC', MARKER);
+        },
+      },
+    });
+    mem.addFile(LOCAL_DB);
+    // 导入提交后、归档前冒出并发实例。
+    let calls = 0;
+    deps.hasConcurrentLiveInstances = () => calls++ >= 2;
+
+    await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+    expect(archivedDbNames(mem)).toHaveLength(0);
   });
 
   it('续跑时源库指纹没变 → 静默续跑,不再弹窗', async () => {
