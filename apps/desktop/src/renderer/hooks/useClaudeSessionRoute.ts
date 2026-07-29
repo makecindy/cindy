@@ -38,6 +38,13 @@ export function useClaudeSessionRoute(
   const [observation, setObservation] = useState<
     (ClaudeSessionRouteState & { sessionId: string }) | null
   >(null);
+  // 禁用即失效(渲染期,setState-in-render 惯用法):enabled 随错误形态翻转
+  // (如 ErrorBanner 的 wantCcRouteState),false → true(同 sessionId)期间
+  // registry 状态可能已变——旧观察值不得在重新启用的头几帧冒充新真值,必须等
+  // 新一轮 GET / push 落地(PR review P1;与 useCodexRuntimeRoute 同法)。
+  if (!enabled && observation !== null) {
+    setObservation(null);
+  }
 
   useEffect(() => {
     if (!enabled || !sessionId) return undefined;

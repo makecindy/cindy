@@ -177,6 +177,15 @@ describe('ErrorBanner billing CTA', () => {
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
   });
 
+  it('honors the bridge-failure veto for cc sessions on budget (codex/) top-level models', () => {
+    // cc 会话顶层是 codex/ 骨折模型:子代理照样可以覆写 bridge 请求,失败归因
+    // 指向 bridge 时 codex/ 子句不得再按顶层模型判成网关计费(PR review P1)。
+    mocks.claudeRoute.mockReturnValue({ route: null, lastFailedRequestBridge: true });
+    renderBanner({ providerId: null, agentKind: 'cc', modelId: 'codex/gpt-5.5' });
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
+    expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
+  });
+
   it('hides the CTA for explicit XD sessions when the failed request was a bridge override', () => {
     // 显式 XD 会话的子代理 bridge 覆写按请求绕过会话来源:providerId=xd +
     // 顶层网关模型也不得把 bridge 配额失败引导去购买点数(PR review P1)。

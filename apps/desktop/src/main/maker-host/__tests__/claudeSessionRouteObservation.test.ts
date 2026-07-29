@@ -288,12 +288,43 @@ describe('claude session route observation (routing transform ② 段)', () => {
     };
     return decision.localHandler({ res: { statusCode: 0 } }).then(() => {
       expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
-      // ……随后 forward 路径 POST 失败落地 → 覆写为非 bridge。
-      observer({ method: 'POST', status: 429, requestHeaders: SESSION_HEADER });
+      // Auto 权限分类器的辅助请求失败不参与归因:它的失败走 auto→ask 协调器,
+      // 不进错误横幅,并发后落地不得把 bridge 归因误覆写回 false(PR review P1)。
+      const classifierBody = Buffer.from(
+        JSON.stringify({
+          max_tokens: 512,
+          system: 'You are a security monitor for autonomous AI coding agents.',
+          messages: [],
+        }),
+      );
+      observer({
+        method: 'POST',
+        status: 429,
+        requestHeaders: SESSION_HEADER,
+        requestBody: classifierBody,
+      });
+      expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
+      // ……随后 forward 路径主推理 POST 失败落地 → 覆写为非 bridge。
+      observer({
+        method: 'POST',
+        status: 429,
+        requestHeaders: SESSION_HEADER,
+        requestBody: Buffer.from('{"model":"claude-opus-4-8","max_tokens":32000}'),
+      });
       expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(false);
       // 成功响应 / GET 不参与归因。
-      observer({ method: 'POST', status: 200, requestHeaders: SESSION_HEADER });
-      observer({ method: 'GET', status: 404, requestHeaders: SESSION_HEADER });
+      observer({
+        method: 'POST',
+        status: 200,
+        requestHeaders: SESSION_HEADER,
+        requestBody: Buffer.from('{}'),
+      });
+      observer({
+        method: 'GET',
+        status: 404,
+        requestHeaders: SESSION_HEADER,
+        requestBody: Buffer.from(''),
+      });
       expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(false);
     });
   });

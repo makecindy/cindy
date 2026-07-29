@@ -233,8 +233,11 @@ export function ErrorBanner({
   const ccBridgeFailureVeto = agentKind === 'cc' && ccLastFailedRequestBridge;
   const isGatewayBilledSource =
     (normalizedProviderId === 'xd' && !isSubscriptionBridgeModel && !ccBridgeFailureVeto) ||
+    // codex/ 骨折模型子句同样吃 bridge 失败否决:cc 会话顶层是 codex/ 模型时,
+    // 子代理照样可以覆写 bridge 请求,失败归因优先于顶层模型判断(PR review P1)。
     ((normalizedProviderId === null || normalizedProviderId === 'xd') &&
-      !!modelId?.startsWith('codex/')) ||
+      !!modelId?.startsWith('codex/') &&
+      !ccBridgeFailureVeto) ||
     // codex 隐式来源必须等 runtime route 真值:占位 env-key 会把 OAuth 订阅
     // 会话的配额错误误判成网关计费(与 TodaySpendChip 同口径)。持久化历史
     // 错误不启用:共享 app-server 的当前路由 ≠ 产生该失败那一轮的路由,

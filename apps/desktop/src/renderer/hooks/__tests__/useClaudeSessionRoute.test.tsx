@@ -87,6 +87,33 @@ describe('useClaudeSessionRoute session binding', () => {
     expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false });
   });
 
+  it('invalidates the stored observation while disabled (no stale frame on re-enable)', async () => {
+    // enabled 随错误形态翻转(ErrorBanner wantCcRouteState):false → true 期间
+    // registry 状态可能已变,旧观察值不得在重新启用的头几帧冒充新真值,必须等
+    // 新一轮 GET 落地(PR review P1;与 useCodexRuntimeRoute 同法)。
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useClaudeSessionRoute('s1', enabled),
+      { initialProps: { enabled: true } },
+    );
+    await act(async () => {
+      pending[0].resolve({ route: 'gateway', lastFailedRequestBridge: true });
+      await pending[0].promise;
+    });
+    await waitFor(() => expect(result.current.lastFailedRequestBridge).toBe(true));
+
+    rerender({ enabled: false });
+    rerender({ enabled: true });
+    // 旧观察值已在禁用渲染里清空:重新启用后为空状态,等新 GET。
+    expect(result.current).toEqual({ route: null, lastFailedRequestBridge: false });
+
+    await act(async () => {
+      pending[1].resolve({ route: 'gateway', lastFailedRequestBridge: false });
+      await pending[1].promise;
+    });
+    await waitFor(() => expect(result.current.route).toBe('gateway'));
+    expect(result.current.lastFailedRequestBridge).toBe(false);
+  });
+
   it('carries lastFailedRequestBridge through pushes without dropping the observed route', async () => {
     // bridge 子代理失败置归因、主路由不变;下一笔非 bridge 失败覆写归因。
     const { result } = renderHook(() => useClaudeSessionRoute('s1', true));
