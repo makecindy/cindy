@@ -35,10 +35,13 @@ import {
   createResponsesChatHandler,
   type ChatBridgeCapabilities,
 } from '@cindy/responses-chat-bridge';
+import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-bridge';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from './codex-gateway-config.js';
+import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { getActiveCatalog } from './active-catalog.js';
 import {
   gatewayDefaultRouteDecision,
@@ -50,6 +53,7 @@ import {
   isHostInjectedAuthSession,
   isUserProviderSession,
   getUserProviderIdForSession,
+  readProviderOAuthToken,
   providerRoutingServesWireModel,
   resolveImplicitProviderOAuthRouteDecision,
   resolveProviderOAuthControlRouteDecision,
@@ -65,6 +69,7 @@ import { encryptedStripController, imageGenerationStripController } from './thre
 import { createMakerLogger } from './logger-adapter.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import { outboundFetch } from './outbound-fetch.js';
+import { desktopAnthropicImageCodec } from './anthropic-image-codec.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
@@ -505,60 +510,295 @@ function createChatBridgeDecision(
   }, { logger: log, fetchImpl: outboundFetch });
   return {
     localHandler: ({ rawBody, parsedBody, res }) => {
-      let body = parsedBody;
-      const strippedBody = stripImageGenerationItemsWithoutIdFromBody(rawBody);
-      if (strippedBody) {
-        try {
-          body = JSON.parse(strippedBody.toString('utf8'));
-        } catch {
-          // Keep the already parsed body if the defensive strip result cannot be parsed.
-        }
-      }
-      if (requestModelOverride && isPlainObject(body)) {
-        body = stripGuardianProviderSearchTools({
-          ...body,
-          model: requestModelOverride,
-        });
-      }
-      if (instructions && isPlainObject(body)) {
-        const existing = body.instructions;
-        const existingText = Array.isArray(existing)
-          ? existing.map((part) => {
-            if (!isPlainObject(part) || typeof part.type !== 'string') return '';
-            if (
-              (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text')
-              && typeof part.text === 'string'
-            ) {
-              return part.text;
-            }
-            if (part.type === 'refusal' && typeof part.refusal === 'string') return part.refusal;
-            return '';
-          }).join('')
-          : typeof existing === 'string'
-            ? existing
-            : '';
-        body = {
-          ...body,
-          instructions: existingText.includes(instructions)
-            ? existing
-            : Array.isArray(existing)
-              ? [...existing, { type: 'input_text', text: `\n\n${instructions}` }]
-              : [existingText, instructions].filter(Boolean).join('\n\n'),
-        };
-      }
-      // localHandler 在 transform 链**之前**执行(引擎按路由决策短路),跨来源恢复的
-      // 加密压缩块不会被 createCrossProviderCompactionCompatTransform 处理;而 bridge
-      // 的翻译层遇到 compaction 项会按不支持的输入 400(Greptile P1 第二轮)。Chat
-      // bridge 目标上游定义上永远不是 ChatGPT,这里无条件做同一份替换。
-      const compactionSafe = replaceEncryptedCompactionItems(body);
-      if (compactionSafe) {
-        log.info('replaced encrypted compaction history for chat-bridge upstream', {
-          providerId,
-          upstreamBase: route.routing.upstream,
-        });
-        body = compactionSafe;
-      }
+      const body = prepareLocalBridgeBody({
+        rawBody,
+        parsedBody,
+        instructions,
+        requestModelOverride,
+        bridge: 'chat',
+        providerId,
+        upstreamBase: route.routing.upstream,
+      });
       return handler.handle({ parsedBody: body, res });
+    },
+  };
+}
+
+interface PrepareLocalBridgeBodyOptions {
+  rawBody: Buffer;
+  parsedBody: unknown;
+  instructions?: string;
+  requestModelOverride?: string;
+  bridge: 'chat' | 'anthropic';
+  providerId: string;
+  upstreamBase: string;
+}
+
+/**
+ * localHandler runs before the shared request transform chain. Keep the preprocessing
+ * needed by every Responses bridge in one place so adding another wire adapter cannot
+ * accidentally lose product instructions or cross-provider compaction recovery.
+ */
+function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
+  let body = opts.parsedBody;
+  const strippedBody = stripImageGenerationItemsWithoutIdFromBody(opts.rawBody);
+  if (strippedBody) {
+    try {
+      body = JSON.parse(strippedBody.toString('utf8'));
+    } catch {
+      // Keep the already parsed body if the defensive strip result cannot be parsed.
+    }
+  }
+  if (opts.requestModelOverride && isPlainObject(body)) {
+    body = stripGuardianProviderSearchTools({
+      ...body,
+      model: opts.requestModelOverride,
+    });
+  }
+  if (opts.instructions && isPlainObject(body)) {
+    const existing = body.instructions;
+    const existingText = Array.isArray(existing)
+      ? existing.map((part) => {
+        if (!isPlainObject(part) || typeof part.type !== 'string') return '';
+        if (
+          (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text')
+          && typeof part.text === 'string'
+        ) {
+          return part.text;
+        }
+        if (part.type === 'refusal' && typeof part.refusal === 'string') return part.refusal;
+        return '';
+      }).join('')
+      : typeof existing === 'string'
+        ? existing
+        : '';
+    body = {
+      ...body,
+      instructions: existingText.includes(opts.instructions)
+        ? existing
+        : Array.isArray(existing)
+          ? [...existing, { type: 'input_text', text: `\n\n${opts.instructions}` }]
+          : [existingText, opts.instructions].filter(Boolean).join('\n\n'),
+    };
+  }
+  const compactionSafe = replaceEncryptedCompactionItems(body);
+  if (compactionSafe) {
+    log.info('replaced encrypted compaction history for local bridge upstream', {
+      bridge: opts.bridge,
+      providerId: opts.providerId,
+      upstreamBase: opts.upstreamBase,
+    });
+    body = compactionSafe;
+  }
+  return body;
+}
+
+function rewriteAnthropicBridgeModel(model: string, stripPrefix: string | undefined): string {
+  const stripped = stripPrefix && model.startsWith(stripPrefix) ? model.slice(stripPrefix.length) : model;
+  return stripped.replace(/\[1m\]$/, '');
+}
+
+function isOfficialAnthropicUpstream(value: string): boolean {
+  try {
+    return new URL(value).hostname.toLowerCase() === 'api.anthropic.com';
+  } catch {
+    return false;
+  }
+}
+
+function appendCommaSeparatedHeaderToken(
+  headers: Record<string, string>,
+  name: string,
+  token: string,
+): void {
+  const existingName = Object.keys(headers).find((candidate) => (
+    candidate.toLowerCase() === name.toLowerCase()
+  ));
+  const existing = existingName ? headers[existingName] : '';
+  const values = existing
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (!values.includes(token)) values.push(token);
+  if (existingName && existingName !== name) delete headers[existingName];
+  headers[name] = values.join(',');
+}
+
+function claudeCodeSessionId(token: string): string {
+  const hash = createHash('sha256')
+    .update(`claude-code-session:${token}`, 'utf8')
+    .digest('hex');
+  const variant = ((Number.parseInt(hash[16], 16) & 0x3) | 0x8).toString(16);
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-${variant}${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+}
+
+function claudeOAuthHeaders(
+  base: Record<string, string>,
+  token: string,
+): Record<string, string> {
+  return {
+    ...base,
+    authorization: `Bearer ${token}`,
+    'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
+    'user-agent': '@anthropic-ai/sdk/0.74.0',
+    'x-app': 'cli',
+    'x-stainless-retry-count': '0',
+    'x-stainless-runtime': 'node',
+    'x-stainless-lang': 'js',
+    'x-stainless-timeout': '600',
+    'x-stainless-arch': process.arch,
+    'x-stainless-os': process.platform,
+    'x-stainless-package-version': '0.74.0',
+    'x-stainless-runtime-version': process.version.slice(1),
+    'x-claude-code-session-id': claudeCodeSessionId(token),
+    'x-client-request-id': randomUUID(),
+  };
+}
+
+/**
+ * Responses → Anthropic Messages local bridge. The bridge owns both request and
+ * response translation; this host layer only resolves the selected provider, supplies
+ * provider-owned credentials, and restores preprocessing skipped by localHandler.
+ */
+function createAnthropicBridgeDecision(
+  route: Awaited<ReturnType<typeof resolveSessionRoute>>,
+  instructions: string | undefined,
+  wireModel: string,
+): RoutingDecision | null {
+  if (!route || route.routing.wireProtocol !== 'anthropic-messages') return null;
+  const isXdGatewayBridge =
+    route.providerId === 'xd' && route.routing.authStrategy === 'gateway-key';
+  const gatewayKey = isXdGatewayBridge ? _readGatewayKey() : null;
+  const upstreamBase = isXdGatewayBridge
+    ? claudeUpstreamEndpoint().trim()
+    : route.routing.upstream;
+  if (isXdGatewayBridge && (!gatewayKey || !upstreamBase)) {
+    return {
+      localHandler: async ({ res }) => {
+        res.writeHead(503, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        res.end(JSON.stringify({
+          error: {
+            type: 'authentication_error',
+            code: 'cindy_gateway_credentials_unavailable',
+            message: 'Cindy AI credentials are not ready for this bridged model.',
+          },
+        }));
+      },
+    };
+  }
+  // For Codex, provider-oauth-header is the subscription-safe route: the host
+  // injects the Claude.ai token and never forwards the Codex/OpenAI bearer.
+  if (
+    route.providerId === 'anthropic'
+    && route.providerSource === 'builtin'
+    && route.routing.authStrategy === 'provider-oauth-header'
+    && !route.oauthToken
+  ) {
+    return {
+      localHandler: async ({ res }) => {
+        res.writeHead(401, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        res.end(JSON.stringify({
+          error: {
+            type: 'authentication_error',
+            code: 'anthropic_subscription_auth_required',
+            message: 'Connect a Claude.ai subscription before using Anthropic models in Codex.',
+          },
+        }));
+      },
+    };
+  }
+  const isOAuth = route.routing.authStrategy === 'provider-oauth-header';
+  const buildProviderHeaders = (token: string | null): Record<string, string> => {
+    const { headers: baseHeaders } = buildLocalHandlerHeaders(
+      token === route.oauthToken ? route : { ...route, oauthToken: token },
+      'codex',
+    );
+    let headers = { ...baseHeaders };
+    if (isOAuth) {
+      if (token) headers = claudeOAuthHeaders(headers, token);
+    } else if (route.routing.authStrategy === 'api-key-header') {
+      delete headers.authorization;
+      if (route.apiKey) {
+        headers['x-api-key'] = route.apiKey;
+      } else if (!headerValue(headers, 'x-api-key')) {
+        headers['x-api-key'] = 'cindy-missing-custom-provider-api-key';
+      }
+    } else if (isXdGatewayBridge && gatewayKey) {
+      // 上游 wire 是 Anthropic Messages，复用 Claude Code 的网关鉴权形态；同时覆盖
+      // Authorization，确保 Codex/ChatGPT bearer 永远不会离开本机。
+      headers['x-api-key'] = gatewayKey;
+      headers.authorization = `Bearer ${gatewayKey}`;
+    } else if (route.routing.authStrategy === 'none') {
+      delete headers.authorization;
+      delete headers['x-api-key'];
+    }
+    if (wireModel.endsWith('[1m]')) {
+      appendCommaSeparatedHeaderToken(
+        headers,
+        'anthropic-beta',
+        'context-1m-2025-08-07',
+      );
+    }
+    return headers;
+  };
+  const providerId = route.providerId;
+  const providerName = getActiveCatalog().providers.find((p) => p.id === providerId)?.name ?? providerId;
+  const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
+  const onUpstreamError = route.providerSource === 'user'
+    ? ({ status, body }: { status: number; body: string }): void => {
+        reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
+      }
+    : undefined;
+  const handler = createResponsesAnthropicHandler({
+    upstreamBase,
+    ...(route.routing.requestPath ? { requestPath: route.routing.requestPath } : {}),
+    authMode: isOAuth ? 'oauth' : 'api-key',
+    buildHeaders: async () => buildProviderHeaders(route.oauthToken),
+    ...(isOAuth
+      ? {
+          refreshHeaders: async ({
+            requestHeaders,
+          }: {
+            status: 401 | 403;
+            body: string;
+            requestHeaders: Readonly<Record<string, string>>;
+          }) => {
+            const authorization = headerValue(requestHeaders, 'authorization');
+            const staleToken = authorization?.replace(/^Bearer\s+/i, '');
+            const token = await readProviderOAuthToken('anthropic', 'codex', {
+              forceRefresh: true,
+              ...(staleToken ? { staleToken } : {}),
+            });
+            return token ? buildProviderHeaders(token) : null;
+          },
+        }
+      : {}),
+    rewriteModel: (model) => rewriteAnthropicBridgeModel(model, stripPrefix),
+    promptCaching: true,
+    automaticPromptCaching: isOfficialAnthropicUpstream(upstreamBase),
+    imageCodec: desktopAnthropicImageCodec,
+    ...(onUpstreamError ? { onUpstreamError } : {}),
+  }, {
+    logger: log,
+    fetchImpl: outboundFetch,
+  });
+  return {
+    localHandler: ({ rawBody, parsedBody, ctx, res }) => {
+      const body = prepareLocalBridgeBody({
+        rawBody,
+        parsedBody,
+        instructions,
+        bridge: 'anthropic',
+        providerId,
+        upstreamBase,
+      });
+      return handler.handle({ parsedBody: body, ctx, res });
     },
   };
 }
@@ -1619,6 +1859,16 @@ export function createModelRoutingTransform(
       requestModel;
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
     const sessionId = sessionIdFromHeaders(ctx.headers);
+    const selectedRouting = sessionId
+      ? getSessionRoutingDescriptor(sessionId, 'codex', model || undefined)
+      : null;
+    const selectedUsesLocalBridge =
+      ctx.method === 'POST'
+      && Boolean(model)
+      && (
+        selectedRouting?.wireProtocol === 'openai-chat'
+        || selectedRouting?.wireProtocol === 'anthropic-messages'
+      );
 
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。thread-id header → threadToSession 反解 xdt sessionId。
     //    oauth-bearer 态全量适用;env-key 态默认全量走网关、per-session 无意义(与 decideCodexRoute 的
@@ -1628,9 +1878,9 @@ export function createModelRoutingTransform(
     if (sessionId && (
       authInjection === 'oauth-bearer' ||
       isUserProviderSession(sessionId) ||
-      isHostInjectedAuthSession(sessionId, 'codex')
+      isHostInjectedAuthSession(sessionId, 'codex') ||
+      selectedUsesLocalBridge
     )) {
-      const selectedRouting = getSessionRoutingDescriptor(sessionId, 'codex', model || undefined);
       if (selectedRouting?.wireProtocol === 'openai-chat' && ctx.method === 'POST' && model) {
         return resolveSessionRoute(sessionId, 'codex', model).then((localRoute) => {
           const decision = createChatBridgeDecision(
@@ -1650,6 +1900,14 @@ export function createModelRoutingTransform(
           }
           return decision;
         });
+      }
+      if (selectedRouting?.wireProtocol === 'anthropic-messages' && ctx.method === 'POST' && model) {
+        return resolveSessionRoute(sessionId, 'codex', model).then((localRoute) =>
+          createAnthropicBridgeDecision(
+            localRoute,
+            threadId ? registry.get(threadId) : undefined,
+            model,
+          ));
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。

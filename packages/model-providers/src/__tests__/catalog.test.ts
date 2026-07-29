@@ -52,10 +52,12 @@ function runtimeCatalog(): Catalog {
   const clone = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
   for (const p of clone.providers) {
     if (p.id === 'anthropic') {
-      p.models['claude-code'] = [
+      const anthropic = [
         model('claude-opus-4-8', { name: 'Opus 4.8', contextWindow: 1_000_000, supportsFastMode: true }),
         model('claude-sonnet-4-6', { name: 'Sonnet 4.6', contextWindow: 1_000_000 }),
       ];
+      p.models['claude-code'] = anthropic;
+      p.models.codex = anthropic;
     }
     if (p.id === 'openai') {
       p.models.codex = [model('gpt-5.5', { name: 'GPT-5.5', supportsFastMode: true })];
@@ -362,11 +364,12 @@ describe('routing wireProtocol per-agent 契约', () => {
     expect(() => parseCatalog(bad)).toThrow(/openai-chat/);
   });
 
-  it('parseCatalog 拒绝 codex 使用 anthropic-messages(codex host 只实现 Responses 与本地 Chat 桥)', () => {
+  it('parseCatalog 允许 codex 使用 anthropic-messages(由本地 Responses→Anthropic bridge 接管)', () => {
     const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     const xai = bad.providers.find((p) => p.id === 'xai')!;
     xai.routing.codex = { ...xai.routing.codex!, wireProtocol: 'anthropic-messages' };
-    expect(() => parseCatalog(bad)).toThrow(/anthropic-messages/);
+    expect(parseCatalog(bad).providers.find((p) => p.id === 'xai')?.routing.codex?.wireProtocol)
+      .toBe('anthropic-messages');
   });
 });
 

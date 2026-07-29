@@ -81,6 +81,25 @@ describe('classifyProviderError', () => {
 });
 
 describe('buildProbeRequest', () => {
+  it('Codex Anthropic Messages probe uses x-api-key and Messages endpoint', () => {
+    const { url, init } = buildProbeRequest({
+      agent: 'codex',
+      wireProtocol: 'anthropic-messages',
+      baseUrl: 'https://api.anthropic.com',
+      modelId: 'claude-opus-5',
+      apiKey: 'sk-test',
+    });
+    expect(url).toBe('https://api.anthropic.com/v1/messages');
+    const headers = init.headers as Record<string, string>;
+    expect(headers['anthropic-version']).toBe('2023-06-01');
+    expect(headers['x-api-key']).toBe('sk-test');
+    expect(headers.authorization).toBeUndefined();
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      model: 'claude-opus-5',
+      max_tokens: 1,
+    });
+  });
+
   it('cc wire：/v1/messages + anthropic-version + 双鉴权头（与 api-key-header 路由分支对齐）', () => {
     const { url, init } = buildProbeRequest({
       agent: 'claude-code',

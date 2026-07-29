@@ -15,10 +15,12 @@ import { BUNDLED_CATALOG, type CatalogModel } from '@cindy/model-providers';
 
 import {
   getActiveCatalog,
+  isXdCodexAnthropicBridgeModel,
   setActiveCatalog,
   setAnthropicDiscoveredModels,
   setXdGatewayModels,
 } from '../active-catalog.js';
+import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 function xdModels(agent: 'claude-code' | 'codex') {
   const xd = getActiveCatalog().providers.find((p) => p.id === 'xd');
@@ -45,11 +47,12 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex')).toEqual([]);
   });
 
-  it('未登记模型的确定性默认:3 档 effort + fast=false + 仅 cc tab + 200k 窗口', () => {
+  it('未登记模型按 Claude-only 兜底并投影到 Codex bridge:3 档 effort + fast=false + 200k 窗口', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{ id: 'brand-new-model' }]);
 
     const cc = xdModels('claude-code');
+    const codex = xdModels('codex');
     expect(cc.map((m) => m.id)).toEqual(['brand-new-model']);
     expect(cc[0]).toMatchObject({
       name: 'brand-new-model',
@@ -58,7 +61,11 @@ describe('XD 网关权威模型清单重建', () => {
       defaultEffort: 'high',
       supportsFastMode: false,
     });
-    expect(xdModels('codex')).toEqual([]);
+    expect(codex).toEqual(cc);
+    expect(isXdCodexAnthropicBridgeModel('brand-new-model')).toBe(true);
+    expect(
+      deriveAvailableModels(getActiveCatalog(), 'codex').map((model) => model.id),
+    ).toContain('brand-new-model');
   });
 
   it('显式登记 efforts=[] 表示不可调,不合成 3 档;fast 显式 false 尊重', () => {
@@ -101,6 +108,22 @@ describe('XD 网关权威模型清单重建', () => {
         defaultEffort: 'high',
       });
     }
+    expect(isXdCodexAnthropicBridgeModel('gpt-5.6-sol')).toBe(false);
+  });
+
+  it('仅 codex 的原生模型不投影到 Claude tab,也不标记为 bridge', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'codex-native-only',
+        agents: ['codex'],
+        name: 'Codex Native Only',
+      },
+    ]);
+
+    expect(xdModels('claude-code')).toEqual([]);
+    expect(xdModels('codex').map((model) => model.id)).toEqual(['codex-native-only']);
+    expect(isXdCodexAnthropicBridgeModel('codex-native-only')).toBe(false);
   });
 
   it('perAgent 覆盖块按 tab 应用(cc 无 Fast + 1M 窗口;codex 保持基线)', () => {

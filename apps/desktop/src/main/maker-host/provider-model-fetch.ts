@@ -11,7 +11,11 @@
  *   - fetch 可注入（单测不联网）。
  */
 
-import { isLoopbackProviderUrl, type AgentKind } from '@cindy/model-providers';
+import {
+  isLoopbackProviderUrl,
+  type AgentKind,
+  type ProviderWireProtocol,
+} from '@cindy/model-providers';
 
 import {
   classifyProviderError,
@@ -28,6 +32,8 @@ const MAX_ERROR_BODY_BYTES = 16 * 1024;
 /** 一次「获取模型列表」的完整参数（表单值内存透传，不落盘）。 */
 export interface ProviderModelsFetchSpec {
   agent: AgentKind;
+  /** 上游 wire protocol；用于区分 Codex 原生 OpenAI 与 Anthropic Messages 桥。 */
+  wireProtocol?: ProviderWireProtocol;
   baseUrl: string;
   /** 表单态鉴权方式；main IPC 用它强制 none 只访问 loopback。 */
   authMethod?: 'apiKey' | 'oauth' | 'none';
@@ -79,12 +85,17 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: s
   const headers: Record<string, string> = mustStripCredentialHeaders
     ? withoutCredentialHeaders(spec.headers)
     : { ...(spec.headers ?? {}) };
-  if (spec.agent === 'claude-code') {
+  const anthropicMessages =
+    spec.wireProtocol === 'anthropic-messages'
+    || (spec.wireProtocol === undefined && spec.agent === 'claude-code');
+  if (anthropicMessages) {
     // Anthropic wire 的所有端点（含 GET /v1/models）都要求 anthropic-version，缺失直接 400。
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
     if (spec.apiKey) {
       headers['x-api-key'] = spec.apiKey;
-      headers['authorization'] = `Bearer ${spec.apiKey}`;
+      // Claude Code 的历史兼容端点同时接受 Bearer；Codex bridge 必须只带
+      // x-api-key，避免把 OpenAI 认证语义混入 Anthropic API 请求。
+      if (spec.agent === 'claude-code') headers['authorization'] = `Bearer ${spec.apiKey}`;
     }
   } else if (spec.apiKey) {
     headers['authorization'] = `Bearer ${spec.apiKey}`;

@@ -568,6 +568,7 @@ export function CustomProviderDialog({
         agent,
         baseUrl,
         authMethod: authMode,
+        ...(rf.wireProtocol ? { wireProtocol: rf.wireProtocol } : {}),
         modelsUrl: rf.modelsUrl.trim() || null,
         apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
         ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),

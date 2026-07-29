@@ -25,6 +25,7 @@ const mockState = vi.hoisted(() => {
     },
     createAnthropicCompatProxy: vi.fn(),
     createResponsesChatHandler: vi.fn(() => ({ handle: vi.fn(async () => undefined) })),
+    createResponsesAnthropicHandler: vi.fn(() => ({ handle: vi.fn(async () => undefined) })),
     injectionTransform: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
     stripNonAnthropicFields: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
     recordXaiRateLimitSnapshot: vi.fn(),
@@ -104,10 +105,15 @@ vi.mock('@cindy/responses-chat-bridge', () => ({
   createResponsesChatHandler: mockState.createResponsesChatHandler,
 }));
 
+vi.mock('@cindy/responses-anthropic-bridge', () => ({
+  createResponsesAnthropicHandler: mockState.createResponsesAnthropicHandler,
+}));
+
 async function freshCodexProxyHost() {
   vi.resetModules();
   mockState.createAnthropicCompatProxy.mockReset();
   mockState.createResponsesChatHandler.mockClear();
+  mockState.createResponsesAnthropicHandler.mockClear();
   mockState.createInstructionsInjectionTransform.mockClear();
   mockState.injectionTransform.mockReset();
   mockState.injectionTransform.mockReturnValue(null);
@@ -529,6 +535,264 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     clearSessionProvider('session-kimi-image');
     setCustomProviderKeyReader(() => null);
     setCustomProviders([]);
+  });
+
+  it('routes a custom Codex Anthropic Messages runtime to the local bridge with provider-owned auth', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'custom-anthropic',
+        name: 'Custom Anthropic',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://api.anthropic.com',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'anthropic-key');
+    host.registerComposed('session-anthropic', 'thread-anthropic', 'PRODUCT_PROMPT');
+    setSessionProvider('session-anthropic', 'custom-anthropic');
+    host.setCodexProxyAuthInjection('env-key');
+
+    const decision = await Promise.resolve(host.createModelRoutingTransform()(
+      {
+        model: 'claude-sonnet-4-6',
+        input: [{ role: 'user', content: 'hello' }],
+      },
+      {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-anthropic' },
+      },
+    ));
+
+    expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    expect(mockState.createResponsesAnthropicHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        upstreamBase: 'https://api.anthropic.com',
+        buildHeaders: expect.any(Function),
+      }),
+      expect.anything(),
+    );
+    const anthropicHandlerCalls = mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
+      {
+        automaticPromptCaching: boolean;
+        buildHeaders: () => Promise<Record<string, string>>;
+      },
+    ]>;
+    const config = anthropicHandlerCalls.at(-1)?.[0];
+    expect(config).toBeDefined();
+    if (!config) throw new Error('Anthropic bridge config was not captured');
+    expect(await config.buildHeaders()).toEqual({ 'x-api-key': 'anthropic-key' });
+    expect(config.automaticPromptCaching).toBe(true);
+
+    clearSessionProvider('session-anthropic');
+    setCustomProviderKeyReader(() => null);
+    setCustomProviders([]);
+  });
+
+  it('routes the built-in Anthropic subscription through the bridge with host-owned Claude.ai OAuth', async () => {
+    const host = await freshCodexProxyHost();
+    const { setProviderOAuthTokenReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setProviderOAuthTokenReader((providerId, agent) =>
+      providerId === 'anthropic' && agent === 'codex'
+        ? Promise.resolve('claude-subscription-token')
+        : null,
+    );
+    host.registerComposed(
+      'session-anthropic-subscription',
+      'thread-anthropic-subscription',
+      'PRODUCT_PROMPT',
+    );
+    setSessionProvider('session-anthropic-subscription', 'anthropic');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    const decision = await Promise.resolve(host.createModelRoutingTransform()(
+      {
+        model: 'claude-opus-5[1m]',
+        input: [{ role: 'user', content: 'hello' }],
+      },
+      {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: {
+          'thread-id': 'thread-anthropic-subscription',
+          authorization: 'Bearer codex-openai-token-must-not-leak',
+          'chatgpt-account-id': 'account-must-not-leak',
+        },
+      },
+    ));
+
+    expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    const anthropicHandlerCalls = mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
+      {
+        buildHeaders: () => Promise<Record<string, string>>;
+        rewriteModel: (model: string) => string;
+      },
+    ]>;
+    const config = anthropicHandlerCalls.at(-1)?.[0];
+    expect(config).toBeDefined();
+    if (!config) throw new Error('Anthropic subscription bridge config was not captured');
+    const headers = await config.buildHeaders();
+    expect(headers).toEqual(expect.objectContaining({
+      'anthropic-version': '2023-06-01',
+      authorization: 'Bearer claude-subscription-token',
+      'x-app': 'cli',
+      'x-stainless-runtime': 'node',
+      'x-claude-code-session-id': expect.any(String),
+      'x-client-request-id': expect.any(String),
+    }));
+    expect(headers['anthropic-beta']?.split(',')).toEqual([
+      'claude-code-20250219',
+      'oauth-2025-04-20',
+      'context-1m-2025-08-07',
+    ]);
+    expect(config.rewriteModel('claude-opus-5[1m]')).toBe('claude-opus-5');
+
+    clearSessionProvider('session-anthropic-subscription');
+    setProviderOAuthTokenReader(() => null);
+  });
+
+  it('routes only XD Claude-only models through the Anthropic bridge in env-key mode', async () => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setXdGatewayModels([
+      { id: 'gpt-native', agents: ['claude-code', 'codex'] },
+      { id: 'claude-bridge', agents: ['claude-code'] },
+    ]);
+    host.setCodexProxyGatewayKeyReader(() => 'xd-gateway-key');
+    host.registerComposed('session-xd-bridge', 'thread-xd-bridge', 'PRODUCT_PROMPT');
+    setSessionProvider('session-xd-bridge', 'xd');
+    host.setCodexProxyAuthInjection('env-key');
+
+    const bridgeDecision = await Promise.resolve(host.createModelRoutingTransform()(
+      {
+        model: 'claude-bridge[1m]',
+        input: [{ role: 'user', content: 'hello' }],
+      },
+      {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: {
+          'thread-id': 'thread-xd-bridge',
+          authorization: 'Bearer codex-token-must-not-leak',
+          'chatgpt-account-id': 'account-must-not-leak',
+        },
+      },
+    ));
+
+    expect(bridgeDecision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    const anthropicHandlerCalls = mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
+      {
+        upstreamBase: string;
+        automaticPromptCaching: boolean;
+        buildHeaders: () => Promise<Record<string, string>>;
+        rewriteModel: (model: string) => string;
+      },
+    ]>;
+    const config = anthropicHandlerCalls.at(-1)?.[0];
+    expect(config).toBeDefined();
+    if (!config) throw new Error('XD Anthropic bridge config was not captured');
+    expect(config.upstreamBase).toBe(XD_GATEWAY_BASE_URL);
+    expect(config.automaticPromptCaching).toBe(false);
+    expect(await config.buildHeaders()).toEqual({
+      'x-api-key': 'xd-gateway-key',
+      authorization: 'Bearer xd-gateway-key',
+      'anthropic-beta': 'context-1m-2025-08-07',
+    });
+    expect(config.rewriteModel('claude-bridge[1m]')).toBe('claude-bridge');
+
+    const nativeDecision = await Promise.resolve(host.createModelRoutingTransform()(
+      {
+        model: 'gpt-native',
+        input: [{ role: 'user', content: 'hello' }],
+      },
+      {
+        reqId: 2,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-xd-bridge' },
+      },
+    ));
+    expect(nativeDecision).toBeNull();
+    expect(mockState.createResponsesAnthropicHandler).toHaveBeenCalledTimes(1);
+
+    clearSessionProvider('session-xd-bridge');
+    setXdGatewayModels([]);
+    host.setCodexProxyGatewayKeyReader(() => null);
+  });
+
+  it('fails an XD bridged model locally when the gateway key is unavailable', async () => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setXdGatewayModels([{ id: 'claude-bridge', agents: ['claude-code'] }]);
+    host.setCodexProxyGatewayKeyReader(() => null);
+    host.registerComposed('session-xd-no-key', 'thread-xd-no-key', 'PRODUCT_PROMPT');
+    setSessionProvider('session-xd-no-key', 'xd');
+    host.setCodexProxyAuthInjection('env-key');
+
+    const decision = await Promise.resolve(host.createModelRoutingTransform()(
+      {
+        model: 'claude-bridge',
+        input: [{ role: 'user', content: 'hello' }],
+      },
+      {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-xd-no-key' },
+      },
+    ));
+
+    expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    expect(mockState.createResponsesAnthropicHandler).not.toHaveBeenCalled();
+
+    clearSessionProvider('session-xd-no-key');
+    setXdGatewayModels([]);
+  });
+
+  it('fails the built-in Anthropic subscription bridge locally when Claude.ai OAuth is missing', async () => {
+    const host = await freshCodexProxyHost();
+    const { setProviderOAuthTokenReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setProviderOAuthTokenReader(() => null);
+    host.registerComposed(
+      'session-anthropic-no-auth',
+      'thread-anthropic-no-auth',
+      'PRODUCT_PROMPT',
+    );
+    setSessionProvider('session-anthropic-no-auth', 'anthropic');
+
+    const decision = await Promise.resolve(host.createModelRoutingTransform()(
+      {
+        model: 'claude-opus-5',
+        input: [{ role: 'user', content: 'hello' }],
+      },
+      {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-anthropic-no-auth' },
+      },
+    ));
+
+    expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    expect(mockState.createResponsesAnthropicHandler).not.toHaveBeenCalled();
+
+    clearSessionProvider('session-anthropic-no-auth');
   });
 });
 

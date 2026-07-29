@@ -19,10 +19,13 @@
  * token 覆盖 authorization,避免把子进程里其它供应商的 OAuth bearer 泄漏过去(如 Codex → xAI)。
  */
 
-import type { AgentKind, RoutingDescriptor } from '@cindy/model-providers';
+import type { AgentKind, Provider, RoutingDescriptor } from '@cindy/model-providers';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
-import { getActiveCatalog } from './active-catalog.js';
+import {
+  getActiveCatalog,
+  isXdCodexAnthropicBridgeModel,
+} from './active-catalog.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getSessionProvider } from './session-provider-store.js';
 
@@ -92,12 +95,30 @@ export function hasCustomProviderKey(providerId: string, agent: AgentKind): bool
   return Boolean(customProviderKeyReader(providerId, agent));
 }
 
-type ProviderOAuthTokenReader = (providerId: string, agent: AgentKind) => string | null | Promise<string | null>;
+export interface ProviderOAuthTokenReadOptions {
+  forceRefresh?: boolean;
+  staleToken?: string;
+}
+
+type ProviderOAuthTokenReader = (
+  providerId: string,
+  agent: AgentKind,
+  options?: ProviderOAuthTokenReadOptions,
+) => string | null | Promise<string | null>;
 let providerOAuthTokenReader: ProviderOAuthTokenReader = () => null;
 
 /** host 启动期接通内置 OAuth 供应商 token 读取（如 xAI/SuperGrok）。 */
 export function setProviderOAuthTokenReader(reader: ProviderOAuthTokenReader): void {
   providerOAuthTokenReader = reader;
+}
+
+/** Read a provider OAuth token for a local bridge retry without exposing the reader itself. */
+export function readProviderOAuthToken(
+  providerId: string,
+  agent: AgentKind,
+  options?: ProviderOAuthTokenReadOptions,
+): Promise<string | null> {
+  return Promise.resolve(providerOAuthTokenReader(providerId, agent, options)).catch(() => null);
 }
 
 const MISSING_PROVIDER_OAUTH_TOKEN = 'xdt-missing-provider-oauth-token';
@@ -364,6 +385,34 @@ function routingServesWireModel(routing: RoutingDescriptor, wireModel: string | 
 }
 
 /**
+ * 解析 provider × agent × model 的最终 wire。
+ *
+ * 绝大多数路由直接使用 provider 级描述符；XD 是一个 provider 内同时存在两种 Codex wire
+ * 的特例：服务端原生声明 codex 的模型走 Responses，只声明 claude-code 的模型由客户端
+ * 投影给 Codex，并复用同一 provider 的 Claude Messages 路由进入本地 bridge。
+ */
+function providerRoutingForModel(
+  provider: Provider,
+  agent: AgentKind,
+  wireModel: string | undefined,
+): RoutingDescriptor | null {
+  if (
+    provider.id === 'xd'
+    && agent === 'codex'
+    && wireModel
+    && isXdCodexAnthropicBridgeModel(wireModel)
+  ) {
+    const claudeRouting = provider.routing['claude-code'];
+    if (!claudeRouting) return null;
+    return {
+      ...claudeRouting,
+      wireProtocol: 'anthropic-messages',
+    };
+  }
+  return provider.routing[agent] ?? null;
+}
+
+/**
  * 某 provider 对某 agent 的路由是否服务该 wire model(modelPrefixes 语义;未声明 = true,
  * provider 无该 agent 路由 = false)。
  *
@@ -377,7 +426,8 @@ export function providerRoutingServesWireModel(
   wireModel: string | undefined,
 ): boolean {
   if (providerId === 'xd' && !getAppCapabilities().canUseCindyGateway) return false;
-  const routing = getActiveCatalog().providers.find((p) => p.id === providerId)?.routing[agent];
+  const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
+  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!routing) return false;
   return routingServesWireModel(routing, wireModel);
 }
@@ -406,7 +456,8 @@ export function getSessionRoutingDescriptor(
   const providerId = getSessionProvider(sessionId);
   if (!providerId) return null;
   if (isProviderRouteMutationInProgress(providerId)) return null;
-  const routing = getActiveCatalog().providers.find((provider) => provider.id === providerId)?.routing[agent];
+  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!routing || !routingServesWireModel(routing, wireModel)) return null;
   return routing;
 }
@@ -432,7 +483,7 @@ export async function resolveSessionRoute(
   if (!providerId) return null;
   if (isProviderRouteMutationInProgress(providerId)) return null;
   const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
-  const routing = provider?.routing[agent];
+  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
   const apiKey = provider.source === 'user' ? customProviderKeyReader(providerId, agent) : null;
   let oauthToken: string | null = null;
@@ -511,7 +562,7 @@ export function resolveSessionRouteDecision(
   }
   if (providerId === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-  const routing = provider?.routing[agent];
+  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!routing) return null;
   if (routing.disabled) return disabledProviderRouteDecision(providerId);
   if (!routingServesWireModel(routing, wireModel)) return null;
@@ -598,6 +649,11 @@ export function resolveProviderOAuthControlRouteDecision(
       !isProviderRouteMutationInProgress(provider.id)
       && provider.agents.includes(agent)
       && routing?.authStrategy === 'provider-oauth-header'
+      // Session-less Codex control requests use the OpenAI control-plane
+      // protocol. Local inference bridges (Chat / Anthropic Messages) obtain
+      // their model lists through Cindy's provider discovery and must not
+      // compete for transparent GET /models routing.
+      && (routing.wireProtocol === undefined || routing.wireProtocol === 'openai-responses')
     );
   });
   if (providers.length !== 1) return null;

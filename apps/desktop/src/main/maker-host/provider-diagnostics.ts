@@ -98,12 +98,14 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
       ? withoutCredentialHeaders(spec.headers)
       : (spec.headers ?? {})),
   };
-  if (spec.agent === 'claude-code') {
-    // Anthropic Messages wire。anthropic-version 为兼容端点普遍要求的必带头。
+  const anthropicMessages =
+    spec.wireProtocol === 'anthropic-messages'
+    || (spec.wireProtocol === undefined && spec.agent === 'claude-code');
+  if (anthropicMessages) {
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
     if (spec.apiKey) {
       headers['x-api-key'] = spec.apiKey;
-      headers['authorization'] = `Bearer ${spec.apiKey}`;
+      if (spec.agent === 'claude-code') headers['authorization'] = `Bearer ${spec.apiKey}`;
     }
     return {
       url: appendProviderRequestPath(spec.baseUrl, spec.requestPath ?? '/v1/messages'),

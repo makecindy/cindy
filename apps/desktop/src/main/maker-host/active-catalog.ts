@@ -101,6 +101,14 @@ export interface XdGatewayModelInfo {
  *  - 目录里有、网关没有 → 不展示。
  */
 let xdGatewayModels: XdGatewayModelInfo[] = [];
+/**
+ * XD 服务端只声明 claude-code、未声明 codex 的聊天模型。
+ *
+ * 这些模型在客户端投影进 Codex 选择器，但请求必须走本地
+ * Responses → Anthropic Messages bridge，不能误用 XD 的原生 Responses 路由。
+ * Set 在模型目录刷新时一次性派生，路由热路径只做 O(1) 查询。
+ */
+let xdCodexAnthropicBridgeModelIds = new Set<string>();
 
 /**
  * Anthropic(Claude.ai 订阅)的**权威模型清单**(2026-07-19 统一重构):由 host 的
@@ -121,6 +129,35 @@ const VALID_EFFORTS: ReadonlySet<string> = new Set([
 ]);
 
 type Effort = CatalogModel['efforts'][number];
+
+function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
+  return model.agents && model.agents.length > 0 ? model.agents : ['claude-code'];
+}
+
+function deriveXdCodexAnthropicBridgeModelIds(
+  models: XdGatewayModelInfo[],
+): Set<string> {
+  const support = new Map<string, { claudeCode: boolean; codex: boolean }>();
+  for (const model of models) {
+    const current = support.get(model.id) ?? { claudeCode: false, codex: false };
+    for (const agent of xdGatewayTargetAgents(model)) {
+      if (agent === 'claude-code') current.claudeCode = true;
+      else if (agent === 'codex') current.codex = true;
+    }
+    support.set(model.id, current);
+  }
+  return new Set(
+    [...support]
+      .filter(([, agents]) => agents.claudeCode && !agents.codex)
+      .map(([modelId]) => modelId),
+  );
+}
+
+/** 当前 XD 模型是否由客户端投影给 Codex、并应走 Anthropic Messages bridge。 */
+export function isXdCodexAnthropicBridgeModel(modelId: string): boolean {
+  // Codex 会把 1M 上下文选择编码成 wire model 后缀；目录身份仍是原始 model id。
+  return xdCodexAnthropicBridgeModelIds.has(modelId.replace(/\[1m\]$/, ''));
+}
 
 function nonNegativeFiniteOrUndefined(value: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -480,7 +517,9 @@ function computeMerged(): Catalog {
       anthropicModels.map((m) => overlayCindyMeta(m, metaIndex.get(m.id))),
     );
     providers = providers.map((p) =>
-      p.id === 'anthropic' ? { ...p, models: { ...p.models, 'claude-code': overlaid } } : p,
+      p.id === 'anthropic'
+        ? { ...p, models: { ...p.models, 'claude-code': overlaid, codex: overlaid } }
+        : p,
     );
   }
 
@@ -503,8 +542,7 @@ function computeMerged(): Catalog {
     for (const agent of agentKeys) models[agent] = [];
     for (const gm of gwModels) {
       // tab 归属:服务端 agents > 仅 claude-code(网关 /v1/messages 翻译覆盖面最广,不猜)
-      const targetAgents: AgentKind[] =
-        gm.agents && gm.agents.length > 0 ? gm.agents : ['claude-code'];
+      const targetAgents = xdGatewayTargetAgents(gm);
       for (const agent of targetAgents) {
         if (!models[agent]) continue; // 未知 agent 键防御(wire 数据)
         const ov = gm.perAgent?.[agent] ?? {};
@@ -540,6 +578,15 @@ function computeMerged(): Catalog {
           ...(cost ? { cost } : {}),
         };
         models[agent]!.push(merged);
+      }
+    }
+    // 服务端明确没有 codex 的 Claude-wire 模型仍可由本地 bridge 服务。选择器需要看到
+    // 它们，但路由身份保留在 xdCodexAnthropicBridgeModelIds，不能把投影误当原生支持。
+    const claudeModels = models['claude-code'] ?? [];
+    const codexModels = models.codex;
+    if (codexModels) {
+      for (const model of claudeModels) {
+        if (xdCodexAnthropicBridgeModelIds.has(model.id)) codexModels.push(model);
       }
     }
     // 每个 tab 内按 sortOrder 稳定排序(无 sortOrder 的合成条目排最后,按进入序)。
@@ -636,6 +683,7 @@ export function setDiscoveredProviderModels(
  */
 export function setXdGatewayModels(models: XdGatewayModelInfo[]): void {
   xdGatewayModels = [...models];
+  xdCodexAnthropicBridgeModelIds = deriveXdCodexAnthropicBridgeModelIds(models);
   markChanged();
 }
 

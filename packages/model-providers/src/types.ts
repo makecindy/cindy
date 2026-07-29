@@ -56,7 +56,8 @@ export type ProviderAccess =
  * 是否透传 chatgpt-account-id）由该 runtime 的代理实现，本字段只表达意图：
  *   - oauth-passthrough : 直连供应商自家上游，透传二进制已带的 OAuth bearer。
  *   - provider-oauth-header : 直连供应商自家上游，但用 host 保存的该供应商 OAuth token
- *     覆盖 Authorization；用于子进程 OAuth 不属于目标供应商的场景（如 Codex → xAI）。
+ *     覆盖 Authorization；用于子进程 OAuth 不属于目标供应商的场景
+ *     （如 Codex → xAI / Claude.ai subscription）。
  *   - api-key-header    : 直连供应商自家上游，用该供应商自己的 API key 覆盖鉴权头。
  *   - gateway-key       : 走 XD 共享网关，把鉴权头换成网关 key。
  *   - oauth-token       : 直连供应商自家上游，用 host 侧通用 OAuth Runner 持有的
@@ -136,7 +137,8 @@ export type OAuthProviderDescriptor =
 export interface RoutingDescriptor {
   /**
    * 上游 wire protocol。缺省按 agent 保持历史语义：Claude Code = anthropic-messages，
-   * Codex = openai-responses。只有显式 openai-chat 才进入本地 Responses→Chat bridge。
+   * Codex = openai-responses。Codex 的 openai-chat / anthropic-messages 会分别进入
+   * 对应的本地 Responses bridge。
    */
   wireProtocol?: ProviderWireProtocol;
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */

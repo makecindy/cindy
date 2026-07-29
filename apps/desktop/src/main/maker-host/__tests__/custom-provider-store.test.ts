@@ -258,6 +258,21 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect((await getCustomProvider('openrouter'))?.runtimes.codex?.wireProtocol).toBe('openai-chat');
   });
 
+  it('round-trips an explicit Anthropic Messages protocol for Codex', async () => {
+    mountDb();
+    await createCustomProvider({
+      ...valid,
+      runtimes: {
+        codex: {
+          ...valid.runtimes.codex!,
+          baseUrl: 'https://api.anthropic.com',
+          wireProtocol: 'anthropic-messages',
+        },
+      },
+    });
+    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.wireProtocol).toBe('anthropic-messages');
+  });
+
   it('preserves legacy remote auth:none records for repair without deleting them', async () => {
     mountDb();
     raw!.prepare(
