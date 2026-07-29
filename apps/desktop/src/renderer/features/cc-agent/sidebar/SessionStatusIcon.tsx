@@ -99,11 +99,11 @@ export function SessionStatusIcon({
       {isArchived ? (
         <Archive
           size={size ?? 12}
-          strokeWidth={1.5}
+          strokeWidth={1.75}
           className={
             isActive
               ? 'text-[var(--sidebar-item-active-foreground)]'
-              : 'text-[var(--sidebar-list-muted)]'
+              : 'text-[var(--cmd-palette-item-meta)]'
           }
         />
       ) : isOrcaLead ? (

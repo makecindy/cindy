@@ -169,7 +169,7 @@ describe('SessionItem — memo 包裹', () => {
 });
 
 describe('SessionItem — 归档视觉', () => {
-  it('标题保留正文色，并用侧栏 muted Archive 图标区分归档行', () => {
+  it('标题保留正文色，并用主题感知的 Archive 图标区分归档行', () => {
     const regularSession = makeSession('regular-session');
     const archivedSession = makeSession('archived-session', 'archived');
     const { container } = render(rowsElement([regularSession, archivedSession], new Set()));
@@ -187,7 +187,8 @@ describe('SessionItem — 归档视觉', () => {
     );
     expect(archivedIconBranch).toContain('<Archive');
     expect(archivedIconBranch).toContain('text-[var(--sidebar-item-active-foreground)]');
-    expect(archivedIconBranch).toContain('text-[var(--sidebar-list-muted)]');
+    expect(archivedIconBranch).toContain('strokeWidth={1.75}');
+    expect(archivedIconBranch).toContain('text-[var(--cmd-palette-item-meta)]');
   });
 });
 
