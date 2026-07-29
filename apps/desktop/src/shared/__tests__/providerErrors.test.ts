@@ -34,6 +34,17 @@ describe('classifyProviderError — quota patterns', () => {
     expect(result.retryable).toBe(false);
   });
 
+  it('keeps per-minute metric quotas as retryable RATE_LIMITED (not billing)', () => {
+    // Google 风格速率配额也带 quota exceeded 字样,但等待重试即可恢复,
+    // 不是余额耗尽——不得判成不可重试并触发购买引导(review P1)。
+    const result = classifyProviderError({
+      status: 429,
+      bodyText: "Quota exceeded for quota metric 'requests per minute' and limit 'RPM'",
+    });
+    expect(result.code).toBe('RATE_LIMITED');
+    expect(result.retryable).toBe(true);
+  });
+
   it('keeps plain 429 as retryable RATE_LIMITED', () => {
     const result = classifyProviderError({
       status: 429,
@@ -60,6 +71,10 @@ describe('isQuotaExceededMessage — message-level matcher (ErrorBanner 消费)'
     '401 Unauthorized: Missing bearer token',
     'model gpt-x not found',
     'prompt is too long: 250000 tokens',
+    // 速率型配额(每分钟请求/token 上限):quota exceeded 字样但可等待恢复,
+    // 不得触发点数耗尽文案与购买引导(review P1)。
+    "Quota exceeded for quota metric 'requests per minute' and limit 'RPM'",
+    'Token quota exceeded: 30000 tokens per minute',
   ])('does not match non-quota errors: %s', (text) => {
     expect(isQuotaExceededMessage(text)).toBe(false);
   });

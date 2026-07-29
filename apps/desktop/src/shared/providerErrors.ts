@@ -84,6 +84,12 @@ const CONTEXT_TOO_LONG_RE =
  *  LiteLLM "ExceededBudget: … Budget has been exceeded"(XD 网关点数耗尽的实际形状)。 */
 const QUOTA_RE =
   /insufficient_quota|insufficient.{0,12}(balance|credit|funds)|quota.{0,20}exceed|budget.{0,20}exceeded|ExceededBudget|余额不足|欠费/i;
+/** 速率型配额措辞(每分钟/每秒请求或 token 上限,如 Google "Quota exceeded for quota
+ *  metric 'requests per minute'"):也含 quota exceeded 字样,但等待重试即可恢复,
+ *  **不是**余额/预算耗尽——不得判成不可重试的 QUOTA_EXCEEDED,更不得触发购买点数
+ *  引导(review P1)。 */
+const RATE_QUOTA_RE =
+  /per\s+(second|minute|hour|day)|per-(second|minute|hour|day)|[rt]pm|quota metric|rate.{0,8}limit/i;
 /** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。 */
 const WIRE_RE =
   /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;
@@ -96,7 +102,7 @@ const AUTH_RE = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorize
  * 的 QUOTA_EXCEEDED 共用同一 pattern,避免两处口径漂移。
  */
 export function isQuotaExceededMessage(text: string): boolean {
-  return QUOTA_RE.test(text);
+  return QUOTA_RE.test(text) && !RATE_QUOTA_RE.test(text);
 }
 
 /**
@@ -129,7 +135,7 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   if (status === 429 || status === 529) {
     // LiteLLM 会用 429 携带 ExceededBudget(预算耗尽):这是不可重试的余额问题,
     // 不能落进「限流,可重试」误导用户空转。
-    if (QUOTA_RE.test(body)) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
+    if (isQuotaExceededMessage(body)) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
     return { code: 'RATE_LIMITED', retryable: true, detail };
   }
   if (status === 404) {
@@ -139,7 +145,7 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   if (status === 400 || status === 422) {
     if (MODEL_NOT_FOUND_RE.test(body)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
     if (CONTEXT_TOO_LONG_RE.test(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
-    if (QUOTA_RE.test(body)) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
+    if (isQuotaExceededMessage(body)) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
     if (AUTH_RE.test(body)) return { code: 'AUTH_INVALID', retryable: false, detail };
     if (WIRE_RE.test(body)) return { code: 'WIRE_INCOMPATIBLE', retryable: false, detail };
     return { code: 'UNKNOWN', retryable: false, detail };
