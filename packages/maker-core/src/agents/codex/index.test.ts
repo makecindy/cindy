@@ -4840,6 +4840,67 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('clears an adopted dead turn that turnStarted had already activated', async () => {
+      // 空 id 容量拒绝 → turnStarted(带出真实 id) → turn/start 响应 的顺序下, 认领只落
+      // 墓碑、不清活跃态的话: 补排会因为"看起来还有 turn 在跑"而放弃(且清掉延后标记),
+      // 而那个 turn 的 turn/completed 又被墓碑压掉 —— 逻辑 send 永久悬空
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-adopt-clears-active',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.turnStarted || !handlers.turnCompleted) throw new Error('expected handlers');
+
+        // 空 id 容量拒绝（初始 RPC 仍在飞）。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 随后 turnStarted 带出真实 id 并把它激活。
+        handlers.turnStarted({ turn: { id: 'turn-1' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-1');
+
+        // 响应回来 → 认领 turn-1 为死 turn, 必须同时清掉活跃态。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sending;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        // 补排必须发生（不能既不重投也不收口）。
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(turnStarts).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('interrupts an already-started retry turn when only the send signal aborts', async () => {
       // 重投的 turnStarted 可能先于它的响应到达, 那时 currentTurnId 指着一个真实在跑的
       // server turn。只推终态事件、不动它, 那个 turn 会在调用方已按"已取消"处理之后

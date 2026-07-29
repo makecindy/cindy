@@ -4500,6 +4500,18 @@ export class CodexAgent extends BaseAgent {
       if (state.deferredCapacityFailure?.deadTurnId === null) {
         state.deferredCapacityFailure = { deadTurnId: turnId };
       }
+      // turnStarted 可能已经先于响应到达并把这个 id 激活。只落墓碑不清活跃态的话,
+      // rescheduleDeferredCapacityFailure 会因为"看起来还有 turn 在跑"而放弃补排(且顺手
+      // 清掉延后标记), 而那个 turn 的 turn/completed 又被墓碑压掉 —— 逻辑 send 既没有
+      // 下一次重投也没有终态事件, 永久悬空(review #844 codex P1)。与错误自带 id 时的
+      // 死 turn 处理保持一致。
+      if (currentTurnId === turnId) {
+        dismissPendingUserInputForTurn(turnId, 'turn_failed');
+        clearActiveToolContextsForTurn(turnId);
+        stopActiveRolloutPlanFallback();
+        currentTurnId = null;
+        isTurnInFlight = false;
+      }
       log.info('codex adopted turn/start response id for an id-less capacity failure', {
         turnId,
         threadId,
