@@ -34,6 +34,7 @@ import {
 } from '../appSessionState.js';
 import { getLayoutStore } from '../layout/index.js';
 import { GhostManager, type InstallRejection, type UninstallRejection } from './GhostManager.js';
+import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
 import {
   clearBuiltinTombstone,
@@ -3521,6 +3522,37 @@ export function registerGhostIpc(): void {
     }
     await uninstallGhostAndCleanup(id);
     return { ok: true };
+  });
+
+  // 详情页「导出 .cindy」:把已装插件的安装目录重新打成 zip 包,经系统
+  // 保存对话框写到用户选定的位置。取消选择返回 { status: 'canceled' },
+  // 不算错误;导出失败抛 IPC 错误(renderer 映射 toast)。
+  // 包先在内存里打完再弹对话框,用户挑位置期间插件怎么变都不影响已抓
+  // 内容;除此之外不做并发防护——导出与安装/切号同刻的极端时序下可能
+  // 得到略旧内容,用户重导即可,属可接受取舍。
+  ipcMain.handle('ghosts:export', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = await exportGhostPackage(id, {
+      listInstalled: () => manager.list(),
+      showSaveDialog: (opts) =>
+        win ? dialog.showSaveDialog(win, opts) : dialog.showSaveDialog(opts),
+      getDownloadsDir: () => app.getPath('downloads'),
+      writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
+    });
+    switch (result.status) {
+      case 'saved':
+        log.info('ghost exported', { id: String(id) });
+        return { status: 'saved' as const, savedPath: result.savedPath };
+      case 'canceled':
+        return { status: 'canceled' as const };
+      case 'invalid_id':
+        return throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
+      case 'not_installed':
+        return throwIpcError('NOT_FOUND', `意识 ${String(id)} 未安装`);
+      case 'error':
+        return throwIpcError('INTERNAL', `导出插件失败(${result.code})`);
+    }
   });
 
   // 内置意识状态(sendSync:设置页与已装清单同帧渲染,规则 7 无跳变)——

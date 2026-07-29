@@ -1106,6 +1106,10 @@ interface ElectronAPI {
       iconDataUrl?: string;
     }>;
     uninstall: (id: string) => Promise<{ ok: true }>;
+    /** 详情页「导出 .cindy」:打包安装目录 → 保存对话框落盘。 */
+    export: (
+      id: string,
+    ) => Promise<{ status: 'saved'; savedPath: string } | { status: 'canceled' }>;
     /** 启用/停用(停用 = 面板休眠,布局位置保留)。 */
     setEnabled: (id: string, enabled: boolean) => Promise<{ ok: true }>;
     /** 目录级禁用清单(插件页项目范围视图;sendSync 切换同帧渲染)。 */
