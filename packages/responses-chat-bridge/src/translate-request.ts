@@ -87,16 +87,28 @@ function audioPart(part: Record<string, unknown>): ChatUserContentPart | undefin
 function mediaPart(
   part: Record<string, unknown>,
   capabilities: ChatMediaCapabilities,
+  failClosed = false,
 ): ChatUserContentPart | undefined {
   if (part.type === 'input_image' || part.type === 'image_url' || part.type === 'image') {
-    if (capabilities.imageInput !== 'image_url') return undefined;
+    if (capabilities.imageInput !== 'image_url') {
+      if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
+      return undefined;
+    }
     return imagePart(part);
   }
   if (part.type === 'input_file' || part.type === 'file') {
-    return capabilities.fileInput === 'file' ? filePart(part) : undefined;
+    if (capabilities.fileInput !== 'file') {
+      if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
+      return undefined;
+    }
+    return filePart(part);
   }
   if (part.type === 'input_audio') {
-    return capabilities.audioInput === 'input_audio' ? audioPart(part) : undefined;
+    if (capabilities.audioInput !== 'input_audio') {
+      if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
+      return undefined;
+    }
+    return audioPart(part);
   }
   return undefined;
 }
@@ -175,7 +187,7 @@ function replaceToolMedia(
     return value.map((part) => replaceToolMedia(part, media, mediaCapabilities));
   }
   if (!isPlainObject(value)) return value;
-  const translated = mediaPart(value, mediaCapabilities);
+  const translated = mediaPart(value, mediaCapabilities, true);
   if (translated) {
     media.push(translated);
     return { type: 'text', text: TOOL_RESULT_MEDIA_MOVED_MARKER };

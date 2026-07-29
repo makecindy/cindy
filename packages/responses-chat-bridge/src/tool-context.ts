@@ -154,18 +154,21 @@ export class ChatBridgeToolContext {
   }
 
   private addToolSearch(): void {
-    if (this.specsByChatName.has(TOOL_SEARCH_CHAT_NAME)) return;
+    const responseIdentity = `\0${TOOL_SEARCH_CHAT_NAME}`;
+    const reservedIdentity = `${responseIdentity}__adapter`;
+    const chatName = this.reserveName(TOOL_SEARCH_CHAT_NAME, reservedIdentity);
+    if (this.specsByChatName.has(chatName)) return;
     const spec: ChatBridgeToolSpec = {
       kind: 'tool_search',
-      chatName: TOOL_SEARCH_CHAT_NAME,
+      chatName,
       name: TOOL_SEARCH_CHAT_NAME,
     };
-    this.specsByChatName.set(TOOL_SEARCH_CHAT_NAME, spec);
-    this.chatNamesByResponseName.set(`\0${TOOL_SEARCH_CHAT_NAME}`, TOOL_SEARCH_CHAT_NAME);
+    this.specsByChatName.set(chatName, spec);
+    this.chatNamesByResponseName.set(responseIdentity, chatName);
     this.chatToolsValue.push({
       type: 'function',
       function: {
-        name: TOOL_SEARCH_CHAT_NAME,
+        name: chatName,
         description: 'Search and load Codex tools, plugins, connectors, and MCP namespaces.',
         parameters: {
           type: 'object',

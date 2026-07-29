@@ -622,6 +622,23 @@ describe('translateResponsesRequest', () => {
     });
   });
 
+  it('keeps the built-in tool-search adapter distinct from a user tool_search name', () => {
+    const out = translateResponsesRequest(base({
+      tools: [
+        { type: 'function', name: 'tool_search', parameters: { type: 'object' } },
+        { type: 'tool_search' },
+      ],
+      input: [{ type: 'tool_search_call', id: 'ts_1' }],
+    }));
+    const toolNames = out.tools?.map((tool) => tool.function.name) ?? [];
+    expect(toolNames).toHaveLength(2);
+    expect(new Set(toolNames).size).toBe(2);
+    expect(toolNames).toContain('tool_search');
+    expect((out.messages[0] as {
+      tool_calls?: Array<{ function: { name: string } }>;
+    }).tool_calls?.[0]?.function.name).not.toBe('tool_search');
+  });
+
   it('keeps reasoning history attached to the following assistant/tool turn', () => {
     const out = translateResponsesRequest(base({
       input: [
@@ -782,6 +799,21 @@ describe('translateResponsesRequest', () => {
         },
       ],
     }), { capabilities: { imageInput: 'image_url' } })).toThrow('input_image.file_id');
+  });
+
+  it('rejects unsupported media inside tool results instead of serializing it as text', () => {
+    for (const part of [
+      { type: 'input_image', image_url: 'https://example.com/image.png' },
+      { type: 'input_file', file_data: 'BASE64' },
+      { type: 'input_audio', input_audio: { data: 'BASE64', format: 'wav' } },
+    ]) {
+      expect(() => translateResponsesRequest(base({
+        input: [
+          { type: 'function_call', call_id: 'c1', name: 'inspect', arguments: '{}' },
+          { type: 'function_call_output', call_id: 'c1', output: [part] },
+        ],
+      }))).toThrow(part.type);
+    }
   });
 
   it('forwards only capability-approved Chat tuning fields and maps reasoning dialects', () => {
