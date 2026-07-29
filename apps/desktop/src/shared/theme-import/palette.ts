@@ -253,13 +253,16 @@ export function buildThemeColorsFromPalette(
   /** CREATE AGENT / 输入框底色：light 可用 inputBg 压暗一档（Solarized 惯例）。 */
   const inputBg = toHex(palette.inputBg ?? palette.surface);
   /** CREATE AGENT hover / icon 圆底 / pressed 收敛规则：
-   *  仅当 light 传了与 surface 不同的 inputBg（如 Solarized base2 卡片）时，hover
-   *  与 icon 圆底提亮到 surface（与卡片底拉开一档）；否则 hover=通用 hover、
-   *  icon 圆底=chip。pressed 恒 pick(chip, hover)。pick(dark, light)。 */
+   *  card hover 提亮到「lift 档」（light 传了与 surface 不同的 inputBg，如 Solarized
+   *  base2 卡片，则 lift 到 surface，否则用通用 hover）；icon 圆底取「比 hover 卡片
+   *  更深一档」的层——lift 主题用 chip（压在提亮卡片上），其余 dark 用 border、
+   *  其余 light 用 chip——保证三态可分。pressed 恒 pick(chip, hover)。 */
   const liftsOffSurface = palette.inputBg !== undefined
     && toHex(palette.inputBg).toLowerCase() !== toHex(palette.surface).toLowerCase();
   const quickHover = toHex(liftsOffSurface ? palette.surface : palette.hover);
-  const quickIconBg = toHex(liftsOffSurface ? palette.surface : palette.chip);
+  const quickIconBg = liftsOffSurface
+    ? toHex(palette.chip)
+    : pick(toHex(palette.border), toHex(palette.chip));
 
   const colors: Record<string, string> = {
     // ── Tier1 语义 slot ──

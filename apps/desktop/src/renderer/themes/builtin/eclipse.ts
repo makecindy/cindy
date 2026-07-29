@@ -87,7 +87,7 @@ const singletonOverrides = {
   'create-agent-quick-card-bg-hover': HOVER_NAVY,
   'create-agent-quick-card-border': BOARD_NAVY,
   'create-agent-quick-card-icon': TEXT_PRIMARY,
-  'create-agent-quick-card-icon-bg': CHIP_NAVY,
+  'create-agent-quick-card-icon-bg': BOARD_NAVY,
   'create-agent-quick-card-text': TEXT_PRIMARY,
   'create-agent-segment-inactive-text': TEXT_TERTIARY,
   'create-agent-segment-track-bg': SURFACE_NAVY,
