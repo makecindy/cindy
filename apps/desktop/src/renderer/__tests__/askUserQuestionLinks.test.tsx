@@ -75,4 +75,39 @@ describe('AskUserQuestionPrompt question links', () => {
 
     await waitFor(() => expect(openExternal).toHaveBeenCalledWith(url));
   });
+
+  it('resets link-local menu state when the wizard advances to a different URL', async () => {
+    const nextUrl = 'https://example.com/base?table=tbl456';
+    render(
+      <AskUserQuestionPrompt
+        sessionId="session-a"
+        pending={{
+          requestId: 'req-link-steps',
+          questions: [
+            {
+              question: url,
+              options: [{ label: '继续' }],
+            },
+            {
+              question: nextUrl,
+              options: [{ label: '完成' }],
+            },
+          ],
+        }}
+        onAnswer={vi.fn()}
+        viewerState="expanded"
+        onViewerStateChange={vi.fn()}
+        draft={null}
+        onDraftChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole('link', { name: url }));
+    expect(screen.getByText('chat.markdownRenderer.copyLink')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('继续').closest('button')!);
+
+    await waitFor(() => expect(screen.getByRole('link', { name: nextUrl })).toBeTruthy());
+    expect(screen.queryByText('chat.markdownRenderer.copyLink')).toBeNull();
+  });
 });

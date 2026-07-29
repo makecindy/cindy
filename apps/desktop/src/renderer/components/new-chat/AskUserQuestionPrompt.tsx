@@ -72,7 +72,7 @@ function QuestionTextWithLinks({ text, sessionId }: { text: string; sessionId?: 
     if (match.index > lastIndex) result.push(text.slice(lastIndex, match.index));
     result.push(
       <UserMessageUrlLink
-        key={`question-url-${match.index}`}
+        key={`question-url-${match.index}-${match.text}`}
         url={match.text}
         sessionId={sessionId}
       />,
