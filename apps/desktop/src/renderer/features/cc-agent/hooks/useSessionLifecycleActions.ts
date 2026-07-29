@@ -14,7 +14,7 @@
  * activeSessionId 由调用方传入：sidebar 是当前路由解析出的活跃会话（可能
  * 操作非活跃行）；header 操作的恒为当前打开的会话（传 session.id 即可）。
  *
- * includeArchived 必须与调用方自己的 useCCSessions 桶一致：refreshSessions
+ * includeArchived 必须与调用方自己的 useCCSessions 桶一致：unarchive 的 refreshSessions
  * 只刷当前桶，sidebar 处于 archived / all 桶时删除行后若刷的是默认 active
  * 桶，已删行会在当前列表残留（Codex review P2）。header 始终展示 active
  * 会话语境，用默认值即可。
@@ -98,7 +98,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         //
         // Delete 仍走原来的"先 DB 后清理"流程:delete 不可逆,乐观删除如果 DB 失
         // 败会让用户看到"行消失又出现"的诡异闪烁,代价比 archive 大。写库成功
-        // 后再用 patchLocal 从所有桶移除,并由 refreshSessions 刷新当前桶兜底。
+        // 后再用 patchLocal 从所有桶移除,并由 emitRefresh 强制重拉所有桶兜底。
         const archivedRowStaysInList = listFilter === 'all';
         const leaveArchivedSession = () => {
           if (sessionId === activeSessionId) navigate('/cc-agent/new');
@@ -162,18 +162,24 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         cleanupSessionLayoutPrefs(sessionId);
       }
 
-      // 兜底重拉当前桶,但**不 await**:上面的 patchLocal 已经把所有已加载桶修到
-      // 正确状态(该移出的就地移除),列表视觉不依赖这次 IPC。sessions:list 是
+      // 写库成功后强制重拉**所有已加载桶**。不 await —— 列表视觉已由上面的
+      // patchLocal 就地改好,这里只是让缓存跟 DB 对齐;sessions:list 是
       // LEFT JOIN messages + GROUP BY + latest-message 子查询的重查询,await 它
       // 只会把后面的 refreshWorktrees / delete 跳转推迟几百毫秒。
-      void refreshSessions().catch((err: unknown) => {
-        log.warn('[session action] refresh sessions failed', err);
-      });
+      //
+      // 为什么必须全桶、不能只刷当前桶(codex review):归档时 patchLocal 会 drop
+      // 目标桶(archived,本地没有这条的完整 row)并立刻重拉,而那次重拉发生在
+      // setStatus 写库**之前**,拿回来的是「还没归档」的快照。本机
+      // local-db:sessions:update 又只在 title / settings / project 变化时才广播
+      // sessions:patched(status 不在其中),archived 桶再没有别的修正机会 —— 用户
+      // 切到「已归档」筛选会看不到刚归档的这条,直到某次无关刷新。
+      // 与 unarchiveSession 末尾的 emitRefresh 同口径。
+      emitRefresh();
       // 远程会话从侧边栏消失由被控端 sessions:patched{status} 回流(applyPatch 移出分片)驱动,
       // 控制端不再主动重拉 / 不再埋「主动移除」标记(掉线 vs 删除的区分见 CCAgentSessionView 优雅退出)。
-      // I-2: delete/archive 都要顺手刷一次 worktree map —— main 此时已自动收尾
-      // 对应 worktree 目录，但 WorktreeContext 不会因 refreshSessions() 自动更新
-      // (它只订阅 sessionsBus.onRefresh，而 refreshSessions 不发该事件)。
+      // I-2: delete/archive 都要顺手刷一次 worktree map。上面的 emitRefresh 已经会
+      // 触发 WorktreeContext(它订阅 sessionsBus.onRefresh),这里再显式刷一次是为了
+      // 不依赖那条链;worktree 回收真正跑完后 main 还会广播 worktree:changed。
       void refreshWorktrees();
 
       // Archive 已在前面乐观跳到 /cc-agent/new,这里只处理 delete。调用方有列表
@@ -183,7 +189,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         navigate(deleteRedirectRoute ?? '/cc-agent');
       }
     },
-    [navigate, refreshSessions, refreshWorktrees, patchLocal, listFilter, t],
+    [navigate, refreshWorktrees, patchLocal, listFilter, t],
   );
 
   /**
