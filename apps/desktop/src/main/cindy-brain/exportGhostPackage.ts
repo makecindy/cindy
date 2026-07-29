@@ -2,77 +2,37 @@
  * exportGhostPackage
  * ---------------------------------------------------------------------------
  * 插件详情页「导出 .cindy」的打包业务体:把已装插件的安装目录重新打成
- * .cindy zip 包(与 forge.ts packGhostDir 同一份内容契约——ghost.json 在
- * zip 根部、不套外层文件夹),供 main IPC handler 经系统保存对话框落盘。
+ * .cindy zip 包,供 main IPC handler 经系统保存对话框落盘。
  *
- * 与 forge 打包的三点差异(导出 ≠ 制作,见插件规则文档):
- * - 源是安装目录(装入时的 zip 解包内容),不重新校验清单——装入侧已验过;
- * - 跳过装入后由主机写入的根部保留文件(.disabled / .cindy-trust.json),
- *   嵌套条目全保留、根部 .DS_Store 按签名 statement 决定去留,
- *   导出包可原样过装入校验;
- * - 产物不写回源目录,由保存对话框写到用户选定的位置。
+ * 设计(第一性原理:导出包必须可原样通过装入校验):
  *
- * 打包是一致性快照(见 snapshotTree):读完用纯元数据第二遍校验,与
- * 更新/卸载并发时不会产出混合版本的坏包。整个包先在内存里打完再弹
- * 保存对话框:用户挑选位置期间插件被更新/卸载都不影响已抓到的内容。
- * Electron 对话框、安装目录解析与落盘全部注入,便于内存 harness 测试。
+ * 1) 签名包 —— 包内容由 statement 定义,不由目录枚举定义。
+ *    装入校验 = 对 zip 重建 statement 并逐条等于 cindy-signatures.json
+ *    里的 statement。因此导出 = statement 闭包 + 签名文件本身:逐文件
+ *    读盘、重算 sha256 与 statement 比对,全部命中则导出包可证可重装。
+ *    statement 之外的任何内容(主机保留文件、Finder 残渣、任意深度的
+ *    .DS_Store、symlink 目标)天然不进入导出包,无需启发式过滤;任何
+ *    文件缺失/哈希不符 = 目录被并发更新或篡改,整体重读后仍不符则
+ *    如实报错。一致性、签名口径、竞争防护在这一步坍缩为同一件事。
+ *
+ * 2) 未签名包 —— 没有 statement 可锚定,退回目录归档:跳过根部主机
+ *    保留文件与根部 .DS_Store(装入后残渣),symlink 不跟随;一致性用
+ *    纯元数据第二遍校验(读窗口内任何增删改都被尺寸/mtime 捕获),
+ *    不一致整体重读。
+ *
+ * 两路共用:包先在内存里打完再弹保存对话框——用户挑选位置期间插件被
+ * 更新/卸载都不影响已抓内容。Electron 对话框、安装目录解析与落盘全部
+ * 注入,便于内存 harness 测试。
  */
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import JSZip from 'jszip';
 
 import { isValidGhostId, type InstalledGhost } from '../../shared/ghost.js';
-
-/**
- * 遍历时跳过的只有根部主机保留文件(.disabled / .cindy-trust.json)——
- * 它们是装入后由主机写入的,签名 statement 不可能覆盖;其余条目一律
- * 进入快照(签名 statement 覆盖全部原始条目,跳任何一个都会让导出包
- * 装回时完整性校验失败)。
- *
- * .DS_Store 不在这里过滤,统一在快照校验通过后按快照内 statement 去留
- * (见 filterResidueDSStore):statement 必须从与目录一致的同一份快照
- * 里解析,预读磁盘会让过滤依据与归档内容错位。
- */
-const EXPORT_HOST_ROOT_FILES = new Set(['.disabled', '.cindy-trust.json']);
-function shouldSkipExportEntry(name: string, relBase: string): boolean {
-  return relBase === '' && EXPORT_HOST_ROOT_FILES.has(name);
-}
-
-/** 解析 statement 覆盖的相对路径;解析失败返回 null(视为未签名)。 */
-function parseSignedPaths(signatureBytes: Buffer): Set<string> | null {
-  try {
-    const doc = JSON.parse(signatureBytes.toString('utf8')) as {
-      statement?: { files?: Array<{ path?: unknown }> };
-    };
-    const files = doc?.statement?.files;
-    if (!Array.isArray(files)) return null;
-    return new Set(
-      files.map((item) => item?.path).filter((p): p is string => typeof p === 'string'),
-    );
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 快照校验通过后的 .DS_Store 去留(任意深度统一口径):
- * - 签名包:buildStatement 打包时哈希除 __MACOSX 与签名文件外的所有
- *   条目——statement 覆盖的 .DS_Store 必须保留(跳过会缺文件),未覆盖
- *   的必须丢弃(装入后 Finder 浏览生成的残渣,保留会多出 statement 外
- *   文件),两种错位都会让重装校验失败;
- * - 未签名包:只丢根部残渣,嵌套 .DS_Store 可能是作者包内容,保留。
- */
-function filterResidueDSStore(files: TreeFile[]): TreeFile[] {
-  const signature = files.find((file) => file.rel === 'cindy-signatures.json');
-  const signedPaths = signature ? parseSignedPaths(signature.data) : null;
-  return files.filter((file) => {
-    if (file.rel.split('/').pop() !== '.DS_Store') return true;
-    if (signedPaths) return signedPaths.has(file.rel);
-    return file.rel.includes('/');
-  });
-}
+import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
 
 export type ExportGhostPackageResult =
   | { status: 'saved'; savedPath: string }
@@ -95,10 +55,9 @@ export interface ExportGhostPackageDeps {
   writeFile(filePath: string, data: Buffer): Promise<void>;
 }
 
-/** Windows 保留设备名(不分大小写),直接作文件名会被系统拒绝。 */
+/** 插件名清洗成文件名片段:空白折叠、剥掉文件系统非法字符,截断防爆长度。 */
 const WINDOWS_RESERVED_BASENAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 
-/** 插件名清洗成文件名片段:空白折叠、剥掉文件系统非法字符,截断防爆长度。 */
 export function sanitizeExportFileNamePart(name: string): string {
   let cleaned = name
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
@@ -116,10 +75,96 @@ export function sanitizeExportFileNamePart(name: string): string {
   return cleaned;
 }
 
-/** 目录内一个文件的字节与元数据(一致性快照用)。 */
-interface TreeFile {
+/** 导出包的一个条目。 */
+interface PackageEntry {
   rel: string;
   data: Buffer;
+}
+
+// ---------------------------------------------------------------------------
+// 签名包:statement 闭包
+// ---------------------------------------------------------------------------
+
+interface SignedDoc {
+  /** 签名文件原始字节(原样进入导出包)。 */
+  raw: Buffer;
+  files: Array<{ path: string; sha256: string; bytes: number }>;
+}
+
+/**
+ * 读取并解析签名文件。返回 null 表示插件未签名(文件不存在);文件存在
+ * 但结构非法时抛错——静默降级成未签名导出会让重装后信任等级失真,
+ * 不如如实报错。
+ */
+async function readSignedDoc(dir: string): Promise<SignedDoc | null> {
+  let raw: Buffer;
+  try {
+    raw = await fs.promises.readFile(path.join(dir, GHOST_SIGNATURE_FILE));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+    throw err;
+  }
+  const doc = JSON.parse(raw.toString('utf8')) as {
+    statement?: { files?: Array<{ path?: unknown; sha256?: unknown; bytes?: unknown }> };
+  };
+  const files = doc?.statement?.files;
+  if (!Array.isArray(files)) throw new Error('invalid signature statement');
+  const parsed: SignedDoc['files'] = [];
+  for (const item of files) {
+    if (
+      typeof item?.path !== 'string' ||
+      typeof item?.sha256 !== 'string' ||
+      typeof item?.bytes !== 'number'
+    ) {
+      throw new Error('invalid signature statement entry');
+    }
+    parsed.push({ path: item.path, sha256: item.sha256, bytes: item.bytes });
+  }
+  return { raw, files: parsed };
+}
+
+/** statement 路径必须相对且不逃逸——装入侧已校验,这里防一手目录被改。 */
+function isSafeStatementPath(p: string): boolean {
+  if (p.length === 0 || p.startsWith('/') || p.includes('\\')) return false;
+  return !p.split('/').includes('..');
+}
+
+/**
+ * 按 statement 闭包读包:逐文件读盘并重算 sha256 比对。任何文件缺失、
+ * 长度或哈希不符都返回 null(目录被并发更新/篡改,调用方整体重试)。
+ * 通过即导出包内容——不多不少,可证可重装。
+ */
+async function readSignedEntries(dir: string, doc: SignedDoc): Promise<PackageEntry[] | null> {
+  const out: PackageEntry[] = [{ rel: GHOST_SIGNATURE_FILE, data: doc.raw }];
+  for (const item of doc.files) {
+    if (!isSafeStatementPath(item.path)) return null;
+    let data: Buffer;
+    try {
+      data = await fs.promises.readFile(path.join(dir, ...item.path.split('/')));
+    } catch {
+      return null;
+    }
+    if (data.byteLength !== item.bytes) return null;
+    if (crypto.createHash('sha256').update(data).digest('hex') !== item.sha256) return null;
+    out.push({ rel: item.path, data });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// 未签名包:目录归档 + 元数据双遍一致性校验
+// ---------------------------------------------------------------------------
+
+/**
+ * 未签名包的跳过口径:根部主机保留文件与根部系统残渣。
+ * 嵌套条目一律保留——它们可能是作者包内容。
+ */
+const EXPORT_SKIP_ROOT_FILES = new Set(['.disabled', '.cindy-trust.json', '.DS_Store']);
+function shouldSkipExportEntry(name: string, relBase: string): boolean {
+  return relBase === '' && EXPORT_SKIP_ROOT_FILES.has(name);
+}
+
+interface TreeFile extends PackageEntry {
   size: number;
   mtimeMs: number;
 }
@@ -127,19 +172,14 @@ interface TreeFile {
 type TreeMeta = Omit<TreeFile, 'data'>;
 
 /**
- * 递归枚举安装目录。withData=true 时先 stat 再读字节(评审 P1:顺序不能
- * 反——先读后 stat 会在文件两步间被改写时产出「旧字节+新元数据」,校验
- * 遍误判一致;先 stat 后读,改写必然落在读之后,校验遍一定能捕获并触发
- * 重读);否则只取元数据(校验遍,不重复读内容)。symlink/junction 不
- * 跟随:只归档安装目录自身的真实内容,防止借链接把目录外文件打进导出包。
- * 结果按 rel 排序,供两遍逐位比对。
+ * 递归枚举安装目录。withData=true 时先 stat 再读字节(顺序不能反:先读
+ * 后 stat 会在文件两步间被改写时产出「旧字节+新元数据」,校验遍误判
+ * 一致);否则只取元数据(校验遍,不重复读内容)。symlink/junction 不
+ * 跟随:只归档安装目录自身的真实内容。结果按 rel 排序供逐位比对。
  */
 async function walkTree(dir: string, withData: true): Promise<TreeFile[]>;
 async function walkTree(dir: string, withData: false): Promise<TreeMeta[]>;
-async function walkTree(
-  dir: string,
-  withData: boolean,
-): Promise<Array<TreeFile | TreeMeta>> {
+async function walkTree(dir: string, withData: boolean): Promise<Array<TreeFile | TreeMeta>> {
   const out: Array<TreeFile | TreeMeta> = [];
   const walk = async (cur: string, relBase: string): Promise<void> => {
     const entries = await fs.promises.readdir(cur, { withFileTypes: true });
@@ -168,27 +208,47 @@ async function walkTree(
 }
 
 /**
- * 一致性快照(评审 P1):更新会整体换目录、卸载会删目录,单遍逐文件读
- * 可能跨越两个文件系统状态,产出混合版本的坏包。这里读完后用纯元数据
- * 第二遍校验——任何文件在读窗口内被增删改都会被尺寸/mtime 比对捕获,
- * 不一致就整体重读;通过校验的包对应校验遍时刻的单一目录状态。
+ * 未签名包的一致性快照:更新会整体换目录、卸载会删目录,单遍逐文件读
+ * 可能跨越两个文件系统状态。读完后用纯元数据第二遍校验,任何文件在读
+ * 窗口内被增删改都会被尺寸/mtime 比对捕获,不一致整体重读;通过校验
+ * 的包对应校验遍时刻的单一目录状态。
+ */
+async function snapshotUnsignedTree(dir: string): Promise<TreeFile[] | null> {
+  const first = await walkTree(dir, true);
+  const verify = await walkTree(dir, false);
+  const consistent =
+    first.length === verify.length &&
+    first.every(
+      (file, i) =>
+        file.rel === verify[i]!.rel &&
+        file.size === verify[i]!.size &&
+        file.mtimeMs === verify[i]!.mtimeMs,
+    );
+  return consistent ? first : null;
+}
+
+// ---------------------------------------------------------------------------
+// 共用:带重试的快照 + 打包 + 对话框落盘
+// ---------------------------------------------------------------------------
+
+/**
+ * 快照入口:签名包走 statement 闭包,未签名包走目录归档。任一路在并发
+ * 变更下拿不到一致结果就整体重试,上限 SNAPSHOT_MAX_ATTEMPTS 次;持续
+ * 冲突(反复更新/卸载中)返回 null,由调用方如实报错请用户重试。
  */
 const SNAPSHOT_MAX_ATTEMPTS = 3;
-async function snapshotTree(dir: string): Promise<TreeFile[] | null> {
+
+async function snapshotPackage(dir: string): Promise<PackageEntry[] | null> {
   for (let attempt = 0; attempt < SNAPSHOT_MAX_ATTEMPTS; attempt++) {
-    const first = await walkTree(dir, true);
-    const verify = await walkTree(dir, false);
-    const consistent =
-      first.length === verify.length &&
-      first.every(
-        (file, i) =>
-          file.rel === verify[i]!.rel &&
-          file.size === verify[i]!.size &&
-          file.mtimeMs === verify[i]!.mtimeMs,
-      );
-    if (consistent) return first;
+    const doc = await readSignedDoc(dir);
+    if (doc) {
+      const entries = await readSignedEntries(dir, doc);
+      if (entries) return entries;
+    } else {
+      const tree = await snapshotUnsignedTree(dir);
+      if (tree) return tree.map(({ rel, data }) => ({ rel, data }));
+    }
   }
-  // 持续并发变更(反复更新/卸载中):放弃,让调用方如实报错由用户重试。
   return null;
 }
 
@@ -203,8 +263,7 @@ export async function exportGhostPackage(
   if (!ghost) return { status: 'not_installed' };
 
   // 双保险:dir 来自 GhostManager 扫描,这里再确认它是真实目录(lstat
-  // 不跟随链接),避免把被替换成 symlink/junction 的注册项当成打包源,
-  // 将链接目标的内容打进导出包。
+  // 不跟随链接),避免把被替换成 symlink/junction 的注册项当成打包源。
   try {
     const dirStat = await fs.promises.lstat(ghost.dir);
     if (!dirStat.isDirectory()) throw new Error('not a directory');
@@ -212,20 +271,15 @@ export async function exportGhostPackage(
     return { status: 'error', code: 'read_failed' };
   }
 
-  // 一致性快照(口径见 snapshotTree 头注释):安装目录内容来自装入侧
-  // 已校验的 zip,此处只做如实归档,不设内容上限(装入侧已卡过解压总量)。
-  let files: TreeFile[] | null;
+  // 一致性快照(口径见文件头):安装目录内容来自装入侧已校验的 zip,
+  // 此处只做如实归档,不设内容上限(装入侧已卡过解压总量)。
+  let files: PackageEntry[] | null;
   try {
-    files = await snapshotTree(ghost.dir);
+    files = await snapshotPackage(ghost.dir);
   } catch {
     return { status: 'error', code: 'read_failed' };
   }
-  if (!files) {
-    // 连续多次校验都不一致:目录正在被反复改写,如实报错由用户重试。
-    return { status: 'error', code: 'read_failed' };
-  }
-  // .DS_Store 去留按快照内的 statement 决定(口径见 filterResidueDSStore)。
-  files = filterResidueDSStore(files);
+  if (!files) return { status: 'error', code: 'read_failed' };
 
   const zip = new JSZip();
   for (const file of files) {

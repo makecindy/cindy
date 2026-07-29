@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -55,6 +56,30 @@ function makeGhost(): InstalledGhost {
   };
 }
 
+/**
+ * 给夹具目录写一份真实 sha256 的签名文件(路径相对 ghostDir,
+ * posix 风格)。签名包导出会逐文件校验哈希,假哈希必然 read_failed。
+ */
+async function writeStatement(paths: string[]): Promise<void> {
+  const files = [];
+  for (const p of paths) {
+    const data = await fs.promises.readFile(path.join(ghostDir, ...p.split('/')));
+    files.push({
+      path: p,
+      sha256: crypto.createHash('sha256').update(data).digest('hex'),
+      bytes: data.byteLength,
+    });
+  }
+  await fs.promises.writeFile(
+    path.join(ghostDir, 'cindy-signatures.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      publisher: { name: 'test', publicKey: 'k', signature: 's' },
+      statement: { schemaVersion: 1, ghostId: 'hello', ghostVersion: '1.2.0', files },
+    }),
+  );
+}
+
 function makeDeps(overrides: Partial<Parameters<typeof exportGhostPackage>[1]> = {}) {
   return {
     listInstalled: () => [makeGhost()],
@@ -88,31 +113,23 @@ describe('exportGhostPackage', () => {
     expect(manifest.id).toBe('hello');
   });
 
-  it('根部 .DS_Store 被签名 statement 覆盖时保留,未覆盖时跳过', async () => {
+  it('签名包:导出 statement 闭包,被覆盖的根部 .DS_Store 保留', async () => {
     // 打包时根部已有 .DS_Store 的签名包:statement 覆盖它,导出必须保留,
-    // 否则重装校验缺文件失败。
-    await fs.promises.writeFile(
-      path.join(ghostDir, 'cindy-signatures.json'),
-      JSON.stringify({
-        schemaVersion: 1,
-        statement: {
-          schemaVersion: 1,
-          ghostId: 'hello',
-          ghostVersion: '1.2.0',
-          files: [
-            { path: '.DS_Store', sha256: 'x', bytes: 0 },
-            { path: 'ghost.json', sha256: 'y', bytes: 1 },
-          ],
-        },
-      }),
-    );
-    const signedResult = await exportGhostPackage('hello', makeDeps());
-    expect(signedResult.status).toBe('saved');
-    if (signedResult.status !== 'saved') return;
-    const signedZip = await JSZip.loadAsync(await fs.promises.readFile(signedResult.savedPath));
-    expect(Object.keys(signedZip.files)).toContain('.DS_Store');
+    // 否则重装校验缺文件失败;主机保留文件(.disabled/.cindy-trust.json)
+    // 不在 statement 里,天然不进入导出包。
+    await writeStatement(['.DS_Store', 'ghost.json', 'locales/en.json', 'main.js']);
+    const result = await exportGhostPackage('hello', makeDeps());
+    expect(result.status).toBe('saved');
+    if (result.status !== 'saved') return;
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(result.savedPath));
+    const names = Object.keys(zip.files);
+    expect(names).toContain('.DS_Store');
+    expect(names).toContain('cindy-signatures.json');
+    expect(names).toContain('ghost.json');
+    expect(names).not.toContain('.disabled');
+    expect(names).not.toContain('.cindy-trust.json');
 
-    // 无签名覆盖(装入后 Finder 生成的残渣):跳过,不带进导出包。
+    // 未签名包:根部 .DS_Store 是装入后 Finder 残渣,跳过。
     await fs.promises.rm(path.join(ghostDir, 'cindy-signatures.json'));
     const unsignedResult = await exportGhostPackage('hello', makeDeps());
     expect(unsignedResult.status).toBe('saved');
@@ -121,27 +138,51 @@ describe('exportGhostPackage', () => {
     expect(Object.keys(unsignedZip.files)).not.toContain('.DS_Store');
   });
 
-  it('签名包嵌套 .DS_Store 未被 statement 覆盖时丢弃(Finder 残渣)', async () => {
+  it('签名包:statement 之外的杂散文件不进入导出包(任意深度 Finder 残渣)', async () => {
     // 用户用 Finder 浏览过子目录:嵌套 .DS_Store 是装入后生成的,
-    // statement 不覆盖它,导出保留会让重装校验多出 statement 外文件。
+    // statement 不覆盖它,保留会让重装校验多出 statement 外文件。
     await fs.promises.writeFile(path.join(ghostDir, 'locales', '.DS_Store'), '');
-    await fs.promises.writeFile(
-      path.join(ghostDir, 'cindy-signatures.json'),
-      JSON.stringify({
-        schemaVersion: 1,
-        statement: {
-          schemaVersion: 1,
-          ghostId: 'hello',
-          ghostVersion: '1.2.0',
-          files: [{ path: 'ghost.json', sha256: 'y', bytes: 1 }],
-        },
-      }),
-    );
+    await writeStatement(['ghost.json', 'locales/en.json', 'main.js']);
     const result = await exportGhostPackage('hello', makeDeps());
     expect(result.status).toBe('saved');
     if (result.status !== 'saved') return;
     const zip = await JSZip.loadAsync(await fs.promises.readFile(result.savedPath));
-    expect(Object.keys(zip.files)).not.toContain('locales/.DS_Store');
+    const names = Object.keys(zip.files);
+    expect(names).not.toContain('locales/.DS_Store');
+    expect(names).not.toContain('.DS_Store');
+    expect(names).toContain('locales/en.json');
+  });
+
+  it('签名包内容被篡改(哈希与 statement 不符):如实 read_failed', async () => {
+    await writeStatement(['ghost.json', 'locales/en.json', 'main.js']);
+    await fs.promises.writeFile(path.join(ghostDir, 'main.js'), 'tampered-content');
+    const result = await exportGhostPackage('hello', makeDeps());
+    expect(result).toEqual({ status: 'error', code: 'read_failed' });
+  });
+
+  it('签名包读取期间目录被更新:哈希不符触发整体重读', async () => {
+    await writeStatement(['ghost.json', 'locales/en.json', 'main.js']);
+    // 第一次读 main.js 返回陈旧字节(模拟并发更新读到旧目录):
+    // 哈希与 statement 不符,必须整体重读,最终包内容应为真实字节。
+    const realReadFile = fs.promises.readFile;
+    let staleServed = false;
+    const spy = vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p: any, opts: any) => {
+      if (String(p).endsWith('main.js') && !staleServed) {
+        staleServed = true;
+        return Buffer.from('stale-bytes');
+      }
+      return realReadFile(p, opts) as any;
+    });
+    try {
+      const result = await exportGhostPackage('hello', makeDeps());
+      expect(result.status).toBe('saved');
+      if (result.status !== 'saved') return;
+      expect(staleServed).toBe(true);
+      const zip = await JSZip.loadAsync(await fs.promises.readFile(result.savedPath));
+      await expect(zip.files['main.js'].async('string')).resolves.toBe('console.log("hi")');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('遍历期间目录被改写时整体重读,导出与最终状态一致的包', async () => {
@@ -175,15 +216,13 @@ describe('exportGhostPackage', () => {
     }
   });
 
-  it('嵌套点文件与 node_modules 属于包内容,导出必须保留(签名完整性)', async () => {
+  it('嵌套点文件与 node_modules 属于包内容,未签名导出必须保留', async () => {
     await fs.promises.mkdir(path.join(ghostDir, 'node_modules', 'dep'), { recursive: true });
     await fs.promises.writeFile(path.join(ghostDir, 'node_modules', 'dep', 'index.js'), 'x');
     await fs.promises.mkdir(path.join(ghostDir, 'data'), { recursive: true });
     await fs.promises.writeFile(path.join(ghostDir, 'data', '.keep'), '');
-    // 嵌套 .DS_Store 可能是签名 statement 覆盖的原始条目,必须保留;
-    // 只有根部主机残渣才跳过。
+    // 嵌套 .DS_Store 可能是作者包内容;未签名包只有根部主机残渣才跳过。
     await fs.promises.writeFile(path.join(ghostDir, 'data', '.DS_Store'), '');
-    await fs.promises.writeFile(path.join(ghostDir, 'cindy-signatures.json'), '{}');
 
     const result = await exportGhostPackage('hello', makeDeps());
     expect(result.status).toBe('saved');
@@ -196,7 +235,6 @@ describe('exportGhostPackage', () => {
     expect(names).toContain('node_modules/dep/index.js');
     expect(names).toContain('data/.keep');
     expect(names).toContain('data/.DS_Store');
-    expect(names).toContain('cindy-signatures.json');
     expect(names).not.toContain('.disabled');
     expect(names).not.toContain('.cindy-trust.json');
   });
