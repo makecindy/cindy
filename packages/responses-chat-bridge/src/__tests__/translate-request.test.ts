@@ -868,6 +868,35 @@ describe('translateResponsesRequest', () => {
     ]));
   });
 
+  it('ignores late results for synthesized missing calls without closing a newer tool round', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'old_1', name: 'Bash', arguments: '{"round":1}' },
+        { type: 'message', role: 'user', content: 'continue' },
+        { type: 'function_call', call_id: 'new_1', name: 'Bash', arguments: '{"round":2}' },
+        { type: 'function_call_output', call_id: 'old_1', output: 'late result' },
+        { type: 'function_call_output', call_id: 'new_1', output: 'new result' },
+      ],
+    }));
+
+    expect(out.messages.filter((message) => message.role === 'tool')).toEqual([
+      {
+        role: 'tool',
+        tool_call_id: 'old_1',
+        content: expect.stringContaining('execution status is unknown'),
+      },
+      { role: 'tool', tool_call_id: 'new_1', content: 'new result' },
+    ]);
+    expect(out.messages).not.toEqual(expect.arrayContaining([
+      { role: 'tool', tool_call_id: 'old_1', content: 'late result' },
+      expect.objectContaining({
+        role: 'tool',
+        tool_call_id: 'new_1',
+        content: expect.stringContaining('execution status is unknown'),
+      }),
+    ]));
+  });
+
   it('normalizes synthesized orphan tool calls for reasoning and Gemini providers', () => {
     const out = translateResponsesRequest(base({
       input: [

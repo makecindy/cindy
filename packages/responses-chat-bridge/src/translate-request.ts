@@ -375,6 +375,7 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
           `No tool result was recorded for "${call.name}"; execution status is unknown. `
           + 'Do not treat this as success, failure, or user-provided input.',
       });
+      resolvedToolCallIds.add(call.id);
     }
     pendingToolCalls = [];
     releaseDeferredBarriers();
