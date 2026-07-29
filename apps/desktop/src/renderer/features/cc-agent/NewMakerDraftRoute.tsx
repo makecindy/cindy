@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 职责:
  *   1. 从 newMakerDraft store 读取 vendor / workingDir / lastByVendor
- *   2. 渲染 CREATE AGENT 主区:lockup + ChatInput(sessionId=undefined) + 快速开始
+ *   2. 渲染 CREATE AGENT 主区:lockup + ChatInput(sessionId=undefined) + 上下文快捷入口
  *   3. 用户切 vendor → switchVendor() 把当前 prefs 落地 lastByVendor[oldVendor]
  *      + 切到新 vendor 后 ChatInput 的 initialModel/Effort/PermissionMode 自动
  *      由 lastByVendor[newVendor] 提供
@@ -63,6 +63,7 @@ import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useAttachments } from '@/hooks/useAttachments';
+import { useComposerDraftPresence } from '@/hooks/useComposerDraftPresence';
 import {
   useNewMakerDraft,
   switchVendor,
@@ -87,7 +88,6 @@ import {
   clearDraftAndNotify as clearComposerDraftAndNotify,
   getDraft as getComposerDraft,
   plainTextToTiptapDoc,
-  quickStartTextToTiptapDoc,
   saveDraft as saveComposerDraft,
 } from '@/lib/composerDraftStore';
 import type { JSONContent } from '@tiptap/core';
@@ -99,6 +99,11 @@ import * as sessionService from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { NewGoalDialog } from '@/components/new-chat/NewGoalDialog';
 import type { GoalLimitValues } from '@/components/new-chat/GoalAdvancedLimits';
+import {
+  NewMakerQuickStarts,
+  type NewMakerQuickStartItem,
+  type NewMakerQuickStartKey,
+} from './NewMakerQuickStarts';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
 import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
@@ -109,15 +114,7 @@ import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor, Session } from '@/lib/ccAgent.types';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
-import {
-  ChevronDown,
-  Code2,
-  Hammer,
-  MessageSquare,
-  MessageSquareCode,
-  MonitorSmartphone,
-  SearchCode,
-} from 'lucide-react';
+import { ChevronDown, MessageSquare, MonitorSmartphone } from 'lucide-react';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
@@ -251,29 +248,6 @@ function draftEnableOrcaOptions(
     delegateTask: cfg.initialTask || undefined,
   };
 }
-
-const createAgentQuickStarts = [
-  {
-    key: 'explore',
-    labelKey: 'newChat.createAgent.quickStarts.explore',
-    icon: SearchCode,
-  },
-  {
-    key: 'build',
-    labelKey: 'newChat.createAgent.quickStarts.build',
-    icon: Code2,
-  },
-  {
-    key: 'review',
-    labelKey: 'newChat.createAgent.quickStarts.review',
-    icon: MessageSquareCode,
-  },
-  {
-    key: 'fix',
-    labelKey: 'newChat.createAgent.quickStarts.fix',
-    icon: Hammer,
-  },
-] as const;
 
 /**
  * 草稿态没有 sessionId,附件有两种"寄居"形态,lazy-create 出 sessionId 之后
@@ -422,6 +396,9 @@ export function NewMakerDraftRoute() {
   const pageDragCounterRef = useRef(0);
   const [pageDragOver, setPageDragOver] = useState(false);
   const [wtCreating, setWtCreating] = useState(false);
+  // 快捷卡一键启动的 busy guard:同步置位防连点,创建流程收尾(成功 navigate /
+  // 失败恢复)后经 onSettled 复位。
+  const [quickStartBusyKey, setQuickStartBusyKey] = useState<NewMakerQuickStartKey | null>(null);
   // 首页「+」→「新建目标」弹窗开关 + 打开时输入框已有文字(作默认目标内容)。
   const [newGoalOpen, setNewGoalOpen] = useState(false);
   const [newGoalInitialObjective, setNewGoalInitialObjective] = useState('');
@@ -445,6 +422,9 @@ export function NewMakerDraftRoute() {
   // fallback——草稿态没真实会话目录可写),但 draftKey 用 NEW_MAKER_DRAFT_KEY
   // 让附件能在"切走再切回"时存活。
   const attachmentState = useAttachments(undefined, NEW_MAKER_DRAFT_KEY);
+  // 快捷卡是 empty-state 启动器:草稿(文字/附件/引用/评论)非空时整块隐藏,
+  // 绝不覆盖或拼接用户已有输入。
+  const hasComposerDraft = useComposerDraftPresence(NEW_MAKER_DRAFT_KEY);
   const effectiveWorkingDir = draft.workingDir;
   const effectiveRemoteHostId = draft.remoteHostId;
   const isRemoteProjectDraft = effectiveWorkingDir != null && effectiveRemoteHostId != null;
@@ -1377,6 +1357,8 @@ export function NewMakerDraftRoute() {
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
         onAccepted?: () => void;
+        /** 异步创建流程收尾回调(成功 navigate 或失败恢复都触发);快捷卡靠它复位 busy。 */
+        onSettled?: () => void;
       },
     ): Promise<boolean | undefined> => {
       if (sendInFlightRef.current) return false;
@@ -1420,6 +1402,7 @@ export function NewMakerDraftRoute() {
             await tryHandleNavigationCommand(message, { navigate, t });
           } finally {
             sendInFlightRef.current = false;
+            opts?.onSettled?.();
           }
         })();
         return false;
@@ -1659,7 +1642,7 @@ export function NewMakerDraftRoute() {
             // 里, route change 在那次 commit 同时发生,旧的 draft route 直接被 unmount,
             // 不会暴露 cleared 后的视觉状态。clearFiles 仍然在 React 提交 unmount cleanup
             // 之前同步执行,所以 useAttachments 的 cleanup 不会把刚送出去的附件回写到 store。
-            // 保存原始 doc JSON(含 quickStartPill 等 mark),供 worktree 失败恢复时原样还原。
+            // 保存原始 doc JSON(含 mention/引用等节点),供 worktree 失败恢复时原样还原。
             const preNavDraftDoc = getComposerDraft(NEW_MAKER_DRAFT_KEY)?.text ?? null;
             navigate(`/cc-agent/${newSession.id}`, { replace: true });
             // clearDraftAndNotify (not bare clear): onSend returned false above
@@ -1904,6 +1887,7 @@ export function NewMakerDraftRoute() {
         } finally {
           setWtCreating(false);
           sendInFlightRef.current = false;
+          opts?.onSettled?.();
         }
       })();
 
@@ -2199,18 +2183,45 @@ export function NewMakerDraftRoute() {
     return proceed;
   }, [vendorAuthGate]);
 
+  // 快捷卡一键启动:直接复用 handleSend 的既有创建链路(认证门禁 → createSession →
+  // setPending → navigate),kickoff 是用户可见的本地化第一条消息,不再预填 Composer
+  // 要求二次发送。模型/权限/来源沿用草稿当前值,不代替用户切换任何配置。
   const handleQuickStart = useCallback(
-    (labelKey: (typeof createAgentQuickStarts)[number]['labelKey']) => {
-      const text = t(labelKey);
-      const currentDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
-      saveComposerDraft(NEW_MAKER_DRAFT_KEY, {
-        text: quickStartTextToTiptapDoc(text),
-        attachments: currentDraft?.attachments ?? attachmentState.attachments,
-        quotes: currentDraft?.quotes,
-        browserComments: currentDraft?.browserComments,
-      });
+    (item: NewMakerQuickStartItem) => {
+      // 三重防重入:卡片自身 busy、正在发送(Composer 或另一张卡)、草稿非空
+      //(草稿非空时卡片本应隐藏,这里是渲染竞态的兜底)。
+      if (quickStartBusyKey !== null || sendInFlightRef.current || hasComposerDraft) return;
+      setQuickStartBusyKey(item.key);
+      const onSettled = () => setQuickStartBusyKey(null);
+      void handleSend(
+        t(item.kickoffKey),
+        draftInitialModel,
+        draftInitialEffort,
+        chatInitialPermissionMode,
+        undefined,
+        undefined,
+        { providerId: chatInitialProviderId, onSettled },
+      )
+        .then(() => {
+          // handleSend 同步返回 false 后由分离的异步流程收尾;若它在任何早退分支
+          // 直接返回(未置 sendInFlightRef),这里兜底复位 busy。重复调用无害。
+          if (!sendInFlightRef.current) onSettled();
+        })
+        .catch((err) => {
+          log.error('[quick start]', err);
+          onSettled();
+        });
     },
-    [attachmentState.attachments, t],
+    [
+      chatInitialPermissionMode,
+      chatInitialProviderId,
+      draftInitialEffort,
+      draftInitialModel,
+      handleSend,
+      hasComposerDraft,
+      quickStartBusyKey,
+      t,
+    ],
   );
 
   // 注意:不要给 ChatInput 加 key 强制 remount。ChatInput 内部 activeModel /
@@ -2565,56 +2576,17 @@ export function NewMakerDraftRoute() {
                     <ConnectProviderCard />
                   </div>
                 )}
-                {/* 快捷入口与输入框同宽:左右两缘都与上方 ChatInput 对齐(父列已封顶
-                    inputWidth)。此前封顶 800px 会在宽窗口下右缘短一截,视觉上没对齐
-                    (2026-07-24 用户反馈)。 */}
-                {!showProviderOnboardingCard && (
-                  <div data-testid="create-agent-quick-starts" className="mt-[42px] w-full">
-                    {/* 标题字号 12→14px(DESIGN §3 Caption),与卡片间距 16→10px 收近
-                        (DESIGN §5 间距档)——用户改稿 2026-07-22。 */}
-                    <div className="mb-2.5 px-0.5">
-                      <div className="text-[14px] font-medium leading-[18px] text-[var(--text-secondary)]">
-                        {t('newChat.createAgent.quickStart')}
-                      </div>
-                    </div>
-                    <div
-                      className={cn(
-                        'grid w-full gap-3',
-                        isDraftNarrow ? 'grid-cols-1' : isDraftMedium ? 'grid-cols-2' : 'grid-cols-4',
-                      )}
-                    >
-                      {createAgentQuickStarts.map(({ key, labelKey, icon: Icon }) => (
-                        <button
-                          key={key}
-                          type="button"
-                          onClick={() => handleQuickStart(labelKey)}
-                          // 圆角与输入框统一为 12px(DESIGN §5 容器档,rounded-xl)。
-                          // 用户改稿 2026-07-25:两档统一竖排——icon 固定卡片左上(距顶/
-                          // 距左均等于 p-3/p-4 内边距),文字挪到卡片中下方、与 icon 左对齐
-                          // (flex-col + justify-between,icon 顶、文字底;gap-1 兜底竖向
-                          // 最小间距),取代原窄态横排 / 常态竖排自适应(#562)。
-                          // 卡片高度不变(narrow 84 / 常态 112)。
-                          className={cn(
-                            'group flex flex-col items-start justify-between gap-1 rounded-xl border border-[var(--create-agent-quick-card-border)] bg-[var(--create-agent-quick-card-bg)] text-left text-[var(--create-agent-quick-card-text)] transition-colors hover:bg-[var(--create-agent-quick-card-bg-hover)]',
-                            isDraftNarrow ? 'min-h-[84px] p-3' : 'min-h-[112px] p-4',
-                          )}
-                        >
-                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--create-agent-quick-card-icon-bg)]">
-                            <Icon
-                              size={16}
-                              strokeWidth={2}
-                              className="text-[var(--create-agent-quick-card-icon)]"
-                            />
-                          </span>
-                          {/* 字号 13px 与左侧会话列表(text-13)一致——用户改稿 2026-07-22。
-                              竖排下占满卡片宽度、左对齐 icon,靠父列 justify-between 贴底。 */}
-                          <span className="w-full min-w-0 text-13 font-semibold leading-[16px]">
-                            {t(labelKey)}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                {/* 快捷入口仅在 Composer 为空时出现(empty-state 启动器),不覆盖文字、
+                    附件或引用;卡片集合由 createSession 同一份 effectiveWorkingDir 真值
+                    派生(Dialogue/Project 两套)。宽度与输入框同宽(父列已封顶 inputWidth)。 */}
+                {!showProviderOnboardingCard && !hasComposerDraft && (
+                  <NewMakerQuickStarts
+                    workspaceKind={effectiveWorkingDir ? 'project' : 'dialogue'}
+                    narrow={isDraftNarrow}
+                    medium={isDraftMedium}
+                    busyKey={quickStartBusyKey}
+                    onSelect={handleQuickStart}
+                  />
                 )}
                 {/* 首页「新建目标」弹窗:无 sessionId → onCreate 建会话并 setGoal(见 handleCreateGoal)。
                 initialObjective = 点「新建目标」时输入框里已有的文字。 */}

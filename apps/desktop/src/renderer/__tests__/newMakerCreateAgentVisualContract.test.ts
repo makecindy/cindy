@@ -4,6 +4,10 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const source = readFileSync(resolve(__dirname, '..', 'features', 'cc-agent', 'NewMakerDraftRoute.tsx'), 'utf8');
+const quickStartsSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'NewMakerQuickStarts.tsx'),
+  'utf8',
+);
 const brandLockupSource = readFileSync(resolve(__dirname, '..', 'components', 'branding', 'ThemeBrandLockup.tsx'), 'utf8');
 const chatInputSource = readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'), 'utf8');
 const sendButtonSource = readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'SendButton.tsx'), 'utf8');
@@ -24,8 +28,8 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('data-testid="create-agent-main"');
     expect(source).toContain('data-testid="create-agent-mode-pill"');
     expect(source).toContain('testId="create-agent-brand-lockup"');
-    expect(source).toContain('data-testid="create-agent-quick-starts"');
-    expect(source).toContain('createAgentQuickStarts.map');
+    expect(source).toContain('<NewMakerQuickStarts');
+    expect(quickStartsSource).toContain('data-testid="create-agent-quick-starts"');
     expect(source).toContain('<ChatInput');
     expect(source).toContain('<VendorSegmentedSwitcher');
     expect(source).toContain('middleToolbarSlot={');
@@ -63,10 +67,11 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).not.toContain('max-w-[800px]');
     expect(source).toContain('absolute right-0 top-[22px]');
     // 快捷入口与输入框同宽(w-full 跟随父列 inputWidth),左右两缘对齐 ChatInput;
-    // 旧 800px 封顶在宽窗口下右缘短一截,2026-07-24 用户反馈后摘除。
-    const quickStartsBlock = source.slice(
-      source.indexOf('data-testid="create-agent-quick-starts"'),
-      source.indexOf('data-testid="create-agent-quick-starts"') + 200,
+    // 旧 800px 封顶在宽窗口下右缘短一截,2026-07-24 用户反馈后摘除。卡片区已抽成
+    // NewMakerQuickStarts 纯展示组件(2026-07-29 上下文快捷入口重构)。
+    const quickStartsBlock = quickStartsSource.slice(
+      quickStartsSource.indexOf('data-testid="create-agent-quick-starts"'),
+      quickStartsSource.indexOf('data-testid="create-agent-quick-starts"') + 200,
     );
     expect(quickStartsBlock).toContain('w-full');
     expect(quickStartsBlock).toContain('mt-[42px]');
@@ -114,27 +119,39 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     }
   });
 
-  it('uses the R2 quick-start icon mapping and avoids page-level shadows', () => {
-    expect(source).toContain('SearchCode');
-    expect(source).toContain('Code2');
-    expect(source).toContain('MessageSquareCode');
-    expect(source).toContain('Hammer');
+  it('uses the contextual quick-start icon mapping and avoids page-level shadows', () => {
+    // Dialogue 通用四卡(制作工具/写文档/设计图片/搜索互联网)+ Project 开发四卡。
+    // 修复类入口图标从 Hammer 换成语义更准确的 Wrench(2026-07-29 上下文重构)。
+    for (const icon of [
+      'Blocks',
+      'FileSpreadsheet',
+      'Image',
+      'Globe2',
+      'SearchCode',
+      'Code2',
+      'MessageSquareCode',
+      'Wrench',
+    ]) {
+      expect(quickStartsSource).toContain(icon);
+    }
+    expect(quickStartsSource).not.toContain('Hammer');
     expect(source).not.toContain('shadow-[');
     expect(source).not.toContain('boxShadow');
+    expect(quickStartsSource).not.toContain('shadow-[');
   });
 
   it('lays out quick-start cards icon-top/label-bottom with a 4px minimum gap (2026-07-25 redesign)', () => {
     // 用户改稿 2026-07-25:两档(narrow/常态)统一竖排——icon 固定左上,文字挪到卡片
     // 中下方与 icon 左对齐(flex-col + justify-between,gap-1 兜底最小间距),取代原
     // 窄态横排 / 常态竖排自适应(#562)。卡片高度不变(narrow 84 / 常态 112)。
-    expect(source).toContain(
+    expect(quickStartsSource).toContain(
       "'group flex flex-col items-start justify-between gap-1 rounded-xl border",
     );
-    expect(source).toContain("isDraftNarrow ? 'min-h-[84px] p-3' : 'min-h-[112px] p-4'");
-    expect(source).toContain('className="w-full min-w-0 text-13 font-semibold leading-[16px]"');
+    expect(quickStartsSource).toContain("narrow ? 'min-h-[84px] p-3' : 'min-h-[112px] p-4'");
+    expect(quickStartsSource).toContain('w-full min-w-0 select-none text-13 font-semibold leading-[16px]');
     // 旧的窄态横排(items-center)/常态竖排(gap-3)特判已被统一竖排取代。
-    expect(source).not.toContain("'flex min-h-[84px] items-center gap-3 p-3'");
-    expect(source).not.toContain("'flex min-h-[112px] flex-col items-start gap-3 p-4'");
+    expect(quickStartsSource).not.toContain("'flex min-h-[84px] items-center gap-3 p-3'");
+    expect(quickStartsSource).not.toContain("'flex min-h-[112px] flex-col items-start gap-3 p-4'");
   });
 
   it('uses exact CREATE AGENT quick-start and avatar tokens from the Figma slices', () => {
@@ -147,11 +164,11 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(brandLockupSource).toContain('BRAND_LOGO_HEIGHT = 37.5');
     expect(brandLockupSource).not.toMatch(/logoScale\s*[=:]/);
     expect(source).not.toContain('create-agent-avatar-glass-bg');
-    expect(source).toContain('bg-[var(--create-agent-quick-card-bg)]');
-    expect(source).toContain('border-[var(--create-agent-quick-card-border)]');
-    expect(source).toContain('text-[var(--create-agent-quick-card-text)]');
-    expect(source).toContain('bg-[var(--create-agent-quick-card-icon-bg)]');
-    expect(source).toContain('text-[var(--create-agent-quick-card-icon)]');
+    expect(quickStartsSource).toContain('bg-[var(--create-agent-quick-card-bg)]');
+    expect(quickStartsSource).toContain('border-[var(--create-agent-quick-card-border)]');
+    expect(quickStartsSource).toContain('text-[var(--create-agent-quick-card-text)]');
+    expect(quickStartsSource).toContain('bg-[var(--create-agent-quick-card-icon-bg)]');
+    expect(quickStartsSource).toContain('text-[var(--create-agent-quick-card-icon)]');
 
     expect(colorsSource).toContain("'create-agent-quick-card-icon-bg'");
     expect(colorsSource).toContain("light: '#EDEDED'");

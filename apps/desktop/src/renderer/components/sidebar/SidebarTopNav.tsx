@@ -1,8 +1,8 @@
 /**
  * SidebarTopNav —— 侧栏顶部常驻动作/导航列表(取代原 HorizontalTabbar)。
  * ---------------------------------------------------------------------------
- * 一条同级、等权的列表行,按顺序:新建 / 自动任务 / Plugins / 搜索 / 远程机器。
- *   - 新建 / 自动任务:项目(cc-agent)视图的动作 —— 在任意视图点击都跳回项目视图并执行。
+ * 一条同级、等权的列表行,按顺序:新任务 / 自动任务 / Plugins / 搜索 / 远程机器。
+ *   - 新任务 / 自动任务:项目(cc-agent)视图的动作 —— 在任意视图点击都跳回项目视图并执行。
  *   - Plugins:主视图切换(navigateToView),命中当前视图时高亮。
  *   - 搜索(SidebarInlineSearch):静息态与其余行同款「🔍 搜索」;hover / 聚焦
  *     就地展开成搜索框,结果 overlay 由下方功能槽(CCAgentSidebarUpper)绘制。搜索状态经
@@ -28,6 +28,7 @@ import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { MachineSwitcherMenu } from '@/features/cc-agent/sidebar/MachineSwitcherMenu';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
 import { useConversationSearchContext } from '@/features/cc-agent/sidebar/conversationSearchContext';
+import { prepareGlobalNewTask } from '@/features/cc-agent/prepareGlobalNewTask';
 
 /** 列表行通用样式 —— 各行同款 pill 行。 */
 const ROW_CLASS =
@@ -46,12 +47,10 @@ export function SidebarTopNav(): React.ReactElement {
   const onScheduleMatch = useMatch('/cc-agent/scheduled');
   const { search, allKnownProjects, openSignal } = useConversationSearchContext();
 
-  // 通用「新建」入口:只 navigate 到草稿页,不清空 newMakerDraft。
-  // 之前这里会把 workingDir / remoteHostId / extraDirs 清成默认,导致用户在草稿页
-  // 选好「对话或选择项目」后,切到别的会话再点「新建」回来时选择被重置为默认、需要
-  // 重新选。草稿页的选择由 newMakerDraft store 持久化(见 state/newMakerDraft.ts),
-  // 通用新建应保留上次选择;「新建对话」等显式入口才负责清空(见 CCAgentSidebarUpper)。
+  // 全局「新任务」默认回到 Dialogue，但真实未发送草稿优先恢复原 workspace，
+  // 既不把空的旧项目选择带进 fresh task，也不静默重定向用户已输入的内容。
   const handleNew = () => {
+    prepareGlobalNewTask();
     navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
   };
 
@@ -62,7 +61,7 @@ export function SidebarTopNav(): React.ReactElement {
   return (
     // pt-1(原 2.5):顶行 chrome 收窄到 46px 后,列表整体上提贴近顶行(对齐 Codex)。
     <div className="flex flex-col gap-0.5 pt-1 pr-3 pb-2.5 pl-3">
-      {/* 1. 新建 —— 图标 15/1.8 + meta 灰:与项目行的文件夹图标同规格同色
+      {/* 1. 新任务 —— 图标 15/1.8 + meta 灰:与项目行的文件夹图标同规格同色
           (2026-07 用户定稿,对齐 Codex;文字仍用 foreground)。 */}
       <button onClick={handleNew} className={ROW_CLASS} aria-label={t('ccAgent.layout.new')}>
         <CirclePlus
@@ -87,7 +86,9 @@ export function SidebarTopNav(): React.ReactElement {
           className={cn(
             'shrink-0',
             // 选中反相胶囊上图标跟随 active 前景(图标自带显式色,行级 text 覆盖不到它)。
-            onScheduleMatch ? 'text-sidebar-item-active-foreground' : 'text-[var(--sidebar-nav-text)]',
+            onScheduleMatch
+              ? 'text-sidebar-item-active-foreground'
+              : 'text-[var(--sidebar-nav-text)]',
           )}
         />
         <span className="leading-none">{t('ccAgent.layout.automations')}</span>
@@ -106,7 +107,9 @@ export function SidebarTopNav(): React.ReactElement {
           className={cn(
             'shrink-0',
             // 同上:选中反相胶囊上图标跟随 active 前景。
-            activeKey === 'plugins' ? 'text-sidebar-item-active-foreground' : 'text-[var(--sidebar-nav-text)]',
+            activeKey === 'plugins'
+              ? 'text-sidebar-item-active-foreground'
+              : 'text-[var(--sidebar-nav-text)]',
           )}
         />
         <span className="leading-none">{t('sidebar.tabs.plugins')}</span>

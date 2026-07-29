@@ -162,6 +162,7 @@ import {
 } from './lib/pinnedSidebarOrder';
 import { createLogger } from '@/lib/logger';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
+import { prepareGlobalNewTask } from './prepareGlobalNewTask';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import {
@@ -2650,10 +2651,10 @@ function CollapsedView({
   // 折叠视图会把失败误传成"完成了")。
   const urgentSet = useSessionAttentionUrgencySet();
   // delayed-create:与 ExpandedView 同——单按钮 navigate transient draft 单例。
-  // 与展开态 SidebarTopNav 的通用「新建」同口径:只 navigate,不清空 newMakerDraft,
-  // 保留用户上次在草稿页选好的「对话或选择项目」(切走再回来不重置);清空语义只属于
-  // 「新建对话」等显式入口(handleCreateDialogue)。
+  // 与展开态 SidebarTopNav 的全局「新任务」同口径:fresh task 重置为 Dialogue,
+  // 真实未发送草稿保留原 workspace(见 prepareGlobalNewTask);模型/权限等偏好不动。
   const handleNewCCS = useCallback(() => {
+    prepareGlobalNewTask();
     navigate('/cc-agent/new', { state: makeNewMakerRouteState('generic') });
   }, [navigate]);
   const handleNavScheduled = useCallback(() => {

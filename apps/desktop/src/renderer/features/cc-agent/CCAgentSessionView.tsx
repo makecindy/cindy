@@ -35,6 +35,7 @@ import {
   Brain,
   Check,
   CornerUpLeft,
+  FolderOpen,
   Layers,
   Monitor,
   Sparkles,
@@ -2653,17 +2654,19 @@ export function CCAgentSessionView({
   const workingDirLabel = !session?.workingDir
     ? '\u00A0'
     : session.workspaceKind === 'dialogue'
-      ? `${t('ccAgent.layout.dialogueLabel')} ${basename(session.workingDir).slice(0, 8)}`
+      ? t('ccAgent.layout.taskWorkspaceLabel')
       : worktreeMeta
         ? `${basename(worktreeMeta.baseRepo)} (${worktreeMeta.name})`
         : basename(session.workingDir);
   const workingDirChipContent = (
     <>
-      <Monitor size={12} className="shrink-0 text-[var(--workingdir-icon)]" />
-      {/* Dialogue-mode workdir basename is a UUID; render as
-          "<dialogueLabel> <first-8-chars>" so the chip carries
-          semantic meaning while keeping inter-session distinguishability.
-          Full path stays in the hover tip.
+      {session?.workspaceKind === 'dialogue' ? (
+        <FolderOpen size={12} className="shrink-0 text-[var(--workingdir-icon)]" />
+      ) : (
+        <Monitor size={12} className="shrink-0 text-[var(--workingdir-icon)]" />
+      )}
+      {/* Dialogue 展示用户可理解的「独立任务空间」概念而不是 UUID basename;
+          完整路径仍在 hover tip,点击经既有 shell:open-path IPC 打开任务文件夹。
           Worktree-mode: 走 baseRepo basename + worktree name 的两段式
           "xdt-maker (feat-button-ui)" —— 单段 basename 只显示 worktree
           名字,看不出是哪个 repo 的 worktree;两段式让用户一眼定位到 repo,
@@ -3402,7 +3405,11 @@ export function CCAgentSessionView({
                         type="button"
                         className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left transition-opacity active:opacity-60"
                         onClick={handleOpenWorkingDir}
-                        aria-label={t('ccAgent.layout.openWorkingDirAria')}
+                        aria-label={t(
+                          session?.workspaceKind === 'dialogue'
+                            ? 'ccAgent.layout.openTaskWorkspaceAria'
+                            : 'ccAgent.layout.openWorkingDirAria',
+                        )}
                       >
                         {workingDirChipContent}
                       </button>
