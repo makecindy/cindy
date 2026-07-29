@@ -193,7 +193,8 @@ function TextInput({
         onBlur={onBlur}
         placeholder={placeholder}
         className={cn(
-          'h-[40px] w-full rounded-[10px] pl-[12px] text-14 outline-none transition-colors',
+          // 单行输入按设计规范走药丸圆角(DESIGN.md §4-5:9999px,明令禁止 10px)。
+          'h-[40px] w-full rounded-full pl-[12px] text-14 outline-none transition-colors',
           trailing ? 'pr-9' : 'pr-[12px]',
           'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
           'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] focus:border-[var(--settings-input-border-focus)]',
@@ -349,8 +350,8 @@ export function CustomProviderDialog({
   const [showAdvanced, setShowAdvanced] = useState(false);
   // 上下文窗口输入的行级草稿:受控输入若只回显已提交值,逐字符键入 `1,` 这类
   // 合法中间态会被整体校验拒绝后回滚,声明支持的分组格式只能粘贴、无法键入
-  // (review P1)。草稿承载显示文本;合法完整值仍即时提交,失焦丢弃未提交
-  // 草稿回落已提交值。key = `agent:行号`,行增删后索引漂移,统一清空。
+  // (review P1)。草稿承载显示文本;合法完整值仍即时提交,失焦只清可提交
+  // 草稿。key = `agent:行号`;删行时只重映射该 runtime 的行号,别行草稿保留。
   const [windowDrafts, setWindowDrafts] = useState<Record<string, string>>({});
   // 预设模板（仅新建态展示；目录 presets 段，随 OSS 热更）。
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
@@ -1310,7 +1311,26 @@ export function CustomProviderDialog({
                       <button
                         type="button"
                         onClick={() => {
-                          setWindowDrafts({});
+                          // 只重映射受影响 runtime 的草稿键(删行后同 tab 后续行号
+                          // 前移),其它行/另一 runtime 的未提交草稿必须原样保留——
+                          // 全量清空会让保存守卫看不到别行的非法文本而静默存旧值
+                          // (review P1)。
+                          setWindowDrafts((drafts) => {
+                            const next: Record<string, string> = {};
+                            for (const [key, text] of Object.entries(drafts)) {
+                              const sep = key.lastIndexOf(':');
+                              const agent = key.slice(0, sep);
+                              const idx = Number(key.slice(sep + 1));
+                              if (agent !== activeTab) {
+                                next[key] = text;
+                              } else if (idx < i) {
+                                next[key] = text;
+                              } else if (idx > i) {
+                                next[`${agent}:${idx - 1}`] = text;
+                              }
+                            }
+                            return next;
+                          });
                           patch(activeTab, (x) => ({
                             ...x,
                             models: x.models.filter((_, j) => j !== i),
@@ -1325,13 +1345,13 @@ export function CustomProviderDialog({
                   ))}
                   <button
                     type="button"
-                    onClick={() => {
-                      setWindowDrafts({});
+                    onClick={() =>
+                      // 追加在末尾不移动既有行号,别行草稿无需动(review P1)。
                       patch(activeTab, (x) => ({
                         ...x,
                         models: [...x.models, { id: '', name: '' }],
-                      }));
-                    }}
+                      }))
+                    }
                     className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
                   >
                     <Plus size={14} className="text-[var(--settings-section-desc)]" />
