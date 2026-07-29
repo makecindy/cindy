@@ -99,4 +99,18 @@ describe('market Ghost session boundary', () => {
     expect(handler).toContain('broadcastGhostAppearance(state.appearance);');
     expect(handler).toContain('return state;');
   });
+
+  it('keeps trusted appearance mutations behind the structured IPC error boundary', () => {
+    for (const channel of [
+      'ghosts:appearance:reset',
+      'ghosts:appearance:activate-preset',
+      'ghosts:appearance:delete-preset',
+    ]) {
+      const handlerStart = source.indexOf(`ipcMain.handle('${channel}'`);
+      const handlerEnd = source.indexOf('\n  });', handlerStart);
+      const handler = source.slice(handlerStart, handlerEnd);
+      expect(handler).toContain('return invokeGhostAppearanceIpc(() =>');
+      expect(handler).toContain('withGhostAppearanceMutation(async () =>');
+    }
+  });
 });

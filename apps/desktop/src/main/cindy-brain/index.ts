@@ -36,6 +36,7 @@ import {
 import { getLayoutStore } from '../layout/index.js';
 import { GhostManager, type InstallRejection, type UninstallRejection } from './GhostManager.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
+import { invokeGhostAppearanceIpc } from './appearanceIpcErrorBoundary.js';
 import {
   clearBuiltinTombstone,
   listEligibleBuiltinCommands,
@@ -3257,11 +3258,13 @@ export function registerGhostIpc(): void {
 
   ipcMain.handle('ghosts:appearance:reset', async (event) => {
     assertTrustedAppRendererEvent(event);
-    return withGhostAppearanceMutation(async () => {
-      await resetGhostAppearance();
-      broadcastGhostAppearance(null);
-      return readGhostAppearanceState();
-    });
+    return invokeGhostAppearanceIpc(() =>
+      withGhostAppearanceMutation(async () => {
+        await resetGhostAppearance();
+        broadcastGhostAppearance(null);
+        return readGhostAppearanceState();
+      }),
+    );
   });
 
   ipcMain.handle('ghosts:appearance:activate-preset', async (event, preset: unknown) => {
@@ -3269,12 +3272,14 @@ export function registerGhostIpc(): void {
     if (typeof preset !== 'string' || preset.length === 0 || preset.length > 64) {
       throwIpcError('INVALID_PARAMS', 'preset must be a non-empty string');
     }
-    return withGhostAppearanceMutation(async () => {
-      const appearance = await activateGhostAppearancePreset(preset);
-      if (!appearance) throwIpcError('NOT_FOUND', 'Skin preset not found');
-      broadcastGhostAppearance(appearance);
-      return readGhostAppearanceState();
-    });
+    return invokeGhostAppearanceIpc(() =>
+      withGhostAppearanceMutation(async () => {
+        const appearance = await activateGhostAppearancePreset(preset);
+        if (!appearance) throwIpcError('NOT_FOUND', 'Skin preset not found');
+        broadcastGhostAppearance(appearance);
+        return readGhostAppearanceState();
+      }),
+    );
   });
 
   ipcMain.handle('ghosts:appearance:delete-preset', async (event, preset: unknown) => {
@@ -3282,14 +3287,16 @@ export function registerGhostIpc(): void {
     if (typeof preset !== 'string' || preset.length === 0 || preset.length > 64) {
       throwIpcError('INVALID_PARAMS', 'preset must be a non-empty string');
     }
-    return withGhostAppearanceMutation(async () => {
-      if (!(await deleteGhostAppearancePreset(preset))) {
-        throwIpcError('NOT_FOUND', 'Skin preset not found');
-      }
-      const state = await readGhostAppearanceState();
-      broadcastGhostAppearance(state.appearance);
-      return state;
-    });
+    return invokeGhostAppearanceIpc(() =>
+      withGhostAppearanceMutation(async () => {
+        if (!(await deleteGhostAppearancePreset(preset))) {
+          throwIpcError('NOT_FOUND', 'Skin preset not found');
+        }
+        const state = await readGhostAppearanceState();
+        broadcastGhostAppearance(state.appearance);
+        return state;
+      }),
+    );
   });
 
   // ── 意识聊天卡片取件(卡槽③;宿主 renderer 历史回放用)──────────────
