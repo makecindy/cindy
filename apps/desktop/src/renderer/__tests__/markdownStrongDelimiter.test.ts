@@ -25,7 +25,7 @@ function renderMarkdownWithStrictMath(source: string): string {
     createElement(
       ReactMarkdown,
       {
-        remarkPlugins: [remarkGfm, remarkMath, remarkStrictInlineMath],
+        remarkPlugins: [remarkGfm, remarkMath, remarkStrictInlineMath, remarkTruncateCjkUrls],
         skipHtml: true,
       },
       normalizeStrongDelimiterBoundaries(source),
@@ -165,6 +165,25 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(normalizeStrongDelimiterBoundaries(source)).toBe(source);
     expect(renderMarkdown(source)).toContain(
       '<a href="https://b.test/**foo.**bar">https://b.test/**foo.**bar</a>',
+    );
+  });
+
+  it('protects math syntax recovered from CJK-truncated bare URL tails', () => {
+    const source = 'https://example.com/foo（$2**3.**x$';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      'https://example.com/foo<!--cindy-strong-boundary-->（$2**3.**x$',
+    );
+    const html = renderMarkdownWithStrictMath(source);
+    expect(html).toContain('<code class="language-math math-inline">2**3.**x</code>');
+    expect(html).not.toContain('cindy-strong-boundary');
+  });
+
+  it('does not reparse unrelated math in recovered bare URL tails', () => {
+    const source = ['https://example.com/foo（$x$', '', '**重点。**正文'].join('\n');
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      ['https://example.com/foo（$x$', '', '**重点。**<!--cindy-strong-boundary-->正文'].join('\n'),
     );
   });
 

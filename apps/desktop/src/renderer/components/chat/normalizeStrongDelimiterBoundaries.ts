@@ -185,6 +185,45 @@ function collectRecoveredTailLinkRanges(node: Nodes, ranges: OffsetRange[], mark
   }
 }
 
+function collectRecoveredTailSyntaxRanges(
+  node: Nodes,
+  ranges: OffsetRange[],
+  mathTailStarts: number[],
+  markdown: string,
+): void {
+  if (!('children' in node)) return;
+
+  for (const child of node.children as Nodes[]) {
+    const range = nodeRange(child);
+    const recoveredTail = range ? recoveredAutolinkTailRange(child, range, markdown) : null;
+
+    if (recoveredTail) {
+      const tail = markdown.slice(recoveredTail.start, recoveredTail.end);
+      const tailTree = markdownParser.runSync(markdownParser.parse(tail), tail) as Root;
+      const tailRanges: OffsetRange[] = [];
+      collectProtectedRanges(tailTree, tailRanges, tail);
+      visit(tailTree, (tailNode) => {
+        if (tailNode.type !== 'inlineMath' && tailNode.type !== 'math') return;
+        const tailNodeRange = nodeRange(tailNode);
+        if (
+          tailNodeRange &&
+          POTENTIAL_BOUNDARY_RE.test(tail.slice(tailNodeRange.start, tailNodeRange.end))
+        ) {
+          mathTailStarts.push(recoveredTail.start);
+        }
+      });
+      ranges.push(
+        ...tailRanges.map((tailRange) => ({
+          start: recoveredTail.start + tailRange.start,
+          end: recoveredTail.start + tailRange.end,
+        })),
+      );
+    }
+
+    collectRecoveredTailSyntaxRanges(child, ranges, mathTailStarts, markdown);
+  }
+}
+
 function collectProjectDeepLinkRanges(markdown: string, range: OffsetRange): OffsetRange[] {
   const ranges: OffsetRange[] = [];
   const source = markdown.slice(range.start, range.end);
@@ -244,8 +283,13 @@ function collectProseRanges(
 ): Array<{
   range: OffsetRange;
   protectedRanges: OffsetRange[];
+  recoveredMathTailStarts: number[];
 }> {
-  const proseRanges: Array<{ range: OffsetRange; protectedRanges: OffsetRange[] }> = [];
+  const proseRanges: Array<{
+    range: OffsetRange;
+    protectedRanges: OffsetRange[];
+    recoveredMathTailStarts: number[];
+  }> = [];
 
   visit(tree, (node, _index, parent) => {
     const isProseRoot =
@@ -257,9 +301,12 @@ function collectProseRanges(
     const range = nodeRange(node);
     if (!range) return;
     const protectedRanges: OffsetRange[] = [];
+    const recoveredMathTailStarts: number[] = [];
     collectProtectedRanges(node, protectedRanges, markdown);
     // remarkTruncateCjkUrls 会把被首个裸链接误吞的尾段重新拆成文本和链接，
-    // 这些新链接没有源码位置，需要按尾段中的实际字符位置补回保护范围。
+    // 尾段的 Markdown 语法没有原始解析节点，需要重新解析后补回保护范围；
+    // 插件新生成的链接没有源码位置，再按实际字符位置补回其范围。
+    collectRecoveredTailSyntaxRanges(node, protectedRanges, recoveredMathTailStarts, markdown);
     collectRecoveredTailLinkRanges(node, protectedRanges, markdown);
     protectedRanges.push(...collectProjectDeepLinkRanges(markdown, range));
     protectedRanges.push(
@@ -268,7 +315,7 @@ function collectProseRanges(
       ),
     );
     protectedRanges.sort((left, right) => left.start - right.start);
-    proseRanges.push({ range, protectedRanges });
+    proseRanges.push({ range, protectedRanges, recoveredMathTailStarts });
   });
 
   return proseRanges;
@@ -363,14 +410,14 @@ export function normalizeStrongDelimiterBoundaries(
   const preservedTexDelimiterRanges = options.preserveTexDelimiters
     ? collectPreservedTexDelimiterRanges(markdown)
     : [];
-  const boundaryInsertions = collectProseRanges(
-    tree,
-    markdown,
-    preservedTexDelimiterRanges,
-  ).flatMap(({ range, protectedRanges }) =>
+  const proseRanges = collectProseRanges(tree, markdown, preservedTexDelimiterRanges);
+  const boundaryInsertions = proseRanges.flatMap(({ range, protectedRanges }) =>
     collectBoundaryInsertions(markdown, range, protectedRanges),
   );
-  if (boundaryInsertions.length === 0) return markdown;
+  const recoveredMathTailStarts = proseRanges.flatMap(
+    ({ recoveredMathTailStarts: starts }) => starts,
+  );
+  if (boundaryInsertions.length === 0 && recoveredMathTailStarts.length === 0) return markdown;
 
   // 后续 remark 插件会把裸链接误吞的中文尾段切回 text 节点，但此时 Markdown
   // 已经解析完成，尾段里的星号不会再次解析。在需要修复的尾段起点再插入同一个
@@ -380,7 +427,9 @@ export function normalizeStrongDelimiterBoundaries(
       boundaryInsertions.some((insertion) => insertion >= range.start && insertion < range.end),
     )
     .map((range) => range.start);
-  const insertions = [...new Set([...boundaryInsertions, ...recoveredTailStarts])];
+  const insertions = [
+    ...new Set([...boundaryInsertions, ...recoveredTailStarts, ...recoveredMathTailStarts]),
+  ];
 
   let output = markdown;
   for (const offset of insertions.sort((left, right) => right - left)) {
