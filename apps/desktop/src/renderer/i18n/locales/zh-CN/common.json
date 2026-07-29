@@ -2775,6 +2775,7 @@
         "moreActions": "更多插件操作",
         "updateFromFile": "从 .cindy 文件更新…",
         "exportPackage": "导出 .cindy 文件…",
+        "exportFileType": "Cindy 插件",
         "settingsTitle": "{{name}} 设置",
         "settingsUnavailableUntilRestore": "恢复插件后可继续使用这项配置。",
         "configurationTitle": "配置",

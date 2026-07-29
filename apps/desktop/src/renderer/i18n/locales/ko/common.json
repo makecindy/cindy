@@ -2775,6 +2775,7 @@
         "moreActions": "Plugin 추가 작업",
         "updateFromFile": ".cindy 파일에서 업데이트…",
         "exportPackage": ".cindy 파일 내보내기…",
+        "exportFileType": "Cindy 플러그인",
         "settingsTitle": "{{name}} 설정",
         "settingsUnavailableUntilRestore": "이 설정을 다시 사용하려면 플러그인을 복원하세요.",
         "configurationTitle": "설정",

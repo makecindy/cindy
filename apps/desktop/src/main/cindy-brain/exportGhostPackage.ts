@@ -7,13 +7,15 @@
  *
  * 与 forge 打包的三点差异(导出 ≠ 制作,见插件规则文档):
  * - 源是安装目录(装入时的 zip 解包内容),不重新校验清单——装入侧已验过;
- * - 跳过根部主机保留文件(.disabled / .cindy-trust.json)与 .DS_Store,
+ * - 跳过装入后由主机写入的根部保留文件(.disabled / .cindy-trust.json),
+ *   嵌套条目全保留、根部 .DS_Store 按签名 statement 决定去留,
  *   导出包可原样过装入校验;
  * - 产物不写回源目录,由保存对话框写到用户选定的位置。
  *
- * 整个包先在内存里打完再弹保存对话框:用户挑选位置期间插件被更新/卸载
- * 都不影响已抓到的内容。Electron 对话框、安装目录解析与落盘全部注入,
- * 便于内存 harness 测试。
+ * 打包是一致性快照(见 snapshotTree):读完用纯元数据第二遍校验,与
+ * 更新/卸载并发时不会产出混合版本的坏包。整个包先在内存里打完再弹
+ * 保存对话框:用户挑选位置期间插件被更新/卸载都不影响已抓到的内容。
+ * Electron 对话框、安装目录解析与落盘全部注入,便于内存 harness 测试。
  */
 
 import fs from 'node:fs';
@@ -24,13 +26,47 @@ import JSZip from 'jszip';
 import { isValidGhostId, type InstalledGhost } from '../../shared/ghost.js';
 
 /**
- * 导出过滤口径:只跳过 zip 根部的主机保留文件与根部系统残渣。
- * 嵌套条目(含嵌套 .DS_Store)一律保留——签名包的 statement 覆盖全部
- * 原始条目,跳任何一个都会让导出包装回时完整性校验失败。
+ * 导出过滤口径:根部主机保留文件(.disabled / .cindy-trust.json)永远
+ * 跳过——它们是装入后由主机写入的,签名 statement 不可能覆盖;嵌套条目
+ * 一律保留(签名 statement 覆盖全部原始条目,跳任何一个都会让导出包
+ * 装回时完整性校验失败)。
+ *
+ * 根部 .DS_Store 是唯一的例外判断:buildStatement 打包时哈希除
+ * __MACOSX 与签名文件外的所有条目,所以它可能在 statement 里(作者
+ * 在 macOS 上打包)也可能不在(装入后 Finder 浏览生成的残渣)。被签名
+ * 却跳过 → 重装校验缺文件失败;未签名却保留 → 重装多出 statement 外
+ * 文件同样失败。因此按 cindy-signatures.json 的 statement 决定取舍。
  */
-const EXPORT_SKIP_ROOT_FILES = new Set(['.disabled', '.cindy-trust.json', '.DS_Store']);
-function shouldSkipExportEntry(name: string, relBase: string): boolean {
-  return relBase === '' && EXPORT_SKIP_ROOT_FILES.has(name);
+const EXPORT_HOST_ROOT_FILES = new Set(['.disabled', '.cindy-trust.json']);
+function shouldSkipExportEntry(
+  name: string,
+  relBase: string,
+  signedPaths: ReadonlySet<string> | null,
+): boolean {
+  if (relBase !== '') return false;
+  if (EXPORT_HOST_ROOT_FILES.has(name)) return true;
+  if (name === '.DS_Store') return !signedPaths?.has(name);
+  return false;
+}
+
+/** 读取签名 statement 覆盖的相对路径;无签名文件或解析失败返回 null。 */
+async function loadSignedPaths(dir: string): Promise<Set<string> | null> {
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(path.join(dir, 'cindy-signatures.json'), 'utf8');
+  } catch {
+    return null;
+  }
+  try {
+    const doc = JSON.parse(raw) as { statement?: { files?: Array<{ path?: unknown }> } };
+    const files = doc?.statement?.files;
+    if (!Array.isArray(files)) return null;
+    return new Set(
+      files.map((item) => item?.path).filter((p): p is string => typeof p === 'string'),
+    );
+  } catch {
+    return null;
+  }
 }
 
 export type ExportGhostPackageResult =
@@ -49,6 +85,8 @@ export interface ExportGhostPackageDeps {
   }): Promise<{ canceled: boolean; filePath?: string }>;
   /** 保存对话框 defaultPath 的目录部分(下载目录)。 */
   getDownloadsDir(): string;
+  /** 保存对话框文件类型标签(调用方按当前 locale 本地化)。 */
+  fileTypeLabel: string;
   writeFile(filePath: string, data: Buffer): Promise<void>;
 }
 
@@ -66,9 +104,97 @@ export function sanitizeExportFileNamePart(name: string): string {
     .trim()
     // Windows 禁止尾随点/空格(截断后可能新产生,最后再剥一次)。
     .replace(/[. ]+$/, '');
-  // Windows 保留设备名:加前缀避让,不作为非法名交给保存对话框。
-  if (WINDOWS_RESERVED_BASENAME.test(cleaned)) cleaned = `_${cleaned}`;
+  // Windows 保留设备名(含带扩展名形式,如 CON.txt 同样非法):
+  // 按首个点前的词干判断,命中加前缀避让。
+  const stem = cleaned.split('.', 1)[0] ?? cleaned;
+  if (WINDOWS_RESERVED_BASENAME.test(stem)) cleaned = `_${cleaned}`;
   return cleaned;
+}
+
+/** 目录内一个文件的字节与元数据(一致性快照用)。 */
+interface TreeFile {
+  rel: string;
+  data: Buffer;
+  size: number;
+  mtimeMs: number;
+}
+
+type TreeMeta = Omit<TreeFile, 'data'>;
+
+/**
+ * 递归枚举安装目录。withData=true 时逐文件读字节(第一遍);否则只取
+ * 元数据(校验遍,不重复读内容)。symlink/junction 不跟随:只归档安装
+ * 目录自身的真实内容,防止借链接把目录外文件打进导出包。
+ * 结果按 rel 排序,供两遍逐位比对。
+ */
+async function walkTree(
+  dir: string,
+  signedPaths: ReadonlySet<string> | null,
+  withData: true,
+): Promise<TreeFile[]>;
+async function walkTree(
+  dir: string,
+  signedPaths: ReadonlySet<string> | null,
+  withData: false,
+): Promise<TreeMeta[]>;
+async function walkTree(
+  dir: string,
+  signedPaths: ReadonlySet<string> | null,
+  withData: boolean,
+): Promise<Array<TreeFile | TreeMeta>> {
+  const out: Array<TreeFile | TreeMeta> = [];
+  const walk = async (cur: string, relBase: string): Promise<void> => {
+    const entries = await fs.promises.readdir(cur, { withFileTypes: true });
+    for (const entry of entries) {
+      if (shouldSkipExportEntry(entry.name, relBase, signedPaths)) continue;
+      if (entry.isSymbolicLink()) continue;
+      const abs = path.join(cur, entry.name);
+      const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await walk(abs, rel);
+      } else if (entry.isFile()) {
+        if (withData) {
+          const data = await fs.promises.readFile(abs);
+          const stat = await fs.promises.stat(abs);
+          out.push({ rel, data, size: stat.size, mtimeMs: stat.mtimeMs });
+        } else {
+          const stat = await fs.promises.stat(abs);
+          out.push({ rel, size: stat.size, mtimeMs: stat.mtimeMs });
+        }
+      }
+    }
+  };
+  await walk(dir, '');
+  out.sort((a, b) => a.rel.localeCompare(b.rel));
+  return out;
+}
+
+/**
+ * 一致性快照(评审 P1):更新会整体换目录、卸载会删目录,单遍逐文件读
+ * 可能跨越两个文件系统状态,产出混合版本的坏包。这里读完后用纯元数据
+ * 第二遍校验——任何文件在读窗口内被增删改都会被尺寸/mtime 比对捕获,
+ * 不一致就整体重读;通过校验的包对应校验遍时刻的单一目录状态。
+ */
+const SNAPSHOT_MAX_ATTEMPTS = 3;
+async function snapshotTree(
+  dir: string,
+  signedPaths: ReadonlySet<string> | null,
+): Promise<TreeFile[] | null> {
+  for (let attempt = 0; attempt < SNAPSHOT_MAX_ATTEMPTS; attempt++) {
+    const first = await walkTree(dir, signedPaths, true);
+    const verify = await walkTree(dir, signedPaths, false);
+    const consistent =
+      first.length === verify.length &&
+      first.every(
+        (file, i) =>
+          file.rel === verify[i]!.rel &&
+          file.size === verify[i]!.size &&
+          file.mtimeMs === verify[i]!.mtimeMs,
+      );
+    if (consistent) return first;
+  }
+  // 持续并发变更(反复更新/卸载中):放弃,让调用方如实报错由用户重试。
+  return null;
 }
 
 export async function exportGhostPackage(
@@ -91,29 +217,17 @@ export async function exportGhostPackage(
     return { status: 'error', code: 'read_failed' };
   }
 
-  // 收集文件并立即读入内存(口径见 shouldSkipExportEntry 头注释)。
-  // 安装目录内容来自装入侧已校验的 zip,此处只做如实归档,不设内容上限
-  // (装入侧已卡过解压总量)。
-  const files: Array<{ rel: string; data: Buffer }> = [];
-  const walk = async (cur: string, relBase: string): Promise<void> => {
-    const entries = await fs.promises.readdir(cur, { withFileTypes: true });
-    for (const entry of entries) {
-      if (shouldSkipExportEntry(entry.name, relBase)) continue;
-      // symlink/junction 不跟随:只归档安装目录自身的真实内容,
-      // 防止借链接把目录外文件打进导出包。
-      if (entry.isSymbolicLink()) continue;
-      const abs = path.join(cur, entry.name);
-      const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        await walk(abs, rel);
-      } else if (entry.isFile()) {
-        files.push({ rel, data: await fs.promises.readFile(abs) });
-      }
-    }
-  };
+  // 一致性快照(口径见 snapshotTree 头注释):安装目录内容来自装入侧
+  // 已校验的 zip,此处只做如实归档,不设内容上限(装入侧已卡过解压总量)。
+  const signedPaths = await loadSignedPaths(ghost.dir);
+  let files: TreeFile[] | null;
   try {
-    await walk(ghost.dir, '');
+    files = await snapshotTree(ghost.dir, signedPaths);
   } catch {
+    return { status: 'error', code: 'read_failed' };
+  }
+  if (!files) {
+    // 连续多次校验都不一致:目录正在被反复改写,如实报错由用户重试。
     return { status: 'error', code: 'read_failed' };
   }
 
@@ -141,7 +255,7 @@ export async function exportGhostPackage(
   try {
     picked = await deps.showSaveDialog({
       defaultPath: path.join(deps.getDownloadsDir(), defaultFileName),
-      filters: [{ name: 'Cindy Plugin', extensions: ['cindy'] }],
+      filters: [{ name: deps.fileTypeLabel, extensions: ['cindy'] }],
     });
   } catch {
     return { status: 'error', code: 'dialog_failed' };

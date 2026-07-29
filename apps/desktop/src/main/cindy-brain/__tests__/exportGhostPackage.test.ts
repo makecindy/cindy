@@ -63,6 +63,7 @@ function makeDeps(overrides: Partial<Parameters<typeof exportGhostPackage>[1]> =
       filePath: path.join(workDir, path.basename(defaultPath)),
     })),
     getDownloadsDir: () => workDir,
+    fileTypeLabel: 'Cindy Plugin',
     writeFile: (filePath: string, data: Buffer) => fs.promises.writeFile(filePath, data),
     ...overrides,
   };
@@ -85,6 +86,70 @@ describe('exportGhostPackage', () => {
     expect(names).toEqual(['ghost.json', 'locales/en.json', 'main.js']);
     const manifest = JSON.parse(await zip.files['ghost.json'].async('string')) as { id: string };
     expect(manifest.id).toBe('hello');
+  });
+
+  it('根部 .DS_Store 被签名 statement 覆盖时保留,未覆盖时跳过', async () => {
+    // 打包时根部已有 .DS_Store 的签名包:statement 覆盖它,导出必须保留,
+    // 否则重装校验缺文件失败。
+    await fs.promises.writeFile(
+      path.join(ghostDir, 'cindy-signatures.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        statement: {
+          schemaVersion: 1,
+          ghostId: 'hello',
+          ghostVersion: '1.2.0',
+          files: [
+            { path: '.DS_Store', sha256: 'x', bytes: 0 },
+            { path: 'ghost.json', sha256: 'y', bytes: 1 },
+          ],
+        },
+      }),
+    );
+    const signedResult = await exportGhostPackage('hello', makeDeps());
+    expect(signedResult.status).toBe('saved');
+    if (signedResult.status !== 'saved') return;
+    const signedZip = await JSZip.loadAsync(await fs.promises.readFile(signedResult.savedPath));
+    expect(Object.keys(signedZip.files)).toContain('.DS_Store');
+
+    // 无签名覆盖(装入后 Finder 生成的残渣):跳过,不带进导出包。
+    await fs.promises.rm(path.join(ghostDir, 'cindy-signatures.json'));
+    const unsignedResult = await exportGhostPackage('hello', makeDeps());
+    expect(unsignedResult.status).toBe('saved');
+    if (unsignedResult.status !== 'saved') return;
+    const unsignedZip = await JSZip.loadAsync(await fs.promises.readFile(unsignedResult.savedPath));
+    expect(Object.keys(unsignedZip.files)).not.toContain('.DS_Store');
+  });
+
+  it('遍历期间目录被改写时整体重读,导出与最终状态一致的包', async () => {
+    // 第二遍(校验遍)枚举根部前改写 main.js:第一遍的字节与第二遍的
+    // 元数据对不上,必须重读;最终包内容应是改写后的版本。
+    const realReaddir = fs.promises.readdir;
+    let rootReads = 0;
+    const spy = vi.spyOn(fs.promises, 'readdir').mockImplementation(async (p: any, opts: any) => {
+      if (String(p) === ghostDir) {
+        rootReads += 1;
+        if (rootReads === 2) {
+          await fs.promises.writeFile(
+            path.join(ghostDir, 'main.js'),
+            'console.log("version-2-content")',
+          );
+        }
+      }
+      return realReaddir(p, opts) as any;
+    });
+    try {
+      const result = await exportGhostPackage('hello', makeDeps());
+      expect(result.status).toBe('saved');
+      if (result.status !== 'saved') return;
+      expect(rootReads).toBeGreaterThan(2);
+      const zip = await JSZip.loadAsync(await fs.promises.readFile(result.savedPath));
+      await expect(zip.files['main.js'].async('string')).resolves.toBe(
+        'console.log("version-2-content")',
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('嵌套点文件与 node_modules 属于包内容,导出必须保留(签名完整性)', async () => {
@@ -261,5 +326,11 @@ describe('sanitizeExportFileNamePart', () => {
     expect(sanitizeExportFileNamePart('CON')).toBe('_CON');
     expect(sanitizeExportFileNamePart('com1')).toBe('_com1');
     expect(sanitizeExportFileNamePart('auxiliary')).toBe('auxiliary');
+  });
+
+  it('带扩展名的 Windows 保留设备名同样避让(按词干判断)', () => {
+    expect(sanitizeExportFileNamePart('CON.txt')).toBe('_CON.txt');
+    expect(sanitizeExportFileNamePart('nul.backup')).toBe('_nul.backup');
+    expect(sanitizeExportFileNamePart('console.log')).toBe('console.log');
   });
 });

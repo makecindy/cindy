@@ -2776,6 +2776,7 @@
         "moreActions": "More Plugin Actions",
         "updateFromFile": "Update from .cindy File…",
         "exportPackage": "Export .cindy File…",
+        "exportFileType": "Cindy Plugin",
         "settingsTitle": "{{name}} Settings",
         "settingsUnavailableUntilRestore": "Restore the plugin to use this configuration again.",
         "configurationTitle": "Configuration",
