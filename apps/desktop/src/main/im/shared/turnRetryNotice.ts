@@ -66,3 +66,23 @@ export function overloadFailureNotice(message: string, errorStatus?: number): st
     '（在桌面端点「重试」也能继续任务，但结果不会回到这条消息里。）'
   );
 }
+
+/**
+ * 终态 error 事件的 data -> 渠道要展示的失败文案: 过载类换成上面那条可操作说明,
+ * 其它错误沿用上游原文。
+ *
+ * 单独抽出来是因为渠道侧有**两条**终态收口路径 —— 用户 turn 的 handleTurnErrorAsync
+ * 与调度转播的 finalizeTranspond。此前只有前者做了映射, 定时任务的卡片在重试耗尽
+ * 时仍会从本地化进度突然跳回 `Selected model is at capacity...`(review #844 codex
+ * P1)。两边共用本函数, 顺带保证 errorStatus(Anthropic 529 只有状态码、message 里
+ * 不一定带 529)不被丢掉。
+ */
+export function terminalErrorText(data: unknown): string {
+  const record =
+    data && typeof data === 'object'
+      ? (data as { message?: unknown; errorStatus?: unknown })
+      : null;
+  const message = record && 'message' in record ? String(record.message) : String(data);
+  const errorStatus = typeof record?.errorStatus === 'number' ? record.errorStatus : undefined;
+  return overloadFailureNotice(message, errorStatus) ?? message;
+}

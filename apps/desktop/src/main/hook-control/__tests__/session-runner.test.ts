@@ -1042,7 +1042,17 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
           h.eventCbs.delete(id);
         };
       },
-      send: vi.fn(async (_msg: unknown, opts: { onAccepted?: () => Promise<void> }) => {
+      setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
+        h.interactionListeners.set(id, listener);
+      },
+      send: vi.fn(async (
+        _msg: unknown,
+        opts: {
+          beforeProviderStart?: () => Promise<void> | void;
+          onAccepted?: () => Promise<void>;
+        },
+      ) => {
+        await opts.beforeProviderStart?.();
         await opts.onAccepted?.();
         return {};
       }),

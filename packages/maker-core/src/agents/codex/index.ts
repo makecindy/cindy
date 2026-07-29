@@ -4453,6 +4453,20 @@ export class CodexAgent extends BaseAgent {
         // 同时记账：这条失败只是被**延后**，retry() 的 finally 会在 RPC settle 后
         // 补排一次；不记的话没有任何计时器或终态事件残留，逻辑 send 会永久悬空。
         state.deferredCapacityFailure = { deadTurnId };
+        // 这个 turn 在 app-server 侧已经死了, 必须**当场**把它从"活跃 turn"上摘掉,
+        // 不能等它自己的 turn/completed。事件顺序 turnStarted → 容量错误 →
+        // turn/start 响应 下, retry() 的 finally 跑到补排判定时 currentTurnId 还挂着
+        // 这具尸体 → 补排条件不成立; 而随后到达的 turn/completed 被墓碑压掉, 只清
+        // currentTurnId、不排任何东西 —— 逻辑 send 永久悬空(review #844 codex P1)。
+        // 只在确认是同一个 turn 时清: 真有别的 turn 活着说明这条错误不针对当前轮,
+        // 那时本就不该补排。
+        if (deadTurnId && currentTurnId === deadTurnId) {
+          dismissPendingUserInputForTurn(deadTurnId, 'turn_failed');
+          clearActiveToolContextsForTurn(deadTurnId);
+          stopActiveRolloutPlanFallback();
+          isTurnInFlight = false;
+          currentTurnId = null;
+        }
         log.info('codex overload retry already in flight — deferring this failure to it', {
           attempt: state.attempt,
           threadId,
@@ -5354,6 +5368,12 @@ export class CodexAgent extends BaseAgent {
             // RPC 在途也算忙（见 isTurnRunning 注释）：计时器已清、turn 未激活的
             // 这段窗口若报 idle，并发 send 会把原消息挤掉。
             state.inFlight = true;
+            // RPC 是否走完了成功路径。补排延后的容量失败**只能**在成功路径上做:
+            // finally 先于外层 state.retry().catch 执行, 若 RPC 已经 reject 却在这里
+            // 排上新计时器, 紧随其后的 catch 会推终态 error + Done 收口 UI, 而那个
+            // 计时器没人取消 —— 会话已收口, 原消息却在稍后被静默重投并真的执行工具
+            // 副作用(review #844 codex P1)。失败路径统一由外层 catch 报终态。
+            let rpcSettledOk = false;
             try {
               // 必须带超时：AppServerHost.request 默认不超时，daemon / 远端传输
               // 卡住时这个 RPC 会永久在飞，而 inFlight 被算作忙 → 会话永久卡死
@@ -5394,6 +5414,7 @@ export class CodexAgent extends BaseAgent {
               }
               markTurnConfigAccepted();
               handleTurnStartResp(resp);
+              rpcSettledOk = true;
             } finally {
               state.inFlight = false;
               isTurnStartPending = false;
@@ -5406,6 +5427,7 @@ export class CodexAgent extends BaseAgent {
               state.deferredCapacityFailure = null;
               if (
                 deferred &&
+                rpcSettledOk &&
                 !closed &&
                 !state.isCancelled() &&
                 overloadRetry === state &&

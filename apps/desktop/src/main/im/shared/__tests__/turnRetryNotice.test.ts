@@ -6,7 +6,11 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { overloadFailureNotice, overloadRetryNotice } from '../turnRetryNotice';
+import {
+  overloadFailureNotice,
+  overloadRetryNotice,
+  terminalErrorText,
+} from '../turnRetryNotice';
 
 describe('overloadRetryNotice', () => {
   it('带次数的 Codex 容量重投 → 带进度的中文提示', () => {
@@ -62,5 +66,41 @@ describe('overloadFailureNotice', () => {
   it('非过载错误沿用原文(返回 null 让调用方不改写)', () => {
     expect(overloadFailureNotice('process exited with code 1')).toBeNull();
     expect(overloadFailureNotice('Request timed out', 504)).toBeNull();
+  });
+});
+
+describe('terminalErrorText', () => {
+  it('Codex 容量终态 → 本地化说明(定时转播卡与用户 turn 共用同一映射)', () => {
+    // 三条渠道终态路径(handleTurnErrorAsync / finalizeTranspond / hook session-runner)
+    // 必须口径一致: 之前转播路径自己 extractErrMessage 取原文, 重试耗尽时卡片会从
+    // 「正在自动重试（N/M）」突然跳回英文原文(review #844 codex P1)。
+    const text = terminalErrorText({
+      message: 'Selected model is at capacity. Please try a different model.',
+    });
+    expect(text).toContain('模型服务繁忙');
+    expect(text).toContain('在这里重发这条消息');
+  });
+
+  it('只有状态码带 529 时也命中(errorStatus 不能在取文案时被丢掉)', () => {
+    // Anthropic 的 529 有时只体现在状态码上, message 里不含 529 字样。
+    expect(terminalErrorText({ message: 'SDK API request failed', errorStatus: 529 })).toContain(
+      '模型服务繁忙',
+    );
+  });
+
+  it('非过载终态沿用上游原文', () => {
+    expect(terminalErrorText({ message: 'process exited with code 1' })).toBe(
+      'process exited with code 1',
+    );
+    expect(terminalErrorText({ message: 'Request timed out', errorStatus: 504 })).toBe(
+      'Request timed out',
+    );
+  });
+
+  it('形状异常时退回 String(data), 与被它取代的 extractErrMessage 逐字一致', () => {
+    expect(terminalErrorText('at capacity')).toContain('模型服务繁忙');
+    expect(terminalErrorText('boom')).toBe('boom');
+    expect(terminalErrorText(null)).toBe('null');
+    expect(terminalErrorText({})).toBe('[object Object]');
   });
 });

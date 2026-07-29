@@ -4793,6 +4793,138 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('does not arm a new retry when the in-flight retry RPC rejects', async () => {
+      // finally 先于外层 state.retry().catch 执行。若延后的容量失败在 RPC 已经 reject
+      // 的情况下还照样补排，紧随其后的 catch 会推终态 error + Done 把 UI 收口，而那个
+      // 计时器没人取消 —— 会话已经关掉，原消息却在稍后被静默重投并真的跑工具
+      // （review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-reject-no-rearm',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 在途期间又撞容量 → 被延后。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-inflight',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 这次 RPC 自己失败（超时 / 传输错）。
+        retryStart.reject(new Error('turn/start timed out'));
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        // 唯一一条终态由外层 catch 推出，且**没有**残留计时器把原消息重投。
+        expect(turnStarts).toBe(2);
+        const terminal = events.filter((e) => e.type === 'error' && e.data?.isTerminal === true);
+        expect(terminal).toHaveLength(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reschedules a deferred failure even when turnStarted arrived before the response', async () => {
+      // 事件顺序 turnStarted → 容量错误 → turn/start 响应：currentTurnId 在 finally
+      // 里还挂着那具已被落墓碑的尸体 → 补排条件不成立，而随后被压掉的 turn/completed
+      // 只清 currentTurnId、不排任何东西 —— 逻辑 send 永久悬空（review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-started-before-resp',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.turnStarted) throw new Error('expected turnStarted handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        // 重投的 turn 先把 started 推回来：currentTurnId 被置成 turn-inflight。
+        handlers.turnStarted({ turn: { id: 'turn-inflight' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-inflight');
+
+        // 紧接着它自己也撞容量（RPC 仍在飞）→ 延后，同时必须当场摘掉这个死 turn。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-inflight',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        retryStart.resolve({ turn: { id: 'turn-inflight' } });
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        // 补排生效：第三次 turn/start 发了出去，send 没有悬空。
+        expect(turnStarts).toBe(3);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('interrupts the retry when an intermediate mode change leaves the frozen policy looser', async () => {
       // Full access → Ask（arm 标记）→ Auto（Ask→Auto 不算收紧，会清标记），而重投
       // 持的仍是 Full access 的冻结策略（review #844 codex P1）。

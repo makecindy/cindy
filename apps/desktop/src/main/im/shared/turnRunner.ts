@@ -104,7 +104,7 @@ import {
   setActivityNotice,
   type TurnActivityState,
 } from './turnActivity';
-import { overloadFailureNotice, overloadRetryNotice } from './turnRetryNotice';
+import { overloadRetryNotice, terminalErrorText } from './turnRetryNotice';
 import {
   toCoreAgentKind,
   touchUserSent as repoTouchUserSent,
@@ -1786,7 +1786,10 @@ export function createTurnRunner(
         // 收口会过早关卡 + 清空 scheduledTranspond → 重试产出的 text/done 又惰性开第二张
         // 卡。非终止 error 当进行中处理,不转播(后随事件继续刷,最终由 done/终止 error 收口)。
         if (isTerminalAgentErrorEvent(event)) {
-          return void finalizeTranspond(state, extractErrMessage(event.data));
+          // 过载类终态换成本地化可操作说明(与用户 turn 的 handleTurnErrorAsync 共用
+          // 同一 helper): 定时任务的卡片刚显示过「正在自动重试（N/M）」, 重试耗尽时
+          // 再回落成上游英文原文, 等于把内部实现细节丢给渠道用户(review #844 codex P1)。
+          return void finalizeTranspond(state, terminalErrorText(event.data));
         }
         // 自动重试中: 在过程区留一行, 但**只刷已存在的**转播卡。与用户 turn 的
         // 取舍不同 —— 转播是自动任务的旁路展示, 没有人在等它; 为一条重试提示开卡,
@@ -1803,18 +1806,15 @@ export function createTurnRunner(
     }
   }
 
-  function extractErrMessage(data: unknown): string {
-    if (data && typeof data === 'object' && 'message' in data) {
-      return String((data as { message: unknown }).message);
-    }
-    return String(data);
-  }
-
   async function finalizeTranspond(state: SessionState, errMsg: string | null): Promise<void> {
     const t = state.scheduledTranspond;
     if (!t) return;
     state.scheduledTranspond = null; // 防重入(下一条 stray 不会再命中)
     clearTranspondTicker(t);
+    // 收口前清掉"正在自动重试"这类瞬态状态行: 它不是工作项, 而下面 composeTranspondView
+    // 会把 activity 整段写进 finalize 的正文 —— 不清就会在失败说明的正上方永久留一行
+    // "仍在重试"(与 handleTurnErrorAsync 同款处理)。
+    setActivityNotice(t.activity, null);
     // 没产出任何内容(无文本无步骤)且无错 → 不留空卡。
     if (!t.streamingHandle && t.buffer.length === 0 && t.activity.totalSteps === 0 && !errMsg) {
       return;
@@ -2232,16 +2232,9 @@ export function createTurnRunner(
     // 过载类终态(Codex 重试耗尽 / Claude 529 最终失败)换成可操作的本地化说明。
     // 不换的话渠道用户会在重试进度之后突然收到 `Selected model is at capacity...`
     // 或内部英文 SDK 串——从本地化文案回归英文实现细节(review #844 codex P1)。
-    // 与 hook runner 共用同一个 helper，两条渠道链路口径一致；上游原文留在本地日志。
-    const rawErrorStatus =
-      errData && typeof errData === 'object' && 'errorStatus' in errData
-        ? (errData as { errorStatus?: unknown }).errorStatus
-        : undefined;
-    const msg =
-      overloadFailureNotice(
-        rawMsg,
-        typeof rawErrorStatus === 'number' ? rawErrorStatus : undefined,
-      ) ?? rawMsg;
+    // hook runner 与调度转播共用同一个 helper，三条渠道链路口径一致；上游原文留在
+    // 本地日志。
+    const msg = terminalErrorText(errData);
     if (turn) clearSilentStopSettleWait(turn);
     if (turn) clearActivityTicker(turn);
     if (turn) {
