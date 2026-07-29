@@ -192,12 +192,22 @@ export class MakerMemoryStore {
       this.logger.warn('consolidate fts rebuild failed', { error: String(e) });
     }
 
+    // 删源后索引已变小, 写入时点的软警告可能失真 — 以最终磁盘状态重算;
+    // 重算失败时退回写入时点的值 (宁可保守报警, 不静默丢警告)
+    let finalDetail = writeRes.warningDetail;
+    try {
+      finalDetail = await this.storage.assessWarning(writeRes.filename);
+    } catch (e) {
+      this.logger.warn('consolidate: reassess warning failed, using write-time detail', {
+        error: String(e),
+      });
+    }
+
     return {
       ok: true,
       filename: writeRes.filename,
       deletedSources: deleted,
-      ...(writeRes.warning ? { warning: writeRes.warning } : {}),
-      ...(writeRes.warningDetail ? { warningDetail: writeRes.warningDetail } : {}),
+      ...(finalDetail ? { warning: finalDetail.kind, warningDetail: finalDetail } : {}),
     };
   }
 

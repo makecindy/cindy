@@ -374,6 +374,16 @@ export class MemoryStorage {
     }
   }
 
+  /**
+   * 以当前磁盘状态重算某分片的软警告 (含索引侧)。
+   * consolidate 删源后索引已变小, 写入时点的警告可能失真 — 收尾用本方法重算。
+   */
+  async assessWarning(filename: string): Promise<WriteWarningDetail | undefined> {
+    const rec = await this.read(filename);
+    await this.getIndex(); // 确保 indexCache 就绪 (新实例上也能评估索引侧)
+    return this.computeWarning(rec.body);
+  }
+
   private computeWarning(body: string): WriteWarningDetail | undefined {
     const bodyBytes = Buffer.byteLength(body, 'utf8');
     if (bodyBytes > this.config.maxShardBytes) {

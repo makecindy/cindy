@@ -86,4 +86,45 @@ describe('MemoryStorage · size 软警告数值明细', () => {
     expect(result.warning).toBeUndefined();
     expect(result.warningDetail).toBeUndefined();
   });
+
+  it('assessWarning: 删源后索引回落则不再报警(consolidate 删源前的写入警告失真场景)', async () => {
+    // 探针: 默认配置下量出 1 条 / 2 条时的真实索引字节
+    const probe = new MemoryStorage(dir, DEFAULT_MEMORY_CONFIG);
+    await probe.init(dir);
+    await probe.write(writeOpts('内容 a', 'src-a'));
+    const size1 = await probe.getIndexSize();
+    await probe.write(writeOpts('内容 b', 'src-b'));
+    const size2 = await probe.getIndexSize();
+    expect(size2).toBeGreaterThan(size1);
+
+    // 正式: 索引软上限落在两者之间 → 第二条写入报索引警告, 删掉一条后回落
+    const dir2 = await mkdtemp(path.join(tmpdir(), 'memory-warning-'));
+    try {
+      const storage = new MemoryStorage(dir2, {
+        ...DEFAULT_MEMORY_CONFIG,
+        maxIndexBytes: Math.floor((size1 + size2) / 2),
+      });
+      await storage.init(dir2);
+      await storage.write(writeOpts('内容 a', 'src-a'));
+      const over = await storage.write(writeOpts('内容 b', 'src-b'));
+      expect(over.warning).toBe('index-size-exceeded');
+
+      await storage.delete('project_src-b.md');
+      expect(await storage.assessWarning('project_src-a.md')).toBeUndefined();
+    } finally {
+      await rm(dir2, { recursive: true, force: true });
+    }
+  });
+
+  it('assessWarning: 分片本身仍超软上限时保持分片警告明细', async () => {
+    const storage = new MemoryStorage(dir, {
+      ...DEFAULT_MEMORY_CONFIG,
+      maxShardBytes: 64,
+    });
+    await storage.init(dir);
+    await storage.write(writeOpts('x'.repeat(100)));
+    const detail = await storage.assessWarning('project_warn-case.md');
+    expect(detail?.kind).toBe('shard-size-exceeded');
+    expect(detail?.sizeBytes).toBe(100);
+  });
 });
