@@ -13,12 +13,15 @@ import {
   SUBSCRIPTION_DIRECT_MODEL_PREFIXES,
   XAI_MODEL_PREFIX,
   categorize,
+  classifyModel,
   formatContextWindow,
   groupModelsForDisplay,
   groupOf,
   isBudgetModel,
+  isChatEligible,
   isSubscriptionDirectModel,
   modelBadges,
+  type ModelCategory,
 } from '../classification.js';
 
 // ── 原文移植: sourceSwitch.test.ts 的 categorize / groupOf / groupModelsForDisplay ──
@@ -35,18 +38,63 @@ describe('categorize', () => {
   it('非对话类型先于厂商前缀判定(网关杂项模型按类型归组,不误入 gpt/google)', () => {
     expect(categorize('gpt-image-2')).toBe('image');
     expect(categorize('gemini-3-pro-image')).toBe('image');
-    expect(categorize('gpt-4o-transcribe')).toBe('audio');
-    expect(categorize('elevenlabs/scribe_v2')).toBe('audio');
-    expect(categorize('gemini-omni-flash-preview')).toBe('audio');
     expect(categorize('voyage/voyage-context-4')).toBe('embedding');
     expect(categorize('doubao-seedance-2-0-260128')).toBe('video');
     expect(categorize('happyhorse-1.1-t2v')).toBe('video');
-    expect(categorize('ai-gateway-doc')).toBe('other');
+    expect(categorize('ai-gateway-doc')).toBe('compression');
   });
 
   it('订阅直连前缀归组: chatgpt/ → gpt,xai/ → grok', () => {
     expect(categorize(`${CHATGPT_MODEL_PREFIX}gpt-5.5`)).toBe('gpt');
     expect(categorize(`${XAI_MODEL_PREFIX}grok-4`)).toBe('grok');
+  });
+
+  it('x-ai/ 命名空间前缀(网关侧,与订阅直连 xai/ 是两回事)归 grok,不落 china(issue #882)', () => {
+    expect(categorize('x-ai/grok-4.5')).toBe('grok');
+  });
+
+  it('gpt-realtime-* 归 realtime,不再落 gpt 聊天组(issue #882)', () => {
+    expect(categorize('gpt-realtime-2')).toBe('realtime');
+    expect(categorize('gpt-realtime-mini')).toBe('realtime');
+    expect(categorize('gpt-realtime-translate')).toBe('realtime');
+    expect(categorize('gemini-omni-flash-preview')).toBe('realtime');
+  });
+
+  it('语音转写/ASR 类归 stt,即使 id 里带 "realtime" 字样也不误入 realtime(issue #882)', () => {
+    expect(categorize('gpt-4o-transcribe')).toBe('stt');
+    expect(categorize('gpt-4o-mini-transcribe')).toBe('stt');
+    expect(categorize('elevenlabs/scribe_v1')).toBe('stt');
+    expect(categorize('elevenlabs/scribe_v1_experimental')).toBe('stt');
+    expect(categorize('elevenlabs/scribe_v2')).toBe('stt');
+    expect(categorize('gpt-realtime-whisper')).toBe('stt');
+    expect(categorize('qwen3-asr-flash-realtime')).toBe('stt');
+    expect(categorize('fun-asr-realtime-2026-02-28')).toBe('stt');
+  });
+
+  it('语音合成(TTS)归 tts,与同前缀的 elevenlabs STT 模型区分(issue #882)', () => {
+    expect(categorize('elevenlabs/eleven_v3')).toBe('tts');
+    expect(categorize('elevenlabs/eleven_multilingual_v2')).toBe('tts');
+  });
+
+  it('视频生成/编辑类归 video(issue #882)', () => {
+    expect(categorize('doubao-seedance-2-0-fast-260128')).toBe('video');
+    expect(categorize('happyhorse-1.1-i2v')).toBe('video');
+    expect(categorize('happyhorse-1.1-r2v')).toBe('video');
+    expect(categorize('happyhorse-1.0-video-edit')).toBe('video');
+  });
+
+  it('Embedding 类归 embedding(issue #882)', () => {
+    expect(categorize('text-embedding-3-large')).toBe('embedding');
+    expect(categorize('text-embedding-3-small')).toBe('embedding');
+    expect(categorize('gemini-embedding-2-preview')).toBe('embedding');
+    expect(categorize('voyage/voyage-code-3')).toBe('embedding');
+    expect(categorize('voyage/voyage-4-large')).toBe('embedding');
+    expect(categorize('voyage/voyage-4')).toBe('embedding');
+  });
+
+  it('图像生成类归 image(issue #882)', () => {
+    expect(categorize('gemini-3.1-flash-image')).toBe('image');
+    expect(categorize('gpt-image-1.5')).toBe('image');
   });
 });
 
@@ -60,6 +108,114 @@ describe('groupOf — 数据优先,前缀兜底', () => {
     expect(groupOf({ id: 'claude-opus-4-8' })).toBe('anthropic');
     expect(groupOf({ id: 'gemini-3-flash' })).toBe('google');
     expect(groupOf({ id: 'gpt-5.5', group: 'mistral' })).toBe('gpt'); // 未知 group 忽略,按前缀
+  });
+});
+
+describe('classifyModel — mode 权威,缺省时回退 groupOf(issue #882)', () => {
+  const NON_CHAT_MODE_CASES: Array<{ id: string; mode: string; category: ModelCategory }> = [
+    { id: 'gemini-3.1-flash-image', mode: 'image_generation', category: 'image' },
+    { id: 'gemini-3-pro-image', mode: 'image_generation', category: 'image' },
+    { id: 'gpt-image-1.5', mode: 'image_generation', category: 'image' },
+    { id: 'gpt-image-2', mode: 'image_generation', category: 'image' },
+    { id: 'text-embedding-3-large', mode: 'embedding', category: 'embedding' },
+    { id: 'text-embedding-3-small', mode: 'embedding', category: 'embedding' },
+    { id: 'gemini-embedding-2-preview', mode: 'embedding', category: 'embedding' },
+    { id: 'voyage/voyage-code-3', mode: 'embedding', category: 'embedding' },
+    { id: 'voyage/voyage-4-large', mode: 'embedding', category: 'embedding' },
+    { id: 'voyage/voyage-4', mode: 'embedding', category: 'embedding' },
+    { id: 'voyage/voyage-context-4', mode: 'embedding', category: 'embedding' },
+    { id: 'elevenlabs/eleven_v3', mode: 'audio_speech', category: 'tts' },
+    { id: 'elevenlabs/eleven_multilingual_v2', mode: 'audio_speech', category: 'tts' },
+    { id: 'gpt-4o-transcribe', mode: 'audio_transcription', category: 'stt' },
+    { id: 'gpt-4o-mini-transcribe', mode: 'audio_transcription', category: 'stt' },
+    { id: 'elevenlabs/scribe_v1', mode: 'audio_transcription', category: 'stt' },
+    { id: 'elevenlabs/scribe_v1_experimental', mode: 'audio_transcription', category: 'stt' },
+    { id: 'elevenlabs/scribe_v2', mode: 'audio_transcription', category: 'stt' },
+    { id: 'gpt-realtime-whisper', mode: 'audio_transcription', category: 'stt' },
+    { id: 'qwen3-asr-flash-realtime', mode: 'audio_transcription', category: 'stt' },
+    { id: 'fun-asr-realtime-2026-02-28', mode: 'audio_transcription', category: 'stt' },
+    { id: 'gpt-realtime-2', mode: 'realtime', category: 'realtime' },
+    { id: 'gpt-realtime-mini', mode: 'realtime', category: 'realtime' },
+    { id: 'gpt-realtime-translate', mode: 'realtime', category: 'realtime' },
+    { id: 'gemini-omni-flash-preview', mode: 'realtime', category: 'realtime' },
+    { id: 'doubao-seedance-2-0-260128', mode: 'video_generation', category: 'video' },
+    { id: 'doubao-seedance-2-0-fast-260128', mode: 'video_generation', category: 'video' },
+    { id: 'happyhorse-1.1-t2v', mode: 'video_generation', category: 'video' },
+    { id: 'happyhorse-1.1-i2v', mode: 'video_generation', category: 'video' },
+    { id: 'happyhorse-1.1-r2v', mode: 'video_generation', category: 'video' },
+    { id: 'happyhorse-1.0-video-edit', mode: 'video_generation', category: 'video' },
+  ];
+
+  it.each(NON_CHAT_MODE_CASES)(
+    '$id: mode=$mode 权威判定为 $category,忽略 id 正则',
+    ({ id, mode, category }) => {
+      expect(classifyModel({ id, mode })).toBe(category);
+    },
+  );
+
+  it('未识别的 mode 值不静默丢弃,落 other(issue #882 第 5 点:无损保留新类型)', () => {
+    expect(classifyModel({ id: 'ai-gateway-doc', mode: 'doc_rerank' })).toBe('other');
+    expect(classifyModel({ id: 'some-future-model', mode: 'brand-new-capability' })).toBe('other');
+  });
+
+  it('mode 缺省时回退 groupOf/categorize(旧缓存兜底,同 issue 点名的具体 bug 修复)', () => {
+    expect(classifyModel({ id: 'gpt-realtime-2' })).toBe('realtime');
+    expect(classifyModel({ id: 'x-ai/grok-4.5' })).toBe('grok');
+    expect(classifyModel({ id: 'ai-gateway-doc' })).toBe('compression');
+  });
+
+  it("mode='chat' 只确认是聊天模型,厂商分组仍由 group/id 决定(两层判断独立)", () => {
+    expect(classifyModel({ id: 'claude-opus-4-8', mode: 'chat' })).toBe('anthropic');
+    expect(classifyModel({ id: 'x-ai/grok-4.5', mode: 'chat' })).toBe('grok');
+    expect(classifyModel({ id: 'gpt-weird', group: 'china', mode: 'chat' })).toBe('china');
+  });
+});
+
+describe('isChatEligible — 决定能否进 Agent availableModels(issue #882 第 3 点)', () => {
+  it('mode 权威判定为非 chat 的所有类型模型均不可进 availableModels', () => {
+    const nonChatIds = [
+      'gemini-3.1-flash-image',
+      'gpt-image-2',
+      'text-embedding-3-large',
+      'voyage/voyage-4',
+      'elevenlabs/eleven_v3',
+      'elevenlabs/scribe_v2',
+      'gpt-4o-transcribe',
+      'qwen3-asr-flash-realtime',
+      'gpt-realtime-2',
+      'gemini-omni-flash-preview',
+      'doubao-seedance-2-0-260128',
+      'happyhorse-1.1-t2v',
+    ];
+    for (const id of nonChatIds) {
+      expect(isChatEligible({ id, mode: 'embedding' })).toBe(false); // 任意非 chat mode 皆不可用
+    }
+    expect(isChatEligible({ id: 'ai-gateway-doc', mode: 'doc_rerank' })).toBe(false);
+  });
+
+  it('mode 缺省时按修正后的 categorize 兜底判定 —— 同样排除这些具体模型', () => {
+    for (const id of [
+      'gpt-realtime-2',
+      'gpt-realtime-mini',
+      'gpt-realtime-translate',
+      'gemini-omni-flash-preview',
+      'text-embedding-3-large',
+      'ai-gateway-doc',
+      'elevenlabs/eleven_v3',
+      'elevenlabs/scribe_v2',
+      'gpt-4o-transcribe',
+      'doubao-seedance-2-0-260128',
+    ]) {
+      expect(isChatEligible({ id })).toBe(false);
+    }
+  });
+
+  it('聊天模型(含 mode 缺省的网关旧数据)仍判定为可用 —— 回归锁,不能因这次改动消失', () => {
+    expect(isChatEligible({ id: 'claude-opus-4-8' })).toBe(true);
+    expect(isChatEligible({ id: 'gpt-5.5' })).toBe(true);
+    expect(isChatEligible({ id: 'x-ai/grok-4.5' })).toBe(true); // 无 mode 时按修正后的 grok 分组,可用
+    expect(isChatEligible({ id: 'moonshotai/kimi-k2' })).toBe(true); // china 兜底组
+    expect(isChatEligible({ id: 'some-gateway-chat-model', mode: 'chat' })).toBe(true);
   });
 });
 

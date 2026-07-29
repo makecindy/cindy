@@ -36,8 +36,9 @@ export function isSubscriptionDirectModel(model: string | null | undefined): boo
 }
 
 // 仅用于分组展示, 不参与持久化或 onModelChange 数据流。
-// 对话厂商组(anthropic..china)在前;非对话类型组(image/audio/video/embedding/other)在后——
-// 后者收纳网关多出的图像 / 语音 / 视频 / 向量等模型(它们默认关、不能当 agent 用,仅分类展示)。
+// 对话厂商组(anthropic..china)在前;非对话类型组(image/tts/stt/realtime/video/embedding/
+// compression/other)在后——后者收纳网关多出的图像/语音/视频/向量/压缩等模型(它们默认关、
+// 不能当 agent 用,仅分类展示,见 isChatEligible)。
 export type ModelCategory =
   | 'anthropic'
   | 'gpt'
@@ -46,9 +47,12 @@ export type ModelCategory =
   | 'google'
   | 'china'
   | 'image'
-  | 'audio'
   | 'video'
+  | 'tts'
+  | 'stt'
+  | 'realtime'
   | 'embedding'
+  | 'compression'
   | 'other';
 
 export const CATEGORY_ORDER: ModelCategory[] = [
@@ -59,34 +63,85 @@ export const CATEGORY_ORDER: ModelCategory[] = [
   'google',
   'china',
   'image',
-  'audio',
   'video',
+  'tts',
+  'stt',
+  'realtime',
   'embedding',
+  'compression',
   'other',
 ];
 
+/** 对话厂商组:属于其一即被 isChatEligible 判定为可进 Agent availableModels。 */
+const CHAT_VENDOR_CATEGORIES = new Set<ModelCategory>([
+  'anthropic',
+  'gpt',
+  'gpt-budget',
+  'grok',
+  'google',
+  'china',
+]);
+
+/**
+ * 对话厂商组,按 CATEGORY_ORDER 原有相对顺序派生(供切来源 reconcile 之类
+ * 「只在聊天厂商组里找候选」的场景复用,不必各自手写排除非聊天分类的清单——
+ * 那份清单每新增一个非聊天分类就要改一处,已经是本次要修的那类耦合)。
+ */
+export const CHAT_VENDOR_CATEGORY_ORDER: readonly ModelCategory[] = CATEGORY_ORDER.filter((c) =>
+  CHAT_VENDOR_CATEGORIES.has(c),
+);
+
+/**
+ * Gateway 原生 `mode` → 展示分类(issue #882:mode 是权威信号,取值即
+ * LiteLLM/AIGateway 侧的原生字符串,未来新增值先落 other 并保留原串,不必
+ * 为每个新值改这里的正则)。'chat' 与缺省不出现在这里 —— 它们仍按厂商
+ * 前缀走 groupOf/categorize 归到 anthropic/gpt/grok/google/china 等分组,
+ * 因为"是聊天模型"和"属于哪个厂商分组"是两个独立问题。
+ * 取值以线上 Gateway 实际返回为准;这里先覆盖 LiteLLM 通用常见值,遇到确认
+ * 的新取值(如压缩类的真实 mode 字符串)再补充映射,未覆盖时不会丢数据,只是
+ * 先落 other 展示原始 mode。
+ */
+const MODE_TO_CATEGORY: Record<string, ModelCategory> = {
+  embedding: 'embedding',
+  image_generation: 'image',
+  video_generation: 'video',
+  audio_speech: 'tts',
+  audio_transcription: 'stt',
+  realtime: 'realtime',
+};
+
 // 按 model.id 前缀粗分类: claude-* → Anthropic, gpt-* → GPT, codex/* → 骨折GPT (gateway 低价路由),
 // gemini-* → Google, 其余 (moonshotai/qwen/glm/...) 一律落到 China。新增国产模型不需要改这里。
+// 这是**没有 mode 时**的兜底(旧缓存 / mode 尚未覆盖到的来源);mode 存在时一律用
+// classifyModel,不再猜 id。
 export function categorize(id: string): ModelCategory {
   if (id.startsWith('claude-')) return 'anthropic';
-  // 非对话类型(向量/图像/音频语音/视频)必须在通用 gpt- / gemini- 厂商规则**之前**判定,
+  // 非对话类型(向量/图像/语音/视频/压缩)必须在通用 gpt- / gemini- 厂商规则**之前**判定,
   // 否则 gpt-image-2 / gemini-3-pro-image / gpt-4o-transcribe 会被误归到 gpt / google。
   // 这些是网关多返回的、不能当 agent 用的模型,默认关、仅按类型归类展示。
   if (/embedding/.test(id) || id.startsWith('voyage/')) return 'embedding';
   if (/image/.test(id)) return 'image';
-  if (
-    id.startsWith('elevenlabs/') ||
-    id.startsWith('gpt-4o-realtime') ||
-    /transcribe|audio|speech|tts|whisper|asr|gemini-omni/.test(id)
-  )
-    return 'audio';
   if (/seedance|happyhorse|video|-t2v|-i2v|-r2v/.test(id)) return 'video';
-  if (id === 'ai-gateway-doc') return 'other';
+  if (id === 'ai-gateway-doc') return 'compression';
+  // STT/ASR 必须在 realtime 判定之前:qwen3-asr-flash-realtime / fun-asr-realtime-* /
+  // gpt-realtime-whisper 的 id 里都含 "realtime",但语义是语音转写,不是实时多模态。
+  if (
+    id.startsWith('elevenlabs/scribe') ||
+    /transcribe|whisper|asr/.test(id)
+  )
+    return 'stt';
+  if (id.startsWith('elevenlabs/eleven')) return 'tts';
+  // gpt-realtime-2 / gpt-realtime-mini / gpt-realtime-translate / gemini-omni-* ——
+  // 真正的实时多模态,已排除上面的 STT 特例。
+  if (/^gpt-realtime|gemini-omni/.test(id)) return 'realtime';
   // 订阅直连 GPT(chatgpt/ 前缀,经 responses-bridge)与网关 gpt- 同归 GPT 组;前缀常量与
   // 路由 / 记账 gate 同源(本文件顶部),防漂移。
   if (id.startsWith('gpt-') || id.startsWith(CHATGPT_MODEL_PREFIX)) return 'gpt';
   if (id.startsWith('codex/')) return 'gpt-budget';
-  if (id.startsWith(XAI_MODEL_PREFIX) || id.startsWith('grok')) return 'grok';
+  // x-ai/ 只是网关侧 grok 的命名空间前缀(展示分组用),与 XAI_MODEL_PREFIX
+  // ('xai/',订阅直连 bridge 语义)是两件事,不要合并常量。
+  if (id.startsWith(XAI_MODEL_PREFIX) || id.startsWith('x-ai/') || id.startsWith('grok'))
+    return 'grok';
   if (id.startsWith('gemini-')) return 'google';
   return 'china';
 }
@@ -96,24 +151,52 @@ const KNOWN_CATEGORIES = new Set<string>(CATEGORY_ORDER);
 /**
  * 决定一个模型的厂商分组 —— **数据优先**:目录里带了合法 `group` 就用它,
  * 否则回退到 id 前缀归类(categorize)。未知的 group 值(渲染层没有对应标签)也回退,
- * 避免出现没有 i18n 标签的空分组。
+ * 避免出现没有 i18n 标签的空分组。不感知 `mode`——mode 优先分类见 classifyModel。
  */
 export function groupOf(model: { id: string; group?: string }): ModelCategory {
   if (model.group && KNOWN_CATEGORIES.has(model.group)) return model.group as ModelCategory;
   return categorize(model.id);
 }
 
-/** groupModelsForDisplay 的最小模型形状(只需 id + 可选 group / sortOrder)。 */
+/**
+ * 分类的**权威入口**(issue #882):`mode` 存在且不是 'chat' 时直接按
+ * MODE_TO_CATEGORY 权威判定,忽略 id/group——网关明确说了这不是聊天模型,
+ * 不该再让 id 正则有机会猜错(如 gpt-realtime-2 猜成 gpt、x-ai/grok-4.5 猜成
+ * china)。`mode` 缺省或恰好是 'chat' 时,回退 groupOf(数据 group 优先 /
+ * id 正则兜底)—— "是不是聊天模型"与"聊天模型属于哪个厂商分组"是两层判断,
+ * mode='chat' 只回答第一层,第二层仍需 id/group。
+ */
+export function classifyModel(model: { id: string; group?: string; mode?: string }): ModelCategory {
+  if (model.mode !== undefined && model.mode !== 'chat') {
+    return MODE_TO_CATEGORY[model.mode] ?? 'other';
+  }
+  return groupOf(model);
+}
+
+/**
+ * 该模型能不能进 Agent `availableModels` / 新对话模型选择器(issue #882 第 3 点)。
+ * `mode` 存在时只信 mode==='chat';缺省时看 classifyModel 落进哪个分组——
+ * 落进厂商聊天组(anthropic/gpt/gpt-budget/grok/google/china)才算,这保证了
+ * "mode 还没覆盖到、但已经在正常工作的网关聊天模型"不会因为这次改动突然从
+ * availableModels 消失(见 classification.test.ts 的回归锁)。
+ */
+export function isChatEligible(model: { id: string; group?: string; mode?: string }): boolean {
+  if (model.mode !== undefined) return model.mode === 'chat';
+  return CHAT_VENDOR_CATEGORIES.has(groupOf(model));
+}
+
+/** groupModelsForDisplay 的最小模型形状(id + 可选 group / mode / sortOrder)。 */
 export interface DisplayModel {
   id: string;
   group?: string;
+  mode?: string;
   sortOrder?: number;
 }
 
 /**
  * 选择器右栏的「分组 + 排序」纯逻辑 —— **完全由目录数据驱动**:
  *   1. 先按 `sortOrder` 升序稳定排序(缺省排末尾,相等时保持入参顺序);
- *   2. 按 `groupOf`(group 字段优先 / 前缀兜底)分桶;
+ *   2. 按 `classifyModel`(mode 优先 / group 字段次之 / id 前缀兜底)分桶;
  *   3. 桶的先后 = 桶内首个模型在已排序列表里的出现序(= 该桶最小 sortOrder)。
  * 返回有序的 { category, models } 列表;不依赖写死的 CATEGORY_ORDER 决定展示顺序。
  */
@@ -126,7 +209,7 @@ export function groupModelsForDisplay<T extends DisplayModel>(
   );
   const map = new Map<ModelCategory, T[]>();
   for (const m of sorted) {
-    const cat = groupOf(m);
+    const cat = classifyModel(m);
     const list = map.get(cat) ?? [];
     list.push(m);
     map.set(cat, list);

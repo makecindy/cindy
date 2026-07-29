@@ -220,6 +220,14 @@ export interface CatalogModel {
    */
   group?: string;
   /**
+   * Gateway 原生模型能力类型(issue #882:'chat' / 'embedding' / 'image_generation' /
+   * 'audio_speech' / ... ,字段值不改名,原样透传)。是否为聊天模型、进哪个
+   * ModelMode 展示分类均以此为权威;缺省时回退 id 正则兜底
+   * (`classification.ts` classifyModel)。只有 XD 网关来源目前会填充,静态
+   * 内置目录留空。
+   */
+  mode?: string;
+  /**
    * 展示排序权重（升序）。渲染层按它对模型排序、并据每个分组的最小 sortOrder 决定分组先后。
    * 缺省排到末尾。仅影响选择器展示顺序，不影响 host 派生的 availableModels 数组序（后者保序）。
    */
