@@ -10063,21 +10063,29 @@ describe('CodexAgent MCP thread context hooks', () => {
     const iterator = handle.events()[Symbol.asyncIterator]();
     const handlers = host.getThreadHandlers();
     if (!handlers?.requestUserInput || !handlers.serverRequestResolved) throw new Error('expected handlers');
-    const pendingDecision = deferred<InteractionDecision>();
-    handle.setInteractionResolver(async () => pendingDecision.promise);
+    const cancelledDecision = deferred<InteractionDecision>();
+    const retryDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async (req) => {
+      requestCount += 1;
+      return req.requestId === 'req-resolved'
+        ? cancelledDecision.promise
+        : retryDecision.promise;
+    });
 
+    const question = {
+      id: 'q1',
+      header: 'Question',
+      question: 'Pick one',
+      isOther: false,
+      isSecret: false,
+      options: null,
+    };
     const responsePromise = handlers.requestUserInput({
       threadId: 'start-thread-id',
       turnId: 'turn-1',
       itemId: 'item-1',
-      questions: [{
-        id: 'q1',
-        header: 'Question',
-        question: 'Pick one',
-        isOther: false,
-        isSecret: false,
-        options: null,
-      }],
+      questions: [question],
     }, { requestId: 'req-resolved' });
 
     handlers.serverRequestResolved({ threadId: 'start-thread-id', requestId: 'req-resolved' });
@@ -10091,7 +10099,37 @@ describe('CodexAgent MCP thread context hooks', () => {
         resolvedAs: 'deny',
       },
     });
-    pendingDecision.resolve({ kind: 'ask_user_question', answers: { q1: 'late' } });
+
+    const retryResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-2',
+      questions: [question],
+    }, { requestId: 'req-retry' });
+    expect(requestCount).toBe(2);
+    retryDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'fresh' },
+    });
+    await expect(retryResponsePromise).resolves.toEqual({
+      answers: { q1: { answers: ['fresh'] } },
+    });
+
+    cancelledDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'late' },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-3',
+      questions: [question],
+    }, { requestId: 'req-replay' })).resolves.toEqual({
+      answers: { q1: { answers: ['fresh'] } },
+    });
+    expect(requestCount).toBe(2);
     await handle.close();
   });
 

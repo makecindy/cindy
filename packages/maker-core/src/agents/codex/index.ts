@@ -3544,6 +3544,12 @@ export class CodexAgent extends BaseAgent {
       string,
       Map<string, Promise<UserInputAnswersByPosition>>
     >();
+    const pendingUserInputOwnerByRequestId = new Map<string, {
+      turnId: string;
+      fingerprint: string;
+      pendingForTurn: Map<string, Promise<UserInputAnswersByPosition>>;
+      interactionPromise: Promise<UserInputAnswersByPosition>;
+    }>();
     registerCodexMcpContext(threadId);
     let mcpElicitationSeq = 0;
 
@@ -4471,8 +4477,25 @@ export class CodexAgent extends BaseAgent {
       for (const [itemId, ctx] of activeToolContexts) {
         if (ctx.turnId === turnId) activeToolContexts.delete(itemId);
       }
+      for (const [requestId, pending] of pendingUserInputOwnerByRequestId) {
+        if (pending.turnId === turnId) pendingUserInputOwnerByRequestId.delete(requestId);
+      }
       submittedUserInputByTurn.delete(turnId);
       pendingUserInputByTurn.delete(turnId);
+    }
+
+    function forgetPendingUserInputRequest(requestId: string): void {
+      const pending = pendingUserInputOwnerByRequestId.get(requestId);
+      if (!pending) return;
+      pendingUserInputOwnerByRequestId.delete(requestId);
+      if (pending.pendingForTurn.get(pending.fingerprint) !== pending.interactionPromise) return;
+      pending.pendingForTurn.delete(pending.fingerprint);
+      if (
+        pending.pendingForTurn.size === 0
+        && pendingUserInputByTurn.get(pending.turnId) === pending.pendingForTurn
+      ) {
+        pendingUserInputByTurn.delete(pending.turnId);
+      }
     }
 
     function classifyUserInputRequest(params: ToolRequestUserInputParams): 'ask_user_question' | 'permission' {
@@ -4545,6 +4568,12 @@ export class CodexAgent extends BaseAgent {
         if (!pendingUserInputByTurn.has(turnId)) {
           pendingUserInputByTurn.set(turnId, pendingForTurn);
         }
+        pendingUserInputOwnerByRequestId.set(requestId, {
+          turnId,
+          fingerprint,
+          pendingForTurn,
+          interactionPromise,
+        });
       }
 
       try {
@@ -4553,6 +4582,7 @@ export class CodexAgent extends BaseAgent {
           turnId
           && fingerprint
           && pendingUserInputByTurn.get(turnId) === pendingForTurn
+          && pendingForTurn?.get(fingerprint) === interactionPromise
           && hasSubmittedUserInput(answersByPosition)
         ) {
           const nextSubmittedForTurn = submittedUserInputByTurn.get(turnId)
@@ -4564,6 +4594,10 @@ export class CodexAgent extends BaseAgent {
         }
         return responseFromUserInputAnswersByPosition(questions, answersByPosition);
       } finally {
+        const ownedPending = pendingUserInputOwnerByRequestId.get(requestId);
+        if (ownedPending?.interactionPromise === interactionPromise) {
+          pendingUserInputOwnerByRequestId.delete(requestId);
+        }
         if (turnId && fingerprint && pendingForTurn?.get(fingerprint) === interactionPromise) {
           pendingForTurn.delete(fingerprint);
           if (
@@ -4732,6 +4766,7 @@ export class CodexAgent extends BaseAgent {
         },
       );
       if (userInputCancelled || dynamicCancelled) {
+        forgetPendingUserInputRequest(requestId);
         eventQueue.push({
           type: 'interaction_dismissed',
           data: { requestId, reason: 'server_request_resolved', resolvedAs: 'deny' },
@@ -6297,6 +6332,7 @@ export class CodexAgent extends BaseAgent {
           activeToolContexts.clear();
           submittedUserInputByTurn.clear();
           pendingUserInputByTurn.clear();
+          pendingUserInputOwnerByRequestId.clear();
         }
         const targetsPendingTurn = isTurnStartPending && currentTurnId === null && Boolean(params.turnId);
         // 空 turnId 的容量拒绝: 过载重投的 RPC 还在飞、而它的 turnStarted 尚未到达时,
