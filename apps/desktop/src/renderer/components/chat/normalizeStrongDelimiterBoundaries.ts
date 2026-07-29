@@ -520,11 +520,20 @@ function collectProseRanges(
     collectRecoveredTailSyntaxRanges(node, protectedRanges, recoveredMathTailStarts, markdown);
     collectRecoveredTailLinkRanges(node, protectedRanges, markdown);
     protectedRanges.push(...collectProjectDeepLinkRanges(markdown, range));
-    protectedRanges.push(
-      ...preservedTexDelimiterRanges.filter(
-        (protectedRange) => protectedRange.start < range.end && protectedRange.end > range.start,
-      ),
+    // 保留的 TeX 区间按源码顺序收集。先定位首个可能重叠的区间，再只遍历
+    // 当前段落实际覆盖的部分，避免每个段落都重新扫描整份文档的公式。
+    const firstPreservedTexRange = firstRangeEndingAfter(
+      preservedTexDelimiterRanges,
+      range.start,
     );
+    for (
+      let index = firstPreservedTexRange;
+      index < preservedTexDelimiterRanges.length &&
+      preservedTexDelimiterRanges[index].start < range.end;
+      index += 1
+    ) {
+      protectedRanges.push(preservedTexDelimiterRanges[index]);
+    }
     proseRanges.push({
       range,
       protectedRanges: mergeOffsetRanges(protectedRanges),

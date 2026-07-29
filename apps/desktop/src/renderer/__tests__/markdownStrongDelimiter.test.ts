@@ -359,6 +359,17 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
   });
 
+  it('handles many paragraphs and preserved TeX ranges in source-line mode', () => {
+    const source = Array.from(
+      { length: 1_000 },
+      (_, index) => `\\[formula_${index}**3.**x\\]\n\n段落 ${index}：**重点。**正文`,
+    ).join('\n\n');
+
+    expect(normalizeStrongDelimiterBoundaries(source, { preserveTexDelimiters: true })).toBe(
+      source.replaceAll('**正文', '**<!--cindy-strong-boundary-->正文'),
+    );
+  });
+
   it('leaves historical bare project deep links unchanged', () => {
     const source = '打开 cindy://project/%2Ftmp%2Ffoo**bar.**baz 查看';
 
