@@ -22,8 +22,11 @@
  *    增删改都会哈希不符或条目错位,整体重读。
  *
  * 两路共用:包先在内存里打完再弹保存对话框——用户挑选位置期间插件被
- * 更新/卸载都不影响已抓内容。Electron 对话框、安装目录解析与落盘全部
- * 注入,便于内存 harness 测试。
+ * 更新/卸载都不影响已抓内容。产物落盘前再过两道装入同口径的闸:
+ * 体积(条目数/解压总量/包体大小,与 GhostManager 同一组常量,Node
+ * 插件运行期可能把目录写大)与装入级验签(签名包的 statement/发布者
+ * 签名在装入后可能被篡改,哈希自洽证明不了 statement 本身可信)。
+ * Electron 对话框、安装目录解析与落盘全部注入,便于内存 harness 测试。
  */
 
 import crypto from 'node:crypto';
@@ -33,14 +36,31 @@ import path from 'node:path';
 import JSZip from 'jszip';
 
 import { isValidGhostId, type InstalledGhost } from '../../shared/ghost.js';
-import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
+import {
+  MAX_BASIC_CINDY_FILE_BYTES,
+  MAX_BASIC_UNCOMPRESSED_BYTES,
+  MAX_BASIC_ZIP_ENTRIES,
+  MAX_NODE_CINDY_FILE_BYTES,
+  MAX_NODE_UNCOMPRESSED_BYTES,
+  MAX_NODE_ZIP_ENTRIES,
+} from './GhostManager.js';
+import { GHOST_SIGNATURE_FILE, verifyGhostZipSignatures } from './ghostSignature.js';
 
 export type ExportGhostPackageResult =
   | { status: 'saved'; savedPath: string }
   | { status: 'canceled' }
   | { status: 'invalid_id' }
   | { status: 'not_installed' }
-  | { status: 'error'; code: 'read_failed' | 'compress_failed' | 'dialog_failed' | 'write_failed' };
+  | {
+      status: 'error';
+      code:
+        | 'read_failed'
+        | 'compress_failed'
+        | 'dialog_failed'
+        | 'write_failed'
+        | 'too_large'
+        | 'verify_failed';
+    };
 
 export interface ExportGhostPackageDeps {
   /** 已装插件清单(GhostManager.list 的事实源)。 */
@@ -237,16 +257,24 @@ async function snapshotUnsignedTree(dir: string): Promise<TreeFile[] | null> {
  */
 const SNAPSHOT_MAX_ATTEMPTS = 3;
 
-async function snapshotPackage(dir: string): Promise<PackageEntry[] | null> {
+interface PackageSnapshot {
+  entries: PackageEntry[];
+  /** 是否走了签名闭包路径(决定产物是否要做装入级验签)。 */
+  signed: boolean;
+}
+
+async function snapshotPackage(dir: string): Promise<PackageSnapshot | null> {
   for (let attempt = 0; attempt < SNAPSHOT_MAX_ATTEMPTS; attempt++) {
     try {
       const doc = await readSignedDoc(dir);
       if (doc) {
         const entries = await readSignedEntries(dir, doc);
-        if (entries) return entries;
+        if (entries) return { entries, signed: true };
       } else {
         const tree = await snapshotUnsignedTree(dir);
-        if (tree) return tree.map(({ rel, data }) => ({ rel, data }));
+        if (tree) {
+          return { entries: tree.map(({ rel, data }) => ({ rel, data })), signed: false };
+        }
       }
     } catch {
       // 并发更新/卸载途中的瞬时失败(目录短暂缺失、半写文件等):重试。
@@ -274,15 +302,27 @@ export async function exportGhostPackage(
     return { status: 'error', code: 'read_failed' };
   }
 
-  // 一致性快照(口径见文件头):安装目录内容来自装入侧已校验的 zip,
-  // 此处只做如实归档,不设内容上限(装入侧已卡过解压总量)。
-  // snapshotPackage 内部已把瞬时失败纳入重试,返回 null = 持续冲突。
-  const files = await snapshotPackage(ghost.dir);
-  if (!files) return { status: 'error', code: 'read_failed' };
+  // 一致性快照(口径见文件头):snapshotPackage 内部已把瞬时失败纳入
+  // 重试,返回 null = 持续冲突。
+  const snapshot = await snapshotPackage(ghost.dir);
+  if (!snapshot) return { status: 'error', code: 'read_failed' };
+
+  // 装入侧体积口径(评审 P1):Node 插件运行期可向安装目录写缓存/产物,
+  // 目录可能已长大到超过装入上限——导出成功却装不回是最差结局,这里
+  // 与装入侧同一组常量,超限如实报错。
+  const isNode = Boolean(ghost.manifest.node);
+  const maxUncompressed = isNode ? MAX_NODE_UNCOMPRESSED_BYTES : MAX_BASIC_UNCOMPRESSED_BYTES;
+  const maxEntries = isNode ? MAX_NODE_ZIP_ENTRIES : MAX_BASIC_ZIP_ENTRIES;
+  const maxArchive = isNode ? MAX_NODE_CINDY_FILE_BYTES : MAX_BASIC_CINDY_FILE_BYTES;
+  const totalBytes = snapshot.entries.reduce((sum, file) => sum + file.data.byteLength, 0);
+  if (totalBytes > maxUncompressed) return { status: 'error', code: 'too_large' };
 
   const zip = new JSZip();
-  for (const file of files) {
+  for (const file of snapshot.entries) {
     zip.file(file.rel, file.data);
+  }
+  if (Object.keys(zip.files).length > maxEntries) {
+    return { status: 'error', code: 'too_large' };
   }
   let buf: Buffer;
   try {
@@ -290,6 +330,15 @@ export async function exportGhostPackage(
   } catch {
     // 压缩失败(zlib 等)如实落到结构化结果,不冒成未捕获的 IPC 异常。
     return { status: 'error', code: 'compress_failed' };
+  }
+  if (buf.byteLength > maxArchive) return { status: 'error', code: 'too_large' };
+
+  // 装入级验签(评审 P1):签名包的 statement/发布者签名在装入后可能被
+  // 篡改——哈希比对只能证明内容与 statement 自洽,证明不了 statement
+  // 本身可信。产物写盘前走与装入相同的验签,确保导出包可原样装回。
+  if (snapshot.signed) {
+    const verification = await verifyGhostZipSignatures(zip, '', ghost.manifest, {});
+    if (!verification.ok) return { status: 'error', code: 'verify_failed' };
   }
 
   const baseName = sanitizeExportFileNamePart(ghost.manifest.name) || ghost.manifest.id;

@@ -8,6 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
 import { exportGhostPackage, sanitizeExportFileNamePart } from '../exportGhostPackage';
+import { signGhostPackage } from '../ghostSignature';
+
+/** 测试用发布者密钥对(每次进程一对,签名/验签都走真实 ed25519)。 */
+const { privateKey: publisherKey } = crypto.generateKeyPairSync('ed25519');
 
 /** 每个用例独立的临时安装目录(规则 23:测试路径一律 os.tmpdir)。 */
 let workDir: string;
@@ -57,27 +61,23 @@ function makeGhost(): InstalledGhost {
 }
 
 /**
- * 给夹具目录写一份真实 sha256 的签名文件(路径相对 ghostDir,
- * posix 风格)。签名包导出会逐文件校验哈希,假哈希必然 read_failed。
+ * 给夹具目录写一份真实签名的 cindy-signatures.json:用 signGhostPackage
+ * 对 paths 指定的文件(相对 ghostDir,posix 风格)打包签名,取签名文件
+ * 落盘。导出会对签名包做装入级验签,假签名必然 verify_failed。
  */
 async function writeStatement(paths: string[]): Promise<void> {
-  const files = [];
+  const zip = new JSZip();
   for (const p of paths) {
-    const data = await fs.promises.readFile(path.join(ghostDir, ...p.split('/')));
-    files.push({
-      path: p,
-      sha256: crypto.createHash('sha256').update(data).digest('hex'),
-      bytes: data.byteLength,
-    });
+    zip.file(p, await fs.promises.readFile(path.join(ghostDir, ...p.split('/'))));
   }
-  await fs.promises.writeFile(
-    path.join(ghostDir, 'cindy-signatures.json'),
-    JSON.stringify({
-      schemaVersion: 1,
-      publisher: { name: 'test', publicKey: 'k', signature: 's' },
-      statement: { schemaVersion: 1, ghostId: 'hello', ghostVersion: '1.2.0', files },
-    }),
-  );
+  const pkg = await zip.generateAsync({ type: 'nodebuffer' });
+  const signed = await signGhostPackage(pkg, {
+    publisherName: 'test',
+    privateKey: publisherKey,
+  });
+  const signedZip = await JSZip.loadAsync(signed);
+  const sigText = await signedZip.file('cindy-signatures.json')!.async('string');
+  await fs.promises.writeFile(path.join(ghostDir, 'cindy-signatures.json'), sigText);
 }
 
 function makeDeps(overrides: Partial<Parameters<typeof exportGhostPackage>[1]> = {}) {
@@ -158,6 +158,30 @@ describe('exportGhostPackage', () => {
     await fs.promises.writeFile(path.join(ghostDir, 'main.js'), 'tampered-content');
     const result = await exportGhostPackage('hello', makeDeps());
     expect(result).toEqual({ status: 'error', code: 'read_failed' });
+  });
+
+  it('签名文件本身被篡改(发布者签名失效):如实 verify_failed', async () => {
+    await writeStatement(['ghost.json', 'locales/en.json', 'main.js']);
+    // 文件与 statement 自洽(哈希全对),但发布者签名被换掉——
+    // 装入级验签必须拦下,不能产出装不回的"成功"导出。
+    const sigPath = path.join(ghostDir, 'cindy-signatures.json');
+    const doc = JSON.parse(await fs.promises.readFile(sigPath, 'utf8')) as {
+      publisher: { signature: string };
+    };
+    doc.publisher.signature = Buffer.from('forged-signature-bytes').toString('base64');
+    await fs.promises.writeFile(sigPath, JSON.stringify(doc));
+    const result = await exportGhostPackage('hello', makeDeps());
+    expect(result).toEqual({ status: 'error', code: 'verify_failed' });
+  });
+
+  it('目录内容超过装入侧条目上限:如实 too_large', async () => {
+    // 普通(非 Node)插件装入上限 256 条目;运行期写入的杂散文件可能
+    // 把目录撑过上限,导出不能成功却装不回。
+    for (let i = 0; i < 260; i++) {
+      await fs.promises.writeFile(path.join(ghostDir, `cache-${i}.dat`), 'x');
+    }
+    const result = await exportGhostPackage('hello', makeDeps());
+    expect(result).toEqual({ status: 'error', code: 'too_large' });
   });
 
   it('签名包读取期间目录被更新:哈希不符触发整体重读', async () => {
