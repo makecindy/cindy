@@ -3228,7 +3228,7 @@
   },
   "localAdoption": {
     "title": "Bring Local Sessions Into Your Account",
-    "description": "Sessions created on this device while you were signed out were found. You can bring them into the account you just signed in with and keep using them, or keep them in local mode where they are only visible when you skip sign-in. Either way, all data stays on this device — nothing is uploaded. Any local schedules come over paused; turn on the ones you still want.",
+    "description": "Sessions created on this device while you were signed out were found. You can bring them into the account you just signed in with and keep using them, or keep them in local mode where they are only visible when you skip sign-in. Either way, all data stays on this device — nothing is uploaded. Custom model providers and MCP connections configured in local mode come over too. Any local schedules come over paused; turn on the ones you still want.",
     "adopt": "Bring Into This Account",
     "keep": "Keep in Local Mode",
     "migrating": "Bringing local sessions in, please wait…",

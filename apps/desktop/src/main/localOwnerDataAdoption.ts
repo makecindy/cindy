@@ -153,7 +153,10 @@ export interface LocalOwnerAdoptionDeps {
    * 行级导入(提交点):把 local 库的业务行并入**当前已 ready 的账号库**,单事务
    * 全成或全不成。抛错即未发生任何写入。
    */
-  importLocalData(localDbPath: string): Promise<LocalOwnerImportResult>;
+  importLocalData(
+    localDbPath: string,
+    options: { resuming: boolean },
+  ): Promise<LocalOwnerImportResult>;
   /** 共享 userData 的 passive dev 实例必须保持只读。 */
   passiveSharedUserData(): boolean;
   /** 是否有其它活实例共享本 userData(动文件前的独占确认)。 */
@@ -549,7 +552,7 @@ export async function runLocalOwnerDataAdoption(
 
       // 5. 提交点:行级导入。单事务,抛错即零写入,local 库分毫未动。续跑时重跑
       //    一遍也安全(幂等 no-op),省掉一条「跳过导入」的分支。
-      const imported = await deps.importLocalData(localDbPath);
+      const imported = await deps.importLocalData(localDbPath, { resuming });
       deps.log.info(
         'local owner adoption: imported %d rows (%s)',
         imported.inserted,
@@ -675,12 +678,18 @@ async function commitAdoptionTail(
         ...declined,
       });
     } catch (err) {
-      // 提交点已过,认领事实成立。这条记录只用于「收尾崩了不再重复问用户」,
-      // 写不进去最坏是下次登录再问一次(导入幂等,不会产生重复会话)。
+      // 提交点已过,认领事实成立——但这条记录没落盘就**不能继续收尾**。它是
+      // 「这批数据已归本账号」的唯一凭据:少了它,共用机器上另一个账号下次登录会
+      // 把同一批 local 数据再认领一遍,而我们此刻若已经把 owner 文件和凭证搬进
+      // 本账号命名空间,那批数据就被劈成两半、所有权边界也破了(codex review)。
+      // 收尾一步都不做,直接按「未完成」返回:local 侧完整留在原地,下次登录重来
+      // (导入幂等,不会产生重复会话)。
       deps.log.warn(
-        'local owner adoption: imported marker write failed (adoption stands): %s',
+        'local owner adoption: imported marker write failed; skipping cleanup so the batch keeps a single owner (will retry next login): %s',
         err instanceof Error ? err.message : String(err),
       );
+      deps.ui.publish('done');
+      return { status: 'adopted', imported, resumed };
     }
   }
 
@@ -884,8 +893,11 @@ export async function runLocalOwnerDataAdoptionForUser(
     dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
     fs: realFsDeps,
     countLocalSessions: countSessionsInClosedDb,
-    importLocalData: (localDbPath) =>
-      getDbClient().tx('localOwner.importData', { localDbPath }),
+    importLocalData: (localDbPath, options) =>
+      getDbClient().tx('localOwner.importData', {
+        localDbPath,
+        resuming: options.resuming,
+      }),
     passiveSharedUserData: () => process.env.XDT_PASSIVE_SHARED_USER_DATA === '1',
     hasConcurrentLiveInstances: () => hasConcurrentLiveInstancesSharingUserData(),
     closeLocalDbIfOpen: () => {

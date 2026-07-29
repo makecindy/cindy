@@ -167,7 +167,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
   const rawDecision = overrides.decision;
   const decisionFn: () => Promise<LocalAdoptionDecision> =
     typeof rawDecision === 'function' ? rawDecision : async () => rawDecision ?? 'adopt';
-  const importLocalData = vi.fn(async () => {
+  const importLocalData = vi.fn(async (_localDbPath: string, _options: { resuming: boolean }) => {
     if (overrides.importThrows) throw new Error('SQLITE_BUSY: database is locked');
     return { ...emptyImport, inserted: 5, ...overrides.importResult };
   });
@@ -281,7 +281,7 @@ describe('runLocalOwnerDataAdoption 前置探测(静默跳过,绝不弹窗)', ()
     mem.addFile(path.join(USER_DATA, `${PREFIX}-${USER_ID}.db`));
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
     expect(result.status).toBe('adopted');
-    expect(importLocalData).toHaveBeenCalledWith(path.normalize(LOCAL_DB));
+    expect(importLocalData).toHaveBeenCalledWith(path.normalize(LOCAL_DB), { resuming: false });
   });
 });
 
@@ -397,7 +397,7 @@ describe('runLocalOwnerDataAdoption 并入全流程', () => {
 
     expect(result).toEqual({ status: 'adopted', imported: 7, resumed: false });
     expect(phases).toEqual(['confirm', 'running', 'done']);
-    expect(importLocalData).toHaveBeenCalledWith(path.normalize(LOCAL_DB));
+    expect(importLocalData).toHaveBeenCalledWith(path.normalize(LOCAL_DB), { resuming: false });
 
     // local 库归档保留(不删),原名消失 → 回到 local 模式是全新空间。
     expect(mem.exists(LOCAL_DB)).toBe(false);
@@ -519,6 +519,46 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
     expect(readMarker(mem).claimedOwnerKey).toBe(USER_KEY);
   });
 
+  it('续跑时给导入端带上 resuming(账号侧字段已被 sweep 改写,不能再按内容比冲突)', async () => {
+    const { mem, deps, importLocalData } = createHarness();
+    mem.addFile(LOCAL_DB);
+    mem.addFile(MARKER, JSON.stringify({ version: 1, importedOwnerKey: USER_KEY }));
+
+    await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(importLocalData).toHaveBeenCalledWith(path.normalize(LOCAL_DB), { resuming: true });
+  });
+
+  it('importedOwnerKey 落不下来时一步收尾都不做(所有权凭据缺失,不能动共享文件)', async () => {
+    const { mem, deps, phases } = createHarness({
+      fsOverrides: {
+        writeFile: async () => {
+          throw errnoError('ENOSPC', MARKER);
+        },
+      },
+    });
+    mem.addFile(LOCAL_DB);
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'), 'learn');
+    mem.addFile(
+      path.join(SECRETS_DIR, `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}k.enc`),
+      'k',
+    );
+
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(result.status).toBe('adopted');
+    expect(phases).toEqual(['confirm', 'running', 'done']);
+    // 少了这条凭据,共用机器上另一个账号可能把同一批数据再认领一遍——所以库、
+    // owner 文件、凭证一个都不能动。
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+    expect(archivedDbNames(mem)).toHaveLength(0);
+    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'))).toBe(true);
+    expect(mem.exists(path.join(ACCOUNT_OWNER_DIR, 'learn'))).toBe(false);
+    expect(
+      mem.exists(path.join(SECRETS_DIR, `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}k.enc`)),
+    ).toBe(true);
+  });
+
   it('续跑时本账号的旧拒绝记录不再拦路(导入已提交,认领事实成立)', async () => {
     const { mem, deps } = createHarness();
     mem.addFile(LOCAL_DB);
@@ -597,9 +637,9 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
     mem.addFile(`${LOCAL_DB}-wal`, 'wal-bytes');
     // 前置检查时不可见(已 checkpoint),收尾归档时可见。
     const originalImport = deps.importLocalData;
-    deps.importLocalData = (async (dbPath: string) => {
+    deps.importLocalData = (async (dbPath, options) => {
       sidecarVisible = true;
-      return originalImport(dbPath);
+      return originalImport(dbPath, options);
     }) as typeof deps.importLocalData;
 
     await runLocalOwnerDataAdoption(USER_ID, deps);

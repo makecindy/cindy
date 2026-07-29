@@ -24,8 +24,10 @@
  *    部分导入都会搅乱某类引用(子行挂错会话、fork 的 parent 指向账号无关会话、
  *    定时任务的 target/skip_log 指错)。因此直接抛
  *    `LOCAL_OWNER_SESSION_ID_CONFLICT`、零写入,让调用方推迟并 warn——local 数据
- *    分毫未动。会话 id 是 UUID,正常永不发生。判定比的是**内容**不是 id:续跑时
- *    账号库里已有上一批已提交的同 id 同内容会话,只比 id 会把它们全判成冲突。
+ *    分毫未动。会话 id 是 UUID,正常永不发生。**续跑时整体跳过这项检测**:账号库里
+ *    那些同 id 会话正是上一批自己导入的,而它们的字段随后会被账号侧正常流程改写
+ *    (sweepLegacyDialogueWorkingDirs 会重写 dialogue 会话的 working_dir),按内容
+ *    比较必然误判成外部冲突、把认领永久卡死。
  *  - **定时任务导入即暂停**:确认窗只裁决对话归属,没征求「让 local 模式的自动化
  *    在新账号下跑起来」;认领后 scheduler 立刻启动,到点任务会带着刚搬过去的凭证
  *    自动执行。因此**本次新插入的** schedules 一律置 status='paused'(账号库原有
@@ -181,6 +183,7 @@ function sourceTableNames(db: Database.Database): Set<string> {
 export function importLocalOwnerData(
   db: Database.Database,
   localDbPath: string,
+  options: { resuming?: boolean } = {},
 ): LocalOwnerImportResult {
   // 「绝不触碰 local 库」这条契约有两半,都要落到实现:
   //  - **不创建**:`ATTACH` 打开的是 read-write 句柄,路径不存在时 SQLite 会直接
@@ -228,7 +231,14 @@ export function importLocalOwnerData(
       // 关键:比较**内容**而非只比 id。续跑场景里账号库已经有上一次已提交的
       // 那批会话(同 id 同内容),只比 id 会把它们全判成冲突、导致收尾永远完不成
       // (codex review)。逐列 `IS NOT` 是 null-safe 的不等比较。
-      if (sourceTables.has(SESSIONS_TABLE)) {
+      // 续跑(上一批导入已提交、只是收尾没走完)时**不做**冲突检测:账号库里那些
+      // 同 id 会话正是上次自己导入的,而它们的字段在这之后会被账号侧的正常流程
+      // 改写——`sweepLegacyDialogueWorkingDirs` 紧跟在认领之后就会把 dialogue
+      // 会话的 working_dir 从 local 命名空间重写到账号命名空间。按内容比较必然
+      // 判成「同 id 不同内容」,认领于是永久卡在冲突上(codex review)。
+      // 同 owner 的账号库里出现同 id 会话只可能来自上一批导入(会话 id 是 UUID),
+      // 所以续跑跳过检测是安全的;首次导入照常检测。
+      if (!options.resuming && sourceTables.has(SESSIONS_TABLE)) {
         const sessionCols = [...tableColumns(db, SOURCE_SCHEMA, SESSIONS_TABLE)].filter((col) =>
           tableColumns(db, 'main', SESSIONS_TABLE).has(col),
         );

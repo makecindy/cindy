@@ -672,6 +672,12 @@ export interface WechatUnbindCleanupResult {
 export interface LocalOwnerImportDataArgs {
   /** 已关闭的 local-v1 库文件绝对路径。 */
   localDbPath: string;
+  /**
+   * true = 这是「上一批导入已提交、只是收尾没走完」的续跑。此时账号库里的同 id
+   * 会话就是上次自己导入的,导入端会跳过同 id 冲突检测(它们的字段随后会被账号侧
+   * 正常流程改写,按内容比较必然误判成外部冲突)。
+   */
+  resuming?: boolean;
 }
 
 export type DbTxArgsByName = {

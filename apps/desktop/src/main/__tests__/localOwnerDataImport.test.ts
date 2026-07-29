@@ -373,6 +373,31 @@ describe('importLocalOwnerData 同 id 会话冲突', () => {
     }
   });
 
+  it('resuming 时整体跳过冲突检测:账号侧字段被改写过也不会误判成外部冲突', () => {
+    // 复刻真实时序:导入 → sweepLegacyDialogueWorkingDirs 改写 working_dir →
+    // 收尾失败 → 下次登录续跑。不跳过检测的话这里必然抛冲突、认领永久卡死。
+    seedLocalDb((db) => {
+      db.prepare('INSERT INTO sessions (id, title, working_dir, created_at) VALUES (?,?,?,?)').run(
+        's1', '本机会话', '/base/Cindy/owners/localkey/dialogues/2026-07-29/s1', 1,
+      );
+    });
+    importLocalOwnerData(accountDb, localDbPath);
+    accountDb
+      .prepare('UPDATE sessions SET working_dir = ? WHERE id = ?')
+      .run('/base/Cindy/owners/acckey/dialogues/2026-07-29/s1', 's1');
+
+    // 首次导入的口径下这是「同 id 不同内容」→ 会抛冲突。
+    expect(() => importLocalOwnerData(accountDb, localDbPath)).toThrow(/share an id/);
+    // 续跑口径下照常收敛。
+    const resumed = importLocalOwnerData(accountDb, localDbPath, { resuming: true });
+    expect(resumed.conflictedSessions).toBe(0);
+    expect(resumed.inserted).toBe(0);
+    // 账号侧已改写的 working_dir 不被回退。
+    expect(accountDb.prepare('SELECT working_dir w FROM sessions WHERE id = ?').get('s1')).toEqual({
+      w: '/base/Cindy/owners/acckey/dialogues/2026-07-29/s1',
+    });
+  });
+
   it('同 id **同内容**不算冲突:续跑重跑导入照常收敛(幂等)', () => {
     seedLocalDb((db) => {
       db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('s1', '本机会话', 1);

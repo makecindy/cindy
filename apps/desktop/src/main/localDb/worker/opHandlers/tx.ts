@@ -832,7 +832,9 @@ function localOwnerImportData(
   args: unknown,
 ): LocalOwnerImportResult {
   const payload = asRecord(args, 'localOwner.importData args');
-  return importLocalOwnerData(db, expectString(payload.localDbPath, 'localDbPath'));
+  return importLocalOwnerData(db, expectString(payload.localDbPath, 'localDbPath'), {
+    resuming: payload.resuming === true,
+  });
 }
 
 // 会话分享(.xdtshare)导入落库:单事务插 session 行 + 全量 messages(含 rewind 链)。
