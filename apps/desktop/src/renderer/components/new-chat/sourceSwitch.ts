@@ -66,10 +66,17 @@ export const CATEGORY_LABEL_KEY: Record<ModelCategory, string> = {
   other: 'newChat.modelSelector.category.other',
 };
 
-/** resolveSourceSwitch 的最小模型形状(只需 id + 该模型支持的 effort 档)。 */
+/**
+ * resolveSourceSwitch 的最小模型形状:id + 该模型支持的 effort 档,外加可选的
+ * `group`/`mode`——reconcile 候选过滤要靠 classifyModel 做 mode 优先判定
+ * (issue #882 review:只传 id 时 mode 信号会丢,可能把非聊天模型选成 reconcile
+ * 目标,见下方 resolveSourceSwitch 用法),不传时行为与历史一致(回退 id 正则)。
+ */
 export interface SwitchModel {
   id: string;
   efforts: readonly Effort[];
+  group?: string;
+  mode?: string;
 }
 
 /**
@@ -113,10 +120,11 @@ export function resolveSourceSwitch(args: {
     if (tm && tm.efforts.includes(remembered.effort)) targetEffort = remembered.effort;
   } else if (currentModelId && !providerOffersModel(provider, currentModelId, agent)) {
     // 只在聊天厂商组里找候选(issue #882):非聊天类型(image/video/tts/stt/realtime/
-    // embedding/compression/other)不该被 reconcile 选中,用 CHAT_VENDOR_CATEGORY_ORDER
-    // 而非手写排除清单——新增一个非聊天分类不需要再改这里。
+    // embedding/compression/other)不该被 reconcile 选中。用 classifyModel(mode 优先,
+    // 无 mode 才回退 id 正则)而不是纯 id 正则的 categorize——否则 mode 标为非聊天、
+    // 但 id 落进 categorize 兜底组(如 china)的模型会绕过准入被选中(2026-07 review)。
     const ordered = CHAT_VENDOR_CATEGORY_ORDER.flatMap((c) =>
-      visibleModels.filter((m) => categorize(m.id) === c),
+      visibleModels.filter((m) => classifyModel(m) === c),
     );
     targetModel = ordered.find(
       (m) => providerOffersModel(provider, m.id, agent) && isVisible(m.id),
