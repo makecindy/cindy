@@ -30,7 +30,10 @@ import type { Session } from '@/lib/ccAgent.types';
 import * as sessionService from '@/lib/sessionService';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
-import { fetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
+import {
+  prefetchDirtyWorktreeForRemoval,
+  resolveDirtyWorktreeForRemoval,
+} from '@/lib/worktreeRemovalWarning';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
@@ -380,28 +383,34 @@ export function SessionContentHeader({
       toast.warning(t('ccAgent.sidebar.archiveBlocked.running'));
       return;
     }
-    try {
-      const binding = await window.electronAPI.binding.resolveSession(session.id);
-      if (binding.attached) {
-        toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
-        return;
-      }
-    } catch {
-      // resolveSession 失败时不阻断归档
+    // 两个预检互不依赖 → 并行发,别串行叠加两次 IPC 往返。dirty 预检走 resolve:
+    // 菜单打开时已经 prefetch 过,这里通常直接命中缓存。resolveSession 失败降级
+    // 为「未接管」,不阻断归档(与 sidebar 的 handleActionClick 同口径)。
+    const [attached, dirtyWorktree] = await Promise.all([
+      window.electronAPI.binding
+        .resolveSession(session.id)
+        .then((binding) => binding.attached)
+        .catch(() => false),
+      resolveDirtyWorktreeForRemoval(session.id, session.deviceLinkDeviceId),
+    ]);
+    if (attached) {
+      toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
+      return;
     }
-    const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
-      session.id,
-      session.deviceLinkDeviceId,
-    );
-    const ok = await confirmDialog({
-      title: t('ccAgent.sidebar.confirmArchive.title'),
-      description:
-        t('ccAgent.sidebar.confirmArchive.description') +
-        (dirtyWorktree ? ' ' + t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning') : ''),
-      confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
-      cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
-    });
-    if (!ok) return;
+    // 归档不弹确认框 —— 可逆操作(菜单里就有「恢复」),与 sidebar 同口径。
+    // 只有 worktree 有未提交改动才确认:归档会顺带回收 worktree,不能静默带走改动。
+    if (dirtyWorktree) {
+      const ok = await confirmDialog({
+        title: t('ccAgent.sidebar.confirmArchive.title'),
+        description:
+          t('ccAgent.sidebar.confirmArchive.description') +
+          ' ' +
+          t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning'),
+        confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
+        cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
+      });
+      if (!ok) return;
+    }
     await runSessionAction(session.id, 'archive', { activeSessionId: session.id });
   }, [
     confirmDialog,
@@ -428,7 +437,7 @@ export function SessionContentHeader({
       return;
     }
     // P1 预检:worktree 有未提交更改时确认文案追加警告(查询失败降级为不提示)
-    const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
+    const dirtyWorktree = await resolveDirtyWorktreeForRemoval(
       session.id,
       session.deviceLinkDeviceId,
     );
@@ -529,7 +538,13 @@ export function SessionContentHeader({
       )}
 
       {!isEditing && (
-        <DropdownMenu>
+        // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少
+        // 一次反应时间,足够这次 git status 跑完,点下去时命中缓存、零等待。
+        <DropdownMenu
+          onOpenChange={(open) => {
+            if (open) prefetchDirtyWorktreeForRemoval(session.id, session.deviceLinkDeviceId);
+          }}
+        >
           <DropdownMenuTrigger asChild>
             <button
               className={cn(

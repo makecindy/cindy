@@ -47,7 +47,7 @@ import { clearDraft as clearComposerDraft } from '@/lib/composerDraftStore';
 import { cleanupSessionLayoutPrefs } from '@/lib/sessionLayoutPrefs';
 import {
   countDirtyWorktreesForRemoval,
-  fetchDirtyWorktreeForRemoval,
+  resolveDirtyWorktreeForRemoval,
 } from '@/lib/worktreeRemovalWarning';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useBackgroundActivitySessionIds } from '@/lib/sessionBackgroundActivityStore';
@@ -1276,6 +1276,10 @@ function ExpandedView({
   // 重建自身 —— 否则 SessionItem 的 memo 会被整表打穿(SessionItem.tsx 不变量第 3 条)。
   const sessionsByIdRef = useRef(sessionsById);
   sessionsByIdRef.current = sessionsById;
+  // 同理:归档预检只在点击那一刻查一次 attached 集合。每次 binding:changed 都会
+  // 换一个新 Set 引用,放进 handleActionClick 的 deps 会让整表行 handler 重建。
+  const attachedSessionIdsRef = useRef(attachedSessionIds);
+  attachedSessionIdsRef.current = attachedSessionIds;
   const selectedSessions = useMemo(
     () =>
       [...selectedSessionIds]
@@ -1767,9 +1771,11 @@ function ExpandedView({
   );
 
   /* ---- Delete / Archive / Unarchive action handlers ----
-   * delete & archive（菜单触发）走 ConfirmDialog（不可逆 / 移出当前列表）；
-   * archive-now（行内 Confirm 触发）走 runSessionAction，跳过弹窗 —— 等价于
-   *   用户在快捷按钮上完成了两步行内确认，不再二次弹窗；
+   * delete 走 ConfirmDialog —— 不可逆，必须确认；
+   * archive / archive-now 都直接执行，不弹确认框：归档可逆（菜单里就有「恢复」），
+   *   行内入口本身已经是两步确认，菜单入口再弹一次纯属多余摩擦。唯一例外是
+   *   worktree 有未提交改动 —— 归档会顺带回收 worktree，这时升级到 ConfirmDialog
+   *   展示 dirty warning；
    * unarchive 是 archive 的反向操作，无副作用，直接 patch 即可，不弹确认。
    *
    * 执行序列（关子进程 / 写库 / 乐观补丁 / 释放内存 / refresh / 跳转）抽在
@@ -1795,25 +1801,41 @@ function ExpandedView({
         toast.warning(t('ccAgent.sidebar.archiveBlocked.running'));
         return;
       }
-      // 被 IM 接管中的 session 不允许归档 —— 接管方还在操控，先收回再归档
-      if (isArchiveLike) {
-        try {
-          const binding = await window.electronAPI.binding.resolveSession(sessionId);
-          if (binding.attached) {
-            toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
-            return;
-          }
-        } catch {
-          // resolveSession 失败时不阻断归档，直接继续
-        }
+      // 被 IM 接管中的 session 不允许归档 —— 接管方还在操控，先收回再归档。
+      // sidebar 常驻订阅的 attached 集合与 binding:resolve-session 同源
+      // (binding:list-attached = 全量 resolve, binding:changed 驱动 refresh),
+      // 命中就直接拦，连 IPC 都不用发。
+      if (isArchiveLike && attachedSessionIdsRef.current.has(sessionId)) {
+        toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
+        return;
       }
-      // 行内 Confirm 触发：干净 worktree 保持两步快捷确认；若有未提交改动，
-      // 升级到现有确认弹窗展示 dirty warning，避免绕过归档预检。
-      if (action === 'archive-now') {
-        const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
+      // 本地集合没命中仍问一次 main 兜底(刚 attach 而 binding:changed 尚未到达
+      // 时不能漏拦)。**先发不 await**:它与下面的 dirty 预检互不依赖,让两次 IPC
+      // 在链路上重叠,归档前的等待从 sum(两次往返) 降到 max —— dirty 预检要在
+      // main 侧跑 git status,串行叠加会明显拖长"点了归档、列表还没反应"的时间。
+      // 失败降级为「未接管」(与改造前 catch 后继续归档同口径)。
+      const attachedPromise = isArchiveLike
+        ? window.electronAPI.binding
+            .resolveSession(sessionId)
+            .then((binding) => binding.attached)
+            .catch(() => false)
+        : null;
+      const blockedByAttachment = async (): Promise<boolean> => {
+        if (!(await attachedPromise)) return false;
+        toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
+        return true;
+      };
+      // 归档一律不弹确认框:它是可逆的(菜单里就有「恢复」),菜单入口与行内
+      // 快捷按钮同一口径直接执行 —— 行内那个本身已经是两步确认。
+      // 唯一例外是 worktree 有未提交改动:归档会顺带回收 worktree,这时升级到
+      // 确认弹窗展示 dirty warning,不让改动被静默带走。
+      if (isArchiveLike) {
+        const dirtyWorktree = await resolveDirtyWorktreeForRemoval(
           sessionId,
           session?.deviceLinkDeviceId,
         );
+        // 接管拦截优先于 dirty 弹窗:被接管时不该弹任何归档确认。
+        if (await blockedByAttachment()) return;
         if (dirtyWorktree) {
           setConfirm({ open: true, sessionId, action: 'archive', dirtyWorktree: true });
           return;
@@ -1826,9 +1848,10 @@ function ExpandedView({
         });
         return;
       }
-      if (action !== 'unarchive') {
+      if (action === 'delete') {
+        // 删除不可逆,始终弹确认框。
         // P1 预检:worktree 有未提交更改时确认文案追加警告(查询失败降级为不提示)
-        const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
+        const dirtyWorktree = await resolveDirtyWorktreeForRemoval(
           sessionId,
           session?.deviceLinkDeviceId,
         );
