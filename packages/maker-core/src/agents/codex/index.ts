@@ -3215,6 +3215,13 @@ export class CodexAgent extends BaseAgent {
             runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
           );
           if (verdict === 'prompt-each-time') return Promise.resolve('decline');
+          return Promise.resolve('accept');
+        }
+        // 命令/文件类审批却没有可分类的 action(如 permissions 能力升级)——无人值守下无法审查的
+        // 高权限动作 → fail-closed 拒绝,而非静默放行。mcpServerElicitation(交互输入)有自己的
+        // forceConfirmToolCall 门,保留既有无人值守 auto-accept。
+        if (kind === 'commandExecution' || kind === 'fileChange') {
+          return Promise.resolve('decline');
         }
         return Promise.resolve('accept');
       }

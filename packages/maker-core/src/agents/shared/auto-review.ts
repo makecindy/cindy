@@ -143,11 +143,14 @@ const DANGEROUS_PATTERNS: readonly RegExp[] = [
 const COMMAND_SUBSTITUTION = /\$\(|`|<\(/;
 
 /**
- * 文件输出重定向 `>` / `>>`(含 fd 前缀 `1>`/`2>>` 与 `&>`)。区分"写文件"与"fd 复制":
- * 目标是文件(`>file` / `1>~/.bashrc`)→ 命中;目标是另一个 fd(`2>&1` / `>&2`)→ 不命中(`>` 后是 `&`)。
- * 要求操作符前是行首/空白/`&`/fd 数字,避免把 `a->b` 这类箭头误判成重定向。
+ * 文件输出重定向 `>` / `>>`。区分"写文件"与"fd 复制":目标是文件 → 命中;目标是另一个 fd(`2>&1` /
+ * `>&2`,`>` 后是 `&`)→ 不命中。两支:
+ *   - 贴合/空白形态 `(?<![-\d&])>>?(?!&)`:`>file` / `cat > b` / `echo x>~/.bashrc`(贴合前一词也命中,
+ *     修 codex 报的 attached 重定向);`a->b` 这类箭头(`-` 在前)排除。
+ *   - fd 前缀形态 `\d+>>?`:`1>file` / `2>>log`,但 `1>&2`/`2>&1`(`>` 后 `&`)排除。
+ * 调用方在**去掉引号内容**的串上匹配(引号内的 `>` 是数据不是重定向,见 classifyShellSegment)。
  */
-const OUTPUT_REDIRECTION = /(?:^|\s)&?[0-9]*>>?\s*(?![&\s])/;
+const OUTPUT_REDIRECTION = /(?<![-\d&])>>?(?!&)|(?:^|\s)\d+>>?(?!&)/;
 
 /**
  * curl/wget 视为"只读取回"(命令行浏览器)的排除项。命中任一就不是安全 GET,交通用判定升级:
@@ -157,7 +160,7 @@ const OUTPUT_REDIRECTION = /(?:^|\s)&?[0-9]*>>?\s*(?![&\s])/;
  */
 // curl 上传 / 非 GET 方法。含贴合式短选项(`-dDATA` / `-Ffield` / `-Tfile`)——`-[dFT]` 不带 \b,
 // 贴合的 value 照样命中。大小写敏感(不加 /i):`-d/-F/-T` 是上传,`-D`(dump-header,只读)不能误伤。
-const CURL_UPLOAD_FLAGS = /(?:^|\s)-[dFT]|(?:^|\s)--(?:data|form|upload-file)[\w-]*|(?:^|\s)(?:-X|--request)\s*(?:POST|PUT|DELETE|PATCH)/;
+const CURL_UPLOAD_FLAGS = /(?:^|\s)-[dFT]|(?:^|\s)--(?:data|form|upload-file|json)[\w-]*|(?:^|\s)(?:-X|--request)\s*(?:POST|PUT|DELETE|PATCH)/;
 // wget 上传 / 非默认方法(curl 的 --data 等对 wget 无意义,wget 用 --post-*/--body-*/--method)。
 const WGET_UPLOAD_FLAGS = /(?:^|\s)--(?:post-data|post-file|body-data|body-file|method)\b/i;
 // 落盘到文件(curl -o/-O/--output;wget -o 日志 /-O 文档)。含贴合短选项 `-ofile`;把远端内容写进任意路径。
@@ -224,14 +227,17 @@ function baseName(p: string): string {
 
 function isSafeReadonlyBin(bin: string, segment: string, tokens: string[]): boolean {
   if (!SAFE_READONLY_BINS.has(bin)) return false;
-  // find 的命令搬运/删除/写文件 flag(输出重定向/命令替换已在 classifyShellSegment 统一挡掉)。
-  // `-fprintf`/`-fprint`/`-fprint0`/`-fls` 把匹配结果写进任意文件(与 -exec/-delete 同类,只是枚举);
-  // `-print`/`-printf`/`-ls`(无 f 前缀,写 stdout)仍算只读、不拦。
+  // 以下 flag 检测都跑在**去引号标记**的 segment 上(见 classifyShellSegment),防 -ex'ec' / -'o' 拼接绕过。
+  // find 的执行/删除/写文件 flag:-exec/-delete/-fprintf/-fls(-print/-ls 写 stdout,仍算只读)。
   if (bin === 'find' && /-(?:exec(?:dir)?|ok(?:dir)?|delete)\b|-f(?:print[f0]?|ls)\b/.test(segment)) return false;
-  // 少数"只读"工具其实能写文件:sort -o/--output、yq/jq -i/--inplace、uniq 的第二个位置参数(输出文件)。
-  // 管道形态(`… | sort | uniq`)无这些 flag/额外位置参数,仍走 stdout,照常放行。
-  if (bin === 'sort' && tokens.some((t) => t === '-o' || /^-o./.test(t) || /^--output(?:=|$)/.test(t))) return false;
-  if ((bin === 'yq' || bin === 'jq') && tokens.some((t) => t === '-i' || /^--in-?place$/.test(t))) return false;
+  // sort:-o/--output 写文件;--compress-program 会运行任意外部程序(RCE)。
+  if (bin === 'sort' && /(?:^|\s)(?:-o\b|-o\S|--output\b|--compress-program\b)/.test(segment)) return false;
+  // jq/yq:-i/--in-place 就地改文件;env/$ENV/strenv 读取注入的凭证环境变量(与 shell $VAR 同等泄漏面)。
+  if (bin === 'yq' || bin === 'jq') {
+    if (/(?:^|\s)-i\b|(?:^|\s)--in-?place\b/.test(segment)) return false;
+    if (/(?<!\.)\b(?:env|strenv)\b|\$ENV\b/.test(segment)) return false;
+  }
+  // uniq 的第二个位置参数是输出文件(写)。计数用 tokens(全引号参数已剥),对拼接引号同样稳健。
   if (bin === 'uniq' && tokens.slice(1).filter((t) => !t.startsWith('-')).length >= 2) return false;
   return true;
 }
@@ -244,6 +250,42 @@ function isSafeReadonlyBin(bin: string, segment: string, tokens: string[]): bool
  *   - **目标 URL 无查询串**:`?…=…` 可能把数据编码进 URL 外发(GET 型 exfil,不需 -d/-F),含无 scheme 的
  *     `host/path?q=` 形态。命令替换 `$(...)` 另有 COMMAND_SUBSTITUTION 拦截。
  */
+/** curl/wget 的 URL/host 目标 token(有 scheme、无 scheme host、localhost、IPv4)。 */
+function isFetchTargetToken(t: string): boolean {
+  return (
+    /:\/\//.test(t) ||                                    // 带 scheme:https:// 等
+    /^[\w.-]+\.[a-z]{2,}(?:[:/].*)?$/i.test(t) ||         // 无 scheme 的 host[/path][:port]
+    /^localhost(?::\d+)?(?:[/?].*)?$/i.test(t) ||         // localhost[:port]
+    /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:[/?].*)?$/.test(t) // IPv4[:port]
+  );
+}
+
+/**
+ * 内网 / 环回 / 链路本地(含云 metadata 169.254.169.254)/ *.internal —— 抓取即敏感,一律升级:
+ * SSRF 打云 metadata 会把实例凭证读进模型上下文,localhost/内网服务数据同理。公网 host 才当"命令行浏览器"放行。
+ */
+function isInternalFetchTarget(t: string): boolean {
+  const host = t
+    .replace(/^[a-z][\w+.-]*:\/\//i, '') // 去 scheme
+    .replace(/[/?#].*$/, '')             // 去 path/query/fragment
+    .replace(/^[^@]*@/, '')              // 去 userinfo
+    .replace(/:\d+$/, '')                // 去端口
+    .toLowerCase();
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '0.0.0.0' || host === '::1') return true;
+  if (host === 'metadata.google.internal' || host.endsWith('.internal')) return true;
+  if (host.startsWith('[')) return true; // IPv6 字面量(环回/私网难精确,保守升级)
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(host);
+  if (m) {
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    if (a === 127 || a === 10 || a === 0) return true;    // 环回 / 10.0.0.0-8 / 0.0.0.0-8
+    if (a === 169 && b === 254) return true;              // 链路本地 + 云 metadata 169.254.169.254
+    if (a === 172 && b >= 16 && b <= 31) return true;     // 172.16.0.0-12
+    if (a === 192 && b === 168) return true;              // 192.168.0.0-16
+  }
+  return false;
+}
+
 function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   if (bin !== 'curl' && bin !== 'wget') return false;
   if (FETCH_OUTPUT_FLAGS.test(segment)) return false;
@@ -251,14 +293,10 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   if (bin === 'wget' && WGET_UPLOAD_FLAGS.test(segment)) return false;
   const positional = tokens.slice(1).filter((t) => !t.startsWith('-'));
   if (positional.some((t) => t.includes('?'))) return false; // 查询串外发面(含无 scheme 的 host?query)
-  const hasTarget = positional.some(
-    (t) =>
-      /:\/\//.test(t) ||                              // 带 scheme:https:// 等
-      /^[\w.-]+\.[a-z]{2,}(?:[:/].*)?$/i.test(t) ||   // 无 scheme 的 host[/path][:port]
-      /^localhost(?::\d+)?(?:\/.*)?$/i.test(t) ||     // localhost[:port]
-      /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:\/.*)?$/.test(t), // IPv4[:port]
-  );
-  return hasTarget;
+  const target = positional.find(isFetchTargetToken);
+  if (!target) return false;                     // 认不出 URL 目标 → fail-closed 升级
+  if (isInternalFetchTarget(target)) return false; // 云 metadata / localhost / 内网 → 升级
+  return true;
 }
 
 function classifyGit(tokens: string[], segment: string): ReviewVerdict {
@@ -293,12 +331,16 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   // 剥壳后为空段:裸 `env`/`printenv`(dump 环境变量,含凭证)、或纯包裹器无内层命令 —— fail-closed 升级。
   if (tokens.length === 0) return 'prompt';
   const bin = baseName(tokens[0]);
+  // 去引号标记:防 -ex'ec' / -'o' 这类把 flag/命令拆开的引号拼接绕过(flag/命令检测在此串上跑)。
+  const deQuoted = segment.replace(/['"]/g, '');
+  // 去引号内容:判重定向时引号内的 `>` 是数据不是重定向(如 git log --format='%h>%s')。
+  const redirectScan = segment.replace(/'[^']*'|"[^"]*"/g, '');
   // 输出重定向(写文件)/ 命令替换(执行任意内容):任何命令带它都不能算只读放行,统一升级。
   // 必须挡在 git/fetch/readonly 判定之前 —— 否则 `curl x > ~/.bashrc`、`cat f > /etc/y` 会被误放行。
-  if (OUTPUT_REDIRECTION.test(segment) || COMMAND_SUBSTITUTION.test(segment)) return 'prompt';
-  if (bin === 'git') return classifyGit(tokens, segment);
-  if (isSafeFetch(bin, segment, tokens)) return 'auto-approve';
-  if (isSafeReadonlyBin(bin, segment, tokens)) return 'auto-approve';
+  if (OUTPUT_REDIRECTION.test(redirectScan) || COMMAND_SUBSTITUTION.test(segment)) return 'prompt';
+  if (bin === 'git') return classifyGit(tokens, deQuoted);
+  if (isSafeFetch(bin, deQuoted, tokens)) return 'auto-approve';
+  if (isSafeReadonlyBin(bin, deQuoted, tokens)) return 'auto-approve';
   // 其余(含所有写操作、未知命令)fail-closed 升级 —— 交给用户确认(可本会话记住)。
   return 'prompt';
 }
@@ -310,8 +352,10 @@ function classifyShellSegment(segment: string): ReviewVerdict {
  */
 export function classifyShellCommand(command: string, _workspaceRoots: string[]): ReviewVerdict {
   if (typeof command !== 'string' || command.trim().length === 0) return 'prompt';
+  // 去引号标记后再匹配危险模式:防 su'do' / rm -r'f' / cat ~/.ss'h'/id_rsa 这类引号拼接绕过关键词。
+  const deQuotedCommand = command.replace(/['"]/g, '');
   for (const re of DANGEROUS_PATTERNS) {
-    if (re.test(command)) return 'prompt-each-time';
+    if (re.test(deQuotedCommand)) return 'prompt-each-time';
   }
   const segments = splitTopLevelSegments(command);
   if (segments.length === 0) return 'prompt';
@@ -385,7 +429,15 @@ function canonicalPath(p: string): string {
   return m ? n.slice('/private'.length) : n;
 }
 
-/** 目标是否落在任一 workspace root 内(含根本身),按路径分量边界判,避免 /foo 命中 /foobar。 */
+/**
+ * 目标是否落在任一 workspace root 内(含根本身),按路径分量边界判,避免 /foo 命中 /foobar。
+ *
+ * **已知限制(有意为之):纯词法判定,不解析符号链接。** 若工作区内预先存在指向区外的 symlink
+ * (如 `/repo/outside -> /etc`),写 `/repo/outside/x` 会被判为区内。要消除它得 `fs.realpath` ——
+ * 但本 core 刻意不碰文件系统(见文件头:探路径存在性是侧信道,且对远端会话路径不可行/不适用)。
+ * 缓解:创建该 symlink 本身需要一条 `ln -s`(shell 命令,会按写/未知升级),攻击面限于**预先已存在**
+ * 的恶意链接。以 fail-open 的这一窄口,换取无 fs 副作用 + 远端路径可判 + 确定性可测,是刻意取舍。
+ */
 function isInsideWorkspace(target: string, workspaceRoots: string[]): boolean {
   const t = canonicalPath(target);
   for (const root of workspaceRoots) {

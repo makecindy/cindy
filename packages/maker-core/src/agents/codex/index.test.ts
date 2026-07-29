@@ -4874,6 +4874,41 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('policy turn (unattended Auto): declines permission escalation that has no classifiable action (fail-closed)', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-policy-perm' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-policy-perm',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    const policy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'wechat', taskId: 'task-perm' },
+      confirmationSurface: 'desktop',
+      forceConfirmToolCall: () => false,
+    };
+    const resolver = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'allow' as const }));
+    handle.setInteractionResolver(resolver);
+    await handle.send({ type: 'user', content: 'do maintenance' }, { turnPermissionPolicy: policy });
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.permissionsApproval) throw new Error('expected permissionsApproval handler');
+    // 能力升级(permissions)在无人值守下没有 autoReviewAction 可审查 → fail-closed:授权为空(拒绝),不弹 UI。
+    const res = await handlers.permissionsApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-policy-perm',
+      itemId: 'perm-1',
+      permissions: { network: true },
+    });
+    expect(res).toEqual({ permissions: {}, scope: 'turn' });
+    expect(resolver).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
   it('does not auto-approve fallback commands when no interaction resolver is attached (fail-closed)', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
