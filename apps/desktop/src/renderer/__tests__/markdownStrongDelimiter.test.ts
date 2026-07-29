@@ -148,6 +148,32 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
   });
 
+  it('repairs strong delimiters in visible image descriptions without rewriting destinations', () => {
+    const inlineImage = '![**重点。**正文](https://example.test/**path.**next)';
+    const referenceImage = [
+      '![**重点。**正文][target]',
+      '',
+      '[target]: https://example.test/**path.**next',
+    ].join('\n');
+
+    expect(normalizeStrongDelimiterBoundaries(inlineImage)).toBe(
+      '![重点。正文](https://example.test/**path.**next)',
+    );
+    expect(normalizeStrongDelimiterBoundaries(referenceImage)).toBe(
+      [
+        '![重点。正文][target]',
+        '',
+        '[target]: https://example.test/**path.**next',
+      ].join('\n'),
+    );
+    expect(renderMarkdown(inlineImage)).toContain(
+      'src="https://example.test/**path.**next" alt="重点。正文"',
+    );
+    expect(renderMarkdown(referenceImage)).toContain(
+      'src="https://example.test/**path.**next" alt="重点。正文"',
+    );
+  });
+
   it('repairs strong delimiters in CJK prose recovered from a bare URL', () => {
     const source = 'https://example.com/foo（**重点。**正文';
 
@@ -156,6 +182,17 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
     expect(renderMarkdown(source)).toContain(
       '<a href="https://example.com/foo">https://example.com/foo</a>（<strong>重点。</strong>正文',
+    );
+  });
+
+  it('uses source offsets when a recovered bare URL tail follows a character reference', () => {
+    const source = 'https://a.test/x?a=1&amp;b=2（**重点。**正文';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      'https://a.test/x?a=1&amp;b=2<!--cindy-strong-boundary-->（**重点。**<!--cindy-strong-boundary-->正文',
+    );
+    expect(renderMarkdown(source)).toContain(
+      '<a href="https://a.test/x?a=1&amp;amp;b=2">https://a.test/x?a=1&amp;amp;b=2</a>（<strong>重点。</strong>正文',
     );
   });
 
@@ -245,11 +282,39 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     }
   });
 
-  it('preserves loose inline math before the strict math plugin downgrades it to text', () => {
+  it('repairs affected markup when loose inline math is downgraded to text', () => {
     const source = '$2**3.**x $';
 
-    expect(normalizeStrongDelimiterBoundaries(source)).toBe(source);
-    expect(renderMarkdownWithStrictMath(source)).not.toContain('cindy-strong-boundary');
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      '\\$2**3.**<!--cindy-strong-boundary-->x \\$',
+    );
+    const html = renderMarkdownWithStrictMath(source);
+    expect(html).toContain('$2<strong>3.</strong>x $');
+    expect(html).not.toContain('cindy-strong-boundary');
+  });
+
+  it('repairs strong markup when loose inline math is downgraded to visible text', () => {
+    const source = '$5 **重点。**正文 $10';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      '\\$5 **重点。**<!--cindy-strong-boundary-->正文 \\$10',
+    );
+    const html = renderMarkdownWithStrictMath(source);
+    expect(html).toContain('$5 <strong>重点。</strong>正文 $10');
+    expect(html).not.toContain('**');
+    expect(html).not.toContain('cindy-strong-boundary');
+  });
+
+  it('handles many protected spans and ordinary backslashes in source-line mode', () => {
+    const protectedSpans = Array.from({ length: 2_000 }, (_, index) => `\`code-${index}\``).join(
+      ' ',
+    );
+    const ordinaryBackslashes = '\\x '.repeat(2_000);
+    const source = `${protectedSpans} ${ordinaryBackslashes}**重点。**正文`;
+
+    expect(normalizeStrongDelimiterBoundaries(source, { preserveTexDelimiters: true })).toBe(
+      source.replace('**正文', '**<!--cindy-strong-boundary-->正文'),
+    );
   });
 
   it('leaves historical bare project deep links unchanged', () => {

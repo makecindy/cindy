@@ -33,10 +33,7 @@ const PROTECTED_NODE_TYPES = new Set<Nodes['type']>([
   'code',
   'definition',
   'html',
-  'image',
-  'imageReference',
   'inlineCode',
-  'inlineMath',
   'math',
 ]);
 const markdownParser = unified()
@@ -44,10 +41,17 @@ const markdownParser = unified()
   .use(remarkGfm, { singleTilde: false })
   .use(remarkMath)
   .use(remarkTruncateCjkUrls);
+const characterReferenceParser = unified().use(remarkParse);
 
 interface OffsetRange {
   start: number;
   end: number;
+}
+
+interface BoundaryRepair {
+  openerStart: number;
+  closerStart: number;
+  separatorOffset: number;
 }
 
 interface NormalizeStrongDelimiterBoundariesOptions {
@@ -89,6 +93,46 @@ function nodeRange(node: Nodes): OffsetRange | null {
   return start == null || end == null ? null : { start, end };
 }
 
+function decodeCharacterReference(reference: string): string | null {
+  const tree = characterReferenceParser.parse(reference) as Root;
+  const paragraph = tree.children.length === 1 ? tree.children[0] : null;
+  const text =
+    paragraph?.type === 'paragraph' && paragraph.children.length === 1
+      ? paragraph.children[0]
+      : null;
+  return text?.type === 'text' && text.value !== reference ? text.value : null;
+}
+
+function sourceOffsetAfterValue(
+  markdown: string,
+  range: OffsetRange,
+  value: string,
+): number | null {
+  let sourceCursor = range.start;
+  let valueCursor = 0;
+
+  while (valueCursor < value.length && sourceCursor < range.end) {
+    const sourceCharacter = characterAfter(markdown, sourceCursor);
+    const valueCharacter = characterAfter(value, valueCursor);
+    if (sourceCharacter === valueCharacter) {
+      sourceCursor += sourceCharacter?.length ?? 0;
+      valueCursor += valueCharacter?.length ?? 0;
+      continue;
+    }
+
+    const referenceMatch = markdown
+      .slice(sourceCursor, range.end)
+      .match(/^&(?:#[xX][\dA-Fa-f]+|#\d+|[A-Za-z][A-Za-z\d]+);/u);
+    if (!referenceMatch) return null;
+    const decoded = decodeCharacterReference(referenceMatch[0]);
+    if (!decoded || !value.startsWith(decoded, valueCursor)) return null;
+    sourceCursor += referenceMatch[0].length;
+    valueCursor += decoded.length;
+  }
+
+  return valueCursor === value.length ? sourceCursor : null;
+}
+
 function recoveredAutolinkTailRange(
   node: Nodes,
   range: OffsetRange,
@@ -100,8 +144,45 @@ function recoveredAutolinkTailRange(
   const onlyChild = node.children.length === 1 ? node.children[0] : null;
   if (onlyChild?.type !== 'text') return null;
 
-  const tailStart = range.start + onlyChild.value.length;
+  // remarkTruncateCjkUrls 会缩短节点值，但保留覆盖原始裸链接的 source position。
+  // 必须把缩短后的 head 映射回原始源码；节点值可能经过字符引用解码，不能把
+  // value.length 直接当作源码长度。无法无损映射时宁可继续保护整段链接。
+  const tailStart = sourceOffsetAfterValue(markdown, range, onlyChild.value);
+  if (tailStart == null) return null;
   return tailStart < range.end ? { start: tailStart, end: range.end } : null;
+}
+
+function imageDescriptionRange(node: Nodes, markdown: string): OffsetRange | null {
+  if (node.type !== 'image' && node.type !== 'imageReference') return null;
+  const range = nodeRange(node);
+  if (!range || markdown.slice(range.start, range.start + 2) !== '![') return null;
+
+  let nestedBrackets = 0;
+  for (let cursor = range.start + 2; cursor < range.end; cursor += 1) {
+    if (isEscaped(markdown, cursor)) continue;
+    if (markdown[cursor] === '[') {
+      nestedBrackets += 1;
+      continue;
+    }
+    if (markdown[cursor] !== ']') continue;
+    if (nestedBrackets > 0) {
+      nestedBrackets -= 1;
+      continue;
+    }
+    return { start: range.start + 2, end: cursor };
+  }
+
+  return null;
+}
+
+function isLooseInlineMath(node: Nodes, markdown: string): boolean {
+  if (node.type !== 'inlineMath') return false;
+  const range = nodeRange(node);
+  if (!range) return false;
+  const raw = markdown.slice(range.start, range.end);
+  const inner = raw.replace(/^\$+/, '').replace(/\$+$/, '');
+  const nextCharacter = markdown[range.end] ?? '';
+  return /^\s|\s$/u.test(inner) || inner.includes('`') || /^\d/u.test(nextCharacter);
 }
 
 function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: string): void {
@@ -125,6 +206,27 @@ function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: st
     ranges.push({ start: range.start, end: childRanges[0].start });
     ranges.push({ start: childRanges[childRanges.length - 1].end, end: range.end });
     for (const child of node.children) collectProtectedRanges(child, ranges, markdown);
+    return;
+  }
+
+  if (node.type === 'image' || node.type === 'imageReference') {
+    const range = nodeRange(node);
+    const descriptionRange = imageDescriptionRange(node, markdown);
+    if (!range || !descriptionRange) {
+      if (range) ranges.push(range);
+      return;
+    }
+
+    // 图片说明会成为可见替代文字，需要像链接文字一样扫描；只保护 `![`、
+    // 目标地址与引用标签等外围语法。
+    ranges.push({ start: range.start, end: descriptionRange.start });
+    ranges.push({ start: descriptionRange.end, end: range.end });
+    return;
+  }
+
+  if (node.type === 'inlineMath') {
+    const range = nodeRange(node);
+    if (range && !isLooseInlineMath(node, markdown)) ranges.push(range);
     return;
   }
 
@@ -240,6 +342,34 @@ function collectProjectDeepLinkRanges(markdown: string, range: OffsetRange): Off
   return ranges;
 }
 
+function mergeOffsetRanges(ranges: OffsetRange[]): OffsetRange[] {
+  if (ranges.length < 2) return ranges;
+  const sorted = [...ranges].sort((left, right) => left.start - right.start);
+  const merged: OffsetRange[] = [{ ...sorted[0] }];
+
+  for (const range of sorted.slice(1)) {
+    const previous = merged[merged.length - 1];
+    if (range.start > previous.end) {
+      merged.push({ ...range });
+    } else if (range.end > previous.end) {
+      previous.end = range.end;
+    }
+  }
+
+  return merged;
+}
+
+function firstRangeEndingAfter(ranges: OffsetRange[], offset: number): number {
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (ranges[middle].end <= offset) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
 function findUnprotectedDelimiter(
   markdown: string,
   delimiter: string,
@@ -251,10 +381,9 @@ function findUnprotectedDelimiter(
   while (scan < markdown.length) {
     const offset = markdown.indexOf(delimiter, scan);
     if (offset === -1) return -1;
-    const protectedRange = protectedRanges.find(
-      (range) => offset >= range.start && offset < range.end,
-    );
-    if (!protectedRange) return offset;
+    const rangeIndex = firstRangeEndingAfter(protectedRanges, offset);
+    const protectedRange = protectedRanges[rangeIndex];
+    if (!protectedRange || offset < protectedRange.start) return offset;
     scan = protectedRange.end;
   }
 
@@ -338,8 +467,11 @@ function collectProseRanges(
         (protectedRange) => protectedRange.start < range.end && protectedRange.end > range.start,
       ),
     );
-    protectedRanges.sort((left, right) => left.start - right.start);
-    proseRanges.push({ range, protectedRanges, recoveredMathTailStarts });
+    proseRanges.push({
+      range,
+      protectedRanges: mergeOffsetRanges(protectedRanges),
+      recoveredMathTailStarts,
+    });
   });
 
   return proseRanges;
@@ -356,14 +488,52 @@ function collectRecoveredAutolinkTailRanges(tree: Root, markdown: string): Offse
   return ranges;
 }
 
-function collectBoundaryInsertions(
+function collectImageDescriptionRanges(tree: Root, markdown: string): OffsetRange[] {
+  const ranges: OffsetRange[] = [];
+  visit(tree, (node) => {
+    const range = imageDescriptionRange(node, markdown);
+    if (range) ranges.push(range);
+  });
+  return ranges;
+}
+
+function collectLooseMathDelimiterOffsets(
+  tree: Root,
+  markdown: string,
+  boundaryRepairs: BoundaryRepair[],
+): number[] {
+  const offsets: number[] = [];
+  visit(tree, 'inlineMath', (node) => {
+    if (!isLooseInlineMath(node, markdown)) return;
+    const range = nodeRange(node);
+    if (
+      !range ||
+      !boundaryRepairs.some(
+        (repair) =>
+          repair.separatorOffset > range.start && repair.separatorOffset < range.end,
+      )
+    ) {
+      return;
+    }
+
+    for (let cursor = range.start; cursor < range.end && markdown[cursor] === '$'; cursor += 1) {
+      offsets.push(cursor);
+    }
+    for (let cursor = range.end - 1; cursor >= range.start && markdown[cursor] === '$'; cursor -= 1) {
+      offsets.push(cursor);
+    }
+  });
+  return offsets;
+}
+
+function collectBoundaryRepairs(
   markdown: string,
   range: OffsetRange,
   protectedRanges: OffsetRange[],
-): number[] {
-  const insertions: number[] = [];
+): BoundaryRepair[] {
+  const repairs: BoundaryRepair[] = [];
   let cursor = range.start;
-  let openStrongCount = 0;
+  const openStrongStarts: number[] = [];
   let protectedIndex = 0;
 
   while (cursor < range.end) {
@@ -395,7 +565,7 @@ function collectBoundaryInsertions(
     // `***` 及更长序列使用另一套配对规则。这里不猜测其意图，同时清掉
     // 当前配对状态，避免后续双星号跨过不支持的序列发生误配。
     if (runLength > 2) {
-      openStrongCount = 0;
+      openStrongStarts.length = 0;
       cursor = runEnd;
       continue;
     }
@@ -405,19 +575,25 @@ function collectBoundaryInsertions(
     const canOpen = after !== 'whitespace' && (after !== 'punctuation' || before !== 'other');
     const canClose = before !== 'whitespace' && (before !== 'punctuation' || after !== 'other');
 
-    if (canClose && openStrongCount > 0) {
-      openStrongCount -= 1;
-    } else if (before === 'punctuation' && after === 'other' && openStrongCount > 0) {
-      openStrongCount -= 1;
-      insertions.push(runEnd);
+    if (canClose && openStrongStarts.length > 0) {
+      openStrongStarts.pop();
+    } else if (
+      before === 'punctuation' &&
+      after === 'other' &&
+      openStrongStarts.length > 0
+    ) {
+      const openerStart = openStrongStarts.pop();
+      if (openerStart != null) {
+        repairs.push({ openerStart, closerStart: cursor, separatorOffset: runEnd });
+      }
     } else if (canOpen) {
-      openStrongCount += 1;
+      openStrongStarts.push(cursor);
     }
 
     cursor = runEnd;
   }
 
-  return insertions;
+  return repairs;
 }
 
 /**
@@ -435,15 +611,15 @@ export function normalizeStrongDelimiterBoundaries(
   if (options.preserveTexDelimiters) {
     const protectedSyntaxRanges: OffsetRange[] = [];
     collectProtectedRanges(tree, protectedSyntaxRanges, markdown);
-    protectedSyntaxRanges.sort((left, right) => left.start - right.start);
     preservedTexDelimiterRanges.push(
-      ...collectPreservedTexDelimiterRanges(markdown, protectedSyntaxRanges),
+      ...collectPreservedTexDelimiterRanges(markdown, mergeOffsetRanges(protectedSyntaxRanges)),
     );
   }
   const proseRanges = collectProseRanges(tree, markdown, preservedTexDelimiterRanges);
-  const boundaryInsertions = proseRanges.flatMap(({ range, protectedRanges }) =>
-    collectBoundaryInsertions(markdown, range, protectedRanges),
+  const boundaryRepairs = proseRanges.flatMap(({ range, protectedRanges }) =>
+    collectBoundaryRepairs(markdown, range, protectedRanges),
   );
+  const boundaryInsertions = boundaryRepairs.map((repair) => repair.separatorOffset);
   const recoveredMathTailStarts = proseRanges.flatMap(
     ({ recoveredMathTailStarts: starts }) => starts,
   );
@@ -460,10 +636,35 @@ export function normalizeStrongDelimiterBoundaries(
   const insertions = [
     ...new Set([...boundaryInsertions, ...recoveredTailStarts, ...recoveredMathTailStarts]),
   ];
+  const looseMathDelimiterOffsets = collectLooseMathDelimiterOffsets(
+    tree,
+    markdown,
+    boundaryRepairs,
+  );
+  const imageDescriptionRanges = collectImageDescriptionRanges(tree, markdown);
+  const imageRepairs = boundaryRepairs.filter((repair) =>
+    imageDescriptionRanges.some(
+      (range) =>
+        repair.openerStart >= range.start && repair.separatorOffset <= range.end,
+    ),
+  );
+  const imageRepairOffsets = new Set(imageRepairs.map((repair) => repair.separatorOffset));
 
   let output = markdown;
-  for (const offset of insertions.sort((left, right) => right - left)) {
-    output = `${output.slice(0, offset)}${HIDDEN_SEPARATOR}${output.slice(offset)}`;
+  const edits = [
+    ...insertions
+      .filter((offset) => !imageRepairOffsets.has(offset))
+      .map((offset) => ({ offset, deleteCount: 0, value: HIDDEN_SEPARATOR })),
+    ...looseMathDelimiterOffsets.map((offset) => ({ offset, deleteCount: 0, value: '\\' })),
+    ...imageRepairs.flatMap((repair) => [
+      { offset: repair.openerStart, deleteCount: 2, value: '' },
+      { offset: repair.closerStart, deleteCount: 2, value: '' },
+    ]),
+  ];
+  for (const edit of edits.sort((left, right) => right.offset - left.offset)) {
+    output = `${output.slice(0, edit.offset)}${edit.value}${output.slice(
+      edit.offset + edit.deleteCount,
+    )}`;
   }
   return output;
 }
