@@ -9899,16 +9899,17 @@ describe('CodexAgent MCP thread context hooks', () => {
       throw new Error('expected user input handlers');
     }
     let requestCount = 0;
+    const pendingDecision = deferred<InteractionDecision>();
     handle.setInteractionResolver(async (req) => {
       requestCount += 1;
       expect(req).toMatchObject({
         kind: 'ask_user_question',
         requestId: 'req-dynamic',
       });
-      return { kind: 'ask_user_question', answers: { 'What next?': 'Keep going' } };
+      return pendingDecision.promise;
     });
 
-    const result = await handlers.dynamicToolCall({
+    const resultPromise = handlers.dynamicToolCall({
       threadId: 'start-thread-id',
       turnId: 'turn-1',
       callId: 'dynamic-call-1',
@@ -9916,34 +9917,45 @@ describe('CodexAgent MCP thread context hooks', () => {
       tool: 'ask_user_question',
       arguments: {
         questions: [{
-          id: 'q1',
           header: 'Direction',
           question: 'What next?',
-          options: [{ label: 'Keep going', description: 'Continue current work' }],
         }],
       },
     }, { requestId: 'req-dynamic' });
 
-    expect(result.success).toBe(true);
-    expect(result.contentItems).toEqual([
-      { type: 'inputText', text: JSON.stringify({ q1: { answers: ['Keep going'] } }) },
-    ]);
-
-    const nativeDuplicateResult = await handlers.requestUserInput({
+    const nativeDuplicateResultPromise = handlers.requestUserInput({
       threadId: 'start-thread-id',
       turnId: 'turn-1',
       itemId: 'native-call-duplicate',
       questions: [{
-        id: 'q1',
+        id: 'native-q1',
         header: 'Direction',
         question: 'What next?',
         isOther: false,
         isSecret: false,
-        options: [{ label: 'Keep going', description: 'Continue current work' }],
+        options: [],
       }],
     }, { requestId: 'req-native-duplicate' });
+
+    expect(requestCount).toBe(1);
+    pendingDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'What next?': 'Keep going' },
+    });
+
+    const [result, nativeDuplicateResult] = await Promise.all([
+      resultPromise,
+      nativeDuplicateResultPromise,
+    ]);
+    expect(result.success).toBe(true);
+    expect(result.contentItems).toEqual([
+      {
+        type: 'inputText',
+        text: JSON.stringify({ 'question-1': { answers: ['Keep going'] } }),
+      },
+    ]);
     expect(nativeDuplicateResult).toEqual({
-      answers: { q1: { answers: ['Keep going'] } },
+      answers: { 'native-q1': { answers: ['Keep going'] } },
     });
 
     const legacyResult = await handlers.dynamicToolCall({
@@ -9954,14 +9966,19 @@ describe('CodexAgent MCP thread context hooks', () => {
       tool: 'ask_user_question',
       arguments: {
         questions: [{
-          id: 'q1',
+          id: 'legacy-q1',
           header: 'Direction',
           question: 'What next?',
-          options: [{ label: 'Keep going', description: 'Continue current work' }],
+          options: null,
         }],
       },
     }, { requestId: 'req-dynamic-legacy' });
-    expect(legacyResult).toEqual(result);
+    expect(legacyResult.contentItems).toEqual([
+      {
+        type: 'inputText',
+        text: JSON.stringify({ 'legacy-q1': { answers: ['Keep going'] } }),
+      },
+    ]);
     expect(requestCount).toBe(1);
     await handle.close();
   });

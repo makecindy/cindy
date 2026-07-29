@@ -646,12 +646,42 @@ function dynamicToolResponseFromUserInput(response: ToolRequestUserInputResponse
 function userInputQuestionsFingerprint(
   questions: readonly ToolRequestUserInputQuestion[],
 ): string {
-  return JSON.stringify(questions);
+  return JSON.stringify(questions.map((question) => ({
+    header: question.header,
+    question: question.question,
+    isOther: question.isOther === true,
+    options: (question.options ?? []).map((option) => ({
+      label: option.label,
+      description: option.description,
+    })),
+  })));
 }
 
-function hasSubmittedUserInput(response: ToolRequestUserInputResponse): boolean {
-  return Object.values(response.answers).some((answer) =>
-    answer?.answers.some((value) => value.trim().length > 0) === true,
+type UserInputAnswersByPosition = string[][];
+
+function userInputAnswersByPosition(
+  questions: readonly ToolRequestUserInputQuestion[],
+  response: ToolRequestUserInputResponse,
+): UserInputAnswersByPosition {
+  return questions.map((question) =>
+    response.answers[question.id]?.answers.slice() ?? [],
+  );
+}
+
+function responseFromUserInputAnswersByPosition(
+  questions: readonly ToolRequestUserInputQuestion[],
+  answersByPosition: readonly (readonly string[])[],
+): ToolRequestUserInputResponse {
+  const answers: ToolRequestUserInputResponse['answers'] = {};
+  questions.forEach((question, index) => {
+    answers[question.id] = { answers: [...(answersByPosition[index] ?? [])] };
+  });
+  return { answers };
+}
+
+function hasSubmittedUserInput(answersByPosition: readonly (readonly string[])[]): boolean {
+  return answersByPosition.some((answers) =>
+    answers.some((value) => value.trim().length > 0),
   );
 }
 
@@ -3502,13 +3532,17 @@ export class CodexAgent extends BaseAgent {
     const userInputBroker = new CodexInteractionBroker<ToolRequestUserInputResponse>();
     const dynamicToolBroker = new CodexInteractionBroker<DynamicToolCallResponse>();
     const activeToolContexts = new Map<string, ActiveToolContext>();
-    // A single model turn can surface the same question through both the
-    // native requestUserInput request and the dynamic-tool compatibility
-    // path. Once the user has submitted a real answer, replay it for an exact
-    // same-turn duplicate instead of asking them a second time.
+    // A single model turn can surface the same visible question through both
+    // the native requestUserInput request and the dynamic-tool compatibility
+    // path. Join an in-flight interaction, then replay its submitted answers
+    // by question position so protocol-specific ids can still differ.
     const submittedUserInputByTurn = new Map<
       string,
-      Map<string, ToolRequestUserInputResponse>
+      Map<string, UserInputAnswersByPosition>
+    >();
+    const pendingUserInputByTurn = new Map<
+      string,
+      Map<string, Promise<UserInputAnswersByPosition>>
     >();
     registerCodexMcpContext(threadId);
     let mcpElicitationSeq = 0;
@@ -4438,6 +4472,7 @@ export class CodexAgent extends BaseAgent {
         if (ctx.turnId === turnId) activeToolContexts.delete(itemId);
       }
       submittedUserInputByTurn.delete(turnId);
+      pendingUserInputByTurn.delete(turnId);
     }
 
     function classifyUserInputRequest(params: ToolRequestUserInputParams): 'ask_user_question' | 'permission' {
@@ -4473,24 +4508,70 @@ export class CodexAgent extends BaseAgent {
           turnId,
           questionCount: questions.length,
         });
-        return replay;
+        return responseFromUserInputAnswersByPosition(questions, replay);
       }
-      const decision = await dispatchInteraction({
-        kind: 'ask_user_question',
-        requestId,
-        questions: questionsToAskUserItems(questions),
-      });
-      if (decision.kind !== 'ask_user_question') {
-        log.warn('requestUserInput got mismatched ask decision', { requestId, decKind: decision.kind });
-        return emptyUserInputResponse(questions);
+
+      let pendingForTurn = turnId ? pendingUserInputByTurn.get(turnId) : undefined;
+      const pendingReplay = fingerprint ? pendingForTurn?.get(fingerprint) : undefined;
+      if (pendingReplay) {
+        log.info('joining duplicate same-turn user input request', {
+          requestId,
+          turnId,
+          questionCount: questions.length,
+        });
+        const answersByPosition = await pendingReplay;
+        return responseFromUserInputAnswersByPosition(questions, answersByPosition);
       }
-      const response = responseFromAskUserAnswers(questions, decision.answers);
-      if (turnId && fingerprint && hasSubmittedUserInput(response)) {
-        const nextSubmittedForTurn = submittedForTurn ?? new Map<string, ToolRequestUserInputResponse>();
-        nextSubmittedForTurn.set(fingerprint, response);
-        if (!submittedForTurn) submittedUserInputByTurn.set(turnId, nextSubmittedForTurn);
+
+      const interactionPromise = (async (): Promise<UserInputAnswersByPosition> => {
+        const decision = await dispatchInteraction({
+          kind: 'ask_user_question',
+          requestId,
+          questions: questionsToAskUserItems(questions),
+        });
+        if (decision.kind !== 'ask_user_question') {
+          log.warn('requestUserInput got mismatched ask decision', { requestId, decKind: decision.kind });
+          return questions.map(() => []);
+        }
+        return userInputAnswersByPosition(
+          questions,
+          responseFromAskUserAnswers(questions, decision.answers),
+        );
+      })();
+
+      if (turnId && fingerprint) {
+        pendingForTurn ??= new Map<string, Promise<UserInputAnswersByPosition>>();
+        pendingForTurn.set(fingerprint, interactionPromise);
+        if (!pendingUserInputByTurn.has(turnId)) {
+          pendingUserInputByTurn.set(turnId, pendingForTurn);
+        }
       }
-      return response;
+
+      try {
+        const answersByPosition = await interactionPromise;
+        if (
+          turnId
+          && fingerprint
+          && pendingUserInputByTurn.get(turnId) === pendingForTurn
+          && hasSubmittedUserInput(answersByPosition)
+        ) {
+          const nextSubmittedForTurn = submittedForTurn
+            ?? new Map<string, UserInputAnswersByPosition>();
+          nextSubmittedForTurn.set(fingerprint, answersByPosition);
+          if (!submittedForTurn) submittedUserInputByTurn.set(turnId, nextSubmittedForTurn);
+        }
+        return responseFromUserInputAnswersByPosition(questions, answersByPosition);
+      } finally {
+        if (turnId && fingerprint && pendingForTurn?.get(fingerprint) === interactionPromise) {
+          pendingForTurn.delete(fingerprint);
+          if (
+            pendingForTurn.size === 0
+            && pendingUserInputByTurn.get(turnId) === pendingForTurn
+          ) {
+            pendingUserInputByTurn.delete(turnId);
+          }
+        }
+      }
     }
 
     async function requestUserInputAsPermission(
@@ -6213,6 +6294,7 @@ export class CodexAgent extends BaseAgent {
           dismissAllPendingUserInput('transport_error');
           activeToolContexts.clear();
           submittedUserInputByTurn.clear();
+          pendingUserInputByTurn.clear();
         }
         const targetsPendingTurn = isTurnStartPending && currentTurnId === null && Boolean(params.turnId);
         // 空 turnId 的容量拒绝: 过载重投的 RPC 还在飞、而它的 turnStarted 尚未到达时,
