@@ -4,6 +4,11 @@
 两档屏幕（短屏 750×1334 / 长屏 750×1624）并排。
 
 - 本地体验：浏览器直接打开 `index.html`（自包含，无需起服务）
+- **不想 clone 也能看**：下面这张就是 `index.html` 的渲染截图（GitHub 上 `.html` 只显示源码、不会渲染，故入库一张目检图）
+
+![主干现状 vs 本 PR 修复（短屏 750×1334 / 长屏 750×1624）](./evidence/shot-both-main-vs-fix.png)
+
+左列红斜纹 = 主干现状多出来的空白（短屏 92 / 长屏 131.65 设计px）；右列绿框 ✓稿 = 本 PR 修复后回到稿内的 20 / 25.65。
 
 ## 看什么
 
@@ -61,5 +66,6 @@ node $D/render.mjs  "$PWD"                   # 由 truth.json 重新生成 index
   `DESIGN.md §16` 新稿帧底与面板色。
 - **只覆盖两档基准屏**：`dh<1334` 的压缩分支与 `1334..1624` 的插值段不在图里，由
   `loginSkinLayout.test.ts` 的三条不变式（间距上界 / 锚常量连续性 / 短屏以下分支不压盖）守护。
+- `evidence/shot-both-main-vs-fix.png` 是 `index.html` 的目检截图（Chrome headless，`--force-device-scale-factor=1`，1120×1900），随模板/真值变化需重截；它只是"不用 clone 也能看"的入口，**判定依据仍是 `index.html` + `truth.json`**。
 - `assets/` 是 `apps/mobile/assets/login/` 的 `@2x` 副本（`hero.png` / `slogan-dark.png` /
   `wordmark-dark.png`），为让 demo 脱离仓库也能打开；产品真源以 `apps/mobile/assets/login/` 为准。
