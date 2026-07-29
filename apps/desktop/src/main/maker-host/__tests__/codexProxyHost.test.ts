@@ -566,8 +566,8 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
+        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
@@ -600,6 +600,200 @@ describe('codex proxy host', () => {
 
     host.unregister('session-1');
     expect(mockState.capturedRegistry?.get('thread-1')).toBeUndefined();
+  });
+
+  it('routes Guardian reviewer models per parent session without crossing providers', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    host.registerReviewerRouteContext('session-xd-review', 'thread-xd-parent', 'deepseek/deepseek-v4');
+    host.registerReviewerRouteContext('session-openai-review', 'thread-openai-parent', 'gpt-5.5');
+    setSessionProvider('session-xd-review', 'xd');
+    setSessionProvider('session-openai-review', 'openai');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    // active strips ×2, product prompt injection, then provider-aware Guardian rewrite.
+    const reviewerTransform = transforms[3];
+    if (!reviewerTransform) throw new Error('expected Guardian reviewer transform');
+    const body = { model: 'codex-auto-review', input: [{ role: 'user', content: 'review' }] };
+    const guardianHeaders = (parentThreadId: string) => ({
+      'thread-id': `guardian-child-${parentThreadId}`,
+      'x-openai-subagent': 'guardian',
+      'x-codex-parent-thread-id': parentThreadId,
+    });
+
+    expect(reviewerTransform(body, {
+      method: 'POST',
+      url: '/responses',
+      headers: guardianHeaders('thread-xd-parent'),
+    })).toEqual({ ...body, model: 'deepseek/deepseek-v4' });
+    expect(reviewerTransform(body, {
+      method: 'POST',
+      url: '/responses',
+      headers: guardianHeaders('thread-openai-parent'),
+    })).toBeNull();
+    expect(reviewerTransform(body, {
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        ...guardianHeaders('thread-xd-parent'),
+        'x-openai-subagent': 'review',
+      },
+    })).toBeNull();
+    expect(reviewerTransform(body, {
+      method: 'POST',
+      url: '/responses',
+      headers: guardianHeaders('missing-parent'),
+    })).toBeNull();
+
+    host.registerReviewerRouteContext('session-xd-review', 'thread-xd-parent', 'qwen/qwen3-coder');
+    expect(reviewerTransform(body, {
+      method: 'POST',
+      url: '/responses',
+      headers: guardianHeaders('thread-xd-parent'),
+    })).toEqual({ ...body, model: 'qwen/qwen3-coder' });
+
+    host.unregister('session-xd-review');
+    expect(reviewerTransform(body, {
+      method: 'POST',
+      url: '/responses',
+      headers: guardianHeaders('thread-xd-parent'),
+    })).toBeNull();
+
+    clearSessionProvider('session-xd-review');
+    clearSessionProvider('session-openai-review');
+  });
+
+  it('applies provider compatibility and routing to a Guardian child via its parent thread', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { setProviderOAuthTokenReader } = await import('../provider-route.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.registerReviewerRouteContext('session-xai-review', 'thread-xai-parent', 'xai/grok-4.5');
+    setSessionProvider('session-xai-review', 'xai');
+    setProviderOAuthTokenReader((providerId) => (providerId === 'xai' ? 'xai-review-token' : null));
+
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'guardian-child-xai',
+        'x-openai-subagent': 'guardian',
+        'x-codex-parent-thread-id': 'thread-xai-parent',
+      },
+    };
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    const rawGuardianBody = {
+      model: 'codex-auto-review',
+      reasoning: { effort: 'high', summary: 'auto' },
+      tools: [
+        { type: 'function', name: 'shell' },
+        { type: 'namespace', name: 'multi_agent_v1', tools: [] },
+      ],
+      input: [{ role: 'user', content: 'review this action' }],
+    };
+    let current: unknown = rawGuardianBody;
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toMatchObject({ model: 'grok-4.5' });
+    expect((current as { tools?: Array<{ type?: string }> }).tools)
+      .not.toContainEqual(expect.objectContaining({ type: 'namespace' }));
+
+    const routingTransform = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.routingTransform;
+    if (!routingTransform) throw new Error('expected routing transform');
+    // The proxy chooses the route from the raw JSON before running request
+    // transforms; routing must therefore resolve the same parent-aware model.
+    await expect(Promise.resolve(routingTransform(rawGuardianBody, ctx))).resolves.toEqual({
+      upstreamOverride: 'https://api.x.ai/v1',
+      headerOverride: { authorization: 'Bearer xai-review-token' },
+      headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
+    });
+
+    clearSessionProvider('session-xai-review');
+    setProviderOAuthTokenReader(() => null);
+  });
+
+  it('passes the parent session model into a Guardian request handled by the Chat bridge', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'guardian-chat-provider',
+        name: 'Guardian Chat Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://chat-provider.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'deepseek-v4', name: 'DeepSeek V4' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'chat-provider-key');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.registerReviewerRouteContext(
+      'session-chat-review',
+      'thread-chat-parent',
+      'deepseek-v4',
+    );
+    setSessionProvider('session-chat-review', 'guardian-chat-provider');
+
+    const rawGuardianBody = {
+      model: 'codex-auto-review',
+      input: [{ role: 'user', content: 'review this action' }],
+    };
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'guardian-child-chat',
+        'x-openai-subagent': 'guardian',
+        'x-codex-parent-thread-id': 'thread-chat-parent',
+      },
+    };
+    const decision = await Promise.resolve(
+      host.createModelRoutingTransform()(rawGuardianBody, ctx),
+    );
+    expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    if (!decision?.localHandler) throw new Error('expected Chat bridge local handler');
+
+    const res = {} as never;
+    await decision.localHandler({
+      rawBody: Buffer.from(JSON.stringify(rawGuardianBody)),
+      parsedBody: rawGuardianBody,
+      ctx,
+      res,
+    });
+    const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as
+      | { handle: ReturnType<typeof vi.fn> }
+      | undefined;
+    expect(bridge?.handle).toHaveBeenCalledWith({
+      parsedBody: { ...rawGuardianBody, model: 'deepseek-v4' },
+      res,
+    });
+
+    clearSessionProvider('session-chat-review');
+    setCustomProviderKeyReader(() => null);
+    setCustomProviders([]);
   });
 
   it('normalizes xAI Codex Responses body before forwarding requests', async () => {
@@ -1590,7 +1784,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(11); // encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(12); // encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

@@ -2300,16 +2300,13 @@ export class CodexAgent extends BaseAgent {
       : credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
     const approvalsReviewerProtocolSupported =
       supportsCodexApprovalsReviewerProtocol(initResp.userAgent);
-    // Codex's built-in reviewer currently selects the hidden `codex-auto-review`
-    // model through the session's model provider. Cindy's gateway, third-party
-    // providers, and other non-subscription credentials do not have a verified
-    // route for that model. Keep Auto usable on those routes by falling back to
-    // manual on-request approvals instead of letting the first write fail in the
-    // reviewer. Remote OAuth subscriptions use the daemon's synced subscription
-    // credential and keep the verified reviewer route.
-    const approvalsReviewerRouteSupported = sessionCredentialMode === 'oauth-bearer';
-    const approvalsReviewerSupported =
-      approvalsReviewerProtocolSupported && approvalsReviewerRouteSupported;
+    // OpenAI OAuth can use Codex's hidden reviewer model directly. Local proxy
+    // routes may opt in after registering a parent-thread → session → main-model
+    // context; until that synchronous registration succeeds they stay on the
+    // explicit user reviewer. Remote non-subscription routes have no local proxy
+    // rewrite and therefore keep the conservative manual fallback.
+    const nativeApprovalsReviewerRouteSupported = sessionCredentialMode === 'oauth-bearer';
+    let approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
     const resumeExcludeTurnsSupported = supportsCodexResumeExcludeTurns(initResp.userAgent);
     if (mutableExtraDirs.length > 0 && !readonlyReferenceDirsSupported) {
@@ -2318,7 +2315,10 @@ export class CodexAgent extends BaseAgent {
         `Codex reference directories require app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
       );
     }
-    if (mutablePermissionMode === 'auto' && !approvalsReviewerSupported) {
+    if (
+      mutablePermissionMode === 'auto' &&
+      !(approvalsReviewerProtocolSupported && approvalsReviewerRouteSupported)
+    ) {
       log.warn('Codex Auto falling back to user approvals: automatic reviewer is unavailable on this route', {
         userAgent: initResp.userAgent,
         providerId: opts.providerId ?? null,
@@ -2600,6 +2600,46 @@ export class CodexAgent extends BaseAgent {
       if (!register) return;
       register({ sessionId: sid, threadId, text });
     };
+    const registerCodexReviewerRouteContext = (targetThreadId: string): void => {
+      if (!sid || opts.remoteHostId || !hostUsesCodexProxy || !approvalsReviewerProtocolSupported) {
+        approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
+        return;
+      }
+      const register = this.deps.registerCodexReviewerRouteContext;
+      if (!register) {
+        approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
+        return;
+      }
+      try {
+        const registered = register({
+          sessionId: sid,
+          threadId: targetThreadId,
+          model: mutableModel,
+        });
+        approvalsReviewerRouteSupported =
+          nativeApprovalsReviewerRouteSupported || registered === true;
+        if (registered === true) {
+          log.debug('codex provider-aware Guardian reviewer route registered', {
+            threadId: prefixId(targetThreadId),
+            sessionId: prefixId(sid),
+            model: mutableModel,
+          });
+        } else if (!nativeApprovalsReviewerRouteSupported) {
+          log.warn('Codex Auto keeping user approvals: Guardian reviewer route registration declined', {
+            threadId: prefixId(targetThreadId),
+            sessionId: prefixId(sid),
+            model: mutableModel,
+          });
+        }
+      } catch (e) {
+        approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
+        log.warn('registerCodexReviewerRouteContext threw; keeping safe reviewer route', {
+          error: String(e),
+          threadId: prefixId(targetThreadId),
+          sessionId: prefixId(sid),
+        });
+      }
+    };
 
     // ── thread/start 或 thread/resume ────────────────────────────────────────
     // 防御: resumeSessionId 偶尔会是上次失败 session 残留的占位 ('<failed>' / '<pending>')
@@ -2700,6 +2740,7 @@ export class CodexAgent extends BaseAgent {
           mutableModel = resp.model;
         }
         threadId = resp.thread.id;
+        registerCodexReviewerRouteContext(threadId);
         if (useProxyChannel) {
           registerCodexDeveloperInstructions(threadId, developerInstructions);
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
@@ -2762,6 +2803,7 @@ export class CodexAgent extends BaseAgent {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
         }
         threadId = resp.thread.id;
+        registerCodexReviewerRouteContext(threadId);
         if (useProxyChannel) {
           registerCodexDeveloperInstructions(threadId, developerInstructions);
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
@@ -2934,6 +2976,7 @@ export class CodexAgent extends BaseAgent {
           sdkSessionId = nextThreadId;
           subscription = host.subscribeThread(threadId, handlers);
           registerCodexMcpContext(threadId);
+          registerCodexReviewerRouteContext(threadId);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
           if (replacementServiceTierGeneration !== serviceTierMutationGeneration) {
             // setFastMode() updated the old thread while thread/start was
@@ -5450,6 +5493,7 @@ export class CodexAgent extends BaseAgent {
         if (newModel === mutableModel) return; // 去重: 值没变不重推 (renderer 单次切换会全量重调 set*)
         log.debug('setModel', { from: mutableModel, to: newModel });
         mutableModel = newModel;
+        registerCodexReviewerRouteContext(threadId);
         // thread 已启动 → 立即经 thread/settings/update 推给 server (sticky); 未启动则由
         // 首个 thread/start 携带。沿用 turn/start 的 'gpt-5'=server 默认哨兵约定 (省略),
         // 避免把占位 model id 发给 server。失败时 turn/start 透传仍是兜底。
@@ -5609,6 +5653,7 @@ export class CodexAgent extends BaseAgent {
           threadMayHaveRollout = true;
           subscription = host.subscribeThread(threadId, handlers);
           registerCodexMcpContext(threadId);
+          registerCodexReviewerRouteContext(threadId);
           registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
         } else {

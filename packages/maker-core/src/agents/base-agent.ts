@@ -75,6 +75,12 @@ export interface CodexMcpThreadContextArgs {
   vendorOptions: Record<string, unknown>;
 }
 
+export interface CodexReviewerRouteContextArgs {
+  threadId: string;
+  sessionId: string;
+  model: string;
+}
+
 /**
  * Metadata for an MCP tool approval decision.
  *
@@ -326,6 +332,18 @@ export interface AgentDeps {
     threadId: string;
     text: string;
   }) => void;
+
+  /**
+   * Codex 专用：登记 Guardian 子线程回到父业务 session 时应使用的主模型。
+   *
+   * Codex app-server 的模型目录由共享进程持有，不能代表单个 session 的实际
+   * Provider。host/proxy 通过 Guardian 请求的 x-codex-parent-thread-id 找回
+   * 此上下文，在非 OpenAI 路由把隐藏 codex-auto-review 改写为当前主模型。
+   *
+   * 只有明确返回 true 才表示路由已就绪；缺省、false 或抛错都必须继续使用
+   * user reviewer，不能让未知路由进入无人值守审批。
+   */
+  registerCodexReviewerRouteContext?: (args: CodexReviewerRouteContextArgs) => boolean;
 
   /**
    * Claude 专用: host 明确认定可无提示执行的只读工具名, 透传到 SDK

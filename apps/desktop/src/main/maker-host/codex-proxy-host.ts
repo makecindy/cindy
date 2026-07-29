@@ -75,6 +75,10 @@ const log = createMakerLogger('codex-proxy');
 const registry = createInstructionsRegistry();
 const sessionToThread = new Map<string, string>();
 const threadToSession = new Map<string, string>();
+const reviewerModelBySession = new Map<string, string>();
+
+const CODEX_AUTO_REVIEW_MODEL = 'codex-auto-review';
+const CODEX_GUARDIAN_SUBAGENT = 'guardian';
 
 let _handle: ProxyHandle | null = null;
 let _startPromise: Promise<void> | null = null;
@@ -144,6 +148,23 @@ function selectedThreadIdFromHeaders(headers: Readonly<Record<string, string>>):
     'unknown';
 }
 
+function guardianParentThreadIdFromHeaders(
+  headers: Readonly<Record<string, string>>,
+): string {
+  if (headerValue(headers, 'x-openai-subagent').toLowerCase() !== CODEX_GUARDIAN_SUBAGENT) {
+    return '';
+  }
+  return headerValue(headers, 'x-codex-parent-thread-id');
+}
+
+function sessionIdFromHeaders(
+  headers: Readonly<Record<string, string>>,
+): string | undefined {
+  const parentThreadId = guardianParentThreadIdFromHeaders(headers);
+  if (parentThreadId) return threadToSession.get(parentThreadId);
+  return threadToSession.get(selectedThreadIdFromHeaders(headers));
+}
+
 function safeDumpName(threadId: string): string {
   return threadId.replace(/[^A-Za-z0-9._-]/g, '_') || 'unknown';
 }
@@ -186,9 +207,72 @@ function createCodexTransform(): RequestTransform {
   return createInstructionsInjectionTransform({ registry, logger: log });
 }
 
+function sessionUsesNativeOpenAIReviewer(
+  sessionId: string,
+  model: string,
+  authInjection: CodexProxyAuthInjection,
+): boolean {
+  const explicitProviderId = getSessionProvider(sessionId);
+  if (explicitProviderId) return explicitProviderId === 'openai';
+
+  const inferredProviderId = inferProviderIdForModel(model, 'codex');
+  if (inferredProviderId) return inferredProviderId === 'openai';
+
+  // An unscoped model inherits the app-server's spawn credential. Namespaced
+  // models are never treated as native OpenAI merely because a superset OAuth
+  // host happens to serve the session.
+  if (
+    model.startsWith('codex/') ||
+    model.startsWith('chatgpt/') ||
+    model.startsWith('xai/')
+  ) {
+    return false;
+  }
+  return authInjection === 'oauth-bearer';
+}
+
+function providerAwareGuardianReviewerModel(
+  body: unknown,
+  headers: Readonly<Record<string, string>>,
+  authInjection: CodexProxyAuthInjection,
+): string | null {
+  if (!isPlainObject(body) || body.model !== CODEX_AUTO_REVIEW_MODEL) return null;
+  const parentThreadId = guardianParentThreadIdFromHeaders(headers);
+  if (!parentThreadId) return null;
+  const sessionId = threadToSession.get(parentThreadId);
+  if (!sessionId) return null;
+  const mainModel = reviewerModelBySession.get(sessionId);
+  if (!mainModel || mainModel === CODEX_AUTO_REVIEW_MODEL) return null;
+  return sessionUsesNativeOpenAIReviewer(sessionId, mainModel, authInjection)
+    ? null
+    : mainModel;
+}
+
+function createProviderAwareGuardianReviewerTransform(): RequestTransform {
+  return (body, ctx) => {
+    if (ctx.method !== 'POST' || !isPlainObject(body)) return null;
+    const parentThreadId = guardianParentThreadIdFromHeaders(ctx.headers);
+    const sessionId = parentThreadId ? threadToSession.get(parentThreadId) : undefined;
+    const mainModel = providerAwareGuardianReviewerModel(
+      body,
+      ctx.headers,
+      getCodexProxyAuthInjection(),
+    );
+    if (!parentThreadId || !sessionId || !mainModel) return null;
+
+    log.info('routing Codex Guardian reviewer through the session provider model', {
+      sessionId,
+      parentThreadId,
+      fromModel: CODEX_AUTO_REVIEW_MODEL,
+      toModel: mainModel,
+      providerId: getSessionProvider(sessionId),
+    });
+    return { ...body, model: mainModel };
+  };
+}
+
 function sessionIdFromTransformCtx(ctx: RequestTransformCtx): string | undefined {
-  const threadId = selectedThreadIdFromHeaders(ctx.headers);
-  return threadId ? threadToSession.get(threadId) : undefined;
+  return sessionIdFromHeaders(ctx.headers);
 }
 
 // 通用 Chat Completions 上游(DeepSeek/GLM/Kimi 等非 OpenAI o-series)的兼容默认。
@@ -278,6 +362,7 @@ function createChatBridgeDecision(
   route: Awaited<ReturnType<typeof resolveSessionRoute>>,
   instructions: string | undefined,
   wireModel: string,
+  requestModelOverride?: string,
 ): RoutingDecision | null {
   if (!route || route.routing.wireProtocol !== 'openai-chat') return null;
   const { headers } = buildLocalHandlerHeaders(route, 'codex');
@@ -332,6 +417,9 @@ function createChatBridgeDecision(
         } catch {
           // Keep the already parsed body if the defensive strip result cannot be parsed.
         }
+      }
+      if (requestModelOverride && isPlainObject(body)) {
+        body = { ...body, model: requestModelOverride };
       }
       if (instructions && isPlainObject(body)) {
         const existing = typeof body.instructions === 'string' ? body.instructions : '';
@@ -1198,7 +1286,7 @@ function logProviderServiceTier(ctx: ResponseObserverCtx, body: Record<string, u
   const request = readRequestMeta(ctx.requestBody);
   const upstream = readProviderResponseMeta(body);
   const threadId = selectedThreadIdFromObserver(ctx);
-  const sessionId = threadToSession.get(threadId) ?? null;
+  const sessionId = sessionIdFromHeaders(ctx.requestHeaders) ?? null;
   log.info('codex provider service tier observed', {
     reqId: ctx.reqId,
     threadId,
@@ -1374,11 +1462,14 @@ export function createModelRoutingTransform(
   return (body, ctx) => {
     // body 可能为 undefined —— 无 body 的 GET(典型: codex models-manager 的 `GET /models` 轮询,
     // 引擎现在也会对它跑路由)。不再因 body 非对象就短路;会话解析只依赖 headers,model 字段可选。
-    const model = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
     const gatewayKey = _readGatewayKey();
     const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
+    const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
+    const model =
+      providerAwareGuardianReviewerModel(body, ctx.headers, authInjection) ??
+      requestModel;
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
-    const sessionId = threadId ? threadToSession.get(threadId) : undefined;
+    const sessionId = sessionIdFromHeaders(ctx.headers);
 
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。thread-id header → threadToSession 反解 xdt sessionId。
     //    oauth-bearer 态全量适用;env-key 态默认全量走网关、per-session 无意义(与 decideCodexRoute 的
@@ -1397,6 +1488,7 @@ export function createModelRoutingTransform(
             localRoute,
             threadId ? registry.get(threadId) : undefined,
             model,
+            model !== requestModel ? model : undefined,
           ));
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
@@ -1462,6 +1554,10 @@ function createTransformRequestChain(): RequestTransform[] {
       strip: stripImageGenerationItemsWithoutIdFromBody,
     }),
     createCodexTransform(),
+    // Guardian uses an isolated child thread. Resolve its parent business
+    // session and select that session's real provider model before provider
+    // compatibility transforms inspect the request.
+    createProviderAwareGuardianReviewerTransform(),
     // 必须先于 xAI/MiniMax 兼容改写:加密压缩块换成明文占位 message 后,后续
     // 针对具体供应商的 input 归一化才能按标准 message 处理它。
     createCrossProviderCompactionCompatTransform(),
@@ -1493,8 +1589,7 @@ function createCodexProxyHandle(
       createProviderUpstreamErrorObserver({
         agent: 'codex',
         resolveUserProviderId: (requestHeaders) => {
-          const threadId = selectedThreadIdFromHeaders(requestHeaders);
-          const sessionId = threadId ? threadToSession.get(threadId) : undefined;
+          const sessionId = sessionIdFromHeaders(requestHeaders);
           return sessionId ? getUserProviderIdForSession(sessionId) : null;
         },
         resolveUserProviderName: (providerId) =>
@@ -1642,6 +1737,17 @@ export function getCodexProxyEndpoint(): string {
  * 这是同步内存 Map 写入,不做 IO / 网络,调用方可以把它当成不可失败的强时序步骤。
  */
 export function registerComposed(sessionId: string, threadId: string, text: string): void {
+  bindThreadToSession(sessionId, threadId);
+  registry.set(threadId, text);
+  log.debug('registered codex prompt for thread', {
+    sessionId,
+    threadId,
+    bytes: Buffer.byteLength(text, 'utf8'),
+    registrySize: registry.size,
+  });
+}
+
+function bindThreadToSession(sessionId: string, threadId: string): void {
   const previousThreadId = sessionToThread.get(sessionId);
   if (previousThreadId && previousThreadId !== threadId) {
     registry.delete(previousThreadId);
@@ -1651,17 +1757,27 @@ export function registerComposed(sessionId: string, threadId: string, text: stri
   const previousSessionId = threadToSession.get(threadId);
   if (previousSessionId && previousSessionId !== sessionId) {
     sessionToThread.delete(previousSessionId);
+    reviewerModelBySession.delete(previousSessionId);
   }
 
   sessionToThread.set(sessionId, threadId);
   threadToSession.set(threadId, sessionId);
-  registry.set(threadId, text);
-  log.debug('registered codex prompt for thread', {
-    sessionId,
-    threadId,
-    bytes: Buffer.byteLength(text, 'utf8'),
-    registrySize: registry.size,
-  });
+}
+
+/**
+ * Register the exact parent-thread/session/model context required to route a
+ * Guardian child request without consulting the shared app-server catalog.
+ */
+export function registerReviewerRouteContext(
+  sessionId: string,
+  threadId: string,
+  model: string,
+): boolean {
+  const normalizedModel = model.trim();
+  if (!sessionId || !threadId || !normalizedModel) return false;
+  bindThreadToSession(sessionId, threadId);
+  reviewerModelBySession.set(sessionId, normalizedModel);
+  return true;
 }
 
 /**
@@ -1674,6 +1790,7 @@ export function unregister(sessionId: string): void {
   sessionToThread.delete(sessionId);
   threadToSession.delete(threadId);
   registry.delete(threadId);
+  reviewerModelBySession.delete(sessionId);
   log.debug('unregistered codex prompt for session', {
     sessionId,
     threadId,
@@ -1702,6 +1819,7 @@ export async function disposeCodexProxy(): Promise<void> {
   }
   sessionToThread.clear();
   threadToSession.clear();
+  reviewerModelBySession.clear();
 
   if (_startPromise) {
     await _startPromise.catch(() => undefined);
