@@ -31,6 +31,18 @@ const settingsViewSource = fs.readFileSync(
   fileURLToPath(new URL('../../components/settings/SettingsView.tsx', import.meta.url)),
   'utf8',
 );
+const pluginLayoutSource = fs.readFileSync(
+  fileURLToPath(new URL('../../features/plugin/PluginManagementLayout.tsx', import.meta.url)),
+  'utf8',
+);
+const pluginPageSource = fs.readFileSync(
+  fileURLToPath(new URL('../../features/plugin/GhostPluginPage.tsx', import.meta.url)),
+  'utf8',
+);
+const schedulerPageSource = fs.readFileSync(
+  fileURLToPath(new URL('../../features/scheduler/SchedulerPage.tsx', import.meta.url)),
+  'utf8',
+);
 const chatInputSource = fs.readFileSync(
   fileURLToPath(new URL('../../components/new-chat/ChatInput.tsx', import.meta.url)),
   'utf8',
@@ -59,6 +71,9 @@ describe('SkinBackdrop stacking contract', () => {
     ).toBeGreaterThanOrEqual(3);
     expect(newMakerSource).toContain('data-cindy-skin-transparent-layer="true"');
     expect(settingsViewSource).toContain('data-cindy-skin-transparent-layer="true"');
+    expect(pluginLayoutSource).toContain('data-cindy-skin-transparent-layer="true"');
+    expect(pluginPageSource).toContain('data-cindy-skin-transparent-layer="true"');
+    expect(schedulerPageSource).toContain('data-cindy-skin-transparent-layer="true"');
     expect(globalsSource).toContain(
       "html[data-skin-active] [data-cindy-skin-transparent-layer='true']",
     );

@@ -38,7 +38,10 @@ export function MarketPluginDetailView({
     busy || detail.installState === 'installed' || detail.installState === 'conflict';
 
   return (
-    <main className="plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]">
+    <main
+      data-cindy-skin-transparent-layer="true"
+      className="plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
+    >
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
         <button
           type="button"

@@ -234,7 +234,7 @@ export function KeyboardShortcutsSection() {
   }, [beginShortcutAction, reportMutationError]);
 
   const iconButtonClass =
-    'inline-flex h-[26px] w-[26px] items-center justify-center rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-chip)] transition-colors';
+    'inline-flex h-[26px] w-[26px] items-center justify-center rounded-md text-[var(--settings-shortcut-action-icon)] hover:text-[var(--settings-shortcut-action-icon-hover)] hover:bg-[var(--settings-shortcut-action-bg-hover)] transition-colors';
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -274,7 +274,7 @@ export function KeyboardShortcutsSection() {
                 <p className="truncate text-13 font-medium text-[var(--text-primary)]">
                   {itemLabel(def)}
                 </p>
-                <p className="truncate text-12 leading-[1.4] text-[var(--text-secondary)]">
+                <p className="truncate text-12 leading-[1.4] text-[var(--settings-shortcut-description)]">
                   {t(def.descriptionKey, { defaultValue: '' })}
                 </p>
               </div>
@@ -291,11 +291,11 @@ export function KeyboardShortcutsSection() {
                   // 字体自带这些符号的正确字形 (与 VoiceInputSection 显示一致)。
                   'border text-12 font-medium',
                   isRecording
-                    ? 'border-[var(--focus-ring)] text-[var(--text-primary)] bg-[var(--surface-chip)]'
-                    : 'border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)]',
+                    ? 'border-[var(--focus-ring)] text-[var(--settings-shortcut-key-text)] bg-[var(--settings-shortcut-key-bg)]'
+                    : 'border-[var(--settings-shortcut-key-border)] bg-[var(--settings-shortcut-key-bg)]',
                   !isRecording && combos.length === 0
-                    ? 'text-[var(--text-tertiary)]'
-                    : 'text-[var(--text-secondary)]',
+                    ? 'text-[var(--settings-shortcut-key-muted-text)]'
+                    : 'text-[var(--settings-shortcut-key-text)]',
                 )}
               >
                 {isRecording
@@ -309,7 +309,7 @@ export function KeyboardShortcutsSection() {
                 <button
                   type="button"
                   onClick={() => setRecordingId(null)}
-                  className="shrink-0 rounded-md px-2 py-1 text-12 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-chip)] transition-colors"
+                  className="shrink-0 rounded-md px-2 py-1 text-12 text-[var(--settings-shortcut-action-icon)] hover:text-[var(--settings-shortcut-action-icon-hover)] hover:bg-[var(--settings-shortcut-action-bg-hover)] transition-colors"
                 >
                   {t('settings.shortcuts.cancel')}
                 </button>

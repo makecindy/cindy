@@ -47,6 +47,7 @@ import {
   resetGhostAppearance,
   saveGhostAppearance,
   saveGhostAppearancePreset,
+  saveGhostAppearanceWithPreset,
 } from '../appearanceStore';
 
 const HASH_A = 'a'.repeat(64);
@@ -144,6 +145,37 @@ describe('appearance preset store', () => {
       name: 'Before',
     });
     expect([...mocks.refs.get(`skin-preset:${preset.id}:background`)!]).toEqual([HASH_A]);
+  });
+
+  it('保存命名皮肤的活动文件失败时恢复旧皮肤归属', async () => {
+    await saveGhostAppearance(
+      { ...appearance('Before'), sourceGhostId: 'other' },
+      { background: HASH_A },
+      'other',
+    );
+    const rename = fs.promises.rename.bind(fs.promises);
+    let renameCount = 0;
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (...args) => {
+      renameCount += 1;
+      if (renameCount === 2) throw new Error('disk full');
+      return rename(...args);
+    });
+
+    await expect(
+      saveGhostAppearanceWithPreset(
+        appearance('After', HASH_B),
+        { background: HASH_B },
+        'skin',
+        { dim: true, surfaceOpacity: true },
+      ),
+    ).rejects.toThrow('disk full');
+
+    expect(await readGhostAppearance()).toMatchObject({
+      name: 'Before',
+      sourceGhostId: 'other',
+    });
+    expect(await listGhostAppearancePresets()).toEqual([]);
+    expect([...mocks.refs.get('skin-background:active')!]).toEqual([HASH_A]);
   });
 
   it('单条损坏的预设只被剔除,不清空整库', async () => {

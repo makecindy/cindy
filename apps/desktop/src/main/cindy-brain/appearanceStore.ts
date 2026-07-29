@@ -493,7 +493,7 @@ export function saveGhostAppearanceWithPreset(
           await saveGhostAppearanceUnsafe(
             previousAppearance,
             hashesFromSnapshot(previousAppearance),
-            undefined,
+            previousAppearance.sourceGhostId,
             { dim: true, surfaceOpacity: true },
           );
         } else {
