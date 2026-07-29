@@ -5613,6 +5613,82 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('keeps the foreign-terminal guard when the retry already activated its turn', async () => {
+      // 上一条守的是"退避中(无活跃 turn)"那个时序。归属校验若还要求 currentTurnId === null,
+      // 则"重投 RPC 在飞 + 它的 turnStarted 已先到"这种状态(活跃 turn 存在、重投仍挂着)整段
+      // 绕过校验 —— 陌生 turn 的迟到终态照样撤销这一轮的重投并把它报成失败, 而它的 turn
+      // 还在跑(review #844 greptile P1)。所以判据只看归属, 不看有没有活跃 turn。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise; // 重投的 RPC 挂住 → inFlight
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-foreign-vs-active-turn',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+        expect(turnStarts).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted || !handlers.turnCompleted) {
+          throw new Error('expected handlers');
+        }
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 容量拒绝 → 排退避 → 到点发出重投, 它的 RPC 挂住(inFlight)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(2);
+
+        // 重投的 turnStarted 先于它的响应到达 → 活跃 turn 存在, 而重投仍算挂着。
+        handlers.turnStarted({ turn: { id: 'turn-retry' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-retry');
+        const before = events.length;
+
+        // 陌生 turn 的迟到失败终态: 既不许替本轮收口, 也不许撤销本轮的重投。
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-foreign', status: 'failed', error: { message: 'boom' } },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(events.slice(before).filter((e) => e.type === 'done')).toHaveLength(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-retry');
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        // 重投的响应随后正常回来, 这一轮照常继续。
+        retryStart.resolve({ turn: { id: 'turn-retry' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-retry');
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not let a foreign late turn/completed settle or cancel a pending retry', async () => {
       // 两条不变量在同一个窗口里打架, 这里钉住正确的那一条。
       //

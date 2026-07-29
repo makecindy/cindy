@@ -4481,18 +4481,23 @@ export class CodexAgent extends BaseAgent {
         flushDeferredTerminalTurnCompletionsIfIdle();
         return;
       }
-      // 收口前的归属校验。currentTurnId 为 null 时本函数会把**任何** turn 的终态当成"收口
-      // 当前这一轮"(既有行为), 而挂起 / 延后的重投恰好活在这个窗口里: 被 Stop 的旧 turn 的
+      // 收口前的归属校验。本函数对**不是当前活跃 turn** 的终态一律按"收口当前这一轮"处理
+      // (既有行为: currentTurnId 为 null 时走 emit done, 非 null 时也照样推 error + done,
+      // 只是不动活跃态), 而挂起 / 延后 / 在飞的重投恰好活在这些窗口里: 被 Stop 的旧 turn 的
       // 迟到 completed 于是既把新一轮报成失败, 又顺手撤销它的重投 —— 那一轮白白丢掉自动
       // 重试, 要用户手动重发(review #844 greptile P1)。
-      // 只在"有重投挂着 + 这个 turn 不属于它那一轮"时按 stale 处理: 只做 bookkeeping,
-      // 不出 UI、不撤销。归属未知(拿不到 origin)同样算不属于 —— 未知的一律不许替它收口。
-      if (overloadRetryPending() && currentTurnId === null) {
+      //
+      // 判据**只看归属, 不看有没有活跃 turn**: 早先版本多要求 currentTurnId === null, 于是
+      // "重投 RPC 在飞 + 它的 turnStarted 已先到"这种状态(活跃 turn 存在且重投仍挂着)整段
+      // 绕过校验, 同一个 bug 换个时序照样成立(review #844 greptile P1)。
+      // 归属未知(拿不到 origin)同样算不属于 —— 未知的一律不许替它收口。
+      if (overloadRetryPending()) {
         const origin = turnOriginByTurnId.get(turn.id);
         if (origin?.sendGen !== overloadRetry?.sendGen) {
           log.info('ignoring a foreign turn terminal state while an overload retry is pending', {
             turnId: turn.id,
             status: turn.status,
+            activeTurnId: currentTurnId,
             turnSendGen: origin?.sendGen ?? null,
             retrySendGen: overloadRetry?.sendGen ?? null,
             threadId,
