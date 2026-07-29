@@ -19,6 +19,8 @@ import {
   isOverloadErrorMessage,
   parseOverloadError,
   parseOverloadRetryProgress,
+  GOAL_OVERLOAD_LAST_REASON,
+  isGoalCapacityBackoff,
 } from '@/utils/overloadError';
 
 describe('isOverloadErrorMessage', () => {
@@ -84,5 +86,22 @@ describe('parseOverloadRetryProgress', () => {
     'foo (auto-retry 5/4)',
   ])('无有效进度后缀时返回 null: %s', (msg) => {
     expect(parseOverloadRetryProgress(msg)).toBeNull();
+  });
+});
+
+describe('isGoalCapacityBackoff', () => {
+  it('过载退避与账号限流分得开(两者共用 usageLimited 状态)', () => {
+    // 状态标签与「恢复时刻」文案都靠这个判定分岔: 账号从没被限流时说「用量受限 /
+    // X 点恢复」是假信息 —— 那个时刻只是"现在 + 60s 后重试"(review #844 codex P1)。
+    expect(isGoalCapacityBackoff('usageLimited', GOAL_OVERLOAD_LAST_REASON)).toBe(true);
+    expect(isGoalCapacityBackoff('usageLimited', 'usage limit reached')).toBe(false);
+    expect(isGoalCapacityBackoff('usageLimited', null)).toBe(false);
+    expect(isGoalCapacityBackoff('usageLimited', undefined)).toBe(false);
+  });
+
+  it('其它状态一律 false, 不受 reason 影响', () => {
+    expect(isGoalCapacityBackoff('active', GOAL_OVERLOAD_LAST_REASON)).toBe(false);
+    expect(isGoalCapacityBackoff('blocked', GOAL_OVERLOAD_LAST_REASON)).toBe(false);
+    expect(isGoalCapacityBackoff(null, GOAL_OVERLOAD_LAST_REASON)).toBe(false);
   });
 });

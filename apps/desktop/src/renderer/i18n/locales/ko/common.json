@@ -7321,7 +7321,8 @@
       "blocked": "차단됨",
       "complete": "완료",
       "budgetLimited": "한도 도달",
-      "usageLimited": "사용량 제한"
+      "usageLimited": "사용량 제한",
+        "capacityLimited": "모델 서비스 혼잡"
     },
     "turns": "{{used}} 턴",
     "turnsWithMax": "{{used}} / {{max}} 턴",
@@ -7344,6 +7345,7 @@
       "failed": "목표 생성 실패"
     },
     "usageLimitedUntil": "{{time}} 재개",
+      "capacityRetryAt": "{{time}}에 다시 시도",
     "usageResumeNotice": "사용량이 회복되어 목표를 재개합니다",
     "capacityRetryNotice": "모델 서비스가 혼잡했습니다. 목표를 다시 시도합니다",
     "complete": {

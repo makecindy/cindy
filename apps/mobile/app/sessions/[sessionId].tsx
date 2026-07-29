@@ -132,7 +132,7 @@ import {
   ContextSheetRow,
 } from '@/session/ContextSheet';
 import { RecentPhotosStrip, ScreenshotsGrid } from '@/session/ContextSheetMediaViews';
-import { ContextSheetGoalView, GOAL_STATUS_LABEL } from '@/session/ContextSheetGoalView';
+import { ContextSheetGoalView, goalStatusLabel } from '@/session/ContextSheetGoalView';
 import { ComposerAttachmentCollapsedBadge, ComposerAttachmentTray } from '@/session/ComposerAttachmentTray';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import { ImageLightbox } from '@/session/ImageLightbox';
@@ -6725,7 +6725,7 @@ export default function SessionScreen() {
                   trailing={goalStatus ? (
                     <>
                       <Text style={{ color: colors.textTertiary, fontSize: typeScale.footnote }}>
-                        {GOAL_STATUS_LABEL[goalStatus.status]}
+                        {goalStatusLabel(goalStatus.status, goalStatus.lastReason)}
                       </Text>
                       <ChevronRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
                     </>

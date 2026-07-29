@@ -46,18 +46,17 @@ function formatTokenPreset(n: number): string {
   return String(n);
 }
 
-/**
- * 状态标签映射。值用 getter 惰性求值(i18n.t 在访问时调用,不冻结语言),
- * 既保留 `GOAL_STATUS_LABEL[status]` 索引用法给外部调用方,又跟随语言切换。
- */
-export const GOAL_STATUS_LABEL: Record<MobileGoalStatus, string> = {
-  get active() { return i18n.t('interaction.contextSheet.goalStatus.active'); },
-  get paused() { return i18n.t('interaction.contextSheet.goalStatus.paused'); },
-  get blocked() { return i18n.t('interaction.contextSheet.goalStatus.blocked'); },
-  get complete() { return i18n.t('interaction.contextSheet.goalStatus.complete'); },
-  get budgetLimited() { return i18n.t('interaction.contextSheet.goalStatus.budgetLimited'); },
-  get usageLimited() { return i18n.t('interaction.contextSheet.goalStatus.usageLimited'); },
-};
+// 状态标签映射与 reason 文案的纯逻辑住在 goalStatusLabel.ts(组件文件会拉进
+// react-native, 单测跑不起来; 那边有完整注释与用例)。这里 re-export 保持既有 import
+// 路径可用 —— 渲染一律走 goalStatusLabel(status, lastReason), 不按状态直取映射表:
+// 过载退避与账号限流共用 usageLimited, 直取会重新显示成「用量受限」(review #844)。
+export {
+  GOAL_STATUS_LABEL,
+  goalReasonText,
+  goalStatusLabel,
+} from '@/session/goalStatusLabel';
+
+import { goalReasonText, goalStatusLabel } from '@/session/goalStatusLabel';
 
 export interface ContextSheetGoalViewProps {
   /** undefined = 状态尚未拉取(unknown);此时仍渲染新建表单,覆盖保护在提交端补查。 */
@@ -254,7 +253,7 @@ function GoalStatusView({
       <View style={styles.statusHeader}>
         <View style={[styles.statusChip, goal.status === 'active' && styles.statusChipActive]}>
           <Text style={[styles.statusChipText, goal.status === 'active' && styles.statusChipTextActive]}>
-            {GOAL_STATUS_LABEL[goal.status]}
+            {goalStatusLabel(goal.status, goal.lastReason)}
           </Text>
         </View>
         <Text style={styles.statusMeta}>
@@ -262,7 +261,9 @@ function GoalStatusView({
         </Text>
       </View>
       <Text style={styles.objectiveText} testID="contextSheet.goalObjectiveText">{goal.objective}</Text>
-      {goal.lastReason ? <Text style={styles.hintText}>{goal.lastReason}</Text> : null}
+      {goalReasonText(goal.lastReason) ? (
+        <Text style={styles.hintText}>{goalReasonText(goal.lastReason)}</Text>
+      ) : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
       <View style={styles.actionRow}>
         {canPause ? (

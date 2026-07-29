@@ -61,3 +61,28 @@ export function parseOverloadRetryProgress(
   }
   return { attempt, maxAttempts };
 }
+
+/**
+ * goal-host 在「上游过载」时写进 GoalState.lastReason 的判据串。
+ *
+ * 过载与账号限流共用 `usageLimited` 状态(可恢复 + 到点自动续跑), 所以状态本身分不出
+ * 两者 —— 状态标签要说对话就得看这个 reason。判据来源是 main 侧的
+ * goal-host/usageLimit.ts:OVERLOAD_LAST_REASON; renderer 不得 import main
+ * (architecture-invariants), 因此在这里镜像一份常量, 与本文件其它谓词同规。
+ * 两侧改动必须同步。
+ */
+export const GOAL_OVERLOAD_LAST_REASON = 'model service at capacity';
+
+/**
+ * 目标是否正处于「上游过载退避」而非账号限流。
+ *
+ * 两者共用 `usageLimited` 状态, 所以状态标签、恢复时刻文案都必须靠这个判定分岔:
+ * 账号从没被限流时说「用量受限 / X 点恢复」是假信息 —— 那个时刻只是"现在 + 60s 后
+ * 重试", 不是任何额度重置点(review #844 codex P1)。
+ */
+export function isGoalCapacityBackoff(
+  status: string | null | undefined,
+  lastReason: string | null | undefined,
+): boolean {
+  return status === 'usageLimited' && lastReason === GOAL_OVERLOAD_LAST_REASON;
+}

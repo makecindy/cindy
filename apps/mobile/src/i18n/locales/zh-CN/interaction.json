@@ -153,7 +153,8 @@
       "blocked": "待处理",
       "complete": "已完成",
       "budgetLimited": "已达上限",
-      "usageLimited": "用量受限"
+      "usageLimited": "用量受限",
+      "capacityLimited": "模型服务繁忙"
     },
     "goalLabel": "目标",
     "goalObjectiveAccessibility": "目标内容",
@@ -165,6 +166,7 @@
     "noProgressLimit": "无进展上限",
     "startGoal": "开始目标",
     "goalMeta": "{{turns}} 轮 · {{tokens}} token",
+    "goalCapacityHint": "上游暂时没有可用容量，到点会自动重试",
     "pause": "暂停",
     "resume": "继续",
     "clearGoal": "终止目标",
