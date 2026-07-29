@@ -105,6 +105,27 @@ export function sanitizeExportFileNamePart(name: string): string {
   return cleaned;
 }
 
+/**
+ * 按 UTF-8 字节数截断(评审 P1):文件系统按字节卡 255,按 UTF-16 码元
+ * slice 管不住多字节字符(64 个中文名 + 32 个中文版本号会超)。
+ * 按码点累加,不在多字节字符中间切断。
+ */
+function capToByteLength(s: string, maxBytes: number): string {
+  if (Buffer.byteLength(s, 'utf8') <= maxBytes) return s;
+  let out = '';
+  let bytes = 0;
+  for (const ch of s) {
+    const b = Buffer.byteLength(ch, 'utf8');
+    if (bytes + b > maxBytes) break;
+    out += ch;
+    bytes += b;
+  }
+  return out;
+}
+
+/** 完整文件名(不含扩展名)的字节上限:255 分量上限 - '.cindy'。 */
+const MAX_EXPORT_BASENAME_BYTES = 249;
+
 /** 导出包的一个条目。 */
 interface PackageEntry {
   rel: string;
@@ -210,30 +231,46 @@ function sha256hex(data: Buffer): string {
  * 判定锚定在字节上,路径/尺寸/mtime 相同的并发替换也会哈希不符被捕获。
  * symlink/junction 不跟随:只归档安装目录自身的真实内容。结果按 rel
  * 排序供逐位比对。
- * budget(仅第一遍):边遍历边扣条目/字节额度,超限抛 ExportTooLargeError
- * 立刻中止——不把超限目录完整读进内存。
+ * 空目录(子树内不含保留文件)与文件一起记录、一起进两遍比对——目录
+ * 结构也在一致性信封内(评审 P1:文件快照后才收集目录会把新版目录
+ * 结构与旧版文件混装)。budget(仅第一遍):文件与目录都计条目并扣
+ * 字节额度,超限抛 ExportTooLargeError 立刻中止——海量空目录或超大
+ * 内容都不会被完整读进内存。
  */
+interface TreePass<T> {
+  items: T[];
+  emptyDirs: string[];
+}
+
 async function walkTree(
   dir: string,
   withData: true,
   budget: { entriesLeft: number; bytesLeft: number },
-): Promise<TreeFile[]>;
-async function walkTree(dir: string, withData: false): Promise<TreeMeta[]>;
+): Promise<TreePass<TreeFile>>;
+async function walkTree(dir: string, withData: false): Promise<TreePass<TreeMeta>>;
 async function walkTree(
   dir: string,
   withData: boolean,
   budget?: { entriesLeft: number; bytesLeft: number },
-): Promise<Array<TreeFile | TreeMeta>> {
-  const out: Array<TreeFile | TreeMeta> = [];
-  const walk = async (cur: string, relBase: string): Promise<void> => {
+): Promise<TreePass<TreeFile | TreeMeta>> {
+  const items: Array<TreeFile | TreeMeta> = [];
+  const emptyDirs: string[] = [];
+  const walk = async (cur: string, relBase: string): Promise<boolean> => {
     const entries = await fs.promises.readdir(cur, { withFileTypes: true });
+    let hasContent = false;
     for (const entry of entries) {
       if (shouldSkipExportEntry(entry.name, relBase)) continue;
       if (entry.isSymbolicLink()) continue;
       const abs = path.join(cur, entry.name);
       const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        await walk(abs, rel);
+        if (withData && budget) {
+          budget.entriesLeft -= 1;
+          if (budget.entriesLeft < 0) throw new ExportTooLargeError();
+        }
+        const subHas = await walk(abs, rel);
+        if (!subHas) emptyDirs.push(rel);
+        hasContent = hasContent || subHas;
       } else if (entry.isFile()) {
         const data = await fs.promises.readFile(abs);
         if (withData) {
@@ -242,34 +279,45 @@ async function walkTree(
           if (budget!.entriesLeft < 0 || budget!.bytesLeft < 0) {
             throw new ExportTooLargeError();
           }
-          out.push({ rel, data, sha256: sha256hex(data) });
+          items.push({ rel, data, sha256: sha256hex(data) });
         } else {
-          out.push({ rel, sha256: sha256hex(data) });
+          items.push({ rel, sha256: sha256hex(data) });
         }
+        hasContent = true;
       }
     }
+    return hasContent;
   };
   await walk(dir, '');
-  out.sort((a, b) => a.rel.localeCompare(b.rel));
-  return out;
+  items.sort((a, b) => a.rel.localeCompare(b.rel));
+  emptyDirs.sort();
+  return { items, emptyDirs };
 }
 
 /**
  * 未签名包的一致性快照:更新会整体换目录、卸载会删目录,单遍逐文件读
- * 可能跨越两个文件系统状态。读完后第二遍重读重哈希——任何文件在读窗口
- * 内被增删改都会哈希不符或条目错位;通过校验的包逐字节等于校验遍时刻
- * 的单一目录状态。
+ * 可能跨越两个文件系统状态。读完后第二遍重读重哈希——任何文件或目录
+ * 在读窗口内被增删改都会哈希不符或条目错位;通过校验的包(文件+空
+ * 目录)等于校验遍时刻的单一目录状态。
  */
 async function snapshotUnsignedTree(
   dir: string,
   budget: { entriesLeft: number; bytesLeft: number },
-): Promise<TreeFile[] | null> {
+): Promise<{ files: TreeFile[]; emptyDirs: string[] } | null> {
   const first = await walkTree(dir, true, budget);
   const verify = await walkTree(dir, false);
-  const consistent =
-    first.length === verify.length &&
-    first.every((file, i) => file.rel === verify[i]!.rel && file.sha256 === verify[i]!.sha256);
-  return consistent ? first : null;
+  const filesConsistent =
+    first.items.length === verify.items.length &&
+    first.items.every(
+      (file, i) =>
+        file.rel === verify.items[i]!.rel && file.sha256 === verify.items[i]!.sha256,
+    );
+  const dirsConsistent =
+    first.emptyDirs.length === verify.emptyDirs.length &&
+    first.emptyDirs.every((rel, i) => rel === verify.emptyDirs[i]);
+  return filesConsistent && dirsConsistent
+    ? { files: first.items, emptyDirs: first.emptyDirs }
+    : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -308,10 +356,14 @@ interface PackageSnapshot {
 
 /**
  * 递归收集空目录(子树内没有计入包内容的文件)。keep 判定文件是否计入
- * 包内容:未签名包为全部保留文件(跳过口径已在遍历内应用),签名包为
- * statement 成员。symlink 不跟随,与 walkTree 同口径。
+ * 包内容:签名包为 statement 成员。symlink 不跟随,与 walkTree 同口径。
+ * 数量超 maxEntries 抛 ExportTooLargeError(海量空目录同样进预算)。
  */
-async function collectEmptyDirs(dir: string, keep: (rel: string) => boolean): Promise<string[]> {
+async function collectEmptyDirs(
+  dir: string,
+  keep: (rel: string) => boolean,
+  maxEntries: number,
+): Promise<string[]> {
   const empty: string[] = [];
   const walk = async (cur: string, relBase: string): Promise<boolean> => {
     const entries = await fs.promises.readdir(cur, { withFileTypes: true });
@@ -323,7 +375,10 @@ async function collectEmptyDirs(dir: string, keep: (rel: string) => boolean): Pr
       const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         const subHas = await walk(abs, rel);
-        if (!subHas) empty.push(rel);
+        if (!subHas) {
+          empty.push(rel);
+          if (empty.length > maxEntries) throw new ExportTooLargeError();
+        }
         hasContent = hasContent || subHas;
       } else if (entry.isFile()) {
         if (keep(rel)) hasContent = true;
@@ -351,7 +406,16 @@ async function snapshotPackage(
         const entries = await readSignedEntries(dir, doc);
         if (entries) {
           const covered = new Set(doc.files.map((file) => file.path));
-          const emptyDirs = await collectEmptyDirs(dir, (rel) => covered.has(rel));
+          const emptyDirs = await collectEmptyDirs(
+            dir,
+            (rel) => covered.has(rel),
+            limits.maxEntries,
+          );
+          // 目录结构信封(评审 P1):空目录收集发生在文件哈希校验之后,
+          // 期间目录被换掉会把新版空目录与旧版文件混装——重读签名文件
+          // 比对字节,变了说明整个读窗口跨了版本,整体重试。
+          const sigAgain = await fs.promises.readFile(path.join(dir, GHOST_SIGNATURE_FILE));
+          if (!sigAgain.equals(doc.raw)) continue;
           return { entries, emptyDirs };
         }
       } else {
@@ -361,10 +425,9 @@ async function snapshotPackage(
         };
         const tree = await snapshotUnsignedTree(dir, budget);
         if (tree) {
-          const emptyDirs = await collectEmptyDirs(dir, () => true);
           return {
-            entries: tree.map(({ rel, data }) => ({ rel, data })),
-            emptyDirs,
+            entries: tree.files.map(({ rel, data }) => ({ rel, data })),
+            emptyDirs: tree.emptyDirs,
           };
         }
       }
@@ -429,11 +492,14 @@ export async function exportGhostPackage(
 
   const baseName = sanitizeExportFileNamePart(ghost.manifest.name) || ghost.manifest.id;
   // 版本同样来自作者清单,可能与名字一样含路径分隔符/控制字符,
-  // 必须走同一道清洗再拼进默认文件名。
+  // 必须走同一道清洗再拼进默认文件名。组合后按 UTF-8 字节数截断——
+  // 文件系统按字节卡 255,多字节字符按码元 slice 管不住。
   const versionPart = sanitizeExportFileNamePart(ghost.manifest.version);
-  const defaultFileName = versionPart
-    ? `${baseName}-${versionPart}.cindy`
-    : `${baseName}.cindy`;
+  const baseComposed = capToByteLength(
+    versionPart ? `${baseName}-${versionPart}` : baseName,
+    MAX_EXPORT_BASENAME_BYTES,
+  );
+  const defaultFileName = `${baseComposed}.cindy`;
 
   let picked: { canceled: boolean; filePath?: string };
   try {

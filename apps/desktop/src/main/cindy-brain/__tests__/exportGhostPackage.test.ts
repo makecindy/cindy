@@ -352,6 +352,28 @@ describe('exportGhostPackage', () => {
     expect(names).toEqual(['ghost.json', 'locales/en.json', 'main.js']);
   });
 
+  it('多字节名称组合后按 UTF-8 字节截断,不超 255 分量上限', async () => {
+    // 64 个中文字符的名 + 32 个中文字符的版本:按码元各截 80 也仍有
+    // 96 码元 × 3 字节 + '.cindy' > 255 字节,Linux 上会 ENAMETOOLONG。
+    const ghost = makeGhost();
+    ghost.manifest = {
+      ...ghost.manifest,
+      name: '插'.repeat(64),
+      version: '版'.repeat(32),
+    };
+    const showSaveDialog = vi.fn(
+      async (_opts: { defaultPath: string }) => ({ canceled: true as const }),
+    );
+    await exportGhostPackage('hello', makeDeps({
+      listInstalled: () => [ghost],
+      showSaveDialog,
+    }));
+    const defaultPath = showSaveDialog.mock.calls[0]?.[0].defaultPath ?? '';
+    const base = path.basename(defaultPath);
+    expect(Buffer.byteLength(base, 'utf8')).toBeLessThanOrEqual(255);
+    expect(base.endsWith('.cindy')).toBe(true);
+  });
+
   it('版本号含路径分隔符时清洗后再拼默认文件名', async () => {
     const ghost = makeGhost();
     ghost.manifest = { ...ghost.manifest, version: '1/../../etc' };
