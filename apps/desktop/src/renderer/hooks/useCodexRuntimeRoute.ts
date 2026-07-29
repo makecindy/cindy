@@ -62,15 +62,18 @@ export function useCodexRuntimeRoute(options?: { enabled?: boolean; refreshKey?:
     let cancelled = false;
     const off = window.electronAPI.maker.auth.onStateChanged((payload) => {
       if (payload.agentKind !== 'codex') return;
+      // 以**发起时**的 key 为准:重查在途期间 refreshKey 变化(切会话)时,
+      // 新 key 的常规 fetch 可能先落地,旧重查的结果不得回写覆盖——settle 时
+      // key 已不匹配则整体丢弃(PR review P1)。
+      const myKey = refreshKeyRef.current;
       window.electronAPI.maker
         .codexRuntimeRouteGet()
         .then((next) => {
-          if (!cancelled) {
-            setRoute(next);
-            // 这是首查失败后的恢复路径:拿到权威真值同样要标记已解析,
-            // 否则计费门控会永久停留在「形态未定」(PR review P1)。
-            setResolution({ key: refreshKeyRef.current });
-          }
+          if (cancelled || !Object.is(myKey, refreshKeyRef.current)) return;
+          setRoute(next);
+          // 这是首查失败后的恢复路径:拿到权威真值同样要标记已解析,
+          // 否则计费门控会永久停留在「形态未定」(PR review P1)。
+          setResolution({ key: myKey });
         })
         .catch(() => {
           /* keep current route */

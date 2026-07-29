@@ -3335,6 +3335,7 @@ export function CCAgentSessionView({
                       ? handleSwitchToClaudeSubscription
                       : undefined
                   }
+                  sessionId={sessionId}
                   silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                   onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                   forkStripEncryptedRunning={forkStripEncryptedRunning}

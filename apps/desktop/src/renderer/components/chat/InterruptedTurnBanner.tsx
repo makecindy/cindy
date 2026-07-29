@@ -122,6 +122,7 @@ export function ErrorTailErrorBanner({
   forkStripEncryptedRunning,
   errorReason,
   onSilentStopContinue,
+  sessionId,
   className,
   style,
 }: {
@@ -136,6 +137,8 @@ export function ErrorTailErrorBanner({
   modelId?: string;
   providerId?: string | null;
   onSwitchToClaudeSubscription?: () => Promise<void>;
+  /** 当前 session id:透传给 ErrorBanner 的点数耗尽引导(cc 默认路由需读会话计费路由)。 */
+  sessionId?: string;
   silentEncryptedRetryEnabled?: boolean;
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;

@@ -104,6 +104,40 @@ describe('useCodexRuntimeRoute resolved flag', () => {
     expect(result.current.authInjection).toBe('oauth-bearer');
   });
 
+  it('discards an auth-triggered refresh that was superseded by a refreshKey change', async () => {
+    // 旧 key 发起的 auth 重查在途时切会话:新 key 的常规 fetch 先落地后,
+    // 旧重查结果不得回写覆盖(以发起时的 key 为准)。
+    const { result, rerender } = renderHook(
+      ({ key }: { key: string }) => useCodexRuntimeRoute({ refreshKey: key }),
+      { initialProps: { key: 's1' } },
+    );
+    await act(async () => {
+      pending[0].resolve({ authInjection: 'env-key' });
+      await pending[0].promise;
+    });
+    await waitFor(() => expect(result.current.resolved).toBe(true));
+
+    // s1 在途的 auth 重查(pending[1]),随后切到 s2(pending[2])
+    act(() => {
+      authListeners.forEach((cb) => cb({ agentKind: 'codex' }));
+    });
+    rerender({ key: 's2' });
+    await act(async () => {
+      pending[2].resolve({ authInjection: 'oauth-bearer' });
+      await pending[2].promise;
+    });
+    await waitFor(() => expect(result.current.resolved).toBe(true));
+    expect(result.current.authInjection).toBe('oauth-bearer');
+
+    // 旧重查此时才落地:必须被丢弃,s2 的真值不被 env-key 覆盖。
+    await act(async () => {
+      pending[1].resolve({ authInjection: 'env-key' });
+      await pending[1].promise;
+    });
+    expect(result.current.authInjection).toBe('oauth-bearer');
+    expect(result.current.resolved).toBe(true);
+  });
+
   it('resets to unresolved while disabled', async () => {
     const { result, rerender } = renderHook(
       ({ enabled }: { enabled: boolean }) => useCodexRuntimeRoute({ enabled }),
