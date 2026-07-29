@@ -163,12 +163,14 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 function TextInput({
   value,
   onChange,
+  onBlur,
   placeholder,
   type = 'text',
   trailing,
 }: {
   value: string;
   onChange: (v: string) => void;
+  onBlur?: () => void;
   placeholder?: string;
   type?: string;
   trailing?: React.ReactNode;
@@ -179,6 +181,7 @@ function TextInput({
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
         placeholder={placeholder}
         className={cn(
           'h-[40px] w-full rounded-[10px] pl-[12px] text-14 outline-none transition-colors',
@@ -335,6 +338,11 @@ export function CustomProviderDialog({
   });
   // OAuth 模式下模型 / 请求头收进默认折叠的「高级配置」——模型授权后自动发现,普通用户无需碰。
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // 上下文窗口输入的行级草稿:受控输入若只回显已提交值,逐字符键入 `1,` 这类
+  // 合法中间态会被整体校验拒绝后回滚,声明支持的分组格式只能粘贴、无法键入
+  // (review P1)。草稿承载显示文本;合法完整值仍即时提交,失焦丢弃未提交
+  // 草稿回落已提交值。key = `agent:行号`,行增删后索引漂移,统一清空。
+  const [windowDrafts, setWindowDrafts] = useState<Record<string, string>>({});
   // 预设模板（仅新建态展示；目录 presets 段，随 OSS 热更）。
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
@@ -1235,8 +1243,19 @@ export function CustomProviderDialog({
                             拒绝本次变更(保持原值)——绝不剥字符再拼数字,-5 / 1e6 /
                             262144.9 这类输入不得被静默纠正成另一个合法值(review P1)。 */}
                         <TextInput
-                          value={m.contextWindow != null ? String(m.contextWindow) : ''}
-                          onChange={(v) =>
+                          value={
+                            windowDrafts[`${activeTab}:${i}`]
+                            ?? (m.contextWindow != null ? String(m.contextWindow) : '')
+                          }
+                          onBlur={() =>
+                            setWindowDrafts((drafts) => {
+                              if (!(`${activeTab}:${i}` in drafts)) return drafts;
+                              const { [`${activeTab}:${i}`]: _drop, ...rest } = drafts;
+                              return rest;
+                            })
+                          }
+                          onChange={(v) => {
+                            setWindowDrafts((drafts) => ({ ...drafts, [`${activeTab}:${i}`]: v }));
                             patch(activeTab, (x) => ({
                               ...x,
                               models: x.models.map((y, j) => {
@@ -1259,8 +1278,8 @@ export function CustomProviderDialog({
                                 }
                                 return { ...y, contextWindow: Number(parsed) };
                               }),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder={t(
                             'settings.providers.custom.fields.modelContextWindowPlaceholder',
                           )}
@@ -1268,12 +1287,13 @@ export function CustomProviderDialog({
                       </div>
                       <button
                         type="button"
-                        onClick={() =>
+                        onClick={() => {
+                          setWindowDrafts({});
                           patch(activeTab, (x) => ({
                             ...x,
                             models: x.models.filter((_, j) => j !== i),
-                          }))
-                        }
+                          }));
+                        }}
                         className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
                         aria-label={t('settings.providers.custom.fields.removeRow')}
                       >
@@ -1283,12 +1303,13 @@ export function CustomProviderDialog({
                   ))}
                   <button
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
+                      setWindowDrafts({});
                       patch(activeTab, (x) => ({
                         ...x,
                         models: [...x.models, { id: '', name: '' }],
-                      }))
-                    }
+                      }));
+                    }}
                     className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
                   >
                     <Plus size={14} className="text-[var(--settings-section-desc)]" />
