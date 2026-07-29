@@ -4574,6 +4574,17 @@ export class CodexAgent extends BaseAgent {
       if (!turnId) return;
       entry.quarantined = false;
       terminalErroredTurnIds.add(turnId);
+      // 这个 turn 的事件可能正躺在缓冲队列里(孤儿守卫武装期间 item / tool 都会被缓冲, 而
+      // 缓冲**只**表示我们还没渲染 —— daemon 那边命令早就跑了)。此时产出标记从未被置上,
+      // 于是补排会照常重放同一条输入, 副作用执行两遍。按"有缓冲事件即有产出"处理
+      // (review #844 codex P1)。
+      if ((bufferedTurnEventQueues.get(turnId)?.length ?? 0) > 0) {
+        currentTurnProducedOutput = true;
+        log.info('codex adopted turn had buffered events — treating as produced output', {
+          turnId,
+          threadId,
+        });
+      }
       // server 侧这个 turn 可能真的在跑(Stop / 撤单那条来源就是), 落墓碑只挡事件、
       // 不停执行 —— 必须补一次 best-effort interrupt。容量拒绝那条来源里它本就已死,
       // interrupt 是无害的空操作。
@@ -4748,6 +4759,18 @@ export class CodexAgent extends BaseAgent {
     ): { attempt: number; maxAttempts: number } | null => {
       const state = overloadRetry;
       if (!state || closed) return null;
+      // 空 id 的容量拒绝**无法归属**到具体请求(协议里它既不带 turnId 也不带请求关联)。
+      // 只有一个 start 在飞时可以安全地认定就是它; 有两个及以上时(Stop 留下的旧 RPC 仍在飞、
+      // 下一轮 send 又已发出)猜错的代价是: 隔离到错的那一个 → 把**已经在 server 上跑过工具**
+      // 的新 turn 落墓碑并重放它的输入 → 副作用执行两遍(review #844 codex P1)。
+      // 这里选择不接管: 代价只是这一轮要用户自己再发一次, 而错误的一侧是重复副作用。
+      if (!deadTurnId && inFlightStarts.size > 1) {
+        log.warn('codex id-less capacity failure not attributable — declining takeover', {
+          inFlightStarts: inFlightStarts.size,
+          threadId,
+        });
+        return null;
+      }
       // 本 turn 已产出内容 → 重放会让模型重做已完成的工作（甚至重复副作用），
       // 交回用户决定是否继续，不自动重投。
       //

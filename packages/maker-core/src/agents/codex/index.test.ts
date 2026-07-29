@@ -4840,84 +4840,12 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
-    it('does not settle twice when two stopped sends both have pending start RPCs', async () => {
-      // "已由取消收口"若记在一个标量上, 后一次 Stop 会把前一次覆盖掉 —— 先那次的 reject
-      // 于是又推一组终态, 而事件里不带 send 世代, 下游可能把这份过期收口套到后一个 turn 上
-      // (review #844 codex P1)。标记挂在 per-request 条目上就不会互相覆盖。
-      vi.useFakeTimers();
-      try {
-        const agent = new CodexAgent(createDeps());
-        const firstStart = deferred<{ turn: { id: string } }>();
-        const secondStart = deferred<{ turn: { id: string } }>();
-        let turnStarts = 0;
-        const host = installFakeHost(agent, (method) => {
-          if (method === Method.TurnStart) {
-            turnStarts += 1;
-            if (turnStarts === 1) return firstStart.promise;
-            if (turnStarts === 2) return secondStart.promise;
-            return { turn: { id: `turn-${turnStarts}` } };
-          }
-          if (method === Method.TurnInterrupt) return {};
-          return undefined;
-        });
-        const handle = await agent.startSession({
-          sessionId: 'session-overload-two-stopped-sends',
-          model: 'gpt-5.4',
-          workingDir: '/repo',
-        });
-        const handlers0 = host.getThreadHandlers();
-        if (!handlers0?.error) throw new Error('expected error handler');
-
-        const events: AgentEvent[] = [];
-        void (async () => {
-          for await (const event of handle.events()) events.push(event);
-        })();
-
-        const stopOnePendingSend = async (send: Promise<unknown>): Promise<void> => {
-          // 空 id 容量拒绝(RPC 仍在飞)→ 让这一轮进入"有挂起重投"的状态, Stop 才会推终态。
-          handlers0.error?.({
-            threadId: 'start-thread-id',
-            turnId: '',
-            willRetry: false,
-            error: { message: CAPACITY_MESSAGE },
-          } as never);
-          await vi.advanceTimersByTimeAsync(0);
-          await handle.abort?.();
-          await vi.advanceTimersByTimeAsync(0);
-          void send;
-        };
-
-        const firstSend = handle.send({ type: 'user', content: 'first' });
-        await vi.advanceTimersByTimeAsync(0);
-        await stopOnePendingSend(firstSend);
-
-        const secondSend = handle.send({ type: 'user', content: 'second' });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(turnStarts).toBe(2);
-        await stopOnePendingSend(secondSend);
-
-        // 两轮各自被 Stop → 恰好两条终态。
-        const afterStops = events.filter(
-          (e) => e.type === 'error' && e.data?.isTerminal === true,
-        ).length;
-        expect(afterStops).toBe(2);
-
-        // 两个 RPC 现在才失败: 都不得再推第三、第四条终态。
-        firstStart.reject(new Error('turn/start timed out'));
-        secondStart.reject(new Error('turn/start timed out'));
-        await firstSend.catch(() => undefined);
-        await secondSend.catch(() => undefined);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(
-          events.filter((e) => e.type === 'error' && e.data?.isTerminal === true),
-        ).toHaveLength(2);
-
-        await handle.close();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
+    // 注: 曾有一条 'does not settle twice when two stopped sends both have pending start
+    // RPCs' 的用例, 覆盖"两轮 send 各自被 Stop 且两个 RPC 都在飞时, 后一次 Stop 覆盖前一次
+    // 的收口标记"。第二十五轮把"空 id 容量拒绝在无法归属时不接管"落地后, 那个场景不再可达:
+    // 第一轮的 RPC 还在飞时, 第二轮拿不到挂起重投, Stop 也就不会为它推终态。per-request 的
+    // 收口标记(inFlightStarts[*].terminalSettled)本身仍由下面那条单轮用例把住; 与其把用例
+    // 拧成一个够不着的形状, 不如把这段来历记在这里。
     it('does not discard the next send retry state when the stopped send fails', async () => {
       // Stop 之后下一轮 send 可能已经装上了自己的 overloadRetry。旧 send 的失败尾巴若无条件
       // discardOverloadRetry, 会把它连同它记账的延后失败一起清掉 —— 那一轮既不重投也不收口
@@ -5159,11 +5087,13 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
-    it('quarantines both starts when the second one also hits an id-less capacity failure', async () => {
-      // Stop 之后旧 RPC 仍在飞, 新 send 又被放行 —— 此时**两个** start 都需要隔离:
-      // 旧的因为已被 Stop, 新的因为自己也撞了空 id 容量拒绝。用单个标量记"哪一次要隔离"
-      // 时后者会覆盖前者, 被 Stop 的旧 turn 于是逃过隔离、在响应回来时被正常激活并继续跑
-      // 工具(review #844 codex P1)。
+    it('keeps the stopped start quarantined and lets the new turn live when an id-less failure is unattributable', async () => {
+      // Stop 之后旧 RPC 仍在飞, 新 send 又被放行, 此时又来一条**空 id** 容量拒绝 ——
+      // 它既不带 turnId 也不带请求关联, 无法归属。两条不变量:
+      //  1. 被 Stop 的旧 start 必须**保持**隔离(不得被这条新错误的记账覆盖掉);
+      //  2. 不猜它属于谁 —— 猜错就会把已经在 server 上跑过工具的新 turn 落墓碑并重放,
+      //     副作用执行两遍。所以这一条不接管, 新 turn 照常活着。
+      // (两条都是 review #844 codex P1; 第 2 条推翻了本用例最初"两个都隔离"的写法。)
       vi.useFakeTimers();
       try {
         const agent = new CodexAgent(createDeps());
@@ -5206,7 +5136,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(turnStarts).toBe(2);
 
-        // 新 start 自己也撞空 id 容量拒绝 → 它也要被隔离(旧的那份不得被覆盖)。
+        // 又来一条空 id 容量拒绝: 两个 start 在飞 → 无法归属 → 不接管。
         handlers.error({
           threadId: 'start-thread-id',
           turnId: '',
@@ -5215,23 +5145,29 @@ describe('CodexAgent MCP thread context hooks', () => {
         });
         await vi.advanceTimersByTimeAsync(0);
 
-        // 两个响应先后回来: 都不得激活, 都要被 interrupt。
         firstStart.resolve({ turn: { id: 'turn-stopped' } });
         secondStart.resolve({ turn: { id: 'turn-second' } });
         await firstSend.catch(() => undefined);
         await secondSend.catch(() => undefined);
         await vi.advanceTimersByTimeAsync(0);
 
-        expect(handle.getCurrentTurnId?.()).toBeNull();
-        for (const turnId of ['turn-stopped', 'turn-second']) {
-          expect(
-            host.request.mock.calls.some(
-              ([method, params]) =>
-                method === Method.TurnInterrupt &&
-                (params as { turnId?: string }).turnId === turnId,
-            ),
-          ).toBe(true);
-        }
+        // 旧的(被 Stop 那次)仍然被隔离: 不激活 + interrupt。
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-stopped',
+          ),
+        ).toBe(true);
+        // 新的活下来, 且没有被误 interrupt —— 不猜归属的收益就在这里。
+        expect(handle.getCurrentTurnId?.()).toBe('turn-second');
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-second',
+          ),
+        ).toBe(false);
 
         await handle.close();
       } finally {
