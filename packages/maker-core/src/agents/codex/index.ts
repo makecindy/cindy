@@ -4695,6 +4695,11 @@ export class CodexAgent extends BaseAgent {
           // 重投本身失败（含容量再次不足）：转终止错误交回用户，不在这里递归重排——
           // 递归会绕过预算上限，容量故障期把额度烧光。
           log.error('codex overload retry failed', { attempt, error: String(error), threadId });
+          // 与原始 turn/start 失败同款隔离：这次 RPC 可能已被 server 接受, 只是响应没
+          // 回来。不隔离的话, 先于 reject 到达的 turnStarted 会让 isTurnRunning() 在
+          // UI 收口后永真, 晚到的那种则会把一个没人消费的 turn 激活并执行工具
+          // (review #844 codex P1)。
+          quarantineTurnsAfterStartFailure('overload retry turn/start failed');
           eventQueue.push({
             type: 'error',
             data: { message: `turn/start retry failed: ${String(error)}`, isTerminal: true },
@@ -4708,6 +4713,54 @@ export class CodexAgent extends BaseAgent {
         });
       }, delayMs);
       return { attempt, maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS };
+    };
+
+    /**
+     * turn/start RPC 级失败(超时 / 拒绝)后的孤儿隔离。
+     *
+     * RPC 失败**不代表** server 没建 turn —— daemon 可能已经接受了 turn/start, 只是
+     * 响应没回来。所以必须三件事一起做: 立孤儿守卫(之后迟到的 turnStarted 不得重新
+     * 激活会话)、把可能已被 started-before-resp 激活的活跃 turn 收掉(墓碑 + 清状态 +
+     * best-effort interrupt)、把缓冲的歧义 started 坐实成孤儿。
+     *
+     * 过载重投的 RPC 失败走同一套: 只推 terminal error + Done 的话, 迟到的
+     * turnStarted 会在 UI 已收口之后把一个没人消费的 turn 激活并执行工具; 而先于
+     * reject 到达的那种则会让 isTurnRunning() 永真, 下一条 send 被并发守卫挡死
+     * (review #844 codex P1)。
+     */
+    const quarantineTurnsAfterStartFailure = (reason: string): void => {
+      turnStartFailedWithoutTurnId = true;
+      if (currentTurnId) {
+        const orphanTurnId = currentTurnId;
+        terminalErroredTurnIds.add(orphanTurnId);
+        if (threadId) {
+          host.request(Method.TurnInterrupt, { threadId, turnId: orphanTurnId }).catch((e2: unknown) => {
+            log.warn('turn/start-failure orphan interrupt failed (best-effort)', {
+              reason,
+              turnId: orphanTurnId,
+              error: e2 instanceof Error ? e2.message : String(e2),
+            });
+          });
+        }
+        currentTurnId = null;
+        isTurnInFlight = false;
+        currentTurnPlanModeActive = false;
+      }
+      for (const bufferedId of bufferedOrphanTurnIds) {
+        terminalErroredTurnIds.add(bufferedId);
+        settleBufferedTurnReconcile(bufferedId, false);
+        if (threadId) {
+          host.request(Method.TurnInterrupt, { threadId, turnId: bufferedId }).catch((e2: unknown) => {
+            log.warn('buffered orphan turn interrupt failed (best-effort)', {
+              reason,
+              turnId: bufferedId,
+              error: e2 instanceof Error ? e2.message : String(e2),
+            });
+          });
+        }
+      }
+      bufferedOrphanTurnIds.clear();
+      bufferedTurnEventQueues.clear();
     };
 
     /**
@@ -5830,44 +5883,11 @@ export class CodexAgent extends BaseAgent {
           // RPC 级失败(超时/拒绝)不代表 server 没建 turn — daemon 可能已接受
           // turn/start 只是响应没回来。立孤儿守卫: 之后迟到的 turnStarted 不得
           // 重新激活会话 (greptile P1: 已报终态错误的会话又回到 generating)。
-          turnStartFailedWithoutTurnId = true;
           // turnStarted 也可能已先于响应到达并被接受 (started-before-resp 是
           // 协议允许的乱序) — 此时 currentTurnId/isTurnInFlight 已置位, 失败
-          // 收口必须把这个活跃 turn 一起收掉: 立墓碑挡后续事件 + 清 turn 状态 +
-          // 补 interrupt (daemon 侧该 turn 还在跑)。否则 UI 已 Done 但
-          // handle.isTurnRunning() 永真, 下一条 send 被 in-flight guard 挡死
-          // (greptile R6 P1)。
-          if (currentTurnId) {
-            const orphanTurnId = currentTurnId;
-            terminalErroredTurnIds.add(orphanTurnId);
-            if (threadId) {
-              host.request(Method.TurnInterrupt, { threadId, turnId: orphanTurnId }).catch((e2: unknown) => {
-                log.warn('turn/start-failure orphan interrupt failed (best-effort)', {
-                  turnId: orphanTurnId,
-                  error: e2 instanceof Error ? e2.message : String(e2),
-                });
-              });
-            }
-            currentTurnId = null;
-            isTurnInFlight = false;
-            currentTurnPlanModeActive = false;
-          }
-          // 缓冲的歧义 started 随本次失败一并坐实孤儿身份 (codex R9 P2):
-          // 没人消费, 全部 interrupt + 墓碑。
-          for (const bufferedId of bufferedOrphanTurnIds) {
-            terminalErroredTurnIds.add(bufferedId);
-            settleBufferedTurnReconcile(bufferedId, false);
-            if (threadId) {
-              host.request(Method.TurnInterrupt, { threadId, turnId: bufferedId }).catch((e2: unknown) => {
-                log.warn('buffered orphan turn interrupt failed (best-effort)', {
-                  turnId: bufferedId,
-                  error: e2 instanceof Error ? e2.message : String(e2),
-                });
-              });
-            }
-          }
-          bufferedOrphanTurnIds.clear();
-          bufferedTurnEventQueues.clear();
+          // 收口必须把这个活跃 turn 一起收掉; 缓冲的歧义 started 同样坐实成孤儿
+          // (greptile R6 P1 + codex R9 P2)。细节见 helper 顶注。
+          quarantineTurnsAfterStartFailure('original turn/start failed');
           log.error('turn/start failed', { error: String(finalErr) });
           eventQueue.push({
             type: 'error',
@@ -6034,30 +6054,56 @@ export class CodexAgent extends BaseAgent {
           overloadRetry?.timer != null || overloadRetry?.inFlight === true;
         discardOverloadRetry('aborted');
         if (closed) return;
-        if (!currentTurnId) {
-          // 退避窗口里的 Stop：server 侧没有 turn 可 interrupt，但**必须**显式收口
-          // 逻辑 turn —— desktop 的 SessionTurnActivityTracker 只在收到终态事件后
-          // 才释放派发闩，Codex coordinator 也刻意等这个事件而不自己解锁，hook
-          // runner 同样等到一小时硬超时才罢休。不发的话会话永久忙、后续消息无法
-          // 派发（review #844 codex P1）。
-          if (hadPendingOverloadRetry) {
-            eventQueue.push({
-              type: 'error',
-              data: {
-                message: 'Codex turn stopped while waiting to retry a model-capacity failure',
-                isTerminal: true,
-                reason: 'codex-overload-retry-aborted',
-              },
-              source: 'codex',
-            });
-            eventQueue.push({
-              type: 'status',
-              data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
-              source: 'codex',
-            });
+        // 有挂起重投时的 Stop **必须**由这里显式收口逻辑 turn —— desktop 的
+        // SessionTurnActivityTracker 只在收到终态事件后才释放派发闩，Codex
+        // coordinator 也刻意等这个事件而不自己解锁，hook runner 同样等到一小时硬
+        // 超时才罢休。不发的话会话永久忙、后续消息无法派发（review #844 codex P1）。
+        //
+        // 两种排序都要覆盖:
+        //  - 退避等待中: server 侧没有 turn 可 interrupt (currentTurnId 为 null);
+        //  - 重投的 turnStarted 已先于它的响应到达: currentTurnId 非空, 但**不能**
+        //    像普通 Stop 那样把收口交给 turn/completed —— 随后到达的重投响应会走
+        //    cancelledMidFlight 把同一个 id 落墓碑, handleTurnCompleted 于是把唯一
+        //    那条完成事件压掉, 派发闩永远不释放（review #844 codex P1）。这里自己
+        //    落墓碑 + interrupt + 推终态, 保证恰好一次收口。
+        if (hadPendingOverloadRetry) {
+          const abortedTurnId = currentTurnId;
+          if (abortedTurnId) {
+            terminalErroredTurnIds.add(abortedTurnId);
+            dismissPendingUserInputForTurn(abortedTurnId, 'turn_interrupted');
+            clearActiveToolContextsForTurn(abortedTurnId);
+            if (threadId && !skipIfStaleHost('turn/interrupt')) {
+              host
+                .request(Method.TurnInterrupt, { threadId, turnId: abortedTurnId })
+                .catch((e: unknown) => {
+                  log.warn('overload retry abort interrupt failed (best-effort)', {
+                    turnId: abortedTurnId,
+                    error: e instanceof Error ? e.message : String(e),
+                  });
+                });
+            }
+            stopActiveRolloutPlanFallback();
+            currentTurnId = null;
+            isTurnInFlight = false;
+            currentTurnPlanModeActive = false;
           }
+          eventQueue.push({
+            type: 'error',
+            data: {
+              message: 'Codex turn stopped while waiting to retry a model-capacity failure',
+              isTerminal: true,
+              reason: 'codex-overload-retry-aborted',
+            },
+            source: 'codex',
+          });
+          eventQueue.push({
+            type: 'status',
+            data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+            source: 'codex',
+          });
           return;
         }
+        if (!currentTurnId) return;
         if (skipIfStaleHost('turn/interrupt')) return;
         dismissPendingUserInputForTurn(currentTurnId, 'turn_interrupted');
         try {

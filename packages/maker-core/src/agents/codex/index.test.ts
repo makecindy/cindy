@@ -4840,6 +4840,151 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('quarantines a turn the server may have accepted when the retry RPC rejects', async () => {
+      // 重投 RPC 失败不代表 server 没建 turn。不做孤儿隔离时: 先于 reject 到达的
+      // turnStarted 会让 isTurnRunning() 在 UI 收口后永真(下一条 send 被并发守卫挡死),
+      // 晚到的那种则会把一个没人消费的 turn 激活并执行工具(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-retry-reject-quarantine',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.turnStarted) throw new Error('expected turnStarted handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        // started 先于 reject 到达：server 确实建了 turn。
+        handlers.turnStarted({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        retryStart.reject(new Error('turn/start timed out'));
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 活跃 turn 必须被收掉 + interrupt，会话不能永远 busy。
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-2',
+          ),
+        ).toBe(true);
+
+        // 孤儿守卫已武装：更晚到的 started 不得把会话拉回 running。
+        handlers.turnStarted({ turn: { id: 'turn-late' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('settles the logical turn when Stop races with the retry turnStarted', async () => {
+      // 重投的 turnStarted 先于它的响应到达时 currentTurnId 非空, 普通 Stop 会把收口
+      // 交给 turn/completed —— 但随后到达的重投响应会把同一个 id 落墓碑, 那条完成事件
+      // 因此被压掉, 派发闩永远不释放(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-stop-races-started',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.turnStarted || !handlers.turnCompleted) throw new Error('expected handlers');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        handlers.turnStarted({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 用户点 Stop（此时 currentTurnId 非空）。
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const after = events.slice(before);
+        expect(
+          after.filter((e) => e.type === 'error' && e.data?.isTerminal === true),
+        ).toHaveLength(1);
+        expect(after.some((e) => e.type === 'status' && e.data?.isRunning === false)).toBe(true);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        // 随后到达的重投响应 + turn/completed 都不得再收口一次。
+        retryStart.resolve({ turn: { id: 'turn-2' } });
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-2', status: 'interrupted' },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(
+          events.slice(before).filter((e) => e.type === 'error' && e.data?.isTerminal === true),
+        ).toHaveLength(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not count the SDK userMessage echo as produced output', async () => {
       // app-server 会在 turn 开头把用户输入 echo 成一个 userMessage item(translator 明确
       // 不消费它)。把它算进产出, 产出守卫会在**正常事件序**下立刻生效 —— 自动重投整体
