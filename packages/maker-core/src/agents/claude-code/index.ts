@@ -191,6 +191,16 @@ function isProviderRoutedModel(model: string): boolean {
   return !model.startsWith('claude-');
 }
 
+/** URL → host(路由决策日志用,失败返回 undefined,不抛)。 */
+function hostOfUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).host;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * 已知的 Claude 内置只读工具白名单(纯读、无本地写 / 无命令执行 / 无外部发送副作用)。
  *
@@ -936,6 +946,20 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 的场景(如显式 anthropic 的 oauth-bearer 形态,buildClaudeEnv 期不注入 token)
       // 需要在这里补跑一次;规则单源在 env-builder。
       applyOAuthSpawnEntrypointGate(remoteEnv);
+    }
+    // 远端路由决策日志(排障还原「为什么这个会话走网关/直连/自定义上游」)。只打安全
+    // 字段:endpoint 只取 host,凭证形态与接线布尔量;绝不打 token / header 值。
+    if (remoteEnv) {
+      log.info('remote claude route decision', {
+        remoteHostId: opts.remoteHostId,
+        providerId: opts.providerId?.trim() || null,
+        routeMaterialized: remoteRoute !== null,
+        credentialMode: credentialMode ?? null,
+        endpointHost: hostOfUrl(remoteEnv.ANTHROPIC_BASE_URL),
+        oauthRefreshWired: Boolean(
+          remoteEnv.CLAUDE_CODE_OAUTH_TOKEN && this.deps.auth.getFreshSubscriptionToken,
+        ),
+      });
     }
     const hostSystemPrompt = this.deps.runtimeConfig.systemPrompt;
 
