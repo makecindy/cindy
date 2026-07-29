@@ -138,6 +138,53 @@ function collectProtectedRanges(node: Nodes, ranges: OffsetRange[], markdown: st
   for (const child of node.children as Nodes[]) collectProtectedRanges(child, ranges, markdown);
 }
 
+function collectRecoveredTailLinkRanges(node: Nodes, ranges: OffsetRange[], markdown: string): void {
+  if (!('children' in node)) return;
+  const children = node.children as Nodes[];
+
+  for (let index = 0; index < children.length; index += 1) {
+    const child = children[index];
+    const range = nodeRange(child);
+    const recoveredTail = range ? recoveredAutolinkTailRange(child, range, markdown) : null;
+
+    if (recoveredTail) {
+      let cursor = recoveredTail.start;
+      for (
+        let tailIndex = index + 1;
+        tailIndex < children.length && cursor < recoveredTail.end;
+        tailIndex += 1
+      ) {
+        const tailNode = children[tailIndex];
+        if (nodeRange(tailNode)) break;
+
+        let value: string | null = null;
+        let isLink = false;
+        if (tailNode.type === 'text') {
+          value = tailNode.value;
+        } else if (tailNode.type === 'link') {
+          const onlyChild = tailNode.children.length === 1 ? tailNode.children[0] : null;
+          if (onlyChild?.type === 'text' && onlyChild.value === tailNode.url) {
+            value = onlyChild.value;
+            isLink = true;
+          }
+        }
+
+        if (
+          value === null ||
+          cursor + value.length > recoveredTail.end ||
+          !markdown.startsWith(value, cursor)
+        ) {
+          break;
+        }
+        if (isLink) ranges.push({ start: cursor, end: cursor + value.length });
+        cursor += value.length;
+      }
+    }
+
+    collectRecoveredTailLinkRanges(child, ranges, markdown);
+  }
+}
+
 function collectProjectDeepLinkRanges(markdown: string, range: OffsetRange): OffsetRange[] {
   const ranges: OffsetRange[] = [];
   const source = markdown.slice(range.start, range.end);
@@ -211,6 +258,9 @@ function collectProseRanges(
     if (!range) return;
     const protectedRanges: OffsetRange[] = [];
     collectProtectedRanges(node, protectedRanges, markdown);
+    // remarkTruncateCjkUrls 会把被首个裸链接误吞的尾段重新拆成文本和链接，
+    // 这些新链接没有源码位置，需要按尾段中的实际字符位置补回保护范围。
+    collectRecoveredTailLinkRanges(node, protectedRanges, markdown);
     protectedRanges.push(...collectProjectDeepLinkRanges(markdown, range));
     protectedRanges.push(
       ...preservedTexDelimiterRanges.filter(

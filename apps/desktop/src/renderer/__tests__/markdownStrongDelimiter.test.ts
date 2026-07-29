@@ -159,6 +159,15 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
   });
 
+  it('protects bare URLs regenerated inside recovered CJK tails', () => {
+    const source = 'https://a.test/x（https://b.test/**foo.**bar';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(source);
+    expect(renderMarkdown(source)).toContain(
+      '<a href="https://b.test/**foo.**bar">https://b.test/**foo.**bar</a>',
+    );
+  });
+
   it('preserves an open strong span across single-star content', () => {
     expect(renderMarkdown('**This is *very* important.**Next')).toContain(
       '<strong>This is <em>very</em> important.</strong>Next',
