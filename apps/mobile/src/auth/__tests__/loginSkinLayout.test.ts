@@ -13,6 +13,8 @@ import {
   createResendDeadline,
   formatResendCountdown,
   LOGIN_DELETION_BUBBLE,
+  LOGIN_PAD_LANDSCAPE_STAGE,
+  LOGIN_PAD_PORTRAIT_STAGE,
   LOGIN_STAGE_LONG,
   LOGIN_STAGE_SHORT,
   PAD_LANDSCAPE_MIN_SCALE,
@@ -300,6 +302,33 @@ describe('loginSkin §3.6 平板/横竖屏 surface 构图(PR4b Step 5b.3;adaptat
     expect(over.scale).toBeCloseTo(1.3, 10); // 旧上限 1.30 恰好,不钳
     const far = resolveLoginSurface(1770, 1230); // min(1.5,1.5)=1.5 — 远超旧上限,原样不钳
     expect(far.scale).toBeCloseTo(1.5, 10);
+  });
+
+  /**
+   * pad 两档的「字标底↔面板顶」间距钉值 —— 2026-07-29 事故的同源性防护延伸到 pad。
+   *
+   * phone 侧那次事故的机理是:品牌簇换了新稿基准、`loginY` 留在配旧品牌簇的值,两半
+   * 不同源 → 间距漂成稿内不存在的 92 / 131.65。pad 现在**没有** figma 新稿帧,品牌簇
+   * 与 `loginY` 都还是同一套 wave3 推导值,所以内部自洽(竖 14.84 / 横 33.88)。
+   *
+   * 但这份自洽此前没有任何断言守着:将来给 pad 换新稿基准时,只改品牌簇不改 `loginY`
+   * (或反之)会原样重演 phone 那次的漂移,且静默通过。这里把两档间距钉住 —— 换稿时
+   * 本用例必然红,迫使改动者同批处理 `loginY`(并在此更新钉值 + 记录依据)。
+   */
+  it('pad 同源性不变式:两档「字标底↔面板顶」间距钉值(竖 14.84 / 横 33.88),换稿只改一半即红', () => {
+    const portrait = LOGIN_PAD_PORTRAIT_STAGE;
+    expect(
+      portrait.loginY - (portrait.word.y + portrait.word.h),
+    ).toBeCloseTo(14.84, 2);
+
+    const landscape = LOGIN_PAD_LANDSCAPE_STAGE;
+    expect(
+      landscape.loginY - (landscape.word.y + landscape.word.h),
+    ).toBeCloseTo(33.88, 2);
+
+    // 不重叠是底线(面板不透明,压上去会盖住字标);两档都必须为正间距
+    expect(portrait.loginY).toBeGreaterThan(portrait.word.y + portrait.word.h);
+    expect(landscape.loginY).toBeGreaterThan(landscape.word.y + landscape.word.h);
   });
 
   it('横屏居中偏移:offsetX/Y = (viewport - stage*scale)/2(画布居中锚)', () => {
