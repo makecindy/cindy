@@ -1313,6 +1313,7 @@
           "nameRequired": "표시 이름을 입력하세요",
           "runtimeRequired": "Runtime을 하나 이상 구성하세요(기본 URL과 모델)",
           "baseUrlInvalid": "기본 URL은 유효한 http(s) 주소여야 합니다",
+          "contextWindowInvalid": "컨텍스트 윈도우는 유효한 양의 정수여야 합니다(숫자 그룹 사이에 구분 기호 사용 가능)",
           "requestPathInvalid": "정확한 요청 경로는 단일 /로 시작해야 하며 프래그먼트나 . 또는 .. 경로 세그먼트를 포함하면 안 됩니다. 공백과 안전하지 않은 문자는 퍼센트 인코딩하세요.",
           "modelRequired": "모델을 하나 이상 추가하세요",
           "oauthInvalid": "OAuth 설정이 불완전합니다. 모든 필드는 필수이며 두 엔드포인트는 안전한 https URL이어야 합니다"

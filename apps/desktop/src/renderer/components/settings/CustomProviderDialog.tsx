@@ -160,6 +160,15 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** 上下文窗口文本是否可提交:空 = 清除窗口;非空须整体合法(分组分隔符 + BigInt 上界)。 */
+function isCommittableWindowText(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed === '') return true;
+  if (!/^[0-9]+(?:[,_ ][0-9]+)*$/.test(trimmed)) return false;
+  const parsed = BigInt(trimmed.replace(/[,_ ]/g, ''));
+  return parsed > 0n && parsed <= BigInt(Number.MAX_SAFE_INTEGER);
+}
+
 function TextInput({
   value,
   onChange,
@@ -692,6 +701,16 @@ export function CustomProviderDialog({
       toast.error(t('settings.providers.custom.errors.nameRequired'));
       return;
     }
+    // 上下文窗口草稿必须已可提交:输入框还挂着 `1,` / `-5` 这类未完成/非法文本时
+    // 点保存,已提交值(或隐式 200K 默认)与用户可见文本不一致——静默存旧值等于
+    // 改掉用户显式输入(review P1 ×2)。定位到首个问题 tab 并报错拦下。
+    for (const [draftKey, draftText] of Object.entries(windowDrafts)) {
+      if (isCommittableWindowText(draftText)) continue;
+      const draftAgent = draftKey.split(':')[0] as AgentKind;
+      if (VISIBLE_AGENTS.includes(draftAgent)) setActiveTab(draftAgent);
+      toast.error(t('settings.providers.custom.errors.contextWindowInvalid'));
+      return;
+    }
     const runtimes: CustomProviderConfig['runtimes'] = {};
     const keys: RuntimeKeys = {};
     for (const a of VISIBLE_AGENTS) {
@@ -864,6 +883,7 @@ export function CustomProviderDialog({
     initial,
     existingIds,
     onSaved,
+    windowDrafts,
     t,
   ]);
 
@@ -1265,18 +1285,14 @@ export function CustomProviderDialog({
                                   const { contextWindow: _drop, ...rest } = y;
                                   return rest;
                                 }
-                                // 分隔符只允许单个、且夹在数字组之间:`1,,2` / `1_ 2` /
-                                // 尾随分隔符等无效位置不得被剥掉后当 `12` 保存(review P1)。
-                                if (!/^[0-9]+(?:[,_ ][0-9]+)*$/.test(trimmed)) return y;
-                                // BigInt 精确校验上界:parseInt 会把超安全整数先舍入
-                                // (9007199254740993 → …992)再通过 isSafeInteger,落盘值
-                                // 与用户输入不一致(review P1);正则已保证纯数字,BigInt
-                                // 不会抛。
-                                const parsed = BigInt(trimmed.replace(/[,_ ]/g, ''));
-                                if (parsed <= 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
-                                  return y;
-                                }
-                                return { ...y, contextWindow: Number(parsed) };
+                                // 整体校验(分隔符只允许单个、夹在数字组之间;BigInt 精确
+                                // 校验上界防 parseInt 先舍入):不合法的中间态/非法值只
+                                // 留在草稿,不提交、不剥字符拼数字(review P1 ×2)。
+                                if (!isCommittableWindowText(trimmed)) return y;
+                                return {
+                                  ...y,
+                                  contextWindow: Number(BigInt(trimmed.replace(/[,_ ]/g, ''))),
+                                };
                               }),
                             }));
                           }}
