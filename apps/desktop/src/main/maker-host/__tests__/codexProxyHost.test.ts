@@ -668,8 +668,10 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
     host.registerComposed('session-subscription-search', 'thread-subscription-search', 'PRODUCT_PROMPT');
     setSessionProvider('session-subscription-search', 'openai');
+    host.setCodexProxyAuthInjection('oauth-bearer');
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    const routingTransform = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.routingTransform;
     const original = { model: 'gpt-5.6-sol' };
     let current: unknown = original;
     const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-subscription-search' } };
@@ -679,6 +681,10 @@ describe('codex proxy host', () => {
     }
 
     expect(current).toEqual(original);
+    await expect(Promise.resolve(routingTransform(current, ctx))).resolves.toEqual({
+      upstreamOverride: 'https://chatgpt.com/backend-api/codex',
+    });
+    host.clearCodexProxyAuthInjection();
     clearSessionProvider('session-subscription-search');
   });
 
@@ -1646,6 +1652,47 @@ describe('codex proxy host', () => {
     // instructions 未被挪进 input、reasoning 未被剥、model 未被 rewrite。
     expect(current).toEqual(original);
     clearSessionProvider('session-xai-foreign');
+  });
+
+  it('restores native search when provider-oauth foreign-model fallback lands on Gateway', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-xai-search-fallback', 'thread-xai-search-fallback', 'PRODUCT_PROMPT');
+    setSessionProvider('session-xai-search-fallback', 'xai');
+    host.setCodexProxyAuthInjection('provider-oauth');
+    host.setCodexProxyGatewayKeyReader(() => 'gw-key');
+
+    const proxyOptions = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+    const transforms = proxyOptions?.transformRequest ?? [];
+    const routingTransform = proxyOptions?.routingTransform;
+    const current: Record<string, unknown> = { model: 'gpt-5.6-sol' };
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-xai-search-fallback' },
+    };
+    let transformed: unknown = current;
+    for (const transform of transforms) {
+      const next = transform(transformed, ctx);
+      if (next !== null && next !== undefined) transformed = next;
+    }
+
+    expect(transformed).toEqual({
+      model: 'gpt-5.6-sol',
+      tools: [{ type: 'web_search' }],
+    });
+    expect(routingTransform(current, ctx)).toEqual({
+      headerOverride: { authorization: 'Bearer gw-key' },
+    });
+
+    host.clearCodexProxyAuthInjection();
+    host.setCodexProxyGatewayKeyReader(() => null);
+    clearSessionProvider('session-xai-search-fallback');
   });
 
   it('dumps transformed request bodies when the debug env gate is enabled', async () => {
