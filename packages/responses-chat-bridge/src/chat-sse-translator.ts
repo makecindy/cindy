@@ -554,7 +554,9 @@ export class ChatSseTranslator {
       || !state.name
       || (!force && !state.arguments && !this.pendingFinishReason)
     ) return;
-    const kind = this.toolContext?.lookupChatName(state.name)?.kind;
+    const spec = this.toolContext?.lookupChatName(state.name);
+    if (!force && !spec && this.toolContext?.hasChatNamePrefix(state.name)) return;
+    const kind = spec?.kind;
     state.itemId = deterministicId(
       kind === 'custom' ? 'ctc' : kind === 'tool_search' ? 'tsc' : 'fc',
       this.responseId,

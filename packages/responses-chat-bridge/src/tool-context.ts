@@ -93,6 +93,15 @@ export class ChatBridgeToolContext {
     return this.specsByChatName.get(chatName);
   }
 
+  /** Whether a streamed name may still resolve to a longer catalogued Chat tool name. */
+  hasChatNamePrefix(prefix: string): boolean {
+    if (!prefix) return false;
+    for (const chatName of this.specsByChatName.keys()) {
+      if (chatName !== prefix && chatName.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
   chatNameForResponse(
     name: string,
     namespace?: string,
