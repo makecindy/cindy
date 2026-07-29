@@ -139,7 +139,7 @@ describe('refresh token replacement detection', () => {
     expect(pickRefreshTokenReplacementCandidate('rt-old', ['rt-old', 'rt-old'])).toBeNull();
   });
 
-  it('readLatestStoredToken 收到本次请求所用的 token,便于跨来源挑候选', async () => {
+  it('调用方交出全部来源,由 runner 跨来源挑候选', async () => {
     const okResult: RefreshFetchResult<unknown> = {
       ok: true,
       status: 200,
@@ -148,19 +148,42 @@ describe('refresh token replacement detection', () => {
     const doRefresh = vi.fn(async (refreshToken: string) =>
       refreshToken === 'rt-legacy' ? okResult : invalidToken,
     );
-    const seenRequestedTokens: string[] = [];
 
     const result = await runRefreshWithReplacementRetry('rt-old', {
       doRefresh,
       // 模拟 authManager 的读侧:v1 仍是自己那枚,legacy 才有旧版实例轮换出的新 token。
-      readLatestStoredToken: (requestedToken) => {
-        seenRequestedTokens.push(requestedToken);
-        return pickRefreshTokenReplacementCandidate(requestedToken, ['rt-old', 'rt-legacy']);
-      },
+      readLatestStoredTokens: () => ['rt-old', 'rt-legacy'],
     });
 
     expect(result).toMatchObject({ result: okResult, requestedToken: 'rt-legacy' });
-    expect(seenRequestedTokens).toEqual(['rt-old']);
+  });
+
+  it('首选来源存着已拒的 token 时,不得挤掉次选来源里有效的那枚', async () => {
+    // codex #878 P1:v1 存着已拒的 A、legacy 被并发的旧实例轮换成有效的 C。若调用方先按
+    // 优先级折叠成单个候选,交出的永远是 A;A 已被拒 → 整轮以确定性失效收场,C 从未被
+    // 试过,还会连同 C 一起被删。筛选必须在折叠之前发生。
+    const okResult: RefreshFetchResult<unknown> = {
+      ok: true,
+      status: 200,
+      data: { accessToken: 'a', refreshToken: 'rt-d' },
+    };
+    const doRefresh = vi.fn(async (refreshToken: string) =>
+      refreshToken === 'rt-c' ? okResult : invalidToken,
+    );
+
+    const result = await runRefreshWithReplacementRetry('rt-a', {
+      doRefresh,
+      // v1 始终是已被拒的 rt-a;legacy 在本进程重试期间被另一个实例换成了 rt-c。
+      readLatestStoredTokens: () => ['rt-a', 'rt-c'],
+    });
+
+    expect(result).toMatchObject({
+      result: okResult,
+      requestedToken: 'rt-c',
+      replacementRetries: 1,
+    });
+    expect(doRefresh).toHaveBeenNthCalledWith(1, 'rt-a');
+    expect(doRefresh).toHaveBeenNthCalledWith(2, 'rt-c');
   });
 
   it('确定性失败且磁盘已有新 token → 用新 token 重试,不清登录态', () => {
@@ -207,7 +230,7 @@ describe('refresh token replacement detection', () => {
 
     const result = await runRefreshWithReplacementRetry('rt-old', {
       doRefresh,
-      readLatestStoredToken: () => 'rt-new',
+      readLatestStoredTokens: () => ['rt-new'],
       onReplacementRetry: ({ replacementRetry, status, code }) =>
         replacements.push({ replacementRetry, status, code }),
     });
@@ -242,7 +265,7 @@ describe('refresh token replacement detection', () => {
 
     const result = await runRefreshWithReplacementRetry('rt-old', {
       doRefresh,
-      readLatestStoredToken: () => latestTokens.shift() ?? 'rt-new',
+      readLatestStoredTokens: () => [latestTokens.shift() ?? 'rt-new'],
       replacementRecheck: {
         delaysMs: [10],
         sleep: (ms) => (sleepCalls.push(ms), Promise.resolve()),
@@ -269,7 +292,7 @@ describe('refresh token replacement detection', () => {
 
     const result = await runRefreshWithReplacementRetry('rt-old', {
       doRefresh,
-      readLatestStoredToken: () => 'rt-new',
+      readLatestStoredTokens: () => ['rt-new'],
       replacementRecheck: {
         delaysMs: [10],
         sleep,
@@ -294,7 +317,7 @@ describe('refresh token replacement detection', () => {
 
     const result = await runRefreshWithReplacementRetry('rt-old', {
       doRefresh,
-      readLatestStoredToken: () => latestTokens.shift() ?? 'rt-new-2',
+      readLatestStoredTokens: () => [latestTokens.shift() ?? 'rt-new-2'],
       maxReplacementRetries: 1,
     });
 
@@ -319,8 +342,7 @@ describe('refresh token replacement detection', () => {
 
     const result = await runRefreshWithReplacementRetry('rt-v1', {
       doRefresh,
-      readLatestStoredToken: (requestedToken) =>
-        pickRefreshTokenReplacementCandidate(requestedToken, [disk.v1, disk.legacy]),
+      readLatestStoredTokens: () => [disk.v1, disk.legacy],
       maxReplacementRetries: 5,
     });
 
@@ -344,7 +366,7 @@ describe('refresh token replacement detection', () => {
 
     const result = await runRefreshWithReplacementRetry('rt-1', {
       doRefresh,
-      readLatestStoredToken: () => (diskReads.length ? (diskReads.shift() ?? null) : null),
+      readLatestStoredTokens: () => [diskReads.length ? (diskReads.shift() ?? null) : null],
       maxReplacementRetries: 5,
       replacementRecheck: {
         delaysMs: [10, 20],

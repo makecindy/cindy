@@ -135,18 +135,26 @@ describe('legacy → v1 refresh token migration window', () => {
     // 被选中,耗尽 maxReplacementRetries 后以 replacement-retry 收尾 —— runtime 每 60s
     // 重试一枚已知无效的凭证而永不过期,冷启动保留不可用凭证并以未登录启动。
     expect(refreshSource).toContain('const rejectedTokens = new Set<string>();');
-    expect(refreshSource).toContain('rejectedTokens.has(action.refreshToken)');
     expect(refreshSource).toContain('rejectedTokens.add(requestedToken);');
-    expect(refreshSource).toContain('const withoutRejectedCandidate = (');
+    // 筛选必须发生在「按优先级折叠成一枚」之前:先折叠后过滤会让首选来源里那枚已拒的
+    // token 挤掉次选来源里有效的那枚(codex #878 P1)。
+    const helper = refreshSource.slice(
+      refreshSource.indexOf('const nextReplacementCandidate = ('),
+      refreshSource.indexOf('while (true) {'),
+    );
+    // 全部来源先经 rejectedTokens 过滤,过滤结果才作为 pick 的候选集传进去。
+    expect(helper).toContain(
+      'opts.readLatestStoredTokens().filter((token) => !token || !rejectedTokens.has(token))',
+    );
+    expect(helper).toContain('pickRefreshTokenReplacementCandidate(');
     // 主判定与 recheck 循环两处都必须过这道闸,漏一处就仍会来回重试。
-    const guardCalls = refreshSource.match(/withoutRejectedCandidate\(\n/g) ?? [];
+    const guardCalls = refreshSource.match(/nextReplacementCandidate\(requestedToken\)/g) ?? [];
     expect(guardCalls.length).toBe(2);
   });
 
-  it('读侧:replacement 候选同时看 v1 与 legacy,v1 优先', () => {
-    const body = sliceBody('function readLatestReplacementRefreshToken(', '\n}\n');
+  it('读侧:交出 v1 与 legacy 两个来源且不在此折叠,v1 排前', () => {
+    const body = sliceBody('function readStoredRefreshTokenCandidates(', '\n}\n');
 
-    expect(body).toContain('pickRefreshTokenReplacementCandidate(requestedToken, [');
     const v1Idx = body.indexOf('readPersistedRefreshToken(realm)');
     const legacyIdx = body.indexOf('readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY)');
     expect(v1Idx).toBeGreaterThan(-1);
@@ -157,6 +165,9 @@ describe('legacy → v1 refresh token migration window', () => {
     expect(body).toContain(
       'realm === AUTH_REGION ? readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY) : null',
     );
+    // 关键:这里**不能**先挑一枚。挑选要在 runner 里做,只有它知道哪些 token 本轮已被拒;
+    // 在这里折叠会让 v1 那枚已失效的 token 挤掉 legacy 里有效的那枚,连带把有效凭证删掉。
+    expect(body).not.toContain('pickRefreshTokenReplacementCandidate');
   });
 
   it('读侧:replacement-retry 走双来源读取,不再只认 v1', () => {
@@ -165,8 +176,39 @@ describe('legacy → v1 refresh token migration window', () => {
       '});',
     );
 
-    expect(body).toContain('readLatestReplacementRefreshToken(opts.realm, requestedToken)');
-    // 直接把 readPersistedRefreshToken 当 readLatestStoredToken 用就是本次事故的成因。
+    expect(body).toContain('readLatestStoredTokens: () => readStoredRefreshTokenCandidates(');
+    // 直接把 readPersistedRefreshToken 当唯一来源用就是本次事故的成因。
     expect(body).not.toContain('readLatestStoredToken: () => readPersistedRefreshToken(');
+  });
+
+  it('确定性失效后:冷启动清掉镜像出去的 legacy 从属副本', () => {
+    // 权威记录被判失效删除后,镜像那一份不能留:只读 legacy 的旧版实例会拿它再撞一次
+    // INVALID_REFRESH_TOKEN 被强制重登,本进程读侧回退也会把它当替换候选。
+    const helper = sliceBody(
+      'function clearMirroredLegacyRefreshToken(realm: AuthRegion, expectedToken: string): void {',
+      '\n}\n',
+    );
+    expect(helper).toContain('if (realm !== AUTH_REGION) return;');
+    expect(helper).toContain(
+      'removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, expectedToken)',
+    );
+    // 必须 compare-and-delete:内容已变说明另一个实例刚写入替换凭证,不在清理范围内。
+    expect(helper).not.toContain('removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);');
+    expect(helper).toContain("if (outcome === 'changed') {");
+    expect(helper).toContain("if (outcome === 'failed') {");
+
+    // 调用点必须落在冷启动确定性失效的**非 passive** 分支里:passive 不得删整机共享凭证。
+    const coldStart = sliceBody(
+      "if (action.kind === 'definitive-failure') {",
+      "} else if (action.kind === 'replacement-retry') {",
+    );
+    const passiveIdx = coldStart.indexOf('if (isPassiveSharedUserDataInstance()) {');
+    const callIdx = coldStart.indexOf('clearMirroredLegacyRefreshToken(storedRealm, storedToken);');
+    expect(passiveIdx).toBeGreaterThan(-1);
+    expect(callIdx).toBeGreaterThan(passiveIdx);
+    // 与 v1 的 CAS 删除同处一个 else 分支,顺序在其后(先清权威,再清从属)。
+    expect(
+      coldStart.indexOf('removeSafeIfUnchanged(AUTH_SESSION_KEY, expectedSession)'),
+    ).toBeLessThan(callIdx);
   });
 });

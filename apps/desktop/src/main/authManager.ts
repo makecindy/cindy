@@ -48,7 +48,6 @@ import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
 import {
   runRefreshWithReplacementRetry,
-  pickRefreshTokenReplacementCandidate,
   resolveSessionExpiredReason,
   type RefreshFailureAction,
   type RefreshFailureInfo,
@@ -460,21 +459,48 @@ function mirrorLegacyResourceRefreshToken(refreshToken: string, realm: AuthRegio
 }
 
 /**
- * replacement-retry 的读侧对偶:从 v1 与 legacy 两个来源里挑出「不是本次请求那一枚」
- * 的最新 token。
+ * 确定性失效后清掉 legacy 里的从属副本。
+ *
+ * 权威记录(v1)被判失效删除时,镜像出去的那一份不能留在盘上:只读 legacy 的旧版实例会
+ * 拿它再撞一次 INVALID_REFRESH_TOKEN 并被强制重登,本进程的读侧回退也会把它当成替换
+ * 候选。compare-and-delete 只删「与本次判定的那一枚相同」的内容——不同就说明另一个
+ * 实例刚写入了替换凭证,不在本次清理范围内。
+ *
+ * 运行期 `clearAuth` 已经会删这个文件(那是显式登出 / 会话过期的整体清理),所以这里只
+ * 补冷启动确定性失效这一条路径;passive 实例的守卫在调用点。
+ */
+function clearMirroredLegacyRefreshToken(realm: AuthRegion, expectedToken: string): void {
+  if (realm !== AUTH_REGION) return;
+  const outcome = removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, expectedToken);
+  if (outcome === 'changed') {
+    log.warn(
+      'cold-start refresh: legacy refresh token changed meanwhile — keeping the replacement written by another app instance',
+    );
+    return;
+  }
+  if (outcome === 'failed') {
+    log.error(
+      'cold-start refresh: failed to delete the mirrored legacy refresh token — it is still on disk and older instances may keep retrying it',
+    );
+  }
+}
+
+/**
+ * replacement-retry 的读侧对偶:交出磁盘上**全部**凭证来源的当前值,按优先级排列。
  *
  * 镜像只能解决「新版轮换 → 旧版追赶」;反向(旧版实例轮换后只写 legacy,本进程读 v1
- * 读到的仍是已作废的旧值)同样会误判确定性失效,所以读侧也必须认 legacy。v1 优先:
+ * 读到的仍是已作废的旧值)同样会误判确定性失效,所以读侧也必须认 legacy。v1 排前面:
  * 它带 realm、是本版本的权威记录;legacy 仅在与安装包区域一致时才可解释。
+ *
+ * 这里刻意**不**折叠成单个候选。选择要在 `runRefreshWithReplacementRetry` 里做——只有
+ * 它知道本轮哪些 token 已经被服务端拒过。在这里先按优先级挑一枚,会让 v1 里那枚已失效
+ * 的 token 挤掉 legacy 里真正有效的那枚,最终以确定性失效收场并连带删掉有效凭证。
  */
-function readLatestReplacementRefreshToken(
-  realm: AuthRegion,
-  requestedToken: string,
-): string | null {
-  return pickRefreshTokenReplacementCandidate(requestedToken, [
+function readStoredRefreshTokenCandidates(realm: AuthRegion): readonly (string | null)[] {
+  return [
     readPersistedRefreshToken(realm),
     realm === AUTH_REGION ? readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY) : null,
-  ]);
+  ];
 }
 
 function readPersistedAccountDeletionReceipt() {
@@ -1072,8 +1098,7 @@ async function runAuthRefreshWithReplacementRetry(
 }> {
   const run = await runRefreshWithReplacementRetry(initialRefreshToken, {
     doRefresh: (refreshToken) => requestAuthRefresh(refreshToken, opts.realm),
-    readLatestStoredToken: (requestedToken) =>
-      readLatestReplacementRefreshToken(opts.realm, requestedToken),
+    readLatestStoredTokens: () => readStoredRefreshTokenCandidates(opts.realm),
     transientRetry: opts.withTransientRetry
       ? {
           rateLimitDelayMs: opts.rateLimitDelayMs,
@@ -2058,6 +2083,7 @@ async function runColdStartRefreshFlow(
               );
               break;
           }
+          clearMirroredLegacyRefreshToken(storedRealm, storedToken);
         }
         resetActiveAuthRealmToBuild();
       } else if (action.kind === 'replacement-retry') {

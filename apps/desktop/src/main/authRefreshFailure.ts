@@ -268,10 +268,14 @@ export async function runRefreshWithReplacementRetry<T>(
   opts: {
     doRefresh: (refreshToken: string) => Promise<RefreshFetchResult<T>>;
     /**
-     * 读磁盘上当前最新的 refresh token。带上本次请求所用的 token,让调用方能在
-     * 多个凭证来源(legacy / v1)之间挑出真正「不是这一枚」的替换候选。
+     * 读磁盘上所有凭证来源的当前值(如 v1 记录与 legacy 裸 token),按优先级排列。
+     *
+     * 必须交出**全部**来源、由本函数统一筛选,不能由调用方先折叠成单个候选:
+     * 排除「本轮已被拒过的 token」这一步只有拿到完整候选集才做得对。调用方先按
+     * 优先级折叠的话,首选来源里那枚已失效的 token 会把后面来源里真正有效的那枚
+     * 挤掉,最终以确定性失效收场并连带删掉有效凭证。
      */
-    readLatestStoredToken: (requestedToken: string) => string | null;
+    readLatestStoredTokens: () => readonly (string | null | undefined)[];
     /** 不传则单次请求;传入则每一枚 token 内部按 transient 规则重试。 */
     transientRetry?: {
       retryDelaysMs?: readonly number[];
@@ -318,11 +322,18 @@ export async function runRefreshWithReplacementRetry<T>(
    */
   const rejectedTokens = new Set<string>();
 
-  /** 候选已在本轮被拒过 → 不是有效的追赶目标,按确定性失效收尾。 */
-  const withoutRejectedCandidate = (action: RefreshFailureAction): RefreshFailureAction =>
-    action.kind === 'replacement-retry' && rejectedTokens.has(action.refreshToken)
-      ? { kind: 'definitive-failure' }
-      : action;
+  /**
+   * 读全部来源 → **先剔掉本轮已被拒过的** → 再按优先级挑替换候选。
+   *
+   * 顺序是要点:先折叠后过滤会漏掉有效凭证——v1 存着已拒的 A、legacy 存着有效的 C 时,
+   * 折叠只交出 A(v1 优先),随后 A 被判已拒,于是整轮以确定性失效收场,C 从未被试过,
+   * 还会连同 C 一起被清掉。
+   */
+  const nextReplacementCandidate = (requestedToken: string): string | null =>
+    pickRefreshTokenReplacementCandidate(
+      requestedToken,
+      opts.readLatestStoredTokens().filter((token) => !token || !rejectedTokens.has(token)),
+    );
 
   while (true) {
     const run = opts.transientRetry
@@ -345,12 +356,10 @@ export async function runRefreshWithReplacementRetry<T>(
 
     rejectedTokens.add(requestedToken);
 
-    let action = withoutRejectedCandidate(
-      resolveRefreshFailureAction(
-        run.result,
-        requestedToken,
-        opts.readLatestStoredToken(requestedToken),
-      ),
+    let action = resolveRefreshFailureAction(
+      run.result,
+      requestedToken,
+      nextReplacementCandidate(requestedToken),
     );
 
     if (action.kind === 'definitive-failure' && isReplacementRetryEligibleFailure(run.result)) {
@@ -362,12 +371,10 @@ export async function runRefreshWithReplacementRetry<T>(
           delayMs,
         });
         if (delayMs > 0) await replacementRecheckSleep(delayMs);
-        action = withoutRejectedCandidate(
-          resolveRefreshFailureAction(
-            run.result,
-            requestedToken,
-            opts.readLatestStoredToken(requestedToken),
-          ),
+        action = resolveRefreshFailureAction(
+          run.result,
+          requestedToken,
+          nextReplacementCandidate(requestedToken),
         );
         if (action.kind !== 'definitive-failure') break;
       }
