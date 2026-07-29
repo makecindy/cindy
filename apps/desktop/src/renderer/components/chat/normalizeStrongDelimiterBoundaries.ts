@@ -426,6 +426,7 @@ function collectRecoveredTailSyntaxRanges(
   ranges: OffsetRange[],
   mathTailStarts: number[],
   looseMathRanges: OffsetRange[],
+  imageDescriptionRanges: OffsetRange[],
   markdown: string,
 ): void {
   if (!('children' in node)) return;
@@ -444,6 +445,12 @@ function collectRecoveredTailSyntaxRanges(
       const tailTree = markdownParser.runSync(markdownParser.parse(tail), tail) as Root;
       const tailRanges: OffsetRange[] = [];
       collectProtectedRanges(tailTree, tailRanges, tail);
+      imageDescriptionRanges.push(
+        ...collectImageDescriptionRanges(tailTree, tail).map((descriptionRange) => ({
+          start: recoveredTail.start + descriptionRange.start,
+          end: recoveredTail.start + descriptionRange.end,
+        })),
+      );
       visit(tailTree, (tailNode) => {
         if (tailNode.type !== 'inlineMath' && tailNode.type !== 'math') return;
         const tailNodeRange = nodeRange(tailNode);
@@ -465,7 +472,14 @@ function collectRecoveredTailSyntaxRanges(
       );
     }
 
-    collectRecoveredTailSyntaxRanges(child, ranges, mathTailStarts, looseMathRanges, markdown);
+    collectRecoveredTailSyntaxRanges(
+      child,
+      ranges,
+      mathTailStarts,
+      looseMathRanges,
+      imageDescriptionRanges,
+      markdown,
+    );
   }
 }
 
@@ -628,12 +642,14 @@ function collectProseRanges(
   protectedRanges: OffsetRange[];
   recoveredMathTailStarts: number[];
   recoveredLooseMathRanges: OffsetRange[];
+  recoveredImageDescriptionRanges: OffsetRange[];
 }> {
   const proseRanges: Array<{
     range: OffsetRange;
     protectedRanges: OffsetRange[];
     recoveredMathTailStarts: number[];
     recoveredLooseMathRanges: OffsetRange[];
+    recoveredImageDescriptionRanges: OffsetRange[];
   }> = [];
 
   visit(tree, (node, _index, parent) => {
@@ -648,6 +664,7 @@ function collectProseRanges(
     const protectedRanges: OffsetRange[] = [];
     const recoveredMathTailStarts: number[] = [];
     const recoveredLooseMathRanges: OffsetRange[] = [];
+    const recoveredImageDescriptionRanges: OffsetRange[] = [];
     collectProtectedRanges(node, protectedRanges, markdown);
     // remarkTruncateCjkUrls 会把被首个裸链接误吞的尾段重新拆成文本和链接，
     // 尾段的 Markdown 语法没有原始解析节点，需要重新解析后补回保护范围；
@@ -657,6 +674,7 @@ function collectProseRanges(
       protectedRanges,
       recoveredMathTailStarts,
       recoveredLooseMathRanges,
+      recoveredImageDescriptionRanges,
       markdown,
     );
     collectRecoveredTailLinkRanges(node, protectedRanges, markdown);
@@ -680,6 +698,7 @@ function collectProseRanges(
       protectedRanges: mergeOffsetRanges(protectedRanges),
       recoveredMathTailStarts,
       recoveredLooseMathRanges,
+      recoveredImageDescriptionRanges,
     });
   });
 
@@ -752,16 +771,21 @@ function collectBoundaryRepairs(
   const openStrongStarts: number[] = [];
   let protectedIndex = 0;
   let isolatedIndex = firstRangeEndingAfter(isolatedRanges, range.start);
+  let savedOuterStrongStarts: number[] | null = null;
 
   while (cursor < range.end) {
-    const isolatedRange = isolatedRanges[isolatedIndex];
-    if (isolatedRange && cursor >= isolatedRange.end) {
-      openStrongStarts.length = 0;
+    let isolatedRange = isolatedRanges[isolatedIndex];
+    while (isolatedRange && cursor >= isolatedRange.end) {
+      if (savedOuterStrongStarts) {
+        openStrongStarts.splice(0, openStrongStarts.length, ...savedOuterStrongStarts);
+        savedOuterStrongStarts = null;
+      }
       isolatedIndex += 1;
-      continue;
+      isolatedRange = isolatedRanges[isolatedIndex];
     }
     if (isolatedRange && cursor === isolatedRange.start) {
       // 图片说明的加粗标记只在说明内部配对，不能继承外层正文的未闭合状态。
+      savedOuterStrongStarts = [...openStrongStarts];
       openStrongStarts.length = 0;
     }
 
@@ -858,7 +882,13 @@ export function normalizeStrongDelimiterBoundaries(
     );
   }
   const proseRanges = collectProseRanges(tree, markdown, preservedTexDelimiterRanges);
-  const imageDescriptionRanges = collectImageDescriptionRanges(tree, markdown);
+  const recoveredImageDescriptionRanges = proseRanges.flatMap(
+    ({ recoveredImageDescriptionRanges: ranges }) => ranges,
+  );
+  const imageDescriptionRanges = mergeOffsetRanges([
+    ...collectImageDescriptionRanges(tree, markdown),
+    ...recoveredImageDescriptionRanges,
+  ]);
   const boundaryRepairs = proseRanges.flatMap(({ range, protectedRanges }) =>
     collectBoundaryRepairs(markdown, range, protectedRanges, imageDescriptionRanges),
   );

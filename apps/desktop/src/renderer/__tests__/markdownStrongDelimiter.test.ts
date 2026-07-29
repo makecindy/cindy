@@ -193,6 +193,17 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(html).not.toContain('cindy-strong-boundary');
   });
 
+  it('restores an outer strong span after scanning an image description', () => {
+    const source = '**See ![alt](missing.png).**Next';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      '**See ![alt](missing.png).**<!--cindy-strong-boundary-->Next',
+    );
+    expect(renderMarkdown(source)).toContain(
+      '<strong>See <img src="missing.png" alt="alt"/>.</strong>Next',
+    );
+  });
+
   it('preserves protected Markdown syntax inside image descriptions', () => {
     const inlineCode = '![`**终点。**正文`](missing.png)';
 
@@ -256,6 +267,19 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(renderMarkdown(source)).toContain(
       '<a href="https://b.test/**foo.**bar">https://b.test/**foo.**bar</a>',
     );
+  });
+
+  it('classifies image descriptions recovered from CJK-truncated bare URL tails', () => {
+    const source = 'https://example.com/foo（![**重点。**正文](missing.png)';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      'https://example.com/foo<!--cindy-strong-boundary-->（![重点。正文](missing.png)',
+    );
+    const html = renderMarkdown(source);
+    expect(html).toContain(
+      '<a href="https://example.com/foo">https://example.com/foo</a>（<img src="missing.png" alt="重点。正文"/>',
+    );
+    expect(html).not.toContain('cindy-strong-boundary');
   });
 
   it('protects nested bare URLs regenerated inside recovered CJK tails', () => {
