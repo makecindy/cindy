@@ -33,7 +33,7 @@ import {
   type MemoryType,
   type WriteOptions,
   type WriteResult,
-  type WriteWarning,
+  type WriteWarningDetail,
 } from './types.js';
 
 const INDEX_FILENAME = 'MEMORY.md';
@@ -172,7 +172,8 @@ export class MemoryStorage {
    * 写完自动重建 MEMORY.md。返 WriteResult.warning:
    *  - 'shard-size-exceeded' : 写完后 body 超 maxShardBytes (软上限)
    *  - 'index-size-exceeded' : 重建后 MEMORY.md 超 maxIndexBytes (软上限)
-   * 软警告 = 写入仍成功, LLM 在 prompt 引导下走 consolidate。
+   * 软警告 = 写入仍成功; warningDetail 附当前字节/软上限/硬上限,
+   * 调用方据此判断超了多少再决定不动 / 微剪 / consolidate。
    */
   async write(opts: WriteOptions): Promise<WriteResult> {
     this.validateOpts(opts);
@@ -226,8 +227,11 @@ export class MemoryStorage {
     await this.rebuildIndex();
 
     const result: WriteResult = { ok: true, filename };
-    const warning = this.computeWarning(nextBody);
-    if (warning) result.warning = warning;
+    const detail = this.computeWarning(nextBody);
+    if (detail) {
+      result.warning = detail.kind;
+      result.warningDetail = detail;
+    }
     return result;
   }
 
@@ -370,13 +374,25 @@ export class MemoryStorage {
     }
   }
 
-  private computeWarning(body: string): WriteWarning | undefined {
-    if (Buffer.byteLength(body, 'utf8') > this.config.maxShardBytes) {
-      return 'shard-size-exceeded';
+  private computeWarning(body: string): WriteWarningDetail | undefined {
+    const bodyBytes = Buffer.byteLength(body, 'utf8');
+    if (bodyBytes > this.config.maxShardBytes) {
+      return {
+        kind: 'shard-size-exceeded',
+        sizeBytes: bodyBytes,
+        softLimitBytes: this.config.maxShardBytes,
+        hardLimitBytes: this.config.hardShardBytes,
+      };
     }
     // 索引刚被 rebuildIndex 写过, 直接读 cache
-    if (this.indexCache !== null && Buffer.byteLength(this.indexCache, 'utf8') > this.config.maxIndexBytes) {
-      return 'index-size-exceeded';
+    const indexBytes =
+      this.indexCache !== null ? Buffer.byteLength(this.indexCache, 'utf8') : 0;
+    if (indexBytes > this.config.maxIndexBytes) {
+      return {
+        kind: 'index-size-exceeded',
+        sizeBytes: indexBytes,
+        softLimitBytes: this.config.maxIndexBytes,
+      };
     }
     return undefined;
   }

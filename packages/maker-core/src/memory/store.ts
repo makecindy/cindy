@@ -60,6 +60,8 @@ export interface ConsolidateResult {
   deletedSources: string[];
   /** 写入 warning (通常 consolidate 后 size 会降, 但兜底带上) */
   warning?: WriteResult['warning'];
+  /** 软警告数值明细, 与 warning 同生同灭 */
+  warningDetail?: WriteResult['warningDetail'];
 }
 
 export class MakerMemoryStore {
@@ -195,6 +197,7 @@ export class MakerMemoryStore {
       filename: writeRes.filename,
       deletedSources: deleted,
       ...(writeRes.warning ? { warning: writeRes.warning } : {}),
+      ...(writeRes.warningDetail ? { warningDetail: writeRes.warningDetail } : {}),
     };
   }
 
