@@ -4014,9 +4014,12 @@
         "google": "Google",
         "china": "国内",
         "image": "画像",
-        "audio": "音声",
         "video": "動画",
+        "tts": "音声合成",
+        "stt": "音声認識",
+        "realtime": "リアルタイム音声",
         "embedding": "埋め込み",
+        "compression": "圧縮",
         "other": "その他"
       },
       "search": {

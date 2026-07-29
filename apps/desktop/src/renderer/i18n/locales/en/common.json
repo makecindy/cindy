@@ -4015,9 +4015,12 @@
         "google": "Google",
         "china": "Domestic",
         "image": "Image",
-        "audio": "Audio & Speech",
         "video": "Video",
+        "tts": "Text to Speech",
+        "stt": "Speech to Text",
+        "realtime": "Realtime Audio",
         "embedding": "Embeddings",
+        "compression": "Compression",
         "other": "Other"
       },
       "search": {

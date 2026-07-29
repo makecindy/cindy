@@ -4014,9 +4014,12 @@
         "google": "Google",
         "china": "국내",
         "image": "이미지",
-        "audio": "오디오·음성",
         "video": "비디오",
+        "tts": "음성 합성",
+        "stt": "음성 인식",
+        "realtime": "실시간 음성",
         "embedding": "임베딩",
+        "compression": "압축",
         "other": "기타"
       },
       "search": {
