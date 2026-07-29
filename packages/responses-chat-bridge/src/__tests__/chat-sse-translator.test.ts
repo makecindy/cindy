@@ -157,7 +157,7 @@ describe('ChatSseTranslator', () => {
     const translator = new ChatSseTranslator('m');
     const beforeName = translator.push({
       id: 'chatcmpl_args_first',
-      choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_args_first', function: { arguments: '{"x":' } }] } }],
+      choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_args_first', function: { arguments: '{"x":1}' } }] } }],
     }) as Array<Record<string, unknown>>;
     expect(beforeName.filter((event) => event.type === 'response.output_item.added')).toEqual([]);
     expect(beforeName.filter((event) => event.type === 'response.function_call_arguments.delta')).toEqual([]);
@@ -165,7 +165,7 @@ describe('ChatSseTranslator', () => {
     const out = [
       ...beforeName,
       ...translator.push({
-        choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'Bash', arguments: '1}' } }] }, finish_reason: 'tool_calls' }],
+        choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'Bash' } }] }, finish_reason: 'tool_calls' }],
       }),
       ...translator.finish(),
     ] as Array<Record<string, unknown>>;

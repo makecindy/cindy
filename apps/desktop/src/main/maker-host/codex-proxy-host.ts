@@ -752,8 +752,8 @@ function isVolcengineArkResponsesRouting(ctx: RequestTransformCtx, model: unknow
   if (!routing || (routing.wireProtocol ?? 'openai-responses') !== 'openai-responses') return false;
 
   try {
-    const hostname = new URL(routing.upstream).hostname.toLowerCase();
-    return hostname === 'volces.com' || hostname.endsWith('.volces.com');
+    const url = new URL(routing.upstream);
+    return url.protocol === 'https:' && VOLCENGINE_ARK_CHAT_HOST_RE.test(url.hostname.toLowerCase());
   } catch {
     return false;
   }

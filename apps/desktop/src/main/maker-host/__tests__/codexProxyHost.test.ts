@@ -1188,6 +1188,61 @@ describe('codex proxy host', () => {
     setCustomProviders([]);
   });
 
+  it('does not apply the Seed fallback to non-Ark Volces Responses routes', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'custom-volces',
+        name: 'Custom Volces',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://gateway.volces.com/api/v3',
+            models: [{ id: 'production-deployment', name: 'Production Deployment' }],
+          },
+        },
+      }),
+    ]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-custom-volces', 'thread-custom-volces', 'PRODUCT_PROMPT');
+    setSessionProvider('session-custom-volces', 'custom-volces');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    const original = {
+      model: 'production-deployment',
+      reasoning: { effort: 'high', summary: 'auto' },
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'namespace', name: 'mcp__example', tools: [{ type: 'function', name: 'read' }] },
+        { type: 'web_search', external_web_access: true },
+      ],
+      input: [
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'earlier' }] },
+      ],
+    };
+    let current: unknown = original;
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-custom-volces' },
+    };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual(original);
+
+    clearSessionProvider('session-custom-volces');
+    setCustomProviders([]);
+  });
+
   it('recognizes Volcengine native doubao Seed model IDs without route metadata', async () => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({

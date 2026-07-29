@@ -494,7 +494,7 @@ export class ChatSseTranslator {
     const args = stringField(functionPart.arguments);
     if (args) state.arguments += args;
     this.addToolWhenReady(state, out);
-    if (state.added && args) {
+    if (state.added) {
       const delta = state.arguments.slice(state.emittedArgumentsLength);
       state.emittedArgumentsLength = state.arguments.length;
       if (delta && !this.isCustomOrToolSearch(state.name)) {
