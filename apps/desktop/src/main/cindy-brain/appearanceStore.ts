@@ -687,13 +687,26 @@ export function deleteGhostAppearancePreset(
     const library = await readPresetLibrary();
     const preset = findPreset(library.presets, idOrName, sourceGhostId);
     if (!preset) return false;
-    library.presets = library.presets.filter((candidate) => candidate.id !== preset.id);
-    await atomicWriteJson(presetsFilePath(), library);
+    const previousAppearance = await readGhostAppearance();
+    await atomicWriteJson(transactionFilePath(), {
+      version: 1,
+      previousAppearance,
+      previousPresets: library,
+    } satisfies PersistedAppearanceTransaction);
+
+    const nextLibrary = {
+      ...library,
+      presets: library.presets.filter((candidate) => candidate.id !== preset.id),
+    };
+    await atomicWriteJson(presetsFilePath(), nextLibrary);
     await Promise.all(
       (['background', 'brandIcon', 'brandLogo'] as const).map((asset) =>
         removeRefs({ refKind: 'skin-preset', refId: presetRefId(preset.id, asset) }),
       ),
     );
+    // 媒体引用全部释放后才提交删除。此前任一步失败都会保留事务标记，
+    // 读取侧继续看到旧预设，下一次 mutation 先恢复引用与预设文件。
+    await fs.rm(transactionFilePath());
     return true;
   });
 }

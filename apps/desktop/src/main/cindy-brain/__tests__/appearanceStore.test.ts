@@ -49,6 +49,7 @@ import {
   saveGhostAppearancePreset,
   saveGhostAppearanceWithPreset,
 } from '../appearanceStore';
+import { removeRefs } from '../../cindy-media/ledger';
 
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
@@ -117,6 +118,22 @@ describe('appearance preset store', () => {
     expect(mocks.refs.get(`skin-preset:${first.id}:background`)?.has(HASH_B)).toBe(true);
     expect(await deleteGhostAppearancePreset(first.id)).toBe(true);
     expect(mocks.refs.has(`skin-preset:${first.id}:background`)).toBe(false);
+  });
+
+  it('预设引用清理失败时保留可重试的逻辑删除事务', async () => {
+    await saveGhostAppearancePreset(appearance('Furina'), { background: HASH_A }, 'skin');
+    const preset = (await listGhostAppearancePresets())[0];
+    vi.mocked(removeRefs).mockRejectedValueOnce(new Error('ledger unavailable'));
+
+    await expect(deleteGhostAppearancePreset(preset.id)).rejects.toThrow('ledger unavailable');
+
+    expect((await listGhostAppearancePresets()).map((item) => item.id)).toEqual([preset.id]);
+    expect(fs.existsSync(path.join(mocks.root, 'appearance-transaction.v1.json'))).toBe(true);
+
+    await expect(deleteGhostAppearancePreset(preset.id)).resolves.toBe(true);
+    expect(await listGhostAppearancePresets()).toEqual([]);
+    expect(mocks.refs.has(`skin-preset:${preset.id}:background`)).toBe(false);
+    expect(fs.existsSync(path.join(mocks.root, 'appearance-transaction.v1.json'))).toBe(false);
   });
 
   it('活动皮肤文件提交失败时恢复旧媒体引用', async () => {
