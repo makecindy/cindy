@@ -210,8 +210,10 @@ export function ErrorBanner({
             : null);
   // codex/ 骨折前缀只在 XD / 隐式来源下代表网关计费:显式自定义供应商也可能
   // 发现 codex/ 开头的模型 id,且 proxy 按显式来源优先路由(PR review P1)。
+  // 显式 xd 也要排除订阅桥模型:路由层的 bridge 分流优先于会话来源,xd 会话里
+  // 的 chatgpt/ / xai/ 模型花的仍是个人订阅额度(PR review P1)。
   const isGatewayBilledSource =
-    normalizedProviderId === 'xd' ||
+    (normalizedProviderId === 'xd' && !isSubscriptionBridgeModel) ||
     ((normalizedProviderId === null || normalizedProviderId === 'xd') &&
       !!modelId?.startsWith('codex/')) ||
     // codex 隐式来源必须等 runtime route 真值:占位 env-key 会把 OAuth 订阅

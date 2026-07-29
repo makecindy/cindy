@@ -24,8 +24,14 @@ export function useCodexRuntimeRoute(options?: { enabled?: boolean; refreshKey?:
   const [resolved, setResolved] = useState(false);
 
   useEffect(() => {
-    if (!enabled) return undefined;
+    if (!enabled) {
+      setResolved(false);
+      return undefined;
+    }
     let cancelled = false;
+    // refreshKey 变化 / 重新启用后旧真值不可信(典型:切换会话):先归位未解析,
+    // 消费方不得拿上一个会话的 route 继续分类,等新值落地再放行。
+    setResolved(false);
     window.electronAPI.maker
       .codexRuntimeRouteGet()
       .then((next) => {

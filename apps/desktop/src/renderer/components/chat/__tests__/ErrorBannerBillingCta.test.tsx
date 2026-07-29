@@ -139,6 +139,13 @@ describe('ErrorBanner billing CTA', () => {
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
   });
 
+  it('keeps subscription-bridge models off Cindy billing even under an explicit xd provider', () => {
+    // 路由层的 bridge 分流优先于会话来源:xd 会话里的 chatgpt/ 模型花的是个人订阅额度。
+    renderBanner({ providerId: 'xd', modelId: 'chatgpt/gpt-5.5' });
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
+    expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
+  });
+
   it('never relabels subscription-bridge (chatgpt/) quota errors even with a stale gateway route', () => {
     // bridge 请求在 proxy 提前分流、不更新会话路由观察值:残留的 gateway 观察值
     // 不得把 ChatGPT 的配额错误贴成 Cindy 点数耗尽。
