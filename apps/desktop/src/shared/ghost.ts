@@ -56,7 +56,7 @@ export function parseGhostPartition(partition: unknown): string | null {
 const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 /**
- * 十四个卡槽(意识能力的全部出口,docs/dev-rules/plugin-security-and-authoring.md)。
+ * 十六个卡槽(意识能力的全部出口,docs/dev-rules/plugin-security-and-authoring.md)。
  * 'cindy' = 请 Cindy 本体代办(借主机自带 AI 能力干活;2026-07-11 Lizi 定案
  * 由 'model' 更名——本质是 Cindy 在干活,与选模型无关;旧名在校验层作
  * 静默别名兼容,已装老包不消失)。
@@ -96,6 +96,9 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 即授权(pick 模式,路径不回沙箱),或 tool-call 语境下带在途 callId + 绝对
  * 路径(目录在该会话 workdir 内自动放行,workdir 外弹确认卡)。远程工作区
  * v1 一律拒(fail closed)。
+ * 'appearance' = Cindy 外观(2026-07-28):插件只能选择宿主预置调色板，
+ * 并可提交经过媒体账本归属校验的图片作为背景、首页头像与 Logo。宿主不接受
+ * CSS、DOM 操作、任意 URL 或任意颜色；外观覆盖可随时恢复默认。
  */
 export const GHOST_SLOTS = [
   'subscribe',
@@ -113,6 +116,7 @@ export const GHOST_SLOTS = [
   'preview',
   'skill',
   'workspace',
+  'appearance',
 ] as const;
 export type GhostSlot = (typeof GHOST_SLOTS)[number];
 
@@ -1295,6 +1299,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
     // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
     else if (slot === 'skill') keys.push('slotSkill');
     else if (slot === 'workspace') keys.push('slotWorkspace');
+    else if (slot === 'appearance') keys.push('slotAppearance');
     // 'panel' 槽已由 manifest.panel 覆盖,不重复
   }
   return keys;
@@ -1356,7 +1361,7 @@ export interface GhostPermissionItem {
   /** 稳定键:更新 diff 按它对齐(内容变化视为移除+新增,如面板换边)。 */
   key: string;
   /** 图标分组(renderer 按 kind 选图标)。 */
-  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace';
+  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace' | 'appearance';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -1541,6 +1546,14 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       kind: 'workspace',
       labelKey: 'workspace',
       detailKey: 'workspaceDetail',
+    });
+  }
+  if (manifest.slots.includes('appearance')) {
+    items.push({
+      key: 'appearance',
+      kind: 'appearance',
+      labelKey: 'appearance',
+      detailKey: 'appearanceDetail',
     });
   }
   // session-context 槽:派活时可获知当前会话的项目目录位置(路径信息,
@@ -4541,6 +4554,122 @@ export type GhostPipeNotifyResult = { ok: true } | { ok: false; message: string 
 
 /** 提示正文长度上限(与订阅槽 block reason ≤200 同量级:一眼能读完的量)。 */
 export const GHOST_NOTIFY_MAX_CHARS = 200;
+
+/** appearance 槽只接受宿主维护的固定调色板，不接受插件自报色值。 */
+export const GHOST_APPEARANCE_PALETTES = [
+  'graphite',
+  'ocean',
+  'forest',
+  'ember',
+  'violet',
+  'rose',
+] as const;
+export type GhostAppearancePalette = (typeof GHOST_APPEARANCE_PALETTES)[number];
+export const GHOST_APPEARANCE_DEFAULT_DIM = 0.28;
+export const GHOST_APPEARANCE_DEFAULT_SURFACE_OPACITY = 0.82;
+
+export interface GhostAppearanceSnapshot {
+  palette: GhostAppearancePalette;
+  /** 由宿主持久化的来源归属；插件请求不能自报。 */
+  sourceGhostId?: string;
+  name?: string;
+  background?: {
+    /** 由主机从账本元数据拼出的 cindy-media URL。 */
+    url: string;
+    focusX: number;
+    focusY: number;
+  };
+  /** 首页品牌图片；均由主机从媒体账本解析，不接受插件提供的任意 URL。 */
+  brand?: {
+    icon?: { url: string };
+    logo?: { url: string };
+  };
+  /** 背景暗化强度，0–0.85。 */
+  dim: number;
+  /** 内容表面不透明度，0.55–1。默认 0.82，确保背景仍清晰可辨。 */
+  surfaceOpacity: number;
+  updatedAt: number;
+}
+
+export interface GhostAppearancePresetSummary {
+  id: string;
+  name: string;
+  palette: GhostAppearancePalette;
+  /** 设置页展示来源与插件侧所有权隔离使用。 */
+  sourceGhostId?: string;
+  /** 仅可信宿主 UI 返回的人类可读插件名；持久层不依赖它。 */
+  sourceGhostName?: string;
+  hasBackground: boolean;
+  hasBrandIcon: boolean;
+  hasBrandLogo: boolean;
+  updatedAt: number;
+}
+
+/** 上行：应用或恢复 Cindy 外观。图片只交 SHA-256，归属和真实 MIME 由主机复验。 */
+export type GhostPipeAppearanceRequest =
+  | {
+      type: 'appearance-request';
+      operation: 'apply';
+      palette: GhostAppearancePalette;
+      name?: string;
+      background?: { hash: string; focusX?: number; focusY?: number };
+      brand?: {
+        icon?: { hash: string };
+        logo?: {
+          hash: string;
+          /** 将生成图的近白底转成透明并裁掉留白。 */
+          removeWhiteBackground?: boolean;
+        };
+      };
+      dim?: number;
+      surfaceOpacity?: number;
+    }
+  | {
+      type: 'appearance-request';
+      operation: 'patch';
+      name?: string;
+      palette?: GhostAppearancePalette;
+      /** null 表示显式移除；undefined 表示保留当前值。 */
+      background?: { hash: string; focusX?: number; focusY?: number } | null;
+      brand?: {
+        icon?: { hash: string } | null;
+        logo?: {
+          hash: string;
+          removeWhiteBackground?: boolean;
+        } | null;
+      } | null;
+      dim?: number;
+      surfaceOpacity?: number;
+    }
+  | {
+      type: 'appearance-request';
+      operation: 'reset';
+    }
+  | {
+      type: 'appearance-request';
+      operation: 'list-presets';
+    }
+  | {
+      type: 'appearance-request';
+      operation: 'activate-preset' | 'delete-preset';
+      /** 可传稳定 id，也可传皮肤名称（名称匹配不区分大小写）。 */
+      preset: string;
+    }
+  | {
+      type: 'appearance-request';
+      operation: 'save-current';
+      /** 省略时沿用当前皮肤名称。 */
+      name?: string;
+    };
+
+export type GhostPipeAppearanceResult =
+  | {
+      ok: true;
+      appearance: GhostAppearanceSnapshot | null;
+      presets?: GhostAppearancePresetSummary[];
+      preset?: GhostAppearancePresetSummary;
+    }
+  | { ok: false; message: string };
 
 /**
  * 主机代言提示的文案键(host-origin notice,2026-07-14):凭证入库 / 授权

@@ -43,6 +43,12 @@ function defaultDb(): LedgerDb {
  * 'profile-avatar':用户自定义头像(设置 → 用户卡片编辑),refId = 登录用户
  * id。跨会话持久(removeSessionRefs 不碰),同 refId 只保留最新指纹——换头像时
  * 由 profileEdit 用 removeRefsExceptHash 清旧引用,恢复默认头像时 removeRefs 清空。
+ * 'skin-background' / 'skin-brand-icon' / 'skin-brand-logo':当前用户正在使用
+ * 的 Cindy 皮肤图片，refId 恒为 'active'；与会话、插件安装生命周期解耦，
+ * 替换或恢复默认时由外观存储清理。
+ * 'skin-preset':用户保存的皮肤预设图片，refId =
+ * `<preset id>:background|brand-icon|brand-logo`；切换或恢复默认不清理，仅在
+ * 更新 / 删除对应预设时释放。
  */
 export type MediaRefKind =
   | 'message'
@@ -52,7 +58,11 @@ export type MediaRefKind =
   | 'ghost-grant'
   | 'import'
   | 'integration-cache'
-  | 'profile-avatar';
+  | 'profile-avatar'
+  | 'skin-background'
+  | 'skin-brand-icon'
+  | 'skin-brand-logo'
+  | 'skin-preset';
 /** 出生来源类型。 */
 export type MediaOriginKind = 'ghost' | 'tool' | 'user' | 'integration';
 

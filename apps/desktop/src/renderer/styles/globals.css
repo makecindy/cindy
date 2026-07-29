@@ -1738,6 +1738,40 @@ body.resizing-pane [data-ghost-webview] {
 [data-theme='cindy-dark'] .h-screen.bg-content-area {
   background: transparent;
 }
+/* Cindy Skin 已在 MainLayout 的 chat-main 外层铺一层半透明 content-area。
+   CCAgentSessionView 自己再画同色背景会把透明度重复叠加（0.72 两层≈0.92），
+   导致侧栏可见壁纸而聊天／生成页近乎实色。皮肤生效时只撤掉这个内层；
+   外层仍保留阅读性蒙版，普通主题完全不受影响。 */
+html[data-skin-active] [data-cindy-skin-transparent-layer='true'] {
+  background: transparent;
+}
+/* 输入框外侧不再铺整块 footer 托底；仅输入卡自身形成局部毛玻璃。
+   高浓度底色负责隔开滚动正文，blur 只在 12px 圆角内柔化背景。 */
+html[data-skin-active] [data-cindy-skin-glass-card='true'] {
+  -webkit-backdrop-filter: blur(20px) saturate(1.08);
+  backdrop-filter: blur(20px) saturate(1.08);
+}
+/* 输入区是浮层，MessageStream 的 bottomPadding 只负责滚动定位，不会阻止正文
+   绘制到浮层后方。按输入区实时高度裁掉消息像素，并在顶部 32px 内渐隐：
+   底部可以继续展示壁纸与状态控件，但不会再出现正文穿过输入框／状态栏。 */
+html[data-skin-active]
+  [data-cindy-skin-message-viewport='true']
+  [data-cindy-skin-scroll-content='true'] {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 calc(100% - var(--cindy-composer-overlay-height)),
+    transparent calc(100% - var(--cindy-composer-overlay-height) + 32px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 calc(100% - var(--cindy-composer-overlay-height)),
+    transparent calc(100% - var(--cindy-composer-overlay-height) + 32px),
+    transparent 100%
+  );
+}
 /* 模式1 侧栏(light):半透底,壁纸模糊由原生 vibrancy sidebar 材质提供。
    红渐变覆盖层已拆除(用户裁决 2026-07-18:Figma 该两块渐变矩形按装饰废稿处理,不实现);
    CSS backdrop-filter 已撤(A/B 实证:blur 会把透明窗背衬黑箱)。 */
@@ -1834,4 +1868,9 @@ body.resizing-pane [data-ghost-webview] {
   .ghost-panel-enter,
   .ghost-panel-exit,
   .ghost-bubble:hover .ghost-bubble-face { animation: none; }
+}
+/* 宿主受控换肤层位于 MainLayout 内；激活时只让最外层画布透明，具体 sidebar /
+   chat / card 仍消费 appearance 映射后的语义 surface，保证文字可读。 */
+:root[data-skin-active='true'] [data-cindy-main-layout='true'] {
+  background-color: transparent;
 }

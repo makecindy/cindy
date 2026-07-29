@@ -58,4 +58,42 @@ describe('market Ghost session boundary', () => {
     expect(leaseIndex).toBeGreaterThan(inspectIndex);
     expect(body).toContain('releaseMutation?.();');
   });
+
+  it('holds the same owner-stability lease across every appearance mutation entry', () => {
+    const helperStart = source.indexOf(
+      'async function withGhostAppearanceMutation<T>',
+    );
+    const helperEnd = source.indexOf(
+      '\n}\n\nexport function getGhostAppearanceSlot',
+      helperStart,
+    );
+    const helper = source.slice(helperStart, helperEnd);
+    expect(helper).toContain('const owner = captureGhostMutationOwner();');
+    expect(helper).toContain('const releaseMutation = beginGhostMutation(owner);');
+    expect(helper).toContain('releaseMutation();');
+
+    for (const marker of [
+      'getGhostAppearanceSlot().handleRequest(id, payload)',
+      'await resetGhostAppearance();',
+      'await activateGhostAppearancePreset(preset)',
+      'await deleteGhostAppearancePreset(preset)',
+    ]) {
+      const markerIndex = source.indexOf(marker);
+      const leaseIndex = source.lastIndexOf('withGhostAppearanceMutation(', markerIndex);
+      expect(markerIndex).toBeGreaterThan(-1);
+      expect(leaseIndex).toBeGreaterThan(-1);
+      expect(markerIndex - leaseIndex).toBeLessThan(500);
+    }
+  });
+
+  it('broadcasts trusted preset deletion so every window refreshes its library', () => {
+    const handlerStart = source.indexOf(
+      "ipcMain.handle('ghosts:appearance:delete-preset'",
+    );
+    const handlerEnd = source.indexOf('\n  });', handlerStart);
+    const handler = source.slice(handlerStart, handlerEnd);
+    expect(handler).toContain('const state = await readGhostAppearanceState();');
+    expect(handler).toContain('broadcastGhostAppearance(state.appearance);');
+    expect(handler).toContain('return state;');
+  });
 });

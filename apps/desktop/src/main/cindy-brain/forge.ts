@@ -843,7 +843,7 @@ key、未知字段、原清单没有的条目、类型或长度不合格、文�
 node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`constructor\` 或
 \`prototype\`；这些名称是宿主保留键，打包时会直接拒绝。
 
-十五个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图)、\`agent\`(让
+十六个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图)、\`agent\`(让
 当前 Agent 开始一个普通用户回合,见 §4.11)、\`panel\`(常驻
 面板)、\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
 事件 + 拦截用户消息,见 §4.6)、\`network\`(访问自带服务的域名白名单 HTTP,主机代发,
@@ -854,7 +854,8 @@ Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机
 用户亲选即授权,见 §4.14)、\`preview\`(请主机在右侧栏内置浏览器打开白名单网站的
 预览标签,见 §4.15)、\`skill\`(捆绑 Agent Skills:随包 SKILL.md 技能,启用后
 Claude Code 与 Codex 都能发现,见 §4.16)、\`workspace\`(请主机为项目目录在
-侧边栏创建/复用会话入口,见 §4.17)。
+侧边栏创建/复用会话入口,见 §4.17)、\`appearance\`(从宿主预置调色板与
+本插件名下图片中组合 Cindy 外观,见 §4.18)。
 
 **agent 能力详单**:在 \`slots\` 加 \`"agent"\`，默认只允许在用户真实点击你的
 聊天卡片后发起一次 Agent 回合；这一档不写配套字段。若确实需要没有当次点击也能
@@ -2352,7 +2353,7 @@ SKILL.md 硬规则(打包与装入双侧强制,任一不满足直接拒):
 信任与作用域(如实告知用户,也请作者自重):
 
 - 技能指令由**主 Agent 以用户全部权限执行**,对所有项目、所有会话生效,
-  **不受插件沙箱约束**——这是十五个卡槽里信任面最高的能力,装入确认框会把
+  **不受插件沙箱约束**——这是十六个卡槽里信任面最高的能力,装入确认框会把
   每个技能置顶逐条列出;
 - 技能跟随插件的**全局**启用状态:仅在某个工作目录停用插件**不会**隐藏技能,
   只有全局停用或卸载才撤链(本期只有全局作用域);
@@ -2406,6 +2407,100 @@ const ensured = await cindy.workspace({
   BUSY);
 - 创建的是**空会话**:不拉起 agent、不发消息、不自动开始任何任务;要让 Agent
   立即干活请配合 agent 槽(§4.11)。
+
+## 4.18 修改 Cindy 外观(appearance 槽)
+
+需要为 Cindy 应用背景与配色时声明 \`appearance\` 槽。此能力创建宿主受控的
+「插件皮肤」外观风格，不是 CSS 注入器：插件不能访问宿主 DOM，不能传任意颜色、
+任意 URL、样式表或本机路径。插件皮肤与普通主题互斥，不会叠在用户此前选中的
+主题上；显示模式只在宿主管理的皮肤 Light / Dark 变体之间切换，字体设置保持独立。
+
+\`\`\`js
+const applied = await cindy.send({
+  type: 'appearance-request',
+  operation: 'apply',
+  name: '雨夜书房',                 // 可选，1–48 个可见字符
+  palette: 'ocean',                // 必填，见下方固定枚举
+  background: {                    // 可选
+    hash: generated.hash,          // 当前插件名下、账本可读的真实图片指纹
+    focusX: 0.5,                   // 可选 0–1，缺省 0.5
+    focusY: 0.4                    // 可选 0–1，缺省 0.5
+  },
+  brand: {                         // 可选；只影响 Cindy 首页品牌锁定区
+    icon: { hash: squareHash },    // 可选，推荐 1:1
+    logo: {                        // 可选，横向文字字标
+      hash: wideLogoHash,
+      removeWhiteBackground: true // 近白底转透明并自动裁掉留白
+    }
+  },
+  dim: 0.28,                       // 可选 0–0.85
+  surfaceOpacity: 0.82             // 可选 0.55–1
+});
+
+// 微调当前皮肤：只改明确给出的字段，其它内容原样保留。
+await cindy.send({
+  type: 'appearance-request',
+  operation: 'patch',
+  brand: { icon: { hash: newAvatarHash } }
+});
+// 图片字段显式传 null 才表示移除；不传表示保留。
+await cindy.send({
+  type: 'appearance-request',
+  operation: 'patch',
+  brand: { logo: null }
+});
+
+// 查看、保存、切换和删除「当前插件自己名下」的账号级皮肤预设。
+const library = await cindy.send({
+  type: 'appearance-request',
+  operation: 'list-presets'
+});
+await cindy.send({
+  type: 'appearance-request',
+  operation: 'save-current',
+  name: '雨夜书房'
+});
+await cindy.send({
+  type: 'appearance-request',
+  operation: 'activate-preset',
+  preset: '雨夜书房'                // 也可传 list-presets 返回的稳定 id
+});
+await cindy.send({
+  type: 'appearance-request',
+  operation: 'delete-preset',
+  preset: '雨夜书房'
+});
+
+// 恢复普通主题（只释放当前外观引用，不删除已保存预设）
+await cindy.send({ type: 'appearance-request', operation: 'reset' });
+\`\`\`
+
+固定 palette：\`graphite\` / \`ocean\` / \`forest\` / \`ember\` /
+\`violet\` / \`rose\`。背景与品牌图片 hash 必须来自本插件通过 cindy-request 生成、
+network media 入库或用户显式过户的图片；主机复验 SHA-256 形状、账本归属和
+真实 MIME，不属于你的图片或非图片资源一律拒绝。已有图片不需要由本插件重新
+生成：Agent 应把其它插件返回的 \`cindy-media://\`、聊天图片或本机媒体路径放在
+\`ghost_call\` 顶层 \`attachments\`，主机安全入库／过户后会把裸指纹注入
+\`msg.args.attachments\`；插件从中取指纹填入 \`background.hash\` 或
+\`brand.icon.hash\` / \`brand.logo.hash\`，不得把原始
+URL 或路径直接塞进 appearance-request。应用结果按当前账号持久化，Light / Dark
+切换时由宿主以 Cindy 对应明暗版本为固定基础，解析出这套皮肤自己的完整主题。
+不要循环重试被拒请求，也不要向用户承诺修改布局、
+字体、权限色、危险状态色或其它未在协议中的 UI。
+
+\`apply\` 是整套替换：没带的背景或品牌图会被清除。\`patch\` 是局部微调：
+未出现的字段必须保留，图片字段显式传 \`null\` 才移除；当前没有皮肤、或活动皮肤
+来自其他插件时拒绝 patch / save-current / reset。插件只能列出、激活和删除自己创建的预设；
+全部皮肤的统一管理属于 Cindy 可信设置页。
+带名称的新皮肤应保存为账号级预设，同名保存执行更新；预设图片由宿主使用独立媒体引用
+保活，每个插件去重后的预设媒体上限为 128 MB，因此切换到其它皮肤或恢复默认后仍可直接
+激活，无需重新生成。删除正在显示的预设
+只删除皮肤库条目，不强制改变当前画面。
+
+Logo 生成提示必须要求“纯白 #FFFFFF 实心背景、深色或主题色单行文字字标、横向构图”，
+并明确禁止徽章、头像、人物、吉祥物、圆形图标、方形底板和 App icon；随后传
+\`removeWhiteBackground:true\` 由宿主生成透明 PNG。原图已透明且含需保留的白色元素时
+才传 false。
 
 ## 5. 面板(panel.html/css/js)
 

@@ -2419,15 +2419,16 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
     expect(withPreview({ hosts: ['a.example.com'], extra: 1 }).ok).toBe(false);
   });
 
-  it('session-context / pick / workspace 槽:纯槽声明即可装入,并生成对应权限项', () => {
+  it('session-context / pick / workspace / appearance 槽:纯槽声明即可装入,并生成对应权限项', () => {
     const r = validateGhostManifest({
       ...goodChipManifest(),
-      slots: ['panel', 'session-context', 'pick', 'preview', 'workspace'],
+      slots: ['panel', 'session-context', 'pick', 'preview', 'workspace', 'appearance'],
       preview: { hosts: ['example.com'] },
     });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(ghostContentKeys(r.manifest)).toContain('slotWorkspace');
+    expect(ghostContentKeys(r.manifest)).toContain('slotAppearance');
     const items = ghostPermissionItems(r.manifest);
     expect(items).toEqual(
       expect.arrayContaining([
@@ -2448,6 +2449,12 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
           kind: 'workspace',
           labelKey: 'workspace',
           detailKey: 'workspaceDetail',
+        }),
+        expect.objectContaining({
+          key: 'appearance',
+          kind: 'appearance',
+          labelKey: 'appearance',
+          detailKey: 'appearanceDetail',
         }),
       ]),
     );

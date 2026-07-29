@@ -3408,6 +3408,7 @@ export function MessageStream({
             <div
               ref={scrollRef}
               data-scroll-container=""
+              data-cindy-skin-scroll-content="true"
               className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
               onScroll={handleScroll}
             >

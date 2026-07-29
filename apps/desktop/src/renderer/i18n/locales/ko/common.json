@@ -361,9 +361,27 @@
     "appearance": {
       "title": "외관",
       "modeLabel": "표시 모드",
+      "modeDescription": "화면의 밝기를 정합니다. 외관 스타일은 이에 맞는 버전을 자동으로 사용합니다.",
+      "modeAria": "표시 모드 선택",
       "themeLabel": "테마",
       "themeAriaLabel": "테마 선택",
       "localBadge": "(로컬)",
+      "style": {
+        "label": "외관 스타일",
+        "aria": "외관 스타일 선택",
+        "theme": "테마",
+        "localTheme": "로컬 테마",
+        "pluginSkin": "플러그인 스킨",
+        "fromPlugin": "{{name}} 플러그인에서 제공",
+        "customSkin": "사용자 지정 스킨",
+        "switchFailed": "외관 스타일을 전환할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        "deleteTitle": "‘{{name}}’을(를) 삭제할까요?",
+        "deleteDescription": "이 스킨 프리셋과 연결된 미디어 참조를 삭제합니다. 사용 중이면 Cindy가 이전에 선택한 테마로 돌아갑니다.",
+        "deleteConfirm": "삭제",
+        "deleteAria": "스킨 ‘{{name}}’ 삭제",
+        "deleted": "스킨 ‘{{name}}’을(를) 삭제했습니다",
+        "deleteFailed": "스킨을 삭제할 수 없습니다. 잠시 후 다시 시도해 주세요."
+      },
       "localThemes": {
         "title": "로컬 테마",
         "export": "로컬 복사본 만들기",
@@ -432,8 +450,8 @@
         "system": "자동"
       },
       "themeAria": {
-        "light": "라이트 테마",
-        "dark": "다크 테마",
+        "light": "라이트 모드",
+        "dark": "다크 모드",
         "system": "시스템 따르기"
       },
       "sidebarCardMode": {
@@ -2700,6 +2718,8 @@
         "pickDetail": "요청 시 Cindy가 시스템 폴더 선택 창을 띄웁니다. 어떤 폴더를 넘길지는 직접 결정하며, 취소하면 아무것도 전달되지 않습니다.",
         "workspace": "프로젝트 폴더의 세션 항목을 사이드바에 만들도록 요청할 수 있습니다",
         "workspaceDetail": "요청 시 직접 폴더를 선택하거나 확인 카드에서 전체 경로를 본 뒤 허용 여부를 결정합니다. 사용자가 시작한 호출을 처리하는 동안에는 현재 세션 작업 디렉터리 안의 하위 폴더는 추가 확인 없이 사용됩니다. 이미 세션이 있는 폴더는 재사용되어 중복 생성되지 않습니다. 만들어지는 것은 빈 세션뿐이며 스스로 작업을 시작하지 않습니다.",
+        "appearance": "Cindy의 외관을 변경할 수 있습니다",
+        "appearanceDetail": "Cindy가 제공하는 팔레트와 이 플러그인이 생성했거나 사용 권한을 받은 정적 이미지만 사용할 수 있습니다. 자신이 만든 스킨 프리셋을 읽고 덮어쓰거나 삭제할 수 있으며, 프리셋 미디어는 최대 128 MB까지 영구 저장됩니다. CSS 삽입, 호스트 DOM 접근, 임의 URL 사용, 권한 및 위험 상태의 의미 색상 변경은 할 수 없습니다.",
         "sessionContext": "현재 세션이 사용 중인 프로젝트 폴더 위치를 알 수 있습니다",
         "sessionContextDetail": "현재 세션을 위해 작동할 때만 위치 정보(세션 ID와 프로젝트 폴더 경로)를 전달합니다. 파일 내용은 포함되지 않으며 파일 접근 권한도 부여되지 않습니다.",
         "preview": "아래 사이트의 미리보기 페이지를 사이드바 브라우저에서 열 수 있습니다",
@@ -2797,7 +2817,8 @@
         "slotNotify": "시스템 알림",
         "slotFs": "파일 쓰기",
         "slotSkill": "에이전트 스킬",
-        "slotWorkspace": "워크스페이스 세션"
+        "slotWorkspace": "워크스페이스 세션",
+        "slotAppearance": "Cindy 외관"
       },
       "commandPaletteTag": "플러그인 명령",
       "updateConfirm": {

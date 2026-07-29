@@ -361,9 +361,27 @@
     "appearance": {
       "title": "外观",
       "modeLabel": "显示模式",
+      "modeDescription": "决定界面的明暗状态，外观风格会自动使用对应版本。",
+      "modeAria": "选择显示模式",
       "themeLabel": "主题",
       "themeAriaLabel": "主题选择",
       "localBadge": "(本地)",
+      "style": {
+        "label": "外观风格",
+        "aria": "选择外观风格",
+        "theme": "主题",
+        "localTheme": "本地主题",
+        "pluginSkin": "插件皮肤",
+        "fromPlugin": "来自「{{name}}」插件",
+        "customSkin": "自定义皮肤",
+        "switchFailed": "无法切换外观风格，请稍后重试",
+        "deleteTitle": "删除「{{name}}」？",
+        "deleteDescription": "将删除这套皮肤预设及其持有的媒体引用。如果它正在使用，Cindy 会切回你上次选择的主题。",
+        "deleteConfirm": "删除",
+        "deleteAria": "删除皮肤「{{name}}」",
+        "deleted": "已删除皮肤「{{name}}」",
+        "deleteFailed": "无法删除皮肤，请稍后重试"
+      },
       "localThemes": {
         "title": "本地主题",
         "export": "新建本地副本",
@@ -432,8 +450,8 @@
         "system": "跟随系统"
       },
       "themeAria": {
-        "light": "浅色主题",
-        "dark": "深色主题",
+        "light": "浅色模式",
+        "dark": "深色模式",
         "system": "跟随系统"
       },
       "sidebarCardMode": {
@@ -2700,6 +2718,8 @@
         "pickDetail": "它发起请求时，Cindy 会弹出系统的选择文件夹窗口；选哪个、给不给，都由你亲手决定，取消则它什么都拿不到。",
         "workspace": "可请求为项目文件夹在侧边栏创建对话入口",
         "workspaceDetail": "它发起请求时，由你亲手选择文件夹，或在确认卡上看到完整路径后再决定；它正在处理你发起的调用时，当前对话工作目录内的子文件夹可直接使用，不再单独确认。文件夹已有对话时直接复用，不重复创建。创建的只是空对话，不会自动开始任何任务。",
+        "appearance": "可以修改 Cindy 外观",
+        "appearanceDetail": "只能使用 Cindy 预置调色板和该插件自己生成或获授权的静态图片；它也可以读取、覆盖或删除自己名下的皮肤预设，预设媒体最多持久占用 128 MB。不能注入 CSS、访问宿主 DOM、使用任意网址或修改权限与危险状态的语义颜色。",
         "sessionContext": "可获知当前对话正在使用的项目文件夹位置",
         "sessionContextDetail": "只在它为当前对话干活时告知位置信息(对话编号与项目文件夹路径)，不包含文件内容，也不因此获得文件访问权。",
         "preview": "可在右侧栏浏览器中打开以下网站的预览页面",
@@ -2797,7 +2817,8 @@
         "slotNotify": "系统提示",
         "slotFs": "写文件",
         "slotSkill": "Agent 技能",
-        "slotWorkspace": "工作区对话"
+        "slotWorkspace": "工作区对话",
+        "slotAppearance": "Cindy 外观"
       },
       "commandPaletteTag": "插件指令",
       "updateConfirm": {

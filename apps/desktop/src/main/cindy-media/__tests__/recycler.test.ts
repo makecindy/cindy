@@ -237,6 +237,34 @@ describe('scanCache / evictCacheBlobs(cache 瘦身)', () => {
   });
 });
 
+describe('skin refKinds(换肤引用的回收回归)', () => {
+  it('仅剩 skin-* 引用的 blob 不是零引用候选;引用释放后过缓冲期才候选', async () => {
+    const bg = await seedBlob('skin-active-bg', { ageMs: OLD });
+    await ledger.addRef({ hash: bg.hash, refKind: 'skin-background', refId: 'active' }, db);
+    const preset = await seedBlob('skin-preset-bg', { ageMs: OLD });
+    await ledger.addRef(
+      { hash: preset.hash, refKind: 'skin-preset', refId: 'p1:background' },
+      db,
+    );
+
+    expect((await recycler.scanZeroRef({ live: new Set() }, db)).hashes).toEqual([]);
+
+    // 恢复默认 / 删除预设 = 只删自己名下的引用行;blob 交回收器按零引用走。
+    await ledger.removeRefs({ refKind: 'skin-background', refId: 'active' }, db);
+    await ledger.removeRefs({ refKind: 'skin-preset', refId: 'p1:background' }, db);
+    const scan = await recycler.scanZeroRef({ live: new Set() }, db);
+    expect(new Set(scan.hashes)).toEqual(new Set([bg.hash, preset.hash]));
+  });
+
+  it('cache 入仓的图片挂上 skin 引用后不可按缓存逐出(双保险)', async () => {
+    const b = await seedBlob('skin-cache-origin', { isCache: true });
+    await ledger.addRef({ hash: b.hash, refKind: 'skin-brand-icon', refId: 'active' }, db);
+    const result = await recycler.evictCacheBlobs({ hashes: [b.hash], live: new Set() }, db);
+    expect(result).toEqual({ deleted: 0, freedBytes: 0, skipped: 1 });
+    expect(fs.existsSync(blobPath(b.hash, b.ext))).toBe(true);
+  });
+});
+
 describe('reconcile(对账:只报不删)', () => {
   it('孤魂文件(盘有账无,超 1h)与坏账(账有盘无)都能报出;在途新文件豁免', async () => {
     // 孤魂:直接写字节仓不记账,并把 mtime 拨老。

@@ -12,6 +12,7 @@ import { act, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 
 import { themeService } from '../../themes/theme-service';
+import { publishSkinAppearance } from '../../cindy-brain/skinAppearanceStore';
 import { ThemeProvider, useTheme } from '../useTheme';
 
 // jsdom 无 matchMedia,ThemeProvider 初始化与 system 模式需要它。
@@ -39,6 +40,7 @@ function dispatchStorage(key: string, newValue: string | null) {
 describe('useTheme 跨窗口主题同步(D2-3)', () => {
   beforeEach(() => {
     localStorage.clear();
+    publishSkinAppearance(null);
     delete document.documentElement.dataset.theme;
     document.documentElement.classList.remove('dark');
     vi.spyOn(themeService, 'applyTheme').mockImplementation(() => {});
@@ -112,5 +114,38 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     });
     expect(result.current.theme).toBe(beforeTheme);
     expect(result.current.familyId).toBe(beforeFamily);
+  });
+
+  it('皮肤作为互斥外观来源，显示模式只解析其对应明暗变体', () => {
+    publishSkinAppearance({
+      palette: 'ocean',
+      sourceGhostId: 'skin',
+      dim: 0.28,
+      surfaceOpacity: 0.82,
+      updatedAt: 1,
+    });
+    const { result } = renderHook(() => useTheme(), { wrapper });
+    expect(result.current.appearanceSource).toBe('skin');
+    const applySpy = themeService.applyTheme as unknown as ReturnType<typeof vi.fn>;
+    expect(applySpy.mock.calls.at(-1)?.[0]).toMatchObject({
+      id: 'skin-ocean-light',
+      type: 'light',
+    });
+  });
+
+  it('停用皮肤后恢复此前保存的普通主题家族', () => {
+    localStorage.setItem('theme.familyId', 'default');
+    publishSkinAppearance({
+      palette: 'forest',
+      sourceGhostId: 'skin',
+      dim: 0.28,
+      surfaceOpacity: 0.82,
+      updatedAt: 1,
+    });
+    const { result } = renderHook(() => useTheme(), { wrapper });
+    expect(result.current.familyId).toBe('default');
+    act(() => publishSkinAppearance(null));
+    expect(result.current.appearanceSource).toBe('theme');
+    expect(result.current.familyId).toBe('default');
   });
 });

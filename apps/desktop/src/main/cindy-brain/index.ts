@@ -7,6 +7,7 @@ import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   type GhostAppRegion,
+  type GhostAppearanceSnapshot,
   CINDY_ACCOUNT_GHOST_IDS,
   GHOST_CARD_HEIGHT_DEFAULT,
   GHOST_CARD_HEIGHT_MAX,
@@ -137,6 +138,18 @@ import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
+import { GhostAppearanceSlot } from './appearanceSlot.js';
+import {
+  activateGhostAppearancePreset,
+  deleteGhostAppearancePreset,
+  listGhostAppearancePresets,
+  readGhostAppearance,
+  resetGhostAppearance,
+  saveGhostAppearance,
+  saveGhostAppearancePreset,
+  saveGhostAppearanceWithPreset,
+} from './appearanceStore.js';
+import { removeWhiteSkinLogoBackground, validateStaticSkinImage } from './skinLogoProcessor.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
 import { GhostNetworkSlot } from './networkSlot.js';
@@ -1435,6 +1448,87 @@ export function noteGhostSessionFocused(sessionId: string | null): void {
 let cindySlotSingleton: GhostCindySlot | null = null;
 let networkSlotSingleton: GhostNetworkSlot | null = null;
 let notifySlotSingleton: GhostNotifySlot | null = null;
+let appearanceSlotSingleton: GhostAppearanceSlot | null = null;
+
+export const GHOST_APPEARANCE_CHANNEL = 'ghosts:appearance-changed';
+
+function broadcastGhostAppearance(appearance: GhostAppearanceSnapshot | null): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (window.isDestroyed()) return;
+    window.webContents.send(GHOST_APPEARANCE_CHANNEL, { appearance });
+  });
+}
+
+async function readGhostAppearanceState() {
+  const [appearance, presets] = await Promise.all([
+    readGhostAppearance(),
+    listGhostAppearancePresets(),
+  ]);
+  const names = new Map(
+    getGhostManager().list().map((ghost) => [ghost.manifest.id, ghost.manifest.name]),
+  );
+  return {
+    appearance,
+    presets: presets.map((preset) => ({
+      ...preset,
+      ...(preset.sourceGhostId && names.get(preset.sourceGhostId)
+        ? { sourceGhostName: names.get(preset.sourceGhostId)! }
+        : {}),
+    })),
+  };
+}
+
+async function withGhostAppearanceMutation<T>(operation: () => Promise<T>): Promise<T> {
+  // appearanceStore 自己负责同账号内串行化；这里再持有账号边界 lease，确保排队
+  // 期间 teardown 会等待，文件路径与媒体账本不会在执行中切到下一个 owner。
+  const owner = captureGhostMutationOwner();
+  const releaseMutation = beginGhostMutation(owner);
+  try {
+    return await operation();
+  } finally {
+    releaseMutation();
+  }
+}
+
+export function getGhostAppearanceSlot(): GhostAppearanceSlot {
+  if (!appearanceSlotSingleton) {
+    appearanceSlotSingleton = new GhostAppearanceSlot({
+      getGhost: findAvailableGhost,
+      getCurrent: readGhostAppearance,
+      canReadImage: (hash, ghostId) => ledger.ghostCanRead(hash, ghostId),
+      resolveImage: async (hash) => {
+        const info = await ledger.getBlobInfo(hash);
+        return info
+          ? { url: blobStore.blobUrl(hash, info.ext), mimeType: info.mimeType, bytes: info.bytes }
+          : null;
+      },
+      validateImage: async (hash) => {
+        const info = await ledger.getBlobInfo(hash);
+        if (!info) throw new Error('图片资源不存在');
+        const { absPath } = blobStore.resolveHashRef(hash, info.ext);
+        const source = await fs.promises.readFile(absPath);
+        await validateStaticSkinImage(source);
+      },
+      removeWhiteLogoBackground: async (hash) => {
+        const info = await ledger.getBlobInfo(hash);
+        if (!info || !info.mimeType.startsWith('image/')) {
+          throw new Error('Logo 资源不是受支持的图片');
+        }
+        return removeWhiteSkinLogoBackground({ hash, ext: info.ext });
+      },
+      save: saveGhostAppearance,
+      savePreset: saveGhostAppearancePreset,
+      saveWithPreset: saveGhostAppearanceWithPreset,
+      listPresets: (ghostId) => listGhostAppearancePresets(ghostId),
+      activatePreset: (preset, ghostId) => activateGhostAppearancePreset(preset, ghostId),
+      deletePreset: (preset, ghostId) => deleteGhostAppearancePreset(preset, ghostId),
+      reset: resetGhostAppearance,
+      broadcast: broadcastGhostAppearance,
+      log,
+    });
+  }
+  return appearanceSlotSingleton;
+}
 
 /** 意识系统提示通道(main → 全窗口 renderer;宿主 Toast 渲染,带意识身份头)。 */
 export const GHOST_NOTIFY_CHANNEL = 'ghosts:notify';
@@ -3047,7 +3141,8 @@ export function registerGhostIpc(): void {
   // 守门)/ node-request(随包 Node JSON-RPC/MCP stdio 中继)/ pick-request
   // (系统级选文件夹,用户亲选即授权)/ preview-request(右侧栏开预览标签,
   // preview.hosts 白名单守门)/ workspace-request(工作区会话入口,亲选或
-  // 确认卡授权,判重/创建在 workspaceSlot)。其它类型一律拒。
+  // 确认卡授权,判重/创建在 workspaceSlot)/ appearance-request(受控外观
+  // 覆盖,palette 枚举+图片归属复验在 appearanceSlot)。其它类型一律拒。
   ipcMain.handle('ghost-pipe:ping', (event) => {
     const id = ghostIdForLogicWebContents(event.sender.id);
     if (!id) throwIpcError('PERMISSION_DENIED', '非意识电子脑上下文');
@@ -3112,6 +3207,13 @@ export function registerGhostIpc(): void {
     if (type === 'workspace-request') {
       return getGhostWorkspaceSlot().handleRequest(id, payload);
     }
+    // appearance-request = 受控外观覆盖：固定调色板 + 当前插件名下图片。
+    // CSS、DOM、任意 URL/颜色不进入协议，资源归属由 appearanceSlot 复验。
+    if (type === 'appearance-request') {
+      return withGhostAppearanceMutation(() =>
+        getGhostAppearanceSlot().handleRequest(id, payload),
+      );
+    }
     // preview-request = 右侧栏开预览标签(preview 槽):URL 必须命中身份卡
     // preview.hosts 白名单;守门/限速在 previewSlot,落地在 renderer。
     if (type === 'preview-request') {
@@ -3135,6 +3237,48 @@ export function registerGhostIpc(): void {
       return getGhostNotifySlot().handleNotify(id, payload);
     }
     throwIpcError('INVALID_PARAMS', '未知的管子消息类型');
+  });
+
+  ipcMain.handle('ghosts:appearance:get', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readGhostAppearanceState();
+  });
+
+  ipcMain.handle('ghosts:appearance:reset', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return withGhostAppearanceMutation(async () => {
+      await resetGhostAppearance();
+      broadcastGhostAppearance(null);
+      return readGhostAppearanceState();
+    });
+  });
+
+  ipcMain.handle('ghosts:appearance:activate-preset', async (event, preset: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof preset !== 'string' || preset.length === 0 || preset.length > 64) {
+      throwIpcError('INVALID_PARAMS', 'preset must be a non-empty string');
+    }
+    return withGhostAppearanceMutation(async () => {
+      const appearance = await activateGhostAppearancePreset(preset);
+      if (!appearance) throwIpcError('NOT_FOUND', 'Skin preset not found');
+      broadcastGhostAppearance(appearance);
+      return readGhostAppearanceState();
+    });
+  });
+
+  ipcMain.handle('ghosts:appearance:delete-preset', async (event, preset: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof preset !== 'string' || preset.length === 0 || preset.length > 64) {
+      throwIpcError('INVALID_PARAMS', 'preset must be a non-empty string');
+    }
+    return withGhostAppearanceMutation(async () => {
+      if (!(await deleteGhostAppearancePreset(preset))) {
+        throwIpcError('NOT_FOUND', 'Skin preset not found');
+      }
+      const state = await readGhostAppearanceState();
+      broadcastGhostAppearance(state.appearance);
+      return state;
+    });
   });
 
   // ── 意识聊天卡片取件(卡槽③;宿主 renderer 历史回放用)──────────────

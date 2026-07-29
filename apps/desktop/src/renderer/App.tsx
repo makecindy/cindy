@@ -6,6 +6,7 @@ import { useCloseWindowFallbackShortcut } from '@/hooks/useCloseWindowShortcut';
 import { useDisableContextMenu } from '@/hooks/useDisableContextMenu';
 import { useDisableTab } from '@/hooks/useDisableTab';
 import { ThemeProvider } from '@/hooks/useTheme';
+import { SkinAppearanceRuntime } from '@/cindy-brain/SkinAppearanceRuntime';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
 import { LocaleProvider } from '@/hooks/useLocale';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
@@ -261,6 +262,7 @@ export function App() {
 
   return (
     <ThemeProvider>
+      <SkinAppearanceRuntime />
       <FontSettingsProvider>
         <LocaleProvider>
           <ConfirmDialogProvider>

@@ -2281,6 +2281,7 @@ export function NewMakerDraftRoute() {
       >
         <div
           data-testid="create-agent-shell"
+          data-cindy-skin-transparent-layer="true"
           className={cn(
             'relative flex h-full w-full items-center justify-center overflow-hidden bg-[var(--surface)] px-3 py-8', // px-3:外壳12+main32=44,与技能页(32+12滚动条槽)对齐(实测定稿 2026-07-19)
           )}
@@ -2585,6 +2586,7 @@ export function NewMakerDraftRoute() {
                     >
                       {createAgentQuickStarts.map(({ key, labelKey, icon: Icon }) => (
                         <button
+                          data-cindy-skin-glass-card="true"
                           key={key}
                           type="button"
                           onClick={() => handleQuickStart(labelKey)}

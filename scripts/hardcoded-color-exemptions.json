@@ -213,5 +213,30 @@
   "glob": "apps/desktop/native/agent-island/macos-agent-island-helper.swift",
   "reason": "原生 helper 注释里引用的角色素材固有色 hex(便于与设计素材对照);渲染值本身是 Color(red:green:blue:),不经过 renderer token 体系",
   "owner": "agent-island"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/cindy-brain/SkinBackdrop.tsx",
+  "reason": "宿主受控换肤装饰层(DESIGN.md §1 skin exception):只消费 skin-theme 的 governed palette surface，并绘制账本验证后的背景与 dim 蒙版",
+  "owner": "cindy-skin"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/themes/skin-theme.ts",
+  "reason": "插件皮肤 governed palette 落值层(DESIGN.md §1 skin exception):6 palette × Light/Dark 的宿主固定映射，是受控主题数据源而非组件硬编码",
+  "owner": "cindy-skin"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/cindy-brain/__tests__/SkinBackdrop.contract.test.ts",
+  "reason": "换肤合同测试断言值守护(expect toContain hsl 模板),非样式硬编码",
+  "owner": "cindy-skin"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/components/settings/AppearanceSection.tsx",
+  "reason": "插件皮肤样式选择器只把 skin-theme 宿主受控 palette 的 Light/Dark surface 映射为双色预览，不接受组件自报颜色",
+  "owner": "cindy-skin"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/features/cc-agent/CCAgentSessionView.tsx",
+  "reason": "hsl(var(--content-area)) 合法 token 消费(规则16 HSL wrap);换肤 data-attr 改行形态后重新入账(同 VendorIcon 先例)",
+  "owner": "cindy-skin"
  }
 ]

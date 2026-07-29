@@ -1121,6 +1121,28 @@ interface ElectronAPI {
     onChanged: (
       callback: (payload: { ghosts: import('../shared/ghost').InstalledGhost[] }) => void,
     ) => () => void;
+    /** 当前账号的宿主受控外观覆盖；null 表示跟随普通主题。 */
+    getAppearance: () => Promise<{
+      appearance: import('../shared/ghost').GhostAppearanceSnapshot | null;
+      presets: import('../shared/ghost').GhostAppearancePresetSummary[];
+    }>;
+    resetAppearance: () => Promise<{
+      appearance: import('../shared/ghost').GhostAppearanceSnapshot | null;
+      presets: import('../shared/ghost').GhostAppearancePresetSummary[];
+    }>;
+    activateAppearancePreset: (preset: string) => Promise<{
+      appearance: import('../shared/ghost').GhostAppearanceSnapshot | null;
+      presets: import('../shared/ghost').GhostAppearancePresetSummary[];
+    }>;
+    deleteAppearancePreset: (preset: string) => Promise<{
+      appearance: import('../shared/ghost').GhostAppearanceSnapshot | null;
+      presets: import('../shared/ghost').GhostAppearancePresetSummary[];
+    }>;
+    onAppearanceChanged: (
+      callback: (payload: {
+        appearance: import('../shared/ghost').GhostAppearanceSnapshot | null;
+      }) => void,
+    ) => () => void;
     /** Host 校验 setup action 后请求打开固定的本地配置入口。 */
     onSetupNavigate: (
       callback: (

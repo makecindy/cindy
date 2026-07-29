@@ -46,6 +46,10 @@ import type {
   LocalThemeWriteRequest,
   LocalThemeWriteResult,
 } from '../shared/local-themes';
+import type {
+  GhostAppearancePresetSummary,
+  GhostAppearanceSnapshot,
+} from '../shared/ghost';
 import type { LocalThemeImportResult } from '../shared/theme-import/types';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
 import {
@@ -419,6 +423,13 @@ const fanOutGhostHookFused = createIpcFanOut('ghosts:hook-fused');
 const fanOutGhostNotify = createIpcFanOut('ghosts:notify');
 // 插件预览开页(preview 槽:renderer 在右侧栏开 web-browser 标签)。
 const fanOutGhostPreviewOpen = createIpcFanOut('ghosts:preview-open');
+// Channel literal kept in sync with GHOST_APPEARANCE_CHANNEL in
+// main/cindy-brain/index.ts(宿主受控换肤层的全窗口推送).
+const fanOutGhostAppearanceChanged = createIpcFanOut('ghosts:appearance-changed');
+type GhostAppearanceState = {
+  appearance: GhostAppearanceSnapshot | null;
+  presets: GhostAppearancePresetSummary[];
+};
 const fanOutVoiceInputModifierShortcutKeys = createIpcFanOut('voice-input:modifier-shortcut-keys');
 // Remote SSH (Phase A) — host status fan-out. Channel literal kept in
 // sync with REMOTE_SSH_PUSH.STATUS_CHANGED in main/remote-ssh/index.ts;
@@ -913,6 +924,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onHookFused: fanOutGhostHookFused,
     onNotify: fanOutGhostNotify,
     onPreviewOpen: fanOutGhostPreviewOpen,
+    getAppearance: (): Promise<GhostAppearanceState> =>
+      ipcRenderer.invoke('ghosts:appearance:get'),
+    resetAppearance: (): Promise<GhostAppearanceState> =>
+      ipcRenderer.invoke('ghosts:appearance:reset'),
+    activateAppearancePreset: (preset: string): Promise<GhostAppearanceState> =>
+      ipcRenderer.invoke('ghosts:appearance:activate-preset', preset),
+    deleteAppearancePreset: (preset: string): Promise<GhostAppearanceState> =>
+      ipcRenderer.invoke('ghosts:appearance:delete-preset', preset),
+    onAppearanceChanged: fanOutGhostAppearanceChanged,
     getCard: (
       callId: string,
     ): Promise<{
