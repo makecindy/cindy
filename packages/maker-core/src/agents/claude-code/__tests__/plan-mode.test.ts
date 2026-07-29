@@ -212,6 +212,53 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('overrides remote cc-manager env with a host-materialized Claude route', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const starts: Array<Record<string, unknown>> = [];
+    const fakeQuery = createFakeQuery();
+
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async (args) => {
+      starts.push(args.startParams);
+      return fakeQuery as never;
+    };
+    const resolveRemoteClaudeRoute = vi.fn(async () => ({
+      endpoint: 'https://provider.example/v1',
+      env: {
+        ANTHROPIC_API_KEY: 'k-route',
+        ANTHROPIC_CUSTOM_HEADERS: 'authorization: Bearer k-route\nx-tenant: acme',
+      },
+    }));
+    const agent = new ClaudeCodeAgent(createDeps({
+      // Empty gateway endpoint would fail the old remote gateway guard; routed sessions must not depend on it.
+      runtimeConfig: { remoteEndpoint: '' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-materialized-route',
+      model: 'custom-model',
+      providerId: 'custom-provider',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    expect(resolveRemoteClaudeRoute).toHaveBeenCalledWith({
+      providerId: 'custom-provider',
+      model: 'custom-model',
+      credentialMode: 'provider-oauth',
+    });
+    expect(starts).toHaveLength(1);
+    const env = starts[0]?.env as Record<string, string> | undefined;
+    expect(env?.ANTHROPIC_BASE_URL).toBe('https://provider.example/v1');
+    expect(env?.ANTHROPIC_API_KEY).toBe('k-route');
+    expect(env?.ANTHROPIC_CUSTOM_HEADERS).toBe('authorization: Bearer k-route\nx-tenant: acme');
+    expect(env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    await handle.close();
+  });
+
   it('setPlanMode toggles the SDK between plan and the underlying mode', async () => {
     const { handle, fakeQuery } = await startPlanSession(false);
 

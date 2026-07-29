@@ -498,6 +498,51 @@ export function buildLocalHandlerHeaders(route: ResolvedSessionRoute, agent: Age
   }
   return { headers, headerDelete: [...headerDelete] };
 }
+/** 某 providerId 解析出的路由描述符 + 已注入真实凭证的 RoutingDecision(供远端 env materialize 用)。 */
+export interface ResolvedProviderRouteDecision {
+  providerId: string;
+  providerSource: 'builtin' | 'user';
+  routing: RoutingDescriptor;
+  /** buildRouteDecision 结果(headerOverride 已含真实 key/token,upstreamOverride = 供应商真上游)。 */
+  decision: RoutingDecision | null;
+}
+
+/**
+ * 按 **providerId** 解析路由决策(resolveSessionRouteDecision 的 provider-keyed 变体,不查
+ * getSessionProvider,也不套 routingServesWireModel 服务范围门 —— 远端会话的 model 就是该
+ * 供应商的主模型)。远端 Claude 会话把结果翻成 cc env 时用(见 remote-claude-route.ts)。
+ * 返回 null = providerId 空 / xd 网关不可用 / 该供应商对此 agent 无路由。
+ */
+export async function resolveProviderRouteDecision(
+  providerId: string | null | undefined,
+  agent: AgentKind,
+  gatewayKey: string | null,
+): Promise<ResolvedProviderRouteDecision | null> {
+  const id = providerId?.trim() || null;
+  if (!id) return null;
+  if (id === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
+  const provider = getActiveCatalog().providers.find((p) => p.id === id);
+  const routing = provider?.routing[agent];
+  if (!provider || !routing) return null;
+  const apiKey = provider.source === 'user' ? customProviderKeyReader(id, agent) : null;
+  let oauthToken: string | null = null;
+  if (routing.authStrategy === 'oauth-token') {
+    oauthToken = oauthTokenReader(id);
+  } else if (routing.authStrategy === 'provider-oauth-header') {
+    try {
+      oauthToken = await providerOAuthTokenReader(id, agent);
+    } catch {
+      oauthToken = null;
+    }
+  }
+  return {
+    providerId: id,
+    providerSource: provider.source,
+    routing,
+    decision: buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken),
+  };
+}
+
 export function resolveSessionRouteDecision(
   sessionId: string,
   agent: AgentKind,
