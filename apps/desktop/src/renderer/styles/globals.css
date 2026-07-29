@@ -139,6 +139,10 @@
       --motion-exit: 0ms;
     }
 
+    [class*='animate-spinner'] {
+      animation: none !important;
+    }
+
     .animate-confirm-overlay-in,
     .animate-confirm-overlay-out,
     .animate-confirm-content-in,
@@ -944,6 +948,7 @@ body.resizing-pane [data-ghost-webview] {
 [data-app-hidden='true'] .agent-island-mascot-key,
 [data-app-hidden='true'] .agent-island-mascot-eyes,
 [data-app-hidden='true'] .agent-island-mascot-sparkle,
+[data-app-hidden='true'] [class*='animate-spinner'],
 [data-app-hidden='true'] [class*='animate-spin'],
 [data-app-hidden='true'] [class*='animate-pulse'],
 [data-app-hidden='true'] [class*='infinite'],

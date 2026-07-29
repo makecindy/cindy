@@ -370,7 +370,7 @@ function ChromeIconButton({
     >
       {spinning && ReducedMotionIcon ? (
         <>
-          <span className="inline-flex animate-spin motion-reduce:hidden">
+          <span className="inline-flex animate-spinner motion-reduce:hidden">
             <Icon size={size} strokeWidth={2} />
           </span>
           <span className="hidden motion-reduce:inline-flex">
@@ -381,7 +381,7 @@ function ChromeIconButton({
         <span
           className={cn(
             'inline-flex',
-            spinning && 'animate-spin motion-reduce:animate-none',
+            spinning && 'animate-spinner motion-reduce:animate-none',
           )}
         >
           <Icon size={size} strokeWidth={2} />

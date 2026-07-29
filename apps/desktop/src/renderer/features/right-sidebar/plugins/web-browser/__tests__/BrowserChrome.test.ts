@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement, createRef } from 'react';
 
+import tailwindConfig from '../../../../../../../tailwind.config';
 import { BrowserChrome, type BrowserChromeHandle } from '../BrowserChrome';
 
 vi.mock('react-i18next', () => ({
@@ -123,7 +124,8 @@ describe('BrowserChrome', () => {
     const button = screen.getByRole('button', { name: 'rightSidebar.browser.stop' });
     const spinner = button.querySelector('span');
     expect(button.getAttribute('aria-busy')).toBe('true');
-    expect(spinner?.classList.contains('animate-spin')).toBe(true);
+    expect(spinner?.classList.contains('animate-spinner')).toBe(true);
+    expect(spinner?.classList.contains('animate-spin')).toBe(false);
     expect(spinner?.classList.contains('motion-reduce:hidden')).toBe(true);
     expect(button.querySelector('.lucide-rotate-cw')).toBeTruthy();
     expect(
@@ -144,11 +146,20 @@ describe('BrowserChrome', () => {
 
     const button = screen.getByRole('button', { name: 'rightSidebar.browser.reload' });
     expect(button.hasAttribute('aria-busy')).toBe(false);
-    expect(button.querySelector('span')?.classList.contains('animate-spin')).toBe(false);
+    expect(button.querySelector('span')?.classList.contains('animate-spinner')).toBe(false);
 
     fireEvent.click(button);
     expect(onReload).toHaveBeenCalledOnce();
     expect(onStop).not.toHaveBeenCalled();
+  });
+
+  it('routes the refresh spinner timing through the approved motion tier', () => {
+    const animation = (
+      tailwindConfig.theme?.extend?.animation as Record<string, string> | undefined
+    )?.spinner;
+
+    expect(animation).toContain('var(--motion-enter, 250ms)');
+    expect(animation).not.toContain('spin 1s');
   });
 
   it('fires open-in-system-browser and copy-link from the more menu when the link is valid', () => {

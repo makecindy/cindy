@@ -121,6 +121,11 @@ const config: Config = {
         },
       },
       animation: {
+        // 持续 spinner 的一圈时长由既有 enter 档派生(4 × 250ms),不再使用
+        // Tailwind animate-spin 内置的硬编码 1s。重复相加保持标准 calc() 兼容性,
+        // 同时让全局 motion token 调整能同步影响 spinner 节奏。
+        spinner:
+          'spin calc(var(--motion-enter, 250ms) + var(--motion-enter, 250ms) + var(--motion-enter, 250ms) + var(--motion-enter, 250ms)) linear infinite',
         // float-out 需要 forwards:Radix 等 animationend 才卸载,fill 不驻留
         // 会在动画结束到卸载之间闪回原状。
         'float-in':
