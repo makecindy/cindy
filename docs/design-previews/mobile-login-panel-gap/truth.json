@@ -1,0 +1,233 @@
+{
+  "generatedFrom": {
+    "src": "apps/mobile/src/auth/loginSkinLayout.ts",
+    "mainRef": "origin/main"
+  },
+  "current": {
+    "label": "本 PR 修复后",
+    "short": {
+      "designHeight": 1334,
+      "cindy": {
+        "x": 75,
+        "y": 60,
+        "w": 599,
+        "h": 720
+      },
+      "slogan": {
+        "x": 462.55,
+        "y": 408.37,
+        "w": 254.01,
+        "h": 72.8
+      },
+      "word": {
+        "x": 208,
+        "y": 487,
+        "w": 335,
+        "h": 115
+      },
+      "loginY": 622,
+      "wordBottom": 602,
+      "gap": 20
+    },
+    "long": {
+      "designHeight": 1624,
+      "cindy": {
+        "x": 0,
+        "y": 106,
+        "w": 750,
+        "h": 902
+      },
+      "slogan": {
+        "x": 444.9,
+        "y": 568,
+        "w": 269.66,
+        "h": 77.29
+      },
+      "word": {
+        "x": 182,
+        "y": 669.17,
+        "w": 387,
+        "h": 132.18
+      },
+      "loginY": 827,
+      "wordBottom": 801.3499999999999,
+      "gap": 25.65
+    }
+  },
+  "main": {
+    "label": "origin/main 现状（已含 #697）",
+    "short": {
+      "designHeight": 1334,
+      "cindy": {
+        "x": 75,
+        "y": 60,
+        "w": 599,
+        "h": 720
+      },
+      "slogan": {
+        "x": 462.55,
+        "y": 408.37,
+        "w": 254.01,
+        "h": 72.8
+      },
+      "word": {
+        "x": 208,
+        "y": 487,
+        "w": 335,
+        "h": 115
+      },
+      "loginY": 694,
+      "wordBottom": 602,
+      "gap": 92
+    },
+    "long": {
+      "designHeight": 1624,
+      "cindy": {
+        "x": 0,
+        "y": 106,
+        "w": 750,
+        "h": 902
+      },
+      "slogan": {
+        "x": 444.9,
+        "y": 568,
+        "w": 269.66,
+        "h": 77.29
+      },
+      "word": {
+        "x": 182,
+        "y": 669.17,
+        "w": 387,
+        "h": 132.18
+      },
+      "loginY": 933,
+      "wordBottom": 801.3499999999999,
+      "gap": 131.65
+    }
+  },
+  "figmaLoginY": {
+    "short": 622,
+    "long": 827
+  },
+  "figmaGap": {
+    "short": 20,
+    "long": 25.65
+  },
+  "panel": {
+    "group": {
+      "x": 35,
+      "width": 680,
+      "height": 560
+    },
+    "title": {
+      "y": 31,
+      "height": 38,
+      "font": 32
+    },
+    "subtitle": {
+      "x": 70,
+      "y": 75,
+      "width": 540,
+      "height": 23,
+      "font": 20,
+      "maxLines": 2
+    },
+    "control": {
+      "x": 70,
+      "inputY": 158,
+      "buttonY": 300,
+      "width": 540,
+      "height": 80,
+      "radius": 40,
+      "font": 24,
+      "textPadLeft": 31
+    },
+    "social": {
+      "y": 480,
+      "size": 80,
+      "gap": 70,
+      "icon": 48
+    },
+    "consent": {
+      "y": 582,
+      "width": 680,
+      "height": 40,
+      "gap": 6.5,
+      "font": 20,
+      "lineHeight": 23,
+      "bottomOverflow": 62,
+      "radio": {
+        "hitSize": 24,
+        "ringSize": 20,
+        "ringRadius": 9,
+        "ringStroke": 2,
+        "checkStroke": 3,
+        "pressSize": 88
+      }
+    },
+    "errorText": {
+      "y": 380,
+      "width": 680,
+      "height": 60,
+      "font": 20
+    }
+  },
+  "planA": {
+    "label": "方案A 品牌簇整体下移",
+    "short": {
+      "designHeight": 1334,
+      "cindy": {
+        "x": 75,
+        "y": 120,
+        "w": 599,
+        "h": 720
+      },
+      "slogan": {
+        "x": 462.55,
+        "y": 468.37,
+        "w": 254.01,
+        "h": 72.8
+      },
+      "word": {
+        "x": 208,
+        "y": 547,
+        "w": 335,
+        "h": 115
+      },
+      "loginY": 682,
+      "wordBottom": 662,
+      "gap": 20,
+      "shift": 60
+    },
+    "long": {
+      "designHeight": 1624,
+      "cindy": {
+        "x": 0,
+        "y": 166,
+        "w": 750,
+        "h": 902
+      },
+      "slogan": {
+        "x": 444.9,
+        "y": 628,
+        "w": 269.66,
+        "h": 77.29
+      },
+      "word": {
+        "x": 182,
+        "y": 729.17,
+        "w": 387,
+        "h": 132.18
+      },
+      "loginY": 887,
+      "wordBottom": 861.35,
+      "gap": 25.65,
+      "shift": 60
+    }
+  },
+  "contentBelowLoginY": 622,
+  "figBottomGap": {
+    "short": 30,
+    "long": 115
+  }
+}

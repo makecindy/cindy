@@ -1,0 +1,161 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#141414;color:#EDEDED;font:14px/1.5 -apple-system,"PingFang SC",sans-serif;padding:28px 24px 36px}
+  h1{font-size:22px;margin-bottom:4px}
+  .lead{color:#9A9A9A;font-size:13px;margin-bottom:22px}
+  .lead b{color:#FF8A80}
+  h2{font-size:15px;color:#C9C9C9;margin:22px 0 10px;font-weight:600}
+  .row{display:flex;gap:20px}
+  .col{flex:0 0 auto}
+  .cap{font-size:12.5px;margin-bottom:7px;display:flex;align-items:center;gap:8px;color:#B9B9B9}
+  .cap.bad{color:#FF6F60;font-weight:700}
+  .cap.ok{color:#8BC98B}
+  .cap.ref{color:#7FB0E8}
+  .cap.pick{color:#F3C969;font-weight:700}
+  .metrics{display:flex;gap:5px;margin-bottom:7px;flex-wrap:wrap}
+  .m{font-family:ui-monospace,Menlo,monospace;font-size:10px;padding:1px 5px;border-radius:3px;background:#242424;color:#B5B5B5}
+  .m.good{background:#1E3A22;color:#9FE0A6}
+  .m.warn{background:#4A2A1A;color:#FFC79A}
+  .botzone{position:absolute;left:0;width:100%;display:flex;align-items:center;justify-content:center}
+  .botzone.ok{background:rgba(120,220,140,.10);border-top:1px dashed rgba(150,230,170,.45)}
+  .botzone.warn{background:repeating-linear-gradient(45deg,rgba(255,170,60,.20),rgba(255,170,60,.20) 7px,rgba(255,170,60,.08) 7px,rgba(255,170,60,.08) 14px);border-top:1px dashed #FFAA3C}
+  .botzone span{font-family:ui-monospace,Menlo,monospace;font-size:9.5px;color:#E9E9E9;background:rgba(0,0,0,.55);padding:0 5px;border-radius:3px}
+  .stage{position:relative;background:#1F1F1E;overflow:hidden;border-radius:10px;outline:1px solid #333}
+  .stage img,.stage .group,.stage .gapzone{position:absolute}
+  .asset,.hero{object-fit:contain}
+  .group{left:0;width:100%}
+  .panel{position:absolute;top:0;background:#FBFBFB;border-radius:18px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
+  .panel>div{position:absolute;color:#1A1A1A}
+  .p-title{left:0;width:100%;text-align:center;font-weight:700}
+  .p-sub{color:#6F6F6F}
+  .p-input{background:#EFEFEF;color:#9A9A9A;display:flex;align-items:center}
+  .p-btn{background:#1F1F1E;color:#FBFBFB;display:flex;align-items:center;justify-content:center;font-weight:600}
+  .social{position:absolute;border-radius:50%;background:#FBFBFB;opacity:.92}
+  .consent{position:absolute;display:flex;align-items:center;justify-content:center;gap:5px;color:#CFCFCF;font-size:10px}
+  .radio{width:9px;height:9px;border-radius:50%;border:1.2px solid #CFCFCF;display:inline-block}
+  .gapzone{display:flex;align-items:center;justify-content:center;font-family:ui-monospace,Menlo,monospace;font-size:11px}
+  .gapzone.bad{background:repeating-linear-gradient(45deg,rgba(255,80,60,.30),rgba(255,80,60,.30) 7px,rgba(255,80,60,.13) 7px,rgba(255,80,60,.13) 14px);border-top:1px dashed #FF6F60;border-bottom:1px dashed #FF6F60}
+  .gapzone.bad span{color:#FFD9D2;background:rgba(120,25,15,.85);padding:1px 7px;border-radius:4px}
+  .gapzone.ok,.gapzone.ref{background:rgba(255,255,255,.10);border-top:1px dashed rgba(255,255,255,.35);border-bottom:1px dashed rgba(255,255,255,.35)}
+  .gapzone.ok span,.gapzone.ref span{color:#E6E6E6;background:rgba(0,0,0,.55);padding:0 5px;border-radius:3px;font-size:9.5px}
+</style></head><body>
+<h1>手机登录页：字标底 → 登录面板顶 的间距（主干现状 vs 本 PR 修复）</h1>
+<div class="lead">两列几何都从 <code>apps/mobile/src/auth/loginSkinLayout.ts</code> 真值渲染：① 取 <code>git show origin/main</code> 的同一文件，② 取本分支工作树。资产为仓库真图、<code>contain</code> 适配同 <code>MobileLoginHandoffStage</code> 的 <code>resizeMode</code>。<b>红斜纹 = 多出来的空白</b>；✓稿 = 与 figma 新稿标注一致。
+<br><b>① 就是当前主干的实际状态</b>（PR #697 已于 2026-07-29 合并）：品牌簇已换 figma 新稿基准（<code>705:915</code> / <code>705:799</code>），但功能区落位 <code>loginY</code> 仍是配旧品牌簇的 694 / 933，两半拼接使字标底↔面板顶空出 <b>92 / 131.65 设计px</b>（实机 ≈38pt / 57pt）—— 该值在 main 改版前（18.98 / 22）和新稿（20 / 25.65）里都不存在。
+<br>② 本 PR 把 <code>loginY</code> 取回新稿标注值 <b>622 / 827</b>，间距回到稿内的 20 / 25.65。底部留白 90 / 175 比稿内的 30 / 115 各多 60（新稿手机帧面板 500 高含「跳过登录」栏，手机端已剥离该入口、面板回 440，少掉的 60 落到底部）—— 审图拍板「方案 B」，已在 <code>DESIGN.md §16.2</code> 就地记录。</div>
+<div class="rowwrap"><h2>短屏 iPhone 750×1334（stage 750×1334）</h2><div class="row">
+  
+  <div class="col">
+    <div class="cap bad">① origin/main 现状（有问题）</div>
+    <div class="metrics">
+      <span class="m warn">字标↔面板 92</span>
+      <span class="m warn">底部留白 18</span>
+      <span class="m">立绘顶 60</span>
+    </div>
+    <div class="stage" style="width:465px;height:827.08px">
+      <img class="hero" src="./assets/hero.png" style="left:46.5px;top:37.2px;width:371.38px;height:446.4px">
+      <img class="asset" src="./assets/slogan-dark.png" style="left:286.781px;top:253.1894px;width:157.4862px;height:45.135999999999996px">
+      <img class="asset" src="./assets/wordmark-dark.png" style="left:128.96px;top:301.94px;width:207.7px;height:71.3px">
+      <div class="gapzone bad" style="left:0;top:373.24px;width:465px;height:57.04px">
+        <span>92</span>
+      </div>
+      <div class="group" style="top:430.28px;height:347.2px">
+        
+  <div class="panel" style="left:21.7px;width:421.6px;height:272.8px">
+    <div class="p-title" style="top:19.22px;height:23.56px;font-size:19.84px">登录 Cindy</div>
+    <div class="p-sub" style="left:43.4px;top:46.5px;width:334.8px;font-size:12.4px;line-height:14.26px">使用手机号登录</div>
+    <div class="p-input" style="left:43.4px;top:97.96px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px;padding-left:19.22px">请输入手机号</div>
+    <div class="p-btn" style="left:43.4px;top:186px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px">继续</div>
+  </div>
+        <div class="social" style="left:114.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:207.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:300.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="consent" style="left:21.7px;top:360.84px;width:421.6px;height:24.8px;font-size:12.4px"><span class="radio"></span>已阅读并同意《用户协议》《隐私政策》</div>
+      </div>
+      <div class="botzone warn" style="top:815.92px;height:11.16px"><span>底 18</span></div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="cap pick">② 本 PR 修复后</div>
+    <div class="metrics">
+      <span class="m good">字标↔面板 20 ✓稿</span>
+      <span class="m warn">底部留白 90</span>
+      <span class="m">立绘顶 60</span>
+    </div>
+    <div class="stage" style="width:465px;height:827.08px">
+      <img class="hero" src="./assets/hero.png" style="left:46.5px;top:37.2px;width:371.38px;height:446.4px">
+      <img class="asset" src="./assets/slogan-dark.png" style="left:286.781px;top:253.1894px;width:157.4862px;height:45.135999999999996px">
+      <img class="asset" src="./assets/wordmark-dark.png" style="left:128.96px;top:301.94px;width:207.7px;height:71.3px">
+      <div class="gapzone pick" style="left:0;top:373.24px;width:465px;height:12.4px">
+        <span>20</span>
+      </div>
+      <div class="group" style="top:385.64px;height:347.2px">
+        
+  <div class="panel" style="left:21.7px;width:421.6px;height:272.8px">
+    <div class="p-title" style="top:19.22px;height:23.56px;font-size:19.84px">登录 Cindy</div>
+    <div class="p-sub" style="left:43.4px;top:46.5px;width:334.8px;font-size:12.4px;line-height:14.26px">使用手机号登录</div>
+    <div class="p-input" style="left:43.4px;top:97.96px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px;padding-left:19.22px">请输入手机号</div>
+    <div class="p-btn" style="left:43.4px;top:186px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px">继续</div>
+  </div>
+        <div class="social" style="left:114.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:207.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:300.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="consent" style="left:21.7px;top:360.84px;width:421.6px;height:24.8px;font-size:12.4px"><span class="radio"></span>已阅读并同意《用户协议》《隐私政策》</div>
+      </div>
+      <div class="botzone warn" style="top:771.28px;height:55.8px"><span>底 90</span></div>
+    </div>
+  </div>
+  </div></div>
+<div class="rowwrap"><h2>长屏 iPhone 750×1624（stage 750×1624）</h2><div class="row">
+  
+  <div class="col">
+    <div class="cap bad">① origin/main 现状（有问题）</div>
+    <div class="metrics">
+      <span class="m warn">字标↔面板 131.65</span>
+      <span class="m warn">底部留白 69</span>
+      <span class="m">立绘顶 106</span>
+    </div>
+    <div class="stage" style="width:465px;height:1006.88px">
+      <img class="hero" src="./assets/hero.png" style="left:0px;top:65.72px;width:465px;height:559.24px">
+      <img class="asset" src="./assets/slogan-dark.png" style="left:275.83799999999997px;top:352.16px;width:167.18920000000003px;height:47.9198px">
+      <img class="asset" src="./assets/wordmark-dark.png" style="left:112.84px;top:414.88539999999995px;width:239.94px;height:81.9516px">
+      <div class="gapzone bad" style="left:0;top:496.83699999999993px;width:465px;height:81.623px">
+        <span>131.65</span>
+      </div>
+      <div class="group" style="top:578.46px;height:347.2px">
+        
+  <div class="panel" style="left:21.7px;width:421.6px;height:272.8px">
+    <div class="p-title" style="top:19.22px;height:23.56px;font-size:19.84px">登录 Cindy</div>
+    <div class="p-sub" style="left:43.4px;top:46.5px;width:334.8px;font-size:12.4px;line-height:14.26px">使用手机号登录</div>
+    <div class="p-input" style="left:43.4px;top:97.96px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px;padding-left:19.22px">请输入手机号</div>
+    <div class="p-btn" style="left:43.4px;top:186px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px">继续</div>
+  </div>
+        <div class="social" style="left:114.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:207.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:300.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="consent" style="left:21.7px;top:360.84px;width:421.6px;height:24.8px;font-size:12.4px"><span class="radio"></span>已阅读并同意《用户协议》《隐私政策》</div>
+      </div>
+      <div class="botzone warn" style="top:964.1px;height:42.78px"><span>底 69</span></div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="cap pick">② 本 PR 修复后</div>
+    <div class="metrics">
+      <span class="m good">字标↔面板 25.65 ✓稿</span>
+      <span class="m warn">底部留白 175</span>
+      <span class="m">立绘顶 106</span>
+    </div>
+    <div class="stage" style="width:465px;height:1006.88px">
+      <img class="hero" src="./assets/hero.png" style="left:0px;top:65.72px;width:465px;height:559.24px">
+      <img class="asset" src="./assets/slogan-dark.png" style="left:275.83799999999997px;top:352.16px;width:167.18920000000003px;height:47.9198px">
+      <img class="asset" src="./assets/wordmark-dark.png" style="left:112.84px;top:414.88539999999995px;width:239.94px;height:81.9516px">
+      <div class="gapzone pick" style="left:0;top:496.83699999999993px;width:465px;height:15.902999999999999px">
+        <span>25.65</span>
+      </div>
+      <div class="group" style="top:512.74px;height:347.2px">
+        
+  <div class="panel" style="left:21.7px;width:421.6px;height:272.8px">
+    <div class="p-title" style="top:19.22px;height:23.56px;font-size:19.84px">登录 Cindy</div>
+    <div class="p-sub" style="left:43.4px;top:46.5px;width:334.8px;font-size:12.4px;line-height:14.26px">使用手机号登录</div>
+    <div class="p-input" style="left:43.4px;top:97.96px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px;padding-left:19.22px">请输入手机号</div>
+    <div class="p-btn" style="left:43.4px;top:186px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px">继续</div>
+  </div>
+        <div class="social" style="left:114.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:207.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:300.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="consent" style="left:21.7px;top:360.84px;width:421.6px;height:24.8px;font-size:12.4px"><span class="radio"></span>已阅读并同意《用户协议》《隐私政策》</div>
+      </div>
+      <div class="botzone warn" style="top:898.38px;height:108.5px"><span>底 175</span></div>
+    </div>
+  </div>
+  </div></div>
+</body></html>
