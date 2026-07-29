@@ -99,6 +99,11 @@ describe('categorize', () => {
     expect(categorize('happyhorse-1.0-video-edit')).toBe('video');
   });
 
+  it('带视频理解能力但走 Chat Completions 的聊天模型不误判为 video(2026-07 review 第 23 轮:通用 "video" 关键词太宽,会误伤真聊天模型,同 audio 关键词收窄同理)', () => {
+    expect(categorize('llava-hf/LLaVA-NeXT-Video-7B-hf')).not.toBe('video');
+    expect(isChatEligible({ id: 'llava-hf/LLaVA-NeXT-Video-7B-hf' })).toBe(true);
+  });
+
   it('Embedding 类归 embedding(issue #882)', () => {
     expect(categorize('text-embedding-3-large')).toBe('embedding');
     expect(categorize('text-embedding-3-small')).toBe('embedding');

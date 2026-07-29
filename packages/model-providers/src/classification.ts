@@ -161,9 +161,13 @@ export function categorize(rawId: string): ModelCategory {
   // 走 {id,name} 极简发现的自定义 OAuth 供应商没有 mode/group,只能靠这份正则)。
   if (/image/.test(id) || id.startsWith('dall-e') || stripNamespace(id).startsWith('dall-e'))
     return 'image';
-  // sora(OpenAI 视频)/ veo(Google 视频)同理,id 里没有 "video" 字样。
+  // sora(OpenAI 视频)/ veo(Google 视频)同理,id 里没有 "video" 字样。故意不认通用的
+  // "video" 关键词:llava-hf/LLaVA-NeXT-Video-7B-hf 这类视频理解多模态聊天模型 id
+  // 里带 "video" 却是走 Chat Completions 的正常聊天模型,不是纯视频生成端点——与
+  // 音频判定不认通用 "audio" 关键词同理(2026-07 review 第 23 轮)。只认
+  // seedance/happyhorse/-t2v/-i2v/-r2v 这几个真正专指视频生成的关键词。
   if (
-    /seedance|happyhorse|video|-t2v|-i2v|-r2v/.test(id) ||
+    /seedance|happyhorse|-t2v|-i2v|-r2v/.test(id) ||
     /^sora|^veo-/.test(id) ||
     /^sora|^veo-/.test(stripNamespace(id))
   )
