@@ -641,6 +641,43 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     ).toBeGreaterThan(0);
   });
 
+  it('keeps ASCII punctuation in a list prefix inside the fixed CJK font slot', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'intro' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '1. 中文,正文' },
+            ],
+          },
+        ],
+      },
+    });
+    const prefix = editor.view.dom.querySelector(
+      '.composer-list-fallback-prefix.composer-list-cjk-font',
+    );
+    expect(prefix?.textContent).toBe('1. ');
+    expect(prefix?.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
+    expect(
+      Array.from(editor.view.dom.querySelectorAll('span[style*="font-family"]')).map(
+        (node) => node.textContent,
+      ),
+    ).toContain(',');
+  });
+
   it('keeps slash-command pills inline inside the paragraph fallback flow', () => {
     editor = new Editor({
       element: document.createElement('div'),
