@@ -40,6 +40,7 @@ import {
 } from './claude-gateway-config.js';
 import {
   gatewayDefaultRouteDecision,
+  isProviderRouteMutationInProgress,
   resolveProviderRouteDecision,
   type ResolvedProviderRouteDecision,
 } from './provider-route.js';
@@ -61,6 +62,14 @@ export async function resolveRemoteClaudeRoute(opts: {
 
   // 显式选定供应商(非网关)→ 按其 RoutingDescriptor materialize。
   if (providerId && providerId !== 'xd') {
+    // mutation 窗口先于「无路由」判:resolveProviderRouteDecision 在窗口内也返回 null
+    // (安全门),但报「不支持」会误导 —— 真实状态是「凭证正在更新,稍后重试」,对齐
+    // 本地 provider_route_updating 语义。
+    if (isProviderRouteMutationInProgress(providerId)) {
+      throw new Error(
+        `[REMOTE_PROVIDER_UPDATING] provider "${providerId}" credentials are being updated on this desktop; retry in a moment`,
+      );
+    }
     const routed = await resolveProviderRouteDecision(providerId, REMOTE_AGENT, readClaudeApiKey());
     if (routed) return materializeRoutedProvider(routed);
     throw new Error(

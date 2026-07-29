@@ -9,6 +9,7 @@ const hasClaudeAiOAuth = vi.fn<() => boolean>(() => false);
 const getActiveCatalog = vi.fn<() => { providers: unknown[] }>(() => ({ providers: [] }));
 const resolveProviderRouteDecision = vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const gatewayDefaultRouteDecision = vi.fn<(...args: unknown[]) => unknown>();
+const isProviderRouteMutationInProgress = vi.fn<(...args: unknown[]) => boolean>(() => false);
 
 vi.mock('../auth-adapters.js', () => ({ readClaudeApiKey: () => readClaudeApiKey() }));
 vi.mock('../claude-oauth-refresh.js', () => ({
@@ -19,6 +20,7 @@ vi.mock('../active-catalog.js', () => ({ getActiveCatalog: () => getActiveCatalo
 vi.mock('../provider-route.js', () => ({
   resolveProviderRouteDecision: (...args: unknown[]) => resolveProviderRouteDecision(...args),
   gatewayDefaultRouteDecision: (...args: unknown[]) => gatewayDefaultRouteDecision(...args),
+  isProviderRouteMutationInProgress: (...args: unknown[]) => isProviderRouteMutationInProgress(...args),
 }));
 
 import { resolveRemoteClaudeRoute } from '../remote-claude-route.js';
@@ -39,6 +41,7 @@ beforeEach(() => {
   getActiveCatalog.mockReset().mockReturnValue({ providers: [] });
   resolveProviderRouteDecision.mockReset().mockResolvedValue(null);
   gatewayDefaultRouteDecision.mockReset().mockReturnValue(null);
+  isProviderRouteMutationInProgress.mockReset().mockReturnValue(false);
 });
 
 describe('resolveRemoteClaudeRoute — 默认路由(未显式选供应商)', () => {
@@ -215,6 +218,14 @@ describe('resolveRemoteClaudeRoute — 远端无法表达的能力 → 明确报
     await expect(resolveRemoteClaudeRoute({ providerId: 'partner-gw', model: 'm' })).rejects.toThrow(
       /REMOTE_PROVIDER_UNSUPPORTED/,
     );
+  });
+
+  it('路由凭证 mutation 窗口内 → REMOTE_PROVIDER_UPDATING(不误报不支持)', async () => {
+    isProviderRouteMutationInProgress.mockReturnValue(true);
+    await expect(resolveRemoteClaudeRoute({ providerId: 'my-provider', model: 'm' })).rejects.toThrow(
+      /REMOTE_PROVIDER_UPDATING/,
+    );
+    expect(resolveProviderRouteDecision).not.toHaveBeenCalled();
   });
 
   it('显式未知供应商(无 claude-code 路由)→ REMOTE_PROVIDER_UNSUPPORTED', async () => {
