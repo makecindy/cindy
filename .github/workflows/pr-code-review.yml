@@ -33,10 +33,29 @@ jobs:
     # 连 job 都不启动。fork PR 一律不 review:一是 fork 触发的 pull_request 事件
     # 取不到 secrets,二是外部分支内容进 prompt 有注入面。外部贡献者的 PR 因此
     # 只有 client-ci 与人工 review 把关,这是有意的取舍。
+    #
+    # 排除 dependabot:它的分支在本仓,同仓判断拦不住,但 GitHub 把 Dependabot 触发的
+    # pull_request 当 fork 处理——GITHUB_TOKEN 只读、Actions secrets 一律不可见(只有
+    # Dependabot secrets 可见)。于是 job 会照常启动然后必然失败:拿不到
+    # ANTHROPIC_API_KEY,也拿不到 pull-requests:write 去发评论。本仓 dependabot 每周
+    # 巡检 github-actions 与 npm 两个生态(上限 5 个 PR,见 .github/dependabot.yml),
+    # 不排除就是每周固定几条红。
+    #
+    # 被调用 workflow 的 allowed_bots 输入解决不了这个:它管的是 claude-code-action
+    # 自己的 bot 作者校验,与 GitHub 扣发 secrets 是两层;上游注释也明确写了要禁 bot
+    # 就在调用方 gate。
+    #
+    # 判定用 github.actor 而不是 pull_request.user.login:约束的实质是「谁触发了这次
+    # run」。人往 dependabot 分支上推一个 commit 时,run 由该人触发,secrets 与写权限
+    # 都正常,那次 review 应该照跑——用 user.login 会把这种情况一并误杀。
+    #
+    # 若以后希望 dependabot PR 也过 review,把 ANTHROPIC_API_KEY 以同名加到
+    # Dependabot secrets,再删掉这一行条件。
     if: >-
       github.event.pull_request &&
       !github.event.pull_request.draft &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
     # 跨 org 复用 workflow,按本仓惯例钉死 commit SHA 而不是 @v1 浮动 tag:
     # tag 可被上游重新指向,而这份 workflow 持有 pull-requests:write 并决定
     # 喂给模型的 prompt。dependabot(github-actions 生态,见 .github/dependabot.yml)
