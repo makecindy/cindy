@@ -178,6 +178,34 @@ describe('appearance preset store', () => {
     expect([...mocks.refs.get('skin-background:active')!]).toEqual([HASH_A]);
   });
 
+  it('预设库回滚写入也失败时保留磁盘现存预设的媒体引用', async () => {
+    await saveGhostAppearance(appearance('Before'), { background: HASH_A }, 'skin');
+    await saveGhostAppearancePreset(appearance('Before'), { background: HASH_A }, 'skin');
+    const rename = fs.promises.rename.bind(fs.promises);
+    let renameCount = 0;
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (...args) => {
+      renameCount += 1;
+      // 新预设已提交后，让活动文件写入和预设库回滚写入持续失败。
+      if (renameCount === 2 || renameCount === 4) throw new Error('disk full');
+      return rename(...args);
+    });
+
+    await expect(
+      saveGhostAppearanceWithPreset(
+        appearance('After', HASH_B),
+        { background: HASH_B },
+        'skin',
+        { dim: true, surfaceOpacity: true },
+      ),
+    ).rejects.toThrow('disk full');
+
+    const afterPreset = (await listGhostAppearancePresets()).find(
+      (preset) => preset.name === 'After',
+    );
+    expect(afterPreset).toBeDefined();
+    expect(mocks.refs.get(`skin-preset:${afterPreset!.id}:background`)?.has(HASH_B)).toBe(true);
+  });
+
   it('单条损坏的预设只被剔除,不清空整库', async () => {
     await saveGhostAppearancePreset(appearance('Furina'), { background: HASH_A }, 'skin');
     const file = path.join(mocks.root, 'appearance-skins.v1.json');

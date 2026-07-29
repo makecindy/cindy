@@ -440,6 +440,19 @@ async function saveGhostAppearancePresetUnsafe(
 
 async function restorePresetState(before: PersistedAppearancePresetLibrary): Promise<void> {
   const after = await readPresetLibrary();
+  // 先建立旧库需要的全部引用，再提交旧文件。若回滚写盘仍失败，磁盘上的
+  // 新库及其引用保持可用，最多暂留一组旧引用；不能先删新引用后留下缺图预设。
+  for (const previous of before.presets) {
+    await retainPresetMedia(
+      previous.id,
+      hashesFromSnapshot(previous.snapshot),
+      previous.sourceGhostId,
+    );
+  }
+  await atomicWriteJson(presetsFilePath(), before);
+
+  // 文件已指向旧库后再清理新库独占的引用。清理失败只会多占空间，不会让
+  // 持久化预设失去媒体；后续保存/删除仍会按 refId 收敛。
   const beforeById = new Map(before.presets.map((preset) => [preset.id, preset]));
   for (const preset of after.presets) {
     const previous = beforeById.get(preset.id);
@@ -451,19 +464,8 @@ async function restorePresetState(before: PersistedAppearancePresetLibrary): Pro
       );
       continue;
     }
-    const previousHashes = hashesFromSnapshot(previous.snapshot);
-    await releaseReplacedPresetMedia(preset.id, previousHashes);
-    await retainPresetMedia(preset.id, previousHashes, previous.sourceGhostId);
+    await releaseReplacedPresetMedia(preset.id, hashesFromSnapshot(previous.snapshot));
   }
-  for (const previous of before.presets) {
-    if (after.presets.some((preset) => preset.id === previous.id)) continue;
-    await retainPresetMedia(
-      previous.id,
-      hashesFromSnapshot(previous.snapshot),
-      previous.sourceGhostId,
-    );
-  }
-  await atomicWriteJson(presetsFilePath(), before);
 }
 
 export function saveGhostAppearancePreset(
