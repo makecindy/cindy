@@ -235,7 +235,11 @@ function draftEnableOrcaOptions(
     );
     if (!provider || !providerOffersModel(provider, cfg.model, workerAgent)) return undefined;
     const catalogModel = getModel(provider, cfg.model, workerAgent);
-    return catalogModel && isModelEnabled(workerAgent, cfg.providerId, catalogModel)
+    // 非聊天模型不该被当成持久化草稿的有效来源(issue #882 第 3 点,2026-07 review),
+    // 与 CreateWorkerPopover.narrowProviderSource 同规则同理由。
+    return catalogModel &&
+      isChatEligible(catalogModel) &&
+      isModelEnabled(workerAgent, cfg.providerId, catalogModel)
       ? cfg.providerId
       : undefined;
   })();
