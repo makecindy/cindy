@@ -228,9 +228,9 @@ describe('exportGhostPackage', () => {
   it('遍历期间目录被改写时整体重读,导出与最终状态一致的包', async () => {
     // 第二遍(校验遍)枚举根部前改写 main.js:第一遍的字节与第二遍的
     // 元数据对不上,必须重读;最终包内容应是改写后的版本。
-    const realReaddir = fs.promises.readdir;
+    const realOpendir = fs.promises.opendir;
     let rootReads = 0;
-    const spy = vi.spyOn(fs.promises, 'readdir').mockImplementation(async (p: any, opts: any) => {
+    const spy = vi.spyOn(fs.promises, 'opendir').mockImplementation(async (p: any) => {
       if (String(p) === ghostDir) {
         rootReads += 1;
         if (rootReads === 2) {
@@ -240,7 +240,7 @@ describe('exportGhostPackage', () => {
           );
         }
       }
-      return realReaddir(p, opts) as any;
+      return realOpendir(p) as any;
     });
     try {
       const result = await exportGhostPackage('hello', makeDeps());

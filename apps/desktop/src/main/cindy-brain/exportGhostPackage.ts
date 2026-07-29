@@ -240,15 +240,17 @@ function sha256hex(data: Buffer): string {
 
 /**
  * 递归枚举安装目录,逐文件读字节并算 sha256。withData=true 时保留字节
- * (第一遍);否则只留哈希(校验遍)。两遍都读内容而不是 stat——一致性
- * 判定锚定在字节上,路径/尺寸/mtime 相同的并发替换也会哈希不符被捕获。
- * symlink/junction 不跟随:只归档安装目录自身的真实内容。结果按 rel
- * 排序供逐位比对。
+ * (第一遍);否则只留哈希(校验遍)。两遍都锚定字节——一致性判定与
+ * 路径/尺寸/mtime 等元数据碰撞彻底无关。symlink/junction 不跟随:只
+ * 归档安装目录自身的真实内容。结果按 rel 排序供逐位比对。
  * 空目录(子树内不含保留文件)与文件一起记录、一起进两遍比对——目录
- * 结构也在一致性信封内(评审 P1:文件快照后才收集目录会把新版目录
- * 结构与旧版文件混装)。budget(仅第一遍):文件与目录都计条目并扣
- * 字节额度,超限抛 ExportTooLargeError 立刻中止——海量空目录或超大
- * 内容都不会被完整读进内存。
+ * 结构也在一致性信封内。枚举走 opendir 流式迭代(评审 P1:readdir
+ * 一次性物化 Dirent[],单目录海量条目会先分配再计数)。
+ * 限流(评审 P1):
+ * - 第一遍(budget):文件与目录都计条目;单文件先 stat,超剩余字节
+ *   直接中止,不把巨型文件读进内存;
+ * - 校验遍(expect):读取量被第一遍锚住——stat 尺寸与第一遍不符必然
+ *   不一致,不读内容;第一遍没有的新文件同理(必然不一致)。
  */
 interface TreePass<T> {
   items: T[];
@@ -260,24 +262,28 @@ async function walkTree(
   withData: true,
   budget: { entriesLeft: number; bytesLeft: number },
 ): Promise<TreePass<TreeFile>>;
-async function walkTree(dir: string, withData: false): Promise<TreePass<TreeMeta>>;
+async function walkTree(
+  dir: string,
+  withData: false,
+  expect: Map<string, number>,
+): Promise<TreePass<TreeMeta>>;
 async function walkTree(
   dir: string,
   withData: boolean,
-  budget?: { entriesLeft: number; bytesLeft: number },
+  limit: { entriesLeft: number; bytesLeft: number } | Map<string, number>,
 ): Promise<TreePass<TreeFile | TreeMeta>> {
   const items: Array<TreeFile | TreeMeta> = [];
   const emptyDirs: string[] = [];
   const walk = async (cur: string, relBase: string): Promise<boolean> => {
-    const entries = await fs.promises.readdir(cur, { withFileTypes: true });
     let hasContent = false;
-    for (const entry of entries) {
+    for await (const entry of await fs.promises.opendir(cur)) {
       if (shouldSkipExportEntry(entry.name, relBase)) continue;
       if (entry.isSymbolicLink()) continue;
       const abs = path.join(cur, entry.name);
       const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        if (withData && budget) {
+        if (withData) {
+          const budget = limit as { entriesLeft: number; bytesLeft: number };
           budget.entriesLeft -= 1;
           if (budget.entriesLeft < 0) throw new ExportTooLargeError();
         }
@@ -286,20 +292,29 @@ async function walkTree(
         hasContent = hasContent || subHas;
       } else if (entry.isFile()) {
         if (withData) {
-          // 先 stat 预扣额度:超过剩余字节的文件直接中止,不读进内存
-          // (评审 P1:巨型单文件要挡在分配之前);读后按实际字节结算。
+          const budget = limit as { entriesLeft: number; bytesLeft: number };
           const stat = await fs.promises.stat(abs);
-          if (stat.size > budget!.bytesLeft) throw new ExportTooLargeError();
+          if (stat.size > budget.bytesLeft) throw new ExportTooLargeError();
           const data = await fs.promises.readFile(abs);
-          budget!.entriesLeft -= 1;
-          budget!.bytesLeft -= Math.max(stat.size, data.byteLength);
-          if (budget!.entriesLeft < 0 || budget!.bytesLeft < 0) {
+          budget.entriesLeft -= 1;
+          budget.bytesLeft -= Math.max(stat.size, data.byteLength);
+          if (budget.entriesLeft < 0 || budget.bytesLeft < 0) {
             throw new ExportTooLargeError();
           }
           items.push({ rel, data, sha256: sha256hex(data) });
         } else {
-          const data = await fs.promises.readFile(abs);
-          items.push({ rel, sha256: sha256hex(data) });
+          const expect = limit as Map<string, number>;
+          const expectedSize = expect.get(rel);
+          const stat =
+            expectedSize !== undefined ? await fs.promises.stat(abs) : null;
+          if (expectedSize === undefined || stat!.size !== expectedSize) {
+            // 第一遍没有的新文件/尺寸被换:与第一遍必然不一致,
+            // 不读内容(校验遍读取量由第一遍锚住)。
+            items.push({ rel, sha256: '' });
+          } else {
+            const data = await fs.promises.readFile(abs);
+            items.push({ rel, sha256: sha256hex(data) });
+          }
         }
         hasContent = true;
       }
@@ -323,7 +338,8 @@ async function snapshotUnsignedTree(
   budget: { entriesLeft: number; bytesLeft: number },
 ): Promise<{ files: TreeFile[]; emptyDirs: string[] } | null> {
   const first = await walkTree(dir, true, budget);
-  const verify = await walkTree(dir, false);
+  const expect = new Map(first.items.map((file) => [file.rel, file.data.byteLength]));
+  const verify = await walkTree(dir, false, expect);
   const filesConsistent =
     first.items.length === verify.items.length &&
     first.items.every(
@@ -385,9 +401,8 @@ async function collectEmptyDirs(
 ): Promise<string[]> {
   const empty: string[] = [];
   const walk = async (cur: string, relBase: string): Promise<boolean> => {
-    const entries = await fs.promises.readdir(cur, { withFileTypes: true });
     let hasContent = false;
-    for (const entry of entries) {
+    for await (const entry of await fs.promises.opendir(cur)) {
       if (shouldSkipExportEntry(entry.name, relBase)) continue;
       if (entry.isSymbolicLink()) continue;
       budget.entriesLeft -= 1;
