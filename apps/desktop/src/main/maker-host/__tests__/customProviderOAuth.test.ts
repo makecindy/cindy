@@ -190,13 +190,15 @@ describe('mergeDiscoveredModelsIntoConfig（发现结果持久化的 additions-o
 });
 
 describe('parseModelsListResponse contextWindow 提取(#386)', () => {
-  it('从 context_length / context_window / max_context_length 尽力提取,非法值缺省', () => {
+  it('从 context_length / context_window / max_context_length / max_input_tokens 尽力提取,非法值缺省', () => {
     expect(
       parseModelsListResponse({
         data: [
           { id: 'a', context_length: 1_048_576 },
           { id: 'b', name: 'B', context_window: 262144.9 },
           { id: 'c', max_context_length: 131072 },
+          // Anthropic 兼容端点的字段口径(与 model-discovery/anthropic.ts 对齐,review P1)。
+          { id: 'f', max_input_tokens: 200_000 },
           { id: 'd', context_length: -5 },
           { id: 'e' },
         ],
@@ -205,6 +207,7 @@ describe('parseModelsListResponse contextWindow 提取(#386)', () => {
       { id: 'a', name: 'a', contextWindow: 1_048_576 },
       { id: 'b', name: 'B', contextWindow: 262144 },
       { id: 'c', name: 'c', contextWindow: 131072 },
+      { id: 'f', name: 'f', contextWindow: 200_000 },
       { id: 'd', name: 'd' },
       { id: 'e', name: 'e' },
     ]);

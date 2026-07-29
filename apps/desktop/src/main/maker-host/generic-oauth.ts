@@ -834,7 +834,9 @@ export async function discoverGenericOAuthModels(
  * 字符串数组）为去重后的 `{id, name, contextWindow?}[]`；无法识别返回 null。显示名优先取
  * 条目的 `display_name`（Anthropic 形状）/ `name` 字段，缺省回退 id。
  * contextWindow 尽力从常见字段读取（OpenRouter `context_length` / 通用 `context_window` /
- * Moonshot 等 `max_context_length`），无或非法时缺省——缺省的模型仍会回落保守默认(#386)。
+ * Moonshot 等 `max_context_length` / Anthropic 兼容端点 `max_input_tokens`,与
+ * model-discovery/anthropic.ts 认的字段对齐），无或非法时缺省——缺省的模型仍会
+ * 回落保守默认(#386)。
  * 纯函数——OAuth 自动发现（本模块）与 API key 表单「获取模型列表」（provider-model-fetch）共用。
  */
 export function parseModelsListResponse(
@@ -867,6 +869,7 @@ export function parseModelsListResponse(
             context_length?: unknown;
             context_window?: unknown;
             max_context_length?: unknown;
+            max_input_tokens?: unknown;
           })
         : null;
     const name =
@@ -876,7 +879,7 @@ export function parseModelsListResponse(
           ? rec.name
           : id;
     const rawWindow = rec
-      ? [rec.context_length, rec.context_window, rec.max_context_length].find(
+      ? [rec.context_length, rec.context_window, rec.max_context_length, rec.max_input_tokens].find(
           (v) => typeof v === 'number' && Number.isFinite(v) && v > 0,
         )
       : undefined;
