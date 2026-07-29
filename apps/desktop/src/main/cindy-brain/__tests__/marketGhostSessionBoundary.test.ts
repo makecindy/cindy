@@ -134,8 +134,10 @@ describe('market Ghost session boundary', () => {
       uninstallStart,
     );
     const uninstallBody = source.slice(uninstallStart, uninstallEnd);
-    expect(uninstallBody).toContain('await removeGhostAppearanceData(id)');
-    expect(uninstallBody.indexOf('await removeGhostAppearanceData(id)')).toBeGreaterThan(
+    expect(uninstallBody).toContain(
+      'await withGhostAppearanceMutation(() =>\n        removeGhostAppearanceData(id),',
+    );
+    expect(uninstallBody.indexOf('await withGhostAppearanceMutation(() =>')).toBeGreaterThan(
       uninstallBody.indexOf('await manager.uninstall('),
     );
   });

@@ -2631,7 +2631,12 @@ export async function uninstallGhostAndCleanup(
     const result = await manager.uninstall(id, { notify: false });
     if ('rejection' in result) throwUninstallError(result.rejection);
     try {
-      const appearanceCleanup = await removeGhostAppearanceData(id);
+      // 与插件 appearance-request / 可信 Renderer mutation 共用同一队列：
+      // 已通过初始归属检查的在途请求可能还在验图，必须等它落盘后再做最终
+      // 清扫，避免卸载完成后又留下同 ghost id 的新引用。
+      const appearanceCleanup = await withGhostAppearanceMutation(() =>
+        removeGhostAppearanceData(id),
+      );
       if (appearanceCleanup.activeRemoved) broadcastGhostAppearance(null);
     } catch (error) {
       // 清理事务已经持久化，读取侧会立即隐藏旧归属；下次外观 mutation 或
