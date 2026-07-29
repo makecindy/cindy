@@ -11,6 +11,7 @@ import {
   DEFINITIVE_REFRESH_FAILURE_CODES,
   getRefreshTokenReplacementCandidate,
   isDefinitiveRefreshFailure,
+  pickRefreshTokenReplacementCandidate,
   resolveRefreshFailureAction,
   resolveSessionExpiredReason,
   runRefreshWithReplacementRetry,
@@ -117,6 +118,49 @@ describe('refresh token replacement detection', () => {
     expect(getRefreshTokenReplacementCandidate('rt-old', null)).toBeNull();
     expect(getRefreshTokenReplacementCandidate('rt-old', '')).toBeNull();
     expect(getRefreshTokenReplacementCandidate('rt-old', 'rt-old')).toBeNull();
+  });
+
+  it('多来源候选:按顺序取第一枚「非空且不是本次请求那一枚」', () => {
+    // legacy → v1 迁移窗口里两个实例可能各写一个文件,只认单一来源的一方追不上对方。
+    expect(pickRefreshTokenReplacementCandidate('rt-old', ['rt-v1', 'rt-legacy'])).toBe('rt-v1');
+    // v1 还没被别人更新(仍是自己那枚)→ 回退到 legacy 里旧版实例刚轮换出的新 token。
+    expect(pickRefreshTokenReplacementCandidate('rt-old', ['rt-old', 'rt-legacy'])).toBe(
+      'rt-legacy',
+    );
+    // 空洞不阻断后续候选。
+    expect(pickRefreshTokenReplacementCandidate('rt-old', [null, undefined, '', 'rt-legacy'])).toBe(
+      'rt-legacy',
+    );
+  });
+
+  it('多来源候选:全部缺失或都等于请求 token → 没有替换候选(真确定性失效)', () => {
+    expect(pickRefreshTokenReplacementCandidate('rt-old', [])).toBeNull();
+    expect(pickRefreshTokenReplacementCandidate('rt-old', [null, undefined, ''])).toBeNull();
+    expect(pickRefreshTokenReplacementCandidate('rt-old', ['rt-old', 'rt-old'])).toBeNull();
+  });
+
+  it('readLatestStoredToken 收到本次请求所用的 token,便于跨来源挑候选', async () => {
+    const okResult: RefreshFetchResult<unknown> = {
+      ok: true,
+      status: 200,
+      data: { accessToken: 'a', refreshToken: 'rt-newer' },
+    };
+    const doRefresh = vi.fn(async (refreshToken: string) =>
+      refreshToken === 'rt-legacy' ? okResult : invalidToken,
+    );
+    const seenRequestedTokens: string[] = [];
+
+    const result = await runRefreshWithReplacementRetry('rt-old', {
+      doRefresh,
+      // 模拟 authManager 的读侧:v1 仍是自己那枚,legacy 才有旧版实例轮换出的新 token。
+      readLatestStoredToken: (requestedToken) => {
+        seenRequestedTokens.push(requestedToken);
+        return pickRefreshTokenReplacementCandidate(requestedToken, ['rt-old', 'rt-legacy']);
+      },
+    });
+
+    expect(result).toMatchObject({ result: okResult, requestedToken: 'rt-legacy' });
+    expect(seenRequestedTokens).toEqual(['rt-old']);
   });
 
   it('确定性失败且磁盘已有新 token → 用新 token 重试,不清登录态', () => {

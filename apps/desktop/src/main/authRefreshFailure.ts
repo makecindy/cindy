@@ -58,9 +58,28 @@ export function getRefreshTokenReplacementCandidate(
   requestedToken: string,
   latestStoredToken: string | null,
 ): string | null {
-  if (!latestStoredToken) return null;
-  if (latestStoredToken === requestedToken) return null;
-  return latestStoredToken;
+  return pickRefreshTokenReplacementCandidate(requestedToken, [latestStoredToken]);
+}
+
+/**
+ * 从多个磁盘凭证来源里挑出可用于追赶的替换 token —— 按传入顺序取第一枚
+ * 「非空且不等于本次请求所用」的 token。
+ *
+ * 为什么需要多来源:凭证文件正在做 legacy → v1 的格式迁移(见 authManager 的
+ * `AUTH_SESSION_KEY` / `LEGACY_RESOURCE_REFRESH_TOKEN_KEY`)。共享 userData 的
+ * 双开窗口里,两个实例可能一个写 v1、一个写 legacy;只认单一来源的一方永远追不上
+ * 另一方轮换出的新 token,会把本可自愈的竞态判成确定性失效并强制重登。
+ */
+export function pickRefreshTokenReplacementCandidate(
+  requestedToken: string,
+  candidates: readonly (string | null | undefined)[],
+): string | null {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (candidate === requestedToken) continue;
+    return candidate;
+  }
+  return null;
 }
 
 /**
@@ -248,7 +267,11 @@ export async function runRefreshWithReplacementRetry<T>(
   initialRefreshToken: string,
   opts: {
     doRefresh: (refreshToken: string) => Promise<RefreshFetchResult<T>>;
-    readLatestStoredToken: () => string | null;
+    /**
+     * 读磁盘上当前最新的 refresh token。带上本次请求所用的 token,让调用方能在
+     * 多个凭证来源(legacy / v1)之间挑出真正「不是这一枚」的替换候选。
+     */
+    readLatestStoredToken: (requestedToken: string) => string | null;
     /** 不传则单次请求;传入则每一枚 token 内部按 transient 规则重试。 */
     transientRetry?: {
       retryDelaysMs?: readonly number[];
@@ -307,7 +330,7 @@ export async function runRefreshWithReplacementRetry<T>(
     let action = resolveRefreshFailureAction(
       run.result,
       requestedToken,
-      opts.readLatestStoredToken(),
+      opts.readLatestStoredToken(requestedToken),
     );
 
     if (action.kind === 'definitive-failure' && isReplacementRetryEligibleFailure(run.result)) {
@@ -322,7 +345,7 @@ export async function runRefreshWithReplacementRetry<T>(
         action = resolveRefreshFailureAction(
           run.result,
           requestedToken,
-          opts.readLatestStoredToken(),
+          opts.readLatestStoredToken(requestedToken),
         );
         if (action.kind !== 'definitive-failure') break;
       }

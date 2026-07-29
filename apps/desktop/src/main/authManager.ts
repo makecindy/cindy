@@ -48,6 +48,7 @@ import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
 import {
   runRefreshWithReplacementRetry,
+  pickRefreshTokenReplacementCandidate,
   resolveSessionExpiredReason,
   type RefreshFailureAction,
   type RefreshFailureInfo,
@@ -402,7 +403,57 @@ function readPersistedRefreshToken(realm = activeAuthRealm): string | null {
 }
 
 function writePersistedAuthSession(refreshToken: string, realm = activeAuthRealm): boolean {
-  return writeSafe(AUTH_SESSION_KEY, serializeAuthSessionRecord(realm, refreshToken));
+  const written = writeSafe(AUTH_SESSION_KEY, serializeAuthSessionRecord(realm, refreshToken));
+  // v1 记录是唯一权威;legacy 只是给尚未升级的实例看的从属副本,写成功才镜像。
+  if (written) mirrorLegacyResourceRefreshToken(refreshToken, realm);
+  return written;
+}
+
+/**
+ * 过渡期镜像:把轮换出的新 refresh token 同步回写 legacy 凭证文件。
+ *
+ * 服务端 refresh token 按 (user, device) 一对一存,共享 userData 的双开实例共用
+ * 同一 deviceId——任一实例续期,另一实例手上那枚立刻作废。这本该由
+ * replacement-retry 兜住(「磁盘上已有别人写的新 token」就追上去重试),但
+ * `LEGACY_RESOURCE_REFRESH_TOKEN_KEY` → `AUTH_SESSION_KEY` 的格式迁移打断了这条
+ * 兜底:新版轮换后只写 v1,旧版实例只会读 legacy,于是它读到的永远是自己那枚死
+ * token,把可自愈的竞态判成确定性失效并强制重登。
+ *
+ * 2026-07-29 事故:packaged 0.1.20(legacy)与含 #748 的 dev(v1)共享 userData 双开,
+ * dev 在 07:42 续期,packaged 07:46 的 refresh 拿 INVALID_REFRESH_TOKEN,两次
+ * replacement recheck 读 legacy 都读到自己那枚旧 token,弹「登录已过期」。
+ *
+ * 只在 legacy 文件**已经存在**时镜像:它不在就说明没有旧版实例在消费它(或已被
+ * 独占启动的新版清理),不要凭空复活一份凭证文件。
+ *
+ * 只镜像 realm === AUTH_REGION 的 session:legacy 格式是裸 token、不带 realm,旧版
+ * 按自己的构建区解释。把对端区域的 token 写进去,旧版会拿它去请求本区 auth-server,
+ * 比不镜像更糟。
+ */
+function mirrorLegacyResourceRefreshToken(refreshToken: string, realm: AuthRegion): void {
+  if (realm !== AUTH_REGION) return;
+  if (isPersistedSecretAbsent(LEGACY_RESOURCE_REFRESH_TOKEN_KEY)) return;
+  // 已经是同一枚就不写:省一次落盘,也不因无意义的 mtime 变化干扰 CAS 删除的身份校验。
+  if (readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY) === refreshToken) return;
+  writeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, refreshToken);
+}
+
+/**
+ * replacement-retry 的读侧对偶:从 v1 与 legacy 两个来源里挑出「不是本次请求那一枚」
+ * 的最新 token。
+ *
+ * 镜像只能解决「新版轮换 → 旧版追赶」;反向(旧版实例轮换后只写 legacy,本进程读 v1
+ * 读到的仍是已作废的旧值)同样会误判确定性失效,所以读侧也必须认 legacy。v1 优先:
+ * 它带 realm、是本版本的权威记录;legacy 仅在与安装包区域一致时才可解释。
+ */
+function readLatestReplacementRefreshToken(
+  realm: AuthRegion,
+  requestedToken: string,
+): string | null {
+  return pickRefreshTokenReplacementCandidate(requestedToken, [
+    readPersistedRefreshToken(realm),
+    realm === AUTH_REGION ? readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY) : null,
+  ]);
 }
 
 function readPersistedAccountDeletionReceipt() {
@@ -1000,7 +1051,8 @@ async function runAuthRefreshWithReplacementRetry(
 }> {
   const run = await runRefreshWithReplacementRetry(initialRefreshToken, {
     doRefresh: (refreshToken) => requestAuthRefresh(refreshToken, opts.realm),
-    readLatestStoredToken: () => readPersistedRefreshToken(opts.realm),
+    readLatestStoredToken: (requestedToken) =>
+      readLatestReplacementRefreshToken(opts.realm, requestedToken),
     transientRetry: opts.withTransientRetry
       ? {
           rateLimitDelayMs: opts.rateLimitDelayMs,
