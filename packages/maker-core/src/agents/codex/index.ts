@@ -4531,10 +4531,20 @@ export class CodexAgent extends BaseAgent {
      * currentTurnId / isTurnStartPending, 会漏掉"退避计时器正在等"这个窗口 ——
      * 那时重投一到点就会以已被撤销的宽松档执行工具(review #844 codex P1)。
      */
-    const overloadRetryPolicyLooserThan = (mode: PermissionMode): boolean =>
-      (overloadRetry?.timer != null || overloadRetry?.inFlight === true)
-      && codexPermissionStrictnessRank(overloadRetry.launchedPermissionMode)
-        < codexPermissionStrictnessRank(mode);
+    const overloadRetryPolicyLooserThan = (mode: PermissionMode): boolean => {
+      const state = overloadRetry;
+      if (!state) return false;
+      // 三种"重投仍会发生"的状态都要算在内: 计时器在等、重投 RPC 在途, 以及**失败已被
+      // 延后、等在途 turn/start settle 后补排**(那时既没有计时器也没有 inFlight) ——
+      // 漏掉最后一种, 那个窗口里的收紧就不会武装延迟中断(review #844 codex P1)。
+      const retryStillPending =
+        state.timer != null || state.inFlight || state.deferredCapacityFailure !== null;
+      if (!retryStillPending) return false;
+      return (
+        codexPermissionStrictnessRank(state.launchedPermissionMode)
+        < codexPermissionStrictnessRank(mode)
+      );
+    };
 
     /**
      * 取消一轮过载重投时, 把它**已经激活**的 turn 一起收掉。
@@ -4721,6 +4731,22 @@ export class CodexAgent extends BaseAgent {
         threadId,
         deadTurnId,
       });
+      // 重投持的是**冻结**策略。排上计时器的这一刻若当前档已经比冻结档更严, 必须
+      // (重新)武装延迟中断标记: 收紧若发生在"失败已延后、计时器还没排上"的窗口里,
+      // 那个标记会先被原始 turn 的 turn/start 响应消费掉(handleTurnStartResp 无条件
+      // 消费它), 等重投真的发出去时已经没有任何东西能拦住它 —— 工具就会在权限已被
+      // 撤销后执行(review #844 codex P1)。这里按状态重新推导, 不依赖标记存活。
+      if (
+        codexPermissionStrictnessRank(state.launchedPermissionMode)
+        < codexPermissionStrictnessRank(mutablePermissionMode)
+      ) {
+        pendingTightenInterrupt = true;
+        log.info('codex overload retry armed a tighten interrupt (frozen policy is looser)', {
+          frozen: state.launchedPermissionMode,
+          current: mutablePermissionMode,
+          threadId,
+        });
+      }
       state.timer = setTimeout(() => {
         state.timer = null;
         if (closed || overloadRetry !== state) return;

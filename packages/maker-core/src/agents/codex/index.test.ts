@@ -4840,6 +4840,69 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('keeps a deferred retry under a tightening that lands before the initial response', async () => {
+      // 失败在初始 turn/start 还在飞时被延后 → 那个状态既没计时器也没 inFlight。此时
+      // 收紧权限, 延迟中断标记会先被原始 turn 的响应消费掉, 补排出去的重投带着冻结的
+      // 宽松策略、且没有任何东西能拦它 —— 工具在权限已被撤销后执行
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-deferred-tighten',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+          permissionMode: 'bypassPermissions',
+        });
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 空 id 容量拒绝（初始 RPC 仍在飞）→ 只延后，不排计时器。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 用户在这个窗口里收紧到 Ask（Full access → Ask）。
+        await handle.setPermissionMode?.('ask');
+
+        // 初始响应回来：它会消费掉延迟中断标记，随后补排重投。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sending;
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(turnStarts).toBe(2);
+
+        // 重投带的是冻结的 Full access → 必须被补中断，不能让它继续跑工具。
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-2',
+          ),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('clears an adopted dead turn that turnStarted had already activated', async () => {
       // 空 id 容量拒绝 → turnStarted(带出真实 id) → turn/start 响应 的顺序下, 认领只落
       // 墓碑、不清活跃态的话: 补排会因为"看起来还有 turn 在跑"而放弃(且清掉延后标记),
