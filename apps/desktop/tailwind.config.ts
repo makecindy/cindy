@@ -121,11 +121,10 @@ const config: Config = {
         },
       },
       animation: {
-        // 持续 spinner 的一圈时长由既有 enter 档派生(4 × 250ms),不再使用
-        // Tailwind animate-spin 内置的硬编码 1s。重复相加保持标准 calc() 兼容性,
-        // 同时让全局 motion token 调整能同步影响 spinner 节奏。
+        // 功能性 loading spinner 使用 DESIGN.md §14.4 明确登记的语义循环 token；
+        // 不复用 Tailwind animate-spin 的硬编码 1s,也不耦合 enter/exit 交互档位。
         spinner:
-          'spin calc(var(--motion-enter, 250ms) + var(--motion-enter, 250ms) + var(--motion-enter, 250ms) + var(--motion-enter, 250ms)) linear infinite',
+          'spin var(--motion-spinner-cycle, 1000ms) linear infinite',
         // float-out 需要 forwards:Radix 等 animationend 才卸载,fill 不驻留
         // 会在动画结束到卸载之间闪回原状。
         'float-in':

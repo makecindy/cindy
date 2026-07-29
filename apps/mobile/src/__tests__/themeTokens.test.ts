@@ -5,6 +5,7 @@ import {
   iconSize,
   lightColors,
   lineHeight,
+  motionDuration,
   palettes,
   textStyles,
   typeScale,
@@ -41,6 +42,10 @@ describe('theme tokens', () => {
   it('palettes 指向同一份 light / dark 对象', () => {
     expect(palettes.light).toBe(lightColors);
     expect(palettes.dark).toBe(darkColors);
+  });
+
+  it('spinner 语义循环例外与 DESIGN.md §14.4 保持一致', () => {
+    expect(motionDuration.spinnerCycle).toBe(1000);
   });
 
   it('每个颜色 token 都是非空字符串(login 登录皮嵌套组下钻)', () => {

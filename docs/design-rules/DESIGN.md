@@ -547,7 +547,7 @@ Applies to submit-on-Enter fields: the chat composer, goal input, ask input, etc
 
 #### Motion tokens (the only tier source)
 
-Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`; mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (dual-platform isomorphism, same policy as color tokens, landing with the mobile motion overhaul). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 duration tiers + 3 curves, the same philosophy as the §5 three-tier radius. Values outside the tiers require design review first.
+Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`; mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (dual-platform isomorphism, same policy as color tokens, landing with the mobile motion overhaul). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 interaction-duration tiers + 3 curves, the same philosophy as the §5 three-tier radius. Values outside the tiers require design review first. The single semantic loop-cycle exception is recorded directly below.
 
 | Token | Value | Use |
 |---|---|---|
@@ -560,6 +560,14 @@ Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`;
 | `--motion-ease-in` | `cubic-bezier(0.4, 0, 1, 1)` | Exit |
 | `--motion-ease-move` | `cubic-bezier(0.4, 0, 0.2, 1)` | Position/size interpolation |
 
+**Semantic loop-cycle exception:** `--motion-spinner-cycle` = `1000ms` is the
+full-turn duration for functional loading spinners. It is not a sixth interaction
+tier and must not be used for enter/exit, hover, resize, or decorative motion.
+Spinner rotation remains linear, transform-only, mounted on an HTML wrapper, and
+must become static under reduced motion. This exception keeps loading rotation
+readable without coupling it to dialog timing or copying a hardcoded Tailwind
+default into components.
+
 #### Semantics → motion prototypes (one semantic, one motion, app-wide)
 
 | Semantic | Spec | Reference implementation |
@@ -571,6 +579,7 @@ Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`;
 | Press | `active:scale-[0.98]` (all interactive pills/buttons) | ConfirmDialog buttons |
 | Done | **the app's only sanctioned overshoot** (`status-done-pop`) | `globals.css` |
 | Running | Opacity breathing; must sit on an HTML wrapper (`docs/dev-rules/engineering-conventions.md` §7) | `session-breathing` |
+| Loading spinner | `animate-spinner` (`--motion-spinner-cycle`, linear full turn); HTML wrapper only, static under reduced motion | `tailwind.config.ts` |
 | Hover / state colors | `transition-colors`, ≤ fast (150ms) | App-wide status quo |
 | Container transform (chip grows into panel) | 220ms — see the dedicated category below (explicit exception) | Composer permission/model selectors |
 

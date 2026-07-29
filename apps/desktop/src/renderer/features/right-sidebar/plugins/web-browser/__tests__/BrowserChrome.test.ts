@@ -153,12 +153,13 @@ describe('BrowserChrome', () => {
     expect(onStop).not.toHaveBeenCalled();
   });
 
-  it('routes the refresh spinner timing through the approved motion tier', () => {
+  it('routes the refresh spinner through the approved semantic cycle token', () => {
     const animation = (
       tailwindConfig.theme?.extend?.animation as Record<string, string> | undefined
     )?.spinner;
 
-    expect(animation).toContain('var(--motion-enter, 250ms)');
+    expect(animation).toContain('var(--motion-spinner-cycle, 1000ms)');
+    expect(animation).not.toContain('--motion-enter');
     expect(animation).not.toContain('spin 1s');
   });
 
