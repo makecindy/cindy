@@ -399,6 +399,42 @@ describe('GhostAppearanceSlot', () => {
     expect(h.savePreset).toHaveBeenCalledOnce();
   });
 
+  it('另存当前皮肤时隐藏存储路径但保留稳定的配额提示', async () => {
+    const current = {
+      name: 'Current',
+      palette: 'ocean' as const,
+      sourceGhostId: 'skin',
+      dim: 0.28,
+      surfaceOpacity: 0.82,
+      updatedAt: 100,
+    };
+    const storageFailure = harness({
+      getCurrent: async () => current,
+      saveWithPreset: async () => {
+        throw new Error('EACCES: /Users/private/appearance-skins.v1.json');
+      },
+    });
+    await expect(
+      storageFailure.slot.handleRequest('skin', {
+        type: 'appearance-request',
+        operation: 'save-current',
+      }),
+    ).resolves.toEqual({ ok: false, message: '保存皮肤失败，请稍后重试' });
+
+    const quotaFailure = harness({
+      getCurrent: async () => current,
+      saveWithPreset: async () => {
+        throw new Error('每个插件最多保存 50 套皮肤');
+      },
+    });
+    await expect(
+      quotaFailure.slot.handleRequest('skin', {
+        type: 'appearance-request',
+        operation: 'save-current',
+      }),
+    ).resolves.toEqual({ ok: false, message: '每个插件最多保存 50 套皮肤' });
+  });
+
   it('不能读取、微调或另存其他插件的活动皮肤', async () => {
     const current = {
       palette: 'ocean' as const,

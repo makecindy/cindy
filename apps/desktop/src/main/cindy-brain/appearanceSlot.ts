@@ -22,6 +22,23 @@ const MAX_SKIN_IMAGE_BYTES = 8 * 1024 * 1024;
 const SUPPORTED_STATIC_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
 /** 与 appearanceStore 持久层的 isSnapshot 同限:超限名字会让整份快照在重启后读不回来。 */
 const SKIN_NAME_MAX_CHARS = 48;
+const PUBLIC_SAVE_ERROR_MESSAGES = new Set([
+  '每个插件的皮肤预设媒体总量不能超过 128 MB',
+  '皮肤来源与当前插件不一致',
+  '保存皮肤预设需要名称',
+  '皮肤名称须为 1–48 个可见字符',
+  '每个插件最多保存 50 套皮肤',
+  '皮肤库已达到宿主安全上限',
+]);
+const RECOVERY_ERROR_MESSAGE =
+  '皮肤保存失败且自动恢复未完成；预设可能已保存，请刷新外观列表确认';
+
+/** 只允许稳定的领域错误跨越插件沙箱边界，绝不转发文件系统或数据库原始消息。 */
+function publicSaveErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  if (error.name === 'GhostAppearanceRecoveryError') return RECOVERY_ERROR_MESSAGE;
+  return PUBLIC_SAVE_ERROR_MESSAGES.has(error.message) ? error.message : fallback;
+}
 
 /** 皮肤名统一校验:所有会被持久化的名字(apply / patch / save-current)必须走这里。 */
 function normalizeSkinName(value: unknown): string | null {
@@ -218,7 +235,7 @@ export class GhostAppearanceSlot {
         });
         return {
           ok: false,
-          message: error instanceof Error && error.message ? error.message : '保存皮肤失败',
+          message: publicSaveErrorMessage(error, '保存皮肤失败，请稍后重试'),
         };
       }
     }
@@ -493,10 +510,7 @@ export class GhostAppearanceSlot {
       });
       return {
         ok: false,
-        message:
-          error instanceof Error && error.name === 'GhostAppearanceRecoveryError'
-            ? error.message
-            : '外观保存失败，请稍后重试',
+        message: publicSaveErrorMessage(error, '外观保存失败，请稍后重试'),
       };
     }
     this.deps.broadcast(appearance);
