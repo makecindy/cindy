@@ -4840,6 +4840,82 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('quarantines the pending initial turn when Stop lands during a deferred failure', async () => {
+      // Stop 会 discardOverloadRetry 把重投状态整个置空。隔离标记若挂在那个状态里就会
+      // 跟着消失, 于是随后回来的 turn/start 响应不再被认领成死 turn, handleTurnStartResp
+      // 照常激活它 —— 用户已经收到「已停止」的终态, 工具却还在跑
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-stop-during-deferral',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 空 id 容量拒绝（初始 RPC 仍在飞）→ 只延后。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 响应与 turnStarted 都还没到就按 Stop。
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(
+          events.slice(before).filter((e) => e.type === 'error' && e.data?.isTerminal === true),
+        ).toHaveLength(1);
+
+        // 响应现在才回来：不得激活，且要 best-effort interrupt 把它停掉。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sending.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-1',
+          ),
+        ).toBe(true);
+
+        // Stop 之后也不得再补排重投。
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('stays busy and settles on cancel while a capacity failure is only deferred', async () => {
       // "失败已延后、等在途 turn/start settle 后补排"这个状态既没有计时器也没有
       // inFlight。两处后果: Session.send() 会把会话当 idle 接受第二条消息并丢掉第一条
