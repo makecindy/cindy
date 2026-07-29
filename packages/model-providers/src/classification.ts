@@ -129,7 +129,10 @@ export function categorize(id: string): ModelCategory {
   // 非对话类型(向量/图像/语音/视频/压缩)必须在通用 gpt- / gemini- 厂商规则**之前**判定,
   // 否则 gpt-image-2 / gemini-3-pro-image / gpt-4o-transcribe 会被误归到 gpt / google。
   // 这些是网关多返回的、不能当 agent 用的模型,默认关、仅按类型归类展示。
-  if (/embedding/.test(id) || id.startsWith('voyage/')) return 'embedding';
+  // embed-english-v3.0 / embed-multilingual-v3.0(Cohere)等 id 里没有 "embedding"
+  // 字样,只靠 /embedding/ 关键词兜底会漏网(2026-07 review 第 17 轮,同 dall-e/
+  // sora/veo 这类命名不含类型关键词的情况)。
+  if (/embedding/.test(id) || id.startsWith('voyage/') || id.startsWith('embed-')) return 'embedding';
   // dall-e(OpenAI 图像)id 里没有 "image" 字样,靠关键词兜底会漏网(2026-07 review:
   // 走 {id,name} 极简发现的自定义 OAuth 供应商没有 mode/group,只能靠这份正则)。
   if (/image/.test(id) || id.startsWith('dall-e')) return 'image';

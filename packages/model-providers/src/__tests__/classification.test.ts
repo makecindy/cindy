@@ -108,6 +108,13 @@ describe('categorize', () => {
     expect(categorize('voyage/voyage-4')).toBe('embedding');
   });
 
+  it('embed-*(Cohere,id 里没有 "embedding" 字样)同样归 embedding、不可聊天(2026-07 review 第 17 轮)', () => {
+    expect(categorize('embed-english-v3.0')).toBe('embedding');
+    expect(categorize('embed-multilingual-v3.0')).toBe('embedding');
+    expect(isChatEligible({ id: 'embed-english-v3.0' })).toBe(false);
+    expect(isChatEligible({ id: 'embed-multilingual-v3.0' })).toBe(false);
+  });
+
   it('图像生成类归 image(issue #882)', () => {
     expect(categorize('gemini-3.1-flash-image')).toBe('image');
     expect(categorize('gpt-image-1.5')).toBe('image');
