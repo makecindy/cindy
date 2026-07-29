@@ -84,6 +84,8 @@ describe('classifyBuiltinToolForAutoReview — 内置 Read/Grep/LS 读凭证升�
     expect(verdict('NotebookRead', { notebook_path: '/Users/me/.config/gcloud/application_default_credentials.json' })).toBe('prompt-each-time');
     expect(verdict('Grep', { pattern: 'AKIA', path: '/Users/me/.aws' })).toBe('prompt-each-time');
     expect(verdict('LS', { path: '/Users/me/.ssh' })).toBe('prompt-each-time');
+    // Windows 反斜杠路径的凭证同样命中(前缀类含 `\\`)。
+    expect(verdict('Read', { file_path: 'C:\\Users\\me\\.ssh\\id_rsa' })).toBe('prompt-each-time');
   });
   it('读普通文件 / 无 path 的读工具 → auto-approve', () => {
     expect(verdict('Read', { file_path: '/repo/src/a.ts' })).toBe('auto-approve');
@@ -118,7 +120,9 @@ describe('classifyBuiltinToolForAutoReview — Bash 只读命令放行', () => {
   });
   it('curl/wget 只读 GET(命令行浏览器,默认 stdout)auto-approve', () => {
     expect(verdict('Bash', { command: 'curl -sS https://example.com/' })).toBe('auto-approve');
-    expect(verdict('Bash', { command: 'wget -q https://example.com' })).toBe('auto-approve');
+    // wget 默认跟随重定向(可 302 跳内网/metadata)→ 升级,除非显式 --max-redirect=0。
+    expect(verdict('Bash', { command: 'wget --max-redirect=0 https://example.com' })).toBe('auto-approve');
+    expect(verdict('Bash', { command: 'wget https://example.com' })).toBe('prompt');
     // 落盘到文件(-o/-O file)不算只读 → 升级(防写任意路径,见 core 回归护栏)。
     expect(verdict('Bash', { command: 'curl https://example.com -o out.html' })).toBe('prompt');
   });

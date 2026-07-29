@@ -101,9 +101,10 @@ const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
  * 凭证 / 密钥的**路径**特征。命令里出现即"触碰凭证",内置 Read 工具的 path 命中同样必问。
  * 不锚 ~/:绝对路径(/Users/x/.aws/…)、相对、~/ 三种形态都命中。
  */
+// 前缀类含反斜杠 `\\`:Windows 路径(C:\Users\me\.ssh\id_rsa)的分隔符是 `\`,不带它会漏掉 Windows 凭证。
 const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
-  /(?:^|[\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker)\b/,     // 凭证/密钥目录
-  /(?:^|[\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc)\b/,     // 含 token 的凭证配置文件
+  /(?:^|[\\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker)\b/,    // 凭证/密钥目录
+  /(?:^|[\\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc)\b/,    // 含 token 的凭证配置文件
   /\bapplication_default_credentials\b/,                  // gcloud 默认凭证文件
   /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/, // 私钥文件
 ];
@@ -148,9 +149,10 @@ const COMMAND_SUBSTITUTION = /\$\(|`|<\(/;
  *   - 贴合/空白形态 `(?<![-\d&])>>?(?!&)`:`>file` / `cat > b` / `echo x>~/.bashrc`(贴合前一词也命中,
  *     修 codex 报的 attached 重定向);`a->b` 这类箭头(`-` 在前)排除。
  *   - fd 前缀形态 `\d+>>?`:`1>file` / `2>>log`,但 `1>&2`/`2>&1`(`>` 后 `&`)排除。
+ *   - 组合形态 `&>` / `&>>`(bash 把 stdout+stderr 一起写文件):`echo x &>out`。
  * 调用方在**去掉引号内容**的串上匹配(引号内的 `>` 是数据不是重定向,见 classifyShellSegment)。
  */
-const OUTPUT_REDIRECTION = /(?<![-\d&])>>?(?!&)|(?:^|\s)\d+>>?(?!&)/;
+const OUTPUT_REDIRECTION = /(?<![-\d&])>>?(?!&)|(?:^|\s)\d+>>?(?!&)|(?:^|\s)&>>?/;
 
 /**
  * curl/wget 视为"只读取回"(命令行浏览器)的排除项。命中任一就不是安全 GET,交通用判定升级:
@@ -163,8 +165,13 @@ const OUTPUT_REDIRECTION = /(?<![-\d&])>>?(?!&)|(?:^|\s)\d+>>?(?!&)/;
 const CURL_UPLOAD_FLAGS = /(?:^|\s)-[dFT]|(?:^|\s)--(?:data|form|upload-file|json)[\w-]*|(?:^|\s)(?:-X|--request)\s*(?:POST|PUT|DELETE|PATCH)/;
 // wget 上传 / 非默认方法(curl 的 --data 等对 wget 无意义,wget 用 --post-*/--body-*/--method)。
 const WGET_UPLOAD_FLAGS = /(?:^|\s)--(?:post-data|post-file|body-data|body-file|method)\b/i;
-// 落盘到文件(curl -o/-O/--output;wget -o 日志 /-O 文档)。含贴合短选项 `-ofile`;把远端内容写进任意路径。
-const FETCH_OUTPUT_FLAGS = /(?:^|\s)-[oO]|(?:^|\s)--(?:output(?:-dir|-document)?|remote-name)\b/;
+// 落盘到文件/目录(curl -o/-O/--output;wget -o 日志 /-O 文档 /-P 目录前缀)。含贴合短选项 `-ofile`;写任意路径。
+const FETCH_OUTPUT_FLAGS = /(?:^|\s)-[oOP]|(?:^|\s)--(?:output(?:-dir|-document)?|remote-name|directory-prefix)\b/;
+// curl 跟随重定向(-L/--location*):最终 host 静态不可判(可 302 跳到云 metadata/内网)→ 升级。
+const CURL_REDIRECT_FLAGS = /(?:^|\s)(?:-L|--location(?:-trusted)?)\b/;
+// curl 带凭证 / 隐藏参数的 flag:-u/--user(basic auth)、--netrc*(用存储凭证)、-K/--config(配置文件可藏 -d 上传)、
+// -b/--cookie*(发送/落盘会话 cookie)、-H/--header 里的鉴权头(Authorization/Cookie/X-Api-Key…)。短选项大小写敏感。
+const CURL_SENSITIVE_FLAGS = /(?:^|\s)(?:-u\b|--user\b|--netrc\S*|-K\b|--config\b|-b\b|--cookie\S*)|(?:-H|--header)\s*['"]?\s*(?:[Aa]uthorization|[Cc]ookie|[Xx]-[Aa]pi-[Kk]ey|[Xx]-[Aa]uth|[Pp]roxy-[Aa]uthorization)/;
 
 /** git 只读子命令 → 放行。 */
 const SAFE_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
@@ -232,6 +239,8 @@ function isSafeReadonlyBin(bin: string, segment: string, tokens: string[]): bool
   if (bin === 'find' && /-(?:exec(?:dir)?|ok(?:dir)?|delete)\b|-f(?:print[f0]?|ls)\b/.test(segment)) return false;
   // sort:-o/--output 写文件;--compress-program 会运行任意外部程序(RCE)。
   if (bin === 'sort' && /(?:^|\s)(?:-o\b|-o\S|--output\b|--compress-program\b)/.test(segment)) return false;
+  // ripgrep --pre=CMD 对每个文件跑预处理程序(任意程序执行,RCE);--pre-glob 无害不拦。
+  if (bin === 'rg' && /--pre(?:=|\s|$)/.test(segment)) return false;
   // jq/yq:-i/--in-place 就地改文件;env/$ENV/strenv 读取注入的凭证环境变量(与 shell $VAR 同等泄漏面)。
   if (bin === 'yq' || bin === 'jq') {
     if (/(?:^|\s)-i\b|(?:^|\s)--in-?place\b/.test(segment)) return false;
@@ -289,8 +298,16 @@ function isInternalFetchTarget(t: string): boolean {
 function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   if (bin !== 'curl' && bin !== 'wget') return false;
   if (FETCH_OUTPUT_FLAGS.test(segment)) return false;
-  if (bin === 'curl' && CURL_UPLOAD_FLAGS.test(segment)) return false;
-  if (bin === 'wget' && WGET_UPLOAD_FLAGS.test(segment)) return false;
+  if (bin === 'wget') {
+    if (WGET_UPLOAD_FLAGS.test(segment)) return false;
+    // wget 默认跟随重定向,最终 host 静态不可判(可跳到云 metadata/内网)→ 升级,除非显式关闭跟随。
+    if (!/--max-redirect[=\s]*0\b/.test(segment)) return false;
+  }
+  if (bin === 'curl') {
+    if (CURL_UPLOAD_FLAGS.test(segment)) return false;
+    if (CURL_REDIRECT_FLAGS.test(segment)) return false;   // -L 跟随重定向 → 目标不可判 → 升级
+    if (CURL_SENSITIVE_FLAGS.test(segment)) return false;   // 带凭证/隐藏参数的 flag → 升级
+  }
   const positional = tokens.slice(1).filter((t) => !t.startsWith('-'));
   if (positional.some((t) => t.includes('?'))) return false; // 查询串外发面(含无 scheme 的 host?query)
   const target = positional.find(isFetchTargetToken);

