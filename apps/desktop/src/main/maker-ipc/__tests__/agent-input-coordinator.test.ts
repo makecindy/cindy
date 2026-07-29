@@ -2079,7 +2079,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-head', 'q-second']);
   });
 
-  it('does not clear an existing recovery when compact is requested', async () => {
+  it('does not clear a queue-head recovery when compact is requested', async () => {
     const h = createHarness();
     const sid = 'compact-preserves-recovery';
     const failed = makeItem('q-failed', 'failed');
@@ -2099,6 +2099,63 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent).not.toHaveBeenCalled();
     expect(after.recovery).toEqual({ kind: 'queue-head', clientId: 'q-failed' });
     expect(after.errorRetryText).toBe('failed');
+  });
+
+  it('abandons an idle active-turn recovery and dispatches compact immediately', async () => {
+    const h = createHarness();
+    const sid = 'compact-abandons-idle-active-turn-recovery';
+
+    h.coordinator.enqueue(sid, makeItem('q-failed', 'failed'));
+    await flush();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'context window exhausted');
+    await flush();
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+
+    await h.coordinator.compact(sid, makeItem('q-compact', 'ignored').createOpts);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: '/compact' });
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('queues compact after abandoning active-turn recovery while the dispatch boundary is still busy', async () => {
+    const h = createHarness();
+    const sid = 'compact-queues-after-active-turn-recovery';
+
+    h.coordinator.enqueue(sid, makeItem('q-failed', 'failed'));
+    await flush();
+
+    h.coordinator.onTurnEvent(sid, 'error', 'context window exhausted');
+    await flush();
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+
+    await h.coordinator.compact(sid, makeItem('q-compact', 'ignored').createOpts);
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: '/compact' });
+    expect(projection.recovery).toBeNull();
   });
 
   it('wakes queued turns after compact dispatch failure releases the active turn', async () => {
