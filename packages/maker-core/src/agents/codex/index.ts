@@ -4895,6 +4895,15 @@ export class CodexAgent extends BaseAgent {
     ): { attempt: number; maxAttempts: number } | null => {
       const state = overloadRetry;
       if (!state || closed) return null;
+      // 本轮已被取消(sendOpts.signal 已 abort)→ 一律不接管, 让这条错误走原终态路径收口。
+      // 不判的话: signal 在"初始 turn/start 还在飞、容量通知尚未到达"时 abort, 那个 {once}
+      // 监听器因为当时无事可做而被消费掉; 随后到达的空 id 容量拒绝照样建出
+      // deferredCapacityFailure, 而补排会在 isCancelled() 上退出 —— 标记留着,
+      // overloadRetryPending() 因此恒真, isTurnRunning() 永远为真(review #844 codex P1)。
+      if (state.isCancelled()) {
+        log.info('codex not taking over a capacity failure for an already-cancelled send', { threadId });
+        return null;
+      }
       // 空 id 的容量拒绝**无法归属**到具体请求(协议里它既不带 turnId 也不带请求关联)。
       // 只有一个 start 在飞时可以安全地认定就是它; 有两个及以上时(Stop 留下的旧 RPC 仍在飞、
       // 下一轮 send 又已发出)猜错的代价是: 隔离到错的那一个 → 把**已经在 server 上跑过工具**
@@ -5158,7 +5167,15 @@ export class CodexAgent extends BaseAgent {
         state.deferredCapacityFailure = null;
         return;
       }
-      if (closed || state.isCancelled() || overloadRetry !== state) return;
+      if (closed || overloadRetry !== state) return;
+      // 已取消却还挂着延后标记 → **必须收口**, 不能静默返回: 标记留着会让
+      // overloadRetryPending() 恒真, isTurnRunning() 永远为真, 上层派发闩不释放
+      // (review #844 codex P1)。settleCancelledOverloadRetry 会 discard 状态(标记随之清掉)
+      // 并推终态; 重复调用是无害的 no-op(它自查 overloadRetry !== state)。
+      if (state.isCancelled()) {
+        settleCancelledOverloadRetry(state, 'deferred capacity failure on a cancelled send');
+        return;
+      }
       if (currentTurnId !== null || isTurnInFlight) return;
       // 还有别的 start 在飞 → 这条失败交给那一次的 settle 去补排, 本次不排:
       // 否则又回到"两个 start 并存"的形状(review #844 codex P1)。
@@ -5608,21 +5625,36 @@ export class CodexAgent extends BaseAgent {
           && isTurnStartPending
           && currentTurnId === null
           && idLessAttributable;
-        // 活跃 turn 也可能不是这条空 id 通知的主人: 它的归属方(生出它的那次 start)早已
-        // settle, 而登记表里还躺着**别人**的 start —— Stop 留下的旧 RPC 就是。此时认在活跃
-        // turn 头上, scheduleOverloadRetry 会拿 currentTurnId 当死 turn: 一个正常在跑的
-        // turn 被落墓碑、它的输入被重放, 而 server 侧那个 turn 还在跑 —— 副作用两遍
-        // (review #844 codex P1)。既有的 inFlightStarts.size > 1 守卫拦不住: 这时 deadTurnId
-        // 非空(走了 currentTurnId 兜底), 且登记表里只有那一个陌生 start。
+        // 空 id 的容量拒绝什么时候才算"活跃 turn 的"。
+        //
+        // 判据是**它自己的 admission 还没回包**: 空 turnId 这个形状的含义就是"server 还没能
+        // 告诉你是哪个 turn", 也就是容量在 admission 阶段被拒。活跃 turn 的 turn/start 若已
+        // 经回包, 它早就过了 admission —— 之后真为它发的容量错误一定带得上 turnId。所以此时
+        // 的空 id 通知只可能来自别处(最典型: 被 Stop 的旧 send, 它的 turn id 我们从没学到),
+        // 认在活跃 turn 头上的后果是: scheduleOverloadRetry 拿 currentTurnId 当死 turn, 把一
+        // 个正常在跑的 turn 落墓碑、撤销重投、推 Done, 而 server 侧那个 turn 还在执行工具
+        // (review #844 codex/greptile P1)。
+        //
+        // 覆盖三种此前漏掉或猜错的形状, 收敛成一条:
+        //  - 活跃 turn 的 start 已 settle、登记表里躺着**别人**的 start(Stop 留下的旧 RPC);
+        //  - 活跃 turn 的 start 已 settle、且**没有任何** start 在飞(上一条的对称情形);
+        //  - 归属未知(拿不到 origin.startSeq)。
+        // 保留的是唯一合法形状: started-before-resp —— 活跃 turn 是它自己那次仍在飞的 start
+        // 生出来的, 那条空 id 拒绝确实可能是它的 admission。
         // 只收紧**容量**这一类: 其它空 id 终态错误保持既有行为, 免得顺手改了无关语义。
-        const idLessActiveTurnAmbiguous =
-          idLessCapacityError
-          && isTurnInFlight
+        const activeTurnStartSeq =
+          currentTurnId !== null ? turnOriginByTurnId.get(currentTurnId)?.startSeq ?? null : null;
+        const idLessCapacityTargetsActiveTurn =
+          isTurnInFlight
           && currentTurnId !== null
-          && hasOtherInFlightStart(turnOriginByTurnId.get(currentTurnId)?.startSeq ?? -1);
+          && activeTurnStartSeq !== null
+          && inFlightStarts.has(activeTurnStartSeq)
+          && !hasOtherInFlightStart(activeTurnStartSeq);
         const targetsCurrentTurn =
           params.turnId === currentTurnId
-          || (params.turnId === '' && isTurnInFlight && !idLessActiveTurnAmbiguous)
+          || (params.turnId === ''
+            && isTurnInFlight
+            && (!idLessCapacityError || idLessCapacityTargetsActiveTurn))
           || targetsPendingTurn
           || targetsIdLessPendingStart;
         if (isTerminalError && isTransportError && !targetsCurrentTurn) {

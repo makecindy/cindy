@@ -5613,6 +5613,135 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('ignores an id-less capacity error once the active turn is past admission', async () => {
+      // 空 turnId 这个形状的含义是"server 还没能告诉你是哪个 turn"——即容量在 admission 阶段
+      // 被拒。活跃 turn 的 turn/start 若已回包, 它早过了 admission, 之后真为它发的容量错误
+      // 一定带得上 turnId。所以此时的空 id 通知只可能来自别处(典型: 被 Stop 的旧 send, 它的
+      // turn id 我们从没学到), 认在活跃 turn 头上就会把一个正常在跑的 turn 落墓碑并重放它的
+      // 输入(review #844 codex/greptile P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-idless-after-admission',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+        expect(turnStartCount(host)).toBe(1);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-1'); // 已回包 = 过了 admission
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 迟到的空 id 容量拒绝(来自别处)→ 必须整条忽略。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        // 活跃 turn 照常活着; 既不重投也不收口。
+        expect(handle.getCurrentTurnId?.()).toBe('turn-1');
+        expect(handle.isTurnRunning?.()).toBe(true);
+        expect(turnStartCount(host)).toBe(1);
+        expect(events.slice(before)).toHaveLength(0);
+
+        // 带 turnId 的容量拒绝仍照常接管(没有把正常路径一起收紧)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStartCount(host)).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('settles a deferred capacity failure when the signal aborted before it was recorded', async () => {
+      // signal 在"初始 turn/start 还在飞、容量通知尚未到达"时 abort: 那个 {once} 监听器因为
+      // 当时无事可做而被消费掉。随后到达的空 id 容量拒绝若照样建出 deferredCapacityFailure,
+      // 补排会在 isCancelled() 上静默退出 —— 标记留着, overloadRetryPending() 恒真,
+      // isTurnRunning() 永远为真, 上层派发闩不释放(review #844 codex P1)。
+      //
+      // **如实标注: 这条用例修复前后都通过**, 不构成修复证据。本文件构造的这个序列里,
+      // 第二十六轮加的 `!rpcSettledOk → 清标记` 分支恰好先一步兜住了(取消边界抛出 ⇒
+      // initialStartSettledOk 为 false)。要真正走到 isCancelled() 那条路, 需要标记属于
+      // **另一轮**仍活着的 send(那时 rpcSettledOk 被传 true), 而那个组合在本轮另一条修复
+      // (空 id 容量拒绝不得算在已过 admission 的活跃 turn 头上)之后不再可达。
+      // 留着是当不变量锁: 已取消的 send 必须回到 idle 且不得被重投。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-abort-before-defer',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        const send = handle.send(
+          { type: 'user', content: 'hello' },
+          { signal: controller.signal },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 先 abort: 此刻既没有计时器也没有延后标记, 监听器无事可做并被消费。
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 再来空 id 容量拒绝。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 响应随后回来(取消边界会抛)。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await send.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        // 会话必须回到 idle: 不得因为一条留着的延后标记而永远"忙"。
+        expect(handle.isTurnRunning?.()).toBe(false);
+        // 也不得替这条已取消的 send 重投。
+        expect(turnStarts).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('interrupts an idle orphan turn even when an item arrives before its late turnStarted', async () => {
       // 取消隔离了挂起重投 → 它的 RPC 随后失败 → server 其实已经建了 turn。此时若 item/started
       // 之类的事件**先于**迟到的 turnStarted 到达: stale 闸的 idle 孤儿路径只落墓碑, 而
