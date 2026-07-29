@@ -1,3 +1,12 @@
+import type { Nodes, Root } from 'mdast';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
+import { visit } from 'unist-util-visit';
+
+import remarkStrictInlineMath from './remarkStrictInlineMath';
+
 /**
  * 放宽 AI 常见的中文加粗写法。
  *
@@ -6,18 +15,40 @@
  * “结束”。例如 `**重点。**下一句` 会整段按原文显示。
  *
  * 这里不改用户看到的文字，只在这类已经存在未闭合加粗起点的收尾后插入
- * 一个会被 MarkdownRenderer 的 `skipHtml` 丢弃的 HTML 注释。代码块、行内
- * 代码、转义星号和三颗以上的星号序列保持原样。
+ * 一个会被 MarkdownRenderer 的 `skipHtml` 丢弃的 HTML 注释。解析树用于
+ * 限定正文段落并排除代码、公式、链接和原始 HTML，避免字符扫描改写这些
+ * 语法区域。
  */
 
 const HIDDEN_SEPARATOR = '<!--cindy-strong-boundary-->';
+const ASCII_PUNCTUATION = '\\u0021-\\u002F\\u003A-\\u0040\\u005B-\\u0060\\u007B-\\u007E';
+const POTENTIAL_BOUNDARY_RE = new RegExp(
+  `[\\p{P}${ASCII_PUNCTUATION}]\\*\\*[^\\s\\p{P}${ASCII_PUNCTUATION}]`,
+  'u',
+);
 const UNICODE_WHITESPACE_RE = /^\s$/u;
-const UNICODE_PUNCTUATION_RE = /^[\p{P}\p{S}]$/u;
+const UNICODE_PUNCTUATION_RE = new RegExp(`^[\\p{P}${ASCII_PUNCTUATION}]$`, 'u');
+const PROTECTED_NODE_TYPES = new Set<Nodes['type']>([
+  'code',
+  'definition',
+  'html',
+  'image',
+  'imageReference',
+  'inlineCode',
+  'inlineMath',
+  'link',
+  'linkReference',
+  'math',
+]);
+const markdownParser = unified()
+  .use(remarkParse)
+  .use(remarkGfm, { singleTilde: false })
+  .use(remarkMath)
+  .use(remarkStrictInlineMath);
 
-interface NormalizationState {
-  fencedCode: { marker: '`' | '~'; length: number } | null;
-  inlineCodeLength: number | null;
-  openStrongCount: number;
+interface OffsetRange {
+  start: number;
+  end: number;
 }
 
 function classifyCharacter(character: string | undefined): 'whitespace' | 'punctuation' | 'other' {
@@ -45,134 +76,127 @@ function isEscaped(text: string, index: number): boolean {
   return slashCount % 2 === 1;
 }
 
-function isFenceStart(line: string): { marker: '`' | '~'; length: number } | null {
-  const match = line.match(/^ {0,3}([`~]{3,})/);
-  if (!match) return null;
-  const run = match[1];
-  if (!run || run.split('').some((character) => character !== run[0])) return null;
-  return { marker: run[0] as '`' | '~', length: run.length };
+function nodeRange(node: Nodes): OffsetRange | null {
+  const start = node.position?.start.offset;
+  const end = node.position?.end.offset;
+  return start == null || end == null ? null : { start, end };
 }
 
-function isFenceEnd(line: string, fence: NonNullable<NormalizationState['fencedCode']>): boolean {
-  const match = line.match(/^ {0,3}([`~]+)[ \t]*$/);
-  if (!match || match[1][0] !== fence.marker) return false;
-  return match[1].length >= fence.length;
+function collectProtectedRanges(node: Nodes, ranges: OffsetRange[]): void {
+  if (PROTECTED_NODE_TYPES.has(node.type)) {
+    const range = nodeRange(node);
+    if (range) ranges.push(range);
+    return;
+  }
+
+  if (!('children' in node)) return;
+  for (const child of node.children as Nodes[]) collectProtectedRanges(child, ranges);
 }
 
-function normalizeInlineLine(line: string, state: NormalizationState): string {
-  let output = '';
-  let cursor = 0;
+function collectProseRanges(tree: Root): Array<{
+  range: OffsetRange;
+  protectedRanges: OffsetRange[];
+}> {
+  const proseRanges: Array<{ range: OffsetRange; protectedRanges: OffsetRange[] }> = [];
 
-  while (cursor < line.length) {
-    const character = line[cursor];
+  visit(tree, (node, _index, parent) => {
+    const isProseRoot =
+      node.type === 'paragraph' ||
+      node.type === 'heading' ||
+      (node.type === 'tableCell' && parent?.type === 'tableRow');
+    if (!isProseRoot) return;
 
-    if (character === '`') {
-      let runEnd = cursor + 1;
-      while (runEnd < line.length && line[runEnd] === '`') runEnd += 1;
-      const runLength = runEnd - cursor;
+    const range = nodeRange(node);
+    if (!range) return;
+    const protectedRanges: OffsetRange[] = [];
+    collectProtectedRanges(node, protectedRanges);
+    protectedRanges.sort((left, right) => left.start - right.start);
+    proseRanges.push({ range, protectedRanges });
+  });
 
-      if (state.inlineCodeLength === null) {
-        if (!isEscaped(line, cursor)) state.inlineCodeLength = runLength;
-      } else if (state.inlineCodeLength === runLength) {
-        state.inlineCodeLength = null;
-      }
+  return proseRanges;
+}
 
-      output += line.slice(cursor, runEnd);
-      cursor = runEnd;
+function collectBoundaryInsertions(
+  markdown: string,
+  range: OffsetRange,
+  protectedRanges: OffsetRange[],
+): number[] {
+  const insertions: number[] = [];
+  let cursor = range.start;
+  let openStrongCount = 0;
+  let protectedIndex = 0;
+
+  while (cursor < range.end) {
+    const protectedRange = protectedRanges[protectedIndex];
+    if (protectedRange && cursor >= protectedRange.end) {
+      protectedIndex += 1;
+      continue;
+    }
+    if (protectedRange && cursor >= protectedRange.start) {
+      cursor = protectedRange.end;
+      protectedIndex += 1;
       continue;
     }
 
-    if (state.inlineCodeLength !== null || character !== '*') {
-      output += character;
+    if (markdown[cursor] !== '*') {
       cursor += 1;
       continue;
     }
 
     let runEnd = cursor + 1;
-    while (runEnd < line.length && line[runEnd] === '*') runEnd += 1;
+    while (runEnd < range.end && markdown[runEnd] === '*') runEnd += 1;
     const runLength = runEnd - cursor;
 
-    // `***` 及更长序列使用另一套配对规则。这里不猜测其意图，同时清掉
-    // 当前配对状态，避免后续双星号跨过不支持的序列发生误配。
-    if (runLength !== 2 || isEscaped(line, cursor)) {
-      output += line.slice(cursor, runEnd);
-      state.openStrongCount = 0;
+    if (isEscaped(markdown, cursor) || runLength === 1) {
       cursor = runEnd;
       continue;
     }
 
-    const before = classifyCharacter(characterBefore(line, cursor));
-    const after = classifyCharacter(characterAfter(line, runEnd));
+    // `***` 及更长序列使用另一套配对规则。这里不猜测其意图，同时清掉
+    // 当前配对状态，避免后续双星号跨过不支持的序列发生误配。
+    if (runLength > 2) {
+      openStrongCount = 0;
+      cursor = runEnd;
+      continue;
+    }
+
+    const before = classifyCharacter(characterBefore(markdown, cursor));
+    const after = classifyCharacter(characterAfter(markdown, runEnd));
     const canOpen = after !== 'whitespace' && (after !== 'punctuation' || before !== 'other');
     const canClose = before !== 'whitespace' && (before !== 'punctuation' || after !== 'other');
 
-    if (canClose && state.openStrongCount > 0) {
-      state.openStrongCount -= 1;
-      output += '**';
-    } else if (before === 'punctuation' && after === 'other' && state.openStrongCount > 0) {
-      // CommonMark 因右侧紧接普通字符而把它视为起点；前面尚未配对的
-      // `**` 表明这其实是 AI 句子想表达的收尾。
-      state.openStrongCount -= 1;
-      output += `**${HIDDEN_SEPARATOR}`;
-    } else {
-      if (canOpen) state.openStrongCount += 1;
-      output += '**';
+    if (canClose && openStrongCount > 0) {
+      openStrongCount -= 1;
+    } else if (before === 'punctuation' && after === 'other' && openStrongCount > 0) {
+      openStrongCount -= 1;
+      insertions.push(runEnd);
+    } else if (canOpen) {
+      openStrongCount += 1;
     }
 
     cursor = runEnd;
   }
 
-  return output;
+  return insertions;
 }
 
 /**
  * 让“以标点结束、后面紧接正文”的加粗片段能被解析，同时不改变可见
- * 消息和代码示例。
+ * 消息、链接、公式、原始 HTML 和代码示例。
  */
 export function normalizeStrongDelimiterBoundaries(markdown: string): string {
-  if (!markdown.includes('**')) return markdown;
+  if (!markdown.includes('**') || !POTENTIAL_BOUNDARY_RE.test(markdown)) return markdown;
 
-  const state: NormalizationState = {
-    fencedCode: null,
-    inlineCodeLength: null,
-    openStrongCount: 0,
-  };
-  const parts = markdown.split(/(\r\n|\n|\r)/);
-  let output = '';
+  const tree = markdownParser.runSync(markdownParser.parse(markdown), markdown);
+  const insertions = collectProseRanges(tree).flatMap(({ range, protectedRanges }) =>
+    collectBoundaryInsertions(markdown, range, protectedRanges),
+  );
+  if (insertions.length === 0) return markdown;
 
-  for (const part of parts) {
-    if (/^(?:\r\n|\n|\r)$/.test(part)) {
-      output += part;
-      continue;
-    }
-
-    if (state.fencedCode) {
-      output += part;
-      if (isFenceEnd(part, state.fencedCode)) {
-        state.fencedCode = null;
-        state.inlineCodeLength = null;
-        state.openStrongCount = 0;
-      }
-      continue;
-    }
-
-    if (part.trim() === '' || /^(?: {4}|\t)/.test(part)) {
-      output += part;
-      state.inlineCodeLength = null;
-      state.openStrongCount = 0;
-      continue;
-    }
-
-    const fence = state.inlineCodeLength === null ? isFenceStart(part) : null;
-    if (fence) {
-      output += part;
-      state.fencedCode = fence;
-      state.openStrongCount = 0;
-      continue;
-    }
-
-    output += normalizeInlineLine(part, state);
+  let output = markdown;
+  for (const offset of insertions.sort((left, right) => right - left)) {
+    output = `${output.slice(0, offset)}${HIDDEN_SEPARATOR}${output.slice(offset)}`;
   }
-
   return output;
 }

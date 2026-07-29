@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { describe, expect, it } from 'vitest';
 
+import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import { normalizeStrongDelimiterBoundaries } from '@/components/chat/normalizeStrongDelimiterBoundaries';
 
 function renderMarkdown(source: string): string {
@@ -30,6 +31,20 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     expect(html).not.toContain('**');
   });
 
+  it('distinguishes non-ASCII symbols from CommonMark punctuation', () => {
+    const emojiAfterBoundary = '**结论。**✅继续';
+    const asciiSymbolBeforeBoundary = '**总计 $**Next';
+
+    expect(normalizeStrongDelimiterBoundaries(emojiAfterBoundary)).toBe(
+      '**结论。**<!--cindy-strong-boundary-->✅继续',
+    );
+    expect(normalizeStrongDelimiterBoundaries(asciiSymbolBeforeBoundary)).toBe(
+      '**总计 $**<!--cindy-strong-boundary-->Next',
+    );
+    expect(renderMarkdown(emojiAfterBoundary)).toContain('<strong>结论。</strong>✅继续');
+    expect(renderMarkdown(asciiSymbolBeforeBoundary)).toContain('<strong>总计 $</strong>Next');
+  });
+
   it('does not rewrite boundaries that CommonMark already closes', () => {
     const cases = [
       '**终点站**从第一轮',
@@ -51,8 +66,12 @@ describe('normalizeStrongDelimiterBoundaries', () => {
       '***终点站。***从第一轮',
       '`**终点站。**从第一轮`',
       ['```md', '**终点站。**从第一轮', '```'].join('\n'),
+      ['> ```md', '> **终点站。**从第一轮', '> ```'].join('\n'),
+      ['- ```md', '  **终点站。**从第一轮', '  ```'].join('\n'),
       ['`**终点站。', '**从第一轮`'].join('\n'),
       ['    **终点站。**从第一轮'].join('\n'),
+      '>     **终点站。**从第一轮',
+      '-     **终点站。**从第一轮',
     ];
 
     for (const source of cases) {
@@ -61,5 +80,117 @@ describe('normalizeStrongDelimiterBoundaries', () => {
 
     expect(renderMarkdown(cases[2])).toContain('<code>**终点站。**从第一轮</code>');
     expect(renderMarkdown(cases[3])).toContain('**终点站。**从第一轮');
+    expect(renderMarkdown(cases[8])).toContain('<code>**终点站。**从第一轮');
+    expect(renderMarkdown(cases[9])).toContain('<code>**终点站。**从第一轮');
+  });
+
+  it('leaves link and image destinations, reference definitions, and autolinks unchanged', () => {
+    const cases = [
+      '[glob](https://example.test/**index.**html)',
+      '![glob](https://example.test/**index.**html)',
+      ['[glob]: https://example.test/**index.**html', '', '[链接][glob]'].join('\n'),
+      ['[glob]:', '  https://example.test/**index.**html', '', '[链接][glob]'].join('\n'),
+      '<https://example.test/**index.**html>',
+      '**[链接](https://example.test/。**next)',
+    ];
+
+    for (const source of cases) {
+      expect(normalizeStrongDelimiterBoundaries(source), source).toBe(source);
+    }
+
+    expect(renderMarkdown(cases[0])).toContain('href="https://example.test/**index.**html"');
+    expect(renderMarkdown(cases[1])).toContain('src="https://example.test/**index.**html"');
+    expect(renderMarkdown(cases[2])).toContain('href="https://example.test/**index.**html"');
+    expect(renderMarkdown(cases[3])).toContain('href="https://example.test/**index.**html"');
+    expect(renderMarkdown(cases[4])).toContain('href="https://example.test/**index.**html"');
+    expect(renderMarkdown('**查看 [链接](https://example.test/a)。**正文')).toContain(
+      '<strong>查看 <a href="https://example.test/a">链接</a>。</strong>正文',
+    );
+  });
+
+  it('preserves an open strong span across single-star content', () => {
+    expect(renderMarkdown('**This is *very* important.**Next')).toContain(
+      '<strong>This is <em>very</em> important.</strong>Next',
+    );
+    expect(renderMarkdown('**2 * 3.**Next')).toContain('<strong>2 * 3.</strong>Next');
+  });
+
+  it('leaves inline and display math bodies unchanged', () => {
+    const cases = [
+      '$2**3.**x$',
+      ['$$', '2**3.**x', '$$'].join('\n'),
+      '\\(2**3.**x\\)',
+      ['\\[', '2**3.**x', '\\]'].join('\n'),
+    ];
+
+    for (const source of cases) {
+      const normalizedMath = normalizeMathDelimiters(source);
+      expect(normalizeStrongDelimiterBoundaries(normalizedMath), source).toBe(normalizedMath);
+    }
+
+    expect(normalizeStrongDelimiterBoundaries('$2**3.**x$ **重点。**正文')).toBe(
+      '$2**3.**x$ **重点。**<!--cindy-strong-boundary-->正文',
+    );
+  });
+
+  it('treats unmatched backticks as prose instead of suppressing later repairs', () => {
+    const source = ['`unfinished', '**重点。**下一句'].join('\n');
+    const sameLine = '`unfinished **重点。**下一句';
+    const invalidBacktickFence = '```foo``` **重点。**下一句';
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      ['`unfinished', '**重点。**<!--cindy-strong-boundary-->下一句'].join('\n'),
+    );
+    expect(normalizeStrongDelimiterBoundaries(sameLine)).toBe(
+      '`unfinished **重点。**<!--cindy-strong-boundary-->下一句',
+    );
+    expect(normalizeStrongDelimiterBoundaries(invalidBacktickFence)).toBe(
+      '```foo``` **重点。**<!--cindy-strong-boundary-->下一句',
+    );
+    expect(renderMarkdown(source)).toContain('<strong>重点。</strong>下一句');
+    expect(renderMarkdown(invalidBacktickFence)).toContain('<strong>重点。</strong>下一句');
+  });
+
+  it('normalizes indented paragraph continuations but not actual indented code blocks', () => {
+    const paragraphContinuation = ['intro', '    **重点。**下一句'].join('\n');
+    const indentedCode = ['', '    **重点。**下一句'].join('\n');
+    const mixedIndentationCode = ['', ' \t**重点。**下一句'].join('\n');
+
+    expect(normalizeStrongDelimiterBoundaries(paragraphContinuation)).toBe(
+      ['intro', '    **重点。**<!--cindy-strong-boundary-->下一句'].join('\n'),
+    );
+    expect(normalizeStrongDelimiterBoundaries(indentedCode)).toBe(indentedCode);
+    expect(normalizeStrongDelimiterBoundaries(mixedIndentationCode)).toBe(mixedIndentationCode);
+    expect(renderMarkdown(paragraphContinuation)).toContain('<strong>重点。</strong>下一句');
+    expect(renderMarkdown(indentedCode)).toContain('<code>**重点。**下一句');
+    expect(renderMarkdown(mixedIndentationCode)).toContain('<code>**重点。**下一句');
+  });
+
+  it('leaves raw HTML regions unchanged without suppressing later prose repairs', () => {
+    const cases = [
+      'prefix <!-- **hidden.**visible --> suffix',
+      '<span data-value="**hidden.**visible">正文</span>',
+      ['<script>', '**hidden.**visible', '</script>'].join('\n'),
+      ['<div>', '**hidden.**visible', '</div>'].join('\n'),
+    ];
+
+    for (const source of cases) {
+      expect(normalizeStrongDelimiterBoundaries(source), source).toBe(source);
+    }
+
+    const followedByProse = ['<!-- **hidden.**visible -->', '', '**重点。**正文'].join('\n');
+    expect(normalizeStrongDelimiterBoundaries(followedByProse)).toBe(
+      ['<!-- **hidden.**visible -->', '', '**重点。**<!--cindy-strong-boundary-->正文'].join('\n'),
+    );
+    expect(renderMarkdown(followedByProse)).toContain('<strong>重点。</strong>正文');
+  });
+
+  it('resets unmatched strong state at Markdown block boundaries', () => {
+    const source = ['**orphan', '# heading', 'x**重点。**正文'].join('\n');
+
+    expect(normalizeStrongDelimiterBoundaries(source)).toBe(
+      ['**orphan', '# heading', 'x**重点。**<!--cindy-strong-boundary-->正文'].join('\n'),
+    );
+    expect(renderMarkdown(source)).toContain('<strong>重点。</strong>正文');
   });
 });
