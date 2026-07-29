@@ -1050,7 +1050,7 @@ export function TodaySpendChip({
   // device-link 远程会话:turn 跑在被控端、消耗被控端账号,计费形态(订阅/网关)与账号
   // 余量的事实都在被控端 —— 本机的 route 观察 / 账号快照与之无关,一律不读、不据此分类。
   const isDeviceLinkRemote = Boolean(deviceLinkDeviceId);
-  const { authInjection: codexAuthInjection } = useCodexRuntimeRoute({
+  const { authInjection: codexAuthInjection, resolved: codexRouteResolved } = useCodexRuntimeRoute({
     enabled: vendorKey === 'codex' && !isDeviceLinkRemote,
     refreshKey: sessionId,
   });
@@ -1245,7 +1245,12 @@ export function TodaySpendChip({
   const isGatewayBilledSource =
     providerId === 'xd' ||
     ((providerId == null || providerId === 'xd') && isCodexBudgetModel) ||
-    (providerId == null && vendorKey === 'codex' && !isCodexSubscription) ||
+    // codex 隐式来源必须等 runtime route 真值:占位 env-key 会把 OAuth 订阅会话
+    // 首帧误判成网关计费,chip 先指计费页再闪切外部看板(PR review P1)。
+    (providerId == null &&
+      vendorKey === 'codex' &&
+      codexRouteResolved &&
+      !isCodexSubscription) ||
     (providerId == null &&
       vendorKey === 'cc' &&
       !isSubscriptionBridge &&
@@ -1262,8 +1267,9 @@ export function TodaySpendChip({
   // codex-oauth / cc+chatgpt bridge → ChatGPT 用量看板; cc+xai bridge → xAI 账户页;
   // cc Claude 订阅 → claude.ai 用量页; 其余(cc 网关 / codex-api)→ 无外部看板(null),
   // 个人云账号退而指向站内计费页(见 opensBillingSettings / usageDashboardLabel 兜底)。
-  // device-link 远程会话额度属于被控端账号,本机浏览器打开的看板是控制端自己的账号 → 不跳。
-  const usageDashboardUrl: string | null = isDeviceLinkRemote
+  // 远程会话(SSH / device-link)额度属于远端账号,本机浏览器打开的看板是控制端
+  // 自己的账号 → 一律不跳(PR review P1:SSH 此前漏排)。
+  const usageDashboardUrl: string | null = isAnyRemoteSession
     ? null
     : usesXaiQuotaForm
       ? XAI_ACCOUNT_URL
@@ -1275,7 +1281,7 @@ export function TodaySpendChip({
   // 看板链接行文案:与 usageDashboardUrl 一一对应;网关账号无外部看板 → 个人云
   // 账号兜底为站内「用量和计费」(opensBillingSettings),其余账号 null
   // (tooltip 不显示链接行,chip 也不可点)。
-  const usageDashboardLabel: string | null = isDeviceLinkRemote
+  const usageDashboardLabel: string | null = isAnyRemoteSession
     ? null
     : usesXaiQuotaForm
       ? t('todaySpend.openXaiUsage')

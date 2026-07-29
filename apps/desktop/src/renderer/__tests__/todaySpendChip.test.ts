@@ -104,7 +104,8 @@ describe('TodaySpendChip dashboard routing', () => {
     // 渲染走专属分支:估算价值 / 累计 cost 有哪个显哪个,不显示本机限额窗口
     expect(source).toContain('if (isDeviceLinkRemote) {');
     // 看板链接对 device-link 落 null(额度属于被控端账号,本机浏览器打开的是控制端账号)
-    expect(source).toMatch(/usageDashboardUrl: string \| null = isDeviceLinkRemote\s*\?\s*null/);
+    // 外链看板对一切远程会话关闭(SSH + device-link,额度属远端账号)。
+    expect(source).toMatch(/usageDashboardUrl: string \| null = isAnyRemoteSession\s*\?\s*null/);
   });
 
   it('does not classify remote Codex sessions from the local runtime route', () => {
@@ -383,6 +384,10 @@ describe('TodaySpendChip dashboard routing', () => {
     // device-link)与非网关计费来源(自定义供应商等)不进(PR review P1 ×2)。
     expect(source).toContain('canAccessBillingSettings({');
     expect(source).toMatch(/opensBillingSettings =\n\s*!isAnyRemoteSession &&\n\s*isGatewayBilledSource &&/);
+    // codex 隐式来源等 runtime route 真值(占位 env-key 不算);外链看板对一切
+    // 远程会话(SSH + device-link)关闭(PR review P1 ×2)。
+    expect(source).toContain('codexRouteResolved &&');
+    expect(source).toContain('const usageDashboardUrl: string | null = isAnyRemoteSession');
     // tooltip "打开看板" 行经 helper 统一追加,label 为 null(不可点账号)时不追加;
     // 个人云网关账号 label 兜底为站内计费入口文案,四语言 key 齐备。
     expect(source).toContain('function pushDashboardLinkLine(lines: string[], label: string | null)');

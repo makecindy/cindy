@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
     user: { membershipKind: 'personal' } as { membershipKind: 'personal' | 'org' } | null,
   })),
   claudeRoute: vi.fn((): 'gateway' | 'subscription' | null => null),
-  runtimeRoute: vi.fn(() => ({ authInjection: 'env-key' as const })),
+  runtimeRoute: vi.fn(() => ({ authInjection: 'env-key' as const, resolved: true })),
   apiKey: vi.fn(() => ({ hasSavedKey: false, isReconciling: false })),
   claudeOAuthConnected: vi.fn((): boolean | null => null),
 }));
@@ -90,6 +90,18 @@ describe('ErrorBanner billing CTA', () => {
     mocks.claudeRoute.mockReturnValue(null);
     mocks.apiKey.mockReturnValue({ hasSavedKey: false, isReconciling: false });
     mocks.claudeOAuthConnected.mockReturnValue(null);
+    mocks.runtimeRoute.mockReturnValue({ authInjection: 'env-key', resolved: true });
+  });
+
+  it('shows CTA for implicit codex sessions once the runtime route resolves to env-key', () => {
+    renderBanner({ providerId: null, agentKind: 'codex', modelId: 'gpt-5.5' });
+    expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
+  });
+
+  it('stays silent for implicit codex sessions while the runtime route is unresolved (placeholder env-key)', () => {
+    mocks.runtimeRoute.mockReturnValue({ authInjection: 'env-key', resolved: false });
+    renderBanner({ providerId: null, agentKind: 'codex', modelId: 'gpt-5.5' });
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
   });
 
   it('shows friendly copy + buy-credits button for xd-source quota errors and navigates to billing', () => {

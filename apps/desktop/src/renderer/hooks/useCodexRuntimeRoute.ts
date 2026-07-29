@@ -18,6 +18,10 @@ export function useCodexRuntimeRoute(options?: { enabled?: boolean; refreshKey?:
   const [route, setRoute] = useState<CodexRuntimeRoute>({
     authInjection: 'env-key',
   });
+  // authInjection 在真值回来前是保守占位('env-key'),消费方无法区分「真的是
+  // env-key」与「还没查到」。需要区分的消费方(如计费入口门控)用 resolved:
+  // 首次 get 成功或收到 push 后才为 true;get 失败保持 false(形态未定)。
+  const [resolved, setResolved] = useState(false);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -25,7 +29,10 @@ export function useCodexRuntimeRoute(options?: { enabled?: boolean; refreshKey?:
     window.electronAPI.maker
       .codexRuntimeRouteGet()
       .then((next) => {
-        if (!cancelled) setRoute(next);
+        if (!cancelled) {
+          setRoute(next);
+          setResolved(true);
+        }
       })
       .catch(() => {
         /* keep conservative env-key default */
@@ -39,6 +46,7 @@ export function useCodexRuntimeRoute(options?: { enabled?: boolean; refreshKey?:
     if (!enabled) return undefined;
     return window.electronAPI.maker.onCodexRuntimeRouteChanged((next) => {
       setRoute(next);
+      setResolved(true);
     });
   }, [enabled]);
 
@@ -62,5 +70,5 @@ export function useCodexRuntimeRoute(options?: { enabled?: boolean; refreshKey?:
     };
   }, [enabled]);
 
-  return route;
+  return { ...route, resolved };
 }

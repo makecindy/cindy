@@ -126,7 +126,12 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
     if (AUTH_RE.test(body)) return { code: 'AUTH_INVALID', retryable: false, detail };
     return { code: 'AUTH_FORBIDDEN', retryable: false, detail };
   }
-  if (status === 429 || status === 529) return { code: 'RATE_LIMITED', retryable: true, detail };
+  if (status === 429 || status === 529) {
+    // LiteLLM 会用 429 携带 ExceededBudget(预算耗尽):这是不可重试的余额问题,
+    // 不能落进「限流,可重试」误导用户空转。
+    if (QUOTA_RE.test(body)) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
+    return { code: 'RATE_LIMITED', retryable: true, detail };
+  }
   if (status === 404) {
     if (MODEL_NOT_FOUND_RE.test(body)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
     return { code: 'ENDPOINT_NOT_FOUND', retryable: false, detail };

@@ -120,9 +120,10 @@ export function ErrorBanner({
   const isAnyRemoteSession = Boolean(remoteHostId) || Boolean(deviceLinkDeviceId);
   // 本会话 codex app-server 的 spawn 鉴权注入(oauth-bearer = 走订阅 / env-key = 走网关 / provider-oauth = proxy 注入供应商 OAuth)。
   // 默认 'env-key'(保守):真值未回来前不会误命中 OAuth 引导分支而短暂 hide Retry。
-  const { authInjection: codexAuthInjection } = useCodexRuntimeRoute({
-    enabled: agentKind === 'codex' && !isAnyRemoteSession,
-  });
+  const { authInjection: codexAuthInjection, resolved: codexRouteResolved } =
+    useCodexRuntimeRoute({
+      enabled: agentKind === 'codex' && !isAnyRemoteSession,
+    });
   const [syncing, setSyncing] = useState(false);
   // 已同步标志:点击同步成功后置 true, 让 displayError 切换成"已同步,请重试"提示,
   // 同时把 Retry 按钮显出来。
@@ -213,9 +214,12 @@ export function ErrorBanner({
     normalizedProviderId === 'xd' ||
     ((normalizedProviderId === null || normalizedProviderId === 'xd') &&
       !!modelId?.startsWith('codex/')) ||
+    // codex 隐式来源必须等 runtime route 真值:占位 env-key 会把 OAuth 订阅
+    // 会话的配额错误误判成网关计费(与 TodaySpendChip 同口径)。
     (normalizedProviderId === null &&
       agentKind === 'codex' &&
       !isSubscriptionBridgeModel &&
+      codexRouteResolved &&
       codexAuthInjection === 'env-key') ||
     (normalizedProviderId === null &&
       agentKind === 'cc' &&

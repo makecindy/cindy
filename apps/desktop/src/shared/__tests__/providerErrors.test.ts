@@ -23,6 +23,25 @@ describe('classifyProviderError — quota patterns', () => {
       classifyProviderError({ status: 400, bodyText: 'unknown field: budget_hint' }).code,
     ).not.toBe('QUOTA_EXCEEDED');
   });
+
+  it('classifies 429 + budget-exhaustion body as QUOTA_EXCEEDED (not retryable rate limiting)', () => {
+    // LiteLLM 的预算耗尽会以 429 形状出现:Request rejected (429): ExceededBudget。
+    const result = classifyProviderError({
+      status: 429,
+      bodyText: 'Request rejected (429): ExceededBudget: Budget has been exceeded!',
+    });
+    expect(result.code).toBe('QUOTA_EXCEEDED');
+    expect(result.retryable).toBe(false);
+  });
+
+  it('keeps plain 429 as retryable RATE_LIMITED', () => {
+    const result = classifyProviderError({
+      status: 429,
+      bodyText: 'Rate limit reached for requests. Please try again later.',
+    });
+    expect(result.code).toBe('RATE_LIMITED');
+    expect(result.retryable).toBe(true);
+  });
 });
 
 describe('isQuotaExceededMessage — message-level matcher (ErrorBanner 消费)', () => {
