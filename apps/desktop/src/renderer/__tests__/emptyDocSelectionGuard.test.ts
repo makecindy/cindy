@@ -140,6 +140,7 @@ describe('collapseBlankDocDomSelection', () => {
     rangeCount: number;
     isCollapsed: boolean;
     anchorNode: Node | null;
+    focusNode: Node | null;
     collapse: (node: Node, offset: number) => void;
   }
 
@@ -149,23 +150,34 @@ describe('collapseBlankDocDomSelection', () => {
       docHasText?: boolean;
       selection?: Partial<FakeSelection> | null;
       anchorInside?: boolean;
+      focusInside?: boolean;
     } = {},
   ): { view: BlankDocSelectionView; selection: FakeSelection } {
-    const { composing = false, docHasText = false, anchorInside = true } = overrides;
+    const {
+      composing = false,
+      docHasText = false,
+      anchorInside = true,
+      focusInside = true,
+    } = overrides;
     const editor = makeEditor();
     if (docHasText) editor.commands.insertContent('draft');
     const paragraph = { nodeName: 'P' } as unknown as Node;
     const anchor = { nodeName: '#text' } as unknown as Node;
+    const focus = { nodeName: '#text' } as unknown as Node;
     const selection: FakeSelection = {
       rangeCount: 1,
       isCollapsed: false,
       anchorNode: anchor,
+      focusNode: focus,
       collapse: vi.fn(),
       ...overrides.selection,
     };
+    const inside = new Set<Node>([paragraph]);
+    if (anchorInside) inside.add(anchor);
+    if (focusInside) inside.add(focus);
     const dom = {
       ownerDocument: { getSelection: () => (overrides.selection === null ? null : selection) },
-      contains: (node: Node) => anchorInside && node === anchor,
+      contains: (node: Node) => inside.has(node),
       firstChild: paragraph,
     } as unknown as HTMLElement;
     return {
@@ -198,8 +210,28 @@ describe('collapseBlankDocDomSelection', () => {
     expect(selection.collapse).not.toHaveBeenCalled();
   });
 
-  it('选区不在本 editor 内时不动作(同页多个 composer 互不干扰)', () => {
+  it('anchor 不在本 editor 内时不动作(反向拖选:从外部拖进空输入框)', () => {
     const { view, selection } = makeView({ anchorInside: false });
+    expect(collapseBlankDocDomSelection(view)).toBe(false);
+    expect(selection.collapse).not.toHaveBeenCalled();
+  });
+
+  it('focus 不在本 editor 内时不动作(从空输入框内起手往外拖选)', () => {
+    // 只校验 anchor 会把这种跨边界选区当成自己的并折叠掉,清掉用户合法的选择
+    // (PR #896 review:copilot + greptile P2)。
+    const { view, selection } = makeView({ focusInside: false });
+    expect(collapseBlankDocDomSelection(view)).toBe(false);
+    expect(selection.collapse).not.toHaveBeenCalled();
+  });
+
+  it('两端都不在本 editor 内时不动作(同页多个 composer 互不干扰)', () => {
+    const { view, selection } = makeView({ anchorInside: false, focusInside: false });
+    expect(collapseBlankDocDomSelection(view)).toBe(false);
+    expect(selection.collapse).not.toHaveBeenCalled();
+  });
+
+  it('focusNode 缺失时安全返回', () => {
+    const { view, selection } = makeView({ selection: { focusNode: null } });
     expect(collapseBlankDocDomSelection(view)).toBe(false);
     expect(selection.collapse).not.toHaveBeenCalled();
   });

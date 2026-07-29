@@ -52,9 +52,11 @@ export interface BlankDocSelectionView {
 /**
  * DOM 层兜底：文档已是真空、PM 状态层也已折叠，但浏览器仍持有跨节点选区时把它折叠掉。
  *
- * 只在选区确实落在本 editor 内时动手（同页可能有多个 composer，anchor 归属检查让它们
- * 互不干扰）。IME 组字期间一律不介入 —— 组字的 DOM selection 归 ProseMirror 的原生
- * composition 生命周期所有。
+ * 只在选区**两端**都落在本 editor 内时动手。只校验 anchor 不够：从空输入框内起手往外
+ * 拖选时 anchor 在 editor 内、focus 在外，折叠会清掉用户合法的跨边界选区（反向拖选时
+ * anchor 已在 editor 外，本来就不会命中）。两端都查同时也让同页多个 composer 互不干扰。
+ * IME 组字期间一律不介入 —— 组字的 DOM selection 归 ProseMirror 的原生 composition
+ * 生命周期所有。
  *
  * 收敛性：`collapse()` 触发的 selectionchange 会被 PM 的 DOMObserver 读回并 dispatch，
  * 下一轮进来时 DOM 已折叠，直接返回 false。
@@ -64,8 +66,15 @@ export function collapseBlankDocDomSelection(view: BlankDocSelectionView): boole
   if (!isBlankParagraphDoc(view.state.doc)) return false;
   const selection = view.dom.ownerDocument?.getSelection?.() ?? null;
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return false;
-  const anchor = selection.anchorNode;
-  if (!anchor || !view.dom.contains(anchor)) return false;
+  const { anchorNode, focusNode } = selection;
+  if (
+    !anchorNode ||
+    !focusNode ||
+    !view.dom.contains(anchorNode) ||
+    !view.dom.contains(focusNode)
+  ) {
+    return false;
+  }
   const paragraph = view.dom.firstChild;
   if (!paragraph) return false;
   selection.collapse(paragraph, 0);
