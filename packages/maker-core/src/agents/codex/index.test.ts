@@ -4840,6 +4840,86 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('quarantines both starts when the second one also hits an id-less capacity failure', async () => {
+      // Stop 之后旧 RPC 仍在飞, 新 send 又被放行 —— 此时**两个** start 都需要隔离:
+      // 旧的因为已被 Stop, 新的因为自己也撞了空 id 容量拒绝。用单个标量记"哪一次要隔离"
+      // 时后者会覆盖前者, 被 Stop 的旧 turn 于是逃过隔离、在响应回来时被正常激活并继续跑
+      // 工具(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const secondStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            if (turnStarts === 2) return secondStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-two-quarantines',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 第一次: 空 id 容量拒绝 + Stop → 旧 start 被隔离。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 新 send 被放行(Stop 让会话 idle), 旧 RPC 仍在飞。
+        const secondSend = handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+
+        // 新 start 自己也撞空 id 容量拒绝 → 它也要被隔离(旧的那份不得被覆盖)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 两个响应先后回来: 都不得激活, 都要被 interrupt。
+        firstStart.resolve({ turn: { id: 'turn-stopped' } });
+        secondStart.resolve({ turn: { id: 'turn-second' } });
+        await firstSend.catch(() => undefined);
+        await secondSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        for (const turnId of ['turn-stopped', 'turn-second']) {
+          expect(
+            host.request.mock.calls.some(
+              ([method, params]) =>
+                method === Method.TurnInterrupt &&
+                (params as { turnId?: string }).turnId === turnId,
+            ),
+          ).toBe(true);
+        }
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('keeps the stopped turn quarantined even after a new message is sent', async () => {
       // Stop 之后旧 RPC 仍在飞, 而 Stop 让 handle 变 idle —— 用户可以马上发下一条消息,
       // 于是两个 start 同时在飞。隔离若是个布尔标记: 新 send 的重置会把它清掉(放过已停止
