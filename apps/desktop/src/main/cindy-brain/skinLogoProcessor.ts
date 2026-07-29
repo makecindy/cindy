@@ -100,7 +100,7 @@ export async function whiteBackgroundToTransparentPng(source: Uint8Array): Promi
       throw new Error('Logo 去白底后没有可见内容，请使用深色文字与纯白背景');
     }
 
-    return sharp(data, {
+    const png = await sharp(data, {
       raw: {
         width: info.width,
         height: info.height,
@@ -110,6 +110,10 @@ export async function whiteBackgroundToTransparentPng(source: Uint8Array): Promi
       .trim({ background: { r: 0, g: 0, b: 0, alpha: 0 } })
       .png()
       .toBuffer();
+    if (png.byteLength > MAX_SOURCE_BYTES) {
+      throw new Error('Logo 去白底后的 PNG 超过 8 MB，请缩小图片尺寸后重试');
+    }
+    return png;
   });
 }
 

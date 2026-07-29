@@ -54,4 +54,27 @@ describe('whiteBackgroundToTransparentPng', () => {
       'Logo 去白底后没有可见内容',
     );
   });
+
+  it('rejects a processed PNG that exceeds the skin image byte limit', async () => {
+    const width = 2_000;
+    const height = 2_000;
+    const pixels = Buffer.allocUnsafe(width * height * 3);
+    let state = 0x12345678;
+    for (let offset = 0; offset < pixels.length; offset += 1) {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      pixels[offset] = state & 0x7f;
+    }
+    const source = await sharp(pixels, {
+      raw: { width, height, channels: 3 },
+    })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+
+    expect(source.byteLength).toBeLessThanOrEqual(8 * 1024 * 1024);
+    await expect(whiteBackgroundToTransparentPng(source)).rejects.toThrow(
+      'Logo 去白底后的 PNG 超过 8 MB',
+    );
+  });
 });
