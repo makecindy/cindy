@@ -4840,6 +4840,182 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('does not settle twice when Stop is followed by the start RPC rejecting', async () => {
+      // Stop 已经推过 terminal error + Done。旧 RPC 随后 reject 时若照常按 finalErr 再推
+      // 一组, 取消会被改报成"启动失败", 且 coordinator / 活动状态 / goal 对同一个 turn
+      // 收口两次(review #844 greptile P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) return firstStart.promise;
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-no-double-settle',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+        // Stop 自己推了一组终态。
+        expect(
+          events.slice(before).filter((e) => e.type === 'error' && e.data?.isTerminal === true),
+        ).toHaveLength(1);
+
+        // 旧 RPC 现在才失败 —— 不得再推第二组。
+        firstStart.reject(new Error('turn/start timed out'));
+        await sending.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        const terminal = events
+          .slice(before)
+          .filter((e) => e.type === 'error' && e.data?.isTerminal === true);
+        expect(terminal).toHaveLength(1);
+        // 而且那一条仍是"已停止", 不能被改述成 turn/start 失败。
+        expect(String((terminal[0].data as { message?: string }).message)).toContain('stopped');
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not let a late turnStarted revive a quarantined start after Stop', async () => {
+      // 隔离只标了登记表, 而 turnStarted handler 只看 turnStartFailedWithoutTurnId ——
+      // 迟到的 started 会把这个"已判定不许运行"的 turn 激活, 工具在 Stop 之后继续跑
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) return firstStart.promise;
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-late-started-after-stop',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted) throw new Error('expected handlers');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Stop 之后、响应之前才到的 turnStarted。
+        handlers.turnStarted({ turn: { id: 'turn-late' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        firstStart.reject(new Error('turn/start timed out'));
+        await sending.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        // 会话不得被这条迟到的 started 拉回 running。
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not let a stopped send kill the next send active turn on failure cleanup', async () => {
+      // Stop 放行了下一轮 send, 它已经激活自己的 turn; 旧 send 的 RPC 随后 reject 时,
+      // 失败清理若无条件把 currentTurnId 当自己的孤儿收掉, 就会墓碑 + interrupt 一个
+      // **合法在跑**的新 turn(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-stale-cleanup-scope',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 下一轮 send 接管会话并激活自己的 turn。
+        await handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        // 旧 send 的 RPC 现在才失败 —— 不得动新 turn。
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-2',
+          ),
+        ).toBe(false);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('quarantines both starts when the second one also hits an id-less capacity failure', async () => {
       // Stop 之后旧 RPC 仍在飞, 新 send 又被放行 —— 此时**两个** start 都需要隔离:
       // 旧的因为已被 Stop, 新的因为自己也撞了空 id 容量拒绝。用单个标量记"哪一次要隔离"
@@ -5342,12 +5518,14 @@ describe('CodexAgent MCP thread context hooks', () => {
         });
         await vi.advanceTimersByTimeAsync(0);
 
-        // 随后 turnStarted 带出真实 id 并把它激活。
+        // 随后 turnStarted 带出真实 id。隔离已武装通知级孤儿守卫, 所以这条 started 会被
+        // **缓冲**而不是直接激活 —— 这个 turn 早已被判定不许运行, 不该先激活再收拾
+        // (第二十三轮把 quarantine 与孤儿守卫接上后的行为; 之前是先激活再由响应清理)。
         handlers.turnStarted({ turn: { id: 'turn-1' } });
         await vi.advanceTimersByTimeAsync(0);
-        expect(handle.getCurrentTurnId?.()).toBe('turn-1');
+        expect(handle.getCurrentTurnId?.()).toBeNull();
 
-        // 响应回来 → 认领 turn-1 为死 turn, 必须同时清掉活跃态。
+        // 响应回来 → 认领 turn-1 为死 turn, 活跃态必须仍是空。
         firstStart.resolve({ turn: { id: 'turn-1' } });
         await sending;
         await vi.advanceTimersByTimeAsync(0);

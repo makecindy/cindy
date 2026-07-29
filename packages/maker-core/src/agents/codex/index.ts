@@ -2206,6 +2206,8 @@ export class CodexAgent extends BaseAgent {
        * 没有任何计时器或终态事件残留（review #844 codex P1）。
        */
       deferredCapacityFailure: { deadTurnId: string | null } | null;
+      /** 这份重投状态属于哪一轮 send(判断"尾巴动作还有没有权限动全局状态")。 */
+      sendGen: number;
       /** 摘掉本轮 send 信号的 abort 监听（状态被替换 / 收口时必须调）。 */
       disposeSignalWatch: (() => void) | null;
     } | null = null;
@@ -2225,6 +2227,17 @@ export class CodexAgent extends BaseAgent {
     const inFlightStarts = new Map<number, { quarantined: boolean }>();
     /** 每次 turn/start RPC 的自增序号, 作为登记表的键。 */
     let turnStartSeq = 0;
+    /**
+     * 每轮 send 的自增世代。
+     *
+     * Stop 会让 handle 变 idle, 于是被 Stop 的那一轮 send 还有"尾巴"在跑(它的 RPC 尚未
+     * settle、迟到的通知、失败清理), 而**下一轮 send 可能已经接管会话**。这些尾巴动作若
+     * 照旧操作全局状态(推终态、把 currentTurnId 当自己的孤儿收掉), 就会二次收口、甚至误杀
+     * 新一轮的合法 turn(review #844 codex/greptile P1)。判据统一为"我这一轮还是最新世代吗"。
+     */
+    let sendGeneration = 0;
+    /** 已经由 Stop / 撤单推过终态的 send 世代 —— 该世代不得再推第二次。 */
+    let terminalSettledSendGen: number | null = null;
 
     /** 登记一次即将发出的 turn/start, 返回它的序号。 */
     const beginTurnStart = (): number => {
@@ -2261,10 +2274,25 @@ export class CodexAgent extends BaseAgent {
       if (latest === undefined) return;
       const entry = inFlightStarts.get(latest);
       if (entry) entry.quarantined = true;
+      armLateStartOrphanGuard();
     };
     const quarantineAllInFlightStarts = (): void => {
+      if (inFlightStarts.size === 0) return;
       for (const entry of inFlightStarts.values()) entry.quarantined = true;
+      armLateStartOrphanGuard();
     };
+    /**
+     * 被隔离的 start 也可能在响应之前先推回 turnStarted —— 那个 handler 只看
+     * `turnStartFailedWithoutTurnId`, 不看登记表的 quarantined, 于是会把这个"已经判定不许
+     * 运行"的 turn 正常激活, 工具在 Stop 之后继续跑(review #844 codex P1)。
+     *
+     * 语义上这两件事是同一类: "有一次 start 我们拿不到 id 却已经决定它不许活"。所以复用既有
+     * 的通知级孤儿守卫, 让迟到的未知 started 走缓冲 / 墓碑 + interrupt 那条既有路径, 而不是
+     * 在 turnStarted handler 里再加一份并行判定。
+     */
+    function armLateStartOrphanGuard(): void {
+      turnStartFailedWithoutTurnId = true;
+    }
 
     let closed = false;
     let subscriptionInvalidatedByTransport = false;
@@ -4664,6 +4692,7 @@ export class CodexAgent extends BaseAgent {
       // 重投的 turnStarted 已先于响应到达时, currentTurnId 指着一个真实在跑的
       // server turn —— 必须一起收掉, 否则它会在调用方按"已取消"处理后继续执行工具。
       teardownActiveTurnForCancellation(reason);
+      terminalSettledSendGen = state.sendGen;
       // 还有 turn/start 在飞时同理: 它的响应晚于本次收口回来, 不隔离就会被正常激活。
       // 全部隔离而不只是最新那个: 取消的语义是"这一轮什么都别再跑"。
       quarantineAllInFlightStarts();
@@ -4838,7 +4867,9 @@ export class CodexAgent extends BaseAgent {
           // 回来。不隔离的话, 先于 reject 到达的 turnStarted 会让 isTurnRunning() 在
           // UI 收口后永真, 晚到的那种则会把一个没人消费的 turn 激活并执行工具
           // (review #844 codex P1)。
-          quarantineTurnsAfterStartFailure('overload retry turn/start failed');
+          quarantineTurnsAfterStartFailure('overload retry turn/start failed', {
+            ownsSession: sendGeneration === state.sendGen,
+          });
           eventQueue.push({
             type: 'error',
             data: { message: `turn/start retry failed: ${String(error)}`, isTerminal: true },
@@ -4867,9 +4898,16 @@ export class CodexAgent extends BaseAgent {
      * reject 到达的那种则会让 isTurnRunning() 永真, 下一条 send 被并发守卫挡死
      * (review #844 codex P1)。
      */
-    const quarantineTurnsAfterStartFailure = (reason: string): void => {
+    const quarantineTurnsAfterStartFailure = (
+      reason: string,
+      opts?: { ownsSession?: boolean },
+    ): void => {
       turnStartFailedWithoutTurnId = true;
-      if (currentTurnId) {
+      // currentTurnId 未必属于**这一次**失败的请求: Stop 之后下一轮 send 可能已经激活了它
+      // 自己的 turn, 这时把它当孤儿收掉 = 误杀一个合法在跑的 turn(review #844 codex P1)。
+      // 只有"我这一轮还拥有会话"时才动它; 否则只留孤儿守卫与缓冲清理。
+      const mayClaimActiveTurn = opts?.ownsSession !== false;
+      if (currentTurnId && mayClaimActiveTurn) {
         const orphanTurnId = currentTurnId;
         terminalErroredTurnIds.add(orphanTurnId);
         if (threadId) {
@@ -5531,6 +5569,7 @@ export class CodexAgent extends BaseAgent {
         // 的自动重投判成"有产出, 不重投"(review #844 codex P1)。同 turn 重复
         // turnStarted 的幂等保护仍在 turnStarted 里(只在真的换 turn 时清)。
         currentTurnProducedOutput = false;
+        const mySendGen = ++sendGeneration;
         isTurnStartPending = true;
         usageTracker.beginTurn();
         log.debug('send ▶ user message', {
@@ -5792,6 +5831,7 @@ export class CodexAgent extends BaseAgent {
           inFlight: false,
           isCancelled: () => sendOpts?.signal?.aborted === true,
           launchedPermissionMode: mutablePermissionMode,
+          sendGen: mySendGen,
           deferredCapacityFailure: null,
           disposeSignalWatch: null,
           retry: async () => {
@@ -6042,18 +6082,29 @@ export class CodexAgent extends BaseAgent {
           // 协议允许的乱序) — 此时 currentTurnId/isTurnInFlight 已置位, 失败
           // 收口必须把这个活跃 turn 一起收掉; 缓冲的歧义 started 同样坐实成孤儿
           // (greptile R6 P1 + codex R9 P2)。细节见 helper 顶注。
-          quarantineTurnsAfterStartFailure('original turn/start failed');
+          quarantineTurnsAfterStartFailure('original turn/start failed', {
+            ownsSession: sendGeneration === mySendGen,
+          });
           log.error('turn/start failed', { error: String(finalErr) });
-          eventQueue.push({
-            type: 'error',
-            data: { message: `turn/start failed: ${String(finalErr)}`, isTerminal: true },
-            source: 'codex',
-          });
-          eventQueue.push({
-            type: 'status',
-            data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
-            source: 'codex',
-          });
+          // Stop / 撤单已经为这一轮推过终态时不得再推一组: 否则取消被改报成"启动失败",
+          // 且 coordinator / 活动状态 / goal 会对同一个 turn 收口两次
+          // (review #844 greptile P1)。
+          if (terminalSettledSendGen === mySendGen) {
+            log.info('turn/start failure suppressed — this send was already settled by cancel', {
+              threadId,
+            });
+          } else {
+            eventQueue.push({
+              type: 'error',
+              data: { message: `turn/start failed: ${String(finalErr)}`, isTerminal: true },
+              source: 'codex',
+            });
+            eventQueue.push({
+              type: 'status',
+              data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+              source: 'codex',
+            });
+          }
           if (sendOpts?.throwOnStartFailure) {
             throw new Error(`Codex turn/start failed: ${String(finalErr)}`);
           }
@@ -6222,6 +6273,7 @@ export class CodexAgent extends BaseAgent {
         //    落墓碑 + interrupt + 推终态, 保证恰好一次收口。
         if (hadPendingOverloadRetry) {
           teardownActiveTurnForCancellation('stopped while an overload retry was pending');
+          terminalSettledSendGen = sendGeneration;
           // turn/start 还在飞时按下 Stop: 这里马上会推终态事件, 而那个 RPC 的响应随后
           // 才回来。不武装隔离的话 handleTurnStartResp 会照常激活它 —— 用户看到
           // 「已停止」, 工具还在跑(review #844 codex P1)。
