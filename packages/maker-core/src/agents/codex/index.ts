@@ -2605,6 +2605,21 @@ export class CodexAgent extends BaseAgent {
         approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
         return;
       }
+      // `gpt-5` is the app-server's "use its default" sentinel, not an
+      // authoritative provider model id. A runtime switch to it deliberately
+      // skips thread/settings/update, so there is no concrete model to register
+      // for a third-party Guardian route. Keep manual review until a later
+      // start/resume/settings notification supplies the resolved model.
+      if (mutableModel === 'gpt-5') {
+        approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
+        if (!nativeApprovalsReviewerRouteSupported) {
+          log.warn('Codex Auto keeping user approvals: default model sentinel is unresolved', {
+            threadId: prefixId(targetThreadId),
+            sessionId: prefixId(sid),
+          });
+        }
+        return;
+      }
       const register = this.deps.registerCodexReviewerRouteContext;
       if (!register) {
         approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;

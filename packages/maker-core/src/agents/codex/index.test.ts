@@ -4717,6 +4717,60 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('keeps user approvals while a runtime default-model sentinel is unresolved', async () => {
+    const registerCodexReviewerRouteContext = vi.fn(() => true);
+    const agent = new CodexAgent(createDeps({}, {
+      registerCodexReviewerRouteContext,
+    }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: `turn-default-sentinel-${host.request.mock.calls.length}` } };
+      }
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    }, { codexProxyActive: true });
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-reviewer-default-sentinel',
+      model: 'deepseek/deepseek-v4',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+
+    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
+      sessionId: 'session-provider-reviewer-default-sentinel',
+      threadId: 'start-thread-id',
+      model: 'deepseek/deepseek-v4',
+    });
+
+    if (!handle.setModel) throw new Error('expected setModel');
+    await handle.setModel('gpt-5');
+    expect(registerCodexReviewerRouteContext).toHaveBeenCalledTimes(1);
+    expect(host.request.mock.calls.some(
+      ([method, params]) =>
+        method === Method.ThreadSettingsUpdate &&
+        (params as { model?: string }).model === 'gpt-5',
+    )).toBe(false);
+
+    await handle.send({ type: 'user', content: 'use the provider default' });
+    const firstTurnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
+      approvalsReviewer?: string;
+    };
+    expect(firstTurnParams.approvalsReviewer).toBe('user');
+
+    await handle.setModel('qwen/qwen3-coder');
+    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
+      sessionId: 'session-provider-reviewer-default-sentinel',
+      threadId: 'start-thread-id',
+      model: 'qwen/qwen3-coder',
+    });
+    await handle.send({ type: 'user', content: 'use the concrete model' });
+    const turnCalls = host.request.mock.calls.filter(([method]) => method === Method.TurnStart);
+    const secondTurnParams = turnCalls[1]?.[1] as { approvalsReviewer?: string };
+    expect(secondTurnParams.approvalsReviewer).toBe('auto_review');
+    await handle.close();
+  });
+
   it('registers the model resolved by thread/start when the request uses the default sentinel', async () => {
     const registerCodexReviewerRouteContext = vi.fn(() => true);
     const agent = new CodexAgent(createDeps({}, {
