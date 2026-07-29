@@ -15,6 +15,7 @@
  */
 
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 
 import JSZip from 'jszip';
@@ -168,17 +169,32 @@ export async function writeGhostPackageSnapshot(
   }
   if (picked.canceled || !picked.filePath) return { status: 'canceled' };
 
-  // 原子落盘(评审 P1):先写目标目录里的临时文件,成功后 rename 替换。
+  // 原子落盘(评审 P1):先写目标目录里的临时文件,再发布到目标。
   // 直接 writeFile 会先截断旧文件——中途失败(磁盘满/断连/退出)会毁掉
-  // 用户原有的包。rename 同目录原子,失败时目标原样保留。
+  // 用户原有的包。临时名带随机段 + 调用方 'wx' 独占创建(对齐
+  // blobStore 的 tmp 口径),防同目录预置同名文件/symlink 劫持。
+  // 发布优先 rename(POSIX 原子覆盖);Windows rename 不覆盖已存在目标,
+  // 仅在 EPERM/EEXIST 且目标确实存在时退化为 unlink+rename(该路径只在
+  // 用户显式选择覆盖时到达,窗口期失败保留 tmp 供排查,不静默两空)。
   const targetPath = picked.filePath;
   const tempPath = path.join(
     path.dirname(targetPath),
-    `.cindy-export-${process.pid}-${Date.now()}.tmp`,
+    `.cindy-export-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`,
   );
   try {
     await deps.writeFile(tempPath, snapshot.buf);
-    await fs.promises.rename(tempPath, targetPath);
+    try {
+      await fs.promises.rename(tempPath, targetPath);
+    } catch (renameErr) {
+      const code = (renameErr as NodeJS.ErrnoException)?.code;
+      if (code !== 'EPERM' && code !== 'EEXIST' && code !== 'EACCES') throw renameErr;
+      const targetExists = await fs.promises
+        .access(targetPath)
+        .then(() => true, () => false);
+      if (!targetExists) throw renameErr;
+      await fs.promises.rm(targetPath, { force: true });
+      await fs.promises.rename(tempPath, targetPath);
+    }
   } catch {
     await fs.promises.rm(tempPath, { force: true }).catch(() => {});
     return { status: 'error', code: 'write_failed' };

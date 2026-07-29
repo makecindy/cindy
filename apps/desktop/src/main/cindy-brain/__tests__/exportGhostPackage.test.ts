@@ -206,6 +206,21 @@ describe('exportGhostPackage', () => {
     expect(leftovers).toEqual([]);
   });
 
+  it('用户选择覆盖既有文件时,完整新包原子替换旧内容', async () => {
+    const target = path.join(workDir, 'existing.cindy');
+    await fs.promises.writeFile(target, 'old-bytes');
+    const result = await exportGhostPackage('hello', makeDeps({
+      showSaveDialog: vi.fn(async () => ({ canceled: false, filePath: target })),
+    }));
+    expect(result).toEqual({ status: 'saved', savedPath: target });
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(target));
+    const names = Object.values(zip.files)
+      .filter((entry) => !entry.dir)
+      .map((entry) => entry.name)
+      .sort();
+    expect(names).toEqual(['ghost.json', 'locales/en.json', 'main.js']);
+  });
+
   it('安装目录不可读返回 read_failed', async () => {
     const ghost = makeGhost();
     ghost.dir = path.join(workDir, 'gone');

@@ -3504,7 +3504,8 @@ export function registerGhostIpc(): void {
       showSaveDialog: (opts) =>
         win ? dialog.showSaveDialog(win, opts) : dialog.showSaveDialog(opts),
       getDownloadsDir: () => app.getPath('downloads'),
-      writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
+      // 'wx' 独占创建临时文件:不跟随既有路径/symlink(防同目录预置劫持)。
+      writeFile: (filePath, data) => fs.promises.writeFile(filePath, data, { flag: 'wx' }),
     });
     switch (result.status) {
       case 'saved':
