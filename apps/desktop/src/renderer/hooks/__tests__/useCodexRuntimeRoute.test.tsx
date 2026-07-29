@@ -28,9 +28,11 @@ function deferred(): Deferred {
 }
 
 const pending: Deferred[] = [];
+const authListeners: Array<(payload: { agentKind: string }) => void> = [];
 
 beforeEach(() => {
   pending.length = 0;
+  authListeners.length = 0;
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       codexRuntimeRouteGet: vi.fn(() => {
@@ -39,7 +41,12 @@ beforeEach(() => {
         return d.promise;
       }),
       onCodexRuntimeRouteChanged: vi.fn(() => () => {}),
-      auth: { onStateChanged: vi.fn(() => () => {}) },
+      auth: {
+        onStateChanged: vi.fn((cb: (payload: { agentKind: string }) => void) => {
+          authListeners.push(cb);
+          return () => {};
+        }),
+      },
     },
   };
 });
@@ -74,6 +81,22 @@ describe('useCodexRuntimeRoute resolved flag', () => {
     expect(result.current.resolved).toBe(false);
 
     await act(async () => {
+      pending[1].resolve({ authInjection: 'oauth-bearer' });
+      await pending[1].promise;
+    });
+    await waitFor(() => expect(result.current.resolved).toBe(true));
+    expect(result.current.authInjection).toBe('oauth-bearer');
+  });
+
+  it('resolves via the auth-state recovery path after the initial fetch failed', async () => {
+    // 首查失败 → resolved 停留 false;AUTH_STATE_CHANGED 触发的重查成功后必须
+    // 标记已解析,否则计费门控永久停在「形态未定」。
+    const { result } = renderHook(() => useCodexRuntimeRoute({ refreshKey: 's1' }));
+    const failing = deferred();
+    await act(async () => {
+      // 用一个永不 resolve 的首查模拟失败面(reject 会打 unhandled;挂起等价于未解析)
+      void failing;
+      authListeners.forEach((cb) => cb({ agentKind: 'codex' }));
       pending[1].resolve({ authInjection: 'oauth-bearer' });
       await pending[1].promise;
     });
