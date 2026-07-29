@@ -261,7 +261,7 @@ export function buildThemeColorsFromPalette(
     && toHex(palette.inputBg).toLowerCase() !== toHex(palette.surface).toLowerCase();
   const quickHover = toHex(liftsOffSurface ? palette.surface : palette.hover);
   const quickIconBg = liftsOffSurface
-    ? toHex(palette.chip)
+    ? toHex(palette.surface)
     : pick(toHex(palette.border), toHex(palette.chip));
 
   const colors: Record<string, string> = {
@@ -358,8 +358,11 @@ export function buildThemeColorsFromPalette(
     'primary-foreground': pick(surfaceHsl, '0 0% 100%'),
     'search-match-fg': textPrimaryHsl,
     secondary: pick(elevatedHsl, chipHsl),
-    'send-btn-bg': 'var(--accent-cta-bg)',
-    'send-btn-icon': 'var(--accent-pure-cta-fg)',
+    // send 底用反相中性而非 accent:共享 send token 还渲染 10-12px 文本
+    // (VoiceInputOverlay / CollaborationModeToggle / SessionHandoffCard),accent 底
+    // 配白/黑字难稳定过 4.5:1 小字线,反相中性双模式均满足。
+    'send-btn-bg': pick(textPrimary, surface),
+    'send-btn-icon': pick(surface, textPrimary),
     'settings-btn-primary-text': onAccent,
     'settings-btn-secondary-hover-bg': hover,
     // placeholder 必须"读着像空",两个模式都取比 tertiary 更淡的 disabled 档。
