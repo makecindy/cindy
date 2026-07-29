@@ -2224,7 +2224,7 @@ export class CodexAgent extends BaseAgent {
      * 每个 per-request 的事实都住在自己的条目里, 请求 settle 时整条删掉, 天然不串味;
      * "有没有 start 在飞"一律由 `inFlightStarts.size` 派生, 不再有第二份真相。
      */
-    const inFlightStarts = new Map<number, { quarantined: boolean }>();
+    const inFlightStarts = new Map<number, { quarantined: boolean; terminalSettled: boolean }>();
     /** 每次 turn/start RPC 的自增序号, 作为登记表的键。 */
     let turnStartSeq = 0;
     /**
@@ -2236,13 +2236,11 @@ export class CodexAgent extends BaseAgent {
      * 新一轮的合法 turn(review #844 codex/greptile P1)。判据统一为"我这一轮还是最新世代吗"。
      */
     let sendGeneration = 0;
-    /** 已经由 Stop / 撤单推过终态的 send 世代 —— 该世代不得再推第二次。 */
-    let terminalSettledSendGen: number | null = null;
 
     /** 登记一次即将发出的 turn/start, 返回它的序号。 */
     const beginTurnStart = (): number => {
       const seq = ++turnStartSeq;
-      inFlightStarts.set(seq, { quarantined: false });
+      inFlightStarts.set(seq, { quarantined: false, terminalSettled: false });
       isTurnStartPending = true;
       return seq;
     };
@@ -2275,6 +2273,18 @@ export class CodexAgent extends BaseAgent {
       const entry = inFlightStarts.get(latest);
       if (entry) entry.quarantined = true;
       armLateStartOrphanGuard();
+    };
+    /**
+     * 标记当前所有在飞 start:这一轮已经由 Stop / 撤单推过终态, 它们的失败尾巴不得再推
+     * 第二组终态事件。
+     *
+     * 挂在**每个请求的条目**上而不是一个标量: 两轮 send 先后被 Stop 且各自的 RPC 都还在飞
+     * 时, 后一次会把标量覆盖掉 —— 先那次的 reject 于是又推一组终态, 而事件里不带 send 世代,
+     * 下游可能把这份过期收口套到后一个 turn 上(review #844 codex P1)。条目随 endTurnStart
+     * 一起删, 也不会泄漏。
+     */
+    const markInFlightStartsTerminallySettled = (): void => {
+      for (const entry of inFlightStarts.values()) entry.terminalSettled = true;
     };
     const quarantineAllInFlightStarts = (): void => {
       if (inFlightStarts.size === 0) return;
@@ -4692,7 +4702,7 @@ export class CodexAgent extends BaseAgent {
       // 重投的 turnStarted 已先于响应到达时, currentTurnId 指着一个真实在跑的
       // server turn —— 必须一起收掉, 否则它会在调用方按"已取消"处理后继续执行工具。
       teardownActiveTurnForCancellation(reason);
-      terminalSettledSendGen = state.sendGen;
+      markInFlightStartsTerminallySettled();
       // 还有 turn/start 在飞时同理: 它的响应晚于本次收口回来, 不隔离就会被正常激活。
       // 全部隔离而不只是最新那个: 取消的语义是"这一轮什么都别再跑"。
       quarantineAllInFlightStarts();
@@ -5909,7 +5919,11 @@ export class CodexAgent extends BaseAgent {
               // 没能激活时才补排（它被落了墓碑、响应因此拒绝激活）；turn 活了就说明
               // 那条错误针对的是别的 turn，不该重排。预算耗尽时必须自己推终态，
               // 否则逻辑 send 永久悬空。
-              rescheduleDeferredCapacityFailure(state, rpcSettledOk);
+              // 同上: 延后的失败若属于另一轮仍活着的 send, 与本次 RPC 成败无关。
+              rescheduleDeferredCapacityFailure(
+                overloadRetry ?? state,
+                overloadRetry === state ? rpcSettledOk : true,
+              );
             }
           },
         };
@@ -5946,6 +5960,8 @@ export class CodexAgent extends BaseAgent {
         // finally 在响应处理完之后补排 —— 保证任一时刻只有一个 turn/start 在飞。
         const initialStartSeq = beginTurnStart();
         let initialStartSettledOk = false;
+        /** 本次请求是否已被 Stop / 撤单收口过(条目会在 finally 里删掉, 所以先取出来)。 */
+        let initialStartSettledByCancel = false;
         try {
           const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
             timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
@@ -6053,6 +6069,9 @@ export class CodexAgent extends BaseAgent {
             finalErr = e;
           }
         } finally {
+          // 条目即将被删, 先把"已由取消收口"取出来供下面的 finalErr 分支判断。
+          initialStartSettledByCancel =
+            inFlightStarts.get(initialStartSeq)?.terminalSettled === true;
           // 先注销本次请求(isTurnStartPending 由登记表重算) —— 无条件置 false 会在两个
           // start 并存时清掉属于**另一个**请求的状态(review #844 codex P1)。注销必须早于
           // flush: 后者按 idle 与否决定是否放行缓存的终态。
@@ -6063,14 +6082,29 @@ export class CodexAgent extends BaseAgent {
           // inFlightStarts 的注释）。终失败路径 settledOk 为 false，不补排；那条由下面的
           // discardOverloadRetry + terminal error 收口。
           const armedState = overloadRetry;
-          if (armedState) rescheduleDeferredCapacityFailure(armedState, initialStartSettledOk);
+          if (armedState) {
+            // rpcSettledOk 的本意是"我这次 RPC 失败了, 别在推终态之外再排一个计时器"。
+            // 但延后的那条失败可能属于**另一轮仍然活着的** send(它的容量错误在我还在飞时
+            // 到达, 于是只被记账): 那一轮的命运与我这次 RPC 成败无关, 用我的失败去压掉它
+            // 会让它既不重投也不收口(写本轮回归用例时实测到, review 未提)。
+            const ownedByThisSend = armedState.sendGen === mySendGen;
+            rescheduleDeferredCapacityFailure(
+              armedState,
+              ownedByThisSend ? initialStartSettledOk : true,
+            );
+          }
         }
         if (finalErr) {
           // 容量通知可能先于本次 turn/start 响应到达(协议允许的乱序), 那时重投
           // 计时器已经排上。原始请求随后终失败 → 下面会推 terminal error + Done,
           // UI 与调用方都已按失败处理; 若不把重投一起废掉, 计时器到点会重投一条
           // 已判失败的消息, 副作用在用户看不到的地方执行(review #844 codex P1)。
-          discardOverloadRetry('original turn/start failed');
+          // 只废弃**属于本轮**的重投状态: Stop 之后下一轮 send 可能已经装上了自己的
+          // overloadRetry, 无条件 discard 会把它连同它记账的延后失败一起清掉 —— 那一轮
+          // 于是既不重投也不收口(review #844 codex P1)。
+          if (overloadRetry?.sendGen === mySendGen) {
+            discardOverloadRetry('original turn/start failed');
+          }
           // 计划模式: turn 从未启动就终失败 → 结束半开循环(与 turnCompleted 的
           // failed 分支同语义), 否则 planCycleActive 泄漏, 下一条常规消息仍会
           // 携带 collaborationMode plan(勾选与 chip 早已熄灭, 行为与 UI 脱节)。
@@ -6089,7 +6123,7 @@ export class CodexAgent extends BaseAgent {
           // Stop / 撤单已经为这一轮推过终态时不得再推一组: 否则取消被改报成"启动失败",
           // 且 coordinator / 活动状态 / goal 会对同一个 turn 收口两次
           // (review #844 greptile P1)。
-          if (terminalSettledSendGen === mySendGen) {
+          if (initialStartSettledByCancel) {
             log.info('turn/start failure suppressed — this send was already settled by cancel', {
               threadId,
             });
@@ -6273,7 +6307,7 @@ export class CodexAgent extends BaseAgent {
         //    落墓碑 + interrupt + 推终态, 保证恰好一次收口。
         if (hadPendingOverloadRetry) {
           teardownActiveTurnForCancellation('stopped while an overload retry was pending');
-          terminalSettledSendGen = sendGeneration;
+          markInFlightStartsTerminallySettled();
           // turn/start 还在飞时按下 Stop: 这里马上会推终态事件, 而那个 RPC 的响应随后
           // 才回来。不武装隔离的话 handleTurnStartResp 会照常激活它 —— 用户看到
           // 「已停止」, 工具还在跑(review #844 codex P1)。

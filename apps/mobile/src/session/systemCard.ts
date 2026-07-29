@@ -91,7 +91,7 @@ export function formatMobileSystemCard(
     // 两种续跑原因共用这张卡, 但说法必须分开(与桌面 GoalResumedCard 同口径):
     // 上游过载那条只是干等了 60s、**没有**任何容量探测, 说「用量已恢复」是假信息;
     // 账号限流那条的重置时刻来自账号额度信息, 有依据(review #844 codex P1)。
-    const isCapacity = typeof data?.kind === 'string' && data.kind === 'capacity-resumed';
+    const isCapacity = data?.kind === 'capacity-resumed';
     return {
       title: i18n.t(
         isCapacity ? 'message.systemCard.goalCapacityRetry' : 'message.systemCard.goalResumed',

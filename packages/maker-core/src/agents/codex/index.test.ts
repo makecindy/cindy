@@ -4840,6 +4840,149 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('does not settle twice when two stopped sends both have pending start RPCs', async () => {
+      // "已由取消收口"若记在一个标量上, 后一次 Stop 会把前一次覆盖掉 —— 先那次的 reject
+      // 于是又推一组终态, 而事件里不带 send 世代, 下游可能把这份过期收口套到后一个 turn 上
+      // (review #844 codex P1)。标记挂在 per-request 条目上就不会互相覆盖。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const secondStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            if (turnStarts === 2) return secondStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-two-stopped-sends',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const handlers0 = host.getThreadHandlers();
+        if (!handlers0?.error) throw new Error('expected error handler');
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        const stopOnePendingSend = async (send: Promise<unknown>): Promise<void> => {
+          // 空 id 容量拒绝(RPC 仍在飞)→ 让这一轮进入"有挂起重投"的状态, Stop 才会推终态。
+          handlers0.error?.({
+            threadId: 'start-thread-id',
+            turnId: '',
+            willRetry: false,
+            error: { message: CAPACITY_MESSAGE },
+          } as never);
+          await vi.advanceTimersByTimeAsync(0);
+          await handle.abort?.();
+          await vi.advanceTimersByTimeAsync(0);
+          void send;
+        };
+
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+        await stopOnePendingSend(firstSend);
+
+        const secondSend = handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        await stopOnePendingSend(secondSend);
+
+        // 两轮各自被 Stop → 恰好两条终态。
+        const afterStops = events.filter(
+          (e) => e.type === 'error' && e.data?.isTerminal === true,
+        ).length;
+        expect(afterStops).toBe(2);
+
+        // 两个 RPC 现在才失败: 都不得再推第三、第四条终态。
+        firstStart.reject(new Error('turn/start timed out'));
+        secondStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await secondSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(
+          events.filter((e) => e.type === 'error' && e.data?.isTerminal === true),
+        ).toHaveLength(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not discard the next send retry state when the stopped send fails', async () => {
+      // Stop 之后下一轮 send 可能已经装上了自己的 overloadRetry。旧 send 的失败尾巴若无条件
+      // discardOverloadRetry, 会把它连同它记账的延后失败一起清掉 —— 那一轮既不重投也不收口
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-keep-next-retry-state',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 下一轮 send 接管并装上自己的重投状态(它的 turn 被容量拒绝)。
+        await handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-2',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 旧 send 的 RPC 现在才失败 —— 不得把新一轮的重投状态清掉。
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 新一轮的重投照常发生。
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(turnStarts).toBe(3);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not settle twice when Stop is followed by the start RPC rejecting', async () => {
       // Stop 已经推过 terminal error + Done。旧 RPC 随后 reject 时若照常按 finalErr 再推
       // 一组, 取消会被改报成"启动失败", 且 coordinator / 活动状态 / goal 对同一个 turn
