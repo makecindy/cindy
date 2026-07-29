@@ -3477,6 +3477,9 @@ export function registerGhostIpc(): void {
     if (isAppSessionBoundaryPending()) {
       throwIpcError('PRECONDITION_FAILED', '账号切换中，请稍后重试导出');
     }
+    // 快照前捕获 owner:持约期间若开始切号,租约释放后切换可能已完成,
+    // 快照字节属于旧账号——落盘前按 owner 复查,变即拒(Greptile P1)。
+    const exportOwner = getActiveAppSession();
     const win = BrowserWindow.fromWebContents(event.sender);
     // 租约只覆盖快照(读目录);对话框等待与落盘在约外,不阻塞变更。
     const releaseMutation = ghostMutationCoordinator.acquire();
@@ -3499,6 +3502,12 @@ export function registerGhostIpc(): void {
           return throwIpcError('INTERNAL', `导出插件失败(${snapshot.result.code})`);
       }
       return throwIpcError('INTERNAL', '导出插件失败(unknown)');
+    }
+    if (
+      isAppSessionBoundaryPending() ||
+      !isSameAppSession(exportOwner, getActiveAppSession())
+    ) {
+      return throwIpcError('PRECONDITION_FAILED', '账号已切换，请重新导出');
     }
     const result = await writeGhostPackageSnapshot(snapshot, {
       showSaveDialog: (opts) =>
