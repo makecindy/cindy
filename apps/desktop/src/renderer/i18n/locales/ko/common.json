@@ -2655,6 +2655,8 @@
         "cindyImageEdit": "이미지 편집(Cindy에게 대행 요청, 자신이 생성한 이미지만)",
         "cindyVideoGenerate": "영상 생성(Cindy에게 대행 요청)",
         "cindyVideoEdit": "이미지로 영상 만들기(Cindy에게 대행 요청, 참조 이미지는 자신 소유만)",
+        "cindyMediaDeposit": "보유한 이미지·영상·오디오를 내 미디어 라이브러리에 저장할 수 있음",
+        "cindyMediaDepositDetail": "플러그인에 붙여넣거나 끌어다 놓은 소재도 AI가 편집할 수 있게 하는 권한입니다. 저장된 항목은 이 플러그인 이름으로 기록되며 최대 {{quota}}까지 사용하고, 플러그인을 삭제하면 함께 정리됩니다.",
         "agentUserAction": "플러그인 카드를 클릭한 뒤 Agent의 새 작업을 시작할 수 있음",
         "agentUserActionDetail": "클릭 한 번마다 한 번만 시작할 수 있으며, 해당 카드가 속한 세션에서만 사용할 수 있습니다.",
         "agentBackground": "백그라운드에서 Agent의 새 작업을 자동으로 시작할 수 있음",
@@ -2844,8 +2846,8 @@
         "urlPlaceholder": "https://example.com/mcp",
         "command": "명령",
         "commandPlaceholder": "예: npx",
-        "args": "인수(한 줄에 하나)",
-        "argsPlaceholder": "-y\n@modelcontextprotocol/server-filesystem\n.",
+        "args": "인수(JSON 배열)",
+        "argsPlaceholder": "[\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"]",
         "cwd": "작업 디렉터리(선택)",
         "cwdPlaceholder": "비워 두면 Agent 작업 디렉터리를 사용",
         "env": "환경 변수(선택)",
@@ -2868,6 +2870,7 @@
         "nameRequired": "표시 이름을 입력하세요",
         "urlInvalid": "유효한 http(s) URL을 입력하세요",
         "commandRequired": "stdio에는 명령이 필요합니다",
+        "argsInvalid": "인수는 문자열만 포함하는 JSON 배열이어야 합니다",
         "envNameInvalid": "환경 변수 이름에는 영문자, 숫자, 밑줄만 사용할 수 있습니다"
       },
       "toast": {
@@ -3894,6 +3897,7 @@
       "ariaDescription": "버전 {{version}} 릴리스 노트",
       "ariaDescriptionSpan": "v{{from}} 이후 {{count}}개 버전의 릴리스 노트",
       "versionsSpan": "{{count}}개 버전",
+      "versionJumpAria": "버전으로 이동 — 전체 {{count}}개 버전, 현재 v{{version}}",
       "loading": "불러오는 중",
       "loadFailed": "불러오기 실패",
       "retry": "다시 시도"

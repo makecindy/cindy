@@ -1,8 +1,8 @@
 /**
  * customMcpServers —— 自定义 MCP「配置 + 可选 bearer token」的 renderer 侧写入编排。
  *
- * 配置走 maker IPC（入 localDb）；token 与 stdio 环境变量走通用 safeStorage IPC
- * （`mcp_token_<id>` / `mcp_env_<id>`，本地加密；main 的 CustomMcpProvider resolve 时读出）。
+ * 配置走 maker IPC（入 localDb）；token 走通用 safeStorage IPC。stdio 环境变量随配置
+ * 一并交给 Main，在同一 mutation queue 内写入 owner-scoped safeStorage 并支持失败回滚。
  *
  * 顺序约定：
  *   - create：先写配置（IPC 在重名 / 非法时 reject，避免误覆盖既有同 id 的 token），成功后存 token。
@@ -27,9 +27,10 @@ export async function readCustomMcpToken(mcpId: string): Promise<string | null> 
 }
 
 /** stdio env is encrypted as one JSON document, so values never enter localDb. */
-export async function readCustomMcpEnv(mcpId: string): Promise<Record<string, string>> {
+export async function readCustomMcpEnv(mcpId: string): Promise<Record<string, string> | null> {
   try {
     const raw = await window.electronAPI.safeStorageRead(customMcpEnvStorageKey(mcpId));
+    if (raw === null) return null;
     const value: unknown = raw ? JSON.parse(raw) : {};
     return value && typeof value === 'object' && !Array.isArray(value)
       ? Object.fromEntries(
@@ -39,15 +40,8 @@ export async function readCustomMcpEnv(mcpId: string): Promise<Record<string, st
         )
       : {};
   } catch {
-    return {};
+    return null;
   }
-}
-
-export async function storeCustomMcpEnv(mcpId: string, env: Record<string, string>): Promise<void> {
-  const key = customMcpEnvStorageKey(mcpId);
-  if (Object.keys(env).length === 0) await window.electronAPI.safeStorageRemove(key);
-  else if (!(await window.electronAPI.safeStorageStore(key, JSON.stringify(env))))
-    throw new Error('safeStorage unavailable');
 }
 
 /** 列出全部自定义 MCP。 */
@@ -62,7 +56,10 @@ export async function createCustomMcpServer(
   token: string,
   env: Record<string, string> = {},
 ): Promise<void> {
-  await window.electronAPI.maker.createCustomMcpServer(config);
+  await window.electronAPI.maker.createCustomMcpServer(
+    config,
+    config.transport === 'stdio' ? env : undefined,
+  );
   const t = token.trim();
   if (t) {
     // token 是可选字段：存储失败不阻断 create 事务（配置已入库，用户可在「编辑」里补录）。
@@ -83,16 +80,7 @@ export async function createCustomMcpServer(
       /* 无旧 token 时 remove 无害 */
     }
   }
-  if (config.transport === 'stdio') {
-    await storeCustomMcpEnv(config.id, env);
-  } else {
-    try {
-      await window.electronAPI.safeStorageRemove(customMcpEnvStorageKey(config.id));
-    } catch {
-      /* 远程 MCP 不会读取该 key；遗留值不影响配置。 */
-    }
-  }
-  // 第二次刷新消除「配置 IPC 完成→凭证或 stdio env 落盘」之间的竞态窗口。
+  // 远程 token 在配置 IPC 后落盘，需要第二次刷新；stdio env 已在 Main 事务内生效。
   try {
     await window.electronAPI.maker.refreshCustomMcpCodex();
   } catch {
@@ -110,20 +98,17 @@ export async function updateCustomMcpServer(
   config: CustomMcpConfig,
   token: string,
   clearToken: boolean,
-  env: Record<string, string> = {},
+  env?: Record<string, string>,
 ): Promise<void> {
-  await window.electronAPI.maker.updateCustomMcpServer(config);
+  await window.electronAPI.maker.updateCustomMcpServer(config, env);
   const t = token.trim();
   let secretChanged = false;
   if (config.transport === 'stdio') {
     try {
       await window.electronAPI.safeStorageRemove(customMcpSecretStorageKey(config.id));
-      secretChanged = true;
     } catch {
       /* stdio 不读取 bearer token；清理失败不影响配置更新。 */
     }
-    await storeCustomMcpEnv(config.id, env);
-    secretChanged = true;
   } else if (t) {
     // token 是可选字段：存储失败不阻断 update 事务（配置已入库），与 create 路径保持一致。
     // safeStorageStore 在 safeStorage 不可用时返回 false 而不是 throw，需单独检查。
@@ -145,14 +130,7 @@ export async function updateCustomMcpServer(
       /* 清理失败不影响配置更新 */
     }
   }
-  if (config.transport !== 'stdio') {
-    try {
-      await window.electronAPI.safeStorageRemove(customMcpEnvStorageKey(config.id));
-    } catch {
-      /* 远程 MCP 不读取该 key；遗留值不影响配置。 */
-    }
-  }
-  // stdio env 与 token 一样在配置写入后落盘，二者变更都需要第二次刷新。
+  // stdio env 已随配置在 Main 内刷新；这里只为另行落盘的远程 token 再刷新一次。
   if (secretChanged) {
     try {
       await window.electronAPI.maker.refreshCustomMcpCodex();
@@ -169,10 +147,5 @@ export async function deleteCustomMcpServer(mcpId: string): Promise<void> {
     await window.electronAPI.safeStorageRemove(customMcpSecretStorageKey(mcpId));
   } catch {
     /* token 清理失败无害：孤儿 .enc 不会被任何 provider 引用。 */
-  }
-  try {
-    await window.electronAPI.safeStorageRemove(customMcpEnvStorageKey(mcpId));
-  } catch {
-    /* best-effort */
   }
 }

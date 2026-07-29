@@ -33,6 +33,14 @@ export interface ConnectionReadOptions {
   allowSideEffects: boolean;
 }
 
+export interface ProviderListOptions extends ConnectionReadOptions {
+  /**
+   * Internal catalog override for policy consumers that need the routing truth
+   * rather than the user-selectable projection. Never sourced from IPC input.
+   */
+  catalog?: Catalog;
+}
+
 /** 内置三家供应商「是否已连接」的判定器（由 host 注入，读各自凭证存储）。 */
 export interface ProviderConnectionReaders {
   /** XD 网关：托管 api_key 是否存在。 */
@@ -88,7 +96,7 @@ export interface ProviderService {
    *   · 跨进程边界进来的（renderer IPC、device-link 合成 event）按 sender 可信度决定，
    *     见 providerHandlers 的 isTrustedSender。
    */
-  listProviders(opts?: Partial<ConnectionReadOptions>): Promise<ProviderView[]>;
+  listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]>;
 }
 
 /**
@@ -96,7 +104,7 @@ export interface ProviderService {
  * 连接状态每次实时读（凭证变化要立即反映）。
  */
 export function createProviderService(deps: ProviderServiceDeps): ProviderService {
-  async function listProviders(opts?: Partial<ConnectionReadOptions>): Promise<ProviderView[]> {
+  async function listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]> {
     const readOpts: ConnectionReadOptions = { allowSideEffects: opts?.allowSideEffects === true };
     const [xd, anthropic, openai, xai] = await Promise.all([
       Promise.resolve(deps.connection.xd(readOpts)),
@@ -104,7 +112,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       Promise.resolve(deps.connection.openai(readOpts)),
       Promise.resolve(deps.connection.xai(readOpts)),
     ]);
-    const catalog = deps.getCatalog();
+    const catalog = opts?.catalog ?? deps.getCatalog();
     const connected: ConnectionState = { xd, anthropic, openai, xai };
     // 自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」替代「连接 / 断开」，
     // 没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。

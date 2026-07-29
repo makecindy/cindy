@@ -2655,6 +2655,8 @@
         "cindyImageEdit": "画像編集(Cindy に代行依頼、自身が生成した画像のみ)",
         "cindyVideoGenerate": "動画生成(Cindy に代行依頼)",
         "cindyVideoEdit": "画像から動画(Cindy に代行依頼、参照画像は自身名義のもののみ)",
+        "cindyMediaDeposit": "保有している画像・動画・音声をあなたのメディアライブラリに保存できます",
+        "cindyMediaDepositDetail": "プラグイン内で貼り付け・ドロップした素材も AI で加工できるようにするための権限です。保存内容はこのプラグイン名義で記録され、最大 {{quota}} まで使用し、アンインストール時に併せて削除されます。",
         "agentUserAction": "プラグインカードをクリックした後、Agent の新しいターンを開始できます",
         "agentUserActionDetail": "1 回のクリックにつき 1 回だけ開始でき、そのカードが属するセッションでのみ使用できます。",
         "agentBackground": "バックグラウンドで Agent の新しいターンを自動的に開始できます",
@@ -2844,8 +2846,8 @@
         "urlPlaceholder": "https://example.com/mcp",
         "command": "コマンド",
         "commandPlaceholder": "例: npx",
-        "args": "引数（1 行に 1 つ）",
-        "argsPlaceholder": "-y\n@modelcontextprotocol/server-filesystem\n.",
+        "args": "引数（JSON 配列）",
+        "argsPlaceholder": "[\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"]",
         "cwd": "作業ディレクトリ（任意）",
         "cwdPlaceholder": "空欄で Agent の作業ディレクトリを使用",
         "env": "環境変数（任意）",
@@ -2868,6 +2870,7 @@
         "nameRequired": "表示名を入力してください",
         "urlInvalid": "有効な http(s) URL を入力してください",
         "commandRequired": "stdio にはコマンドが必要です",
+        "argsInvalid": "引数は文字列のみを含む JSON 配列にしてください",
         "envNameInvalid": "環境変数名には英字、数字、アンダースコアのみ使用できます"
       },
       "toast": {
@@ -3894,6 +3897,7 @@
       "ariaDescription": "バージョン {{version}} のリリースノート",
       "ariaDescriptionSpan": "v{{from}} 以降 {{count}} バージョン分のリリースノート",
       "versionsSpan": "{{count}} バージョン",
+      "versionJumpAria": "バージョンへ移動 — 全 {{count}} バージョン、現在は v{{version}}",
       "loading": "読み込み中",
       "loadFailed": "読み込み失敗",
       "retry": "再試行"

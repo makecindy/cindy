@@ -157,8 +157,12 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   }, [browser.title, ctx, state.title]);
 
   useEffect(() => {
-    if (browser.favicon === state.favicon) return;
-    ctx.patchState({ favicon: browser.favicon || null });
+    // null 表示当前 webview 代际尚未观测到 favicon，不能据此清掉持久化图标；
+    // 空串才是 page-favicon-updated 明确报告 "无图标"。
+    if (browser.favicon === null) return;
+    const nextFavicon = browser.favicon || null;
+    if (nextFavicon === state.favicon) return;
+    ctx.patchState({ favicon: nextFavicon });
   }, [browser.favicon, ctx, state.favicon]);
 
   // isAudible 同步:webview audio-state-changed → patchState({isAudible}),

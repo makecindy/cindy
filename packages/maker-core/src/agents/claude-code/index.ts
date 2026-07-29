@@ -1838,10 +1838,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           const dropped = Object.keys(mcpServers).filter((k) => !(k in remoteMcpServers));
           log.warn('cc remote: dropping in-process MCP servers (MVP not supported)', { dropped });
         }
-        // 远端会话实际只装到 remoteMcpServers 这一批, 被 filter 掉的 in-process server
-        // 在远端不存在 —— 审批归属必须按远端真实清单判, 否则策略会对远端根本不可能
-        // 出现的 server 名做判定。
-        registeredMcpServerNames = new Set(Object.keys(remoteMcpServers ?? {}));
+        // 远端会话的 server 基线是 remoteMcpServers (被 filter 掉的 in-process server
+        // 在远端不存在); 但 factory 还可能注入 host 侧 http server (协同恢复通道),
+        // 所以审批归属快照不在此处定稿, 挪到 factory 调用后按 startParams 重算。
         // 计划模式开启时远端 SDK 同样跑 plan; 读 mutable 值让 rewind 重建也拿到当前档。
         const remotePermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
         sdkInPlanMode = remotePermissionMode === 'plan';
@@ -1912,6 +1911,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           remoteHostId: opts.remoteHostId,
           sessionId: opts.sessionId,
           startParams,
+          // 协同身份以 session 自己的 vendorOptions 为准 (worker 首次创建时
+          // DB 标记尚未写入, host 现场查库会拿到空角色)。见 base-agent.ts
+          // remoteCcQueryFactory 的 vendorOptions 注释。
+          vendorOptions: vo,
           onApprovalRequest: async (rawParams: unknown) => {
             // 110s timeout — must respond before daemon's 120s server-request timeout.
             // On timeout, dismiss the pending interaction (clears UI) and reject to
@@ -2043,6 +2046,13 @@ export class ClaudeCodeAgent extends BaseAgent {
             };
           },
         });
+        // factory 可能注入 host 侧 http server (远端 cc 协同恢复通道的
+        // cindy_orca / orca_worker_bridge, 见 maker-host remoteCcQueryFactory),
+        // 审批归属快照必须按注入后的最终清单定稿, 否则 canUseTool 的
+        // resolveMcpToolTarget 认不出 orca server 名, 归属判定缺失。
+        registeredMcpServerNames = new Set(
+          Object.keys((startParams as { mcpServers?: Record<string, unknown> }).mcpServers ?? {}),
+        );
         // 记入 closure: handle.close / U2 兜底需要 await remoteQuery.close()。
         activeRemoteQuery = remoteQuery as unknown as { close: () => Promise<void>; detach?: () => Promise<void> };
 

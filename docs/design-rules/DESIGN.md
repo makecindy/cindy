@@ -469,7 +469,7 @@ This section is the authoritative token-usage text; i18n rules for UI copy live 
 
 Settings → Appearance can import a VSCode color theme (`*.json` / jsonc) or an Obsidian `theme.css` and convert it into a local theme. Implementation: `apps/desktop/src/shared/theme-import/` (pure conversion) + `apps/desktop/src/main/local-themes/importer.ts` (dialog / read / write). Rules that govern it:
 
-- **One template, taken from the hand-ported community themes.** The seven ported themes under `apps/desktop/src/renderer/themes/builtin/` (one-dark-pro, github-dark, eclipse, material-ocean-hc, monokai-pro, atom-one-light, solarized-light) share a byte-identical key set of 91 tokens derived from 13 palette roles. `apps/desktop/src/shared/theme-import/palette.ts` is that derivation, code-ified; `one-dark-pro.ts`'s header comment is the source-of-truth for which VSCode key feeds which role. The template is **allow-list only** — it emits exactly those 91 base ids, plus optional Markdown tokens (`md-h1-fg`…`md-h6-fg` / `md-strong-fg`) when the source theme provides heading or bold colors.
+- **One template, taken from the hand-ported community themes.** The seven ported themes under `apps/desktop/src/renderer/themes/builtin/` (one-dark-pro, github-dark, eclipse, material-ocean-hc, monokai-pro, atom-one-light, solarized-light) share a byte-identical key set of 108 tokens derived from 13 palette roles plus the optional light-only `inputBg` role (CREATE AGENT card/input background, e.g. Solarized base2; absent ⇒ collapses to `surface`). Within the template, when a light palette supplies an `inputBg` distinct from `surface` (e.g. Solarized base2 cards), CREATE AGENT `*-hover` and the resting `quick-card-icon-bg` lift to `surface` (icon drops back to `chip` on hover); otherwise `*-hover`=`hover` and `quick-card-icon-bg` is `border` in dark / `chip` in light — keeping default/hover/icon visually distinct in every theme. `control-bg-pressed` is `chip` in dark and `hover` in light. `send-btn-bg`/`send-btn-icon` use the inverse-neutral pair (`textPrimary`/`surface`), not the accent, because the shared send tokens also render 10–12px text that must clear 4.5:1. `apps/desktop/src/shared/theme-import/palette.ts` is that derivation, code-ified; `one-dark-pro.ts`'s header comment is the source-of-truth for which VSCode key feeds which role. The template is **allow-list only** — it emits exactly those 108 base ids, plus optional Markdown tokens (`md-h1-fg`…`md-h6-fg` / `md-strong-fg`) when the source theme provides heading or bold colors.
 - **Exemption families are never imported.** `--login-*`, brand red, `--destructive`, `--error-*`, `--warning-accent`, `--status-bar-accent`, `--focus-ring*`, `--diff-*`, shadows and overlays stay at their spec values under every imported theme (see the exemption table above and §16). `apps/desktop/src/shared/theme-import/protected-tokens.ts` enforces it as a second gate; the import report tells the user how many tokens were held back.
 - **`-hsl` tokens are computed, not copied.** Both forms of a color must denote the same color, so the converter derives every HSL triplet from its hex via `toHslTriplet()`. (Note: a few hand-written builtin themes carry approximate HSL values — `github-dark`'s `SURFACE_BG_HSL` was copied off one-dark-pro. Those are left as-is; new imports are exact.)
 - **Markdown text colors go through `--md-h1-fg`…`--md-h6-fg` / `--md-strong-fg`, and default to `inherit`.** Before these tokens existed, Markdown headings and bold text inherited their color from the container (`baseComponents` sets size/weight only). Defaulting to `var(--text-primary)` would have repainted headings inside blockquotes, tool cards and secondary-text regions, so the defaults are `inherit` — every built-in theme renders exactly as before. Imported themes fill them from Obsidian `--hN-color` / `--bold-color` or VSCode `markup.heading` / `markup.bold`. Guard: `themes/__tests__/markdownColorTokens.test.ts`.
@@ -547,7 +547,7 @@ Applies to submit-on-Enter fields: the chat composer, goal input, ask input, etc
 
 #### Motion tokens (the only tier source)
 
-Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`; mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (dual-platform isomorphism, same policy as color tokens, landing with the mobile motion overhaul). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 duration tiers + 3 curves, the same philosophy as the §5 three-tier radius. Values outside the tiers require design review first.
+Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`; mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (dual-platform isomorphism, same policy as color tokens, landing with the mobile motion overhaul). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 interaction-duration tiers + 3 curves, the same philosophy as the §5 three-tier radius. Values outside the tiers require design review first. The single semantic loop-cycle exception is recorded directly below.
 
 | Token | Value | Use |
 |---|---|---|
@@ -560,6 +560,14 @@ Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`;
 | `--motion-ease-in` | `cubic-bezier(0.4, 0, 1, 1)` | Exit |
 | `--motion-ease-move` | `cubic-bezier(0.4, 0, 0.2, 1)` | Position/size interpolation |
 
+**Semantic loop-cycle exception:** `--motion-spinner-cycle` = `1000ms` is the
+full-turn duration for functional loading spinners. It is not a sixth interaction
+tier and must not be used for enter/exit, hover, resize, or decorative motion.
+Spinner rotation remains linear, transform-only, mounted on an HTML wrapper, and
+must become static under reduced motion. This exception keeps loading rotation
+readable without coupling it to dialog timing or copying a hardcoded Tailwind
+default into components.
+
 #### Semantics → motion prototypes (one semantic, one motion, app-wide)
 
 | Semantic | Spec | Reference implementation |
@@ -571,6 +579,7 @@ Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`;
 | Press | `active:scale-[0.98]` (all interactive pills/buttons) | ConfirmDialog buttons |
 | Done | **the app's only sanctioned overshoot** (`status-done-pop`) | `globals.css` |
 | Running | Opacity breathing; must sit on an HTML wrapper (`docs/dev-rules/engineering-conventions.md` §7) | `session-breathing` |
+| Loading spinner | `animate-spinner` (`--motion-spinner-cycle`, linear full turn); HTML wrapper only, static under reduced motion | `tailwind.config.ts` |
 | Hover / state colors | `transition-colors`, ≤ fast (150ms) | App-wide status quo |
 | Container transform (chip grows into panel) | 220ms — see the dedicated category below (explicit exception) | Composer permission/model selectors |
 
@@ -852,20 +861,30 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 
 **平台差异**：桌面 = Web renderer（Electron，Win / Mac 同套）；手机 = React Native（iOS / Android，含 phone / pad-portrait / pad-landscape）。两端同参数源、同 token 语义（手机 `loginColors` 与桌面 `LOGIN_COLORS` 同名同值），仅实现宿主不同（RN 用 `StyleSheet` + `Animated`，桌面用 CSS + Tailwind）。
 
-**移动端 stage 几何（2026-07-27 换品牌簇基准；2026-07-28 勘误后仅品牌簇生效）**：手机的**品牌簇**（立绘 / SLOGAN / 字标）按新稿逐字段更新，**功能区落位 `loginY` 与面板派生几何保持 main 原值不动**（手机端跳过登录已于 2026-07-28 整体剥离，面板仍 440、组仍 560，见本节末勘误）。短屏 / 长屏两档之间仍走既有线性插值体系（`loginSkinLayout.resolveLoginStage`），**不另造缩放规则**。下表为设计单位（750 设计px 基准），消费时一律 × `surface.scale`（设计单位 ≠ 物理 pt，见 §16.4「几何」条）：
+**移动端 stage 几何（2026-07-27 换品牌簇基准；2026-07-29 修正：功能区落位同步取新稿标注值）**：手机的**品牌簇**（立绘 / SLOGAN / 字标）**与功能区落位 `loginY` 一并取新稿逐字段值**——两者是同一份稿的两半，必须同源。短屏 / 长屏两档之间仍走既有线性插值体系（`loginSkinLayout.resolveLoginStage`），**不另造缩放规则**。下表为设计单位（750 设计px 基准），消费时一律 × `surface.scale`（设计单位 ≠ 物理 pt，见 §16.4「几何」条）：
 
 | 档 | 立绘 | SLOGAN（可见图形框） | 字标（图像框） | 登录组顶 `loginY` | 溯源 |
 |---|---|---|---|---|---|
-| 短屏 `designHeight=1334` | 599×720 @(75,**60**) | 254.01×72.8 @(462.55,408.37) | 335×115 @(208,487) | **694**（组高 560 + 协议行溢出 62 → 组底 622，距屏底 18；= main 原值，本轮不动。~~新稿 622~~ 随跳过登录剥离作废） | 品牌簇 = 新稿 `705:915` + 避脸拍板；`loginY` = 2026-07-24 拍板 |
-| 长屏 `designHeight=1624` | 750×902 @(0,106) | 269.66×77.29 @(444.9,**568**) | 387×132.18 @(182,669.17) | **933**（组底 1555，距屏底 69；= main 原值，本轮不动。~~新稿 827~~ 同上作废） | 品牌簇 = 新稿 `705:799` + 避脸拍板；`loginY` = 2026-07-24 拍板 |
+| 短屏 `designHeight=1334` | 599×720 @(75,**60**) | 254.01×72.8 @(462.55,408.37) | 335×115 @(208,487) | **622**（新稿标注值；字标底 602 → 面板顶间距 **20** = 稿内值。组高 560 + 协议行溢出 62 → 内容底 1244，底部留白 90，比稿内 30 多 60，见下「面板 500→440 的 60 去向」） | 品牌簇 + `loginY` 同源 = 新稿 `705:915`（Log_in 组 @(35,622)）+ 避脸拍板 |
+| 长屏 `designHeight=1624` | 750×902 @(0,106) | 269.66×77.29 @(444.9,**568**) | 387×132.18 @(182,669.17) | **827**（新稿标注值；字标底 801.35 → 间距 **25.65** = 稿内值。内容底 1449，底部留白 175，比稿内 115 多 60，同上） | 品牌簇 + `loginY` 同源 = 新稿 `705:799`（Log_in 组 @(35,827)）+ 避脸拍板 |
+
+- **面板 500→440 少掉的 60 去向（2026-07-29 审图拍板「方案 B」）**：新稿手机帧的面板是 **500 高**（含面板内「跳过登录」栏），而手机端已按产品决定剥离该入口、面板回 **440**、组回 **560**。少掉的 60 必须有个去处，两个候选经实机比例图审图：
+  - **方案 B（采纳）**：`loginY` 取稿值 622 / 827，60 全部落到**底部留白**（90 / 175，比稿内多 60）。品牌簇的稿内顶部构图与间距完全保真。
+  - **方案 A（未采纳）**：品牌簇整体下移 60（`loginY` 682 / 887），字标↔面板与底部留白**双双**回到稿值（20/30、25.65/115），代价是品牌簇整体比稿位低 60（叠加避脸上移后立绘顶 120 / 166）。
+  - ⚠️ **禁止只改一半**：`loginY` 与品牌簇取自同一份稿，任一侧单独回退会让字标↔面板出现稿内不存在的间距（2026-07-28 实例：品牌簇换新稿、`loginY` 留 main 的 694 / 933 → 间距变 **92 / 131.65**，实机肉眼可见一条空白）。该组合已由 `loginSkinLayout.test.ts` 的「间距上界不变式」钉死（等于稿值，不是「小于面板顶」）。
 
 - **SLOGAN 避脸（2026-07-27 用户审 demo 两次拍板）**：新稿原值下 SLOGAN 压在立绘脸上（像素级实测：立绘脸部 skin 连通域 x402..552 / y315..475，SLOGAN 资产 ink 5244px，双方按各自 `contain` 折算到 stage 求交 —— 长屏原值 `y=536.68` 时 ink ∩ 脸 = 290px、短屏 = 91px、中段 dh≈1400 最高 113px）。两档分别处理：
   - **长屏**：SLOGAN 下移 31.32（inner `y` 536.68 → **568**，容器 y 514 → 545.32；x / 宽高不动），底 645.29 距字标框顶 669.17 留 **23.88 ≈ 24 设计px** —— 24px 是这一档的**硬上限**，再下移即撞字标。
   - **短屏**：SLOGAN 在本档没有下移余量（底 481.17 距字标顶 487 仅 5.83），改为**立绘整体上移 27**（`y` 87 → **60**）。改后 dh ≤1450 全段 ink ∩ 脸 = **0**；dh 1500..1624 残留 3..9px（仅下巴尖，由长屏档自身落位 + 上面那条 24px 上限共同决定）。
   - **边界核对**：立绘资产不透明内容起于 y=86（上方为透明留白），短屏 `contain` 缩放 720/902 → 可见发顶 = 60 + 86×0.79823 = **128.65**，仍在 Status Bar 下沿（115.67）之下 12.98，**不侵入状态栏、无顶部裁切**；底部可见内容止于资产 y=696 且是淡出渐隐（alpha 69→21），上移后尾部由「藏在面板下 20.6」变成「露出面板上 6.4」——长屏本来就露 25，同款观感，无硬切边。
 
-- **短屏以下（dh<1334）**：视觉区（立绘 / slogan / 字标）继续按 `v=max(0.25,(dh-600)/734)` 以 (375,0) 为锚连续压缩；功能区 680×**560** 不缩放、锚定底部，锚常量 **`dh-640`**（= 组底 622 + 底距 18），在 dh=1334 处与短屏档 `loginY=694` 连续 —— **均为 main 原值**。〔~~随面板 440→500 改为 `dh-712`~~ 已于 2026-07-28 作废，见本节末勘误〕
-- **2026-07-24「视觉 + 功能区整体上移 40 设计px」拍板对功能区仍然有效**（`loginY` 694 / 933 / `dh-640` 就是它的结果）〔~~由本次新稿取代~~ 2026-07-28 更正：跳过登录剥离后功能区回 main，该拍板未被取代；本轮只有品牌簇换成新稿基准〕。
+- **短屏以下（dh<1334）**：视觉区（立绘 / slogan / 字标）继续按 `v=max(0.25,(dh-600)/734)` 以 (375,0) 为锚连续压缩；功能区 680×**560** 不缩放、按**紧凑底距 18** 锚定底部并**钳到短屏档落位**：`loginY = min(622, max(0, dh-640))`。
+  - **为什么是钳制、不是把锚常量改成 `dh-712`**：短屏档那 90 的底距是「面板 500→440 少掉 60 落到底部」的产物，只属于 dh≥1334；窄屏空间本就不足，若在那里也保留这 60，面板会上移压住被 `v` 压缩后的字标 —— 2026-07-29 review 实算：`dh-712` 会让 **dh∈[712,1222) 全段字标被不透明面板盖住**（dh=1000 压 40 设计px）。钳制式在 dh→1334⁻ 自然收敛到 622（边界连续），窄屏行为与 main 逐值一致。
+  - **既定代价**：dh<822 时 stage 高度已不足以同时容纳压缩后的品牌簇与不缩放的功能区，字标与面板仍会交叠（dh=800 压 4、dh=700 压 90.5）——同一公式同一取值，**main 既有行为**，属「功能区优先」的取舍（Split View 320pt 窄窗等极端形态）。
+  - **钳制自身的代价**：`loginY` 的斜率在 dh=1262 处由 1 变 0（值连续、斜率不连续）——dh∈[1262,1334) 面板定在 622 不再随屏高上移，底部留白由 18 涨到 90。该窗口仅 ≈37 物理px（@scale 0.52），离散的旋转 / 分屏切换基本撞不到，只有连续拖拽调窗（Android 分屏拖拽）可能感知到「面板定住」。
+  - 守护：`loginSkinLayout.test.ts` 的「锚常量连续性不变式」（dh=1334 上下不跳变）+「间距不变式（短屏以下分支）」（dh∈[850,1334) 采样点面板顶不得压到字标底；最紧点在 dh=850，间距 4.96）。
+- **2026-07-24「视觉 + 功能区整体上移 40 设计px」拍板已被本次新稿取代**（其产物 `loginY` 694 / 933 作废）：两档落位改取新稿自带的标注值（622 / 827），不再由「组底 + 底距」反推。**但 dh<1334 段仍沿用该拍板的紧凑底距 18（`dh-640`）**，只是额外钳到 622——理由见上条。
+- **pad 两档（竖 744×1133 / 横 1180×820）本轮不动，但换稿时必须与 `loginY` 同批改**：pad 没有 figma 新稿帧，品牌簇与 `loginY` 目前都还是同一套 wave3 推导值，因此内部自洽 —— 字标底↔面板顶间距 **竖 14.84 / 横 33.88**（已由 `loginSkinLayout.test.ts`「pad 同源性不变式」钉住）。⚠️ **将来给 pad 换新稿基准时，品牌簇与 `loginY` 必须同批处理**：只改一半会原样重演 2026-07-29 那次 phone 侧的漂移（品牌簇换稿、`loginY` 留旧 → 间距变成稿内不存在的 92 / 131.65，实机可见空白）。换稿时上述不变式会先红，届时同步更新钉值并在本节记录依据。
 - **~~pad 竖屏（stage 744×1133）为推导值，无 figma 源~~〔整段已作废 2026-07-28：面板不再增高，pad 竖屏几何与 `splashOffset` 全部保持 main 原值（`loginY` 621 / `splashOffset` 158），无需上移、无推导值〕**：新稿没有 pad 帧。面板增高后组底会从 1114.94 推到 1162.59 > stage 1133、触发安全区抬升压住字标，故把品牌簇与登录组**一起上移 60 × 0.794117 = 47.647 设计px**（`loginY` 621→573.353，立绘 / slogan / 字标同量上移；`splashOffset` 158→206 保持 splash 期簇位不变），三条不变量 = ① 组底仍落 1114.94、② 字标框底↔面板顶间距仍 14.84、③ splash 期簇位不变。**该值为推导，非设计源；用户 2026-07-27 接受推导，竖屏几何待设计侧回看确认**。pad 横屏（1180×820）组底 774.95 仍在 stage 内，几何原值不动。
 
 **~~键盘停靠锚 = error 槽底（2026-07-27 拍板，移动端）~~〔已作废 2026-07-28：手机端跳过登录整体剥离，停靠锚仍为面板底，见本节末勘误〕**：停靠贴附锚由**面板底**改为**面板内 y=430（error 槽底）**——面板 440→500 后若继续用面板底，每次停靠会比改版前多顶 60 设计px（短屏更容易触发 clamped-fallback、把品牌层与标题挤掉）。**取舍**：键盘弹起时「跳过登录」槽（430..490）允许被遮挡——它不是输入链路的必需元素，收起键盘即可见；停靠引擎本身（10px 贴附 + safe-top 上限 + clamped-fallback 兜底）与悬浮相交判定锚（输入框 ∪ 主按钮）均不变。
@@ -1025,6 +1044,6 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 > 无配置错误屏逃生入口、无 `LoginSkipLoginLink` 组件与 `skipLogin` 文案 key**。
 > 本节表格里的 **500 / 620 / 540 / 642 / error 50 / 跳过槽 430..490 与命中区扩张 30**
 > 均只对**桌面**成立；一切标注「移动 50」「双端」「手机端」的跳过登录口径读作**未落地**。
-> **(6) 需拆开读**：手机短屏 / 长屏的**品牌簇**（立绘 / SLOGAN / 字标）新稿基准与避脸落值**保留生效**（本轮唯一落地的手机改动）；同条里的**功能区落位**（`loginY` 622 / 827、锚常量 `dh-712`）与 **pad 竖屏推导值**（`loginY` 573.353 / `splashOffset` 206）**作废**，回 main 原值 694 / 933 / `dh-640` / 621 / 158 —— 上方 §16.2 表格与条目已就地标注。
+> **(6) 需拆开读**〔2026-07-29 二次修正〕：手机短屏 / 长屏的**品牌簇**（立绘 / SLOGAN / 字标）新稿基准与避脸落值**保留生效**；同条的**功能区落位**（`loginY` **622 / 827**）在 2026-07-28 曾随跳过登录剥离一并退回 main 原值（694 / 933），但那会与已换新稿的品牌簇拼出稿内不存在的 92 / 131.65 间距（实机可见空白），**2026-07-29 审图后恢复为新稿标注值**（方案 B，60 落到底部留白；详见上方 §16.2「面板 500→440 少掉的 60 去向」）。dh<1334 段**不采用**该条曾写过的 `dh-712`，而是「紧凑底距 18 + 钳到 622」（`dh-712` 会压盖窄屏字标，见 §16.2 对应条目）。**pad 竖屏推导值**（`loginY` 573.353 / `splashOffset` 206）仍然**作废**、保持 main 原值 621 / 158——pad 无 figma 新稿帧，其品牌簇也未换新稿基准，内部自洽，不受本次修正影响。
 > 手机端保持无游客 / 无账号行为不变。详见
 > [`design-decision-log.md`](./design-decision-log.md)「2026-07-28」条。

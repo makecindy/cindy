@@ -20,6 +20,7 @@ import {
   sessionToCamel,
   sessionCreateToRow,
   sessionPatchToRow,
+  normalizeRemoteHostId,
   type SessionRowWithCount,
 } from '../mapper';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
@@ -65,6 +66,24 @@ export function broadcastSessionPatched(sessionId: string, patch: Record<string,
 }
 
 /**
+ * worktree 回收真正跑完后通知本机所有窗口重拉 worktree 快照。
+ *
+ * 没有这条推送,renderer 只能在归档/删除动作里"顺手"刷一次 worktree map,而回收
+ * 是下面 fire-and-forget 的异步链(动态 import → 关子进程 → git worktree remove →
+ * 文件系统清理),store 条目被移除的时刻远晚于状态 IPC 返回。renderer 那次刷新会
+ * 快照到仍然存在的旧条目,归档列表上的 worktree 徽标就一直陈旧,直到某次无关的
+ * 刷新才纠正(codex review P1)。
+ *
+ * 只广播给本机窗口、不进 device-link tap:控制端(手机/另一台桌面)的远程会话
+ * worktree 元数据走 device-link 自己的镜像链路,不经本机 WorktreeContext。
+ */
+function broadcastWorktreeChanged(sessionId: string): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('worktree:changed', { sessionId });
+  }
+}
+
+/**
  * 会话 status 显式变为 deleted / archived 后的 worktree 回收调度(P0 重构:回收
  * 唯一驱动点,从 Maker onClose 迁到这里——close 是进程生命周期事件,/clear、鉴权
  * 重连、CLI 崩溃都会触发,不能当"用户不要工作区了"的信号)。
@@ -73,6 +92,9 @@ export function broadcastSessionPatched(sessionId: string, patch: Record<string,
  * 先关子进程再回收——Windows 下 CLI 子进程 cwd 在 worktree 内会锁目录。
  * 动态 import 避免 localDb → maker-host / worktree 的静态模块环(worktreeStore
  * 反向 import 本文件的 setWorktreePathInDb)。
+ *
+ * 回收链结束后(无论成功、跳过还是失败)都广播一次 worktree:changed —— 失败/跳过
+ * 时条目仍在 store 里,重拉拿到的就是"徽标还在"这个真实状态,同样是对的。
  */
 function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
@@ -91,12 +113,16 @@ function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unkno
         .catch(() => undefined);
     });
     await recycle.recycleWorktreeForRemovedSession(sessionId);
-  })().catch((err) => {
-    log.warn('worktree recycle after session status change failed', {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
+  })()
+    .catch((err) => {
+      log.warn('worktree recycle after session status change failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    })
+    .finally(() => {
+      broadcastWorktreeChanged(sessionId);
     });
-  });
 }
 
 /**
@@ -307,6 +333,36 @@ const LATEST_MSG_ROLE_SQL = sql<string | null>`(
  * Resume 路径(scheduler runner / send_to_session)用它做归档/删除兜底和展示元数据返回。
  * 失败 swallow 返 null 而非抛 —— 调用方应当把 null 视作 NOT_FOUND, 由业务自己决定 fallback。
  */
+/**
+ * sessionId → remoteHostId 的进程内缓存 reader:session 的 remoteHostId 创建后
+ * 不变,lazy resume 路径每次 send 都经过 ensureRemoteReadyForSessionStart,避免
+ * 重复查库。查询成功(含行不存在)才缓存;DB 异常返回 null 但**不缓存** ——
+ * 一次瞬时 DB 失败不该永久关闭该 session 的 remote ensure 兜底(否则远端
+ * session 会被按本地会话处理远端 workingDir)。
+ */
+export function createSessionRemoteHostIdReader(): (sessionId: string) => Promise<string | null> {
+  const cache = new Map<string, string | null>();
+  return async (sessionId) => {
+    if (cache.has(sessionId)) {
+      return cache.get(sessionId) ?? null;
+    }
+    let value: string | null;
+    try {
+      const db = getDbClient().drizzle;
+      const [row] = await db
+        .select({ remoteHostId: sessions.remoteHostId })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      value = normalizeRemoteHostId(row?.remoteHostId ?? null);
+    } catch {
+      return null;
+    }
+    cache.set(sessionId, value);
+    return value;
+  };
+}
+
 export async function getSessionRowSnapshot(id: string): Promise<{
   status: string;
   title: string | null;
@@ -318,6 +374,8 @@ export async function getSessionRowSnapshot(id: string): Promise<{
   remoteHostId?: string | null;
   /** Hook exact-takeover must reject internal Orca worker sessions. */
   orcaRole?: 'lead' | 'worker' | null;
+  /** Collab policy gate: remote session 的 codex / claude-code 均放行。 */
+  agentKind?: string | null;
 } | null> {
   try {
     const db = getDbClient().drizzle;
@@ -333,6 +391,7 @@ export async function getSessionRowSnapshot(id: string): Promise<{
         providerId: sessions.providerId,
         remoteHostId: sessions.remoteHostId,
         orcaRole: sessions.orcaRole,
+        agentKind: sessions.agentKind,
       })
       .from(sessions)
       .where(eq(sessions.id, id))

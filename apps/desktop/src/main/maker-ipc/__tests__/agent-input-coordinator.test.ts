@@ -59,8 +59,6 @@ const flush = async () => {
   }
 };
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 function makeItem(
   clientId: string,
   text: string,
@@ -306,6 +304,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -538,6 +537,7 @@ describe('AgentInputCoordinator send transaction', () => {
   });
 
   it('turns CREDENTIAL_SWITCH_BUSY into a visible wait and auto-dispatches when the blocker settles', async () => {
+    vi.useFakeTimers();
     // 回归锚点(2026-07-03 → 2026-07-04):凭证切换忙先被修成「可见错误 + 手动
     // Retry」;现在升级为**可见等待 + 自动派发** —— credentialSwitchWait 进
     // projection(renderer 显等待横幅),挡路会话 turn 结束(onExternalTurnSettled)
@@ -569,7 +569,7 @@ describe('AgentInputCoordinator send transaction', () => {
     });
 
     // 兜底定时器是 2s 档,300ms 内不应有静默重试(避免高频 lazy-create)。
-    await wait(300);
+    await vi.advanceTimersByTimeAsync(300);
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
 
@@ -656,6 +656,7 @@ describe('AgentInputCoordinator send transaction', () => {
   });
 
   it('cancels the credential switch wait when the queued head is removed', async () => {
+    vi.useFakeTimers();
     const h = createHarness();
     const sid = 'send-credential-switch-busy-cancel';
     const first = makeItem('q-1', 'first');
@@ -680,7 +681,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.credentialSwitchWait).toBeNull();
 
     h.coordinator.onExternalTurnSettled('other-session');
-    await wait(50);
+    await vi.advanceTimersByTimeAsync(50);
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     projection = latestProjection(h.projections);
@@ -713,6 +714,7 @@ describe('AgentInputCoordinator send transaction', () => {
   });
 
   it('retries a restored queue head when SESSION_RUNNING clears without a done event', async () => {
+    vi.useFakeTimers();
     const h = createHarness();
     const sid = 'send-session-running-retry-without-done';
     const first = makeItem('q-1', 'first');
@@ -732,7 +734,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.recovery).toBeNull();
 
     h.setRunning(false);
-    await wait(300);
+    await vi.advanceTimersByTimeAsync(300);
     await flush();
 
     projection = latestProjection(h.projections);
@@ -745,6 +747,7 @@ describe('AgentInputCoordinator send transaction', () => {
   });
 
   it('keeps retrying a restored queue head when a late done arrives before SESSION_RUNNING clears', async () => {
+    vi.useFakeTimers();
     const h = createHarness();
     const sid = 'send-session-running-late-done-before-idle';
     const first = makeItem('q-1', 'first');
@@ -766,7 +769,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
 
     h.setRunning(false);
-    await wait(300);
+    await vi.advanceTimersByTimeAsync(300);
     await flush();
 
     projection = latestProjection(h.projections);
@@ -779,6 +782,7 @@ describe('AgentInputCoordinator send transaction', () => {
   });
 
   it('drains queued input after an external turn error clears without a coordinator active turn', async () => {
+    vi.useFakeTimers();
     const h = createHarness();
     const sid = 'external-turn-error-drains-queue';
     const first = makeItem('q-1', 'first');
@@ -796,7 +800,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent).not.toHaveBeenCalled();
 
     h.setRunning(false);
-    await wait(300);
+    await vi.advanceTimersByTimeAsync(300);
     await flush();
 
     projection = latestProjection(h.projections);
@@ -1006,6 +1010,7 @@ describe('AgentInputCoordinator send transaction', () => {
   });
 
   it('drains queued input when an external live reservation clears without a terminal event', async () => {
+    vi.useFakeTimers();
     const h = createHarness();
     const sid = 'external-reservation-drains-queue';
     const first = makeItem('q-1', 'first');
@@ -1019,7 +1024,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-1']);
 
     h.setRunning(false);
-    await wait(300);
+    await vi.advanceTimersByTimeAsync(300);
     await flush();
 
     projection = latestProjection(h.projections);
@@ -1650,6 +1655,7 @@ describe('AgentInputCoordinator send transaction', () => {
   });
 
   it('retries silent compact when SESSION_RUNNING clears without a done event', async () => {
+    vi.useFakeTimers();
     const h = createHarness();
     const sid = 'compact-session-running-retry-without-done';
     const createOpts = makeItem('q-compact', 'ignored').createOpts;
@@ -1669,7 +1675,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.recovery).toBeNull();
 
     h.setRunning(false);
-    await wait(300);
+    await vi.advanceTimersByTimeAsync(300);
     await flush();
 
     projection = latestProjection(h.projections);
@@ -1687,6 +1693,7 @@ describe('AgentInputCoordinator send transaction', () => {
   });
 
   it('drains queued silent compact when an external live reservation clears without a terminal event', async () => {
+    vi.useFakeTimers();
     const h = createHarness();
     const sid = 'external-reservation-drains-compact';
     const createOpts = makeItem('q-compact', 'ignored').createOpts;
@@ -1702,7 +1709,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.recovery).toBeNull();
 
     h.setRunning(false);
-    await wait(300);
+    await vi.advanceTimersByTimeAsync(300);
     await flush();
 
     projection = latestProjection(h.projections);
@@ -2079,7 +2086,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-head', 'q-second']);
   });
 
-  it('does not clear an existing recovery when compact is requested', async () => {
+  it('does not clear a queue-head recovery when compact is requested', async () => {
     const h = createHarness();
     const sid = 'compact-preserves-recovery';
     const failed = makeItem('q-failed', 'failed');
@@ -2099,6 +2106,63 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent).not.toHaveBeenCalled();
     expect(after.recovery).toEqual({ kind: 'queue-head', clientId: 'q-failed' });
     expect(after.errorRetryText).toBe('failed');
+  });
+
+  it('abandons an idle active-turn recovery and dispatches compact immediately', async () => {
+    const h = createHarness();
+    const sid = 'compact-abandons-idle-active-turn-recovery';
+
+    h.coordinator.enqueue(sid, makeItem('q-failed', 'failed'));
+    await flush();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'context window exhausted');
+    await flush();
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+
+    await h.coordinator.compact(sid, makeItem('q-compact', 'ignored').createOpts);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: '/compact' });
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('queues compact after abandoning active-turn recovery while the dispatch boundary is still busy', async () => {
+    const h = createHarness();
+    const sid = 'compact-queues-after-active-turn-recovery';
+
+    h.coordinator.enqueue(sid, makeItem('q-failed', 'failed'));
+    await flush();
+
+    h.coordinator.onTurnEvent(sid, 'error', 'context window exhausted');
+    await flush();
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+
+    await h.coordinator.compact(sid, makeItem('q-compact', 'ignored').createOpts);
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: '/compact' });
+    expect(projection.recovery).toBeNull();
   });
 
   it('wakes queued turns after compact dispatch failure releases the active turn', async () => {

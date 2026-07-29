@@ -5,6 +5,7 @@ import type { Logger, McpProvider } from '@cindy/maker-core';
 import {
   getCodexExtraSpawnConfig,
   registerCodexMcpThreadContext,
+  setCodexEnvironmentShutdownHook,
   shutdownCodexEnvironment,
   unregisterCodexMcpThreadContext,
 } from '../codexEnvironment.js';
@@ -91,7 +92,9 @@ function extractUrl(args: string[]): URL {
 
 describe('codexEnvironment', () => {
   afterEach(async () => {
+    setCodexEnvironmentShutdownHook(null);
     await shutdownCodexEnvironment();
+    vi.restoreAllMocks();
   });
 
   it('reuses one bridge and exposes unbound MCP server URLs', async () => {
@@ -230,6 +233,26 @@ describe('codexEnvironment', () => {
     expect(cfg.extraEnv).toMatchObject({ API_KEY: 'secret' });
   });
 
+  it('treats environment names as case-insensitive on Windows', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    const second: McpProvider = {
+      name: 'other_tools',
+      toCodexMcpConfig: () => ({
+        type: 'stdio',
+        command: 'node',
+        env: { api_key: 'different-secret' },
+      }),
+    };
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [stdioProvider(), second],
+      logger: noopLogger(),
+    });
+
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.local_tools.'))).toBe(true);
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.other_tools.'))).toBe(false);
+    expect(cfg.extraEnv).toMatchObject({ API_KEY: 'secret' });
+  });
+
   it('skips a stdio MCP when another provider needs the same environment name', async () => {
     const remoteWithEnv: McpProvider = {
       name: 'remote_tools',
@@ -246,6 +269,23 @@ describe('codexEnvironment', () => {
     expect(cfg.extraEnv).toMatchObject({ API_KEY: 'remote-secret' });
   });
 
+  it('removes a stdio MCP when a later Windows provider uses a case variant', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    const remoteWithEnv: McpProvider = {
+      name: 'remote_tools',
+      getExtraEnv: () => ({ api_key: 'remote-secret' }),
+      toCodexMcpConfig: () => ({ type: 'http', url: 'https://example.com/mcp' }),
+    };
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [stdioProvider(), remoteWithEnv],
+      logger: noopLogger(),
+    });
+
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.local_tools.'))).toBe(false);
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.remote_tools.'))).toBe(true);
+    expect(cfg.extraEnv).toMatchObject({ api_key: 'remote-secret' });
+  });
+
   // server 名可能来自用户可控来源（自定义 MCP id、插件身份卡）。普通 `{}` 上
   // `map['__proto__'] = cfg` 命中的是原型 setter：该 server 不出现在 Object.entries 里，
   // 于是在 Codex 侧静默消失，同一份配置却在 Claude 侧正常工作。
@@ -259,5 +299,21 @@ describe('codexEnvironment', () => {
     // 同批次的正常 provider 不受影响，原型也没有被污染。
     expect(cfg.extraArgs).toContain('mcp_servers.themis.url="https://themis.example/mcp"');
     expect(Object.getPrototypeOf({} as Record<string, unknown>)).toBe(Object.prototype);
+  });
+
+  it('invokes the shutdown hook after the bridge stops, on every shutdown path (R22 P1)', async () => {
+    // 远端失效钩子折进 shutdownCodexEnvironment 内部:任何调用点 (插件开关 /
+    // custom MCP CRUD / contacts / 账号切换) 都自动覆盖, 不靠逐点挂接。
+    const hook = vi.fn();
+    setCodexEnvironmentShutdownHook(hook);
+    await getCodexExtraSpawnConfig({ mcpProviders: [testProvider()], logger: noopLogger() });
+    expect(hook).not.toHaveBeenCalled(); // 未 shutdown 不调
+
+    await shutdownCodexEnvironment();
+    expect(hook).toHaveBeenCalledTimes(1);
+
+    // 未启动过时 (cached 为空) shutdown 是 no-op, 不调 hook。
+    await shutdownCodexEnvironment();
+    expect(hook).toHaveBeenCalledTimes(1);
   });
 });

@@ -1389,7 +1389,7 @@ export function SkillhubDetailView() {
         name: entry.name,
         installPath: entry.absolutePath,
         version: latestVersion,
-        // 主动"更新到 vN":完整替换,但保留 XDMaker 备份。即使 dirty 判定漏掉,
+        // 主动"更新到 vN":完整替换,但保留 Cindy 备份。即使 dirty 判定漏掉,
         // 旧目录也不会在更新成功后被直接删除;替换失败会尽力恢复旧目录。
         force: true,
         skipBackup: false,

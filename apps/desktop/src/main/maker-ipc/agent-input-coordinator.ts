@@ -772,7 +772,7 @@ export class AgentInputCoordinator {
         clientId: item.clientId,
       });
     }
-    this.abandonActiveTurnRecoveryForNewInput(state);
+    this.abandonActiveTurnRecoveryForUserAction(state);
     this.clearErrorUnlessQueueHeadBlocked(state);
     // 用户点「继续任务」表达的是恢复刚才中断/失败的 turn，必须先于此前
     // 已排队的新任务执行；普通 composer / Orca / scheduler 输入仍保持 FIFO。
@@ -817,6 +817,11 @@ export class AgentInputCoordinator {
 
   async compact(sessionId: string, createOpts: AgentInputCreateOpts, opts?: { userName?: string }): Promise<AgentInputProjection> {
     const state = this.getState(sessionId);
+    // 手动压缩与发送新消息一样,都是用户对失败 turn 的明确后续选择:
+    // 放弃 active-turn retry,让 /compact 在真实 dispatch boundary 空闲时立即执行,
+    // 仍忙时则进入 pendingCompacts。queue-head recovery 表示消息从未受理且仍在
+    // 队首,不能越过它静默改变顺序,继续保留原阻塞语义。
+    this.abandonActiveTurnRecoveryForUserAction(state);
     if (state.recovery) {
       log.info('compact ignored while dispatch boundary is busy', { sessionId });
       state.error = 'Cannot compact while the session is busy';
@@ -2470,7 +2475,7 @@ export class AgentInputCoordinator {
   private fallbackPreparedAsTurn(sessionId: string, item: AgentInputQueuedMessage, removeFromQueue: boolean): void {
     const state = this.getState(sessionId);
     // 插话回落成普通派发 = 也是一条新用户输入,同 enqueue 放弃 active-turn 重试。
-    this.abandonActiveTurnRecoveryForNewInput(state);
+    this.abandonActiveTurnRecoveryForUserAction(state);
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);
     state.queuePaused = false;
     state.steeringQueueClientIds = state.steeringQueueClientIds.filter((id) => id !== item.clientId);
@@ -2563,12 +2568,14 @@ export class AgentInputCoordinator {
   }
 
   /**
-   * 新用户输入放弃 active-turn 重试入口(2026-07-13 Lizi 拍板)。错误的本质是
+   * 用户后续动作放弃 active-turn 重试入口。错误的本质是
    * "上一条消息执行失败了",用户此后**主动发出的新消息**(composer 发送 / 插话
    * 回落派发)就是对"要不要重试"的表态 —— 清掉错误横幅与重试入口,让新消息正常
    * 派发,不再默默排队等一个可能没被注意到的重试按钮。失败消息已落库、仍在会话
    * 里可手动重发;「重试」按钮与新输入赛跑时后到的 retryLastError 读到
    * recovery=null 即 no-op,无双发风险。
+   * 手动 compact 同样表达"先压缩而非重试上一轮":必须先清 recovery,再按真实
+   * dispatch boundary 决定立即派发或排队,否则上下文耗尽后的空闲会话会被误报 busy。
    *
    * 边界(刻意不收进来的入口):
    * - resume(继续队列)**不**放弃:Stop 中断留下的 recovery 可能是"已落库但从未
@@ -2582,7 +2589,7 @@ export class AgentInputCoordinator {
    * 新消息是对会话现状的明确表态,三类来源一视同仁(2026-07-13 拍板口径
    * "上一条消息失败了 → 新消息 = 不重试",Stop/派发失败同属"没执行成功")。
    */
-  private abandonActiveTurnRecoveryForNewInput(state: SessionInputState): void {
+  private abandonActiveTurnRecoveryForUserAction(state: SessionInputState): void {
     if (state.recovery?.kind !== 'active-turn') return;
     state.error = null;
     state.stickyError = null;

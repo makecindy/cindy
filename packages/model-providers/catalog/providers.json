@@ -442,7 +442,8 @@
             },
             {
               "id": "k3",
-              "name": "Kimi K3"
+              "name": "Kimi K3",
+              "contextWindow": 262144
             }
           ]
         },
@@ -452,15 +453,18 @@
           "models": [
             {
               "id": "kimi-for-coding",
-              "name": "Kimi for Coding"
+              "name": "Kimi for Coding",
+              "contextWindow": 262144
             },
             {
               "id": "kimi-for-coding-highspeed",
-              "name": "Kimi for Coding 高速版"
+              "name": "Kimi for Coding 高速版",
+              "contextWindow": 262144
             },
             {
               "id": "k3",
-              "name": "Kimi K3"
+              "name": "Kimi K3",
+              "contextWindow": 262144
             }
           ]
         }

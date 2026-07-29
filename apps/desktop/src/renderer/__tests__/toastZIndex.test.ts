@@ -7,7 +7,7 @@
  * application uses 9999 as the "max" stacking layer for overlays (TextLightbox,
  * ImageLightbox, SplashScreen). To guarantee the Toast wins the z-index race
  * even when Modals + Lightboxes are stacked in document.body via Portals,
- * ToastContainer is bumped one step higher to 10000.
+ * ToastContainer is above the z-[10000] Radix Dialog layer at 10100.
  *
  * Static-source scanning (matches the project convention used by
  * textLightbox.test.ts and imageLightboxCloseAnywhere.test.ts).
@@ -33,16 +33,17 @@ const imageLightboxSource = readFileSync(
 );
 
 describe('Toast z-index — sits above all overlays (symptom #1)', () => {
-  it('ToastContainer uses z-[10000] (one step above 9999 lightbox layer)', () => {
-    expect(toastContainerSource).toMatch(/z-\[10000\]/);
-    expect(toastContainerSource).not.toMatch(/z-\[9999\]/);
+  it('ToastContainer class uses z-[10100] (above lightboxes and Radix dialogs)', () => {
+    expect(toastContainerSource).toMatch(
+      /className="[^"]*\bz-\[10100\][^"]*"/,
+    );
   });
 
   it('TextLightbox overlay still uses zIndex 9999 (below toast layer)', () => {
-    // The lightbox sits at 9999; the toast sits at 10000. The strict ordering
+    // The lightbox sits at 9999; the toast sits at 10100. The strict ordering
     // is what guarantees the Toast wins even when the Lightbox Portal mounts
     // later in document.body.
-    expect(textLightboxSource).toMatch(/zIndex:\s*9999/);
+    expect(textLightboxSource).toMatch(/TEXT_LIGHTBOX_OVERLAY_Z_INDEX\s*=\s*9999/);
   });
 
   it('ImageLightbox overlay still uses zIndex 9999 (below toast layer)', () => {

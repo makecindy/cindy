@@ -5,7 +5,8 @@
  * worktree-parallel-sessions 前端方案 M2：
  *   - mount 时拉一次 listAll
  *   - create 成功 / close 完成后由调用方主动 refresh()
- *   - V1 不订阅 main 推送（main 不广播）
+ *   - 归档/删除的 worktree 回收跑完后，由 main 的 `worktree:changed` 推送触发重拉
+ *     （回收是异步链，调用方那次主动 refresh 会拿到回收前的旧快照）
  *
  * 与项目内 AuthContext / EnvCheckContext 同
  * Provider+hooks 范式，不引入新状态库。
@@ -63,10 +64,22 @@ export function WorktreeProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   // 复用 sessionsBus 的 refresh 事件 —— delete / archive 完成后会触发一次，
-  // 顺手刷 worktree map，让徽标在删除会话后立刻消失（main 此时已自动收尾
-  // 对应 worktree 目录，但 renderer 的 Context 还需要拉一次新数据）。
+  // 顺手刷一次 worktree map。
   useEffect(() => {
     return onSessionsRefresh(() => {
+      void refresh();
+    });
+  }, [refresh]);
+
+  // 权威时机在这条推送上：main 侧的 worktree 回收是 fire-and-forget 的异步链
+  // （关子进程 → git worktree remove → 文件系统清理），store 条目被移除的时刻
+  // 远晚于归档/删除的状态 IPC 返回。上面那次「顺手刷」几乎必然快照到仍然存在的
+  // 旧条目，徽标会一直停在回收前的状态，直到某次无关刷新才纠正（codex review P1）。
+  // main 在回收链结束后广播 worktree:changed，这里再拉一次拿到真实结果。
+  useEffect(() => {
+    const subscribe = window.electronAPI?.onWorktreeChanged;
+    if (!subscribe) return;
+    return subscribe(() => {
       void refresh();
     });
   }, [refresh]);

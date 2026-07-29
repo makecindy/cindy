@@ -84,6 +84,7 @@ vi.mock('../../clientEndpointsService.js', () => ({ getBuildClientEndpoint: () =
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   genericOAuthSecretIo: {},
   setProviderSecretsClearedListener: () => {},
+  addProviderSecretsClearedListener: () => {},
   readCustomProviderKey: () => null,
 }));
 

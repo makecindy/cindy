@@ -25,6 +25,7 @@ import {
   readCustomMcpToken,
   updateCustomMcpServer,
 } from '@/lib/customMcpServers';
+import { parseStdioArgsInput, selectStdioEnvMutation } from '@/lib/customMcpForm';
 
 import { MCP_TRANSPORTS, type CustomMcpConfig, type McpTransport } from '@/../shared/customMcp';
 
@@ -117,7 +118,9 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
   const [transport, setTransport] = useState<McpTransport>(initial?.transport ?? 'http');
   const [url, setUrl] = useState(initial?.transport === 'stdio' ? '' : (initial?.url ?? ''));
   const [command, setCommand] = useState(initial?.transport === 'stdio' ? initial.command : '');
-  const [args, setArgs] = useState(initial?.transport === 'stdio' ? initial.args.join('\n') : '');
+  const [args, setArgs] = useState(
+    initial?.transport === 'stdio' ? JSON.stringify(initial.args, null, 2) : '[]',
+  );
   const [cwd, setCwd] = useState(initial?.transport === 'stdio' ? initial.cwd : '');
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
@@ -133,6 +136,8 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
   });
   const envKeyRef = useRef(1);
   const [env, setEnv] = useState<EnvRow[]>([{ name: '', value: '', _key: 0 }]);
+  const [envLoaded, setEnvLoaded] = useState(!editing || initial?.transport !== 'stdio');
+  const [envDirty, setEnvDirty] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // 编辑态:回填已存 token(让 token 框「能看」/可核对,据此点亮「已保存」徽标)。
@@ -156,12 +161,14 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
     let cancelled = false;
     void readCustomMcpEnv(initial.id).then((values) => {
       if (cancelled) return;
+      if (values === null) return;
       const rows = Object.entries(values).map(([name, value]) => ({
         name,
         value,
         _key: envKeyRef.current++,
       }));
       setEnv(rows.length ? rows : [{ name: '', value: '', _key: envKeyRef.current++ }]);
+      setEnvLoaded(true);
     });
     return () => {
       cancelled = true;
@@ -191,6 +198,11 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
       toast.error(t('settings.mcp.errors.commandRequired'));
       return;
     }
+    const parsedArgs = isStdio ? parseStdioArgsInput(args) : null;
+    if (isStdio && (!parsedArgs || !parsedArgs.ok)) {
+      toast.error(t('settings.mcp.errors.argsInvalid'));
+      return;
+    }
     const headerMap: Record<string, string> = {};
     for (const h of headers) {
       const n = h.name.trim();
@@ -203,10 +215,7 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
           name: trimmedName,
           transport: 'stdio',
           command: command.trim(),
-          args: args
-            .split('\n')
-            .map((arg) => arg.trim())
-            .filter(Boolean),
+          args: parsedArgs && parsedArgs.ok ? parsedArgs.args : [],
           cwd: cwd.trim(),
         }
       : { id, name: trimmedName, transport, url: trimmedUrl, headers: headerMap };
@@ -217,13 +226,22 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
       toast.error(t('settings.mcp.errors.envNameInvalid'));
       return;
     }
+    const envMutation = isStdio
+      ? selectStdioEnvMutation({
+          editing,
+          initialTransport: initial?.transport,
+          envLoaded,
+          envDirty,
+          env: envMap,
+        })
+      : undefined;
     setSaving(true);
     try {
       if (editing) {
         // clearToken=true：只有在 token 已加载（hasToken=true）且字段被清空时才撤销鉴权；
         // 若 token 字段为空但 hasToken=false（async 回填尚未完成），则保留已存 token。
         const clearToken = hasToken && !token.trim();
-        await updateCustomMcpServer(config, token, clearToken, envMap);
+        await updateCustomMcpServer(config, token, clearToken, envMutation);
         toast.success(t('settings.mcp.toast.updated'));
       } else {
         await createCustomMcpServer(config, token, envMap);
@@ -246,6 +264,8 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
     hasToken,
     headers,
     env,
+    envLoaded,
+    envDirty,
     editing,
     initial,
     existingIds,
@@ -378,29 +398,34 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
                     <div className="flex-1">
                       <TextInput
                         value={entry.name}
-                        onChange={(value) =>
+                        onChange={(value) => {
+                          setEnvDirty(true);
                           setEnv((rows) =>
                             rows.map((row, index) => (index === i ? { ...row, name: value } : row)),
-                          )
-                        }
+                          );
+                        }}
                         placeholder={t('settings.mcp.fields.envNamePlaceholder')}
                       />
                     </div>
                     <div className="flex-1">
                       <TextInput
                         value={entry.value}
-                        onChange={(value) =>
+                        onChange={(value) => {
+                          setEnvDirty(true);
                           setEnv((rows) =>
                             rows.map((row, index) => (index === i ? { ...row, value } : row)),
-                          )
-                        }
+                          );
+                        }}
                         placeholder={t('settings.mcp.fields.envValuePlaceholder')}
                         type="password"
                       />
                     </div>
                     <button
                       type="button"
-                      onClick={() => setEnv((rows) => rows.filter((_, index) => index !== i))}
+                      onClick={() => {
+                        setEnvDirty(true);
+                        setEnv((rows) => rows.filter((_, index) => index !== i));
+                      }}
                       className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
                       aria-label={t('settings.mcp.fields.removeRow')}
                     >
@@ -410,9 +435,10 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
                 ))}
                 <button
                   type="button"
-                  onClick={() =>
-                    setEnv((rows) => [...rows, { name: '', value: '', _key: envKeyRef.current++ }])
-                  }
+                  onClick={() => {
+                    setEnvDirty(true);
+                    setEnv((rows) => [...rows, { name: '', value: '', _key: envKeyRef.current++ }]);
+                  }}
                   className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
                 >
                   <Plus size={14} className="text-[var(--settings-section-desc)]" />

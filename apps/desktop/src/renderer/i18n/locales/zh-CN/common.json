@@ -2655,6 +2655,8 @@
         "cindyImageEdit": "图像编辑(请 Cindy 代办，仅限它自己生成的图)",
         "cindyVideoGenerate": "视频生成(请 Cindy 代办)",
         "cindyVideoEdit": "图生视频(请 Cindy 代办，参考图仅限它名下的图)",
+        "cindyMediaDeposit": "可将它手中的图片、视频或音频存入你的媒体库",
+        "cindyMediaDepositDetail": "用于让你在插件里粘贴或拖入的素材也能被 AI 加工。存入的内容记在这个插件名下，最多占用 {{quota}}，卸载插件时一并清理。",
         "agentUserAction": "用户点击插件卡片后，可让 Agent 开始新一轮工作",
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的对话。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
@@ -2844,8 +2846,8 @@
         "urlPlaceholder": "https://example.com/mcp",
         "command": "命令",
         "commandPlaceholder": "例如 npx",
-        "args": "参数（每行一个）",
-        "argsPlaceholder": "-y\n@modelcontextprotocol/server-filesystem\n.",
+        "args": "参数（JSON 数组）",
+        "argsPlaceholder": "[\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"]",
         "cwd": "工作目录（可选）",
         "cwdPlaceholder": "留空则使用 Agent 的工作目录",
         "env": "环境变量（可选）",
@@ -2868,6 +2870,7 @@
         "nameRequired": "请填写显示名称",
         "urlInvalid": "请填写合法的 http(s) URL",
         "commandRequired": "stdio 必须填写命令",
+        "argsInvalid": "参数必须是仅包含字符串的 JSON 数组",
         "envNameInvalid": "环境变量名只能使用字母、数字和下划线"
       },
       "toast": {
@@ -3894,6 +3897,7 @@
       "ariaDescription": "版本 {{version}} 的更新说明",
       "ariaDescriptionSpan": "自 v{{from}} 起累计 {{count}} 个版本的更新说明",
       "versionsSpan": "{{count}} 个版本",
+      "versionJumpAria": "跳转到版本，共 {{count}} 个版本，当前 v{{version}}",
       "loading": "加载中",
       "loadFailed": "加载失败",
       "retry": "重试"

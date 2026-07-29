@@ -85,6 +85,30 @@ const singletonOverrides = {
   'ask-checkbox-border': TEXT_TERTIARY,
   background: SURFACE_BG_HSL,
   'chat-input-bg': CHIP_BG,
+  // CREATE AGENT 快速开始卡片 / 顶部 pill / 分段开关(#607):
+  // 卡片用 base2(CHIP)下沉式抬起,与 chat-input 同层;边框/文字走 tier1 同源常量。
+  // hover 必须提亮到 base3(SURFACE):CHIP 与 HOVER 在本主题同值,沿用 HOVER 会让
+  // 卡片 default/hover 同色、icon 圆底与卡片同色(codex P1 3671116833)。
+  'create-agent-control-bg': CHIP_BG,
+  'create-agent-control-bg-hover': SURFACE_BG,
+  'create-agent-control-bg-pressed': HOVER_BG,
+  'create-agent-control-border': BORDER_BG,
+  'create-agent-control-icon': TEXT_PRIMARY,
+  'create-agent-control-text': TEXT_PRIMARY,
+  'create-agent-quick-card-bg': CHIP_BG,
+  'create-agent-quick-card-bg-hover': SURFACE_BG,
+  'create-agent-quick-card-border': BORDER_BG,
+  'create-agent-quick-card-icon': TEXT_PRIMARY,
+  // icon 圆底 resting 提到 base3(SURFACE) 与 base2 卡片区分;hover 时卡片升到
+  // base3、圆底由模板规则落回 base2(CHIP),两态均可分(codex P1 3671457570)。
+  'create-agent-quick-card-icon-bg': SURFACE_BG,
+  // send 不用 accent(green) 底:共享 send token 还渲染 10-12px 文本
+  // (VoiceInputOverlay / CollaborationModeToggle / SessionHandoffCard),白字仅
+  // 3.20:1,不达 DESIGN.md §10 小字 4.5:1;回退 registry 反相中性(codex P1
+  // 3671457561),故本主题不覆盖 send-btn-*。
+  'create-agent-quick-card-text': TEXT_PRIMARY,
+  'create-agent-segment-inactive-text': TEXT_SECONDARY,
+  'create-agent-segment-track-bg': CHIP_BG,
   'chat-input-chip-border': BORDER_BG,
   'chat-input-text': TEXT_PRIMARY,
   'color-primary': TEXT_PRIMARY,

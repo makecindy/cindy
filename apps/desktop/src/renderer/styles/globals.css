@@ -47,13 +47,14 @@
     --text-28: 28px;
 
     /* Motion token(全局动效档位,规范见 DESIGN.md §14.4):新增过渡/动画一律
-       引用这些 token,不要再各处硬编码时长和 cubic-bezier。5 档时长 + 3 条
-       曲线,与三档圆角同一哲学——档位之外的值先过设计评审再加。 */
+       引用这些 token,不要再各处硬编码时长和 cubic-bezier。5 档交互时长 +
+       spinner 语义循环例外 + 3 条曲线,与三档圆角同一哲学。 */
     --motion-instant: 80ms; /* hover 即时反馈、轻浮层退场 */
     --motion-fast: 150ms; /* 颜色/透明度状态切换、轻浮层入场(§14.4 功能性过渡上限) */
     --motion-base: 200ms; /* 尺寸变化:展开折叠、面板收展 */
     --motion-enter: 250ms; /* 重浮层(弹窗)入场 */
     --motion-exit: 150ms; /* 重浮层(弹窗)退场 */
+    --motion-spinner-cycle: 1000ms; /* 功能性 loading spinner 完整一圈(§14.4 窄例外) */
     --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 入场/展开 */
     --motion-ease-in: cubic-bezier(0.4, 0, 1, 1); /* 退场 */
     --motion-ease-move: cubic-bezier(0.4, 0, 0.2, 1); /* 位置/尺寸插值 */
@@ -137,6 +138,11 @@
       --motion-base: 0ms;
       --motion-enter: 0ms;
       --motion-exit: 0ms;
+      --motion-spinner-cycle: 0ms;
+    }
+
+    [class*='animate-spinner'] {
+      animation: none !important;
     }
 
     .animate-confirm-overlay-in,
@@ -944,6 +950,7 @@ body.resizing-pane [data-ghost-webview] {
 [data-app-hidden='true'] .agent-island-mascot-key,
 [data-app-hidden='true'] .agent-island-mascot-eyes,
 [data-app-hidden='true'] .agent-island-mascot-sparkle,
+[data-app-hidden='true'] [class*='animate-spinner'],
 [data-app-hidden='true'] [class*='animate-spin'],
 [data-app-hidden='true'] [class*='animate-pulse'],
 [data-app-hidden='true'] [class*='infinite'],

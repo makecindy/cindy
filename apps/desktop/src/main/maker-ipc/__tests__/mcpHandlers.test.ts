@@ -59,6 +59,9 @@ function makeDeps(over: Partial<McpHandlerDeps> = {}): McpHandlerDeps {
     broadcastChanged: vi.fn(() => {}),
     invalidateCodex: vi.fn(async () => {}),
     assertTrustedSender: vi.fn(() => {}),
+    readCustomMcpEnvForMutation: vi.fn(() => null),
+    writeCustomMcpEnvForMutation: vi.fn(() => true),
+    removeCustomMcpEnvForMutation: vi.fn(() => ({ success: true })),
     ...over,
   };
 }
@@ -92,6 +95,74 @@ describe('mcp:custom:* CRUD handlers', () => {
     expect(deps.broadcastChanged).toHaveBeenCalledOnce();
     // Codex 侧失效:让新 codex 会话按新 MCP 配置重 spawn。
     expect(deps.invalidateCodex).toHaveBeenCalledOnce();
+  });
+
+  it('does not persist a stdio config when encrypted env storage is unavailable', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({ writeCustomMcpEnvForMutation: vi.fn(() => false) });
+    registerMcpHandlers(harness, deps);
+    const stdio: CustomMcpConfig = {
+      id: 'local-tools',
+      name: 'Local tools',
+      transport: 'stdio',
+      command: 'node',
+      args: ['server.js'],
+      cwd: '',
+    };
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, stdio, { API_KEY: 'secret' }),
+    ).rejects.toThrow(/INTERNAL/);
+    expect(await listCustomMcpServers()).toEqual([]);
+    expect(deps.refreshProviders).not.toHaveBeenCalled();
+  });
+
+  it('preserves an existing stdio env when update omits an unresolved snapshot', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerMcpHandlers(harness, deps);
+    const stdio: CustomMcpConfig = {
+      id: 'local-tools',
+      name: 'Local tools',
+      transport: 'stdio',
+      command: 'node',
+      args: ['server.js'],
+      cwd: '',
+    };
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, stdio, { API_KEY: 'secret' });
+    vi.mocked(deps.readCustomMcpEnvForMutation).mockClear();
+    vi.mocked(deps.writeCustomMcpEnvForMutation).mockClear();
+    vi.mocked(deps.removeCustomMcpEnvForMutation).mockClear();
+
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, { ...stdio, name: 'Renamed' });
+
+    expect(deps.readCustomMcpEnvForMutation).not.toHaveBeenCalled();
+    expect(deps.writeCustomMcpEnvForMutation).not.toHaveBeenCalled();
+    expect(deps.removeCustomMcpEnvForMutation).not.toHaveBeenCalled();
+    expect((await listCustomMcpServers())[0]?.name).toBe('Renamed');
+  });
+
+  it('rejects an invalid stdio env before touching config or safeStorage', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerMcpHandlers(harness, deps);
+    const stdio: CustomMcpConfig = {
+      id: 'local-tools',
+      name: 'Local tools',
+      transport: 'stdio',
+      command: 'node',
+      args: [],
+      cwd: '',
+    };
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, stdio, { 'BAD-NAME': 'secret' }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    expect(await listCustomMcpServers()).toEqual([]);
+    expect(deps.readCustomMcpEnvForMutation).not.toHaveBeenCalled();
   });
 
   it('requires a trusted renderer before mutating MCP configuration', async () => {

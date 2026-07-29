@@ -4217,7 +4217,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
-  it('skips Codex MCP thread context registration for remote sessions', async () => {
+  it('registers Codex MCP thread context for remote sessions (SSH remote-forward MCP bridge)', async () => {
+    // 远端 daemon 经 SSH remote-forward 直连本机 HTTP MCP bridge 后,tool call
+    // 同样按 params._meta.threadId 路由,remote thread 也必须注册 context。
     const registerCodexMcpThreadContext = vi.fn();
     const unregisterCodexMcpThreadContext = vi.fn();
     const agent = new CodexAgent(createDeps({}, {
@@ -4233,9 +4235,15 @@ describe('CodexAgent MCP thread context hooks', () => {
       remoteHostId: 'remote-host-1',
     });
 
-    expect(registerCodexMcpThreadContext).not.toHaveBeenCalled();
+    expect(registerCodexMcpThreadContext).toHaveBeenCalledTimes(1);
+    expect(registerCodexMcpThreadContext).toHaveBeenCalledWith({
+      threadId: 'start-thread-id',
+      sessionId: 'session-remote-codex-mcp-context',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
     await handle.close();
-    expect(unregisterCodexMcpThreadContext).not.toHaveBeenCalled();
+    expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('start-thread-id');
   });
 
   it('passes MCP tool params to host policy and auto-approves safe inner calls', async () => {

@@ -81,7 +81,7 @@ export class CustomMcpProvider implements McpProvider {
   readonly name: string;
   private readonly config: CustomMcpConfig;
   private readonly tokenReader: (id: string) => string | null;
-  private readonly envReader: (id: string) => Record<string, string>;
+  private readonly stdioEnv: Record<string, string>;
 
   constructor(
     config: CustomMcpConfig,
@@ -91,7 +91,9 @@ export class CustomMcpProvider implements McpProvider {
     this.config = config;
     this.name = config.id;
     this.tokenReader = tokenReader;
-    this.envReader = envReader;
+    // Snapshot with the config during registry refresh. An in-flight older provider must not see
+    // a newly staged secret before the matching database config has committed.
+    this.stdioEnv = config.transport === 'stdio' ? { ...envReader(config.id) } : {};
   }
 
   /** 合成 Claude 端使用的 headers(用户 headers + 可选 Bearer)。 */
@@ -107,7 +109,7 @@ export class CustomMcpProvider implements McpProvider {
 
   toClaudeSdkConfig(_context: McpProviderContext): unknown {
     if (this.config.transport === 'stdio') {
-      const env = this.envReader(this.config.id);
+      const env = this.stdioEnv;
       return {
         type: 'stdio',
         command: this.config.command,
@@ -128,7 +130,7 @@ export class CustomMcpProvider implements McpProvider {
     _context: McpProviderContext,
   ): CodexHttpMcpServerConfig | CodexStdioMcpServerConfig | null {
     if (this.config.transport === 'stdio') {
-      const env = this.envReader(this.config.id);
+      const env = this.stdioEnv;
       return {
         type: 'stdio',
         command: this.config.command,

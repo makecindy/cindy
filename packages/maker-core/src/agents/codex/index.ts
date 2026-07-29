@@ -1838,10 +1838,12 @@ export class CodexAgent extends BaseAgent {
 
     // 选 transport: 本地 → StdioTransport (spawn codex app-server)
     //               远端 → host 注入的 getRemoteCodexTransport (SSH+daemon+proxy+ws)
-    // 注意: 远端路径下 env/extraArgs/buildCodexEnv 不参与 — 远端 daemon 由远端用户的
-    // ~/.codex 配置驱动, 我们走 daemon control socket 拿到的协议 channel, 不在本地起
-    // 进程, 所以本地的 env / -c overrides 没有意义。MCP 桥接 (lizi_*) 暂不支持远端,
-    // 远端 session 只能用 codex 自带 + 远端用户配置的 MCP。
+    // 注意: 远端路径下 env/extraArgs/buildCodexEnv 不参与 — 远端 daemon 由远端
+    // isolated CODEX_HOME 的配置驱动, 我们走 daemon control socket 拿到的协议
+    // channel, 不在本地起进程, 所以本地的 env / -c overrides 没有意义。MCP 桥接
+    // 改由 desktop 侧在 session start 前置完成 (remote-ssh/codex-remote-mcp.ts):
+    // 往远端 config.toml 写 mcp_servers 段, daemon 经 SSH remote-forward 直连
+    // 本机 HTTP bridge, tool call 按 params._meta.threadId 路由(与本地一致)。
     let createTransport: () => import('./app-server/transport.js').Transport;
     if (remoteHostId) {
       if (!this.deps.getRemoteCodexTransport) {
@@ -2375,7 +2377,10 @@ export class CodexAgent extends BaseAgent {
     }
 
     const registerCodexMcpContext = (threadId: string): void => {
-      if (!sid || opts.remoteHostId) return;
+      // remoteHostId 不再跳过:远端 daemon 经 SSH remote-forward 直连本机
+      // HTTP MCP bridge 后,tool call 同样按 params._meta.threadId 路由,
+      // 需要这条注册让 CodexMcpThreadContextStore 能解析 remote thread。
+      if (!sid) return;
       try {
         const register = this.deps.registerCodexMcpThreadContext;
         if (!register) return;
@@ -2396,7 +2401,8 @@ export class CodexAgent extends BaseAgent {
       }
     };
     const unregisterCodexMcpContext = (threadId: string): void => {
-      if (!sid || opts.remoteHostId) return;
+      // 与 register 对齐:remote thread 同样注册过 context,close 时同样注销。
+      if (!sid) return;
       try {
         const unregister = this.deps.unregisterCodexMcpThreadContext;
         if (!unregister) return;

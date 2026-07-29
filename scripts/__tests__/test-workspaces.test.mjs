@@ -915,10 +915,28 @@ test("test gate lock reports the holder, waits, and acquires after release", asy
 	}
 });
 
+// A real probe round connects to every candidate port, and a port that accepts
+// the connection without answering only resolves once the probe socket times
+// out. So the window that waits for the WAIT report has to be far wider than a
+// single probe round, otherwise a slow round loses the race and the assertion
+// fails for reasons unrelated to the lock protocol.
+const REAL_LOCK_WAIT_WINDOW_MS = 30_000;
+const REAL_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
+
+function raceWithDeadline(candidates, deadlineMs, deadlineValue) {
+	let timer;
+	const deadline = new Promise((resolve) => {
+		timer = setTimeout(() => resolve(deadlineValue), deadlineMs);
+	});
+	return Promise.race([...candidates, deadline]).finally(() => {
+		clearTimeout(timer);
+	});
+}
+
 test("two real test gate lock holders serialize on the same identity", async () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-gate-real-lock-"));
 	let firstLock;
-	let secondLock;
+	let secondLockPromise;
 	let reportWaiting;
 	const waiting = new Promise((resolve) => {
 		reportWaiting = resolve;
@@ -929,30 +947,39 @@ test("two real test gate lock holders serialize on the same identity", async () 
 			owner: { pid: 41, tier: "unit", cwd: path.join(root, "first") },
 			output: () => {},
 		});
-		const secondLockPromise = acquireTestGateLock({
+		secondLockPromise = acquireTestGateLock({
 			repoRoot: root,
 			owner: { pid: 42, tier: "db", cwd: path.join(root, "second") },
-			timeoutMs: 2_000,
+			timeoutMs: REAL_LOCK_ACQUIRE_TIMEOUT_MS,
 			retryDelayMs: 10,
 			output: reportWaiting,
-		}).then((lock) => {
-			secondLock = lock;
-			return lock;
 		});
-		const outcome = await Promise.race([
-			waiting.then(() => "waiting"),
-			secondLockPromise.then(() => "acquired"),
-			new Promise((resolve) => setTimeout(() => resolve("timed-out"), 1_000)),
-		]);
+		// A failing assertion below jumps straight to `finally` while this
+		// acquisition is still running. Attach a no-op handler so an eventual
+		// rejection is never unhandled; the real await and release happen in
+		// `finally`, otherwise a lock bound after the failure keeps its listener
+		// open and `node --test` never exits.
+		secondLockPromise.catch(() => {});
+
+		const outcome = await raceWithDeadline(
+			[waiting.then(() => "waiting"), secondLockPromise.then(() => "acquired")],
+			REAL_LOCK_WAIT_WINDOW_MS,
+			"timed-out",
+		);
 		assert.equal(outcome, "waiting");
 
 		await firstLock.release();
 		firstLock = undefined;
-		await secondLockPromise;
+		const secondLock = await secondLockPromise;
 		assert.ok(secondLock.port >= 49_152);
 	} finally {
-		await secondLock?.release();
+		// Order matters: releasing the first lock lets the second acquisition
+		// settle immediately instead of waiting out its own timeout.
 		await firstLock?.release();
+		await secondLockPromise?.then(
+			(lock) => lock.release(),
+			() => {},
+		);
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });

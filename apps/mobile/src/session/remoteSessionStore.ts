@@ -22,6 +22,7 @@ import { cacheSessionMessages, getCachedSessionMessages } from '@/session/mobile
 import { contentToPreview } from '@/utils/contentPreview';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
+import { normalizeRemoteMoney } from '@/session/remoteMoney';
 
 interface DeviceShard {
   deviceId: string;
@@ -1703,8 +1704,15 @@ export const remoteSessionStore = {
     if (channel === 'usage:message-turn-cost' && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       const clientId = readString(payload, 'clientId');
+      const turnMoney = normalizeRemoteMoney(payload.turnMoney);
       const turnCostUsd = readNumber(payload, 'turnCostUsd');
-      if (sessionId && clientId && turnCostUsd !== null && turnCostUsd > 0) {
+      if (sessionId && clientId && turnMoney && turnMoney.amount > 0) {
+        this.patchMessageAgentMeta(sessionId, clientId, {
+          turnCost: turnMoney,
+          ...(turnMoney.currency === 'USD' ? { turnCostUsd: turnMoney.amount } : {}),
+          turnCostIsEstimate: turnMoney.kind === 'value-estimate',
+        });
+      } else if (sessionId && clientId && turnCostUsd !== null && turnCostUsd > 0) {
         this.patchMessageAgentMeta(sessionId, clientId, {
           turnCostUsd,
           turnCostIsEstimate: payload.turnCostIsEstimate === true,
@@ -1717,8 +1725,14 @@ export const remoteSessionStore = {
       // sessions:patched,这条(sessions topic,列表订阅常开)是唯一更新通道;不处理则
       // 会话菜单用量摘要停在旧值直到 reseed。readNumber 已挡 NaN,负数不入镜像。
       const sessionId = readString(payload, 'sessionId');
+      const totalMoney = normalizeRemoteMoney(payload.totalMoney);
       const totalCostUsd = readNumber(payload, 'totalCostUsd');
-      if (sessionId && totalCostUsd !== null && totalCostUsd >= 0) {
+      if (sessionId && totalMoney) {
+        this.applySessionPatch(deviceId, sessionId, {
+          totalMoney,
+          ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount } : {}),
+        });
+      } else if (sessionId && totalCostUsd !== null && totalCostUsd >= 0) {
         this.applySessionPatch(deviceId, sessionId, { totalCostUsd });
       }
       return;

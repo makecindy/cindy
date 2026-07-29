@@ -160,6 +160,38 @@ describe('auth login-flow reset', () => {
     expect(initializeBody.slice(localGuard, refreshTokenRead)).toContain('return snapshotAuthState();');
   });
 
+  it('activates a restored realm only after the refreshed membership passes build policy', () => {
+    const initializeStart = source.indexOf('export async function initialize(');
+    const initializeEnd = source.indexOf('\n}\n\n/**\n * 冷启动 refresh 流程本体', initializeStart);
+    const initializeBody = source.slice(initializeStart, initializeEnd);
+    expect(initializeBody).toContain('await loadClientEndpointsForRealm(persistedSession.realm);');
+    expect(initializeBody).not.toContain('activateClientEndpointRealm(persistedSession.realm);');
+
+    const coldStart = source.indexOf('async function runColdStartRefreshFlow(');
+    const coldEnd = source.indexOf('\n}\n\nasync function loadLoginProviders()', coldStart);
+    const coldBody = source.slice(coldStart, coldEnd);
+    const coldPolicyGuard = coldBody.indexOf('!canRestoreAuthSessionForMembership(');
+    const coldRealmActivation = coldBody.indexOf('activateClientEndpointRealm(storedRealm);');
+    expect(coldPolicyGuard).toBeGreaterThan(-1);
+    expect(coldRealmActivation).toBeGreaterThan(coldPolicyGuard);
+    expect(coldBody).toContain('writePersistedAuthSession(refreshData.refreshToken, storedRealm);');
+
+    const refreshStart = source.indexOf('export async function refresh(): Promise<boolean> {');
+    const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);
+    const refreshBody = source.slice(refreshStart, refreshEnd);
+    const runtimePolicyGuard = refreshBody.indexOf('!canRestoreAuthSessionForMembership(');
+    const runtimeRealmActivation = refreshBody.indexOf(
+      'activateClientEndpointRealm(refreshRealm);',
+    );
+    expect(runtimePolicyGuard).toBeGreaterThan(-1);
+    expect(runtimeRealmActivation).toBeGreaterThan(runtimePolicyGuard);
+    expect(refreshBody).toContain('writePersistedAuthSession(data.refreshToken, refreshRealm);');
+    expect(refreshBody).toContain(
+      "await expireRuntimeAuth(currentUser.id, 'replaced-elsewhere', {",
+    );
+    expect(refreshBody).toContain('preservePersistedRefreshToken: true');
+  });
+
   it('drops a runtime refresh result after logout or a newer login changes auth generation', () => {
     const refreshStart = source.indexOf('export async function refresh(): Promise<boolean> {');
     const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);

@@ -461,9 +461,12 @@ export function NewMakerDraftRoute() {
   const effectiveCollab = collab;
   const collabPolicyEligible =
     effectiveWorkingDir != null &&
-    effectiveRemoteHostId == null &&
     effectiveDeviceLinkDeviceId == null;
-  const collabPolicy = useCollabProjectPolicy(effectiveWorkingDir, collabPolicyEligible);
+  const collabPolicy = useCollabProjectPolicy(effectiveWorkingDir, collabPolicyEligible, {
+    // 远端 draft 的 workingDir 是远端路径, 本机项目级查询无意义, 跳过;
+    // 用户级/全局级 collab 开关仍生效 (与 main 侧 remote 分支同口径)。
+    skipQuery: effectiveRemoteHostId != null,
+  });
   const projectPickerOptions = useProjectPickerOptions();
   const createAgentModeLabel =
     getProjectPickerDisplayName(effectiveWorkingDir, projectPickerOptions) ??
@@ -1154,13 +1157,36 @@ export function NewMakerDraftRoute() {
           attachmentState.clearFiles();
         }
         resetDraftWorkspaceAfterSend();
-        navigate(`/cc-agent/${newSession.id}`, { replace: true });
+        // F-COLLAB: draft 阶段开了协同 toggle → 与 send/goal 路径同口径,
+        // createSession 后立刻 enableOrca 拉起 Worker;失败 toast 但保留
+        // Lead 会话继续 navigate (用户可继续单 session, 不阻断)。
+        let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
+        if (effectiveCollab.enabled) {
+          try {
+            const result = await window.electronAPI.maker.enableOrca(
+              newSession.id,
+              draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
+            );
+            orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
+          } catch (err) {
+            log.error('[add remote project] enableOrca failed (continuing as single session)', err);
+            toast.error(
+              getCollaborationStartErrorMessage(err, t, { continueAsSingleSession: true }),
+            );
+          }
+        }
+        navigate(`/cc-agent/${newSession.id}`, {
+          replace: true,
+          state: orcaWorkersRevealState
+            ? { orcaWorkersReveal: orcaWorkersRevealState }
+            : undefined,
+        });
       } catch (err) {
         log.error('[add remote project]', err);
         throw err;
       }
     },
-    [draft.vendor, chatPrefs, chatInitialPermissionMode, chatInitialProviderId, draftInitialModel, draftInitialEffort, effectiveFastMode, effectiveDeviceLinkDeviceId, localProviders, capabilityAgentKind, effectivePlanMode, attachmentState, createSession, navigate, t],
+    [draft.vendor, chatPrefs, chatInitialPermissionMode, chatInitialProviderId, draftInitialModel, draftInitialEffort, effectiveFastMode, effectiveDeviceLinkDeviceId, localProviders, localProvidersLoading, effectiveCollab, capabilityAgentKind, effectivePlanMode, attachmentState, createSession, navigate, t],
   );
 
   // ─── 切 vendor ──────────────────────────────────────────────────────
@@ -2464,9 +2490,9 @@ export function NewMakerDraftRoute() {
                         disabled={wtCreating}
                       />
                     }
-                    // 协同 toggle(与对话界面同一控件):仅本地项目 draft 可用 —— 对话模式(无
-                    // workingDir)/ 远程 SSH / device-link 均不支持起 worker(state 层 normalize
-                    // + patchDraft 已强制 collab.enabled=false,这里同口径 gate 渲染)。Lead = 当前
+                    // 协同 toggle(与对话界面同一控件):本地与 SSH 远端项目 draft 均可用
+                    // (远端 worker 创建继承 remoteHostId, 两端 MCP 注入已接通); 对话模式(无
+                    // workingDir)/ device-link 不支持(state 层 normalize + patchDraft 同口径)。Lead = 当前
                     // vendor(上方 VendorSegmentedSwitcher)。onOpenDetails 打开「开启协同」富弹窗
                     // (CreateWorkerPopover:role/agent/model/初始任务),与会话内完全一致;OFF 态点击
                     // 走它而非简单 worker popover。ON 态点击 onChange(enabled:false) 关闭协同。
@@ -2663,6 +2689,9 @@ export function NewMakerDraftRoute() {
           }}
           title={t('orca.createWorker.enableCollabTitle')}
           submitLabel={t('orca.createWorker.enableCollabSubmit')}
+          // SSH 远程草稿(draft.remoteHostId):worker 在远端 spawn,模型清单按 SSH
+          // 口径过滤,与本路由 ChatInput 候选及 main 侧 remote-worker guard 同口径。
+          sshRemote={!!effectiveRemoteHostId}
         />
 
         {/* 添加远程项目弹窗 (入口在 mode pill 的 FolderPickerPopover 里, gate 走 hasAnyRemoteTarget =

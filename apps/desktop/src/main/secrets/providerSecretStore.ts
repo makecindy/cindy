@@ -17,6 +17,7 @@ import {
   GHOST_SECRET_PREFIX,
   GHOST_SECRET_HINT_PREFIX,
   PROVIDER_SECRET_IDS,
+  REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY,
   type ProviderSecretId,
 } from '../../shared/providerSecrets.js';
 import {
@@ -229,9 +230,22 @@ const electronSecretIo: SecretStorageIo = {
  * 典型:generic-oauth 的 blob 内存缓存,不失效会让 B 账号继续用 A 的 token 路由。
  * setter 注入避免 secrets 层反向依赖 maker-host(host 启动期接线)。
  */
-let secretsClearedListener: (() => void) | null = null;
+const secretsClearedListeners = new Set<() => void>();
+/**
+ * 重置为单个监听(覆盖式,历史 API)。测试用它隔离状态;生产代码一律用
+ * addProviderSecretsClearedListener —— 多个上层各自缓存各自的密钥,
+ * 单槽覆盖会让后注册者把先注册者的失效回调挤掉。
+ */
 export function setProviderSecretsClearedListener(listener: () => void): void {
-  secretsClearedListener = listener;
+  secretsClearedListeners.clear();
+  secretsClearedListeners.add(listener);
+}
+/** 追加一个清空监听,返回注销函数。生产代码注册缓存失效回调的入口。 */
+export function addProviderSecretsClearedListener(listener: () => void): () => void {
+  secretsClearedListeners.add(listener);
+  return () => {
+    secretsClearedListeners.delete(listener);
+  };
 }
 
 /** providerId 维度的密钥读写器。 */
@@ -265,16 +279,21 @@ export function createProviderSecretStore(
 ): ProviderSecretStore {
   let lastReconciledOwnerId: string | null = null;
   const notifySecretsCleared = (): void => {
-    try {
-      secretsClearedListener?.();
-    } catch {
-      /* 监听器异常不阻断账号边界清理 */
+    for (const listener of secretsClearedListeners) {
+      try {
+        listener();
+      } catch {
+        /* 监听器异常不阻断账号边界清理与其他监听器 */
+      }
     }
   };
   const clearAllSecrets = (): void => {
     for (const id of PROVIDER_SECRET_IDS) {
       io.remove(providerSecretStorageKey(id));
     }
+    // SSH 远端 daemon 直连 MCP bridge 的 persistent token 同清:同机换账号后,
+    // 旧账号远端 host 上仍在跑的 daemon env 里的 token 必须失效,防串号。
+    io.remove(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY);
     // 动态键名密钥同清(按前缀扫 io.list()):自定义 MCP bearer token(mcp_token_<id>)、
     // 自定义供应商 per-runtime key(provider_key_*)、通用 OAuth 凭证 blob(provider_oauth_*)、
     // 意识 network 槽凭证(ghost_secret_*)。这些不在 PROVIDER_SECRET_IDS 静态集合里,
@@ -448,6 +467,37 @@ export function storeCustomProviderKey(providerId: string, agent: string, value:
   }
 }
 
+/**
+ * 读取 SSH 远端 daemon 直连 MCP bridge 的 persistent bearer token
+ * (**main 侧 HTTP bridge 鉴权专用**)。不存在 / safeStorage 不可用 / 读失败
+ * 均返回 null。与通用 safe-storage IPC 字节级互通;main-only 键,renderer
+ * 不可经 generic bridge 访问。
+ */
+export function readRemoteMcpBridgeToken(): string | null {
+  try {
+    return electronSecretIo.read(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'read remote mcp bridge token failed',
+    );
+    return null;
+  }
+}
+
+/** 写入 remote MCP bridge persistent token(仅不存在时的首次生成路径调用)。 */
+export function writeRemoteMcpBridgeToken(value: string): boolean {
+  try {
+    return electronSecretIo.write(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY, value);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'write remote mcp bridge token failed',
+    );
+    return false;
+  }
+}
+
 /** 删除某自定义供应商 runtime 的 API key；不存在视为成功。 */
 export function removeCustomProviderKey(
   providerId: string,
@@ -494,6 +544,66 @@ export function readCustomMcpEnv(mcpId: string): Record<string, string> {
       'read custom mcp env failed',
     );
     return {};
+  }
+}
+
+/**
+ * Strict snapshot used by the MCP config mutation transaction.
+ * Only a missing file maps to null; unavailable encryption and unreadable data abort the mutation
+ * so a failed read can never be mistaken for an empty environment and overwrite existing secrets.
+ */
+export function readCustomMcpEnvForMutation(mcpId: string): string | null {
+  const logicalKey = customMcpEnvStorageKey(mcpId);
+  const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
+  if (!scopedKey) throw new Error('custom MCP secret owner is unavailable');
+  let encoded: string;
+  try {
+    encoded = fs.readFileSync(path.join(secretDir(), `${scopedKey}.enc`), 'utf-8');
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'read custom mcp env snapshot failed',
+    );
+    throw new Error('existing custom MCP environment is unreadable');
+  }
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('custom MCP environment encryption is unavailable');
+  }
+  try {
+    return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+  } catch (err) {
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'decrypt custom mcp env snapshot failed',
+    );
+    throw new Error('existing custom MCP environment is unreadable');
+  }
+}
+
+/** Main-side write used by the serialized MCP config + environment mutation. */
+export function writeCustomMcpEnvForMutation(mcpId: string, value: string): boolean {
+  try {
+    return electronSecretIo.write(customMcpEnvStorageKey(mcpId), value);
+  } catch (err) {
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'write custom mcp env failed',
+    );
+    return false;
+  }
+}
+
+/** Main-side removal used by the serialized MCP config + environment mutation. */
+export function removeCustomMcpEnvForMutation(mcpId: string): { success: boolean; error?: string } {
+  try {
+    return electronSecretIo.remove(customMcpEnvStorageKey(mcpId));
+  } catch (err) {
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'remove custom mcp env failed',
+    );
+    return { success: false, error: 'remove_failed' };
   }
 }
 

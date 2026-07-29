@@ -5,7 +5,7 @@
  *   1. **PR 引用**(session-git-pr-context):有 PR 引用时显示 owner/repo#N +
  *      状态 + 未解决评论 + 标题;状态按需加载(首次悬停打开触发
  *      fetchStatusesForSession,共享缓存 + main 60s TTL,规则 7 不做 loading 态)。
- *   2. **项目来源**(sourceLabel):无 PR 时展示"XDMaker""对话"等来源标签,
+ *   2. **项目来源**(sourceLabel):无 PR 时展示"Cindy""对话"等来源标签,
  *      与工作空间左下角同口径,orca-lead / 罕见来源走 workingDir basename 回退
  *      (规则见 lib/sessionSourceLabel.ts)。
  *   3. 两者都无 → 直接透传 children,保持"密集列表少挂 Tip"的既有取舍。

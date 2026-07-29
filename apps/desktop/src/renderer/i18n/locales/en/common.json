@@ -2656,6 +2656,8 @@
         "cindyImageEdit": "Image editing (delegated to Cindy, its own images only)",
         "cindyVideoGenerate": "Video generation (delegated to Cindy)",
         "cindyVideoEdit": "Image-to-video (delegated to Cindy, reference images from its own media only)",
+        "cindyMediaDeposit": "Can save images, video or audio it holds into your media library",
+        "cindyMediaDepositDetail": "This lets AI work on material you paste or drop into the plugin. Saved items are recorded under this plugin, use at most {{quota}}, and are cleaned up when you uninstall it.",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
@@ -2845,8 +2847,8 @@
         "urlPlaceholder": "https://example.com/mcp",
         "command": "Command",
         "commandPlaceholder": "e.g. npx",
-        "args": "Arguments (one per line)",
-        "argsPlaceholder": "-y\n@modelcontextprotocol/server-filesystem\n.",
+        "args": "Arguments (JSON array)",
+        "argsPlaceholder": "[\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"]",
         "cwd": "Working directory (optional)",
         "cwdPlaceholder": "Leave blank to use the agent working directory",
         "env": "Environment variables (optional)",
@@ -2869,6 +2871,7 @@
         "nameRequired": "Display name is required",
         "urlInvalid": "Enter a valid http(s) URL",
         "commandRequired": "Command is required for stdio",
+        "argsInvalid": "Arguments must be a JSON array of strings",
         "envNameInvalid": "Use letters, numbers, and underscores in environment variable names"
       },
       "toast": {
@@ -3895,6 +3898,7 @@
       "ariaDescription": "Release notes for version {{version}}",
       "ariaDescriptionSpan": "Release notes for {{count}} versions since v{{from}}",
       "versionsSpan": "{{count}} versions",
+      "versionJumpAria": "Jump to a version — {{count}} versions, currently on v{{version}}",
       "loading": "Loading",
       "loadFailed": "Load failed",
       "retry": "Retry"

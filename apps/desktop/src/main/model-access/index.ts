@@ -39,6 +39,7 @@ import {
   waitForModelsSyncRefresh,
 } from './modelsSyncRefresh.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
+import { hasAuthSessionIdentityChanged } from './authSessionIdentity.js';
 export { isModelAccessReady } from './readiness.js';
 
 const log = createLogger('modelAccess');
@@ -141,12 +142,13 @@ let modelsSyncGen = -1;
 /** 旧世代请求在途时新账号的补发标记。 */
 let modelsSyncRerunQueued = false;
 /**
- * 认证世代:登出或 userId 变化时自增(与 credentialsSync 的 epoch 同语义)。
- * 目录请求以发起时世代为闸——A 账号的在途 /models 响应在切到 B 后一律丢弃,
- * 且 B 会补发自己的请求(PR review P1:旧账号目录不得覆盖新账号)。
+ * 认证世代:登出或 userId / realm 变化时自增(与 credentialsSync 的 epoch 同语义)。
+ * 目录请求以发起时世代为闸——旧身份的在途 /models 响应在换号或同账号跨区后
+ * 一律丢弃,且新身份会补发自己的请求。
  */
 let authGeneration = 0;
 let lastAuthUserId: string | null = null;
+let lastAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 
 function applyGatewayModels(
   models: ModelAccessGatewayModel[],
@@ -353,24 +355,39 @@ function mapServerError(err: unknown): never {
 export function initModelAccess(): void {
   const sync = getSync();
 
-  const noteAuthState = (isAuthenticated: boolean, userId: string | null) => {
-    // 认证世代:登出或换号自增,作废旧账号在途的目录请求(runModelsSync 世代闸)。
-    if (!isAuthenticated || (userId !== null && lastAuthUserId !== null && userId !== lastAuthUserId)) {
+  const noteAuthState = (
+    isAuthenticated: boolean,
+    userId: string | null,
+    realm: ReturnType<typeof authManager.getActiveAuthRealm> | null,
+  ) => {
+    // 认证世代:登出、换号或同账号跨区均自增,作废旧身份在途的目录请求。
+    if (
+      !isAuthenticated ||
+      hasAuthSessionIdentityChanged(
+        { userId: lastAuthUserId, realm: lastAuthRealm },
+        { userId, realm },
+      )
+    ) {
       authGeneration++;
-      // 旧账号模型清单不能跨账号继续显示;新账号凭据 / 模型拉取成功后再注入。
+      // 旧身份模型清单不能跨账号/区域继续显示;新身份拉取成功后再注入。
       applyGatewayModels([]);
     }
     lastAuthUserId = isAuthenticated ? (userId ?? lastAuthUserId) : null;
-    sync.handleAuthChange({ isAuthenticated, userId });
+    lastAuthRealm = isAuthenticated ? (realm ?? lastAuthRealm) : null;
+    sync.handleAuthChange({ isAuthenticated, userId, realm });
   };
 
   authManager.onAuthStateChange((state) => {
-    noteAuthState(state.isAuthenticated, state.user?.id ?? null);
+    noteAuthState(
+      state.isAuthenticated,
+      state.user?.id ?? null,
+      state.isAuthenticated ? authManager.getActiveAuthRealm() : null,
+    );
   });
   // 订阅挂载时可能已错过冷启动的首次 notify(初始化顺序取决于 bootstrap),补一次。
   const initial = authManager.getAuthState();
   if (initial.isAuthenticated) {
-    noteAuthState(true, initial.user?.id ?? null);
+    noteAuthState(true, initial.user?.id ?? null, authManager.getActiveAuthRealm());
   }
   ipcMain.handle('model-access:get-status', () => sync.getStatus());
 
@@ -403,5 +420,6 @@ export function resetModelAccessForTest(): void {
   lastModelsSyncSucceededAttempt = 0;
   authGeneration = 0;
   lastAuthUserId = null;
+  lastAuthRealm = null;
   applyGatewayModels([]);
 }

@@ -58,7 +58,7 @@ export interface PreRunHookInput {
 }
 
 /**
- * `xdt-node` 命令前缀:用 XDMaker 自带的 Electron 运行时以 Node 模式执行脚本
+ * `xdt-node` 命令前缀:用 Cindy 自带的 Electron 运行时以 Node 模式执行脚本
  * (ELECTRON_RUN_AS_NODE)。给"机器上没有系统 node"的用户兜底——AI 生成器探测
  * 不到系统 node 时改发 `xdt-node <script>`,执行时在这里解析成当前 app 的
  * process.execPath,**不把 exe 绝对路径写进 DB**(app 升级/换装路径变了命令

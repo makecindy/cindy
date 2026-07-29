@@ -90,6 +90,19 @@ describe('TextLightbox — F3 overlay style', () => {
   it('overlay is rendered via createPortal to document.body', () => {
     expect(source).toMatch(/createPortal\(overlay,\s*document\.body\)/);
   });
+
+  it('keeps every toolbar tooltip above the lightbox overlay', () => {
+    expect(source).toMatch(/TEXT_LIGHTBOX_OVERLAY_Z_INDEX\s*=\s*9999/);
+    expect(source).toMatch(
+      /TEXT_LIGHTBOX_TOOLTIP_STYLE\s*=\s*\{[\s\S]*zIndex:\s*TEXT_LIGHTBOX_OVERLAY_Z_INDEX\s*\+\s*1/,
+    );
+
+    const tooltipContents = source.match(/<Tooltip\.Content\b/g) ?? [];
+    const layeredTooltipContents =
+      source.match(/<Tooltip\.Content\s+style=\{TEXT_LIGHTBOX_TOOLTIP_STYLE\}/g) ?? [];
+    expect(tooltipContents.length).toBeGreaterThan(0);
+    expect(layeredTooltipContents).toHaveLength(tooltipContents.length);
+  });
 });
 
 // ── F4: toolbar wiring ──────────────────────────────────────────────────────

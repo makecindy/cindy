@@ -68,6 +68,26 @@ describe('CustomMcpProvider', () => {
     });
   });
 
+  it('keeps stdio env paired with the config snapshot until providers refresh', () => {
+    const config: CustomMcpConfig = {
+      id: 'stdio',
+      name: 'stdio',
+      transport: 'stdio',
+      command: 'node',
+      args: [],
+      cwd: '',
+    };
+    let env = { API_KEY: 'old' };
+    const provider = new CustomMcpProvider(
+      config,
+      () => null,
+      () => env,
+    );
+    env = { API_KEY: 'new' };
+
+    expect(provider.toCodexMcpConfig(ctx)).toMatchObject({ env: { API_KEY: 'old' } });
+  });
+
   it('toClaudeSdkConfig returns sse config with user headers', () => {
     expect(make({ transport: 'sse', headers: { 'X-Foo': 'bar' } }).toClaudeSdkConfig(ctx)).toEqual({
       type: 'sse',
