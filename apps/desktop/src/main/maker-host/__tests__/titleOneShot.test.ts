@@ -350,6 +350,17 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
     expect(body.stream).toBe(true);
     expect(body.store).toBe(false);
     expect(body.reasoning).toEqual({ effort: 'low' });
+    expect(body.instructions).toBe(
+      'Output only the short conversation title requested by the user message, without quotation marks or ending punctuation.',
+    );
+    expect(body.instructions).not.toContain('Chinese');
+    expect(body.input).toEqual([
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: '起个标题' }],
+      },
+    ]);
   });
   it('无 codex 凭证 → null,不发请求', async () => {
     const fetchImpl = fakeFetch(() => ({ text: SSE }));
