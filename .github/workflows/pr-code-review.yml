@@ -6,9 +6,10 @@ name: pr-code-review
 # 定位：**建议性**检查，不替代人工 review，也不替代 client-ci 的机器门禁。
 # 仓库侧的审阅口径写在根目录 REVIEW.md（复用 workflow 的 prompt 会主动读取）。
 #
-# 前置配置（缺任一项本 workflow 会失败，代码里无法兜底）：
-#   - repository secret `ANTHROPIC_API_KEY`（复用 workflow 声明为 required）
-#   - 可选 repository variable `ANTHROPIC_BASE_URL`,不设则走 api.anthropic.com
+# 前置配置：
+#   - repository secret `ANTHROPIC_API_KEY`(必需)。复用 workflow 声明为 required,
+#     缺了本 workflow 每次都失败,代码里无法兜底。
+#   - repository variable `ANTHROPIC_BASE_URL`(可选)。不设则走 api.anthropic.com。
 
 on:
   pull_request:
