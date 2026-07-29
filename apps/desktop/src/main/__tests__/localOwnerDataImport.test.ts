@@ -154,16 +154,19 @@ describe('importLocalOwnerData 基本导入', () => {
   });
 
   it('主键撞车时保留账号库已有内容(OR IGNORE 跳过整行)', () => {
-    accountDb.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('dup', '账号版', 9);
+    // 用非 sessions 表:sessions 同 id 不同内容会让导入整体中止(见冲突那组用例)。
+    accountDb.prepare('INSERT INTO custom_providers (id, name) VALUES (?,?)').run('dup', '账号版');
     seedLocalDb((db) => {
-      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('dup', '本机版', 1);
+      db.prepare('INSERT INTO custom_providers (id, name) VALUES (?,?)').run('dup', '本机版');
     });
 
     const result = importLocalOwnerData(accountDb, localDbPath);
 
-    expect(result.perTable.sessions).toBeUndefined();
+    expect(result.perTable.custom_providers).toBeUndefined();
     expect(
-      (accountDb.prepare('SELECT title FROM sessions WHERE id = ?').get('dup') as { title: string }).title,
+      (accountDb.prepare('SELECT name FROM custom_providers WHERE id = ?').get('dup') as {
+        name: string;
+      }).name,
     ).toBe('账号版');
   });
 
@@ -263,10 +266,11 @@ describe('importLocalOwnerData 边界与原子性', () => {
   });
 
   it('正常路径 droppedRows 为空;主键撞车不算丢行', () => {
-    accountDb.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('dup', 'acc', 9);
+    accountDb.prepare('INSERT INTO custom_providers (id, name) VALUES (?,?)').run('dup', 'acc');
     seedLocalDb((db) => {
-      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('dup', 'local', 1);
-      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('s2', 'new', 2);
+      db.prepare('INSERT INTO custom_providers (id, name) VALUES (?,?)').run('dup', 'local');
+      db.prepare('INSERT INTO custom_providers (id, name) VALUES (?,?)').run('p2', 'new');
+      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('s1', 'x', 1);
     });
 
     expect(importLocalOwnerData(accountDb, localDbPath).droppedRows).toEqual({});
@@ -329,97 +333,77 @@ describe('importLocalOwnerData 边界与原子性', () => {
 });
 
 describe('importLocalOwnerData 同 id 会话冲突', () => {
-  it('冲突会话的子行整批跳过,不挂到账号库那条同 id 会话上', () => {
+  it('同 id 但内容不同时整体中止:抛错且账号库零写入', () => {
     accountDb
       .prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)')
       .run('shared-id', '账号侧的会话', 10);
-    accountDb
-      .prepare('INSERT INTO messages (id, session_id, role, content) VALUES (?,?,?,?)')
-      .run('acc-m1', 'shared-id', 'user', '"账号侧消息"');
     seedLocalDb((db) => {
-      // 同 id、不同内容:local 侧这条会话及其子行都必须整批跳过。
       db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('shared-id', '本机的会话', 1);
       db.prepare('INSERT INTO messages (id, session_id, role, content) VALUES (?,?,?,?)').run(
         'local-m1', 'shared-id', 'user', '"本机消息"',
       );
-      db.prepare('INSERT INTO session_goals (id, session_id, goal) VALUES (?,?,?)').run(
-        'g1', 'shared-id', '本机目标',
-      );
-      // 不冲突的会话照常并入。
+      // 即使还有完全无冲突的会话,也一并不导入——要么全对要么不动。
       db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('fresh', '本机新会话', 2);
-      db.prepare('INSERT INTO messages (id, session_id, role, content) VALUES (?,?,?,?)').run(
-        'local-m2', 'fresh', 'user', '"ok"',
-      );
     });
 
-    const result = importLocalOwnerData(accountDb, localDbPath);
+    expect(() => importLocalOwnerData(accountDb, localDbPath)).toThrow(/share an id/);
 
-    expect(result.conflictedSessions).toBe(1);
-    expect(result.skippedByConflict).toMatchObject({ messages: 1, session_goals: 1 });
-    // 账号侧那条会话的历史一个字都没被污染。
-    const accMessages = accountDb
-      .prepare('SELECT id FROM messages WHERE session_id = ? ORDER BY id')
-      .all('shared-id')
-      .map((r) => (r as { id: string }).id);
-    expect(accMessages).toEqual(['acc-m1']);
-    expect(countRows('session_goals')).toBe(0);
-    // 不冲突的那条照常并入。
+    // 账号侧那条会话原样保留,没有多出任何行。
+    expect(countRows('sessions')).toBe(1);
+    expect(countRows('messages')).toBe(0);
     expect(
-      accountDb.prepare('SELECT title FROM sessions WHERE id = ?').get('fresh'),
-    ).toEqual({ title: '本机新会话' });
-    // 被故意跳过的子行不算成 schema 不兼容的丢行。
-    expect(result.droppedRows.messages).toBeUndefined();
+      accountDb.prepare('SELECT title FROM sessions WHERE id = ?').get('shared-id'),
+    ).toEqual({ title: '账号侧的会话' });
   });
 
-  it('多个会话引用列全覆盖(声明了外键的与只在名单里的),NULL 引用照常导入', () => {
-    accountDb
-      .prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)')
-      .run('shared-id', '账号侧', 10);
+  it('抛出的错误带 code 与冲突条数,便于调用方分流与日志', () => {
+    accountDb.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('a', 'X', 1);
+    accountDb.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('b', 'Y', 2);
     seedLocalDb((db) => {
-      // 制造一个冲突会话,让冲突过滤生效。
-      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('shared-id', '本机', 1);
-      // 两个引用列都为 NULL:不关联任何会话,必须照常并入。
-      db.prepare(
-        "INSERT INTO schedules (id, name, status, target_session_id, skip_log_session_id)" +
-          " VALUES (?,?,'active',NULL,NULL)",
-      ).run('sch-null', '不关联会话的任务');
-      // 冲突会话出现在**无外键声明**的列上(靠已知列名清单命中),应被跳过。
-      db.prepare(
-        "INSERT INTO schedules (id, name, status, target_session_id, skip_log_session_id)" +
-          " VALUES (?,?,'active',?,NULL)",
-      ).run('sch-conflict-target', '关联冲突会话(target)', 'shared-id');
-      // 冲突会话出现在**有外键声明**的列上(靠动态读外键命中),也应被跳过。
-      db.prepare(
-        "INSERT INTO schedules (id, name, status, target_session_id, skip_log_session_id)" +
-          " VALUES (?,?,'active',NULL,?)",
-      ).run('sch-conflict-skiplog', '关联冲突会话(skip_log)', 'shared-id');
+      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('a', 'X-local', 1);
+      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('b', 'Y-local', 2);
     });
 
-    const result = importLocalOwnerData(accountDb, localDbPath);
-
-    const ids = accountDb
-      .prepare('SELECT id FROM schedules ORDER BY id')
-      .all()
-      .map((r) => (r as { id: string }).id);
-    expect(ids).toEqual(['sch-null']);
-    expect(result.skippedByConflict.schedules).toBe(2);
-    // NULL 那条是正常并入的,不该被算成丢行。
-    expect(result.droppedRows.schedules).toBeUndefined();
+    try {
+      importLocalOwnerData(accountDb, localDbPath);
+      throw new Error('should have thrown');
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe('LOCAL_OWNER_SESSION_ID_CONFLICT');
+      expect((err as { conflictedSessions?: number }).conflictedSessions).toBe(2);
+    }
   });
 
-  it('无冲突时不建过滤临时表、不误伤任何子行', () => {
+  it('同 id **同内容**不算冲突:续跑重跑导入照常收敛(幂等)', () => {
     seedLocalDb((db) => {
-      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('s1', 'x', 1);
+      db.prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)').run('s1', '本机会话', 1);
       db.prepare('INSERT INTO messages (id, session_id, role, content) VALUES (?,?,?,?)').run(
         'm1', 's1', 'user', '{}',
       );
     });
 
-    const result = importLocalOwnerData(accountDb, localDbPath);
+    // 第一次导入 = 已提交的那批;第二次模拟收尾失败后的续跑。
+    const first = importLocalOwnerData(accountDb, localDbPath);
+    const second = importLocalOwnerData(accountDb, localDbPath);
 
-    expect(result.conflictedSessions).toBe(0);
-    expect(result.skippedByConflict).toEqual({});
-    expect(countRows('messages')).toBe(1);
+    expect(first.inserted).toBe(2);
+    expect(second.inserted).toBe(0);
+    expect(second.conflictedSessions).toBe(0);
+    expect(countRows('sessions')).toBe(1);
+  });
+
+  it('local 库缺列时按共享列比内容,不因缺列误判成冲突', () => {
+    accountDb
+      .prepare('INSERT INTO sessions (id, title, created_at) VALUES (?,?,?)')
+      .run('s1', '同一条', 0);
+    seedLocalDb(
+      (db) => {
+        db.prepare('INSERT INTO sessions (id, title) VALUES (?,?)').run('s1', '同一条');
+      },
+      `CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL);`,
+    );
+
+    // 共享列只有 id/title 且值相同 → 不是冲突。
+    expect(() => importLocalOwnerData(accountDb, localDbPath)).not.toThrow();
   });
 });
 
@@ -451,6 +435,26 @@ describe('importLocalOwnerData 定时任务导入即暂停', () => {
     expect(accountDb.prepare('SELECT status FROM schedules WHERE id = ?').get('acc-sch')).toEqual({
       status: 'active',
     });
+  });
+
+  it('schedule id 与账号已有任务撞车时,绝不把账号那条停掉', () => {
+    // OR IGNORE 保留的是账号那行;若按「源库有这个 id」去 UPDATE 就会误停它。
+    accountDb
+      .prepare("INSERT INTO schedules (id, name, status) VALUES (?,?,'active')")
+      .run('dup-sch', '账号在跑的任务');
+    seedLocalDb((db) => {
+      db.prepare("INSERT INTO schedules (id, name, status) VALUES (?,?,'active')").run('dup-sch', '本机的同 id 任务');
+      db.prepare("INSERT INTO schedules (id, name, status) VALUES (?,?,'active')").run('new-sch', '本机新任务');
+    });
+
+    const result = importLocalOwnerData(accountDb, localDbPath);
+
+    const rows = accountDb.prepare('SELECT id, name, status FROM schedules ORDER BY id').all();
+    expect(rows).toEqual([
+      { id: 'dup-sch', name: '账号在跑的任务', status: 'active' },
+      { id: 'new-sch', name: '本机新任务', status: 'paused' },
+    ]);
+    expect(result.pausedSchedules).toBe(1);
   });
 });
 

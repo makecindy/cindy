@@ -20,13 +20,19 @@
  * 走目标 schema 默认值,多出来的列丢弃,因此无需为了导入去迁移 local 库。
  *
  * 两条与「行搬过去就完事」不同的特殊处理:
- *  - **同 id 会话冲突**:账号库已有同 id 会话时,源会话的 sessions 行被 OR IGNORE
- *    跳过,它名下的子行(消息/目标/绑定/tab…)必须**一并跳过**,否则外键会指向账号
- *    库那条同名会话,把别人的历史搅乱。正常恒不发生(会话 id 是 UUID)。
- *  - **定时任务导入即暂停**:确认窗只裁决会话归属,没征求「让 local 模式的自动化
+ *  - **同 id 会话冲突 = 整体中止**:两库对同一个会话 id 有不同内容时,任何形式的
+ *    部分导入都会搅乱某类引用(子行挂错会话、fork 的 parent 指向账号无关会话、
+ *    定时任务的 target/skip_log 指错)。因此直接抛
+ *    `LOCAL_OWNER_SESSION_ID_CONFLICT`、零写入,让调用方推迟并 warn——local 数据
+ *    分毫未动。会话 id 是 UUID,正常永不发生。判定比的是**内容**不是 id:续跑时
+ *    账号库里已有上一批已提交的同 id 同内容会话,只比 id 会把它们全判成冲突。
+ *  - **定时任务导入即暂停**:确认窗只裁决对话归属,没征求「让 local 模式的自动化
  *    在新账号下跑起来」;认领后 scheduler 立刻启动,到点任务会带着刚搬过去的凭证
- *    自动执行。因此导入的 schedules 一律置 status='paused',用户自行决定启用哪条。
+ *    自动执行。因此**本次新插入的** schedules 一律置 status='paused'(账号库原有
+ *    的任务不动),用户自行决定启用哪条。
  */
+
+import fs from 'node:fs';
 
 import type Database from 'better-sqlite3';
 
@@ -36,20 +42,11 @@ const SOURCE_SCHEMA = 'adopt_src';
 /** 会话表名(冲突集与外键探测都以它为锚)。 */
 const SESSIONS_TABLE = 'sessions';
 
-/**
- * 已知的会话引用列名。与「从外键定义动态读」取**并集**:动态那半覆盖将来新增的
- * 引用列(不必回来改清单),这份名单覆盖没有显式声明 REFERENCES 的列——两者都可能
- * 单独漏,漏一列就会让子行挂到账号侧的同名会话上。
- */
-const SESSION_REF_COLUMN_NAMES = [
-  'session_id',
-  'target_session_id',
-  'lead_session_id',
-  'skip_log_session_id',
-] as const;
+/** 定时任务表名(导入后要把本次新增的那些置 paused)。 */
+const SCHEDULES_TABLE = 'schedules';
 
-/** 冲突会话 id 的临时表名(事务内建、用完即弃;避免 IN 子句撞变量数上限)。 */
-const CONFLICT_TEMP_TABLE = 'adopt_conflicted_sessions';
+/** 导入前账号库已有的 schedule id(事务内建、用完即弃;避免 IN 撞变量数上限)。 */
+const PRE_EXISTING_SCHEDULES_TABLE = 'adopt_preexisting_schedules';
 
 /**
  * 随认领导入的表,**按外键父→子排序**(sessions 先于 messages,media_blobs 先于
@@ -108,6 +105,14 @@ export const SKIPPED_TABLES: readonly string[] = [
   'vec_table_meta',
   'embedding_jobs',
   'orca_worker_creation_reservations',
+  // 个人微信可靠入站的运行态:binding epoch 世代号、待派发/待投递队列及其附件。
+  // 都绑定在「某次微信绑定」上(凭证不入库,epoch 一换即失效),跨 owner 搬过去
+  // 既接不上绑定,还会让 local 期间残留的待派发任务在新账号下被 pump 出去
+  // ——与 schedules 同类的风险,而队列没有 paused 态可用,只能不导入。
+  'wechat_sync_state',
+  'wechat_inbox',
+  'wechat_outbox',
+  'wechat_file_attachments',
 ];
 
 export interface LocalOwnerImportResult {
@@ -129,14 +134,11 @@ export interface LocalOwnerImportResult {
   /** 账号库缺表或列完全不重叠、整表没能导入的表(schema 异常信号)。 */
   unimportableTables: string[];
   /**
-   * 两库存在同 id 会话的条数。这类会话的 sessions 行被 OR IGNORE 跳过,它名下的
-   * 消息/目标/绑定等子行**也一并跳过**——否则子行的外键会指向账号库里那条同 id
-   * 会话,把别人的历史搅乱。正常恒为 0(会话 id 是 UUID);非 0 说明两库同源
-   * (例如都来自同一次 mToc 复制),调用方按「数据没全带过来」处理。
+   * 恒为 0。同 id 但内容不同的会话会让导入**整体中止**(抛
+   * `LOCAL_OWNER_SESSION_ID_CONFLICT`,零写入),所以能拿到结果就说明没有冲突。
+   * 字段保留是为了让调用方的日志/类型保持稳定。
    */
   conflictedSessions: number;
-  /** 因所属会话冲突而跳过的子行数(逐表)。 */
-  skippedByConflict: Record<string, number>;
   /** 导入后被置为 paused 的定时任务数(不让它们在新账号下自动跑起来)。 */
   pausedSchedules: number;
 }
@@ -163,22 +165,6 @@ function primaryKeyColumns(db: Database.Database, table: string): string[] {
     .map((row) => row.name);
 }
 
-/**
- * 某张表里指向 `sessions` 的列:账号库的外键定义(schema 最新)∪ 已知列名清单。
- * 一张表可以有多个会话引用列——schedules 就同时有 target_session_id 与
- * skip_log_session_id,任何一半单独用都会漏。
- */
-function sessionRefColumns(db: Database.Database, table: string): string[] {
-  const rows = db.pragma(`main.foreign_key_list(${quoteId(table)})`) as Array<{
-    table: string;
-    from: string;
-  }>;
-  const declared = rows
-    .filter((row) => row.table === SESSIONS_TABLE)
-    .map((row) => row.from);
-  return [...new Set([...declared, ...SESSION_REF_COLUMN_NAMES])];
-}
-
 function sourceTableNames(db: Database.Database): Set<string> {
   const rows = db
     .prepare(`SELECT name FROM ${SOURCE_SCHEMA}.sqlite_master WHERE type = 'table'`)
@@ -196,6 +182,19 @@ export function importLocalOwnerData(
   db: Database.Database,
   localDbPath: string,
 ): LocalOwnerImportResult {
+  // 「绝不触碰 local 库」这条契约有两半,都要落到实现:
+  //  - **不创建**:`ATTACH` 打开的是 read-write 句柄,路径不存在时 SQLite 会直接
+  //    建一个空库(实测确认)。因此先显式验存,不存在即抛错——否则一个路径错误
+  //    就会在 userData 里凭空造出个空的 local 库(Copilot review)。
+  //    read-only URI(`file:...?mode=ro`)在本仓的 better-sqlite3 上不可用
+  //    (未启用 URI 处理,实测 `unable to open database`),所以只读那一半靠
+  //    SQL 层保证:本模块对 `adopt_src` 只出现 SELECT,从不 INSERT/UPDATE/DELETE。
+  //  - **不写入**:见上一条的 SQL 层约束,加上导入事务只写 `main.*`。
+  if (!fs.existsSync(localDbPath)) {
+    throw Object.assign(new Error(`local db not found: ${localDbPath}`), {
+      code: 'LOCAL_DB_MISSING',
+    });
+  }
   // ATTACH / DETACH 不能在事务内执行,因此包在事务外。worker 的连接是长驻的,
   // 上一次导入若在 DETACH 前被打断会留下同名 attach,先自愈掉再 ATTACH。
   detachSourceQuietly(db);
@@ -209,7 +208,6 @@ export function importLocalOwnerData(
     const unimportableTables: string[] = [];
     let inserted = 0;
 
-    const skippedByConflict: Record<string, number> = {};
     let conflictedSessions = 0;
     let pausedSchedules = 0;
 
@@ -218,24 +216,65 @@ export function importLocalOwnerData(
       // (同表内的自引用、以及未来新增的表间引用),延迟到 COMMIT 统一校验。
       db.pragma('defer_foreign_keys = ON');
 
-      // 先算「两库同 id 会话」:这类源会话的 sessions 行会被 OR IGNORE 跳过,
-      // 它名下的子行必须一并跳过,否则外键会指到账号库那条同名会话上、把别人的
-      // 历史搅乱(codex review)。必须在插 sessions 之前算,插完就都存在了。
-      // 用临时表而非 IN 参数列表:冲突集理论上可以很大,IN 会撞变量数上限。
-      db.prepare(`DROP TABLE IF EXISTS temp.${quoteId(CONFLICT_TEMP_TABLE)}`).run();
-      if (sourceTables.has('sessions')) {
-        db.prepare(
-          `CREATE TEMP TABLE ${quoteId(CONFLICT_TEMP_TABLE)} (id TEXT PRIMARY KEY)`,
-        ).run();
-        conflictedSessions = Number(
-          db
-            .prepare(
-              `INSERT INTO temp.${quoteId(CONFLICT_TEMP_TABLE)} (id)
-                 SELECT s.id FROM ${SOURCE_SCHEMA}.sessions s
-                  WHERE EXISTS (SELECT 1 FROM main.sessions m WHERE m.id = s.id)`,
-            )
-            .run().changes,
+      // ── 同 id 会话冲突:检测到就整体中止,不做部分导入 ──────────────────
+      // 「同 id 但内容不同的会话」意味着两个库对同一个 id 有不同的事实。此时无论
+      // 怎么部分跳过,都会有一类引用被搅乱:子行挂到账号那条会话上、fork 的
+      // parent_session_id 指向账号的无关会话、定时任务的 target/skip_log 指错
+      // ——这些坑逐个补了三轮还在冒新的。改为**整体抛错、零写入**:local 数据
+      // 分毫未动、账号库不变,调用方按失败推迟并 warn,用户数据零损失。
+      // 会话 id 是 UUID,正常永不发生;真发生了(手工改库、两库同源分叉)就该
+      // 停下来让人看一眼,而不是让工具去猜哪些行该保留。
+      //
+      // 关键:比较**内容**而非只比 id。续跑场景里账号库已经有上一次已提交的
+      // 那批会话(同 id 同内容),只比 id 会把它们全判成冲突、导致收尾永远完不成
+      // (codex review)。逐列 `IS NOT` 是 null-safe 的不等比较。
+      if (sourceTables.has(SESSIONS_TABLE)) {
+        const sessionCols = [...tableColumns(db, SOURCE_SCHEMA, SESSIONS_TABLE)].filter((col) =>
+          tableColumns(db, 'main', SESSIONS_TABLE).has(col),
         );
+        if (sessionCols.length > 0) {
+          const differs = sessionCols
+            .map((col) => `s.${quoteId(col)} IS NOT m.${quoteId(col)}`)
+            .join(' OR ');
+          conflictedSessions = Number(
+            (
+              db
+                .prepare(
+                  `SELECT COUNT(*) AS c
+                     FROM ${SOURCE_SCHEMA}.${quoteId(SESSIONS_TABLE)} s
+                     JOIN main.${quoteId(SESSIONS_TABLE)} m ON m.id = s.id
+                    WHERE ${differs}`,
+                )
+                .get() as { c: number | bigint }
+            ).c ?? 0,
+          );
+        }
+      }
+      if (conflictedSessions > 0) {
+        throw Object.assign(
+          new Error(
+            `${conflictedSessions} local session(s) share an id with a different account session; import aborted without writing anything`,
+          ),
+          { code: 'LOCAL_OWNER_SESSION_ID_CONFLICT', conflictedSessions },
+        );
+      }
+
+      // 定时任务导入后要置 paused,但**只能动本次插入的那些**。先记下账号库里
+      // 已经存在的 schedule id:同 id 撞车时 OR IGNORE 保留的是账号那行,若按
+      // 「源库有这个 id」去 UPDATE,就会把用户账号里原本在跑的任务也停掉
+      // (codex review)。临时表而非 IN 参数列表,避免撞变量数上限。
+      db.prepare(`DROP TABLE IF EXISTS temp.${quoteId(PRE_EXISTING_SCHEDULES_TABLE)}`).run();
+      const canPauseSchedules =
+        sourceTables.has(SCHEDULES_TABLE) &&
+        tableColumns(db, 'main', SCHEDULES_TABLE).has('status');
+      if (canPauseSchedules) {
+        db.prepare(
+          `CREATE TEMP TABLE ${quoteId(PRE_EXISTING_SCHEDULES_TABLE)} (id TEXT PRIMARY KEY)`,
+        ).run();
+        db.prepare(
+          `INSERT INTO temp.${quoteId(PRE_EXISTING_SCHEDULES_TABLE)} (id)
+             SELECT id FROM main.${quoteId(SCHEDULES_TABLE)}`,
+        ).run();
       }
 
       for (const table of IMPORTED_TABLES) {
@@ -254,50 +293,13 @@ export function importLocalOwnerData(
           continue;
         }
         const colList = sharedCols.map(quoteId).join(', ');
-        // 冲突会话的子行整批排除(见上面临时表的理由)。sessions 自身不需要过滤:
-        // 它的冲突行本来就被 OR IGNORE 跳过。引用列**从账号库的外键定义动态读**,
-        // 不硬编码列名——schedules 就同时有 target_session_id 与 skip_log_session_id,
-        // 漏一列就会让子行挂到账号侧的同名会话上(Copilot review)。
-        const refCols =
-          conflictedSessions > 0 && table !== SESSIONS_TABLE
-            ? sessionRefColumns(db, table).filter((col) => sharedCols.includes(col))
-            : [];
-        // NULL-safe:`col NOT IN (...)` 在 col 为 NULL 时结果是 NULL(被 WHERE 当假),
-        // 而这些引用列多数可空——不显式放行 NULL 的话,只要出现一个冲突会话,
-        // 所有「不关联任何会话」的行都会被误跳过(Copilot review)。
-        const refPredicate = (col: string, alias = ''): string =>
-          `(${alias}${quoteId(col)} IS NULL OR ${alias}${quoteId(col)} NOT IN` +
-          ` (SELECT id FROM temp.${quoteId(CONFLICT_TEMP_TABLE)}))`;
-        const conflictFilter = refCols.length
-          ? ` WHERE ${refCols.map((col) => refPredicate(col)).join(' AND ')}`
-          : '';
-        if (refCols.length) {
-          // 任一引用列指向冲突会话即整行跳过,统计口径与上面的过滤保持一致。
-          const anyConflict = refCols
-            .map(
-              (col) =>
-                `${quoteId(col)} IN (SELECT id FROM temp.${quoteId(CONFLICT_TEMP_TABLE)})`,
-            )
-            .join(' OR ');
-          const skipped = Number(
-            (
-              db
-                .prepare(
-                  `SELECT COUNT(*) AS c FROM ${SOURCE_SCHEMA}.${quoteId(table)}
-                     WHERE ${anyConflict}`,
-                )
-                .get() as { c: number | bigint }
-            ).c ?? 0,
-          );
-          if (skipped > 0) skippedByConflict[table] = skipped;
-        }
-        // OR IGNORE:主键/唯一约束冲突整行跳过。业务 id 都是 UUID,真正会撞的
-        // 只有按日期聚合的统计表——撞同一天时保留账号库已有的那条(与用户确认
-        // 的取舍一致:local 模式不产生 Cindy AI 花费,统计不并入无影响)。
+        // OR IGNORE:主键/唯一约束冲突整行跳过。会话 id 冲突已在上面整体拦死,
+        // 这里真正会撞的只有按日期聚合的统计表——撞同一天时保留账号库已有的那条
+        // (与用户确认的取舍一致:local 模式不产生 Cindy AI 花费,统计不并入无影响)。
         const result = db
           .prepare(
             `INSERT OR IGNORE INTO main.${quoteId(table)} (${colList})
-               SELECT ${colList} FROM ${SOURCE_SCHEMA}.${quoteId(table)}${conflictFilter}`,
+               SELECT ${colList} FROM ${SOURCE_SCHEMA}.${quoteId(table)}`,
           )
           .run();
         const changes = Number(result.changes);
@@ -317,40 +319,36 @@ export function importLocalOwnerData(
         const pkMatch = pkCols
           .map((col) => `t.${quoteId(col)} IS s.${quoteId(col)}`)
           .join(' AND ');
-        // 核验时排除「因会话冲突而故意跳过」的行——它们没进来是设计使然,
-        // 已单独记在 skippedByConflict 里,不该再算成 schema 不兼容的丢行。
-        const conflictExclusion = refCols.length
-          ? ` AND ${refCols.map((col) => refPredicate(col, 's.')).join(' AND ')}`
-          : '';
         const dropped = db
           .prepare(
             `SELECT COUNT(*) AS c FROM ${SOURCE_SCHEMA}.${quoteId(table)} s
                WHERE NOT EXISTS (
                  SELECT 1 FROM main.${quoteId(table)} t WHERE ${pkMatch}
-               )${conflictExclusion}`,
+               )`,
           )
           .get() as { c: number | bigint };
         const droppedCount = Number(dropped.c ?? 0);
         if (droppedCount > 0) droppedRows[table] = droppedCount;
       }
 
-      // 定时任务导入后一律置为 paused。确认窗只让用户裁决「会话归属」,没有征求
-      // 「把 local 模式的自动化任务在新账号下跑起来」——认领后 bootstrap 紧接着
-      // 启动 scheduler,到点的任务会带着刚搬过去的凭证自动执行 agent / 脚本
-      // (codex review)。导入即暂停,用户想要哪条自己去开。
-      if (sourceTables.has('schedules') && tableColumns(db, 'main', 'schedules').has('status')) {
+      // 确认窗只让用户裁决「对话归属」,没有征求「把 local 模式的自动化任务在新
+      // 账号下跑起来」——认领后 bootstrap 紧接着启动 scheduler,到点的任务会带着
+      // 刚搬过去的凭证自动执行 agent / 脚本(codex review)。导入即暂停,用户想要
+      // 哪条自己去开;账号库原有的任务(上面记进临时表的那些)一律不动。
+      if (canPauseSchedules) {
         pausedSchedules = Number(
           db
             .prepare(
-              `UPDATE main.schedules SET status = 'paused'
+              `UPDATE main.${quoteId(SCHEDULES_TABLE)} SET status = 'paused'
                  WHERE status <> 'paused'
-                   AND id IN (SELECT id FROM ${SOURCE_SCHEMA}.schedules)`,
+                   AND id IN (SELECT id FROM ${SOURCE_SCHEMA}.${quoteId(SCHEDULES_TABLE)})
+                   AND id NOT IN (SELECT id FROM temp.${quoteId(PRE_EXISTING_SCHEDULES_TABLE)})`,
             )
             .run().changes,
         );
       }
 
-      db.prepare(`DROP TABLE IF EXISTS temp.${quoteId(CONFLICT_TEMP_TABLE)}`).run();
+      db.prepare(`DROP TABLE IF EXISTS temp.${quoteId(PRE_EXISTING_SCHEDULES_TABLE)}`).run();
     });
     run();
 
@@ -362,7 +360,6 @@ export function importLocalOwnerData(
       unverifiedTables,
       unimportableTables,
       conflictedSessions,
-      skippedByConflict,
       pausedSchedules,
     };
   } finally {

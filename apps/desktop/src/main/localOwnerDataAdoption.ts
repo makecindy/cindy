@@ -100,8 +100,12 @@ class AdoptionInterruptedError extends Error {
 /** 推送给 renderer 的弹窗阶段(语义同 mToc:done/failed 后可解除)。 */
 export type LocalAdoptionPhase = 'confirm' | 'running' | 'done' | 'failed';
 
-/** 用户在确认窗上的裁决。 */
-export type LocalAdoptionDecision = 'adopt' | 'keep';
+/**
+ * 用户在确认窗上的裁决。`cancelled` 不是用户点出来的:另一个窗口切到别的账号时,
+ * 本次认领的目标 owner 已经过期,再等用户答这个弹窗只会把新账号的 ensureReady
+ * 一起堵住(codex review)——由 cancelPendingAdoptionDecision() 主动注入。
+ */
+export type LocalAdoptionDecision = 'adopt' | 'keep' | 'cancelled';
 
 interface AdoptionMarker {
   version: 1;
@@ -390,10 +394,17 @@ async function finishAdoption(
         moved += result.moved;
         conflicts += result.conflicts;
       }
-      if (moved > 0 || conflicts > 0) {
-        deps.log.info(
-          'local owner adoption: owner secrets renamed (moved=%d conflicts=%d)',
-          moved,
+      if (moved > 0) {
+        deps.log.info('local owner adoption: %d owner secrets renamed', moved);
+      }
+      if (conflicts > 0) {
+        // 账号侧已经有同名凭证文件:绝不覆盖(那会毁掉账号自己的凭证),但也绝不
+        // 静默——撞名意味着「本机那份凭证没能跟着配置过来」,对应的自定义供应商 /
+        // MCP / IM 在账号下可能拿着账号侧的旧凭证跑,是用户该知道的事
+        // (codex review)。按收尾未完成处理:local 侧的凭证与库都留在原地。
+        complete = false;
+        deps.log.warn(
+          'local owner adoption: %d owner secret(s) already exist under the account namespace and were left in place; the imported configs may be missing their credentials',
           conflicts,
         );
       }
@@ -486,6 +497,13 @@ export async function runLocalOwnerDataAdoption(
     if (!resuming) {
       deps.ui.publish('confirm');
       const decision = await deps.ui.waitForDecision();
+      if (decision === 'cancelled') {
+        // owner 已经换人,这次询问失去意义。不写任何 marker:新 owner 的那一轮
+        // 会自己重新判断要不要问。
+        deps.log.info('local owner adoption: confirmation cancelled, active owner changed');
+        deps.ui.publish('done');
+        return { status: 'stale-owner' };
+      }
       if (decision === 'keep') {
         try {
           await writeAdoptionMarker(deps, markerPath, {
@@ -566,15 +584,6 @@ export async function runLocalOwnerDataAdoption(
           imported.unverifiedTables.join(' '),
         );
       }
-      if (imported.conflictedSessions > 0) {
-        deps.log.warn(
-          'local owner adoption: %d local sessions collide with existing account sessions; they and their %s child rows were skipped to avoid corrupting the account side',
-          imported.conflictedSessions,
-          Object.entries(imported.skippedByConflict)
-            .map(([table, count]) => `${table}=${count}`)
-            .join(' ') || 'no',
-        );
-      }
       if (imported.pausedSchedules > 0) {
         deps.log.info(
           'local owner adoption: %d imported schedules were paused (the user only consented to moving conversations)',
@@ -591,8 +600,7 @@ export async function runLocalOwnerDataAdoption(
       const incomplete =
         Object.keys(imported.droppedRows).length > 0 ||
         imported.unimportableTables.length > 0 ||
-        imported.unverifiedTables.length > 0 ||
-        imported.conflictedSessions > 0;
+        imported.unverifiedTables.length > 0;
       return await commitAdoptionTail(
         deps,
         userId,
@@ -609,6 +617,17 @@ export async function runLocalOwnerDataAdoption(
       // inline worker 回滚口不实现 localOwner.importData(导入语义只留一份正本,
       // 不做第二份易 drift 的复制)。这不是错误,是「当前 db 运行时做不了」:
       // 推迟即可,正常 file worker 下会照常认领。
+      if ((err as { code?: string }).code === 'LOCAL_OWNER_SESSION_ID_CONFLICT') {
+        // 两库对同一个会话 id 有不同内容:导入整体中止、零写入。这不是可以靠重试
+        // 化解的故障,但也不该悄悄放弃——如实 warn,不写 marker(下次登录仍会问,
+        // 用户可选「保留在本机模式」终止),local 数据分毫未动。
+        deps.log.warn(
+          'local owner adoption aborted: %d local session(s) share an id with a different account session; nothing was written and the local data is untouched',
+          (err as { conflictedSessions?: number }).conflictedSessions ?? 0,
+        );
+        deps.ui.publish('failed');
+        return { status: 'failed', error: message };
+      }
       if ((err as { code?: string }).code === 'UNKNOWN_TX') {
         deps.log.info('local owner adoption deferred: db runtime has no row-level import support');
         deps.ui.publish('done');
@@ -795,6 +814,18 @@ const electronUiDeps: LocalAdoptionUiDeps = {
 };
 
 /**
+ * 主动结束还停在确认窗上的那次认领(注入 `cancelled`)。用于「另一个窗口切到别的
+ * 账号」:旧 owner 的弹窗此刻已无意义,而它不结束,新 owner 的 ensureReady 就会
+ * 一直排在它后面等用户点按钮(codex review)。无 pending 时是 no-op。
+ */
+function cancelPendingAdoptionDecision(): void {
+  const resolver = pendingDecisionResolver;
+  if (resolver == null) return;
+  pendingDecisionResolver = null;
+  resolver('cancelled');
+}
+
+/**
  * 注册认领弹窗的 IPC handler(bootstrap 里在 registerLocalDbIpc 前调用一次)。
  *  - `local-adoption:decide`:renderer 传回用户裁决('adopt' | 'keep');failed/
  *    done 态下的解除也走这条(无 pending resolver 时仅清态)。
@@ -839,6 +870,9 @@ export async function runLocalOwnerDataAdoptionForUser(
   while (inFlight != null) {
     const pending = inFlight;
     const pendingUserId = inFlightUserId;
+    // 不是同一个 owner:先把它可能还停着的确认窗取消掉,否则它要等用户点按钮才
+    // 走到 stale-owner 判定,本次(新 owner)就被无限期堵在这儿(codex review)。
+    if (pendingUserId !== userId) cancelPendingAdoptionDecision();
     const result = await pending;
     if (pendingUserId === userId) return result;
     // 上一轮已结束(finally 清了 inFlight)则退出循环自己跑;若又有新的在跑则继续等。

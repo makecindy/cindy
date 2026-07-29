@@ -144,7 +144,6 @@ const emptyImport: LocalOwnerImportResult = {
   unverifiedTables: [],
   unimportableTables: [],
   conflictedSessions: 0,
-  skippedByConflict: {},
   pausedSchedules: 0,
 };
 
@@ -437,26 +436,6 @@ describe('runLocalOwnerDataAdoption 并入全流程', () => {
     });
   });
 
-  it('账号侧已有同名凭证时跳过不覆盖', async () => {
-    const { mem, deps } = createHarness();
-    const localSecret = path.join(
-      SECRETS_DIR,
-      `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}anthropic.enc`,
-    );
-    const accountSecret = path.join(
-      SECRETS_DIR,
-      `${ownerSecretStoragePrefix(USER_ID)}anthropic.enc`,
-    );
-    mem.addFile(LOCAL_DB);
-    mem.addFile(localSecret, 'local-key');
-    mem.addFile(accountSecret, 'account-key');
-
-    await runLocalOwnerDataAdoption(USER_ID, deps);
-
-    expect(mem.files.get(path.normalize(accountSecret))).toBe('account-key');
-    expect(mem.files.get(path.normalize(localSecret))).toBe('local-key');
-  });
-
   it('确认窗停留期间 owner 变了(登出/切号)时中止,绝不并进失效账号', async () => {
     const { mem, deps, phases, importLocalData } = createHarness({
       ownerStillCurrent: () => false,
@@ -649,20 +628,57 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
     expect(mem.exists(LOCAL_DB)).toBe(true);
   });
 
-  it('存在同 id 会话冲突时按「没全带过来」处理:warn + 保留 local 库', async () => {
-    const { mem, deps } = createHarness({
-      importResult: { inserted: 4, conflictedSessions: 2, skippedByConflict: { messages: 9 } },
-    });
+  it('同 id 会话冲突时导入整体中止:零写入、不写 marker、local 数据分毫未动', async () => {
+    const { mem, deps, phases } = createHarness();
     mem.addFile(LOCAL_DB);
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'), 'learn');
+    deps.importLocalData = async () => {
+      throw Object.assign(new Error('2 local session(s) share an id'), {
+        code: 'LOCAL_OWNER_SESSION_ID_CONFLICT',
+        conflictedSessions: 2,
+      });
+    };
+
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(result.status).toBe('failed');
+    expect(phases).toEqual(['confirm', 'running', 'failed']);
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('share an id with a different account session'),
+      2,
+    );
+    // 零写入:marker、库、owner 文件全都没动。
+    expect(mem.files.has(path.normalize(MARKER))).toBe(false);
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+    expect(archivedDbNames(mem)).toHaveLength(0);
+    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'))).toBe(true);
+  });
+
+  it('账号侧已有同名凭证时不覆盖,并按收尾未完成处理(配置可能缺凭证)', async () => {
+    const { mem, deps } = createHarness();
+    const localSecret = path.join(
+      SECRETS_DIR,
+      `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}provider_key_p1_claude.enc`,
+    );
+    const accountSecret = path.join(
+      SECRETS_DIR,
+      `${ownerSecretStoragePrefix(USER_ID)}provider_key_p1_claude.enc`,
+    );
+    mem.addFile(LOCAL_DB);
+    mem.addFile(localSecret, 'local-key');
+    mem.addFile(accountSecret, 'account-key');
 
     expect((await runLocalOwnerDataAdoption(USER_ID, deps)).status).toBe('adopted');
 
+    expect(mem.files.get(path.normalize(accountSecret))).toBe('account-key');
     expect(deps.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining('collide with existing account sessions'),
-      2,
-      'messages=9',
+      expect.stringContaining('already exist under the account namespace'),
+      1,
     );
-    expect(archivedDbNames(mem)).toHaveLength(0);
+    // 收尾未完成 → 停在 importedOwnerKey,下次登录续跑。
+    const marker = readMarker(mem);
+    expect(marker.importedOwnerKey).toBe(USER_KEY);
+    expect(marker.claimedOwnerKey).toBeUndefined();
   });
 
   it('导入的定时任务被暂停时记录下来(用户只裁决了对话归属)', async () => {
