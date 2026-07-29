@@ -170,6 +170,7 @@
   "systemCard": {
     "goalComplete": "目標を達成 · {{turns}} 回 · 所要 {{duration}}",
     "goalResumed": "使用量が回復、目標を継続",
+    "goalCapacityRetry": "モデルサービスが混雑していました。目標を再試行します",
     "autoResume": "接続が切断、自動的に継続しました",
     "modelLabel": "モデル",
     "sessionLabel": "セッション",
