@@ -4840,6 +4840,76 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('keeps the stopped turn quarantined even after a new message is sent', async () => {
+      // Stop 之后旧 RPC 仍在飞, 而 Stop 让 handle 变 idle —— 用户可以马上发下一条消息,
+      // 于是两个 start 同时在飞。隔离若是个布尔标记: 新 send 的重置会把它清掉(放过已停止
+      // 的旧 turn), 或者谁先回谁消费(可能误杀新 turn)。按请求序号绑定后两者都不会发生
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-quarantine-survives-new-send',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 空 id 容量拒绝（初始 RPC 仍在飞）→ 延后 + 武装隔离。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 响应还没回来就 Stop。
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        // Stop 让会话变 idle → 用户马上发下一条消息(此时旧 RPC 仍在飞)。
+        await handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        // 新 turn 必须正常激活, 不能被上一轮的隔离误杀。
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        // 现在旧 RPC 才回来: 那个被 Stop 的 turn 必须落墓碑 + interrupt, 不得激活,
+        // 也不得把新 turn 顶掉。
+        firstStart.resolve({ turn: { id: 'turn-stale' } });
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-stale',
+          ),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('drops the pending-start quarantine when that turn/start fails', async () => {
       // 隔离标记是针对**某一次在途 turn/start 响应**的。那次请求失败后标记若留着, 下一条
       // 用户消息的成功响应会被它当成"该落墓碑的 turn"消费掉: 既不激活也不收口, 新消息
