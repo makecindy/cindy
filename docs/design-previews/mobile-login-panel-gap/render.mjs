@@ -1,6 +1,8 @@
 /**
- * 从 truth.json 生成手机登录页三方对比高保真图(main / 本 PR / figma 新稿配套)。
- * 坐标 = 750 stage 设计 px,统一 ×0.5 显示;资产走真图 + contain(与
+ * 从 truth.json 生成手机登录页「字标底↔面板顶」间距的**两列**对照图:
+ * ① origin/main 现状(已含 #697,有问题) vs ② 本 PR 修复后。figma 稿值不单独成列,
+ * 只作为 ✓稿 判定的参照(truth.json 的 figmaGap / figBottomGap)。
+ * 坐标 = 750 stage 设计 px,统一按 S 缩放显示;资产走真图 + contain(与
  * MobileLoginHandoffStage 的 resizeMode="contain" 同口径);深色底 #1F1F1E、
  * 面板 #FBFBFB(DESIGN.md §16 新稿帧底与面板色)。
  */

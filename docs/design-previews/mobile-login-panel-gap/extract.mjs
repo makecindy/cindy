@@ -4,24 +4,36 @@
  * 真值来源(禁手抄):
  *  - 当前 PR 值 = 直接 import apps/mobile/src/auth/loginSkinLayout.ts(纯数据零 RN);
  *  - main 值 = git show origin/main 同文件后 import,同一把尺子量两次。
- * 资产 = apps/mobile/assets/login/ 真图(@3x),不用占位图。
+ * 资产 = apps/mobile/assets/login/ 真图(demo 内 assets/ 为其 @2x 副本),不用占位图。
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { build } from 'esbuild';
+import { pathToFileURL } from 'node:url';
+import { transformSync } from 'esbuild';
 
 const REPO = process.argv[2];
 const SRC = 'apps/mobile/src/auth/loginSkinLayout.ts';
 
+/**
+ * TS 源码文本 → 已加载的 ES module(沿用 login-deletion-bubble/extract.mjs 的既有范式)。
+ *
+ * 两处刻意为之:
+ *  - `pathToFileURL(...).href` 而不是裸路径 —— Windows 上 `import('C:\\...')` 会被当成
+ *    包名解析而失败,动态 import 必须给 file:// URL(跨平台,AGENTS.md 规则 15);
+ *  - `finally` 里 `rmSync` 删临时目录 —— 否则每跑一次就在 os.tmpdir() 留一个
+ *    `mobile-gap-*` 目录慢慢堆积。
+ */
 async function loadFrom(tsText, tag) {
   const dir = mkdtempSync(path.join(tmpdir(), `mobile-gap-${tag}-`));
-  const entry = path.join(dir, 'layout.ts');
-  writeFileSync(entry, tsText, 'utf8');
-  const out = path.join(dir, 'layout.mjs');
-  await build({ entryPoints: [entry], outfile: out, format: 'esm', platform: 'node', bundle: false, loader: { '.ts': 'ts' } });
-  return import(out);
+  try {
+    const out = path.join(dir, 'layout.mjs');
+    writeFileSync(out, transformSync(tsText, { loader: 'ts', format: 'esm' }).code, 'utf8');
+    return await import(pathToFileURL(out).href);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 const currentTs = readFileSync(path.join(REPO, SRC), 'utf8');
