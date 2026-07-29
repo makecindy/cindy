@@ -5306,6 +5306,100 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('does not let a stopped orphan turn buffered output block the next send retry', async () => {
+      // 产出标记曾是**会话级标量**: 被 Stop 的旧 start 带着缓冲事件回包时(那要按"有产出"
+      // 处理, 因为 daemon 那边命令早跑了), 标量写的是当前这一轮的账 —— 而新一轮的
+      // turnStarted 进过缓冲, 不会把它清掉, 于是新消息一次本来安全的零产出容量重投被误判
+      // 成"有产出, 不重投", 自动重试静默失效(review #844 codex P1)。改为按 turn id 记账。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const secondStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            if (turnStarts === 2) return secondStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-orphan-output',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted || !handlers.itemStarted) {
+          throw new Error('expected handlers');
+        }
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const secondSend = handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        // 新一轮的 started 归属不明 → 进缓冲。
+        handlers.turnStarted({ turn: { id: 'turn-b' } });
+        // 被 Stop 那个 turn 在 server 上真的跑过命令, 事件同样先进缓冲(id 我们还不知道)。
+        handlers.itemStarted({
+          turnId: 'turn-stopped',
+          item: { id: 'item-1', type: 'commandExecution', command: 'rm -rf build' },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 旧 RPC 回包 → 认领这具尸体, 它有缓冲事件 → 按"有产出"记账(记在 turn-stopped 上)。
+        firstStart.resolve({ turn: { id: 'turn-stopped' } });
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 新一轮激活自己的 turn。
+        secondStart.resolve({ turn: { id: 'turn-b' } });
+        await secondSend;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-b');
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        // 基线: 队列里已有被 Stop 那一轮的终态事件, 只看这条容量错误之后新增的。
+        const before = events.length;
+
+        // 新一轮自己零产出撞容量 → 必须照常自动重投(不得被孤儿的账拖累)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-b',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(3);
+        const added = events.slice(before);
+        expect(added.filter((e) => e.type === 'error' && e.data.isTerminal)).toHaveLength(0);
+        // 透出的是非终止的重试进度横幅。
+        expect(added.filter((e) => e.type === 'error' && !e.data.isTerminal).length).toBeGreaterThan(0);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('keeps the next send buffered turn alive when the stopped start finally resolves', async () => {
       // 与"旧 start 最终 reject"同源的另一半: 被 Stop 的旧 turn/start 若是**resolve**回来,
       // 它照样走 handleTurnStartResp 的对账循环 —— 循环把"不是我的 id"一律坐实成孤儿, 于是

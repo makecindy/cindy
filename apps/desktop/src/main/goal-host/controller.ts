@@ -1040,6 +1040,24 @@ export class GoalController {
     // 判据与 fireTurn 用的是同一个 exceedsGoalBudget，结论必然一致；仍照常走 resumeGoal，
     // 由它把状态转成 budgetLimited。
     const budgetAlreadyExhausted = exceedsGoalBudget(state);
+    // 同理的第二种"这条重试根本没发生":会话此刻拿不到 live session(已关闭 / 暂时 hydrate
+    // 不出来)。resumeGoal 忽略 ensureSession 的结果、照样把目标转 active,而 fireTurn 拿不到
+    // session 就直接 return —— 既没有 listener 也没有续跑 timer,目标停在 active 不动,而卡片
+    // 已经落库说"正在重试目标"(review #844 codex P1)。
+    //
+    // 这里先探一次:拿不到就**原样留在 usageLimited**(可恢复态)——存档里 usageResetAt 还在,
+    // 用户手动 resume 或下次启动的 usageLimited 重排(见 start() 里按 listUsageLimited 补排
+    // timer)都会再试一次;既不落假卡片,也不把目标推进一个停滞的 active。
+    // 刻意不在这里重排 timer:hydrate 不出来通常不是几十秒能自愈的,循环重排只会空转。
+    // ensureSession 是幂等的 ensure 语义,下面 resumeGoal 再调一次拿到的是同一个 session。
+    const liveSession = await this.deps.ensureSession(sessionId).catch(() => null);
+    if (!liveSession) {
+      this.deps.logger.warn('[goal] skipped auto resume — no live session; staying usageLimited', {
+        sessionId,
+        lastReason: state.lastReason ?? null,
+      });
+      return;
+    }
     if (this.deps.persistGoalNotice && !budgetAlreadyExhausted) {
       // 过载与账号限流共用 usageLimited 状态和这同一个 timer，但说法必须分开：
       // 账号从没被限流时报「额度已重置」是假信息（review #844 codex P1）。

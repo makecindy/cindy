@@ -316,10 +316,12 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
   const userMessages: Array<{ sessionId: string; content: string; updated?: boolean }> = [];
   // 可变:测试按需设置"账号是否受限 + resetAt"。
   let accountLimit: AccountLimitInfo | null = null;
+  // 可变:模拟"会话已关闭 / 此刻 hydrate 不出来"(ensureSession 返回 undefined)。
+  let hydratable = true;
   const deps: GoalControllerDeps = {
     storage,
     getSession: (id) => (id === 's1' ? session : undefined),
-    ensureSession: async (id) => (id === 's1' ? session : undefined),
+    ensureSession: async (id) => (hydratable && id === 's1' ? session : undefined),
     isSessionInTurn: () => false,
     emitStatus: (u) => updates.push(u),
     getDefaults: () => ({ ...DEFAULT_LIMITS }),
@@ -351,6 +353,9 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
     userMessages,
     setAccountLimit: (v: AccountLimitInfo | null) => {
       accountLimit = v;
+    },
+    setHydratable: (v: boolean) => {
+      hydratable = v;
     },
   };
 }
@@ -1328,6 +1333,44 @@ describe('GoalController', () => {
     // 一条提示都不该落库, 状态直接转成 budgetLimited。
     expect(h.notices).toEqual([]);
     expect((await h.storage.get('s1'))?.status).toBe('budgetLimited');
+  });
+
+  it('keeps the goal usageLimited when the session cannot be hydrated at resume time', async () => {
+    // 第二种"这条重试根本没发生": 到点时会话已关闭 / hydrate 不出来。resumeGoal 忽略
+    // ensureSession 的结果照样转 active, 而 fireTurn 拿不到 session 就直接 return ——
+    // 既没有 listener 也没有续跑 timer, 目标停在 active 不动, 卡片却说"正在重试目标"
+    // (review #844 codex P1)。要求: 不落卡片, 原样留在 usageLimited(可恢复态,
+    // 存档的 usageResetAt 会在下次启动时被重排)。
+    h.setAccountLimit({ limited: false, resetAtMs: null });
+    await startGoal(h);
+    h.session.emitErrorTurn({ message: 'Selected model is at capacity.' });
+    await tick();
+    expect((await h.storage.get('s1'))?.status).toBe('usageLimited');
+    const resetAtBefore = (await h.storage.get('s1'))?.usageResetAt ?? null;
+    expect(resetAtBefore).not.toBeNull();
+    h.notices.length = 0;
+
+    // 到点了, 但此刻 hydrate 不出 live session。
+    h.setHydratable(false);
+    await (
+      h.controller as unknown as { autoResumeFromUsageLimit(id: string): Promise<void> }
+    ).autoResumeFromUsageLimit('s1');
+    await tick();
+
+    expect(h.notices).toEqual([]);
+    const after = await h.storage.get('s1');
+    expect(after?.status).toBe('usageLimited');
+    // 可恢复:重排 timer 靠的就是它。
+    expect(after?.usageResetAt).toBe(resetAtBefore);
+
+    // 会话回来之后再到点 → 照常落卡片续跑。
+    h.setHydratable(true);
+    await (
+      h.controller as unknown as { autoResumeFromUsageLimit(id: string): Promise<void> }
+    ).autoResumeFromUsageLimit('s1');
+    await tick();
+    expect(h.notices).toEqual([{ sessionId: 's1', kind: 'capacity-resumed' }]);
+    expect((await h.storage.get('s1'))?.status).toBe('active');
   });
 
   it('setGoal gives a replacement objective its own overload budget', async () => {

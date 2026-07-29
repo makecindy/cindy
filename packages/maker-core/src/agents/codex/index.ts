@@ -2163,14 +2163,21 @@ export class CodexAgent extends BaseAgent {
     let lastTurnTokenUsage: TokenUsageBreakdown | null = null;
     let lastModelContextWindow: number | null = null;
     /**
-     * 本 turn 是否已产出任何模型内容（item 或 reasoning 增量）。
+     * 已产出过模型内容(item 或 reasoning 增量)的 turn id。
      *
      * 只用于判断服务过载错误能否安全重投：容量拒绝发生在 admission 阶段时模型
      * 一个字都没写过，重投同一份 turnParams 不会重复任何副作用；一旦已经产出过
      * 内容（写过文件、跑过命令），重放就会让模型重做已完成的工作，那种情况必须
      * 交回用户决定。
+     *
+     * **按 turn 记账而不是一个会话级标量**: 被 Stop 的旧 send 的隔离 start 若带着缓冲事件
+     * 回包(那要按"有产出"处理), 标量写的是**当前**这一轮的账 —— 而新一轮的 turnStarted 若
+     * 进过缓冲或作为同 turn 通知到达, 都不会把它清掉, 于是新消息一次本来安全的零产出容量
+     * 重投被误判成"有产出, 不重投", 自动重试静默失效(review #844 codex P1)。
+     * 每个写入方都拿得到自己的 turnId, 读取方(scheduleOverloadRetry)拿得到死 turn 的 id,
+     * 按 id 记账后跨轮污染在结构上就不成立, 也不再需要"换 turn 才清零"这类时序守卫。
      */
-    let currentTurnProducedOutput = false;
+    const producedOutputTurnIds = new Set<string>();
     /**
      * 服务过载退避重投状态。`retry` 由 send() 每轮登记，闭包持有该 turn 的
      * turnParams 与响应处理逻辑，因此重投投递的是同一条用户消息、同一套策略，
@@ -4598,7 +4605,7 @@ export class CodexAgent extends BaseAgent {
       // 于是补排会照常重放同一条输入, 副作用执行两遍。按"有缓冲事件即有产出"处理
       // (review #844 codex P1)。
       if ((bufferedTurnEventQueues.get(turnId)?.length ?? 0) > 0) {
-        currentTurnProducedOutput = true;
+        producedOutputTurnIds.add(turnId);
         log.info('codex adopted turn had buffered events — treating as produced output', {
           turnId,
           threadId,
@@ -4818,9 +4825,14 @@ export class CodexAgent extends BaseAgent {
       // 随后重放原消息 —— 已经执行过的命令与文件改动跑第二遍
       // (review #844 codex P1)。这里返回 null 是安全的：有产出意味着该 turn 早已
       // 被 turnStarted 激活，不存在"UI 收口后在途 RPC 又把 turn 激活"的悬空风险。
-      if (currentTurnProducedOutput) {
+      // deadTurnId 为空(空 id 容量拒绝)时查不了, 也不必查: 那条路要求 currentTurnId 为
+      // null, 即这个 turn 的 turnStarted 还没到, 它的 item / reasoning 不可能被记到自己
+      // 名下(全被 stale 闸或缓冲挡住)。缓冲事件那种"看不见的产出"由
+      // adoptUnidentifiedDeadTurn 在响应回来、id 已知时补记, 补排再查一次就拦住了。
+      if (deadTurnId && producedOutputTurnIds.has(deadTurnId)) {
         log.info('codex overload error after partial output — not auto-retrying', {
           threadId,
+          deadTurnId,
           inFlight: state.inFlight,
         });
         return null;
@@ -5260,15 +5272,12 @@ export class CodexAgent extends BaseAgent {
         translatorRt.networkRetryNotice = null;
         // retry 升级计数同样按 turn 隔离 — 新 turn 从零计。
         turnRetryTracker.reset();
-        // 新 turn 从"零产出"起算,决定后续过载错误能否安全重投。
-        // **只在真的换了 turn 时重置**:本 handler 明确支持同一 turn 的重复 /
-        // 迟到 started(典型:buffered item 事件重放后补发),那时 item / reasoning
-        // 可能已经把标记置成 true。无条件清零会让随后的容量错误被误判成零产出,
-        // 重放整条消息 → 重复已经执行过的命令与文件改动(review #844 codex P1)。
+        // 产出记账**不在这里清**: 它按 turn id 存(producedOutputTurnIds), 新 turn 天然
+        // 从"零产出"起算, 同一 turn 的重复 / 迟到 started 也不会抹掉已记的账 —— 这两条
+        // 以前靠 `if (!wasSameTurn)` 的时序守卫维持(review #844 codex P1), 现在是结构性的。
         // **不在这里重置 overloadRetry.attempt**:过载重投本身会开出新 turn,
         // 在这里清预算等于每次重投都续满次数 → 容量故障期无限重试烧额度。
         // 预算只在 send() 收到用户新消息时重置。
-        if (!wasSameTurn) currentTurnProducedOutput = false;
         log.debug('SDK ▶ turn start', {
           turnId: params.turn.id,
           model: mutableModel,
@@ -5326,7 +5335,7 @@ export class CodexAgent extends BaseAgent {
         if (interceptProposedPlanItem(params.item)) return;
         // 模型已开始产出 → 本 turn 不再适合被过载重投整体重放。SDK echo 类 item
         // (userMessage 等)不算产出, 见 itemRepresentsModelWork。
-        if (itemRepresentsModelWork(params.item)) currentTurnProducedOutput = true;
+        if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
         pushItemStatus(params.item);
         translateItemNotification('started', params, eventQueue, {
@@ -5341,7 +5350,7 @@ export class CodexAgent extends BaseAgent {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
-        if (itemRepresentsModelWork(params.item)) currentTurnProducedOutput = true;
+        if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
         translateItemNotification('updated', params, eventQueue, {
           rt: translatorRt,
@@ -5355,7 +5364,7 @@ export class CodexAgent extends BaseAgent {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
-        if (itemRepresentsModelWork(params.item)) currentTurnProducedOutput = true;
+        if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
         translateItemNotification('completed', params, eventQueue, {
           rt: translatorRt,
@@ -5378,19 +5387,19 @@ export class CodexAgent extends BaseAgent {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryTextDelta?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         // thinking 流也算产出：模型已经在这一轮里工作了，整体重放不再等价。
-        currentTurnProducedOutput = true;
+        producedOutputTurnIds.add(params.turnId);
         translateReasoningSummaryTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
       reasoningSummaryPartAdded: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryPartAdded?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
-        currentTurnProducedOutput = true;
+        producedOutputTurnIds.add(params.turnId);
         translateReasoningSummaryPartAdded(params, eventQueue, { rt: translatorRt, log });
       },
       reasoningTextDelta: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningTextDelta?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
-        currentTurnProducedOutput = true;
+        producedOutputTurnIds.add(params.turnId);
         translateReasoningTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
       accountRateLimitsUpdated: (params) =>
@@ -5670,12 +5679,10 @@ export class CodexAgent extends BaseAgent {
         // 用户发新消息 = 上一轮的过载重投彻底作废(它要重投的是旧消息)。
         // 这里也是**唯一**重置重投预算的地方，见 turnStarted 的说明。
         discardOverloadRetry('new send');
-        // 产出标记同样按 send 归零。只靠 turnStarted 重置不够: 新 turn 的
-        // turn/start 响应与容量错误都可能先于它的 turnStarted 通知到达(本文件多处
-        // 支持这种乱序), 那时读到的是**上一个 turn** 的产出状态, 会把一次本来安全
-        // 的自动重投判成"有产出, 不重投"(review #844 codex P1)。同 turn 重复
-        // turnStarted 的幂等保护仍在 turnStarted 里(只在真的换 turn 时清)。
-        currentTurnProducedOutput = false;
+        // 产出记账不需要按 send 归零: 它按 turn id 存, 新一轮读的是新 turn 的账。
+        // 早先的标量要在这里清, 是因为"新 turn 的响应 / 容量错误先于它的 turnStarted
+        // 到达"时会读到上一个 turn 的状态(review #844 codex P1); 按 id 记账后这类乱序
+        // 不再影响判定, 也不会再被别的 turn(含被 Stop 的旧 send 的孤儿)污染。
         const mySendGen = ++sendGeneration;
         isTurnStartPending = true;
         usageTracker.beginTurn();
