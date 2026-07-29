@@ -165,10 +165,10 @@ const OUTPUT_REDIRECTION = /(?<!-)>>?(?!&)/;
 // 贴合的 value 照样命中。大小写敏感(不加 /i):`-d/-F/-T` 是上传,`-D`(dump-header,只读)不能误伤。
 // `-[a-zA-Z]*[dFT]`:短选项簇里含值取向的 -d/-F/-T(curl 无布尔短选项用 d/F/T),捕获贴合 `-dDATA`、
 // 捆绑 `-sdsecret`、独立 `-d`;curl 大小写敏感,不误伤只读的 -D。
-const CURL_UPLOAD_FLAGS = /(?:^|\s)-[a-zA-Z]*[dFT]|(?:^|\s)--(?:data|form|upload-file|json)[\w-]*|(?:^|\s)(?:-X|--request)\s*(?:POST|PUT|DELETE|PATCH)/;
+const CURL_UPLOAD_FLAGS = /(?:^|\s)-[a-zA-Z]*[dFT]|(?:^|\s)--(?:data|form|upload-file|json)[\w-]*|(?:^|\s)(?:-X|--request)[=\s]*(?:POST|PUT|DELETE|PATCH)/;
 // 落盘到文件/目录(curl -o/-O/--output;wget -o 日志 /-O 文档 /-P 目录前缀)。含贴合短选项 `-ofile`;写任意路径。
 // (wget 现整体升级、不再走安全 fetch,见 isSafeFetch;此常量仍供 curl 的 -o/-O 判定。)
-const FETCH_OUTPUT_FLAGS = /(?:^|\s)-[oOP]|(?:^|\s)--(?:output(?:-dir|-document)?|remote-name|directory-prefix)\b/;
+const FETCH_OUTPUT_FLAGS = /(?:^|\s)-[oODP]|(?:^|\s)--(?:output(?:-dir|-document)?|remote-name|directory-prefix|dump-header)\b/;
 // curl 跟随重定向(-L/--location*):最终 host 静态不可判(可 302 跳到云 metadata/内网)→ 升级。
 const CURL_REDIRECT_FLAGS = /(?:^|\s)(?:-L|--location(?:-trusted)?)\b/;
 // curl 带凭证 / 隐藏参数 / SSRF 改路由的 flag → 升级。短选项大小写敏感。
@@ -295,10 +295,21 @@ function isInternalFetchTarget(t: string): boolean {
   if (host === 'localhost' || host.endsWith('.localhost') || host === '0.0.0.0' || host === '::1') return true;
   if (host === 'metadata.google.internal' || host.endsWith('.internal')) return true;
   if (host.startsWith('[')) return true; // IPv6 字面量(环回/私网难精确,保守升级)
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(host);
-  if (m) {
-    const a = Number(m[1]);
-    const b = Number(m[2]);
+  // 取 32 位 IPv4:点分 a.b.c.d,或 SSRF 混淆用的十进制整数(2852039166=169.254.169.254)/ 十六进制(0xA9FEA9FE)。
+  let a: number | null = null;
+  let b = 0;
+  const dotted = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(host);
+  if (dotted) {
+    a = Number(dotted[1]);
+    b = Number(dotted[2]);
+  } else if (/^\d+$/.test(host) || /^0x[0-9a-f]+$/i.test(host)) {
+    const n = host.startsWith('0x') || host.startsWith('0X') ? parseInt(host, 16) : Number(host);
+    if (Number.isFinite(n) && n >= 0 && n <= 0xffffffff) {
+      a = (n >>> 24) & 255;
+      b = (n >>> 16) & 255;
+    }
+  }
+  if (a !== null) {
     if (a === 127 || a === 10 || a === 0) return true;    // 环回 / 10.0.0.0-8 / 0.0.0.0-8
     if (a === 169 && b === 254) return true;              // 链路本地 + 云 metadata 169.254.169.254
     if (a === 172 && b >= 16 && b <= 31) return true;     // 172.16.0.0-12

@@ -357,6 +357,25 @@ describe('classifyShellCommand — 第六轮 bot 护栏', () => {
   });
 });
 
+// 第七轮护栏:--request=POST 等号形、-D/--dump-header 落盘、整数/十六进制 IPv4 SSRF 混淆。
+describe('classifyShellCommand — 第七轮 bot 护栏', () => {
+  it('curl --request=POST 等号形 → prompt', () => {
+    expect(classifyShellCommand('curl --request=POST https://x.example', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl --request POST https://x.example', roots)).toBe('prompt');
+  });
+  it('curl -D/--dump-header 落盘 → prompt', () => {
+    expect(classifyShellCommand('curl -D ~/.bashrc https://example.com', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl --dump-header /tmp/h https://example.com', roots)).toBe('prompt');
+  });
+  it('整数/十六进制 IPv4 SSRF 混淆(2852039166 / 0xA9FEA9FE = 169.254.169.254)→ prompt', () => {
+    expect(classifyShellCommand('curl http://2852039166/latest/meta-data', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://0xA9FEA9FE/latest/meta-data', roots)).toBe('prompt');
+  });
+  it('公网点分 IP 仍放行(8.8.8.8)', () => {
+    expect(classifyShellCommand('curl http://8.8.8.8/', roots)).toBe('auto-approve');
+  });
+});
+
 describe('classifyShellCommand — 内网/云 metadata 抓取升级(SSRF 面)', () => {
   it('云 metadata / localhost / 私网 IP → prompt', () => {
     for (const c of [
