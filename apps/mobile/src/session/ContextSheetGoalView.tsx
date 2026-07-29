@@ -243,6 +243,9 @@ function GoalStatusView({
   const canResume = goal.status === 'paused' || goal.status === 'blocked' || goal.status === 'usageLimited';
   const turnsText = `${goal.turnsUsed}${goal.maxTurns !== null ? ` / ${goal.maxTurns}` : ''}`;
   const tokensText = `${formatTokens(goal.tokensUsed)}${goal.budgetTokens !== null ? ` / ${formatTokens(goal.budgetTokens)}` : ''}`;
+  // 只取一次: 这里原本直接用 goal.lastReason(取值免费), 换成函数后条件与正文各调一次
+  // 属于无谓重复(copilot 低置信提示)。
+  const reasonText = goalReasonText(goal.lastReason);
   return (
     <View testID={testID}>
       <View style={styles.statusHeader}>
@@ -256,9 +259,7 @@ function GoalStatusView({
         </Text>
       </View>
       <Text style={styles.objectiveText} testID="contextSheet.goalObjectiveText">{goal.objective}</Text>
-      {goalReasonText(goal.lastReason) ? (
-        <Text style={styles.hintText}>{goalReasonText(goal.lastReason)}</Text>
-      ) : null}
+      {reasonText ? <Text style={styles.hintText}>{reasonText}</Text> : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
       <View style={styles.actionRow}>
         {canPause ? (
