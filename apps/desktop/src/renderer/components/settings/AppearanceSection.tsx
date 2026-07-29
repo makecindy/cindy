@@ -512,15 +512,6 @@ export function AppearanceSection() {
         const state = await window.electronAPI.ghosts.deleteAppearancePreset(option.presetId);
         publishSkinAppearanceState(state.appearance, state.presets);
         toast.success(t('settings.appearance.style.deleted', { name: option.label }));
-        if (activeSkinPreset?.id === option.presetId) {
-          try {
-            const resetState = await window.electronAPI.ghosts.resetAppearance();
-            publishSkinAppearanceState(resetState.appearance, resetState.presets);
-          } catch (error) {
-            log.warn('deleted active skin preset but failed to return to theme', { error });
-            toast.error(t('settings.appearance.style.switchFailed'));
-          }
-        }
       } catch (error) {
         log.warn('failed to delete skin preset', { error });
         toast.error(t('settings.appearance.style.deleteFailed'));
@@ -528,7 +519,7 @@ export function AppearanceSection() {
         setAppearanceBusy(false);
       }
     },
-    [activeSkinPreset?.id, appearanceBusy, confirm, t],
+    [appearanceBusy, confirm, t],
   );
 
   useEffect(() => {

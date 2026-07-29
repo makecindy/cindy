@@ -1478,13 +1478,24 @@ async function readGhostAppearanceState() {
   };
 }
 
+let ghostAppearanceMutationTail: Promise<void> = Promise.resolve();
+
 async function withGhostAppearanceMutation<T>(operation: () => Promise<T>): Promise<T> {
-  // appearanceStore 自己负责同账号内串行化；这里再持有账号边界 lease，确保排队
-  // 期间 teardown 会等待，文件路径与媒体账本不会在执行中切到下一个 owner。
+  // 从请求归属检查到最终持久化必须是同一个串行操作。appearanceStore 只串行
+  // 单次读写，无法阻止可信 Renderer 在插件 getCurrent() 与 reset/save() 之间
+  // 插入另一套皮肤。这里同时覆盖插件管子和可信 IPC，消除跨入口 TOCTOU。
+  //
+  // lease 在排队前获取，确保等待期间 teardown 也会等待，文件路径与媒体账本
+  // 不会在操作开始执行前切到下一个 owner。
   const owner = captureGhostMutationOwner();
   const releaseMutation = beginGhostMutation(owner);
+  const run = ghostAppearanceMutationTail.then(operation);
+  ghostAppearanceMutationTail = run.then(
+    () => undefined,
+    () => undefined,
+  );
   try {
-    return await operation();
+    return await run;
   } finally {
     releaseMutation();
   }

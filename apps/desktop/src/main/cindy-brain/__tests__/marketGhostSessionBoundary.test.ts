@@ -70,6 +70,9 @@ describe('market Ghost session boundary', () => {
     const helper = source.slice(helperStart, helperEnd);
     expect(helper).toContain('const owner = captureGhostMutationOwner();');
     expect(helper).toContain('const releaseMutation = beginGhostMutation(owner);');
+    expect(helper).toContain('const run = ghostAppearanceMutationTail.then(operation);');
+    expect(helper).toContain('ghostAppearanceMutationTail = run.then(');
+    expect(helper).toContain('return await run;');
     expect(helper).toContain('releaseMutation();');
 
     for (const marker of [
