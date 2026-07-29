@@ -5306,6 +5306,75 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it('keeps the next send buffered turn alive when the stopped start finally resolves', async () => {
+      // 与"旧 start 最终 reject"同源的另一半: 被 Stop 的旧 turn/start 若是**resolve**回来,
+      // 它照样走 handleTurnStartResp 的对账循环 —— 循环把"不是我的 id"一律坐实成孤儿, 于是
+      // 把下一轮 send 那条合法的缓冲 started 落墓碑 + interrupt, 它自己的响应随后拒绝激活,
+      // 那一轮永久卡 generating(review #844 codex P1)。
+      // 判据统一为"没有别的 start 在飞时才算权威对账者"。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const secondStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            if (turnStarts === 2) return secondStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-stopped-start-resolves',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted) throw new Error('expected handlers');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const secondSend = handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        handlers.turnStarted({ turn: { id: 'turn-second' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.() ?? null).toBeNull();
+
+        // 旧 RPC 现在才**成功**回包(server 早就接受了它, 只是响应慢)。它带回的是自己的
+        // turn id, 不得据此把新一轮那条缓冲 started 判成孤儿。
+        firstStart.resolve({ turn: { id: 'turn-stopped' } });
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        // 被 Stop 的那个 turn 自己照旧不许活。
+        expect(handle.getCurrentTurnId?.() ?? null).not.toBe('turn-stopped');
+
+        secondStart.resolve({ turn: { id: 'turn-second' } });
+        await secondSend;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-second');
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('revokes a pending retry when a late turn/completed settles the send terminally', async () => {
       // 不变量: 逻辑 send 一旦被终态收口(terminal error + Done 都出了 UI), 挂起 / 延后的
       // 重投资格就随之作废。否则计时器到点会在用户已经看到失败之后重投原消息, 服务端

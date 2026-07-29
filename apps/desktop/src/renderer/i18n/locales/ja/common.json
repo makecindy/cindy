@@ -7322,7 +7322,7 @@
       "complete": "完了",
       "budgetLimited": "上限到達",
       "usageLimited": "利用上限",
-        "capacityLimited": "モデルサービスが混雑"
+      "capacityLimited": "モデルサービスが混雑"
     },
     "turns": "{{used}} ターン",
     "turnsWithMax": "{{used}} / {{max}} ターン",
@@ -7345,7 +7345,7 @@
       "failed": "目標の作成に失敗しました"
     },
     "usageLimitedUntil": "{{time}} に再開",
-      "capacityRetryAt": "{{time}} に再試行",
+    "capacityRetryAt": "{{time}} に再試行",
     "usageResumeNotice": "利用枠が回復しました。目標を再開します",
     "capacityRetryNotice": "モデルサービスが混雑していました。目標を再試行します",
     "complete": {

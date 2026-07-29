@@ -24,6 +24,7 @@ import type {
   MobileGoalStatusPayload,
 } from '@cindy/maker-shared/device-link-contract';
 import { i18n } from '@/i18n';
+import { GOAL_STATUS_LABEL, goalReasonText, goalStatusLabel } from '@/session/goalStatusLabel';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 /** 三项上限的推荐预设(与桌面 GoalAdvancedLimits 一致,2026-06 与用户确认)。 */
@@ -50,13 +51,7 @@ function formatTokenPreset(n: number): string {
 // react-native, 单测跑不起来; 那边有完整注释与用例)。这里 re-export 保持既有 import
 // 路径可用 —— 渲染一律走 goalStatusLabel(status, lastReason), 不按状态直取映射表:
 // 过载退避与账号限流共用 usageLimited, 直取会重新显示成「用量受限」(review #844)。
-export {
-  GOAL_STATUS_LABEL,
-  goalReasonText,
-  goalStatusLabel,
-} from '@/session/goalStatusLabel';
-
-import { goalReasonText, goalStatusLabel } from '@/session/goalStatusLabel';
+export { GOAL_STATUS_LABEL, goalReasonText, goalStatusLabel };
 
 export interface ContextSheetGoalViewProps {
   /** undefined = 状态尚未拉取(unknown);此时仍渲染新建表单,覆盖保护在提交端补查。 */

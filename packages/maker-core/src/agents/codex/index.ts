@@ -2257,6 +2257,22 @@ export class CodexAgent extends BaseAgent {
     };
 
     /**
+     * 除了 `seq` 这一次, 还有别的 turn/start 在飞吗。
+     *
+     * 缓冲集里的歧义 started **无法归属**(协议层分不清失败 RPC 的孤儿与在飞 RPC 的
+     * started-before-resp), 所以一个 id 只有在**所有候选归属方都被排除**之后才能被坐实成
+     * 孤儿 —— 也就是没有别的 start 还在飞的时候。隔离(reject)与对账(resolve)两条路共用这条
+     * 判据(review #844 codex P1)。
+     *
+     * 显式传 seq 而不是判 `inFlightStarts.size > 1`: 后者只在"调用点一定早于本请求
+     * endTurnStart"时才等价, 而那正是本 PR 反复踩过的隐式耦合。
+     */
+    const hasOtherInFlightStart = (seq: number): boolean => {
+      for (const other of inFlightStarts.keys()) if (other !== seq) return true;
+      return false;
+    };
+
+    /**
      * 标记某次在飞的 start:它的响应回来时**不得激活**带回的 turn, 必须落墓碑 + interrupt。
      *
      * 两个来源:
@@ -5814,14 +5830,32 @@ export class CodexAgent extends BaseAgent {
         // 只动 error path, happy path 完全不变 (规则 19: 不影响 cache hit /
         // 性能 / 准确性 4 指标)。重试只发生在 "thread not found" 字符串匹配时,
         // 普通 LLM 错误 / 超时 / auth 失败照原路径报错。
-        const handleTurnStartResp = (resp: TurnStartResponse): void => {
+        const handleTurnStartResp = (resp: TurnStartResponse, ownerSeq: number): void => {
           if (resp.turn?.id) {
             // 缓冲的歧义 started 对账 (codex R9 P2): 本响应确立在飞 RPC 的
             // turnId — 缓冲里 id 一致的是它的合法 started (下方正常激活),
             // 不一致的是失败 RPC 的孤儿 (interrupt + 墓碑, 没人消费)。
+            //
+            // 但"不是我的"只有在**没有别的 start 在飞**时才等于"是孤儿": Stop 会武装孤儿
+            // 守卫, 于是下一轮 send 的 turnStarted 同样先进这个**会话级共享**的缓冲集; 被
+            // Stop 的旧 RPC 若是 resolve(而不是 reject)回来, 它照样走到这里, 把新一轮那条
+            // 合法 started 当孤儿坐实 —— 墓碑 + interrupt 之后新一轮的响应拒绝激活, 那一轮
+            // 永久卡 generating(review #844 codex P1, 与隔离路径同源)。
+            //
+            // 非唯一权威时只做能确定的那一半: 把自己的 id 从缓冲里摘掉(否则 stale 闸会继续
+            // 忽略它已激活 turn 的事件), 其余留给仍在飞的那些 start 去对账。
             if (bufferedOrphanTurnIds.size > 0) {
               const wasBuffered = bufferedOrphanTurnIds.has(resp.turn.id);
-              for (const bufferedId of bufferedOrphanTurnIds) {
+              const soleAuthority = !hasOtherInFlightStart(ownerSeq);
+              if (!soleAuthority) {
+                bufferedOrphanTurnIds.delete(resp.turn.id);
+                log.debug('turn/start response is not the sole reconciler — leaving other buffered turns', {
+                  acceptedTurnId: resp.turn.id,
+                  remaining: [...bufferedOrphanTurnIds],
+                  threadId,
+                });
+              }
+              for (const bufferedId of soleAuthority ? bufferedOrphanTurnIds : []) {
                 if (bufferedId === resp.turn.id) continue;
                 terminalErroredTurnIds.add(bufferedId);
                 // 孤儿的事件队列整队丢弃 (greptile R11 P1) — 任何事件都不得
@@ -5843,7 +5877,7 @@ export class CodexAgent extends BaseAgent {
                   });
                 }
               }
-              bufferedOrphanTurnIds.clear();
+              if (soleAuthority) bufferedOrphanTurnIds.clear();
               if (wasBuffered) {
                 // 合法 started 曾被缓冲: 补做 turnStarted 正常路径被跳过的
                 // per-turn 状态重置 (与 turnStarted handler 同款)。
@@ -5989,7 +6023,7 @@ export class CodexAgent extends BaseAgent {
               }
               markTurnConfigAccepted();
               adoptUnidentifiedDeadTurn(resp, retryStartSeq);
-              handleTurnStartResp(resp);
+              handleTurnStartResp(resp, retryStartSeq);
               rpcSettledOk = true;
             } finally {
               state.inFlight = false;
@@ -6055,7 +6089,7 @@ export class CodexAgent extends BaseAgent {
             abandonBufferedTurns('send cancelled after turn/start');
             return;
           }
-          handleTurnStartResp(resp);
+          handleTurnStartResp(resp, initialStartSeq);
           initialStartSettledOk = true;
         } catch (e) {
           if (isLocalAcceptBoundaryError(e)) {
@@ -6136,7 +6170,7 @@ export class CodexAgent extends BaseAgent {
                 abandonBufferedTurns('send cancelled after turn/start retry');
                 return;
               }
-              handleTurnStartResp(resp);
+              handleTurnStartResp(resp, initialStartSeq);
               initialStartSettledOk = true;
             } catch (retryErr) {
               if (isLocalAcceptBoundaryError(retryErr)) throw retryErr;

@@ -7333,7 +7333,7 @@
       "complete": "Completed",
       "budgetLimited": "Limit reached",
       "usageLimited": "Usage limited",
-        "capacityLimited": "Model service busy"
+      "capacityLimited": "Model service busy"
     },
     "turns": "{{used}} turns",
     "turnsWithMax": "{{used}} / {{max}} turns",
@@ -7356,7 +7356,7 @@
       "failed": "Failed to create goal"
     },
     "usageLimitedUntil": "resumes {{time}}",
-      "capacityRetryAt": "Retrying at {{time}}",
+    "capacityRetryAt": "Retrying at {{time}}",
     "usageResumeNotice": "Usage limit reset — resuming the goal",
     "capacityRetryNotice": "Model service was busy — retrying the goal",
     "complete": {

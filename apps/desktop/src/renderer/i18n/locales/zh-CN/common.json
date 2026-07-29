@@ -7322,7 +7322,7 @@
       "complete": "已完成",
       "budgetLimited": "已达上限",
       "usageLimited": "用量受限",
-        "capacityLimited": "模型服务繁忙"
+      "capacityLimited": "模型服务繁忙"
     },
     "turns": "{{used}} 轮",
     "turnsWithMax": "{{used}} / {{max}} 轮",
@@ -7345,7 +7345,7 @@
       "failed": "新建目标失败"
     },
     "usageLimitedUntil": "{{time}} 恢复",
-      "capacityRetryAt": "{{time}} 重试",
+    "capacityRetryAt": "{{time}} 重试",
     "usageResumeNotice": "用量已恢复，继续目标",
     "capacityRetryNotice": "模型服务繁忙，正在重试目标",
     "complete": {
