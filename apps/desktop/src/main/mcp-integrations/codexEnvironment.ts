@@ -106,7 +106,9 @@ export function getActiveCodexBridgeInstanceId(): string | null {
  */
 export function getActiveCodexBridgeServerNames(): string[] | null {
   // 与 activeBridge 同生共死 (doStart 同步赋值 / shutdown finally 同步清空)。
-  return activeBridgeServerNames;
+  // 返回防御性拷贝: 内部数组同时是 drift 判定 / stale-bridge 钳制的数据源,
+  // 调用方误改不得污染快照。
+  return activeBridgeServerNames ? [...activeBridgeServerNames] : null;
 }
 
 export async function shutdownCodexEnvironment(): Promise<void> {
