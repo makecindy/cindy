@@ -1521,6 +1521,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     () =>
       normalizeStrongDelimiterBoundaries(
         normalizeMathDelimiters(throttledContent, { preserveLineCount: emitSourceLines }),
+        { preserveTexDelimiters: emitSourceLines },
       ),
     [throttledContent, emitSourceLines],
   );

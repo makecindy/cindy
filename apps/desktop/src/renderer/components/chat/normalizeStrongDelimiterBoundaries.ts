@@ -50,6 +50,14 @@ interface OffsetRange {
   end: number;
 }
 
+interface NormalizeStrongDelimiterBoundariesOptions {
+  /**
+   * 保护因行号对齐而保留源码形态的 `\[...\]` 与跨行 `\(...\)`。
+   * 普通渲染会先把它们转换成 remark-math 可识别的美元符号定界符。
+   */
+  preserveTexDelimiters?: boolean;
+}
+
 function classifyCharacter(character: string | undefined): 'whitespace' | 'punctuation' | 'other' {
   if (!character || UNICODE_WHITESPACE_RE.test(character)) return 'whitespace';
   if (UNICODE_PUNCTUATION_RE.test(character)) return 'punctuation';
@@ -146,9 +154,46 @@ function collectProjectDeepLinkRanges(markdown: string, range: OffsetRange): Off
   return ranges;
 }
 
+function collectPreservedTexDelimiterRanges(markdown: string): OffsetRange[] {
+  const ranges: OffsetRange[] = [];
+  let scan = 0;
+  let noParenCloser = false;
+  let noBracketCloser = false;
+
+  while (scan < markdown.length) {
+    const open = markdown.indexOf('\\', scan);
+    if (open === -1 || open + 1 >= markdown.length) break;
+    const kind = markdown[open + 1];
+    if (kind !== '(' && kind !== '[') {
+      scan = open + 1;
+      continue;
+    }
+
+    const isDisplay = kind === '[';
+    if (isDisplay ? noBracketCloser : noParenCloser) {
+      scan = open + 2;
+      continue;
+    }
+    const closer = kind === '[' ? '\\]' : '\\)';
+    const close = markdown.indexOf(closer, open + 2);
+    if (close === -1) {
+      if (isDisplay) noBracketCloser = true;
+      else noParenCloser = true;
+      scan = open + 2;
+      continue;
+    }
+
+    ranges.push({ start: open, end: close + 2 });
+    scan = close + 2;
+  }
+
+  return ranges;
+}
+
 function collectProseRanges(
   tree: Root,
   markdown: string,
+  preservedTexDelimiterRanges: OffsetRange[],
 ): Array<{
   range: OffsetRange;
   protectedRanges: OffsetRange[];
@@ -167,6 +212,11 @@ function collectProseRanges(
     const protectedRanges: OffsetRange[] = [];
     collectProtectedRanges(node, protectedRanges, markdown);
     protectedRanges.push(...collectProjectDeepLinkRanges(markdown, range));
+    protectedRanges.push(
+      ...preservedTexDelimiterRanges.filter(
+        (protectedRange) => protectedRange.start < range.end && protectedRange.end > range.start,
+      ),
+    );
     protectedRanges.sort((left, right) => left.start - right.start);
     proseRanges.push({ range, protectedRanges });
   });
@@ -253,11 +303,21 @@ function collectBoundaryInsertions(
  * 让“以标点结束、后面紧接正文”的加粗片段能被解析，同时不改变可见
  * 消息、链接、公式、原始 HTML 和代码示例。
  */
-export function normalizeStrongDelimiterBoundaries(markdown: string): string {
+export function normalizeStrongDelimiterBoundaries(
+  markdown: string,
+  options: NormalizeStrongDelimiterBoundariesOptions = {},
+): string {
   if (!markdown.includes('**') || !POTENTIAL_BOUNDARY_RE.test(markdown)) return markdown;
 
   const tree = markdownParser.runSync(markdownParser.parse(markdown), markdown) as Root;
-  const boundaryInsertions = collectProseRanges(tree, markdown).flatMap(({ range, protectedRanges }) =>
+  const preservedTexDelimiterRanges = options.preserveTexDelimiters
+    ? collectPreservedTexDelimiterRanges(markdown)
+    : [];
+  const boundaryInsertions = collectProseRanges(
+    tree,
+    markdown,
+    preservedTexDelimiterRanges,
+  ).flatMap(({ range, protectedRanges }) =>
     collectBoundaryInsertions(markdown, range, protectedRanges),
   );
   if (boundaryInsertions.length === 0) return markdown;

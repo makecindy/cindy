@@ -184,6 +184,24 @@ describe('normalizeStrongDelimiterBoundaries', () => {
     );
   });
 
+  it('protects TeX delimiters preserved for source-line anchors', () => {
+    const cases = ['\\[2**3.**x\\]', ['\\(', '2**3.**x', '\\)'].join('\n')];
+
+    for (const source of cases) {
+      const normalizedMath = normalizeMathDelimiters(source, { preserveLineCount: true });
+      expect(normalizedMath, source).toBe(source);
+      expect(
+        normalizeStrongDelimiterBoundaries(normalizedMath, { preserveTexDelimiters: true }),
+        source,
+      ).toBe(source);
+    }
+
+    const prose = '**重点。**正文';
+    expect(normalizeStrongDelimiterBoundaries(prose, { preserveTexDelimiters: true })).toBe(
+      '**重点。**<!--cindy-strong-boundary-->正文',
+    );
+  });
+
   it('preserves loose inline math before the strict math plugin downgrades it to text', () => {
     const source = '$2**3.**x $';
 
