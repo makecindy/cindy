@@ -397,6 +397,7 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
     if (assistant.content == null && !hasToolCalls && assistant.reasoning_content) assistant.content = '';
     ensureToolCallCompatibility(assistant, opts);
     messages.push(assistant);
+    if (hasToolCalls) resolvedToolCallIds.clear();
     pendingToolCalls = (assistant.tool_calls ?? []).map((call) => ({
       id: call.id,
       name: call.function.name,
@@ -420,8 +421,14 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
       : typeof item.id === 'string' && item.id
         ? item.id
         : '';
-    if (callId && resolvedToolCallIds.has(callId)) return;
+    const bufferedAssistantReusesCallId = callId
+      ? assistant?.tool_calls?.some((call) => call.id === callId) === true
+      : false;
+    // A late duplicate from the completed round must not flush unrelated buffered calls. The
+    // same ID in the buffered assistant instead starts a legitimate new round and takes priority.
+    if (callId && resolvedToolCallIds.has(callId) && !bufferedAssistantReusesCallId) return;
     flushAssistant();
+    if (callId && resolvedToolCallIds.has(callId)) return;
     let matchIndex = callId
       ? pendingToolCalls.findIndex((call) => call.id === callId)
       : -1;

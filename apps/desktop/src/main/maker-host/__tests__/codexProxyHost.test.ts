@@ -369,6 +369,37 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       }),
       expect.anything(),
     );
+    const localHandler = (decision as {
+      localHandler: (input: { rawBody: Buffer; parsedBody: unknown; res: unknown }) => Promise<void>;
+    }).localHandler;
+    const originalInstructions = [
+      { type: 'input_text', text: 'BASE_PROMPT' },
+      { type: 'input_image', image_url: 'data:image/png;base64,eA==' },
+    ];
+    const parsedBody = {
+      model: 'kimi-k3',
+      instructions: originalInstructions,
+      input: 'hello',
+    };
+    const res = {};
+    await localHandler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      res,
+    });
+    const bridgeHandler = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as {
+      handle: ReturnType<typeof vi.fn>;
+    };
+    expect(bridgeHandler.handle).toHaveBeenCalledWith({
+      parsedBody: {
+        ...parsedBody,
+        instructions: [
+          ...originalInstructions,
+          { type: 'input_text', text: '\n\nPRODUCT_PROMPT' },
+        ],
+      },
+      res,
+    });
 
     clearSessionProvider('session-kimi-image');
     setCustomProviderKeyReader(() => null);

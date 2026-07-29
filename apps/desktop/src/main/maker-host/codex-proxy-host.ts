@@ -352,12 +352,29 @@ function createChatBridgeDecision(
         }
       }
       if (instructions && isPlainObject(body)) {
-        const existing = typeof body.instructions === 'string' ? body.instructions : '';
+        const existing = body.instructions;
+        const existingText = Array.isArray(existing)
+          ? existing.map((part) => {
+            if (!isPlainObject(part) || typeof part.type !== 'string') return '';
+            if (
+              (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text')
+              && typeof part.text === 'string'
+            ) {
+              return part.text;
+            }
+            if (part.type === 'refusal' && typeof part.refusal === 'string') return part.refusal;
+            return '';
+          }).join('')
+          : typeof existing === 'string'
+            ? existing
+            : '';
         body = {
           ...body,
-          instructions: existing.includes(instructions)
+          instructions: existingText.includes(instructions)
             ? existing
-            : [existing, instructions].filter(Boolean).join('\n\n'),
+            : Array.isArray(existing)
+              ? [...existing, { type: 'input_text', text: `\n\n${instructions}` }]
+              : [existingText, instructions].filter(Boolean).join('\n\n'),
         };
       }
       // localHandler 在 transform 链**之前**执行(引擎按路由决策短路),跨来源恢复的

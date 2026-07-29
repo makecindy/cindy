@@ -822,6 +822,25 @@ describe('translateResponsesRequest', () => {
     ]);
   });
 
+  it('keeps real tool outputs when a later assistant round reuses the same call id', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'c1', name: 'Bash', arguments: '{"round":1}' },
+        { type: 'function_call_output', call_id: 'c1', output: 'first result' },
+        { type: 'function_call', call_id: 'c1', name: 'Bash', arguments: '{"round":2}' },
+        { type: 'function_call_output', call_id: 'c1', output: 'second result' },
+      ],
+    }));
+
+    expect(out.messages.filter((message) => message.role === 'tool')).toEqual([
+      { role: 'tool', tool_call_id: 'c1', content: 'first result' },
+      { role: 'tool', tool_call_id: 'c1', content: 'second result' },
+    ]);
+    expect(out.messages).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ content: expect.stringContaining('execution status is unknown') }),
+    ]));
+  });
+
   it('normalizes synthesized orphan tool calls for reasoning and Gemini providers', () => {
     const out = translateResponsesRequest(base({
       input: [
