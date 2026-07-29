@@ -643,6 +643,18 @@ function dynamicToolResponseFromUserInput(response: ToolRequestUserInputResponse
   };
 }
 
+function userInputQuestionsFingerprint(
+  questions: readonly ToolRequestUserInputQuestion[],
+): string {
+  return JSON.stringify(questions);
+}
+
+function hasSubmittedUserInput(response: ToolRequestUserInputResponse): boolean {
+  return Object.values(response.answers).some((answer) =>
+    answer?.answers.some((value) => value.trim().length > 0) === true,
+  );
+}
+
 function normalizeServiceTier(serviceTier: ServiceTier | null | undefined): ServiceTier | null | undefined {
   return serviceTier === 'priority' ? 'fast' : serviceTier;
 }
@@ -3490,6 +3502,14 @@ export class CodexAgent extends BaseAgent {
     const userInputBroker = new CodexInteractionBroker<ToolRequestUserInputResponse>();
     const dynamicToolBroker = new CodexInteractionBroker<DynamicToolCallResponse>();
     const activeToolContexts = new Map<string, ActiveToolContext>();
+    // A single model turn can surface the same question through both the
+    // native requestUserInput request and the dynamic-tool compatibility
+    // path. Once the user has submitted a real answer, replay it for an exact
+    // same-turn duplicate instead of asking them a second time.
+    const submittedUserInputByTurn = new Map<
+      string,
+      Map<string, ToolRequestUserInputResponse>
+    >();
     registerCodexMcpContext(threadId);
     let mcpElicitationSeq = 0;
 
@@ -4417,6 +4437,7 @@ export class CodexAgent extends BaseAgent {
       for (const [itemId, ctx] of activeToolContexts) {
         if (ctx.turnId === turnId) activeToolContexts.delete(itemId);
       }
+      submittedUserInputByTurn.delete(turnId);
     }
 
     function classifyUserInputRequest(params: ToolRequestUserInputParams): 'ask_user_question' | 'permission' {
@@ -4434,6 +4455,7 @@ export class CodexAgent extends BaseAgent {
     async function askUserViaInteraction(
       requestId: string,
       questions: ToolRequestUserInputQuestion[],
+      turnId?: string | null,
     ): Promise<ToolRequestUserInputResponse> {
       if (questions.some((q) => q.isSecret)) {
         log.warn('requestUserInput secret question refused', {
@@ -4441,6 +4463,17 @@ export class CodexAgent extends BaseAgent {
           questionCount: questions.length,
         });
         return emptyUserInputResponse(questions);
+      }
+      const fingerprint = turnId ? userInputQuestionsFingerprint(questions) : null;
+      const submittedForTurn = turnId ? submittedUserInputByTurn.get(turnId) : undefined;
+      const replay = fingerprint ? submittedForTurn?.get(fingerprint) : undefined;
+      if (replay) {
+        log.info('reusing submitted answer for duplicate same-turn user input request', {
+          requestId,
+          turnId,
+          questionCount: questions.length,
+        });
+        return replay;
       }
       const decision = await dispatchInteraction({
         kind: 'ask_user_question',
@@ -4451,7 +4484,13 @@ export class CodexAgent extends BaseAgent {
         log.warn('requestUserInput got mismatched ask decision', { requestId, decKind: decision.kind });
         return emptyUserInputResponse(questions);
       }
-      return responseFromAskUserAnswers(questions, decision.answers);
+      const response = responseFromAskUserAnswers(questions, decision.answers);
+      if (turnId && fingerprint && hasSubmittedUserInput(response)) {
+        const nextSubmittedForTurn = submittedForTurn ?? new Map<string, ToolRequestUserInputResponse>();
+        nextSubmittedForTurn.set(fingerprint, response);
+        if (!submittedForTurn) submittedUserInputByTurn.set(turnId, nextSubmittedForTurn);
+      }
+      return response;
     }
 
     async function requestUserInputAsPermission(
@@ -4530,7 +4569,7 @@ export class CodexAgent extends BaseAgent {
         async (settle) => {
           const response = kind === 'permission'
             ? await requestUserInputAsPermission(requestId, params, questions)
-            : await askUserViaInteraction(requestId, questions);
+            : await askUserViaInteraction(requestId, questions, params.turnId);
           settle(response);
         },
       );
@@ -4590,7 +4629,7 @@ export class CodexAgent extends BaseAgent {
           itemId: params.callId,
         },
         async (settle) => {
-          const response = await askUserViaInteraction(requestId, questions);
+          const response = await askUserViaInteraction(requestId, questions, params.turnId);
           settle(dynamicToolResponseFromUserInput(response));
         },
       );
@@ -6173,6 +6212,7 @@ export class CodexAgent extends BaseAgent {
           subscriptionInvalidatedByTransport = true;
           dismissAllPendingUserInput('transport_error');
           activeToolContexts.clear();
+          submittedUserInputByTurn.clear();
         }
         const targetsPendingTurn = isTurnStartPending && currentTurnId === null && Boolean(params.turnId);
         // 空 turnId 的容量拒绝: 过载重投的 RPC 还在飞、而它的 turnStarted 尚未到达时,
