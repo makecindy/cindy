@@ -31,6 +31,11 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { listMessagesFor } from '@/lib/makerTransport';
 import { collectSessionListSnapshot } from '@/features/device-link/refreshRemoteSessions';
+import {
+  cancelSessionListPersist,
+  clearCachedDevice,
+  scheduleSessionListPersist,
+} from '@/features/device-link/mirrorCacheClient';
 import * as messageService from '@/lib/messageService';
 
 const DEVICE_ID = 'dev-A';
@@ -97,7 +102,9 @@ const putMessages = vi.fn<
   ) => Promise<{ ok: true }>
 >(async () => ({ ok: true as const }));
 const getSessionList = vi.fn(async () => ({ devices: [] as never[] }));
-const putSessionList = vi.fn(async () => ({ ok: true as const }));
+const putSessionList = vi.fn<
+  (devices: readonly Record<string, unknown>[]) => Promise<{ ok: true }>
+>(async () => ({ ok: true as const }));
 const clearCache = vi.fn(async () => ({ ok: true as const }));
 
 function stubApi(): void {
@@ -426,6 +433,31 @@ describe('remoteProjectsStore.hydrateFromCache', () => {
       { deviceId: 'dev-empty', deviceName: 'Empty', sessions: [] },
     ]);
     expect(remoteProjectsStore.hasDevice('dev-empty')).toBe(false);
+  });
+});
+
+describe('清某设备缓存不牵连别的设备', () => {
+  // review(codex P1):clearCachedDevice 原先顺手 cancel 了那个**全局**去抖回写 ——
+  // 「A 被归档排了回写、1.2 秒内 B 被撤销」时 A 那次更新被吞掉,而随后的对账内容没变
+  // 就不会再通知订阅者,于是 A 的旧会话能在下次离线冷启动重新出现。
+  it('清 B 的缓存不会吞掉 A 刚排下的列表回写', async () => {
+    vi.useFakeTimers();
+    try {
+      scheduleSessionListPersist(() => [
+        { deviceId: 'dev-A', deviceName: 'Mac A', sessions: [{ id: 's-a' }] as never },
+      ]);
+      clearCachedDevice('dev-B');
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(clearCache).toHaveBeenCalledWith('dev-B');
+      expect(putSessionList).toHaveBeenCalledTimes(1);
+      const written = putSessionList.mock.calls[0]?.[0] as Array<{ deviceId: string }>;
+      expect(written.map((d) => d.deviceId)).toEqual(['dev-A']);
+    } finally {
+      cancelSessionListPersist();
+      vi.useRealTimers();
+    }
   });
 });
 

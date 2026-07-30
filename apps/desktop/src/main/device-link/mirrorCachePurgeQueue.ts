@@ -72,9 +72,61 @@ const memoryQueue = new Map<string, PurgeEntry>();
 let queueLock: Promise<unknown> = Promise.resolve();
 
 function withQueueLock<T>(task: () => Promise<T>): Promise<T> {
-  const next = queueLock.then(task, task);
+  const guarded = (): Promise<T> => withFileLock(task);
+  const next = queueLock.then(guarded, guarded);
   queueLock = next.catch(() => undefined);
   return next;
+}
+
+/** 跨进程锁文件名(与队列文件同目录)。 */
+const QUEUE_LOCK_FILE = `${QUEUE_FILE}.lock`;
+/** 超过这个年龄的锁一定是崩溃残留(临界区只有几毫秒的文件 IO),可以强行接管。 */
+const LOCK_STALE_MS = 10_000;
+/** 抢锁最长等待:拿不到就降级为「只靠进程内锁 + 提交时合并」,绝不因此丢掉这次记录。 */
+const LOCK_WAIT_MS = 3_000;
+const LOCK_RETRY_MS = 40;
+
+/**
+ * 跨进程互斥。dev 实例与打包实例可以共用同一个 userData(见 devStartupStatus.ts),
+ * 于是「读队列 → 改 → 整份写回」在两个进程之间会互相覆盖:后落位的那次赢,输的那条记录
+ * 只剩在自己进程的 memoryQueue 里,进程退出即消失,对应的明文缓存再也没有重试
+ * (review: codex P1)。
+ *
+ * 用 `open(lock, 'wx')` 做锁:同目录、O_EXCL 语义在 Windows / macOS / Linux 都可靠。
+ * 抢不到就退化(只等 LOCK_WAIT_MS),因为「宁可偶尔覆盖,也不能因为拿不到锁就不记」——
+ * 提交时的合并(drain / enqueue 都在临界区里重读一次最新盘上内容)仍在兜着。
+ */
+async function withFileLock<T>(task: () => Promise<T>): Promise<T> {
+  const lock = path.join(app.getPath('userData'), QUEUE_LOCK_FILE);
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let held = false;
+  for (;;) {
+    try {
+      const handle = await fsp.open(lock, 'wx');
+      await handle.writeFile(String(process.pid), 'utf8').catch(() => undefined);
+      await handle.close().catch(() => undefined);
+      held = true;
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') break; // 权限等:直接降级
+      const stat = await fsp.stat(lock).catch(() => null);
+      if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+        log.warn('breaking stale mirror cache purge queue lock');
+        await fsp.rm(lock, { force: true }).catch(() => undefined);
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        log.warn('mirror cache purge queue lock busy; proceeding without cross-process lock');
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
+    }
+  }
+  try {
+    return await task();
+  } finally {
+    if (held) await fsp.rm(lock, { force: true }).catch(() => undefined);
+  }
 }
 
 function queueFilePath(): string {
@@ -374,6 +426,7 @@ async function drainPurgeQueueLocked(): Promise<{ purged: number; pending: numbe
 
 export const __testing = {
   queueFileName: QUEUE_FILE,
+  lockFileName: QUEUE_LOCK_FILE,
   maxEntries: MAX_ENTRIES,
   readQueue,
   resetMemoryQueue(): void {

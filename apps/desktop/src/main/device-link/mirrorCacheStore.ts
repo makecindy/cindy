@@ -399,6 +399,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
    */
   type WriteGuard = { kind: 'write'; epoch: number } | { kind: 'purge'; allEpoch: number };
 
+  /**
+   * 列表快照写入结果。`purge-failed` 带上具体卡住的路径(可能是 session-list.json 本身,
+   * 也可能是落位失败后删不掉的 `.tmp` —— 后者里同样是完整快照明文)。
+   */
+  type SessionListWriteResult =
+    | { outcome: 'written' | 'removed' | 'skipped' | 'stale' | 'failed'; stuck?: undefined }
+    | { outcome: 'purge-failed'; stuck: string };
+
   /** 这笔写入此刻是否已被作废。 */
   function isStale(guard: WriteGuard): boolean {
     return guard.kind === 'write'
@@ -409,20 +417,20 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   async function writeSessionListLocked(
     devices: readonly unknown[],
     guard: WriteGuard,
-  ): Promise<'written' | 'removed' | 'skipped' | 'stale' | 'failed' | 'purge-failed'> {
+  ): Promise<SessionListWriteResult> {
     const file = sessionListPath();
-    if (isStale(guard)) return 'stale';
+    if (isStale(guard)) return { outcome: 'stale' };
     for (const perDeviceLimit of SESSION_LIST_SHRINK_STEPS) {
       const normalized = normalizeDeviceSessions(devices, perDeviceLimit);
       if (normalized.length === 0) {
         lastWritten.delete(file);
         try {
           await fsp.rm(file, { force: true });
-          return 'removed';
+          return { outcome: 'removed' };
         } catch {
           // 删除类失败与写入类失败要分开:前者意味着「本该消失的元数据还在盘上」,得进
           // purge 队列;后者只是缓存没更新,重试删除反而会删掉正常数据。
-          return 'purge-failed';
+          return { outcome: 'purge-failed', stuck: file };
         }
       }
       const payload: StoredSessionList = { version: 1, updatedAt: Date.now(), devices: normalized };
@@ -431,10 +439,16 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 指纹只算 devices,不含 updatedAt。10 秒一轮的 anti-entropy 绝大多数时候内容没变,
       // 这里直接跳过落盘。
       const body = JSON.stringify(normalized);
-      if (unchanged(file, body)) return 'skipped';
+      if (unchanged(file, body)) return { outcome: 'skipped' };
       await ensureDir(path.dirname(file));
-      if (isStale(guard)) return 'stale';
-      if (!(await writeFileAtomic(file, serialized))) return 'failed';
+      if (isStale(guard)) return { outcome: 'stale' };
+      const written = await writeFileAtomic(file, serialized);
+      if (!written.ok) {
+        // 连 `.tmp` 都删不掉时那份完整快照留在盘上 → 当成删除类失败登记重试。
+        return written.leftoverTmp
+          ? { outcome: 'purge-failed', stuck: written.leftoverTmp }
+          : { outcome: 'failed' };
+      }
       if (isStale(guard)) {
         // 同 writeMessages:清理已经过去了,这笔补偿删除失败就等于「被撤销 / 上一个账号的
         // 设备元数据留在盘上,而且没人知道」。返回 purge-failed 让调用方登记重试。
@@ -442,15 +456,15 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         try {
           await fsp.rm(file, { force: true });
         } catch {
-          return 'purge-failed';
+          return { outcome: 'purge-failed', stuck: file };
         }
-        return 'stale';
+        return { outcome: 'stale' };
       }
       rememberWritten(file, body);
-      return 'written';
+      return { outcome: 'written' };
     }
     // 缩到最小档仍超上限:保留旧快照,不写入。
-    return 'skipped';
+    return { outcome: 'skipped' };
   }
 
   function serializeWrite<T>(file: string, task: () => Promise<T>): Promise<T> {
@@ -513,7 +527,15 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         if (unchanged(file, body)) return;
         await ensureDir(dir);
         if (epoch !== generation) return;
-        if (!(await writeFileAtomic(file, serialized))) return;
+        const written = await writeFileAtomic(file, serialized);
+        if (!written.ok) {
+          // 落位失败且连 `.tmp` 都删不掉:那份完整明文留在盘上,登记重试(逐设备清理的
+          // 枚举现在也认 `.tmp`,但重试更直接)。
+          if (written.leftoverTmp) {
+            throw new MirrorCachePurgeError(resolveRoot(), [written.leftoverTmp], null);
+          }
+          return;
+        }
         if (epoch !== generation) {
           // 隐私清理期间落的盘:立刻收回,否则刚被清空的目录里会留下本该消失的聊天内容。
           // 这笔补偿删除失败(Windows 文件锁 / 权限)时不能咽下去:清理侧已经枚举并删完了,
@@ -548,8 +570,8 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       );
       // 只有「删除失败」才抛(见 purge-failed):写入失败保留旧快照即可,不该让上层去
       // 重试删除一份仍然有效的缓存。
-      if (outcome === 'purge-failed') {
-        throw new MirrorCachePurgeError(resolveRoot(), [sessionListPath()], null);
+      if (outcome.outcome === 'purge-failed') {
+        throw new MirrorCachePurgeError(resolveRoot(), [outcome.stuck], null);
       }
     },
 
@@ -602,7 +624,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         // 尚未删完」的窗口:那时晚到的 clearDevice 会快照到新代际,若只比代际就拦不住它在
         // 删除完成之后把列表写回去(review: codex P1)。
         const guard = { kind: 'purge', allEpoch: epochAll } as const;
-        if (isStale(guard)) return 'stale' as const;
+        if (isStale(guard)) return { outcome: 'stale' } as SessionListWriteResult;
         const parsed = await readJson(listFile);
         const devices = isRecord(parsed) && Array.isArray(parsed.devices) ? parsed.devices : [];
         const others = normalizeDeviceSessions(devices).filter((device) => device.deviceId !== id);
@@ -610,7 +632,8 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       });
       // 列表快照重写失败(Windows 上被占用 / owner 目录只读)同样要能被重试 —— 否则消息文件
       // 删掉了、会话元数据还在盘上,下次冷启动照样把这台被撤销的设备画回侧边栏(review: codex P1)。
-      if (outcome === 'failed' || outcome === 'purge-failed') stuck.push(listFile);
+      if (outcome.outcome === 'failed') stuck.push(listFile);
+      else if (outcome.outcome === 'purge-failed') stuck.push(outcome.stuck);
 
       // 删不掉 / 数不出来的东西都是隐私问题:被撤销的对端正文会留在盘上直到本账号生命周期
       // 结束。抛出来让调用方登记重试,而不是把失败咽下去。
@@ -663,6 +686,9 @@ async function evictMessagesIfNeeded(
   dir: string,
   lastWritten: Map<string, string>,
 ): Promise<void> {
+  // 先扫掉陈旧的 `.tmp`:进程在 writeFile 与 rename 之间被杀会留下完整明文,而它既不进
+  // 体积预算也不会被下面的 LRU 逐出(review: codex P1)。只删够老的,免得动到正在写的那笔。
+  await sweepStaleTmpFiles(dir);
   const names = await listFiles(dir);
   if (names.length === 0) return;
   const stats: Array<{ name: string; size: number; mtimeMs: number }> = [];
@@ -688,6 +714,31 @@ async function evictMessagesIfNeeded(
   }
 }
 
+/** 超过这个年龄的 `.tmp` 一定不是在写的那笔(单次写盘是毫秒级),可以安全清掉。 */
+const STALE_TMP_MS = 60_000;
+
+async function sweepStaleTmpFiles(dir: string): Promise<void> {
+  let entries: string[];
+  try {
+    entries = (await fsp.readdir(dir, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.tmp'))
+      .map((entry) => entry.name);
+  } catch {
+    return; // 纯优化路径:枚举不了就算了(隐私清理走 fail-closed 的 listMessageFileNames)
+  }
+  const now = Date.now();
+  for (const name of entries) {
+    const file = path.join(dir, name);
+    try {
+      const stat = await fsp.stat(file);
+      if (now - stat.mtimeMs < STALE_TMP_MS) continue;
+      await fsp.rm(file, { force: true });
+    } catch {
+      // 竞态 / 权限:留给下一次(逐设备清理与 clearAll 都会再看一遍)
+    }
+  }
+}
+
 /**
  * 枚举 messages/ 下的缓存文件,**区分「空」与「数不出来」**。
  *
@@ -701,8 +752,14 @@ async function listMessageFileNames(
   try {
     const entries = await fsp.readdir(dir, { withFileTypes: true });
     return {
+      // `.tmp` 也算:落位失败或进程在 writeFile 与 rename 之间被杀时,残留的
+      // `<file>.<hex>.tmp` 里是完整明文。只认 `.json` 的话逐设备清理看不见它,
+      // 被撤销对端的正文就无限期留在盘上(review: codex P1)。名字前缀不变,
+      // 所以调用方的 prefix 过滤照样命中。
       names: entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+        .filter(
+          (entry) => entry.isFile() && (entry.name.endsWith('.json') || entry.name.endsWith('.tmp')),
+        )
         .map((entry) => entry.name),
       unreadable: false,
     };
@@ -740,16 +797,30 @@ async function ensureDir(dir: string): Promise<void> {
  * 原子落位:写临时文件再 rename。失败时删掉半成品并返回 false ——
  * 绝不能让被中断的写入留下一个能被解析成「更少消息」的文件。
  */
-async function writeFileAtomic(file: string, content: string): Promise<boolean> {
+/**
+ * 原子落位。失败时返回 `leftoverTmp` —— 那个 `.tmp` 里是**完整的明文**(消息页或列表快照),
+ * 清不掉就必须让调用方登记重试:它不以 `.json` 结尾,逐设备清理的枚举本来看不见它
+ * (review: codex P1)。
+ */
+async function writeFileAtomic(
+  file: string,
+  content: string,
+): Promise<{ ok: boolean; leftoverTmp?: string }> {
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
   try {
     await fsp.writeFile(tmp, content, 'utf8');
     await fsp.rename(tmp, file);
-    return true;
+    return { ok: true };
   } catch (err) {
     log.debug(`mirror cache write failed: ${file}`, err);
     await fsp.rm(tmp, { force: true }).catch(() => undefined);
-    return false;
+    // 只有「tmp 真的还在盘上」才算残留:tmp 根本没建出来时(比如 messages/ 位置被占成
+    // 普通文件,writeFile 直接 ENOTDIR),rm 也会失败,但盘上并没有明文。
+    const leftover = await fsp.stat(tmp).then(
+      () => true,
+      () => false,
+    );
+    return leftover ? { ok: false, leftoverTmp: tmp } : { ok: false };
   }
 }
 
@@ -770,4 +841,6 @@ export const __testing = {
   safeSegment,
   shortHash,
   purgeContents,
+  sweepStaleTmpFiles,
+  staleTmpMs: STALE_TMP_MS,
 };

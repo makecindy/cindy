@@ -132,12 +132,19 @@ function writeSessionListNow(devices: readonly CachedDeviceSessionsSnapshot[]): 
 
 /**
  * 某设备离场(移除 / 撤销控制):清它的消息缓存与列表快照条目。
- * 同时取消 pending 的列表回写 —— 否则残留定时器会把刚被移除的设备写回去。
+ *
+ * 刻意**不**取消 pending 的列表回写:那是一个全局去抖,取消它会连带丢掉别的设备刚排下的
+ * 快照更新 —— 「A 被归档 / 删除排了回写、1.2 秒内 B 被撤销」时,A 那次更新被吞掉,而
+ * 随后的对账内容没变就不会再通知订阅者,于是 A 的旧会话能在下次离线冷启动重新出现
+ * (review: codex P1)。
+ *
+ * 不取消也不会把 B 写回去:`collect` 是懒的(定时器触发时才读 store),而所有调用方都在
+ * 调这里之前先 `removeDevice` 掉了 B 的分片;真正的删除由 main 侧 `clearDevice()` 完成,
+ * 它会原子地把 B 从盘上的快照里摘掉。
  */
 export function clearCachedDevice(deviceId: string): void {
   const api = bridge();
   if (!api || !deviceId) return;
-  cancelSessionListPersist();
   void api.clear(deviceId).catch((err: unknown) => log.debug('clear device cache failed', err));
 }
 

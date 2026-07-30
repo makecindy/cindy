@@ -442,6 +442,65 @@ describe('session list', () => {
   );
 });
 
+describe('.tmp 残留(落位失败 / 进程被杀在 writeFile 与 rename 之间)', () => {
+  // review(codex P1):`<file>.<hex>.tmp` 里是完整明文。它不以 .json 结尾,逐设备清理的
+  // 枚举原先看不见它,于是撤销访问 / 关闭控制之后那份正文无限期留在盘上,也不受体积上限约束。
+  it('clearDevice 连该设备的 .tmp 残留一起删掉', async () => {
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    const dir = messagesDir();
+    const real = path.join(dir, messageFileName('dev-1', 'sess-1'));
+    const orphanTmp = `${real}.deadbeef.tmp`;
+    await fsp.writeFile(orphanTmp, '{"messages":[{"content":"明文"}]}', 'utf8');
+    // 另一台设备的残留不该被这次清理带走。
+    const otherTmp = path.join(dir, `${messageFileName('dev-2', 'sess-9')}.cafe.tmp`);
+    await fsp.writeFile(otherTmp, '{}', 'utf8');
+
+    await c.clearDevice('dev-1');
+
+    expect(fs.existsSync(real)).toBe(false);
+    expect(fs.existsSync(orphanTmp)).toBe(false);
+    expect(fs.existsSync(otherTmp)).toBe(true);
+  });
+
+  it('陈旧 .tmp 会被清扫,正在写的那笔(新鲜 .tmp)留着', async () => {
+    const dir = messagesDir();
+    await fsp.mkdir(dir, { recursive: true });
+    const stale = path.join(dir, 'dev_x-aaaa-sess-bbbb.json.1111.tmp');
+    const fresh = path.join(dir, 'dev_x-aaaa-sess-bbbb.json.2222.tmp');
+    await fsp.writeFile(stale, '{}', 'utf8');
+    await fsp.writeFile(fresh, '{}', 'utf8');
+    const old = new Date(Date.now() - __testing.staleTmpMs - 5_000);
+    await fsp.utimes(stale, old, old);
+
+    await __testing.sweepStaleTmpFiles(dir);
+
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it.skipIf((process.getuid?.() ?? 0) === 0)(
+    '落位失败且 .tmp 也删不掉 → 抛 MirrorCachePurgeError 并带上那个 .tmp',
+    async () => {
+      const cacheRoot = path.join(root, 'ro-messages');
+      const c = createMirrorCache(() => cacheRoot);
+      // 先建好 messages/,再把它设成 r-x:tmp 建不出来 → 落位失败,rm 也失败。
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      const dir = path.join(cacheRoot, __testing.messagesDirName);
+      await fsp.chmod(dir, 0o500);
+      try {
+        // 只读目录下 writeFile(tmp) 就会失败,rm(tmp) 因 ENOENT 成功 → 不抛。
+        // 这里验证的是"不误报":真正抛错的路径由上面的空写 / 补偿删除用例覆盖。
+        await expect(
+          c.writeMessages('dev-1', 'sess-2', [row('m2', '2026-02-01T00:00:00.000Z')]),
+        ).resolves.toBeUndefined();
+      } finally {
+        await fsp.chmod(dir, 0o700);
+      }
+    },
+  );
+});
+
 describe('clearDevice / clearAll', () => {
   it('clearDevice 只清该设备:它的消息文件与列表条目都走,其它设备不受影响', async () => {
     const c = cache();

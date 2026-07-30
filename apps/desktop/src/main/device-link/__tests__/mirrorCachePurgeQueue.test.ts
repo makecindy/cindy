@@ -253,6 +253,49 @@ describe('超量路径分片', () => {
   });
 });
 
+describe('跨进程锁', () => {
+  // review(codex P1):dev 实例与打包实例可以共用同一个 userData,两个进程各自「读 → 改 →
+  // 整份写回」会互相覆盖,输的那条只剩在自己进程的内存表里,退出即丢。
+  function lockFile(): string {
+    return path.join(userData, __testing.lockFileName);
+  }
+
+  it('临界区结束后不留锁文件', async () => {
+    const root = await makeOwnerCache('owner-1');
+    await enqueuePurge(root);
+    expect(fs.existsSync(lockFile())).toBe(false);
+    await drainPurgeQueue();
+    expect(fs.existsSync(lockFile())).toBe(false);
+  });
+
+  it('崩溃残留的陈旧锁会被接管,记录照常落盘', async () => {
+    const root = await makeOwnerCache('owner-1');
+    await fsp.writeFile(lockFile(), '99999', 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await fsp.utimes(lockFile(), old, old);
+
+    await enqueuePurge(root);
+
+    __testing.resetMemoryQueue();
+    expect((await __testing.readQueue()).map((e) => e.root)).toEqual([root]);
+    expect(fs.existsSync(lockFile())).toBe(false);
+  });
+
+  it('锁被别人持有时不丢记录(等不到就降级,仍然落盘)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    // 新鲜锁:本进程抢不到 → 等待到超时后降级执行。用短一点的观察方式:
+    // 只断言"最终记录仍在盘上",不断言时序。
+    await fsp.writeFile(lockFile(), '99999', 'utf8');
+    try {
+      await enqueuePurge(root);
+      __testing.resetMemoryQueue();
+      expect((await __testing.readQueue()).map((e) => e.root)).toEqual([root]);
+    } finally {
+      await fsp.rm(lockFile(), { force: true });
+    }
+  }, 20_000);
+});
+
 describe('队列文件原子落位', () => {
   // review(greptile P1 / security):这份文件是「缓存没清干净」唯一的跨重启痕迹。直接覆写时
   // 进程在写入中途被杀会留下截断的 JSON,下次启动解析失败被当成空队列,而内存兜底早已
