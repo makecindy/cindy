@@ -4286,8 +4286,7 @@
       "inlineSecretStoreFailed": "認証情報の保存に失敗しました",
       "targetNotFound": "対象プラグインがアンインストールされたか現在利用不可です",
       "targetDisabled": "対象プラグインが無効化されています",
-      "targetDisabledInWorkdir": "ユーザーが現在のワーキングディレクトリでこのプラグインを無効にしています。リトライしないでください。",
-      "targetToolNotFound": "対象プラグインはこのツールを提供していません"
+      "targetDisabledInWorkdir": "ユーザーが現在のワーキングディレクトリでこのプラグインを無効にしています。リトライしないでください。"
     },
     "createAgent": {
       "quickStart": "クイックスタート",

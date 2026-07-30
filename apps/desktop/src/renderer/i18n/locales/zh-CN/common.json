@@ -4286,8 +4286,7 @@
       "inlineSecretStoreFailed": "凭证保存失败",
       "targetNotFound": "目标插件已卸载或当前不可用",
       "targetDisabled": "目标插件已被停用",
-      "targetDisabledInWorkdir": "用户已在当前工作目录停用该插件；不要重试。",
-      "targetToolNotFound": "目标插件不再提供该工具"
+      "targetDisabledInWorkdir": "用户已在当前工作目录停用该插件；不要重试。"
     },
     "createAgent": {
       "quickStart": "快速开始",

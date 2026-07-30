@@ -4287,8 +4287,7 @@
       "inlineSecretStoreFailed": "Failed to save credential",
       "targetNotFound": "The target plugin was uninstalled or is currently unavailable",
       "targetDisabled": "The target plugin has been disabled",
-      "targetDisabledInWorkdir": "The user has disabled this plugin in the current working directory; do not retry.",
-      "targetToolNotFound": "The target plugin no longer provides this tool"
+      "targetDisabledInWorkdir": "The user has disabled this plugin in the current working directory; do not retry."
     },
     "createAgent": {
       "quickStart": "Quick start",

@@ -4286,8 +4286,7 @@
       "inlineSecretStoreFailed": "자격 증명 저장에 실패했습니다",
       "targetNotFound": "대상 플러그인이 제거되었거나 현재 사용할 수 없습니다",
       "targetDisabled": "대상 플러그인이 비활성화되었습니다",
-      "targetDisabledInWorkdir": "사용자가 현재 작업 디렉토리에서 이 플러그인을 비활성화했습니다. 재시도하지 마세요.",
-      "targetToolNotFound": "대상 플러그인이 더 이상 이 도구를 제공하지 않습니다"
+      "targetDisabledInWorkdir": "사용자가 현재 작업 디렉토리에서 이 플러그인을 비활성화했습니다. 재시도하지 마세요."
     },
     "createAgent": {
       "quickStart": "빠른 시작",
