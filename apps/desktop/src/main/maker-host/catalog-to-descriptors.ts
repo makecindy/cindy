@@ -49,6 +49,26 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
 
 /** 派生某 agent 的 availableModels：跨 provider union（数组序）+ 按 id 首见去重。 */
 export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): ModelDescriptor[] {
+  // 同一 model id 可以由多个 provider 提供（订阅直连发现的 `gpt-5.6-sol` 注入 openai，
+  // 网关下发的同 id 落在 xd；自定义 provider 也可能重名）。去重是 first-wins，**provider
+  // 归属随之丢失**，而 agent 侧只能按 id 回查这张扁平表 —— 拿到的可能是另一条路由的元数据。
+  //
+  // 这种歧义下不能声称窗口「已核实」：否则会用错路由的上限去收敛运行期上报值（例：命中
+  // openai live-list 的兜底条目，或反过来拿某条路由的 372K 去压另一条真的更大的窗口）。
+  // 所以冲突 id 一律清掉 contextWindowVerified → 退回不收敛（改动前行为，fail-safe）。
+  //
+  // 已知限制：这让「同时连订阅直连与网关、两边都提供同一个无前缀 id」的配置收敛不生效。
+  // 要精确到路由得让 capabilities 带 provider 维度（availableModels 形状是跨端协议，
+  // device-link / renderer 都吃它），属于独立改动，不在本次范围。带 `codex/` 前缀的折扣
+  // 路由 id 只由网关提供，不受此限制。
+  const providersPerId = new Map<string, number>();
+  for (const provider of catalog.providers) {
+    if (provider.routing[agent]?.disabled === true) continue;
+    for (const m of provider.models[agent] ?? []) {
+      providersPerId.set(m.id, (providersPerId.get(m.id) ?? 0) + 1);
+    }
+  }
+
   const seen = new Set<string>();
   const out: ModelDescriptor[] = [];
   for (const provider of catalog.providers) {
@@ -60,7 +80,9 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       // 25 轮)。非聊天模型不占 seen,同 id 若被其它来源标为 chat 仍可补上。
       if (!isAgentSelectableModel(m, { userProvider: provider.source === 'user' })) continue;
       seen.add(m.id);
-      out.push(toDescriptor(m));
+      const d = toDescriptor(m);
+      if ((providersPerId.get(m.id) ?? 0) > 1) delete d.contextWindowVerified;
+      out.push(d);
     }
   }
   return out;

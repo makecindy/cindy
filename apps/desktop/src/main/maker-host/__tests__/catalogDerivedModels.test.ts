@@ -103,6 +103,54 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(fallback && 'contextWindowVerified' in fallback).toBe(false);
   });
 
+  // 去重是 first-wins,provider 归属随之丢失;agent 侧只能按 id 回查这张扁平表。同一 id
+  // 由多个 provider 提供时,拿到的可能是另一条路由的元数据 —— 此时不得声称已核实,否则会
+  // 用**错路由**的上限去收敛上报值(reviewer 指出的 "a custom route can be capped by an
+  // unrelated built-in value")。冲突一律清标记 → 退回不收敛(fail-safe)。
+  it('同一 id 跨 provider 冲突时清掉 contextWindowVerified', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    for (const p of catalog.providers) {
+      if (p.id === 'openai') {
+        // 靠前 → first-wins 选中它。**带已核实标记**:若不按冲突清掉,它就会被拿去 cap
+        // 实际可能跑在另一条路由上的同 id 会话。
+        p.models.codex = [model('shared-id', { contextWindow: 372_000, contextWindowVerified: true })];
+      }
+      if (p.id === 'xd') {
+        // 靠后的同 id(真实窗口不同的另一条路由)。
+        p.models.codex = [model('shared-id', { contextWindow: 500_000, contextWindowVerified: true })];
+        p.models['claude-code'] = [model('xd-only', { contextWindow: 500_000, contextWindowVerified: true })];
+      }
+    }
+    const codex = deriveAvailableModels(catalog, 'codex');
+    const conflicted = codex.filter((m) => m.id === 'shared-id');
+    expect(conflicted).toHaveLength(1);
+    expect(conflicted[0].contextWindow).toBe(372_000); // first-wins 取值不变
+    expect('contextWindowVerified' in conflicted[0]).toBe(false); // 但不再声称已核实
+
+    // 只由单一 provider 提供的 id 不受影响,照常保留标记。
+    const cc = deriveAvailableModels(catalog, 'claude-code');
+    expect(cc.find((m) => m.id === 'xd-only')).toMatchObject({
+      contextWindow: 500_000,
+      contextWindowVerified: true,
+    });
+  });
+
+  // reviewer 原始场景的方向:靠前的订阅直连条目是 live-list 兜底(未核实),靠后的网关条目
+  // 已核实。first-wins 本就取到未核实那条 → 结果同样是不收敛,不会误用另一条路由的上限。
+  it('冲突且 first-wins 条目未核实时同样不收敛', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    for (const p of catalog.providers) {
+      if (p.id === 'openai') p.models.codex = [model('gpt-5.6-sol', { contextWindow: 272_000 })];
+      if (p.id === 'xd') {
+        p.models.codex = [model('gpt-5.6-sol', { contextWindow: 372_000, contextWindowVerified: true })];
+      }
+    }
+    const picked = deriveAvailableModels(catalog, 'codex').filter((m) => m.id === 'gpt-5.6-sol');
+    expect(picked).toHaveLength(1);
+    expect(picked[0].contextWindow).toBe(272_000);
+    expect(picked[0].contextWindowVerified).toBeUndefined();
+  });
+
   it('注入后:按 provider 序 union + id 首见去重(anthropic 先于 xd,fast 分叉取首见)', () => {
     const cc = deriveAvailableModels(injectedCatalog(), 'claude-code');
     const ids = cc.map((m) => m.id);
