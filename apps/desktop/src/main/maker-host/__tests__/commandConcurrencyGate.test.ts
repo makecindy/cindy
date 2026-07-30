@@ -101,6 +101,36 @@ describe('command concurrency gate', () => {
     await expect(next).resolves.toBe('queued');
   });
 
+  it('repumps queued waiters within one poll interval after the limit is raised (no acquire/release needed)', async () => {
+    const { gate, setLimit } = makeGate();
+    await gate.acquire({ toolUseId: 'a', sessionId: 's1' });
+    await gate.acquire({ toolUseId: 'b', sessionId: 's1' });
+    const c = gate.acquire({ toolUseId: 'c', sessionId: 's1' });
+    const d = gate.acquire({ toolUseId: 'd', sessionId: 's1' });
+    expect(gate.snapshot()).toEqual({ running: 2, queued: 2 });
+
+    // limit 热更调高:没有任何 acquire/release 事件,repump 轮询必须自己唤醒队列
+    setLimit(4);
+    vi.advanceTimersByTime(1000);
+    await expect(c).resolves.toBe('queued');
+    await expect(d).resolves.toBe('queued');
+    expect(gate.snapshot()).toEqual({ running: 4, queued: 0 });
+  });
+
+  it('repumps everything when the limit is switched to unlimited mid-wait', async () => {
+    const { gate, setLimit } = makeGate();
+    await gate.acquire({ toolUseId: 'a', sessionId: 's1' });
+    await gate.acquire({ toolUseId: 'b', sessionId: 's1' });
+    const waiting = gate.acquire({ toolUseId: 'c', sessionId: 's1' });
+
+    setLimit(0);
+    vi.advanceTimersByTime(1000);
+    await expect(waiting).resolves.toBe('queued');
+    // 队列清空后 repump 轮询自停:继续推进时间不应产生任何状态变化
+    vi.advanceTimersByTime(10_000);
+    expect(gate.snapshot()).toEqual({ running: 3, queued: 0 });
+  });
+
   it('fails open with wait-timeout after queueWaitMaxMs', async () => {
     const { gate } = makeGate({ queueWaitMaxMs: 1000 });
     await gate.acquire({ toolUseId: 'a', sessionId: 's1' });
