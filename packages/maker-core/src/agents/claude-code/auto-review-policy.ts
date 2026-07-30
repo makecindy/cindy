@@ -18,6 +18,8 @@ export interface BuiltinAutoReviewContext {
   input: unknown;
   /** 会话的工作区根:cwd + additionalDirectories,绝对路径。远端会话是远端路径(纯字符串判定)。 */
   workspaceRoots: string[];
+  /** 会话所在平台(决定是否抹平 macOS firmlink /private)。缺省用本进程 process.platform;远端会话应传远端 OS。 */
+  platform?: NodeJS.Platform;
 }
 
 /** 只读内省工具:纯读、无本地写、无命令执行、无外发。 */
@@ -80,24 +82,25 @@ export function classifyBuiltinToolForAutoReview(
   ctx: BuiltinAutoReviewContext,
 ): BuiltinAutoReviewVerdict {
   const { toolName, input, workspaceRoots } = ctx;
+  const opts = ctx.platform ? { platform: ctx.platform } : undefined;
 
   if (READ_ONLY_TOOLS.has(toolName)) {
     // Read/NotebookRead 读单个具名文件(scope='file');Grep/Glob/LS 是目录级递归读(scope='tree'),
     // 根在工作区外时能遍历进区外凭证子路径 → 由 core 按边界升级(见 reviewAction 的 read 分支)。
     const scope: 'file' | 'tree' = toolName === 'Read' || toolName === 'NotebookRead' ? 'file' : 'tree';
-    return reviewAction({ kind: 'read', path: extractReadPath(toolName, input), scope }, workspaceRoots);
+    return reviewAction({ kind: 'read', path: extractReadPath(toolName, input), scope }, workspaceRoots, opts);
   }
-  if (SAFE_STATEFUL_TOOLS.has(toolName)) return reviewAction({ kind: 'session-state' }, workspaceRoots);
+  if (SAFE_STATEFUL_TOOLS.has(toolName)) return reviewAction({ kind: 'session-state' }, workspaceRoots, opts);
   if (FILE_WRITE_TOOLS.has(toolName)) {
-    return reviewAction({ kind: 'file-write', path: extractFilePath(toolName, input) }, workspaceRoots);
+    return reviewAction({ kind: 'file-write', path: extractFilePath(toolName, input) }, workspaceRoots, opts);
   }
   if (toolName === 'Bash') {
-    return reviewAction({ kind: 'exec', command: extractCommand(input) }, workspaceRoots);
+    return reviewAction({ kind: 'exec', command: extractCommand(input) }, workspaceRoots, opts);
   }
   // WebFetch/WebSearch:把 URL/搜索词送往外部(exfil 面)→ 升级。
   if (toolName === 'WebFetch' || toolName === 'WebSearch') {
-    return reviewAction({ kind: 'network' }, workspaceRoots);
+    return reviewAction({ kind: 'network' }, workspaceRoots, opts);
   }
   // 未知 / 其它一切工具 → fail-closed 升级。
-  return reviewAction({ kind: 'other' }, workspaceRoots);
+  return reviewAction({ kind: 'other' }, workspaceRoots, opts);
 }

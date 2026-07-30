@@ -49,28 +49,39 @@ export type ReviewableAction =
  * 核心裁决。纯函数、确定性、无副作用(不触文件系统 —— 探文件存在性会变侧信道,且对远端
  * 路径不可行;workspaceRoots 只做字符串前缀判定)。workspaceRoots = cwd + 额外可写目录,绝对路径。
  */
-export function reviewAction(action: ReviewableAction, workspaceRoots: string[]): ReviewVerdict {
+export function reviewAction(
+  action: ReviewableAction,
+  workspaceRoots: string[],
+  opts?: { platform?: NodeJS.Platform },
+): ReviewVerdict {
+  // macOS firmlink(/private/{var,tmp,etc} == /{var,tmp,etc})仅在 darwin 上成立;在 Linux(含远端 Linux)
+  // 上 /private/tmp 与 /tmp 是无关路径,无条件抹平会把区外写误判为区内(codex 报)→ 只在 darwin 上抹平。
+  const aliasFirmlinks = (opts?.platform ?? process.platform) === 'darwin';
   switch (action.kind) {
     case 'read':
       // 读凭证/密钥文件(内置 Read/Grep 等,path 命中)必问、不可记住。
       if (action.path && isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
       // 目录级递归读(Grep/Glob/LS,scope='tree')的**根目录**在工作区外 → 能遍历进区外的凭证子路径
       // (如 `Grep {path:'/Users/me', pattern:'AKIA'}` 读出 ~/.aws/credentials,而 path 本身不含凭证名,
-      // copilot 报)→ 升级。单文件读(Read/NotebookRead,scope='file' 或未标)只读一个具名文件,风险低,
-      // 仍按凭证命中升级、其余放行。path 缺失(如 Glob 只给 pattern,默认 cwd)= 区内,放行。
+      // copilot 报)→ 升级。读取范围含额外只读引用目录(整个 workspaceRoots)。单文件读只读一个具名文件。
       if (action.scope === 'tree' && action.path
-        && !isInsideWorkspace(normalizeTarget(action.path, workspaceRoots), workspaceRoots)) return 'prompt';
+        && !isInsideWorkspace(normalizeTarget(action.path, workspaceRoots), workspaceRoots, aliasFirmlinks)) return 'prompt';
       return 'auto-approve';
     case 'session-state':
       return 'auto-approve';
-    case 'file-write':
+    case 'file-write': {
       if (!action.path) return 'prompt';
       // 写凭证文件必问、不可记住 —— 即便落在工作区内(如 /repo/.aws/credentials、/repo/.codex/auth.json):
       // 把 secret 写进 git-tracked checkout 与写区外同样危险,凭证性优先于工作区边界。
       if (isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
-      return isInsideWorkspace(normalizeTarget(action.path, workspaceRoots), workspaceRoots)
+      // **只有工作目录(workspaceRoots[0])可写**;额外目录(additionalDirectories)是只读引用上下文
+      // (base-agent 契约 / index.ts extraDirs 注释:可读不可写),写入其中须升级(codex 报)。相对路径仍
+      // 挂到 workspaceRoots[0] 解析,故边界集只取第一个 root。
+      const writableRoots = workspaceRoots.slice(0, 1);
+      return isInsideWorkspace(normalizeTarget(action.path, workspaceRoots), writableRoots, aliasFirmlinks)
         ? 'auto-approve'
         : 'prompt';
+    }
     case 'exec':
       return classifyShellCommand(action.command, workspaceRoots);
     case 'network':
@@ -451,6 +462,28 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   if (CURL_UPLOAD_FLAGS.test(segment) || CURL_NONGET_METHOD.test(segment)) return false; // -d/-F/--json 上传、非 GET 方法
   if (CURL_REDIRECT_FLAGS.test(segment)) return false;    // -L 跟随重定向 → 目标不可判 → 升级
   if (CURL_SENSITIVE_FLAGS.test(segment)) return false;   // 凭证/隐藏参数/SSRF 改路由 flag → 升级
+  // curl `@filename` 从文件读内容:-d/-F/-T 已由 UPLOAD_FLAGS 拦,-H/--header @file 会把文件每行当 header 外发
+  // (codex 报 `curl -H @/repo/config.txt`)→ 升级。含贴合/等号/空格形态。
+  if (/(?:^|\s)(?:-H|--header)[=\s]*@/.test(segment)) return false;
+  // curl 危险长选项的**唯一前缀缩写**(`--trace`/`--trace-ascii` 写调试文件、`--dump-h`=--dump-header、
+  // `--loc`=--location、`--outp`=--output 等):全称正则会漏(codex 报 --trace)。逐 `--` token 取选项名,
+  // 命中任一危险长选项(落盘/写文件/上传/非GET/重定向/凭证/SSRF)的前缀即升级。极短歧义缩写一并升级。
+  const DANGEROUS_CURL_LONG_OPTS = [
+    '--output', '--output-dir', '--remote-name', '--remote-name-all', '--remote-header-name',
+    '--dump-header', '--trace', '--trace-ascii', '--trace-config', '--etag-save', '--cookie-jar',
+    '--stderr', '--create-dirs',
+    '--data', '--data-raw', '--data-binary', '--data-urlencode', '--data-ascii', '--form', '--form-string',
+    '--upload-file', '--json', '--url-query', '--request',
+    '--location', '--location-trusted',
+    '--user', '--netrc', '--netrc-file', '--netrc-optional', '--config', '--cookie', '--resolve', '--connect-to',
+    '--unix-socket', '--abstract-unix-socket', '--proxy', '--proxy-user', '--preproxy', '--interface',
+    '--variable', '--expand-url', '--oauth2-bearer', '--header', '--proxy-header', '--cert', '--key',
+  ];
+  for (const tok of tokens) {
+    if (!tok.startsWith('--')) continue;
+    const name = stripExpansions(tok.split('=')[0].replace(/['"\\]/g, ''));
+    if (name.length >= 3 && DANGEROUS_CURL_LONG_OPTS.some((full) => full.startsWith(name))) return false;
+  }
   const positional = tokens.slice(1).filter((t) => !t.startsWith('-'));
   // 非 http(s) scheme(file:// 读本地文件、scp://sftp:// 外发、ftp/dict/gopher 等)超出"命令行浏览器"面 → 升级。
   if (positional.some((t) => /^[a-z][\w+.-]*:\/\//i.test(t) && !/^https?:\/\//i.test(t))) return false;
@@ -685,8 +718,9 @@ function normalizeSlashes(p: string): string {
  * 绝对路径常带 `/private` 前缀,而 cwd 可能不带 —— 不抹平会把区内写误判成越界。纯字符串,不碰
  * 文件系统(远端路径无 macOS firmlink,原样通过)。
  */
-function canonicalPath(p: string): string {
+function canonicalPath(p: string, aliasFirmlinks: boolean): string {
   const n = normalizeSlashes(p);
+  if (!aliasFirmlinks) return n; // 非 macOS:/private/tmp 与 /tmp 是不同路径,不抹平
   const m = /^\/private(\/(?:var|tmp|etc)(?:\/|$))/.exec(n);
   return m ? n.slice('/private'.length) : n;
 }
@@ -700,11 +734,11 @@ function canonicalPath(p: string): string {
  * 缓解:创建该 symlink 本身需要一条 `ln -s`(shell 命令,会按写/未知升级),攻击面限于**预先已存在**
  * 的恶意链接。以 fail-open 的这一窄口,换取无 fs 副作用 + 远端路径可判 + 确定性可测,是刻意取舍。
  */
-function isInsideWorkspace(target: string, workspaceRoots: string[]): boolean {
-  const t = canonicalPath(target);
+function isInsideWorkspace(target: string, workspaceRoots: string[], aliasFirmlinks: boolean): boolean {
+  const t = canonicalPath(target, aliasFirmlinks);
   for (const root of workspaceRoots) {
     if (!root) continue;
-    const r = canonicalPath(root);
+    const r = canonicalPath(root, aliasFirmlinks);
     if (t === r) return true;
     if (t.startsWith(r.endsWith('/') ? r : `${r}/`)) return true;
   }

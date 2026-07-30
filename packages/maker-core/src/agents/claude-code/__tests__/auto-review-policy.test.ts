@@ -35,9 +35,10 @@ describe('classifyBuiltinToolForAutoReview — 文件写(结构化 path 精确�
     expect(verdict('Edit', { file_path: 'src/a.ts' })).toBe('auto-approve');
     expect(verdict('MultiEdit', { file_path: '/repo/pkg/b.ts' })).toBe('auto-approve');
   });
-  it('工作区内绝对路径写 → auto-approve;额外目录也算区内', () => {
+  it('工作目录绝对路径写 → auto-approve;额外只读引用目录写 → prompt', () => {
     expect(verdict('Write', { file_path: '/repo/x.ts' })).toBe('auto-approve');
-    expect(verdict('Write', { file_path: '/extra/y.ts' })).toBe('auto-approve');
+    // /extra 是只读引用目录(additionalDirectories),写入须升级(codex 报)。
+    expect(verdict('Write', { file_path: '/extra/y.ts' })).toBe('prompt');
   });
   it('工作区外写 → prompt(升级)', () => {
     expect(verdict('Write', { file_path: '/etc/passwd' })).toBe('prompt');
@@ -50,24 +51,35 @@ describe('classifyBuiltinToolForAutoReview — 文件写(结构化 path 精确�
   it('前缀不整段匹配:/repo-secrets 不算 /repo 内 → prompt', () => {
     expect(verdict('Write', { file_path: '/repo-secrets/x' })).toBe('prompt');
   });
-  it('macOS firmlink:/private/var 与 /var 视为同一(区内写不被误升级)', () => {
-    // 工具常把 cwd 相对路径解析成 /private/var/... 而 root 是 /var/...(os.tmpdir 形态)。
+  it('macOS firmlink:/private/var 与 /var 视为同一(区内写不被误升级,platform=darwin)', () => {
+    // 工具常把 cwd 相对路径解析成 /private/var/... 而 root 是 /var/...(os.tmpdir 形态)。显式传 darwin,
+    // 使断言在任何宿主(含 Linux CI)上确定。
     expect(classifyBuiltinToolForAutoReview({
       toolName: 'Write',
       input: { file_path: '/private/var/folders/x/ws/a.ts' },
       workspaceRoots: ['/var/folders/x/ws'],
+      platform: 'darwin',
     })).toBe('auto-approve');
     // 反向:root 带 /private、目标不带,也应对齐。
     expect(classifyBuiltinToolForAutoReview({
       toolName: 'Write',
       input: { file_path: '/var/folders/x/ws/a.ts' },
       workspaceRoots: ['/private/var/folders/x/ws'],
+      platform: 'darwin',
     })).toBe('auto-approve');
     // /private 抹平不误伤真实越界:/private/etc 归 /etc,仍在 /var 工作区外。
     expect(classifyBuiltinToolForAutoReview({
       toolName: 'Write',
       input: { file_path: '/private/etc/passwd' },
       workspaceRoots: ['/var/folders/x/ws'],
+      platform: 'darwin',
+    })).toBe('prompt');
+    // Linux:/private/var 不再抹平 → 区外写升级(远端 Linux 会话)。
+    expect(classifyBuiltinToolForAutoReview({
+      toolName: 'Write',
+      input: { file_path: '/private/var/folders/x/ws/a.ts' },
+      workspaceRoots: ['/var/folders/x/ws'],
+      platform: 'linux',
     })).toBe('prompt');
   });
   it('NotebookEdit 用 notebook_path;拿不到路径 → prompt', () => {

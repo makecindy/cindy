@@ -25,10 +25,13 @@ describe('reviewAction — 非 shell 动作', () => {
 });
 
 describe('reviewAction — file-write 工作区边界', () => {
-  it('区内(相对/绝对/额外目录)→ auto-approve', () => {
+  it('工作目录(第一个 root)内写(相对/绝对)→ auto-approve', () => {
     expect(reviewAction({ kind: 'file-write', path: 'src/a.ts' }, roots)).toBe('auto-approve');
     expect(reviewAction({ kind: 'file-write', path: '/repo/x.ts' }, roots)).toBe('auto-approve');
-    expect(reviewAction({ kind: 'file-write', path: '/extra/y.ts' }, roots)).toBe('auto-approve');
+  });
+  it('额外只读引用目录(非首 root)写 → prompt(additionalDirectories 可读不可写)', () => {
+    // /extra 是只读引用目录,写入须升级,不能因它在 workspaceRoots 里就当可写(codex 报)。
+    expect(reviewAction({ kind: 'file-write', path: '/extra/y.ts' }, roots)).toBe('prompt');
   });
   it('区外 / .. 逃逸 / 前缀不整段 → prompt', () => {
     expect(reviewAction({ kind: 'file-write', path: '/etc/passwd' }, roots)).toBe('prompt');
@@ -38,9 +41,14 @@ describe('reviewAction — file-write 工作区边界', () => {
   it('path 缺失 → prompt(无法确认在区内)', () => {
     expect(reviewAction({ kind: 'file-write', path: undefined }, roots)).toBe('prompt');
   });
-  it('macOS firmlink:/private/var 与 /var 对齐', () => {
-    expect(reviewAction({ kind: 'file-write', path: '/private/var/f/ws/a' }, ['/var/f/ws'])).toBe('auto-approve');
-    expect(reviewAction({ kind: 'file-write', path: '/private/etc/passwd' }, ['/var/f/ws'])).toBe('prompt');
+  it('macOS firmlink:/private/var 与 /var 对齐(仅 darwin);Linux 不抹平', () => {
+    // 显式传 platform,使断言在任何宿主(含 Linux CI)上确定。
+    expect(reviewAction({ kind: 'file-write', path: '/private/var/f/ws/a' }, ['/var/f/ws'], { platform: 'darwin' })).toBe('auto-approve');
+    expect(reviewAction({ kind: 'file-write', path: '/private/etc/passwd' }, ['/var/f/ws'], { platform: 'darwin' })).toBe('prompt');
+    // Linux:/private/tmp 与 /tmp 无关,写 /private/tmp/repo/x(root=/tmp/repo)不再被误判为区内 → prompt。
+    expect(reviewAction({ kind: 'file-write', path: '/private/tmp/repo/x' }, ['/tmp/repo'], { platform: 'linux' })).toBe('prompt');
+    // darwin 上同一路径仍抹平为区内。
+    expect(reviewAction({ kind: 'file-write', path: '/private/tmp/repo/x' }, ['/tmp/repo'], { platform: 'darwin' })).toBe('auto-approve');
   });
 });
 
