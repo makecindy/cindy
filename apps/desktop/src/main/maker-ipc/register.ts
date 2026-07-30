@@ -635,11 +635,20 @@ function cancelScheduledAutoResume(sessionId: string): void {
 }
 
 /**
- * 会话被终止(清空 / 中止 / 全部停止 / 关闭)时的自愈收尾:撤销排期、把悬空的重连记录
- * 钉成失败、清掉被压住的错误详情。三件事必须一起做,否则残留会污染下一轮。
+ * 会话被终止(清空 / 中止 / 全部停止 / 关闭)时的自愈收尾:撤销排期、清掉 coordinator 的
+ * 接管态、把悬空的重连记录钉成失败、清掉被压住的错误详情。四件事必须一起做,否则残留会
+ * 污染下一轮。
+ *
+ * **清接管态是"已经在途"那次重试的唯一刹车。** 定时器一旦 fire 就从 map 里摘掉了,此后
+ * `autoRetryLastError` 还要 await 读库判产出;那段窗口里 `cancelScheduledAutoResume`
+ * 已经无从取消,而 `onSessionClosed` 刻意保留 recovery(手动重试入口),光靠 recovery
+ * 检查挡不住 —— 补发会把用户刚关掉的会话重新拉起来(codex P1)。coordinator 在 await
+ * 之后复核接管态,这里清掉即等于刹车。
  */
 function teardownAutoResumeForSession(sessionId: string): void {
   cancelScheduledAutoResume(sessionId);
+  // 不带 message:只清接管态,不弹横幅(会话已经被用户终止,再弹一条只是打扰)。
+  agentInputCoordinatorHolder?.abandonAutoResume(sessionId);
   settleAutoResumeOutcome(sessionId, 'failed');
   autoResumeSuppressedErrors.delete(sessionId);
 }
@@ -6843,6 +6852,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         silentStopAutoResumeGuard.noteUserSend(sessionId);
         interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
       }
+      // 落库失败 → 撤掉刚才那条待确认登记:那条消息压根不存在,留着会让后续事件去 patch
+      // 一个不存在的 clientId,map 也一直脏着(copilot review)。登记刻意放在写之前(不能
+      // 让写完到登记之间的事件漏掉结算),所以这里补一条失败回滚。
+      const releasePendingOutcomeOnFailure = () => {
+        if (!isAutoResumeUserMessage(message.agentMeta)) return;
+        if (pendingAutoResumeOutcomes.get(sessionId) !== message.clientId) return;
+        pendingAutoResumeOutcomes.delete(sessionId);
+      };
       const result = await enqueueDurableWrite(`user:${sessionId}:${message.clientId}`, () => {
         // Coordinator accepts can stamp transcriptParentUuid early; this late FIFO
         // fallback covers makerSendTransaction/direct createDbMessage paths.
@@ -6865,6 +6882,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           agentKind ? { ...enrichedMessage, agentKind } : enrichedMessage,
           opts,
         );
+      }).catch((err: unknown) => {
+        releasePendingOutcomeOnFailure();
+        throw err;
       });
       return result;
     },
@@ -7296,6 +7316,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 目标轮落库了却没能 dispatch(取消 / 失败): 记账该立刻还回去, 而不是等超时。
       publishUiTurnUndispatched(sessionId, item.clientId);
       gitSnapshotCoordinator?.onTurnAbort(sessionId);
+      // 自动续跑那条消息已落库、却最终没派出去 → 这次重连就是失败。**必须在这里钉死**:
+      // 它不会产生任何 turn 事件,新加的终态结算路径够不到它,待确认记录于是悬空,被之后
+      // 任何一个无关的 text / tool 事件误标成「已重新连接」(codex P1)。
+      // 按 clientId 匹配 —— 别的 turn 未派发不该动这条记录。
+      if (pendingAutoResumeOutcomes.get(sessionId) === item.clientId) {
+        settleAutoResumeOutcome(sessionId, 'failed');
+        // 同时把守卫的 pendingResume 回滚:不回滚会让该会话之后的中断永远被判成
+        // 「上一次还在路上」,再也不自愈(不变量 I5)。
+        interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);
+      }
     },
     // Thread 3 fix: called from drain/dispatchCompact failure paths where the item
     // was removed from the queue but not put back (persisted-failure case). If no

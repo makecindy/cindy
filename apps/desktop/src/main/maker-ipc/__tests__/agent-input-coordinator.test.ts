@@ -6157,6 +6157,39 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
    * (recovery 留不留得住是前提),但红横幅与 error 行落库都发生在决策之前。
    * 下面四条锁的就是这段窗口 —— 候选期一律先按住,决策落定后按结果放行。
    */
+  it('在途重试的刹车:await 读库期间接管态被清(会话关闭)→ 判 superseded,不补发', async () => {
+    // 定时器 fire 那一刻就从 map 里摘掉了,此后 autoRetryLastError 还要 await 读库判产出。
+    // 会话在那段窗口里关掉时 cancelScheduledAutoResume 已经无从取消,而 onSessionClosed
+    // 刻意保留 recovery(手动重试入口),只看 recovery 会让补发把会话重新拉起来(codex P1)。
+    // teardown 清接管态 → coordinator 在 await 之后复核并收手。
+    const h = createHarness();
+    const sid = 'auto-retry-inflight-brake';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    let releaseProgressQuery: () => void = () => {};
+    h.setHasAssistantProgressAfter(async () => {
+      await new Promise<void>((resolve) => {
+        releaseProgressQuery = resolve;
+      });
+      return true;
+    });
+    await failAfterDispatch(h, sid);
+    expect(h.coordinator.isAutoResumePending(sid)).toBe(true);
+
+    const sendCallsBefore = h.sendToAgent.mock.calls.length;
+    const retry = h.coordinator.autoRetryLastError(sid);
+    await flush();
+    // 读库还没回来时会话被关掉 → teardown 清接管态(abandonAutoResume 不带 message)。
+    h.coordinator.abandonAutoResume(sid);
+    releaseProgressQuery();
+
+    await expect(retry).resolves.toBe('superseded');
+    await flush();
+    expect(
+      h.sendToAgent.mock.calls.length,
+      '不许往已经终止的会话补发续跑',
+    ).toBe(sendCallsBefore);
+  });
+
   it('延后结算:候选期不发布 error(一帧都不闪),接管后只有活动行', async () => {
     const h = createHarness();
     const sid = 'deferred-takeover-no-flash';

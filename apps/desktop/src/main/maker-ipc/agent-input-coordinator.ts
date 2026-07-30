@@ -1514,6 +1514,13 @@ export class AgentInputCoordinator {
       if (this.getState(sessionId).recovery !== recovery) {
         return { projection: this.getProjection(sessionId), outcome: 'superseded' };
       }
+      // 接管态也要在 await **之后**再核一次。这个 await 里会读库(见 dep 实现),窗口足够
+      // 长到用户在此期间关掉会话 / 自己发消息 —— 而 onSessionClosed 刻意保留 recovery
+      // (它是手动重试入口),所以上面那道 recovery 检查放得过去,自动续跑会往一个已经
+      // 关掉的会话补发消息、把它重新拉起来(codex P1)。teardown 会清接管态,这里据此收手。
+      if (opts?.auto && !this.getState(sessionId).autoResumePending) {
+        return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+      }
       if (hasProgress) {
         const clientId = crypto.randomUUID();
         continueItem = {
