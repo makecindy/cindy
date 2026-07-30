@@ -470,8 +470,8 @@ function VersionDropdown({
 }
 
 // ---------------------------------------------------------------------------
-// Auto-mode body: static header badge (v<oldest> → v<newest>), preloaded
-// blocks stacked.
+// Auto-mode body: preloaded blocks stacked (version identity lives inside each
+// block since #956; the header has no range badge).
 // ---------------------------------------------------------------------------
 
 function AutoBody({
