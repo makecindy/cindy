@@ -6157,6 +6157,35 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
    * (recovery 留不留得住是前提),但红横幅与 error 行落库都发生在决策之前。
    * 下面四条锁的就是这段窗口 —— 候选期一律先按住,决策落定后按结果放行。
    */
+  it('候选期 activeTurn 被顶替(同轮 steer)→ 仍要通知 host 补落 error 行', async () => {
+    // activeTurn 被换掉后,drain 会在 isActiveTurnCurrent 处早返、跳过后面所有清理,而 host
+    // 那边 error 行早就被压住了 —— 不在早返之前补落,那次中断在历史里彻底消失(codex P1)。
+    const h = createHarness();
+    const sid = 'deferred-stale-active-flushes';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    let releasePersist: () => void = () => {};
+    mocks.createMessage.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        releasePersist = resolve;
+      });
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original long task'));
+    await flush();
+    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
+    await flush();
+    expect(h.coordinator.isAutoResumeDeferred(sid)).toBe(true);
+
+    // 同轮 steer 被接受 → activeTurn 换成新对象,原 drain 的后续步骤全部失效。
+    void h.coordinator.steer(sid, makeItem('q-steer', '顺手补一句'));
+    await flush();
+    releasePersist();
+    await flush();
+
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+  });
+
   it('在途重试的刹车:await 读库期间接管态被清(会话关闭)→ 判 superseded,不补发', async () => {
     // 定时器 fire 那一刻就从 map 里摘掉了,此后 autoRetryLastError 还要 await 读库判产出。
     // 会话在那段窗口里关掉时 cancelScheduledAutoResume 已经无从取消,而 onSessionClosed

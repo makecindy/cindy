@@ -352,13 +352,12 @@ interface SessionInputState {
   error: string | null;
   stickyError: string | null;
   /**
-   * 中断自动续跑接管中(退避窗口内)。为 true 时 `error` 保持 null:自愈过程只在聊天
-   * 流里显示低调提示,不弹红横幅(见 AgentInputProjection.autoResumePending)。
-   * 由 host 在终态 error 那一刻同步决定,补发成功或放弃时清除。
-   */
-  /**
-   * 中断自愈接管中(退避窗口内)时的展示信息;null = 未接管。非 null 时 `error` 保持
-   * null:自愈过程只在聊天流里显示低调的活动行,不弹红横幅。
+   * 中断自愈接管中（退避窗口内）时的展示信息；`null` = 未接管。
+   *
+   * 非 null 时 `error` 必为 null：自愈过程只在聊天流里显示低调的活动行，不弹红横幅
+   * （见 `AgentInputProjection.autoResumePending`）。由 host 在终态 error 那一刻同步决定，
+   * 补发成功、用户接手（`enqueue` / `clearError`）或放弃时清除 —— 因此它也是"这次自愈
+   * 是否仍然有效"的唯一判据（`performRetryLastError` 的 auto 路径据此收手）。
    */
   autoResumePending: AutoResumeInfo | null;
   recovery: AgentInputRecovery;
@@ -2346,7 +2345,7 @@ export class AgentInputCoordinator {
           },
         },
       );
-      if (!this.isActiveTurnCurrent(sessionId, active)) return;
+      if (this.discardOnStaleActiveTurn(sessionId, active)) return;
       active.persisting = false;
       if (!isSendDispatched(result)) {
         this.handleSendNotDispatched(sessionId, active, head, result);
@@ -2366,14 +2365,14 @@ export class AgentInputCoordinator {
           error: err instanceof Error ? err.message : String(err),
         });
       }
-      if (!this.isActiveTurnCurrent(sessionId, active)) return;
+      if (this.discardOnStaleActiveTurn(sessionId, active)) return;
       if (active.pendingTerminalEvent) {
         this.settlePendingTerminalEventAfterPersist(sessionId, active);
         return;
       }
       this.emit(sessionId);
     } catch (err) {
-      if (!this.isActiveTurnCurrent(sessionId, active)) return;
+      if (this.discardOnStaleActiveTurn(sessionId, active)) return;
       // 派发 / 落库失败(含 SESSION_RUNNING 让位):暂存的 error 候选到此作废,补落它的行。
       // 放在分支之前 —— 三条出口都不会再走到接管决策。
       this.discardDeferredResumableCandidate(sessionId, active);
@@ -3057,6 +3056,21 @@ export class AgentInputCoordinator {
    * error 候选就地作废：清标记（否则 `isAutoResumeDeferred` 会一直为真，把后续无关错误的
    * error 行也压掉）并通知 host 补落那一行（不变量 I2）。非候选或没有暂存事件时是 no-op。
    */
+  /**
+   * activeTurn 已被顶替（同轮 steer 被接受 / 新 turn 起来了）时的收尾。
+   *
+   * 这条路上的每个 `isActiveTurnCurrent` 早返都会**跳过**下方所有清理，而 host 那边 error 行
+   * 早就被「可能接管」压住了 —— 不在早返之前补落，那次中断在历史里彻底消失、压住的详情
+   * 也一直悬着（codex P1）。`active` 是被顶替的那个对象，它自己还拿着 pendingTerminalEvent。
+   *
+   * 返回 true 表示"已经不是当前 turn，调用方该早返了"。
+   */
+  private discardOnStaleActiveTurn(sessionId: string, active: ActiveTurn): boolean {
+    if (this.isActiveTurnCurrent(sessionId, active)) return false;
+    this.discardDeferredResumableCandidate(sessionId, active);
+    return true;
+  }
+
   private discardDeferredResumableCandidate(sessionId: string, active: ActiveTurn): void {
     const pending = active.pendingTerminalEvent;
     if (pending?.type !== 'error' || pending.resumableCandidate !== true) return;

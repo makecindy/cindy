@@ -613,25 +613,51 @@ const autoResumeSuppressedErrors = new Map<
 const pendingAutoResumeOutcomes = new Map<string, string>();
 
 /**
- * 已排期、还没到点的自动续跑定时器(sessionId → timer)。
+ * 已排期、还没到点的自动续跑定时器(sessionId → 句柄 + 排期令牌)。
  *
  * 退避窗口有 3–20 秒,期间会话可能被关闭 / 清空 / 「全部停止」。不取消的话定时器仍会到点
  * 补发一条消息到一个用户已经喊停的会话里(codex P1)。`autoRetryLastError` 内部虽然会复核
- * recovery,但那是"补发前最后一道",定时器本身该在会话终止时就撤掉。
+ * recovery 与接管态,但那是"补发前最后一道",定时器本身该在会话终止时就撤掉。
+ *
+ * **为什么要带令牌**:同一会话可以先后排两次。用户在第一次退避里插手 → 新 turn 起来
+ * (`noteTurnStarted` 清掉守卫的 pending 位)→ 新 turn 又失败 → 合法地排第二次。此时若只覆盖
+ * 句柄,第一个定时器仍会在它自己那个**更早**的到点时刻 fire,读到新一轮的接管态与 recovery
+ * 就把新的重试提前打出去,而且它的 `delete` 会把新句柄一起抹掉 —— teardown 从此取消不了
+ * 任何东西(codex P1)。令牌让回调只认自己那次排期。
  */
-const autoResumeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const autoResumeRetryTimers = new Map<
+  string,
+  { timer: ReturnType<typeof setTimeout>; token: number }
+>();
+/** 排期令牌自增源(全局单调,跨会话共享即可:只用来判"是不是我那次")。 */
+let autoResumeScheduleSeq = 0;
 
 /**
  * 撤掉某会话已排期的自动续跑,并把守卫的 pendingResume 回滚。
  * 会话被 /clear、abort、「全部停止」或关闭时调用;没有排期时是 no-op。
  */
 function cancelScheduledAutoResume(sessionId: string): void {
-  const timer = autoResumeRetryTimers.get(sessionId);
-  if (!timer) return;
-  clearTimeout(timer);
+  const scheduled = autoResumeRetryTimers.get(sessionId);
+  if (!scheduled) return;
+  clearTimeout(scheduled.timer);
   autoResumeRetryTimers.delete(sessionId);
   interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);
   log.debug('interrupted-turn auto-resume cancelled (session terminated)', { sessionId });
+}
+
+/**
+ * 装新排期前先撤掉同会话的旧排期(**不**回滚守卫额度)。
+ *
+ * 与 `cancelScheduledAutoResume` 的区别就在这一点:那份用于"会话终止",要把 pendingResume
+ * 还回去;这份用于"新排期顶掉旧排期",此时守卫的 pending 位属于**新**那次(旧那次已被
+ * `noteTurnStarted` 清过),回滚会把新的一起抹掉。
+ */
+function supersedeScheduledAutoResume(sessionId: string): void {
+  const scheduled = autoResumeRetryTimers.get(sessionId);
+  if (!scheduled) return;
+  clearTimeout(scheduled.timer);
+  autoResumeRetryTimers.delete(sessionId);
+  log.debug('interrupted-turn auto-resume schedule superseded by a newer one', { sessionId });
 }
 
 /**
@@ -7128,13 +7154,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         sessionTotal: decision.sessionTotal,
         delayMs: decision.delayMs,
       });
+      // 装新排期前先撤掉旧的:同会话可以先后排两次(用户在第一次退避里插手 → 新 turn 起来 →
+      // 又失败 → 合法地排第二次)。只覆盖句柄的话,旧定时器会在它自己更早的到点时刻 fire,
+      // 用新一轮的状态把重试提前打出去,还会把新句柄 delete 掉(codex P1)。
+      supersedeScheduledAutoResume(sessionId);
+      const scheduleToken = ++autoResumeScheduleSeq;
       const retryTimer = setTimeout(() => {
+        // 只摘自己那次排期:令牌不匹配说明这条回调已被更新的排期顶替(理论上 clearTimeout
+        // 已经挡住了,这是防御性的第二道 —— 误删新句柄会让 teardown 再也取消不掉任何东西)。
+        const scheduled = autoResumeRetryTimers.get(sessionId);
+        if (scheduled?.token !== scheduleToken) {
+          log.debug('interrupted-turn auto-resume callback superseded; ignoring', { sessionId });
+          return;
+        }
         autoResumeRetryTimers.delete(sessionId);
         void (async () => {
           try {
-            // 退避窗口内用户可能已经自己发了消息 / 清了会话。最终判据是 coordinator 的
-            // recovery 是否还在(那些动作都会清掉它),autoRetryLastError 内部复核后会
-            // no-op 并返回 false —— 此时必须回滚 pendingResume。
+            // 退避窗口内用户可能已经自己发了消息 / 清了会话。判据是 coordinator 的 recovery
+            // 与**接管态**(enqueue / clearError / teardown 会清掉接管态,recovery 未必),
+            // autoRetryLastError 内部复核后会 no-op 并返回非 resumed —— 此时必须回滚
+            // pendingResume。
             const outcome = await inputCoordinator.autoRetryLastError(sessionId);
             if (outcome !== 'resumed') {
               interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);
@@ -7161,7 +7200,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
         })();
       }, decision.delayMs);
-      autoResumeRetryTimers.set(sessionId, retryTimer);
+      autoResumeRetryTimers.set(sessionId, { timer: retryTimer, token: scheduleToken });
       // 回传展示信息:coordinator 存进 autoResumePending → projection → 活动行
       // (「重新连接中 attempt/maxAttempts」+ 展开详情里的原因与会话累计)。
       return {
