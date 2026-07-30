@@ -1081,8 +1081,8 @@ export function CCAgentSessionView({
   useEffect(() => {
     let cancelled = false;
     const agentKind = session?.agentKind === 'codex' ? 'codex' : 'claude-code';
-    // remote 传 null:loadAllCommands 退化为 desktop + agent-builtin,不扫本机项目 skills。
-    const wd = isRemoteSession ? null : (session?.workingDir ?? null);
+    // SSH remote 显式禁用控制端本机 skill 扫描；本地无 workingDir 时 Claude 仍扫全局 skills。
+    const wd = session?.workingDir;
     // 先同步清空:切换会话(尤其 local→remote)时 loadAllCommands 是异步的,清空可避免
     // 刷新完成前 getHelpCommandsSnapshot / desktop 命令识别复用上一个项目的本地 skills。
     setAllCommands([]);
@@ -1090,7 +1090,7 @@ export function CCAgentSessionView({
     // (与 ChatInput palette 同源)。否则此 cache 取的是控制端命令,maybeDispatchDesktopSlashCommand
     // 会把被控端 skill/builtin 影子掉的 /clear、/help 等误判成 desktop 命令、在控制端执行。
     // 本机会话 remoteDeviceId=undefined → 行为不变。desktop 命令始终本地(见 loadAllCommands)。
-    loadAllCommands(agentKind, wd, undefined, remoteDeviceId)
+    loadAllCommands(agentKind, wd, { skipAgentSkills: isRemoteSession }, remoteDeviceId)
       .then((cmds) => {
         if (!cancelled) setAllCommands(cmds);
       })
@@ -1563,8 +1563,8 @@ export function CCAgentSessionView({
       // device-link 远程会话同源:传 remoteDeviceId,fallback 快照也从被控端读(见上方 cache effect 说明)。
       return await loadAllCommands(
         agentKind,
-        isRemoteSession ? null : (session?.workingDir ?? null),
-        undefined,
+        session?.workingDir,
+        { skipAgentSkills: isRemoteSession },
         remoteDeviceId,
       );
     } catch {

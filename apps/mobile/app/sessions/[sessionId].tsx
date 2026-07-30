@@ -470,7 +470,6 @@ import type {
   RemoteSession,
 } from '@/session/types';
 import type {
-  MobileAgentSkillListResult,
   MobileAtResourceItem,
   MobileDesktopCommandListResult,
   MobileModelPricingMap,
@@ -2282,12 +2281,10 @@ export default function SessionScreen() {
       await openLink(deviceId);
       const [builtins, skills, desktop] = await Promise.all([
         maker.listAgentCommands(agentKind),
-        currentSession.workingDir
-          ? maker.listAgentSkills(agentKind, {
-              workingDir: currentSession.workingDir,
-              forceReload: false,
-            })
-          : Promise.resolve({ success: true, skills: [] } satisfies MobileAgentSkillListResult),
+        maker.listAgentSkills(agentKind, {
+          ...(currentSession.workingDir ? { workingDir: currentSession.workingDir } : {}),
+          forceReload: false,
+        }),
         // desktop 命令是 additive 展示(白名单分流不依赖此清单,清单只参与同名 skill
         // 让行仲裁,见 desktopSlashCommands):拉取失败(含老被控端无此通道)静默降级
         // 为不展示,不能拖垮 builtin/skill 两路。

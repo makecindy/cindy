@@ -392,7 +392,7 @@ export interface MobileMakerTransport {
    * 被控端执行,这里只拿 runId;评审 UI 暂只有桌面端,移动端以系统卡提示去桌面评审。
    */
   learnStart(req: MobileLearnStartRequest): Promise<{ runId: string }>;
-  listAgentSkills(agentKind: MobileAgentKind, opts: { workingDir: string; forceReload?: boolean }): Promise<MobileAgentSkillListResult>;
+  listAgentSkills(agentKind: MobileAgentKind, opts: { workingDir?: string; forceReload?: boolean }): Promise<MobileAgentSkillListResult>;
   scanAtResources(agentKind: MobileAgentKind, opts: { workingDir: string; cap?: number; query?: string }): Promise<MobileAtResourceScanResult>;
   fetchRemoteMedia(url: string, opts?: { skipCache?: boolean; thumbnail?: boolean }): Promise<MobileRemoteMediaFetchResult>;
   transcribeVoice(input: MobileVoiceTranscribeRequest): Promise<MobileVoiceTranscribeResult>;

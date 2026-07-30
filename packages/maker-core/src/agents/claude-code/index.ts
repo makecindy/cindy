@@ -405,6 +405,13 @@ function parseIdleTimeoutMs(raw: string | undefined): number {
   return Math.floor(n);
 }
 
+/** upstream-response-idle 看门狗的计时分片长度(见 armUpstreamResponseIdleSlice)。 */
+const CC_UPSTREAM_IDLE_SLICE_MS = 60_000;
+
+/** 分片实际耗时超出片长这么多 → 判为进程被系统挂起过,该片不计入额度。 */
+const CC_UPSTREAM_IDLE_SUSPEND_GAP_MS = 30_000;
+
+
 function mapAnthropicError(err: unknown): OneShotError {
   if (err instanceof APIError) {
     if (err.status === 401 || err.status === 403) {
@@ -1595,12 +1602,18 @@ export class ClaudeCodeAgent extends BaseAgent {
     let upstreamResponseIdleTimer: NodeJS.Timeout | null = null;
     let upstreamResponseLastEventType: string | null = null;
     let upstreamResponseLastEventAt = 0;
+    /** 还需要"清醒地"静默多久才判上游哑火;按分片递减(见 armUpstreamResponseIdleSlice)。 */
+    let upstreamResponseIdleRemainingMs = 0;
+    /** 当前分片的起始壁钟时刻;片尾据此识别系统挂起。 */
+    let upstreamResponseIdleSliceStartedAt = 0;
     const pendingToolIds: Set<string> = new Set();
     function clearUpstreamResponseIdle(): void {
       if (upstreamResponseIdleTimer) {
         clearTimeout(upstreamResponseIdleTimer);
         upstreamResponseIdleTimer = null;
       }
+      upstreamResponseIdleRemainingMs = 0;
+      upstreamResponseIdleSliceStartedAt = 0;
     }
     function armUpstreamResponseIdle(): void {
       clearUpstreamResponseIdle();
@@ -1608,71 +1621,70 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (closed || !turnInFlight) return;
       // 工具执行 / 用户交互 in-flight 期间 ball 不在上游, 不计 idle 配额。
       if (pendingToolIds.size > 0) return;
+      upstreamResponseIdleRemainingMs = upstreamResponseIdleTimeoutMs;
+      armUpstreamResponseIdleSlice();
+    }
+    /**
+     * 分片计时,片尾核对真实耗时(壁钟差 ≠ 清醒时间,分层自愈不变量第 6 处;
+     * 与 codex 的 armUpstreamIdleSlice、Session 层的 armTurnStallSlice /
+     * armAbortRecoverySlice、scheduler 的 absorbSuspendGap、scheduler-host runner
+     * 的排队派发上限同源)。不能用一个 30 分钟的长定时器直接判定 —— Electron 被
+     * 系统挂起(合盖睡眠)期间没有任何事件,定时器一旦在唤醒后到期就立刻开火,
+     * 一次午休就能让看门狗中断一条其实还健康的 turn(SDK 连接可能仍活着)。
+     * 片尾判定被冻结过时走**完整重判**(armUpstreamResponseIdle)而不是直接续片:
+     * 唤醒后 turn / 工具 / 交互状态可能已经变了。
+     */
+    function armUpstreamResponseIdleSlice(): void {
+      const slice = Math.min(upstreamResponseIdleRemainingMs, CC_UPSTREAM_IDLE_SLICE_MS);
+      upstreamResponseIdleSliceStartedAt = Date.now();
       upstreamResponseIdleTimer = setTimeout(() => {
         upstreamResponseIdleTimer = null;
-        if (closed || !turnInFlight) return;
-        const idleMs = upstreamResponseIdleTimeoutMs;
-        const msSinceLast = upstreamResponseLastEventAt > 0
-          ? Date.now() - upstreamResponseLastEventAt
-          : null;
-        log.warn('upstream-response-idle watchdog tripped — interrupting current turn', {
-          idleMs,
-          sdkSessionId,
-          lastEventType: upstreamResponseLastEventType,
-          msSinceLastEvent: msSinceLast,
-          pendingToolIdsSize: pendingToolIds.size,
-          turnInFlight,
-        });
-        // Bridge 消费兜底 (Codex review 3535664420 / 3536509277): 若 watchdog 在
-        // bridge /compact turn 内触发(大上下文压缩容易超 idle 阈值), 语义与用户 Stop
-        // 一致:取消整条 "compact → real user message" 序列。只 inputQueue.clear()
-        // 不够,因为 SDK 可能已经 eager-drain 了后续真实用户输入;只 q.interrupt()
-        // 也可能只中断当前 /compact turn,让已 drain 的真实消息继续跑。这里走与
-        // abort() 相同的 close-and-rebuild 路径,并保留 rewind resume point 给下一次
-        // send 重建。
-        if (queuedBridgeTurns > 0 || activeBridgeRewindResumeAt !== undefined) {
-          log.warn('upstream-idle watchdog fired during bridge — closing query and preserving rewind resume point', {
-            queuedBridgeTurns,
-            queuedInput: inputQueue.pending,
-            activeBridgeRewindResumeAt,
+        const elapsed = Date.now() - upstreamResponseIdleSliceStartedAt;
+        if (elapsed > slice + CC_UPSTREAM_IDLE_SUSPEND_GAP_MS) {
+          log.info('upstream-response-idle watchdog skipped a suspended slice', {
+            sdkSessionId,
+            sliceMs: slice,
+            elapsedMs: elapsed,
           });
-          eventQueue.push({
-            type: 'error',
-            data: {
-              message:
-                `上游 API 单次响应已静默 ${Math.round(idleMs / 1000)}s, ` +
-                `已自动中断当前 turn 防止卡死。可以直接发下一条消息继续 ` +
-                `(已完成的 tool result 都保留)。`,
-              isTerminal: true,
-              reason: 'upstream_response_idle_timeout',
-              idleMs,
-              sdkSessionId,
-              lastEventType: upstreamResponseLastEventType,
-              msSinceLastEvent: msSinceLast,
-            },
-            source: 'claude-code',
-          });
-          queuedBridgeTurns = 0;
-          restoreBridgeAutoCompactSnapshot('upstream_response_idle_timeout');
-          autoCompactController?.onCompactCanceled('upstream_response_idle_timeout');
-          inputQueue.clear();
-          try {
-            inputQueue.end();
-          } catch (e) {
-            log.warn('upstream-idle watchdog during bridge: inputQueue.end threw', { error: String(e) });
-          }
-          canceledBridgeQueries.add(q);
-          try {
-            q.close();
-          } catch (e) {
-            log.warn('upstream-idle watchdog during bridge: q.close threw', { error: String(e) });
-          }
-          turnInFlight = false;
-          turnState.interruptRequested = false;
-          pendingToolIds.clear();
-          emitTurnBoundary('upstream_response_idle_timeout', takeBridgeSuppressedDoneData());
+          armUpstreamResponseIdle();
           return;
         }
+        upstreamResponseIdleRemainingMs -= Math.max(0, elapsed);
+        if (upstreamResponseIdleRemainingMs > 0) {
+          armUpstreamResponseIdleSlice();
+          return;
+        }
+        onUpstreamResponseIdleTimeout();
+      }, slice);
+      (upstreamResponseIdleTimer as unknown as { unref?: () => void }).unref?.();
+    }
+    function onUpstreamResponseIdleTimeout(): void {
+      if (closed || !turnInFlight) return;
+      const idleMs = upstreamResponseIdleTimeoutMs;
+      const msSinceLast = upstreamResponseLastEventAt > 0
+        ? Date.now() - upstreamResponseLastEventAt
+        : null;
+      log.warn('upstream-response-idle watchdog tripped — interrupting current turn', {
+        idleMs,
+        sdkSessionId,
+        lastEventType: upstreamResponseLastEventType,
+        msSinceLastEvent: msSinceLast,
+        pendingToolIdsSize: pendingToolIds.size,
+        turnInFlight,
+      });
+      // Bridge 消费兜底 (Codex review 3535664420 / 3536509277): 若 watchdog 在
+      // bridge /compact turn 内触发(大上下文压缩容易超 idle 阈值), 语义与用户 Stop
+      // 一致:取消整条 "compact → real user message" 序列。只 inputQueue.clear()
+      // 不够,因为 SDK 可能已经 eager-drain 了后续真实用户输入;只 q.interrupt()
+      // 也可能只中断当前 /compact turn,让已 drain 的真实消息继续跑。这里走与
+      // abort() 相同的 close-and-rebuild 路径,并保留 rewind resume point 给下一次
+      // send 重建。
+      if (queuedBridgeTurns > 0 || activeBridgeRewindResumeAt !== undefined) {
+        log.warn('upstream-idle watchdog fired during bridge — closing query and preserving rewind resume point', {
+          queuedBridgeTurns,
+          queuedInput: inputQueue.pending,
+          activeBridgeRewindResumeAt,
+        });
         eventQueue.push({
           type: 'error',
           data: {
@@ -1689,21 +1701,57 @@ export class ClaudeCodeAgent extends BaseAgent {
           },
           source: 'claude-code',
         });
-        // 先关 turn-in-flight + 清 pending 再 interrupt: 这样 SDK drain 出 ResultMessage 时,
-        // translator 的 onTurnEnd 还会再清一次 (幂等), 但中间任何 message 都不会重新 arm timer。
+        queuedBridgeTurns = 0;
+        restoreBridgeAutoCompactSnapshot('upstream_response_idle_timeout');
+        autoCompactController?.onCompactCanceled('upstream_response_idle_timeout');
+        inputQueue.clear();
+        try {
+          inputQueue.end();
+        } catch (e) {
+          log.warn('upstream-idle watchdog during bridge: inputQueue.end threw', { error: String(e) });
+        }
+        canceledBridgeQueries.add(q);
+        try {
+          q.close();
+        } catch (e) {
+          log.warn('upstream-idle watchdog during bridge: q.close threw', { error: String(e) });
+        }
         turnInFlight = false;
+        turnState.interruptRequested = false;
         pendingToolIds.clear();
-        // watchdog 上面已推过带 reason 的 terminal error, interrupt 后 drain 出的
-        // is_error result 不能再触发 translator 的失败兜底(双 error banner)。
-        turnState.interruptRequested = true;
-        turnState.interruptGeneration = turnState.generation;
-        void q.interrupt().catch((e) => {
-          // interrupt 没发出去 → 不会有被打断的 result 来消费标记, 残留会错误
-          // 抑制下一真实 turn 的 is_error 兜底 —— 立即回收。
-          turnState.interruptRequested = false;
-          log.warn('upstream-response-idle watchdog: interrupt threw', { error: String(e) });
-        });
-      }, upstreamResponseIdleTimeoutMs);
+        emitTurnBoundary('upstream_response_idle_timeout', takeBridgeSuppressedDoneData());
+        return;
+      }
+      eventQueue.push({
+        type: 'error',
+        data: {
+          message:
+            `上游 API 单次响应已静默 ${Math.round(idleMs / 1000)}s, ` +
+            `已自动中断当前 turn 防止卡死。可以直接发下一条消息继续 ` +
+            `(已完成的 tool result 都保留)。`,
+          isTerminal: true,
+          reason: 'upstream_response_idle_timeout',
+          idleMs,
+          sdkSessionId,
+          lastEventType: upstreamResponseLastEventType,
+          msSinceLastEvent: msSinceLast,
+        },
+        source: 'claude-code',
+      });
+      // 先关 turn-in-flight + 清 pending 再 interrupt: 这样 SDK drain 出 ResultMessage 时,
+      // translator 的 onTurnEnd 还会再清一次 (幂等), 但中间任何 message 都不会重新 arm timer。
+      turnInFlight = false;
+      pendingToolIds.clear();
+      // watchdog 上面已推过带 reason 的 terminal error, interrupt 后 drain 出的
+      // is_error result 不能再触发 translator 的失败兜底(双 error banner)。
+      turnState.interruptRequested = true;
+      turnState.interruptGeneration = turnState.generation;
+      void q.interrupt().catch((e) => {
+        // interrupt 没发出去 → 不会有被打断的 result 来消费标记, 残留会错误
+        // 抑制下一真实 turn 的 is_error 兜底 —— 立即回收。
+        turnState.interruptRequested = false;
+        log.warn('upstream-response-idle watchdog: interrupt threw', { error: String(e) });
+      });
     }
     function noteUpstreamResponseActivity(eventType: string): void {
       upstreamResponseLastEventType = eventType;
