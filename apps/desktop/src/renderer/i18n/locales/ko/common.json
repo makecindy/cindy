@@ -6615,6 +6615,7 @@
       "platformUnavailableHint": "이 기기에 기록된 제출 항목만 표시합니다. 해당 이슈의 최신 상태는 아직 앱에서 확인할 수 없습니다.",
       "notSignedInHint": "Cindy 계정에 로그인하면 제출한 모든 이슈와 최신 상태를 볼 수 있습니다.",
       "fetchFailedHint": "최신 상태를 가져오지 못했습니다. 이 기기에 기록된 제출 항목만 표시합니다.",
+      "fetchFailedPartialHint": "최신 상태를 가져오지 못했습니다. 일부 이슈의 상태가 완전하지 않을 수 있습니다.",
       "truncatedHint": "이슈가 많아 일부만 표시했습니다. 전체 목록은 GitHub에서 확인하세요."
     },
     "redirect": {

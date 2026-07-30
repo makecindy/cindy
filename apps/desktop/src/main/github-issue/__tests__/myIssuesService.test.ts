@@ -219,6 +219,30 @@ describe('MyIssuesService.list', () => {
     }
   });
 
+  it('账本读取抛错时不拖累另两路 —— 主来源好着就必须照常出数据', async () => {
+    // electron-store 初始化会同步抛(目录不可读 / 权限 / 磁盘错误)。放在 Promise.all
+    // 之前裸调用,一次抛出就让平台请求与增强都不再启动,整页只剩 unexpected ——
+    // 而平台通道才是主来源,账本只是它未就绪时的兜底,依赖方向不能反。
+    const fetchPlatformIssues = vi.fn(async () => ({
+      ok: true as const,
+      page: { issues: [remoteIssue({ number: 77 })], totalCount: 1 },
+    }));
+    const service = new MyIssuesService(
+      makeDeps({
+        readLedger: () => {
+          throw new Error('ENOENT: no such file or directory');
+        },
+        fetchPlatformIssues,
+      }),
+    );
+
+    const result = await service.list();
+    expect(fetchPlatformIssues).toHaveBeenCalledTimes(1);
+    expect(result.items.map((i) => i.number)).toEqual([77]);
+    // 账本读不到不是平台通道的状态,不占用那三个 reason。
+    expect(result.degraded).toBeNull();
+  });
+
   it('平台通道意外抛错时归到 fetch-failed,不把整页打挂', async () => {
     const service = new MyIssuesService(
       makeDeps({

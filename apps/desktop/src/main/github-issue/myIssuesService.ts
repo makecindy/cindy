@@ -211,7 +211,7 @@ export class MyIssuesService {
   }
 
   private async load(): Promise<MyIssuesResult> {
-    const ledger = this.deps.readLedger();
+    const ledger = this.readLedgerSafely();
 
     // 两路互不阻塞:平台通道挂了不能连可选增强一起拖掉,反之亦然。
     const [platform, enhancement] = await Promise.all([
@@ -227,6 +227,28 @@ export class MyIssuesService {
       degraded: platform.degraded,
       truncated: platform.truncated || enhancement.truncated,
     };
+  }
+
+  /**
+   * 账本读取失败不得拖累另两路 —— **依赖方向不能反**:平台通道才是主来源,账本只是
+   * 它未就绪 / 离线时的兜底。
+   *
+   * electron-store 的初始化会同步抛出(目录不可读、权限、磁盘错误);裸调用放在
+   * Promise.all 之前,一次抛出就让平台请求与 GitHub 增强**都不再启动**,整页只剩
+   * unexpected —— 明明主来源好着,用户却什么都看不到。
+   *
+   * 不计入 degraded:那三个 reason 讲的都是平台通道的状态。账本读不到时,平台正常
+   * 就能给出完整列表(没有可见损失),平台也失败则用户已经看到对应提示。
+   */
+  private readLedgerSafely(): SubmittedIssueRecord[] {
+    try {
+      return this.deps.readLedger();
+    } catch (err) {
+      log.warn('reading the submitted-issue ledger failed; continuing without it', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
   }
 
   private async loadPlatform(): Promise<{

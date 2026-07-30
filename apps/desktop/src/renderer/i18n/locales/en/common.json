@@ -6626,6 +6626,7 @@
       "platformUnavailableHint": "Showing only submissions recorded on this device. Live status for these issues isn't available in the app yet.",
       "notSignedInHint": "Sign in to your Cindy account to see every issue you've filed, along with its current status.",
       "fetchFailedHint": "Couldn't load the latest status. Showing only submissions recorded on this device.",
+      "fetchFailedPartialHint": "Couldn't load the latest status, so some issues may show incomplete status.",
       "truncatedHint": "There are more issues than shown here — open GitHub for the full list."
     },
     "redirect": {

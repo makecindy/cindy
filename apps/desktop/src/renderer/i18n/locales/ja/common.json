@@ -6615,6 +6615,7 @@
       "platformUnavailableHint": "この端末に記録された送信分のみを表示しています。これらの Issue の最新ステータスはまだアプリ内で表示できません。",
       "notSignedInHint": "Cindy アカウントにサインインすると、送信したすべての Issue と最新のステータスを表示できます。",
       "fetchFailedHint": "最新ステータスを取得できませんでした。この端末に記録された送信分のみを表示しています。",
+      "fetchFailedPartialHint": "最新ステータスを取得できませんでした。一部の Issue はステータスが不完全な場合があります。",
       "truncatedHint": "Issue が多いため一部のみ表示しています。全件は GitHub で確認してください。"
     },
     "redirect": {

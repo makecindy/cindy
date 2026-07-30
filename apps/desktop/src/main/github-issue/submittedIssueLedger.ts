@@ -64,8 +64,10 @@ function isValidRecord(value: unknown): value is SubmittedIssueRecord {
 }
 
 /**
- * 清洗持久化内容:丢掉形状不对的条目,按提交时间倒序,同一 issue 号只留最新一条,
- * 并把总量压在上限内。纯函数,单测直接调(不碰 electron-store)。
+ * 清洗**读出来的**账本内容并返回,不回写 —— 落盘的坏数据不会被自动修好,每次读都
+ * 重新过滤一遍(真正改写只发生在 recordSubmittedIssue 那次 set)。
+ * 丢掉形状不对的条目,按提交时间倒序,同一 issue 号只留最新一条,并把总量压在上限内。
+ * 纯函数,单测直接调(不碰 electron-store)。
  */
 export function normalizeSubmittedIssues(value: unknown): SubmittedIssueRecord[] {
   if (!Array.isArray(value)) return [];

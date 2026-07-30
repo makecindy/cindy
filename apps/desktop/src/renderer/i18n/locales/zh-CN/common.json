@@ -6615,6 +6615,7 @@
       "platformUnavailableHint": "当前只显示本机记录的提交，这些 Issue 在 GitHub 上的最新状态暂时无法在应用内查看。",
       "notSignedInHint": "登录 Cindy 账号后，可以看到你提交过的全部 Issue 和它们的最新状态。",
       "fetchFailedHint": "暂时取不到最新状态，当前只显示本机记录的提交。",
+      "fetchFailedPartialHint": "暂时取不到最新状态，部分 Issue 的状态可能显示不全。",
       "truncatedHint": "Issue 较多，这里只列出了一部分，完整列表请在 GitHub 上查看。"
     },
     "redirect": {
