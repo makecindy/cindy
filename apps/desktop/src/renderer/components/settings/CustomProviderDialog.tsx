@@ -692,6 +692,17 @@ export function CustomProviderDialog({
       }
       return { ...x, models: merged };
     });
+    // picker 重写该 runtime 的整个 models 数组(勾选/取消勾选可任意增删重排),
+    // 旧行号不可用简单映射对应新行——按 agent 整体清空该 runtime 的窗口草稿,
+    // 不留指向已不存在的行的陈旧非法草稿(否则会一直挡住保存、toast 报错却
+    // 找不到对应输入框,见 review P1)。
+    setWindowDrafts((drafts) => {
+      const next: Record<string, string> = {};
+      for (const [key, text] of Object.entries(drafts)) {
+        if (!key.startsWith(`${picker.agent}:`)) next[key] = text;
+      }
+      return next;
+    });
     setPicker(null);
   }, [picker, patch]);
 
