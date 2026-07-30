@@ -115,6 +115,12 @@ export function useDeviceLinkRemoteProjects(): void {
     }
 
     let disposed = false;
+    /**
+     * 「已明确离场、不许被冷缓存种回来」的设备 id。撤销访问 / 关闭被控 / 本机停用控制这三条
+     * 路径都会往里加 —— 它们清盘是异步的,而 mount 时那次 readCachedSessionList 可能早已
+     * 读到旧快照(review: codex P1)。
+     */
+    const cacheHydrationBlocked = new Set<string>();
     /** relay 在线时才跑 anti-entropy；初始状态未知时保守暂停，避免离线失败重试。 */
     let linkOnline = false;
     /** push 一旦到达即权威：迟到的 getState 快照不得覆盖更新的 link status。 */
@@ -145,6 +151,7 @@ export function useDeviceLinkRemoteProjects(): void {
       remoteProjectsStore.removeDevice(deviceId);
       removeRemoteSessionActivityForDevice(deviceId);
       // 被控端明确拒绝我们:盘上那份镜像缓存也不该留(尊重对方的拒绝,不在本机留副本)。
+      cacheHydrationBlocked.add(deviceId);
       clearCachedDevice(deviceId);
       evictDeviceCapabilities(deviceId);
       evictDeviceProviders(deviceId);
@@ -254,6 +261,7 @@ export function useDeviceLinkRemoteProjects(): void {
           removeRemoteSessionActivityForDevice(d.deviceId);
           // 设备明确离场(关被控 / 本机禁用控制 / 是自己):它的冷缓存一起清掉,
           // 否则下次冷启动会把一台已经不该出现的设备画回侧边栏。
+          cacheHydrationBlocked.add(d.deviceId);
           clearCachedDevice(d.deviceId);
         }
         evictDeviceCapabilities(d.deviceId);
@@ -309,7 +317,12 @@ export function useDeviceLinkRemoteProjects(): void {
     // 一次快照让 All Sessions 稳定」一致,不是本次引入的行为。
     void readCachedSessionList().then((devices) => {
       if (disposed || devices.length === 0) return;
-      remoteProjectsStore.hydrateFromCache(devices);
+      // 读快照这一跳期间被**明确移除**的设备(撤销访问 / 关闭被控 / 本机停用控制)不许种回来:
+      // 那些路径已经删了分片并清了盘,而这次种入拿的是它们之前读到的旧快照;紧随的 reseed
+      // 在 listDevices 离线时也纠正不了,于是那台设备会一直留在侧边栏(review: codex P1)。
+      const usable = devices.filter((device) => !cacheHydrationBlocked.has(device.deviceId));
+      if (usable.length === 0) return;
+      remoteProjectsStore.hydrateFromCache(usable);
       reseed();
     });
 
@@ -431,6 +444,7 @@ export function useDeviceLinkRemoteProjects(): void {
         // hydrateFromCache 会把这台已经明确禁用控制的设备连着它的会话画回侧边栏
         // (review: greptile)。放在 if 外面:即使此刻内存里没有分片(本次会话从未连上它),
         // 盘上仍可能留着上一次运行写下的缓存。
+        cacheHydrationBlocked.add(p.deviceId);
         clearCachedDevice(p.deviceId);
         return;
       }

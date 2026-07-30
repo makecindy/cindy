@@ -51,13 +51,14 @@ import {
   rememberLastKnownDeviceName,
   setDeviceControlEnabled,
 } from './settings-store';
+import { ownerScopedUserDataPath } from '../appSessionState';
 import {
   getMirrorCache,
   MirrorCachePurgeError,
   type CachedDeviceSessions,
   type MirrorCache,
 } from './mirrorCacheStore';
-import { enqueuePurge, pendingPurgeCount } from './mirrorCachePurgeQueue';
+import { enqueuePurge, hasPendingPurgeRecords } from './mirrorCachePurgeQueue';
 import {
   recordSubscribe,
   recordUnsubscribe,
@@ -727,8 +728,18 @@ async function awaitMirrorCacheReadGate(): Promise<void> {
  * 交回 renderer,而 renderer 一旦画上去就收不回了(review: codex P1)。
  * 代价只是失去首屏加速,且仅限于这种失败状态;下一次 drain 成功即恢复。
  */
-function mirrorCacheReadsBlocked(): boolean {
-  return pendingPurgeCount() > 0;
+async function mirrorCacheReadsBlocked(): Promise<boolean> {
+  return hasPendingPurgeRecords();
+}
+
+/**
+ * 缓存 owner 的身份标记 = owner 作用域路径本身(见 appSessionState.ownerScopedUserDataPath)。
+ * 读路径要在**返回之前**再取一次比对:闸门等待 / 文件读期间账号边界可能已经走完,
+ * 那时返回的既可能是上一个账号的明文,也可能是新账号的快照被交给旧账号发起的那次请求
+ * (review: codex P1)。变了就当未命中。
+ */
+function cacheOwnerToken(): string {
+  return ownerScopedUserDataPath('device-link-mirror-cache');
 }
 
 /**
@@ -754,12 +765,18 @@ export async function handleMirrorCacheGetMessages(
 ): Promise<{ messages: Record<string, unknown>[] }> {
   const device = requireCacheId(deviceId, 'deviceId');
   const session = requireCacheId(sessionId, 'sessionId');
+  const owner = cacheOwnerToken();
   await awaitMirrorCacheReadGate();
-  if (mirrorCacheReadsBlocked()) {
+  if (await mirrorCacheReadsBlocked()) {
     log.warn('mirror cache read suppressed: purge queue still has pending entries');
     return { messages: [] };
   }
-  return { messages: await cache.readMessages(device, session) };
+  const messages = await cache.readMessages(device, session);
+  if (cacheOwnerToken() !== owner) {
+    log.warn('mirror cache read discarded: account boundary moved while reading');
+    return { messages: [] };
+  }
+  return { messages };
 }
 
 export async function handleMirrorCachePutMessages(
@@ -786,12 +803,18 @@ export async function handleMirrorCachePutMessages(
 export async function handleMirrorCacheGetSessionList(
   cache: MirrorCache,
 ): Promise<{ devices: CachedDeviceSessions[] }> {
+  const owner = cacheOwnerToken();
   await awaitMirrorCacheReadGate();
-  if (mirrorCacheReadsBlocked()) {
+  if (await mirrorCacheReadsBlocked()) {
     log.warn('mirror cache read suppressed: purge queue still has pending entries');
     return { devices: [] };
   }
-  return { devices: await cache.readSessionList() };
+  const devices = await cache.readSessionList();
+  if (cacheOwnerToken() !== owner) {
+    log.warn('mirror cache read discarded: account boundary moved while reading');
+    return { devices: [] };
+  }
+  return { devices };
 }
 
 export async function handleMirrorCachePutSessionList(

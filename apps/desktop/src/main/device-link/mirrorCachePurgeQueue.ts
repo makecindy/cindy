@@ -234,7 +234,7 @@ async function readPersistedQueue(): Promise<PurgeEntry[]> {
   const fromMain = await readQueueFile(queueFilePath());
   const main = fromMain ?? (await readQueueFile(`${queueFilePath()}.bak`)) ?? [];
   // 追加目录里的条目同样有效(抢不到锁时写在那里,见 QUEUE_PENDING_DIR)。
-  const pending = await readPendingEntries();
+  const pending = (await readPendingEntries()).items;
   if (pending.length === 0) return main;
   const merged = new Map<string, PurgeEntry>();
   for (const entry of [...main, ...pending.map((p) => p.entry)]) merged.set(entryKey(entry), entry);
@@ -246,23 +246,36 @@ function pendingDirPath(): string {
 }
 
 /** 追加目录里的条目(带文件名,便于折进正本后精确删除)。 */
-async function readPendingEntries(): Promise<Array<{ file: string; entry: PurgeEntry }>> {
+async function readPendingEntries(): Promise<{
+  items: Array<{ file: string; entry: PurgeEntry }>;
+  unreadable: boolean;
+}> {
   let names: string[];
   try {
     names = (await fsp.readdir(pendingDirPath(), { withFileTypes: true }))
       .filter((e) => e.isFile() && e.name.endsWith('.json'))
       .map((e) => e.name);
-  } catch {
-    return [];
+  } catch (err) {
+    // 只有"目录不存在"能推出"没有待清记录";EACCES / EPERM / Windows 瞬时锁一律 fail-closed
+    // —— 这些文件可能是"已撤销明文仍待删除"的唯一凭据,当成空会让读路径重新放行
+    // (review: codex P1)。
+    const code = (err as NodeJS.ErrnoException)?.code;
+    const absent = code === 'ENOENT' || code === 'ENOTDIR';
+    return { items: [], unreadable: !absent };
   }
   const out: Array<{ file: string; entry: PurgeEntry }> = [];
+  let unreadable = false;
   for (const name of names) {
     const file = path.join(pendingDirPath(), name);
     const parsed = await readQueueFile(file);
-    if (!parsed || parsed.length === 0) continue;
+    if (parsed === null) {
+      // 文件在那儿但读不出来:同样 fail-closed。
+      unreadable = true;
+      continue;
+    }
     for (const entry of parsed) out.push({ file, entry });
   }
-  return out;
+  return { items: out, unreadable };
 }
 
 /**
@@ -513,26 +526,38 @@ async function enqueuePurgeLocked(
  * 返回本次清掉与仍待清的条目数,便于日志与测试断言。
  */
 /**
- * 最近一次 drain 之后仍待清的条目数。读路径据此**拒绝命中**:队列里还留着"本该删掉却删不掉"
- * 的东西时,那份内容仍在盘上,照读就等于把已撤销 / 上一个账号的内容交回 renderer
- * (review: codex P1)。初值 -1 = 本进程还没 drain 过(启动闸门会先跑一次)。
+ * 「此刻还有没有待清记录」——读路径据此**拒绝命中**:队列里留着"本该删掉却删不掉"的东西时,
+ * 那份内容仍在盘上,照读就等于把已撤销 / 上一个账号的内容交回 renderer(review: codex P1)。
+ *
+ * 刻意每次都查**当前**状态(内存表 + 正本 / 备份 / 追加目录是否存在),而不是缓存上一次 drain
+ * 的结果:一条 drain 之后才入队的失败清理、或另一个共享 userData 进程刚追加的记录,都必须
+ * 立刻挡住读(review: codex P1)。开销是 2~3 个 stat / readdir,与随后要读的缓存文件同量级。
+ * 任何一处读不出来都按"有待清"处理(fail-closed)。
  */
-let lastDrainPending = -1;
-
-export function pendingPurgeCount(): number {
-  return lastDrainPending;
+export async function hasPendingPurgeRecords(): Promise<boolean> {
+  if (memoryQueue.size > 0) return true;
+  for (const file of [queueFilePath(), `${queueFilePath()}.bak`]) {
+    try {
+      await fsp.stat(file);
+      return true;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return true; // 读不出来 → fail-closed
+    }
+  }
+  const pending = await readPendingEntries();
+  return pending.unreadable || pending.items.length > 0;
 }
 
 export async function drainPurgeQueue(): Promise<{ purged: number; pending: number }> {
-  const result = await withQueueLock(drainPurgeQueueLocked);
-  lastDrainPending = result.pending;
-  return result;
+  return withQueueLock(drainPurgeQueueLocked);
 }
 
 async function drainPurgeQueueLocked(lockHeld = true): Promise<{ purged: number; pending: number }> {
   // 折进正本之前先记下追加目录里有哪些文件:只删这次真的读进来的那几个,
   // 期间另一个实例新写的追加文件不受影响。
-  const pendingFiles = lockHeld ? await readPendingEntries() : [];
+  const pendingRead = lockHeld ? await readPendingEntries() : { items: [], unreadable: false };
+  const pendingFiles = pendingRead.items;
   const entries = await readQueue();
   if (entries.length === 0) return { purged: 0, pending: 0 };
   const base = ownersRoot();
@@ -602,7 +627,7 @@ async function drainPurgeQueueLocked(lockHeld = true): Promise<{ purged: number;
   if (persisted) {
     for (const { file } of pendingFiles) await fsp.rm(file, { force: true }).catch(() => undefined);
   }
-  return { purged, pending: keep.length };
+  return { purged, pending: keep.length + (pendingRead.unreadable ? 1 : 0) };
 }
 
 export const __testing = {

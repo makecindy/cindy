@@ -35,6 +35,15 @@ vi.mock('electron', () => ({
 vi.mock('../../logger', () => ({
   createLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() }),
 }));
+// 读路径要比对 owner 作用域路径(账号边界复核),这里给个稳定值即可。
+vi.mock('../../appSessionState', () => ({
+  ownerScopedUserDataPath: (...parts: string[]): string => ['/data/owners/x', ...parts].join('/'),
+}));
+// 读路径还会查 purge 队列是否有待清记录;边界测试只关心授权,给"干净"。
+vi.mock('../mirrorCachePurgeQueue', () => ({
+  enqueuePurge: vi.fn(async () => undefined),
+  hasPendingPurgeRecords: async (): Promise<boolean> => false,
+}));
 vi.mock('../../security/trustedAppRenderer', () => ({
   assertTrustedAppRendererEvent: () => {
     if (!h.trusted) throw new Error('[PERMISSION_DENIED] 此操作只能从 Cindy 主页面发起');

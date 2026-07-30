@@ -23,7 +23,11 @@ vi.mock('../../logger', () => ({
 
 vi.mock('../mirrorCachePurgeQueue', () => ({
   enqueuePurge: vi.fn(async () => undefined),
-  pendingPurgeCount: (): number => pendingPurges,
+  hasPendingPurgeRecords: async (): Promise<boolean> => pendingPurges > 0,
+}));
+vi.mock('../../appSessionState', () => ({
+  ownerScopedUserDataPath: (...parts: string[]): string =>
+    ['/data/owners', ownerKey, ...parts].join('/'),
 }));
 
 import {
@@ -56,10 +60,13 @@ function fakeCache() {
 let cache: ReturnType<typeof fakeCache>;
 /** 由 mock 的 pendingPurgeCount 读取:>0 表示队列里还有删不掉的东西。 */
 let pendingPurges = 0;
+/** 由 mock 的 ownerScopedUserDataPath 读取:模拟账号边界推进(owner 换人)。 */
+let ownerKey = 'owner-a';
 
 beforeEach(() => {
   cache = fakeCache();
   pendingPurges = 0;
+  ownerKey = 'owner-a';
 });
 
 describe('messages get / put', () => {
@@ -204,6 +211,34 @@ describe('待清未清时读路径不命中', () => {
     pendingPurges = 0;
     await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
       messages: [{ id: 'm1' }],
+    });
+  });
+});
+
+describe('读期间账号边界推进', () => {
+  // review(codex P1):闸门等待 / 文件读期间账号边界可能已经走完 —— 那时返回的既可能是上一个
+  // 账号的明文,也可能是新账号的快照被交给旧账号发起的那次请求。
+  it('读消息期间 owner 变了 → 丢弃结果,返回空', async () => {
+    cache.readMessages.mockImplementationOnce(async () => {
+      ownerKey = 'owner-b'; // 读的过程中账号边界推进
+      return [{ id: 'm1' }];
+    });
+    await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
+      messages: [],
+    });
+  });
+
+  it('读列表期间 owner 变了 → 丢弃结果,返回空', async () => {
+    cache.readSessionList.mockImplementationOnce(async () => {
+      ownerKey = 'owner-b';
+      return [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }];
+    });
+    await expect(handleMirrorCacheGetSessionList(cache)).resolves.toEqual({ devices: [] });
+  });
+
+  it('owner 没变 → 照常返回', async () => {
+    await expect(handleMirrorCacheGetSessionList(cache)).resolves.toEqual({
+      devices: [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }],
     });
   });
 });

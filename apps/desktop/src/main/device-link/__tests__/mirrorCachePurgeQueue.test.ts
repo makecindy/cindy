@@ -24,6 +24,7 @@ vi.mock('../../logger', () => ({
 import {
   drainPurgeQueue,
   enqueuePurge,
+  hasPendingPurgeRecords,
   isPurgableRoot,
   __testing,
 } from '../mirrorCachePurgeQueue';
@@ -250,6 +251,34 @@ describe('超量路径分片', () => {
     const result = await drainPurgeQueue();
     expect(result.pending).toBe(0);
     expect(fs.existsSync(root)).toBe(false);
+  });
+});
+
+describe('待清状态查询(读路径据此拒绝命中)', () => {
+  it('队列干净 → false;入队之后立刻 → true(不等下一次 drain)', async () => {
+    expect(await hasPendingPurgeRecords()).toBe(false);
+    const root = await makeOwnerCache('owner-1');
+    await enqueuePurge(root);
+    expect(await hasPendingPurgeRecords()).toBe(true);
+    // 只看盘:内存表清掉后正本还在,依旧为 true
+    __testing.resetMemoryQueue();
+    expect(await hasPendingPurgeRecords()).toBe(true);
+    await drainPurgeQueue();
+    expect(await hasPendingPurgeRecords()).toBe(false);
+  });
+
+  // review(codex P1):EACCES / 瞬时锁下 readdir 失败若当成"空",读路径会被重新放行,
+  // 而那些文件可能是"已撤销明文仍待删除"的唯一凭据。
+  it.skipIf((process.getuid?.() ?? 0) === 0)('追加目录读不出来 → fail-closed 判为有待清', async () => {
+    const pendingDir = path.join(userData, __testing.pendingDirName);
+    await fsp.mkdir(pendingDir, { recursive: true });
+    await fsp.writeFile(path.join(pendingDir, 'x.json'), '{"version":1,"entries":[]}', 'utf8');
+    await fsp.chmod(pendingDir, 0o000);
+    try {
+      expect(await hasPendingPurgeRecords()).toBe(true);
+    } finally {
+      await fsp.chmod(pendingDir, 0o700);
+    }
   });
 });
 
