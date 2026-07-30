@@ -448,7 +448,7 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
   // (实测缺 scope),图像通道用独立的平台 key。仅当目录给 openai 声明了 imageModels
   // 才渲染(远端目录可能撤掉该能力)。
   const imagesKeyRow = (provider?.imageModels?.length ?? 0) > 0 && (
-    <ImageApiKeyRow secretId="openai-images" />
+    <ImageApiKeyRow secretId="openai-images" provider={provider} />
   );
   const reconnectRequired = state.kind === 'reconnect-required';
   const loggingIn = state.kind === 'login-pending';
@@ -529,7 +529,17 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
  * 输入 + 保存。key 是 MAIN_ONLY 键,走内置 API-key 专用 IPC(builtinApiKey*),
  * renderer 只能查存在性/写/删,通用 safeStorage 桥读不到明文。
  */
-function ImageApiKeyRow({ secretId }: { secretId: ProviderSecretId }) {
+function ImageApiKeyRow({
+  secretId,
+  provider,
+}: {
+  secretId: ProviderSecretId;
+  /**
+   * 供应商快照(useProviders)。别的窗口保存/清除 key 会广播 PROVIDER_CHANGED →
+   * 快照刷新 → 对象换新 → 本 effect 重查存在性,多窗口状态不滞留。
+   */
+  provider?: ProviderView;
+}) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -543,18 +553,15 @@ function ImageApiKeyRow({ secretId }: { secretId: ProviderSecretId }) {
     return () => {
       cancelled = true;
     };
-  }, [secretId]);
+  }, [secretId, provider]);
 
   const handleSave = useCallback(async () => {
     const key = draftKey.trim();
     if (!key) return;
     setBusy(true);
     try {
-      const ok = await window.electronAPI.builtinApiKeyStore(secretId, key);
-      if (!ok) {
-        toast.error(t('settings.providers.imagesKey.toast.saveFailed'));
-        return;
-      }
+      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
+      await window.electronAPI.builtinApiKeyStore(secretId, key);
       toast.success(t('settings.providers.imagesKey.toast.saved'));
       setDraftKey('');
       setConfigured(true);
@@ -568,11 +575,7 @@ function ImageApiKeyRow({ secretId }: { secretId: ProviderSecretId }) {
   const handleClear = useCallback(async () => {
     setBusy(true);
     try {
-      const result = await window.electronAPI.builtinApiKeyRemove(secretId);
-      if (!result.success) {
-        toast.error(t('settings.providers.imagesKey.toast.clearFailed'));
-        return;
-      }
+      await window.electronAPI.builtinApiKeyRemove(secretId);
       toast.success(t('settings.providers.imagesKey.toast.cleared'));
       setConfigured(false);
     } catch {
@@ -853,11 +856,8 @@ function BuiltinApiKeyHeader({
     if (!key) return;
     setBusy(true);
     try {
-      const ok = await window.electronAPI.builtinApiKeyStore(provider.id, key);
-      if (!ok) {
-        toast.error(t('settings.providers.builtinApiKey.toast.saveFailed', { name: provider.name }));
-        return;
-      }
+      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
+      await window.electronAPI.builtinApiKeyStore(provider.id, key);
       toast.success(t('settings.providers.builtinApiKey.toast.saved', { name: provider.name }));
       setEditing(false);
       setDraftKey('');
@@ -881,13 +881,7 @@ function BuiltinApiKeyHeader({
     if (!confirmed) return;
     setBusy(true);
     try {
-      const result = await window.electronAPI.builtinApiKeyRemove(provider.id);
-      if (!result.success) {
-        toast.error(
-          t('settings.providers.builtinApiKey.toast.disconnectFailed', { name: provider.name }),
-        );
-        return;
-      }
+      await window.electronAPI.builtinApiKeyRemove(provider.id);
       toast.success(
         t('settings.providers.builtinApiKey.toast.disconnected', { name: provider.name }),
       );

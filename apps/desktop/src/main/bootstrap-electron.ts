@@ -3466,15 +3466,33 @@ const registerIpcHandlers = () => {
 
   // 内置 API-key 供应商专用 IPC(查/写/删,has 只回存在性,永不回读明文)。
   // 这些键在 MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS 里,通用 safeStorage IPC 已拦截;
-  // 此处是唯一合法的 renderer 访问通道。
+  // 此处是唯一合法的 renderer 访问通道。mutation 错误走统一 IPC 协议(throwIpcError),
+  // renderer 经 extractIpcError 解码;has 是查询,失败回 false 供 UI 按未配置渲染。
   const BUILTIN_API_KEY_PROVIDER_IDS = new Set<ProviderSecretId>(['gemini', 'openai-images']);
+  // 真实 API key 远短于此(gemini ~39 / OpenAI 平台 ~200 字符);上限挡的是被攻陷
+  // renderer 塞超大字符串让 main 同步加密落盘耗资源(副作用前验证 payload 长度)。
+  const BUILTIN_API_KEY_MAX_LENGTH = 1024;
+  const requireBuiltinApiKeyProviderId = (providerId: unknown): ProviderSecretId => {
+    if (
+      typeof providerId !== 'string' ||
+      !BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)
+    ) {
+      throwIpcError('INVALID_PARAMS', `unsupported builtin api-key provider: ${String(providerId)}`);
+    }
+    return providerId as ProviderSecretId;
+  };
 
   ipcMain.handle(
     'builtin-api-key-has',
-    async (event: Electron.IpcMainInvokeEvent, providerId: string): Promise<boolean> => {
+    async (event: Electron.IpcMainInvokeEvent, providerId: unknown): Promise<boolean> => {
+      assertTrustedAppRendererEvent(event);
+      if (
+        typeof providerId !== 'string' ||
+        !BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)
+      ) {
+        return false;
+      }
       try {
-        assertTrustedAppRendererEvent(event);
-        if (!BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)) return false;
         return getProviderSecretStore().has(providerId as ProviderSecretId);
       } catch (err) {
         console.error('[builtin-api-key-has]', err);
@@ -3485,54 +3503,33 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle(
     'builtin-api-key-store',
-    async (event: Electron.IpcMainInvokeEvent, providerId: string, value: string): Promise<boolean> => {
-      try {
-        assertTrustedAppRendererEvent(event);
-        if (!BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)) return false;
-        const trimmed = value.trim();
-        if (!trimmed) return false;
-        const ok = getProviderSecretStore().set(providerId as ProviderSecretId, trimmed);
-        if (ok) {
-          notifyProviderKeyChanged(providerId);
-          for (const win of BrowserWindow.getAllWindows()) {
-            if (!win.isDestroyed()) {
-              try { win.webContents.send(MAKER_PUSH.PROVIDER_CHANGED, {}); } catch { /* no-op */ }
-            }
-          }
-        }
-        return ok;
-      } catch (err) {
-        console.error('[builtin-api-key-store]', err);
-        return false;
+    async (event: Electron.IpcMainInvokeEvent, providerId: unknown, value: unknown): Promise<void> => {
+      assertTrustedAppRendererEvent(event);
+      const id = requireBuiltinApiKeyProviderId(providerId);
+      if (typeof value !== 'string' || value.length > BUILTIN_API_KEY_MAX_LENGTH) {
+        throwIpcError('INVALID_PARAMS', 'api key must be a string within the length limit');
       }
+      const trimmed = value.trim();
+      if (!trimmed) {
+        throwIpcError('INVALID_PARAMS', 'api key must not be empty');
+      }
+      if (!getProviderSecretStore().set(id, trimmed)) {
+        throwIpcError('INTERNAL', 'failed to store the api key');
+      }
+      notifyProviderKeyChanged(id);
     },
   );
 
   ipcMain.handle(
     'builtin-api-key-remove',
-    async (
-      event: Electron.IpcMainInvokeEvent,
-      providerId: string,
-    ): Promise<{ success: boolean; error?: string }> => {
-      try {
-        assertTrustedAppRendererEvent(event);
-        if (!BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)) {
-          return { success: false, error: 'invalid_provider' };
-        }
-        const result = getProviderSecretStore().remove(providerId as ProviderSecretId);
-        if (result.success) {
-          notifyProviderKeyChanged(providerId);
-          for (const win of BrowserWindow.getAllWindows()) {
-            if (!win.isDestroyed()) {
-              try { win.webContents.send(MAKER_PUSH.PROVIDER_CHANGED, {}); } catch { /* no-op */ }
-            }
-          }
-        }
-        return result;
-      } catch (err) {
-        console.error('[builtin-api-key-remove]', err);
-        return { success: false, error: 'remove_failed' };
+    async (event: Electron.IpcMainInvokeEvent, providerId: unknown): Promise<void> => {
+      assertTrustedAppRendererEvent(event);
+      const id = requireBuiltinApiKeyProviderId(providerId);
+      const result = getProviderSecretStore().remove(id);
+      if (!result.success) {
+        throwIpcError('INTERNAL', 'failed to remove the api key');
       }
+      notifyProviderKeyChanged(id);
     },
   );
 
