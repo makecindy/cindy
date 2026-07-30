@@ -14,6 +14,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _resetTabKindRegistry, registerTabKind } from '../registry';
+import {
+  _resetPopupTabsForTests,
+  isPopupSpawnedTab,
+  markPopupSpawnedTab,
+} from '../lib/popupTabs';
 import type { TabKindPlugin } from '../types';
 
 // device-link origin 注册表桩:'remote-' 前缀的 sessionId 视为远程会话。
@@ -86,11 +91,13 @@ describe('RSB store', () => {
     _resetTabKindRegistry();
     ipc = makeIpcStub();
     installIpc(ipc);
+    _resetPopupTabsForTests();
   });
 
   afterEach(() => {
     store._resetStore();
     _resetTabKindRegistry();
+    _resetPopupTabsForTests();
   });
 
   describe('getBucket', () => {
@@ -256,6 +263,158 @@ describe('RSB store', () => {
       expect(store.getBucket('s1').tabs.map((t) => t.id)).toEqual([a.id]);
       expect(store.getBucket('s2').tabs.map((t) => t.id)).toEqual([b.id]);
     });
+
+    it('onOptimisticAdd fires synchronously with the optimistic insert, before IPC settles', async () => {
+      // popup 来源标记的时序契约:持久化 IPC 在途期间 React 已能 mount 这个
+      // tab 的 webview,标记必须在乐观插入的同一 tick 就绪——不能等 addTab
+      // resolve(快速 OAuth callback 的 window.close 会赶在登记前到达)。
+      let releaseUpsert: (() => void) | null = null;
+      ipc.upsert.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseUpsert = () => resolve({ ok: true });
+          }),
+      );
+      const seen: string[] = [];
+      const pending = store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: (tabId) => seen.push(tabId),
+      });
+      // upsert 仍挂起,回调必须已带着乐观插入的 tabId 执行过。
+      expect(seen).toHaveLength(1);
+      expect(store.getBucket('s1').tabs.map((t) => t.id)).toEqual(seen);
+      releaseUpsert!();
+      const tab = await pending;
+      expect(tab.id).toBe(seen[0]);
+    });
+
+    it('closeTab 等待进行中的创建落地,不会用 NOT_FOUND 把关闭回滚掉', async () => {
+      // OAuth callback 页能在 addTab 的 upsert 还在途时就 window.close():close 先
+      // 到 main 会拿到 NOT_FOUND → closeTab 回滚出这个 tab,随后 upsert 落地,
+      // cache 与 DB 里都留下一个本该消失的 tab(正是本 PR 要消灭的残留空 tab)。
+      let releaseUpsert: (() => void) | null = null;
+      ipc.upsert.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseUpsert = () => resolve({ ok: true });
+          }),
+      );
+      let createdId = '';
+      const pendingAdd = store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: (tabId) => {
+          createdId = tabId;
+        },
+      });
+      // upsert 仍挂起时就关它(guest window.close 的时序)。
+      const pendingClose = store.closeTab('s1', createdId);
+      await Promise.resolve();
+      // 必须还没发 close —— 先等创建落地。
+      expect(ipc.close).not.toHaveBeenCalled();
+
+      releaseUpsert!();
+      await pendingAdd;
+      await pendingClose;
+
+      expect(ipc.upsert).toHaveBeenCalledTimes(1);
+      expect(ipc.close).toHaveBeenCalledWith({ id: createdId });
+      expect(store.getBucket('s1').tabs).toHaveLength(0);
+    });
+
+    it('upsert 成功但 setActive 失败时,并发关闭仍要发 close 删掉那一行', async () => {
+      // 半失败:DB 里已经有这一行了。addTab 会回滚 renderer cache,若关闭路径把
+      // "创建失败"一概当成"DB 里没这行"而跳过 close,DB 就留下一行孤儿 tab,
+      // 下次 hydrate / 重启冒出来。
+      let releaseUpsert: (() => void) | null = null;
+      ipc.upsert.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseUpsert = () => resolve({ ok: true });
+          }),
+      );
+      ipc.setActive.mockRejectedValueOnce(new Error('setActive boom'));
+      let createdId = '';
+      const pendingAdd = store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: (tabId) => {
+          createdId = tabId;
+        },
+      });
+      const pendingClose = store.closeTab('s1', createdId);
+      await Promise.resolve();
+
+      releaseUpsert!();
+      await expect(pendingAdd).rejects.toThrow('setActive boom');
+      await pendingClose;
+
+      expect(ipc.close).toHaveBeenCalledWith({ id: createdId });
+      expect(store.getBucket('s1').tabs).toHaveLength(0);
+    });
+
+    it('创建失败回滚时清掉 onOptimisticAdd 登记的旁路标记', async () => {
+      // 没有任何 closeTab 会来清它:tab 从未存在过。不清则 DB/IPC 异常期间反复
+      // 触发 popup 会让标记集合随进程生命周期无界增长。
+      ipc.upsert.mockRejectedValueOnce(new Error('db down'));
+      let createdId = '';
+
+      await expect(
+        store.addTab('s1', 'web-browser', null, {
+          onOptimisticAdd: (tabId) => {
+            createdId = tabId;
+            markPopupSpawnedTab(tabId);
+          },
+        }),
+      ).rejects.toThrow('db down');
+
+      expect(store.getBucket('s1').tabs).toHaveLength(0);
+      expect(isPopupSpawnedTab(createdId)).toBe(false);
+    });
+
+    it('创建失败时并发的 closeTab 不发 close,不留幽灵 tab', async () => {
+      // 创建失败 = DB 里从来没有这行,addTab 已把它从 cache 回滚掉。此时若照样发
+      // close 必然 NOT_FOUND,closeTab 的回滚分支会把这个幽灵 tab 写回 cache。
+      let rejectUpsert: ((err: Error) => void) | null = null;
+      ipc.upsert.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectUpsert = reject;
+          }),
+      );
+      let createdId = '';
+      const pendingAdd = store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: (tabId) => {
+          createdId = tabId;
+          markPopupSpawnedTab(tabId);
+        },
+      });
+      const pendingClose = store.closeTab('s1', createdId);
+      await Promise.resolve();
+
+      rejectUpsert!(new Error('db down'));
+      await expect(pendingAdd).rejects.toThrow('db down');
+      await expect(pendingClose).resolves.toBeUndefined();
+
+      // best-effort close(state 写队列同样走 upsert,可能反倒把行写进 DB);
+      // 它必须**吞掉**失败,不能像正常分支那样回滚出一个幽灵 tab。
+      expect(ipc.close).toHaveBeenCalledWith({ id: createdId });
+      expect(store.getBucket('s1').tabs).toHaveLength(0);
+      // tab 已不存在,标记也要清掉(否则 tabId 永久留在标记集合里)。
+      expect(isPopupSpawnedTab(createdId)).toBe(false);
+    });
+
+    it('创建失败分支的 best-effort close 报错也不回滚出幽灵 tab', async () => {
+      ipc.upsert.mockRejectedValueOnce(new Error('db down'));
+      ipc.close.mockRejectedValueOnce(new Error('NOT_FOUND'));
+      let createdId = '';
+      const pendingAdd = store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: (tabId) => {
+          createdId = tabId;
+        },
+      });
+      const pendingClose = store.closeTab('s1', createdId);
+
+      await expect(pendingAdd).rejects.toThrow('db down');
+      await expect(pendingClose).resolves.toBeUndefined();
+
+      expect(store.getBucket('s1').tabs).toHaveLength(0);
+    });
   });
 
   describe('addOrFocusSingletonTab', () => {
@@ -299,6 +458,96 @@ describe('RSB store', () => {
   });
 
   describe('closeTab', () => {
+    it('清掉 tabId 上的 popup 来源标记(任何关闭入口,不只 guest 自关)', async () => {
+      const tab = await store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: markPopupSpawnedTab,
+      });
+      expect(isPopupSpawnedTab(tab.id)).toBe(true);
+
+      // 用户手动关(或 closeAllTabs / agent close tab-op)也必须清标记,否则标记
+      // 集合会随进程生命周期无界增长。
+      await store.closeTab('s1', tab.id);
+
+      expect(isPopupSpawnedTab(tab.id)).toBe(false);
+    });
+
+    it('IPC 失败回滚时保留 popup 标记(tab 还在,自关语义不能丢)', async () => {
+      const tab = await store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: markPopupSpawnedTab,
+      });
+      ipc.close.mockRejectedValueOnce(new Error('db down'));
+
+      await expect(store.closeTab('s1', tab.id)).rejects.toThrow('db down');
+
+      expect(store.getBucket('s1').tabs).toHaveLength(1);
+      expect(isPopupSpawnedTab(tab.id)).toBe(true);
+    });
+
+    it('同 session 并发关闭按序落盘,不用旧快照复活已删 tab', async () => {
+      // 交错场景(不限于 popup 自关):关掉 active 的 A 会把 active 挪到 B,若此时
+      // 另一路关闭已经把 B 删掉,前者延迟到达的 setActive(B) 会 NOT_FOUND,
+      // closeTab 便用"含 A、B"的旧快照整体回滚,两个 tab 一起复活。
+      const a = await store.addTab('s1', 'web-browser', null);
+      const b = await store.addTab('s1', 'web-browser', null);
+      await store.setActiveTab('s1', a.id);
+      // close 的 IPC 慢一拍,给两路关闭制造交错窗口。
+      ipc.close.mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve({ ok: true }), 5)),
+      );
+      ipc.setActive.mockImplementation((input: { id: string | null }) => {
+        // main 端真实行为:setActive 指向已删除的 tab 会报错。
+        if (input.id !== null && !store.getBucket('s1').tabs.some((t) => t.id === input.id)) {
+          return Promise.reject(new Error('NOT_FOUND'));
+        }
+        return Promise.resolve({ ok: true });
+      });
+
+      await Promise.all([store.closeTab('s1', a.id), store.closeTab('s1', b.id)]);
+
+      expect(store.getBucket('s1').tabs).toHaveLength(0);
+      expect(store.getBucket('s1').activeTabId).toBeNull();
+    });
+
+    it('active 落库前重取 cache 现值,不用旧值盖掉并发 addTab 落的 active', async () => {
+      // closeTab 的 setActive 跨越若干 await,并发的 addTab 可能已经把新 tab 落成
+      // active。若这里还按关闭前算好的旧值写,DB 的 active 会与 cache 分叉,下次
+      // hydrate 恢复出错的激活项。
+      const a = await store.addTab('s1', 'web-browser', null);
+      let releaseClose: (() => void) | null = null;
+      ipc.close.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseClose = () => resolve({ ok: true });
+          }),
+      );
+
+      const pendingClose = store.closeTab('s1', a.id);
+      await Promise.resolve();
+      // close IPC 在途期间插入一个新 tab —— 它自己会把 active 落成 b。
+      const b = await store.addTab('s1', 'web-browser', null);
+      releaseClose!();
+      await pendingClose;
+
+      expect(store.getBucket('s1').activeTabId).toBe(b.id);
+      // 最后一次 setActive 必须是 cache 现值(b),不是关闭时算出的 null。
+      const activeCalls = ipc.setActive.mock.calls.map((c) => (c[0] as { id: string | null }).id);
+      expect(activeCalls[activeCalls.length - 1]).toBe(b.id);
+    });
+
+    it('前一次关闭失败不会把同 session 后续关闭拖挂', async () => {
+      const a = await store.addTab('s1', 'web-browser', null);
+      const b = await store.addTab('s1', 'web-browser', null);
+      ipc.close.mockRejectedValueOnce(new Error('db down'));
+
+      const first = store.closeTab('s1', a.id);
+      const second = store.closeTab('s1', b.id);
+
+      await expect(first).rejects.toThrow('db down');
+      await expect(second).resolves.toBeUndefined();
+      // a 回滚留下,b 正常关掉。
+      expect(store.getBucket('s1').tabs.map((t) => t.id)).toEqual([a.id]);
+    });
+
     it('removes tab and shifts active to neighbor', async () => {
       const a = await store.addTab('s1', 'file-browser', null);
       const b = await store.addTab('s1', 'file-browser', null);
@@ -315,6 +564,206 @@ describe('RSB store', () => {
       ipc.close.mockRejectedValueOnce(new Error('boom'));
       await expect(store.closeTab('s1', a.id)).rejects.toThrow('boom');
       expect(store.getBucket('s1').tabs.map((t) => t.id)).toEqual([a.id]);
+    });
+
+    it('close 落库后同步 active 前,等新 active tab 的 INSERT 落定再 setActive', async () => {
+      // close 在途时并发 addTab 使新 tab 成为 active:它的 upsert 未提交前就发
+      // setActive 会撞 [NOT_FOUND](main 端还会先清掉全 session 的 active 位),
+      // 并把"close 已成功"错误地拖进回滚分支复活已删 tab。
+      const a = await store.addTab('s1', 'web-browser', null);
+      ipc.setActive.mockClear();
+      let releaseClose!: () => void;
+      ipc.close.mockImplementationOnce(
+        () => new Promise((resolve) => { releaseClose = () => resolve({ ok: true }); }),
+      );
+      let releaseUpsert!: () => void;
+      ipc.upsert.mockImplementationOnce(
+        () => new Promise((resolve) => { releaseUpsert = () => resolve({ ok: true }); }),
+      );
+
+      const close = store.closeTab('s1', a.id);
+      await Promise.resolve();
+      const pendingAdd = store.addTab('s1', 'web-browser', null); // 成为 active,INSERT 挂起
+      await Promise.resolve();
+      releaseClose();
+      // 给 close 内部若干 tick 走到 active 同步点:INSERT 未落定前不得发任何 setActive。
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+      expect(ipc.setActive).not.toHaveBeenCalled();
+
+      releaseUpsert();
+      const b = await pendingAdd;
+      await close;
+      expect(ipc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: b.id });
+      expect(store.getBucket('s1').tabs.map((t) => t.id)).toEqual([b.id]);
+    });
+
+    it('正常分支 close 撞 [NOT_FOUND](行已被并发清理删掉)按成功收尾,不回插幽灵 tab', async () => {
+      // 双路径清理竞争:addTab 半失败(upsert 成功 setActive 失败)的回滚清理先删
+      // 了行,pendingCreate 半失败返回 true 让并发 close 走到正常分支 → ipc.close
+      // 拿 [NOT_FOUND]。行不存在正是关闭的目标状态——回滚反而把 DB 已无的行插
+      // 回 cache,制造幽灵 tab。
+      const a = await store.addTab('s1', 'web-browser', null);
+      ipc.close.mockRejectedValueOnce(
+        new Error(
+          "Error invoking remote method 'local-db:right-sidebar-tabs:close': Error: [NOT_FOUND] tab x not found",
+        ),
+      );
+      await expect(store.closeTab('s1', a.id)).resolves.toBeUndefined();
+      expect(store.getBucket('s1').tabs).toHaveLength(0);
+    });
+
+    it('post-close setActive 失败的恢复不覆盖期间用户的新激活', async () => {
+      // setActive(B) 在途期间用户激活 C(已各自落库):B 的失败恢复若无条件清
+      // null,会把更新的激活覆盖掉——旧写失败不该赢过新写成功。
+      const a = await store.addTab('s1', 'web-browser', null);
+      const b = await store.addTab('s1', 'web-browser', null);
+      const c = await store.addTab('s1', 'web-browser', null);
+      await store.setActiveTab('s1', a.id);
+      ipc.setActive.mockClear();
+      let rejectFirst!: (e: Error) => void;
+      ipc.setActive.mockImplementationOnce(
+        () => new Promise((_resolve, reject) => { rejectFirst = (e) => reject(e); }),
+      );
+
+      const close = store.closeTab('s1', a.id); // 替代者 = b → setActive(b) 挂起
+      await vi.waitFor(() =>
+        expect(ipc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: b.id }),
+      );
+      await store.setActiveTab('s1', c.id); // 用户此间激活 C(默认 mock 成功)
+      rejectFirst(new Error('boom'));
+      await close;
+
+      expect(store.getBucket('s1').activeTabId).toBe(c.id);
+    });
+
+    it('close 落库后 setActive 失败只降级为警告,不复活已删 tab', async () => {
+      const a = await store.addTab('s1', 'web-browser', null);
+      const b = await store.addTab('s1', 'web-browser', null);
+      await store.setActiveTab('s1', a.id);
+      // 关 active tab → close 成功后需要 setActive(替代者 b);让它失败。
+      ipc.setActive.mockRejectedValueOnce(new Error('boom'));
+      await expect(store.closeTab('s1', a.id)).resolves.toBeUndefined();
+      // tab 删除已落库,绝不能因 active 同步失败复活;active 漂移由用户下次点击收敛。
+      expect(store.getBucket('s1').tabs.map((t) => t.id)).toEqual([b.id]);
+    });
+
+    it('孤儿行清理对非 NOT_FOUND 失败按 overload 节奏重试,不再静默吞掉', async () => {
+      // 创建失败(非 FK)→ addTab 回滚 cache;in-flight 的 close 走孤儿清理分支。
+      // 清理 close 首次撞 overload:必须重试(默认 mock 第二次成功),不能吞掉——
+      // 吞掉意味着 state 写队列可能已写进 DB 的孤儿行永远没人清,重启复活。
+      let rejectUpsert!: (e: Error) => void;
+      ipc.upsert.mockImplementationOnce(
+        () => new Promise((_resolve, reject) => { rejectUpsert = (e) => reject(e); }),
+      );
+      let createdId = '';
+      const pendingAdd = store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: (id) => { createdId = id; },
+      });
+      const close = store.closeTab('s1', createdId);
+      await Promise.resolve();
+      ipc.close.mockRejectedValueOnce(new Error('db worker RPC queue overloaded'));
+
+      rejectUpsert(new Error('boom'));
+      await expect(pendingAdd).rejects.toThrow('boom');
+      await close;
+      expect(ipc.close).toHaveBeenCalledTimes(2);
+      expect(store.getBucket('s1').tabs).toHaveLength(0);
+    });
+
+    it('孤儿行清理把 Electron 包装形态的 [NOT_FOUND] 视为"行本来就没有",不重试', async () => {
+      let rejectUpsert!: (e: Error) => void;
+      ipc.upsert.mockImplementationOnce(
+        () => new Promise((_resolve, reject) => { rejectUpsert = (e) => reject(e); }),
+      );
+      let createdId = '';
+      const pendingAdd = store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: (id) => { createdId = id; },
+      });
+      const close = store.closeTab('s1', createdId);
+      await Promise.resolve();
+      // renderer 实际拿到的是 Electron invoke 包装后的形态。
+      ipc.close.mockRejectedValueOnce(
+        new Error(
+          "Error invoking remote method 'local-db:right-sidebar-tabs:close': Error: [NOT_FOUND] tab x not found",
+        ),
+      );
+
+      rejectUpsert(new Error('boom'));
+      await expect(pendingAdd).rejects.toThrow('boom');
+      await close;
+      expect(ipc.close).toHaveBeenCalledTimes(1);
+    });
+
+    it('message 恰含 [NOT_FOUND] 字样但非 IPC code 位置的失败,不误判为清理成功', async () => {
+      // 结构化 code 比对(extractIpcError 锚定 code 位置)的意义:裸
+      // `includes('[NOT_FOUND]')` 会把这类无关错误当成"行不存在",静默跳过清理。
+      let rejectUpsert!: (e: Error) => void;
+      ipc.upsert.mockImplementationOnce(
+        () => new Promise((_resolve, reject) => { rejectUpsert = (e) => reject(e); }),
+      );
+      let createdId = '';
+      const pendingAdd = store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: (id) => { createdId = id; },
+      });
+      const close = store.closeTab('s1', createdId);
+      await Promise.resolve();
+      ipc.close.mockRejectedValueOnce(
+        new Error('proxy hiccup while forwarding [NOT_FOUND] marker downstream'),
+      );
+
+      rejectUpsert(new Error('boom'));
+      await expect(pendingAdd).rejects.toThrow('boom');
+      await close; // 默认 mock 第二次成功 → 重试路径完成清理
+      expect(ipc.close).toHaveBeenCalledTimes(2);
+    });
+
+    it('孤儿行清理重试仍失败时向上抛,不静默', async () => {
+      let rejectUpsert!: (e: Error) => void;
+      ipc.upsert.mockImplementationOnce(
+        () => new Promise((_resolve, reject) => { rejectUpsert = (e) => reject(e); }),
+      );
+      let createdId = '';
+      const pendingAdd = store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: (id) => { createdId = id; },
+      });
+      const close = store.closeTab('s1', createdId);
+      await Promise.resolve();
+      ipc.close.mockRejectedValue(new Error('db worker RPC queue overloaded'));
+
+      rejectUpsert(new Error('boom'));
+      await expect(pendingAdd).rejects.toThrow('boom');
+      await expect(close).rejects.toThrow('overloaded');
+      // 1 次首发 + 3 次重试。
+      expect(ipc.close).toHaveBeenCalledTimes(4);
+      ipc.close.mockResolvedValue({ ok: true }); // 还原默认,防污染后续用例
+    });
+
+    it('close 失败的回滚只插回被关的 tab,不覆盖 in-flight 期间并发的 addTab/setActive', async () => {
+      // addTab / setActiveTab 有意不进 close 队列:close 的 IPC 在途期间它们可能
+      // 已把新 tab 写进 cache 和 DB。整快照回滚会把并发 tab 从 cache 抹掉(DB 里
+      // 还在,重启 hydrate 后"幽灵复活")——精准回滚只恢复被关的那一个。
+      const a = await store.addTab('s1', 'web-browser', null);
+      let rejectClose!: (err: Error) => void;
+      ipc.close.mockImplementationOnce(
+        () => new Promise((_resolve, reject) => {
+          rejectClose = (err) => reject(err);
+        }),
+      );
+
+      const close = store.closeTab('s1', a.id);
+      await Promise.resolve();
+      // close IPC 挂起期间并发新增一个 tab(popup 场景)并成为 active。
+      const b = await store.addTab('s1', 'web-browser', { url: 'https://popup.example' });
+      expect(store.getBucket('s1').tabs.map((t) => t.id)).toEqual([b.id]);
+
+      rejectClose(new Error('boom'));
+      await expect(close).rejects.toThrow('boom');
+
+      const after = store.getBucket('s1');
+      // a 被插回,b 不能丢。
+      expect(after.tabs.map((t) => t.id).sort()).toEqual([a.id, b.id].sort());
+      // 并发操作已把 active 指向 b,回滚不得抢回。
+      expect(after.activeTabId).toBe(b.id);
     });
 
     it('waits for queued state writes before deleting the tab row', async () => {
@@ -593,6 +1042,33 @@ describe('RSB store', () => {
         expect.objectContaining({ id: b.id, state: { url: 'https://example.com/b1' } }),
       );
       expect(store.getBucket('s1').hydrated).toBe(false);
+    });
+
+    it('skips post-close setActive when cache is invalidated during the close IPC', async () => {
+      // Codex P1: invalidateSessionCaches() 清掉旧 renderer 的 bucket(hydrated=false)
+      // 时,closeTab 的 active 同步段不应调 setActive(null)——那会把新 renderer 已
+      // 接管会话的 active 标志清掉。
+      const tab = await store.addTab('s1', 'web-browser', { url: 'https://example.com/a' });
+      await store.addTab('s1', 'web-browser', { url: 'https://example.com/b' });
+      ipc.setActive.mockClear();
+
+      let releaseClose: (() => void) | undefined;
+      ipc.close.mockImplementationOnce(
+        () => new Promise<{ ok: true }>((resolve) => {
+          releaseClose = () => resolve({ ok: true });
+        }),
+      );
+
+      const closing = store.closeTab('s1', tab.id);
+      // 等 closeTab 走到 ipc.close 调用后(releaseClose 已被 mock 赋值)
+      await vi.waitFor(() => expect(releaseClose).toBeDefined());
+      // close IPC 在途时 invalidate
+      store.invalidateSessionCaches();
+      releaseClose!();
+      await closing;
+
+      // hydrated=false 后 active 同步段必须跳过
+      expect(ipc.setActive).not.toHaveBeenCalled();
     });
   });
 

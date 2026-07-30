@@ -8,20 +8,25 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { HookMessage, TaskDispatchPayload } from '@cindy/slack-hook-protocol';
+import {
+  HOOK_FEATURE_TURN_REOPEN,
+  type HookMessage,
+  type TaskDispatchPayload,
+} from '@cindy/slack-hook-protocol';
 
 import {
   buildHookSessionTitle,
   createHookDispatcher,
-  isPathWithin,
-  isSamePath,
   normalizeTaskSource,
+  type HookContinuationWatchRequest,
   type HookDispatcherDeps,
   type HookRunOutcome,
   type HookRunRequest,
   type HookSessionRunner,
+  type PrepareWorktreeResult,
 } from '../dispatcher';
-import type { HookBindingEntry, HookBindingStore } from '../bindings';
+import type { HookBindingStore } from '../bindings';
+import { isPathWithin } from '../paths';
 import type { HookConnectionConfig } from '../store';
 
 const noopLog = { info: () => {}, warn: () => {} };
@@ -37,22 +42,13 @@ const CONFIG: HookConnectionConfig = {
   createdAt: 0,
 };
 
-/** 内存 binding(含工作目录快照与授权来源, 与文件实现同语义)。 */
+/** 内存 binding(与文件实现同语义: 只存 externalKey -> sessionId)。 */
 function memoryBindings(): HookBindingStore {
-  const map = new Map<string, HookBindingEntry>();
+  const map = new Map<string, string>();
   const k = (c: string, e: string): string => `${c}|${e}`;
   return {
-    get: (c, e) => map.get(k(c, e))?.sessionId ?? null,
-    getEntry: (c, e) => {
-      const row = map.get(k(c, e));
-      return row ? { ...row } : null;
-    },
-    set: (c, e, s, workingDir, authority) =>
-      void map.set(k(c, e), {
-        sessionId: s,
-        workingDir: workingDir ?? null,
-        authority: authority ?? null,
-      }),
+    get: (c, e) => map.get(k(c, e)) ?? null,
+    set: (c, e, s) => void map.set(k(c, e), s),
     remove: (c, e) => void map.delete(k(c, e)),
   };
 }
@@ -133,6 +129,10 @@ function makeDispatcher(overrides?: {
   prepareWorktree?: HookDispatcherDeps['prepareWorktree'];
   dialogue?: HookDispatcherDeps['dialogue'];
   abortSession?: HookDispatcherDeps['abortSession'];
+  subscribeUiContinuation?: HookDispatcherDeps['subscribeUiContinuation'];
+  subscribeUiSessionIntervention?: HookDispatcherDeps['subscribeUiSessionIntervention'];
+  subscribeUiTurnDispatching?: HookDispatcherDeps['subscribeUiTurnDispatching'];
+  subscribeUiTurnUndispatched?: HookDispatcherDeps['subscribeUiTurnUndispatched'];
   accountInitiallyActive?: boolean;
 }) {
   const bindings = overrides?.bindings ?? memoryBindings();
@@ -145,6 +145,10 @@ function makeDispatcher(overrides?: {
     prepareWorktree: overrides?.prepareWorktree,
     dialogue: overrides?.dialogue,
     abortSession: overrides?.abortSession,
+    subscribeUiContinuation: overrides?.subscribeUiContinuation,
+    subscribeUiSessionIntervention: overrides?.subscribeUiSessionIntervention,
+    subscribeUiTurnDispatching: overrides?.subscribeUiTurnDispatching,
+    subscribeUiTurnUndispatched: overrides?.subscribeUiTurnUndispatched,
     accountInitiallyActive: overrides?.accountInitiallyActive,
     log: noopLog,
   });
@@ -158,16 +162,6 @@ describe('isPathWithin', () => {
     expect(isPathWithin(WS_DIR, path.resolve('/repos/other'))).toBe(false);
     // 前缀相似但非子目录(/repos/xdmaker-evil)不放行
     expect(isPathWithin(WS_DIR, `${WS_DIR}-evil`)).toBe(false);
-  });
-});
-
-describe('isSamePath', () => {
-  it('同一目录的不同写法算相同, 子目录不算', () => {
-    expect(isSamePath(WS_DIR, WS_DIR)).toBe(true);
-    expect(isSamePath(WS_DIR, path.join(WS_DIR, 'sub', '..'))).toBe(true);
-    expect(isSamePath(WS_DIR, `${WS_DIR}${path.sep}`)).toBe(true);
-    expect(isSamePath(WS_DIR, path.join(WS_DIR, 'sub'))).toBe(false);
-    expect(isSamePath(WS_DIR, path.resolve('/repos/other'))).toBe(false);
   });
 });
 
@@ -265,6 +259,26 @@ describe('normalizeTaskSource', () => {
     expect(fr.calls[0]?.source?.channelName).toHaveLength(160);
     expect(fr.calls[0]?.source?.userText).toHaveLength(20_000);
     fr.finish();
+  });
+
+  it('laneKind 派生: telegram group/topic externalKey → group, DM 与 Slack → dm', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+
+    const keys = [
+      'telegram:group:bot:-900:42:9:g0',
+      'telegram:topic:bot:-900:77:9:g0',
+      'telegram:dm:bot:user:g0',
+      'team-slack:C1:1.1',
+    ];
+    for (const [i, externalKey] of keys.entries()) {
+      d.handleDispatch('conn-1', dispatch({ requestId: `req-lane-${i}`, externalKey }), c.send);
+      await tick();
+      fr.finish();
+      await tick();
+    }
+    expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm']);
   });
 });
 
@@ -428,7 +442,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
-  it('会话被移出工作目录映射: 目录变过 -> 跟随复用并说明, 不重开新会话', async () => {
+  it('会话被移出工作目录映射 -> 断开绑定、换新对话并说明, 不跟随到映射外', async () => {
     const bindings = memoryBindings();
     const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
     const fr = fakeRunner({ sessions });
@@ -448,29 +462,55 @@ describe('dispatcher 核心语义', () => {
 
     d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
     await tick();
-    expect(c.last('task.ack')!.payload).toMatchObject({ result: 'accepted', sessionId: first });
-    expect(fr.calls[1]).toMatchObject({ isNew: false, sessionId: first, workingDir: MOVED_DIR });
-    // 快照跟随移动, 并记下"这份授权来自本地移动"
-    expect(bindings.getEntry('conn-1', 'team-slack:C1:1.1')).toEqual({
-      sessionId: first,
-      workingDir: MOVED_DIR,
-      authority: 'local-move',
-    });
+    const second = c.last('task.ack')!.payload.sessionId!;
+    // 映射是唯一边界: 移出去就不再驱动它, 这条消息换新对话在映射内跑
+    expect(second).not.toBe(first);
+    expect(fr.calls[1]).toMatchObject({ isNew: true, workingDir: WS_DIR });
+    expect(bindings.get('conn-1', 'team-slack:C1:1.1')).toBe(second);
 
-    fr.finish({ finalText: '在新目录里跑完了' });
+    fr.finish({ finalText: '新对话的回答' });
     await tick();
     const finalText = c.last('turn.end')!.payload.finalText;
-    expect(finalText).toContain('已被移动到新的工作目录');
-    expect(finalText).toContain('在新目录里跑完了');
+    expect(finalText).toContain('原对话已不在可用的工作目录里');
+    expect(finalText).toContain('把它所在的目录加进来');
+    expect(finalText).toContain('新对话的回答');
   });
 
-  it('移动后的后续消息持续复用同一 session, 且不再重复提示(跟随不能只生效一次)', async () => {
+  it('旧任务还在跑时被移出映射: 新消息不排进旧会话(快路径也过边界)', async () => {
     const bindings = memoryBindings();
     const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
     const fr = fakeRunner({ sessions });
     const { d } = makeDispatcher({ runner: fr.runner, bindings });
     const c = collector();
-    const MOVED_DIR = path.resolve('/repos/another-project');
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const first = c.last('task.ack')!.payload.sessionId!;
+    // 第一轮仍在执行(没有 fr.finish): session 落库并被用户移出映射
+    sessions[first] = { workingDir: path.resolve('/repos/another-project'), usable: true };
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
+    await tick();
+    // 免检快路径只保「尚未落库」的窗口 —— 已落库的会话在跑也要过映射校验,
+    // 否则这条消息会排进旧会话, 由 session meta 的 workDir 带到映射外执行
+    const second = c.last('task.ack')!.payload.sessionId!;
+    expect(second).not.toBe(first);
+    expect(c.last('task.ack')!.payload.result).toBe('accepted');
+    expect(fr.calls[1]).toMatchObject({ isNew: true, workingDir: WS_DIR });
+    expect(bindings.get('conn-1', 'team-slack:C1:1.1')).toBe(second);
+
+    fr.finish();
+    await tick();
+    fr.finish();
+    await tick();
+  });
+
+  it('inspect 瞬时失败(返回 null)不构成免检: 已落库的会话仍按边界处理', async () => {
+    const bindings = memoryBindings();
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const { d } = makeDispatcher({ runner: fr.runner, bindings });
+    const c = collector();
 
     d.handleDispatch('conn-1', dispatch(), c.send);
     await tick();
@@ -479,61 +519,272 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
     await tick();
 
-    // 移动后连发两条: 第二条时快照已等于新目录, 只有持久化的授权来源能保住复用
-    sessions[first] = { workingDir: MOVED_DIR, usable: true };
+    // 第二轮开着不收口, 让 first 留在 running 里
     d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
     await tick();
-    fr.finish({ finalText: '第一次' });
-    await tick();
+    expect(c.last('task.ack')!.payload.sessionId).toBe(first);
 
+    // 模拟 meta / DB 读取瞬时失败: inspect 也返回 null, 与"不存在"不可区分。
+    // 免检窗口只认 awaitingPersist(本 dispatcher 新建且未落库), first 早已出局,
+    // 所以这里必须 fail closed 而不是把消息排进 first。
+    delete sessions[first];
     d.handleDispatch('conn-1', dispatch({ requestId: 'req-3' }), c.send);
     await tick();
-    expect(c.last('task.ack')!.payload).toMatchObject({ result: 'accepted', sessionId: first });
-    expect(fr.calls[2]).toMatchObject({ isNew: false, sessionId: first, workingDir: MOVED_DIR });
+    expect(c.last('task.ack')!.payload.sessionId).not.toBe(first);
 
-    fr.finish({ finalText: '第二次' });
+    fr.finish();
     await tick();
-    // 说明只在"这次刚发现被移动"时出现一次
-    expect(c.last('turn.end')!.payload.finalText).toBe('第二次');
+    fr.finish();
+    await tick();
   });
 
-  it('对话移回工作目录映射内: 授权来源复位, 此后映射被改仍按撤权重建', async () => {
+  it('免检窗口内别名被改指: 未落库的会话也要重过映射校验, 不再免检', async () => {
+    const bindings = memoryBindings();
+    const fr = fakeRunner(); // sessions 恒空 -> inspect 一直返回 null(未落库)
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR } };
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const first = c.last('task.ack')!.payload.sessionId!;
+    expect(fr.calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR });
+
+    // 第一轮还在 agent.startSession 里(没落库、没收口), 此时用户把别名改指走
+    config.workspaces = { xdmaker: path.resolve('/repos/elsewhere') };
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
+    await tick();
+    // 只认 sessionId 的话这条会排进 first —— 而 first 建在已撤权的目录里
+    expect(c.last('task.ack')!.payload.sessionId).not.toBe(first);
+
+    fr.finish();
+    await tick();
+    fr.finish();
+    await tick();
+  });
+
+  it('排队期间映射被撤权: drain 时不执行, 回一条说明而不是在已撤权目录里跑', async () => {
     const bindings = memoryBindings();
     const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
     const fr = fakeRunner({ sessions });
     const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR } };
     const { d } = makeDispatcher({ runner: fr.runner, bindings, config });
     const c = collector();
-    const MOVED_DIR = path.resolve('/repos/another-project');
 
     d.handleDispatch('conn-1', dispatch(), c.send);
     await tick();
     const first = c.last('task.ack')!.payload.sessionId!;
-    sessions[first] = { workingDir: MOVED_DIR, usable: true };
-    fr.finish();
-    await tick();
+    sessions[first] = { workingDir: WS_DIR, usable: true };
 
-    // 移出去一次(拿到 local-move 授权), 再移回映射内
+    // 第一轮没收口时第二条进队列(此刻目录还在映射内, 校验通过)
     d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
     await tick();
-    fr.finish();
+    expect(c.last('task.ack')!.payload).toMatchObject({ result: 'queued' });
+
+    // 排队期间用户把这个目录从映射里删掉 —— 会话目录和 expectedWorkingDir 都
+    // 没变, 只有"映射还认不认它"变了, 所以必须在开跑前重新查映射
+    config.workspaces = {};
+    fr.finish({ finalText: '第一条跑完了' });
     await tick();
-    sessions[first] = { workingDir: WS_DIR, usable: true };
-    d.handleDispatch('conn-1', dispatch({ requestId: 'req-3' }), c.send);
-    await tick();
-    expect(bindings.getEntry('conn-1', 'team-slack:C1:1.1')).toEqual({
-      sessionId: first,
-      workingDir: WS_DIR,
-      authority: 'workspace',
+
+    const ends = c.ofType('turn.end').map((m) => m.payload);
+    const queued = ends.find((e) => e.requestId === 'req-2')!;
+    expect(queued.status).toBe('error');
+    expect(queued.errorMessage).toContain('已不在工作目录映射里');
+    // 关键: 排队那条根本没进 runner
+    expect(fr.calls).toHaveLength(1);
+  });
+
+  it('新建会话在定位与执行之间被撤权: 同样不执行(新建路径也走执行侧收口)', async () => {
+    const fr = fakeRunner();
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR } };
+    let release!: (v: PrepareWorktreeResult) => void;
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      config,
+      prepareWorktree: () =>
+        new Promise<PrepareWorktreeResult>((resolve) => {
+          release = resolve;
+        }),
     });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    // 定位还卡在 worktree 预建上, 此时用户把这个目录从映射里删掉
+    config.workspaces = {};
+    release({ ok: false, message: 'no worktree' });
+    await tick();
+
+    // 新建路径没有 expectedWorkingDir, 但 workingDir 就是要跑的目录, 照样拦下
+    expect(fr.calls).toHaveLength(0);
+    const end = c.last('turn.end')!.payload;
+    expect(end.status).toBe('error');
+    expect(end.errorMessage).toContain('已不在工作目录映射里');
+  });
+
+  it('排队期间连接被停用: 目录还在映射里也不执行', async () => {
+    const fr = fakeRunner({ sessions: {} });
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR } };
+    const { d } = makeDispatcher({ runner: fr.runner, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
+    await tick();
+    expect(c.last('task.ack')!.payload.result).toBe('queued');
+
+    // 用户关掉了这条连接 —— 通道已切断, 排着的远端任务不能因为"目录还在映射里"就跑
+    config.enabled = false;
     fr.finish();
     await tick();
 
-    // 授权已复位: 映射改指别处时按撤权重建, 不再吃老的 local-move
-    config.workspaces = { xdmaker: path.resolve('/repos/elsewhere') };
-    d.handleDispatch('conn-1', dispatch({ requestId: 'req-4' }), c.send);
+    expect(fr.calls).toHaveLength(1);
+    const queued = c
+      .ofType('turn.end')
+      .map((m) => m.payload)
+      .find((e) => e.requestId === 'req-2')!;
+    expect(queued.status).toBe('error');
+  });
+
+  it('执行前被拦下时回收预建的 worktree(不留孤儿)', async () => {
+    const fr = fakeRunner();
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR } };
+    const cleanup = vi.fn(async () => undefined);
+    let release!: (v: PrepareWorktreeResult) => void;
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      config,
+      prepareWorktree: () =>
+        new Promise<PrepareWorktreeResult>((resolve) => {
+          release = resolve;
+        }),
+    });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
     await tick();
-    expect(c.last('task.ack')!.payload.sessionId).not.toBe(first);
+    config.workspaces = {};
+    release({ ok: true, sessionId: 'wt-session', path: path.join(WS_DIR, 'wt'), cleanup });
+    await tick();
+
+    expect(fr.calls).toHaveLength(0);
+    // worktree 已经建出来了却没有会话认领 —— 必须就地回收
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it('isDirAuthorized 按当前映射回答, 供 runner 校验实际执行目录', async () => {
+    const fr = fakeRunner();
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR } };
+    const { d } = makeDispatcher({ runner: fr.runner, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const ask = fr.calls[0].isDirAuthorized!;
+    expect(ask(WS_DIR)).toBe(true);
+    expect(ask(path.join(WS_DIR, 'sub'))).toBe(true);
+    expect(ask(path.resolve('/repos/elsewhere'))).toBe(false);
+
+    // 映射被改后同一个回调立刻反映新状态(runner 是在 await 之后才问的)
+    config.workspaces = { xdmaker: path.resolve('/repos/elsewhere') };
+    expect(ask(WS_DIR)).toBe(false);
+    expect(ask(path.resolve('/repos/elsewhere'))).toBe(true);
+    fr.finish();
+  });
+
+  it('inspect 期间目录被加回映射: 按当前映射判定, 不误杀这条绑定', async () => {
+    const bindings = memoryBindings();
+    const OUTSIDE = path.resolve('/repos/another-project');
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {
+      'bound-session': { workingDir: OUTSIDE, usable: true },
+    };
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR } };
+    let releaseInspect!: () => void;
+    const runner: HookSessionRunner = {
+      isBusy: () => false,
+      inspect: async (id) => {
+        await new Promise<void>((resolve) => {
+          releaseInspect = resolve;
+        });
+        return sessions[id] ? { ...sessions[id] } : null;
+      },
+      run: async () => ({ status: 'ok', finalText: 'done', errorMessage: null, durationMs: 1 }),
+    };
+    const { d } = makeDispatcher({ runner, bindings, config });
+    const c = collector();
+    bindings.set('conn-1', 'team-slack:C1:1.1', 'bound-session');
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    // inspect 还挂着时用户把这个目录加进了映射 —— 入口快照里没有它, 当前映射有
+    config.workspaces = { xdmaker: WS_DIR, other: OUTSIDE };
+    releaseInspect();
+    await tick();
+
+    expect(c.last('task.ack')!.payload.sessionId).toBe('bound-session');
+    expect(bindings.get('conn-1', 'team-slack:C1:1.1')).toBe('bound-session');
+  });
+
+  it('在工作目录映射内换目录 -> 无感跟随复用(边界内的移动不受影响)', async () => {
+    const bindings = memoryBindings();
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const { d } = makeDispatcher({ runner: fr.runner, bindings });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const first = c.last('task.ack')!.payload.sessionId!;
+    sessions[first] = { workingDir: WS_DIR, usable: true };
+    fr.finish();
+    await tick();
+
+    // 移到映射根下的子目录: 仍在边界内, 判定无状态所以直接复用
+    const INSIDE = path.join(WS_DIR, 'packages', 'sub-project');
+    sessions[first] = { workingDir: INSIDE, usable: true };
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
+    await tick();
+    expect(c.last('task.ack')!.payload).toMatchObject({ result: 'accepted', sessionId: first });
+    expect(fr.calls[1]).toMatchObject({ isNew: false, sessionId: first, workingDir: INSIDE });
+
+    fr.finish({ finalText: '在子目录里跑完了' });
+    await tick();
+    // 边界内的移动不打扰用户
+    expect(c.last('turn.end')!.payload.finalText).toBe('在子目录里跑完了');
+  });
+
+  it('移出映射后再移回映射内 -> 恢复正常复用(绑定不留任何过期授权)', async () => {
+    const bindings = memoryBindings();
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const { d } = makeDispatcher({ runner: fr.runner, bindings });
+    const c = collector();
+    const OUTSIDE = path.resolve('/repos/another-project');
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const first = c.last('task.ack')!.payload.sessionId!;
+    // 第一条消息后它就被移出映射: 绑定改指新对话
+    sessions[first] = { workingDir: OUTSIDE, usable: true };
+    fr.finish();
+    await tick();
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
+    await tick();
+    const second = c.last('task.ack')!.payload.sessionId!;
+    expect(second).not.toBe(first);
+    sessions[second] = { workingDir: WS_DIR, usable: true };
+    fr.finish();
+    await tick();
+
+    // 新对话在映射内, 此后照常复用
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-3' }), c.send);
+    await tick();
+    expect(c.last('task.ack')!.payload).toMatchObject({ result: 'accepted', sessionId: second });
     fr.finish();
   });
 
@@ -571,51 +822,35 @@ describe('dispatcher 核心语义', () => {
     expect(finalText).toContain('新会话的回答');
   });
 
-  it('老绑定没有目录快照时按保守侧处理: 越界即重建', async () => {
-    const bindings = memoryBindings();
-    const OUTSIDE = path.resolve('/repos/another-project');
-    const fr = fakeRunner({
-      sessions: { 'legacy-session': { workingDir: OUTSIDE, usable: true } },
-    });
-    const { d } = makeDispatcher({ runner: fr.runner, bindings });
-    const c = collector();
-    // v1 形态: 只有 sessionId, 无从判断目录是被用户移动还是映射被改
-    bindings.set('conn-1', 'team-slack:C1:1.1', 'legacy-session');
+  it('存量绑定(带早期版本残留字段)照常判定: 在映射内即复用, 越界即重建', async () => {
+    const reuse = memoryBindings();
+    const fr1 = fakeRunner({ sessions: { 'old-session': { workingDir: WS_DIR, usable: true } } });
+    const { d: d1 } = makeDispatcher({ runner: fr1.runner, bindings: reuse });
+    const c1 = collector();
+    reuse.set('conn-1', 'team-slack:C1:1.1', 'old-session');
 
-    d.handleDispatch('conn-1', dispatch(), c.send);
+    d1.handleDispatch('conn-1', dispatch(), c1.send);
     await tick();
-
-    const sessionId = c.last('task.ack')!.payload.sessionId!;
-    expect(sessionId).not.toBe('legacy-session');
-    expect(fr.calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR });
-    expect(bindings.getEntry('conn-1', 'team-slack:C1:1.1')).toEqual({
-      sessionId,
-      workingDir: WS_DIR,
-      authority: 'workspace',
-    });
-    fr.finish();
-  });
-
-  it('正常复用顺手回填目录快照(存量绑定升级路径)', async () => {
-    const bindings = memoryBindings();
-    const fr = fakeRunner({ sessions: { 'legacy-session': { workingDir: WS_DIR, usable: true } } });
-    const { d } = makeDispatcher({ runner: fr.runner, bindings });
-    const c = collector();
-    bindings.set('conn-1', 'team-slack:C1:1.1', 'legacy-session');
-
-    d.handleDispatch('conn-1', dispatch(), c.send);
-    await tick();
-
-    expect(c.last('task.ack')!.payload.sessionId).toBe('legacy-session');
-    expect(bindings.getEntry('conn-1', 'team-slack:C1:1.1')).toEqual({
-      sessionId: 'legacy-session',
-      workingDir: WS_DIR,
-      authority: 'workspace',
-    });
-    fr.finish({ finalText: '继续' });
+    expect(c1.last('task.ack')!.payload.sessionId).toBe('old-session');
+    fr1.finish({ finalText: '继续' });
     await tick();
     // 正常复用不打扰用户
-    expect(c.last('turn.end')!.payload.finalText).toBe('继续');
+    expect(c1.last('turn.end')!.payload.finalText).toBe('继续');
+
+    const rebuild = memoryBindings();
+    const OUTSIDE = path.resolve('/repos/another-project');
+    const fr2 = fakeRunner({ sessions: { 'old-session': { workingDir: OUTSIDE, usable: true } } });
+    const { d: d2 } = makeDispatcher({ runner: fr2.runner, bindings: rebuild });
+    const c2 = collector();
+    rebuild.set('conn-1', 'team-slack:C1:1.1', 'old-session');
+
+    d2.handleDispatch('conn-1', dispatch(), c2.send);
+    await tick();
+    const sessionId = c2.last('task.ack')!.payload.sessionId!;
+    expect(sessionId).not.toBe('old-session');
+    expect(fr2.calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR });
+    expect(rebuild.get('conn-1', 'team-slack:C1:1.1')).toBe(sessionId);
+    fr2.finish();
   });
 
   it('绑定的会话已归档/删除 -> 重建并说明是原对话没了', async () => {
@@ -623,7 +858,7 @@ describe('dispatcher 核心语义', () => {
     const fr = fakeRunner({ sessions: { 'gone-session': { workingDir: WS_DIR, usable: false } } });
     const { d } = makeDispatcher({ runner: fr.runner, bindings });
     const c = collector();
-    bindings.set('conn-1', 'team-slack:C1:1.1', 'gone-session', WS_DIR, 'workspace');
+    bindings.set('conn-1', 'team-slack:C1:1.1', 'gone-session');
 
     d.handleDispatch('conn-1', dispatch(), c.send);
     await tick();
@@ -631,7 +866,8 @@ describe('dispatcher 核心语义', () => {
 
     fr.finish({ finalText: '新的回答' });
     await tick();
-    expect(c.last('turn.end')!.payload.finalText).toContain('原对话已被归档或删除');
+    // 措辞留余地: inspect 的 null 也可能是读库瞬时失败, 不能一口咬定会话没了
+    expect(c.last('turn.end')!.payload.finalText).toContain('原对话现在读不到');
   });
 
   it('切账号期间异步定位失败也不回写旧代 rejected ack', async () => {
@@ -1316,7 +1552,69 @@ describe('session.archive(/new 换代归档旧代会话)', () => {
   });
 
   it('有绑定: 归档 session 行并清绑定', async () => {
-    const fr = fakeRunner();
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const bindings = memoryBindings();
+    const archived: string[] = [];
+    const d = createHookDispatcher({
+      getConnection: () => CONFIG,
+      bindings,
+      runner: fr.runner,
+      archiveSessionRow: async (sessionId) => void archived.push(sessionId),
+      log: noopLog,
+    });
+    const c = collector();
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'r1', externalKey: 'slack:dm:U1:g1' }),
+      c.send,
+    );
+    await tick();
+    const sessionId = c.last('task.ack')!.payload.sessionId as string;
+    sessions[sessionId] = { workingDir: WS_DIR, usable: true };
+    fr.finish();
+    await tick();
+
+    d.handleSessionArchive('conn-1', 'slack:dm:U1:g1');
+    await tick();
+    expect(archived).toEqual([sessionId]);
+    expect(bindings.get('conn-1', 'slack:dm:U1:g1')).toBeNull();
+  });
+
+  it('turn 还在跑但已落库时被移出映射: /new 也不归档(不走 awaitingPersist 捷径)', async () => {
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const bindings = memoryBindings();
+    const archived: string[] = [];
+    const d = createHookDispatcher({
+      getConnection: () => CONFIG,
+      bindings,
+      runner: fr.runner,
+      archiveSessionRow: async (sessionId) => void archived.push(sessionId),
+      log: noopLog,
+    });
+    const c = collector();
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'r1', externalKey: 'slack:dm:U1:g1' }),
+      c.send,
+    );
+    await tick();
+    const sessionId = c.last('task.ack')!.payload.sessionId as string;
+    // 关键: turn 没收口, 所以 awaitingPersist 里还留着它 —— 但它已经落库, 且
+    // 已被移出映射。捷径必须只在"真查不到"时才用。
+    sessions[sessionId] = { workingDir: path.resolve('/repos/elsewhere'), usable: true };
+
+    d.handleSessionArchive('conn-1', 'slack:dm:U1:g1');
+    await tick();
+    expect(archived).toEqual([]);
+    expect(bindings.get('conn-1', 'slack:dm:U1:g1')).toBeNull();
+    fr.finish();
+  });
+
+  it('会话已被移出映射: /new 只清绑定, 不归档那个本地会话', async () => {
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
     const bindings = memoryBindings();
     const archived: string[] = [];
     const d = createHookDispatcher({
@@ -1336,10 +1634,14 @@ describe('session.archive(/new 换代归档旧代会话)', () => {
     const sessionId = c.last('task.ack')!.payload.sessionId as string;
     fr.finish();
     await tick();
+    // 用户把它移到映射外 —— 远端已经无权驱动它, 也就无权归档它 / 触发它的
+    // worktree 清理
+    sessions[sessionId] = { workingDir: path.resolve('/repos/elsewhere'), usable: true };
 
     d.handleSessionArchive('conn-1', 'slack:dm:U1:g1');
     await tick();
-    expect(archived).toEqual([sessionId]);
+    expect(archived).toEqual([]);
+    // 绑定还是要清: 下条消息本就该开新会话
     expect(bindings.get('conn-1', 'slack:dm:U1:g1')).toBeNull();
   });
 
@@ -1362,10 +1664,11 @@ describe('session.archive(/new 换代归档旧代会话)', () => {
     d.handleSessionArchive('conn-1', 'slack:dm:U1:g1');
     await tick();
     expect(archiveCalls).toEqual([]);
-    // 有绑定但行已不存在: 调用发生、异常被吞、绑定仍被清理
+    // 有绑定但会话查不到(行已不存在): 无从确认它还在映射内, 就不对它动手 ——
+    // 反正 archiveSessionRow 也只会 NOT_FOUND。绑定照清, 幂等目的达到。
     d.handleSessionArchive('conn-1', 'slack:dm:U1:g2');
     await tick();
-    expect(archiveCalls).toEqual(['sess-gone']);
+    expect(archiveCalls).toEqual([]);
     expect(bindings.get('conn-1', 'slack:dm:U1:g2')).toBeNull();
   });
 
@@ -1637,5 +1940,814 @@ describe('内置「对话」伪目录(chat 保留别名)', () => {
       result: 'rejected',
       reason: 'unknown_workspace',
     });
+  });
+});
+
+describe('turn.reopen: 失败任务在桌面端被续跑后接回原消息', () => {
+  /**
+   * 可控续跑观察器: 记录 watch 请求, 由测试驱动 claim / progress / end。
+   * sessions 是可变的 —— 测试可在首轮之后把会话登记进去, 让后续 dispatch 走
+   * 「binding 复用同一个 session」而不是查不到重建。
+   */
+  function continuationRunner() {
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const watches: HookContinuationWatchRequest[] = [];
+    const cancels: number[] = [];
+    const runner: HookSessionRunner = {
+      ...fr.runner,
+      watchContinuation: (req) => {
+        watches.push(req);
+        const index = watches.length - 1;
+        // 真实 runner 现在**立即认领**: 归属已由 clientId 在 dispatch 前确认, 不再等
+        // 首个事件来猜这一轮是不是目标轮(见 uiContinuationSignal)。fixture 照此模拟,
+        // 否则用例会测一个生产上不存在的"已挂未认领"中间态。
+        req.onClaim();
+        return () => cancels.push(index);
+      },
+    };
+    return {
+      ...fr,
+      runner,
+      sessions,
+      watches,
+      cancels,
+      latest: () => watches[watches.length - 1],
+    };
+  }
+
+  /**
+   * 信号源: 模拟 coordinator 侧那四条通道。
+   *
+   * 归属键是 clientId —— 续跑意图(fire)与"那条消息即将 dispatch"(dispatchTurn)必须带
+   * 同一个 clientId 才算同一轮, 这正是本 PR 用来替掉"首个事件 + isBusy 快照"的东西。
+   */
+  function signalSource() {
+    const retryListeners = new Set<(sessionId: string, clientId: string) => void>();
+    const dispatchListeners = new Set<(sessionId: string, clientId: string) => void>();
+    const undispatchListeners = new Set<(sessionId: string, clientId: string) => void>();
+    const interveners = new Set<(sessionId: string) => void>();
+    return {
+      subscribe: ((listener) => {
+        retryListeners.add(listener);
+        return () => retryListeners.delete(listener);
+      }) as NonNullable<HookDispatcherDeps['subscribeUiContinuation']>,
+      subscribeIntervention: ((listener) => {
+        interveners.add(listener);
+        return () => interveners.delete(listener);
+      }) as NonNullable<HookDispatcherDeps['subscribeUiSessionIntervention']>,
+      subscribeDispatching: ((listener) => {
+        dispatchListeners.add(listener);
+        return () => dispatchListeners.delete(listener);
+      }) as NonNullable<HookDispatcherDeps['subscribeUiTurnDispatching']>,
+      subscribeUndispatched: ((listener) => {
+        undispatchListeners.add(listener);
+        return () => undispatchListeners.delete(listener);
+      }) as NonNullable<HookDispatcherDeps['subscribeUiTurnUndispatched']>,
+      /** 模拟"桌面端在这个会话里做了与续跑无关的事"。 */
+      intervene: (sessionId: string) => {
+        for (const l of [...interveners]) l(sessionId);
+      },
+      /** 用户点了重试 —— 只是意图, 还没确定是哪一轮。 */
+      fire: (sessionId: string, clientId = DEFAULT_RETRY_CLIENT_ID) => {
+        for (const l of [...retryListeners]) l(sessionId, clientId);
+      },
+      /** 那条消息即将 vendor dispatch —— 归属在这一刻成立。 */
+      dispatchTurn: (sessionId: string, clientId = DEFAULT_RETRY_CLIENT_ID) => {
+        for (const l of [...dispatchListeners]) l(sessionId, clientId);
+      },
+      /** 那条消息落库了却没能 dispatch。 */
+      undispatchTurn: (sessionId: string, clientId = DEFAULT_RETRY_CLIENT_ID) => {
+        for (const l of [...undispatchListeners]) l(sessionId, clientId);
+      },
+      /**
+       * 走完整一轮续跑: 意图 + 归属确认。绝大多数用例只关心"续跑接上了没有",
+       * 用它即可; 只有专门验证两阶段语义的用例才分开调 fire / dispatchTurn。
+       */
+      retry: (sessionId: string, clientId = DEFAULT_RETRY_CLIENT_ID) => {
+        for (const l of [...retryListeners]) l(sessionId, clientId);
+        for (const l of [...dispatchListeners]) l(sessionId, clientId);
+      },
+      /** 当前订阅数 —— 用于直接断言 dispose 真的退订了。 */
+      listenerCount: () => retryListeners.size,
+    };
+  }
+
+  /** 绝大多数用例只关心"同一轮", 用同一个 clientId 即可。 */
+  const DEFAULT_RETRY_CLIENT_ID = 'retry-client-id';
+
+  const REOPEN_FEATURES = [HOOK_FEATURE_TURN_REOPEN];
+
+  /** 跑一个 hook 任务并让它以失败收口, 返回环境与那一轮的 sessionId。 */
+  async function failOneTask(opts?: { features?: readonly string[] }) {
+    const cr = continuationRunner();
+    const sig = signalSource();
+    const c = collector();
+    const { d } = makeDispatcher({
+      runner: cr.runner,
+      subscribeUiContinuation: sig.subscribe,
+      subscribeUiSessionIntervention: sig.subscribeIntervention,
+      subscribeUiTurnDispatching: sig.subscribeDispatching,
+      subscribeUiTurnUndispatched: sig.subscribeUndispatched,
+    });
+    d.onConnected('conn-1', c.send, opts?.features ?? REOPEN_FEATURES);
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const sessionId = c.last('task.ack')!.payload.sessionId!;
+    cr.finish({ status: 'error', finalText: '', errorMessage: 'boom' });
+    await tick();
+    expect(c.last('turn.end')!.payload.status).toBe('error');
+    return { cr, sig, c, d, sessionId };
+  }
+
+  it('续跑信号 -> turn.reopen(新 requestId + reopenOf) -> 进度与结果都走新 id', async () => {
+    const { cr, sig, c, sessionId } = await failOneTask();
+
+    // 意图到达时**还不**挂观察、不发帧: 归属要等那条消息真的要 dispatch 才成立。
+    sig.fire(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(0);
+    expect(c.ofType('turn.reopen')).toHaveLength(0);
+
+    // 归属确认(clientId 对得上)-> 挂观察 + 立即认领 + 发 reopen。
+    sig.dispatchTurn(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(1);
+    expect(cr.latest().sessionId).toBe(sessionId);
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+
+    const reopen = c.last('turn.reopen')!.payload;
+    expect(reopen.reopenOf).toBe('req-1');
+    expect(reopen.requestId).not.toBe('req-1');
+    expect(reopen.externalKey).toBe('team-slack:C1:1.1');
+    expect(reopen.sessionId).toBe(sessionId);
+    expect(reopen.reason).toBe('user-continued');
+
+    cr.latest().onProgress('干到一半了');
+    expect(c.last('turn.progress')!.payload).toEqual({
+      requestId: reopen.requestId,
+      text: '干到一半了',
+    });
+
+    cr.latest().onEnd({
+      status: 'ok',
+      finalText: '这次成了',
+      errorMessage: null,
+      durationMs: 12,
+    });
+    const end = c.ofType('turn.end').at(-1)!.payload;
+    expect(end.requestId).toBe(reopen.requestId);
+    expect(end.status).toBe('ok');
+    expect(end.finalText).toBe('这次成了');
+    // 原 requestId 的那条 turn.end 仍然只有一条(server 侧幂等语义不变)。
+    expect(c.ofType('turn.end').filter((m) => m.payload.requestId === 'req-1')).toHaveLength(1);
+  });
+
+  it('server 没宣告 turn-reopen 能力时完全不启用(不记账, 信号空转)', async () => {
+    const { cr, sig, c, sessionId } = await failOneTask({ features: [] });
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(0);
+    expect(c.ofType('turn.reopen')).toHaveLength(0);
+  });
+
+  it('只有 error 收口才记账: ok 与 cancelled 都不接回', async () => {
+    for (const outcome of [
+      { status: 'ok' as const, finalText: 'done', errorMessage: null },
+      { status: 'error' as const, finalText: '', errorMessage: 'x' }, // cancelled 走 cancel() 改写
+    ]) {
+      const cr = continuationRunner();
+      const sig = signalSource();
+      const c = collector();
+      const { d } = makeDispatcher({ runner: cr.runner, subscribeUiContinuation: sig.subscribe });
+      d.onConnected('conn-1', c.send, REOPEN_FEATURES);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      const sessionId = c.last('task.ack')!.payload.sessionId!;
+      if (outcome.status === 'error') {
+        // 用户按了停止 -> 上游看到的是 cancelled, 不该被当成"失败等续跑"。
+        d.cancel('conn-1', 'req-1');
+      }
+      cr.finish({ ...outcome, durationMs: 1 });
+      await tick();
+      sig.retry(sessionId);
+      await tick();
+      expect(c.ofType('turn.reopen')).toHaveLength(0);
+      expect(cr.watches).toHaveLength(0);
+    }
+  });
+
+  it('同 session 又来了新的 hook 任务 -> 撤销在观察的续跑并作废记账', async () => {
+    const { cr, sig, c, d, sessionId } = await failOneTask();
+    // 让后续 dispatch 沿 binding 落回同一个会话(否则 inspect 查不到会重建)。
+    cr.sessions[sessionId] = { workingDir: WS_DIR, usable: true };
+    sig.retry(sessionId);
+    await tick();
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+
+    // 新任务接管这条消息线: 旧观察器必须被撤销, 否则新 turn 的事件会被当成
+    // 续跑的继续, 把上一条渠道消息改写成不相干的内容。
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
+    await tick();
+    expect(cr.cancels).toEqual([0]);
+
+    // 记账也作废: 再来一次续跑信号不会重开旧消息。
+    cr.finish({ status: 'error', finalText: '', errorMessage: 'again' });
+    await tick();
+    sig.retry(sessionId);
+    await tick();
+    // 新一轮(req-2)自己失败后重新记账, 于是这次接回的是 req-2 那条消息。
+    expect(cr.watches).toHaveLength(2);
+    expect(c.ofType('turn.reopen').at(-1)!.payload.reopenOf).toBe('req-2');
+  });
+
+  it('接管导致的撤销不留新记账(否则续跑会把用户带回一条过期消息)', async () => {
+    const { cr, sig, c, d, sessionId } = await failOneTask();
+    cr.sessions[sessionId] = { workingDir: WS_DIR, usable: true };
+    sig.retry(sessionId);
+    await tick();
+
+    // 新任务接管 -> 撤销续跑。撤销的收口是 error, 但这条消息线已经归新任务了。
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
+    await tick();
+    expect(cr.cancels).toEqual([0]);
+
+    // 新任务成功收口 -> 全程没有任何"等着被续跑"的东西。
+    cr.finish({ status: 'ok', finalText: '这次好了', errorMessage: null });
+    await tick();
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(1);
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+  });
+
+  it('目标那条消息始终没能 dispatch -> 不发任何帧, 记账还回去让下次重试还能接上', async () => {
+    // 取消 / 派发失败(凭证切换被放弃、队列被清等)。渠道那条消息**没被改写过**, 所以
+    // 记账仍然有效 —— 不还回去, 回流就永久丢了, 而这正是本能力要修的症状。
+    // 这里也是"慢启动"的收口方式: 意图可以等任意长时间(远端 SSH 重连、凭证切换都在
+    // dispatch 之前), 不再有任何固定窗口会把它提前判死。
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.fire(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(0);
+
+    sig.undispatchTurn(sessionId);
+    await tick();
+    expect(c.ofType('turn.reopen')).toHaveLength(0);
+    expect(c.ofType('turn.end').filter((m) => m.payload.requestId !== 'req-1')).toHaveLength(0);
+
+    // 记账已还回去: 用户再点一次重试, 照样能接上。
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(1);
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+  });
+
+  it('新任务接管导致的撤销不还记账(那条消息线已交给别人)', async () => {
+    // 与"目标轮没能 dispatch"那条的区别: 那条该还记账(用户马上会再点重试), 这条不该
+    // (消息线已经交给新任务, 还了会让之后的续跑信号把用户带回一条过期消息)。
+    // 撤销后 runner 按契约收口 —— 已认领的走 onEnd, 而它不得据此重新登记。
+    const { cr, sig, c, d, sessionId } = await failOneTask();
+    cr.sessions[sessionId] = { workingDir: WS_DIR, usable: true };
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(1);
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
+    await tick();
+    expect(cr.cancels).toEqual([0]);
+    cr.watches[0]!.onEnd({
+      status: 'error',
+      finalText: '',
+      errorMessage: 'hook continuation cancelled',
+      durationMs: 1,
+    });
+    await tick();
+
+    // 新任务成功收口后再来一次续跑信号: 不该有任何"等着被续跑"的记账复活。
+    cr.finish({ status: 'ok', finalText: '这次好了', errorMessage: null });
+    await tick();
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(1);
+  });
+
+  it('续跑又失败 -> 允许再续一次, reopenOf 指向上一轮的新 id(成链)', async () => {
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.retry(sessionId);
+    await tick();
+    const firstReopen = c.last('turn.reopen')!.payload.requestId;
+    cr.latest().onEnd({
+      status: 'error',
+      finalText: '',
+      errorMessage: '又崩了',
+      durationMs: 3,
+    });
+    await tick();
+
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(2);
+    const secondReopen = c.ofType('turn.reopen').at(-1)!.payload;
+    expect(secondReopen.reopenOf).toBe(firstReopen);
+    expect(secondReopen.requestId).not.toBe(firstReopen);
+  });
+
+  it('认领后连接断开 -> 续跑轮的 turn.end 不缓存不补发, 也不再登记可续跑', async () => {
+    const { cr, sig, c, d, sessionId } = await failOneTask();
+    sig.retry(sessionId);
+    await tick();
+    const reopened = c.last('turn.reopen')!.payload.requestId;
+    const endsBefore = c.ofType('turn.end').length;
+
+    // 映射已装上、渠道消息已改成进行中, 此时断连: server 侧会做孤儿收口并解绑
+    // 这一轮的 requestId, 所以迟到的 turn.end 只会被当未知 id 丢弃。
+    d.onDisconnected('conn-1');
+    cr.latest().onEnd({ status: 'error', finalText: '', errorMessage: '又崩了', durationMs: 3 });
+    await tick();
+    expect(c.ofType('turn.end')).toHaveLength(endsBefore);
+
+    // 重连不得把它补发出来(普通任务才走 sendOrBuffer 的断线补发)。
+    d.onConnected('conn-1', c.send, REOPEN_FEATURES);
+    await tick();
+    expect(c.ofType('turn.end').filter((m) => m.payload.requestId === reopened)).toHaveLength(0);
+
+    // 也不得再登记可续跑: 那条记账的 reopenOf 已被 server 解绑, 再发只会被忽略。
+    const reopensBefore = c.ofType('turn.reopen').length;
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(1);
+    expect(c.ofType('turn.reopen')).toHaveLength(reopensBefore);
+  });
+
+  it('续跑轮可被 /stop 精确取消(新 requestId 已登记为在执行的任务)', async () => {
+    const aborted: string[] = [];
+    const cr = continuationRunner();
+    const sig = signalSource();
+    const c = collector();
+    const { d } = makeDispatcher({
+      runner: cr.runner,
+      subscribeUiContinuation: sig.subscribe,
+      subscribeUiTurnDispatching: sig.subscribeDispatching,
+      subscribeUiTurnUndispatched: sig.subscribeUndispatched,
+      abortSession: async (id) => void aborted.push(id),
+    });
+    d.onConnected('conn-1', c.send, REOPEN_FEATURES);
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const sessionId = c.last('task.ack')!.payload.sessionId!;
+    cr.finish({ status: 'error', finalText: '', errorMessage: 'boom' });
+    await tick();
+
+    sig.retry(sessionId);
+    await tick();
+    const requestId = c.last('turn.reopen')!.payload.requestId;
+
+    d.cancel('conn-1', requestId);
+    expect(aborted).toEqual([sessionId]);
+    cr.latest().onEnd({
+      status: 'error',
+      finalText: '',
+      errorMessage: 'aborted',
+      durationMs: 2,
+    });
+    const end = c.ofType('turn.end').at(-1)!.payload;
+    expect(end.requestId).toBe(requestId);
+    expect(end.status).toBe('cancelled');
+    expect(end.errorMessage).toBeNull();
+  });
+
+  it('目录已被移出工作目录映射 -> 不接回(与执行前的映射收口同一道判定)', async () => {
+    const cr = continuationRunner();
+    const sig = signalSource();
+    const c = collector();
+    let config: HookConnectionConfig | null = CONFIG;
+    const d = createHookDispatcher({
+      getConnection: () => config,
+      bindings: memoryBindings(),
+      runner: cr.runner,
+      subscribeUiContinuation: sig.subscribe,
+      log: noopLog,
+    });
+    d.onConnected('conn-1', c.send, REOPEN_FEATURES);
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const sessionId = c.last('task.ack')!.payload.sessionId!;
+    cr.finish({ status: 'error', finalText: '', errorMessage: 'boom' });
+    await tick();
+
+    config = { ...CONFIG, workspaces: {} };
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(0);
+    expect(c.ofType('turn.reopen')).toHaveLength(0);
+  });
+
+  it('别的 turn 先跑起来也不会被误认(clientId 对不上就不认领)', async () => {
+    // 这条锁的是本 PR 最核心的保证。观察器是会话级的、分不清事件属于哪条用户消息,
+    // 所以归属**不能**靠"首个事件"或 isBusy 快照去猜 —— 绕过 coordinator 的路径
+    // (silent-stop 自动续跑)照样能直接 session.send, 任何快照都拦不住它。
+    // 现在归属键是 clientId: 对不上就连观察器都不挂, 于是结构上不可能被误认。
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.fire(sessionId);
+    await tick();
+
+    // 会话里先跑起来的是**另一条**消息(clientId 不同)。
+    sig.dispatchTurn(sessionId, 'some-unrelated-client-id');
+    await tick();
+    expect(cr.watches).toHaveLength(0);
+    expect(c.ofType('turn.reopen')).toHaveLength(0);
+
+    // 而且它同时作废了意图与记账: 与 enqueue 侧同一条规则 —— 这个会话被无关内容推进过,
+    // 就不再把任何结果接回那条旧消息。哪怕目标那条随后真的 dispatch 也不接。
+    // 取舍是明确的: 这里判错的代价是"渠道消息停在失败上"(本能力之前的状态), 反过来
+    // 放行则是"把无关输出写进用户那条消息", 后者是真的错。
+    sig.dispatchTurn(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(0);
+    expect(c.ofType('turn.reopen')).toHaveLength(0);
+  });
+
+  it('会话正忙也不再是拒绝理由(归属由 clientId 保证, 不靠忙闲快照)', async () => {
+    // 旧实现用 isBusy 拒绝, 那既拦不住绕过 coordinator 的 turn, 又会把"排队后才跑"
+    // 的合法续跑误杀。远端慢启动尤其常见: 点重试时会话可能仍在收尾上一轮。
+    const { cr, sig, c, sessionId } = await failOneTask();
+    cr.busy.add(sessionId);
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(1);
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+  });
+
+  it('断连后能力快照即失效 -> 不再为这条连接白挂观察器', async () => {
+    // serverFeatures 只在握手时权威。断连后不清, supportsReopen 会拿上一次的快照
+    // 继续放行: 观察器照挂、记账照消耗, 而 sendFns 早已删掉 —— 帧根本发不出去,
+    // 白挂一个要空转 2 分钟才退场的监听, 且这条消息线的续跑机会被无谓吃掉。
+    const { cr, sig, d, sessionId } = await failOneTask();
+    d.onDisconnected('conn-1');
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(0);
+  });
+
+  it('已认领的续跑轮在其连接断开时被撤掉 -> 重连后不再用 stale id 发帧', async () => {
+    // 断连是续跑回流的终局: server 此刻收口那条消息并解绑这一轮的 requestId。
+    // 观察器若活到重连后, progress / turn.end 会带着已解绑的 id 发到新 socket
+    // (dispatchId 在重连间稳定, 所以真发得出去), 更糟的是 error 收口还会把这个
+    // stale id 登记成下一轮的 reopenOf。
+    const { cr, sig, c, d, sessionId } = await failOneTask();
+    sig.retry(sessionId);
+    await tick();
+    const reopened = c.last('turn.reopen')!.payload.requestId;
+    expect(cr.cancels).toHaveLength(0);
+
+    d.onDisconnected('conn-1');
+    // 撤销即收口 -> 观察器被取消(cancels 记录了它)。
+    expect(cr.cancels).toHaveLength(1);
+
+    // 重连后即使那一轮还想发东西, 也不该再有帧带着 stale id 出去。
+    d.onConnected('conn-1', c.send, REOPEN_FEATURES);
+    cr.latest().onProgress('迟到的进度');
+    cr.latest().onEnd({ status: 'error', finalText: '', errorMessage: '又崩了', durationMs: 3 });
+    await tick();
+    expect(c.ofType('turn.progress').filter((m) => m.payload.requestId === reopened)).toHaveLength(
+      0,
+    );
+    expect(c.ofType('turn.end').filter((m) => m.payload.requestId === reopened)).toHaveLength(0);
+
+    // 也不该把这个已被 server 解绑的 id 记成下一轮的 reopenOf。
+    const reopensBefore = c.ofType('turn.reopen').length;
+    sig.retry(sessionId);
+    await tick();
+    expect(c.ofType('turn.reopen')).toHaveLength(reopensBefore);
+  });
+
+  it('中间跑过无关的桌面 turn -> 记账作废, 之后的重试不再改写渠道原消息', async () => {
+    // 记账只按 sessionId 记, 而普通桌面 turn 不经本模块。没有这条作废, 用户在跑过
+    // 别的 turn 之后点重试, 观察器会把那个无关 turn 的输出写进渠道那条旧消息。
+    // isBusy 守卫挡不住它: 点重试时会话并不忙。
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.intervene(sessionId);
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(0);
+    expect(c.ofType('turn.reopen')).toHaveLength(0);
+  });
+
+  it('续跑本身的原文重发不会自我作废(信号先于发送事务)', async () => {
+    // coordinator 是在 drain **之前**同步发重试信号的, 所以真正的续跑先认领(记账
+    // 已消耗), 随后那条原文消息落到"无关介入"通道时只是 no-op。
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.retry(sessionId);
+    await tick();
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+
+    // 模拟零产出重试重发的原文走到发送事务。
+    sig.intervene(sessionId);
+    cr.latest().onProgress('干活中');
+    await tick();
+    expect(c.ofType('turn.progress')).toHaveLength(1);
+  });
+
+  it('还在等 dispatch 时来了无关消息 -> 意图作废, 之后那条 dispatch 也不再接上', async () => {
+    // "重试哪一轮"与"渠道消息对应哪一轮"是两件事: 用户跑过无关 turn 之后点重试,
+    // 重试的是那个无关 turn, 不该把它的输出写进渠道那条旧消息。
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.fire(sessionId);
+    await tick();
+
+    sig.intervene(sessionId);
+    await tick();
+    // 意图已作废: 即使那条消息随后真的 dispatch 了, 也不该挂观察、不该发帧。
+    sig.dispatchTurn(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(0);
+    expect(c.ofType('turn.reopen')).toHaveLength(0);
+  });
+
+  it('意图死在落库之前 -> 记账留着, 用户再点一次仍然接得上', async () => {
+    // 被意识钩挡掉 / 落库失败 / 排队被丢的那条消息, 既走不到 dispatching 也不会发
+    // undispatched(它压根没跨过持久化边界)。记账若在记意图时就被转移走, 这类静默失败
+    // 会把它吃掉, 之后谁也接不回来 —— 所以记账要留到 claim 帧真的发出才作废。
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.fire(sessionId, 'client-blocked');
+    await tick();
+    expect(cr.watches).toHaveLength(0);
+    expect(c.ofType('turn.reopen')).toHaveLength(0);
+
+    // 用户再点一次(是条新消息, 于是新 clientId)。
+    sig.retry(sessionId, 'client-second');
+    await tick();
+    expect(cr.watches).toHaveLength(1);
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+  });
+
+  it('失败登记之前就进队的无关消息 -> 它 dispatch 时作废记账', async () => {
+    // 那条消息在 hook turn 还没收口时就 enqueue 了, 介入信号在"记账还不存在"时发过一次
+    // 就不再发第二次。只靠 enqueue 侧作废会漏掉它, 于是它跑完之后用户点重试, 会把这个
+    // 无关 turn 的输出写进渠道那条旧消息。dispatch 侧同样观测"会话被推进"即可关掉。
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.dispatchTurn(sessionId, 'unrelated-client');
+    await tick();
+
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(0);
+    expect(c.ofType('turn.reopen')).toHaveLength(0);
+  });
+
+  it('已认领的那一轮被别的 dispatch 顶掉 -> 就地收口, 不挂到硬超时', async () => {
+    // coordinator 的派发边界(activeTurn 非空或 isTurnRunning)不放行任何并发 dispatch,
+    // 插话走 steer 也不发这条信号 —— 所以"另一条用户轮居然 dispatch 了"等价于"我们这一轮
+    // 已经不是活跃轮"。正常收口的话观察器早在终态事件上 settle 并出表了, 还在表里就说明它
+    // 是被 Stop 之类抢在 vendor dispatch 与收口检查之间顶掉的, 而 coordinator 那条路径不发
+    // undispatched。不就地收口, 渠道消息会停在"进行中"直到 1 小时硬超时。
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.retry(sessionId);
+    await tick();
+    const reopened = c.ofType('turn.reopen')[0]?.payload.requestId;
+    expect(reopened).toBeTruthy();
+
+    sig.dispatchTurn(sessionId, 'unrelated-client');
+    await tick();
+    expect(cr.cancels).toHaveLength(1);
+
+    // 撤销让 runner 以"已取消"收口, 那条 turn.end 必须真的发出去(连接还在)。
+    cr.latest().onEnd({
+      status: 'error',
+      finalText: '',
+      errorMessage: '被顶掉了',
+      durationMs: 5,
+    });
+    await tick();
+    const ends = c.ofType('turn.end').filter((m) => m.payload.requestId === reopened);
+    expect(ends).toHaveLength(1);
+    expect(ends[0]?.payload.status).toBe('error');
+
+    // 这条消息线已经交给别人了 -> 不再记待续跑, 之后的重试不该再改写它。
+    sig.retry(sessionId);
+    await tick();
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+  });
+
+  it('claim 帧发不出去 -> 撤观察、留记账, 且一帧都不带这个未认领的 requestId 出去', async () => {
+    // WS 已进 CLOSING 但 onDisconnected 还没到时, send 返回 false。此时:
+    //   - 不能"只是不认领": runner 那边按契约认为认领发生过, 不会再给第二次机会,
+    //     观察器留着就要挂到 1 小时硬超时 —— 所以要撤;
+    //   - 记账必须留着: 渠道那条消息此刻仍是原来的失败态, 没被改写过;
+    //   - 一帧都不能带这个 requestId 出去: server 从没把消息挂到它上面。
+    // 用户那一轮**照常跑**: 回流是增强, 不是关键路径(信号 fan-out 吞掉监听方异常,
+    // 结构上就不可能让它 abort 掉 pre-vendor dispatch)。
+    const { cr, sig, c, sessionId } = await failOneTask();
+    c.setOnline(false);
+    sig.retry(sessionId);
+    await tick();
+    expect(c.ofType('turn.reopen')).toHaveLength(0);
+    expect(cr.cancels).toContain(0);
+
+    // 记账还在: 连接恢复后再点一次重试就能接上。
+    c.setOnline(true);
+    sig.retry(sessionId, 'retry-client-2');
+    await tick();
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+  });
+
+  it('附件收集期间排在后面的桌面消息 dispatch -> 不算顶替, 成功结果照样如实收口', async () => {
+    // 成功那一路要先异步收集出站附件, onEnd 因此晚于"停止观察"。这段时间里若还把这一轮
+    // 算作"在观察", 排在后面的桌面消息一 dispatch 就会命中顶替判定 —— 而它其实已经跑完了。
+    // runner 在 settle 的同步段就发 onSettling, dispatcher 据此摘账, 于是「表里还有这一轮」
+    // 严格等价于「它仍在观察」, 顶替判定的前提才成立。
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.retry(sessionId);
+    await tick();
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+    const reopened = c.last('turn.reopen')!.payload.requestId;
+
+    // 观察结束(附件还在收集中), 随后排在后面的那条桌面消息 dispatch。
+    cr.watches[0]!.onSettling?.();
+    sig.dispatchTurn(sessionId, 'queued-after-client');
+    await tick();
+    // 关键断言: 它没被当成"被顶掉"而撤销。少了 onSettling 这一步, 这里会记下一次撤销
+    // (log 里也会留一条 superseded), 即对一轮**已经跑完**的续跑做无谓的撤销记账。
+    expect(cr.cancels).toHaveLength(0);
+
+    // 迟到的成功收口如实发出去 —— 不是 cancelled, 也没被撤掉。
+    cr.watches[0]!.onEnd({
+      status: 'ok',
+      finalText: '续跑的结果',
+      errorMessage: null,
+      durationMs: 12,
+    });
+    await tick();
+    const ends = c.ofType('turn.end').filter((m) => m.payload.requestId === reopened);
+    expect(ends).toHaveLength(1);
+    expect(ends[0]!.payload.status).toBe('ok');
+    expect(ends[0]!.payload.finalText).toBe('续跑的结果');
+  });
+
+  it('turn 跑到一半断连 -> 失败收口仍记待续跑(重连后点重试接得上)', async () => {
+    // 失败的 turn.end 走 sendOrBuffer, 重连后补发, 渠道里确实会显示失败。但收口那一刻
+    // 连接已断、能力快照已被 onDisconnected 清掉, 若在那时才查能力就不会记待续跑 ——
+    // 用户点重试便接不回来。能力要在**接活时**取快照。
+    const cr = continuationRunner();
+    const sig = signalSource();
+    const c = collector();
+    const { d } = makeDispatcher({
+      runner: cr.runner,
+      subscribeUiContinuation: sig.subscribe,
+      subscribeUiSessionIntervention: sig.subscribeIntervention,
+      subscribeUiTurnDispatching: sig.subscribeDispatching,
+      subscribeUiTurnUndispatched: sig.subscribeUndispatched,
+    });
+    d.onConnected('conn-1', c.send, REOPEN_FEATURES);
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const sessionId = c.last('task.ack')!.payload.sessionId!;
+
+    // turn 跑到一半 socket 断了, 然后它以失败收口(turn.end 进缓存)。
+    d.onDisconnected('conn-1');
+    cr.finish({ status: 'error', finalText: '', errorMessage: 'boom' });
+    await tick();
+
+    // 重连(dispatchId 稳定, 同一个 connectionId): 缓存的失败被补发。
+    d.onConnected('conn-1', c.send, REOPEN_FEATURES);
+    await tick();
+    expect(c.last('turn.end')!.payload.status).toBe('error');
+
+    // 现在点重试 —— 记账在, 能接上。
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(1);
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+  });
+
+  it('迟到的收口只删自己那一轮, 不把后来注册的那一轮从表里抹掉', async () => {
+    // 成功收口要先异步收集出站附件, 所以 onEnd 可能落在"本轮已被接管、用户又续了一次、
+    // 新一轮已注册"之后。按 sessionId 无条件删就会把**新**那一轮抹掉 —— 它的观察器于是
+    // 躲过断连与后续接管的撤销, 拿已被 server 解绑的 requestId 继续发帧。
+    const { cr, sig, c, d, sessionId } = await failOneTask();
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(1);
+
+    // 新 hook 任务接管(第一轮的 onEnd 还压在附件收集里没发出来)。
+    cr.sessions[sessionId] = { workingDir: WS_DIR, usable: true };
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-take-over', prompt: '新任务' }), c.send);
+    await tick();
+    expect(cr.cancels).toContain(0);
+    cr.finish({ status: 'error', finalText: '', errorMessage: '又失败了' });
+    await tick();
+
+    // 用户又续了一次 -> 第二轮注册。
+    sig.retry(sessionId, 'retry-client-2');
+    await tick();
+    expect(cr.watches).toHaveLength(2);
+
+    // 第一轮那条迟到的成功收口现在才到。
+    cr.watches[0]!.onEnd({
+      status: 'ok',
+      finalText: '早先那轮的结果',
+      errorMessage: null,
+      durationMs: 9,
+    });
+    await tick();
+
+    // 第二轮必须还在表里 —— 断连时它得能被撤掉。
+    d.onDisconnected('conn-1');
+    expect(cr.cancels).toContain(1);
+  });
+
+  it('新 hook 任务接管时清掉在等的意图(迟到的重试不能改写已过期的消息)', async () => {
+    // 意图记下后还没 dispatch(远端冷启动 / 凭证切换都在 dispatch 之前), 这时同一会话来了
+    // 新 hook 任务。它接管了消息线, 那条意图自带的 entry 已经过期 —— 不清掉的话, 新任务失败
+    // 登记自己的记账之后, 那条迟到的重试会匹配上陈旧意图, 拿已被 server 解绑的旧 reopenOf
+    // 去认领, 还顺带把新记账删掉。
+    const { cr, sig, c, d, sessionId } = await failOneTask();
+    sig.fire(sessionId);
+    await tick();
+
+    // 同一 externalKey 的新 hook 任务跑起来, 并同样以失败收口 -> 记账换成它的 requestId。
+    // (让 inspect 看见这个 session, 第二条派发才会落到同一个会话上。)
+    cr.sessions[sessionId] = { workingDir: WS_DIR, usable: true };
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-take-over', prompt: '新任务' }), c.send);
+    await tick();
+    cr.finish({ status: 'error', finalText: '', errorMessage: '又失败了' });
+    await tick();
+
+    // 那条迟到的重试终于 dispatch —— 不该认领任何东西。
+    const reopensBefore = c.ofType('turn.reopen').length;
+    sig.dispatchTurn(sessionId);
+    await tick();
+    expect(c.ofType('turn.reopen')).toHaveLength(reopensBefore);
+    expect(cr.watches).toHaveLength(0);
+  });
+
+  it('已认领的续跑轮不因无关消息被撤(它已在往渠道写, 后来的消息只会排队)', async () => {
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.retry(sessionId);
+    await tick();
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+
+    sig.intervene(sessionId);
+    expect(cr.cancels).toHaveLength(0);
+    cr.latest().onProgress('续跑进度');
+    await tick();
+    expect(c.ofType('turn.progress')).toHaveLength(1);
+  });
+
+  it('认领后才发现没能 dispatch -> 撤掉观察并按失败收口(不挂到硬超时)', async () => {
+    // dispatching 信号发在 vendor dispatch **之前**, 之后仍有会失败的环节(Stop 抢在
+    // 持久化之后、pre-vendor hook 抛错)。那一轮压根没跑起来, 但渠道消息已被改成
+    // "进行中" —— 必须撤掉观察让它按失败收口。
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.retry(sessionId);
+    await tick();
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+    expect(cr.cancels).toHaveLength(0);
+
+    const reopened = c.last('turn.reopen')!.payload.requestId;
+    sig.undispatchTurn(sessionId);
+    await tick();
+    expect(cr.cancels).toHaveLength(1);
+
+    // 连接还在 -> 撤销后的收口帧**必须发得出去**, 否则渠道那条消息停在假的"进行中"
+    // 直到 1 小时硬超时。(只有连接已断才静默, 那时 server 已做过孤儿收口。)
+    cr.latest().onEnd({
+      status: 'error',
+      finalText: '',
+      errorMessage: 'hook continuation cancelled',
+      durationMs: 1,
+    });
+    await tick();
+    expect(c.ofType('turn.end').filter((m) => m.payload.requestId === reopened)).toHaveLength(1);
+
+    // 且记账还回去了: 这一轮压根没跑起来, 用户马上会再点一次重试。
+    sig.retry(sessionId);
+    await tick();
+    expect(cr.watches).toHaveLength(2);
+  });
+
+  it('undispatched 的 clientId 对不上时不动已认领的那一轮', async () => {
+    const { cr, sig, c, sessionId } = await failOneTask();
+    sig.retry(sessionId);
+    await tick();
+    expect(c.ofType('turn.reopen')).toHaveLength(1);
+
+    sig.undispatchTurn(sessionId, 'some-other-client-id');
+    await tick();
+    expect(cr.cancels).toHaveLength(0);
+  });
+
+  it('dispose() 退订信号源(不只是清记账)', async () => {
+    // 直接断言订阅数, 不看下游行为: dispose 同时清了 pendingReopens, 只看
+    // "有没有起观察" 的话, 即使退订漏了也照样为 0 —— 那样这条锁就是假的。
+    const cr = continuationRunner();
+    const sig = signalSource();
+    const c = collector();
+    const { d } = makeDispatcher({ runner: cr.runner, subscribeUiContinuation: sig.subscribe });
+    d.onConnected('conn-1', c.send, REOPEN_FEATURES);
+    expect(sig.listenerCount()).toBe(1);
+    d.dispose();
+    expect(sig.listenerCount()).toBe(0);
   });
 });

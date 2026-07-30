@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as QRCode from 'qrcode';
 import {
@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import cindyIconUrl from '@/../../resources/icon.png?url';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import type {
@@ -168,7 +169,13 @@ export function PlanChangeTargetDialog({
                         </p>
                         {candidate.offer.creditAmount && (
                           <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
-                            {t('billing.credits', { amount: candidate.offer.creditAmount })}
+                            {t('billing.credits', {
+                              amount: formatMoney(
+                                candidate.offer.creditAmount,
+                                candidate.offer.currency,
+                                billingLocale,
+                              ),
+                            })}
                           </p>
                         )}
                       </div>
@@ -240,6 +247,12 @@ export function PlanChangeStatusDialog({
   const change = state.planChange;
   const action: BillingPaymentAction | null = change?.paymentAction ?? null;
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const openedRedirectKeyRef = useRef<string | null>(null);
+  const redirectUrl = action?.type === 'REDIRECT' ? action.url : null;
+  const redirectKey =
+    action?.type === 'REDIRECT'
+      ? [change?.planChangeId, action.url, action.expiresAt].join(':')
+      : null;
   const actionSeconds = useCountdownSeconds(
     state.phase === 'AWAITING_PAYMENT' ? (action?.expiresAt ?? null) : null,
   );
@@ -251,7 +264,11 @@ export function PlanChangeStatusDialog({
     let active = true;
     setQrDataUrl(null);
     if (action?.type === 'QR_CODE') {
-      void QRCode.toDataURL(action.value, { width: 1024, margin: 4 })
+      void QRCode.toDataURL(action.value, {
+        errorCorrectionLevel: 'H',
+        width: 320,
+        margin: 4,
+      })
         .then((dataUrl) => {
           if (active) setQrDataUrl(dataUrl);
         })
@@ -263,6 +280,16 @@ export function PlanChangeStatusDialog({
       active = false;
     };
   }, [action]);
+
+  useEffect(() => {
+    if (!state.open || state.phase !== 'AWAITING_PAYMENT') {
+      openedRedirectKeyRef.current = null;
+      return;
+    }
+    if (!redirectKey || !redirectUrl || openedRedirectKeyRef.current === redirectKey) return;
+    openedRedirectKeyRef.current = redirectKey;
+    void billingApi.openPaymentRedirect(redirectUrl);
+  }, [redirectKey, redirectUrl, state.open, state.phase]);
 
   const busy = state.phase === 'QUOTING' || state.phase === 'CONFIRMING';
   const title = useMemo(() => {
@@ -395,14 +422,22 @@ export function PlanChangeStatusDialog({
             {state.phase === 'AWAITING_PAYMENT' && action?.type === 'QR_CODE' && (
               <>
                 <div
-                  className="grid place-items-center rounded-xl border border-[var(--border-default)] bg-white p-2"
+                  className="relative grid place-items-center rounded-xl border border-[var(--border-default)] bg-white p-2"
                   style={{
-                    width: 'min(440px, calc(100vw - 96px), calc(100vh - 280px))',
-                    height: 'min(440px, calc(100vw - 96px), calc(100vh - 280px))',
+                    width: 'min(280px, calc(100vw - 96px), calc(100vh - 280px))',
+                    height: 'min(280px, calc(100vw - 96px), calc(100vh - 280px))',
                   }}
                 >
                   {qrDataUrl ? (
-                    <img src={qrDataUrl} className="size-full" alt={t('billing.checkout.qrAlt')} />
+                    <>
+                      <img src={qrDataUrl} className="size-full" alt={t('billing.checkout.qrAlt')} />
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute grid size-10 place-items-center rounded-lg bg-white p-1"
+                      >
+                        <img src={cindyIconUrl} className="size-8 rounded-md" alt="" />
+                      </span>
+                    </>
                   ) : (
                     <Spinner size={24} className="text-[var(--text-secondary)]" />
                   )}

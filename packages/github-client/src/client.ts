@@ -1,8 +1,9 @@
 /**
  * GitHub REST API v3 客户端。
  *
- * 零外部依赖 — 仅使用全局 fetch(Node 18+ / Electron 28+)。
- * 所有方法均可在 main / server 进程直接调用。
+ * 零外部依赖 — 默认用全局 fetch(Node 18+ / Electron 28+),也可经
+ * `GithubClientConfig.fetchImpl` 注入自己的实现(desktop 注入代理感知 fetch:Node /
+ * Electron 主进程下的全局 fetch 是 undici,不读系统代理)。所有方法均可在 main / server 进程直接调用。
  *
  * 与 @cindy/gitlab-client 接口形状对齐,差异点:
  *   - GitHub 用 `number` 标识 issue/PR(GitLab 是 `iid`)
@@ -120,6 +121,8 @@ export class GithubClient {
    * 见 https://docs.github.com/en/enterprise-server/graphql/guides
    */
   private readonly graphqlUrl: string;
+  /** 出网通道(见 GithubClientConfig.fetchImpl)。 */
+  private readonly fetchImpl: typeof fetch;
 
   constructor(config: GithubClientConfig) {
     this.baseUrl = trimTrailingSlashes(config.baseUrl ?? DEFAULT_BASE_URL);
@@ -136,6 +139,7 @@ export class GithubClient {
     // GHE 的 baseUrl 末尾是 '/api/v3',把它剥掉换成 '/api' 后拼 '/graphql'。
     // github.com 的 baseUrl 是 'https://api.github.com',正则不匹配,直接拼 '/graphql'。
     this.graphqlUrl = `${this.baseUrl.replace(/\/api\/v3$/, '/api')}/graphql`;
+    this.fetchImpl = config.fetchImpl ?? fetch;
   }
 
   /** Return the encoded repo path or fail fast when the caller invoked a
@@ -639,7 +643,7 @@ export class GithubClient {
         'X-GitHub-Api-Version': '2022-11-28',
       },
       body: JSON.stringify({ query, variables }),
-    });
+    }, undefined, this.fetchImpl);
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new GithubApiError(
@@ -1749,7 +1753,7 @@ export class GithubClient {
     }
 
     // 认证请求禁止自动跟随跨 host 重定向:Authorization token 绝不重放到另一个 host。
-    const res = await fetchWithSafeRedirect(url, init);
+    const res = await fetchWithSafeRedirect(url, init, undefined, this.fetchImpl);
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -1782,7 +1786,7 @@ export class GithubClient {
    */
   private async requestRedirectUrl(method: string, path: string): Promise<string | null> {
     const url = `${this.baseUrl}${path}`;
-    const res = await fetch(url, {
+    const res = await this.fetchImpl(url, {
       method,
       redirect: 'manual',
       headers: {

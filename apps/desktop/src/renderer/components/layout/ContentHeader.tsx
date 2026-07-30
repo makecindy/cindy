@@ -27,6 +27,7 @@ import type { ReactNode } from 'react';
 import { useFeatureContentHeader } from '@/features/feature-context';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { cn } from '@/lib/utils';
+import { CHROME_ACTIONS_GEOMETRY } from './chromeActionsGeometry';
 
 /**
  * Windows 窗口控制按钮宽度（3 × 46px）。窗口控制按钮已 hoist 到 MainLayout
@@ -63,6 +64,8 @@ interface ContentHeaderProps {
   sidebarVisible: boolean;
   /** 折叠态是否需要为 ChromeActions 浮动按钮簇预留占位。设置页为 false。 */
   showCollapsedActions: boolean;
+  /** 左侧栏是否处于 rail 态（拖到最窄但仍保留图标列）。 */
+  isSidebarRail: boolean;
   /** mac 右上浮层按钮是否在场(2026-07-09 口径:右栏在场即 true,不分贴哪侧 ——
    *  折叠 toggle 恒钉窗口右上角,面板贴左时它压在本 header 右端)。mac 据此在
    *  右端留折叠按钮占位 + 决定是否留住空 header;Windows 仅影响空 header 判定,
@@ -75,6 +78,7 @@ interface ContentHeaderProps {
 export function ContentHeader({
   sidebarVisible,
   showCollapsedActions,
+  isSidebarRail,
   rightSidebarAvailable,
   hidden,
 }: ContentHeaderProps) {
@@ -84,6 +88,12 @@ export function ContentHeader({
   // Sidebar 不可见时红绿灯落在 header 上方 → 非全屏让位。78px = 70px 红绿灯
   // 占位 + 8px 呼吸间隙（与原 TitleBar 的 pl-[70px] + px-2 等效）。
   const needsTrafficLightInset = isMac && !isFullscreen && !sidebarVisible;
+  // rail 态时，Sidebar 仍占 78px；mac 非全屏的 ChromeActions 却紧贴其右缘
+  // (x=78)。Sidebar 顶栏里的 no-drag 洞会被自身 overflow-hidden 裁掉，必须在
+  // main 的 drag header 左缘再挖一个洞，否则点击浮动的收放/菜单按钮会被 Electron
+  // 当成窗口拖拽吞掉。完全收起态 main 从 x=0 开始，既有 spacer 已覆盖该位置；
+  // 全屏态按钮回到 rail 内，也由 Sidebar 的既有洞覆盖。
+  const needsRailChromeActionsHitHole = isMac && !isFullscreen && isSidebarRail;
 
   // 设置页：Sidebar 隐藏且无折叠按钮占位 → header 退化为"隐形 chrome"
   // （仅拖拽区 + Windows 窗口控制），不画下边框。
@@ -113,7 +123,7 @@ export function ContentHeader({
         // 红绿灯同轴(对齐 Codex 的紧凑 titlebar)。与 ChromeActions / Sidebar
         // 顶行 / MainLayout 右上浮层同一常量,改动必须连同 main 侧
         // trafficLightPosition 一起同步。
-        'flex h-[46px] w-full shrink-0 items-center select-none',
+        'relative flex h-[46px] w-full shrink-0 items-center select-none',
         // 下边框只画在右栏（header 在 main 内部，不会延伸到 Sidebar 上方），
         // Sidebar 侧保持无横线的连续表面；设置页隐形 chrome 不画
         // （用户决策 2026-06-11）。
@@ -127,6 +137,19 @@ export function ContentHeader({
       // 36px Tab 条那层(在面板身上,语义准)。
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
+      {needsRailChromeActionsHitHole && (
+        <div
+          aria-hidden
+          data-testid="content-header-rail-chrome-actions-hit-hole"
+          className="absolute left-0 top-0 h-full"
+          style={
+            {
+              width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
+              WebkitAppRegion: 'no-drag',
+            } as React.CSSProperties
+          }
+        />
+      )}
       {/* 折叠态占位 spacer：真实按钮在 MainLayout 的 ChromeActions 浮层里
           （钉死左上角、不随折叠重建的常驻实例）。本 spacer 以与侧栏宽度动画
           相同的时长/缓动伸缩，把标题平滑推到浮动按钮右侧（项目规则 8）。
@@ -176,6 +199,7 @@ export function ContentHeader({
 export function ContentHeaderSlot({
   sidebarVisible,
   showCollapsedActions,
+  isSidebarRail,
   rightSidebarAvailable,
   children,
 }: Omit<ContentHeaderProps, 'hidden'> & { children: ReactNode }) {
@@ -185,6 +209,7 @@ export function ContentHeaderSlot({
       <ContentHeader
         sidebarVisible={sidebarVisible}
         showCollapsedActions={showCollapsedActions}
+        isSidebarRail={isSidebarRail}
         rightSidebarAvailable={rightSidebarAvailable}
         hidden={hidden}
       />

@@ -153,10 +153,13 @@ export function deriveRemoteReadiness(
 export function sourceReadyFromProviderList(
   value: unknown,
   agent: ProviderAgentKind,
+  opts?: { includeSuspended?: boolean },
 ): boolean | null {
   const providers = (value as { providers?: ProviderView[] } | null)?.providers;
   if (!Array.isArray(providers)) return null;
-  return connectedProvidersForAgent(providers, agent).length > 0;
+  return connectedProvidersForAgent(providers, agent, {
+    includeSuspended: opts?.includeSuspended === true,
+  }).length > 0;
 }
 
 interface GateResult {
@@ -182,7 +185,7 @@ interface UseVendorAuthGateReturn {
    */
   checkAndConfirm: (
     vendor: AgentKind,
-    options?: { purpose?: GatePurpose; deviceId?: string },
+    options?: { purpose?: GatePurpose; deviceId?: string; existingSessionRoute?: boolean },
   ) => Promise<GateResult>;
 }
 
@@ -197,7 +200,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
   const checkAndConfirm = useCallback(
     async (
       vendor: AgentKind,
-      options?: { purpose?: GatePurpose; deviceId?: string },
+      options?: { purpose?: GatePurpose; deviceId?: string; existingSessionRoute?: boolean },
     ): Promise<GateResult> => {
       if (options?.purpose === 'voice-input') {
         const readiness = await window.electronAPI.voiceInput.getReadiness();
@@ -237,7 +240,9 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
             : null;
         const sourceReady =
           providersRes.status === 'fulfilled'
-            ? sourceReadyFromProviderList(providersRes.value, providerAgent)
+            ? sourceReadyFromProviderList(providersRes.value, providerAgent, {
+                includeSuspended: options?.existingSessionRoute === true,
+              })
             : null;
         const remoteReadiness = deriveRemoteReadiness(vendor, {
           binaryReady: status?.binaryReady ?? null,
@@ -274,7 +279,10 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
 
       // 触发一次最新检查——避免 stale state 误放行。
       const target = vendor === 'codex' ? codex : cc;
-      const readiness = await target.revalidate();
+      // 已建会话的发送门禁计入 suspended 来源(见 useVendorReadiness 注释);草稿不传。
+      const readiness = await target.revalidate({
+        includeSuspended: options?.existingSessionRoute === true,
+      });
       const dialogCopy = pickCopy(copy, vendor, readiness);
       if (!dialogCopy) return { proceed: true };
 

@@ -18,6 +18,13 @@ export type IpcErrorCode =
   // 分开:后者是"本会话在跑"的短时状态;混用会让「新建会话/切模型」场景弹出误导性的
   // "会话运行中"文案(实际是别的会话挡住了凭证切换)。
   | 'CREDENTIAL_SWITCH_BUSY'
+  // 远端 Claude 路由 materialization 失败(remote-claude-route.ts):
+  // 供应商凭证 mutation 窗口(稍后重试)/ 远端不可表达(换来源)/ 订阅未连接(连接 Claude.ai)。
+  | 'REMOTE_PROVIDER_UPDATING'
+  | 'REMOTE_PROVIDER_UNSUPPORTED'
+  | 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
+  // 远端切模/切来源需要不同路由(claude-code setModel 守卫):提示重建会话。
+  | 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE'
   | 'NO_LIVE_QUERY'
   // 智能通讯录: (platform, value) 身份已属于另一个联系人 — message 里带占用者 id
   | 'IDENTITY_CONFLICT'
@@ -123,7 +130,14 @@ export type IpcErrorCode =
   | 'SHARE_EXPORT_FAILED' // 导出编排失败(含超出体积上限)
   | 'SHARE_IMPORT_FAILED' // 导入编排失败(已回滚)
   | 'SHARE_WORKTREE_NOT_GIT' // 导入勾选 worktree 但所选目录不在 git 仓库内
-  | 'SHARE_WORKTREE_FAILED'; // 导入时 worktree 创建失败(已中止导入)
+  | 'SHARE_WORKTREE_FAILED' // 导入时 worktree 创建失败(已中止导入)
+  // 主题导入(local-themes:import)
+  | 'THEME_NOT_A_FILE' // 选中路径不是普通文件
+  | 'THEME_FILE_TOO_LARGE' // 超 4MB 上限
+  | 'THEME_UNSUPPORTED_FILE' // 无法识别为 VSCode / Obsidian 主题
+  | 'THEME_USES_INCLUDE' // VSCode 主题含 include(需基底才能完整解析)
+  | 'THEME_WRITE_ERROR' // 落盘失败(权限/磁盘)
+  | 'THEME_IMPORT_INTERNAL'; // 意外异常
 
 export interface IpcError {
   code: IpcErrorCode;
@@ -144,6 +158,10 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'APP_SHORTCUTS_WRITE_FAILED',
   'NO_ACTIVE_TURN',
   'SESSION_RUNNING',
+  'REMOTE_PROVIDER_UPDATING',
+  'REMOTE_PROVIDER_UNSUPPORTED',
+  'REMOTE_NATIVE_OAUTH_UNAVAILABLE',
+  'REMOTE_MODEL_SWITCH_ROUTE_CHANGE',
   'NO_LIVE_QUERY',
   'STALE_DIFF',
   'PUSH_LEASE_EXPIRED',
@@ -226,6 +244,12 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'SHARE_IMPORT_FAILED',
   'SHARE_WORKTREE_NOT_GIT',
   'SHARE_WORKTREE_FAILED',
+  'THEME_NOT_A_FILE',
+  'THEME_FILE_TOO_LARGE',
+  'THEME_UNSUPPORTED_FILE',
+  'THEME_USES_INCLUDE',
+  'THEME_WRITE_ERROR',
+  'THEME_IMPORT_INTERNAL',
 ]);
 
 export function isIpcErrorCode(code: unknown): code is IpcErrorCode {

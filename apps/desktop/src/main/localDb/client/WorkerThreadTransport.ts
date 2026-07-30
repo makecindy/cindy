@@ -286,6 +286,8 @@ function dispatchTx(readyDb, payload) {
       return embeddingEnqueue(readyDb, request.args);
     case 'scheduler.claimDueFireAndInsertRun':
       return schedulerClaimDueFireAndInsertRun(readyDb, request.args);
+    case 'scheduler.resumeWithLiveClaimGuard':
+      return schedulerResumeWithLiveClaimGuard(readyDb, request.args);
     case 'orca.reserveWorkerCreation':
       return orcaReserveWorkerCreation(readyDb, request.args);
     case 'orca.renewWorkerCreationReservation':
@@ -791,11 +793,9 @@ function schedulerClaimDueFireAndInsertRun(readyDb, args) {
 
   return readyDb.transaction(() => {
     const claim = readyDb.prepare(
-      "UPDATE schedules SET next_fire_at = NULL, last_fired_at = CASE WHEN last_fired_at IS NULL OR last_fired_at <= ? THEN ? ELSE last_fired_at END, active_claim_fired_at = ? WHERE id = ? AND status = 'active' AND next_fire_at = ?",
+      "UPDATE schedules SET next_fire_at = NULL, active_claim_run_id = ? WHERE id = ? AND status = 'active' AND next_fire_at = ?",
     ).run(
-      expectNumber(run.firedAt, 'run.firedAt'),
-      expectNumber(run.firedAt, 'run.firedAt'),
-      expectNumber(run.firedAt, 'run.firedAt'),
+      expectString(run.id, 'run.id'),
       scheduleId,
       expectedNextFireAt,
     );
@@ -824,6 +824,41 @@ function schedulerClaimDueFireAndInsertRun(readyDb, args) {
       nullableNumber(run.heartbeatAt),
     );
     return true;
+  })();
+}
+
+function schedulerResumeWithLiveClaimGuard(readyDb, args) {
+  const payload = asRecord(args, 'scheduler.resumeWithLiveClaimGuard args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  const nextFireAt = expectNumber(payload.nextFireAt, 'nextFireAt');
+
+  return readyDb.transaction(() => {
+    const row = readyDb
+      .prepare('SELECT active_claim_run_id FROM schedules WHERE id = ? LIMIT 1')
+      .get(scheduleId);
+    if (!row) return false;
+    const activeClaimRunId =
+      typeof row.active_claim_run_id === 'string' ? row.active_claim_run_id : null;
+    const liveClaim =
+      activeClaimRunId !== null &&
+      readyDb
+        .prepare(
+          "SELECT 1 FROM schedule_runs WHERE id = ? AND schedule_id = ? AND status = 'running' LIMIT 1",
+        )
+        .get(activeClaimRunId, scheduleId) !== undefined;
+
+    const result = readyDb
+      .prepare(
+        "UPDATE schedules SET status = 'active', updated_at = ?, next_fire_at = ?, active_claim_run_id = ? WHERE id = ?",
+      )
+      .run(
+        updatedAt,
+        liveClaim ? null : nextFireAt,
+        liveClaim ? activeClaimRunId : null,
+        scheduleId,
+      );
+    return result.changes > 0;
   })();
 }
 
@@ -1248,11 +1283,69 @@ function readExistingMessageFingerprints(readyDb, sessionId, importClientIdPrefi
 
 function isLikelyLocalDuplicate(existing, row) {
   const next = messageFingerprint(row.role, row.text, row.createdAt);
-  return existing.some((prev) => prev.role === next.role && prev.text === next.text && Math.abs(prev.createdAt - next.createdAt) <= LOCAL_DUPLICATE_WINDOW_MS);
+  // 普通消息原文精确比较;canon 有损比较只在「至少一侧含原始标记字面量」时启用
+  // (升级前旧标记行 vs 已归一化导入行),避免仅 Markdown 格式不同的正常回复被
+  // 误判成重复。口径同 opHandlers/tx.ts。
+  return existing.some((prev) => prev.role === next.role
+    && Math.abs(prev.createdAt - next.createdAt) <= LOCAL_DUPLICATE_WINDOW_MS
+    && (prev.plain === next.plain
+      || (prev.canonical !== undefined && next.canonical !== undefined
+        && (prev.hasMarker || next.hasMarker)
+        && prev.canonical === next.canonical)));
 }
 
 function messageFingerprint(role, text, createdAt) {
-  return { role, text: normalizeFingerprintText(text), createdAt };
+  const plain = normalizeFingerprintText(text);
+  const hasMarker = role === 'assistant' && text.includes(CODEX_CITATION_OPEN);
+  const canonical = role === 'assistant'
+    ? normalizeFingerprintText(canonicalizeCodexCitations(text))
+    : undefined;
+  const out = { role, plain, hasMarker, createdAt };
+  if (canonical !== undefined) out.canonical = canonical;
+  return out;
+}
+
+// 与 opHandlers/tx.ts 的指纹规范形同构;SSoT 注释见该文件,口径变更需同步。
+const CODEX_CITATION_RE = /:codex-file-citation\\{((?:[^"{}]|"(?:[^"\\\\]|\\\\.)*")*)\\}/g;
+const CODEX_CITATION_OPEN = ':codex-file-citation{';
+
+function codexCitationClose(text, attrsStart) {
+  let inQuote = false;
+  for (let i = attrsStart; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inQuote && ch === '\\\\') i += 1;
+    else if (ch === '"') inQuote = !inQuote;
+    else if (!inQuote && ch === '}') return i;
+    else if (!inQuote && ch === '{') return -2;
+  }
+  return -1;
+}
+
+function decodeCitationPathForFingerprint(attrs) {
+  const m = /(?:^|\\s)path="((?:[^"\\\\]|\\\\.)*)"/.exec(attrs);
+  if (!m) return '';
+  const raw = m[1];
+  const nativeUnc = raw.startsWith('\\\\\\\\') && raw[2] !== '\\\\';
+  const head = nativeUnc ? '\\\\\\\\' : '';
+  return head + (nativeUnc ? raw.slice(2) : raw).replace(/\\\\([\\\\"])/g, '$1');
+}
+
+function canonicalizeCodexCitations(text) {
+  let out = text;
+  let from = 0;
+  for (;;) {
+    const open = out.indexOf(CODEX_CITATION_OPEN, from);
+    if (open === -1) break;
+    const close = codexCitationClose(out, open + CODEX_CITATION_OPEN.length);
+    if (close === -1) { out = out.slice(0, open); break; }
+    from = close === -2 ? open + CODEX_CITATION_OPEN.length : close + 1;
+  }
+  for (let i = 0; i < 5; i += 1) {
+    const next = out.replace(CODEX_CITATION_RE, (_all, attrs) => decodeCitationPathForFingerprint(attrs));
+    if (next === out) break;
+    out = next;
+  }
+  return out.replace(/\`+/g, '').replace(/\\s+/g, ' ');
 }
 
 function normalizeStoredMessageText(raw) {

@@ -25,6 +25,7 @@ import {
   type AndroidAutomationSettings,
 } from '../android-automation-settings-store.js';
 import { createLogger } from '../logger.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 
 const logger = createLogger('mcp/cindy_android');
 
@@ -146,7 +147,7 @@ export function setServerPreExistedForTest(value: boolean | null): void {
  * 已有 server),fire-and-forget 一个 `adb kill-server` 收掉它。detached + unref,
  * 绝不阻塞退出。
  *
- * 如果用户在 XDMaker 之前已有 server 在跑(Android Studio / SDK 等),我们的
+ * 如果用户在 Cindy 之前已有 server 在跑(Android Studio / SDK 等),我们的
  * bundled adb 只是复用了它,此时 kill-server 会杀掉用户的 server、中断其 logcat
  * / 设备连接——这种情况不触发 kill。判断依据是首次使用前对 5037 端口的探活结果,
  * 记录在 serverPreExistedBeforeUs 中(一次检测,整个会话生效)。
@@ -480,7 +481,8 @@ async function downloadPlatformToolsZip(url: string): Promise<Buffer> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), platformToolsDownloadTimeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    // dl.google.com:境外下载,必须吃系统代理(见 maker-host/outbound-fetch.ts)。
+    const response = await outboundFetch(url, { signal: controller.signal });
     if (!response.ok) {
       throw new AndroidDriverError(
         'ANDROID_DRIVER_ERROR',

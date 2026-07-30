@@ -2,7 +2,11 @@
  * 远程文件 Quick Look 预览。
  *
  * 同目录文件横滑翻页(iOS Quick Look 心智):进入时列一次父目录,把全部文件
- * (含不可预览的,显示占位页)按浏览页同款排序装进水平 pager。
+ * (含不可预览的,显示占位页)按浏览页同款排序装进水平 pager。PDF 例外:
+ * 预览期间禁用外层横滑,把缩放后的水平拖动完整留给 WKWebView,避免 pager
+ * 抢手势后切换文件;PDF cell 离开渲染窗口时可能被回收,进而重置阅读位置
+ * 或再次加载 URL。
+ * 切换文件通过 Done 返回列表完成。
  * 文本 = readFile(acceptGzip,pako 解码)+ 行号列表;图片 = 缩略图立即显示,
  * OSS 导出原图就绪后无缝换源(不出 loading 态,规则 7);其它 = 占位 + 下载。
  *
@@ -33,6 +37,7 @@ import { goBackGuarded } from '@/utils/backGuard';
 import { useAuth } from '@/auth/AuthContext';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
@@ -145,6 +150,30 @@ export default function RemoteFilePreviewScreen() {
     unmountedRef.current = true;
   }, []);
 
+  // deviceUnresponsive 进依赖(review P1):深链进入且无缓存会话时,首次
+  // getSession 若撞上熔断 open 会拿到 DEVICE_UNRESPONSIVE 快速失败;本页只
+  // track openLink、不持有 topic,恢复 rehydrate 的 reseed 也覆盖不到——不随
+  // 熔断状态翻转重跑的话,探测成功后预览页仍永久空白。翻转重跑最多多发一次
+  // 轻量请求(open 期间是本地快速失败,零管道流量)。
+  const unresponsiveDevices = useUnresponsiveDevices();
+  const deviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
+  // 熔断恢复代数(review P1):open→closed 翻转沿 +1。仅重试 getSession 不够——
+  // 会话已缓存时,同目录 pager 可能已退化成单文件、文本/PDF/音视频子页已落进
+  // 失败态,而子页用 requestedRef/loadedRef 防重复请求,失败后绝不自行重试。
+  // 代数驱动两件事:pager effect 重列目录;非 PDF 子页通过 FlatList key 整体
+  // 重挂载(refs 归零、重新拉取)。PDF 保持已加载 WebView 的稳定 key,仅在
+  // 上次导出失败且代数前进时由 PdfPreviewPage 原地重试,避免恢复沿重置阅读位置。
+  const [recoveryEpoch, setRecoveryEpoch] = useState(0);
+  const prevBreakerStateRef = useRef({ deviceId, unresponsive: deviceUnresponsive });
+  useEffect(() => {
+    const prev = prevBreakerStateRef.current;
+    prevBreakerStateRef.current = { deviceId, unresponsive: deviceUnresponsive };
+    // 换设备不是恢复沿(review):页面保持挂载但路由参数换了设备时,「上一台
+    // 未响应、这一台正常」不该触发整个 pager 重挂载——新设备的加载由各 effect
+    // 的 deviceId 依赖自然驱动。
+    if (prev.deviceId !== deviceId) return;
+    if (prev.unresponsive && !deviceUnresponsive) setRecoveryEpoch((epoch) => epoch + 1);
+  }, [deviceId, deviceUnresponsive]);
   useEffect(() => {
     if (knownSession) {
       setSession(knownSession);
@@ -155,9 +184,13 @@ export default function RemoteFilePreviewScreen() {
       await openLink(deviceId);
       return maker.getSession(sessionId);
     })
-      .then(setSession)
+      .then((loaded) => {
+        setSession(loaded);
+        // 清掉熔断 open 期间留下的错误快照,恢复后不再残留降级横幅。
+        setError(null);
+      })
       .catch((err) => setError(formatRemoteError(err)));
-  }, [deviceId, knownSession, maker, openLink, sessionId]);
+  }, [deviceId, deviceUnresponsive, knownSession, maker, openLink, sessionId]);
 
   // absPath 单文件模式:不列目录,直接以合成 item 装单页 pager。
   useEffect(() => {
@@ -167,10 +200,24 @@ export default function RemoteFilePreviewScreen() {
   }, [singleAbsPath]);
 
   // 同目录 pager:列父目录 → 文件项按浏览页同款排序;失败时退化为单文件。
+  // 重建列表时锚定「当前可见文件」而非固定 initialRelPath(review P1):恢复
+  // 重列 / 排序切换发生在用户已翻页之后时,重置回初始文件会让 FlatList 的
+  // 原生滚动位置与 pageIndex(标题 / 分享 / 下载的目标)指向两个不同文件。
+  // setPageIndex 后再显式 scrollToOffset 重锚一次(initialScrollIndex 只在
+  // 首挂载生效,items key 变化不会重置 contentOffset)。
   useEffect(() => {
     if (!deviceId || !workdir || !initialRelPath) return undefined;
     let cancelled = false;
     const dirRel = parentRelPath(initialRelPath) ?? '';
+    const anchorRelPath = currentRelPathRef.current ?? initialRelPath;
+    const anchorTo = (index: number): void => {
+      setPageIndex(index);
+      requestAnimationFrame(() => {
+        if (!cancelled) {
+          pagerRef.current?.scrollToOffset({ animated: false, offset: index * pageWidthRef.current });
+        }
+      });
+    };
     void withTransientRemoteRetry(async () => {
       await openLink(deviceId);
       return maker.fileBrowser.listDir(workdir, dirRel);
@@ -182,27 +229,40 @@ export default function RemoteFilePreviewScreen() {
         const files = buildFileBrowserGridItems(normalizeRemoteOpDirEntries(raw), sortMode, Date.now())
           .filter((item) => item.kind === 'file')
           .filter((item) => item.thumb !== 'image' || item.relPath === initialRelPath);
-        const index = files.findIndex((item) => item.relPath === initialRelPath);
+        let index = files.findIndex((item) => item.relPath === anchorRelPath);
+        if (index < 0) index = files.findIndex((item) => item.relPath === initialRelPath);
         if (files.length === 0 || index < 0) {
           setSiblings([fallbackItem(initialRelPath)]);
-          setPageIndex(0);
+          anchorTo(0);
           return;
         }
         setSiblings(files);
-        setPageIndex(index);
+        anchorTo(index);
       })
       .catch(() => {
         if (cancelled) return;
         setSiblings([fallbackItem(initialRelPath)]);
-        setPageIndex(0);
+        anchorTo(0);
       });
     return () => {
       cancelled = true;
     };
-  }, [deviceId, initialRelPath, maker, openLink, sortMode, workdir]);
+  }, [deviceId, initialRelPath, maker, openLink, recoveryEpoch, sortMode, workdir]);
 
   const current = siblings?.[pageIndex] ?? null;
   const pagerRef = useRef<FlatList<FileBrowserGridItem>>(null);
+  // 当前可见文件路径镜像(pager 重建锚定用;不能进上面 effect 的依赖,否则
+  // 每次翻页都会重列目录)。
+  const currentRelPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    currentRelPathRef.current = current?.relPath ?? null;
+  }, [current]);
+  // pageWidth 镜像:重锚回调里读现值,不把 pageWidth 拉进列表 effect 依赖
+  // (旋转已有专门的重锚 effect)。
+  const pageWidthRef = useRef(pageWidth);
+  useEffect(() => {
+    pageWidthRef.current = pageWidth;
+  }, [pageWidth]);
 
   // 旋转(宽度变化)时按当前页重锚:FlatList 保留的是旧宽度下的像素 contentOffset,
   // 不重锚会停在两页中间(处理方式对齐 ImageLightbox)。
@@ -353,7 +413,9 @@ export default function RemoteFilePreviewScreen() {
         ref={pagerRef}
         horizontal
         initialScrollIndex={pageIndex}
-        keyExtractor={(item) => item.key}
+        keyExtractor={(item) => (
+          item.previewKind === 'pdf' ? item.key : `${item.key}:${recoveryEpoch}`
+        )}
         onMomentumScrollEnd={(event) => {
           const next = Math.round(event.nativeEvent.contentOffset.x / pageWidth);
           if (next !== pageIndex && next >= 0 && next < siblings.length) setPageIndex(next);
@@ -387,11 +449,13 @@ export default function RemoteFilePreviewScreen() {
               }}
               readTextFile={readTextFile}
               onOpenLightbox={setLightboxUrl}
+              recoveryEpoch={recoveryEpoch}
               targetLine={item.relPath === (singleAbsPath ?? initialRelPath) ? targetLine : null}
               workdir={workdir}
             />
           </View>
         )}
+        scrollEnabled={current.previewKind !== 'pdf'}
         showsHorizontalScrollIndicator={false}
         windowSize={3}
       />
@@ -473,6 +537,7 @@ function FilePreviewPage({
   onOpenLightbox,
   onQuoteSelection,
   readTextFile,
+  recoveryEpoch,
   targetLine,
   workdir,
 }: {
@@ -485,6 +550,7 @@ function FilePreviewPage({
   /** chat-text-quote:markdown 渲染态的选中引用回调(仅文本页消费)。 */
   onQuoteSelection?: (text: string) => void;
   readTextFile(relPath: string): Promise<FileBrowserReadFileResult>;
+  recoveryEpoch: number;
   targetLine: number | null;
   workdir: string;
 }) {
@@ -502,7 +568,7 @@ function FilePreviewPage({
     );
   }
   if (item.previewKind === 'pdf') {
-    return <PdfPreviewPage active={active} exportToUrl={exportToUrl} item={item} onDownload={onDownload} workdir={workdir} />;
+    return <PdfPreviewPage active={active} exportToUrl={exportToUrl} item={item} onDownload={onDownload} recoveryEpoch={recoveryEpoch} workdir={workdir} />;
   }
   const avKind = avKindFor(item.name);
   if (avKind) {
@@ -585,12 +651,14 @@ function PdfPreviewPage({
   exportToUrl,
   item,
   onDownload,
+  recoveryEpoch,
   workdir,
 }: {
   active: boolean;
   exportToUrl(relPath: string, mtimeMs: number): Promise<string>;
   item: FileBrowserGridItem;
   onDownload(): void;
+  recoveryEpoch: number;
   workdir: string;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -598,11 +666,28 @@ function PdfPreviewPage({
   const { t } = useTranslation();
   const [url, setUrl] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [requestEpoch, setRequestEpoch] = useState(0);
   const requestedRef = useRef(false);
+  const latestRecoveryEpochRef = useRef(recoveryEpoch);
+  const requestedAtRecoveryEpochRef = useRef(recoveryEpoch);
+
+  useEffect(() => {
+    latestRecoveryEpochRef.current = recoveryEpoch;
+  }, [recoveryEpoch]);
+
+  // 已成功加载的 PDF 不随设备恢复沿重挂载或重新取 URL;只有上次导出失败,
+  // 且失败尝试发生在更早的恢复代数时,才清掉一次性请求门闩原地重试。
+  useEffect(() => {
+    if (!failure || requestedAtRecoveryEpochRef.current >= recoveryEpoch) return;
+    requestedRef.current = false;
+    setFailure(null);
+    setRequestEpoch((epoch) => epoch + 1);
+  }, [failure, recoveryEpoch]);
 
   useEffect(() => {
     if (!active || requestedRef.current || !workdir) return undefined;
     requestedRef.current = true;
+    requestedAtRecoveryEpochRef.current = latestRecoveryEpochRef.current;
     let cancelled = false;
     setFailure(null);
     void exportToUrl(item.relPath, item.mtimeMs)
@@ -611,19 +696,20 @@ function PdfPreviewPage({
       })
       .catch((err) => {
         if (cancelled) return;
-        // 保持 requestedRef=true:失败态由 UnsupportedPage 呈现,靠「下载原文件」
-        // 或翻页重进重试,不在 effect 里自动循环重试。
+        // 保持 requestedRef=true:失败态由 UnsupportedPage 呈现,不在当前
+        // 恢复代数里自动循环;下一次设备恢复沿重试,或离开后重新打开。
         setFailure(formatRemoteError(err));
       });
     return () => {
       cancelled = true;
     };
-  }, [active, exportToUrl, item.mtimeMs, item.relPath, workdir]);
+  }, [active, exportToUrl, item.mtimeMs, item.relPath, requestEpoch, workdir]);
+  const pdfSource = useMemo(() => (url ? { uri: url } : null), [url]);
 
   if (failure) {
     return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.fetchPdfFailed', { detail: failure })} />;
   }
-  if (!url) {
+  if (!pdfSource) {
     return (
       <View style={styles.centerFill} testID="filePreview.pdfLoading">
         <ActivityIndicator color={colors.textTertiary} />
@@ -631,7 +717,7 @@ function PdfPreviewPage({
       </View>
     );
   }
-  return <WebView source={{ uri: url }} style={styles.pdfView} testID="filePreview.pdfView" />;
+  return <WebView source={pdfSource} style={styles.pdfView} testID="filePreview.pdfView" />;
 }
 
 /** 文本/代码页:readFile(acceptGzip)→ 行号列表;OVERSIZE/BINARY 退占位。 */

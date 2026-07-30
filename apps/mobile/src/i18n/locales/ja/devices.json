@@ -8,20 +8,20 @@
     "create": "新規"
   },
   "list": {
-    "thisComputer": "このパソコン",
+    "thisComputer": "このデバイス",
     "allConversations": "すべての会話",
     "syncFailed": "同期に失敗しました",
     "requestFailed": "リクエストに失敗しました",
-    "loading": "操作可能なパソコンを読み込み中",
+    "loading": "操作可能なデバイスを読み込み中",
     "untitled": "無題の会話",
     "connection": {
       "connecting": "接続中",
       "disconnected": "切断されました"
     },
     "error": {
-      "sessionDeviceNotFound": "この会話が属するパソコンが見つかりません。再同期してからもう一度お試しください。",
-      "taskDeviceNotFound": "このタスクが属するパソコンが見つかりません。再同期してからもう一度お試しください。",
-      "noDevice": "利用できるパソコンがありません。デスクトップでリモート操作をオンにしてから、再同期してください。"
+      "sessionDeviceNotFound": "この会話が属するデバイスが見つかりません。再同期してからもう一度お試しください。",
+      "taskDeviceNotFound": "このタスクが属するデバイスが見つかりません。再同期してからもう一度お試しください。",
+      "noDevice": "利用できるデバイスがありません。デスクトップでリモート操作をオンにしてから、再同期してください。"
     },
     "alert": {
       "actionFailed": "操作に失敗しました",
@@ -198,7 +198,7 @@
     },
     "empty": {
       "copy": "最初の自動化タスクをスマホから直接作成するか、デスクトップで作成してここに同期できます。",
-      "title": "このパソコンには自動化がありません"
+      "title": "このデバイスには自動化がありません"
     },
     "createAutomation": "自動化を新規作成",
     "recentRuns": "最近の実行",

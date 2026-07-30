@@ -21,6 +21,7 @@ import {
   resolveLoginLocale,
   type LoginLocale,
 } from '@/auth/loginMessages';
+import { LOGIN_CONSENT_DIALOG } from '@/auth/loginSkinLayout';
 
 const LOCALES: LoginLocale[] = ['zh-CN', 'en', 'ja', 'ko'];
 
@@ -62,6 +63,34 @@ describe('loginMessages 4 语 catalog', () => {
     expect(loginMessages.en.phonePlaceholder).toBe('Phone number');
     expect(loginMessages.ja.phonePlaceholder).toBe('携帯電話番号');
     expect(loginMessages.ko.phonePlaceholder).toBe('휴대전화 번호');
+  });
+
+  it('区域确认正文按标准 26/40 固定两行，4 语每行均无需二次折行', () => {
+    const maxEstimatedUnits =
+      (LOGIN_CONSENT_DIALOG.body.width * 0.95 * 3) /
+      LOGIN_CONSENT_DIALOG.body.font;
+    const estimatedUnits = (value: string) =>
+      [...value].reduce(
+        (sum, character) =>
+          sum + ((character.codePointAt(0) ?? 0) <= 0xff ? 0.5 : 1),
+        0,
+      );
+    for (const locale of LOCALES) {
+      const messages = loginMessages[locale];
+      for (const body of [
+        messages.realmConsentBodyCn,
+        messages.realmConsentBodyGlobal,
+      ]) {
+        const lines = body.split('\n');
+        expect(lines, `locale=${locale}: ${body}`).toHaveLength(2);
+        for (const line of lines) {
+          expect(
+            estimatedUnits(line),
+            `locale=${locale}: ${line}`,
+          ).toBeLessThanOrEqual(maxEstimatedUnits / 3);
+        }
+      }
+    }
   });
 
   it('登录错误码 4 语齐全且非空', () => {

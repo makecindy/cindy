@@ -23,6 +23,8 @@ function sshHost(
     status: 'ready',
     statusChangedAt: 0,
     autoConnect: false,
+    agentProxy: null,
+    agentProxyTunnel: null,
   };
 }
 

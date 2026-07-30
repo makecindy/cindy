@@ -373,7 +373,7 @@ export function buildSensitiveMediaBlocklist(
       pushHome('.gnome2', 'keyrings'); // legacy gnome-keyring location
       // Chrome/Chromium user-data root varies by channel AND by config prefix:
       // Chromium honors $CHROME_CONFIG_HOME as an alternate prefix (falling back
-      // to $XDG_CONFIG_HOME, then ~/.config). Cover every base XDMaker can
+      // to $XDG_CONFIG_HOME, then ~/.config). Cover every base Cindy can
       // observe so a profile under any of them is denied.
       const chromeBases = new Set<string>();
       if (posixEnv.CHROME_CONFIG_HOME) chromeBases.add(posixEnv.CHROME_CONFIG_HOME);

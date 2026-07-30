@@ -54,7 +54,7 @@ export interface AttachmentRejection {
 export interface UseAttachmentsReturn {
   attachments: AttachedFile[];
   hasAttachments: boolean;
-  addFiles: (fileList: FileList) => Promise<void>;
+  addFiles: (fileList: FileList | readonly File[]) => Promise<void>;
   addClipboardImage: (blob: Blob) => Promise<void>;
   /**
    * Files rejected on the most recent add attempt (oversize / empty / blocked
@@ -302,7 +302,7 @@ export function useAttachments(
     return payloads;
   }, []);
 
-  const addFiles = useCallback(async (fileList: FileList) => {
+  const addFiles = useCallback(async (fileList: FileList | readonly File[]) => {
     // Fresh attempt: clear stale rejections so the inline strip reflects only
     // this drop's failures.
     setRejections([]);
@@ -312,8 +312,7 @@ export function useAttachments(
     type RawFile = { name: string; path: string; size: number; file: File };
     const rawFiles: RawFile[] = [];
     const earlyErrors: { name: string; reason: string }[] = [];
-    for (let i = 0; i < fileList.length; i++) {
-      const f = fileList[i];
+    for (const f of Array.from(fileList)) {
       let filePath = '';
       try {
         filePath = window.electronAPI.getFilePath(f);

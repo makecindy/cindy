@@ -153,7 +153,8 @@
       "blocked": "保留中",
       "complete": "完了",
       "budgetLimited": "上限に到達",
-      "usageLimited": "使用量制限中"
+      "usageLimited": "使用量制限中",
+      "capacityLimited": "モデルサービスが混雑"
     },
     "goalLabel": "ゴール",
     "goalObjectiveAccessibility": "ゴールの内容",
@@ -165,6 +166,7 @@
     "noProgressLimit": "無進展の上限",
     "startGoal": "ゴールを開始",
     "goalMeta": "{{turns}} ターン · {{tokens}} token",
+    "goalCapacityHint": "上流に空き容量がありません。時間が来たら自動で再試行します",
     "pause": "一時停止",
     "resume": "再開",
     "clearGoal": "ゴールを終了",
@@ -199,6 +201,8 @@
       "ACTION_STALE": "設定内容が更新されました。設定操作を選び直してください。",
       "AUTH_CANCELLED": "認証がキャンセルされました。必要に応じてもう一度認証してください。",
       "AUTH_FAILED": "認証を完了できませんでした。もう一度お試しください。",
+      "AUTH_NETWORK": "認証サービスに接続できませんでした。ネットワーク接続を確認して、もう一度お試しください。",
+      "AUTH_SERVICE_UNAVAILABLE": "認証サービスは一時的に利用できません。しばらくしてからもう一度お試しください。",
       "INLINE_INVALID": "設定内容が無効です。内容を確認してもう一度お試しください。",
       "INLINE_UNAVAILABLE": "このバージョンの Cindy ではチャット内でこの設定を保存できません。Cindy を更新してもう一度お試しください。",
       "SAVE_FAILED": "設定を保存できませんでした。もう一度お試しください。",

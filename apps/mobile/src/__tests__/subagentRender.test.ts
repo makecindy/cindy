@@ -85,6 +85,8 @@ describe('subagent nesting render wiring', () => {
     // 联合类型扩为 mobile-only(shared 类型不动)。
     expect(model).toContain("type: 'subagent_group';");
     expect(model).toContain('| MobileSubagentGroupItem');
-    expect(model).toContain('| MobileForkOriginItem;');
+    expect(model).toContain('| MobileForkOriginItem');
+    // 待发送气泡(pending_send)也是 mobile-only 的联合成员,同样不动 shared 类型。
+    expect(model).toContain('| MobilePendingSendItem;');
   });
 });

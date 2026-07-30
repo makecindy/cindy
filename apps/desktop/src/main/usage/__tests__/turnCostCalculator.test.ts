@@ -5,7 +5,6 @@ import {
   buildClaudeTurnUsageDetails,
   computeGatewayTurnCost,
   estimateClaudeSubscriptionTurnValue,
-  getCodexBudgetEffectiveCostMultiplier,
   isAnthropicModel,
   normalizeModelIdForPricing,
   resolveClaudeTurnCostSinks,
@@ -22,14 +21,22 @@ import type {
 const XD_GATEWAY: TurnPricingContext = {
   providerId: 'xd',
   billingRoute: 'xd-gateway',
+  region: 'global',
+};
+const XD_GATEWAY_CN: TurnPricingContext = {
+  providerId: 'xd',
+  billingRoute: 'xd-gateway',
+  region: 'cn',
 };
 const PROVIDER_API: TurnPricingContext = {
   providerId: 'anthropic',
   billingRoute: 'provider-api',
+  region: 'global',
 };
 const SUBSCRIPTION: TurnPricingContext = {
   providerId: 'anthropic',
   billingRoute: 'subscription',
+  region: 'global',
 };
 
 function quote(
@@ -58,25 +65,17 @@ function catalog(...quotes: ModelPriceQuote[]): ModelPricingCatalog {
   return result;
 }
 
-function usdMoney(
-  amount: number,
-  kind: RegionalMoney['kind'] = 'actual-cost',
-): RegionalMoney {
+function usdMoney(amount: number, kind: RegionalMoney['kind'] = 'actual-cost'): RegionalMoney {
   return {
     amount,
     currency: 'USD',
     approximate: kind === 'value-estimate',
     kind,
-    ...(kind === 'value-estimate'
-      ? { estimateReasons: ['subscription-value'] }
-      : {}),
+    ...(kind === 'value-estimate' ? { estimateReasons: ['subscription-value'] } : {}),
   };
 }
 
-function delta(
-  model: string,
-  values: Partial<ModelUsageDeltaEntry> = {},
-): ModelUsageDeltaEntry {
+function delta(model: string, values: Partial<ModelUsageDeltaEntry> = {}): ModelUsageDeltaEntry {
   return {
     model,
     costUsdDelta: 0,
@@ -116,12 +115,10 @@ describe('model id and route helpers', () => {
     expect(normalizeModelIdForPricing(null)).toBe('unknown');
   });
 
-  it('recognizes Anthropic families and applies codex budget discount exactly once', () => {
+  it('recognizes Anthropic families', () => {
     expect(isAnthropicModel('claude-sonnet-4-6')).toBe(true);
     expect(isAnthropicModel('sonnet')).toBe(true);
     expect(isAnthropicModel('gpt-5.5')).toBe(false);
-    expect(getCodexBudgetEffectiveCostMultiplier('codex/gpt-5.5')).toBe(0.15);
-    expect(getCodexBudgetEffectiveCostMultiplier('gpt-5.5')).toBe(1);
   });
 });
 
@@ -138,27 +135,26 @@ describe('computeGatewayTurnCost', () => {
   });
 
   it('uses explicit cache read/write prices when present', () => {
-    expect(computeGatewayTurnCost(
-      {
-        inputTokens: 1_000_000,
-        outputTokens: 1_000_000,
-        cacheReadTokens: 1_000_000,
-        cacheCreateTokens: 1_000_000,
-      },
-      quote('m', 2, 8, {
-        cacheReadPerMtok: 0.2,
-        cacheCreatePerMtok: 2.5,
-      }),
-    )).toBeCloseTo(12.7);
+    expect(
+      computeGatewayTurnCost(
+        {
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+          cacheReadTokens: 1_000_000,
+          cacheCreateTokens: 1_000_000,
+        },
+        quote('m', 2, 8, {
+          cacheReadPerMtok: 0.2,
+          cacheCreatePerMtok: 2.5,
+        }),
+      ),
+    ).toBeCloseTo(12.7);
   });
 });
 
 describe('resolveTurnCost', () => {
   it('XD route uses provider-scoped gateway pricing for every model family', () => {
-    const pricing = catalog(
-      quote('gpt-5.5', 2, 8),
-      quote('claude-opus-4-8', 5, 25),
-    );
+    const pricing = catalog(quote('gpt-5.5', 2, 8), quote('claude-opus-4-8', 5, 25));
     const gpt = resolveTurnCost({
       rawModel: 'gpt-5.5[1m]',
       tokens: {
@@ -190,7 +186,7 @@ describe('resolveTurnCost', () => {
     expect(claude.money?.amount).toBe(5);
   });
 
-  it('XD missing price falls back to the SDK number instead of dropping the turn', () => {
+  it('keeps the SDK USD fallback for Global when the Gateway quote is missing', () => {
     const result = resolveTurnCost({
       rawModel: 'unknown-model',
       tokens: {
@@ -204,33 +200,36 @@ describe('resolveTurnCost', () => {
       context: XD_GATEWAY,
     });
     expect(result.source).toBe('sdk-fallback');
-    expect(result.money).toMatchObject({
+    expect(result.money).toEqual({
       amount: 1.23,
       currency: 'USD',
+      approximate: false,
       kind: 'actual-cost',
     });
   });
 
-  it('XD missing price fallback applies the codex budget multiplier and keeps USD', () => {
-    const zeroTokens = {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheCreateTokens: 0,
-    };
-    const codexFallback = resolveTurnCost({
-      rawModel: 'codex/gpt-5.5',
-      tokens: zeroTokens,
-      sdkCostDelta: 10,
-      pricing: null,
-      context: XD_GATEWAY,
+  it('applies an ordinary Gateway model costDiscount exactly once', () => {
+    const result = resolveTurnCost({
+      rawModel: 'discounted-model',
+      tokens: {
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+      },
+      sdkCostDelta: 99,
+      pricing: catalog(
+        quote('discounted-model', 2, 8, {
+          currency: 'CNY',
+          costDiscount: 0.75,
+        }),
+      ),
+      context: XD_GATEWAY_CN,
     });
-    expect(codexFallback.source).toBe('sdk-fallback');
-    expect(codexFallback.money).toMatchObject({
-      amount: 1.5,
-      currency: 'USD',
+    expect(result.money).toMatchObject({
+      amount: 0.5,
+      currency: 'CNY',
       approximate: false,
-      kind: 'actual-cost',
     });
   });
 
@@ -272,7 +271,7 @@ describe('resolveTurnCost', () => {
     });
   });
 
-  it('codex provider SDK fallback applies the 15% multiplier once', () => {
+  it('does not apply a Gateway discount to provider SDK cost facts', () => {
     const result = resolveTurnCost({
       rawModel: 'codex/gpt-5.5',
       tokens: {
@@ -285,7 +284,7 @@ describe('resolveTurnCost', () => {
       pricing: null,
       context: PROVIDER_API,
     });
-    expect(result.money?.amount).toBe(1.5);
+    expect(result.money?.amount).toBe(10);
   });
 
   it('subscription routes and explicit subscription model prefixes never become actual cost', () => {
@@ -320,10 +319,7 @@ describe('resolveTurnCost', () => {
 
 describe('resolveClaudeTurnCostSinks', () => {
   it('sums structured per-model money using one billing route', () => {
-    const pricing = catalog(
-      quote('claude-opus-4-8', 5, 25),
-      quote('gpt-5.5', 2, 8),
-    );
+    const pricing = catalog(quote('claude-opus-4-8', 5, 25), quote('gpt-5.5', 2, 8));
     const result = resolveClaudeTurnCostSinks(
       [
         delta('claude-opus-4-8[1m]', { inputTokensDelta: 1_000_000 }),
@@ -337,17 +333,15 @@ describe('resolveClaudeTurnCostSinks', () => {
     expect(result.perModel.map((item) => item.source)).toEqual(['gateway', 'gateway']);
   });
 
-  it('skips the USD SDK fallback under a non-USD catalog — no reliable price, no money', () => {
-    const pricing = catalog(
-      quote('claude-opus-4-8', 5, 25, { currency: 'CNY' }),
-    );
+  it('keeps quoted CN Gateway segments and omits unquoted SDK USD amounts', () => {
+    const pricing = catalog(quote('claude-opus-4-8', 5, 25, { currency: 'CNY' }));
     const result = resolveClaudeTurnCostSinks(
       [
         delta('claude-opus-4-8', { inputTokensDelta: 1_000_000 }),
         delta('unquoted-model', { costUsdDelta: 2 }),
       ],
       pricing,
-      XD_GATEWAY,
+      XD_GATEWAY_CN,
     );
     expect(result.turnMoney).toMatchObject({
       amount: 5,
@@ -358,10 +352,7 @@ describe('resolveClaudeTurnCostSinks', () => {
       expect.objectContaining({ currency: 'CNY', amount: 5 }),
       null,
     ]);
-    expect(result.perModel.map((item) => item.source)).toEqual([
-      'gateway',
-      'sdk-fallback',
-    ]);
+    expect(result.perModel.map((item) => item.source)).toEqual(['gateway', 'sdk-fallback']);
   });
 
   it('returns null total when the route is subscription-only', () => {
@@ -380,12 +371,15 @@ describe('resolveClaudeTurnCostSinks', () => {
 
 describe('subscription value and usage details', () => {
   it('estimates Anthropic subscription value from USD reference pricing', () => {
-    const value = estimateClaudeSubscriptionTurnValue([
-      resolvedModel('claude-opus-4-8', {
-        inputTokens: 1_000_000,
-        outputTokens: 200_000,
-      }),
-    ]);
+    const value = estimateClaudeSubscriptionTurnValue(
+      [
+        resolvedModel('claude-opus-4-8', {
+          inputTokens: 1_000_000,
+          outputTokens: 200_000,
+        }),
+      ],
+      'global',
+    );
     expect(value).toMatchObject({
       amount: 10,
       currency: 'USD',
@@ -395,18 +389,19 @@ describe('subscription value and usage details', () => {
   });
 
   it('does not estimate non-Anthropic, already-costed, unknown, or zero-token entries', () => {
-    expect(estimateClaudeSubscriptionTurnValue([
-      resolvedModel('gpt-5.5', { inputTokens: 1_000_000 }),
-      resolvedModel(
-        'claude-opus-4-8',
-        { inputTokens: 1_000_000 },
-        usdMoney(1),
+    expect(
+      estimateClaudeSubscriptionTurnValue(
+        [
+          resolvedModel('gpt-5.5', { inputTokens: 1_000_000 }),
+          resolvedModel('claude-opus-4-8', { inputTokens: 1_000_000 }, usdMoney(1)),
+          resolvedModel('claude-unknown-9', { inputTokens: 1_000_000 }),
+        ],
+        'global',
       ),
-      resolvedModel('claude-unknown-9', { inputTokens: 1_000_000 }),
-    ])).toBeNull();
-    expect(estimateClaudeSubscriptionTurnValue(
-      [resolvedModel('claude-opus-4-8')],
-    )).toBeNull();
+    ).toBeNull();
+    expect(
+      estimateClaudeSubscriptionTurnValue([resolvedModel('claude-opus-4-8')], 'global'),
+    ).toBeNull();
   });
 
   it('builds token totals and structured per-model costs from model deltas', () => {

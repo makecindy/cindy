@@ -151,6 +151,11 @@ export interface RoutingDescriptor {
   requestPath?: string;
   /** 鉴权策略（见 AuthStrategy）。 */
   authStrategy: AuthStrategy;
+  /**
+   * 配置保留用于展示/修复，但运行时不得向该上游路由。用于把升级前不再满足安全边界的
+   * 历史配置留在设置页，同时让所有路由解析 fail closed。
+   */
+  disabled?: boolean;
   /** 转发上游前还原 model id（如剥掉 `codex/` 前缀）。缺省 = 原样。 */
   modelIdRewrite?: { stripPrefix: string };
   /** 转发上游前需删除的请求头（如 gateway 路由删 `anthropic-beta`）。 */
@@ -279,6 +284,16 @@ export interface CatalogModel {
    * 新增模型缺省 = 默认开,符合「未自定义用户随版本吃到新默认」(CLAUDE.md 规则 20)。
    */
   defaultEnabled?: boolean;
+  /**
+   * **视图层字段**:该 (供应商, 模型) 已被用户「停用」(准入关,与 `defaultEnabled` 的
+   * 「显示」轴正交)。由 `buildRegistry` 按 host 注入的 ModelDisableOverrides 填充,
+   * 目录数据本身**不携带**本字段,也不参与 `modelSignature` 一致性校验。
+   *
+   * 语义:停用 = 不可被任何新路由选中(选择器 / worker 创建 / MCP 点名 / IM 兜底),
+   * 由 modelList.ts 的标准派生统一过滤;已在运行的会话不受影响(keepSelected 豁免)。
+   * 与「隐藏」(defaultEnabled/visibility override,仅陈列过滤、点名与兜底仍可用)不同。
+   */
+  disabled?: boolean;
 }
 
 /** 供应商定义。 */
@@ -318,8 +333,10 @@ export interface Provider {
    * agent runtime,由主机图像通道直调)。与聊天模型同一目录同一热更机制:
    * 消费方为意识 cindy 槽(白名单 + 详情页下拉)。
    * 可选字段,additions-only,老版本 App 忽略之。
+   * `disabled` 是视图层字段(与 CatalogModel.disabled 同语义):buildRegistry 按用户
+   * 停用 override 烘焙,设置页据此渲染专属媒体条目的停用状态;目录数据本身不携带。
    */
-  imageModels?: { id: string; name: string }[];
+  imageModels?: { id: string; name: string; disabled?: boolean }[];
   /**
    * 图像能力的默认选型(与 imageModels 配套;值必须是 imageModels 里的 id):
    * - standard:未指定任何偏好时的默认模型(意识 cindy 槽"默认"档的真身);
@@ -332,8 +349,9 @@ export interface Provider {
    * 该供应商提供的**视频生成/编辑模型**清单(与 imageModels 同地位:
    * 不挂 agent,由主机视频通道直调,id 即 video provider 层的 alias)。
    * 消费方为意识 cindy 槽(白名单 + 详情页下拉)。可选,additions-only。
+   * `disabled` 同 imageModels:视图层停用标志,buildRegistry 烘焙。
    */
-  videoModels?: { id: string; name: string }[];
+  videoModels?: { id: string; name: string; disabled?: boolean }[];
   /**
    * 视频能力的默认选型(与 videoModels 配套;值必须是 videoModels 里的 id;
    * 语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。

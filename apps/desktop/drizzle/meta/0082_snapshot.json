@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4561e515-1e31-4e69-b212-48124838769d",
+  "id": "0979ace1-4d1d-4459-9bfa-d9c7eaebcf09",
   "prevId": "78f061ed-c715-452e-928f-33871745c4d4",
   "tables": {
     "account_usage_snapshots": {
@@ -2041,13 +2041,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "active_claim_fired_at": {
-          "name": "active_claim_fired_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "last_finished_at": {
           "name": "last_finished_at",
           "type": "integer",
@@ -3113,6 +3106,574 @@
         }
       },
       "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "wechat_file_attachments": {
+      "name": "wechat_file_attachments",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "binding_epoch": {
+          "name": "binding_epoch",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "task_id": {
+          "name": "task_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "abs_path": {
+          "name": "abs_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "original_name": {
+          "name": "original_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mime_type": {
+          "name": "mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "bytes": {
+          "name": "bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'staged'"
+        },
+        "promoted_at": {
+          "name": "promoted_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_wechat_file_attachments_task": {
+          "name": "idx_wechat_file_attachments_task",
+          "columns": [
+            "binding_epoch",
+            "task_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "wechat_file_attachments_binding_epoch_wechat_sync_state_binding_epoch_fk": {
+          "name": "wechat_file_attachments_binding_epoch_wechat_sync_state_binding_epoch_fk",
+          "tableFrom": "wechat_file_attachments",
+          "tableTo": "wechat_sync_state",
+          "columnsFrom": [
+            "binding_epoch"
+          ],
+          "columnsTo": [
+            "binding_epoch"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "wechat_file_attachments_task_id_wechat_inbox_id_fk": {
+          "name": "wechat_file_attachments_task_id_wechat_inbox_id_fk",
+          "tableFrom": "wechat_file_attachments",
+          "tableTo": "wechat_inbox",
+          "columnsFrom": [
+            "task_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "wechat_file_attachments_session_id_sessions_id_fk": {
+          "name": "wechat_file_attachments_session_id_sessions_id_fk",
+          "tableFrom": "wechat_file_attachments",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "wechat_inbox": {
+      "name": "wechat_inbox",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "binding_epoch": {
+          "name": "binding_epoch",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "platform_message_id": {
+          "name": "platform_message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "platform_seq": {
+          "name": "platform_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "peer_id": {
+          "name": "peer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "received_at": {
+          "name": "received_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "platform_created_at": {
+          "name": "platform_created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "lease_until": {
+          "name": "lease_until",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "conversation_epoch": {
+          "name": "conversation_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "payload_json": {
+          "name": "payload_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "context_nonce": {
+          "name": "context_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "context_ciphertext": {
+          "name": "context_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "context_tag": {
+          "name": "context_tag",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "last_error_code": {
+          "name": "last_error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "uniq_wechat_inbox_platform_message": {
+          "name": "uniq_wechat_inbox_platform_message",
+          "columns": [
+            "binding_epoch",
+            "platform_message_id"
+          ],
+          "isUnique": true
+        },
+        "idx_wechat_inbox_queue": {
+          "name": "idx_wechat_inbox_queue",
+          "columns": [
+            "binding_epoch",
+            "status",
+            "received_at"
+          ],
+          "isUnique": false
+        },
+        "idx_wechat_inbox_lease": {
+          "name": "idx_wechat_inbox_lease",
+          "columns": [
+            "binding_epoch",
+            "lease_until"
+          ],
+          "isUnique": false
+        },
+        "idx_wechat_inbox_conversation": {
+          "name": "idx_wechat_inbox_conversation",
+          "columns": [
+            "binding_epoch",
+            "peer_id",
+            "conversation_epoch"
+          ],
+          "isUnique": false
+        },
+        "uniq_wechat_inbox_running_session": {
+          "name": "uniq_wechat_inbox_running_session",
+          "columns": [
+            "binding_epoch",
+            "session_id"
+          ],
+          "isUnique": true,
+          "where": "\"wechat_inbox\".\"session_id\" IS NOT NULL AND \"wechat_inbox\".\"status\" IN ('dispatching', 'accepted_running', 'waiting_desktop', 'delivery_pending')"
+        }
+      },
+      "foreignKeys": {
+        "wechat_inbox_binding_epoch_wechat_sync_state_binding_epoch_fk": {
+          "name": "wechat_inbox_binding_epoch_wechat_sync_state_binding_epoch_fk",
+          "tableFrom": "wechat_inbox",
+          "tableTo": "wechat_sync_state",
+          "columnsFrom": [
+            "binding_epoch"
+          ],
+          "columnsTo": [
+            "binding_epoch"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "wechat_inbox_session_id_sessions_id_fk": {
+          "name": "wechat_inbox_session_id_sessions_id_fk",
+          "tableFrom": "wechat_inbox",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "wechat_outbox": {
+      "name": "wechat_outbox",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "binding_epoch": {
+          "name": "binding_epoch",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "task_id": {
+          "name": "task_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "chunk_index": {
+          "name": "chunk_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "text": {
+          "name": "text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "media_json": {
+          "name": "media_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "next_retry_at": {
+          "name": "next_retry_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "delivered_at": {
+          "name": "delivered_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "uniq_wechat_outbox_client_id": {
+          "name": "uniq_wechat_outbox_client_id",
+          "columns": [
+            "binding_epoch",
+            "client_id"
+          ],
+          "isUnique": true
+        },
+        "idx_wechat_outbox_delivery": {
+          "name": "idx_wechat_outbox_delivery",
+          "columns": [
+            "binding_epoch",
+            "status",
+            "next_retry_at"
+          ],
+          "isUnique": false
+        },
+        "idx_wechat_outbox_task": {
+          "name": "idx_wechat_outbox_task",
+          "columns": [
+            "binding_epoch",
+            "task_id",
+            "chunk_index"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "wechat_outbox_binding_epoch_wechat_sync_state_binding_epoch_fk": {
+          "name": "wechat_outbox_binding_epoch_wechat_sync_state_binding_epoch_fk",
+          "tableFrom": "wechat_outbox",
+          "tableTo": "wechat_sync_state",
+          "columnsFrom": [
+            "binding_epoch"
+          ],
+          "columnsTo": [
+            "binding_epoch"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "wechat_outbox_task_id_wechat_inbox_id_fk": {
+          "name": "wechat_outbox_task_id_wechat_inbox_id_fk",
+          "tableFrom": "wechat_outbox",
+          "tableTo": "wechat_inbox",
+          "columnsFrom": [
+            "task_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "wechat_sync_state": {
+      "name": "wechat_sync_state",
+      "columns": {
+        "binding_epoch": {
+          "name": "binding_epoch",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "sync_cursor": {
+          "name": "sync_cursor",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "''"
+        },
+        "last_poll_at": {
+          "name": "last_poll_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_error_code": {
+          "name": "last_error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "uniq_wechat_sync_active": {
+          "name": "uniq_wechat_sync_active",
+          "columns": [
+            "is_active"
+          ],
+          "isUnique": true,
+          "where": "\"wechat_sync_state\".\"is_active\" = 1"
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},

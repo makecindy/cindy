@@ -678,6 +678,19 @@ describe('interaction shared model', () => {
     });
   });
 
+  it.each([
+    'AUTH_NETWORK',
+    'AUTH_SERVICE_UNAVAILABLE',
+  ] as const)('preserves remote OAuth setup error %s', (errorCode) => {
+    const presentation = buildRemotePluginSetupPresentation({
+      kind: 'plugin_setup',
+      requestId: 's1',
+      steps: [{ id: 'oauth', title: 'OAuth', phase: 'failed', errorCode }],
+    });
+
+    expect(presentation.groups[0]?.steps[0]?.errorCode).toBe(errorCode);
+  });
+
   it('collapses unknown plugin setup enums instead of passing them through to copy lookups', () => {
     const presentation = buildRemotePluginSetupPresentation({
       kind: 'plugin_setup',

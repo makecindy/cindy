@@ -5,7 +5,11 @@
     "REMOTE_WORKDIR_INVALID": "The remote project path is invalid. Choose the project directory again.",
     "REMOTE_WORKDIR_NOT_FOUND": "The remote project directory no longer exists. Choose it again.",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "The remote project path is not a folder. Choose a project directory.",
-    "REMOTE_WORKDIR_UNAVAILABLE": "The remote project directory is unavailable. Reconnect the network drive and try again."
+    "REMOTE_WORKDIR_UNAVAILABLE": "The remote project directory is unavailable. Reconnect the network drive and try again.",
+    "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "The target model or source needs a different remote route — close and recreate the remote session to apply.",
+    "REMOTE_PROVIDER_UPDATING": "Provider credentials are being updated — retry in a moment",
+    "REMOTE_PROVIDER_UNSUPPORTED": "This provider is not supported in SSH remote sessions — pick another source",
+    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai subscription is not connected — connect it first or pick a gateway model"
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
@@ -48,7 +52,7 @@
   },
   "agentIsland": {
     "native": {
-      "newConversationTitle": "New Maker",
+      "newConversationTitle": "New Chat",
       "newConversationHint": "Start a new conversation",
       "muteSound": "Mute Agent Island",
       "enableSound": "Enable Agent Island sound",
@@ -61,6 +65,7 @@
       "input": "Input",
       "done": "Done",
       "running": "Running",
+      "networkReconnecting": "({{attempt}}/{{maxAttempts}}) Connection interrupted — reconnecting…",
       "updatingTasks": "Updating tasks",
       "awaitingPermission": "Awaiting permission",
       "awaitingQuestion": "Awaiting your reply",
@@ -110,6 +115,7 @@
       "notifications": "Notifications",
       "agentIsland": "Agent Island",
       "collaboration": "Collaboration",
+      "agentResource": "Agent Resource Usage",
       "gitSafety": "Git Safety",
       "language": "Language",
       "experimental": "Experimental",
@@ -268,7 +274,21 @@
         },
         "identityFile": "Identity file path",
         "cancel": "Cancel",
-        "submit": "Add machine"
+        "submit": "Add machine",
+        "agentProxy": "Route agent traffic via proxy",
+        "agentProxyTip": "Send remote codex / Claude Code model traffic through a proxy: either a Cindy-managed SSH tunnel back to your local proxy, or a remote-reachable proxy URL you provide",
+        "agentProxyModeTunnel": "Cindy-managed tunnel",
+        "agentProxyModeTunnelDesc": "Dedicated SSH tunnel back to your local proxy, fixed remote port, auto-reconnects",
+        "agentProxyModeEnv": "Bring your own proxy (env vars only)",
+        "agentProxyModeEnvDesc": "Provide a proxy URL reachable from the remote; you maintain the tunnel/reachability",
+        "agentProxyAddr": "Local proxy address",
+        "agentProxyHint": "A fixed port on the remote 127.0.0.1 is tunneled over a dedicated, Cindy-managed SSH connection back to your local proxy (e.g. Clash on 7890). {{appName}} does not provide a proxy — only the tunnel; the remote agent's HTTPS_PROXY is pinned to the fixed port and never drifts on reconnect. Changing this restarts the remote codex daemon once.",
+        "agentProxyAddrInvalid": "Expected host:port, e.g. 127.0.0.1:7890",
+        "agentProxyRemotePort": "Fixed remote port",
+        "agentProxyRemotePortInvalid": "Port must be an integer between 1 and 65535",
+        "agentProxyUrl": "Remote-reachable proxy URL",
+        "agentProxyUrlHint": "Resolved on the remote host: a proxy on the remote itself (e.g. your own autossh -R tunnel), a LAN proxy, etc. Supports http / https / socks5.",
+        "agentProxyUrlInvalid": "Must be an http(s):// or socks5:// URL without spaces or quotes"
       },
       "detail": {
         "agentSetupTitle": "Agent setup",
@@ -290,7 +310,15 @@
           "run": "Run",
           "syncAuth": "Sync auth",
           "syncAuthTip": "Copy your local Codex credentials to this remote so you don't need to log in again there"
-        }
+        },
+        "agentProxyTitle": "Agent proxy",
+        "agentProxyActive": "Remote 127.0.0.1:{{port}} → local {{target}} · established",
+        "agentProxyPending": "Establishing tunnel → local {{target}}",
+        "agentProxyWaiting": "Host not connected; resumes automatically on reconnect → local {{target}}",
+        "agentProxyError": "Proxy setup failed: {{message}}",
+        "agentProxyPortBusy": "Remote port {{port}} is busy; waiting for release and retrying… (change the port in settings if it stays busy)",
+        "agentProxyEnvInfo": "Env vars injected → {{url}} (you maintain the route)",
+        "agentProxyEnvPending": "Waiting to apply env vars → {{url}} (takes effect automatically once the host connects)"
       },
       "startSession": {
         "title": "Start a remote Codex session",
@@ -308,9 +336,9 @@
         "confirmTitle": "Push Codex credentials to remote?",
         "confirmPush": "Push",
         "confirmOverwrite": "Overwrite",
-        "descFirstPush": "This will install your local Codex credentials at ~/.codex/auth.json on {{hostId}}.",
-        "descOverwrite": "This will overwrite the existing Codex login on {{hostId}}.",
-        "descOverwriteWithAge": "This will overwrite the existing Codex login on {{hostId}} (last updated {{when}}).",
+        "descFirstPush": "This will install your local Codex credentials in Cindy Codex home on {{hostId}} (~/.xdt-server/v1/codex-home/auth.json).",
+        "descOverwrite": "This will overwrite the existing Codex login in Cindy Codex home on {{hostId}}.",
+        "descOverwriteWithAge": "This will overwrite the existing Codex login in Cindy Codex home on {{hostId}} (last updated {{when}}).",
         "warnOverwrite": "The current remote login will be lost. If someone is using Codex on that machine right now, they will be logged out.",
         "warnShared": "Anyone who can SSH into {{hostId}} will be able to read this file and use your OpenAI account.",
         "daysAgo": "{{n}} day(s) ago",
@@ -356,10 +384,20 @@
       "localThemes": {
         "title": "Local themes",
         "export": "Create local copy",
+        "import": "Import VSCode / Obsidian theme",
         "openDir": "Open themes folder",
         "refresh": "Refresh",
         "exportSuccess": "Created {{file}}. Replace the example image paths, save, then click \"Refresh\".",
         "exportFailed": "Export failed: {{error}}",
+        "importSuccess": "Imported {{name}} ({{themeCount}} variant(s)). Pick it in the theme list above.",
+        "importPartial": "Imported {{name}} ({{themeCount}} variant(s)). {{skipped}} semantic colors stay unchanged per spec, {{unresolved}} values could not be read, and {{derived}} roles were approximated from nearby colors.",
+        "importFailed": "Import failed: {{error}}",
+        "importUnsupported": "This file is not a recognizable VSCode or Obsidian theme.",
+        "importUsesInclude": "This VSCode theme inherits colors via \"include\" and cannot be imported standalone.",
+        "importNotAFile": "Select a file, not a folder.",
+        "importTooLarge": "File is too large to import as a theme.",
+        "importWriteError": "Could not save the theme. Check disk space and permissions.",
+        "importInternalError": "The file could not be read or processed. Try selecting it again.",
         "openDirFailed": "Failed to open folder: {{error}}",
         "refreshed": "Local themes refreshed"
       },
@@ -482,6 +520,14 @@
       "soundPreviewAria": "Preview {{event}} sound",
       "skinAnimationAria": "Switch {{skin}} animation preview",
       "skins": {
+        "cindy": {
+          "name": "Cindy",
+          "description": "Cindy herself, keeping an eye on every run."
+        },
+        "blackcat": {
+          "name": "Black Cat",
+          "description": "A composed black cat whose yellow eyes stay sharp against the dark notch."
+        },
         "pululu": {
           "name": "Pululu",
           "description": "TapFamily's calm little guardian: round-headed, sincere, and ready to steady messy tasks."
@@ -509,6 +555,10 @@
         "muffin": {
           "name": "Muffin",
           "description": "A soft blue-gray companion that keeps running tasks feeling light and playful."
+        },
+        "erika": {
+          "name": "Erika",
+          "description": "Erika with her crescent hairpin — warm brown eyes, quietly focused on long runs."
         }
       },
       "soundEvents": {
@@ -549,11 +599,11 @@
       "fallbackName": "User",
       "avatarAlt": "{{name}} avatar",
       "local": {
-        "exitFailed": "Failed to exit local mode, please try again",
-        "name": "Local mode",
+        "exitFailed": "Failed to exit the not-signed-in state, please try again",
+        "name": "Not signed in",
         "description": "Data stays on this device without Cindy account services",
         "signIn": "Sign in to Cindy",
-        "exit": "Exit local mode"
+        "exit": "Exit the not-signed-in state"
       },
       "copyUserId": {
         "action": "Copy user ID",
@@ -654,6 +704,12 @@
       "analyticsSaveFailed": "Failed to save usage statistics settings",
       "debugLogLabel": "Debug logs",
       "debugLogDescription": "When enabled, emits verbose debug logs: main/maker logger raised to debug level; new Claude Code sessions also log API request URL/status/latency, Node-level DNS/TCP/TLS handshake timing, and SDK internals. Output is large — turn off after troubleshooting. Always on in dev mode.",
+      "legal": {
+        "termsOfServiceLabel": "Terms of Service",
+        "privacyPolicyLabel": "Privacy Policy",
+        "viewDocument": "View {{document}}",
+        "openFailed": "Unable to open the document. Check your system browser settings."
+      },
       "social": {
         "title": "Connect with Cindy",
         "discordLabel": "Discord",
@@ -717,7 +773,7 @@
       "serviceSource": {
         "label": "Voice service",
         "hint": "Uses the Cindy voice service by default. You can instead connect a realtime ASR service with separate voice credentials.",
-        "localHint": "Local mode does not use Cindy account services; connect a realtime ASR service with separate voice credentials.",
+        "localHint": "Cindy account services are unavailable while not signed in; connect a realtime ASR service with separate voice credentials.",
         "ariaLabel": "Voice service source",
         "options": {
           "cindy": "Cindy official service",
@@ -837,11 +893,16 @@
         "recording": "Press a new shortcut",
         "none": "Not set",
         "clear": "Clear",
+        "fnNeedsInputMonitoring": "Fn-based shortcuts need the shortcut listener permission; other shortcuts record normally.",
+        "awaitingInputMonitoring": "This shortcut is waiting for the shortcut listener permission and takes effect once granted.",
         "toast": {
           "needsModifier": "Use a key combo, a standalone F1-F24 key, or Left/Right Command, Option, Control, Fn.",
           "fnUnavailable": "Use a key combo, a standalone F1-F24 key, or Left/Right Command, Option, Control, Fn.",
           "systemReserved": "This shortcut conflicts with a system or common editing shortcut",
-          "registrationFailed": "Could not register this shortcut: {{error}}"
+          "registrationFailed": "Could not register this shortcut: {{error}}",
+          "recordingFailed": "Could not start shortcut recording: {{error}}",
+          "listenerUnavailable": "Could not start the shortcut listener — restart Cindy and try again",
+          "pendingInputMonitoring": "Shortcut saved — it takes effect after you grant the shortcut listener permission"
         }
       },
       "permissions": {
@@ -893,6 +954,11 @@
             "hint": "When you manually correct dictated words, candidates are recorded and promoted after repeated evidence.",
             "externalAppMacOnly": "Auto-learning after pasting into external apps is currently macOS-only. In-app voice input is unaffected.",
             "ariaLabel": "Toggle dictionary auto-learning"
+          },
+          "deviceSync": {
+            "label": "Sync across my devices",
+            "hint": "Your dictionary merges automatically between computers that are online at the same time. Entries are sent device to device and never stored on a server.",
+            "ariaLabel": "Toggle dictionary sync across devices"
           },
           "add": "New term",
           "save": "Save",
@@ -1131,14 +1197,18 @@
       "title": "Providers",
       "subtitle": "The source used when picking a model. Each source offers its own models and billing, switchable per conversation.",
       "pill": {
-        "connected": "Connected"
+        "connected": "Connected",
+        "suspended": "Disabled"
       },
       "button": {
         "authorize": "Authorize",
         "logout": "Sign out",
         "connect": "Connect",
         "disconnect": "Disconnect",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "retry": "Retry model discovery",
+        "retrying": "Retrying discovery…",
+        "enableProvider": "Enable Provider"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -1206,6 +1276,8 @@
           "wireProtocol": "Upstream protocol",
           "baseUrl": "Base URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
+          "requestPath": "Exact request path (optional)",
+          "requestPathHelp": "Leave empty to use the standard path for the selected protocol. Enter a path beginning with / only when the provider uses a non-standard inference endpoint.",
           "apiKey": "API key",
           "apiKeyPlaceholder": "API key",
           "apiKeyEditPlaceholder": "Unchanged (saved)",
@@ -1237,8 +1309,9 @@
           "nameRequired": "Display name is required",
           "runtimeRequired": "Configure at least one runtime (its base URL and models)",
           "baseUrlInvalid": "Base URL must be a valid http(s) address",
+          "requestPathInvalid": "Begin the exact request path with a single /. Do not use fragments or . and .. path segments; percent-encode spaces and unsafe characters.",
           "modelRequired": "Add at least one model",
-          "oauthInvalid": "Incomplete OAuth config: all four fields are required and both endpoints must be https URLs"
+          "oauthInvalid": "Incomplete OAuth config: all fields are required and both endpoints must be secure https URLs"
         },
         "toast": {
           "created": "Provider added",
@@ -1280,9 +1353,17 @@
           "label": "Authentication",
           "apiKey": "API key",
           "oauth": "OAuth subscription",
-          "oauthHelp": "For subscription providers offering OAuth sign-in. After saving, click \"Authorize\" in the provider list to sign in via browser. Credentials are stored encrypted on this device only.",
+          "none": "No authentication",
+          "noneHelp": "For local or trusted self-hosted proxies. Cindy removes the CLI's subscription credentials and account headers before forwarding requests.",
+          "oauthHelp": "For providers offering OAuth sign-in. Choose a browser callback or device code flow, then authorize from the provider list. Credentials are stored encrypted on this device only.",
+          "flowLabel": "OAuth flow",
+          "flow": {
+            "authorization-code": "Browser callback (PKCE)",
+            "device-code": "Device code"
+          },
           "fields": {
             "authorizeUrl": "Authorize URL",
+            "deviceAuthorizationUrl": "Device authorization URL",
             "tokenUrl": "Token URL",
             "clientId": "Client ID",
             "scopes": "Scopes (space-separated)"
@@ -1298,7 +1379,6 @@
         "available": "Shown in Model Picker",
         "modelCount_one": "{{count}} model",
         "modelCount_other": "{{count}} models",
-        "agentEnabledCount": "{{agent}} {{on}}/{{total}}",
         "enableAll": "Show All",
         "disableAll": "Hide All",
         "subscription": "Subscription",
@@ -1309,9 +1389,18 @@
         "capabilityNote": "Not available in {{agent}}",
         "divergedChip": "Hidden in {{agent}}",
         "refreshAria": "Refresh model list (additions only)",
+        "refreshBuiltinAria": "Refresh Model List",
+        "refreshingAria": "Refreshing model list…",
+        "refreshDone": "Model list refreshed",
         "refreshAdded": "Found {{count}} new models",
         "refreshNoNew": "Model list is up to date — nothing new",
-        "refreshFailed": "Failed to refresh the model list. Please try again later"
+        "refreshFailed": "Model list couldn’t be refreshed — try again later",
+        "disableModel": "Disable This Model",
+        "enableModel": "Enable This Model",
+        "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
+        "accessWriteFailed": "Couldn't save the change. Please try again.",
+        "disabledGroup": "Disabled",
+        "enableAllModels": "Enable All"
       },
       "genericOAuth": {
         "subtitle": "Subscription sign-in (OAuth)",
@@ -1333,7 +1422,29 @@
         "singleAgentNote": "{{agent}} only",
         "emptyModels": "Models are discovered automatically after you authorize",
         "emptyList": "Click \"Add provider\" below to connect your first model source",
-        "emptyModelsConnected": "Connected — discovering available models. If it stays empty, try again shortly."
+        "emptyModelsConnected": "Connected — discovering available models. If it stays empty, try again shortly.",
+        "discoveryFailed": {
+          "network": "Can't reach this provider, so its model list is unavailable. Check your network or proxy settings, then retry.",
+          "timeout": "Connection to this provider timed out, so its model list is unavailable. Check your network, then retry.",
+          "upstream": "This provider can't return its model list right now. Try again later.",
+          "regionBlocked": "This provider doesn't offer service in your current region, so its model list is unavailable. You can use a different provider instead.",
+          "unauthorized": "This provider rejected the current authorization, so its model list is unavailable. Disconnect and connect again.",
+          "forbidden": "This provider refused the request, so its model list is unavailable. If you're on a proxy or VPN, switch exits and retry.",
+          "rejected": "This provider refused the request, so its model list is unavailable. Try again later, or use a different provider.",
+          "empty": "This provider returned no usable models. Check your account's access, then retry."
+        },
+        "discoveryFailedStale": {
+          "network": "Can't reach this provider. The list below is from the last successful refresh. Check your network or proxy settings, then retry.",
+          "timeout": "Connection to this provider timed out. The list below is from the last successful refresh. Check your network, then retry.",
+          "upstream": "This provider can't return its model list right now. The list below is from the last successful refresh. Try again later.",
+          "regionBlocked": "This provider doesn't offer service in your current region. The list below is from the last successful refresh. You can use a different provider instead.",
+          "unauthorized": "This provider rejected the current authorization. The list below is from the last successful refresh. Disconnect and connect again.",
+          "forbidden": "This provider refused the request. The list below is from the last successful refresh. If you're on a proxy or VPN, switch exits and retry.",
+          "rejected": "This provider refused the request. The list below is from the last successful refresh. Try again later, or use a different provider.",
+          "empty": "This provider returned no usable models this time. The list below is from the last successful refresh. Check your account's access, then retry."
+        },
+        "suspendedBanner": "This provider is disabled. Credentials are kept; enable it to use its models again.",
+        "moreActionsAria": "More Actions"
       },
       "detect": {
         "groupLabel": "Detected on this device",
@@ -1350,14 +1461,17 @@
         "stepModels": "Choose models",
         "searchPlaceholder": "Search providers…",
         "groupSubscription": "Subscription sign-in · recommended",
-        "groupApiKey": "API key providers · presets update with the catalog",
+        "groupApiKey": "API and self-hosted proxies · presets update with the catalog",
         "groupCustom": "Custom",
         "metaOAuth": "Subscription (OAuth)",
         "metaApiKey": "API key",
+        "metaNoAuth": "Local / self-hosted · no authentication",
         "customTitle": "Custom endpoint",
         "customMeta": "Connect any OpenAI / Anthropic compatible source",
         "pickHint": "The sign-in method is defined by each provider; OAuth endpoints and base URLs come from presets — nothing to fill in by hand.",
         "oauthDesc": "Authorize your subscription in the browser — no API key needed",
+        "deviceOAuthDesc": "Authorize on the provider's verification page with a one-time device code",
+        "authorizeInBrowser": "Authorize in browser",
         "authorizeWithDeviceCode": "Use device code",
         "preparingDeviceCode": "Preparing a device code…",
         "deviceCodePrompt": "Enter this one-time device code on the verification page:",
@@ -1371,10 +1485,16 @@
         "authorizeFailed": "Failed to authorize {{name}}. Please try again",
         "nameLabel": "Display name",
         "onlyAgentNote": "This provider only supports {{agent}}",
+        "endpointLabel": "{{agent}} base URL",
+        "noAuthNote": "This proxy needs no client key; Cindy removes CLI subscription credentials before forwarding.",
         "bridgedNote": "Cindy bridge (Chat Completions)",
         "docsLink": "View setup docs",
         "fetching": "Verifying connection and fetching models…",
         "fetchFailed": "Couldn't fetch the model list — you can finish with the preset's recommended models and refresh later in details",
+        "manualModelHint": "No models were discovered. Enter the exact model ID exposed by this proxy.",
+        "manualModelLabel": "{{agent}} model ID",
+        "manualModelPlaceholder": "e.g. local-model",
+        "addManualModel": "Add model",
         "recommended": "Recommended",
         "modelsHint": "Checked models appear in the chat model picker and apply to every CLI where they're available; adjust anytime in provider details.",
         "noModelSelected": "Select at least one model",
@@ -1391,6 +1511,10 @@
         "badge": "Recommended",
         "desc": "Sign in to Cindy to enable the official Cindy AI service — all models work out of the box, no keys to manage.",
         "cta": "Sign in to Cindy"
+      },
+      "menu": {
+        "disableProvider": "Disable This Provider",
+        "enableProvider": "Enable This Provider"
       }
     },
     "experimental": {
@@ -1468,6 +1592,90 @@
       },
       "bind": "Bind"
     },
+    "wechatBot": {
+      "title": "Personal WeChat",
+      "description": "Scan to connect personal WeChat and work with {{appName}} from a private chat.",
+      "statusAria": "Personal WeChat status: {{status}}",
+      "status": {
+        "disconnected": "Not connected",
+        "authorizing": "Preparing authorization…",
+        "waitingConfirmation": "Waiting for WeChat…",
+        "connected": "Connected",
+        "reconnecting": "Reconnecting…",
+        "needsReauth": "Authorization required",
+        "disabled": "Unavailable",
+        "error": "Connection failed"
+      },
+      "intro": "After connecting, private messages sent to this WeChat connection enter Cindy on this computer. Tencent provides the authorization page, which may display OpenClaw.",
+      "errorNote": "The connection was not completed. Check your network and scan again. Cindy never stores plaintext credentials after a failed connection.",
+      "disabledNote": "Personal WeChat is paused in this version by the compatibility policy. Saved conversations and settings are not removed.",
+      "permission": {
+        "label": "Permission mode",
+        "hint": "Applies to new context after /new. Risky actions still require confirmation in Cindy Desktop.",
+        "fullAccessDisabled": "Personal WeChat does not support Full Access yet because actions that cannot be confirmed in WeChat must not run directly.",
+        "permissionModeDisabled": "Personal WeChat always uses Cindy Desktop's confirmation policy, so this permission mode is unavailable."
+      },
+      "authorization": {
+        "title": "Authorize WeChat",
+        "rebindTitle": "Connect a new Cindy to WeChat",
+        "description": "Tencent's webpage will open for authorization. After scanning, you can talk to Cindy from WeChat.",
+        "rebindDescription": "This WeChat account already has a connection. Continuing may replace its existing Cindy or OpenClaw connection.",
+        "confirm": "Authorize",
+        "cancel": "Cancel",
+        "steps": {
+          "1": "Select Authorize to open the WeChat binding page in your system browser.",
+          "2": "Scan with the WeChat app and confirm the connection in WeChat.",
+          "3": "Return to Cindy after binding; the connection status updates automatically.",
+          "4": "Tencent provides the authorization page, which may display OpenClaw."
+        }
+      },
+      "waiting": {
+        "heading": "Waiting for confirmation in WeChat",
+        "note": "Finish scanning and confirmation in your system browser. Cindy updates automatically when it succeeds, or you can cancel this attempt.",
+        "cancel": "Cancel authorization"
+      },
+      "bound": {
+        "heading": "Personal WeChat connected",
+        "attentionHeading": "Personal WeChat needs attention",
+        "notes": {
+          "disconnected": "The connection is saved but is not currently running.",
+          "authorizing": "Preparing a new WeChat authorization.",
+          "waiting_confirmation": "Waiting for scan confirmation in WeChat.",
+          "connected": "WeChat private messages go directly to Cindy on this computer and are not relayed through Cindy servers.",
+          "reconnecting": "This computer is restoring the WeChat connection. No new scan is needed.",
+          "needs_reauth": "The WeChat authorization expired or was replaced by another connection. Scan again.",
+          "disabled_by_policy": "The connection is paused by this version's compatibility policy; credentials and conversations remain saved.",
+          "error": "The connection is temporarily unavailable. Scan again or unbind and retry later."
+        }
+      },
+      "actions": {
+        "connect": "Connect WeChat",
+        "rebind": "Reconnect",
+        "unbind": "Unbind"
+      },
+      "workingDir": {
+        "title": "Working directory for new conversations",
+        "hint": "Used for the first WeChat conversation and after /new. Changing it does not move the current context.",
+        "managed": "Use a Cindy-managed directory",
+        "reset": "Restore default",
+        "unavailable": "The selected directory is unavailable. New conversations temporarily use a Cindy-managed directory."
+      },
+      "unbind": {
+        "title": "Unbind personal WeChat?",
+        "description": "Unbinding stops messaging, removes local WeChat credentials, and clears unfinished tasks. Existing Cindy conversations, history, and saved attachments remain.",
+        "confirm": "Unbind",
+        "cancel": "Cancel"
+      },
+      "toasts": {
+        "authorizeFailed": "Could not start WeChat authorization. Try again later.",
+        "cancelFailed": "Could not cancel WeChat authorization",
+        "unbound": "Personal WeChat unbound",
+        "unbindFailed": "Unbind failed. Try again later.",
+        "workingDirSaved": "Working directory for new WeChat conversations updated",
+        "workingDirReset": "New WeChat conversations now use the default directory",
+        "workingDirFailed": "Could not update the working directory. Select it again."
+      }
+    },
     "discordBot": {
       "title": "Discord Bot",
       "description": "Connect your own Discord bot so {{appName}} can work from Discord DMs.",
@@ -1534,6 +1742,134 @@
         "step4": {
           "title": "Copy your user ID",
           "body": "Enable Developer Mode in Discord user settings, right-click your own avatar, then choose Copy User ID."
+        }
+      }
+    },
+    "telegramBot": {
+      "title": "Telegram Bot",
+      "description": "Connect your own Telegram bot. The desktop connects to Telegram directly, so {{appName}} works from DMs and group chats.",
+      "statusAria": "Telegram bot status: {{status}}",
+      "status": {
+        "needsConfig": "Needs setup",
+        "connecting": "Connecting…",
+        "connected": "Connected",
+        "conflict": "In use by another device",
+        "error": "Connection failed"
+      },
+      "connected": {
+        "heading": "Telegram bot connected",
+        "note": "DM your bot or @mention it in a group and messages are routed to {{appName}} on this machine; recent group chatter is included as context.",
+        "botLabel": "Bot account",
+        "ownerLabel": "My user ID"
+      },
+      "tokenLabel": "Bot Token",
+      "tokenPlaceholder": "Paste the token from BotFather",
+      "ownerUserIdLabel": "My Telegram user ID",
+      "ownerUserIdPlaceholder": "Numeric ID (ask @userinfobot)",
+      "showToken": "Show token",
+      "hideToken": "Hide token",
+      "formHint": "The user ID is numeric; DM @userinfobot to look up your own ID.",
+      "connect": "Connect",
+      "connectingAction": "Connecting…",
+      "disconnect": "Unbind",
+      "disconnectingAction": "Unbinding…",
+      "disconnectAria": "Unbind Telegram bot",
+      "disconnectConfirm": {
+        "title": "Unbind Telegram Bot?",
+        "description": "Unbinding disconnects the bot and removes the locally saved Bot Token and Telegram user ID.",
+        "confirm": "Unbind",
+        "cancel": "Cancel"
+      },
+      "ownerNotice": {
+        "linked": "✅ All linked. Just send a message when you're ready.",
+        "disconnected": "🔌 Unlinked. Link again whenever you need me."
+      },
+      "guide": {
+        "title": "Setup guide",
+        "openBotFather": "Open BotFather ↗",
+        "step1": {
+          "title": "Create a bot",
+          "body": "Message @BotFather on Telegram, send /newbot and follow the prompts, then copy the generated Bot Token."
+        },
+        "step2": {
+          "title": "Find your user ID",
+          "body": "DM @userinfobot to get your numeric user ID; only messages from this ID are processed."
+        },
+        "step3": {
+          "title": "Group context (optional)",
+          "body": "After adding the bot to a group, send /setprivacy to BotFather and choose Disable (or make the bot a group admin) so it can see all group messages and build context; it only replies when you @mention it or reply to it."
+        },
+        "step4": {
+          "title": "Connect",
+          "body": "Fill in the token and user ID above and hit Connect. The desktop talks to Telegram directly — nothing goes through {{appName}} servers."
+        }
+      },
+      "commandMenu": {
+        "start": "Welcome and usage",
+        "new": "Start a new session",
+        "help": "Show command help",
+        "stop": "Stop the current task",
+        "session": "Recent sessions, pick one to continue",
+        "project": "Switch project workspace",
+        "model": "Show or switch the model",
+        "permission": "Show or switch the permission mode",
+        "ctr": "Remotely control a desktop session",
+        "exctr": "Exit remote control"
+      },
+      "behavior": {
+        "title": "Reactions & quoting",
+        "emojiLabel": "Emoji reactions",
+        "emojiOption": {
+          "off": "Off",
+          "minimal": "Basic",
+          "expressive": "Lively"
+        },
+        "emojiHint": {
+          "off": "No emoji reactions at all.",
+          "minimal": "👀 on receipt, 👍 on success, 👎 on failure.",
+          "expressive": "Finishes pick randomly from the full reaction set (positive/negative pools kept separate)."
+        },
+        "groupQuoteLabel": "Quote the question in groups",
+        "quoteOption": {
+          "off": "Never",
+          "first": "First reply",
+          "all": "Every reply"
+        },
+        "groupQuoteHint": {
+          "off": "Group answers are not attached to the question.",
+          "first": "The first reply of each answer quotes the question (recommended).",
+          "all": "Every message of the answer quotes the question."
+        },
+        "dmQuoteLabel": "Quote your message in DM",
+        "dmQuoteHint": {
+          "off": "DM answers are sent without quoting (default, cleaner).",
+          "first": "The first reply quotes the message you sent."
+        }
+      },
+      "persona": {
+        "title": "Persona",
+        "nameLabel": "Name",
+        "namePlaceholder": "Name your bot (synced to its Telegram profile)",
+        "soulLabel": "Soul (base persona)",
+        "soulPlaceholder": "Describe its character, tone, catchphrases, boundaries… Every reply carries this persona.",
+        "syncHint": "Write the name to the Telegram profile (no BotFather needed)",
+        "sync": {
+          "idle": "Sync profile",
+          "syncing": "Syncing…",
+          "done": "Synced ✓",
+          "failed": "Sync failed, try again later"
+        }
+      },
+      "groups": {
+        "title": "Group participation",
+        "hint": "Groups the bot has seen appear here. \"Active\" = it reads every message and decides on its own whether to chime in (each message costs tokens).",
+        "empty": "No groups yet. Add the bot to a group and it will appear here once someone speaks.",
+        "contactsOn": "People who speak in groups are auto-added to Smart Contacts (master switch is on).",
+        "contactsOff": "Smart Contacts is off — people who speak in groups won't be remembered automatically.",
+        "contactsEnable": "Turn on",
+        "mode": {
+          "mention": "@ only",
+          "always": "Active"
         }
       }
     },
@@ -1697,6 +2033,34 @@
       "idleRelease": "Idle Release (minutes)",
       "idleReleaseHint": "Set 0 to disable background auto-release; positive values release workers after this many idle minutes."
     },
+    "agentResource": {
+      "saveFailed": "Failed to save. Try again.",
+      "title": "Agent Resource Usage",
+      "description": "Limit how much system capacity Agent command-line work can consume, so parallel tests or builds don't freeze your machine. Defaults to full speed (no intervention). The concurrency limit applies immediately; priority lowering reaches running Agent processes within about 15 seconds; raising priority back to Normal and toolchain thread caps only apply to newly started Agent processes. Applies to local Agents only; Agents on remote (SSH) machines are not governed by these settings.",
+      "preset": "Profile",
+      "presets": {
+        "full": "Full Speed",
+        "balanced": "Balanced",
+        "background": "Background"
+      },
+      "presetHints": {
+        "full": "No limits (default). Agents use the machine at full speed; when switching back from another profile, Agents already running only fully recover after they restart.",
+        "balanced": "Command queueing + lower priority + toolchain thread caps: Agents keep working while foreground apps always come first.",
+        "background": "Lowest priority (efficiency cores on macOS) + a strict concurrency limit: quiet and responsive, but Agents run noticeably slower.",
+        "custom": "Custom combination. Adjust the fields below directly."
+      },
+      "maxConcurrent": "Concurrent Command Limit",
+      "maxConcurrentHint": "Maximum number of commands the Claude Code engine may run at once; extra commands wait in a queue. 0 means unlimited. Codex commands run inside their own sandbox without a per-command hook and are covered by the priority and thread-cap layers instead.",
+      "priority": "Process Priority",
+      "priorityHint": "Lower it so Agents only use idle capacity and foreground apps stay responsive. Raising it back only applies to newly started Agent processes.",
+      "priorityOptions": {
+        "normal": "Normal",
+        "low": "Low",
+        "lowest": "Lowest"
+      },
+      "capThreads": "Cap Toolchain Parallelism",
+      "capThreadsHint": "Injects environment variables such as VITEST_MAX_FORKS and MAKEFLAGS so a single test or build command can't take every CPU core. Variables you set yourself are never overridden."
+    },
     "computerUse": {
       "title": "Automation",
       "description": "Let agents use your computer and connected devices to get things done for you. Browser automation uses an isolated browser; Android automation uses ADB; computer automation relies on a local driver.",
@@ -1754,6 +2118,24 @@
           "adbNotFound": "ADB not detected. Enable Android automation to prepare platform-tools, or set a custom adb path.",
           "failed": "ADB status check failed: {{message}}",
           "unknownIssue": "ADB issue: {{issue}}"
+        },
+        "connectionGuide": {
+          "connect": {
+            "title": "How to connect an Android phone",
+            "adbNote": "Cindy prepares ADB automatically; you do not need to install the Android SDK. Custom ADB path is for advanced users.",
+            "step1": "Connect the phone to the computer with a USB cable that supports data transfer.",
+            "step2": "On the phone, open Settings → About phone and tap the build number repeatedly to enable Developer options.",
+            "step3": "Open Developer options and turn on USB debugging.",
+            "step4": "Keep the phone unlocked, return to Cindy, and click Recheck."
+          },
+          "unauthorized": {
+            "title": "Allow USB debugging",
+            "body": "On the phone, choose Allow in the USB debugging permission dialog. We recommend checking Always allow from this computer, then return to Cindy and click Recheck."
+          },
+          "offline": {
+            "title": "The device is offline",
+            "body": "Reconnect the USB cable, keep the phone unlocked, then return to Cindy and click Recheck."
+          }
         },
         "device": {
           "title": "Device",
@@ -2189,15 +2571,17 @@
       },
       "tips": {
         "cindy": "Cindy is the official shared bot — no credentials needed. Connect Slack and just @Cindy to hand off tasks.",
-        "personal": "Personal bots connect to Feishu / Discord with your own credentials — the bot is fully yours, but you create the app and fill in its config yourself.",
-        "personalFeishuOnly": "Personal bots connect to Feishu with your own credentials — the bot is fully yours, but you create the app and fill in its config yourself."
+        "personal": "Personal connections include WeChat scan authorization and your own Feishu / Discord / Telegram credentials. Each channel keeps independent new-conversation settings.",
+        "personalFeishuOnly": "Personal connections include WeChat scan authorization and your own Feishu credentials. Each channel keeps independent new-conversation settings."
       },
       "defaults": {
         "title": "New Conversation Configuration",
         "channelDescriptions": {
           "feishu": "New Feishu conversations use this Agent and model. Send /new in an existing DM to apply it.",
           "slack": "New Slack threads use this Agent and model.",
-          "discord": "New Discord conversations use this Agent and model. Send /new in an existing DM to apply it."
+          "discord": "New Discord conversations use this Agent and model. Send /new in an existing DM to apply it.",
+          "wechat": "New WeChat conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
+          "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it."
         },
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",
@@ -2313,7 +2697,7 @@
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
         "createWithCindy": "Create with Cindy",
-        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to read the full specification; do not start implementing yet. Begin by asking questions, focusing on one key decision at a time, and work with me to define the problem, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to package and install the plugin.",
+        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to get the handbook's table of contents, then read the relevant chapters via the section parameter (at minimum the sandbox red-lines and packaging chapters) before writing any code; do not start implementing yet. Begin by asking questions, focusing on one key decision at a time, and work with me to define the problem, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to package and install the plugin.",
         "installedTitle": "Installed Plugins",
         "installedExpand": "Show {{count}} more installed plugins",
         "installedCollapse": "Hide additional installed plugins",
@@ -2464,6 +2848,8 @@
         "cindyImageEdit": "Image editing (delegated to Cindy, its own images only)",
         "cindyVideoGenerate": "Video generation (delegated to Cindy)",
         "cindyVideoEdit": "Image-to-video (delegated to Cindy, reference images from its own media only)",
+        "cindyMediaDeposit": "Can save images, video or audio it holds into your media library",
+        "cindyMediaDepositDetail": "This lets AI work on material you paste or drop into the plugin. Saved items are recorded under this plugin, use at most {{quota}}, and are cleaned up when you uninstall it.",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
@@ -2681,7 +3067,7 @@
     },
     "contacts": {
       "title": "Smart Contacts",
-      "description": "A people and organization directory built for agents: cross-platform identity resolution (email / Feishu / Slack / GitHub id → who is this), relationship context, and dated event records. Agents collect entries as they work; low-confidence ones land in a pending queue for your review.",
+      "description": "A people and organization directory built for agents: cross-platform identity resolution (email / Feishu / Slack / GitHub id → who is this), relationship context, and dated event records. Agents collect entries as they work; low-confidence ones land in a pending queue for your review. Data is stored on this device only; lookups and organizing are processed through your own model.",
       "enable": {
         "label": "Enable Smart Contacts",
         "description": "When on, agents can look up and automatically collect contact information (uncertain entries go to pending review). Turning it off does not affect browsing or managing existing data here.",
@@ -2825,9 +3211,16 @@
         "INTERNAL": "Operation failed. Please try again later."
       },
       "guide": {
-        "hint": "Your contacts are empty. Let AI get you started — collect people from conversations or import from system contacts.",
+        "hint": "Your contacts are empty. Start from any source so it knows your people from day one:",
         "cta": "Organize with AI",
-        "prompt": "Help me organize my smart contacts: review what is there, add people worth keeping (import from system contacts or vCard, or ask me), and confirm-then-merge any duplicates."
+        "prompt": "Help me organize my smart contacts: review what is there, add people worth keeping (import from system contacts or vCard, or ask me), and confirm-then-merge any duplicates.",
+        "sources": {
+          "mail": "From Email",
+          "im": "From IM",
+          "import": "Import Contacts"
+        },
+        "mailPrompt": "Help me build my Smart Contacts from email: first check which mail tools I have connected (if none, tell me how to connect one); scan the last 6 months of correspondence and create profiles for real contacts I exchange mail with — confirm high-frequency, clearly-identified people directly, use pending for uncertain ones; skip marketing mail, notification bots, and one-off senders. Report which profiles you created at the end.",
+        "imPrompt": "Help me build my Smart Contacts from chat tools: first check which IMs I have connected (Feishu / Slack / WeChat etc.; if none, tell me how to connect one); organize the people I chat with regularly into contacts, use pending for uncertain ones, and skip group bots and one-off conversations. Report which profiles you created at the end."
       }
     }
   },
@@ -2948,8 +3341,7 @@
     "ssoRequired": "This organization requires SSO sign-in",
     "ssoEntry": "Sign in with enterprise SSO",
     "localModeEntry": "Skip Sign-In",
-    "localModeOpening": "Opening local mode…",
-    "returnToLocalMode": "Return to local mode",
+    "localModeOpening": "Skipping sign-in…",
     "localModeDescription": "No Cindy account required. Data stays on this device; cloud models, cross-device access, and marketplace services are unavailable.",
     "consentStatement": "I have read and agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
     "consentDialog": {
@@ -2963,6 +3355,13 @@
     "ssoOrgPlaceholder": "Company ID, slug, or domain",
     "ssoOrgHint": "Don't know your enterprise sign-in identifier? Ask your admin",
     "ssoOrgDetected": "Choose a single sign-on connection for \"{{org}}\"",
+    "realmConsent": {
+      "title": "Connect to your enterprise region",
+      "bodyCn": "Your enterprise is in Mainland China.\nContinue to connect Cindy to this region.",
+      "bodyGlobal": "Your enterprise is in the Global region.\nContinue to connect Cindy to this region.",
+      "agree": "Continue sign-in",
+      "disagree": "Cancel"
+    },
     "ssoVerificationTitle": "Verify Your Work Identity",
     "ssoVerificationSubtitle": "First-time sign-in requires verification of the contact returned by your identity provider: {{target}}",
     "enterCode": "Enter verification code",
@@ -2995,7 +3394,10 @@
       "errorBody": "Please return to {{appName}} and sign in again.",
       "returnButton": "Return to {{appName}}"
     },
-    "globalRegion": "Global",
+    "regionPill": {
+      "cn": "CN",
+      "dev": "Dev"
+    },
     "errors": {
       "fallback": "Sign-in failed. Please try again.",
       "AUTH_SERVICE_UNAVAILABLE": "The sign-in service is temporarily unavailable.",
@@ -3008,6 +3410,8 @@
       "RATE_LIMITED": "Too many attempts. Please wait and try again.",
       "SSO_LOGIN_REQUIRED": "This organization requires SSO sign-in.",
       "ORG_SSO_NOT_FOUND": "Company not found, or it has no SSO connection enabled",
+      "ORG_REALM_AMBIGUOUS": "This enterprise identifier exists in both regions. Contact your administrator.",
+      "ORG_REALM_UNAVAILABLE": "Cindy cannot verify the enterprise region right now. Check your connection and retry.",
       "SSO_EMAIL_REQUIRED": "Your work identity did not provide a valid email. Ask your admin to check the IdP configuration.",
       "INVALID_SSO_VERIFICATION_TICKET": "Work identity verification expired. Start SSO sign-in again.",
       "SOCIAL_TOKEN_INVALID": "The provider authorization expired. Please try again.",
@@ -3096,6 +3500,8 @@
       "balanceAvailable": "Balance available",
       "balanceDepleted": "Balance depleted",
       "balanceUnlimited": "Balance Unlimited",
+      "resetCreditsAvailableLine": "Available resets: {{count}}",
+      "resetCreditEarliestExpiryLine": "Earliest expiry: {{at}}",
       "windowLine": "{{label}} {{remaining}} left ({{used}} used)",
       "windowSegment": "{{label}} {{remaining}} left",
       "resetAt": "resets {{at}}",
@@ -3245,6 +3651,7 @@
         "browser": "Browser",
         "terminal": "Terminal",
         "review": "Review",
+        "backgroundTasks": "Background tasks",
         "collaboration": "Team",
         "unknown": "Unknown tab",
         "ghostPanel": "Plugin panel"
@@ -3268,6 +3675,8 @@
         "fileSub": "Files",
         "openReview": "Open review",
         "reviewSub": "Review",
+        "openBackgroundTasks": "Open background tasks",
+        "backgroundTasksSub": "Background tasks",
         "openBrowser": "Open browser",
         "browserSub": "Browser",
         "openTerminal": "Open terminal",
@@ -3629,12 +4038,24 @@
       "touchCountAria_other": "Edited {{count}} times",
       "expandAllAria": "Expand all files",
       "collapseAllAria": "Collapse all files"
+    },
+    "backgroundTasks": {
+      "running": "Running",
+      "completed": "Completed",
+      "empty": "No background tasks in this session yet",
+      "stop": "Stop",
+      "back": "Back",
+      "progressSummary": "{{done}}/{{total}} agents",
+      "tokens": "{{value}} tokens",
+      "noProgress": "No progress details yet"
     }
   },
   "update": {
     "banner": {
       "title": "Updated to {{version}}",
       "subtitle": "Relaunch to apply",
+      "viewNotes": "See What's New",
+      "viewNotesAria": "See what's new in {{version}}",
       "button": "Relaunch",
       "tooltipReady": "Update ready – click to relaunch{{versionSuffix}}",
       "ariaCollapsed": "Update ready, click to relaunch to version {{version}}",
@@ -3646,6 +4067,7 @@
       "preparingAria": "Preparing newer version, please wait",
       "confirmTitle": "Restart to update?",
       "confirmHint": "The app will restart automatically",
+      "confirmBusyHint": "A task is still running. Restarting will interrupt it",
       "confirmButton": "Restart now",
       "cancel": "Cancel",
       "confirmTooltip": "Confirm restart to apply the update",
@@ -3664,6 +4086,7 @@
       "ariaDescription": "Release notes for version {{version}}",
       "ariaDescriptionSpan": "Release notes for {{count}} versions since v{{from}}",
       "versionsSpan": "{{count}} versions",
+      "versionJumpAria": "Jump to a version — {{count}} versions, currently on v{{version}}",
       "loading": "Loading",
       "loadFailed": "Load failed",
       "retry": "Retry"
@@ -3693,6 +4116,8 @@
     "user": {
       "settingsLink": "Settings, current user: {{name}}",
       "canaryBadge": "Canary user",
+      "regionCodeCn": "CN",
+      "regionCodeDev": "Dev",
       "viewReleaseNotes": "View release notes",
       "reopenUpdateBanner": "Update ready — click to review",
       "downloadMobile": "Download Cindy Mobile"
@@ -3813,6 +4238,8 @@
         "ACTION_STALE": "This setup changed. Choose the setup action again.",
         "AUTH_CANCELLED": "Authorization was cancelled. Authorize the account again when ready.",
         "AUTH_FAILED": "Couldn't authorize the account. Try again.",
+        "AUTH_NETWORK": "Couldn't reach the authorization service. Check your network and try again.",
+        "AUTH_SERVICE_UNAVAILABLE": "The authorization service is temporarily unavailable. Try again later.",
         "INLINE_INVALID": "This configuration is invalid. Check it and try again.",
         "INLINE_UNAVAILABLE": "This Cindy version can't save this configuration in chat. Update Cindy and try again.",
         "SAVE_FAILED": "Couldn't save this configuration. Try again.",
@@ -3911,13 +4338,21 @@
         "addFailed": "Failed to add project",
         "pathEmpty": "Please enter a project path",
         "pathIsFile": "{{path}} is a file, not a directory"
-      }
+      },
+      "selectTargetPlaceholder": "Choose a target…",
+      "requestedDeviceUnavailable": "The requested device isn't available right now — pick another target"
     },
     "projectPicker": {
       "addRemoteProject": "Add remote project"
     },
     "modelSelector": {
       "budgetNeedsApiKey": "This model needs an API key — configure it in Settings",
+      "subscriptionDirectDisabled": {
+        "chatgpt": "Subscription-direct GPT models are not supported in SSH remote sessions yet",
+        "xai": "Subscription-direct Grok models are not supported in SSH remote sessions yet",
+        "generic": "Subscription-direct models are not supported in SSH remote sessions yet"
+      },
+      "discovering": "Fetching models…",
       "effortLabel": "Effort level",
       "edit": "Edit",
       "options": "Options",
@@ -3937,7 +4372,14 @@
       "trigger": {
         "placeholder": "Select model",
         "aria": "Select model. Current: {{model}}",
-        "ariaWithEffort": "Select model. Current: {{model}}, effort: {{effort}}"
+        "ariaWithEffort": "Select model. Current: {{model}}, effort: {{effort}}",
+        "pendingAria": "Select model. Next message: {{agent}} · {{model}}",
+        "pendingAriaWithEffort": "Select model. Next message: {{agent}} · {{model}}, effort: {{effort}}",
+        "agent": {
+          "claudeCode": "Claude Code",
+          "codex": "Codex",
+          "pending": "Next: {{agent}}"
+        }
       },
       "category": {
         "anthropic": "Anthropic",
@@ -4221,6 +4663,20 @@
       "editTitle": "Edit Pasted Text",
       "cancelEdit": "Cancel Editing",
       "saveEdit": "Save Text"
+    },
+    "permissionPrompt": {
+      "alwaysAllowScoped": "Always Allow {{scope}} in This Session",
+      "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
+      "alwaysAllowSessionHint": "Applies to the whole session, not just this one request.",
+      "ruleSeparator": ", "
+    },
+    "deviceSwitcher": {
+      "label": "Device",
+      "localHint": "Runs on this computer",
+      "onlineHint": "Connected — available",
+      "offlineHint": "Offline — available once connected",
+      "attachmentsDropped": "Removed {{count}} attachment(s) — they live on the previous device",
+      "attachmentsRemoteUnsupported": "File attachments aren't supported on a remote device — skipped {{count}} (images are fine)"
     }
   },
   "onboarding": {
@@ -4246,6 +4702,13 @@
       },
       "detectedLabel": "Detected",
       "oauthSub": "Opens a verification page in your browser — connects automatically"
+    },
+    "inheritedSubscription": {
+      "title": "Using the {{products}} sign-in already on this computer",
+      "desc": "Cindy picked up the account you're already signed in to locally — no separate authorization was needed. Switch or disconnect it under model providers.",
+      "openProviders": "Open Model Providers",
+      "acknowledge": "Got it",
+      "separator": ", "
     }
   },
   "voiceInputOverlay": {
@@ -4255,6 +4718,7 @@
       "refining": "Refining",
       "result": "Voice input",
       "inputFailed": "Input failed",
+      "transcriptKept": "Recognized text kept",
       "permissionRequired": "Permission required",
       "error": "Voice input failed"
     },
@@ -4292,7 +4756,11 @@
     "apiKeyRequired": "Configure an API Key before using voice input.",
     "cindyServiceUnavailable": "The Cindy voice service is unavailable. Check your network or switch service source.",
     "asrServiceUnavailable": "Voice recognition service failed to connect. Check your network and try again.",
-    "emptyTranscript": "Speech was detected, but no text was recognized. Please try again."
+    "emptyTranscript": "Speech was detected, but no text was recognized. Please try again.",
+    "connectionInterrupted": "The voice connection was interrupted. Check your network and try again.",
+    "recognitionStalled": "Voice recognition stopped returning results. Try again.",
+    "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",
+    "transcriptKeptOverlay": "{{message}} The text recognized so far was kept — copy it to continue."
   },
   "chat": {
     "askUserQuestion": {
@@ -4340,6 +4808,9 @@
         "stopped": "Stopped"
       },
       "stop": "Stop this task",
+      "openInPanel": "Open in the background tasks panel",
+      "workflowProgressLine": "{{phase}} · {{done}}/{{total}} agents",
+      "workflowProgressCount": "{{done}}/{{total}} agents",
       "tokens": "{{count}} tokens",
       "toolUses_one": "{{count}} tool use",
       "toolUses_other": "{{count}} tool uses",
@@ -4387,11 +4858,10 @@
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",
       "retry": "Retry",
-      "cancel": "Dismiss",
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
       "budgetModelHint": "If this keeps failing, try switching to the standard GPT model.",
-      "codexAuthMissing": "Remote codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local ~/.codex/auth.json to the remote, then retry.",
+      "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "Codex credentials missing or expired (401 Unauthorized). Re-login in {{appName}} Settings → Codex (the app-server will auto-restart on login), or run `codex login` in your terminal and toggle the auth mode in Settings once to restart the app-server. Then start a new session.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",
       "codexSessionExpiredDialog": {
@@ -4403,7 +4873,7 @@
       "codexAuthSynced": "Auth synced. Click \"Retry\" to resend.",
       "syncAuth": "Sync auth",
       "syncAuthSyncing": "Syncing…",
-      "syncAuthTitle": "Push local ~/.codex/auth.json to remote codex-home",
+      "syncAuthTitle": "Push local Codex credentials to remote Cindy Codex home",
       "syncAuthSuccess": "Synced — click \"Retry\" to resend",
       "syncAuthFailed": "Sync failed: {{msg}}",
       "syncAuthDaemonRestartFailed": "Credentials pushed, but the old daemon did not restart — reconnect to the remote before retrying",
@@ -4416,6 +4886,10 @@
       "networkUnreachable": "Network error: the service is temporarily unreachable. Click \"Retry\" to try again.",
       "networkUnreachableNoRetry": "Network error: the service is temporarily unreachable.",
       "networkAutoRetrying": "Network error — retrying automatically…",
+      "networkReconnecting": "Connection interrupted — reconnecting ({{attempt}}/{{maxAttempts}})…",
+      "overloadRetrying": "The model service is busy — retrying automatically ({{attempt}}/{{maxAttempts}})…",
+      "overloadBusy": "The model service is busy — the upstream has no capacity right now. Click \"Retry\", or switch to another model.",
+      "overloadBusyNoRetry": "The model service is busy — the upstream has no capacity right now. Try again later, or switch to another model.",
       "networkShowRaw": "Show raw error",
       "networkHideRaw": "Hide raw error",
       "silentStopContinue": "Continue",
@@ -4727,12 +5201,27 @@
         "aria": "Conversation compacted"
       },
       "autoResume": {
+        "label": "Reconnected",
+        "labelFailed": "Reconnect failed",
+        "labelNeutral": "Reconnect",
+        "detail": {
+          "reason": "Interruption reason",
+          "attempt": "Attempt {{attempt}}/{{total}}",
+          "sessionTotal": "{{count}} reconnects in this conversation"
+        }
+      },
+      "autoResumeSeparator": {
         "label": "Connection interrupted — resumed automatically"
+      },
+      "autoResumePending": {
+        "label": "Reconnecting",
+        "labelWithProgress": "Reconnecting {{attempt}}/{{total}}"
       },
       "agentSwitch": {
         "label": "Switched from {{from}} to {{to}}",
         "toggleHint": "View handoff context",
-        "handoffTitle": "Handoff — the context summary sent to the new engine at switch time (never shown in your messages)",
+        "handoffTitle": "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)",
+        "handoffTitleEnglishSource": "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)",
         "resumedBadge": "session resumed"
       }
     },
@@ -4763,7 +5252,6 @@
       "openInSidebarFailed": "Failed to open in sidebar browser"
     },
     "ghostSummon": {
-      "overline": "PLUGIN USE · GHOST",
       "directiveLabel": "Directive appended for the model",
       "legend": "Highlighted = injected from the plugin's manifest · the rest is the fixed system template",
       "expandAria": "Show the directive appended for the model",
@@ -4773,7 +5261,12 @@
       "mentionDirectiveLabel": "Hint appended for the model",
       "semanticExpandAria": "Show how this plugin was used",
       "semanticNote": "The AI used this plugin on its own based on the meaning of your message; no machine directive was appended to it.",
-      "listSeparator": ", "
+      "listSeparator": ", ",
+      "status": {
+        "running": "Calling…",
+        "called": "Called",
+        "done": "Finished"
+      }
     },
     "userMessage": {
       "attachmentPrefix": "Attachments: ",
@@ -4894,13 +5387,19 @@
     "workflowTree": {
       "agentsCount": "{{count}} agents",
       "attempt": "attempt {{count}}",
+      "endedEarly": "Ended before completion",
       "state": {
         "queued": "Queued",
+        "pending": "Pending",
+        "start": "Starting",
         "running": "Running",
+        "progress": "Running",
         "done": "Done",
         "completed": "Completed",
         "failed": "Failed",
-        "stopped": "Stopped"
+        "error": "Failed",
+        "stopped": "Stopped",
+        "killed": "Killed"
       }
     },
     "credentialSwitchWait": {
@@ -5070,11 +5569,15 @@
     },
     "draft": {
       "createSessionFailed": "Failed to create session, please retry",
+      "remoteProviderUpdating": "Provider credentials are being updated — retry in a moment",
+      "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
+      "remoteNativeOauthUnavailable": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
       "deviceStillLoading": "Remote device is still loading, please wait",
       "worktreeMissingRepo": "Cannot create worktree: missing repository root for the current directory",
       "worktreeRepoHint": "Try re-selecting the working directory and wait for the folder badge to refresh, then retry",
       "sessionInactive": "Session is no longer active",
-      "remoteProjectBanner": "New session in {{project}} on {{device}}"
+      "remoteProjectBanner": "New session in {{project}} on {{device}}",
+      "remoteDialogueBanner": "New dialogue on {{device}} (no project)"
     },
     "jumpSession": {
       "emptyId": "Enter a sessionId to jump to",
@@ -5571,7 +6074,7 @@
         "activityDesc": "Recently active",
         "activityAsc": "Oldest active"
       },
-      "filterAria": "Search filters (Status: {{status}}, Agent: {{agent}}, Last activity: {{lastActivity}}, Projects: {{projects}})",
+      "filterAria": "Search filters and sort (Sort: {{sort}}, Status: {{status}}, Agent: {{agent}}, Last activity: {{lastActivity}}, Projects: {{projects}})",
       "filter": {
         "label": "Filters",
         "active": "{{count}} filters",
@@ -5681,6 +6184,7 @@
     "cell": {
       "subtitlePaused": "Paused",
       "subtitleWaitingForResources": "Waiting for a slot ({{inFlight}}/{{max}})",
+      "subtitleQueuedForSession": "Queued until the session is idle",
       "subtitleManual": "Manual",
       "subtitleOnce": "Once",
       "tagOnce": "Once",
@@ -6304,10 +6808,20 @@
       "typeFeature": "Feature",
       "titleLabel": "Title",
       "bodyLabel": "Body (Markdown)",
-      "identityGithubUser": "Submitting identity: GitHub user @{{login}} (you)",
-      "identityPlatform": "Submitting identity: Cindy platform (GitHub App {{login}})",
+      "submissionMethodLabel": "Publishing Method",
+      "identityGithubUser": "Publish directly through GitHub account @{{login}}",
+      "identityGithubUserHint": "You will be the GitHub author and can edit or close this Issue on GitHub",
+      "identityPlatform": "Publish through Cindy (GitHub App {{login}})",
+      "identityPlatformHint": "You will not be the GitHub author and cannot edit or close this Issue yourself",
+      "publicNameLabel": "Public Attribution",
+      "publicNameHint": "This attribution will appear publicly in the Issue body",
+      "anonymous": "Anonymous",
+      "useAnonymous": "Use Anonymous Attribution",
       "envLine": "Attached automatically on submit: client {{appVersion}} · {{platform}} {{arch}} · UI language {{uiLanguage}}",
-      "submit": "Submit",
+      "regionLine": "Build region: {{region}}",
+      "regionCodeCn": "CN",
+      "regionCodeDev": "Dev",
+      "submit": "Submit Feedback",
       "cancel": "Cancel"
     },
     "redirect": {
@@ -6927,7 +7441,12 @@
       "migrationFailed": "Migration failed, please retry later",
       "fetchUpdateNoticeFailed": "Failed to fetch update notice",
       "corruptionRestored": "Database restored from snapshot at {{time}}; recent chats may be lost",
-      "schemaDriftWarning": "A local database version record is inconsistent. Update to the latest version; if this warning keeps appearing, contact support. The app will not delete local data automatically."
+      "schemaDriftWarning": "A local database version record is inconsistent. Update to the latest version; if this warning keeps appearing, contact support. The app will not delete local data automatically.",
+      "telegramBotConnected": "Telegram bot configuration saved",
+      "telegramBotConnectFailed": "Telegram bot connection failed; check the token and your network",
+      "telegramBotSaveFailed": "Save failed: {{message}}",
+      "telegramBotDisconnected": "Telegram bot unbound",
+      "telegramBotDisconnectFailed": "Unbind failed: {{message}}"
     },
     "errors": {
       "openFileFailed": "Cannot open file in system",
@@ -6941,13 +7460,18 @@
       "registrationFailed": "Creation failed, please retry later",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
-      "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed."
+      "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
+      "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
+      "turnNoEventTimeout": "This turn showed no activity for a long time (model, tools and background processes were all silent), so it was interrupted to avoid hanging forever. Send the next message to continue."
     },
     "validation": {
       "feishuFieldsRequired": "App ID and App Secret are both required",
       "feishuAppIdFormat": "App ID format should be cli_xxxxxxxxxxxxxxxx",
       "discordFieldsRequired": "Bot Token and Discord user ID are both required",
-      "discordOwnerUserIdFormat": "Discord user ID must be 17-20 digits"
+      "discordOwnerUserIdFormat": "Discord user ID must be 17-20 digits",
+      "telegramFieldsRequired": "Bot Token and Telegram user ID are both required",
+      "telegramTokenFormat": "Invalid token format: expected the \"digits:secret\" shape generated by BotFather",
+      "telegramOwnerUserIdFormat": "Telegram user ID must be numeric"
     },
     "confirm": {
       "logoutTitle": "Log out",
@@ -7076,7 +7600,8 @@
       "blocked": "Blocked",
       "complete": "Completed",
       "budgetLimited": "Limit reached",
-      "usageLimited": "Usage limited"
+      "usageLimited": "Usage limited",
+      "capacityLimited": "Model service busy"
     },
     "turns": "{{used}} turns",
     "turnsWithMax": "{{used}} / {{max}} turns",
@@ -7096,10 +7621,13 @@
       "start": "Start",
       "starting": "Starting…",
       "cancel": "Cancel",
-      "failed": "Failed to create goal"
+      "failed": "Failed to create goal",
+      "busy": "Another creation is already in progress. Please try again in a moment."
     },
     "usageLimitedUntil": "resumes {{time}}",
+    "capacityRetryAt": "Retrying at {{time}}",
     "usageResumeNotice": "Usage limit reset — resuming the goal",
+    "capacityRetryNotice": "Model service was busy — retrying the goal",
     "complete": {
       "record": "Goal achieved · {{turns}} turns · {{duration}}"
     },
@@ -7174,11 +7702,6 @@
     },
     "hub": {
       "learnButton": "Learn this skill"
-    }
-  },
-  "workflows": {
-    "toast": {
-      "none": "No workflow is running in this session"
     }
   },
   "planMode": {
@@ -7267,7 +7790,7 @@
     }
   },
   "billing": {
-    "sidebar": "Credits & plans",
+    "sidebar": "Balance & Plans",
     "settings": {
       "title": "Usage and billing",
       "subscriptionCard": {
@@ -7278,14 +7801,17 @@
         "unavailable": "Subscription status is temporarily unavailable. Refresh to try again.",
         "action": "View plans",
         "changeAction": "Change plan",
+        "manageAction": "Manage subscription",
+        "portalAction": "Manage in Stripe",
+        "portalFailed": "Couldn't open Stripe subscription management. Try again later.",
         "priceInterval": "{{price}} / {{interval}}",
-        "includedCredits": "Includes {{amount}} credits per {{interval}}",
+        "includedCredits": "Includes {{amount}} per {{interval}}",
         "renewsAt": "Renews {{date}}",
         "endsAt": "Plan ends {{date}}",
         "cancelAction": "Cancel Subscription",
         "cancelConfirmTitle": "Cancel Your Current Subscription?",
-        "cancelConfirmDescription": "This action does not issue a refund or immediately change your credits. Your current plan stays available through {{date}}, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
-        "cancelConfirmDescriptionWithoutDate": "This action does not issue a refund or immediately change your credits. Your current plan stays available through the end of this billing period, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmDescription": "This action does not issue a refund or immediately change your balance. Your current plan stays available through {{date}}, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmDescriptionWithoutDate": "This action does not issue a refund or immediately change your balance. Your current plan stays available through the end of this billing period, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
         "cancelConfirmAction": "Confirm Cancellation",
         "cancelSuccess": "Auto-renewal is canceled. Your current plan remains available through {{date}}.",
         "cancelSuccessWithoutDate": "Auto-renewal is canceled. Your current plan will end after this billing period.",
@@ -7293,34 +7819,33 @@
         "cancelFailed": "Could not cancel the subscription. Try again later."
       },
       "topupCard": {
-        "action": "Buy credits"
+        "action": "Add Funds"
       }
     },
     "balance": {
       "title": "Available balance",
-      "creditParityCny": "1 credit = 1 CNY. Credits pay for Cindy AI usage; payments are processed by third-party providers.",
-      "creditParityUsd": "1 credit = 1 USD. Credits pay for Cindy AI usage; payments are processed by third-party providers.",
-      "plan": "Plan credits",
-      "purchased": "Purchased credits",
-      "promotional": "Promotional credits",
-      "notProvisioned": "Credits have not been enabled for this account.",
+      "plan": "Plan Balance",
+      "purchased": "Top-up Balance",
+      "promotional": "Promotional Balance",
+      "notProvisioned": "Balance has not been enabled for this account.",
       "notSupported": "Balance lookup is not supported for this account.",
       "unavailable": "Balance is temporarily unavailable. Refresh to try again."
     },
     "usage": {
-      "title": "Credit usage",
+      "title": "Balance Usage",
       "observedAt": "Balance updated {{date}}",
       "poolDetail": "Used {{used}} · Total {{total}}",
       "remaining": "Remaining",
       "progressLabel": "{{label}} usage",
+      "noPlanCredits": "No plan balance because there is no active subscription.",
       "historyUnavailable": "Usage history is incomplete. Only the remaining balance is available.",
       "detailsUnavailable": "Usage details are temporarily unavailable. Current balances are shown instead.",
       "promotionalDetails": {
-        "title": "Promotional Credit Details",
+        "title": "Promotional Balance Details",
         "count": "{{count}} grants",
-        "empty": "No promotional credit grants are available.",
+        "empty": "No promotional grants are available.",
         "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
-        "unnamed": "Promotional credit",
+        "unnamed": "Promotional Grant",
         "original": "Original",
         "used": "Used",
         "remaining": "Remaining",
@@ -7338,7 +7863,7 @@
         "title": "Choose a subscription plan"
       },
       "topup": {
-        "title": "Buy credits"
+        "title": "Add Funds"
       }
     },
     "steps": {
@@ -7356,8 +7881,7 @@
     "catalog": {
       "errorTitle": "Plans are temporarily unavailable",
       "errorDescription": "Check your connection and retry. Local fallback plans will not be used.",
-      "emptyTitle": "No Plans Available",
-      "emptyDescription": "The server has not published any plans yet.",
+      "emptyTitle": "Coming soon. Stay tuned.",
       "currentPlan": "Current Plan",
       "unavailableReasons": {
         "OFFER_COMING_SOON": "Coming Soon",
@@ -7376,7 +7900,7 @@
       "MONTH": "month",
       "YEAR": "year"
     },
-    "credits": "{{amount}} credits",
+    "credits": "Includes {{amount}}",
     "confirm": {
       "channel": "Pay with {{provider}}"
     },
@@ -7386,7 +7910,7 @@
     },
     "providers": {
       "alipay": "Alipay",
-      "stripe": "Card"
+      "stripe": "Stripe"
     },
     "currentSubscription": {
       "title": "Current subscription",
@@ -7409,7 +7933,7 @@
       "failedTitle": "Unable to complete",
       "expiredTitle": "Payment expired",
       "canceledTitle": "Payment canceled",
-      "topupSubtitle": "Credit top-up",
+      "topupSubtitle": "Balance Top-up",
       "subscriptionSubtitle": "Subscription",
       "creatingBody": "Confirming the order with the payment service…",
       "qrAlt": "Payment QR code",

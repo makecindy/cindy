@@ -23,7 +23,12 @@ class FakeAsrProvider implements AsrProvider {
     this.callback({ type: 'connected', at: Date.now() });
   }
 
+  // Real providers await an in-flight recover() inside stop() (swallowing its
+  // rejection), so stop() is another window where a failure can land.
+  public stopHook: () => Promise<void> = async () => {};
+
   async stop(): Promise<void> {
+    await this.stopHook();
     this.callback({ type: 'disconnected', at: Date.now() });
   }
 
@@ -43,6 +48,18 @@ class FakeAsrProvider implements AsrProvider {
   emit(event: AsrEvent): void {
     this.callback(event);
   }
+}
+
+// A host that takes the text: salvage treats the returned range as the
+// acceptance signal, so stubs that mean "accepted" must return one.
+function acceptSubmission(text: string, segment: SpeechSegment): EditableRange {
+  return {
+    id: `range-${segment.id}`,
+    segmentIds: [segment.id],
+    startOffset: 0,
+    endOffset: text.length,
+    userTouched: false,
+  };
 }
 
 function pcmChunk(amplitude: number): ArrayBuffer {
@@ -268,6 +285,483 @@ describe('VoiceInputController', () => {
       message: 'Voice input detected speech but returned no transcript. Please try again.',
       code: 'empty_transcript',
     }]);
+  });
+
+  it('keeps the transcript recognized before a fatal transport drop', async () => {
+    const asr = new FakeAsrProvider();
+    const submitted: string[] = [];
+    const errors: Array<{ message: string; code?: string; kept?: boolean }> = [];
+    const timeline: VoiceTimelineEvent[] = [];
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger((event) => timeline.push(event)),
+      callbacks: {
+        onDraftChanged: () => {},
+        onSubmitted: (text, segment) => {
+          submitted.push(text);
+          return acceptSubmission(text, segment);
+        },
+        onError: (message, code, details) => errors.push({ message, code, kept: details?.transcriptKept }),
+      },
+    });
+
+    await controller.start();
+    asr.emit({ type: 'partial', text: 'half a sentence', at: Date.now() });
+    asr.emit({ type: 'disconnected', at: Date.now() });
+
+    expect(submitted).toEqual(['half a sentence']);
+    expect(errors).toEqual([{
+      message: 'Voice input connection was interrupted. Please try again.',
+      code: 'connection_interrupted',
+      kept: true,
+    }]);
+    expect(controller.currentState).toBe('error');
+    expect(timeline).toContainEqual(expect.objectContaining({
+      type: 'transcript_salvaged',
+      text: 'half a sentence',
+      source: 'partial',
+    }));
+  });
+
+  it('hands the transcript to the host before the terminal error state', async () => {
+    const asr = new FakeAsrProvider();
+    const calls: string[] = [];
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger(),
+      callbacks: {
+        onStateChanged: (state) => calls.push(`state:${state}`),
+        onDraftChanged: () => {},
+        onSubmitted: (text, segment) => {
+          calls.push('submitted');
+          return acceptSubmission(text, segment);
+        },
+        onError: () => calls.push('error'),
+      },
+    });
+
+    await controller.start();
+    asr.emit({ type: 'stable', text: 'ordering matters', at: Date.now() });
+    asr.emit({ type: 'disconnected', at: Date.now() });
+
+    // Hosts drop their draft on 'error', so the text has to land first.
+    expect(calls).toEqual(['state:listening', 'submitted', 'state:error', 'error']);
+  });
+
+  it('keeps the transcript when stop-time flush fails', async () => {
+    const asr = new FakeAsrProvider();
+    asr.flush = async () => {
+      throw new Error('socket closed');
+    };
+    const submitted: string[] = [];
+    const errors: Array<{ message: string; code?: string; kept?: boolean }> = [];
+    const timeline: VoiceTimelineEvent[] = [];
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger((event) => timeline.push(event)),
+      callbacks: {
+        onDraftChanged: () => {},
+        onSubmitted: (text, segment) => {
+          submitted.push(text);
+          return acceptSubmission(text, segment);
+        },
+        onError: (message, code, details) => errors.push({ message, code, kept: details?.transcriptKept }),
+      },
+    });
+
+    await controller.start();
+    asr.emit({ type: 'stable', text: 'kept text', at: Date.now() });
+    await controller.stop();
+
+    expect(submitted).toEqual(['kept text']);
+    expect(errors).toEqual([{ message: 'socket closed', code: undefined, kept: true }]);
+    expect(timeline).toContainEqual(expect.objectContaining({
+      type: 'transcript_salvaged',
+      text: 'kept text',
+      source: 'stable',
+    }));
+  });
+
+  it('does not submit twice when recovery rejects after stop already submitted', async () => {
+    const asr = new FakeAsrProvider();
+    let rejectRecover: ((error: Error) => void) | undefined;
+    asr.recover = () => new Promise<void>((_resolve, reject) => {
+      rejectRecover = reject;
+    });
+    const submitted: string[] = [];
+    const errors: Array<{ message: string; code?: string; kept?: boolean }> = [];
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger(),
+      stableWaitMs: 0,
+      refiner: {
+        refine: () => new Promise<RefinementResult>(() => {}),
+      },
+      callbacks: {
+        onDraftChanged: () => {},
+        onSubmitted: (text, segment) => {
+          submitted.push(text);
+          return {
+            id: 'range-1',
+            segmentIds: [segment.id],
+            startOffset: 0,
+            endOffset: text.length,
+            userTouched: false,
+          };
+        },
+        onError: (message, code, details) => errors.push({ message, code, kept: details?.transcriptKept }),
+      },
+    });
+
+    await controller.start();
+    asr.emit({ type: 'partial', text: 'one submission only', at: Date.now() });
+    asr.emit({ type: 'disconnected', at: Date.now() });
+    await controller.stop();
+
+    expect(controller.currentState).toBe('refining');
+    expect(submitted).toEqual(['one submission only']);
+
+    rejectRecover?.(new Error('network down'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(submitted).toEqual(['one submission only']);
+    expect(errors).toEqual([{
+      message: 'Voice input stopped receiving recognition. Please try again.',
+      code: 'recognition_stalled',
+      kept: true,
+    }]);
+  });
+
+  it('salvages the newest transcript when a partial follows a stable', async () => {
+    const asr = new FakeAsrProvider();
+    const submitted: string[] = [];
+    const timeline: VoiceTimelineEvent[] = [];
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger((event) => timeline.push(event)),
+      callbacks: {
+        onDraftChanged: () => {},
+        onSubmitted: (text, segment) => {
+          submitted.push(text);
+          return acceptSubmission(text, segment);
+        },
+      },
+    });
+
+    await controller.start();
+    // Providers emit both lanes as the full aggregate transcript, so the partial
+    // for the utterance in progress already contains the completed one.
+    asr.emit({ type: 'stable', text: 'first sentence.', at: Date.now() });
+    asr.emit({ type: 'partial', text: 'first sentence. second sen', at: Date.now() });
+    asr.emit({ type: 'disconnected', at: Date.now() });
+
+    expect(submitted).toEqual(['first sentence. second sen']);
+    expect(timeline).toContainEqual(expect.objectContaining({
+      type: 'transcript_salvaged',
+      source: 'partial',
+    }));
+  });
+
+  it('does not resubmit when a failure lands while stop is flushing', async () => {
+    const asr = new FakeAsrProvider();
+    let rejectRecover: ((error: Error) => void) | undefined;
+    asr.recover = () => new Promise<void>((_resolve, reject) => {
+      rejectRecover = reject;
+    });
+    let releaseFlush: (() => void) | undefined;
+    asr.flush = () => new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    const submitted: string[] = [];
+    const errors: Array<{ message: string; code?: string; kept?: boolean }> = [];
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger(),
+      stableWaitMs: 0,
+      callbacks: {
+        onDraftChanged: () => {},
+        onSubmitted: (text, segment) => {
+          submitted.push(text);
+          return acceptSubmission(text, segment);
+        },
+        onError: (message, code, details) => errors.push({ message, code, kept: details?.transcriptKept }),
+      },
+    });
+
+    await controller.start();
+    asr.emit({ type: 'partial', text: 'only once', at: Date.now() });
+    asr.emit({ type: 'disconnected', at: Date.now() });
+
+    const stopPromise = controller.stop();
+    await Promise.resolve();
+
+    rejectRecover?.(new Error('network down'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(submitted).toEqual(['only once']);
+    expect(controller.currentState).toBe('error');
+
+    // Providers await an in-flight recover() during flushAudio() but swallow its
+    // rejection, so stop() resumes on an already-failed run.
+    releaseFlush?.();
+    await stopPromise;
+
+    expect(submitted).toEqual(['only once']);
+    expect(controller.currentState).toBe('error');
+    expect(errors).toEqual([{
+      message: 'Voice input stopped receiving recognition. Please try again.',
+      code: 'recognition_stalled',
+      kept: true,
+    }]);
+  });
+
+  it('does not resubmit when a failure lands while the provider is stopping', async () => {
+    const asr = new FakeAsrProvider();
+    let rejectRecover: ((error: Error) => void) | undefined;
+    asr.recover = () => new Promise<void>((_resolve, reject) => {
+      rejectRecover = reject;
+    });
+    let releaseStop: (() => void) | undefined;
+    asr.stopHook = () => new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    const submitted: string[] = [];
+    const errors: Array<{ message: string; code?: string; kept?: boolean }> = [];
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger(),
+      stableWaitMs: 0,
+      callbacks: {
+        onDraftChanged: () => {},
+        onSubmitted: (text, segment) => {
+          submitted.push(text);
+          return acceptSubmission(text, segment);
+        },
+        onError: (message, code, details) => errors.push({ message, code, kept: details?.transcriptKept }),
+      },
+    });
+
+    await controller.start();
+    asr.emit({ type: 'partial', text: 'only once', at: Date.now() });
+    asr.emit({ type: 'disconnected', at: Date.now() });
+
+    const stopPromise = controller.stop();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The run fails while stop() is parked on the provider's stop(), i.e. after
+    // the flush window has already closed.
+    rejectRecover?.(new Error('network down'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(submitted).toEqual(['only once']);
+    expect(controller.currentState).toBe('error');
+
+    releaseStop?.();
+    await stopPromise;
+
+    expect(submitted).toEqual(['only once']);
+    expect(controller.currentState).toBe('error');
+  });
+
+  it('does not strand the run when the host throws on submit', async () => {
+    const asr = new FakeAsrProvider();
+    const errors: Array<{ message: string; code?: string; kept?: boolean }> = [];
+    let submitAttempts = 0;
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger(),
+      stableWaitMs: 0,
+      callbacks: {
+        onDraftChanged: () => {},
+        onSubmitted: () => {
+          // e.g. the composer's window was destroyed while stop() was in flight
+          submitAttempts += 1;
+          throw new Error('editor is gone');
+        },
+        onError: (message, code, details) => errors.push({ message, code, kept: details?.transcriptKept }),
+      },
+    });
+
+    await controller.start();
+    asr.emit({ type: 'partial', text: 'nowhere to go', at: Date.now() });
+    await expect(controller.stop()).resolves.toBeUndefined();
+
+    // A terminal state is what lets the next dictation start at all.
+    expect(controller.currentState).toBe('error');
+    expect(errors).toEqual([{ message: 'editor is gone', code: undefined, kept: false }]);
+    // Exactly one attempt: a callback that threw part-way has already run an
+    // unknown share of its side effects, so salvage must not run it again.
+    expect(submitAttempts).toBe(1);
+    await expect(controller.start()).resolves.toMatch(/./);
+  });
+
+  it('does not claim retention when the host refuses the salvaged text', async () => {
+    const asr = new FakeAsrProvider();
+    const timeline: VoiceTimelineEvent[] = [];
+    const errors: Array<{ message: string; code?: string; kept?: boolean }> = [];
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger((event) => timeline.push(event)),
+      callbacks: {
+        onDraftChanged: () => {},
+        // Mobile refuses writes once the user has edited the voice insertion,
+        // so the salvaged text never lands in the composer.
+        onSubmitted: () => undefined,
+        onError: (message, code, details) => errors.push({ message, code, kept: details?.transcriptKept }),
+      },
+    });
+
+    await controller.start();
+    asr.emit({ type: 'partial', text: 'never lands', at: Date.now() });
+    asr.emit({ type: 'disconnected', at: Date.now() });
+
+    expect(errors).toEqual([{
+      message: 'Voice input connection was interrupted. Please try again.',
+      code: 'connection_interrupted',
+      kept: false,
+    }]);
+    expect(timeline).toContainEqual(expect.objectContaining({
+      type: 'transcript_salvaged',
+      accepted: false,
+    }));
+  });
+
+  it('logs an interrupted stop as cancelled when the user cancelled', async () => {
+    const asr = new FakeAsrProvider();
+    // stop() and cancel() each await the provider's stop(); hold both and
+    // release them together, otherwise the first one never settles.
+    const stopResolvers: Array<() => void> = [];
+    asr.stopHook = () => new Promise<void>((resolve) => {
+      stopResolvers.push(resolve);
+    });
+    const timeline: VoiceTimelineEvent[] = [];
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger((event) => timeline.push(event)),
+      stableWaitMs: 0,
+      refiner: {
+        refine: () => new Promise<RefinementResult>(() => {}),
+      },
+      callbacks: {
+        onDraftChanged: () => {},
+        onSubmitted: (text, segment) => ({
+          id: 'range-1',
+          segmentIds: [segment.id],
+          startOffset: 0,
+          endOffset: text.length,
+          userTouched: false,
+        }),
+      },
+    });
+
+    await controller.start();
+    asr.emit({ type: 'partial', text: 'abandoned', at: Date.now() });
+    const stopPromise = controller.stop();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const cancelPromise = controller.cancel();
+    stopResolvers.splice(0).forEach((resolve) => resolve());
+    await cancelPromise;
+    stopResolvers.splice(0).forEach((resolve) => resolve());
+    await stopPromise;
+
+    expect(timeline).toContainEqual(expect.objectContaining({
+      type: 'refine_discarded',
+      reason: 'cancelled',
+    }));
+    expect(timeline).not.toContainEqual(expect.objectContaining({
+      type: 'refine_discarded',
+      reason: 'run_failed',
+    }));
+  });
+
+  it('does not let a late refinement overwrite a failed run', async () => {
+    const asr = new FakeAsrProvider();
+    let rejectRecover: ((error: Error) => void) | undefined;
+    asr.recover = () => new Promise<void>((_resolve, reject) => {
+      rejectRecover = reject;
+    });
+    let resolveRefine: ((result: RefinementResult) => void) | undefined;
+    const applied: string[] = [];
+    const states: VoiceInputState[] = [];
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger(),
+      stableWaitMs: 0,
+      refiner: {
+        refine: () => new Promise<RefinementResult>((resolve) => {
+          resolveRefine = resolve;
+        }),
+      },
+      callbacks: {
+        onStateChanged: (state) => states.push(state),
+        onDraftChanged: () => {},
+        onSubmitted: (text, segment) => ({
+          id: 'range-1',
+          segmentIds: [segment.id],
+          startOffset: 0,
+          endOffset: text.length,
+          userTouched: false,
+        }),
+        applyRefinement: (_range, refinedText) => {
+          applied.push(refinedText);
+          return true;
+        },
+        onError: () => {},
+      },
+    });
+
+    await controller.start();
+    asr.emit({ type: 'partial', text: 'text under refinement', at: Date.now() });
+    asr.emit({ type: 'disconnected', at: Date.now() });
+    await controller.stop();
+    expect(controller.currentState).toBe('refining');
+
+    // Recovery gives up while refinement is still running.
+    rejectRecover?.(new Error('network down'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(controller.currentState).toBe('error');
+
+    resolveRefine?.({
+      accepted: true,
+      sourceSegmentIds: ['segment-1'],
+      basedOnText: 'text under refinement',
+      refinedText: 'Text under refinement.',
+      elapsedMs: 1,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The user was already told the run failed; refinement must not rewrite
+    // their text nor flip the run back to a success state.
+    expect(applied).toEqual([]);
+    expect(controller.currentState).toBe('error');
+    expect(states.at(-1)).toBe('error');
+  });
+
+  it('reports the original failure cause alongside the retention flag', async () => {
+    const asr = new FakeAsrProvider();
+    const errors: Array<{ message: string; code?: string; kept?: boolean }> = [];
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger(),
+      callbacks: {
+        onDraftChanged: () => {},
+        onSubmitted: acceptSubmission,
+        onError: (message, code, details) => errors.push({ message, code, kept: details?.transcriptKept }),
+      },
+    });
+
+    await controller.start();
+    asr.emit({ type: 'partial', text: 'said something', at: Date.now() });
+    // An auth/quota failure must not be flattened into "the connection dropped":
+    // retention rides along as a detail so hosts can show both.
+    asr.emit({ type: 'error', message: 'Voice credential expired.', at: Date.now() });
+
+    expect(errors).toEqual([{ message: 'Voice credential expired.', code: undefined, kept: true }]);
   });
 
   it('ignores stop-time ASR errors after transcript text is available', async () => {

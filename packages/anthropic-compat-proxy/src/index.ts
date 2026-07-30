@@ -17,8 +17,11 @@ export { createAnthropicCompatProxy } from './server.js';
 export {
   createEnvOutboundProxyResolver,
   hasProxyEnvConfig,
+  isLoopbackHostname,
   parseOutboundProxyUrl,
   redactProxyUrlForLog,
+  stripIpv6Brackets,
+  TunnelingHttpsAgent,
 } from './outbound-proxy.js';
 export type {
   OutboundProxyAgent,
@@ -32,11 +35,20 @@ export {
 } from './instructions-injection.js';
 export {
   createActiveStripTransform,
+  createDuplicateToolUseIdRecoveryRule,
+  createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
+  createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  dedupeDuplicateToolUseIds,
+  dedupeDuplicateToolUseIdsFromBody,
+  repairToolExchangeAdjacency,
+  repairToolExchangeAdjacencyFromBody,
+  repairToolExchangeStructureFromBody,
+  stripEmptyAssistantMessagesFromBody,
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
   stripEncryptedContentFromBody,

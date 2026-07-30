@@ -53,6 +53,7 @@ vi.mock('@/hooks/useProviders', () => ({
         name: 'Anthropic',
         connected: true,
         agents: ['claude-code'],
+        routing: { 'claude-code': {} },
         models: {
           'claude-code': providersMock.claudeModels,
           codex: [],

@@ -109,6 +109,7 @@ describe('automation-generated sessions', () => {
       'slack',
       'telegram',
       'discord',
+      'wechat',
       'scheduler',
       'learn',
       'shared',
@@ -864,7 +865,10 @@ describe('automation-generated sessions', () => {
     );
     const preloadSource = readTextLf(new URL('../../preload/preload.ts', import.meta.url), 'utf8');
 
-    expect(scheduleIndexHookSource).toContain('loadScheduleSidebarIndexRuns()');
+    // 这个 hook 取 snapshot 变体:除了 run 列表还要引擎的 in-flight 集合,用于通知抑制
+    // 标记的对账(见 scheduleSidebarIndexRuns 与 scheduler.listInflightRunIds)。两者是
+    // 同一条 sidebar index IPC,本用例要锁的「不走 per-schedule history limit」不变。
+    expect(scheduleIndexHookSource).toContain('loadScheduleSidebarIndexSnapshot()');
     expect(scheduleIndexHookSource).not.toContain('RUNS_PER_SCHEDULE_LIMIT');
     expect(scheduleIndexHookSource).not.toContain('listRuns(');
     expect(unreadCountsHookSource).toContain('loadScheduleSidebarIndexRuns()');
@@ -968,7 +972,9 @@ describe('automation-generated sessions', () => {
     expect(zh.scheduler.runs.sessionValue).toBe('对话价值 {{value}}');
     expect(zh.scheduler.runs.runCost).toBe('本次开销 {{cost}}');
     expect(zh.scheduler.runs.legacyCostUnavailable).toBe('历史费用无法拆分');
-    expect(zh.scheduler.runs.persistentSessionGroup).toBe('持续对话 {{session}} · {{count}} 次运行');
+    expect(zh.scheduler.runs.persistentSessionGroup).toBe(
+      '持续对话 {{session}} · {{count}} 次运行',
+    );
     expect(zh.scheduler.runs.expandRemainingRuns).toBe('展开另外 {{count}} 次');
   });
 

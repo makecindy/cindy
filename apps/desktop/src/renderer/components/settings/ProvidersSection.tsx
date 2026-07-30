@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Check, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { Check, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
@@ -43,6 +43,12 @@ import {
   customProviderSubtitleForDisplay,
   providerSubtitleForDisplay,
 } from '@/lib/providerSubtitle';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { CustomProviderDialog } from './CustomProviderDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
@@ -53,6 +59,7 @@ import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 
 import type { LocalCliDetection } from '../../../shared/localCliDetect';
+import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
 import type { CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
 // ---------------------------------------------------------------------------
@@ -60,7 +67,25 @@ import type { CustomProviderConfig, ProviderView } from '@cindy/model-providers'
 // ---------------------------------------------------------------------------
 
 function providerHasModels(provider: ProviderView): boolean {
-  return provider.agents.some((a) => (provider.models[a]?.length ?? 0) > 0);
+  // 专属媒体清单(imageModels/videoModels)也算「有模型」:XD 动态对话目录不可用时
+  // 内置的图像/视频模型仍可用且可被停用管理,UnifiedModelList 的 buildUnionRows
+  // 会为它们合成能力行 —— 只看 models[agent] 会让整个列表不渲染
+  // (PR #744 review 第十五轮)。
+  return (
+    provider.agents.some((a) => (provider.models[a]?.length ?? 0) > 0) ||
+    (provider.imageModels?.length ?? 0) > 0 ||
+    (provider.videoModels?.length ?? 0) > 0
+  );
+}
+
+/**
+ * 写供应商级停用 override(model-disable-store)。成功后由 main 广播
+ * PROVIDER_CHANGED 驱动快照刷新,这里不 refetch;失败走统一错误提示。
+ */
+function writeProviderDisabled(providerId: string, disabled: boolean, errorText: string): void {
+  void window.electronAPI.maker
+    .setModelDisable({ kind: 'provider', providerId, disabled })
+    .catch(() => toast.error(errorText));
 }
 
 /** 供应商行图标(内置品牌 mark / 首字母 monogram)。 */
@@ -258,6 +283,9 @@ function DetailHeader({
                 })}
               />
             )}
+            {provider?.suspended && (
+              <CustomTag label={t('settings.providers.pill.suspended')} />
+            )}
             {badge}
           </div>
           <span
@@ -270,6 +298,39 @@ function DetailHeader({
         </div>
 
         {trailing}
+        {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
+            整体不可路由(model-disable-store);恢复入口在菜单与下方的已停用条带都有。 */}
+        {provider && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={t('settings.providers.detail.moreActionsAria')}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
+                style={{ color: 'var(--text-tertiary)' }}
+              >
+                <MoreHorizontal size={15} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() =>
+                  writeProviderDisabled(
+                    provider.id,
+                    !provider.suspended,
+                    t('settings.providers.models.accessWriteFailed'),
+                  )
+                }
+              >
+                {t(
+                  provider.suspended
+                    ? 'settings.providers.menu.enableProvider'
+                    : 'settings.providers.menu.disableProvider',
+                )}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
       {detail}
@@ -558,16 +619,19 @@ function GenericOAuthHeader({
   const [loggingIn, setLoggingIn] = useState(false);
   const connected = provider.connected;
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
-  const { deviceCode, clearDeviceCode, beginOwnedLogin } = useProviderOAuthDeviceCode(
-    deviceFlow ? provider.id : null,
+  const { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } = useProviderOAuthDeviceCode(
+    provider.id,
+    { observeProgress: deviceFlow },
   );
 
   const handleLogin = useCallback(async () => {
     clearDeviceCode();
     setLoggingIn(true);
-    const finishOwnedLogin = beginOwnedLogin();
+    const ownedLogin = beginOwnedLogin();
     try {
-      const r = await window.electronAPI.maker.providerOAuthLogin(provider.id);
+      const r = await window.electronAPI.maker.providerOAuthLogin(provider.id, {
+        ownerId: ownedLogin.ownerId,
+      });
       if (r.ok) {
         toast.success(t('settings.providers.genericOAuth.toast.loggedIn', { name: provider.name }));
         onChanged();
@@ -581,7 +645,7 @@ function GenericOAuthHeader({
     } catch {
       toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }));
     } finally {
-      finishOwnedLogin();
+      ownedLogin.finish();
       setLoggingIn(false);
     }
   }, [beginOwnedLogin, clearDeviceCode, onChanged, provider.id, provider.name, t]);
@@ -630,7 +694,7 @@ function GenericOAuthHeader({
       }
       onClick={() => {
         if (loggingIn) {
-          void window.electronAPI.maker.providerOAuthCancel(provider.id);
+          cancelOwnedLogin();
           clearDeviceCode();
           setLoggingIn(false);
         } else {
@@ -849,8 +913,9 @@ function CustomProviderHeader({
   const [loggingIn, setLoggingIn] = useState(false);
   const isOAuth = provider.auth.method === 'oauth' && !!provider.auth.oauth;
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
-  const { deviceCode, clearDeviceCode, beginOwnedLogin } = useProviderOAuthDeviceCode(
-    deviceFlow ? provider.id : null,
+  const { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } = useProviderOAuthDeviceCode(
+    isOAuth ? provider.id : null,
+    { observeProgress: deviceFlow },
   );
   const handleOAuthClick = useCallback(async () => {
     if (provider.connected) {
@@ -867,16 +932,18 @@ function CustomProviderHeader({
       return;
     }
     if (loggingIn) {
-      void window.electronAPI.maker.providerOAuthCancel(provider.id);
+      cancelOwnedLogin();
       clearDeviceCode();
       setLoggingIn(false);
       return;
     }
     clearDeviceCode();
     setLoggingIn(true);
-    const finishOwnedLogin = beginOwnedLogin();
+    const ownedLogin = beginOwnedLogin();
     try {
-      const r = await window.electronAPI.maker.providerOAuthLogin(provider.id);
+      const r = await window.electronAPI.maker.providerOAuthLogin(provider.id, {
+        ownerId: ownedLogin.ownerId,
+      });
       if (r.ok)
         toast.success(t('settings.providers.genericOAuth.toast.loggedIn', { name: provider.name }));
       else if (r.reason !== 'login_cancelled') {
@@ -887,10 +954,10 @@ function CustomProviderHeader({
     } catch {
       toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }));
     } finally {
-      finishOwnedLogin();
+      ownedLogin.finish();
       setLoggingIn(false);
     }
-  }, [beginOwnedLogin, clearDeviceCode, loggingIn, provider.connected, provider.id, provider.name, t]);
+  }, [beginOwnedLogin, cancelOwnedLogin, clearDeviceCode, loggingIn, provider.connected, provider.id, provider.name, t]);
 
   const trailing = (
     <div className="flex shrink-0 items-center gap-1">
@@ -1027,21 +1094,31 @@ function ListRow({
       </div>
       <span
         className="min-w-0 flex-1 truncate text-13 font-medium"
-        style={{ color: 'var(--settings-section-title)' }}
+        style={{
+          color: provider.suspended ? 'var(--text-tertiary)' : 'var(--settings-section-title)',
+        }}
       >
         {title}
       </span>
-      {modelCount !== null && (
-        <span className="shrink-0 text-11 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
-          {t('settings.providers.models.modelCount', { count: modelCount })}
+      {provider.suspended ? (
+        // 已停用比模型数更要紧:窄栏(224px)只放得下一个注记,停用时以状态取代计数。
+        <span className="shrink-0 select-none text-11" style={{ color: 'var(--text-tertiary)' }}>
+          {t('settings.providers.pill.suspended')}
         </span>
+      ) : (
+        modelCount !== null && (
+          <span className="shrink-0 text-11 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
+            {t('settings.providers.models.modelCount', { count: modelCount })}
+          </span>
+        )
       )}
       <span
         className="h-1.5 w-1.5 shrink-0 rounded-full"
         style={{
-          backgroundColor: provider.connected
-            ? 'var(--remote-status-ready)'
-            : 'var(--border-default)',
+          backgroundColor:
+            provider.connected && !provider.suspended
+              ? 'var(--remote-status-ready)'
+              : 'var(--border-default)',
         }}
       />
     </button>
@@ -1121,7 +1198,30 @@ export function ProvidersSection() {
     null | { mode: 'create' } | { mode: 'edit'; config: CustomProviderConfig }
   >(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
-  const [refreshingModels, setRefreshingModels] = useState(false);
+  const [rediscovering, setRediscovering] = useState(false);
+  const [refreshingProviderId, setRefreshingProviderId] = useState<string | null>(null);
+  // React state 负责渲染反馈；ref 才是同一事件循环内立即生效的互斥锁，防止双击在
+  // disabled 状态提交到 DOM 前启动两条刷新。
+  const refreshingProviderIdRef = useRef<string | null>(null);
+  const beginProviderRefresh = useCallback((providerId: string): boolean => {
+    if (refreshingProviderIdRef.current !== null) return false;
+    refreshingProviderIdRef.current = providerId;
+    setRefreshingProviderId(providerId);
+    return true;
+  }, []);
+  const finishProviderRefresh = useCallback((providerId: string): void => {
+    if (refreshingProviderIdRef.current !== providerId) return;
+    refreshingProviderIdRef.current = null;
+    setRefreshingProviderId(null);
+  }, []);
+
+  // 进入「模型供应商」页时只上报一个静默刷新提示。是否真正访问上游由 Main
+  // 根据连接状态、30 分钟冷却和全局 in-flight 决定，失败不打扰用户。
+  useEffect(() => {
+    void window.electronAPI.maker
+      .requestProviderModelsAutoRefresh('providers-open')
+      .catch(() => undefined);
+  }, []);
 
   // 本机 CLI 扫描:挂载时一次(失败静默空数组;检测建议是增强,不是依赖)。
   useEffect(() => {
@@ -1145,6 +1245,8 @@ export function ProvidersSection() {
 
   // 左栏行集合:xd 置顶;内置/通用 OAuth 渠道只在已连接后占行(未连接的入口在向导
   // 目录 + 检测建议);自定义供应商保持既有过滤(有模型或 OAuth 形态)。
+  // 停用的供应商**沉底**(稳定分区,组内保持既有顺序)——「停用的东西往下沉、变灰、
+  // 离开活跃区」是本页的统一隐喻,与右栏模型列表的「已停用」分区同构。
   const listProviders = useMemo(() => {
     const rows: ProviderView[] = [];
     const xd = byId.get('xd');
@@ -1163,7 +1265,7 @@ export function ProvidersSection() {
         rows.push(p);
       }
     }
-    return rows;
+    return [...rows.filter((p) => !p.suspended), ...rows.filter((p) => p.suspended)];
   }, [providers, byId, openaiReconnectRequired]);
 
   // 检测建议:CLI 已安装 + 对应渠道存在于目录 + 未连接,且**未以任何形态占行**
@@ -1257,7 +1359,7 @@ export function ProvidersSection() {
    */
   const handleRefreshModels = useCallback(
     async (p: ProviderView) => {
-      setRefreshingModels(true);
+      if (!beginProviderRefresh(p.id)) return;
       try {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
@@ -1265,10 +1367,16 @@ export function ProvidersSection() {
         for (const agent of p.agents) {
           const rt = config.runtimes[agent];
           if (!rt?.baseUrl) continue;
-          const apiKey = await readCustomProviderKey(p.id, agent);
+          const authMethod =
+            p.auth.method === 'none' ? 'none'
+              : p.auth.method === 'oauth' ? 'oauth'
+                : 'apiKey';
+          const apiKey =
+            authMethod === 'apiKey' ? await readCustomProviderKey(p.id, agent) : null;
           const r = await window.electronAPI.maker.fetchProviderModels({
             agent,
             baseUrl: rt.baseUrl,
+            authMethod,
             modelsUrl: rt.modelsUrl ?? null,
             apiKey,
             ...(rt.headers ? { headers: rt.headers } : {}),
@@ -1293,7 +1401,53 @@ export function ProvidersSection() {
       } catch {
         toast.error(t('settings.providers.models.refreshFailed'));
       } finally {
-        setRefreshingModels(false);
+        finishProviderRefresh(p.id);
+      }
+    },
+    [beginProviderRefresh, finishProviderRefresh, refetch, t],
+  );
+
+  /** 内置四家复用 main 已有的 provider-specific 真源刷新，不在 Renderer 复制网络逻辑。 */
+  const handleRefreshBuiltinModels = useCallback(
+    async (p: ProviderView) => {
+      if (!isBuiltinRefreshableProviderId(p.id) || !beginProviderRefresh(p.id)) return;
+      try {
+        await window.electronAPI.maker.refreshBuiltinProviderModels(p.id);
+        toast.success(t('settings.providers.models.refreshDone'));
+        refetch();
+      } catch {
+        toast.error(t('settings.providers.models.refreshFailed'));
+      } finally {
+        finishProviderRefresh(p.id);
+      }
+    },
+    [beginProviderRefresh, finishProviderRefresh, refetch, t],
+  );
+
+  /**
+   * 动态清单发现失败后的**用户主动**重试。
+   *
+   * host 只对暂时性失败(连不上 / 超时 / 上游 5xx)做有限次退避重试,地域拒绝、凭证被拒
+   * 这类确定性答复一次都不重试 —— 重试只会把真正的原因藏起来。所以自动退避停手之后,
+   * 这个按钮就是恢复入口:用户换好网络 / 代理出口后点一下即可,不必重启,并且会重开一轮
+   * 退避。成功与否都由 main 广播 PROVIDER_CHANGED 驱动列表刷新:成功时清单直接出现在
+   * 同一块区域,失败时理由就地更新 —— 两种结果都自解释,不再弹 toast 重复一遍(只有 IPC
+   * 本身异常才需要额外提示)。
+   */
+  const handleRediscoverModels = useCallback(
+    async (p: ProviderView) => {
+      setRediscovering(true);
+      try {
+        await window.electronAPI.maker.rediscoverModels(p.id);
+        // 正常路径不 refetch:main 的发现流程会广播 PROVIDER_CHANGED,App 层监听已经触发
+        // refreshLocalCatalogSnapshot。这里再拉一次等于每点一下重试就多做一整轮目录 +
+        // capabilities 刷新,也和上面「刷新由广播驱动」的说明自相矛盾(PR #548 review)。
+      } catch {
+        // IPC 本身失败 = 没有广播可等,自己补一次拉取,免得 UI 停在旧快照。
+        toast.error(t('settings.providers.models.refreshFailed'));
+        refetch();
+      } finally {
+        setRediscovering(false);
       }
     },
     [refetch, t],
@@ -1317,14 +1471,14 @@ export function ProvidersSection() {
 
   return (
     <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-1">
         <h2
-          className="text-18 font-semibold leading-[1.2]"
+          className="text-16 font-medium leading-[1.2]"
           style={{ color: 'var(--settings-section-title)' }}
         >
           {t('settings.providers.title')}
         </h2>
-        <p className="text-13 leading-snug" style={{ color: 'var(--settings-section-desc)' }}>
+        <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
           {t('settings.providers.subtitle')}
         </p>
       </div>
@@ -1442,7 +1596,65 @@ export function ProvidersSection() {
             ) : effectiveSelected ? (
               <>
                 {renderDetailHeader(effectiveSelected)}
-                {providerHasModels(effectiveSelected) && (
+                {/* 供应商已停用:条带讲清「发生了什么 + 下一步」并就地给恢复入口。整个
+                    模型区随之收起(2026-07-28 用户反馈:停用了就别再列模型)——停用是
+                    盖在上面的一层,凭证与逐模型配置不丢,启用即原样回来。 */}
+                {effectiveSelected.suspended && (
+                  <div
+                    className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
+                    style={{ borderColor: 'var(--settings-theme-card-border)' }}
+                  >
+                    <span style={{ color: 'var(--text-tertiary)' }}>
+                      {t('settings.providers.detail.suspendedBanner')}
+                    </span>
+                    <PillButton
+                      label={t('settings.providers.button.enableProvider')}
+                      onClick={() =>
+                        writeProviderDisabled(
+                          effectiveSelected.id,
+                          false,
+                          t('settings.providers.models.accessWriteFailed'),
+                        )
+                      }
+                    />
+                  </div>
+                )}
+                {/* 发现失败与「有没有模型」是正交的:失败时刻意保留上次成功的清单(它是陈旧
+                    但可溯源的真数据),于是老用户清单照常显示 —— 若把提示只放进空态分支,他
+                    就完全看不到「这份清单已经不代表当前状态」,还以为供应商一切正常
+                    (DESIGN.md「Errors = what happened + what to do」)。有清单时以条带形式
+                    置于列表上方,无清单时走下面的空态居中版。 */}
+                {!effectiveSelected.suspended &&
+                  effectiveSelected.modelDiscoveryFailure &&
+                  providerHasModels(effectiveSelected) && (
+                  <div
+                    className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
+                    style={{ borderColor: 'var(--settings-theme-card-border)' }}
+                  >
+                    <span style={{ color: 'var(--text-tertiary)' }}>
+                      {/* 有清单时必须换一套措辞:空态那套说的是「拿不到模型列表」,而列表就
+                          显示在这条横幅下面 —— 照搬等于当着用户的面说一句他能一眼看穿的假话。
+                          这里讲的是「没能刷新,你看到的是上次的结果」,每个归因各自的处置建议
+                          照旧保留(DESIGN.md「Errors = what happened + what to do」)。 */}
+                      {t(
+                        `settings.providers.detail.discoveryFailedStale.${effectiveSelected.modelDiscoveryFailure.kind}`,
+                      )}
+                    </span>
+                    <PillButton
+                      label={t(
+                        rediscovering
+                          ? 'settings.providers.button.retrying'
+                          : 'settings.providers.button.retry',
+                      )}
+                      onClick={() => void handleRediscoverModels(effectiveSelected)}
+                      disabled={rediscovering}
+                    />
+                  </div>
+                )}
+                {!effectiveSelected.suspended &&
+                  (providerHasModels(effectiveSelected) ||
+                    (isBuiltinRefreshableProviderId(effectiveSelected.id) &&
+                      !effectiveSelected.modelDiscoveryFailure)) && (
                   <>
                     <div
                       className="border-t"
@@ -1450,27 +1662,60 @@ export function ProvidersSection() {
                     />
                     <UnifiedModelList
                       provider={effectiveSelected}
-                      {...(effectiveSelected.source === 'user' &&
-                      effectiveSelected.auth.method !== 'oauth'
+                      emptyMessage={t(
+                        effectiveSelected.connected
+                          ? 'settings.providers.detail.emptyModelsConnected'
+                          : 'settings.providers.detail.emptyModels',
+                      )}
+                      {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
                         ? {
-                            onRefresh: () => void handleRefreshModels(effectiveSelected),
-                            refreshing: refreshingModels,
+                            onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
+                            refreshing: refreshingProviderId === effectiveSelected.id,
+                            refreshDisabled: refreshingProviderId !== null,
+                            refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
                           }
-                        : {})}
+                        : effectiveSelected.source === 'user' &&
+                            effectiveSelected.auth.method !== 'oauth'
+                          ? {
+                              onRefresh: () => void handleRefreshModels(effectiveSelected),
+                              refreshing: refreshingProviderId === effectiveSelected.id,
+                              refreshDisabled: refreshingProviderId !== null,
+                            }
+                          : {})}
                     />
                   </>
                 )}
-                {!providerHasModels(effectiveSelected) && (
-                  <div
-                    className="flex flex-1 items-center justify-center px-8 text-center text-13"
-                    style={{ color: 'var(--text-tertiary)' }}
-                  >
+                {!effectiveSelected.suspended &&
+                  !providerHasModels(effectiveSelected) &&
+                  (Boolean(effectiveSelected.modelDiscoveryFailure) ||
+                    !isBuiltinRefreshableProviderId(effectiveSelected.id)) && (
+                  <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center text-13">
                     {/* 已连接却无模型(如 Codex 刚登录、models_cache 未生成;或网关清单拉取失败)
-                        不能沿用未连接的「授权后…」文案——那对已连接供应商自相矛盾。 */}
-                    {t(
-                      effectiveSelected.connected
-                        ? 'settings.providers.detail.emptyModelsConnected'
-                        : 'settings.providers.detail.emptyModels',
+                        不能沿用未连接的「授权后…」文案——那对已连接供应商自相矛盾。
+                        动态发现明确失败时更进一步:讲清**发生了什么 + 下一步**并给出重试入口
+                        (DESIGN.md「Errors = what happened + what to do」)——被地域拒绝或凭证
+                        被拒的用户不会等来任何自动恢复,继续说「正在发现」就是假话。 */}
+                    <span style={{ color: 'var(--text-tertiary)' }}>
+                      {effectiveSelected.modelDiscoveryFailure
+                        ? t(
+                            `settings.providers.detail.discoveryFailed.${effectiveSelected.modelDiscoveryFailure.kind}`,
+                          )
+                        : t(
+                            effectiveSelected.connected
+                              ? 'settings.providers.detail.emptyModelsConnected'
+                              : 'settings.providers.detail.emptyModels',
+                          )}
+                    </span>
+                    {effectiveSelected.modelDiscoveryFailure && (
+                      <PillButton
+                        label={t(
+                          rediscovering
+                            ? 'settings.providers.button.retrying'
+                            : 'settings.providers.button.retry',
+                        )}
+                        onClick={() => void handleRediscoverModels(effectiveSelected)}
+                        disabled={rediscovering}
+                      />
                     )}
                   </div>
                 )}

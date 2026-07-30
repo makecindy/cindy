@@ -579,8 +579,22 @@
     {
       "idx": 82,
       "version": "6",
-      "when": 1785164646382,
-      "tag": "0082_breezy_captain_america",
+      "when": 1785150667133,
+      "tag": "0082_daffy_calypso",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "6",
+      "when": 1785287922480,
+      "tag": "0083_gray_katie_power",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "6",
+      "when": 1785423446415,
+      "tag": "0084_brown_iron_patriot",
       "breakpoints": true
     }
   ]

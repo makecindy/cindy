@@ -33,6 +33,7 @@ import { GitSafetySection } from './GitSafetySection';
 import { SessionImportSection } from './SessionImportSection';
 import { HelpSection } from './HelpSection';
 import { HelpAssistantPanel } from './HelpAssistantPanel';
+import { AgentResourceSection } from './AgentResourceSection';
 import { CollaborationSection } from './CollaborationSection';
 import { BuiltinToolsSection } from './BuiltinToolsSection';
 import { ContactsSection } from './contacts/ContactsSection';
@@ -162,7 +163,7 @@ export function SettingsView() {
     [canAccessBilling, isMac],
   );
 
-  // deep-link: ?section=... → scroll to a section inside General settings.
+  // deep-link: ?section=... → scroll to a section inside the active tab.
   useEffect(() => {
     const section = searchParams.get('section');
     const sectionId =
@@ -170,7 +171,9 @@ export function SettingsView() {
         ? 'settings-collaboration'
         : section === 'notifications'
           ? 'settings-notifications'
-          : null;
+          : section === 'contacts'
+            ? 'settings-contacts'
+            : null;
     if (!sectionId) return;
     const el = document.getElementById(sectionId);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -237,18 +240,29 @@ export function SettingsView() {
         </aside>
 
         {/* Content column — capped and centered in the remaining space.
+            Most tabs scroll as a page; Session Import uses a fixed-height workspace
+            so only its candidate list scrolls and the import action stays visible.
             right padding mirrors sidebar's 24px left inset.
             pt-[56px] pushes content top to align with the first nav tab (General),
             skipping the "Settings" header height (h1 24/1.1 + pb-18 + gap-2 ≈ 52px).
-            scrollbar-gutter:stable —— 全局滚动条占位 12px,长短页(有/无滚动条)
-            切换时预留 gutter,避免居中内容左右跳变。 */}
+            scrollbar-gutter:stable —— 所有分区都预留同一滚动条槽位；即使
+            Session Import 自身不滚动，也要保持与普通滚动页相同的内容宽度。 */}
         <div
           ref={contentScrollRef}
-          className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-y-auto pl-4 pr-6 pt-[56px] [scrollbar-gutter:stable]"
+          className={cn(
+            'flex h-full min-h-0 min-w-0 flex-1 flex-col pl-4 pr-6 pt-[56px] [scrollbar-gutter:stable]',
+            activeTab === 'import' ? 'overflow-hidden' : 'overflow-y-auto',
+          )}
         >
           {/* key={activeTab}:切分区时 wrapper 重挂跑 150ms 淡入(面板内容本就
               按 activeTab 条件卸载重挂,key 不额外丢状态;滚动容器在外层不重挂)。 */}
-          <div key={activeTab} className="mx-auto w-full max-w-[920px] pb-32 animate-fade-in">
+          <div
+            key={activeTab}
+            className={cn(
+              'mx-auto w-full min-w-0 max-w-[920px] px-1 animate-fade-in',
+              activeTab === 'import' ? 'h-full min-h-0' : 'pb-32',
+            )}
+          >
             {activeTab === 'general' && (
               <div
                 role="tabpanel"
@@ -303,6 +317,16 @@ export function SettingsView() {
                   <CollaborationSection />
                 </section>
 
+                {/* Section — Agent resource usage (命令并发/进程优先级/工具链限核)。
+                    与 Collaboration(worker 上限)相邻:同属"agent 吃多少机器资源"的治理面。 */}
+                <section
+                  id="settings-agent-resource"
+                  className="py-[18px]"
+                  aria-label={t('settings.sections.agentResource')}
+                >
+                  <AgentResourceSection />
+                </section>
+
                 {/* Section — Git safety savepoints (formal setting, not experimental). */}
                 <section className="py-[18px]" aria-label={t('settings.sections.gitSafety')}>
                   <GitSafetySection />
@@ -352,11 +376,14 @@ export function SettingsView() {
                 <section className="pb-[18px]" aria-label={t('settings.sections.subagentModels')}>
                   <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>
-                {mode !== 'local' && (
-                  <section className="pb-[18px]" aria-label={t('settings.contacts.title')}>
-                    <ContactsSection key={`contacts:${dataOwnerId ?? 'none'}`} />
-                  </section>
-                )}
+                {/* 通讯录是本机全局库(数据与开关都不依赖云端账号),local 模式同样可用 */}
+                <section
+                  id="settings-contacts"
+                  className="pb-[18px]"
+                  aria-label={t('settings.contacts.title')}
+                >
+                  <ContactsSection key={`contacts:${dataOwnerId ?? 'none'}`} />
+                </section>
                 <section className="pb-[18px]" aria-label={t('settings.sections.compaction')}>
                   <CompactionSection key={`compaction:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>
@@ -467,8 +494,13 @@ export function SettingsView() {
             )}
 
             {activeTab === 'import' && (
-              <div role="tabpanel" id="settings-panel-import" aria-labelledby="settings-tab-import">
-                <section aria-label={t('settings.sections.import')}>
+              <div
+                role="tabpanel"
+                id="settings-panel-import"
+                aria-labelledby="settings-tab-import"
+                className="h-full min-h-0"
+              >
+                <section className="h-full min-h-0" aria-label={t('settings.sections.import')}>
                   <SessionImportSection />
                 </section>
               </div>

@@ -1,0 +1,87 @@
+name: pr-code-review
+
+# Claude Code 自动 code review。审阅逻辑、prompt 与工具白名单都在被调用的
+# krosdai/.github 复用 workflow 里，本文件只负责传 PR 上下文与凭证。
+#
+# 定位：**建议性**检查，不替代人工 review，也不替代 client-ci 的机器门禁。
+# 仓库侧的审阅口径写在根目录 REVIEW.md（复用 workflow 的 prompt 会主动读取）。
+#
+# 前置配置：
+#   - repository secret `ANTHROPIC_API_KEY`(必需)。复用 workflow 声明为 required,
+#     缺了本 workflow 每次都失败,代码里无法兜底。
+#   - repository variable `ANTHROPIC_BASE_URL`(可选)。不设则走 api.anthropic.com。
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened, synchronize]
+
+# 被调用 workflow 自己声明了 actions:read / contents:read / id-token:write /
+# pull-requests:write。调用方授予的权限必须 >= 这四项,否则整个 run 直接报错;
+# 这里按最小集给齐,不多给 issues:write 之类用不到的权限。
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+  pull-requests: write
+
+# 刻意不在调用方设 concurrency:被调用 workflow 已按 repo + PR number 分组并
+# cancel-in-progress,再套一层只会让取消粒度重复。
+
+jobs:
+  code-review:
+    # 与被调用 workflow 内部的 if 重复是有意的——在调用方就短路,fork PR 与 draft
+    # 连 job 都不启动。fork PR 一律不 review:一是 fork 触发的 pull_request 事件
+    # 取不到 secrets,二是外部分支内容进 prompt 有注入面。外部贡献者的 PR 因此
+    # 只有 client-ci 与人工 review 把关,这是有意的取舍。
+    #
+    # 排除 dependabot:它的分支在本仓,同仓判断拦不住,但 GitHub 把 Dependabot 触发的
+    # pull_request 当 fork 处理——Actions secrets 一律不可见,只有 Dependabot secrets
+    # 可见。于是 job 会照常启动,然后在拿不到 ANTHROPIC_API_KEY 这一步必然失败。
+    # 本仓 dependabot 每周巡检 github-actions 与 npm 两个生态(上限 5 个 PR,见
+    # .github/dependabot.yml),不排除就是每周固定几条红。
+    #
+    # 注意别把这里的原因记成「拿不到 pull-requests:write」:GITHUB_TOKEN 对 Dependabot
+    # 触发的 run 确实默认只读,但那只是**默认值**——自 2021-10 起这类 run 会遵循
+    # workflow 的 permissions key,而本文件上面已经声明了 pull-requests:write。
+    # 也就是说唯一真正卡住的是 secrets,不是权限。
+    #
+    # 被调用 workflow 的 allowed_bots 输入解决不了这个:它管的是 claude-code-action
+    # 自己的 bot 作者校验,与 GitHub 扣发 secrets 是两层;上游注释也明确写了要禁 bot
+    # 就在调用方 gate。
+    #
+    # 判定用 github.actor 而不是 pull_request.user.login:约束的实质是「谁触发了这次
+    # run」。人往 dependabot 分支上推一个 commit 时,run 由该人触发,secrets 与写权限
+    # 都正常,那次 review 应该照跑——用 user.login 会把这种情况一并误杀。
+    #
+    # 若以后希望 dependabot PR 也过 review,把 ANTHROPIC_API_KEY 以同名加到
+    # Dependabot secrets,再删掉这一行条件。上面那段说明了权限侧不需要额外动作,
+    # 但这条链路(Dependabot + reusable workflow + permissions key)没有实机验证过,
+    # 真要恢复时先拿一个 dependabot PR 实跑确认,别只依赖文档推断。
+    if: >-
+      github.event.pull_request &&
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
+    # 跨 org 复用 workflow,按本仓惯例钉死 commit SHA 而不是 @v1 浮动 tag:
+    # tag 可被上游重新指向,而这份 workflow 持有 pull-requests:write 并决定
+    # 喂给模型的 prompt。dependabot(github-actions 生态,见 .github/dependabot.yml)
+    # 会照常提交升级 PR。
+    #
+    # 已知残余风险(有意接受,不是疏漏):钉这一行锁住的是「跑哪份 workflow 文件、
+    # 什么 prompt、什么权限声明、什么工具白名单」,锁不住「该文件在运行期拉取
+    # 并执行哪个版本的 action」。截至 0838103,被调用文件内部是两个浮动 tag——
+    # actions/checkout@v6 与 anthropics/claude-code-action@v1——它们运行在持有
+    # ANTHROPIC_API_KEY 与 pull-requests:write 的 job 里。
+    # 接受的理由:这两个分别是 GitHub 与 Anthropic 的第一方 action,tag 被恶意
+    # 重指向属于行业级事件,不构成本仓特有的暴露面。代价是与本仓「全部 action
+    # 钉 40 位 SHA」的惯例留了一处不一致。
+    # 真正的修法在上游:让 krosdai/.github 把内部 action 钉到 SHA,本仓再 re-pin
+    # 到新的上游 SHA。届时删掉本段注释。
+    # 背景见 PR #985 与安全门 issue #999。
+    uses: krosdai/.github/.github/workflows/code-review.yml@0838103fffe7d4c38247050098defc8ae47b8355 # v1
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      is_draft: ${{ github.event.pull_request.draft }}
+      head_repo_full_name: ${{ github.event.pull_request.head.repo.full_name }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

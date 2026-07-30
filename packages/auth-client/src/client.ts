@@ -127,9 +127,17 @@ export class CindyAuthClient {
       ssoOrgDiscoverySchema,
       { org },
     );
+    if (discovery.region !== this.options.region) {
+      throw new AuthApiError(
+        "REGION_MISMATCH",
+        0,
+        `Queried ${this.options.region} auth deployment returned ${discovery.region}`,
+      );
+    }
     // 企业存在但未启用任何 SSO 连接（服务端可能以 200 + connections:[] 表达）：
     // 映射成精确的 ORG_SSO_NOT_FOUND（其文案已覆盖「未启用 SSO」语义），
     // 避免落到 INVALID_RESPONSE 的通用错误，也拦住空 methods 进入 method-choice。
+    // 必须在 region 核对之后判断，不能把错误部署返回的空列表伪装成明确未找到。
     if (discovery.connections.length === 0) {
       throw new AuthApiError(
         "ORG_SSO_NOT_FOUND",

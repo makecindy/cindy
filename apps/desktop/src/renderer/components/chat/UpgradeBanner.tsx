@@ -273,18 +273,15 @@ export function UpgradeBanner({ hostId, sessionId, className, style }: UpgradeBa
           {t('chat.upgradeBanner.upgrade')}
         </button>
       )}
+      {/* 关闭:纯 X,尺寸与不透明度对齐其它提示条的关闭按钮(2026-07 统一)。 */}
       {!upgrading && (
         <button
           type="button"
           onClick={() => void handleDismiss()}
-          className={cn(
-            'shrink-0 flex items-center gap-1 text-xs font-medium',
-            'text-[var(--upgrade-banner-fg)]',
-            'hover:opacity-70 transition-opacity',
-          )}
+          className="shrink-0 text-[var(--upgrade-banner-fg)] opacity-60 hover:opacity-100 transition-opacity"
           title={t('chat.upgradeBanner.dismissTitle')}
         >
-          <X size={12} />
+          <X size={14} />
         </button>
       )}
     </div>

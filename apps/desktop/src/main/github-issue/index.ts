@@ -10,6 +10,7 @@ import os from 'node:os';
 
 import { app } from 'electron';
 
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { getCurrentMembershipDisplayName } from '../authManager';
 import { getGhostManager, getGhostPipeDispatcher } from '../cindy-brain';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
@@ -70,8 +71,8 @@ export async function submitGithubIssueForSession(
   };
   return submitGithubIssueWithConfirm(
     {
-      confirm: (sessionId, draft, env, submissionIdentity) =>
-        bridge.request(sessionId, draft, env, submissionIdentity),
+      confirm: (sessionId, draft, env, submissionIdentity, suggestedPublicName) =>
+        bridge.request(sessionId, draft, env, submissionIdentity, suggestedPublicName),
       resolveSubmissionIdentity: (workdir) =>
         resolveGithubIssueSubmissionIdentity(githubUserSubmitterDeps, workdir),
       postIssue: (submissionIdentity, bodyFactory) => {
@@ -85,8 +86,8 @@ export async function submitGithubIssueForSession(
             bodyFactory,
             // 独立部署的 github-server(服务端仓);登录 JWT 验签与
             // auth-server 同侧。bodyFactory 随 401 refresh 重建,确保账号切换后
-            // userName 与最终 Bearer membership 一致。
-            baseUrl: getClientEndpoint('githubApiBaseUrl'),
+            // userName、区域端点与最终 Bearer membership 一致。
+            baseUrl: () => getClientEndpoint('githubApiBaseUrl'),
           },
         );
       },
@@ -96,6 +97,7 @@ export async function submitGithubIssueForSession(
         arch: process.arch,
         osVersion: os.release(),
       }),
+      getRegion: () => CURRENT_CINDY_REGION,
       getFallbackLocale: () => app.getLocale(),
       getSubmitterName: getCurrentMembershipDisplayName,
     },

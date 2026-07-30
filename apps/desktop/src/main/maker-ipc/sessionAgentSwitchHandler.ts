@@ -99,6 +99,19 @@ export interface AgentSwitchSessionRow {
 }
 
 export interface MakerSessionAgentSwitchHandlerDeps {
+  /**
+   * 停用轴的边界裁决(生产 = register.ts 的 assertModelRouteUsable,内核纯逻辑在
+   * model-route-guard.ts)。跨引擎切换是新的路由选择,目标 (agent, model, 来源) 被
+   * 停用必须抛错拒绝 —— 本 channel 在 device-link allowlist 内,且切回停泊引擎会以
+   * resumeSessionId bootstrap,create 侧的 resume 豁免拦不住它(PR #744 review)。
+   * 返回非空 = 隐式来源的默认落点被停用,应改路由到该启用来源。缺省 = 不裁决
+   * (测试最小 harness)。
+   */
+  assertModelRouteUsable?(
+    agent: 'claude-code' | 'codex',
+    model: string,
+    providerId: string | null,
+  ): Promise<string | undefined>;
   getSessionRow(sessionId: string): Promise<AgentSwitchSessionRow | null>;
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null | undefined;
   closeSession(sessionId: string): Promise<void>;
@@ -132,6 +145,16 @@ export interface MakerSessionAgentSwitchHandlerDeps {
       fastMode?: boolean;
     },
   ): Promise<void>;
+  /**
+   * DB 提交成功后同步跨引擎 provider route。这里只在显式携带 providerId 的
+   * 生命周期切换边界调用，避免普通 create/resume 的异步 DB 读取覆盖运行时 SET_MODEL。
+   */
+  setSessionProvider(sessionId: string, providerId: string | null): void;
+  /**
+   * 新的跨引擎选择淘汰较早的 deferred model/provider 选择。后者可能正在等待
+   * close 完成，必须先清登记，避免它在新 agent route 提交后回写旧 provider。
+   */
+  supersedePendingCredentialSwitch?(sessionId: string): void;
   /** 返回边界行 clientId(resume 回落时原子改写定位用)。 */
   insertBoundaryMessage(sessionId: string, content: AgentSwitchBoundaryContent): Promise<string>;
   /**
@@ -143,7 +166,14 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     clientId: string,
     content: AgentSwitchBoundaryContent,
   ): Promise<void>;
-  setPendingHandoff(sessionId: string, handoff: string): void;
+  /**
+   * 写待注入交接。`expectedGeneration` 取自 readPendingHandoffGeneration:本函数从读
+   * 历史到写回之间有大量异步工作,期间若发生 /clear,这份按 clear 前历史算出的交接
+   * 必须被丢弃,而不是盖掉 clear 立的墓碑。
+   */
+  setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
+  /** 读交接注册表的当前代次(在读历史之前取一次)。 */
+  readPendingHandoffGeneration?(sessionId: string): number;
   /** 从 DB 行(切换已提交后的新值)重建 live session;抛错 = 引擎未就绪。 */
   bootstrapSwitchedSession(sessionId: string): Promise<void>;
   /**
@@ -196,6 +226,12 @@ export interface PendingAgentSwitchIntent {
     boundaryClientId: string | null;
     boundaryContent: AgentSwitchBoundaryContent;
     handoff: string;
+    /**
+     * 构造这份 handoff 时的 clear 纪元。重试路径必须用它、而不是重试开始时重读——
+     * intent 里的 handoff 是按**当初**的历史生成的,若这中间用户 /clear 过(而 /clear
+     * 并不取消 intent),重读会拿到 clear 之后的纪元,让这份已作废的历史绕过墓碑写回去。
+     */
+    handoffClearEpoch?: number;
   };
 }
 
@@ -297,6 +333,20 @@ export async function performSessionAgentSwitch(
   if (providerId !== undefined && providerId !== null && typeof providerId !== 'string') {
     throwIpcError('INVALID_PARAMS', 'providerId must be string | null');
   }
+  let normalizedProviderId =
+    typeof providerId === 'string' ? providerId.trim() || null : providerId;
+
+  // 停用轴准入(PR #744 review):意图登记与 applyNow 提交都要过裁决(applyNow 重入
+  // 本函数时按最新目录再判一次)。目标路由被停用 → 抛错;隐式默认落点被停用而有
+  // 启用替代拷贝 → 直接以显式来源落地(后续意图/提交/内存路由全部用改后的值)。
+  if (deps.assertModelRouteUsable) {
+    const reroute = await deps.assertModelRouteUsable(
+      targetAgentKind,
+      model,
+      typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
+    );
+    if (reroute && typeof normalizedProviderId !== 'string') normalizedProviderId = reroute;
+  }
 
   const row = await deps.getSessionRow(sessionId);
   throwIfAgentSwitchAborted(signal);
@@ -322,6 +372,10 @@ export async function performSessionAgentSwitch(
     return { switched: false, agentKind: targetAgentKind, model, engineReady: true };
   }
 
+  // 跨引擎选择比此前登记的凭证切换更新；即使旧切换已在 await close，清掉登记后
+  // 它也会在收口前重读并放弃，避免 DB 已是新 agent、内存 route 却被旧 provider 覆盖。
+  deps.supersedePendingCredentialSwitch?.(sessionId);
+
   // 意图制:外部调用(非 applyNow)一律只登记意图——空闲/运行中同一语义,
   // 用户反复改选零成本;renderer 乐观显示意图,真切换在下一条消息发送时刻执行。
   // 重复登记 = 覆盖(同一意图的最新表达)。
@@ -329,7 +383,7 @@ export async function performSessionAgentSwitch(
     const intent: PendingAgentSwitchIntent = {
       targetAgentKind,
       model,
-      providerId: providerId as string | null | undefined,
+      providerId: normalizedProviderId,
       ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
       ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
     };
@@ -349,6 +403,9 @@ export async function performSessionAgentSwitch(
     // 竞态兜底:仍在跑就拒绝,绝不打断进行中的 turn。
     throwIpcError('SESSION_RUNNING', `Session ${sessionId} is running a turn`);
   }
+  // 交接注册表代次:必须在读历史**之前**取。下面到 setPendingHandoff 之间全是异步活,
+  // 期间用户可能 /clear——带上它,过期的写入会被 registry 丢弃而不是盖掉墓碑。
+  const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
   // 交接素材与停泊绑定先于任何状态变更取得(失败不留半切换状态)。
   // Phase 2:目标引擎有停泊原生会话 → resume + 增量交接(只补离开期间的进展,
   // 工作状态区仍按全量历史提取);无绑定 → v1 全量交接 + 全新原生会话。
@@ -385,15 +442,32 @@ export async function performSessionAgentSwitch(
       await deps.closeSession(sessionId);
     }
 
+    // 停用轴:提交点重裁决(PR #744 review 第十五轮)—— parked 数据加载、handoff
+    // 构建、closeSession 都是长 await,入口裁决可能已过期。此刻拒绝仍安全:DB 未写,
+    // 旧会话即使已关也只是下一次发送按旧路由懒重建,不产生新的停用路由请求。
+    if (deps.assertModelRouteUsable) {
+      const rerouteAtCommit = await deps.assertModelRouteUsable(
+        targetAgentKind,
+        model,
+        typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
+      );
+      if (rerouteAtCommit && typeof normalizedProviderId !== 'string') {
+        normalizedProviderId = rerouteAtCommit;
+      }
+    }
+
     // ---- commit point:此后切换生效 ----
     await deps.applyAgentSwitchToDb(sessionId, {
       agentKind: toDbKind,
       model,
-      providerId: providerId as string | null | undefined,
+      providerId: normalizedProviderId,
       sdkSessionId: parked?.sdkSessionId ?? null,
       ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
       ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
     });
+    if (normalizedProviderId !== undefined) {
+      deps.setSessionProvider(sessionId, normalizedProviderId);
+    }
 
     const boundaryContent: AgentSwitchBoundaryContent = {
       fromAgentKind: fromDbKind,
@@ -415,7 +489,7 @@ export async function performSessionAgentSwitch(
         err: err instanceof Error ? err.message : String(err),
       });
     }
-    deps.setPendingHandoff(sessionId, handoff);
+    deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
 
     let engineReady = true;
     let resumed = !!parked;
@@ -459,13 +533,14 @@ export async function performSessionAgentSwitch(
               deps.pendingSwitches?.set(sessionId, {
                 targetAgentKind,
                 model,
-                providerId: providerId as string | null | undefined,
+                providerId: normalizedProviderId,
                 ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
                 ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
                 resumeFallbackRecovery: {
                   boundaryClientId,
                   boundaryContent: fallbackBoundaryContent,
                   handoff: fullHandoff,
+                  handoffClearEpoch: handoffGeneration,
                 },
               });
               engineReady = false;
@@ -481,13 +556,14 @@ export async function performSessionAgentSwitch(
             deps.pendingSwitches?.set(sessionId, {
               targetAgentKind,
               model,
-              providerId: providerId as string | null | undefined,
+              providerId: normalizedProviderId,
               ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
               ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
               resumeFallbackRecovery: {
                 boundaryClientId: null,
                 boundaryContent: fallbackBoundaryContent,
                 handoff: fullHandoff,
+                handoffClearEpoch: handoffGeneration,
               },
             });
             engineReady = false;
@@ -496,7 +572,11 @@ export async function performSessionAgentSwitch(
               sessionId,
             });
           }
-          deps.setPendingHandoff(sessionId, fullHandoff);
+          // 仍用最初那个纪元,**不要**在这里重读:纪元只由 /clear 推进,所以覆盖自己
+          // 先前写的增量交接本来就不会被挡;而重读会在"期间发生过 /clear、首次写入
+          // 已被正确拒绝"时拿到 clear 之后的新纪元,让这份基于清空前历史构造的全量
+          // 交接反而绕过墓碑写进去。
+          deps.setPendingHandoff(sessionId, fullHandoff, handoffGeneration);
           if (fallbackCommitted) {
             try {
               await deps.bootstrapSwitchedSession(sessionId);
@@ -573,6 +653,10 @@ export function applyPendingAgentSwitchIfIdle(
       if (intent.resumeFallbackRecovery) {
         const recovery = intent.resumeFallbackRecovery;
         throwIfAgentSwitchAborted(opts?.signal);
+        // 用**构造这份 handoff 时**记下的纪元,不要在这里重读:intent 里的 handoff 按
+        // 当初的历史生成,而 /clear 并不取消 intent——重读会拿到 clear 之后的纪元,让
+        // 这份已作废的历史绕过墓碑写回去。
+        const recoveryHandoffGeneration = recovery.handoffClearEpoch;
         const boundaryClientId = recovery.boundaryClientId ??
           await deps.insertBoundaryMessage(sessionId, recovery.boundaryContent);
         // 边界补写成功、原子事务仍失败时记住 id；下次只重试事务，不重复插边界。
@@ -582,7 +666,7 @@ export function applyPendingAgentSwitchIfIdle(
           boundaryClientId,
           recovery.boundaryContent,
         );
-        deps.setPendingHandoff(sessionId, recovery.handoff);
+        deps.setPendingHandoff(sessionId, recovery.handoff, recoveryHandoffGeneration);
         if (deps.pendingSwitches?.get(sessionId) === intent) {
           deps.pendingSwitches.clear(sessionId);
           deps.onPendingSwitchChanged?.(sessionId, null);

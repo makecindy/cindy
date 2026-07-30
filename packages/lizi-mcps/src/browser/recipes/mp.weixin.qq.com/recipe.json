@@ -1,0 +1,16 @@
+{
+  "id": "wechat-article",
+  "match": ["mp.weixin.qq.com"],
+  "description": "读取一篇微信公众号文章:标题/公众号名/作者/发布时间/正文全文/正文图片地址。无需登录,url 传文章分享链接(https://mp.weixin.qq.com/s/... 或 /s?__biz=... 形式)。注意:没有免登录的搜索/列表接口,文章链接需由用户提供。",
+  "inputs": { "url": { "required": true } },
+  "steps": [
+    { "action": "navigate", "url": "{{url}}" },
+    { "action": "wait", "loadState": "load" },
+    {
+      "action": "evaluate",
+      "as": "article",
+      "fn": "() => { if (location.hostname !== 'mp.weixin.qq.com') { throw new Error('当前页面不是微信公众号文章(host: ' + location.hostname + '),url 必须是 https://mp.weixin.qq.com/s/... 链接'); } const q = (s) => { const el = document.querySelector(s); return el ? el.textContent.trim() : ''; }; const content = document.querySelector('#js_content'); if (!content) { throw new Error('页面没有正文容器 #js_content(链接可能已过期、文章被删除/屏蔽,或被环境验证页拦截)。页面开头:' + (document.body.innerText || '').slice(0, 120)); } const images = Array.from(content.querySelectorAll('img')).map(im => im.getAttribute('data-src') || im.getAttribute('src') || '').filter(u => u.indexOf('http') === 0); const full = content.innerText.trim(); const MAX = 40000; return { title: q('#activity-name') || document.title, account: q('#js_name'), author: q('#js_author_name'), publishTime: q('#publish_time'), text: full.slice(0, MAX), truncated: full.length > MAX, images }; }"
+    }
+  ],
+  "output": "{{article}}"
+}

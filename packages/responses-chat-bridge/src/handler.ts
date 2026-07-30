@@ -1,7 +1,7 @@
 import type { ServerResponse } from 'node:http';
 
 import { ChatSseTranslator } from './chat-sse-translator.js';
-import { translateResponsesRequest } from './translate-request.js';
+import { translateResponsesRequestWithContext } from './translate-request.js';
 import {
   UnsupportedResponsesFeatureError,
   type ChatBridgeLogger,
@@ -11,6 +11,7 @@ import {
 } from './types.js';
 
 const MAX_ERROR_BODY_CHARS = 16 * 1024;
+const MAX_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
 const MAX_SSE_BUFFER_CHARS = 1024 * 1024;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -35,14 +36,33 @@ function writeSse(res: ServerResponse, event: unknown, sequenceNumber: number): 
   res.write(`event: ${event.type}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return value.slice(0, end);
+}
+
 function joinUrl(base: string, path: string): string {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const queryIndex = normalizedPath.indexOf('?');
+  const pathname = queryIndex === -1 ? normalizedPath : normalizedPath.slice(0, queryIndex);
+  const hasEncodedPathSeparator = /%(?:2f|5c)/i.test(pathname);
+  const hasDotSegment = pathname
+    .split('/')
+    .some((segment) => {
+      const normalizedDots = segment.replace(/%2e/gi, '.');
+      return normalizedDots === '.' || normalizedDots === '..';
+    });
   if (
-    normalizedPath.startsWith('//')
+    normalizedPath.length > 2_048
+    || normalizedPath.startsWith('//')
     || normalizedPath.includes('#')
     || normalizedPath.includes('\\')
     || /[^\u0021-\u007e]/.test(normalizedPath)
+    || !/^\/[A-Za-z0-9\-._~%!$&()*+,;=:@/?]*$/.test(normalizedPath)
     || /%(?![0-9A-Fa-f]{2})/.test(normalizedPath)
+    || hasEncodedPathSeparator
+    || hasDotSegment
   ) {
     throw new TypeError('invalid chat completions path');
   }
@@ -54,11 +74,9 @@ function joinUrl(base: string, path: string): string {
   ) {
     throw new TypeError('invalid upstream base URL');
   }
-  const queryIndex = normalizedPath.indexOf('?');
-  const pathname = queryIndex === -1 ? normalizedPath : normalizedPath.slice(0, queryIndex);
   const pathQuery = queryIndex === -1 ? '' : normalizedPath.slice(queryIndex + 1);
   const baseQuery = url.search.slice(1);
-  url.pathname = `${url.pathname.replace(/\/+$/, '')}${pathname}`;
+  url.pathname = `${trimTrailingSlashes(url.pathname)}${pathname}`;
   url.search = [baseQuery, pathQuery].filter(Boolean).join('&');
   url.hash = '';
   return url.toString();
@@ -84,6 +102,42 @@ async function readErrorText(upstream: Response): Promise<string> {
   }
 }
 
+async function readResponseText(upstream: Response): Promise<string> {
+  const reader = upstream.body?.getReader();
+  if (!reader) return '';
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let bytesRead = 0;
+  try {
+    while (bytesRead < MAX_RESPONSE_BODY_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) {
+        chunks.push(decoder.decode());
+        return chunks.join('');
+      }
+      const remaining = MAX_RESPONSE_BODY_BYTES - bytesRead;
+      const bounded = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      bytesRead += bounded.byteLength;
+      chunks.push(decoder.decode(bounded, { stream: true }));
+      if (bounded.byteLength < value.byteLength || bytesRead >= MAX_RESPONSE_BODY_BYTES) {
+        await reader.cancel();
+        return chunks.join('');
+      }
+    }
+    await reader.cancel();
+    return chunks.join('');
+  } catch {
+    try {
+      await reader.cancel();
+    } catch {
+      // Ignore cancellation failures after a body read error.
+    }
+    return '';
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export interface ResponsesChatHandlerOptions {
   logger?: ChatBridgeLogger;
   fetchImpl?: typeof fetch;
@@ -105,9 +159,9 @@ export function createResponsesChatHandler(
       }
       const request = parsedBody as ResponsesRequest;
       const realModel = provider.rewriteModel?.(request.model) ?? request.model;
-      let chatRequest;
+      let translated;
       try {
-        chatRequest = translateResponsesRequest(request, {
+        translated = translateResponsesRequestWithContext(request, {
           model: realModel,
           capabilities: provider.capabilities,
           onDroppedTool: (type, index) => {
@@ -125,6 +179,7 @@ export function createResponsesChatHandler(
         }
         throw error;
       }
+      const { request: chatRequest, toolContext } = translated;
 
       let upstreamUrl: string;
       try {
@@ -210,7 +265,50 @@ export function createResponsesChatHandler(
 
       const contentType = upstream.headers.get('content-type')?.toLowerCase() ?? '';
       if (!contentType.startsWith('text/event-stream')) {
-        const text = await readErrorText(upstream);
+        const text = await readResponseText(upstream);
+        let jsonBody: unknown;
+        try {
+          jsonBody = JSON.parse(text);
+        } catch {
+          jsonBody = undefined;
+        }
+        if (isPlainObject(jsonBody) && Array.isArray(jsonBody.choices)) {
+          const translator = new ChatSseTranslator(request.model, {
+            toolContext,
+            zeroUsageOnMissing: provider.capabilities?.zeroUsageOnMissing,
+            inlineReasoning: provider.capabilities?.inlineReasoning,
+          });
+          const events = [
+            ...translator.push(jsonBody),
+            ...translator.finish(),
+          ];
+          const terminal = [...events].reverse().find((event) => (
+            isPlainObject(event)
+            && (
+              event.type === 'response.completed'
+              || event.type === 'response.incomplete'
+              || event.type === 'response.failed'
+            )
+            && isPlainObject(event.response)
+          )) as Record<string, unknown> | undefined;
+          if (request.stream !== false) {
+            res.writeHead(200, {
+              'content-type': 'text/event-stream; charset=utf-8',
+              'cache-control': 'no-cache',
+              connection: 'keep-alive',
+            });
+            let sequenceNumber = 0;
+            for (const event of events) writeSse(res, event, sequenceNumber++);
+            res.end();
+            res.off('close', abortUpstream);
+            return;
+          }
+          res.off('close', abortUpstream);
+          writeJson(res, 200, terminal && isPlainObject(terminal.response)
+            ? terminal.response
+            : responsesError(502, 'invalid_upstream_response', 'provider response could not be translated'));
+          return;
+        }
         log.warn?.('responses-chat bridge upstream returned non-SSE response', {
           model: request.model,
           status: upstream.status,
@@ -225,19 +323,40 @@ export function createResponsesChatHandler(
         return;
       }
 
-      res.writeHead(200, {
-        'content-type': 'text/event-stream; charset=utf-8',
-        'cache-control': 'no-cache',
-        connection: 'keep-alive',
+      if (request.stream !== false) {
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive',
+        });
+      }
+      const translator = new ChatSseTranslator(request.model, {
+        toolContext,
+        zeroUsageOnMissing: provider.capabilities?.zeroUsageOnMissing,
+        inlineReasoning: provider.capabilities?.inlineReasoning,
       });
-      const translator = new ChatSseTranslator(request.model);
       const reader = upstream.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
       let streamFailed = false;
       // 全响应连续递增的 SSE sequence_number（Responses 协议要求）。
       let seq = 0;
+      let terminalEvent: Record<string, unknown> | undefined;
       const emit = (output: unknown): void => {
+        if (request.stream === false) {
+          if (
+            isPlainObject(output)
+            && (
+              output.type === 'response.completed'
+              || output.type === 'response.incomplete'
+              || output.type === 'response.failed'
+            )
+            && isPlainObject(output.response)
+          ) {
+            terminalEvent = output;
+          }
+          return;
+        }
         writeSse(res, output, seq++);
       };
       const parseDataPayload = (payload: string): void => {
@@ -304,7 +423,13 @@ export function createResponsesChatHandler(
         if (!streamFailed && !abort.signal.aborted) {
           for (const output of translator.finish(true)) emit(output);
         }
-        res.end();
+        if (request.stream === false) {
+          writeJson(res, 200, terminalEvent && isPlainObject(terminalEvent.response)
+            ? terminalEvent.response
+            : responsesError(502, 'invalid_upstream_response', 'provider response could not be translated'));
+        } else {
+          res.end();
+        }
       }
     },
   };

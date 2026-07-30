@@ -11,6 +11,20 @@ describe('computeListContinuation', () => {
       expect(computeListContinuation('12) bar')).toEqual({ action: 'continue', insert: '13) ' });
     });
 
+    it('七位数序号正常自增', () => {
+      expect(computeListContinuation('999999. item')).toEqual({
+        action: 'continue',
+        insert: '1000000. ',
+      });
+    });
+
+    it('八位数序号正常接续', () => {
+      expect(computeListContinuation('10000000. item')).toEqual({
+        action: 'continue',
+        insert: '10000001. ',
+      });
+    });
+
     it('保留分隔符后的多余空白', () => {
       expect(computeListContinuation('3.  foo')).toEqual({ action: 'continue', insert: '4.  ' });
     });
@@ -29,7 +43,7 @@ describe('computeListContinuation', () => {
       expect(computeListContinuation('5、')).toEqual({ action: 'exit' });
     });
 
-    it('光标在标记后、正文前(`1. |todo`)不算空项 → 接续拆分,不退出(codex P2)', () => {
+    it('光标在标记后、正文前(`1. |todo`)不算空项 → 接续拆分,不退出', () => {
       // 光标前 = "1. "(rest 空),但光标后仍有 "todo" → 整行非空 → continue
       expect(computeListContinuation('1. ', 'todo')).toEqual({ action: 'continue', insert: '2. ' });
       // 光标后是空白也算空项
@@ -44,8 +58,9 @@ describe('computeListContinuation', () => {
   });
 
   describe('无序列表', () => {
-    it('`- ` / `* ` / `• ` 原样接续', () => {
+    it('`- ` / `+ ` / `* ` / `• ` 原样接续', () => {
       expect(computeListContinuation('- item')).toEqual({ action: 'continue', insert: '- ' });
+      expect(computeListContinuation('+ item')).toEqual({ action: 'continue', insert: '+ ' });
       expect(computeListContinuation('* item')).toEqual({ action: 'continue', insert: '* ' });
       expect(computeListContinuation('• item')).toEqual({ action: 'continue', insert: '• ' });
     });

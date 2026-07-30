@@ -115,7 +115,8 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     },
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
-    apiFetch: (path, opts) => serverApiFetch(path, { ...opts, baseUrl: deviceLinkApiBase() }),
+    apiFetch: (path, opts) =>
+      serverApiFetch(path, { ...opts, baseUrl: deviceLinkApiBase }),
     openLink: openRemoteLink,
     closeLink: closeRemoteLink,
     invoke: (...args) => {

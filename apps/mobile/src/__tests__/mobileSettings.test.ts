@@ -224,5 +224,11 @@ describe('mobile settings overview', () => {
     expect(source).toContain(
       "testID=\"settings.otaVersion\">{t('settings.version.otaVersion', { version: otaVersion })}",
     );
+    expect(source).toContain(
+      "testID=\"settings.desktopVersion\">{t('settings.version.pairedDesktopVersion', { version: DESKTOP_PACKAGE_VERSION })}",
+    );
+    expect(source).not.toContain("'settings.version.desktopVersion'");
+    expect(i18n.t('settings.version.pairedDesktopVersion', { version: '0.1.18' }))
+      .toBe('配套桌面版本 0.1.18');
   });
 });

@@ -97,6 +97,12 @@ export interface UserMessageContent {
   agentReferences?: AgentInputReference[];
 }
 
+function basenameForAttachment(value: string): string {
+  const normalized = value.replace(/\\/g, '/');
+  const name = normalized.slice(normalized.lastIndexOf('/') + 1);
+  return name || 'attachment';
+}
+
 /**
  * Parse a `Message.content` value into { text, images, files }.
  *
@@ -109,10 +115,9 @@ export interface UserMessageContent {
  *                Strings that look like JSON ('{' / '[' lead) are parsed
  *                and recursed into the relevant branch.
  *   2. array   — SDK-native content blocks: `[{type:'text',text},
- *                {type:'image',...}]`. Text blocks are concatenated;
- *                image blocks are dropped (user attachments flow through
- *                the independent `images` field, not via inline content).
- *                The SDK has no standard "file" block, so files is always [].
+ *                {type:'image',...}]`. Text blocks are concatenated and
+ *                attachment blocks are projected into `{images, files}` so
+ *                legacy IM messages remain renderable after a restart.
  *   3. object  — `{text, images, files}` shape produced by stringifyUserContent
  *                AFTER messageToCamel has parsed it back into an object.
  *
@@ -139,19 +144,42 @@ export function parseUserContent(content: unknown): UserMessageContent {
   // ── Branch 2: array — SDK-native content blocks ──────────────────────────
   if (Array.isArray(content)) {
     const textParts: string[] = [];
+    const images: ImageRef[] = [];
+    const files: FileRef[] = [];
     for (const block of content) {
       if (block && typeof block === 'object') {
         const b = block as Record<string, unknown>;
         if (b.type === 'text' && typeof b.text === 'string') {
           textParts.push(b.text);
         }
-        // image blocks are intentionally ignored — user-message attachments
-        // live in the independent `images` field on the parent shape.
-        // SDK has no "file" / "document" block we want to surface here either;
-        // historical SDK-array payloads never carried desktop file attachments.
+        if (b.type === 'image') {
+          const image = coerceImageRef({
+            url: b.url,
+            mimeType: b.mimeType,
+            originalName:
+              typeof b.originalName === 'string'
+                ? b.originalName
+                : typeof b.path === 'string'
+                  ? basenameForAttachment(b.path)
+                  : undefined,
+          });
+          if (image) images.push(image);
+        }
+        if (b.type === 'file' && typeof b.path === 'string') {
+          files.push({
+            name:
+              typeof b.name === 'string'
+                ? b.name
+                : typeof b.originalName === 'string'
+                  ? b.originalName
+                  : basenameForAttachment(b.path),
+            path: b.path,
+          });
+        }
+        // Unknown block types remain intentionally ignored.
       }
     }
-    return { text: textParts.join(''), images: [], files: [] };
+    return { text: textParts.join(''), images, files };
   }
 
   // ── Branch 3: object — already-parsed {text, images, files} shape ────────

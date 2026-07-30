@@ -67,6 +67,8 @@ export function countMobileRenderItemDiffs(items: readonly MobileMessageRenderIt
       nested += countMobileRenderItemDiffs(item.childItems);
     } else if (item.type === 'fork_origin') {
       // 导航标记不含 diff payload。
+    } else if (item.type === 'pending_send') {
+      // 待发送气泡还没有正文以外的 payload(diff 由回流后的正式消息承载)。
     } else {
       sharedItems.push(item);
     }

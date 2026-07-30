@@ -6,9 +6,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GhostManifest, InstalledGhost } from '../../../shared/ghost';
+import type { PluginMarketItem } from '../../../shared/pluginMarket';
 import {
   filterGhostPluginItems,
   ghostFallbackIconKind,
+  marketPresentationForInstalledGhost,
   sortGhostPluginItemsByRecentUse,
   toGhostPluginDetail,
   toGhostPluginListItem,
@@ -51,6 +53,32 @@ function installed(overrides: Partial<InstalledGhost> = {}): InstalledGhost {
   return {
     manifest: manifest(),
     dir: '/tmp/cindy-brain/xd-mivo',
+    enabled: true,
+    ...overrides,
+  };
+}
+
+function marketItem(overrides: Partial<PluginMarketItem> = {}): PluginMarketItem {
+  return {
+    pluginId: `c${'a'.repeat(24)}`,
+    ghostId: 'xd-mivo',
+    name: 'Mivo Studio',
+    description: 'Latest market description.',
+    author: 'Xindong Design',
+    scope: 'public',
+    organizationId: null,
+    defaultInstall: false,
+    releaseId: 'release-1',
+    version: '1.5.10',
+    publishedAt: '2026-07-27T00:00:00.000Z',
+    icon: {
+      mimeType: 'image/png',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 128,
+      url: 'https://plugin.example.invalid/mivo.png?signature=new',
+      expiresAt: '2026-07-27T01:00:00.000Z',
+    },
+    installState: 'installed',
     enabled: true,
     ...overrides,
   };
@@ -114,6 +142,63 @@ describe('ghostPluginViewModel', () => {
       enabled: true,
       canUse: true,
       version: '1.5.10',
+    });
+  });
+
+  it('overlays exact installed market presentation without changing runtime facts', () => {
+    const ghost = installed({
+      iconDataUrl: 'data:image/png;base64,OLD',
+      enabled: false,
+    });
+    const presentation = marketPresentationForInstalledGhost(ghost, marketItem());
+
+    expect(toGhostPluginListItem(ghost, presentation)).toMatchObject({
+      id: 'xd-mivo',
+      name: 'Mivo Studio',
+      description: 'Latest market description.',
+      iconDataUrl: 'https://plugin.example.invalid/mivo.png?signature=new',
+      version: '1.5.10',
+      enabled: false,
+      canUse: true,
+    });
+    const detail = toGhostPluginDetail(ghost, presentation);
+    expect(detail.author).toBe('Xindong Design');
+    expect(detail.permissions.map((item) => item.kind)).toEqual([
+      'network',
+      'network',
+      'tool',
+      'tool',
+      'command',
+      'card',
+      'code',
+    ]);
+  });
+
+  it('treats a market null icon as an explicit presentation override', () => {
+    const ghost = installed({ iconDataUrl: 'data:image/png;base64,OLD' });
+    const presentation = marketPresentationForInstalledGhost(ghost, marketItem({ icon: null }));
+
+    expect(presentation).not.toBeNull();
+    expect(toGhostPluginListItem(ghost, presentation)).not.toHaveProperty('iconDataUrl');
+  });
+
+  it.each([
+    ['local market miss', null],
+    ['not installed', marketItem({ installState: 'not-installed' })],
+    ['source conflict', marketItem({ installState: 'conflict' })],
+    ['pending update', marketItem({ installState: 'update-available', version: '1.6.0' })],
+    ['unresolved same-version provenance', marketItem({ installState: 'update-available' })],
+    ['version mismatch', marketItem({ version: '1.6.0' })],
+    ['ghost ID mismatch', marketItem({ ghostId: 'another-plugin' })],
+  ] as const)('keeps local presentation for %s', (_label, item) => {
+    const ghost = installed({ iconDataUrl: 'data:image/png;base64,LOCAL' });
+    const presentation = marketPresentationForInstalledGhost(ghost, item);
+
+    expect(presentation).toBeNull();
+    expect(toGhostPluginListItem(ghost, presentation)).toMatchObject({
+      name: 'XD Mivo',
+      description: 'Generate media assets.',
+      iconDataUrl: 'data:image/png;base64,LOCAL',
     });
   });
 

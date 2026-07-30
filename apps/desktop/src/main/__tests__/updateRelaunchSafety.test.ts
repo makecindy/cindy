@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   MACOS_UPDATE_RELAUNCH_ARG,
   createUpdatePresentationRecoveryController,
+  decideUpdateRelaunchBusyTransition,
   decideUpdatePresentationRecovery,
   hasUpdateRelaunchBusyActivity,
   isMacOSUpdateRelaunch,
@@ -78,6 +79,21 @@ describe('update relaunch marker', () => {
 });
 
 describe('update relaunch busy probe', () => {
+  it.each([
+    { previousBusy: false, nextBusy: false, shouldNotify: false },
+    { previousBusy: false, nextBusy: true, shouldNotify: true },
+    { previousBusy: true, nextBusy: true, shouldNotify: false },
+    { previousBusy: true, nextBusy: false, shouldNotify: true },
+  ])(
+    'notifies only on remote busy edges ($previousBusy → $nextBusy)',
+    ({ previousBusy, nextBusy, shouldNotify }) => {
+      expect(decideUpdateRelaunchBusyTransition(previousBusy, nextBusy)).toEqual({
+        nextBusy,
+        shouldNotify,
+      });
+    },
+  );
+
   it('treats uninitialized scheduler storage as an idle cold-start state', async () => {
     await expect(readUpdateRelaunchScheduleBusy(null)).resolves.toBe(false);
   });

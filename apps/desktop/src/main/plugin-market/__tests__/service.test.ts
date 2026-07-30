@@ -158,6 +158,50 @@ function harness(items: VisiblePluginSummary[]) {
 }
 
 describe('PluginMarketService migration and defaultInstall', () => {
+  it('projects same-release display metadata without reinstalling the package', async () => {
+    runtime.ghosts = [
+      {
+        manifest: manifest(),
+        dir: '/userData/cindy-brain/cindy-test',
+        enabled: false,
+      },
+    ];
+    const item = summary({
+      name: 'Renamed Plugin',
+      description: 'Updated market description',
+      author: 'Updated Publisher',
+    });
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      pluginId: item.id,
+      ghostId: item.ghostId,
+      releaseId: item.currentRelease.id,
+      version: item.currentRelease.version,
+      sha256: item.currentRelease.sha256,
+      scope: item.scope,
+      organizationId: item.organizationId,
+      source: 'market',
+      installed: true,
+      updatedAt: '2026-07-27T00:00:00.000Z',
+    });
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [
+        {
+          name: 'Renamed Plugin',
+          description: 'Updated market description',
+          author: 'Updated Publisher',
+          releaseId: 'release-1',
+          version: '1.0.0',
+          installState: 'installed',
+          enabled: false,
+        },
+      ],
+      unavailableReason: null,
+    });
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
   it('passes the optional release icon metadata to renderer-safe market items', async () => {
     const icon = {
       mimeType: 'image/png',

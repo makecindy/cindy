@@ -79,6 +79,12 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
     排查并发相关问题时可用
     `pnpm test:unit -- --workspace-concurrency=1` 临时退回 workspace 串行；该参数只改变
     workspace 调度，不减少测试覆盖。
+  - **跨 worktree 重型门禁串行**：本地运行 `unit`、`all`、`db`、`git-integration`
+    tier 时，`test-workspaces.mjs` 会按 Git common-dir 获取同仓共享的 loopback TCP 锁；
+    同一 clone 的后到进程会打印持有者 PID、tier 与 worktree 路径并排队，不同 clone
+    互不影响。`guard` tier 和 CI／GitHub Actions 不参与。等待超过 15 分钟以退出码 `75`
+    结束，表示测试尚未运行，不得当作测试失败排查；排队是正常状态，不要 kill 后重跑。
+    只有明确确认资源足够且需要有意重叠时，才可追加 `--no-lock` 作为逃生口。
 - **在门禁之上按风险追加验证**：跨模块、高风险或基础设施改动追加更广泛验证（如仓库根
   `pnpm test:all`），**最终以 CI 门禁为准**。不得通过 skip、删除或弱化测试制造通过；
   PR「怎么验证的」一节必须**如实**填写，没跑不许写已跑。

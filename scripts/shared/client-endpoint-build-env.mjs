@@ -1,9 +1,9 @@
 /**
  * 客户端构建期端点自举配置。
  *
- * 运行期业务端点的唯一事实源是 region 对应的 config/endpoint*.json；构建期只需
- * 烘焙 region 与“去哪里拉这份清单”的 CDN 基址。该基址直接取同一份仓内正本的
- * cdnBaseUrl，避免再维护一份 production-endpoints.json 镜像。
+ * 运行期业务端点的唯一事实源是 region 对应的 config/endpoint*.json；构建期烘焙
+ * region 与 CN/Global 两份清单的 CDN 基址。基址直接取仓内正本的 cdnBaseUrl，
+ * 避免再维护一份 production-endpoints.json 镜像。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -72,6 +72,18 @@ export function loadEndpointManifestBaseUrl(options = {}) {
   return normalized;
 }
 
+/**
+ * 返回当前构建区域之外的另一份受信任清单基址。CN/Global 互为对端；
+ * dev 以 CN 身份运行，仍只把 Global 作为对端。
+ */
+export function loadPeerEndpointManifestBaseUrl(options = {}) {
+  const region = resolveClientBuildRegion(options.authRegion);
+  return loadEndpointManifestBaseUrl({
+    authRegion: region === 'global' ? 'cn' : 'global',
+    repoRoot: options.repoRoot,
+  });
+}
+
 /** Desktop 正式构建所需的公开 Vite 变量。 */
 export function desktopClientBuildEnv({ allowEnvOverride = true, authRegion, repoRoot } = {}) {
   const region = resolveClientBuildRegion(
@@ -82,10 +94,15 @@ export function desktopClientBuildEnv({ allowEnvOverride = true, authRegion, rep
   const override = allowEnvOverride
     ? process.env.VITE_ENDPOINT_MANIFEST_BASE_URL?.trim()
     : '';
+  const peerOverride = allowEnvOverride
+    ? process.env.VITE_ENDPOINT_MANIFEST_PEER_BASE_URL?.trim()
+    : '';
   return {
     VITE_CINDY_AUTH_REGION: region,
     VITE_ENDPOINT_MANIFEST_BASE_URL:
       override || loadEndpointManifestBaseUrl({ authRegion: region, repoRoot }),
+    VITE_ENDPOINT_MANIFEST_PEER_BASE_URL:
+      peerOverride || loadPeerEndpointManifestBaseUrl({ authRegion: region, repoRoot }),
   };
 }
 
@@ -99,6 +116,21 @@ export function mobileClientBuildEnv({ authRegion, repoRoot } = {}) {
     EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL: loadEndpointManifestBaseUrl({
       authRegion: region,
       repoRoot,
+    }),
+  };
+}
+
+/**
+ * Mobile JS bundle 额外需要对端区域清单基址。与 mobileClientBuildEnv 分开，
+ * 避免把这个纯 JS 变量加入 app.config 的既有 Expo extra / runtime fingerprint。
+ */
+export function mobileClientBundleEnv(options = {}) {
+  const buildEnv = mobileClientBuildEnv(options);
+  return {
+    ...buildEnv,
+    EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL: loadPeerEndpointManifestBaseUrl({
+      authRegion: buildEnv.EXPO_PUBLIC_CINDY_AUTH_REGION,
+      repoRoot: options.repoRoot,
     }),
   };
 }

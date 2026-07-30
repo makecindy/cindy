@@ -38,6 +38,8 @@ import type {
   SessionListResult,
   ApprovalRequestParams,
   ApprovalRequestResult,
+  OAuthRefreshParams,
+  OAuthRefreshResult,
 } from '@cindy/maker-cc-manager';
 import {
   REMOTE_CC_MGR_BUNDLE_PATH,
@@ -73,6 +75,12 @@ const DAEMON_READY_TIMEOUT_MS = 10_000;
  * 卡死 UI 显示 "connecting" 不可恢复。15s 兜底让 user-visible error 快速冒出来。
  */
 const RPC_REQUEST_TIMEOUT_MS = 15_000;
+/**
+ * SESSION_KILL 专用 timeout — daemon 侧 kill 会同步等 consume loop 退出
+ * (10s 看门狗 + close() 升级后再等 5s grace, 见 maker-cc-manager
+ * session-registry.ts), 正常路径最坏 ~15s, 必须显著宽于通用 RPC 超时。
+ */
+const KILL_RPC_TIMEOUT_MS = 30_000;
 /** ssh 启 daemon 命令的最长等待 — 超时 ssh channel 被强关, daemon 已 setsid 独立。 */
 const DAEMON_SPAWN_SSH_TIMEOUT_MS = 5_000;
 /** sock 探活 / 等待循环的轮询间隔。 */
@@ -282,6 +290,23 @@ export async function openCcManagerSession(opts: {
    * are denied (same as the old hardcoded acceptEdits behavior).
    */
   onApprovalRequest?: (params: ApprovalRequestParams) => Promise<ApprovalRequestResult>;
+  /**
+   * 强制 fresh start:daemon 侧 session alive 时也先 kill 再走 start 路径
+   * (而非 attach)。用于本机 HTTP MCP bridge 重启 (app 重启) 后首轮注入:
+   * 旧 SDK 持有的 mcp-session-id 在新 bridge 已不存在, attach 会让协同
+   * MCP 的每次调用 404 且 SDK 不会自动重新 initialize。fresh start 经
+   * startParams.resumeSdkSessionId 恢复上下文 (远端 cc CLI session 文件
+   * 持久化在远端机器上)。SSH 断线重连 (app 未重启) 不要传:bridge 内存
+   * 表还在, attach 是对的。
+   */
+  forceFreshQuery?: boolean;
+  /**
+   * Callback invoked when the remote daemon needs a fresh subscription OAuth
+   * token (remote cc hit 401 mid-turn). Maps to maker-core's
+   * auth.getFreshSubscriptionToken. If not provided, refresh requests answer
+   * token=null (SDK surfaces the auth error — pre-refresh behavior).
+   */
+  onOAuthRefresh?: (params: OAuthRefreshParams) => Promise<OAuthRefreshResult>;
 }): Promise<{
   remoteQuery: RemoteQuery;
   dispose: () => Promise<void>;
@@ -337,6 +362,23 @@ export async function openCcManagerSession(opts: {
       return { kind: p.kind, behavior: 'deny', reason: 'no approval handler registered' } satisfies ApprovalRequestResult;
     });
 
+    // OAuth refresh handler — daemon sends these when the remote cc SDK's
+    // getOAuthToken fires (subscription token expired mid-turn). token=null
+    // on any failure: the daemon passes it to the SDK, which surfaces the
+    // auth error (same as the pre-refresh behavior).
+    client.setRequestHandler(SERVER_METHODS.OAUTH_REFRESH, async (params) => {
+      const p = params as OAuthRefreshParams;
+      if (opts.onOAuthRefresh) {
+        try {
+          return await opts.onOAuthRefresh(p);
+        } catch (err) {
+          log.warn('oauth refresh handler rejected', { sessionId: p.sessionId, error: (err as Error)?.message });
+          return { token: null } satisfies OAuthRefreshResult;
+        }
+      }
+      return { token: null } satisfies OAuthRefreshResult;
+    });
+
     // start-vs-attach 路由:cc-mgr daemon 是 setsid 持久化的, desktop 关掉 daemon
     // 不死, SessionRegistry 里旧 sessionId 仍活着。重启后用同 sessionId 调
     // query/start 会撞 SESSION_ALREADY_EXISTS。先 list 一遍 daemon 上的 sessions,
@@ -355,6 +397,8 @@ export async function openCcManagerSession(opts: {
     // chat(跟 codex remote 行为一致);基于 SDK jsonl 的 read-since-lineNo
     // recovery 是 follow-up,**尚未实现**。
     if (listedSession && !listedSession.alive) {
+      // dead 条目的 kill 只是注册表清理, 失败可吞:start 路径对 dead 条目
+      // 不撞 SESSION_ALREADY_EXISTS (该错误只对 alive 条目)。
       await client.request(
         METHODS.SESSION_KILL,
         { sessionId: opts.sessionId },
@@ -366,7 +410,59 @@ export async function openCcManagerSession(opts: {
         daemonLastSeq: listedSession.lastSeq,
       });
     }
-    const existing = listedSession?.alive ? listedSession : undefined;
+    // forceFreshQuery:alive 也 kill + fresh (bridge MCP 重启后首轮注入,
+    // 见 opts.forceFreshQuery 注释)。
+    const killAliveForFresh = listedSession?.alive === true && opts.forceFreshQuery === true;
+    if (killAliveForFresh) {
+      // kill 失败不得吞错继续 (greptile P1):旧 session 仍 alive 时 fresh
+      // start 必撞 SESSION_ALREADY_EXISTS, 且后续重试沿同一路径永久卡死。
+      // 让错误上抛 → open 失败 → forcedFresh 状态不提交 (maker-host 只在
+      // open 成功后 add), 下次重试仍带 forceFreshQuery 重试 kill, 瞬时
+      // 故障可恢复。
+      await client.request(
+        METHODS.SESSION_KILL,
+        { sessionId: opts.sessionId },
+        { timeoutMs: KILL_RPC_TIMEOUT_MS },
+      );
+      // registry.kill 同步等 consume loop 退出才返回 (interrupt 无效时
+      // 升级 query.close() 终止子进程; 仍不退出抛 SESSION_KILL_TIMEOUT
+      // 上抛, 绝不谎报已退出 — greptile confidence 3/5)。此处轮询只是
+      // belt-and-braces (loop 退出到 list 反映之间无间隙, 通常首轮即
+      // break), 保留以兜住 daemon 老版本 (无同步 kill) 的慢退出:
+      // 退避 (150ms→1s), 总预算 30s。
+      // 超时只能上抛, 不得降级 attach (greptile R22/R23 P1):kill 已 end
+      // 输入队列, AsyncQueue.push 在 end 后静默丢弃 (cc-mgr registry 注释
+      // 实锤) — attach 仍在退出中的 query 会吞掉用户消息。慢退出场景由
+      // 调用方重试自然覆盖 (重试时 query 多已退出);consume loop 永不退出
+      // 是 daemon 病态, 任何客户端策略都无法恢复, 错误信息给出可操作
+      // 指引 (重启远端 cc-mgr)。fresh 状态不提交, 下次重试仍带
+      // forceFreshQuery。
+      const killWaitDeadline = Date.now() + 30_000;
+      let pollDelayMs = 150;
+      for (;;) {
+        const after = await client.request<SessionListResult>(METHODS.SESSION_LIST, {}, {
+          timeoutMs: RPC_REQUEST_TIMEOUT_MS,
+        });
+        const stillAlive =
+          after.sessions.find((s) => s.sessionId === opts.sessionId)?.alive === true;
+        if (!stillAlive) break;
+        if (Date.now() > killWaitDeadline) {
+          throw new Error(
+            `cc-mgr: session ${opts.sessionId} still alive 30s after kill (forced fresh) — ` +
+              `the daemon's consume loop did not exit; retry shortly, or restart the remote ` +
+              `cc-mgr daemon if it persists (a wedged consume loop cannot be recovered from the client side)`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, pollDelayMs));
+        pollDelayMs = Math.min(pollDelayMs * 2, 1_000);
+      }
+      log.info('cc-mgr: alive session killed for forced fresh start (bridge MCP re-inject)', {
+        hostId: opts.host.id,
+        sessionId: opts.sessionId,
+        daemonLastSeq: listedSession.lastSeq,
+      });
+    }
+    const existing = listedSession?.alive && !killAliveForFresh ? listedSession : undefined;
 
     // 对齐 codex 模式: alive → attach live-only, dead/absent → fresh start。
     // 不 replay 旧 events,不追踪 cursor。

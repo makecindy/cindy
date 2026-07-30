@@ -38,10 +38,37 @@ import { getSessionProvider } from './session-provider-store.js';
  */
 type CustomProviderKeyReader = (providerId: string, agent: AgentKind) => string | null;
 let customProviderKeyReader: CustomProviderKeyReader = () => null;
+const providerRouteMutationCounts = new Map<string, number>();
 
 /** host 启动期接通真实 safeStorage 读取（按 `provider_key_<id>_<agent>`，per-runtime 独立密钥）。 */
 export function setCustomProviderKeyReader(reader: CustomProviderKeyReader): void {
   customProviderKeyReader = reader;
+}
+
+/**
+ * 暂停某个 provider 的新路由解析，直到配置、secret 与 active catalog 一起切换完成。
+ *
+ * 配置和 safeStorage 无法组成同一个物理事务；mutation 期间直接拒绝新请求，避免把旧
+ * endpoint 与新 key（或新 endpoint 与旧 key）拼成一次上游请求。计数使排队的多窗口
+ * mutation 之间不会短暂恢复路由。
+ */
+export function beginProviderRouteMutation(providerId: string): () => void {
+  providerRouteMutationCounts.set(
+    providerId,
+    (providerRouteMutationCounts.get(providerId) ?? 0) + 1,
+  );
+  let finished = false;
+  return () => {
+    if (finished) return;
+    finished = true;
+    const remaining = (providerRouteMutationCounts.get(providerId) ?? 1) - 1;
+    if (remaining <= 0) providerRouteMutationCounts.delete(providerId);
+    else providerRouteMutationCounts.set(providerId, remaining);
+  };
+}
+
+export function isProviderRouteMutationInProgress(providerId: string): boolean {
+  return providerRouteMutationCounts.has(providerId);
 }
 
 /**
@@ -61,6 +88,7 @@ export function setOAuthTokenReader(reader: OAuthTokenReader): void {
 
 /** 查询自定义供应商该 runtime 是否已有可注入的 API key（不暴露明文）。 */
 export function hasCustomProviderKey(providerId: string, agent: AgentKind): boolean {
+  if (isProviderRouteMutationInProgress(providerId)) return false;
   return Boolean(customProviderKeyReader(providerId, agent));
 }
 
@@ -86,6 +114,54 @@ const CODEX_ACCOUNT_HEADERS = ['chatgpt-account-id', 'openai-beta', 'originator'
 const CLIENT_AUTH_HEADERS = ['authorization', 'x-api-key'];
 /** 缺少自定义供应商 key 时覆盖 CLI 凭证的哑值：目标上游应 401，但绝不收到订阅 token。 */
 const MISSING_CUSTOM_PROVIDER_API_KEY = 'cindy-missing-custom-provider-api-key';
+const DISABLED_PROVIDER_ROUTE_ERROR = 'provider_route_disabled';
+const UPDATING_PROVIDER_ROUTE_ERROR = 'provider_route_updating';
+
+/**
+ * 已迁移但无法安全执行的历史路由必须由 proxy 原地拒绝，不能返回 null：
+ * null 在两个 proxy host 里表示“未命中”，会继续走默认网关/订阅上游。
+ */
+function disabledProviderRouteDecision(providerId?: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const providerLabel = providerId ? `Provider '${providerId}'` : 'The selected provider';
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: DISABLED_PROVIDER_ROUTE_ERROR,
+          code: DISABLED_PROVIDER_ROUTE_ERROR,
+          message: `${providerLabel} is disabled; update its endpoint or authentication settings before retrying.`,
+        },
+      });
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+function updatingProviderRouteDecision(providerId: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: UPDATING_PROVIDER_ROUTE_ERROR,
+          code: UPDATING_PROVIDER_ROUTE_ERROR,
+          message: `Provider '${providerId}' is updating; retry after the configuration change completes.`,
+        },
+      });
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'retry-after': '1',
+      });
+      res.end(payload);
+    },
+  };
+}
 
 function withoutClientAuthHeaders(
   headers: Record<string, string> | undefined,
@@ -130,6 +206,7 @@ export function buildRouteDecision(
   // routing 只会命中其一，共用一个参数无歧义。
   oauthToken?: string | null,
 ): RoutingDecision | null {
+  if (routing.disabled) return disabledProviderRouteDecision();
   switch (routing.authStrategy) {
     case 'none': {
       // 本机 / 自托管无鉴权代理：仍固定路由到所选 upstream，但显式剥掉子进程自带的
@@ -280,6 +357,7 @@ export function gatewayDefaultRouteDecision(
  * wireModel 为空 = 控制面请求(如 codex `GET /models`,无 body.model),不受范围限制。
  */
 function routingServesWireModel(routing: RoutingDescriptor, wireModel: string | undefined): boolean {
+  if (routing.disabled) return false;
   if (!routing.modelPrefixes?.length) return true;
   if (!wireModel) return true;
   return routing.modelPrefixes.some((prefix) => wireModel.startsWith(prefix));
@@ -327,6 +405,7 @@ export function getSessionRoutingDescriptor(
 ): RoutingDescriptor | null {
   const providerId = getSessionProvider(sessionId);
   if (!providerId) return null;
+  if (isProviderRouteMutationInProgress(providerId)) return null;
   const routing = getActiveCatalog().providers.find((provider) => provider.id === providerId)?.routing[agent];
   if (!routing || !routingServesWireModel(routing, wireModel)) return null;
   return routing;
@@ -351,19 +430,11 @@ export async function resolveSessionRoute(
 ): Promise<ResolvedSessionRoute | null> {
   const providerId = getSessionProvider(sessionId);
   if (!providerId) return null;
+  if (isProviderRouteMutationInProgress(providerId)) return null;
   const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
   const routing = provider?.routing[agent];
   if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
-  const apiKey = provider.source === 'user' ? customProviderKeyReader(providerId, agent) : null;
-  let oauthToken: string | null = null;
-  if (routing.authStrategy === 'oauth-token') oauthToken = oauthTokenReader(providerId);
-  else if (routing.authStrategy === 'provider-oauth-header') {
-    try {
-      oauthToken = await providerOAuthTokenReader(providerId, agent);
-    } catch {
-      oauthToken = null;
-    }
-  }
+  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
   return {
     providerId,
     providerSource: provider.source,
@@ -418,6 +489,66 @@ export function buildLocalHandlerHeaders(route: ResolvedSessionRoute, agent: Age
   }
   return { headers, headerDelete: [...headerDelete] };
 }
+/** 某 providerId 解析出的路由描述符 + 已注入真实凭证的 RoutingDecision(供远端 env materialize 用)。 */
+export interface ResolvedProviderRouteDecision {
+  providerId: string;
+  routing: RoutingDescriptor;
+  /** buildRouteDecision 结果(headerOverride 已含真实 key/token,upstreamOverride = 供应商真上游)。 */
+  decision: RoutingDecision | null;
+}
+
+/**
+ * 读取某供应商路由所需的 host 侧凭证(自定义 key + 供应商 OAuth token)。
+ * resolveSessionRoute / resolveProviderRouteDecision 共用 —— 判定条件(user source 才有
+ * 自定义 key、两种 OAuth 策略的读取器与容错)是同一份逻辑,分写会漂移。
+ */
+async function readProviderRouteCredentials(
+  provider: { id: string; source: 'builtin' | 'user' },
+  routing: RoutingDescriptor,
+  agent: AgentKind,
+): Promise<{ apiKey: string | null; oauthToken: string | null }> {
+  const apiKey = provider.source === 'user' ? customProviderKeyReader(provider.id, agent) : null;
+  let oauthToken: string | null = null;
+  if (routing.authStrategy === 'oauth-token') {
+    oauthToken = oauthTokenReader(provider.id);
+  } else if (routing.authStrategy === 'provider-oauth-header') {
+    try {
+      oauthToken = await providerOAuthTokenReader(provider.id, agent);
+    } catch {
+      oauthToken = null;
+    }
+  }
+  return { apiKey, oauthToken };
+}
+
+/**
+ * 按 **providerId** 解析路由决策(resolveSessionRouteDecision 的 provider-keyed 变体,不查
+ * getSessionProvider,也不套 routingServesWireModel 服务范围门 —— 远端会话的 model 就是该
+ * 供应商的主模型)。远端 Claude 会话把结果翻成 cc env 时用(见 remote-claude-route.ts)。
+ * 返回 null = providerId 空 / xd 网关不可用 / 该供应商对此 agent 无路由 / 路由凭证正在
+ * mutation 窗口内(与 resolveSessionRoute 同口径:窗口极短,spawn 拒绝后重试即可,不能把
+ * 旧 endpoint 与新 key 拼进同一份远端 env)。
+ */
+export async function resolveProviderRouteDecision(
+  providerId: string | null | undefined,
+  agent: AgentKind,
+  gatewayKey: string | null,
+): Promise<ResolvedProviderRouteDecision | null> {
+  const id = providerId?.trim() || null;
+  if (!id) return null;
+  if (isProviderRouteMutationInProgress(id)) return null;
+  if (id === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
+  const provider = getActiveCatalog().providers.find((p) => p.id === id);
+  const routing = provider?.routing[agent];
+  if (!provider || !routing) return null;
+  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  return {
+    providerId: id,
+    routing,
+    decision: buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken),
+  };
+}
+
 export function resolveSessionRouteDecision(
   sessionId: string,
   agent: AgentKind,
@@ -426,10 +557,14 @@ export function resolveSessionRouteDecision(
 ): RoutingDecision | null | Promise<RoutingDecision | null> {
   const providerId = getSessionProvider(sessionId);
   if (!providerId) return null;
+  if (isProviderRouteMutationInProgress(providerId)) {
+    return updatingProviderRouteDecision(providerId);
+  }
   if (providerId === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   const routing = provider?.routing[agent];
   if (!routing) return null;
+  if (routing.disabled) return disabledProviderRouteDecision(providerId);
   if (!routingServesWireModel(routing, wireModel)) return null;
   // 自定义供应商：resolve 时按 provider_key_<id>_<agent> 读出该 runtime 的 API key 注入鉴权头（不在 catalog）。
   const apiKey = provider?.source === 'user' ? customProviderKeyReader(providerId, agent) : null;
@@ -454,9 +589,10 @@ export function resolveSessionRouteDecision(
 
 function providersForModel(modelId: string, agent: AgentKind) {
   return getActiveCatalog().providers.filter((provider) =>
+    !isProviderRouteMutationInProgress(provider.id) &&
     (provider.id !== 'xd' || getAppCapabilities().canUseCindyGateway) &&
     provider.agents.includes(agent) &&
-    Boolean(provider.routing[agent]) &&
+    Boolean(provider.routing[agent] && !provider.routing[agent]?.disabled) &&
     (provider.models[agent] ?? []).some((model) => model.id === modelId),
   );
 }
@@ -509,7 +645,11 @@ export function resolveProviderOAuthControlRouteDecision(
 ): RoutingDecision | null | Promise<RoutingDecision | null> {
   const providers = getActiveCatalog().providers.filter((provider) => {
     const routing = provider.routing[agent];
-    return provider.agents.includes(agent) && routing?.authStrategy === 'provider-oauth-header';
+    return (
+      !isProviderRouteMutationInProgress(provider.id)
+      && provider.agents.includes(agent)
+      && routing?.authStrategy === 'provider-oauth-header'
+    );
   });
   if (providers.length !== 1) return null;
   const provider = providers[0];

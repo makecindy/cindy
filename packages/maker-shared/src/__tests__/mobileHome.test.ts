@@ -93,6 +93,48 @@ describe('mobileHome', () => {
     ]);
   });
 
+  it('groups worktree sessions into the base repo project instead of a random worktree card', () => {
+    // Slack / 定时任务这类自动建 worktree 的会话,workingDir 是 `<主仓>/.cindy-worktrees/<随机名>`。
+    // 不折叠的话首页会多出「serene-lovelace」这种随机名项目卡(与桌面侧栏口径不一致)。
+    const home = buildMobileHomePresentation({
+      devices: [{ canOpen: true, deviceId: 'mac-a', name: 'Mac A' }],
+      sessions: [
+        session('main-repo', { deviceLinkDeviceId: 'mac-a', updatedAt: '2026-01-01T00:03:00.000Z' }),
+        session('managed-worktree', {
+          deviceLinkDeviceId: 'mac-a',
+          workingDir: '/repo/app/.cindy-worktrees/serene-lovelace',
+          worktreePath: '/repo/app/.cindy-worktrees/serene-lovelace',
+          updatedAt: '2026-01-01T00:04:00.000Z',
+        }),
+        session('legacy-worktree', {
+          deviceLinkDeviceId: 'mac-a',
+          workingDir: '/repo/app/.xdt-worktrees/pensive-pasteur/src',
+          worktreePath: '/repo/app/.xdt-worktrees/pensive-pasteur',
+          updatedAt: '2026-01-01T00:05:00.000Z',
+        }),
+        session('conventional-worktree', {
+          deviceLinkDeviceId: 'mac-a',
+          workingDir: '/repo/app/.claude/worktrees/manual',
+          updatedAt: '2026-01-01T00:06:00.000Z',
+        }),
+      ],
+    });
+
+    expect(home.projects.map((project) => ({
+      key: project.key,
+      sessionIds: project.sessions.map((item) => item.session.id),
+      title: project.title,
+      workingDir: project.workingDir,
+    }))).toEqual([
+      {
+        key: 'device:mac-a:/repo/app',
+        sessionIds: ['conventional-worktree', 'legacy-worktree', 'managed-worktree', 'main-repo'],
+        title: 'app',
+        workingDir: '/repo/app',
+      },
+    ]);
+  });
+
   it('keeps the Windows drive-root separator so C:\\ and c:/ merge into one card', () => {
     // 盘符根特例:去尾分隔符不能把 C:\ / c:/ 削成 drive-relative 的 C: —— 否则丢掉 Windows 路径特征、
     // 盘符大小写无法归一,两条盘符根会话又会拆成两张卡。
@@ -395,6 +437,27 @@ describe('mobileHome', () => {
 
     const home = buildMobileHomePresentation({ searchQuery: '登录失败', sessions });
     expect(home.chats.map((item) => item.session.id)).toEqual(['chat-1']);
+  });
+
+  // 首页与设备详情页两条列表管线是对称的:任何一侧只改展示不改 haystack,
+  // 都会留下「搜得到的 ≠ 看得到的」(PR #1031 review P1)。
+  it('搜索按行上显示的标题匹配,内部哨兵不进 haystack', () => {
+    const sessions = [
+      session('s-sentinel', { title: 'New Maker', workspaceKind: 'dialogue', workingDir: null }),
+      session('s-named', { title: 'Fix New Maker draft route', workspaceKind: 'dialogue', workingDir: null }),
+    ];
+
+    expect(buildMobileHomePresentation({
+      searchQuery: 'Untitled',
+      sessions,
+      unnamedLabel: 'Untitled session',
+    }).chats.map((item) => item.session.id)).toEqual(['s-sentinel']);
+
+    expect(buildMobileHomePresentation({
+      searchQuery: 'new maker',
+      sessions,
+      unnamedLabel: 'Untitled session',
+    }).chats.map((item) => item.session.id)).toEqual(['s-named']);
   });
 
   it('collapses runs of the same schedule into one automation group row inside the project', () => {

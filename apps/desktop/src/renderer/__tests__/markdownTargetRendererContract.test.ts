@@ -5,17 +5,17 @@ import { resolve } from 'node:path';
 const markdownRenderer = readFileSync(
   resolve(__dirname, '..', 'components', 'chat', 'MarkdownRenderer.tsx'),
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 
 const localPathResolver = readFileSync(
   resolve(__dirname, '..', 'lib', 'localPathResolver.ts'),
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 
 const textLightbox = readFileSync(
   resolve(__dirname, '..', 'components', 'chat', 'TextLightbox.tsx'),
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 
 describe('Markdown target rendering contract', () => {
   it('funnels markdown links and inline code through the shared target classifier', () => {

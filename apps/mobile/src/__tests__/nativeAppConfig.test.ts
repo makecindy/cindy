@@ -14,6 +14,8 @@ const managedEnvKeys = [
   'EXPO_PUBLIC_APP_VARIANT',
   'EXPO_PUBLIC_BETA_DEV',
   'EXPO_PUBLIC_CINDY_AUTH_REGION',
+  'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL',
+  'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL',
   'EXPO_PUBLIC_XDT_OTA_SELFHOST',
   'EXPO_PUBLIC_XDT_OTA_URL',
   'EXPO_PUBLIC_CINDY_GOOGLE_WEB_CLIENT_ID',
@@ -67,6 +69,33 @@ describe('mobile native app config', () => {
     process.env.EXPO_PUBLIC_BETA_DEV = 'carol';
     expect(buildConfig({ config: appJson.expo }).name).toBe(
       'Cindy Beta (carol)',
+    );
+  });
+
+  it('injects the peer manifest URL into Metro without adding it to the Expo fingerprint', () => {
+    const appJson = JSON.parse(
+      readFileSync(resolve(process.cwd(), 'app.json'), 'utf8'),
+    );
+    const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
+
+    const cn = buildConfig({ config: appJson.expo });
+    expect(
+      process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL,
+    ).toBe('https://hotfix.cindy.app/cindy');
+    expect(cn.extra.xdtProductionEnv).toEqual({
+      EXPO_PUBLIC_CINDY_AUTH_REGION: 'cn',
+      EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL:
+        'https://hotfix.cindy.com.cn/cindy',
+    });
+    expect(cn.extra.xdtProductionEnv).not.toHaveProperty(
+      'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL',
+    );
+    const runtimeEnvSource = readFileSync(
+      resolve(process.cwd(), 'src/config/env.ts'),
+      'utf8',
+    );
+    expect(runtimeEnvSource).toContain(
+      'process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL',
     );
   });
 

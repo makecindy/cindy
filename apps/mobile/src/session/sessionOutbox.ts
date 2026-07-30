@@ -196,9 +196,22 @@ export function buildOutboxItem(input: {
   };
 }
 
-/** 将一组同会话 outbox 条目按 FIFO 顺序合并回一个可持久化 composer 草稿。 */
+/**
+ * 恢复回草稿所需的最小信息。
+ *
+ * 放宽到 Pick 而不是整个 MobileOutboxItem:新建会话失败时,首条消息(它来自
+ * creationTask.draft,从来不是 outbox 条目)必须和创建期间攒下的后续消息**一起、按序**
+ * 恢复,否则用户拿不回原始顺序。有了这个最小形状,首条消息可以直接参与同一次合并,
+ * 引用块与富文本结构都不丢。
+ */
+export type MobileRecoverableDraftItem = Pick<
+  MobileOutboxItem,
+  'text' | 'quotesEncoded' | 'pastedTextRanges' | 'slashCommandRanges' | 'agentReferences'
+>;
+
+/** 将一组同会话待发条目按 FIFO 顺序合并回一个可持久化 composer 草稿。 */
 export function recoverOutboxItemsToComposerDraft(
-  items: readonly MobileOutboxItem[],
+  items: readonly MobileRecoverableDraftItem[],
   existingDraft?: MobileOutboxExistingDraft | null,
 ): MobileOutboxDraftRecovery {
   const visibleParts: string[] = [];

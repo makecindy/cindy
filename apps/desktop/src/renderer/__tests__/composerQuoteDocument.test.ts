@@ -7,6 +7,7 @@ import HardBreak from '@tiptap/extension-hard-break';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ComposerQuoteNode } from '@/components/new-chat/ComposerQuoteNode';
 import {
+  COMPOSER_QUOTE_NODE_TYPE,
   appendQuoteToComposerDocument,
   composerHistoryEntryToDocument,
   prependLegacyQuotesToComposerDocument,
@@ -140,6 +141,36 @@ describe('composerQuoteDocument', () => {
             { type: 'text', text: 'a2' },
           ],
         },
+      ],
+    });
+  });
+
+  it('keeps a sibling list row separate when it follows a quote segment', () => {
+    expect(
+      quoteSegmentsToComposerDocument([
+        { kind: 'text', text: '- first' },
+        { kind: 'quote', quote: { text: 'quoted' } },
+        { kind: 'text', text: '- second' },
+      ]),
+    ).toEqual({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '- first' },
+            {
+              type: COMPOSER_QUOTE_NODE_TYPE,
+              attrs: {
+                text: 'quoted',
+                sourcePath: null,
+                startLine: null,
+                endLine: null,
+              },
+            },
+          ],
+        },
+        { type: 'paragraph', content: [{ type: 'text', text: '- second' }] },
       ],
     });
   });

@@ -44,6 +44,10 @@
   提的，提交者身份不构成例外。
 - 新增或调整产品功能、判断能力应进入 Core / Skill / 插件、设计人机交互或多端体验
   前，必须先读 `docs/product-rules/core-product-principles.md`。
+- 新增或修改按区域（`cn` / `global`）分支的逻辑、构建身份与命名、端点选择、区域相关
+  UI 标注，或涉及两个版本关系的对外文案前，必须先读
+  `docs/product-rules/region-and-editions.md`：**无限定词身份归 Global，未显式指定
+  区域一律落在 `global`，只标注中国大陆版**。
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
   `docs/design-rules/DESIGN.md`；设计文档索引见
   `docs/design-rules/cindy-design-system.md`。
@@ -101,6 +105,9 @@
 - commit、push 和创建 PR 的执行时机由开发者或 Codex、Claude Code、Cindy 等宿主
   工作流决定；仓库规则本身不额外授权外部写操作。
 - 提交 PR 时遵循 `.github/PULL_REQUEST_TEMPLATE.md`，如实说明改动、验证和风险。
+- 非 fork 的非 draft PR 会触发自动 code review（`.github/workflows/pr-code-review.yml`），
+  审阅口径见根目录 `REVIEW.md`。它是**建议性**检查，不替代人工 review，也不替代
+  `client-ci` 的机器门禁；改动上述两份文件前先读 `REVIEW.md` 开头的说明。
 - **DCO 签名（硬性要求）**：本仓每个 commit 都必须带 `Signed-off-by` trailer，且其中的
   名字与邮箱都要与 commit 的 author（或 committer）一致，用 `git commit -s` 生成；
   agent 的自动提交同样适用。PR 上的 DCO check（DCO GitHub App，配置见

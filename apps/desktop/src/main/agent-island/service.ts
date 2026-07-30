@@ -2,9 +2,15 @@ import { dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOp
 import path from 'node:path';
 import { release as getOsRelease } from 'node:os';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
-import type { AgentEvent, InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import {
+  isTerminalAgentErrorEvent,
+  type AgentEvent,
+  type InteractionDecision,
+  type InteractionRequest,
+} from '@cindy/maker-core';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import type { ApplicationMenuCommand } from '../../shared/applicationMenuCommands.js';
 
 import { hasSessionAttention as hasAppBadgeSessionAttention } from '../appBadgeService.js';
@@ -40,6 +46,7 @@ import {
   AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL,
   type AgentIslandDisplayOption,
   type AgentIslandDisplayState,
+  type AgentIslandPillSnapshot,
   type AgentIslandSessionActivity,
   type AgentIslandDisplayTarget,
   type AgentIslandMascotSkin,
@@ -103,10 +110,13 @@ import {
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import {
+  beginProtectedFolderCheck,
   detectProtectedFolderEperm,
+  endProtectedFolderCheck,
+  markEpermGuidanceShown,
   openFolderPrivacySettings,
+  probeProtectedFolderAccess,
   releaseEpermGuidance,
-  shouldShowEpermGuidance,
   type ProtectedFolderKind,
 } from '../file-access/permissions.js';
 import { SessionActivityRelay } from './sessionActivityRelay.js';
@@ -680,10 +690,9 @@ export class AgentIslandService {
       const folderKind = data?.isError !== false && data?.fullText
         ? detectProtectedFolderEperm(data.fullText)
         : null;
-      if (folderKind && shouldShowEpermGuidance(folderKind)) {
-        void this.showFolderEpermGuidance(folderKind).catch((error: unknown) => {
-          releaseEpermGuidance(folderKind);
-          log.warn('failed to show folder access guidance', { kind: folderKind, error });
+      if (folderKind) {
+        void this.resolveProtectedFolderDenial(folderKind).catch((error: unknown) => {
+          log.warn('protected folder guidance flow failed', { kind: folderKind, error });
         });
       }
     }
@@ -947,7 +956,7 @@ export class AgentIslandService {
   }
 
   private prunePermissionRequestsForAgentEvent(sessionId: string, event: AgentEvent): void {
-    if (event.type === 'done' || event.type === 'error') {
+    if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
       this.deletePermissionRequestsForSession(sessionId);
       return;
     }
@@ -1035,13 +1044,13 @@ export class AgentIslandService {
   /**
    * badge 桥接来的会话已读信号(renderer → appBadgeService → 这里)。
    * source 默认 'passive'(fail-safe):renderer 未声明意图的清除一律当被动信号,
-   * 未读 error 条目免疫;只有真实展示路径(useErrorReadAck / 全部标为已读等)
-   * 显式带 'explicit' 才能清掉未读的报错。
+   * 未读 error 条目免疫;只有处置路径(用户操作报错横幅 / 全部标为已读 /
+   * pending-alerts 派生收敛)显式带 'explicit' 才能清掉未处理的报错。
    */
   handleSessionAttentionCleared(sessionId: string, source: 'explicit' | 'passive' = 'passive'): void {
     const ack = acknowledgeAgentIslandSessionRead(this.state, sessionId, Date.now(), { source });
     // 未读 error 对 passive 免疫:state 未动,也**不能**给远端发收尾包 —— 否则手机
-    // 列表行的 error 红点会被导航级被动信号清掉,破坏「已读以真实展示为准」。
+    // 列表行的 error 红点会被导航级被动信号清掉,破坏「未处置就不消失」。
     if (ack === 'error-immune') return;
     if (ack === 'not-found') {
       // not-found(典型:重启后 state / relay 条目丢失,远端仍挂着旧未读)只对
@@ -1103,23 +1112,74 @@ export class AgentIslandService {
       workingDir: patch.workingDir !== undefined ? patch.workingDir : current.workingDir,
       workspaceKind: patch.workspaceKind !== undefined ? patch.workspaceKind : current.workspaceKind,
     };
-    this.metadataCache.set(sessionId, next);
-    if (!patchAgentIslandMetadata(this.state, { sessionId, ...next })) return;
-    this.publish();
+    this.commitMetadata(sessionId, next);
   }
 
   replaySessionActivity(): void {
     this.sessionActivityRelay.replay(this.buildSessionActivityPayload());
   }
 
+  /**
+   * 会话元数据的**唯一写出口**:落 cache + patch state + 发布。
+   *
+   * 这里**只存原始标题**,不做本地化投影 —— 投影统一推迟到 {@link localizeDisplayState}
+   * (构建送给 native 的 payload 那一刻)。两个理由:
+   *
+   *   - `metadataCache` 必须是原始值 —— {@link ensureMetadata} 靠
+   *     `isPlaceholderSessionTitle(cached.title)` 判断「还没拿到权威标题、需要重拉」。
+   *     把本地化文案写进 cache 会让该判定恒为 false,权威标题永远不会再被加载。
+   *   - `state` 也必须是原始值 —— 否则切换应用语言时,`refreshLocalization()` 只重建
+   *     `state.strings` 并 republish,不会重新投影 metadata,灵动岛会一直显示旧语言的
+   *     兜底文案,直到下一次 metadata 事件才纠正(PR #1031 review P1)。存原始值 +
+   *     publish 时投影,切语言后的那次 republish 自然就是新语言,不需要任何重投影逻辑。
+   */
+  private commitMetadata(
+    sessionId: string,
+    meta: { title: string | null; workingDir: string | null; workspaceKind: string | null },
+  ): void {
+    this.metadataCache.set(sessionId, meta);
+    if (!patchAgentIslandMetadata(this.state, { sessionId, ...meta })) return;
+    this.publish();
+  }
+
   private hydrateMeta(meta: AgentIslandSessionMeta): AgentIslandSessionMeta & { title?: string | null } {
     const cached = this.metadataCache.get(meta.sessionId);
     return {
       ...meta,
+      // 原始标题:投影只在 publish 构建 payload 时做(见 commitMetadata 的说明)。
       title: cached?.title ?? null,
       workingDir: cached?.workingDir ?? meta.workingDir,
       workspaceKind: cached?.workspaceKind ?? meta.workspaceKind,
     };
+  }
+
+  /**
+   * agent 输出里的关键词只是粗筛,真相由 Main 亲自向系统核实一次:
+   *
+   * - 读得动 → 那条 EPERM 与 TCC 无关(agent 常常只是读到了**写着这个词的文件内容**),
+   *   什么都不做,也不消耗该目录的提醒名额。
+   * - 读不动 → 确认被拒,才提示用户。这次探测同时把 TCC 归因落到 Cindy.app 上,系统
+   *   自己的授权弹窗有机会出现;用户在系统弹窗里点了允许,readdir 随即成功,这里就不再
+   *   叠一个自制弹窗。只有系统确实不肯再问(此前被拒过)才走到引导去系统设置这一步。
+   */
+  private async resolveProtectedFolderDenial(kind: ProtectedFolderKind): Promise<void> {
+    if (!beginProtectedFolderCheck(kind)) return;
+    try {
+      const access = await probeProtectedFolderAccess(kind);
+      if (access !== 'denied') {
+        log.debug(`protected folder guidance skipped: kind=${kind} access=${access}`);
+        return;
+      }
+      markEpermGuidanceShown(kind);
+      try {
+        await this.showFolderEpermGuidance(kind);
+      } catch (error) {
+        releaseEpermGuidance(kind);
+        log.warn('failed to show folder access guidance', { kind, error });
+      }
+    } finally {
+      endProtectedFolderCheck(kind);
+    }
   }
 
   private async showFolderEpermGuidance(kind: ProtectedFolderKind): Promise<void> {
@@ -1151,15 +1211,11 @@ export class AgentIslandService {
     this.metadataLoading.add(sessionId);
     void getSessionRowSnapshot(sessionId)
       .then((row) => {
-        const metadata = {
+        this.commitMetadata(sessionId, {
           title: row?.title ?? null,
           workingDir: row?.workingDir ?? null,
           workspaceKind: row?.workspaceKind ?? null,
-        };
-        this.metadataCache.set(sessionId, metadata);
-        if (patchAgentIslandMetadata(this.state, { sessionId, ...metadata })) {
-          this.publish();
-        }
+        });
       })
       .catch((err) => {
         log.warn('session metadata load failed', {
@@ -1350,10 +1406,12 @@ export class AgentIslandService {
     }
 
     this.hiddenPublished = false;
-    const displayState = withAgentIslandConfig(
-      buildAgentIslandDisplayState(this.state, now),
-      this.soundSettings,
-      this.mascotSkin,
+    const displayState = this.localizeDisplayState(
+      withAgentIslandConfig(
+        buildAgentIslandDisplayState(this.state, now),
+        this.soundSettings,
+        this.mascotSkin,
+      ),
     );
     this.emitSessionActivityToRenderer();
     this.scheduleNextPublish(now);
@@ -1374,6 +1432,32 @@ export class AgentIslandService {
     )) {
       this.logNativeRendererUnavailable(displayState);
     }
+  }
+
+  /**
+   * 哨兵标题 → 本地化文案的**唯一投影点**:构建送给 native 的 payload 那一刻。
+   *
+   * 不变量:`metadataCache` 与 `state` 一律存**原始**标题,只有这里把哨兵换成兜底文案。
+   *
+   * 放在这里(而不是写 cache / 写 state 时)换来两个性质:
+   *   - **切语言即时生效**:`refreshLocalization()` 只重建 `strings` 再 publish,而 publish
+   *     每次都重新走本函数,所以那次 republish 自然带新语言 —— 不需要「本地化刷新时重投影
+   *     metadata」这类额外逻辑(PR #1031 review P1)。
+   *   - **判定不被污染**:`ensureMetadata` 仍能用 `isPlaceholderSessionTitle(cached.title)`
+   *     判断该不该重拉权威标题。
+   *
+   * 只投影哨兵;真实标题与 null 原样透传(null 由 native 走它自己的空标题分支)。
+   */
+  private localizeDisplayState(state: AgentIslandDisplayState): AgentIslandDisplayState {
+    if (!state.sessions.some((s) => isDefaultDraftSessionTitle(s.title))) return state;
+    return {
+      ...state,
+      sessions: state.sessions.map((session) =>
+        isDefaultDraftSessionTitle(session.title)
+          ? { ...session, title: t('ccAgent.common.unnamedSession') }
+          : session,
+      ),
+    };
   }
 
   private scheduleNextPublish(now: number): void {
@@ -1606,6 +1690,9 @@ export class AgentIslandService {
       hasSession,
       displayWidth: display.bounds.width,
       screenMetrics,
+      // Keep the carrier wide enough for the native count badge; without this the
+      // native side's own reservation gets clamped away and the badge is clipped.
+      pillSnapshot: displayState.pillSnapshot,
     });
     const minimumContentWidth = getAgentIslandMinimumContentWidth({
       expanded,
@@ -1619,6 +1706,7 @@ export class AgentIslandService {
         display,
         screenMetrics,
         minimumContentWidth,
+        pillSnapshot: displayState.pillSnapshot,
       })
       : null;
     const contentWidth = preferredContentWidth !== null
@@ -1751,6 +1839,7 @@ export class AgentIslandService {
     display: Display;
     screenMetrics: AgentIslandScreenLayoutMetrics | null;
     minimumContentWidth: number;
+    pillSnapshot?: AgentIslandPillSnapshot | null;
   }): number {
     if (input.expanded) {
       return input.desiredWidth;
@@ -1767,6 +1856,7 @@ export class AgentIslandService {
       maxWidth,
       hasSession: input.hasSession,
       screenMetrics: input.screenMetrics,
+      pillSnapshot: input.pillSnapshot,
     });
   }
 
@@ -1974,6 +2064,7 @@ function buildAgentIslandStrings(): AgentIslandStrings {
     input: t('agentIsland.native.input'),
     done: t('agentIsland.native.done'),
     running: t('agentIsland.native.running'),
+    networkReconnecting: t('agentIsland.native.networkReconnecting'),
     updatingTasks: t('agentIsland.native.updatingTasks'),
     awaitingPermission: t('agentIsland.native.awaitingPermission'),
     awaitingQuestion: t('agentIsland.native.awaitingQuestion'),
@@ -2157,3 +2248,4 @@ function isPlaceholderSessionTitle(title: string | null): boolean {
   const normalized = title.trim().toLowerCase();
   return normalized === '' || normalized === 'new maker' || normalized === 'untitled';
 }
+

@@ -4,6 +4,10 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import type { VoiceInputDraftSource } from '@cindy/voice-input-core';
 
+import {
+  clampEditorTextRangeToDoc,
+  clampToInlinePosition,
+} from '../../voice-input/editorRangeMapping';
 import { MIC_WAVE_ICON_SVG } from '../../voice-input/VoiceInputMicWaveIcon';
 
 /**
@@ -39,14 +43,12 @@ export type VoiceInputReplacementRangeUpdate = {
   range: VoiceInputReplacementRange | null;
 };
 
-function clampPosition(doc: PMNode, position: number): number {
-  return Math.max(0, Math.min(position, doc.content.size));
-}
-
+// 折叠锚点吸附到「能承载 inline 内容」的位置(见 clampToInlinePosition):落在 block
+// 边界上时 ProseMirror 会把 inline widget 渲染到段落之外,浏览器给它单独一行 ——
+// 就是听写时凭空多出的那个空行。非折叠区间保留两端(全选后听写要替换整篇),widget
+// 的渲染位置在 createDecorations 里单独吸附。
 function clampRange(doc: PMNode, from: number, to: number): { from: number; to: number } {
-  const safeFrom = clampPosition(doc, Math.min(from, to));
-  const safeTo = clampPosition(doc, Math.max(from, to));
-  return { from: safeFrom, to: safeTo };
+  return clampEditorTextRangeToDoc({ from, to }, doc);
 }
 
 /**
@@ -112,6 +114,12 @@ function createDecorations(
 ): DecorationSet {
   if (!text && !caretState) return DecorationSet.empty;
   const range = clampRange(doc, from, to);
+  // The replaced range keeps its own endpoints (a dictation started over
+  // AllSelection must still replace the whole document), but the inline widgets
+  // have to sit at a position that can hold inline content: at a block boundary
+  // ProseMirror renders them at doc level, where the browser gives the span its
+  // own line — a stray blank line above the caret.
+  const widgetPosition = clampToInlinePosition(doc, range.from);
   const decorations: Decoration[] = [];
   if (text && range.to > range.from) {
     decorations.push(
@@ -130,7 +138,7 @@ function createDecorations(
     // browser only repaints the glyphs that actually changed.
     decorations.push(
       Decoration.widget(
-        range.from,
+        widgetPosition,
         () => {
           const node = document.createElement('span');
           node.dataset.voiceDraftInline = 'true';
@@ -139,7 +147,7 @@ function createDecorations(
           return node;
         },
         {
-          key: `voice-input-draft:${range.from}:${range.to}`,
+          key: `voice-input-draft:${widgetPosition}:${range.to}`,
           side: 1,
         },
       ),
@@ -153,10 +161,10 @@ function createDecorations(
     // the next text will land.
     decorations.push(
       Decoration.widget(
-        range.from,
+        widgetPosition,
         () => createCaretElement(caretState),
         {
-          key: `voice-input-caret:${caretState}:${range.from}`,
+          key: `voice-input-caret:${caretState}:${widgetPosition}`,
           side: 2,
         },
       ),
@@ -263,8 +271,13 @@ export function createVoiceInputDraftPlugin(): Plugin<VoiceInputDraftDecorationS
           }
         }
         if (tr.docChanged) {
-          const mappedFrom = tr.mapping.map(old.from, -1);
-          const mappedTo = tr.mapping.map(old.to, 1);
+          // A collapsed anchor must stay collapsed: mapping it with opposite
+          // biases grows it into a range, and a non-empty range makes the
+          // `voice-input-draft-replaced` decoration hide whatever text now sits
+          // inside it (a full-document rebuild would blank the existing draft).
+          const collapsed = old.from === old.to;
+          const mappedFrom = tr.mapping.map(old.from, collapsed ? 1 : -1);
+          const mappedTo = collapsed ? mappedFrom : tr.mapping.map(old.to, 1);
           return createState(
             tr.doc,
             old.text,

@@ -1382,6 +1382,7 @@ describe('Electron Computer Use permission guide window', () => {
   });
 
   it('centers the guide vertically on the real System Settings window', async () => {
+    vi.useFakeTimers();
     harness.locateComputerUseSwitchTarget.mockResolvedValue({
       status: 'not-found',
       systemWindowBounds: { x: 200, y: 100, width: 1000, height: 500 },
@@ -1391,15 +1392,15 @@ describe('Electron Computer Use permission guide window', () => {
     finishTestDrag(guide);
     const guideWindow = harness.windows[1];
 
-    await vi.waitFor(() => {
-      expect(guideWindow.setBounds).toHaveBeenCalledWith(
-        { x: 736, y: 190, width: 480, height: 272 },
-        false,
-      );
-    });
+    await vi.advanceTimersByTimeAsync(900);
+    expect(guideWindow.setBounds).toHaveBeenCalledWith(
+      { x: 736, y: 190, width: 480, height: 272 },
+      false,
+    );
   });
 
   it('uses guide dimensions from the shared placement module', async () => {
+    vi.useFakeTimers();
     const { PERMISSION_GUIDE_WINDOW_WIDTH, PERMISSION_GUIDE_WINDOW_HEIGHT } =
       await import('../placement');
     expect(PERMISSION_GUIDE_WINDOW_WIDTH).toBe(480);
@@ -1413,15 +1414,14 @@ describe('Electron Computer Use permission guide window', () => {
     await guide.showComputerPermissionGuideWindow(null);
     finishTestDrag(guide);
 
-    await vi.waitFor(() => {
-      expect(harness.windows[1].setBounds).toHaveBeenCalledWith(
-        expect.objectContaining({
-          width: PERMISSION_GUIDE_WINDOW_WIDTH,
-          height: PERMISSION_GUIDE_WINDOW_HEIGHT,
-        }),
-        false,
-      );
-    });
+    await vi.advanceTimersByTimeAsync(900);
+    expect(harness.windows[1].setBounds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        width: PERMISSION_GUIDE_WINDOW_WIDTH,
+        height: PERMISSION_GUIDE_WINDOW_HEIGHT,
+      }),
+      false,
+    );
   });
 
   it('does not write drag state when Electron startDrag throws', async () => {

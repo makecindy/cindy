@@ -1,4 +1,8 @@
-import type { BrowserControlRequest, BrowserControlRuntime } from '@cindy/browser-control-runtime';
+import {
+  isPublicHttpResourceUrl,
+  type BrowserControlRequest,
+  type BrowserControlRuntime,
+} from '@cindy/browser-control-runtime';
 import { z } from 'zod';
 
 import type { BrowserMcpDeps } from '../types.js';
@@ -98,11 +102,60 @@ const ACT_KINDS = [
   'resize',
   'wait',
   'evaluate',
+  'saveResource',
   'close',
 ] as const;
 
 function getRuntime(deps: BrowserMcpDeps): BrowserControlRuntime {
   return deps.getRuntime();
+}
+
+function actKindSchema(deps: BrowserMcpDeps) {
+  return z.enum(ACT_KINDS).superRefine((kind, ctx) => {
+    if (kind === 'saveResource' && deps.supportsResourceDownloads?.() === false) {
+      ctx.addIssue({
+        code: 'custom',
+        message: '当前浏览器后端不支持 saveResource',
+      });
+    }
+  });
+}
+
+function elementQuerySchema(deps: BrowserMcpDeps) {
+  const nonBlankString = z.string().trim().min(1);
+  return z.object({
+    css: nonBlankString.optional(),
+    role: nonBlankString.optional(),
+    name: nonBlankString.optional(),
+    text: nonBlankString.optional(),
+    label: nonBlankString.optional(),
+    placeholder: nonBlankString.optional(),
+    testId: nonBlankString.optional(),
+    exact: z.boolean().optional(),
+    index: z.number().int().nonnegative().optional(),
+  }).superRefine((query, ctx) => {
+    const hasLookupField = [
+      query.css,
+      query.role,
+      query.name,
+      query.text,
+      query.label,
+      query.placeholder,
+      query.testId,
+    ].some((value) => typeof value === 'string' && value !== '');
+    if (!hasLookupField) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'element query requires at least one lookup field',
+      });
+    }
+    if (deps.supportsSemanticQueries?.() === false) {
+      ctx.addIssue({
+        code: 'custom',
+        message: '当前浏览器后端不支持语义元素查询',
+      });
+    }
+  });
 }
 
 // Server-enforced ceiling on a single tool result (~50k tokens). A huge page /
@@ -167,6 +220,8 @@ function toRuntimeRequest(args: Record<string, unknown>): BrowserControlRequest 
 }
 
 export function registerBrowserTools(registry: BrowserToolRegistry, deps: BrowserMcpDeps): void {
+  const actKind = actKindSchema(deps);
+  const elementQuery = elementQuerySchema(deps);
   registry.register({
     name: 'browser',
     category: 'browser',
@@ -202,6 +257,9 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
       level: z.string().optional(),
       paths: z.array(z.string()).optional(),
       inputRef: z.string().optional(),
+      query: elementQuery
+        .optional()
+        .describe('action=upload 时定位文件输入框；字段语义与 act.request.query 一致'),
       timeoutMs: z.number().int().positive().optional(),
       dialogId: z.string().optional(),
       accept: z.boolean().optional(),
@@ -227,9 +285,15 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
         .describe('action=saveRecipe: 可选,一并保存的站点指南对象(site/entry/recipes/notes…)'),
       request: z
         .object({
-          kind: z.enum(ACT_KINDS),
+          kind: actKind,
           targetId: z.string().optional(),
           ref: z.string().optional(),
+          query: elementQuery
+            .optional()
+            .describe(
+              '语义元素查询，可组合 role/name/text/label/placeholder/testId/css；' +
+                '默认要求唯一匹配，多项结果时用 index 明确选择。',
+            ),
           doubleClick: z.boolean().optional(),
           button: z.string().optional(),
           modifiers: z.array(z.string()).optional(),
@@ -248,7 +312,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           height: z.number().int().positive().optional(),
           timeMs: z.number().int().nonnegative().optional(),
           selector: z.string().optional(),
-          url: z.string().optional(),
+          url: z.string().optional().describe('saveResource 时使用 snapshot(urls:true) 返回的资源 URL'),
           loadState: z.string().optional(),
           textGone: z.string().optional(),
           timeoutMs: z.number().int().positive().optional(),
@@ -283,6 +347,29 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               `url 必须是 http(s);不支持 file:// / chrome:// / data: 等协议(收到 "${u}")`,
             );
           }
+        }
+        if (
+          args.action === 'act'
+          && args.request?.kind === 'saveResource'
+          && deps.supportsResourceDownloads?.() === false
+        ) {
+          return errorResult(
+            args.action,
+            '当前浏览器后端不支持 saveResource，请使用内嵌浏览器后端',
+          );
+        }
+        if (
+          args.action === 'act'
+          && args.request?.kind === 'saveResource'
+          && (
+            typeof args.request.url !== 'string'
+            || !isPublicHttpResourceUrl(args.request.url)
+          )
+        ) {
+          return errorResult(
+            args.action,
+            'saveResource.url 必须是 snapshot(urls:true) 返回的 http(s) 资源地址',
+          );
         }
 
         // recipe: run a declarative per-site flow (composition over primitives).
@@ -357,6 +444,10 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               const spec = r?.recipe.inputs ?? {};
               return {
                 id,
+                // Surface the author's description at discovery time — it carries
+                // input constraints (e.g. "id must be passed as a string") that the
+                // bare input-name list cannot express.
+                description: r?.recipe.description,
                 inputs: Object.keys(spec),
                 required: Object.entries(spec)
                   .filter(([, v]) => v?.required)

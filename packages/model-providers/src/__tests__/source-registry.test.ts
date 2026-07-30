@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { BUNDLED_CATALOG } from '../catalog.js';
 import {
   loadCatalog,
+  loadCatalogWithSource,
   resolveCatalogUrl,
   resolveFallbackCatalogUrl,
   mergeWithBundled,
@@ -176,6 +177,25 @@ describe('mergeWithBundled', () => {
 });
 
 describe('loadCatalog', () => {
+  it('reports whether local, remote, or bundled supplied the snapshot', async () => {
+    const local = await loadCatalogWithSource(
+      { localPath: '/repo/providers.json' },
+      { readFile: vi.fn(async () => JSON.stringify(MINIMAL)) },
+    );
+    const remote = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      { fetchText: vi.fn(async () => JSON.stringify(MINIMAL)) },
+    );
+    const bundled = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      { fetchText: vi.fn(async () => { throw new Error('network down'); }) },
+    );
+
+    expect(local).toMatchObject({ source: 'local', catalog: { version: 'test' } });
+    expect(remote).toMatchObject({ source: 'remote', catalog: { version: 'test' } });
+    expect(bundled).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
+  });
+
   it('dev: reads local path, skips network', async () => {
     const fetchText = vi.fn();
     const io: CatalogIO = { readFile: vi.fn(async () => JSON.stringify(MINIMAL)), fetchText };
@@ -335,6 +355,32 @@ describe('registry visibility & sources(运行时注入 fixture)', () => {
     expect(connectedProvidersForAgent(views, 'codex').map((p) => p.id)).toEqual(['xd']);
   });
 
+  it('agent selectors and model sources exclude disabled runtimes', () => {
+    const catalog = runtimeCatalog();
+    const xd = catalog.providers.find((provider) => provider.id === 'xd')!;
+    xd.routing.codex = { ...xd.routing.codex!, disabled: true };
+    const disabledViews = buildRegistry(catalog, { xd: true });
+
+    expect(providersForAgent(disabledViews, 'codex').map((provider) => provider.id))
+      .not.toContain('xd');
+    expect(connectedProvidersForAgent(disabledViews, 'codex')).toEqual([]);
+    expect(sourcesForModel(disabledViews, 'gpt-5.5', 'codex')).toEqual([]);
+    expect(connectedProvidersForAgent(disabledViews, 'claude-code').map((provider) => provider.id))
+      .toEqual(['xd']);
+  });
+
+  it('agent selectors and model sources exclude a declared agent with no routing descriptor', () => {
+    const catalog = runtimeCatalog();
+    const xd = catalog.providers.find((provider) => provider.id === 'xd')!;
+    delete xd.routing.codex;
+    const missingRouteViews = buildRegistry(catalog, { xd: true });
+
+    expect(providersForAgent(missingRouteViews, 'codex').map((provider) => provider.id))
+      .not.toContain('xd');
+    expect(connectedProvidersForAgent(missingRouteViews, 'codex')).toEqual([]);
+    expect(sourcesForModel(missingRouteViews, 'gpt-5.5', 'codex')).toEqual([]);
+  });
+
   it('providerOffersModel / getModel (agent-scoped)', () => {
     const xd = views.find((p) => p.id === 'xd')!;
     expect(providerOffersModel(xd, 'gpt-5.5', 'codex')).toBe(true);
@@ -424,6 +470,21 @@ describe('resolveRoute(运行时注入 fixture)', () => {
     expect(resolveRoute(views, 'anthropic', 'claude-opus-4-8', 'codex')).toBeNull();
     expect(resolveRoute(views, 'openai', 'claude-opus-4-8', 'codex')).toBeNull();
     expect(resolveRoute(views, 'nope', 'claude-opus-4-8', 'claude-code')).toBeNull();
+  });
+
+  it('rejects a disabled route even when provider, model, and agent match', () => {
+    const disabledViews = views.map((provider) =>
+      provider.id === 'xai'
+        ? {
+            ...provider,
+            routing: {
+              ...provider.routing,
+              codex: { ...provider.routing.codex!, disabled: true },
+            },
+          }
+        : provider,
+    );
+    expect(resolveRoute(disabledViews, 'xai', 'xai/grok-4.3', 'codex')).toBeNull();
   });
 
   it('动态供应商未注入清单时不解析路由(无可用性证明不路由)', () => {

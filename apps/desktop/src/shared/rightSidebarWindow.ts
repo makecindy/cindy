@@ -43,6 +43,12 @@ export type RsbWindowCommand =
       focusTab?: boolean;
     }
   | { type: 'close-orca-workers-tab'; sessionId: string }
+  /** 打开/聚焦「后台任务」页签(每会话单例);focusTaskId 定位到对应 workflow 详情。 */
+  | {
+      type: 'open-background-tasks-tab';
+      sessionId: string;
+      focusTaskId?: string | null;
+    }
   | {
       type: 'open-file-browser';
       sessionId: string;
@@ -61,6 +67,15 @@ export interface RsbWindowCommandRouteRequest {
   command: RsbWindowCommand;
   /** false 时 detached host 关闭/未 ready 不得重开，main 会保存 intent。 */
   allowOpen: boolean;
+  /**
+   * 这条命令是不是用户当次手势直接要求的(点链接 / 点菜单 / 点按钮)。
+   *
+   * 缺省 true —— 绝大多数调用点都是用户手势,保持既有「带出子窗口」观感。
+   * 插件 preview 槽开页、agent 浏览器自动化这类**程序自发**的命令必须显式传
+   * false:内容照常送进子窗口,但不得 show/focus 抢走用户当前前台应用
+   * (Windows 上 focus() 就是抢前台,后台干活弹窗口是硬伤)。
+   */
+  userInitiated?: boolean;
 }
 
 /** main-owned 宿主裁决；renderer 只有 attached 可以写本地 store。 */

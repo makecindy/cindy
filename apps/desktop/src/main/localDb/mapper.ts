@@ -7,6 +7,8 @@
  * 目的：让上层 sessionService/messageService 函数签名与原 HTTP 响应字段完全一致，hooks 零改动。
  */
 
+import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+
 import type {
   sessions,
   messages,
@@ -268,7 +270,7 @@ export function sessionCreateToRow(
 ): SessionInsert {
   return {
     id,
-    title: 'New Maker',
+    title: DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: normalizeWorkingDirForStorage(body?.workingDir),
     workspaceKind: body?.workspaceKind ?? 'project',
     model: body?.model ?? 'claude-sonnet-4-6',
@@ -558,7 +560,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     lastFiredAt: row.lastFiredAt ?? undefined,
-    activeClaimFiredAt: row.activeClaimFiredAt ?? undefined,
+    activeClaimRunId: row.activeClaimRunId ?? undefined,
     lastFinishedAt: row.lastFinishedAt ?? undefined,
     nextFireAt: row.nextFireAt ?? undefined,
     expireAt: row.expireAt ?? undefined,
@@ -602,7 +604,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
     lastFiredAt: s.lastFiredAt ?? null,
-    activeClaimFiredAt: s.activeClaimFiredAt ?? null,
+    activeClaimRunId: s.activeClaimRunId ?? null,
     lastFinishedAt: s.lastFinishedAt ?? null,
     nextFireAt: s.nextFireAt ?? null,
     expireAt: s.expireAt ?? null,
@@ -664,8 +666,8 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'updatedAt')) out.updatedAt = patch.updatedAt as number;
   // 可空时间戳：undefined 也要写成 null（业务语义"清空 nextFireAt"）
   if (hasKey(patch, 'lastFiredAt')) out.lastFiredAt = patch.lastFiredAt ?? null;
-  if (hasKey(patch, 'activeClaimFiredAt')) {
-    out.activeClaimFiredAt = patch.activeClaimFiredAt ?? null;
+  if (hasKey(patch, 'activeClaimRunId')) {
+    out.activeClaimRunId = patch.activeClaimRunId ?? null;
   }
   if (hasKey(patch, 'lastFinishedAt')) out.lastFinishedAt = patch.lastFinishedAt ?? null;
   if (hasKey(patch, 'nextFireAt')) out.nextFireAt = patch.nextFireAt ?? null;

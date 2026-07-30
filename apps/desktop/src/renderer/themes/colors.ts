@@ -66,6 +66,42 @@ registerColor('md-table-bg', {
   light: 'rgba(236, 236, 234, 0.55)',
   dark: 'rgba(44, 44, 42, 0.55)',
 }, 'Markdown 编辑器表格行 / 表头半透明背景');
+// ── Markdown 正文语义色(标题 h1-h6 + 加粗)──
+// 默认值刻意是 `inherit` 而不是 var(--text-primary):这些元素在引入 token 之前
+// 的颜色就是从容器继承来的(baseComponents 只给字号字重,不给 color)。若默认改成
+// 具体色槽,tool card / secondary 文字区里的 Markdown 标题与加粗会由弱化色变回
+// 主色 —— 那才是真的改动现有观感。(blockquote 已不在此列:引用正文本身改为
+// --text-primary,见 msg-blockquote-text。)`inherit` 让默认主题渲染结果逐
+// 像素不变,同时给外部主题导入(VSCode markup.heading / Obsidian --hN-color)留出
+// 可覆盖的槽位。详见 docs/design-rules/DESIGN.md §10「外部主题导入」。
+registerColor('md-h1-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H1 文字色(默认继承容器文字色)');
+registerColor('md-h2-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H2 文字色(默认继承容器文字色)');
+registerColor('md-h3-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H3 文字色(默认继承容器文字色)');
+registerColor('md-h4-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H4 文字色(默认继承容器文字色)');
+registerColor('md-h5-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H5 文字色(默认继承容器文字色)');
+registerColor('md-h6-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown H6 文字色(默认继承容器文字色)');
+registerColor('md-strong-fg', {
+  light: 'inherit',
+  dark: 'inherit',
+}, 'Markdown 加粗文字色(默认继承容器文字色)');
 registerColor('border-default', {
   light: '#d7d7d4',
   dark: '#3c3c3a',
@@ -473,13 +509,13 @@ registerColor('login-panel-border', {
   light: '#D4D4D4',
   dark: '#434343',
 }, 'Login — 面板 1px inside 描边(亮色 #D4D4D4 / 暗色 #434343;DESIGN.md §16.1)');
-// 品牌红 accent 族:wave4 改判后 #DF0C27 语义限定为 accent(Global pill/字标
+// 品牌红 accent 族:wave4 改判后 #DF0C27 语义限定为 accent(区域徽标/字标
 // 红元素等品牌点缀),禁止表达页面/画板背景——命名刻意不含 bg/background
 // (token-decision-table.md 原案名 login-brand-bg 已随改判弃用)。
 registerColor('login-brand-accent', {
   light: '#DF0C27',
   dark: '#DF0C27',
-}, 'Login — 品牌红 accent(Global pill/字标红元素;禁止用作页面背景,wave4 改判)');
+}, 'Login — 品牌红 accent(区域徽标/字标红元素;禁止用作页面背景,wave4 改判)');
 registerColor('login-brand-accent-pressed', {
   light: '#A61629',
   dark: '#A61629',
@@ -546,7 +582,7 @@ registerColor('login-action-control-bg', {
 registerColor('login-back-border', {
   light: '#FFFFFF',
   dark: '#434343',
-}, 'Login — 返回钮描边(亮色白 / 暗色 #434343;figma 549:897。Global pill 白字仍走 login-inverted-button-border)');
+}, 'Login — 返回钮描边(亮色白 / 暗色 #434343;figma 549:897。区域徽标白字仍走 login-inverted-button-border)');
 registerColor('login-control-border', {
   light: '#D4D4D4',
   dark: '#434343',
@@ -602,7 +638,7 @@ registerColor('login-disabled-button-text', {
 registerColor('login-inverted-button-border', {
   light: '#FFFFFF',
   dark: '#FFFFFF',
-}, 'Login — 浅底钮白描边/Global pill 白字(两模式同值 #FFFFFF;推导,待 Figma 精确)');
+}, 'Login — 浅底钮白描边/区域徽标白字(两模式同值 #FFFFFF;推导,待 Figma 精确)');
 registerColor('login-link-text', {
   light: '#2A2828',
   dark: '#EEEEEE',
@@ -798,6 +834,33 @@ registerColor('file-remove-bg', {
   light: '#525252',
   dark: '#737373',
 }, 'Mid Gray');
+// 附件卡自绘文件图标的类型角标(§10 theme-invariant 例外族):颜色跟「这份文件是
+// 什么」绑定,不随明暗翻转,两模式同值。取值都按白字 ≥4.5:1 选过(pdf 5.96 /
+// doc 6.56 / sheet 5.05 / slide 5.24 / code 7.09),角标文字恒用 file-badge-fg。
+registerColor('file-badge-pdf', {
+  light: '#B23A26',
+  dark: '#B23A26',
+}, '文件类型角标 — PDF(theme-invariant;× file-badge-fg = 5.96:1)');
+registerColor('file-badge-doc', {
+  light: '#2C5CA8',
+  dark: '#2C5CA8',
+}, '文件类型角标 — 文档(theme-invariant;× file-badge-fg = 6.56:1)');
+registerColor('file-badge-sheet', {
+  light: '#2E7D4F',
+  dark: '#2E7D4F',
+}, '文件类型角标 — 表格(theme-invariant;× file-badge-fg = 5.05:1)');
+registerColor('file-badge-slide', {
+  light: '#A25A12',
+  dark: '#A25A12',
+}, '文件类型角标 — 幻灯片(theme-invariant;× file-badge-fg = 5.24:1)');
+registerColor('file-badge-code', {
+  light: '#5B49A8',
+  dark: '#5B49A8',
+}, '文件类型角标 — 代码(theme-invariant;× file-badge-fg = 7.09:1)');
+registerColor('file-badge-fg', {
+  light: '#FFFFFF',
+  dark: '#FFFFFF',
+}, '文件类型角标前景 — 恒白(不能借 accent-pure-cta-fg:那个会在 Dark 翻成黑)');
 registerColor('chat-input-chip-bg', {
   light: 'var(--surface-chip)',
   dark: 'var(--surface-chip)',
@@ -1080,10 +1143,36 @@ registerColor('msg-code-block-border', {
   light: 'var(--border-default)',
   dark: 'var(--border-default)',
 }, 'Board');
+// ⚠️ 名字叫 inline-code,实际语义已经是「chip / subtle hover 底」:除了可点的
+// FileTargetChip,还有 13 处把它用作 hover:bg-(TextLightbox / AgentActionRow /
+// ToolPayloadLightbox / ToolCallCard / ChatAudioCard)。**不要**为了调 markdown
+// 行内 code 而改这里 —— 那会把那些交互反馈一起变淡。markdown 行内 code 用下面
+// 单开的 msg-md-inline-code-bg。
 registerColor('msg-code-inline-bg', {
   light: 'var(--surface-chip)',
   dark: 'var(--surface-chip)',
-}, 'Light Gray');
+}, 'Light Gray — chip / subtle hover 底(非 markdown 行内 code)');
+// markdown 行内 code 底 —— 对齐 GitHub Primer 的 bgColor-neutral-muted。
+// 半透明而非实色的两个理由:① 实色必然在某个容器底色上撞色隐形(移动端就撞过:
+// 行内 code 底与消息卡片底逐字节相同 → 1.00:1,只剩圆角脏边),半透明的相对对比
+// 与容器无关;② GitHub 这套值实测 light 仅 1.13:1,是「轻微的底色提示」而不是
+// 色块,成段中文里嵌多个标识符也不会被切碎(12% 黑那版 1.31:1 就偏重了)。
+// light / dark 刻意不同 alpha,但 dark **不照抄 GitHub 的 0.4**:
+//   GitHub 原值合成后是 light 1.132:1 / dark 1.629:1 —— dark 的抬升是 light 的近 5 倍。
+//   照抄到我们这儿(light 1.11~1.13 / dark 1.56~1.63,与 GitHub 逐值等观感)后,实机
+//   目检的结论是深色模式明显偏重:两个模式不对称,深色下一段话里嵌几个标识符就被
+//   切成一排色块。所以 dark 降到 0.22 → 1.26~1.28:1,回到「浅浅地看出有差别」。
+//   light 保留 0.2:它已经是 1.11~1.13,再降就基本看不见了。
+// 与可点 path chip 的区分:chip 用上面的实色 surface-chip(1.26:1)+ hover 变色 +
+// cursor-pointer,本 token 只作静态提示 —— 两者数值接近,区分靠 hover 与指针形状。
+//
+// 与移动端刻意**不**同形态:移动端聊天流走 RN 嵌套 Text,只认 backgroundColor 不认
+// borderRadius,淡底在那边只能是直角方块,所以它改用「零底色 + 文字压暗」
+// (chatInlineCodeText)。本路径是 CSS,圆角淡底能真正实现,按 GitHub 原样保留。
+registerColor('msg-md-inline-code-bg', {
+  light: 'rgba(175, 184, 193, 0.2)',
+  dark: 'rgba(110, 118, 129, 0.22)',
+}, 'GitHub Primer neutral-muted — markdown 行内 code 底(半透明,不随容器撞色;dark alpha 下调至 0.22)');
 registerColor('msg-table-border', {
   light: 'var(--border-default)',
   dark: 'var(--border-default)',
@@ -1092,14 +1181,24 @@ registerColor('msg-table-header-bg', {
   light: 'var(--surface)',
   dark: 'var(--surface)',
 }, 'Surface');
+// ── 引用块:正文主色 + 与全局 left rail 统一的竖线 ──
+// 模型常用 `>` 承载本轮最该看的内容(引述的原始需求、报错原文、待确认结论),
+// 弱化色让它在扫读时反而最先被跳过 —— 这是引用块唯一要修的问题,故正文改主色。
+// 竖线刻意跟随 --agent-actions-rail(WorkGroupBlock / ThinkingCard /
+// AgentTaskCard / AgentActionsBlock 都用它 + border-l-2):界面里「块引导竖线」
+// 是一套统一的视觉语言,淡是它的设计意图,不是缺陷。引用块的识别由「内缩 +
+// 这条 rail + 正文主色」共同承担,不靠加深竖线。
+// 注:该 rail 对 surface 约 1.36:1(light)/ 1.64:1(dark),低于 WCAG 非文本
+// 3:1 —— 这是全局既有设计语言的既定取舍,引用块与之统一优先;要调就整套 rail
+// 一起调,不在引用块这里单独加深(否则引用块会比工具块更抢眼)。
 registerColor('msg-blockquote-border', {
-  light: 'var(--border-default)',
-  dark: 'var(--border-default)',
-}, 'Board');
+  light: 'var(--agent-actions-rail)',
+  dark: 'var(--agent-actions-rail)',
+}, 'Left rail — 与 agent actions / thinking 卡片竖线统一');
 registerColor('msg-blockquote-text', {
-  light: 'var(--text-secondary-mid)',
-  dark: 'var(--text-secondary-mid)',
-}, 'Dark Gray — secondary');
+  light: 'var(--text-primary)',
+  dark: 'var(--text-primary)',
+}, 'Near Black — 引用正文与正文同权重');
 registerColor('msg-hr-border', {
   light: 'var(--border-default)',
   dark: 'var(--border-default)',
@@ -1565,6 +1664,10 @@ registerColor('card-status-done', {
   light: '#2AAE5B',
   dark: '#2AAE5B',
 }, '状态点 — 完成未读 (设计定稿 2026-07-17 #2AAE5B,取代 #22c55e;普通/定时任务完成统一,橙专职 running)');
+registerColor('completion-badge-fg', {
+  light: '#1f1f1e',
+  dark: '#1f1f1e',
+}, '完成徽标(✓)前景 — 深墨前景压在 card-status-done 绿上,对比 5.29:1(白前景只有 2.88:1,不达 WCAG 1.4.11 非文字 3:1 门槛);light/dark 同值,与 surface-on-card 暗态的 checked icon 深前景惯例一致');
 registerColor('remote-status-disconnected', {
   light: 'var(--text-tertiary)',
   dark: 'var(--text-tertiary)',

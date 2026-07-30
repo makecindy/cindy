@@ -40,6 +40,7 @@ import {
   installPerformanceTimelineCleanupInterval,
 } from './lib/foregroundRecoveryDiagnostics';
 import { installRenderLoopWatchdog } from './lib/renderLoopWatchdog';
+import { installHiddenAnimationGate } from './lib/hiddenAnimationGate';
 import { installInteractionJankProbe } from './lib/interactionJankProbe';
 import { installSwallowActivationClick } from './lib/swallowActivationClick';
 import { getSwallowActivationClickEnabled } from './hooks/useSwallowActivationClickSettings';
@@ -52,6 +53,10 @@ installScrollbarAutoHide();
 const disposeForegroundRecoveryDiagnostics = installForegroundRecoveryDiagnostics();
 // 睡醒白屏取证:主线程阻塞漂移 + 可见无帧探针,只记日志(见模块头注释)。
 const disposeRenderLoopWatchdog = installRenderLoopWatchdog();
+// 隐藏期冻结常驻装饰动画 —— 有 running turn 时 backgroundThrottling 被主动关闭,
+// 不加这道闸门,看不见的窗口里动画会继续烧 CPU(见模块头注释)。浮窗同样适用:
+// 语音浮窗的 mic 波形也是 infinite 装饰动画。
+const disposeHiddenAnimationGate = installHiddenAnimationGate();
 // Codex maker 化后, codex 事件流走 makerChatStore 内部的 maker:event 监听器,
 // 不再需要专门的 codex progress dispatcher。
 
@@ -111,6 +116,7 @@ if (import.meta.env.DEV) {
   import.meta.hot?.dispose(() => {
     disposeForegroundRecoveryDiagnostics();
     disposeRenderLoopWatchdog();
+    disposeHiddenAnimationGate();
     disposePerformanceTimelineCleanupInterval();
     disposeSwallowActivationClick();
     disposeInteractionJankProbe();

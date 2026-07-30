@@ -42,15 +42,22 @@ const SCALE_TS = 'apps/desktop/src/renderer/components/login/loginScale.ts';
 const METHOD_TS = 'apps/desktop/src/shared/loginIdentifierMethod.ts';
 let tokens, scaleMod, methodMod;
 try {
-  for (const [src, out] of [
+  for (const [src, out, transform] of [
     [TOKENS_TS, 'tokens.mjs'],
-    [SCALE_TS, 'scale.mjs'],
+    // loginScale.ts 自 2026-07-27 改版起 import LOGIN_GROUP(组高单一来源):
+    // 临时目录里文件名被扁平化,把相对 import 重定向到同批编译的 tokens.mjs
+    [
+      SCALE_TS,
+      'scale.mjs',
+      (code) => code.replace(/from\s*['"]\.\/loginDesignTokens['"]/g, "from './tokens.mjs'"),
+    ],
     [METHOD_TS, 'method.mjs'],
   ]) {
-    const code = esbuild.transformSync(readFileSync(R(src), 'utf8'), {
+    let code = esbuild.transformSync(readFileSync(R(src), 'utf8'), {
       loader: 'ts',
       format: 'esm',
     }).code;
+    if (transform) code = transform(code);
     writeFileSync(join(tmp, out), code);
   }
   tokens = await import(pathToFileURL(join(tmp, 'tokens.mjs')).href);
@@ -82,7 +89,7 @@ const geometry = {
   panel: wrapObj(tokens.PANEL, TOKENS_TS, 'PANEL'),
   title: wrapObj(tokens.TITLE, TOKENS_TS, 'TITLE'),
   subtitle: wrapObj(tokens.SUBTITLE, TOKENS_TS, 'SUBTITLE'),
-  globalPill: wrapObj(tokens.GLOBAL_PILL, TOKENS_TS, 'GLOBAL_PILL'),
+  regionPill: wrapObj(tokens.REGION_PILL, TOKENS_TS, 'REGION_PILL'),
   control: wrapObj(tokens.CONTROL, TOKENS_TS, 'CONTROL'),
   spinner: wrapObj(tokens.SPINNER, TOKENS_TS, 'SPINNER'),
   social: wrapObj(tokens.SOCIAL, TOKENS_TS, 'SOCIAL'),
@@ -172,7 +179,7 @@ const COPY_KEYS = [
   'verifying', 'signIn', 'resendCode', 'resendCountdown', 'chooseAccount', 'chooseAccountSubtitle',
   'personalAccount', 'binding.phoneTitle', 'binding.phoneSubtitle', 'binding.emailTitle',
   'binding.emailSubtitle', 'sendCode', 'completeSignIn', 'preparing', 'preparingSubtitle',
-  'unavailable', 'retry', 'browserWaiting', 'globalRegion',
+  'unavailable', 'retry', 'browserWaiting', 'regionPill.cn', 'regionPill.dev',
   'errors.fallback', 'errors.INVALID_CODE', 'errors.AUTH_SERVICE_UNAVAILABLE',
   'social.apple', 'social.google', 'social.wechat',
 ];
@@ -255,7 +262,8 @@ const icons = {
   google: { light: svgAsset('google'), dark: svgAsset('google') },
   wechat: { light: svgAsset('wechat'), dark: svgAsset('wechat') },
   sso: { light: svgAsset('sso'), dark: svgAsset('sso-dark') },
-  guest: { light: svgAsset('guest'), dark: svgAsset('guest-dark') },
+  // guest 圆钮入口已退役(游客入口改为文本链接),对应 icons/guest{,-dark}.svg 已从产品删除,
+  // 故此处不再提取 guest 叶子。本 demo 的 index.html 仍按其内嵌 truth 快照渲染历史 UI。
   paths: {
     backChevron: backChevronD,
     consentCheck: pathsOf('ConsentCheckGlyph')[0],

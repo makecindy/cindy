@@ -39,7 +39,6 @@ import {
   Plus,
   Scan,
   Settings,
-  Square,
   Target,
   X,
   Zap,
@@ -54,7 +53,6 @@ import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import type {
-  MobileAgentSkillListResult,
   MobileAtResourceItem,
   MobileSlashCommand,
   RemoteDirectoryEntry,
@@ -136,6 +134,7 @@ import {
   buildRecentWorkspaceOptions,
   filterRemoteDirectoryEntries,
   normalizeCreateSessionResult,
+  isNewSessionDraftMissingPayloadOnly,
   parseNewSessionDeviceOptions,
   pickAgentDefaultRuntime,
   pickInitialNewSessionWorkspace,
@@ -184,6 +183,7 @@ import {
   VoiceMicWaveCaret,
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
+import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { useComposerResize } from '@/session/useComposerResize';
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
@@ -228,6 +228,10 @@ import {
   recordMobileVoiceInputHistoryForHost,
   updateMobileVoiceInputHistoryEntryForHost,
 } from '@/session/mobileVoiceHistoryStore';
+import {
+  hydrateMobileVoiceDictionary,
+  refreshMobileVoiceDictionary,
+} from '@/session/mobileVoiceDictionaryCache';
 import {
   playMobileVoiceInputEndCue,
 } from '@/session/mobileVoiceCue';
@@ -373,19 +377,6 @@ export default function NewRemoteSessionScreen() {
   // create() 里 await 在途图片上传后闭包里的 attachments 已是旧值,经 ref 读最新列表。
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
-  // 乐观创建失败后「返回编辑」的草稿回填:会话页 stash → 跳回本页 → 挂载时 drain。
-  // 附件是已上传完成的引用,原样回列即可继续使用。
-  useEffect(() => {
-    const stashed = drainStashedNewSessionDraft();
-    if (!stashed) return;
-    setDraft(stashed.draft);
-    setAttachments([...stashed.attachments]);
-    if (stashed.deviceId) {
-      setSelectedDeviceId(stashed.deviceId);
-      setSelectedDeviceName(stashed.deviceName || stashed.deviceId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅挂载时领取一次信箱
-  }, []);
   // 相册资产 → 已上传附件 id 的映射(缩略图勾选态真相)。
   const [mediaAssetAttachments, setMediaAssetAttachments] = useState<Record<string, string>>({});
   // 待选相册资产(按选中顺序;Cursor 式两段提交,底部「加入对话」统一上传)。
@@ -395,6 +386,22 @@ export default function NewRemoteSessionScreen() {
   // composer 托盘里正被全屏查看的图片附件 id(null = 关闭)。
   const [composerPreviewAttachmentId, setComposerPreviewAttachmentId] = useState<string | null>(null);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  // 乐观创建失败后「返回编辑」的草稿回填:会话页 stash → 跳回本页 → 挂载时 drain。
+  // 附件是已上传完成的引用,原样回列即可继续使用;notice 是「有内容没能带回」的告知
+  // (创建期间发出的消息可能超出单条上限,装不下的只能丢,但不能静默丢,review P1)。
+  // 声明在 attachmentError 之后:notice 就落在附件错误行上。
+  useEffect(() => {
+    const stashed = drainStashedNewSessionDraft();
+    if (!stashed) return;
+    setDraft(stashed.draft);
+    setAttachments([...stashed.attachments]);
+    if (stashed.notice) setAttachmentError(stashed.notice);
+    if (stashed.deviceId) {
+      setSelectedDeviceId(stashed.deviceId);
+      setSelectedDeviceName(stashed.deviceName || stashed.deviceId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅挂载时领取一次信箱
+  }, []);
   // 圈点标注接线 api 的 ref 中转(同会话页):hook 实例声明在 removeAttachment
   // 之后,onUploaded 等回调延迟执行经 ref 读最新实例。
   const composerAnnotationsRef = useRef<UseComposerImageAnnotationsResult | null>(null);
@@ -753,7 +760,23 @@ export default function NewRemoteSessionScreen() {
     [draft, draftContent],
   );
   const composerHasMessage = draft.firstMessage.trim().length > 0;
-  const composerShowCreateButton = composerHasMessage || attachments.length > 0 || pendingUploads.length > 0;
+  // 「按下即录」的乐观反馈(与会话页/桌面同款,详见 [sessionId].tsx 同名状态注释)。
+  // 声明在 composerShowCreateButton 之前:pending 期就要占住创建槽。
+  const [voiceStartPending, setVoiceStartPending] = useState(false);
+  const voiceStartPendingSeqRef = useRef(0);
+  const voiceStartedOnPressInRef = useRef(false);
+  // 语音生命周期内创建按钮常驻(与会话页发送槽同理,对齐桌面):录音中点创建
+  // = 结束录音并用转写创建(create() 已有 listening 分支);否则首段转写落地的
+  // 瞬间按钮冒出来,右对齐工具排会把语音胶囊整格推左。乐观 pending 期同理占位,
+  // 避免胶囊先在 12pt 档展开、listening 一到又跳 52pt 档。voiceIsBusy 在下方
+  // 声明,这里直接展开同一表达式,避免声明顺序对调。
+  const composerShowCreateButton = composerHasMessage
+    || attachments.length > 0
+    || pendingUploads.length > 0
+    || voiceStartPending
+    || voiceState === 'listening'
+    || voiceState === 'submitting'
+    || voiceState === 'refining';
   const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
   const voiceIsListening = voiceState === 'listening';
   const voiceIsProcessing = voiceState === 'submitting' || voiceState === 'refining';
@@ -762,12 +785,33 @@ export default function NewRemoteSessionScreen() {
   const deviceSelectorDisabled = creating || voiceIsProcessing || !deviceHasChoices;
   // 上传中不再挡创建:附件走乐观管线(pendingUploads),create() 内部会 await 全部
   // 在途上传落定后再组首条消息,抢点创建不会丢图(#589 的 attachmentBusy 门由此取代)。
-  const canCreate = !createValidation && !creating && !voiceIsProcessing;
+  // listening 时**只**豁免「缺正文/附件」这一条校验:此刻点创建 = 结束录音并用
+  // 转写创建(create() 的 listening 分支),最终转写在 create() 内部重新校验;
+  // 不豁免的话空草稿录音期间创建按钮永远按不动。缺项目路径/模型等其它校验不
+  // 豁免——那些不会被转写补上,放行只会「可点但必失败」(review 二轮收窄)。
+  // validateNewSessionDraft 的校验顺序是 路径→模型→正文,命中缺正文文案即代表
+  // 前两项都已通过。
+  // 结构化判定,不比对本地化文案:locale 异步恢复(如深链直达后语言落地)时
+  // memo 住的旧语言校验文案与新 t() 输出不等,字符串比对会让豁免静默失效
+  // (review 三轮收口)。
+  const createValidationIsMissingPayload = useMemo(
+    () => isNewSessionDraftMissingPayloadOnly(draft, draftContent),
+    [draft, draftContent],
+  );
+  const canCreate = (!createValidation || (voiceIsListening && createValidationIsMissingPayload))
+    && !creating
+    && !voiceIsProcessing;
   const voiceIsBusy = voiceIsListening || voiceIsProcessing;
+  // 录音计时(红点+m:ss 胶囊,与会话页/桌面同形态);pillWidth 同步驱动工具排占位。
+  // counting 只认真实采集,启动链路(权限弹窗等)不计入时长,pending 期显示 0:00。
+  const voiceRecordingTimer = useMobileVoiceRecordingTimer({
+    expanded: voiceIsListening || voiceStartPending,
+    counting: voiceIsListening,
+  });
   // 手机语音只保留官方托管路径,错误引导仅剩系统麦克风权限一条。
   const canOpenVoiceSettings = isMobileVoiceMicPermissionError(voiceError);
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
-  // 录音状态由输入框内的语音按钮形态(Mic / Square / spinner)表达。
+  // 录音状态由输入框内的语音按钮形态(Mic / 红点计时胶囊 / spinner)表达。
   const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);
   const composerVoicePlacement = voiceUiAvailable
     ? resolveMobileComposerVoiceButtonPlacement({
@@ -1100,12 +1144,10 @@ export default function NewRemoteSessionScreen() {
       await openLink(selectedDeviceId);
       const [builtins, skills] = await Promise.all([
         maker.listAgentCommands(agentKind),
-        workingDir
-          ? maker.listAgentSkills(agentKind, {
-              workingDir,
-              forceReload: false,
-            })
-          : Promise.resolve({ success: true, skills: [] } satisfies MobileAgentSkillListResult),
+        maker.listAgentSkills(agentKind, {
+          ...(workingDir ? { workingDir } : {}),
+          forceReload: false,
+        }),
       ]);
       return { builtins, skills };
     })
@@ -1474,9 +1516,13 @@ export default function NewRemoteSessionScreen() {
       // Claim the connection prewarmed at pressIn (if any): its credential is
       // already resolved and its ASR WebSocket already connecting, so the
       // handshake overlaps the press gesture instead of following it.
+      // 词典快照拉取不进 await:它只影响润色提示的丰富度,拉不到(桌面离线、老版本
+      // 被控端)就用上次缓存,绝不为它推迟开麦。
+      void refreshMobileVoiceDictionary(selectedDeviceId, () => maker.getVoiceDictionary());
       const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([
         takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null),
         getMobileVoiceInputHistoryForHost(selectedDeviceId),
+        hydrateMobileVoiceDictionary(selectedDeviceId),
       ]);
       claimedPrewarm = prewarmedVoice;
       const credential = prewarmedVoice?.credential
@@ -1649,11 +1695,12 @@ export default function NewRemoteSessionScreen() {
     }
   }, [finishVoiceRecording, startVoiceRecording, voiceState]);
 
-  // Speculative warm-up on touch-down of the mic button (audio session + ASR
-  // connect, see mobileVoicePrewarm): both cold-start costs overlap the press
-  // gesture instead of following the tap. Skipped when the tap will stop the
-  // current recording rather than start a new one.
+  // Touch-down of the mic button = start recording (desktop pointerdown 同款,
+  // 2026-07-27 定案):按下瞬间起录,开头一个字不丢;松手属于同一手势,由
+  // voiceStartedOnPressInRef 吞掉 onPress 的 toggle。预热仍在最前,与启动重叠。
+  // Skipped when the tap will stop the current recording rather than start a new one.
   const handleVoiceButtonPressIn = useCallback(() => {
+    voiceStartedOnPressInRef.current = false;
     if (creating || voiceIsProcessing) return;
     if (voiceRecordingActiveRef.current || voiceState === 'listening') return;
     if (!selectedDeviceId || !isMobileRealtimeAudioAvailable()) return;
@@ -1666,7 +1713,18 @@ export default function NewRemoteSessionScreen() {
       refreshAccessToken: () => auth.refreshAccessToken(),
       apiFetch: auth.apiFetch,
     });
-  }, [creating, selectedDeviceId, voiceIsProcessing, voiceState]);
+    // 启动已在途/停止在途时不重复发起,也不把这次按下标成「已起录」。
+    if (voiceStartupInFlightRef.current || voiceStopInFlightRef.current) return;
+    voiceStartedOnPressInRef.current = true;
+    const pendingSeq = ++voiceStartPendingSeqRef.current;
+    setVoiceStartPending(true);
+    void startVoiceRecording()
+      .catch(() => undefined)
+      .finally(() => {
+        // 只收自己世代的 pending(与会话页同款守卫)。
+        if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);
+      });
+  }, [creating, selectedDeviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
   useEffect(() => {
     return () => {
@@ -1799,7 +1857,7 @@ export default function NewRemoteSessionScreen() {
       </Pressable>
       <ComposerToolbarSpacer />
       {composerVoicePlacement?.inline || composerVoicePlacement?.floating
-        ? <ComposerToolbarVoiceSlot />
+        ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
         : null}
       {composerShowCreateButton ? renderCreateButton() : null}
     </>
@@ -1825,7 +1883,7 @@ export default function NewRemoteSessionScreen() {
     >
       {voiceDraftShowsListeningPrompt ? (
         <View style={styles.voiceDraftListeningPrompt}>
-          <VoiceMicWaveCaret color={colors.statusReady} testID="newSession.voiceMicCaret" />
+          <VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />
           <Text style={styles.voiceDraftListeningText}>{composerListeningPlaceholder}</Text>
         </View>
       ) : (
@@ -1846,7 +1904,7 @@ export default function NewRemoteSessionScreen() {
               },
             ]}
           >
-            <VoiceMicWaveCaret color={colors.statusReady} testID="newSession.voiceMicCaret" />
+            <VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />
           </View>
         </View>
       )}
@@ -1860,12 +1918,28 @@ export default function NewRemoteSessionScreen() {
       accessibilityState={{ busy: voiceIsProcessing || undefined, disabled: creating || undefined }}
       disabled={creating || voiceIsProcessing}
       hitSlop={10}
-      onPress={toggleVoiceRecording}
+      onPress={() => {
+        if (voiceStartedOnPressInRef.current) {
+          // 本次按下已在 pressIn 起录:松手不当作「再点一下停止」。
+          voiceStartedOnPressInRef.current = false;
+          return;
+        }
+        toggleVoiceRecording();
+      }}
       onPressIn={handleVoiceButtonPressIn}
+      onTouchCancel={() => {
+        // 手势被系统/滚动打断:撤销这次按下误触发的录音(与会话页同语义,
+        // 正常松手不触发;cancelVoiceForDeviceSwitch 会作废在途启动并释放音频)。
+        if (!voiceStartedOnPressInRef.current) return;
+        voiceStartedOnPressInRef.current = false;
+        cancelVoiceForDeviceSwitch();
+      }}
       style={({ pressed }) => [
         styles.composerIconButton,
         buttonStyle,
-        voiceIsListening && styles.composerIconButtonActive,
+        // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening。
+        voiceRecordingTimer.label !== null && styles.composerIconButtonActive,
+        voiceRecordingTimer.label !== null && { width: voiceRecordingTimer.pillWidth },
         (creating || voiceIsProcessing) && styles.disabled,
         pressed && styles.pressed,
       ]}
@@ -1873,10 +1947,9 @@ export default function NewRemoteSessionScreen() {
     >
       {voiceIsProcessing ? (
         <ActivityIndicator color={colors.textSecondary} size="small" />
-      ) : voiceIsListening ? (
-        // 录音停止:红色描边方块(对齐桌面 activeRecording 的 --settings-badge-error),
-        // 与「停止任务」的中性色实心方块区分开。
-        <Square color={colors.statusRecording} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      ) : voiceRecordingTimer.label !== null ? (
+        // 录音中:胶囊展开为脉冲红点 + 计时(对齐桌面/会话页),点胶囊任意位置停止。
+        <VoiceRecordingPillContent label={voiceRecordingTimer.label} testID="newSession.voiceRecordingPill" />
       ) : (
         <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
       )}

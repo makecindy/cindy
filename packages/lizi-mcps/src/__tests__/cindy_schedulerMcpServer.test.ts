@@ -100,33 +100,45 @@ class InMemoryStorage implements ScheduleStorage {
     return [];
   }
   async touchRunHeartbeats(): Promise<void> {}
-  async hasRunningRuns(scheduleId?: string, opts?: { firedAt?: number }): Promise<boolean> {
+  async hasRunningRuns(scheduleId?: string, opts?: { runId?: string }): Promise<boolean> {
     return [...this.runs.values()].some(
       (r) =>
         r.status === 'running' &&
         (scheduleId === undefined || r.scheduleId === scheduleId) &&
-        (opts?.firedAt === undefined || r.firedAt === opts.firedAt),
+        (opts?.runId === undefined || r.id === opts.runId),
     );
   }
-  async listRunningRunFiredAts(scheduleId: string): Promise<number[]> {
+  async listRunningRunIds(scheduleId: string): Promise<string[]> {
     return [...this.runs.values()]
       .filter((r) => r.status === 'running' && r.scheduleId === scheduleId)
-      .map((r) => r.firedAt)
-      .sort((a, b) => b - a);
+      .sort((a, b) => b.firedAt - a.firedAt)
+      .map((r) => r.id);
   }
   async rescheduleDeferredAutomaticClaim(
     id: string,
-    claimFiredAt: number,
+    claimRunId: string,
     retryAt: number,
-    previousLastFiredAt?: number,
   ): Promise<Schedule | null> {
     const ex = this.schedules.get(id);
-    if (!ex || ex.activeClaimFiredAt !== claimFiredAt) return null;
+    if (!ex || ex.activeClaimRunId !== claimRunId) return null;
     ex.nextFireAt = retryAt;
-    if (ex.lastFiredAt === claimFiredAt) {
-      ex.lastFiredAt = previousLastFiredAt;
-    }
-    ex.activeClaimFiredAt = undefined;
+    ex.activeClaimRunId = undefined;
+    return { ...ex };
+  }
+  async resumeWithLiveClaimGuard(
+    id: string,
+    updatedAt: number,
+    nextFireAt: number,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex) return null;
+    const liveClaim =
+      ex.activeClaimRunId !== undefined &&
+      await this.hasRunningRuns(id, { runId: ex.activeClaimRunId });
+    ex.status = 'active';
+    ex.updatedAt = updatedAt;
+    ex.nextFireAt = liveClaim ? undefined : nextFireAt;
+    if (!liveClaim) ex.activeClaimRunId = undefined;
     return { ...ex };
   }
   // 与真实现相同的 CAS 语义:active 且 nextFireAt 精确匹配才认领(置空),否则 null。
@@ -145,10 +157,7 @@ class InMemoryStorage implements ScheduleStorage {
     const ex = this.schedules.get(id);
     if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
     ex.nextFireAt = undefined;
-    if (ex.lastFiredAt === undefined || ex.lastFiredAt <= run.firedAt) {
-      ex.lastFiredAt = run.firedAt;
-    }
-    ex.activeClaimFiredAt = run.firedAt;
+    ex.activeClaimRunId = run.id;
     this.runs.set(run.id, { ...run });
     return { ...ex };
   }

@@ -50,6 +50,13 @@ export interface CatalogIO {
   log?: (level: 'info' | 'warn' | 'error', msg: string, meta?: Record<string, unknown>) => void;
 }
 
+export type CatalogLoadSource = 'local' | 'remote' | 'bundled';
+
+export interface CatalogLoadResult {
+  catalog: Catalog;
+  source: CatalogLoadSource;
+}
+
 // 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
 function trimTrailingSlashes(s: string): string {
   let end = s.length;
@@ -132,14 +139,19 @@ function log(io: CatalogIO, level: 'info' | 'warn' | 'error', msg: string, meta?
 }
 
 /**
- * 加载目录。返回值永远是一个合法 Catalog（最差也回退内置 bundled），不抛错。
+ * 加载目录并返回实际命中的来源。返回值永远包含一个合法 Catalog（最差也回退内置
+ * bundled），不抛错。来源标记让手动刷新可以把 bundled fallback 视为失败并保留上次
+ * 有效快照；启动加载仍可通过 loadCatalog 接受 bundled 兜底。
  *
  * 顺序：
  *  1. dev：cfg.localPath + io.readFile → 读本地、合并 bundled、直接返回（不联网）。
  *  2. 远端依次尝试公共 API、迁移期旧 OSS（除非 disableFetch / 无 URL / 无 fetchText）。
  *  3. 任意上述来源均不可用 → 内置 bundled。
  */
-export async function loadCatalog(cfg: CatalogSourceConfig, io: CatalogIO): Promise<Catalog> {
+export async function loadCatalogWithSource(
+  cfg: CatalogSourceConfig,
+  io: CatalogIO,
+): Promise<CatalogLoadResult> {
   // 1) dev 本地文件优先（命中即用，不联网）。
   if (cfg.localPath && io.readFile) {
     try {
@@ -147,7 +159,7 @@ export async function loadCatalog(cfg: CatalogSourceConfig, io: CatalogIO): Prom
       if (text != null) {
         const parsed = parseCatalog(text);
         log(io, 'info', 'loaded catalog from local path', { path: cfg.localPath });
-        return mergeWithBundled(parsed);
+        return { catalog: mergeWithBundled(parsed), source: 'local' };
       }
     } catch (err) {
       log(io, 'warn', 'local catalog read/parse failed, falling back', { err: String(err) });
@@ -175,7 +187,7 @@ export async function loadCatalog(cfg: CatalogSourceConfig, io: CatalogIO): Prom
         const text = await io.fetchText(remoteUrl, remainingMs);
         const parsed = parseCatalog(text);
         log(io, 'info', 'loaded catalog from remote', { url: remoteUrl });
-        return mergeWithBundled(parsed);
+        return { catalog: mergeWithBundled(parsed), source: 'remote' };
       } catch (err) {
         log(io, 'warn', 'remote catalog read/parse failed, trying fallback', {
           url: remoteUrl,
@@ -187,5 +199,10 @@ export async function loadCatalog(cfg: CatalogSourceConfig, io: CatalogIO): Prom
 
   // 3) 兜底：内置 bundled。
   log(io, 'info', 'using bundled catalog');
-  return BUNDLED_CATALOG;
+  return { catalog: BUNDLED_CATALOG, source: 'bundled' };
+}
+
+/** 启动期兼容入口：接受最终 bundled fallback，只返回目录快照。 */
+export async function loadCatalog(cfg: CatalogSourceConfig, io: CatalogIO): Promise<Catalog> {
+  return (await loadCatalogWithSource(cfg, io)).catalog;
 }

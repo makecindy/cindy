@@ -79,7 +79,14 @@ describe('deriveRemoteReadiness（被控端就绪推导）', () => {
 describe('sourceReadyFromProviderList（隧道 provider:list 响应解析）', () => {
   // 与被控端 dispatch 剥离执行字段后的回显结构一致,判定只消费 connected + agents。
   const provider = (over: Partial<ProviderView>): ProviderView =>
-    ({ id: 'p', name: 'P', agents: ['codex'], connected: true, ...over }) as ProviderView;
+    ({
+      id: 'p',
+      name: 'P',
+      agents: ['codex'],
+      routing: { codex: {} },
+      connected: true,
+      ...over,
+    }) as ProviderView;
 
   it('该 agent 有已连接来源 → true;来源都未连接 / 不支持该 agent → false', () => {
     expect(sourceReadyFromProviderList({ providers: [provider({})] }, 'codex')).toBe(true);

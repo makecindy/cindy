@@ -15,6 +15,7 @@ import {
   GHOST_SECRET_PREFIX,
   GHOST_SECRET_HINT_PREFIX,
   PROVIDER_SECRET_IDS,
+  REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY,
   type ProviderSecretId,
 } from '../../shared/providerSecrets.js';
 import {
@@ -51,8 +52,8 @@ const OWNER_STORAGE_KEY = 'provider_secret_owner';
  *
  * 注意:本 store 的 set / remove **不触发** 任何副作用(例如 api_key 变更后重建
  * Codex —— 那是 safe-storage IPC 层 onApiKeyChangedMaybeRestartCodex 的职责)。
- * 当前没有"main 端写供应商 key"的路径(写入都走 renderer → IPC),set / remove
- * 仅为 API 对称而提供;未来若有 main 端写 api_key 的需求,需自行补副作用。
+ * main 端写路径仅限自定义供应商 CRUD 的 per-provider mutation queue；若扩展到
+ * 需要重建运行时的内置 provider key，必须同步补对应副作用。
  */
 
 /** 低层加密 KV(按 safeStorage 存储键名读写),抽出以便注入测试。 */
@@ -207,9 +208,22 @@ const electronSecretIo: SecretStorageIo = {
  * 典型:generic-oauth 的 blob 内存缓存,不失效会让 B 账号继续用 A 的 token 路由。
  * setter 注入避免 secrets 层反向依赖 maker-host(host 启动期接线)。
  */
-let secretsClearedListener: (() => void) | null = null;
+const secretsClearedListeners = new Set<() => void>();
+/**
+ * 重置为单个监听(覆盖式,历史 API)。测试用它隔离状态;生产代码一律用
+ * addProviderSecretsClearedListener —— 多个上层各自缓存各自的密钥,
+ * 单槽覆盖会让后注册者把先注册者的失效回调挤掉。
+ */
 export function setProviderSecretsClearedListener(listener: () => void): void {
-  secretsClearedListener = listener;
+  secretsClearedListeners.clear();
+  secretsClearedListeners.add(listener);
+}
+/** 追加一个清空监听,返回注销函数。生产代码注册缓存失效回调的入口。 */
+export function addProviderSecretsClearedListener(listener: () => void): () => void {
+  secretsClearedListeners.add(listener);
+  return () => {
+    secretsClearedListeners.delete(listener);
+  };
 }
 
 /** providerId 维度的密钥读写器。 */
@@ -243,16 +257,21 @@ export function createProviderSecretStore(
 ): ProviderSecretStore {
   let lastReconciledOwnerId: string | null = null;
   const notifySecretsCleared = (): void => {
-    try {
-      secretsClearedListener?.();
-    } catch {
-      /* 监听器异常不阻断账号边界清理 */
+    for (const listener of secretsClearedListeners) {
+      try {
+        listener();
+      } catch {
+        /* 监听器异常不阻断账号边界清理与其他监听器 */
+      }
     }
   };
   const clearAllSecrets = (): void => {
     for (const id of PROVIDER_SECRET_IDS) {
       io.remove(providerSecretStorageKey(id));
     }
+    // SSH 远端 daemon 直连 MCP bridge 的 persistent token 同清:同机换账号后,
+    // 旧账号远端 host 上仍在跑的 daemon env 里的 token 必须失效,防串号。
+    io.remove(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY);
     // 动态键名密钥同清(按前缀扫 io.list()):自定义 MCP bearer token(mcp_token_<id>)、
     // 自定义供应商 per-runtime key(provider_key_*)、通用 OAuth 凭证 blob(provider_oauth_*)、
     // 意识 network 槽凭证(ghost_secret_*)。这些不在 PROVIDER_SECRET_IDS 静态集合里,
@@ -374,6 +393,109 @@ export function readCustomProviderKey(providerId: string, agent: string): string
       'read custom provider key failed',
     );
     return null;
+  }
+}
+
+/**
+ * 配置 CRUD 回滚前的严格 API key 快照读取。
+ * 仅 ENOENT 表示“没有旧 key”；owner / 加密不可用、文件读取或解密失败都必须抛错，
+ * 防止调用方把暂时不可读的现有凭证误判为空并永久删除。
+ */
+export function readCustomProviderKeyForMutation(
+  providerId: string,
+  agent: string,
+): string | null {
+  const logicalKey = customProviderSecretStorageKey(providerId, agent);
+  const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
+  if (!scopedKey) throw new Error('provider secret owner is unavailable');
+  let encoded: string;
+  try {
+    encoded = fs.readFileSync(path.join(secretDir(), `${scopedKey}.enc`), 'utf-8');
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'read custom provider key snapshot failed',
+    );
+    throw new Error('existing provider credential is unreadable');
+  }
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('provider credential encryption is unavailable');
+  }
+  try {
+    return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+  } catch (err) {
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'decrypt custom provider key snapshot failed',
+    );
+    throw new Error('existing provider credential is unreadable');
+  }
+}
+
+/** 写入某自定义供应商 runtime 的 API key；供 main 侧原子配置更新使用。 */
+export function storeCustomProviderKey(
+  providerId: string,
+  agent: string,
+  value: string,
+): boolean {
+  try {
+    return electronSecretIo.write(customProviderSecretStorageKey(providerId, agent), value);
+  } catch (err) {
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'write custom provider key failed',
+    );
+    return false;
+  }
+}
+
+/**
+ * 读取 SSH 远端 daemon 直连 MCP bridge 的 persistent bearer token
+ * (**main 侧 HTTP bridge 鉴权专用**)。不存在 / safeStorage 不可用 / 读失败
+ * 均返回 null。与通用 safe-storage IPC 字节级互通;main-only 键,renderer
+ * 不可经 generic bridge 访问。
+ */
+export function readRemoteMcpBridgeToken(): string | null {
+  try {
+    return electronSecretIo.read(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'read remote mcp bridge token failed',
+    );
+    return null;
+  }
+}
+
+/** 写入 remote MCP bridge persistent token(仅不存在时的首次生成路径调用)。 */
+export function writeRemoteMcpBridgeToken(value: string): boolean {
+  try {
+    return electronSecretIo.write(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY, value);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'write remote mcp bridge token failed',
+    );
+    return false;
+  }
+}
+
+/** 删除某自定义供应商 runtime 的 API key；不存在视为成功。 */
+export function removeCustomProviderKey(
+  providerId: string,
+  agent: string,
+): { success: boolean; error?: string } {
+  try {
+    return electronSecretIo.remove(customProviderSecretStorageKey(providerId, agent));
+  } catch (err) {
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'remove custom provider key failed',
+    );
+    return { success: false, error: 'remove_failed' };
   }
 }
 
@@ -552,6 +674,36 @@ export const genericOAuthSecretIo = {
       return null;
     }
   },
+  readStrict(providerId: string): string | null {
+    const logicalKey = providerOAuthStorageKey(providerId);
+    const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
+    if (!scopedKey) throw new Error('provider secret owner is unavailable');
+    let encoded: string;
+    try {
+      encoded = fs.readFileSync(path.join(secretDir(), `${scopedKey}.enc`), 'utf-8');
+    } catch (err) {
+      if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      log.warn(
+        { providerId, err: err instanceof Error ? err.message : String(err) },
+        'read generic oauth blob snapshot failed',
+      );
+      throw new Error('existing OAuth credential is unreadable');
+    }
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('provider credential encryption is unavailable');
+    }
+    try {
+      return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+    } catch (err) {
+      log.warn(
+        { providerId, err: err instanceof Error ? err.message : String(err) },
+        'decrypt generic oauth blob snapshot failed',
+      );
+      throw new Error('existing OAuth credential is unreadable');
+    }
+  },
   write(providerId: string, value: string): boolean {
     try {
       return electronSecretIo.write(providerOAuthStorageKey(providerId), value);
@@ -563,15 +715,23 @@ export const genericOAuthSecretIo = {
       return false;
     }
   },
-  remove(providerId: string): void {
+  remove(providerId: string): boolean {
     try {
-      electronSecretIo.remove(providerOAuthStorageKey(providerId));
+      const result = electronSecretIo.remove(providerOAuthStorageKey(providerId));
+      if (!result.success) {
+        log.warn(
+          { providerId, error: result.error ?? 'remove_failed' },
+          'remove generic oauth blob failed',
+        );
+      }
+      return result.success;
     } catch (err) {
-      // 键名校验抛错（非法 id）或底层删除异常:降级记日志,与 read/write 的容错口径一致。
+      // 键名校验抛错（非法 id）或底层删除异常：保留现有登录态并把失败交给调用方。
       log.warn(
         { providerId, err: err instanceof Error ? err.message : String(err) },
         'remove generic oauth blob failed',
       );
+      return false;
     }
   },
 };

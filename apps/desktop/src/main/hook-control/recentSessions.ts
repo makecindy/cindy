@@ -9,7 +9,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
-import { isPathWithin } from './dispatcher.js';
+import { isPathWithin } from './paths.js';
 
 const VISIBLE_SESSION_SOURCES = new Set<string>(DESKTOP_VISIBLE_SESSION_SOURCES);
 const MAX_SESSION_TITLE_CHARS = 200;

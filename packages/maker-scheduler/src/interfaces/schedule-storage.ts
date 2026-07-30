@@ -23,9 +23,9 @@ export interface ScheduleStorage {
    * 原子认领一次自动触发并写入对应的 running run。多实例启动归一会用
    * running run 判断 nextFireAt=NULL 是否代表"另一个实例正在执行";因此
    * claim 与 running 行必须同事务可见,不能先清 nextFireAt 再晚些 insertRun。
-   * 实现同时把 schedules.lastFiredAt 写成 run.firedAt 给 UI 反映触发时间,并把
-   * schedules.activeClaimFiredAt 写成 run.firedAt 作为"这条 running run 是自动
-   * claim owner"的标记;手动 runNow 可更新 lastFiredAt,但不能覆盖 claim 标记。
+   * 实现同时把 schedules.activeClaimRunId 写成 run.id 作为"这条 running run
+   * 是自动 claim owner"的标记;手动 runNow 可更新 lastFiredAt,但不能覆盖 claim
+   * 标记。自动 claim 不能提前写 lastFiredAt,否则崩溃的一次性任务会被当成已消费。
    */
   claimDueFireAndInsertRun(
     id: string,
@@ -34,23 +34,30 @@ export interface ScheduleStorage {
   ): Promise<Schedule | null>;
 
   /**
-   * Return firedAt values for currently running rows on one schedule. Startup and
-   * stale-run cleanup use this only for legacy rows that predate
-   * activeClaimFiredAt, where the live automatic owner may not equal
-   * schedules.lastFiredAt.
+   * Return IDs for currently running rows on one schedule. Startup and stale-run
+   * cleanup use this only for legacy rows that predate activeClaimRunId.
    */
-  listRunningRunFiredAts(scheduleId: string): Promise<number[]>;
+  listRunningRunIds(scheduleId: string): Promise<string[]>;
 
   /**
    * Complete a deferred automatic claim in one conditional write. The update must
-   * only clear the active claim marker that belongs to `claimFiredAt`, while
-   * preserving a newer manual runNow lastFiredAt written concurrently.
+   * only clear the active claim marker that belongs to `claimRunId`.
    */
   rescheduleDeferredAutomaticClaim(
     id: string,
-    claimFiredAt: number,
+    claimRunId: string,
     retryAt: number,
-    previousLastFiredAt?: number,
+  ): Promise<Schedule | null>;
+
+  /**
+   * Resume a schedule while atomically preserving a live automatic claim if its
+   * activeClaimRunId still points at a running row. This prevents a remote owner
+   * completing between a separate hasRunningRuns() read and the resume update.
+   */
+  resumeWithLiveClaimGuard(
+    id: string,
+    updatedAt: number,
+    nextFireAt: number,
   ): Promise<Schedule | null>;
 
   insertRun(run: ScheduleRun): Promise<ScheduleRun>;
@@ -100,5 +107,5 @@ export interface ScheduleStorage {
    * 不能用 listRuns 的历史展示查询——它带条数上限，活跃 claim run 被更新的
    * runNow/终态行挤出窗口时会漏判（codex review P2）。
    */
-  hasRunningRuns(scheduleId?: string, opts?: { firedAt?: number }): Promise<boolean>;
+  hasRunningRuns(scheduleId?: string, opts?: { runId?: string }): Promise<boolean>;
 }

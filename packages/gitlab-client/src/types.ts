@@ -22,6 +22,12 @@ export interface GitlabClientConfig {
   token: string;
   /** 项目路径，如 'group/project'。cross-project / user-scope 调用可省略。 */
   projectPath?: string;
+  /**
+   * 出网通道。缺省 = 全局 fetch —— 在 **Node / Electron 主进程**下那是 undici,不读系统
+   * 代理设置也不读代理环境变量,所以代理网络下的宿主应注入自己的代理感知实现
+   * (desktop 注入 main/maker-host/outbound-fetch)。
+   */
+  fetchImpl?: typeof fetch;
 }
 
 export interface GitlabUser {

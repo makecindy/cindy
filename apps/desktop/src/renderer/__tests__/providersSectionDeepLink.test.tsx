@@ -8,7 +8,7 @@
  *   4. wizard=1 → 向导目录第一步(entry undefined)。
  */
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -143,6 +143,7 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
+      requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
     },
   };
 });
@@ -218,5 +219,57 @@ describe('ProvidersSection — 深链定位', () => {
     await waitFor(() => expect(screen.queryByTestId('wizard-stub')).not.toBeNull());
     expect(wizardSpy).toHaveBeenCalledWith(undefined);
     await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+  });
+
+  it('authorization-code 自定义供应商登录期间卸载时取消本视图拥有的授权', async () => {
+    const providerOAuthLogin = vi.fn<
+      (providerId: string, options?: { ownerId?: string }) => Promise<{ ok: boolean }>
+    >(() => new Promise(() => undefined));
+    const providerOAuthCancel = vi.fn(async () => ({ ok: true }));
+    const onProviderOAuthProgress = vi.fn(() => () => undefined);
+    providersState.providers = [
+      makeProvider('custom-oauth', {
+        name: 'Custom OAuth',
+        source: 'user',
+        auth: {
+          method: 'oauth',
+          oauth: {
+            authorizeUrl: 'https://auth.example.test/authorize',
+            tokenUrl: 'https://auth.example.test/token',
+            clientId: 'custom-client',
+            scopes: 'openid',
+          },
+        },
+      }),
+    ];
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      maker: {
+        scanLocalCli: vi.fn(async () => ({ detections: [] })),
+        requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
+        providerOAuthLogin,
+        providerOAuthCancel,
+        onProviderOAuthProgress,
+      },
+    };
+
+    const view = renderAt('?tab=providers');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'settings.providers.button.authorize' }),
+    );
+    await waitFor(() =>
+      expect(providerOAuthLogin).toHaveBeenCalledWith(
+        'custom-oauth',
+        expect.objectContaining({ ownerId: expect.any(String) }),
+      ),
+    );
+    const ownerId = providerOAuthLogin.mock.calls[0]?.[1]?.ownerId;
+    expect(onProviderOAuthProgress).not.toHaveBeenCalled();
+
+    view.unmount();
+    expect(providerOAuthCancel).toHaveBeenCalledOnce();
+    expect(providerOAuthCancel).toHaveBeenCalledWith('custom-oauth', {
+      releaseOwner: true,
+      ownerId,
+    });
   });
 });

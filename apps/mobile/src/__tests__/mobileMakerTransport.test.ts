@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { REMOTE_INVOKE_ALLOWLIST } from '@cindy/device-link';
+import {
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  REMOTE_INVOKE_ALLOWLIST,
+} from '@cindy/device-link';
 import {
   createMobileMakerTransport,
   MOBILE_MAKER_CHANNELS,
@@ -52,6 +55,7 @@ describe('mobile maker transport', () => {
       'device-link:media:fetch',
       'device-link:voice:transcribe',
       'device-link:voice:dictionary-learning',
+      'device-link:voice:dictionary:get',
       'maker:get-pending-interactions',
       'maker:resolve-interaction',
       'maker:get-context-usage',
@@ -208,7 +212,9 @@ describe('mobile maker transport', () => {
     expect(calls).toEqual([{
       deviceId: 'dev-1',
       channel: 'maker:provider:list',
-      args: [],
+      args: [{
+        capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+      }],
     }]);
   });
 
@@ -265,6 +271,7 @@ describe('mobile maker transport', () => {
     await maker.setExtraDirs('s1', ['/repo/docs']);
     await maker.listAgentCommands('claude-code');
     await maker.listAgentSkills('claude-code', { workingDir: '/repo' });
+    await maker.listAgentSkills('codex', {});
     await maker.scanAtResources('claude-code', { workingDir: '/repo', cap: 2000, query: 'session' });
     await maker.fetchRemoteMedia('xdt-image://local/a.png');
     await maker.transcribeVoice({ ossKey: 'voice-key', mimeType: 'audio/mp4', fileName: 'voice.m4a' });
@@ -274,6 +281,7 @@ describe('mobile maker transport', () => {
       beforeText: 'XDMaker',
       afterText: 'XDMaker',
     });
+    await maker.getVoiceDictionary();
     await maker.input.stop('s1', { pauseQueue: true });
     await maker.input.compact('s1');
     await maker.input.retryLastError('s1');
@@ -305,6 +313,7 @@ describe('mobile maker transport', () => {
       ['maker:set-extra-dirs', ['s1', ['/repo/docs']]],
       ['maker:list-agent-commands', ['claude-code']],
       ['maker:list-agent-skills', ['claude-code', { workingDir: '/repo' }]],
+      ['maker:list-agent-skills', ['codex', {}]],
       ['maker:scan-at-resources', ['claude-code', { workingDir: '/repo', cap: 2000, query: 'session' }]],
       ['device-link:media:fetch', [{ url: 'xdt-image://local/a.png' }]],
       ['device-link:voice:transcribe', [{ ossKey: 'voice-key', mimeType: 'audio/mp4', fileName: 'voice.m4a' }]],
@@ -314,6 +323,7 @@ describe('mobile maker transport', () => {
         beforeText: 'XDMaker',
         afterText: 'XDMaker',
       }]],
+      ['device-link:voice:dictionary:get', []],
       ['maker:input:stop', ['s1', { pauseQueue: true }]],
       ['maker:input:compact', ['s1']],
       ['maker:input:retry-last-error', ['s1']],

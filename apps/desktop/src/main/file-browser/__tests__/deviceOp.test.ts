@@ -416,16 +416,25 @@ describe('file-browser device-op', () => {
     resolveGuard({ allowed: true, source: 'filesystem' });
     await firstStart;
 
-    await fsWriteFile(path.join(workdir, 'src', 'resubscribed.ts'), 'active\n', 'utf8');
+    // fs.watch(recursive) 靠 macOS FSEvents 流, start 返回后仍有短暂空窗,
+    // 空窗内的一次性写入事件会整体丢失且不补发 → 在轮询里重复写直到事件到达。
+    // 断言语义不变: resubscribe 后的 watcher 确实在推事件。
+    let writeSeq = 0;
     await vi.waitFor(
-      () => {
+      async () => {
+        writeSeq += 1;
+        await fsWriteFile(
+          path.join(workdir, 'src', 'resubscribed.ts'),
+          `active ${writeSeq}\n`,
+          'utf8',
+        );
         expect(
           pushSpy.mock.calls.some(
             ([, payload]) => (payload as { relPath?: string }).relPath === 'src/resubscribed.ts',
           ),
         ).toBe(true);
       },
-      { timeout: 3_000, interval: 50 },
+      { timeout: 5_000, interval: 100 },
     );
   });
 

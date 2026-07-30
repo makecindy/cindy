@@ -40,6 +40,37 @@ export interface ThemeColors {
   chatCodeSurface: string;
   /** Chat / task code card 专用描边 */
   chatCodeBorder: string;
+  /**
+   * markdown 行内 code 文字色 —— 移动端走「零底色 + 文字压暗」形态(参照 Codex
+   * 客户端)。**与桌面刻意不同**:桌面是 CSS,按 GitHub 的半透明淡底 + 6px 圆角实现
+   * (--msg-md-inline-code-bg);移动端聊天流是 RN 嵌套 Text,只认 backgroundColor 不认
+   * borderRadius,淡底在那边只能是直角方块,成段中文里一排方块比没有底色更糟。
+   * 两端不同是结论,不是漏改 —— 改这里之前先看这条。
+   *
+   * 取值实测(见 themeTokens.test.ts):light #686B72 对 surface 4.56:1、对正文
+   * Δ1.98;dark #A3A3A3 对 surface 5.81:1、对正文 Δ1.70 —— 都过 AA 且压暗可辨。
+   * light 值 = textTertiary(表内 AA 中性强调灰);dark 值取自桌面基表
+   * text-secondary 的 dark 原值 —— cindy 深色批准灰阶在 #6F6F6F(2.92:1,掉 AA)与
+   * #BFC1C4(对正文 Δ1.22,压暗看不出)之间没有中间档。
+   * 刻意**不**复用 textSecondary:它是 #8C8E94 / #6F6F6F,只有 2.80:1 / 2.92:1,
+   * 用在正文流里的标识符上会直接掉出 AA(那正是本轮要修的问题)。
+   * 压暗幅度受 AA 下限约束 —— 深色底 #2A2828 比 Codex 的近黑浅得多,再压就破线。
+   */
+  chatInlineCodeText: string;
+  /**
+   * 代码高亮语法色(6 档)。色值对齐桌面端所用的 GitHub highlight.js 主题
+   * (light = `highlight.js/styles/github.css`,dark = globals.css 里的 GitHub Dark
+   * 覆盖),两端观感一致。移动端不引入 highlight.js —— 依赖会改 runtime
+   * fingerprint 触发冷更,词法分析走仓内 `session/codeHighlight.ts`。
+   * 这 6 档是语义豁免色(语法着色本身就是彩色),不受黑白系约束。
+   */
+  syntaxKeyword: string;
+  syntaxString: string;
+  syntaxComment: string;
+  syntaxNumber: string;
+  syntaxFunction: string;
+  /** 属性名 / 字段名(hljs 的 attr;GitHub 主题里与 number 同色)。 */
+  syntaxProperty: string;
   /** Composer / input focus caret。二次改稿 2026-07-18 晚:撤红改蓝,对齐 Mac caret-accent */
   inputCaret: string;
   /** Bottom sheet root 玻璃面 */
@@ -146,7 +177,7 @@ export interface ThemeColors {
 export interface LoginSkinColors {
   /** 登录画布底(亮 #EDEDED / 暗 #1F1F1E,figma 532:585 暗色帧实测;纯平,PR#104 拍板) */
   bgBase: string;
-  /** 品牌红 accent(Global pill/字标红元素;禁止用作页面背景——wave4 改判;跨模式不变) */
+  /** 品牌红 accent(区域徽标/字标红元素;禁止用作页面背景——wave4 改判;跨模式不变) */
   brandAccent: string;
   /** 品牌深红 pressed/hover(跨模式不变) */
   brandAccentPressed: string;
@@ -200,7 +231,7 @@ export interface LoginSkinColors {
   overlayButtonPressed: string;
   /** 浅底控件(方式行/返回钮)pressed 叠层(两模式黑 8%) */
   overlayControlPressed: string;
-  /** 浅底钮白描边/Global pill(两模式 #FFFFFF;推导,待 Figma 精确) */
+  /** 浅底钮白描边/区域徽标(两模式 #FFFFFF;推导,待 Figma 精确) */
   invertedButtonBorder: string;
   /** 大 loading 环轨(亮 rgba(42,40,40,.18) / 暗 rgba(212,212,212,.18) 推导,待 Figma) */
   loadingRingTrack: string;
@@ -346,6 +377,14 @@ export const lightColors: ThemeColors = {
   activeGlyph: '#DF0C27',
   chatCodeSurface: '#F8F8F8',
   chatCodeBorder: '#DCDFE3',
+  chatInlineCodeText: '#686B72', // = textTertiary(表内 AA 中性强调灰),对 surface 4.56:1
+  // GitHub light(highlight.js github.css)原值,与桌面端逐值一致。
+  syntaxKeyword: '#D73A49',
+  syntaxString: '#032F62',
+  syntaxComment: '#6A737D',
+  syntaxNumber: '#005CC5',
+  syntaxFunction: '#6F42C1',
+  syntaxProperty: '#005CC5',
   inputCaret: '#417CDD',
   sheetSurface: 'rgba(248, 248, 248, 0.95)',
   sheetActionSurface: '#F6F6F6',
@@ -409,6 +448,15 @@ export const darkColors: ThemeColors = {
   activeGlyph: '#A61629',
   chatCodeSurface: '#353333',
   chatCodeBorder: '#3C3C3C',
+  chatInlineCodeText: '#A3A3A3', // = 桌面基表 text-secondary dark 原值,对 surface 5.81:1
+  // GitHub Dark,取自桌面 globals.css 的 .dark .n* 覆盖(#ff7b72 / #a5d6ff /
+  // #8b949e / #79c0ff / #d2a8ff)。
+  syntaxKeyword: '#FF7B72',
+  syntaxString: '#A5D6FF',
+  syntaxComment: '#8B949E',
+  syntaxNumber: '#79C0FF',
+  syntaxFunction: '#D2A8FF',
+  syntaxProperty: '#79C0FF',
   inputCaret: '#417CDD',
   sheetSurface: 'rgba(59, 59, 59, 0.95)',
   sheetActionSurface: 'rgba(59, 59, 59, 0.5)',
@@ -652,6 +700,7 @@ export const loginSizes = {
 /**
  * Motion token(全局动效档位,ms)——与桌面端 DESIGN.md §14.4 的 --motion-* 同名
  * 同值,双端同构。新增动效一律引用这些档位,不要在组件里硬编码时长。
+ * spinnerCycle 是功能性 loading spinner 的语义循环例外,不是第六档交互时长。
  */
 export const motionDuration = {
   /** hover / 即时反馈、轻浮层退场 */
@@ -664,6 +713,8 @@ export const motionDuration = {
   enter: 250,
   /** 重浮层(弹窗 / sheet)退场 */
   exit: 150,
+  /** 功能性 loading spinner 完整一圈(§14.4 窄例外) */
+  spinnerCycle: 1000,
 } as const;
 
 /**

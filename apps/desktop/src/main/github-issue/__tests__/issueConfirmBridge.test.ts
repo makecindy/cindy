@@ -9,7 +9,13 @@ import { IssueConfirmBridge } from '../issueConfirmBridge';
 import { MAKER_PUSH } from '../../maker-ipc/channels';
 
 const DRAFT = { title: '标题标题标题', body: '正文'.repeat(20), type: 'bug' as const };
-const ENV = { appVersion: '0.0.112', platform: 'darwin', arch: 'arm64', osVersion: '25.5.0' };
+const ENV = {
+  appVersion: '0.0.112',
+  platform: 'darwin',
+  arch: 'arm64',
+  osVersion: '25.5.0',
+  region: 'cn' as const,
+};
 const IDENTITY = { kind: 'github-user', login: 'octocat' } as const;
 
 function lastRequestId(broadcast: ReturnType<typeof vi.fn>): string {
@@ -74,6 +80,66 @@ describe('IssueConfirmBridge', () => {
       reason: 'resolved',
       resolvedAs: 'allow',
     });
+  });
+
+  it('平台代发把建议署名传给卡片，并要求响应带有效公开署名', async () => {
+    const broadcast = vi.fn();
+    const warn = vi.fn();
+    const bridge = new IssueConfirmBridge({ broadcast, logger: { warn } });
+    const platformIdentity = { kind: 'platform', login: 'cindy-issue' } as const;
+    const promise = bridge.request('sess-1', DRAFT, ENV, platformIdentity, '当前昵称');
+    const requestId = lastRequestId(broadcast);
+    expect(broadcast).toHaveBeenCalledWith(
+      MAKER_PUSH.INTERACTION_REQUEST,
+      expect.objectContaining({
+        request: expect.objectContaining({
+          submissionIdentity: platformIdentity,
+          suggestedPublicName: '当前昵称',
+        }),
+      }),
+    );
+
+    expect(
+      bridge.resolve(requestId, {
+        confirmed: true,
+        title: DRAFT.title,
+        body: DRAFT.body,
+        type: DRAFT.type,
+        publicName: '  匿名  ',
+      }),
+    ).toBe(true);
+    await expect(promise).resolves.toMatchObject({
+      confirmed: true,
+      publicName: '匿名',
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('平台代发缺少署名或携带换行时按取消兜底', async () => {
+    for (const publicName of [undefined, '', '第一行\n第二行']) {
+      const broadcast = vi.fn();
+      const warn = vi.fn();
+      const bridge = new IssueConfirmBridge({ broadcast, logger: { warn } });
+      const promise = bridge.request(
+        'sess-1',
+        DRAFT,
+        ENV,
+        { kind: 'platform', login: 'cindy-issue' },
+        '当前昵称',
+      );
+      const requestId = lastRequestId(broadcast);
+      expect(
+        bridge.resolve(requestId, {
+          confirmed: true,
+          title: DRAFT.title,
+          body: DRAFT.body,
+          type: DRAFT.type,
+          publicName,
+        }),
+      ).toBe(true);
+      await expect(promise).resolves.toEqual({ confirmed: false, reason: 'cancelled' });
+      expect(warn).toHaveBeenCalled();
+    }
   });
 
   it('resolve 取消 decision → cancelled;未知 requestId → 返 false', async () => {
@@ -143,5 +209,60 @@ describe('IssueConfirmBridge', () => {
       .requestId;
     expect(bridge.resolve(req2, { confirmed: false })).toBe(true);
     await expect(p2).resolves.toEqual({ confirmed: false, reason: 'cancelled' });
+  });
+});
+
+describe('onDesktopOnlyConfirmPending(#926)', () => {
+  it('request 派发确认卡后同步触发回调,带 sessionId', async () => {
+    const onPending = vi.fn();
+    const bridge = new IssueConfirmBridge({
+      broadcast: () => {},
+      timeoutMs: 50,
+      onDesktopOnlyConfirmPending: onPending,
+    });
+    const p = bridge.request(
+      'feishu_bot_ou_1',
+      { title: 't', body: 'b', type: 'bug' },
+      { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
+      { kind: 'platform', login: 'cindy' },
+    );
+    expect(onPending).toHaveBeenCalledWith('feishu_bot_ou_1');
+    await p; // 超时收口,不留挂起 promise
+  });
+
+  it('未注入回调时行为不变(可选依赖)', async () => {
+    const bridge = new IssueConfirmBridge({ broadcast: () => {}, timeoutMs: 50 });
+    const decision = await bridge.request(
+      's1',
+      { title: 't', body: 'b', type: 'bug' },
+      { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
+      { kind: 'github-user', login: 'u' },
+    );
+    expect(decision.confirmed).toBe(false);
+  });
+});
+
+describe('onDesktopOnlyConfirmPending 抛错防护(#1059 review)', () => {
+  it('回调同步抛错被吞掉只 warn,确认流程照常走到超时收口', async () => {
+    const warn = vi.fn();
+    const bridge = new IssueConfirmBridge({
+      broadcast: () => {},
+      timeoutMs: 50,
+      logger: { warn },
+      onDesktopOnlyConfirmPending: () => {
+        throw new Error('notifier exploded');
+      },
+    });
+    const decision = await bridge.request(
+      's-throw',
+      { title: 't', body: 'b', type: 'bug' },
+      { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
+      { kind: 'github-user', login: 'u' },
+    );
+    expect(decision.confirmed).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      'onDesktopOnlyConfirmPending threw (ignored)',
+      expect.objectContaining({ sessionId: 's-throw' }),
+    );
   });
 });

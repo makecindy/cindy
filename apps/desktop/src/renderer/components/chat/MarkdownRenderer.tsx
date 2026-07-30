@@ -208,6 +208,18 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeHighlight,
 ];
 const MARKDOWN_LINK_CLASS = 'text-[var(--msg-link)] underline underline-offset-2 cursor-pointer [overflow-wrap:anywhere]';
+/**
+ * markdown 行内 code —— 几何与底色对齐 GitHub(6px 圆角 + 左右内距 + 半透明淡底,
+ * 见 --msg-md-inline-code-bg 的说明)。
+ *
+ * 底色刻意用 --msg-md-inline-code-bg 而不是 --msg-code-inline-bg:后者是实色的
+ * chip / hover 底,同时被可点的 FileTargetChip 与十余处 hover:bg- 复用;行内 code
+ * 若用同一个值,就和「有底色 = 可点路径 chip」这个信号撞车了。
+ *
+ * 移动端**刻意不同形态**(零底色 + 文字压暗):那边聊天流是 RN 嵌套 Text,不认
+ * borderRadius,淡底只能是直角方块。这里是 CSS,按 GitHub 原样实现。
+ */
+const INLINE_CODE_CLASS = 'font-mono text-14 rounded-[6px] px-[0.4em] py-[0.2em] bg-[var(--msg-md-inline-code-bg)]';
 
 const WINDOWS_ABSOLUTE_HREF_RE = /^[A-Za-z]:[\\/]/;
 
@@ -563,14 +575,36 @@ const baseComponents: Components = {
   // components object).
 
   // Headings
+  //
+  // 颜色走 --md-hN-fg token(默认值 `inherit`,见 themes/colors.ts):默认主题下与
+  // 引入 token 前逐像素一致,外部导入的主题(Obsidian --hN-color / VSCode
+  // markup.heading)才会把它染成分级色。字号字重不受 token 影响。
   h1({ children, ...props }) {
-    return <h1 className="my-3 text-20 leading-[1.4] font-medium" {...props}>{children}</h1>;
+    return <h1 className="my-3 text-20 leading-[1.4] font-medium text-[var(--md-h1-fg)]" {...props}>{children}</h1>;
   },
   h2({ children, ...props }) {
-    return <h2 className="my-3 text-18 leading-[1.556] font-medium" {...props}>{children}</h2>;
+    return <h2 className="my-3 text-18 leading-[1.556] font-medium text-[var(--md-h2-fg)]" {...props}>{children}</h2>;
   },
   h3({ children, ...props }) {
-    return <h3 className="my-2 text-16 leading-[1.5] font-medium" {...props}>{children}</h3>;
+    return <h3 className="my-2 text-16 leading-[1.5] font-medium text-[var(--md-h3-fg)]" {...props}>{children}</h3>;
+  },
+  // h4-h6 此前没有 renderer(走 react-markdown 默认的裸 tag,字号字重由 Tailwind
+  // preflight 归一成继承)。这里只补颜色 class,刻意不加字号/字重/间距 —— 保持
+  // 原有观感不变。
+  h4({ children, ...props }) {
+    return <h4 className="text-[var(--md-h4-fg)]" {...props}>{children}</h4>;
+  },
+  h5({ children, ...props }) {
+    return <h5 className="text-[var(--md-h5-fg)]" {...props}>{children}</h5>;
+  },
+  h6({ children, ...props }) {
+    return <h6 className="text-[var(--md-h6-fg)]" {...props}>{children}</h6>;
+  },
+
+  // 加粗:同上,只接颜色 token。font-weight 仍由 Tailwind preflight 的
+  // `b, strong { font-weight: bolder }` 提供,这里不覆盖。
+  strong({ children, ...props }) {
+    return <strong className="text-[var(--md-strong-fg)]" {...props}>{children}</strong>;
   },
 
   // Blockquote
@@ -578,8 +612,13 @@ const baseComponents: Components = {
     return (
       <blockquote
         className={cn(
+          // border-l-2 + --msg-blockquote-border(= --agent-actions-rail):与
+          // WorkGroupBlock / ThinkingCard / AgentActionsBlock 的 left rail 完全
+          // 统一,宽度和颜色都不在引用块这里另搞一套。
+          // 不用斜体:中文没有真斜体,机械倾斜反而降低可读性;引用语义由 rail +
+          // 内缩表达已经足够。
           'my-2 border-l-2 border-[var(--msg-blockquote-border)] pl-4',
-          'italic text-[var(--msg-blockquote-text)]',
+          'text-[var(--msg-blockquote-text)]',
         )}
         {...props}
       >
@@ -601,10 +640,10 @@ const baseComponents: Components = {
  * chat 调用方不传 prop, 这里整个函数永远不会运行 → chat 路径零开销零行为变化。
  *
  * 实现:
- *   - 已有 base renderer (h1-h3 / p / pre / table / ul / ol / blockquote / hr):
+ *   - 已有 base renderer (h1-h6 / p / pre / table / ul / ol / blockquote / hr):
  *     把 lineAttr merge 进 props 后透传给 base 函数。base 内部 spread props 时
  *     data-source-line 自然落到对应 DOM 节点上。
- *   - base 没有的 (h4-h6 / li): 直接 createElement 渲染原生 tag。
+ *   - base 没有的 (li): 直接 createElement 渲染原生 tag。
  */
 type BlockTag = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'p' | 'pre' | 'table' | 'ul' | 'ol' | 'li' | 'blockquote' | 'hr';
 
@@ -1431,7 +1470,7 @@ function InlineCodeWithTarget({
   // inline <code> — same as before the markdown-target system existed.
   if (target.kind !== 'resolved-local') {
     return (
-      <code className={cn('font-mono text-14')} {...props}>
+      <code className={cn(INLINE_CODE_CLASS)} {...props}>
         {children}
       </code>
     );
@@ -1555,7 +1594,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         const safeProps = omitMarkdownInternalProps(props as Record<string, unknown>);
         if (!allowPrivilegedLinks) {
           return (
-            <code className={cn('font-mono text-14')} {...safeProps}>
+            <code className={cn(INLINE_CODE_CLASS)} {...safeProps}>
               {children}
             </code>
           );

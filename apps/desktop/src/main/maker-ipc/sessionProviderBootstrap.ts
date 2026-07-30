@@ -20,5 +20,8 @@ export async function persistAndHydrateSessionProvider(
     await input.updateProviderId(input.sessionId, createProviderId);
   }
   const persistedProviderId = await input.readProviderId(input.sessionId);
-  input.hydrateSessionProvider(input.sessionId, persistedProviderId ?? null);
+  // undefined 表示 DB 没有对应行，不能把它解释为“显式清空”并覆盖运行时选择。
+  if (persistedProviderId !== undefined) {
+    input.hydrateSessionProvider(input.sessionId, persistedProviderId);
+  }
 }

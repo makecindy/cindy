@@ -100,7 +100,17 @@ describe('sentAttachmentThumbStore', () => {
     expect(parsed[0]?.file.includes('/')).toBe(false);
   });
 
-  it('非 oss 引用 / 空 sourceUri / 重复引用 / 超大文件不注册', async () => {
+  it('桌面本地媒体引用(粘贴先进媒体总仓)同样留底,不必等远端取件', async () => {
+    // 粘贴图片的字节会先进媒体总仓,附件 url 是 cindy-media://blobs/<指纹>,手机本地没有
+    // 对应文件。原先只认 xdt-oss-attach://,这类图一律不留底 → 发出后气泡只能画空占位格。
+    const mediaRef = 'cindy-media://blobs/8ae715a364e0f5ab.png';
+    const { deps, copies } = makeFsDeps();
+    await registerSentAttachmentThumb(mediaRef, 'file:///cache/pasted.png', deps);
+    expect(copies).toHaveLength(1);
+    expect(getSentAttachmentThumbUri(mediaRef)).toContain('sent-attachment-thumbs/');
+  });
+
+  it('非兜底引用 / 空 sourceUri / 重复引用 / 超大文件不注册', async () => {
     const { deps, copies } = makeFsDeps();
     await registerSentAttachmentThumb('https://example.com/a.jpg', 'file:///cache/a.jpg', deps);
     await registerSentAttachmentThumb(undefined, 'file:///cache/a.jpg', deps);

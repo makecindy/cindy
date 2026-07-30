@@ -198,7 +198,7 @@ const GROUP_BY_VALUES: ReadonlySet<string> = new Set<FilterGroupBy>(['project', 
 
 /**
  * 读 localStorage 中的 groupBy;任何异常 / 非法值 / 未设置 → 'project'。
- * 「按工作目录分组」是 XDMaker 作为工作台的设计基线默认值;用户显式切到
+ * 「按工作目录分组」是 Cindy 作为工作台的设计基线默认值;用户显式切到
  * 'date' 时由 persistGroupBy 写入 storage,下次启动读回,保留其选择。
  */
 export function loadGroupBy(): FilterGroupBy {

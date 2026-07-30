@@ -43,6 +43,63 @@ describe('browserWebviewPool', () => {
     expect(a2.webview).toBe(a1.webview);
   });
 
+  it('notifies only when a new entry is created', () => {
+    const onEntryCreated = vi.fn();
+    const unsub = browserWebviewPool.onEntryCreated(onEntryCreated);
+
+    browserWebviewPool.acquire('tab-a');
+    browserWebviewPool.acquire('tab-a');
+
+    expect(onEntryCreated).toHaveBeenCalledOnce();
+    expect(onEntryCreated).toHaveBeenCalledWith('tab-a');
+    unsub();
+  });
+
+  it('captures guest failure before hook listeners bind and clears it on recovery', () => {
+    const entry = browserWebviewPool.acquire('tab-a');
+    const gone = new Event('render-process-gone');
+    Object.defineProperty(gone, 'details', { value: { reason: 'crashed' } });
+
+    entry.webview.dispatchEvent(gone);
+    expect(entry.guestFailure).toEqual({ kind: 'render-process-gone', reason: 'crashed' });
+
+    entry.webview.dispatchEvent(new Event('did-start-loading'));
+    expect(entry.guestFailure).toBeNull();
+
+    entry.webview.dispatchEvent(new Event('unresponsive'));
+    expect(entry.guestFailure).toEqual({ kind: 'unresponsive', reason: 'unresponsive' });
+
+    entry.webview.dispatchEvent(new Event('responsive'));
+    expect(entry.guestFailure).toBeNull();
+  });
+
+  it('broadcasts guest window.close() to onGuestClose subscribers', () => {
+    // 监听必须由 pool 在创建 webview 时安装(而不是 useBrowserWebview):隐藏
+    // tab 根本不物化 hook 的监听,OAuth callback 页的自关会发生在后台。
+    const onGuestClose = vi.fn();
+    const unsub = browserWebviewPool.onGuestClose(onGuestClose);
+
+    const entry = browserWebviewPool.acquire('tab-a');
+    entry.webview.dispatchEvent(new Event('close'));
+
+    expect(onGuestClose).toHaveBeenCalledWith('tab-a');
+    // pool 只广播,不自己关 tab —— 裁决(popup-spawned 判定)在订阅方。
+    expect(browserWebviewPool.peek('tab-a')).not.toBeNull();
+
+    unsub();
+    entry.webview.dispatchEvent(new Event('close'));
+    expect(onGuestClose).toHaveBeenCalledOnce();
+  });
+
+  it('guest close listener throw does not break the pool', () => {
+    const unsub = browserWebviewPool.onGuestClose(() => {
+      throw new Error('guest-close listener exploded');
+    });
+    const entry = browserWebviewPool.acquire('tab-a');
+    expect(() => entry.webview.dispatchEvent(new Event('close'))).not.toThrow();
+    unsub();
+  });
+
   it('creates webviews with allowpopups so main can route popups into tabs', () => {
     const entry = browserWebviewPool.acquire('tab-a');
     expect(entry.webview.getAttribute('allowpopups')).toBe('true');
@@ -196,8 +253,11 @@ describe('browserWebviewPool', () => {
     browserWebviewPool.onPinChange(() => {
       throw new Error('pin listener exploded');
     });
-    browserWebviewPool.acquire('tab-a');
+    browserWebviewPool.onEntryCreated(() => {
+      throw new Error('entry-created listener exploded');
+    });
 
+    expect(() => browserWebviewPool.acquire('tab-a')).not.toThrow();
     expect(() => browserWebviewPool.pinForAutomation('tab-a')).not.toThrow();
     expect(() => browserWebviewPool.release('tab-a')).not.toThrow();
     expect(browserWebviewPool.peek('tab-a')).toBeNull();
@@ -205,12 +265,16 @@ describe('browserWebviewPool', () => {
 
   it('unsubscribe removes the listener', () => {
     const onRelease = vi.fn();
-    const unsub = browserWebviewPool.onRelease(onRelease);
-    unsub();
+    const onEntryCreated = vi.fn();
+    const unsubRelease = browserWebviewPool.onRelease(onRelease);
+    const unsubEntryCreated = browserWebviewPool.onEntryCreated(onEntryCreated);
+    unsubRelease();
+    unsubEntryCreated();
 
     browserWebviewPool.acquire('tab-a');
     browserWebviewPool.release('tab-a');
 
     expect(onRelease).not.toHaveBeenCalled();
+    expect(onEntryCreated).not.toHaveBeenCalled();
   });
 });

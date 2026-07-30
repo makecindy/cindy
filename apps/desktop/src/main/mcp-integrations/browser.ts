@@ -8,7 +8,7 @@
 import './browser-runtime-env.js';
 import fs from 'node:fs';
 import nodePath from 'node:path';
-import { ipcMain } from 'electron';
+import { app, ipcMain } from 'electron';
 import {
   createBrowserControlRuntime,
   type BrowserControlRuntime,
@@ -19,7 +19,7 @@ import { createLogger } from '../logger.js';
 import { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
 import { loadUserBrowserRecipes, type UserRecipesResult } from '../browser-recipes/loader.js';
 import { writeUserRecipe, type WriteUserRecipeResult } from '../browser-recipes/writer.js';
-import { stopRuntimeForQuit } from './browser-dispose.js';
+import { stopRuntimeForQuitIfUsed, trackBrowserRuntimeUsage } from './browser-dispose.js';
 import {
   BackendRouter,
   ExternalChromeBackend,
@@ -101,11 +101,13 @@ const MANAGED_CDP_PORT = 18800;
  * Default ("managed") config: a single playwright-launched Chrome profile, headed,
  * with a STABLE persistent user-data-dir (logins survive across sessions). This is
  * the product default — a "dedicated persistent login automation browser".
+ * (`browser-backend-settings-store` resolves `'external'` as the system default,
+ * so this config is what a user who never touched the toggle gets.)
  *
  * SECURITY POSTURE (intentional, owner-decided 2026-06):
  *  - No `ssrfPolicy` is set → the strict browser-side DNS-rebinding gate +
  *    redirect-chain inspection stay OFF, so the agent CAN navigate to
- *    localhost / private-network hosts. This is deliberate: XDMaker is an internal
+ *    localhost / private-network hosts. This is deliberate: Cindy is an internal
  *    tool and users need the agent to drive local dev servers / internal sites.
  *    (Private-IP *literals* are still classified by the vendored resolver; what's
  *    intentionally allowed is hostname→private navigation.) Do not arm
@@ -159,23 +161,38 @@ healLegacyManagedProfileDir();
 // Single shared runtime for the desktop process. Boots with the managed profile
 // (electron-free, safe at module-eval); logs route into the unified logger.
 //
-// `vendoredRuntime` is the raw upstream object. We never hand it out directly —
-// it sits behind the `ExternalChromeBackend` wrapper, which itself sits behind
-// the `BackendRouter`. The router is what callers (@cindy/mcps via
-// `getBrowserMcpDeps`, host helpers below) receive, so swapping the active
-// backend in Phase 5 is a single `router.setBackend()` call away.
-const vendoredRuntime: BrowserControlRuntime = createBrowserControlRuntime({
-  config: buildManagedConfig(),
-  logSink: (level, scope, args) => {
-    // Bind to `logger`: the unified logger's methods rely on `this`, and calling
-    // a detached `logger[level]` reference would lose it (undefined in strict
-    // mode) and silently break the browser runtime's log channel.
-    const fn = (logger[level] ?? logger.info).bind(logger);
-    fn(`[${scope}]`, ...args);
-  },
-});
+// `vendoredRuntime` is the raw upstream object behind a thin usage-tracking
+// wrapper (see `trackBrowserRuntimeUsage`): every consumer in this module —
+// the `ExternalChromeBackend` (behind the `BackendRouter`, which is what
+// @cindy/mcps via `getBrowserMcpDeps` and host helpers below receive), the
+// availability probe and the login helper — calls through the wrapper, so
+// `disposeBrowserRuntime` can tell whether the runtime saw ANY traffic this
+// session. We never hand the raw object out; swapping the active backend in
+// Phase 5 is a single `router.setBackend()` call away.
+const vendoredRuntime = trackBrowserRuntimeUsage(
+  createBrowserControlRuntime({
+    config: buildManagedConfig(),
+    logSink: (level, scope, args) => {
+      // Bind to `logger`: the unified logger's methods rely on `this`, and calling
+      // a detached `logger[level]` reference would lose it (undefined in strict
+      // mode) and silently break the browser runtime's log channel.
+      const fn = (logger[level] ?? logger.info).bind(logger);
+      fn(`[${scope}]`, ...args);
+    },
+  }),
+);
 
 const externalBackend = new ExternalChromeBackend(vendoredRuntime, logger);
+
+type SessionUploadRootResolver = (sessionId: string) => Promise<string[]>;
+
+let resolveSessionUploadRoots: SessionUploadRootResolver = async () => [];
+
+export function setBrowserSessionUploadRootResolver(
+  resolver: SessionUploadRootResolver,
+): void {
+  resolveSessionUploadRoots = resolver;
+}
 
 /**
  * RSB-webview backend instance (Phase 3+). Lazily constructed because the
@@ -185,6 +202,8 @@ const externalBackend = new ExternalChromeBackend(vendoredRuntime, logger);
 const rsbBackend = new RsbWebviewBackend({
   registry: getRsbBrowserBridge(),
   getActiveSessionId: () => getActiveRsbSessionId(),
+  artifactRoot: () => nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'),
+  resolveUploadRoots: (sessionId) => resolveSessionUploadRoots(sessionId),
   bridge: {
     // Lazy main-window lookup. Phase 2 uses the same pattern; once the host
     // window is available the dispatch lands cleanly, before that the request
@@ -207,9 +226,11 @@ const rsbBackend = new RsbWebviewBackend({
 });
 
 /**
- * Initial backend selection — driven by the persisted Phase 5 settings file.
- * On first launch (no override) the system default `'rsb-webview'` is applied
- * so users see the new behavior out of the box.
+ * Initial backend selection — driven by the persisted settings file. On first
+ * launch (no override) the system default from `browser-backend-settings-store`
+ * is applied; that default is `'external'` (the managed Chrome below). Users
+ * who explicitly picked a backend keep their choice — see the DEFAULT HISTORY
+ * note in that store for the override semantics behind the two flips.
  */
 function backendForKind(kind: BackendKind): BrowserBackend {
   switch (kind) {
@@ -312,6 +333,8 @@ export async function setActiveBrowserBackendKind(kind: BackendKind): Promise<vo
  */
 export function getBrowserMcpDeps(): {
   getRuntime(): BrowserControlRuntime;
+  supportsResourceDownloads(): boolean;
+  supportsSemanticQueries(): boolean;
   logger: typeof logger;
   getUserRecipes(): Promise<UserRecipesResult>;
   saveUserRecipe(input: Parameters<typeof writeUserRecipe>[0]): Promise<WriteUserRecipeResult>;
@@ -326,6 +349,8 @@ export function getBrowserMcpDeps(): {
     // the backend split. Swapping the active backend (Phase 5) is invisible from
     // @cindy/mcps' perspective.
     getRuntime: () => router,
+    supportsResourceDownloads: () => router.kind === 'rsb-webview',
+    supportsSemanticQueries: () => router.kind === 'rsb-webview',
     logger,
   };
 }
@@ -347,8 +372,8 @@ export async function getBrowserAvailability(): Promise<BrowserAvailability> {
 }
 
 /**
- * Read the currently-active backend kind. Phase 1 always returns `'external'`;
- * Phase 5 wires this to a Settings-driven toggle.
+ * Read the currently-active backend kind. Reflects the Settings-driven toggle
+ * (persisted override) merged over the system default, not a fixed value.
  */
 export function getActiveBrowserBackendKind(): BackendKind {
   return router.getCurrentBackendKind();
@@ -423,7 +448,7 @@ export async function openBrowserForLogin(): Promise<void> {
   //
   // **Always** goes to the vendored runtime, NOT the router — "打开 Agent 专用浏
   // 览器" is the external Chrome workflow: user clicks it to log into sites in
-  // the dedicated XDMaker profile. If the user picked the rsb-webview backend
+  // the dedicated `Cindy` profile. If the user picked the rsb-webview backend
   // they don't need this button at all (logins go through the sidebar webview);
   // routing through router would either no-op (rsb backend's `start` is a
   // no-op) or open the wrong thing.
@@ -452,8 +477,7 @@ export async function openBrowserForLogin(): Promise<void> {
  * spawned process owned by the vendored runtime; nothing else sends `stop`, so
  * without this the headed Chrome + its locked user-data-dir survive app
  * quit / crash / dev-reload, and the next launch has to recover a stale
- * SingletonLock. Delegates to the active backend's `dispose` via the router —
- * for the external backend that is the electron-free `stopRuntimeForQuit`
+ * SingletonLock. Goes through the electron-free `stopRuntimeForQuitIfUsed`
  * (which swallows errors — see browser-dispose.ts).
  *
  * NOTE (Windows): the vendored stop sends SIGTERM→SIGKILL to the launched Chrome
@@ -473,8 +497,11 @@ export function disposeBrowserRuntime(): Promise<void> {
   // doesn't know about the swap and Phase 5 swap-time dispose already ran;
   // a stale-lock recovery on next launch is the symptom).
   //
-  // `stopRuntimeForQuit` is idempotent — if Chrome never started this turn
-  // it's a no-op; if it's running it stops cleanly. Safe to call regardless
-  // of which backend is currently active.
-  return stopRuntimeForQuit(vendoredRuntime, logger);
+  // Short-circuit via the usage tracker: the vendored dispatch bridge boots
+  // the browser control service (dynamic playwright import included) before
+  // routing ANY action, `stop` included — so on a session that never touched
+  // the browser runtime, an unconditional stop would START services during
+  // quit, which is an exit-hang amplifier. If the runtime WAS used, `stop` is
+  // idempotent and safe regardless of which backend is currently active.
+  return stopRuntimeForQuitIfUsed(vendoredRuntime, logger);
 }

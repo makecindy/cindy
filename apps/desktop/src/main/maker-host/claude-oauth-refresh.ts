@@ -2,7 +2,7 @@
  * claude-oauth-refresh —— Claude.ai 订阅 OAuth access token 的 host 侧到期刷新。
  *
  * 为什么 host 要管刷新(cc >= 2.1.19x 语义变化):
- *   XDMaker 给 cc 子进程注入 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1(防 workdir
+ *   Cindy 给 cc 子进程注入 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1(防 workdir
  *   settings.json 覆盖 app 注入的 provider 路由,见 env-builder.ts)。cc 2.1.198 起
  *   该 flag 的语义从「过滤 settings 来源的 provider env」扩大为「凭证也由 host 全权
  *   提供」——设了 flag 后 cc **完全不再读**系统凭证库(keychain / .credentials.json)
@@ -17,7 +17,7 @@
  *
  * 跨进程互斥(阻塞级约束):
  *   refresh token 是轮换制;并发刷新者不止本进程——用户终端里的 standalone `claude`
- *   (没被注 flag,自己会刷)、dev + release 双开的另一个 XDMaker 实例。基于旧值刷新
+ *   (没被注 flag,自己会刷)、dev + release 双开的另一个 Cindy 实例。基于旧值刷新
  *   会触发服务端 refresh-token 复用检测把两边同时登出,陈旧整块回写还会静默回滚
  *   凭证 blob 里 cc 的 mcpOAuth 等字段。cc 自己的刷新走跨进程锁协议
  *   (反编译 2.1.198:proper-lockfile,lockfilePath = <configDir>/.oauth_refresh.lock,
@@ -53,6 +53,7 @@ import {
   type ClaudeAiOAuth,
 } from './claude-credentials-store.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { outboundFetch } from './outbound-fetch.js';
 
 const log = desktopMakerLogger.child('claude-oauth-refresh');
 
@@ -112,7 +113,7 @@ export interface SubscriptionProfile {
 /**
  * best-effort 拉订阅身份 profile(subscriptionType / rateLimitTier)。
  *
- * 为什么需要:经 XDMaker 浏览器 OAuth 登录写入的凭证 subscriptionType 为 null——
+ * 为什么需要:经 Cindy 浏览器 OAuth 登录写入的凭证 subscriptionType 为 null——
  * 旧链路靠「cc 子进程读凭证后自行 refresh 时拉 profile 回填」,而本修复后 cc 不再
  * 读凭证库,回填责任随刷新一起转移到 host。协议对齐反编译 cc n0e/pCn:
  * GET /api/oauth/profile + Bearer,organization.organization_type 映射档位。
@@ -120,7 +121,7 @@ export interface SubscriptionProfile {
  */
 export async function fetchSubscriptionProfile(
   accessToken: string,
-  fetchFn: typeof fetch = fetch,
+  fetchFn: typeof fetch = outboundFetch,
 ): Promise<SubscriptionProfile | null> {
   try {
     const res = await fetchFn(PROFILE_URL, {
@@ -215,7 +216,7 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
-        // 父目录(config dir)不存在:macOS 上仅经 XDMaker 浏览器 OAuth 登录的用户凭证
+        // 父目录(config dir)不存在:macOS 上仅经 Cindy 浏览器 OAuth 登录的用户凭证
         // 在 Keychain,~/.claude 可能从未被创建 —— 锁拿不到会导致刷新永远被跳过,
         // 过期后订阅会话全断。先建父目录再重试一次(recursive 幂等)。
         try {
@@ -423,7 +424,7 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
   }
 
   /**
-   * 订阅身份回填(锁外后台,best-effort):经 XDMaker 浏览器 OAuth 登录的凭证
+   * 订阅身份回填(锁外后台,best-effort):经 Cindy 浏览器 OAuth 登录的凭证
    * subscriptionType/rateLimitTier 为 null(旧链路由 cc 刷新时补全,本修复后 cc 不读
    * 凭证库)。刷新主流程落盘后异步触发:锁外拉 profile(纯网络,不占临界区)→ 重新拿锁
    * → 锁内重读最新凭证 → 字段仍缺才 merge 写回(只补身份字段、不动 token —— 期间他人
@@ -693,7 +694,8 @@ function getDefaultRefresher(): ReturnType<typeof createClaudeOAuthRefresher> {
     defaultRefresher = createClaudeOAuthRefresher({
       readOAuth: readClaudeAiOAuth,
       writeOAuth: writeClaudeAiOAuth,
-      fetchFn: fetch,
+      // 刷新与 profile 回填都打境外端点,必须吃系统代理(见 outbound-fetch.ts)。
+      fetchFn: outboundFetch,
       now: Date.now,
       lockDir: defaultLockDir,
       onInvalidGrant: () => invalidGrantHandler?.(),

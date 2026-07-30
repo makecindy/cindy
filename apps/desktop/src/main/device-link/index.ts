@@ -15,6 +15,7 @@ import { app, BrowserWindow } from 'electron';
 import WebSocket from 'ws';
 import {
   DeviceLinkClient,
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   type DeviceLinkConnectionIssue,
@@ -33,6 +34,7 @@ import * as authManager from '../authManager';
 import { createLogger } from '../logger';
 import { onQuit } from '../lifecycle';
 import { tryGetDbClient } from '../localDb/client/current';
+import { createOutboundHttpAgent } from '../maker-host/outbound-fetch';
 import {
   DeviceLinkOwnershipArbiter,
   createDbClientOwnershipStore,
@@ -49,10 +51,21 @@ import { keepAwakeController } from './power-blocker';
 import {
   wireInboundDispatch,
   setControllersChangedListener,
+  setRemoteInvokeBusyChangedListener,
   dropAllControllers,
   handleControllerOffline,
 } from './dispatch';
 import { setBusyProbe, helloBusy, pollBusyChange, resetBusyDedupe } from './busyReporter';
+import {
+  DL_VOICE_DICTIONARY_SYNC_CHANNEL,
+  broadcastDictionaryNow,
+  handleDesktopPeerOnline,
+  handleIncomingDictionaryState,
+  initVoiceDictionarySync,
+  notifyLocalDictionaryChanged,
+  shouldExchangeDictionaryWith,
+} from '../voice-input/dictionarySyncDriver';
+import { onVoiceInputDictionaryChanged } from '../voice-input/VoiceInputDataStore';
 import { resetAll as resetSubscriptionRefs, snapshotSubscriptions } from './subscriptionRefcount';
 import { getControllersForTopic } from './subscriptions';
 import {
@@ -79,6 +92,9 @@ export function deviceLinkApiBase(): string {
 
 let client: DeviceLinkClient | null = null;
 let arbiter: DeviceLinkOwnershipArbiter | null = null;
+let observedAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
+let authRealmReconnectGeneration = 0;
+let unsubscribeAuthState: (() => void) | null = null;
 /** ownership store 按 DbClient 实例缓存(避免每 tick 建对象);换库(换账号)自动重建 */
 let ownershipStoreCache: { db: unknown; store: OwnershipStore } | null = null;
 /**
@@ -99,6 +115,21 @@ let appliedKeepAwake: boolean | null = null;
 let pendingQuitOwnershipRelease: Promise<void> | null = null;
 const openLinkInFlight = new Map<string, Promise<LinkAcceptPayload>>();
 const presenceAvailableByDevice = new Map<string, boolean>();
+/**
+ * 词典同步的对端选择只看「在线 + 是桌面」,不看 remoteControlEnabled ——
+ * push 帧不属于 relay 的控制类帧,自己设备之间同步词典不该要求对方开放被控。
+ */
+const presenceOnlineByDevice = new Map<string, boolean>();
+const presencePlatformByDevice = new Map<string, string>();
+let unsubscribeDictionaryChanged: (() => void) | null = null;
+
+/**
+ * 用户撤销过访问权限的设备,同样不参与词典同步 —— 撤销的意图是「不再跟这台设备
+ * 交换数据」,不只是「不许它操作我」。
+ */
+function isDeviceRevoked(deviceId: string): boolean {
+  return readDeviceLinkSettings().revokedControllers.includes(deviceId);
+}
 
 /**
  * relay 连续报 auth-failed 时,两次主动 refresh 之间的最小间隔。
@@ -188,7 +219,12 @@ function wsUrl(): string {
   return deviceLinkApiBase().replace(/^http/, 'ws') + WS_PATH;
 }
 
-export function initDeviceLinkService(): void {
+/** Host integrations that consume device-link lifecycle state. */
+export interface DeviceLinkServiceOptions {
+  onUpdateRelaunchBusyChanged?: (busy: boolean) => void;
+}
+
+export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): void {
   // 「保持电脑唤醒」按持久化偏好在启动时应用(与登录 / relay 无关,幂等)。
   const initialKeepAwake = readDeviceLinkSettings().keepAwake;
   keepAwakeController.apply(initialKeepAwake);
@@ -218,7 +254,10 @@ export function initDeviceLinkService(): void {
       // 硬编码 false 会把 server presence 覆盖成空闲、且轮询 dedupe 压掉补正(New-F)。见 busyReporter。
       busy: helloBusy(),
     }),
-    createWebSocket: (url, headers) => new WebSocket(url, { headers }),
+    // agent:`ws` 不吃系统代理,relay 在代理网络下会连不上;直连时为 undefined,
+    // 行为与不传一致(见 maker-host/outbound-fetch)。
+    createWebSocket: async (url, headers) =>
+      new WebSocket(url, { headers, agent: await createOutboundHttpAgent(url) }),
     logger: {
       debug: (...args) => log.debug(...args),
       info: (...args) => log.info(...args),
@@ -229,6 +268,10 @@ export function initDeviceLinkService(): void {
 
   client.onStatusChange((status) => {
     if (status !== 'online') openLinkInFlight.clear();
+    // 断线期间 relay 不会为对端补发 offline presence,重连后同一台电脑仍以
+    // online 到达,`wasOnline` 还是 true —— 上线握手不会触发,而断线这段时间的
+    // 改动谁也不会主动推。清空在线视图,让重连后的 presence 重新走一遍握手。
+    if (status !== 'online') presenceOnlineByDevice.clear();
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
     if (status === 'online') replayActiveSubscriptions('ws-online');
   });
@@ -247,7 +290,10 @@ export function initDeviceLinkService(): void {
   client.onPresenceChanged((snap: PresenceSnapshot) => {
     const wasAvailable = presenceAvailableByDevice.get(snap.deviceId);
     const available = snap.online && snap.remoteControlEnabled;
+    const wasOnline = presenceOnlineByDevice.get(snap.deviceId);
     presenceAvailableByDevice.set(snap.deviceId, available);
+    presenceOnlineByDevice.set(snap.deviceId, snap.online);
+    presencePlatformByDevice.set(snap.deviceId, snap.platform);
     void rememberLastKnownDeviceName(snap.deviceId, snap.deviceName); // best-effort 名称缓存,不阻塞 presence 处理
     broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, snap);
     // 被控端兜底:对等控制端下线 → 清掉它在本机的订阅 registry(防僵尸订阅持续 sendPush)。
@@ -255,15 +301,40 @@ export function initDeviceLinkService(): void {
     if (available && wasAvailable === false) {
       replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);
     }
+    // 词典同步不看「允许被控」开关(push 帧不是控制类帧,这是自己设备之间的数据
+    // 流动),但撤销过的设备必须排除 —— 判定统一走 shouldExchangeDictionaryWith,
+    // 三个入口共用一份条件。
+    if (
+      wasOnline !== true
+      && shouldExchangeDictionaryWith({
+        online: snap.online,
+        platform: snap.platform,
+        revoked: isDeviceRevoked(snap.deviceId),
+      })
+    ) {
+      handleDesktopPeerOnline(snap.deviceId);
+    }
+  });
+
+  let updateRelaunchControllersBusy = false;
+  let remoteInvokeBusy = false;
+  const notifyUpdateRelaunchBusy = (): void => {
+    options.onUpdateRelaunchBusyChanged?.(updateRelaunchControllersBusy || remoteInvokeBusy);
+  };
+
+  // 先注册远程活动监听，再接线入站帧；否则首个 subscribe / invoke 可能落在空窗期。
+  setControllersChangedListener((controllers, updateRelaunchControllers) => {
+    broadcast(DEVICE_LINK_PUSH.CONTROLLED_STATE, { controllers });
+    updateRelaunchControllersBusy = updateRelaunchControllers.length > 0;
+    notifyUpdateRelaunchBusy();
+  });
+  setRemoteInvokeBusyChangedListener((busy) => {
+    remoteInvokeBusy = busy;
+    notifyUpdateRelaunchBusy();
   });
 
   // 被控端:接线入站隧道(link-open / invoke / link-close → 本机 handler dispatch)
   wireInboundDispatch(client);
-
-  // 被控端可见性:控制端集合变化 → 广播给 renderer 状态条
-  setControllersChangedListener((controllers) => {
-    broadcast(DEVICE_LINK_PUSH.CONTROLLED_STATE, { controllers });
-  });
 
   // busy presence:每 5s 探一次本机是否有 turn 在跑,变化才上报(dedupe by value)
   startBusyReporting();
@@ -283,11 +354,46 @@ export function initDeviceLinkService(): void {
     }
     if (env.kind !== 'push') return;
     const p = env.payload as PushPayload;
+    // 词典同步帧在 main 侧消费,不转给 renderer —— 它不是远程视图事件,
+    // renderer 也不该看到别的设备的同步状态。
+    if (p?.channel === DL_VOICE_DICTIONARY_SYNC_CHANNEL) {
+      // 入站与出站走同一份准入判定:这条通道承载的是可写 CRDT 状态,只接受电脑
+      // 对端。手机在这套设计里是只读消费者(走 invoke 拉快照),不该能推状态过来
+      // 改桌面词典 —— 出站已经这么把关了,入站漏掉就等于白设。
+      if (shouldExchangeDictionaryWith({
+        online: true,
+        platform: presencePlatformByDevice.get(env.src),
+        revoked: isDeviceRevoked(env.src),
+      })) {
+        handleIncomingDictionaryState(env.src, p.payload);
+      }
+      return;
+    }
     broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, {
       deviceId: env.src,
       channel: p.channel,
       payload: p.payload,
     });
+  });
+
+  // 词典对等同步:传输能力注入驱动,驱动只管什么时候发、发给谁。
+  initVoiceDictionarySync({
+    sendState: (deviceId, payload) => {
+      client?.sendPush(deviceId, DL_VOICE_DICTIONARY_SYNC_CHANNEL, payload);
+    },
+    listOnlineDesktopDevices: () =>
+      [...presenceOnlineByDevice.entries()]
+        .filter(([deviceId, online]) => shouldExchangeDictionaryWith({
+          online,
+          platform: presencePlatformByDevice.get(deviceId),
+          revoked: isDeviceRevoked(deviceId),
+        }))
+        .map(([deviceId]) => deviceId),
+  });
+  if (unsubscribeDictionaryChanged) unsubscribeDictionaryChanged();
+  unsubscribeDictionaryChanged = onVoiceInputDictionaryChanged((options) => {
+    if (options?.immediate) broadcastDictionaryNow();
+    else notifyLocalDictionaryChanged();
   });
 
   // 同机多实例单持有者仲裁:共享 userData(同 deviceId)的多个实例中,只有认领
@@ -325,11 +431,19 @@ export function initDeviceLinkService(): void {
   });
 
   // 登录态驱动仲裁:已登录即参与认领(控制端列表/被控端可达都依赖这条 WS)
+  observedAuthRealm = authManager.getActiveAuthRealm();
   syncWithAuthState(authManager.getAuthState().isAuthenticated);
-  authManager.onAuthStateChange((state) => {
-    syncWithAuthState(state.isAuthenticated);
+  unsubscribeAuthState = authManager.onAuthStateChange((state) => {
+    const nextRealm = authManager.getActiveAuthRealm();
+    const realmChanged = observedAuthRealm !== null && observedAuthRealm !== nextRealm;
+    observedAuthRealm = nextRealm;
+    syncWithAuthState(state.isAuthenticated, realmChanged);
   });
   onQuit('device-link', () => {
+    authRealmReconnectGeneration += 1;
+    unsubscribeAuthState?.();
+    unsubscribeAuthState = null;
+    observedAuthRealm = null;
     if (busyTimer) {
       clearInterval(busyTimer);
       busyTimer = null;
@@ -344,6 +458,7 @@ export function initDeviceLinkService(): void {
     // 已由上面 stop() 的 onDemote 执行过一次,linkTornDown 标记拦截重复清理。
     teardownActiveLink();
     setControllersChangedListener(null);
+    setRemoteInvokeBusyChangedListener(null);
     client = null;
   });
 
@@ -359,14 +474,44 @@ export function initDeviceLinkService(): void {
   log.info(`device-link service initialized → ${wsUrl()}`);
 }
 
-function syncWithAuthState(isAuthenticated: boolean): void {
+function syncWithAuthState(isAuthenticated: boolean, realmChanged = false): void {
   if (!client || !arbiter) return;
   if (isAuthenticated) {
+    if (realmChanged) {
+      restartDeviceLinkForAuthRealmChange();
+      return;
+    }
     // 不直接 client.start():先参与仲裁,认领成功由 onAcquire 启动连接
     arbiter.start();
   } else {
+    authRealmReconnectGeneration += 1;
     stopArbitrationAndTeardown();
   }
+}
+
+/**
+ * 同账号被另一 shared-userData 实例切到其它区域时，登录态仍是 authenticated，
+ * 普通 arbiter.start() 会幂等早退，旧 WS 因而不会换区。先完整释放持有权并拆掉
+ * 旧 client，再以最新 realm/token 重新参与仲裁；generation 防止等待释放期间登出
+ * 或再次切区后把过期连接复活。
+ */
+function restartDeviceLinkForAuthRealmChange(): void {
+  const generation = ++authRealmReconnectGeneration;
+  const targetRealm = authManager.getActiveAuthRealm();
+  void stopArbitrationAndTeardown()
+    .catch((error) => {
+      log.warn('device-link ownership release during auth realm switch failed', error);
+    })
+    .then(() => {
+      if (
+        generation !== authRealmReconnectGeneration ||
+        !authManager.getAuthState().isAuthenticated ||
+        authManager.getActiveAuthRealm() !== targetRealm
+      ) {
+        return;
+      }
+      arbiter?.start();
+    });
 }
 
 /**
@@ -435,6 +580,12 @@ function teardownActiveLink(): void {
   }
   dropAllControllers(client, 'shutdown');
   presenceAvailableByDevice.clear();
+  // 词典同步驱动是进程级的,**不随单次链路起停**:多实例仲裁的 demote → acquire
+  // 只会 client.start(),不会重跑 initDeviceLinkService,在这里 stop 掉它会让词典
+  // 同步在降级过一次之后永久失效。清空 presence 就够了 —— 没有对端就不会发送,
+  // client 为 null 时 sendPush 也是 no-op。
+  presenceOnlineByDevice.clear();
+  presencePlatformByDevice.clear();
   resetSubscriptionRefs();
   resetBusyDedupe(); // 重置 busy dedupe,避免重连后首个真实 busy 状态被旧值压掉
   client.stop();
@@ -647,6 +798,7 @@ export async function openRemoteLink(deviceId: string): Promise<LinkAcceptPayloa
     controllerName: deviceName(),
     protocolVersion: 1,
     appVersion: app.getVersion(),
+    capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
   });
   openLinkInFlight.set(deviceId, request);
   const cleanup = (): void => {
@@ -696,7 +848,11 @@ export async function remoteSubscribe(
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
   return client.invoke(deviceId, {
     channel: DL_SUBSCRIBE_CHANNEL,
-    args: [{ topics, controllerName: deviceName() }],
+    args: [{
+      topics,
+      controllerName: deviceName(),
+      capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+    }],
   });
 }
 

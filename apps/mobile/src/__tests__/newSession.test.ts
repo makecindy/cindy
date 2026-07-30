@@ -531,7 +531,7 @@ describe('new session model', () => {
       title: '还不能创建',
       subtitle: '请输入电脑端项目路径。',
       details: [
-        '电脑：Carol Mac',
+        '设备：Carol Mac',
         '位置：未选择项目路径',
         '运行：Claude · claude-sonnet-4-6 · medium',
         '首条：未填写',
@@ -546,9 +546,9 @@ describe('new session model', () => {
       model: 'claude-sonnet-4-6',
     }, 'Carol Mac')).toMatchObject({
       title: '准备创建并发送',
-      subtitle: '确认后会在被控电脑创建对话，并把首条消息加入队列。',
+      subtitle: '确认后会在被控设备创建对话，并把首条消息加入队列。',
       details: [
-        '电脑：Carol Mac',
+        '设备：Carol Mac',
         '位置：对话工作区',
         '运行：Claude · claude-sonnet-4-6 · medium',
         '首条：请帮我总结这个项目，并给出下一步建议。',
@@ -562,7 +562,7 @@ describe('new session model', () => {
     }, 'Carol Mac', { attachmentCount: 2 })).toMatchObject({
       title: '准备创建并发送',
       details: [
-        '电脑：Carol Mac',
+        '设备：Carol Mac',
         '位置：/repo/xdt-maker',
         '运行：Claude · claude-sonnet-4-6 · medium',
         '首条：仅发送附件',
@@ -860,10 +860,23 @@ describe('new session composer surface', () => {
     expect(newSource).not.toContain('testID="newSession.permissionButton"');
     expect(newSource).not.toContain('testID="newSession.permissionPanel"');
     expect(newSource).not.toContain('testID="newSession.modelPickerPanel"');
-    expect(newSource).toContain('const composerShowCreateButton = composerHasMessage || attachments.length > 0 || pendingUploads.length > 0;');
-    expect(newSource).toContain('const canCreate = !createValidation && !creating && !voiceIsProcessing;');
+    // 语音生命周期内创建按钮常驻(2026-07-25 对齐桌面):录音中点创建=结束录音并
+    // 用转写创建;否则首段转写落地瞬间按钮冒出来会把语音胶囊整格推左。
+    expect(newSource).toContain("|| voiceStartPending\n    || voiceState === 'listening'\n    || voiceState === 'submitting'\n    || voiceState === 'refining';");
+    // listening 时只豁免「缺正文/附件」校验(路径/模型等其它校验不放行,
+    // 否则按钮可点但必失败):点创建 = 停录并用最终转写创建(review 二轮收窄)。
+    // 判定必须是结构化的 isNewSessionDraftMissingPayloadOnly,禁止比对本地化
+    // 文案——locale 异步恢复时字符串比对会静默失效(review 三轮收口)。
+    expect(newSource).toContain('isNewSessionDraftMissingPayloadOnly(draft, draftContent)');
+    expect(newSource).not.toContain("=== t('session.new.enterFirstMessageOrAttachment')");
+    expect(newSource).toContain('const canCreate = (!createValidation || (voiceIsListening && createValidationIsMissingPayload))');
+    expect(newSource).not.toContain('(!createValidation || voiceIsListening) &&');
+    expect(newSource).toContain('const composerShowCreateButton = composerHasMessage');
     expect(newSource).toContain('const deviceSelectorDisabled = creating || voiceIsProcessing || !deviceHasChoices;');
-    expect(voiceButtonSource).toContain('onPress={toggleVoiceRecording}');
+    // 按下即录(pressIn 起录):同一手势的松手由 voiceStartedOnPressInRef 吞掉,
+    // 不再直接把 onPress 绑到 toggle。
+    expect(voiceButtonSource).toContain('voiceStartedOnPressInRef.current = false;');
+    expect(voiceButtonSource).toContain('toggleVoiceRecording();');
     expect(voiceButtonSource).toContain('disabled={creating || voiceIsProcessing}');
     expect(newSource).toContain('const startVoiceRecording = useCallback(async () => {');
     expect(newSource).toContain('const voiceStartupInFlightRef = useRef(false);');
@@ -921,7 +934,8 @@ describe('new session composer surface', () => {
     expect(newSource).toContain("import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';");
     expect(newSource).toContain('const composerListeningPlaceholder = buildSessionComposerLayout({');
     expect(newSource).toContain('<Text style={styles.voiceDraftListeningText}>{composerListeningPlaceholder}</Text>');
-    expect(newSource).toContain('<VoiceMicWaveCaret color={colors.statusReady} testID="newSession.voiceMicCaret" />');
+    // 听写 mic 波形 caret 用正文色(对齐桌面 --chat-input-text,2026-07-28 用户定案),不用 statusReady 蓝绿。
+    expect(newSource).toContain('<VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />');
     expect(newSource).toContain('const voiceDraftShowsListeningPrompt = voiceIsListening && draft.firstMessage.length === 0;');
     expect(newSource).toContain('firstMessageInputRef.current?.setNativeProps({ selection: { start: end, end } });');
     expect(newSource).toContain('voiceDraftScrollRef.current?.scrollToEnd({ animated: false });');

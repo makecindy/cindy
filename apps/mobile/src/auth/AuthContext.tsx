@@ -13,15 +13,23 @@ import { AppState, Linking } from 'react-native';
 import {
   AuthApiError,
   CindyAuthClient,
+  discoverSsoOrgRealm,
+  parseAccountDeletionReceiptRecord,
+  parseAuthSessionRecord,
   reduceAuthFlow,
+  serializeAccountDeletionReceiptRecord,
   ssoOrgDiscoveryToMethods,
+  serializeAuthSessionRecord,
   type AuthFlowState,
+  type AuthRegion,
+  type AuthSessionRecord,
   type AuthMembership,
   type AccountDeletionAvailability,
   type AccountDeletionChallenge,
   type AccountDeletionStatus,
   type LoginOutcome,
   type SocialProvider,
+  type SsoOrgDiscovery,
   type VerificationKind,
 } from '@cindy/auth-client';
 // dev-only 登录 scenario harness(implementation-plan Step 0 WHAT4):
@@ -36,12 +44,16 @@ import {
   type ApiFetchOptions,
 } from '@/api/client';
 import {
-  AUTH_API_BASE_URL,
-  AUTH_REGION,
+  activateMobileSessionRealm,
+  BUILD_AUTH_REGION,
+  getMobileEndpointForRealm,
+  getMobileEndpointRealmConfig,
   IS_OTA_SELFHOST,
+  loadMobileEndpointsForRealm,
   MOBILE_VISUAL_MOCK_ENABLED,
   MOBILE_REDIRECT_URL,
   OAUTH_BROKER_API_BASE_URL,
+  resetMobileSessionRealm,
 } from '@/config/env';
 import { syncCanaryChannelAfterAuth } from '@/auth/canaryChannelSync';
 import { ensureDeviceId } from '@/auth/deviceId';
@@ -59,7 +71,11 @@ import {
   getSecureItem,
   setSecureItem,
 } from '@/auth/secureStorage';
-import { clearTapdbUser, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
+import {
+  clearTapdbUser,
+  setTapdbUser,
+  stopMobileTapdbReporting,
+} from '@/analytics/mobileTapdb';
 import {
   clearAnalyticsConsent,
   migrateExistingLoginAsConsented,
@@ -70,6 +86,10 @@ import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
+import {
+  clearAllMobileVoiceDictionaryCaches,
+  setMobileVoiceDictionaryAccountScope,
+} from '@/session/mobileVoiceDictionaryCache';
 import { clearAllMobileVoiceInputHistories } from '@/session/mobileVoiceHistoryStore';
 import { visualMockApiFetch, visualMockUser } from '@/debug/visualMock';
 import {
@@ -79,15 +99,15 @@ import {
 
 WebBrowser.maybeCompleteAuthSession();
 
-const REFRESH_TOKEN_KEY = 'cindy.mobile.auth.refreshToken';
+const AUTH_SESSION_KEY = 'cindy.mobile.auth.session.v1';
+const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'cindy.mobile.auth.refreshToken';
 const LEGACY_ACCOUNT_REFRESH_TOKEN_KEY =
   'cindy.mobile.auth.accountRefreshToken';
 const LEGACY_REFRESH_TOKEN_KEY = 'xdt.mobile.refreshToken';
 const USER_PROFILE_KEY = 'cindy.mobile.auth.userProfile';
 const LEGACY_USER_PROFILE_KEY = 'xdt.mobile.userProfile';
 const PENDING_OAUTH_KEY = 'cindy.mobile.auth.pendingOAuth';
-const ACCOUNT_DELETION_RECEIPT_KEY =
-  'cindy.mobile.auth.accountDeletionReceipt';
+const ACCOUNT_DELETION_RECEIPT_KEY = 'cindy.mobile.auth.accountDeletionReceipt';
 const LEGACY_PENDING_OAUTH_KEY = 'xdt.mobile.pendingOAuth';
 const PENDING_OAUTH_MAX_AGE_MS = 10 * 60 * 1000;
 const AUTH_STARTUP_GATE_TIMEOUT_MS = 20 * 1000;
@@ -111,6 +131,8 @@ export type MobileLoginAction =
   | { type: 'reset' }
   | { type: 'discover'; email: string }
   | { type: 'discover-sso-org'; org: string }
+  | { type: 'confirm-sso-realm' }
+  | { type: 'cancel-sso-realm' }
   | { type: 'request-code'; kind: VerificationKind; identifier: string }
   | {
       type: 'verify-code';
@@ -132,6 +154,7 @@ interface PendingOAuth {
   state: string;
   createdAt: number;
   label: string;
+  realm: AuthRegion;
 }
 
 export interface AuthContextValue {
@@ -228,17 +251,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pendingAccountTokenRef = useRef<string | null>(null);
   const [user, setUser] = useState<MobileUser | null>(null);
   const userRef = useRef<MobileUser | null>(null);
+  // 跨区缓存会话在所属 realm 清单尚未就绪时保持未认证，但仍需后台重试，
+  // 不能复用只由 user 驱动的弱网自愈条件。
+  const [deferredSessionRecovery, setDeferredSessionRecovery] = useState(false);
   const [loginState, setLoginState] = useState<AuthFlowState | null>(null);
   const loginStateRef = useRef<AuthFlowState | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [accountDeletionReceipt, setAccountDeletionReceipt] = useState<
     string | null
   >(null);
-  const [accountDeletionRestored, setAccountDeletionRestored] =
-    useState(false);
+  const [accountDeletionRestored, setAccountDeletionRestored] = useState(false);
   const pendingLoginTicketRef = useRef<string | null>(null);
   const pendingBindTicketRef = useRef<string | null>(null);
   const pendingSsoVerificationTicketRef = useRef<string | null>(null);
+  const activeAuthRealmRef = useRef<AuthRegion>(BUILD_AUTH_REGION);
+  const pendingAuthRealmRef = useRef<AuthRegion | null>(null);
+  const accountDeletionReceiptRealmRef = useRef<AuthRegion | null>(null);
   const pendingAccountDeletionRestoredRef = useRef(false);
   const loginActionInFlightRef = useRef<Promise<boolean> | null>(null);
   const browserCompletionRef = useRef<Promise<void> | null>(null);
@@ -251,6 +279,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   >(async () => undefined);
   // Logout bumps this generation so a late refresh cannot resurrect the session.
   const authGenerationRef = useRef(0);
+  // 用户主动开始新登录后，旧的弱网会话不得再通过定时/前台恢复抢回界面。
+  const sessionRecoverySuspendedRef = useRef(false);
   // SecureStore operations are asynchronous. Serialize mutations so logout always
   // wins over a refresh/login write that was already inside the native storage call.
   const refreshTokenMutationRef = useRef<Promise<void>>(Promise.resolve());
@@ -258,6 +288,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const accountDeletionReceiptMutationRef = useRef<Promise<void>>(
     Promise.resolve(),
   );
+
+  const suspendSessionRecoveryForLogin = useCallback(() => {
+    if (sessionRecoverySuspendedRef.current) return;
+    sessionRecoverySuspendedRef.current = true;
+    authGenerationRef.current += 1;
+    refreshInFlightRef.current = null;
+    setDeferredSessionRecovery(false);
+  }, []);
 
   /** 登录态落地后异步刷新灰度标记；失败保留旧值，迟到响应按 auth generation 丢弃。 */
   const scheduleCanaryChannelSync = useCallback(
@@ -306,14 +344,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const persistAccountDeletionReceipt = useCallback(
-    async (receiptToken: string | null): Promise<void> => {
+    async (
+      receiptToken: string | null,
+      realm = activeAuthRealmRef.current,
+    ): Promise<void> => {
       const operation = async () => {
         if (receiptToken) {
-          await setSecureItem(ACCOUNT_DELETION_RECEIPT_KEY, receiptToken);
+          await setSecureItem(
+            ACCOUNT_DELETION_RECEIPT_KEY,
+            serializeAccountDeletionReceiptRecord(realm, receiptToken),
+          );
+          accountDeletionReceiptRealmRef.current = realm;
         } else {
           await deleteSecureItem(ACCOUNT_DELETION_RECEIPT_KEY).catch(
             () => undefined,
           );
+          accountDeletionReceiptRealmRef.current = null;
         }
         setAccountDeletionReceipt(receiptToken);
       };
@@ -344,6 +390,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // 缓存资料恢复“已登录”视图,token 由后台刷新补齐。
   const applyUser = useCallback(
     (next: MobileUser | null) => {
+      setDeferredSessionRecovery(false);
       userRef.current = next;
       setUser(next);
       void serializeUserProfileMutation(() => writeCachedUserProfile(next));
@@ -364,7 +411,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       expectedGeneration = authGenerationRef.current,
     ): Promise<void> => {
       // 2026-07 起只拉 auth-server 身份(产品 /api/user/me 已退役)。
-      const identityResult = await authClientFor(did)
+      const identityResult = await authClientFor(
+        did,
+        activeAuthRealmRef.current,
+      )
         .getMe(token)
         .then(
           (value) => ({ status: 'fulfilled' as const, value }),
@@ -437,11 +487,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         outcome.accountDeletionRestored === true ||
         pendingAccountDeletionRestoredRef.current;
       pendingAccountDeletionRestoredRef.current = false;
+      const committedRealm = pendingAuthRealmRef.current ?? BUILD_AUTH_REGION;
+      const previousAccessToken = accessTokenRef.current;
+      const previousRealm = activeAuthRealmRef.current;
+      const replacesActiveSession =
+        previousAccessToken !== null &&
+        (previousRealm !== committedRealm ||
+          userRef.current?.id !== outcome.membership.id);
+      if (replacesActiveSession) {
+        // 新会话尚未覆盖旧 token / realm；在这一刻撤销旧区推送，失败不能阻断登录。
+        await unregisterPushTokenBestEffort(
+          previousAccessToken,
+          previousRealm,
+        );
+      }
       const generation = ++authGenerationRef.current;
       refreshInFlightRef.current = null;
+      activateMobileSessionRealm(committedRealm);
+      activeAuthRealmRef.current = committedRealm;
       const persisted = await serializeRefreshTokenMutation(async () => {
         if (authGenerationRef.current !== generation) return false;
-        await setSecureItem(REFRESH_TOKEN_KEY, outcome.refreshToken);
+        await writePersistedAuthSession(outcome.refreshToken, committedRealm);
         return authGenerationRef.current === generation;
       });
       if (!persisted) throw authCodeError('AUTH_FLOW_SUPERSEDED');
@@ -451,10 +517,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       pendingLoginTicketRef.current = null;
       pendingBindTicketRef.current = null;
       pendingSsoVerificationTicketRef.current = null;
+      pendingAuthRealmRef.current = null;
       setToken(outcome.accessToken);
       applyUser(
         mergeMembershipWithExisting(outcome.membership, userRef.current),
       );
+      sessionRecoverySuspendedRef.current = false;
       scheduleCanaryChannelSync(outcome.accessToken, generation);
       updateLoginState(
         reduceAuthFlow(loginStateRef.current, { type: 'outcome', outcome }),
@@ -489,19 +557,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const did =
           knownDeviceId ?? deviceIdRef.current ?? (await ensureDeviceId());
         deviceIdRef.current = did;
-        const refreshToken = await serializeRefreshTokenMutation(() =>
-          getSecureItem(REFRESH_TOKEN_KEY).catch(() => null),
+        const session = await serializeRefreshTokenMutation(
+          readPersistedAuthSession,
         );
-        if (!refreshToken) {
+        if (authGenerationRef.current !== generation) return null;
+        if (!session) {
           await clearCanaryChannel().catch(() => undefined);
           return null;
         }
         try {
-          const pair = await authClientFor(did).refresh(refreshToken);
+          await loadMobileEndpointsForRealm(session.realm);
+          if (authGenerationRef.current !== generation) return null;
+          activateMobileSessionRealm(session.realm);
+          activeAuthRealmRef.current = session.realm;
+          const pair = await authClientFor(did, session.realm).refresh(
+            session.refreshToken,
+          );
           if (authGenerationRef.current !== generation) return null;
           const persisted = await serializeRefreshTokenMutation(async () => {
             if (authGenerationRef.current !== generation) return false;
-            await setSecureItem(REFRESH_TOKEN_KEY, pair.refreshToken);
+            await writePersistedAuthSession(pair.refreshToken, session.realm);
             return authGenerationRef.current === generation;
           });
           if (!persisted) return null;
@@ -541,7 +616,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsBusy(true);
       try {
         const did = await ensureDeviceId();
-        if (cancelled) return;
+        if (cancelled || sessionRecoverySuspendedRef.current) return;
         deviceIdRef.current = did;
         setDeviceId(did);
         // Old Feishu refresh tokens are not valid in auth-server. Purge them explicitly
@@ -558,21 +633,68 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 服务模式开关与 BYOK LiteLLM key,防止桌面 key 继续躺在 secure storage。
           clearAllMobileVoiceCredentials().catch(() => undefined),
         ]);
-        const [storedRefreshToken, cachedUser, storedDeletionReceipt] =
-          await Promise.all([
-          getSecureItem(REFRESH_TOKEN_KEY).catch(() => null),
+        let storedSession = await readPersistedAuthSession();
+        if (!storedSession) {
+          const legacyToken = await getSecureItem(
+            LEGACY_RESOURCE_REFRESH_TOKEN_KEY,
+          ).catch(() => null);
+          if (legacyToken) {
+            await writePersistedAuthSession(legacyToken, BUILD_AUTH_REGION);
+            await deleteSecureItem(LEGACY_RESOURCE_REFRESH_TOKEN_KEY).catch(
+              () => undefined,
+            );
+            storedSession = {
+              version: 1,
+              realm: BUILD_AUTH_REGION,
+              refreshToken: legacyToken,
+            };
+          }
+        }
+        const [cachedUser, storedDeletionReceiptRaw] = await Promise.all([
           readCachedUserProfile(),
           getSecureItem(ACCOUNT_DELETION_RECEIPT_KEY).catch(() => null),
         ]);
+        const storedDeletionReceipt =
+          parseAccountDeletionReceiptRecord(storedDeletionReceiptRaw) ??
+          (storedDeletionReceiptRaw &&
+          !storedDeletionReceiptRaw.trimStart().startsWith('{')
+            ? {
+                version: 1 as const,
+                realm: BUILD_AUTH_REGION,
+                receiptToken: storedDeletionReceiptRaw,
+              }
+            : null);
         if (storedDeletionReceipt) {
-          setAccountDeletionReceipt(storedDeletionReceipt);
+          accountDeletionReceiptRealmRef.current = storedDeletionReceipt.realm;
+          setAccountDeletionReceipt(storedDeletionReceipt.receiptToken);
+          // Older builds stored only the opaque receipt; migrate it atomically
+          // with the deterministic build-region interpretation.
+          if (!parseAccountDeletionReceiptRecord(storedDeletionReceiptRaw)) {
+            await setSecureItem(
+              ACCOUNT_DELETION_RECEIPT_KEY,
+              serializeAccountDeletionReceiptRecord(
+                storedDeletionReceipt.realm,
+                storedDeletionReceipt.receiptToken,
+              ),
+            );
+          }
         }
-        // 弱网冷启动:先用本地会话痕迹恢复已登录视图,再走网络刷新。
-        if (storedRefreshToken && cachedUser) {
-          userRef.current = cachedUser;
-          setUser(cachedUser);
+        // 弱网冷启动只有在会话所属 realm 的业务端点已整体激活后，才发布缓存用户。
+        // 构建 realm 命中启动缓存，不增加网络依赖；跨区清单不可用时保持未认证，
+        // 防止业务调用先捕获构建区 URL、随后 refresh 又把对端 token 发给该 URL。
+        if (storedSession && cachedUser) {
+          try {
+            await loadMobileEndpointsForRealm(storedSession.realm);
+            if (cancelled) return;
+            activateMobileSessionRealm(storedSession.realm);
+            activeAuthRealmRef.current = storedSession.realm;
+            userRef.current = cachedUser;
+            setUser(cachedUser);
+          } catch {
+            if (!cancelled) setDeferredSessionRecovery(true);
+          }
         }
-        if (!storedRefreshToken)
+        if (!storedSession)
           await deleteSecureItem(USER_PROFILE_KEY).catch(() => undefined);
         try {
           await awaitAuthStartupGate(
@@ -615,34 +737,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [refresh]);
 
-  // 降级会话自愈:有缓存用户但尚未取得 access token 时,以退避节奏和回前台时机重试。
+  // 降级会话自愈:已安全发布的缓存用户，或因跨区清单失败而延迟发布的会话，
+  // 都以退避节奏和回前台时机重试。
   useEffect(() => {
-    if (!initialized || !user || accessToken) return;
+    const hasRecoverableSession =
+      user !== null || deferredSessionRecovery;
+    if (
+      !initialized ||
+      accessToken ||
+      !hasRecoverableSession ||
+      sessionRecoverySuspendedRef.current
+    )
+      return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
     const scheduleNext = () => {
-      if (cancelled) return;
+      if (cancelled || sessionRecoverySuspendedRef.current) return;
       attempt += 1;
       const delay = Math.min(5_000 * 2 ** attempt, 60_000);
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => void tryRefresh(), delay);
     };
     const tryRefresh = async () => {
-      if (cancelled) return;
+      if (cancelled || sessionRecoverySuspendedRef.current) return;
       try {
         const token = await refresh();
-        if (cancelled) return;
+        if (cancelled || sessionRecoverySuspendedRef.current) return;
         if (token) return;
-        let storedRefreshToken: string | null;
+        let storedSession: AuthSessionRecord | null;
         try {
-          storedRefreshToken = await getSecureItem(REFRESH_TOKEN_KEY);
+          storedSession = await readPersistedAuthSession();
         } catch {
           scheduleNext();
           return;
         }
-        if (cancelled) return;
-        if (!storedRefreshToken) {
+        if (cancelled || sessionRecoverySuspendedRef.current) return;
+        if (!storedSession) {
           applyUser(null);
           return;
         }
@@ -660,7 +791,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription.remove();
       if (timer) clearTimeout(timer);
     };
-  }, [accessToken, applyUser, initialized, refresh, user]);
+  }, [
+    accessToken,
+    applyUser,
+    deferredSessionRecovery,
+    initialized,
+    refresh,
+    user,
+  ]);
 
   // 存量同意迁移已在冷启动流程里 await 完成(见上方 initialize),这里只负责绑定
   // 账号标识 —— initialized 变 true 时迁移必然已经落盘。
@@ -670,9 +808,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     else void clearTapdbUser();
   }, [initialized, user?.id]);
 
+  // 词典缓存的落盘键按账号分区。登出清理是尽力而为的(索引可能读不出来),分区让
+  // 「没删干净」不再等于「下个账号能读到上个账号的词条并发给润色模型」。
+  useEffect(() => {
+    setMobileVoiceDictionaryAccountScope(user?.id ?? '');
+  }, [user?.id]);
+
   const completeOAuthCallback = useCallback(
     (callbackUrl: string): Promise<void> => {
       if (browserCompletionRef.current) return browserCompletionRef.current;
+      suspendSessionRecoveryForLogin();
       const run = (async () => {
         setIsBusy(true);
         try {
@@ -683,8 +828,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const callback = parseOAuthCallbackUrl(callbackUrl);
           if (callback.state !== pending.state)
             throw authCodeError('STATE_MISMATCH');
+          try {
+            await loadMobileEndpointsForRealm(pending.realm);
+          } catch {
+            throw new AuthApiError(
+              'ORG_REALM_UNAVAILABLE',
+              503,
+              'Unable to load the enterprise auth region manifest',
+            );
+          }
+          pendingAuthRealmRef.current = pending.realm;
           const outcome = await authClientFor(
             pending.deviceId,
+            pending.realm,
           ).exchangeAuthorizationCode(callback.code, pending.codeVerifier);
           deviceIdRef.current = pending.deviceId;
           setDeviceId(pending.deviceId);
@@ -694,6 +850,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const code = authErrorCode(error);
           if (code === 'INVALID_AUTH_CODE') {
             await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
+            pendingAuthRealmRef.current = null;
+            resetMobileSessionRealm();
             updateLoginState(null);
           }
           setAuthError(code);
@@ -715,7 +873,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       );
       return run;
     },
-    [acceptOutcome, updateLoginState],
+    [acceptOutcome, suspendSessionRecoveryForLogin, updateLoginState],
   );
 
   // SSO returns through cindycn://auth or cindy://auth. The pending PKCE verifier
@@ -736,6 +894,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const dispatchLoginAction = useCallback(
     (action: MobileLoginAction): Promise<boolean> => {
+      suspendSessionRecoveryForLogin();
       if (loginActionInFlightRef.current) return loginActionInFlightRef.current;
       let run: Promise<boolean>;
       const clearIfCurrent = () => {
@@ -749,17 +908,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const did = deviceIdRef.current ?? (await ensureDeviceId());
           deviceIdRef.current = did;
           setDeviceId(did);
-          const client = authClientFor(did);
+          const startsBuildRealmFlow =
+            action.type === 'discover' ||
+            action.type === 'request-code' ||
+            action.type === 'verify-code' ||
+            action.type === 'native-social';
+          if (startsBuildRealmFlow) {
+            pendingAuthRealmRef.current = null;
+            resetMobileSessionRealm();
+          }
+          const loginRealm = pendingAuthRealmRef.current ?? BUILD_AUTH_REGION;
+          const client = authClientFor(did, loginRealm);
 
           if (action.type === 'reset') {
             pendingAccountTokenRef.current = null;
             pendingLoginTicketRef.current = null;
             pendingBindTicketRef.current = null;
             pendingSsoVerificationTicketRef.current = null;
+            pendingAuthRealmRef.current = null;
+            resetMobileSessionRealm();
             pendingAccountDeletionRestoredRef.current = false;
             setAccountDeletionRestored(false);
             await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
-            const providers = await client.getProviders();
+            const providers = await authClientFor(
+              did,
+              BUILD_AUTH_REGION,
+            ).getProviders();
             updateLoginState(
               reduceAuthFlow(loginStateRef.current, {
                 type: 'providers-loaded',
@@ -768,9 +942,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             );
             return true;
           }
+          if (action.type === 'confirm-sso-realm') {
+            const confirmation = loginStateRef.current;
+            if (
+              confirmation?.step !== 'realm-confirmation' ||
+              pendingAuthRealmRef.current !== confirmation.targetRegion
+            ) {
+              throw authCodeError('INVALID_AUTH_ACTION');
+            }
+            updateLoginState(
+              reduceAuthFlow(confirmation, {
+                type: 'discovery-loaded',
+                email: '',
+                methods: confirmation.methods,
+              }),
+            );
+            return true;
+          }
+          if (action.type === 'cancel-sso-realm') {
+            const confirmation = loginStateRef.current;
+            if (confirmation?.step !== 'realm-confirmation') {
+              throw authCodeError('INVALID_AUTH_ACTION');
+            }
+            pendingAuthRealmRef.current = null;
+            resetMobileSessionRealm();
+            updateLoginState(
+              reduceAuthFlow(confirmation, {
+                type: 'providers-loaded',
+                providers: confirmation.providers,
+              }),
+            );
+            return true;
+          }
           if (action.type === 'discover') {
             const email = action.email.trim().toLowerCase();
-            const methods = await client.discover(email);
+            const methods = await authClientFor(
+              did,
+              BUILD_AUTH_REGION,
+            ).discover(email);
             updateLoginState(
               reduceAuthFlow(loginStateRef.current, {
                 type: 'discovery-loaded',
@@ -783,21 +992,72 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 企业 SSO 入口（按组织 ID/slug/已验证域名）：结果映射进 method-choice，
           // 复用连接选择 UI 与 start-sso 流程。
           if (action.type === 'discover-sso-org') {
-            const discovery = await client.discoverSsoOrg(
-              action.org.trim().toLowerCase(),
-            );
-            updateLoginState(
-              reduceAuthFlow(loginStateRef.current, {
-                type: 'discovery-loaded',
-                email: '',
-                methods: ssoOrgDiscoveryToMethods(discovery),
-              }),
-            );
+            const org = action.org.trim().toLowerCase();
+            // 新的一次组织发现不得复用上一轮成功结果；只有本轮双区判定成功后
+            // 才重新冻结 pending realm。
+            pendingAuthRealmRef.current = null;
+            const realmConfig = getMobileEndpointRealmConfig();
+            let discovery: SsoOrgDiscovery;
+            if (
+              realmConfig.crossRealmOrgLoginEnabled &&
+              realmConfig.realmManifestBaseUrls
+            ) {
+              try {
+                await Promise.all([
+                  loadMobileEndpointsForRealm('cn'),
+                  loadMobileEndpointsForRealm('global'),
+                ]);
+              } catch {
+                throw new AuthApiError(
+                  'ORG_REALM_UNAVAILABLE',
+                  503,
+                  'Unable to load both enterprise auth region manifests',
+                );
+              }
+              const selected = await discoverSsoOrgRealm(org, {
+                cn: authClientFor(did, 'cn'),
+                global: authClientFor(did, 'global'),
+              });
+              pendingAuthRealmRef.current = selected.region;
+              discovery = selected.discovery;
+            } else {
+              pendingAuthRealmRef.current = BUILD_AUTH_REGION;
+              discovery = await authClientFor(
+                did,
+                BUILD_AUTH_REGION,
+              ).discoverSsoOrg(org);
+            }
+            const methods = ssoOrgDiscoveryToMethods(discovery);
+            const currentState = loginStateRef.current;
+            if (discovery.region !== BUILD_AUTH_REGION) {
+              if (currentState?.step !== 'identifier') {
+                throw authCodeError('INVALID_AUTH_ACTION');
+              }
+              updateLoginState(
+                reduceAuthFlow(currentState, {
+                  type: 'realm-switch-required',
+                  targetRegion: discovery.region,
+                  providers: currentState.providers,
+                  methods,
+                }),
+              );
+            } else {
+              updateLoginState(
+                reduceAuthFlow(currentState, {
+                  type: 'discovery-loaded',
+                  email: '',
+                  methods,
+                }),
+              );
+            }
             return true;
           }
           if (action.type === 'request-code') {
             const identifier = action.identifier.trim();
-            await client.requestCode(action.kind, identifier);
+            await authClientFor(did, BUILD_AUTH_REGION).requestCode(
+              action.kind,
+              identifier,
+            );
             updateLoginState(
               reduceAuthFlow(loginStateRef.current, {
                 type: 'code-requested',
@@ -809,7 +1069,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           if (action.type === 'verify-code') {
             await acceptOutcome(
-              await client.verifyCode(
+              await authClientFor(did, BUILD_AUTH_REGION).verifyCode(
                 action.kind,
                 action.identifier.trim(),
                 action.code,
@@ -823,13 +1083,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               action.provider,
             );
             await acceptOutcome(
-              await client.exchangeNativeSocial(action.provider, credential),
+              await authClientFor(did, BUILD_AUTH_REGION).exchangeNativeSocial(
+                action.provider,
+                credential,
+              ),
               did,
             );
             return true;
           }
           if (action.type === 'start-sso') {
             const previousState = loginStateRef.current;
+            if (
+              previousState?.step !== 'method-choice' ||
+              !previousState.methods.some(
+                (method) =>
+                  method.type === 'sso' &&
+                  method.connectionId === action.connectionId,
+              )
+            ) {
+              throw authCodeError('INVALID_AUTH_ACTION');
+            }
             const { codeVerifier, codeChallenge } = await createPkcePair();
             const state = createState();
             await setSecureItem(
@@ -840,6 +1113,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 state,
                 createdAt: Date.now(),
                 label: action.label,
+                realm: loginRealm,
               } satisfies PendingOAuth),
             );
             updateLoginState(
@@ -864,7 +1138,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               return true;
             }
             await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
-            updateLoginState(previousState);
+            pendingAuthRealmRef.current = null;
+            updateLoginState(null);
             throw authCodeError('USER_CANCELLED');
           }
           if (action.type === 'select-account') {
@@ -954,12 +1229,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             code === 'INVALID_SSO_VERIFICATION_TICKET' ||
             code === 'INVALID_TOKEN' ||
             code === 'TOKEN_EXPIRED' ||
-            code === 'AUTH_FLOW_SUPERSEDED'
+            code === 'AUTH_FLOW_SUPERSEDED' ||
+            code === 'USER_CANCELLED'
           ) {
             pendingAccountTokenRef.current = null;
             pendingLoginTicketRef.current = null;
             pendingBindTicketRef.current = null;
             pendingSsoVerificationTicketRef.current = null;
+            pendingAuthRealmRef.current = null;
             pendingAccountDeletionRestoredRef.current = false;
             setAccountDeletionRestored(false);
             updateLoginState(null);
@@ -974,7 +1251,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       run.then(clearIfCurrent, clearIfCurrent);
       return run;
     },
-    [acceptOutcome, completeOAuthCallback, updateLoginState],
+    [
+      acceptOutcome,
+      completeOAuthCallback,
+      suspendSessionRecoveryForLogin,
+      updateLoginState,
+    ],
   );
 
   const clearLocalSession = useCallback(async () => {
@@ -982,7 +1264,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 都先 best-effort 注销移动推送 token —— 只挂在 logout 会漏掉终止路径,设备会
     // 继续收到旧账号的任务通知。token 此刻可能已失效(账号不可用),失败静默,
     // 残留由 server 侧 APNs 410 回收与换账号重注册的让位逻辑兜底。
-    await unregisterPushTokenBestEffort(accessTokenRef.current);
+    await unregisterPushTokenBestEffort(
+      accessTokenRef.current,
+      activeAuthRealmRef.current,
+    );
     authGenerationRef.current += 1;
     refreshInFlightRef.current = null;
     setToken(null);
@@ -993,10 +1278,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pendingLoginTicketRef.current = null;
     pendingBindTicketRef.current = null;
     pendingSsoVerificationTicketRef.current = null;
+    pendingAuthRealmRef.current = null;
+    activeAuthRealmRef.current = BUILD_AUTH_REGION;
+    resetMobileSessionRealm();
     pendingAccountDeletionRestoredRef.current = false;
     // 覆盖历史穿透凭据、服务模式与 BYOK key 三类存量存储键(功能已删除)。
     await clearAllMobileVoiceCredentials().catch(() => undefined);
     await clearAllMobileVoiceInputHistories().catch(() => undefined);
+    // 词典缓存按 host 设备分区、不含账号身份:同一台电脑在两个账号下是同一个
+    // deviceId,不清就会让下一个账号读到上一个账号的词条并发给润色模型。
+    await clearAllMobileVoiceDictionaryCaches().catch(() => undefined);
     await clearCachedSessionMessages().catch(() => undefined);
     // 首页设备+会话快照与消息缓存一样属于账号数据,登出必须清掉。
     await clearCachedHomeListSnapshot().catch(() => undefined);
@@ -1009,13 +1300,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await stopMobileTapdbReporting().catch(() => undefined);
     await clearAnalyticsConsent().catch(() => undefined);
     await serializeRefreshTokenMutation(() =>
-      deleteSecureItem(REFRESH_TOKEN_KEY).catch(() => undefined),
+      deleteSecureItem(AUTH_SESSION_KEY).catch(() => undefined),
     );
     await Promise.all([
       serializeUserProfileMutation(() =>
         deleteSecureItem(USER_PROFILE_KEY).catch(() => undefined),
       ),
       deleteSecureItem(LEGACY_REFRESH_TOKEN_KEY).catch(() => undefined),
+      deleteSecureItem(LEGACY_RESOURCE_REFRESH_TOKEN_KEY).catch(
+        () => undefined,
+      ),
       deleteSecureItem(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY).catch(() => undefined),
       deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined),
       deleteSecureItem(LEGACY_PENDING_OAUTH_KEY).catch(() => undefined),
@@ -1061,13 +1355,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     const token = accessTokenRef.current;
     const did = deviceIdRef.current;
+    const realm = activeAuthRealmRef.current;
     // 移动推送 token 的注销收口在 clearLocalSession(覆盖 logout 与全部终止路径)。
     // 普通登出代表放弃尚未确认的 challenge；确认注销走 clearLocalSession 直达，
     // 不调用本函数，因此已确认请求的 receipt 仍会保留供登录页查询。
     await persistAccountDeletionReceipt(null);
     await clearLocalSession();
     if (token && did)
-      await authClientFor(did)
+      await authClientFor(did, realm)
         .logout(token)
         .catch(() => undefined);
   }, [clearLocalSession, persistAccountDeletionReceipt]);
@@ -1099,7 +1394,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const did = deviceIdRef.current ?? (await ensureDeviceId());
     deviceIdRef.current = did;
     return runProtectedAuthRequest(() =>
-      authClientFor(did).getAccountDeletionAvailability(token),
+      authClientFor(
+        did,
+        activeAuthRealmRef.current,
+      ).getAccountDeletionAvailability(token),
     );
   }, [getAccessToken, runProtectedAuthRequest]);
 
@@ -1109,11 +1407,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const did = deviceIdRef.current ?? (await ensureDeviceId());
     deviceIdRef.current = did;
     const challenge = await runProtectedAuthRequest(() =>
-      authClientFor(did).requestAccountDeletionChallenge(token),
+      authClientFor(
+        did,
+        activeAuthRealmRef.current,
+      ).requestAccountDeletionChallenge(token),
     );
     // 先持久化查询凭证，再把 challenge 交给 UI。即使确认成功后的响应丢失，
     // 下一次冷启动仍能查询注销状态。
-    await persistAccountDeletionReceipt(challenge.receiptToken);
+    await persistAccountDeletionReceipt(
+      challenge.receiptToken,
+      activeAuthRealmRef.current,
+    );
     return challenge;
   }, [getAccessToken, persistAccountDeletionReceipt, runProtectedAuthRequest]);
 
@@ -1127,7 +1431,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!token) throw authCodeError('UNAUTHENTICATED');
       const did = deviceIdRef.current ?? (await ensureDeviceId());
       deviceIdRef.current = did;
-      const client = authClientFor(did);
+      const client = authClientFor(did, activeAuthRealmRef.current);
       let status: AccountDeletionStatus;
       try {
         status = await runProtectedAuthRequest(() =>
@@ -1161,10 +1465,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const getAccountDeletionStatus = useCallback(async () => {
     const receiptToken = accountDeletionReceipt;
-    if (!receiptToken) return null;
+    const realm = accountDeletionReceiptRealmRef.current;
+    if (!receiptToken || !realm) return null;
     const did = deviceIdRef.current ?? (await ensureDeviceId());
     deviceIdRef.current = did;
-    return authClientFor(did).getAccountDeletionStatus(receiptToken);
+    await loadMobileEndpointsForRealm(realm);
+    return authClientFor(did, realm).getAccountDeletionStatus(receiptToken);
   }, [accountDeletionReceipt]);
 
   const clearAccountDeletionReceipt = useCallback(
@@ -1284,10 +1590,12 @@ export function useAuth(): AuthContextValue {
   return context;
 }
 
-function authClientFor(deviceId: string): CindyAuthClient {
-  // auth 协议只有 cn/global 两条线;dev 目标行为语义归 cn 系(实际连的
-  // dev-auth 服务器由 AUTH_API_BASE_URL 决定,与线别参数正交)。
-  const region = AUTH_REGION === 'global' ? 'global' : 'cn';
+function authClientFor(
+  deviceId: string,
+  region: AuthRegion = BUILD_AUTH_REGION,
+): CindyAuthClient {
+  // auth 协议只有 cn/global 两条线；dev 构建语义归 cn 系，实际基址仍来自
+  // 已解析的 endpoint manifest。
   // 登录 scenario harness 注入点(仅 client 构造参数;implementation-plan Step 0
   // WHAT4)。guard:__DEV__ + EXPO_PUBLIC_LOGIN_SCENARIO(值域见附录 A);
   // 生产构建由 metro resolveRequest 把 fixtures 整模块替换为空 stub 双保险。
@@ -1297,7 +1605,7 @@ function authClientFor(deviceId: string): CindyAuthClient {
     region,
   });
   return new CindyAuthClient({
-    baseUrl: AUTH_API_BASE_URL,
+    baseUrl: getMobileEndpointForRealm(region, 'authApiBaseUrl'),
     region,
     deviceId,
     clientType: 'mobile',
@@ -1388,6 +1696,22 @@ function authCodeError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code });
 }
 
+async function readPersistedAuthSession(): Promise<AuthSessionRecord | null> {
+  return parseAuthSessionRecord(
+    await getSecureItem(AUTH_SESSION_KEY).catch(() => null),
+  );
+}
+
+async function writePersistedAuthSession(
+  refreshToken: string,
+  realm: AuthRegion,
+): Promise<void> {
+  await setSecureItem(
+    AUTH_SESSION_KEY,
+    serializeAuthSessionRecord(realm, refreshToken),
+  );
+}
+
 async function readCachedUserProfile(): Promise<MobileUser | null> {
   try {
     const raw = await getSecureItem(USER_PROFILE_KEY);
@@ -1428,7 +1752,8 @@ async function readPendingOAuth(): Promise<PendingOAuth> {
     typeof parsed.deviceId !== 'string' ||
     typeof parsed.state !== 'string' ||
     typeof parsed.createdAt !== 'number' ||
-    typeof parsed.label !== 'string'
+    typeof parsed.label !== 'string' ||
+    (parsed.realm !== 'cn' && parsed.realm !== 'global')
   )
     throw authCodeError('INVALID_AUTH_CODE');
   if (Date.now() - parsed.createdAt > PENDING_OAUTH_MAX_AGE_MS) {

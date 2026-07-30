@@ -157,7 +157,7 @@ const SCHEDULER_DDL = [
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       last_fired_at INTEGER,
-      active_claim_fired_at INTEGER,
+      active_claim_run_id TEXT,
       last_finished_at INTEGER,
       next_fire_at INTEGER,
       expire_at INTEGER
@@ -461,11 +461,11 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         costAttribution: 'unavailable',
       });
       expect(claimed?.nextFireAt).toBeUndefined();
-      expect(claimed?.lastFiredAt).toBe(firedAt);
-      expect(claimed?.activeClaimFiredAt).toBe(firedAt);
-      expect(await harness.storage.hasRunningRuns('sch-claim-run', { firedAt })).toBe(true);
-      expect(await harness.storage.hasRunningRuns('sch-claim-run', { firedAt: firedAt + 1 })).toBe(false);
-      expect(await harness.storage.listRunningRunFiredAts('sch-claim-run')).toEqual([firedAt]);
+      expect(claimed?.lastFiredAt).toBeUndefined();
+      expect(claimed?.activeClaimRunId).toBe('run-hit');
+      expect(await harness.storage.hasRunningRuns('sch-claim-run', { runId: 'run-hit' })).toBe(true);
+      expect(await harness.storage.hasRunningRuns('sch-claim-run', { runId: 'run-missing' })).toBe(false);
+      expect(await harness.storage.listRunningRunIds('sch-claim-run')).toEqual(['run-hit']);
       expect(await harness.storage.listRuns('sch-claim-run')).toEqual([
         expect.objectContaining({
           id: 'run-hit',
@@ -498,17 +498,69 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         status: 'running',
       });
       expect(claimedAfterManual?.lastFiredAt).toBe(firedAt + 10);
-      expect(claimedAfterManual?.activeClaimFiredAt).toBe(firedAt);
+      expect(claimedAfterManual?.activeClaimRunId).toBe('run-preserve-manual');
 
       const deferred = await harness.storage.rescheduleDeferredAutomaticClaim(
         'sch-preserve-manual',
-        firedAt,
+        'run-preserve-manual',
         due + 60_000,
-        firedAt - 10,
       );
       expect(deferred?.nextFireAt).toBe(due + 60_000);
       expect(deferred?.lastFiredAt).toBe(firedAt + 10);
-      expect(deferred?.activeClaimFiredAt).toBeUndefined();
+      expect(deferred?.activeClaimRunId).toBeUndefined();
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('resumeWithLiveClaimGuard: 原子保留活 claim,清掉陈旧 claim', async () => {
+    const harness = createStorageHarness();
+    const now = 1_700_000_120_000;
+    const nextFireAt = now + 60_000;
+    try {
+      await harness.storage.insert(
+        baseSchedule({
+          id: 'sch-resume-live',
+          status: 'paused',
+          nextFireAt: undefined,
+          activeClaimRunId: 'run-resume-live',
+        }),
+      );
+      await harness.storage.insertRun({
+        id: 'run-resume-live',
+        scheduleId: 'sch-resume-live',
+        firedAt: now - 1_000,
+        status: 'running',
+        heartbeatAt: now - 500,
+      });
+
+      const live = await harness.storage.resumeWithLiveClaimGuard(
+        'sch-resume-live',
+        now,
+        nextFireAt,
+      );
+      expect(live?.status).toBe('active');
+      expect(live?.updatedAt).toBe(now);
+      expect(live?.nextFireAt).toBeUndefined();
+      expect(live?.activeClaimRunId).toBe('run-resume-live');
+
+      await harness.storage.insert(
+        baseSchedule({
+          id: 'sch-resume-stale',
+          status: 'paused',
+          nextFireAt: undefined,
+          activeClaimRunId: 'run-resume-stale',
+        }),
+      );
+      const stale = await harness.storage.resumeWithLiveClaimGuard(
+        'sch-resume-stale',
+        now,
+        nextFireAt,
+      );
+      expect(stale?.status).toBe('active');
+      expect(stale?.updatedAt).toBe(now);
+      expect(stale?.nextFireAt).toBe(nextFireAt);
+      expect(stale?.activeClaimRunId).toBeUndefined();
     } finally {
       harness.close();
     }
@@ -553,10 +605,10 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       });
       expect(claimedWithRun?.id).toBe('sch-proxy-run');
       expect(claimedWithRun?.nextFireAt).toBeUndefined();
-      expect(claimedWithRun?.lastFiredAt).toBe(firedAt);
-      expect(claimedWithRun?.activeClaimFiredAt).toBe(firedAt);
-      expect(await storage.hasRunningRuns('sch-proxy-run', { firedAt })).toBe(true);
-      expect(await storage.listRunningRunFiredAts('sch-proxy-run')).toEqual([firedAt]);
+      expect(claimedWithRun?.lastFiredAt).toBeUndefined();
+      expect(claimedWithRun?.activeClaimRunId).toBe('run-proxy');
+      expect(await storage.hasRunningRuns('sch-proxy-run', { runId: 'run-proxy' })).toBe(true);
+      expect(await storage.listRunningRunIds('sch-proxy-run')).toEqual(['run-proxy']);
       expect(await storage.listRuns('sch-proxy-run')).toEqual([
         expect.objectContaining({ id: 'run-proxy', status: 'running', firedAt }),
       ]);
@@ -582,17 +634,57 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         status: 'running',
       });
       expect(proxyAfterManual?.lastFiredAt).toBe(firedAt + 10);
-      expect(proxyAfterManual?.activeClaimFiredAt).toBe(firedAt);
+      expect(proxyAfterManual?.activeClaimRunId).toBe('run-proxy-preserve-manual');
 
       const proxyDeferred = await storage.rescheduleDeferredAutomaticClaim(
         'sch-proxy-preserve-manual',
-        firedAt,
+        'run-proxy-preserve-manual',
         due + 60_000,
-        firedAt - 10,
       );
       expect(proxyDeferred?.nextFireAt).toBe(due + 60_000);
       expect(proxyDeferred?.lastFiredAt).toBe(firedAt + 10);
-      expect(proxyDeferred?.activeClaimFiredAt).toBeUndefined();
+      expect(proxyDeferred?.activeClaimRunId).toBeUndefined();
+
+      await storage.insert(
+        baseSchedule({
+          id: 'sch-proxy-resume-live',
+          status: 'paused',
+          nextFireAt: undefined,
+          activeClaimRunId: 'run-proxy-resume-live',
+        }),
+      );
+      await storage.insertRun({
+        id: 'run-proxy-resume-live',
+        scheduleId: 'sch-proxy-resume-live',
+        firedAt,
+        status: 'running',
+        heartbeatAt: firedAt,
+      });
+      const proxyResumeLive = await storage.resumeWithLiveClaimGuard(
+        'sch-proxy-resume-live',
+        due + 1_000,
+        due + 60_000,
+      );
+      expect(proxyResumeLive?.status).toBe('active');
+      expect(proxyResumeLive?.nextFireAt).toBeUndefined();
+      expect(proxyResumeLive?.activeClaimRunId).toBe('run-proxy-resume-live');
+
+      await storage.insert(
+        baseSchedule({
+          id: 'sch-proxy-resume-stale',
+          status: 'paused',
+          nextFireAt: undefined,
+          activeClaimRunId: 'run-proxy-resume-stale',
+        }),
+      );
+      const proxyResumeStale = await storage.resumeWithLiveClaimGuard(
+        'sch-proxy-resume-stale',
+        due + 1_000,
+        due + 60_000,
+      );
+      expect(proxyResumeStale?.status).toBe('active');
+      expect(proxyResumeStale?.nextFireAt).toBe(due + 60_000);
+      expect(proxyResumeStale?.activeClaimRunId).toBeUndefined();
     } finally {
       await client.dispose();
     }

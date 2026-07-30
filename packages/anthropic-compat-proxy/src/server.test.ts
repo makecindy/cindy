@@ -10,10 +10,15 @@ import {
 } from './server.js';
 import {
   createActiveStripTransform,
+  createDuplicateToolUseIdRecoveryRule,
+  createEmptyAssistantMessageRecoveryRule,
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
+  createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  dedupeDuplicateToolUseIds,
+  repairToolExchangeAdjacency,
   stripEncryptedContentFromBody,
 } from './transform.js';
 import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
@@ -651,11 +656,11 @@ describe('anthropic-compat-proxy routingTransform', () => {
     proxy = await createAnthropicCompatProxy({
       upstream: `${custom.url}/base?tenant=acme`,
       transformRequest: [],
-      routingTransform: () => ({ pathOverride: '/infer?stream=1' }),
+      routingTransform: () => ({ pathOverride: '/infer?stream=1&next=%2fadmin' }),
     });
 
     await post(proxy.url, { model: 'custom-model' });
-    expect(custom.paths).toEqual(['/base/infer?tenant=acme&stream=1']);
+    expect(custom.paths).toEqual(['/base/infer?tenant=acme&stream=1&next=%2fadmin']);
   });
 
   it.each([
@@ -668,10 +673,16 @@ describe('anthropic-compat-proxy routingTransform', () => {
     '/infer\u007fmode',
     '/infer\u0085mode',
     '/café',
+    '/../admin',
+    '/.%2e/admin',
+    '/%2e%2e%2fadmin',
+    '/safe%5Cpart',
+    '/a<b',
     '/infer%2',
     '/%ZZ',
     '/模型',
     '/v1\\messages',
+    `/${'a'.repeat(2_048)}`,
   ])('rejects an unsafe path override before contacting the upstream: %j', async (pathOverride) => {
     const custom = await startFakeUpstream((_i, _b, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -1086,6 +1097,52 @@ describe('anthropic-compat-proxy routingTransform', () => {
     expect(chunks.join('')).toBe(errBody);
     expect(observedEnd).toBe(true);
   });
+
+  it('exposes the final routed headers to the observer, not the client-sent ones', async () => {
+    // 回归:供应商 OAuth 是路由期经 headerOverride 注入的。观察器若只拿得到 requestHeaders,
+    // 就只能看到 agent 子进程自带的那把 bearer —— 任何「这次请求用了哪把凭证」的判断
+    // (如 xAI 凭证失效收口的等值关联)都会永远对不上,整条链路的收口静默失效。
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(403, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ code: 'unauthenticated:bad-credentials' }));
+    });
+    upstreamClose = upstream.close;
+    let observedRequestAuth: string | undefined;
+    let observedOutboundAuth: string | undefined;
+    let observedOutboundBeta: string | undefined;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      routingTransform: () => ({
+        headerOverride: { authorization: 'Bearer routed-xai-token' },
+        headerDelete: ['anthropic-beta'],
+      }),
+      responseObserver: (ctx) => {
+        observedRequestAuth = ctx.requestHeaders.authorization;
+        observedOutboundAuth = ctx.outboundHeaders?.authorization;
+        observedOutboundBeta = ctx.outboundHeaders?.['anthropic-beta'];
+        return null;
+      },
+    });
+
+    const r = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'thread-id': 'thread-a',
+        authorization: 'Bearer client-subprocess-token',
+        'anthropic-beta': 'oauth-2025-04-20',
+      },
+      body: JSON.stringify({ model: 'gpt-5.5', input: [] }),
+    });
+
+    expect(r.status).toBe(403);
+    // 客户端原始头保持原样(反解 thread-id 等会话归属仍靠它)。
+    expect(observedRequestAuth).toBe('Bearer client-subprocess-token');
+    // 实际发往上游的是路由注入后的凭证,且 headerDelete 已生效。
+    expect(observedOutboundAuth).toBe('Bearer routed-xai-token');
+    expect(observedOutboundBeta).toBeUndefined();
+  });
 });
 
 const THINKING_ERROR_BODY = JSON.stringify({
@@ -1254,6 +1311,397 @@ describe('anthropic-compat-proxy empty-thinking recovery', () => {
     expect(r.status).toBe(200);
     expect(upstream.bodies).toHaveLength(1);
     expect(upstream.bodies[0]).toBe(JSON.stringify(clean));
+  });
+});
+
+// moonshot 线上 400 原文(2026-07-28,经 LiteLLM passthrough;request_id 取自真实捕获)。
+const MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY = JSON.stringify({
+  error: {
+    type: 'invalid_request_error',
+    message: "Invalid request: the message at position 395 with role 'assistant' must not be empty",
+  },
+  request_id: 'f1b34454-8a63-11f1-bf3c-9ac780b5488d',
+  type: 'error',
+});
+
+// moonshot/kimi-k3 线上污染会话形态(2026-07-28): 完整 tool_use/tool_result 上下文里
+// 夹着一条 thinking-only 空 assistant(流中断后客户端持久化的未完成占位 block)。
+function kimiBodyWithEmptyAssistant(): unknown {
+  return {
+    model: 'moonshot/kimi-k3',
+    messages: [
+      { role: 'user', content: 'run ls' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_01', name: 'Bash', input: { command: 'ls' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01', content: 'ok' }] },
+      { role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: '' }] },
+      { role: 'user', content: 'continue' },
+    ],
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 重复 tool_use id(moonshot/kimi 序号 id 跨 turn 复用,2026-07 两个会话实测
+// `Edit_306` / `Bash_256` 各复用 20+ 次致安静瘫痪)的全链路防御实测。
+// ───────────────────────────────────────────────────────────────────────────
+
+// kimi-k3 事故会话形态: 同一序号 id 的两对完整 tool 交换跨 turn 出现。
+function kimiBodyWithDuplicatedToolUseIds(): Record<string, unknown> {
+  return {
+    model: 'moonshot/kimi-k3',
+    messages: [
+      { role: 'user', content: '把 race-2 修掉' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'Edit_306', name: 'Edit', input: { file: 'a.ts', old: 'x', new: 'y' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Edit_306', content: 'has been updated successfully' }] },
+      { role: 'assistant', content: [{ type: 'text', text: '继续修复计划' }, { type: 'tool_use', id: 'Edit_306', name: 'Edit', input: { file: 'a.ts', old: 'x', new: 'y' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Edit_306', content: 'String to replace not found' }] },
+    ],
+  };
+}
+
+// Anthropic 文案的重复 id 400(LiteLLM 版本差 / 真 Anthropic 上游可见)。
+const DUPLICATE_TOOL_USE_ID_ERROR_BODY = JSON.stringify({
+  error: { type: 'invalid_request_error', message: 'messages: `tool_use` ids must be unique' },
+});
+
+// moonshot chatcmpl 校验透出的孤儿 result 400(原文双空格,kimi kosong 注释同款)。
+const MOONSHOT_TOOL_CALL_ID_NOT_FOUND_BODY = JSON.stringify({
+  error: { type: 'invalid_request_error', message: 'Invalid request: tool_call_id  is not found' },
+});
+
+describe('anthropic-compat-proxy duplicate tool_use id (kimi/moonshot 序号 id 复用)', () => {
+  it('proactively rewrites duplicated ids before forwarding — no 400 needed', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [repairToolExchangeAdjacency, dedupeDuplicateToolUseIds], // host 同序: repair 先于 dedupe
+      recoveryRules: [],
+    });
+
+    const r = await post(proxy.url, kimiBodyWithDuplicatedToolUseIds());
+
+    expect(r.status).toBe(200);
+    // 只发一次:主动 transform 在转发前修好,不等上游报错。
+    expect(upstream.bodies).toHaveLength(1);
+    const sent = JSON.parse(upstream.bodies[0]);
+    // 第二对 Edit_306 被唯一化,首对与配对关系保持完整。
+    expect(sent.messages[1].content[0].id).toBe('Edit_306');
+    expect(sent.messages[2].content[0].tool_use_id).toBe('Edit_306');
+    expect(sent.messages[3].content[1].id).toBe('Edit_306_2');
+    expect(sent.messages[4].content[0].tool_use_id).toBe('Edit_306_2');
+    // text 块与业务 input 原样保留。
+    expect(sent.messages[3].content[0]).toEqual({ type: 'text', text: '继续修复计划' });
+    expect(sent.messages[3].content[1].input).toEqual({ file: 'a.ts', old: 'x', new: 'y' });
+  });
+
+  it('passes a clean paired history through byte-identical (zero interference)', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [repairToolExchangeAdjacency, dedupeDuplicateToolUseIds], // host 同序: repair 先于 dedupe
+      recoveryRules: [],
+    });
+
+    const cleanBody = {
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'run ls' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_256', name: 'Bash', input: { command: 'ls' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Bash_256', content: 'ok' }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Read_257', name: 'Read', input: { file: 'a.ts' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Read_257', content: 'file content' }] },
+      ],
+    };
+    const r = await post(proxy.url, cleanBody);
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(1);
+    // cache 安全契约在链路上的实测:无异常时 upstream 收到的字节与客户端发出的一致。
+    expect(upstream.bodies[0]).toBe(JSON.stringify(cleanBody));
+  });
+
+  it('recovers from a 400 "`tool_use` ids must be unique" via transparent retry', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(DUPLICATE_TOOL_USE_ID_ERROR_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      // 空 transform 链:验证 recovery 在主动 transform 未接入的链路上独立工作。
+      transformRequest: [],
+      recoveryRules: [createDuplicateToolUseIdRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, kimiBodyWithDuplicatedToolUseIds());
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    // 第一次原样发出(重复 id 还在),第二次已唯一化。
+    expect(upstream.bodies[0]).toBe(JSON.stringify(kimiBodyWithDuplicatedToolUseIds()));
+    const retried = JSON.parse(upstream.bodies[1]);
+    expect(retried.messages[3].content[1].id).toBe('Edit_306_2');
+    expect(retried.messages[4].content[0].tool_use_id).toBe('Edit_306_2');
+  });
+
+  it('recovers from the moonshot "tool_call_id is not found" 400 by dropping the orphan result', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(MOONSHOT_TOOL_CALL_ID_NOT_FOUND_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createToolExchangeAdjacencyRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_1', name: 'Bash', input: {} }] },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'Bash_1', content: 'ok' },
+            { type: 'tool_result', tool_use_id: 'Edit_999', content: 'stray' },
+          ],
+        },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    const retried = JSON.parse(upstream.bodies[1]);
+    // 孤儿块被丢,合法配对保留。
+    expect(retried.messages[2].content).toEqual([
+      { type: 'tool_result', tool_use_id: 'Bash_1', content: 'ok' },
+    ]);
+  });
+
+  it('returns the 400 as-is when the history has nothing to repair', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(DUPLICATE_TOOL_USE_ID_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createDuplicateToolUseIdRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'moonshot/kimi-k3',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+
+    // strip 无东西可改 → 不重试,400 原样回客户端(不误伤)。
+    expect(r.status).toBe(400);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it('repairs a multiply-polluted history in one proactive pass (host chain order)', async () => {
+    // host 装配顺序的组合场景: 同一请求同时含重复 id + 错位 result + 缺失 result,
+    // repair → dedupe 链式应用后一次修好,只发一次(不等 400)。
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [repairToolExchangeAdjacency, dedupeDuplicateToolUseIds], // host 同序: repair 先于 dedupe
+      recoveryRules: [],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Edit_306', name: 'Edit', input: { a: 1 } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Edit_306', content: 'ok' }] },
+        // 第二对: 同 id(重复)且 result 错位(隔了一条 user text)。
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Edit_306', name: 'Edit', input: { a: 2 } }] },
+        { role: 'user', content: [{ type: 'text', text: 'intervening' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Edit_306', content: 'late' }] },
+        // 第三个 call: 同 id 且从此无 result(缺失,后面有 assistant 推进 → 非 trailing)。
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Edit_306', name: 'Edit', input: { a: 3 } }] },
+        { role: 'assistant', content: [{ type: 'text', text: '我以为发出去了' }] },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(1);
+    const sent = JSON.parse(upstream.bodies[0]);
+    // dedupe: 三个同 id call → Edit_306 / Edit_306_2 / Edit_306_3。
+    const callIds = sent.messages
+      .filter((m: { role: string }) => m.role === 'assistant')
+      .flatMap((m: { content: Array<{ id?: string }> }) => m.content)
+      .filter((b: { id?: string }) => b.id !== undefined)
+      .map((b: { id?: string }) => b.id);
+    expect(callIds).toEqual(['Edit_306', 'Edit_306_2', 'Edit_306_3']);
+    // repair: 错位的 result(已改名 Edit_306_2)前移到第二对 call 紧邻的 user 消息开头;
+    // 第三个 call 合成占位(Edit_306_3),新建 user 消息插入在两个 assistant 之间。
+    const roles = sent.messages.map((m: { role: string }) => m.role);
+    expect(roles).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
+    expect(sent.messages[4].content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'Edit_306_2', content: 'late' });
+    expect(sent.messages[6].content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'Edit_306_3' });
+    // 每个 tool_use 都有紧邻的配对 result —— 修复后的历史对 strict 上游合法。
+  });
+});
+
+describe('anthropic-compat-proxy empty-assistant-message recovery (moonshot/kimi)', () => {
+  it('drops the empty assistant message and retries once on the moonshot 400', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    upstreamClose = upstream.close;
+    let marked: { threadId: string; model: string } | null = null;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEmptyAssistantMessageRecoveryRule({
+        enabled: () => true,
+        onRetry: (threadId, model) => { marked = { threadId, model }; },
+      })],
+    });
+
+    const r = await post(proxy.url, kimiBodyWithEmptyAssistant());
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(upstream.bodies[0]).toContain('"thinking":""');
+    // 重发 body: 空 thinking-only assistant 整条被丢(5 → 4 条),tool_use/tool_result 配对保留。
+    const retried = JSON.parse(upstream.bodies[1]);
+    expect(retried.messages).toHaveLength(4);
+    expect(retried.messages.map((m: { role: string }) => m.role)).toEqual([
+      'user', 'assistant', 'user', 'user',
+    ]);
+    expect(upstream.bodies[1]).not.toContain('"thinking":""');
+    expect(marked).toEqual({ threadId: 'thread-a', model: 'moonshot/kimi-k3' });
+  });
+
+  it('does not retry when there is no empty assistant message to drop', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEmptyAssistantMessageRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'thinking', thinking: 'real reasoning', signature: '' }, { type: 'text', text: 'ok' }] },
+      ],
+    });
+
+    expect(r.status).toBe(400);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it('does not retry a second time after the retry still returns the moonshot 400', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEmptyAssistantMessageRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, kimiBodyWithEmptyAssistant());
+
+    expect(r.status).toBe(400);
+    expect(upstream.bodies).toHaveLength(2);
+  });
+
+  it('also recovers when the stale assistant carries an empty text block instead of empty thinking', async () => {
+    // PR #821 review 实测反馈形态: bridge 清理路径的 text-only 空块。
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEmptyAssistantMessageRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'text', text: '' }] },
+        { role: 'user', content: 'continue' },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(JSON.parse(upstream.bodies[1]).messages).toHaveLength(2);
+  });
+
+  it('decodes a gzip-encoded moonshot 400 and still triggers the retry', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+        res.end(gzipSync(Buffer.from(MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY, 'utf8')));
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{}');
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEmptyAssistantMessageRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, kimiBodyWithEmptyAssistant());
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(upstream.bodies[1]).not.toContain('"thinking":""');
   });
 });
 
@@ -1473,6 +1921,7 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
   it('客户端在流式响应中途断开时,同步掐掉上游请求(费用泄漏止血)', async () => {
     let sawAbort!: () => void;
     const upstreamAborted = new Promise<void>((r) => { sawAbort = r; });
+    const errorLogs: string[] = [];
     const upstream = await startFakeUpstream((_idx, _body, res) => {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.write('event: message_start\ndata: {}\n\n');
@@ -1481,7 +1930,11 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
       res.on('close', () => sawAbort());
     });
     upstreamClose = upstream.close;
-    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [] });
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      logger: { error: (msg) => { errorLogs.push(msg); } },
+    });
 
     const controller = new AbortController();
     const res = await fetch(`${proxy.url}/v1/messages`, {
@@ -1496,6 +1949,92 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     await reader.read();
     controller.abort();
     await upstreamAborted;
+    expect(errorLogs.filter((m) => m.includes('upstream response stream error'))).toHaveLength(0);
+  });
+
+  it('透明重试后的上游 2xx SSE 中断时,立即收口且旧 listener 不误报客户端断开', async () => {
+    const errorLogs: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
+    const infoLogs: string[] = [];
+    const observerErrors: string[] = [];
+    let observerEnds = 0;
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(ENC_ERROR_BODY);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('event: message_start\ndata: {}\n\n');
+      // 不发送 end,模拟上游生成过程中连接被对端掐断。Node 可能发
+      // `aborted`、`error`、`close` 中的一个或多个,代理必须幂等收口。
+      setTimeout(() => res.destroy(), 50);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+      logger: {
+        info: (msg) => infoLogs.push(msg),
+        error: (msg, ctx) => errorLogs.push({ msg, ctx }),
+      },
+      responseObserver: () => ({
+        onEnd: () => { observerEnds += 1; },
+        onError: (err) => { observerErrors.push(err.message); },
+      }),
+    });
+
+    const controller = new AbortController();
+    let responseStatus: number | null = null;
+    let clientError: unknown = null;
+    const operation = fetch(`${proxy.url}/v1/messages?api_key=must-not-appear-in-logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'test-model',
+        input: [{ type: 'reasoning', encrypted_content: 'gAAAsecret' }],
+      }),
+      signal: controller.signal,
+    }).then(async (res) => {
+      responseStatus = res.status;
+      await res.text();
+    }).catch((err: unknown) => {
+      // destroy() 后 undici 通常会以 body read error 收口,这正是期望的
+      // “立即失败”语义;测试只关心它不能悬挂到 watchdog。
+      clientError = err;
+    });
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      operation.then(() => 'settled' as const),
+      new Promise<'timeout'>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve('timeout'), 1000);
+      }),
+    ]);
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    if (outcome === 'timeout') controller.abort();
+
+    expect(outcome).toBe('settled');
+    expect(responseStatus).toBe(200);
+    expect(clientError).toBeInstanceOf(Error);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(infoLogs.filter((m) => m.includes('client disconnected'))).toHaveLength(0);
+    const responseFailures = errorLogs.filter((entry) => entry.msg === 'upstream response stream error');
+    expect(responseFailures).toHaveLength(1);
+    expect(responseFailures[0].ctx).toMatchObject({
+      status: 200,
+      reason: expect.stringMatching(/^(error|aborted|close)$/),
+      bytes: expect.any(Number),
+      lastChunkBytes: expect.any(Number),
+      lastChunkAt: expect.any(Number),
+    });
+    expect(responseFailures[0].ctx?.path).toBe('/v1/messages');
+    expect(JSON.stringify(responseFailures[0].ctx)).not.toContain('must-not-appear-in-logs');
+    expect(Number(responseFailures[0].ctx?.bytes)).toBeGreaterThan(0);
+    expect(responseFailures[0].ctx).not.toHaveProperty('body');
+    expect(responseFailures[0].ctx).not.toHaveProperty('requestBody');
+    expect(responseFailures[0].ctx).not.toHaveProperty('chunk');
+    expect(observerErrors).toHaveLength(1);
+    expect(observerEnds).toBe(0);
   });
 
   it('正常完成的响应不受影响:不误判为客户端断开,连接复用下后续请求照常', async () => {
@@ -1508,10 +2047,15 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     // "client disconnected mid-response" 的中断传播路径(否则每笔请求都会对
     // 完成态上游请求调 destroy 并刷一条误导日志)。
     const infoLogs: string[] = [];
+    const errorLogs: string[] = [];
     proxy = await createAnthropicCompatProxy({
       upstream: upstream.url,
       transformRequest: [],
-      logger: { info: (msg) => { infoLogs.push(msg); } },
+      // 此测试同时确保 upstream end 后迟到的 request/response error 不会重复收口。
+      logger: {
+        info: (msg) => { infoLogs.push(msg); },
+        error: (msg) => { errorLogs.push(msg); },
+      },
     });
 
     const r1 = await post(proxy.url, { model: 'test-model' });
@@ -1520,6 +2064,7 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     expect(r2.status).toBe(200);
     expect(upstream.bodies).toHaveLength(2);
     expect(infoLogs.filter((m) => m.includes('client disconnected'))).toHaveLength(0);
+    expect(errorLogs.filter((m) => m.includes('upstream response stream error'))).toHaveLength(0);
   });
 });
 

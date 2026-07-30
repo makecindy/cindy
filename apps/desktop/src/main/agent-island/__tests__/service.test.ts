@@ -78,7 +78,21 @@ const mocks = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
   showMessageBox: vi.fn(),
   openExternal: vi.fn(),
+  readdir: vi.fn<(...args: unknown[]) => Promise<string[]>>(() => Promise.resolve([])),
 }));
+
+// 受保护目录引导会由 Main 亲自 readdir 核实一次;只替换这一个 API,其余 fs/promises
+// 保持真实。默认让读取失败(EPERM),模拟 macOS 真的拒绝了访问。
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs/promises')>()),
+  readdir: mocks.readdir,
+}));
+
+function tccDeniedError(): NodeJS.ErrnoException {
+  const error = new Error('EPERM: operation not permitted, scandir') as NodeJS.ErrnoException;
+  error.code = 'EPERM';
+  return error;
+}
 
 vi.mock('electron', () => {
   return {
@@ -148,6 +162,8 @@ beforeEach(() => {
   mocks.showMessageBox.mockResolvedValue({ response: 1, checkboxChecked: false });
   mocks.openExternal.mockReset();
   mocks.openExternal.mockResolvedValue(undefined);
+  mocks.readdir.mockReset();
+  mocks.readdir.mockRejectedValue(tccDeniedError());
   resetEpermGuidanceForTest();
 });
 
@@ -185,6 +201,14 @@ function terminalErrorEvent(message: string, reason?: string): AgentEvent {
     type: 'error',
     source: 'claude-code',
     data: { message, isTerminal: true, ...(reason ? { reason } : {}) },
+  };
+}
+
+function recoverableErrorEvent(message: string): AgentEvent {
+  return {
+    type: 'error',
+    source: 'codex',
+    data: { message, isTerminal: false, willRetry: true },
   };
 }
 
@@ -927,6 +951,57 @@ describe('AgentIslandService native publishing', () => {
     expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.pendingInteractionCount).toBe(0);
   });
 
+  it('keeps permission routing through recoverable errors and clears it on terminal errors', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const resolver = vi.fn(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+
+    syncEnabledForTest(service, publish);
+    service.setPermissionResolver(resolver);
+    handleInteractionRequestForTest(service,
+      { sessionId: 's1', agentKind: 'codex' },
+      {
+        kind: 'permission',
+        requestId: 'req-reconnecting',
+        toolName: 'Bash',
+        input: { command: 'pnpm test' },
+      },
+    );
+
+    service.handleAgentEvent(
+      { sessionId: 's1', agentKind: 'codex' },
+      recoverableErrorEvent('Reconnecting... 1/5'),
+    );
+    service.handlePermissionAction({ requestId: 'req-reconnecting', action: 'allow' });
+
+    expect(resolver).toHaveBeenCalledWith('req-reconnecting', {
+      kind: 'permission',
+      behavior: 'allow',
+      permissionUpdates: undefined,
+    });
+
+    handleInteractionRequestForTest(service,
+      { sessionId: 's1', agentKind: 'codex' },
+      {
+        kind: 'permission',
+        requestId: 'req-terminal',
+        toolName: 'Bash',
+        input: { command: 'pnpm test' },
+      },
+    );
+    service.handleAgentEvent(
+      { sessionId: 's1', agentKind: 'codex' },
+      terminalErrorEvent('retry exhausted'),
+    );
+    service.handlePermissionAction({ requestId: 'req-terminal', action: 'allow' });
+
+    expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
   it('clears an island permission prompt by request id after app-side approval', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
@@ -1182,10 +1257,39 @@ describe('AgentIslandService native publishing', () => {
       '/goal 测试一下是不是支持目标模式',
     );
     await vi.waitFor(() => expect(mocks.getSessionRowSnapshot).toHaveBeenCalledTimes(1));
+    // cache-miss 加载路径同样要过显示投影:发给 native 的是本地化兜底文案,而不是
+    // DB 里那个 locale-independent 的英文哨兵(PR #1031 review P1)。此前只有读路径
+    // hydrateMeta 做了投影,这条断言正好固化了漏掉的那一半。
     await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
-      title: 'New Maker',
+      title: 'Untitled session',
       projectName: null,
     }));
+    // 另一条写路径(metadata patch)同样过投影;权威标题到达后照常原样发布 ——
+    // 投影只作用于哨兵,不会把真实标题也顶掉。
+    service.handleSessionMetadataPatch('s1', { title: '登录失败排查' });
+    await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      title: '登录失败排查',
+    }));
+    service.handleSessionMetadataPatch('s1', { title: 'New Maker' });
+    await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      title: 'Untitled session',
+    }));
+    // 切换应用语言后必须**立刻**换语言:投影发生在构建 payload 那一刻,而 state / cache
+    // 存的是原始哨兵,所以 refreshLocalization() 的这次 republish 自然带新语言。若把投影
+    // 固化进 state,这里会一直停在上一语言,直到下一次 metadata 事件(PR #1031 review P1)。
+    {
+      const { setMainLocale } = await import('../../i18n.js');
+      setMainLocale('zh-CN');
+      service.refreshLocalization();
+      await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+        title: '未命名对话',
+      }));
+      setMainLocale('en');
+      service.refreshLocalization();
+      await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+        title: 'Untitled session',
+      }));
+    }
     expect(publish.mock.calls.at(-1)?.[0].strings).toMatchObject({
       appName: BRAND_NAME,
       newMessage: 'New message',
@@ -1608,6 +1712,41 @@ describe('AgentIslandService native publishing', () => {
 
       expect(mocks.showMessageBox).not.toHaveBeenCalled();
       expect(mocks.openExternal).not.toHaveBeenCalled();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it('stays silent when the folder is readable, and still guides on a later real denial', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, publish: vi.fn(() => true) },
+      });
+      const event: AgentEvent = {
+        type: 'tool_result_full',
+        source: 'claude-code',
+        data: {
+          toolUseId: 'tool-1',
+          fullText: `EPERM: operation not permitted, open '${protectedFolderFile('Documents', 'blocked.txt')}'`,
+        },
+      };
+
+      // 粗筛命中,但 Main 亲自读得动 → 那条 EPERM 与 TCC 无关,不得打扰用户。
+      mocks.readdir.mockResolvedValue([]);
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'claude-code' }, event);
+      await vi.waitFor(() => expect(mocks.readdir).toHaveBeenCalledTimes(1));
+      expect(mocks.showMessageBox).not.toHaveBeenCalled();
+
+      // 等首轮探测完整收尾并释放同目录的探测占位,否则第二条事件会被串行化挡掉。
+      await new Promise((resolve) => setImmediate(resolve));
+
+      // 且没有吃掉该目录的提醒名额:之后真被系统拒绝时仍然提示。
+      mocks.readdir.mockRejectedValue(tccDeniedError());
+      service.handleAgentEvent({ sessionId: 's2', agentKind: 'claude-code' }, event);
+      await vi.waitFor(() => expect(mocks.showMessageBox).toHaveBeenCalledTimes(1));
     } finally {
       platformSpy.mockRestore();
     }

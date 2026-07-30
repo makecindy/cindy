@@ -1,8 +1,9 @@
 /**
- * Tiptap 扩展 —— composer 列表行缩进(纯视觉,对齐 Claude 原生 App 的
- * "进入列表模式"反馈)。
+ * Tiptap 扩展 —— composer 纯文本 Markdown 列表的兼容缩进。
  *
- * 行为:当某一"行"(段落内以 hardBreak 划分)以列表 / 待办 / 引用前缀开头
+ * 结构化 bullet / ordered list 由 schema 和原生列表布局负责；本扩展只处理
+ * 粘贴或旧草稿中仍为文本的列表，以及待办 / 引用前缀。当某一"行"
+ * (段落内以 hardBreak 划分)以列表 / 待办 / 引用前缀开头
  * (`1. ` / `- ` / `- [ ] ` / `> ` 等,与列表接续共用 matchListPrefix 判定),
  * 单行段落使用 node decoration,hardBreak 分隔的多行段落按行使用 inline
  * decoration；连续数字/字母正文使用 marker/body 两个盒子，避免长串把
@@ -21,7 +22,7 @@
  *   全量成本可忽略,不值得做增量映射);
  * - IME composition 开始前临时移除 decoration,结束后的下一轮 task 再按
  *   当前 doc 补算,避免微软拼音输入时改写 composition DOM;
- * - 这是纯文本编辑器的视觉缩进,不改变 doc JSON / 发送文本。
+ * - 这是兼容文本行的视觉缩进,不改变 doc JSON / 发送文本。
  */
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
@@ -39,6 +40,7 @@ import {
   resolveVoiceInputReplacementRange,
   type VoiceInputReplacementRange,
 } from './VoiceInputDraftDecoration';
+import { hasCjkContextPunctuation } from './CjkPunctuationUtils';
 
 const TAB_SIZE = 8;
 
@@ -55,12 +57,10 @@ const PLUGIN_STATE_KEY = new PluginKey<ListDecorationPluginState>(
 
 /** 行内一个非文本 inline 节点(mention chip 等)的占位符,与 applyListContinuation 一致。 */
 const ATOM_PLACEHOLDER = '\uFFFC';
-const CJK_PUNCTUATION_RE = /[\u3000-\u303f\uff00-\uffef]/;
 // 只有正文整体是一个没有自然断点的数字/字母串时才拆成 marker/body。
 // 普通句子里偶然出现长 token 时，交给 overflow-wrap:anywhere，保留空格
 // 的自然断词行为，避免把整句变成逐字断行。
 const LONG_ALPHANUMERIC_BODY_RE = /^\s*[A-Za-z0-9]{12,}\s*$/;
-
 interface ListIndentValues {
   ch: number;
   em: number;
@@ -200,9 +200,12 @@ export function buildListIndentDecorations(
     lineEndOffset = block.content.size;
     flushLine(); // 段落最后一行
 
+    const compatibilityMatch = (line: (typeof lines)[number]) => {
+      return matchListPrefix(line.text);
+    };
     const lineMatches = lines.map((line) => ({
       line,
-      match: matchListPrefix(line.text),
+      match: compatibilityMatch(line),
     }));
     const hasFallbackLine = lineMatches.some(({ line, match }) => {
       if (!match) return false;
@@ -214,7 +217,7 @@ export function buildListIndentDecorations(
         voiceReplacementRange !== null &&
         voiceReplacementRange.from < contentBase + line.end &&
         voiceReplacementRange.to > contentBase + line.start;
-      const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(line.text);
+      const hasCjkPunctuation = hasCjkContextPunctuation(line.text);
       return (
         line.hasInlineAtom ||
         overlapsSlashCommandPill ||
@@ -243,10 +246,10 @@ export function buildListIndentDecorations(
     }
 
     const addLineDecoration = (line: (typeof lines)[number]) => {
-      const match = matchListPrefix(line.text);
+      const match = compatibilityMatch(line);
       if (!match) {
         if (hasFallbackLine && lines.length > 1 && line.end > line.start) {
-          const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(line.text);
+          const hasCjkPunctuation = hasCjkContextPunctuation(line.text);
           decorations.push(
             Decoration.inline(contentBase + line.start, contentBase + line.end, {
               class: [
@@ -265,7 +268,8 @@ export function buildListIndentDecorations(
       const prefix = line.text.slice(0, match.prefixLength);
       const body = line.text.slice(match.prefixLength);
       const hasTabPrefix = prefix.includes('\t');
-      const prefixHasCjkPunctuation = CJK_PUNCTUATION_RE.test(prefix);
+      const prefixHasCjkPunctuation =
+        match !== null && hasCjkContextPunctuation(line.text, 0, match.prefixLength);
       const lineClass = hasTabPrefix ? 'composer-list-tab-indent' : '';
       if (hasFallbackLine) {
         // The paragraph-level fallback supplies the available line width. The
@@ -316,12 +320,13 @@ export function buildListIndentDecorations(
 
     if (lines.length === 1) {
       const [line] = lines;
-      const match = line && matchListPrefix(line.text);
+      const match = line && compatibilityMatch(line);
       const prefix = match ? line.text.slice(0, match.prefixLength) : '';
       const body = line && match ? line.text.slice(match.prefixLength) : '';
       const from = line ? contentBase + line.start : contentBase;
       const hasLongAlphanumericBody = LONG_ALPHANUMERIC_BODY_RE.test(body);
-      const prefixHasCjkPunctuation = CJK_PUNCTUATION_RE.test(prefix);
+      const prefixHasCjkPunctuation =
+        match !== null && hasCjkContextPunctuation(line.text, 0, match.prefixLength);
       const hasTabPrefix = prefix.includes('\t');
       // A node decoration stays on the paragraph even when CjkPunctDecoration
       // adds nested inline spans, so punctuation cannot split the list wrapper.
@@ -414,6 +419,7 @@ export const ComposerListIndentDecoration = Extension.create({
               decorations: buildListIndentDecorations(
                 state.doc,
                 findSlashCommandMatches(state.doc, roster),
+                null,
               ),
               suspendedForComposition: false,
             };

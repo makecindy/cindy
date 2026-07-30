@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createElement, type ReactElement } from 'react';
+import type { WebviewTag } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UseBrowserWebviewResult } from '../../../hooks/useBrowserWebview';
@@ -10,6 +11,10 @@ import { BrowserTabBody } from '../BrowserTabBody';
 
 const browserNavigate = vi.fn();
 let browserState: UseBrowserWebviewResult;
+
+const poolMocks = vi.hoisted(() => ({
+  currentWrapper: null as HTMLDivElement | null,
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -21,12 +26,18 @@ vi.mock('../../../hooks/useBrowserWebview', () => ({
   useBrowserWebview: () => browserState,
 }));
 
+vi.mock('../useLocalHtmlAutoReload', () => ({
+  useLocalHtmlAutoReload: vi.fn(),
+}));
+
 vi.mock('../../../lib/browserWebviewPool', () => ({
   browserWebviewPool: {
     release: vi.fn(),
-    // useBrowserComment 经 peek 取 webview 挂 ipc-message 监听;导航测试里没有
-    // 真 webview,返回 null 即可(hook 对 null 全程静默降级)。
-    peek: vi.fn(() => null),
+    // Navigation tests do not create a real WebView. The wrapper is only used
+    // to verify that layout cleanup respects the current Pool generation.
+    peek: vi.fn(() => poolMocks.currentWrapper
+      ? { wrapper: poolMocks.currentWrapper, webview: null }
+      : null),
   },
 }));
 
@@ -40,6 +51,7 @@ function makeBrowserState(
 ): UseBrowserWebviewResult {
   return {
     wrapper: sharedWrapper,
+    webview: null,
     url: 'https://www.taptap.cn/',
     title: '',
     favicon: '',
@@ -59,7 +71,16 @@ function makeBrowserState(
   };
 }
 
-function renderBrowserTab(stateUrl: string, patchState = vi.fn()): ReactElement {
+function renderBrowserTab(
+  stateUrl: string,
+  patchState = vi.fn(),
+  active = true,
+  statePatch: Partial<{
+    title: string;
+    favicon: string | null;
+    isAudible: boolean;
+  }> = {},
+): ReactElement {
   const ctx: TabKindHostContext = {
     tabId: 'tab-browser',
     sessionId: 'session-a',
@@ -70,13 +91,14 @@ function renderBrowserTab(stateUrl: string, patchState = vi.fn()): ReactElement 
     setCloseInterceptor: vi.fn(() => () => undefined),
   };
   return createElement(BrowserTabBody, {
-    active: true,
+    active,
     ctx,
     state: {
       url: stateUrl,
       title: '',
       favicon: null,
       isAudible: false,
+      ...statePatch,
     },
   });
 }
@@ -95,8 +117,78 @@ describe('BrowserTabBody navigation', () => {
 
   afterEach(() => {
     cleanup();
+    poolMocks.currentWrapper = null;
+    document.getElementById('browser-webview-pool')?.remove();
     vi.clearAllMocks();
     browserState = makeBrowserState();
+  });
+
+  it('keeps an eagerly created hidden wrapper parked without navigating', () => {
+    const parking = document.createElement('div');
+    parking.id = 'browser-webview-pool';
+    document.body.appendChild(parking);
+    parking.appendChild(sharedWrapper);
+    poolMocks.currentWrapper = sharedWrapper;
+    browserState = makeBrowserState({ wrapper: sharedWrapper, url: '' });
+
+    const view = render(renderBrowserTab('https://example.com/persisted', vi.fn(), false));
+
+    expect(sharedWrapper.parentElement).toBe(parking);
+    expect(browserNavigate).not.toHaveBeenCalled();
+
+    view.rerender(renderBrowserTab('https://example.com/persisted', vi.fn(), true));
+
+    expect(sharedWrapper.parentElement).not.toBe(parking);
+    expect(browserNavigate).toHaveBeenCalledOnce();
+    expect(browserNavigate).toHaveBeenCalledWith('https://example.com/persisted');
+  });
+
+  it('does not reconnect a released wrapper when a replacement arrives', () => {
+    const parking = document.createElement('div');
+    parking.id = 'browser-webview-pool';
+    document.body.appendChild(parking);
+    parking.appendChild(sharedWrapper);
+    poolMocks.currentWrapper = sharedWrapper;
+    browserState = makeBrowserState({ wrapper: sharedWrapper });
+    const patchState = vi.fn();
+    const view = render(renderBrowserTab('https://www.taptap.cn/', patchState));
+
+    expect(sharedWrapper.isConnected).toBe(true);
+    poolMocks.currentWrapper = null;
+    sharedWrapper.remove();
+    browserState = makeBrowserState({ wrapper: null });
+    view.rerender(renderBrowserTab('https://www.taptap.cn/', patchState));
+
+    const replacement = document.createElement('div');
+    parking.appendChild(replacement);
+    poolMocks.currentWrapper = replacement;
+    browserState = makeBrowserState({ wrapper: replacement, url: '' });
+    view.rerender(renderBrowserTab('https://www.taptap.cn/', patchState));
+
+    expect(sharedWrapper.isConnected).toBe(false);
+    expect(replacement.isConnected).toBe(true);
+    expect(replacement.parentElement).not.toBe(parking);
+  });
+
+  it('only exposes page comments while a WebView generation exists', () => {
+    browserState = makeBrowserState({ webview: null });
+    const view = render(renderBrowserTab('https://www.taptap.cn/'));
+
+    expect(
+      screen.queryByRole('button', { name: 'rightSidebar.browser.comment' }),
+    ).toBeNull();
+
+    const webview = {
+      send: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as WebviewTag;
+    browserState = makeBrowserState({ webview });
+    view.rerender(renderBrowserTab('https://www.taptap.cn/'));
+
+    expect(
+      screen.getByRole('button', { name: 'rightSidebar.browser.comment' }),
+    ).toBeTruthy();
   });
 
   it('does not patch the old webview URL back over a user-entered navigation while loading', () => {
@@ -164,6 +256,34 @@ describe('BrowserTabBody navigation', () => {
     view.rerender(renderBrowserTab('https://www.google.com/', patchState));
 
     expect(browserNavigate).not.toHaveBeenCalled();
+  });
+
+  it('keeps a persisted favicon while the new webview has not observed one yet', () => {
+    browserState = makeBrowserState({ favicon: null });
+    const patchState = vi.fn();
+
+    render(renderBrowserTab(
+      'https://www.taptap.cn/',
+      patchState,
+      true,
+      { favicon: 'https://www.taptap.cn/favicon.ico' },
+    ));
+
+    expect(patchState).not.toHaveBeenCalledWith({ favicon: null });
+  });
+
+  it('clears a persisted favicon after the webview explicitly reports none', () => {
+    browserState = makeBrowserState({ favicon: '' });
+    const patchState = vi.fn();
+
+    render(renderBrowserTab(
+      'https://www.taptap.cn/',
+      patchState,
+      true,
+      { favicon: 'https://www.taptap.cn/favicon.ico' },
+    ));
+
+    expect(patchState).toHaveBeenCalledWith({ favicon: null });
   });
 
   it('does not run browser shortcuts while an editable target has focus', () => {
@@ -271,7 +391,6 @@ describe('BrowserTabBody navigation', () => {
 
     expect(patchState).toHaveBeenCalledWith({ url: 'https://www.google.com/' });
   });
-
 
   it('does not patch about:blank back over a user-entered navigation before loading flips true', () => {
     browserState = makeBrowserState({

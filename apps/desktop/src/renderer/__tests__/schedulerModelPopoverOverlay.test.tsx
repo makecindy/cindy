@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -10,23 +10,50 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('@/components/ui/popover', () => ({
-  Popover: ({ children }: { children: React.ReactNode }) => children,
-  PopoverTrigger: ({ children }: { children: React.ReactNode }) => children,
-  PopoverContent: ({
-    children,
-    className,
-    onWheel,
-  }: {
-    children: React.ReactNode;
-    className?: string;
-    onWheel?: React.WheelEventHandler<HTMLDivElement>;
-  }) => (
-    <div data-testid="model-popover" className={className} onWheel={onWheel}>
-      {children}
-    </div>
-  ),
-}));
+vi.mock('@/components/ui/popover', () => {
+  const PopoverState = React.createContext<{
+    open: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }>({ open: false });
+  return {
+    Popover: ({
+      children,
+      open = false,
+      onOpenChange,
+    }: {
+      children: React.ReactNode;
+      open?: boolean;
+      onOpenChange?: (open: boolean) => void;
+    }) => (
+      <PopoverState.Provider value={{ open, onOpenChange }}>
+        {children}
+      </PopoverState.Provider>
+    ),
+    PopoverTrigger: ({ children }: { children: React.ReactNode }) => {
+      const state = React.useContext(PopoverState);
+      const child = children as React.ReactElement<{ onClick?: React.MouseEventHandler }>;
+      return React.cloneElement(child, {
+        onClick: (event) => {
+          child.props.onClick?.(event);
+          state.onOpenChange?.(!state.open);
+        },
+      });
+    },
+    PopoverContent: ({
+      children,
+      className,
+      onWheel,
+    }: {
+      children: React.ReactNode;
+      className?: string;
+      onWheel?: React.WheelEventHandler<HTMLDivElement>;
+    }) => (
+      <div data-testid="model-popover" className={className} onWheel={onWheel}>
+        {children}
+      </div>
+    ),
+  };
+});
 
 vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelectorContent: ({ overlayContentClassName }: { overlayContentClassName?: string }) => (
@@ -57,6 +84,15 @@ vi.mock('@/hooks/useProviders', () => ({
 
 import { ModelEffortChip } from '@/features/scheduler/components/ScheduleChips';
 
+const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
+
+beforeEach(() => {
+  requestProviderModelsAutoRefresh.mockClear();
+  (window as unknown as { electronAPI: unknown }).electronAPI = {
+    maker: { requestProviderModelsAutoRefresh },
+  };
+});
+
 describe('scheduler model popover overlay behavior', () => {
   it('keeps wheel events inside the model popover and raises nested model options above it', () => {
     const onOuterWheel = vi.fn();
@@ -81,5 +117,26 @@ describe('scheduler model popover overlay behavior', () => {
     expect(screen.getByTestId('model-selector-content').getAttribute('data-overlay-class')).toBe(
       'z-[10020]',
     );
+  });
+
+  it('requests a silent refresh when the scheduler model selector opens', async () => {
+    render(
+      <ModelEffortChip
+        agentKind="claude-code"
+        modelValue="claude-opus-4-8"
+        onChangeModel={vi.fn()}
+        effortValue="high"
+        onChangeEffort={vi.fn()}
+        providerId=""
+        onChangeProviderId={vi.fn()}
+      />,
+    );
+
+    // 打开既发起刷新、又把「发现在途」状态推给下拉内容(见 useModelDiscoveryPending):
+    // 那次刷新 resolve 后还有一次 setPending(false) 落在微任务里,所以要走 act。
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/ }));
+    });
+    expect(requestProviderModelsAutoRefresh).toHaveBeenCalledWith('model-selector-open');
   });
 });

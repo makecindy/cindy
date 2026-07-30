@@ -11,7 +11,7 @@
  */
 
 import { createLogger } from '../../logger';
-import { applyPendingAgentSwitchForDirectSend } from '../../maker-ipc/register';
+import { acquirePendingAgentSwitchForDirectSend } from '../../maker-ipc/register';
 import { createImSessionRepo, type ImSessionRepo } from './sessionRepo';
 import { createCardBuilders, type ImCardBuilders } from './cardBuilders';
 import { createTurnRunner, type ImTurnRunner } from './turnRunner';
@@ -52,11 +52,18 @@ export function createImOrchestrator(adapter: ImChannelAdapter): ImOrchestrator 
       `im orchestrator channel=${adapter.channel}: threadScoped requires ui.thread + im.threadKeyForMessage`,
     );
   }
+  // projectSwitching 渠道的能力配对断言 — /project 卡文案缺失会在按钮回流时
+  // 静默失效, 接线期 fail-fast。
+  if (adapter.projectSwitching && !adapter.ui.cards.project) {
+    throw new Error(
+      `im orchestrator channel=${adapter.channel}: projectSwitching requires ui.cards.project`,
+    );
+  }
 
   const repo = createImSessionRepo(adapter.config, adapter.sessions);
   const cards = createCardBuilders(adapter.ui, repo.getDefaultEffortFor);
   const turnRunner = createTurnRunner(adapter, repo, cards, {
-    applyPendingAgentSwitch: applyPendingAgentSwitchForDirectSend,
+    acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
   });
   const slash = createSlashHandlers(adapter, repo, cards, turnRunner);
   const attachMessageHandler = createMessageHandler(adapter, slash, turnRunner);

@@ -8,6 +8,14 @@ describe('auth login-flow reset', () => {
     /\r\n/g,
     '\n',
   );
+  const deviceLinkSource = readFileSync(
+    resolve(process.cwd(), 'src/main/device-link/index.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+  const hookControlSource = readFileSync(
+    resolve(process.cwd(), 'src/main/hook-control/ipc.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
 
   it('clears renderer state, provider cache, and private tickets whenever auth is cleared', () => {
     const resetStart = source.indexOf('function resetLoginFlowState(): void {');
@@ -41,15 +49,56 @@ describe('auth login-flow reset', () => {
     expect(source).not.toContain('setJwt(');
   });
 
-  it('registers enterprise-id SSO discovery into the start-browser connection whitelist', () => {
-    // 企业 ID discovery 的连接必须写入 discoveredMethods:start-browser 的
-    // connectionId 校验以它为白名单,漏写会让该入口发起的 SSO 全部 404。
+  it('requires confirmation only when enterprise discovery crosses the build region', () => {
     const start = source.indexOf("if (action.type === 'discover-sso-org') {");
     expect(start).toBeGreaterThan(-1);
-    const body = source.slice(start, source.indexOf('\n    }', start));
-    expect(body).toContain('discoveredMethods = ssoOrgDiscoveryToMethods(discovery)');
+    const body = source.slice(
+      start,
+      source.indexOf("\n    if (action.type === 'request-code')", start),
+    );
+    expect(body).toContain('const methods = ssoOrgDiscoveryToMethods(discovery)');
+    expect(body).toContain('if (discovery.region !== AUTH_REGION)');
+    expect(body).toContain("type: 'realm-switch-required'");
     expect(body).toContain("type: 'discovery-loaded'");
     expect(body).toContain("email: ''");
+
+    // 跨区连接只有 confirm action 才写入 start-browser 白名单；弹窗阶段不能
+    // 通过伪造 connectionId 直接跳过确认。
+    const confirmStart = source.indexOf("if (action.type === 'confirm-sso-realm') {");
+    const confirmBody = source.slice(
+      confirmStart,
+      source.indexOf("\n    if (action.type === 'cancel-sso-realm')", confirmStart),
+    );
+    expect(confirmBody).toContain('discoveredMethods = confirmation.methods;');
+    expect(confirmBody).toContain("type: 'discovery-loaded'");
+  });
+
+  it('clears stale organization realm state before personal login and a new discovery', () => {
+    const discoveryStart = source.indexOf(
+      'async function discoverOrganizationRealm(org: string)',
+    );
+    const discoveryBody = source.slice(
+      discoveryStart,
+      source.indexOf('\n}', discoveryStart),
+    );
+    expect(discoveryBody).toContain('pendingAuthRealm = null;');
+
+    const actionStart = source.indexOf(
+      'async function runLoginAction(action: DesktopLoginAction)',
+    );
+    const actionPreamble = source.slice(
+      actionStart,
+      source.indexOf('const stateBeforeAction', actionStart),
+    );
+    expect(actionPreamble).toContain("action.type === 'discover'");
+    expect(actionPreamble).toContain("action.type === 'request-code'");
+    expect(actionPreamble).toContain("action.type === 'verify-code'");
+    expect(actionPreamble).toContain(
+      "action.type === 'start-browser' && action.kind === 'social'",
+    );
+    expect(actionPreamble).toContain(
+      'if (startsBuildRealmFlow) pendingAuthRealm = null;',
+    );
   });
 
   it('does not leave expired private tickets on a screen that can only reuse them', () => {
@@ -104,11 +153,43 @@ describe('auth login-flow reset', () => {
     const initializeEnd = source.indexOf('\n}\n\n/**\n * 冷启动 refresh 流程本体', initializeStart);
     const initializeBody = source.slice(initializeStart, initializeEnd);
     const localGuard = initializeBody.indexOf("getActiveAppSession().mode === 'local'");
-    const refreshTokenRead = initializeBody.indexOf('readSafe(REFRESH_TOKEN_KEY)');
+    const refreshTokenRead = initializeBody.indexOf('readPersistedAuthSession()');
 
     expect(localGuard).toBeGreaterThan(-1);
     expect(refreshTokenRead).toBeGreaterThan(localGuard);
     expect(initializeBody.slice(localGuard, refreshTokenRead)).toContain('return snapshotAuthState();');
+  });
+
+  it('activates a restored realm only after the refreshed membership passes build policy', () => {
+    const initializeStart = source.indexOf('export async function initialize(');
+    const initializeEnd = source.indexOf('\n}\n\n/**\n * 冷启动 refresh 流程本体', initializeStart);
+    const initializeBody = source.slice(initializeStart, initializeEnd);
+    expect(initializeBody).toContain('await loadClientEndpointsForRealm(persistedSession.realm);');
+    expect(initializeBody).not.toContain('activateClientEndpointRealm(persistedSession.realm);');
+
+    const coldStart = source.indexOf('async function runColdStartRefreshFlow(');
+    const coldEnd = source.indexOf('\n}\n\nasync function loadLoginProviders()', coldStart);
+    const coldBody = source.slice(coldStart, coldEnd);
+    const coldPolicyGuard = coldBody.indexOf('!canRestoreAuthSessionForMembership(');
+    const coldRealmActivation = coldBody.indexOf('activateClientEndpointRealm(storedRealm);');
+    expect(coldPolicyGuard).toBeGreaterThan(-1);
+    expect(coldRealmActivation).toBeGreaterThan(coldPolicyGuard);
+    expect(coldBody).toContain('writePersistedAuthSession(refreshData.refreshToken, storedRealm);');
+
+    const refreshStart = source.indexOf('export async function refresh(): Promise<boolean> {');
+    const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);
+    const refreshBody = source.slice(refreshStart, refreshEnd);
+    const runtimePolicyGuard = refreshBody.indexOf('!canRestoreAuthSessionForMembership(');
+    const runtimeRealmActivation = refreshBody.indexOf(
+      'activateClientEndpointRealm(refreshRealm);',
+    );
+    expect(runtimePolicyGuard).toBeGreaterThan(-1);
+    expect(runtimeRealmActivation).toBeGreaterThan(runtimePolicyGuard);
+    expect(refreshBody).toContain('writePersistedAuthSession(data.refreshToken, refreshRealm);');
+    expect(refreshBody).toContain(
+      "await expireRuntimeAuth(currentUser.id, 'replaced-elsewhere', {",
+    );
+    expect(refreshBody).toContain('preservePersistedRefreshToken: true');
   });
 
   it('drops a runtime refresh result after logout or a newer login changes auth generation', () => {
@@ -123,6 +204,24 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain("refreshWasSuperseded('after-account-switch-teardown')");
     expect(refreshBody).toContain("refreshWasSuperseded('after-integration-reload')");
     expect(refreshBody).toContain("refreshWasSuperseded('catch')");
+  });
+
+  it('reconnects realm-bound main clients after a runtime realm change commits its new token', () => {
+    const refreshStart = source.indexOf('export async function refresh(): Promise<boolean> {');
+    const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);
+    const refreshBody = source.slice(refreshStart, refreshEnd);
+
+    expect(refreshBody).toContain('const authRealmChanged = refreshRealm !== activeAuthRealm;');
+    expect(refreshBody).toContain('writePersistedAuthSession(data.refreshToken, refreshRealm);');
+    expect(refreshBody).toContain('activeAuthRealm = refreshRealm;');
+    expect(refreshBody).toContain('previousUserId !== currentUser.id || authRealmChanged');
+    expect(refreshBody).toContain('if (authRealmChanged) {\n        notifyAuthListeners();');
+
+    expect(deviceLinkSource).toContain('restartDeviceLinkForAuthRealmChange();');
+    expect(deviceLinkSource).toContain('void stopArbitrationAndTeardown()');
+    expect(deviceLinkSource).toContain('authManager.getActiveAuthRealm() !== targetRealm');
+    expect(hookControlSource).toContain('} else if (realmChanged) {');
+    expect(hookControlSource).toContain('manager?.sync();');
   });
 
   it('tears down the owner boundary before notifying runtime auth expiry', () => {

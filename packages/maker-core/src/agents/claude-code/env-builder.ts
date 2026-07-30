@@ -38,6 +38,20 @@ interface ClaudeEnvBuildOptions {
   mode?: 'local' | 'remote';
   /** 本次子进程明确要走的凭证形态。undefined 时保持 adapter 既有 fallback。 */
   credentialMode?: AgentCredentialMode;
+  /**
+   * 本次 spawn 的会话来源(显式 providerId;null/undefined = 隐式默认路由)。
+   * 供 runtimeConfig.subagentModelForRoute 按父会话来源判定 subagent 覆写是否可路由
+   * (options.subagentModel 省略、走 runtimeConfig 回落分支时消费)。
+   */
+  sessionProviderId?: string | null;
+  /**
+   * 调用方已解析好的 `CLAUDE_CODE_SUBAGENT_MODEL` 决定(见 subagent-model-default.ts)。
+   *   - 字符串 → 设该值;
+   *   - `null`  → 明确**不要设**(让用户手写 agent 的 frontmatter `model:` 生效);
+   *   - 省略    → 回落读 `runtimeConfig`(未接该解析的调用方保持旧行为;有
+   *     subagentModelForRoute 时按 sessionProviderId/credentialMode 走路由感知入口)。
+   */
+  subagentModel?: string | null;
 }
 
 function serializeModelContextWindows(
@@ -81,7 +95,7 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
   'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR',
   // 订阅身份元数据(与 OAUTH_TOKEN 配套,cc env-token 分支消费):不剥离的话,从
-  // 带这些变量的 shell 启动 XDMaker(典型:终端里的 cc 会话内跑 dev)会把**别人的
+  // 带这些变量的 shell 启动 Cindy(典型:终端里的 cc 会话内跑 dev)会把**别人的
   // 档位/scopes**漏进子进程 —— 凭证库没提供时 getAuthEnv 不注入对应 key,继承残留
   // 会顶上,订阅会话以错误 scopes/tier 起跑。
   'CLAUDE_CODE_OAUTH_SCOPES',
@@ -100,7 +114,60 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'ANTHROPIC_FOUNDRY_RESOURCE',
   // 配置目录重定向
   'CLAUDE_CONFIG_DIR',
+  // 子代理派发覆盖:这是 host 独占的键(值由「Subagent 模型」设置经
+  // subagent-model-default.ts 解析决定),继承来的残留会以最高优先级盖掉用户手写 agent 的
+  // `model:`,而且**盖得静默**。典型泄漏路径:终端里的 cc 会话跑 dev,Electron 从
+  // process.env 继承外层会话的值 —— 那时 host 判定的「不要设」在 SDK 的
+  // `{...process.env, ...userEnv}` 合并里根本不生效(我们只能覆盖,删不掉)。
+  'CLAUDE_CODE_SUBAGENT_MODEL',
 ] as const;
+
+/**
+ * 远端路由 materialization 覆盖前,须从 remoteEnv 剥离的鉴权 / 上游 / 定制头字段。
+ *
+ * 清单归本文件所有:buildClaudeEnv(经 getAuthEnv / endpoint / behaviorFlags)是这些
+ * 字段在 remoteEnv 里的唯一写入方,新增鉴权类写入时必须同步本清单,否则 route 覆盖后
+ * 旧字段残留、破坏「route.env 是远端鉴权唯一事实源 / 单鉴权门」不变量(消费方见
+ * claude-code/index.ts startSession 远端分支)。
+ *
+ * 刻意不复用 SENSITIVE_ANTHROPIC_ENV_KEYS:那是「继承残留清洗」超集,含 route 覆盖时
+ * 必须保留的字段(如 dev 多实例的 CLAUDE_CONFIG_DIR)。
+ */
+export const REMOTE_ROUTE_OVERRIDE_ENV_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_SCOPES',
+  'CLAUDE_CODE_SUBSCRIPTION_TYPE',
+  'CLAUDE_CODE_RATE_LIMIT_TIER',
+  'ANTHROPIC_CUSTOM_HEADERS',
+  'ANTHROPIC_BASE_URL',
+] as const;
+
+/**
+ * 订阅 token 的 401 续命回调有 entrypoint 白名单闸门(cc 反编译):
+ *   if (CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH && Set(["claude-desktop","local-agent",
+ *       "claude-vscode"]).has(CLAUDE_CODE_ENTRYPOINT)) 才注册 requestOAuthTokenRefresh。
+ * agent SDK 默认填 CLAUDE_CODE_ENTRYPOINT=sdk-ts(不在白名单)——不覆盖的话
+ * getOAuthToken 回调**静默失效**(不报错不打日志, 长 turn 过期照样死)。必须选
+ * claude-vscode: 另两个值在 cc 的桌面宿主集合里, 会连带切换整套 desktop-host 语义
+ * (settings 过滤策略 / remote managed settings 等), 影响面未审。
+ * 硬覆盖而非 if-undefined: dev 下 Electron 可能由终端 cc 启动, 继承来的
+ * CLAUDE_CODE_ENTRYPOINT=sdk-ts/cli 同样会关掉闸门。仅 oauth-spawn(实际注入了
+ * 订阅 token)时生效, gateway-key 会话保持 SDK 默认。
+ *
+ * buildClaudeEnv 末段与远端路由 materialization(claude-code/index.ts,route 覆盖后
+ * 才出现 CLAUDE_CODE_OAUTH_TOKEN 的场景)共用 —— 闸门规则只此一份。
+ */
+export function applyOAuthSpawnEntrypointGate(env: Record<string, string>): void {
+  if (!env.CLAUDE_CODE_OAUTH_TOKEN) return;
+  env.CLAUDE_CODE_ENTRYPOINT = 'claude-vscode';
+  // claude-vscode 身份的防御性收口: 禁掉 IDE 扩展自动安装类副作用(headless 会话
+  // 不需要; env 在 cc 内存在, 用户显式覆盖优先)。
+  if (env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL === undefined) {
+    env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL = '1';
+  }
+}
 
 /**
  * !! 主防线 !! 必须由 host 在 boot 最早期(任何动态 import / spawn 之前)调用一次。
@@ -151,6 +218,34 @@ export function cleanProcessEnv(env: NodeJS.ProcessEnv = process.env): Record<st
 }
 
 /**
+ * `CLAUDE_CODE_SUBAGENT_MODEL` 的**唯一**写入点。
+ *
+ * - 非空串 → 设该值;
+ * - `null` / 空串 → **删掉这个键**;
+ * - `undefined` → 不动(调用方没有做过决定)。
+ *
+ * 为什么「不设」必须是 delete 而不是「跳过赋值」:local 模式的 env 是从 `cleanProcessEnv()`
+ * 起的,`behaviorFlags` 也可能带进来同名键。只跳过赋值的话,那个继承/外来的值会原封不动
+ * 留在字典里,继续以最高优先级盖掉 frontmatter —— 「明确不设」于是变成一句空话。
+ *
+ * (根因侧的防线是把该键放进 SENSITIVE_ANTHROPIC_ENV_KEYS:boot 期从 process.env 剥掉,
+ * 否则 SDK spawn 时的 `{...process.env, ...userEnv}` 合并我们只能覆盖、无法删除。
+ * 这里的 delete 负责字典层,两道一起才干净。)
+ *
+ * `discoverSubagentDefinitions` 需要本函数产出的 env(要读 `CLAUDE_CONFIG_DIR`),所以
+ * 「先建 env、再判定、最后回来落这个键」是合法用法,见 index.ts 的会话启动路径。
+ */
+export function applySubagentModelEnv(
+  env: Record<string, string>,
+  decision: string | null | undefined,
+): void {
+  if (decision === undefined) return;
+  const value = (decision ?? '').trim();
+  if (value) env.CLAUDE_CODE_SUBAGENT_MODEL = value;
+  else delete env.CLAUDE_CODE_SUBAGENT_MODEL;
+}
+
+/**
  * 组装最终注入到 sdkQuery options.env 的字典。
  * 顺序：cleanEnv → behaviorFlags → endpoint → authEnv（鉴权最后，避免被 behaviorFlags 覆盖）
  *
@@ -190,8 +285,14 @@ export async function buildClaudeEnv(
   const cleanEnv = mode === 'remote' ? {} : cleanProcessEnv();
   const env: Record<string, string> = { ...cleanEnv };
 
-  if (runtimeConfig.behaviorFlags) {
-    Object.assign(env, runtimeConfig.behaviorFlags);
+  // 函数形态按本次 spawn 的凭证形态求值(如 attribution 归因块只对 gateway-key 禁用);
+  // spawnMode 让 host 区分本机/远端(只对本机有意义的 flag 不注到远端)。
+  const behaviorFlags =
+    typeof runtimeConfig.behaviorFlags === 'function'
+      ? runtimeConfig.behaviorFlags({ credentialMode: options.credentialMode, spawnMode: mode })
+      : runtimeConfig.behaviorFlags;
+  if (behaviorFlags) {
+    Object.assign(env, behaviorFlags);
   }
   // 远端模式优先用 remoteEndpoint（真上游网关）—— 本地 endpoint 是 loopback proxy URL，
   // 远端机器够不到（见 runtime-config.ts remoteEndpoint 文档 + index.ts 的 loopback guard）。
@@ -208,12 +309,27 @@ export async function buildClaudeEnv(
     : undefined;
   Object.assign(env, await auth.getAuthEnv(authOptions));
 
-  // Claude Code's documented child-agent model override. Blank / undefined deliberately leaves
-  // the key untouched so the host preserves the pre-existing native selection behavior.
-  const subagentModel = runtimeConfig.subagentModel?.trim();
-  if (subagentModel) {
-    env.CLAUDE_CODE_SUBAGENT_MODEL = subagentModel;
-  }
+  // Claude Code's documented child-agent model override.
+  //
+  // `options.subagentModel` 是调用方**已解析过**的决定(见 subagent-model-default.ts):
+  //   - 字符串 → 设该值;
+  //   - `null`  → 明确「不要设」—— 用户手写 agent 自己声明了 model,设了会把它静默盖掉;
+  //   - 省略    → 回落读 runtimeConfig(未接入该解析的调用方保持旧行为)。
+  // 该 env 在平台解析顺序里是最高优先级,所以「不设」是让 frontmatter 生效的唯一办法。
+  // runtimeConfig 回落分支里路由感知版优先:子代理请求跑在父会话来源上,覆写是否可注入
+  // 要按该来源判(host 的停用轴按 (来源, 模型) 记账;PR #744 review 第十九轮)。
+  applySubagentModelEnv(
+    env,
+    options.subagentModel !== undefined
+      ? options.subagentModel
+      : ((runtimeConfig.subagentModelForRoute
+          ? runtimeConfig.subagentModelForRoute(
+              options.sessionProviderId ?? null,
+              options.credentialMode,
+            )
+          : runtimeConfig.subagentModel
+        )?.trim() || undefined),
+  );
 
   // 第三道防线: 告诉 CC CLI "provider 路由由 host 接管"。
   // CC 内部 filterSettingsEnv 看到此标记后,会从所有 settings-sourced env 中剥掉
@@ -228,24 +344,7 @@ export async function buildClaudeEnv(
   // 若 host 只设 flag 不递凭证, cc 毫秒级判 "Not logged in"(2026-07-03 线上事故)。
   env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
 
-  // 订阅 token 的 401 续命回调有 entrypoint 白名单闸门(cc 反编译):
-  //   if (CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH && Set(["claude-desktop","local-agent",
-  //       "claude-vscode"]).has(CLAUDE_CODE_ENTRYPOINT)) 才注册 requestOAuthTokenRefresh。
-  // agent SDK 默认填 CLAUDE_CODE_ENTRYPOINT=sdk-ts(不在白名单)——不覆盖的话
-  // getOAuthToken 回调**静默失效**(不报错不打日志, 长 turn 过期照样死)。必须选
-  // claude-vscode: 另两个值在 cc 的桌面宿主集合里, 会连带切换整套 desktop-host 语义
-  // (settings 过滤策略 / remote managed settings 等), 影响面未审。
-  // 硬覆盖而非 if-undefined: dev 下 Electron 可能由终端 cc 启动, 继承来的
-  // CLAUDE_CODE_ENTRYPOINT=sdk-ts/cli 同样会关掉闸门。仅 oauth-spawn(实际注入了
-  // 订阅 token)时生效, gateway-key 会话保持 SDK 默认。
-  if (env.CLAUDE_CODE_OAUTH_TOKEN) {
-    env.CLAUDE_CODE_ENTRYPOINT = 'claude-vscode';
-    // claude-vscode 身份的防御性收口: 禁掉 IDE 扩展自动安装类副作用(headless 会话
-    // 不需要; env 在 cc 内存在, 用户显式覆盖优先)。
-    if (env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL === undefined) {
-      env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL = '1';
-    }
-  }
+  applyOAuthSpawnEntrypointGate(env);
 
   // xdt-maker 自己托管会话生命周期和自动任务。Claude Code 原生 cron 会读取
   // workdir/.claude/scheduled_tasks.json，并把到期任务作为隐藏 meta prompt 注入

@@ -442,12 +442,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         .update(schedules)
         .set({
           nextFireAt: null,
-          lastFiredAt: sql`CASE
-            WHEN ${schedules.lastFiredAt} IS NULL OR ${schedules.lastFiredAt} <= ${run.firedAt}
-            THEN ${run.firedAt}
-            ELSE ${schedules.lastFiredAt}
-          END`,
-          activeClaimFiredAt: run.firedAt,
+          activeClaimRunId: run.id,
         })
         .where(
           and(
@@ -471,35 +466,29 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     });
   }
 
-  async listRunningRunFiredAts(scheduleId: string): Promise<number[]> {
+  async listRunningRunIds(scheduleId: string): Promise<string[]> {
     const db = this.getDb();
     const rows = await db
-      .select({ firedAt: scheduleRuns.firedAt })
+      .select({ id: scheduleRuns.id })
       .from(scheduleRuns)
       .where(and(eq(scheduleRuns.status, 'running'), eq(scheduleRuns.scheduleId, scheduleId)))
       .orderBy(desc(scheduleRuns.firedAt));
-    return rows.map((row) => row.firedAt);
+    return rows.map((row) => row.id);
   }
 
   async rescheduleDeferredAutomaticClaim(
     id: string,
-    claimFiredAt: number,
+    claimRunId: string,
     retryAt: number,
-    previousLastFiredAt?: number,
   ): Promise<Schedule | null> {
     const db = this.getDb();
     const result = await db
       .update(schedules)
       .set({
         nextFireAt: retryAt,
-        lastFiredAt: sql`CASE
-          WHEN ${schedules.lastFiredAt} = ${claimFiredAt}
-          THEN ${previousLastFiredAt ?? null}
-          ELSE ${schedules.lastFiredAt}
-        END`,
-        activeClaimFiredAt: null,
+        activeClaimRunId: null,
       })
-      .where(and(eq(schedules.id, id), eq(schedules.activeClaimFiredAt, claimFiredAt)))
+      .where(and(eq(schedules.id, id), eq(schedules.activeClaimRunId, claimRunId)))
       .run();
     const changes = (result as unknown as { changes?: number }).changes;
     if (typeof changes !== 'number') {
@@ -507,6 +496,53 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     }
     if (changes === 0) return null;
     return this.get(id);
+  }
+
+  async resumeWithLiveClaimGuard(
+    id: string,
+    updatedAt: number,
+    nextFireAt: number,
+  ): Promise<Schedule | null> {
+    const db = this.getDb();
+    if (this.getDbClient) {
+      const updated = await this.getDbClient().tx('scheduler.resumeWithLiveClaimGuard', {
+        scheduleId: id,
+        updatedAt,
+        nextFireAt,
+      });
+      if (!updated) return null;
+      return this.get(id);
+    }
+
+    return db.transaction(() => {
+      const [row] = db.select().from(schedules).where(eq(schedules.id, id)).limit(1).all();
+      if (!row) return null;
+      const liveClaim =
+        row.activeClaimRunId !== null &&
+        db
+          .select({ id: scheduleRuns.id })
+          .from(scheduleRuns)
+          .where(
+            and(
+              eq(scheduleRuns.id, row.activeClaimRunId),
+              eq(scheduleRuns.scheduleId, id),
+              eq(scheduleRuns.status, 'running'),
+            ),
+          )
+          .limit(1)
+          .all().length > 0;
+      db.update(schedules)
+        .set({
+          status: 'active',
+          updatedAt,
+          nextFireAt: liveClaim ? null : nextFireAt,
+          activeClaimRunId: liveClaim ? row.activeClaimRunId : null,
+        })
+        .where(eq(schedules.id, id))
+        .run();
+      const [updated] = db.select().from(schedules).where(eq(schedules.id, id)).limit(1).all();
+      return updated ? scheduleToCamel(updated) : null;
+    });
   }
 
   // ---------- ScheduleRun CRUD ----------
@@ -1117,7 +1153,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
    * "是否仍有活 run"不变量用,无上限,不受 listRuns 展示条数影响);
    * 不传 = 全局(updater 自动重启的 busy probe 沿用)。
    */
-  async hasRunningRuns(scheduleId?: string, opts?: { firedAt?: number }): Promise<boolean> {
+  async hasRunningRuns(scheduleId?: string, opts?: { runId?: string }): Promise<boolean> {
     const db = this.getDb();
     const [row] = await db
       .select({ id: scheduleRuns.id })
@@ -1126,7 +1162,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         and(
           eq(scheduleRuns.status, 'running'),
           ...(scheduleId !== undefined ? [eq(scheduleRuns.scheduleId, scheduleId)] : []),
-          ...(opts?.firedAt !== undefined ? [eq(scheduleRuns.firedAt, opts.firedAt)] : []),
+          ...(opts?.runId !== undefined ? [eq(scheduleRuns.id, opts.runId)] : []),
         ),
       )
       .limit(1);

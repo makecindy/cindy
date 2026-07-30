@@ -157,6 +157,8 @@ interface PtySession {
 export interface PtyManagerDeps {
   spawn?: PtySpawnFn;
   sink: PtyEventSink;
+  /** 仅供测试注入平台；生产代码默认使用当前 Node 平台。 */
+  platform?: NodeJS.Platform;
   /**
    * owner webContents destroyed 时的接管者解析(典型:主窗 webContents)。
    * 返回一个活着的、不同于 dead owner 的 webContents 时,该 owner 的 session
@@ -176,11 +178,13 @@ export class PtyManager {
   private readonly trackedOwners = new WeakSet<WebContents>();
   private readonly spawnFn: PtySpawnFn;
   private readonly sink: PtyEventSink;
+  private readonly platform: NodeJS.Platform;
   private readonly resolveFallbackOwner?: (deadOwner: WebContents) => WebContents | null;
 
   constructor(deps: PtyManagerDeps) {
     this.spawnFn = deps.spawn ?? defaultPtySpawn;
     this.sink = deps.sink;
+    this.platform = deps.platform ?? process.platform;
     this.resolveFallbackOwner = deps.resolveFallbackOwner;
   }
 
@@ -368,11 +372,13 @@ export class PtyManager {
     const rows = opts.rows && opts.rows > 0 ? opts.rows : DEFAULT_ROWS;
     const resolved = resolveShellForCreate(opts.shellPref ?? null);
 
-    // 合并 env:用户 env 覆盖 process.env,再注入 TERM,最后剥掉 host terminal app 标记。
+    // 合并 env:先复制父进程环境,做平台兜底,再应用调用方显式覆盖。
+    // ENV_KEYS_TO_STRIP 与 TERM 仍在下方强制执行,不允许 opts.env 改写。
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(process.env)) {
       if (typeof v === 'string') env[k] = v;
     }
+    ensureMacTerminalUtf8Locale(env, this.platform);
     if (opts.env) {
       for (const [k, v] of Object.entries(opts.env)) {
         if (typeof v === 'string') env[k] = v;
@@ -473,4 +479,23 @@ export class PtyManager {
       });
     }
   }
+}
+
+/**
+ * macOS Finder/Dock 启动的 GUI 进程可能继承到空/C locale。zsh 的行编辑器
+ * 需要 UTF-8 的 LC_CTYPE 才能正确识别中文等多字节输入；只设置 LANG 不够，
+ * 因为非空 LC_CTYPE 会覆盖 LANG。非空 LC_ALL 通常表示用户主动指定，保留其
+ * 语义；调用方通过 opts.env 传入的显式覆盖也在本函数之后生效。
+ */
+function ensureMacTerminalUtf8Locale(
+  env: Record<string, string>,
+  platform: NodeJS.Platform,
+): void {
+  if (platform !== 'darwin' || env.LC_ALL?.trim()) return;
+
+  const charLocale = env.LC_CTYPE?.trim() || env.LANG?.trim() || 'C';
+  const normalized = charLocale.toUpperCase();
+  if (normalized !== 'C' && normalized !== 'POSIX') return;
+
+  env.LC_CTYPE = 'UTF-8';
 }

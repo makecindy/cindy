@@ -16,9 +16,18 @@
 
 const bySession = new Map<string, string | null>();
 
+/** Canonical provider id used by runtime routing and every persistence adapter. */
+export function normalizeSessionProviderId(
+  providerId: string | null | undefined,
+): string | null | undefined {
+  if (providerId === undefined) return undefined;
+  if (typeof providerId !== 'string') return null;
+  return providerId.trim() || null;
+}
+
 /** 设定某会话的供应商(SET_MODEL 携带 providerId 时调用)。null/'' = 清除显式选择。 */
 export function setSessionProvider(sessionId: string, providerId: string | null): void {
-  bySession.set(sessionId, providerId && providerId.trim() ? providerId : null);
+  bySession.set(sessionId, normalizeSessionProviderId(providerId) ?? null);
 }
 
 /** 读取某会话的供应商;未设置或已清除返回 null(调用方据此走默认路由)。 */
@@ -32,7 +41,7 @@ export function getSessionProvider(sessionId: string): string | null {
  */
 export function hydrateSessionProvider(sessionId: string, providerId: string | null): void {
   if (!bySession.has(sessionId)) {
-    bySession.set(sessionId, providerId && providerId.trim() ? providerId : null);
+    bySession.set(sessionId, normalizeSessionProviderId(providerId) ?? null);
   }
 }
 

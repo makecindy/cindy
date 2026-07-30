@@ -91,8 +91,11 @@ export function reportProviderUpstreamError(params: {
   });
 }
 
-/** 按 content-encoding 解压错误体（与 proxy 包 debug dump 的解压语义一致；失败回退原文）。 */
-function decodeBody(buf: Buffer, encoding: string | undefined): string {
+/**
+ * 按 content-encoding 解压错误体（与 proxy 包 debug dump 的解压语义一致；失败回退原文）。
+ * 导出供其它 responseObserver 复用（如 xai 凭证收口），解压语义单点维护。
+ */
+export function decodeUpstreamErrorBody(buf: Buffer, encoding: string | undefined): string {
   try {
     if (encoding === 'gzip') return gunzipSync(buf).toString('utf-8');
     if (encoding === 'br') return brotliDecompressSync(buf).toString('utf-8');
@@ -146,7 +149,7 @@ export function createProviderUpstreamErrorObserver(
       },
       onEnd: () => {
         const encoding = ctx.responseHeaders['content-encoding'];
-        const bodyText = decodeBody(
+        const bodyText = decodeUpstreamErrorBody(
           Buffer.concat(chunks, Math.min(size, MAX_ERROR_BODY_BYTES)),
           typeof encoding === 'string' ? encoding : undefined,
         );

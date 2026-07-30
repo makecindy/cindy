@@ -21,10 +21,11 @@
  *
  * 边界处理
  * --------
- * - IME 组合期 (用户打 pinyin 还没选字): compositionstart 前临时移除
- *   decoration,compositionend 后再按当前 doc 补算,避免改写输入法维护的 DOM。
- * - 性能: chat input 文本量很小,doc 变化、slash roster 或 voice replacement
- *   range 变化时采用全量重扫;不使用 DecorationSet.map 增量映射,以保持边界逻辑简单。
+ * - IME 组合期 (用户打 pinyin 还没选字): 保留组合开始前已有的 decoration,
+ *   只随 transaction 映射其位置,compositionend 后再按当前 doc 补算。这样既不
+ *   重建输入法维护的 DOM,也不会让已有标点在每次组字时切回另一套字形。
+ * - 性能: chat input 文本量很小,正常 doc 变化、slash roster 或 voice replacement
+ *   range 变化时采用全量重扫;只有组合期为保持已有 DOM 稳定才映射旧 decoration。
  * - 不污染源数据: decoration 只是渲染层,doc JSON 里没有 span,copy/paste/save
  *   拿到的都是纯文本
  *
@@ -50,6 +51,10 @@ import {
   resolveVoiceInputReplacementRange,
   type VoiceInputReplacementRange,
 } from './VoiceInputDraftDecoration';
+import {
+  hasCjkContextPunctuation,
+  isCjkContextPunctuation,
+} from './CjkPunctuationUtils';
 
 type CjkDecorationPluginState = {
   decorations: DecorationSet;
@@ -59,15 +64,6 @@ type CjkDecorationPluginState = {
 type CompositionMeta = 'suspend' | 'resume';
 
 const PLUGIN_KEY = new PluginKey<CjkDecorationPluginState>('cjkPunctDecoration');
-
-/**
- * CJK 标点字符集合。覆盖最常用的几个区段,够 chat input 场景用:
- *   U+3000-303F: CJK Symbols and Punctuation (含 《》「」『』【】 等)
- *   U+FF00-FFEF: Halfwidth and Fullwidth Forms (含全角 (), !? 等)
- *
- * 不包括 ASCII 标点,因为它们 script 已经是 Latin,不会触发 itemization 错乱。
- */
-const CJK_PUNCT_REGEX = /[\u3000-\u303f\uff00-\uffef]/g;
 
 const LONG_ALPHANUMERIC_BODY_RE = /^\s*[A-Za-z0-9]{12,}\s*$/;
 
@@ -139,8 +135,7 @@ function listLineRanges(
         voiceReplacementRange !== null &&
         voiceReplacementRange.from < contentBase + line.end &&
         voiceReplacementRange.to > contentBase + line.start;
-      const hasCjkPunctuation = CJK_PUNCT_REGEX.test(line.text);
-      CJK_PUNCT_REGEX.lastIndex = 0;
+      const hasCjkPunctuation = hasCjkContextPunctuation(line.text);
       return (
         line.hasInlineAtom ||
         overlapsSlashCommandPill ||
@@ -200,25 +195,27 @@ const CJK_FONT_STACK =
 
 /**
  * 扫描整个 doc, 给所有 CJK 标点位置生成 inline decoration。
- * 用 descendants 遍历所有 text node, 对每个 text node 内的字符做正则匹配。
+ * 用 descendants 遍历所有 text node, 对每个 text node 内的字符做上下文匹配。
  * 注意 from/to 是 doc-level position, 不是 text-node-local offset。
  */
 function buildDecorations(
   doc: PMNode,
   slashCommandMatches: ReadonlyArray<Pick<SlashCommandMatch, 'from' | 'to'>> = [],
   voiceReplacementRange: VoiceInputReplacementRange | null = null,
+  ignoreListRanges = false,
 ): DecorationSet {
   const decorations: Decoration[] = [];
-  const listRanges = listLineRanges(doc, slashCommandMatches, voiceReplacementRange);
+  const listRanges = ignoreListRanges
+    ? []
+    : listLineRanges(doc, slashCommandMatches, voiceReplacementRange);
 
   doc.descendants((node, pos) => {
     if (!node.isText || !node.text) return;
     const text = node.text;
-    CJK_PUNCT_REGEX.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = CJK_PUNCT_REGEX.exec(text)) !== null) {
-      const from = pos + m.index;
-      const to = from + m[0].length;
+    for (let index = 0; index < text.length; index += 1) {
+      if (!isCjkContextPunctuation(text, index)) continue;
+      const from = pos + index;
+      const to = from + 1;
       if (listRanges.some((range) => from >= range.from && to <= range.to)) {
         // ComposerListIndentDecoration owns the wrapping container for these
         // ranges. An overlapping inline font decoration would split fixed-width
@@ -259,8 +256,20 @@ export const CjkPunctDecoration = Extension.create({
           apply(tr: Transaction, old: CjkDecorationPluginState, oldState: EditorState) {
             const compositionMeta = tr.getMeta(PLUGIN_KEY) as CompositionMeta | undefined;
             if (compositionMeta === 'suspend') {
+              // ComposerListIndentDecoration removes its wrappers during IME
+              // composition so ProseMirror does not let native composition DOM
+              // get split by stale layout decorations. Rebuild CJK spans
+              // without the list-owned exclusions for that same window; this
+              // keeps marker dots and fallback sibling ASCII punctuation in the
+              // explicit CJK font stack while the list wrappers are absent.
+              const roster = getSlashCommandRoster(oldState);
               return {
-                decorations: DecorationSet.empty,
+                decorations: buildDecorations(
+                  tr.doc,
+                  findSlashCommandMatches(tr.doc, roster),
+                  resolveVoiceInputReplacementRange(tr, oldState).range,
+                  true,
+                ),
                 suspendedForComposition: true,
               };
             }
@@ -268,7 +277,12 @@ export const CjkPunctDecoration = Extension.create({
             const rosterUpdate = getSlashCommandRosterUpdate(tr);
             const voiceReplacement = resolveVoiceInputReplacementRange(tr, oldState);
             if (old.suspendedForComposition && compositionMeta !== 'resume') {
-              return old;
+              return {
+                decorations: tr.docChanged
+                  ? old.decorations.map(tr.mapping, tr.doc)
+                  : old.decorations,
+                suspendedForComposition: true,
+              };
             }
             // doc、命令 roster 和 voice replacement 都没变 → decoration 位置不变,
             // 直接复用;任一输入变化都需要重新扫描。

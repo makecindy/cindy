@@ -46,6 +46,10 @@ export default defineConfig({
     env: {
       EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL: 'https://relay.example.invalid',
       EXPO_PUBLIC_XDT_MOBILE_VOICE_LITELLM_BASE_URL: 'https://gateway.example.invalid',
+      EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL:
+        'https://manifest.cn.example.invalid/app',
+      EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL:
+        'https://manifest.global.example.invalid/app',
     },
   },
 });

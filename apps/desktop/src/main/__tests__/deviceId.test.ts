@@ -47,9 +47,13 @@ describe('ensureSystemBinPathForMachineId', () => {
   it('追加而非前置:不覆盖已有的用户 PATH 项', () => {
     process.env.PATH = '/opt/homebrew/bin:/usr/bin:/bin';
     ensureSystemBinPathForMachineId();
-    const dirs = (process.env.PATH ?? '').split(path.delimiter);
-    expect(dirs[0]).toBe('/opt/homebrew/bin'); // 原有优先项仍在最前
-    if (PATCHES_PATH) expect(dirs).toContain('/usr/sbin');
+    if (PATCHES_PATH) {
+      const dirs = (process.env.PATH ?? '').split(path.delimiter);
+      expect(dirs[0]).toBe('/opt/homebrew/bin'); // 原有优先项仍在最前
+      expect(dirs).toContain('/usr/sbin');
+    } else {
+      expect(process.env.PATH).toBe('/opt/homebrew/bin:/usr/bin:/bin'); // Windows: 不动 PATH
+    }
   });
 
   it('保留原 PATH 的空段(Unix 下代表 CWD),不改语义', () => {

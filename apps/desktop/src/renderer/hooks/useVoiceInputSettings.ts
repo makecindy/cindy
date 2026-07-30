@@ -135,12 +135,40 @@ export function subscribeVoiceInputSettings(
 }
 
 export type VoiceInputShortcutUpdateResult =
-  | { ok: true; settings: VoiceInputSettings }
-  | { ok: false; error: string; errorCode?: string };
+  | {
+    ok: true;
+    settings: VoiceInputSettings;
+    /**
+     * 快捷键已存盘，但 macOS 监听权限还没拿到，所以按键暂时不会有反应。设置页据此
+     * 请求授权并标注「待授权」，而不是当成注册失败报错。
+     */
+    pendingInputMonitoring?: boolean;
+  }
+  // 用 IPC 契约的固定联合而不是裸 string，避免误传/误判不存在的 code。
+  | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode };
 
-export async function syncVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null): Promise<{ ok: boolean; error?: string }> {
+/**
+ * 录制期挂起全局快捷键。
+ *
+ * 与「同步」分开是必要的：main 侧会丢掉与存盘不一致的同步请求（那是过时的广播回声），而挂起
+ * 传的 null 恰恰**故意**与存盘不同。不把意图讲明，就只能在 main 侧放行所有 null —— 于是
+ * 「清空快捷键」那次提交广播出的 null 回声也能迟到落地，把更晚一次提交刚注册好的快捷键关掉。
+ */
+export async function suspendVoiceInputGlobalShortcut(): Promise<{ ok: boolean; error?: string }> {
+  return syncVoiceInputGlobalShortcut(null, { suspend: true });
+}
+
+/**
+ * 返回类型带上 `errorCode`：调用方要靠它区分「还是缺权限」「helper 真起不来」「被更晚一轮
+ * 顶掉」，只有 ok/error 的话就只能去匹配 main 侧那句英文（而那句已经被统一消毒成固定文案，
+ * 压根区分不出原因）。
+ */
+export async function syncVoiceInputGlobalShortcut(
+  shortcut: VoiceInputShortcut | null,
+  options?: { suspend?: true },
+): Promise<{ ok: boolean; error?: string; errorCode?: VoiceInputGlobalErrorCode }> {
   try {
-    const result = await window.electronAPI.voiceInput.setGlobalShortcut(shortcut);
+    const result = await window.electronAPI.voiceInput.setGlobalShortcut(shortcut, options);
     if (!result.ok) {
       log.warn('global voice input shortcut sync failed:', result.error);
     }
@@ -162,8 +190,12 @@ export function useVoiceInputSettings(): {
   setRefinementEnabled: (enabled: boolean) => void;
   setRefinementInstructions: (instructions: string) => void;
   setAutoDictionaryEnabled: (enabled: boolean) => void;
-  setDictionaryEntries: (entries: VoiceInputDictionaryEntry[]) => void;
-  deleteDictionaryEntry: (entryId: string) => void;
+  setDictionarySyncEnabled: (enabled: boolean) => void;
+  /** 这几个返回持久化结果:成功才收口 UI(关对话框、清草稿、提示成功)。 */
+  addDictionaryEntry: (text: string) => Promise<boolean>;
+  importDictionaryEntries: (texts: string[]) => Promise<boolean>;
+  renameDictionaryEntry: (entryId: string, text: string) => Promise<boolean>;
+  deleteDictionaryEntry: (entryId: string) => Promise<boolean>;
   recordDictionaryLearningActions: (actions: DictationDictionaryLearningAction[]) => void;
   setShortcut: (shortcut: VoiceInputShortcut | null) => Promise<VoiceInputShortcutUpdateResult>;
 } {
@@ -226,20 +258,55 @@ export function useVoiceInputSettings(): {
     [updateSettings],
   );
 
-  const setDictionaryEntries = useCallback(
-    (dictionaryEntries: VoiceInputDictionaryEntry[]) => updateSettings({ dictionaryEntries }),
+  const setDictionarySyncEnabled = useCallback(
+    (dictionarySyncEnabled: boolean) => updateSettings({ dictionarySyncEnabled }),
     [updateSettings],
   );
 
-  const deleteDictionaryEntry = useCallback((entryId: string) => {
-    void window.electronAPI.voiceInput
-      .deleteDictionaryEntries([entryId])
-      .then(setSettings)
-      .catch((error) => {
-        log.warn('voice input dictionary delete failed:', error instanceof Error ? error.message : String(error));
-        toast.error(formatVoiceInputPersistenceError(t, error));
-      });
-  }, [t]);
+  // 词典的增改删都是语义化操作:主进程按「用户做了什么」更新同步状态,再把物化
+  // 结果回投影成 settings。整份覆盖词条数组表达不了用户意图,也会被下一次物化冲掉。
+  /**
+   * 返回 Promise 而不是 fire-and-forget:调用方要等持久化真的成功再关对话框、清
+   * 草稿、弹成功提示。主进程会在投影文件写不下去、或同步状态来自更新客户端时
+   * 拒绝写入 —— 那时 UI 却已经宣告成功,用户以为加上了,重启后发现没有。
+   */
+  const runDictionaryMutation = useCallback(
+    (mutate: () => Promise<unknown>): Promise<boolean> =>
+      mutate()
+        .then((next) => {
+          setSettings(next as VoiceInputSettings);
+          return true;
+        })
+        .catch((error) => {
+          log.warn('voice input dictionary update failed:', error instanceof Error ? error.message : String(error));
+          toast.error(formatVoiceInputPersistenceError(t, error));
+          return false;
+        }),
+    [t],
+  );
+
+  const addDictionaryEntry = useCallback(
+    (text: string) => runDictionaryMutation(() => window.electronAPI.voiceInput.addDictionaryEntry(text)),
+    [runDictionaryMutation],
+  );
+
+  const importDictionaryEntries = useCallback(
+    (texts: string[]) =>
+      runDictionaryMutation(() => window.electronAPI.voiceInput.importDictionaryEntries(texts)),
+    [runDictionaryMutation],
+  );
+
+  const renameDictionaryEntry = useCallback(
+    (entryId: string, text: string) =>
+      runDictionaryMutation(() => window.electronAPI.voiceInput.renameDictionaryEntry(entryId, text)),
+    [runDictionaryMutation],
+  );
+
+  const deleteDictionaryEntry = useCallback(
+    (entryId: string) =>
+      runDictionaryMutation(() => window.electronAPI.voiceInput.deleteDictionaryEntries([entryId])),
+    [runDictionaryMutation],
+  );
 
   const recordDictionaryLearningActions = useCallback((actions: DictationDictionaryLearningAction[]) => {
     void recordVoiceInputDictionaryLearningActions(actions);
@@ -276,7 +343,10 @@ export function useVoiceInputSettings(): {
     setRefinementEnabled,
     setRefinementInstructions,
     setAutoDictionaryEnabled,
-    setDictionaryEntries,
+    setDictionarySyncEnabled,
+    addDictionaryEntry,
+    importDictionaryEntries,
+    renameDictionaryEntry,
     deleteDictionaryEntry,
     recordDictionaryLearningActions,
     setShortcut,

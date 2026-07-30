@@ -121,6 +121,44 @@ describe('update_plan tool_use persistence', () => {
     );
   });
 
+  it('updates the existing web_search row when completed carries authoritative input', async () => {
+    const firstPersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'search-1',
+        toolName: 'web_search',
+        input: { query: 'early query', action: { type: 'search', query: 'early query' } },
+      },
+      null,
+    );
+    const secondPersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'search-1',
+        toolName: 'web_search',
+        input: { query: 'https://example.com/final', action: { type: 'openPage', url: 'https://example.com/final' } },
+      },
+      null,
+    );
+
+    expect(secondPersistId).toBe(firstPersistId);
+
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      firstPersistId,
+      {
+        toolUseId: 'search-1',
+        toolName: 'web_search',
+        input: {
+          query: 'https://example.com/final',
+          action: { type: 'openPage', url: 'https://example.com/final' },
+        },
+      },
+    );
+  });
+
   it('does not dedupe ordinary repeated tool_use ids', async () => {
     const firstPersistId = onToolUseEvent(
       SESSION,

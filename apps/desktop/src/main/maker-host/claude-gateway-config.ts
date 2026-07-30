@@ -24,6 +24,14 @@ import type { Catalog } from '@cindy/model-providers';
 export const ANTHROPIC_DIRECT_UPSTREAM = 'https://api.anthropic.com';
 
 /**
+ * provider-oauth 形态 cc spawn 的占位 API key(真实凭证由 proxy 在路由时注入)。
+ * 定义放本 leaf 模块:auth-adapters(写入 env)与 anthropic-compat-proxy-host
+ * (路由时识别「这不是可用凭证」,#831)都要消费,而 auth-adapters 已 import
+ * proxy-host,反向 import 会成环。
+ */
+export const CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY = 'xdt-provider-auth-placeholder-key';
+
+/**
  * 前缀兼容地板(见文件头)。新增 Anthropic 家族名**不需要**改这里——
  * 加进 OSS 目录 anthropic 供应商名下即可;此列表只为历史裸别名与目录失效兜底而存在。
  */

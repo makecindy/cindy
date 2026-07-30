@@ -102,6 +102,85 @@ describe('createResponsesHandler', () => {
     expect(seen[0].body.service_tier).toBeUndefined();
   });
 
+  it('上游 200 但整流零事件(非 SSE 正文)→ 合成带正文前缀的 error 事件而非空 200,并留 warn(#941)', async () => {
+    const warns: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('{"error":{"message":"prompt too large for context window"}}'));
+          c.close();
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )));
+    const handler = createResponsesHandler({
+      providers: [providerConfig()],
+      logger: { warn: (msg) => warns.push(msg) },
+    });
+    const r = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [] });
+    expect(r.status).toBe(200);
+    expect(r.text).toContain('event: error');
+    expect(r.text).toContain('no translatable SSE events');
+    // 上游正文前缀进错误信息:真实错误不再被空 200 掩盖。
+    expect(r.text).toContain('prompt too large for context window');
+    expect(warns).toContain('upstream 2xx with non-SSE content-type');
+    expect(warns).toContain('upstream stream yielded no translatable events');
+  });
+
+  it('content-type 判定大小写不敏感:Text/Event-Stream 不触发 non-SSE warn', async () => {
+    const warns: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(sse(OK_SSE), {
+      status: 200,
+      headers: { 'content-type': 'Text/Event-Stream; charset=utf-8' },
+    })));
+    const handler = createResponsesHandler({
+      providers: [providerConfig()],
+      logger: { warn: (msg) => warns.push(msg) },
+    });
+    const r = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [] });
+    expect(r.text).toContain('message_stop');
+    expect(warns).not.toContain('upstream 2xx with non-SSE content-type');
+  });
+
+  it('已写出部分事件后断流 → error 事件收尾,不补 message_stop 伪装正常完成(#941 review)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      (() => {
+        // pull 式逐块投递:start 里 enqueue 后立即 error 会按 Streams 规范丢弃整个
+        // 未读队列,前面的块根本到不了 handler。
+        let step = 0;
+        return new ReadableStream<Uint8Array>({
+          pull(c) {
+            if (step < 3) {
+              c.enqueue(new TextEncoder().encode(`data: ${OK_SSE[step]}\n\n`));
+              step += 1;
+            } else {
+              c.error(new Error('socket reset'));
+            }
+          },
+        });
+      })(),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    )));
+    const handler = createResponsesHandler({ providers: [providerConfig()] });
+    const r = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [] });
+    expect(r.text).toContain('message_start');
+    expect(r.text).toContain('upstream stream error: socket reset');
+    // 截断响应必须以 error 事件收尾,不能以 message_stop 伪装正常完成。
+    expect(r.text).not.toContain('message_stop');
+  });
+
+  it('上游流内 OpenAI 风格 error 帧 → 透传为 Anthropic error 事件,不合成零事件错误(#941)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      sse([JSON.stringify({ error: { message: 'boom', code: 'server_error' } })]),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    )));
+    const handler = createResponsesHandler({ providers: [providerConfig()] });
+    const r = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [] });
+    expect(r.status).toBe(200);
+    expect(r.text).toContain('[server_error] boom');
+    expect(r.text).not.toContain('no translatable SSE events');
+  });
+
   it('wire model 带 [1m] 后缀 → 上游 model 剥后缀(目录 1M 模型经 toSdkModelString 会带)', async () => {
     const seen: Array<{ body: Record<string, unknown> }> = [];
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
@@ -113,6 +192,34 @@ describe('createResponsesHandler', () => {
     const r = await invoke(handler, { model: 'xai/grok-4.3[1m]', messages: [] });
     expect(r.status).toBe(200);
     expect(seen[0].body.model).toBe('grok-4.3');
+  });
+
+  it('provider.serverSideTools 按去前缀 model 决定,并随请求下发给上游', async () => {
+    const seen: Array<{ body: Record<string, unknown> }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push({ body: JSON.parse(String(init.body)) });
+      return new Response(sse(OK_SSE), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }));
+    const askedModels: string[] = [];
+    const handler = createResponsesHandler({
+      providers: [providerConfig({
+        prefix: 'xai/',
+        serverSideTools: (model) => {
+          askedModels.push(model);
+          return model.startsWith('grok-code') ? [] : [{ type: 'x_search' }];
+        },
+      })],
+    });
+
+    await invoke(handler, { model: 'xai/grok-4.5', messages: [] });
+    expect(seen[0].body.tools).toEqual([{ type: 'x_search' }]);
+    // 门控拿到的是剥掉前缀与 [1m] 后缀的真实 model id。
+    expect(askedModels).toEqual(['grok-4.5']);
+
+    // 编码模型:门控返回空 → 完全不发 tools。
+    seen.length = 0;
+    await invoke(handler, { model: 'xai/grok-code-fast', messages: [] });
+    expect(seen[0].body.tools).toBeUndefined();
   });
 
   it('count_tokens 本地估算;无匹配 provider → 400;buildHeaders 抛错 → 502', async () => {
