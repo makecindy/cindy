@@ -250,7 +250,12 @@ export function CCAgentSidebarUpper() {
   const filter = useSidebarFilter();
   const includeArchived = filter.status;
   const sessionsHook = useCCSessions({ includeArchived });
-  const { sessions: allSessionsForAttention } = useCCSessions({ includeArchived: 'all' });
+  // attention 标记 / 搜索用的全量桶让出首屏：它与上面那条 list 抢同一个单线程 DB worker，
+  // 而用户在等的是上面那条。deferred 只改发起时机，数据到达后照常补上标记。
+  const { sessions: allSessionsForAttention } = useCCSessions({
+    includeArchived: 'all',
+    deferred: true,
+  });
   const searchProjectSessions = useMemo(
     () => allSessionsForAttention.filter((s) => !isOrcaWorkerSession(s)),
     [allSessionsForAttention],
