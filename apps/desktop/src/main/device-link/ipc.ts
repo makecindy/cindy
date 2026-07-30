@@ -124,8 +124,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     },
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
-    apiFetch: (path, opts) =>
-      serverApiFetch(path, { ...opts, baseUrl: deviceLinkApiBase }),
+    apiFetch: (path, opts) => serverApiFetch(path, { ...opts, baseUrl: deviceLinkApiBase }),
     openLink: openRemoteLink,
     closeLink: closeRemoteLink,
     invoke: (...args) => {
@@ -313,7 +312,10 @@ function reconcileDeviceNames(
   return { devices };
 }
 
-function assertControlTargetEnabled(deps: Pick<DeviceLinkIpcDeps, 'getState'>, deviceId: string): void {
+function assertControlTargetEnabled(
+  deps: Pick<DeviceLinkIpcDeps, 'getState'>,
+  deviceId: string,
+): void {
   if (deps.getState().disabledControlDeviceIds?.includes(deviceId)) {
     throwIpcError('DEVICE_LINK_CONTROL_DISABLED', 'device control is disabled locally');
   }
@@ -393,7 +395,10 @@ export function handleDisconnectAll(deps: DeviceLinkIpcDeps): { ok: true } {
   return { ok: true };
 }
 
-export async function handleRevoke(deps: DeviceLinkIpcDeps, deviceId: unknown): Promise<{ ok: true }> {
+export async function handleRevoke(
+  deps: DeviceLinkIpcDeps,
+  deviceId: unknown,
+): Promise<{ ok: true }> {
   if (typeof deviceId !== 'string' || !deviceId.trim()) {
     throwIpcError('INVALID_PARAMS', 'deviceId is required');
   }
@@ -401,7 +406,10 @@ export async function handleRevoke(deps: DeviceLinkIpcDeps, deviceId: unknown): 
   return { ok: true };
 }
 
-export async function handleRestore(deps: DeviceLinkIpcDeps, deviceId: unknown): Promise<{ ok: true }> {
+export async function handleRestore(
+  deps: DeviceLinkIpcDeps,
+  deviceId: unknown,
+): Promise<{ ok: true }> {
   if (typeof deviceId !== 'string' || !deviceId.trim()) {
     throwIpcError('INVALID_PARAMS', 'deviceId is required');
   }
@@ -521,10 +529,7 @@ export async function handleInvoke(
   if (result.error.code === 'IPC_ERROR') {
     throw new Error(result.error.message);
   }
-  throwIpcError(
-    DEVICE_LINK_CODE_MAP[result.error.code] ?? 'INTERNAL',
-    result.error.message,
-  );
+  throwIpcError(DEVICE_LINK_CODE_MAP[result.error.code] ?? 'INTERNAL', result.error.message);
 }
 
 /** subscribe/unsubscribe 共用:校验 + 解包 invoke-result(失败按隧道错误码抛给 renderer)。 */
@@ -810,7 +815,11 @@ export async function handleMirrorCachePutMessages(
   deviceId: unknown,
   sessionId: unknown,
   messages: unknown,
-  enqueueRetry: (root: string, paths?: readonly string[]) => Promise<void> = enqueuePurge,
+  enqueueRetry: (
+    root: string,
+    paths?: readonly string[],
+    barriers?: readonly string[],
+  ) => Promise<void> = enqueuePurge,
   expectedInvalidation?: unknown,
 ): Promise<{ ok: true; invalidation?: number }> {
   const device = requireCacheId(deviceId, 'deviceId');
@@ -857,7 +866,11 @@ export async function handleMirrorCacheGetSessionList(
 export async function handleMirrorCachePutSessionList(
   cache: MirrorCache,
   devices: unknown,
-  enqueueRetry: (root: string, paths?: readonly string[]) => Promise<void> = enqueuePurge,
+  enqueueRetry: (
+    root: string,
+    paths?: readonly string[],
+    barriers?: readonly string[],
+  ) => Promise<void> = enqueuePurge,
 ): Promise<{ ok: true }> {
   if (!Array.isArray(devices)) throwIpcError('INVALID_PARAMS', 'devices must be an array');
   // 先把外层数组截断,再逐台把 sessions 截断,最后对整批做结构 / 字节预算。
@@ -893,12 +906,18 @@ export async function handleMirrorCachePutSessionList(
 /** 清理类失败 → 登记持久重试;其它错误照常抛。 */
 async function queuePurgeRetry(
   err: unknown,
-  enqueueRetry: (root: string, paths?: readonly string[]) => Promise<void>,
+  enqueueRetry: (
+    root: string,
+    paths?: readonly string[],
+    barriers?: readonly string[],
+  ) => Promise<void>,
   where: string,
 ): Promise<void> {
   if (!(err instanceof MirrorCachePurgeError)) throw err;
   log.error(`${where} left ${err.remaining.length} path(s) behind; queued for retry`, err);
-  await enqueueRetry(err.root, err.remaining).catch((queueErr: unknown) => {
+  // barriers = 自增失败的作废计数器 key:队列在补删前替我们自增,否则"内容取自清理之前、
+  // put 迟到"的写入会在消化之后通过比对(见 MirrorCachePurgeError.barriers)。
+  await enqueueRetry(err.root, err.remaining, err.barriers).catch((queueErr: unknown) => {
     log.error(`failed to queue ${where} purge retry`, queueErr);
   });
 }
@@ -915,7 +934,11 @@ async function queuePurgeRetry(
 export async function handleMirrorCacheClear(
   cache: MirrorCache,
   deviceId: unknown,
-  enqueueRetry: (root: string, paths?: readonly string[]) => Promise<void> = enqueuePurge,
+  enqueueRetry: (
+    root: string,
+    paths?: readonly string[],
+    barriers?: readonly string[],
+  ) => Promise<void> = enqueuePurge,
 ): Promise<{ ok: true }> {
   const device = requireCacheId(deviceId, 'deviceId');
   try {
@@ -960,10 +983,12 @@ export async function retryUnsubscribeAfterWindowGone(
 // ─── 注册(Electron adapter)──────────────────────────────────────────────────
 
 export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): void {
-  const gated = <T extends unknown[]>(handler: (...args: T) => unknown) => (...args: T) => {
-    requireDeviceLinkCapability();
-    return handler(...args);
-  };
+  const gated =
+    <T extends unknown[]>(handler: (...args: T) => unknown) =>
+    (...args: T) => {
+      requireDeviceLinkCapability();
+      return handler(...args);
+    };
   // Keep the local keep-awake setting available without a Cindy account. The
   // setting is local-only and does not expose any remote-control capability.
   ipcMain.handle(DEVICE_LINK_INVOKE.GET_STATE, () => handleGetState(deps));
@@ -978,7 +1003,10 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     const p = (payload ?? {}) as { deviceId?: unknown; enabled?: unknown };
     return handleSetDeviceControlEnabled(deps, p.deviceId, p.enabled);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.LIST_DEVICES, gated(() => handleListDevices(deps)));
+  ipcMain.handle(
+    DEVICE_LINK_INVOKE.LIST_DEVICES,
+    gated(() => handleListDevices(deps)),
+  );
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; name?: unknown };
@@ -1017,7 +1045,8 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       for (const { deviceId, topics } of recordWindowGone(windowId)) {
         // 窗口已销毁、无 ref 可恢复 → 用有限退避主动重试,堵住 unsubscribe 一次失败后被控端
         // 对已无 UI 订阅的 topic 持续推送的泄漏(见 retryUnsubscribeAfterWindowGone)。
-        if (topics.length > 0) void retryUnsubscribeAfterWindowGone(deps.unsubscribe, deviceId, topics);
+        if (topics.length > 0)
+          void retryUnsubscribeAfterWindowGone(deps.unsubscribe, deviceId, topics);
       }
     });
   };

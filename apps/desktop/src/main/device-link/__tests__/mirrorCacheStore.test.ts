@@ -1118,6 +1118,27 @@ describe('会话级作废计数(跨窗口 / 跨进程)', () => {
     expect(await c.readMessages('dev-1', 'sess-2')).toEqual([]);
   });
 
+  it('空写的计数自增失败 → 抛错时带上待补自增的会话 key(交给 purge 队列修屏障)', async () => {
+    // review(codex P1):只登记文件不够 —— 队列删掉文件、扔掉记录之后,一笔"内容取自清理之前、
+    // put 迟到"的写入手里那份会话计数仍与盘上一致,照样通过比对。账号级顶替也不行(账号基线是
+    // put 开始时才采样的),所以要把**具体的 key** 一起持久化。
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    const sessionKey = messageFileName('dev-1', 'sess-1').replace(/\.json$/, '');
+    const markDir = path.join(`${root}.control`, 'cleared');
+    await fsp.mkdir(markDir, { recursive: true });
+    await fsp.writeFile(path.join(markDir, sessionKey), 'corrupted', 'utf8');
+
+    const err = await c.writeMessages('dev-1', 'sess-1', []).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(MirrorCachePurgeError);
+    expect((err as MirrorCachePurgeError).barriers).toEqual([sessionKey]);
+    // 屏障没落下去就不删数据(宁可缓存暂留,也不要"删了却没有屏障")。
+    expect(fs.existsSync(path.join(messagesDir(), messageFileName('dev-1', 'sess-1')))).toBe(true);
+  });
+
   it('计数自增是原子落位(不留 .tmp、不出现空内容窗口)', async () => {
     const c = cache();
     await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);

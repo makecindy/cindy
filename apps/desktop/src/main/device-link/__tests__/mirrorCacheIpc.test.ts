@@ -42,7 +42,10 @@ import { MirrorCachePurgeError, type MirrorCache } from '../mirrorCacheStore';
 function fakeCache() {
   return {
     readMessages: vi.fn(async () => [{ id: 'm1' }]),
-    readMessagesWithInvalidation: vi.fn(async () => ({ messages: [{ id: 'm1' }], invalidation: 3 })),
+    readMessagesWithInvalidation: vi.fn(async () => ({
+      messages: [{ id: 'm1' }],
+      invalidation: 3,
+    })),
     writeMessages: vi.fn(async () => ({ invalidation: 3 })),
     readSessionList: vi.fn(async () => [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }]),
     writeSessionList: vi.fn(async () => undefined),
@@ -156,9 +159,9 @@ describe('payload 有界校验', () => {
   it('循环引用不会让 handler 抛错(丢弃那条即可)', async () => {
     const cyclic: Record<string, unknown> = { id: 'cyc', clientId: 'c-cyc' };
     cyclic.self = cyclic;
-    await expect(
-      handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [cyclic]),
-    ).resolves.toEqual({ ok: true, invalidation: 3 });
+    await expect(handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [cyclic])).resolves.toEqual(
+      { ok: true, invalidation: 3 },
+    );
     expect(cache.writeMessages.mock.calls[0]?.[2]).toEqual([]);
   });
 
@@ -336,7 +339,9 @@ describe('清理失败登记重试', () => {
       handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [], enqueue),
     ).resolves.toEqual({ ok: true });
 
-    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck);
+    // 第三个参数是待补自增的作废屏障 key(见 MirrorCachePurgeError.barriers);这些用例造的
+    // 错误没带 key,于是传空数组。
+    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck, []);
   });
 
   it('列表快照的删除类失败 → 登记进 purge 队列,IPC 仍返回 ok', async () => {
@@ -346,9 +351,13 @@ describe('清理失败登记重试', () => {
     );
     const enqueue = vi.fn(async () => undefined);
 
-    await expect(handleMirrorCachePutSessionList(cache, [], enqueue)).resolves.toEqual({ ok: true });
+    await expect(handleMirrorCachePutSessionList(cache, [], enqueue)).resolves.toEqual({
+      ok: true,
+    });
 
-    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck);
+    // 第三个参数是待补自增的作废屏障 key(见 MirrorCachePurgeError.barriers);这些用例造的
+    // 错误没带 key,于是传空数组。
+    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck, []);
   });
 
   it('写入的非 purge 类错误照常抛出', async () => {
@@ -410,11 +419,15 @@ describe('clear', () => {
 
     await expect(handleMirrorCacheClear(cache, 'dev-1', enqueue)).resolves.toEqual({ ok: true });
 
-    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck);
+    // 第三个参数是待补自增的作废屏障 key(见 MirrorCachePurgeError.barriers);这些用例造的
+    // 错误没带 key,于是传空数组。
+    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck, []);
   });
 
   it('登记重试本身失败也不让 IPC 失败(已记 error,清理是 best-effort)', async () => {
-    cache.clearDevice.mockRejectedValueOnce(new MirrorCachePurgeError('/data/owners/x', ['/a'], null));
+    cache.clearDevice.mockRejectedValueOnce(
+      new MirrorCachePurgeError('/data/owners/x', ['/a'], null),
+    );
     const enqueue = vi.fn(async () => {
       throw new Error('userData read-only');
     });

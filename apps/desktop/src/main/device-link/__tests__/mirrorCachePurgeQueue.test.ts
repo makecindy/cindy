@@ -245,6 +245,51 @@ describe('文件级条目(clearDevice 删不掉时用)', () => {
     expect(barrierAtFirstDelete).toEqual([4]);
   });
 
+  // review(codex P1):只自增账号级不够 —— 会话令牌是在**远端请求发起时**取的,而账号基线是在
+  // put 开始时才采样(已在自增之后),两项都会"对上"。必须把当初自增失败的**那个 key** 持久化。
+  it('登记了具体屏障 key 时自增它们(不是拿账号级顶替)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const target = path.join(root, 'messages', 'a.json');
+    const cleared = path.join(`${root}.control`, 'cleared');
+    await fsp.mkdir(cleared, { recursive: true });
+    await fsp.writeFile(path.join(cleared, 'sess-key'), '5', 'utf8');
+    await fsp.writeFile(path.join(cleared, '_account'), '3', 'utf8');
+
+    await enqueuePurge(root, [target], ['sess-key']);
+    expect((await __testing.readQueue())[0]?.barriers).toEqual(['sess-key']);
+    expect(await drainPurgeQueue()).toEqual({ purged: 1, pending: 0 });
+
+    expect(Number.parseInt(await fsp.readFile(path.join(cleared, 'sess-key'), 'utf8'), 10)).toBe(6);
+    // 账号级不该被顺带改动(它不是这条记录要修的东西)。
+    expect(Number.parseInt(await fsp.readFile(path.join(cleared, '_account'), 'utf8'), 10)).toBe(3);
+  });
+
+  it('屏障 key 带路径结构 / 超长 → 被过滤掉(队列文件是不可信 JSON)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const outside = path.join(userData, 'owners', 'owner-2', 'victim');
+    await fsp.mkdir(path.dirname(outside), { recursive: true });
+    await fsp.writeFile(outside, 'keep-me', 'utf8');
+
+    await enqueuePurge(
+      root,
+      [path.join(root, 'messages', 'a.json')],
+      ['../../owner-2/victim', 'a/b', 'x'.repeat(200), '', 'ok_key-1'],
+    );
+    expect((await __testing.readQueue())[0]?.barriers).toEqual(['ok_key-1']);
+
+    expect(await drainPurgeQueue()).toEqual({ purged: 1, pending: 0 });
+    // 越界的 key 没有变成写入目标。
+    expect(await fsp.readFile(outside, 'utf8')).toBe('keep-me');
+  });
+
+  it('同一条记录重复登记时屏障 key 取并集(不丢先前待修的)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const target = path.join(root, 'messages', 'a.json');
+    await enqueuePurge(root, [target], ['sess-a']);
+    await enqueuePurge(root, [target], ['sess-b']);
+    expect((await __testing.readQueue())[0]?.barriers).toEqual(['sess-a', 'sess-b']);
+  });
+
   it('屏障修不好(计数读不出数字)→ 条目留着重试,不当成清干净了', async () => {
     const root = await makeOwnerCache('owner-1');
     const target = path.join(root, 'messages', 'a.json');

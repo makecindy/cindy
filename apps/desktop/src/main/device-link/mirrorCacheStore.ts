@@ -326,6 +326,16 @@ export class MirrorCachePurgeError extends Error {
     readonly root: string,
     readonly remaining: string[],
     readonly cause: unknown,
+    /**
+     * 还没落盘的**作废屏障** key(`cleared/` 下的计数器名)。
+     *
+     * 这些 key 的自增失败了 —— 光把残留文件登记进 purge 队列不够:队列删掉文件、扔掉记录之后,
+     * 一笔"内容取自清理之前、put 迟到"的写入手里那份计数仍然与盘上一致,于是通过比对、把已清掉
+     * 的正文重建回来。所以要连"该自增哪个 key"一起持久化,由队列在补删前替我们自增
+     * (review: codex P1)。**必须是具体的那个 key**:账号级计数救不了它 —— 会话令牌是在远端请求
+     * 发起时取的,而账号基线是在 put 开始时才采样的(已在自增之后),两项都会"对上"。
+     */
+    readonly barriers: string[] = [],
   ) {
     super(`device-link mirror cache purge incomplete: ${remaining.length} file(s) remain`);
     this.name = 'MirrorCachePurgeError';
@@ -753,12 +763,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // (review: codex P1)。所以这里先 bump 一次(挡住"内容取自清理之前"的写入),
       // 收尾再 bump 一次(挡住"内容取自清理进行中"的写入),两次都失败即视为没清完。
       let barrierPersisted = true;
+      const stuckBarriers: string[] = [];
       try {
         await bumpClearCounters(rootAtStart, id);
       } catch (err) {
         barrierPersisted = false;
         log.error(`mirror cache: failed to persist clear intent for ${id.slice(0, 8)}`, err);
         stuck.push(rootAtStart);
+        stuckBarriers.push(deviceClearKey(id), CLEARED_ANY);
       }
 
       /** 扫一轮该设备的消息文件(含 .tmp 残留)。返回删不掉的路径。 */
@@ -837,7 +849,10 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         await bumpClearCounters(rootAtStart, id);
       } catch (err) {
         log.error(`mirror cache: failed to persist clear barrier for ${id.slice(0, 8)}`, err);
-        if (barrierPersisted) stuck.push(rootAtStart);
+        if (barrierPersisted) {
+          stuck.push(rootAtStart);
+          stuckBarriers.push(deviceClearKey(id), CLEARED_ANY);
+        }
       }
       // 本进程内再自增一次代际:清理**结束**时作废所有更早发起的写入。时间戳标记是跨进程
       // 手段,毫秒精度下"清理在同一毫秒内跑完"时它挡不住(测试与小目录下常见);代际比对
@@ -853,7 +868,9 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 结束。抛出来让调用方登记重试,而不是把失败咽下去。
       // 去重:两轮扫描会把同一个删不掉的文件报两次。
       const remaining = [...new Set(stuck)];
-      if (remaining.length > 0) throw new MirrorCachePurgeError(rootAtStart, remaining, null);
+      if (remaining.length > 0) {
+        throw new MirrorCachePurgeError(rootAtStart, remaining, null, [...new Set(stuckBarriers)]);
+      }
     });
   }
 
@@ -921,7 +938,9 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
             try {
               await bumpClearedCounter(rootAtStart, sessionKey);
             } catch (err) {
-              throw new MirrorCachePurgeError(rootAtStart, [file], err);
+              // 连"该补自增哪个 key"一起交给队列(见 MirrorCachePurgeError.barriers):
+              // 只登记文件的话,一笔取自清理之前、put 迟到的写入会在消化之后通过比对。
+              throw new MirrorCachePurgeError(rootAtStart, [file], err, [sessionKey]);
             }
             const invalidation = numericCounter(await readClearCounter(rootAtStart, sessionKey));
             await serializeWrite(file, async () => {
@@ -1137,7 +1156,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           await bumpClearedCounter(root, CLEARED_ACCOUNT);
         } catch (err) {
           purgeAllInFlight -= 1; // 下面的 finally 不会执行(还没进 try)
-          throw new MirrorCachePurgeError(root, [root], err);
+          throw new MirrorCachePurgeError(root, [root], err, [CLEARED_ACCOUNT]);
         }
         let failure: MirrorCachePurgeError | null = null;
         try {
@@ -1162,7 +1181,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         try {
           await bumpClearedCounter(root, CLEARED_ACCOUNT);
         } catch (err) {
-          failure ??= new MirrorCachePurgeError(root, [root], err);
+          failure ??= new MirrorCachePurgeError(root, [root], err, [CLEARED_ACCOUNT]);
         }
         if (failure) throw failure;
       });

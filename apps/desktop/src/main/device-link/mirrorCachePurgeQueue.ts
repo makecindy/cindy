@@ -50,6 +50,14 @@ interface PurgeEntry {
    * 缺省 / 空 = 删整棵 root(clearAll 失败)。
    */
   paths?: string[];
+  /**
+   * 还没落盘的**作废屏障** key(`<root>.control/cleared/` 下的计数器名)。
+   * 消化时先把它们各自自增一次,再删数据 —— 那些 key 的自增当初失败了,只删文件的话,一笔
+   * "内容取自清理之前、put 迟到"的写入会在记录被移除之后通过比对(review: codex P1)。
+   * 必须是**具体的 key**:账号级计数救不了会话级的洞 —— 会话令牌在远端请求发起时取,
+   * 而账号基线在 put 开始时才采样(已在自增之后),两项都会"对上"。
+   */
+  barriers?: string[];
   /** 首次记录时间(毫秒),仅供排查。 */
   since: number;
   /** 已经尝试过多少次。 */
@@ -129,6 +137,25 @@ export function isPurgableRoot(root: string, ownersRootPath: string): boolean {
   // (review: copilot)。
   const parts = rel.split(path.sep);
   return parts.length === 2 && parts[1] === MIRROR_CACHE_DIR_NAME;
+}
+
+/** 单个屏障 key 的上限与形状:它会被拼进 `cleared/` 下的文件名,必须不含任何路径结构。 */
+const MAX_BARRIERS_PER_ENTRY = 16;
+const BARRIER_KEY_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * 过滤屏障 key。队列文件是普通 JSON、随时可能被改写 —— 这些 key 会变成
+ * `<root>.control/cleared/<key>` 的写入目标,所以只放行「纯字母数字 / 下划线 / 连字符」,
+ * 分隔符、`..`、NUL 一律拒掉(与 isPurgablePath 同一条理由:文件内容不能当授权)。
+ */
+function safeBarrierKeys(keys: readonly string[] | undefined): string[] {
+  const out: string[] = [];
+  for (const key of keys ?? []) {
+    if (typeof key !== 'string' || !BARRIER_KEY_RE.test(key)) continue;
+    if (!out.includes(key)) out.push(key);
+    if (out.length >= MAX_BARRIERS_PER_ENTRY) break;
+  }
+  return out;
 }
 
 /** 文件级条目的每个路径都必须落在它自己的 root 之内(顺带满足 owners 约束)。 */
@@ -262,6 +289,7 @@ async function readQueueFile(file: string): Promise<PurgeEntry[] | null> {
             : undefined;
           return {
             root: entry.root,
+            barriers: safeBarrierKeys(Array.isArray(entry.barriers) ? entry.barriers : undefined),
             // 文件级清单超上限(理论上写不出来,只可能来自被改写的队列文件):降级成整根条目
             // 而不是截断 —— 截断会静默漏掉待清路径,整根是超集(见 compactEntries)。
             paths: paths && paths.length > MAX_PATHS_PER_ENTRY ? undefined : paths,
@@ -403,13 +431,18 @@ async function commitQueueFile(tmp: string, file: string): Promise<void> {
  *
  * 内存表**先**记(保证本进程内一定能重试),再尝试落盘;落盘失败照常抛给调用方。
  */
-export async function enqueuePurge(root: string, paths?: readonly string[]): Promise<void> {
-  return withQueueLock((held) => enqueuePurgeLocked(root, paths, held));
+export async function enqueuePurge(
+  root: string,
+  paths?: readonly string[],
+  barriers?: readonly string[],
+): Promise<void> {
+  return withQueueLock((held) => enqueuePurgeLocked(root, paths, barriers, held));
 }
 
 async function enqueuePurgeLocked(
   root: string,
   paths?: readonly string[],
+  barriers?: readonly string[],
   lockHeld = true,
 ): Promise<void> {
   const base = ownersRoot();
@@ -437,12 +470,23 @@ async function enqueuePurgeLocked(
 
   let persistError: unknown = null;
   for (const chunk of chunks) {
-    const entry: PurgeEntry = { root, paths: chunk, since: Date.now(), attempts: 1 };
+    const entry: PurgeEntry = {
+      root,
+      paths: chunk,
+      barriers: safeBarrierKeys(barriers),
+      since: Date.now(),
+      attempts: 1,
+    };
+    if (entry.barriers?.length === 0) delete entry.barriers;
     const key = entryKey(entry);
     const existing = (await readQueue()).find((candidate) => entryKey(candidate) === key);
     if (existing) {
       entry.since = existing.since;
       entry.attempts = existing.attempts + 1;
+      // 屏障 key 取并集:同一条记录先因"会话计数自增失败"登记、后又因别的原因重复登记时,
+      // 不能把先前那个待修的 key 丢掉(丢了就等于漏修屏障)。
+      const merged = safeBarrierKeys([...(existing.barriers ?? []), ...(entry.barriers ?? [])]);
+      if (merged.length > 0) entry.barriers = merged;
     }
     // 内存兜底先落:即使接下来落盘失败,本进程后续的 drain 仍会重试。
     memoryQueue.set(key, entry);
@@ -533,7 +577,12 @@ async function drainPurgeQueueLocked(
       // 计数)会在消化之后通过比对,把已清掉的正文重建回来(review: codex P1)。
       // 顺序同 clearDevice:意图先落盘、再删数据 —— 自增之后才捕获内容的写入拿的是新值,
       // 而"内容取自自增之前"的写入一律失配。修不好就整条留着重试(读路径同时保持被挡)。
-      await bumpClearedCounter(entry.root, CLEARED_ACCOUNT);
+      // 优先自增**当初失败的那些 key**(会话级 / 设备级);没有登记时(整根条目、老版本条目)
+      // 退回账号级 —— 它是 clearAll 失败那条路径的正解。
+      const barrierKeys = safeBarrierKeys(entry.barriers);
+      for (const key of barrierKeys.length > 0 ? barrierKeys : [CLEARED_ACCOUNT]) {
+        await bumpClearedCounter(entry.root, key);
+      }
       if (!classified.wholeRoot && entry.paths && entry.paths.length > 0) {
         // 逐个删成功才算清掉;剩下的继续留在队列里。
         //
