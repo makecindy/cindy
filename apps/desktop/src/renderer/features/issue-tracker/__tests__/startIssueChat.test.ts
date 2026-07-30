@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const saveDraft = vi.fn();
-const patchDraft = vi.fn();
+const resetDraftWorkspaceTargets = vi.fn();
 
 vi.mock('@/lib/composerDraftStore', () => ({
   saveDraft: (...args: unknown[]) => saveDraft(...args),
@@ -17,7 +17,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 
 vi.mock('@/state/newMakerDraft', () => ({
-  patchDraft: (...args: unknown[]) => patchDraft(...args),
+  resetDraftWorkspaceTargets: () => resetDraftWorkspaceTargets(),
 }));
 
 const { ISSUE_COMMAND_DRAFT_TEXT, prefillIssueCommandDraft } = await import('../lib/startIssueChat');
@@ -25,7 +25,7 @@ const { ISSUE_COMMAND_DRAFT_TEXT, prefillIssueCommandDraft } = await import('../
 describe('prefillIssueCommandDraft', () => {
   beforeEach(() => {
     saveDraft.mockClear();
-    patchDraft.mockClear();
+    resetDraftWorkspaceTargets.mockClear();
   });
 
   it('把 /issue 预填进 New Maker 草稿,不带附件', () => {
@@ -55,13 +55,10 @@ describe('prefillIssueCommandDraft', () => {
     expect(match?.[2]).toBe('列表刷新按钮点了没反应');
   });
 
-  it('重置远程目标回本机', () => {
+  it('走共享的工作区复位入口(而不是手写字段清单)', () => {
+    // 手写清单正是漏掉 extraDirs 目录授权的原因;复位语义与字段覆盖由
+    // newMakerDraftWorkspaceReset.test.ts 单独钉住。
     prefillIssueCommandDraft();
-    expect(patchDraft).toHaveBeenCalledWith({
-      workingDir: null,
-      remoteHostId: null,
-      deviceLinkDeviceId: null,
-      deviceLinkDeviceName: null,
-    });
+    expect(resetDraftWorkspaceTargets).toHaveBeenCalledTimes(1);
   });
 });

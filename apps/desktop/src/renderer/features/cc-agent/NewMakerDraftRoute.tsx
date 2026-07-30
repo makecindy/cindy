@@ -75,6 +75,7 @@ import {
   patchDraft,
   patchCollab,
   patchCurrentVendorPrefs,
+  resetDraftWorkspaceTargets,
   getFastModeForModel,
   setFastModeForModel,
   setEffortForModel,
@@ -406,12 +407,11 @@ function getCurrentRoutePath(): string {
 
 /**
  * 发送 / 建目标成功后调用:把草稿 store 的工作区选择复位到默认(对话态、无额外目录)。
- * workingDir=null 会通过 patchDraft 的兜底级联清掉 remoteHostId / deviceLink / collab.enabled,
- * 所以这里只需显式清 workingDir + extraDirs 两个字段。vendor / lastByVendor / fastModeByModel
- * 等模型/agent 层偏好保持不变(那是"我常用哪个"的记忆,和"这次要跑在哪"的工作区选择正交)。
+ * 具体清哪些字段、为什么只需两个,见 state/newMakerDraft 的 resetDraftWorkspaceTargets ——
+ * 该语义已提到 store 侧共享,其它「另起一段干净对话」的入口也走同一个函数。
  */
 function resetDraftWorkspaceAfterSend(): void {
-  patchDraft({ workingDir: null, extraDirs: [] });
+  resetDraftWorkspaceTargets();
 }
 
 /**

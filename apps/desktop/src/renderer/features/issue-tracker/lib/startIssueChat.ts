@@ -10,14 +10,17 @@
  * (`CCAgentSessionView.maybeDispatchDesktopSlashCommand`),不依赖编辑器里的
  * 命令 mark;新会话的首条 pending 消息同样经过那条识别路径。
  *
- * 同时重置草稿的远程目标(workingDir / device-link):提交反馈用的是本机的 Cindy
- * 登录态与本机插件配置,残留的远程草稿会把会话发到对端机器,issue 就成了用对端
- * 账号提交的 —— 用户在这台机器上点的按钮,结果落到另一台,不可接受。
+ * 同时把草稿的工作区目标复位成干净的本机对话态(resetDraftWorkspaceTargets),原因有两条:
+ *  1. 残留的远程目标会把会话发到对端机器,issue 就成了用对端账号提交的 —— 用户在这台
+ *     机器上点的按钮,结果落到另一台;
+ *  2. 残留的 extraDirs 是**目录读取授权**,会让这段反馈对话悄悄继承对无关本地目录的
+ *     访问权(#1103 review)。
+ * 刻意调那个共享函数而不是在这里手写字段清单 —— 手写正是上一版漏掉 extraDirs 的原因。
  */
 
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import { plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
-import { patchDraft } from '@/state/newMakerDraft';
+import { resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 
 /** 末尾留一个空格:光标停在命令后面,用户可以直接接着写描述。 */
 export const ISSUE_COMMAND_DRAFT_TEXT = '/issue ';
@@ -27,10 +30,5 @@ export function prefillIssueCommandDraft(): void {
     text: plainTextToTiptapDoc(ISSUE_COMMAND_DRAFT_TEXT),
     attachments: [],
   });
-  patchDraft({
-    workingDir: null,
-    remoteHostId: null,
-    deviceLinkDeviceId: null,
-    deviceLinkDeviceName: null,
-  });
+  resetDraftWorkspaceTargets();
 }

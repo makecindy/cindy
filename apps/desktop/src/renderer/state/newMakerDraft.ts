@@ -425,6 +425,22 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   emit();
 }
 
+/**
+ * 把草稿的「这次要跑在哪」复位成干净的本机对话态。
+ *
+ * 只需这两个字段:workingDir=null 经上面的兜底级联同时清掉 remoteHostId /
+ * deviceLink* / collab.enabled。vendor / lastByVendor / fastModeByModel 等模型偏好
+ * 保持不变(那是「我常用哪个」的记忆,与「这次跑在哪」正交)。
+ *
+ * **任何「另起一段干净对话」的入口都必须走这里,不要各自手写字段清单。**
+ * extraDirs 是单次草稿的**目录读取授权**,漏掉它会让新会话悄悄继承对无关本地目录的
+ * 访问权(#1103 review 实例:两个预填入口都手写了清单,把级联已经处理的三个字段
+ * 抄了一遍,却都漏了真正需要清的这一个)。新增工作区字段时只改这一处。
+ */
+export function resetDraftWorkspaceTargets(): void {
+  patchDraft({ workingDir: null, extraDirs: [] });
+}
+
 /** 单字段写入 collab(便捷 setter,语义比 patchDraft({ collab: ... }) 更直接)。 */
 export function patchCollab(patch: Partial<CollabDraft>): void {
   patchDraft({ collab: { ...currentDraft.collab, ...patch } });
