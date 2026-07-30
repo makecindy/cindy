@@ -10,10 +10,11 @@ export const MAX_IMAGE_BASE64_LENGTH = 5 * 1024 * 1024;
 export const TOTAL_IMAGE_BASE64_BUDGET = 20 * 1024 * 1024;
 export const MAX_INPUT_BASE64_LENGTH = 20 * 1024 * 1024;
 
-// Sharp holds the decoded input and resized output concurrently. Serialize native
-// normalization so multiple large-but-admissible images cannot multiply that peak
-// inside Electron's main process before the final request budget is enforced.
+// Sharp holds the decoded input and resized output concurrently. Keep one worker per
+// request, then additionally serialize all requests sharing the same native codec
+// instance below so large-but-admissible images cannot multiply that peak.
 const IMAGE_NORMALIZE_CONCURRENCY = 1;
+const codecNormalizeTails = new WeakMap<AnthropicImageCodec, Promise<void>>();
 const ALLOWED_IMAGE_MEDIA_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -237,6 +238,26 @@ function initialTier(newestFirstIndex: number, bias: number): number {
   return Math.min(base + Math.max(0, bias), TERMINAL_TIER);
 }
 
+async function runCodecNormalization<T>(
+  codec: AnthropicImageCodec,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = codecNormalizeTails.get(codec) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => current);
+  codecNormalizeTails.set(codec, tail);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (codecNormalizeTails.get(codec) === tail) codecNormalizeTails.delete(codec);
+  }
+}
+
 async function normalizeAtTier(
   data: string,
   mediaType: string,
@@ -254,13 +275,13 @@ async function normalizeAtTier(
   }
   for (let tier = startTier; tier <= TERMINAL_TIER; tier += 1) {
     const spec = TIER_SPECS[tier];
-    const normalized = await codec.normalize({
+    const normalized = await runCodecNormalization(codec, () => codec.normalize({
       data,
       mediaType,
       maxEdge: spec.maxEdge,
       qualities: spec.qualities,
       hardCap: spec.hardCap,
-    });
+    }));
     if (normalized && (normalized.data.length <= spec.hardCap || tier === TERMINAL_TIER)) {
       return { ...normalized, tier };
     }
