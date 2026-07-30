@@ -156,6 +156,30 @@ describe('projectProviderCatalogForBuildRegion — 图像多来源(2026-07)', ()
     expect(xd?.videoModels?.map((m) => m.id)).toEqual(['seedance-fast', 'seedance-pro']);
   });
 
+  it('非 xd 供应商 models dict 中的 mainland video 型号在 cn 区域同样被剥离', () => {
+    const thirdParty: Provider = {
+      id: 'third',
+      name: 'Third Party',
+      source: 'builtin',
+      agents: ['claude-code'],
+      auth: { method: 'oauth' },
+      routing: {},
+      models: {
+        'claude-code': [
+          { ...model('seedance-fast'), group: 'video' },
+          model('chat-model'),
+        ],
+      },
+    };
+    const base = catalog();
+    const projected = projectProviderCatalogForBuildRegion(
+      { ...base, providers: [...base.providers, thirdParty] },
+      'cn',
+    );
+    const third = projected.providers.find((p) => p.id === 'third');
+    expect(third?.models['claude-code']?.map((m) => m.id)).toEqual(['chat-model']);
+  });
+
   it('global 区域原样返回(含新来源的媒体清单)', () => {
     const gemini: Provider = {
       id: 'gemini',

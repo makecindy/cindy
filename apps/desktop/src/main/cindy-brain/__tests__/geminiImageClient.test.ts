@@ -52,18 +52,20 @@ describe('geminiImageClient', () => {
     expect('generationConfig' in without).toBe(false);
   });
 
-  it('ready = key 已配置;未配置时请求人话拒且不出网', async () => {
+  it('ready = key 已配置;null 或空白串均视为未配置(不出网)', async () => {
     const doFetch = fetchMock();
-    const channel = createGeminiImageChannel({
-      getApiKey: () => null,
-      fetchImplementation: doFetch as unknown as typeof fetch,
-    });
-    expect(channel.ready()).toBe(false);
-    const err = await channel
-      .generateImage({ model: 'gemini/gemini-3-pro-image', prompt: 'p' })
-      .catch((e: unknown) => e);
-    expect((err as Error).message).toContain('Gemini API key 未配置');
-    expect(doFetch).not.toHaveBeenCalled();
+    for (const key of [null, '', '   ']) {
+      const channel = createGeminiImageChannel({
+        getApiKey: () => key,
+        fetchImplementation: doFetch as unknown as typeof fetch,
+      });
+      expect(channel.ready()).toBe(false);
+      const err = await channel
+        .generateImage({ model: 'gemini/gemini-3-pro-image', prompt: 'p' })
+        .catch((e: unknown) => e);
+      expect((err as Error).message).toContain('Gemini API key 未配置');
+      expect(doFetch).not.toHaveBeenCalled();
+    }
   });
 
   it('安全拦截(promptFeedback.blockReason)与 key 无效(400)都是人话报错', async () => {

@@ -508,7 +508,7 @@ export function getDesktopProviderService(): ProviderService {
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(providerId),
     // 内置 API-key 供应商(如 gemini 图像来源):连接态 = key 已存(providerSecretStore)。
     builtinApiKeyConnected: (providerId) =>
-      providerId === 'gemini' ? (getProviderSecretStore().get('gemini')?.trim() ?? '') !== '' : false,
+      providerId === 'gemini' ? Boolean(getProviderSecretStore().get('gemini')?.trim()) : false,
     // 动态清单发现的失败归因：目前只有 anthropic 是「清单唯一来源是动态发现」的供应商，
     // 拉不到就是零模型 —— UI 要据此讲明失败理由，而不是一直说「正在发现」。
     //
