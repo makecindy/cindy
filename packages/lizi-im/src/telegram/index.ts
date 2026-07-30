@@ -132,8 +132,21 @@ export const TELEGRAM_DEFAULT_BEHAVIOR: TelegramBehaviorConfig = {
   replyQuoteDm: 'off',
 };
 
-const EXPRESSIVE_DONE_POOL = ['👍', '🎉', '💯'] as const;
-const EXPRESSIVE_ERROR_POOL = ['👎', '😱'] as const;
+/**
+ * 生动档变体池 — Telegram bot 可用标准 reaction 全集按语义分池(Chris:
+ * 能用的都随便用)。正/负分开是底线: 成功不能随机出 💩/🤡。选中表情在该
+ * 群被限制时(available_reactions), setMessageReaction 会 400 — 回落基础款
+ * 重试一次。
+ */
+const EXPRESSIVE_DONE_POOL = [
+  '👍', '❤', '🔥', '🥰', '👏', '😁', '🎉', '🤩', '🙏', '👌',
+  '😍', '❤‍🔥', '💯', '🤣', '⚡', '🏆', '🍾', '🤗', '🫡', '😇',
+  '🤝', '💅', '🆒', '💘', '😎', '🦄', '🕊', '🐳', '🍓', '💋',
+  '😘', '🎃', '👾', '🍌', '🌭',
+] as const;
+const EXPRESSIVE_ERROR_POOL = [
+  '👎', '😱', '😢', '💔', '😨', '🤯', '🥴', '🙈', '😐', '🗿',
+] as const;
 
 export interface TelegramIMOptions {
   /** cindy-media:// / xdt-image:// → 本地绝对路径(出站图片上传用)。 */
@@ -520,14 +533,26 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         }
       }
       const { chatId, messageId: nativeId } = decodeMessageId(messageId);
-      await api.call('setMessageReaction', {
-        chat_id: chatId,
-        message_id: Number(nativeId),
-        reaction: [{ type: 'emoji', emoji: effective }],
-        // 终态表情放大动画; 过程 ack(👀)保持安静。
-        ...(emoji === '👍' || emoji === '👎' ? { is_big: true } : {}),
-      });
-      return effective;
+      const isBig = emoji === '👍' || emoji === '👎';
+      const react = (value: string) =>
+        api.call('setMessageReaction', {
+          chat_id: chatId,
+          message_id: Number(nativeId),
+          reaction: [{ type: 'emoji', emoji: value }],
+          // 终态表情放大动画; 过程 ack(👀)保持安静。
+          ...(isBig ? { is_big: true } : {}),
+        });
+      try {
+        await react(effective);
+        return effective;
+      } catch (err) {
+        // 变体在该群被 available_reactions 限制 → 回落基础款一次。
+        if (effective !== emoji && err instanceof TelegramApiError && err.errorCode === 400) {
+          await react(emoji);
+          return emoji;
+        }
+        throw err;
+      }
     } catch {
       return null;
     }

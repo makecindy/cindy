@@ -1805,7 +1805,7 @@
         "emojiHint": {
           "off": "No emoji reactions at all.",
           "minimal": "👀 on receipt, 👍 on success, 👎 on failure.",
-          "expressive": "Finishes pick randomly from 👍🎉💯 / 👎😱 for more life."
+          "expressive": "Finishes pick randomly from the full reaction set (positive/negative pools kept separate)."
         },
         "groupQuoteLabel": "Quote the question in groups",
         "quoteOption": {

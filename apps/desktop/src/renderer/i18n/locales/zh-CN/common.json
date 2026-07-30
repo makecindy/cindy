@@ -1804,7 +1804,7 @@
         "emojiHint": {
           "off": "不放任何表情回应。",
           "minimal": "收到消息 👀，完成 👍，失败 👎。",
-          "expressive": "完成/失败从 👍🎉💯 / 👎😱 中随机挑选，更有生气。"
+          "expressive": "完成/失败从全量可用表情里随机挑（正负分池，成功不会随机出翻车表情）。"
         },
         "groupQuoteLabel": "群里回复时引用提问",
         "quoteOption": {
