@@ -377,19 +377,6 @@ export default function NewRemoteSessionScreen() {
   // create() 里 await 在途图片上传后闭包里的 attachments 已是旧值,经 ref 读最新列表。
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
-  // 乐观创建失败后「返回编辑」的草稿回填:会话页 stash → 跳回本页 → 挂载时 drain。
-  // 附件是已上传完成的引用,原样回列即可继续使用。
-  useEffect(() => {
-    const stashed = drainStashedNewSessionDraft();
-    if (!stashed) return;
-    setDraft(stashed.draft);
-    setAttachments([...stashed.attachments]);
-    if (stashed.deviceId) {
-      setSelectedDeviceId(stashed.deviceId);
-      setSelectedDeviceName(stashed.deviceName || stashed.deviceId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅挂载时领取一次信箱
-  }, []);
   // 相册资产 → 已上传附件 id 的映射(缩略图勾选态真相)。
   const [mediaAssetAttachments, setMediaAssetAttachments] = useState<Record<string, string>>({});
   // 待选相册资产(按选中顺序;Cursor 式两段提交,底部「加入对话」统一上传)。
@@ -399,6 +386,22 @@ export default function NewRemoteSessionScreen() {
   // composer 托盘里正被全屏查看的图片附件 id(null = 关闭)。
   const [composerPreviewAttachmentId, setComposerPreviewAttachmentId] = useState<string | null>(null);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  // 乐观创建失败后「返回编辑」的草稿回填:会话页 stash → 跳回本页 → 挂载时 drain。
+  // 附件是已上传完成的引用,原样回列即可继续使用;notice 是「有内容没能带回」的告知
+  // (创建期间发出的消息可能超出单条上限,装不下的只能丢,但不能静默丢,review P1)。
+  // 声明在 attachmentError 之后:notice 就落在附件错误行上。
+  useEffect(() => {
+    const stashed = drainStashedNewSessionDraft();
+    if (!stashed) return;
+    setDraft(stashed.draft);
+    setAttachments([...stashed.attachments]);
+    if (stashed.notice) setAttachmentError(stashed.notice);
+    if (stashed.deviceId) {
+      setSelectedDeviceId(stashed.deviceId);
+      setSelectedDeviceName(stashed.deviceName || stashed.deviceId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅挂载时领取一次信箱
+  }, []);
   // 圈点标注接线 api 的 ref 中转(同会话页):hook 实例声明在 removeAttachment
   // 之后,onUploaded 等回调延迟执行经 ref 读最新实例。
   const composerAnnotationsRef = useRef<UseComposerImageAnnotationsResult | null>(null);

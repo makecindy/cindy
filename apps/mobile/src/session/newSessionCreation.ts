@@ -308,6 +308,14 @@ export interface StashedNewSessionDraft {
   deviceName: string;
   draft: NewSessionDraft;
   attachments: readonly RemoteSerializedAttachment[];
+  /**
+   * 「有内容没能带回来」的可见告知(新建页展示为附件错误行)。
+   *
+   * 新建页只有一条首条消息 + 一个受上限约束的托盘,而创建期间可能已经发出多条带附件
+   * 的消息:装不下的部分只能丢,但**绝不能静默丢**——中转对象由会话页回收,用户得知道
+   * 少了什么、需要重新选(review P1)。
+   */
+  notice?: string | null;
 }
 
 let stashedDraft: StashedNewSessionDraft | null = null;
@@ -321,6 +329,7 @@ export function stashNewSessionDraftForEdit(
   override?: {
     draft?: NewSessionDraft;
     attachments?: readonly RemoteSerializedAttachment[];
+    notice?: string | null;
   },
 ): void {
   stashedDraft = {
@@ -328,6 +337,7 @@ export function stashNewSessionDraftForEdit(
     deviceName: task.deviceName,
     draft: override?.draft ?? task.draft,
     attachments: override?.attachments ?? task.attachments,
+    notice: override?.notice ?? null,
   };
 }
 
