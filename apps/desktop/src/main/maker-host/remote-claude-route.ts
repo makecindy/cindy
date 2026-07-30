@@ -72,6 +72,13 @@ export async function resolveRemoteClaudeRoute(opts: {
     }
     const routed = await resolveProviderRouteDecision(providerId, REMOTE_AGENT, readClaudeApiKey());
     if (routed) return materializeRoutedProvider(routed);
+    // TOCTOU 兜底:resolver 内部也会因 mutation 窗口返回 null;若恰好在两次判定之间
+    // 窗口开启,报 UPDATING 而非 UNSUPPORTED(语义更准确,用户稍后重试即可)。
+    if (isProviderRouteMutationInProgress(providerId)) {
+      throw new Error(
+        `[REMOTE_PROVIDER_UPDATING] provider "${providerId}" credentials are being updated on this desktop; retry in a moment`,
+      );
+    }
     throw new Error(
       `[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" has no claude-code route on this desktop`,
     );

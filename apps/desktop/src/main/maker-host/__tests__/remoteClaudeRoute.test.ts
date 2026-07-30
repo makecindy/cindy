@@ -228,6 +228,15 @@ describe('resolveRemoteClaudeRoute — 远端无法表达的能力 → 明确报
     expect(resolveProviderRouteDecision).not.toHaveBeenCalled();
   });
 
+  it('TOCTOU: resolver 返回 null 后 mutation 窗口开启 → REMOTE_PROVIDER_UPDATING', async () => {
+    // 前置检查通过(false),resolver 返回 null,兜底检查命中(true)—— 模拟窗口在两次判定之间开启。
+    isProviderRouteMutationInProgress.mockReturnValueOnce(false).mockReturnValue(true);
+    resolveProviderRouteDecision.mockResolvedValue(null);
+    await expect(resolveRemoteClaudeRoute({ providerId: 'my-provider', model: 'm' })).rejects.toThrow(
+      /REMOTE_PROVIDER_UPDATING/,
+    );
+  });
+
   it('显式未知供应商(无 claude-code 路由)→ REMOTE_PROVIDER_UNSUPPORTED', async () => {
     resolveProviderRouteDecision.mockResolvedValue(null);
     await expect(resolveRemoteClaudeRoute({ providerId: 'ghost', model: 'm' })).rejects.toThrow(

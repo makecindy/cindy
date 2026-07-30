@@ -206,12 +206,12 @@ export function selectVisibleModels(params: {
   const { agentKind, deviceId, providers, deviceCcModels, deviceCodexModels, excludeSubscriptionDirect, excludeChatBridgedCodex } = params;
   // excludeSubscriptionDirect 不再过滤(见参数文档):行保留,准入由调用方按
   // isSubscriptionDirectModel 打 disabled。保留参数是为了不破坏既有调用签名。
-  const drop = (list: ModelDescriptor[]): ModelDescriptor[] => list;
+  const pass = (list: ModelDescriptor[]): ModelDescriptor[] => list;
   const codexDeriveOpts = excludeChatBridgedCodex
     ? { excludeProvider: isChatBridgedCodexProvider }
     : undefined;
-  const cc = drop(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code'));
-  const codex = drop(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', codexDeriveOpts));
+  const cc = pass(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code'));
+  const codex = pass(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', codexDeriveOpts));
   if (agentKind === 'claude-code') return cc;
   if (agentKind === 'codex') return codex;
   const merged = [...cc];
