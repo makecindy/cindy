@@ -4155,6 +4155,7 @@
         "xai": "구독 직결 Grok 모델은 SSH 원격 세션을 아직 지원하지 않습니다",
         "generic": "구독 직결 모델은 SSH 원격 세션을 아직 지원하지 않습니다"
       },
+      "discovering": "모델 가져오는 중…",
       "effortLabel": "추론 강도",
       "edit": "편집",
       "options": "옵션",
@@ -4504,6 +4505,13 @@
       },
       "detectedLabel": "감지됨",
       "oauthSub": "브라우저에서 인증 페이지가 열리며, 로그인 후 자동으로 연결됩니다"
+    },
+    "inheritedSubscription": {
+      "title": "이 컴퓨터에 이미 로그인된 {{products}} 계정을 그대로 사용합니다",
+      "desc": "Cindy가 이 기기에 로그인된 계정을 그대로 사용했으며, 별도의 인증은 필요하지 않았습니다. 계정을 바꾸거나 연결을 끊으려면 모델 제공자에서 변경하세요.",
+      "openProviders": "모델 제공자 열기",
+      "acknowledge": "확인",
+      "separator": ", "
     }
   },
   "voiceInputOverlay": {

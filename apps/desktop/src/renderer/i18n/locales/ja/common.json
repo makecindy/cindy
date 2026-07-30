@@ -4155,6 +4155,7 @@
         "xai": "サブスクリプション直結の Grok モデルは SSH リモートセッションに未対応です",
         "generic": "サブスクリプション直結モデルは SSH リモートセッションに未対応です"
       },
+      "discovering": "モデルを取得中…",
       "effortLabel": "推論強度",
       "edit": "編集",
       "options": "オプション",
@@ -4504,6 +4505,13 @@
       },
       "detectedLabel": "検出済み",
       "oauthSub": "ブラウザで認証ページが開き、ログイン後に自動接続されます"
+    },
+    "inheritedSubscription": {
+      "title": "このパソコンでログイン済みの {{products}} をそのまま使っています",
+      "desc": "Cindy はこの端末でログイン済みのアカウントをそのまま利用しました。別途の認証は不要です。アカウントの切り替えや解除はモデルプロバイダーから行えます。",
+      "openProviders": "モデルプロバイダーを開く",
+      "acknowledge": "了解",
+      "separator": "、"
     }
   },
   "voiceInputOverlay": {

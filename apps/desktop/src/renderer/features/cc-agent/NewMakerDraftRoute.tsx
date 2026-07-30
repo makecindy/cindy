@@ -59,6 +59,7 @@ import { useHasAnyRemoteTarget } from '@/hooks/useHasAnyReadyRemoteHost';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
+import { InheritedSubscriptionNotice } from '@/components/onboarding/InheritedSubscriptionNotice';
 import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
@@ -3261,6 +3262,14 @@ export function NewMakerDraftRoute() {
                     <ConnectProviderCard />
                   </div>
                 )}
+                {/* 「已沿用本机订阅」一次性告知。与上面的引导卡条件互斥(它要求零已连接
+                    来源,而继承成功后该供应商已连接),所以不与快捷入口互斥 —— 告知不是
+                    待办,不该把快速开始顶掉。device-link 草稿不出:连接态在被控端。
+                    间距挂在组件自身:外层包一层 div 会在它不可见时留下一段空白 margin。 */}
+                <InheritedSubscriptionNotice
+                  enabled={!isDeviceLinkDraft}
+                  className="mt-6 self-stretch"
+                />
                 {/* 快捷入口与输入框同宽:左右两缘都与上方 ChatInput 对齐(父列已封顶
                     inputWidth)。此前封顶 800px 会在宽窗口下右缘短一截,视觉上没对齐
                     (2026-07-24 用户反馈)。 */}

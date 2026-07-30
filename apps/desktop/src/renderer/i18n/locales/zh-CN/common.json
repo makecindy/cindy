@@ -4155,6 +4155,7 @@
         "xai": "订阅直连的 Grok 模型协议暂不支持 SSH 远程会话",
         "generic": "订阅直连模型协议暂不支持 SSH 远程会话"
       },
+      "discovering": "正在获取模型…",
       "effortLabel": "推理强度",
       "edit": "编辑",
       "options": "选项",
@@ -4504,6 +4505,13 @@
       },
       "detectedLabel": "已检测到",
       "oauthSub": "在浏览器打开授权页，登录后自动连接"
+    },
+    "inheritedSubscription": {
+      "title": "已沿用这台电脑上的 {{products}} 登录",
+      "desc": "Cindy 直接使用了本机已登录的账号，没有另外要你授权。想换账号或断开，去模型供应商里改。",
+      "openProviders": "打开模型供应商",
+      "acknowledge": "知道了",
+      "separator": "、"
     }
   },
   "voiceInputOverlay": {

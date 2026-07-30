@@ -4156,6 +4156,7 @@
         "xai": "Subscription-direct Grok models are not supported in SSH remote sessions yet",
         "generic": "Subscription-direct models are not supported in SSH remote sessions yet"
       },
+      "discovering": "Fetching models…",
       "effortLabel": "Effort level",
       "edit": "Edit",
       "options": "Options",
@@ -4505,6 +4506,13 @@
       },
       "detectedLabel": "Detected",
       "oauthSub": "Opens a verification page in your browser — connects automatically"
+    },
+    "inheritedSubscription": {
+      "title": "Using the {{products}} sign-in already on this computer",
+      "desc": "Cindy picked up the account you're already signed in to locally — no separate authorization was needed. Switch or disconnect it under model providers.",
+      "openProviders": "Open Model Providers",
+      "acknowledge": "Got it",
+      "separator": ", "
     }
   },
   "voiceInputOverlay": {
