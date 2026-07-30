@@ -153,7 +153,7 @@
           }
         ]
       },
-      "note": "中国大陆版登录页区域徽标上的标签值（DESIGN.md §16.3）。四语同值、**不翻译**——它是区域代号不是可译文案，所以把 en 原样写进各语言 translations（同 Agent 条目的做法），这让 caseStandardFor 生效、guard 能挡住 cn／Cn 之类的大小写漂移。forbidden 用条件形态（whenEn=CN）补另一半：大小写规则挡不住“被整体译走”，条件形态又能把拦截精确限定在英文源为 CN 的 key 上，不误伤别处正当的“国内”“中国版”表述。列的是最可能的自造说法，不求穷举。status 取 proposed 与 region-badge 一致：产品尚未拍板是否改用可译文案，改判后本条应随之作废而非沿用。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeCn`），口径与徽标完全一致：global 不标。"
+      "note": "中国大陆版登录页区域徽标上的标签值（DESIGN.md §16.3）。四语同值、**不翻译**——它是区域代号不是可译文案，所以把 en 原样写进各语言 translations（同 Agent 条目的做法），这让 caseStandardFor 生效、guard 能挡住 cn／Cn 之类的大小写漂移。forbidden 用条件形态（whenEn=CN）补另一半：大小写规则挡不住“被整体译走”，条件形态又能把拦截精确限定在英文源为 CN 的 key 上，不误伤别处正当的“国内”“中国版”表述。列的是最可能的自造说法，不求穷举。status 取 proposed 与 region-badge 一致：产品尚未拍板是否改用可译文案，改判后本条应随之作废而非沿用。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeCn`）与侧栏用户卡片版本行（`sidebar.user.regionCodeCn`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。"
     },
     {
       "id": "region-code-dev",
@@ -188,7 +188,7 @@
         "desktop:settings.about.debugLogDescription",
         "desktop:settings.voiceInput.permissions.inputMonitoring.tooltip"
       ],
-      "note": "dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`），口径与徽标完全一致：global 不标。"
+      "note": "dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`）与侧栏用户卡片版本行（`sidebar.user.regionCodeDev`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。"
     },
     {
       "id": "agent",

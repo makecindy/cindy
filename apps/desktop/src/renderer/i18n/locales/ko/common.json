@@ -2650,6 +2650,8 @@
         "cindyImageEdit": "이미지 편집(Cindy에게 대행 요청, 자신이 생성한 이미지만)",
         "cindyVideoGenerate": "영상 생성(Cindy에게 대행 요청)",
         "cindyVideoEdit": "이미지로 영상 만들기(Cindy에게 대행 요청, 참조 이미지는 자신 소유만)",
+        "cindyMediaDeposit": "보유한 이미지·영상·오디오를 내 미디어 라이브러리에 저장할 수 있음",
+        "cindyMediaDepositDetail": "플러그인에 붙여넣거나 끌어다 놓은 소재도 AI가 편집할 수 있게 하는 권한입니다. 저장된 항목은 이 플러그인 이름으로 기록되며 최대 {{quota}}까지 사용하고, 플러그인을 삭제하면 함께 정리됩니다.",
         "agentUserAction": "플러그인 카드를 클릭한 뒤 Agent의 새 작업을 시작할 수 있음",
         "agentUserActionDetail": "클릭 한 번마다 한 번만 시작할 수 있으며, 해당 카드가 속한 세션에서만 사용할 수 있습니다.",
         "agentBackground": "백그라운드에서 Agent의 새 작업을 자동으로 시작할 수 있음",
@@ -3876,6 +3878,7 @@
       "ariaDescription": "버전 {{version}} 릴리스 노트",
       "ariaDescriptionSpan": "v{{from}} 이후 {{count}}개 버전의 릴리스 노트",
       "versionsSpan": "{{count}}개 버전",
+      "versionJumpAria": "버전으로 이동 — 전체 {{count}}개 버전, 현재 v{{version}}",
       "loading": "불러오는 중",
       "loadFailed": "불러오기 실패",
       "retry": "다시 시도"
@@ -3905,6 +3908,8 @@
     "user": {
       "settingsLink": "설정, 현재 사용자: {{name}}",
       "canaryBadge": "Canary 사용자",
+      "regionCodeCn": "CN",
+      "regionCodeDev": "Dev",
       "viewReleaseNotes": "릴리즈 노트 보기",
       "reopenUpdateBanner": "업데이트 준비됨 — 클릭하여 확인",
       "downloadMobile": "Cindy 모바일 다운로드"
@@ -4651,6 +4656,9 @@
       "networkUnreachableNoRetry": "네트워크 오류: 서비스에 일시적으로 연결할 수 없습니다.",
       "networkAutoRetrying": "네트워크 오류: 자동으로 다시 시도하는 중…",
       "networkReconnecting": "연결이 끊어졌습니다. 다시 연결하는 중({{attempt}}/{{maxAttempts}})…",
+      "overloadRetrying": "모델 서비스가 혼잡합니다. 자동으로 다시 시도하는 중({{attempt}}/{{maxAttempts}})…",
+      "overloadBusy": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. \"재시도\"를 누르거나 다른 모델로 바꿔 보세요",
+      "overloadBusyNoRetry": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. 잠시 후 다시 시도하거나 다른 모델로 바꿔 보세요",
       "networkShowRaw": "원본 오류 보기",
       "networkHideRaw": "원본 오류 숨기기",
       "silentStopContinue": "계속",
@@ -5804,7 +5812,7 @@
         "activityDesc": "최근 활성순",
         "activityAsc": "오래된 활성순"
       },
-      "filterAria": "검색 필터(상태: {{status}}, 에이전트: {{agent}}, 최근 활성: {{lastActivity}}, 프로젝트: {{projects}})",
+      "filterAria": "검색 필터 및 정렬(정렬: {{sort}}, 상태: {{status}}, 에이전트: {{agent}}, 최근 활성: {{lastActivity}}, 프로젝트: {{projects}})",
       "filter": {
         "label": "필터",
         "active": "필터 {{count}}개",
@@ -5914,6 +5922,7 @@
     "cell": {
       "subtitlePaused": "일시 중지됨",
       "subtitleWaitingForResources": "실행 슬롯 대기 중 ({{inFlight}}/{{max}})",
+      "subtitleQueuedForSession": "세션이 유휴 상태가 될 때까지 대기 중",
       "subtitleManual": "수동",
       "subtitleOnce": "1회",
       "tagOnce": "1회",
@@ -7184,7 +7193,9 @@
       "registrationFailed": "생성 실패. 잠시 후 다시 시도하세요",
       "silentStopExhausted": "모델이 빈 응답을 반복해서 반환하여 자동 재개가 일시 중지되었습니다. \"계속\"을 클릭하여 작업을 재개하세요.",
       "permissionTightenInterruptFailed": "권한을 강화하는 동안 실행 중인 작업을 중지하지 못했습니다. 작업이 끝날 때까지 확인 없이 계속 실행될 수 있습니다. 필요하면 수동으로 중지하세요.",
-      "codexAutoReviewUnavailable": "자동 리뷰를 일시적으로 사용할 수 없습니다. 현재 작업을 차단하고 기본 권한으로 전환했습니다. 다시 시도하세요. 필요한 경우 확인을 요청합니다."
+      "codexAutoReviewUnavailable": "자동 리뷰를 일시적으로 사용할 수 없습니다. 현재 작업을 차단하고 기본 권한으로 전환했습니다. 다시 시도하세요. 필요한 경우 확인을 요청합니다.",
+      "upstreamResponseIdleTimeout": "모델이 오랫동안 응답하지 않아 무한 대기를 막기 위해 이번 턴을 자동으로 중단했습니다. 완료된 도구 호출은 유지되며, 다음 메시지를 보내 계속할 수 있습니다.",
+      "turnNoEventTimeout": "이번 턴에서 오랫동안 아무런 진행이 없어(모델·도구·백그라운드 프로세스 모두 무응답) 무한 대기를 막기 위해 자동으로 중단했습니다. 다음 메시지를 보내 계속할 수 있습니다."
     },
     "validation": {
       "feishuFieldsRequired": "App ID와 App Secret 둘 다 입력해야 합니다",
@@ -7318,7 +7329,8 @@
       "blocked": "차단됨",
       "complete": "완료",
       "budgetLimited": "한도 도달",
-      "usageLimited": "사용량 제한"
+      "usageLimited": "사용량 제한",
+      "capacityLimited": "모델 서비스 혼잡"
     },
     "turns": "{{used}} 턴",
     "turnsWithMax": "{{used}} / {{max}} 턴",
@@ -7341,7 +7353,9 @@
       "failed": "목표 생성 실패"
     },
     "usageLimitedUntil": "{{time}} 재개",
+    "capacityRetryAt": "{{time}}에 다시 시도",
     "usageResumeNotice": "사용량이 회복되어 목표를 재개합니다",
+    "capacityRetryNotice": "모델 서비스가 혼잡했습니다. 목표를 다시 시도합니다",
     "complete": {
       "record": "목표 달성 · {{turns}}턴 · {{duration}}"
     },
@@ -7550,6 +7564,7 @@
       "poolDetail": "사용 {{used}} · 전체 {{total}}",
       "remaining": "잔여",
       "progressLabel": "{{label}} 사용량",
+      "noPlanCredits": "활성 구독이 없어 구독 크레딧이 없습니다.",
       "historyUnavailable": "사용 기록이 완전하지 않아 잔여 크레딧만 표시합니다.",
       "detailsUnavailable": "사용량 상세를 불러올 수 없어 현재 잔액만 표시합니다.",
       "promotionalDetails": {
@@ -7593,8 +7608,7 @@
     "catalog": {
       "errorTitle": "요금제를 불러올 수 없습니다",
       "errorDescription": "네트워크를 확인하고 다시 시도하세요. 로컬 대체 요금제는 표시하지 않습니다.",
-      "emptyTitle": "요금제가 없습니다",
-      "emptyDescription": "서버에서 공개한 요금제가 아직 없습니다.",
+      "emptyTitle": "곧 출시됩니다. 기대해 주세요.",
       "currentPlan": "현재 요금제",
       "unavailableReasons": {
         "OFFER_COMING_SOON": "출시 예정",

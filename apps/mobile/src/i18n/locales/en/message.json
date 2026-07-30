@@ -170,6 +170,7 @@
   "systemCard": {
     "goalComplete": "Goal reached · {{turns}} turns · took {{duration}}",
     "goalResumed": "Usage restored, continuing the goal",
+    "goalCapacityRetry": "Model service was busy — retrying the goal",
     "autoResume": "Connection dropped, resumed automatically",
     "modelLabel": "Model",
     "sessionLabel": "Session",

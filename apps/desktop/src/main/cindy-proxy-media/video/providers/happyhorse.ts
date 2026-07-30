@@ -168,12 +168,19 @@ function buildParameters(
       sr === '1080p' ? 1920 : sr === '480p' ? 854 : 1280;
     const shortSide =
       sr === '1080p' ? 1080 : sr === '480p' ? 480 : 720;
+    // 每档的像素量以该档 16:9(longSide*shortSide)为上限,任何比例都不得
+    // 超过——超了就是偷偷升档:DashScope 可能直接拒,或按更高分辨率出片
+    // 并计费。4:3 原先拿 longSide 当宽再推高(720p → 1280*960 = 基准的
+    // 1.33 倍)是唯一越线的一项,改成以高锚定该档短边(960*720)。
+    // 注:3:4 与 4:3 的长边口径并不对称(540*720 vs 960*720),那是既有
+    // 映射,两者都在基准像素量之内,统一口径需要 DashScope 侧的权威依据,
+    // 不在本次范围。
     const ratioMap: Record<string, string> = {
       '16:9': `${longSide}*${shortSide}`,
       '9:16': `${shortSide}*${longSide}`,
       '1:1': `${shortSide}*${shortSide}`,
-      '4:3': `${longSide}*${Math.round(longSide * 3 / 4)}`,
-      '3:4': `${Math.round(shortSide * 3 / 4)}*${shortSide}`,
+      '4:3': `${Math.round((shortSide * 4) / 3)}*${shortSide}`,
+      '3:4': `${Math.round((shortSide * 3) / 4)}*${shortSide}`,
     };
     const size = ratioMap[req.ratio];
     if (size) params.size = size;

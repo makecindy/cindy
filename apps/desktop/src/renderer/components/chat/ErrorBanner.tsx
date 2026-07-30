@@ -29,6 +29,7 @@ import {
 import { cn } from '@/lib/utils';
 import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
 import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
+import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
 
 interface ErrorBannerProps {
   error: string;
@@ -180,6 +181,10 @@ export function ErrorBanner({
   // Codex `Reconnecting... N/M` 额外解析次数，让 recoverable 状态持续更新而非裸英文。
   const reconnectAttempt = parseReconnectAttemptMessage(error);
   const isNetworkishError = reconnectAttempt !== null || isNetworkishErrorMessage(error);
+  // 服务过载(模型容量不足 / 上游 529):与网络类分开判定——把容量问题说成"网络
+  // 异常"会让用户白折腾自己的网络。带 `(auto-retry N/M)` 后缀 = 仍在自动重试。
+  const isOverloadError = isOverloadErrorMessage(error);
+  const overloadRetryProgress = parseOverloadRetryProgress(error);
   // Retry 的显示条件与网络错误文案必须共用同一个判定。外部发起的 turn（例如
   // scheduler / goal）失败时没有安全的 recovery target，errorRetryText 会是 null；
   // 此时不能一边隐藏按钮，一边仍提示用户“点击重试”。
@@ -218,6 +223,25 @@ export function ErrorBanner({
       : t('chat.errorBanner.codexSessionExpired');
   } else if (isCodexLocalOAuthAuthMissing) {
     displayError = t('chat.errorBanner.codexAuthMissingLocal');
+  } else if (isOverloadError) {
+    // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
+    // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。
+    // 放在网络类之前:两者都可能重试自愈,但只有这里该建议"换模型"。
+    // 终态文案刻意**不**声称"多次重试仍未成功": 走到终态的原因不止"预算耗尽",
+    // 还包括"本 turn 已有产出所以不重投"以及接管条件不满足(如 daemon 自己已经
+    // retry 很久后升级成终态)。那些情况下一次自动重试都没发生过, 说"重试多次"
+    // 是假信息(review #844 codex P1)。真的重试过时用户也已经在退避窗口里逐帧看过
+    // 「正在自动重试（N/M）」, 信息不丢。两个分支只按"有没有重试按钮"给不同下一步。
+    displayError = overloadRetryProgress
+      ? t('chat.errorBanner.overloadRetrying', {
+          attempt: overloadRetryProgress.attempt,
+          maxAttempts: overloadRetryProgress.maxAttempts,
+        })
+      : t(
+          safeRetryText
+            ? 'chat.errorBanner.overloadBusy'
+            : 'chat.errorBanner.overloadBusyNoRetry',
+        );
   } else if (isNetworkishError) {
     // 网络类错误:原始英文报错(502/ECONNREFUSED/fetch failed 等)对用户没有
     // 行动价值,换成友好文案;原始错误折叠可查(下方「查看原始错误」)。
@@ -246,9 +270,15 @@ export function ErrorBanner({
   // budget 判定与全项目一致: `codex/` 前缀。
   // 例外:网络类分支(终止态)仍叠加 —— 折扣版 gateway 挂掉恰恰多表现为 502 /
   // upstream unreachable,「切普通版试试」对症;自动重试中不叠(用户无需行动)。
+  // 过载类同理叠加:折扣版 gateway 的容量往往比官方版更紧,「切普通版试试」对症。
+  // 仍在自动重试时不叠(用户无需行动)——判据是有没有进度后缀,而不是 isRecoverable:
+  // 预算耗尽后的终止错误没有后缀,那时才该给建议。
   const isBudgetModel = !!modelId && modelId.startsWith('codex/');
   const showBudgetHint =
-    isBudgetModel && (!hasSpecialGuidance || (isNetworkishError && !isRecoverable));
+    isBudgetModel &&
+    (!hasSpecialGuidance ||
+      (isNetworkishError && !isRecoverable) ||
+      (isOverloadError && !overloadRetryProgress));
 
   // 走跟 Settings/RemoteHostDetail 同款的 check → confirm → sync 三步:
   // 1. checkCodexAuth: 探远端是否已有 auth.json (有则要 confirm 覆盖)
@@ -344,9 +374,9 @@ export function ErrorBanner({
             {t('chat.errorBanner.budgetModelHint')}
           </span>
         )}
-        {isNetworkishError && (
-          // 网络分支的原始错误折叠可查:友好文案替换了原文,但排障(端口/URL/
-          // errno)仍需要原文,点击展开。新增控件走 --error-fg token(规则 16;
+        {(isNetworkishError || isOverloadError) && (
+          // 网络类与过载类的原始错误折叠可查:友好文案替换了原文,但排障(端口/URL/
+          // errno/上游原话)仍需要原文,点击展开。新增控件走 --error-fg token(规则 16;
           // 本组件其余 red-600/400 为历史存量,error 属语义豁免色但新代码仍走 token)。
           <>
             <button

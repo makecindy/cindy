@@ -170,6 +170,7 @@
   "systemCard": {
     "goalComplete": "목표 달성 · {{turns}}회 · 소요 {{duration}}",
     "goalResumed": "사용량이 회복되어 목표를 계속합니다",
+    "goalCapacityRetry": "모델 서비스가 혼잡했습니다. 목표를 다시 시도합니다",
     "autoResume": "연결이 끊겨 자동으로 계속했습니다",
     "modelLabel": "모델",
     "sessionLabel": "세션",

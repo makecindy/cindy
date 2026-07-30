@@ -46,6 +46,7 @@ import {
 } from './LoginControls';
 import { useResendCountdown } from './useResendCountdown';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import { shouldLabelRegion } from '../../../shared/regionCode';
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
 import { resolveIdentifierMethod } from '../../../shared/loginIdentifierMethod';
 import {
@@ -74,6 +75,13 @@ import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './
  *
  * 值为四语同文的区域代号(与旧 login.globalRegion 一致:区域标识不翻译),仍走
  * i18n 以便日后改判为「中国大陆版」这类可译文案时不必回改组件。
+ *
+ * ⚠️ 本表只负责「哪个区域用哪个 i18n key」。**「标不标」不由本表决定**——那是
+ * `shared/regionCode.ts` 的 `CINDY_REGION_CODE` 一处说了算(issue 反馈链路、侧栏
+ * 版本行同源),消费处统一过 `shouldLabelRegion()`。否则改了 shared 映射、登录页
+ * 这张表没跟上,徽标就会与其它界面报出不同的区域身份而没有任何信号。两者的对齐
+ * (有代号的区域必须有 key、不标的区域不得有 key)由
+ * `renderer/__tests__/regionCode.consistency.test.ts` 断言。
  */
 const REGION_PILL_KEY: Partial<Record<typeof CURRENT_CINDY_REGION, string>> = {
   cn: 'login.regionPill.cn',
@@ -248,7 +256,11 @@ export function LoginPage() {
   const isGlobalBuild = import.meta.env.VITE_CINDY_AUTH_REGION === 'global';
   // 徽标读 CURRENT_CINDY_REGION 而非上面的 env 字面比较:未注入区域的本地 dev
   // 构建经 resolveCindyRegion 落到默认 global,正确地不挂徽标(而非误挂 Dev)。
-  const regionPillKey = REGION_PILL_KEY[CURRENT_CINDY_REGION];
+  // 「标不标」过 shouldLabelRegion(shared 单点,与侧栏 / issue 链路同源),本组件的
+  // REGION_PILL_KEY 只回答「用哪个 key」——两层分开,shared 映射改了这里不会静默漂移。
+  const regionPillKey = shouldLabelRegion(CURRENT_CINDY_REGION)
+    ? REGION_PILL_KEY[CURRENT_CINDY_REGION]
+    : undefined;
   // identifier 形态 = 构建区域确定性推导(用户拍板 2026-07-21:手机/邮箱分区互斥,
   // 双 tab 切换移除);providers 仅兜底区域首选方式未下发的场景。
   const identifierKind: VerificationKind = useMemo(

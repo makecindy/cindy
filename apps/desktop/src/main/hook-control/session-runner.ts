@@ -91,7 +91,9 @@ import {
   pushThinkingStep,
   pushToolStep,
   renderActivity,
+  setActivityNotice,
 } from '../im/shared/turnActivity.js';
+import { overloadFailureNotice, overloadRetryNotice } from '../im/shared/turnRetryNotice.js';
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 
 import type { HookRunOutcome, HookSessionRunner } from './dispatcher.js';
@@ -697,7 +699,11 @@ export function createMakerHookSessionRunner(deps: {
       const answerOnlyProgress = isTelegram && req.laneKind !== 'group';
       const progress = req.onProgress
         ? createProgressEmitter(req.onProgress, () => {
-            if (answerOnlyProgress) return assistantText;
+            // 只流正文的唯一例外: 还没有任何正文、而 agent 正在自动重试(上游过载)
+            // 时, 草稿本来就是空的 —— 此时给出那一行状态说明, 否则用户在整个退避
+            // 窗口里完全看不到任何反馈。有正文后仍只发正文, 不掺过程区。
+            // (群/topic 走上面的完整过程卡, notice 已在那条路径里渲染。)
+            if (answerOnlyProgress) return assistantText || (activity.notice ?? '');
             const act = renderActivity(activity, Date.now());
             if (!act) return assistantText;
             return assistantText ? `${act}\n\n${assistantText}` : act;
@@ -811,6 +817,19 @@ export function createMakerHookSessionRunner(deps: {
             }
             return;
           }
+          if (ev.type === 'error' && !isTerminalAgentErrorEvent(ev)) {
+            // 非终止 error = agent 正在自愈(当前只透过载类的自动重试)。turn 没
+            // 结束, 不收口; 但必须在过程区留一行, 否则零产出的退避窗口里渠道那
+            // 条消息整段静止(见 turnRetryNotice.ts 的模块注释)。
+            const notice = overloadRetryNotice(ev.data);
+            if (notice !== null && setActivityNotice(activity, notice)) {
+              // ticker 让"第 N 步 · 42s"与这行状态一起走时间, 重试期间没有任何
+              // 新事件也能看出还在动。
+              progress?.ensureTicker();
+              progress?.schedule();
+            }
+            return;
+          }
           if (ev.type === 'tool_result_full') {
             // 出站图片旁路(与 IM handleToolResultFullEvent 同语义): art
             // image_generate 等工具按设计不在文本里嵌 xdt-image markdown,
@@ -859,8 +878,16 @@ export function createMakerHookSessionRunner(deps: {
             progress?.stop();
             off();
             stopListening = undefined;
-            const data = ev.data as { message?: string } | null;
-            reject(new Error(data?.message ?? 'agent terminal error'));
+            const data = ev.data as { message?: string; errorStatus?: number } | null;
+            const raw = data?.message ?? 'agent terminal error';
+            // 过载重试耗尽: 渠道里发裸英文原文(server 侧再前缀成 "Task failed:")
+            // 等于把内部串丢给用户, 且没说清"怎么才能真的重试"。换成可读说明,
+            // 原文留在本地日志里供排查。
+            const friendly = overloadFailureNotice(raw, data?.errorStatus);
+            if (friendly !== null) {
+              log.warn(`hook turn failed (upstream overload): ${raw}`);
+            }
+            reject(new Error(friendly ?? raw));
           }
         });
         stopListening = (): void => {

@@ -2650,6 +2650,8 @@
         "cindyImageEdit": "画像編集(Cindy に代行依頼、自身が生成した画像のみ)",
         "cindyVideoGenerate": "動画生成(Cindy に代行依頼)",
         "cindyVideoEdit": "画像から動画(Cindy に代行依頼、参照画像は自身名義のもののみ)",
+        "cindyMediaDeposit": "保有している画像・動画・音声をあなたのメディアライブラリに保存できます",
+        "cindyMediaDepositDetail": "プラグイン内で貼り付け・ドロップした素材も AI で加工できるようにするための権限です。保存内容はこのプラグイン名義で記録され、最大 {{quota}} まで使用し、アンインストール時に併せて削除されます。",
         "agentUserAction": "プラグインカードをクリックした後、Agent の新しいターンを開始できます",
         "agentUserActionDetail": "1 回のクリックにつき 1 回だけ開始でき、そのカードが属するセッションでのみ使用できます。",
         "agentBackground": "バックグラウンドで Agent の新しいターンを自動的に開始できます",
@@ -3876,6 +3878,7 @@
       "ariaDescription": "バージョン {{version}} のリリースノート",
       "ariaDescriptionSpan": "v{{from}} 以降 {{count}} バージョン分のリリースノート",
       "versionsSpan": "{{count}} バージョン",
+      "versionJumpAria": "バージョンへ移動 — 全 {{count}} バージョン、現在は v{{version}}",
       "loading": "読み込み中",
       "loadFailed": "読み込み失敗",
       "retry": "再試行"
@@ -3905,6 +3908,8 @@
     "user": {
       "settingsLink": "設定, 現在のユーザー: {{name}}",
       "canaryBadge": "Canary ユーザー",
+      "regionCodeCn": "CN",
+      "regionCodeDev": "Dev",
       "viewReleaseNotes": "リリースノートを表示",
       "reopenUpdateBanner": "更新の準備完了 — クリックして確認",
       "downloadMobile": "Cindy モバイル版をダウンロード"
@@ -4651,6 +4656,9 @@
       "networkUnreachableNoRetry": "ネットワークエラー:サービスに一時的に接続できません。",
       "networkAutoRetrying": "ネットワークエラー:自動的に再試行しています…",
       "networkReconnecting": "接続が中断されました。再接続中（{{attempt}}/{{maxAttempts}}）…",
+      "overloadRetrying": "モデルサービスが混雑しています:自動的に再試行しています（{{attempt}}/{{maxAttempts}}）…",
+      "overloadBusy": "モデルサービスが混雑しています。上流に空き容量がありません。「再試行」を押すか、別のモデルに切り替えてください",
+      "overloadBusyNoRetry": "モデルサービスが混雑しています。上流に空き容量がありません。しばらくしてから再試行するか、別のモデルに切り替えてください",
       "networkShowRaw": "元のエラーを表示",
       "networkHideRaw": "元のエラーを隠す",
       "silentStopContinue": "続行",
@@ -5804,7 +5812,7 @@
         "activityDesc": "最近アクティブ",
         "activityAsc": "古いアクティブ順"
       },
-      "filterAria": "検索フィルター（状態：{{status}}、エージェント：{{agent}}、最近のアクティビティ：{{lastActivity}}、プロジェクト：{{projects}}）",
+      "filterAria": "検索フィルターと並び順（並び順：{{sort}}、状態：{{status}}、エージェント：{{agent}}、最近のアクティビティ：{{lastActivity}}、プロジェクト：{{projects}}）",
       "filter": {
         "label": "フィルター",
         "active": "フィルター {{count}} 件",
@@ -5914,6 +5922,7 @@
     "cell": {
       "subtitlePaused": "一時停止中",
       "subtitleWaitingForResources": "実行スロット待ち（{{inFlight}}/{{max}}）",
+      "subtitleQueuedForSession": "セッションが空くのを待機中",
       "subtitleManual": "手動",
       "subtitleOnce": "1回",
       "tagOnce": "1回",
@@ -7184,7 +7193,9 @@
       "registrationFailed": "作成に失敗しました。後でもう一度お試しください",
       "silentStopExhausted": "モデルが空の応答を繰り返し返したため、自動再開を一時停止しました。「続行」をクリックしてタスクを再開してください。",
       "permissionTightenInterruptFailed": "権限を厳格化する際に実行中のタスクを停止できませんでした。タスクは終了まで確認なしで実行され続ける可能性があります。必要に応じて手動で停止してください。",
-      "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。"
+      "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。",
+      "upstreamResponseIdleTimeout": "モデルから長時間応答がなかったため、無限待機を避けるためこのターンを自動中断しました。完了したツール呼び出しは保持されています。次のメッセージを送信して続行できます。",
+      "turnNoEventTimeout": "このターンは長時間まったく進展がなかったため（モデル・ツール・バックグラウンド処理のすべてが無反応）、無限待機を避けるため自動中断しました。次のメッセージを送信して続行できます。"
     },
     "validation": {
       "feishuFieldsRequired": "App ID と App Secret の両方を入力してください",
@@ -7318,7 +7329,8 @@
       "blocked": "ブロック中",
       "complete": "完了",
       "budgetLimited": "上限到達",
-      "usageLimited": "利用上限"
+      "usageLimited": "利用上限",
+      "capacityLimited": "モデルサービスが混雑"
     },
     "turns": "{{used}} ターン",
     "turnsWithMax": "{{used}} / {{max}} ターン",
@@ -7341,7 +7353,9 @@
       "failed": "目標の作成に失敗しました"
     },
     "usageLimitedUntil": "{{time}} に再開",
+    "capacityRetryAt": "{{time}} に再試行",
     "usageResumeNotice": "利用枠が回復しました。目標を再開します",
+    "capacityRetryNotice": "モデルサービスが混雑していました。目標を再試行します",
     "complete": {
       "record": "目標達成 · {{turns}} ターン · {{duration}}"
     },
@@ -7550,6 +7564,7 @@
       "poolDetail": "使用済み {{used}} · 合計 {{total}}",
       "remaining": "残り",
       "progressLabel": "{{label}}の使用量",
+      "noPlanCredits": "有効なサブスクリプションがないため、サブスクリプションクレジットはありません。",
       "historyUnavailable": "使用履歴が完全ではないため、残りのクレジットのみ表示しています。",
       "detailsUnavailable": "使用量の詳細を取得できないため、現在の残高のみ表示しています。",
       "promotionalDetails": {
@@ -7593,8 +7608,7 @@
     "catalog": {
       "errorTitle": "プランを取得できません",
       "errorDescription": "接続を確認して再試行してください。ローカルの代替プランは表示しません。",
-      "emptyTitle": "プランはまだありません",
-      "emptyDescription": "サーバーで公開中のプランはまだありません。",
+      "emptyTitle": "近日公開予定です。お楽しみに。",
       "currentPlan": "現在のプラン",
       "unavailableReasons": {
         "OFFER_COMING_SOON": "近日提供",

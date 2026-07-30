@@ -23,6 +23,7 @@ import {
 } from '@cindy/maker-shared/error-redaction';
 import type { createAsyncQueue } from '../shared/async-queue.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
+import { formatOverloadRetryMessage, parseOverloadError } from '../shared/overload-error.js';
 import type { UsageTracker } from '../shared/usage-tracker.js';
 
 // ── 共享 turn / runtime 状态 ─────────────────────────────────────────────────
@@ -756,6 +757,50 @@ function handleSystem(
       errorStatus: msg.error_status,
       sdkError: redactSensitiveText(msg.error ?? 'unknown'),
     });
+    // SDK 正在自己退避重试 → 透出**非终止**进度，别让用户对着无提示的转圈干等
+    // （PR #790 给 Codex `Reconnecting N/M` 做的是同一件事）。恢复后由后续正常
+    // 事件按现有机制自动清除，不结束 turn、不落 error 行。
+    //
+    // **绝不在这里自己重投**：SDK 已带退避重试（529 overloaded / 429 / 连接错误
+    // 都走它），客户端再叠一层会把一次上游过载放大成指数级请求，而失败请求照扣
+    // 额度。Codex 那侧要自己重投只是因为 app-server 对容量拒绝根本不重试。
+    //
+    // 第 1 次不透出：单次抖动 SDK 一次重试就过，提示只会闪一下徒增噪音（与
+    // codex translator 持续重试透出的防噪口径一致）。
+    //
+    // **只透出过载类**：这条 message 是内部英文 SDK 字符串，renderer 的 ErrorBanner
+    // 只对过载与网络形态做本地化替换。若把 429、500 这类也透出来，各语言用户会直接
+    // 看到裸英文，而它们在本改动之前是静默的——那是实打实的回归。其它重试类别保持
+    // 原样静默，需要时另行补本地化再放开。
+    //
+    // 判据是 parseOverloadError 的**两种**形态都算（`overloaded`：529 /
+    // overloaded_error；`capacity`：`at capacity`），不只 529：renderer 侧的镜像
+    // (renderer/utils/overloadError.ts) 对两种形态都有本地化文案，所以放开 capacity
+    // 不会产生裸英文；反过来只认 529 会把一条措辞为 `at capacity` 的过载错误静默掉，
+    // 用户看到的是"什么都没发生"。
+    const overloadRetry =
+      typeof msg.attempt === 'number' &&
+      typeof msg.max_retries === 'number' &&
+      msg.attempt >= 2 &&
+      parseOverloadError(`${sdkError} ${statusLabel}`, msg.error_status ?? undefined) !== null;
+    if (overloadRetry) {
+      queue.push({
+        type: 'error',
+        data: {
+          // 进度用 `(auto-retry N/M)` 后缀编码，与 Codex 侧同一套跨 agent 协议，
+          // renderer 只需一份解析。原始状态留在正文里供分类与折叠查看。
+          message: formatOverloadRetryMessage(
+            `SDK API request failed: ${sdkError} (${statusLabel})`,
+            msg.attempt as number,
+            msg.max_retries as number,
+          ),
+          isTerminal: false,
+          willRetry: true,
+          ...(msg.error_status != null ? { errorStatus: msg.error_status } : {}),
+        },
+        source: 'claude-code',
+      });
+    }
     return;
   }
   if (msg.subtype === 'compact_boundary') {

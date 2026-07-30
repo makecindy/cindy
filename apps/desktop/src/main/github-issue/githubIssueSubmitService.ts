@@ -12,7 +12,7 @@
 
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
-import { ISSUE_REGION_CODE } from '../../shared/issueRegionCode.js';
+import { CINDY_REGION_CODE } from '../../shared/regionCode.js';
 import { normalizeIssuePublicName } from '../../shared/issuePublicName.js';
 import type {
   IssueConfirmDecision,
@@ -154,11 +154,11 @@ export async function submitGithubIssueWithConfirm(
     decision.type !== req.type;
 
   const uiLanguage = decision.uiLanguage ?? deps.getFallbackLocale();
-  const regionCode = ISSUE_REGION_CODE[env.region];
+  const regionCode = CINDY_REGION_CODE[env.region];
   const envBlock = [
     '',
     '---',
-    // global 不写这一行 —— 缺失即默认区域,理由见 ISSUE_REGION_CODE(与确认卡片同源)。
+    // global 不写这一行 —— 缺失即默认区域,理由见 CINDY_REGION_CODE(与确认卡片同源)。
     ...(regionCode ? [`**版本区域**: ${regionCode}`] : []),
     `**OS**: ${env.platform} ${env.arch} (${env.osVersion})`,
     `**界面语言**: ${uiLanguage}`,

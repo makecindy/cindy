@@ -38,6 +38,8 @@ export * from './memory/types.js';
 export {
   MemoryStorage,
   sanitizeWorkdir,
+  buildMemoryScopeKey,
+  memoryScopeDirName,
   buildFilename,
   parseFilename,
   validateSlug,

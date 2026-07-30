@@ -293,6 +293,106 @@ describe('translateErrorNotification', () => {
     expect(events[0].data).toMatchObject({ isTerminal: true, willRetry: false });
   });
 
+  it('willRetry=false 模型容量不足 + agent 层接管 → 非终止 + 带重投进度', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const calls: number[] = [];
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'Selected model is at capacity. Please try a different model.',
+      }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverOverload: () => {
+          calls.push(1);
+          return { attempt: 2, maxAttempts: 4 };
+        },
+      },
+    );
+    const events = await collect(q);
+    expect(calls).toHaveLength(1);
+    expect(events).toHaveLength(1);
+    // 必须是非终止：终止会让 UI 先收口成失败，用户看到假失败闪烁。
+    expect(events[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+    // 原始错误原文保留（renderer 折叠可查），进度以后缀编码。
+    expect((events[0].data as { message: string }).message).toBe(
+      'Selected model is at capacity. Please try a different model. (auto-retry 2/4)',
+    );
+  });
+
+  it('willRetry=false 模型容量不足 + agent 层不接管 → 落回终止错误', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({ willRetry: false, message: 'Selected model is at capacity.' }),
+      q,
+      // 预算耗尽 / 本 turn 已有产出 / 会话已关时 agent 层返回 null。
+      { ...makeCtx(rt), tryTakeOverOverload: () => null },
+    );
+    const events = await collect(q);
+    expect(events).toHaveLength(1);
+    expect(events[0].data).toMatchObject({ isTerminal: true, willRetry: false });
+    // 没接管就不能挂进度后缀，否则 renderer 会把已放弃的错误显示成"正在重试"。
+    expect((events[0].data as { message: string }).message).not.toContain('auto-retry');
+  });
+
+  it('没有注入接管钩子时容量错误按原终止路径报', async () => {
+    // 非 codex/index.ts 的调用方（既有测试、其它宿主）不受本分支影响。
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({ willRetry: false, message: 'Selected model is at capacity.' }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events).toHaveLength(1);
+    expect(events[0].data).toMatchObject({ isTerminal: true, willRetry: false });
+  });
+
+  it('willRetry=true 的容量错误不走接管（server 自己还在重试）', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    let takeOverCalled = false;
+    translateErrorNotification(
+      makeParams({ willRetry: true, message: 'Selected model is at capacity.' }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverOverload: () => {
+          takeOverCalled = true;
+          return { attempt: 1, maxAttempts: 4 };
+        },
+      },
+    );
+    const events = await collect(q);
+    // 双层重试是反模式：server 说自己会重试时我们绝不插手。
+    expect(takeOverCalled).toBe(false);
+    expect(events).toHaveLength(0);
+  });
+
+  it('非容量类的终止错误不触发接管', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    let takeOverCalled = false;
+    translateErrorNotification(
+      makeParams({ willRetry: false, message: 'context window exceeded' }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverOverload: () => {
+          takeOverCalled = true;
+          return { attempt: 1, maxAttempts: 4 };
+        },
+      },
+    );
+    const events = await collect(q);
+    expect(takeOverCalled).toBe(false);
+    expect(events[0].data).toMatchObject({ isTerminal: true });
+  });
+
   it('newCodexRuntimeState() 初始 lastAuthErrorKey 为 null', () => {
     const rt = newCodexRuntimeState();
     expect(rt.lastAuthErrorKey).toBeNull();

@@ -378,4 +378,35 @@ describe('MakerScheduleRunner 顺延 / 礼让', () => {
     const finalRun = (notifier.notify.mock.calls[0] as unknown[])[1] as { status: string };
     expect(finalRun.status).toBe('failed');
   });
+
+  it('B 边界:manual 任务撞忙 → 不顺延(顺延会给"只能手动跑"的任务排出自动触发)', async () => {
+    // manual: true, recurring: true 的任务契约是**只能经 runNow 触发**:nextFireAt 永不
+    // 设置,computeNextFireAt 对它返回 undefined。但顺延分支是直接写
+    // `nextFireAt: retryAt` 并把行塞回 activeSchedules 的,绕过那道语义闸 —— 一次"立即
+    // 运行"撞忙就给它凭空排出一次自动触发(review #944 第十九轮 P1)。canDefer 原来的
+    // 注释已经把 manual 算进排除项,代码没跟上。
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      title: null,
+      userSendAt: null,
+    });
+    mocks.isSessionInTurn.mockReturnValue(false);
+
+    const err = new Error('SESSION_RUNNING: existing turn') as Error & { code?: string };
+    err.code = 'SESSION_RUNNING';
+    const h = createSessionHarness(async () => {
+      throw err;
+    });
+    const { runner, notifier } = createRunnerHarness(h.session);
+
+    await expect(
+      runner.fire(
+        heartbeatSchedule({ manual: true, recurring: true, status: 'active' }),
+        createFireContext(),
+      ),
+    ).rejects.toThrow(/SESSION_RUNNING/);
+    expect(notifier.notify).toHaveBeenCalledTimes(1); // 可见失败,用户可以自己再点一次
+    const finalRun = (notifier.notify.mock.calls[0] as unknown[])[1] as { status: string };
+    expect(finalRun.status).toBe('failed');
+  });
 });

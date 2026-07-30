@@ -1392,7 +1392,11 @@ export const mediaBlobs = sqliteTable('media_blobs', {
  * refKind/refId 是多态引用(消息 id / 会话 id / 意识 id),不设 FK——
  * 删除会话/卸载意识时由对应业务代码删自己名下的 ref(回收器对账兜底)。
  * origin* 记出生:意识面板供图的归属校验即查「该指纹是否有 origin 为本意识
- * 的行或 ghost-gallery ref」(ghostCanRead,见 main/cindy-media/ledger.ts)。
+ * 的行,或 ghost-gallery / ghost-grant / ghost-deposit ref」(ghostCanRead,
+ * 见 main/cindy-media/ledger.ts)。
+ *
+ * refKind 是无约束的 text 列:新增引用类型只改 ledger.ts 的联合类型,
+ * 不需要 migration。
  */
 export const mediaRefs = sqliteTable(
   'media_refs',
@@ -1401,7 +1405,7 @@ export const mediaRefs = sqliteTable(
     hash: text('hash')
       .notNull()
       .references((): AnySQLiteColumn => mediaBlobs.hash, { onDelete: 'cascade' }),
-    /** 'message' | 'session-attachment' | 'ghost-gallery' | 'import'(联合类型见 ledger.ts)。 */
+    /** 'message' | 'session-attachment' | 'ghost-gallery' | 'ghost-deposit' | 'import'…(联合类型见 ledger.ts)。 */
     refKind: text('ref_kind').notNull(),
     /** 引用方 id:消息 clientId / 会话 id / 意识 id。 */
     refId: text('ref_id').notNull(),

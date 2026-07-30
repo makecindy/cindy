@@ -117,6 +117,129 @@ async function freshCodexProxyHost() {
   return import('../codex-proxy-host.js');
 }
 
+describe('withCodexUpstreamRecording', () => {
+  const DEFAULT_UPSTREAM = 'https://gateway.example/v1';
+  const ctxFor = (threadId?: string) => ({
+    reqId: 1,
+    method: 'POST',
+    url: '/responses',
+    headers: threadId ? { 'thread-id': threadId } : {},
+  }) as never;
+
+  it('records the override upstream origin for the request thread', async () => {
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+    const wrapped = host.withCodexUpstreamRecording(
+      () => ({ upstreamOverride: 'https://api.x.ai/v1' }),
+      () => DEFAULT_UPSTREAM,
+    );
+
+    await wrapped({}, ctxFor('t-xai'));
+
+    // 诊断必须报本次真正打的上游 —— 会话选了 xAI 就不能报 gateway。
+    expect(host.getCodexThreadUpstreamOrigin('t-xai')).toBe('https://api.x.ai');
+    // 没记录过的 thread 不借用别人的结论。
+    expect(host.getCodexThreadUpstreamOrigin('t-other')).toBe(null);
+  });
+
+  it('falls back to the default upstream when the decision does not override it', async () => {
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+    const wrapped = host.withCodexUpstreamRecording(() => null, () => DEFAULT_UPSTREAM);
+
+    await wrapped({}, ctxFor('t-default'));
+
+    expect(host.getCodexThreadUpstreamOrigin('t-default')).toBe('https://gateway.example');
+  });
+
+  it('records through an async decision and returns it unchanged', async () => {
+    // chat-bridge 分支返回 Promise;包装层必须同样记录,且不改变 decision。
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+    const decision = { upstreamOverride: 'https://custom.provider:8443/v1' };
+    const wrapped = host.withCodexUpstreamRecording(
+      () => Promise.resolve(decision),
+      () => DEFAULT_UPSTREAM,
+    );
+
+    await expect(wrapped({}, ctxFor('t-async'))).resolves.toBe(decision);
+    expect(host.getCodexThreadUpstreamOrigin('t-async')).toBe('https://custom.provider:8443');
+  });
+
+  it('does not record for localHandler decisions or thread-less requests', async () => {
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+
+    // localHandler 与其余路由字段互斥,不发生上游转发 → 没有出口可记。
+    const local = host.withCodexUpstreamRecording(
+      () => ({ localHandler: { handle: async () => undefined } }) as never,
+      () => DEFAULT_UPSTREAM,
+    );
+    await local({}, ctxFor('t-local'));
+    expect(host.getCodexThreadUpstreamOrigin('t-local')).toBe(null);
+
+    // 无 thread 的控制面请求(models 轮询)会被 selectedThreadIdFromHeaders 回落成
+    // 字面量 'unknown';那不是 thread,不该进桶。
+    const plain = host.withCodexUpstreamRecording(() => null, () => DEFAULT_UPSTREAM);
+    await plain({}, ctxFor(undefined));
+    expect(host.getCodexThreadUpstreamOrigin('unknown')).toBe(null);
+  });
+
+  it('records the chat-bridge upstream even though it routes through a localHandler', async () => {
+    // localHandler 不等于「不出网」:chat bridge 的 handler 自己用 outboundFetch 打
+    // route.routing.upstream,照样产生出站路径快照。漏记会让该供应商不可达时诊断
+    // 查不到映射、静默退回通用猜测清单。
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'kimi-moonshot',
+        name: 'Kimi (Moonshot 中国大陆)',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://api.moonshot.cn/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'kimi-k3', name: 'Kimi K3' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'moonshot-key');
+    host.registerComposed('session-kimi-diag', 'thread-kimi-diag', 'PRODUCT_PROMPT');
+    setSessionProvider('session-kimi-diag', 'kimi-moonshot');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'kimi-k3' },
+        { reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-kimi-diag' } },
+      ));
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      expect(host.getCodexThreadUpstreamOrigin('thread-kimi-diag')).toBe('https://api.moonshot.cn');
+    } finally {
+      clearSessionProvider('session-kimi-diag');
+      setCustomProviders([]);
+    }
+  });
+
+  it('never lets a recording failure affect forwarding', async () => {
+    // 诊断旁路:默认上游取值抛错也不能影响 decision。
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+    const decision = { upstreamOverride: 'https://api.x.ai/v1' };
+    const wrapped = host.withCodexUpstreamRecording(
+      () => decision,
+      () => { throw new Error('endpoint unavailable'); },
+    );
+
+    expect(await wrapped({}, ctxFor('t-boom'))).toBe(decision);
+  });
+});
+
 describe('codex gateway config', () => {
   it('oauth-bearer 模式: requires_openai_auth, 不带 env_key', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');

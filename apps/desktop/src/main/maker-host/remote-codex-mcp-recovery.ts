@@ -36,6 +36,11 @@ export interface RemoteCodexMcpRecoveryDeps {
    */
   isCollabEnabled: () => boolean;
   /**
+   * Maker Memory 全局开关。恢复路径的 ensure 同样必须透传 — 缺省 false 会
+   * 让 bridge 重建后的补刀把已注入的 cindy_memory 从远端 config 剥掉。
+   */
+  isMakerMemoryEnabled: () => boolean;
+  /**
    * detach 该 host 上活跃的远端 codex session (跳过 turn 中的)。ensure
    * 成功 (且非 live-turn defer) ⇒ daemon 已 rebootstrap ⇒ 旧 transport
    * (到重启前 daemon socket 的长命 channel) 已死 — 不 detach 的话后续
@@ -56,6 +61,7 @@ export function refreshRemoteCodexMcpAfterBridgeRecreate(deps: RemoteCodexMcpRec
       ensureBridgeStarted: deps.ensureBridgeStarted,
       hasLiveTurnOnHost: liveTurnChecker,
       isCollabEnabled: deps.isCollabEnabled,
+      isMakerMemoryEnabled: deps.isMakerMemoryEnabled,
     }).then((result) => {
       if (!result.ok) {
         deps.log.warn('remote MCP recovery after bridge recreate failed', {

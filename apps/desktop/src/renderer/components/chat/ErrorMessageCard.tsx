@@ -29,6 +29,10 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'silent-stop-exhausted': 'logic.errors.silentStopExhausted',
   'permission-tighten-interrupt-failed': 'logic.errors.permissionTightenInterruptFailed',
   'codex-auto-review-unavailable': 'logic.errors.codexAutoReviewUnavailable',
+  // 卡死自愈的两层看门狗(agent 层上游静默 / Session 层 turn 零事件)。两者的
+  // maker-core 侧 message 是英文兜底,renderer 一律走这里的本地化文案。
+  upstream_response_idle_timeout: 'logic.errors.upstreamResponseIdleTimeout',
+  turn_no_event_timeout: 'logic.errors.turnNoEventTimeout',
 };
 
 export function ErrorMessageCard({ message, reason }: { message: string; reason?: string }) {

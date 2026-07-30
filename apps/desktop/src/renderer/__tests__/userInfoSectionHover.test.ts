@@ -58,12 +58,24 @@ describe('UserInfoSection — outer wrapper takes over full-row hover', () => {
 });
 
 describe('UserInfoSection — version label', () => {
-  it('shows the build region alongside the app version', () => {
+  it('labels only the non-global builds alongside the app version', () => {
     expect(source).toContain("import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';");
-    expect(source).toContain(
-      "const appRegionLabel = CURRENT_CINDY_REGION === 'global' ? 'Global' : 'CN';",
+    // 「哪些区域要标」必须来自 shared 单点,不得在组件里再写一份映射
+    // (issue 反馈链路同源;口径见 DESIGN.md §16.3 / region-and-editions §2.3)。
+    expect(source).toContain("import { shouldLabelRegion } from '../../../shared/regionCode';");
+    expect(source).not.toMatch(/const REGION_LABEL/);
+    // global 故意不贴标签,落到 null 分支只显示版本号。
+    expect(source).toMatch(
+      /const appRegionLabel = !shouldLabelRegion\(CURRENT_CINDY_REGION\)\s*\n\s*\? null\s*\n\s*: CURRENT_CINDY_REGION === 'cn'/,
     );
-    expect(source).toContain('const appVersionLabel = `${appRegionLabel} · ${appDisplayVersion}`;');
+    // 展示文案走 i18n,且 key 为字面量分支(check:i18n 静态提取要看得到)。
+    expect(source).toContain("t('sidebar.user.regionCodeCn')");
+    expect(source).toContain("t('sidebar.user.regionCodeDev')");
+    expect(source).not.toContain("'Global'");
+    expect(source).not.toMatch(/'CN'|'Dev'/);
+    expect(source).toMatch(
+      /const appVersionLabel = appRegionLabel\s*\n\s*\? `\$\{appRegionLabel\} · \$\{appDisplayVersion\}`\s*\n\s*: appDisplayVersion;/,
+    );
     expect(source).not.toContain('XD.Inc');
     expect(source).toContain('{appVersionLabel}');
     expect(source).toContain('title={appVersionLabelDetail}');

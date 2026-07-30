@@ -54,6 +54,7 @@ import {
 import { SYSTEM_PROMPT_APPEND as MAKER_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
+import { buildMemoryScopeKey } from '../../memory/storage.js';
 import type {
   Capabilities,
   EffortDescriptor,
@@ -923,15 +924,18 @@ export class ClaudeCodeAgent extends BaseAgent {
       opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false;
     const makerMemory = this.deps.makerMemory;
     const makerMemoryEnabled = makerMemoryFlag === true && !!makerMemory;
+    // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key,
+    // 键规则与理由见 buildMemoryScopeKey (memory/storage.ts)。
+    const memoryScopeKey = buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
     // This per-session injection flag must not mutate the shared manager.
     if (makerMemoryEnabled && makerMemory) {
       try {
-        const store = await makerMemory.getStore(opts.workingDir);
+        const store = await makerMemory.getStore(memoryScopeKey);
         makerMemoryRules = MAKER_MEMORY_RULES;
         makerMemoryIndex = await store.getIndex();
         memoryFlushController = new MemoryFlushController({
           logger: log.child('memory-flush'),
-          workdir: opts.workingDir,
+          workdir: memoryScopeKey,
           agentKind: 'claude-code',
         });
         log.debug('maker memory loaded for session', {
@@ -979,6 +983,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 普通字符串键。
       const out: Record<string, McpServerConfig> = Object.create(null);
       for (const provider of providers) {
+        // cindy_memory: per-session flag 关 → 不注册; remote → in-process sdk 实例
+        // 不可序列化, 这里跳过, 由 host 的 remoteCcQueryFactory 按同一 flag 以
+        // http 形态经 bridge 注入 (见 cc-remote-mcp.ts)。
         if (provider.name === 'cindy_memory' && (!makerMemoryEnabled || opts.remoteHostId)) continue;
         if (provider.isEnabled && !provider.isEnabled(context)) continue;
         // 同名 provider 先注册者胜 —— host 把用户自定义 MCP **追加**在内置之后, 后写
@@ -1384,9 +1391,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     const buildSettings = (): Settings =>
       buildClaudeFlagSettings({
         showThinkingSummaries,
-        // Maker Memory is not available on SSH targets. Do not carry the local
-        // manager's native-memory suppression across that boundary: the remote
-        // host must retain its own Claude memory configuration.
+        // Do not carry the local manager's native-memory suppression across the
+        // SSH boundary: the remote host retains its own Claude memory
+        // configuration. Maker Memory on remote sessions is injected via the
+        // host bridge (prompt + http MCP), which coexists with — but does not
+        // rewrite — the remote machine's native memory settings.
         memoryOverride: opts.remoteHostId ? undefined : this.memoryOverride,
         // Fast 模式:进 flag settings 层(= --settings),解锁 cc 二进制在 Agent SDK 通道下的
         // fast(否则二进制按 "Agent SDK 不可用" 拒绝)。是否 Opus/官方/firstParty 由二进制把关,
@@ -1915,6 +1924,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // DB 标记尚未写入, host 现场查库会拿到空角色)。见 base-agent.ts
           // remoteCcQueryFactory 的 vendorOptions 注释。
           vendorOptions: vo,
+          // per-session Maker Memory 开关 — host 据此决定是否把 cindy_memory
+          // 以 http 形态注进远端 startParams.mcpServers (cc-remote-mcp.ts)。
+          makerMemoryEnabled,
           onApprovalRequest: async (rawParams: unknown) => {
             // 110s timeout — must respond before daemon's 120s server-request timeout.
             // On timeout, dismiss the pending interaction (clears UI) and reject to

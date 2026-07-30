@@ -8,6 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import { shouldLabelRegion } from '../../../shared/regionCode';
 import { MobileDownloadDialog } from './MobileDownloadDialog';
 
 interface UserInfoSectionProps {
@@ -47,9 +48,24 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const initial = displayName.charAt(0).toUpperCase();
   const appDisplayVersion = window.electronAPI.appDisplayVersion;
   const appDisplayVersionDetail = window.electronAPI.appDisplayVersionDetail;
-  const appRegionLabel = CURRENT_CINDY_REGION === 'global' ? 'Global' : 'CN';
-  const appVersionLabel = `${appRegionLabel} · ${appDisplayVersion}`;
-  const appVersionLabelDetail = `${appRegionLabel} · ${appDisplayVersionDetail}`;
+  // 版本行的区域前缀。「哪些区域要标」只有 CINDY_REGION_CODE 一个事实源(issue
+  // 反馈链路同源),口径见 DESIGN.md §16.3 与 region-and-editions.md §2.3:
+  // cn → CN、dev → Dev、**global 不标**——Cindy 默认版本不给自己贴标签自证是全球版,
+  // global 构建这一行只剩版本号。展示文案走 i18n(同 login.regionPill.* 的做法),
+  // 便于日后改判为「中国大陆版」这类可译文案时不必回改组件;key 写成字面量分支而非
+  // 动态拼接,保证 pnpm check:i18n 的静态提取能看到全部 key。一致性由
+  // __tests__/regionCode.consistency.test.ts 逐区域逐语言断言。
+  const appRegionLabel = !shouldLabelRegion(CURRENT_CINDY_REGION)
+    ? null
+    : CURRENT_CINDY_REGION === 'cn'
+      ? t('sidebar.user.regionCodeCn')
+      : t('sidebar.user.regionCodeDev');
+  const appVersionLabel = appRegionLabel
+    ? `${appRegionLabel} · ${appDisplayVersion}`
+    : appDisplayVersion;
+  const appVersionLabelDetail = appRegionLabel
+    ? `${appRegionLabel} · ${appDisplayVersionDetail}`
+    : appDisplayVersionDetail;
   const remoteAvailable = mode === 'cloud';
 
   const handleClick = () => {

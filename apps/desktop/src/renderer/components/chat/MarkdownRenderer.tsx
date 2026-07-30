@@ -208,6 +208,18 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeHighlight,
 ];
 const MARKDOWN_LINK_CLASS = 'text-[var(--msg-link)] underline underline-offset-2 cursor-pointer [overflow-wrap:anywhere]';
+/**
+ * markdown 行内 code —— 几何与底色对齐 GitHub(6px 圆角 + 左右内距 + 半透明淡底,
+ * 见 --msg-md-inline-code-bg 的说明)。
+ *
+ * 底色刻意用 --msg-md-inline-code-bg 而不是 --msg-code-inline-bg:后者是实色的
+ * chip / hover 底,同时被可点的 FileTargetChip 与十余处 hover:bg- 复用;行内 code
+ * 若用同一个值,就和「有底色 = 可点路径 chip」这个信号撞车了。
+ *
+ * 移动端**刻意不同形态**(零底色 + 文字压暗):那边聊天流是 RN 嵌套 Text,不认
+ * borderRadius,淡底只能是直角方块。这里是 CSS,按 GitHub 原样实现。
+ */
+const INLINE_CODE_CLASS = 'font-mono text-14 rounded-[6px] px-[0.4em] py-[0.2em] bg-[var(--msg-md-inline-code-bg)]';
 
 const WINDOWS_ABSOLUTE_HREF_RE = /^[A-Za-z]:[\\/]/;
 
@@ -600,8 +612,13 @@ const baseComponents: Components = {
     return (
       <blockquote
         className={cn(
+          // border-l-2 + --msg-blockquote-border(= --agent-actions-rail):与
+          // WorkGroupBlock / ThinkingCard / AgentActionsBlock 的 left rail 完全
+          // 统一,宽度和颜色都不在引用块这里另搞一套。
+          // 不用斜体:中文没有真斜体,机械倾斜反而降低可读性;引用语义由 rail +
+          // 内缩表达已经足够。
           'my-2 border-l-2 border-[var(--msg-blockquote-border)] pl-4',
-          'italic text-[var(--msg-blockquote-text)]',
+          'text-[var(--msg-blockquote-text)]',
         )}
         {...props}
       >
@@ -1453,7 +1470,7 @@ function InlineCodeWithTarget({
   // inline <code> — same as before the markdown-target system existed.
   if (target.kind !== 'resolved-local') {
     return (
-      <code className={cn('font-mono text-14')} {...props}>
+      <code className={cn(INLINE_CODE_CLASS)} {...props}>
         {children}
       </code>
     );
@@ -1577,7 +1594,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         const safeProps = omitMarkdownInternalProps(props as Record<string, unknown>);
         if (!allowPrivilegedLinks) {
           return (
-            <code className={cn('font-mono text-14')} {...safeProps}>
+            <code className={cn(INLINE_CODE_CLASS)} {...safeProps}>
               {children}
             </code>
           );
