@@ -3874,12 +3874,21 @@ export class ClaudeCodeAgent extends BaseAgent {
             providerId: targetProviderId,
             model: newModel,
           });
+          // env 比对排除易变 token 字段(CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY /
+          // ANTHROPIC_AUTH_TOKEN):订阅 token 刷新后 remoteRoute.env 仍是 spawn 时旧值,
+          // 而 resolver 返回新值,直接 JSON 比对会把正常 token 轮换误判成路由变化
+          // (codex-connector review #1035)。稳定字段(endpoint + 非 token env)一致
+          // 即视为同一路由。
+          const stableEnvOf = (env: Record<string, string>): Record<string, string> => {
+            const { CLAUDE_CODE_OAUTH_TOKEN: _, ANTHROPIC_API_KEY: __, ANTHROPIC_AUTH_TOKEN: ___, ...rest } = env;
+            return rest;
+          };
           const routeChanged =
             (nextRoute === null) !== (remoteRoute === null) ||
             (nextRoute !== null &&
               remoteRoute !== null &&
               (nextRoute.endpoint !== remoteRoute.endpoint ||
-                JSON.stringify(nextRoute.env) !== JSON.stringify(remoteRoute.env)));
+                JSON.stringify(stableEnvOf(nextRoute.env)) !== JSON.stringify(stableEnvOf(remoteRoute.env))));
           if (routeChanged) {
             throw new Error(
               `[REMOTE_MODEL_SWITCH_ROUTE_CHANGE] switching to "${newModel}" requires a different remote route; close and recreate the remote session to apply it`,
