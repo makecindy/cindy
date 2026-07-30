@@ -258,6 +258,39 @@ describe('TelegramIM', () => {
     expect(sent.params.message_thread_id).toBe(77);
   });
 
+  it('群触发后的首条出站回挂触发消息(reply), 后续不重复回挂', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '帮我看看', fromId: 111, messageId: 60, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    await im.sendText(events[0].senderId, '第一条回复');
+    await im.sendText(events[0].senderId, '第二条回复');
+    const sends = api.calls.filter(
+      (c) => c.method === 'sendMessage' && c.params.chat_id === '-100200',
+    );
+    expect(sends).toHaveLength(2);
+    expect(sends[0].params.reply_parameters).toEqual({
+      message_id: 60,
+      allow_sending_without_reply: true,
+    });
+    expect(sends[1].params.reply_parameters).toBeUndefined();
+  });
+
+  it('私聊出站不回挂 reply', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([privateMessage('hi', 111, 61)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    await im.sendText(events[0].senderId, '回复');
+    const sent = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    expect(sent.params.reply_parameters).toBeUndefined();
+  });
+
   it('出站群回复回流进窗口(isBot 条目)', async () => {
     const windowEntries: TelegramGroupWindowEntry[] = [];
     im.onGroupWindowMessage((e) => windowEntries.push(e));

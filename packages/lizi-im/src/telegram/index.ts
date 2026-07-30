@@ -129,6 +129,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     string,
     { messages: TgMessage[]; timer: ReturnType<typeof setTimeout> }
   >();
+  /**
+   * 群 lane 的待回挂触发消息(laneUserId → 原生 message_id): 该触发的**首条**
+   * 出站消息以 reply 形式挂回触发消息下面 — 多人群里答案必须和提问对上号
+   * (与官方 bot / OpenClaw / Hermes 的群内回复习惯一致)。用后即耗, 后续分段
+   * /卡片不重复回挂; DM 不回挂。
+   */
+  private readonly laneReplyTargets = new Map<string, string>();
 
   constructor(
     host: IMHost,
@@ -326,6 +333,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const { html, replyMarkup } = buildCardPayload(spec);
     const sent = await this.callSend<TgMessage>('sendMessage', {
       ...target,
+      ...this.consumeReplyParams(userId),
       text: html,
       parse_mode: 'HTML',
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
@@ -649,6 +657,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (!trigger) return;
       if (String(m.from.id) !== this.ownerUserId) return; // 仅 owner 可触发
       const laneUserId = laneUserIdOf(m);
+      this.laneReplyTargets.set(laneUserId, String(m.message_id));
       const acceptedConfigVersion = this.configVersion;
       const event = await normalizeMessage(m, {
         api: this.requireApi(),
@@ -720,6 +729,21 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     };
   }
 
+  /**
+   * 消费该 lane 的待回挂触发 → reply_parameters(首条出站专用)。
+   * allow_sending_without_reply: 触发消息被删时降级为普通消息, 不让发送失败。
+   */
+  private consumeReplyParams(
+    userId: string,
+  ): { reply_parameters: { message_id: number; allow_sending_without_reply: true } } | Record<string, never> {
+    const target = this.laneReplyTargets.get(userId);
+    if (target === undefined) return {};
+    this.laneReplyTargets.delete(userId);
+    return {
+      reply_parameters: { message_id: Number(target), allow_sending_without_reply: true },
+    };
+  }
+
   private requireApi(): TelegramApiClient {
     if (!this.api) throw new Error('telegram api is not connected');
     return this.api;
@@ -745,11 +769,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     markdownChunk: string,
   ): Promise<{ messageId: string; imageUrls: string[] }> {
     const target = this.targetOf(userId);
+    const replyParams = this.consumeReplyParams(userId);
     const { html, imageUrls } = markdownToTelegramHtml(markdownChunk);
     let sent: TgMessage;
     try {
       sent = await this.callSend<TgMessage>('sendMessage', {
         ...target,
+        ...replyParams,
         text: html || '…',
         parse_mode: 'HTML',
         link_preview_options: { is_disabled: true },
@@ -758,6 +784,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (err instanceof TelegramApiError && err.errorCode === 400) {
         sent = await this.callSend<TgMessage>('sendMessage', {
           ...target,
+          ...replyParams,
           text: markdownChunk || '…',
           link_preview_options: { is_disabled: true },
         });
@@ -778,6 +805,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     for (const chunk of chunkTelegramSource(text)) {
       const sent = await this.callSend<TgMessage>('sendMessage', {
         ...target,
+        ...(firstMessageId === '' ? this.consumeReplyParams(userId) : {}),
         text: chunk || '…',
         link_preview_options: { is_disabled: true },
       });
