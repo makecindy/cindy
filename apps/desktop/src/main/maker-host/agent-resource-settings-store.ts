@@ -109,6 +109,10 @@ export function writeAgentResourceSetting<K extends keyof AgentResourceSettings>
   key: K,
   value: AgentResourceSettings[K],
 ): void {
+  // 写前同样按 mtime 失效缓存:隐藏配置约定允许直接改文件即生效,不失效的话
+  // writePatch 会基于旧缓存的 overrides 计算,把进程外修改的其它 key 静默
+  // 覆盖回去(bot review P1)。
+  store.invalidateIfChanged();
   store.writePatch({ [key]: value } as Partial<AgentResourceSettings>);
   log.info('agent resource setting written', { key, value });
 }
