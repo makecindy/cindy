@@ -405,6 +405,8 @@ function isInternalFetchTarget(t: string): boolean {
     .replace(/[/?#].*$/, '')             // 去 path/query/fragment
     .replace(/^[^@]*@/, '')              // 去 userinfo
     .replace(/:\d+$/, '')                // 去端口
+    .replace(/\.+$/, '')                 // 去尾随点(FQDN 根点):curl/DNS 视 `127.0.0.1.`=127.0.0.1、
+                                          // `metadata.google.internal.`=metadata.google.internal,不剥会漏判内网(SSRF)
     .toLowerCase();
   if (host === 'localhost' || host.endsWith('.localhost') || host === '0.0.0.0' || host === '::1') return true;
   if (host === 'metadata.google.internal' || host.endsWith('.internal')) return true;
@@ -493,11 +495,13 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
   // 命令也已跑(codex 报:`git ls-remote 'ext::sh -c …'`)。任何 git 命令带 ext::/fd:: 传输 → 升级。
   if (/(?:^|[\s'"=])(?:ext|fd)::/.test(segment)) return 'prompt';
   const rest = tokens.slice(1); // 'git' 之后
-  // 子命令**之前**的内联 config(git -c core.pager=… / -c diff.external=… / --config-env[=…])可执行任意程序(RCE)→ 升级。
-  // `--config-env` 的等号形式 `--config-env=core.pager=…` 是单 token,不等于裸 `--config-env`,用 startsWith 一并拦。
+  // 子命令**之前**的内联全局选项可执行任意程序(RCE)→ 升级:
+  //   -c core.pager=… / -c diff.external=… / --config-env[=…](内联 config);
+  //   --exec-path[=<dir>](把 git 子命令的查找目录指到可写目录 → `git --exec-path=/tmp/evil status` 跑 /tmp/evil/git-status)。
+  // 等号形式是单 token(如 `--config-env=…` / `--exec-path=…`),用 startsWith 一并拦。
   const subIdx = rest.findIndex((t) => !t.startsWith('-'));
   const preSub = subIdx >= 0 ? rest.slice(0, subIdx) : rest;
-  if (preSub.some((t) => t === '-c' || t.startsWith('--config-env'))) return 'prompt';
+  if (preSub.some((t) => t === '-c' || t.startsWith('--config-env') || t.startsWith('--exec-path'))) return 'prompt';
   const sub = rest.find((t) => !t.startsWith('-'));
   if (!sub || !SAFE_GIT_SUBCOMMANDS.has(sub)) {
     // `git config --get/--list` 只读;其它 git(commit/checkout/merge/fetch/config 写…)升级。
@@ -549,9 +553,10 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   // 带替换/默认值的参数展开(${X:-ec} 等)可代入任意文本、拼出危险 flag/命令,静态不可求值 → 升级
   // (codex 报:`-ex${UNSET:-ec}` 抹空后是 -ex、bash 代入 ec 成 -exec)。挡在 readonly/git/fetch 放行前。
   if (SUBSTITUTION_EXPANSION.test(segment)) return 'prompt';
-  // 花括号展开出现在命令名(tokens[0])或某个 flag(-… )里 → 可拼出任意命令/flag,静态不可预测 → 升级
-  // (codex 报 `-ex{e..e}c`→-exec)。位置参数里的 brace 只影响文件名、curl URL glob 另处理,不在此。
-  if (tokens.some((t, i) => (i === 0 || t.startsWith('-')) && BRACE_EXPANSION.test(t))) return 'prompt';
+  // 花括号展开 `{a,b}`/`{x..y}` 或 ANSI-C 转义引用 `$'…'` 出现在命令名(tokens[0])或某个 flag(-…)里 →
+  // bash 在分词前展开/解码,可拼出任意命令/flag(`-ex{e..e}c`→-exec、`-ex$'\x65'c`→-exec),静态不可预测 → 升级。
+  // 只查命令名/flag 位:位置参数里的 brace 只影响文件名、`grep $'\t' f` 的 ANSI-C 是数据,均不误升级;curl URL glob 另处理。
+  if (tokens.some((t, i) => (i === 0 || t.startsWith('-')) && (BRACE_EXPANSION.test(t) || t.includes("$'")))) return 'prompt';
   // 显式路径的可执行文件(./ls、/tmp/ls、bin/ls)不是白名单里的系统工具,不能靠 basename 放行 ——
   // 只信任 **OS 自有**、非特权用户不可写的 bin 目录(/usr/bin、/bin、/usr/sbin、/sbin)。/usr/local/bin 与
   // /opt/homebrew/bin 在 macOS/Homebrew 下当前用户可写(可被替换成木马),不再算可信系统 bin(codex 报);

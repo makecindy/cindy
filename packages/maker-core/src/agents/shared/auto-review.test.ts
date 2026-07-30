@@ -848,4 +848,29 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
     expect(classifyShellCommand('git remote -v', roots)).toBe('auto-approve');
     expect(classifyShellCommand('git remote get-url origin', roots)).toBe('auto-approve');
   });
+
+  // ─── 主动加固(赶在评审 bot 前):host 尾点 / git --exec-path / ANSI-C 转义引用 ───
+
+  it('host 尾随点(FQDN 根点)不绕过内网判定 → 升级', () => {
+    expect(classifyShellCommand('curl http://127.0.0.1./x', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://169.254.169.254./latest/meta-data', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://metadata.google.internal./x', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://foo.internal./x', roots)).toBe('prompt');
+    // 反例:公网带尾点仍放行(尾点不影响公网判定)。
+    expect(classifyShellCommand('curl http://example.com./', roots)).toBe('auto-approve');
+  });
+
+  it('git --exec-path=<dir> 子命令前把子命令查找目录指到可写目录(RCE)→ 升级', () => {
+    expect(classifyShellCommand('git --exec-path=/tmp/evil status', roots)).toBe('prompt');
+    expect(classifyShellCommand('git --exec-path=/tmp/evil log', roots)).toBe('prompt');
+    // 反例:普通只读子命令仍放行。
+    expect(classifyShellCommand('git status', roots)).toBe('auto-approve');
+  });
+
+  it("ANSI-C 转义引用 $'…' 出现在命令名/flag 里(可解码成任意 flag/命令)→ 升级", () => {
+    expect(classifyShellCommand("find . -maxdepth 0 -ex$'\\x65'c sh -c payload {} +", roots)).toBe('prompt');
+    expect(classifyShellCommand("$'\\x63at' /etc/passwd", roots)).toBe('prompt');
+    // 反例:位置参数里的 $'…'(如 grep 搜索制表符)是数据,不误升级。
+    expect(classifyShellCommand("grep $'\\t' notes.txt", roots)).toBe('auto-approve');
+  });
 });
