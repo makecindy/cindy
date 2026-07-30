@@ -214,6 +214,25 @@ describe('ErrorBanner billing CTA', () => {
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
   });
 
+  it('resets the billing attribution snapshot when the route-owned view switches sessions', () => {
+    // 只按错误文本键控不够:两个会话的错误文案恰好相同(如都命中
+    // insufficient_quota)时,直接切到另一会话不该沿用旧会话的 providerId
+    // 快照(PR review P1)——必须联合 sessionId 判定实例边界。
+    const view = renderBanner({ providerId: 'my-custom-provider', sessionId: 's1' });
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
+    view.rerender(
+      <ErrorBanner
+        error={QUOTA_ERROR}
+        retryText="retry me"
+        onRetry={vi.fn()}
+        agentKind="cc"
+        providerId="xd"
+        sessionId="s2"
+      />,
+    );
+    expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
+  });
+
   it('suppresses explicit-source clauses for persisted errors (attribution unavailable)', () => {
     // 持久化历史错误重开时来源可能早已换过:providerId=xd 的现值不可信,
     // 仅剩 cc 会话观察值路径可放行引导(PR review P1)。

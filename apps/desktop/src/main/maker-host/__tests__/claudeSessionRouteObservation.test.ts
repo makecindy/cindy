@@ -314,11 +314,31 @@ describe('claude session route observation (routing transform ② 段)', () => {
         requestBody: Buffer.from('{"model":"claude-opus-4-8"}'),
       });
       expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
-      // ……随后 forward 路径主推理 POST 失败落地 → 覆写为非 bridge。
+      // 429 / 529 是 SDK 自带退避重试的状态码,单次响应不代表终态——不得覆写
+      // 归因(PR review P1),否则一次会被重试掉的瞬时失败会污染当前显示的
+      // bridge 错误,且没有"重试成功"事件能纠正回来。
       observer({
         method: 'POST',
         url: '/v1/messages?beta=true',
         status: 429,
+        requestHeaders: SESSION_HEADER,
+        requestBody: Buffer.from('{"model":"claude-opus-4-8","max_tokens":32000}'),
+      });
+      expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
+      observer({
+        method: 'POST',
+        url: '/v1/messages?beta=true',
+        status: 529,
+        requestHeaders: SESSION_HEADER,
+        requestBody: Buffer.from('{"model":"claude-opus-4-8","max_tokens":32000}'),
+      });
+      expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
+      // ……随后 forward 路径主推理 POST 真正终止的失败(非 429/529)落地 →
+      // 覆写为非 bridge。
+      observer({
+        method: 'POST',
+        url: '/v1/messages?beta=true',
+        status: 400,
         requestHeaders: SESSION_HEADER,
         requestBody: Buffer.from('{"model":"claude-opus-4-8","max_tokens":32000}'),
       });

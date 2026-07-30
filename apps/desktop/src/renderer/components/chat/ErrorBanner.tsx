@@ -186,17 +186,21 @@ export function ErrorBanner({
   // ── 计费引导的来源归因快照(错误实例级)────────────────────────────────
   // providerId / modelId 是会话的**可变**当前值:错误还挂着时用户切换来源
   // (ChatInput.performProviderChange 不清错误尾部),自定义供应商的余额错误会
-  // 被换上的 xd 重新贴成 Cindy 点数耗尽(PR review P1)。快照按错误文本实例
-  // 冻结首帧的来源归因,只服务下方计费引导;其它恢复分支维持既有行为。
-  // 持久化历史错误连首帧快照都不可信(重开时来源可能早已换过),由下方
-  // !persistedError 门控整体抑制显式来源子句。
+  // 被换上的 xd 重新贴成 Cindy 点数耗尽(PR review P1)。快照按 (sessionId, 错误
+  // 文本) 联合实例冻结首帧的来源归因,只服务下方计费引导;其它恢复分支维持既有
+  // 行为。只按错误文本键控不够:route-owner 会话视图直接切到另一会话时,若两个
+  // 会话的错误文案恰好相同(如都命中 insufficient_quota),旧会话的快照会被
+  // 误认成仍然有效并沿用其 providerId(PR review P1)。持久化历史错误连首帧
+  // 快照都不可信(重开时来源可能早已换过),由下方 !persistedError 门控整体
+  // 抑制显式来源子句。
   const [billingAttribution, setBillingAttribution] = useState<{
+    sessionId: string | undefined;
     err: string;
     providerId: string | null;
     modelId: string | undefined;
-  }>(() => ({ err: error, providerId: normalizedProviderId, modelId }));
-  if (billingAttribution.err !== error) {
-    setBillingAttribution({ err: error, providerId: normalizedProviderId, modelId });
+  }>(() => ({ sessionId, err: error, providerId: normalizedProviderId, modelId }));
+  if (billingAttribution.sessionId !== sessionId || billingAttribution.err !== error) {
+    setBillingAttribution({ sessionId, err: error, providerId: normalizedProviderId, modelId });
   }
   const billingProviderId = billingAttribution.providerId;
   const billingModelId = billingAttribution.modelId;
