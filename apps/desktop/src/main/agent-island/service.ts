@@ -10,6 +10,7 @@ import {
 } from '@cindy/maker-core';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import type { ApplicationMenuCommand } from '../../shared/applicationMenuCommands.js';
 
 import { hasSessionAttention as hasAppBadgeSessionAttention } from '../appBadgeService.js';
@@ -1111,19 +1112,41 @@ export class AgentIslandService {
       workingDir: patch.workingDir !== undefined ? patch.workingDir : current.workingDir,
       workspaceKind: patch.workspaceKind !== undefined ? patch.workspaceKind : current.workspaceKind,
     };
-    this.metadataCache.set(sessionId, next);
-    if (!patchAgentIslandMetadata(this.state, { sessionId, ...next })) return;
-    this.publish();
+    this.commitMetadata(sessionId, next);
   }
 
   replaySessionActivity(): void {
     this.sessionActivityRelay.replay(this.buildSessionActivityPayload());
   }
 
+  /**
+   * 会话元数据的**唯一写出口**:落 cache + patch state + 发布。
+   *
+   * 这里**只存原始标题**,不做本地化投影 —— 投影统一推迟到 {@link localizeDisplayState}
+   * (构建送给 native 的 payload 那一刻)。两个理由:
+   *
+   *   - `metadataCache` 必须是原始值 —— {@link ensureMetadata} 靠
+   *     `isPlaceholderSessionTitle(cached.title)` 判断「还没拿到权威标题、需要重拉」。
+   *     把本地化文案写进 cache 会让该判定恒为 false,权威标题永远不会再被加载。
+   *   - `state` 也必须是原始值 —— 否则切换应用语言时,`refreshLocalization()` 只重建
+   *     `state.strings` 并 republish,不会重新投影 metadata,灵动岛会一直显示旧语言的
+   *     兜底文案,直到下一次 metadata 事件才纠正(PR #1031 review P1)。存原始值 +
+   *     publish 时投影,切语言后的那次 republish 自然就是新语言,不需要任何重投影逻辑。
+   */
+  private commitMetadata(
+    sessionId: string,
+    meta: { title: string | null; workingDir: string | null; workspaceKind: string | null },
+  ): void {
+    this.metadataCache.set(sessionId, meta);
+    if (!patchAgentIslandMetadata(this.state, { sessionId, ...meta })) return;
+    this.publish();
+  }
+
   private hydrateMeta(meta: AgentIslandSessionMeta): AgentIslandSessionMeta & { title?: string | null } {
     const cached = this.metadataCache.get(meta.sessionId);
     return {
       ...meta,
+      // 原始标题:投影只在 publish 构建 payload 时做(见 commitMetadata 的说明)。
       title: cached?.title ?? null,
       workingDir: cached?.workingDir ?? meta.workingDir,
       workspaceKind: cached?.workspaceKind ?? meta.workspaceKind,
@@ -1188,15 +1211,11 @@ export class AgentIslandService {
     this.metadataLoading.add(sessionId);
     void getSessionRowSnapshot(sessionId)
       .then((row) => {
-        const metadata = {
+        this.commitMetadata(sessionId, {
           title: row?.title ?? null,
           workingDir: row?.workingDir ?? null,
           workspaceKind: row?.workspaceKind ?? null,
-        };
-        this.metadataCache.set(sessionId, metadata);
-        if (patchAgentIslandMetadata(this.state, { sessionId, ...metadata })) {
-          this.publish();
-        }
+        });
       })
       .catch((err) => {
         log.warn('session metadata load failed', {
@@ -1387,10 +1406,12 @@ export class AgentIslandService {
     }
 
     this.hiddenPublished = false;
-    const displayState = withAgentIslandConfig(
-      buildAgentIslandDisplayState(this.state, now),
-      this.soundSettings,
-      this.mascotSkin,
+    const displayState = this.localizeDisplayState(
+      withAgentIslandConfig(
+        buildAgentIslandDisplayState(this.state, now),
+        this.soundSettings,
+        this.mascotSkin,
+      ),
     );
     this.emitSessionActivityToRenderer();
     this.scheduleNextPublish(now);
@@ -1411,6 +1432,32 @@ export class AgentIslandService {
     )) {
       this.logNativeRendererUnavailable(displayState);
     }
+  }
+
+  /**
+   * 哨兵标题 → 本地化文案的**唯一投影点**:构建送给 native 的 payload 那一刻。
+   *
+   * 不变量:`metadataCache` 与 `state` 一律存**原始**标题,只有这里把哨兵换成兜底文案。
+   *
+   * 放在这里(而不是写 cache / 写 state 时)换来两个性质:
+   *   - **切语言即时生效**:`refreshLocalization()` 只重建 `strings` 再 publish,而 publish
+   *     每次都重新走本函数,所以那次 republish 自然带新语言 —— 不需要「本地化刷新时重投影
+   *     metadata」这类额外逻辑(PR #1031 review P1)。
+   *   - **判定不被污染**:`ensureMetadata` 仍能用 `isPlaceholderSessionTitle(cached.title)`
+   *     判断该不该重拉权威标题。
+   *
+   * 只投影哨兵;真实标题与 null 原样透传(null 由 native 走它自己的空标题分支)。
+   */
+  private localizeDisplayState(state: AgentIslandDisplayState): AgentIslandDisplayState {
+    if (!state.sessions.some((s) => isDefaultDraftSessionTitle(s.title))) return state;
+    return {
+      ...state,
+      sessions: state.sessions.map((session) =>
+        isDefaultDraftSessionTitle(session.title)
+          ? { ...session, title: t('ccAgent.common.unnamedSession') }
+          : session,
+      ),
+    };
   }
 
   private scheduleNextPublish(now: number): void {
@@ -2201,3 +2248,4 @@ function isPlaceholderSessionTitle(title: string | null): boolean {
   const normalized = title.trim().toLowerCase();
   return normalized === '' || normalized === 'new maker' || normalized === 'untitled';
 }
+

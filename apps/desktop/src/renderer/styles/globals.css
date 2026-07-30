@@ -1032,6 +1032,54 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
+/* 召唤法阵终态编舞(GhostSummonCard/SummonSeal,DESIGN.md §14.4 登记):
+   running 结束时两道弧在旋转中把缺口收拢至满圆(600ms 一次性 dasharray
+   过渡,一次性瞬态允许非合成器属性)→ 光晕从法阵荡开一圈 + ✓ 弹出
+   (✓ 复用 Done 语义的唯一批准 overshoot 曲线,同 status-done-pop)。
+   motion-reduce 下全部禁用,直接落终态帧。 */
+.summon-seal-arc {
+  transition: stroke-dasharray 600ms var(--motion-ease-out), opacity 600ms var(--motion-ease-out);
+}
+@keyframes summon-seal-halo {
+  0% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+}
+.summon-seal-halo {
+  animation: summon-seal-halo 0.9s var(--motion-ease-out) forwards;
+}
+@keyframes summon-seal-tick-pop {
+  0% {
+    transform: scale(0);
+  }
+  60% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.summon-seal-tick-pop {
+  animation: summon-seal-tick-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .summon-seal-arc {
+    transition: none;
+  }
+  .summon-seal-halo,
+  .summon-seal-tick-pop {
+    animation: none;
+  }
+  .summon-seal-halo {
+    opacity: 0;
+  }
+}
+
 /* Done: pop bounce, stays orange */
 .status-bar-done {
   color: var(--status-bar-accent);

@@ -10,11 +10,15 @@ import {
 } from './server.js';
 import {
   createActiveStripTransform,
+  createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
+  createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  dedupeDuplicateToolUseIds,
+  repairToolExchangeAdjacency,
   stripEncryptedContentFromBody,
 } from './transform.js';
 import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
@@ -1334,6 +1338,236 @@ function kimiBodyWithEmptyAssistant(): unknown {
     ],
   };
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// 重复 tool_use id(moonshot/kimi 序号 id 跨 turn 复用,2026-07 两个会话实测
+// `Edit_306` / `Bash_256` 各复用 20+ 次致安静瘫痪)的全链路防御实测。
+// ───────────────────────────────────────────────────────────────────────────
+
+// kimi-k3 事故会话形态: 同一序号 id 的两对完整 tool 交换跨 turn 出现。
+function kimiBodyWithDuplicatedToolUseIds(): Record<string, unknown> {
+  return {
+    model: 'moonshot/kimi-k3',
+    messages: [
+      { role: 'user', content: '把 race-2 修掉' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'Edit_306', name: 'Edit', input: { file: 'a.ts', old: 'x', new: 'y' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Edit_306', content: 'has been updated successfully' }] },
+      { role: 'assistant', content: [{ type: 'text', text: '继续修复计划' }, { type: 'tool_use', id: 'Edit_306', name: 'Edit', input: { file: 'a.ts', old: 'x', new: 'y' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Edit_306', content: 'String to replace not found' }] },
+    ],
+  };
+}
+
+// Anthropic 文案的重复 id 400(LiteLLM 版本差 / 真 Anthropic 上游可见)。
+const DUPLICATE_TOOL_USE_ID_ERROR_BODY = JSON.stringify({
+  error: { type: 'invalid_request_error', message: 'messages: `tool_use` ids must be unique' },
+});
+
+// moonshot chatcmpl 校验透出的孤儿 result 400(原文双空格,kimi kosong 注释同款)。
+const MOONSHOT_TOOL_CALL_ID_NOT_FOUND_BODY = JSON.stringify({
+  error: { type: 'invalid_request_error', message: 'Invalid request: tool_call_id  is not found' },
+});
+
+describe('anthropic-compat-proxy duplicate tool_use id (kimi/moonshot 序号 id 复用)', () => {
+  it('proactively rewrites duplicated ids before forwarding — no 400 needed', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [repairToolExchangeAdjacency, dedupeDuplicateToolUseIds], // host 同序: repair 先于 dedupe
+      recoveryRules: [],
+    });
+
+    const r = await post(proxy.url, kimiBodyWithDuplicatedToolUseIds());
+
+    expect(r.status).toBe(200);
+    // 只发一次:主动 transform 在转发前修好,不等上游报错。
+    expect(upstream.bodies).toHaveLength(1);
+    const sent = JSON.parse(upstream.bodies[0]);
+    // 第二对 Edit_306 被唯一化,首对与配对关系保持完整。
+    expect(sent.messages[1].content[0].id).toBe('Edit_306');
+    expect(sent.messages[2].content[0].tool_use_id).toBe('Edit_306');
+    expect(sent.messages[3].content[1].id).toBe('Edit_306_2');
+    expect(sent.messages[4].content[0].tool_use_id).toBe('Edit_306_2');
+    // text 块与业务 input 原样保留。
+    expect(sent.messages[3].content[0]).toEqual({ type: 'text', text: '继续修复计划' });
+    expect(sent.messages[3].content[1].input).toEqual({ file: 'a.ts', old: 'x', new: 'y' });
+  });
+
+  it('passes a clean paired history through byte-identical (zero interference)', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [repairToolExchangeAdjacency, dedupeDuplicateToolUseIds], // host 同序: repair 先于 dedupe
+      recoveryRules: [],
+    });
+
+    const cleanBody = {
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'run ls' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_256', name: 'Bash', input: { command: 'ls' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Bash_256', content: 'ok' }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Read_257', name: 'Read', input: { file: 'a.ts' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Read_257', content: 'file content' }] },
+      ],
+    };
+    const r = await post(proxy.url, cleanBody);
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(1);
+    // cache 安全契约在链路上的实测:无异常时 upstream 收到的字节与客户端发出的一致。
+    expect(upstream.bodies[0]).toBe(JSON.stringify(cleanBody));
+  });
+
+  it('recovers from a 400 "`tool_use` ids must be unique" via transparent retry', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(DUPLICATE_TOOL_USE_ID_ERROR_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      // 空 transform 链:验证 recovery 在主动 transform 未接入的链路上独立工作。
+      transformRequest: [],
+      recoveryRules: [createDuplicateToolUseIdRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, kimiBodyWithDuplicatedToolUseIds());
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    // 第一次原样发出(重复 id 还在),第二次已唯一化。
+    expect(upstream.bodies[0]).toBe(JSON.stringify(kimiBodyWithDuplicatedToolUseIds()));
+    const retried = JSON.parse(upstream.bodies[1]);
+    expect(retried.messages[3].content[1].id).toBe('Edit_306_2');
+    expect(retried.messages[4].content[0].tool_use_id).toBe('Edit_306_2');
+  });
+
+  it('recovers from the moonshot "tool_call_id is not found" 400 by dropping the orphan result', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(MOONSHOT_TOOL_CALL_ID_NOT_FOUND_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createToolExchangeAdjacencyRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_1', name: 'Bash', input: {} }] },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'Bash_1', content: 'ok' },
+            { type: 'tool_result', tool_use_id: 'Edit_999', content: 'stray' },
+          ],
+        },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    const retried = JSON.parse(upstream.bodies[1]);
+    // 孤儿块被丢,合法配对保留。
+    expect(retried.messages[2].content).toEqual([
+      { type: 'tool_result', tool_use_id: 'Bash_1', content: 'ok' },
+    ]);
+  });
+
+  it('returns the 400 as-is when the history has nothing to repair', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(DUPLICATE_TOOL_USE_ID_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createDuplicateToolUseIdRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'moonshot/kimi-k3',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+
+    // strip 无东西可改 → 不重试,400 原样回客户端(不误伤)。
+    expect(r.status).toBe(400);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it('repairs a multiply-polluted history in one proactive pass (host chain order)', async () => {
+    // host 装配顺序的组合场景: 同一请求同时含重复 id + 错位 result + 缺失 result,
+    // repair → dedupe 链式应用后一次修好,只发一次(不等 400)。
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [repairToolExchangeAdjacency, dedupeDuplicateToolUseIds], // host 同序: repair 先于 dedupe
+      recoveryRules: [],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Edit_306', name: 'Edit', input: { a: 1 } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Edit_306', content: 'ok' }] },
+        // 第二对: 同 id(重复)且 result 错位(隔了一条 user text)。
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Edit_306', name: 'Edit', input: { a: 2 } }] },
+        { role: 'user', content: [{ type: 'text', text: 'intervening' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Edit_306', content: 'late' }] },
+        // 第三个 call: 同 id 且从此无 result(缺失,后面有 assistant 推进 → 非 trailing)。
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Edit_306', name: 'Edit', input: { a: 3 } }] },
+        { role: 'assistant', content: [{ type: 'text', text: '我以为发出去了' }] },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(1);
+    const sent = JSON.parse(upstream.bodies[0]);
+    // dedupe: 三个同 id call → Edit_306 / Edit_306_2 / Edit_306_3。
+    const callIds = sent.messages
+      .filter((m: { role: string }) => m.role === 'assistant')
+      .flatMap((m: { content: Array<{ id?: string }> }) => m.content)
+      .filter((b: { id?: string }) => b.id !== undefined)
+      .map((b: { id?: string }) => b.id);
+    expect(callIds).toEqual(['Edit_306', 'Edit_306_2', 'Edit_306_3']);
+    // repair: 错位的 result(已改名 Edit_306_2)前移到第二对 call 紧邻的 user 消息开头;
+    // 第三个 call 合成占位(Edit_306_3),新建 user 消息插入在两个 assistant 之间。
+    const roles = sent.messages.map((m: { role: string }) => m.role);
+    expect(roles).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
+    expect(sent.messages[4].content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'Edit_306_2', content: 'late' });
+    expect(sent.messages[6].content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'Edit_306_3' });
+    // 每个 tool_use 都有紧邻的配对 result —— 修复后的历史对 strict 上游合法。
+  });
+});
 
 describe('anthropic-compat-proxy empty-assistant-message recovery (moonshot/kimi)', () => {
   it('drops the empty assistant message and retries once on the moonshot 400', async () => {

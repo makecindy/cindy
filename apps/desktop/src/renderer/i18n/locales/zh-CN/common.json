@@ -2,6 +2,10 @@
   "ipcError": {
     "SESSION_RUNNING": "当前对话正在执行任务，请稍后再试。",
     "CREDENTIAL_SWITCH_BUSY": "其他 Codex 任务正在运行，本次来源切换未生效（对话仍使用原来源）。等其他任务结束后再试。",
+    "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "目标模型或来源需要不同的远端路由，请关闭并重新创建远程对话后生效。",
+    "REMOTE_PROVIDER_UPDATING": "供应商凭证正在更新，请稍后重试",
+    "REMOTE_PROVIDER_UNSUPPORTED": "该供应商不支持 SSH 远程会话，请更换来源",
+    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "未连接 Claude.ai 订阅，请先连接或选择网关模型",
     "REMOTE_WORKDIR_INVALID": "远程项目目录无效，请重新选择项目目录。",
     "REMOTE_WORKDIR_NOT_FOUND": "远程项目目录不存在，请重新选择项目目录。",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "远程项目路径不是文件夹，请重新选择项目目录。",
@@ -269,13 +273,22 @@
           "keyHint": "直接读私钥文件。为了不存密码，不支持加密的密钥 —— 仅在 ssh-agent 不可用时使用。"
         },
         "identityFile": "私钥文件路径",
-        "agentProxy": "Agent 流量走本地 Proxy",
-        "agentProxyTip": "在远端开一个 127.0.0.1 端口，经 SSH 隧道转回本机 Proxy，远端 codex / Claude Code 的流量由此流出",
-        "agentProxyAddr": "本地 Proxy 地址",
-        "agentProxyHint": "在远端 127.0.0.1 开端口，经 SSH 隧道转回本机 Proxy（如 Clash 的 7890）。{{appName}} 不提供 Proxy，只建隧道；远端 agent 的 HTTPS_PROXY 会指向隧道口，域名由你的 Proxy 解析。切换后远端 codex daemon 会重启一次以生效。",
-        "agentProxyAddrInvalid": "格式应为 host:port，例如 127.0.0.1:7890",
         "cancel": "取消",
-        "submit": "添加机器"
+        "submit": "添加机器",
+        "agentProxy": "Agent 流量走 Proxy",
+        "agentProxyTip": "让远端 codex / Claude Code 的模型流量经 Proxy 流出：由 Cindy 代建 SSH 隧道回本机 Proxy，或直接注入你自备的远端可达 Proxy 地址",
+        "agentProxyModeTunnel": "Cindy 代建隧道",
+        "agentProxyModeTunnelDesc": "独立 SSH 隧道转回本机 Proxy，固定远端端口，断线自动重连保活",
+        "agentProxyModeEnv": "自备 Proxy（仅注入环境变量）",
+        "agentProxyModeEnvDesc": "填一个在远端可达的 Proxy 地址，隧道与可达性由你自行维护",
+        "agentProxyAddr": "本地 Proxy 地址",
+        "agentProxyHint": "远端 127.0.0.1 的固定端口经 Cindy 维护的独立 SSH 隧道转回本机 Proxy（如 Clash 的 7890）。{{appName}} 不提供 Proxy，只建隧道；远端 agent 的 HTTPS_PROXY 写死这个固定端口，重连不漂移。修改配置后远端 codex daemon 会重启一次以生效。",
+        "agentProxyAddrInvalid": "格式应为 host:port，例如 127.0.0.1:7890",
+        "agentProxyRemotePort": "远端固定端口",
+        "agentProxyRemotePortInvalid": "端口应为 1-65535 的整数",
+        "agentProxyUrl": "远端可达的 Proxy 地址",
+        "agentProxyUrlHint": "该地址在远端解析：可以是远端本机 Proxy（如你用 autossh -R 自建的隧道口）、局域网 Proxy 等。支持 http / https / socks5。",
+        "agentProxyUrlInvalid": "应为 http:// 、https:// 或 socks5:// 开头的 URL，不含空格与引号"
       },
       "detail": {
         "agentSetupTitle": "Agent 设置",
@@ -289,11 +302,6 @@
         "statusInstalled": "已安装",
         "statusNotInstalled": "未安装",
         "claudeCodeName": "Claude Code",
-        "agentProxyTitle": "Agent Proxy 隧道",
-        "agentProxyActive": "远端 127.0.0.1 端口 {{port}} → 本机 {{target}} · 已建立",
-        "agentProxyPending": "隧道建立中 → 本机 {{target}}",
-        "agentProxyWaiting": "主机未连接，重连后自动建立 → 本机 {{target}}",
-        "agentProxyError": "隧道建立失败：{{message}}",
         "button": {
           "install": "安装",
           "reinstall": "重新安装",
@@ -302,7 +310,15 @@
           "run": "运行",
           "syncAuth": "同步登录态",
           "syncAuthTip": "把本机的 Codex 凭证复制到这台远端，免去在远端重新登录"
-        }
+        },
+        "agentProxyTitle": "Agent Proxy",
+        "agentProxyActive": "远端 127.0.0.1 端口 {{port}} → 本机 {{target}} · 已建立",
+        "agentProxyPending": "隧道建立中 → 本机 {{target}}",
+        "agentProxyWaiting": "主机未连接，重连后自动恢复 → 本机 {{target}}",
+        "agentProxyError": "Proxy 配置失败：{{message}}",
+        "agentProxyPortBusy": "远端端口 {{port}} 被占用，正在等待释放并自动重试…（长时间占用可在设置中更换端口）",
+        "agentProxyEnvInfo": "已注入环境变量 → {{url}}（通路由你自行维护）",
+        "agentProxyEnvPending": "等待应用环境变量 → {{url}}（主机连接后自动生效）"
       },
       "startSession": {
         "title": "在这台远端开新 Codex 对话",
@@ -1974,6 +1990,24 @@
           "failed": "ADB 状态检查失败：{{message}}",
           "unknownIssue": "ADB 状态异常：{{issue}}"
         },
+        "connectionGuide": {
+          "connect": {
+            "title": "如何连接 Android 手机",
+            "adbNote": "Cindy 会自动准备 ADB，无需安装 Android SDK；自定义 ADB 路径仅供高级设置使用。",
+            "step1": "使用支持数据传输的 USB 数据线连接手机和电脑。",
+            "step2": "在手机「设置 → 关于手机」中连续点击版本号，开启开发者选项。",
+            "step3": "在「开发者选项」中开启「USB 调试」。",
+            "step4": "保持手机解锁，回到 Cindy 点击「重新检查」。"
+          },
+          "unauthorized": {
+            "title": "请允许 USB 调试",
+            "body": "请在手机弹出的「允许 USB 调试」窗口中点击「允许」，建议勾选「始终允许使用这台电脑」，然后回到 Cindy 点击「重新检查」。"
+          },
+          "offline": {
+            "title": "设备处于 offline 状态",
+            "body": "请重新插拔 USB 数据线，保持手机解锁，然后回到 Cindy 点击「重新检查」。"
+          }
+        },
         "device": {
           "title": "设备",
           "ariaLabel": "选择默认 Android 设备",
@@ -2903,7 +2937,7 @@
     },
     "contacts": {
       "title": "智能通讯录",
-      "description": "为 Agent 建立的人物与组织档案库：跨平台身份反查(邮箱 / 飞书 / Slack / GitHub id → 这是谁)、关系背景与带日期的事件记录。Agent 在工作中自动沉淀，低置信条目进入待确认队列由你裁决。",
+      "description": "为 Agent 建立的人物与组织档案库：跨平台身份反查(邮箱 / 飞书 / Slack / GitHub id → 这是谁)、关系背景与带日期的事件记录。Agent 在工作中自动沉淀，低置信条目进入待确认队列由你裁决。数据只保存在本机，查询与整理会经由你自己的模型处理。",
       "enable": {
         "label": "启用智能通讯录",
         "description": "开启后 Agent 可以查询并自动采集人物信息(不确定的条目会进入待确认)。关闭不影响在此浏览和管理已有数据。",
@@ -3047,9 +3081,16 @@
         "INTERNAL": "操作失败，请稍后重试"
       },
       "guide": {
-        "hint": "通讯录还是空的。让 AI 帮你开始：整理对话里出现过的人、或从系统通讯录导入。",
+        "hint": "通讯录还是空的。从任一来源开始，让它第一天就认识你的联系人：",
         "cta": "让 AI 整理通讯录",
-        "prompt": "帮我整理一下我的智能通讯录：先看看现在有什么，然后把值得记录的人补进去(可以从系统通讯录或 vCard 导入，也可以问我)，有重复的帮我确认后合并。"
+        "prompt": "帮我整理一下我的智能通讯录：先看看现在有什么，然后把值得记录的人补进去(可以从系统通讯录或 vCard 导入，也可以问我)，有重复的帮我确认后合并。",
+        "sources": {
+          "mail": "从邮件整理",
+          "im": "从 IM 整理",
+          "import": "导入通讯录"
+        },
+        "mailPrompt": "帮我从邮件建立智能通讯录：先看看我连接了哪些邮箱工具(没有的话告诉我该怎么连接)；扫描最近 6 个月的往来邮件，找出和我有双向往来的真实联系人建档——高频且信息明确的直接确认，拿不准的用 pending；营销邮件、通知机器人、一次性发件人跳过。最后汇报建了哪些档案。",
+        "imPrompt": "帮我从 IM 工具建立智能通讯录：先看看我连接了哪些 IM(飞书 / Slack / 微信等，没有的话告诉我该怎么连接)；把近期经常和我对话的联系人整理进通讯录，拿不准的用 pending，群机器人和一次性对话跳过。最后汇报建了哪些档案。"
       }
     }
   },
@@ -3896,6 +3937,7 @@
       "preparingAria": "正在准备新版本，请稍候",
       "confirmTitle": "确认重启更新？",
       "confirmHint": "应用会自动重启",
+      "confirmBusyHint": "当前仍有任务在执行，重启会直接中断",
       "confirmButton": "确认重启",
       "cancel": "取消",
       "confirmTooltip": "确认重启并应用更新",
@@ -4175,6 +4217,11 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在设置里配置 API key 才能使用",
+      "subscriptionDirectDisabled": {
+        "chatgpt": "订阅直连的 GPT 模型协议暂不支持 SSH 远程会话",
+        "xai": "订阅直连的 Grok 模型协议暂不支持 SSH 远程会话",
+        "generic": "订阅直连模型协议暂不支持 SSH 远程会话"
+      },
       "effortLabel": "推理强度",
       "edit": "编辑",
       "options": "选项",
@@ -5053,7 +5100,6 @@
       "openInSidebarFailed": "在侧边栏浏览器中打开失败"
     },
     "ghostSummon": {
-      "overline": "调用插件 · GHOST",
       "directiveLabel": "追加给模型的指令",
       "legend": "高亮 = 插件注入(来自身份卡)· 其余为系统固定模板",
       "expandAria": "展开查看追加给模型的指令",
@@ -5063,7 +5109,12 @@
       "mentionDirectiveLabel": "追加给模型的提示",
       "semanticExpandAria": "查看本次调用说明",
       "semanticNote": "AI 根据消息语义自主调用了这个插件；本条消息未追加任何机器指令。",
-      "listSeparator": "、"
+      "listSeparator": "、",
+      "status": {
+        "running": "调用中…",
+        "called": "已调用",
+        "done": "已完成"
+      }
     },
     "userMessage": {
       "attachmentPrefix": "附件：",
@@ -5357,6 +5408,9 @@
     },
     "draft": {
       "createSessionFailed": "创建对话失败，请重试",
+      "remoteProviderUpdating": "供应商凭证正在更新，请稍后重试",
+      "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
+      "remoteNativeOauthUnavailable": "未连接 Claude.ai 订阅，请先连接或选择网关模型",
       "deviceStillLoading": "远程设备仍在加载中，请稍候",
       "worktreeMissingRepo": "无法开 worktree：缺少当前目录的仓库根",
       "worktreeRepoHint": "可尝试重新选一次工作目录，等右下角文件夹标识刷新后再试",
@@ -7566,7 +7620,7 @@
     }
   },
   "billing": {
-    "sidebar": "点数与订阅",
+    "sidebar": "余额与订阅",
     "settings": {
       "title": "用量和计费",
       "subscriptionCard": {
@@ -7581,13 +7635,13 @@
         "portalAction": "Stripe 管理",
         "portalFailed": "无法打开 Stripe 订阅管理页，请稍后重试。",
         "priceInterval": "{{price}} / {{interval}}",
-        "includedCredits": "每{{interval}}包含 {{amount}} 点数",
+        "includedCredits": "每{{interval}}包含 {{amount}}",
         "renewsAt": "下次续费 {{date}}",
         "endsAt": "套餐将于 {{date}} 结束",
         "cancelAction": "取消订阅",
         "cancelConfirmTitle": "取消当前订阅？",
-        "cancelConfirmDescription": "本次操作不会退款，也不会立即调整点数。当前套餐权益可继续使用至 {{date}}，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
-        "cancelConfirmDescriptionWithoutDate": "本次操作不会退款，也不会立即调整点数。当前套餐权益可继续使用至本计费周期结束，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
+        "cancelConfirmDescription": "本次操作不会退款，也不会立即调整余额。当前套餐权益可继续使用至 {{date}}，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
+        "cancelConfirmDescriptionWithoutDate": "本次操作不会退款，也不会立即调整余额。当前套餐权益可继续使用至本计费周期结束，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
         "cancelConfirmAction": "确认取消",
         "cancelSuccess": "已取消自动续费，当前套餐可使用至 {{date}}。",
         "cancelSuccessWithoutDate": "已取消自动续费，当前套餐将在本计费周期结束后到期。",
@@ -7595,36 +7649,34 @@
         "cancelFailed": "取消订阅失败，请稍后重试。"
       },
       "topupCard": {
-        "action": "购买点数"
+        "action": "余额充值"
       }
     },
     "balance": {
       "title": "可用余额",
-      "creditParityCny": "1 点 = 1 元，用于 Cindy AI 用量结算；支付由第三方渠道处理。",
-      "creditParityUsd": "1 点 = 1 美元，用于 Cindy AI 用量结算；支付由第三方渠道处理。",
-      "plan": "订阅点数",
-      "purchased": "已购点数",
-      "promotional": "赠送点数",
-      "notProvisioned": "当前账户尚未开通点数。",
+      "plan": "订阅余额",
+      "purchased": "充值余额",
+      "promotional": "赠送余额",
+      "notProvisioned": "当前账户尚未开通余额。",
       "notSupported": "当前账户暂不支持余额查询。",
       "unavailable": "暂时无法获取余额，请刷新后重试。"
     },
     "usage": {
-      "title": "点数用量",
+      "title": "余额用量",
       "observedAt": "余额更新于 {{date}}",
       "poolDetail": "已用 {{used}} · 总额 {{total}}",
       "remaining": "剩余",
       "progressLabel": "{{label}}使用进度",
-      "noPlanCredits": "当前无生效订阅，因此没有订阅点数。",
+      "noPlanCredits": "当前无生效订阅，因此没有订阅余额。",
       "historyUnavailable": "历史记录不完整，暂时仅显示剩余余额。",
       "detailsUnavailable": "用量明细暂时不可用，当前仅显示各类余额。",
       "promotionalDetails": {
-        "title": "赠送点数明细",
+        "title": "赠送余额明细",
         "count": "{{count}} 笔",
-        "empty": "当前没有赠送点数记录。",
+        "empty": "当前没有赠送记录。",
         "incomplete": "赠送记录较多，当前仅显示最近的 {{count}} 笔。",
-        "unnamed": "赠送点数",
-        "original": "原始点数",
+        "unnamed": "赠送余额",
+        "original": "原始金额",
         "used": "已用",
         "remaining": "剩余",
         "expiresAt": "有效期至 {{date}}",
@@ -7641,7 +7693,7 @@
         "title": "选择订阅套餐"
       },
       "topup": {
-        "title": "购买点数"
+        "title": "余额充值"
       }
     },
     "steps": {
@@ -7678,7 +7730,7 @@
       "MONTH": "月",
       "YEAR": "年"
     },
-    "credits": "{{amount}} 点数",
+    "credits": "含 {{amount}}",
     "confirm": {
       "channel": "通过 {{provider}} 支付"
     },
@@ -7711,7 +7763,7 @@
       "failedTitle": "暂时无法完成",
       "expiredTitle": "支付已过期",
       "canceledTitle": "支付已取消",
-      "topupSubtitle": "点数充值",
+      "topupSubtitle": "余额充值",
       "subscriptionSubtitle": "订阅套餐",
       "creatingBody": "正在向支付服务确认订单…",
       "qrAlt": "支付二维码",

@@ -1847,7 +1847,7 @@ describe('BillingPage plan change', () => {
     expect(within(currentButton).getByText('Plus plan')).toBeTruthy();
     expect(within(currentButton).getByText('$7.00')).toBeTruthy();
     expect(
-      within(currentButton).getByText('billing.credits:{"amount":"80"}'),
+      within(currentButton).getByText('billing.credits:{"amount":"$80.00"}'),
     ).toBeTruthy();
   });
 

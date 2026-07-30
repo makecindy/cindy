@@ -160,6 +160,7 @@
     "chipArchived": "アーカイブ済み",
     "chipReadOnly": "読み取り専用",
     "titleFallback": "リモートセッション",
+    "unnamedTitle": "名称未設定の会話",
     "renameAction": "会話の名前を変更",
     "copyLinkAction": "会話リンクをコピー",
     "unpin": "ピン留めを解除",

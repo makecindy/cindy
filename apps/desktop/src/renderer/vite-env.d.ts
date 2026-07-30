@@ -12,6 +12,8 @@ interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
 
+type AgentProxyPrefPayload = import('../shared/agentProxyConfig').SshHostAgentProxyPref;
+type AgentProxyTunnelStatePayload = import('../shared/agentProxyConfig').AgentProxyTunnelState;
 type ModelAccessStatusPayload = import('../shared/modelAccess').ModelAccessStatus;
 type AnalyticsSettingsPayload = import('../shared/analyticsSettings').AnalyticsSettingsPayload;
 type RsbWindowCommand = import('../shared/rightSidebarWindow').RsbWindowCommand;
@@ -51,9 +53,9 @@ interface EnvCheckResult {
 type RemoteHostSnapshot = import('@cindy/maker-remote-ssh').HostSnapshot & {
   autoConnect: boolean;
   /** Agent 流量经 SSH 隧道走本地 Proxy 的 per-host 配置; 未开启 → null。 */
-  agentProxy: { enabled: boolean; localHost: string; localPort: number } | null;
+  agentProxy: AgentProxyPrefPayload | null;
   /** 隧道实时状态 (main 进程内存态); 无记录 → null。 */
-  agentProxyTunnel: { active: boolean; remotePort?: number; lastError?: string } | null;
+  agentProxyTunnel: AgentProxyTunnelStatePayload | null;
 };
 /** 设备互联:REST 设备视图(同 shared/deviceLinkIpc.ts DeviceLinkDeviceView) */
 interface DeviceLinkDeviceInfo {
@@ -2021,11 +2023,18 @@ interface ElectronAPI {
   /**
    * RSB web-browser plugin popup 路由订阅。guest webview 内 `window.open` /
    * `<a target="_blank">` / window.location 跨 host 时,main 端 webview-security
-   * setWindowOpenHandler 把 url + disposition 推过来,renderer 端 RightSidebarShell
-   * 收到后调 store.addTab 开新 web-browser tab。
+   * setWindowOpenHandler 把 url + disposition(+ opener 归属,按发起方 guest 的
+   * webContentsId 从 TabRegistry 反查)推过来,renderer 端 RightSidebarShell
+   * 收到后调 store.addTab 开新 web-browser tab——有 openerSessionId 时落进该
+   * session 的 bucket,而不是用户正在看的 session。
    */
   onRsbBrowserPopup: (
-    callback: (payload: { url: string; disposition: string }) => void,
+    callback: (payload: {
+      url: string;
+      disposition: string;
+      openerTabId?: string;
+      openerSessionId?: string;
+    }) => void,
   ) => () => void;
 
   /**
@@ -2854,7 +2863,7 @@ interface ElectronAPI {
       authMethod?: 'agent' | 'key';
       identityFile?: string;
       /** 「Agent 流量走本地 Proxy」pref; null = 关闭, 缺省 = 不动。 */
-      agentProxy?: { enabled: boolean; localHost: string; localPort: number } | null;
+      agentProxy?: AgentProxyPrefPayload | null;
     }) => Promise<{ host: RemoteHostSnapshot }>;
     update: (host: {
       id: string;
@@ -2863,7 +2872,7 @@ interface ElectronAPI {
       user: string;
       authMethod?: 'agent' | 'key';
       identityFile?: string;
-      agentProxy?: { enabled: boolean; localHost: string; localPort: number } | null;
+      agentProxy?: AgentProxyPrefPayload | null;
     }) => Promise<{ host: RemoteHostSnapshot }>;
     remove: (id: string) => Promise<{ ok: true }>;
     connect: (id: string) => Promise<{ host: RemoteHostSnapshot | null }>;

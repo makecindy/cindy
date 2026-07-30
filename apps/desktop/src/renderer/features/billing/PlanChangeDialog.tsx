@@ -169,7 +169,13 @@ export function PlanChangeTargetDialog({
                         </p>
                         {candidate.offer.creditAmount && (
                           <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
-                            {t('billing.credits', { amount: candidate.offer.creditAmount })}
+                            {t('billing.credits', {
+                              amount: formatMoney(
+                                candidate.offer.creditAmount,
+                                candidate.offer.currency,
+                                billingLocale,
+                              ),
+                            })}
                           </p>
                         )}
                       </div>

@@ -166,7 +166,12 @@ import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
-import { installWebviewHardener } from './webview-security';
+import {
+  installWebviewHardener,
+  setRsbPopupHostResolver,
+  setRsbPopupOpenerReportSubscriber,
+  setRsbPopupOpenerResolver,
+} from './webview-security';
 import {
   installSelectionContextMenu,
   setSelectionContextMenuLocale,
@@ -1103,6 +1108,21 @@ registerRsbBrowserBridgeIpc({
   getHostWebContents: () => rsbWindowController.getHostWebContents(),
   logger: createLogger('rsb-browser-bridge-bootstrap'),
 });
+// popup opener 反查:webview-security 的 popup 路由据此把 window.open 的目标
+// tab 归属到发起方 tab 的 session(而不是用户正在看的 session)。
+setRsbPopupOpenerResolver((webContentsId) => {
+  const record = getRsbBrowserBridge().findByWebContentsId(webContentsId);
+  return record ? { tabId: record.tabId, sessionId: record.sessionId } : null;
+});
+// report 到达事件订阅:归属等待从固定轮询窗口升级为事件驱动 —— report 落地的
+// 瞬间完成反查,超时只兜"report 永不来"的极端场景。
+setRsbPopupOpenerReportSubscriber((listener) =>
+  getRsbBrowserBridge().onReport((record) => listener(record.webContentsId)),
+);
+// popup 路由目标 host 动态解析:异步等待(归属反查 / deferred URL 捕获)期间用户
+// detach 侧边栏或切视图后,捕获时的 hostContents 已过时 —— 发送时刻按当前宿主
+// 形态解析(与 tab-op bridge 同一来源),消息才能落到活着的订阅者。
+setRsbPopupHostResolver(() => rsbWindowController.getHostWebContents());
 // Tab-op result handler for the main → renderer request/response bridge —
 // RsbWebviewBackend (Phase 3) uses this to drive `open` / `focus` / `close`
 // against the renderer's RSB store.

@@ -210,6 +210,7 @@ import {
 import { QuoteCapsule } from '@/session/QuoteCapsule';
 import { formatQuotesForSend } from '@cindy/maker-shared/chat-quotes';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
+import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import { confirmMobileSessionAgentSwitch } from '@/session/sessionAgentSwitchConfirmation';
 import {
@@ -6587,7 +6588,10 @@ export default function SessionScreen() {
               searchOpen={searchOpen}
               title={isDeviceAccessRevoked
                 ? t('session.screen.accessRevokedShort')
-                : currentSession?.title || currentSession?.workingDir
+                // 哨兵先过投影再进兜底链:会话头是发出第一句话后停留最久的位置,
+                // 原样显示会把内部哨兵 "New Maker" 摆在标题栏上。
+                : projectDraftSessionTitle(currentSession?.title, t('session.menu.unnamedTitle'))
+                  || currentSession?.workingDir
                   || (connectionError ? t('session.screen.sessionNotSynced') : (deviceName || t('session.screen.conversationFallback')))}
             />
 

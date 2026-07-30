@@ -1664,6 +1664,10 @@ registerColor('card-status-done', {
   light: '#2AAE5B',
   dark: '#2AAE5B',
 }, '状态点 — 完成未读 (设计定稿 2026-07-17 #2AAE5B,取代 #22c55e;普通/定时任务完成统一,橙专职 running)');
+registerColor('completion-badge-fg', {
+  light: '#1f1f1e',
+  dark: '#1f1f1e',
+}, '完成徽标(✓)前景 — 深墨前景压在 card-status-done 绿上,对比 5.29:1(白前景只有 2.88:1,不达 WCAG 1.4.11 非文字 3:1 门槛);light/dark 同值,与 surface-on-card 暗态的 checked icon 深前景惯例一致');
 registerColor('remote-status-disconnected', {
   light: 'var(--text-tertiary)',
   dark: 'var(--text-tertiary)',

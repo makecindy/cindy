@@ -101,6 +101,7 @@ import { showWorktreeError } from '@/lib/worktreeToast';
 import type { CreateWorktreeResp } from '@/lib/worktree.types';
 import * as sessionService from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { emitAutoTitlePreview, emitAutoTitlePreviewCleared } from '@/lib/sessionsBus';
 import { NewGoalDialog } from '@/components/new-chat/NewGoalDialog';
 import type { GoalLimitValues } from '@/components/new-chat/GoalAdvancedLimits';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -131,6 +132,10 @@ import {
 } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
+import {
+  DEFAULT_DRAFT_SESSION_TITLE,
+  normalizeAutoTitle,
+} from '@cindy/maker-shared/session-title';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { InvisibleWindowDragStrip } from '@/components/layout/windowDrag';
@@ -221,6 +226,42 @@ export { NEW_MAKER_DRAFT_KEY };
 
 /** 草稿命名空间图片缓存 URL 前缀(浏览器页面评论截图等草稿期缓存落这里)。 */
 const DRAFT_IMAGE_URL_PREFIX = `xdt-image://${NEW_MAKER_DRAFT_KEY}/`;
+
+/**
+ * 「创建即发送」路径的乐观标题 —— 让侧边栏 / 会话头 / tab 从第一帧就显示用户刚写下的
+ * 那句话,而不是先亮一下建会话时的默认占位。
+ *
+ * 背景:权威标题在发送链路的**后段**才写(createSession → navigate → SessionView
+ * mount → sendMessage → `maker:auto-title` IPC → 写库 → 广播回 renderer)。这中间会话
+ * 行已经出现在侧边栏上,标题却还是建会话时的默认值,用户明明已经按下回车却看着一个
+ * 占位。device-link 远程路径早就为此做了即时预览
+ * (`remoteProjectsStore.setPendingTitlePreview`,免得干等一次隧道往返),本机路径缺的
+ * 是对称的这一半。
+ *
+ * 预览经 `emitAutoTitlePreview` 交给 sessionsStore:那边把它记进叠加层,既能活过新建
+ * 会话触发的 `forceRefreshAll`(否则会被仍带哨兵的 DB 快照冲掉),又统一持有「标题是否
+ * 仍是哨兵」这唯一一份判据。不写 DB —— 权威标题仍由 main 落库并广播回来,那个串与这里
+ * 算的是同一个(共用 `normalizeAutoTitle`),回流时不跳变。
+ *
+ * **只对能证明一致的纯文本消息放行**。带 @mention / 附件 / 会话引用时,权威占位由
+ * `deriveAutoTitleSeed` 另行推导(剔除 mention 的 wire token、拿文件名合成描述),这里
+ * 算不出同一个串 —— 预览会先显示 A 再跳成 B,比短暂显示占位更糟。这类消息交给显示层的
+ * 「未命名对话」兜底,等权威标题回流。
+ *
+ * 纯文本时两侧一致是可证明的:无 reference / 未编码引用标记时 `projectLiteralUserText`
+ * 退化为 `text.trim()`,无 mention 时 `stripMentionTokens` 同样只做 trim,而
+ * `normalizeAutoTitle` 本身已含 trim。
+ */
+function optimisticFirstMessageTitle(
+  message: string,
+  files: AttachedFile[] | undefined,
+  mentions: MentionedResource[] | undefined,
+  opts: { quotesEncoded?: boolean; agentReferences?: AgentInputReference[] } | undefined,
+): string | null {
+  if (files?.length || mentions?.length) return null;
+  if (opts?.agentReferences?.length || opts?.quotesEncoded) return null;
+  return normalizeAutoTitle(message) || null;
+}
 
 /**
  * 由 draft.collab 拼出 createSession 后 enableOrca 的入参:与会话内 requestEnableCollab 同口径。
@@ -413,9 +454,24 @@ export function NewMakerDraftRoute() {
   // Icon-only mode is reserved for the tighter toolbar state, not merely a
   // moderately narrow content rail (for example, when attachments are present).
   const isDraftToolbarNarrow = draftContentWidth < 600;
-  const { createSession } = useCCSessions();
+  const { createSession, error: createSessionError } = useCCSessions();
   const vendorAuthGate = useVendorAuthGate();
   const refreshWorktrees = useRefreshWorktrees();
+
+  /** createSession 失败 toast:远端路由错误按 code 给可操作文案,其余回退通用文案。 */
+  const toastCreateSessionFailed = (err?: unknown) => {
+    const code = (err as { code?: string } | null | undefined)?.code
+      ?? (createSessionError as { code?: string } | null)?.code;
+    const key =
+      code === 'REMOTE_PROVIDER_UPDATING'
+        ? 'ccAgent.draft.remoteProviderUpdating'
+        : code === 'REMOTE_PROVIDER_UNSUPPORTED'
+          ? 'ccAgent.draft.remoteProviderUnsupported'
+          : code === 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
+            ? 'ccAgent.draft.remoteNativeOauthUnavailable'
+            : 'ccAgent.draft.createSessionFailed';
+    toast.error(t(key));
+  };
 
   // 「添加远程项目」入口:gate = 至少一台 ready SSH 主机 或 一台可控 device-link 设备。
   // 入口渲染在 mode pill 的 FolderPickerPopover 里(Globe 项),点开下面这个弹窗。
@@ -1930,6 +1986,11 @@ export function NewMakerDraftRoute() {
       const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;
 
       markSendInFlight(true);
+      // 已登记乐观标题预览的会话 id。交接链路(rehomeDraftAttachments / setPending /
+      // navigate)在登记之后抛错时,消息没被交出去、权威标题永不回流,预览必须在下面的
+      // catch 里撤回,否则空会话会跨列表刷新一直显示一句**没发出去**的话
+      // (PR #1031 review P1;worktree 与 goal 两条路径各有自己的撤回点)。
+      let optimisticTitleSessionId: string | null = null;
       void (async () => {
         try {
           // device-link:远程草稿就绪态以被控端为准(传 deviceId 走隧道查被控端 maker:agent:status);
@@ -2048,6 +2109,8 @@ export function NewMakerDraftRoute() {
             const created = createResult as { sessionId?: string; workDir?: string } | null;
             const remoteSessionId = created?.sessionId;
             if (!remoteSessionId) {
+              // device-link 创建失败:错误来自被控端 RPC,与 useCCSessions().error 无关,
+              // 不应读 state 里的 REMOTE_* code(copilot review #1035)。
               toast.error(t('ccAgent.draft.createSessionFailed'));
               return;
             }
@@ -2148,7 +2211,7 @@ export function NewMakerDraftRoute() {
               providerId,
             });
             if (!newSession) {
-              toast.error(t('ccAgent.draft.createSessionFailed'));
+              toastCreateSessionFailed();
               return;
             }
             // 计划模式是一次性选择:随本次发送被消耗,草稿勾选同步熄灭,
@@ -2161,6 +2224,11 @@ export function NewMakerDraftRoute() {
               userSendAt: sendAt.toISOString(),
               updatedAt: sendAt.toISOString(),
             });
+            // 标题即时预览,理由同普通 send 分支(见 optimisticFirstMessageTitle)。
+            {
+              const optimisticTitle = optimisticFirstMessageTitle(message, files, mentions, opts);
+              if (optimisticTitle) emitAutoTitlePreview(newSession.id, optimisticTitle);
+            }
             sessionService.touchUserSend(newSession.id, sendAt.getTime()).catch((err) => {
               log.warn('[draft worktree send] touchUserSend failed', err);
             });
@@ -2201,6 +2269,11 @@ export function NewMakerDraftRoute() {
                   text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
                   attachments: rehomedFiles ?? [],
                 });
+                // 第一条消息退回草稿 = 它没被交出去,也就永远不会有权威标题回流。
+                // 不撤回的话标题预览会一直盖着 DB 里的哨兵(每次全量刷新后重新盖上),
+                // 会话永久显示一句**没发出去**的话(PR #1031 review P1)。
+                // 放在这里而不是各 return 前:所有「交接失败 → 还原草稿」的分支都过这一处。
+                emitAutoTitlePreviewCleared(newSession.id);
               };
               try {
                 rehomedFiles = await rehomeDraftAttachments(files, newSession.id);
@@ -2339,7 +2412,7 @@ export function NewMakerDraftRoute() {
             providerId,
           });
           if (!newSession) {
-            toast.error(t('ccAgent.draft.createSessionFailed'));
+            toastCreateSessionFailed();
             return;
           }
           // 计划模式是一次性选择:随本次发送被消耗,草稿勾选同步熄灭。
@@ -2358,9 +2431,17 @@ export function NewMakerDraftRoute() {
           // (userSendAt==null && messages==0 → unclassified),否则新会话会先在
           // Projects 顶层闪一帧再跳到 workdir 分组下。真实 userSendAt 会通过
           // sendMessage 链路里的 emitPatch 再覆盖一次,值差几百 ms 无所谓。
+          //
+          // 标题同理需要即时预览(见 optimisticFirstMessageTitle):否则侧边栏 / 会话头会
+          // 在整个发送链路走完前一直显示建会话时的默认占位。
           {
             const iso = new Date().toISOString();
             sessionsStore.patchLocal(newSession.id, { userSendAt: iso, updatedAt: iso });
+            const optimisticTitle = optimisticFirstMessageTitle(message, files, mentions, opts);
+            if (optimisticTitle) {
+              emitAutoTitlePreview(newSession.id, optimisticTitle);
+              optimisticTitleSessionId = newSession.id;
+            }
           }
 
           // F-COLLAB: draft 阶段开了协同 toggle → createSession 之后立刻 enableOrca
@@ -2418,6 +2499,8 @@ export function NewMakerDraftRoute() {
           });
         } catch (err) {
           log.error('[draft send]', err);
+          // 交接失败 → 撤回乐观标题预览(理由见上面 optimisticTitleSessionId 的注释)。
+          if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
           toast.error(
             getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed'),
           );
@@ -2605,8 +2688,11 @@ export function NewMakerDraftRoute() {
               // maker:generate-title 没有空消息防线,LLM 会把"请提供内容"当标题。
               if (!placeholderTitle) return;
               // 覆写守卫:仅当远端标题仍是默认占位时才自动起名(user rename wins,
-              // PR #296 review)。刚 create-session 建出的会话标题必为 'New Maker',
+              // PR #296 review)。刚 create-session 建出的会话标题必为默认哨兵,
               // 此检查防御极端 race;读取失败时按默认占位继续,不中断起名。
+              //
+              // 比对用跨端共享常量:这串由**被控端**(可能是另一个版本的客户端)写入,
+              // 必须逐字一致,不能本地化。
               try {
                 const preCheck = (await window.electronAPI.deviceLink.invoke(
                   deviceId,
@@ -2614,7 +2700,7 @@ export function NewMakerDraftRoute() {
                   [remoteSessionId],
                 )) as { title?: string | null } | null;
                 const preTitle = preCheck?.title?.trim();
-                if (preTitle && preTitle !== 'New Maker') return;
+                if (preTitle && preTitle !== DEFAULT_DRAFT_SESSION_TITLE) return;
               } catch {
                 // 读不到当前标题时按"仍是默认占位"继续。
               }
@@ -2645,11 +2731,11 @@ export function NewMakerDraftRoute() {
                 [remoteSessionId],
               )) as { title?: string | null } | null;
               const existingTitle = current?.title?.trim();
-              // 占位标题与 'New Maker'(maker:create-session 的默认占位符)都允许覆写;
+              // 占位标题与默认哨兵(maker:create-session 的默认占位符)都允许覆写;
               // 用户已手动改过的真实标题则保留(user rename wins)。
               if (
                 existingTitle &&
-                existingTitle !== 'New Maker' &&
+                existingTitle !== DEFAULT_DRAFT_SESSION_TITLE &&
                 existingTitle !== placeholderTitle
               ) {
                 return;
@@ -2684,9 +2770,13 @@ export function NewMakerDraftRoute() {
         if (!newSession) {
           throw new Error(t('ccAgent.draft.createSessionFailed'));
         }
+        // 目标文案是纯文本(goal 对话框没有附件 / mention 入口),直接即时预览 ——
+        // 与下面 autoNameSession(objective) 最终写入的占位是同一个串。
+        const optimisticGoalTitle = normalizeAutoTitle(objective);
         {
           const iso = new Date().toISOString();
           sessionsStore.patchLocal(newSession.id, { userSendAt: iso, updatedAt: iso });
+          if (optimisticGoalTitle) emitAutoTitlePreview(newSession.id, optimisticGoalTitle);
         }
         // 草稿开了协同 → 新建目标路径也要拉起 Worker(与 Send 路径同口径);否则用户开了协同
         // 却走「新建目标」会得到一个没有 Worker 的 lead session(codex P2)。失败 toast + 降级
@@ -2708,7 +2798,15 @@ export function NewMakerDraftRoute() {
           }
         }
         // setGoal 内部 ensureSession(拉起 agent)+ 发首轮(带目标指令)。
-        await window.electronAPI.maker.setGoal({ sessionId: newSession.id, objective, limits });
+        try {
+          await window.electronAPI.maker.setGoal({ sessionId: newSession.id, objective, limits });
+        } catch (err) {
+          // 首轮没发出去 → 下面的 autoNameSession 也不会跑,权威标题永不回流。
+          // 不撤回的话标题预览会永久盖着 DB 里的哨兵(理由同 worktree 分支的
+          // restoreFirstMessageDraft)。异常照旧抛给调用方展示。
+          if (optimisticGoalTitle) emitAutoTitlePreviewCleared(newSession.id);
+          throw err;
+        }
         // 自动起名:/goal 新建的会话不经普通发送路径,scheduleAutoName 漏触发 → 标题会停在默认。
         // 这里用目标文案补一次,与普通会话同款(立即占位 + 智能标题后台覆盖 + 不覆盖手动改名)。
         makerChatStore.autoNameSession(newSession.id, objective, capabilityAgentKind);
@@ -2847,7 +2945,7 @@ export function NewMakerDraftRoute() {
         <div
           data-testid="create-agent-shell"
           className={cn(
-            'relative flex h-full w-full items-center justify-center overflow-hidden bg-[var(--surface)] px-3 py-8', // px-3:外壳12+main32=44,与技能页(32+12滚动条槽)对齐(实测定稿 2026-07-19)
+            'relative flex h-full w-full items-center justify-center overflow-x-hidden overflow-y-auto bg-[var(--surface)] px-3 py-8', // px-3:外壳12+main32=44,与技能页(32+12滚动条槽)对齐(实测定稿 2026-07-19)
           )}
         >
           {/* 整页拖入遮罩(与 CCAgentSessionView 聊天区同款 token):提示文案由

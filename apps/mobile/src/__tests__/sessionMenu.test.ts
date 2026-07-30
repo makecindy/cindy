@@ -62,6 +62,12 @@ describe('sessionMenu header', () => {
     expect(buildSessionMenuHeader(session({ title: '', workingDir: null }), {}).title).toBe('远程对话');
   });
 
+  it('未起名会话显示本地化兜底,不回落工作目录名', () => {
+    // 哨兵若按「无标题」处理会回落 workspaceName 显示目录名,与 desktop 的
+    // 「未命名对话」不一致(PR #1031 review P1)。
+    expect(buildSessionMenuHeader(session({ title: 'New Maker' }), {}).title).toBe('未命名对话');
+  });
+
   it('prefers the worktree name in the meta line', () => {
     const header = buildSessionMenuHeader(session({
       agentKind: 'codex',

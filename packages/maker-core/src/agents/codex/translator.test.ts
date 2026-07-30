@@ -1231,3 +1231,263 @@ describe('extractRolloutUpdatePlanFunctionCallEvent', () => {
     expect(parsed).toBeNull();
   });
 });
+
+describe('codex file citation 归一化 (#785)', () => {
+  it('normalizeCodexFileCitations 把标记换成行内代码路径,畸形标记整个剥掉', async () => {
+    const { normalizeCodexFileCitations } = await import('./translator.js');
+    expect(
+      normalizeCodexFileCitations(
+        '文档已生成::codex-file-citation{path="/tmp/报告.docx" purpose="output"},请查收。',
+      ),
+    ).toBe('文档已生成:`/tmp/报告.docx`,请查收。');
+    expect(normalizeCodexFileCitations('bad :codex-file-citation{purpose="output"} end')).toBe(
+      'bad  end',
+    );
+    expect(normalizeCodexFileCitations('no marker here')).toBe('no marker here');
+    // 路径含花括号(引号串内):标记仍完整匹配,不把内部语法漏给用户。
+    expect(
+      normalizeCodexFileCitations(':codex-file-citation{path="/tmp/a{b}.md" purpose="output"}'),
+    ).toBe('`/tmp/a{b}.md`');
+    // 路径含反引号:围栏升级为双反引号,code span 不被撑破。
+    expect(
+      normalizeCodexFileCitations(':codex-file-citation{path="/tmp/a`b.md" purpose="output"}'),
+    ).toBe('``/tmp/a`b.md``');
+    // 路径以反引号结尾:按 CommonMark 两侧补空格。
+    expect(
+      normalizeCodexFileCitations(':codex-file-citation{path="/tmp/ab`" purpose="output"}'),
+    ).toBe('`` /tmp/ab` ``');
+    // 路径含转义引号(\"):解出真实文件名(review 反馈)。
+    expect(
+      normalizeCodexFileCitations(':codex-file-citation{path="/tmp/a\\"b.md" purpose="output"}'),
+    ).toBe('`/tmp/a"b.md`');
+    // Windows 原生路径:反斜杠不是转义前缀,原样保留(review 反馈——全量 \(.) 反
+    // 转义会把 C:\Users\Ada\out.docx 毁成 C:UsersAdaout.docx)。
+    expect(
+      normalizeCodexFileCitations(
+        ':codex-file-citation{path="C:\\Users\\Ada\\out.docx" purpose="output"}',
+      ),
+    ).toBe('`C:\\Users\\Ada\\out.docx`');
+    // 显式转义的 \\ 仍解为单个反斜杠。
+    expect(
+      normalizeCodexFileCitations(':codex-file-citation{path="C:\\\\tmp\\\\a.md" purpose="output"}'),
+    ).toBe('`C:\\tmp\\a.md`');
+    // UNC 原生路径:开头的 \\ 是路径本体(网络共享前缀),不当作转义对(review 反馈)。
+    expect(
+      normalizeCodexFileCitations(
+        ':codex-file-citation{path="\\\\server\\share\\out.docx" purpose="output"}',
+      ),
+    ).toBe('`\\\\server\\share\\out.docx`');
+    // 转义形态的 UNC(\\\\server\\share):按转义对解码,解出恰好两个分隔符(review 反馈)。
+    expect(
+      normalizeCodexFileCitations(
+        ':codex-file-citation{path="\\\\\\\\server\\\\share\\\\out.docx" purpose="output"}',
+      ),
+    ).toBe('`\\\\server\\share\\out.docx`');
+    // 属性名完整边界:display_path 不是 path,畸形标记(无真 path)整个剥掉;
+    // 有真 path 时不被前面的 *_path 别名遮蔽(review 反馈)。
+    expect(
+      normalizeCodexFileCitations(
+        'bad :codex-file-citation{display_path="/tmp/preview.docx"} end',
+      ),
+    ).toBe('bad  end');
+    expect(
+      normalizeCodexFileCitations(
+        ':codex-file-citation{display_path="/tmp/preview.docx" path="/tmp/real.docx"}',
+      ),
+    ).toBe('`/tmp/real.docx`');
+    // 文件名首尾空白保留,不 trim(悄悄改写会指向另一个文件)。
+    expect(
+      normalizeCodexFileCitations(':codex-file-citation{path="/tmp/ab.md " purpose="output"}'),
+    ).toBe('`/tmp/ab.md `');
+    // 首尾都是空格:CommonMark 渲染器会对这种 code span 各剥一个空格,补空格垫让
+    // 展示串回到真实路径(review 反馈);单侧空格渲染器不剥,不垫。
+    expect(
+      normalizeCodexFileCitations(':codex-file-citation{path=" ab.md " purpose="output"}'),
+    ).toBe('`  ab.md  `');
+    // 全空格路径:CommonMark 规定剥空格仅当「首尾是空格且**非全空格**」——全空格
+    // code span 原样保留,因此**不垫**才是无损的;垫了反而多出两个永远不被剥的空格。
+    expect(normalizeCodexFileCitations(':codex-file-citation{path="   " purpose="output"}')).toBe(
+      '`   `',
+    );
+  });
+
+  it('finalizeCodexCitationText:剥截断残尾 + 归一化,幂等(#785 导入口径)', async () => {
+    const { finalizeCodexCitationText } = await import('./translator.js');
+    // 截断残尾剥除,与流式 completed 同口径。
+    expect(finalizeCodexCitationText('文件在 :codex-file-citation{path="/tmp/x')).toBe('文件在 ');
+    // 完整标记归一化。
+    expect(
+      finalizeCodexCitationText('done :codex-file-citation{path="/a/b.md" purpose="output"}'),
+    ).toBe('done `/a/b.md`');
+    // 对已归一化文本幂等。
+    expect(finalizeCodexCitationText('done `/a/b.md`')).toBe('done `/a/b.md`');
+  });
+
+  it('stableCitationBoundary 按住未写完的标记尾巴', async () => {
+    const { stableCitationBoundary } = await import('./translator.js');
+    expect(stableCitationBoundary('plain text')).toBe('plain text'.length);
+    const partialOpen = 'abc :codex-file-citation{path="/x';
+    expect(stableCitationBoundary(partialOpen)).toBe(4);
+    const partialPrefix = 'abc :codex-fi';
+    expect(stableCitationBoundary(partialPrefix)).toBe(4);
+    const complete = 'abc :codex-file-citation{path="/x"}';
+    expect(stableCitationBoundary(complete)).toBe(complete.length);
+    // 引号串内的 } 不是闭合边界:标记未写完仍要按住(review 反馈的花括号路径场景)。
+    const braceInQuote = 'abc :codex-file-citation{path="/tmp/a{b}';
+    expect(stableCitationBoundary(braceInQuote)).toBe(4);
+    const braceComplete = 'abc :codex-file-citation{path="/tmp/a{b}.md"}';
+    expect(stableCitationBoundary(braceComplete)).toBe(braceComplete.length);
+  });
+
+  it('路径本身含标记开头字面量:完整标记结构化消费,不被误认成新的未闭合开头', async () => {
+    const { normalizeCodexFileCitations, stableCitationBoundary } = await import('./translator.js');
+    // macOS/POSIX 文件名允许 `:` 与 `{`——路径里可以出现完整的 OPEN 字面量。
+    // 按「最后一个裸字面量」定位会从路径中间起扫、引号状态错位,把完整标记判成
+    // 未完成(review 反馈);结构化扫描把完整标记整体跳过。
+    const marker =
+      ':codex-file-citation{path="/tmp/a:codex-file-citation{b.md" purpose="output"}';
+    expect(stableCitationBoundary(`abc ${marker}`)).toBe(`abc ${marker}`.length);
+    expect(normalizeCodexFileCitations(`abc ${marker}`)).toBe(
+      'abc `/tmp/a:codex-file-citation{b.md`',
+    );
+    // 完整标记之后的真实截断尾巴仍要按住,且按住点在外层标记的真实开头。
+    const tail = ' 然后 :codex-file-citation{path="/x';
+    expect(stableCitationBoundary(`abc ${marker}${tail}`)).toBe(`abc ${marker} 然后 `.length);
+  });
+
+  it('completed:路径含 OPEN 字面量的完整标记不再被误剥,只剥真实截断尾巴', async () => {
+    const { newCodexRuntimeState } = await import('./translator.js');
+    const marker =
+      ':codex-file-citation{path="/tmp/a:codex-file-citation{b.md" purpose="output"}';
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'agentMessage',
+          id: 'msg-embed',
+          text: `保存到 ${marker} 之后 :codex-file-citation{path="/x`,
+        },
+      },
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect((events[0].data as { text: string }).text).toBe(
+      '保存到 `/tmp/a:codex-file-citation{b.md` 之后 ',
+    );
+  });
+
+  it('裸 { 的畸形标记原样透出:不按住流式边界,也不吞它后面的正文', async () => {
+    const { stableCitationBoundary } = await import('./translator.js');
+    // 属性区出现裸 { 后正则永不匹配,追加文本也救不回来——不是「尚未写完」,按住
+    // 或剥除都会误吞后续正文,原样透出交给用户可见性兜底。
+    const poisoned = 'abc :codex-file-citation{oops{ 后面是正文';
+    expect(stableCitationBoundary(poisoned)).toBe(poisoned.length);
+  });
+
+  it('agentMessage 流式:标记跨 update 分段到达,delta 流与 final 全文一致且无内部语法', async () => {
+    const { newCodexRuntimeState } = await import('./translator.js');
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const push = (phase: 'started' | 'updated' | 'completed', text: string): void => {
+      translateItemNotification(
+        phase,
+        {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: { type: 'agentMessage', id: 'msg-1', text },
+        },
+        q,
+        makeCtx(rt),
+      );
+    };
+    push('started', '文件已保存:');
+    push('updated', '文件已保存::codex-file-cit');
+    push('updated', '文件已保存::codex-file-citation{path="/tmp/out');
+    push('updated', '文件已保存::codex-file-citation{path="/tmp/out.docx" purpose="output"} 完成');
+    push('completed', '文件已保存::codex-file-citation{path="/tmp/out.docx" purpose="output"} 完成。');
+
+    const events = await collect(q);
+    const finalText = '文件已保存:`/tmp/out.docx` 完成。';
+    const deltas = events
+      .filter((e) => e.type === 'text' && (e.data as { isFinal: boolean }).isFinal === false)
+      .map((e) => (e.data as { text: string }).text);
+    // 既有契约:completed 只出 final、不补 delta——completed 才首次出现的「。」不进
+    // delta 流,由 final 全文兜底。delta 累积必须是 final 的前缀且不含内部语法。
+    expect(deltas.join('')).toBe('文件已保存:`/tmp/out.docx` 完成');
+    expect(finalText.startsWith(deltas.join(''))).toBe(true);
+    const finals = events.filter(
+      (e) => e.type === 'text' && (e.data as { isFinal: boolean }).isFinal === true,
+    );
+    expect(finals).toHaveLength(1);
+    expect((finals[0].data as { text: string }).text).toBe(finalText);
+    for (const d of deltas) expect(d).not.toContain(':codex-file-citation{');
+  });
+
+  it('completed 文本截断在标记中间:确定的未完成标记从 final 剥掉,疑似前缀保留', async () => {
+    const { newCodexRuntimeState } = await import('./translator.js');
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'agentMessage',
+          id: 'msg-cut',
+          text: '文件在 :codex-file-citation{path="/tmp/x',
+        },
+      },
+      q,
+      makeCtx(rt),
+    );
+    const rt2 = newCodexRuntimeState();
+    const q2 = createAsyncQueue<AgentEvent>();
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-prefix', text: '正文以 :codex 结尾' },
+      },
+      q2,
+      makeCtx(rt2),
+    );
+    const events = await collect(q);
+    expect((events[0].data as { text: string }).text).toBe('文件在 ');
+    const events2 = await collect(q2);
+    expect((events2[0].data as { text: string }).text).toBe('正文以 :codex 结尾');
+  });
+
+  it('agentMessage 非流式(直接 completed):final 文本已归一化', async () => {
+    const { newCodexRuntimeState } = await import('./translator.js');
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'agentMessage',
+          id: 'msg-2',
+          text: 'done :codex-file-citation{path="/a/b.md" purpose="output"}',
+        },
+      },
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'text',
+        data: { text: 'done `/a/b.md`', isFinal: true },
+      }),
+    ]);
+  });
+});

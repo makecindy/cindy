@@ -58,6 +58,8 @@ export type {
   SessionKillParams,
   ApprovalRequestParams,
   ApprovalRequestResult,
+  OAuthRefreshParams,
+  OAuthRefreshResult,
   QueryEventNotification,
   SessionClosedNotification,
   ClientReplacedNotification,

@@ -17,6 +17,7 @@ import {
   type AgentIslandSoundChoice,
   type AgentIslandSoundSettings,
 } from '../shared/agentIsland';
+import type { AgentProxyTunnelState, SshHostAgentProxyPref } from '../shared/agentProxyConfig';
 import {
   WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL,
@@ -2378,18 +2379,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onNotificationFocusSession: fanOutNotificationFocusSession,
 
   // RSB web-browser plugin popup 路由 — main 端 webview-security 推送
-  // `{ url, disposition }`,renderer 端 RightSidebarShell 订阅 → addTab。
+  // `{ url, disposition, openerTabId?, openerSessionId? }`,renderer 端
+  // RightSidebarShell 订阅 → addTab(落进 opener 所属 session 的 bucket)。
   onRsbBrowserPopup: (
-    callback: (payload: { url: string; disposition: string }) => void,
+    callback: (payload: {
+      url: string;
+      disposition: string;
+      openerTabId?: string;
+      openerSessionId?: string;
+    }) => void,
   ): (() => void) =>
     fanOutRsbBrowserPopup((payload) => {
-      if (
-        payload &&
-        typeof payload === 'object' &&
-        typeof (payload as { url?: unknown }).url === 'string'
-      ) {
-        callback(payload as { url: string; disposition: string });
-      }
+      // 形状校验后才回调:opener 字段直接进 renderer 的分支(ensureHydrated /
+      // addTab 目标 session),异常 payload 拒收而不是让运行时错误往上冒。
+      if (!payload || typeof payload !== 'object') return;
+      const p = payload as {
+        url?: unknown;
+        disposition?: unknown;
+        openerTabId?: unknown;
+        openerSessionId?: unknown;
+      };
+      if (typeof p.url !== 'string' || typeof p.disposition !== 'string') return;
+      if (p.openerTabId !== undefined && typeof p.openerTabId !== 'string') return;
+      if (p.openerSessionId !== undefined && typeof p.openerSessionId !== 'string') return;
+      callback(
+        p as {
+          url: string;
+          disposition: string;
+          openerTabId?: string;
+          openerSessionId?: string;
+        },
+      );
     }),
 
   // RSB web-browser plugin:guest webview 内 Cmd/Ctrl+L 命中 → 让 active 的
@@ -2977,9 +2997,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         /** Phase D — 启动时是否自动连接 (本地 prefs, 不写入 ~/.ssh/config). */
         autoConnect: boolean;
         /** Agent 流量经 SSH 隧道走本地 Proxy (本地 prefs); 未开启 → null. */
-        agentProxy: { enabled: boolean; localHost: string; localPort: number } | null;
+        agentProxy: SshHostAgentProxyPref | null;
         /** 隧道实时状态 (内存态); 无记录 → null. */
-        agentProxyTunnel: { active: boolean; remotePort?: number; lastError?: string } | null;
+        agentProxyTunnel: AgentProxyTunnelState | null;
       }>;
     }> => ipcRenderer.invoke('maker:remote-ssh:list'),
     reloadConfig: (): Promise<{ hosts: unknown[] }> =>
@@ -2991,7 +3011,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       user: string;
       authMethod?: 'agent' | 'key';
       identityFile?: string;
-      agentProxy?: { enabled: boolean; localHost: string; localPort: number } | null;
+      agentProxy?: SshHostAgentProxyPref | null;
     }): Promise<{ host: unknown }> => ipcRenderer.invoke('maker:remote-ssh:add', host),
     update: (host: {
       id: string;
@@ -3000,7 +3020,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       user: string;
       authMethod?: 'agent' | 'key';
       identityFile?: string;
-      agentProxy?: { enabled: boolean; localHost: string; localPort: number } | null;
+      agentProxy?: SshHostAgentProxyPref | null;
     }): Promise<{ host: unknown }> => ipcRenderer.invoke('maker:remote-ssh:update', host),
     remove: (id: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:remote-ssh:remove', { id }),

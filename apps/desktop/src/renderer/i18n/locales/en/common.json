@@ -5,7 +5,11 @@
     "REMOTE_WORKDIR_INVALID": "The remote project path is invalid. Choose the project directory again.",
     "REMOTE_WORKDIR_NOT_FOUND": "The remote project directory no longer exists. Choose it again.",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "The remote project path is not a folder. Choose a project directory.",
-    "REMOTE_WORKDIR_UNAVAILABLE": "The remote project directory is unavailable. Reconnect the network drive and try again."
+    "REMOTE_WORKDIR_UNAVAILABLE": "The remote project directory is unavailable. Reconnect the network drive and try again.",
+    "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "The target model or source needs a different remote route — close and recreate the remote session to apply.",
+    "REMOTE_PROVIDER_UPDATING": "Provider credentials are being updated — retry in a moment",
+    "REMOTE_PROVIDER_UNSUPPORTED": "This provider is not supported in SSH remote sessions — pick another source",
+    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai subscription is not connected — connect it first or pick a gateway model"
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
@@ -48,7 +52,7 @@
   },
   "agentIsland": {
     "native": {
-      "newConversationTitle": "New Maker",
+      "newConversationTitle": "New Chat",
       "newConversationHint": "Start a new conversation",
       "muteSound": "Mute Agent Island",
       "enableSound": "Enable Agent Island sound",
@@ -269,13 +273,22 @@
           "keyHint": "Read a private key file directly. We don't store passphrases, so encrypted keys aren't supported — use this only when ssh-agent isn't available."
         },
         "identityFile": "Identity file path",
-        "agentProxy": "Route agent traffic via local proxy",
-        "agentProxyTip": "Open a 127.0.0.1 port on the remote that tunnels back over SSH to a proxy on this machine; remote codex / Claude Code traffic flows out through it",
-        "agentProxyAddr": "Local proxy address",
-        "agentProxyHint": "Opens a 127.0.0.1 port on the remote, tunneled over SSH back to your local proxy (e.g. Clash on 7890). {{appName}} does not provide a proxy — only the tunnel; the remote agent's HTTPS_PROXY points at the tunnel and domains are resolved by your proxy. Toggling restarts the remote codex daemon once to take effect.",
-        "agentProxyAddrInvalid": "Expected host:port, e.g. 127.0.0.1:7890",
         "cancel": "Cancel",
-        "submit": "Add machine"
+        "submit": "Add machine",
+        "agentProxy": "Route agent traffic via proxy",
+        "agentProxyTip": "Send remote codex / Claude Code model traffic through a proxy: either a Cindy-managed SSH tunnel back to your local proxy, or a remote-reachable proxy URL you provide",
+        "agentProxyModeTunnel": "Cindy-managed tunnel",
+        "agentProxyModeTunnelDesc": "Dedicated SSH tunnel back to your local proxy, fixed remote port, auto-reconnects",
+        "agentProxyModeEnv": "Bring your own proxy (env vars only)",
+        "agentProxyModeEnvDesc": "Provide a proxy URL reachable from the remote; you maintain the tunnel/reachability",
+        "agentProxyAddr": "Local proxy address",
+        "agentProxyHint": "A fixed port on the remote 127.0.0.1 is tunneled over a dedicated, Cindy-managed SSH connection back to your local proxy (e.g. Clash on 7890). {{appName}} does not provide a proxy — only the tunnel; the remote agent's HTTPS_PROXY is pinned to the fixed port and never drifts on reconnect. Changing this restarts the remote codex daemon once.",
+        "agentProxyAddrInvalid": "Expected host:port, e.g. 127.0.0.1:7890",
+        "agentProxyRemotePort": "Fixed remote port",
+        "agentProxyRemotePortInvalid": "Port must be an integer between 1 and 65535",
+        "agentProxyUrl": "Remote-reachable proxy URL",
+        "agentProxyUrlHint": "Resolved on the remote host: a proxy on the remote itself (e.g. your own autossh -R tunnel), a LAN proxy, etc. Supports http / https / socks5.",
+        "agentProxyUrlInvalid": "Must be an http(s):// or socks5:// URL without spaces or quotes"
       },
       "detail": {
         "agentSetupTitle": "Agent setup",
@@ -289,11 +302,6 @@
         "statusInstalled": "Installed",
         "statusNotInstalled": "Not installed",
         "claudeCodeName": "Claude Code",
-        "agentProxyTitle": "Agent proxy tunnel",
-        "agentProxyActive": "Remote 127.0.0.1:{{port}} → local {{target}} · established",
-        "agentProxyPending": "Establishing tunnel → local {{target}}",
-        "agentProxyWaiting": "Host not connected; tunnel will be established on reconnect → local {{target}}",
-        "agentProxyError": "Tunnel failed: {{message}}",
         "button": {
           "install": "Install",
           "reinstall": "Reinstall",
@@ -302,7 +310,15 @@
           "run": "Run",
           "syncAuth": "Sync auth",
           "syncAuthTip": "Copy your local Codex credentials to this remote so you don't need to log in again there"
-        }
+        },
+        "agentProxyTitle": "Agent proxy",
+        "agentProxyActive": "Remote 127.0.0.1:{{port}} → local {{target}} · established",
+        "agentProxyPending": "Establishing tunnel → local {{target}}",
+        "agentProxyWaiting": "Host not connected; resumes automatically on reconnect → local {{target}}",
+        "agentProxyError": "Proxy setup failed: {{message}}",
+        "agentProxyPortBusy": "Remote port {{port}} is busy; waiting for release and retrying… (change the port in settings if it stays busy)",
+        "agentProxyEnvInfo": "Env vars injected → {{url}} (you maintain the route)",
+        "agentProxyEnvPending": "Waiting to apply env vars → {{url}} (takes effect automatically once the host connects)"
       },
       "startSession": {
         "title": "Start a remote Codex session",
@@ -1975,6 +1991,24 @@
           "failed": "ADB status check failed: {{message}}",
           "unknownIssue": "ADB issue: {{issue}}"
         },
+        "connectionGuide": {
+          "connect": {
+            "title": "How to connect an Android phone",
+            "adbNote": "Cindy prepares ADB automatically; you do not need to install the Android SDK. Custom ADB path is for advanced users.",
+            "step1": "Connect the phone to the computer with a USB cable that supports data transfer.",
+            "step2": "On the phone, open Settings → About phone and tap the build number repeatedly to enable Developer options.",
+            "step3": "Open Developer options and turn on USB debugging.",
+            "step4": "Keep the phone unlocked, return to Cindy, and click Recheck."
+          },
+          "unauthorized": {
+            "title": "Allow USB debugging",
+            "body": "On the phone, choose Allow in the USB debugging permission dialog. We recommend checking Always allow from this computer, then return to Cindy and click Recheck."
+          },
+          "offline": {
+            "title": "The device is offline",
+            "body": "Reconnect the USB cable, keep the phone unlocked, then return to Cindy and click Recheck."
+          }
+        },
         "device": {
           "title": "Device",
           "ariaLabel": "Select default Android device",
@@ -2904,7 +2938,7 @@
     },
     "contacts": {
       "title": "Smart Contacts",
-      "description": "A people and organization directory built for agents: cross-platform identity resolution (email / Feishu / Slack / GitHub id → who is this), relationship context, and dated event records. Agents collect entries as they work; low-confidence ones land in a pending queue for your review.",
+      "description": "A people and organization directory built for agents: cross-platform identity resolution (email / Feishu / Slack / GitHub id → who is this), relationship context, and dated event records. Agents collect entries as they work; low-confidence ones land in a pending queue for your review. Data is stored on this device only; lookups and organizing are processed through your own model.",
       "enable": {
         "label": "Enable Smart Contacts",
         "description": "When on, agents can look up and automatically collect contact information (uncertain entries go to pending review). Turning it off does not affect browsing or managing existing data here.",
@@ -3048,9 +3082,16 @@
         "INTERNAL": "Operation failed. Please try again later."
       },
       "guide": {
-        "hint": "Your contacts are empty. Let AI get you started — collect people from conversations or import from system contacts.",
+        "hint": "Your contacts are empty. Start from any source so it knows your people from day one:",
         "cta": "Organize with AI",
-        "prompt": "Help me organize my smart contacts: review what is there, add people worth keeping (import from system contacts or vCard, or ask me), and confirm-then-merge any duplicates."
+        "prompt": "Help me organize my smart contacts: review what is there, add people worth keeping (import from system contacts or vCard, or ask me), and confirm-then-merge any duplicates.",
+        "sources": {
+          "mail": "From Email",
+          "im": "From IM",
+          "import": "Import Contacts"
+        },
+        "mailPrompt": "Help me build my Smart Contacts from email: first check which mail tools I have connected (if none, tell me how to connect one); scan the last 6 months of correspondence and create profiles for real contacts I exchange mail with — confirm high-frequency, clearly-identified people directly, use pending for uncertain ones; skip marketing mail, notification bots, and one-off senders. Report which profiles you created at the end.",
+        "imPrompt": "Help me build my Smart Contacts from chat tools: first check which IMs I have connected (Feishu / Slack / WeChat etc.; if none, tell me how to connect one); organize the people I chat with regularly into contacts, use pending for uncertain ones, and skip group bots and one-off conversations. Report which profiles you created at the end."
       }
     }
   },
@@ -3897,6 +3938,7 @@
       "preparingAria": "Preparing newer version, please wait",
       "confirmTitle": "Restart to update?",
       "confirmHint": "The app will restart automatically",
+      "confirmBusyHint": "A task is still running. Restarting will interrupt it",
       "confirmButton": "Restart now",
       "cancel": "Cancel",
       "confirmTooltip": "Confirm restart to apply the update",
@@ -4176,6 +4218,11 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "This model needs an API key — configure it in Settings",
+      "subscriptionDirectDisabled": {
+        "chatgpt": "Subscription-direct GPT models are not supported in SSH remote sessions yet",
+        "xai": "Subscription-direct Grok models are not supported in SSH remote sessions yet",
+        "generic": "Subscription-direct models are not supported in SSH remote sessions yet"
+      },
       "effortLabel": "Effort level",
       "edit": "Edit",
       "options": "Options",
@@ -5054,7 +5101,6 @@
       "openInSidebarFailed": "Failed to open in sidebar browser"
     },
     "ghostSummon": {
-      "overline": "PLUGIN USE · GHOST",
       "directiveLabel": "Directive appended for the model",
       "legend": "Highlighted = injected from the plugin's manifest · the rest is the fixed system template",
       "expandAria": "Show the directive appended for the model",
@@ -5064,7 +5110,12 @@
       "mentionDirectiveLabel": "Hint appended for the model",
       "semanticExpandAria": "Show how this plugin was used",
       "semanticNote": "The AI used this plugin on its own based on the meaning of your message; no machine directive was appended to it.",
-      "listSeparator": ", "
+      "listSeparator": ", ",
+      "status": {
+        "running": "Calling…",
+        "called": "Called",
+        "done": "Finished"
+      }
     },
     "userMessage": {
       "attachmentPrefix": "Attachments: ",
@@ -5367,6 +5418,9 @@
     },
     "draft": {
       "createSessionFailed": "Failed to create session, please retry",
+      "remoteProviderUpdating": "Provider credentials are being updated — retry in a moment",
+      "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
+      "remoteNativeOauthUnavailable": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
       "deviceStillLoading": "Remote device is still loading, please wait",
       "worktreeMissingRepo": "Cannot create worktree: missing repository root for the current directory",
       "worktreeRepoHint": "Try re-selecting the working directory and wait for the folder badge to refresh, then retry",
@@ -7577,7 +7631,7 @@
     }
   },
   "billing": {
-    "sidebar": "Credits & plans",
+    "sidebar": "Balance & Plans",
     "settings": {
       "title": "Usage and billing",
       "subscriptionCard": {
@@ -7592,13 +7646,13 @@
         "portalAction": "Manage in Stripe",
         "portalFailed": "Couldn't open Stripe subscription management. Try again later.",
         "priceInterval": "{{price}} / {{interval}}",
-        "includedCredits": "Includes {{amount}} credits per {{interval}}",
+        "includedCredits": "Includes {{amount}} per {{interval}}",
         "renewsAt": "Renews {{date}}",
         "endsAt": "Plan ends {{date}}",
         "cancelAction": "Cancel Subscription",
         "cancelConfirmTitle": "Cancel Your Current Subscription?",
-        "cancelConfirmDescription": "This action does not issue a refund or immediately change your credits. Your current plan stays available through {{date}}, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
-        "cancelConfirmDescriptionWithoutDate": "This action does not issue a refund or immediately change your credits. Your current plan stays available through the end of this billing period, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmDescription": "This action does not issue a refund or immediately change your balance. Your current plan stays available through {{date}}, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmDescriptionWithoutDate": "This action does not issue a refund or immediately change your balance. Your current plan stays available through the end of this billing period, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
         "cancelConfirmAction": "Confirm Cancellation",
         "cancelSuccess": "Auto-renewal is canceled. Your current plan remains available through {{date}}.",
         "cancelSuccessWithoutDate": "Auto-renewal is canceled. Your current plan will end after this billing period.",
@@ -7606,35 +7660,33 @@
         "cancelFailed": "Could not cancel the subscription. Try again later."
       },
       "topupCard": {
-        "action": "Buy credits"
+        "action": "Add Funds"
       }
     },
     "balance": {
       "title": "Available balance",
-      "creditParityCny": "1 credit = 1 CNY. Credits pay for Cindy AI usage; payments are processed by third-party providers.",
-      "creditParityUsd": "1 credit = 1 USD. Credits pay for Cindy AI usage; payments are processed by third-party providers.",
-      "plan": "Plan credits",
-      "purchased": "Purchased credits",
-      "promotional": "Promotional credits",
-      "notProvisioned": "Credits have not been enabled for this account.",
+      "plan": "Plan Balance",
+      "purchased": "Top-up Balance",
+      "promotional": "Promotional Balance",
+      "notProvisioned": "Balance has not been enabled for this account.",
       "notSupported": "Balance lookup is not supported for this account.",
       "unavailable": "Balance is temporarily unavailable. Refresh to try again."
     },
     "usage": {
-      "title": "Credit usage",
+      "title": "Balance Usage",
       "observedAt": "Balance updated {{date}}",
       "poolDetail": "Used {{used}} · Total {{total}}",
       "remaining": "Remaining",
       "progressLabel": "{{label}} usage",
-      "noPlanCredits": "No subscription credits because there is no active subscription.",
+      "noPlanCredits": "No plan balance because there is no active subscription.",
       "historyUnavailable": "Usage history is incomplete. Only the remaining balance is available.",
       "detailsUnavailable": "Usage details are temporarily unavailable. Current balances are shown instead.",
       "promotionalDetails": {
-        "title": "Promotional Credit Details",
+        "title": "Promotional Balance Details",
         "count": "{{count}} grants",
-        "empty": "No promotional credit grants are available.",
+        "empty": "No promotional grants are available.",
         "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
-        "unnamed": "Promotional credit",
+        "unnamed": "Promotional Grant",
         "original": "Original",
         "used": "Used",
         "remaining": "Remaining",
@@ -7652,7 +7704,7 @@
         "title": "Choose a subscription plan"
       },
       "topup": {
-        "title": "Buy credits"
+        "title": "Add Funds"
       }
     },
     "steps": {
@@ -7689,7 +7741,7 @@
       "MONTH": "month",
       "YEAR": "year"
     },
-    "credits": "{{amount}} credits",
+    "credits": "Includes {{amount}}",
     "confirm": {
       "channel": "Pay with {{provider}}"
     },
@@ -7722,7 +7774,7 @@
       "failedTitle": "Unable to complete",
       "expiredTitle": "Payment expired",
       "canceledTitle": "Payment canceled",
-      "topupSubtitle": "Credit top-up",
+      "topupSubtitle": "Balance Top-up",
       "subscriptionSubtitle": "Subscription",
       "creatingBody": "Confirming the order with the payment service…",
       "qrAlt": "Payment QR code",

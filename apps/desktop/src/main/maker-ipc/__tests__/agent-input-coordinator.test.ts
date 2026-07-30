@@ -194,10 +194,14 @@ function createHarness() {
   const persistQueueSnapshot = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['persistQueueSnapshot']>
   >();
+  const onUiRetry = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUiRetry']>>(() => {});
+  const onUserEnqueue = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUserEnqueue']>>(() => {});
   const coordinator = new AgentInputCoordinator({
     sendToAgent,
     steerToAgent,
     abortSession,
+    onUiRetry,
+    onUserEnqueue,
     isTurnRunning: () => running,
     reconcileTurnIdle,
     hasPendingInteraction: () => pendingInteraction,
@@ -241,6 +245,8 @@ function createHarness() {
     resolveSessionReferences,
     emitProjection,
     projections,
+    onUiRetry,
+    onUserEnqueue,
     setRunning(value: boolean) {
       running = value;
     },
@@ -2012,6 +2018,123 @@ describe('AgentInputCoordinator send transaction', () => {
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'original task' });
+    // 重发的是原文, 文本上与普通用户消息无异 —— 所以「用户显式重试」只能靠这个
+    // 回调传出去。hook 侧的渠道回流(turn.reopen)依赖它: 零产出失败恰是上游过载
+    // 最典型的形态, 也最需要把结果接回渠道那条消息。
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
+  });
+
+  it('signals an explicit UI retry on both retry shapes (continue prompt and original resend)', async () => {
+    // 防漂移锁: 回流信号一度只在发送路径上按文本认 CONTINUE_AFTER_ERROR_PROMPT,
+    // 于是零产出重试(重发原文)完全没有信号 —— 最需要回流的那类失败恰好漏掉。
+    for (const hasProgress of [true, false]) {
+      const h = createHarness();
+      const sid = `retry-signal-${String(hasProgress)}`;
+      h.setHasAssistantProgressAfter(async () => hasProgress);
+
+      h.coordinator.enqueue(sid, makeItem('q-first', 'original task'));
+      await flush();
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+      await flush();
+
+      expect(h.onUiRetry).not.toHaveBeenCalled();
+      await h.coordinator.retryLastError(sid);
+      await flush();
+      expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
+      expect(h.onUiRetry).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('retry does not report a user enqueue (it must not invalidate its own reopen)', async () => {
+    // 防漂移锁: 渠道回流的作废判据一度按**消息文本**做(非续跑指令即视为无关介入),
+    // 而零产出重试重发的是原文 —— 那会让它撤掉自己刚挂上的观察器, 把本能力最主要的
+    // 场景又打回原样。判据因此改成**入口**: enqueue 才算新消息, retry 走 unshift。
+    const h = createHarness();
+    const sid = 'retry-not-enqueue';
+    h.setHasAssistantProgressAfter(async () => false);
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original task'));
+    await flush();
+    expect(h.onUserEnqueue).toHaveBeenCalledWith(sid);
+    h.onUserEnqueue.mockClear();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
+    expect(h.onUserEnqueue).not.toHaveBeenCalled();
+  });
+
+  it('a continuation prompt enqueue is not reported as an unrelated intervention', async () => {
+    // 中断横幅「继续任务」由 renderer 直发 CONTINUE_AFTER_APP_EXIT_PROMPT, 它**先**经
+    // enqueue、之后才在 drain 时被认成续跑。无条件作废会把它自己的待续跑记账删掉,
+    // 于是那条续跑跑成了却不回流。
+    const h = createHarness();
+    const sid = 'enqueue-continue-exempt';
+    h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_APP_EXIT_PROMPT));
+    await flush();
+    expect(h.onUserEnqueue).not.toHaveBeenCalled();
+
+    // 普通消息照常上报。
+    h.coordinator.enqueue(sid, makeItem('q-normal', '顺手问个别的'));
+    await flush();
+    expect(h.onUserEnqueue).toHaveBeenCalledWith(sid);
+  });
+
+  it('a deduplicated resend does not report a user enqueue', async () => {
+    // 弱网 / 移动端的重传带同一个 clientId, 会被幂等去重丢弃 —— 它压根没推进会话。
+    // 若在去重**之前**作废记账, 一条延迟到达的旧重传就会删掉之后才装上的、更新的
+    // 那笔待续跑记账, 于是下一次显式重试跑成了却不回流。
+    const h = createHarness();
+    const sid = 'enqueue-dup-no-signal';
+    h.coordinator.enqueue(sid, makeItem('q-dup', 'first'));
+    await flush();
+    expect(h.onUserEnqueue).toHaveBeenCalledTimes(1);
+
+    h.onUserEnqueue.mockClear();
+    h.coordinator.enqueue(sid, makeItem('q-dup', 'first'));
+    await flush();
+    expect(h.onUserEnqueue).not.toHaveBeenCalled();
+  });
+
+  it('does not signal a UI retry when there is nothing to recover', async () => {
+    const h = createHarness();
+    await h.coordinator.retryLastError('retry-signal-noop');
+    await flush();
+    expect(h.onUiRetry).not.toHaveBeenCalled();
+  });
+
+  it('does not signal a UI retry for queue-head recovery (never became a turn)', async () => {
+    // queue-head 的那条消息在**派发前**就失败了, 与之前失败的 hook turn 无关。
+    // 在它上面发信号会让一条无关的排队桌面消息认领并改写渠道那条旧消息。
+    const h = createHarness();
+    const sid = 'retry-signal-queue-head';
+    const lookupStarted = deferred<void>();
+    const lookup = deferred<string | undefined>();
+    h.getSdkSessionId.mockImplementationOnce(async () => {
+      lookupStarted.resolve();
+      return lookup.promise;
+    });
+
+    // 会话在派发前被关闭 -> 队头消息回到队列并留下 queue-head recovery。
+    h.coordinator.enqueue(sid, makeItem('q-first', 'first'));
+    await lookupStarted.promise;
+    h.coordinator.onSessionClosed(sid);
+    lookup.resolve('sdk-session');
+    await flush();
+
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).recovery).toEqual({
+      kind: 'queue-head',
+      clientId: 'q-first',
+    });
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.onUiRetry).not.toHaveBeenCalled();
   });
 
   it('queue-head retry never substitutes the continue prompt and redrains the original head', async () => {

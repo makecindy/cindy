@@ -51,6 +51,7 @@ import type { DesktopCommandContext } from '../commands/index.js';
 import { getDesktopCommandRegistry } from '../commands/index.js';
 import { initGithubIssueSubmit, IssueConfirmBridge } from '../github-issue/index.js';
 import { initGhostGrantConfirmBridge } from '../cindy-brain/ghostGrantConfirmBridge.js';
+import { createFeishuDesktopConfirmNotifier } from '../im/desktopConfirmNoticeWiring.js';
 import {
   initGhostSetupInteractionBridge,
   parseGhostSetupInteractionCommand,
@@ -264,7 +265,11 @@ import {
 } from '../messagePersistBroadcaster.js';
 import { ensureCcManagerInstalledOrInstall } from '../remote-ssh/cc-manager-install.js';
 import { ensureRemoteCodexMcpBridge, hasPendingRemoteMcpDrift } from '../remote-ssh/codex-remote-mcp.js';
-import { reconcileCodexAgentProxyEnv } from '../remote-ssh/agent-proxy.js';
+import {
+  hasPendingAgentProxyReconcile,
+  reconcileCodexAgentProxyEnv,
+  setAgentProxyLiveTurnChecker,
+} from '../remote-ssh/agent-proxy.js';
 import { ensureRemoteAgentInstalledOrInstall, ensureRemoteHostReady, getRemoteSshPool, isCcMgrUpgradeInFlight } from '../remote-ssh/index.js';
 import {
   recordSessionContextSnapshot,
@@ -522,6 +527,12 @@ import {
   SILENT_STOP_RESUME_PROMPT,
   SilentStopAutoResumeGuard,
 } from './silentStopAutoResume.js';
+import {
+  publishUiContinuation,
+  publishUiSessionIntervention,
+  publishUiTurnDispatching,
+  publishUiTurnUndispatched,
+} from './uiContinuationSignal.js';
 import { readSilentStopAutoResumeSettings } from '../maker-host/silent-stop-auto-resume-store.js';
 import {
   broadcastGhostMessageBlocked,
@@ -1228,14 +1239,22 @@ const pendingInteractionResolvers = new Map<string, PendingInteractionEntry>();
  * 超时/会话清理由桥自己兜底。复用同一对 INTERACTION_REQUEST / RESOLVE_INTERACTION
  * channel,renderer 按 kind 分发。
  */
+// 桌面专属确认卡的 IM 侧提示(#926):卡片仍只在桌面出现(设计边界不动),
+// 但飞书绑定会话的用户会即时收到「去桌面确认」的文字提示,不再默等到超时。
+const desktopConfirmImNotifier = createFeishuDesktopConfirmNotifier();
+
 const issueConfirmBridge = new IssueConfirmBridge({
   broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
   logger: log,
+  onDesktopOnlyConfirmPending: (sessionId) =>
+    desktopConfirmImNotifier(sessionId, '「提交 GitHub issue」的确认卡'),
 });
 
 const renameSessionsConfirmBridge = new RenameSessionsConfirmBridge({
   broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
   logger: log,
+  onDesktopOnlyConfirmPending: (sessionId) =>
+    desktopConfirmImNotifier(sessionId, '「批量重命名会话」的确认卡'),
 });
 
 /**
@@ -1246,6 +1265,8 @@ const renameSessionsConfirmBridge = new RenameSessionsConfirmBridge({
 const ghostGrantConfirmBridge = initGhostGrantConfirmBridge({
   broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
   logger: log,
+  onDesktopOnlyConfirmPending: (sessionId) =>
+    desktopConfirmImNotifier(sessionId, '「插件文件授权」的确认卡'),
 });
 
 const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({
@@ -4523,6 +4544,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     );
   }
   setRemoteCodexLiveTurnChecker(codexRemoteHasLiveTurn);
+  // agent-proxy 的漂移应用 (重启 daemon / 迁移拆除隧道) 会打断该 host 上
+  // **任一** agent 的在途流量 — 隧道是 codex 与 CC 共用的网络通路, gate
+  // 必须两个通道都看 (R3 review P1), 不能沿用 MCP ensure 的 codex-only
+  // 判定 (那边 daemon 重启只影响 codex, 语义不同)。
+  function remoteAgentHasLiveTurn(hostId: string): boolean {
+    return maker.listActiveSessions().some(
+      (s) =>
+        s.remoteHostId === hostId &&
+        (s.agentKind === 'codex' || s.agentKind === 'claude-code') &&
+        (agentInputCoordinatorHolder?.hasActiveTurnForRewind(s.id) ?? false),
+    );
+  }
+  setAgentProxyLiveTurnChecker(remoteAgentHasLiveTurn);
 
   async function detachIdleRemoteCodexSessionsOnHost(hostId: string, reason: string): Promise<void> {
     const detachTasks: Array<Promise<void>> = [];
@@ -4553,22 +4587,43 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const session = maker.getSession(sessionId);
     const remoteHostId = session?.remoteHostId;
     if (!remoteHostId) return;
+    const host = getRemoteSshPool().get(remoteHostId);
+    const hostReady = host?.getStatus() === 'ready';
+    // agent-proxy 的 live-turn defer 在这里补刀 — codex 与 CC 的 turn 收口
+    // 都算 (隧道是两个 agent 共用的通路, gate 也共用, R3 review P1)。只有
+    // 确有 pending (defer / 失败) 时才跑, 稳态下不为每次 turn 结束白付一次
+    // 远端 cat RTT。失败不阻断后续 (自身已重新记 pending)。
+    const reconcileIfPending =
+      hostReady && host && hasPendingAgentProxyReconcile(remoteHostId)
+        ? reconcileCodexAgentProxyEnv(host).catch((err) => {
+            log.warn('agent-proxy reconcile on turn settled failed', {
+              sessionId,
+              hostId: remoteHostId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          })
+        : Promise.resolve();
     if (session.agentKind === 'codex') {
-      const host = getRemoteSshPool().get(remoteHostId);
-      if (host?.getStatus() !== 'ready') return;
-      void ensureRemoteCodexMcpBridge(host, {
-        ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
-        hasLiveTurnOnHost: codexRemoteHasLiveTurn,
-        isCollabEnabled: () => getPluginRegistry().isEnabled('collab'),
-        isMakerMemoryEnabled: () => maker.makerMemory?.isEnabled() ?? false,
-      }).then(async (result) => {
-        if (result.ok && result.daemonRebootstrapped && !codexRemoteHasLiveTurn(remoteHostId)) {
-          await detachIdleRemoteCodexSessionsOnHost(remoteHostId, 'codex-mcp-turn-settled-rebootstrap');
-        }
-      });
+      if (!hostReady || !host) return;
+      // 与 session-start 路径同序: 先 reconcile 再 MCP ensure (codex R20 P1)。
+      void reconcileIfPending
+        .then(() =>
+          ensureRemoteCodexMcpBridge(host, {
+            ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
+            hasLiveTurnOnHost: codexRemoteHasLiveTurn,
+            isCollabEnabled: () => getPluginRegistry().isEnabled('collab'),
+            isMakerMemoryEnabled: () => maker.makerMemory?.isEnabled() ?? false,
+          }),
+        )
+        .then(async (result) => {
+          if (result?.ok && result.daemonRebootstrapped && !codexRemoteHasLiveTurn(remoteHostId)) {
+            await detachIdleRemoteCodexSessionsOnHost(remoteHostId, 'codex-mcp-turn-settled-rebootstrap');
+          }
+        });
       return;
     }
     if (session.agentKind === 'claude-code') {
+      void reconcileIfPending;
       getRemoteCcTurnSettledHandler()?.(sessionId);
     }
   };
@@ -6952,6 +7007,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
     noteSessionClearBoundary,
+    // 用户点了错误横幅的「重试」→ hook 侧把这一轮接回渠道那条已收口的消息。
+    // 这是权威来源: 零产出重试重发的是原文, 从文本认不出重试意图(见 deps 注释)。
+    onUiRetry: publishUiContinuation,
+    // 新消息进队 → 作废该会话的待续跑记账(渠道那条旧消息已被别的内容取代)。
+    // 用 enqueue 入口而不是消息文本: 零产出重试重发的是原文, 文本上无从区分,
+    // 而它走 unshift 不经这里, 于是不会把自己的回流作废掉。
+    onUserEnqueue: publishUiSessionIntervention,
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (_sessionId, item) => {
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
@@ -6999,8 +7061,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }),
     onUserMessageRewritten: (sessionId, item, info) =>
       broadcastGhostMessageRewritten({ sessionId, clientId: item.clientId, ...info }),
-    beforeDispatchUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnStart(sessionId),
-    onUndispatchedUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnAbort(sessionId),
+    beforeDispatchUserTurn: (sessionId, item) => {
+      // hook 续跑回流的**权威归属点**: 在 vendor dispatch 之前(本回调被 await), 所以
+      // 观察器挂上就不丢正文开头, 而 live session 此刻必然已就绪。clientId 对得上的
+      // 才是目标续跑轮 —— 绕过 coordinator 的 turn(silent-stop 自动续跑)不走这里,
+      // 结构上不可能被误认。详见 uiContinuationSignal 的模块注释。
+      publishUiTurnDispatching(sessionId, item.clientId);
+      return gitSnapshotCoordinator?.onTurnStart(sessionId);
+    },
+    onUndispatchedUserTurn: (sessionId, item) => {
+      // 目标轮落库了却没能 dispatch(取消 / 失败): 记账该立刻还回去, 而不是等超时。
+      publishUiTurnUndispatched(sessionId, item.clientId);
+      gitSnapshotCoordinator?.onTurnAbort(sessionId);
+    },
     // Thread 3 fix: called from drain/dispatchCompact failure paths where the item
     // was removed from the queue but not put back (persisted-failure case). If no
     // other work is pending, any deferred completion must be replayed so Agent

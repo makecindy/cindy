@@ -92,6 +92,7 @@ import {
   desktopCodexRuntimeConfig,
 } from './runtime-configs.js';
 import { getClaudeEndpoint, setClaudeProxyGatewayKeyReader, setClaudeProxyOAuthSpawnChecker } from './anthropic-compat-proxy-host.js';
+import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { notifyAutoPermissionClassifierUnavailable } from './claude-auto-permission-fallback.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
@@ -112,6 +113,16 @@ import {
   unregister as unregisterCodexProxyPrompt,
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
+import { readContactsSettings } from './contacts-settings-store.js';
+
+/**
+ * 最近一次成功构建的 codex spawn 配置里, 通讯录开关的实际取值(null = 尚未
+ * spawn 过)。codex 的 MCP flags 冻结在 cached spawn 配置且 app-server 跨会话
+ * 长活 —— 开关切换后若失效失败(busy), running 实例仍是旧工具面; codex 的
+ * getContactsPromptState 用这份快照识别该 stale 窗口, 避免 prompt 指挥模型调
+ * stale 桥里不存在的工具。在 prepareCodexExtraSpawnConfig 内更新。
+ */
+let codexAppliedContactsEnabled: boolean | null = null;
 import {
   registerCustomMcpArrays,
   refreshCustomMcpProviders,
@@ -668,6 +679,13 @@ export function getMaker(): Maker {
       resolveCcDebugFile: resolveSessionCcDebugFile,
       mcpProviders: claudeMcpProviders,
       makerMemory: makerMemoryManager,
+      // 智能通讯录 prompt 段的「本会话有效状态」: 与 mcp-providers.ts 的 provider
+      // 包装同一判定链(PluginRegistry 工作区/用户覆盖 → 全局开关), 保证工具面与
+      // prompt 不分叉; agent 侧对 enabled 还会与实际注册的 server 集合取交。
+      getContactsPromptState: ({ workingDir }) => {
+        if (!getPluginRegistry().isEnabled('contacts', workingDir)) return 'unavailable';
+        return readContactsSettings().enabled ? 'enabled' : 'disabled';
+      },
       // 第一方只读工具走 SDK allowedTools, 避免 auto 模式为 discovery/read-only
       // 操作额外调用远程安全分类器; 列表按精确工具名维护, 不放行动态 call_tool。
       claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),
@@ -709,6 +727,10 @@ export function getMaker(): Maker {
       ),
       registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
       getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
+      // 远端 Claude 会话的路由 materialization:把该会话真实上游 + 鉴权 + 定制头解析成 cc
+      // env(native OAuth 订阅 / 自定义 Claude Code 供应商),覆盖「远端恒用网关」旧行为。
+      // 返回 null = 有效路由是 XD 网关,maker-core 维持既有网关远端路径。见 remote-claude-route.ts。
+      resolveRemoteClaudeRoute,
       // Phase 4.3: 远端 cc 路由 — 当 session 标了 remoteHostId, ClaudeCodeAgent
       // 调这个 factory 拿一个连远端 cc-mgr daemon 的 Query (替代本地 sdkQuery
       // 起 cc 子进程)。详见 packages/maker-core/src/agents/base-agent.ts 的
@@ -717,7 +739,7 @@ export function getMaker(): Maker {
       // RemoteQuery 实现 SDK Query interface 的子集 (ClaudeCodeAgent 实际只调
       // for-await / interrupt / setModel / setPermissionMode / applyFlagSettings),
       // factory 返回时直接 `as unknown as Query` cast 即可。
-      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest, makerMemoryEnabled }) => {
+      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest, onOAuthRefresh, makerMemoryEnabled }) => {
         const host = getRemoteSshPool().get(remoteHostId);
         if (host?.getStatus() !== 'ready') {
           throw new Error(`remote ssh host not ready: ${remoteHostId}`);
@@ -836,6 +858,7 @@ export function getMaker(): Maker {
               startParams: startParamsWithProxy as unknown as Parameters<typeof openCcManagerSession>[0]['startParams'],
               claudeBinaryPath,
               onApprovalRequest: onApprovalRequest as Parameters<typeof openCcManagerSession>[0]['onApprovalRequest'],
+              onOAuthRefresh: onOAuthRefresh as Parameters<typeof openCcManagerSession>[0]['onOAuthRefresh'],
               forceFreshQuery,
             });
           } catch (err) {
@@ -901,6 +924,17 @@ export function getMaker(): Maker {
       // 起 streamable-HTTP bridge 把 instance 通过 -c 'mcp_servers...=...' 注入。
       mcpProviders: codexMcpProviders,
       makerMemory: makerMemoryManager,
+      // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
+      // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,
+      // contacts-ipc 折成 codexMcpRefreshed:false)时 stale 桥里没有新工具面,
+      // live=开 / applied=关 → unavailable(静默), 直到重建成功快照跟上。
+      getContactsPromptState: ({ workingDir }) => {
+        if (!getPluginRegistry().isEnabled('contacts', workingDir)) return 'unavailable';
+        const live = readContactsSettings().enabled;
+        if (!live) return 'disabled';
+        const applied = codexAppliedContactsEnabled ?? live;
+        return applied ? 'enabled' : 'unavailable';
+      },
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CODEX_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 codex 列表注入
       // （gpt 原生 + codex/ 折扣网关路由）。「折扣GPT」codex/ 仍是「XD 网关来源」,渲染层按
@@ -953,10 +987,17 @@ export function getMaker(): Maker {
           });
           mcpExtraArgs = cfg.extraArgs;
           mcpExtraEnv = cfg.extraEnv;
+          // 本次 spawn 配置实际应用的通讯录可用性快照 —— 从返回的 cfg 本体推导,
+          // 不另读 settings: getCodexExtraSpawnConfig 是模块级缓存, 失效失败后
+          // 命中缓存返回的还是 pre-toggle 配置, 此时 live 设置读数会谎报新状态
+          // (review: 快照必须等于 applied config, 而非 applied 时刻的旁路读数)。
+          codexAppliedContactsEnabled = cfg.bridgeServerNames.includes('cindy_contacts');
         } catch (err) {
           desktopMakerLogger.error('codex MCP bridge prep failed, continuing without lizi MCP', {
             message: err instanceof Error ? err.message : String(err),
           });
+          // bridge 整体缺席 = cindy_contacts 必然不可达
+          codexAppliedContactsEnabled = false;
         }
         // API 模式: 追加 model_provider override, 让 codex app-server 走 AI Gateway
         // 而非 OAuth 订阅后端。每次 createHost 都现读 mode, 切模式后重建即生效。
@@ -1078,6 +1119,9 @@ export function getMaker(): Maker {
             // 继续 probe 会 attach 到 stale daemon, UI 报 tunnel active 而
             // codex 流量走旧路由 (codex R10 P1): 按 bootstrap 失败抛出, 让
             // session start 显式报错, 而不是静默复用。
+            // deferredForLiveTurn (host 上有别的 turn 在跑) 则放行 attach:
+            // 这正是「不 mid-turn 杀 daemon」的代价 — 新 session 暂用旧
+            // env, turn-done 挂钩补刀后自愈。
             const reconciled = await reconcileCodexAgentProxyEnv(remoteHost);
             if (reconciled.markerChanged && !reconciled.daemonRestarted) {
               throw new Error(

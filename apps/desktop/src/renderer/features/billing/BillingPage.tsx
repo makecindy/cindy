@@ -564,7 +564,9 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       status: currentSubscription.status,
       price: plan ? formatMoney(plan.terms.amount, plan.terms.currency, billingLocale) : null,
       interval: plan?.offer.interval ?? null,
-      includedCredits: plan?.terms.creditAmount ?? null,
+      includedCredits: plan
+        ? formatMoney(plan.terms.creditAmount, plan.terms.currency, billingLocale)
+        : null,
       periodEndAt: formatBillingDate(currentSubscription.currentPeriodEndAt, billingLocale),
       cancelAtPeriodEnd: currentSubscription.cancelAtPeriodEnd,
     };
@@ -872,14 +874,6 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
             </BillingGroup>
           )}
         </div>
-
-        <p className="mt-8 text-12 leading-5 text-[var(--text-tertiary)]">
-          {t(
-            BILLING_CURRENCY === 'usd'
-              ? 'billing.balance.creditParityUsd'
-              : 'billing.balance.creditParityCny',
-          )}
-        </p>
       </div>
 
       <BillingOfferDialog
@@ -1644,7 +1638,13 @@ function BillingOfferDialog({
                             </p>
                             {offer.creditAmount && (
                               <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
-                                {t('billing.credits', { amount: offer.creditAmount })}
+                                {t('billing.credits', {
+                                  amount: formatMoney(
+                                    offer.creditAmount,
+                                    offer.currency,
+                                    billingLocale,
+                                  ),
+                                })}
                               </p>
                             )}
                           </div>

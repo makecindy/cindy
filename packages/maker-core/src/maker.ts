@@ -15,6 +15,8 @@
  * - 业务 token 管理、飞书业务态
  */
 
+import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+
 import type { AgentKind } from './types/common.js';
 import type { Capabilities } from './types/capabilities.js';
 import type { ForkSdkSessionOptions, ForkSdkSessionResult } from './types/events.js';
@@ -314,7 +316,7 @@ export class Maker {
         id,
         agentKind: opts.agentKind,
         workDir: opts.workingDir,
-        title: opts.title ?? 'New Maker',
+        title: opts.title ?? DEFAULT_DRAFT_SESSION_TITLE,
         model: opts.model,
         workspaceKind: opts.workspaceKind,
         effort: opts.effort,

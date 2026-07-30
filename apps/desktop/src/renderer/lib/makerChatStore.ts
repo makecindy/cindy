@@ -28,6 +28,7 @@ import {
   normalizeWorkflowProgressEntries,
   type WorkflowProgressEntry,
 } from '@cindy/maker-shared/agent-task';
+import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import type { MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource, SerializedAttachedFile } from '@/lib/fileTypes';
 import type {
@@ -87,7 +88,11 @@ import {
 import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
-import { emitPatch } from '@/lib/sessionsBus';
+import {
+  emitAutoTitlePreview,
+  emitAutoTitlePreviewCleared,
+  emitPatch,
+} from '@/lib/sessionsBus';
 import { createLogger } from '@/lib/logger';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -6701,6 +6706,16 @@ function updateQueueItem(sessionId: string, clientId: string, newText: string): 
  */
 const autoNameSettled = new Set<string>();
 
+/**
+ * 每个会话最近一次起名尝试的轮次号(sessionId → attempt)。
+ *
+ * 用户在首次 `maker:auto-title` 返回前连着发两条文字时,两次都会通过 `autoNameSettled`
+ * 检查、各起一次尝试。若**较早**那次失败,它的撤回不能动预览 —— 更晚的尝试仍在飞,
+ * 预览还有主人,撤回会让标题白闪一次「未命名对话」(PR #1031 review P1)。
+ * 与 SessionMenuSheet 的 `renameSeqRef`、搜索框的 `requestSeqRef` 同款守卫。
+ */
+const autoNameAttempts = new Map<string, number>();
+
 /** 纯附件消息合成占位标题时的类别兜底词(拿不到任何文件名时才用)。 */
 function autoTitleFallbackLabels(): AutoTitleFallbackLabels {
   return {
@@ -6729,8 +6744,8 @@ function scheduleAutoName(
   agentKind: 'claude-code' | 'codex',
   isUserText = true,
 ): void {
-  // 与 main 的 normalizeAutoTitle 同一套规则,两端算出的占位串一致,回流时不跳变。
-  const fallbackTitle = text.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
+  // 与 main 共用 normalizeAutoTitle,两端算出的占位串逐字一致,回流时不跳变。
+  const fallbackTitle = normalizeAutoTitle(text);
   // 连描述都合成不出来(既无文字也无可命名附件):保留默认标题,留给下一条消息。
   if (!fallbackTitle) return;
   if (isRemoteSession(sessionId)) {
@@ -6740,20 +6755,79 @@ function scheduleAutoName(
     return;
   }
   if (autoNameSettled.has(sessionId)) return;
+  // 本机会话的即时标题预览 —— 与上面远程分支的 setPendingTitlePreview 对称。
+  //
+  // 没有这一步,标题要等「IPC 往返 → main 读库 → 写占位 → 广播 sessions:patched」
+  // 整条链路走完才更新:用户明明已经按下回车,侧边栏 / 会话头却还显示着建会话时的
+  // 默认占位。main 随后写入的就是这里的 fallbackTitle(同一套 deriveAutoTitleSeed
+  // 素材 + 同一个 normalizeAutoTitle),所以回流时不跳变。
+  //
+  // 「标题是否仍是哨兵」的判定在 sessionsStore 的订阅处(它持有列表缓存);本函数
+  // 也被「补起名」路径调用(每条带文字的消息都来一次),无条件写会把用户手动改过的
+  // 名在 UI 上顶掉。走 bus 而不是直接 import sessionsStore:后者会把它的模块级
+  // 订阅副作用拉进所有 import 本模块的加载链。
+  //
+  // 单独 try:预览纯属锦上添花,它失败既不能打断下面的起名 IPC,更不能把异常抛回
+  // sendMessageCore 打断消息入队(与本函数其余副作用同一条契约)。
+  try {
+    emitAutoTitlePreview(sessionId, fallbackTitle);
+  } catch (err) {
+    log.warn('Failed to emit auto-title preview:', err);
+  }
+  // 一次起名尝试的**唯一**收尾:三种结束方式(正常 resolve / IPC reject / 同步抛错)
+  // 都走这里,判据只有一条 —— **main 没确认写入(`applied` 不为 true)就撤回预览**。
+  //
+  // reject 与同步抛错建模成「没有结果」,与 `{ applied: false }` 落在同一分支:
+  // `runSessionAutoTitle` 在「资格读失败 / 占位与智能标题两段都没写进去」时是
+  // **正常 resolve** 出 `applied: false` 的,只挂 `.catch` 会漏掉这一整类
+  // (PR #1031 review P1)。把收尾收敛成一个函数,是为了不再出现第四条漏掉的路径。
+  //
+  // `applied: false, done: true`(用户已手动改过名)同样撤回:DB 里是用户的标题,
+  // 叠加层不该继续盖着;store 那边的守卫会发现缓存里已不是这次预览而自动让位。
+  const attempt = (autoNameAttempts.get(sessionId) ?? 0) + 1;
+  autoNameAttempts.set(sessionId, attempt);
+  const settleAutoName = (result?: { applied?: boolean; done?: boolean }): void => {
+    if (result?.done) autoNameSettled.add(sessionId);
+    if (result?.applied) return;
+    // 更晚的尝试已经起飞 → 预览归它,本次失败不撤回(否则标题白闪一次兜底文案)。
+    if (autoNameAttempts.get(sessionId) !== attempt) return;
+    clearAutoTitlePreviewSafely(sessionId);
+  };
   // 整条链路对发送主流程必须是无副作用的:起名失败(桥接缺失 / IPC 抛错)只记日志,
   // 绝不能把异常抛回 sendMessageCore 打断消息入队。
   try {
     void window.electronAPI.maker
       .autoTitle({ sessionId, text, agentKind, isUserText })
-      .then((result) => {
-        if (result?.done) autoNameSettled.add(sessionId);
-      })
+      .then(settleAutoName)
       .catch((err) => {
         // 不登记 settled —— 下一条带文字的消息会重试。
         log.warn('Failed to auto-name session:', err);
+        settleAutoName();
       });
   } catch (err) {
     log.warn('Failed to invoke auto-title IPC:', err);
+    settleAutoName();
+  }
+}
+
+/**
+ * main 没确认写入 → 撤回上面那次乐观预览。
+ *
+ * 预览是「马上会有权威标题回流」的赌注,它的失效条件是权威标题落地。起名没写成时
+ * 那个条件永远不成立:叠加层会在每次全量刷新后继续顶着 DB 里的哨兵,会话永久显示一个
+ * **库里并不存在**的标题(重启后又变回「未命名对话」,同一会话两种标题)。宁可退回可
+ * 解释的兜底文案 —— 而且没登记 `autoNameSettled`,下一条带文字的消息会重试起名。
+ *
+ * 万一 IPC 是「写库成功、响应丢了」,撤回也不会造成错误状态:main 已经广播过
+ * `sessions:patched`,store 那边的迟到撤回守卫(比对缓存里是否仍是这次预览)会让位。
+ *
+ * 同上契约:撤回自身失败只记日志,绝不外抛打断发送主流程。
+ */
+function clearAutoTitlePreviewSafely(sessionId: string): void {
+  try {
+    emitAutoTitlePreviewCleared(sessionId);
+  } catch (err) {
+    log.warn('Failed to clear auto-title preview:', err);
   }
 }
 
@@ -8872,6 +8946,7 @@ export const makerChatStore = {
   /** Exposed for tests only: 清空「已确认无需起名」缓存,隔离用例间状态。 */
   __resetAutoNameStateForTest: (): void => {
     autoNameSettled.clear();
+    autoNameAttempts.clear();
   },
   /** Exposed for tests only: 把 stream event 打进真实 store(驱动 getRunningSnapshot 等)。 */
   __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void =>
