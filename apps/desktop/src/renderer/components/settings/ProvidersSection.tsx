@@ -743,11 +743,8 @@ function BuiltinApiKeyHeader({
     if (!key) return;
     setBusy(true);
     try {
-      const ok = await window.electronAPI.builtinApiKeyStore(provider.id, key);
-      if (!ok) {
-        toast.error(t('settings.providers.builtinApiKey.toast.saveFailed', { name: provider.name }));
-        return;
-      }
+      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
+      await window.electronAPI.builtinApiKeyStore(provider.id, key);
       toast.success(t('settings.providers.builtinApiKey.toast.saved', { name: provider.name }));
       setEditing(false);
       setDraftKey('');
@@ -771,13 +768,7 @@ function BuiltinApiKeyHeader({
     if (!confirmed) return;
     setBusy(true);
     try {
-      const result = await window.electronAPI.builtinApiKeyRemove(provider.id);
-      if (!result.success) {
-        toast.error(
-          t('settings.providers.builtinApiKey.toast.disconnectFailed', { name: provider.name }),
-        );
-        return;
-      }
+      await window.electronAPI.builtinApiKeyRemove(provider.id);
       toast.success(
         t('settings.providers.builtinApiKey.toast.disconnected', { name: provider.name }),
       );

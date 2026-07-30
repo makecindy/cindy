@@ -690,11 +690,8 @@ export function AddProviderWizard({
     if (!key) return;
     setSaving(true);
     try {
-      const ok = await window.electronAPI.builtinApiKeyStore(id, key);
-      if (!ok) {
-        toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));
-        return;
-      }
+      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
+      await window.electronAPI.builtinApiKeyStore(id, key);
       toast.success(t('settings.providers.wizard.authorizedToast', { name: sel.provider.name }));
       onDone(id);
     } catch {
