@@ -25,6 +25,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BROWSER_PARTITION } from '../../shared/webviewPartition';
 import { getEffectiveAppShortcuts, type AppShortcutId } from '../../shared/appShortcuts';
 import {
+  BLANK_POPUP_WINDOW_WEB_PREFERENCES,
   DEFERRED_POPUP_ROUTE_TIMEOUT_MS,
   POPUP_OPENER_EVENT_WAIT_TIMEOUT_MS,
   POPUP_OPENER_WAIT_TIMEOUT_MS,
@@ -158,6 +159,30 @@ describe('applyWebviewHardening', () => {
     expect(webPreferences.contextIsolation).toBe(true);
     expect('disablewebsecurity' in params).toBe(false);
     expect(params.partition).toBe(BROWSER_PARTITION);
+  });
+});
+
+describe('BLANK_POPUP_WINDOW_WEB_PREFERENCES(about:blank 中转窗口安全集)', () => {
+  it('覆盖仓库 BrowserWindow 安全契约的全部显式字段', () => {
+    // docs/dev-rules/electron-security-and-process-boundaries.md 第 3 节:新增
+    // BrowserWindow 必须显式配置的清单。隐藏中转窗口同样是真实 BrowserWindow,
+    // 少一个字段就是比主窗宽松的例外。enableBlinkFeatures 的契约是"不设置",
+    // 一并断言不存在。
+    expect(BLANK_POPUP_WINDOW_WEB_PREFERENCES).toMatchObject({
+      sandbox: true,
+      nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      nodeIntegrationInWorker: false,
+      contextIsolation: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
+      plugins: false,
+      navigateOnDragDrop: false,
+      webviewTag: false,
+      partition: BROWSER_PARTITION,
+    });
+    expect('enableBlinkFeatures' in BLANK_POPUP_WINDOW_WEB_PREFERENCES).toBe(false);
   });
 });
 

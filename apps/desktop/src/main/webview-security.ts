@@ -419,6 +419,27 @@ function routeBrowserPopup(
   });
 }
 
+/**
+ * about:blank deferred popup 的隐藏中转 BrowserWindow 的 webPreferences。
+ * 完整安全集,对齐 docs/dev-rules/electron-security-and-process-boundaries.md
+ * 第 3 节的 BrowserWindow 契约 —— 这是一个真实的(隐藏)BrowserWindow,即使
+ * 只活到"偷到第一个真实 URL"也不许比主窗宽松。导出供单测钉住字段完整性。
+ */
+export const BLANK_POPUP_WINDOW_WEB_PREFERENCES = Object.freeze({
+  sandbox: true,
+  nodeIntegration: false,
+  nodeIntegrationInSubFrames: false,
+  nodeIntegrationInWorker: false,
+  contextIsolation: true,
+  webSecurity: true,
+  allowRunningInsecureContent: false,
+  experimentalFeatures: false,
+  plugins: false,
+  navigateOnDragDrop: false,
+  partition: BROWSER_PARTITION,
+  webviewTag: false,
+} as const);
+
 function isInitialBlankPopupUrl(url: string): boolean {
   return url === 'about:blank' || url === 'about:blank#blocked';
 }
@@ -612,14 +633,7 @@ export function installWebviewHardener(): void {
             overrideBrowserWindowOptions: {
               show: false,
               autoHideMenuBar: true,
-              webPreferences: {
-                sandbox: true,
-                nodeIntegration: false,
-                contextIsolation: true,
-                webSecurity: true,
-                partition: BROWSER_PARTITION,
-                webviewTag: false,
-              },
+              webPreferences: { ...BLANK_POPUP_WINDOW_WEB_PREFERENCES },
             },
           };
         }
