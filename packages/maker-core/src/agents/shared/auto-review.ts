@@ -24,6 +24,22 @@
  * 默认 fail-open 相反 —— auto-review 要 safe-by-default)。shell 越界只能靠命令字符串启发式
  * (shell 不可静态求解):明确只读放行、明确危险必问、其余(含一切写)一律升级;结构化 path
  * 参数的动作(file-write)才做精确的工作区边界判定。
+ *
+ * ## 已知静态残口(命令字符串层不可闭合,应在 env / OS / 会话配置层缓解,不在此兜底)
+ *
+ * 本层只看命令字符串,以下几类的"命令本身无害、危险藏在进程环境/文件系统/仓库配置里"——静态不可判,
+ * 强行兜底要么无效、要么把 auto-approve 全毁掉,故明确划为残口(与安全团队 / env 构建层的约束配合):
+ *   - **PATH 解析**:白名单按 basename 判(`ls`=系统 ls)。若 PATH(或 runtimeConfig.pathPrepends /
+ *     buildCodexEnv 前置目录)把用户可写目录排在 /usr/bin 前,`ls` 会跑那个目录的木马。PATH 被污染时
+ *     任何命令名都不可信 —— 属"别用不可信 PATH 跑 agent"的 env 完整性问题,缓解在 env 构建层(别把
+ *     不可信目录前置),不在命令审查层。显式路径(`./ls`、`/opt/homebrew/bin/ls`)已按可信目录判并升级。
+ *   - **恶意 .git/config + .gitattributes**:`core.pager` / `diff.<d>.textconv` / `diff.<d>.command`(external
+ *     diff)/ `core.fsmonitor` 等能让**无害 argv** 的 `git diff|show|log|blame` 跑任意程序;`remote.<n>.url=ext::`
+ *     让 `git <联网子命令>` 执行(ls-remote 已因此移出白名单)。这是"在不可信 checkout 里跑 git"的仓库信任
+ *     问题 —— 命令 `git diff` 本身无辜、毒在仓库配置,静态无法识别。显式传入的 `-c`/`--config-env`/`--textconv`/
+ *     `--ext-diff`/`--open-files-in-pager`/`--exec-path`/`--upload-pack` 等已在 classifyGit 升级;config 文件驱动的
+ *     无 argv 形态属残口,缓解在"是否信任该 checkout 的 git 配置"的会话/OS 层。
+ *   - **DNS 重绑定 / 符号链接**:见 isInternalFetchTarget / isInsideWorkspace 各自注释;属网络出口过滤 / fs.realpath 层。
  */
 
 export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
@@ -343,8 +359,10 @@ function isSafeReadonlyBin(bin: string, segment: string, tokens: string[]): bool
   // 以下 flag 检测都跑在**去引号标记**的 segment 上(见 classifyShellSegment),防 -ex'ec' / -'o' 拼接绕过。
   // find 的执行/删除/写文件 flag:-exec/-delete/-fprintf/-fls(-print/-ls 写 stdout,仍算只读)。
   if (bin === 'find' && /-(?:exec(?:dir)?|ok(?:dir)?|delete)\b|-f(?:print[f0]?|ls)\b/.test(segment)) return false;
-  // sort:-o/--output 写文件;--compress-program 会运行任意外部程序(RCE)。
-  if (bin === 'sort' && /(?:^|\s)(?:-o\b|-o\S|--output\b|--compress-program\b)/.test(segment)) return false;
+  // sort:-o/--output 写文件;--compress-program 会运行任意外部程序(RCE)。GNU sort 接受唯一前缀缩写
+  // (`--compress-prog` / `--compress-p`,codex 报),故按前缀匹配 —— `--o…`(仅 --output)与 `--compress…`
+  // (仅 --compress-program)开头的长选项一律拦(短选项 -o 单列)。
+  if (bin === 'sort' && /(?:^|\s)(?:-o\b|-o\S|--o[a-z-]*\b|--compress[a-z-]*\b)/.test(segment)) return false;
   // base64(BSD/macOS `-o <file>` 把解码内容写任意文件)、tree(`-o <file>` 把树输出写文件)—— -o/--output 落盘。
   if ((bin === 'base64' || bin === 'tree') && /(?:^|\s)(?:-o\b|-o\S|--output\b)/.test(segment)) return false;
   // ripgrep 跑外部程序的 flag:--pre=CMD(预处理器)、--hostname-bin=CMD(取 hostname 供超链接)= RCE。
@@ -471,7 +489,7 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   const DANGEROUS_CURL_LONG_OPTS = [
     '--output', '--output-dir', '--remote-name', '--remote-name-all', '--remote-header-name',
     '--dump-header', '--trace', '--trace-ascii', '--trace-config', '--etag-save', '--cookie-jar',
-    '--stderr', '--create-dirs',
+    '--stderr', '--create-dirs', '--libcurl',
     '--data', '--data-raw', '--data-binary', '--data-urlencode', '--data-ascii', '--form', '--form-string',
     '--upload-file', '--json', '--url-query', '--request',
     '--location', '--location-trusted',

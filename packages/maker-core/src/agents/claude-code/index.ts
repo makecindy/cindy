@@ -1331,6 +1331,10 @@ export class ClaudeCodeAgent extends BaseAgent {
               workspaceRoots: [opts.workingDir, ...mutableExtraDirs].filter(
                 (d): d is string => typeof d === 'string' && d.length > 0,
               ),
+              // 远端会话:host 的 process.platform 不代表远端 OS(host 可能是 macOS、远端是 Linux)。
+              // 远端 OS 未接入前,保守传非-darwin('linux')关掉 /private firmlink 抹平 → fail-closed
+              // (宁多问,不把远端 /private/tmp 误当 /tmp 区内);本地会话用真实 process.platform。
+              platform: opts.remoteHostId ? 'linux' : process.platform,
             })
           : mcpApprovalPolicy;
       if (effectivePolicy === 'auto-approve' && !turnPolicyForcePrompt) {

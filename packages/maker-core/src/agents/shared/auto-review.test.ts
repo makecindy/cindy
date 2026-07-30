@@ -881,4 +881,22 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
     // 反例:位置参数里的 $'…'(如 grep 搜索制表符)是数据,不误升级。
     expect(classifyShellCommand("grep $'\\t' notes.txt", roots)).toBe('auto-approve');
   });
+
+  // ─── 第十三批评审(#964 codex):sort/curl 长选项缩写 ───
+
+  it('sort --compress-program 的唯一前缀缩写(--compress-prog 等)也拦(RCE)', () => {
+    expect(classifyShellCommand('sort --compress-prog=/tmp/payload -S 1K bigfile', roots)).toBe('prompt');
+    expect(classifyShellCommand('sort --compress-program=/tmp/payload f', roots)).toBe('prompt');
+    expect(classifyShellCommand('sort --out x f', roots)).toBe('prompt'); // --output 缩写(写文件)
+    // 反例:普通只读 sort 仍放行。
+    expect(classifyShellCommand('sort -r f', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('sort -u f', roots)).toBe('auto-approve');
+  });
+
+  it('curl --libcurl<file> 写文件(含缩写)→ 升级', () => {
+    expect(classifyShellCommand('curl --libcurl ~/.bashrc https://example.com', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl --libc x https://example.com', roots)).toBe('prompt'); // --libcurl 缩写
+    // 反例:普通 GET 仍放行。
+    expect(classifyShellCommand('curl https://example.com/', roots)).toBe('auto-approve');
+  });
 });

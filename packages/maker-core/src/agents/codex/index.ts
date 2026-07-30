@@ -2620,6 +2620,11 @@ export class CodexAgent extends BaseAgent {
         : path.join(this.codexHome ?? '', sub);
     const codexExtraWritableRoots = this.codexHome ? [joinCodexHome('memories')] : [];
     const runtimeWorkspaceRoots = (): string[] => [opts.workingDir, ...mutableExtraDirs];
+    // Auto-review 传给 core 的会话平台(决定是否抹平 macOS /private firmlink)。远端会话的 host
+    // process.platform 不代表远端 OS(host 可能 macOS、远端 Linux)——远端 OS 未接入前保守传 'linux'
+    // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
+    // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
+    const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : process.platform;
     const readonlyReferencesConfig: Record<string, unknown> = {
       [`permissions.${READONLY_REFERENCES_PERMISSION_PROFILE}`]: {
         filesystem: {
@@ -3552,6 +3557,7 @@ export class CodexAgent extends BaseAgent {
           const verdict = reviewAction(
             opts.autoReviewAction,
             runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
+            { platform: sessionReviewPlatform },
           );
           // 无人值守:只接受 core 判为 auto-approve 的安全动作。prompt / prompt-each-time 都意味着
           // "需人确认"而此路径无人在场 → 一律 fail-closed decline(AGENTS.md 无人值守安全底线)。
@@ -3580,6 +3586,7 @@ export class CodexAgent extends BaseAgent {
         const verdict = reviewAction(
           opts.autoReviewAction,
           runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
+          { platform: sessionReviewPlatform },
         );
         if (verdict === 'auto-approve') return Promise.resolve('accept');
         // prompt-each-time:高风险,强制逐次弹窗且剥离会话级 suggestion(不许"总是允许")。
