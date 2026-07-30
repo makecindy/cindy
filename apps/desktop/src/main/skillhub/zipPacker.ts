@@ -18,6 +18,15 @@ import { isIgnoredSkillPackagePath } from './packageIgnore';
 
 const log = createLogger('skillhub:zipPacker');
 
+/**
+ * zip 条目时间戳固定为常量:JSZip 缺省给每个条目盖打包瞬间的墙钟(DOS 时间
+ * 2 秒精度),同一内容两次打包跨过秒界 sha256 即漂移——"内容相同 ⇒ 包字节相同"
+ * 的确定性契约破产(publish 重试缓存与 server 端校验都以包 sha 为锚,CI 上
+ * determinism 用例也会随机红)。取 2020-01-01(zip 的 DOS 时间下限是 1980,
+ * 不能用 Unix epoch);条目真实 mtime 本就不进 manifest,无信息损失。
+ */
+const ZIP_ENTRY_DATE = new Date('2020-01-01T00:00:00Z');
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface PackResult {
@@ -108,7 +117,7 @@ async function walk(
 
     const content = await fs.promises.readFile(fullPath);
     checkPackState();
-    zip.file(relPath, content);
+    zip.file(relPath, content, { date: ZIP_ENTRY_DATE });
 
     const fileSha256 = await streamSha256(fullPath);
     checkPackState();

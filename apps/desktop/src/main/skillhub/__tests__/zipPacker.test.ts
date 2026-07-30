@@ -9,7 +9,7 @@
  *   - zip 根直接是文件（无顶层目录包裹）
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -250,6 +250,27 @@ describe('skillhub/zipPacker.pack', () => {
     const r2 = await pack(dir2);
     // Same content, different path → only content matters → same sha256
     expect(r1.sha256).toBe(r2.sha256);
+  });
+
+  it('打包时刻不进 zip 字节:跨秒界两次 pack 仍同 sha256(条目时间戳已固定)', async () => {
+    // 回归背景:JSZip 缺省给条目盖打包瞬间墙钟(DOS 2 秒精度),两次 pack 跨过
+    // 秒界即 sha 漂移,上面的 determinism 用例在 CI 上随机红。用假时钟制造
+    // 远大于精度的墙钟差,锁住"时间不参与包字节"。
+    const dir1 = path.join(tmpDir, 'clock1');
+    const dir2 = path.join(tmpDir, 'clock2');
+    writeFile(dir1, 'SKILL.md', Buffer.from('clock-free', 'utf8'));
+    writeFile(dir2, 'SKILL.md', Buffer.from('clock-free', 'utf8'));
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-07-30T20:42:59.900Z'));
+      const r1 = await pack(dir1);
+      vi.setSystemTime(new Date('2026-07-30T20:43:07.100Z'));
+      const r2 = await pack(dir2);
+      expect(r1.sha256).toBe(r2.sha256);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('aborts before reading files when the signal is already cancelled', async () => {
