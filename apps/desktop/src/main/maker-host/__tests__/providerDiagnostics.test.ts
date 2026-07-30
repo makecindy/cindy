@@ -88,10 +88,17 @@ describe('buildProbeRequest', () => {
       baseUrl: 'https://api.anthropic.com',
       modelId: 'claude-opus-5',
       apiKey: 'sk-test',
+      headers: {
+        'Anthropic-Version': 'custom-version',
+        'Content-Type': 'text/plain',
+      },
     });
     expect(url).toBe('https://api.anthropic.com/v1/messages');
     const headers = init.headers as Record<string, string>;
-    expect(headers['anthropic-version']).toBe('2023-06-01');
+    expect(headers['anthropic-version']).toBe('custom-version');
+    expect(headers['Anthropic-Version']).toBeUndefined();
+    expect(headers['content-type']).toBe('application/json');
+    expect(headers['Content-Type']).toBeUndefined();
     expect(headers['x-api-key']).toBe('sk-test');
     expect(headers.authorization).toBeUndefined();
     expect(JSON.parse(String(init.body))).toMatchObject({
@@ -237,7 +244,7 @@ describe('buildProbeRequest', () => {
     });
     expect(init.headers).toEqual({
       'content-type': 'application/json',
-      'X-Tenant': 'local',
+      'x-tenant': 'local',
     });
   });
 });
@@ -362,8 +369,10 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     });
 
     const headers = buildProbeRequest(spec).init.headers as Record<string, string>;
-    expect(headers.Authorization).toBe('Bearer stale');
-    expect(headers['X-API-Key']).toBe('stale');
+    expect(headers.authorization).toBe('Bearer stale');
+    expect(headers['x-api-key']).toBe('stale');
+    expect(headers.Authorization).toBeUndefined();
+    expect(headers['X-API-Key']).toBeUndefined();
   });
 
   it('api-key-header + openai-chat 供应商:saved 探测带上 wireProtocol → 打 /chat/completions', async () => {

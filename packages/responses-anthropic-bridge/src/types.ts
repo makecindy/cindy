@@ -89,7 +89,7 @@ export interface ResponsesAnthropicHandler {
 
 export interface ResponsesRequest {
   model: string;
-  instructions?: string;
+  instructions?: string | unknown[];
   input?: string | unknown[];
   tools?: unknown[];
   tool_choice?: unknown;

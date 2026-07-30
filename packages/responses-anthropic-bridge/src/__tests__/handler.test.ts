@@ -370,6 +370,43 @@ describe('createResponsesAnthropicHandler', () => {
     expect(maxEdges).toContain(1024);
   });
 
+  it('cancels an oversized 413 body before retrying image normalization', async () => {
+    let cancelled = false;
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('x'.repeat(16 * 1024 + 1)));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(oversizedBody, { status: 413 }))
+      .mockResolvedValueOnce(anthropicStream());
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({}),
+      imageCodec: {
+        normalize: async () => ({ data: 'abc', mediaType: 'image/png' }),
+      },
+    }, { fetchImpl: fetchMock as unknown as typeof fetch });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'claude',
+        input: [{
+          role: 'user',
+          content: [{ type: 'input_image', image_url: 'data:image/png;base64,abc' }],
+        }],
+      },
+      ctx,
+      res: res as never,
+    });
+    expect(cancelled).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(200);
+  });
+
   it('keeps refreshed OAuth headers across a following image-size retry', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response('expired', { status: 401 }))
@@ -471,5 +508,31 @@ describe('createResponsesAnthropicHandler', () => {
     expect(res.status).toBe(401);
     expect(res.chunks.join('')).toContain('authentication_error');
     expect(onUpstreamError).toHaveBeenCalledWith(expect.objectContaining({ status: 401, body: 'bad key' }));
+  });
+
+  it('cancels and truncates an oversized upstream error body', async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`bad key:${'x'.repeat(16 * 1024 + 1)}`));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const onUpstreamError = vi.fn();
+    const fetchImpl = vi.fn(async () => new Response(stream, { status: 401 })) as typeof fetch;
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({}),
+      onUpstreamError,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'claude', input: 'hi' }, ctx, res: res as never });
+    expect(cancelled).toBe(true);
+    expect(res.status).toBe(401);
+    const body = onUpstreamError.mock.calls[0]?.[0]?.body as string;
+    expect(new TextEncoder().encode(body).byteLength).toBe(16 * 1024);
+    expect(res.chunks.join('').length).toBeLessThan(17 * 1024);
   });
 });

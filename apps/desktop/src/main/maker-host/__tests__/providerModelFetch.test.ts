@@ -76,9 +76,11 @@ describe('buildModelsFetchRequest', () => {
         agent: 'codex',
         wireProtocol: 'anthropic-messages',
         baseUrl: 'https://api.anthropic.com',
+        headers: { 'Anthropic-Version': 'custom-version' },
       }),
     ).init.headers as Record<string, string>;
-    expect(headers['anthropic-version']).toBe('2023-06-01');
+    expect(headers['anthropic-version']).toBe('custom-version');
+    expect(headers['Anthropic-Version']).toBeUndefined();
     expect(headers['x-api-key']).toBe('sk-test');
     expect(headers.authorization).toBeUndefined();
   });

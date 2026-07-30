@@ -70,12 +70,20 @@ function sameOrigin(a: string, b: string): boolean {
 function withoutCredentialHeaders(
   headers: Record<string, string> | undefined,
 ): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(headers ?? {}).filter(([name]) => {
-      const normalized = name.toLowerCase();
-      return normalized !== 'authorization' && normalized !== 'x-api-key';
-    }),
-  );
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    const lower = name.toLowerCase();
+    if (lower !== 'authorization' && lower !== 'x-api-key') normalized[lower] = value;
+  }
+  return normalized;
+}
+
+function normalizedHeaders(headers: Record<string, string> | undefined): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    normalized[name.toLowerCase()] = value;
+  }
+  return normalized;
 }
 
 /** 构造列模型请求（纯函数，单测直断言）。鉴权头组合与 buildProbeRequest 同口径。 */
@@ -84,7 +92,7 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: s
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers: Record<string, string> = mustStripCredentialHeaders
     ? withoutCredentialHeaders(spec.headers)
-    : { ...(spec.headers ?? {}) };
+    : normalizedHeaders(spec.headers);
   const anthropicMessages =
     spec.wireProtocol === 'anthropic-messages'
     || (spec.wireProtocol === undefined && spec.agent === 'claude-code');

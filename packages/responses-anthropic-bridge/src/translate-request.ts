@@ -57,6 +57,26 @@ function isMeaningfulText(value: string): boolean {
   return value.trim().length > 0;
 }
 
+function instructionsText(value: ResponsesRequest['instructions']): string {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+  return value.map((part, index) => {
+    if (!isObject(part) || typeof part.type !== 'string') {
+      throw new UnsupportedResponsesFeatureError(`instructions[${index}]`);
+    }
+    if (
+      (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text')
+      && typeof part.text === 'string'
+    ) {
+      return part.text;
+    }
+    if (part.type === 'refusal' && typeof part.refusal === 'string') {
+      return part.refusal;
+    }
+    throw new UnsupportedResponsesFeatureError(`instructions[${index}].${part.type}`);
+  }).join('');
+}
+
 function parseDataUrl(value: string): { mediaType: string; data: string } | null {
   const match = /^data:([^;,]+)(?:;[^,]*)*;base64,([\s\S]+)$/i.exec(value);
   if (!match) return null;
@@ -916,7 +936,8 @@ export function translateResponsesRequest(
   }
   const model = options.model ?? raw.model;
   const systemParts: string[] = [];
-  if (raw.instructions && isMeaningfulText(raw.instructions)) systemParts.push(raw.instructions);
+  const instructions = instructionsText(raw.instructions);
+  if (isMeaningfulText(instructions)) systemParts.push(instructions);
   const oauth = options.authMode === 'oauth';
   if (oauth) systemParts.unshift(CLAUDE_CODE_SYSTEM_INSTRUCTION);
   const messages: Array<{ role: 'user' | 'assistant'; content: JsonObject[] }> = [];

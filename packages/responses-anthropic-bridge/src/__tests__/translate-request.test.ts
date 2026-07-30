@@ -38,6 +38,24 @@ describe('Responses → Anthropic request translation', () => {
     expect(JSON.stringify(result.request)).toContain('cache_control');
   });
 
+  it('parses text and refusal content parts from top-level instructions', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      instructions: [
+        { type: 'input_text', text: 'system one' },
+        { type: 'refusal', refusal: '\n\nsystem two' },
+      ],
+      input: 'hello',
+    });
+    expect(result.request.system?.[0].text).toBe('system one\n\nsystem two');
+
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      instructions: [{ type: 'input_image', image_url: 'https://example.com/a.png' }],
+      input: 'hello',
+    })).toThrowError('instructions[0].input_image');
+  });
+
   it('flattens namespace tools and restores their mapping in the context', () => {
     const result = translateResponsesRequest({
       model: 'claude',

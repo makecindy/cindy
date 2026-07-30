@@ -12,7 +12,7 @@ import {
   UnsupportedResponsesFeatureError,
 } from './types.js';
 
-const MAX_ERROR_BODY_CHARS = 16 * 1024;
+const MAX_ERROR_BODY_BYTES = 16 * 1024;
 const MAX_STREAM_BUFFER_CHARS = 1024 * 1024;
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -95,7 +95,7 @@ function writeSse(res: ServerResponse, event: unknown, sequenceNumber: number): 
 
 async function readBody(response: Response): Promise<string> {
   try {
-    return (await response.text()).slice(0, MAX_ERROR_BODY_CHARS);
+    return await readBodyWithLimit(response, MAX_ERROR_BODY_BYTES);
   } catch {
     return '';
   }
@@ -104,7 +104,7 @@ async function readBody(response: Response): Promise<string> {
 async function readBodyWithLimit(
   response: Response,
   limitBytes: number,
-  limitMessage: string,
+  limitMessage?: string,
 ): Promise<string> {
   if (!response.body) return '';
   const reader = response.body.getReader();
@@ -115,8 +115,17 @@ async function readBodyWithLimit(
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      const remaining = limitBytes - bytesRead;
+      if (value.byteLength > remaining) {
+        if (limitMessage) throw new Error(limitMessage);
+        if (remaining > 0) {
+          body += decoder.decode(value.subarray(0, remaining), { stream: true });
+        }
+        await reader.cancel();
+        body += decoder.decode();
+        return body;
+      }
       bytesRead += value.byteLength;
-      if (bytesRead > limitBytes) throw new Error(limitMessage);
       body += decoder.decode(value, { stream: true });
     }
     body += decoder.decode();
