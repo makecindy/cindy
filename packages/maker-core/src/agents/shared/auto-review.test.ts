@@ -899,4 +899,19 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
     // 反例:普通 GET 仍放行。
     expect(classifyShellCommand('curl https://example.com/', roots)).toBe('auto-approve');
   });
+
+  // ─── 第十四批评审(#964 codex):gcloud 凭证目录 / curl -w %output{} 写文件 ───
+
+  it('~/.config/gcloud 凭证目录(credentials.db 等)→ prompt-each-time', () => {
+    expect(reviewAction({ kind: 'read', path: '/Users/me/.config/gcloud/credentials.db' }, roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('cat ~/.config/gcloud/credentials.db', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('cat /home/me/.config/gcloud/access_tokens.db', roots)).toBe('prompt-each-time');
+  });
+
+  it('curl -w/--write-out 的 %output{file} 写任意文件 → 升级;普通 -w 格式串放行', () => {
+    expect(classifyShellCommand("curl -w '%output{/tmp/pwn}payload' https://example.com", roots)).toBe('prompt');
+    expect(classifyShellCommand("curl --write-out '%output{>>/tmp/pwn}x' https://example.com", roots)).toBe('prompt');
+    // 反例:无 %output{ 的普通 write-out 格式串(取状态码)仍放行。
+    expect(classifyShellCommand("curl -w '%{http_code}' https://example.com", roots)).toBe('auto-approve');
+  });
 });

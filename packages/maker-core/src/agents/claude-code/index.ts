@@ -2058,6 +2058,9 @@ export class ClaudeCodeAgent extends BaseAgent {
                     workspaceRoots: [opts.workingDir].filter(
                       (d): d is string => typeof d === 'string' && d.length > 0,
                     ),
+                    // 此路径恒为远端会话(在 remoteHostId 分支内):host process.platform 不代表远端 OS →
+                    // 保守传非-darwin,关掉 /private firmlink 抹平,fail-closed(与本地 canUseTool 的远端分支对齐)。
+                    platform: 'linux',
                   })
                 : remoteMcpPolicy;
             if (remoteEffectivePolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt) {

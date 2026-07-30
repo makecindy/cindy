@@ -149,7 +149,7 @@ const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
   /\bapplication_default_credentials\b/i,                 // gcloud 默认凭证文件
   /\bcredentials\.json\b/i,                               // Claude 等的 OAuth 凭证文件(.credentials.json)
   /[\\/](?:codex|claude|gcloud|containers)[\\/]auth\.json\b/i, // agent/registry 认证文件(~/.config/codex|containers/auth.json 等)
-  /[\\/]\.config[\\/](?:gh|hub|glab|op)\b/i,                  // GitHub/GitLab/Op CLI 的 OAuth/Token 凭证目录(~/.config/gh/hosts.yml 等)
+  /[\\/]\.config[\\/](?:gh|hub|glab|op|gcloud)\b/i,           // GitHub/GitLab/Op/gcloud CLI 的 OAuth/Token 凭证目录(~/.config/gh/hosts.yml、~/.config/gcloud/credentials.db 等)
   /\/proc\/[^/\s]*\/environ\b/i,                          // procfs 环境变量(读 /proc/self/environ 即 dump 含凭证的环境)
   /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/i, // 私钥文件
 ];
@@ -483,6 +483,9 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   // curl `@filename` 从文件读内容:-d/-F/-T 已由 UPLOAD_FLAGS 拦,-H/--header @file 会把文件每行当 header 外发
   // (codex 报 `curl -H @/repo/config.txt`)→ 升级。含贴合/等号/空格形态。
   if (/(?:^|\s)(?:-H|--header)[=\s]*@/.test(segment)) return false;
+  // curl -w/--write-out 的 `%output{file}` / `%output{>>file}` 指令把 write-out 写进任意文件(创建/覆盖/追加)
+  // (codex 报 `curl -w '%output{/tmp/pwn}…'`)→ 升级。-w 本身(如 `%{http_code}`)无害不拦,只拦 %output{。
+  if (/%output\{/i.test(segment)) return false;
   // curl 危险长选项的**唯一前缀缩写**(`--trace`/`--trace-ascii` 写调试文件、`--dump-h`=--dump-header、
   // `--loc`=--location、`--outp`=--output 等):全称正则会漏(codex 报 --trace)。逐 `--` token 取选项名,
   // 命中任一危险长选项(落盘/写文件/上传/非GET/重定向/凭证/SSRF)的前缀即升级。极短歧义缩写一并升级。
