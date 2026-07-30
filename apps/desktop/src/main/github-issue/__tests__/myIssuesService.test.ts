@@ -480,6 +480,34 @@ describe('MyIssuesService 的账号作用域隔离', () => {
     expect(result.githubEnhancement).toBeNull();
   });
 
+  it('invalidate 之后发起的查询不复用更早的在途请求', async () => {
+    // 只用 epoch 阻止「旧结果落缓存」是不够的:失效后发起的调用若复用那个读了旧账本
+    // 的在途 Promise,拿回的仍是不含新 issue 的快照,而页面不会自动再查。
+    let ledger: SubmittedIssueRecord[] = [];
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let gated = true;
+    const fetchPlatformIssues = vi.fn(async () => {
+      if (gated) await gate;
+      return { ok: false as const, reason: 'platform-unavailable' as const };
+    });
+    const service = new MyIssuesService(makeDeps({ readLedger: () => ledger, fetchPlatformIssues }));
+
+    const stale = service.list(); // 读到空账本后卡住
+    ledger = [ledgerRecord({ number: 555 })];
+    service.invalidate(); // 另一个窗口提交成功
+
+    gated = false;
+    const fresh = service.list(); // 失效后发起 —— 必须另起,不能复用上面那个
+    expect(fetchPlatformIssues).toHaveBeenCalledTimes(2);
+    expect((await fresh).items.map((i) => i.number)).toEqual([555]);
+
+    release!();
+    await stale;
+  });
+
   it('同一账号内 TTL 与 in-flight 复用不受影响', async () => {
     const fetchPlatformIssues = vi.fn(async () => ({
       ok: true as const,

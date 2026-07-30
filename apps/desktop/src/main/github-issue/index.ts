@@ -11,6 +11,7 @@ import os from 'node:os';
 import { app } from 'electron';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getCurrentMembershipDisplayName } from '../authManager';
 import { createLogger } from '../logger.js';
 import { serverApiFetch } from '../serverApiClient';
@@ -61,6 +62,9 @@ export async function submitGithubIssueForSession(
     };
   }
   const githubUserSubmitterDeps: GithubUserIssueSubmitterDeps = buildGithubUserSubmitterDeps();
+  // 在**发起时**锁定账号作用域:提交要等用户确认 + 一次网络往返,期间完全可能切号。
+  // 记账时拿它核对,绝不把这条提交写进另一个账号的账本(见 recordSubmittedIssue)。
+  const submitScope = activeOwnerScopeKey();
   return submitGithubIssueWithConfirm(
     {
       confirm: (sessionId, draft, env, submissionIdentity, suggestedPublicName) =>
@@ -94,7 +98,7 @@ export async function submitGithubIssueForSession(
       getSubmitterName: getCurrentMembershipDisplayName,
       onSubmitted: (record) => {
         try {
-          recordSubmittedIssue(record);
+          recordSubmittedIssue(record, submitScope);
           // 不失效的话,刚提交的那条最多要等 60s TTL 到期才会出现在列表里。
           invalidateMyIssuesCache();
         } catch (err) {

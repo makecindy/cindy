@@ -122,7 +122,12 @@ export class MyIssuesService {
   private readonly ttlMs: number;
   private readonly now: () => number;
   private cache: CacheEntry | null = null;
-  private inFlight: { scope: string; promise: Promise<MyIssuesResult> } | null = null;
+  private inFlight: {
+    scope: string;
+    /** 发起时的账本世代。invalidate() 之后的调用不得复用更早的在途请求。 */
+    epoch: number;
+    promise: Promise<MyIssuesResult>;
+  } | null = null;
   /** 账本世代。invalidate() 递增,使早于它发起的在途结果不再可缓存。 */
   private cacheEpoch = 0;
 
@@ -143,18 +148,25 @@ export class MyIssuesService {
     ) {
       return this.cache.result;
     }
-    // 只复用同账号的在途请求;跨账号一律另起,绝不共享结果。
-    if (this.inFlight && this.inFlight.scope === scope) return this.inFlight.promise;
-
-    // 发起时的账本世代。invalidate() 会递增它 —— 见 CACHE_EPOCH 不变量。
+    // 发起时的账本世代。invalidate() 会递增它 —— 见 settle() 的两条不变量。
     const epochAtStart = this.cacheEpoch;
+    // 复用在途请求要求**账号与世代都相同**:只比 scope 的话,提交成功
+    // (invalidate 递增世代)之后发起的查询会复用那个读了旧账本的在途请求,
+    // 拿回不含新 issue 的快照,而页面不会自动再查一次。
+    if (
+      this.inFlight &&
+      this.inFlight.scope === scope &&
+      this.inFlight.epoch === epochAtStart
+    ) {
+      return this.inFlight.promise;
+    }
     const promise = this.load()
       .then((result) => this.settle(result, scope, epochAtStart))
       .finally(() => {
         // 只清自己那条,别把切号后新起的在途请求误清掉。
         if (this.inFlight?.promise === promise) this.inFlight = null;
       });
-    this.inFlight = { scope, promise };
+    this.inFlight = { scope, epoch: epochAtStart, promise };
     return promise;
   }
 

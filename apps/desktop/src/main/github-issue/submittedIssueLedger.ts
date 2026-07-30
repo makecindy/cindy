@@ -14,7 +14,10 @@
 import Store from 'electron-store';
 
 import type { SubmittedIssueRecord } from '../../shared/myIssues.js';
-import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('github-issue/ledger');
 
 interface SubmittedIssueLedgerShape {
   issues: SubmittedIssueRecord[];
@@ -81,8 +84,27 @@ export function listSubmittedIssues(): SubmittedIssueRecord[] {
   return normalizeSubmittedIssues(getStore().get('issues', []));
 }
 
-/** 记一条提交成功的 issue;同号重复提交按最新一条覆盖。 */
-export function recordSubmittedIssue(record: SubmittedIssueRecord): SubmittedIssueRecord[] {
+/**
+ * 记一条提交成功的 issue;同号重复提交按最新一条覆盖。
+ *
+ * `expectedScope` **必填**且必须是**提交发起时**取的 activeOwnerScopeKey():
+ * getStore() 走 ownerScopedUserDataPath(),读的是「此刻」的账号路径。提交请求在飞
+ * 期间切号,落地时写入就会把账号 A 的提交记进账号 B 的账本、出现在 B 的列表里。
+ * 参数设成必填而不是可选,是为了让新调用点不可能忘记带上作用域。
+ */
+export function recordSubmittedIssue(
+  record: SubmittedIssueRecord,
+  expectedScope: string,
+): SubmittedIssueRecord[] {
+  const currentScope = activeOwnerScopeKey();
+  if (currentScope !== expectedScope) {
+    // 放弃写入而不是写进别人的账本。这条提交在 GitHub 上已经成功,只是本机
+    // 少一条记录(平台读接口就绪后仍会出现在原账号的列表里)。
+    log.warn('dropping submitted-issue record: active account changed since submit started', {
+      issueNumber: record.number,
+    });
+    return listSubmittedIssues();
+  }
   const next = normalizeSubmittedIssues([record, ...listSubmittedIssues()]);
   getStore().set('issues', next);
   return next;

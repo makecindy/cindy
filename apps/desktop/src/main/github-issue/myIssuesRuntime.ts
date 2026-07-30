@@ -18,7 +18,7 @@ import { GithubClient } from '@cindy/github-client';
 
 import { MY_ISSUES_REPOSITORY, type MyIssuesDegradedReason } from '../../shared/myIssues.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { getActiveAppSession } from '../appSessionState.js';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { createLogger } from '../logger.js';
@@ -48,6 +48,12 @@ const PLATFORM_MY_ISSUES_PATH = '/api/github/issues/mine';
 /** GitHub 用户名字符集。拼进 search q 前必须校验,否则 login 里的空格 / 冒号会变成查询限定符。 */
 const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 
+/**
+ * 平台列表请求的上限。serverApiFetch 默认不设 deadline,而这条是页面加载路径,
+ * 与增强分支并行 await —— 不设上限时服务端 hang 住会把整页钉在 loading。
+ */
+const PLATFORM_FETCH_TIMEOUT_MS = 10_000;
+
 const GHOST_IDENTITY_TIMEOUT_MS = 5_000;
 /**
  * 增强搜索的插件通道超时。service 层另有一道整体超时兜着,但这里也必须传 ——
@@ -64,7 +70,7 @@ export function getMyIssuesService(): MyIssuesService {
       fetchPlatformIssues: fetchPlatformIssues,
       resolveGithubEnhancement: resolveGithubEnhancement,
       searchAuthoredIssues: searchAuthoredIssues,
-      readScope: readAccountScope,
+      readScope: activeOwnerScopeKey,
     });
   }
   return serviceInstance;
@@ -75,15 +81,6 @@ export function invalidateMyIssuesCache(): void {
   serviceInstance?.invalidate();
 }
 
-/**
- * 账号作用域键。generation 在每次 mode / dataOwnerId 变化时递增
- * (appSessionState.commitActiveAppSession),所以切号后旧缓存与旧在途结果一律作废 ——
- * issue 列表是账号私有数据,进程级单例不能跨账号复用。
- */
-function readAccountScope(): string {
-  const session = getActiveAppSession();
-  return `${session.mode}:${session.dataOwnerId ?? 'none'}:${session.generation}`;
-}
 
 /** 平台通道。约定不抛:所有失败归一成 reason,由 UI 如实说明。 */
 async function fetchPlatformIssues(): Promise<PlatformIssuesOutcome> {
@@ -95,6 +92,10 @@ async function fetchPlatformIssues(): Promise<PlatformIssuesOutcome> {
       method: 'GET',
       // 与提交路径同源;resolver 形态保证 401 refresh 切区域后重新读端点。
       baseUrl: () => getClientEndpoint('githubApiBaseUrl'),
+      // 必须显式传:serverApiFetch 默认 timeoutMs=0 即**不设 deadline**。这是页面
+      // 加载路径,且与增强分支是并行 await 的 —— 服务端连上却不回时,不设上限会让
+      // 本机账本一直被 loading 遮住。超时按 fetch-failed 降级。
+      timeoutMs: PLATFORM_FETCH_TIMEOUT_MS,
     });
     return { ok: true, page: parseIssuePage(data) };
   } catch (err) {

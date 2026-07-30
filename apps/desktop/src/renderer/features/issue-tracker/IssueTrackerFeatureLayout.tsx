@@ -64,7 +64,7 @@ export function IssueTrackerFeatureLayout() {
           title={t('issueTracker.mine.refresh')}
           aria-label={t('issueTracker.mine.refresh')}
           className={cn(
-            'flex size-7 items-center justify-center rounded-md text-sidebar-muted',
+            'flex size-7 items-center justify-center rounded-full text-sidebar-muted',
             'transition-colors hover:bg-sidebar-item-hover hover:text-foreground',
             'disabled:pointer-events-none disabled:opacity-50',
           )}
@@ -121,7 +121,7 @@ function IssueCommandButton({
       title={t('issueTracker.mine.startIssueChat')}
       aria-label={t('issueTracker.mine.startIssueChat')}
       className={cn(
-        'rounded bg-sidebar-item-hover font-mono text-foreground',
+        'rounded-full bg-sidebar-item-hover font-mono text-foreground',
         'transition-colors hover:bg-sidebar-item-active',
         size === 'lg' ? 'px-1.5 py-0.5' : 'px-1 py-0.5',
       )}
@@ -152,7 +152,7 @@ function Notices({ data }: { data: MyIssuesResult | null }) {
   const notices = selectMyIssuesNotices(data);
   if (notices.length === 0) return null;
   return (
-    <div className="mb-2 flex flex-col gap-1.5 rounded-md bg-sidebar-item-hover px-3 py-2">
+    <div className="mb-2 flex flex-col gap-1.5 rounded-xl bg-sidebar-item-hover px-3 py-2">
       {notices.map((key) => (
         <p key={key} className="text-11 leading-relaxed text-sidebar-muted">
           {t(key)}
@@ -169,7 +169,7 @@ function Notices({ data }: { data: MyIssuesResult | null }) {
 function RefreshFailedNotice({ onRetry }: { onRetry: () => void }) {
   const { t } = useTranslation();
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-sidebar-item-hover px-3 py-2">
+    <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-sidebar-item-hover px-3 py-2">
       <p className="text-11 text-sidebar-muted">{t('issueTracker.list.loadFailed')}</p>
       <button
         type="button"

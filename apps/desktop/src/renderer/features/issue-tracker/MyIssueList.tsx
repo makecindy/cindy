@@ -63,7 +63,7 @@ function MyIssueRow({ item }: { item: MyIssueItem }) {
         onClick={() => window.electronAPI.openExternal(item.url)}
         title={t('issueTracker.mine.openOnGithub')}
         className={cn(
-          'group flex w-full items-start gap-3 rounded-md px-3 py-2.5 text-left',
+          'group flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left',
           'transition-colors hover:bg-sidebar-item-hover',
         )}
       >
