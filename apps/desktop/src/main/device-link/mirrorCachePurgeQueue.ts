@@ -201,16 +201,22 @@ export async function drainPurgeQueue(): Promise<{ purged: number; pending: numb
     const targets = (entry.paths ?? []).filter((target) => isPurgablePath(target, entry.root));
     try {
       if (entry.paths && entry.paths.length > 0) {
-        // 文件级:全部删成功才算清掉;剩下的继续留在队列里。
+        // 逐个删成功才算清掉;剩下的继续留在队列里。
+        //
+        // `recursive: true` 是必需的:清理路径可能登记的是**目录** —— `clearDevice` 在
+        // `messages/` 因权限而枚举失败时登记的就是那个目录本身。非递归的 `rm` 对非空目录会
+        // 报 ERR_FS_EISDIR,于是权限恢复后这条重试也永远失败,已撤销设备的正文长期残留
+        // (review: greptile + codex P1)。目标已被 isPurgablePath 限制在自己的 root 之内,
+        // 递归不会越界。
         const stuck: string[] = [];
         for (const target of targets) {
           try {
-            await fsp.rm(target, { force: true });
+            await fsp.rm(target, { recursive: true, force: true });
           } catch {
             stuck.push(target);
           }
         }
-        if (stuck.length > 0) throw new Error(`${stuck.length} file(s) still undeletable`);
+        if (stuck.length > 0) throw new Error(`${stuck.length} path(s) still undeletable`);
       } else {
         await fsp.rm(entry.root, { recursive: true, force: true });
       }

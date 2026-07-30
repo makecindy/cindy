@@ -563,6 +563,43 @@ describe('clearDevice / clearAll', () => {
     expect(fs.existsSync(path.join(root, __testing.sessionListFileName))).toBe(false);
   });
 
+  // review(codex P1):清理写入若用 generation 守,另一个 clearDevice 的自增会在 ensureDir /
+  // 原子写前后把它判成 stale(甚至写完又删掉),那台设备的元数据就此留下且无人重试。
+  it('多台设备接连被清:每一台都真的从列表里消失(清理写入不被同类作废)', async () => {
+    const c = cache();
+    const devices = ['dev-1', 'dev-2', 'dev-3', 'dev-4'];
+    await c.writeSessionList([
+      ...devices.map((deviceId) => ({
+        deviceId,
+        deviceName: deviceId,
+        sessions: [{ id: `s-${deviceId}`, status: 'active' as const }],
+      })),
+      { deviceId: 'dev-keep', deviceName: 'Keep', sessions: [{ id: 's-keep', status: 'active' }] },
+    ]);
+
+    // 全部同时发起(renderer 侧的收敛循环就是不 await 连着调的)
+    await Promise.all(devices.map((deviceId) => c.clearDevice(deviceId)));
+
+    expect((await c.readSessionList()).map((d) => d.deviceId)).toEqual(['dev-keep']);
+  });
+
+  it('clearAll 与 clearDevice 同时发起时,列表快照最终不存在(屏障挡住晚到的写回)', async () => {
+    const c = cache();
+    await c.writeSessionList([
+      { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+      { deviceId: 'dev-2', deviceName: 'PC', sessions: [{ id: 's2', status: 'active' }] },
+    ]);
+
+    await Promise.all([
+      c.clearAll(),
+      c.clearDevice('dev-1').catch(() => undefined),
+      c.clearDevice('dev-2').catch(() => undefined),
+    ]);
+
+    expect(await c.readSessionList()).toEqual([]);
+    expect(fs.existsSync(path.join(root, __testing.sessionListFileName))).toBe(false);
+  });
+
   it('并发 clearDevice 不会把彼此从列表快照里恢复回来', async () => {
     const c = cache();
     await c.writeSessionList([

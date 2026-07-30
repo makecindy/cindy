@@ -140,6 +140,21 @@ describe('文件级条目(clearDevice 删不掉时用)', () => {
     expect(fs.existsSync(root)).toBe(true);
   });
 
+  // review(greptile + codex P1):clearDevice 在 messages/ 枚举失败时登记的是**目录**,
+  // 非递归 rm 对非空目录报 ERR_FS_EISDIR → 权限恢复后这条重试也永远失败。
+  it('目录型目标(枚举失败时登记的 messages/)能被递归清掉', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const dir = path.join(root, 'messages');
+    await fsp.writeFile(path.join(dir, 'b.json'), '{}', 'utf8');
+
+    await enqueuePurge(root, [dir]);
+    const result = await drainPurgeQueue();
+
+    expect(result).toEqual({ purged: 1, pending: 0 });
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(fs.existsSync(root)).toBe(true);
+  });
+
   it('root 之外的文件路径拒绝入队(不给自己造越界删除的能力)', async () => {
     const root = await makeOwnerCache('owner-1');
     const outside = path.join(userData, 'owners', 'owner-2', 'secret.json');
