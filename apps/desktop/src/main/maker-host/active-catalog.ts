@@ -586,7 +586,12 @@ function computeMerged(): Catalog {
     const codexModels = models.codex;
     if (codexModels) {
       for (const model of claudeModels) {
-        if (xdCodexAnthropicBridgeModelIds.has(model.id)) codexModels.push(model);
+        if (xdCodexAnthropicBridgeModelIds.has(model.id)) {
+          codexModels.push({
+            ...model,
+            codexCompatibilityWireProtocol: 'anthropic-messages',
+          });
+        }
       }
     }
     // 每个 tab 内按 sortOrder 稳定排序(无 sortOrder 的合成条目排最后,按进入序)。

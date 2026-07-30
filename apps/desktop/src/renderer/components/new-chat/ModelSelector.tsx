@@ -51,6 +51,7 @@ import {
   modelSupportsFastMode,
   providerOffersModel,
   resolveModelIconKind,
+  resolveCodexCompatibilityWireProtocol,
   sourcesForModel,
   visibleModelUnion,
   type ProviderView,
@@ -240,6 +241,8 @@ interface RowModel {
   defaultEffort: Effort | null;
   effortDisplayNames?: Partial<Record<string, string>>;
   supportsFastMode?: boolean;
+  /** 模型级 Codex bridge 协议；仅同一 Provider 内混合原生/桥接模型时存在。 */
+  codexCompatibilityWireProtocol?: 'openai-chat' | 'anthropic-messages';
   /** 展示图标 id(AI Gateway / 目录设定,SectionModel.icon);flat 列表的 ModelDescriptor 无此字段。 */
   icon?: string;
 }
@@ -1090,6 +1093,9 @@ function ModelSelectorContentView({
   const editingPricePresentation = editingModel
     ? pricePresentationOf(editingProvider?.id ?? editingProviderId, editingModel.id)
     : null;
+  const editingCodexCompatibilityProtocol = editingProvider
+    ? resolveCodexCompatibilityWireProtocol(editingProvider, currentAgentKind, editingModel)
+    : null;
   const editingDiscount =
     editingPricePresentation?.kind === 'priced' ? editingPricePresentation.discount : undefined;
   const editingPromotionLabel =
@@ -1249,6 +1255,9 @@ function ModelSelectorContentView({
                 value: formatContextWindow(editingModel.contextWindow),
               })}
             </span>
+          )}
+          {editingCodexCompatibilityProtocol && (
+            <span>{t('newChat.modelSelector.meta.codexCompatibilityMode')}</span>
           )}
           {editingModel.supportsFastMode && (
             <span>{t('newChat.modelSelector.meta.fastBadge')}</span>

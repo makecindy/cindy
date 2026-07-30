@@ -61,7 +61,13 @@ describe('XD 网关权威模型清单重建', () => {
       defaultEffort: 'high',
       supportsFastMode: false,
     });
-    expect(codex).toEqual(cc);
+    expect(codex).toEqual([
+      {
+        ...cc[0],
+        codexCompatibilityWireProtocol: 'anthropic-messages',
+      },
+    ]);
+    expect('codexCompatibilityWireProtocol' in cc[0]).toBe(false);
     expect(isXdCodexAnthropicBridgeModel('brand-new-model')).toBe(true);
     expect(
       deriveAvailableModels(getActiveCatalog(), 'codex').map((model) => model.id),
@@ -109,6 +115,7 @@ describe('XD 网关权威模型清单重建', () => {
       });
     }
     expect(isXdCodexAnthropicBridgeModel('gpt-5.6-sol')).toBe(false);
+    expect('codexCompatibilityWireProtocol' in xdModels('codex')[0]).toBe(false);
   });
 
   it('仅 codex 的原生模型不投影到 Claude tab,也不标记为 bridge', () => {

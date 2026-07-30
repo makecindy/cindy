@@ -30,6 +30,12 @@ export type ProviderWireProtocol =
   | 'openai-responses'
   | 'openai-chat';
 
+/** Codex 通过本地 bridge 兼容的两种非原生 Responses wire protocol。 */
+export type CodexCompatibilityWireProtocol = Extract<
+  ProviderWireProtocol,
+  'anthropic-messages' | 'openai-chat'
+>;
+
 /** 供应商来源：内置 vs 用户自定义（自定义本轮不实现，类型先留位）。 */
 export type ProviderSource = 'builtin' | 'user';
 
@@ -254,6 +260,16 @@ export interface CatalogModel {
    * 不能读跨 provider 拍平去重后的列表（那只保留首个 provider 的值，会错）。
    */
   supportsFastMode?: boolean;
+  /**
+   * 该模型在 Codex 下使用的模型级兼容 bridge 协议。
+   *
+   * 通常 wire protocol 由 Provider.routing.codex 决定；只有同一 Provider 内不同模型
+   * 需要走不同 Codex wire 时才写本字段。典型是 XD：服务端原生声明 Codex 的模型走
+   * Responses，只声明 Claude Code 的模型投影进 Codex 后走 Anthropic Messages bridge。
+   *
+   * 这是按 agent 嵌套的目录元数据，不代表模型能力；缺省时回落 Provider 级路由。
+   */
+  codexCompatibilityWireProtocol?: CodexCompatibilityWireProtocol;
   /**
    * 展示图标 id —— 模型行 / composer 药丸上显示什么图标,**以 AI Gateway / 目录设定为准**
    * (XD 模型经 model-access-server GET /models 下发,其它供应商可由 OSS 目录配置)。
