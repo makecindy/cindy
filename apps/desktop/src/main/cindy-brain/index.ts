@@ -1893,8 +1893,7 @@ function decodeImageResponse(res: {
 export function getGhostCindySlot(): GhostCindySlot {
   if (!cindySlotSingleton) {
     cindySlotSingleton = new GhostCindySlot({
-      getGhost: (id) =>
-        getAppCapabilities().canUseCindyGateway ? findAvailableGhost(id) : null,
+      getGhost: (id) => findAvailableGhost(id),
       // model 已在 modelSlot 按白名单校验;归属来源(providerId)按白名单条目
       // 定位,经 imageChannelRegistry 取对应执行通道(2026-07 图像多来源)。
       generateImage: async ({ prompt, model, aspectRatio }) => {

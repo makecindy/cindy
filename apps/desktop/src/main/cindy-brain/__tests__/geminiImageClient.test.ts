@@ -46,10 +46,10 @@ describe('geminiImageClient', () => {
     });
     await channel.generateImage({ model: 'gemini/gemini-3-pro-image', prompt: 'p', aspectRatio: '2:3' });
     const withRatio = JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
-    expect(withRatio.generationConfig).toEqual({ imageConfig: { aspectRatio: '2:3' } });
+    expect(withRatio.generationConfig).toEqual({ responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: '2:3' } });
     await channel.generateImage({ model: 'gemini/gemini-3-pro-image', prompt: 'p' });
     const without = JSON.parse(String(doFetch.mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
-    expect('generationConfig' in without).toBe(false);
+    expect(without.generationConfig).toEqual({ responseModalities: ['TEXT', 'IMAGE'] });
   });
 
   it('ready = key 已配置;null 或空白串均视为未配置(不出网)', async () => {
