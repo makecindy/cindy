@@ -109,8 +109,9 @@ describe('classifyShellCommand — 关键漏洞回归护栏', () => {
       expect(classifyShellCommand(c, roots)).toBe('prompt');
     }
   });
-  it('git 只读形态仍放行(branch / branch -a / remote -v / remote show)', () => {
-    for (const c of ['git branch', 'git branch -a', 'git remote -v', 'git remote show origin']) {
+  it('git 只读形态仍放行(branch / branch -a / remote -v / remote show -n)', () => {
+    // remote show 不带 -n 会联系远端(第十批修:升级为 prompt),带 -n 只读本地配置放行。
+    for (const c of ['git branch', 'git branch -a', 'git remote -v', 'git remote show -n origin']) {
       expect(classifyShellCommand(c, roots)).toBe('auto-approve');
     }
   });
@@ -815,5 +816,36 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
     // 反例:只读形态仍放行。
     expect(classifyShellCommand('git branch', roots)).toBe('auto-approve');
     expect(classifyShellCommand('git branch -a', roots)).toBe('auto-approve');
+  });
+
+  // ─── 第十批评审(#964 codex):两段式 IPv4 / curl 长选项缩写 / git remote show 联网 ───
+
+  it('两段式 IPv4(a.B24)内网判定 → prompt(codex P1)', () => {
+    // 169.16689662 = 169.254.169.254(inet_aton 两段式:B24 高8位=254 → 云 metadata)
+    expect(classifyShellCommand('curl http://169.16689662/latest/meta-data', roots)).toBe('prompt');
+    // 127.65793 = 127.1.1.1(127.0x10101 → 环回)
+    expect(classifyShellCommand('curl http://127.65793/', roots)).toBe('prompt');
+    // 反例:公网两段式不误伤(8.524288 = 8.8.0.0,公网)
+    expect(classifyShellCommand('curl http://8.524288/', roots)).toBe('auto-approve');
+  });
+
+  it('curl 长选项前缀缩写(--dump-h → --dump-header)→ 升级(codex P1)', () => {
+    expect(classifyShellCommand('curl --dump-h ~/.bashrc https://example.com', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl --dump-he /tmp/out https://example.com', roots)).toBe('prompt');
+    // 反例:--dump-header 全称同样升级(回归)
+    expect(classifyShellCommand('curl --dump-header /tmp/out https://example.com', roots)).toBe('prompt');
+    // 反例:无落盘 flag 的简单 GET 仍放行
+    expect(classifyShellCommand('curl https://example.com/', roots)).toBe('auto-approve');
+  });
+
+  it('git remote show 不带 -n → 联网可被 ext:: 劫持 → 升级;带 -n 放行(codex P1)', () => {
+    expect(classifyShellCommand('git remote show origin', roots)).toBe('prompt');
+    expect(classifyShellCommand('git remote show', roots)).toBe('prompt');
+    // 带 -n 只读本地配置 → 放行
+    expect(classifyShellCommand('git remote show -n origin', roots)).toBe('auto-approve');
+    // 反例:bare remote / -v / get-url 不触网 → 放行
+    expect(classifyShellCommand('git remote', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('git remote -v', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('git remote get-url origin', roots)).toBe('auto-approve');
   });
 });

@@ -233,7 +233,8 @@ const CURL_NONGET_METHOD = /(?:^|\s)(?:-X|--request)[=\s]*(?:POST|PUT|DELETE|PAT
 // 短选项用簇匹配 `-[a-zA-Z]*[oODP]`:除贴合 `-ofile`,还捕获与只读短选项捆绑的形态
 // (`-sD/tmp/headers`、`-so/tmp/out` = -s 静默 + -D/-o 落盘),否则簇里的落盘 flag 会被漏放行。
 // (wget 现整体升级、不再走安全 fetch,见 isSafeFetch;此常量仍供 curl 的 -o/-O 判定。)
-const FETCH_OUTPUT_FLAGS = /(?:^|\s)-[a-zA-Z]*[oODP]|(?:^|\s)--(?:output(?:-dir|-document)?|remote-name|directory-prefix|dump-header)\b/;
+// `dump-h[\w-]*`:curl 接受唯一前缀缩写,`--dump-h` 等同 `--dump-header`(copilot P1:缩写形绕过精确匹配)。
+const FETCH_OUTPUT_FLAGS = /(?:^|\s)-[a-zA-Z]*[oODP]|(?:^|\s)--(?:output(?:-dir|-document)?|remote-name|directory-prefix|dump-h[\w-]*)\b/;
 // curl 跟随重定向(-L/--location*):最终 host 静态不可判(可 302 跳到云 metadata/内网)→ 升级。
 // 短选项同样用簇匹配 `-[a-zA-Z]*L`,捕获 `-sL`(-s 静默 + -L 跟随)这类捆绑形态。
 const CURL_REDIRECT_FLAGS = /(?:^|\s)(?:-[a-zA-Z]*L|--location(?:-trusted)?)\b/;
@@ -421,7 +422,8 @@ function isInternalFetchTarget(t: string): boolean {
     const p1 = parseNumericHostComponent(parts[1]);
     if (p0 === null || p1 === null) return true; // 畸形八进制(如 08)等非规范数字 host → 保守视为内网升级
     a = p0;
-    b = p1;
+    // 两段式 a.B24:B24 高 8 位是第二字节(inet_aton 规则);如 169.16689662 → b=(16689662>>>16)&255=254 → 命中 metadata(codex P1)。
+    b = parts.length === 2 ? (p1 >>> 16) & 255 : p1;
   } else if (NUMERIC.test(host)) {
     const n = parseNumericHostComponent(host);
     if (n === null) return true;                 // 非规范数字 host → 保守升级
@@ -518,11 +520,14 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
     return 'auto-approve';
   }
   if (sub === 'remote') {
-    const next = rest.slice(rest.indexOf(sub) + 1).find((t) => !t.startsWith('-'));
+    const afterRemote = rest.slice(rest.indexOf(sub) + 1);
+    const next = afterRemote.find((t) => !t.startsWith('-'));
     if (next && /^(?:add|remove|rm|rename|set-url|set-head|set-branches|prune|update)$/.test(next)) {
       return 'prompt';
     }
-    return 'auto-approve'; // bare / -v / show / get-url 等只读形态
+    // `remote show` 不带 -n 会联系远端(ext:://insteadOf 可执行 payload,codex P1)→ 升级;带 -n 只读本地配置放行。
+    if (next === 'show' && !afterRemote.includes('-n')) return 'prompt';
+    return 'auto-approve'; // bare / -v / get-url / show -n 等不触网的只读形态
   }
   return 'auto-approve';
 }
