@@ -88,6 +88,10 @@ export function initPopupRouter(): () => void {
       const newTab = await addTab(targetSessionId, 'web-browser', initialState, {
         onOptimisticAdd: markPopupSpawnedTab,
       });
+      // addTab IPC(upsert/setActive)在途期间用户可能已关闭该 tab —— closeTab
+      // 乐观移除 + ipc.close 落库后,tab 已不在 bucket 里。若此时仍 eagerSpawn,
+      // 会在 pool/Main registry 里留下孤立入口并重新加载 OAuth URL(Codex P1)。
+      if (!getBucket(targetSessionId).tabs.some((t) => t.id === newTab.id)) return;
       // 一律离屏物化,不区分目标 session 是否当前:
       // - 跨 session / Shell 已卸载:没有 BrowserTabBody 去出生 webview;
       // - 同 session 但侧栏折叠:Shell 挂着但 shellVisible=false,#700 之后隐藏
