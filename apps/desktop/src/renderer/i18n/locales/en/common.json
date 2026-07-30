@@ -1908,7 +1908,7 @@
     "agentResource": {
       "saveFailed": "Failed to save. Try again.",
       "title": "Agent Resource Usage",
-      "description": "Limit how much system capacity Agent command-line work can consume, so parallel tests or builds don't freeze your machine. Defaults to full speed (no intervention). The concurrency limit and priority lowering take effect immediately (including running Agent processes); raising priority back to Normal and toolchain thread caps only apply to newly started Agent processes. Applies to local Agents only; Agents on remote (SSH) machines are not governed by these settings.",
+      "description": "Limit how much system capacity Agent command-line work can consume, so parallel tests or builds don't freeze your machine. Defaults to full speed (no intervention). The concurrency limit applies immediately; priority lowering reaches running Agent processes within about 15 seconds; raising priority back to Normal and toolchain thread caps only apply to newly started Agent processes. Applies to local Agents only; Agents on remote (SSH) machines are not governed by these settings.",
       "preset": "Profile",
       "presets": {
         "full": "Full Speed",
