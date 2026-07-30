@@ -82,7 +82,10 @@ export function classifyBuiltinToolForAutoReview(
   const { toolName, input, workspaceRoots } = ctx;
 
   if (READ_ONLY_TOOLS.has(toolName)) {
-    return reviewAction({ kind: 'read', path: extractReadPath(toolName, input) }, workspaceRoots);
+    // Read/NotebookRead 读单个具名文件(scope='file');Grep/Glob/LS 是目录级递归读(scope='tree'),
+    // 根在工作区外时能遍历进区外凭证子路径 → 由 core 按边界升级(见 reviewAction 的 read 分支)。
+    const scope: 'file' | 'tree' = toolName === 'Read' || toolName === 'NotebookRead' ? 'file' : 'tree';
+    return reviewAction({ kind: 'read', path: extractReadPath(toolName, input), scope }, workspaceRoots);
   }
   if (SAFE_STATEFUL_TOOLS.has(toolName)) return reviewAction({ kind: 'session-state' }, workspaceRoots);
   if (FILE_WRITE_TOOLS.has(toolName)) {

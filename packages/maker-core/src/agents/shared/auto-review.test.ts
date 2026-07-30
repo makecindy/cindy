@@ -618,4 +618,55 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
     // 反例:无内联 config 的只读子命令仍放行。
     expect(classifyShellCommand('git status', roots)).toBe('auto-approve');
   });
+
+  // ─── 第四批评审(#964):glob 凭证绕过 / env 选项参数 / ls-remote upload-pack / curl URL glob ───
+
+  it('shell glob(方括号/花括号)展开成凭证路径 → prompt-each-time(greptile P1)', () => {
+    // 审查时不含字面 `.ssh`/`id_rsa`,shell 展开 `[h]`→h、`[r]`→r 后才成 ~/.ssh/id_rsa。
+    expect(classifyShellCommand('cat ~/.ss[h]/id_[r]sa', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('cat ~/.{ssh}/id_rsa', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand("cat '/Users/me/.a'[w]s/credentials", roots)).toBe('prompt-each-time');
+    // 反例:良性 glob 不误伤(*.ts 归一后无凭证特征,仍按只读放行)。
+    expect(classifyShellCommand('grep foo *.ts', roots)).toBe('auto-approve');
+  });
+
+  it('env 剥壳精确消费选项参数 —— -u NAME 不得把 NAME 误当内层命令(codex P1)', () => {
+    // env -u ls ./payload:-u 消费变量名 ls,真正执行的是 ./payload(显式路径)→ 升级,不可漏放行。
+    expect(classifyShellCommand('env -u ls ./payload', roots)).toBe('prompt');
+    // -S/--split-string 把参数重解析成整条命令 → 不剥壳、fail-closed 升级。
+    expect(classifyShellCommand('env -S ls', roots)).toBe('prompt');
+    expect(classifyShellCommand('env --split-string=ls', roots)).toBe('prompt');
+    // 反例:-u NAME 后接安全命令仍放行(NAME 被正确消费)。
+    expect(classifyShellCommand('env -u FOO ls', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('env FOO=bar ls', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('env -i -u PATH cat f', roots)).toBe('auto-approve');
+  });
+
+  it('git ls-remote/fetch 的 --upload-pack/--receive-pack/--exec(远程执行器)→ 升级(codex P1)', () => {
+    expect(classifyShellCommand("git ls-remote --upload-pack='sh payload' repo", roots)).toBe('prompt');
+    expect(classifyShellCommand('git ls-remote --upload-pack=./x repo', roots)).toBe('prompt');
+    // 反例:普通 ls-remote 仍放行。
+    expect(classifyShellCommand('git ls-remote origin', roots)).toBe('auto-approve');
+  });
+
+  it('curl URL glob({}/[])未关 glob 时 → 升级(codex P1,防展开出 metadata)', () => {
+    expect(classifyShellCommand("curl 'http://{example.com,169.254.169.254}/latest/meta-data'", roots)).toBe('prompt');
+    expect(classifyShellCommand("curl 'http://10.0.0.[1-9]/'", roots)).toBe('prompt');
+    // 反例:显式 --globoff 关闭 glob,大括号为字面 host(非内网)→ 放行。
+    expect(classifyShellCommand("curl --globoff 'http://{a,b}.example.com/'", roots)).toBe('auto-approve');
+    // 反例:普通公网 URL 仍放行。
+    expect(classifyShellCommand('curl https://example.com/', roots)).toBe('auto-approve');
+  });
+
+  it('reviewAction read scope=tree:区外根目录级读升级,区内/单文件读放行(copilot)', () => {
+    // 目录级递归读(Grep/LS/Glob)根在工作区外 → 能遍历进 ~/.aws 等 → 升级。
+    expect(reviewAction({ kind: 'read', path: '/Users/me', scope: 'tree' }, roots)).toBe('prompt');
+    expect(reviewAction({ kind: 'read', path: '/', scope: 'tree' }, roots)).toBe('prompt');
+    // 区内根、相对(默认 cwd)、单文件读 → 放行。
+    expect(reviewAction({ kind: 'read', path: '/repo/src', scope: 'tree' }, roots)).toBe('auto-approve');
+    expect(reviewAction({ kind: 'read', path: 'src', scope: 'tree' }, roots)).toBe('auto-approve');
+    expect(reviewAction({ kind: 'read', path: '/Users/me/notes.txt', scope: 'file' }, roots)).toBe('auto-approve');
+    // 凭证命中优先于边界(即便标 tree)。
+    expect(reviewAction({ kind: 'read', path: '/Users/me/.aws', scope: 'tree' }, roots)).toBe('prompt-each-time');
+  });
 });

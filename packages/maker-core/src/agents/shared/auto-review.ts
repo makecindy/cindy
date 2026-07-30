@@ -30,7 +30,7 @@ export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
 
 /**
  * 归一化动作 —— 各 harness 的 adapter 把自己的工具调用/审批请求翻译成它,交 reviewAction 裁决。
- *   read          读文件/内省(可带 path:读凭证文件必问,其余放行)
+ *   read          读文件/内省(可带 path:读凭证文件必问;scope='tree' 的目录级递归读若根在区外必升级,其余放行)
  *   session-state 会话内状态/控制,无本地写/外发(todo、后台 shell 读写、subagent 派生)
  *   file-write    带结构化路径的文件写(path 缺失=无法确认在区内→升级)
  *   exec          shell 命令(交给命令分类器)
@@ -38,7 +38,7 @@ export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
  *   other         未知/其它 → fail-closed
  */
 export type ReviewableAction =
-  | { kind: 'read'; path?: string }
+  | { kind: 'read'; path?: string; scope?: 'file' | 'tree' }
   | { kind: 'session-state' }
   | { kind: 'file-write'; path: string | undefined }
   | { kind: 'exec'; command: string }
@@ -52,8 +52,15 @@ export type ReviewableAction =
 export function reviewAction(action: ReviewableAction, workspaceRoots: string[]): ReviewVerdict {
   switch (action.kind) {
     case 'read':
-      // 读凭证/密钥文件(内置 Read/Grep 等,path 命中)必问、不可记住;读普通文件放行。
-      return action.path && isSensitiveCredentialPath(action.path) ? 'prompt-each-time' : 'auto-approve';
+      // 读凭证/密钥文件(内置 Read/Grep 等,path 命中)必问、不可记住。
+      if (action.path && isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
+      // 目录级递归读(Grep/Glob/LS,scope='tree')的**根目录**在工作区外 → 能遍历进区外的凭证子路径
+      // (如 `Grep {path:'/Users/me', pattern:'AKIA'}` 读出 ~/.aws/credentials,而 path 本身不含凭证名,
+      // copilot 报)→ 升级。单文件读(Read/NotebookRead,scope='file' 或未标)只读一个具名文件,风险低,
+      // 仍按凭证命中升级、其余放行。path 缺失(如 Glob 只给 pattern,默认 cwd)= 区内,放行。
+      if (action.scope === 'tree' && action.path
+        && !isInsideWorkspace(normalizeTarget(action.path, workspaceRoots), workspaceRoots)) return 'prompt';
+      return 'auto-approve';
     case 'session-state':
       return 'auto-approve';
     case 'file-write':
@@ -231,10 +238,24 @@ function unwrapWrappers(tokens: string[]): string[] {
     const head = baseName(toks[0]);
     if (!COMMAND_WRAPPERS.has(head)) break;
     if (head === 'env') {
-      // env [-i] [NAME=val...] cmd args —— 跳过 env 及其后所有 `NAME=val` / `-*`。
+      // env [-i] [-u NAME]... [-C DIR] [NAME=val...] cmd args。**必须精确消费带独立参数的选项** ——
+      // `-u`/`--unset` 后跟的 NAME 若被当成内层命令(如 `env -u ls ./payload`:-u 消费 ls、真正执行的是
+      // ./payload)会漏放行(codex 报)。未建模的选项(尤其 `-S`/`--split-string` 会把参数重解析成整条
+      // 命令串)不猜测、保留原 token → 后续分类必 fail-closed 升级。
       let i = 1;
-      while (i < toks.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(toks[i]) || toks[i].startsWith('-'))) i++;
+      let bail = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '-' || t === '-i' || t === '--ignore-environment' || t === '-0' || t === '--null' || t === '-v' || t === '--debug') { i++; continue; }
+        if (t === '-u' || t === '--unset' || t === '-C' || t === '--chdir') { i += 2; continue; } // 消费独立参数(NAME / DIR)
+        if (/^(?:--unset|--chdir)=/.test(t) || /^-[uC]./.test(t)) { i++; continue; }             // --unset=NAME / -uNAME / -C=DIR
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) { i++; continue; }                                 // NAME=VALUE
+        if (t.startsWith('-')) { bail = true; break; }  // -S/--split-string 及一切未建模选项 → 不剥,fail-closed
+        break;                                          // 内层命令
+      }
+      // bail 时 toks[i] 是可疑选项(如 -S),保留它作首 token → classifyShellSegment 认不出安全命令 → 升级。
       toks = toks.slice(i);
+      if (bail) break;
     } else if (head === 'timeout' || head === 'time' || head === 'nice' || head === 'ionice' || head === 'chrt' || head === 'stdbuf') {
       // 带自身参数(timeout 5 / nice -n 10 / stdbuf -oL):跳过前导 `-*` 与紧随的数值/时长参数。
       let i = 1;
@@ -360,6 +381,11 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   // 非 http(s) scheme(file:// 读本地文件、scp://sftp:// 外发、ftp/dict/gopher 等)超出"命令行浏览器"面 → 升级。
   if (positional.some((t) => /^[a-z][\w+.-]*:\/\//i.test(t) && !/^https?:\/\//i.test(t))) return false;
   if (positional.some((t) => t.includes('?'))) return false; // 查询串外发面(含无 scheme 的 host?query)
+  // curl URL glob(默认开启):`{a,b}` 列表 / `[1-9]`·`[a-z]` 范围会展开成多个 URL,字面 token 静态
+  // 无法预判展开后的 host → `curl 'http://{example.com,169.254.169.254}/…'` 会连 metadata 一起抓
+  // (codex 报)。除非显式 `-g`/`--globoff` 关闭 glob,含 `{}`/`[]` 的 URL 目标一律升级。
+  const globOff = /(?:^|\s)-[a-zA-Z]*g\b|(?:^|\s)--globoff\b/.test(segment);
+  if (!globOff && positional.some((t) => isFetchTargetToken(t) && /[{}[\]]/.test(t))) return false;
   // curl 可接多个 URL 并逐个抓取 → 必须校验**每一个** URL 目标,不能只看第一个
   // (`curl https://public http://169.254.169.254/...` 会把 metadata 也抓回来)。
   const targets = positional.filter(isFetchTargetToken);
@@ -376,7 +402,9 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
   //   -O/--open-files-in-pager(git grep 用指定 pager 打开匹配文件 → 执行任意程序=RCE,
   //     `git grep --open-files-in-pager=./payload pat` 会跑 ./payload)。
   //   --filters/--textconv(git cat-file 对内容跑 clean/smudge filter 或 textconv 驱动 → 执行任意程序=RCE)。
-  if (/(?:^|\s)(?:-o\b|-o\S|-O\b|-O\S|--output\b|--ext-diff\b|--open-files-in-pager\b|--filters\b|--textconv\b)/.test(segment)) return 'prompt';
+  //   --upload-pack/--receive-pack/--exec(ls-remote/fetch/push 等把 <exec> 当命令跑,连本地仓库也执行 →
+  //     `git ls-remote --upload-pack='sh payload' repo` = RCE,codex 报)。
+  if (/(?:^|\s)(?:-o\b|-o\S|-O\b|-O\S|--output\b|--ext-diff\b|--open-files-in-pager\b|--filters\b|--textconv\b|--upload-pack\b|--receive-pack\b|--exec\b)/.test(segment)) return 'prompt';
   const rest = tokens.slice(1); // 'git' 之后
   // 子命令**之前**的内联 config(git -c core.pager=… / -c diff.external=… / --config-env[=…])可执行任意程序(RCE)→ 升级。
   // `--config-env` 的等号形式 `--config-env=core.pager=…` 是单 token,不等于裸 `--config-env`,用 startsWith 一并拦。
@@ -438,14 +466,20 @@ function classifyShellSegment(segment: string): ReviewVerdict {
  */
 export function classifyShellCommand(command: string, _workspaceRoots: string[]): ReviewVerdict {
   if (typeof command !== 'string' || command.trim().length === 0) return 'prompt';
-  // 匹配危险模式时跑**两个变体**,任一命中即 prompt-each-time:
+  // 匹配危险模式时跑**三个变体**,任一命中即 prompt-each-time:
   //  - deEscaped(去引号 + 去反斜杠转义):防 su'do' / su\do / rm -r'f' 这类把关键词拆开的绕过。
   //  - quotesOnly(只去引号、保留 `\`):Windows `\` 路径的凭证检测 —— `cat C:\Users\me\.ssh\id_rsa`
   //    里反斜杠是分隔符,若一并去掉会让凭证正则(前缀含 `\`)失配(copilot 报)。
+  //  - deGlobbed(在 deEscaped 上再去掉 shell glob 元字符 `[]{}*?`):防方括号/花括号通配把凭证路径
+  //    拆开绕过 —— `cat ~/.ss[h]/id_[r]sa` 审查时不含字面 `.ssh`,shell 展开后才成 `~/.ssh/id_rsa`
+  //    (greptile 报)。去掉 `[]{}` 让 `.ss[h]`→`.ssh`、`id_[r]sa`→`id_rsa` 现形;去 `*?` 让 `*.pem`
+  //    等也归一。会造成个别良性命令过度升级(fail-closed 方向,可接受);`?`/`*` 作单字符替身的
+  //    残口(`.ss?`→`.ss` 不复原)属静态不可闭合、极冷门,不追。
   const deEscaped = command.replace(/['"\\]/g, '');
   const quotesOnly = command.replace(/['"]/g, '');
+  const deGlobbed = deEscaped.replace(/[[\]{}*?]/g, '');
   for (const re of DANGEROUS_PATTERNS) {
-    if (re.test(deEscaped) || re.test(quotesOnly)) return 'prompt-each-time';
+    if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed)) return 'prompt-each-time';
   }
   const segments = splitTopLevelSegments(command);
   if (segments.length === 0) return 'prompt';

@@ -97,6 +97,16 @@ describe('classifyBuiltinToolForAutoReview — 内置 Read/Grep/LS 读凭证升�
     expect(verdict('Glob', { pattern: '**/*.ts' })).toBe('auto-approve');
     expect(verdict('LS', { path: '/repo' })).toBe('auto-approve');
   });
+  it('目录级读工具(Grep/Glob/LS)根在工作区外 → prompt(防遍历进区外凭证子路径)', () => {
+    // Grep {path:'/Users/me'} 递归能读出 ~/.aws/credentials,而 path 本身不含凭证名 → 升级。
+    expect(verdict('Grep', { pattern: 'AKIA', path: '/Users/me' })).toBe('prompt');
+    expect(verdict('LS', { path: '/' })).toBe('prompt');
+    expect(verdict('LS', { path: '/etc' })).toBe('prompt');
+    expect(verdict('Glob', { pattern: '*', path: '/var/log' })).toBe('prompt');
+    // 单文件 Read 读区外具名文件仍放行(scope='file',非目录级递归)。
+    expect(verdict('Read', { file_path: '/Users/me/notes.txt' })).toBe('auto-approve');
+    expect(verdict('NotebookRead', { notebook_path: '/tmp/n.ipynb' })).toBe('auto-approve');
+  });
 });
 
 describe('classifyBuiltinToolForAutoReview — Windows 盘符路径边界', () => {
