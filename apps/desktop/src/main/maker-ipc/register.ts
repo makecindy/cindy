@@ -3087,13 +3087,19 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // invalid api key / 401 的情形。本地会话（无 remoteHostId）无 auto-retry，不跳过。
       isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);
       // 计费引导的失败归因(claude-session-route-registry):cc 会话真正终止
-      // (会向用户展示)的失败落地时,把该会话的 lastFailedRequestBridge 覆写为
-      // false —— 非 bridge 请求的失败。用**这个 SDK 已判定"不再重试、即将
-      // surface 给用户"的终止事件**做归因边界,而不是在 proxy 层按单次 HTTP
-      // 状态码猜测:429/529 是 SDK 自带退避重试的状态码,单次响应不代表终态,
-      // 之前在 HTTP 层直接排除/放行这两个状态码都不对——排除会让真正耗尽重试
-      // 的终止 429(如网关预算耗尽)永远清不掉残留的 bridge 归因,放行又会被
-      // 中途还会重试成功的瞬时响应误清掉(PR review P1 ×2)。
+      // (会向用户展示)的失败落地时,把该会话的 lastFailedRequestBridge 按这次
+      // 失败的来源覆写。用**这个 SDK 已判定"不再重试、即将 surface 给用户"的
+      // 终止事件**做归因边界,而不是在 proxy 层按单次 HTTP 状态码猜测:429/529
+      // 是 SDK 自带退避重试的状态码,单次响应不代表终态,之前在 HTTP 层直接
+      // 排除/放行这两个状态码都不对——排除会让真正耗尽重试的终止 429(如网关
+      // 预算耗尽)永远清不掉残留的 bridge 归因,放行又会被中途还会重试成功的
+      // 瞬时响应误清掉(PR review P1 ×2)。
+      //
+      // 两个方向都要记,不能只记 false 侧:bridge 子代理与默认路由请求可并发
+      // 失败,若默认请求的终止事件先落地记 false,随后 bridge 自己的终止事件
+      // 才是真正 surface 给用户的那个——只判"非 bridge 才覆写"会让这个真正
+      // 需要改判成 true 的时刻被跳过,银幕上显示的 bridge 配额错误仍带着
+      // 前一个事件残留的 false(PR review P1)。
       //
       // 判据必须是**这次失败请求实际用的模型**,不能是 session.model:Task/
       // sub-agent 可以在 frontmatter 里把单次请求覆写成 chatgpt/ / xai/,会话
@@ -3108,10 +3114,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         event.source === 'claude-code' &&
         !isPlannedUpgradeClose &&
         !isRemoteAuthRetry &&
-        typeof failingModel === 'string' &&
-        !isSubscriptionDirectModel(failingModel)
+        typeof failingModel === 'string'
       ) {
-        recordClaudeSessionFailedRequestSource(session.id, false);
+        recordClaudeSessionFailedRequestSource(session.id, isSubscriptionDirectModel(failingModel));
       }
       if (!isPlannedUpgradeClose) {
         agentInputCoordinatorHolder?.onTurnEvent(
