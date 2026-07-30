@@ -848,6 +848,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
     const sdkModelFor = (model: string): string => this.sdkModelFor(model);
     const resolveRemoteClaudeRoute = this.deps.resolveRemoteClaudeRoute?.bind(this.deps);
+    const getAuthEnv = this.deps.auth.getAuthEnv.bind(this.deps.auth);
     const sdkModel = sdkModelFor(opts.model);
     const initialSdkEffort = this.sdkEffortForModel(opts.model, opts.effort ?? 'high');
     const binaryPath = this.deps.binaryPath;
@@ -3900,8 +3901,17 @@ export class ClaudeCodeAgent extends BaseAgent {
                   JSON.stringify(pick(nextRoute.env)) !==
                     JSON.stringify(pick(remoteEnv ?? {}))
                 );
+              })()) ||
+            // 网关路径(route null):切模时重新读当前网关 key,与 remoteEnv 里 spawn 时
+            // 烤进的比对——用户在设置里更新网关 key 后,远端 daemon 仍带旧 key,继续
+            // 切模会放行到 401(Greptile 三轮)。
+            (nextRoute === null &&
+              remoteRoute === null &&
+              (async () => {
+                const currentAuthEnv = await getAuthEnv({ credentialMode: 'gateway-key' });
+                return currentAuthEnv.ANTHROPIC_API_KEY !== remoteEnv?.ANTHROPIC_API_KEY;
               })());
-          if (routeChanged) {
+          if (await routeChanged) {
             throw new Error(
               `[REMOTE_MODEL_SWITCH_ROUTE_CHANGE] switching to "${newModel}" requires a different remote route; close and recreate the remote session to apply it`,
             );

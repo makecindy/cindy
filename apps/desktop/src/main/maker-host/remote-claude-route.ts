@@ -153,7 +153,16 @@ function materializeRoutedProvider(routed: ResolvedProviderRouteDecision): Remot
       `[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" route did not resolve to remote-usable credentials`,
     );
   }
+  // no-auth + loopback upstream:baseUrl 指向本机 localhost,materialize 后远端
+  // ANTHROPIC_BASE_URL 会指向**远端机器的** localhost,必错(codex-connector review
+  // #1035)。除非显式隧道(follow-up),一律拒绝;非 loopback 的 no-auth(如内网
+  // 自托管)远端可能可达,仍放行。
   const endpoint = (decision.upstreamOverride ?? routing.upstream)?.trim();
+  if (routing.authStrategy === 'none' && endpoint && isLoopbackUrl(endpoint)) {
+    throw new Error(
+      `[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" (no-auth loopback) isn't supported on remote Claude Code sessions: the loopback base URL would point at the remote host's localhost`,
+    );
+  }
   if (!endpoint) {
     throw new Error(`[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" has no upstream endpoint`);
   }
@@ -192,6 +201,16 @@ function routeDecisionToCcEnv(decision: RoutingDecision): Record<string, string>
 function stripBearer(value: string): string {
   const m = /^\s*Bearer\s+(.*)$/i.exec(value);
   return m ? m[1] : value;
+}
+
+/** URL 是否指向本机 loopback(localhost / 127.* / ::1)。 */
+function isLoopbackUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === 'localhost' || host.startsWith('127.') || host === '::1' || host === '[::1]';
+  } catch {
+    return false;
+  }
 }
 
 /** cc 的 ANTHROPIC_CUSTOM_HEADERS 格式:每行 `Name: Value`,换行分隔(header-echo 探测确认)。

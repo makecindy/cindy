@@ -176,7 +176,7 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
     expect(route!.env.ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();
   });
 
-  it('无鉴权(none)自托管 → 占位 key 过 cc auth gate', async () => {
+  it('无鉴权(none)自托管(非 loopback)→ 占位 key 过 cc auth gate', async () => {
     resolveProviderRouteDecision.mockResolvedValue({
       providerId: 'selfhost',
       routing: { upstream: 'https://internal.local/anthropic', authStrategy: 'none' },
@@ -184,6 +184,17 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
     });
     const route = await resolveRemoteClaudeRoute({ providerId: 'selfhost', model: 'm' });
     expect(route!.env.ANTHROPIC_API_KEY).toBe('cindy-remote-no-auth');
+  });
+
+  it('无鉴权(none)+ loopback upstream → REMOTE_PROVIDER_UNSUPPORTED(远端 localhost 必错)', async () => {
+    resolveProviderRouteDecision.mockResolvedValue({
+      providerId: 'selfhost',
+      routing: { upstream: 'http://localhost:8080/anthropic', authStrategy: 'none' },
+      decision: { upstreamOverride: 'http://localhost:8080/anthropic', headerOverride: {} },
+    });
+    await expect(resolveRemoteClaudeRoute({ providerId: 'selfhost', model: 'm' })).rejects.toThrow(
+      /REMOTE_PROVIDER_UNSUPPORTED/,
+    );
   });
 });
 
