@@ -90,7 +90,7 @@ import {
   writeWechatWorkingDir,
 } from './wechat/channelSettings';
 
-export { im, feishuIm, discordIm, telegramIm, wechatIm } from './host';
+export { registerTelegramBotConfigIpc, im, feishuIm, discordIm, telegramIm, wechatIm } from './host';
 
 const log = createLogger('main:im');
 

@@ -157,46 +157,52 @@ export const telegramIm = createTelegramIM(host, {
     }),
   ),
 });
-// 行为配置 IPC(设置卡「回应与引用」节)。payload 在 store 内白名单校验,
-// 未知字段/非法值一律丢弃(electron-security: 不信任 renderer 输入)。
-ipcMain.handle('telegramBot:get-behavior', () => readTelegramBehavior());
-ipcMain.handle('telegramBot:set-behavior', (_e, patch) =>
-  patchTelegramBehavior((patch ?? {}) as Parameters<typeof patchTelegramBehavior>[0]),
-);
-// 群聊节: 已知群列表(窗口表 distinct chat)+ per-chat 参与模式读写。
-ipcMain.handle('telegramBot:list-groups', async () => {
-  const groups = await listTelegramKnownGroups();
-  const activation = readTelegramBehavior().groupActivation ?? {};
-  return {
-    groups: groups.map((g) => ({
-      chatId: g.chatId,
-      chatName: g.chatName,
-      activation: activation[g.chatId] ?? 'mention',
-    })),
-  };
-});
-ipcMain.handle('telegramBot:set-group-activation', (_e, payload) => {
-  const p = (payload ?? {}) as { chatId?: string; mode?: string };
-  const chatId = typeof p.chatId === 'string' && /^-?\d+$/.test(p.chatId) ? p.chatId : null;
-  const mode = p.mode === 'always' ? 'always' : 'mention';
-  if (!chatId) return readTelegramBehavior();
-  return setTelegramGroupActivation(chatId, mode);
-});
-
-// 人格配置(soul + 名字); 保存后可选把名字同步到 Telegram 资料页(setMyName)。
-ipcMain.handle('telegramBot:get-persona', () => readTelegramPersona());
-ipcMain.handle('telegramBot:set-persona', async (_e, payload) => {
-  const p = (payload ?? {}) as { botName?: string; soul?: string; syncProfile?: boolean };
-  const persona = patchTelegramPersona({
-    ...(typeof p.botName === 'string' ? { botName: p.botName } : {}),
-    ...(typeof p.soul === 'string' ? { soul: p.soul } : {}),
+/**
+ * Telegram 个人 bot 的行为/人格/群参与配置 IPC(设置卡数据通道)。
+ * 必须由 bootstrap 显式调用(与 im.registerIpc() 同期) — 不能放模块顶层:
+ * host.ts 被 mock 掉 electron 的单测传递 import 时, 顶层 ipcMain.handle
+ * 会在收集期炸掉(2026-07-30 全量门禁 device-link TEST_COLLECT_FAILED 教训)。
+ * payload 在 store 内白名单校验, 未知字段/非法值一律丢弃。
+ */
+export function registerTelegramBotConfigIpc(): void {
+  ipcMain.handle('telegramBot:get-behavior', () => readTelegramBehavior());
+  ipcMain.handle('telegramBot:set-behavior', (_e, patch) =>
+    patchTelegramBehavior((patch ?? {}) as Parameters<typeof patchTelegramBehavior>[0]),
+  );
+  // 群聊节: 已知群列表(窗口表 distinct chat)+ per-chat 参与模式读写。
+  ipcMain.handle('telegramBot:list-groups', async () => {
+    const groups = await listTelegramKnownGroups();
+    const activation = readTelegramBehavior().groupActivation ?? {};
+    return {
+      groups: groups.map((g) => ({
+        chatId: g.chatId,
+        chatName: g.chatName,
+        activation: activation[g.chatId] ?? 'mention',
+      })),
+    };
   });
-  let profileSynced: boolean | undefined;
-  if (p.syncProfile === true) {
-    profileSynced = await telegramIm.syncBotProfileName(persona.botName);
-  }
-  return { persona, ...(profileSynced !== undefined ? { profileSynced } : {}) };
-});
+  ipcMain.handle('telegramBot:set-group-activation', (_e, payload) => {
+    const p = (payload ?? {}) as { chatId?: string; mode?: string };
+    const chatId = typeof p.chatId === 'string' && /^-?\d+$/.test(p.chatId) ? p.chatId : null;
+    const mode = p.mode === 'always' ? 'always' : 'mention';
+    if (!chatId) return readTelegramBehavior();
+    return setTelegramGroupActivation(chatId, mode);
+  });
+  // 人格配置(soul + 名字); 保存后可选把名字同步到 Telegram 资料页(setMyName)。
+  ipcMain.handle('telegramBot:get-persona', () => readTelegramPersona());
+  ipcMain.handle('telegramBot:set-persona', async (_e, payload) => {
+    const p = (payload ?? {}) as { botName?: string; soul?: string; syncProfile?: boolean };
+    const persona = patchTelegramPersona({
+      ...(typeof p.botName === 'string' ? { botName: p.botName } : {}),
+      ...(typeof p.soul === 'string' ? { soul: p.soul } : {}),
+    });
+    let profileSynced: boolean | undefined;
+    if (p.syncProfile === true) {
+      profileSynced = await telegramIm.syncBotProfileName(persona.botName);
+    }
+    return { persona, ...(profileSynced !== undefined ? { profileSynced } : {}) };
+  });
+}
 
 export const wechatCompatibilityPolicy = new WechatCompatibilityPolicyService({
   ...WECHAT_COMPATIBILITY_POLICY_PRODUCTION_CONFIG,
