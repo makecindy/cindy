@@ -522,6 +522,16 @@ describe('复审第三批:env 注入 / 显式路径 / file:// / 缩写 IP / git 
     expect(classifyShellCommand('curl http://192.168.1/x', roots)).toBe('prompt');
     expect(classifyShellCommand('curl http://8.8.8.8/', roots)).toBe('auto-approve');
   });
+  it('curl 八进制/十六进制 IPv4 分量按 inet_aton 进制解析命中内网 → prompt(codex P1)', () => {
+    // 0251=169、0376=254(八进制)→ 169.254.169.254(metadata)。
+    expect(classifyShellCommand('curl http://0251.0376.0251.0376/latest/meta-data', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://0177.0.0.1/x', roots)).toBe('prompt'); // 0177=127 环回
+    expect(classifyShellCommand('curl http://0xA9.0xFE.0xA9.0xFE/', roots)).toBe('prompt'); // 每段十六进制
+    // 单整数八进制形态(前导 0)同样按八进制:025177524776(八进制)= 2852039166 = 169.254.169.254。
+    expect(classifyShellCommand('curl http://025177524776/', roots)).toBe('prompt');
+    // 反例:公网十进制不误伤(0251 之外的规范公网)。
+    expect(classifyShellCommand('curl http://93.184.216.34/', roots)).toBe('auto-approve');
+  });
   it('git cat-file --filters/--textconv 跑 filter(RCE)→ prompt;cat-file -p 只读放行', () => {
     expect(classifyShellCommand('git cat-file --filters HEAD:path', roots)).toBe('prompt');
     expect(classifyShellCommand('git cat-file --textconv HEAD:path', roots)).toBe('prompt');

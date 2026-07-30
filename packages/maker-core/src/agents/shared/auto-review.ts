@@ -372,6 +372,18 @@ function isFetchTargetToken(t: string): boolean {
  * 且这正是 fetch 本身要做的事)。这类残口(与符号链接、-L 重定向同源)应由网络出口过滤(禁 link-local /
  * RFC1918 出站)在网络层堵,不在命令字符串审查层。前提也需模型去抓一个攻击者控制的域名。
  */
+/**
+ * 按 curl/inet_aton 规则解析一个数字型 host 分量:`0x`/`0X` 前缀=十六进制,前导 `0`=八进制,否则十进制。
+ * 畸形(如含 8/9 的"八进制" `08`)返回 null,由调用方 fail-closed 处理。
+ */
+function parseNumericHostComponent(p: string): number | null {
+  if (/^0[xX][0-9a-fA-F]+$/.test(p)) return parseInt(p.slice(2), 16);
+  if (/^0[0-7]+$/.test(p)) return parseInt(p, 8);
+  if (p === '0') return 0;
+  if (/^[1-9]\d*$/.test(p)) return Number(p);
+  return null;
+}
+
 function isInternalFetchTarget(t: string): boolean {
   const host = t
     .replace(/^[a-z][\w+.-]*:\/\//i, '') // 去 scheme
@@ -382,17 +394,24 @@ function isInternalFetchTarget(t: string): boolean {
   if (host === 'localhost' || host.endsWith('.localhost') || host === '0.0.0.0' || host === '::1') return true;
   if (host === 'metadata.google.internal' || host.endsWith('.internal')) return true;
   if (host.startsWith('[')) return true; // IPv6 字面量(环回/私网难精确,保守升级)
-  // 取 32 位 IPv4:点分 a.b.c.d,或 SSRF 混淆用的十进制整数(2852039166=169.254.169.254)/ 十六进制(0xA9FEA9FE)。
+  // 取 32 位 IPv4:点分 a.b.c.d,或 SSRF 混淆用的整数(2852039166=169.254.169.254)/ 十六进制(0xA9FEA9FE)。
+  // **每个分量按 curl/inet_aton 进制规则解析**(前导 0=八进制、0x=十六进制、否则十进制):`0251.0376.0251.0376`
+  // = 169.254.169.254、`0177.0.0.1`=127.0.0.1(codex 报:Number('0251') 误按十进制得 251 而漏判)。
+  const NUMERIC = /^(?:0[xX][0-9a-fA-F]+|\d+)$/;
   let a: number | null = null;
   let b = 0;
   const parts = host.split('.');
-  if (parts.length >= 2 && parts.length <= 4 && parts.every((p) => /^\d+$/.test(p))) {
+  if (parts.length >= 2 && parts.length <= 4 && parts.every((p) => NUMERIC.test(p))) {
     // 点分 IPv4,含缩写形(curl 接受 127.1=127.0.0.1、10.1=10.0.0.1):内网判定只看前两段即可。
-    a = Number(parts[0]);
-    b = Number(parts[1]);
-  } else if (/^\d+$/.test(host) || /^0x[0-9a-f]+$/i.test(host)) {
-    const n = host.startsWith('0x') || host.startsWith('0X') ? parseInt(host, 16) : Number(host);
-    if (Number.isFinite(n) && n >= 0 && n <= 0xffffffff) {
+    const p0 = parseNumericHostComponent(parts[0]);
+    const p1 = parseNumericHostComponent(parts[1]);
+    if (p0 === null || p1 === null) return true; // 畸形八进制(如 08)等非规范数字 host → 保守视为内网升级
+    a = p0;
+    b = p1;
+  } else if (NUMERIC.test(host)) {
+    const n = parseNumericHostComponent(host);
+    if (n === null) return true;                 // 非规范数字 host → 保守升级
+    if (n >= 0 && n <= 0xffffffff) {
       a = (n >>> 24) & 255;
       b = (n >>> 16) & 255;
     }
