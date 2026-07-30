@@ -93,7 +93,7 @@ function providerIcon(p: ProviderView, size: number): ReactNode {
   if (hasProviderLogo(p.id, p.routing)) {
     return <ProviderLogoMark providerId={p.id} routing={p.routing} size={size} />;
   }
-  return <span className="text-15 font-semibold leading-none">{providerMonogram(p.name)}</span>;
+  return <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ function PillButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        'flex h-8 shrink-0 items-center justify-center rounded-full px-[14px] text-13 font-medium transition-colors',
+        'flex h-8 shrink-0 items-center justify-center rounded-full px-6 text-13 font-medium transition-colors',
         'border',
         disabled && 'cursor-not-allowed opacity-60',
       )}
@@ -207,7 +207,7 @@ function RowIconButton({
       type="button"
       onClick={onClick}
       aria-label={label}
-      className="flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
+      className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
       style={{ color: 'var(--text-tertiary)' }}
     >
       {icon}
@@ -306,7 +306,7 @@ function DetailHeader({
               <button
                 type="button"
                 aria-label={t('settings.providers.detail.moreActionsAria')}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
                 style={{ color: 'var(--text-tertiary)' }}
               >
                 <MoreHorizontal size={15} />
@@ -858,7 +858,7 @@ function XdGatewayHeader({
     connected && syncStatus.state !== 'unsupported' ? (
       <div className="flex items-center gap-2.5 pl-12">
         <span
-          className="flex shrink-0 items-center rounded-md px-2 py-1 text-12"
+          className="flex shrink-0 items-center rounded-lg px-2 py-1 text-12"
           style={{
             backgroundColor: 'var(--surface-chip)',
             border: '1px solid var(--settings-integration-avatar-border)',
@@ -1030,7 +1030,7 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
       style={selected ? { backgroundColor: 'var(--surface-chip)' } : undefined}
     >
       <div
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
         style={{
           backgroundColor: 'var(--settings-integration-avatar-bg)',
           border: '1px solid var(--settings-integration-avatar-border)',
@@ -1083,7 +1083,7 @@ function ListRow({
       style={selected ? { backgroundColor: 'var(--surface-chip)' } : undefined}
     >
       <div
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
         style={{
           backgroundColor: 'var(--settings-integration-avatar-bg)',
           border: '1px solid var(--settings-integration-avatar-border)',
@@ -1151,7 +1151,7 @@ function SuggestionRow({
       className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
     >
       <div
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md opacity-70"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg opacity-70"
         style={{
           backgroundColor: 'var(--settings-integration-avatar-bg)',
           border: '1px solid var(--settings-integration-avatar-border)',
@@ -1518,8 +1518,8 @@ export function ProvidersSection() {
               {suggestions.length > 0 && (
                 <>
                   <span
-                    className="px-2.5 pb-1 pt-3 text-11 font-semibold uppercase"
-                    style={{ color: 'var(--text-tertiary)', letterSpacing: '0.4px' }}
+                    className="px-2.5 pb-1 pt-3 text-11 font-medium uppercase"
+                    style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
                   >
                     {t('settings.providers.detect.groupLabel')}
                   </span>
@@ -1555,8 +1555,9 @@ export function ProvidersSection() {
             </div>
           </div>
 
-          {/* 右栏详情 */}
-          <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+          {/* 右栏详情:详情头/条带固定,仅模型列表(UnifiedModelList 内部)滚动 ——
+              长清单滚动时供应商名称、连接状态与工具行不随之滚走(2026-07 定稿)。 */}
+          <div className="flex min-w-0 flex-1 flex-col">
             {cindySigninActive ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
                 <div
