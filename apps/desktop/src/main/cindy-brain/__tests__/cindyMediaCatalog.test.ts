@@ -29,9 +29,9 @@ describe('deriveCindyMediaConfig — 正常目录', () => {
   it('清单按目录序、label 取 name、providerId 记归属;draft/best 缺省回落 standard', () => {
     const image = deriveCindyMediaConfig([XD], 'image');
     expect(image.models).toEqual([
-      { id: 'gpt-image-2', label: 'GPT Image 2', providerId: 'xd' },
-      { id: 'gemini-3-pro-image', label: 'Gemini 3 Pro Image', providerId: 'xd' },
-      { id: 'gemini-3.1-flash-image', label: 'Gemini 3.1 Flash Image', providerId: 'xd' },
+      { id: 'gpt-image-2', label: 'GPT Image 2', providerId: 'xd', supportsEdit: true },
+      { id: 'gemini-3-pro-image', label: 'Gemini 3 Pro Image', providerId: 'xd', supportsEdit: true },
+      { id: 'gemini-3.1-flash-image', label: 'Gemini 3.1 Flash Image', providerId: 'xd', supportsEdit: true },
     ]);
     // best 没声明 → 回落 standard。
     expect(image.defaults).toEqual({
@@ -200,5 +200,30 @@ describe('deriveCindyMediaConfig — 就绪过滤(isProviderReady,2026-07 图像
     };
     const cfg = deriveCindyMediaConfig([XD, clash], 'image');
     expect(cfg.models.find((m) => m.id === 'gpt-image-2')?.providerId).toBe('xd');
+  });
+});
+
+describe('deriveCindyMediaConfig — supportsEdit(仅生成来源,2026-07)', () => {
+  const XAI: CindyMediaProviderSlice = {
+    id: 'xai',
+    imageModels: [{ id: 'xai/aurora', name: 'Aurora' }],
+  };
+
+  it('不传 isProviderEditReady → 所有条目 supportsEdit=true(兼容路径)', () => {
+    const cfg = deriveCindyMediaConfig([XD, XAI], 'image');
+    expect(cfg.models.every((m) => m.supportsEdit)).toBe(true);
+  });
+
+  it('isProviderEditReady 为 false 的来源条目 supportsEdit=false,仍进生成清单', () => {
+    const cfg = deriveCindyMediaConfig(
+      [XD, XAI],
+      'image',
+      undefined,
+      () => true,
+      (id) => id !== 'xai',
+    );
+    expect(cfg.models.map((m) => m.id)).toContain('xai/aurora');
+    expect(cfg.models.find((m) => m.id === 'xai/aurora')?.supportsEdit).toBe(false);
+    expect(cfg.models.find((m) => m.id === 'gpt-image-2')?.supportsEdit).toBe(true);
   });
 });

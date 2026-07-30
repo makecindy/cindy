@@ -5,7 +5,7 @@
  * providers and models exposed as selectable capabilities to product surfaces.
  */
 
-import { groupOf, type Catalog, type Provider } from '@cindy/model-providers';
+import { classifyModel, type Catalog, type Provider } from '@cindy/model-providers';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 export interface ProviderAccessContext {
@@ -55,7 +55,7 @@ export function projectProviderCatalogForBuildRegion(
       (provider.videoModels?.length ?? 0) > 0 ||
       provider.videoDefaults !== undefined ||
       Object.values(provider.models).some((list) =>
-        list?.some((m) => { const g = groupOf(m); return g === 'image' || g === 'video'; }),
+        list?.some((m) => { const g = classifyModel(m); return g === 'image' || g === 'video'; }),
       );
     const isCindyAi = provider.id === CINDY_AI_PROVIDER_ID;
     if (!hasMedia && !isCindyAi) return provider;
@@ -70,7 +70,7 @@ export function projectProviderCatalogForBuildRegion(
       Object.entries(provider.models).map(([agent, list]) => [
         agent,
         list.filter((model) => {
-          const group = groupOf(model);
+          const group = classifyModel(model);
           return group !== 'image' && (group !== 'video' || (isCindyAi && MAINLAND_VIDEO_MODEL_IDS.has(model.id)));
         }),
       ]),

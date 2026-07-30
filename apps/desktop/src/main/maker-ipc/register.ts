@@ -61,6 +61,7 @@ import {
   type GhostSetupInteractionSnapshot,
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
+import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import {
@@ -1386,7 +1387,7 @@ initGhostSetupCoordinator({
       return {
         ok: false,
         errorCode: 'TOOL_NOT_FOUND',
-        message: `${t('newChat.pluginSetup.targetToolNotFound')} (${tool})`,
+        message: toolNotFoundMessage(ghostId, tool, ghost.manifest.tools),
       };
     }
     return { ok: true };

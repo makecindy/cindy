@@ -180,6 +180,30 @@ describe('projectProviderCatalogForBuildRegion — 图像多来源(2026-07)', ()
     expect(third?.models['claude-code']?.map((m) => m.id)).toEqual(['chat-model']);
   });
 
+  it('mode: image_generation 的模型在 cn 区域被剥离(classifyModel 权威分类,不依赖 id 关键词)', () => {
+    const modeOnly: Provider = {
+      id: 'xai',
+      name: 'xAI',
+      source: 'builtin',
+      agents: ['claude-code'],
+      auth: { method: 'oauth' },
+      routing: {},
+      models: {
+        'claude-code': [
+          { ...model('xai/aurora'), mode: 'image_generation' },
+          model('xai/grok-chat'),
+        ],
+      },
+    };
+    const base = catalog();
+    const projected = projectProviderCatalogForBuildRegion(
+      { ...base, providers: [...base.providers, modeOnly] },
+      'cn',
+    );
+    const xai = projected.providers.find((p) => p.id === 'xai');
+    expect(xai?.models['claude-code']?.map((m) => m.id)).toEqual(['xai/grok-chat']);
+  });
+
   it('global 区域原样返回(含新来源的媒体清单)', () => {
     const gemini: Provider = {
       id: 'gemini',

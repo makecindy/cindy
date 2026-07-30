@@ -1694,10 +1694,17 @@ function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig
       (providerId, modelId) =>
         isProviderDisabled(access, providerId) ||
         isModelDisabled(access, providerId, modelId),
-      // 图像来源要求执行通道凭证就绪(未注册/未配置的来源整段不进白名单,
-      // 见 imageChannelRegistry 头注);视频通道今天只有 xd 一家,不做该过滤
-      // (registry 只登记图像通道,按 kind 收窄避免把视频清单误清空)。
-      kind === 'image' ? (providerId) => getImageChannelRegistry().isProviderReady(providerId) : undefined,
+      // 执行通道凭证就绪过滤(未就绪的来源整段不进白名单,见 imageChannelRegistry
+      // 头注)。图像走 registry;视频通道今天只有 xd 一家、不经 registry,但同样要求
+      // 网关能力在场 —— 未登录本地模式(canUseCindyGateway=false)下 xd 的视频型号
+      // 不能进清单,否则用户在本地模式钉选/点名视频型号就是"可选但必失败"
+      // (2026-07 review:与图像的就绪语义对齐)。
+      kind === 'image'
+        ? (providerId) => getImageChannelRegistry().isProviderReady(providerId)
+        : (providerId) => providerId !== 'xd' || getAppCapabilities().canUseCindyGateway,
+      // 编辑就绪过滤:仅支持生成的来源(supportsEdit: false)的模型不进编辑清单,
+      // 防用户把该型号钉到 image.edit 偏好后在 editImage 路径拿到确定性 400。
+      kind === 'image' ? (providerId) => getImageChannelRegistry().isProviderEditReady(providerId) : undefined,
     );
   } catch (err) {
     // 目录读取异常 = 拿不到可用性证明,同「空清单」处理(不静默顶一份旧名单)。
@@ -1866,12 +1873,15 @@ function getImageChannelRegistry(): ImageChannelRegistry {
  * (cindyMediaCatalog first-wins 定格);白名单查无该模型时视同已停用
  * (assertMediaModelStillEnabled 同窗口语义)。
  */
-function resolveImageChannelForModel(model: string) {
+function resolveImageChannelForModel(model: string, operation: 'generate' | 'edit' = 'generate') {
   const entry = getCatalogMediaConfig('image').models.find((m) => m.id === model);
   if (!entry) {
     const slash = model.indexOf('/');
     if (slash > 0) getImageChannelRegistry().resolve(model.slice(0, slash));
     throw new Error('图像模型不可用,本次生成已取消');
+  }
+  if (operation === 'edit' && !entry.supportsEdit) {
+    throw new Error(`图像来源 ${entry.providerId} 不支持图像编辑,请在设置中选择支持编辑的来源`);
   }
   return getImageChannelRegistry().resolve(entry.providerId);
 }
@@ -1914,10 +1924,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       editImage: async ({ prompt, model, imagePaths, aspectRatio }) => {
         try {
           assertMediaModelStillEnabled('image', model);
-          const channel = resolveImageChannelForModel(model);
-          if (channel.supportsEdit === false) {
-            throw new Error('所选图像来源不支持改图,请改用支持改图的型号');
-          }
+          const channel = resolveImageChannelForModel(model, 'edit');
           return decodeImageResponse(
             await channel.editImage({
               model,
@@ -3543,7 +3550,8 @@ export function registerGhostIpc(): void {
     }
     // 白名单按能力键类目取(video.* 钉的是视频清单里的 alias)。
     const cfg = (capability as string).startsWith('video.') ? getCatalogVideoConfig() : getCatalogImageConfig();
-    if (model !== null && !cfg.models.some((m) => m.id === model)) {
+    const isEditCap = capability === 'image.edit';
+    if (model !== null && !cfg.models.some((m) => m.id === model && (!isEditCap || m.supportsEdit))) {
       throwIpcError('INVALID_PARAMS', 'model must be null or a catalog model of the capability category');
     }
     const overrides = writeGhostCindyOverride(
