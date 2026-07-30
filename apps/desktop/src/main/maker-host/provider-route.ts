@@ -628,6 +628,16 @@ async function connectedDefaultProviderForModel(modelId: string, agent: AgentKin
   return providers.find((provider) => provider.id === defaultId) ?? null;
 }
 
+function hasImplicitLocalBridgeCandidate(modelId: string, agent: AgentKind): boolean {
+  return providersForModel(modelId, agent).some((provider) => {
+    const routing = providerRoutingForModel(provider, agent, modelId);
+    return (
+      routing?.wireProtocol === 'openai-chat'
+      || routing?.wireProtocol === 'anthropic-messages'
+    );
+  });
+}
+
 function uniqueProviderForModel(modelId: string, agent: AgentKind) {
   const providers = providersForModel(modelId, agent);
   return providers.length === 1 ? providers[0] : null;
@@ -653,6 +663,12 @@ export function resolveImplicitLocalBridgeRoute(
   agent: AgentKind,
 ): Promise<ResolvedSessionRoute | null> {
   const catalogModelId = modelId.replace(/\[1m\]$/, '');
+  // Most Codex requests are native OpenAI Responses and do not need provider
+  // connection resolution. Keep credential-store reads off that hot path; only
+  // bridge-capable catalog models need the live connected-provider snapshot.
+  if (!hasImplicitLocalBridgeCandidate(catalogModelId, agent)) {
+    return Promise.resolve(null);
+  }
   return connectedDefaultProviderForModel(catalogModelId, agent).then((provider) => {
     if (!provider) return null;
     const routing = providerRoutingForModel(provider, agent, modelId);

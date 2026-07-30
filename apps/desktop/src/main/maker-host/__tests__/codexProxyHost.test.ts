@@ -996,6 +996,48 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     }
   });
 
+  it('does not read live ProviderView credentials for a native Codex model', async () => {
+    const host = await freshCodexProxyHost();
+    const { setProviderViewsReader } = await import('../provider-route.js');
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { clearSessionProvider } = await import('../session-provider-store.js');
+    const providerViewsReader = vi.fn(async () => {
+      throw new Error('native model must not read provider credentials');
+    });
+    setProviderViewsReader(providerViewsReader);
+    setXdGatewayModels([{ id: 'gpt-native-hot-path', agents: ['codex'] }]);
+    host.registerComposed(
+      'session-native-hot-path',
+      'thread-native-hot-path',
+      'PRODUCT_PROMPT',
+    );
+    clearSessionProvider('session-native-hot-path');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        {
+          model: 'gpt-native-hot-path',
+          input: [{ role: 'user', content: 'hello' }],
+        },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { 'thread-id': 'thread-native-hot-path' },
+        },
+      ));
+
+      expect(decision).toBeNull();
+      expect(providerViewsReader).not.toHaveBeenCalled();
+    } finally {
+      host.unregister('session-native-hot-path');
+      clearSessionProvider('session-native-hot-path');
+      setProviderViewsReader(async () => []);
+      setXdGatewayModels([]);
+    }
+  });
+
   it('does not overwrite a child thread that is already owned by another session', async () => {
     const host = await freshCodexProxyHost();
     host.registerComposed('session-parent', 'thread-parent', 'PARENT_PROMPT');
