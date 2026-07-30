@@ -20,9 +20,10 @@
  */
 
 import {
-  nativeDefaultSourceId,
+  effectiveSourceIdForModel,
   type AgentKind,
   type Provider,
+  type ProviderView,
   type RoutingDescriptor,
 } from '@cindy/model-providers';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
@@ -115,6 +116,17 @@ let providerOAuthTokenReader: ProviderOAuthTokenReader = () => null;
 /** host 启动期接通内置 OAuth 供应商 token 读取（如 xAI/SuperGrok）。 */
 export function setProviderOAuthTokenReader(reader: ProviderOAuthTokenReader): void {
   providerOAuthTokenReader = reader;
+}
+
+type ProviderViewsReader = () => Promise<ProviderView[]>;
+let providerViewsReader: ProviderViewsReader = async () => [];
+
+/**
+ * 注入 Main 侧实时 ProviderView 读取器。隐式来源必须与模型选择器共用连接态，
+ * 不能只看 active catalog：目录表示“可提供”，凭证状态才表示“当前可路由”。
+ */
+export function setProviderViewsReader(reader: ProviderViewsReader): void {
+  providerViewsReader = reader;
 }
 
 /** Read a provider OAuth token for a local bridge retry without exposing the reader itself. */
@@ -610,12 +622,9 @@ function providersForModel(modelId: string, agent: AgentKind) {
   );
 }
 
-function defaultProviderForModel(modelId: string, agent: AgentKind) {
-  const providers = providersForModel(modelId, agent);
-  const defaultId = nativeDefaultSourceId(
-    providers.map((provider) => ({ ...provider, connected: true })),
-    agent,
-  );
+async function connectedDefaultProviderForModel(modelId: string, agent: AgentKind) {
+  const providers = await providerViewsReader();
+  const defaultId = effectiveSourceIdForModel(providers, null, modelId, agent);
   return providers.find((provider) => provider.id === defaultId) ?? null;
 }
 
@@ -642,18 +651,19 @@ export function inferProviderIdForModel(modelId: string, agent: AgentKind): stri
 export function resolveImplicitLocalBridgeRoute(
   modelId: string,
   agent: AgentKind,
-): Promise<ResolvedSessionRoute | null> | null {
+): Promise<ResolvedSessionRoute | null> {
   const catalogModelId = modelId.replace(/\[1m\]$/, '');
-  const provider = defaultProviderForModel(catalogModelId, agent);
-  if (!provider) return null;
-  const routing = providerRoutingForModel(provider, agent, modelId);
-  if (
-    routing?.wireProtocol !== 'openai-chat'
-    && routing?.wireProtocol !== 'anthropic-messages'
-  ) {
-    return null;
-  }
-  return resolveProviderRouteById(provider.id, agent, modelId);
+  return connectedDefaultProviderForModel(catalogModelId, agent).then((provider) => {
+    if (!provider) return null;
+    const routing = providerRoutingForModel(provider, agent, modelId);
+    if (
+      routing?.wireProtocol !== 'openai-chat'
+      && routing?.wireProtocol !== 'anthropic-messages'
+    ) {
+      return null;
+    }
+    return resolveProviderRouteById(provider.id, agent, modelId);
+  });
 }
 
 /**

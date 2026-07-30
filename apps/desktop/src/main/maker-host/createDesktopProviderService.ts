@@ -52,7 +52,12 @@ import {
 import { createProviderService, type ProviderService } from './provider-service.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { listCustomProviders } from './custom-provider-store.js';
-import { setCustomProviderKeyReader, setOAuthTokenReader, setProviderOAuthTokenReader } from './provider-route.js';
+import {
+  setCustomProviderKeyReader,
+  setOAuthTokenReader,
+  setProviderOAuthTokenReader,
+  setProviderViewsReader,
+} from './provider-route.js';
 import { setDiagnosticsKeyReader, setDiagnosticsOAuthTokenReader } from './provider-diagnostics.js';
 import {
   configureGenericOAuth,
@@ -251,6 +256,13 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   };
   setOAuthTokenReader(readOAuthToken);
   setDiagnosticsOAuthTokenReader(readOAuthToken);
+  // 在启动期固定 service 实例，避免请求路由热路径重复进入 getter 里的 legacy
+  // owner 绑定迁移；每次 listProviders 仍会实时读取凭证连接态。
+  const providerService = getDesktopProviderService();
+  setProviderViewsReader(() => providerService.listProviders({
+    allowSideEffects: false,
+    catalog: getActiveCatalog(),
+  }));
   if (activeLoaded) return Promise.resolve(getActiveCatalog());
   if (!activeInflight) {
     const source = buildSource();

@@ -1970,16 +1970,24 @@ export function createModelRoutingTransform(
     // 两者都必须先于 Codex 默认 ChatGPT/XD 分支，避免协议或凭证落错上游。
     if (!explicitProviderId && model) {
       if (sessionId && ctx.method === 'POST') {
-        const implicitLocalRoute = resolveImplicitLocalBridgeRoute(model, 'codex');
-        if (implicitLocalRoute) {
-          return implicitLocalRoute.then((localRoute) => createLocalBridgeDecision(
-            localRoute,
-            threadId ? registry.get(threadId) : undefined,
+        return resolveImplicitLocalBridgeRoute(model, 'codex').then((localRoute) => {
+          if (localRoute) {
+            return createLocalBridgeDecision(
+              localRoute,
+              threadId ? registry.get(threadId) : undefined,
+              model,
+              model !== requestModel ? model : undefined,
+              threadId,
+            );
+          }
+          const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(
             model,
-            model !== requestModel ? model : undefined,
-            threadId,
-          ));
-        }
+            'codex',
+            gatewayKey,
+          );
+          if (implicitProviderOAuth) return implicitProviderOAuth;
+          return decideCodexRoute({ model, authInjection, gatewayKey });
+        });
       }
       const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(model, 'codex', gatewayKey);
       if (implicitProviderOAuth) return implicitProviderOAuth;
