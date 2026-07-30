@@ -28,6 +28,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
       const translations: Record<string, string> = {
         'effortLevels.xhigh': '超高',
         'settings.providers.anthropic.title': 'Anthropic',
+        'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
@@ -41,7 +42,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         return `${options?.value} context`;
       }
       if (key === 'newChat.modelSelector.meta.codexCompatibilityMode') {
-        return '· Codex compatibility mode';
+        return 'Codex compatibility mode';
       }
       if (key === 'newChat.modelSelector.source.viaSource') {
         return `Source: ${options?.source}`;
@@ -1259,14 +1260,20 @@ describe('ModelSelector trigger variants', () => {
 
         fireEvent.pointerEnter(screen.getByRole('option', { name: /Bridge Fixture/ }));
         const details = screen.getByRole('group', { name: /Bridge Fixture/ });
-        const compatibilityLabel = within(details).queryByText('· Codex compatibility mode');
+        const compatibilityLabel = within(details).queryByText('Codex compatibility mode');
         if (visible) {
           expect(compatibilityLabel).toBeTruthy();
           const detailText = details.textContent ?? '';
           const sourceText = modelProtocol ? 'Source: Cindy AI' : 'Source: Fixture';
           expect(detailText.indexOf(sourceText)).toBeLessThan(detailText.indexOf('1M context'));
           expect(detailText.indexOf('1M context')).toBeLessThan(
-            detailText.indexOf('· Codex compatibility mode'),
+            detailText.indexOf('Codex compatibility mode'),
+          );
+          expect(compatibilityLabel).not.toBe(
+            within(details).getByText(sourceText).parentElement,
+          );
+          expect(compatibilityLabel).not.toBe(
+            within(details).getByText('1M context').parentElement,
           );
         } else {
           expect(compatibilityLabel).toBeNull();

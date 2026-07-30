@@ -4194,7 +4194,7 @@
       },
       "meta": {
         "context": "{{value}} 上下文",
-        "codexCompatibilityMode": "· Codex 兼容模式",
+        "codexCompatibilityMode": "Codex 兼容模式",
         "price": "{{input}}/{{output}} / 百万",
         "fastBadge": "快速",
         "budgetDiscount": "特别折扣"

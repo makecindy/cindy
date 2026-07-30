@@ -1256,13 +1256,15 @@ function ModelSelectorContentView({
               })}
             </span>
           )}
-          {editingCodexCompatibilityProtocol && (
-            <span>{t('newChat.modelSelector.meta.codexCompatibilityMode')}</span>
-          )}
           {editingModel.supportsFastMode && (
             <span>{t('newChat.modelSelector.meta.fastBadge')}</span>
           )}
         </div>
+        {editingCodexCompatibilityProtocol && (
+          <div className="mt-0.5 text-11 font-normal leading-[1.4] text-[var(--text-tertiary)]">
+            {t('newChat.modelSelector.meta.codexCompatibilityMode')}
+          </div>
+        )}
       </div>
     </div>
   ) : null;

@@ -4194,7 +4194,7 @@
       },
       "meta": {
         "context": "コンテキスト {{value}}",
-        "codexCompatibilityMode": "・Codex 互換モード",
+        "codexCompatibilityMode": "Codex 互換モード",
         "price": "{{input}}/{{output}} / 100万",
         "fastBadge": "高速",
         "budgetDiscount": "特別割引"
