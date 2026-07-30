@@ -229,6 +229,28 @@ describe('AgentResourceSection', () => {
     expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('7');
   });
 
+  it('keeps invalid concurrency input as draft instead of coercing it to disk', async () => {
+    const api = installElectronApi({ ...DEFAULT_WIRE, maxConcurrentCommands: 5, isCustomized: true });
+    render(<AgentResourceSection />);
+    await waitFor(() => screen.getByRole('spinbutton'));
+
+    // 负值/小数/越界都不许写盘(clamp 成 0 会瞬间解除已有限制)
+    for (const bad of ['-1', '3.5', '99', '']) {
+      fireEvent.change(screen.getByRole('spinbutton'), { target: { value: bad } });
+    }
+    expect(api.settingsSet).not.toHaveBeenCalled();
+
+    // blur 后草稿作废,回显权威值
+    fireEvent.blur(screen.getByRole('spinbutton'));
+    expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('5');
+
+    // 合法整数(含 0 与上限 64)照常持久化
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '64' } });
+    await waitFor(() => {
+      expect(api.settingsSet).toHaveBeenCalledWith('maxConcurrentCommands', 64);
+    });
+  });
+
   it('persists single-field edits through the settings IPC', async () => {
     const api = installElectronApi(DEFAULT_WIRE);
     render(<AgentResourceSection />);

@@ -259,17 +259,16 @@ export function AgentResourceSection() {
           onChange={(e) => {
             const text = e.target.value;
             setMaxDraft(text);
-            // 空串是编辑中间态(如全选删除后重输):只留草稿,绝不当 0=不限 写盘
-            if (text.trim() === '') return;
-            const raw = Number(text);
-            if (!Number.isFinite(raw)) return;
-            persist(
-              'maxConcurrentCommands',
-              Math.max(0, Math.min(MAX_CONCURRENT_CAP, Math.trunc(raw))),
-            );
+            // 非法输入(空串/负号/小数/越界)一律只留草稿、不写盘,blur 作废回显
+            // 权威值 —— clamp 会把 -1 之类静默改写成 0=不限,瞬间放行排队命令,
+            // 且绕过 main 侧的硬拒语义(bot review P1)。只接受 0..64 的整数。
+            if (!/^\d+$/.test(text.trim())) return;
+            const raw = Number(text.trim());
+            if (raw > MAX_CONCURRENT_CAP) return;
+            persist('maxConcurrentCommands', raw);
           }}
           onBlur={() => setMaxDraft(null)}
-          className="mt-0.5 w-20 rounded-lg border border-[var(--border-default)] bg-transparent px-3 py-1.5 text-13 text-[var(--settings-input-text)] outline-none"
+          className="mt-0.5 w-20 rounded-lg border border-[var(--border-default)] bg-transparent px-3 py-1.5 text-13 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
         />
       </label>
 
