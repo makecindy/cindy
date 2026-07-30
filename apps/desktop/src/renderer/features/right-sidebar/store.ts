@@ -474,6 +474,7 @@ export async function addTab(
   } catch {
     // 调用方回调抛错不该毒化 addTab 主流程。
   }
+  let rowCommitted = false;
   try {
     const ipc = ipcApi();
     if (ipc && shouldPersist(sessionId)) {
@@ -481,7 +482,6 @@ export async function addTab(
       // `rowCommitted` 只跟踪 **upsert 这一步**:upsert 成功但随后的 setActive 失败
       // 时,DB 里已经有这一行了,关闭路径必须照常发 close 把它删掉,否则 addTab
       // 回滚了 renderer cache,DB 里却留下一行孤儿 tab,下次 hydrate / 重启就冒出来。
-      let rowCommitted = false;
       const create = (async () => {
         await ipc.upsert({ id, sessionId, kind, position, state: initialState });
         rowCommitted = true;
@@ -508,6 +508,26 @@ export async function addTab(
     // 这个 tab 从未存在过 —— `onOptimisticAdd` 里登记的旁路记录(popup 标记等)
     // 必须跟着回滚,否则没有任何 closeTab 成功分支会来清它。
     forgetClosedTab(sessionId, id);
+    // rowCommitted=true 说明 upsert 已成功、SQLite 有这一行,但 addTab 整体失败
+    // (通常是 setActive 抛错)。cache 已回滚且没有调用方会再发 closeTab —— 做一次
+    // best-effort close 把孤儿行清掉,否则下次 hydrate / 重启该 tab 会"幽灵复活"。
+    // [NOT_FOUND] 视为清理成功(另一个路径先删了);其它错误只记 warn,不影响抛出原始 err。
+    if (rowCommitted) {
+      const ipc = ipcApi();
+      if (ipc && shouldPersist(sessionId)) {
+        void settleTabStateWrites(sessionId, id).then(() =>
+          ipc.close({ id }).catch((cleanupErr) => {
+            if (!isTabRowMissingError(cleanupErr)) {
+              log.warn('addTab rollback: orphan-row cleanup failed', {
+                sessionId,
+                id,
+                err: cleanupErr,
+              });
+            }
+          }),
+        );
+      }
+    }
     throw err;
   }
 }
@@ -712,14 +732,19 @@ export async function closeTab(
             }
           }
         } catch (activeErr) {
-          // active 同步失败只是轻微视图态漂移(main 端 setActive 本就两步非事务,
-          // 中间态语义为"无激活 tab",用户重点一下即收敛);tab 删除已成功落库,
-          // 绝不能为它回滚。
-          log.warn('closeTab: post-close setActive failed (ignored)', {
+          // active 同步失败:tab 删除已成功落库,绝不能回滚。
+          // 但 cache 里 activeTabId 仍指向那个 tab,若用户立刻点击同一 tab,
+          // setActiveTab 会以"already active"跳过 IPC → DB 永久漂移。
+          // 清空 cache active 让下次用户点击时 setActiveTab 照常落库。
+          log.warn('closeTab: post-close setActive failed; clearing cache activeTabId for recovery', {
             sessionId,
             tabId,
             err: activeErr,
           });
+          const current = getBucket(sessionId);
+          if (current.hydrated) {
+            setBucket(sessionId, { tabs: current.tabs, activeTabId: null });
+          }
         }
       }
       forgetClosedTab(sessionId, tabId);

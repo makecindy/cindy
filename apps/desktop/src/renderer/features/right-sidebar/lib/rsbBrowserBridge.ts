@@ -278,8 +278,11 @@ export function initRsbBrowserBridge(): () => void {
         // release:销毁 guest webContents、经 onRelease 链同步 main 端 TabRegistry。
         // 前台场景 TabBody 的关闭路径先 release 过也没关系 —— release 幂等。
         browserWebviewPool.release(tabId);
-        const afterCount = getBucket(sessionId).tabs.length;
-        if (beforeCount > 0 && afterCount === 0) {
+        // detach/reattach 竞态防护:closeTab await 期间 invalidateSessionCaches()
+        // 可能把 bucket 清为 EMPTY_BUCKET(hydrated=false, tabs=[])——此时
+        // afterCount===0 不代表会话真的没有 tab 了,不应折叠侧边栏。
+        const afterBucket = getBucket(sessionId);
+        if (beforeCount > 0 && afterBucket.hydrated && afterBucket.tabs.length === 0) {
           requestRightSidebarVisibility('close', { sessionId });
         }
         return;
@@ -538,8 +541,9 @@ async function handleTabOpRequest(
       // what's left after. Bucket reads are synchronous off the store cache.
       const beforeCount = getBucket(req.sessionId).tabs.length;
       await storeCloseTab(req.sessionId, req.tabId);
-      const afterCount = getBucket(req.sessionId).tabs.length;
-      if (beforeCount > 0 && afterCount === 0) {
+      // detach/reattach 竞态防护:同 guest-close 路径,需确认 bucket 仍由本 renderer 持有。
+      const afterBucket = getBucket(req.sessionId);
+      if (beforeCount > 0 && afterBucket.hydrated && afterBucket.tabs.length === 0) {
         requestRightSidebarVisibility('close', { sessionId: req.sessionId });
       }
       result = { reqId, ok: true, tabId: req.tabId };
