@@ -6837,6 +6837,9 @@ export class CodexAgent extends BaseAgent {
               } else {
                 delete turnParams.model;
               }
+              // 恢复路径可能把 'gpt-5' 哨兵解析成具体路由模型 —— 重投的 turn 用的是新值,
+              // 窗口归属必须跟着改写走, 否则查不到目录条目、沿用 app-server 的基础模型窗口。
+              activeTurnModel = mutableModel;
               if (mutableServiceTier !== undefined) {
                 turnParams.serviceTier = mutableServiceTier ?? null;
               } else {

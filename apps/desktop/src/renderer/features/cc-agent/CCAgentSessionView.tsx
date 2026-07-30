@@ -2445,7 +2445,11 @@ export function CCAgentSessionView({
     try {
       const contextWindow = resolveDisplayContextWindow({
         sdkContextWindow: agentStatus.contextWindow,
-        ...getModelContextWindow(session.model, session.agentKind ?? 'cc', remoteDeviceId),
+        modelContextWindow: getModelContextWindow(
+          session.model,
+          session.agentKind ?? 'cc',
+          remoteDeviceId,
+        ),
       });
       const used = Math.min(agentStatus.contextTokens, contextWindow || Infinity);
       const pct = contextWindow > 0 ? Math.round((used / contextWindow) * 100) : 0;
@@ -3954,23 +3958,16 @@ function formatTokenCount(n: number): string {
 }
 
 /**
- * 从 maker capabilities cache 查模型 contextWindow 及其来源可信度。
- *
- * 拿不到时两项都是 undefined，由 display resolver 兜底到 200K。verified 必须跟着值一起
- * 传：目录里的窗口可能是派生兜底常量，只能展示、不能当上限（见 resolveDisplayContextWindow）。
- * 返回可直接展开进 resolveDisplayContextWindow 的入参。
+ * 从 maker capabilities cache 查模型 contextWindow。
+ * 拿不到时返回 undefined，由 display resolver 兜底到 200K。
  */
 function getModelContextWindow(
   model: string,
   vendorKey: 'cc' | 'codex',
   deviceId?: string,
-): { modelContextWindow?: number; modelContextWindowVerified?: boolean } {
+): number | undefined {
   const found = getModelsForVendor(vendorKey, deviceId).find((m) => m.id === model);
-  if (!found) return {};
-  return {
-    modelContextWindow: found.contextWindow,
-    modelContextWindowVerified: found.contextWindowVerified,
-  };
+  return found?.contextWindow;
 }
 
 function ContextCapacityRing({
@@ -3994,7 +3991,7 @@ function ContextCapacityRing({
   const { t } = useTranslation();
   const contextWindow = resolveDisplayContextWindow({
     sdkContextWindow,
-    ...getModelContextWindow(model, vendorKey, deviceId),
+    modelContextWindow: getModelContextWindow(model, vendorKey, deviceId),
   });
   const pct =
     contextWindow > 0

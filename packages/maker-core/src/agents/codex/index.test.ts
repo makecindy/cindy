@@ -14842,6 +14842,55 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
+  // daemon 重启后 turn/start 报 "thread not found" 会走 thread/resume + 重投; 若会话是用
+  // 'gpt-5' 这个 server-default 哨兵启动的, resume 会把它解析成具体路由模型并重写
+  // turnParams.model。快照必须跟着改写走 —— 否则重投 turn 的用量按 'gpt-5' 查目录(查不到),
+  // 保留 app-server 的基础模型窗口(1M)而不是该路由真实的 372K。
+  it('refreshes the turn-model snapshot when daemon recovery rewrites the model', async () => {
+    const agent = agentWithCatalog([gatewayRoutedModel, wideModel]);
+    let turnStartCount = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        // 保留哨兵: 让 mutableModel 停在 'gpt-5', 复现 resume 解析具体模型的前提。
+        return { thread: { id: 'start-thread-id' }, model: 'gpt-5', modelProvider: 'openai', cwd: '/repo' };
+      }
+      if (method === Method.TurnStart) {
+        turnStartCount += 1;
+        if (turnStartCount === 1) throw new Error('thread not found');
+        return { turn: { id: `turn-${turnStartCount}` } };
+      }
+      if (method === Method.ThreadResume) {
+        // 恢复时解析出真正的路由模型(目录里 372K)。
+        return {
+          thread: { id: 'start-thread-id' },
+          model: 'codex/gpt-5.6-sol',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
+      }
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-ctxwin-recovery',
+      model: 'gpt-5',
+      workingDir: '/repo',
+    });
+
+    await handle.send({ type: 'user', content: 'go' });
+    await vi.waitFor(() => {
+      expect(turnStartCount).toBeGreaterThanOrEqual(2);
+    });
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+    pushUsage(handlers, 'turn-2', 1_000_000);
+
+    expect(handle.getUsageSnapshot().contextWindow).toBe(372_000);
+    await handle.close();
+  });
+
   // setModel 文档写「下一 turn 才生效」,但 mutableModel 是**即时**改的。活跃 turn 仍在
   // 产出 usage 时切模型,不能拿下一个模型的窗口去收敛这一 turn —— 否则 372K 的 turn 会
   // 按 1M 记账,memory flush 阈值随之推迟。

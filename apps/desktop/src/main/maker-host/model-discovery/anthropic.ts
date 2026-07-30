@@ -677,7 +677,14 @@ export function noteAnthropicSdkSupportedModels(raw: unknown): void {
   if (mapped.length === 0) return;
   const mappedWithWindows = mapped.map(({ model, hasEffortInfo, hasFastModeInfo }) => {
     const explicit = explicitWindows.get(model.id);
-    const base = explicit !== undefined ? { ...model, contextWindow: explicit } : model;
+    // explicitWindows 存的是 HTTP 明说过的 max_input_tokens —— 恢复它时必须连
+    // contextWindowVerified 一起恢复。SDK 通道重新映射同一模型时走的是「无 explicit」
+    // 分支(目录里没有该模型就落到启发式、不带标记), 只覆盖 contextWindow 会把这份
+    // provenance 静默擦掉, 之后就不再拿这个真实上限去收敛虚高的上报值了。
+    const base =
+      explicit !== undefined
+        ? { ...model, contextWindow: explicit, contextWindowVerified: true as const }
+        : model;
     return { model: base, hasEffortInfo, hasFastModeInfo };
   });
   const { models, explicitEffortIds, explicitFastModeIds } =
