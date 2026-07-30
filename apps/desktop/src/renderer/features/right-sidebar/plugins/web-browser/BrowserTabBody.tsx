@@ -361,7 +361,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // (SidebarWindowLayout)只挂 RightSidebarShell、不挂 ChatInput,评论写进
   // 子窗口自己的 composerDraftStore 无处可发(还会误报成功 toast),故子窗口里
   // 不提供评论入口。内嵌侧栏(主窗)与副窗口(MainLayout,自带 composer)不受影响。
-  const commentSupported = !isSidebarWindow() && Boolean(sessionId);
+  const commentSupported = !isSidebarWindow() && Boolean(sessionId) && Boolean(browser.webview);
 
   // 崩溃恢复 —— banner 上的 "重新加载" 按钮:对 unresponsive 走 reload(让 guest
   // 主线程被打断重启),对 crashed/killed/oom 走 navigate(等价于 reload,但能
@@ -508,6 +508,8 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
               anchor={comment.pendingTarget.point}
               submitting={comment.mode === 'submitting'}
               designBaseline={comment.pendingTarget.designBaseline}
+              editorDraft={comment.editorDraft}
+              onEditorDraftChange={comment.updateEditorDraft}
               onSubmit={comment.submit}
               onCancel={comment.cancelPending}
               onPreviewDesign={comment.previewDesign}

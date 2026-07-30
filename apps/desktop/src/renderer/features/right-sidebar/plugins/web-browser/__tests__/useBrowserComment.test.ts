@@ -195,6 +195,13 @@ describe('useBrowserComment', () => {
     await enterSelecting(first, () => result!);
     act(() => first.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
     expect(result!.mode).toBe('pending');
+    act(() =>
+      result!.updateEditorDraft({
+        text: 'Keep this unsent comment',
+        styleEdits: { color: '#ff0000' },
+        textEdit: 'Updated label',
+      }),
+    );
 
     view.rerender(
       createElement(HookProbe, {
@@ -208,10 +215,16 @@ describe('useBrowserComment', () => {
     expect(result!.mode).toBe('off');
     expect(first.listenerCount('ipc-message')).toBe(0);
     expect(second.listenerCount('ipc-message')).toBe(1);
+    expect(result!.editorDraft).toEqual({
+      text: 'Keep this unsent comment',
+      styleEdits: { color: '#ff0000' },
+      textEdit: 'Updated label',
+    });
 
     await enterSelecting(second, () => result!);
     act(() => second.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
     expect(result!.mode).toBe('pending');
+    expect(result!.editorDraft.text).toBe('Keep this unsent comment');
   });
 
   it('does not claim comment mode when enter-mode delivery fails', async () => {
@@ -366,6 +379,40 @@ describe('useBrowserComment', () => {
     expect(toastMocks.error).toHaveBeenCalledWith('rightSidebar.browser.commentFailed');
   });
 
+  it('clears the recoverable editor draft after an explicit cancel', async () => {
+    const webview = makeWebview();
+    let result: UseBrowserCommentResult | null = null;
+    render(
+      createElement(HookProbe, {
+        webview: webview.value,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+    await enterSelecting(webview, () => result!);
+    act(() => webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
+    act(() =>
+      result!.updateEditorDraft({
+        text: 'Discard me',
+        styleEdits: { color: '#ff0000' },
+        textEdit: 'Discarded label',
+      }),
+    );
+
+    act(() => result!.cancelPending());
+    expect(lastCommand(webview).command).toBe(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL);
+    await acknowledgeLastCommand(webview);
+
+    expect(result!.mode).toBe('selecting');
+    expect(result!.pendingTarget).toBeNull();
+    expect(result!.editorDraft).toEqual({
+      text: '',
+      styleEdits: {},
+      textEdit: null,
+    });
+  });
+
   it('keeps the pending target mounted when capture fails after preparation', async () => {
     vi.mocked(window.electronAPI.rsbBrowserBridge.captureScreenshotData).mockRejectedValueOnce(
       new Error('capture failed'),
@@ -458,6 +505,11 @@ describe('useBrowserComment', () => {
     await acknowledgeLastCommand(webview);
     expect(result!.mode).toBe('selecting');
     expect(result!.pendingTarget).toBeNull();
+    expect(result!.editorDraft).toEqual({
+      text: '',
+      styleEdits: {},
+      textEdit: null,
+    });
     expect(toastMocks.success).toHaveBeenCalledWith('rightSidebar.browser.commentAdded');
   });
 

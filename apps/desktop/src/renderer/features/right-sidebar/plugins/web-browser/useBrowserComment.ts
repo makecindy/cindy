@@ -50,6 +50,10 @@ import {
   type BrowserCommentTargetInfo,
 } from '../../../../../shared/browserComment';
 import { composerDraftKeyForRightSidebarSession } from '@/features/cc-agent/newMakerDraftRightSidebar';
+import {
+  createEmptyBrowserCommentEditorDraft,
+  type BrowserCommentEditorDraft,
+} from './browserCommentEditorDraft';
 
 /** 关键 guest 命令的完成回执等待上限；超时保持用户输入并允许重试。 */
 const COMMAND_TIMEOUT_MS = 2_000;
@@ -102,6 +106,9 @@ export interface UseBrowserCommentResult {
   mode: BrowserCommentMode;
   /** 已点选的目标信息(pending / submitting 态非空),气泡定位与提交都用它。 */
   pendingTarget: BrowserCommentTargetInfo | null;
+  /** Host 侧未提交编辑草稿；WebView 自动换代时保留，显式取消 / 成功后清空。 */
+  editorDraft: BrowserCommentEditorDraft;
+  updateEditorDraft: (draft: BrowserCommentEditorDraft) => void;
   /** 工具栏按钮:off → 进入点选;其它态 → 整体退出。 */
   toggle: () => void;
   /** 气泡取消:回到点选态(marker 清除、样式预览还原,评论模式保持)。 */
@@ -131,6 +138,7 @@ export function useBrowserComment(
     sessionId === undefined ? undefined : composerDraftKeyForRightSidebarSession(sessionId);
   const [mode, setMode] = useState<BrowserCommentMode>('off');
   const [pendingTarget, setPendingTarget] = useState<BrowserCommentTargetInfo | null>(null);
+  const [editorDraft, setEditorDraft] = useState(createEmptyBrowserCommentEditorDraft);
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const pendingTargetRef = useRef(pendingTarget);
@@ -161,6 +169,12 @@ export function useBrowserComment(
    * 用 lifecycle failure 诱导用户重试并重复写入同一条评论。
    */
   const committedSubmissionEpochRef = useRef<number | null>(null);
+  const clearEditorDraft = useCallback(() => {
+    setEditorDraft(createEmptyBrowserCommentEditorDraft());
+  }, []);
+  const updateEditorDraft = useCallback((draft: BrowserCommentEditorDraft) => {
+    setEditorDraft(draft);
+  }, []);
 
   const rejectCommandsForWebview = useCallback((target: WebviewTag) => {
     for (const [requestId, pending] of pendingCommandsRef.current) {
@@ -176,11 +190,12 @@ export function useBrowserComment(
       if (committedSubmissionEpochRef.current !== epoch) return false;
       committedSubmissionEpochRef.current = null;
       setPendingTarget(null);
+      clearEditorDraft();
       setMode(nextMode);
       toast.success(tRef.current('rightSidebar.browser.commentAdded'));
       return true;
     },
-    [],
+    [clearEditorDraft],
   );
 
   /**
@@ -259,11 +274,12 @@ export function useBrowserComment(
     const committedEpoch = committedSubmissionEpochRef.current;
     submitEpochRef.current += 1; // 作废任何挂起中的提交
     bufferedStartupSelectionRef.current = null;
+    clearEditorDraft();
     sendBestEffortCommand(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
     if (committedEpoch !== null && settleCommittedSubmission(committedEpoch, 'off')) return;
     setMode('off');
     setPendingTarget(null);
-  }, [sendBestEffortCommand, settleCommittedSubmission]);
+  }, [clearEditorDraft, sendBestEffortCommand, settleCommittedSubmission]);
   const exitModeRef = useRef(exitMode);
   exitModeRef.current = exitMode;
 
@@ -274,6 +290,7 @@ export function useBrowserComment(
       () => {
         if (submitEpochRef.current !== epoch) return;
         setPendingTarget(null);
+        clearEditorDraft();
         setMode('selecting');
       },
       () => {
@@ -283,7 +300,7 @@ export function useBrowserComment(
         toast.error(tRef.current('rightSidebar.browser.commentFailed'));
       },
     );
-  }, [exitMode, sendCommand]);
+  }, [clearEditorDraft, exitMode, sendCommand]);
 
   /**
    * 提交主流程(气泡提交与 immediate 共用)。commentText 允许为空(immediate:
@@ -569,6 +586,7 @@ export function useBrowserComment(
           const committedEpoch = committedSubmissionEpochRef.current;
           submitEpochRef.current += 1; // 作废任何挂起中的提交
           bufferedStartupSelectionRef.current = null;
+          clearEditorDraft();
           if (committedEpoch !== null && settleCommittedSubmission(committedEpoch, 'off')) return;
           setMode('off');
           setPendingTarget(null);
@@ -590,7 +608,13 @@ export function useBrowserComment(
       webview.removeEventListener('did-navigate-in-page', onNavigate);
       rejectCommandsForWebview(webview);
     };
-  }, [acceptSelectedTarget, rejectCommandsForWebview, settleCommittedSubmission, webview]);
+  }, [
+    acceptSelectedTarget,
+    clearEditorDraft,
+    rejectCommandsForWebview,
+    settleCommittedSubmission,
+    webview,
+  ]);
 
   // tab 卸载 / 切走时若模式仍开着,通知 guest 拆 overlay(webview 被 pool 保活,
   // 不通知的话 overlay 会一直趴在页面上)。
@@ -600,5 +624,15 @@ export function useBrowserComment(
     };
   }, [tabId]);
 
-  return { mode, pendingTarget, toggle, cancelPending, submit, previewDesign, resetDesign };
+  return {
+    mode,
+    pendingTarget,
+    editorDraft,
+    updateEditorDraft,
+    toggle,
+    cancelPending,
+    submit,
+    previewDesign,
+    resetDesign,
+  };
 }
