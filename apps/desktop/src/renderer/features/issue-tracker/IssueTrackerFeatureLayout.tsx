@@ -10,6 +10,11 @@
  *
  * 一条都没有时,页面退回原来的引导形态(告诉用户怎么用 /issue 提交)。
  *
+ * **取数期间不换界面**(engineering-conventions §7):首屏加载不显示 loading 文案,
+ * 正文保持引导内容 —— 平台通道的总 deadline 可达 12s,换成一行「加载中」会造成
+ * 引导 → loading → 列表 两次跳变;而一条都没有的用户(最常见)看到的引导页更是
+ * 从头到尾不该动过。进度反馈只放在 header 的刷新图标上(零布局变化)。
+ *
  * 左侧 app 侧栏沿用 cc-agent 项目/对话列表(显式注册,避免冷启动直接进 /issues
  * 时左栏空白,详见 useRegisterCCAgentSidebar)。
  */
@@ -70,8 +75,10 @@ export function IssueTrackerFeatureLayout() {
           )}
         >
           {/* 动画挂外层 span,SVG 保持静态:挂在 SVG 上会每帧惊动主线程
-              (engineering-conventions「常驻动画必须 compositor-only」)。 */}
-          <span className={cn('inline-flex', refreshing && 'animate-spinner')}>
+              (engineering-conventions「常驻动画必须 compositor-only」)。
+              首屏取数期间也转 —— 正文保持引导内容不动,这里是唯一的进度反馈,
+              且它零布局变化、不构成跳变。 */}
+          <span className={cn('inline-flex', (loading || refreshing) && 'animate-spinner')}>
             <RefreshCw size={14} />
           </span>
         </button>
@@ -82,9 +89,7 @@ export function IssueTrackerFeatureLayout() {
       {hasItems ? <SubmitHintBar onStartIssueChat={startIssueChat} /> : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6 pt-2">
-        {loading ? (
-          <p className="px-3 py-2 text-13 text-sidebar-muted">{t('issueTracker.detail.loading')}</p>
-        ) : error && !hasItems ? (
+        {error && !hasItems ? (
           // 整页错误态只留给「从来没加载成功过」;已经有数据时刷新失败不能把列表
           // 盖掉(useMyIssues 特意保留了旧 data),否则用户点一下刷新就丢失全部内容。
           <LoadFailed onRetry={refresh} />

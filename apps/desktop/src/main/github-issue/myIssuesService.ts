@@ -315,16 +315,24 @@ export class MyIssuesService {
       const timer = setTimeout(() => {
         reject(new Error(`my-issues ${label} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-      run().then(
-        (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        (err) => {
-          clearTimeout(timer);
-          reject(err);
-        },
-      );
+      const settleOk = (value: T) => {
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const settleErr = (err: unknown) => {
+        clearTimeout(timer);
+        reject(err);
+      };
+      // try/catch 而不是 Promise.resolve().then(run):run 若**同步**抛出(某个 deps
+      // 实现直接 throw 而非返回 rejected promise),裸 run() 会让异常越过清理路径,
+      // 留下一个跑到超时才触发的计时器。包一层微任务也能修,但那会把**所有**调用的
+      // 远端发起时刻推后一个微任务 —— 为一个边缘缺陷改掉全部时序,副作用比缺陷本身大
+      // (在途去重的语义就依赖「list() 同步就已发起请求」)。
+      try {
+        run().then(settleOk, settleErr);
+      } catch (err) {
+        settleErr(err);
+      }
     });
   }
 }

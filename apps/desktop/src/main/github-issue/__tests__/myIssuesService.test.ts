@@ -222,6 +222,29 @@ describe('MyIssuesService.list', () => {
     expect(result.items).toHaveLength(1);
   });
 
+  it('deps 同步抛出时也走 deadline 的清理路径,不留下悬挂计时器', async () => {
+    // 裸 run() 的写法下,同步 throw 会越过 clearTimeout,留一个跑到 12s 才触发的
+    // 计时器。用假计时器断言:结果落地后已无待触发的计时器。
+    vi.useFakeTimers();
+    try {
+      const service = new MyIssuesService(
+        makeDeps({
+          readLedger: () => [ledgerRecord()],
+          // 注意是**同步** throw,不是 rejected promise。
+          fetchPlatformIssues: (() => {
+            throw new Error('sync boom');
+          }) as MyIssuesServiceDeps['fetchPlatformIssues'],
+        }),
+      );
+      const result = await service.list();
+      expect(result.degraded).toBe('fetch-failed');
+      expect(result.items).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('可选增强把用户自己 GitHub 名下的 issue 并进来,并回传身份', async () => {
     const service = new MyIssuesService(
       makeDeps({

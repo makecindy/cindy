@@ -100,10 +100,25 @@ describe('IssueTrackerFeatureLayout 内容区分支', () => {
     expect(screen.queryByText('已经加载出来的那条 issue')).toBeNull();
   });
 
-  it('加载中显示加载态', () => {
-    useMyIssuesMock.mockReturnValue(state({ loading: true }));
+  it('首屏取数期间保留引导内容,不换成 loading 文案(engineering-conventions §7)', () => {
+    // 平台通道总 deadline 可达 12s。换成一行「加载中」会造成 引导 → loading → 列表
+    // 两次跳变;而一条都没有的用户(最常见)看到的引导页本该从头到尾没动过。
+    useMyIssuesMock.mockReturnValue(state({ loading: true, data: null }));
     render(<IssueTrackerFeatureLayout />);
-    expect(screen.getByText('issueTracker.detail.loading')).toBeTruthy();
+
+    expect(screen.getByText('issueTracker.mine.emptyTitle')).toBeTruthy();
+    expect(screen.queryByText('issueTracker.detail.loading')).toBeNull();
+  });
+
+  it('首屏取数完成后引导原子切成列表 —— 中间不经过第三种形态', () => {
+    useMyIssuesMock.mockReturnValue(state({ loading: true, data: null }));
+    const view = render(<IssueTrackerFeatureLayout />);
+    expect(screen.getByText('issueTracker.mine.emptyTitle')).toBeTruthy();
+
+    useMyIssuesMock.mockReturnValue(state({ loading: false, data: result([item()]) }));
+    view.rerender(<IssueTrackerFeatureLayout />);
+    expect(screen.queryByText('issueTracker.mine.emptyTitle')).toBeNull();
+    expect(screen.getByText('已经加载出来的那条 issue')).toBeTruthy();
   });
 
   it('一条都没有:显示空态引导,不显示常驻说明条(避免与引导里的说明重复)', () => {

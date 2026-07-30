@@ -24,7 +24,7 @@ import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { createLogger } from '../logger.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { serverApiFetch } from '../serverApiClient';
-import { buildGithubUserSubmitterDeps } from './cindyGithubGhostDeps.js';
+import { getSharedGithubUserSubmitterDeps } from './cindyGithubGhostDeps.js';
 import { parseIssuePage } from './githubIssuePayload.js';
 import {
   callCindyGithubOperation,
@@ -120,7 +120,7 @@ function mapPlatformFailure(err: unknown): MyIssuesDegradedReason {
 }
 
 async function resolveGithubEnhancement(): Promise<GithubEnhancementViewer | null> {
-  const ghostDeps = buildGithubUserSubmitterDeps();
+  const ghostDeps = getSharedGithubUserSubmitterDeps();
   // workdir 传 null:/issues 是全局页面,没有会话工作目录上下文。
   if (isCindyGithubGhostUsable(ghostDeps, null)) {
     const login = await readGhostViewerLogin(ghostDeps);
@@ -172,7 +172,7 @@ async function searchAuthoredIssues(
 
   if (viewer.source === 'ghost') {
     const operation = await callCindyGithubOperation(
-      buildGithubUserSubmitterDeps(),
+      getSharedGithubUserSubmitterDeps(),
       'search_issues_and_prs',
       params,
       { timeoutMs: GHOST_SEARCH_TIMEOUT_MS },

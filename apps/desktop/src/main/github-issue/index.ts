@@ -99,8 +99,6 @@ export async function submitGithubIssueForSession(
       onSubmitted: (record) => {
         try {
           recordSubmittedIssue(record, submitScope);
-          // 不失效的话,刚提交的那条最多要等 60s TTL 到期才会出现在列表里。
-          invalidateMyIssuesCache();
         } catch (err) {
           // 账本只服务「我的 Issue」列表;写失败最多让这条不出现在列表里,
           // 绝不能影响已经成功的提交。
@@ -108,6 +106,11 @@ export async function submitGithubIssueForSession(
             issueNumber: record.number,
             error: err instanceof Error ? err.message : String(err),
           });
+        } finally {
+          // **无论记账成功与否都要失效**:这两件事互相独立 —— 平台通道就绪时,列表
+          // 本来就能从服务端看到刚提交的那条,不该因为本机账本写失败而在 60s TTL 内
+          // 一直看不见。(放在同一个 try 里时,记账抛错会把它一起跳过。)
+          invalidateMyIssuesCache();
         }
       },
     },

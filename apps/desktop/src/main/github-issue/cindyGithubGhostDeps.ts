@@ -18,6 +18,22 @@ import {
   type GithubUserIssueSubmitterDeps,
 } from './githubUserIssueSubmitter';
 
+let sharedDeps: GithubUserIssueSubmitterDeps | null = null;
+
+/**
+ * 共享实例 —— 同一次「我的 Issue」查询里,身份解析与随后的搜索用同一个对象,
+ * 不必各建一份(模式同 git-context 的 getSharedGhCliTokenSource)。
+ *
+ * 单例安全的原因:下面每个成员都是**惰性闭包**,不捕获任何状态,都是被调用的那一刻
+ * 才去查插件启用状态 / 凭证 / 管子。也正因如此,复用同一实例**并不构成**「一致快照」——
+ * 真正的不一致来自两次**调用**之间插件被停用或换了凭证,而那种情况的正确行为已经
+ * 定好:搜索失败 → 静默降级为「这次没有增强」(见 myIssuesService 的可选增强口径)。
+ */
+export function getSharedGithubUserSubmitterDeps(): GithubUserIssueSubmitterDeps {
+  if (!sharedDeps) sharedDeps = buildGithubUserSubmitterDeps();
+  return sharedDeps;
+}
+
 export function buildGithubUserSubmitterDeps(): GithubUserIssueSubmitterDeps {
   return {
     isGithubGhostEnabled: () =>

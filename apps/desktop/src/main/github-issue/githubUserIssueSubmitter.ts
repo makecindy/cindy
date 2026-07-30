@@ -65,6 +65,12 @@ export function isCindyGithubGhostUsable(
 export type CindyGithubReadOperation = 'get_current_user' | 'search_issues_and_prs';
 
 /**
+ * 插件通道支持的全部操作名 = 只读操作 + 提交。**通道函数一律用它,不要放宽成 string**:
+ * 加新操作时改这一处,拼错立刻是编译错误。
+ */
+type CindyGithubOperation = CindyGithubReadOperation | 'create_issue';
+
+/**
  * 经插件通道调一个只读 GitHub 操作。失败返回结构化 failure(不抛),
  * 响应形状不对时才抛 —— 与提交路径共用同一个通道与解包逻辑。
  */
@@ -170,7 +176,7 @@ async function requireGithubOperation(
 
 async function callGithubOperation(
   deps: GithubUserIssueSubmitterDeps,
-  name: string,
+  name: CindyGithubOperation,
   args: Record<string, unknown>,
   options: { timeoutMs?: number } = {},
 ): Promise<{ ok: true; data: unknown } | GithubOperationFailure> {
