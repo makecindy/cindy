@@ -13,8 +13,9 @@
  *    deps.isContactsEnabled 才注入其一(缺省 = 两段都不注入, 与改造前行为一致)
  *  - codex/index.ts 同上, 拼 developerInstructions
  *
- * 缓存约束(maker-core-and-agent-behavior.md §3.1): 开关状态在 session 启动时
- * 求值一次, 会话内文案恒定, 不进任何 per-turn 易变段。
+ * 缓存约束(maker-core-and-agent-behavior.md §3.1): 开关状态与 MCP 工具注册
+ * 同点求值(claude 每次 buildQuery, codex 每 session 一次), 单次 build 内文案
+ * 恒定, 不进任何 per-turn 易变段; remote 会话不注入(工具不可达)。
  */
 
 import enabledText from './system-prompt-enabled.md?raw';

@@ -306,11 +306,15 @@ export interface AgentDeps {
   makerMemory?: MakerMemoryManager;
 
   /**
-   * 智能通讯录开关快照 (host 注入, desktop = readContactsSettings().enabled)。
-   * startSession 时求值一次决定注入哪段 contacts prompt(开 = 使用规范,
-   * 关 = 可选功能告示, 见 contacts/system-prompt.ts), 会话内不再重读 —
-   * 与 MCP provider isEnabled 的 session-start 评估语义一致, 保证同一会话里
-   * prompt 状态与 cindy_contacts 工具可用性不分叉, 也不破坏前缀缓存稳定性。
+   * 智能通讯录开关读取 (host 注入, desktop = readContactsSettings().enabled)。
+   * 决定注入哪段 contacts prompt(开 = 使用规范, 关 = 可选功能告示, 见
+   * contacts/system-prompt.ts)。求值时机与 MCP 工具注册对齐, 保证 prompt 状态
+   * 与 cindy_contacts 工具可用性不分叉:
+   *  - claude-code: 每次 buildQuery(含 rewind/fresh 重建)与 buildMcpServers
+   *    同点求值; 单次 build 内恒定, 前缀缓存不受影响。
+   *  - codex: session 启动求值一次(MCP flags 冻结在 spawn 配置, 开关变更由
+   *    host 的 app-server 失效机制兜底, 新 thread 整体按新状态重建)。
+   * remote 会话两端都不注入(cindy_contacts 不随远端转发)。
    *
    * 缺省 / undefined → 两段都不注入 (host 未接线, 与改造前行为一致)。
    */

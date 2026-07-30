@@ -960,15 +960,6 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
     }
 
-    // ── 智能通讯录 prompt 段: 开关在 session 启动时求值一次(两态), host 未注入
-    // isContactsEnabled 则整段缺省 — 语义与 makerMemoryRules 同(会话内恒定,
-    // 不破坏前缀缓存; 详见 contacts/system-prompt.ts)。
-    const contactsRules = this.deps.isContactsEnabled
-      ? this.deps.isContactsEnabled()
-        ? CONTACTS_RULES_ENABLED
-        : CONTACTS_RULES_DISABLED
-      : '';
-
     const mcpProviders = this.deps.mcpProviders ?? [];
     // host-owned 只读白名单在 session 启动时快照; 与 hooks / MCP 注册同样保持整条
     // 会话稳定, 避免中途改数组导致 CLI 权限规则与 prompt cache 前缀漂移。
@@ -1822,6 +1813,18 @@ export class ClaudeCodeAgent extends BaseAgent {
     }): Promise<Query> => {
       const currentSdkModel = sdkModelFor(mutableModel);
       const currentSdkEffort = getSdkEffortForModel(mutableModel, mutableEffort);
+      // ── 智能通讯录两态段: 与 buildMcpServers 同点求值 —— rewind/fresh 重建时
+      // prompt 状态与 cindy_contacts 工具注册读同一份当前设置, 不分叉(否则中途
+      // 切开关再 rewind, prompt 会指挥模型用已移除的工具)。同一次 build 内只读
+      // 一次, 未 rewind 的会话与启动时快照语义等价, 前缀缓存不受影响。
+      // remote 会话不注入: in-process cindy_contacts 不随远端转发(过桥白名单只有
+      // collaboration/memory), 注入只会引导模型调不存在的工具。
+      const contactsRules =
+        opts.remoteHostId || !this.deps.isContactsEnabled
+          ? ''
+          : this.deps.isContactsEnabled()
+            ? CONTACTS_RULES_ENABLED
+            : CONTACTS_RULES_DISABLED;
       const baseResumeAt = vo.resumeSessionAt as string | undefined;
       const baseFork = vo.forkSession as boolean | undefined;
       const finalResumeAt = extra?.fresh ? undefined : (extra?.resumeSessionAt ?? baseResumeAt);
@@ -2229,7 +2232,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           includePartialMessages: true,
           ...thinkingOpts,
           pathToClaudeCodeExecutable: binaryPath,
-          // systemPrompt 六段拼接 — SDK 先输出 preset, 再追加 append 字段。
+          // systemPrompt 七段拼接(含 SDK 内嵌 preset)— SDK 先输出 preset, 再追加 append 字段。
           //   [1] cc preset                  — Claude SDK 自带 (内嵌不可见)
           //   [2] MAKER_SYSTEM_PROMPT_APPEND — maker engine (system-prompt-append.md)
           //   [3] makerMemoryRules           — maker memory 写入规范 (条件式: makerMemoryEnabled

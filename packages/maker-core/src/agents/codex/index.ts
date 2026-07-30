@@ -2965,12 +2965,17 @@ export class CodexAgent extends BaseAgent {
       });
     }
     // 智能通讯录两态段: session 启动求值一次, host 未注入 isContactsEnabled 则缺省。
-    // 语义与 claude-code 端一致(contacts/system-prompt.ts)。
-    const contactsRules = this.deps.isContactsEnabled
-      ? this.deps.isContactsEnabled()
-        ? CONTACTS_RULES_ENABLED
-        : CONTACTS_RULES_DISABLED
-      : '';
+    // remote 会话不注入: 远端 spawn 不带本地 MCP flags、托管 allowlist 只有
+    // collaboration/memory, cindy_contacts 不可达, 注入只会引导模型调不存在的工具。
+    // 本地会话中途切开关的一致性由 host 侧 app-server 失效机制兜底(contacts-ipc):
+    // MCP flags 冻结在 spawn 配置, 开关变更 → 失效 app-server → 新 thread 重建时
+    // 本段与工具面一起按新状态生成。
+    const contactsRules =
+      opts.remoteHostId || !this.deps.isContactsEnabled
+        ? ''
+        : this.deps.isContactsEnabled()
+          ? CONTACTS_RULES_ENABLED
+          : CONTACTS_RULES_DISABLED;
     const developerInstructions = buildCodexDeveloperInstructions({
       makerMemoryRules,
       contactsRules,
@@ -3103,7 +3108,8 @@ export class CodexAgent extends BaseAgent {
       //                                          紧邻 userPrompt 高优先级, 启动时快照)
       //   [7] opts.userPrompt                  — per-call 用户级 (renderer 本地 storage,
       //                                          每次 startSession 透传, 优先级最高)
-      // 跟 claude-code 七段语义对齐。空段被 .filter 跳过,
+      // 段序语义与 claude-code 对齐(claude 的 [1] 是 SDK 内嵌 preset, 此处无对应段,
+      // 故编号从 [2] 起、共六段)。空段被 .filter 跳过,
       // 内容为空时不发送 developerInstructions 字段。
       const params: ThreadStartParams = {
         cwd: opts.workingDir,
