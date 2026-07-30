@@ -178,12 +178,11 @@ import {
   writeCollaborationSetting,
 } from '../maker-host/collaboration-settings-store.js';
 import {
-  MAX_CONCURRENT_COMMANDS_CAP,
   readAgentResourceSettingsState,
   resetAgentResourceSettings,
   writeAgentResourceSetting,
-  type AgentResourceSettings,
 } from '../maker-host/agent-resource-settings-store.js';
+import { createAgentResourceSettingsIpc } from './agent-resource-settings-ipc.js';
 import { createGitSnapshotCoordinator } from '../maker-host/git-snapshot-host.js';
 import {
   cancelCodexAuthModeChange,
@@ -678,56 +677,16 @@ function collaborationSettingsWire() {
   };
 }
 
-const AGENT_RESOURCE_SETTING_KEYS = [
-  'maxConcurrentCommands',
-  'processPriority',
-  'capToolchainThreads',
-] as const;
-type AgentResourceSettingKey = typeof AGENT_RESOURCE_SETTING_KEYS[number];
-const AGENT_RESOURCE_PRIORITIES = ['normal', 'low', 'lowest'] as const;
-
-function isAgentResourceSettingKey(key: unknown): key is AgentResourceSettingKey {
-  return typeof key === 'string'
-    && (AGENT_RESOURCE_SETTING_KEYS as readonly string[]).includes(key);
-}
-
-/** store 层 clamp 容错读盘;IPC 写路径按惯例硬拒非法值(INVALID_PARAMS)。 */
-function validateAgentResourceSettingValue(
-  key: AgentResourceSettingKey,
-  value: unknown,
-): AgentResourceSettings[AgentResourceSettingKey] {
-  if (key === 'maxConcurrentCommands') {
-    if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
-      throwIpcError('INVALID_PARAMS', `${key} must be an integer`);
-    }
-    if (value < 0) throwIpcError('INVALID_PARAMS', `${key} must be >= 0`);
-    if (value > MAX_CONCURRENT_COMMANDS_CAP) {
-      throwIpcError('INVALID_PARAMS', `${key} must be <= ${MAX_CONCURRENT_COMMANDS_CAP}`);
-    }
-    return value;
-  }
-  if (key === 'processPriority') {
-    if (typeof value !== 'string'
-      || !(AGENT_RESOURCE_PRIORITIES as readonly string[]).includes(value)) {
-      throwIpcError('INVALID_PARAMS', `${key} must be one of ${AGENT_RESOURCE_PRIORITIES.join('/')}`);
-    }
-    return value as AgentResourceSettings['processPriority'];
-  }
-  if (typeof value !== 'boolean') {
-    throwIpcError('INVALID_PARAMS', `${key} must be a boolean`);
-  }
-  return value;
-}
-
-function agentResourceSettingsWire() {
-  const state = readAgentResourceSettingsState();
-  return {
-    ...state.value,
-    isCustomized: state.isCustomized,
-    customizedKeys: state.customizedKeys,
-    defaults: state.defaults,
-  };
-}
+// agent-resource-settings 的 key 白名单/校验/wire 组装已抽到
+// agent-resource-settings-ipc.ts(可注入依赖免 Electron 直测,含 sender 校验、
+// 逐 key 校验、存储失败转 INTERNAL 的全套测试)。这里只保留 adapter 接线。
+const agentResourceSettingsIpc = createAgentResourceSettingsIpc({
+  assertTrustedSender: (event) =>
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
+  readState: readAgentResourceSettingsState,
+  write: writeAgentResourceSetting,
+  reset: resetAgentResourceSettings,
+});
 
 function memorySettingsWire() {
   const state = readMemorySettingsState();
@@ -6423,43 +6382,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   // ─── Agent resource settings IPC(命令并发/进程优先级/工具链限核)──────────
-  // 写路径会持久改变 agent 进程的资源治理行为,属特权 IPC:先验 sender 可信度
-  // (新增特权 handler 的硬性要求,bot review P1)。
-  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_GET, async (e) => {
-    assertTrustedAppRendererEvent(e);
-    return agentResourceSettingsWire();
-  });
-
-  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_SET, async (e, body: unknown) => {
-    assertTrustedAppRendererEvent(e);
-    const b = body as Record<string, unknown> | null | undefined;
-    if (!b || typeof b.key !== 'string') throwIpcError('INVALID_PARAMS', 'key required');
-    if (!isAgentResourceSettingKey(b.key)) {
-      throwIpcError('INVALID_PARAMS', `unknown key: ${b.key}`);
-    }
-    const value = validateAgentResourceSettingValue(b.key, b.value);
-    try {
-      writeAgentResourceSetting(
-        b.key as keyof AgentResourceSettings,
-        value as AgentResourceSettings[keyof AgentResourceSettings],
-      );
-    } catch {
-      // 落盘失败(只读目录/磁盘满等):按 IPC 错误协议包装,不把原始 fs 异常
-      // (含内部绝对路径)透给 renderer。
-      throwIpcError('INTERNAL', 'agent resource settings write failed');
-    }
-    return agentResourceSettingsWire();
-  });
-
-  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_RESET, async (e) => {
-    assertTrustedAppRendererEvent(e);
-    try {
-      resetAgentResourceSettings();
-    } catch {
-      throwIpcError('INTERNAL', 'agent resource settings reset failed');
-    }
-    return agentResourceSettingsWire();
-  });
+  // 业务体在 agent-resource-settings-ipc.ts(sender 校验/逐 key 校验/存储失败
+  // 转 INTERNAL),这里是纯 adapter。
+  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_GET, async (e) =>
+    agentResourceSettingsIpc.get(e),
+  );
+  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_SET, async (e, body: unknown) =>
+    agentResourceSettingsIpc.set(e, body),
+  );
+  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_RESET, async (e) =>
+    agentResourceSettingsIpc.reset(e),
+  );
 
   // ─── Idle watcher ────────────────────────────────────────────────────────
   // 只扫描 active team/session，避免已归档 Worker 被终态筛选重新捞起。

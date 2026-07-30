@@ -70,6 +70,10 @@ export function AgentResourceSection() {
   const [settings, setSettings] = useState<Wire | null>(null);
   // 预设三键写入的 in-flight 闸:防并发点击交错出"杂交档位"落盘。
   const [applyingPreset, setApplyingPreset] = useState(false);
+  // 并发上限输入框的本地草稿:清空是编辑中间态,Number('') === 0 会被瞬态持久化
+  // 成"不限"并放行排队命令(bot review P1)——空/非法值只留在草稿,不写盘;
+  // blur 时草稿作废回显权威值。
+  const [maxDraft, setMaxDraft] = useState<string | null>(null);
   // 写序号:每次以写类 IPC 响应落地 settings 时 +1。失败回读的 GET 是异步的,
   // 且发起后操作闸已解除 —— 期间用户的成功修改不能被迟到的旧 GET 快照覆盖,
   // 回读响应只在序号未前进时生效(bot review P1)。
@@ -136,6 +140,7 @@ export function AgentResourceSection() {
   const applyPreset = async (id: PresetId) => {
     if (applyingPreset) return; // 三键序列非原子,靠 in-flight 闸禁止交错
     setApplyingPreset(true);
+    setMaxDraft(null); // 预设接管并发值,废弃输入框草稿
     const values = presetValues(id);
     setSettings((prev) => (prev ? { ...prev, ...values } : prev));
     try {
@@ -250,15 +255,20 @@ export function AgentResourceSection() {
           min={0}
           max={MAX_CONCURRENT_CAP}
           disabled={applyingPreset}
-          value={settings.maxConcurrentCommands}
+          value={maxDraft ?? String(settings.maxConcurrentCommands)}
           onChange={(e) => {
-            const raw = Number(e.target.value);
-            const v = Math.max(
-              0,
-              Math.min(MAX_CONCURRENT_CAP, Number.isFinite(raw) ? Math.trunc(raw) : 0),
+            const text = e.target.value;
+            setMaxDraft(text);
+            // 空串是编辑中间态(如全选删除后重输):只留草稿,绝不当 0=不限 写盘
+            if (text.trim() === '') return;
+            const raw = Number(text);
+            if (!Number.isFinite(raw)) return;
+            persist(
+              'maxConcurrentCommands',
+              Math.max(0, Math.min(MAX_CONCURRENT_CAP, Math.trunc(raw))),
             );
-            persist('maxConcurrentCommands', v);
           }}
+          onBlur={() => setMaxDraft(null)}
           className="mt-0.5 w-20 rounded-lg border border-[var(--border-default)] bg-transparent px-3 py-1.5 text-13 text-[var(--settings-input-text)] outline-none"
         />
       </label>
