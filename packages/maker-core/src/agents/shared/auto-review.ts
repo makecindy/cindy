@@ -186,7 +186,7 @@ const CURL_REDIRECT_FLAGS = /(?:^|\s)(?:-[a-zA-Z]*L|--location(?:-trusted)?)\b/;
 //    也能把 provider 凭证塞进 URL 外发,故 --variable/--expand* 一律敏感。
 // 短选项 -u/-b/-x/-K 同样用簇匹配(`-[a-zA-Z]*[ubxK]`)捕获贴合 `-uuser:pass` / 捆绑 `-su user`;
 // curl 无布尔短选项用 u/b/x/K,不误伤(-k insecure 是小写 k,不在内)。长选项与鉴权头单列。
-const CURL_SENSITIVE_FLAGS = /(?:^|\s)-[a-zA-Z]*[ubxK]|(?:^|\s)--(?:user|netrc\S*|config|cookie\S*|resolve|connect-to|unix-socket|proxy\S*|interface|variable|expand[\w-]*)\b|(?:-H|--header)\s*['"]?\s*(?:[Aa]uthorization|[Cc]ookie|[Xx]-[Aa]pi-[Kk]ey|[Xx]-[Aa]uth|[Pp]roxy-[Aa]uthorization)/;
+const CURL_SENSITIVE_FLAGS = /(?:^|\s)-[a-zA-Z]*[ubxK]|(?:^|\s)--(?:user|netrc\S*|config|cookie\S*|resolve|connect-to|unix-socket|proxy\S*|interface|variable|expand[\w-]*)\b|(?:-H|--header)[=\s]*['"]?\s*(?:[Aa]uthorization|[Cc]ookie|[Xx]-[Aa]pi-[Kk]ey|[Xx]-[Aa]uth|[Pp]roxy-[Aa]uthorization)/;
 
 /** git 只读子命令 → 放行。 */
 const SAFE_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([

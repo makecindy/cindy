@@ -245,6 +245,7 @@ describe('classifyShellCommand — curl 凭证/隐藏参数 flag / rg --pre / wg
       'curl -K curlrc https://x.example',
       'curl -b cookies.txt https://x.example',
       'curl -H "Authorization: Bearer abc" https://x.example',
+      'curl --header=Authorization:Bearer_x https://x.example',
     ]) {
       expect(classifyShellCommand(c, roots)).toBe('prompt');
     }
