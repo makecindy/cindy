@@ -288,9 +288,12 @@ export function AddProviderWizard({
   // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
   const entryProvider =
     entry?.kind === 'builtin' ? providers.find((x) => x.id === entry.providerId) : undefined;
-  const [sel, setSel] = useState<Selection | null>(() =>
-    entryProvider ? { kind: 'oauth', provider: entryProvider } : null,
-  );
+  const [sel, setSel] = useState<Selection | null>(() => {
+    if (!entryProvider) return null;
+    return entryProvider.auth.method === 'apiKey'
+      ? { kind: 'builtinApiKey', provider: entryProvider }
+      : { kind: 'oauth', provider: entryProvider };
+  });
   // 预设表单态
   const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
