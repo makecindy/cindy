@@ -585,6 +585,42 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('remote setModel allows same-route switch despite token rotation', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    // 后台刷新后 nextRoute.env 是新 token,但 remoteEnv(远端 daemon)还是旧值 ——
+    // token 值轮换不算路由变化,同路由放行(codex P2 三轮)。
+    let callCount = 0;
+    const resolveRemoteClaudeRoute = vi.fn(async () => {
+      callCount += 1;
+      return {
+        endpoint: 'https://api.anthropic.com',
+        env: { CLAUDE_CODE_OAUTH_TOKEN: callCount === 1 ? 'tok-old' : 'tok-new' },
+      };
+    });
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-token-rotation',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    // token 值不同(轮换)但 endpoint + token 存在性一致 → 放行。
+    await handle.setModel?.('claude-sonnet-5');
+    expect(fakeQuery.setModel).toHaveBeenCalled();
+    await handle.close();
+  });
+
   it('remote setModel rejects when the target route drops a custom header', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;

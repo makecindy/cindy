@@ -3882,24 +3882,39 @@ export class ClaudeCodeAgent extends BaseAgent {
               (() => {
                 // 与「当前生效的 remoteEnv」比对,而不是 spawn 时冻结的 remoteRoute.env:
                 // refreshSubscriptionTokenInPlace 会原地写回 remoteEnv,因此它始终是最新
-                // 凭证;nextRoute 也是现解析的最新值。两者一致 = 同一路由(放行,token
-                // 轮换不误拒);用户在设置里改了 key/定制头 → 不一致(拒绝,不放行旧凭证)。
-                // (Greptile/codex-connector review #1035:排除 token 字段会放行真凭证变化。)
-                // 比对两边 key 的并集:nextRoute 删除某个定制头时,remoteEnv 里仍烤着
-                // 旧值,只取 nextRoute 的 key 会把「删除」误判成一致(Greptile 二轮)。
-                // remoteEnv 含 route.env 之外的字段(ANTHROPIC_BASE_URL / entrypoint gate
-                // 补的 CLAUDE_CODE_ENTRYPOINT 等),只取 route 声明过的 key(remoteRoute.env
-                // 的 key 集 = spawn 时 route 声明,nextRoute.env 的 key 集 = 现声明)。
+                // 凭证;nextRoute 也是现解析的最新值。
+                //
+                // 比对规则(三轮 review 的折中):
+                // - endpoint + 非 token env 值:任一变化 → 拒绝(真路由/定制头变化);
+                // - token 字段(CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY /
+                //   ANTHROPIC_AUTH_TOKEN)的**存在性**:在/不在变化 → 拒绝(路由类型变化);
+                // - token 字段的**值**:不比对 —— 订阅 token 轮换(后台刷新先更新
+                //   nextRoute,远端 daemon 尚未 401)与网关 key 轮换同理会误拒;远端
+                //   daemon 撞 401 时会经 oauth/refresh 拿到最新值,不会用旧 token 跑。
+                // (Greptile 三轮 vs codex P2:全值比对误拒轮换,排除字段放行真变化;
+                // 存在性比对是两边都安全的折中。)
+                const TOKEN_KEYS = new Set([
+                  'CLAUDE_CODE_OAUTH_TOKEN',
+                  'ANTHROPIC_API_KEY',
+                  'ANTHROPIC_AUTH_TOKEN',
+                ]);
                 const routeKeys = new Set([
                   ...Object.keys(remoteRoute.env),
                   ...Object.keys(nextRoute.env),
                 ]);
                 const pick = (env: Record<string, string>): Record<string, string> =>
-                  Object.fromEntries([...routeKeys].filter((k) => env[k] !== undefined).map((k) => [k, env[k]]));
+                  Object.fromEntries(
+                    [...routeKeys]
+                      .filter((k) => env[k] !== undefined && !TOKEN_KEYS.has(k))
+                      .map((k) => [k, env[k]]),
+                  );
+                const tokenPresenceOf = (env: Record<string, string>): string[] =>
+                  [...TOKEN_KEYS].filter((k) => env[k] !== undefined).sort();
                 return (
                   nextRoute.endpoint !== remoteRoute.endpoint ||
-                  JSON.stringify(pick(nextRoute.env)) !==
-                    JSON.stringify(pick(remoteEnv ?? {}))
+                  JSON.stringify(pick(nextRoute.env)) !== JSON.stringify(pick(remoteEnv ?? {})) ||
+                  JSON.stringify(tokenPresenceOf(nextRoute.env)) !==
+                    JSON.stringify(tokenPresenceOf(remoteEnv ?? {}))
                 );
               })()) ||
             // 网关路径(route null):切模时重新读当前网关 key,与 remoteEnv 里 spawn 时

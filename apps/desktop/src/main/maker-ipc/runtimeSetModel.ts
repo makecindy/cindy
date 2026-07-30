@@ -274,6 +274,12 @@ export async function applyRuntimeSetModelChange(
     if (providerId !== undefined) {
       setSessionProvider(sessionId, currentProviderId);
     }
+    // 热切失败:恢复上面清除的 pending,用户的待定来源选择不随异常丢失
+    // (Greptile review #1035 五轮;与 shouldCloseSession 分支同口径)。
+    const clearedPending = pendingTarget ?? (providerId !== undefined ? input.getPendingCredentialSwitch?.(sessionId) : undefined);
+    if (clearedPending && input.registerPendingCredentialSwitch) {
+      input.registerPendingCredentialSwitch(sessionId, clearedPending);
+    }
     throw err;
   }
   return { status: 'applied' };
