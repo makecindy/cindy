@@ -1505,7 +1505,11 @@
         "finish": "Finish",
         "cancel": "Cancel",
         "useApiKey": "Use an API key instead",
-        "metaOAuthOrApi": "Subscription (OAuth) · API key"
+        "metaOAuthOrApi": "Subscription (OAuth) · API key",
+        "builtinApiKey": {
+          "subtitle": "Connect with your own API key",
+          "note": "This source provides image generation models and does not join chats. The API key is stored only on this device (encrypted by the system keychain) and never uploaded."
+        }
       },
       "xdSignin": {
         "badge": "Recommended",
@@ -1515,6 +1519,24 @@
       "menu": {
         "disableProvider": "Disable This Provider",
         "enableProvider": "Enable This Provider"
+      },
+      "builtinApiKey": {
+        "subtitle": "API key connection",
+        "replaceKey": "Replace key",
+        "saveKey": "Save",
+        "keyPlaceholder": "Paste API key",
+        "toast": {
+          "saved": "API key for {{name}} saved",
+          "saveFailed": "Failed to save API key for {{name}}. Please try again.",
+          "disconnected": "Disconnected {{name}}",
+          "disconnectFailed": "Failed to disconnect {{name}}"
+        },
+        "disconnectConfirm": {
+          "title": "Disconnect {{name}}?",
+          "description": "Disconnecting deletes the API key stored on this device. Models from this source become unavailable; you can add it again anytime.",
+          "confirm": "Disconnect",
+          "cancel": "Cancel"
+        }
       }
     },
     "experimental": {

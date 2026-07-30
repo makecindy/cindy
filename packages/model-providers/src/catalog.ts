@@ -184,7 +184,16 @@ function validateProvider(p: Provider): void {
     p.auth.method === 'oauth' || p.auth.oauth === undefined,
     `provider '${p.id}' auth.oauth not allowed for ${p.auth.method} method`,
   );
-  assert(Array.isArray(p.agents) && p.agents.length > 0, `provider.agents missing for '${p.id}'`);
+  // agents 允许为空**当且仅当**声明了媒体清单(媒体-only 供应商,如 Gemini 图像
+  // API key 来源,2026-07 图像多来源):图像/视频模型不经 agent runtime,由主机
+  // 图像通道直调,不需要任何 agent 路由;没有媒体清单的空 agents 仍是无效数据。
+  const hasMediaModels =
+    (Array.isArray(p.imageModels) && p.imageModels.length > 0) ||
+    (Array.isArray(p.videoModels) && p.videoModels.length > 0);
+  assert(
+    Array.isArray(p.agents) && (p.agents.length > 0 || hasMediaModels),
+    `provider.agents missing for '${p.id}'`,
+  );
   assert(p.agents.every(isAgentKind), `provider.agents has invalid kind for '${p.id}'`);
   assert(p.routing && typeof p.routing === 'object', `provider.routing missing for '${p.id}'`);
   assert(

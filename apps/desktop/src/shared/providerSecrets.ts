@@ -18,7 +18,7 @@
  */
 
 /** 供应商密钥的稳定标识。新增供应商时在此扩展。 */
-export type ProviderSecretId = 'xd' | 'mivo' | 'brave' | 'tavily' | 'xai' | 'voice-asr';
+export type ProviderSecretId = 'xd' | 'mivo' | 'brave' | 'tavily' | 'xai' | 'voice-asr' | 'gemini';
 
 /**
  * providerId → safeStorage 存储键名(.enc 文件名,不含后缀)。
@@ -37,6 +37,8 @@ const STORAGE_KEYS: Record<ProviderSecretId, string> = {
   // Voice input's user-configured realtime ASR credential is intentionally
   // isolated from chat/model gateway keys.
   'voice-asr': 'voice_input_asr_api_key',
+  // Google Gemini API key(图像通道,2026-07 图像多来源)。按新供应商约定命名。
+  gemini: 'provider_key_gemini',
   // 未来新增示例(届时在 ProviderSecretId 与此处同步添加):
   //   anthropic: 'provider_key_anthropic',
   //   openai:    'provider_key_openai',

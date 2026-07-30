@@ -161,6 +161,7 @@ import { GhostExternalLinkGate, GhostPreviewGate, resolveGhostPanelMedia } from 
 import {
   ghostSecretSaved,
   readGhostSecret,
+  getProviderSecretStore,
   readGhostSecretTail,
   removeGhostSecret,
   removeGhostSecrets,
@@ -190,6 +191,7 @@ import {
 } from './ghostRecentUsageStore.js';
 import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.js';
 import { ImageChannelRegistry } from './imageChannelRegistry.js';
+import { createGeminiImageChannel } from './geminiImageClient.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
@@ -1847,6 +1849,13 @@ function getImageChannelRegistry(): ImageChannelRegistry {
           ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
         }),
     });
+    // Gemini(BYO API key,generateContent wire):ready = key 已配置。停用轴
+    // 派发前重查经 beforeDispatch 注入(与 xd 通道的 cindyProxyMedia beforeDispatch
+    // 同语义 —— xd 的挂在网关客户端装配处,gemini 的挂在这里)。
+    registry.register('gemini', createGeminiImageChannel({
+      getApiKey: () => getProviderSecretStore().get('gemini'),
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
+    }));
     imageChannelRegistrySingleton = registry;
   }
   return imageChannelRegistrySingleton;

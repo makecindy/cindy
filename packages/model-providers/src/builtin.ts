@@ -121,12 +121,35 @@ const XD_PROVIDER: Provider = {
   models: { 'claude-code': [], codex: [] },
 };
 
-/** 内置供应商(顺序契约见文件头)。 */
+/**
+ * Google Gemini(API key,媒体-only,2026-07 图像多来源)。
+ * 没有 Google OAuth(那是后续独立项目),连接方式是用户自己的 Gemini API key
+ * (Google AI Studio);agents 为空 —— 图像模型不经 agent runtime,由主机图像
+ * 通道(geminiImageClient)直调,不参与任何聊天路由。模型 id 带 `gemini/` 前缀
+ * 且**不声明 imageDefaults**:xd 网关的出厂默认地位不动(数据契约测试锁定)。
+ */
+const GEMINI_PROVIDER: Provider = {
+  id: 'gemini',
+  name: 'Google Gemini',
+  source: 'builtin',
+  agents: [],
+  auth: { method: 'apiKey' },
+  access: { kind: 'api' },
+  imageModels: [
+    { id: 'gemini/gemini-3-pro-image', name: 'Gemini 3 Pro Image' },
+    { id: 'gemini/gemini-3.1-flash-image', name: 'Gemini 3.1 Flash Image' },
+  ],
+  routing: {},
+  models: {},
+};
+
+/** 内置供应商(顺序契约见文件头;gemini 追加在 xd 之后,聊天分段与 first-wins 契约零影响)。 */
 export const BUILTIN_PROVIDERS: Provider[] = [
   ANTHROPIC_PROVIDER,
   OPENAI_PROVIDER,
   xaiFromCatalog,
   XD_PROVIDER,
+  GEMINI_PROVIDER,
 ];
 
 /** 打包进 App 的内置目录(离线兜底 / 远端拉取失败时使用)。 */

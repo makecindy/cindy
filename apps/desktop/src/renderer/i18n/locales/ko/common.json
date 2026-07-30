@@ -1504,7 +1504,11 @@
         "finish": "추가 완료",
         "cancel": "취소",
         "useApiKey": "API 키로 연결",
-        "metaOAuthOrApi": "구독 인증 · API 키"
+        "metaOAuthOrApi": "구독 인증 · API 키",
+        "builtinApiKey": {
+          "subtitle": "내 API key로 연결",
+          "note": "이 소스는 이미지 생성 모델을 제공하며 대화에는 참여하지 않습니다. API key는 이 기기에만 저장되며(시스템 키체인 암호화) 업로드되지 않습니다."
+        }
       },
       "xdSignin": {
         "badge": "추천",
@@ -1514,6 +1518,24 @@
       "menu": {
         "disableProvider": "이 제공자 비활성화",
         "enableProvider": "이 제공자 활성화"
+      },
+      "builtinApiKey": {
+        "subtitle": "API key 연결",
+        "replaceKey": "key 변경",
+        "saveKey": "저장",
+        "keyPlaceholder": "API key 붙여넣기",
+        "toast": {
+          "saved": "{{name}}의 API key를 저장했습니다",
+          "saveFailed": "{{name}}의 API key 저장에 실패했습니다. 다시 시도해 주세요",
+          "disconnected": "{{name}} 연결을 해제했습니다",
+          "disconnectFailed": "{{name}} 연결 해제에 실패했습니다"
+        },
+        "disconnectConfirm": {
+          "title": "{{name}} 연결을 해제할까요?",
+          "description": "연결을 해제하면 이 기기에 저장된 API key가 삭제되며 이 소스의 모델을 사용할 수 없게 됩니다. 언제든지 다시 추가할 수 있습니다.",
+          "confirm": "연결 해제",
+          "cancel": "취소"
+        }
       }
     },
     "experimental": {

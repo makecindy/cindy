@@ -40,6 +40,11 @@ import {
 } from '@/lib/customProviders';
 import { providerMonogram } from '@/lib/providerModels';
 import {
+  providerSecretStorageKey,
+  PROVIDER_SECRET_IDS,
+  type ProviderSecretId,
+} from '../../../shared/providerSecrets';
+import {
   customProviderSubtitleForDisplay,
   providerSubtitleForDisplay,
 } from '@/lib/providerSubtitle';
@@ -711,6 +716,138 @@ function GenericOAuthHeader({
       icon={providerIcon(provider, 18)}
       title={provider.name}
       subtitle={t('settings.providers.genericOAuth.subtitle')}
+      trailing={trailing}
+      provider={provider}
+      detail={detail}
+    />
+  );
+}
+
+/**
+ * 内置 API-key 供应商详情头(如 Gemini 图像来源,2026-07 图像多来源)。
+ * 连接态 = key 已存(provider-service builtinApiKeyConnected);「更换」重写 key,
+ * 「断开」删除 key(safeStorage),断开后左栏行按既有契约消失、重连入口回向导。
+ * key 全程掩码,不回显明文。
+ */
+function BuiltinApiKeyHeader({
+  provider,
+  onChanged,
+}: {
+  provider: ProviderView;
+  onChanged: () => void;
+}) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draftKey, setDraftKey] = useState('');
+
+  const storageKey = (PROVIDER_SECRET_IDS as readonly string[]).includes(provider.id)
+    ? providerSecretStorageKey(provider.id as ProviderSecretId)
+    : null;
+
+  const handleSave = useCallback(async () => {
+    if (!storageKey) return;
+    const key = draftKey.trim();
+    if (!key) return;
+    setBusy(true);
+    try {
+      const ok = await window.electronAPI.safeStorageStore(storageKey, key);
+      if (!ok) {
+        toast.error(t('settings.providers.builtinApiKey.toast.saveFailed', { name: provider.name }));
+        return;
+      }
+      toast.success(t('settings.providers.builtinApiKey.toast.saved', { name: provider.name }));
+      setEditing(false);
+      setDraftKey('');
+      onChanged();
+    } catch {
+      toast.error(t('settings.providers.builtinApiKey.toast.saveFailed', { name: provider.name }));
+    } finally {
+      setBusy(false);
+    }
+  }, [draftKey, onChanged, provider.name, storageKey, t]);
+
+  const handleDisconnect = useCallback(async () => {
+    if (!storageKey) return;
+    const confirmed = await confirm({
+      title: t('settings.providers.builtinApiKey.disconnectConfirm.title', { name: provider.name }),
+      description: t('settings.providers.builtinApiKey.disconnectConfirm.description', {
+        name: provider.name,
+      }),
+      confirmText: t('settings.providers.builtinApiKey.disconnectConfirm.confirm'),
+      cancelText: t('settings.providers.builtinApiKey.disconnectConfirm.cancel'),
+    });
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await window.electronAPI.safeStorageRemove(storageKey);
+      toast.success(
+        t('settings.providers.builtinApiKey.toast.disconnected', { name: provider.name }),
+      );
+      onChanged();
+    } catch {
+      toast.error(
+        t('settings.providers.builtinApiKey.toast.disconnectFailed', { name: provider.name }),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [confirm, onChanged, provider.name, storageKey, t]);
+
+  const trailing = (
+    <div className="flex shrink-0 items-center gap-2.5">
+      {provider.connected && <ConnectedPill />}
+      <PillButton
+        label={t(
+          editing
+            ? 'settings.providers.button.cancel'
+            : 'settings.providers.builtinApiKey.replaceKey',
+        )}
+        onClick={() => {
+          setDraftKey('');
+          setEditing((v) => !v);
+        }}
+        disabled={busy}
+      />
+      {provider.connected && (
+        <PillButton
+          label={t('settings.providers.button.disconnect')}
+          onClick={() => void handleDisconnect()}
+          disabled={busy}
+        />
+      )}
+    </div>
+  );
+
+  const detail = editing ? (
+    <div className="flex items-center gap-2 pt-2">
+      <input
+        type="password"
+        value={draftKey}
+        onChange={(e) => setDraftKey(e.target.value)}
+        autoComplete="off"
+        placeholder={t('settings.providers.builtinApiKey.keyPlaceholder')}
+        className="h-8 min-w-0 flex-1 rounded-full border px-3 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+        style={{
+          borderColor: 'var(--border-default)',
+          backgroundColor: 'var(--surface-elevated)',
+          color: 'var(--settings-section-title)',
+        }}
+      />
+      <PillButton
+        label={t('settings.providers.builtinApiKey.saveKey')}
+        onClick={() => void handleSave()}
+        disabled={busy || draftKey.trim().length === 0}
+      />
+    </div>
+  ) : undefined;
+
+  return (
+    <DetailHeader
+      icon={providerIcon(provider, 18)}
+      title={provider.name}
+      subtitle={t('settings.providers.builtinApiKey.subtitle')}
       trailing={trailing}
       provider={provider}
       detail={detail}
@@ -1459,6 +1596,9 @@ export function ProvidersSection() {
     if (p.id === 'anthropic') return <AnthropicHeader provider={p} onChanged={refetch} />;
     if (p.id === 'openai') return <OpenAiHeader provider={p} onChanged={refetch} />;
     if (p.id === 'xai') return <XaiHeader provider={p} onChanged={refetch} />;
+    if (p.source === 'builtin' && p.auth.method === 'apiKey') {
+      return <BuiltinApiKeyHeader provider={p} onChanged={refetch} />;
+    }
     if (p.source === 'builtin') return <GenericOAuthHeader provider={p} onChanged={refetch} />;
     return (
       <CustomProviderHeader

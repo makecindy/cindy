@@ -1504,7 +1504,11 @@
         "finish": "完成添加",
         "cancel": "取消",
         "useApiKey": "改用 API Key 接入",
-        "metaOAuthOrApi": "订阅授权 · API Key"
+        "metaOAuthOrApi": "订阅授权 · API Key",
+        "builtinApiKey": {
+          "subtitle": "用你自己的 API key 连接",
+          "note": "此来源提供图像生成模型，不参与对话。API key 仅保存在本机（系统钥匙串加密），不会上传。"
+        }
       },
       "xdSignin": {
         "badge": "推荐",
@@ -1514,6 +1518,24 @@
       "menu": {
         "disableProvider": "停用此供应商",
         "enableProvider": "启用此供应商"
+      },
+      "builtinApiKey": {
+        "subtitle": "API key 连接",
+        "replaceKey": "更换 key",
+        "saveKey": "保存",
+        "keyPlaceholder": "粘贴 API key",
+        "toast": {
+          "saved": "{{name}} 的 API key 已保存",
+          "saveFailed": "保存 {{name}} 的 API key 失败，请重试",
+          "disconnected": "已断开 {{name}}",
+          "disconnectFailed": "断开 {{name}} 失败"
+        },
+        "disconnectConfirm": {
+          "title": "断开 {{name}}？",
+          "description": "断开会删除本机保存的 API key，该来源的模型将不可用，可随时重新添加。",
+          "confirm": "断开",
+          "cancel": "取消"
+        }
       }
     },
     "experimental": {

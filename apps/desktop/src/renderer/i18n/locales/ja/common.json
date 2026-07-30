@@ -1504,7 +1504,11 @@
         "finish": "追加を完了",
         "cancel": "キャンセル",
         "useApiKey": "API キーで接続する",
-        "metaOAuthOrApi": "サブスク認証 · API キー"
+        "metaOAuthOrApi": "サブスク認証 · API キー",
+        "builtinApiKey": {
+          "subtitle": "自分の API key で接続",
+          "note": "このソースは画像生成モデルを提供し、チャットには参加しません。API key はこの端末のみに保存され(システムキーチェーンで暗号化)、アップロードされません。"
+        }
       },
       "xdSignin": {
         "badge": "おすすめ",
@@ -1514,6 +1518,24 @@
       "menu": {
         "disableProvider": "このプロバイダーを無効にする",
         "enableProvider": "このプロバイダーを有効にする"
+      },
+      "builtinApiKey": {
+        "subtitle": "API key で接続",
+        "replaceKey": "key を変更",
+        "saveKey": "保存",
+        "keyPlaceholder": "API key を貼り付け",
+        "toast": {
+          "saved": "{{name}} の API key を保存しました",
+          "saveFailed": "{{name}} の API key の保存に失敗しました。もう一度お試しください",
+          "disconnected": "{{name}} を切断しました",
+          "disconnectFailed": "{{name}} の切断に失敗しました"
+        },
+        "disconnectConfirm": {
+          "title": "{{name}} を切断しますか?",
+          "description": "切断するとこの端末に保存された API key が削除され、このソースのモデルは利用できなくなります。いつでも再追加できます。",
+          "confirm": "切断",
+          "cancel": "キャンセル"
+        }
       }
     },
     "experimental": {

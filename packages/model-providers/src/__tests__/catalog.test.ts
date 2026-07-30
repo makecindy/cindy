@@ -79,7 +79,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
 
   it('has exactly the built-in providers in stable order', () => {
     // 顺序契约:决定选择器分段顺序与 deriveAvailableModels first-wins 优先级。
-    expect(BUNDLED_CATALOG.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd']);
+    expect(BUNDLED_CATALOG.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd', 'gemini']);
     expect(BUNDLED_CATALOG.providers.every((p) => p.source === 'builtin')).toBe(true);
   });
 
