@@ -362,6 +362,37 @@ describe('同一次中断事件的多次重连折叠成一行', () => {
     expect(cards.map((m) => m.clientId)).toEqual(['r1', 'r2']);
   });
 
+  it('中间只有 thinking 时仍折叠(main 也把它算在同一段里)', async () => {
+    // 折叠边界必须与 main 的产出判据同语义(isSubstantiveProgressEvent:实义文本 / 工具调用,
+    // thinking 不算)。不一致的话:开了 reasoning 的重连只吐 thinking 就再次失败时,main 记
+    // attempt 2/5 属同一段,UI 却把卡片拆成两行(codex P1)。空白文本同理。
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      resumeRow('r1', 1, 'failed'),
+      serverMessage({
+        clientId: 't1',
+        role: 'thinking',
+        content: '在想怎么接着做',
+        createdAt: '2026-06-12T00:00:05.000Z',
+      }),
+      serverMessage({
+        clientId: 'ws1',
+        role: 'assistant',
+        // 纯空白 + 零宽字符:两者都是"用户看不见",都不该成为折叠边界(greptile P2)。
+        content: '   \n \u200B\uFEFF ',
+        createdAt: '2026-06-12T00:00:06.000Z',
+      }),
+      resumeRow('r2', 2, undefined, '2026-06-12T00:00:1'),
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+
+    const cards = makerChatStore
+      .getSnapshot(SID)
+      .messages.filter((m) => m.systemCardType === 'auto-resume');
+    expect(cards.map((m) => m.clientId), '同一次中断只该留最新那一行').toEqual(['r2']);
+  });
+
   it('进行中的 ephemeral 行会盖掉它前面那条已落库的重连行', async () => {
     vi.mocked(messageService.list).mockResolvedValueOnce([resumeRow('r1', 1, 'failed')]);
     makerChatStore.ensureInitialMessages(SID);

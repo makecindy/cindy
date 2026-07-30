@@ -93,6 +93,11 @@ describe('providerSecrets registry', () => {
     expect(isRendererAccessibleSafeStorageKey(customMcpSecretStorageKey('example'))).toBe(true);
   });
 
+  it('keeps the Gemini API key behind its dedicated main-only IPC boundary', () => {
+    expect(isRendererAccessibleSafeStorageKey(providerSecretStorageKey('gemini'))).toBe(false);
+    expect(isRendererAccessibleSafeStorageKey('PROVIDER_KEY_GEMINI')).toBe(false);
+  });
+
   it('动态键名构造前校验片段字符集,路径逃逸类 id 直接抛错', () => {
     expect(providerOAuthStorageKey('acme-1')).toBe('provider_oauth_acme-1');
     expect(customProviderSecretStorageKey('my_or', 'claude-code')).toBe('provider_key_my_or_claude-code');

@@ -31,7 +31,13 @@ export interface CindyMediaCatalogConfig {
    * `providerId` = 该条目的归属来源(first-wins 定格)——图像多来源后派发端按它
    * 从 imageChannelRegistry 取执行通道,不再默认全部发 XD 网关(2026-07)。
    */
-  models: Array<{ id: string; label: string; providerId: string }>;
+  models: Array<{
+    id: string;
+    label: string;
+    providerId: string;
+    /** 该来源是否支持图像编辑。仅对 image 类目有意义;video 类目始终为 true。 */
+    supportsEdit: boolean;
+  }>;
   /**
    * 默认 / 档位选型。null = 目录没有该类目的任何模型(能力暂不可用);
    * 非 null 时 standard / draft / best 三个值必定在 models 里。
@@ -60,8 +66,9 @@ export function deriveCindyMediaConfig(
   kind: 'image' | 'video',
   isModelDisabled?: (providerId: string, modelId: string) => boolean,
   isProviderReady?: (providerId: string) => boolean,
+  isProviderEditReady?: (providerId: string) => boolean,
 ): CindyMediaCatalogConfig {
-  const models: Array<{ id: string; label: string; providerId: string }> = [];
+  const models: Array<{ id: string; label: string; providerId: string; supportsEdit: boolean }> = [];
   const seen = new Set<string>();
   let rawDefaults: { standard: string; draft?: string; best?: string } | undefined;
   for (const p of providers) {
@@ -71,7 +78,12 @@ export function deriveCindyMediaConfig(
       if (seen.has(m.id)) continue;
       if (isModelDisabled?.(p.id, m.id)) continue;
       seen.add(m.id);
-      models.push({ id: m.id, label: m.name, providerId: p.id });
+      models.push({
+        id: m.id,
+        label: m.name,
+        providerId: p.id,
+        supportsEdit: isProviderEditReady ? isProviderEditReady(p.id) : true,
+      });
     }
     // 多供应商时首个声明默认的生效(契约测试锁定只有 xd 声明)。
     const d = kind === 'image' ? p.imageDefaults : p.videoDefaults;

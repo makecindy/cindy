@@ -24,6 +24,8 @@
  * 社区同型：anthropics/claude-code#38905（SSE 静默中断）。
  */
 
+import { hasUserVisibleText } from '../../shared/visibleText.js';
+
 import {
   isNetworkishErrorMessage,
   isOverloadErrorMessage,
@@ -133,10 +135,20 @@ export function isAutoResumeUserMessage(agentMeta: unknown): boolean {
  * 这个 agent 事件算不算「模型有实质产出」——即连续失败计数该不该归零、上一次重连该不该
  * 判成成功的唯一证据。
  *
- * 只认两种：非空 assistant 文本、工具调用。**空文本必须排除**：translator 在若干路径上
- * 会推 `text: ''`（流式兜底、空 assistant 消息），把它算成产出的话，一个什么都没产出的
- * 重连会既绕过连续失败上限、又在历史里错误显示「已重新连接」（greptile / codex 双报 P1）。
+ * 只认两种：**用户看得见的** assistant 文本、工具调用。看不见的一律排除：translator 在若干
+ * 路径上会推 `text: ''`（流式兜底、空 assistant 消息），而两侧 translator 转发的 text block /
+ * delta 内容是任意的，纯空白（`'\n'`、`' '`）与零宽字符（U+200B/200C/200D、U+FEFF …）同样会
+ * 原样透出（`claude-code/translator.ts` 与 `codex/translator.ts` 的 text 分支）。把它们算成产出
+ * 的话，一个用户什么都没看到的重连会既绕过连续失败上限（这类 delta 可以让计数永远停在 1/5），
+ * 又在历史里错误显示「已重新连接」（greptile / codex 连报四轮 P1/P2）。
  * thinking / status / 我们自己补发的续跑指令同理都不算。
+ *
+ * 「看得见」的判定收敛在 `shared/visibleText.ts` 一处，renderer 的折叠边界
+ * （`makerChatStore.isSubstantiveChatRow`）用的是**同一个函数** —— 两边各写一份就会分叉，
+ * 而分叉的表现是静默的（main 认为还在同一段、UI 却把卡片拆成多行）。
+ *
+ * 真实产出里夹着的空白 delta 不受影响：紧随其后的那个 delta 带可见字符，那时才记产出，
+ * 而"下一次失败之前有没有产出"这个判据不在乎它发生在哪一拍。
  *
  * 抽成纯函数是为了能被单测锁住 —— 它原本长在 register 的巨型 wiring 里，测不到。
  */
@@ -146,8 +158,7 @@ export function isSubstantiveProgressEvent(event: {
 }): boolean {
   if (event.type === 'tool_use') return true;
   if (event.type !== 'text') return false;
-  const text = (event.data as { text?: unknown } | null | undefined)?.text;
-  return typeof text === 'string' && text.length > 0;
+  return hasUserVisibleText((event.data as { text?: unknown } | null | undefined)?.text);
 }
 
 /**

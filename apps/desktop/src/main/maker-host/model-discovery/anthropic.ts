@@ -129,9 +129,15 @@ function generationCanApply(generation: number, models: CatalogModel[]): boolean
   return generation === authGeneration && (models.length === 0 || hasClaudeAiOAuth());
 }
 
-/** 剥掉 dated wire id 的日期后缀(claude-opus-4-8-20260401 → claude-opus-4-8)。 */
+/**
+ * wire id → 目录 id 归一化:先剥 `[1m]` 等方括号路由后缀,再剥 dated 日期后缀
+ * (claude-opus-4-8-20260401 → claude-opus-4-8)。SDK 注册表把长上下文变体报成
+ * claude-fable-5[1m],而目录与会话选中的 id 无此后缀——不剥会让该模型在
+ * sourcesForModel 的精确匹配整体 miss,顶栏误报「已断开」并禁发。口径与
+ * claude-gateway-config / usageFormat 的既有归一化一致。
+ */
 function normalizeModelId(raw: string): string {
-  return raw.replace(/-20\d{6}$/, '');
+  return raw.replace(/\[[^\]]*\]$/, '').replace(/-20\d{6}$/, '');
 }
 
 /** contextWindow 规则:HTTP 明示 > 目录已知值 > 未知模型启发式(默认 1M,Haiku 200k)。 */
@@ -547,7 +553,11 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
     const windows = (raw as { explicitWindows?: unknown }).explicitWindows;
     if (windows && typeof windows === 'object' && !Array.isArray(windows)) {
       for (const [id, win] of Object.entries(windows as Record<string, unknown>)) {
-        if (typeof win === 'number' && win > 0) explicitWindows.set(id, win);
+        // key 同样归一化:历史缓存可能以带 [1m] 后缀的脏 id 记账。归一化后撞 key 时
+        // first-wins,与下方 models 去重同口径,避免拼出「窗口来自 A、能力来自 B」的杂交态。
+        if (typeof win !== 'number' || win <= 0) continue;
+        const normalizedId = normalizeModelId(id);
+        if (!explicitWindows.has(normalizedId)) explicitWindows.set(normalizedId, win);
       }
     }
     // 恢复待确认骤减记账(跨重启累计,见 persistPendingShrink;坏字段静默忽略)。
@@ -561,7 +571,11 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
         Number.isInteger(p.streak) &&
         p.streak > 0
       ) {
-        httpShrinkSignature = p.signature;
+        // 签名按当前归一化口径重算(排序 id 集):历史签名可能含脏 id,口径漂移会让
+        // 跨重启的骤减确认计数被无声重置。
+        httpShrinkSignature = [...new Set(p.signature.split('\n').map(normalizeModelId))]
+          .sort()
+          .join('\n');
         httpShrinkStreak = Math.min(p.streak, CONFIRMED_SHRINK_STREAK);
       }
     }
@@ -576,12 +590,28 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
         Array.isArray((m as CatalogModel).efforts),
     );
     if (valid.length === 0) return;
-    const validIds = new Set(valid.map((model) => model.id));
+    // 归一化自愈:修复前的 SDK 捕获会把 claude-fable-5[1m] 这类脏 id 落盘。按当前口径
+    // 清洗 + first-wins 去重,启动加载即恢复来源匹配,不等下一次动态捕获才纠正。
+    const validIds = new Set<string>();
+    const deduped: CatalogModel[] = [];
+    for (const model of valid) {
+      const id = normalizeModelId(model.id);
+      if (validIds.has(id)) {
+        // 折叠丢弃留痕:两条脏/裸变体的能力字段可能不同,first-wins 的输者信息
+        // 会等下一次动态捕获刷新,这里记日志方便定位。
+        log.info(`anthropic disk cache entry folded by id normalization: ${model.id}`);
+        continue;
+      }
+      validIds.add(id);
+      deduped.push(id === model.id ? model : { ...model, id });
+    }
     const restoreIds = (value: unknown): Set<string> => {
       const restored = new Set<string>();
       if (Array.isArray(value)) {
         for (const id of value) {
-          if (typeof id === 'string' && validIds.has(id)) restored.add(id);
+          if (typeof id !== 'string') continue;
+          const normalizedId = normalizeModelId(id);
+          if (validIds.has(normalizedId)) restored.add(normalizedId);
         }
       }
       return restored;
@@ -598,7 +628,7 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
     // mapper fallbacks from API/SDK-declared capabilities. Refresh every
     // non-explicit effort baseline and context window from the current
     // catalog so app upgrades cannot preserve stale model metadata.
-    const normalized = valid.map((model) => {
+    const normalized = deduped.map((model) => {
       const effortBaseline = restoredExplicitEffortIds.has(model.id)
         ? null
         : fallbackEffortBaseline(model.id);

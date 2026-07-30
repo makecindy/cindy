@@ -113,7 +113,7 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
   const doFetch = opts.fetchImplementation ?? fetch;
 
   function requireApiKey(): string {
-    const key = opts.getApiKey();
+    const key = opts.getApiKey()?.trim() ?? '';
     if (!key) {
       throw new Error('Gemini API key 未配置,请到「设置 → 模型供应商 → Google Gemini」填入后重试');
     }
@@ -137,9 +137,10 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
     }
     const body: Record<string, unknown> = {
       contents: [{ parts }],
-      ...(params.aspectRatio
-        ? { generationConfig: { imageConfig: { aspectRatio: params.aspectRatio } } }
-        : {}),
+      generationConfig: {
+        responseModalities: ['TEXT', 'IMAGE'],
+        ...(params.aspectRatio ? { imageConfig: { aspectRatio: params.aspectRatio } } : {}),
+      },
     };
     // 停用轴派发前重查:参考图 fs.readFile 是 await,窗口内被停用即拒(同 gatewayImageClient)。
     opts.beforeDispatch?.(params.model);
@@ -157,7 +158,7 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
   }
 
   return {
-    ready: () => opts.getApiKey() !== null,
+    ready: () => (opts.getApiKey()?.trim() ?? '') !== '',
     generateImage: ({ model, prompt, aspectRatio }) =>
       callGenerateContent({ model, prompt, aspectRatio }),
     editImage: ({ model, prompt, imagePaths, aspectRatio }) =>

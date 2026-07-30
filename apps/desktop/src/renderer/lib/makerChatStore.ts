@@ -38,6 +38,7 @@ import type {
   AgentInputSessionRef,
   AgentInputReference,
 } from '../../shared/agentInputQueue';
+import { hasUserVisibleText } from '../../shared/visibleText';
 import {
   deriveAutoTitleSeed,
   getAgentFacingText,
@@ -9071,13 +9072,29 @@ type RemoteRowsOrder = 'newest-first' | 'oldest-first';
 /** 自愈活动行的两种卡型（ephemeral 进行中 + 落库记录）。 */
 const AUTO_RESUME_CARD_TYPES = new Set(['auto-resume', 'auto-resume-pending']);
 
-/** 这一行对用户是不是"实质内容"（用来切分自愈事件的边界）。 */
+/**
+ * 这一行对用户是不是"实质内容"（用来切分自愈事件的边界）。
+ *
+ * **必须与 main 的产出判据同语义**（`interruptedTurnAutoResume.isSubstantiveProgressEvent`：
+ * 用户看得见的文本、或工具调用）。不一致的后果是两边对"还在不在同一次中断里"的判断分叉：
+ * 开了 reasoning 的重连只吐 thinking 就再次失败时，main 仍把它算在同一段（attempt 2/5），
+ * 而这里若把 thinking 行当成边界，卡片就不再折叠——一次中断在流里堆出多行，正是「连续重连
+ * 原地更新同一行」要避免的（codex P1）。
+ *
+ * 「看得见」不自己判：与 main 共用 `shared/visibleText.ts` 的 `hasUserVisibleText`（纯空白与
+ * 零宽字符都算看不见）。各写一份必然漂移 —— `trim()` 挡不住 U+200B 这类零宽字符就是实例
+ * （greptile P2）。
+ */
 function isSubstantiveChatRow(message: ChatMessage): boolean {
   // 其它系统卡（compact / goal 分隔条等）算边界:它们之后的重连属于新一段。
   if (message.systemCardType && !AUTO_RESUME_CARD_TYPES.has(message.systemCardType)) return true;
   // 隐藏的合成指令行（含我们自己补发的续跑指令）不算内容。
   if (message.isSyntheticTrigger === true) return false;
-  return typeof message.content === 'string' ? message.content.length > 0 : message.content != null;
+  // thinking 不算产出（与 main 一致）：用户没看到任何回答，那次重连也就没成功。
+  if (message.role === 'thinking') return false;
+  return typeof message.content === 'string'
+    ? hasUserVisibleText(message.content)
+    : message.content != null;
 }
 
 /**

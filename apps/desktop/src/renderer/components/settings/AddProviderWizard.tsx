@@ -23,11 +23,7 @@ import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { createCustomProvider, type RuntimeKeys } from '@/lib/customProviders';
-import {
-  providerSecretStorageKey,
-  PROVIDER_SECRET_IDS,
-  type ProviderSecretId,
-} from '../../../shared/providerSecrets';
+import { PROVIDER_SECRET_IDS } from '../../../shared/providerSecrets';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import { providerMonogram } from '@/lib/providerModels';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
@@ -288,9 +284,12 @@ export function AddProviderWizard({
   // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
   const entryProvider =
     entry?.kind === 'builtin' ? providers.find((x) => x.id === entry.providerId) : undefined;
-  const [sel, setSel] = useState<Selection | null>(() =>
-    entryProvider ? { kind: 'oauth', provider: entryProvider } : null,
-  );
+  const [sel, setSel] = useState<Selection | null>(() => {
+    if (!entryProvider) return null;
+    return entryProvider.auth?.method === 'apiKey'
+      ? { kind: 'builtinApiKey', provider: entryProvider }
+      : { kind: 'oauth', provider: entryProvider };
+  });
   // 预设表单态
   const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -362,7 +361,7 @@ export function AddProviderWizard({
           p.source === 'builtin' &&
           p.auth.method === 'apiKey' &&
           !p.connected &&
-          (p.imageModels?.length ?? 0) > 0,
+          ((p.imageModels?.length ?? 0) > 0 || (p.videoModels?.length ?? 0) > 0),
       ),
     [providers],
   );
@@ -691,10 +690,7 @@ export function AddProviderWizard({
     if (!key) return;
     setSaving(true);
     try {
-      const ok = await window.electronAPI.safeStorageStore(
-        providerSecretStorageKey(id as ProviderSecretId),
-        key,
-      );
+      const ok = await window.electronAPI.builtinApiKeyStore(id, key);
       if (!ok) {
         toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));
         return;
