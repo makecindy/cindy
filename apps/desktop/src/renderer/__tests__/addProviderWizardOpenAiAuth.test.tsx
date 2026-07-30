@@ -352,3 +352,38 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     });
   });
 });
+
+describe('AddProviderWizard — 关闭途径(DESIGN.md §4:取消 / Esc / 遮罩)', () => {
+  it('按 Esc 关闭向导', () => {
+    const onClose = vi.fn();
+    render(
+      <AddProviderWizard
+        providers={[OPENAI_PROVIDER]}
+        onOpenCustomForm={vi.fn()}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('点击遮罩关闭向导;点击弹窗内部不关闭', () => {
+    const onClose = vi.fn();
+    const { container } = render(
+      <AddProviderWizard
+        providers={[OPENAI_PROVIDER]}
+        onOpenCustomForm={vi.fn()}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    // 点弹窗内部(标题):target ≠ 遮罩本身,不得关闭。
+    fireEvent.click(screen.getByText('settings.providers.wizard.title'));
+    expect(onClose).not.toHaveBeenCalled();
+    // 点遮罩本身:关闭。
+    const overlay = container.firstElementChild as HTMLElement;
+    fireEvent.click(overlay);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});

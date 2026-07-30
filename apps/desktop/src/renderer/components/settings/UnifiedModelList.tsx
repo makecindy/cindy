@@ -497,8 +497,10 @@ export function UnifiedModelList({
         </span>
         <span className="min-w-0 flex-1" />
         {showSearch && (
+          /* basis 200px 但允许收缩:窄窗口(右栏可被压到 ~270px)时先压缩搜索框,
+             不让右侧操作被 overflow-hidden 裁掉(PR #1102 review)。 */
           <div
-            className="flex h-8 w-[200px] shrink-0 items-center gap-2 rounded-full px-3"
+            className="flex h-8 min-w-0 basis-[200px] items-center gap-2 rounded-full px-3"
             style={{ backgroundColor: 'var(--surface-elevated)', border: '1px solid var(--border-default)' }}
           >
             <Search size={14} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
@@ -758,7 +760,7 @@ export function UnifiedModelList({
             const collapsed = !query.trim() && isCollapsed(DISABLED_GROUP_KEY);
             return (
               <div className="flex flex-col">
-                <div className="flex items-center gap-2 px-2 pb-0.5">
+                <div className="flex items-center gap-2 pb-0.5">
                   <button
                     type="button"
                     onClick={() => toggleCollapsed(DISABLED_GROUP_KEY)}

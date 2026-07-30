@@ -202,7 +202,8 @@ function ProviderRow({
       >
         {name}
       </span>
-      <span className="shrink-0 text-11" style={{ color: 'var(--text-tertiary)' }}>
+      {/* meta 可收缩截断:en 等长文案在窄弹窗下不得把名称挤出(PR #1102 review)。 */}
+      <span className="min-w-0 truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
         {meta}
       </span>
     </button>
