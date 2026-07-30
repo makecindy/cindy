@@ -112,7 +112,7 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
     if (spec.apiKey) {
       headers['x-api-key'] = spec.apiKey;
-      if (spec.agent === 'claude-code') headers['authorization'] = `Bearer ${spec.apiKey}`;
+      headers['authorization'] = `Bearer ${spec.apiKey}`;
     }
     return {
       url: joinAnthropicMessagesUrl(spec.baseUrl, spec.requestPath ?? '/v1/messages'),

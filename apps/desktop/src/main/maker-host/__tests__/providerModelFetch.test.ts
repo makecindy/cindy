@@ -70,7 +70,7 @@ describe('buildModelsFetchRequest', () => {
     expect(codex['authorization']).toBe('Bearer sk-test');
   });
 
-  it('Codex Anthropic Messages bridge sends x-api-key without OpenAI Bearer', () => {
+  it('Codex Anthropic Messages bridge sends provider-owned x-api-key and Bearer', () => {
     const headers = buildModelsFetchRequest(
       spec({
         agent: 'codex',
@@ -82,7 +82,7 @@ describe('buildModelsFetchRequest', () => {
     expect(headers['anthropic-version']).toBe('custom-version');
     expect(headers['Anthropic-Version']).toBeUndefined();
     expect(headers['x-api-key']).toBe('sk-test');
-    expect(headers.authorization).toBeUndefined();
+    expect(headers.authorization).toBe('Bearer sk-test');
   });
 
   it('omits auth headers without apiKey and keeps custom headers', () => {
@@ -235,7 +235,7 @@ describe('fetchProviderModels', () => {
     );
     expect(result.ok).toBe(true);
     expect(seenHeaders['x-api-key']).toBe('sk-test');
-    expect(seenHeaders.authorization).toBeUndefined();
+    expect(seenHeaders.authorization).toBe('Bearer sk-test');
     expect(seenHeaders['anthropic-version']).toBe('2023-06-01');
   });
 });

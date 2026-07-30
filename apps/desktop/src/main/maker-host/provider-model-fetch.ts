@@ -101,9 +101,9 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: s
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
     if (spec.apiKey) {
       headers['x-api-key'] = spec.apiKey;
-      // Claude Code 的历史兼容端点同时接受 Bearer；Codex bridge 必须只带
-      // x-api-key，避免把 OpenAI 认证语义混入 Anthropic API 请求。
-      if (spec.agent === 'claude-code') headers['authorization'] = `Bearer ${spec.apiKey}`;
+      // `buildLocalHandlerHeaders` 已把 agent 自带凭证替换为 Provider-owned key。
+      // 同时发送标准 Anthropic x-api-key 与兼容网关常用的 Bearer，和真实会话保持一致。
+      headers['authorization'] = `Bearer ${spec.apiKey}`;
     }
   } else if (spec.apiKey) {
     headers['authorization'] = `Bearer ${spec.apiKey}`;

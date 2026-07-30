@@ -733,7 +733,6 @@ function createAnthropicBridgeDecision(
     if (isOAuth) {
       if (token) headers = claudeOAuthHeaders(headers, token);
     } else if (route.routing.authStrategy === 'api-key-header') {
-      delete headers.authorization;
       if (route.apiKey) {
         headers['x-api-key'] = route.apiKey;
       } else if (!headerValue(headers, 'x-api-key')) {

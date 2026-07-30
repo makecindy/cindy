@@ -100,7 +100,7 @@ describe('buildProbeRequest', () => {
     expect(headers['content-type']).toBe('application/json');
     expect(headers['Content-Type']).toBeUndefined();
     expect(headers['x-api-key']).toBe('sk-test');
-    expect(headers.authorization).toBeUndefined();
+    expect(headers.authorization).toBe('Bearer sk-test');
     expect(JSON.parse(String(init.body))).toMatchObject({
       model: 'claude-opus-5',
       max_tokens: 1,

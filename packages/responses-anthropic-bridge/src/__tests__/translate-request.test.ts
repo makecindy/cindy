@@ -322,6 +322,26 @@ describe('Responses → Anthropic request translation', () => {
     expect(result.request.tool_choice).toEqual({ type: 'any' });
   });
 
+  it('keeps allowed_tools filtering specific to same-named tool kinds', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      tool_choice: {
+        type: 'allowed_tools',
+        mode: 'required',
+        tools: [{ type: 'custom', name: 'shared' }],
+      },
+      input: [{ role: 'user', content: 'use the custom tool' }],
+      tools: [
+        { type: 'function', name: 'shared', parameters: {} },
+        { type: 'custom', name: 'shared' },
+      ],
+    });
+    const tools = result.request.tools as Array<{ name: string }>;
+    expect(tools).toHaveLength(1);
+    expect(result.toolContext.byWireName.get(tools[0].name)?.kind).toBe('custom');
+    expect(result.request.tool_choice).toEqual({ type: 'any' });
+  });
+
   it('filters OAuth allowed_tools after applying the custom_ wire prefix', () => {
     const result = translateResponsesRequest({
       model: 'claude-sonnet-5',

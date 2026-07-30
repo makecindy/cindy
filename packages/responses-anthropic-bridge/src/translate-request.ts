@@ -876,7 +876,6 @@ function filterToolsForChoice(
       const name = raw.trim();
       const mapping = responseNameForMapping(context, name, undefined, 'function', oauth);
       allowed.add(mapping.wireName);
-      allowed.add(name);
       continue;
     }
     if (!isObject(raw)) continue;
@@ -891,16 +890,12 @@ function filterToolsForChoice(
           : 'function';
       const mapping = responseNameForMapping(context, name, namespace, kind, oauth);
       allowed.add(mapping.wireName);
-      allowed.add(name);
     }
-    if (namespace && name) allowed.add(`${namespace}__${name}`);
   }
   if (allowed.size === 0) return [];
-  return tools.filter((tool) => {
-    if (!isObject(tool) || typeof tool.name !== 'string') return false;
-    const name = tool.name;
-    return allowed.has(name) || [...allowed].some((entry) => entry.endsWith(`__${name}`));
-  });
+  return tools.filter((tool) => (
+    isObject(tool) && typeof tool.name === 'string' && allowed.has(tool.name)
+  ));
 }
 
 function forcedToolChoice(value: unknown): boolean {

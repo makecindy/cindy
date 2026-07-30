@@ -637,7 +637,10 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     const config = anthropicHandlerCalls.at(-1)?.[0];
     expect(config).toBeDefined();
     if (!config) throw new Error('Anthropic bridge config was not captured');
-    expect(await config.buildHeaders()).toEqual({ 'x-api-key': 'anthropic-key' });
+    expect(await config.buildHeaders()).toEqual({
+      'x-api-key': 'anthropic-key',
+      authorization: 'Bearer anthropic-key',
+    });
     expect(config.automaticPromptCaching).toBe(true);
     expect(config.strictTools).toBe(true);
 
