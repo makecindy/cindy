@@ -630,6 +630,20 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         const others = normalizeDeviceSessions(devices).filter((device) => device.deviceId !== id);
         return writeSessionListLocked(others, guard);
       });
+      // 根目录下的 `session-list.json.<hex>.tmp`:进程死在 writeFile 与 rename 之间时,
+      // 那里是**全部设备**的会话元数据。逐设备清理原先只扫 messages/ 下的 tmp,于是这份
+      // 崩溃残留要等到整账号清理才消失(review: codex P1)。它是过期快照、对谁都没用,
+      // 直接删掉;枚举失败则把根目录计入待重试(fail-closed)。
+      const rootTmp = await listRootTmpFiles(resolveRoot());
+      if (rootTmp.unreadable) stuck.push(resolveRoot());
+      for (const file of rootTmp.files) {
+        try {
+          await fsp.rm(file, { force: true });
+        } catch {
+          stuck.push(file);
+        }
+      }
+
       // 列表快照重写失败(Windows 上被占用 / owner 目录只读)同样要能被重试 —— 否则消息文件
       // 删掉了、会话元数据还在盘上,下次冷启动照样把这台被撤销的设备画回侧边栏(review: codex P1)。
       if (outcome.outcome === 'failed') stuck.push(listFile);
@@ -711,6 +725,25 @@ async function evictMessagesIfNeeded(
     await fsp.rm(file, { force: true }).catch(() => undefined);
     count -= 1;
     totalBytes -= entry.size;
+  }
+}
+
+/**
+ * 缓存根目录下的 `.tmp` 残留(只有 session-list 的原子写会产生)。**fail-closed**:
+ * 枚举失败要让调用方知道(和 listMessageFileNames 同口径),不能当成"里面没有"。
+ */
+async function listRootTmpFiles(root: string): Promise<{ files: string[]; unreadable: boolean }> {
+  try {
+    const entries = await fsp.readdir(root, { withFileTypes: true });
+    return {
+      files: entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith('.tmp'))
+        .map((entry) => path.join(root, entry.name)),
+      unreadable: false,
+    };
+  } catch (err) {
+    if (errnoCode(err) === 'ENOENT') return { files: [], unreadable: false };
+    return { files: [], unreadable: true };
   }
 }
 
@@ -842,5 +875,6 @@ export const __testing = {
   shortHash,
   purgeContents,
   sweepStaleTmpFiles,
+  listRootTmpFiles,
   staleTmpMs: STALE_TMP_MS,
 };

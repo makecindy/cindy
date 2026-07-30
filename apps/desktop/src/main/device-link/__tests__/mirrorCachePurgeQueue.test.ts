@@ -281,19 +281,63 @@ describe('跨进程锁', () => {
     expect(fs.existsSync(lockFile())).toBe(false);
   });
 
-  it('锁被别人持有时不丢记录(等不到就降级,仍然落盘)', async () => {
-    const root = await makeOwnerCache('owner-1');
-    // 新鲜锁:本进程抢不到 → 等待到超时后降级执行。用短一点的观察方式:
-    // 只断言"最终记录仍在盘上",不断言时序。
-    await fsp.writeFile(lockFile(), '99999', 'utf8');
+  // review(codex P1):降级成"无锁整份读改写"等于把上一轮修掉的丢更新又放回来。
+  // 现在降级走**追加**:一条记录一个文件,只碰自己那一个,别的实例整份写正本也抹不掉它。
+  it('锁被别人持有时改成追加落盘:不丢记录,且不覆盖正本里别人的条目', async () => {
+    const mine = await makeOwnerCache('owner-1');
+    const theirs = path.join(userData, 'owners', 'owner-2', 'device-link-mirror-cache');
+    await fsp.mkdir(theirs, { recursive: true });
+    // 正本里已经有"另一个实例"记下的条目。
+    await fsp.writeFile(
+      queueFile(),
+      JSON.stringify({ version: 1, entries: [{ root: theirs, since: 1, attempts: 1 }] }),
+      'utf8',
+    );
+    await fsp.writeFile(lockFile(), '99999', 'utf8'); // 新鲜锁:本进程抢不到
+
     try {
-      await enqueuePurge(root);
+      await enqueuePurge(mine);
+
+      // 正本没被整份覆盖(别人的条目还在),自己的条目落在追加目录里。
+      const persisted = JSON.parse(await fsp.readFile(queueFile(), 'utf8')) as {
+        entries: Array<{ root: string }>;
+      };
+      expect(persisted.entries.map((e) => e.root)).toEqual([theirs]);
+      const pendingDir = path.join(userData, __testing.pendingDirName);
+      expect(fs.readdirSync(pendingDir).filter((n) => n.endsWith('.json')).length).toBe(1);
+
+      // 「下次启动」只读盘:两条都在。
       __testing.resetMemoryQueue();
-      expect((await __testing.readQueue()).map((e) => e.root)).toEqual([root]);
+      expect((await __testing.readQueue()).map((e) => e.root).sort()).toEqual(
+        [mine, theirs].sort(),
+      );
     } finally {
       await fsp.rm(lockFile(), { force: true });
     }
   }, 20_000);
+
+  it('拿到锁的 drain 把追加条目折进正本并删掉追加文件', async () => {
+    const root = await makeOwnerCache('owner-1');
+    await fsp.writeFile(lockFile(), '99999', 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await fsp.utimes(lockFile(), old, old); // 陈旧锁:下一次会接管
+    await fsp.rm(lockFile(), { force: true });
+    // 直接造一个追加条目(等价于上一次降级写下的)
+    const pendingDir = path.join(userData, __testing.pendingDirName);
+    await fsp.mkdir(pendingDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(pendingDir, 'abc.json'),
+      JSON.stringify({ version: 1, entries: [{ root, since: 1, attempts: 1 }] }),
+      'utf8',
+    );
+    __testing.resetMemoryQueue();
+
+    const result = await drainPurgeQueue();
+
+    expect(result.purged).toBe(1);
+    expect(fs.existsSync(root)).toBe(false);
+    expect(fs.readdirSync(pendingDir).filter((n) => n.endsWith('.json'))).toEqual([]);
+  });
 });
 
 describe('队列文件原子落位', () => {

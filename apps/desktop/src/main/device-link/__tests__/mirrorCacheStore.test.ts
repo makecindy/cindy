@@ -463,6 +463,21 @@ describe('.tmp 残留(落位失败 / 进程被杀在 writeFile 与 rename 之间
     expect(fs.existsSync(otherTmp)).toBe(true);
   });
 
+  // review(codex P1):根目录下的 `session-list.json.<hex>.tmp` 里是**全部设备**的会话元数据。
+  // 逐设备清理原先只扫 messages/ 下的 tmp,这份崩溃残留要等整账号清理才消失。
+  it('clearDevice 也扫掉根目录下的 session-list.json.<hex>.tmp', async () => {
+    const c = cache();
+    await c.writeSessionList([
+      { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+    ]);
+    const rootTmp = path.join(root, `${__testing.sessionListFileName}.deadbeef.tmp`);
+    await fsp.writeFile(rootTmp, '{"devices":[{"deviceId":"dev-1"}]}', 'utf8');
+
+    await c.clearDevice('dev-1');
+
+    expect(fs.existsSync(rootTmp)).toBe(false);
+  });
+
   it('陈旧 .tmp 会被清扫,正在写的那笔(新鲜 .tmp)留着', async () => {
     const dir = messagesDir();
     await fsp.mkdir(dir, { recursive: true });

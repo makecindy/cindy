@@ -236,6 +236,36 @@ describe('冷缓存 hydrate', () => {
     expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
   });
 
+  // review(codex P1):读缓存这一跳期间设备可能已被移除 / 会话换到了另一台设备。
+  // 只看 chat state 挡不住,于是 A 的历史会被种进一个已经不属于 A 的会话。
+  it('读缓存期间设备已离场 → 不种入(不把另一台机器的历史画上去)', async () => {
+    const s = sid();
+    cachedMessages.set(`${DEVICE_ID}::${s}`, [
+      dbMessage(s, 'a', 'cached A', '2026-01-01T00:00:00.000Z') as unknown as Record<
+        string,
+        unknown
+      >,
+    ]);
+    registerRemote(s);
+    remoteListPromise = new Promise<Message[]>(() => {}); // 首拉挂起(被控端离线)
+    // 缓存读挂起,等我们把设备摘掉之后才 resolve。
+    let resolveRead: (value: { messages: Record<string, unknown>[] }) => void = () => {};
+    getMessages.mockImplementationOnce(
+      () =>
+        new Promise<{ messages: Record<string, unknown>[] }>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    remoteProjectsStore.removeDevice(DEVICE_ID);
+    resolveRead({ messages: cachedMessages.get(`${DEVICE_ID}::${s}`) ?? [] });
+    await flush(20);
+
+    expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
+  });
+
   it('本机会话不读缓存(本机历史就在本机 DB)', async () => {
     const s = sid();
     makerChatStore.ensureInitialMessages(s);

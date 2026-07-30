@@ -5186,6 +5186,11 @@ function hydrateRemoteMessagesFromCache(sessionId: string): void {
       cacheHydrated: true as const,
     }));
     if (mapped.length === 0) return;
+    // 读缓存这一跳期间归属可能已经变了:设备被移除(mapping 消失)或会话换到了另一台设备。
+    // 只看 chat state 挡不住这种情况 —— 于是 A 设备的历史会被种进一个已经不属于 A 的会话,
+    // 而新的权威首拉若离线失败,屏上留着的就是**另一台机器**的消息(review: codex P1)。
+    // 与写缓存那侧同一条纪律:落地前重核归属。
+    if (remoteProjectsStore.getSessionDeviceId(sessionId) !== deviceId) return;
     setState(sessionId, (s) => {
       // fresh 已经落地 / 期间已有实时消息进来 → 缓存没有价值了,原样返回不动切片。
       if (s.historyLoaded || s.messages.length > 0) return s;

@@ -26,7 +26,7 @@
 import { app } from 'electron';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 import { createLogger } from '../logger';
 
@@ -71,12 +71,19 @@ const memoryQueue = new Map<string, PurgeEntry>();
  */
 let queueLock: Promise<unknown> = Promise.resolve();
 
-function withQueueLock<T>(task: () => Promise<T>): Promise<T> {
+function withQueueLock<T>(task: (held: boolean) => Promise<T>): Promise<T> {
   const guarded = (): Promise<T> => withFileLock(task);
   const next = queueLock.then(guarded, guarded);
   queueLock = next.catch(() => undefined);
   return next;
 }
+
+/**
+ * 抢不到锁时的「追加式」落盘目录:一条记录一个文件,写入只 create/replace 自己那一个 ——
+ * 不做整份读改写,因此**不可能**被另一个进程的整份写入抹掉(review: codex P1)。
+ * 下一次拿到锁的 drain 会把它们折进正本并删掉。
+ */
+const QUEUE_PENDING_DIR = `${QUEUE_FILE}.pending`;
 
 /** 跨进程锁文件名(与队列文件同目录)。 */
 const QUEUE_LOCK_FILE = `${QUEUE_FILE}.lock`;
@@ -96,7 +103,7 @@ const LOCK_RETRY_MS = 40;
  * 抢不到就退化(只等 LOCK_WAIT_MS),因为「宁可偶尔覆盖,也不能因为拿不到锁就不记」——
  * 提交时的合并(drain / enqueue 都在临界区里重读一次最新盘上内容)仍在兜着。
  */
-async function withFileLock<T>(task: () => Promise<T>): Promise<T> {
+async function withFileLock<T>(task: (held: boolean) => Promise<T>): Promise<T> {
   const lock = path.join(app.getPath('userData'), QUEUE_LOCK_FILE);
   const deadline = Date.now() + LOCK_WAIT_MS;
   let held = false;
@@ -123,7 +130,7 @@ async function withFileLock<T>(task: () => Promise<T>): Promise<T> {
     }
   }
   try {
-    return await task();
+    return await task(held);
   } finally {
     if (held) await fsp.rm(lock, { force: true }).catch(() => undefined);
   }
@@ -166,8 +173,60 @@ async function readPersistedQueue(): Promise<PurgeEntry[]> {
   // 正本读不出来(缺失 / 半个文件)时回退 .bak:Windows 落位需要「先挪走正本」的那条退路
   // 会短暂只留备份,崩在那一瞬不该等于「没有待清记录」(见 commitQueueFile)。
   const fromMain = await readQueueFile(queueFilePath());
-  if (fromMain !== null) return fromMain;
-  return (await readQueueFile(`${queueFilePath()}.bak`)) ?? [];
+  const main = fromMain ?? (await readQueueFile(`${queueFilePath()}.bak`)) ?? [];
+  // 追加目录里的条目同样有效(抢不到锁时写在那里,见 QUEUE_PENDING_DIR)。
+  const pending = await readPendingEntries();
+  if (pending.length === 0) return main;
+  const merged = new Map<string, PurgeEntry>();
+  for (const entry of [...main, ...pending.map((p) => p.entry)]) merged.set(entryKey(entry), entry);
+  return compactEntries([...merged.values()]);
+}
+
+function pendingDirPath(): string {
+  return path.join(app.getPath('userData'), QUEUE_PENDING_DIR);
+}
+
+/** 追加目录里的条目(带文件名,便于折进正本后精确删除)。 */
+async function readPendingEntries(): Promise<Array<{ file: string; entry: PurgeEntry }>> {
+  let names: string[];
+  try {
+    names = (await fsp.readdir(pendingDirPath(), { withFileTypes: true }))
+      .filter((e) => e.isFile() && e.name.endsWith('.json'))
+      .map((e) => e.name);
+  } catch {
+    return [];
+  }
+  const out: Array<{ file: string; entry: PurgeEntry }> = [];
+  for (const name of names) {
+    const file = path.join(pendingDirPath(), name);
+    const parsed = await readQueueFile(file);
+    if (!parsed || parsed.length === 0) continue;
+    for (const entry of parsed) out.push({ file, entry });
+  }
+  return out;
+}
+
+/**
+ * 追加一条待清记录(抢不到跨进程锁时走这里)。一条记录一个文件、文件名由 entryKey 派生 ——
+ * 同一条重复登记只会覆盖自己那一个文件,永远不会碰到别人的条目。
+ */
+async function appendPendingEntry(entry: PurgeEntry): Promise<void> {
+  const dir = pendingDirPath();
+  await fsp.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${digestOfKey(entryKey(entry))}.json`);
+  const payload: StoredQueue = { version: 1, entries: [entry] };
+  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await fsp.writeFile(tmp, JSON.stringify(payload), 'utf8');
+    await fsp.rename(tmp, file);
+  } catch (err) {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
+    throw err;
+  }
+}
+
+function digestOfKey(key: string): string {
+  return createHash('sha256').update(key).digest('hex').slice(0, 32);
 }
 
 async function readQueueFile(file: string): Promise<PurgeEntry[] | null> {
@@ -301,10 +360,14 @@ async function commitQueueFile(tmp: string, file: string): Promise<void> {
  * 内存表**先**记(保证本进程内一定能重试),再尝试落盘;落盘失败照常抛给调用方。
  */
 export async function enqueuePurge(root: string, paths?: readonly string[]): Promise<void> {
-  return withQueueLock(() => enqueuePurgeLocked(root, paths));
+  return withQueueLock((held) => enqueuePurgeLocked(root, paths, held));
 }
 
-async function enqueuePurgeLocked(root: string, paths?: readonly string[]): Promise<void> {
+async function enqueuePurgeLocked(
+  root: string,
+  paths?: readonly string[],
+  lockHeld = true,
+): Promise<void> {
   const base = ownersRoot();
   if (!isPurgableRoot(root, base)) {
     log.warn(`refusing to enqueue purge outside owners dir: ${root}`);
@@ -336,10 +399,16 @@ async function enqueuePurgeLocked(root: string, paths?: readonly string[]): Prom
     }
     // 内存兜底先落:即使接下来落盘失败,本进程后续的 drain 仍会重试。
     memoryQueue.set(key, entry);
-    const entries = (await readQueue()).filter((candidate) => entryKey(candidate) !== key);
-    entries.push(entry);
     try {
-      await writeQueue(entries);
+      if (lockHeld) {
+        const entries = (await readQueue()).filter((candidate) => entryKey(candidate) !== key);
+        entries.push(entry);
+        await writeQueue(entries);
+      } else {
+        // 没拿到跨进程锁:**不做整份读改写**(会被另一个实例的写入抹掉),改成追加一条
+        // 独立文件,交给下一次拿到锁的 drain 折进正本(review: codex P1)。
+        await appendPendingEntry(entry);
+      }
     } catch (err) {
       // 一个分片写不下去不代表其余分片也写不下去:记下第一个错误,剩下的照常尝试,
       // 全部处理完再抛(否则后面的分片连内存记录都没登记上)。
@@ -363,7 +432,10 @@ export async function drainPurgeQueue(): Promise<{ purged: number; pending: numb
   return withQueueLock(drainPurgeQueueLocked);
 }
 
-async function drainPurgeQueueLocked(): Promise<{ purged: number; pending: number }> {
+async function drainPurgeQueueLocked(lockHeld = true): Promise<{ purged: number; pending: number }> {
+  // 折进正本之前先记下追加目录里有哪些文件:只删这次真的读进来的那几个,
+  // 期间另一个实例新写的追加文件不受影响。
+  const pendingFiles = lockHeld ? await readPendingEntries() : [];
   const entries = await readQueue();
   if (entries.length === 0) return { purged: 0, pending: 0 };
   const base = ownersRoot();
@@ -417,16 +489,29 @@ async function drainPurgeQueueLocked(): Promise<{ purged: number; pending: numbe
   for (const entry of await readQueue()) merged.set(entryKey(entry), entry);
   for (const entry of keep) merged.set(entryKey(entry), entry);
   for (const key of purgedKeys) merged.delete(key);
+  if (!lockHeld) {
+    // 没拿到跨进程锁:删除照做(幂等),但**不动盘上的簿记** —— 整份写回会抹掉另一个实例
+    // 刚记下的条目。留给下一次拿到锁的 drain 收拾(review: codex P1)。
+    log.warn('drained without cross-process lock; leaving queue bookkeeping to a later run');
+    return { purged, pending: keep.length };
+  }
   // 落盘失败不影响本次结果:内存表已经更新,下一次 drain 照样会重试。
+  let persisted = true;
   await writeQueue([...merged.values()]).catch((err: unknown) => {
+    persisted = false;
     log.error('failed to persist purge queue after drain (kept in memory only)', err);
   });
+  // 正本写成功后才删追加文件(它们的内容已经进正本或已被清掉);写失败就留着,下次再折。
+  if (persisted) {
+    for (const { file } of pendingFiles) await fsp.rm(file, { force: true }).catch(() => undefined);
+  }
   return { purged, pending: keep.length };
 }
 
 export const __testing = {
   queueFileName: QUEUE_FILE,
   lockFileName: QUEUE_LOCK_FILE,
+  pendingDirName: QUEUE_PENDING_DIR,
   maxEntries: MAX_ENTRIES,
   readQueue,
   resetMemoryQueue(): void {
