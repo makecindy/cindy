@@ -21,8 +21,24 @@ import { extractIpcError } from '@/utils/ipcError';
 import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { remoteProjectsStore } from './remoteProjectsStore';
 import { removeRemoteSessionActivityEntry } from './remoteSessionActivityStore';
+import {
+  scheduleSessionListPersist,
+  type CachedDeviceSessionsSnapshot,
+} from './mirrorCacheClient';
 
 const log = createLogger('device-link-refresh');
+
+/**
+ * 把 store 当前的全部设备分片摊成可缓存的快照(字段瘦身与 live 态剔除在 main 侧
+ * 白名单里做,见 mirrorCacheStore.coerceCachedSession)。
+ */
+export function collectSessionListSnapshot(): CachedDeviceSessionsSnapshot[] {
+  return remoteProjectsStore.getDeviceIds().map((deviceId) => ({
+    deviceId,
+    deviceName: remoteProjectsStore.getDeviceName(deviceId) ?? deviceId,
+    sessions: [...remoteProjectsStore.getDeviceSessions(deviceId)],
+  }));
+}
 
 /** 与 listing tier 的拉取上限一致(useDeviceLinkRemoteProjects 的 LIST_LIMIT)。 */
 const LIST_LIMIT = 200;
@@ -290,6 +306,9 @@ async function runRefreshRemoteDeviceSessions(
         } else {
           remoteProjectsStore.setDeviceSessions(deviceId, deviceName, list as Session[]);
         }
+        // 权威列表已落进 store → 去抖回写冷缓存,供下次冷启动先画侧边栏
+        // (collect 在定时器触发时才跑,拿的是届时最新的全部分片,不闭包本次数据)。
+        scheduleSessionListPersist(collectSessionListSnapshot);
       }
       return 'ok'; // 成功
     } catch (err) {

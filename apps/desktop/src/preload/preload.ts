@@ -2931,6 +2931,49 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onControlTargetChanged: fanOutDeviceLinkControlTargetChanged,
     /** 「保持电脑唤醒」在其它共享 userData 实例被翻转后推送,payload: { keepAwake: boolean } */
     onKeepAwakeChanged: fanOutDeviceLinkKeepAwakeChanged,
+    /**
+     * 控制端:远程会话镜像的本地冷缓存(main 落 userData,见 main/device-link/mirrorCacheStore.ts)。
+     * 只做首屏加速,非权威;fresh 数据一到由 renderer 整体接管。
+     */
+    mirrorCache: {
+      /** 读某 (设备, 会话) 缓存的最近一页消息(未命中返回空数组) */
+      getMessages: (
+        deviceId: string,
+        sessionId: string,
+      ): Promise<{ messages: Record<string, unknown>[] }> =>
+        ipcRenderer.invoke('device-link:mirror-cache:messages:get', { deviceId, sessionId }),
+      /** 写某 (设备, 会话) 的最近一页消息;空数组 = 清掉该条缓存 */
+      putMessages: (
+        deviceId: string,
+        sessionId: string,
+        messages: readonly Record<string, unknown>[],
+      ): Promise<{ ok: true }> =>
+        ipcRenderer.invoke('device-link:mirror-cache:messages:put', {
+          deviceId,
+          sessionId,
+          messages,
+        }),
+      /** 读侧边栏远程会话列表快照 */
+      getSessionList: (): Promise<{
+        devices: Array<{
+          deviceId: string;
+          deviceName: string;
+          sessions: Record<string, unknown>[];
+        }>;
+      }> => ipcRenderer.invoke('device-link:mirror-cache:session-list:get'),
+      /** 写侧边栏远程会话列表快照 */
+      putSessionList: (
+        devices: ReadonlyArray<{
+          deviceId: string;
+          deviceName: string;
+          sessions: readonly Record<string, unknown>[];
+        }>,
+      ): Promise<{ ok: true }> =>
+        ipcRenderer.invoke('device-link:mirror-cache:session-list:put', { devices }),
+      /** 清缓存:传 deviceId 清单台设备,不传则整体清(登出) */
+      clear: (deviceId?: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke('device-link:mirror-cache:clear', { deviceId }),
+    },
   },
 
   // ── Remote SSH (Phase A) ───────────────────────────────────────────────

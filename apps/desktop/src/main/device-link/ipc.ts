@@ -13,7 +13,7 @@ import {
   type LinkAcceptPayload,
 } from '@cindy/device-link';
 import { serverApiFetch, ServerApiError } from '../serverApiClient';
-import { throwIpcError } from '../utils/ipcValidate';
+import { requireString, throwIpcError } from '../utils/ipcValidate';
 import type { IpcErrorCode } from '../../shared/ipc-errors';
 import {
   DEVICE_LINK_INVOKE,
@@ -50,6 +50,11 @@ import {
   rememberLastKnownDeviceName,
   setDeviceControlEnabled,
 } from './settings-store';
+import {
+  getMirrorCache,
+  type CachedDeviceSessions,
+  type MirrorCache,
+} from './mirrorCacheStore';
 import {
   recordSubscribe,
   recordUnsubscribe,
@@ -603,6 +608,67 @@ export async function handleUnsubscribe(
   return unwrapSubscribeResult(result);
 }
 
+// ─── 远程会话镜像的本地冷缓存(纯本机,不进隧道)────────────────────────────────
+
+/**
+ * renderer 一次能塞进来的最大条数(store 内部还会按时间截到 MAX_CACHED_MESSAGES)。
+ * IPC payload 不可信,先在这里挡住异常大的数组,别让 main 白做序列化。
+ *
+ * 截断取**数组开头**:`local-db:messages:list` 的页是 newest-first(最新在前,
+ * 见首拉的 mergeMessages(..., 'newest-first')),取前 N 才是留最新的那批。
+ * 正常一页 ≤ MAX_LIMIT(100),这条上限只是防御。
+ */
+const MIRROR_CACHE_MAX_INBOUND_MESSAGES = 500;
+const MIRROR_CACHE_MAX_INBOUND_DEVICES = 64;
+
+export async function handleMirrorCacheGetMessages(
+  cache: MirrorCache,
+  deviceId: unknown,
+  sessionId: unknown,
+): Promise<{ messages: Record<string, unknown>[] }> {
+  const device = requireString(deviceId, 'deviceId');
+  const session = requireString(sessionId, 'sessionId');
+  return { messages: await cache.readMessages(device, session) };
+}
+
+export async function handleMirrorCachePutMessages(
+  cache: MirrorCache,
+  deviceId: unknown,
+  sessionId: unknown,
+  messages: unknown,
+): Promise<{ ok: true }> {
+  const device = requireString(deviceId, 'deviceId');
+  const session = requireString(sessionId, 'sessionId');
+  if (!Array.isArray(messages)) throwIpcError('INVALID_PARAMS', 'messages must be an array');
+  await cache.writeMessages(device, session, messages.slice(0, MIRROR_CACHE_MAX_INBOUND_MESSAGES));
+  return { ok: true };
+}
+
+export async function handleMirrorCacheGetSessionList(
+  cache: MirrorCache,
+): Promise<{ devices: CachedDeviceSessions[] }> {
+  return { devices: await cache.readSessionList() };
+}
+
+export async function handleMirrorCachePutSessionList(
+  cache: MirrorCache,
+  devices: unknown,
+): Promise<{ ok: true }> {
+  if (!Array.isArray(devices)) throwIpcError('INVALID_PARAMS', 'devices must be an array');
+  await cache.writeSessionList(devices.slice(0, MIRROR_CACHE_MAX_INBOUND_DEVICES));
+  return { ok: true };
+}
+
+/** deviceId 缺省 = 整体清(登出隐私路径);带 deviceId = 单台设备离场。 */
+export async function handleMirrorCacheClear(
+  cache: MirrorCache,
+  deviceId: unknown,
+): Promise<{ ok: true }> {
+  if (typeof deviceId === 'string' && deviceId.trim()) await cache.clearDevice(deviceId);
+  else await cache.clearAll();
+  return { ok: true };
+}
+
 /**
  * 窗口销毁后的退订重试(best-effort)。窗口已销毁、refcount 已无该窗口的 ref,无处「恢复引用」
  * 留给后续重试(那是普通 unsubscribe 路径 handleUnsubscribe 的做法,且恢复死窗口的 ref 会让它
@@ -721,5 +787,35 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleRestore(deps, p.deviceId);
+  });
+  // 远程会话镜像缓存:读写按 device-link capability 把关(没账号就不存在远程会话),
+  // 但 **clear 不 gate** —— 登出清理恰好发生在 capability 已经掉下去之后,
+  // gate 住就再也清不掉上一个账号的缓存了。
+  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_MESSAGES, (_e, payload: unknown) => {
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { deviceId?: unknown; sessionId?: unknown };
+    return handleMirrorCacheGetMessages(getMirrorCache(), p.deviceId, p.sessionId);
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_PUT_MESSAGES, (_e, payload: unknown) => {
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as {
+      deviceId?: unknown;
+      sessionId?: unknown;
+      messages?: unknown;
+    };
+    return handleMirrorCachePutMessages(getMirrorCache(), p.deviceId, p.sessionId, p.messages);
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_SESSION_LIST, () => {
+    requireDeviceLinkCapability();
+    return handleMirrorCacheGetSessionList(getMirrorCache());
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_PUT_SESSION_LIST, (_e, payload: unknown) => {
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { devices?: unknown };
+    return handleMirrorCachePutSessionList(getMirrorCache(), p.devices);
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, (_e, payload: unknown) => {
+    const p = (payload ?? {}) as { deviceId?: unknown };
+    return handleMirrorCacheClear(getMirrorCache(), p.deviceId);
   });
 }

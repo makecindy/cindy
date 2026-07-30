@@ -2803,6 +2803,38 @@ interface ElectronAPI {
     ) => () => void;
     /** 「保持电脑唤醒」在其它共享 userData 实例被翻转后推送 */
     onKeepAwakeChanged: (cb: (payload: { keepAwake: boolean }) => void) => () => void;
+    /**
+     * 控制端:远程会话镜像的本地冷缓存(main 落 userData,见
+     * main/device-link/mirrorCacheStore.ts)。只做首屏加速、非权威 —— 缓存里没有 live 态,
+     * fresh 数据一到由 renderer 整体接管。
+     */
+    mirrorCache: {
+      getMessages: (
+        deviceId: string,
+        sessionId: string,
+      ) => Promise<{ messages: Record<string, unknown>[] }>;
+      putMessages: (
+        deviceId: string,
+        sessionId: string,
+        messages: readonly Record<string, unknown>[],
+      ) => Promise<{ ok: true }>;
+      getSessionList: () => Promise<{
+        devices: Array<{
+          deviceId: string;
+          deviceName: string;
+          sessions: Record<string, unknown>[];
+        }>;
+      }>;
+      putSessionList: (
+        devices: ReadonlyArray<{
+          deviceId: string;
+          deviceName: string;
+          sessions: readonly Record<string, unknown>[];
+        }>,
+      ) => Promise<{ ok: true }>;
+      /** 传 deviceId 清单台设备,不传则整体清(登出) */
+      clear: (deviceId?: string) => Promise<{ ok: true }>;
+    };
   };
 
   // ── Remote SSH (Phase A) ───────────────────────────────────────────────

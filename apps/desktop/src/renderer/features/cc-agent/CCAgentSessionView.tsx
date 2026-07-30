@@ -1466,7 +1466,12 @@ export function CCAgentSessionView({
   }, [remoteDeviceId, sessionId]);
   // device-link 远程会话首屏:历史/元数据经隧道往返(网络),慢网下 historyLoaded=false
   // 期间消息区空白。仅远程 + 延迟防闪后给「正在从被控端加载」提示(本机会话恒 false)。
-  const showRemoteLoading = useRemoteSessionLoading(remoteDeviceId, historyLoaded);
+  // 冷缓存已经把最近一页画出来时(messages 非空)不再显示覆盖层 —— 它会盖住可读内容。
+  const showRemoteLoading = useRemoteSessionLoading(
+    remoteDeviceId,
+    historyLoaded,
+    messages.length > 0,
+  );
   // 远程回执「真实展示」放行 + 本次访问的新鲜度对账。放行表示「视图挂载、真实可见
   // (viewVisible:rail 收起 / Orca 面板隐藏时为 false,挂载 ≠ 看得见)且历史已渲染」;
   // 回执真正发出还要求入队之后有一轮 sync 成功完成(sessionAttentionStore 的同步代数

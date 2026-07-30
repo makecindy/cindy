@@ -18,6 +18,7 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
 } from '@/features/device-link/remoteProjectsStore';
+import { persistCachedMessages } from '@/features/device-link/mirrorCacheClient';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import type { Message, Session } from '@/lib/ccAgent.types';
 import * as messageService from '@/lib/messageService';
@@ -192,14 +193,34 @@ export function isSessionTurnRunningFor(sessionId: string): Promise<boolean> {
   return invokeRemote(deviceId, 'maker:session-in-turn', [sessionId]) as Promise<boolean>;
 }
 
-/** 读历史消息:远程走隧道 local-db:messages:list,返回形状与本地一致(camelCase Message[])。 */
+/**
+ * 读历史消息:远程走隧道 local-db:messages:list,返回形状与本地一致(camelCase Message[])。
+ *
+ * 远程会话取回**最新一页**(没有 before / beforeTs 游标)时顺手写进冷缓存
+ * (`mirrorCacheClient`),供下次冷启动 / 被控端离线时乐观渲染。这是缓存的**唯一写点**:
+ * 首拉、reconcileRemoteMessages、reconnect 重拉、turn 结束对账都经过这里,所以缓存
+ * 自然跟着最近一次对账保持新鲜。翻页(before/beforeTs)与本机会话都不写 ——
+ * 老窗口不是"最近一页",写进去会让下次冷开 hydrate 出一段历史中间的孤岛。
+ */
 export function listMessagesFor(
   sessionId: string,
   opts?: { limit?: number; before?: string; beforeTs?: number },
 ): Promise<Message[]> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return messageService.list(sessionId, opts);
-  return invokeRemote(deviceId, 'local-db:messages:list', [sessionId, opts]) as Promise<Message[]>;
+  const promise = invokeRemote(deviceId, 'local-db:messages:list', [
+    sessionId,
+    opts,
+  ]) as Promise<Message[]>;
+  if (!opts?.before && opts?.beforeTs == null) {
+    void promise
+      .then((rows) => {
+        if (Array.isArray(rows)) persistCachedMessages(deviceId, sessionId, rows);
+      })
+      // 拉取失败由调用方处理;这里只是不写缓存(旧缓存保留,离线时正好还能用)。
+      .catch(() => undefined);
+  }
+  return promise;
 }
 
 // 已确认不支持 maker:get-workflow-progress 的被控设备(收到过 CHANNEL_NOT_ALLOWED):

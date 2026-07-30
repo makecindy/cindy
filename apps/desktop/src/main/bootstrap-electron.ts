@@ -285,6 +285,7 @@ import {
   defaultDeps as deviceLinkIpcDeps,
   handleInvoke as deviceLinkHandleInvoke,
 } from './device-link/ipc';
+import { getMirrorCache } from './device-link/mirrorCacheStore';
 import { assertCaptureHealthy } from './device-link/invoke-registry';
 // worktree-parallel-sessions: IPC 注册 + close-session 内的 fire-and-forget 删除钩子
 import {
@@ -848,6 +849,14 @@ async function ensureLifecycleDbClient(userId: string) {
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   skillhubAutoSyncService.cancelInFlight();
+  // 远程会话的镜像冷缓存里是别的设备的聊天内容。owner 命名空间已经保证下一个账号读不到
+  // 它,但登出后不该在盘上留着 —— 这里 owner 还指向**旧账号**(commitActiveAppSession 在
+  // teardown 之后才切),正是唯一能清准的时机。
+  try {
+    await getMirrorCache().clearAll();
+  } catch (err) {
+    authBoundaryLog.error(`clear device-link mirror cache on ${reason} failed (non-fatal):`, err);
+  }
   // Cindy relay owns long-lived transports plus account-scoped task/binding
   // state. Drain ingress before discarding the owner-scoped store; otherwise a
   // late Telegram/Slack callback could write through the next account boundary.

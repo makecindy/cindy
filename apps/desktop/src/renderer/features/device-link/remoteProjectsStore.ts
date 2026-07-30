@@ -21,6 +21,13 @@
  *  - **复用本地渲染管线**:每条 session 注入 `deviceLinkDeviceId/Name/ConnectionStatus`
  *    后喂给 `groupSessions`。
  *  - **origin 注册表**:`sessionId → deviceId`(`getSessionDeviceId`),供传输层 / SessionView 用。
+ *  - **冷启动首屏借冷缓存**(`hydrateFromCache`):列表快照落在 main 的 userData
+ *    (`main/device-link/mirrorCacheStore.ts`),冷启动时先画上次看到的行,免得侧边栏
+ *    等一次 bootstrap 往返才出现远程项目。这不动摇「零权威状态」:种入的分片一律标
+ *    **disconnected**(缓存不是 live 设备)、只在该设备还没有分片时种入,bootstrap 的
+ *    `setDeviceSessions` 一到就整片替换;设备已不合格时由既有
+ *    `resolveIneligibleRemoteProjectAction`(它的 `hasCachedShard` 判据)收敛为
+ *    disconnect / remove。缓存永不参与写路径。
  *
  * 模块级 vanilla store + useSyncExternalStore;`getMergedRemoteSessions()` 返回缓存引用,
  * 仅在分片真正变化时才换新数组(满足 getSnapshot 引用稳定性,否则无限重渲染)。
@@ -28,6 +35,7 @@
 
 import { useSyncExternalStore } from 'react';
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
+import { clearCachedMessages } from './mirrorCacheClient';
 
 /** 单台被控设备的内存分片。 */
 interface DeviceShard {
@@ -310,6 +318,35 @@ const actions = {
     recompute();
   },
 
+  /**
+   * 冷启动:用本地冷缓存的列表快照种入分片,让侧边栏在 bootstrap 往返之前就有内容。
+   *
+   * 三条硬约束(见文件头「冷启动首屏借冷缓存」):
+   *  - 只种**尚无分片**的设备:任何权威数据(snapshot / patch)都优先,缓存绝不覆盖它。
+   *  - 一律标 **disconnected**:缓存不是 live 设备,标 connected 会画出假在线,
+   *    也会让「新建对话」这类以连接态为准的判定误放行。
+   *  - 不清 bootstrapFailed、不动 epoch:种入不是一次拉取,不参与乱序保护。
+   */
+  hydrateFromCache(
+    devices: ReadonlyArray<{ deviceId: string; deviceName: string; sessions: readonly Session[] }>,
+  ): void {
+    let changed = false;
+    for (const device of devices) {
+      const deviceId = device.deviceId?.trim();
+      if (!deviceId || shards.has(deviceId)) continue;
+      if (device.sessions.length === 0) continue;
+      const deviceName = device.deviceName?.trim() || deviceId;
+      shards.set(deviceId, {
+        deviceId,
+        deviceName,
+        connectionStatus: 'disconnected',
+        sessions: device.sessions.map((s) => stamp(s, deviceId, deviceName, 'disconnected')),
+      });
+      changed = true;
+    }
+    if (changed) recompute();
+  },
+
   /** bootstrap 永久失败 / 重试耗尽且没有 sessions shard：记录终态，避免侧边栏无限 loading。 */
   markBootstrapFailed(deviceId: string): void {
     if (!setBootstrapFailed(deviceId, true)) return;
@@ -361,6 +398,9 @@ const actions = {
       // 会话),之后 unarchive / reseed 会把边界前的旧预览顶回一个仍是系统占位的
       // 会话上(PR #510 review)。
       dropTitleOverlay(sessionId);
+      // 该会话已离场:它的消息冷缓存也没意义了(留着只会占地方,unarchive 后
+      // 反正要重新拉一页)。失败静默,缓存是纯优化。
+      clearCachedMessages(deviceId, sessionId);
       shard.sessions = shard.sessions.filter((s) => s.id !== sessionId);
       recompute();
       return;
