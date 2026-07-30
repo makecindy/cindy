@@ -148,8 +148,8 @@ describe('isDeviceModelVisible — 使用被控端可见性快照', () => {
   });
 });
 
-describe('selectVisibleModels — excludeSubscriptionDirect(SSH 远程隐藏订阅直连模型)', () => {
-  it('true:过滤 chatgpt/ 与 xai/ 前缀模型,其余保留(本机 providers 派生路径)', () => {
+describe('selectVisibleModels — excludeSubscriptionDirect(SSH 远程保留但由调用方禁用订阅直连模型)', () => {
+  it('true:订阅直连模型不再被过滤,仍全部列出(禁用在 ModelSelector 层打标)', () => {
     const out = selectVisibleModels({
       agentKind: 'claude-code',
       deviceId: undefined,
@@ -158,8 +158,8 @@ describe('selectVisibleModels — excludeSubscriptionDirect(SSH 远程隐藏订�
       deviceCodexModels: [],
       excludeSubscriptionDirect: true,
     });
-    // 裸 gpt-5.5(真网关)不受影响 —— 只按订阅直连前缀过滤,不误伤同名网关模型。
-    expect(ids(out)).toEqual(['claude-opus-4-8', 'gpt-5.5']);
+    // 语义变更:不再从清单剔除,避免静默消失;行级 disabled 由调用方按 isSubscriptionDirectModel 判定。
+    expect(ids(out)).toEqual(['claude-opus-4-8', 'chatgpt/gpt-5.5', 'xai/grok-4.3', 'gpt-5.5']);
   });
 
   it('未传(默认)不过滤:订阅直连模型正常列出', () => {
@@ -173,8 +173,7 @@ describe('selectVisibleModels — excludeSubscriptionDirect(SSH 远程隐藏订�
     expect(ids(out)).toEqual(['chatgpt/gpt-5.5', 'claude-opus-4-8']);
   });
 
-  it('device-link 路径同样生效(deviceId 非空 + excludeSubscriptionDirect)', () => {
-    // 正常 device-link 会话不传本参数;此用例只锁参数与取数路径正交,防未来重构漏掉分支。
+  it('device-link 路径同样保留(deviceId 非空 + excludeSubscriptionDirect)', () => {
     const out = selectVisibleModels({
       agentKind: null,
       deviceId: 'dev-1',
@@ -183,7 +182,7 @@ describe('selectVisibleModels — excludeSubscriptionDirect(SSH 远程隐藏订�
       deviceCodexModels: [devModel('xai/grok-4.3'), devModel('gpt-5.5')],
       excludeSubscriptionDirect: true,
     });
-    expect(ids(out)).toEqual(['claude-opus-4-8', 'gpt-5.5']);
+    expect(ids(out)).toEqual(['chatgpt/gpt-5.5', 'claude-opus-4-8', 'xai/grok-4.3', 'gpt-5.5']);
   });
 });
 

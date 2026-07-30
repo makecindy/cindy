@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
 import { ERROR_REASON_I18N_KEYS } from '@/components/chat/ErrorMessageCard';
+import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
 
 const SESSION_ID = 's-err';
 
@@ -34,6 +35,30 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     expect(ERROR_REASON_I18N_KEYS['codex-auto-review-unavailable']).toBe(
       'logic.errors.codexAutoReviewUnavailable',
     );
+  });
+
+  it('maps upstream overload to the same copy the tail banner uses', () => {
+    // 本表注释的一致性诉求: 同一条过载错误不能出现「尾部红条本地化、历史静态卡
+    // 英文原文」的分裂。复用 banner 那条 key(不新增文案), 且 codex 改措辞也不影响
+    // —— 判定走的是稳定 reason key, 不是原文。
+    expect(ERROR_REASON_I18N_KEYS[UPSTREAM_OVERLOAD_REASON]).toBe(
+      'chat.errorBanner.overloadBusyNoRetry',
+    );
+  });
+
+  it('restores the overload reason from persisted rows so history can localize it', () => {
+    const mapped = makerChatStore.__mapServerMessagesForTest([
+      errorRow('e-overload', {
+        // 文案故意不含 `at capacity`: codex 改了措辞后历史行仍要能本地化。
+        message: 'The upstream declined this request.',
+        reason: UPSTREAM_OVERLOAD_REASON,
+      }),
+    ]);
+    expect(mapped[0]).toMatchObject({
+      clientId: 'e-overload',
+      role: 'error',
+      errorReason: UPSTREAM_OVERLOAD_REASON,
+    });
   });
 
   it('restores message text and errorReason from structured content', () => {

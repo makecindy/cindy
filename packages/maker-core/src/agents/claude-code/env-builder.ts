@@ -123,6 +123,53 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
 ] as const;
 
 /**
+ * 远端路由 materialization 覆盖前,须从 remoteEnv 剥离的鉴权 / 上游 / 定制头字段。
+ *
+ * 清单归本文件所有:buildClaudeEnv(经 getAuthEnv / endpoint / behaviorFlags)是这些
+ * 字段在 remoteEnv 里的唯一写入方,新增鉴权类写入时必须同步本清单,否则 route 覆盖后
+ * 旧字段残留、破坏「route.env 是远端鉴权唯一事实源 / 单鉴权门」不变量(消费方见
+ * claude-code/index.ts startSession 远端分支)。
+ *
+ * 刻意不复用 SENSITIVE_ANTHROPIC_ENV_KEYS:那是「继承残留清洗」超集,含 route 覆盖时
+ * 必须保留的字段(如 dev 多实例的 CLAUDE_CONFIG_DIR)。
+ */
+export const REMOTE_ROUTE_OVERRIDE_ENV_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_SCOPES',
+  'CLAUDE_CODE_SUBSCRIPTION_TYPE',
+  'CLAUDE_CODE_RATE_LIMIT_TIER',
+  'ANTHROPIC_CUSTOM_HEADERS',
+  'ANTHROPIC_BASE_URL',
+] as const;
+
+/**
+ * 订阅 token 的 401 续命回调有 entrypoint 白名单闸门(cc 反编译):
+ *   if (CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH && Set(["claude-desktop","local-agent",
+ *       "claude-vscode"]).has(CLAUDE_CODE_ENTRYPOINT)) 才注册 requestOAuthTokenRefresh。
+ * agent SDK 默认填 CLAUDE_CODE_ENTRYPOINT=sdk-ts(不在白名单)——不覆盖的话
+ * getOAuthToken 回调**静默失效**(不报错不打日志, 长 turn 过期照样死)。必须选
+ * claude-vscode: 另两个值在 cc 的桌面宿主集合里, 会连带切换整套 desktop-host 语义
+ * (settings 过滤策略 / remote managed settings 等), 影响面未审。
+ * 硬覆盖而非 if-undefined: dev 下 Electron 可能由终端 cc 启动, 继承来的
+ * CLAUDE_CODE_ENTRYPOINT=sdk-ts/cli 同样会关掉闸门。仅 oauth-spawn(实际注入了
+ * 订阅 token)时生效, gateway-key 会话保持 SDK 默认。
+ *
+ * buildClaudeEnv 末段与远端路由 materialization(claude-code/index.ts,route 覆盖后
+ * 才出现 CLAUDE_CODE_OAUTH_TOKEN 的场景)共用 —— 闸门规则只此一份。
+ */
+export function applyOAuthSpawnEntrypointGate(env: Record<string, string>): void {
+  if (!env.CLAUDE_CODE_OAUTH_TOKEN) return;
+  env.CLAUDE_CODE_ENTRYPOINT = 'claude-vscode';
+  // claude-vscode 身份的防御性收口: 禁掉 IDE 扩展自动安装类副作用(headless 会话
+  // 不需要; env 在 cc 内存在, 用户显式覆盖优先)。
+  if (env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL === undefined) {
+    env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL = '1';
+  }
+}
+
+/**
  * !! 主防线 !! 必须由 host 在 boot 最早期(任何动态 import / spawn 之前)调用一次。
  *
  * 背景: @anthropic-ai/claude-agent-sdk 在 spawn CLI 时强制做
@@ -296,24 +343,7 @@ export async function buildClaudeEnv(
   // 若 host 只设 flag 不递凭证, cc 毫秒级判 "Not logged in"(2026-07-03 线上事故)。
   env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
 
-  // 订阅 token 的 401 续命回调有 entrypoint 白名单闸门(cc 反编译):
-  //   if (CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH && Set(["claude-desktop","local-agent",
-  //       "claude-vscode"]).has(CLAUDE_CODE_ENTRYPOINT)) 才注册 requestOAuthTokenRefresh。
-  // agent SDK 默认填 CLAUDE_CODE_ENTRYPOINT=sdk-ts(不在白名单)——不覆盖的话
-  // getOAuthToken 回调**静默失效**(不报错不打日志, 长 turn 过期照样死)。必须选
-  // claude-vscode: 另两个值在 cc 的桌面宿主集合里, 会连带切换整套 desktop-host 语义
-  // (settings 过滤策略 / remote managed settings 等), 影响面未审。
-  // 硬覆盖而非 if-undefined: dev 下 Electron 可能由终端 cc 启动, 继承来的
-  // CLAUDE_CODE_ENTRYPOINT=sdk-ts/cli 同样会关掉闸门。仅 oauth-spawn(实际注入了
-  // 订阅 token)时生效, gateway-key 会话保持 SDK 默认。
-  if (env.CLAUDE_CODE_OAUTH_TOKEN) {
-    env.CLAUDE_CODE_ENTRYPOINT = 'claude-vscode';
-    // claude-vscode 身份的防御性收口: 禁掉 IDE 扩展自动安装类副作用(headless 会话
-    // 不需要; env 在 cc 内存在, 用户显式覆盖优先)。
-    if (env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL === undefined) {
-      env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL = '1';
-    }
-  }
+  applyOAuthSpawnEntrypointGate(env);
 
   // xdt-maker 自己托管会话生命周期和自动任务。Claude Code 原生 cron 会读取
   // workdir/.claude/scheduled_tasks.json，并把到期任务作为隐藏 meta prompt 注入

@@ -82,7 +82,12 @@ import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import { ToolLoopGuard } from '../shared/loop-guard.js';
-import { applySubagentModelEnv, buildClaudeEnv } from './env-builder.js';
+import {
+  applyOAuthSpawnEntrypointGate,
+  applySubagentModelEnv,
+  buildClaudeEnv,
+  REMOTE_ROUTE_OVERRIDE_ENV_KEYS,
+} from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { repairForkedClaudeSessionJsonl, type RepairForkedClaudeJsonlResult } from './fork-jsonl-repair.js';
@@ -184,6 +189,16 @@ function isDeepSeekModel(model: string): boolean {
 
 function isProviderRoutedModel(model: string): boolean {
   return !model.startsWith('claude-');
+}
+
+/** URL → host(路由决策日志用,失败返回 undefined,不抛)。 */
+function hostOfUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).host;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -405,6 +420,13 @@ function parseIdleTimeoutMs(raw: string | undefined): number {
   return Math.floor(n);
 }
 
+/** upstream-response-idle 看门狗的计时分片长度(见 armUpstreamResponseIdleSlice)。 */
+const CC_UPSTREAM_IDLE_SLICE_MS = 60_000;
+
+/** 分片实际耗时超出片长这么多 → 判为进程被系统挂起过,该片不计入额度。 */
+const CC_UPSTREAM_IDLE_SUSPEND_GAP_MS = 30_000;
+
+
 function mapAnthropicError(err: unknown): OneShotError {
   if (err instanceof APIError) {
     if (err.status === 401 || err.status === 403) {
@@ -591,6 +613,30 @@ export class ClaudeCodeAgent extends BaseAgent {
   }
 
   /**
+   * 订阅 token 401 强刷 —— 本地 SDK getOAuthToken 回调与远端 onOAuthRefresh 共用。
+   *
+   * env.CLAUDE_CODE_OAUTH_TOKEN 是该会话持有 token 的**单一事实源**:作为失败基线传给
+   * host(库已被后台预续期换代时直接返回库值,不再消耗一次轮换);拿到新 token 后原地
+   * 写回 env —— rewind/fork/重连重建复用同一 env 引用,新子进程直接以最新 token spawn,
+   * 不会拿旧 token 起跑立即 401 再白白强刷一枚好 token。失败返回 null(cc 侧 surface
+   * 鉴权错误),绝不上抛。
+   */
+  private async refreshSubscriptionTokenInPlace(env: Record<string, string>): Promise<string | null> {
+    try {
+      const fresh = await this.deps.auth.getFreshSubscriptionToken!(env.CLAUDE_CODE_OAUTH_TOKEN);
+      if (fresh) env.CLAUDE_CODE_OAUTH_TOKEN = fresh;
+      return fresh ?? null;
+    } catch (e) {
+      this.deps.logger
+        .child('claude-code/oauth-refresh')
+        .warn('subscription token refresh failed; returning null (cc will surface auth error)', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      return null;
+    }
+  }
+
+  /**
    * Agent 内置 command —— ChatInput palette 'agent-builtin' 类目数据源。
    * 是硬编码白名单(见 ./commands.ts), 不从 SDK 自动派生。
    * 当前 live: /compact。
@@ -768,13 +814,34 @@ export class ClaudeCodeAgent extends BaseAgent {
     // (用户单独装过 Claude Code 时存在),用上别人的 OAuth 通道 → 既泄漏隔离,也
     // 让用户莫名其妙"用上了不属于本 app 的 key"。
     // renderer 接到 AgentNotAuthenticatedError 后据 reason 引导用户补齐当前来源的鉴权。
-    const credentialMode = opts.remoteHostId
-      ? 'gateway-key'
-      : resolveAgentCredentialMode({
-          agentKind: 'claude-code',
-          providerId: opts.providerId,
-          model: opts.model,
-        });
+    // 远端路由 materialization(必须先于凭证形态推导):本地按模型分流的逻辑活在 loopback
+    // proxy,远端够不到,由 host 在 spawn 前把「该会话真实上游 + 鉴权 + 定制头」解析成 cc
+    // env(见 base-agent.ts AgentDeps.resolveRemoteClaudeRoute)。
+    //   - 返回 route:native OAuth 订阅 / 自定义 Claude Code 供应商 —— 下方覆盖 endpoint + 鉴权;
+    //   - 返回 null / resolver 未注入(旧 host):有效路由是 XD 网关 —— credentialMode 必须
+    //     回落 'gateway-key'(与升级前「远端恒用网关」逐字节一致)。不回落的话,getAuthEnv
+    //     会按本地 fallback 注入订阅 token / provider 占位 key,与 buildClaudeEnv 写入的网关
+    //     endpoint 并存:订阅 token 被发往网关(凭证泄漏)或网关收到占位 key(401)。
+    //   - throw:显式选定的供应商在远端无法表达(自定义 requestPath / modelIdRewrite 等),
+    //     透传报错,不静默错路由。
+    const remoteRoute =
+      opts.remoteHostId && this.deps.resolveRemoteClaudeRoute
+        ? await this.deps.resolveRemoteClaudeRoute({
+            providerId: opts.providerId,
+            model: opts.model,
+          })
+        : null;
+    // 凭证形态:本地按会话来源推导;远端仅在 materialize 出 route 时用来源形态(route.env
+    // 是远端鉴权的唯一事实源,来源形态只影响 auth gate 与 behaviorFlags),网关路径(route
+    // 为 null / 旧 host)维持「远端恒用网关 key」。
+    const credentialMode =
+      opts.remoteHostId && !remoteRoute
+        ? 'gateway-key'
+        : resolveAgentCredentialMode({
+            agentKind: 'claude-code',
+            providerId: opts.providerId,
+            model: opts.model,
+          });
     const authOptions = credentialMode ? { credentialMode } : undefined;
     const authState = await this.deps.auth.getState(authOptions);
     if (!authState.authenticated) {
@@ -787,6 +854,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
     const sdkModelFor = (model: string): string => this.sdkModelFor(model);
+    const resolveRemoteClaudeRoute = this.deps.resolveRemoteClaudeRoute?.bind(this.deps);
+    const getAuthEnv = this.deps.auth.getAuthEnv.bind(this.deps.auth);
     const sdkModel = sdkModelFor(opts.model);
     const initialSdkEffort = this.sdkEffortForModel(opts.model, opts.effort ?? 'high');
     const binaryPath = this.deps.binaryPath;
@@ -873,6 +942,34 @@ export class ClaudeCodeAgent extends BaseAgent {
           subagentModel: subagentDefault.envSubagentModel ?? null,
         })
       : null;
+    // 远端 route 覆盖(route 解析见上方 credentialMode 前的 remoteRoute):
+    // 先剥掉 buildClaudeEnv 经 getAuthEnv/endpoint 写入的鉴权/上游字段(订阅 token /
+    // provider-oauth 占位 key / 网关 endpoint),再让 route.env 成为唯一事实源,避免两套
+    // 鉴权字段并存。route 为 null 时 credentialMode 已回落 'gateway-key',remoteEnv 保持
+    // buildClaudeEnv 写入的网关 key + 网关 endpoint(remoteEndpoint),不进本块。
+    if (remoteEnv && remoteRoute) {
+      for (const key of REMOTE_ROUTE_OVERRIDE_ENV_KEYS) delete remoteEnv[key];
+      Object.assign(remoteEnv, remoteRoute.env);
+      remoteEnv.ANTHROPIC_BASE_URL = remoteRoute.endpoint;
+      // 订阅 token 续命回调的 entrypoint 闸门:route 覆盖后才出现 CLAUDE_CODE_OAUTH_TOKEN
+      // 的场景(如显式 anthropic 的 oauth-bearer 形态,buildClaudeEnv 期不注入 token)
+      // 需要在这里补跑一次;规则单源在 env-builder。
+      applyOAuthSpawnEntrypointGate(remoteEnv);
+    }
+    // 远端路由决策日志(排障还原「为什么这个会话走网关/直连/自定义上游」)。只打安全
+    // 字段:endpoint 只取 host,凭证形态与接线布尔量;绝不打 token / header 值。
+    if (remoteEnv) {
+      log.info('remote claude route decision', {
+        remoteHostId: opts.remoteHostId,
+        providerId: opts.providerId?.trim() || null,
+        routeMaterialized: remoteRoute !== null,
+        credentialMode: credentialMode ?? null,
+        endpointHost: hostOfUrl(remoteEnv.ANTHROPIC_BASE_URL),
+        oauthRefreshWired: Boolean(
+          remoteEnv.CLAUDE_CODE_OAUTH_TOKEN && this.deps.auth.getFreshSubscriptionToken,
+        ),
+      });
+    }
     const hostSystemPrompt = this.deps.runtimeConfig.systemPrompt;
 
     // mutable closure — setVendorOptions 在 handle 上对外暴露,**原地合并** patch。
@@ -1595,12 +1692,18 @@ export class ClaudeCodeAgent extends BaseAgent {
     let upstreamResponseIdleTimer: NodeJS.Timeout | null = null;
     let upstreamResponseLastEventType: string | null = null;
     let upstreamResponseLastEventAt = 0;
+    /** 还需要"清醒地"静默多久才判上游哑火;按分片递减(见 armUpstreamResponseIdleSlice)。 */
+    let upstreamResponseIdleRemainingMs = 0;
+    /** 当前分片的起始壁钟时刻;片尾据此识别系统挂起。 */
+    let upstreamResponseIdleSliceStartedAt = 0;
     const pendingToolIds: Set<string> = new Set();
     function clearUpstreamResponseIdle(): void {
       if (upstreamResponseIdleTimer) {
         clearTimeout(upstreamResponseIdleTimer);
         upstreamResponseIdleTimer = null;
       }
+      upstreamResponseIdleRemainingMs = 0;
+      upstreamResponseIdleSliceStartedAt = 0;
     }
     function armUpstreamResponseIdle(): void {
       clearUpstreamResponseIdle();
@@ -1608,71 +1711,70 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (closed || !turnInFlight) return;
       // 工具执行 / 用户交互 in-flight 期间 ball 不在上游, 不计 idle 配额。
       if (pendingToolIds.size > 0) return;
+      upstreamResponseIdleRemainingMs = upstreamResponseIdleTimeoutMs;
+      armUpstreamResponseIdleSlice();
+    }
+    /**
+     * 分片计时,片尾核对真实耗时(壁钟差 ≠ 清醒时间,分层自愈不变量第 6 处;
+     * 与 codex 的 armUpstreamIdleSlice、Session 层的 armTurnStallSlice /
+     * armAbortRecoverySlice、scheduler 的 absorbSuspendGap、scheduler-host runner
+     * 的排队派发上限同源)。不能用一个 30 分钟的长定时器直接判定 —— Electron 被
+     * 系统挂起(合盖睡眠)期间没有任何事件,定时器一旦在唤醒后到期就立刻开火,
+     * 一次午休就能让看门狗中断一条其实还健康的 turn(SDK 连接可能仍活着)。
+     * 片尾判定被冻结过时走**完整重判**(armUpstreamResponseIdle)而不是直接续片:
+     * 唤醒后 turn / 工具 / 交互状态可能已经变了。
+     */
+    function armUpstreamResponseIdleSlice(): void {
+      const slice = Math.min(upstreamResponseIdleRemainingMs, CC_UPSTREAM_IDLE_SLICE_MS);
+      upstreamResponseIdleSliceStartedAt = Date.now();
       upstreamResponseIdleTimer = setTimeout(() => {
         upstreamResponseIdleTimer = null;
-        if (closed || !turnInFlight) return;
-        const idleMs = upstreamResponseIdleTimeoutMs;
-        const msSinceLast = upstreamResponseLastEventAt > 0
-          ? Date.now() - upstreamResponseLastEventAt
-          : null;
-        log.warn('upstream-response-idle watchdog tripped — interrupting current turn', {
-          idleMs,
-          sdkSessionId,
-          lastEventType: upstreamResponseLastEventType,
-          msSinceLastEvent: msSinceLast,
-          pendingToolIdsSize: pendingToolIds.size,
-          turnInFlight,
-        });
-        // Bridge 消费兜底 (Codex review 3535664420 / 3536509277): 若 watchdog 在
-        // bridge /compact turn 内触发(大上下文压缩容易超 idle 阈值), 语义与用户 Stop
-        // 一致:取消整条 "compact → real user message" 序列。只 inputQueue.clear()
-        // 不够,因为 SDK 可能已经 eager-drain 了后续真实用户输入;只 q.interrupt()
-        // 也可能只中断当前 /compact turn,让已 drain 的真实消息继续跑。这里走与
-        // abort() 相同的 close-and-rebuild 路径,并保留 rewind resume point 给下一次
-        // send 重建。
-        if (queuedBridgeTurns > 0 || activeBridgeRewindResumeAt !== undefined) {
-          log.warn('upstream-idle watchdog fired during bridge — closing query and preserving rewind resume point', {
-            queuedBridgeTurns,
-            queuedInput: inputQueue.pending,
-            activeBridgeRewindResumeAt,
+        const elapsed = Date.now() - upstreamResponseIdleSliceStartedAt;
+        if (elapsed > slice + CC_UPSTREAM_IDLE_SUSPEND_GAP_MS) {
+          log.info('upstream-response-idle watchdog skipped a suspended slice', {
+            sdkSessionId,
+            sliceMs: slice,
+            elapsedMs: elapsed,
           });
-          eventQueue.push({
-            type: 'error',
-            data: {
-              message:
-                `上游 API 单次响应已静默 ${Math.round(idleMs / 1000)}s, ` +
-                `已自动中断当前 turn 防止卡死。可以直接发下一条消息继续 ` +
-                `(已完成的 tool result 都保留)。`,
-              isTerminal: true,
-              reason: 'upstream_response_idle_timeout',
-              idleMs,
-              sdkSessionId,
-              lastEventType: upstreamResponseLastEventType,
-              msSinceLastEvent: msSinceLast,
-            },
-            source: 'claude-code',
-          });
-          queuedBridgeTurns = 0;
-          restoreBridgeAutoCompactSnapshot('upstream_response_idle_timeout');
-          autoCompactController?.onCompactCanceled('upstream_response_idle_timeout');
-          inputQueue.clear();
-          try {
-            inputQueue.end();
-          } catch (e) {
-            log.warn('upstream-idle watchdog during bridge: inputQueue.end threw', { error: String(e) });
-          }
-          canceledBridgeQueries.add(q);
-          try {
-            q.close();
-          } catch (e) {
-            log.warn('upstream-idle watchdog during bridge: q.close threw', { error: String(e) });
-          }
-          turnInFlight = false;
-          turnState.interruptRequested = false;
-          pendingToolIds.clear();
-          emitTurnBoundary('upstream_response_idle_timeout', takeBridgeSuppressedDoneData());
+          armUpstreamResponseIdle();
           return;
         }
+        upstreamResponseIdleRemainingMs -= Math.max(0, elapsed);
+        if (upstreamResponseIdleRemainingMs > 0) {
+          armUpstreamResponseIdleSlice();
+          return;
+        }
+        onUpstreamResponseIdleTimeout();
+      }, slice);
+      (upstreamResponseIdleTimer as unknown as { unref?: () => void }).unref?.();
+    }
+    function onUpstreamResponseIdleTimeout(): void {
+      if (closed || !turnInFlight) return;
+      const idleMs = upstreamResponseIdleTimeoutMs;
+      const msSinceLast = upstreamResponseLastEventAt > 0
+        ? Date.now() - upstreamResponseLastEventAt
+        : null;
+      log.warn('upstream-response-idle watchdog tripped — interrupting current turn', {
+        idleMs,
+        sdkSessionId,
+        lastEventType: upstreamResponseLastEventType,
+        msSinceLastEvent: msSinceLast,
+        pendingToolIdsSize: pendingToolIds.size,
+        turnInFlight,
+      });
+      // Bridge 消费兜底 (Codex review 3535664420 / 3536509277): 若 watchdog 在
+      // bridge /compact turn 内触发(大上下文压缩容易超 idle 阈值), 语义与用户 Stop
+      // 一致:取消整条 "compact → real user message" 序列。只 inputQueue.clear()
+      // 不够,因为 SDK 可能已经 eager-drain 了后续真实用户输入;只 q.interrupt()
+      // 也可能只中断当前 /compact turn,让已 drain 的真实消息继续跑。这里走与
+      // abort() 相同的 close-and-rebuild 路径,并保留 rewind resume point 给下一次
+      // send 重建。
+      if (queuedBridgeTurns > 0 || activeBridgeRewindResumeAt !== undefined) {
+        log.warn('upstream-idle watchdog fired during bridge — closing query and preserving rewind resume point', {
+          queuedBridgeTurns,
+          queuedInput: inputQueue.pending,
+          activeBridgeRewindResumeAt,
+        });
         eventQueue.push({
           type: 'error',
           data: {
@@ -1689,21 +1791,57 @@ export class ClaudeCodeAgent extends BaseAgent {
           },
           source: 'claude-code',
         });
-        // 先关 turn-in-flight + 清 pending 再 interrupt: 这样 SDK drain 出 ResultMessage 时,
-        // translator 的 onTurnEnd 还会再清一次 (幂等), 但中间任何 message 都不会重新 arm timer。
+        queuedBridgeTurns = 0;
+        restoreBridgeAutoCompactSnapshot('upstream_response_idle_timeout');
+        autoCompactController?.onCompactCanceled('upstream_response_idle_timeout');
+        inputQueue.clear();
+        try {
+          inputQueue.end();
+        } catch (e) {
+          log.warn('upstream-idle watchdog during bridge: inputQueue.end threw', { error: String(e) });
+        }
+        canceledBridgeQueries.add(q);
+        try {
+          q.close();
+        } catch (e) {
+          log.warn('upstream-idle watchdog during bridge: q.close threw', { error: String(e) });
+        }
         turnInFlight = false;
+        turnState.interruptRequested = false;
         pendingToolIds.clear();
-        // watchdog 上面已推过带 reason 的 terminal error, interrupt 后 drain 出的
-        // is_error result 不能再触发 translator 的失败兜底(双 error banner)。
-        turnState.interruptRequested = true;
-        turnState.interruptGeneration = turnState.generation;
-        void q.interrupt().catch((e) => {
-          // interrupt 没发出去 → 不会有被打断的 result 来消费标记, 残留会错误
-          // 抑制下一真实 turn 的 is_error 兜底 —— 立即回收。
-          turnState.interruptRequested = false;
-          log.warn('upstream-response-idle watchdog: interrupt threw', { error: String(e) });
-        });
-      }, upstreamResponseIdleTimeoutMs);
+        emitTurnBoundary('upstream_response_idle_timeout', takeBridgeSuppressedDoneData());
+        return;
+      }
+      eventQueue.push({
+        type: 'error',
+        data: {
+          message:
+            `上游 API 单次响应已静默 ${Math.round(idleMs / 1000)}s, ` +
+            `已自动中断当前 turn 防止卡死。可以直接发下一条消息继续 ` +
+            `(已完成的 tool result 都保留)。`,
+          isTerminal: true,
+          reason: 'upstream_response_idle_timeout',
+          idleMs,
+          sdkSessionId,
+          lastEventType: upstreamResponseLastEventType,
+          msSinceLastEvent: msSinceLast,
+        },
+        source: 'claude-code',
+      });
+      // 先关 turn-in-flight + 清 pending 再 interrupt: 这样 SDK drain 出 ResultMessage 时,
+      // translator 的 onTurnEnd 还会再清一次 (幂等), 但中间任何 message 都不会重新 arm timer。
+      turnInFlight = false;
+      pendingToolIds.clear();
+      // watchdog 上面已推过带 reason 的 terminal error, interrupt 后 drain 出的
+      // is_error result 不能再触发 translator 的失败兜底(双 error banner)。
+      turnState.interruptRequested = true;
+      turnState.interruptGeneration = turnState.generation;
+      void q.interrupt().catch((e) => {
+        // interrupt 没发出去 → 不会有被打断的 result 来消费标记, 残留会错误
+        // 抑制下一真实 turn 的 is_error 兜底 —— 立即回收。
+        turnState.interruptRequested = false;
+        log.warn('upstream-response-idle watchdog: interrupt threw', { error: String(e) });
+      });
     }
     function noteUpstreamResponseActivity(eventType: string): void {
       upstreamResponseLastEventType = eventType;
@@ -1797,12 +1935,15 @@ export class ClaudeCodeAgent extends BaseAgent {
           remoteHostId: opts.remoteHostId,
           sessionId: opts.sessionId,
         });
-        // 远端真上游由 host 经 runtimeConfig.remoteEndpoint 提供(model-access 下发的
-        // 网关 endpoint)。host 定义了该字段但值为空 = 网关凭据尚未就绪 / 已失效——
-        // 此时 env-builder 会回落到本地 endpoint,下面的 loopback guard 虽也能拦,
-        // 但错误归因是「内部错误」,按它排查会走进死胡同。这里先按真实原因拒绝。
-        // (`!== undefined` 区分未注入该字段的旧 host:保持其原有回落行为。)
+        // 网关路径(remoteRoute 为 null,即会话有效路由是 XD 网关)才依赖
+        // runtimeConfig.remoteEndpoint:host 定义了该字段但值为空 = 网关凭据尚未就绪 /
+        // 已失效,env-builder 会回落到本地 endpoint(下面 loopback guard 虽能拦,但错误
+        // 归因成「内部错误」误导排查),这里先按真实原因拒绝。(`!== undefined` 区分未注入
+        // 该字段的旧 host,保持其原有回落行为。)
+        // route 路径(native OAuth / 自定义供应商)的 endpoint 已由 resolveRemoteClaudeRoute
+        // 覆盖成供应商真上游,与网关 endpoint 就绪与否无关,跳过本判。
         if (
+          !remoteRoute &&
           this.deps.runtimeConfig.remoteEndpoint !== undefined &&
           !this.deps.runtimeConfig.remoteEndpoint.trim()
         ) {
@@ -2057,6 +2198,19 @@ export class ClaudeCodeAgent extends BaseAgent {
               reason: decision.reason,
             };
           },
+          // 订阅 token 到期续命(远端版,对齐本地 SDK options 的 getOAuthToken 回调,
+          // 见 buildQuery 本地分支):远端 cc 中途 401 → daemon 发 oauth/refresh 反向
+          // RPC → 这里向 host 要新 token。接线条件与本地同款:env 实际带订阅 token 且
+          // host 实现了强刷 —— 网关 key / 自定义供应商会话绝不接,避免 API-key 401 被
+          // 误引导去刷订阅 token。刷新语义(失败基线 / 原地写回单一事实源)与本地共用
+          // refreshSubscriptionTokenInPlace。
+          ...(remoteEnv?.CLAUDE_CODE_OAUTH_TOKEN && this.deps.auth.getFreshSubscriptionToken
+            ? {
+                onOAuthRefresh: async (): Promise<unknown> => ({
+                  token: await this.refreshSubscriptionTokenInPlace(remoteEnv),
+                }),
+              }
+            : {}),
         });
         // factory 可能注入 host 侧 http server (远端 cc 协同恢复通道的
         // cindy_orca / orca_worker_bridge, 见 maker-host remoteCcQueryFactory),
@@ -2214,25 +2368,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 所以即使回调超时返回 null, 第二条路仍能捡到新 token, 排障时两条都要看。
           ...(env.CLAUDE_CODE_OAUTH_TOKEN && this.deps.auth.getFreshSubscriptionToken
             ? {
-                getOAuthToken: async (): Promise<string | null> => {
-                  try {
-                    // env.CLAUDE_CODE_OAUTH_TOKEN = 本会话持有 token 的**单一事实源**:
-                    // 作为失败基线传给 host(库已被后台预续期换代时直接返回库值,不再
-                    // 消耗一次轮换);拿到新 token 后原地写回 env —— rewind/fork 重建
-                    // buildQuery 复用同一 env 引用,新子进程直接以最新 token spawn,
-                    // 不会拿旧 token 起跑立即 401 再白白强刷一枚好 token。
-                    const fresh = await this.deps.auth.getFreshSubscriptionToken!(
-                      env.CLAUDE_CODE_OAUTH_TOKEN,
-                    );
-                    if (fresh) env.CLAUDE_CODE_OAUTH_TOKEN = fresh;
-                    return fresh ?? null;
-                  } catch (e) {
-                    log.warn('getOAuthToken callback failed; returning null (cc will surface auth error)', {
-                      error: e instanceof Error ? e.message : String(e),
-                    });
-                    return null;
-                  }
-                },
+                getOAuthToken: (): Promise<string | null> =>
+                  this.refreshSubscriptionTokenInPlace(env),
               }
             : {}),
           // 第一方只读工具由 host 精确列名, 直接走 SDK public allowlist, 避免
@@ -3774,7 +3911,92 @@ export class ClaudeCodeAgent extends BaseAgent {
       // buildQuery 重建时读的就是 mutableModel / mutableEffort / mutableFastMode /
       // effectiveSdkPermissionMode() 的最新值, 新设置会自然带上。
 
-      async setModel(newModel: string) {
+      async setModel(newModel: string, setModelOpts?: { providerId?: string | null }) {
+        // 远端会话切换模型/来源:远端 env 在 spawn 时已烤进 daemon,无法热改。若新
+        // 模型/来源解析出的路由与当前不一致(路由类型或 env 内容变化),继续用旧
+        // env 会以错误 endpoint/凭证打新模型(401/404/错租户)。重新解析比对,
+        // 不一致则拒绝并提示重建会话;完全一致才放行。
+        // providerId 用调用方给的目标来源(可能正在切 provider),缺省回落会话启动值。
+        if (opts.remoteHostId && resolveRemoteClaudeRoute) {
+          const targetProviderId = setModelOpts?.providerId !== undefined ? setModelOpts.providerId : opts.providerId;
+          const nextRoute = await resolveRemoteClaudeRoute({
+            providerId: targetProviderId,
+            model: newModel,
+          });
+          const routeChanged =
+            (nextRoute === null) !== (remoteRoute === null) ||
+            (nextRoute !== null &&
+              remoteRoute !== null &&
+              (() => {
+                // 与「当前生效的 remoteEnv」比对,而不是 spawn 时冻结的 remoteRoute.env:
+                // refreshSubscriptionTokenInPlace 会原地写回 remoteEnv,因此它始终是最新
+                // 凭证;nextRoute 也是现解析的最新值。
+                //
+                // 比对规则(四轮 review 的折中):
+                // - endpoint + 非 token env 值:任一变化 → 拒绝(真路由/定制头变化);
+                // - CLAUDE_CODE_OAUTH_TOKEN(订阅 token,有 oauth/refresh 通道)的**值**:
+                //   不比对 —— 后台刷新先更新 nextRoute、远端 daemon 尚未 401 的轮换
+                //   窗口会误拒;daemon 撞 401 时经 refresh 拿最新值。
+                // - ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN(自定义供应商 key,**无**
+                //   refresh 通道)的**值**:仍比对 —— 用户改 key 后远端 daemon 会持续
+                //   401,必须拒绝(Greptile 六轮)。存在性(在/不在)同样比对(路由类型)。
+                const SUBSCRIPTION_TOKEN_KEY = 'CLAUDE_CODE_OAUTH_TOKEN';
+                const PROVIDER_KEY_KEYS = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
+                // 订阅身份元数据(scopes/subscriptionType/rateLimitTier)与 token 同源,
+                // 会在用户零操作下漂移(登录后 backfill 补齐 / 订阅计划变更刷新)——
+                // 与 token 同组按存在性比对,不按值(Fable 5 评估 B1:值比对会误拒)。
+                const SUBSCRIPTION_METADATA_KEYS = new Set([
+                  'CLAUDE_CODE_OAUTH_TOKEN',
+                  'CLAUDE_CODE_OAUTH_SCOPES',
+                  'CLAUDE_CODE_SUBSCRIPTION_TYPE',
+                  'CLAUDE_CODE_RATE_LIMIT_TIER',
+                ]);
+                const routeKeys = new Set([
+                  ...Object.keys(remoteRoute.env),
+                  ...Object.keys(nextRoute.env),
+                ]);
+                // 非订阅字段的值(含自定义供应商 key + 定制头)按全并集比对;
+                // 订阅字段(token + 元数据)只按「spawn 时声明过的字段」(remoteRoute.env
+                // 的 key 集)比存在性 —— nextRoute 新增的元数据字段(backfill 后才有)
+                // 不算变化,remoteEnv 烤的是 spawn 时快照(Fable 5 B1 修正)。
+                const nonSubscriptionPick = (env: Record<string, string>): Record<string, string> =>
+                  Object.fromEntries(
+                    [...routeKeys]
+                      .filter((k) => !SUBSCRIPTION_METADATA_KEYS.has(k) && env[k] !== undefined)
+                      .map((k) => [k, env[k]]),
+                  );
+                const spawnDeclares = new Set(Object.keys(remoteRoute.env));
+                const subscriptionPresenceOf = (env: Record<string, string>): string[] =>
+                  [...spawnDeclares]
+                    .filter((k) => SUBSCRIPTION_METADATA_KEYS.has(k) && env[k] !== undefined)
+                    .sort();
+                return (
+                  nextRoute.endpoint !== remoteRoute.endpoint ||
+                  JSON.stringify(nonSubscriptionPick(nextRoute.env)) !==
+                    JSON.stringify(nonSubscriptionPick(remoteEnv ?? {})) ||
+                  JSON.stringify(subscriptionPresenceOf(nextRoute.env)) !==
+                    JSON.stringify(subscriptionPresenceOf(remoteEnv ?? {}))
+                );
+              })()) ||
+            // 网关路径(route null):切模时重新读当前网关 key,与 remoteEnv 里 spawn 时
+            // 烤进的比对——用户在设置里更新网关 key 后,远端 daemon 仍带旧 key,继续
+            // 切模会放行到 401(Greptile 三轮)。
+            (nextRoute === null &&
+              remoteRoute === null &&
+              (async () => {
+                const currentAuthEnv = await getAuthEnv({ credentialMode: 'gateway-key' });
+                return currentAuthEnv.ANTHROPIC_API_KEY !== remoteEnv?.ANTHROPIC_API_KEY;
+              })());
+          if (await routeChanged) {
+            throw new Error(
+              `[REMOTE_MODEL_SWITCH_ROUTE_CHANGE] switching to "${newModel}" requires a different remote route; close and recreate the remote session to apply it`,
+            );
+          }
+          // 放行后**不**更新 remoteRoute:它是「spawn 时的路由指纹」,spawnDeclares
+          // 永远用初次 spawn 的 key 集 —— nextRoute 新增的元数据字段(backfill 后
+          // 才有)若被当成 spawn 声明,下次切模会与仍烤着旧快照的 remoteEnv 比对
+          // 误拒(codex P2 #1035)。
+        }
         const sdkModel = sdkModelFor(newModel);
         const isControlBlocked = controlRequestsBlocked();
         log.debug('setModel', { from: mutableModel, to: newModel, sdk: sdkModel, controlRequestsBlocked: isControlBlocked });

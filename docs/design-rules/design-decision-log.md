@@ -12,6 +12,32 @@
 
 ## 2026-07
 
+- **07-29** **「跳过登录」恢复过协议门 + 协议行整行热区 + 未登录态命名(拍板人 = 用户)**——
+  本条**推翻** 07-27 记录里的「跳过登录免协议门」(桌面侧;那条其余内容——入口形态换文字按钮、
+  面板 440→500、圆钮行删游客——继续有效)。三项决策:
+  (1) **跳过登录过协议门**:不登录账号也是在使用 Cindy 客户端,面板内「跳过登录」文字按钮与
+  桌面 `error` 步 footer 逃生口都改回经 `requireConsent`——未勾选先弹服务条款 / 隐私协议弹窗,
+  同意后才进未登录状态,并写入统计采集同意。是否真的上报仍由 main 侧闸决定
+  (`analyticsSettingsService` 对本地会话一律 `!isLocalMode()` 不放行,该逻辑不动)。
+  ⚠️ 合规实现约束(#907 review 引出,勿改顺序):这条链路的同意记录必须落在
+  `auth:enter-local` **之后**——`acceptPrivacyConsent` 会同步广播 `allowed`,提前落时
+  `isLocalMode()` 还是 false,`allowed:true` 会让 TapDB 当场 init 并发 `device_login`,
+  把「未登录态不上报」破一个窗口。落码 = `deferConsentPersist` 选项 + `openLocalMode`
+  自己落同意,顺序由 consent 测试的 `invocationCallOrder` 断言锁住。同批还要求切换窗口内
+  不接任何新动作(`requireConsent` 顶部 `localModePendingRef` guard;企业 SSO 入口与
+  `error` 步 `reset` 因绕过 requireConsent 另行自挡),否则窗口里点邮箱 / 社交会走
+  「放行即落同意」分支再次广播 `allowed:true`。取舍:用行为层 guard 而非给全部控件加
+  disabled(窗口只有几十毫秒,全量 disabled 会换来可见闪变)。
+  (2) **协议同意行整行可点**:热区由 radio 的 24px 圈体扩到整行 680×40(原来要瞄准一个小圆点);
+  两个内联链接与 radio 自身 `stopPropagation`(前者只开链接,后者防冒泡二次 toggle),
+  行容器不加 role / tabIndex(radio 仍是唯一无障碍交互点),整行 `select-none`。
+  (3) **未登录态改名**:应用内不再出现「本地模式」这个说法——账号状态名统一为「未登录」
+  (侧边栏账号胶囊、设置页资料卡、语音服务提示四语同步),动作名沿用「跳过登录」;
+  未登录态头像不再取状态文案首字(会渲染成「未」/「N」)或写死「L」,改中性人形图标。
+  代码内部标识(`AuthState mode='local'`、`authEnterLocal` IPC、data owner)不受影响,仍用 local。
+  术语已登记 `not-signed-in` / `skip-sign-in` 两条 proposed(`i18n/glossary.json`)。
+  (→ `DESIGN.md §16` 协议门表 + 协议行整行热区条 / `LoginPage.consent.test.tsx`
+  与 `LoginPage.region.harness.test.tsx` 的过门断言 / `userInfoSectionHover.test.ts` 头像契约)
 - **07-29** **手机端功能区落位改回新稿标注值(拍板人 = 用户,依据 = 实机比例对照图)**——
   本条**修正**下方 07-28 记录里「功能区落位保持 main 原值不动」那一句(该句作废,原记录
   保留在册)。**背景**:07-28 剥离手机端跳过登录时,把功能区落位一并退回 main

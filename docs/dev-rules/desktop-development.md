@@ -15,7 +15,8 @@ pnpm restart:desktop:remote --region=cn
 ```
 
 Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录页中免 Cindy 账号的
-「本地模式」（无需账号即可使用本机 agent）不是同一个概念。Agent 不得自行改用
+「跳过登录」（应用内显示为「未登录」，无需账号即可使用本机 agent；代码内部标识仍为
+`local` mode）不是同一个概念。Agent 不得自行改用
 `pnpm dev:desktop` 或 `pnpm dev:desktop:remote` 绕过包装脚本。
 
 启动包装会先停止**当前 checkout** 已有的 Desktop dev 进程；其他 worktree／命名沙箱的

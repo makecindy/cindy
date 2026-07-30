@@ -153,6 +153,9 @@ UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 V
     `apps/mobile/src/__tests__/shadowCatalogGlossary.test.ts`
   - desktop：`src/main/applicationMenuLabels.ts`（macOS 原生菜单栏）→
     `apps/desktop/src/main/__tests__/applicationMenuLabels.test.ts`
+  - desktop：`src/main/endpointManifestDialogCopy.ts`（启动期端点清单获取失败的系统弹框，
+    弹在 createWindow 之前、renderer 与 i18next 都还不存在）→
+    `apps/desktop/src/main/__tests__/endpointManifestDialogCopyGlossary.test.ts`
   - desktop：`src/main/oauthResultPage.ts`（OAuth 回调结果页，渲染在系统浏览器里）→
     `apps/desktop/src/main/__tests__/oauthResultPageGlossary.test.ts`。它的文案分散在
     若干函数里且要传 provider / brand 实参，测试用固定占位实参求值后再扫；占位值不含

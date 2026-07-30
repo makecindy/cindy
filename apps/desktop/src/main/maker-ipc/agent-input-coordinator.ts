@@ -196,6 +196,26 @@ export interface AgentInputCoordinatorDeps {
    */
   onDiscardedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
+   * 用户在桌面端**显式重试**了这个会话的失败 turn(错误横幅「重试」)。
+   *
+   * hook-control 用它把那一轮的结果接回渠道里那条已经收口的消息(turn.reopen)。
+   * 之所以要 coordinator 显式回调、而不是在发送路径上按文本认续跑指令:
+   * retryLastError 只在失败 turn **已有产出**时才改发 CONTINUE_AFTER_ERROR_PROMPT,
+   * 零产出(派发即失败 / 首个 API 调用就挂, 也就是上游过载最典型的形态)走的是
+   * 克隆重发原文 —— 那条消息文本上与普通用户消息毫无区别, 从文本无法认出重试意图。
+   * 只靠文本嗅探会让最需要回流的那类失败恰好没有信号。
+   */
+  onUiRetry?: (sessionId: string, clientId: string) => void;
+  /**
+   * 用户/上游把一条**新**消息排进了这个会话(enqueue 入口)。
+   *
+   * hook-control 用它作废该会话的待续跑记账: 会话已经被别的内容推进, 再把结果接回
+   * 渠道那条旧消息只会显示无关输出。判据刻意用**入口**而不是消息文本 ——
+   * retryLastError 的零产出分支重发的是原文, 文本上与新消息无从区分, 而它走的是
+   * pendingQueue.unshift、不经本入口, 于是不会自我作废。
+   */
+  onUserEnqueue?: (sessionId: string) => void;
+  /**
    * 派发失败后队列可能已空(项目已从队列移除但未被放回时)回调。
    * host 用它触发 notifyQueueEmptied, 让 AgentIsland 中因队列非空而延迟的完成事件得到补发。
    * Thread 3 fix: drain/dispatchCompact 失败路径在 item 未回退到队列时调用。
@@ -775,6 +795,21 @@ export class AgentInputCoordinator {
       return this.getProjection(sessionId);
     }
     this.rememberEnqueuedClientId(state, item.clientId);
+    // 真的有一条**新**消息进队了 = 这个会话被别的内容推进(见 deps.onUserEnqueue)。
+    // 必须放在幂等去重**之后**: 被去重丢弃的重传(弱网 / 移动端补发)压根没推进任何
+    // 东西, 若在它上面作废记账, 一条延迟到达的旧重传就会把之后才装上的、更新的那笔
+    // 待续跑记账删掉, 于是下一次显式重试跑成了却不回流。
+    //
+    // 续跑指令走的是另一条语义: 中断横幅「继续任务」由 renderer 直发
+    // CONTINUE_AFTER_APP_EXIT_PROMPT 并经本入口入队。它不是"无关的新消息"(那会作废
+    // 渠道回流的记账), 而**就是**一次续跑意图 —— 所以在这里发续跑信号并带上 clientId,
+    // 让消费方按 clientId 做权威归属(见 deps.onUiRetry 的说明)。
+    // (错误横幅那条走 retryLastError, 压根不经本入口。)
+    if (item.originalSyntheticTrigger === 'continue') {
+      this.deps.onUiRetry?.(sessionId, item.clientId);
+    } else {
+      this.deps.onUserEnqueue?.(sessionId);
+    }
     // 崩溃恢复暂停队列的死锁解除(2026-07-14):恢复暂停只防"重启后自动替用户
     // 发送",用户显式输入(composer 发送 / 中断横幅「继续任务」,均经 INPUT_ENQUEUE
     // 携带本 flag)即视为放行——否则「继续任务」只是往暂停队列再塞一条,永远
@@ -1377,6 +1412,16 @@ export class AgentInputCoordinator {
       }
       state.pendingQueue.unshift(item);
       this.prependPendingCompactWaitClientId(state, item.clientId);
+      // 「用户显式重试」信号 —— **只在 active-turn recovery 上发**。这一支重试的是
+      // 那个真正跑起来又失败的 turn, 所以它可能正是渠道那条消息线的延续: 有产出走
+      // 续跑指令、零产出走克隆重发, 但对回流而言意图相同。
+      // queue-head recovery 刻意不发: 那条消息在**派发前**就失败了(它自己从未成为
+      // 一个 turn), 与之前失败的 hook turn 无关。同一会话若还留着上一次渠道失败的
+      // 待续跑记账, 在那上面发信号会让一条无关的排队桌面消息认领并改写那条旧消息。
+      //
+      // 带上这条重试消息的 clientId: 消费方(hook-control)用它做**权威归属** ——
+      // 只有 clientId 对得上的那次 dispatch 才是目标续跑轮, 不再靠"首个事件"猜。
+      this.deps.onUiRetry?.(sessionId, item.clientId);
     }
     this.touchUserSend(sessionId);
     this.emit(sessionId);

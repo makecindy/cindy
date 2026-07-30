@@ -53,7 +53,6 @@ import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import type {
-  MobileAgentSkillListResult,
   MobileAtResourceItem,
   MobileSlashCommand,
   RemoteDirectoryEntry,
@@ -1142,12 +1141,10 @@ export default function NewRemoteSessionScreen() {
       await openLink(selectedDeviceId);
       const [builtins, skills] = await Promise.all([
         maker.listAgentCommands(agentKind),
-        workingDir
-          ? maker.listAgentSkills(agentKind, {
-              workingDir,
-              forceReload: false,
-            })
-          : Promise.resolve({ success: true, skills: [] } satisfies MobileAgentSkillListResult),
+        maker.listAgentSkills(agentKind, {
+          ...(workingDir ? { workingDir } : {}),
+          forceReload: false,
+        }),
       ]);
       return { builtins, skills };
     })

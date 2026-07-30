@@ -210,6 +210,7 @@ import {
 import { QuoteCapsule } from '@/session/QuoteCapsule';
 import { formatQuotesForSend } from '@cindy/maker-shared/chat-quotes';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
+import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import { confirmMobileSessionAgentSwitch } from '@/session/sessionAgentSwitchConfirmation';
 import {
@@ -470,7 +471,6 @@ import type {
   RemoteSession,
 } from '@/session/types';
 import type {
-  MobileAgentSkillListResult,
   MobileAtResourceItem,
   MobileDesktopCommandListResult,
   MobileModelPricingMap,
@@ -2282,12 +2282,10 @@ export default function SessionScreen() {
       await openLink(deviceId);
       const [builtins, skills, desktop] = await Promise.all([
         maker.listAgentCommands(agentKind),
-        currentSession.workingDir
-          ? maker.listAgentSkills(agentKind, {
-              workingDir: currentSession.workingDir,
-              forceReload: false,
-            })
-          : Promise.resolve({ success: true, skills: [] } satisfies MobileAgentSkillListResult),
+        maker.listAgentSkills(agentKind, {
+          ...(currentSession.workingDir ? { workingDir: currentSession.workingDir } : {}),
+          forceReload: false,
+        }),
         // desktop 命令是 additive 展示(白名单分流不依赖此清单,清单只参与同名 skill
         // 让行仲裁,见 desktopSlashCommands):拉取失败(含老被控端无此通道)静默降级
         // 为不展示,不能拖垮 builtin/skill 两路。
@@ -6590,7 +6588,10 @@ export default function SessionScreen() {
               searchOpen={searchOpen}
               title={isDeviceAccessRevoked
                 ? t('session.screen.accessRevokedShort')
-                : currentSession?.title || currentSession?.workingDir
+                // 哨兵先过投影再进兜底链:会话头是发出第一句话后停留最久的位置,
+                // 原样显示会把内部哨兵 "New Maker" 摆在标题栏上。
+                : projectDraftSessionTitle(currentSession?.title, t('session.menu.unnamedTitle'))
+                  || currentSession?.workingDir
                   || (connectionError ? t('session.screen.sessionNotSynced') : (deviceName || t('session.screen.conversationFallback')))}
             />
 

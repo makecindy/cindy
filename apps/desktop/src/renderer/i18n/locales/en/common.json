@@ -5,7 +5,11 @@
     "REMOTE_WORKDIR_INVALID": "The remote project path is invalid. Choose the project directory again.",
     "REMOTE_WORKDIR_NOT_FOUND": "The remote project directory no longer exists. Choose it again.",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "The remote project path is not a folder. Choose a project directory.",
-    "REMOTE_WORKDIR_UNAVAILABLE": "The remote project directory is unavailable. Reconnect the network drive and try again."
+    "REMOTE_WORKDIR_UNAVAILABLE": "The remote project directory is unavailable. Reconnect the network drive and try again.",
+    "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "The target model or source needs a different remote route — close and recreate the remote session to apply.",
+    "REMOTE_PROVIDER_UPDATING": "Provider credentials are being updated — retry in a moment",
+    "REMOTE_PROVIDER_UNSUPPORTED": "This provider is not supported in SSH remote sessions — pick another source",
+    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai subscription is not connected — connect it first or pick a gateway model"
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
@@ -48,7 +52,7 @@
   },
   "agentIsland": {
     "native": {
-      "newConversationTitle": "New Maker",
+      "newConversationTitle": "New Chat",
       "newConversationHint": "Start a new conversation",
       "muteSound": "Mute Agent Island",
       "enableSound": "Enable Agent Island sound",
@@ -582,11 +586,11 @@
       "fallbackName": "User",
       "avatarAlt": "{{name}} avatar",
       "local": {
-        "exitFailed": "Failed to exit local mode, please try again",
-        "name": "Local mode",
+        "exitFailed": "Failed to exit the not-signed-in state, please try again",
+        "name": "Not signed in",
         "description": "Data stays on this device without Cindy account services",
         "signIn": "Sign in to Cindy",
-        "exit": "Exit local mode"
+        "exit": "Exit the not-signed-in state"
       },
       "copyUserId": {
         "action": "Copy user ID",
@@ -756,7 +760,7 @@
       "serviceSource": {
         "label": "Voice service",
         "hint": "Uses the Cindy voice service by default. You can instead connect a realtime ASR service with separate voice credentials.",
-        "localHint": "Local mode does not use Cindy account services; connect a realtime ASR service with separate voice credentials.",
+        "localHint": "Cindy account services are unavailable while not signed in; connect a realtime ASR service with separate voice credentials.",
         "ariaLabel": "Voice service source",
         "options": {
           "cindy": "Cindy official service",
@@ -876,11 +880,16 @@
         "recording": "Press a new shortcut",
         "none": "Not set",
         "clear": "Clear",
+        "fnNeedsInputMonitoring": "Fn-based shortcuts need the shortcut listener permission; other shortcuts record normally.",
+        "awaitingInputMonitoring": "This shortcut is waiting for the shortcut listener permission and takes effect once granted.",
         "toast": {
           "needsModifier": "Use a key combo, a standalone F1-F24 key, or Left/Right Command, Option, Control, Fn.",
           "fnUnavailable": "Use a key combo, a standalone F1-F24 key, or Left/Right Command, Option, Control, Fn.",
           "systemReserved": "This shortcut conflicts with a system or common editing shortcut",
-          "registrationFailed": "Could not register this shortcut: {{error}}"
+          "registrationFailed": "Could not register this shortcut: {{error}}",
+          "recordingFailed": "Could not start shortcut recording: {{error}}",
+          "listenerUnavailable": "Could not start the shortcut listener — restart Cindy and try again",
+          "pendingInputMonitoring": "Shortcut saved — it takes effect after you grant the shortcut listener permission"
         }
       },
       "permissions": {
@@ -3266,7 +3275,7 @@
     "ssoRequired": "This organization requires SSO sign-in",
     "ssoEntry": "Sign in with enterprise SSO",
     "localModeEntry": "Skip Sign-In",
-    "localModeOpening": "Opening local mode…",
+    "localModeOpening": "Skipping sign-in…",
     "localModeDescription": "No Cindy account required. Data stays on this device; cloud models, cross-device access, and marketplace services are unavailable.",
     "consentStatement": "I have read and agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
     "consentDialog": {
@@ -3979,6 +3988,8 @@
     "banner": {
       "title": "Updated to {{version}}",
       "subtitle": "Relaunch to apply",
+      "viewNotes": "See What's New",
+      "viewNotesAria": "See what's new in {{version}}",
       "button": "Relaunch",
       "tooltipReady": "Update ready – click to relaunch{{versionSuffix}}",
       "ariaCollapsed": "Update ready, click to relaunch to version {{version}}",
@@ -4260,13 +4271,20 @@
         "addFailed": "Failed to add project",
         "pathEmpty": "Please enter a project path",
         "pathIsFile": "{{path}} is a file, not a directory"
-      }
+      },
+      "selectTargetPlaceholder": "Choose a target…",
+      "requestedDeviceUnavailable": "The requested device isn't available right now — pick another target"
     },
     "projectPicker": {
       "addRemoteProject": "Add remote project"
     },
     "modelSelector": {
       "budgetNeedsApiKey": "This model needs an API key — configure it in Settings",
+      "subscriptionDirectDisabled": {
+        "chatgpt": "Subscription-direct GPT models are not supported in SSH remote sessions yet",
+        "xai": "Subscription-direct Grok models are not supported in SSH remote sessions yet",
+        "generic": "Subscription-direct models are not supported in SSH remote sessions yet"
+      },
       "effortLabel": "Effort level",
       "edit": "Edit",
       "options": "Options",
@@ -4583,6 +4601,14 @@
       "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
       "alwaysAllowSessionHint": "Applies to the whole session, not just this one request.",
       "ruleSeparator": ", "
+    },
+    "deviceSwitcher": {
+      "label": "Device",
+      "localHint": "Runs on this computer",
+      "onlineHint": "Connected — available",
+      "offlineHint": "Offline — available once connected",
+      "attachmentsDropped": "Removed {{count}} attachment(s) — they live on the previous device",
+      "attachmentsRemoteUnsupported": "File attachments aren't supported on a remote device — skipped {{count}} (images are fine)"
     }
   },
   "onboarding": {
@@ -5450,11 +5476,15 @@
     },
     "draft": {
       "createSessionFailed": "Failed to create session, please retry",
+      "remoteProviderUpdating": "Provider credentials are being updated — retry in a moment",
+      "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
+      "remoteNativeOauthUnavailable": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
       "deviceStillLoading": "Remote device is still loading, please wait",
       "worktreeMissingRepo": "Cannot create worktree: missing repository root for the current directory",
       "worktreeRepoHint": "Try re-selecting the working directory and wait for the folder badge to refresh, then retry",
       "sessionInactive": "Session is no longer active",
-      "remoteProjectBanner": "New session in {{project}} on {{device}}"
+      "remoteProjectBanner": "New session in {{project}} on {{device}}",
+      "remoteDialogueBanner": "New dialogue on {{device}} (no project)"
     },
     "jumpSession": {
       "emptyId": "Enter a sessionId to jump to",
@@ -7498,7 +7528,8 @@
       "start": "Start",
       "starting": "Starting…",
       "cancel": "Cancel",
-      "failed": "Failed to create goal"
+      "failed": "Failed to create goal",
+      "busy": "Another creation is already in progress. Please try again in a moment."
     },
     "usageLimitedUntil": "resumes {{time}}",
     "capacityRetryAt": "Retrying at {{time}}",
@@ -7666,7 +7697,7 @@
     }
   },
   "billing": {
-    "sidebar": "Credits & plans",
+    "sidebar": "Balance & Plans",
     "settings": {
       "title": "Usage and billing",
       "subscriptionCard": {
@@ -7677,14 +7708,17 @@
         "unavailable": "Subscription status is temporarily unavailable. Refresh to try again.",
         "action": "View plans",
         "changeAction": "Change plan",
+        "manageAction": "Manage subscription",
+        "portalAction": "Manage in Stripe",
+        "portalFailed": "Couldn't open Stripe subscription management. Try again later.",
         "priceInterval": "{{price}} / {{interval}}",
-        "includedCredits": "Includes {{amount}} credits per {{interval}}",
+        "includedCredits": "Includes {{amount}} per {{interval}}",
         "renewsAt": "Renews {{date}}",
         "endsAt": "Plan ends {{date}}",
         "cancelAction": "Cancel Subscription",
         "cancelConfirmTitle": "Cancel Your Current Subscription?",
-        "cancelConfirmDescription": "This action does not issue a refund or immediately change your credits. Your current plan stays available through {{date}}, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
-        "cancelConfirmDescriptionWithoutDate": "This action does not issue a refund or immediately change your credits. Your current plan stays available through the end of this billing period, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmDescription": "This action does not issue a refund or immediately change your balance. Your current plan stays available through {{date}}, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmDescriptionWithoutDate": "This action does not issue a refund or immediately change your balance. Your current plan stays available through the end of this billing period, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
         "cancelConfirmAction": "Confirm Cancellation",
         "cancelSuccess": "Auto-renewal is canceled. Your current plan remains available through {{date}}.",
         "cancelSuccessWithoutDate": "Auto-renewal is canceled. Your current plan will end after this billing period.",
@@ -7692,35 +7726,33 @@
         "cancelFailed": "Could not cancel the subscription. Try again later."
       },
       "topupCard": {
-        "action": "Buy credits"
+        "action": "Add Funds"
       }
     },
     "balance": {
       "title": "Available balance",
-      "creditParityCny": "1 credit = 1 CNY. Credits pay for Cindy AI usage; payments are processed by third-party providers.",
-      "creditParityUsd": "1 credit = 1 USD. Credits pay for Cindy AI usage; payments are processed by third-party providers.",
-      "plan": "Plan credits",
-      "purchased": "Purchased credits",
-      "promotional": "Promotional credits",
-      "notProvisioned": "Credits have not been enabled for this account.",
+      "plan": "Plan Balance",
+      "purchased": "Top-up Balance",
+      "promotional": "Promotional Balance",
+      "notProvisioned": "Balance has not been enabled for this account.",
       "notSupported": "Balance lookup is not supported for this account.",
       "unavailable": "Balance is temporarily unavailable. Refresh to try again."
     },
     "usage": {
-      "title": "Credit usage",
+      "title": "Balance Usage",
       "observedAt": "Balance updated {{date}}",
       "poolDetail": "Used {{used}} · Total {{total}}",
       "remaining": "Remaining",
       "progressLabel": "{{label}} usage",
-      "noPlanCredits": "No subscription credits because there is no active subscription.",
+      "noPlanCredits": "No plan balance because there is no active subscription.",
       "historyUnavailable": "Usage history is incomplete. Only the remaining balance is available.",
       "detailsUnavailable": "Usage details are temporarily unavailable. Current balances are shown instead.",
       "promotionalDetails": {
-        "title": "Promotional Credit Details",
+        "title": "Promotional Balance Details",
         "count": "{{count}} grants",
-        "empty": "No promotional credit grants are available.",
+        "empty": "No promotional grants are available.",
         "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
-        "unnamed": "Promotional credit",
+        "unnamed": "Promotional Grant",
         "original": "Original",
         "used": "Used",
         "remaining": "Remaining",
@@ -7738,7 +7770,7 @@
         "title": "Choose a subscription plan"
       },
       "topup": {
-        "title": "Buy credits"
+        "title": "Add Funds"
       }
     },
     "steps": {
@@ -7775,7 +7807,7 @@
       "MONTH": "month",
       "YEAR": "year"
     },
-    "credits": "{{amount}} credits",
+    "credits": "Includes {{amount}}",
     "confirm": {
       "channel": "Pay with {{provider}}"
     },
@@ -7808,7 +7840,7 @@
       "failedTitle": "Unable to complete",
       "expiredTitle": "Payment expired",
       "canceledTitle": "Payment canceled",
-      "topupSubtitle": "Credit top-up",
+      "topupSubtitle": "Balance Top-up",
       "subscriptionSubtitle": "Subscription",
       "creatingBody": "Confirming the order with the payment service…",
       "qrAlt": "Payment QR code",

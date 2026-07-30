@@ -439,6 +439,27 @@ describe('mobileHome', () => {
     expect(home.chats.map((item) => item.session.id)).toEqual(['chat-1']);
   });
 
+  // 首页与设备详情页两条列表管线是对称的:任何一侧只改展示不改 haystack,
+  // 都会留下「搜得到的 ≠ 看得到的」(PR #1031 review P1)。
+  it('搜索按行上显示的标题匹配,内部哨兵不进 haystack', () => {
+    const sessions = [
+      session('s-sentinel', { title: 'New Maker', workspaceKind: 'dialogue', workingDir: null }),
+      session('s-named', { title: 'Fix New Maker draft route', workspaceKind: 'dialogue', workingDir: null }),
+    ];
+
+    expect(buildMobileHomePresentation({
+      searchQuery: 'Untitled',
+      sessions,
+      unnamedLabel: 'Untitled session',
+    }).chats.map((item) => item.session.id)).toEqual(['s-sentinel']);
+
+    expect(buildMobileHomePresentation({
+      searchQuery: 'new maker',
+      sessions,
+      unnamedLabel: 'Untitled session',
+    }).chats.map((item) => item.session.id)).toEqual(['s-named']);
+  });
+
   it('collapses runs of the same schedule into one automation group row inside the project', () => {
     const scheduleInfo = (latestRunAt: number, running = false) => ({
       scheduleId: 'sched-1',

@@ -820,6 +820,34 @@
       }
     },
     {
+      "id": "volcengine-agent-plan",
+      "name": "火山方舟 Agent Plan",
+      "nameEn": "Volcengine Ark Agent Plan",
+      "docsUrl": "https://docs.volcengine.com/docs/82379/2373738",
+      "regionHint": "cn",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://ark.cn-beijing.volces.com/api/plan",
+          "models": [
+            {
+              "id": "ark-code-latest",
+              "name": "Ark Code Latest"
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "ark-code-latest",
+              "name": "Ark Code Latest"
+            }
+          ]
+        }
+      }
+    },
+    {
       "id": "volcengine-coding-plan",
       "name": "火山方舟 Coding Plan",
       "nameEn": "Volcengine Ark Coding Plan",

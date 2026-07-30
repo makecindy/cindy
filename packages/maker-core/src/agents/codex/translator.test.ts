@@ -21,6 +21,7 @@ import {
   translatePlanUpdatedNotification,
 } from './translator.js';
 import type { CodexRuntimeState } from './translator.js';
+import type { CodexErrorInfo } from './app-server/protocol.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import type { AgentEvent } from '../../types/events.js';
@@ -46,17 +47,21 @@ function makeParams(opts: {
   message: string;
   threadId?: string;
   turnId?: string;
+  codexErrorInfo?: CodexErrorInfo;
 }): {
   threadId: string;
   turnId: string;
   willRetry: boolean;
-  error: { message: string };
+  error: { message: string; codexErrorInfo?: CodexErrorInfo };
 } {
   return {
     threadId: opts.threadId ?? 't1',
     turnId: opts.turnId ?? 'turn-a',
     willRetry: opts.willRetry,
-    error: { message: opts.message },
+    error: {
+      message: opts.message,
+      ...(opts.codexErrorInfo !== undefined ? { codexErrorInfo: opts.codexErrorInfo } : {}),
+    },
   };
 }
 
@@ -320,6 +325,154 @@ describe('translateErrorNotification', () => {
     expect((events[0].data as { message: string }).message).toBe(
       'Selected model is at capacity. Please try a different model. (auto-retry 2/4)',
     );
+  });
+
+  it('过载错误带稳定 reason key，供 renderer 隔 IPC 判定（非终止与终止两条路径）', async () => {
+    // renderer 拿不到 codexErrorInfo(跨 IPC 投影只留 message 字符串), 靠这个 key 渲染
+    // 本地化重试进度与过载引导。两条路径都必须带, 否则退避窗口内或耗尽后有一边退回
+    // 英文原文 —— 也就是本次改动要消除的依赖在 UI 侧原样残留。
+    const rt = newCodexRuntimeState();
+    const q1 = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'The upstream declined this request.',
+        codexErrorInfo: 'serverOverloaded',
+      }),
+      q1,
+      { ...makeCtx(rt), tryTakeOverOverload: () => ({ attempt: 1, maxAttempts: 4 }) },
+    );
+    const nonTerminal = await collect(q1);
+    expect(nonTerminal[0]!.data).toMatchObject({
+      reason: 'upstream-overload',
+      isTerminal: false,
+    });
+
+    // 接管不成立(预算耗尽 / 本 turn 已有产出) → 终止路径, reason 同样要带。
+    const q2 = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'The upstream declined this request.',
+        codexErrorInfo: 'serverOverloaded',
+      }),
+      q2,
+      { ...makeCtx(rt), tryTakeOverOverload: () => null },
+    );
+    const terminal = await collect(q2);
+    expect(terminal[0]!.data).toMatchObject({
+      reason: 'upstream-overload',
+      isTerminal: true,
+    });
+  });
+
+  it('非过载错误不得带过载 reason key', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({ willRetry: false, message: 'tool failed: file not found' }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).not.toHaveProperty('reason');
+  });
+
+  it('容量拒绝改了文案措辞时，结构化 tag 仍触发接管重投', async () => {
+    // 本用例锁的是这次改动的核心目标: 重投不再依赖 codex 的英文文案。
+    // message 故意完全不含 "at capacity" —— 模拟 codex 升级改了措辞。若判定回退到
+    // 文案匹配, tryTakeOverOverload 不会被调用, 这里立刻失败。
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const calls: number[] = [];
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'The upstream declined this request.',
+        codexErrorInfo: 'serverOverloaded',
+      }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverOverload: () => {
+          calls.push(1);
+          return { attempt: 1, maxAttempts: 4 };
+        },
+      },
+    );
+    const events = await collect(q);
+    expect(calls).toHaveLength(1);
+    expect(events[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+    expect((events[0].data as { message: string }).message).toBe(
+      'The upstream declined this request. (auto-retry 1/4)',
+    );
+  });
+
+  it('结构化 tag 透出到 error data，且不干扰既有 errorStatus 推断', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'Selected model is at capacity.',
+        codexErrorInfo: 'serverOverloaded',
+      }),
+      q,
+      { ...makeCtx(rt), tryTakeOverOverload: () => null },
+    );
+    const events = await collect(q);
+    expect(events[0].data).toMatchObject({ codexErrorInfo: 'serverOverloaded' });
+    // 容量文案里没有 401/429 信号, 既有推断必须保持不变(不得被新字段带偏)。
+    expect(events[0].data).not.toHaveProperty('errorStatus');
+    expect(events[0].data).not.toHaveProperty('usageLimit');
+  });
+
+  it('对象形态的 codexErrorInfo 取单键作为 tag，且不误判成过载', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const calls: number[] = [];
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'stream disconnected before completion',
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 503 } },
+      }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverOverload: () => {
+          calls.push(1);
+          return { attempt: 1, maxAttempts: 4 };
+        },
+      },
+    );
+    const events = await collect(q);
+    // 流断开不是容量拒绝: 不得接管重投(它有自己的重连路径)。
+    expect(calls).toHaveLength(0);
+    expect(events[0].data).toMatchObject({
+      codexErrorInfo: 'responseStreamDisconnected',
+      isTerminal: true,
+    });
+  });
+
+  it('老 daemon 不发 codexErrorInfo 时按文案兜底，行为不变', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const calls: number[] = [];
+    translateErrorNotification(
+      makeParams({ willRetry: false, message: 'Selected model is at capacity.' }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverOverload: () => {
+          calls.push(1);
+          return { attempt: 1, maxAttempts: 4 };
+        },
+      },
+    );
+    const events = await collect(q);
+    expect(calls).toHaveLength(1);
+    expect(events[0].data).not.toHaveProperty('codexErrorInfo');
   });
 
   it('willRetry=false 模型容量不足 + agent 层不接管 → 落回终止错误', async () => {

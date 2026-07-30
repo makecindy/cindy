@@ -20,6 +20,7 @@ import {
   parseOverloadError,
   parseOverloadRetryProgress,
   GOAL_OVERLOAD_LAST_REASON,
+  UPSTREAM_OVERLOAD_REASON,
   isGoalCapacityBackoff,
 } from '@/utils/overloadError';
 
@@ -67,6 +68,43 @@ describe('isOverloadErrorMessage', () => {
     const network = 'unexpected status 502 Bad Gateway: upstream unreachable';
     expect(isNetworkishErrorMessage(network)).toBe(true);
     expect(isOverloadErrorMessage(network)).toBe(false);
+  });
+
+  // ── 稳定 reason key 优先 ─────────────────────────────────────────────────────
+  //
+  // renderer 隔着 IPC 投影拿不到 codex 的原始 codexErrorInfo tag, 靠 maker-core 带上
+  // 的 UPSTREAM_OVERLOAD_REASON 判定。这一组锁的是「codex 改了容量文案后 banner 仍显示
+  // 本地化过载文案与重试进度, 而不是英文原文」。
+
+  it('reason key 命中时不依赖文案措辞', () => {
+    // message 故意完全不含 `at capacity`: 模拟 codex 改了措辞。
+    expect(
+      isOverloadErrorMessage('The upstream declined this request.', undefined, UPSTREAM_OVERLOAD_REASON),
+    ).toBe(true);
+    expect(
+      parseOverloadError('The upstream declined this request.', undefined, UPSTREAM_OVERLOAD_REASON),
+    ).toEqual({ kind: 'capacity' });
+    // 空文案同理(host 合成的错误可能不带 message)。
+    expect(isOverloadErrorMessage('', undefined, UPSTREAM_OVERLOAD_REASON)).toBe(true);
+  });
+
+  it('reason key 优先于 529(决定用户看到哪条文案)', () => {
+    expect(parseOverloadError('overloaded_error', 529, UPSTREAM_OVERLOAD_REASON)).toEqual({
+      kind: 'capacity',
+    });
+  });
+
+  it('其它 reason key 不误判成过载', () => {
+    for (const reason of ['silent-stop-exhausted', 'turn-failed', 'empty-response', 'app-exit-interrupted']) {
+      expect(isOverloadErrorMessage('tool failed: file not found', undefined, reason)).toBe(false);
+    }
+  });
+
+  it('reason 缺席时退回文案兜底(历史持久化错误行只有文案可用)', () => {
+    expect(
+      isOverloadErrorMessage('Selected model is at capacity.', undefined, undefined),
+    ).toBe(true);
+    expect(isOverloadErrorMessage('Selected model is at capacity.', undefined, null)).toBe(true);
   });
 });
 

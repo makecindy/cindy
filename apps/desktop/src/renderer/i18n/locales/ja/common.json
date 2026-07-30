@@ -5,7 +5,11 @@
     "REMOTE_WORKDIR_INVALID": "リモートプロジェクトのパスが無効です。プロジェクトディレクトリを選び直してください。",
     "REMOTE_WORKDIR_NOT_FOUND": "リモートプロジェクトのディレクトリが見つかりません。選び直してください。",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "リモートプロジェクトのパスはディレクトリではありません。プロジェクトディレクトリを選び直してください。",
-    "REMOTE_WORKDIR_UNAVAILABLE": "リモートプロジェクトのディレクトリにアクセスできません。ネットワークドライブを再接続してから、もう一度お試しください。"
+    "REMOTE_WORKDIR_UNAVAILABLE": "リモートプロジェクトのディレクトリにアクセスできません。ネットワークドライブを再接続してから、もう一度お試しください。",
+    "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "対象のモデルまたはソースは別のリモートルートが必要です。リモートセッションを閉じて再作成してください。",
+    "REMOTE_PROVIDER_UPDATING": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
+    "REMOTE_PROVIDER_UNSUPPORTED": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
+    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai サブスクリプションが未接続です。先に接続するか、ゲートウェイモデルを選択してください"
   },
   "providerError": {
     "AUTH_INVALID": "API キーが無効か期限切れです（401）。キーを確認して再試行してください",
@@ -582,11 +586,11 @@
       "fallbackName": "ユーザー",
       "avatarAlt": "{{name}} のアバター",
       "local": {
-        "exitFailed": "ローカルモードの終了に失敗しました。もう一度お試しください",
-        "name": "ローカルモード",
+        "exitFailed": "未ログイン状態の終了に失敗しました。もう一度お試しください",
+        "name": "未ログイン",
         "description": "データはこの端末だけに保存され、Cindy アカウントサービスは使用しません",
         "signIn": "Cindy にログイン",
-        "exit": "ローカルモードを終了"
+        "exit": "未ログイン状態を終了"
       },
       "copyUserId": {
         "action": "ユーザー ID をコピー",
@@ -756,7 +760,7 @@
       "serviceSource": {
         "label": "音声サービス",
         "hint": "既定では Cindy 音声サービスを使用します。リアルタイム ASR 対応サービスと専用の音声認証情報に切り替えることもできます。",
-        "localHint": "ローカルモードでは Cindy アカウントサービスを使用しません。リアルタイム ASR 対応サービスと専用の音声認証情報を設定してください。",
+        "localHint": "未ログイン状態では Cindy アカウントサービスを使用しません。リアルタイム ASR 対応サービスと専用の音声認証情報を設定してください。",
         "ariaLabel": "音声サービスソースの選択",
         "options": {
           "cindy": "Cindy 公式サービス",
@@ -876,11 +880,16 @@
         "recording": "新しいショートカットを押してください",
         "none": "未設定",
         "clear": "クリア",
+        "fnNeedsInputMonitoring": "Fn を含むショートカットにはショートカット監視の許可が必要です。他のショートカットは通常どおり記録できます。",
+        "awaitingInputMonitoring": "このショートカットはショートカット監視の許可待ちです。許可すると有効になります。",
         "toast": {
           "needsModifier": "組み合わせキー、F1-F24 単独、または左右の Command / Option / Control / Fn を使ってください。",
           "fnUnavailable": "組み合わせキー、F1-F24 単独、または左右の Command / Option / Control / Fn を使ってください。",
           "systemReserved": "このショートカットはシステムまたは一般的な編集ショートカットと競合します",
-          "registrationFailed": "ショートカットを登録できませんでした: {{error}}"
+          "registrationFailed": "ショートカットを登録できませんでした: {{error}}",
+          "recordingFailed": "ショートカットの記録を開始できませんでした: {{error}}",
+          "listenerUnavailable": "ショートカット監視を開始できませんでした。Cindy を再起動してから再試行してください",
+          "pendingInputMonitoring": "ショートカットを保存しました。ショートカット監視を許可すると有効になります"
         }
       },
       "permissions": {
@@ -3265,7 +3274,7 @@
     "ssoRequired": "この組織は SSO ログインが必要です",
     "ssoEntry": "企業 SSO でサインイン",
     "localModeEntry": "ログインをスキップ",
-    "localModeOpening": "ローカルモードを開いています…",
+    "localModeOpening": "ログインをスキップしています…",
     "localModeDescription": "Cindy アカウントは不要です。データはこのデバイスに保存され、クラウドモデル、デバイス間アクセス、マーケットサービスは利用できません。",
     "consentStatement": "<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を読み、同意します",
     "consentDialog": {
@@ -3978,6 +3987,8 @@
     "banner": {
       "title": "{{version}} に更新済み",
       "subtitle": "再起動して適用",
+      "viewNotes": "更新情報を見る",
+      "viewNotesAria": "{{version}} の更新情報を見る",
       "button": "再起動",
       "tooltipReady": "更新準備完了 — クリックで再起動{{versionSuffix}}",
       "ariaCollapsed": "更新準備完了、クリックでバージョン {{version}} に再起動",
@@ -4259,13 +4270,20 @@
         "addFailed": "プロジェクト追加に失敗",
         "pathEmpty": "プロジェクトのパスを入力してください",
         "pathIsFile": "{{path}} はファイルです (ディレクトリではありません)"
-      }
+      },
+      "selectTargetPlaceholder": "対象を選択…",
+      "requestedDeviceUnavailable": "指定のデバイスは現在利用できません。別の対象を選んでください"
     },
     "projectPicker": {
       "addRemoteProject": "リモートプロジェクトを追加"
     },
     "modelSelector": {
       "budgetNeedsApiKey": "このモデルは設定で API key を構成してから使用できます",
+      "subscriptionDirectDisabled": {
+        "chatgpt": "サブスクリプション直結の GPT モデルは SSH リモートセッションに未対応です",
+        "xai": "サブスクリプション直結の Grok モデルは SSH リモートセッションに未対応です",
+        "generic": "サブスクリプション直結モデルは SSH リモートセッションに未対応です"
+      },
       "effortLabel": "推論強度",
       "edit": "編集",
       "options": "オプション",
@@ -4582,6 +4600,14 @@
       "alwaysAllowScopedHint": "このセッション全体に適用され、ここに挙げた範囲にのみ及びます。",
       "alwaysAllowSessionHint": "この 1 回のリクエストだけでなく、このセッション全体に適用されます。",
       "ruleSeparator": "、"
+    },
+    "deviceSwitcher": {
+      "label": "デバイス",
+      "localHint": "このパソコンで実行",
+      "onlineHint": "接続済み — 作成できます",
+      "offlineHint": "オフライン — 接続後に利用可能",
+      "attachmentsDropped": "添付ファイル {{count}} 件を削除しました（前のデバイス上のファイルです）",
+      "attachmentsRemoteUnsupported": "リモートデバイスではファイル添付に未対応のため {{count}} 件をスキップしました（画像は可）"
     }
   },
   "onboarding": {
@@ -5440,11 +5466,15 @@
     },
     "draft": {
       "createSessionFailed": "セッションの作成に失敗しました。再試行してください",
+      "remoteProviderUpdating": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
+      "remoteProviderUnsupported": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
+      "remoteNativeOauthUnavailable": "Claude.ai サブスクリプションが未接続です。先に接続するか、ゲートウェイモデルを選択してください",
       "deviceStillLoading": "リモートデバイスの読み込み中です。しばらくお待ちください",
       "worktreeMissingRepo": "worktree を作成できません：現在のディレクトリのリポジトリルートがありません",
       "worktreeRepoHint": "作業ディレクトリを再選択し、右下のフォルダ表示が更新されてから再試行してください",
       "sessionInactive": "セッションはすでにアクティブではありません",
-      "remoteProjectBanner": "{{device}} の {{project}} で新しいセッションを作成"
+      "remoteProjectBanner": "{{device}} の {{project}} で新しいセッションを作成",
+      "remoteDialogueBanner": "{{device}} で新しい対話（プロジェクトなし）"
     },
     "jumpSession": {
       "emptyId": "移動先の sessionId を入力してください",
@@ -7487,7 +7517,8 @@
       "start": "開始",
       "starting": "作成中…",
       "cancel": "キャンセル",
-      "failed": "目標の作成に失敗しました"
+      "failed": "目標の作成に失敗しました",
+      "busy": "作成処理が進行中です。しばらくしてからもう一度お試しください。"
     },
     "usageLimitedUntil": "{{time}} に再開",
     "capacityRetryAt": "{{time}} に再試行",
@@ -7655,7 +7686,7 @@
     }
   },
   "billing": {
-    "sidebar": "クレジットとプラン",
+    "sidebar": "残高とプラン",
     "settings": {
       "title": "使用量と請求",
       "subscriptionCard": {
@@ -7666,14 +7697,17 @@
         "unavailable": "サブスクリプションの状態を取得できません。更新してもう一度お試しください。",
         "action": "プランを見る",
         "changeAction": "プランを変更",
+        "manageAction": "サブスクリプションを管理",
+        "portalAction": "Stripe で管理",
+        "portalFailed": "Stripeのサブスクリプション管理を開けませんでした。しばらくしてからもう一度お試しください。",
         "priceInterval": "{{price}} / {{interval}}",
-        "includedCredits": "毎{{interval}} {{amount}} クレジットを付与",
+        "includedCredits": "毎{{interval}} {{amount}} 分を付与",
         "renewsAt": "次回更新日: {{date}}",
         "endsAt": "{{date}} にプラン終了",
         "cancelAction": "サブスクリプションを解約",
         "cancelConfirmTitle": "現在のサブスクリプションを解約しますか？",
-        "cancelConfirmDescription": "この操作による返金やクレジットの即時変更はありません。現在のプランは {{date}} まで利用でき、その後は更新されません。キャンセルはアプリ内では元に戻せません。また、この請求期間が終了するまで新しいプランは購入できません。",
-        "cancelConfirmDescriptionWithoutDate": "この操作による返金やクレジットの即時変更はありません。現在のプランは請求期間の終了まで利用でき、その後は更新されません。キャンセルはアプリ内では元に戻せません。また、この請求期間が終了するまで新しいプランは購入できません。",
+        "cancelConfirmDescription": "この操作による返金や残高の即時変更はありません。現在のプランは {{date}} まで利用でき、その後は更新されません。キャンセルはアプリ内では元に戻せません。また、この請求期間が終了するまで新しいプランは購入できません。",
+        "cancelConfirmDescriptionWithoutDate": "この操作による返金や残高の即時変更はありません。現在のプランは請求期間の終了まで利用でき、その後は更新されません。キャンセルはアプリ内では元に戻せません。また、この請求期間が終了するまで新しいプランは購入できません。",
         "cancelConfirmAction": "解約を確定",
         "cancelSuccess": "自動更新を停止しました。現在のプランは {{date}} まで利用できます。",
         "cancelSuccessWithoutDate": "自動更新を停止しました。現在のプランはこの請求期間の終了後に終了します。",
@@ -7681,35 +7715,33 @@
         "cancelFailed": "サブスクリプションを解約できませんでした。しばらくしてからもう一度お試しください。"
       },
       "topupCard": {
-        "action": "クレジットを購入"
+        "action": "残高チャージ"
       }
     },
     "balance": {
       "title": "利用可能残高",
-      "creditParityCny": "1クレジット = 1元。クレジットは Cindy AI の利用量の決済に使われ、支払いは第三者の決済事業者が処理します。",
-      "creditParityUsd": "1クレジット = 1米ドル。クレジットは Cindy AI の利用量の決済に使われ、支払いは第三者の決済事業者が処理します。",
-      "plan": "プランクレジット",
-      "purchased": "購入済みクレジット",
-      "promotional": "特典クレジット",
-      "notProvisioned": "このアカウントではクレジットがまだ有効になっていません。",
+      "plan": "プラン残高",
+      "purchased": "チャージ残高",
+      "promotional": "特典残高",
+      "notProvisioned": "このアカウントでは残高がまだ有効になっていません。",
       "notSupported": "このアカウントでは残高照会を利用できません。",
       "unavailable": "残高を取得できません。更新してもう一度お試しください。"
     },
     "usage": {
-      "title": "クレジット使用量",
-      "observedAt": "クレジット更新: {{date}}",
+      "title": "残高使用量",
+      "observedAt": "残高更新: {{date}}",
       "poolDetail": "使用済み {{used}} · 合計 {{total}}",
       "remaining": "残り",
       "progressLabel": "{{label}}の使用量",
-      "noPlanCredits": "有効なサブスクリプションがないため、サブスクリプションクレジットはありません。",
-      "historyUnavailable": "使用履歴が完全ではないため、残りのクレジットのみ表示しています。",
+      "noPlanCredits": "有効なサブスクリプションがないため、プラン残高はありません。",
+      "historyUnavailable": "使用履歴が完全ではないため、残高のみ表示しています。",
       "detailsUnavailable": "使用量の詳細を取得できないため、現在の残高のみ表示しています。",
       "promotionalDetails": {
-        "title": "特典クレジット明細",
+        "title": "特典残高明細",
         "count": "{{count}}件",
-        "empty": "特典クレジットの付与履歴はありません。",
+        "empty": "特典の付与履歴はありません。",
         "incomplete": "付与履歴が多いため、最新の{{count}}件のみ表示しています。",
-        "unnamed": "特典クレジット",
+        "unnamed": "特典残高",
         "original": "付与額",
         "used": "使用済み",
         "remaining": "残り",
@@ -7727,7 +7759,7 @@
         "title": "サブスクリプションプランを選択"
       },
       "topup": {
-        "title": "クレジットを購入"
+        "title": "残高チャージ"
       }
     },
     "steps": {
@@ -7764,7 +7796,7 @@
       "MONTH": "月",
       "YEAR": "年"
     },
-    "credits": "{{amount}} クレジット",
+    "credits": "{{amount}} 分を付与",
     "confirm": {
       "channel": "{{provider}}で支払う"
     },
@@ -7797,7 +7829,7 @@
       "failedTitle": "完了できませんでした",
       "expiredTitle": "支払い期限切れ",
       "canceledTitle": "支払いキャンセル済み",
-      "topupSubtitle": "クレジットチャージ",
+      "topupSubtitle": "残高チャージ",
       "subscriptionSubtitle": "サブスクリプション",
       "creatingBody": "支払いサービスで注文を確認しています…",
       "qrAlt": "支払いQRコード",

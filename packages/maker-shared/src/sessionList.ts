@@ -4,6 +4,7 @@ import { isSyntheticTriggerText } from './syntheticTrigger.js';
 import type { RemoteSchedule, RemoteScheduleRun, RemoteScheduleRunStatus } from './scheduleTypes.js';
 import { toMillis } from './scheduleModel.js';
 import { sessionCollaborationLabel, sessionWorktreeLabel } from './sessionIdentity.js';
+import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
 import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
 
@@ -157,6 +158,11 @@ export interface RemoteSessionListOptions {
    * 折叠会让被计入「查看全部 N 条」的其余 run 无法点开,故那里传 false 让每个 run 各自成行。
    */
   groupAutomations?: boolean;
+  /**
+   * 「尚未起名」会话的显示文案(已解析的 i18n 值)。不传则回落 workingDir → 「未命名会话」;
+   * 共享层刻意不兜中文串,见 {@link remoteSessionDisplayTitle}。
+   */
+  unnamedLabel?: string;
 }
 
 export function buildRemoteSessionSections(
@@ -175,6 +181,7 @@ export function buildRemoteSessionSections(
       liveActivityIndex: options.liveActivityIndex,
       pendingInteractionIndex: options.pendingInteractionIndex,
       scheduleIndex: options.scheduleIndex,
+      unnamedLabel: options.unnamedLabel,
     }))
     .sort(compareSessions)
     .map((session) => toRemoteSessionListItem(
@@ -184,6 +191,7 @@ export function buildRemoteSessionSections(
       options.pendingInteractionIndex?.get(session.id) ?? 0,
       options.messagePreviewIndex?.get(session.id) ?? sessionRowMessagePreview(session),
       options.liveActivityIndex?.get(session.id) ?? null,
+      options.unnamedLabel,
     ));
 
   const pinned = items.filter((item) => !!item.session.pinnedAt);
@@ -414,6 +422,31 @@ function buildDateSections(
     .filter((section) => section.data.length > 0);
 }
 
+/**
+ * 远程会话在列表 / 菜单上应显示的标题。
+ *
+ * 「尚未起名」的哨兵**直接用调用方给的本地化兜底、不回落 workingDir**:回落会把完整
+ * 工作目录路径当标题显示,与 desktop 侧的「未命名对话」不一致(PR #1031 review P1)。
+ * 哨兵本身是 locale-independent 的英文字面量(见 ./sessionTitle.ts),原样显示会露出
+ * "New Maker"。
+ *
+ * `unnamedLabel` 由调用方传入已解析的 i18n 文案(mobile 支持 en / ja / ko,本模块不能
+ * 导出中文 UI 串),与 desktop 的 `getSessionDisplayTitle(session, unnamedLabel)` 同款
+ * 签名。
+ *
+ * 空标题(非哨兵)保持既有兜底链 workingDir → 「未命名会话」不变。
+ */
+export function remoteSessionDisplayTitle(session: RemoteSession, unnamedLabel?: string): string {
+  if (isDefaultDraftSessionTitle(session.title)) {
+    // 调用方给了**已解析的 i18n 文案**就用它;没给则按「无标题」走既有兜底链
+    // (workingDir → '未命名会话'),即本 PR 之前的行为 —— 但无论如何都不把英文哨兵
+    // 原样显示出去。刻意不在共享层兜一个中文串:mobile 支持 en / ja / ko,那会让未接
+    // i18n 的调用方悄悄显示中文(PR #1031 review P1)。
+    return unnamedLabel || session.workingDir || '未命名会话';
+  }
+  return automationDisplayTitle(session) || session.workingDir || '未命名会话';
+}
+
 export function toRemoteSessionListItem(
   session: RemoteSession,
   now = Date.now(),
@@ -421,13 +454,15 @@ export function toRemoteSessionListItem(
   pendingInteractionCount = 0,
   messagePreview: string | null = null,
   liveActivity: RemoteSessionLiveActivity | null = null,
+  /** 「尚未起名」会话的显示文案,由调用方传已解析的 i18n 值(见 remoteSessionDisplayTitle)。 */
+  unnamedLabel?: string,
 ): RemoteSessionListItem {
   const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
   const scheduleInfo = scheduleIndex?.get(session.id) ?? fallbackScheduleInfo(session);
   const worktreeLabel = sessionWorktreeLabel(session);
   return {
     session,
-    title: automationDisplayTitle(session) || session.workingDir || '未命名会话',
+    title: remoteSessionDisplayTitle(session, unnamedLabel),
     subtitle: [
       sessionCollaborationLabel(session),
       worktreeLabel,
@@ -655,12 +690,18 @@ function matchesSearchQuery(
     liveActivityIndex?: ReadonlyMap<string, RemoteSessionLiveActivity>;
     pendingInteractionIndex?: ReadonlyMap<string, number>;
     scheduleIndex?: ReadonlyMap<string, RemoteSessionScheduleInfo>;
+    unnamedLabel?: string;
   } = {},
 ): boolean {
   if (!query) return true;
   const scheduleInfo = options.scheduleIndex?.get(session.id) ?? fallbackScheduleInfo(session);
   const haystack = [
-    session.title,
+    // 与列表展示**同源到函数级**:行上显示的就是 remoteSessionDisplayTitle 的结果
+    // (见 toRemoteSessionListItem),haystack 直接调同一个函数。放原始 title 会两头错位
+    // —— 搜界面上看得见的兜底文案一条都搜不到,搜内部哨兵 "New Maker" 反而命中一堆
+    // 不显示这个词的行(PR #1031 review P1)。副作用:`[Schedule] ` 这个**不显示**的
+    // 内部前缀不再可搜,自动化任务名另有 scheduleInfo.scheduleName 那条覆盖。
+    remoteSessionDisplayTitle(session, options.unnamedLabel),
     session.workingDir,
     session.model,
     session.agentKind,
@@ -669,7 +710,8 @@ function matchesSearchQuery(
     session.worktreePath,
     sessionWorktreeLabel(session),
     scheduleInfo?.scheduleName,
-    automationDisplayTitle(session),
+    // automationDisplayTitle 不单列:非自动化会话它就等于原始 title(哨兵会从这条漏回
+    // haystack),自动化会话的剥前缀标题已由上面的 remoteSessionDisplayTitle 覆盖。
     sessionCollaborationLabel(session),
     (options.pendingInteractionIndex?.get(session.id) ?? 0) > 0 ? '等待处理 waiting attention pending' : null,
     sessionRowMessagePreview(session),

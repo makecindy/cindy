@@ -49,6 +49,7 @@ import type {
   ConversationSearchSortBy,
   ConversationSearchStatusFilter,
 } from '../../../../shared/conversationSearch';
+import { conversationSearchTitle } from '../../../../shared/conversationSearch';
 import { highlightSegments } from '../lib/highlightSegments';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
@@ -152,6 +153,11 @@ export function useConversationSearch({
   onProgrammaticOpen,
   onResultChosen,
 }: UseConversationSearchParams) {
+  const { t } = useTranslation();
+  // 「尚未起名」会话的显示文案。main 拿它算标题匹配与命中下标、结果行拿它渲染
+  // (两侧都过 conversationSearchTitle),所以它必须进请求 **和** effect 依赖:
+  // 切语言后要重发一次搜索,否则下标还按旧语言的串算、高亮会错位。
+  const unnamedLabel = t('ccAgent.common.unnamedSession');
   const [query, setQuery] = useState('');
   // 排序订阅共享偏好 store(持久化 + 跨实例同步),其余筛选每次回到默认
   // ——取舍与「为什么不是各自 useState」见 conversationSearchPrefs 的文件头。
@@ -229,6 +235,7 @@ export function useConversationSearch({
       query: trimmed,
       limit: SEARCH_LIMIT,
       sortBy,
+      unnamedLabel,
       filters: {
         status: statusFilter,
         agentKind: agentFilter,
@@ -282,6 +289,7 @@ export function useConversationSearch({
     sortBy,
     statusFilter,
     trimmed,
+    unnamedLabel,
   ]);
 
   /**
@@ -894,6 +902,9 @@ function SearchResultRow({
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  // 与 main 的匹配串同源:未起名会话在结果行里也不能露出英文哨兵,且 titleMatchIndices
+  // 就是按这个串算出来的,换成原始 title 会让高亮下标错位。
+  const displayTitle = conversationSearchTitle(item.session.title, t('ccAgent.common.unnamedSession'));
   const primaryHit = item.contentHit;
   const allHits = item.contentHits ?? (primaryHit ? [primaryHit] : []);
   const visibleHits = expanded ? allHits : allHits.slice(0, MAX_VISIBLE_HITS_PER_RESULT);
@@ -911,7 +922,7 @@ function SearchResultRow({
   ].filter(Boolean).join(' · ');
   const tooltip = (
     <div className="space-y-2">
-      <div className="font-medium leading-snug">{item.session.title}</div>
+      <div className="font-medium leading-snug">{displayTitle}</div>
       {primaryHit?.preview && (
         <div className="border-t border-[var(--cmd-palette-border)] pt-2 text-[12px] leading-snug text-[var(--tooltip-text)]">
           {renderSnippet(primaryHit.snippet, query) ?? renderKeywordHighlights(primaryHit.preview, query)}
@@ -938,7 +949,7 @@ function SearchResultRow({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
               <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--text-primary)]">
-                {highlightSegments(item.session.title, item.titleMatchIndices)}
+                {highlightSegments(displayTitle, item.titleMatchIndices)}
               </span>
               <Tip text={sourceText} side="top" delay={150}>
                 <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--text-tertiary)]">

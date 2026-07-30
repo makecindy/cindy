@@ -152,6 +152,42 @@ describe('maker session CREATE_SESSION IPC handler', () => {
     expect(deps.sendWorkerReadyMessage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['[REMOTE_PROVIDER_UPDATING] provider "p" credentials are being updated; retry in a moment', 'REMOTE_PROVIDER_UPDATING'],
+    ['[REMOTE_PROVIDER_UNSUPPORTED] provider "p" has no claude-code route on this desktop', 'REMOTE_PROVIDER_UNSUPPORTED'],
+    ['[REMOTE_NATIVE_OAUTH_UNAVAILABLE] Anthropic subscription is not connected on this desktop', 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'],
+  ])('maps remote route error %s to %s', async (message, code) => {
+    const harness = new IpcHarness();
+    const deps = createDeps({
+      bootstrapSession: vi.fn().mockRejectedValue(new Error(message)),
+    });
+    registerMakerSessionCreateHandler(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.CREATE_SESSION, {
+        agentKind: 'claude-code',
+        workingDir: 'C:\\repo',
+        model: 'claude-opus-4-6',
+      }),
+    ).rejects.toMatchObject({ code });
+  });
+
+  it('rethrows non-remote errors unchanged', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps({
+      bootstrapSession: vi.fn().mockRejectedValue(new Error('some other failure')),
+    });
+    registerMakerSessionCreateHandler(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.CREATE_SESSION, {
+        agentKind: 'claude-code',
+        workingDir: 'C:\\repo',
+        model: 'claude-opus-4-6',
+      }),
+    ).rejects.toThrow('some other failure');
+  });
+
   it('preserves explicit providerId=null through create-session parsing', async () => {
     const harness = new IpcHarness();
     const deps = createDeps();

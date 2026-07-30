@@ -36,6 +36,7 @@ export {
 // (renderer 因跨 bundle 才另存一份镜像; main 与 maker-core 同 bundle, 直接复用
 // 同一份判定, 不再造第三份)。详见 shared/overload-error.ts 的模块注释。
 export {
+  UPSTREAM_OVERLOAD_REASON,
   parseOverloadError,
   parseOverloadRetryProgress,
   isOverloadErrorMessage,

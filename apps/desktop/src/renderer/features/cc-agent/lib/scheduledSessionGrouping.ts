@@ -12,7 +12,13 @@ import type { Session, AgentKind } from '@/lib/ccAgent.types';
 
 import { extractDisplayName, normalizeWorkingDir } from './projectGrouping';
 
-const SCHED_PREFIX = '[Schedule] ';
+/**
+ * legacy automation 会话的标题前缀。**非 i18n 串**:它是旧数据唯一的来源标记
+ * (新数据走 `source='scheduler'`),既用于识别也用于展示时剥离。重命名落库前要靠它
+ * 把前缀补回去,否则 legacy 会话会从 automation 分组里消失 —— 故对外导出。
+ */
+export const SCHEDULE_TITLE_PREFIX = '[Schedule] ';
+const SCHED_PREFIX = SCHEDULE_TITLE_PREFIX;
 
 export function isScheduledSession(s: Session): boolean {
   if (typeof s.title !== 'string') return false;

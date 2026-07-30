@@ -2708,6 +2708,66 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('uses the home directory to list global skills for a new conversation without a cwd', async () => {
+    const home = os.homedir();
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.SkillsList, {
+        result: {
+          data: [{
+            cwd: home,
+            skills: [
+              {
+                name: 'pr-watch',
+                description: 'Watch PR feedback',
+                path: path.join(home, '.agents', 'skills', 'pr-watch', 'SKILL.md'),
+                scope: 'user',
+                enabled: true,
+              },
+              {
+                name: 'openai-templates:artifact-template-report',
+                description: 'Plugin-internal template',
+                path: path.join(
+                  home,
+                  '.codex',
+                  'plugins',
+                  'cache',
+                  'openai-curated-remote',
+                  'openai-templates',
+                  '0.1.0',
+                  'skills',
+                  'artifact-template-report',
+                  'SKILL.md',
+                ),
+                scope: 'user',
+                enabled: true,
+              },
+              {
+                name: 'skill-creator',
+                description: 'System skill',
+                path: path.join(home, '.codex', 'skills', '.system', 'skill-creator', 'SKILL.md'),
+                scope: 'system',
+                enabled: true,
+              },
+            ],
+            errors: [],
+          }],
+        },
+      });
+    };
+    const agent = new CodexAgent(createDeps());
+
+    await expect(agent.listAgentSkills({})).resolves.toMatchObject({
+      skills: [expect.objectContaining({ name: 'pr-watch', scope: 'user' })],
+    });
+
+    const request = createdTransports[0].lines
+      .map((line) => JSON.parse(line) as { method?: string; params?: unknown })
+      .find((line) => line.method === Method.SkillsList);
+    expect(request?.params).toMatchObject({ cwds: [home] });
+
+    await agent.dispose();
+  });
+
   it('starts a cold OAuth host before account rate-limit RPCs', async () => {
     const rateLimits = {
       rateLimits: { planType: 'plus', primary: { usedPercent: 100, windowMinutes: 300 } },
@@ -8388,6 +8448,215 @@ describe('CodexAgent MCP thread context hooks', () => {
       approvalsReviewer: 'user',
       sandboxPolicy: { type: 'workspaceWrite' },
     });
+    await handle.close();
+  });
+
+  it('enables Guardian after a local provider reviewer route is registered and keeps its model current', async () => {
+    const registerCodexReviewerRouteContext = vi.fn(() => true);
+    const agent = new CodexAgent(createDeps({}, {
+      registerCodexReviewerRouteContext,
+    }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: 'turn-provider-aware-reviewer' } };
+      }
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    }, { codexProxyActive: true });
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-aware-reviewer',
+      model: 'deepseek/deepseek-v4',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+
+    const startParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      approvalsReviewer?: string;
+    };
+    // The thread is created before its id can be registered with the proxy.
+    expect(startParams.approvalsReviewer).toBe('user');
+    expect(registerCodexReviewerRouteContext).toHaveBeenCalledWith({
+      sessionId: 'session-provider-aware-reviewer',
+      threadId: 'start-thread-id',
+      model: 'deepseek/deepseek-v4',
+    });
+
+    await handle.send({ type: 'user', content: 'hello' });
+    const firstTurnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
+      approvalsReviewer?: string;
+    };
+    expect(firstTurnParams.approvalsReviewer).toBe('auto_review');
+
+    if (!handle.setModel) throw new Error('expected setModel');
+    await handle.setModel('qwen/qwen3-coder');
+    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
+      sessionId: 'session-provider-aware-reviewer',
+      threadId: 'start-thread-id',
+      model: 'qwen/qwen3-coder',
+    });
+    host.getThreadHandlers()?.threadSettingsUpdated?.({
+      threadId: 'start-thread-id',
+      threadSettings: {
+        serviceTier: null,
+        model: 'qwen/qwen3-coder-202607',
+        effort: 'high',
+      },
+    });
+    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
+      sessionId: 'session-provider-aware-reviewer',
+      threadId: 'start-thread-id',
+      model: 'qwen/qwen3-coder-202607',
+    });
+    await handle.close();
+  });
+
+  it('keeps user approvals while a runtime default-model sentinel is unresolved', async () => {
+    const registerCodexReviewerRouteContext = vi.fn(() => true);
+    const agent = new CodexAgent(createDeps({}, {
+      registerCodexReviewerRouteContext,
+    }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: `turn-default-sentinel-${host.request.mock.calls.length}` } };
+      }
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    }, { codexProxyActive: true });
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-reviewer-default-sentinel',
+      model: 'deepseek/deepseek-v4',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+
+    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
+      sessionId: 'session-provider-reviewer-default-sentinel',
+      threadId: 'start-thread-id',
+      model: 'deepseek/deepseek-v4',
+    });
+
+    if (!handle.setModel) throw new Error('expected setModel');
+    await handle.setModel('gpt-5');
+    expect(registerCodexReviewerRouteContext).toHaveBeenCalledTimes(1);
+    expect(host.request.mock.calls.some(
+      ([method, params]) =>
+        method === Method.ThreadSettingsUpdate &&
+        (params as { model?: string }).model === 'gpt-5',
+    )).toBe(false);
+
+    await handle.send({ type: 'user', content: 'use the provider default' });
+    const firstTurnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
+      approvalsReviewer?: string;
+    };
+    expect(firstTurnParams.approvalsReviewer).toBe('user');
+
+    await handle.setModel('qwen/qwen3-coder');
+    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
+      sessionId: 'session-provider-reviewer-default-sentinel',
+      threadId: 'start-thread-id',
+      model: 'qwen/qwen3-coder',
+    });
+    await handle.send({ type: 'user', content: 'use the concrete model' });
+    const turnCalls = host.request.mock.calls.filter(([method]) => method === Method.TurnStart);
+    const secondTurnParams = turnCalls[1]?.[1] as { approvalsReviewer?: string };
+    expect(secondTurnParams.approvalsReviewer).toBe('auto_review');
+    await handle.close();
+  });
+
+  it('registers the model resolved by thread/start when the request uses the default sentinel', async () => {
+    const registerCodexReviewerRouteContext = vi.fn(() => true);
+    const agent = new CodexAgent(createDeps({}, {
+      registerCodexReviewerRouteContext,
+    }));
+    installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        return {
+          thread: { id: 'start-thread-id' },
+          model: 'deepseek/deepseek-v4',
+          modelProvider: 'xd',
+          cwd: '/repo',
+        };
+      }
+      return undefined;
+    }, { codexProxyActive: true });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-reviewer-default-model',
+      model: 'gpt-5',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+
+    expect(registerCodexReviewerRouteContext).toHaveBeenCalledWith({
+      sessionId: 'session-provider-reviewer-default-model',
+      threadId: 'start-thread-id',
+      model: 'deepseek/deepseek-v4',
+    });
+    await handle.close();
+  });
+
+  it('keeps user approvals when provider reviewer route registration fails', async () => {
+    const registerCodexReviewerRouteContext = vi.fn(() => {
+      throw new Error('proxy registry unavailable');
+    });
+    const agent = new CodexAgent(createDeps({}, {
+      registerCodexReviewerRouteContext,
+    }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: 'turn-provider-reviewer-register-failed' } };
+      }
+      return undefined;
+    }, { codexProxyActive: true });
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-reviewer-register-failed',
+      model: 'deepseek/deepseek-v4',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+
+    await handle.send({ type: 'user', content: 'hello' });
+    const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
+      approvalsReviewer?: string;
+    };
+    expect(turnParams.approvalsReviewer).toBe('user');
+    await handle.close();
+  });
+
+  it('registers the resumed parent thread before enabling a provider-aware reviewer', async () => {
+    const registerCodexReviewerRouteContext = vi.fn(() => true);
+    const agent = new CodexAgent(createDeps({}, {
+      registerCodexReviewerRouteContext,
+    }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: 'turn-resumed-provider-reviewer' } };
+      }
+      return undefined;
+    }, { codexProxyActive: true });
+    const handle = await agent.startSession({
+      sessionId: 'session-resumed-provider-reviewer',
+      resumeSessionId: '12345678-1234-1234-1234-123456789abc',
+      model: 'xai/grok-4.5',
+      providerId: 'xai',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+
+    expect(registerCodexReviewerRouteContext).toHaveBeenCalledWith({
+      sessionId: 'session-resumed-provider-reviewer',
+      threadId: 'resume-thread-id',
+      model: 'xai/grok-4.5',
+    });
+    await handle.send({ type: 'user', content: 'hello' });
+    const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
+      approvalsReviewer?: string;
+    };
+    expect(turnParams.approvalsReviewer).toBe('auto_review');
     await handle.close();
   });
 

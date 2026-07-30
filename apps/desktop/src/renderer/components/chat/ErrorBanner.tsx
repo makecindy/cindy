@@ -183,7 +183,12 @@ export function ErrorBanner({
   const isNetworkishError = reconnectAttempt !== null || isNetworkishErrorMessage(error);
   // 服务过载(模型容量不足 / 上游 529):与网络类分开判定——把容量问题说成"网络
   // 异常"会让用户白折腾自己的网络。带 `(auto-retry N/M)` 后缀 = 仍在自动重试。
-  const isOverloadError = isOverloadErrorMessage(error);
+  //
+  // 判定优先吃 errorReason 的稳定 key(maker-core 的 UPSTREAM_OVERLOAD_REASON):
+  // Codex 的容量文案是它二进制里硬编码的提示语, 改一次措辞就会让这里退回英文原文,
+  // 而这条判定驱动的正是本地化文案、重试进度与 hideRetry。文案匹配保留作兜底
+  // (老 daemon / Anthropic 侧 / 历史持久化错误行 —— 后者只有文案可用)。
+  const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   // Retry 的显示条件与网络错误文案必须共用同一个判定。外部发起的 turn（例如
   // scheduler / goal）失败时没有安全的 recovery target，errorRetryText 会是 null；

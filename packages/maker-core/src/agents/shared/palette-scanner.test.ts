@@ -30,6 +30,45 @@ describe('scanWorkspaceFileResources', () => {
 });
 
 describe('scanClaudeSlashCommands', () => {
+  it('lists global Claude commands and skills without a working directory', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-palette-'));
+    const home = path.join(root, 'home');
+    const commandsDir = path.join(home, '.claude', 'commands');
+    const skillDir = path.join(home, '.claude', 'skills', 'global-only');
+
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+    try {
+      await mkdir(commandsDir, { recursive: true });
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(path.join(commandsDir, 'global-command.md'), '# Global command\n', 'utf8');
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        '---\ndescription: available without a project\n---\n\nbody\n',
+        'utf8',
+      );
+
+      const commands = await scanClaudeSlashCommands();
+
+      expect(commands).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          name: 'global-command',
+          source: 'user',
+          scope: 'global',
+        }),
+        expect.objectContaining({
+          name: 'global-only',
+          description: 'available without a project',
+          source: 'skill',
+          scope: 'global',
+        }),
+      ]));
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('includes skill directories that are symlinked into the global Claude skills root', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-palette-'));
     const home = path.join(root, 'home');

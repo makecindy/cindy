@@ -71,6 +71,51 @@ describe('parseOverloadError', () => {
     expect(isOverloadErrorMessage('buffer capacity dropping')).toBe(false);
     expect(isOverloadErrorMessage('upstream busy', 529)).toBe(true);
   });
+
+  // ── 结构化 codexErrorInfo 优先 ───────────────────────────────────────────────
+  //
+  // 这一组锁的是「判定不再依赖 codex 的英文文案」。`Selected model is at capacity...`
+  // 是 codex 二进制里硬编码的用户可见提示语, 不是 API 契约; 它一改, 靠文案驱动的
+  // 退避重投就静默失效, 而用同一句文案写的测试仍然全绿 —— 所以必须有用例断言
+  // **文案缺席时也能判定**, 否则等于没有解开这个依赖。
+
+  it('结构化 tag 命中时不需要文案配合（真正解开对 codex 文案的依赖）', () => {
+    // 故意给一句完全不含 "at capacity" 的文案: 模拟 codex 改了措辞。
+    expect(parseOverloadError('upstream refused the request', undefined, 'serverOverloaded')).toEqual({
+      kind: 'capacity',
+    });
+    // 空文案同理 —— host 合成的错误可能压根没有 message。
+    expect(parseOverloadError('', undefined, 'serverOverloaded')).toEqual({ kind: 'capacity' });
+  });
+
+  it('结构化 tag 优先于文案与状态码', () => {
+    // 529 会被判成 overloaded(Anthropic 语义); 有 serverOverloaded tag 时按 Codex
+    // 的 capacity 处理 —— 决定「由谁重试」, 不能弄反。
+    expect(parseOverloadError('overloaded_error', 529, 'serverOverloaded')).toEqual({
+      kind: 'capacity',
+    });
+  });
+
+  it('非过载的结构化 tag 不触发过载判定', () => {
+    for (const tag of ['usageLimitExceeded', 'contextWindowExceeded', 'unauthorized', 'other']) {
+      expect(parseOverloadError('some failure', undefined, tag)).toBeNull();
+    }
+  });
+
+  it('tag 缺席或不认识时退回文案兜底（老 daemon 不发该字段）', () => {
+    expect(parseOverloadError('Selected model is at capacity.', undefined, undefined)).toEqual({
+      kind: 'capacity',
+    });
+    // 上游将来新增的变体名: 不认识就当没有, 由文案接手, 不能因此丢掉判定。
+    expect(parseOverloadError('Selected model is at capacity.', undefined, 'someFutureVariant')).toEqual(
+      { kind: 'capacity' },
+    );
+  });
+
+  it('isOverloadErrorMessage 同样吃结构化 tag', () => {
+    expect(isOverloadErrorMessage('nothing quotable', undefined, 'serverOverloaded')).toBe(true);
+    expect(isOverloadErrorMessage('nothing quotable', undefined, 'other')).toBe(false);
+  });
 });
 
 describe('overloadRetryDelayMs', () => {
